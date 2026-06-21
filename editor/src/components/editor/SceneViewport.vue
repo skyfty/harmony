@@ -87,6 +87,7 @@ import {
   getLastExtensionFromFilenameOrUrl,
   isHdriLikeExtension,
   isKtx2LikeExtension,
+  isSkyCubeArchiveExtension,
   isVideoLikeExtension,
   loadSkyCubeTexture,
   resolveGroundChunkCoordFromWorldPosition,
@@ -1125,6 +1126,8 @@ const postprocessing = useViewportPostprocessing({
   getPerformanceMode: () => Boolean(environmentSettings.value.viewportPerformanceMode),
 })
 let backgroundTexture: THREE.Texture | null = null
+let backgroundTextureCleanup: (() => void) | null = null
+let backgroundTextureSourceKind: 'texture' | null = null
 let backgroundAssetId: string | null = null
 let backgroundAssetKey: string | null = null
 let skyCubeTexture: THREE.CubeTexture | null = null
@@ -14281,6 +14284,7 @@ function disposeHdriBackgroundResources() {
     backgroundTexture.dispose()
     backgroundTexture = null
   }
+  backgroundTextureSourceKind = null
   backgroundAssetId = null
   backgroundAssetKey = null
 }
@@ -14310,7 +14314,14 @@ function applyEnvironmentReflectionFromBackground(background: EnvironmentSetting
   if (!scene) {
     return false
   }
-  if ((background.mode === 'hdri' || background.mode === 'fastHdri') && backgroundTexture) {
+  if (
+    backgroundTexture
+    && (
+      background.mode === 'hdri'
+      || background.mode === 'fastHdri'
+      || (background.mode === 'skycube' && backgroundTextureSourceKind === 'texture')
+    )
+  ) {
     scene.environment = backgroundTexture
   } else {
     scene.environment = null
@@ -14366,138 +14377,103 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
 
   if (background.mode === 'skycube') {
     disposeGradientBackgroundResources()
-    const faceAssetIds: Array<string | null> = [
-      background.positiveXAssetId ?? null,
-      background.negativeXAssetId ?? null,
-      background.positiveYAssetId ?? null,
-      background.negativeYAssetId ?? null,
-      background.positiveZAssetId ?? null,
-      background.negativeZAssetId ?? null,
-    ]
-    const skycubeFormat = 'zip'
-
-    if (skycubeFormat === 'zip') {
-      const zipAssetId = background.skycubeZipAssetId ?? null
-      const zipKey = computeEnvironmentAssetReloadKey(zipAssetId)
-
-      if (!zipAssetId) {
-        disposeBackgroundResources()
-        scene.background = new THREE.Color(background.solidColor)
-        return true
-      }
-
-      const sameAsPrevious =
-        skyCubeTexture &&
-        skyCubeSourceFormat === 'zip' &&
-        (zipAssetId ?? null) === (skyCubeZipAssetId ?? null) &&
-        (zipKey ?? null) === (skyCubeZipAssetKey ?? null)
-      if (sameAsPrevious && skyCubeTexture) {
-        scene.background = skyCubeTexture
-        return true
-      }
-
-      const resolved = await resolveEnvironmentAssetUrl(zipAssetId)
-      const zipUrl = resolved?.url ?? null
-      if (!zipUrl) {
-        console.warn('[SceneViewport] SkyCube zip URL unavailable', zipAssetId)
-        return false
-      }
-
-      let buffer: ArrayBuffer | null = null
-      try {
-        const response = await fetch(zipUrl)
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
-        buffer = await response.arrayBuffer()
-      } catch (error) {
-        console.warn('[SceneViewport] Failed to fetch SkyCube zip', zipAssetId, error)
-        return false
-      }
-
-      if (token !== backgroundLoadToken) {
-        return false
-      }
-
-      let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>
-      try {
-        extracted = await extractSkycubeZipFacesAsync(buffer)
-      } catch (error) {
-        console.warn('[SceneViewport] Failed to unzip SkyCube zip', zipAssetId, error)
-        return false
-      }
-
-      if (extracted.missingFaces.length) {
-        console.warn('[SceneViewport] SkyCube zip missing faces', extracted.missingFaces)
-      }
-
-      const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
-
-      const loaded = await loadSkyCubeTexture(faceUrls)
-      if (token !== backgroundLoadToken) {
-        disposeSkyCubeTexture(loaded.texture)
-        disposeFaceUrls()
-        return false
-      }
-      if (!loaded.texture) {
-        disposeFaceUrls()
-        throw new Error(loaded.error || 'Failed to load SkyCube background from zip')
-      }
-
+    const assetId = background.skycubeZipAssetId ?? background.hdriAssetId ?? null
+    if (!assetId) {
       disposeBackgroundResources()
-      skyCubeTexture = loaded.texture
-      skyCubeSourceFormat = 'zip'
-      skyCubeZipAssetId = zipAssetId
-      skyCubeZipAssetKey = zipKey
-      skyCubeZipFaceUrlCleanup = disposeFaceUrls
-      skyCubeFaceAssetIds = [null, null, null, null, null, null]
-      skyCubeFaceKeys = [null, null, null, null, null, null]
-      scene.background = skyCubeTexture
+      scene.background = new THREE.Color(background.solidColor)
       return true
     }
 
-    const faceKeys: Array<string | null> = faceAssetIds.map((assetId) => computeEnvironmentAssetReloadKey(assetId))
+    const resolved = await resolveEnvironmentAssetUrl(assetId)
+    const extension = resolved?.extension ?? null
+    if (!isSkyCubeArchiveExtension(extension)) {
+      const hdriKey = computeEnvironmentAssetReloadKey(assetId)
+      if (backgroundTexture && backgroundAssetId === assetId && backgroundAssetKey === hdriKey && backgroundTextureSourceKind === 'texture') {
+        scene.background = backgroundTexture
+        return true
+      }
+      const loaded = await loadEnvironmentTextureFromAsset(assetId)
+      if (!loaded || token !== backgroundLoadToken) {
+        if (loaded) {
+          loaded.dispose()
+        }
+        return false
+      }
+      disposeBackgroundResources()
+      backgroundTexture = loaded
+      backgroundTextureSourceKind = 'texture'
+      backgroundAssetId = assetId
+      backgroundAssetKey = hdriKey
+      scene.background = backgroundTexture
+      return true
+    }
 
+    const zipKey = computeEnvironmentAssetReloadKey(assetId)
     const sameAsPrevious =
       skyCubeTexture &&
-      faceAssetIds.every((id, index) => (id ?? null) === (skyCubeFaceAssetIds[index] ?? null)) &&
-      faceKeys.every((key, index) => (key ?? null) === (skyCubeFaceKeys[index] ?? null))
+      skyCubeSourceFormat === 'zip' &&
+      (assetId ?? null) === (skyCubeZipAssetId ?? null) &&
+      (zipKey ?? null) === (skyCubeZipAssetKey ?? null)
     if (sameAsPrevious && skyCubeTexture) {
       scene.background = skyCubeTexture
       return true
     }
 
-    const faceUrls: Array<string | null> = await Promise.all(
-      faceAssetIds.map(async (assetId) => {
-        if (!assetId) {
-          return null
-        }
-        const resolved = await resolveEnvironmentAssetUrl(assetId)
-        return resolved?.url ?? null
-      }),
-    )
-
-    const loaded = await loadSkyCubeTexture(faceUrls)
-    if (!loaded.texture || token !== backgroundLoadToken) {
-      disposeSkyCubeTexture(loaded.texture)
-      if (loaded.error) {
-        console.warn('[SceneViewport] Failed to load SkyCube background', loaded.error)
-      }
+    const zipUrl = resolved?.url ?? null
+    if (!zipUrl) {
+      console.warn('[SceneViewport] SkyCube zip URL unavailable', assetId)
       return false
     }
 
-    if (loaded.missingFaces.length) {
-      console.warn('[SceneViewport] SkyCube background missing faces', loaded.missingFaces)
+    let buffer: ArrayBuffer | null = null
+    try {
+      const response = await fetch(zipUrl)
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+      buffer = await response.arrayBuffer()
+    } catch (error) {
+      console.warn('[SceneViewport] Failed to fetch SkyCube zip', assetId, error)
+      return false
+    }
+
+    if (token !== backgroundLoadToken) {
+      return false
+    }
+
+    let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>
+    try {
+      extracted = await extractSkycubeZipFacesAsync(buffer)
+    } catch (error) {
+      console.warn('[SceneViewport] Failed to unzip SkyCube zip', assetId, error)
+      return false
+    }
+
+    if (extracted.missingFaces.length) {
+      console.warn('[SceneViewport] SkyCube zip missing faces', extracted.missingFaces)
+    }
+
+    const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
+
+    const loaded = await loadSkyCubeTexture(faceUrls)
+    if (token !== backgroundLoadToken) {
+      disposeSkyCubeTexture(loaded.texture)
+      disposeFaceUrls()
+      return false
+    }
+    if (!loaded.texture) {
+      disposeFaceUrls()
+      throw new Error(loaded.error || 'Failed to load SkyCube background from zip')
     }
 
     disposeBackgroundResources()
     skyCubeTexture = loaded.texture
     skyCubeSourceFormat = 'zip'
-    skyCubeFaceAssetIds = faceAssetIds
-    skyCubeFaceKeys = faceKeys
-    skyCubeZipAssetId = null
-    skyCubeZipAssetKey = null
-    skyCubeZipFaceUrlCleanup = null
+    skyCubeZipAssetId = assetId
+    skyCubeZipAssetKey = zipKey
+    skyCubeZipFaceUrlCleanup = disposeFaceUrls
+    skyCubeFaceAssetIds = [null, null, null, null, null, null]
+    skyCubeFaceKeys = [null, null, null, null, null, null]
     scene.background = skyCubeTexture
     return true
   }
@@ -14525,6 +14501,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
 
   disposeBackgroundResources()
   backgroundTexture = texture
+  backgroundTextureSourceKind = 'texture'
   backgroundAssetId = background.hdriAssetId
   backgroundAssetKey = hdriKey
   scene.background = texture

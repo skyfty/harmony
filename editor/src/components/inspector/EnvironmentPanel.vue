@@ -11,6 +11,7 @@ import type {
 } from '@/types/environment'
 import {
   isHdriLikeExtension,
+  isKtx2LikeExtension,
   isSkyCubeArchiveExtension,
 } from '@schema/core'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -185,7 +186,7 @@ const backgroundAsset = computed(() => {
   const background = environmentSettings.value.background
   const assetId =
     background.mode === 'skycube'
-      ? background.skycubeZipAssetId
+      ? (background.skycubeZipAssetId ?? background.hdriAssetId)
       : background.hdriAssetId
   if (!assetId) {
     return null
@@ -204,13 +205,16 @@ const backgroundAssetLabel = computed(() => {
 const backgroundAssetHint = computed(() => {
   const asset = backgroundAsset.value
   if (!asset) {
-    return 'Supports HDRI, .hdr, or .skycube assets'
+    return 'Supports HDRI, Fast HDRI, or SkyCube assets'
   }
   const extension = asset.extension ? asset.extension.toLowerCase() : null
   if (isSkyCubeArchiveExtension(extension)) {
     return '.skycube archive'
   }
-  return extension === 'hdr' ? '.hdr HDRI' : 'HDRI asset'
+  if (isKtx2LikeExtension(extension)) {
+    return '.ktx2 Fast HDRI'
+  }
+  return isHdriLikeExtension(extension) ? 'HDRI asset' : 'Sky asset'
 })
 
 const backgroundPreviewStyle = computed(() => resolveAssetPreviewStyle(backgroundAsset.value))
@@ -465,6 +469,7 @@ function clearBackgroundAsset() {
   }
   if (background.mode === 'skycube') {
     nextBackground.skycubeZipAssetId = null
+    nextBackground.hdriAssetId = null
   } else {
     nextBackground.hdriAssetId = null
   }
@@ -789,7 +794,7 @@ function resolveDraggedAsset(event: DragEvent): ProjectAsset | null {
 }
 
 function isHdrExtension(extension: string | null): boolean {
-  return isHdriLikeExtension(extension)
+  return isHdriLikeExtension(extension) || isKtx2LikeExtension(extension)
 }
 
 function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
@@ -800,7 +805,7 @@ function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
     return true
   }
   if (asset.type === 'file') {
-      const extension = asset.extension ? asset.extension.toLowerCase() : null
+    const extension = asset.extension ? asset.extension.toLowerCase() : null
     return isHdrExtension(extension) || isSkyCubeArchiveExtension(extension)
   }
   return false
@@ -870,7 +875,12 @@ function applySkyAsset(asset: ProjectAsset) {
     return
   }
 
-  const mode: EnvironmentBackgroundMode = 'hdri'
+  const currentMode = environmentSettings.value.background.mode
+  const mode: EnvironmentBackgroundMode = currentMode === 'skycube'
+    ? 'skycube'
+    : isKtx2LikeExtension(extension)
+      ? 'fastHdri'
+      : 'hdri'
   patchEnvironmentBackground({
     mode,
     solidColor: environmentSettings.value.background.solidColor,
@@ -878,7 +888,7 @@ function applySkyAsset(asset: ProjectAsset) {
     gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
     hdriAssetId: asset.id,
-    skycubeZipAssetId: null,
+    skycubeZipAssetId: mode === 'skycube' ? asset.id : null,
     positiveXAssetId: null,
     negativeXAssetId: null,
     positiveYAssetId: null,
@@ -904,7 +914,7 @@ function openAssetDialog(target: 'background', event?: MouseEvent) {
   assetDialogTarget.value = target
   assetDialogSelectedId.value =
     environmentSettings.value.background.mode === 'skycube'
-      ? (environmentSettings.value.background.skycubeZipAssetId ?? '')
+      ? (environmentSettings.value.background.skycubeZipAssetId ?? environmentSettings.value.background.hdriAssetId ?? '')
       : (environmentSettings.value.background.hdriAssetId ?? '')
   assetDialogVisible.value = true
 }

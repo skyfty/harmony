@@ -750,11 +750,11 @@ function buildEnvironmentIssues(scene: AssetLookupScene): SceneAssetDiagnosticIs
     return issues
   }
 
-  if (!background.skycubeZipAssetId) {
+  if (!background.skycubeZipAssetId && !background.hdriAssetId) {
     issues.push({
       severity: 'error',
       code: 'environment-misconfiguration',
-      message: 'Environment background is SkyCube but skycubeZipAssetId is missing.',
+      message: 'Environment background is SkyCube but no sky background asset is assigned.',
       path: 'environment.background.skycubeZipAssetId',
       category: 'environment',
       references: [],
