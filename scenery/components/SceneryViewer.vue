@@ -5403,7 +5403,6 @@ function replaceSceneNodeById(nodes: SceneNode[] | undefined | null, nodeId: str
 function applySteerTargetTransform(targetNode: SceneNode, replacementRoot: SceneNode): void {
   replacementRoot.position = cloneVectorLikeValue(targetNode.position) ?? cloneVectorLikeValue(replacementRoot.position) ?? { x: 0, y: 0, z: 0 };
   replacementRoot.rotation = cloneVectorLikeValue(targetNode.rotation) ?? cloneVectorLikeValue(replacementRoot.rotation) ?? { x: 0, y: 0, z: 0 };
-  replacementRoot.scale = cloneVectorLikeValue(targetNode.scale) ?? cloneVectorLikeValue(replacementRoot.scale) ?? { x: 1, y: 1, z: 1 };
   if (typeof targetNode.visible === 'boolean') {
     replacementRoot.visible = targetNode.visible;
   }

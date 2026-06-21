@@ -76,9 +76,17 @@ export type WaterRuntimeHandle = {
   nodeId: string
   getRenderObject: () => Object3D | null
   getEffectiveMode: () => Exclude<WaterImplementationMode, 'auto'> | null
+  hasCapturedStaticMirror?: () => boolean
   updateTransforms: () => void
   tickDynamic: (deltaSeconds: number) => void
-  tickStatic: (deltaSeconds: number, renderer: WebGLRenderer, scene: Scene, camera: Camera) => void
+  tickStatic: (
+    deltaSeconds: number,
+    renderer: WebGLRenderer,
+    scene: Scene,
+    camera: Camera,
+    trace?: (message: string, details?: Record<string, unknown>) => void,
+    allowCapture?: boolean,
+  ) => void
 }
 
 const waterRuntimeHandleRegistry = new Map<string, WaterRuntimeHandle>()
@@ -107,6 +115,8 @@ const WATER_STATIC_MIRROR_CAMERA_ROTATION_COS_HALF_EPS = Math.cos((35 * Math.PI)
 // Water surface moved threshold before forcing a re-capture (world units).
 const WATER_STATIC_MIRROR_WORLD_POSITION_EPS_SQ = 0.05 * 0.05
 const WATER_STATIC_MIRROR_MIN_CAPTURE_INTERVAL_MS = 250
+const WATER_STATIC_MIRROR_CAPTURE_SCALE = 0.125
+const WATER_STATIC_MIRROR_CAPTURE_ENABLED = false
 
 // Removed unused PositionAttribute type
 
@@ -379,10 +389,11 @@ class WaterComponent extends Component<WaterComponentProps> {
       return null
     }
 
-    return {
+      return {
       key: this.runtimeHandleKey,
       nodeId: this.context.nodeId,
       getRenderObject: () => this.waterInstance ?? this.staticWaterMesh,
+      hasCapturedStaticMirror: () => this.staticEnvHasCaptured,
       getEffectiveMode: () => {
         const props = clampWaterComponentProps(this.context.getProps())
         return resolveEffectiveImplementationMode(props.implementationMode)
@@ -407,7 +418,14 @@ class WaterComponent extends Component<WaterComponentProps> {
         }
         this.syncSunUniforms()
       },
-      tickStatic: (deltaSeconds: number, renderer: WebGLRenderer, scene: Scene, camera: Camera) => {
+      tickStatic: (
+        deltaSeconds: number,
+        renderer: WebGLRenderer,
+        scene: Scene,
+        camera: Camera,
+        trace?: (message: string, details?: Record<string, unknown>) => void,
+        allowCapture = true,
+      ) => {
         if (!this.staticWaterMesh) {
           return
         }
@@ -416,11 +434,14 @@ class WaterComponent extends Component<WaterComponentProps> {
         this.markStaticEnvCaptureIfMoved()
         this.syncSunUniforms()
         this.syncStaticEyeUniform(camera)
+        if (!allowCapture || !WATER_STATIC_MIRROR_CAPTURE_ENABLED) {
+          return
+        }
         if (!this.isEligibleStaticMirrorCaptureCamera(camera)) {
           return
         }
         this.markStaticEnvCaptureIfCameraChanged(camera)
-        this.maybeCaptureStaticMirror(renderer, scene, camera)
+        return this.maybeCaptureStaticMirror(renderer, scene, camera, trace)
       },
     }
   }
@@ -1020,7 +1041,19 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
   }
 
-  private maybeCaptureStaticMirror(renderer: WebGLRenderer, scene: Scene, camera: Camera): void {
+  private maybeCaptureStaticMirror(
+    renderer: WebGLRenderer,
+    scene: Scene,
+    camera: Camera,
+    trace?: (message: string, details?: Record<string, unknown>) => void,
+  ): void {
+    const perfNow = typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? () => performance.now()
+      : () => Date.now()
+    const captureStartedAt = perfNow()
+    if (this.staticEnvHasCaptured) {
+      return
+    }
     if (!this.isEligibleStaticMirrorCaptureCamera(camera)) {
       return
     }
@@ -1039,6 +1072,11 @@ class WaterComponent extends Component<WaterComponentProps> {
     }
     const scope = this.staticWaterMesh
     const mirrorCamera = this.staticMirrorCamera
+    if (!this.staticEnvHasCaptured && this.staticMirrorTarget) {
+      const targetWidth = Math.max(WATER_MIN_TEXTURE_SIZE, Math.round((this.staticMirrorTarget as WebGLRenderTarget).width * WATER_STATIC_MIRROR_CAPTURE_SCALE))
+      const targetHeight = Math.max(WATER_MIN_TEXTURE_SIZE, Math.round((this.staticMirrorTarget as WebGLRenderTarget).height * WATER_STATIC_MIRROR_CAPTURE_SCALE))
+      this.staticMirrorTarget.setSize(targetWidth, targetHeight)
+    }
 
     // Mirror world position is the plane position.
     this.staticMirrorWorldPosition.setFromMatrixPosition(scope.matrixWorld)
@@ -1125,16 +1163,35 @@ class WaterComponent extends Component<WaterComponentProps> {
     const currentRenderTarget = renderer.getRenderTarget()
     const currentXrEnabled = renderer.xr.enabled
     const currentShadowAutoUpdate = renderer.shadowMap.autoUpdate
+    let setupStateMs = 0
+    let renderTargetMs = 0
+    let renderCaptureMs = 0
+    let uniformUpdateMs = 0
+    let restoreMs = 0
+    const renderInfoBefore = {
+      calls: renderer.info.render.calls,
+      triangles: renderer.info.render.triangles,
+      points: renderer.info.render.points,
+      lines: renderer.info.render.lines,
+    }
     try {
+      const setupStartedAt = perfNow()
       renderer.xr.enabled = false
       renderer.shadowMap.autoUpdate = false
+      setupStateMs = perfNow() - setupStartedAt
 
+      const renderTargetStartedAt = perfNow()
       renderer.setRenderTarget(this.staticMirrorTarget)
       if ((renderer as any).autoClear === false) {
         renderer.clear()
       }
-      renderer.render(scene, mirrorCamera)
+      renderTargetMs = perfNow() - renderTargetStartedAt
 
+      const renderStartedAt = perfNow()
+      renderer.render(scene, mirrorCamera)
+      renderCaptureMs = perfNow() - renderStartedAt
+
+      const uniformUpdateStartedAt = perfNow()
       const uniforms = this.staticWaterMaterial.uniforms as Record<string, { value: any }>
       if (uniforms.mirrorSampler) {
         uniforms.mirrorSampler.value = this.staticMirrorTarget.texture
@@ -1142,6 +1199,7 @@ class WaterComponent extends Component<WaterComponentProps> {
       if (uniforms.textureMatrix?.value instanceof Matrix4) {
         uniforms.textureMatrix.value.copy(this.staticTextureMatrix)
       }
+      uniformUpdateMs = perfNow() - uniformUpdateStartedAt
 
       this.staticEnvHasCaptured = true
       this.staticEnvNeedsCapture = false
@@ -1177,11 +1235,32 @@ class WaterComponent extends Component<WaterComponentProps> {
         }
       }
     } finally {
+      const restoreStartedAt = perfNow()
       renderer.xr.enabled = currentXrEnabled
       renderer.shadowMap.autoUpdate = currentShadowAutoUpdate
       renderer.setRenderTarget(currentRenderTarget)
       scope.visible = wasVisible
       this.staticEnvIsCapturing = false
+      restoreMs = perfNow() - restoreStartedAt
+    }
+
+    const captureMs = perfNow() - captureStartedAt
+    if (trace && captureMs >= 32) {
+      trace('water static mirror capture', {
+        ms: Math.round(captureMs * 10) / 10,
+        setupStateMs: Math.round(setupStateMs * 10) / 10,
+        renderTargetMs: Math.round(renderTargetMs * 10) / 10,
+        renderCaptureMs: Math.round(renderCaptureMs * 10) / 10,
+        uniformUpdateMs: Math.round(uniformUpdateMs * 10) / 10,
+        restoreMs: Math.round(restoreMs * 10) / 10,
+        renderCallsDelta: renderer.info.render.calls - renderInfoBefore.calls,
+        renderTrianglesDelta: renderer.info.render.triangles - renderInfoBefore.triangles,
+        renderPointsDelta: renderer.info.render.points - renderInfoBefore.points,
+        renderLinesDelta: renderer.info.render.lines - renderInfoBefore.lines,
+        hasCapturedBefore: this.staticEnvHasCaptured,
+        needsCapture: this.staticEnvNeedsCapture,
+        visible: wasVisible,
+      })
     }
   }
 
