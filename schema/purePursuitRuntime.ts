@@ -586,7 +586,7 @@ export function applyPurePursuitVehicleControl(params: {
   // We only apply this brake-distance rule while stopping near the end.
   const brakeThreshold = Math.max(
     pursuitProps.brakeDistanceMinMeters,
-    speed * pursuitProps.brakeDistanceSpeedFactor,
+    speedMps * pursuitProps.brakeDistanceSpeedFactor,
   )
   const shouldBrakeNearEnd = modeStopping && distanceToEnd < brakeThreshold
   if (shouldBrakeNearEnd && !dockActive) {

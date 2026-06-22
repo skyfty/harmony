@@ -536,6 +536,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       lastProjectedS: snap.projectedS,
       speedIntegral: undefined,
       lastSteerRad: undefined,
+      speedTargetMps: undefined,
       reverseActive: undefined,
     })
 

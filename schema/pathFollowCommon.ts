@@ -7,6 +7,8 @@ import {
   type PolylineMetricMode,
 } from './polylineProgress'
 
+export { samplePolylineAtS }
+
 export type PathFollowSample = {
   polylineData: PolylineMetricData
   projection: ReturnType<typeof projectPointToPolyline>
