@@ -10192,15 +10192,6 @@ async function applyBackgroundSettings(
 			return true
 		}
 
-		const faceAssetIds: Array<string | null> = [
-			background.positiveXAssetId ?? null,
-			background.negativeXAssetId ?? null,
-			background.positiveYAssetId ?? null,
-			background.negativeYAssetId ?? null,
-			background.positiveZAssetId ?? null,
-			background.negativeZAssetId ?? null,
-		]
-		const hasAnyFace = faceAssetIds.some((assetId) => typeof assetId === 'string' && assetId.trim().length > 0)
 		const zipKey = computeEnvironmentAssetReloadKey(normalizedAssetId)
 		if (
 			skyCubeTexture &&

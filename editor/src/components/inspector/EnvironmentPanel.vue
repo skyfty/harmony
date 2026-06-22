@@ -62,7 +62,7 @@ type AssetDialogTarget = 'background'
 const assetDialogTarget = ref<AssetDialogTarget | null>(null)
 
 const HDRI_ASSET_TYPE = 'hdri' as const
-const BACKGROUND_ASSET_TYPE = 'hdri,file' as const
+const BACKGROUND_ASSET_TYPE = 'hdri,texture,file' as const
 const BACKGROUND_ASSET_EXTENSIONS = [
   'hdr',
   'hdri',
@@ -801,8 +801,9 @@ function isEnvironmentAsset(asset: ProjectAsset | null): asset is ProjectAsset {
   if (!asset) {
     return false
   }
-  if (asset.type === 'hdri') {
-    return true
+  if (asset.type === 'hdri' || asset.type === 'texture') {
+    const extension = asset.extension ? asset.extension.toLowerCase() : null
+    return isHdrExtension(extension)
   }
   if (asset.type === 'file') {
     const extension = asset.extension ? asset.extension.toLowerCase() : null

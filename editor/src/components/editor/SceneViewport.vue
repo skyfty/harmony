@@ -1126,14 +1126,11 @@ const postprocessing = useViewportPostprocessing({
   getPerformanceMode: () => Boolean(environmentSettings.value.viewportPerformanceMode),
 })
 let backgroundTexture: THREE.Texture | null = null
-let backgroundTextureCleanup: (() => void) | null = null
 let backgroundTextureSourceKind: 'texture' | null = null
 let backgroundAssetId: string | null = null
 let backgroundAssetKey: string | null = null
 let skyCubeTexture: THREE.CubeTexture | null = null
 let skyCubeSourceFormat: 'zip' = 'zip'
-let skyCubeFaceAssetIds: Array<string | null> = [null, null, null, null, null, null]
-let skyCubeFaceKeys: Array<string | null> = [null, null, null, null, null, null]
 let gradientBackgroundDome: GradientBackgroundDome | null = null
 let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
@@ -14298,8 +14295,6 @@ function disposeSkyCubeBackgroundResources() {
   disposeSkyCubeTexture(skyCubeTexture)
   skyCubeTexture = null
   skyCubeSourceFormat = 'zip'
-  skyCubeFaceAssetIds = [null, null, null, null, null, null]
-  skyCubeFaceKeys = [null, null, null, null, null, null]
   skyCubeZipAssetId = null
   skyCubeZipAssetKey = null
 }
@@ -14472,8 +14467,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
     skyCubeZipAssetId = assetId
     skyCubeZipAssetKey = zipKey
     skyCubeZipFaceUrlCleanup = disposeFaceUrls
-    skyCubeFaceAssetIds = [null, null, null, null, null, null]
-    skyCubeFaceKeys = [null, null, null, null, null, null]
     scene.background = skyCubeTexture
     return true
   }

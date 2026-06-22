@@ -479,6 +479,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
+import { KTX2Loader as PlatformKTX2Loader } from '@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader';
 import PlatformCanvas from './PlatformCanvas.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
 import DriveJoystick from './DriveJoystick.vue';
@@ -495,7 +496,7 @@ import {
   type PhysicsStepFrame,
   type PhysicsTransform,
 } from '@harmony/physics-core';
-import {createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
+import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
 
 import { useProjectStore } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
@@ -1360,14 +1361,18 @@ async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManage
 }
 
 
-async function loadKtx2TextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.Texture> {
-  const render = createKtx2SupportRenderer();
-  try {
-    const ktx2Loader = await createKtx2Loader(render, { manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH });
-    return ktx2Loader.loadAsync(url);
-  } finally {
-    disposeKtx2SupportRenderer(render);
+async function loadKtx2TextureFromUrl(
+  url: string,
+  renderer: THREE.WebGLRenderer | null | undefined,
+  manager?: THREE.LoadingManager,
+): Promise<THREE.Texture> {
+  if (!renderer) {
+    throw new Error('KTX2 texture loading requires an active scene renderer')
   }
+  const ktx2Loader = isWeChatMiniProgram
+    ? new PlatformKTX2Loader(manager).detectSupport(renderer)
+    : await createKtx2Loader(renderer, { manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH })
+  return await ktx2Loader.loadAsync(url)
 }
 
 
@@ -1928,7 +1933,7 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
       if (extension === 'hdr' || extension === 'hdri' || extension === 'rgbe') {
         texture = await loadRgbETextureFromUrl(source);
       } else if (extension === 'ktx2') {
-        texture = await loadKtx2TextureFromUrl(source);
+        texture = await loadKtx2TextureFromUrl(source, renderContext?.renderer ?? null);
       } else {
         // EXR is not available in all module environments; fall back to image loader.
         texture = await loadTextureFromSourceUrl(source);
@@ -15830,7 +15835,7 @@ async function loadEnvironmentTextureFromAsset(
   const dispose = resolve.dispose;
   try {
     if (isKtx2EnvironmentTexture(extension, mimeType)) {
-      const texture = await loadKtx2TextureFromUrl(resolve.url);
+      const texture = await loadKtx2TextureFromUrl(resolve.url, renderContext?.renderer ?? null);
       texture.mapping = THREE.CubeUVReflectionMapping;
       texture.needsUpdate = true;
       return { texture, dispose };

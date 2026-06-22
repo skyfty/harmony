@@ -123,7 +123,9 @@ async function openZipDb(): Promise<IDBDatabase> {
       return;
     }
 
-    const request = indexedDB.open('harmony-scene-packages', 1);
+    // Bump the database version so existing installations with v2+ storage
+    // can open without a VersionError.
+    const request = indexedDB.open('harmony-scene-packages', 2);
     request.onerror = () => reject(request.error ?? new Error('IndexedDB 打开失败'));
     request.onupgradeneeded = () => {
       const db = request.result;
