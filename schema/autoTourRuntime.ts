@@ -118,6 +118,7 @@ type AutoTourPlaybackState = {
   // Vehicle-only control state.
   speedIntegral: number | undefined
   lastSteerRad: number | undefined
+  speedTargetMps: number | undefined
   reverseActive: boolean | undefined
 
   debugLastMode?: AutoTourPlaybackMode
@@ -873,6 +874,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           dockLatchIndex: undefined,
           speedIntegral: undefined,
           lastSteerRad: undefined,
+          speedTargetMps: undefined,
           reverseActive: undefined,
         }
         autoTourPlaybackState.set(key, state)
@@ -908,6 +910,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.dockLatchIndex = undefined
         state.speedIntegral = undefined
         state.lastSteerRad = undefined
+        state.speedTargetMps = undefined
         state.reverseActive = undefined
       }
 
@@ -1595,6 +1598,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.mode = 'stopped'
         state.speedIntegral = undefined
         state.lastSteerRad = undefined
+        state.speedTargetMps = undefined
         state.reverseActive = undefined
 
         const node = deps.resolveNodeById(nodeId)

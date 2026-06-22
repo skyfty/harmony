@@ -271,6 +271,14 @@ function updateBackgroundMode(mode: BackgroundUiMode | null) {
       gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+      hdriAssetId: null,
+      skycubeZipAssetId: null,
+      positiveXAssetId: null,
+      negativeXAssetId: null,
+      positiveYAssetId: null,
+      negativeYAssetId: null,
+      positiveZAssetId: null,
+      negativeZAssetId: null,
     })
     return
   }
@@ -283,8 +291,14 @@ function updateBackgroundMode(mode: BackgroundUiMode | null) {
     gradientTopColor: background.gradientTopColor ?? null,
     gradientOffset: background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: background.hdriAssetId,
-    skycubeZipAssetId: background.skycubeZipAssetId,
+    hdriAssetId: null,
+    skycubeZipAssetId: null,
+    positiveXAssetId: null,
+    negativeXAssetId: null,
+    positiveYAssetId: null,
+    negativeYAssetId: null,
+    positiveZAssetId: null,
+    negativeZAssetId: null,
   })
 }
 
@@ -816,6 +830,24 @@ function patchEnvironmentBackground(background: Record<string, unknown>): void {
   sceneStore.patchEnvironmentSettings({ background: background as any })
 }
 
+async function registerBackgroundAsset(asset: ProjectAsset): Promise<ProjectAsset> {
+  const source = asset.source ?? null
+  const registeredAsset = sceneStore.ensureSceneAssetRegistered(asset, {
+    providerId: source?.type === 'package' ? source.providerId : undefined,
+    packagePathSegments: source?.type === 'package' && Array.isArray(source.packagePathSegments)
+      ? source.packagePathSegments
+      : undefined,
+    source: source ?? undefined,
+  })
+
+  const syncSource = registeredAsset.source ?? source ?? undefined
+  if (syncSource) {
+    await sceneStore.syncAssetRegistryEntry(registeredAsset, syncSource)
+  }
+
+  return registeredAsset
+}
+
 function handleBackgroundDragEnter(event: DragEvent) {
   const asset = resolveDraggedAsset(event)
   if (!isEnvironmentAsset(asset)) {
@@ -855,8 +887,9 @@ function handleBackgroundDragLeave(event: DragEvent) {
   isBackgroundDropActive.value = false
 }
 
-function applySkyAsset(asset: ProjectAsset) {
-  const extension = asset.extension ? asset.extension.toLowerCase() : null
+async function applySkyAsset(asset: ProjectAsset) {
+  const registeredAsset = await registerBackgroundAsset(asset)
+  const extension = registeredAsset.extension ? registeredAsset.extension.toLowerCase() : null
   if (isSkyCubeArchiveExtension(extension)) {
     patchEnvironmentBackground({
       mode: 'skycube',
@@ -865,7 +898,7 @@ function applySkyAsset(asset: ProjectAsset) {
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
       hdriAssetId: null,
-      skycubeZipAssetId: asset.id,
+      skycubeZipAssetId: registeredAsset.id,
       positiveXAssetId: null,
       negativeXAssetId: null,
       positiveYAssetId: null,
@@ -888,8 +921,8 @@ function applySkyAsset(asset: ProjectAsset) {
     gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
     gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: asset.id,
-    skycubeZipAssetId: mode === 'skycube' ? asset.id : null,
+    hdriAssetId: registeredAsset.id,
+    skycubeZipAssetId: mode === 'skycube' ? registeredAsset.id : null,
     positiveXAssetId: null,
     negativeXAssetId: null,
     positiveYAssetId: null,
@@ -897,13 +930,6 @@ function applySkyAsset(asset: ProjectAsset) {
     positiveZAssetId: null,
     negativeZAssetId: null,
   })
-}
-
-function applyEnvironmentAsset(target: 'background' | 'environment', asset: ProjectAsset) {
-  if (target !== 'background') {
-    return
-  }
-  applySkyAsset(asset)
 }
 
 function openAssetDialog(target: 'background', event?: MouseEvent) {
@@ -920,7 +946,7 @@ function openAssetDialog(target: 'background', event?: MouseEvent) {
   assetDialogVisible.value = true
 }
 
-function handleAssetDialogUpdate(asset: ProjectAsset | null) {
+async function handleAssetDialogUpdate(asset: ProjectAsset | null) {
   if (!assetDialogTarget.value) {
     return
   }
@@ -933,7 +959,7 @@ function handleAssetDialogUpdate(asset: ProjectAsset | null) {
     console.warn('Selected asset is not a supported environment asset')
     return
   }
-  applyEnvironmentAsset('background', asset)
+  await applySkyAsset(asset)
   assetDialogVisible.value = false
 }
 
@@ -941,7 +967,7 @@ function handleAssetDialogCancel() {
   assetDialogVisible.value = false
 }
 
-function handleBackgroundDrop(event: DragEvent) {
+async function handleBackgroundDrop(event: DragEvent) {
   const asset = resolveDraggedAsset(event)
   isBackgroundDropActive.value = false
   if (!isEnvironmentAsset(asset)) {
@@ -949,7 +975,9 @@ function handleBackgroundDrop(event: DragEvent) {
   }
   event.preventDefault()
   event.stopPropagation()
-  applyEnvironmentAsset('background', asset)
+  if (asset) {
+    await applySkyAsset(asset)
+  }
 }
 
 // Environment map selection has been removed; reflections follow background.

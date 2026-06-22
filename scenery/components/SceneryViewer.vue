@@ -297,9 +297,10 @@
         </view>
         
       </view>
-      <view v-if="vehicleDriveUi.visible" class="viewer-drive-speed-left-floating">
+      <view v-if="autoTourTelemetryUiVisible" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
         <button
+          v-if="vehicleDriveUi.visible"
           class="viewer-drive-icon-button"
           :class="{ 'is-busy': vehicleDriveResetBusy }"
           type="button"
@@ -314,7 +315,7 @@
         </button>
       </view>
 
-      <view v-if="vehicleDriveUi.visible" class="viewer-drive-compass-right-floating" aria-hidden="true">
+      <view v-if="autoTourTelemetryUiVisible" class="viewer-drive-compass-right-floating" aria-hidden="true">
         <DriveCompass
           :compass-style="vehicleCompassStyle"
           :ticks="vehicleCompassTicks"
@@ -880,6 +881,8 @@ import {
 } from '@harmony/schema/components/definitions/autoTourComponent';
 import {
   purePursuitComponentDefinition,
+  PURE_PURSUIT_COMPONENT_TYPE,
+  type PurePursuitComponentProps,
 } from '@harmony/schema/components/definitions/purePursuitComponent';
 import {
   sceneStateAnchorComponentDefinition,
@@ -1359,7 +1362,6 @@ async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManage
   texture.needsUpdate = true;
   return texture;
 }
-
 
 async function loadKtx2TextureFromUrl(
   url: string,
@@ -2823,6 +2825,11 @@ type VehicleInstanceWithWheels = VehicleInstance & {
 };
 
 type HostPhysicsVec3 = VehicleDriveVehicle['chassisBody']['position'];
+type PhysicsBridgeVehicleControlInput = {
+  steering: number;
+  throttle: number;
+  brake: number;
+};
 
 function createHostPhysicsVec3(x = 0, y = 0, z = 0): HostPhysicsVec3 {
   return {
@@ -3211,6 +3218,12 @@ const vehicleSpeedDisplayMps = ref(0);
 const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeedDisplayMps.value * 3.6));
 let vehicleSpeedDisplayLastCommitAtMs = 0;
 let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null;
+const vehicleSpeedDisplayScratchPosition = new THREE.Vector3();
+const vehicleSpeedDisplayScratchDelta = new THREE.Vector3();
+const autoTourTelemetryLastWorldPosition = new THREE.Vector3();
+let autoTourTelemetryHasWorldPositionSample = false;
+let autoTourTelemetryLastSampleAtMs = 0;
+let autoTourTelemetryLastNodeId: string | null = null;
 const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
 const characterAuthorityInput = reactive({
   moveX: 0,
@@ -3405,6 +3418,8 @@ const vehicleDriveUi = computed(() => {
     braking: active && vehicleDriveInputFlags.brake,
   } as const;
 });
+
+const autoTourTelemetryUiVisible = computed(() => vehicleDriveUi.value.visible || activeAutoTourNodeIds.size > 0);
 
 const characterControlUi = computed(() => {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
@@ -9067,18 +9082,101 @@ function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: P
   instance.hasChassisPositionSample = false;
 }
 
+function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): PhysicsBridgeVehicleControlInput | null {
+  const instance = vehicleInstances.get(nodeId) ?? null;
+  if (!instance) {
+    return null;
+  }
+  const node = resolveNodeById(nodeId);
+  const vehicleComponent = resolveVehicleComponent(node);
+  const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null);
+  const desiredSpeedMps = typeof (instance.vehicle as any)?.__harmonyDesiredSpeedMps === 'number'
+    ? Math.max(0, (instance.vehicle as any).__harmonyDesiredSpeedMps)
+    : null;
+  const wheelInfos = Array.isArray(instance.vehicle.wheelInfos) ? instance.vehicle.wheelInfos : [];
+  if (!wheelInfos.length) {
+    return null;
+  }
+
+  let maxEngineForce = 0;
+  let maxBrakeForce = 0;
+  let steeringSum = 0;
+  let steeringCount = 0;
+  wheelInfos.forEach((wheelInfo: any) => {
+    const engineForce = typeof wheelInfo?.engineForce === 'number' ? Math.max(0, wheelInfo.engineForce) : 0;
+    const brakeForce = typeof wheelInfo?.brake === 'number' ? Math.max(0, wheelInfo.brake) : 0;
+    const steering = typeof wheelInfo?.steering === 'number' ? wheelInfo.steering : 0;
+    maxEngineForce = Math.max(maxEngineForce, engineForce);
+    maxBrakeForce = Math.max(maxBrakeForce, brakeForce);
+    if (Math.abs(steering) > 1e-6) {
+      steeringSum += steering;
+      steeringCount += 1;
+    }
+  });
+
+  const maxSteerRad = THREE.MathUtils.degToRad(Math.max(1, vehicleProps.maxSteerDegrees));
+  const steering = steeringCount > 0
+    ? THREE.MathUtils.clamp(steeringSum / steeringCount / Math.max(1e-6, maxSteerRad), -1, 1)
+    : 0;
+  const vehicleMaxSpeedMps = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : 0;
+  const throttle = desiredSpeedMps != null && vehicleMaxSpeedMps > 0
+    ? THREE.MathUtils.clamp(desiredSpeedMps / vehicleMaxSpeedMps, 0, 1)
+    : vehicleProps.engineForceMax > 0
+      ? THREE.MathUtils.clamp(maxEngineForce / vehicleProps.engineForceMax, -1, 1)
+      : 0;
+  const brake = desiredSpeedMps != null && desiredSpeedMps <= 0.1
+    ? 1
+    : vehicleProps.brakeForceMax > 0
+      ? THREE.MathUtils.clamp(maxBrakeForce / vehicleProps.brakeForceMax, 0, 1)
+      : 0;
+
+  return {
+    steering,
+    throttle,
+    brake,
+  };
+}
+
+function resolveSceneryPhysicsBridgeAutoTourNodeId(): string | null {
+  if (!activeAutoTourNodeIds.size) {
+    return null;
+  }
+  const preferred = autoTourFollowNodeId.value ?? null;
+  if (preferred && activeAutoTourNodeIds.has(preferred)) {
+    return preferred;
+  }
+  return activeAutoTourNodeIds.values().next().value ?? null;
+}
+
 function syncSceneryPhysicsBridgeVehicleInput(): void {
+  const autoTourNodeId = !vehicleDriveActive.value ? resolveSceneryPhysicsBridgeAutoTourNodeId() : null;
+  const bridgeActiveNodeId = vehicleDriveActive.value
+    ? vehicleDriveNodeId.value
+    : autoTourNodeId;
+  const bridgeInput: PhysicsBridgeVehicleControlInput = vehicleDriveActive.value
+    ? {
+        steering: vehicleDriveInput.steering,
+        throttle: vehicleDriveInput.throttle,
+        brake: vehicleDriveInput.brake,
+      }
+    : autoTourNodeId
+      ? resolveSceneryPhysicsBridgeVehicleControlInput(autoTourNodeId) ?? {
+          steering: 0,
+          throttle: 0,
+          brake: 1,
+        }
+      : {
+          steering: 0,
+          throttle: 0,
+          brake: 0,
+        };
   syncPhysicsBridgeVehicleInput({
     state: physicsBridgeVehicleInputSyncState,
     bridge: physicsBridge,
     sceneLoaded: physicsBridgeSceneLoaded,
-    activeNodeId: vehicleDriveActive.value ? vehicleDriveNodeId.value : null,
+    activeNodeId: bridgeActiveNodeId,
     vehicleIdByNodeId: physicsBridgeVehicleIdByNodeId,
-    input: {
-      steering: vehicleDriveInput.steering,
-      throttle: vehicleDriveInput.throttle,
-      brake: vehicleDriveInput.brake,
-    },
+    input: bridgeInput,
     resolveBodyId: (nodeId) => physicsBridgeBodyIdByNodeId.get(nodeId),
     resolveStopTransform: resolveSceneryPhysicsBridgeVehicleStopTransform,
     resetLocalVehicleState: resetSceneryPhysicsBridgeVehicleLocalState,
@@ -14456,21 +14554,32 @@ function resolveNorthDirectionAngleDegrees(direction: EnvironmentNorthDirection 
 }
 
 function updateVehicleSpeedFromVehicle(): void {
-  const vehicle = vehicleDriveVehicle;
-  const chassisBody = vehicle?.chassisBody ?? null;
-  const velocity = chassisBody?.velocity ?? null;
-  const vehicleInstance = vehicleDriveNodeId.value ? vehicleInstances.get(vehicleDriveNodeId.value) ?? null : null;
+  const manualNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
+  const autoTourNodeId = !manualNodeId ? resolveSceneryPhysicsBridgeAutoTourNodeId() : null;
+  const telemetryNodeId = manualNodeId ?? autoTourNodeId;
+  const manualVehicle = vehicleDriveVehicle;
+  const manualChassisBody = manualVehicle?.chassisBody ?? null;
+  const manualVelocity = manualChassisBody?.velocity ?? null;
+  const telemetryInstance = telemetryNodeId ? vehicleInstances.get(telemetryNodeId) ?? null : null;
+  if (telemetryNodeId !== autoTourTelemetryLastNodeId) {
+    autoTourTelemetryLastNodeId = telemetryNodeId;
+    autoTourTelemetryHasWorldPositionSample = false;
+    autoTourTelemetryLastSampleAtMs = 0;
+  }
+  const telemetryVehicle = telemetryInstance?.vehicle ?? manualVehicle;
+  const chassisBody = telemetryVehicle?.chassisBody ?? manualChassisBody;
+  const velocity = chassisBody?.velocity ?? manualVelocity;
   const nowMs = getVehicleSpeedDisplayNowMs();
   if (chassisBody && velocity) {
-    if (vehicleInstance) {
+    if (telemetryInstance) {
       updateVehicleSpeedAndApplyParkingHoldSafe({
-        vehicleInstance,
+        vehicleInstance: telemetryInstance,
         chassisBody,
-        throttle: vehicleDriveInput.throttle,
-        brake: vehicleDriveInput.brake,
+        throttle: manualNodeId ? vehicleDriveInput.throttle : 0,
+        brake: manualNodeId ? vehicleDriveInput.brake : 0,
         parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
         parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
-        resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleDriveNodeId.value ?? ''),
+        resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(telemetryNodeId ?? ''),
       });
     }
 
@@ -14499,17 +14608,30 @@ function updateVehicleSpeedFromVehicle(): void {
     return;
   }
 
-  const transformSpeed = vehicleDriveController.getCurrentSpeed();
-  commitVehicleSpeedDisplay(transformSpeed, nowMs);
-
-  const driveNodeId = vehicleDriveNodeId.value;
-  const driveObject = driveNodeId ? nodeObjectMap.get(driveNodeId) ?? null : null;
+  const driveObject = telemetryNodeId ? nodeObjectMap.get(telemetryNodeId) ?? null : null;
   if (!driveObject) {
+    const transformSpeed = vehicleDriveController.getCurrentSpeed();
+    commitVehicleSpeedDisplay(transformSpeed, nowMs);
     commitVehicleHeadingDegrees(0);
     return;
   }
 
   driveObject.updateWorldMatrix(true, false);
+  driveObject.getWorldPosition(vehicleSpeedDisplayScratchPosition);
+  if (autoTourTelemetryHasWorldPositionSample) {
+    const deltaSeconds = autoTourTelemetryLastSampleAtMs > 0
+      ? Math.max(0.001, (nowMs - autoTourTelemetryLastSampleAtMs) / 1000)
+      : 0;
+    if (deltaSeconds > 0) {
+      vehicleSpeedDisplayScratchDelta.copy(vehicleSpeedDisplayScratchPosition).sub(autoTourTelemetryLastWorldPosition);
+      const sampledSpeed = vehicleSpeedDisplayScratchDelta.length() / deltaSeconds;
+      commitVehicleSpeedDisplay(sampledSpeed, nowMs);
+    }
+  }
+  autoTourTelemetryLastWorldPosition.copy(vehicleSpeedDisplayScratchPosition);
+  autoTourTelemetryHasWorldPositionSample = true;
+  autoTourTelemetryLastSampleAtMs = nowMs;
+
   driveObject.getWorldQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.y = 0;
@@ -14972,7 +15094,8 @@ function handleFloatingAutoTourTap(): void {
   }
 
   const node = resolveNodeById(targetNodeId);
-  if (!node || !resolveAutoTourComponent(node)) {
+  const autoTourComponent = resolveAutoTourComponent(node);
+  if (!node || !autoTourComponent) {
     uni.showToast({ title: '目标未启用自动巡游组件', icon: 'none' });
     return;
   }

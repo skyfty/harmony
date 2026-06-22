@@ -10250,6 +10250,11 @@ export const useSceneStore = defineStore('scene', {
     },
     patchEnvironmentSettings(patch: EnvironmentSettingsPatch) {
       const current = this.environment
+      const backgroundPatch = (patch.background ?? {}) as Partial<EnvironmentSettings['background']>
+      const nextMode = typeof backgroundPatch.mode === 'string'
+        ? backgroundPatch.mode
+        : current.background.mode
+      const modeChanged = nextMode !== current.background.mode
       const merged: EnvironmentSettings = {
         ...current,
         ...patch,
@@ -10259,8 +10264,22 @@ export const useSceneStore = defineStore('scene', {
         },
       }
 
-      // Preserve user-selected HDRI assets across mode changes.
-      // Explicit clearing happens only via dedicated actions (e.g., Clear buttons).
+      if (modeChanged) {
+        const background = merged.background
+        const backgroundPatchHasHdriAssetId = Object.prototype.hasOwnProperty.call(backgroundPatch, 'hdriAssetId')
+        const backgroundPatchHasSkycubeZipAssetId = Object.prototype.hasOwnProperty.call(backgroundPatch, 'skycubeZipAssetId')
+        background.hdriAssetId = backgroundPatchHasHdriAssetId ? background.hdriAssetId : null
+        background.skycubeZipAssetId = backgroundPatchHasSkycubeZipAssetId ? background.skycubeZipAssetId : null
+        background.positiveXAssetId = null
+        background.negativeXAssetId = null
+        background.positiveYAssetId = null
+        background.negativeYAssetId = null
+        background.positiveZAssetId = null
+        background.negativeZAssetId = null
+      }
+
+      // When the background mode changes, drop stale background asset refs unless
+      // the caller explicitly supplies a new one in the same patch.
 
       return this.setEnvironmentSettings(merged)
     },
