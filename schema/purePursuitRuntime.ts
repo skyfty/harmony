@@ -319,7 +319,7 @@ export function applyPurePursuitVehicleControl(params: {
     minMeters: pursuitProps.lookaheadMinMeters,
     maxMeters: pursuitProps.lookaheadMaxMeters,
   })
-  const sample = resolvePathFollowSample({
+  const previewSample = resolvePathFollowSample({
     points,
     loop,
     currentPosition: purePursuitChassisPosition,
@@ -328,6 +328,33 @@ export function applyPurePursuitVehicleControl(params: {
     outLookaheadPoint: purePursuitLookaheadPoint,
     outClosestPoint: purePursuitClosestPoint,
   })
+  if (!previewSample || previewSample.polylineData.totalLength <= 1e-6) {
+    const holdBrakeForce = vehicleProps.brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER
+    holdVehicleBrakeSafe({ vehicleInstance, brakeForce: holdBrakeForce })
+    return {
+      reachedStop: false,
+      steeringRad: Number.isFinite(state.lastSteerRad) ? state.lastSteerRad! : 0,
+      targetSpeedMps: 0,
+    }
+  }
+
+  const previewTurnSeverity = resolvePreviewTurnSeverity(points, previewSample, lookaheadDistance)
+  const steeringLookaheadDistance = THREE.MathUtils.lerp(
+    lookaheadDistance,
+    Math.max(0.8, pursuitProps.lookaheadMinMeters),
+    smoothStep01(previewTurnSeverity),
+  )
+  const sample = steeringLookaheadDistance < lookaheadDistance - 1e-6
+    ? resolvePathFollowSample({
+      points,
+      loop,
+      currentPosition: purePursuitChassisPosition,
+      lookaheadDistance: steeringLookaheadDistance,
+      mode: 'xz',
+      outLookaheadPoint: purePursuitLookaheadPoint,
+      outClosestPoint: purePursuitClosestPoint,
+    })
+    : previewSample
   if (!sample || sample.polylineData.totalLength <= 1e-6) {
     const holdBrakeForce = vehicleProps.brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce: holdBrakeForce })
@@ -412,11 +439,10 @@ export function applyPurePursuitVehicleControl(params: {
       * Math.max(PURE_PURSUIT_MIN_WHEELBASE_METERS, wheelbase)
       * Math.max(0.4, pursuitProps.curvatureSpeedFactor),
   )
-  const previewTurnSeverity = resolvePreviewTurnSeverity(points, sample, lookaheadDistance)
   const turnSeverity = Math.max(steerSeverity, curvatureSeverity, previewTurnSeverity)
   const curveMinRatio = clampNumber(PURE_PURSUIT_CURVE_MIN_SPEED_RATIO, 0.05, 1)
   const curveSpeedRatio = THREE.MathUtils.lerp(1, curveMinRatio, smoothStep01(turnSeverity))
-  const turnSpeedCap = baseTargetSpeed * THREE.MathUtils.lerp(1, 0.12, smoothStep01(Math.max(turnSeverity, previewTurnSeverity)))
+  const turnSpeedCap = baseTargetSpeed * THREE.MathUtils.lerp(1, 0.4, smoothStep01(Math.max(turnSeverity, previewTurnSeverity)))
   let rawTargetSpeedMps = Math.min(baseTargetSpeed * curveSpeedRatio, turnSpeedCap)
   if (!modeStopping && baseTargetSpeed > 0) {
     const minimumCruiseFloor = Math.max(0.18, Math.min(pursuitProps.minSpeedMps, baseTargetSpeed * 0.35))
