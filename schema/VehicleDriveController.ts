@@ -44,6 +44,11 @@ export type VehicleDriveInputState = {
   analogBrake?: number
 }
 
+export type VehicleDriveAutoTourTargetState = {
+  autoTourTargetSpeedMps?: number
+  autoTourTargetSteeringRad?: number
+}
+
 export type VehicleDriveRuntimeState = {
   active: boolean
   nodeId: string | null
@@ -66,7 +71,7 @@ export type VehicleDriveVehicle = {
   applyEngineForce: (force: number, wheelIndex: number) => void
   setSteeringValue: (value: number, wheelIndex: number) => void
   setBrake: (brake: number, wheelIndex: number) => void
-}
+} & VehicleDriveAutoTourTargetState
 
 export type VehicleDriveChassisBody = {
   position: VehicleDriveVec3

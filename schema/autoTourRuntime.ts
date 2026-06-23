@@ -3,6 +3,7 @@ import type { SceneNode } from './core'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe } from './purePursuitRuntime'
 import { syncBodyFromObject } from './physicsBodySync'
+import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 import type { VehicleDriveVehicle } from './VehicleDriveController'
 import type { PolylineMetricData } from './polylineProgress'
 import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
@@ -227,6 +228,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const terminalBrakeHoldNodes = new Set<string>()
   // Nodes that reached a terminal (loop=false) stop and should not re-initialize movement until restarted.
   const terminalStoppedNodes = new Set<string>()
+  const terminalParkedPoses = new Map<string, { position: THREE.Vector3; quaternion: THREE.Quaternion }>()
 
   // Nodes that should re-enter playback by first returning to waypoint(0).
   const pendingReturnToStartNodes = new Set<string>()
@@ -264,6 +266,31 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
   }
 
+  function clearTerminalParkedPose(nodeId: string): void {
+    terminalParkedPoses.delete(nodeId)
+  }
+
+  function captureTerminalParkedPose(nodeId: string, sourceObject: THREE.Object3D | null, chassisBody: VehicleDriveVehicle['chassisBody'] | null): void {
+    const parkedPose = terminalParkedPoses.get(nodeId) ?? {
+      position: new THREE.Vector3(),
+      quaternion: new THREE.Quaternion(),
+    }
+    if (sourceObject) {
+      sourceObject.updateMatrixWorld(true)
+      sourceObject.getWorldPosition(parkedPose.position)
+      sourceObject.getWorldQuaternion(parkedPose.quaternion)
+    } else if (chassisBody) {
+      parkedPose.position.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+      parkedPose.quaternion.set(
+        chassisBody.quaternion.x,
+        chassisBody.quaternion.y,
+        chassisBody.quaternion.z,
+        chassisBody.quaternion.w,
+      )
+    }
+    terminalParkedPoses.set(nodeId, parkedPose)
+  }
+
   function requestReturnToStart(nodeId: string): void {
     if (!nodeId) {
       return
@@ -271,6 +298,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     // Make sure the node is eligible to move again.
     terminalBrakeHoldNodes.delete(nodeId)
     terminalStoppedNodes.delete(nodeId)
+    clearTerminalParkedPose(nodeId)
     disabledTourNodes.delete(nodeId)
     pendingReturnToStartNodes.add(nodeId)
     // Force a clean re-init; we will override into return-to-start once state exists.
@@ -288,13 +316,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return
     }
 
-    console.log(
-      `[AutoTourRuntime] terminal-stop node=${nodeId} reason=${reason} `
-      + `mode=${state?.mode ?? 'unknown'} targetIndex=${Number.isFinite(state?.targetIndex) ? Math.floor(state!.targetIndex) : 0} `
-      + `dockStopIndex=${typeof state?.dockStopIndex === 'number' && Number.isFinite(state.dockStopIndex) ? Math.floor(state.dockStopIndex) : -1} `
-      + `loop=${tourProps.loop ? 1 : 0}`,
-    )
-
     const terminalObject = deps.nodeObjectMap.get(nodeId) ?? null
     if (terminalObject) {
       terminalObject.getWorldPosition(autoTourCurrentPosition)
@@ -304,8 +325,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         + `localPos=(${terminalObject.position.x.toFixed(3)},${terminalObject.position.y.toFixed(3)},${terminalObject.position.z.toFixed(3)})`,
       )
     }
-
-    
 
     if (requiresExplicitStart) {
       // Keep node marked as active so the host UI can offer resume/stop choices.
@@ -350,18 +369,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     const stopObject = deps.nodeObjectMap.get(nodeId) ?? null
     if (stopObject) {
       stopObject.getWorldPosition(autoTourCurrentPosition)
-      console.log(
-        `[AutoTourRuntime] hard-stop-object node=${nodeId} `
-        + `worldPos=(${autoTourCurrentPosition.x.toFixed(3)},${autoTourCurrentPosition.y.toFixed(3)},${autoTourCurrentPosition.z.toFixed(3)}) `
-        + `localPos=(${stopObject.position.x.toFixed(3)},${stopObject.position.y.toFixed(3)},${stopObject.position.z.toFixed(3)})`,
-      )
     }
 
-    console.log(
-      `[AutoTourRuntime] hard-stop node=${nodeId} `
-      + `beforeSpeed=(${chassisBody.velocity.x.toFixed(3)},${chassisBody.velocity.y.toFixed(3)},${chassisBody.velocity.z.toFixed(3)}) `
-      + `beforeAngular=(${chassisBody.angularVelocity.x.toFixed(3)},${chassisBody.angularVelocity.y.toFixed(3)},${chassisBody.angularVelocity.z.toFixed(3)})`,
-    )
+    captureTerminalParkedPose(nodeId, stopObject, chassisBody)
 
     // Ensure the body is awake while we apply braking/force resets.
     try {
@@ -371,46 +381,22 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
 
     // Apply strong braking and reset steering/engine via the shared safe helper.
-    const node = deps.resolveNodeById(nodeId) ?? null
-    const vehicleComponent = node
-      ? resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
-      : null
-    const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null)
     try {
-      holdVehicleBrakeSafe({
-        vehicleInstance: vehicleInstance as any,
-        brakeForce: vehicleProps.brakeForceMax * 6,
-      })
-      for (let index = 0; index < vehicleInstance.wheelCount; index += 1) {
-        vehicleInstance.vehicle.applyEngineForce(0, index)
-        vehicleInstance.vehicle.setSteeringValue(0, index)
+      if (stopObject) {
+        syncBodyFromObject(chassisBody, stopObject)
       }
+      vehicleInstance.vehicle.autoTourTargetSpeedMps = 0
+      vehicleInstance.vehicle.autoTourTargetSteeringRad = 0
     } catch {
       // Best-effort; physics may be resetting.
     }
 
     // Hard-stop velocity to prevent coasting.
     try {
-      chassisBody.allowSleep = true
-      chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
-      chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
-      chassisBody.velocity.set(0, 0, 0)
-      chassisBody.angularVelocity.set(0, 0, 0)
-      // Sleep to avoid solver jitter once stopped.
-      chassisBody.sleep?.()
-      console.log(
-        `[AutoTourRuntime] hard-stop-applied node=${nodeId} `
-        + `afterSpeed=(${chassisBody.velocity.x.toFixed(3)},${chassisBody.velocity.y.toFixed(3)},${chassisBody.velocity.z.toFixed(3)}) `
-        + `afterAngular=(${chassisBody.angularVelocity.x.toFixed(3)},${chassisBody.angularVelocity.y.toFixed(3)},${chassisBody.angularVelocity.z.toFixed(3)}) `
-        + `sleepLimit=${String(chassisBody.sleepSpeedLimit)} sleepTime=${String(chassisBody.sleepTimeLimit)}`,
-      )
+      stopPhysicsBodyMotion(chassisBody)
+      sleepPhysicsBody(chassisBody, { minSpeedLimit: 0.05, minTimeLimit: 0.05 })
       if (stopObject) {
         stopObject.getWorldPosition(autoTourCurrentPosition)
-        console.log(
-          `[AutoTourRuntime] hard-stop-object-after node=${nodeId} `
-          + `worldPos=(${autoTourCurrentPosition.x.toFixed(3)},${autoTourCurrentPosition.y.toFixed(3)},${autoTourCurrentPosition.z.toFixed(3)}) `
-          + `localPos=(${stopObject.position.x.toFixed(3)},${stopObject.position.y.toFixed(3)},${stopObject.position.z.toFixed(3)})`,
-        )
       }
     } catch {
       // ignore
@@ -538,7 +524,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (!autoTour) {
       return
     }
-    const tourProps = clampAutoTourComponentProps(autoTour.props)
     const key = `${node.id}:${autoTour.id}`
     autoTourPlaybackState.set(key, {
       mode: 'path',
@@ -569,14 +554,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     pendingReturnToStartNodes.delete(nodeId)
     if (requiresExplicitStart) {
       activeTourNodes.add(nodeId)
-    }
-
-    if (!tourProps.loop && snap.targetIndex >= snap.routeWaypointCount - 1) {
-      const seeded = autoTourPlaybackState.get(key)
-      if (seeded) {
-        seeded.mode = 'stopping'
-        seeded.dockStopIndex = snap.routeWaypointCount - 1
-      }
     }
   }
 
@@ -686,6 +663,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       // Manual drive has priority; do not keep auto-parking brakes applied.
       terminalBrakeHoldNodes.clear()
       terminalStoppedNodes.clear()
+      terminalParkedPoses.clear()
       return
     }
 
@@ -697,6 +675,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null
         if (!vehicleInstance || !chassisBody) {
           terminalBrakeHoldNodes.delete(nodeId)
+          clearTerminalParkedPose(nodeId)
           continue
         }
 
@@ -705,7 +684,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           ? resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
           : null
         const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null)
-        try {
+        try {   
           holdVehicleBrakeSafe({
             vehicleInstance: vehicleInstance as any,
             brakeForce: vehicleProps.brakeForceMax * 6,
@@ -940,10 +919,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           state.targetIndex = 0
         } else {
           if (shouldDriveAsVehicle) {
-            holdVehicleBrakeSafe({
-              vehicleInstance: vehicleInstance! as any,
-              brakeForce: vehicleProps.brakeForceMax * 6,
-            })
+            vehicleInstance!.vehicle.autoTourTargetSpeedMps = 0
+            vehicleInstance!.vehicle.autoTourTargetSteeringRad = 0
           }
           continue
         }
@@ -985,7 +962,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           returnToStartPointB.set(startPoint.x, autoTourCurrentPosition.y, startPoint.z)
           returnToStartPointC.set(nextPoint.x, autoTourCurrentPosition.y, nextPoint.z)
 
-          applyPurePursuitVehicleControlSafe({
+          const result = applyPurePursuitVehicleControlSafe({
             vehicleInstance: vehicleInstance! as any,
             points: returnToStartPolyline,
             loop: false,
@@ -995,8 +972,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             vehicleProps,
             state: state as any,
             modeStopping: false,
-            distanceToTarget: distanceToStart,
+            distanceToTarget: distanceToStart
           })
+          vehicleInstance!.vehicle.autoTourTargetSpeedMps = result.targetSpeedMps
+          vehicleInstance!.vehicle.autoTourTargetSteeringRad = result.steeringRad
 
           if (!reachedStart) {
             // Still returning; no further route processing this frame.
@@ -1034,6 +1013,13 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           const proj = projectPointToPolyline(points, polylineData3d, autoTourCurrentPosition, autoTourNextWorldPosition)
           state.lastProjectedS = proj.s
 
+          const chassisBody = vehicleInstance!.vehicle.chassisBody
+          const currentSpeedMps = Math.sqrt(
+            chassisBody.velocity.x * chassisBody.velocity.x
+              + chassisBody.velocity.y * chassisBody.velocity.y
+              + chassisBody.velocity.z * chassisBody.velocity.z,
+          )
+
           const deviation = Math.sqrt(Math.max(0, proj.distanceSq))
           const maxDeviation = Math.max(1, arrivalDistance * 2)
           if (Number.isFinite(deviation) && deviation <= maxDeviation) {
@@ -1060,7 +1046,20 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             state.targetIndex = Math.max(state.targetIndex, Math.min(stopBarrierIndex, nextIndex))
 
             // End handling for non-looping tours: once progress reaches the end, enter stopping mode.
-            if (!tourProps.loop && stopBarrierIndex === endIndex && proj.s >= polylineData3d.totalLength - Math.max(0.5, arrivalDistance)) {
+            const terminalLeadDistance = Math.max(
+              0.5,
+              arrivalDistance,
+              pursuitProps.brakeDistanceMinMeters + currentSpeedMps * Math.max(0, pursuitProps.brakeDistanceSpeedFactor),
+            )
+            if (!tourProps.loop && stopBarrierIndex === endIndex && proj.s >= polylineData3d.totalLength - terminalLeadDistance) {
+              console.log(
+                `[AutoTourRuntime] enter-stopping node=${node.id} `
+                + `mode=${state.mode} projS=${proj.s.toFixed(3)} total=${polylineData3d.totalLength.toFixed(3)} `
+                + `lead=${terminalLeadDistance.toFixed(3)} speed=${speed.toFixed(3)} `
+                + `current=${currentSpeedMps.toFixed(3)} targetIndex=${state.targetIndex} endIndex=${endIndex} `
+                + `arrival=${arrivalDistance.toFixed(3)} brakeMin=${pursuitProps.brakeDistanceMinMeters.toFixed(3)} `
+                + `brakeFactor=${Math.max(0, pursuitProps.brakeDistanceSpeedFactor).toFixed(3)}`,
+              )
               state.mode = 'stopping'
               state.targetIndex = endIndex
             } else if (tourProps.loop) {
@@ -1239,8 +1238,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
                 ? Math.floor(state.dockStopIndex)
                 : endIndex),
             }
-            : {}),
+            : {})
         })
+        vehicleInstance!.vehicle.autoTourTargetSpeedMps = result.targetSpeedMps
+        vehicleInstance!.vehicle.autoTourTargetSteeringRad = result.steeringRad
         if (isStopping && result.reachedStop) {
           const stopIndex = typeof state.dockStopIndex === 'number' && Number.isFinite(state.dockStopIndex)
             ? Math.floor(state.dockStopIndex)
@@ -1467,6 +1468,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       disabledTourNodes.clear()
       terminalBrakeHoldNodes.clear()
       terminalStoppedNodes.clear()
+      terminalParkedPoses.clear()
       pendingReturnToStartNodes.clear()
     },
     resolveRouteSnap,
@@ -1478,6 +1480,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       pendingReturnToStartNodes.delete(nodeId)
       terminalBrakeHoldNodes.delete(nodeId)
       terminalStoppedNodes.delete(nodeId)
+      clearTerminalParkedPose(nodeId)
       disabledTourNodes.delete(nodeId)
       if (requiresExplicitStart) {
         activeTourNodes.add(nodeId)
@@ -1499,6 +1502,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       // Explicit stop should not keep "park" brakes applied forever.
       terminalBrakeHoldNodes.delete(nodeId)
       terminalStoppedNodes.delete(nodeId)
+      clearTerminalParkedPose(nodeId)
       if (requiresExplicitStart) {
         activeTourNodes.delete(nodeId)
       } else {

@@ -8199,6 +8199,7 @@ function updateVehicleSpeedFromVehicle(): void {
 			brake: vehicleDriveInput.brake,
 			parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
 			parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+			engageParkingHold: false,
 			resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleNodeId!),
 		})
 	}
