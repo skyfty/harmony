@@ -30,8 +30,14 @@ import {
 	isRuntimeHiddenInPreview,
 	type InstancedLodTarget,
 } from '@schema/core'
+import {
+	GUIDE_ROUTE_COMPONENT_TYPE,
+	clampGuideRouteComponentProps,
+	type GuideRouteComponentProps,
+} from '@schema/components'
 import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
 import { extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
+import { buildPolylineMetricData, buildPolylineVertexArcLengths } from '@schema/polylineProgress'
 import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import type {
 	EnvironmentCsmSettings,
@@ -248,6 +254,7 @@ import type { InstancedLodBoundsSnapshot } from '@schema/core'
 import { VehicleDriveController, resolveCharacterControlMovementMagnitude, CharacterAutoTourRuntimeManager } from '@schema/motion'
 import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
+import { AutoTourCameraAvoidanceController, type AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
 import {
   FollowCameraController,
   computeFollowLerpAlpha,
@@ -1418,14 +1425,12 @@ const autoTourPausedIsTerminal = ref(false)
 const autoTourPausedNodeId = ref<string | null>(null)
 
 const autoTourFollowNodeId = ref<string | null>(null)
-const autoTourCameraFollowState = createCameraFollowState()
-const autoTourCameraFollowController = new FollowCameraController()
-const autoTourCameraFollowLastAnchor = new THREE.Vector3()
-const autoTourCameraFollowVelocity = new THREE.Vector3()
-const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
-let autoTourCameraFollowHasSample = false
+const autoTourCameraAvoidanceController = new AutoTourCameraAvoidanceController()
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
+const autoTourCameraRoutePointsScratch: THREE.Vector3[] = []
+const autoTourCameraRouteDockScratch: boolean[] = []
+const autoTourRoutePointScratch = new THREE.Vector3()
 
 const vehicleDrivePrompt = computed(() => {
 	// Ensure this computed updates when the set changes.
@@ -3135,9 +3140,9 @@ const vehicleDriveController = new VehicleDriveController(
 		resolveNodeById,
 	resolveRigidbodyComponent,
 	resolveVehicleComponent,
-	isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-	ensureVehicleBindingForNode,
-	normalizeNodeId,
+		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+		ensureVehicleBindingForNode,
+		normalizeNodeId,
 		setCameraViewState: (mode, targetId) => {
 			const nextMode: CameraViewMode = mode === 'watching' ? 'watching' : 'level'
 			setCameraViewState(nextMode, targetId ?? null)
@@ -3556,6 +3561,59 @@ function resolveAutoTourComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<AutoTourComponentProps> | null {
 	return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+}
+
+function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): { points: THREE.Vector3[]; dock: boolean[] } | null {
+	const routeNode = resolveNodeById(routeNodeId)
+	const routeObject = nodeObjectMap.get(routeNodeId) ?? null
+	if (!routeNode || !routeObject) {
+		return null
+	}
+	const component = resolveEnabledComponentState<GuideRouteComponentProps>(routeNode, GUIDE_ROUTE_COMPONENT_TYPE)
+	if (!component) {
+		return null
+	}
+	const props = clampGuideRouteComponentProps(component.props)
+	if (!props.waypoints.length) {
+		return null
+	}
+	autoTourCameraRoutePointsScratch.length = 0
+	autoTourCameraRouteDockScratch.length = 0
+	props.waypoints.forEach((waypoint) => {
+		autoTourRoutePointScratch.set(waypoint.position.x, waypoint.position.y, waypoint.position.z)
+		autoTourCameraRoutePointsScratch.push(routeObject.localToWorld(autoTourRoutePointScratch.clone()))
+		autoTourCameraRouteDockScratch.push(waypoint.dock === true)
+	})
+	return autoTourCameraRoutePointsScratch.length >= 2
+		? { points: autoTourCameraRoutePointsScratch, dock: autoTourCameraRouteDockScratch }
+		: null
+}
+
+function resolveAutoTourCameraRouteData(nodeId: string): AutoTourCameraRouteData | null {
+	const node = resolveNodeById(nodeId)
+	const autoTour = resolveAutoTourComponent(node)
+	if (!autoTour?.props?.routeNodeId) {
+		return null
+	}
+	const routeData = resolveAutoTourGuideRouteWorldWaypoints(autoTour.props.routeNodeId)
+	if (!routeData) {
+		return null
+	}
+	const polylineData3d = buildPolylineMetricData(routeData.points, {
+		closed: Boolean(autoTour.props.loop),
+		mode: '3d',
+	})
+	if (!polylineData3d) {
+		return null
+	}
+	const waypointArcLengths3d = buildPolylineVertexArcLengths(routeData.points, polylineData3d)
+	return {
+		routeNodeId: autoTour.props.routeNodeId,
+		points: routeData.points,
+		dock: routeData.dock,
+		polylineData3d,
+		waypointArcLengths3d,
+	}
 }
 
 const autoTourVehicleInstances = createPhysicsAwareAutoTourVehicleInstances(
@@ -8504,9 +8562,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 		startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.add(n)
 			autoTourFollowNodeId.value = n
-			resetCameraFollowState(autoTourCameraFollowState)
-			autoTourCameraFollowVelocity.set(0, 0, 0)
-			autoTourCameraFollowHasSample = false
+			autoTourCameraAvoidanceController.reset()
 			followCameraControlActive = false
 			followCameraControlDirty = false
 			setCameraViewState('watching', n)
@@ -8581,12 +8637,10 @@ function handleVehicleAutoTourStopClick(): void {
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
-				autoTourFollowNodeId.value = null
-				resetCameraFollowState(autoTourCameraFollowState)
-				autoTourCameraFollowVelocity.set(0, 0, 0)
-				autoTourCameraFollowHasSample = false
-				followCameraControlActive = false
-				followCameraControlDirty = false
+		autoTourFollowNodeId.value = null
+		autoTourCameraAvoidanceController.reset()
+		followCameraControlActive = false
+		followCameraControlDirty = false
 				setCameraViewState('level', null)
 			}
 		})
@@ -8616,9 +8670,7 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
 				autoTourFollowNodeId.value = null
-				resetCameraFollowState(autoTourCameraFollowState)
-				autoTourCameraFollowVelocity.set(0, 0, 0)
-				autoTourCameraFollowHasSample = false
+				autoTourCameraAvoidanceController.reset()
 			}
 		})
 	}
@@ -9480,22 +9532,19 @@ function updateAutoTourCameraForFrame(
 	if (!nodeId) {
 		if (autoTourFollowNodeId.value) {
 			autoTourFollowNodeId.value = null
-			resetCameraFollowState(autoTourCameraFollowState)
-			autoTourCameraFollowVelocity.set(0, 0, 0)
-			autoTourCameraFollowHasSample = false
+			autoTourCameraAvoidanceController.reset()
 		}
 		return
 	}
 	if (autoTourFollowNodeId.value !== nodeId) {
 		autoTourFollowNodeId.value = nodeId
-		resetCameraFollowState(autoTourCameraFollowState)
+		autoTourCameraAvoidanceController.reset()
 	}
 	const object = nodeObjectMap.get(nodeId) ?? null
 	if (!object) {
 		return
 	}
 	object.updateMatrixWorld(true)
-	// Use bounding-box center as anchor (fallback to world position).
 	tempBox.makeEmpty()
 	tempBox.setFromObject(object)
 	if (tempBox.isEmpty()) {
@@ -9504,62 +9553,53 @@ function updateAutoTourCameraForFrame(
 		tempBox.getCenter(tempPosition)
 	}
 
-	// Pause only affects auto-tour (keep manual-drive behavior unchanged).
-	// Still allow active-node sync / follow-node resolution above, but freeze camera placement updates.
-	if (autoTourPaused.value) {
+	object.getWorldDirection(tempDirection)
+	tempDirection.y = 0
+	if (tempDirection.lengthSq() < 1e-8) {
+		tempDirection.set(0, 0, 1)
+	} else {
+		tempDirection.normalize()
+	}
+	const routeData = resolveAutoTourCameraRouteData(nodeId)
+	if (!routeData) {
 		return
 	}
-
-	if (!autoTourCameraFollowHasSample || delta <= 0) {
-		autoTourCameraFollowLastAnchor.copy(tempPosition)
-		autoTourCameraFollowVelocity.set(0, 0, 0)
-		autoTourCameraFollowHasSample = true
-	} else {
-		const rawVelocity = autoTourCameraFollowVelocityScratch
-			.copy(tempPosition)
-			.sub(autoTourCameraFollowLastAnchor)
-			.multiplyScalar(1 / delta)
-		autoTourCameraFollowLastAnchor.copy(tempPosition)
-		const alpha = computeFollowLerpAlpha(delta, 8)
-		autoTourCameraFollowVelocity.lerp(rawVelocity, alpha)
+	tempTarget.copy(tempPosition).add(tempDirection)
+	if (autoTourPaused.value) {
+		autoTourCameraAvoidanceController.seedFromPose({
+			cameraPosition: activeCamera.position,
+			cameraTarget: mapControls?.target ?? tempTarget,
+			anchorWorld: tempPosition,
+			forwardWorld: tempDirection,
+		})
+		return
 	}
-
-	object.getWorldQuaternion(tempQuaternion)
-
-	// Prefer movement direction as heading so “behind” matches vehicle-drive behavior.
-	// Many scene nodes use +X (or other) as visual forward; using quaternion axes directly can place the camera on the side.
-	const planarVelocityDir = tempDirection.set(autoTourCameraFollowVelocity.x, 0, autoTourCameraFollowVelocity.z)
-	if (planarVelocityDir.lengthSq() > 1e-6) {
-		planarVelocityDir.normalize()
-	} else {
-		// Fallback: use Three.js world direction (object -Z), projected to XZ.
-		object.getWorldDirection(planarVelocityDir)
-		planarVelocityDir.y = 0
-		if (planarVelocityDir.lengthSq() > 1e-6) {
-			planarVelocityDir.normalize()
-		} else {
-			planarVelocityDir.set(0, 0, 1)
-		}
-	}
-
 	const placement = computeFollowPlacement(getApproxDimensions(object))
-	const updated = autoTourCameraFollowController.update({
-		follow: autoTourCameraFollowState,
+	const avoidance = autoTourCameraAvoidanceController.update({
+		nodeId,
+		routeData,
 		placement,
 		anchorWorld: tempPosition,
-		desiredForwardWorld: planarVelocityDir,
-		velocityWorld: autoTourCameraFollowVelocity,
+		desiredForwardWorld: tempDirection,
+		velocityWorld: tempDirection,
+		up: AUTO_TOUR_CAMERA_WORLD_UP,
 		deltaSeconds: delta,
-		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
-		worldUp: AUTO_TOUR_CAMERA_WORLD_UP,
-		applyOrbitTween: true,
-		followControlsDirty: followCameraControlDirty,
-		onUpdateOrbitLookTween: updateOrbitCameraLookTween,
+		roots: {
+			sceneGraphRoot: rootGroup,
+			instancedMeshGroup,
+		},
+		occlusionIgnoreNodeIds: [nodeId, routeData.routeNodeId],
+		immediate: false,
 	})
-	if (updated && mapControls) {
+
+	activeCamera.position.copy(avoidance.currentPosition)
+	if (mapControls) {
+		mapControls.target.copy(avoidance.currentTarget)
+		mapControls.update()
 		lastOrbitState.position.copy(activeCamera.position)
 		lastOrbitState.target.copy(mapControls.target)
 	}
+	activeCamera.lookAt(mapControls?.target ?? avoidance.currentTarget)
 }
 
 /**
@@ -9823,9 +9863,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	waterRuntime.reset()
 	activeAutoTourNodeIds.clear()
 	autoTourFollowNodeId.value = null
-	resetCameraFollowState(autoTourCameraFollowState)
-	autoTourCameraFollowVelocity.set(0, 0, 0)
-	autoTourCameraFollowHasSample = false
+	autoTourCameraAvoidanceController.reset()
 	followCameraControlActive = false
 	followCameraControlDirty = false
 	physicsBridgeContactsByNodeId.clear()
@@ -13408,16 +13446,16 @@ watch(
 									color="warning"
 								/>
 							</v-list-item>
-							<v-list-item>
-								<v-checkbox
-									class="scene-preview__debug-checkbox"
-									label="Ground streaming stats"
-									v-model="isGroundChunkStatsVisible"
-									hide-details
-									density="compact"
-									color="warning"
-								/>
-							</v-list-item>
+						<v-list-item>
+							<v-checkbox
+								class="scene-preview__debug-checkbox"
+								label="Ground streaming stats"
+								v-model="isGroundChunkStatsVisible"
+								hide-details
+								density="compact"
+								color="warning"
+							/>
+						</v-list-item>
 						<v-list-item>
 							<v-checkbox
 								class="scene-preview__debug-checkbox"
@@ -14435,6 +14473,12 @@ watch(
 	color: #f0f4ff;
 	font-size: 0.78rem;
 	font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+.scene-preview__stats-fallback--mono {
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-width: min(100%, 520px);
 }
 
 .scene-preview__debug-overlay {

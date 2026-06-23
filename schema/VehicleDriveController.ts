@@ -177,9 +177,6 @@ export type VehicleDriveControllerDeps = {
   followCameraVelocityLerpSpeed?: number | (() => number)
   followCameraTuning?: Partial<CameraFollowTuning> | (() => Partial<CameraFollowTuning>)
 
-  // Allow host to provide interpolated chassis data (e.g., fixed-step physics interpolation on WeChat).
-  resolveChassisWorldPosition?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
-  resolveChassisWorldVelocity?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
   resolveSurfaceSample?: (x: number, z: number, preferredHeight?: number | null, edgeMargin?: number | null) => VehicleSurfaceSample | null
   onVehicleObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
 }
@@ -269,16 +266,16 @@ const VEHICLE_FOLLOW_DISTANCE_MIN = 1
 // 跟随相机最大距离
 const VEHICLE_FOLLOW_DISTANCE_MAX = 10
 // 跟随相机基于转向输入的即时偏航反馈上限
-const VEHICLE_FOLLOW_STEER_LOOK_MAX = THREE.MathUtils.degToRad(14)
+const VEHICLE_FOLLOW_STEER_LOOK_MAX = THREE.MathUtils.degToRad(8)
 // 低于该速度时基本不施加转向视觉偏航
-const VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD = 0.75
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD = 1.1
 // 达到该速度后使用完整的转向视觉偏航
-const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 5.5
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 7.5
 // 转向视觉偏航建立速度（越大越接近即时）
 // 松开转向后的回正时间常数（秒）；值越小回正越快
-const VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT = 0.22
+const VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT = 0.32
 // 非零目标转向时的跟随时间常数（秒）；值越小越跟手
-const VEHICLE_FOLLOW_STEER_LOOK_TRACK_TIME_CONSTANT = 0.08
+const VEHICLE_FOLLOW_STEER_LOOK_TRACK_TIME_CONSTANT = 0.18
 // 跟随相机高度比例（调高让车辆在画面中更靠下）
 const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.7 // 降低相机高度比例
 const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0   // 降低相机最小高度
@@ -389,6 +386,12 @@ export class VehicleDriveController {
     vehicleDimensions: new THREE.Vector3(),
     tempQuaternion: new THREE.Quaternion(),
     tempVector: new THREE.Vector3(),
+    vehicleObjectWorldPosition: new THREE.Vector3(),
+    vehicleObjectWorldQuaternion: new THREE.Quaternion(),
+    vehicleVisualObjectWorldPosition: new THREE.Vector3(),
+    vehicleVisualObjectWorldQuaternion: new THREE.Quaternion(),
+    chassisWorldPosition: new THREE.Vector3(),
+    chassisWorldQuaternion: new THREE.Quaternion(),
   }
   private readonly transformDriveState = {
     speed: 0,
@@ -492,6 +495,21 @@ export class VehicleDriveController {
       targetLift: placement.targetLift,
       targetForward: placement.targetForward,
     }
+  }
+
+  private computeVehicleRenderFollowAnchor(vehicleObject: THREE.Object3D | null, fallbackPosition: THREE.Vector3, target: THREE.Vector3): void {
+    if (!vehicleObject) {
+      target.copy(fallbackPosition)
+      return
+    }
+    const temp = this.temp
+    temp.box.makeEmpty()
+    temp.box.setFromObject(vehicleObject)
+    if (temp.box.isEmpty()) {
+      target.copy(fallbackPosition)
+      return
+    }
+    temp.box.getCenter(target)
   }
 
   private clearFollowCameraPlacementCache(): void {
@@ -872,9 +890,6 @@ export class VehicleDriveController {
     const token = state.token
     const instance = nodeId ? this.deps.vehicleInstances.get(nodeId) ?? null : null
     const chassisBody = instance?.vehicle?.chassisBody ?? null
-    // (Removed unused debug snapshots)
-    // stopDrive: begin (debug logs removed)
-
     // --- HARD STOP ---
     // The runtime vehicle keeps the last engine/brake/steer command values until we overwrite them.
     // Clear all control state and forcibly stop the chassis body to guarantee that exiting drive leaves the vehicle static.
@@ -945,7 +960,6 @@ export class VehicleDriveController {
       this.deps.onResolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
     }
 
-    // stopDrive: end (debug logs removed)
   }
 
   applyForces(deltaSeconds?: number): void {
@@ -1399,31 +1413,20 @@ export class VehicleDriveController {
     const follow = this.bindings.cameraFollowState
     const temp = this.temp
     const placement = this.resolveFollowCameraPlacement(vehicleObject, instance)
+    this.computeVehicleFollowAnchor(vehicleObject, temp.seatPosition, temp.followAnchor)
+    const selectedAnchor = temp.followAnchor
 
-    this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
-
-    // Camera velocity: prefer a single stable source for all platforms.
-    // Use physics velocity when the host can supply it; otherwise fall back to anchor differencing.
     if (options.immediate) {
       this.followCameraVelocityHasSample = false
       this.followCameraVelocity.set(0, 0, 0)
-      this.followCameraLastAnchor.copy(temp.followAnchor)
+      this.followCameraLastAnchor.copy(selectedAnchor)
       this.followCameraVelocityHasSample = true
     } else if (deltaSeconds > 0 && this.followCameraVelocityHasSample) {
       const dt = Math.max(1e-6, Math.min(0.25, deltaSeconds))
-      const chassisBody = instance?.vehicle?.chassisBody ?? null
-      const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
-      const resolvedNodeId = nodeId ?? null
-      const resolveVelocity = resolvedNodeId && chassisBody ? this.deps.resolveChassisWorldVelocity : undefined
-
-      if (resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
-        // Use host-provided velocity when available to keep sampling consistent across platforms.
-      } else {
-        this.followCameraVelocityScratch
-          .copy(temp.followAnchor)
-          .sub(this.followCameraLastAnchor)
-          .multiplyScalar(1 / dt)
-      }
+      this.followCameraVelocityScratch
+        .copy(selectedAnchor)
+        .sub(this.followCameraLastAnchor)
+        .multiplyScalar(1 / dt)
       this.followCameraVelocityScratch.y = 0
       const sampleSpeedSq =
         (this.followCameraVelocityScratch.x * this.followCameraVelocityScratch.x)
@@ -1451,7 +1454,7 @@ export class VehicleDriveController {
       this.followCameraVelocity.set(0, 0, 0)
       this.followCameraVelocityHasSample = true
     }
-    this.followCameraLastAnchor.copy(temp.followAnchor)
+    this.followCameraLastAnchor.copy(selectedAnchor)
 
     const desiredFollowForward = temp.cameraForward.copy(temp.seatForward)
     desiredFollowForward.y = 0
@@ -1499,10 +1502,10 @@ export class VehicleDriveController {
     const followNodeId = this.deps.normalizeNodeId(this.state.nodeId)
     const constrainFollowCameraPose = this.deps.constrainFollowCameraPose
 
-    return this.followCameraController.update({
+    const updated = this.followCameraController.update({
       follow,
       placement,
-      anchorWorld: temp.followAnchor,
+      anchorWorld: selectedAnchor,
       desiredForwardWorld: desiredFollowForward,
       velocityWorld: this.followCameraVelocity,
       deltaSeconds,
@@ -1529,6 +1532,7 @@ export class VehicleDriveController {
       immediate: options.immediate ?? false,
       ...(updateOrbitLookTween ? { onUpdateOrbitLookTween: updateOrbitLookTween } : {}),
     })
+    return updated
   }
 
   private updateFirstPersonCamera(ctx: VehicleDriveCameraContext): boolean {
@@ -1550,34 +1554,10 @@ export class VehicleDriveController {
 
   private computeVehicleFollowAnchor(
     vehicleObject: THREE.Object3D | null,
-    instance: VehicleInstance | null,
     fallbackPosition: THREE.Vector3,
     target: THREE.Vector3,
   ): void {
-    const physicsEnabled = this.deps.isPhysicsEnabled?.() !== false
-    const chassisBody = instance?.vehicle?.chassisBody ?? null
-    const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
-    const resolvePosition = physicsEnabled && nodeId && chassisBody ? this.deps.resolveChassisWorldPosition : undefined
-    if (nodeId && chassisBody && resolvePosition && resolvePosition(nodeId, chassisBody, target)) {
-      return
-    }
-    const bodyPosition = physicsEnabled ? chassisBody?.position : null
-    if (bodyPosition) {
-      target.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
-      return
-    }
-    if (!vehicleObject) {
-      target.copy(fallbackPosition)
-      return
-    }
-    const temp = this.temp
-    temp.box.makeEmpty()
-    temp.box.setFromObject(vehicleObject)
-    if (temp.box.isEmpty()) {
-      target.copy(fallbackPosition)
-      return
-    }
-    temp.box.getCenter(target)
+    this.computeVehicleRenderFollowAnchor(vehicleObject, fallbackPosition, target)
   }
 
   alignExitCamera(ctx: VehicleDriveCameraContext): boolean {

@@ -1,192 +1,13 @@
 import * as THREE from 'three'
 import type { PurePursuitComponentProps, VehicleComponentProps } from './components'
 import type { VehicleDriveVehicle } from './VehicleDriveController'
-import { resolvePathFollowSample, samplePolylineAtS } from './pathFollowCommon'
+import type { PolylineMetricData } from './polylineProgress'
+import { resolvePathFollowLookaheadDistance, resolvePathFollowPlanarArrivalDistance, resolvePathFollowSample, samplePolylineAtS } from './pathFollowCommon'
+import { buildPolylineVertexArcLengths } from './polylineProgress'
 import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 
-const VEHICLE_CONTROL_DEBUG_KEY = 'harmony:debug:vehicle-control'
-const PURE_PURSUIT_DEBUG_KEY = 'harmony:debug:pure-pursuit'
-const AUTO_TOUR_DEBUG_KEY = 'harmony:debug:auto-tour'
 export const VEHICLE_PARKED_SPEED_EPSILON = 0.08
 export const VEHICLE_PARKING_HOLD_SPEED_EPSILON = 0.2
-
-type VehicleControlDebugKind = 'pure-pursuit' | 'auto-tour'
-
-export type VehicleControlDebugEvent = {
-  ts: number
-  dt?: number
-  kind: VehicleControlDebugKind
-  nodeId?: string
-  reason: string
-  modeStopping?: boolean
-  dockActive?: boolean
-  shouldBrakeNearEnd?: boolean
-  distanceToEnd?: number
-  brakeThreshold?: number
-  arrivalDistance?: number
-  speedMps?: number
-  forwardSpeedMps?: number
-  targetSpeedMps?: number
-  speedError?: number
-  control?: number
-  integral?: number
-  engineForce?: number
-  brakeForce?: number
-  steerRad?: number
-  targetIndex?: number
-  stopIndex?: number
-
-  suppressedSwitches?: number
-}
-
-type VehicleControlDebugBuffer = {
-  capacity: number
-  eventsByNodeId: Map<string, VehicleControlDebugEvent[]>
-}
-
-type DebugFlagCacheEntry = { value: boolean; lastReadMs: number }
-const debugFlagCache = new Map<string, DebugFlagCacheEntry>()
-let debugStorageListenerRegistered = false
-
-function ensureDebugStorageListener(): void {
-  if (debugStorageListenerRegistered) {
-    return
-  }
-  debugStorageListenerRegistered = true
-  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
-    return
-  }
-  try {
-    window.addEventListener('storage', (event) => {
-      const key = event?.key
-      if (!key) {
-        return
-      }
-      if (key === VEHICLE_CONTROL_DEBUG_KEY || key === PURE_PURSUIT_DEBUG_KEY || key === AUTO_TOUR_DEBUG_KEY) {
-        debugFlagCache.delete(key)
-      }
-    })
-  } catch {
-    // Ignore listener failures (e.g., sandboxed runtime).
-  }
-}
-
-function readLocalStorageFlag(key: string): boolean {
-  if (typeof window === 'undefined') {
-    return false
-  }
-  try {
-    const storage = window.localStorage
-    if (!storage) {
-      return false
-    }
-    return storage.getItem(key) === '1'
-  } catch {
-    return false
-  }
-}
-
-function readLocalStorageFlagCached(key: string, maxAgeMs = 500): boolean {
-  const now = Date.now()
-  const cached = debugFlagCache.get(key)
-  if (cached && now - cached.lastReadMs <= maxAgeMs) {
-    return cached.value
-  }
-  const value = readLocalStorageFlag(key)
-  debugFlagCache.set(key, { value, lastReadMs: now })
-  return value
-}
-
-export function isVehicleControlDebugEnabled(): boolean {
-  ensureDebugStorageListener()
-  return (
-    readLocalStorageFlagCached(VEHICLE_CONTROL_DEBUG_KEY) ||
-    readLocalStorageFlagCached(PURE_PURSUIT_DEBUG_KEY) ||
-    readLocalStorageFlagCached(AUTO_TOUR_DEBUG_KEY)
-  )
-}
-
-export function isPurePursuitDebugEnabled(): boolean {
-  ensureDebugStorageListener()
-  return readLocalStorageFlagCached(VEHICLE_CONTROL_DEBUG_KEY) || readLocalStorageFlagCached(PURE_PURSUIT_DEBUG_KEY)
-}
-
-export function isAutoTourDebugEnabled(): boolean {
-  ensureDebugStorageListener()
-  return readLocalStorageFlagCached(VEHICLE_CONTROL_DEBUG_KEY) || readLocalStorageFlagCached(AUTO_TOUR_DEBUG_KEY)
-}
-
-function getVehicleControlDebugBuffer(): VehicleControlDebugBuffer {
-  const g: any = typeof globalThis !== 'undefined' ? (globalThis as any) : ({} as any)
-  const existing = g.__HARMONY_VEHICLE_CONTROL_DEBUG_BUFFER__ as VehicleControlDebugBuffer | undefined
-  if (existing && existing.eventsByNodeId instanceof Map) {
-    return existing
-  }
-  const buffer: VehicleControlDebugBuffer = {
-    capacity: 2000,
-    eventsByNodeId: new Map(),
-  }
-  try {
-    g.__HARMONY_VEHICLE_CONTROL_DEBUG_BUFFER__ = buffer
-  } catch {
-    // Ignore if globalThis is not writable.
-  }
-  return buffer
-}
-
-export function pushVehicleControlDebugEvent(event: VehicleControlDebugEvent): void {
-  if (!isVehicleControlDebugEnabled()) {
-    return
-  }
-
-  const buffer = getVehicleControlDebugBuffer()
-  const nodeId = event.nodeId || '<unknown>'
-  const list = buffer.eventsByNodeId.get(nodeId) ?? []
-  list.push(event)
-  if (list.length > buffer.capacity) {
-    list.splice(0, list.length - buffer.capacity)
-  }
-  buffer.eventsByNodeId.set(nodeId, list)
-
-  // Expose a tiny helper for interactive debugging.
-  const g: any = typeof globalThis !== 'undefined' ? (globalThis as any) : ({} as any)
-  if (!g.__HARMONY_VEHICLE_CONTROL_DEBUG__) {
-    try {
-      g.__HARMONY_VEHICLE_CONTROL_DEBUG__ = {
-        dump: (id?: string) => dumpVehicleControlDebugLog(id),
-        clear: (id?: string) => clearVehicleControlDebugLog(id),
-        keys: {
-          vehicle: VEHICLE_CONTROL_DEBUG_KEY,
-          purePursuit: PURE_PURSUIT_DEBUG_KEY,
-          autoTour: AUTO_TOUR_DEBUG_KEY,
-        },
-      }
-    } catch {
-      // ignore
-    }
-  }
-}
-
-export function dumpVehicleControlDebugLog(nodeId?: string): VehicleControlDebugEvent[] | Record<string, VehicleControlDebugEvent[]> {
-  const buffer = getVehicleControlDebugBuffer()
-  if (nodeId) {
-    return buffer.eventsByNodeId.get(nodeId) ?? []
-  }
-  const result: Record<string, VehicleControlDebugEvent[]> = {}
-  for (const [key, value] of buffer.eventsByNodeId.entries()) {
-    result[key] = value
-  }
-  return result
-}
-
-export function clearVehicleControlDebugLog(nodeId?: string): void {
-  const buffer = getVehicleControlDebugBuffer()
-  if (nodeId) {
-    buffer.eventsByNodeId.delete(nodeId)
-    return
-  }
-  buffer.eventsByNodeId.clear()
-}
 
 export type PurePursuitVehicleInstanceLike = {
   vehicle: VehicleDriveVehicle
@@ -199,14 +20,14 @@ export type PurePursuitVehicleControlState = {
   speedIntegral?: number
   lastSteerRad?: number
   speedTargetMps?: number
+  forwardSpeedMps?: number
+  longitudinalErrorMps?: number
   reverseActive?: boolean
 
   /** Latched longitudinal mode for engine/brake hysteresis. */
   longitudinalUseEngine?: boolean
-
-  debugLastUseEngine?: boolean
-  debugLastDockActive?: boolean
-  debugLastShouldBrakeNearEnd?: boolean
+  /** Timestamp of the last longitudinal mode switch, used to prevent immediate flip-flopping. */
+  longitudinalModeSwitchAtMs?: number
 }
 
 const DEFAULT_MAX_STEER_RADIANS = THREE.MathUtils.degToRad(26)
@@ -221,35 +42,76 @@ const toLookahead = new THREE.Vector3()
 const desiredDir = new THREE.Vector3()
 const cross = new THREE.Vector3()
 const planarVelocity = new THREE.Vector3()
-const planarEnd = new THREE.Vector3()
 const yawTargetQuat = new THREE.Quaternion()
 const objectWorldQuat = new THREE.Quaternion()
 const currentPositionThree = new THREE.Vector3()
 const parkedSpeedQuaternion = new THREE.Quaternion()
 const parkedSpeedForward = new THREE.Vector3()
 const pathPreviewPoint = new THREE.Vector3()
+const pathPreviewFarPoint = new THREE.Vector3()
 const pathPreviewDirection = new THREE.Vector3()
+const pathCurvePointA = new THREE.Vector3()
+const pathCurvePointB = new THREE.Vector3()
+const pathCurvePointD = new THREE.Vector3()
+const pathCurveDirA = new THREE.Vector3()
+const pathCurveDirB = new THREE.Vector3()
+const pathCurveDirC = new THREE.Vector3()
 
 // Longitudinal control tuning (runtime-local, intentionally conservative defaults).
 // These values are designed to remove "engine/brake" chattering near zero error without affecting normal driving.
-const PP_SPEED_ERROR_HYSTERESIS_MPS = 0.06
 const PP_INTEGRAL_LEAK_THRESHOLD_MPS = 0.10
 const PP_INTEGRAL_LEAK_RATE_PER_SEC = 1.6
 const PP_INTEGRAL_SIGN_MISMATCH_LEAK_RATE_PER_SEC = 5.0
+const PP_FORWARD_SPEED_FILTER_RATE_PER_SEC = 10
+const PP_LONGITUDINAL_COAST_BAND_MPS = 0.18
+const PP_LONGITUDINAL_ERROR_FILTER_RATE_PER_SEC = 6.5
+const PP_LONGITUDINAL_ENGINE_ON_THRESHOLD_MPS = 0.30
+const PP_LONGITUDINAL_BRAKE_ON_THRESHOLD_MPS = 0.34
+const PP_LONGITUDINAL_ENGINE_HOLD_MS = 180
+const PP_LONGITUDINAL_BRAKE_HOLD_MS = 320
+const PP_ENGINE_FORCE_OUTPUT_SCALE = 0.55
+const PP_BRAKE_FORCE_OUTPUT_SCALE = 0.30
+const PP_FORWARD_SPEED_CLAMP_MPS = 30
 const AUTO_TOUR_CRUISE_SPEED_SCALE = 0.8
-const AUTO_TOUR_SPEED_TARGET_SMOOTHING_RATE = 5.0
-const AUTO_TOUR_PREVIEW_DISTANCE_MIN_METERS = 4
-const AUTO_TOUR_PREVIEW_DISTANCE_MAX_METERS = 16
-const AUTO_TOUR_PREVIEW_DISTANCE_SCALE = 2.5
-const AUTO_TOUR_PREVIEW_FULL_SLOW_ANGLE = THREE.MathUtils.degToRad(56)
-const AUTO_TOUR_HEADING_FULL_SLOW_ANGLE = THREE.MathUtils.degToRad(68)
-const AUTO_TOUR_TURN_MIN_SPEED_RATIO = 0.28
+const AUTO_TOUR_SPEED_TARGET_RISE_RATE = 2.4
+const AUTO_TOUR_SPEED_TARGET_FALL_RATE = 10.0
+const AUTO_TOUR_PREVIEW_DISTANCE_MIN_METERS = 6
+const AUTO_TOUR_PREVIEW_DISTANCE_MAX_METERS = 20
+const AUTO_TOUR_PREVIEW_DISTANCE_SCALE = 2.6
+const AUTO_TOUR_PREVIEW_FULL_SLOW_ANGLE = THREE.MathUtils.degToRad(52)
+const AUTO_TOUR_HEADING_FULL_SLOW_ANGLE = THREE.MathUtils.degToRad(64)
+const AUTO_TOUR_TURN_MIN_SPEED_RATIO = 0.12
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
     return 0
   }
   return Math.max(0, Math.min(1, value))
+}
+
+function angleBetweenPlanarDirections(a: THREE.Vector3, b: THREE.Vector3): number {
+  const dot = THREE.MathUtils.clamp(a.dot(b), -1, 1)
+  return Math.acos(dot)
+}
+
+function samplePlanarDirectionAtS(
+  points: readonly THREE.Vector3[],
+  polylineData: PolylineMetricData,
+  s0: number,
+  s1: number,
+  outDirection: THREE.Vector3,
+): number {
+  samplePolylineAtS(points, polylineData, s0, pathCurvePointA)
+  samplePolylineAtS(points, polylineData, s1, pathCurvePointB)
+  outDirection.copy(pathCurvePointB).sub(pathCurvePointA)
+  outDirection.y = 0
+  const length = outDirection.length()
+  if (length > 1e-6) {
+    outDirection.multiplyScalar(1 / length)
+    return length
+  }
+  outDirection.set(0, 0, 0)
+  return 0
 }
 
 function setCannonQuaternionFromThree(target: any, q: THREE.Quaternion): void {
@@ -330,8 +192,6 @@ export function applyPurePursuitVehicleControl(params: {
   modeStopping: boolean
   /** Optional index to treat as the stopping/docking target (defaults to route end). */
   stopIndex?: number
-  /** Optional nodeId for debug log correlation. */
-  debugNodeId?: string
 }): { reachedStop: boolean } {
   const {
     vehicleInstance,
@@ -376,13 +236,13 @@ export function applyPurePursuitVehicleControl(params: {
   forwardWorld.normalize()
 
   currentPositionThree.set(currentPosition.x, currentPosition.y, currentPosition.z)
-  const lookaheadDistance = Math.max(
-    pursuitProps.lookaheadMinMeters,
-    Math.min(
-      pursuitProps.lookaheadMaxMeters,
-      pursuitProps.lookaheadBaseMeters + pursuitProps.lookaheadSpeedGain * (Number.isFinite(pursuitProps.maxSpeedMps) ? Math.min(speedMps, pursuitProps.maxSpeedMps) : speedMps),
-    ),
-  )
+  const lookaheadDistance = resolvePathFollowLookaheadDistance({
+    speedMps,
+    baseMeters: pursuitProps.lookaheadBaseMeters,
+    speedGain: pursuitProps.lookaheadSpeedGain,
+    minMeters: pursuitProps.lookaheadMinMeters,
+    maxMeters: pursuitProps.lookaheadMaxMeters,
+  })
   const pathSample = resolvePathFollowSample({
     points,
     loop,
@@ -398,31 +258,29 @@ export function applyPurePursuitVehicleControl(params: {
   const rawStopIndex = typeof stopIndex === 'number' && Number.isFinite(stopIndex) ? Math.floor(stopIndex) : endIndex
   const clampedStopIndex = Math.max(0, Math.min(endIndex, rawStopIndex))
   const stopPoint = points[clampedStopIndex]!
-  planarEnd.set(stopPoint.x, currentY, stopPoint.z)
-  const dxEnd = planarEnd.x - currentPosition.x
-  const dzEnd = planarEnd.z - currentPosition.z
-  const distanceToEnd = Math.sqrt(dxEnd * dxEnd + dzEnd * dzEnd)
-
-  const dockActive = modeStopping && pursuitProps.dockingEnabled && distanceToEnd <= pursuitProps.dockStartDistanceMeters
-
-  const debugEnabled = isPurePursuitDebugEnabled()
-  if (debugEnabled) {
-    const lastDock = state.debugLastDockActive
-    if (lastDock !== dockActive) {
-      state.debugLastDockActive = dockActive
-      pushVehicleControlDebugEvent({
-        ts: Date.now(),
-        dt: deltaSeconds,
-        kind: 'pure-pursuit',
-        nodeId: params.debugNodeId,
-        reason: dockActive ? 'dock_on' : 'dock_off',
-        modeStopping,
-        dockActive,
-        distanceToEnd,
-        stopIndex: clampedStopIndex,
-      })
-    }
-  }
+  const waypointArcLengths = buildPolylineVertexArcLengths(points, pathSample.polylineData)
+  const stopArcLength = waypointArcLengths[clampedStopIndex] ?? pathSample.polylineData.totalLength
+  const routeDistanceToEnd = Math.max(0, stopArcLength - pathSample.projection.s)
+  const previewDistance = Math.max(
+    AUTO_TOUR_PREVIEW_DISTANCE_MIN_METERS,
+    Math.min(
+      AUTO_TOUR_PREVIEW_DISTANCE_MAX_METERS,
+      Math.max(lookaheadDistance * AUTO_TOUR_PREVIEW_DISTANCE_SCALE, lookaheadDistance + 2),
+    ),
+  )
+  const brakeThreshold = resolvePathFollowPlanarArrivalDistance(
+    speedMps,
+    pursuitProps.brakeDistanceMinMeters,
+    Math.max(pursuitProps.brakeDistanceMinMeters, pursuitProps.dockStartDistanceMeters),
+    pursuitProps.brakeDistanceSpeedFactor,
+  )
+  const stopEnvelopeDistance = Math.max(
+    pursuitProps.dockStartDistanceMeters,
+    brakeThreshold,
+    speedMps * Math.max(1, pursuitProps.dockVelocityKp),
+    previewDistance * 0.85,
+  )
+  const dockActive = modeStopping && pursuitProps.dockingEnabled && routeDistanceToEnd <= stopEnvelopeDistance
 
   const wheelbaseMeters = Math.max(0.01, vehicleProps.wheelbaseMeters)
   rearAxle.set(currentPosition.x, currentY, currentPosition.z)
@@ -455,28 +313,39 @@ export function applyPurePursuitVehicleControl(params: {
 
   const componentMaxSpeed = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
   const cruiseSpeed = Math.max(0, Math.min(speedMps * AUTO_TOUR_CRUISE_SPEED_SCALE, componentMaxSpeed))
-  const previewDistance = Math.max(
-    AUTO_TOUR_PREVIEW_DISTANCE_MIN_METERS,
-    Math.min(
-      AUTO_TOUR_PREVIEW_DISTANCE_MAX_METERS,
-      Math.max(lookaheadDistance * AUTO_TOUR_PREVIEW_DISTANCE_SCALE, lookaheadDistance + 2),
-    ),
-  )
   samplePolylineAtS(points, pathSample.polylineData, pathSample.projection.s + previewDistance, pathPreviewPoint)
-  pathPreviewDirection.copy(pathPreviewPoint).sub(pathSample.lookaheadPoint)
+  samplePolylineAtS(points, pathSample.polylineData, pathSample.projection.s + previewDistance + Math.max(1, previewDistance * 0.35), pathPreviewFarPoint)
+  pathPreviewDirection.copy(pathPreviewFarPoint).sub(pathPreviewPoint)
   pathPreviewDirection.y = 0
   const previewLength = pathPreviewDirection.length()
   if (previewLength > 1e-6) {
     pathPreviewDirection.multiplyScalar(1 / previewLength)
   }
 
+  const curveProbeDistance = Math.max(previewDistance * 0.7, lookaheadDistance + 3)
+  const curveProbeNear = Math.max(2, curveProbeDistance * 0.45)
+  const curveProbeMid = Math.max(curveProbeNear + 1, curveProbeDistance * 0.95)
+  const curveProbeFar = Math.max(curveProbeMid + 1, curveProbeDistance * 1.55)
+  const curveProbeExtra = Math.max(1.5, curveProbeDistance * 0.45)
+  samplePlanarDirectionAtS(points, pathSample.polylineData, pathSample.projection.s + curveProbeNear, pathSample.projection.s + curveProbeMid, pathCurveDirA)
+  samplePlanarDirectionAtS(points, pathSample.polylineData, pathSample.projection.s + curveProbeMid, pathSample.projection.s + curveProbeFar, pathCurveDirB)
+  samplePlanarDirectionAtS(points, pathSample.polylineData, pathSample.projection.s + curveProbeFar, pathSample.projection.s + curveProbeFar + curveProbeExtra, pathCurveDirC)
+  samplePlanarDirectionAtS(points, pathSample.polylineData, pathSample.projection.s + curveProbeFar + curveProbeExtra, pathSample.projection.s + curveProbeFar + curveProbeExtra * 2, pathCurvePointD)
+
   const headingErrorRad = Math.acos(THREE.MathUtils.clamp(forwardWorld.dot(desiredDir), -1, 1))
   const previewTurnAngleRad = previewLength > 1e-6
     ? Math.acos(THREE.MathUtils.clamp(desiredDir.dot(pathPreviewDirection), -1, 1))
     : 0
+  const curveTurnAngleRad = Math.max(
+    angleBetweenPlanarDirections(pathCurveDirA, pathCurveDirB),
+    angleBetweenPlanarDirections(pathCurveDirB, pathCurveDirC),
+    angleBetweenPlanarDirections(pathCurveDirC, pathCurvePointD),
+  )
   const headingTurnSeverity = THREE.MathUtils.clamp(headingErrorRad / AUTO_TOUR_HEADING_FULL_SLOW_ANGLE, 0, 1)
   const previewTurnSeverity = THREE.MathUtils.clamp(previewTurnAngleRad / AUTO_TOUR_PREVIEW_FULL_SLOW_ANGLE, 0, 1)
-  const turnSeverity = Math.max(headingTurnSeverity, previewTurnSeverity)
+  const curveTurnSeverity = THREE.MathUtils.clamp(curveTurnAngleRad / THREE.MathUtils.degToRad(50), 0, 1)
+  const steerSeverity = safeMaxSteer > 1e-6 ? Math.abs(steering) / safeMaxSteer : 0
+  const turnSeverity = Math.max(headingTurnSeverity, previewTurnSeverity, curveTurnSeverity, steerSeverity)
   const minSpeedRatio = Math.min(
     1,
     Math.max(
@@ -484,24 +353,46 @@ export function applyPurePursuitVehicleControl(params: {
       cruiseSpeed > 1e-6 ? pursuitProps.minSpeedMps / cruiseSpeed : AUTO_TOUR_TURN_MIN_SPEED_RATIO,
     ),
   )
-  const rawSpeedTarget = Math.max(
-    pursuitProps.minSpeedMps,
-    cruiseSpeed * (1 - turnSeverity * (1 - minSpeedRatio)),
+  const curvatureFactor = Math.max(0, pursuitProps.curvatureSpeedFactor)
+  const curveIntensity = THREE.MathUtils.clamp(
+    (turnSeverity * 0.35 + curveTurnSeverity * 0.65) * (1 + curvatureFactor * 0.25),
+    0,
+    1,
   )
-  const speedTargetAlpha = 1 - Math.exp(-Math.max(0, AUTO_TOUR_SPEED_TARGET_SMOOTHING_RATE) * Math.max(0, deltaSeconds))
-  let speedTarget = typeof state.speedTargetMps === 'number'
-    ? state.speedTargetMps + (rawSpeedTarget - state.speedTargetMps) * speedTargetAlpha
-    : rawSpeedTarget
-  state.speedTargetMps = speedTarget
+  const curveFloorRatio = Math.min(
+    0.9,
+    Math.max(
+      minSpeedRatio,
+      modeStopping ? 0.34 : 0.45,
+    ),
+  )
+  const curveDamping = Math.max(
+    curveFloorRatio,
+    curveFloorRatio + (1 - curveFloorRatio) * Math.pow(1 - curveIntensity, 1.55),
+  )
+  let rawSpeedTarget = Math.max(
+    pursuitProps.minSpeedMps,
+    cruiseSpeed * curveDamping,
+  )
 
   if (modeStopping) {
-    const approachSpeed = Math.min(
-      pursuitProps.dockMaxSpeedMps,
-      Math.max(0, distanceToEnd * pursuitProps.dockVelocityKp),
+    const dockSeverity = THREE.MathUtils.clamp(
+      1 - routeDistanceToEnd / Math.max(1e-6, stopEnvelopeDistance),
+      0,
+      1,
     )
-    speedTarget = Math.min(speedTarget, approachSpeed)
-    state.speedTargetMps = speedTarget
+    const dockSpeedTarget = THREE.MathUtils.lerp(
+      Math.max(pursuitProps.minSpeedMps, pursuitProps.dockStopSpeedEpsilonMps),
+      Math.min(pursuitProps.dockMaxSpeedMps, cruiseSpeed, rawSpeedTarget),
+      1 - dockSeverity,
+    )
+    rawSpeedTarget = Math.min(rawSpeedTarget, dockSpeedTarget)
   }
+
+  const previousSpeedTarget = typeof state.speedTargetMps === 'number' ? Math.max(0, state.speedTargetMps) : rawSpeedTarget
+  const speedTargetAlpha = 1 - Math.exp(-Math.max(0, rawSpeedTarget < previousSpeedTarget ? AUTO_TOUR_SPEED_TARGET_FALL_RATE : AUTO_TOUR_SPEED_TARGET_RISE_RATE) * Math.max(0, deltaSeconds))
+  const speedTarget = previousSpeedTarget + (rawSpeedTarget - previousSpeedTarget) * speedTargetAlpha
+  state.speedTargetMps = speedTarget
 
   const desiredSpeedSigned = speedTarget
   try {
@@ -511,8 +402,23 @@ export function applyPurePursuitVehicleControl(params: {
   }
 
   planarVelocity.set(chassisBody.velocity.x, 0, chassisBody.velocity.z)
-  const forwardSpeed = planarVelocity.dot(forwardWorld)
+  const forwardSpeedRaw = planarVelocity.dot(forwardWorld)
+  const forwardSpeedClamped = THREE.MathUtils.clamp(forwardSpeedRaw, -PP_FORWARD_SPEED_CLAMP_MPS, PP_FORWARD_SPEED_CLAMP_MPS)
+  const previousForwardSpeed = typeof state.forwardSpeedMps === 'number' ? state.forwardSpeedMps : forwardSpeedClamped
+  const forwardSpeedAlpha = 1 - Math.exp(-Math.max(0, PP_FORWARD_SPEED_FILTER_RATE_PER_SEC) * Math.max(0, deltaSeconds))
+  const forwardSpeed = previousForwardSpeed + (forwardSpeedClamped - previousForwardSpeed) * forwardSpeedAlpha
+  state.forwardSpeedMps = forwardSpeed
   const speedError = desiredSpeedSigned - forwardSpeed
+  const previousLongitudinalError = typeof state.longitudinalErrorMps === 'number'
+    ? state.longitudinalErrorMps
+    : speedError
+  const longitudinalErrorSignChanged =
+    Math.abs(previousLongitudinalError) > 1e-3
+    && Math.abs(speedError) > 1e-3
+    && Math.sign(previousLongitudinalError) !== Math.sign(speedError)
+  const longitudinalErrorAlpha = 1 - Math.exp(-Math.max(0, longitudinalErrorSignChanged ? PP_LONGITUDINAL_ERROR_FILTER_RATE_PER_SEC * 0.45 : PP_LONGITUDINAL_ERROR_FILTER_RATE_PER_SEC) * Math.max(0, deltaSeconds))
+  const longitudinalError = previousLongitudinalError + (speedError - previousLongitudinalError) * longitudinalErrorAlpha
+  state.longitudinalErrorMps = longitudinalError
 
   let integral = typeof state.speedIntegral === 'number' ? state.speedIntegral : 0
   integral += speedError * deltaSeconds
@@ -537,86 +443,50 @@ export function applyPurePursuitVehicleControl(params: {
 
   state.speedIntegral = integral
 
-  const control = pursuitProps.speedKp * speedError + pursuitProps.speedKi * integral
+  const control = pursuitProps.speedKp * longitudinalError + pursuitProps.speedKi * integral
 
   const engineForceMax = Number.isFinite(vehicleProps.engineForceMax) ? Math.max(0, vehicleProps.engineForceMax) : 0
   const brakeForceMax = Number.isFinite(vehicleProps.brakeForceMax) ? Math.max(0, vehicleProps.brakeForceMax) : 0
-  const engineForceCmd = THREE.MathUtils.clamp(control * engineForceMax, -engineForceMax, engineForceMax)
+  const engineForceCmd = THREE.MathUtils.clamp(control * engineForceMax * PP_ENGINE_FORCE_OUTPUT_SCALE, -engineForceMax, engineForceMax)
 
   // Hysteresis on longitudinal mode (engine vs brake) to avoid jitter from tiny sign changes around zero.
   // Decide direction from speed error (stable physical signal) and latch within a deadband.
-  const desiredUseEngine = speedError > 0
+  const desiredUseEngine = longitudinalError >= PP_LONGITUDINAL_ENGINE_ON_THRESHOLD_MPS
   const lastUseEngine = typeof state.longitudinalUseEngine === 'boolean' ? state.longitudinalUseEngine : desiredUseEngine
   let useEngine = lastUseEngine
-  if (Number.isFinite(absSpeedError) && absSpeedError > PP_SPEED_ERROR_HYSTERESIS_MPS) {
-    useEngine = desiredUseEngine
+  const now = Date.now()
+  const lastSwitchAtMs = typeof state.longitudinalModeSwitchAtMs === 'number' ? state.longitudinalModeSwitchAtMs : 0
+  const holdMs = useEngine ? PP_LONGITUDINAL_ENGINE_HOLD_MS : PP_LONGITUDINAL_BRAKE_HOLD_MS
+  const holdElapsed = now - lastSwitchAtMs >= holdMs
+  if (holdElapsed) {
+    if (lastUseEngine) {
+      if (longitudinalError <= -PP_LONGITUDINAL_BRAKE_ON_THRESHOLD_MPS) {
+        useEngine = false
+      }
+    } else if (desiredUseEngine) {
+      useEngine = true
+    }
+  }
+  if (useEngine !== lastUseEngine) {
+    state.longitudinalModeSwitchAtMs = now
+    state.speedIntegral = 0
+    integral = 0
   }
   state.longitudinalUseEngine = useEngine
 
-  let engineForce = useEngine ? Math.max(0, engineForceCmd) : 0
-  let brakeForce = useEngine ? 0 : Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax))
-
-  if (debugEnabled) {
-    const lastUseEngine = state.debugLastUseEngine
-    if (lastUseEngine !== useEngine) {
-      state.debugLastUseEngine = useEngine
-      pushVehicleControlDebugEvent({
-        ts: Date.now(),
-        dt: deltaSeconds,
-        kind: 'pure-pursuit',
-        nodeId: params.debugNodeId,
-        reason: useEngine ? 'brake_to_engine' : 'engine_to_brake',
-        modeStopping,
-        dockActive,
-        speedMps,
-        forwardSpeedMps: forwardSpeed,
-        targetSpeedMps: desiredSpeedSigned,
-        speedError,
-        control,
-        integral,
-        engineForce,
-        brakeForce,
-        steerRad: steering,
-      })
-    }
+  const inCoastZone = Math.abs(longitudinalError) <= PP_LONGITUDINAL_COAST_BAND_MPS
+  let engineForce = 0
+  let brakeForce = 0
+  if (!inCoastZone) {
+    engineForce = useEngine ? Math.min(engineForceMax, Math.max(0, engineForceCmd)) : 0
+    brakeForce = useEngine ? 0 : Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax * PP_BRAKE_FORCE_OUTPUT_SCALE))
   }
 
-  // NOTE: `distanceToTarget` in AutoTour is the distance to the *current waypoint*.
-  // Applying a hard brake floor near every waypoint causes visible stutter on curves (dense waypoints).
-  // We only apply this brake-distance rule while stopping near the end.
-  const brakeThreshold = Math.max(
-    pursuitProps.brakeDistanceMinMeters,
-    speedMps * pursuitProps.brakeDistanceSpeedFactor,
-  )
-  const shouldBrakeNearEnd = modeStopping && distanceToEnd < brakeThreshold
+  // NOTE: We now gate the end-brake floor by remaining route arc length instead of straight-line distance.
+  // This keeps braking early enough on bends without reintroducing stutter at dense intermediate waypoints.
+  const shouldBrakeNearEnd = modeStopping && routeDistanceToEnd < brakeThreshold
   if (shouldBrakeNearEnd && !dockActive) {
     brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * 0.35))
-  }
-
-  if (debugEnabled) {
-    const lastNearEnd = state.debugLastShouldBrakeNearEnd
-    if (lastNearEnd !== shouldBrakeNearEnd) {
-      state.debugLastShouldBrakeNearEnd = shouldBrakeNearEnd
-      pushVehicleControlDebugEvent({
-        ts: Date.now(),
-        dt: deltaSeconds,
-        kind: 'pure-pursuit',
-        nodeId: params.debugNodeId,
-        reason: shouldBrakeNearEnd ? 'near_end_brake_on' : 'near_end_brake_off',
-        modeStopping,
-        dockActive,
-        shouldBrakeNearEnd,
-        distanceToEnd,
-        brakeThreshold,
-        speedMps,
-        forwardSpeedMps: forwardSpeed,
-        targetSpeedMps: desiredSpeedSigned,
-        speedError,
-        engineForce,
-        brakeForce,
-      })
-    }
-
   }
 
   if (dockActive) {
@@ -667,27 +537,7 @@ export function applyPurePursuitVehicleControl(params: {
     // Tolerant stopping: once we're within the docking zone, we only require a sufficiently low planar speed.
     // This avoids hunting around the exact endpoint.
     const stopDistance = Math.max(pursuitProps.dockStopEpsilonMeters, pursuitProps.dockStartDistanceMeters)
-    if (distanceToEnd <= stopDistance && planarSpeed <= pursuitProps.dockStopSpeedEpsilonMps) {
-      if (debugEnabled) {
-        pushVehicleControlDebugEvent({
-          ts: Date.now(),
-          dt: deltaSeconds,
-          kind: 'pure-pursuit',
-          nodeId: params.debugNodeId,
-          reason: 'reached_stop',
-          modeStopping,
-          dockActive,
-          shouldBrakeNearEnd,
-          distanceToEnd,
-          speedMps,
-          forwardSpeedMps: forwardSpeed,
-          targetSpeedMps: desiredSpeedSigned,
-          engineForce,
-          brakeForce,
-          steerRad: steering,
-          stopIndex: clampedStopIndex,
-        })
-      }
+    if (routeDistanceToEnd <= stopDistance && planarSpeed <= pursuitProps.dockStopSpeedEpsilonMps) {
       chassisBody.velocity.x = 0
       chassisBody.velocity.z = 0
       chassisBody.angularVelocity.x = 0
@@ -712,7 +562,6 @@ export function applyPurePursuitVehicleControlSafe(params: {
   modeStopping: boolean
   distanceToTarget: number
   stopIndex?: number
-  debugNodeId?: string
 }): { reachedStop: boolean } {
   try {
     return applyPurePursuitVehicleControl(params)

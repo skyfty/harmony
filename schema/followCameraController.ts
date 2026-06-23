@@ -92,16 +92,16 @@ export const DEFAULT_CAMERA_FOLLOW_TUNING: CameraFollowTuning = {
   distanceMax: 10,
   heightMin: 4,
 
-  positionLerpSpeed: 7.2,
-  targetLerpSpeed: 8,
-  headingLerpSpeed: 4.4,
-  anchorLerpSpeed: 7,
+  positionLerpSpeed: 5.4,
+  targetLerpSpeed: 5.8,
+  headingLerpSpeed: 3.2,
+  anchorLerpSpeed: 4.4,
 
-  lookaheadTime: 0.1,
-  lookaheadDistanceMax: 1.2,
+  lookaheadTime: 0.08,
+  lookaheadDistanceMax: 0.9,
   lookaheadMinSpeedSq: 1,
-  lookaheadBlendStart: 0.55,
-  lookaheadBlendSpeed: 3.5,
+  lookaheadBlendStart: 0.7,
+  lookaheadBlendSpeed: 2.2,
 
   backwardDotThreshold: -0.25,
   forwardReleaseDot: 0.25,
@@ -246,9 +246,9 @@ function readVelocityLengthSquared(velocity: VelocityLike): number {
   return x * x + y * y + z * z
 }
 
-const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE = 0.08
+const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE = 0.14
 const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ = FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE * FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE
-const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE = 0.015
+const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE = 0.03
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ = FOLLOW_CAMERA_ANCHOR_DEAD_ZONE * FOLLOW_CAMERA_ANCHOR_DEAD_ZONE
 
 export class FollowCameraController {
