@@ -15170,15 +15170,6 @@ function handleFloatingAutoTourTap(): void {
     return;
   }
 
-  console.log('[SceneryViewer] auto tour start', {
-    nodeId: targetNodeId,
-    routeNodeId: snap.routeNodeId,
-    projectedS: snap.projectedS,
-    targetIndex: snap.targetIndex,
-    routeWaypointCount: snap.routeWaypointCount,
-    loop: autoTourProps.loop === true,
-  });
-
   vehicleDrivePromptBusy.value = true;
   try {
     activeCameraWatchTween = null;

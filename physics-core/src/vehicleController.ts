@@ -38,8 +38,6 @@ export function applyPhysicsVehicleWheelControl(
   const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
   const steerableWheelIndices = new Set(command.steerableWheelIndices)
 
-  console.log(`Applying vehicle wheel control: ${JSON.stringify(command)}, wheelCount: ${wheelCount}`)
-
   for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
     const applyControlToWheel = command.applyControlsToAllWheels === true || steerableWheelIndices.has(wheelIndex)
     vehicle.setSteeringValue(applyControlToWheel ? command.steeringValue : 0, wheelIndex)

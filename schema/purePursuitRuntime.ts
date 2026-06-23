@@ -49,8 +49,8 @@ const purePursuitCurveDirB = new THREE.Vector3()
 
 const PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER = 6
 const PURE_PURSUIT_MIN_WHEELBASE_METERS = 0.25
-const PURE_PURSUIT_CRUISE_SPEED_SCALE = 0.8
-const PURE_PURSUIT_CURVE_MIN_SPEED_RATIO = 0.2
+const PURE_PURSUIT_CRUISE_SPEED_SCALE = 0.9
+const PURE_PURSUIT_CURVE_MIN_SPEED_RATIO = 0.4
 const PURE_PURSUIT_TARGET_ACCEL_MPS2 = 1.8
 const PURE_PURSUIT_TARGET_DECEL_MPS2 = 1.6
 const PURE_PURSUIT_TARGET_STOP_DECEL_MPS2 = 0.78
@@ -58,7 +58,7 @@ const PURE_PURSUIT_TARGET_STOP_APPROACH_DISTANCE_MIN_METERS = 24
 const PURE_PURSUIT_TARGET_STOP_APPROACH_SPEED_FACTOR = 12
 const PURE_PURSUIT_TARGET_STOP_APPROACH_BRAKE_FACTOR = 4
 const PURE_PURSUIT_TARGET_STOP_EASING_POWER = 1.35
-const PURE_PURSUIT_PREVIEW_TURN_FULL_ANGLE = THREE.MathUtils.degToRad(42)
+const PURE_PURSUIT_PREVIEW_TURN_FULL_ANGLE = THREE.MathUtils.degToRad(60)
 
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -124,8 +124,8 @@ function resolvePreviewTurnSeverity(
   if (!sample) {
     return 0
   }
-  const previewNear = Math.max(3.5, lookaheadDistance * 1.6)
-  const previewFar = Math.max(previewNear + 6, lookaheadDistance * 5)
+  const previewNear = Math.max(2.8, lookaheadDistance * 1.2)
+  const previewFar = Math.max(previewNear + 4.5, lookaheadDistance * 3.6)
   const currentS = sample.projection.s
   const okA = samplePlanarDirectionBetween(
     points,

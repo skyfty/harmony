@@ -316,16 +316,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return
     }
 
-    const terminalObject = deps.nodeObjectMap.get(nodeId) ?? null
-    if (terminalObject) {
-      terminalObject.getWorldPosition(autoTourCurrentPosition)
-      console.log(
-        `[AutoTourRuntime] terminal-stop-object node=${nodeId} `
-        + `worldPos=(${autoTourCurrentPosition.x.toFixed(3)},${autoTourCurrentPosition.y.toFixed(3)},${autoTourCurrentPosition.z.toFixed(3)}) `
-        + `localPos=(${terminalObject.position.x.toFixed(3)},${terminalObject.position.y.toFixed(3)},${terminalObject.position.z.toFixed(3)})`,
-      )
-    }
-
     if (requiresExplicitStart) {
       // Keep node marked as active so the host UI can offer resume/stop choices.
       // The node will remain in `activeTourNodes` until explicitly stopped via stopTour().
@@ -1052,14 +1042,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
               pursuitProps.brakeDistanceMinMeters + currentSpeedMps * Math.max(0, pursuitProps.brakeDistanceSpeedFactor),
             )
             if (!tourProps.loop && stopBarrierIndex === endIndex && proj.s >= polylineData3d.totalLength - terminalLeadDistance) {
-              console.log(
-                `[AutoTourRuntime] enter-stopping node=${node.id} `
-                + `mode=${state.mode} projS=${proj.s.toFixed(3)} total=${polylineData3d.totalLength.toFixed(3)} `
-                + `lead=${terminalLeadDistance.toFixed(3)} speed=${speed.toFixed(3)} `
-                + `current=${currentSpeedMps.toFixed(3)} targetIndex=${state.targetIndex} endIndex=${endIndex} `
-                + `arrival=${arrivalDistance.toFixed(3)} brakeMin=${pursuitProps.brakeDistanceMinMeters.toFixed(3)} `
-                + `brakeFactor=${Math.max(0, pursuitProps.brakeDistanceSpeedFactor).toFixed(3)}`,
-              )
+  
               state.mode = 'stopping'
               state.targetIndex = endIndex
             } else if (tourProps.loop) {
