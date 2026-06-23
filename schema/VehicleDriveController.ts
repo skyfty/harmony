@@ -996,7 +996,6 @@ export class VehicleDriveController {
     const chassisBody = vehicle.chassisBody ?? null
     const velocity = chassisBody?.velocity ?? null
     let throttle = this.input.throttle
-    const steeringInput = this.input.steering
     let brakeInput = this.input.brake
     const smoothStop = this.smoothStopState
     let speedSq = 0
@@ -1007,7 +1006,6 @@ export class VehicleDriveController {
     let speedForGovernor = 0
     let softCap = DEFAULT_VEHICLE_SPEED_SOFT_CAP
     let hardCap = DEFAULT_VEHICLE_SPEED_HARD_CAP
-    let autoTourTargetSpeedMps: number | null = null
 
     if (velocity && chassisBody && instance.axisForward) {
       speedSq = velocity.lengthSquared()
@@ -1043,24 +1041,6 @@ export class VehicleDriveController {
         : { softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP, hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP }
       softCap = capState.softCap
       hardCap = capState.hardCap
-
-      autoTourTargetSpeedMps = Number.isFinite(vehicle.autoTourTargetSpeedMps)
-        ? Math.max(0, vehicle.autoTourTargetSpeedMps!)
-        : null
-      if (autoTourTargetSpeedMps !== null) {
-        const targetDelta = autoTourTargetSpeedMps - speedForGovernor
-        const targetScale = Math.max(1.2, hardCap * 0.35)
-        if (targetDelta > 0.08) {
-          throttle = Math.max(throttle, Math.min(1, targetDelta / targetScale))
-          brakeInput = 0
-        } else if (targetDelta < -0.08) {
-          throttle = 0
-          brakeInput = Math.max(brakeInput, Math.min(1, (-targetDelta) / targetScale))
-        } else {
-          throttle = 0
-          brakeInput = 0
-        }
-      }
 
       if (Math.abs(throttle) > 0.05) {
         smoothStop.active = false
@@ -1143,6 +1123,7 @@ export class VehicleDriveController {
       }
 
     }
+    const steeringInput =  this.input.steering
     let steeringValue = steeringInput * VEHICLE_STEER_ANGLE
     if (speedSq > VEHICLE_STEER_SOFT_CAP_SQ) {
       const speed = Math.sqrt(speedSq)
