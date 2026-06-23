@@ -26,8 +26,6 @@ export type PurePursuitVehicleControlState = {
   forwardSpeedMps?: number
   longitudinalErrorMps?: number
   reverseActive?: boolean
-  lastStopDebugLogAtMs?: number
-
   /** Latched longitudinal mode for engine/brake hysteresis. */
   longitudinalUseEngine?: boolean
   /** Timestamp of the last longitudinal mode switch, used to prevent immediate flip-flopping. */
@@ -126,8 +124,8 @@ function resolvePreviewTurnSeverity(
   if (!sample) {
     return 0
   }
-  const previewNear = Math.max(1.2, lookaheadDistance * 0.65)
-  const previewFar = Math.max(previewNear + 1.2, lookaheadDistance * 1.8)
+  const previewNear = Math.max(2.5, lookaheadDistance * 1.2)
+  const previewFar = Math.max(previewNear + 4, lookaheadDistance * 3.5)
   const currentS = sample.projection.s
   const okA = samplePlanarDirectionBetween(
     points,
@@ -418,13 +416,11 @@ export function applyPurePursuitVehicleControl(params: {
   const turnSeverity = Math.max(steerSeverity, curvatureSeverity, previewTurnSeverity)
   const curveMinRatio = clampNumber(PURE_PURSUIT_CURVE_MIN_SPEED_RATIO, 0.05, 1)
   const curveSpeedRatio = THREE.MathUtils.lerp(1, curveMinRatio, smoothStep01(turnSeverity))
-  let rawTargetSpeedMps = baseTargetSpeed * curveSpeedRatio
+  const turnSpeedCap = baseTargetSpeed * THREE.MathUtils.lerp(1, 0.12, smoothStep01(Math.max(turnSeverity, previewTurnSeverity)))
+  let rawTargetSpeedMps = Math.min(baseTargetSpeed * curveSpeedRatio, turnSpeedCap)
   if (!modeStopping && baseTargetSpeed > 0) {
-    const comfortableFloor = Math.min(
-      pursuitProps.minSpeedMps,
-      Math.max(0.45, baseTargetSpeed * 0.55),
-    )
-    rawTargetSpeedMps = Math.max(Math.min(baseTargetSpeed, comfortableFloor), rawTargetSpeedMps)
+    const minimumCruiseFloor = Math.max(0.18, Math.min(pursuitProps.minSpeedMps, baseTargetSpeed * 0.35))
+    rawTargetSpeedMps = Math.max(minimumCruiseFloor, rawTargetSpeedMps)
   }
 
   if (modeStopping) {
@@ -478,31 +474,12 @@ export function applyPurePursuitVehicleControl(params: {
 
   const currentForwardSpeedMps = Math.max(0, forwardSpeedMps)
 
-  if (modeStopping) {
-    const nowMs = Date.now()
-    const shouldLog = !Number.isFinite(state.lastStopDebugLogAtMs)
-      || nowMs - state.lastStopDebugLogAtMs! >= 250
-      || Math.abs(targetSpeedMps - previousTargetSpeed) >= 0.15
-    if (shouldLog) {
-      state.lastStopDebugLogAtMs = nowMs
-      console.log(
-        `[PurePursuitRuntime] stop-plan speed=${targetSpeedMps.toFixed(3)} `
-        + `raw=${rawTargetSpeedMps.toFixed(3)} prev=${previousTargetSpeed.toFixed(3)} `
-        + `forward=${currentForwardSpeedMps.toFixed(3)} `
-        + `dist=${Number.isFinite(distanceToStop) ? distanceToStop.toFixed(3) : 'inf'} `
-        + `direct=${Number.isFinite(directDistanceToStop) ? directDistanceToStop.toFixed(3) : 'inf'} `
-        + `brake=${Math.max(0, pursuitProps.brakeDistanceMinMeters + absoluteForwardSpeedMps * Math.max(0, pursuitProps.brakeDistanceSpeedFactor)).toFixed(3)} `
-        + `approach=${Math.max(
-          PURE_PURSUIT_TARGET_STOP_APPROACH_DISTANCE_MIN_METERS,
-          Math.max(0, pursuitProps.brakeDistanceMinMeters + absoluteForwardSpeedMps * Math.max(0, pursuitProps.brakeDistanceSpeedFactor)) * PURE_PURSUIT_TARGET_STOP_APPROACH_BRAKE_FACTOR,
-          absoluteForwardSpeedMps * PURE_PURSUIT_TARGET_STOP_APPROACH_SPEED_FACTOR,
-          pursuitProps.dockStartDistanceMeters * 2,
-        ).toFixed(3)} `
-        + `dock=${Number.isFinite(pursuitProps.dockStartDistanceMeters) ? pursuitProps.dockStartDistanceMeters.toFixed(3) : 'inf'} `
-        + `dockStop=${Math.max(0, pursuitProps.dockStopEpsilonMeters).toFixed(3)}`,
-      )
-    }
+  if (!modeStopping) {
+    rawTargetSpeedMps = Math.min(rawTargetSpeedMps, Math.max(0.12, baseTargetSpeed * 0.12))
+ 
   }
+
+
   const speedError = targetSpeedMps - currentForwardSpeedMps
   state.longitudinalErrorMps = speedError
   state.speedIntegral = 0

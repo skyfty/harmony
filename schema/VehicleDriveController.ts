@@ -21,6 +21,7 @@ import {
 import type { BehaviorEventResolution } from './behaviors/runtime'
 import type { VehicleSurfaceSample } from './vehicleSurfaceSampler'
 import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
+import { applyPhysicsVehicleWheelControl } from '@harmony/physics-core'
 
 export type RefLike<T> = { value: T }
 
@@ -902,13 +903,13 @@ export class VehicleDriveController {
     this.resetSpeedGovernor()
     if (instance?.vehicle) {
       try {
-        const vehicle = instance.vehicle
-        const wheelCount = Math.max(0, instance.wheelCount ?? vehicle.wheelInfos?.length ?? 0)
-        for (let i = 0; i < wheelCount; i += 1) {
-          vehicle.applyEngineForce(0, i)
-          vehicle.setSteeringValue(0, i)
-          vehicle.setBrake(VEHICLE_BRAKE_FORCE, i)
-        }
+        applyPhysicsVehicleWheelControl(instance.vehicle, {
+          steeringValue: 0,
+          engineForce: 0,
+          brakeForce: VEHICLE_BRAKE_FORCE,
+          steerableWheelIndices: instance.steerableWheelIndices,
+          applyControlsToAllWheels: true,
+        })
       } catch {
         // best-effort
       }
@@ -972,9 +973,11 @@ export class VehicleDriveController {
     if (!state.active || !state.nodeId) {
       return
     }
+    const nodeId = state.nodeId
+    const vehicleInstanceForMode = this.deps.vehicleInstances.get(nodeId) ?? null
     if (!state.vehicle || this.deps.isPhysicsEnabled?.() === false) {
       if (state.vehicle && this.deps.isPhysicsEnabled?.() === false) {
-        const vehicleObject = this.deps.nodeObjectMap.get(state.nodeId) ?? null
+        const vehicleObject = this.deps.nodeObjectMap.get(nodeId) ?? null
         if (vehicleObject) {
           this.initializeTransformDrive(vehicleObject)
           state.vehicle = null
@@ -982,30 +985,29 @@ export class VehicleDriveController {
           state.steerableWheelIndices = []
         }
       }
-      this.applyTransformDrive(state.nodeId, deltaSeconds)
+      this.applyTransformDrive(nodeId, deltaSeconds)
       return
     }
-    const instance = this.deps.vehicleInstances.get(state.nodeId)
+    const instance = vehicleInstanceForMode
     if (!instance) {
       return
     }
     const vehicle = instance.vehicle
     const chassisBody = vehicle.chassisBody ?? null
     const velocity = chassisBody?.velocity ?? null
-    const throttle = this.input.throttle
+    let throttle = this.input.throttle
     const steeringInput = this.input.steering
-    const brakeInput = this.input.brake
+    let brakeInput = this.input.brake
     const smoothStop = this.smoothStopState
-
-    if (Math.abs(throttle) > 0.05) {
-      smoothStop.active = false
-    }
-    const engineForceRaw = throttle * VEHICLE_ENGINE_FORCE
-    let engineForce = engineForceRaw
     let speedSq = 0
     let forwardVelocity: number | null = null
     let forwardSpeedAbs = 0
     let sameDirection: boolean | null = null
+    let engineForce = 0
+    let speedForGovernor = 0
+    let softCap = DEFAULT_VEHICLE_SPEED_SOFT_CAP
+    let hardCap = DEFAULT_VEHICLE_SPEED_HARD_CAP
+    let autoTourTargetSpeedMps: number | null = null
 
     if (velocity && chassisBody && instance.axisForward) {
       speedSq = velocity.lengthSquared()
@@ -1035,7 +1037,36 @@ export class VehicleDriveController {
       // Smooth speed reading to avoid tiny physics noise causing visible push-pull near caps.
       const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
       this.speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - this.speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
-      const speedForGovernor = Math.max(forwardSpeedAbs, this.speedGovernorSmoothedForwardSpeedAbs)
+      speedForGovernor = Math.max(forwardSpeedAbs, this.speedGovernorSmoothedForwardSpeedAbs)
+      const capState = state.nodeId
+        ? this.resolveManualDriveSpeedCaps(state.nodeId)
+        : { softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP, hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP }
+      softCap = capState.softCap
+      hardCap = capState.hardCap
+
+      autoTourTargetSpeedMps = Number.isFinite(vehicle.autoTourTargetSpeedMps)
+        ? Math.max(0, vehicle.autoTourTargetSpeedMps!)
+        : null
+      if (autoTourTargetSpeedMps !== null) {
+        const targetDelta = autoTourTargetSpeedMps - speedForGovernor
+        const targetScale = Math.max(1.2, hardCap * 0.35)
+        if (targetDelta > 0.08) {
+          throttle = Math.max(throttle, Math.min(1, targetDelta / targetScale))
+          brakeInput = 0
+        } else if (targetDelta < -0.08) {
+          throttle = 0
+          brakeInput = Math.max(brakeInput, Math.min(1, (-targetDelta) / targetScale))
+        } else {
+          throttle = 0
+          brakeInput = 0
+        }
+      }
+
+      if (Math.abs(throttle) > 0.05) {
+        smoothStop.active = false
+      }
+      const engineForceRaw = throttle * VEHICLE_ENGINE_FORCE
+      engineForce = engineForceRaw
 
       // forwardSpeedAbs can be used for conditional logic if needed
 
@@ -1045,9 +1076,6 @@ export class VehicleDriveController {
       // This avoids a physics "fight" that can cause oscillation under constant throttle.
       sameDirection = throttleSign !== 0 ? Math.sign(forwardVelocity) === throttleSign : null
       const acceleratingForward = !!(sameDirection && throttleSign !== 0)
-      const { softCap, hardCap } = state.nodeId
-        ? this.resolveManualDriveSpeedCaps(state.nodeId)
-        : { softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP, hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP }
       if (acceleratingForward) {
         const range = Math.max(0.1, hardCap - softCap)
         const excess = Math.max(0, speedForGovernor - softCap)
@@ -1125,16 +1153,13 @@ export class VehicleDriveController {
     }
     const baseBrakeForce = brakeInput * VEHICLE_BRAKE_FORCE
     const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce + this.speedGovernorBrakeAssist))
-    for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
-      vehicle.setBrake(brakeForce, index)
-    }
-    for (let index = 0; index < vehicle.wheelInfos.length; index += 1) {
-      const steerable = instance.steerableWheelIndices.includes(index)
-      if (steerable) {
-        vehicle.setSteeringValue(steeringValue, index)
-        vehicle.applyEngineForce(engineForce, index)
-      }
-    }
+
+    applyPhysicsVehicleWheelControl(vehicle, {
+      steeringValue,
+      engineForce,
+      brakeForce,
+      steerableWheelIndices: instance.steerableWheelIndices,
+    })
   }
 
   private applyTransformDrive(nodeId: string, deltaSeconds?: number): void {

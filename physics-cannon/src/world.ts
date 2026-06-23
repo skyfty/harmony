@@ -1,5 +1,6 @@
 import * as CANNON from 'cannon-es'
 import {
+  applyPhysicsVehicleWheelControl,
   createPhysicsCharacterMotorState,
   stepPhysicsCharacterMotor,
   type PhysicsAddRuntimeBodiesCommand,
@@ -83,7 +84,6 @@ export class CannonPhysicsWorld {
   private readonly vehicles = new Map<number, VehicleState>()
   private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
   private readonly characters = new Map<number, CharacterState>()
-  private stepContacts: PhysicsContactEvent[] = []
   private lastContactNormalYByBodyId = new Map<number, number>()
 
   setWorldSettings(settings: PhysicsWorldSettings): void {
@@ -152,7 +152,6 @@ export class CannonPhysicsWorld {
       };
     }
     this.frame += 1
-    this.stepContacts = []
     this.applyVehicleInputs()
     this.applyCharacterInputs(deltaMs)
     this.lastContactNormalYByBodyId.clear()
@@ -165,8 +164,6 @@ export class CannonPhysicsWorld {
         Math.max(1, this.worldSettings.maxSubSteps | 0),
       )
     }
-    this.stepContacts = this.collectContacts()
-
     const bodyCount = this.scene.bodies.length
     const bodyTransforms = new Float32Array(bodyCount * 8)
     const bodyMeta = new Uint32Array(bodyCount)
@@ -222,6 +219,7 @@ export class CannonPhysicsWorld {
         wheelOffset += 1
       }
     })
+    const contacts = this.collectContacts()
 
     return {
       frame: this.frame,
@@ -233,7 +231,7 @@ export class CannonPhysicsWorld {
       bodyLinearVelocities,
       bodyAngularVelocities,
       bodySleeping,
-      contacts: this.stepContacts.length ? [...this.stepContacts] : undefined,
+      contacts: contacts.length ? contacts : undefined,
     }
   }
 
@@ -722,20 +720,12 @@ export class CannonPhysicsWorld {
         VEHICLE_BRAKE_FORCE,
         Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
       )
-
-      // 遍历每个轮子，分别设置刹车、转向和动力
-      for (let wheelIndex = 0; wheelIndex < state.desc.wheels.length; wheelIndex += 1) {
-        // 判断该轮子是否可转向
-        const steerable = state.steerableWheelIndices.includes(wheelIndex)
-        // 设置转向角度（仅对可转向轮有效）
-        state.vehicle.setSteeringValue(steerable ? steeringValue : 0, wheelIndex)
-        // 设置发动机动力（仅对可转向轮有效）
-        state.vehicle.applyEngineForce(steerable ? engineForce : 0, wheelIndex)
-
-        // 设置当前轮子的刹车力度
-        state.vehicle.setBrake(brakeForce, wheelIndex)
-
-      }
+      applyPhysicsVehicleWheelControl(state.vehicle, {
+        steeringValue,
+        engineForce,
+        brakeForce,
+        steerableWheelIndices: state.steerableWheelIndices,
+      })
       // 唤醒车辆刚体，防止休眠导致物理效果不生效
       if (speedForGovernor > VEHICLE_WAKE_SPEED_THRESHOLD || Math.abs(throttleInput) > 0.001 || Math.abs(steeringInput) > 0.001) {
         state.body.wakeUp()
