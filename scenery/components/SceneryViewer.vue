@@ -3567,7 +3567,16 @@ function clearAutoTourResumeBlendState(): void {
   autoTourResumeBlendNodeId = null;
 }
 
-function resolveAutoTourCameraFollowAnchor(object: THREE.Object3D): THREE.Vector3 {
+function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3D): THREE.Vector3 {
+  if (resolveVehicleOrObjectWorldPosition({
+    nodeId,
+    vehicleInstances,
+    nodeObjectMap,
+    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+    target: autoTourCameraFollowAnchorScratch,
+  })) {
+    return autoTourCameraFollowAnchorScratch;
+  }
   autoTourCameraFollowBox.makeEmpty();
   autoTourCameraFollowBox.setFromObject(object);
   if (!autoTourCameraFollowBox.isEmpty() && Number.isFinite(autoTourCameraFollowBox.min.x)) {
@@ -14768,7 +14777,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     return false;
   }
 
-  resolveAutoTourCameraFollowAnchor(object);
+  resolveAutoTourCameraFollowAnchor(nodeId, object);
 
   if (autoTourPaused.value) {
     object.getWorldDirection(autoTourCameraFollowForwardScratch);
@@ -15238,7 +15247,7 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
     return;
   }
 
-  resolveAutoTourCameraFollowAnchor(object);
+  resolveAutoTourCameraFollowAnchor(targetNodeId, object);
   object.getWorldDirection(autoTourCameraFollowForwardScratch);
   autoTourCameraFollowForwardScratch.y = 0;
   if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {

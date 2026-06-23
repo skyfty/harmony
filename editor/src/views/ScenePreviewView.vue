@@ -9545,12 +9545,22 @@ function updateAutoTourCameraForFrame(
 		return
 	}
 	object.updateMatrixWorld(true)
+	if (resolveVehicleOrObjectWorldPosition({
+		nodeId,
+		vehicleInstances,
+		nodeObjectMap,
+		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+		target: tempPosition,
+	})) {
+		// use physics-backed chassis position for vehicle follow anchors
+	} else {
 	tempBox.makeEmpty()
 	tempBox.setFromObject(object)
 	if (tempBox.isEmpty()) {
 		object.getWorldPosition(tempPosition)
 	} else {
 		tempBox.getCenter(tempPosition)
+	}
 	}
 
 	object.getWorldDirection(tempDirection)

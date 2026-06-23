@@ -1413,7 +1413,7 @@ export class VehicleDriveController {
     const follow = this.bindings.cameraFollowState
     const temp = this.temp
     const placement = this.resolveFollowCameraPlacement(vehicleObject, instance)
-    this.computeVehicleFollowAnchor(vehicleObject, temp.seatPosition, temp.followAnchor)
+    this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
     const selectedAnchor = temp.followAnchor
 
     if (options.immediate) {
@@ -1423,10 +1423,15 @@ export class VehicleDriveController {
       this.followCameraVelocityHasSample = true
     } else if (deltaSeconds > 0 && this.followCameraVelocityHasSample) {
       const dt = Math.max(1e-6, Math.min(0.25, deltaSeconds))
-      this.followCameraVelocityScratch
-        .copy(selectedAnchor)
-        .sub(this.followCameraLastAnchor)
-        .multiplyScalar(1 / dt)
+      const chassisBody = instance?.vehicle?.chassisBody ?? null
+      if (chassisBody?.velocity) {
+        this.followCameraVelocityScratch.set(chassisBody.velocity.x, chassisBody.velocity.y, chassisBody.velocity.z)
+      } else {
+        this.followCameraVelocityScratch
+          .copy(selectedAnchor)
+          .sub(this.followCameraLastAnchor)
+          .multiplyScalar(1 / dt)
+      }
       this.followCameraVelocityScratch.y = 0
       const sampleSpeedSq =
         (this.followCameraVelocityScratch.x * this.followCameraVelocityScratch.x)
@@ -1554,9 +1559,16 @@ export class VehicleDriveController {
 
   private computeVehicleFollowAnchor(
     vehicleObject: THREE.Object3D | null,
+    instance: VehicleInstance | null,
     fallbackPosition: THREE.Vector3,
     target: THREE.Vector3,
   ): void {
+    const physicsEnabled = this.deps.isPhysicsEnabled?.() !== false
+    const chassisBody = instance?.vehicle?.chassisBody ?? null
+    if (physicsEnabled && chassisBody?.position) {
+      target.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+      return
+    }
     this.computeVehicleRenderFollowAnchor(vehicleObject, fallbackPosition, target)
   }
 

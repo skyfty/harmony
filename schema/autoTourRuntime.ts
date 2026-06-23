@@ -607,7 +607,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
    *       - 解析 `AutoTour`、`Vehicle`、`PurePursuit` 组件及其属性。
    *       - 根据组件配置决定驱动模式：
    *         * `shouldDriveAsVehicle`: 使用物理引擎 + PurePursuit 算法驱动（真实车辆行为）。
-   *         * `directMoveVehicle`: 直接移动变换（无 PurePursuit，但有 Vehicle 组件）。
+    *         * `directMoveVehicle`: 仅在没有物理车辆实例时，直接移动变换并同步底盘。
    *         * 其他：直接移动渲染对象（非车辆节点）。
    *    
    *    c. **播放状态初始化/恢复**：
@@ -652,9 +652,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
    *       - 直接更新对象的 `position` 和 `quaternion`（仅运行时，不持久化）。
    *       - 停止模式下平滑到精确终点位置（误差 < `AUTO_TOUR_STOP_POSITION_EPSILON`）。
    *       
-   *       **直接移动车辆分支（`directMoveVehicle`）**：
-   *       - 移动渲染对象后同步物理底盘位置。
-   *       - 应用强制制动防止物理引擎干扰。
+  *       **直接移动车辆分支（`directMoveVehicle`）**：
+  *       - 仅在无法使用物理车辆实例时走该分支。
+  *       - 移动渲染对象后同步物理底盘位置。
+  *       - 应用强制制动防止物理引擎干扰。
    * 
    * 4. **状态持久化**：
    *    - 所有播放状态存储在 `autoTourPlaybackState` Map 中。
@@ -734,9 +735,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
       const hasVehicleComponent = Boolean(vehicleComponent)
       const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
-      const hasPurePursuitComponent = Boolean(purePursuit)
-      // Only use PurePursuit component props; do NOT fall back to AutoTour props.
-      // This ensures that vehicle nodes without PurePursuit do not enter the pure-pursuit driving branch.
+      // Use authored PurePursuit props when present, otherwise fall back to the
+      // default PurePursuit tuning so vehicle nodes still share the physics path.
       const pursuitProps = clampPurePursuitComponentProps(purePursuit?.props ?? null)
       const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null)
       const routeNodeId = tourProps.routeNodeId
@@ -785,8 +785,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       const vehicleInstance = deps.vehicleInstances.get(node.id) ?? null
       const hasVehicleInstance = Boolean(vehicleInstance?.vehicle?.chassisBody)
-      const shouldDriveAsVehicle = hasVehicleComponent && hasPurePursuitComponent && hasVehicleInstance
-      const directMoveVehicle = hasVehicleComponent && (!hasPurePursuitComponent || !hasVehicleInstance)
+      const shouldDriveAsVehicle = hasVehicleComponent && hasVehicleInstance
+      const directMoveVehicle = hasVehicleComponent && !hasVehicleInstance
       const nodeObject = deps.nodeObjectMap.get(node.id) ?? null
 
       if (shouldDriveAsVehicle) {
