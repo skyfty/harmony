@@ -996,6 +996,7 @@ export class VehicleDriveController {
     const chassisBody = vehicle.chassisBody ?? null
     const velocity = chassisBody?.velocity ?? null
     let throttle = this.input.throttle
+    const steeringInput = this.input.steering
     let brakeInput = this.input.brake
     const smoothStop = this.smoothStopState
     let speedSq = 0
@@ -1123,7 +1124,6 @@ export class VehicleDriveController {
       }
 
     }
-    const steeringInput =  this.input.steering
     let steeringValue = steeringInput * VEHICLE_STEER_ANGLE
     if (speedSq > VEHICLE_STEER_SOFT_CAP_SQ) {
       const speed = Math.sqrt(speedSq)
