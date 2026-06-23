@@ -89,6 +89,15 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
+function smoothStep01(value: number): number {
+  const t = clamp01(value)
+  return t * t * (3 - 2 * t)
+}
+
+function formatDebugNumber(value: number, digits = 2): string {
+  return Number.isFinite(value) ? value.toFixed(digits) : 'NaN'
+}
+
 function angleBetweenPlanarDirections(a: THREE.Vector3, b: THREE.Vector3): number {
   const dot = THREE.MathUtils.clamp(a.dot(b), -1, 1)
   return Math.acos(dot)
@@ -281,6 +290,19 @@ export function applyPurePursuitVehicleControl(params: {
     previewDistance * 0.85,
   )
   const dockActive = modeStopping && pursuitProps.dockingEnabled && routeDistanceToEnd <= stopEnvelopeDistance
+  const dockProgress = modeStopping && pursuitProps.dockingEnabled
+    ? smoothStep01(1 - routeDistanceToEnd / Math.max(1e-6, stopEnvelopeDistance))
+    : 0
+  const terminalTaperDistance = modeStopping && pursuitProps.dockingEnabled
+    ? Math.max(
+        pursuitProps.dockStartDistanceMeters,
+        brakeThreshold,
+        Math.min(stopEnvelopeDistance, speedMps * Math.max(0.75, pursuitProps.dockVelocityKp * 0.22)),
+      )
+    : stopEnvelopeDistance
+  const terminalProgress = modeStopping && pursuitProps.dockingEnabled
+    ? smoothStep01(1 - routeDistanceToEnd / Math.max(1e-6, terminalTaperDistance))
+    : 0
 
   const wheelbaseMeters = Math.max(0.01, vehicleProps.wheelbaseMeters)
   rearAxle.set(currentPosition.x, currentY, currentPosition.z)
@@ -363,7 +385,7 @@ export function applyPurePursuitVehicleControl(params: {
     0.9,
     Math.max(
       minSpeedRatio,
-      modeStopping ? 0.34 : 0.45,
+      modeStopping ? THREE.MathUtils.lerp(0.10, 0.30, 1 - terminalProgress) : 0.45,
     ),
   )
   const curveDamping = Math.max(
@@ -376,21 +398,33 @@ export function applyPurePursuitVehicleControl(params: {
   )
 
   if (modeStopping) {
-    const dockSeverity = THREE.MathUtils.clamp(
-      1 - routeDistanceToEnd / Math.max(1e-6, stopEnvelopeDistance),
-      0,
-      1,
+    const terminalSpeedRatio = THREE.MathUtils.lerp(
+      Math.max(0.04, minSpeedRatio * 0.35),
+      0.035,
+      terminalProgress,
+    )
+    const terminalMaxSpeed = Math.max(
+      pursuitProps.dockStopSpeedEpsilonMps,
+      cruiseSpeed * terminalSpeedRatio,
+    )
+    const terminalSpeedTarget = THREE.MathUtils.lerp(
+      Math.max(pursuitProps.minSpeedMps, pursuitProps.dockStopSpeedEpsilonMps),
+      Math.min(pursuitProps.dockMaxSpeedMps, cruiseSpeed, rawSpeedTarget),
+      1 - terminalProgress,
     )
     const dockSpeedTarget = THREE.MathUtils.lerp(
       Math.max(pursuitProps.minSpeedMps, pursuitProps.dockStopSpeedEpsilonMps),
       Math.min(pursuitProps.dockMaxSpeedMps, cruiseSpeed, rawSpeedTarget),
-      1 - dockSeverity,
+      Math.pow(1 - dockProgress, 1.45),
     )
-    rawSpeedTarget = Math.min(rawSpeedTarget, dockSpeedTarget)
+    rawSpeedTarget = Math.min(rawSpeedTarget, dockSpeedTarget, terminalSpeedTarget, terminalMaxSpeed)
   }
 
   const previousSpeedTarget = typeof state.speedTargetMps === 'number' ? Math.max(0, state.speedTargetMps) : rawSpeedTarget
-  const speedTargetAlpha = 1 - Math.exp(-Math.max(0, rawSpeedTarget < previousSpeedTarget ? AUTO_TOUR_SPEED_TARGET_FALL_RATE : AUTO_TOUR_SPEED_TARGET_RISE_RATE) * Math.max(0, deltaSeconds))
+  const dynamicSpeedTargetFallRate = modeStopping
+    ? AUTO_TOUR_SPEED_TARGET_FALL_RATE + terminalProgress * 24
+    : AUTO_TOUR_SPEED_TARGET_FALL_RATE
+  const speedTargetAlpha = 1 - Math.exp(-Math.max(0, rawSpeedTarget < previousSpeedTarget ? dynamicSpeedTargetFallRate : AUTO_TOUR_SPEED_TARGET_RISE_RATE) * Math.max(0, deltaSeconds))
   const speedTarget = previousSpeedTarget + (rawSpeedTarget - previousSpeedTarget) * speedTargetAlpha
   state.speedTargetMps = speedTarget
 
@@ -486,13 +520,18 @@ export function applyPurePursuitVehicleControl(params: {
   // This keeps braking early enough on bends without reintroducing stutter at dense intermediate waypoints.
   const shouldBrakeNearEnd = modeStopping && routeDistanceToEnd < brakeThreshold
   if (shouldBrakeNearEnd && !dockActive) {
-    brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * 0.35))
+    brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * THREE.MathUtils.lerp(0.08, 0.24, terminalProgress)))
   }
 
   if (dockActive) {
     steering = 0
     engineForce = 0
-    brakeForce = Math.max(brakeForce, brakeForceMax * 6)
+    const dockBrakeForce = brakeForceMax * THREE.MathUtils.lerp(0.06, 0.42, terminalProgress)
+    const overspeedBrakeForce = Math.min(
+      brakeForceMax,
+      Math.max(0, -longitudinalError) * brakeForceMax * 1.0,
+    )
+    brakeForce = Math.max(brakeForce, dockBrakeForce, overspeedBrakeForce)
 
     // Do not directly overwrite linear velocity in docking mode.
     // Overwriting velocity can cause the direction to flip as the chassis crosses the endpoint, resulting in jitter.
@@ -518,6 +557,31 @@ export function applyPurePursuitVehicleControl(params: {
     chassisBody.angularVelocity.x *= 0.85
     chassisBody.angularVelocity.y *= 0.6
     chassisBody.angularVelocity.z *= 0.85
+  }
+
+  if (modeStopping && routeDistanceToEnd <= Math.max(stopEnvelopeDistance * 1.5, Math.max(3, brakeThreshold * 1.25))) {
+    // Formatted string logging for endpoint braking diagnostics.
+    // This is intentionally always-on for debugging the terminal stop transition.
+    console.log(
+      `[PurePursuitRuntime] node=${vehicleInstance as any && (vehicleInstance as any).nodeId ? (vehicleInstance as any).nodeId : 'unknown'} `
+      + `phase=${dockActive ? 'dock-active' : shouldBrakeNearEnd ? 'end-brake' : 'approach'} `
+      + `routeRemaining=${formatDebugNumber(routeDistanceToEnd)}m `
+      + `stopEnvelope=${formatDebugNumber(stopEnvelopeDistance)}m `
+      + `terminalTaper=${formatDebugNumber(terminalTaperDistance)}m `
+      + `brakeThreshold=${formatDebugNumber(brakeThreshold)}m `
+      + `dockProgress=${formatDebugNumber(dockProgress * 100, 0)}% `
+      + `terminalProgress=${formatDebugNumber(terminalProgress * 100, 0)}% `
+      + `terminalMaxSpeed=${formatDebugNumber(modeStopping ? Math.max(pursuitProps.dockStopSpeedEpsilonMps, cruiseSpeed * THREE.MathUtils.lerp(Math.max(0.04, minSpeedRatio * 0.35), 0.035, terminalProgress)) : cruiseSpeed)} `
+      + `dockFallRate=${formatDebugNumber(dynamicSpeedTargetFallRate, 1)} `
+      + `speedMps=${formatDebugNumber(speedMps)} `
+      + `cruiseMps=${formatDebugNumber(cruiseSpeed)} `
+      + `speedTargetMps=${formatDebugNumber(speedTarget)} `
+      + `forwardSpeedMps=${formatDebugNumber(forwardSpeed)} `
+      + `longitudinalErrorMps=${formatDebugNumber(longitudinalError)} `
+      + `engineForce=${formatDebugNumber(engineForce, 1)} `
+      + `brakeForce=${formatDebugNumber(brakeForce, 1)} `
+      + `steerRad=${formatDebugNumber(steering, 3)}`,
+    )
   }
 
   for (let index = 0; index < instance.wheelCount; index += 1) {

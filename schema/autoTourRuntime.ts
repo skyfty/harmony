@@ -288,6 +288,23 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return
     }
 
+    console.log(
+      `[AutoTourRuntime] terminal-stop node=${nodeId} reason=${reason} `
+      + `mode=${state?.mode ?? 'unknown'} targetIndex=${Number.isFinite(state?.targetIndex) ? Math.floor(state!.targetIndex) : 0} `
+      + `dockStopIndex=${typeof state?.dockStopIndex === 'number' && Number.isFinite(state.dockStopIndex) ? Math.floor(state.dockStopIndex) : -1} `
+      + `loop=${tourProps.loop ? 1 : 0}`,
+    )
+
+    const terminalObject = deps.nodeObjectMap.get(nodeId) ?? null
+    if (terminalObject) {
+      terminalObject.getWorldPosition(autoTourCurrentPosition)
+      console.log(
+        `[AutoTourRuntime] terminal-stop-object node=${nodeId} `
+        + `worldPos=(${autoTourCurrentPosition.x.toFixed(3)},${autoTourCurrentPosition.y.toFixed(3)},${autoTourCurrentPosition.z.toFixed(3)}) `
+        + `localPos=(${terminalObject.position.x.toFixed(3)},${terminalObject.position.y.toFixed(3)},${terminalObject.position.z.toFixed(3)})`,
+      )
+    }
+
     
 
     if (requiresExplicitStart) {
@@ -330,6 +347,22 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return
     }
 
+    const stopObject = deps.nodeObjectMap.get(nodeId) ?? null
+    if (stopObject) {
+      stopObject.getWorldPosition(autoTourCurrentPosition)
+      console.log(
+        `[AutoTourRuntime] hard-stop-object node=${nodeId} `
+        + `worldPos=(${autoTourCurrentPosition.x.toFixed(3)},${autoTourCurrentPosition.y.toFixed(3)},${autoTourCurrentPosition.z.toFixed(3)}) `
+        + `localPos=(${stopObject.position.x.toFixed(3)},${stopObject.position.y.toFixed(3)},${stopObject.position.z.toFixed(3)})`,
+      )
+    }
+
+    console.log(
+      `[AutoTourRuntime] hard-stop node=${nodeId} `
+      + `beforeSpeed=(${chassisBody.velocity.x.toFixed(3)},${chassisBody.velocity.y.toFixed(3)},${chassisBody.velocity.z.toFixed(3)}) `
+      + `beforeAngular=(${chassisBody.angularVelocity.x.toFixed(3)},${chassisBody.angularVelocity.y.toFixed(3)},${chassisBody.angularVelocity.z.toFixed(3)})`,
+    )
+
     // Ensure the body is awake while we apply braking/force resets.
     try {
       chassisBody.wakeUp?.()
@@ -365,6 +398,20 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       chassisBody.angularVelocity.set(0, 0, 0)
       // Sleep to avoid solver jitter once stopped.
       chassisBody.sleep?.()
+      console.log(
+        `[AutoTourRuntime] hard-stop-applied node=${nodeId} `
+        + `afterSpeed=(${chassisBody.velocity.x.toFixed(3)},${chassisBody.velocity.y.toFixed(3)},${chassisBody.velocity.z.toFixed(3)}) `
+        + `afterAngular=(${chassisBody.angularVelocity.x.toFixed(3)},${chassisBody.angularVelocity.y.toFixed(3)},${chassisBody.angularVelocity.z.toFixed(3)}) `
+        + `sleepLimit=${String(chassisBody.sleepSpeedLimit)} sleepTime=${String(chassisBody.sleepTimeLimit)}`,
+      )
+      if (stopObject) {
+        stopObject.getWorldPosition(autoTourCurrentPosition)
+        console.log(
+          `[AutoTourRuntime] hard-stop-object-after node=${nodeId} `
+          + `worldPos=(${autoTourCurrentPosition.x.toFixed(3)},${autoTourCurrentPosition.y.toFixed(3)},${autoTourCurrentPosition.z.toFixed(3)}) `
+          + `localPos=(${stopObject.position.x.toFixed(3)},${stopObject.position.y.toFixed(3)},${stopObject.position.z.toFixed(3)})`,
+        )
+      }
     } catch {
       // ignore
     }
