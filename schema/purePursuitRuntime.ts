@@ -49,8 +49,8 @@ const purePursuitCurveDirB = new THREE.Vector3()
 
 const PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER = 6
 const PURE_PURSUIT_MIN_WHEELBASE_METERS = 0.25
-const PURE_PURSUIT_CRUISE_SPEED_SCALE = 0.9
-const PURE_PURSUIT_CURVE_MIN_SPEED_RATIO = 0.4
+const PURE_PURSUIT_CRUISE_SPEED_SCALE = 0.82
+const PURE_PURSUIT_CURVE_MIN_SPEED_RATIO = 0.34
 const PURE_PURSUIT_TARGET_ACCEL_MPS2 = 1.8
 const PURE_PURSUIT_TARGET_DECEL_MPS2 = 1.6
 const PURE_PURSUIT_TARGET_STOP_DECEL_MPS2 = 0.78
@@ -268,6 +268,7 @@ export function applyPurePursuitVehicleControl(params: {
   const dt = getSafeDeltaSeconds(params.deltaSeconds)
   const wheelCount = Math.max(0, vehicleInstance.wheelCount)
   if (!chassisBody || wheelCount <= 0 || !points || points.length < 2) {
+    vehicle.autoTourDebugWorldPosition = undefined
     return {
       reachedStop: false,
       steeringRad: Number.isFinite(state.lastSteerRad) ? state.lastSteerRad! : 0,
@@ -331,6 +332,7 @@ export function applyPurePursuitVehicleControl(params: {
   if (!previewSample || previewSample.polylineData.totalLength <= 1e-6) {
     const holdBrakeForce = vehicleProps.brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce: holdBrakeForce })
+    vehicle.autoTourDebugWorldPosition = undefined
     return {
       reachedStop: false,
       steeringRad: Number.isFinite(state.lastSteerRad) ? state.lastSteerRad! : 0,
@@ -358,6 +360,7 @@ export function applyPurePursuitVehicleControl(params: {
   if (!sample || sample.polylineData.totalLength <= 1e-6) {
     const holdBrakeForce = vehicleProps.brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce: holdBrakeForce })
+    vehicle.autoTourDebugWorldPosition = undefined
     return {
       reachedStop: false,
       steeringRad: Number.isFinite(state.lastSteerRad) ? state.lastSteerRad! : 0,
@@ -421,6 +424,11 @@ export function applyPurePursuitVehicleControl(params: {
     ? lastSteerRad + clampNumber(rawSteerRad - lastSteerRad, -maxSteerStep, maxSteerStep)
     : rawSteerRad
   state.lastSteerRad = steeringRad
+  vehicle.autoTourDebugWorldPosition = {
+    x: purePursuitLookaheadPoint.x,
+    y: purePursuitLookaheadPoint.y,
+    z: purePursuitLookaheadPoint.z,
+  }
 
   const vehicleSpeedCap = vehicleProps.maxSpeedKmh > 0
     ? vehicleProps.maxSpeedKmh / 3.6
@@ -442,10 +450,10 @@ export function applyPurePursuitVehicleControl(params: {
   const turnSeverity = Math.max(steerSeverity, curvatureSeverity, previewTurnSeverity)
   const curveMinRatio = clampNumber(PURE_PURSUIT_CURVE_MIN_SPEED_RATIO, 0.05, 1)
   const curveSpeedRatio = THREE.MathUtils.lerp(1, curveMinRatio, smoothStep01(turnSeverity))
-  const turnSpeedCap = baseTargetSpeed * THREE.MathUtils.lerp(1, 0.4, smoothStep01(Math.max(turnSeverity, previewTurnSeverity)))
+  const turnSpeedCap = baseTargetSpeed * THREE.MathUtils.lerp(1, 0.5, smoothStep01(Math.max(turnSeverity, previewTurnSeverity)))
   let rawTargetSpeedMps = Math.min(baseTargetSpeed * curveSpeedRatio, turnSpeedCap)
   if (!modeStopping && baseTargetSpeed > 0) {
-    const minimumCruiseFloor = Math.max(0.18, Math.min(pursuitProps.minSpeedMps, baseTargetSpeed * 0.35))
+    const minimumCruiseFloor = Math.max(0.8, Math.min(pursuitProps.minSpeedMps, baseTargetSpeed * 0.35))
     rawTargetSpeedMps = Math.max(minimumCruiseFloor, rawTargetSpeedMps)
   }
 

@@ -48,6 +48,7 @@ export type VehicleDriveInputState = {
 export type VehicleDriveAutoTourTargetState = {
   autoTourTargetSpeedMps?: number
   autoTourTargetSteeringRad?: number
+  autoTourDebugWorldPosition?: { x: number; y: number; z: number }
 }
 
 export type VehicleDriveRuntimeState = {

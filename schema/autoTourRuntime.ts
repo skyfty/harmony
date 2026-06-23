@@ -249,11 +249,54 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const autoTourPlanarTarget = new THREE.Vector3()
   const autoTourSnapForward = new THREE.Vector3()
   const autoTourSnapPoint = new THREE.Vector3()
+  const autoTourDebugMarkerLocalPosition = new THREE.Vector3()
 
   const returnToStartPointA = new THREE.Vector3()
   const returnToStartPointB = new THREE.Vector3()
   const returnToStartPointC = new THREE.Vector3()
   const returnToStartPolyline: THREE.Vector3[] = [returnToStartPointA, returnToStartPointB, returnToStartPointC]
+
+  const AUTO_TOUR_DEBUG_MARKER_NAME = 'AutoTourDebugLookaheadPoint'
+  const AUTO_TOUR_DEBUG_MARKER_RADIUS = 0.18
+
+  function ensureAutoTourDebugMarker(routeObject: THREE.Object3D): THREE.Mesh {
+    const existing = routeObject.getObjectByName(AUTO_TOUR_DEBUG_MARKER_NAME)
+    if (existing && (existing as THREE.Mesh).isMesh) {
+      return existing as THREE.Mesh
+    }
+
+    const geometry = new THREE.SphereGeometry(1, 16, 12)
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffc84d,
+      emissive: 0x7a5100,
+      emissiveIntensity: 0.9,
+      roughness: 0.25,
+      metalness: 0.05,
+    })
+    const marker = new THREE.Mesh(geometry, material)
+    marker.name = AUTO_TOUR_DEBUG_MARKER_NAME
+    marker.scale.setScalar(AUTO_TOUR_DEBUG_MARKER_RADIUS)
+    marker.castShadow = false
+    marker.receiveShadow = false
+    marker.renderOrder = 999
+    routeObject.add(marker)
+    return marker
+  }
+
+  function updateAutoTourDebugMarker(
+    routeObject: THREE.Object3D | null,
+    worldPosition: { x: number; y: number; z: number } | null | undefined,
+  ): void {
+    if (!routeObject || !worldPosition) {
+      return
+    }
+    const marker = ensureAutoTourDebugMarker(routeObject)
+    routeObject.updateMatrixWorld(true)
+    autoTourDebugMarkerLocalPosition.set(worldPosition.x, worldPosition.y, worldPosition.z)
+    routeObject.worldToLocal(autoTourDebugMarkerLocalPosition)
+    marker.position.copy(autoTourDebugMarkerLocalPosition)
+    marker.visible = true
+  }
 
   
 
@@ -736,7 +779,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       const endIndex = points.length - 1
 
-      const rawSpeed = Math.max(0, tourProps.speedMps)
+      const rawSpeed = Math.max(0, tourProps.speedMps) * 0.72
       // Cap speed by PurePursuit.maxSpeedMps (if present) and AutoTour.maxSpeedMps (if present)
       const pursuitMax = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
       const tourMax = Number.isFinite(tourProps.maxSpeedMps) ? tourProps.maxSpeedMps : Number.POSITIVE_INFINITY
@@ -1283,6 +1326,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.lastProjectedS = projection.s
         samplePolylineAtS(points, state.polylineData3d, projection.s + lookaheadDistance, autoTourLookaheadPoint)
         autoTourLookaheadPoint.y = autoTourCurrentPosition.y
+        updateAutoTourDebugMarker(deps.nodeObjectMap.get(routeNodeId) ?? null, autoTourLookaheadPoint)
         autoTourDesiredDir.copy(autoTourLookaheadPoint).sub(autoTourCurrentPosition)
         autoTourDesiredDir.y = 0
       }
