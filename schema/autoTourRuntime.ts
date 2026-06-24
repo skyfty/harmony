@@ -1068,6 +1068,18 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       autoTourDirection.y = 0
       // 计算XZ平面上的距离
       const distance = Math.sqrt(autoTourDirection.x * autoTourDirection.x + autoTourDirection.z * autoTourDirection.z)
+      const currentSpeedMps = hasVehicleInstance
+        ? Math.sqrt(
+          vehicleInstance!.vehicle.chassisBody.velocity.x * vehicleInstance!.vehicle.chassisBody.velocity.x
+          + vehicleInstance!.vehicle.chassisBody.velocity.y * vehicleInstance!.vehicle.chassisBody.velocity.y
+          + vehicleInstance!.vehicle.chassisBody.velocity.z * vehicleInstance!.vehicle.chassisBody.velocity.z,
+        )
+        : speed
+      const terminalLeadDistance = Math.max(
+        0.5,
+        arrivalDistance,
+        pursuitProps.brakeDistanceMinMeters + currentSpeedMps * Math.max(0, pursuitProps.brakeDistanceSpeedFactor),
+      )
       // 计算到达判定距离（基于速度和PurePursuit参数）
       /**
        * 计算到达距离（arrivalDistance）。
@@ -1283,6 +1295,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         autoTourLookaheadPoint.y = autoTourCurrentPosition.y
         autoTourDesiredDir.copy(autoTourLookaheadPoint).sub(autoTourCurrentPosition)
         autoTourDesiredDir.y = 0
+
+        if (directMoveVehicle && !tourProps.loop && projection.s >= state.polylineData3d.totalLength - terminalLeadDistance) {
+          state.mode = 'stopping'
+          state.targetIndex = endIndex
+          state.dockStopIndex = endIndex
+        }
       }
 
       if (autoTourDesiredDir.lengthSq() < 1e-10) {
