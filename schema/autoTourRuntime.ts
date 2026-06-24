@@ -734,11 +734,17 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       const endIndex = points.length - 1
 
+      // 将巡游配置速度先归一为非负值，避免外部配置误写负数时引入反向速度或其他异常行为。
       const rawSpeed = Math.max(0, tourProps.speedMps)
-      // Cap speed by PurePursuit.maxSpeedMps (if present) and AutoTour.maxSpeedMps (if present)
+      // 读取 PurePursuit 的速度上限：这是底层追踪/巡航实现允许的最大速度。
+      // 若未配置或值不是有限数字，则按“不限制”处理，用正无穷大表示。
       const pursuitMax = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
+      // 读取 AutoTour 任务自身的速度上限：这是当前自动巡游任务可接受的最大速度。
+      // 同样，未配置或非法值都视为不限制。
       const tourMax = Number.isFinite(tourProps.maxSpeedMps) ? tourProps.maxSpeedMps : Number.POSITIVE_INFINITY
+      // 实际生效上限取两者中的更小值：既不能突破底层算法能力边界，也不能超过任务配置边界。
       const cap = Math.min(pursuitMax, tourMax)
+      // 最终速度 = 配置速度 与 综合上限 共同约束后的结果。
       const speed = Math.min(rawSpeed, cap)
       if (speed <= 0) {
         continue
@@ -787,19 +793,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         let polylineData3d: PolylineMetricData | undefined
         let waypointArcLengths3d: number[] | undefined
         let projectedS: number | undefined
-
-        // 尝试构建三维折线度量数据（考虑是否闭合，即 loop 与否）。
-        // 如果成功，计算顶点弧长表并把当前位置投影到这条折线上，用以确定“前方”的目标航点而不是仅仅最近点。
-        // const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
-        // if (polyline) {
-        //   polylineData3d = polyline
-        //   waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
-        //   const proj = projectPointToPolyline(points, polyline, positionSample, autoTourNextWorldPosition)
-        //   // proj.s 是投影点在折线弧长坐标系中的位置；proj.distanceSq 是投影误差平方。
-        //   projectedS = proj.s
-        //   // 使用弧长查找下一个航点索引，确保初始目标是“在当前位置前方/之后”的第一个航点（避免向后回溯）。
-        //   initialTargetIndex = findNextWaypointIndexByS(waypointArcLengths3d, proj.s)
-        // }
 
         // 初始朝向（航向角 yaw）。
         // 含义：initialYaw 表示以世界 Y 轴为上方向时对象的朝向角（弧度，范围 -π..π）。
