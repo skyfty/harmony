@@ -260,6 +260,8 @@ export function updateVehicleSpeedAndApplyParkingHoldSafe(params: {
   brake: number
   parkedSpeedEpsilon?: number
   parkingHoldSpeedEpsilon?: number
+  resolveVehicleWorldVelocity?: (nodeId: string | null | undefined, chassisBody: VehicleDriveVehicle['chassisBody'], target: THREE.Vector3) => boolean
+  nodeId?: string | null
   resolveBrakeForce: (vehicleInstance: PurePursuitVehicleInstanceLike) => number
 }): number {
   const parkedSpeedEpsilon = params.parkedSpeedEpsilon ?? VEHICLE_PARKED_SPEED_EPSILON
@@ -279,10 +281,13 @@ export function updateVehicleSpeedAndApplyParkingHoldSafe(params: {
       + parkedSpeedForward.z * parkedSpeedForward.z
     if (forwardLengthSq > 1e-8) {
       parkedSpeedForward.multiplyScalar(1 / Math.sqrt(forwardLengthSq))
+      const velocitySample = new THREE.Vector3()
+      const resolvedVelocity = params.resolveVehicleWorldVelocity?.(params.nodeId ?? null, params.chassisBody, velocitySample) === true
+      const sourceVelocity = resolvedVelocity ? velocitySample : params.chassisBody.velocity
       const forwardSpeed = Math.abs(
-        params.chassisBody.velocity.x * parkedSpeedForward.x
-          + params.chassisBody.velocity.y * parkedSpeedForward.y
-          + params.chassisBody.velocity.z * parkedSpeedForward.z,
+        sourceVelocity.x * parkedSpeedForward.x
+          + sourceVelocity.y * parkedSpeedForward.y
+          + sourceVelocity.z * parkedSpeedForward.z,
       )
       if (
         Math.abs(params.throttle) <= 0.05
@@ -319,6 +324,8 @@ export function applyPurePursuitVehicleControl(params: {
   vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState
   modeStopping: boolean
+  resolveVehicleWorldPosition?: (nodeId: string | null | undefined, chassisBody: VehicleDriveVehicle['chassisBody'], target: THREE.Vector3) => boolean
+  nodeId?: string | null
   /** Optional index to treat as the stopping/docking target (defaults to route end). */
   stopIndex?: number
   /** Optional nodeId for debug log correlation. */
@@ -342,7 +349,6 @@ export function applyPurePursuitVehicleControl(params: {
   const chassisBody = vehicle.chassisBody
 
   const currentPosition = chassisBody.position
-  const currentY = currentPosition.y
 
   const maxSteerRad = THREE.MathUtils.degToRad(
     Number.isFinite(vehicleProps.maxSteerDegrees)
@@ -366,7 +372,10 @@ export function applyPurePursuitVehicleControl(params: {
   }
   forwardWorld.normalize()
 
-  currentPositionThree.set(currentPosition.x, currentPosition.y, currentPosition.z)
+  if (params.resolveVehicleWorldPosition?.(params.nodeId ?? null, chassisBody, currentPositionThree) !== true) {
+    currentPositionThree.set(currentPosition.x, currentPosition.y, currentPosition.z)
+  }
+  const currentY = currentPositionThree.y
   const lookaheadDistance = Math.max(
     pursuitProps.lookaheadMinMeters,
     Math.min(
@@ -390,8 +399,8 @@ export function applyPurePursuitVehicleControl(params: {
   const clampedStopIndex = Math.max(0, Math.min(endIndex, rawStopIndex))
   const stopPoint = points[clampedStopIndex]!
   planarEnd.set(stopPoint.x, currentY, stopPoint.z)
-  const dxEnd = planarEnd.x - currentPosition.x
-  const dzEnd = planarEnd.z - currentPosition.z
+  const dxEnd = planarEnd.x - currentPositionThree.x
+  const dzEnd = planarEnd.z - currentPositionThree.z
   const distanceToEnd = Math.sqrt(dxEnd * dxEnd + dzEnd * dzEnd)
 
   const dockActive = modeStopping && pursuitProps.dockingEnabled && distanceToEnd <= pursuitProps.dockStartDistanceMeters
@@ -416,7 +425,7 @@ export function applyPurePursuitVehicleControl(params: {
   }
 
   const wheelbaseMeters = Math.max(0.01, vehicleProps.wheelbaseMeters)
-  rearAxle.set(currentPosition.x, currentY, currentPosition.z)
+  rearAxle.set(currentPositionThree.x, currentY, currentPositionThree.z)
   rearAxle.addScaledVector(forwardWorld, -wheelbaseMeters * 0.5)
 
   toLookahead.copy(lookaheadPoint).sub(rearAxle)
@@ -695,6 +704,8 @@ export function applyPurePursuitVehicleControlSafe(params: {
   vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState
   modeStopping: boolean
+  resolveVehicleWorldPosition?: (nodeId: string | null | undefined, chassisBody: VehicleDriveVehicle['chassisBody'], target: THREE.Vector3) => boolean
+  nodeId?: string | null
   distanceToTarget: number
   stopIndex?: number
   debugNodeId?: string

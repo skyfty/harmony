@@ -3,6 +3,7 @@ import type { SceneNode } from './core'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
 import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, isAutoTourDebugEnabled, pushVehicleControlDebugEvent } from './purePursuitRuntime'
 import { syncBodyFromObject } from './physicsBodySync'
+import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 import type { VehicleDriveVehicle } from './VehicleDriveController'
 import type { PolylineMetricData } from './polylineProgress'
 import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline, samplePolylineAtS } from './polylineProgress'
@@ -37,6 +38,10 @@ export type AutoTourRuntimeDeps = {
   nodeObjectMap: Map<string, THREE.Object3D>
   /** Maps nodeId -> vehicle instance. */
   vehicleInstances: Map<string, AutoTourVehicleInstanceLike>
+  /** Optional host resolver for a vehicle chassis world position. */
+  resolveVehicleWorldPosition?: (nodeId: string | null | undefined, chassisBody: VehicleDriveVehicle['chassisBody'], target: THREE.Vector3) => boolean
+  /** Optional host resolver for a vehicle chassis world velocity. */
+  resolveVehicleWorldVelocity?: (nodeId: string | null | undefined, chassisBody: VehicleDriveVehicle['chassisBody'], target: THREE.Vector3) => boolean
   /** When true, AutoTour is paused (manual drive has priority). */
   isManualDriveActive: () => boolean
   /** Optional callback when AutoTour updates a runtime object's transform (useful for instanced meshes). */
@@ -375,13 +380,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
     // Hard-stop velocity to prevent coasting.
     try {
-      chassisBody.allowSleep = true
-      chassisBody.sleepSpeedLimit = Math.max(0.05, chassisBody.sleepSpeedLimit ?? 0)
-      chassisBody.sleepTimeLimit = Math.max(0.05, chassisBody.sleepTimeLimit ?? 0)
-      chassisBody.velocity.set(0, 0, 0)
-      chassisBody.angularVelocity.set(0, 0, 0)
-      // Sleep to avoid solver jitter once stopped.
-      chassisBody.sleep?.()
+      stopPhysicsBodyMotion(chassisBody as any)
+      sleepPhysicsBody(chassisBody as any, { minSpeedLimit: 0.05, minTimeLimit: 0.05 })
     } catch {
       // ignore
     }
@@ -428,6 +428,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     const vehicleInstance = deps.vehicleInstances.get(nodeId) ?? null
     const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null
     if (chassisBody) {
+      if (deps.resolveVehicleWorldPosition?.(nodeId, chassisBody, autoTourCurrentPosition) === true) {
+        return autoTourCurrentPosition
+      }
       autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
       return autoTourCurrentPosition
     }
@@ -823,18 +826,17 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         let waypointArcLengths3d: number[] | undefined
         let projectedS: number | undefined
 
-        // 尝试构建三维折线度量数据（考虑是否闭合，即 loop 与否）。
-        // 如果成功，计算顶点弧长表并把当前位置投影到这条折线上，用以确定“前方”的目标航点而不是仅仅最近点。
-        // const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
-        // if (polyline) {
-        //   polylineData3d = polyline
-        //   waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
-        //   const proj = projectPointToPolyline(points, polyline, positionSample, autoTourNextWorldPosition)
-        //   // proj.s 是投影点在折线弧长坐标系中的位置；proj.distanceSq 是投影误差平方。
-        //   projectedS = proj.s
-        //   // 使用弧长查找下一个航点索引，确保初始目标是“在当前位置前方/之后”的第一个航点（避免向后回溯）。
-        //   initialTargetIndex = findNextWaypointIndexByS(waypointArcLengths3d, proj.s)
-        // }
+        // Project the current position onto the route polyline so we can initialize
+        // the target to the first waypoint ahead of the vehicle instead of always
+        // starting from the nearest discrete vertex.
+        const polyline = buildPolylineMetricData(points, { closed: Boolean(tourProps.loop), mode: '3d' })
+        if (polyline) {
+          polylineData3d = polyline
+          waypointArcLengths3d = buildPolylineVertexArcLengths(points, polyline)
+          const proj = projectPointToPolyline(points, polyline, positionSample, autoTourNextWorldPosition)
+          projectedS = proj.s
+          initialTargetIndex = findTargetWaypointIndexByProjectedS(waypointArcLengths3d, proj.s, Boolean(tourProps.loop))
+        }
 
         // 初始朝向（航向角 yaw）。
         // 含义：initialYaw 表示以世界 Y 轴为上方向时对象的朝向角（弧度，范围 -π..π）。
@@ -970,7 +972,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       // Resolve current world position.
       if (hasVehicleInstance) {
         const chassisBody = vehicleInstance!.vehicle.chassisBody
-        autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+        if (deps.resolveVehicleWorldPosition?.(node.id, chassisBody, autoTourCurrentPosition) !== true) {
+          autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+        }
       } else {
         nodeObject!.getWorldPosition(autoTourCurrentPosition)
       }
@@ -1005,6 +1009,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             vehicleProps,
             state: state as any,
             modeStopping: false,
+            resolveVehicleWorldPosition: (nodeId, chassisBody, target) => (
+              deps.resolveVehicleWorldPosition?.(nodeId ?? node.id, chassisBody, target) === true
+            ),
+            nodeId: node.id,
             distanceToTarget: distanceToStart,
           })
 
@@ -1289,6 +1297,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           vehicleProps,
           state: state as any,
           modeStopping: isStopping,
+          resolveVehicleWorldPosition: (nodeId, chassisBody, target) => (
+            deps.resolveVehicleWorldPosition?.(nodeId ?? node.id, chassisBody, target) === true
+          ),
+          nodeId: node.id,
           distanceToTarget: distance,
           debugNodeId: node.id,
           ...(isStopping
@@ -1329,6 +1341,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             // Docking stop: request host pause and hold here until resume.
             state.mode = 'dock-hold'
             state.dockHoldIndex = stopIndex
+
+            // Keep the chassis fully parked while docked; the host may pause updates,
+            // but this also protects against any residual motion on the frame we stop.
+            stopVehicleImmediately(node.id)
 
             if (debugEnabled) {
               pushVehicleControlDebugEvent({

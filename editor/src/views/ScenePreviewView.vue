@@ -259,7 +259,6 @@ import {
 import {
   createPhysicsAwareAutoTourVehicleInstances,
   resolveVehicleOrObjectWorldPosition,
-  startTourAndFollow,
   stopTourAndUnfollow,
 } from '@schema/motion'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/motion'
@@ -1423,6 +1422,9 @@ const autoTourCameraFollowController = new FollowCameraController()
 const autoTourCameraFollowLastAnchor = new THREE.Vector3()
 const autoTourCameraFollowVelocity = new THREE.Vector3()
 const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
+const autoTourSnapLocalPosition = new THREE.Vector3()
+const autoTourSnapParentWorldQuaternion = new THREE.Quaternion()
+const autoTourSnapEuler = new THREE.Euler()
 let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -3138,6 +3140,34 @@ const vehicleDriveController = new VehicleDriveController(
 	isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
 	ensureVehicleBindingForNode,
 	normalizeNodeId,
+		resolveChassisWorldPosition: (nodeId, chassisBody, target) => {
+			if (!physicsEnvironmentEnabled.value) {
+				return false
+			}
+			if (!vehicleDriveState.active || normalizeNodeId(vehicleDriveState.nodeId) !== nodeId) {
+				return false
+			}
+			const position = chassisBody?.position as unknown as { x?: number; y?: number; z?: number } | null
+			if (!position) {
+				return false
+			}
+			target.set(Number(position.x) || 0, Number(position.y) || 0, Number(position.z) || 0)
+			return true
+		},
+		resolveChassisWorldVelocity: (nodeId, chassisBody, target) => {
+			if (!physicsEnvironmentEnabled.value) {
+				return false
+			}
+			if (!vehicleDriveState.active || normalizeNodeId(vehicleDriveState.nodeId) !== nodeId) {
+				return false
+			}
+			const velocity = chassisBody?.velocity as unknown as { x?: number; y?: number; z?: number } | null
+			if (!velocity) {
+				return false
+			}
+			target.set(Number(velocity.x) || 0, Number(velocity.y) || 0, Number(velocity.z) || 0)
+			return true
+		},
 		setCameraViewState: (mode, targetId) => {
 			const nextMode: CameraViewMode = mode === 'watching' ? 'watching' : 'level'
 			setCameraViewState(nextMode, targetId ?? null)
@@ -3568,6 +3598,22 @@ const autoTourRuntime = createAutoTourRuntime({
 	resolveNodeById,
 	nodeObjectMap,
 	vehicleInstances: autoTourVehicleInstances,
+	resolveVehicleWorldPosition: (_nodeId, chassisBody, target) => {
+		const position = chassisBody?.position as unknown as { x?: number; y?: number; z?: number } | null
+		if (!position) {
+			return false
+		}
+		target.set(Number(position.x) || 0, Number(position.y) || 0, Number(position.z) || 0)
+		return true
+	},
+	resolveVehicleWorldVelocity: (_nodeId, chassisBody, target) => {
+		const velocity = chassisBody?.velocity as unknown as { x?: number; y?: number; z?: number } | null
+		if (!velocity) {
+			return false
+		}
+		target.set(Number(velocity.x) || 0, Number(velocity.y) || 0, Number(velocity.z) || 0)
+		return true
+	},
 	isManualDriveActive: () => vehicleDriveState.active,
 	requiresExplicitStart: true,
 	onDockRequestedPause: (nodeId, payload) => {
@@ -8141,6 +8187,21 @@ function updateVehicleSpeedFromVehicle(): void {
 			brake: vehicleDriveInput.brake,
 			parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
 			parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+			resolveVehicleWorldVelocity: (nodeId, chassisBody, target) => {
+				if (!physicsEnvironmentEnabled.value) {
+					return false
+				}
+				if (!vehicleDriveState.active || normalizeNodeId(vehicleDriveState.nodeId) !== nodeId) {
+					return false
+				}
+				const velocity = chassisBody?.velocity as unknown as { x?: number; y?: number; z?: number } | null
+				if (!velocity) {
+					return false
+				}
+				target.set(Number(velocity.x) || 0, Number(velocity.y) || 0, Number(velocity.z) || 0)
+				return true
+			},
+			nodeId: vehicleNodeId,
 			resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleNodeId!),
 		})
 	}
@@ -8461,6 +8522,87 @@ function applyAutoTourRigidBodyStop(nodeId: string): void {
 	}
 }
 
+
+function applyObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vector3, worldQuaternion: THREE.Quaternion): void {
+	if (object.parent) {
+		object.parent.updateWorldMatrix(true, false)
+		autoTourSnapLocalPosition.copy(worldPosition)
+		object.parent.worldToLocal(autoTourSnapLocalPosition)
+		object.position.copy(autoTourSnapLocalPosition)
+		object.parent.getWorldQuaternion(autoTourSnapParentWorldQuaternion)
+		autoTourSnapParentWorldQuaternion.invert()
+		object.quaternion.copy(autoTourSnapParentWorldQuaternion.multiply(worldQuaternion))
+	} else {
+		object.position.copy(worldPosition)
+		object.quaternion.copy(worldQuaternion)
+	}
+	object.updateWorldMatrix(false, true)
+}
+
+function syncSceneNodeLocalTransformFromObject(node: SceneNode, object: THREE.Object3D): void {
+	if (node.position) {
+		node.position.x = object.position.x
+		node.position.y = object.position.y
+		node.position.z = object.position.z
+	}
+	autoTourSnapEuler.setFromQuaternion(object.quaternion)
+	if (node.rotation) {
+		node.rotation.x = autoTourSnapEuler.x
+		node.rotation.y = autoTourSnapEuler.y
+		node.rotation.z = autoTourSnapEuler.z
+	}
+}
+
+function trySleepBody(body: { sleep?: () => unknown } | null | undefined): void {
+	body?.sleep?.()
+}
+
+function applyAutoTourSnapToVehicle(nodeId: string, snap: { worldPosition: THREE.Vector3; yaw: number }): THREE.Object3D | null {
+	const node = resolveNodeById(nodeId)
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!node || !object) {
+		return null
+	}
+	const vehicleInstance = vehicleInstances.get(nodeId) ?? null
+	const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null
+	const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null
+	tempPosition.copy(snap.worldPosition)
+	tempQuaternion.setFromAxisAngle(AUTO_TOUR_CAMERA_WORLD_UP, snap.yaw)
+	const currentChassisY = chassisBody && Number.isFinite(chassisBody.position.y)
+		? chassisBody.position.y
+		: object.getWorldPosition(autoTourSnapLocalPosition).y
+	if (Number.isFinite(currentChassisY)) {
+		tempPosition.y = currentChassisY
+	}
+	applyObjectWorldPose(object, tempPosition, tempQuaternion)
+	syncSceneNodeLocalTransformFromObject(node, object)
+	if (typeof syncInstancedTransform === 'function') {
+		syncInstancedTransform(object)
+	}
+	if (rigidbodyEntry?.body) {
+		syncSharedBodyFromObject(rigidbodyEntry.body, object, rigidbodyEntry.orientationAdjustment)
+		rigidbodyEntry.body.velocity.set(0, 0, 0)
+		rigidbodyEntry.body.angularVelocity.set(0, 0, 0)
+		trySleepBody(rigidbodyEntry.body)
+	}
+	if (vehicleInstance?.vehicle?.chassisBody) {
+		const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId)
+		const wheelCount = Math.max(0, vehicleInstance.wheelCount || vehicleInstance.vehicle.wheelInfos.length || 0)
+		for (let index = 0; index < wheelCount; index += 1) {
+			vehicleInstance.vehicle.applyEngineForce(0, index)
+			vehicleInstance.vehicle.setSteeringValue(0, index)
+			vehicleInstance.vehicle.setBrake(brakeForce, index)
+		}
+		if (chassisBody) {
+			chassisBody.velocity.set(0, 0, 0)
+			chassisBody.angularVelocity.set(0, 0, 0)
+			trySleepBody(chassisBody)
+		}
+		holdVehicleBrakeSafe({ vehicleInstance, brakeForce })
+	}
+	return object
+}
+
 function applyAutoTourPauseForActiveNodes(): void {
 	const manualNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
 	activeAutoTourNodeIds.forEach((nodeId) => {
@@ -8486,6 +8628,11 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 		appendWarningMessage('AutoTour component is not enabled on the target node.')
 		return
 	}
+	const snap = autoTourRuntime.resolveRouteSnap(targetNodeId)
+	if (!snap) {
+		appendWarningMessage('未找到绑定 Guide Route。')
+		return
+	}
 
 	vehicleDrivePromptBusy.value = true
 	try {
@@ -8501,18 +8648,28 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 
 		resetVehicleDriveInputs()
 		setVehicleDriveUiOverride('hide')
-		startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
-			activeAutoTourNodeIds.add(n)
-			autoTourFollowNodeId.value = n
-			resetCameraFollowState(autoTourCameraFollowState)
-			autoTourCameraFollowVelocity.set(0, 0, 0)
-			autoTourCameraFollowHasSample = false
-			followCameraControlActive = false
-			followCameraControlDirty = false
-			setCameraViewState('watching', n)
-			setCameraCaging(true, { force: true })
-			applyAutoTourCameraInputPolicy()
-		})
+		const snappedObject = applyAutoTourSnapToVehicle(targetNodeId, snap)
+		if (!snappedObject) {
+			appendWarningMessage('无法同步车辆位置。')
+			return
+		}
+
+		autoTourRuntime.startTour(targetNodeId)
+		autoTourRuntime.seedTourPlaybackState(targetNodeId, snap)
+		activeAutoTourNodeIds.add(targetNodeId)
+		autoTourFollowNodeId.value = targetNodeId
+		resetCameraFollowState(autoTourCameraFollowState)
+		autoTourCameraFollowVelocity.set(0, 0, 0)
+		autoTourCameraFollowHasSample = false
+		snappedObject.getWorldPosition(autoTourCameraFollowLastAnchor)
+		followCameraControlActive = false
+		followCameraControlDirty = false
+		setCameraViewState('watching', targetNodeId)
+		setCameraCaging(true, { force: true })
+		applyAutoTourCameraInputPolicy()
+		if (camera) {
+			updateAutoTourCameraForFrame(0, true, camera)
+		}
 
 		// Behavior script tokens should not hang: auto-tour starts immediately.
 		if (event.token) {

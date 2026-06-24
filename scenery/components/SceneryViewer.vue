@@ -7932,6 +7932,22 @@ const autoTourRuntime = createAutoTourRuntime({
   resolveNodeById,
   nodeObjectMap,
   vehicleInstances: autoTourVehicleInstances,
+  resolveVehicleWorldPosition: (_nodeId, chassisBody, target) => {
+    const position = chassisBody?.position as unknown as { x?: number; y?: number; z?: number } | null;
+    if (!position) {
+      return false;
+    }
+    target.set(Number(position.x) || 0, Number(position.y) || 0, Number(position.z) || 0);
+    return true;
+  },
+  resolveVehicleWorldVelocity: (_nodeId, chassisBody, target) => {
+    const velocity = chassisBody?.velocity as unknown as { x?: number; y?: number; z?: number } | null;
+    if (!velocity) {
+      return false;
+    }
+    target.set(Number(velocity.x) || 0, Number(velocity.y) || 0, Number(velocity.z) || 0);
+    return true;
+  },
   isManualDriveActive: () => vehicleDriveActive.value,
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);
@@ -14465,6 +14481,18 @@ function updateVehicleSpeedFromVehicle(): void {
         brake: vehicleDriveInput.brake,
         parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
         parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+        resolveVehicleWorldVelocity: (nodeId, chassisBody, target) => {
+          if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId) {
+            return false;
+          }
+          const velocity = chassisBody?.velocity as unknown as { x?: number; y?: number; z?: number } | null;
+          if (!velocity) {
+            return false;
+          }
+          target.set(Number(velocity.x) || 0, Number(velocity.y) || 0, Number(velocity.z) || 0);
+          return true;
+        },
+        nodeId: vehicleDriveNodeId.value ?? null,
         resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleDriveNodeId.value ?? ''),
       });
     }

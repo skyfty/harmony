@@ -49,6 +49,12 @@ export function createBridgeVehicleProxy(
       allowSleep: true,
       sleepSpeedLimit: 0.05,
       sleepTimeLimit: 0.05,
+      wakeUp() {
+        return undefined
+      },
+      sleep() {
+        return undefined
+      },
     },
     wheelInfos,
     applyEngineForce(force: number, wheelIndex: number) {
