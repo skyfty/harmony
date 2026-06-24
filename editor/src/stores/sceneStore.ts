@@ -2818,32 +2818,6 @@ function hasUsableGroundSplatBake(node: SceneNode | null | undefined): boolean {
   )
 }
 
-function applyRuntimeHiddenInPreviewFlags(
-  nodes: SceneNode[],
-  shouldHideNode: (node: SceneNode) => boolean,
-): boolean {
-  let changed = false
-  for (const node of nodes) {
-    if (!node) {
-      continue
-    }
-    if (shouldHideNode(node)) {
-      const flags = node.editorFlags ?? {}
-      if (flags.runtimeHiddenInPreview !== true) {
-        node.editorFlags = {
-          ...flags,
-          runtimeHiddenInPreview: true,
-        }
-        changed = true
-      }
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      changed = applyRuntimeHiddenInPreviewFlags(node.children, shouldHideNode) || changed
-    }
-  }
-  return changed
-}
-
 function attachRuntimeGroundSidecarsToDocument(document: StoredSceneDocument): StoredSceneDocument {
   const groundNode = findGroundNode(document.nodes ?? [])
   if (!groundNode) {
@@ -9605,7 +9579,6 @@ export const useSceneStore = defineStore('scene', {
       applySceneAssetState(this, scene)
       this.environment = resolveSceneDocumentEnvironment(scene)
       const clonedNodes = cloneSceneNodes(scene.nodes)
-      applyRuntimeHiddenInPreviewFlags(clonedNodes, (node) => node.dynamicMesh?.type === 'Landform')
       const effectiveGroundSettings = resolveGroundSettingsFromNodes(clonedNodes, cloneGroundSettings(scene.groundSettings))
       const normalizedNodes = ensureEnvironmentNode(
         ensureGroundNode(clonedNodes, effectiveGroundSettings),
@@ -10270,12 +10243,6 @@ export const useSceneStore = defineStore('scene', {
         const backgroundPatchHasSkycubeZipAssetId = Object.prototype.hasOwnProperty.call(backgroundPatch, 'skycubeZipAssetId')
         background.hdriAssetId = backgroundPatchHasHdriAssetId ? background.hdriAssetId : null
         background.skycubeZipAssetId = backgroundPatchHasSkycubeZipAssetId ? background.skycubeZipAssetId : null
-        background.positiveXAssetId = null
-        background.negativeXAssetId = null
-        background.positiveYAssetId = null
-        background.negativeYAssetId = null
-        background.positiveZAssetId = null
-        background.negativeZAssetId = null
       }
 
       // When the background mode changes, drop stale background asset refs unless
@@ -16500,105 +16467,98 @@ export const useSceneStore = defineStore('scene', {
 
       const landformGroup = createLandformGroup(defaultMesh)
       const nodeName = payload.name ?? this.generateLandformNodeName()
+      const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
+      const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
 
-      this.captureHistorySnapshot()
-      this.beginHistoryCaptureSuppression()
-      try {
-        const desiredId = typeof payload.nodeId === 'string' && payload.nodeId.trim().length ? payload.nodeId.trim() : null
-        const existing = desiredId ? findNodeById(this.nodes, desiredId) : null
-
-        if (existing && desiredId) {
-          if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
-            this.renameNode(desiredId, payload.name.trim())
-          }
-          this.updateNodeTransform({
-            id: desiredId,
-            position: createVector(build.center.x, build.center.y, build.center.z),
-            rotation: createVector(0, 0, 0),
-            scale: createVector(1, 1, 1),
-          })
-
-          const existingMesh = existing.dynamicMesh?.type === 'Landform' ? (existing.dynamicMesh as LandformDynamicMesh) : null
-          this.updateNodeDynamicMesh(desiredId, {
-            ...defaultMesh,
-            materialConfigId: existingMesh?.materialConfigId ?? defaultMesh.materialConfigId,
-          } as LandformDynamicMesh)
-
-          const existingComponent = findNodeById(this.nodes, desiredId)?.components?.[LANDFORM_COMPONENT_TYPE] as { id?: string } | undefined
-          if (!existingComponent?.id) {
-            this.addNodeComponent(desiredId, LANDFORM_COMPONENT_TYPE)
-          }
-          const updated = findNodeById(this.nodes, desiredId)
-          const component = updated?.components?.[LANDFORM_COMPONENT_TYPE] as { id?: string } | undefined
-          if (component?.id) {
-            const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
-            this.updateNodeComponentProps(desiredId, component.id, {
-              enableFeather: nextProps.enableFeather,
-              feather: nextProps.feather,
-              uvScale: nextProps.uvScale,
-            })
-          }
-
-          let materialsChanged = false
-          let meshChanged = false
-          visitNode(this.nodes, desiredId, (node) => {
-            const result = landformHelpers.ensureLandformMaterialConvention(node)
-            materialsChanged ||= result.materialsChanged
-            meshChanged ||= result.meshChanged
-          })
-          if (materialsChanged) {
-            this.queueSceneNodePatch(desiredId, ['materials'])
-          }
-          if (meshChanged) {
-            this.queueSceneNodePatch(desiredId, ['dynamicMesh'])
-          }
-          if (materialsChanged || meshChanged) {
-            this.nodes = [...this.nodes]
-            commitSceneSnapshot(this)
-          }
-          void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
-            console.warn('[SceneStore] Failed to flush landform scene save after updating existing node', error)
-          })
-          return updated
+      if (existing && desiredId) {
+        if (payload.name && payload.name.trim() && existing.name !== payload.name.trim()) {
+          this.renameNode(desiredId, payload.name.trim())
         }
-
-        const node = this.addSceneNode({
-          nodeId: desiredId ?? undefined,
-          nodeType: 'Mesh',
-          object: landformGroup,
-          name: nodeName,
+        this.updateNodeTransform({
+          id: desiredId,
           position: createVector(build.center.x, build.center.y, build.center.z),
           rotation: createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
-          dynamicMesh: defaultMesh,
-          editorFlags: {
-            ...(payload.editorFlags ?? {}),
-            runtimeHiddenInPreview: true,
-          },
         })
 
-        if (node) {
-          this.setNodeMaterials(node.id, defaultMaterials)
-          const result = this.addNodeComponent(node.id, LANDFORM_COMPONENT_TYPE)
-          const component = result?.component
-          if (component?.id) {
-            const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
-            this.updateNodeComponentProps(node.id, component.id, {
-              enableFeather: nextProps.enableFeather,
-              feather: nextProps.feather,
-              uvScale: nextProps.uvScale,
-            })
-          }
-          scheduleLandformGroundSplatBake(this, 'createLandformNode')
-          void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
-            console.warn('[SceneStore] Failed to flush landform scene save after creation', error)
+        const existingMesh = existing.dynamicMesh?.type === 'Landform' ? (existing.dynamicMesh as LandformDynamicMesh) : null
+        this.updateNodeDynamicMesh(desiredId, {
+          ...defaultMesh,
+          materialConfigId: existingMesh?.materialConfigId ?? defaultMesh.materialConfigId,
+        } as LandformDynamicMesh)
+
+        const existingComponent = findNodeById(this.nodes, desiredId)?.components?.[LANDFORM_COMPONENT_TYPE] as { id?: string } | undefined
+        if (!existingComponent?.id) {
+          this.addNodeComponent(desiredId, LANDFORM_COMPONENT_TYPE)
+        }
+        const updated = findNodeById(this.nodes, desiredId)
+        const component = updated?.components?.[LANDFORM_COMPONENT_TYPE] as { id?: string } | undefined
+        if (component?.id) {
+          const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
+          this.updateNodeComponentProps(desiredId, component.id, {
+            enableFeather: nextProps.enableFeather,
+            feather: nextProps.feather,
+            uvScale: nextProps.uvScale,
           })
         }
 
-        return node
-      } finally {
-        this.endHistoryCaptureSuppression()
+        let materialsChanged = false
+        let meshChanged = false
+        visitNode(this.nodes, desiredId, (node) => {
+          const result = landformHelpers.ensureLandformMaterialConvention(node)
+          materialsChanged ||= result.materialsChanged
+          meshChanged ||= result.meshChanged
+        })
+        if (materialsChanged) {
+          this.queueSceneNodePatch(desiredId, ['materials'])
+        }
+        if (meshChanged) {
+          this.queueSceneNodePatch(desiredId, ['dynamicMesh'])
+        }
+        if (materialsChanged || meshChanged) {
+          this.nodes = [...this.nodes]
+          commitSceneSnapshot(this)
+        }
+        void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
+          console.warn('[SceneStore] Failed to flush landform scene save after updating existing node', error)
+        })
+        return updated
       }
+
+      const node = this.addSceneNode({
+        nodeId: desiredId ?? undefined,
+        nodeType: 'Mesh',
+        object: landformGroup,
+        name: nodeName,
+        position: createVector(build.center.x, build.center.y, build.center.z),
+        rotation: createVector(0, 0, 0),
+        scale: createVector(1, 1, 1),
+        dynamicMesh: defaultMesh,
+        editorFlags: {
+          ...(payload.editorFlags ?? {}),
+          runtimeHiddenInPreview: true,
+        },
+      })
+
+      if (node) {
+        this.setNodeMaterials(node.id, defaultMaterials)
+        const result = this.addNodeComponent(node.id, LANDFORM_COMPONENT_TYPE)
+        const component = result?.component
+        if (component?.id) {
+          const nextProps = resolveLandformComponentPropsFromMesh(defaultMesh)
+          this.updateNodeComponentProps(node.id, component.id, {
+            enableFeather: nextProps.enableFeather,
+            feather: nextProps.feather,
+            uvScale: nextProps.uvScale,
+          })
+        }
+        scheduleLandformGroundSplatBake(this, 'createLandformNode')
+        void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
+          console.warn('[SceneStore] Failed to flush landform scene save after creation', error)
+        })
+      }
+
+      return node
     },
 
     buildLandformPreviewMesh(payload: {

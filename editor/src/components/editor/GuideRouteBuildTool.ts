@@ -259,6 +259,7 @@ export function createGuideRouteBuildTool(options: {
       waypoints: session.points.map((_, index, points) => ({
         dock: index === 0 || index === points.length - 1,
       })),
+      editorFlags: { editorOnly: true, runtimeHiddenInPreview: true},
     })
     const startPoint = session.points[0]?.clone() ?? null
     clearSession()

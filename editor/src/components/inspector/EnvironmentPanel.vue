@@ -273,12 +273,6 @@ function updateBackgroundMode(mode: BackgroundUiMode | null) {
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
       hdriAssetId: null,
       skycubeZipAssetId: null,
-      positiveXAssetId: null,
-      negativeXAssetId: null,
-      positiveYAssetId: null,
-      negativeYAssetId: null,
-      positiveZAssetId: null,
-      negativeZAssetId: null,
     })
     return
   }
@@ -293,12 +287,6 @@ function updateBackgroundMode(mode: BackgroundUiMode | null) {
     gradientExponent: background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
     hdriAssetId: null,
     skycubeZipAssetId: null,
-    positiveXAssetId: null,
-    negativeXAssetId: null,
-    positiveYAssetId: null,
-    negativeYAssetId: null,
-    positiveZAssetId: null,
-    negativeZAssetId: null,
   })
 }
 
@@ -899,12 +887,6 @@ async function applySkyAsset(asset: ProjectAsset) {
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
       hdriAssetId: null,
       skycubeZipAssetId: registeredAsset.id,
-      positiveXAssetId: null,
-      negativeXAssetId: null,
-      positiveYAssetId: null,
-      negativeYAssetId: null,
-      positiveZAssetId: null,
-      negativeZAssetId: null,
     })
     return
   }
@@ -923,12 +905,6 @@ async function applySkyAsset(asset: ProjectAsset) {
     gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
     hdriAssetId: registeredAsset.id,
     skycubeZipAssetId: mode === 'skycube' ? registeredAsset.id : null,
-    positiveXAssetId: null,
-    negativeXAssetId: null,
-    positiveYAssetId: null,
-    negativeYAssetId: null,
-    positiveZAssetId: null,
-    negativeZAssetId: null,
   })
 }
 

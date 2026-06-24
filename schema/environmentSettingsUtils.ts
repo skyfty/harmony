@@ -56,14 +56,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     gradientOffset: DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
     gradientExponent: DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
     hdriAssetId: null,
-    skycubeFormat: 'zip',
     skycubeZipAssetId: null,
-    positiveXAssetId: null,
-    negativeXAssetId: null,
-    positiveYAssetId: null,
-    negativeYAssetId: null,
-    positiveZAssetId: null,
-    negativeZAssetId: null,
   },
   northDirection: DEFAULT_ENVIRONMENT_NORTH_DIRECTION,
   environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
@@ -184,8 +177,6 @@ export function cloneEnvironmentSettings(
   const normalizedSource = source ?? DEFAULT_ENVIRONMENT_SETTINGS
   const backgroundSource = normalizedSource.background ?? null
 
-  const normalizeSkycubeFormat = () => 'zip' as const
-
   const normalizeOrientationPreset = (value: unknown) => {
     if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
       return value as EnvironmentSettings['environmentOrientationPreset']
@@ -251,17 +242,10 @@ export function cloneEnvironmentSettings(
           ? clampNumber((backgroundSource as any)?.gradientExponent, 0, 10, DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT)
           : DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
       hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-      skycubeFormat: normalizeSkycubeFormat(),
       skycubeZipAssetId:
         backgroundMode === 'skycube'
           ? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null)
           : null,
-      positiveXAssetId: null,
-      negativeXAssetId: null,
-      positiveYAssetId: null,
-      negativeYAssetId: null,
-      positiveZAssetId: null,
-      negativeZAssetId: null,
     },
     northDirection: normalizeNorthDirection((normalizedSource as any)?.northDirection),
     environmentOrientationPreset: preset,

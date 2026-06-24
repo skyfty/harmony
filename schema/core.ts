@@ -1556,20 +1556,8 @@ export interface EnvironmentBackgroundSettings {
   /** Vertical gradient exponent (matches Three.js shader example semantics). Default: 0.6. */
   gradientExponent?: number
   hdriAssetId: string | null
-  /** How SkyCube background sources its archive. */
-  skycubeFormat: SkyCubeBackgroundFormat
   /** Points to a .skycube zip asset. */
   skycubeZipAssetId: string | null
-  /**
-   * SkyCube faces in fixed Three.js CubeTextureLoader order:
-   * +X, -X, +Y, -Y, +Z, -Z.
-   */
-  positiveXAssetId: string | null
-  negativeXAssetId: string | null
-  positiveYAssetId: string | null
-  negativeYAssetId: string | null
-  positiveZAssetId: string | null
-  negativeZAssetId: string | null
 }
 
 export interface EnvironmentSettings {
