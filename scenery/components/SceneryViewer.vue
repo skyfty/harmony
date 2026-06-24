@@ -918,7 +918,7 @@ import {
   getApproxDimensions,
   resetCameraFollowState,
 } from '@harmony/schema/motion';
-import type { CameraFollowState } from '@harmony/schema/followCameraController';
+import type { CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
 import {
   VehicleDriveController,
   createAutoTourRuntime,
@@ -3491,7 +3491,6 @@ const autoTourPausedCameraTarget = new THREE.Vector3();
 let autoTourPausedCameraSnapshotValid = false;
 const autoTourPausedCameraNodeId = ref<string | null>(null);
 const autoTourResumeBlendState = createCameraFollowState();
-const autoTourResumeBlendController = new FollowCameraController();
 const autoTourResumeBlendStartPosition = new THREE.Vector3();
 const autoTourResumeBlendStartTarget = new THREE.Vector3();
 const autoTourResumeBlendTempCamera = new THREE.PerspectiveCamera();
@@ -3563,6 +3562,43 @@ function clearAutoTourResumeBlendState(): void {
   autoTourResumeBlendActive = false;
   autoTourResumeBlendElapsedSeconds = 0;
   autoTourResumeBlendNodeId = null;
+}
+
+function prepareAutoTourResumeBlendContext(
+  targetNodeId: string,
+  object: THREE.Object3D,
+  context: RenderContext,
+): CameraFollowPlacement {
+  autoTourCameraFollowForwardScratch.set(0, 0, 0);
+  const chassisBody = vehicleInstances.get(targetNodeId)?.vehicle?.chassisBody ?? null;
+  const velocity = chassisBody?.velocity ?? null;
+  if (velocity) {
+    autoTourCameraFollowForwardScratch.set(velocity.x, 0, velocity.z);
+  }
+  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+    object.getWorldDirection(autoTourCameraFollowForwardScratch);
+    autoTourCameraFollowForwardScratch.y = 0;
+  }
+  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+    autoTourCameraFollowForwardScratch.set(0, 0, 1);
+  } else {
+    autoTourCameraFollowForwardScratch.normalize();
+  }
+
+  resolveAutoTourCameraFollowAnchor(targetNodeId, object);
+  autoTourResumeBlendStartPosition.copy(context.camera.position);
+  autoTourResumeBlendStartTarget.copy(context.controls.target);
+  seedAutoTourCameraFollowStateFromView(
+    autoTourResumeBlendState,
+    autoTourResumeBlendStartPosition,
+    autoTourResumeBlendStartTarget,
+    autoTourCameraFollowAnchorScratch,
+    autoTourCameraFollowForwardScratch,
+  );
+  autoTourResumeBlendTempCamera.position.copy(autoTourResumeBlendStartPosition);
+  autoTourResumeBlendTempCamera.up.copy(context.camera.up);
+  autoTourResumeBlendTempControlsTarget.copy(autoTourResumeBlendStartTarget);
+  return computeFollowPlacement(getApproxDimensions(object));
 }
 
 function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3D): THREE.Vector3 {
@@ -14817,26 +14853,10 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   if (autoTourResumeBlendActive && autoTourResumeBlendNodeId === nodeId && !options.immediate) {
-    object.getWorldDirection(autoTourCameraFollowForwardScratch);
-    autoTourCameraFollowForwardScratch.y = 0;
-    if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
-      autoTourCameraFollowForwardScratch.set(0, 0, 1);
-    } else {
-      autoTourCameraFollowForwardScratch.normalize();
-    }
-    seedAutoTourCameraFollowStateFromView(
-      autoTourResumeBlendState,
-      autoTourResumeBlendStartPosition,
-      autoTourResumeBlendStartTarget,
-      autoTourCameraFollowAnchorScratch,
-      autoTourCameraFollowForwardScratch,
-    );
-    autoTourResumeBlendTempCamera.position.copy(autoTourResumeBlendStartPosition);
-    autoTourResumeBlendTempCamera.up.copy(context.camera.up);
-    autoTourResumeBlendTempControlsTarget.copy(autoTourResumeBlendStartTarget);
-    autoTourResumeBlendController.update({
+    const placement = prepareAutoTourResumeBlendContext(nodeId, object, context);
+    autoTourCameraFollowController.update({
       follow: autoTourResumeBlendState,
-      placement: computeFollowPlacement(getApproxDimensions(object)),
+      placement,
       anchorWorld: autoTourCameraFollowAnchorScratch,
       desiredForwardWorld: autoTourCameraFollowForwardScratch,
       velocityWorld: autoTourCameraFollowVelocity,
@@ -15293,38 +15313,8 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
   if (!context || !object) {
     return;
   }
-
-  autoTourCameraFollowForwardScratch.set(0, 0, 0);
-  const chassisBody = vehicleInstances.get(targetNodeId)?.vehicle?.chassisBody ?? null;
-  const velocity = chassisBody?.velocity ?? null;
-  if (velocity) {
-    autoTourCameraFollowForwardScratch.set(velocity.x, 0, velocity.z);
-  }
-  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
-    object.getWorldDirection(autoTourCameraFollowForwardScratch);
-    autoTourCameraFollowForwardScratch.y = 0;
-  }
-  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
-    autoTourCameraFollowForwardScratch.set(0, 0, 1);
-  } else {
-    autoTourCameraFollowForwardScratch.normalize();
-  }
-
-  resolveAutoTourCameraFollowAnchor(targetNodeId, object);
-  autoTourResumeBlendStartPosition.copy(context.camera.position);
-  autoTourResumeBlendStartTarget.copy(context.controls.target);
-  seedAutoTourCameraFollowStateFromView(
-    autoTourResumeBlendState,
-    autoTourResumeBlendStartPosition,
-    autoTourResumeBlendStartTarget,
-    autoTourCameraFollowAnchorScratch,
-    autoTourCameraFollowForwardScratch,
-  );
-  autoTourResumeBlendTempCamera.position.copy(autoTourResumeBlendStartPosition);
-  autoTourResumeBlendTempCamera.up.copy(context.camera.up);
-  autoTourResumeBlendTempControlsTarget.copy(autoTourResumeBlendStartTarget);
-  const placement = computeFollowPlacement(getApproxDimensions(object));
-  autoTourResumeBlendController.update({
+  const placement = prepareAutoTourResumeBlendContext(targetNodeId, object, context);
+  autoTourCameraFollowController.update({
     follow: autoTourResumeBlendState,
     placement,
     anchorWorld: autoTourCameraFollowAnchorScratch,
