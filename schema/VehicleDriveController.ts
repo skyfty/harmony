@@ -179,6 +179,10 @@ export type VehicleDriveControllerDeps = {
     vehicleObject: THREE.Object3D | null
   }) => void
 
+  // Allow host to provide interpolated chassis data (e.g., fixed-step physics interpolation on WeChat).
+  resolveChassisWorldPosition?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
+  resolveChassisWorldVelocity?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
+
   // Follow camera fine tuning (optional, typically platform-specific).
   followCameraVelocityLerpSpeed?: number | (() => number)
   followCameraTuning?: Partial<CameraFollowTuning> | (() => Partial<CameraFollowTuning>)
@@ -501,21 +505,6 @@ export class VehicleDriveController {
       targetLift: placement.targetLift,
       targetForward: placement.targetForward,
     }
-  }
-
-  private computeVehicleRenderFollowAnchor(vehicleObject: THREE.Object3D | null, fallbackPosition: THREE.Vector3, target: THREE.Vector3): void {
-    if (!vehicleObject) {
-      target.copy(fallbackPosition)
-      return
-    }
-    const temp = this.temp
-    temp.box.makeEmpty()
-    temp.box.setFromObject(vehicleObject)
-    if (temp.box.isEmpty()) {
-      target.copy(fallbackPosition)
-      return
-    }
-    temp.box.getCenter(target)
   }
 
   private clearFollowCameraPlacementCache(): void {
@@ -1435,7 +1424,13 @@ export class VehicleDriveController {
     } else if (deltaSeconds > 0 && this.followCameraVelocityHasSample) {
       const dt = Math.max(1e-6, Math.min(0.25, deltaSeconds))
       const chassisBody = instance?.vehicle?.chassisBody ?? null
-      if (chassisBody?.velocity) {
+      const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
+      const resolvedNodeId = nodeId ?? null
+      const resolveVelocity = resolvedNodeId && chassisBody ? this.deps.resolveChassisWorldVelocity : undefined
+
+      if (resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
+        // Use host-provided velocity when available to keep sampling consistent across platforms.
+      } else if (chassisBody?.velocity) {
         this.followCameraVelocityScratch.set(chassisBody.velocity.x, chassisBody.velocity.y, chassisBody.velocity.z)
       } else {
         this.followCameraVelocityScratch
@@ -1576,11 +1571,28 @@ export class VehicleDriveController {
   ): void {
     const physicsEnabled = this.deps.isPhysicsEnabled?.() !== false
     const chassisBody = instance?.vehicle?.chassisBody ?? null
-    if (physicsEnabled && chassisBody?.position) {
-      target.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+    const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
+    const resolvePosition = physicsEnabled && nodeId && chassisBody ? this.deps.resolveChassisWorldPosition : undefined
+    if (nodeId && chassisBody && resolvePosition && resolvePosition(nodeId, chassisBody, target)) {
       return
     }
-    this.computeVehicleRenderFollowAnchor(vehicleObject, fallbackPosition, target)
+    const bodyPosition = physicsEnabled ? chassisBody?.position : null
+    if (bodyPosition) {
+      target.set(bodyPosition.x, bodyPosition.y, bodyPosition.z)
+      return
+    }
+    if (!vehicleObject) {
+      target.copy(fallbackPosition)
+      return
+    }
+    const temp = this.temp
+    temp.box.makeEmpty()
+    temp.box.setFromObject(vehicleObject)
+    if (temp.box.isEmpty()) {
+      target.copy(fallbackPosition)
+      return
+    }
+    temp.box.getCenter(target)
   }
 
   alignExitCamera(ctx: VehicleDriveCameraContext): boolean {
