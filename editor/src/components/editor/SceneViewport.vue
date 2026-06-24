@@ -1130,7 +1130,6 @@ let backgroundTextureSourceKind: 'texture' | null = null
 let backgroundAssetId: string | null = null
 let backgroundAssetKey: string | null = null
 let skyCubeTexture: THREE.CubeTexture | null = null
-let skyCubeSourceFormat: 'zip' = 'zip'
 let gradientBackgroundDome: GradientBackgroundDome | null = null
 let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
@@ -12888,14 +12887,9 @@ const environmentSignature = computed(() => {
   const settings = environmentSettings.value
   const background = settings.background
 
-  const hdriBackgroundKey =
-    (background.mode === 'hdri' || background.mode === 'fastHdri') && background.hdriAssetId
-      ? computeEnvironmentAssetReloadKey(background.hdriAssetId)
-      : null
-
-  const skycubeZipKey =
-    background.mode === 'skycube' && background.skycubeZipAssetId
-      ? computeEnvironmentAssetReloadKey(background.skycubeZipAssetId)
+  const backgroundAssetKey =
+    background.mode !== 'solidColor' && background.backgroundAssetId
+      ? computeEnvironmentAssetReloadKey(background.backgroundAssetId)
       : null
 
   return JSON.stringify({
@@ -12905,11 +12899,8 @@ const environmentSignature = computed(() => {
       gradientTopColor: background.mode === 'solidColor' ? (background.gradientTopColor ?? null) : null,
       gradientOffset: background.mode === 'solidColor' ? (background.gradientOffset ?? null) : null,
       gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
-      hdriAssetId: background.hdriAssetId ?? null,
-      hdriKey: hdriBackgroundKey,
-      skycubeZipAssetId: background.mode === 'skycube' ? (background.skycubeZipAssetId ?? null) : null,
-      skycubeZipKey,
-      skycubeKeys: null,
+      backgroundAssetId: background.backgroundAssetId ?? null,
+      backgroundAssetKey,
     },
     orientation: {
       preset: settings.environmentOrientationPreset ?? 'yUp',
@@ -14287,7 +14278,6 @@ function disposeSkyCubeBackgroundResources() {
   skyCubeZipFaceUrlCleanup = null
   disposeSkyCubeTexture(skyCubeTexture)
   skyCubeTexture = null
-  skyCubeSourceFormat = 'zip'
   skyCubeZipAssetId = null
   skyCubeZipAssetKey = null
 }
@@ -14365,7 +14355,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
 
   if (background.mode === 'skycube') {
     disposeGradientBackgroundResources()
-    const assetId = background.skycubeZipAssetId ?? background.hdriAssetId ?? null
+    const assetId = background.backgroundAssetId ?? null
     if (!assetId) {
       disposeBackgroundResources()
       scene.background = new THREE.Color(background.solidColor)
@@ -14399,7 +14389,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
     const zipKey = computeEnvironmentAssetReloadKey(assetId)
     const sameAsPrevious =
       skyCubeTexture &&
-      skyCubeSourceFormat === 'zip' &&
       (assetId ?? null) === (skyCubeZipAssetId ?? null) &&
       (zipKey ?? null) === (skyCubeZipAssetKey ?? null)
     if (sameAsPrevious && skyCubeTexture) {
@@ -14456,7 +14445,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
 
     disposeBackgroundResources()
     skyCubeTexture = loaded.texture
-    skyCubeSourceFormat = 'zip'
     skyCubeZipAssetId = assetId
     skyCubeZipAssetKey = zipKey
     skyCubeZipFaceUrlCleanup = disposeFaceUrls
@@ -14464,22 +14452,22 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
     return true
   }
 
-  if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.hdriAssetId) {
+  if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.backgroundAssetId) {
     disposeGradientBackgroundResources()
     disposeBackgroundResources()
     scene.background = new THREE.Color(background.solidColor)
     return true
   }
 
-  const hdriKey = computeEnvironmentAssetReloadKey(background.hdriAssetId)
+  const hdriKey = computeEnvironmentAssetReloadKey(background.backgroundAssetId)
 
-  if (backgroundTexture && backgroundAssetId === background.hdriAssetId && backgroundAssetKey === hdriKey) {
+  if (backgroundTexture && backgroundAssetId === background.backgroundAssetId && backgroundAssetKey === hdriKey) {
     disposeGradientBackgroundResources()
     scene.background = backgroundTexture
     return true
   }
 
-  const texture = await loadEnvironmentTextureFromAsset(background.hdriAssetId)
+  const texture = await loadEnvironmentTextureFromAsset(background.backgroundAssetId)
   if (!texture || token !== backgroundLoadToken) {
     texture?.dispose()
     return false
@@ -14488,7 +14476,7 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   disposeBackgroundResources()
   backgroundTexture = texture
   backgroundTextureSourceKind = 'texture'
-  backgroundAssetId = background.hdriAssetId
+  backgroundAssetId = background.backgroundAssetId
   backgroundAssetKey = hdriKey
   scene.background = texture
   return true

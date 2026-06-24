@@ -517,6 +517,7 @@ import { fetchAssetBlobWithResponse, type AssetBlobDownloadResult } from '@harmo
 import {
   type ScenePackageCacheMetadata,
 } from '@harmony/utils/scenePackageFs';
+import {type EnvironmentBackgroundMode} from '@harmony/schema/core';
 
 type SceneryProps = {
   projectId?: string;
@@ -610,7 +611,7 @@ import {
 } from '@harmony/schema/physicsBodySync';
 import { loadNodeObject } from '@harmony/schema/modelAssetLoader';
 
-import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
+import { inferAssetTypeOrNull, inferMimeTypeFromAssetId, isHdriLikeExtension } from '@harmony/schema/assetTypeConversion'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -1658,9 +1659,6 @@ let backgroundTextureCleanup: (() => void) | null = null;
 let backgroundTextureSourceKind: 'texture' | null = null;
 let backgroundAssetId: string | null = null;
 let skyCubeTexture: THREE.CubeTexture | null = null;
-let skyCubeSourceFormat: 'zip' = 'zip';
-let skyCubeFaceAssetIds: Array<string | null> | null = null;
-let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null;
 let gradientBackgroundDome: GradientBackgroundDome | null = null;
 let skyCubeZipAssetId: string | null = null;
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null;
@@ -8032,7 +8030,6 @@ const autoTourRuntime = createAutoTourRuntime({
     if (entry.object) {
       syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
     }
-      console.log("555555555555555555")
     entry.body.velocity.set(0, 0, 0);
     entry.body.angularVelocity.set(0, 0, 0);
     trySleepBody(entry.body);
@@ -14998,7 +14995,6 @@ function applyAutoTourVehicleHoldBrake(nodeId: string): void {
   holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
   try {
     const chassisBody = vehicleInstance.vehicle.chassisBody;
-      console.log("aaaaaaaaaaaaaaaaaaaaa")
     chassisBody.velocity.set(0, 0, 0);
     chassisBody.angularVelocity.set(0, 0, 0);
     trySleepBody(chassisBody as PhysicsBodyLike);
@@ -15016,7 +15012,6 @@ function applyAutoTourRigidBodyStop(nodeId: string): void {
     if (entry.object) {
       syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
     }
-      console.log("bbbbbbbbbbbbbbbbb")
     entry.body.velocity.set(0, 0, 0);
     entry.body.angularVelocity.set(0, 0, 0);
     entry.body.sleep?.();
@@ -15981,15 +15976,7 @@ function disposeSkyCubeBackgroundResources() {
   skyCubeZipFaceUrlCleanup?.();
   skyCubeZipFaceUrlCleanup = null;
   skyCubeTexture = null;
-  skyCubeSourceFormat = 'zip'
-  skyCubeFaceAssetIds = null;
   skyCubeZipAssetId = null;
-  if (skyCubeFaceTextureCleanup) {
-    for (const dispose of skyCubeFaceTextureCleanup) {
-      dispose?.();
-    }
-  }
-  skyCubeFaceTextureCleanup = null;
   backgroundTextureSourceKind = null;
 }
 
@@ -16010,53 +15997,26 @@ function inferEnvironmentAssetExtension(assetId: string, resolve: ResolvedAssetU
   return sanitized.slice(index + 1).toLowerCase();
 }
 
-function isKtx2EnvironmentTexture(extension: string, mimeType: string): boolean {
-  return extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis');
-}
-
-function isExrEnvironmentTexture(extension: string, mimeType: string): boolean {
-  return extension === 'exr' || mimeType.includes('exr');
-}
-
-function isRgbEEnvironmentTexture(extension: string, mimeType: string): boolean {
-  return extension === 'hdr' || extension === 'hdri' || extension === 'rgbe' || mimeType === 'image/vnd.radiance';
-}
-
 async function loadEnvironmentTextureFromAsset(
   assetId: string,
+  mode: EnvironmentBackgroundMode,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
   const resolve = await resolveAssetUrlReference(assetId);
   if (!resolve) {
     return null;
   }
-  const extension = inferEnvironmentAssetExtension(assetId, resolve);
-  const mimeType = resolve.mimeType?.toLowerCase() ?? '';
   const dispose = resolve.dispose;
   try {
-    if (isKtx2EnvironmentTexture(extension, mimeType)) {
+    if (mode === 'fastHdri') {
       const texture = await loadKtx2TextureFromUrl(resolve.url, renderContext?.renderer ?? null);
       texture.mapping = THREE.CubeUVReflectionMapping;
       texture.needsUpdate = true;
       return { texture, dispose };
     }
-    if (isExrEnvironmentTexture(extension, mimeType)) {
-      // EXR not supported in this environment; use texture loader fallback.
-      const texture = await loadTextureFromSourceUrl(resolve.url);
-      texture.mapping = THREE.EquirectangularReflectionMapping;
-      texture.flipY = false;
-      texture.magFilter = THREE.NearestFilter;
-      texture.minFilter = THREE.NearestFilter;
-      texture.needsUpdate = true;
-      ensureFloatTextureFilterCompatibility(texture);
-      return { texture, dispose };
-    }
-    if (isRgbEEnvironmentTexture(extension, mimeType)) {
+    if (mode === 'hdri') {
       const texture = await loadRgbETextureFromUrl(resolve.url);
       texture.mapping = THREE.EquirectangularReflectionMapping;
-      texture.magFilter = THREE.NearestFilter;
-      texture.minFilter = THREE.NearestFilter;
       texture.needsUpdate = true;
-      ensureFloatTextureFilterCompatibility(texture);
       return { texture, dispose };
     }
     const texture = await loadTextureFromSourceUrl(resolve.url);
@@ -16307,7 +16267,7 @@ async function applyBackgroundSettings(
   if (background.mode === 'skycube') {
     disposeGradientBackgroundDome(gradientBackgroundDome);
     gradientBackgroundDome = null;
-    const assetId = background.skycubeZipAssetId ?? background.hdriAssetId ?? null;
+    const assetId = background.backgroundAssetId ?? null;
     if (assetId) {
       const resolvedAsset = await resolveAssetUrlReference(assetId);
       const assetExtension = inferEnvironmentAssetExtension(assetId, resolvedAsset);
@@ -16316,7 +16276,7 @@ async function applyBackgroundSettings(
           scene.background = backgroundTexture;
           return true;
         }
-        const loadedTexture = await loadEnvironmentTextureFromAsset(assetId);
+        const loadedTexture = await loadEnvironmentTextureFromAsset(assetId, background.mode);
         if (!loadedTexture || token !== backgroundLoadToken) {
           if (loadedTexture) {
             loadedTexture.texture.dispose();
@@ -16333,7 +16293,7 @@ async function applyBackgroundSettings(
         return true;
       }
 
-      if (skyCubeTexture && skyCubeSourceFormat === 'zip' && skyCubeZipAssetId === assetId) {
+      if (skyCubeTexture  && skyCubeZipAssetId === assetId) {
         scene.background = skyCubeTexture;
         return true;
       }
@@ -16393,30 +16353,27 @@ async function applyBackgroundSettings(
       }
       disposeBackgroundResources();
       skyCubeTexture = loaded.texture;
-      skyCubeSourceFormat = 'zip';
       skyCubeZipAssetId = assetId;
       skyCubeZipFaceUrlCleanup = disposeFaceUrls;
-      skyCubeFaceAssetIds = null;
-      skyCubeFaceTextureCleanup = null;
       scene.background = skyCubeTexture;
       return true;
     }
     return true;
   }
-  if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.hdriAssetId) {
+  if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.backgroundAssetId) {
     disposeGradientBackgroundDome(gradientBackgroundDome);
     gradientBackgroundDome = null;
     disposeBackgroundResources();
     scene.background = new THREE.Color(background.solidColor);
     return true;
   }
-  if (backgroundTexture && backgroundAssetId === background.hdriAssetId) {
+  if (backgroundTexture && backgroundAssetId === background.backgroundAssetId) {
     disposeGradientBackgroundDome(gradientBackgroundDome);
     gradientBackgroundDome = null;
     scene.background = backgroundTexture;
     return true;
   }
-  const loaded = await loadEnvironmentTextureFromAsset(background.hdriAssetId);
+  const loaded = await loadEnvironmentTextureFromAsset(background.backgroundAssetId,background.mode);
   if (!loaded || token !== backgroundLoadToken) {
     if (loaded) {
       loaded.texture.dispose();
@@ -16427,7 +16384,7 @@ async function applyBackgroundSettings(
   disposeBackgroundResources();
   backgroundTexture = loaded.texture;
   backgroundTextureSourceKind = 'texture';
-  backgroundAssetId = background.hdriAssetId;
+  backgroundAssetId = background.backgroundAssetId;
   backgroundTextureCleanup = loaded.dispose ?? null;
   scene.background = backgroundTexture;
   return true;

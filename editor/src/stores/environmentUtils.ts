@@ -100,8 +100,7 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     (a.background.gradientTopColor ?? null) === (b.background.gradientTopColor ?? null) &&
     Math.abs((a.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET) - (b.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET)) <= epsilon &&
     Math.abs((a.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT) - (b.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT)) <= epsilon &&
-    a.background.hdriAssetId === b.background.hdriAssetId &&
-    a.background.skycubeZipAssetId === b.background.skycubeZipAssetId &&
+      a.background.backgroundAssetId === b.background.backgroundAssetId &&
     a.environmentOrientationPreset === b.environmentOrientationPreset &&
     Math.abs((a.environmentRotationDegrees?.x ?? 0) - (b.environmentRotationDegrees?.x ?? 0)) <= epsilon &&
     Math.abs((a.environmentRotationDegrees?.y ?? 0) - (b.environmentRotationDegrees?.y ?? 0)) <= epsilon &&

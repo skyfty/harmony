@@ -1555,9 +1555,7 @@ export interface EnvironmentBackgroundSettings {
   gradientOffset?: number
   /** Vertical gradient exponent (matches Three.js shader example semantics). Default: 0.6. */
   gradientExponent?: number
-  hdriAssetId: string | null
-  /** Points to a .skycube zip asset. */
-  skycubeZipAssetId: string | null
+  backgroundAssetId: string | null
 }
 
 export interface EnvironmentSettings {

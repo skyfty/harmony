@@ -318,22 +318,19 @@ function sanitizeEnvironmentAssetReferences<T>(value: T): T {
 
   const clone: Record<string, unknown> = { ...(value as any) }
 
-  const stripHdriAsset = (raw: unknown): void => {
+  const stripBackgroundAsset = (raw: unknown): void => {
     if (!isPlainObject(raw)) {
       return
     }
     const section: Record<string, unknown> = { ...raw }
     const mode = typeof section.mode === 'string' ? section.mode.toLowerCase() : ''
-    if (mode !== 'hdri' && mode !== 'fasthdri') {
-      delete section.hdriAssetId
-    }
-    if (mode !== 'skycube') {
-      delete section.skycubeZipAssetId
+    if (mode === 'solidcolor') {
+      delete section.backgroundAssetId
     }
     clone.background = section
   }
 
-  stripHdriAsset(clone.background)
+  stripBackgroundAsset(clone.background)
 
   return clone as T
 }

@@ -141,8 +141,7 @@ const ASSET_REFERENCE_EXACT_KEYS = new Set<string>([
   'imageassetid',
   'descriptionassetid',
   'textureassetid',
-  'hdriassetid',
-  'skycubezipassetid',
+  'backgroundassetid',
   'positivexassetid',
   'negativexassetid',
   'positiveyassetid',
@@ -735,12 +734,12 @@ function buildEnvironmentIssues(scene: AssetLookupScene): SceneAssetDiagnosticIs
   const environment = cloneEnvironmentSettings(scene.environment as EnvironmentSettings | null | undefined)
   const background = environment.background
 
-  if ((background.mode === 'hdri' || background.mode === 'fastHdri') && !background.hdriAssetId) {
+  if ((background.mode === 'hdri' || background.mode === 'fastHdri') && !background.backgroundAssetId) {
     issues.push({
       severity: 'error',
       code: 'environment-misconfiguration',
-      message: 'Environment background is HDRI/Fast HDRI but hdriAssetId is missing.',
-      path: 'environment.background.hdriAssetId',
+      message: 'Environment background is HDRI/Fast HDRI but backgroundAssetId is missing.',
+      path: 'environment.background.backgroundAssetId',
       category: 'environment',
       references: [],
     })
@@ -750,12 +749,12 @@ function buildEnvironmentIssues(scene: AssetLookupScene): SceneAssetDiagnosticIs
     return issues
   }
 
-  if (!background.skycubeZipAssetId && !background.hdriAssetId) {
+  if (!background.backgroundAssetId) {
     issues.push({
       severity: 'error',
       code: 'environment-misconfiguration',
-      message: 'Environment background is SkyCube but no sky background asset is assigned.',
-      path: 'environment.background.skycubeZipAssetId',
+      message: 'Environment background is SkyCube but backgroundAssetId is missing.',
+      path: 'environment.background.backgroundAssetId',
       category: 'environment',
       references: [],
     })

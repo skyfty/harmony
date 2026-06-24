@@ -1770,10 +1770,6 @@ let backgroundTextureSourceKind: 'texture' | null = null
 let backgroundAssetId: string | null = null
 let backgroundAssetKey: string | null = null
 let skyCubeTexture: THREE.CubeTexture | null = null
-let skyCubeSourceFormat: 'zip' = 'zip'
-let skyCubeFaceAssetIds: Array<string | null> | null = null
-let skyCubeFaceKeys: Array<string | null> | null = null
-let skyCubeFaceTextureCleanup: Array<(() => void) | null> | null = null
 let skyCubeZipAssetId: string | null = null
 let skyCubeZipAssetKey: string | null = null
 let skyCubeZipFaceUrlCleanup: (() => void) | null = null
@@ -9949,17 +9945,8 @@ function disposeSkyCubeBackgroundResources() {
 	skyCubeZipFaceUrlCleanup?.()
 	skyCubeZipFaceUrlCleanup = null
 	skyCubeTexture = null
-	skyCubeSourceFormat = 'zip'
-	skyCubeFaceAssetIds = null
-	skyCubeFaceKeys = null
 	skyCubeZipAssetId = null
 	skyCubeZipAssetKey = null
-	if (skyCubeFaceTextureCleanup) {
-		for (const dispose of skyCubeFaceTextureCleanup) {
-			dispose?.()
-		}
-	}
-	skyCubeFaceTextureCleanup = null
 	backgroundTextureSourceKind = null
 }
 
@@ -10146,7 +10133,7 @@ async function applyBackgroundSettings(
 		return true
 	}
 	if (background.mode === 'skycube') {
-		const assetId = ((background as any).skycubeZipAssetId as string | null) ?? background.hdriAssetId
+		const assetId = background.backgroundAssetId ?? null
 		const normalizedAssetId = assetId && typeof assetId === 'string' ? assetId.trim() : ''
 		const resolved = await resolveAssetUrlReference(normalizedAssetId)
 		const extension = inferEnvironmentAssetExtension(normalizedAssetId, resolved)
@@ -10177,7 +10164,6 @@ async function applyBackgroundSettings(
 		const zipKey = computeEnvironmentAssetReloadKey(normalizedAssetId)
 		if (
 			skyCubeTexture &&
-			skyCubeSourceFormat === 'zip' &&
 			zipKey === skyCubeZipAssetKey &&
 			normalizedAssetId === skyCubeZipAssetId
 		) {
@@ -10238,27 +10224,23 @@ async function applyBackgroundSettings(
 		}
 		disposeBackgroundResources()
 		skyCubeTexture = loaded.texture
-		skyCubeSourceFormat = 'zip'
-		skyCubeFaceAssetIds = null
-		skyCubeFaceKeys = null
-		skyCubeFaceTextureCleanup = null
 		skyCubeZipAssetId = normalizedAssetId
 		skyCubeZipAssetKey = zipKey
 		skyCubeZipFaceUrlCleanup = disposeFaceUrls
 		scene.background = skyCubeTexture
 		return true
 	}
-	if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.hdriAssetId) {
+	if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.backgroundAssetId) {
 		disposeBackgroundResources()
 		scene.background = new THREE.Color(background.solidColor)
 		return true
 	}
-	const hdriKey = computeEnvironmentAssetReloadKey(background.hdriAssetId)
-	if (backgroundTexture && backgroundAssetId === background.hdriAssetId && backgroundAssetKey === hdriKey) {
+	const hdriKey = computeEnvironmentAssetReloadKey(background.backgroundAssetId)
+	if (backgroundTexture && backgroundAssetId === background.backgroundAssetId && backgroundAssetKey === hdriKey) {
 		scene.background = backgroundTexture
 		return true
 	}
-	const loaded = await loadEnvironmentTextureFromAsset(background.hdriAssetId)
+	const loaded = await loadEnvironmentTextureFromAsset(background.backgroundAssetId)
 	if (!loaded || token !== backgroundLoadToken) {
 		if (loaded) {
 			loaded.texture.dispose()
@@ -10269,7 +10251,7 @@ async function applyBackgroundSettings(
 	disposeBackgroundResources()
 	backgroundTexture = loaded.texture
 	backgroundTextureSourceKind = 'texture'
-	backgroundAssetId = background.hdriAssetId
+	backgroundAssetId = background.backgroundAssetId
 	backgroundAssetKey = hdriKey
 	backgroundTextureCleanup = loaded.dispose ?? null
 	scene.background = backgroundTexture

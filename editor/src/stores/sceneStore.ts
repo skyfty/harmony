@@ -10239,10 +10239,8 @@ export const useSceneStore = defineStore('scene', {
 
       if (modeChanged) {
         const background = merged.background
-        const backgroundPatchHasHdriAssetId = Object.prototype.hasOwnProperty.call(backgroundPatch, 'hdriAssetId')
-        const backgroundPatchHasSkycubeZipAssetId = Object.prototype.hasOwnProperty.call(backgroundPatch, 'skycubeZipAssetId')
-        background.hdriAssetId = backgroundPatchHasHdriAssetId ? background.hdriAssetId : null
-        background.skycubeZipAssetId = backgroundPatchHasSkycubeZipAssetId ? background.skycubeZipAssetId : null
+        const backgroundPatchHasBackgroundAssetId = Object.prototype.hasOwnProperty.call(backgroundPatch, 'backgroundAssetId')
+        background.backgroundAssetId = backgroundPatchHasBackgroundAssetId ? background.backgroundAssetId : null
       }
 
       // When the background mode changes, drop stale background asset refs unless

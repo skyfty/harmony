@@ -22,8 +22,7 @@ export interface EnvironmentBackgroundSettings {
   gradientOffset?: number
   /** Gradient exponent. Default: 0.6. */
   gradientExponent?: number
-  hdriAssetId: string | null
-  skycubeZipAssetId: string | null
+  backgroundAssetId: string | null
 }
 
 export interface EnvironmentSettings {

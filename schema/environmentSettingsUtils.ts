@@ -55,8 +55,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
     gradientTopColor: null,
     gradientOffset: DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
     gradientExponent: DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
-    hdriAssetId: null,
-    skycubeZipAssetId: null,
+    backgroundAssetId: null,
   },
   northDirection: DEFAULT_ENVIRONMENT_NORTH_DIRECTION,
   environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
@@ -241,11 +240,10 @@ export function cloneEnvironmentSettings(
         backgroundMode === 'solidColor'
           ? clampNumber((backgroundSource as any)?.gradientExponent, 0, 10, DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT)
           : DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
-      hdriAssetId: normalizeAssetId(backgroundSource?.hdriAssetId ?? null),
-      skycubeZipAssetId:
-        backgroundMode === 'skycube'
-          ? normalizeAssetId((backgroundSource as any)?.skycubeZipAssetId ?? null)
-          : null,
+      backgroundAssetId:
+        backgroundMode === 'solidColor'
+          ? null
+          : normalizeAssetId((backgroundSource as any)?.backgroundAssetId ?? null),
     },
     northDirection: normalizeNorthDirection((normalizedSource as any)?.northDirection),
     environmentOrientationPreset: preset,

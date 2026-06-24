@@ -184,10 +184,7 @@ watch(
 
 const backgroundAsset = computed(() => {
   const background = environmentSettings.value.background
-  const assetId =
-    background.mode === 'skycube'
-      ? (background.skycubeZipAssetId ?? background.hdriAssetId)
-      : background.hdriAssetId
+  const assetId = background.mode === 'solidColor' ? null : background.backgroundAssetId
   if (!assetId) {
     return null
   }
@@ -220,7 +217,7 @@ const backgroundAssetHint = computed(() => {
 const backgroundPreviewStyle = computed(() => resolveAssetPreviewStyle(backgroundAsset.value))
 
 const assetDialogTitle = computed(() => {
-  return assetDialogTarget.value === 'background' ? 'Select Sky Asset' : 'Select Asset'
+  return assetDialogTarget.value === 'background' ? 'Select Background Asset' : 'Select Asset'
 })
 
 const assetDialogAssetType = computed(() => {
@@ -271,8 +268,7 @@ function updateBackgroundMode(mode: BackgroundUiMode | null) {
       gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: null,
-      skycubeZipAssetId: null,
+      backgroundAssetId: null,
     })
     return
   }
@@ -285,8 +281,7 @@ function updateBackgroundMode(mode: BackgroundUiMode | null) {
     gradientTopColor: background.gradientTopColor ?? null,
     gradientOffset: background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: null,
-    skycubeZipAssetId: null,
+    backgroundAssetId: null,
   })
 }
 
@@ -357,7 +352,7 @@ function handleHexColorChange(target: 'background' | 'fog', value: string | null
       gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: environmentSettings.value.background.hdriAssetId,
+      backgroundAssetId: environmentSettings.value.background.backgroundAssetId,
     })
     return
   }
@@ -391,7 +386,7 @@ function handleGradientTopColorChange(value: string | null) {
       gradientTopColor: null,
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: environmentSettings.value.background.hdriAssetId,
+      backgroundAssetId: environmentSettings.value.background.backgroundAssetId,
     })
     return
   }
@@ -405,7 +400,7 @@ function handleGradientTopColorChange(value: string | null) {
     gradientTopColor: normalized,
     gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    backgroundAssetId: environmentSettings.value.background.backgroundAssetId,
   })
 }
 
@@ -431,7 +426,7 @@ function handleGradientOffsetInput(value: unknown) {
     gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
     gradientOffset: clamped,
     gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    backgroundAssetId: environmentSettings.value.background.backgroundAssetId,
   })
 }
 
@@ -453,7 +448,7 @@ function handleGradientExponentInput(value: unknown) {
     gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
     gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: clamped,
-    hdriAssetId: environmentSettings.value.background.hdriAssetId,
+    backgroundAssetId: environmentSettings.value.background.backgroundAssetId,
   })
 }
 
@@ -468,12 +463,7 @@ function clearBackgroundAsset() {
     gradientTopColor: background.gradientTopColor ?? null,
     gradientOffset: background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-  }
-  if (background.mode === 'skycube') {
-    nextBackground.skycubeZipAssetId = null
-    nextBackground.hdriAssetId = null
-  } else {
-    nextBackground.hdriAssetId = null
+    backgroundAssetId: null,
   }
   patchEnvironmentBackground({
     ...nextBackground,
@@ -885,26 +875,19 @@ async function applySkyAsset(asset: ProjectAsset) {
       gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
       gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
       gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      hdriAssetId: null,
-      skycubeZipAssetId: registeredAsset.id,
+      backgroundAssetId: registeredAsset.id,
     })
     return
   }
 
-  const currentMode = environmentSettings.value.background.mode
-  const mode: EnvironmentBackgroundMode = currentMode === 'skycube'
-    ? 'skycube'
-    : isKtx2LikeExtension(extension)
-      ? 'fastHdri'
-      : 'hdri'
+  const mode: EnvironmentBackgroundMode = isKtx2LikeExtension(extension) ? 'fastHdri' : 'hdri'
   patchEnvironmentBackground({
     mode,
     solidColor: environmentSettings.value.background.solidColor,
     gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
     gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
     gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-    hdriAssetId: registeredAsset.id,
-    skycubeZipAssetId: mode === 'skycube' ? registeredAsset.id : null,
+    backgroundAssetId: registeredAsset.id,
   })
 }
 
@@ -916,9 +899,9 @@ function openAssetDialog(target: 'background', event?: MouseEvent) {
   }
   assetDialogTarget.value = target
   assetDialogSelectedId.value =
-    environmentSettings.value.background.mode === 'skycube'
-      ? (environmentSettings.value.background.skycubeZipAssetId ?? environmentSettings.value.background.hdriAssetId ?? '')
-      : (environmentSettings.value.background.hdriAssetId ?? '')
+    environmentSettings.value.background.mode === 'solidColor'
+      ? ''
+      : (environmentSettings.value.background.backgroundAssetId ?? '')
   assetDialogVisible.value = true
 }
 

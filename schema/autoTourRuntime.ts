@@ -711,7 +711,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
       const hasVehicleComponent = Boolean(vehicleComponent)
       const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
-      const hasPurePursuitComponent = Boolean(purePursuit)
       // Only use PurePursuit component props; do NOT fall back to AutoTour props.
       // This ensures that vehicle nodes without PurePursuit do not enter the pure-pursuit driving branch.
       const pursuitProps = clampPurePursuitComponentProps(purePursuit?.props ?? null)
@@ -1076,18 +1075,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       autoTourDirection.y = 0
       // 计算XZ平面上的距离
       const distance = Math.sqrt(autoTourDirection.x * autoTourDirection.x + autoTourDirection.z * autoTourDirection.z)
-      const currentSpeedMps = hasVehicleInstance
-        ? Math.sqrt(
-          vehicleInstance!.vehicle.chassisBody.velocity.x * vehicleInstance!.vehicle.chassisBody.velocity.x
-          + vehicleInstance!.vehicle.chassisBody.velocity.y * vehicleInstance!.vehicle.chassisBody.velocity.y
-          + vehicleInstance!.vehicle.chassisBody.velocity.z * vehicleInstance!.vehicle.chassisBody.velocity.z,
-        )
-        : speed
-      const terminalLeadDistance = Math.max(
-        0.5,
-        arrivalDistance,
-        pursuitProps.brakeDistanceMinMeters + currentSpeedMps * Math.max(0, pursuitProps.brakeDistanceSpeedFactor),
-      )
       // 计算到达判定距离（基于速度和PurePursuit参数）
       /**
        * 计算到达距离（arrivalDistance）。
