@@ -389,6 +389,8 @@ export function applyPurePursuitVehicleControl(params: {
     chassisBody.angularVelocity.z *= 0.85
   }
 
+  console.log('steeringRad', steeringRad, 'engineForce', engineForce, 'brakeForce', brakeForce, 'desiredSpeedSigned', desiredSpeedSigned, 'distanceToEnd', distanceToEnd, 'dockActive', dockActive)
+
   applyPhysicsVehicleWheelControl(vehicle, {
     steeringValue: steeringRad,
     engineForce,

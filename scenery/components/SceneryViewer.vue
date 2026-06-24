@@ -14588,6 +14588,9 @@ function startVehicleDriveMode(
     resetCharacterControlInputs();
     vehicleDriveCameraFollowState.initialized = false;
     purposeActiveMode.value = 'watch';
+    if (options.deferCameraUpdate) {
+      updateVehicleDriveCamera(0, { immediate: true });
+    }
     if (!options.deferCameraUpdate) {
       updateVehicleDriveCamera(0, { immediate: true });
     }

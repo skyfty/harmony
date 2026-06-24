@@ -571,8 +571,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
    *    b. **组件解析**：
    *       - 解析 `AutoTour`、`Vehicle`、`PurePursuit` 组件及其属性。
    *       - 根据组件配置决定驱动模式：
-   *         * `shouldDriveAsVehicle`: 使用物理引擎 + PurePursuit 算法驱动（真实车辆行为）。
-    *         * `directMoveVehicle`: 仅在没有物理车辆实例时，直接移动变换并同步底盘。
+  *         * `shouldDriveAsVehicle`: 使用物理引擎 + PurePursuit 算法驱动（真实车辆行为）。
+  *         * `directMoveVehicle`: 在没有物理车辆实例时，或当 AutoTour 显式关闭物理驱动时，直接移动变换并同步底盘。
    *         * 其他：直接移动渲染对象（非车辆节点）。
    *    
    *    c. **播放状态初始化/恢复**：
@@ -758,8 +758,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       const vehicleInstance = deps.vehicleInstances.get(node.id) ?? null
       const hasVehicleInstance = Boolean(vehicleInstance?.vehicle?.chassisBody)
-      const shouldDriveAsVehicle = hasVehicleComponent && hasVehicleInstance
-      const directMoveVehicle = hasVehicleComponent && !hasVehicleInstance
+      const usePhysicsDrive = tourProps.usePhysicsDrive
+      const shouldDriveAsVehicle = hasVehicleComponent && hasVehicleInstance && usePhysicsDrive
+      const directMoveVehicle = hasVehicleComponent && (!hasVehicleInstance || !usePhysicsDrive)
       const nodeObject = deps.nodeObjectMap.get(node.id) ?? null
 
       if (shouldDriveAsVehicle) {
@@ -776,8 +777,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         const positionSample = autoTourCurrentPosition
 
         // 如果存在物理车辆实例，则从刚体（chassisBody）读取位置；否则使用渲染对象的世界位置。
-        // 这样保证无论该节点是由物理驱动还是直接变换驱动，都能获得一致的世界坐标用于初始化。
-        if (hasVehicleInstance) {
+        // 这样保证物理驱动模式从底盘取样，而位姿移动模式始终以当前对象变换作为真值。
+        if (usePhysicsDrive && hasVehicleInstance) {
           const body = vehicleInstance!.vehicle.chassisBody
           positionSample.set(body.position.x, body.position.y, body.position.z)
         } else {
@@ -797,8 +798,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         // 初始朝向（航向角 yaw）。
         // 含义：initialYaw 表示以世界 Y 轴为上方向时对象的朝向角（弧度，范围 -π..π）。
         let initialYaw = 0
-        if (hasVehicleInstance) {
-          // 车辆：直接从物理底盘读取四元数并规范化以防数值误差，然后提取 yaw。
+        if (usePhysicsDrive && hasVehicleInstance) {
+          // 车辆物理驱动：直接从物理底盘读取四元数并规范化以防数值误差，然后提取 yaw。
           autoTourObjectWorldQuaternion
             .set(
               vehicleInstance!.vehicle.chassisBody.quaternion.x,
@@ -809,7 +810,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             .normalize()
           initialYaw = getWorldYawRadiansFromQuaternion(autoTourObjectWorldQuaternion)
         } else {
-          // 非车辆：从渲染对象读取世界四元数并提取 yaw。
+          // 位姿移动或非车辆：从渲染对象读取世界四元数并提取 yaw。
           nodeObject!.getWorldQuaternion(autoTourObjectWorldQuaternion)
           initialYaw = getWorldYawRadiansFromQuaternion(autoTourObjectWorldQuaternion)
         }
@@ -870,7 +871,24 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         // When direct-moving a vehicle and not looping, fully stop updating once we
         // have reached the final waypoint.
         if (!tourProps.loop && state.mode === 'stopped') {
+          if (hasVehicleInstance) {
+            vehicleInstance!.vehicle.autoTourTargetSpeedMps = 0
+            vehicleInstance!.vehicle.autoTourTargetSteeringRad = 0
+          }
           continue
+        }
+        if (!usePhysicsDrive) {
+          if (hasVehicleInstance) {
+            vehicleInstance!.vehicle.autoTourTargetSpeedMps = 0
+            vehicleInstance!.vehicle.autoTourTargetSteeringRad = 0
+          }
+          state.speedIntegral = undefined
+          state.lastSteerRad = undefined
+          state.speedTargetMps = undefined
+          state.longitudinalErrorMps = undefined
+          state.reverseActive = undefined
+          state.longitudinalUseEngine = undefined
+          state.longitudinalModeSwitchAtMs = undefined
         }
       }
 
@@ -899,7 +917,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           state.mode = 'loop-to-start'
           state.targetIndex = 0
         } else {
-          if (shouldDriveAsVehicle) {
+          if (hasVehicleInstance) {
             vehicleInstance!.vehicle.autoTourTargetSpeedMps = 0
             vehicleInstance!.vehicle.autoTourTargetSteeringRad = 0
           }
@@ -916,7 +934,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
 
       // Resolve current world position.
-      if (hasVehicleInstance) {
+      if (usePhysicsDrive && hasVehicleInstance) {
         const chassisBody = vehicleInstance!.vehicle.chassisBody
         autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
       } else {

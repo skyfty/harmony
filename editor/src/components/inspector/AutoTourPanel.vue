@@ -52,6 +52,7 @@ const localSpeedMps = ref(DEFAULT_AUTO_TOUR_SPEED_MPS * 3.6)
 const localMaxSpeedMps = ref(DEFAULT_AUTO_TOUR_MAX_SPEED_MPS * 3.6)
 const localLoop = ref(false)
 const localAlignToPath = ref(true)
+const localUsePhysicsDrive = ref(true)
 
 watch(
   () => normalizedProps.value,
@@ -61,6 +62,7 @@ watch(
     localMaxSpeedMps.value = props.maxSpeedMps * 3.6
     localLoop.value = props.loop
     localAlignToPath.value = props.alignToPath
+    localUsePhysicsDrive.value = props.usePhysicsDrive
   },
   { immediate: true, deep: true },
 )
@@ -132,6 +134,17 @@ function handleAlignToPathChange(value: boolean | null) {
     return
   }
   updateComponent({ alignToPath: value })
+}
+
+function handleUsePhysicsDriveChange(value: boolean | null) {
+  if (value === null) {
+    return
+  }
+  localUsePhysicsDrive.value = value
+  if (value === normalizedProps.value.usePhysicsDrive) {
+    return
+  }
+  updateComponent({ usePhysicsDrive: value })
 }
 
 function handleToggleComponent() {
@@ -244,6 +257,15 @@ function handleRemoveComponent() {
           :model-value="localAlignToPath"
           :disabled="!componentEnabled"
           @update:model-value="handleAlignToPathChange"
+        />
+
+        <v-switch
+          label="Use Physics Drive"
+          density="compact"
+          hide-details
+          :model-value="localUsePhysicsDrive"
+          :disabled="!componentEnabled"
+          @update:model-value="handleUsePhysicsDriveChange"
         />
       </div>
     </v-expansion-panel-text>
