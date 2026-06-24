@@ -14953,6 +14953,14 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       deltaSeconds,
       ctx: { camera: context.camera, mapControls: context.controls },
       immediate: Boolean(options.immediate),
+      smoothTargetForProgrammaticFollow: true,
+      tuning: {
+        headingLerpSpeed: 1.2,
+        targetLerpSpeed: 1.6,
+        positionLerpSpeed: 4.0,
+        anchorLerpSpeed: 3.0,
+        lookaheadBlendSpeed: 1.0,
+      },
     }),
   );
 

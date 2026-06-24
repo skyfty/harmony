@@ -31,6 +31,7 @@ export type CameraFollowOptions = {
   followControlsDirty?: boolean
   localOffsetOverride?: THREE.Vector3 | null
   lockLocalOffset?: boolean
+  smoothTargetForProgrammaticFollow?: boolean
 }
 
 export type CameraFollowContext = {
@@ -267,24 +268,46 @@ export class FollowCameraController {
   }
 
   update(options: {
+    // 当前帧的跟随状态对象，用于保存相机跟随过程中的历史数据、插值结果与运行时标记。
     follow: CameraFollowState
+    // 相机的摆放/布局配置，决定相机相对目标的位置、朝向与跟随方式。
     placement: CameraFollowPlacement
+    // 被跟随目标的世界空间锚点位置，通常对应角色或物体的跟随中心。
     anchorWorld: THREE.Vector3
+    // 目标期望朝向的世界空间方向，用于计算跟随视角和相机朝向参考。
     desiredForwardWorld: THREE.Vector3
+    // 目标当前世界速度；可为空，存在时会参与前瞻预测与平滑跟随。
     velocityWorld?: VelocityLike | null
+    // 本次更新的时间步长，所有插值、预测和过渡都依赖该值保证与帧率无关。
     deltaSeconds: number
+    // 相机跟随运行上下文，包含相机实例及相关运行时环境。
     ctx: CameraFollowContext
+    // 世界“上”方向，默认使用 Y 轴正方向，可用于适配不同坐标系。
     worldUp?: THREE.Vector3
+    // 距离缩放因子，用于在不同场景尺度下统一跟随距离和速度表现。
     distanceScale?: number
+    // 跟随调参项的局部覆盖值，仅覆盖显式传入的字段，其余保持默认。
     tuning?: Partial<CameraFollowTuning>
+    // 对相机姿态的额外约束，用于限制位置、旋转或视角范围。
     constrainPose?: CameraFollowPoseConstraint
+    // 外部 orbit 视角插值更新回调，用于同步驱动轨道相机的 tween 逻辑。
     onUpdateOrbitLookTween?: (deltaSeconds: number) => void
+    // 标记跟随控制是否脏，便于在需要时触发重算或状态同步。
     followControlsDirty?: boolean
+    // 本地偏移覆盖值；当外部需要强制指定局部偏移时由此传入。
     localOffsetOverride?: THREE.Vector3 | null
+    // 是否锁定本地偏移，锁定后通常不再根据运行时结果动态改写。
     lockLocalOffset?: boolean
+    // 是否立即生效；用于跳过平滑过渡，直接切换到目标状态。
     immediate?: boolean
+    // 是否应用 orbit tween；控制是否启用轨道视角相关的过渡逻辑。
     applyOrbitTween?: boolean
+    // 当没有 mapControls 或 mapControls 被禁用时，是否仍然对 target 使用平滑插值。
+    smoothTargetForProgrammaticFollow?: boolean
   }): boolean {
+    // 这里通过参数对象统一接收本次相机跟随更新所需的全部输入，
+    // 便于在不同调用场景下按需传入：例如程序驱动、玩家控制，
+    // 以及带有插值/约束的复杂跟随逻辑。
     const {
       follow,
       placement,
@@ -295,18 +318,21 @@ export class FollowCameraController {
       ctx,
       onUpdateOrbitLookTween,
     } = options
-
     const camera = ctx.camera
     if (!camera) {
+      // 没有相机实例时，无法完成任何跟随更新，直接返回失败。
       return false
     }
 
+    // 将外部 tuning 与默认值合并，确保后续所有阈值/速度参数都有稳定的基础值。
     const tuning: CameraFollowTuning = { ...DEFAULT_CAMERA_FOLLOW_TUNING, ...(options.tuning ?? {}) }
+    // 世界上方向量默认取 Y 轴正方向；允许外部覆盖以适配不同坐标系。
     const worldUp = options.worldUp ?? new THREE.Vector3(0, 1, 0)
 
+    // 复用临时向量，避免每帧分配对象造成 GC 压力。
     const temp = this.temp
 
-    // Copy placement so we can scale/mutate it like the original vehicle follow.
+    // 复制 placement，后续会在此副本上做缩放/修正，避免污染调用方传入的数据。
     const placementWorking: CameraFollowPlacement = {
       distance: placement.distance,
       heightOffset: placement.heightOffset,
@@ -314,18 +340,22 @@ export class FollowCameraController {
       targetForward: placement.targetForward,
     }
 
+    // distanceScale 用于整体拉伸跟随距离；非法或非正数时回退到 1。
     const distanceScale = Number.isFinite(options.distanceScale) && (options.distanceScale as number) > 0
       ? (options.distanceScale as number)
       : 1
 
-    // Anchor + optional prediction.
+    // 锚点预测：先以真实锚点为基础，再根据速度添加前向预判。
     temp.followPredictedAnchor.copy(anchorWorld)
 
+    // 记录平面速度相关信息：平方值用于快速比较，速度值用于插值/预测。
     let planarSpeedSq = 0
     let planarSpeed = 0
+    // forwardSpeed 表示相对目标朝向的前进速度，用于计算相机前向预瞄距离。
     let forwardSpeed = 0
 
     if (velocityWorld) {
+      // 只考虑水平面速度，忽略垂直分量，避免上下跳动影响相机逻辑。
       temp.planarVelocity.set(velocityWorld.x, 0, velocityWorld.z)
       planarSpeedSq = temp.planarVelocity.lengthSq()
       planarSpeed = Math.sqrt(planarSpeedSq)
@@ -333,16 +363,19 @@ export class FollowCameraController {
       temp.planarVelocity.set(0, 0, 0)
     }
 
+    // 小速度死区：低于阈值时视为静止，避免抖动和微小噪声引起的相机漂移。
     if (planarSpeedSq <= FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ) {
       temp.planarVelocity.set(0, 0, 0)
       planarSpeedSq = 0
       planarSpeed = 0
     }
 
+    // 速度越高，越倾向于拉远相机并抬高视角；这里先计算平滑混合目标值。
     const motionSpeedRange = Math.max(1e-3, tuning.motionSpeedFull - tuning.motionSpeedThreshold)
     const motionBlendTarget = planarSpeed <= tuning.motionSpeedThreshold
       ? 0
       : Math.min(1, (planarSpeed - tuning.motionSpeedThreshold) / motionSpeedRange)
+    // motionBlendAlpha 控制“当前混合值”朝目标值靠拢的速度；首帧或 immediate 时直接到位。
     const motionBlendAlpha = options.immediate || !follow.initialized
       ? 1
       : computeFollowLerpAlpha(deltaSeconds, tuning.motionBlendSpeed)
@@ -352,6 +385,7 @@ export class FollowCameraController {
       follow.motionDistanceBlend += (motionBlendTarget - follow.motionDistanceBlend) * motionBlendAlpha
     }
 
+    // 基于运动状态缩放相机的距离、高度与目标偏移。
     const motionDistanceScale = 1 + follow.motionDistanceBlend * tuning.motionDistanceBoost
     placementWorking.distance = Math.min(
       tuning.distanceMax,
@@ -363,6 +397,7 @@ export class FollowCameraController {
     placementWorking.targetForward *= motionDistanceScale
 
     if (!follow.initialized) {
+      // 初始化阶段：用目标朝向建立初始 heading，作为后续平滑插值的基准。
       follow.heading.copy(desiredForwardWorld)
       follow.heading.y = 0
       if (follow.heading.lengthSq() < 1e-6) {
@@ -376,9 +411,11 @@ export class FollowCameraController {
       follow.lookaheadOffset.set(0, 0, 0)
     }
 
+    // 判断目标是否在明显移动；这会影响锚点更新策略和用户手动偏移的处理。
     const speedSq = velocityWorld ? readVelocityLengthSquared(velocityWorld) : 0
     const isTargetMoving = speedSq > tuning.movingSpeedSq
 
+    // 计算本帧期望的朝向：优先使用外部给定朝向，否则退回到历史 heading。
     const desiredHeading = temp.cameraForward
     if (desiredForwardWorld.lengthSq() > 1e-6) {
       desiredHeading.copy(desiredForwardWorld)
@@ -394,6 +431,7 @@ export class FollowCameraController {
       desiredHeading.normalize()
     }
 
+    // 计算速度在当前朝向上的投影，用于判断前进/后退以及前瞻距离。
     if (planarSpeedSq > 0) {
       forwardSpeed = temp.planarVelocity.dot(desiredHeading)
       temp.tempVector.copy(temp.planarVelocity).normalize()
@@ -403,6 +441,7 @@ export class FollowCameraController {
       follow.lastVelocityDirection.set(0, 0, 0)
     }
 
+    // heading 以插值方式平滑向目标朝向靠拢，减少相机瞬时转向造成的突兀感。
     const headingLerp = follow.initialized ? computeFollowLerpAlpha(deltaSeconds, tuning.headingLerpSpeed) : 1
     follow.heading.lerp(desiredHeading, headingLerp)
     if (follow.heading.lengthSq() < 1e-6) {
@@ -411,6 +450,7 @@ export class FollowCameraController {
       follow.heading.normalize()
     }
 
+    // 构建相机局部坐标系：forward/right/up，用于把局部偏移转换到世界空间。
     const headingForward = temp.cameraForward.copy(follow.heading)
     const headingRight = temp.cameraRight.crossVectors(worldUp, headingForward)
     if (headingRight.lengthSq() < 1e-6) {
@@ -420,10 +460,12 @@ export class FollowCameraController {
     }
     const headingUp = temp.cameraUp.copy(worldUp)
 
+    // 根据速度与阈值，计算前瞻（lookahead）混合量：越接近高速，前瞻越明显。
     const lookaheadBlendRange = Math.max(1e-3, Math.sqrt(tuning.lookaheadMinSpeedSq) - tuning.lookaheadBlendStart)
     const lookaheadBlend = planarSpeed > tuning.lookaheadBlendStart
       ? Math.min(1, (planarSpeed - tuning.lookaheadBlendStart) / lookaheadBlendRange)
       : 0
+    // 前瞻距离以“前进速度 * 预瞄时间”为基础，再做上限裁剪，避免过度超前。
     const forwardLookaheadDistance = Math.max(0, forwardSpeed) * tuning.lookaheadTime * lookaheadBlend
     if (forwardLookaheadDistance > 1e-4) {
       temp.predictionOffset.copy(follow.heading)
@@ -432,6 +474,7 @@ export class FollowCameraController {
       temp.predictionOffset.set(0, 0, 0)
     }
 
+    // 前瞻偏移本身也做一次插值，避免速度变化时锚点突然跳变。
     const lookaheadAlpha = options.immediate || !follow.initialized
       ? 1
       : computeFollowLerpAlpha(deltaSeconds, tuning.lookaheadBlendSpeed)
@@ -441,10 +484,13 @@ export class FollowCameraController {
       follow.lookaheadOffset.lerp(temp.predictionOffset, lookaheadAlpha)
     }
 
+    // 组合真实锚点与前瞻偏移，得到本帧用于跟随的预测锚点。
     temp.followPredictedAnchor.add(follow.lookaheadOffset)
     if (!follow.initialized || options.immediate || isTargetMoving) {
+      // 初始状态、强制立即更新或目标正在明显移动时，直接采用预测锚点。
       follow.desiredAnchor.copy(temp.followPredictedAnchor)
     } else {
+      // 目标基本静止时，若预测锚点与当前锚点的差异很小，则保持现有锚点，避免微抖。
       temp.tempVector.copy(temp.followPredictedAnchor).sub(follow.currentAnchor)
       if (temp.tempVector.lengthSq() <= FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ) {
         follow.desiredAnchor.copy(follow.currentAnchor)
@@ -453,6 +499,7 @@ export class FollowCameraController {
       }
     }
 
+    // 锚点本身再做一次平滑插值，让相机追随更柔和。
     const baseAnchorAlpha = options.immediate || !follow.initialized
       ? 1
       : computeFollowLerpAlpha(deltaSeconds, tuning.anchorLerpSpeed)
@@ -463,21 +510,24 @@ export class FollowCameraController {
     }
     const anchorForCamera = follow.currentAnchor
 
+    // localOffset 代表相机相对锚点的局部偏移，通常表现为“后方 + 上方”。
     const lockLocalOffset = Boolean(options.lockLocalOffset)
     if (options.localOffsetOverride) {
+      // 若外部明确指定局部偏移，优先使用外部值，并标记为已初始化。
       follow.localOffset.copy(options.localOffsetOverride)
       follow.hasLocalOffset = true
     } else if (!follow.hasLocalOffset) {
+      // 首次没有本地偏移时，使用默认值：位于目标后方并略高于目标。
       follow.localOffset.set(0, placementWorking.heightOffset, -placementWorking.distance)
       follow.hasLocalOffset = true
     }
     if (!lockLocalOffset) {
-      // local offset (defaults to behind + above) + clamping.
+      // 对局部偏移做“在目标后方”和“高度下限”的约束，保证相机不会跑到不合理位置。
       enforceFollowBehind(follow, placementWorking, tuning)
       clampFollowLocalOffset(follow, placementWorking, tuning)
     }
 
-    // target offset.
+    // 目标点偏移：通常用于让相机看向锚点上方或前方的一小段空间。
     temp.followOffsetLocal.set(0, placementWorking.targetLift, placementWorking.targetForward)
     temp.followTargetOffsetWorld
       .copy(headingRight)
@@ -486,16 +536,21 @@ export class FollowCameraController {
       .addScaledVector(headingForward, temp.followOffsetLocal.z)
     follow.desiredTarget.copy(anchorForCamera).add(temp.followTargetOffsetWorld)
 
+    // 如果存在地图控制器，则需要考虑用户是否正在通过控制器调整相机。
     const mapControls = ctx.mapControls
     const controlsEnabled = Boolean(mapControls?.enabled)
+    // 纯程序化跟随：没有控制器或控制器禁用时，完全由本逻辑驱动相机目标。
     const pureProgrammaticFollow = !mapControls || !controlsEnabled
+    // 只有在目标静止且控制器开启时，才允许将用户操作视为相机偏移调整。
     const allowCameraAdjustments = !isTargetMoving && controlsEnabled
     let userAdjusted = allowCameraAdjustments && Boolean(options.followControlsDirty)
     if (allowCameraAdjustments && !userAdjusted && follow.initialized) {
+      // 通过当前相机位置与已记录位置的差值，判断用户是否手动拖动/修改了相机。
       const deltaPosition = camera.position.distanceTo(follow.currentPosition)
       userAdjusted = deltaPosition > 1e-3
     }
     if (allowCameraAdjustments && userAdjusted && !lockLocalOffset) {
+      // 将世界空间下的相机偏移转换回局部空间，用于保存用户当前的自定义相对视角。
       temp.followWorldOffset.copy(camera.position).sub(anchorForCamera)
       follow.localOffset.set(
         temp.followWorldOffset.dot(headingRight),
@@ -507,6 +562,7 @@ export class FollowCameraController {
       clampFollowLocalOffset(follow, placementWorking, tuning)
     }
 
+    // 将局部偏移重新投影回世界空间，计算相机最终的目标位置。
     temp.desiredWorldOffset
       .copy(headingRight)
       .multiplyScalar(follow.localOffset.x)
@@ -514,6 +570,7 @@ export class FollowCameraController {
       .addScaledVector(headingForward, follow.localOffset.z)
     follow.desiredPosition.copy(anchorForCamera).add(temp.desiredWorldOffset)
 
+    // immediate：首次初始化或强制立即更新时，直接把当前状态推到目标状态。
     const immediate = Boolean(options.immediate) || !follow.initialized
     if (immediate) {
       follow.currentPosition.copy(follow.desiredPosition)
@@ -522,7 +579,7 @@ export class FollowCameraController {
     } else {
       const positionAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.positionLerpSpeed)
       follow.currentPosition.lerp(follow.desiredPosition, positionAlpha)
-      if (pureProgrammaticFollow) {
+      if (pureProgrammaticFollow && !options.smoothTargetForProgrammaticFollow) {
         follow.currentTarget.copy(follow.desiredTarget)
       } else {
         const targetAlpha = computeFollowLerpAlpha(deltaSeconds, tuning.targetLerpSpeed)
@@ -530,6 +587,7 @@ export class FollowCameraController {
       }
     }
 
+    // 如果外部提供了姿态约束函数，则在最终写入相机前进行二次修正。
     if (options.constrainPose) {
       options.constrainPose({
         camera,
@@ -542,16 +600,22 @@ export class FollowCameraController {
       })
     }
 
+    // 将计算出的结果写回相机，并执行 lookAt。
+
+
     camera.position.copy(follow.currentPosition)
     camera.up.copy(headingUp)
     camera.lookAt(follow.currentTarget)
 
     if (mapControls) {
+      // 同步控制器目标，确保控制器与当前相机状态保持一致。
       mapControls.target.copy(follow.currentTarget)
       if (controlsEnabled) {
+        // 若允许轨道/环绕 tween，则在控制器更新前先驱动过渡逻辑。
         if (options.applyOrbitTween && onUpdateOrbitLookTween) {
           onUpdateOrbitLookTween(deltaSeconds)
         }
+        // 让控制器应用其内部更新后，再次把相机状态回写，防止控制器覆盖跟随结果。
         mapControls.update?.()
         camera.position.copy(follow.currentPosition)
         camera.up.copy(headingUp)
@@ -559,6 +623,7 @@ export class FollowCameraController {
       }
     }
 
+    // 标记本帧已完成初始化，后续将进入平滑跟随模式。
     follow.initialized = true
     return true
   }
