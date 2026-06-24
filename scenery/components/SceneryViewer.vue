@@ -8037,6 +8037,7 @@ const autoTourRuntime = createAutoTourRuntime({
     if (entry.object) {
       syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
     }
+      console.log("555555555555555555")
     entry.body.velocity.set(0, 0, 0);
     entry.body.angularVelocity.set(0, 0, 0);
     trySleepBody(entry.body);
@@ -8624,27 +8625,35 @@ async function loadSceneryPhysicsBridgeScene(
 }
 
 function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeBodyFrameState): void {
+  // 根据节点 ID 找到对应的车辆实例；如果不存在，或者该车辆不是由 physics bridge 驱动，则直接返回。
   const instance = vehicleInstances.get(nodeId);
   if (!instance || instance.source !== 'bridge') {
     return;
   }
+  // 车辆底盘刚体，用于同步位置、旋转和速度等物理状态。
   const chassisBody = instance.vehicle.chassisBody;
+  // 记录上一次 bridge 帧中的位置；若还没有采样过，则先创建一个临时向量。
   const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3();
+  // 先将下一帧速度初始化为 0。
   let nextVelocityX = 0;
   let nextVelocityY = 0;
   let nextVelocityZ = 0;
+  // 当已经收到过至少一帧 bridge 数据后，通过“当前位置 - 上次位置 / 固定步长”估算线速度。
   if (instance.hasBridgeFrameSample) {
     const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0;
     nextVelocityX = (state.position.x - lastPosition.x) * invStep;
     nextVelocityY = (state.position.y - lastPosition.y) * invStep;
     nextVelocityZ = (state.position.z - lastPosition.z) * invStep;
   }
+  // 如果当前刚体速度与计算出的速度差异足够明显，则写回新速度，避免不必要的重复赋值。
   if (!isPhysicsVectorClose(chassisBody.velocity, nextVelocityX, nextVelocityY, nextVelocityZ)) {
     chassisBody.velocity.set(nextVelocityX, nextVelocityY, nextVelocityZ);
   }
+  // bridge 驱动的车辆通常由外部状态直接控制，这里将角速度清零，避免物理引擎继续积累自旋。
   if (!isPhysicsVectorClose(chassisBody.angularVelocity, 0, 0, 0)) {
     chassisBody.angularVelocity.set(0, 0, 0);
   }
+  // 如果当前刚体的位置或四元数与 bridge 帧不一致，则同步到最新的世界变换。
   if (!isPhysicsTransformClose(chassisBody.position, chassisBody.quaternion, state)) {
     chassisBody.position.set(state.position.x, state.position.y, state.position.z);
     chassisBody.quaternion.x = state.quaternion.x;
@@ -8652,8 +8661,10 @@ function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeB
     chassisBody.quaternion.z = state.quaternion.z;
     chassisBody.quaternion.w = state.quaternion.w;
   }
+  // 保存本帧位置，供下一帧计算速度差分使用。
   lastPosition.copy(state.position);
   instance.lastBridgeFramePosition = lastPosition;
+  // 标记已经至少接收到一帧 bridge 数据，后续即可使用差分计算速度。
   instance.hasBridgeFrameSample = true;
 }
 
@@ -14971,6 +14982,7 @@ function applyAutoTourVehicleHoldBrake(nodeId: string): void {
   holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
   try {
     const chassisBody = vehicleInstance.vehicle.chassisBody;
+      console.log("aaaaaaaaaaaaaaaaaaaaa")
     chassisBody.velocity.set(0, 0, 0);
     chassisBody.angularVelocity.set(0, 0, 0);
     trySleepBody(chassisBody as PhysicsBodyLike);
@@ -14988,6 +15000,7 @@ function applyAutoTourRigidBodyStop(nodeId: string): void {
     if (entry.object) {
       syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
     }
+      console.log("bbbbbbbbbbbbbbbbb")
     entry.body.velocity.set(0, 0, 0);
     entry.body.angularVelocity.set(0, 0, 0);
     entry.body.sleep?.();

@@ -245,6 +245,7 @@ export class CannonPhysicsWorld {
     state.body.aabbNeedsUpdate = true
     state.body.wakeUp()
     if (command.resetVelocity) {
+      console.log("111111111111111111111")
       state.body.velocity.set(0, 0, 0)
       state.body.angularVelocity.set(0, 0, 0)
       state.body.force.set(0, 0, 0)

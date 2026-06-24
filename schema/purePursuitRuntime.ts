@@ -37,8 +37,7 @@ const parkedSpeedQuaternion = new THREE.Quaternion()
 const parkedSpeedForward = new THREE.Vector3()
 const purePursuitChassisPosition = new THREE.Vector3()
 const purePursuitChassisQuaternion = new THREE.Quaternion()
-const purePursuitForward = new THREE.Vector3()
-const purePursuitRight = new THREE.Vector3()
+const forwardWorld = new THREE.Vector3()
 const purePursuitUp = new THREE.Vector3(0, 1, 0)
 const purePursuitLookaheadPoint = new THREE.Vector3()
 const purePursuitClosestPoint = new THREE.Vector3()
@@ -182,13 +181,17 @@ export function applyPurePursuitVehicleControl(params: {
     stopIndex,
   } = params
 
+
+  // 获取车辆实体与车身刚体，后续控制都基于这两个对象执行。
   const vehicle = vehicleInstance.vehicle
   const chassisBody = vehicle.chassisBody
+
+  // 将外部传入的 deltaSeconds 规范化为安全值，避免异常帧时间影响控制稳定性。
   const dt = getSafeDeltaSeconds(params.deltaSeconds)
+  // 轮子数量必须有效，否则无法执行轮胎转向和动力输出。
   const wheelCount = Math.max(0, vehicleInstance.wheelCount)
 
   if (!chassisBody || wheelCount <= 0 || !points || points.length < 2) {
-    vehicle.autoTourDebugWorldPosition = undefined
     return {
       reachedStop: false,
       steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0,
@@ -196,40 +199,30 @@ export function applyPurePursuitVehicleControl(params: {
     }
   }
 
+  // 读取车身当前世界坐标位置和姿态，作为本帧控制计算的输入。
   purePursuitChassisPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
   purePursuitChassisQuaternion
     .set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
     .normalize()
 
-  purePursuitForward.copy(vehicleInstance.axisForward)
-  if (purePursuitForward.lengthSq() <= 1e-8) {
-    purePursuitForward.set(0, 0, 1)
+  // 将车辆定义的前向轴转换到世界坐标系，得到车头实际朝向。
+  forwardWorld.copy(vehicleInstance.axisForward)
+  forwardWorld.applyQuaternion(purePursuitChassisQuaternion)
+  // 纯跟踪只在水平面上工作，因此将 Y 分量清零后重新归一化。
+  forwardWorld.y = 0
+  if (forwardWorld.lengthSq() < 1e-10) {
+    forwardWorld.set(1, 0, 0)
   }
-  purePursuitForward.normalize().applyQuaternion(purePursuitChassisQuaternion)
-  purePursuitForward.y = 0
-  if (purePursuitForward.lengthSq() <= 1e-8) {
-    purePursuitForward.set(0, 0, 1)
-  } else {
-    purePursuitForward.normalize()
-  }
-
-  purePursuitRight.crossVectors(purePursuitUp, purePursuitForward)
-  if (purePursuitRight.lengthSq() <= 1e-8) {
-    purePursuitRight.set(1, 0, 0)
-  } else {
-    purePursuitRight.normalize()
-  }
+  forwardWorld.normalize()
 
   const currentPosition = purePursuitChassisPosition
   const currentY = currentPosition.y
   const currentVelocity = chassisBody.velocity
-  const forwardSpeed = currentVelocity.x * purePursuitForward.x
-    + currentVelocity.y * purePursuitForward.y
-    + currentVelocity.z * purePursuitForward.z
-
+  const forwardSpeed = currentVelocity.x * forwardWorld.x + currentVelocity.y * forwardWorld.y + currentVelocity.z * forwardWorld.z
   state.forwardSpeedMps = forwardSpeed
   state.reverseActive = false
 
+  // 根据当前速度与配置计算前视距离：速度越高，前视距离通常越大。
   const lookaheadDistance = resolvePathFollowLookaheadDistance({
     speedMps: Math.max(Math.abs(forwardSpeed), Math.max(0, Number.isFinite(speedMps) ? speedMps : 0)),
     baseMeters: pursuitProps.lookaheadBaseMeters,
@@ -238,6 +231,7 @@ export function applyPurePursuitVehicleControl(params: {
     maxMeters: pursuitProps.lookaheadMaxMeters,
   })
 
+  // 在 XZ 平面上采样路线，得到最近点和前视点；纯跟踪核心就是朝前视点转向。
   const previewSample = resolvePathFollowSample({
     points,
     loop,
@@ -248,9 +242,9 @@ export function applyPurePursuitVehicleControl(params: {
     outClosestPoint: purePursuitClosestPoint,
   })
 
+  // 如果路线无效，则直接施加安全制动并退出，避免车辆失控。
   if (!previewSample || previewSample.polylineData.totalLength <= 1e-6) {
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce: vehicleProps.brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER })
-    vehicle.autoTourDebugWorldPosition = undefined
     return {
       reachedStop: false,
       steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0,
@@ -258,29 +252,37 @@ export function applyPurePursuitVehicleControl(params: {
     }
   }
 
+  // 计算停车目标点：默认取路线终点，也可通过 stopIndex 指定其他点。
   const endIndex = points.length - 1
   const rawStopIndex = typeof stopIndex === 'number' && Number.isFinite(stopIndex) ? Math.floor(stopIndex) : endIndex
   const clampedStopIndex = Math.max(0, Math.min(endIndex, rawStopIndex))
   const stopPoint = points[clampedStopIndex]!
+  // stopS 是目标点在路径上的弧长位置；环路下可能需要偏移到当前采样位置之后。
   const stopS = resolveRouteVertexS(points, clampedStopIndex, loop)
   let adjustedStopS = stopS
   if (loop && adjustedStopS < previewSample.projection.s) {
     adjustedStopS += previewSample.polylineData.totalLength
   }
+  // 终点的平面距离用于减速、刹车和最终停车判断。
   const distanceToEnd = getPlanarDistance(currentPosition, stopPoint)
+  // 在停止模式下，接近目标且允许 docking 时，进入泊车/对准控制状态。
   const dockActive = modeStopping && pursuitProps.dockingEnabled && distanceToEnd <= pursuitProps.dockStartDistanceMeters
 
+  // 轮距用于将目标点相对于后轴来计算转角，这更符合纯跟踪几何模型。
   const wheelbaseMeters = Math.max(0.01, vehicleProps.wheelbaseMeters)
   purePursuitTargetDelta.copy(previewSample.lookaheadPoint).sub(currentPosition)
   purePursuitTargetDelta.y = 0
   const toTargetLen = purePursuitTargetDelta.length()
+  // 若前视点与当前位置过近，则无法稳定计算方向，直接返回当前状态。
   if (!Number.isFinite(toTargetLen) || toTargetLen < 1e-6) {
     return { reachedStop: false, steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0, targetSpeedMps: 0 }
   }
 
-  const rearAxleX = currentPosition.x - purePursuitForward.x * (wheelbaseMeters * 0.5)
-  const rearAxleY = currentY - purePursuitForward.y * (wheelbaseMeters * 0.5)
-  const rearAxleZ = currentPosition.z - purePursuitForward.z * (wheelbaseMeters * 0.5)
+  // 根据车辆朝向和轮距，估算后轴位置，以后轴为几何参考点来计算目标方向。
+  const rearAxleX = currentPosition.x - forwardWorld.x * (wheelbaseMeters * 0.5)
+  const rearAxleY = currentY - forwardWorld.y * (wheelbaseMeters * 0.5)
+  const rearAxleZ = currentPosition.z - forwardWorld.z * (wheelbaseMeters * 0.5)
+  // 重新构造从后轴指向前视点的目标向量。
   purePursuitTargetDelta.copy(previewSample.lookaheadPoint)
   purePursuitTargetDelta.x -= rearAxleX
   purePursuitTargetDelta.y -= rearAxleY
@@ -290,44 +292,55 @@ export function applyPurePursuitVehicleControl(params: {
   if (!Number.isFinite(targetLen) || targetLen < 1e-6) {
     return { reachedStop: false, steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0, targetSpeedMps: 0 }
   }
+  // 目标方向与车头方向的夹角决定需要向左还是向右打轮。
   const desiredDir = purePursuitTargetDelta.clone().normalize()
-  const crossY = purePursuitForward.clone().cross(desiredDir).dot(purePursuitUp)
-  const dot = THREE.MathUtils.clamp(purePursuitForward.dot(desiredDir), -1, 1)
+  const crossY = forwardWorld.clone().cross(desiredDir).dot(purePursuitUp)
+  const dot = THREE.MathUtils.clamp(forwardWorld.dot(desiredDir), -1, 1)
   const alpha = (crossY >= 0 ? 1 : -1) * Math.acos(dot)
 
+  // 读取车辆最大转角限制，避免输出超出物理约束的转向命令。
   const maxSteerRad = THREE.MathUtils.degToRad(Math.max(0, vehicleProps.maxSteerDegrees))
   const safeMaxSteer = Number.isFinite(maxSteerRad) && maxSteerRad > 1e-6 ? maxSteerRad : THREE.MathUtils.degToRad(26)
+  // 纯跟踪公式：根据目标角度和目标距离计算理论转角。
   let steeringRad = Math.atan2(2 * wheelbaseMeters * Math.sin(alpha), Math.max(1e-6, targetLen))
   steeringRad = THREE.MathUtils.clamp(steeringRad, -safeMaxSteer, safeMaxSteer)
+  // 限制每帧转向变化幅度，减少抖动和突变。
   const lastSteer = typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0
   const maxSteerStep = THREE.MathUtils.degToRad(Math.max(0, vehicleProps.maxSteerRateDegPerSec)) * dt
   steeringRad = THREE.MathUtils.clamp(steeringRad, lastSteer - maxSteerStep, lastSteer + maxSteerStep)
   state.lastSteerRad = steeringRad
 
+  // 转角越大，说明弯道越急，因此允许的目标速度应越低。
   const steerRatio = safeMaxSteer > 1e-6 ? Math.min(1, Math.abs(steeringRad) / safeMaxSteer) : 0
   const turnFactor = 1 / (1 + Math.max(0, pursuitProps.curvatureSpeedFactor) * steerRatio)
   const componentMaxSpeed = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
   const speed = Math.max(0, Math.min(speedMps, componentMaxSpeed))
+  // 期望速度由输入速度和弯道降速因子共同决定，同时不低于最小速度。
   let speedTarget = Math.max(pursuitProps.minSpeedMps, speed * turnFactor)
   if (modeStopping) {
+    // 停止模式下，再按距离终点的剩余距离进一步降低目标速度。
     const approachSpeed = Math.min(pursuitProps.dockMaxSpeedMps, Math.max(0, distanceToEnd * pursuitProps.dockVelocityKp))
     speedTarget = Math.min(speedTarget, approachSpeed)
   }
 
+  // 纵向控制的目标速度与当前前进速度作差，得到速度误差。
   const desiredSpeedSigned = speedTarget
   const planarVelocity = new THREE.Vector3(currentVelocity.x, 0, currentVelocity.z)
-  const forwardSignedSpeed = planarVelocity.dot(purePursuitForward)
+  const forwardSignedSpeed = planarVelocity.dot(forwardWorld)
   const speedError = desiredSpeedSigned - forwardSignedSpeed
 
+  // 积分项用于消除长期稳态误差。
   let integral = typeof state.speedIntegral === 'number' ? state.speedIntegral : 0
   integral += speedError * dt
   const integralMax = Math.max(0, pursuitProps.speedIntegralMax)
   integral = integralMax > 0 ? THREE.MathUtils.clamp(integral, -integralMax, integralMax) : 0
 
+  // 当误差很小时，逐步衰减积分，降低来回摆动概率。
   const absSpeedError = Math.abs(speedError)
   if (Number.isFinite(absSpeedError) && absSpeedError <= 0.10) {
     integral *= Math.exp(-1.6 * Math.max(0, dt))
   }
+  // 若积分方向与当前误差方向相反，则快速衰减，避免控制“顶牛”。
   if (
     integral !== 0
     && Number.isFinite(absSpeedError)
@@ -338,34 +351,41 @@ export function applyPurePursuitVehicleControl(params: {
   }
   state.speedIntegral = integral
 
+  // 通过 PI 控制器将速度误差转换为纵向控制量。
   const control = pursuitProps.speedKp * speedError + pursuitProps.speedKi * integral
   const engineForceMax = Number.isFinite(vehicleProps.engineForceMax) ? Math.max(0, vehicleProps.engineForceMax) : 0
   const brakeForceMax = Number.isFinite(vehicleProps.brakeForceMax) ? Math.max(0, vehicleProps.brakeForceMax) : 0
   const engineForceCmd = THREE.MathUtils.clamp(control * engineForceMax, -engineForceMax, engineForceMax)
 
+  // 根据误差正负判断当前应优先使用油门还是刹车。
   const desiredUseEngine = speedError > 0
   const lastUseEngine = typeof state.longitudinalUseEngine === 'boolean' ? state.longitudinalUseEngine : desiredUseEngine
   let useEngine = lastUseEngine
   if (absSpeedError > 0.06) {
+    // 当误差足够大时，快速切换纵向输出模式；误差很小时保持上一状态减少频繁切换。
     useEngine = desiredUseEngine
   }
   state.longitudinalUseEngine = useEngine
-
+  // 调试日志：帮助观察速度误差、控制量及最终油门/刹车选择。
+  // 将控制输出拆分为发动机力和刹车力。
   let engineForce = useEngine ? Math.max(0, engineForceCmd) : 0
   let brakeForce = useEngine ? 0 : Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax))
 
+  // 接近终点时提前增加制动，避免进入停车区时速度过高。
   const brakeThreshold = Math.max(pursuitProps.brakeDistanceMinMeters, speed * pursuitProps.brakeDistanceSpeedFactor)
   const shouldBrakeNearEnd = modeStopping && distanceToEnd < brakeThreshold
   if (shouldBrakeNearEnd && !dockActive) {
     brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * 0.35))
   }
 
+  // 泊车状态下锁定转向、关闭动力并施加更强的制动力。
   if (dockActive) {
     steeringRad = 0
     engineForce = 0
     brakeForce = Math.max(brakeForce, brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER)
 
     if (pursuitProps.dockYawEnabled) {
+      // 允许在泊车时对齐朝向，使车身姿态更接近路径切线方向。
       const prevIndex = clampedStopIndex > 0 ? clampedStopIndex - 1 : Math.min(clampedStopIndex + 1, endIndex)
       const prev = points[prevIndex]!
       const tanX = stopPoint.x - prev.x
@@ -373,7 +393,7 @@ export function applyPurePursuitVehicleControl(params: {
       const tanLen = Math.sqrt(tanX * tanX + tanZ * tanZ)
       const yaw = tanLen > 1e-6
         ? Math.atan2(tanX / tanLen, tanZ / tanLen)
-        : Math.atan2(purePursuitForward.x, purePursuitForward.z)
+        : Math.atan2(forwardWorld.x, forwardWorld.z)
       yawTargetQuat.setFromAxisAngle(purePursuitUp, yaw)
       const alphaYaw = 1 - Math.exp(-Math.max(0, pursuitProps.dockYawSlerpRate) * dt)
       objectWorldQuat.copy(purePursuitChassisQuaternion)
@@ -384,13 +404,13 @@ export function applyPurePursuitVehicleControl(params: {
       chassisBody.quaternion.w = objectWorldQuat.w
     }
 
+    // 缓和角速度，帮助车辆尽快稳定下来。
     chassisBody.angularVelocity.x *= 0.85
     chassisBody.angularVelocity.y *= 0.6
     chassisBody.angularVelocity.z *= 0.85
   }
 
-  console.log('steeringRad', steeringRad, 'engineForce', engineForce, 'brakeForce', brakeForce, 'desiredSpeedSigned', desiredSpeedSigned, 'distanceToEnd', distanceToEnd, 'dockActive', dockActive)
-
+  // 将最终控制量下发给车辆物理轮组。
   applyPhysicsVehicleWheelControl(vehicle, {
     steeringValue: steeringRad,
     engineForce,
@@ -398,15 +418,13 @@ export function applyPurePursuitVehicleControl(params: {
     steerableWheelIndices: vehicleInstance.steerableWheelIndices,
   })
 
+  // 记录本帧目标速度、目标转角与调试点，方便外部界面或日志系统使用。
   vehicle.autoTourTargetSpeedMps = desiredSpeedSigned
   vehicle.autoTourTargetSteeringRad = steeringRad
-  vehicle.autoTourDebugWorldPosition = {
-    x: purePursuitLookaheadPoint.x,
-    y: purePursuitLookaheadPoint.y,
-    z: purePursuitLookaheadPoint.z,
-  }
+
 
   if (modeStopping) {
+    // 进入最终停车判定：距离足够近且速度足够低时，视为到站。
     const planarSpeed = Math.sqrt(currentVelocity.x * currentVelocity.x + currentVelocity.z * currentVelocity.z)
     const stopDistance = Math.max(pursuitProps.dockStopEpsilonMeters, pursuitProps.dockStartDistanceMeters)
     if (distanceToEnd <= stopDistance && planarSpeed <= pursuitProps.dockStopSpeedEpsilonMps) {
@@ -424,9 +442,11 @@ export function applyPurePursuitVehicleControl(params: {
     }
   }
 
+  // 保存纵向误差与刹车输出，供下一帧控制平滑衔接。
   state.longitudinalErrorMps = speedError
   state.lastBrakeForce = brakeForce
 
+  // 返回本帧结果：是否到站、当前转角和目标速度。
   return {
     reachedStop: false,
     steeringRad,

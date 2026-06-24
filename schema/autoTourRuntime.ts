@@ -512,6 +512,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (!autoTour) {
       return
     }
+    const tourProps = clampAutoTourComponentProps(autoTour.props)
     const key = `${node.id}:${autoTour.id}`
     autoTourPlaybackState.set(key, {
       mode: 'path',
@@ -542,6 +543,14 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     pendingReturnToStartNodes.delete(nodeId)
     if (requiresExplicitStart) {
       activeTourNodes.add(nodeId)
+    }
+
+    if (!tourProps.loop && snap.targetIndex >= snap.routeWaypointCount - 1) {
+      const seeded = autoTourPlaybackState.get(key)
+      if (seeded) {
+        seeded.mode = 'stopping'
+        seeded.dockStopIndex = snap.routeWaypointCount - 1
+      }
     }
   }
 
@@ -702,8 +711,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
       const hasVehicleComponent = Boolean(vehicleComponent)
       const purePursuit = resolveEnabledComponentState<PurePursuitComponentProps>(node, PURE_PURSUIT_COMPONENT_TYPE)
-      // Use authored PurePursuit props when present, otherwise fall back to the
-      // default PurePursuit tuning so vehicle nodes still share the physics path.
+      const hasPurePursuitComponent = Boolean(purePursuit)
+      // Only use PurePursuit component props; do NOT fall back to AutoTour props.
+      // This ensures that vehicle nodes without PurePursuit do not enter the pure-pursuit driving branch.
       const pursuitProps = clampPurePursuitComponentProps(purePursuit?.props ?? null)
       const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null)
       const routeNodeId = tourProps.routeNodeId
@@ -1012,13 +1022,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           const proj = projectPointToPolyline(points, polylineData3d, autoTourCurrentPosition, autoTourNextWorldPosition)
           state.lastProjectedS = proj.s
 
-          const chassisBody = vehicleInstance!.vehicle.chassisBody
-          const currentSpeedMps = Math.sqrt(
-            chassisBody.velocity.x * chassisBody.velocity.x
-              + chassisBody.velocity.y * chassisBody.velocity.y
-              + chassisBody.velocity.z * chassisBody.velocity.z,
-          )
-
           const deviation = Math.sqrt(Math.max(0, proj.distanceSq))
           const maxDeviation = Math.max(1, arrivalDistance * 2)
           if (Number.isFinite(deviation) && deviation <= maxDeviation) {
@@ -1045,13 +1048,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             state.targetIndex = Math.max(state.targetIndex, Math.min(stopBarrierIndex, nextIndex))
 
             // End handling for non-looping tours: once progress reaches the end, enter stopping mode.
-            const terminalLeadDistance = Math.max(
-              0.5,
-              arrivalDistance,
-              pursuitProps.brakeDistanceMinMeters + currentSpeedMps * Math.max(0, pursuitProps.brakeDistanceSpeedFactor),
-            )
-            if (!tourProps.loop && stopBarrierIndex === endIndex && proj.s >= polylineData3d.totalLength - terminalLeadDistance) {
-  
+            if (!tourProps.loop && stopBarrierIndex === endIndex && proj.s >= polylineData3d.totalLength - Math.max(0.5, arrivalDistance)) {
               state.mode = 'stopping'
               state.targetIndex = endIndex
             } else if (tourProps.loop) {
@@ -1306,12 +1303,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         autoTourLookaheadPoint.y = autoTourCurrentPosition.y
         autoTourDesiredDir.copy(autoTourLookaheadPoint).sub(autoTourCurrentPosition)
         autoTourDesiredDir.y = 0
-
-        if (directMoveVehicle && !tourProps.loop && projection.s >= state.polylineData3d.totalLength - terminalLeadDistance) {
-          state.mode = 'stopping'
-          state.targetIndex = endIndex
-          state.dockStopIndex = endIndex
-        }
       }
 
       if (autoTourDesiredDir.lengthSq() < 1e-10) {
