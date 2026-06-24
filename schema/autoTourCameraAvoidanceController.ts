@@ -49,6 +49,7 @@ export type AutoTourCameraAvoidanceUpdateParams = {
   occlusionIgnoreNodeIds: readonly string[]
   deltaSeconds: number
   immediate?: boolean
+  obstacleAvoidanceEnabled?: boolean
 }
 
 export type AutoTourCameraAvoidanceUpdateResult = {
@@ -344,6 +345,7 @@ export class AutoTourCameraAvoidanceController {
 
   update(params: AutoTourCameraAvoidanceUpdateParams): AutoTourCameraAvoidanceUpdateResult {
     const deltaSeconds = Math.max(0, params.deltaSeconds)
+    const obstacleAvoidanceEnabled = params.obstacleAvoidanceEnabled ?? false
     if (deltaSeconds > 0 && this.hasSample) {
       this.velocityScratch
         .copy(params.anchorWorld)
@@ -506,6 +508,96 @@ export class AutoTourCameraAvoidanceController {
     const baseTargetLift = params.placement.targetLift * (0.86 + turnSeverity * 0.08 + dockBlend * 0.06 + narrowBlendPreview * 0.14)
     const baseTargetForward = params.placement.targetForward * (1 + motionBlend * 0.12 + nearEndBlend * 0.1 + narrowBlendPreview * 0.12)
     const preferredSide: -1 | 0 | 1 = turnSign === 0 ? 0 : (turnSign > 0 ? -1 : 1)
+
+    if (!obstacleAvoidanceEnabled) {
+      this.candidateId = 'route'
+      this.candidateSwitchAtMs = 0
+      this.narrowLatched = false
+      this.narrowBlend = 0
+      this.narrowSwitchAtMs = 0
+      this.wallLatched = false
+      this.wallBlend = 0
+      this.wallSide = 0
+      this.wallSwitchAtMs = 0
+
+      this.desiredPositionScratch.copy(params.anchorWorld)
+        .addScaledVector(this.tangentScratch, -baseDistance)
+        .addScaledVector(this.upScratch, baseHeight)
+      this.desiredTargetScratch.copy(params.anchorWorld)
+        .addScaledVector(this.tangentScratch, baseTargetForward)
+        .addScaledVector(this.upScratch, baseTargetLift)
+
+      const positionSpeed = AUTO_TOUR_CAMERA_FOLLOW_POSITION_LERP_SPEED
+        + turnSeverity * 2.5
+        + dockBlend * 0.8
+        + nearEndBlend * 0.2
+      const targetSpeed = AUTO_TOUR_CAMERA_FOLLOW_TARGET_LERP_SPEED
+        + turnSeverity * 2.2
+        + dockBlend * 0.8
+        + nearEndBlend * 0.18
+      const positionAlpha = params.immediate || !this.followState.initialized
+        ? 1
+        : computeFollowLerpAlpha(deltaSeconds, positionSpeed)
+      const targetAlpha = params.immediate || !this.followState.initialized
+        ? 1
+        : computeFollowLerpAlpha(deltaSeconds, targetSpeed)
+
+      if (positionAlpha >= 1) {
+        this.followState.currentPosition.copy(this.desiredPositionScratch)
+      } else {
+        this.followState.currentPosition.lerp(this.desiredPositionScratch, positionAlpha)
+      }
+      if (targetAlpha >= 1) {
+        this.followState.currentTarget.copy(this.desiredTargetScratch)
+      } else {
+        this.followState.currentTarget.lerp(this.desiredTargetScratch, targetAlpha)
+      }
+      this.followState.desiredPosition.copy(this.desiredPositionScratch)
+      this.followState.desiredTarget.copy(this.desiredTargetScratch)
+      this.followState.currentAnchor.copy(params.anchorWorld)
+      this.followState.desiredAnchor.copy(params.anchorWorld)
+      this.followState.heading.copy(this.tangentScratch)
+      this.followState.initialized = true
+      this.currentPositionScratch.copy(this.followState.currentPosition)
+      this.currentTargetScratch.copy(this.followState.currentTarget)
+
+      const routeCandidate: AutoTourCameraCandidate = {
+        id: 'route',
+        position: this.desiredPositionScratch.clone(),
+        target: this.desiredTargetScratch.clone(),
+        occlusionScore: 0,
+        routeScore: 0,
+        totalScore: 0,
+      }
+
+      return {
+        routeProgress,
+        routeDistanceToEnd,
+        lookaheadDistance,
+        turnSeverity,
+        turnSign,
+        dockBlend,
+        nearEndBlend,
+        motionBlend,
+        wallProbeScore: 0,
+        wallProbeSide: 0,
+        candidateGap: 0,
+        narrowSignal: 0,
+        wallSignal: 0,
+        chosenCandidate: cloneCandidate(routeCandidate),
+        currentCandidate: cloneCandidate(routeCandidate),
+        bestCandidate: cloneCandidate(routeCandidate),
+        secondCandidate: cloneCandidate(routeCandidate),
+        candidateId: this.candidateId,
+        currentPosition: this.currentPositionScratch,
+        currentTarget: this.currentTargetScratch,
+        desiredPosition: this.desiredPositionScratch,
+        desiredTarget: this.desiredTargetScratch,
+        narrowBlend: this.narrowBlend,
+        wallBlend: this.wallBlend,
+        wallBiasSide: 0,
+      }
+    }
 
     const candidates = this.selectCandidates({
       anchor: params.anchorWorld,

@@ -14913,6 +14913,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   const placement = computeFollowPlacement(getApproxDimensions(object));
+  const autoTourComponent = resolveAutoTourComponent(resolveNodeById(nodeId));
   const avoidance = autoTourCameraAvoidanceController.update({
     nodeId,
     routeData,
@@ -14928,6 +14929,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     occlusionIgnoreNodeIds: [nodeId, routeData.routeNodeId],
     deltaSeconds,
     immediate: options.immediate,
+    obstacleAvoidanceEnabled: autoTourComponent?.props?.followCameraObstacleAvoidanceEnabled !== false,
   });
 
   const updated = runWithProgrammaticCameraMutationAndAnchor(() => {

@@ -9586,6 +9586,7 @@ function updateAutoTourCameraForFrame(
 		return
 	}
 	const placement = computeFollowPlacement(getApproxDimensions(object))
+	const autoTourComponent = resolveAutoTourComponent(resolveNodeById(nodeId))
 	const avoidance = autoTourCameraAvoidanceController.update({
 		nodeId,
 		routeData,
@@ -9601,6 +9602,7 @@ function updateAutoTourCameraForFrame(
 		},
 		occlusionIgnoreNodeIds: [nodeId, routeData.routeNodeId],
 		immediate: false,
+		obstacleAvoidanceEnabled: autoTourComponent?.props?.followCameraObstacleAvoidanceEnabled !== false,
 	})
 
 	activeCamera.position.copy(avoidance.currentPosition)

@@ -18,6 +18,7 @@ export interface AutoTourComponentProps {
   loop: boolean
   alignToPath: boolean
   usePhysicsDrive: boolean
+  followCameraObstacleAvoidanceEnabled: boolean
 }
 
 function normalizeNodeId(value: unknown): string | null {
@@ -60,6 +61,7 @@ export function clampAutoTourComponentProps(
     loop: clampBoolean(raw.loop, false),
     alignToPath: clampBoolean(raw.alignToPath, true),
     usePhysicsDrive: clampBoolean(raw.usePhysicsDrive, true),
+    followCameraObstacleAvoidanceEnabled: clampBoolean(raw.followCameraObstacleAvoidanceEnabled, false),
   }
 }
 
@@ -71,6 +73,7 @@ export function cloneAutoTourComponentProps(props: AutoTourComponentProps): Auto
     loop: props.loop,
     alignToPath: props.alignToPath,
     usePhysicsDrive: props.usePhysicsDrive,
+    followCameraObstacleAvoidanceEnabled: props.followCameraObstacleAvoidanceEnabled,
   }
 }
 
@@ -95,6 +98,7 @@ const autoTourComponentDefinition: ComponentDefinition<AutoTourComponentProps> =
         { kind: 'boolean', key: 'loop', label: 'Loop' },
         { kind: 'boolean', key: 'alignToPath', label: 'Align To Path' },
         { kind: 'boolean', key: 'usePhysicsDrive', label: 'Use Physics Drive' },
+        { kind: 'boolean', key: 'followCameraObstacleAvoidanceEnabled', label: 'Obstacle Avoidance' },
       ],
     },
   ],

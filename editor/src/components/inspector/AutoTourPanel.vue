@@ -53,6 +53,7 @@ const localMaxSpeedMps = ref(DEFAULT_AUTO_TOUR_MAX_SPEED_MPS * 3.6)
 const localLoop = ref(false)
 const localAlignToPath = ref(true)
 const localUsePhysicsDrive = ref(true)
+const localFollowCameraObstacleAvoidanceEnabled = ref(false)
 
 watch(
   () => normalizedProps.value,
@@ -63,6 +64,7 @@ watch(
     localLoop.value = props.loop
     localAlignToPath.value = props.alignToPath
     localUsePhysicsDrive.value = props.usePhysicsDrive
+    localFollowCameraObstacleAvoidanceEnabled.value = props.followCameraObstacleAvoidanceEnabled
   },
   { immediate: true, deep: true },
 )
@@ -145,6 +147,17 @@ function handleUsePhysicsDriveChange(value: boolean | null) {
     return
   }
   updateComponent({ usePhysicsDrive: value })
+}
+
+function handleFollowCameraObstacleAvoidanceEnabledChange(value: boolean | null) {
+  if (value === null) {
+    return
+  }
+  localFollowCameraObstacleAvoidanceEnabled.value = value
+  if (value === normalizedProps.value.followCameraObstacleAvoidanceEnabled) {
+    return
+  }
+  updateComponent({ followCameraObstacleAvoidanceEnabled: value })
 }
 
 function handleToggleComponent() {
@@ -266,6 +279,15 @@ function handleRemoveComponent() {
           :model-value="localUsePhysicsDrive"
           :disabled="!componentEnabled"
           @update:model-value="handleUsePhysicsDriveChange"
+        />
+
+        <v-switch
+          label="Obstacle Avoidance"
+          density="compact"
+          hide-details
+          :model-value="localFollowCameraObstacleAvoidanceEnabled"
+          :disabled="!componentEnabled"
+          @update:model-value="handleFollowCameraObstacleAvoidanceEnabledChange"
         />
       </div>
     </v-expansion-panel-text>
