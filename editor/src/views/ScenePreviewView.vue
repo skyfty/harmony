@@ -2410,6 +2410,7 @@ type PhysicsBridgeBodyFrameState = {
 	position: THREE.Vector3
 	quaternion: THREE.Quaternion
 	motionState: number
+	linearVelocity?: THREE.Vector3
 }
 const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameState>()
 const physicsBridgeSyncPositionHelper = new THREE.Vector3()
@@ -11166,16 +11167,23 @@ function syncScenePreviewBridgeVehicleFromFrame(nodeId: string, state: PhysicsBr
 		return
 	}
 	const chassisBody = instance.vehicle.chassisBody
+	const bridgeVelocity = state.linearVelocity ?? null
 	const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3()
-	if (instance.hasBridgeFrameSample) {
-		const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0
-		chassisBody.velocity.set(
-			(state.position.x - lastPosition.x) * invStep,
-			(state.position.y - lastPosition.y) * invStep,
-			(state.position.z - lastPosition.z) * invStep,
-		)
-	} else {
-		chassisBody.velocity.set(0, 0, 0)
+	if (bridgeVelocity) {
+		chassisBody.velocity.set(bridgeVelocity.x, bridgeVelocity.y, bridgeVelocity.z)
+	} else if (instance.hasBridgeFrameSample) {
+		const dx = state.position.x - lastPosition.x
+		const dy = state.position.y - lastPosition.y
+		const dz = state.position.z - lastPosition.z
+		const displacementSq = (dx * dx) + (dy * dy) + (dz * dz)
+		if (displacementSq > VEHICLE_BRIDGE_SYNC_POSITION_EPSILON_SQ) {
+			const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0
+			chassisBody.velocity.set(
+				dx * invStep,
+				dy * invStep,
+				dz * invStep,
+			)
+		}
 	}
 	chassisBody.angularVelocity.set(0, 0, 0)
 	chassisBody.position.set(state.position.x, state.position.y, state.position.z)
@@ -11254,6 +11262,16 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 				frame.bodyTransforms[base + 6] ?? 1,
 			).normalize()
 			existing.motionState = frame.bodyTransforms[base + 7] ?? 0
+			if (frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3) {
+				existing.linearVelocity ??= new THREE.Vector3()
+				existing.linearVelocity.set(
+					frame.bodyLinearVelocities[base] ?? 0,
+					frame.bodyLinearVelocities[base + 1] ?? 0,
+					frame.bodyLinearVelocities[base + 2] ?? 0,
+				)
+			} else {
+				existing.linearVelocity = undefined
+			}
 			syncScenePreviewBridgeVehicleFromFrame(nodeId, existing)
 			continue
 		}
@@ -11273,6 +11291,13 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 		}
 		physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState)
 		syncScenePreviewBridgeVehicleFromFrame(nodeId, createdState)
+	if (frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3) {
+		createdState.linearVelocity = new THREE.Vector3(
+			frame.bodyLinearVelocities[base] ?? 0,
+			frame.bodyLinearVelocities[base + 1] ?? 0,
+			frame.bodyLinearVelocities[base + 2] ?? 0,
+		)
+	}
 	}
 	applyScenePreviewPhysicsBridgeFrameToObjects()
 }
@@ -11684,13 +11709,11 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 			characterId,
 			moveX: hasPathFollowInput ? pathFollowInput!.moveX : 0,
 			moveZ: hasPathFollowInput ? pathFollowInput!.moveZ : (isControlled ? characterAuthorityInput.moveZ : 0),
-			yaw: activeYaw,
 			jump: hasPathFollowInput ? pathFollowInput!.jump : (isControlled ? characterAuthorityInput.jump : false),
 			sprint: hasPathFollowInput ? pathFollowInput!.sprint : (isControlled ? characterAuthorityInput.sprint : false),
 			crouch: hasPathFollowInput ? pathFollowInput!.crouch : (isControlled ? characterAuthorityInput.crouch : false),
 			interact: hasPathFollowInput ? pathFollowInput!.interact : (isControlled ? characterAuthorityInput.interact : false),
-		}).catch((error) => {
-			console.warn('[ScenePreview] Failed to sync character input', error)
+			yaw: activeYaw,
 		})
 	})
 }

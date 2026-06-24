@@ -2487,6 +2487,7 @@ type PhysicsBridgeBodyFrameState = {
   position: THREE.Vector3;
   quaternion: THREE.Quaternion;
   motionState: number;
+  linearVelocity?: THREE.Vector3;
 };
 type ViewerRigidbodyInstance = RigidbodyInstance & {
   bridgeSyncDirty?: boolean;
@@ -8632,22 +8633,28 @@ function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeB
   }
   // 车辆底盘刚体，用于同步位置、旋转和速度等物理状态。
   const chassisBody = instance.vehicle.chassisBody;
+  const bridgeVelocity = state.linearVelocity ?? null;
   // 记录上一次 bridge 帧中的位置；若还没有采样过，则先创建一个临时向量。
   const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3();
-  // 先将下一帧速度初始化为 0。
-  let nextVelocityX = 0;
-  let nextVelocityY = 0;
-  let nextVelocityZ = 0;
-  // 当已经收到过至少一帧 bridge 数据后，通过“当前位置 - 上次位置 / 固定步长”估算线速度。
-  if (instance.hasBridgeFrameSample) {
-    const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0;
-    nextVelocityX = (state.position.x - lastPosition.x) * invStep;
-    nextVelocityY = (state.position.y - lastPosition.y) * invStep;
-    nextVelocityZ = (state.position.z - lastPosition.z) * invStep;
-  }
-  // 如果当前刚体速度与计算出的速度差异足够明显，则写回新速度，避免不必要的重复赋值。
-  if (!isPhysicsVectorClose(chassisBody.velocity, nextVelocityX, nextVelocityY, nextVelocityZ)) {
-    chassisBody.velocity.set(nextVelocityX, nextVelocityY, nextVelocityZ);
+  if (bridgeVelocity) {
+    // 优先使用 bridge 帧里携带的线速度，避免过密采样时把仍在运动的车误写成 0。
+    if (!isPhysicsVectorClose(chassisBody.velocity, bridgeVelocity.x, bridgeVelocity.y, bridgeVelocity.z)) {
+      chassisBody.velocity.set(bridgeVelocity.x, bridgeVelocity.y, bridgeVelocity.z);
+    }
+  } else if (instance.hasBridgeFrameSample) {
+    const dx = state.position.x - lastPosition.x;
+    const dy = state.position.y - lastPosition.y;
+    const dz = state.position.z - lastPosition.z;
+    const displacementSq = (dx * dx) + (dy * dy) + (dz * dz);
+    if (displacementSq > VEHICLE_BRIDGE_SYNC_POSITION_EPSILON_SQ) {
+      const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0;
+      const nextVelocityX = dx * invStep;
+      const nextVelocityY = dy * invStep;
+      const nextVelocityZ = dz * invStep;
+      if (!isPhysicsVectorClose(chassisBody.velocity, nextVelocityX, nextVelocityY, nextVelocityZ)) {
+        chassisBody.velocity.set(nextVelocityX, nextVelocityY, nextVelocityZ);
+      }
+    }
   }
   // bridge 驱动的车辆通常由外部状态直接控制，这里将角速度清零，避免物理引擎继续积累自旋。
   if (!isPhysicsVectorClose(chassisBody.angularVelocity, 0, 0, 0)) {
@@ -8734,6 +8741,16 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
         frame.bodyTransforms[base + 6] ?? 1,
       ).normalize();
       existing.motionState = frame.bodyTransforms[base + 7] ?? 0;
+      if (frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3) {
+        existing.linearVelocity ??= new THREE.Vector3();
+        existing.linearVelocity.set(
+          frame.bodyLinearVelocities[base] ?? 0,
+          frame.bodyLinearVelocities[base + 1] ?? 0,
+          frame.bodyLinearVelocities[base + 2] ?? 0,
+        );
+      } else {
+        existing.linearVelocity = undefined;
+      }
       syncSceneryBridgeVehicleFromFrame(nodeId, existing);
       continue;
     }
@@ -8751,6 +8768,13 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
       ).normalize(),
       motionState: frame.bodyTransforms[base + 7] ?? 0,
     };
+    if (frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3) {
+      createdState.linearVelocity = new THREE.Vector3(
+        frame.bodyLinearVelocities[base] ?? 0,
+        frame.bodyLinearVelocities[base + 1] ?? 0,
+        frame.bodyLinearVelocities[base + 2] ?? 0,
+      );
+    }
     physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState);
     syncSceneryBridgeVehicleFromFrame(nodeId, createdState);
   }

@@ -323,6 +323,7 @@ export function applyPurePursuitVehicleControl(params: {
     speedTarget = Math.min(speedTarget, approachSpeed)
   }
 
+  
   // 纵向控制的目标速度与当前前进速度作差，得到速度误差。
   const desiredSpeedSigned = speedTarget
   const planarVelocity = new THREE.Vector3(currentVelocity.x, 0, currentVelocity.z)
