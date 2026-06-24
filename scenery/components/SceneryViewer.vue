@@ -481,6 +481,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import { KTX2Loader as PlatformKTX2Loader } from '@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader';
+
 import PlatformCanvas from './PlatformCanvas.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
 import DriveJoystick from './DriveJoystick.vue';
@@ -510,10 +511,12 @@ import {
   removeScenePackageZip,
   resolveScenePackageZipPointerByCacheKey,
   saveScenePackageZipByCacheKey,
-  type ScenePackageCacheMetadata,
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
 import { fetchAssetBlobWithResponse, type AssetBlobDownloadResult } from '@harmony/schema/assetDownload';
+import {
+  type ScenePackageCacheMetadata,
+} from '@harmony/utils/scenePackageFs';
 
 type SceneryProps = {
   projectId?: string;
@@ -880,6 +883,7 @@ import {
 import {
   autoTourComponentDefinition,
   AUTO_TOUR_COMPONENT_TYPE,
+  cloneAutoTourComponentProps,
   type AutoTourComponentProps,
 } from '@harmony/schema/components/definitions/autoTourComponent';
 import {
@@ -5618,6 +5622,16 @@ function findRuntimePrefabRequestByVehicleNode(
   return null;
 }
 
+function transferAutoTourComponentProps(sourceNode: SceneNode, targetNode: SceneNode): void {
+  const sourceAutoTourComponent = sourceNode.components?.[AUTO_TOUR_COMPONENT_TYPE] ?? null;
+  const targetAutoTourComponent = targetNode.components?.[AUTO_TOUR_COMPONENT_TYPE] ?? null;
+  if (!sourceAutoTourComponent || !targetAutoTourComponent) {
+    return;
+  }
+  targetAutoTourComponent.props = cloneAutoTourComponentProps(sourceAutoTourComponent.props);
+  targetAutoTourComponent.enabled = sourceAutoTourComponent.enabled ?? targetAutoTourComponent.enabled;
+}
+
 async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload): Promise<ScenePreviewPayload> {
   pendingDefaultSteerDriveEvent.value = null;
   const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
@@ -5648,6 +5662,7 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
         applySteerTargetTransform(targetNode, cloned.root);
         const replacementVehicleNodeId = findFirstVehicleNodeId(cloned.root) ?? cloned.root.id ?? null;
         if (replacementVehicleNodeId && replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
+          transferAutoTourComponentProps(targetNode, cloned.root);
           steerHostComponent.props = clampSteerComponentProps({
             ...(steerHostComponent.props ?? {}),
             targetNodeId: replacementVehicleNodeId,
@@ -15161,8 +15176,6 @@ function handleFloatingAutoTourTap(): void {
     uni.showToast({ title: '未找到车辆对象', icon: 'none' });
     return;
   }
-
-  const autoTourProps = autoTourComponent.props;
 
   const snap = autoTourRuntime.resolveRouteSnap(targetNodeId);
   if (!snap) {
