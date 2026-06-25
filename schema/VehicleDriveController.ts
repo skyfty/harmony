@@ -293,6 +293,8 @@ const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.82
 const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 3
 // 重置车辆时的抬升高度
 const VEHICLE_RESET_LIFT = 0.75
+// 转向输入响应指数，越大越不敏感
+const VEHICLE_STEERING_RESPONSE_EXPONENT = 2.5
 const TRANSFORM_DRIVE_MAX_FORWARD_SPEED = 8.5
 const TRANSFORM_DRIVE_MAX_REVERSE_SPEED = 3.8
 const TRANSFORM_DRIVE_ACCELERATION = 6.5
@@ -314,6 +316,16 @@ function clampAxisScalar(value: number): number {
     return 0
   }
   return Math.max(-1, Math.min(1, value))
+}
+
+function applySteeringResponseCurve(value: number): number {
+  const clamped = clampAxisScalar(value)
+  const magnitude = Math.abs(clamped)
+  if (magnitude <= 1e-6) {
+    return 0
+  }
+  const response = Math.pow(magnitude, VEHICLE_STEERING_RESPONSE_EXPONENT)
+  return Math.sign(clamped) * response
 }
 
 function getVehicleApproxDimensions(object: THREE.Object3D | null): { width: number; height: number; length: number } {
@@ -609,7 +621,7 @@ export class VehicleDriveController {
     }
 
     input.throttle = throttle
-    input.steering = clampAxisScalar(steering)
+    input.steering = applySteeringResponseCurve(steering)
     input.brake = clampAxisScalar(brake)
   }
 
