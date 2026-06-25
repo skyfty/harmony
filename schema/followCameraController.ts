@@ -252,6 +252,30 @@ const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ = FOLLOW_CAMERA_PLANAR_VELOCITY
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE = 0.03
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ = FOLLOW_CAMERA_ANCHOR_DEAD_ZONE * FOLLOW_CAMERA_ANCHOR_DEAD_ZONE
 
+const followCameraLookAtBeforeDirection = new THREE.Vector3()
+const followCameraLookAtAfterDirection = new THREE.Vector3()
+const followCameraLookAtTargetDirection = new THREE.Vector3()
+
+function formatFollowCameraVec3(vector: THREE.Vector3): string {
+  return `(${vector.x.toFixed(3)}, ${vector.y.toFixed(3)}, ${vector.z.toFixed(3)})`
+}
+
+function logFollowCameraLookAtDirections(
+  label: string,
+  camera: THREE.Camera,
+  target: THREE.Vector3,
+): void {
+  followCameraLookAtBeforeDirection.copy(camera.getWorldDirection(followCameraLookAtBeforeDirection))
+  followCameraLookAtTargetDirection.copy(target).sub(camera.position)
+  if (followCameraLookAtTargetDirection.lengthSq() > 1e-8) {
+    followCameraLookAtTargetDirection.normalize()
+  }
+  console.log(
+    `[FollowCameraLookAt] ${label} before=${formatFollowCameraVec3(followCameraLookAtBeforeDirection)} `
+    + `target=${formatFollowCameraVec3(followCameraLookAtTargetDirection)}`,
+  )
+}
+
 export class FollowCameraController {
   private readonly temp = {
     cameraForward: new THREE.Vector3(),
@@ -605,7 +629,13 @@ export class FollowCameraController {
 
     camera.position.copy(follow.currentPosition)
     camera.up.copy(headingUp)
+    logFollowCameraLookAtDirections('primary', camera, follow.currentTarget)
     camera.lookAt(follow.currentTarget)
+    camera.getWorldDirection(followCameraLookAtAfterDirection)
+    console.log(
+      `[FollowCameraLookAt] primary after=${formatFollowCameraVec3(followCameraLookAtAfterDirection)} `
+      + `target=${formatFollowCameraVec3(follow.currentTarget.clone().sub(camera.position).normalize())}`,
+    )
 
     if (mapControls) {
       // 同步控制器目标，确保控制器与当前相机状态保持一致。
@@ -619,7 +649,13 @@ export class FollowCameraController {
         mapControls.update?.()
         camera.position.copy(follow.currentPosition)
         camera.up.copy(headingUp)
+        logFollowCameraLookAtDirections('controls', camera, follow.currentTarget)
         camera.lookAt(follow.currentTarget)
+        camera.getWorldDirection(followCameraLookAtAfterDirection)
+        console.log(
+          `[FollowCameraLookAt] controls after=${formatFollowCameraVec3(followCameraLookAtAfterDirection)} `
+          + `target=${formatFollowCameraVec3(follow.currentTarget.clone().sub(camera.position).normalize())}`,
+        )
       }
     }
 
