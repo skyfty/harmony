@@ -171,13 +171,6 @@ export type VehicleDriveControllerDeps = {
   onToast?: (message: string) => void
   onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution) => void
   followCameraDistanceScale?: number | (() => number)
-  constrainFollowCameraPose?: (params: {
-    position: THREE.Vector3
-    target: THREE.Vector3
-    anchor: THREE.Vector3
-    nodeId: string
-    vehicleObject: THREE.Object3D | null
-  }) => void
 
   // Allow host to provide interpolated chassis data (e.g., fixed-step physics interpolation on WeChat).
   resolveChassisWorldPosition?: (nodeId: string, chassisBody: VehicleDriveChassisBody, target: THREE.Vector3) => boolean
@@ -1508,10 +1501,7 @@ export class VehicleDriveController {
       }
     }
 
-    const updateOrbitLookTween = this.deps.updateOrbitLookTween
     const tuning = this.getFollowCameraTuning()
-    const followNodeId = this.deps.normalizeNodeId(this.state.nodeId)
-    const constrainFollowCameraPose = this.deps.constrainFollowCameraPose
 
     const updated = this.followCameraController.update({
       follow,
@@ -1524,24 +1514,10 @@ export class VehicleDriveController {
       worldUp: VEHICLE_CAMERA_WORLD_UP,
       distanceScale: this.getFollowDistanceScale(),
       ...(tuning ? { tuning } : {}),
-      ...(followNodeId && constrainFollowCameraPose
-        ? {
-          constrainPose: ({ position, target, anchor }) => {
-            constrainFollowCameraPose({
-              position,
-              target,
-              anchor,
-              nodeId: followNodeId,
-              vehicleObject,
-            })
-          },
-        }
-        : {}),
       applyOrbitTween: options.applyOrbitTween ?? false,
       followControlsDirty: options.followControlsDirty ?? false,
       lockLocalOffset: true,
       immediate: options.immediate ?? false,
-      ...(updateOrbitLookTween ? { onUpdateOrbitLookTween: updateOrbitLookTween } : {}),
     })
     return updated
   }

@@ -720,6 +720,7 @@ export class CannonPhysicsWorld {
         VEHICLE_BRAKE_FORCE,
         Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
       )
+
       applyPhysicsVehicleWheelControl(state.vehicle, {
         steeringValue,
         engineForce,

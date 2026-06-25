@@ -252,29 +252,7 @@ const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ = FOLLOW_CAMERA_PLANAR_VELOCITY
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE = 0.03
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ = FOLLOW_CAMERA_ANCHOR_DEAD_ZONE * FOLLOW_CAMERA_ANCHOR_DEAD_ZONE
 
-const followCameraLookAtBeforeDirection = new THREE.Vector3()
-const followCameraLookAtAfterDirection = new THREE.Vector3()
-const followCameraLookAtTargetDirection = new THREE.Vector3()
 
-function formatFollowCameraVec3(vector: THREE.Vector3): string {
-  return `(${vector.x.toFixed(3)}, ${vector.y.toFixed(3)}, ${vector.z.toFixed(3)})`
-}
-
-function logFollowCameraLookAtDirections(
-  label: string,
-  camera: THREE.Camera,
-  target: THREE.Vector3,
-): void {
-  followCameraLookAtBeforeDirection.copy(camera.getWorldDirection(followCameraLookAtBeforeDirection))
-  followCameraLookAtTargetDirection.copy(target).sub(camera.position)
-  if (followCameraLookAtTargetDirection.lengthSq() > 1e-8) {
-    followCameraLookAtTargetDirection.normalize()
-  }
-  console.log(
-    `[FollowCameraLookAt] ${label} before=${formatFollowCameraVec3(followCameraLookAtBeforeDirection)} `
-    + `target=${formatFollowCameraVec3(followCameraLookAtTargetDirection)}`,
-  )
-}
 
 export class FollowCameraController {
   private readonly temp = {
@@ -312,10 +290,6 @@ export class FollowCameraController {
     distanceScale?: number
     // 跟随调参项的局部覆盖值，仅覆盖显式传入的字段，其余保持默认。
     tuning?: Partial<CameraFollowTuning>
-    // 对相机姿态的额外约束，用于限制位置、旋转或视角范围。
-    constrainPose?: CameraFollowPoseConstraint
-    // 外部 orbit 视角插值更新回调，用于同步驱动轨道相机的 tween 逻辑。
-    onUpdateOrbitLookTween?: (deltaSeconds: number) => void
     // 标记跟随控制是否脏，便于在需要时触发重算或状态同步。
     followControlsDirty?: boolean
     // 本地偏移覆盖值；当外部需要强制指定局部偏移时由此传入。
@@ -340,7 +314,6 @@ export class FollowCameraController {
       velocityWorld,
       deltaSeconds,
       ctx,
-      onUpdateOrbitLookTween,
     } = options
     const camera = ctx.camera
     if (!camera) {
@@ -611,53 +584,13 @@ export class FollowCameraController {
       }
     }
 
-    // 如果外部提供了姿态约束函数，则在最终写入相机前进行二次修正。
-    if (options.constrainPose) {
-      options.constrainPose({
-        camera,
-        position: follow.currentPosition,
-        target: follow.currentTarget,
-        desiredPosition: follow.desiredPosition,
-        desiredTarget: follow.desiredTarget,
-        anchor: anchorForCamera,
-        heading: headingForward,
-      })
-    }
-
     // 将计算出的结果写回相机，并执行 lookAt。
-
 
     camera.position.copy(follow.currentPosition)
     camera.up.copy(headingUp)
-    logFollowCameraLookAtDirections('primary', camera, follow.currentTarget)
     camera.lookAt(follow.currentTarget)
-    camera.getWorldDirection(followCameraLookAtAfterDirection)
-    console.log(
-      `[FollowCameraLookAt] primary after=${formatFollowCameraVec3(followCameraLookAtAfterDirection)} `
-      + `target=${formatFollowCameraVec3(follow.currentTarget.clone().sub(camera.position).normalize())}`,
-    )
+    
 
-    if (mapControls) {
-      // 同步控制器目标，确保控制器与当前相机状态保持一致。
-      mapControls.target.copy(follow.currentTarget)
-      if (controlsEnabled) {
-        // 若允许轨道/环绕 tween，则在控制器更新前先驱动过渡逻辑。
-        if (options.applyOrbitTween && onUpdateOrbitLookTween) {
-          onUpdateOrbitLookTween(deltaSeconds)
-        }
-        // 让控制器应用其内部更新后，再次把相机状态回写，防止控制器覆盖跟随结果。
-        mapControls.update?.()
-        camera.position.copy(follow.currentPosition)
-        camera.up.copy(headingUp)
-        logFollowCameraLookAtDirections('controls', camera, follow.currentTarget)
-        camera.lookAt(follow.currentTarget)
-        camera.getWorldDirection(followCameraLookAtAfterDirection)
-        console.log(
-          `[FollowCameraLookAt] controls after=${formatFollowCameraVec3(followCameraLookAtAfterDirection)} `
-          + `target=${formatFollowCameraVec3(follow.currentTarget.clone().sub(camera.position).normalize())}`,
-        )
-      }
-    }
 
     // 标记本帧已完成初始化，后续将进入平滑跟随模式。
     follow.initialized = true
