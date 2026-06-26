@@ -1128,7 +1128,6 @@ export class VehicleDriveController {
     }
     const baseBrakeForce = brakeInput * VEHICLE_BRAKE_FORCE
     const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce + this.speedGovernorBrakeAssist))
-
     applyPhysicsVehicleWheelControl(vehicle, {
       steeringValue,
       engineForce,

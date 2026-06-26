@@ -1,6 +1,5 @@
 import * as CANNON from 'cannon-es'
 import {
-  applyPhysicsVehicleWheelControl,
   createPhysicsCharacterMotorState,
   stepPhysicsCharacterMotor,
   type PhysicsAddRuntimeBodiesCommand,
@@ -617,22 +616,22 @@ export class CannonPhysicsWorld {
       })
     })
     vehicle.addToWorld(world)
-      return {
-        desc,
-        bodyId: desc.bodyId,
-        body: bodyState.body,
-        vehicle,
-        steerableWheelIndices: desc.wheels.reduce<number[]>((indices, wheel, index) => {
-          if (wheel.isFrontWheel) {
-            indices.push(index)
-          }
-          return indices
-        }, []),
-        speedGovernorScale: 1,
-        speedGovernorBrakeAssist: 0,
-        speedGovernorOverHardCap: false,
-        speedGovernorSmoothedForwardSpeedAbs: 0,
-      }
+    return {
+      desc,
+      bodyId: desc.bodyId,
+      body: bodyState.body,
+      vehicle,
+      steerableWheelIndices: desc.wheels.reduce<number[]>((indices, wheel, index) => {
+        if (wheel.isFrontWheel) {
+          indices.push(index)
+        }
+        return indices
+      }, []),
+      speedGovernorScale: 1,
+      speedGovernorBrakeAssist: 0,
+      speedGovernorOverHardCap: false,
+      speedGovernorSmoothedForwardSpeedAbs: 0,
+    }
   }
 
   /**
@@ -653,6 +652,7 @@ export class CannonPhysicsWorld {
       const brakeInput = clamp(input?.brake ?? 0, 0, 1)
       // 手刹输入，范围[0, 1]
       const handbrakeInput = clamp(input?.handbrake ?? 0, 0, 1)
+
       // 实际转向角度
       const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
       const dt = Math.max(1 / 240, Math.min(0.25, this.worldSettings.fixedTimeStepMs / 1000))
@@ -720,13 +720,16 @@ export class CannonPhysicsWorld {
         VEHICLE_BRAKE_FORCE,
         Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
       )
-
-      applyPhysicsVehicleWheelControl(state.vehicle, {
-        steeringValue,
-        engineForce,
-        brakeForce,
-        steerableWheelIndices: state.steerableWheelIndices,
-      })
+      
+      const vehicle = state.vehicle
+      const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
+      const steerableWheelIndices = new Set(state.steerableWheelIndices)
+      for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
+        const applyControlToWheel =  steerableWheelIndices.has(wheelIndex)
+        vehicle.setSteeringValue(applyControlToWheel ? steeringValue : 0, wheelIndex)
+        vehicle.applyEngineForce(applyControlToWheel ? engineForce : 0, wheelIndex)
+        vehicle.setBrake(brakeForce, wheelIndex)
+      }
       // 唤醒车辆刚体，防止休眠导致物理效果不生效
       if (speedForGovernor > VEHICLE_WAKE_SPEED_THRESHOLD || Math.abs(throttleInput) > 0.001 || Math.abs(steeringInput) > 0.001) {
         state.body.wakeUp()

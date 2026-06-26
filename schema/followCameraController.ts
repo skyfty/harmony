@@ -590,7 +590,21 @@ export class FollowCameraController {
     camera.up.copy(headingUp)
     camera.lookAt(follow.currentTarget)
     
-
+    if (mapControls) {
+      // 同步控制器目标，确保控制器与当前相机状态保持一致。
+      mapControls.target.copy(follow.currentTarget)
+      if (controlsEnabled) {
+        // 若允许轨道/环绕 tween，则在控制器更新前先驱动过渡逻辑。
+        // if (options.applyOrbitTween && onUpdateOrbitLookTween) {
+        //   onUpdateOrbitLookTween(deltaSeconds)
+        // }
+        // 让控制器应用其内部更新后，再次把相机状态回写，防止控制器覆盖跟随结果。
+        mapControls.update?.()
+        // camera.position.copy(follow.currentPosition)
+        // camera.up.copy(headingUp)
+        // camera.lookAt(follow.currentTarget)
+      }
+    }
 
     // 标记本帧已完成初始化，后续将进入平滑跟随模式。
     follow.initialized = true

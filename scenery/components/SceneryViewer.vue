@@ -9150,62 +9150,96 @@ function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: P
 }
 
 function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): PhysicsBridgeVehicleControlInput | null {
+  // 根据节点ID从车辆实例映射表中获取对应的车辆实例
   const instance = vehicleInstances.get(nodeId) ?? null;
   if (!instance) {
+    // 未找到实例，返回 null
     return null;
   }
+
+  // 通过节点ID解析场景节点，并获取其车辆组件及属性
   const node = resolveNodeById(nodeId);
   const vehicleComponent = resolveVehicleComponent(node);
+  // 对车辆属性进行范围限制，确保数值合法
   const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null);
+
+  // 获取车轮信息列表，若不是数组则回退为空数组
   const wheelInfos = Array.isArray(instance.vehicle.wheelInfos) ? instance.vehicle.wheelInfos : [];
   if (!wheelInfos.length) {
+    // 没有车轮信息，无法计算控制输入，返回 null
     return null;
   }
 
-  const manualNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
-  const autoTourActive = activeAutoTourNodeIds.has(nodeId);
-  const useDesiredTargets = autoTourActive && manualNodeId !== nodeId;
-  const desiredSpeedMps = useDesiredTargets && typeof instance.vehicle.autoTourTargetSpeedMps === 'number'
-    ? Math.max(0, instance.vehicle.autoTourTargetSpeedMps)
-    : null;
-  const desiredSteeringRad = useDesiredTargets && typeof instance.vehicle.autoTourTargetSteeringRad === 'number'
-    ? instance.vehicle.autoTourTargetSteeringRad
-    : null;
-
+  // 用于统计所有车轮中的最大引擎力、最大刹车力以及转向角之和与计数
   let maxEngineForce = 0;
   let maxBrakeForce = 0;
   let steeringSum = 0;
   let steeringCount = 0;
+
   wheelInfos.forEach((wheelInfo: any) => {
-    const engineForce = typeof wheelInfo?.engineForce === 'number' ? Math.max(0, wheelInfo.engineForce) : 0;
-    const brakeForce = typeof wheelInfo?.brake === 'number' ? Math.max(0, wheelInfo.brake) : 0;
-    const steering = typeof wheelInfo?.steering === 'number' ? wheelInfo.steering : 0;
+    // 引擎力和刹车力不允许为负值
+    const engineForce = Math.max(0, wheelInfo.engineForce);
+    const brakeForce = Math.max(0, wheelInfo.brake);
+    const steering = wheelInfo.steering;
+
+    // 取所有车轮中的最大引擎力和最大刹车力
     maxEngineForce = Math.max(maxEngineForce, engineForce);
     maxBrakeForce = Math.max(maxBrakeForce, brakeForce);
+
+    // 仅统计转向角绝对值大于极小阈值的车轮，避免浮点误差干扰
     if (Math.abs(steering) > 1e-6) {
       steeringSum += steering;
       steeringCount += 1;
     }
   });
+  // 判断该节点是否处于自动巡游激活状态
+  const useDesiredTargets = activeAutoTourNodeIds.has(nodeId);
+  // 仅当自动巡游激活且当前节点不被手动驾驶占用时，才使用自动巡游的目标控制值
 
+  // 自动巡游目标速度（米/秒），不使用时为 null
+  const desiredSpeedMps = useDesiredTargets && typeof instance.vehicle.autoTourTargetSpeedMps === 'number'
+    ? Math.max(0, instance.vehicle.autoTourTargetSpeedMps) // 速度不允许为负
+    : null;
+
+  // 自动巡游目标转向角（弧度），不使用时为 null
+  const desiredSteeringRad = useDesiredTargets && typeof instance.vehicle.autoTourTargetSteeringRad === 'number'
+    ? instance.vehicle.autoTourTargetSteeringRad
+    : null;
+
+  // 将最大转向角从角度转换为弧度，至少保证 1 度防止除零
   const maxSteerRad = THREE.MathUtils.degToRad(Math.max(1, vehicleProps.maxSteerDegrees));
+
+  // 计算归一化转向值（范围 [-1, 1]）：
+  // 优先使用自动巡游目标转向角，否则取各车轮转向角的平均值，最终归一化到最大转向弧度
   const steering = desiredSteeringRad != null
     ? THREE.MathUtils.clamp(desiredSteeringRad / Math.max(1e-6, maxSteerRad), -1, 1)
     : steeringCount > 0
     ? THREE.MathUtils.clamp(steeringSum / steeringCount / Math.max(1e-6, maxSteerRad), -1, 1)
     : 0;
+
+  // 将最大速度从 km/h 转换为 m/s
   const vehicleMaxSpeedMps = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : 0;
+
+  // 计算归一化油门值（范围 [-1, 1]）：
+  // 自动巡游模式下以目标速度与最大速度的比值作为油门；
+  // 手动模式下以最大引擎力与配置最大引擎力的比值作为油门
   const throttle = desiredSpeedMps != null && vehicleMaxSpeedMps > 0
     ? THREE.MathUtils.clamp(desiredSpeedMps / vehicleMaxSpeedMps, 0, 1)
     : vehicleProps.engineForceMax > 0
       ? THREE.MathUtils.clamp(maxEngineForce / vehicleProps.engineForceMax, -1, 1)
       : 0;
+
+  // 计算归一化刹车值（范围 [0, 1]）：
+  // 自动巡游模式下若目标速度 ≤ 0.1 m/s 则全力刹车；
+  // 否则以最大刹车力与配置最大刹车力的比值作为刹车值
   const brake = desiredSpeedMps != null && desiredSpeedMps <= 0.1
     ? 1
     : vehicleProps.brakeForceMax > 0
       ? THREE.MathUtils.clamp(maxBrakeForce / vehicleProps.brakeForceMax, 0, 1)
       : 0;
 
+ 
+  // 返回最终的车辆控制输入：转向、油门、刹车
   return {
     steering,
     throttle,
@@ -14787,10 +14821,10 @@ function updateVehicleDriveCamera(
   );
 }
 
-function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?: boolean } = {}): boolean {
+function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?: boolean } = {}): void {
   const context = renderContext;
   if (!context) {
-    return false;
+    return;
   }
 
   // Sync active tours from runtime (covers script-triggered startTour/stopTour).
@@ -14813,7 +14847,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   applyAutoTourCameraInputPolicy();
 
   if (vehicleDriveActive.value || activeCameraWatchTween) {
-    return false;
+    return;
   }
 
   const nodeId = resolveAutoTourFollowNodeId(
@@ -14828,7 +14862,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       autoTourFollowNodeId.value = null;
       resetAutoTourCameraFollowState();
     }
-    return false;
+    return;
   }
   if (autoTourFollowNodeId.value !== nodeId) {
     autoTourFollowNodeId.value = nodeId;
@@ -14837,7 +14871,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
 
   const object = nodeObjectMap.get(nodeId) ?? null;
   if (!object) {
-    return false;
+    return;
   }
 
   resolveAutoTourCameraFollowAnchor(nodeId, object);
@@ -14846,7 +14880,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     autoTourCameraFollowVelocity.set(0, 0, 0);
     autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
     autoTourCameraFollowHasSample = true;
-    return false;
+    return;
   }
 
   if (autoTourResumeBlendActive && autoTourResumeBlendNodeId === nodeId && !options.immediate) {
@@ -14879,14 +14913,6 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       alpha,
     );
 
-    const updated = runWithProgrammaticCameraMutationAndAnchor(() => {
-      context.camera.position.copy(autoTourResumeBlendState.currentPosition);
-      context.controls.target.copy(autoTourResumeBlendState.currentTarget);
-      context.controls.update();
-      context.camera.lookAt(context.controls.target);
-      return true;
-    });
-
     if (rawAlpha >= 1) {
       autoTourCameraFollowState.currentPosition.copy(autoTourResumeBlendStartPosition);
       autoTourCameraFollowState.currentTarget.copy(autoTourResumeBlendStartTarget);
@@ -14904,7 +14930,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       clearAutoTourResumeBlendState();
     }
 
-    return updated;
+    return;
   }
 
   object.getWorldDirection(autoTourCameraFollowForwardScratch);
@@ -14940,29 +14966,26 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     autoTourCameraFollowForwardScratch.normalize();
   }
 
-  const updated = runWithProgrammaticCameraMutationAndAnchor(() =>
-    autoTourCameraFollowController.update({
-      follow: autoTourCameraFollowState,
-      placement,
-      anchorWorld: autoTourCameraFollowAnchorScratch,
-      desiredForwardWorld: autoTourCameraFollowForwardScratch,
-      velocityWorld: autoTourCameraFollowVelocity,
-      deltaSeconds,
-      ctx: { camera: context.camera, mapControls: context.controls },
-      immediate: Boolean(options.immediate),
-      smoothTargetForProgrammaticFollow: true,
-      tuning: {
-        headingLerpSpeed: 0.9,
-        targetLerpSpeed: 1.2,
-        positionLerpSpeed: 3.6,
-        anchorLerpSpeed: 2.4,
-        lookaheadBlendSpeed: 0.8,
-      },
-    }),
-  );
+  autoTourCameraFollowController.update({
+    follow: autoTourCameraFollowState,
+    placement,
+    anchorWorld: autoTourCameraFollowAnchorScratch,
+    desiredForwardWorld: autoTourCameraFollowForwardScratch,
+    velocityWorld: autoTourCameraFollowVelocity,
+    deltaSeconds,
+    ctx: { camera: context.camera, mapControls: context.controls },
+    immediate: Boolean(options.immediate),
+    smoothTargetForProgrammaticFollow: true,
+    tuning: {
+      headingLerpSpeed: 0.9,
+      targetLerpSpeed: 1.2,
+      positionLerpSpeed: 3.6,
+      anchorLerpSpeed: 2.4,
+      lookaheadBlendSpeed: 0.8,
+    },
+  });
 
   autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
-  return updated;
 }
 
 
@@ -15242,12 +15265,12 @@ function handleFloatingAutoTourTap(): void {
     autoTourRuntime.seedTourPlaybackState(targetNodeId, snap);
     activeAutoTourNodeIds.add(targetNodeId);
     autoTourFollowNodeId.value = targetNodeId;
-    prepareAutoTourResumeFromCurrentCamera(targetNodeId);
+    resetAutoTourCameraFollowState();
     setCameraViewState('watching', targetNodeId);
     autoTourRotationOnlyHold.value = false;
     setCameraCaging(true);
     applyAutoTourCameraInputPolicy();
-    updateAutoTourFollowCamera(1 / 60);
+    updateAutoTourFollowCamera(0, { immediate: true });
 
     const pendingEvent = pendingVehicleDriveEvent.value;
     if (pendingEvent && (pendingEvent.targetNodeId ?? pendingEvent.nodeId ?? null) === targetNodeId) {

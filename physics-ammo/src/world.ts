@@ -1,5 +1,4 @@
 ﻿import {
-  applyPhysicsVehicleWheelControl,
   createPhysicsCharacterMotorState,
   stepPhysicsCharacterMotor,
   type PhysicsAddRuntimeBodiesCommand,
@@ -817,12 +816,15 @@ export class AmmoPhysicsWorld {
         Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
       )
 
-      applyPhysicsVehicleWheelControl(state.vehicle, {
-        steeringValue,
-        engineForce,
-        brakeForce,
-        steerableWheelIndices: state.steerableWheelIndices,
-      })
+      const vehicle = state.vehicle
+      const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
+      const steerableWheelIndices = new Set(state.steerableWheelIndices)
+      for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
+        const applyControlToWheel = steerableWheelIndices.has(wheelIndex)
+        vehicle.setSteeringValue(applyControlToWheel ? steeringValue : 0, wheelIndex)
+        vehicle.applyEngineForce(applyControlToWheel ? engineForce : 0, wheelIndex)
+        vehicle.setBrake(brakeForce, wheelIndex)
+      }
       if (state.body && (speedForGovernor > VEHICLE_WAKE_SPEED_THRESHOLD || Math.abs(throttleInput) > 0.001 || Math.abs(steeringInput) > 0.001)) {
         state.body.activate?.(true)
       }
