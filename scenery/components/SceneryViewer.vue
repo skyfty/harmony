@@ -514,10 +514,8 @@ import {
   type ScenePackagePointer,
 } from '@harmony/utils/scene-package-storage';
 import { fetchAssetBlobWithResponse, type AssetBlobDownloadResult } from '@harmony/schema/assetDownload';
-import {
-  type ScenePackageCacheMetadata,
-} from '@harmony/utils/scenePackageFs';
-import {type EnvironmentBackgroundMode} from '@harmony/schema/core';
+import { type ScenePackageCacheMetadata } from '@harmony/utils';
+import { type EnvironmentBackgroundMode } from '@harmony/schema/core';
 
 type SceneryProps = {
   projectId?: string;
@@ -611,7 +609,7 @@ import {
 } from '@harmony/schema/physicsBodySync';
 import { loadNodeObject } from '@harmony/schema/modelAssetLoader';
 
-import { inferAssetTypeOrNull, inferMimeTypeFromAssetId, isHdriLikeExtension } from '@harmony/schema/assetTypeConversion'
+import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
 import {
   getCachedModelObject,
   getOrLoadModelObject,
@@ -3416,7 +3414,7 @@ const vehicleDriveUi = computed(() => {
     label,
     cameraLocked: active,
     joystickActive: active && joystickState.active,
-    accelerating: active && (vehicleDriveInputFlags.forward || vehicleDriveInput.throttle > 0.1),
+    accelerating: active && vehicleDriveInput.throttle > 0.05,
     braking: active && vehicleDriveInputFlags.brake,
   } as const;
 });

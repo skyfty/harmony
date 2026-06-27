@@ -29,6 +29,8 @@ export function createBridgeVehicleProxy(
     engineForce: 0,
   }))
   return {
+    autoTourTargetSpeedMps: 0,
+    autoTourTargetSteeringRad: 0,
     chassisBody: {
       position: createBridgeMutableVec3(position.x, position.y, position.z),
       velocity: createBridgeMutableVec3(0, 0, 0),

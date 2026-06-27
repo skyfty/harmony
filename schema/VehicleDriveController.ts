@@ -205,22 +205,14 @@ export type VehicleDriveCameraContext = {
 
 const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
   && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function')
-// 车辆引擎最大推力
-// WeChat mini-program: lower acceleration to reduce high-speed hitching/jerk.
-const VEHICLE_ENGINE_FORCE = 320
 // 车辆最大刹车力
 const VEHICLE_BRAKE_FORCE = 36
 // Default soft/hard speed caps used when no component-level max is present.
 const DEFAULT_VEHICLE_SPEED_SOFT_CAP = 8.5
 const DEFAULT_VEHICLE_SPEED_HARD_CAP = 12.5
 const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.92
-const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
-const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
-const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
-const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
 const VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ = 0.0064
 const VEHICLE_FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ = 0.09
-const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 // 平滑停车默认阻尼
@@ -295,21 +287,17 @@ const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 3
 const VEHICLE_RESET_LIFT = 0.75
 // 转向输入响应指数，越大越不敏感
 const VEHICLE_STEERING_RESPONSE_EXPONENT = 2.5
-const TRANSFORM_DRIVE_MAX_FORWARD_SPEED = 8.5
-const TRANSFORM_DRIVE_MAX_REVERSE_SPEED = 3.8
-const TRANSFORM_DRIVE_ACCELERATION = 6.5
-const TRANSFORM_DRIVE_REVERSE_ACCELERATION = 4.2
+const TRANSFORM_DRIVE_MAX_REVERSE_SPEED = 3.0
 const TRANSFORM_DRIVE_BRAKE_DECELERATION = 11
 const TRANSFORM_DRIVE_COAST_DECELERATION = 2.8
 const TRANSFORM_DRIVE_STEER_RATE = THREE.MathUtils.degToRad(96)
 const TRANSFORM_DRIVE_MIN_STEER_FACTOR = 0.32
 const TRANSFORM_DRIVE_MIN_SPEED_EPSILON = 1e-3
-const TRANSFORM_DRIVE_DIRECTION_CHANGE_DECELERATION = 9.5
 const TRANSFORM_DRIVE_STEER_TRACK_SPEED = 12
 const TRANSFORM_DRIVE_STEER_RELEASE_SPEED = 8
 const TRANSFORM_DRIVE_STEER_IDLE_FACTOR = 0.18
 const TRANSFORM_DRIVE_STEER_FULL_SPEED = 5.5
-const TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO = 0.45
+const TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO = 0.28
 
 function clampAxisScalar(value: number): number {
   if (!Number.isFinite(value)) {
@@ -365,10 +353,6 @@ export class VehicleDriveController {
     objectUuid: null as string | null,
     placement: null as VehicleFollowPlacement | null,
   }
-  private speedGovernorScale = 1
-  private speedGovernorBrakeAssist = 0
-  private speedGovernorSmoothedForwardSpeedAbs = 0
-  private speedGovernorOverHardCap = false
 
   private followCameraVelocityHasSample = false
   private readonly followCameraVelocity = new THREE.Vector3()
@@ -553,13 +537,6 @@ export class VehicleDriveController {
     this.smoothStopState.initialSpeedSq = VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ
   }
 
-  private resetSpeedGovernor(): void {
-    this.speedGovernorScale = 1
-    this.speedGovernorBrakeAssist = 0
-    this.speedGovernorSmoothedForwardSpeedAbs = 0
-    this.speedGovernorOverHardCap = false
-  }
-
   resetInputs(): void {
     const flags = this.inputFlags
     flags.forward = false
@@ -683,36 +660,7 @@ export class VehicleDriveController {
     this.transformDriveState.yaw = this.extractWorldYawRadians(object)
   }
 
-  private resolveTransformDriveSpeedCaps(nodeId: string): { forward: number; reverse: number } {
-    let forward = TRANSFORM_DRIVE_MAX_FORWARD_SPEED
-    try {
-      const node = this.deps.resolveNodeById(nodeId) ?? null
-      if (node) {
-        const pureComp = node.components?.[PURE_PURSUIT_COMPONENT_TYPE] as any
-        if (pureComp && pureComp.enabled) {
-          const pureProps = clampPurePursuitComponentProps(pureComp.props ?? null)
-          if (Number.isFinite(pureProps.maxSpeedMps) && pureProps.maxSpeedMps > 0) {
-            forward = Math.min(forward, pureProps.maxSpeedMps)
-          }
-        }
-        const autoComp = node.components?.[AUTO_TOUR_COMPONENT_TYPE] as any
-        if (autoComp && autoComp.enabled) {
-          const autoProps = clampAutoTourComponentProps(autoComp.props ?? null)
-          if (Number.isFinite(autoProps.maxSpeedMps) && autoProps.maxSpeedMps > 0) {
-            forward = Math.min(forward, autoProps.maxSpeedMps)
-          }
-        }
-      }
-    } catch {
-      forward = TRANSFORM_DRIVE_MAX_FORWARD_SPEED
-    }
-
-    forward = Math.max(2.5, forward)
-    const reverse = Math.max(1.5, Math.min(TRANSFORM_DRIVE_MAX_REVERSE_SPEED, forward * TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO))
-    return { forward, reverse }
-  }
-
-  private resolveManualDriveSpeedCaps(nodeId: string): { softCap: number; hardCap: number } {
+  private resolveManualDriveSpeedCaps(nodeId: string): { softCap: number; hardCap: number; reverseCap: number } {
     let hardCap = Number.POSITIVE_INFINITY
     try {
       const node = this.deps.resolveNodeById(nodeId) ?? null
@@ -746,15 +694,27 @@ export class VehicleDriveController {
 
     if (Number.isFinite(hardCap) && hardCap > 0) {
       const normalizedHardCap = Math.max(0.1, hardCap)
+      const reverseCap = Math.max(1.5, Math.min(TRANSFORM_DRIVE_MAX_REVERSE_SPEED, normalizedHardCap * TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO))
       return {
         hardCap: normalizedHardCap,
         softCap: Math.max(0.1, normalizedHardCap * VEHICLE_SPEED_GOVERNOR_SOFT_RATIO),
+        reverseCap,
       }
     }
     return {
       softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP,
       hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP,
+      reverseCap: Math.max(1.5, Math.min(TRANSFORM_DRIVE_MAX_REVERSE_SPEED, DEFAULT_VEHICLE_SPEED_HARD_CAP * TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO)),
     }
+  }
+
+  private resolveManualDriveTargetSpeed(throttle: number, speedCaps: { hardCap: number; reverseCap: number }): number {
+    const normalizedThrottle = THREE.MathUtils.clamp(throttle, -1, 1)
+    if (Math.abs(normalizedThrottle) <= 1e-6) {
+      return 0
+    }
+    const cap = normalizedThrottle >= 0 ? speedCaps.hardCap : speedCaps.reverseCap
+    return normalizedThrottle * Math.max(0, cap)
   }
 
   prepareTarget(nodeId: string | null | undefined): VehicleDriveTargetReadiness {
@@ -869,8 +829,7 @@ export class VehicleDriveController {
     this.resetFollowCameraOffset()
     this.clearFollowCameraPlacementCache()
     this.resetInputs()
-    this.resetSpeedGovernor()
-        if (this.deps.setCameraViewState) {
+    if (this.deps.setCameraViewState) {
       this.deps.setCameraViewState('watching', targetNodeId)
     }
     if (this.deps.setCameraCaging) {
@@ -894,7 +853,6 @@ export class VehicleDriveController {
     // The runtime vehicle keeps the last engine/brake/steer command values until we overwrite them.
     // Clear all control state and forcibly stop the chassis body to guarantee that exiting drive leaves the vehicle static.
     this.resetInputs()
-    this.resetSpeedGovernor()
     if (instance?.vehicle) {
       try {
         applyPhysicsVehicleWheelControl(instance.vehicle, {
@@ -969,6 +927,17 @@ export class VehicleDriveController {
     }
     const nodeId = state.nodeId
     const vehicleInstanceForMode = this.deps.vehicleInstances.get(nodeId) ?? null
+    const throttleInput = THREE.MathUtils.clamp(this.input.throttle, -1, 1)
+    const steeringInputRaw = this.input.steering
+    const brakeInputRaw = this.input.brake
+    const speedCaps = state.nodeId
+      ? this.resolveManualDriveSpeedCaps(state.nodeId)
+      : {
+        softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP,
+        hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP,
+        reverseCap: Math.max(1.5, Math.min(TRANSFORM_DRIVE_MAX_REVERSE_SPEED, DEFAULT_VEHICLE_SPEED_HARD_CAP * TRANSFORM_DRIVE_MAX_REVERSE_SPEED_RATIO)),
+      }
+    const targetSpeedMps = this.resolveManualDriveTargetSpeed(throttleInput, speedCaps)
     if (!state.vehicle || this.deps.isPhysicsEnabled?.() === false) {
       if (state.vehicle && this.deps.isPhysicsEnabled?.() === false) {
         const vehicleObject = this.deps.nodeObjectMap.get(nodeId) ?? null
@@ -989,23 +958,14 @@ export class VehicleDriveController {
     const vehicle = instance.vehicle
     const chassisBody = vehicle.chassisBody ?? null
     const velocity = chassisBody?.velocity ?? null
-    let throttle = this.input.throttle
-    const steeringInput = this.input.steering
-    let brakeInput = this.input.brake
+    const steeringInput = steeringInputRaw
+    let brakeInput = brakeInputRaw
     const smoothStop = this.smoothStopState
     let speedSq = 0
     let forwardVelocity: number | null = null
-    let forwardSpeedAbs = 0
-    let sameDirection: boolean | null = null
-    let engineForce = 0
-    let speedForGovernor = 0
-    let softCap = DEFAULT_VEHICLE_SPEED_SOFT_CAP
-    let hardCap = DEFAULT_VEHICLE_SPEED_HARD_CAP
 
     if (velocity && chassisBody && instance.axisForward) {
       speedSq = velocity.lengthSquared()
-      const throttleSign = Math.sign(throttle)
-
       const dt = typeof deltaSeconds === 'number' && Number.isFinite(deltaSeconds)
         ? Math.max(0, Math.min(0.25, deltaSeconds))
         : 1 / 60
@@ -1025,70 +985,8 @@ export class VehicleDriveController {
       }
       forwardWorld.applyQuaternion(this.temp.tempQuaternion).normalize()
       forwardVelocity = velocity.x * forwardWorld.x + velocity.y * forwardWorld.y + velocity.z * forwardWorld.z
-      forwardSpeedAbs = Math.abs(forwardVelocity)
-
-      // Smooth speed reading to avoid tiny physics noise causing visible push-pull near caps.
-      const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
-      this.speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - this.speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
-      speedForGovernor = Math.max(forwardSpeedAbs, this.speedGovernorSmoothedForwardSpeedAbs)
-      const capState = state.nodeId
-        ? this.resolveManualDriveSpeedCaps(state.nodeId)
-        : { softCap: DEFAULT_VEHICLE_SPEED_SOFT_CAP, hardCap: DEFAULT_VEHICLE_SPEED_HARD_CAP }
-      softCap = capState.softCap
-      hardCap = capState.hardCap
-
-      if (Math.abs(throttle) > 0.05) {
-        smoothStop.active = false
-      }
-      const engineForceRaw = throttle * VEHICLE_ENGINE_FORCE
-      engineForce = engineForceRaw
-
-      // forwardSpeedAbs can be used for conditional logic if needed
-
-      // Smooth speed governor (preferred over directly editing velocity):
-      // - scales engine force down to 0 when approaching hard cap
-      // - applies a gentle brake assist only when above hard cap
-      // This avoids a physics "fight" that can cause oscillation under constant throttle.
-      sameDirection = throttleSign !== 0 ? Math.sign(forwardVelocity) === throttleSign : null
-      const acceleratingForward = !!(sameDirection && throttleSign !== 0)
-      if (acceleratingForward) {
-        const range = Math.max(0.1, hardCap - softCap)
-        const excess = Math.max(0, speedForGovernor - softCap)
-        const t = Math.min(1, excess / range)
-        // Smoothstep (0..1), then invert to get scale (1..0)
-        const smooth = t * t * (3 - 2 * t)
-        const scaleTarget = Math.max(0, 1 - smooth)
-        const scaleAlpha = 1 - Math.exp(-14 * dt)
-        this.speedGovernorScale += (scaleTarget - this.speedGovernorScale) * scaleAlpha
-        engineForce *= this.speedGovernorScale
-
-        // Brake assist is only for sustained overspeed after engine force has already been scaled down.
-        // Keep a dead-band above the hard cap so the vehicle settles instead of point-braking.
-        const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
-        const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
-        if (!this.speedGovernorOverHardCap) {
-          if (speedForGovernor > hardCapEnter) {
-            this.speedGovernorOverHardCap = true
-          }
-        } else if (speedForGovernor < hardCapExit) {
-          this.speedGovernorOverHardCap = false
-        }
-        const over = this.speedGovernorOverHardCap
-          ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
-          : 0
-        const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
-        const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
-        const brakeAlpha = 1 - Math.exp(-4 * dt)
-        this.speedGovernorBrakeAssist += (brakeTarget - this.speedGovernorBrakeAssist) * brakeAlpha
-      } else {
-        // Relax governor when not accelerating forward.
-        const relaxAlpha = 1 - Math.exp(-6 * dt)
-        this.speedGovernorScale += (1 - this.speedGovernorScale) * relaxAlpha
-        this.speedGovernorBrakeAssist += (0 - this.speedGovernorBrakeAssist) * relaxAlpha
-        this.speedGovernorOverHardCap = false
-      }
-
-      if (Math.abs(throttle) < 0.05) {
+      const currentForwardVelocity = forwardVelocity ?? 0
+      if (Math.abs(targetSpeedMps) < 0.05) {
         let damping = VEHICLE_COASTING_DAMPING
         if (smoothStop.active) {
           const startSpeedSq = Math.max(1e-4, smoothStop.initialSpeedSq)
@@ -1115,6 +1013,15 @@ export class VehicleDriveController {
         } else {
           speedSq = velocity.lengthSquared()
         }
+      } else {
+        smoothStop.active = false
+        const targetDelta = targetSpeedMps - currentForwardVelocity
+        if (Math.abs(targetDelta) > 1e-4) {
+          velocity.x += forwardWorld.x * targetDelta
+          velocity.y += forwardWorld.y * targetDelta
+          velocity.z += forwardWorld.z * targetDelta
+        }
+        speedSq = velocity.lengthSquared()
       }
 
     }
@@ -1127,10 +1034,10 @@ export class VehicleDriveController {
       steeringValue *= 1 - 0.45 * slowRatio
     }
     const baseBrakeForce = brakeInput * VEHICLE_BRAKE_FORCE
-    const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce + this.speedGovernorBrakeAssist))
+    const brakeForce = Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, baseBrakeForce))
     applyPhysicsVehicleWheelControl(vehicle, {
       steeringValue,
-      engineForce,
+      engineForce: 0,
       brakeForce,
       steerableWheelIndices: instance.steerableWheelIndices,
     })
@@ -1144,10 +1051,11 @@ export class VehicleDriveController {
     const dt = typeof deltaSeconds === 'number' && Number.isFinite(deltaSeconds)
       ? Math.max(0, Math.min(0.25, deltaSeconds))
       : 1 / 60
-    const throttle = this.input.throttle
+    const throttle = THREE.MathUtils.clamp(this.input.throttle, -1, 1)
     const steeringInput = THREE.MathUtils.clamp(this.input.steering, -1, 1)
     const brakeInput = THREE.MathUtils.clamp(this.input.brake, 0, 1)
-    const speedCaps = this.resolveTransformDriveSpeedCaps(nodeId)
+    const speedCaps = this.resolveManualDriveSpeedCaps(nodeId)
+    const targetSpeedMps = this.resolveManualDriveTargetSpeed(throttle, speedCaps)
     let speed = this.transformDriveState.speed
 
     const steeringTrackAlpha = 1 - Math.exp(-(Math.abs(steeringInput) > 0.001 ? TRANSFORM_DRIVE_STEER_TRACK_SPEED : TRANSFORM_DRIVE_STEER_RELEASE_SPEED) * dt)
@@ -1158,17 +1066,8 @@ export class VehicleDriveController {
 
     if (brakeInput > 0.001) {
       speed = THREE.MathUtils.damp(speed, 0, TRANSFORM_DRIVE_BRAKE_DECELERATION * brakeInput, dt)
-    } else if (Math.abs(throttle) > 0.05) {
-      const acceleratingReverse = throttle < 0
-      const throttleSign = Math.sign(throttle)
-      const speedSign = Math.sign(speed)
-      const accel = acceleratingReverse ? TRANSFORM_DRIVE_REVERSE_ACCELERATION : TRANSFORM_DRIVE_ACCELERATION
-      if (speedSign !== 0 && throttleSign !== 0 && speedSign !== throttleSign) {
-        speed = THREE.MathUtils.damp(speed, 0, TRANSFORM_DRIVE_DIRECTION_CHANGE_DECELERATION, dt)
-      } else {
-        speed += throttle * accel * dt
-      }
-      speed = THREE.MathUtils.clamp(speed, -speedCaps.reverse, speedCaps.forward)
+    } else if (Math.abs(targetSpeedMps) > 0.05) {
+      speed = THREE.MathUtils.clamp(targetSpeedMps, -speedCaps.reverseCap, speedCaps.hardCap)
     } else {
       let decel = TRANSFORM_DRIVE_COAST_DECELERATION
       if (this.smoothStopState.active) {
@@ -1185,12 +1084,12 @@ export class VehicleDriveController {
     }
 
     const absSpeed = Math.abs(speed)
-  const speedRatio = Math.min(1, absSpeed / Math.max(1, speedCaps.forward))
+    const speedRatio = Math.min(1, absSpeed / Math.max(1, speedCaps.hardCap))
     const steerFactor = THREE.MathUtils.lerp(1, TRANSFORM_DRIVE_MIN_STEER_FACTOR, speedRatio)
-  const steerDirection = speed < -TRANSFORM_DRIVE_MIN_SPEED_EPSILON ? -1 : 1
-  const steerSpeedBlend = Math.min(1, absSpeed / TRANSFORM_DRIVE_STEER_FULL_SPEED)
-  const steerAuthority = THREE.MathUtils.lerp(TRANSFORM_DRIVE_STEER_IDLE_FACTOR, 1, steerSpeedBlend)
-  this.transformDriveState.yaw += this.transformDriveState.steering * steerDirection * TRANSFORM_DRIVE_STEER_RATE * steerFactor * steerAuthority * dt
+    const steerDirection = speed < -TRANSFORM_DRIVE_MIN_SPEED_EPSILON ? -1 : 1
+    const steerSpeedBlend = Math.min(1, absSpeed / TRANSFORM_DRIVE_STEER_FULL_SPEED)
+    const steerAuthority = THREE.MathUtils.lerp(TRANSFORM_DRIVE_STEER_IDLE_FACTOR, 1, steerSpeedBlend)
+    this.transformDriveState.yaw += this.transformDriveState.steering * steerDirection * TRANSFORM_DRIVE_STEER_RATE * steerFactor * steerAuthority * dt
 
     object.updateMatrixWorld(true)
     object.getWorldPosition(this.transformDriveState.worldPosition)
@@ -1237,7 +1136,6 @@ export class VehicleDriveController {
       this.transformDriveState.velocityWorld.set(0, 0, 0)
       this.setObjectWorldPose(object, this.transformDriveState.worldPosition, this.transformDriveState.worldQuaternion)
       this.notifyVehicleObjectTransformUpdated(state.nodeId, object)
-      this.resetSpeedGovernor()
       this.bindings.cameraFollowState.initialized = false
       return true
     }
@@ -1302,7 +1200,6 @@ export class VehicleDriveController {
     rigidbody.object.position.copy(chassisPosition)
     rigidbody.object.quaternion.copy(temp.resetQuaternion)
     rigidbody.object.updateMatrixWorld(true)
-    this.resetSpeedGovernor()
     this.bindings.cameraFollowState.initialized = false
     return true
   }
