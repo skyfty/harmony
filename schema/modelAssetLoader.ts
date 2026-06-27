@@ -1,0 +1,127 @@
+import * as THREE from 'three'
+import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
+import type ResourceCache from './ResourceCache'
+import type { AssetCacheEntry } from './assetCache'
+import type { SceneNodeImportMetadata } from './core'
+
+let assetImportModulePromise: Promise<typeof import('./assetImport')> | null = null
+
+async function loadAssetImportModule(): Promise<typeof import('./assetImport')> {
+  if (!assetImportModulePromise) {
+    assetImportModulePromise = import('./assetImport')
+  }
+  return assetImportModulePromise
+}
+
+function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
+  const cloned = cloneSkinned(source)
+  const sourceAnimations = (source as unknown as { animations?: THREE.AnimationClip[] })?.animations ?? []
+
+  if (sourceAnimations.length) {
+    const animations = sourceAnimations.map((clip) => clip.clone())
+    ;(cloned as unknown as { animations?: THREE.AnimationClip[] }).animations = animations
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = animations.map((clip) => clip.name)
+    return cloned
+  }
+
+  const userDataAnimationNames = Array.isArray((source as any)?.userData?.__animations)
+    ? ((source as any).userData.__animations as string[]).filter((name) => typeof name === 'string' && name.trim().length)
+    : []
+  if (userDataAnimationNames.length) {
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = [...userDataAnimationNames]
+  }
+
+  return cloned
+}
+
+export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
+  const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`
+  const mimeType = entry.mimeType ?? 'application/octet-stream'
+
+  if (entry.blob instanceof File) {
+    return entry.blob
+  }
+
+  if (entry.blob) {
+    try {
+      return new File([entry.blob], filename, { type: mimeType })
+    } catch (_error) {
+      /* noop */
+    }
+  }
+
+  return null
+}
+
+export async function loadAssetObject(resourceCache: ResourceCache, assetId: string): Promise<THREE.Object3D | null> {
+  if (!assetId) {
+    return null
+  }
+  const entry = await resourceCache.acquireAssetEntry(assetId)
+  if (!entry) {
+    return null
+  }
+  const file = createFileFromEntry(assetId, entry)
+  if (!file) {
+    return null
+  }
+  try {
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    const { loadObjectFromFile } = await loadAssetImportModule()
+    const object = await loadObjectFromFile(file, ext)
+    return object
+  } catch (error) {
+    console.warn('[ModelAssetLoader] Failed to parse asset object', assetId, error)
+    return null
+  }
+}
+
+export function findObjectByPath(root: THREE.Object3D, path: number[] | null | undefined): THREE.Object3D | null {
+  if (!Array.isArray(path) || !path.length) {
+    return root
+  }
+  let current: THREE.Object3D | undefined = root
+  for (const segment of path) {
+    if (!current) {
+      return null
+    }
+    const index = Number.isInteger(segment) ? segment : Number.NaN
+    if (!Number.isFinite(index) || index < 0 || index >= current.children.length) {
+      return null
+    }
+    current = current.children[index]
+  }
+  return current ?? null
+}
+
+export async function loadNodeObject(
+  resourceCache: ResourceCache,
+  assetId: string,
+  metadata?: SceneNodeImportMetadata | null,
+): Promise<THREE.Object3D | null> {
+  const base = await loadAssetObject(resourceCache, assetId)
+  if (!base) {
+    return null
+  }
+  const target = findObjectByPath(base, metadata?.objectPath)
+  if (!target) {
+    return null
+  }
+  const cloned = cloneImportedObject(target)
+  const sourceAnimations = (base as unknown as { animations?: THREE.AnimationClip[] })?.animations ?? []
+  if (sourceAnimations.length && !(cloned as unknown as { animations?: THREE.AnimationClip[] })?.animations?.length) {
+    const animations = sourceAnimations.map((clip) => clip.clone())
+    ;(cloned as unknown as { animations?: THREE.AnimationClip[] }).animations = animations
+    cloned.userData = cloned.userData ?? {}
+    cloned.userData.__animations = animations.map((clip) => clip.name)
+    console.info('[ModelAssetLoader] Applied asset animations to node object', {
+      assetId,
+      objectPath: metadata?.objectPath ?? null,
+      targetName: target.name ?? null,
+      animationNames: animations.map((clip) => clip.name),
+    })
+  }
+  return cloned
+}
