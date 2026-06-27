@@ -650,6 +650,7 @@ export function applyPurePursuitVehicleControl(params: {
   longitudinalState.longitudinalErrorMps = speedTarget.speedTargetMps - forwardSignedSpeed
   longitudinalState.lastBrakeForce = brakeForce
 
+
   applyPhysicsVehicleWheelControl(vehicle, {
     steeringValue: finalSteeringRad,
     engineForce,

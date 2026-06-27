@@ -9362,7 +9362,6 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
           throttle: 0,
           brake: 0,
         };
-  console.log(bridgeInput.throttle, bridgeInput.brake);
 
   syncPhysicsBridgeVehicleInput({
     state: physicsBridgeVehicleInputSyncState,
