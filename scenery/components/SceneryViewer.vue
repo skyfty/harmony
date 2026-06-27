@@ -9295,7 +9295,6 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
 
   // 将最大速度从 km/h 转换为 m/s；自动导览优先使用 AutoTour.maxSpeedMps 作为速度上限。
   const vehicleMaxSpeedMps = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : 0;
-  console.log(vehicleMaxSpeedMps, cappedDesiredSpeedMps, forwardSpeedMps);
 
   // 计算归一化油门值（范围 [-1, 1]）：
   // 自动巡游模式下改为闭环控速：根据“目标速度 - 当前前进速度”计算油门，并在超速时辅助制动。
@@ -9363,7 +9362,7 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
           throttle: 0,
           brake: 0,
         };
-    console.log(vehicleDriveInput,bridgeInput);
+  console.log(bridgeInput.throttle, bridgeInput.brake);
 
   syncPhysicsBridgeVehicleInput({
     state: physicsBridgeVehicleInputSyncState,

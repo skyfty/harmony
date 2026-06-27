@@ -102,12 +102,10 @@ export function resolvePathFollowPlanarArrivalDistance(
   speedFactor: number,
 ): number {
   const safeSpeed = Math.max(0, Number.isFinite(speedMps) ? speedMps : 0)
-  const base = Math.max(0, minDistance)
-  const computed = Math.min(
-    Math.max(base, maxDistance),
-    Math.max(base, safeSpeed * Math.max(0, speedFactor)),
-  )
-  return Math.max(0, computed)
+  const min = Math.max(0, Math.min(minDistance, maxDistance))
+  const max = Math.max(min, Math.max(minDistance, maxDistance))
+  const scaled = safeSpeed * Math.max(0, speedFactor)
+  return Math.max(min, Math.min(max, Number.isFinite(scaled) ? scaled : min))
 }
 
 export function resolvePathFollowLookaheadDistance(options: {
