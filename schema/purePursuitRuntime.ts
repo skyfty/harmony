@@ -485,6 +485,7 @@ export function applyPurePursuitVehicleControl(params: {
     chassisBody.angularVelocity.z *= 0.85
   }
 
+  console.log("44444444444444444", engineForce, brakeForce)
   // 将最终控制量下发给车辆物理轮组。
   applyPhysicsVehicleWheelControl(vehicle, {
     steeringValue: steeringRad,
