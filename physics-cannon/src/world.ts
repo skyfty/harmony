@@ -728,7 +728,6 @@ export class CannonPhysicsWorld {
         VEHICLE_BRAKE_FORCE,
         Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
       )
-      
       const vehicle = state.vehicle
       const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
       const steerableWheelIndices = new Set(state.steerableWheelIndices)
