@@ -9259,12 +9259,8 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
     : Number.POSITIVE_INFINITY;
 
   // 自动巡游目标速度（米/秒），不使用时为 null
-  const desiredSpeedMps = useDesiredTargets && typeof instance.vehicle.autoTourTargetSpeedMps === 'number'
-    ? Math.max(0, instance.vehicle.autoTourTargetSpeedMps) // 速度不允许为负
-    : null;
-  const cappedDesiredSpeedMps = desiredSpeedMps != null
-    ? Math.min(desiredSpeedMps, Number.isFinite(autoTourMaxSpeedMps) ? Math.max(0, autoTourMaxSpeedMps) : desiredSpeedMps)
-    : null;
+  const desiredSpeedMps = Math.max(0, instance.vehicle.autoTourTargetSpeedMps);
+  const cappedDesiredSpeedMps = Math.min(desiredSpeedMps, Number.isFinite(autoTourMaxSpeedMps) ? Math.max(0, autoTourMaxSpeedMps) : desiredSpeedMps);
   const chassisBody = instance.vehicle.chassisBody ?? null;
   let forwardSpeedMps = 0;
   if (chassisBody && instance.axisForward) {
@@ -9286,9 +9282,7 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
   }
 
   // 自动巡游目标转向角（弧度），不使用时为 null
-  const desiredSteeringRad = useDesiredTargets && typeof instance.vehicle.autoTourTargetSteeringRad === 'number'
-    ? instance.vehicle.autoTourTargetSteeringRad
-    : null;
+  const desiredSteeringRad = useDesiredTargets ? instance.vehicle.autoTourTargetSteeringRad : null;
 
   // 将最大转向角从角度转换为弧度，至少保证 1 度防止除零
   const maxSteerRad = THREE.MathUtils.degToRad(Math.max(1, vehicleProps.maxSteerDegrees));
@@ -9303,36 +9297,19 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
 
   // 将最大速度从 km/h 转换为 m/s；自动导览优先使用 AutoTour.maxSpeedMps 作为速度上限。
   const vehicleMaxSpeedMps = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : 0;
+  console.log(vehicleMaxSpeedMps, cappedDesiredSpeedMps, forwardSpeedMps);
 
   // 计算归一化油门值（范围 [-1, 1]）：
   // 自动巡游模式下改为闭环控速：根据“目标速度 - 当前前进速度”计算油门，并在超速时辅助制动。
   // 手动模式下以最大引擎力与配置最大引擎力的比值作为油门
-  const throttle = cappedDesiredSpeedMps != null && vehicleMaxSpeedMps > 0
-    ? THREE.MathUtils.clamp(
-      (cappedDesiredSpeedMps - forwardSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.65),
-      0,
-      1,
-    )
-    : vehicleProps.engineForceMax > 0
-      ? THREE.MathUtils.clamp(maxEngineForce / vehicleProps.engineForceMax, -1, 1)
-      : 0;
+  const throttle = vehicleMaxSpeedMps > 0
+    ? THREE.MathUtils.clamp((cappedDesiredSpeedMps - forwardSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.65),  0, 1)
+    : vehicleProps.engineForceMax > 0 ? THREE.MathUtils.clamp(maxEngineForce / vehicleProps.engineForceMax, -1, 1) : 0;
 
   // 计算归一化刹车值（范围 [0, 1]）：
   // 自动巡游巡航时在超速时使用刹车辅助，避免只给油不收油导致速度飙升。
   // 手动/非目标控制路径仍以最大刹车力与配置最大刹车力的比值作为刹车值。
-  const brake = cappedDesiredSpeedMps != null
-    ? cappedDesiredSpeedMps <= 0.1
-      ? 1
-      : THREE.MathUtils.clamp(
-        (forwardSpeedMps - cappedDesiredSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.5),
-        0,
-        1,
-      )
-    : vehicleProps.brakeForceMax > 0
-      ? THREE.MathUtils.clamp(maxBrakeForce / vehicleProps.brakeForceMax, 0, 1)
-      : 0;
-
- 
+ const brake = cappedDesiredSpeedMps <= 0.1 ? 1 : THREE.MathUtils.clamp( (forwardSpeedMps - cappedDesiredSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.5), 0, 1);
   // 返回最终的车辆控制输入：转向、油门、刹车
   return {
     steering,
@@ -9388,6 +9365,8 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
           throttle: 0,
           brake: 0,
         };
+    console.log(vehicleDriveInput,bridgeInput);
+
   syncPhysicsBridgeVehicleInput({
     state: physicsBridgeVehicleInputSyncState,
     bridge: physicsBridge,
