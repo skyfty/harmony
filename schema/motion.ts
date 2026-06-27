@@ -12,12 +12,6 @@ export { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from 
 export { createBridgeVehicleProxy } from './bridgeVehicleProxy'
 export { FollowCameraController, computeFollowLerpAlpha, computeFollowPlacement, createCameraFollowState, getApproxDimensions, resetCameraFollowState } from './followCameraController'
 export { holdVehicleBrakeSafe, updateVehicleSpeedAndApplyParkingHoldSafe, VEHICLE_PARKED_SPEED_EPSILON, VEHICLE_PARKING_HOLD_SPEED_EPSILON, applyPurePursuitVehicleControl, applyPurePursuitVehicleControlSafe } from './purePursuitRuntime'
-export {
-  createVehicleLongitudinalControlState,
-  resetVehicleLongitudinalControlState,
-  resolveVehicleLongitudinalThrottle,
-} from './vehicleLongitudinalControl'
-export type { VehicleLongitudinalControlState } from './vehicleLongitudinalControl'
 export * from './physicsBridgeVehicleInputSync'
 export * from './polylineProgress'
 export * from './pathFollowCommon'

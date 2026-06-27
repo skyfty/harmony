@@ -911,18 +911,14 @@ import type {
   VehicleDriveRuntimeState,
   VehicleInstance,
   VehicleDriveVehicle,
-  VehicleLongitudinalControlState,
 } from '@harmony/schema/motion';
 import {
   FollowCameraController,
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
-  createVehicleLongitudinalControlState,
   getApproxDimensions,
   resetCameraFollowState,
-  resetVehicleLongitudinalControlState,
-  resolveVehicleLongitudinalThrottle,
 } from '@harmony/schema/motion';
 import type { CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
 import {
@@ -3131,7 +3127,6 @@ const vehicleDriveInput = reactive<VehicleDriveInputState>({
   steering: 0,
   brake: 0,
 });
-const vehicleLongitudinalControlStates = new Map<string, VehicleLongitudinalControlState>();
 const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('follow');
 const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow');
 const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
@@ -9210,10 +9205,7 @@ function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: P
   instance.hasChassisPositionSample = false;
 }
 
-function resolveSceneryPhysicsBridgeVehicleControlInput(
-  nodeId: string,
-  deltaSeconds: number,
-): PhysicsBridgeVehicleControlInput | null {
+function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): PhysicsBridgeVehicleControlInput | null {
   // 根据节点ID从车辆实例映射表中获取对应的车辆实例
   const instance = vehicleInstances.get(nodeId) ?? null;
   if (!instance) {
@@ -9312,33 +9304,30 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(
   // 将最大速度从 km/h 转换为 m/s；自动导览优先使用 AutoTour.maxSpeedMps 作为速度上限。
   const vehicleMaxSpeedMps = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : 0;
 
-  let throttle = 0;
-  if (cappedDesiredSpeedMps != null) {
-    let speedControlState = vehicleLongitudinalControlStates.get(nodeId);
-    if (!speedControlState) {
-      speedControlState = createVehicleLongitudinalControlState();
-      vehicleLongitudinalControlStates.set(nodeId, speedControlState);
-    }
-    throttle = resolveVehicleLongitudinalThrottle({
-      state: speedControlState,
-      targetSpeedMps: cappedDesiredSpeedMps,
-      currentForwardSpeedMps: forwardSpeedMps,
-      maxSpeedMps: vehicleMaxSpeedMps,
-      deltaSeconds,
-    });
-  } else {
-    const existingSpeedControlState = vehicleLongitudinalControlStates.get(nodeId);
-    if (existingSpeedControlState) {
-      resetVehicleLongitudinalControlState(existingSpeedControlState);
-    }
-    throttle = vehicleProps.engineForceMax > 0
+  // 计算归一化油门值（范围 [-1, 1]）：
+  // 自动巡游模式下改为闭环控速：根据“目标速度 - 当前前进速度”计算油门，并在超速时辅助制动。
+  // 手动模式下以最大引擎力与配置最大引擎力的比值作为油门
+  const throttle = cappedDesiredSpeedMps != null && vehicleMaxSpeedMps > 0
+    ? THREE.MathUtils.clamp(
+      (cappedDesiredSpeedMps - forwardSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.65),
+      0,
+      1,
+    )
+    : vehicleProps.engineForceMax > 0
       ? THREE.MathUtils.clamp(maxEngineForce / vehicleProps.engineForceMax, -1, 1)
       : 0;
-  }
 
-  // 自动巡游巡航阶段不使用刹车，避免“超速就急刹”的突兀感。
+  // 计算归一化刹车值（范围 [0, 1]）：
+  // 自动巡游巡航时在超速时使用刹车辅助，避免只给油不收油导致速度飙升。
+  // 手动/非目标控制路径仍以最大刹车力与配置最大刹车力的比值作为刹车值。
   const brake = cappedDesiredSpeedMps != null
-    ? 0
+    ? cappedDesiredSpeedMps <= 0.1
+      ? 1
+      : THREE.MathUtils.clamp(
+        (forwardSpeedMps - cappedDesiredSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.5),
+        0,
+        1,
+      )
     : vehicleProps.brakeForceMax > 0
       ? THREE.MathUtils.clamp(maxBrakeForce / vehicleProps.brakeForceMax, 0, 1)
       : 0;
@@ -9375,7 +9364,7 @@ function resolveSceneryPhysicsBridgeAutoTourNodeId(): string | null {
   return activeAutoTourNodeIds.values().next().value ?? null;
 }
 
-function syncSceneryPhysicsBridgeVehicleInput(deltaSeconds: number): void {
+function syncSceneryPhysicsBridgeVehicleInput(): void {
   const manualDriveNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   const autoTourNodeId = !manualDriveNodeId ? resolveSceneryPhysicsBridgeAutoTourNodeId() : null;
   const autoTourControlledNodeId = manualDriveNodeId && activeAutoTourNodeIds.has(manualDriveNodeId)
@@ -9383,7 +9372,7 @@ function syncSceneryPhysicsBridgeVehicleInput(deltaSeconds: number): void {
     : autoTourNodeId;
   const bridgeActiveNodeId = autoTourControlledNodeId ?? manualDriveNodeId;
   const bridgeInput: PhysicsBridgeVehicleControlInput = autoTourControlledNodeId
-    ? resolveSceneryPhysicsBridgeVehicleControlInput(autoTourControlledNodeId, deltaSeconds) ?? {
+    ? resolveSceneryPhysicsBridgeVehicleControlInput(autoTourControlledNodeId) ?? {
         steering: 0,
         throttle: 0,
         brake: 1,
@@ -18323,7 +18312,7 @@ function startRenderLoop(
             }
           }
           stepPhysicsWorld(deltaSeconds);
-          syncSceneryPhysicsBridgeVehicleInput(deltaSeconds);
+          syncSceneryPhysicsBridgeVehicleInput();
           syncSceneryPhysicsBridgeCharacterInput();
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
