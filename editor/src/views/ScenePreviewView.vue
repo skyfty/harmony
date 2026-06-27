@@ -9498,7 +9498,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		transformDriveUpdated = !physicsEnvironmentEnabled.value
 	}
 	stepPhysicsWorld(delta)
-	syncScenePreviewPhysicsBridgeVehicleInput()
+	syncScenePreviewPhysicsBridgeVehicleInput(delta)
 	syncScenePreviewPhysicsBridgeCharacterInput(delta)
 	syncScenePreviewPhysicsBridgeBodyTransforms()
 	stepScenePreviewPhysicsBridge(delta)
@@ -11510,7 +11510,8 @@ function resetScenePreviewPhysicsBridgeVehicleLocalState(nodeId: string, transfo
 	instance.hasChassisPositionSample = false
 }
 
-function syncScenePreviewPhysicsBridgeVehicleInput(): void {
+function syncScenePreviewPhysicsBridgeVehicleInput(deltaSeconds: number): void {
+	void deltaSeconds;
 	syncPhysicsBridgeVehicleInput({
 		state: physicsBridgeVehicleInputSyncState,
 		bridge: physicsBridge,
