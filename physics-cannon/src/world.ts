@@ -652,6 +652,7 @@ export class CannonPhysicsWorld {
       const brakeInput = clamp(input?.brake ?? 0, 0, 1)
       // 手刹输入，范围[0, 1]
       const handbrakeInput = clamp(input?.handbrake ?? 0, 0, 1)
+      const useEngineOnlySpeedGovernor = true
 
       // 实际转向角度
       const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
@@ -682,24 +683,31 @@ export class CannonPhysicsWorld {
           state.speedGovernorScale += (scaleTarget - state.speedGovernorScale) * scaleAlpha
           engineForce *= state.speedGovernorScale
 
-          const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
-          const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
-          if (!state.speedGovernorOverHardCap) {
-            if (speedForGovernor > hardCapEnter) {
-              state.speedGovernorOverHardCap = true
-            }
-          } else if (speedForGovernor < hardCapExit) {
+          if (useEngineOnlySpeedGovernor) {
+            const relaxAlpha = 1 - Math.exp(-6 * dt)
+            state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
             state.speedGovernorOverHardCap = false
-          }
+            brakeAssist = state.speedGovernorBrakeAssist
+          } else {
+            const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
+            const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
+            if (!state.speedGovernorOverHardCap) {
+              if (speedForGovernor > hardCapEnter) {
+                state.speedGovernorOverHardCap = true
+              }
+            } else if (speedForGovernor < hardCapExit) {
+              state.speedGovernorOverHardCap = false
+            }
 
-          const over = state.speedGovernorOverHardCap
-            ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
-            : 0
-          const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
-          const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
-          const brakeAlpha = 1 - Math.exp(-4 * dt)
-          state.speedGovernorBrakeAssist += (brakeTarget - state.speedGovernorBrakeAssist) * brakeAlpha
-          brakeAssist = state.speedGovernorBrakeAssist
+            const over = state.speedGovernorOverHardCap
+              ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
+              : 0
+            const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
+            const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
+            const brakeAlpha = 1 - Math.exp(-4 * dt)
+            state.speedGovernorBrakeAssist += (brakeTarget - state.speedGovernorBrakeAssist) * brakeAlpha
+            brakeAssist = state.speedGovernorBrakeAssist
+          }
         } else {
           const relaxAlpha = 1 - Math.exp(-6 * dt)
           state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha
@@ -725,7 +733,7 @@ export class CannonPhysicsWorld {
       const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
       const steerableWheelIndices = new Set(state.steerableWheelIndices)
       for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
-        const applyControlToWheel =  steerableWheelIndices.has(wheelIndex)
+        const applyControlToWheel = steerableWheelIndices.has(wheelIndex)
         vehicle.setSteeringValue(applyControlToWheel ? steeringValue : 0, wheelIndex)
         vehicle.applyEngineForce(applyControlToWheel ? engineForce : 0, wheelIndex)
         vehicle.setBrake(brakeForce, wheelIndex)

@@ -881,6 +881,7 @@ import {
 import {
   autoTourComponentDefinition,
   AUTO_TOUR_COMPONENT_TYPE,
+  clampAutoTourComponentProps,
   cloneAutoTourComponentProps,
   type AutoTourComponentProps,
 } from '@harmony/schema/components/definitions/autoTourComponent';
@@ -3482,6 +3483,7 @@ const autoTourCameraFollowVelocity = new THREE.Vector3();
 const autoTourCameraFollowVelocityScratch = new THREE.Vector3();
 const autoTourCameraFollowAnchorScratch = new THREE.Vector3();
 const autoTourCameraFollowForwardScratch = new THREE.Vector3();
+const autoTourCameraFollowQuaternionScratch = new THREE.Quaternion();
 const autoTourCameraFollowBox = new THREE.Box3();
 const AUTO_TOUR_RESUME_BLEND_SECONDS = 0.28;
 const autoTourPausedCameraPosition = new THREE.Vector3();
@@ -3505,6 +3507,27 @@ let autoTourCameraFollowHasSample = false;
 let autoTourActiveSyncAccumSeconds = 0;
 const autoTourRotationOnlyHold = ref(false);
 let autoTourLastAnyActive = false;
+// Auto-tour needs a tighter follow profile than the generic controller so turns
+// stay framed instead of letting the vehicle outrun the camera.
+const AUTO_TOUR_CAMERA_FOLLOW_TUNING = {
+  distanceMin: 1.2,
+  distanceMax: 14,
+  heightMin: 4.5,
+  positionLerpSpeed: 5.8,
+  targetLerpSpeed: 7.2,
+  headingLerpSpeed: 4.8,
+  anchorLerpSpeed: 6.2,
+  lookaheadTime: 0.16,
+  lookaheadDistanceMax: 1.8,
+  lookaheadMinSpeedSq: 0.36,
+  lookaheadBlendStart: 0.35,
+  lookaheadBlendSpeed: 4.2,
+  motionSpeedThreshold: 0.9,
+  motionSpeedFull: 5.5,
+  motionBlendSpeed: 3.2,
+  motionDistanceBoost: 0.12,
+  motionHeightBoost: 0.08,
+};
 
 function applyAutoTourCameraInputPolicy(): void {
   if (vehicleDriveActive.value) {
@@ -3562,16 +3585,49 @@ function clearAutoTourResumeBlendState(): void {
   autoTourResumeBlendNodeId = null;
 }
 
+function resolveAutoTourVehicleForwardWorld(
+  nodeId: string,
+  object: THREE.Object3D,
+  target: THREE.Vector3,
+): boolean {
+  const instance = vehicleInstances.get(nodeId) ?? null;
+  const axisForward = instance?.axisForward ?? null;
+  if (!axisForward || axisForward.lengthSq() < 1e-8) {
+    return false;
+  }
+
+  const chassisQuaternion = physicsEnvironmentEnabled.value
+    ? instance?.vehicle?.chassisBody?.quaternion ?? null
+    : null;
+  if (chassisQuaternion) {
+    autoTourCameraFollowQuaternionScratch
+      .set(chassisQuaternion.x, chassisQuaternion.y, chassisQuaternion.z, chassisQuaternion.w)
+      .normalize();
+  } else {
+    object.getWorldQuaternion(autoTourCameraFollowQuaternionScratch).normalize();
+  }
+
+  target.copy(axisForward).applyQuaternion(autoTourCameraFollowQuaternionScratch);
+  target.y = 0;
+  if (target.lengthSq() < 1e-8) {
+    return false;
+  }
+  target.normalize();
+  return true;
+}
+
 function prepareAutoTourResumeBlendContext(
   targetNodeId: string,
   object: THREE.Object3D,
   context: RenderContext,
 ): CameraFollowPlacement {
   autoTourCameraFollowForwardScratch.set(0, 0, 0);
-  const chassisBody = vehicleInstances.get(targetNodeId)?.vehicle?.chassisBody ?? null;
-  const velocity = chassisBody?.velocity ?? null;
-  if (velocity) {
-    autoTourCameraFollowForwardScratch.set(velocity.x, 0, velocity.z);
+  if (!resolveAutoTourVehicleForwardWorld(targetNodeId, object, autoTourCameraFollowForwardScratch)) {
+    const chassisBody = vehicleInstances.get(targetNodeId)?.vehicle?.chassisBody ?? null;
+    const velocity = chassisBody?.velocity ?? null;
+    if (velocity) {
+      autoTourCameraFollowForwardScratch.set(velocity.x, 0, velocity.z);
+    }
   }
   if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
     object.getWorldDirection(autoTourCameraFollowForwardScratch);
@@ -9196,10 +9252,38 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
   const useDesiredTargets = activeAutoTourNodeIds.has(nodeId);
   // 仅当自动巡游激活且当前节点不被手动驾驶占用时，才使用自动巡游的目标控制值
 
+  // 自动巡游组件自身的速度上限，优先作为最终目标速度的约束。
+  const autoTourComponent = useDesiredTargets ? resolveAutoTourComponent(resolveNodeById(nodeId)) : null;
+  const autoTourMaxSpeedMps = autoTourComponent?.props
+    ? clampAutoTourComponentProps(autoTourComponent.props).maxSpeedMps
+    : Number.POSITIVE_INFINITY;
+
   // 自动巡游目标速度（米/秒），不使用时为 null
   const desiredSpeedMps = useDesiredTargets && typeof instance.vehicle.autoTourTargetSpeedMps === 'number'
     ? Math.max(0, instance.vehicle.autoTourTargetSpeedMps) // 速度不允许为负
     : null;
+  const cappedDesiredSpeedMps = desiredSpeedMps != null
+    ? Math.min(desiredSpeedMps, Number.isFinite(autoTourMaxSpeedMps) ? Math.max(0, autoTourMaxSpeedMps) : desiredSpeedMps)
+    : null;
+  const chassisBody = instance.vehicle.chassisBody ?? null;
+  let forwardSpeedMps = 0;
+  if (chassisBody && instance.axisForward) {
+    vehicleCompassQuaternion.set(
+      chassisBody.quaternion.x,
+      chassisBody.quaternion.y,
+      chassisBody.quaternion.z,
+      chassisBody.quaternion.w,
+    );
+    vehicleCompassForward.copy(instance.axisForward).applyQuaternion(vehicleCompassQuaternion);
+    if (vehicleCompassForward.lengthSq() > 1e-8) {
+      vehicleCompassForward.normalize();
+      forwardSpeedMps = (
+        chassisBody.velocity.x * vehicleCompassForward.x
+        + chassisBody.velocity.y * vehicleCompassForward.y
+        + chassisBody.velocity.z * vehicleCompassForward.z
+      );
+    }
+  }
 
   // 自动巡游目标转向角（弧度），不使用时为 null
   const desiredSteeringRad = useDesiredTargets && typeof instance.vehicle.autoTourTargetSteeringRad === 'number'
@@ -9217,23 +9301,33 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
     ? THREE.MathUtils.clamp(steeringSum / steeringCount / Math.max(1e-6, maxSteerRad), -1, 1)
     : 0;
 
-  // 将最大速度从 km/h 转换为 m/s
+  // 将最大速度从 km/h 转换为 m/s；自动导览优先使用 AutoTour.maxSpeedMps 作为速度上限。
   const vehicleMaxSpeedMps = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : 0;
 
   // 计算归一化油门值（范围 [-1, 1]）：
-  // 自动巡游模式下以目标速度与最大速度的比值作为油门；
+  // 自动巡游模式下改为闭环控速：根据“目标速度 - 当前前进速度”计算油门，并在超速时辅助制动。
   // 手动模式下以最大引擎力与配置最大引擎力的比值作为油门
-  const throttle = desiredSpeedMps != null && vehicleMaxSpeedMps > 0
-    ? THREE.MathUtils.clamp(desiredSpeedMps / vehicleMaxSpeedMps, 0, 1)
+  const throttle = cappedDesiredSpeedMps != null && vehicleMaxSpeedMps > 0
+    ? THREE.MathUtils.clamp(
+      (cappedDesiredSpeedMps - forwardSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.65),
+      0,
+      1,
+    )
     : vehicleProps.engineForceMax > 0
       ? THREE.MathUtils.clamp(maxEngineForce / vehicleProps.engineForceMax, -1, 1)
       : 0;
 
   // 计算归一化刹车值（范围 [0, 1]）：
-  // 自动巡游模式下若目标速度 ≤ 0.1 m/s 则全力刹车；
-  // 否则以最大刹车力与配置最大刹车力的比值作为刹车值
-  const brake = desiredSpeedMps != null && desiredSpeedMps <= 0.1
-    ? 1
+  // 自动巡游巡航时在超速时使用刹车辅助，避免只给油不收油导致速度飙升。
+  // 手动/非目标控制路径仍以最大刹车力与配置最大刹车力的比值作为刹车值。
+  const brake = cappedDesiredSpeedMps != null
+    ? cappedDesiredSpeedMps <= 0.1
+      ? 1
+      : THREE.MathUtils.clamp(
+        (forwardSpeedMps - cappedDesiredSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.5),
+        0,
+        1,
+      )
     : vehicleProps.brakeForceMax > 0
       ? THREE.MathUtils.clamp(maxBrakeForce / vehicleProps.brakeForceMax, 0, 1)
       : 0;
@@ -14933,8 +15027,10 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     return;
   }
 
-  object.getWorldDirection(autoTourCameraFollowForwardScratch);
-  autoTourCameraFollowForwardScratch.y = 0;
+  if (!resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch)) {
+    object.getWorldDirection(autoTourCameraFollowForwardScratch);
+    autoTourCameraFollowForwardScratch.y = 0;
+  }
   if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
     autoTourCameraFollowForwardScratch.set(0, 0, 1);
   } else {
@@ -14954,9 +15050,10 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     autoTourCameraFollowVelocity.set(0, 0, 0);
   }
 
-  if (autoTourCameraFollowVelocity.lengthSq() > 1e-6) {
+  const hasVehicleForward = resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch);
+  if (!hasVehicleForward && autoTourCameraFollowVelocity.lengthSq() > 1e-6) {
     autoTourCameraFollowForwardScratch.set(autoTourCameraFollowVelocity.x, 0, autoTourCameraFollowVelocity.z);
-  } else {
+  } else if (!hasVehicleForward) {
     object.getWorldDirection(autoTourCameraFollowForwardScratch);
     autoTourCameraFollowForwardScratch.y = 0;
   }
@@ -14975,15 +15072,10 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     deltaSeconds,
     ctx: { camera: context.camera, mapControls: context.controls },
     immediate: Boolean(options.immediate),
-    smoothTargetForProgrammaticFollow: true,
-    tuning: {
-      headingLerpSpeed: 0.9,
-      targetLerpSpeed: 1.2,
-      positionLerpSpeed: 3.6,
-      anchorLerpSpeed: 2.4,
-      lookaheadBlendSpeed: 0.8,
-    },
-  });
+    smoothTargetForProgrammaticFollow: false,
+    tuning: AUTO_TOUR_CAMERA_FOLLOW_TUNING,
+  })
+
 
   autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
 }
@@ -15349,6 +15441,7 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
     deltaSeconds: 1 / 60,
     ctx: { camera: autoTourResumeBlendTempCamera, mapControls: autoTourResumeBlendTempControls },
     immediate: true,
+    tuning: AUTO_TOUR_CAMERA_FOLLOW_TUNING,
   });
 
   autoTourCameraFollowState.currentPosition.copy(autoTourResumeBlendStartPosition);

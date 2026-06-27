@@ -25,6 +25,10 @@ export type PurePursuitVehicleControlState = {
   reverseActive?: boolean
   longitudinalUseEngine?: boolean
   longitudinalModeSwitchAtMs?: number
+  speedGovernorScale?: number
+  speedGovernorBrakeAssist?: number
+  speedGovernorSmoothedForwardSpeedAbs?: number
+  speedGovernorOverHardCap?: boolean
 }
 
 export type PurePursuitVehicleControlResult = {
@@ -44,6 +48,12 @@ const purePursuitClosestPoint = new THREE.Vector3()
 const purePursuitTargetDelta = new THREE.Vector3()
 const yawTargetQuat = new THREE.Quaternion()
 const objectWorldQuat = new THREE.Quaternion()
+const PURE_PURSUIT_SPEED_GOVERNOR_SOFT_RATIO = 0.92
+const PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
+const PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
+const PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
+const PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_BAND = 1.8
+const PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) {
@@ -162,6 +172,7 @@ export function applyPurePursuitVehicleControl(params: {
   loop: boolean
   deltaSeconds: number
   speedMps: number
+  speedCapMps?: number
   pursuitProps: PurePursuitComponentProps
   vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState
@@ -313,8 +324,11 @@ export function applyPurePursuitVehicleControl(params: {
   // 转角越大，说明弯道越急，因此允许的目标速度应越低。
   const steerRatio = safeMaxSteer > 1e-6 ? Math.min(1, Math.abs(steeringRad) / safeMaxSteer) : 0
   const turnFactor = 1 / (1 + Math.max(0, pursuitProps.curvatureSpeedFactor) * steerRatio)
-  const componentMaxSpeed = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
-  const speed = Math.max(0, Math.min(speedMps, componentMaxSpeed))
+  // 传入速度表示期望巡航速度；PurePursuit 自身上限与外部速度上限会共同约束速度 governor。
+  const speed = Number.isFinite(speedMps) ? Math.max(0, speedMps) : 0
+  const componentSpeedCap = Number.isFinite(pursuitProps.maxSpeedMps) ? Math.max(0, pursuitProps.maxSpeedMps) : speed
+  const externalSpeedCap = Number.isFinite(params.speedCapMps) ? Math.max(0, params.speedCapMps!) : componentSpeedCap
+  const speedCap = Math.min(componentSpeedCap, externalSpeedCap)
   // 期望速度由输入速度和弯道降速因子共同决定，同时不低于最小速度。
   let speedTarget = Math.max(pursuitProps.minSpeedMps, speed * turnFactor)
   if (modeStopping) {
@@ -367,10 +381,70 @@ export function applyPurePursuitVehicleControl(params: {
     useEngine = desiredUseEngine
   }
   state.longitudinalUseEngine = useEngine
-  // 调试日志：帮助观察速度误差、控制量及最终油门/刹车选择。
-  // 将控制输出拆分为发动机力和刹车力。
+
+  // 巡航阶段只靠发动机力控速：目标速度以下给油，目标速度以上松油门滑行。
+  // 刹车仅用于 stopping/docking 等真正需要停车的阶段，避免高速时油门和刹车互相拉扯。
   let engineForce = useEngine ? Math.max(0, engineForceCmd) : 0
-  let brakeForce = useEngine ? 0 : Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax))
+  let brakeForce = !useEngine && modeStopping
+    ? Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax))
+    : 0
+
+  const hardCap = Math.max(0.1, speedCap)
+  const softCap = Math.max(0.1, hardCap * PURE_PURSUIT_SPEED_GOVERNOR_SOFT_RATIO)
+  const forwardSpeedAbs = Math.abs(forwardSignedSpeed)
+  let speedGovernorScale = typeof state.speedGovernorScale === 'number'
+    ? clamp01(state.speedGovernorScale)
+    : 1
+  let speedGovernorBrakeAssist = typeof state.speedGovernorBrakeAssist === 'number'
+    ? Math.max(0, state.speedGovernorBrakeAssist)
+    : 0
+  let speedGovernorSmoothedForwardSpeedAbs = typeof state.speedGovernorSmoothedForwardSpeedAbs === 'number'
+    ? Math.max(0, state.speedGovernorSmoothedForwardSpeedAbs)
+    : 0
+  let speedGovernorOverHardCap = state.speedGovernorOverHardCap === true
+
+  const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
+  speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
+  const speedForGovernor = Math.max(forwardSpeedAbs, speedGovernorSmoothedForwardSpeedAbs)
+  const acceleratingForward = engineForce > 0 && forwardSignedSpeed >= -0.05
+
+  if (acceleratingForward) {
+    const range = Math.max(0.1, hardCap - softCap)
+    const excess = Math.max(0, speedForGovernor - softCap)
+    const t = Math.min(1, excess / range)
+    const smooth = t * t * (3 - 2 * t)
+    const scaleTarget = Math.max(0, 1 - smooth)
+    const scaleAlpha = 1 - Math.exp(-14 * dt)
+    speedGovernorScale += (scaleTarget - speedGovernorScale) * scaleAlpha
+    engineForce *= speedGovernorScale
+  } else {
+    const relaxAlpha = 1 - Math.exp(-6 * dt)
+    speedGovernorScale += (1 - speedGovernorScale) * relaxAlpha
+  }
+
+  const hardCapEnter = hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
+  const hardCapExit = hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
+  if (!speedGovernorOverHardCap) {
+    if (speedForGovernor > hardCapEnter) {
+      speedGovernorOverHardCap = true
+    }
+  } else if (speedForGovernor < hardCapExit) {
+    speedGovernorOverHardCap = false
+  }
+
+  const over = speedGovernorOverHardCap
+    ? Math.max(0, speedForGovernor - (hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_DEADBAND))
+    : 0
+  const brakeRatio = Math.min(1, over / PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_BAND)
+  const governorBrakeTarget = brakeRatio * brakeForceMax * PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_MAX_RATIO
+  const brakeAlpha = 1 - Math.exp(-4 * dt)
+  speedGovernorBrakeAssist += (governorBrakeTarget - speedGovernorBrakeAssist) * brakeAlpha
+  brakeForce = Math.min(brakeForceMax, Math.max(brakeForce, speedGovernorBrakeAssist))
+
+  state.speedGovernorScale = speedGovernorScale
+  state.speedGovernorBrakeAssist = speedGovernorBrakeAssist
+  state.speedGovernorSmoothedForwardSpeedAbs = speedGovernorSmoothedForwardSpeedAbs
+  state.speedGovernorOverHardCap = speedGovernorOverHardCap
 
   // 接近终点时提前增加制动，避免进入停车区时速度过高。
   const brakeThreshold = Math.max(pursuitProps.brakeDistanceMinMeters, speed * pursuitProps.brakeDistanceSpeedFactor)
@@ -461,6 +535,7 @@ export function applyPurePursuitVehicleControlSafe(params: {
   loop: boolean
   deltaSeconds: number
   speedMps: number
+  speedCapMps?: number
   pursuitProps: PurePursuitComponentProps
   vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState

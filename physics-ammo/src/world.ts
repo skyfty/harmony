@@ -745,6 +745,7 @@ export class AmmoPhysicsWorld {
       const throttleInput = clamp(input?.throttle ?? 0, -1, 1)
       const brakeInput = clamp(input?.brake ?? 0, 0, 1)
       const handbrakeInput = clamp(input?.handbrake ?? 0, 0, 1)
+      const useEngineOnlySpeedGovernor = true
       const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
       const dt = Math.max(1 / 240, Math.min(0.25, this.worldSettings.fixedTimeStepMs / 1000))
       const linearVelocity = state.body.getLinearVelocity?.()
@@ -760,7 +761,6 @@ export class AmmoPhysicsWorld {
       const speedForGovernor = Math.max(forwardSpeedAbs, state.speedGovernorSmoothedForwardSpeedAbs)
       const throttleSign = Math.sign(throttleInput)
       const brakeBlend = smoothstep(0.08, VEHICLE_BRAKE_RELEASE_SPEED, speedForGovernor)
-
       let engineForce = throttleInput * VEHICLE_ENGINE_FORCE
       let brakeAssist = state.speedGovernorBrakeAssist
       const maxSpeedMps = resolveVehicleMaxSpeedMps(state.desc.maxSpeedKmh)
@@ -778,24 +778,31 @@ export class AmmoPhysicsWorld {
           state.speedGovernorScale += (scaleTarget - state.speedGovernorScale) * scaleAlpha
           engineForce *= state.speedGovernorScale
 
-          const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
-          const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
-          if (!state.speedGovernorOverHardCap) {
-            if (speedForGovernor > hardCapEnter) {
-              state.speedGovernorOverHardCap = true
-            }
-          } else if (speedForGovernor < hardCapExit) {
+          if (useEngineOnlySpeedGovernor) {
+            const relaxAlpha = 1 - Math.exp(-6 * dt)
+            state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
             state.speedGovernorOverHardCap = false
-          }
+            brakeAssist = state.speedGovernorBrakeAssist
+          } else {
+            const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
+            const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
+            if (!state.speedGovernorOverHardCap) {
+              if (speedForGovernor > hardCapEnter) {
+                state.speedGovernorOverHardCap = true
+              }
+            } else if (speedForGovernor < hardCapExit) {
+              state.speedGovernorOverHardCap = false
+            }
 
-          const over = state.speedGovernorOverHardCap
-            ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
-            : 0
-          const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
-          const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
-          const brakeAlpha = 1 - Math.exp(-4 * dt)
-          state.speedGovernorBrakeAssist += (brakeTarget - state.speedGovernorBrakeAssist) * brakeAlpha
-          brakeAssist = state.speedGovernorBrakeAssist
+            const over = state.speedGovernorOverHardCap
+              ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
+              : 0
+            const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
+            const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
+            const brakeAlpha = 1 - Math.exp(-4 * dt)
+            state.speedGovernorBrakeAssist += (brakeTarget - state.speedGovernorBrakeAssist) * brakeAlpha
+            brakeAssist = state.speedGovernorBrakeAssist
+          }
         } else {
           const relaxAlpha = 1 - Math.exp(-6 * dt)
           state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha

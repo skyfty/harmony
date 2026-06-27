@@ -744,18 +744,18 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const endIndex = points.length - 1
 
       // 将巡游配置速度先归一为非负值，避免外部配置误写负数时引入反向速度或其他异常行为。
-      const rawSpeed = Math.max(0, tourProps.speedMps)
+      const routeSpeed = Math.max(0, tourProps.speedMps)
       // 读取 PurePursuit 的速度上限：这是底层追踪/巡航实现允许的最大速度。
       // 若未配置或值不是有限数字，则按“不限制”处理，用正无穷大表示。
-      const pursuitMax = Number.isFinite(pursuitProps.maxSpeedMps) ? pursuitProps.maxSpeedMps : Number.POSITIVE_INFINITY
+      const pursuitMax = Number.isFinite(pursuitProps.maxSpeedMps) ? Math.max(0, pursuitProps.maxSpeedMps) : Number.POSITIVE_INFINITY
       // 读取 AutoTour 任务自身的速度上限：这是当前自动巡游任务可接受的最大速度。
       // 同样，未配置或非法值都视为不限制。
-      const tourMax = Number.isFinite(tourProps.maxSpeedMps) ? tourProps.maxSpeedMps : Number.POSITIVE_INFINITY
-      // 实际生效上限取两者中的更小值：既不能突破底层算法能力边界，也不能超过任务配置边界。
-      const cap = Math.min(pursuitMax, tourMax)
-      // 最终速度 = 配置速度 与 综合上限 共同约束后的结果。
-      const speed = Math.min(rawSpeed, cap)
-      if (speed <= 0) {
+      const tourMax = Number.isFinite(tourProps.maxSpeedMps) ? Math.max(0, tourProps.maxSpeedMps) : Number.POSITIVE_INFINITY
+      // 物理车辆的速度 governor 使用的综合上限：既不能突破底层算法能力边界，也不能超过任务配置边界。
+      const speedCap = Math.min(pursuitMax, tourMax)
+      // 直接位移分支仍按综合上限做硬限速，避免视觉运动超出 AutoTour 配置。
+      const moveSpeed = Math.min(routeSpeed, speedCap)
+      if (moveSpeed <= 0) {
         continue
       }
 
@@ -975,7 +975,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             points: returnToStartPolyline,
             loop: false,
             deltaSeconds,
-            speedMps: speed,
+            speedMps: routeSpeed,
+            speedCapMps: speedCap,
             pursuitProps,
             vehicleProps,
             state: state as any,
@@ -1024,7 +1025,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           const deviation = Math.sqrt(Math.max(0, proj.distanceSq))
           const maxDeviation = Math.max(1, arrivalDistance * 2)
           if (Number.isFinite(deviation) && deviation <= maxDeviation) {
-            const baseAhead = speed * deltaSeconds * 2
+            const baseAhead = moveSpeed * deltaSeconds * 2
             const passAheadMeters = Math.max(arrivalDistance, Math.max(0.5, Math.min(3, Number.isFinite(baseAhead) ? baseAhead : 0)))
             const sAhead = proj.s + passAheadMeters
 
@@ -1214,7 +1215,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           points,
           loop: Boolean(tourProps.loop),
           deltaSeconds,
-          speedMps: speed,
+          speedMps: routeSpeed,
+          speedCapMps: speedCap,
           pursuitProps,
           vehicleProps,
           state: state as any,
@@ -1268,7 +1270,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_MIN,
         Math.min(
           AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_MAX,
-          Math.max(arrivalDistance * 2, speed * AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_SECONDS),
+          Math.max(arrivalDistance * 2, moveSpeed * AUTO_TOUR_DIRECT_MOVE_TURN_LOOKAHEAD_SECONDS),
         ),
       )
 
@@ -1346,7 +1348,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         // Ease into the final endpoint by smoothing toward the exact target.
         autoTourNextWorldPosition.copy(autoTourPlanarTarget)
       } else {
-        const stepDistance = speed * Math.max(AUTO_TOUR_DIRECT_MOVE_MIN_SPEED_FACTOR, directMoveSpeedFactor) * deltaSeconds
+        const stepDistance = moveSpeed * Math.max(AUTO_TOUR_DIRECT_MOVE_MIN_SPEED_FACTOR, directMoveSpeedFactor) * deltaSeconds
         const clampedStep = Number.isFinite(stepDistance) ? Math.max(0, stepDistance) : 0
         autoTourNextWorldPosition.copy(autoTourCurrentPosition)
         if (clampedStep > 0) {
