@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { SceneNode } from './core'
 import { resolveEnabledComponentState } from './componentRuntimeUtils'
-import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, type PurePursuitVehicleControlState } from './purePursuitRuntime'
+import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, resetPurePursuitVehicleControlState, type PurePursuitVehicleControlState } from './purePursuitRuntime'
 import { syncBodyFromObject } from './physicsBodySync'
 import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 import type { VehicleDriveVehicle } from './VehicleDriveController'
@@ -228,27 +228,25 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
   }
 
+  function resetVehicleControlState(state: PurePursuitVehicleControlState): void {
+    resetPurePursuitVehicleControlState(state)
+  }
+
+  function resetVehicleControlStatesForNode(nodeId: string): void {
+    const nodeStates = purePursuitControlStateByNodeId.get(nodeId)
+    if (!nodeStates) {
+      return
+    }
+    for (const state of nodeStates.values()) {
+      resetVehicleControlState(state)
+    }
+  }
+
   function clearVehicleControlStateForNode(nodeId: string): void {
     purePursuitControlStateByNodeId.delete(nodeId)
   }
 
-  function resetVehicleControlState(state: PurePursuitVehicleControlState): void {
-    state.speedIntegral = undefined
-    state.lastSteerRad = undefined
-    state.lastBrakeForce = undefined
-    state.speedTargetMps = undefined
-    state.forwardSpeedMps = undefined
-    state.longitudinalErrorMps = undefined
-    state.reverseActive = undefined
-    state.longitudinalUseEngine = undefined
-    state.longitudinalModeSwitchAtMs = undefined
-    state.speedGovernorScale = undefined
-    state.speedGovernorBrakeAssist = undefined
-    state.speedGovernorSmoothedForwardSpeedAbs = undefined
-    state.speedGovernorOverHardCap = undefined
-  }
-
-  function getVehicleControlState(nodeId: string, autoTourId: string): PurePursuitVehicleControlState {
+  function ensureVehicleControlStateForNode(nodeId: string, autoTourId: string): PurePursuitVehicleControlState {
     let nodeStates = purePursuitControlStateByNodeId.get(nodeId)
     if (!nodeStates) {
       nodeStates = new Map<string, PurePursuitVehicleControlState>()
@@ -331,7 +329,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     vehicleInstance: AutoTourVehicleInstanceLike | null
     usePhysicsDrive: boolean
     hasVehicleInstance: boolean
-    controlState: PurePursuitVehicleControlState
   }): AutoTourPlaybackState | null {
     const {
       nodeId,
@@ -342,7 +339,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       vehicleInstance,
       usePhysicsDrive,
       hasVehicleInstance,
-      controlState,
     } = options
     const key = `${nodeId}:${autoTourId}`
     const cached = autoTourPlaybackState.get(key) ?? null
@@ -361,6 +357,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     } else {
       nodeObject!.getWorldPosition(positionSample)
     }
+    const controlState = ensureVehicleControlStateForNode(nodeId, autoTourId)
 
     const initialTargetIndex = findClosestWaypointIndex(points, positionSample)
     let polylineData3d: PolylineMetricData | undefined
@@ -544,6 +541,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
   function advanceAutoTourVehicleRoute(options: {
     nodeId: string
+    autoTourId: string
     state: AutoTourPlaybackState
     vehicleInstance: AutoTourVehicleInstanceLike
     points: THREE.Vector3[]
@@ -553,18 +551,13 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     moveSpeed: number
     deltaSeconds: number
     arrivalDistance: number
-    routeNodeId: string
     tourProps: AutoTourComponentProps
     pursuitProps: PurePursuitComponentProps
     vehicleProps: VehicleComponentProps
-    controlState: PurePursuitVehicleControlState
-    hasVehicleComponent: boolean
-    hasVehicleInstance: boolean
-    usePhysicsDrive: boolean
-    nodeObject: THREE.Object3D | null
   }): boolean {
     const {
       nodeId,
+      autoTourId,
       state,
       vehicleInstance,
       points,
@@ -576,8 +569,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       tourProps,
       pursuitProps,
       vehicleProps,
-      controlState,
     } = options
+    const controlState = ensureVehicleControlStateForNode(nodeId, autoTourId)
     const route = prepareAutoTourRouteMotion({
       state,
       vehicleInstance,
@@ -619,7 +612,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     vehicleInstance.vehicle.autoTourTargetSpeedMps = result.targetSpeedMps
     vehicleInstance.vehicle.autoTourTargetSteeringRad = result.steeringRad
 
-    if (state.mode === 'stopping' && result.reachedStop) {
+      if (state.mode === 'stopping' && result.reachedStop) {
       finalizeAutoTourDockStop({ nodeId, state, endIndex: route.endIndex, tourProps, terminalReason: 'vehicle-reached-stop' })
     }
 
@@ -797,6 +790,188 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
 
     return true
+  }
+
+  function prepareAutoTourVehicleNodeState(options: {
+    nodeId: string
+    state: AutoTourPlaybackState
+    points: THREE.Vector3[]
+    endIndex: number
+    tourProps: AutoTourComponentProps
+    vehicleInstance: AutoTourVehicleInstanceLike | null
+    hasVehicleInstance: boolean
+    usePhysicsDrive: boolean
+    directMoveVehicle: boolean
+  }): boolean {
+    const {
+      nodeId,
+      state,
+      points,
+      endIndex,
+      tourProps,
+      vehicleInstance,
+      hasVehicleInstance,
+      usePhysicsDrive,
+      directMoveVehicle,
+    } = options
+
+    if (state.mode === 'loop-to-start') {
+      state.mode = 'path'
+    }
+
+    if (options.state.mode === 'dock-hold') {
+      const holdIndex = typeof state.dockHoldIndex === 'number' && Number.isFinite(state.dockHoldIndex)
+        ? Math.floor(state.dockHoldIndex)
+        : state.targetIndex
+      const nextIndex = tourProps.loop
+        ? ((holdIndex + 1) % points.length)
+        : Math.max(0, Math.min(endIndex, holdIndex + 1))
+      state.mode = 'path'
+      state.targetIndex = nextIndex
+      state.dockHoldIndex = undefined
+      state.dockStopIndex = undefined
+      state.dockLatchIndex = undefined
+    }
+
+    if (state.mode === 'stopped') {
+      if (tourProps.loop) {
+        state.mode = 'loop-to-start'
+        state.targetIndex = 0
+      } else {
+        if (hasVehicleInstance && vehicleInstance) {
+          vehicleInstance.vehicle.autoTourTargetSpeedMps = 0
+          vehicleInstance.vehicle.autoTourTargetSteeringRad = 0
+        }
+        return false
+      }
+    }
+
+    if (directMoveVehicle) {
+      if (!usePhysicsDrive) {
+        if (hasVehicleInstance && vehicleInstance) {
+          vehicleInstance.vehicle.autoTourTargetSpeedMps = 0
+          vehicleInstance.vehicle.autoTourTargetSteeringRad = 0
+        }
+        resetVehicleControlStatesForNode(nodeId)
+      }
+    }
+
+    return true
+  }
+
+  function advanceAutoTourVehicleNodeMotion(options: {
+    node: SceneNode
+    nodeObject: THREE.Object3D | null
+    autoTourId: string
+    state: AutoTourPlaybackState
+    points: THREE.Vector3[]
+    dockFlags: boolean[]
+    endIndex: number
+    routeSpeed: number
+    speedCap: number
+    moveSpeed: number
+    deltaSeconds: number
+    arrivalDistance: number
+    tourProps: AutoTourComponentProps
+    pursuitProps: PurePursuitComponentProps
+    vehicleProps: VehicleComponentProps
+    vehicleInstance: AutoTourVehicleInstanceLike | null
+    hasVehicleInstance: boolean
+    hasVehicleComponent: boolean
+    usePhysicsDrive: boolean
+  }): boolean {
+    const {
+      node,
+      nodeObject,
+      autoTourId,
+      state,
+      points,
+      dockFlags,
+      endIndex,
+      routeSpeed,
+      speedCap,
+      moveSpeed,
+      deltaSeconds,
+      arrivalDistance,
+      tourProps,
+      pursuitProps,
+      vehicleProps,
+      vehicleInstance,
+      hasVehicleInstance,
+      hasVehicleComponent,
+      usePhysicsDrive,
+    } = options
+
+    const directMoveVehicle = hasVehicleComponent && (!hasVehicleInstance || !usePhysicsDrive)
+
+    if (hasVehicleComponent) {
+      const shouldContinue = prepareAutoTourVehicleNodeState({
+        nodeId: node.id,
+        state,
+        points,
+        endIndex,
+        tourProps,
+        vehicleInstance,
+        hasVehicleInstance,
+        usePhysicsDrive,
+        directMoveVehicle,
+      })
+      if (!shouldContinue) {
+        return true
+      }
+    }
+
+    if (!Number.isFinite(state.targetIndex)) {
+      state.targetIndex = 0
+    }
+    state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
+
+    if (usePhysicsDrive && hasVehicleInstance && vehicleInstance) {
+      const chassisBody = vehicleInstance.vehicle.chassisBody
+      autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
+    } else if (nodeObject) {
+      nodeObject.getWorldPosition(autoTourCurrentPosition)
+    }
+
+    if (hasVehicleInstance && usePhysicsDrive && vehicleInstance) {
+      advanceAutoTourVehicleRoute({
+        nodeId: node.id,
+        autoTourId,
+        state,
+        vehicleInstance,
+        points,
+        dockFlags,
+        routeSpeed,
+        speedCap,
+        moveSpeed,
+        deltaSeconds,
+        arrivalDistance,
+        tourProps,
+        pursuitProps,
+        vehicleProps,
+      })
+      return true
+    }
+
+    return true
+  }
+
+  function advanceAutoTourObjectNodeMotion(options: {
+    node: SceneNode
+    nodeObject: THREE.Object3D
+    state: AutoTourPlaybackState
+    points: THREE.Vector3[]
+    dockFlags: boolean[]
+    moveSpeed: number
+    deltaSeconds: number
+    arrivalDistance: number
+    tourProps: AutoTourComponentProps
+    vehicleProps: VehicleComponentProps
+    hasVehicleInstance: boolean
+    directMoveVehicle: boolean
+    vehicleInstance: AutoTourVehicleInstanceLike | null
+  }): boolean {
+    return advanceAutoTourObjectMotion(options)
   }
 
   function clearTerminalParkedPose(nodeId: string): void {
@@ -1067,7 +1242,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       lastProjectedS: snap.projectedS,
     })
 
-    resetVehicleControlState(getVehicleControlState(nodeId, autoTour.id))
+    resetVehicleControlState(ensureVehicleControlStateForNode(nodeId, autoTour.id))
 
     terminalBrakeHoldNodes.delete(nodeId)
     terminalStoppedNodes.delete(nodeId)
@@ -1302,13 +1477,15 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const vehicleInstance = deps.vehicleInstances.get(node.id) ?? null
       const hasVehicleInstance = Boolean(vehicleInstance?.vehicle?.chassisBody)
       const usePhysicsDrive = tourProps.usePhysicsDrive
-      const shouldDriveAsVehicle = hasVehicleComponent && hasVehicleInstance && usePhysicsDrive
-      const directMoveVehicle = hasVehicleComponent && (!hasVehicleInstance || !usePhysicsDrive)
       const nodeObject = deps.nodeObjectMap.get(node.id) ?? null
-      const controlState = getVehicleControlState(node.id, autoTour.id)
 
-      if (shouldDriveAsVehicle) {
-        // OK: can drive purely via physics.
+      if (hasVehicleComponent) {
+        if (usePhysicsDrive && !hasVehicleInstance) {
+          continue
+        }
+        if (!usePhysicsDrive && !nodeObject) {
+          continue
+        }
       } else if (!nodeObject) {
         // Direct-move branch requires a render object.
         continue
@@ -1323,7 +1500,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         vehicleInstance,
         usePhysicsDrive,
         hasVehicleInstance,
-        controlState,
       })
 
       if (!state) {
@@ -1338,122 +1514,48 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.dockStopIndex = undefined
         state.dockHoldIndex = undefined
         state.dockLatchIndex = undefined
-        resetVehicleControlState(controlState)
+        resetVehicleControlStatesForNode(node.id)
       }
 
-      // Vehicle nodes that are moving via direct node transforms should not use the
-      // stopping/stopped state machine (they can still respect loop via index wrap).
-      if (directMoveVehicle) {
-        if (state.mode === 'loop-to-start') {
-          state.mode = 'path'
-        }
-        // When direct-moving a vehicle and not looping, fully stop updating once we
-        // have reached the final waypoint.
-        if (!tourProps.loop && state.mode === 'stopped') {
-          if (hasVehicleInstance) {
-            vehicleInstance!.vehicle.autoTourTargetSpeedMps = 0
-            vehicleInstance!.vehicle.autoTourTargetSteeringRad = 0
-          }
-          continue
-        }
-        if (!usePhysicsDrive) {
-          if (hasVehicleInstance) {
-            vehicleInstance!.vehicle.autoTourTargetSpeedMps = 0
-            vehicleInstance!.vehicle.autoTourTargetSteeringRad = 0
-          }
-          resetVehicleControlState(controlState)
-        }
-      }
-
-      // Dock-hold is entered after coming to a complete stop at a docking waypoint.
-      // The host pauses auto-tour by not calling update(). When update() resumes,
-      // immediately advance to the next waypoint to avoid re-docking at the same point.
-      if (state.mode === 'dock-hold') {
-        const holdIndex = typeof state.dockHoldIndex === 'number' && Number.isFinite(state.dockHoldIndex)
-          ? Math.floor(state.dockHoldIndex)
-          : state.targetIndex
-        const nextIndex = tourProps.loop
-          ? ((holdIndex + 1) % points.length)
-          : Math.max(0, Math.min(endIndex, holdIndex + 1))
-        state.mode = 'path'
-        state.targetIndex = nextIndex
-        state.dockHoldIndex = undefined
-        state.dockStopIndex = undefined
-        state.dockLatchIndex = undefined
-      }
-
-      // When stopped and not looping:
-      // - non-vehicle: do nothing (object already at final position)
-      // - vehicle: keep holding brake to avoid rolling
-      if (state.mode === 'stopped') {
-        if (tourProps.loop) {
-          state.mode = 'loop-to-start'
-          state.targetIndex = 0
-        } else {
-          if (hasVehicleInstance) {
-            vehicleInstance!.vehicle.autoTourTargetSpeedMps = 0
-            vehicleInstance!.vehicle.autoTourTargetSteeringRad = 0
-          }
-          continue
-        }
-      }
-
-      // Safety clamp.
-      // 如果目标索引不是有限数字，则重置为0
-      if (!Number.isFinite(state.targetIndex)) {
-        state.targetIndex = 0
-      }
-      // 保证目标索引在合法范围内（0 ~ endIndex），并取整
-      state.targetIndex = Math.max(0, Math.min(endIndex, Math.floor(state.targetIndex)))
-
-      // Resolve current world position.
-      if (usePhysicsDrive && hasVehicleInstance) {
-        const chassisBody = vehicleInstance!.vehicle.chassisBody
-        autoTourCurrentPosition.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
-      } else {
-        nodeObject!.getWorldPosition(autoTourCurrentPosition)
-      }
-
-      if (shouldDriveAsVehicle) {
-        advanceAutoTourVehicleRoute({
-          nodeId: node.id,
+      const advanced = hasVehicleComponent
+        ? advanceAutoTourVehicleNodeMotion({
+          node,
+          nodeObject,
+          autoTourId: autoTour.id,
           state,
-          vehicleInstance: vehicleInstance!,
           points,
           dockFlags,
+          endIndex,
           routeSpeed,
           speedCap,
           moveSpeed,
           deltaSeconds,
           arrivalDistance,
-          routeNodeId,
           tourProps,
           pursuitProps,
           vehicleProps,
-          controlState,
-          hasVehicleComponent,
+          vehicleInstance,
           hasVehicleInstance,
+          hasVehicleComponent,
           usePhysicsDrive,
-          nodeObject,
         })
-        continue
-      }
+        : advanceAutoTourObjectNodeMotion({
+          node,
+          nodeObject: nodeObject!,
+          state,
+          points,
+          dockFlags,
+          moveSpeed,
+          deltaSeconds,
+          arrivalDistance,
+          tourProps,
+          vehicleProps,
+          hasVehicleInstance,
+          directMoveVehicle: false,
+          vehicleInstance,
+        })
 
-      if (advanceAutoTourObjectMotion({
-        node,
-        nodeObject: nodeObject!,
-        state,
-        points,
-        dockFlags,
-        moveSpeed,
-        deltaSeconds,
-        arrivalDistance,
-        tourProps,
-        vehicleProps,
-        hasVehicleInstance,
-        directMoveVehicle,
-        vehicleInstance,
-      })) {
+      if (advanced) {
         continue
       }
 

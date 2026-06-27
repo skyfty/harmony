@@ -15,9 +15,11 @@ export type PurePursuitVehicleInstanceLike = {
   axisForward: THREE.Vector3
 }
 
-export type PurePursuitVehicleControlState = {
-  speedIntegral?: number
+export type PurePursuitVehicleSteeringState = {
   lastSteerRad?: number
+}
+
+export type PurePursuitVehicleLongitudinalState = {
   lastBrakeForce?: number
   speedTargetMps?: number
   forwardSpeedMps?: number
@@ -25,10 +27,20 @@ export type PurePursuitVehicleControlState = {
   reverseActive?: boolean
   longitudinalUseEngine?: boolean
   longitudinalModeSwitchAtMs?: number
+  speedIntegral?: number
+}
+
+export type PurePursuitVehicleGovernorState = {
   speedGovernorScale?: number
   speedGovernorBrakeAssist?: number
   speedGovernorSmoothedForwardSpeedAbs?: number
   speedGovernorOverHardCap?: boolean
+}
+
+export type PurePursuitVehicleControlState = {
+  steering?: PurePursuitVehicleSteeringState
+  longitudinal?: PurePursuitVehicleLongitudinalState
+  governor?: PurePursuitVehicleGovernorState
 }
 
 export type PurePursuitVehicleControlResult = {
@@ -80,29 +92,275 @@ function getPlanarDistance(a: THREE.Vector3, b: THREE.Vector3): number {
   return Math.sqrt(dx * dx + dz * dz)
 }
 
-function resolveRouteVertexS(points: readonly THREE.Vector3[], index: number, loop: boolean): number {
-  if (!points.length) {
-    return 0
+function getSteeringState(state: PurePursuitVehicleControlState): PurePursuitVehicleSteeringState {
+  if (!state.steering) {
+    state.steering = {}
   }
-  const maxIndex = points.length - 1
-  const targetIndex = loop
-    ? ((Math.floor(index) % points.length) + points.length) % points.length
-    : clampNumber(Math.floor(index), 0, maxIndex)
-  let s = 0
-  for (let i = 0; i < targetIndex; i += 1) {
-    const a = points[i]
-    const b = points[i + 1]
-    if (!a || !b) {
-      continue
-    }
-    const dx = b.x - a.x
-    const dz = b.z - a.z
-    const length = Math.sqrt(dx * dx + dz * dz)
-    if (Number.isFinite(length)) {
-      s += length
-    }
+  return state.steering
+}
+
+function getLongitudinalState(state: PurePursuitVehicleControlState): PurePursuitVehicleLongitudinalState {
+  if (!state.longitudinal) {
+    state.longitudinal = {}
   }
-  return s
+  return state.longitudinal
+}
+
+function getGovernorState(state: PurePursuitVehicleControlState): PurePursuitVehicleGovernorState {
+  if (!state.governor) {
+    state.governor = {}
+  }
+  return state.governor
+}
+
+function getLastSteerRad(state: PurePursuitVehicleControlState): number {
+  const steeringState = getSteeringState(state)
+  return typeof steeringState.lastSteerRad === 'number' ? steeringState.lastSteerRad : 0
+}
+
+export function resetPurePursuitVehicleControlState(state: PurePursuitVehicleControlState): void {
+  state.steering = undefined
+  state.longitudinal = undefined
+  state.governor = undefined
+}
+
+function createControlFallbackResult(state: PurePursuitVehicleControlState): PurePursuitVehicleControlResult {
+  return {
+    reachedStop: false,
+    steeringRad: getLastSteerRad(state),
+    targetSpeedMps: 0,
+  }
+}
+
+function resolvePurePursuitDockingOverrides(params: {
+  dockActive: boolean
+  clampStopIndex: number
+  endIndex: number
+  points: THREE.Vector3[]
+  forwardWorld: THREE.Vector3
+  chassisBody: VehicleDriveVehicle['chassisBody']
+  pursuitProps: PurePursuitComponentProps
+  vehicleProps: VehicleComponentProps
+  vehicleInstance: PurePursuitVehicleInstanceLike
+  dt: number
+}): { steeringRad: number; engineForce: number; brakeForceFloor: number } | null {
+  if (!params.dockActive) {
+    return null
+  }
+
+  // 泊车语义集中在这里：锁转向、关动力、强制刹停，并在需要时对齐车身朝向。
+  const brakeForceMax = Number.isFinite(params.vehicleProps.brakeForceMax) ? Math.max(0, params.vehicleProps.brakeForceMax) : 0
+  if (params.pursuitProps.dockYawEnabled) {
+    const prevIndex = params.clampStopIndex > 0 ? params.clampStopIndex - 1 : Math.min(params.clampStopIndex + 1, params.endIndex)
+    const prev = params.points[prevIndex]!
+    const stopPoint = params.points[params.clampStopIndex]!
+    const tanX = stopPoint.x - prev.x
+    const tanZ = stopPoint.z - prev.z
+    const tanLen = Math.sqrt(tanX * tanX + tanZ * tanZ)
+    const yaw = tanLen > 1e-6
+      ? Math.atan2(tanX / tanLen, tanZ / tanLen)
+      : Math.atan2(params.forwardWorld.x, params.forwardWorld.z)
+    yawTargetQuat.setFromAxisAngle(purePursuitUp, yaw)
+    const alphaYaw = 1 - Math.exp(-Math.max(0, params.pursuitProps.dockYawSlerpRate) * params.dt)
+    objectWorldQuat.copy(params.chassisBody.quaternion)
+    objectWorldQuat.slerp(yawTargetQuat, clamp01(alphaYaw)).normalize()
+    params.chassisBody.quaternion.x = objectWorldQuat.x
+    params.chassisBody.quaternion.y = objectWorldQuat.y
+    params.chassisBody.quaternion.z = objectWorldQuat.z
+    params.chassisBody.quaternion.w = objectWorldQuat.w
+  }
+
+  params.chassisBody.angularVelocity.x *= 0.85
+  params.chassisBody.angularVelocity.y *= 0.6
+  params.chassisBody.angularVelocity.z *= 0.85
+  return {
+    steeringRad: 0,
+    engineForce: 0,
+    brakeForceFloor: brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER,
+  }
+}
+
+function resolvePurePursuitSteeringRad(params: {
+  vehicleProps: VehicleComponentProps
+  wheelbaseMeters: number
+  targetLen: number
+  forwardWorld: THREE.Vector3
+  desiredDir: THREE.Vector3
+  lastSteerRad: number
+  deltaSeconds: number
+}): number {
+  const { vehicleProps, wheelbaseMeters, targetLen, forwardWorld, desiredDir, lastSteerRad, deltaSeconds } = params
+  const crossY = forwardWorld.clone().cross(desiredDir).dot(purePursuitUp)
+  const dot = THREE.MathUtils.clamp(forwardWorld.dot(desiredDir), -1, 1)
+  const alpha = (crossY >= 0 ? 1 : -1) * Math.acos(dot)
+  const maxSteerRad = THREE.MathUtils.degToRad(Math.max(0, vehicleProps.maxSteerDegrees))
+  const safeMaxSteer = Number.isFinite(maxSteerRad) && maxSteerRad > 1e-6 ? maxSteerRad : THREE.MathUtils.degToRad(26)
+  let steeringRad = Math.atan2(2 * wheelbaseMeters * Math.sin(alpha), Math.max(1e-6, targetLen))
+  steeringRad = THREE.MathUtils.clamp(steeringRad, -safeMaxSteer, safeMaxSteer)
+  const maxSteerStep = THREE.MathUtils.degToRad(Math.max(0, vehicleProps.maxSteerRateDegPerSec)) * deltaSeconds
+  return THREE.MathUtils.clamp(steeringRad, lastSteerRad - maxSteerStep, lastSteerRad + maxSteerStep)
+}
+
+function resolvePurePursuitLongitudinalControl(params: {
+  speedMps: number
+  speedCapMps?: number
+  steeringRad: number
+  forwardSignedSpeed: number
+  speedIntegral: number
+  lastUseEngine?: boolean
+  speedGovernorScale?: number
+  speedGovernorBrakeAssist?: number
+  speedGovernorSmoothedForwardSpeedAbs?: number
+  speedGovernorOverHardCap?: boolean
+  pursuitProps: PurePursuitComponentProps
+  vehicleProps: VehicleComponentProps
+  deltaSeconds: number
+  modeStopping: boolean
+  distanceToEnd: number
+  dockActive: boolean
+}): {
+  speedTargetMps: number
+  engineForce: number
+  brakeForce: number
+  speedIntegral: number
+  speedGovernorScale: number
+  speedGovernorBrakeAssist: number
+  speedGovernorSmoothedForwardSpeedAbs: number
+  speedGovernorOverHardCap: boolean
+  desiredUseEngine: boolean
+} {
+  const {
+    speedMps,
+    speedCapMps,
+    steeringRad,
+    forwardSignedSpeed,
+    speedIntegral,
+    lastUseEngine,
+    speedGovernorScale,
+    speedGovernorBrakeAssist,
+    speedGovernorSmoothedForwardSpeedAbs,
+    speedGovernorOverHardCap,
+    pursuitProps,
+    vehicleProps,
+    deltaSeconds,
+    modeStopping,
+    distanceToEnd,
+    dockActive,
+  } = params
+
+  const steerRatio = Math.min(1, Math.abs(steeringRad) / Math.max(1e-6, THREE.MathUtils.degToRad(Math.max(0, vehicleProps.maxSteerDegrees)) || THREE.MathUtils.degToRad(26)))
+  const turnFactor = 1 / (1 + Math.max(0, pursuitProps.curvatureSpeedFactor) * steerRatio)
+  const speed = Number.isFinite(speedMps) ? Math.max(0, speedMps) : 0
+  const componentSpeedCap = Number.isFinite(pursuitProps.maxSpeedMps) ? Math.max(0, pursuitProps.maxSpeedMps) : speed
+  const externalSpeedCap = Number.isFinite(speedCapMps) ? Math.max(0, speedCapMps!) : componentSpeedCap
+  const speedCap = Math.min(componentSpeedCap, externalSpeedCap)
+  let speedTarget = Math.max(pursuitProps.minSpeedMps, speed * turnFactor)
+  if (modeStopping) {
+    const approachSpeed = Math.min(pursuitProps.dockMaxSpeedMps, Math.max(0, distanceToEnd * pursuitProps.dockVelocityKp))
+    speedTarget = Math.min(speedTarget, approachSpeed)
+  }
+
+  const desiredSpeedSigned = speedTarget
+  const speedError = desiredSpeedSigned - forwardSignedSpeed
+  const speedIntegralMax = Math.max(0, pursuitProps.speedIntegralMax)
+  let integral = speedIntegral + speedError * deltaSeconds
+  integral = speedIntegralMax > 0 ? THREE.MathUtils.clamp(integral, -speedIntegralMax, speedIntegralMax) : 0
+  const absSpeedError = Math.abs(speedError)
+  if (Number.isFinite(absSpeedError) && absSpeedError <= 0.10) {
+    integral *= Math.exp(-1.6 * Math.max(0, deltaSeconds))
+  }
+  if (
+    integral !== 0
+    && Number.isFinite(absSpeedError)
+    && absSpeedError <= 0.20
+    && Math.sign(integral) !== Math.sign(speedError)
+  ) {
+    integral *= Math.exp(-5.0 * Math.max(0, deltaSeconds))
+  }
+
+  const control = pursuitProps.speedKp * speedError + pursuitProps.speedKi * integral
+  const engineForceMax = Number.isFinite(vehicleProps.engineForceMax) ? Math.max(0, vehicleProps.engineForceMax) : 0
+  const brakeForceMax = Number.isFinite(vehicleProps.brakeForceMax) ? Math.max(0, vehicleProps.brakeForceMax) : 0
+  const engineForceCmd = THREE.MathUtils.clamp(control * engineForceMax, -engineForceMax, engineForceMax)
+
+  const desiredUseEngine = speedError > 0
+  let useEngine = typeof lastUseEngine === 'boolean' ? lastUseEngine : desiredUseEngine
+  if (absSpeedError > 0.06) {
+    useEngine = desiredUseEngine
+  }
+  let engineForce = useEngine ? Math.max(0, engineForceCmd) : 0
+  let brakeForce = !useEngine && modeStopping
+    ? Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax))
+    : 0
+
+  const hardCap = Math.max(0.1, speedCap)
+  const softCap = Math.max(0.1, hardCap * PURE_PURSUIT_SPEED_GOVERNOR_SOFT_RATIO)
+  const forwardSpeedAbs = Math.abs(forwardSignedSpeed)
+  let speedGovernorScaleValue = typeof speedGovernorScale === 'number' ? clamp01(speedGovernorScale) : 1
+  let speedGovernorBrakeAssistValue = typeof speedGovernorBrakeAssist === 'number' ? Math.max(0, speedGovernorBrakeAssist) : 0
+  let speedGovernorSmoothedForwardSpeedAbsValue = typeof speedGovernorSmoothedForwardSpeedAbs === 'number'
+    ? Math.max(0, speedGovernorSmoothedForwardSpeedAbs)
+    : 0
+  let speedGovernorOverHardCapValue = speedGovernorOverHardCap === true
+  const speedSmoothAlpha = 1 - Math.exp(-6 * deltaSeconds)
+  speedGovernorSmoothedForwardSpeedAbsValue += (forwardSpeedAbs - speedGovernorSmoothedForwardSpeedAbsValue) * speedSmoothAlpha
+  const speedForGovernor = Math.max(forwardSpeedAbs, speedGovernorSmoothedForwardSpeedAbsValue)
+  const acceleratingForward = engineForce > 0 && forwardSignedSpeed >= -0.05
+  if (acceleratingForward) {
+    const range = Math.max(0.1, hardCap - softCap)
+    const excess = Math.max(0, speedForGovernor - softCap)
+    const t = Math.min(1, excess / range)
+    const smooth = t * t * (3 - 2 * t)
+    const scaleTarget = Math.max(0, 1 - smooth)
+    const scaleAlpha = 1 - Math.exp(-14 * deltaSeconds)
+    speedGovernorScaleValue += (scaleTarget - speedGovernorScaleValue) * scaleAlpha
+    engineForce *= speedGovernorScaleValue
+  } else {
+    const relaxAlpha = 1 - Math.exp(-6 * deltaSeconds)
+    speedGovernorScaleValue += (1 - speedGovernorScaleValue) * relaxAlpha
+  }
+
+  const hardCapEnter = hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
+  const hardCapExit = hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
+  if (!speedGovernorOverHardCapValue) {
+    if (speedForGovernor > hardCapEnter) {
+      speedGovernorOverHardCapValue = true
+    }
+  } else if (speedForGovernor < hardCapExit) {
+    speedGovernorOverHardCapValue = false
+  }
+
+  const over = speedGovernorOverHardCapValue
+    ? Math.max(0, speedForGovernor - (hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_DEADBAND))
+    : 0
+  const brakeRatio = Math.min(1, over / PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_BAND)
+  const governorBrakeTarget = brakeRatio * brakeForceMax * PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_MAX_RATIO
+  const brakeAlpha = 1 - Math.exp(-4 * deltaSeconds)
+  speedGovernorBrakeAssistValue += (governorBrakeTarget - speedGovernorBrakeAssistValue) * brakeAlpha
+  brakeForce = Math.min(brakeForceMax, Math.max(brakeForce, speedGovernorBrakeAssistValue))
+
+  const brakeThreshold = Math.max(pursuitProps.brakeDistanceMinMeters, speed * pursuitProps.brakeDistanceSpeedFactor)
+  const shouldBrakeNearEnd = modeStopping && distanceToEnd < brakeThreshold
+  if (shouldBrakeNearEnd && !dockActive) {
+    brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * 0.35))
+  }
+
+  if (dockActive) {
+    brakeForce = Math.max(brakeForce, brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER)
+    engineForce = 0
+  }
+
+  return {
+    speedTargetMps: desiredSpeedSigned,
+    engineForce,
+    brakeForce,
+    speedIntegral: integral,
+    speedGovernorScale: speedGovernorScaleValue,
+    speedGovernorBrakeAssist: speedGovernorBrakeAssistValue,
+    speedGovernorSmoothedForwardSpeedAbs: speedGovernorSmoothedForwardSpeedAbsValue,
+    speedGovernorOverHardCap: speedGovernorOverHardCapValue,
+    desiredUseEngine: useEngine,
+  }
 }
 
 export function updateVehicleSpeedAndApplyParkingHoldSafe(params: {
@@ -203,11 +461,7 @@ export function applyPurePursuitVehicleControl(params: {
   const wheelCount = Math.max(0, vehicleInstance.wheelCount)
 
   if (!chassisBody || wheelCount <= 0 || !points || points.length < 2) {
-    return {
-      reachedStop: false,
-      steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0,
-      targetSpeedMps: 0,
-    }
+    return createControlFallbackResult(state)
   }
 
   // 读取车身当前世界坐标位置和姿态，作为本帧控制计算的输入。
@@ -230,8 +484,11 @@ export function applyPurePursuitVehicleControl(params: {
   const currentY = currentPosition.y
   const currentVelocity = chassisBody.velocity
   const forwardSpeed = currentVelocity.x * forwardWorld.x + currentVelocity.y * forwardWorld.y + currentVelocity.z * forwardWorld.z
-  state.forwardSpeedMps = forwardSpeed
-  state.reverseActive = false
+  const longitudinalState = getLongitudinalState(state)
+  const steeringState = getSteeringState(state)
+  const governorState = getGovernorState(state)
+  longitudinalState.forwardSpeedMps = forwardSpeed
+  longitudinalState.reverseActive = false
 
   // 根据当前速度与配置计算前视距离：速度越高，前视距离通常越大。
   const lookaheadDistance = resolvePathFollowLookaheadDistance({
@@ -256,11 +513,7 @@ export function applyPurePursuitVehicleControl(params: {
   // 如果路线无效，则直接施加安全制动并退出，避免车辆失控。
   if (!previewSample || previewSample.polylineData.totalLength <= 1e-6) {
     holdVehicleBrakeSafe({ vehicleInstance, brakeForce: vehicleProps.brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER })
-    return {
-      reachedStop: false,
-      steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0,
-      targetSpeedMps: 0,
-    }
+    return createControlFallbackResult(state)
   }
 
   // 计算停车目标点：默认取路线终点，也可通过 stopIndex 指定其他点。
@@ -268,12 +521,6 @@ export function applyPurePursuitVehicleControl(params: {
   const rawStopIndex = typeof stopIndex === 'number' && Number.isFinite(stopIndex) ? Math.floor(stopIndex) : endIndex
   const clampedStopIndex = Math.max(0, Math.min(endIndex, rawStopIndex))
   const stopPoint = points[clampedStopIndex]!
-  // stopS 是目标点在路径上的弧长位置；环路下可能需要偏移到当前采样位置之后。
-  const stopS = resolveRouteVertexS(points, clampedStopIndex, loop)
-  let adjustedStopS = stopS
-  if (loop && adjustedStopS < previewSample.projection.s) {
-    adjustedStopS += previewSample.polylineData.totalLength
-  }
   // 终点的平面距离用于减速、刹车和最终停车判断。
   const distanceToEnd = getPlanarDistance(currentPosition, stopPoint)
   // 在停止模式下，接近目标且允许 docking 时，进入泊车/对准控制状态。
@@ -286,7 +533,7 @@ export function applyPurePursuitVehicleControl(params: {
   const toTargetLen = purePursuitTargetDelta.length()
   // 若前视点与当前位置过近，则无法稳定计算方向，直接返回当前状态。
   if (!Number.isFinite(toTargetLen) || toTargetLen < 1e-6) {
-    return { reachedStop: false, steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0, targetSpeedMps: 0 }
+    return createControlFallbackResult(state)
   }
 
   // 根据车辆朝向和轮距，估算后轴位置，以后轴为几何参考点来计算目标方向。
@@ -301,205 +548,70 @@ export function applyPurePursuitVehicleControl(params: {
   purePursuitTargetDelta.y = 0
   const targetLen = purePursuitTargetDelta.length()
   if (!Number.isFinite(targetLen) || targetLen < 1e-6) {
-    return { reachedStop: false, steeringRad: typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0, targetSpeedMps: 0 }
+    return createControlFallbackResult(state)
   }
-  // 目标方向与车头方向的夹角决定需要向左还是向右打轮。
   const desiredDir = purePursuitTargetDelta.clone().normalize()
-  const crossY = forwardWorld.clone().cross(desiredDir).dot(purePursuitUp)
-  const dot = THREE.MathUtils.clamp(forwardWorld.dot(desiredDir), -1, 1)
-  const alpha = (crossY >= 0 ? 1 : -1) * Math.acos(dot)
-
-  // 读取车辆最大转角限制，避免输出超出物理约束的转向命令。
-  const maxSteerRad = THREE.MathUtils.degToRad(Math.max(0, vehicleProps.maxSteerDegrees))
-  const safeMaxSteer = Number.isFinite(maxSteerRad) && maxSteerRad > 1e-6 ? maxSteerRad : THREE.MathUtils.degToRad(26)
-  // 纯跟踪公式：根据目标角度和目标距离计算理论转角。
-  let steeringRad = Math.atan2(2 * wheelbaseMeters * Math.sin(alpha), Math.max(1e-6, targetLen))
-  steeringRad = THREE.MathUtils.clamp(steeringRad, -safeMaxSteer, safeMaxSteer)
-  // 限制每帧转向变化幅度，减少抖动和突变。
-  const lastSteer = typeof state.lastSteerRad === 'number' ? state.lastSteerRad : 0
-  const maxSteerStep = THREE.MathUtils.degToRad(Math.max(0, vehicleProps.maxSteerRateDegPerSec)) * dt
-  steeringRad = THREE.MathUtils.clamp(steeringRad, lastSteer - maxSteerStep, lastSteer + maxSteerStep)
-  state.lastSteerRad = steeringRad
-
-  // 转角越大，说明弯道越急，因此允许的目标速度应越低。
-  const steerRatio = safeMaxSteer > 1e-6 ? Math.min(1, Math.abs(steeringRad) / safeMaxSteer) : 0
-  const turnFactor = 1 / (1 + Math.max(0, pursuitProps.curvatureSpeedFactor) * steerRatio)
-  // 传入速度表示期望巡航速度；PurePursuit 自身上限与外部速度上限会共同约束速度 governor。
-  const speed = Number.isFinite(speedMps) ? Math.max(0, speedMps) : 0
-  const componentSpeedCap = Number.isFinite(pursuitProps.maxSpeedMps) ? Math.max(0, pursuitProps.maxSpeedMps) : speed
-  const externalSpeedCap = Number.isFinite(params.speedCapMps) ? Math.max(0, params.speedCapMps!) : componentSpeedCap
-  const speedCap = Math.min(componentSpeedCap, externalSpeedCap)
-  // 期望速度由输入速度和弯道降速因子共同决定，同时不低于最小速度。
-  let speedTarget = Math.max(pursuitProps.minSpeedMps, speed * turnFactor)
-  if (modeStopping) {
-    // 停止模式下，再按距离终点的剩余距离进一步降低目标速度。
-    const approachSpeed = Math.min(pursuitProps.dockMaxSpeedMps, Math.max(0, distanceToEnd * pursuitProps.dockVelocityKp))
-    speedTarget = Math.min(speedTarget, approachSpeed)
-  }
-
-  
-  // 纵向控制的目标速度与当前前进速度作差，得到速度误差。
-  const desiredSpeedSigned = speedTarget
-  const planarVelocity = new THREE.Vector3(currentVelocity.x, 0, currentVelocity.z)
-  const forwardSignedSpeed = planarVelocity.dot(forwardWorld)
-  const speedError = desiredSpeedSigned - forwardSignedSpeed
-
-  // 积分项用于消除长期稳态误差。
-  let integral = typeof state.speedIntegral === 'number' ? state.speedIntegral : 0
-  integral += speedError * dt
-  const integralMax = Math.max(0, pursuitProps.speedIntegralMax)
-  integral = integralMax > 0 ? THREE.MathUtils.clamp(integral, -integralMax, integralMax) : 0
-
-  // 当误差很小时，逐步衰减积分，降低来回摆动概率。
-  const absSpeedError = Math.abs(speedError)
-  if (Number.isFinite(absSpeedError) && absSpeedError <= 0.10) {
-    integral *= Math.exp(-1.6 * Math.max(0, dt))
-  }
-  // 若积分方向与当前误差方向相反，则快速衰减，避免控制“顶牛”。
-  if (
-    integral !== 0
-    && Number.isFinite(absSpeedError)
-    && absSpeedError <= 0.20
-    && Math.sign(integral) !== Math.sign(speedError)
-  ) {
-    integral *= Math.exp(-5.0 * Math.max(0, dt))
-  }
-  state.speedIntegral = integral
-
-  // 通过 PI 控制器将速度误差转换为纵向控制量。
-  const control = pursuitProps.speedKp * speedError + pursuitProps.speedKi * integral
-  const engineForceMax = Number.isFinite(vehicleProps.engineForceMax) ? Math.max(0, vehicleProps.engineForceMax) : 0
-  const brakeForceMax = Number.isFinite(vehicleProps.brakeForceMax) ? Math.max(0, vehicleProps.brakeForceMax) : 0
-  const engineForceCmd = THREE.MathUtils.clamp(control * engineForceMax, -engineForceMax, engineForceMax)
-
-  // 根据误差正负判断当前应优先使用油门还是刹车。
-  const desiredUseEngine = speedError > 0
-  const lastUseEngine = typeof state.longitudinalUseEngine === 'boolean' ? state.longitudinalUseEngine : desiredUseEngine
-  let useEngine = lastUseEngine
-  if (absSpeedError > 0.06) {
-    // 当误差足够大时，快速切换纵向输出模式；误差很小时保持上一状态减少频繁切换。
-    useEngine = desiredUseEngine
-  }
-  state.longitudinalUseEngine = useEngine
-
-  // 巡航阶段只靠发动机力控速：目标速度以下给油，目标速度以上松油门滑行。
-  // 刹车仅用于 stopping/docking 等真正需要停车的阶段，避免高速时油门和刹车互相拉扯。
-  let engineForce = useEngine ? Math.max(0, engineForceCmd) : 0
-  let brakeForce = !useEngine && modeStopping
-    ? Math.min(brakeForceMax, Math.max(0, Math.abs(control) * brakeForceMax))
-    : 0
-
-  const hardCap = Math.max(0.1, speedCap)
-  const softCap = Math.max(0.1, hardCap * PURE_PURSUIT_SPEED_GOVERNOR_SOFT_RATIO)
-  const forwardSpeedAbs = Math.abs(forwardSignedSpeed)
-  let speedGovernorScale = typeof state.speedGovernorScale === 'number'
-    ? clamp01(state.speedGovernorScale)
-    : 1
-  let speedGovernorBrakeAssist = typeof state.speedGovernorBrakeAssist === 'number'
-    ? Math.max(0, state.speedGovernorBrakeAssist)
-    : 0
-  let speedGovernorSmoothedForwardSpeedAbs = typeof state.speedGovernorSmoothedForwardSpeedAbs === 'number'
-    ? Math.max(0, state.speedGovernorSmoothedForwardSpeedAbs)
-    : 0
-  let speedGovernorOverHardCap = state.speedGovernorOverHardCap === true
-
-  const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
-  speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
-  const speedForGovernor = Math.max(forwardSpeedAbs, speedGovernorSmoothedForwardSpeedAbs)
-  const acceleratingForward = engineForce > 0 && forwardSignedSpeed >= -0.05
-
-  if (acceleratingForward) {
-    const range = Math.max(0.1, hardCap - softCap)
-    const excess = Math.max(0, speedForGovernor - softCap)
-    const t = Math.min(1, excess / range)
-    const smooth = t * t * (3 - 2 * t)
-    const scaleTarget = Math.max(0, 1 - smooth)
-    const scaleAlpha = 1 - Math.exp(-14 * dt)
-    speedGovernorScale += (scaleTarget - speedGovernorScale) * scaleAlpha
-    engineForce *= speedGovernorScale
-  } else {
-    const relaxAlpha = 1 - Math.exp(-6 * dt)
-    speedGovernorScale += (1 - speedGovernorScale) * relaxAlpha
-  }
-
-  const hardCapEnter = hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
-  const hardCapExit = hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
-  if (!speedGovernorOverHardCap) {
-    if (speedForGovernor > hardCapEnter) {
-      speedGovernorOverHardCap = true
-    }
-  } else if (speedForGovernor < hardCapExit) {
-    speedGovernorOverHardCap = false
-  }
-
-  const over = speedGovernorOverHardCap
-    ? Math.max(0, speedForGovernor - (hardCap + PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_DEADBAND))
-    : 0
-  const brakeRatio = Math.min(1, over / PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_BAND)
-  const governorBrakeTarget = brakeRatio * brakeForceMax * PURE_PURSUIT_SPEED_GOVERNOR_BRAKE_MAX_RATIO
-  const brakeAlpha = 1 - Math.exp(-4 * dt)
-  speedGovernorBrakeAssist += (governorBrakeTarget - speedGovernorBrakeAssist) * brakeAlpha
-  brakeForce = Math.min(brakeForceMax, Math.max(brakeForce, speedGovernorBrakeAssist))
-
-  state.speedGovernorScale = speedGovernorScale
-  state.speedGovernorBrakeAssist = speedGovernorBrakeAssist
-  state.speedGovernorSmoothedForwardSpeedAbs = speedGovernorSmoothedForwardSpeedAbs
-  state.speedGovernorOverHardCap = speedGovernorOverHardCap
-
-  // 接近终点时提前增加制动，避免进入停车区时速度过高。
-  const brakeThreshold = Math.max(pursuitProps.brakeDistanceMinMeters, speed * pursuitProps.brakeDistanceSpeedFactor)
-  const shouldBrakeNearEnd = modeStopping && distanceToEnd < brakeThreshold
-  if (shouldBrakeNearEnd && !dockActive) {
-    brakeForce = Math.max(brakeForce, Math.min(brakeForceMax, brakeForceMax * 0.35))
-  }
-
-  // 泊车状态下锁定转向、关闭动力并施加更强的制动力。
-  if (dockActive) {
-    steeringRad = 0
-    engineForce = 0
-    brakeForce = Math.max(brakeForce, brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER)
-
-    if (pursuitProps.dockYawEnabled) {
-      // 允许在泊车时对齐朝向，使车身姿态更接近路径切线方向。
-      const prevIndex = clampedStopIndex > 0 ? clampedStopIndex - 1 : Math.min(clampedStopIndex + 1, endIndex)
-      const prev = points[prevIndex]!
-      const tanX = stopPoint.x - prev.x
-      const tanZ = stopPoint.z - prev.z
-      const tanLen = Math.sqrt(tanX * tanX + tanZ * tanZ)
-      const yaw = tanLen > 1e-6
-        ? Math.atan2(tanX / tanLen, tanZ / tanLen)
-        : Math.atan2(forwardWorld.x, forwardWorld.z)
-      yawTargetQuat.setFromAxisAngle(purePursuitUp, yaw)
-      const alphaYaw = 1 - Math.exp(-Math.max(0, pursuitProps.dockYawSlerpRate) * dt)
-      objectWorldQuat.copy(purePursuitChassisQuaternion)
-      objectWorldQuat.slerp(yawTargetQuat, clamp01(alphaYaw)).normalize()
-      chassisBody.quaternion.x = objectWorldQuat.x
-      chassisBody.quaternion.y = objectWorldQuat.y
-      chassisBody.quaternion.z = objectWorldQuat.z
-      chassisBody.quaternion.w = objectWorldQuat.w
-    }
-
-    // 缓和角速度，帮助车辆尽快稳定下来。
-    chassisBody.angularVelocity.x *= 0.85
-    chassisBody.angularVelocity.y *= 0.6
-    chassisBody.angularVelocity.z *= 0.85
-  }
-
-  // 将最终控制量下发给车辆物理轮组。
-  applyPhysicsVehicleWheelControl(vehicle, {
-    steeringValue: steeringRad,
-    engineForce,
-    brakeForce,
-    steerableWheelIndices: vehicleInstance.steerableWheelIndices,
+  const lastSteer = getLastSteerRad(state)
+  const steeringRad = resolvePurePursuitSteeringRad({
+    vehicleProps,
+    wheelbaseMeters,
+    targetLen,
+    forwardWorld,
+    desiredDir,
+    lastSteerRad: lastSteer,
+    deltaSeconds: dt,
   })
 
-  // 记录本帧目标速度、目标转角与调试点，方便外部界面或日志系统使用。
-  vehicle.autoTourTargetSpeedMps = desiredSpeedSigned
-  vehicle.autoTourTargetSteeringRad = steeringRad
+  const speed = Number.isFinite(speedMps) ? Math.max(0, speedMps) : 0
+  const speedCapMps = params.speedCapMps
+  const forwardVelocity = new THREE.Vector3(currentVelocity.x, 0, currentVelocity.z)
+  const forwardSignedSpeed = forwardVelocity.dot(forwardWorld)
+  const lastUseEngine = longitudinalState.longitudinalUseEngine
+  const speedIntegral = typeof longitudinalState.speedIntegral === 'number' ? longitudinalState.speedIntegral : 0
+  const speedTarget = resolvePurePursuitLongitudinalControl({
+    speedMps: speed,
+    speedCapMps,
+    steeringRad,
+    forwardSignedSpeed,
+    speedIntegral,
+    lastUseEngine,
+    speedGovernorScale: governorState.speedGovernorScale,
+    speedGovernorBrakeAssist: governorState.speedGovernorBrakeAssist,
+    speedGovernorSmoothedForwardSpeedAbs: governorState.speedGovernorSmoothedForwardSpeedAbs,
+    speedGovernorOverHardCap: governorState.speedGovernorOverHardCap,
+    pursuitProps,
+    vehicleProps,
+    deltaSeconds: dt,
+    modeStopping,
+    distanceToEnd,
+    dockActive,
+  })
+  const brakeForceMax = Number.isFinite(vehicleProps.brakeForceMax) ? Math.max(0, vehicleProps.brakeForceMax) : 0
 
+  let finalSteeringRad = steeringRad
+  let engineForce = speedTarget.engineForce
+  let brakeForce = speedTarget.brakeForce
+  if (dockActive) {
+    const dockingOverrides = resolvePurePursuitDockingOverrides({
+      dockActive,
+      clampStopIndex: clampedStopIndex,
+      endIndex,
+      points,
+      forwardWorld,
+      chassisBody,
+      pursuitProps,
+      vehicleProps,
+      vehicleInstance,
+      dt,
+    })
+    if (dockingOverrides) {
+      finalSteeringRad = dockingOverrides.steeringRad
+      engineForce = dockingOverrides.engineForce
+      brakeForce = Math.max(brakeForce, dockingOverrides.brakeForceFloor)
+    }
+  }
 
   if (modeStopping) {
-    // 进入最终停车判定：距离足够近且速度足够低时，视为到站。
     const planarSpeed = Math.sqrt(currentVelocity.x * currentVelocity.x + currentVelocity.z * currentVelocity.z)
     const stopDistance = Math.max(pursuitProps.dockStopEpsilonMeters, pursuitProps.dockStartDistanceMeters)
     if (distanceToEnd <= stopDistance && planarSpeed <= pursuitProps.dockStopSpeedEpsilonMps) {
@@ -509,6 +621,16 @@ export function applyPurePursuitVehicleControl(params: {
       chassisBody.angularVelocity.x = 0
       chassisBody.angularVelocity.y = 0
       chassisBody.angularVelocity.z = 0
+      steeringState.lastSteerRad = 0
+      longitudinalState.speedIntegral = speedTarget.speedIntegral
+      longitudinalState.longitudinalUseEngine = speedTarget.desiredUseEngine
+      governorState.speedGovernorScale = speedTarget.speedGovernorScale
+      governorState.speedGovernorBrakeAssist = speedTarget.speedGovernorBrakeAssist
+      governorState.speedGovernorSmoothedForwardSpeedAbs = speedTarget.speedGovernorSmoothedForwardSpeedAbs
+      governorState.speedGovernorOverHardCap = speedTarget.speedGovernorOverHardCap
+      longitudinalState.speedTargetMps = 0
+      longitudinalState.longitudinalErrorMps = -forwardSignedSpeed
+      longitudinalState.lastBrakeForce = brakeForce
       return {
         reachedStop: true,
         steeringRad: 0,
@@ -517,15 +639,31 @@ export function applyPurePursuitVehicleControl(params: {
     }
   }
 
-  // 保存纵向误差与刹车输出，供下一帧控制平滑衔接。
-  state.longitudinalErrorMps = speedError
-  state.lastBrakeForce = brakeForce
+  steeringState.lastSteerRad = finalSteeringRad
+  longitudinalState.speedIntegral = speedTarget.speedIntegral
+  longitudinalState.longitudinalUseEngine = speedTarget.desiredUseEngine
+  governorState.speedGovernorScale = speedTarget.speedGovernorScale
+  governorState.speedGovernorBrakeAssist = speedTarget.speedGovernorBrakeAssist
+  governorState.speedGovernorSmoothedForwardSpeedAbs = speedTarget.speedGovernorSmoothedForwardSpeedAbs
+  governorState.speedGovernorOverHardCap = speedTarget.speedGovernorOverHardCap
+  longitudinalState.speedTargetMps = speedTarget.speedTargetMps
+  longitudinalState.longitudinalErrorMps = speedTarget.speedTargetMps - forwardSignedSpeed
+  longitudinalState.lastBrakeForce = brakeForce
 
-  // 返回本帧结果：是否到站、当前转角和目标速度。
+  applyPhysicsVehicleWheelControl(vehicle, {
+    steeringValue: finalSteeringRad,
+    engineForce,
+    brakeForce,
+    steerableWheelIndices: vehicleInstance.steerableWheelIndices,
+  })
+
+  vehicle.autoTourTargetSpeedMps = speedTarget.speedTargetMps
+  vehicle.autoTourTargetSteeringRad = finalSteeringRad
+
   return {
     reachedStop: false,
-    steeringRad,
-    targetSpeedMps: desiredSpeedSigned,
+    steeringRad: finalSteeringRad,
+    targetSpeedMps: speedTarget.speedTargetMps,
   }
 }
 
