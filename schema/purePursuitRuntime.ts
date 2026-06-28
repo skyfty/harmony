@@ -74,6 +74,11 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
+function smoothstep01(value: number): number {
+  const t = clamp01(value)
+  return t * t * (3 - 2 * t)
+}
+
 const PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER = 6
 function clampNumber(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -255,8 +260,16 @@ function resolvePurePursuitLongitudinalControl(params: {
   const externalSpeedCap = Number.isFinite(speedCapMps) ? Math.max(0, speedCapMps!) : componentSpeedCap
   const speedCap = Math.min(componentSpeedCap, externalSpeedCap)
   let speedTarget = Math.max(pursuitProps.minSpeedMps, speed * turnFactor)
+  const dockStopDistance = Math.max(0.001, pursuitProps.dockStopEpsilonMeters)
+  const dockStartDistance = Math.max(dockStopDistance, Math.max(0.001, pursuitProps.dockStartDistanceMeters))
+  const dockWindow = Math.max(1e-6, dockStartDistance - dockStopDistance)
+  const dockProgress = THREE.MathUtils.clamp((distanceToEnd - dockStopDistance) / dockWindow, 0, 1)
+  const dockApproachBlend = smoothstep01(dockProgress)
   if (modeStopping) {
-    const approachSpeed = Math.min(pursuitProps.dockMaxSpeedMps, Math.max(0, distanceToEnd * pursuitProps.dockVelocityKp))
+    const approachSpeed = Math.min(
+      pursuitProps.dockMaxSpeedMps,
+      Math.max(0, distanceToEnd * pursuitProps.dockVelocityKp),
+    ) * dockApproachBlend
     speedTarget = Math.min(speedTarget, approachSpeed)
   }
 
@@ -346,7 +359,8 @@ function resolvePurePursuitLongitudinalControl(params: {
   }
 
   if (dockActive) {
-    brakeForce = Math.max(brakeForce, brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER)
+    const dockBrakeAssist = brakeForceMax * (0.15 + 0.85 * (1 - dockApproachBlend))
+    brakeForce = Math.max(brakeForce, dockBrakeAssist)
     engineForce = 0
   }
 
@@ -613,7 +627,7 @@ export function applyPurePursuitVehicleControl(params: {
 
   if (modeStopping) {
     const planarSpeed = Math.sqrt(currentVelocity.x * currentVelocity.x + currentVelocity.z * currentVelocity.z)
-    const stopDistance = Math.max(pursuitProps.dockStopEpsilonMeters, pursuitProps.dockStartDistanceMeters)
+    const stopDistance = Math.max(0.001, pursuitProps.dockStopEpsilonMeters)
     if (distanceToEnd <= stopDistance && planarSpeed <= pursuitProps.dockStopSpeedEpsilonMps) {
       holdVehicleBrakeSafe({ vehicleInstance, brakeForce: brakeForceMax * PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER })
       chassisBody.velocity.x = 0
@@ -649,7 +663,6 @@ export function applyPurePursuitVehicleControl(params: {
   longitudinalState.speedTargetMps = speedTarget.speedTargetMps
   longitudinalState.longitudinalErrorMps = speedTarget.speedTargetMps - forwardSignedSpeed
   longitudinalState.lastBrakeForce = brakeForce
-
 
   applyPhysicsVehicleWheelControl(vehicle, {
     steeringValue: finalSteeringRad,

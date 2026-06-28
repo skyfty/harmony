@@ -9258,6 +9258,7 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
 
   // 自动巡游目标速度（米/秒），不使用时为 null
   const desiredSpeedMps = Math.max(0, instance.vehicle.autoTourTargetSpeedMps);
+  // 取自动巡游目标速度与组件速度上限中的较小值，确保最终目标速度不会超过组件约束。
   const cappedDesiredSpeedMps = Math.min(desiredSpeedMps, Number.isFinite(autoTourMaxSpeedMps) ? Math.max(0, autoTourMaxSpeedMps) : desiredSpeedMps);
   const chassisBody = instance.vehicle.chassisBody ?? null;
   let forwardSpeedMps = 0;
@@ -9308,6 +9309,7 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
   // 手动/非目标控制路径仍以最大刹车力与配置最大刹车力的比值作为刹车值。
  const brake = cappedDesiredSpeedMps <= 0.1 ? 1 : THREE.MathUtils.clamp( (forwardSpeedMps - cappedDesiredSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.5), 0, 1);
   // 返回最终的车辆控制输入：转向、油门、刹车
+
   return {
     steering,
     throttle,
@@ -9345,8 +9347,11 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
     ? manualDriveNodeId
     : autoTourNodeId;
   const bridgeActiveNodeId = autoTourControlledNodeId ?? manualDriveNodeId;
+  const resolvedAutoTourInput = autoTourControlledNodeId
+    ? resolveSceneryPhysicsBridgeVehicleControlInput(autoTourControlledNodeId)
+    : null
   const bridgeInput: PhysicsBridgeVehicleControlInput = autoTourControlledNodeId
-    ? resolveSceneryPhysicsBridgeVehicleControlInput(autoTourControlledNodeId) ?? {
+    ? resolvedAutoTourInput ?? {
         steering: 0,
         throttle: 0,
         brake: 1,

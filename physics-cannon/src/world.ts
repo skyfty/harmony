@@ -731,7 +731,6 @@ export class CannonPhysicsWorld {
       const vehicle = state.vehicle
       const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
       const steerableWheelIndices = new Set(state.steerableWheelIndices)
-      console.log(engineForce, brakeForce)
       for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
         const applyControlToWheel = steerableWheelIndices.has(wheelIndex)
         vehicle.setSteeringValue(applyControlToWheel ? steeringValue : 0, wheelIndex)

@@ -2,7 +2,9 @@ import type {
   PhysicsTransform,
 } from '@harmony/physics-core'
 
-export const PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE = 0.05
+// Keep the stop/deadzone threshold small enough that low-speed auto-tour
+// cruise values do not get misclassified as "idle" and forced into a hard brake.
+export const PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE = 0.01
 const PHYSICS_BRIDGE_VEHICLE_INPUT_EPSILON = 1e-4
 
 type PhysicsBridgeVehicleControlInput = {
@@ -132,11 +134,28 @@ export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInput
     state.motionInputActive = false
   }
 
+  // 判断当前是否有有效的运动输入：
+  // 当油门或刹车的绝对值超过死区阈值时，认为玩家正在主动控制车辆。
+  // 使用死区是为了防止极小的输入值（如自动巡游的低速值）被误判为空闲状态。
   const motionInputActive =
     Math.abs(input.throttle) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
     || Math.abs(input.brake) > PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE
+
+
+  // 判断是否需要立即停车：
+  // 当上一帧存在运动输入，而当前帧运动输入消失时，触发立即停车逻辑，
+  // 防止车辆因惯性继续滑行。
   const shouldStopImmediately = state.motionInputActive && !motionInputActive
+
+  // 计算实际发送给物理引擎的刹车值：
+  // 若当前有运动输入，使用玩家输入的刹车值；
+  // 否则强制将刹车设为 1（全力刹车），确保车辆停止。
   const bridgeBrake = motionInputActive ? input.brake : 1
+
+  // 判断是否需要向物理桥发送新的输入指令，满足以下任一条件则需要同步：
+  // 1. 当前驾驶的车辆与上次不同（切换了车辆）
+  // 2. 任意上次发送的输入值为 null（首次发送，尚未初始化）
+  // 3. 转向、油门或刹车的变化量超过浮点精度阈值（输入发生了有效变化）
   const shouldSyncInput =
     state.lastDrivenVehicleId !== vehicleId
     || state.lastSentSteering === null
@@ -152,17 +171,18 @@ export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInput
   if (!shouldSyncInput && !shouldStopImmediately) {
     return
   }
+  console.log("fffffffffff", input.throttle, PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE,bridgeBrake)
 
   state.lastSentSteering = input.steering
   state.lastSentThrottle = input.throttle
   state.lastSentBrake = bridgeBrake
   const inputPromise = shouldSyncInput
     ? bridge.setVehicleInput({
-        vehicleId,
-        steering: input.steering,
-        throttle: input.throttle,
-        brake: bridgeBrake,
-      })
+      vehicleId,
+      steering: input.steering,
+      throttle: input.throttle,
+      brake: bridgeBrake,
+    })
     : Promise.resolve()
   const stopPromise = shouldStopImmediately
     ? stopPhysicsBridgeVehicleImmediately(options, activeNodeId)

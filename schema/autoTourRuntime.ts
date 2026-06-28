@@ -134,6 +134,7 @@ const AUTO_TOUR_DIRECT_MOVE_CORNER_BLEND_FACTOR = 0.75
 // When loop=false, treat near-identical start/end points as accidental duplicates and drop the last one.
 // Keep this small to avoid altering legitimately-close routes.
 const AUTO_TOUR_END_DUPLICATE_EPSILON_METERS = 0.05
+const AUTO_TOUR_STOP_NEAR_END_DISTANCE_METERS = 0.5
 
 
 function expSmoothingAlpha(smoothing: number, deltaSeconds: number): number {
@@ -168,6 +169,28 @@ function setVector3Like(target: any, x: number, y: number, z: number): void {
   target.x = x
   target.y = y
   target.z = z
+}
+
+function resolveRemainingRouteDistance(
+  polylineData3d: PolylineMetricData | undefined,
+  projectedS: number | undefined,
+): number | null {
+  if (!polylineData3d || !Number.isFinite(polylineData3d.totalLength) || typeof projectedS !== 'number' || !Number.isFinite(projectedS)) {
+    return null
+  }
+  return Math.max(0, polylineData3d.totalLength - projectedS)
+}
+
+function shouldEnterStoppingByRemainingDistance(
+  polylineData3d: PolylineMetricData | undefined,
+  projectedS: number | undefined,
+  thresholdMeters: number,
+): boolean {
+  const remainingDistance = resolveRemainingRouteDistance(polylineData3d, projectedS)
+  if (remainingDistance === null) {
+    return false
+  }
+  return remainingDistance <= Math.max(0, thresholdMeters)
 }
 
 function syncNodeTransformFromObject(node: SceneNode, object: THREE.Object3D): void {
@@ -512,7 +535,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           }
           state.targetIndex = Math.max(state.targetIndex, Math.min(stopBarrierIndex, nextIndex))
 
-          if (!tourProps.loop && stopBarrierIndex === endIndex && proj.s >= polylineData3d.totalLength - Math.max(0.5, arrivalDistance)) {
+          const terminalStopThresholdMeters = Math.max(AUTO_TOUR_STOP_NEAR_END_DISTANCE_METERS, arrivalDistance)
+          if (
+            !tourProps.loop
+            && stopBarrierIndex === endIndex
+            && shouldEnterStoppingByRemainingDistance(polylineData3d, proj.s, terminalStopThresholdMeters)
+          ) {
             state.mode = 'stopping'
             state.targetIndex = endIndex
           } else if (tourProps.loop) {
@@ -591,10 +619,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return true
     }
 
-      const result = applyPurePursuitVehicleControlSafe({
-        vehicleInstance: vehicleInstance as any,
-        points,
-        loop: Boolean(tourProps.loop),
+    const result = applyPurePursuitVehicleControlSafe({
+      vehicleInstance: vehicleInstance as any,
+      points,
+      loop: Boolean(tourProps.loop),
       deltaSeconds,
       speedMps: routeSpeed,
       speedCapMps: speedCap,
@@ -612,7 +640,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     vehicleInstance.vehicle.autoTourTargetSpeedMps = result.targetSpeedMps
     vehicleInstance.vehicle.autoTourTargetSteeringRad = result.steeringRad
 
-      if (state.mode === 'stopping' && result.reachedStop) {
+    if (state.mode === 'stopping' && result.reachedStop) {
       finalizeAutoTourDockStop({ nodeId, state, endIndex: route.endIndex, tourProps, terminalReason: 'vehicle-reached-stop' })
     }
 
@@ -1252,7 +1280,14 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       activeTourNodes.add(nodeId)
     }
 
-    if (!tourProps.loop && snap.targetIndex >= snap.routeWaypointCount - 1) {
+    if (
+      !tourProps.loop
+      && shouldEnterStoppingByRemainingDistance(
+        snap.polylineData3d,
+        snap.projectedS,
+        AUTO_TOUR_STOP_NEAR_END_DISTANCE_METERS,
+      )
+    ) {
       const seeded = autoTourPlaybackState.get(key)
       if (seeded) {
         seeded.mode = 'stopping'
