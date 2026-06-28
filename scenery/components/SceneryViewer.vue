@@ -9256,18 +9256,19 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
 
   const speedError = targetSpeedMps - Math.max(0, forwardSpeed);
   const speedReference = Number.isFinite(maxSpeedMps) && maxSpeedMps > 0 ? maxSpeedMps : Math.max(1, targetSpeedMps);
-  const throttleFromTarget = THREE.MathUtils.clamp(targetSpeedMps / speedReference, 0.02, 1);
-  const throttleFromError = speedError > 0
+  const speedDeadband = Math.max(0.05, targetSpeedMps * 0.12);
+  const cruiseThrottle = THREE.MathUtils.clamp(targetSpeedMps / speedReference, 0.02, 1);
+  const accelThrottle = speedError > speedDeadband
     ? THREE.MathUtils.clamp(speedError / speedReference, 0.02, 1)
     : 0;
-  const brakeFromError = speedError < 0
-    ? THREE.MathUtils.clamp((-speedError) / speedReference, 0, 1)
+  const brakeInput = speedError < -speedDeadband
+    ? THREE.MathUtils.clamp((-speedError) / speedReference, 0.02, 0.5)
     : 0;
-
+  const maintainThrottle = THREE.MathUtils.clamp(Math.max(cruiseThrottle, accelThrottle), 0.02, 0.35);
   return {
     steering: THREE.MathUtils.clamp(targetSteeringRad / maxSteerRad, -1, 1),
-    throttle: Math.max(throttleFromTarget, throttleFromError),
-    brake: brakeFromError,
+    throttle: brakeInput > 0 ? 0 : maintainThrottle,
+    brake: brakeInput,
   };
 }
 

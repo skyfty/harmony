@@ -171,6 +171,7 @@ export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInput
   if (!shouldSyncInput && !shouldStopImmediately) {
     return
   }
+
   state.lastSentSteering = input.steering
   state.lastSentThrottle = input.throttle
   state.lastSentBrake = bridgeBrake

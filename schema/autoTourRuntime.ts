@@ -485,7 +485,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           state: resolvedControlState,
           modeStopping: false,
           distanceToTarget: distanceToStart,
-          debugLabel: 'return-to-start',
         })
         vehicleInstance.vehicle.autoTourTargetSpeedMps = result.targetSpeedMps
         vehicleInstance.vehicle.autoTourTargetSteeringRad = result.steeringRad
@@ -632,7 +631,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       state: controlState,
       modeStopping: state.mode === 'stopping',
       distanceToTarget: route.distance,
-      debugLabel: `${nodeId}:${state.mode}`,
       ...(state.mode === 'stopping'
         ? {
           stopIndex: getAutoTourDockStopIndex(state, route.endIndex),
