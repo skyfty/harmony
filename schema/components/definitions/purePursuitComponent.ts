@@ -311,17 +311,55 @@ class PurePursuitComponent extends Component<PurePursuitComponentProps> {
 
 const purePursuitComponentDefinition: ComponentDefinition<PurePursuitComponentProps> = {
   type: PURE_PURSUIT_COMPONENT_TYPE,
-  label: 'Pure Pursuit',
+  label: 'Regulated Pursuit',
   icon: 'mdi-crosshairs-gps',
   order: 171,
   inspector: [
     {
+      id: 'lookahead',
+      label: 'Lookahead',
+      fields: [
+        { kind: 'number', key: 'lookaheadBaseMeters', label: 'Base Lookahead (m)', min: MIN_PURE_PURSUIT_LOOKAHEAD_BASE_METERS, max: MAX_PURE_PURSUIT_LOOKAHEAD_BASE_METERS, step: 0.1, precision: 2 },
+        { kind: 'number', key: 'lookaheadSpeedGain', label: 'Speed Gain', min: MIN_PURE_PURSUIT_LOOKAHEAD_SPEED_GAIN, max: MAX_PURE_PURSUIT_LOOKAHEAD_SPEED_GAIN, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'lookaheadMinMeters', label: 'Min Lookahead (m)', min: MIN_PURE_PURSUIT_LOOKAHEAD_MIN_METERS, max: MAX_PURE_PURSUIT_LOOKAHEAD_MIN_METERS, step: 0.1, precision: 2 },
+        { kind: 'number', key: 'lookaheadMaxMeters', label: 'Max Lookahead (m)', min: MIN_PURE_PURSUIT_LOOKAHEAD_MAX_METERS, max: MAX_PURE_PURSUIT_LOOKAHEAD_MAX_METERS, step: 0.1, precision: 2 },
+      ],
+    },
+    {
       id: 'speed',
-      label: 'Speed',
+      label: 'Speed Control',
       fields: [
         { kind: 'number', key: 'minSpeedMps', label: 'Min Speed (m/s)', min: MIN_PURE_PURSUIT_MIN_SPEED_MPS, max: MAX_PURE_PURSUIT_MIN_SPEED_MPS, step: 0.1, precision: 2 },
         { kind: 'number', key: 'maxSpeedMps', label: 'Max Speed (m/s)', min: MIN_PURE_PURSUIT_MAX_SPEED_MPS, max: MAX_PURE_PURSUIT_MAX_SPEED_MPS, step: 0.1, precision: 2 },
+        { kind: 'number', key: 'curvatureSpeedFactor', label: 'Curvature Slowdown', min: MIN_PURE_PURSUIT_CURVATURE_SPEED_FACTOR, max: MAX_PURE_PURSUIT_CURVATURE_SPEED_FACTOR, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'speedKp', label: 'Speed Kp', min: MIN_PURE_PURSUIT_SPEED_KP, max: MAX_PURE_PURSUIT_SPEED_KP, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'speedKi', label: 'Speed Ki', min: MIN_PURE_PURSUIT_SPEED_KI, max: MAX_PURE_PURSUIT_SPEED_KI, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'speedIntegralMax', label: 'Integral Clamp', min: MIN_PURE_PURSUIT_SPEED_INTEGRAL_MAX, max: MAX_PURE_PURSUIT_SPEED_INTEGRAL_MAX, step: 0.1, precision: 2 },
+      ],
+    },
+    {
+      id: 'approach',
+      label: 'Approach & Brake',
+      fields: [
+        { kind: 'number', key: 'arrivalDistanceMinMeters', label: 'Approach Min (m)', min: MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS, max: MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'arrivalDistanceMaxMeters', label: 'Approach Max (m)', min: MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS, max: MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'arrivalDistanceSpeedFactor', label: 'Approach Speed Gain', min: MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR, max: MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'brakeDistanceMinMeters', label: 'Brake Min (m)', min: MIN_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS, max: MAX_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'brakeDistanceSpeedFactor', label: 'Brake Speed Gain', min: MIN_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR, max: MAX_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR, step: 0.05, precision: 2 },
+      ],
+    },
+    {
+      id: 'docking',
+      label: 'Docking',
+      fields: [
+        { kind: 'boolean', key: 'dockingEnabled', label: 'Docking Enabled' },
+        { kind: 'number', key: 'dockStartDistanceMeters', label: 'Dock Start (m)', min: MIN_PURE_PURSUIT_DOCK_START_DISTANCE_METERS, max: MAX_PURE_PURSUIT_DOCK_START_DISTANCE_METERS, step: 0.05, precision: 2 },
         { kind: 'number', key: 'dockMaxSpeedMps', label: 'Dock Max Speed (m/s)', min: MIN_PURE_PURSUIT_DOCK_MAX_SPEED_MPS, max: MAX_PURE_PURSUIT_DOCK_MAX_SPEED_MPS, step: 0.05, precision: 2 },
+        { kind: 'number', key: 'dockVelocityKp', label: 'Dock Velocity Kp', min: MIN_PURE_PURSUIT_DOCK_VELOCITY_KP, max: MAX_PURE_PURSUIT_DOCK_VELOCITY_KP, step: 0.05, precision: 2 },
+        { kind: 'boolean', key: 'dockYawEnabled', label: 'Dock Yaw Enabled' },
+        { kind: 'number', key: 'dockYawSlerpRate', label: 'Dock Yaw Rate', min: MIN_PURE_PURSUIT_DOCK_YAW_SLERP_RATE, max: MAX_PURE_PURSUIT_DOCK_YAW_SLERP_RATE, step: 0.1, precision: 2 },
+        { kind: 'number', key: 'dockStopEpsilonMeters', label: 'Dock Stop Epsilon (m)', min: MIN_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS, max: MAX_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS, step: 0.01, precision: 3 },
+        { kind: 'number', key: 'dockStopSpeedEpsilonMps', label: 'Dock Stop Speed (m/s)', min: MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS, max: MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS, step: 0.01, precision: 3 },
       ],
     },
   ],

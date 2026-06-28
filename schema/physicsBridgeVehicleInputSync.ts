@@ -171,8 +171,6 @@ export function syncPhysicsBridgeVehicleInput(options: PhysicsBridgeVehicleInput
   if (!shouldSyncInput && !shouldStopImmediately) {
     return
   }
-  console.log("fffffffffff", input.throttle, PHYSICS_BRIDGE_VEHICLE_STOP_INPUT_DEADZONE,bridgeBrake)
-
   state.lastSentSteering = input.steering
   state.lastSentThrottle = input.throttle
   state.lastSentBrake = bridgeBrake

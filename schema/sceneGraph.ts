@@ -991,6 +991,12 @@ class SceneGraphBuilder {
     if (isRuntimeHiddenInPreview(node)) {
       return null;
     }
+    if (node.dynamicMesh?.type === 'GuideRoute') {
+      const dynamicMeshNode = await this.buildDynamicMeshNode(node);
+      if (dynamicMeshNode) {
+        return dynamicMeshNode;
+      }
+    }
     if (node.editorFlags?.editorOnly) {
       const result = await this.buildEditorOnlyNode(node);
       return result;

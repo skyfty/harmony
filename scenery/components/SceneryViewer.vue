@@ -879,7 +879,6 @@ import {
 import {
   autoTourComponentDefinition,
   AUTO_TOUR_COMPONENT_TYPE,
-  clampAutoTourComponentProps,
   cloneAutoTourComponentProps,
   type AutoTourComponentProps,
 } from '@harmony/schema/components/definitions/autoTourComponent';
@@ -9223,97 +9222,52 @@ function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): Physics
     // 没有车轮信息，无法计算控制输入，返回 null
     return null;
   }
-
-  // 用于统计所有车轮中的最大引擎力、最大刹车力以及转向角之和与计数
-  let maxEngineForce = 0;
-  let maxBrakeForce = 0;
-  let steeringSum = 0;
-  let steeringCount = 0;
-
-  wheelInfos.forEach((wheelInfo: any) => {
-    // 引擎力和刹车力不允许为负值
-    const engineForce = Math.max(0, wheelInfo.engineForce);
-    const brakeForce = Math.max(0, wheelInfo.brake);
-    const steering = wheelInfo.steering;
-
-    // 取所有车轮中的最大引擎力和最大刹车力
-    maxEngineForce = Math.max(maxEngineForce, engineForce);
-    maxBrakeForce = Math.max(maxBrakeForce, brakeForce);
-
-    // 仅统计转向角绝对值大于极小阈值的车轮，避免浮点误差干扰
-    if (Math.abs(steering) > 1e-6) {
-      steeringSum += steering;
-      steeringCount += 1;
-    }
-  });
-  // 判断该节点是否处于自动巡游激活状态
-  const useDesiredTargets = activeAutoTourNodeIds.has(nodeId);
-  // 仅当自动巡游激活且当前节点不被手动驾驶占用时，才使用自动巡游的目标控制值
-
-  // 自动巡游组件自身的速度上限，优先作为最终目标速度的约束。
-  const autoTourComponent = useDesiredTargets ? resolveAutoTourComponent(resolveNodeById(nodeId)) : null;
-  const autoTourMaxSpeedMps = autoTourComponent?.props
-    ? clampAutoTourComponentProps(autoTourComponent.props).maxSpeedMps
-    : Number.POSITIVE_INFINITY;
-
-  // 自动巡游目标速度（米/秒），不使用时为 null
-  const desiredSpeedMps = Math.max(0, instance.vehicle.autoTourTargetSpeedMps);
-  // 取自动巡游目标速度与组件速度上限中的较小值，确保最终目标速度不会超过组件约束。
-  const cappedDesiredSpeedMps = Math.min(desiredSpeedMps, Number.isFinite(autoTourMaxSpeedMps) ? Math.max(0, autoTourMaxSpeedMps) : desiredSpeedMps);
+  const targetSpeedMps = Number.isFinite(instance.vehicle.autoTourTargetSpeedMps)
+    ? Math.max(0, instance.vehicle.autoTourTargetSpeedMps)
+    : 0;
+  const targetSteeringRad = Number.isFinite(instance.vehicle.autoTourTargetSteeringRad)
+    ? instance.vehicle.autoTourTargetSteeringRad
+    : 0;
   const chassisBody = instance.vehicle.chassisBody ?? null;
-  let forwardSpeedMps = 0;
-  if (chassisBody && instance.axisForward) {
-    vehicleCompassQuaternion.set(
-      chassisBody.quaternion.x,
-      chassisBody.quaternion.y,
-      chassisBody.quaternion.z,
-      chassisBody.quaternion.w,
-    );
-    vehicleCompassForward.copy(instance.axisForward).applyQuaternion(vehicleCompassQuaternion);
-    if (vehicleCompassForward.lengthSq() > 1e-8) {
-      vehicleCompassForward.normalize();
-      forwardSpeedMps = (
-        chassisBody.velocity.x * vehicleCompassForward.x
-        + chassisBody.velocity.y * vehicleCompassForward.y
-        + chassisBody.velocity.z * vehicleCompassForward.z
-      );
+  const velocity = chassisBody?.velocity ?? null;
+  const quaternion = chassisBody?.quaternion ?? null;
+  const maxSpeedMps = Number.isFinite(vehicleProps.maxSpeedKmh) && vehicleProps.maxSpeedKmh > 0
+    ? vehicleProps.maxSpeedKmh / 3.6
+    : Number.POSITIVE_INFINITY;
+  const maxSteerRad = THREE.MathUtils.degToRad(26);
+
+  let forwardSpeed = 0;
+  if (velocity && quaternion && instance.axisForward) {
+    tempForwardVec.copy(instance.axisForward);
+    if (tempForwardVec.lengthSq() > 1e-8) {
+      tempForwardVec.normalize().applyQuaternion(quaternion);
+      forwardSpeed = velocity.x * tempForwardVec.x + velocity.y * tempForwardVec.y + velocity.z * tempForwardVec.z;
     }
   }
 
-  // 自动巡游目标转向角（弧度），不使用时为 null
-  const desiredSteeringRad = useDesiredTargets ? instance.vehicle.autoTourTargetSteeringRad : null;
+  // 目标速度为零时直接进入制动保持，避免物理后端把极小油门误判成持续前进。
+  if (targetSpeedMps <= 0.02) {
+    return {
+      steering: THREE.MathUtils.clamp(targetSteeringRad / maxSteerRad, -1, 1),
+      throttle: 0,
+      brake: 1,
+    };
+  }
 
-  // 将最大转向角从角度转换为弧度，至少保证 1 度防止除零
-  const maxSteerRad = THREE.MathUtils.degToRad(Math.max(1, vehicleProps.maxSteerDegrees));
-
-  // 计算归一化转向值（范围 [-1, 1]）：
-  // 优先使用自动巡游目标转向角，否则取各车轮转向角的平均值，最终归一化到最大转向弧度
-  const steering = desiredSteeringRad != null
-    ? THREE.MathUtils.clamp(desiredSteeringRad / Math.max(1e-6, maxSteerRad), -1, 1)
-    : steeringCount > 0
-    ? THREE.MathUtils.clamp(steeringSum / steeringCount / Math.max(1e-6, maxSteerRad), -1, 1)
+  const speedError = targetSpeedMps - Math.max(0, forwardSpeed);
+  const speedReference = Number.isFinite(maxSpeedMps) && maxSpeedMps > 0 ? maxSpeedMps : Math.max(1, targetSpeedMps);
+  const throttleFromTarget = THREE.MathUtils.clamp(targetSpeedMps / speedReference, 0.02, 1);
+  const throttleFromError = speedError > 0
+    ? THREE.MathUtils.clamp(speedError / speedReference, 0.02, 1)
+    : 0;
+  const brakeFromError = speedError < 0
+    ? THREE.MathUtils.clamp((-speedError) / speedReference, 0, 1)
     : 0;
 
-  // 将最大速度从 km/h 转换为 m/s；自动导览优先使用 AutoTour.maxSpeedMps 作为速度上限。
-  const vehicleMaxSpeedMps = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : 0;
-
-  // 计算归一化油门值（范围 [-1, 1]）：
-  // 自动巡游模式下改为闭环控速：根据“目标速度 - 当前前进速度”计算油门，并在超速时辅助制动。
-  // 手动模式下以最大引擎力与配置最大引擎力的比值作为油门
-  const throttle = vehicleMaxSpeedMps > 0
-    ? THREE.MathUtils.clamp((cappedDesiredSpeedMps - forwardSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.65),  0, 1)
-    : vehicleProps.engineForceMax > 0 ? THREE.MathUtils.clamp(maxEngineForce / vehicleProps.engineForceMax, -1, 1) : 0;
-
-  // 计算归一化刹车值（范围 [0, 1]）：
-  // 自动巡游巡航时在超速时使用刹车辅助，避免只给油不收油导致速度飙升。
-  // 手动/非目标控制路径仍以最大刹车力与配置最大刹车力的比值作为刹车值。
- const brake = cappedDesiredSpeedMps <= 0.1 ? 1 : THREE.MathUtils.clamp( (forwardSpeedMps - cappedDesiredSpeedMps) / Math.max(0.5, vehicleMaxSpeedMps * 0.5), 0, 1);
-  // 返回最终的车辆控制输入：转向、油门、刹车
-
   return {
-    steering,
-    throttle,
-    brake,
+    steering: THREE.MathUtils.clamp(targetSteeringRad / maxSteerRad, -1, 1),
+    throttle: Math.max(throttleFromTarget, throttleFromError),
+    brake: brakeFromError,
   };
 }
 
@@ -10971,10 +10925,11 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
     object.name = node.name;
   }
   updateNodeTransfrom(object, node);
+  const isGuideRouteNode = node.dynamicMesh?.type === 'GuideRoute';
   const guideboardVisibility = resolveGuideboardInitialVisibility(node);
   if (guideboardVisibility !== null) {
     object.visible = guideboardVisibility;
-  } else if (isRuntimeHiddenInPreview(node) || node.editorFlags?.editorOnly || object.userData?.hidden === true) {
+  } else if (isRuntimeHiddenInPreview(node) || (node.editorFlags?.editorOnly && !isGuideRouteNode) || object.userData?.hidden === true) {
     object.visible = false;
   } else if (typeof node.visible === 'boolean') {
     object.visible = node.visible;

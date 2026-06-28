@@ -271,7 +271,7 @@ function handleRemoveComponent() {
   <v-expansion-panel value="purePursuit">
     <v-expansion-panel-title>
       <div class="pure-pursuit-panel-header">
-        <span class="pure-pursuit-panel-title">Pure Pursuit</span>
+        <span class="pure-pursuit-panel-title">Regulated Pursuit</span>
         <v-spacer />
         <v-menu
           v-if="purePursuitComponent"
@@ -306,8 +306,9 @@ function handleRemoveComponent() {
 
     <v-expansion-panel-text>
       <div class="pure-pursuit-panel-body" :class="{ 'is-disabled': !componentEnabled }">
+        <div class="pure-pursuit-panel-section-title">Lookahead</div>
         <v-text-field
-          label="Lookahead Base (m)"
+          label="Base Lookahead (m)"
           type="number"
           density="compact"
           variant="solo"
@@ -320,7 +321,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Lookahead Speed Gain"
+          label="Speed Gain"
           type="number"
           density="compact"
           variant="solo"
@@ -333,7 +334,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Lookahead Min (m)"
+          label="Min Lookahead (m)"
           type="number"
           density="compact"
           variant="solo"
@@ -346,7 +347,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Lookahead Max (m)"
+          label="Max Lookahead (m)"
           type="number"
           density="compact"
           variant="solo"
@@ -359,6 +360,7 @@ function handleRemoveComponent() {
         />
 
         <v-divider />
+        <div class="pure-pursuit-panel-section-title">Speed Control</div>
 
         <v-text-field
           label="Speed Kp"
@@ -387,7 +389,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Speed Integral Max"
+          label="Integral Clamp"
           type="number"
           density="compact"
           variant="solo"
@@ -413,7 +415,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Max Speed (km/h)"
+          label="Cruise Max Speed (km/h)"
           type="number"
           density="compact"
           variant="solo"
@@ -426,7 +428,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Curvature Speed Factor"
+          label="Curvature Slowdown"
           type="number"
           density="compact"
           variant="solo"
@@ -439,9 +441,10 @@ function handleRemoveComponent() {
         />
 
         <v-divider />
+        <div class="pure-pursuit-panel-section-title">Approach & Brake</div>
 
         <v-text-field
-          label="Arrival Distance Min (m)"
+          label="Approach Min (m)"
           type="number"
           density="compact"
           variant="solo"
@@ -454,7 +457,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Arrival Distance Max (m)"
+          label="Approach Max (m)"
           type="number"
           density="compact"
           variant="solo"
@@ -467,7 +470,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Arrival Distance Speed Factor"
+          label="Approach Speed Gain"
           type="number"
           density="compact"
           variant="solo"
@@ -480,7 +483,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Brake Distance Min (m)"
+          label="Brake Min (m)"
           type="number"
           density="compact"
           variant="solo"
@@ -493,7 +496,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Brake Distance Speed Factor"
+          label="Brake Speed Gain"
           type="number"
           density="compact"
           variant="solo"
@@ -506,6 +509,7 @@ function handleRemoveComponent() {
         />
 
         <v-divider />
+        <div class="pure-pursuit-panel-section-title">Docking</div>
 
         <v-switch
           label="Docking Enabled"
@@ -517,7 +521,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Dock Start Distance (m)"
+          label="Dock Start (m)"
           type="number"
           density="compact"
           variant="solo"
@@ -565,7 +569,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Dock Yaw Slerp Rate"
+          label="Dock Yaw Rate"
           type="number"
           density="compact"
           variant="solo"
@@ -591,7 +595,7 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Dock Stop Speed Epsilon (km/h)"
+          label="Dock Stop Speed (km/h)"
           type="number"
           density="compact"
           variant="solo"
@@ -623,6 +627,15 @@ function handleRemoveComponent() {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+.pure-pursuit-panel-section-title {
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .component-menu-btn {
