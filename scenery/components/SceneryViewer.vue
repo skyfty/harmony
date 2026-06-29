@@ -21485,8 +21485,9 @@ onUnmounted(() => {
   pointer-events: auto;
   padding: 6px 8px;
   border-radius: 14px;
-  background: linear-gradient(180deg, rgba(19, 35, 56, 0.08), rgba(19, 35, 56, 0.02));
-  backdrop-filter: blur(8px);
+  background: linear-gradient(180deg, rgba(8, 16, 28, 0.18), rgba(8, 16, 28, 0.08));
+  border: 1px solid rgba(125, 159, 199, 0.12);
+  backdrop-filter: blur(10px);
 }
 
 .viewer-character-action-button {
@@ -21494,29 +21495,29 @@ onUnmounted(() => {
   min-width: 32px;
   height: 32px;
   padding: 0;
-  border: 1px solid rgba(153, 193, 255, 0.22);
+  border: 1px solid rgba(127, 166, 209, 0.18);
   border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 246, 255, 0.82));
-  color: #28506f;
-  box-shadow: 0 6px 16px rgba(52, 87, 128, 0.14);
-  backdrop-filter: blur(16px) saturate(1.04);
+  background: linear-gradient(180deg, rgba(30, 44, 63, 0.72), rgba(19, 31, 47, 0.62));
+  color: rgba(220, 231, 245, 0.92);
+  box-shadow: 0 6px 16px rgba(3, 8, 18, 0.22);
+  backdrop-filter: blur(12px) saturate(1.02);
   transition: transform 0.16s ease, background-color 0.16s ease, border-color 0.16s ease, opacity 0.16s ease;
 }
 
 .viewer-character-action-button.is-active,
 .viewer-character-action-button:active {
   transform: scale(0.94);
-  background: linear-gradient(180deg, rgba(217, 236, 255, 0.96), rgba(194, 225, 255, 0.84));
-  border-color: rgba(107, 168, 232, 0.35);
+  background: linear-gradient(180deg, rgba(50, 70, 96, 0.88), rgba(33, 49, 70, 0.78));
+  border-color: rgba(150, 186, 225, 0.28);
 }
 
 .viewer-character-action-button--danger {
-  background: linear-gradient(180deg, rgba(255, 243, 246, 0.96), rgba(255, 231, 237, 0.86));
-  border-color: rgba(233, 124, 151, 0.24);
-  color: #a23250;
+  background: linear-gradient(180deg, rgba(64, 39, 49, 0.78), rgba(45, 27, 35, 0.68));
+  border-color: rgba(233, 124, 151, 0.22);
+  color: rgba(255, 214, 223, 0.96);
 }
 
 .viewer-character-action-button__icon {
