@@ -39,6 +39,7 @@ import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
 import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
 import NominatePanel from '@/components/inspector/NominatePanel.vue'
 import CouponPanel from '@/components/inspector/CouponPanel.vue'
+import ProceduralCityPanel from '@/components/inspector/ProceduralCityPanel.vue'
 import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema/core'
@@ -79,6 +80,7 @@ import {
   resolveModelCollisionComponentPropsFromNode,
   
   LOD_COMPONENT_TYPE,
+  PROCEDURAL_CITY_COMPONENT_TYPE,
 } from '@schema/components'
 
 type BehaviorDetailsPayload = {
@@ -632,6 +634,7 @@ watch(
               <NominatePanel v-else-if="component.type === NOMINATE_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />
+              <ProceduralCityPanel v-else-if="component.type === PROCEDURAL_CITY_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
                 @open-details="handleOpenBehaviorDetails"

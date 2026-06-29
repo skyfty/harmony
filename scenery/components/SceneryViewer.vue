@@ -720,6 +720,9 @@ import {
   floorComponentDefinition,
 } from '@harmony/schema/components/definitions/floorComponent';
 import {
+  proceduralCityComponentDefinition,
+} from '@harmony/schema/components/definitions/proceduralCityComponent';
+import {
   wallComponentDefinition,
   WALL_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/wallComponent';
@@ -1923,6 +1926,7 @@ function disposeMaterialTextureCache(): void {
 
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(floorComponentDefinition);
+previewComponentManager.registerDefinition(proceduralCityComponentDefinition);
 previewComponentManager.registerDefinition(animationComponentDefinition);
 previewComponentManager.registerDefinition(wallComponentDefinition);
 previewComponentManager.registerDefinition(boundaryWallComponentDefinition);

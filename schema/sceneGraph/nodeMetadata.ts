@@ -13,6 +13,10 @@ import {
 import type { ViewPointComponentProps } from '../components/definitions/viewPointComponent';
 import { VIEW_POINT_COMPONENT_TYPE } from '../components/definitions/viewPointComponent';
 import { PARTICLE_SYSTEM_COMPONENT_TYPE } from '../components/definitions/particleSystemComponent';
+import {
+  PROCEDURAL_CITY_HOST_USER_DATA_KEY,
+  cloneProceduralCityHostSnapshot,
+} from '../components/definitions/proceduralCityComponent';
 
 export function applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExtras): void {
   if (!object || !node || !node.id) {
@@ -25,6 +29,12 @@ export function applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExt
   metadata.dynamicMeshType = node.dynamicMesh?.type ?? null;
   metadata.lightType = node.light?.type ?? null;
   metadata.sourceAssetId = node.sourceAssetId ?? null;
+  const proceduralCityHost = cloneProceduralCityHostSnapshot(node.dynamicMesh);
+  if (proceduralCityHost) {
+    metadata[PROCEDURAL_CITY_HOST_USER_DATA_KEY] = proceduralCityHost;
+  } else {
+    delete metadata[PROCEDURAL_CITY_HOST_USER_DATA_KEY];
+  }
 
   const guideboardState = node.components?.[GUIDEBOARD_COMPONENT_TYPE] as
     | SceneNodeComponentState<GuideboardComponentProps>

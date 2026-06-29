@@ -186,6 +186,7 @@ import {
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
 	floorComponentDefinition,
+	proceduralCityComponentDefinition,
 	wallComponentDefinition,
 	roadComponentDefinition,
 	landformComponentDefinition,
@@ -347,7 +348,6 @@ import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import { createAutoTourRuntime } from '@schema/motion'
 import { createScenePreviewPerfController } from '@schema/overlay'
 import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
-
 
 const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
 	format: 'json',
@@ -1217,6 +1217,7 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(floorComponentDefinition)
+previewComponentManager.registerDefinition(proceduralCityComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(boundaryWallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)

@@ -30,6 +30,7 @@ import './definitions/nominateComponent'
 import './definitions/signboardComponent'
 import './definitions/boundaryWallComponent'
 import './definitions/modelCollisionComponent'
+import './definitions/proceduralCityComponent'
 
 export {
 	componentManager,
@@ -77,3 +78,4 @@ export * from './definitions/nominateComponent'
 export * from './definitions/signboardComponent'
 export * from './definitions/boundaryWallComponent'
 export * from './definitions/modelCollisionComponent'
+export * from './definitions/proceduralCityComponent'
