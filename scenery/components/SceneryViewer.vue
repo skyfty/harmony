@@ -2685,6 +2685,11 @@ const protagonistPoseTarget = new THREE.Vector3();
 const protagonistPoseCameraOffset = new THREE.Vector3();
 const protagonistFollowRootPosition = new THREE.Vector3();
 const protagonistFollowLastRootPosition = new THREE.Vector3();
+const characterCameraFollowVelocity = new THREE.Vector3();
+const characterCameraFollowVelocityScratch = new THREE.Vector3();
+const characterCameraFollowAnchorScratch = new THREE.Vector3();
+const characterCameraFollowForwardScratch = new THREE.Vector3();
+const characterControlYawForwardScratch = new THREE.Vector3();
 const vehicleCompassForward = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
@@ -2693,6 +2698,8 @@ const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let protagonistPoseSynced = false;
 let protagonistFollowHasSample = false;
+let characterCameraFollowNodeId: string | null = null;
+let characterControlDeltaSeconds = 1 / 60;
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
@@ -3155,6 +3162,7 @@ const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
 const characterAuthorityInput = reactive({
   moveX: 0,
   moveZ: 0,
+  turn: 0,
   jump: false,
   sprint: false,
   crouch: false,
@@ -3387,6 +3395,8 @@ const autoTourPausedNodeId = ref<string | null>(null);
 const autoTourFollowNodeId = ref<string | null>(null);
 const autoTourCameraFollowState = createCameraFollowState();
 const autoTourCameraFollowController = new FollowCameraController();
+const characterCameraFollowState = createCameraFollowState();
+const characterCameraFollowController = new FollowCameraController();
 const autoTourCameraFollowLastAnchor = new THREE.Vector3();
 const autoTourCameraFollowVelocity = new THREE.Vector3();
 const autoTourCameraFollowVelocityScratch = new THREE.Vector3();
@@ -4109,10 +4119,12 @@ watch(
   (visible) => {
     if (visible) {
       refreshCharacterJoystickMetrics();
+      updateCharacterFollowCamera(0, { immediate: true });
     } else {
       detachCharacterDrivePadMouseListeners();
       hideCharacterDrivePadImmediate();
       deactivateCharacterJoystick(true);
+      resetProtagonistPoseState();
     }
   },
 );
@@ -9220,8 +9232,34 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 }
 
 function resolveSceneryCharacterInputYaw(): number {
+  const controlledObject = findDefaultControlledCharacterObject();
+  if (controlledObject) {
+    const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+    const props = clampCharacterControllerComponentProps(
+      resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
+    );
+    controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
+    writeCharacterLocalForward(characterControlYawForwardScratch, props.forwardAxis);
+    characterControlYawForwardScratch.applyQuaternion(protagonistPoseQuaternion);
+    characterControlYawForwardScratch.y = 0;
+    if (characterControlYawForwardScratch.lengthSq() > 1e-8) {
+      characterControlYawForwardScratch.normalize();
+      const currentYaw = Math.atan2(characterControlYawForwardScratch.x, characterControlYawForwardScratch.z);
+      if (Math.abs(characterAuthorityInput.turn) > 0.001) {
+        const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
+        return currentYaw + (turnRateRadiansPerSecond * characterAuthorityInput.turn * characterControlDeltaSeconds);
+      }
+      if (characterJoystickState.active) {
+        return currentYaw;
+      }
+    }
+  }
+
+  const hasLocalMovementInput =
+    Math.abs(characterAuthorityInput.moveX) > 0.001
+    || Math.abs(characterAuthorityInput.moveZ) > 0.001;
   const activeCamera = renderContext?.camera ?? null;
-  if (activeCamera) {
+  if (activeCamera && hasLocalMovementInput) {
     activeCamera.getWorldDirection(tempForwardVec);
     tempForwardVec.y = 0;
     if (tempForwardVec.lengthSq() > 1e-8) {
@@ -9229,7 +9267,6 @@ function resolveSceneryCharacterInputYaw(): number {
       return Math.atan2(tempForwardVec.x, tempForwardVec.z);
     }
   }
-  const controlledObject = findDefaultControlledCharacterObject();
   if (controlledObject) {
     const controlledNodeId = resolveDefaultControlledCharacterNodeId();
     const props = clampCharacterControllerComponentProps(
@@ -11297,6 +11334,12 @@ function resetProtagonistPoseState(): void {
   protagonistPoseSynced = false;
   protagonistFollowHasSample = false;
   protagonistFollowLastRootPosition.set(0, 0, 0);
+  characterCameraFollowNodeId = null;
+  characterCameraFollowVelocity.set(0, 0, 0);
+  characterCameraFollowVelocityScratch.set(0, 0, 0);
+  characterCameraFollowAnchorScratch.set(0, 0, 0);
+  characterCameraFollowForwardScratch.set(0, 0, 0);
+  resetCameraFollowState(characterCameraFollowState);
 }
 
 function findDefaultControlledCharacterObject(): THREE.Object3D | null {
@@ -11321,6 +11364,36 @@ function resolveCharacterRootWorldPosition(
     protagonistObject.getWorldPosition(target);
   }
   return target;
+}
+
+function resolveCharacterFollowForwardWorld(
+  object: THREE.Object3D,
+  props: CharacterControllerComponentProps,
+  target: THREE.Vector3,
+): THREE.Vector3 {
+  object.getWorldQuaternion(protagonistPoseQuaternion);
+  writeCharacterLocalForward(target, props.forwardAxis);
+  target.applyQuaternion(protagonistPoseQuaternion);
+  target.y = 0;
+  if (target.lengthSq() <= 1e-8) {
+    target.set(0, 0, 1);
+  } else {
+    target.normalize();
+  }
+  return target;
+}
+
+function resolveCharacterFollowPlacement(
+  props: CharacterControllerComponentProps,
+  object: THREE.Object3D | null,
+): CameraFollowPlacement {
+  const dimensions = getApproxDimensions(object);
+  return {
+    distance: props.cameraFollowDistance,
+    heightOffset: props.cameraFollowHeight,
+    targetLift: Math.max(props.colliderHeight * 0.7, dimensions.height * 0.35, 1),
+    targetForward: Math.max(props.colliderRadius * 1.5, Math.min(dimensions.length * 0.25, 1.2), 0.6),
+  };
 }
 
 function getNormalizedMultiuserIdentity(): MultiuserIdentity | null {
@@ -14149,17 +14222,17 @@ function resolveJoystickDriveInput(): { throttle: number; steering: number } {
   };
 }
 
-function resolveJoystickCharacterInput(): { moveX: number; moveZ: number } {
+function resolveJoystickCharacterInput(): { turn: number; moveZ: number } {
   const x = characterJoystickVector.x;
   const y = characterJoystickVector.y;
   const length = Math.hypot(x, y);
   if (length <= JOYSTICK_DEADZONE) {
-    return { moveX: 0, moveZ: 0 };
+    return { turn: 0, moveZ: 0 };
   }
   const effectiveLength = (length - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
   const scale = length > 0 ? effectiveLength / length : 0;
   return {
-    moveX: x * scale,
+    turn: -x * scale,
     moveZ: y * scale,
   };
 }
@@ -14168,8 +14241,9 @@ function updateCharacterAuthorityInputFromKeys(): void {
   const keyMoveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
   const keyMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
   const joystickInput = resolveJoystickCharacterInput();
-  characterAuthorityInput.moveX = clampAxisScalar(keyMoveX + joystickInput.moveX);
+  characterAuthorityInput.moveX = clampAxisScalar(keyMoveX);
   characterAuthorityInput.moveZ = clampAxisScalar(keyMoveZ + joystickInput.moveZ);
+  characterAuthorityInput.turn = clampAxisScalar(joystickInput.turn);
   characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
@@ -14213,6 +14287,7 @@ function setCharacterKeyState(key: string, pressed: boolean): void {
 function resetCharacterControlInputs(): void {
   characterAuthorityInput.moveX = 0;
   characterAuthorityInput.moveZ = 0;
+  characterAuthorityInput.turn = 0;
   characterAuthorityInput.jump = false;
   characterAuthorityInput.sprint = false;
   characterAuthorityInput.crouch = false;
@@ -14863,6 +14938,7 @@ function startVehicleDriveMode(
   const result = vehicleDriveController.startDrive(event, ctx);
   if (result.success) {
     resetCharacterControlInputs();
+    resetProtagonistPoseState();
     vehicleDriveCameraFollowState.initialized = false;
     purposeActiveMode.value = 'watch';
     if (options.deferCameraUpdate) {
@@ -15049,6 +15125,70 @@ function updateVehicleDriveCamera(
   return runWithProgrammaticCameraMutationAndAnchor(() =>
     vehicleDriveController.updateCamera(deltaSeconds, ctx, options),
   );
+}
+
+function updateCharacterFollowCamera(
+  deltaSeconds = 0,
+  options: { immediate?: boolean } = {},
+): boolean {
+  const context = renderContext;
+  if (!context || vehicleDriveActive.value || activeCameraWatchTween || activeAutoTourNodeIds.size > 0) {
+    resetProtagonistPoseState();
+    return false;
+  }
+
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    resetProtagonistPoseState();
+    return false;
+  }
+
+  const node = resolveNodeById(controlledNodeId);
+  const props = clampCharacterControllerComponentProps(resolveCharacterControllerComponent(node)?.props ?? null);
+  const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId);
+  const object = bindingNodeId ? (nodeObjectMap.get(bindingNodeId) ?? null) : null;
+  if (!object) {
+    resetProtagonistPoseState();
+    return false;
+  }
+
+  if (characterCameraFollowNodeId !== controlledNodeId) {
+    resetProtagonistPoseState();
+    characterCameraFollowNodeId = controlledNodeId;
+  }
+
+  const placement = resolveCharacterFollowPlacement(props, object);
+  resolveCharacterRootWorldPosition(controlledNodeId, object, characterCameraFollowAnchorScratch);
+  resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+
+  if (deltaSeconds > 0 && protagonistFollowHasSample) {
+    characterCameraFollowVelocityScratch
+      .copy(characterCameraFollowAnchorScratch)
+      .sub(protagonistFollowLastRootPosition)
+      .multiplyScalar(1 / Math.max(1e-6, deltaSeconds));
+    characterCameraFollowVelocity.lerp(
+      characterCameraFollowVelocityScratch,
+      computeFollowLerpAlpha(deltaSeconds, 8),
+    );
+  } else if (options.immediate) {
+    characterCameraFollowVelocity.set(0, 0, 0);
+  }
+
+  const updated = runWithProgrammaticCameraMutationAndAnchor(() => characterCameraFollowController.update({
+    follow: characterCameraFollowState,
+    placement,
+    anchorWorld: characterCameraFollowAnchorScratch,
+    desiredForwardWorld: characterCameraFollowForwardScratch,
+    velocityWorld: characterCameraFollowVelocity,
+    deltaSeconds,
+    ctx: { camera: context.camera },
+    immediate: Boolean(options.immediate),
+    smoothTargetForProgrammaticFollow: false,
+  }));
+
+  protagonistFollowLastRootPosition.copy(characterCameraFollowAnchorScratch);
+  protagonistFollowHasSample = true;
+  return updated;
 }
 
 function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?: boolean } = {}): void {
@@ -18404,6 +18544,7 @@ function startRenderLoop(
         }
 
         if (deltaSeconds > 0) {
+          characterControlDeltaSeconds = deltaSeconds;
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
@@ -18455,6 +18596,10 @@ function startRenderLoop(
 
         if (deltaSeconds >= 0) {
           updateAutoTourFollowCamera(deltaSeconds);
+        }
+
+        if (deltaSeconds >= 0 && !vehicleDriveActive.value && activeAutoTourNodeIds.size === 0) {
+          updateCharacterFollowCamera(deltaSeconds);
         }
 
         if (vehicleDriveActive.value) {
