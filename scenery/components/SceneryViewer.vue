@@ -2697,9 +2697,6 @@ let protagonistFollowHasSample = false;
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
-const CHARACTER_FOLLOW_CAMERA_POSITION_LERP_SPEED = 7.5;
-const CHARACTER_FOLLOW_CAMERA_TARGET_LERP_SPEED = 9.5;
-const CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE = 12;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -11326,81 +11323,6 @@ function resolveCharacterRootWorldPosition(
   return target;
 }
 
-function updateControlledCharacterFollowCamera(deltaSeconds: number): void {
-  if (vehicleDriveActive.value || purposeActiveMode.value !== 'level' || activeCameraWatchTween) {
-    protagonistPoseSynced = false;
-    protagonistFollowHasSample = false;
-    return;
-  }
-  const context = renderContext;
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const protagonistObject = findDefaultControlledCharacterObject();
-  if (!context || !controlledNodeId || !protagonistObject) {
-    protagonistPoseSynced = false;
-    protagonistFollowHasSample = false;
-    return;
-  }
-
-  const controllerProps = resolveDefaultControlledCharacterComponentProps();
-  const cameraFollowDistance = controllerProps?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE;
-  const cameraFollowHeight = controllerProps?.cameraFollowHeight ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT;
-  const colliderHeight = controllerProps?.colliderHeight ?? HUMAN_EYE_HEIGHT;
-  const lookTargetHeight = Math.min(cameraFollowHeight, Math.max(colliderHeight * 0.72, HUMAN_EYE_HEIGHT * 0.9));
-
-  protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
-  writeCharacterLocalForward(protagonistPoseDirection, controllerProps?.forwardAxis ?? '+x');
-  protagonistPoseDirection.applyQuaternion(protagonistPoseQuaternion);
-  protagonistPoseDirection.y = 0;
-  if (protagonistPoseDirection.lengthSq() <= 1e-8) {
-    protagonistPoseDirection.set(0, 0, -1);
-  } else {
-    protagonistPoseDirection.normalize();
-  }
-
-  resolveCharacterRootWorldPosition(controlledNodeId, protagonistObject, protagonistFollowRootPosition);
-  protagonistPoseTarget.copy(protagonistFollowRootPosition);
-  protagonistPoseTarget.y += lookTargetHeight;
-  protagonistPoseCameraOffset.copy(protagonistPoseDirection).multiplyScalar(-cameraFollowDistance);
-  protagonistPoseCameraOffset.y = cameraFollowHeight;
-  protagonistPosePosition.copy(protagonistFollowRootPosition).add(protagonistPoseCameraOffset);
-
-  const rootDelta = protagonistFollowHasSample
-    ? protagonistFollowLastRootPosition.distanceTo(protagonistFollowRootPosition)
-    : 0;
-  protagonistFollowLastRootPosition.copy(protagonistFollowRootPosition);
-
-  const shouldSnapImmediately =
-    !protagonistPoseSynced
-    || !protagonistFollowHasSample
-    || deltaSeconds <= 0
-    || context.camera.position.distanceToSquared(protagonistPosePosition) > CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE * CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE
-    || rootDelta > CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE;
-
-  const positionAlpha = shouldSnapImmediately
-    ? 1
-    : 1 - Math.exp(-CHARACTER_FOLLOW_CAMERA_POSITION_LERP_SPEED * deltaSeconds);
-  const targetAlpha = shouldSnapImmediately
-    ? 1
-    : 1 - Math.exp(-CHARACTER_FOLLOW_CAMERA_TARGET_LERP_SPEED * deltaSeconds);
-
-  runWithProgrammaticCameraMutationAndAnchor(() => {
-    withControlsVerticalFreedom(context.controls, () => {
-      if (shouldSnapImmediately) {
-        context.camera.position.copy(protagonistPosePosition);
-        context.controls.target.copy(protagonistPoseTarget);
-      } else {
-        context.camera.position.lerp(protagonistPosePosition, positionAlpha);
-        context.controls.target.lerp(protagonistPoseTarget, targetAlpha);
-      }
-      context.camera.lookAt(context.controls.target);
-      context.controls.update();
-    });
-  });
-
-  protagonistPoseSynced = true;
-  protagonistFollowHasSample = true;
-}
-
 function getNormalizedMultiuserIdentity(): MultiuserIdentity | null {
   const userId = typeof props.multiuserIdentity?.userId === 'string' ? props.multiuserIdentity.userId.trim() : '';
   if (!userId) {
@@ -18520,7 +18442,6 @@ function startRenderLoop(
           syncSceneryPhysicsBridgeCharacterInput();
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
-          updateControlledCharacterFollowCamera(deltaSeconds);
           updateVehicleSpeedFromVehicle();
           updateSceneCompassHeading();
           updateVehicleWheelVisuals(deltaSeconds);
