@@ -26,7 +26,6 @@ import {
   GROUND_NODE_ID,
   ENVIRONMENT_NODE_ID,
   MULTIUSER_NODE_ID,
-  PROTAGONIST_NODE_ID,
   GROUND_HEIGHT_UNSET_VALUE,
   getGroundVertexIndex,
   createPrimitiveMesh,
@@ -140,7 +139,7 @@ import {
   isBuiltinWaterNormalAsset,
 } from '@/constants/builtinAssets'
 
-export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID, PROTAGONIST_NODE_ID }
+export { GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID }
 
 import { normalizeDynamicMeshType } from '@/types/dynamic-mesh'
 import {
@@ -306,7 +305,6 @@ import type {
   GuideboardComponentProps,
   NominateComponentProps,
   OnlineComponentProps,
-  ProtagonistComponentProps,
   RigidbodyComponentProps,
   AutoTourComponentProps,
   VehicleComponentProps,
@@ -330,7 +328,6 @@ import {
   PARTICLE_SYSTEM_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
-  PROTAGONIST_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
@@ -417,7 +414,6 @@ type NodeComponentPropsByType = {
   [DISPLAY_BOARD_COMPONENT_TYPE]: DisplayBoardComponentProps
   [BILLBOARD_COMPONENT_TYPE]: BillboardComponentProps
   [PLANNING_IMAGES_COMPONENT_TYPE]: PlanningImagesComponentProps
-  [PROTAGONIST_COMPONENT_TYPE]: ProtagonistComponentProps
   [ONLINE_COMPONENT_TYPE]: OnlineComponentProps
   [BEHAVIOR_COMPONENT_TYPE]: BehaviorComponentProps
   [RIGIDBODY_COMPONENT_TYPE]: RigidbodyComponentProps
@@ -1467,9 +1463,6 @@ async function measureAssetImageDimensions(assetId: string, asset: ProjectAsset 
 
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
-    return false
-  }
-  if (isProtagonistNode(node)) {
     return false
   }
   if (node.dynamicMesh?.type === 'Region') {
@@ -8873,20 +8866,6 @@ function isDescendantNode(nodes: SceneNode[], ancestorId: string, childId: strin
   return nodeContainsId(ancestor, childId)
 }
 
-function isProtagonistNode(node: SceneNode | null | undefined): boolean {
-  const components = node?.components
-  if (!components) {
-    return false
-  }
-  if (node?.id === PROTAGONIST_NODE_ID) {
-    return true
-  }
-  const protagonist = components[PROTAGONIST_COMPONENT_TYPE] as
-    | SceneNodeComponentState<ProtagonistComponentProps>
-    | undefined
-  return Boolean(protagonist)
-}
-
 function isMultiuserNode(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
@@ -8906,9 +8885,6 @@ function allowsChildNodes(node: SceneNode | null | undefined): boolean {
     return true
   }
   if (isMultiuserNode(node)) {
-    return false
-  }
-  if (isProtagonistNode(node)) {
     return false
   }
   if (node.allowChildNodes === false) {
@@ -14661,10 +14637,6 @@ export const useSceneStore = defineStore('scene', {
       }
 
       if (newParentId === ENVIRONMENT_NODE_ID) {
-        return false
-      }
-
-      if (isProtagonistNode(movingNode) && newParentId !== null) {
         return false
       }
 

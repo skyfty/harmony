@@ -42,11 +42,7 @@ export type ScenePreviewPerfController = {
 		nodeId: string
 		body: PhysicsPerfBody
 		isVehicle: boolean
-		isProtagonist: boolean
 	}): void
-
-	registerProtagonist(nodeId: string, body?: PhysicsPerfBody | null): void
-	clearProtagonist(): void
 
 	shouldSyncNonInteractiveSleepingBody(params: { nodeId: string; body: PhysicsPerfBody; nowMs?: number }): boolean
 
@@ -115,7 +111,6 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 	const nonInteractiveDynamicNodeIds = new Set<string>()
 	const nonInteractiveSleepingLastSyncAtMs = new Map<string, number>()
 	const wheelVisualLastUpdateMs = new Map<string, number>()
-	let protagonistNodeId: string | null = null
 
 	function markInstancedCullingDirty(): void {
 		instancedForceNext = true
@@ -168,30 +163,12 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 		return false
 	}
 
-	function registerProtagonist(nodeId: string, body?: PhysicsPerfBody | null): void {
-		protagonistNodeId = nodeId
-		nonInteractiveDynamicNodeIds.delete(nodeId)
-		nonInteractiveSleepingLastSyncAtMs.delete(nodeId)
-		if (body) {
-			try {
-				body.allowSleep = false
-			} catch {
-				// best-effort
-			}
-		}
-	}
-
-	function clearProtagonist(): void {
-		protagonistNodeId = null
-	}
-
 	function applyAggressiveSleepForNonInteractiveDynamic(params: {
 		nodeId: string
 		body: PhysicsPerfBody
 		isVehicle: boolean
-		isProtagonist: boolean
 	}): void {
-		const { nodeId, body, isVehicle, isProtagonist } = params
+		const { nodeId, body, isVehicle } = params
 		if (!body) {
 			return
 		}
@@ -200,11 +177,6 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 		if (!isDynamic) {
 			nonInteractiveDynamicNodeIds.delete(nodeId)
 			nonInteractiveSleepingLastSyncAtMs.delete(nodeId)
-			return
-		}
-
-		if (isProtagonist) {
-			registerProtagonist(nodeId, body)
 			return
 		}
 
@@ -300,9 +272,6 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 		nonInteractiveDynamicNodeIds.delete(nodeId)
 		nonInteractiveSleepingLastSyncAtMs.delete(nodeId)
 		wheelVisualLastUpdateMs.delete(nodeId)
-		if (protagonistNodeId === nodeId) {
-			protagonistNodeId = null
-		}
 	}
 
 	function reset(): void {
@@ -311,7 +280,6 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 		instancedLastAtMs = 0
 		instancedLastPos.set(0, 0, 0)
 		instancedLastQuat.set(0, 0, 0, 1)
-		protagonistNodeId = null
 		nonInteractiveDynamicNodeIds.clear()
 		nonInteractiveSleepingLastSyncAtMs.clear()
 		wheelVisualLastUpdateMs.clear()
@@ -321,8 +289,6 @@ export function createScenePreviewPerfController(options: ScenePreviewPerfOption
 		markInstancedCullingDirty,
 		shouldRunInstancedCulling,
 		applyAggressiveSleepForNonInteractiveDynamic,
-		registerProtagonist,
-		clearProtagonist,
 		shouldSyncNonInteractiveSleepingBody,
 		shouldUpdateWheelVisuals,
 		notifyRemovedNode,

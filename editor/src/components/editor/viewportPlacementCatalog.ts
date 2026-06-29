@@ -25,7 +25,7 @@ type OtherPlacementItem = {
   id: string
   label: string
   tab: 'other'
-  kind: 'guideboard' | 'view-point' | 'protagonist'
+  kind: 'guideboard' | 'view-point'
   icon: string
 }
 
@@ -128,7 +128,6 @@ export const VIEWPORT_LIGHT_ITEMS: LightPlacementItem[] = [
 export const VIEWPORT_OTHER_ITEMS: OtherPlacementItem[] = [
   { id: 'other-guideboard', label: 'Guideboard', tab: 'other', kind: 'guideboard', icon: 'mdi-sign-direction' },
   { id: 'other-view-point', label: 'View Point', tab: 'other', kind: 'view-point', icon: 'mdi-map-marker-radius-outline' },
-  { id: 'other-protagonist', label: 'Protagonist', tab: 'other', kind: 'protagonist', icon: 'mdi-account-outline' },
 ]
 
 const LIGHT_PREVIEW_COLOR = 0xf8c14f
@@ -274,18 +273,6 @@ function createViewPointPreview(): THREE.Object3D {
   return root
 }
 
-function createProtagonistPreview(): THREE.Object3D {
-  const capsuleMesh = createPrimitiveMesh('Capsule', { color: 0xffffff, doubleSided: true })
-  capsuleMesh.name = 'Protagonist Visual'
-  capsuleMesh.castShadow = false
-  capsuleMesh.receiveShadow = false
-  capsuleMesh.position.y = 1
-  const root = new THREE.Group()
-  root.name = 'Protagonist Preview'
-  root.add(capsuleMesh)
-  return root
-}
-
 export function buildViewportPlacementPreview(item: ViewportPlacementItem): THREE.Object3D {
   let preview: THREE.Object3D
 
@@ -298,7 +285,7 @@ export function buildViewportPlacementPreview(item: ViewportPlacementItem): THRE
   } else if (item.kind === 'view-point') {
     preview = createViewPointPreview()
   } else {
-    preview = createProtagonistPreview()
+    preview = new THREE.Group()
   }
 
   preview.position.set(0, 0, 0)

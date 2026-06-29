@@ -20,7 +20,6 @@ import {
 } from '@/utils/waterBuildShapeUserData'
 import { useViewportPostprocessing } from './useViewportPostprocessing'
 import { useDragPreview } from './useDragPreview'
-import { useProtagonistPreview } from './useProtagonistPreview'
 import { createNormalizedPointerGuard } from './normalizedPointerGuard'
 import { createPointerCaptureGuard } from './pointerCaptureGuard'
 import { usePointerInteractionStateMachine } from './usePointerInteractionStateMachine'
@@ -186,7 +185,6 @@ import {
 } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh } from '@schema/import'
-import { PROTAGONIST_NODE_ID } from '@schema/core'
 import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
 
 
@@ -377,7 +375,6 @@ import {
   createGuideboardEffectInstance,
   registerParticleSystemRuntime,
   unregisterParticleSystemRuntime,
-  PROTAGONIST_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
   clampBoundaryWallComponentProps,
@@ -444,10 +441,6 @@ import {
   RIGHT_CLICK_ROTATION_STEP,
 } from './constants'
 // face/surface snap controllers removed: no alignment hint UI
-import {
-  createProtagonistInitialVisibilityCapture,
-  type ProtagonistInitialVisibilityCapture,
-} from './protagonistInitialVisibilityCapture'
 import { buildGroundFlatChunkInstanceMatricesInWorker } from '@/utils/groundFlatChunkMatrixWorker'
 
 setGroundFlatChunkInstanceMatrixBuilder(buildGroundFlatChunkInstanceMatricesInWorker)
@@ -499,21 +492,6 @@ function canCompleteNodePick(nodeId: string): boolean {
   return true
 }
 
-const protagonistPreviewNodeId = computed(() => {
-  const selectedId = sceneStore.selectedNodeId
-  if (!selectedId) {
-    return null
-  }
-  const node = findSceneNode(sceneStore.nodes, selectedId)
-  if (!node) {
-    return null
-  }
-  if (!node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
-    return null
-  }
-  return selectedId
-})
-const showProtagonistPreview = computed(() => Boolean(protagonistPreviewNodeId.value))
 const nodePickerStore = useNodePickerStore()
 const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
@@ -707,7 +685,6 @@ function getPickMaxDistance() {
   const cameraFar = resolveCameraFarPickDistance()
   return cameraFar ?? PICK_MAX_DISTANCE_DEFAULT
 }
-let protagonistInitialVisibilityCapture: ProtagonistInitialVisibilityCapture | null = null
 let instancedCullingNeedsRefresh = true
 let instancedCullingCameraStateValid = false
 const instancedCullingLastCameraProjectionMatrix = new Float32Array(16)
@@ -1310,18 +1287,6 @@ const guideRouteWaypointLabelMeshes = getGuideRouteWaypointLabelMeshes()
 // Guide route waypoint labels are handled by the external manager: `createOrUpdateGuideRouteWaypointLabels`.
 
 // snap controllers disabled in SceneViewport
-
-const protagonistPreview = useProtagonistPreview({
-  getScene: () => scene,
-  getRenderer: () => renderer,
-  getTransformControls: () => transformControls,
-  objectMap,
-  protagonistPreviewNodeId,
-  showProtagonistPreview,
-  widthPx: 240,
-  heightPx: 140,
-  marginPx: 16,
-})
 
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
@@ -1947,17 +1912,6 @@ const snapController = useSnapController({
   enablePlacementSideSnap: true,
 })
 
-protagonistInitialVisibilityCapture = createProtagonistInitialVisibilityCapture({
-  getNodes: () => sceneStore.nodes,
-  isSceneReady: () => isSceneReady.value,
-  updateNodeComponentProps: (nodeId, componentId, propsPatch) =>
-    sceneStore.updateNodeComponentProps(nodeId, componentId, propsPatch),
-  objectMap,
-  rootGroup,
-  instancedMeshGroup,
-  getRenderer: () => renderer,
-  isObjectWorldVisible,
-})
 const renderClock = new THREE.Clock()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 const PARTICLE_PORTAL_PLACEHOLDER_KEY = '__harmonyParticlePortalPlaceholder'
@@ -8833,28 +8787,6 @@ function buildGuideboardPlacementRoot(name: string): THREE.Object3D {
   return guideboardRoot
 }
 
-function buildProtagonistPlacementRoot(name: string): THREE.Object3D {
-  const capsuleMesh = createPrimitiveMesh('Capsule', { color: 0xffffff, doubleSided: true })
-  capsuleMesh.name = `${name} Visual`
-  capsuleMesh.castShadow = true
-  capsuleMesh.receiveShadow = true
-  capsuleMesh.userData = {
-    ...(capsuleMesh.userData ?? {}),
-    editorOnly: true,
-    protagonist: true,
-  }
-
-  const root = new THREE.Object3D()
-  root.name = name
-  root.add(capsuleMesh)
-  root.userData = {
-    ...(root.userData ?? {}),
-    editorOnly: true,
-    protagonist: true,
-  }
-  return root
-}
-
 function handleStartViewportPlacement(item: ViewportPlacementItem): void {
   viewportPlacementMenuOpen.value = false
   if (activeBuildTool.value) {
@@ -8871,21 +8803,6 @@ function handleStartViewportPlacement(item: ViewportPlacementItem): void {
 function handleCancelViewportPlacement(): void {
   pendingViewportPlacement.value = null
   nodePlacementClickSessionState = null
-  viewportPlacementMenuOpen.value = false
-  if (uiStore.activeSelectionContext === 'viewport-add-node') {
-    uiStore.setActiveSelectionContext(null)
-  }
-}
-
-function isSingleInstanceViewportPlacementItem(item: ViewportPlacementItem): boolean {
-  return item.tab === 'other' && item.kind === 'protagonist'
-}
-
-function finishViewportPlacementAfterCommit(item: ViewportPlacementItem): void {
-  if (!isSingleInstanceViewportPlacementItem(item)) {
-    return
-  }
-  pendingViewportPlacement.value = null
   viewportPlacementMenuOpen.value = false
   if (uiStore.activeSelectionContext === 'viewport-add-node') {
     uiStore.setActiveSelectionContext(null)
@@ -8972,32 +8889,7 @@ async function placeViewportItemAtPoint(item: ViewportPlacementItem, basePoint: 
     return Boolean(created)
   }
 
-  if (findSceneNode(sceneStore.nodes, PROTAGONIST_NODE_ID)) {
-    finishViewportPlacementAfterCommit(item)
-    return false
-  }
-
-  const name = 'Protagonist'
-  const created = await sceneStore.addModelNode({
-    nodeId: PROTAGONIST_NODE_ID,
-    object: buildProtagonistPlacementRoot(name),
-    nodeType: 'Capsule',
-    name,
-    position: basePoint.clone(),
-    rotation,
-    snapToGrid: false,
-    editorFlags: {
-      editorOnly: true,
-      ignoreGridSnapping: true,
-    },
-  })
-  if (created && !created.components?.[PROTAGONIST_COMPONENT_TYPE]) {
-    sceneStore.addNodeComponent(created.id, PROTAGONIST_COMPONENT_TYPE)
-  }
-  if (created) {
-    finishViewportPlacementAfterCommit(item)
-  }
-  return Boolean(created)
+  return false
 }
 
 function handleActivateGroundTab(tab: GroundPanelTab) {
@@ -11037,10 +10929,7 @@ const draggingChangedHandler = (event: unknown) => {
     // Dragging ends
     hasTransformLastWorldPosition = false
     if (transformControlsDirty) {
-      const updates = commitTransformControlUpdates()
-      if (updates.length) {
-        protagonistInitialVisibilityCapture?.queueTransformUpdateIds(updates.map((update) => update.id))
-      }
+      void commitTransformControlUpdates()
     }
     sceneStore.endTransformInteraction()
     if (primaryId) {
@@ -11332,8 +11221,6 @@ function applyPendingScenePatches(): boolean {
       return true
     }
   }
-
-  protagonistInitialVisibilityCapture?.flushAfterPatches(nodePatches)
 
   if (needsPlaceholderOverlayRefresh) {
     refreshPlaceholderOverlays()
@@ -12168,7 +12055,6 @@ function renderViewportFrame() {
     return
   }
   postprocessing.render()
-  protagonistPreview.render()
 }
 
 function resolveViewportPixelRatio(): number {
@@ -14901,7 +14787,6 @@ function disposeScene() {
   terrainGridHelper.removeFromParent()
 
   clearOutlineSelectionTargets()
-  protagonistPreview.dispose()
   dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
   hideWarpGatePlacementPreview()
@@ -20273,9 +20158,6 @@ function nodeSupportsMaterials(node: SceneNode | null): boolean {
   if (!node) {
     return false
   }
-  if (node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
-    return false
-  }
   if (node.dynamicMesh?.type === 'Region') {
     return false
   }
@@ -24667,9 +24549,6 @@ defineExpose({
           :heading-degrees="cameraNorthHeadingDegrees"
         />
       </div>
-        <div v-show="showProtagonistPreview" class="protagonist-preview">
-          <span class="protagonist-preview__label">主角视野</span>
-        </div>
         <div
           v-if="autoOverlayHoverIndicator.visible"
           class="auto-overlay-hover-badge"
@@ -24977,20 +24856,6 @@ defineExpose({
   cursor: url('/cursors/scatter-hammer.svg') 4 20, crosshair !important;
 }
 
-.protagonist-preview {
-  position: absolute;
-  bottom: 16px;
-  right: 16px;
-  width: 240px;
-  height: 140px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.35);
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.45);
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 9;
-}
-
 .viewport-bottom-right-hud {
   position: absolute;
   right: 16px;
@@ -25242,20 +25107,6 @@ defineExpose({
     grid-template-columns: 1fr;
     gap: 2px;
   }
-}
-
-.protagonist-preview__label {
-  position: absolute;
-  top: 8px;
-  left: 12px;
-  padding: 2px 8px;
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
-  color: rgba(255, 255, 255, 0.85);
-  background: rgba(0, 0, 0, 0.5);
-  border-radius: 4px;
-  text-transform: uppercase;
-  pointer-events: none;
 }
 
 :deep(.vertex-coordinate-editor) {

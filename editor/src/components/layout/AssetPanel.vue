@@ -37,7 +37,6 @@ import { computeBlobHash, dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { prepareLocalAssetImport, type LocalAssetImportPhase, type PreparedLocalAssetImport } from '@/utils/localAssetImport'
 import type { SceneNode } from '@schema/core'
 import { getExtensionFromMimeType, inferAssetType } from '@schema/core'
-import { PROTAGONIST_COMPONENT_TYPE } from '@schema/components'
 import type { SceneMaterialTextureRef } from '@/types/material'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
@@ -866,9 +865,6 @@ function isNormalSceneNode(node: SceneNode | null): boolean {
 
 function nodeSupportsMaterials(node: SceneNode | null): boolean {
   if (!node || !isNormalSceneNode(node)) {
-    return false
-  }
-  if (node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
     return false
   }
   if (node.dynamicMesh?.type === 'Region') {

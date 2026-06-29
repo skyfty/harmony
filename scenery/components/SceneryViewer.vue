@@ -2,11 +2,11 @@
   <view class="viewer-page">
     <view
       class="viewer-canvas-wrapper"
-      @touchstart.capture="handleDrivePadTouchStart"
-      @touchmove.capture="handleDrivePadTouchMove"
-      @touchend.capture="handleDrivePadTouchEnd"
-      @touchcancel.capture="handleDrivePadTouchEnd"
-      @mousedown.capture="handleDrivePadMouseDown"
+      @touchstart.capture="handleControlPadTouchStart"
+      @touchmove.capture="handleControlPadTouchMove"
+      @touchend.capture="handleControlPadTouchEnd"
+      @touchcancel.capture="handleControlPadTouchEnd"
+      @mousedown.capture="handleControlPadMouseDown"
     >
       <PlatformCanvas
         v-if="!error"
@@ -315,7 +315,11 @@
         </button>
       </view>
 
-      <view v-if="autoTourTelemetryUiVisible" class="viewer-drive-compass-right-floating" aria-hidden="true">
+      <view
+        v-if="autoTourTelemetryUiVisible || (characterControlUi.visible && isWeChatMiniProgram)"
+        class="viewer-drive-compass-right-floating"
+        aria-hidden="true"
+      >
         <DriveCompass
           :compass-style="vehicleCompassStyle"
           :ticks="vehicleCompassTicks"
@@ -327,123 +331,30 @@
         v-if="characterControlUi.visible && isWeChatMiniProgram"
         class="viewer-character-console viewer-character-console--mobile"
       >
-        <view class="viewer-character-panel">
-          <view class="viewer-character-panel__header">
-            <view class="viewer-character-panel__title-row">
-              <text class="viewer-character-panel__title">{{ characterControlUi.label }}</text>
-              <view class="viewer-character-panel__status-pill">
-                <text class="viewer-character-panel__status-dot"></text>
-                <text class="viewer-character-panel__status-text">多端同步</text>
-              </view>
-            </view>
-            <text class="viewer-character-panel__subtitle">按住控制，松开归零</text>
-          </view>
-          <view class="viewer-character-dpad">
-            <button
-              class="viewer-character-button viewer-character-button--direction viewer-character-button--left"
-              :class="{ 'is-active': characterControlUi.leftActive }"
-              type="button"
-              hover-class="none"
-              aria-label="左移"
-              @touchstart.stop.prevent="handleCharacterControlPointer('left', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('left', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('left', false, $event)"
-            >
-              <text class="viewer-character-button__icon">←</text>
-            </button>
-            <button
-              class="viewer-character-button viewer-character-button--direction viewer-character-button--forward"
-              :class="{ 'is-active': characterControlUi.forwardActive }"
-              type="button"
-              hover-class="none"
-              aria-label="前进"
-              @touchstart.stop.prevent="handleCharacterControlPointer('forward', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('forward', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('forward', false, $event)"
-            >
-              <text class="viewer-character-button__icon">↑</text>
-            </button>
-            <button
-              class="viewer-character-button viewer-character-button--direction viewer-character-button--right"
-              :class="{ 'is-active': characterControlUi.rightActive }"
-              type="button"
-              hover-class="none"
-              aria-label="右移"
-              @touchstart.stop.prevent="handleCharacterControlPointer('right', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('right', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('right', false, $event)"
-            >
-              <text class="viewer-character-button__icon">→</text>
-            </button>
-            <button
-              class="viewer-character-button viewer-character-button--direction viewer-character-button--backward"
-              :class="{ 'is-active': characterControlUi.backwardActive }"
-              type="button"
-              hover-class="none"
-              aria-label="后退"
-              @touchstart.stop.prevent="handleCharacterControlPointer('backward', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('backward', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('backward', false, $event)"
-            >
-              <text class="viewer-character-button__icon">↓</text>
-            </button>
-            <view class="viewer-character-dpad__center" aria-hidden="true">
-              <text class="viewer-character-dpad__center-label">移动</text>
-            </view>
-          </view>
-          <view class="viewer-character-grid viewer-character-grid--actions">
-            <button
-              class="viewer-character-button viewer-character-button--action viewer-character-button--accent"
-              :class="{ 'is-active': characterControlUi.jumpActive }"
-              type="button"
-              hover-class="none"
-              aria-label="跳跃"
-              @touchstart.stop.prevent="handleCharacterControlPointer('jump', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('jump', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('jump', false, $event)"
-            >
-              <text class="viewer-character-button__icon">跳</text>
-              <text class="viewer-character-button__label">跳跃</text>
-            </button>
-            <button
-              class="viewer-character-button viewer-character-button--action viewer-character-button--warning"
-              :class="{ 'is-active': characterControlUi.sprintActive }"
-              type="button"
-              hover-class="none"
-              aria-label="冲刺"
-              @touchstart.stop.prevent="handleCharacterControlPointer('sprint', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('sprint', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('sprint', false, $event)"
-            >
-              <text class="viewer-character-button__icon">跑</text>
-              <text class="viewer-character-button__label">冲刺</text>
-            </button>
-            <button
-              class="viewer-character-button viewer-character-button--action"
-              :class="{ 'is-active': characterControlUi.crouchActive }"
-              type="button"
-              hover-class="none"
-              aria-label="蹲下"
-              @touchstart.stop.prevent="handleCharacterControlPointer('crouch', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('crouch', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('crouch', false, $event)"
-            >
-              <text class="viewer-character-button__icon">蹲</text>
-              <text class="viewer-character-button__label">蹲下</text>
-            </button>
-            <button
-              class="viewer-character-button viewer-character-button--action viewer-character-button--success"
-              :class="{ 'is-active': characterControlUi.interactActive }"
-              type="button"
-              hover-class="none"
-              aria-label="交互"
-              @touchstart.stop.prevent="handleCharacterControlPointer('interact', true, $event)"
-              @touchend.stop.prevent="handleCharacterControlPointer('interact', false, $event)"
-              @touchcancel.stop.prevent="handleCharacterControlPointer('interact', false, $event)"
-            >
-              <text class="viewer-character-button__icon">交</text>
-              <text class="viewer-character-button__label">交互</text>
-            </button>
+        <view
+          v-show="characterDrivePadState.visible"
+          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
+          :class="{ 'is-fading': characterDrivePadState.fading }"
+          :style="characterDrivePadStyle"
+        >
+          <view
+            ref="characterFloatingJoystickRef"
+            class="viewer-drive-joystick"
+            :class="{ 'is-active': characterControlUi.joystickActive }"
+            role="slider"
+            :aria-label="`${characterControlUi.label}移动摇杆`"
+            aria-valuemin="-100"
+            aria-valuemax="100"
+            :aria-valuenow="Math.round(characterAuthorityInput.moveZ * 100)"
+            @touchstart.stop.prevent="handleCharacterJoystickTouchStart"
+            @touchmove.stop.prevent="handleCharacterJoystickTouchMove"
+            @touchend.stop.prevent="handleCharacterJoystickTouchEnd"
+            @touchcancel.stop.prevent="handleCharacterJoystickTouchEnd"
+          >
+            <DriveJoystick
+              :is-active="characterControlUi.joystickActive"
+              :knob-style="characterJoystickKnobStyle"
+            />
           </view>
         </view>
       </view>
@@ -832,9 +743,6 @@ import {
 import {
   waterComponentDefinition,
 } from '@harmony/schema/components/definitions/waterComponent';
-import {
-  protagonistComponentDefinition,
-} from '@harmony/schema/components/definitions/protagonistComponent';
 import {
   signboardComponentDefinition,
   SIGNBOARD_COMPONENT_TYPE,
@@ -1997,7 +1905,6 @@ previewComponentManager.registerDefinition(rigidbodyComponentDefinition);
 previewComponentManager.registerDefinition(vehicleComponentDefinition);
 previewComponentManager.registerDefinition(steerComponentDefinition);
 previewComponentManager.registerDefinition(waterComponentDefinition);
-previewComponentManager.registerDefinition(protagonistComponentDefinition);
 previewComponentManager.registerDefinition(lodComponentDefinition);
 previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(networkSyncComponentDefinition);
@@ -2497,7 +2404,6 @@ const physicsBridgeBodyDirtyRevisionByNodeId = new Map<string, number>();
 const physicsBridgePendingBodySyncRevisionByNodeId = new Map<string, number>();
 const PHYSICS_BRIDGE_FULL_BODY_SYNC_INTERVAL_MS = 250;
 let physicsBridgeLastFullBodySyncAtMs = 0;
-let protagonistNodeId: string | null = null;
 
 const vehicleInstances = new Map<string, VehicleInstanceWithWheels>();
 type RemoteMultiuserWheelBinding = {
@@ -2695,7 +2601,6 @@ const wheelQuaternionHelper = new THREE.Quaternion();
 const wheelVisualQuaternionHelper = new THREE.Quaternion();
 const wheelParentWorldQuaternionHelper = new THREE.Quaternion();
 const wheelParentWorldQuaternionInverseHelper = new THREE.Quaternion();
-const wheelBaseQuaternionInverseHelper = new THREE.Quaternion();
 const wheelSteeringQuaternionHelper = new THREE.Quaternion();
 const wheelSpinQuaternionHelper = new THREE.Quaternion();
 const wheelChassisPositionHelper = new THREE.Vector3();
@@ -2792,6 +2697,9 @@ let protagonistFollowHasSample = false;
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
+const CHARACTER_FOLLOW_CAMERA_POSITION_LERP_SPEED = 7.5;
+const CHARACTER_FOLLOW_CAMERA_TARGET_LERP_SPEED = 9.5;
+const CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE = 12;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -3161,6 +3069,7 @@ const vehicleDriveIntroVisible = computed(() => (
 ));
 const lanternJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const floatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
+const characterFloatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const joystickVector = reactive({ x: 0, y: 0 });
 const joystickOffset = reactive({ x: 0, y: 0 });
 const joystickState = reactive({
@@ -3181,12 +3090,35 @@ let drivePadFadeTimer: ReturnType<typeof setTimeout> | null = null;
 let drivePadMouseTracking = false;
 const isBrowserEnvironment = typeof window !== 'undefined';
 const drivePadViewportRect = { top: 0, left: 0, height: getViewportHeight() };
+const characterJoystickVector = reactive({ x: 0, y: 0 });
+const characterJoystickOffset = reactive({ x: 0, y: 0 });
+const characterJoystickState = reactive({
+  active: false,
+  pointerId: -1,
+  centerX: 0,
+  centerY: 0,
+  ready: false,
+});
+const characterDrivePadState = reactive({ visible: false, fading: false, x: 0, y: 0 });
+const characterDrivePadStyle = computed(() => ({
+  left: `${characterDrivePadState.x}px`,
+  top: `${characterDrivePadState.y}px`,
+}));
+let characterDrivePadFadeTimer: ReturnType<typeof setTimeout> | null = null;
+let characterDrivePadMouseTracking = false;
+const characterDrivePadViewportRect = { top: 0, left: 0, height: getViewportHeight() };
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
 const joystickKnobStyle = computed(() => {
   const scale = joystickState.active ? 0.88 : 1;
   return {
     transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px)) scale(${scale})`,
+  };
+});
+const characterJoystickKnobStyle = computed(() => {
+  const scale = characterJoystickState.active ? 0.88 : 1;
+  return {
+    transform: `translate(calc(-50% + ${characterJoystickOffset.x}px), calc(-50% + ${characterJoystickOffset.y}px)) scale(${scale})`,
   };
 });
 const vehicleDriveResetBusy = ref(false);
@@ -3426,30 +3358,14 @@ const characterControlUi = computed(() => {
     return {
       visible: false,
       label: '',
-      cameraLocked: false,
-      forwardActive: false,
-      backwardActive: false,
-      leftActive: false,
-      rightActive: false,
-      jumpActive: false,
-      sprintActive: false,
-      crouchActive: false,
-      interactActive: false,
+      joystickActive: false,
     } as const;
   }
   const node = controlledNodeId ? resolveNodeById(controlledNodeId) : null;
   return {
     visible: true,
     label: node?.name?.trim() || controlledNodeId || 'Character',
-    cameraLocked: false,
-    forwardActive: characterKeyState.forward,
-    backwardActive: characterKeyState.backward,
-    leftActive: characterKeyState.left,
-    rightActive: characterKeyState.right,
-    jumpActive: characterKeyState.jump,
-    sprintActive: characterKeyState.sprint,
-    crouchActive: characterKeyState.crouch,
-    interactActive: characterKeyState.interact,
+    joystickActive: characterJoystickState.active,
   } as const;
 });
 
@@ -4187,6 +4103,19 @@ watch(
       detachDrivePadMouseListeners();
       hideDrivePadImmediate();
       deactivateJoystick(true);
+    }
+  },
+);
+
+watch(
+  () => characterControlUi.value.visible,
+  (visible) => {
+    if (visible) {
+      refreshCharacterJoystickMetrics();
+    } else {
+      detachCharacterDrivePadMouseListeners();
+      hideCharacterDrivePadImmediate();
+      deactivateCharacterJoystick(true);
     }
   },
 );
@@ -8217,7 +8146,6 @@ function clearLegacyPhysicsWorld(): void {
   clearVehicleDriveIntroState();
   vehicleInstances.clear();
   rigidbodyInstances.clear();
-  protagonistNodeId = null;
   scenePreviewPerf.reset();
   vehicleDriveActive.value = false;
   vehicleDriveNodeId.value = null;
@@ -9448,9 +9376,6 @@ function removeRigidbodyInstance(nodeId: string): void {
   physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
   physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
   scenePreviewPerf.notifyRemovedNode(nodeId);
-  if (protagonistNodeId === nodeId) {
-    protagonistNodeId = null;
-  }
   removeVehicleInstance(nodeId);
 }
 
@@ -11373,20 +11298,8 @@ function setCameraCaging(enabled: boolean): void {
 
 function resetProtagonistPoseState(): void {
   protagonistPoseSynced = false;
-  scenePreviewPerf.clearProtagonist();
-  protagonistNodeId = null;
   protagonistFollowHasSample = false;
   protagonistFollowLastRootPosition.set(0, 0, 0);
-}
-
-function registerProtagonistObject(object: THREE.Object3D): void {
-  const id = object.userData?.nodeId as string | undefined;
-  if (!id) {
-    return;
-  }
-  protagonistNodeId = id;
-  const rigidbody = rigidbodyInstances.get(id) ?? null;
-  scenePreviewPerf.registerProtagonist(id, rigidbody?.body ?? null);
 }
 
 function findDefaultControlledCharacterObject(): THREE.Object3D | null {
@@ -11395,11 +11308,7 @@ function findDefaultControlledCharacterObject(): THREE.Object3D | null {
     return null;
   }
   const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId);
-  const object = bindingNodeId ? (nodeObjectMap.get(bindingNodeId) ?? null) : null;
-  if (object) {
-    registerProtagonistObject(object);
-  }
-  return object;
+  return bindingNodeId ? (nodeObjectMap.get(bindingNodeId) ?? null) : null;
 }
 
 function resolveCharacterRootWorldPosition(
@@ -11415,6 +11324,81 @@ function resolveCharacterRootWorldPosition(
     protagonistObject.getWorldPosition(target);
   }
   return target;
+}
+
+function updateControlledCharacterFollowCamera(deltaSeconds: number): void {
+  if (vehicleDriveActive.value || purposeActiveMode.value !== 'level' || activeCameraWatchTween) {
+    protagonistPoseSynced = false;
+    protagonistFollowHasSample = false;
+    return;
+  }
+  const context = renderContext;
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const protagonistObject = findDefaultControlledCharacterObject();
+  if (!context || !controlledNodeId || !protagonistObject) {
+    protagonistPoseSynced = false;
+    protagonistFollowHasSample = false;
+    return;
+  }
+
+  const controllerProps = resolveDefaultControlledCharacterComponentProps();
+  const cameraFollowDistance = controllerProps?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE;
+  const cameraFollowHeight = controllerProps?.cameraFollowHeight ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT;
+  const colliderHeight = controllerProps?.colliderHeight ?? HUMAN_EYE_HEIGHT;
+  const lookTargetHeight = Math.min(cameraFollowHeight, Math.max(colliderHeight * 0.72, HUMAN_EYE_HEIGHT * 0.9));
+
+  protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
+  writeCharacterLocalForward(protagonistPoseDirection, controllerProps?.forwardAxis ?? '+x');
+  protagonistPoseDirection.applyQuaternion(protagonistPoseQuaternion);
+  protagonistPoseDirection.y = 0;
+  if (protagonistPoseDirection.lengthSq() <= 1e-8) {
+    protagonistPoseDirection.set(0, 0, -1);
+  } else {
+    protagonistPoseDirection.normalize();
+  }
+
+  resolveCharacterRootWorldPosition(controlledNodeId, protagonistObject, protagonistFollowRootPosition);
+  protagonistPoseTarget.copy(protagonistFollowRootPosition);
+  protagonistPoseTarget.y += lookTargetHeight;
+  protagonistPoseCameraOffset.copy(protagonistPoseDirection).multiplyScalar(-cameraFollowDistance);
+  protagonistPoseCameraOffset.y = cameraFollowHeight;
+  protagonistPosePosition.copy(protagonistFollowRootPosition).add(protagonistPoseCameraOffset);
+
+  const rootDelta = protagonistFollowHasSample
+    ? protagonistFollowLastRootPosition.distanceTo(protagonistFollowRootPosition)
+    : 0;
+  protagonistFollowLastRootPosition.copy(protagonistFollowRootPosition);
+
+  const shouldSnapImmediately =
+    !protagonistPoseSynced
+    || !protagonistFollowHasSample
+    || deltaSeconds <= 0
+    || context.camera.position.distanceToSquared(protagonistPosePosition) > CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE * CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE
+    || rootDelta > CHARACTER_FOLLOW_CAMERA_TELEPORT_DISTANCE;
+
+  const positionAlpha = shouldSnapImmediately
+    ? 1
+    : 1 - Math.exp(-CHARACTER_FOLLOW_CAMERA_POSITION_LERP_SPEED * deltaSeconds);
+  const targetAlpha = shouldSnapImmediately
+    ? 1
+    : 1 - Math.exp(-CHARACTER_FOLLOW_CAMERA_TARGET_LERP_SPEED * deltaSeconds);
+
+  runWithProgrammaticCameraMutationAndAnchor(() => {
+    withControlsVerticalFreedom(context.controls, () => {
+      if (shouldSnapImmediately) {
+        context.camera.position.copy(protagonistPosePosition);
+        context.controls.target.copy(protagonistPoseTarget);
+      } else {
+        context.camera.position.lerp(protagonistPosePosition, positionAlpha);
+        context.controls.target.lerp(protagonistPoseTarget, targetAlpha);
+      }
+      context.camera.lookAt(context.controls.target);
+      context.controls.update();
+    });
+  });
+
+  protagonistPoseSynced = true;
+  protagonistFollowHasSample = true;
 }
 
 function getNormalizedMultiuserIdentity(): MultiuserIdentity | null {
@@ -14093,6 +14077,104 @@ function refreshJoystickMetrics(): void {
   });
 }
 
+function refreshCharacterJoystickMetrics(): void {
+  nextTick(() => {
+    const resolveElement = (
+      value: ComponentPublicInstance | HTMLElement | { rootRef?: unknown } | null,
+    ): HTMLElement | null => {
+      if (!value) {
+        return null;
+      }
+      const exposedRootRef = (value as { rootRef?: unknown }).rootRef;
+      const resolvedValue = (exposedRootRef as { value?: unknown } | undefined)?.value
+        ?? exposedRootRef
+        ?? value;
+      if (typeof (resolvedValue as HTMLElement).getBoundingClientRect === 'function') {
+        return resolvedValue as HTMLElement;
+      }
+      const maybeEl = (resolvedValue as { $el?: unknown }).$el;
+      if (maybeEl && typeof (maybeEl as HTMLElement).getBoundingClientRect === 'function') {
+        return maybeEl as HTMLElement;
+      }
+      return null;
+    };
+
+    const preferredElement = resolveElement(characterFloatingJoystickRef.value);
+    if (preferredElement) {
+      const rect = preferredElement.getBoundingClientRect();
+      characterJoystickState.centerX = rect.left + rect.width / 2;
+      characterJoystickState.centerY = rect.top + rect.height / 2;
+      characterJoystickState.ready = rect.width > 0 && rect.height > 0;
+      return;
+    }
+
+    const query = uni.createSelectorQuery();
+    if (typeof query.in === 'function') {
+      query.in((pageInstance?.proxy as unknown) ?? null);
+    }
+
+    const expectedCenter = characterDrivePadState.visible
+      ? {
+          x: characterDrivePadViewportRect.left + characterDrivePadState.x,
+          y: characterDrivePadViewportRect.top + characterDrivePadState.y,
+        }
+      : null;
+
+    query
+      .selectAll('.viewer-character-console .viewer-drive-joystick')
+      .boundingClientRect((rects: unknown) => {
+        const items = (Array.isArray(rects) ? rects : []) as UniApp.NodeInfo[];
+        if (items.length === 0) {
+          characterJoystickState.ready = false;
+          return;
+        }
+
+        let best: UniApp.NodeInfo | null = null;
+        let bestScore = Number.POSITIVE_INFINITY;
+        let bestArea = -1;
+
+        for (const rect of items) {
+          const left = rect.left ?? 0;
+          const top = rect.top ?? 0;
+          const width = rect.width ?? 0;
+          const height = rect.height ?? 0;
+          if (!(width > 0 && height > 0)) {
+            continue;
+          }
+          if (expectedCenter) {
+            const centerX = left + width / 2;
+            const centerY = top + height / 2;
+            const score = Math.hypot(centerX - expectedCenter.x, centerY - expectedCenter.y);
+            if (score < bestScore) {
+              best = rect;
+              bestScore = score;
+            }
+            continue;
+          }
+          const area = width * height;
+          if (area > bestArea) {
+            best = rect;
+            bestArea = area;
+          }
+        }
+
+        if (!best) {
+          characterJoystickState.ready = false;
+          return;
+        }
+
+        const left = best.left ?? 0;
+        const top = best.top ?? 0;
+        const width = best.width ?? 0;
+        const height = best.height ?? 0;
+        characterJoystickState.centerX = left + width / 2;
+        characterJoystickState.centerY = top + height / 2;
+        characterJoystickState.ready = true;
+      })
+      .exec();
+  });
+}
+
 function getTouchCoordinates(touch: Touch | null): { x: number; y: number } | null {
   if (!touch) {
     return null;
@@ -14145,11 +14227,27 @@ function resolveJoystickDriveInput(): { throttle: number; steering: number } {
   };
 }
 
+function resolveJoystickCharacterInput(): { moveX: number; moveZ: number } {
+  const x = characterJoystickVector.x;
+  const y = characterJoystickVector.y;
+  const length = Math.hypot(x, y);
+  if (length <= JOYSTICK_DEADZONE) {
+    return { moveX: 0, moveZ: 0 };
+  }
+  const effectiveLength = (length - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
+  const scale = length > 0 ? effectiveLength / length : 0;
+  return {
+    moveX: x * scale,
+    moveZ: y * scale,
+  };
+}
+
 function updateCharacterAuthorityInputFromKeys(): void {
-  const moveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
-  const moveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
-  characterAuthorityInput.moveX = clampAxisScalar(moveX);
-  characterAuthorityInput.moveZ = clampAxisScalar(moveZ);
+  const keyMoveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
+  const keyMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
+  const joystickInput = resolveJoystickCharacterInput();
+  characterAuthorityInput.moveX = clampAxisScalar(keyMoveX + joystickInput.moveX);
+  characterAuthorityInput.moveZ = clampAxisScalar(keyMoveZ + joystickInput.moveZ);
   characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
@@ -14190,8 +14288,6 @@ function setCharacterKeyState(key: string, pressed: boolean): void {
   updateCharacterAuthorityInputFromKeys();
 }
 
-type CharacterControlAction = 'forward' | 'backward' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'interact';
-
 function resetCharacterControlInputs(): void {
   characterAuthorityInput.moveX = 0;
   characterAuthorityInput.moveZ = 0;
@@ -14208,28 +14304,9 @@ function resetCharacterControlInputs(): void {
   characterKeyState.crouch = false;
   characterKeyState.interact = false;
   characterInputJumpLatch = false;
-}
-
-function setCharacterControlFlag(action: CharacterControlAction, pressed: boolean): void {
-  if (vehicleDriveActive.value || !characterControlUi.value.visible) {
-    return;
-  }
-  if (characterKeyState[action] === pressed) {
-    return;
-  }
-  characterKeyState[action] = pressed;
-  updateCharacterAuthorityInputFromKeys();
-}
-
-function handleCharacterControlPointer(
-  action: CharacterControlAction,
-  pressed: boolean,
-  event?: PointerEvent | MouseEvent | TouchEvent,
-): void {
-  if (event) {
-    event.preventDefault();
-  }
-  setCharacterControlFlag(action, pressed);
+  deactivateCharacterJoystick(true);
+  hideCharacterDrivePadImmediate();
+  detachCharacterDrivePadMouseListeners();
 }
 
 function handleWindowBlur(): void {
@@ -14324,35 +14401,45 @@ function getViewportHeight(): number {
   return initialSystemInfo?.windowHeight ?? initialSystemInfo?.screenHeight ?? 0;
 }
 
-function shouldActivateDrivePad(clientY: number): boolean {
-  const height = drivePadViewportRect.height > 0 ? drivePadViewportRect.height : getViewportHeight();
+function shouldActivateDrivePad(
+  clientY: number,
+  viewportRect: { top: number; left: number; height: number } = drivePadViewportRect,
+): boolean {
+  const height = viewportRect.height > 0 ? viewportRect.height : getViewportHeight();
   if (height <= 0) {
     return true;
   }
   // Activate only when touching the bottom third of the viewport
-  return clientY >= drivePadViewportRect.top + (height * 2) / 3;
+  return clientY >= viewportRect.top + (height * 2) / 3;
 }
 
-function updateDrivePadViewportRect(target: EventTarget | null): void {
+function updateDrivePadViewportRect(
+  target: EventTarget | null,
+  viewportRect: { top: number; left: number; height: number } = drivePadViewportRect,
+): void {
   const element = target as { getBoundingClientRect?: () => DOMRect | ClientRect } | null;
   if (element && typeof element.getBoundingClientRect === 'function') {
     const rect = element.getBoundingClientRect();
     if (rect) {
-      drivePadViewportRect.top = rect.top ?? 0;
-      drivePadViewportRect.left = rect.left ?? 0;
-      drivePadViewportRect.height = rect.height ?? getViewportHeight();
+      viewportRect.top = rect.top ?? 0;
+      viewportRect.left = rect.left ?? 0;
+      viewportRect.height = rect.height ?? getViewportHeight();
       return;
     }
   }
-  drivePadViewportRect.top = 0;
-  drivePadViewportRect.left = 0;
-  drivePadViewportRect.height = getViewportHeight();
+  viewportRect.top = 0;
+  viewportRect.left = 0;
+  viewportRect.height = getViewportHeight();
 }
 
-function toDrivePadLocalCoords(x: number, y: number): { x: number; y: number } {
+function toDrivePadLocalCoords(
+  x: number,
+  y: number,
+  viewportRect: { top: number; left: number; height: number } = drivePadViewportRect,
+): { x: number; y: number } {
   return {
-    x: x - drivePadViewportRect.left,
-    y: y - drivePadViewportRect.top,
+    x: x - viewportRect.left,
+    y: y - viewportRect.top,
   };
 }
 
@@ -14393,8 +14480,85 @@ function hideDrivePadImmediate(): void {
   drivePadState.fading = false;
 }
 
+function cancelCharacterDrivePadFade(): void {
+  if (characterDrivePadFadeTimer) {
+    clearTimeout(characterDrivePadFadeTimer);
+    characterDrivePadFadeTimer = null;
+  }
+}
+
+function summonCharacterDrivePadAt(x: number, y: number): void {
+  cancelCharacterDrivePadFade();
+  characterDrivePadState.x = x;
+  characterDrivePadState.y = y;
+  characterDrivePadState.visible = true;
+  characterDrivePadState.fading = false;
+}
+
+function scheduleCharacterDrivePadFade(): void {
+  if (!characterDrivePadState.visible) {
+    return;
+  }
+  characterDrivePadState.fading = true;
+  cancelCharacterDrivePadFade();
+  characterDrivePadFadeTimer = setTimeout(() => {
+    characterDrivePadState.visible = false;
+    characterDrivePadState.fading = false;
+    characterDrivePadFadeTimer = null;
+  }, DRIVE_PAD_FADE_MS);
+}
+
+function hideCharacterDrivePadImmediate(): void {
+  if (!characterDrivePadState.visible && !characterDrivePadState.fading) {
+    return;
+  }
+  cancelCharacterDrivePadFade();
+  characterDrivePadState.visible = false;
+  characterDrivePadState.fading = false;
+}
+
 function cancelVehicleSmoothStop(): void {
   vehicleDriveController.clearSmoothStop();
+}
+
+function handleControlPadTouchStart(event: TouchEvent): void {
+  if (vehicleDriveUi.value.visible) {
+    handleDrivePadTouchStart(event);
+    return;
+  }
+  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+    handleCharacterDrivePadTouchStart(event);
+  }
+}
+
+function handleControlPadTouchMove(event: TouchEvent): void {
+  if (vehicleDriveUi.value.visible) {
+    handleDrivePadTouchMove(event);
+    return;
+  }
+  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+    handleCharacterDrivePadTouchMove(event);
+  }
+}
+
+function handleControlPadTouchEnd(event: TouchEvent): void {
+  if (vehicleDriveUi.value.visible) {
+    handleDrivePadTouchEnd(event);
+    return;
+  }
+  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+    handleCharacterDrivePadTouchEnd(event);
+  }
+}
+
+function handleControlPadMouseDown(event: MouseEvent): void {
+  if (vehicleDriveUi.value.visible) {
+    handleDrivePadMouseDown(event);
+    return;
+  }
+  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+    handleCharacterDrivePadMouseDown(event);
+  }
 }
 
 function handleDrivePadTouchStart(event: TouchEvent): void {
@@ -14500,6 +14664,155 @@ function handleDrivePadMouseUp(): void {
   hideDrivePadImmediate();
 }
 
+function setCharacterJoystickVector(x: number, y: number): void {
+  let nextX = clampAxisScalar(x);
+  let nextY = clampAxisScalar(y);
+  const length = Math.hypot(nextX, nextY);
+  if (length > 1) {
+    const scale = 1 / length;
+    nextX *= scale;
+    nextY *= scale;
+  }
+  characterJoystickVector.x = nextX;
+  characterJoystickVector.y = nextY;
+  characterJoystickOffset.x = characterJoystickVector.x * JOYSTICK_VISUAL_RANGE;
+  characterJoystickOffset.y = -characterJoystickVector.y * JOYSTICK_VISUAL_RANGE;
+  updateCharacterAuthorityInputFromKeys();
+}
+
+function deactivateCharacterJoystick(reset: boolean): void {
+  characterJoystickState.active = false;
+  characterJoystickState.pointerId = -1;
+  characterJoystickState.ready = false;
+  if (reset) {
+    setCharacterJoystickVector(0, 0);
+  }
+}
+
+function applyCharacterJoystickFromPoint(x: number, y: number): void {
+  if (!characterJoystickState.ready) {
+    characterJoystickState.centerX = x;
+    characterJoystickState.centerY = y;
+    characterJoystickState.ready = true;
+    refreshCharacterJoystickMetrics();
+  }
+  const dx = x - characterJoystickState.centerX;
+  const dy = y - characterJoystickState.centerY;
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+    return;
+  }
+  const normalizedX = clampAxisScalar(dx / JOYSTICK_INPUT_RADIUS);
+  const normalizedY = clampAxisScalar(-dy / JOYSTICK_INPUT_RADIUS);
+  const length = Math.hypot(normalizedX, normalizedY);
+  if (length > 1) {
+    const inv = 1 / length;
+    setCharacterJoystickVector(normalizedX * inv, normalizedY * inv);
+    return;
+  }
+  setCharacterJoystickVector(normalizedX, normalizedY);
+}
+
+function handleCharacterDrivePadTouchStart(event: TouchEvent): void {
+  if (!characterControlUi.value.visible || vehicleDriveUi.value.visible) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
+  const touch = event.changedTouches?.[0] ?? null;
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
+    return;
+  }
+  if (!shouldActivateDrivePad(coords.y, characterDrivePadViewportRect)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
+  summonCharacterDrivePadAt(localCoords.x, localCoords.y);
+  handleCharacterJoystickTouchStart(event);
+}
+
+function handleCharacterDrivePadTouchMove(event: TouchEvent): void {
+  if (characterJoystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, characterJoystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  handleCharacterJoystickTouchMove(event);
+}
+
+function handleCharacterDrivePadTouchEnd(event: TouchEvent): void {
+  if (characterJoystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, characterJoystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  handleCharacterJoystickTouchEnd(event);
+  scheduleCharacterDrivePadFade();
+}
+
+function attachCharacterDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || characterDrivePadMouseTracking) {
+    return;
+  }
+  characterDrivePadMouseTracking = true;
+  window.addEventListener('mousemove', handleCharacterDrivePadMouseMove);
+  window.addEventListener('mouseup', handleCharacterDrivePadMouseUp);
+  window.addEventListener('blur', handleCharacterDrivePadMouseUp);
+}
+
+function detachCharacterDrivePadMouseListeners(): void {
+  if (!isBrowserEnvironment || !characterDrivePadMouseTracking) {
+    return;
+  }
+  characterDrivePadMouseTracking = false;
+  window.removeEventListener('mousemove', handleCharacterDrivePadMouseMove);
+  window.removeEventListener('mouseup', handleCharacterDrivePadMouseUp);
+  window.removeEventListener('blur', handleCharacterDrivePadMouseUp);
+}
+
+function handleCharacterDrivePadMouseDown(event: MouseEvent): void {
+  if (!characterControlUi.value.visible || !isWeChatMiniProgram || event.button !== 0) {
+    return;
+  }
+  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
+  const coords = { x: event.clientX, y: event.clientY };
+  if (!shouldActivateDrivePad(coords.y, characterDrivePadViewportRect)) {
+    return;
+  }
+  event.stopPropagation();
+  event.preventDefault();
+  const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
+  summonCharacterDrivePadAt(localCoords.x, localCoords.y);
+  characterJoystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
+  characterJoystickState.active = true;
+  characterJoystickState.ready = false;
+  setCharacterJoystickVector(0, 0);
+  applyCharacterJoystickFromPoint(coords.x, coords.y);
+  attachCharacterDrivePadMouseListeners();
+}
+
+function handleCharacterDrivePadMouseMove(event: MouseEvent): void {
+  if (characterJoystickState.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
+    return;
+  }
+  event.preventDefault();
+  applyCharacterJoystickFromPoint(event.clientX, event.clientY);
+}
+
+function handleCharacterDrivePadMouseUp(): void {
+  if (characterJoystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
+    deactivateCharacterJoystick(true);
+    scheduleCharacterDrivePadFade();
+  }
+  detachCharacterDrivePadMouseListeners();
+  hideCharacterDrivePadImmediate();
+}
+
 function handleJoystickTouchStart(event: TouchEvent): void {
   if (!vehicleDriveActive.value) {
     return;
@@ -14545,6 +14858,52 @@ function handleJoystickTouchEnd(event: TouchEvent): void {
     return;
   }
   deactivateJoystick(true);
+}
+
+function handleCharacterJoystickTouchStart(event: TouchEvent): void {
+  if (!characterControlUi.value.visible || vehicleDriveUi.value.visible) {
+    return;
+  }
+  const touch = event.changedTouches?.[0] ?? null;
+  if (!touch) {
+    return;
+  }
+  if (!characterJoystickState.ready) {
+    refreshCharacterJoystickMetrics();
+  }
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
+    return;
+  }
+  characterJoystickState.pointerId = touch.identifier;
+  characterJoystickState.active = true;
+  applyCharacterJoystickFromPoint(coords.x, coords.y);
+}
+
+function handleCharacterJoystickTouchMove(event: TouchEvent): void {
+  if (!characterJoystickState.active || characterJoystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, characterJoystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
+    return;
+  }
+  applyCharacterJoystickFromPoint(coords.x, coords.y);
+}
+
+function handleCharacterJoystickTouchEnd(event: TouchEvent): void {
+  if (characterJoystickState.pointerId === -1) {
+    return;
+  }
+  const touch = extractTouchById(event, characterJoystickState.pointerId);
+  if (!touch) {
+    return;
+  }
+  deactivateCharacterJoystick(true);
 }
 
 function recomputeVehicleDriveInputs(): void {
@@ -14658,7 +15017,7 @@ function updateVehicleSpeedFromVehicle(): void {
     );
     vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
     vehicleCompassForward.y = 0;
-    const horizontalLengthSq =
+  const horizontalLengthSq =
       vehicleCompassForward.x * vehicleCompassForward.x
       + vehicleCompassForward.z * vehicleCompassForward.z;
     if (horizontalLengthSq > 1e-8) {
@@ -14699,17 +15058,30 @@ function updateVehicleSpeedFromVehicle(): void {
   driveObject.getWorldQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
   vehicleCompassForward.y = 0;
-  const horizontalLengthSq =
+  const objectHorizontalLengthSq =
     vehicleCompassForward.x * vehicleCompassForward.x
     + vehicleCompassForward.z * vehicleCompassForward.z;
-  if (horizontalLengthSq > 1e-8) {
-    vehicleCompassForward.multiplyScalar(1 / Math.sqrt(horizontalLengthSq));
+  if (objectHorizontalLengthSq > 1e-8) {
+    vehicleCompassForward.multiplyScalar(1 / Math.sqrt(objectHorizontalLengthSq));
     const worldHeadingDegrees = THREE.MathUtils.radToDeg(
       Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
     );
     const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
     commitVehicleHeadingDegrees(worldHeadingDegrees - northDirectionAngleDegrees);
   }
+}
+
+function updateSceneCompassHeading(): void {
+  if (vehicleDriveUi.value.visible || activeAutoTourNodeIds.size > 0) {
+    return;
+  }
+  if (characterControlUi.value.visible) {
+    const headingDegrees = THREE.MathUtils.radToDeg(resolveSceneryCharacterInputYaw());
+    const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
+    commitVehicleHeadingDegrees(headingDegrees - northDirectionAngleDegrees);
+    return;
+  }
+  commitVehicleHeadingDegrees(0);
 }
 
 function handleVehicleDriveResetTap(): void {
@@ -17524,13 +17896,10 @@ async function ensureRendererContext(result: UseCanvasResult) {
   ;(renderer as THREE.WebGLRenderer & { transmissionResolutionScale?: number }).transmissionResolutionScale = 0.5
 
   const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, DEFAULT_SCENE_CAMERA_FAR);
-  camera.position.set(0, HUMAN_EYE_HEIGHT, 0);
-  camera.lookAt(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
 
   const controls = new OrbitControls(camera, canvas as unknown as HTMLElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.1;
-  controls.target.set(0, HUMAN_EYE_HEIGHT, -CAMERA_FORWARD_OFFSET);
   controls.enabled = !isCameraCaged.value;
 
   controls.addEventListener('start', () => {
@@ -18055,7 +18424,6 @@ async function mountGraphAndSyncSubsystems(
 
 /** Apply camera alignment and environment settings for the current document. */
 function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: THREE.PerspectiveCamera): void {
-  const shouldAlignToProtagonist = purposeActiveMode.value === 'level' && !vehicleDriveActive.value;
   resetRemovedSkyState();
 
   // Environment settings are applied asynchronously (e.g. texture loads) and will self-defer
@@ -18152,7 +18520,9 @@ function startRenderLoop(
           syncSceneryPhysicsBridgeCharacterInput();
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
+          updateControlledCharacterFollowCamera(deltaSeconds);
           updateVehicleSpeedFromVehicle();
+          updateSceneCompassHeading();
           updateVehicleWheelVisuals(deltaSeconds);
           syncRemoteMultiuserPeerVisibility(camera);
           updateRemoteMultiuserPeers(deltaSeconds);
@@ -20662,249 +21032,6 @@ onUnmounted(() => {
 
 .viewer-character-console--mobile {
   display: block;
-}
-
-.viewer-character-panel {
-  position: absolute;
-  left: 16px;
-  bottom: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  pointer-events: auto;
-  width: min(88vw, 340px);
-  padding: 14px;
-  border-radius: 20px;
-  border: 1px solid rgba(140, 180, 225, 0.2);
-  background: linear-gradient(180deg, rgba(14, 22, 40, 0.84), rgba(9, 14, 28, 0.7));
-  box-shadow: 0 16px 38px rgba(4, 10, 26, 0.28);
-  backdrop-filter: blur(16px) saturate(1.08);
-  -webkit-backdrop-filter: blur(16px) saturate(1.08);
-}
-
-.viewer-character-panel__header {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.viewer-character-panel__title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.viewer-character-panel__title {
-  color: rgba(245, 249, 255, 0.96);
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.viewer-character-panel__status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border-radius: 999px;
-  border: 1px solid rgba(187, 220, 255, 0.18);
-  background: rgba(128, 171, 220, 0.12);
-  color: rgba(224, 240, 255, 0.92);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.viewer-character-panel__status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #77e6a4;
-  box-shadow: 0 0 0 4px rgba(119, 230, 164, 0.14);
-}
-
-.viewer-character-panel__status-text {
-  line-height: 1;
-}
-
-.viewer-character-panel__subtitle {
-  color: rgba(193, 210, 234, 0.8);
-  font-size: 11px;
-  line-height: 1.2;
-}
-
-.viewer-character-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.viewer-character-grid--actions {
-  margin-top: 6px;
-}
-
-.viewer-character-dpad {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(3, minmax(58px, 1fr));
-  gap: 8px;
-  padding: 8px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(173, 205, 238, 0.1);
-}
-
-.viewer-character-dpad__center {
-  grid-column: 2;
-  grid-row: 2;
-  border-radius: 16px;
-  border: 1px dashed rgba(181, 214, 255, 0.16);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
-  color: rgba(214, 231, 247, 0.75);
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.viewer-character-dpad__center-label {
-  line-height: 1;
-}
-
-.viewer-character-button {
-  min-width: 0;
-  min-height: 60px;
-  padding: 10px 8px 9px;
-  border-radius: 16px;
-  border: 1px solid rgba(181, 214, 255, 0.18);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(236, 243, 250, 0.82));
-  color: #23415b;
-  box-shadow: 0 10px 24px rgba(52, 87, 128, 0.12);
-  backdrop-filter: blur(14px) saturate(1.06);
-  -webkit-backdrop-filter: blur(14px) saturate(1.06);
-  transition: transform 0.18s ease, background-color 0.18s ease, opacity 0.18s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.viewer-character-button--direction {
-  min-height: 58px;
-}
-
-.viewer-character-button--action {
-  min-height: 64px;
-}
-
-.viewer-character-button--forward {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.viewer-character-button--left {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.viewer-character-button--right {
-  grid-column: 3;
-  grid-row: 2;
-}
-
-.viewer-character-button--backward {
-  grid-column: 2;
-  grid-row: 3;
-}
-
-.viewer-character-button--accent {
-  background: linear-gradient(180deg, rgba(221, 247, 255, 0.97), rgba(193, 237, 255, 0.84));
-}
-
-.viewer-character-button--warning {
-  background: linear-gradient(180deg, rgba(255, 244, 227, 0.97), rgba(255, 232, 198, 0.86));
-  color: #8a5b16;
-}
-
-.viewer-character-button--success {
-  background: linear-gradient(180deg, rgba(227, 248, 236, 0.97), rgba(205, 240, 220, 0.86));
-  color: #24663c;
-}
-
-.viewer-character-button.is-active {
-  transform: scale(0.96);
-  background: linear-gradient(180deg, rgba(220, 238, 255, 1), rgba(198, 224, 255, 0.92));
-}
-
-.viewer-character-button:active {
-  transform: scale(0.95);
-}
-
-.viewer-character-button__icon {
-  font-size: 19px;
-  line-height: 1;
-  font-weight: 800;
-}
-
-.viewer-character-button__label {
-  font-size: 10px;
-  line-height: 1.1;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.viewer-character-button::before {
-  content: '';
-  position: absolute;
-  inset: auto auto 8px 50%;
-  width: 8px;
-  height: 8px;
-  background: rgba(102, 178, 255, 0.12);
-  border-radius: 50%;
-  transform: translateX(-50%) scale(0);
-  opacity: 0;
-  transition: transform 420ms cubic-bezier(.2,.9,.2,1), opacity 420ms linear;
-}
-
-.viewer-character-button:active::before {
-  transform: translateX(-50%) scale(10);
-  opacity: 1;
-}
-
-.viewer-character-button:disabled {
-  opacity: 0.7;
-}
-
-@media (max-width: 420px) {
-  .viewer-character-panel {
-    width: min(92vw, 360px);
-    left: 12px;
-    bottom: 12px;
-    padding: 12px;
-    border-radius: 18px;
-  }
-
-  .viewer-character-dpad {
-    gap: 6px;
-    padding: 7px;
-    grid-template-rows: repeat(3, minmax(52px, 1fr));
-  }
-
-  .viewer-character-button {
-    min-height: 54px;
-  }
-
-  .viewer-character-button--action {
-    min-height: 58px;
-  }
 }
 
 .viewer-drive-icon-button {

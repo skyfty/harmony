@@ -204,7 +204,6 @@ class CharacterControllerComponent extends Component<CharacterControllerComponen
     if (!object) {
       return
     }
-    object.userData.protagonist = true
     object.userData.characterController = true
     object.userData.characterControllerComponentId = this.context.componentId
     object.userData.characterControllerNodeId = this.context.nodeId

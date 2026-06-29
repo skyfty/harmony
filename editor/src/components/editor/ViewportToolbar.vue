@@ -1170,7 +1170,6 @@ import { computed, reactive, ref, toRefs, watch } from 'vue'
 import AssetPickerList from '@/components/common/AssetPickerList.vue'
 import TerrainSculptPanel from '@/components/inspector/TerrainSculptPanel.vue'
 import GroundAssetPainter from '@/components/inspector/GroundAssetPainter.vue'
-import { PROTAGONIST_NODE_ID } from '@schema/core'
 import type { GroundGenerationMode, GroundSculptOperation } from '@schema/core'
 import type { AlignCommand } from '@/types/scene-viewport-align-command'
 import type { AlignMode } from '@/types/scene-viewport-align-mode'
@@ -1971,8 +1970,6 @@ function hasNodeByPredicate(predicate: (node: any) => boolean, nodes: any[] | un
   return false
 }
 
-const canAddViewportProtagonist = computed(() => !hasNodeByPredicate((node) => node.id === PROTAGONIST_NODE_ID))
-
 function handleGroupSelection() {
   if ((selectionCount.value ?? 0) < 1) return
   // call the store action to group selected nodes
@@ -2335,7 +2332,7 @@ function handleViewportPlacementMenuModelUpdate(value: boolean) {
 }
 
 function isViewportPlacementItemDisabled(item: ViewportPlacementItem): boolean {
-  return item.tab === 'other' && item.kind === 'protagonist' && !canAddViewportProtagonist.value
+  return false
 }
 
 function handleViewportPlacementSelect(item: ViewportPlacementItem) {

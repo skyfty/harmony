@@ -12,7 +12,6 @@ export const GROUND_NODE_ID = 'harmony:ground'
 export const GROUND_TERRAIN_CHUNK_SIZE_METERS = 100
 export const ENVIRONMENT_NODE_ID = 'harmony:environment'
 export const MULTIUSER_NODE_ID = 'harmony:multiuser'
-export const PROTAGONIST_NODE_ID = 'harmony:protagonist'
 
 export { AssetCache, AssetLoader } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions, AssetLoadPersistenceOptions } from './assetCache'

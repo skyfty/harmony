@@ -12,7 +12,6 @@ import FloorPanel from '@/components/inspector/FloorPanel.vue'
 import LandformPanel from '@/components/inspector/LandformPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
-import ProtagonistPanel from '@/components/inspector/ProtagonistPanel.vue'
 import AnimationComponentPanel from '@/components/inspector/AnimationComponentPanel.vue'
 import CharacterControllerPanel from '@/components/inspector/CharacterControllerPanel.vue'
 import GroundAnchorPanel from '@/components/inspector/GroundAnchorPanel.vue'
@@ -40,7 +39,7 @@ import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
 import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
 import NominatePanel from '@/components/inspector/NominatePanel.vue'
 import CouponPanel from '@/components/inspector/CouponPanel.vue'
-import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID,PROTAGONIST_NODE_ID } from '@/stores/sceneStore'
+import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema/core'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
@@ -56,7 +55,6 @@ import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   AUTO_TOUR_COMPONENT_TYPE,
   PURE_PURSUIT_COMPONENT_TYPE,
-  PROTAGONIST_COMPONENT_TYPE,
   ANIMATION_COMPONENT_TYPE,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   GROUND_ANCHOR_COMPONENT_TYPE,
@@ -130,9 +128,6 @@ const isLightNode = computed(() => selectedNode.value?.nodeType === 'Light')
 const isGroundRoot = computed(() => selectedNode.value?.id === GROUND_NODE_ID)
 const isEnvironmentNode = computed(() => selectedNode.value?.id === ENVIRONMENT_NODE_ID)
 const isMultiuserNode = computed(() => selectedNode.value?.id === MULTIUSER_NODE_ID)
-const isProtagonistNode = computed(() =>
-  Boolean(selectedNode.value?.components?.[PROTAGONIST_COMPONENT_TYPE]),
-)
 const isNominateNode = computed(() =>
   Boolean(selectedNode.value?.components?.[NOMINATE_COMPONENT_TYPE]),
 )
@@ -141,7 +136,6 @@ const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'G
 const showMaterialPanel = computed(
   () =>
     !isLightNode.value &&
-    !isProtagonistNode.value &&
     !isMultiuserNode.value &&
     !isNominateNode.value &&
     !isRegionNode.value &&
@@ -164,10 +158,8 @@ const showAssetModelPanel = computed(() => {
 })
 
 const showAddComponentButton = computed(() => {
-  return selectedNode.value?.id !== ENVIRONMENT_NODE_ID && 
-  selectedNode.value?.id !== MULTIUSER_NODE_ID && 
-  selectedNode.value?.id !== PROTAGONIST_NODE_ID;
-
+  return selectedNode.value?.id !== ENVIRONMENT_NODE_ID &&
+  selectedNode.value?.id !== MULTIUSER_NODE_ID
 })
 
 const showRoadPanel = computed(() => selectedNode.value?.dynamicMesh?.type === 'Road')
@@ -214,7 +206,6 @@ function computeDefaultExpandedPanels() {
 
   const shouldShowMaterial =
     (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
-    !Boolean(node?.components?.[PROTAGONIST_COMPONENT_TYPE]) &&
     !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE]) &&
     node?.dynamicMesh?.type !== 'Region'
   if (shouldShowMaterial && node?.id !== GROUND_NODE_ID) {
@@ -448,7 +439,6 @@ watch(
     }
     const materialVisible =
       !isLightNode.value &&
-      !isProtagonistNode.value &&
       !isRegionNode.value &&
       (selectedNode.value?.materials?.length ?? 0) > 0
     if (materialVisible) {
@@ -613,7 +603,6 @@ watch(
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />
               <NetworkSyncPanel v-else-if="component.type === NETWORK_SYNC_COMPONENT_TYPE" />
               <PhysicsAuthorityPanel v-else-if="component.type === PHYSICS_AUTHORITY_COMPONENT_TYPE" />
-              <ProtagonistPanel v-else-if="component.type === PROTAGONIST_COMPONENT_TYPE" />
               <AnimationComponentPanel v-else-if="component.type === ANIMATION_COMPONENT_TYPE" />
               <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
               <GroundAnchorPanel v-else-if="component.type === GROUND_ANCHOR_COMPONENT_TYPE" />

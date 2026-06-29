@@ -6,7 +6,7 @@ This guide verifies the scene-level multi-user flow after the `Multiuser` node, 
 
 - A scene only enters multi-user mode when it contains a `Multiuser` node with an enabled `online` component.
 - Two logged-in users entering the same scene receive each other's snapshots.
-- The active subject is the driven vehicle when the user is driving, otherwise the character/protagonist.
+- The active subject is the driven vehicle when the user is driving, otherwise the character.
 - Remote peers are visual-only and do not participate in physics or control.
 
 ## Local Setup

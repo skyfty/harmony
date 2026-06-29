@@ -15,7 +15,7 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@schema/core'
-import { PROTAGONIST_COMPONENT_TYPE, isAnySteerTargetNode } from '@schema/components'
+import { isAnySteerTargetNode } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import AssetReferenceSearchDialog from './AssetReferenceSearchDialog.vue'
@@ -935,9 +935,6 @@ function resolveAssetDropParentId(targetId: string): string | null {
 
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
-    return false
-  }
-  if (node.components?.[PROTAGONIST_COMPONENT_TYPE]) {
     return false
   }
   if (node.dynamicMesh?.type === 'Region') {

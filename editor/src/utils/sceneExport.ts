@@ -40,8 +40,6 @@ import {
   type RigidbodyConvexSimplifyConfig,
   type RigidbodyPhysicsShape,
   type RigidbodyColliderType,
-  PROTAGONIST_COMPONENT_TYPE,
-  type ProtagonistComponentProps,
   PRELOADABLE_COMPONENT_TYPE,
   type PreloadableComponentProps,
   WALL_COMPONENT_TYPE,
@@ -1298,10 +1296,7 @@ function buildSceneAssetPreloadInfo(
 ): SceneAssetPreloadInfo | undefined {
   const nodeList: SceneNode[] = Array.isArray(nodes) ? [...nodes] : []
 
-  // Collect protagonist initial-visible-node ids (already expected to include subtree),
-  // but apply export-consistent filtering here to avoid preloading meaningless assets.
   const nodeLookup = new Map<string, SceneNode>()
-  const protagonistInitialVisibleNodeIds = new Set<string>()
   const preloadableRootNodeIds = new Set<string>()
   {
     const stack: SceneNode[] = [...nodeList]
@@ -1311,22 +1306,6 @@ function buildSceneAssetPreloadInfo(
         continue
       }
       nodeLookup.set(node.id, node)
-
-      const protagonist = node.components?.[PROTAGONIST_COMPONENT_TYPE] as
-        | SceneNodeComponentState<ProtagonistComponentProps>
-        | undefined
-      const ids = protagonist?.enabled ? (protagonist.props as any)?.initialVisibleNodeIds : null
-      if (Array.isArray(ids)) {
-        ids.forEach((id) => {
-          if (typeof id === 'string') {
-            const trimmed = id.trim()
-            if (trimmed) {
-              protagonistInitialVisibleNodeIds.add(trimmed)
-            }
-          }
-        })
-      }
-
       const preloadable = node.components?.[PRELOADABLE_COMPONENT_TYPE] as
         | SceneNodeComponentState<PreloadableComponentProps>
         | undefined
@@ -1345,10 +1324,8 @@ function buildSceneAssetPreloadInfo(
   scatterAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
 
   // Build essential node ids from multiple sources, then resolve to asset ids in one place.
-  // - Protagonist initial-visible nodes (already expected to include subtree)
   // - Preloadable nodes and their subtrees
   const essentialNodeIds = new Set<string>()
-  protagonistInitialVisibleNodeIds.forEach((nodeId) => essentialNodeIds.add(nodeId))
   if (preloadableRootNodeIds.size) {
     preloadableRootNodeIds.forEach((nodeId) => {
       const root = nodeLookup.get(nodeId) ?? null
@@ -1372,7 +1349,7 @@ function buildSceneAssetPreloadInfo(
     meshAssetIds.forEach((assetId) => essentialSet.add(assetId))
   }
 
-  // Essential assets (protagonist initial-visible + preloadable subtrees) should be eagerly available on scene entry.
+  // Essential assets (preloadable subtrees) should be eagerly available on scene entry.
   essentialAssetIds.forEach((assetId) => essentialSet.add(assetId))
 
   const meshInfo: SceneAssetPreloadInfo['mesh'] = {

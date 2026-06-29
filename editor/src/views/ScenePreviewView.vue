@@ -196,7 +196,6 @@ import {
 	vehicleComponentDefinition,
 	steerComponentDefinition,
 	waterComponentDefinition,
-	protagonistComponentDefinition,
 	signboardComponentDefinition,
 	lodComponentDefinition,
 	CHARACTER_CONTROLLER_COMPONENT_TYPE,
@@ -1235,7 +1234,6 @@ previewComponentManager.registerDefinition(vehicleComponentDefinition)
 previewComponentManager.registerDefinition(steerComponentDefinition)
 previewComponentManager.registerDefinition(waterComponentDefinition)
 previewComponentManager.registerDefinition(behaviorComponentDefinition)
-previewComponentManager.registerDefinition(protagonistComponentDefinition)
 previewComponentManager.registerDefinition(characterControllerComponentDefinition)
 previewComponentManager.registerDefinition(lodComponentDefinition)
 previewComponentManager.registerDefinition(guideRouteComponentDefinition)
