@@ -2819,7 +2819,6 @@ type VehicleInstanceWithWheels = VehicleInstance & {
   hasChassisPositionSample: boolean;
   bridgeBodyId?: number | null;
   vehicleId?: number | null;
-  lastBridgeFramePosition?: THREE.Vector3;
   hasBridgeFrameSample?: boolean;
 };
 
@@ -8679,25 +8678,10 @@ function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeB
   const chassisBody = instance.vehicle.chassisBody;
   const bridgeVelocity = state.linearVelocity ?? null;
   // 记录上一次 bridge 帧中的位置；若还没有采样过，则先创建一个临时向量。
-  const lastPosition = instance.lastBridgeFramePosition ?? new THREE.Vector3();
   if (bridgeVelocity) {
     // 优先使用 bridge 帧里携带的线速度，避免过密采样时把仍在运动的车误写成 0。
     if (!isPhysicsVectorClose(chassisBody.velocity, bridgeVelocity.x, bridgeVelocity.y, bridgeVelocity.z)) {
       chassisBody.velocity.set(bridgeVelocity.x, bridgeVelocity.y, bridgeVelocity.z);
-    }
-  } else if (instance.hasBridgeFrameSample) {
-    const dx = state.position.x - lastPosition.x;
-    const dy = state.position.y - lastPosition.y;
-    const dz = state.position.z - lastPosition.z;
-    const displacementSq = (dx * dx) + (dy * dy) + (dz * dz);
-    if (displacementSq > VEHICLE_BRIDGE_SYNC_POSITION_EPSILON_SQ) {
-      const invStep = PHYSICS_FIXED_TIMESTEP > 1e-6 ? 1 / PHYSICS_FIXED_TIMESTEP : 0;
-      const nextVelocityX = dx * invStep;
-      const nextVelocityY = dy * invStep;
-      const nextVelocityZ = dz * invStep;
-      if (!isPhysicsVectorClose(chassisBody.velocity, nextVelocityX, nextVelocityY, nextVelocityZ)) {
-        chassisBody.velocity.set(nextVelocityX, nextVelocityY, nextVelocityZ);
-      }
     }
   }
   // bridge 驱动的车辆通常由外部状态直接控制，这里将角速度清零，避免物理引擎继续积累自旋。
@@ -8712,42 +8696,35 @@ function syncSceneryBridgeVehicleFromFrame(nodeId: string, state: PhysicsBridgeB
     chassisBody.quaternion.z = state.quaternion.z;
     chassisBody.quaternion.w = state.quaternion.w;
   }
-  // 保存本帧位置，供下一帧计算速度差分使用。
-  lastPosition.copy(state.position);
-  instance.lastBridgeFramePosition = lastPosition;
   // 标记已经至少接收到一帧 bridge 数据，后续即可使用差分计算速度。
   instance.hasBridgeFrameSample = true;
 }
 
 function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
   const nextContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
+  const addContact = (bodyId: number, contact: PhysicsContactEvent): void => {
+    const nodeId = physicsBridgeNodeIdByBodyId.get(bodyId);
+    if (!nodeId) {
+      return;
+    }
+    const contacts = nextContactsByNodeId.get(nodeId) ?? [];
+    contacts.push(contact);
+    nextContactsByNodeId.set(nodeId, contacts);
+  };
+
   if (frame.bodyCount > 0 && frame.bodyMeta?.length) {
     for (let index = 0; index < frame.bodyCount; index += 1) {
       const bodyId = frame.bodyMeta[index];
-      if (typeof bodyId !== 'number') {
-        continue;
+      const nodeId = typeof bodyId === 'number' ? physicsBridgeNodeIdByBodyId.get(bodyId) : null;
+      if (nodeId) {
+        nextContactsByNodeId.set(nodeId, []);
       }
-      const nodeId = physicsBridgeNodeIdByBodyId.get(bodyId);
-      if (!nodeId) {
-        continue;
-      }
-      nextContactsByNodeId.set(nodeId, []);
     }
   }
   if (Array.isArray(frame.contacts) && frame.contacts.length) {
     frame.contacts.forEach((contact) => {
-      const nodeIdA = physicsBridgeNodeIdByBodyId.get(contact.bodyIdA);
-      if (nodeIdA) {
-        const contacts = nextContactsByNodeId.get(nodeIdA) ?? [];
-        contacts.push(contact);
-        nextContactsByNodeId.set(nodeIdA, contacts);
-      }
-      const nodeIdB = physicsBridgeNodeIdByBodyId.get(contact.bodyIdB);
-      if (nodeIdB) {
-        const contacts = nextContactsByNodeId.get(nodeIdB) ?? [];
-        contacts.push(contact);
-        nextContactsByNodeId.set(nodeIdB, contacts);
-      }
+      addContact(contact.bodyIdA, contact);
+      addContact(contact.bodyIdB, contact);
     });
   }
   physicsBridgeContactsByNodeId.clear();
@@ -8763,65 +8740,52 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
   }
   for (let index = 0; index < frame.bodyCount; index += 1) {
     const bodyId = frame.bodyMeta?.[index];
-    if (typeof bodyId !== 'number') {
-      continue;
-    }
-    const nodeId = physicsBridgeNodeIdByBodyId.get(bodyId);
+    const nodeId = typeof bodyId === 'number' ? physicsBridgeNodeIdByBodyId.get(bodyId) : null;
     if (!nodeId) {
       continue;
     }
+
     const base = index * 8;
-    const existing = physicsBridgeFrameBodiesByNodeId.get(nodeId);
-    if (existing) {
-      existing.position.set(
-        frame.bodyTransforms[base] ?? 0,
-        frame.bodyTransforms[base + 1] ?? 0,
-        frame.bodyTransforms[base + 2] ?? 0,
-      );
-      existing.quaternion.set(
-        frame.bodyTransforms[base + 3] ?? 0,
-        frame.bodyTransforms[base + 4] ?? 0,
-        frame.bodyTransforms[base + 5] ?? 0,
-        frame.bodyTransforms[base + 6] ?? 1,
-      ).normalize();
-      existing.motionState = frame.bodyTransforms[base + 7] ?? 0;
-      if (frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3) {
-        existing.linearVelocity ??= new THREE.Vector3();
-        existing.linearVelocity.set(
-          frame.bodyLinearVelocities[base] ?? 0,
-          frame.bodyLinearVelocities[base + 1] ?? 0,
-          frame.bodyLinearVelocities[base + 2] ?? 0,
-        );
-      } else {
-        existing.linearVelocity = undefined;
-      }
-      syncSceneryBridgeVehicleFromFrame(nodeId, existing);
-      continue;
-    }
-    const createdState: PhysicsBridgeBodyFrameState = {
-      position: new THREE.Vector3(
-        frame.bodyTransforms[base] ?? 0,
-        frame.bodyTransforms[base + 1] ?? 0,
-        frame.bodyTransforms[base + 2] ?? 0,
-      ),
-      quaternion: new THREE.Quaternion(
-        frame.bodyTransforms[base + 3] ?? 0,
-        frame.bodyTransforms[base + 4] ?? 0,
-        frame.bodyTransforms[base + 5] ?? 0,
-        frame.bodyTransforms[base + 6] ?? 1,
-      ).normalize(),
-      motionState: frame.bodyTransforms[base + 7] ?? 0,
-    };
-    if (frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3) {
-      createdState.linearVelocity = new THREE.Vector3(
+    const nextPosition = new THREE.Vector3(
+      frame.bodyTransforms[base] ?? 0,
+      frame.bodyTransforms[base + 1] ?? 0,
+      frame.bodyTransforms[base + 2] ?? 0,
+    );
+    const nextQuaternion = new THREE.Quaternion(
+      frame.bodyTransforms[base + 3] ?? 0,
+      frame.bodyTransforms[base + 4] ?? 0,
+      frame.bodyTransforms[base + 5] ?? 0,
+      frame.bodyTransforms[base + 6] ?? 1,
+    ).normalize();
+    const nextMotionState = frame.bodyTransforms[base + 7] ?? 0;
+    const nextLinearVelocity = frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3
+      ? new THREE.Vector3(
         frame.bodyLinearVelocities[base] ?? 0,
         frame.bodyLinearVelocities[base + 1] ?? 0,
         frame.bodyLinearVelocities[base + 2] ?? 0,
-      );
+      )
+      : undefined;
+
+    let existing = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+    if (existing) {
+      existing.position.copy(nextPosition);
+      existing.quaternion.copy(nextQuaternion);
+      existing.motionState = nextMotionState;
+      existing.linearVelocity = nextLinearVelocity;
+    } else {
+      existing  = {
+        position: nextPosition,
+        quaternion: nextQuaternion,
+        motionState: nextMotionState,
+      };
+      if (nextLinearVelocity) {
+        existing.linearVelocity = nextLinearVelocity;
+      }
+      physicsBridgeFrameBodiesByNodeId.set(nodeId, existing);
     }
-    physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState);
-    syncSceneryBridgeVehicleFromFrame(nodeId, createdState);
+    syncSceneryBridgeVehicleFromFrame(nodeId, existing);
   }
+
   applySceneryPhysicsBridgeFrameToObjects();
 }
 
@@ -9196,7 +9160,6 @@ function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: P
   }
   chassisBody.velocity.set(0, 0, 0);
   chassisBody.angularVelocity.set(0, 0, 0);
-  instance.lastBridgeFramePosition = new THREE.Vector3(...transform.position);
   instance.hasBridgeFrameSample = false;
   instance.lastChassisPosition.set(...transform.position);
   instance.hasChassisPositionSample = false;
@@ -9645,7 +9608,6 @@ function createBridgeVehicleInstance(
     initialChassisQuaternion: physicsBridgeSyncQuaternionHelper.clone(),
     bridgeBodyId: physicsBridgeBodyIdByNodeId.get(node.id) ?? null,
     vehicleId: physicsBridgeVehicleIdByNodeId.get(node.id) ?? null,
-    lastBridgeFramePosition: physicsBridgeSyncPositionHelper.clone(),
     hasBridgeFrameSample: false,
   };
 }
@@ -9909,12 +9871,13 @@ function stepPhysicsWorld(delta: number): number {
 }
 
 function updateVehicleWheelVisuals(delta: number): void {
-  // Only update when time advances and vehicle instances exist.
+  // 只有在时间确实推进、并且场景里存在车辆实例时，才需要更新轮子视觉状态。
   if (!Number.isFinite(delta) || delta <= 0 || !vehicleInstances.size) {
     return;
   }
 
   const nowMs = Date.now();
+  // 同一帧里可能会遇到多个轮子共享同一个父节点，使用 WeakSet 避免重复刷新父节点世界矩阵。
   const updatedWheelParents = new WeakSet<THREE.Object3D>();
 
   vehicleInstances.forEach((instance) => {
@@ -9929,18 +9892,22 @@ function updateVehicleWheelVisuals(delta: number): void {
     }
 
     const nodeId = instance.nodeId ?? null;
+    // 手动驾驶和自动导览都可能驱动车辆，但并不是每一帧都值得更新轮子外观。
+    // 这里交给 perf 门禁做节流，减少无意义的轮子旋转和矩阵同步开销。
     const manualActive = vehicleDriveActive.value && vehicleDriveVehicle === instance.vehicle;
     const tourActive = Boolean(nodeId) && activeAutoTourNodeIds.has(nodeId);
     if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody, manualActive, tourActive, nowMs })) {
       return;
     }
 
+    // 读取车身的插值后位姿，避免轮子视觉直接使用未平滑的物理状态。
     resolveInterpolatedBodyPosition(chassisBody as PhysicsBodyLike, wheelChassisPositionHelper);
     wheelQuaternionHelper
       .set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
       .normalize();
 
-    // Signed travel along the vehicle forward axis (supports reverse).
+    // 计算车辆沿自身前进方向的有符号位移，用于驱动轮胎滚动角。
+    // 这里保留正负号，因此倒车时轮子也会反向滚动。
     let signedTravel = 0;
     if (instance.hasChassisPositionSample) {
       wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition);
@@ -9975,8 +9942,8 @@ function updateVehicleWheelVisuals(delta: number): void {
         return;
       }
 
-      // Capture base transform if the wheel object becomes available after the vehicle instance was created
-      // or if the object reference changed (e.g. asset reloaded).
+      // 如果轮子对象是在车辆实例创建之后才出现，或者资源重载导致对象引用变化，
+      // 这里需要重新捕获基础变换，保证后续的转向和滚动都以当前模型原始姿态为准。
       if (binding.object !== wheelObject) {
         binding.object = wheelObject;
         binding.basePosition.copy(wheelObject.position);
@@ -9987,14 +9954,14 @@ function updateVehicleWheelVisuals(delta: number): void {
         binding.instancedTargets = collectInstancedTransformTargets(wheelObject);
       }
 
-      // Keep wheel translation/scale stable; only rotate for steer + spin.
+      // 轮子的位移和缩放保持为基础值，不在这里做动画，只处理转向和滚动旋转。
       wheelObject.position.copy(binding.basePosition);
       wheelObject.scale.copy(binding.baseScale);
 
-      // Wheel roll based on chassis travel.
+      // 根据车身位移计算轮胎滚动角。
       if (signedTravel !== 0) {
         const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS);
-        // Sign convention: forward travel should spin the wheel forward.
+        // 约定：车辆向前行驶时，轮子应当朝“前滚动”方向旋转，所以这里取负号。
         const rollDelta = -signedTravel / radius;
         if (Number.isFinite(rollDelta) && Math.abs(rollDelta) > VEHICLE_WHEEL_SPIN_EPSILON) {
           binding.spinAngle += rollDelta;
@@ -10002,20 +9969,21 @@ function updateVehicleWheelVisuals(delta: number): void {
         }
       }
 
-      // Steering (front/steerable wheels).
+      // 计算前轮/可转向轮的转向角。
       let steeringAngle = 0;
       if (binding.isFrontWheel) {
         const info = wheelInfos?.[binding.wheelIndex];
         const raw = info?.steering;
         if (typeof raw === 'number' && Number.isFinite(raw)) {
           steeringAngle = raw;
+        // 如果物理引擎暂时没有提供单轮转向角，手动驾驶时退回使用当前方向盘输入做视觉兜底。
         } else if (vehicleDriveActive.value && vehicleDriveVehicle === instance.vehicle) {
           steeringAngle = THREE.MathUtils.clamp(vehicleDriveInput.steering, -1, 1) * THREE.MathUtils.degToRad(26);
         }
       }
       binding.lastSteeringAngle = steeringAngle;
 
-      // Prepare parent world quaternion inverse (for parent-space -> wheel-parent local axis conversion).
+      // 先拿到轮子父节点的世界旋转及其逆矩阵，用于把“世界/车身轴向”转换回轮子父节点局部空间。
       wheelParentWorldQuaternionHelper.identity();
       wheelParentWorldQuaternionInverseHelper.identity();
       if (wheelObject.parent) {
@@ -10023,7 +9991,8 @@ function updateVehicleWheelVisuals(delta: number): void {
         wheelParentWorldQuaternionInverseHelper.copy(wheelParentWorldQuaternionHelper).invert();
       }
 
-      // Build parent-space steering quaternion (around vehicle up axis).
+      // 构建转向四元数：围绕车辆的上方向旋转。
+      // 由于轮子可能挂在有旋转的父节点下，这个轴需要先转换到父节点局部空间。
       wheelAxisHelper.copy(instance.axisUp).applyQuaternion(wheelQuaternionHelper);
       if (wheelObject.parent) {
         wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper);
@@ -10036,47 +10005,53 @@ function updateVehicleWheelVisuals(delta: number): void {
       binding.steeringAxis.copy(wheelAxisHelper);
       wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle);
 
-      // Build local-space spin quaternion (around wheel axle).
-      wheelAxisHelper.copy(binding.axleAxis).applyQuaternion(wheelQuaternionHelper);
-      if (wheelObject.parent) {
-        wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper);
-      }
-      if (wheelAxisHelper.lengthSq() < 1e-10) {
-        wheelAxisHelper.copy(defaultWheelAxisVector);
-        wheelAxisHelper.applyQuaternion(wheelQuaternionHelper);
-        if (wheelObject.parent) {
-          wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper);
-        }
-      }
-      if (wheelAxisHelper.lengthSq() < 1e-10) {
-        wheelAxisHelper.set(1, 0, 0);
-      } else {
-        wheelAxisHelper.normalize();
-      }
-      wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert();
-      wheelAxisHelper.applyQuaternion(wheelBaseQuaternionInverseHelper);
-      if (wheelAxisHelper.lengthSq() < 1e-10) {
-        wheelAxisHelper.set(1, 0, 0);
-      } else {
-        wheelAxisHelper.normalize();
-      }
-      binding.spinAxis.copy(wheelAxisHelper);
-      wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle);
+      // 构建滚动四元数：围绕轮轴旋转。
+      // 轮轴优先使用绑定时识别到的 axleAxis；如果退化，再用默认轮轴兜底。
+      // wheelAxisHelper.copy(binding.axleAxis).applyQuaternion(wheelQuaternionHelper);
+      // if (wheelObject.parent) {
+      //   wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper);
+      // }
+      // if (wheelAxisHelper.lengthSq() < 1e-10) {
+      //   wheelAxisHelper.copy(defaultWheelAxisVector);
+      //   wheelAxisHelper.applyQuaternion(wheelQuaternionHelper);
+      //   if (wheelObject.parent) {
+      //     wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper);
+      //   }
+      // }
+      // if (wheelAxisHelper.lengthSq() < 1e-10) {
+      //   wheelAxisHelper.set(1, 0, 0);
+      // } else {
+      //   wheelAxisHelper.normalize();
+      // }
+      // wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert();
+      // wheelAxisHelper.applyQuaternion(wheelBaseQuaternionInverseHelper);
+      // if (wheelAxisHelper.lengthSq() < 1e-10) {
+      //   wheelAxisHelper.set(1, 0, 0);
+      // } else {
+      //   wheelAxisHelper.normalize();
+      // }
+      // binding.spinAxis.copy(wheelAxisHelper);
+      // wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle);
 
-      // Compose: base -> (parent-space steer) -> (local-space spin).
+      // 合成最终轮子朝向：
+      // 1. 先回到模型的基础姿态
+      // 2. 再叠加转向
+      // 3. 最后叠加轮胎滚动
       wheelVisualQuaternionHelper.copy(binding.baseQuaternion);
       if (steeringAngle !== 0) {
         wheelVisualQuaternionHelper.premultiply(wheelSteeringQuaternionHelper);
       }
-      if (binding.spinAngle !== 0) {
-        wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
-      }
+      // if (binding.spinAngle !== 0) {
+      //   wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
+      // }
       wheelObject.quaternion.copy(wheelVisualQuaternionHelper);
 
       if (wheelObject.parent && !updatedWheelParents.has(wheelObject.parent)) {
+        // 先刷新父节点世界矩阵，确保轮子的局部旋转在正确的父空间中生效。
         wheelObject.parent.updateWorldMatrix(true, false);
         updatedWheelParents.add(wheelObject.parent);
       }
+      // 轮子本体重新计算世界矩阵，并同步给轮子内部可能存在的实例化子节点。
       wheelObject.updateWorldMatrix(false, true);
 
       if (binding.instancedTargets.length) {
@@ -15294,11 +15269,7 @@ function handleFloatingAutoTourTap(): void {
     activeAutoTourNodeIds.add(targetNodeId);
     autoTourFollowNodeId.value = targetNodeId;
     resetAutoTourCameraFollowState();
-    setCameraViewState('watching', targetNodeId);
     autoTourRotationOnlyHold.value = false;
-    setCameraCaging(true);
-    applyAutoTourCameraInputPolicy();
-    updateAutoTourFollowCamera(0, { immediate: true });
 
     const pendingEvent = pendingVehicleDriveEvent.value;
     if (pendingEvent && (pendingEvent.targetNodeId ?? pendingEvent.nodeId ?? null) === targetNodeId) {

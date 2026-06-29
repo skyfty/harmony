@@ -12049,11 +12049,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 		if (instance.hasChassisPositionSample) {
 			wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition)
 			wheelForwardHelper.copy(instance.axisForward).applyQuaternion(wheelChassisQuaternionHelper)
-			if (wheelForwardHelper.lengthSq() < 1e-10) {
-				wheelForwardHelper.set(0, 0, 1)
-			} else {
-				wheelForwardHelper.normalize()
-			}
+			normalizeVectorOrFallback(wheelForwardHelper, 0, 0, 1)
 			signedTravel = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
 			if (!Number.isFinite(signedTravel) || Math.abs(signedTravel) < VEHICLE_TRAVEL_EPSILON) {
 				signedTravel = 0
@@ -12124,47 +12120,34 @@ function updateVehicleWheelVisuals(delta: number): void {
 			binding.lastSteeringAngle = steeringAngle
 
 			// Build parent-space steering quaternion (around vehicle up axis).
-			wheelParentWorldQuaternionHelper.identity()
-			wheelParentWorldQuaternionInverseHelper.identity()
-			if (wheelObject.parent) {
-				wheelObject.parent.getWorldQuaternion(wheelParentWorldQuaternionHelper)
+			const wheelParent = wheelObject.parent
+			if (wheelParent) {
+				wheelParent.getWorldQuaternion(wheelParentWorldQuaternionHelper)
 				wheelParentWorldQuaternionInverseHelper.copy(wheelParentWorldQuaternionHelper).invert()
 			}
 			wheelAxisHelper.copy(instance.axisUp).applyQuaternion(wheelChassisQuaternionHelper)
-			if (wheelObject.parent) {
+			if (wheelParent) {
 				wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
 			}
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.set(0, 1, 0)
-			} else {
-				wheelAxisHelper.normalize()
-			}
+			normalizeVectorOrFallback(wheelAxisHelper, 0, 1, 0)
 			wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle)
 
 			// Build local-space spin quaternion (around wheel axle).
 			wheelAxisHelper.copy(binding.axleAxis).applyQuaternion(wheelChassisQuaternionHelper)
-			if (wheelObject.parent) {
+			if (wheelParent) {
 				wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
 			}
 			if (wheelAxisHelper.lengthSq() < 1e-10) {
 				wheelAxisHelper.copy(defaultWheelAxisVector)
 				wheelAxisHelper.applyQuaternion(wheelChassisQuaternionHelper)
-				if (wheelObject.parent) {
+				if (wheelParent) {
 					wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
 				}
 			}
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.set(1, 0, 0)
-			} else {
-				wheelAxisHelper.normalize()
-			}
+			normalizeVectorOrFallback(wheelAxisHelper, 1, 0, 0)
 			wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert()
 			wheelAxisHelper.applyQuaternion(wheelBaseQuaternionInverseHelper)
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.set(1, 0, 0)
-			} else {
-				wheelAxisHelper.normalize()
-			}
+			normalizeVectorOrFallback(wheelAxisHelper, 1, 0, 0)
 			wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle)
 
 			// Compose: base -> (parent-space steer) -> (local-space spin).
@@ -12185,6 +12168,14 @@ function updateVehicleWheelVisuals(delta: number): void {
 			}
 		})
 	})
+}
+
+function normalizeVectorOrFallback(vector: THREE.Vector3, x: number, y: number, z: number): void {
+	if (vector.lengthSq() < 1e-10) {
+		vector.set(x, y, z)
+	} else {
+		vector.normalize()
+	}
 }
 
 function collectInstancedTransformTargets(object: THREE.Object3D): THREE.Object3D[] {

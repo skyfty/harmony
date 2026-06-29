@@ -55,7 +55,6 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
 }
 
 const VEHICLE_ENGINE_FORCE = 320
-const VEHICLE_BRAKE_FORCE = 36
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
 
 export class CannonPhysicsWorld {
@@ -634,7 +633,7 @@ export class CannonPhysicsWorld {
 
       const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
       const engineForce = throttleInput * VEHICLE_ENGINE_FORCE
-      const brakeForce = Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE)
+      const brakeForce = Math.max(0, Math.max(brakeInput, handbrakeInput))
       const vehicle = state.vehicle
       const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
       const steerableWheelIndices = new Set(state.steerableWheelIndices)

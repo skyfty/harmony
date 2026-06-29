@@ -668,13 +668,6 @@ export function applyPurePursuitVehicleControl(params: {
   governorState.speedGovernorOverHardCap = speedTarget.speedGovernorOverHardCap
 
   steeringState.lastSteerRad = finalSteeringRad
-  applyPhysicsVehicleWheelControl(vehicle, {
-    steeringValue: finalSteeringRad,
-    engineForce,
-    brakeForce,
-    steerableWheelIndices: vehicleInstance.steerableWheelIndices,
-  })
-
   vehicle.autoTourTargetSpeedMps = targetSpeedMps
   vehicle.autoTourTargetSteeringRad = finalSteeringRad
 
