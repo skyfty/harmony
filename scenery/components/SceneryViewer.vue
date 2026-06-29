@@ -332,12 +332,13 @@
         class="viewer-character-console viewer-character-console--mobile"
       >
         <view
-          v-show="characterDrivePadState.visible"
-          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
+          v-show="characterDrivePadState.visible || characterDrivePadState.fading"
+          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating viewer-character-drive-cluster"
           :class="{ 'is-fading': characterDrivePadState.fading }"
           :style="characterDrivePadStyle"
         >
           <view
+            v-show="characterDrivePadState.visible"
             ref="characterFloatingJoystickRef"
             class="viewer-drive-joystick"
             :class="{ 'is-active': characterControlUi.joystickActive }"
@@ -355,6 +356,39 @@
               :is-active="characterControlUi.joystickActive"
               :knob-style="characterJoystickKnobStyle"
             />
+          </view>
+        </view>
+        <view
+          v-if="characterActionButtons.length"
+          ref="characterActionsBarRef"
+          class="viewer-character-actions-bar"
+          aria-label="角色动作按钮"
+          data-control-skip="character-actions"
+        >
+          <view class="viewer-character-actions" data-control-skip="character-actions">
+            <button
+              v-for="button in characterActionButtons"
+              :key="button.slot"
+              class="viewer-character-action-button"
+              :class="{
+                'is-active': button.pressed,
+                'viewer-character-action-button--danger': button.emphasis === 'danger',
+              }"
+              type="button"
+              hover-class="none"
+              :aria-label="button.label"
+              :aria-pressed="button.pressed"
+              data-control-skip="character-actions"
+              @tap.stop.prevent="handleCharacterActionButtonTap(button.slot)"
+              @touchstart.stop.prevent="handleCharacterActionButtonPressStart(button.slot)"
+              @touchend.stop.prevent="handleCharacterActionButtonPressEnd(button.slot)"
+              @touchcancel.stop.prevent="handleCharacterActionButtonPressEnd(button.slot)"
+              @mousedown.stop.prevent="handleCharacterActionButtonPressStart(button.slot)"
+              @mouseup.stop.prevent="handleCharacterActionButtonPressEnd(button.slot)"
+              @mouseleave.stop.prevent="handleCharacterActionButtonPressEnd(button.slot)"
+            >
+              <text class="viewer-character-action-button__icon">{{ button.icon }}</text>
+            </button>
           </view>
         </view>
       </view>
@@ -655,11 +689,13 @@ import {
 import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
+  CHARACTER_ANIMATION_EDITOR_SLOTS,
   clampCharacterControllerComponentProps,
   DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
   DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
   characterControllerComponentDefinition,
   writeCharacterLocalForward,
+  type CharacterAnimationSlot,
   type CharacterControllerComponentProps,
 } from '@harmony/schema/components/definitions/characterControllerComponent';
 import {
@@ -2704,6 +2740,7 @@ let characterControlDeltaSeconds = 1 / 60;
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
+const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.38;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -3074,6 +3111,7 @@ const vehicleDriveIntroVisible = computed(() => (
 const lanternJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const floatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const characterFloatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
+const characterActionsBarRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const joystickVector = reactive({ x: 0, y: 0 });
 const joystickOffset = reactive({ x: 0, y: 0 });
 const joystickState = reactive({
@@ -3159,6 +3197,41 @@ let autoTourTelemetryHasWorldPositionSample = false;
 let autoTourTelemetryLastSampleAtMs = 0;
 let autoTourTelemetryLastNodeId: string | null = null;
 const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
+const CHARACTER_ACTION_AUTOMATED_SLOTS = new Set<CharacterAnimationSlot>(['idle', 'walk', 'run']);
+const CHARACTER_ACTION_HOLD_SLOTS = new Set<CharacterAnimationSlot>(['sprint', 'crouch', 'interact']);
+const CHARACTER_ACTION_BUTTON_SLOTS = CHARACTER_ANIMATION_EDITOR_SLOTS
+  .map(({ value }) => value)
+  .filter((slot): slot is CharacterAnimationSlot => !CHARACTER_ACTION_AUTOMATED_SLOTS.has(slot as CharacterAnimationSlot));
+const CHARACTER_ACTION_BUTTON_META: Record<CharacterAnimationSlot, {
+  shortLabel: string;
+  label: string;
+  icon: string;
+  emphasis?: 'danger';
+}> = {
+  idle: { shortLabel: '待', label: '待机动作', icon: 'I' },
+  walk: { shortLabel: '走', label: '行走动作', icon: 'W' },
+  run: { shortLabel: '跑', label: '奔跑动作', icon: 'R' },
+  sprint: { shortLabel: '冲', label: '冲刺动作', icon: 'S' },
+  turn: { shortLabel: '转', label: '转身动作', icon: 'T' },
+  jump: { shortLabel: '跳', label: '跳跃动作', icon: 'J' },
+  fall: { shortLabel: '落', label: '下落动作', icon: 'F' },
+  strafe: { shortLabel: '移', label: '横移动作', icon: 'L' },
+  crouch: { shortLabel: '蹲', label: '下蹲动作', icon: 'C' },
+  interact: { shortLabel: '互', label: '交互动作', icon: 'E' },
+  death: { shortLabel: '终', label: '死亡动作', icon: 'X', emphasis: 'danger' },
+};
+type CharacterActionButtonMode = 'tap' | 'hold' | 'animation';
+type CharacterActionButtonEntry = {
+  slot: CharacterAnimationSlot;
+  clipName: string;
+  shortLabel: string;
+  label: string;
+  icon: string;
+  emphasis?: 'danger';
+  mode: CharacterActionButtonMode;
+  pressed: boolean;
+};
+
 const characterAuthorityInput = reactive({
   moveX: 0,
   moveZ: 0,
@@ -3179,6 +3252,11 @@ const characterKeyState = reactive({
   interact: false,
 });
 let characterInputJumpLatch = false;
+let characterActionJumpReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+let activeCharacterActionAnimationTimer: ReturnType<typeof setTimeout> | null = null;
+let activeCharacterActionAnimationToken: string | null = null;
+let activeCharacterActionAnimationNodeId: string | null = null;
+const activeCharacterActionAnimationSlot = ref<CharacterAnimationSlot | null>(null);
 function getVehicleSpeedDisplayNowMs(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
     return performance.now();
@@ -3372,6 +3450,47 @@ const characterControlUi = computed(() => {
     label: node?.name?.trim() || controlledNodeId || 'Character',
     joystickActive: characterJoystickState.active,
   } as const;
+});
+const characterActionButtons = computed<CharacterActionButtonEntry[]>(() => {
+  if (!characterControlUi.value.visible) {
+    return [];
+  }
+  const props = resolveDefaultControlledCharacterComponentProps();
+  if (!props) {
+    return [];
+  }
+  const bindingMap = new Map(
+    props.animationBindings.map((binding) => [binding.slot, binding.clipName] as const),
+  );
+  return CHARACTER_ACTION_BUTTON_SLOTS.flatMap((slot) => {
+    const clipName = bindingMap.get(slot);
+    if (!clipName) {
+      return [];
+    }
+    const meta = CHARACTER_ACTION_BUTTON_META[slot];
+    const mode: CharacterActionButtonMode = slot === 'jump'
+      ? 'tap'
+      : CHARACTER_ACTION_HOLD_SLOTS.has(slot)
+        ? 'hold'
+        : 'animation';
+    const pressed = mode === 'hold'
+      ? (slot === 'sprint'
+        ? characterKeyState.sprint
+        : slot === 'crouch'
+          ? characterKeyState.crouch
+          : characterKeyState.interact)
+      : activeCharacterActionAnimationSlot.value === slot;
+    return [{
+      slot,
+      clipName,
+      shortLabel: meta.shortLabel,
+      label: meta.label,
+      icon: meta.icon,
+      emphasis: meta.emphasis,
+      mode,
+      pressed,
+    }];
+  });
 });
 
 const pendingVehicleDriveEvent = ref<Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null>(null);
@@ -4121,10 +4240,20 @@ watch(
       refreshCharacterJoystickMetrics();
       updateCharacterFollowCamera(0, { immediate: true });
     } else {
+      resetCharacterActionButtonState();
       detachCharacterDrivePadMouseListeners();
       hideCharacterDrivePadImmediate();
       deactivateCharacterJoystick(true);
       resetProtagonistPoseState();
+    }
+  },
+);
+
+watch(
+  () => resolveDefaultControlledCharacterNodeId(),
+  (nodeId, previousNodeId) => {
+    if (nodeId !== previousNodeId) {
+      resetCharacterActionButtonState();
     }
   },
 );
@@ -14231,8 +14360,12 @@ function resolveJoystickCharacterInput(): { turn: number; moveZ: number } {
   }
   const effectiveLength = (length - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
   const scale = length > 0 ? effectiveLength / length : 0;
+  const turnAbs = Math.abs(x);
+  const turnScale = turnAbs <= CHARACTER_JOYSTICK_TURN_DEADZONE
+    ? 0
+    : (turnAbs - CHARACTER_JOYSTICK_TURN_DEADZONE) / (1 - CHARACTER_JOYSTICK_TURN_DEADZONE);
   return {
-    turn: -x * scale,
+    turn: -Math.sign(x) * turnScale,
     moveZ: y * scale,
   };
 }
@@ -14260,6 +14393,138 @@ function updateCharacterAuthorityInputFromKeys(): void {
   characterAuthorityInput.jump = false;
 }
 
+function clearCharacterActionJumpReleaseTimer(): void {
+  if (characterActionJumpReleaseTimer != null) {
+    clearTimeout(characterActionJumpReleaseTimer);
+    characterActionJumpReleaseTimer = null;
+  }
+}
+
+function releaseActiveCharacterActionAnimation(options: { scheduleResync?: boolean } = {}): void {
+  const { scheduleResync = true } = options;
+  if (activeCharacterActionAnimationTimer != null) {
+    clearTimeout(activeCharacterActionAnimationTimer);
+    activeCharacterActionAnimationTimer = null;
+  }
+  const nodeId = activeCharacterActionAnimationNodeId;
+  const token = activeCharacterActionAnimationToken;
+  activeCharacterActionAnimationSlot.value = null;
+  activeCharacterActionAnimationNodeId = null;
+  activeCharacterActionAnimationToken = null;
+  if (!token || !nodeId) {
+    return;
+  }
+  releaseCharacterControllerBehaviorOverride(token);
+  if (scheduleResync) {
+    scheduleCharacterControllerAnimationResync(nodeId);
+  }
+}
+
+function applyCharacterHoldActionState(slot: CharacterAnimationSlot, pressed: boolean): void {
+  let changed = false;
+  if (slot === 'sprint' && characterKeyState.sprint !== pressed) {
+    characterKeyState.sprint = pressed;
+    changed = true;
+  } else if (slot === 'crouch' && characterKeyState.crouch !== pressed) {
+    characterKeyState.crouch = pressed;
+    changed = true;
+  } else if (slot === 'interact' && characterKeyState.interact !== pressed) {
+    characterKeyState.interact = pressed;
+    changed = true;
+  }
+  if (changed) {
+    updateCharacterAuthorityInputFromKeys();
+  }
+}
+
+function triggerCharacterJumpAction(): void {
+  clearCharacterActionJumpReleaseTimer();
+  characterKeyState.jump = true;
+  updateCharacterAuthorityInputFromKeys();
+  characterActionJumpReleaseTimer = setTimeout(() => {
+    characterKeyState.jump = false;
+    updateCharacterAuthorityInputFromKeys();
+    characterActionJumpReleaseTimer = null;
+  }, 80);
+}
+
+function triggerCharacterSlotAnimation(slot: CharacterAnimationSlot): void {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const props = resolveDefaultControlledCharacterComponentProps();
+  if (!controlledNodeId || !props) {
+    return;
+  }
+  const clipName = props.animationBindings.find((binding) => binding.slot === slot)?.clipName ?? null;
+  if (!clipName) {
+    return;
+  }
+  const animationNodeId = props.targetNodeId ?? controlledNodeId;
+  const controller = nodeAnimationRuntime.get(animationNodeId);
+  const clip = controller?.clips.find((entry) => entry.name === clipName) ?? null;
+  if (!clip) {
+    return;
+  }
+  const defaultTimeScale = controller?.defaultTimeScale ?? 1;
+  const timeScale = Number.isFinite(defaultTimeScale) && defaultTimeScale !== 0
+    ? defaultTimeScale
+    : 1;
+  const playbackAction = nodeAnimationRuntime.playNodeAnimation(animationNodeId, clipName, {
+    loop: false,
+    timeScale,
+  });
+  if (!playbackAction) {
+    return;
+  }
+  releaseActiveCharacterActionAnimation();
+  const token = `ui-character-action-${controlledNodeId}-${slot}-${Date.now()}`;
+  acquireCharacterControllerBehaviorOverride(controlledNodeId, token);
+  activeCharacterActionAnimationToken = token;
+  activeCharacterActionAnimationNodeId = controlledNodeId;
+  activeCharacterActionAnimationSlot.value = slot;
+  const durationSeconds = Number.isFinite(clip.duration) && clip.duration > 0
+    ? clip.duration / Math.max(0.001, Math.abs(timeScale))
+    : 0.35;
+  activeCharacterActionAnimationTimer = setTimeout(() => {
+    releaseActiveCharacterActionAnimation();
+  }, Math.max(120, Math.round(durationSeconds * 1000 + 80)));
+}
+
+function resetCharacterActionButtonState(): void {
+  clearCharacterActionJumpReleaseTimer();
+  if (characterKeyState.jump) {
+    characterKeyState.jump = false;
+  }
+  applyCharacterHoldActionState('sprint', false);
+  applyCharacterHoldActionState('crouch', false);
+  applyCharacterHoldActionState('interact', false);
+  characterInputJumpLatch = false;
+  characterAuthorityInput.jump = false;
+  releaseActiveCharacterActionAnimation();
+}
+
+function handleCharacterActionButtonPressStart(slot: CharacterAnimationSlot): void {
+  if (CHARACTER_ACTION_HOLD_SLOTS.has(slot)) {
+    applyCharacterHoldActionState(slot, true);
+  }
+}
+
+function handleCharacterActionButtonPressEnd(slot: CharacterAnimationSlot): void {
+  if (CHARACTER_ACTION_HOLD_SLOTS.has(slot)) {
+    applyCharacterHoldActionState(slot, false);
+  }
+}
+
+function handleCharacterActionButtonTap(slot: CharacterAnimationSlot): void {
+  if (slot === 'jump') {
+    triggerCharacterJumpAction();
+    return;
+  }
+  if (CHARACTER_ACTION_HOLD_SLOTS.has(slot)) {
+    return;
+  }
+  triggerCharacterSlotAnimation(slot);
+}
+
 function setCharacterKeyState(key: string, pressed: boolean): void {
   const normalized = key.toLowerCase();
   if (normalized === 'w' || normalized === 'arrowup') {
@@ -14285,6 +14550,8 @@ function setCharacterKeyState(key: string, pressed: boolean): void {
 }
 
 function resetCharacterControlInputs(): void {
+  clearCharacterActionJumpReleaseTimer();
+  releaseActiveCharacterActionAnimation();
   characterAuthorityInput.moveX = 0;
   characterAuthorityInput.moveZ = 0;
   characterAuthorityInput.turn = 0;
@@ -14518,12 +14785,100 @@ function cancelVehicleSmoothStop(): void {
   vehicleDriveController.clearSmoothStop();
 }
 
+function resolveInteractiveElementRect(
+  value: ComponentPublicInstance | HTMLElement | { rootRef?: unknown } | null,
+  selector: string,
+): { left: number; top: number; right: number; bottom: number } | null {
+  const exposedRootRef = (value as { rootRef?: unknown } | null)?.rootRef;
+  const resolvedValue = (exposedRootRef as { value?: unknown } | undefined)?.value
+    ?? exposedRootRef
+    ?? value;
+  if (resolvedValue && typeof (resolvedValue as HTMLElement).getBoundingClientRect === 'function') {
+    const rect = (resolvedValue as HTMLElement).getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+    };
+  }
+  const maybeEl = (resolvedValue as { $el?: unknown } | null)?.$el;
+  if (maybeEl && typeof (maybeEl as HTMLElement).getBoundingClientRect === 'function') {
+    const rect = (maybeEl as HTMLElement).getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+    };
+  }
+  try {
+    const query = uni.createSelectorQuery();
+    if (typeof query.in === 'function') {
+      query.in((pageInstance?.proxy as unknown) ?? null);
+    }
+    let resolvedRect: { left: number; top: number; right: number; bottom: number } | null = null;
+    query
+      .select(selector)
+      .boundingClientRect((rect: unknown) => {
+        const item = rect as UniApp.NodeInfo | null;
+        const left = item?.left ?? 0;
+        const top = item?.top ?? 0;
+        const width = item?.width ?? 0;
+        const height = item?.height ?? 0;
+        if (width > 0 && height > 0) {
+          resolvedRect = {
+            left,
+            top,
+            right: left + width,
+            bottom: top + height,
+          };
+        }
+      })
+      .exec();
+    return resolvedRect;
+  } catch {
+    return null;
+  }
+}
+
+function isPointInsideCharacterActionsBar(x: number, y: number): boolean {
+  if (!characterActionButtons.value.length) {
+    return false;
+  }
+  const rect = resolveInteractiveElementRect(characterActionsBarRef.value, '.viewer-character-actions-bar');
+  if (!rect) {
+    return false;
+  }
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null): boolean {
+  const candidate = target as { dataset?: Record<string, unknown>; parentElement?: Element | null } | null;
+  const datasetValue = candidate?.dataset?.controlSkip;
+  if (datasetValue === 'character-actions') {
+    return true;
+  }
+  if (typeof (target as Element | null)?.closest === 'function') {
+    return Boolean((target as Element).closest('[data-control-skip="character-actions"]'));
+  }
+  return false;
+}
+
 function handleControlPadTouchStart(event: TouchEvent): void {
   if (vehicleDriveUi.value.visible) {
     handleDrivePadTouchStart(event);
     return;
   }
   if (characterControlUi.value.visible && isWeChatMiniProgram) {
+    if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
+      return;
+    }
+    const touch = event.changedTouches?.[0] ?? null;
+    const coords = getTouchCoordinates(touch);
+    if (coords && isPointInsideCharacterActionsBar(coords.x, coords.y)) {
+      return;
+    }
     handleCharacterDrivePadTouchStart(event);
   }
 }
@@ -14554,6 +14909,12 @@ function handleControlPadMouseDown(event: MouseEvent): void {
     return;
   }
   if (characterControlUi.value.visible && isWeChatMiniProgram) {
+    if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
+      return;
+    }
+    if (isPointInsideCharacterActionsBar(event.clientX, event.clientY)) {
+      return;
+    }
     handleCharacterDrivePadMouseDown(event);
   }
 }
@@ -19241,6 +19602,7 @@ function cleanupRuntime(): void {
 }
 
 onUnmounted(() => {
+  resetCharacterActionButtonState();
   void destroySceneryPhysicsBridge();
   if (typeof window !== 'undefined') {
     window.removeEventListener('keydown', handleWindowKeyDown);
@@ -21098,6 +21460,69 @@ onUnmounted(() => {
 
 .viewer-character-console--mobile {
   display: block;
+}
+
+.viewer-character-drive-cluster {
+  gap: 10px;
+  align-items: center;
+}
+
+.viewer-character-actions-bar {
+  position: absolute;
+  left: 50%;
+  right: auto;
+  bottom: calc(18px + var(--viewer-safe-area-bottom, 0px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.viewer-character-actions {
+  max-width: min(236px, calc(100vw - 24px));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: auto;
+  padding: 6px 8px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(19, 35, 56, 0.08), rgba(19, 35, 56, 0.02));
+  backdrop-filter: blur(8px);
+}
+
+.viewer-character-action-button {
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(153, 193, 255, 0.22);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 246, 255, 0.82));
+  color: #28506f;
+  box-shadow: 0 6px 16px rgba(52, 87, 128, 0.14);
+  backdrop-filter: blur(16px) saturate(1.04);
+  transition: transform 0.16s ease, background-color 0.16s ease, border-color 0.16s ease, opacity 0.16s ease;
+}
+
+.viewer-character-action-button.is-active,
+.viewer-character-action-button:active {
+  transform: scale(0.94);
+  background: linear-gradient(180deg, rgba(217, 236, 255, 0.96), rgba(194, 225, 255, 0.84));
+  border-color: rgba(107, 168, 232, 0.35);
+}
+
+.viewer-character-action-button--danger {
+  background: linear-gradient(180deg, rgba(255, 243, 246, 0.96), rgba(255, 231, 237, 0.86));
+  border-color: rgba(233, 124, 151, 0.24);
+  color: #a23250;
+}
+
+.viewer-character-action-button__icon {
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 700;
 }
 
 .viewer-drive-icon-button {
