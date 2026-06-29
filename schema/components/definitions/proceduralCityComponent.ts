@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import type { Object3D } from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import {
   COMPONENT_ARTIFACT_COMPONENT_ID_KEY,
@@ -95,10 +94,25 @@ interface ProceduralCityParcel {
   color: THREE.Color
 }
 
-const PROCEDURAL_CITY_FLOOR_HEIGHT = 3
+const PROCEDURAL_CITY_FLOOR_HEIGHT = 3.6
 const PROCEDURAL_CITY_MIN_FLOORS = 3
 const PROCEDURAL_CITY_FACADE_SOURCE_WIDTH = 128
 const PROCEDURAL_CITY_FACADE_SOURCE_HEIGHT = 256
+const PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MIN = 1.8
+const PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MAX = 2.6
+const PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MIN = 1.7
+const PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MAX = 2.3
+const PROCEDURAL_CITY_BUILDING_STEP_SCALE = 1.08
+const PROCEDURAL_CITY_BUILDING_MARGIN_SCALE = 0.72
+const PROCEDURAL_CITY_BUILDING_CLUSTER_SCALE = 0.84
+const PROCEDURAL_CITY_BUILDING_LANE_SCALE = 0.94
+const PROCEDURAL_CITY_BUILDING_JITTER_SCALE = 0.08
+const PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MIN = 1.55
+const PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MAX = 2.2
+const PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MIN = 1.42
+const PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MAX = 1.98
+const PROCEDURAL_CITY_BUILDING_HALF_WIDTH_MAX = 3.0
+const PROCEDURAL_CITY_BUILDING_HALF_DEPTH_MAX = 2.6
 
 type ProceduralCityStyleTheme = {
   parcelPalette: string[]
@@ -657,17 +671,14 @@ function createParcel(
   position: THREE.Vector3,
   rotationY: number,
 ): ProceduralCityParcel {
-  const officeStyle = resolveProceduralCityStyle(props.style) === 'office'
-  const width = randomRange(random, props.minWidth, props.maxWidth) * randomRange(random, officeStyle ? 1.3 : 0.74, officeStyle ? 1.78 : 0.92)
-  const depth = randomRange(random, props.minDepth, props.maxDepth) * randomRange(random, officeStyle ? 1.24 : 0.74, officeStyle ? 1.68 : 0.92)
-  const minFloors = Math.max(officeStyle ? 3 : PROCEDURAL_CITY_MIN_FLOORS, Math.ceil(props.minHeight / PROCEDURAL_CITY_FLOOR_HEIGHT))
+  const width = randomRange(random, props.minWidth, props.maxWidth) * randomRange(random, PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MIN, PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MAX)
+  const depth = randomRange(random, props.minDepth, props.maxDepth) * randomRange(random, PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MIN, PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MAX)
+  const minFloors = Math.max(PROCEDURAL_CITY_MIN_FLOORS, Math.ceil(props.minHeight / PROCEDURAL_CITY_FLOOR_HEIGHT))
   const maxFloors = Math.max(minFloors, Math.floor(props.maxHeight / PROCEDURAL_CITY_FLOOR_HEIGHT))
-  const floorMix = Math.pow(random(), officeStyle ? 1.3 : 0.78)
+  const floorMix = Math.pow(random(), 1.3)
   const floors = minFloors + Math.floor(floorMix * (maxFloors - minFloors + 1))
-  const roofHeight = randomRange(random, officeStyle ? 0.4 : 1.4, officeStyle ? 1.8 : 5.4)
-  const towerBonus = officeStyle
-    ? (random() > 0.9 ? randomRange(random, 0.8, 3.5) : 0)
-    : (random() > 0.7 ? randomRange(random, 4.0, 18.0) : 0)
+  const roofHeight = randomRange(random, 0.4, 1.8)
+  const towerBonus = random() > 0.9 ? randomRange(random, 0.8, 3.5) : 0
   const height = Math.max(props.minHeight, floors * PROCEDURAL_CITY_FLOOR_HEIGHT + roofHeight + towerBonus)
   return {
     position,
@@ -703,13 +714,12 @@ function generatePolygonParcels(
   })
 
   const parcels: ProceduralCityParcel[] = []
-  const officeStyle = resolveProceduralCityStyle(props.style) === 'office'
-  const stepScale = officeStyle ? 1 : 1
-  const stepX = Math.max(props.spacing * stepScale, props.maxWidth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
-  const stepZ = Math.max(props.spacing * stepScale, props.maxDepth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
-  const margin = props.inset * (officeStyle ? 0.72 : 1)
-  const coarseCellX = Math.max(stepX * (officeStyle ? 2.1 : 2.5), officeStyle ? 11 : 12)
-  const coarseCellZ = Math.max(stepZ * (officeStyle ? 2.1 : 2.5), officeStyle ? 11 : 12)
+  const stepScale = PROCEDURAL_CITY_BUILDING_STEP_SCALE
+  const stepX = Math.max(props.spacing * stepScale, props.maxWidth * 1.15 + props.spacing * stepScale)
+  const stepZ = Math.max(props.spacing * stepScale, props.maxDepth * 1.15 + props.spacing * stepScale)
+  const margin = props.inset * PROCEDURAL_CITY_BUILDING_MARGIN_SCALE
+  const coarseCellX = Math.max(stepX * 2.1, 11)
+  const coarseCellZ = Math.max(stepZ * 2.1, 11)
   const centerX = (min.x + max.x) * 0.5
   const centerZ = (min.y + max.y) * 0.5
   for (let z = min.y + margin + stepZ * 0.5; z <= max.y - margin; z += stepZ) {
@@ -719,27 +729,19 @@ function generatePolygonParcels(
       }
       const cellX = Math.floor((x - min.x) / stepX)
       const cellZ = Math.floor((z - min.y) / stepZ)
-      const cluster = officeStyle
-        ? 0.84 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.34
-        : 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.9
-      const lane = officeStyle
-        ? 0.94 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
-        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
+      const cluster = PROCEDURAL_CITY_BUILDING_CLUSTER_SCALE + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.34
+      const lane = PROCEDURAL_CITY_BUILDING_LANE_SCALE + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
       if (random() > props.density * cluster * lane) {
         continue
       }
-      const jitterScale = officeStyle ? 0.08 : 0.42
+      const jitterScale = PROCEDURAL_CITY_BUILDING_JITTER_SCALE
       const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * jitterScale
       const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * jitterScale
       const local = rotate2(new THREE.Vector2(x + jitterX, z + jitterZ), angle)
-      const widthBias = officeStyle
-        ? 1.16 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.4
-        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
-      const depthBias = officeStyle
-        ? 1.12 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.36
-        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
-      const halfX = Math.min(props.maxWidth * (officeStyle ? 1.68 : 1), stepX * widthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
-      const halfZ = Math.min(props.maxDepth * (officeStyle ? 1.58 : 1), stepZ * depthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
+      const widthBias = PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MIN + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * (PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MAX - PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MIN)
+      const depthBias = PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MIN + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * (PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MAX - PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MIN)
+      const halfX = Math.min(props.maxWidth * PROCEDURAL_CITY_BUILDING_HALF_WIDTH_MAX, stepX * widthBias - props.spacing * 0.02) * 0.5
+      const halfZ = Math.min(props.maxDepth * PROCEDURAL_CITY_BUILDING_HALF_DEPTH_MAX, stepZ * depthBias - props.spacing * 0.02) * 0.5
       const corners = [
         rotate2(new THREE.Vector2(local.x - halfX, local.y - halfZ), 0),
         rotate2(new THREE.Vector2(local.x + halfX, local.y - halfZ), 0),
@@ -856,11 +858,10 @@ function generateLandformParcels(
   })
 
   const parcels: ProceduralCityParcel[] = []
-  const officeStyle = resolveProceduralCityStyle(props.style) === 'office'
-  const stepScale = officeStyle ? 1 : 1
-  const stepX = Math.max(props.spacing * stepScale, props.maxWidth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
-  const stepZ = Math.max(props.spacing * stepScale, props.maxDepth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
-  const margin = props.inset * (officeStyle ? 0.72 : 1)
+  const stepScale = PROCEDURAL_CITY_BUILDING_STEP_SCALE
+  const stepX = Math.max(props.spacing * stepScale, props.maxWidth * 1.15 + props.spacing * stepScale)
+  const stepZ = Math.max(props.spacing * stepScale, props.maxDepth * 1.15 + props.spacing * stepScale)
+  const margin = props.inset * PROCEDURAL_CITY_BUILDING_MARGIN_SCALE
   for (let z = min.y + margin + stepZ * 0.5; z <= max.y - margin; z += stepZ) {
     for (let x = min.x + margin + stepX * 0.5; x <= max.x - margin; x += stepX) {
       if (parcels.length >= props.maxBuildings) {
@@ -871,27 +872,19 @@ function generateLandformParcels(
       }
       const cellX = Math.floor((x - min.x) / stepX)
       const cellZ = Math.floor((z - min.y) / stepZ)
-      const cluster = officeStyle
-        ? 0.86 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.1, 11)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.1, 11))) * 0.32
-        : 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.5, 12)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.5, 12))) * 0.9
-      const lane = officeStyle
-        ? 0.94 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
-        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
+      const cluster = PROCEDURAL_CITY_BUILDING_CLUSTER_SCALE + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.1, 11)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.1, 11))) * 0.32
+      const lane = PROCEDURAL_CITY_BUILDING_LANE_SCALE + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
       if (random() > props.density * cluster * lane) {
         continue
       }
-      const jitterScale = officeStyle ? 0.08 : 0.42
+      const jitterScale = PROCEDURAL_CITY_BUILDING_JITTER_SCALE
       const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * jitterScale
       const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * jitterScale
       const local = rotate2(new THREE.Vector2(x + jitterX, z + jitterZ), angle)
-      const widthBias = officeStyle
-        ? 1.16 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.4
-        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
-      const depthBias = officeStyle
-        ? 1.12 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.36
-        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
-      const halfX = Math.min(props.maxWidth * (officeStyle ? 1.68 : 1), stepX * widthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
-      const halfZ = Math.min(props.maxDepth * (officeStyle ? 1.58 : 1), stepZ * depthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
+      const widthBias = PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MIN + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * (PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MAX - PROCEDURAL_CITY_BUILDING_WIDTH_BIAS_MIN)
+      const depthBias = PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MIN + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * (PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MAX - PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MIN)
+      const halfX = Math.min(props.maxWidth * PROCEDURAL_CITY_BUILDING_HALF_WIDTH_MAX, stepX * widthBias - props.spacing * 0.02) * 0.5
+      const halfZ = Math.min(props.maxDepth * PROCEDURAL_CITY_BUILDING_HALF_DEPTH_MAX, stepZ * depthBias - props.spacing * 0.02) * 0.5
       const corners = [
         rotate2(new THREE.Vector2(local.x - halfX, local.y - halfZ), 0),
         rotate2(new THREE.Vector2(local.x + halfX, local.y - halfZ), 0),
@@ -1127,10 +1120,9 @@ function getArchetypes(style: unknown): Array<{ geometry: THREE.BufferGeometry }
   }
   const theme = getProceduralCityStyleTheme(resolvedStyle)
   const archetypes = Array.from({ length: BUILDING_VARIANT_COUNT }, (_entry, index) => {
-    const officeStyle = resolvedStyle === 'office'
-    const taper = officeStyle ? 1 - (index % 6) * 0.012 : 1 - (index % 5) * 0.035
-    const sideTaper = officeStyle ? 1 - ((index + 3) % 4) * 0.01 : 1 - ((index + 2) % 4) * 0.03
-    const roofHeight = officeStyle ? 0.04 + (index % 3) * 0.018 : 0.08 + (index % 4) * 0.045
+    const taper = 1 - (index % 6) * 0.004
+    const sideTaper = 1 - ((index + 3) % 4) * 0.004
+    const roofHeight = 0.02 + (index % 3) * 0.01
     const wall = createTaperedBoxGeometry(
       taper,
       sideTaper,
@@ -1138,23 +1130,13 @@ function getArchetypes(style: unknown): Array<{ geometry: THREE.BufferGeometry }
       theme.vertexTopShade,
     )
     const roof = new THREE.BoxGeometry(
-      Math.max(0.5, officeStyle ? taper - 0.05 : taper - 0.12),
+      Math.max(0.5, taper - 0.02),
       roofHeight,
-      Math.max(0.5, officeStyle ? sideTaper - 0.05 : sideTaper - 0.08),
+      Math.max(0.5, sideTaper - 0.02),
     )
     roof.translate(0, roofHeight * 0.5, 0)
     applyProceduralCityRoofColors(roof)
-    const geometry = officeStyle ? wall : (mergeGeometries([wall, roof], false) ?? wall)
-    if (geometry !== wall) {
-      wall.dispose()
-    }
-    if (!officeStyle) {
-      roof.dispose()
-      geometry.computeVertexNormals()
-      geometry.computeBoundingBox()
-      geometry.computeBoundingSphere()
-      return { geometry }
-    }
+    const geometry = wall
     roof.dispose()
     geometry.computeVertexNormals()
     geometry.computeBoundingBox()
