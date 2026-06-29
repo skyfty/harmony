@@ -2523,6 +2523,7 @@ const remotePhysicsAuthorityEntries = new Map<string, RemotePhysicsAuthorityEntr
 const remotePhysicsAuthorityContactPairs = new Map<string, Set<PhysicsAuthorityContactPairKey>>();
 const remoteMultiuserCharacterStatesByNodeId = new Map<string, RemoteMultiuserCharacterState>();
 const remoteMultiuserCharacterNodeIdByUserId = new Map<string, string>();
+const localMultiuserCharacterPresentationByNodeId = new Map<string, MultiuserCharacterAnimationPresentation>();
 const REMOTE_MULTIUSER_SMOOTHING_SECONDS = 0.16;
 const remoteMultiuserDisplayPositionScratch = new THREE.Vector3();
 const remoteMultiuserTargetPositionScratch = new THREE.Vector3();
@@ -11810,7 +11811,12 @@ function createRemoteMultiuserPlaceholder(subjectType: 'vehicle' | 'character'):
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.name = subjectType === 'vehicle' ? 'RemoteVehiclePlaceholder' : 'RemoteCharacterPlaceholder';
+  mesh.userData.remoteMultiuserPlaceholder = true;
   return mesh;
+}
+
+function isRemoteMultiuserPlaceholderObject(object: THREE.Object3D | null | undefined): boolean {
+  return Boolean(object?.userData?.remoteMultiuserPlaceholder);
 }
 
 function cloneRemoteMultiuserPeerState(state: MultiuserPeerState): MultiuserPeerState {
@@ -12709,10 +12715,17 @@ function attachRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry, frameI
 function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuserPeerEntry, frameIndex: number): void {
   const root = ensureRemoteMultiuserPeerRoot();
   if (entry.root && entry.rootSignature === entry.signature) {
-    if (!entry.visible || (root && entry.root.parent !== root)) {
-      attachRemoteMultiuserPeerRender(entry, frameIndex);
+    const shouldRetryWithRealObject = isRemoteMultiuserPlaceholderObject(entry.root)
+      && Boolean(entry.targetState.subjectNodeId)
+      && Boolean(nodeObjectMap.get(entry.targetState.subjectNodeId) ?? null);
+    if (shouldRetryWithRealObject) {
+      disposeRemoteMultiuserPeerRender(entry);
+    } else {
+      if (!entry.visible || (root && entry.root.parent !== root)) {
+        attachRemoteMultiuserPeerRender(entry, frameIndex);
+      }
+      return;
     }
-    return;
   }
 
   if (entry.root && entry.rootSignature !== entry.signature) {
@@ -13619,12 +13632,23 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
 }
 
 function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCharacterPresentation | null {
+  if (!nodeAnimationRuntime.has(nodeId)) {
+    localMultiuserCharacterPresentationByNodeId.delete(nodeId);
+    return null;
+  }
   const animation = nodeAnimationRuntime.getPresentation(nodeId);
-  if (!animation) {
+  if (animation) {
+    localMultiuserCharacterPresentationByNodeId.set(nodeId, animation);
+    return {
+      animation,
+    };
+  }
+  const cachedAnimation = localMultiuserCharacterPresentationByNodeId.get(nodeId) ?? null;
+  if (!cachedAnimation) {
     return null;
   }
   return {
-    animation,
+    animation: cachedAnimation,
   };
 }
 
@@ -18170,6 +18194,7 @@ function resetScenePreviewRuntimeState(): void {
   resetRemovedSkyState();
   clearSceneInitState();
   warnings.value = [];
+  localMultiuserCharacterPresentationByNodeId.clear();
 }
 
 function prepareScenePreviewPayload(payload: ScenePreviewPayload): void {
@@ -19827,6 +19852,7 @@ function cleanupRuntime(): void {
   setActiveMultiuserRuntimeBridge(null);
   sharedResourceCache = null;
   lanternViewerInstance = null;
+  localMultiuserCharacterPresentationByNodeId.clear();
   setGroundTextureSourceResolver(null);
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];
   setParticleTextureResolver(null);
