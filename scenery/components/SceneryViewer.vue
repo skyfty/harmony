@@ -2502,6 +2502,12 @@ type RemotePhysicsAuthorityEntry = {
   targetState: MultiuserPhysicsAuthoritySnapshot;
   displayState: MultiuserPhysicsAuthoritySnapshot | null;
 };
+type RemoteMultiuserCharacterState = {
+  userId: string;
+  nodeId: string;
+  action: string | null;
+  animation: MultiuserCharacterAnimationPresentation | null;
+};
 type PhysicsAuthorityContactPairKey = string;
 const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
 const remoteMultiuserPeerLoadTokens = new Map<string, number>();
@@ -2515,6 +2521,8 @@ const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
 const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
 const remotePhysicsAuthorityEntries = new Map<string, RemotePhysicsAuthorityEntry>();
 const remotePhysicsAuthorityContactPairs = new Map<string, Set<PhysicsAuthorityContactPairKey>>();
+const remoteMultiuserCharacterStatesByNodeId = new Map<string, RemoteMultiuserCharacterState>();
+const remoteMultiuserCharacterNodeIdByUserId = new Map<string, string>();
 const REMOTE_MULTIUSER_SMOOTHING_SECONDS = 0.16;
 const remoteMultiuserDisplayPositionScratch = new THREE.Vector3();
 const remoteMultiuserTargetPositionScratch = new THREE.Vector3();
@@ -4783,6 +4791,19 @@ function shouldPreloadRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | 
   return request?.preloadPolicy === 'before-entry';
 }
 
+function shouldSpawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): boolean {
+  if (!request.requestId?.startsWith('vehicle-prefab:')) {
+    return true;
+  }
+  const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
+    ? props.defaultSteerIdentifier.trim() || null
+    : null;
+  const binding = currentDocument
+    ? resolveDefaultSteerBinding(currentDocument, defaultSteerIdentifier)
+    : null;
+  return binding?.steerProps.targetType === 'vehicle';
+}
+
 function normalizeAssetIdList(assetIds: Iterable<string>): string[] {
   const uniqueIds = new Set<string>();
   for (const assetId of assetIds) {
@@ -5578,6 +5599,8 @@ function applySteerTargetTransform(targetNode: SceneNode, replacementRoot: Scene
   }
 }
 
+
+
 function resolveDefaultSteerBinding(
   document: SceneJsonExportDocument,
   defaultSteerIdentifier: string | null,
@@ -5756,7 +5779,10 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
 
   let finalTargetNodeId = binding.targetNodeId;
   let nextPayload = payload;
-  const matchedRequest = findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier);
+  const shouldInstantiateSelectedVehicle = binding.steerProps.targetType === 'vehicle';
+  const matchedRequest = shouldInstantiateSelectedVehicle
+    ? findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier)
+    : null;
   if (matchedRequest) {
     const source = await resolveRuntimePrefabSource(matchedRequest);
     if (source) {
@@ -5884,6 +5910,9 @@ async function flushPendingRuntimePrefabSpawnRequests(): Promise<void> {
     while (pendingRuntimePrefabSpawnRequests.length) {
       const request = pendingRuntimePrefabSpawnRequests.shift();
       if (!request) {
+        continue;
+      }
+      if (!shouldSpawnRuntimePrefabRequest(request)) {
         continue;
       }
       const key = buildRuntimePrefabRequestKey(request);
@@ -6638,6 +6667,124 @@ function resolveCharacterControllerBindingNodeId(nodeId: string | null): string 
   return props.targetNodeId ?? nodeId;
 }
 
+function cloneMultiuserCharacterAnimationPresentation(
+  animation: MultiuserCharacterAnimationPresentation | null | undefined,
+): MultiuserCharacterAnimationPresentation | null {
+  if (!animation) {
+    return null;
+  }
+  return {
+    clipName: animation.clipName,
+    time: animation.time,
+    duration: animation.duration,
+    loop: animation.loop,
+    timeScale: animation.timeScale,
+    normalizedTime: animation.normalizedTime ?? null,
+  };
+}
+
+function normalizeRemoteCharacterAction(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  return trimmed.length ? trimmed : null;
+}
+
+function inferCharacterActionFromAnimation(
+  animation: MultiuserCharacterAnimationPresentation | null | undefined,
+): string | null {
+  const clipName = typeof animation?.clipName === 'string' ? animation.clipName.trim().toLowerCase() : '';
+  if (!clipName) {
+    return null;
+  }
+  if (clipName.includes('interact') || clipName.includes('action') || clipName.includes('use')) {
+    return 'interact';
+  }
+  if (clipName.includes('crouch')) {
+    return 'crouch';
+  }
+  if (clipName.includes('jump') || clipName.includes('fall') || clipName.includes('land')) {
+    return 'jump';
+  }
+  if (clipName.includes('sprint') || clipName.includes('run')) {
+    return 'sprint';
+  }
+  if (clipName.includes('walk') || clipName.includes('move')) {
+    return 'move';
+  }
+  if (clipName.includes('idle')) {
+    return 'idle';
+  }
+  return null;
+}
+
+function resolveLocalCharacterPeerAction(nodeId: string): string {
+  const input = resolveSceneryCharacterAnimationInput(nodeId);
+  const animationAction = inferCharacterActionFromAnimation(resolveLocalMultiuserCharacterPresentation(nodeId)?.animation ?? null);
+  if (input.interact) {
+    return 'interact';
+  }
+  if (animationAction === 'interact') {
+    return 'interact';
+  }
+  if (input.jump) {
+    return 'jump';
+  }
+  if (animationAction === 'jump') {
+    return 'jump';
+  }
+  if (input.crouch) {
+    return 'crouch';
+  }
+  if (animationAction === 'crouch') {
+    return 'crouch';
+  }
+  const hasMove = Math.abs(input.moveX) > 0.001 || Math.abs(input.moveZ) > 0.001;
+  if ((input.sprint && hasMove) || animationAction === 'sprint') {
+    return 'sprint';
+  }
+  if (hasMove || animationAction === 'move') {
+    return 'move';
+  }
+  return 'idle';
+}
+
+function clearRemoteMultiuserCharacterStateForUser(userId: string): void {
+  const previousNodeId = remoteMultiuserCharacterNodeIdByUserId.get(userId) ?? null;
+  if (!previousNodeId) {
+    return;
+  }
+  remoteMultiuserCharacterNodeIdByUserId.delete(userId);
+  const current = remoteMultiuserCharacterStatesByNodeId.get(previousNodeId) ?? null;
+  if (current?.userId === userId) {
+    remoteMultiuserCharacterStatesByNodeId.delete(previousNodeId);
+  }
+}
+
+function syncRemoteMultiuserCharacterState(peer: MultiuserPeerSnapshot): void {
+  clearRemoteMultiuserCharacterStateForUser(peer.userId);
+  if (peer.state?.subjectType !== 'character') {
+    return;
+  }
+  const nodeId = typeof peer.state.subjectNodeId === 'string' ? peer.state.subjectNodeId.trim() : '';
+  if (!nodeId) {
+    return;
+  }
+  remoteMultiuserCharacterNodeIdByUserId.set(peer.userId, nodeId);
+  remoteMultiuserCharacterStatesByNodeId.set(nodeId, {
+    userId: peer.userId,
+    nodeId,
+    action: normalizeRemoteCharacterAction(peer.state.action)
+      ?? inferCharacterActionFromAnimation(peer.state.presentation?.character?.animation ?? null),
+    animation: cloneMultiuserCharacterAnimationPresentation(peer.state.presentation?.character?.animation ?? null),
+  });
+}
+
+function resolveRemoteMultiuserCharacterState(nodeId: string): RemoteMultiuserCharacterState | null {
+  return remoteMultiuserCharacterStatesByNodeId.get(nodeId) ?? null;
+}
+
 function resolveSceneryCharacterAnimationInput(nodeId: string): {
   moveX: number;
   moveZ: number;
@@ -6692,10 +6839,14 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
       locallyControlled: false,
     };
   }
-  return resolveRemoteCharacterAnimationInput(nodeId);
+  const remotePeerState = resolveRemoteMultiuserCharacterState(nodeId);
+  if (remotePeerState) {
+    return resolveRemoteCharacterAnimationInput(nodeId, remotePeerState);
+  }
+  return resolveRemoteCharacterAnimationInputFromPhysics(nodeId);
 }
 
-function resolveRemoteCharacterAnimationInput(nodeId: string): {
+function resolveRemoteCharacterAnimationInputFromPhysics(nodeId: string): {
   moveX: number;
   moveZ: number;
   turn: number;
@@ -6801,6 +6952,80 @@ function resolveRemoteCharacterAnimationInput(nodeId: string): {
     interact: false,
     locallyControlled: false,
   };
+}
+
+function resolveRemoteCharacterAnimationInput(
+  nodeId: string,
+  remoteState: RemoteMultiuserCharacterState,
+): {
+  moveX: number;
+  moveZ: number;
+  turn: number;
+  jump: boolean;
+  sprint: boolean;
+  crouch: boolean;
+  interact: boolean;
+  locallyControlled: boolean;
+} {
+  const input = resolveRemoteCharacterAnimationInputFromPhysics(nodeId);
+  const action = remoteState.action ?? inferCharacterActionFromAnimation(remoteState.animation);
+  if (!action) {
+    return input;
+  }
+  if (action === 'idle') {
+    return {
+      ...input,
+      moveX: 0,
+      moveZ: 0,
+      turn: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  if (action === 'move' || action === 'sprint') {
+    const hasMovement = Math.abs(input.moveX) > 0.001 || Math.abs(input.moveZ) > 0.001;
+    return {
+      ...input,
+      moveZ: hasMovement ? input.moveZ : 1,
+      sprint: action === 'sprint' || input.sprint,
+      jump: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  if (action === 'jump') {
+    return {
+      ...input,
+      jump: true,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  if (action === 'crouch') {
+    return {
+      ...input,
+      moveX: 0,
+      moveZ: 0,
+      sprint: false,
+      jump: false,
+      crouch: true,
+      interact: false,
+      locallyControlled: false,
+    };
+  }
+  if (action === 'interact') {
+    return {
+      ...input,
+      interact: true,
+      locallyControlled: false,
+    };
+  }
+  return input;
 }
 
 function isCharacterControllerAnimationNode(nodeId: string): boolean {
@@ -12634,6 +12859,7 @@ function updateRemoteMultiuserPeers(deltaSeconds: number): void {
 }
 
 function removeRemoteMultiuserPeer(userId: string): void {
+  clearRemoteMultiuserCharacterStateForUser(userId);
   const entry = remoteMultiuserPeerEntries.get(userId);
   if (!entry) {
     return;
@@ -12651,6 +12877,8 @@ function clearRemoteMultiuserPeers(): void {
   });
   remoteMultiuserPeerEntries.clear();
   remoteMultiuserPeerLoadTokens.clear();
+  remoteMultiuserCharacterStatesByNodeId.clear();
+  remoteMultiuserCharacterNodeIdByUserId.clear();
   remoteMultiuserPeerRoot.clear();
   remoteMultiuserPeerRoot.parent?.remove(remoteMultiuserPeerRoot);
   markInstancedCullingDirty();
@@ -13315,9 +13543,11 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     return;
   }
   if (!peer.state) {
+    clearRemoteMultiuserCharacterStateForUser(peer.userId);
     removeRemoteMultiuserPeer(peer.userId);
     return;
   }
+  syncRemoteMultiuserCharacterState(peer);
   const signature = getRemoteMultiuserPeerSignature(peer.state);
   const existing = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
   if (existing && existing.signature === signature) {
@@ -13456,6 +13686,7 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
     subjectIdentifier: node?.name ?? resolvedNodeId,
     subjectAssetId: typeof node?.sourceAssetId === 'string' ? node.sourceAssetId : null,
     subjectAssetUrl: null,
+    action: resolveLocalCharacterPeerAction(resolvedNodeId),
     position: {
       x: protagonistPosePosition.x,
       y: protagonistPosePosition.y,
