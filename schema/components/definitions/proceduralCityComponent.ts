@@ -118,19 +118,19 @@ type ProceduralCityStyleTheme = {
 
 const PROCEDURAL_CITY_STYLE_THEMES: Record<ProceduralCityStyle, ProceduralCityStyleTheme> = {
   office: {
-    parcelPalette: ['#e5e8eb', '#d8dee4', '#eef0f2', '#dde3e8', '#e8e3da', '#dfe7ea'],
-    wallShades: ['#a3aab1', '#b0b6bc', '#bac0c6', '#c4c9cf'],
-    frameShade: '#667079',
-    windowLit: ['#f7fbfe', '#ffffff', '#fdf4d7', '#eef8ff'],
-    windowDark: ['#8b949c', '#95a0a7', '#a0aab0', '#abb4ba'],
-    vertexBottomShade: 0.76,
+    parcelPalette: ['#f7f7f7', '#f4f4f4', '#f8f8f8', '#f1f1f1', '#f6f6f6', '#f3f3f3'],
+    wallShades: ['#ffffff', '#f0f0f0', '#e4e4e4', '#d8d8d8'],
+    frameShade: '#dcdcdc',
+    windowLit: ['#f4f4f4', '#ededed', '#e6e6e6', '#f7f7f7'],
+    windowDark: ['#d6d6d6', '#cbcbcb', '#c0c0c0', '#b4b4b4'],
+    vertexBottomShade: 0.19,
     vertexTopShade: 1,
-    floorBandAlpha: 0.18,
-    shadowAlpha: 0.05,
-    litChance: 0.34,
+    floorBandAlpha: 0.0,
+    shadowAlpha: 0.0,
+    litChance: 0.0,
     alternateFloorBands: true,
-    bandTint: 0.065,
-    windowGap: 0.12,
+    bandTint: 0.0,
+    windowGap: 0.02,
   },
   bright: {
     parcelPalette: ['#dcd9cf', '#d5dde2', '#e1d7c7', '#d7e0e4', '#e0d0c8', '#d3dfdb'],
@@ -195,7 +195,10 @@ const PROCEDURAL_CITY_STYLE_THEMES: Record<ProceduralCityStyle, ProceduralCitySt
 }
 
 function resolveProceduralCityStyle(style: unknown): ProceduralCityStyle {
-  return style === 'office' || style === 'classic' || style === 'warm' || style === 'cool' ? style : 'bright'
+  if (style === 'office' || style === 'bright' || style === 'classic' || style === 'warm' || style === 'cool') {
+    return style as ProceduralCityStyle
+  }
+  return 'bright'
 }
 
 function getProceduralCityStyleTheme(style: unknown): ProceduralCityStyleTheme {
@@ -629,6 +632,14 @@ function rotate2(point: THREE.Vector2, angle: number): THREE.Vector2 {
 }
 
 function createParcelColor(random: () => number, style: ProceduralCityStyle): THREE.Color {
+  if (style === 'office') {
+    const value = 1 - random() * random()
+    return new THREE.Color(
+      value + random() * 0.1,
+      value,
+      value + random() * 0.1,
+    )
+  }
   const theme = getProceduralCityStyleTheme(style)
   const base = new THREE.Color(theme.parcelPalette[Math.floor(random() * theme.parcelPalette.length)]!)
   base.offsetHSL(
@@ -942,6 +953,36 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
   }
   const theme = getProceduralCityStyleTheme(resolvedStyle)
   if (typeof document !== 'undefined') {
+    if (resolvedStyle === 'office') {
+      const canvas = document.createElement('canvas')
+      canvas.width = 32
+      canvas.height = 64
+      const context = canvas.getContext('2d')!
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, canvas.width, canvas.height)
+      let seed = 0x2f6e2b1
+      const nextRandom = () => {
+        seed = (Math.imul(seed ^ (seed >>> 15), seed | 1) + 0x6d2b79f5) | 0
+        return ((seed ^ (seed >>> 14)) >>> 0) / 4294967296
+      }
+      for (let y = 2; y < canvas.height; y += 2) {
+        for (let x = 0; x < canvas.width; x += 2) {
+          const value = Math.floor(nextRandom() * 64)
+          context.fillStyle = `rgb(${value}, ${value}, ${value})`
+          context.fillRect(x, y, 2, 1)
+        }
+      }
+      const upscale = document.createElement('canvas')
+      upscale.width = 512
+      upscale.height = 1024
+      const upscaleContext = upscale.getContext('2d')!
+      upscaleContext.imageSmoothingEnabled = false
+      upscaleContext.drawImage(canvas, 0, 0, upscale.width, upscale.height)
+      const texture = configureCityTexture(new THREE.CanvasTexture(upscale))
+      texture.needsUpdate = true
+      facadeTextureByStyle.set(resolvedStyle, texture)
+      return texture
+    }
     const canvas = document.createElement('canvas')
     canvas.width = PROCEDURAL_CITY_FACADE_SOURCE_WIDTH
     canvas.height = PROCEDURAL_CITY_FACADE_SOURCE_HEIGHT
@@ -959,26 +1000,29 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
     const frameShade = theme.frameShade
     const windowLit = theme.windowLit
     const windowDark = theme.windowDark
+    const officeStyle = style === 'office'
     for (let y = 0; y < canvas.height; y += floorHeight) {
       const bandIndex = Math.floor(nextRandom() * wallShades.length)
       const bandShade = wallShades[bandIndex]!
       context.fillStyle = bandShade
       context.fillRect(0, y, canvas.width, floorHeight)
       if (theme.alternateFloorBands && (Math.floor(y / floorHeight) % 2 === 1)) {
-        context.fillStyle = `rgba(255,255,255,${theme.bandTint})`
+        context.fillStyle = officeStyle
+          ? `rgba(255,255,255,${theme.bandTint})`
+          : `rgba(255,255,255,${theme.bandTint})`
         context.fillRect(0, y, canvas.width, floorHeight)
       }
       context.fillStyle = `rgba(255,255,255,${theme.floorBandAlpha})`
       context.fillRect(0, y, canvas.width, 1)
-      context.fillStyle = 'rgba(0,0,0,0.035)'
+      context.fillStyle = officeStyle ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.035)'
       context.fillRect(0, y + floorHeight - 1, canvas.width, 1)
-      const innerHeight = floorHeight - 4
-      const innerY = y + 2
+      const innerHeight = officeStyle ? floorHeight - 8 : floorHeight - 4
+      const innerY = officeStyle ? y + 4 : y + 2
       for (let column = 0; column < columnCount; column += 1) {
         const span = canvas.width / columnCount
-        const windowWidth = Math.max(5, Math.floor(span * (0.24 + nextRandom() * theme.windowGap)))
-        const windowHeight = Math.max(6, Math.floor(innerHeight * (0.7 + nextRandom() * 0.12)))
-        const offsetX = Math.floor(span * 0.14 + nextRandom() * span * theme.windowGap)
+        const windowWidth = Math.max(4, Math.floor(span * (officeStyle ? 0.16 : 0.24) + nextRandom() * span * theme.windowGap))
+        const windowHeight = Math.max(3, Math.floor(innerHeight * (officeStyle ? 0.5 : 0.7 + nextRandom() * 0.12)))
+        const offsetX = Math.floor(span * (officeStyle ? 0.18 : 0.14) + nextRandom() * span * theme.windowGap)
         const windowX = Math.floor(column * span + offsetX)
         const windowY = Math.floor(innerY + (innerHeight - windowHeight) * 0.5)
         context.fillStyle = frameShade
@@ -987,7 +1031,7 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
         context.fillStyle = lit ? windowLit[Math.floor(nextRandom() * windowLit.length)]! : windowDark[Math.floor(nextRandom() * windowDark.length)]!
         context.fillRect(windowX, windowY, windowWidth, windowHeight)
         if (lit) {
-          context.fillStyle = 'rgba(255,255,255,0.28)'
+          context.fillStyle = officeStyle ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.28)'
           context.fillRect(windowX, windowY, windowWidth, 1)
         }
       }
