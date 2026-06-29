@@ -9,10 +9,18 @@ import {
   componentManager,
   type ComponentDefinition,
 } from '../componentManager'
-import type { FloorDynamicMesh, RegionDynamicMesh, RoadDynamicMesh, SceneNode, SceneNodeComponentState } from '../../core'
+import type {
+  FloorDynamicMesh,
+  LandformDynamicMesh,
+  RegionDynamicMesh,
+  RoadDynamicMesh,
+  SceneNode,
+  SceneNodeComponentState,
+} from '../../core'
 
 export const PROCEDURAL_CITY_COMPONENT_TYPE = 'proceduralCity'
 export const PROCEDURAL_CITY_HOST_USER_DATA_KEY = 'proceduralCityHost'
+const PROCEDURAL_CITY_RUNTIME_GROUP_KEY = '__harmonyProceduralCityRuntimeGroup'
 
 export const PROCEDURAL_CITY_DEFAULT_PROPS: ProceduralCityComponentProps = {
   seed: 1337,
@@ -50,6 +58,7 @@ type ProceduralCityHostSnapshot =
   | { type: 'Floor'; mesh: FloorDynamicMesh }
   | { type: 'Region'; mesh: RegionDynamicMesh }
   | { type: 'Road'; mesh: RoadDynamicMesh }
+  | { type: 'Landform'; mesh: LandformDynamicMesh }
 
 type ProceduralCityPolygonFootprint = {
   kind: 'polygon'
@@ -64,7 +73,13 @@ type ProceduralCityRoadFootprint = {
   segmentHeights: number[][]
 }
 
-type ProceduralCityFootprint = ProceduralCityPolygonFootprint | ProceduralCityRoadFootprint
+type ProceduralCityLandformFootprint = {
+  kind: 'landform'
+  points: THREE.Vector2[]
+  mesh: LandformDynamicMesh
+}
+
+type ProceduralCityFootprint = ProceduralCityPolygonFootprint | ProceduralCityRoadFootprint | ProceduralCityLandformFootprint
 
 interface ProceduralCityParcel {
   position: THREE.Vector3
@@ -197,11 +212,58 @@ export function cloneProceduralCityHostSnapshot(dynamicMesh: unknown): Procedura
       ? { type: 'Road', mesh: { type: 'Road', width, vertices, segments, segmentHeights } }
       : null
   }
+  if (type === 'Landform') {
+    const source = dynamicMesh as LandformDynamicMesh
+    const vertices = normalizePolygonVertices(source.vertices).map((point) => [point.x, point.y] as [number, number])
+    const renderCache = source.renderCache && typeof source.renderCache === 'object'
+      ? {
+          surfaceVertices: Array.isArray(source.renderCache.surfaceVertices)
+            ? source.renderCache.surfaceVertices.map((entry) => {
+                const vector = toFiniteVector3(entry)
+                return vector ? { x: vector.x, y: vector.y, z: vector.z } : null
+              }).filter((entry): entry is { x: number; y: number; z: number } => Boolean(entry))
+            : [],
+          surfaceIndices: Array.isArray(source.renderCache.surfaceIndices)
+            ? source.renderCache.surfaceIndices.map((entry) => Math.trunc(Number(entry))).filter((entry) => Number.isInteger(entry) && entry >= 0)
+            : [],
+          surfaceUvs: Array.isArray(source.renderCache.surfaceUvs)
+            ? source.renderCache.surfaceUvs.map((entry) => {
+                const x = Number((entry as { x?: unknown }).x)
+                const y = Number((entry as { y?: unknown }).y)
+                return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
+              }).filter((entry): entry is { x: number; y: number } => Boolean(entry))
+            : [],
+          surfaceFeather: Array.isArray(source.renderCache.surfaceFeather)
+            ? source.renderCache.surfaceFeather.map((entry) => Number(entry)).filter(Number.isFinite)
+            : [],
+          surfaceGroundUvs: Array.isArray(source.renderCache.surfaceGroundUvs)
+            ? source.renderCache.surfaceGroundUvs.map((entry) => {
+                const x = Number((entry as { x?: unknown }).x)
+                const y = Number((entry as { y?: unknown }).y)
+                return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
+              }).filter((entry): entry is { x: number; y: number } => Boolean(entry))
+            : [],
+          groundTextureDataUrl: typeof source.renderCache.groundTextureDataUrl === 'string'
+            ? source.renderCache.groundTextureDataUrl
+            : null,
+        }
+      : null
+    return vertices.length >= 3
+      ? {
+          type: 'Landform',
+          mesh: {
+            ...source,
+            type: 'Landform',
+            vertices,
+            renderCache,
+          },
+        }
+      : null
+  }
   return null
 }
 
-function resolveProceduralCityFootprint(hostObject: THREE.Object3D | null): ProceduralCityFootprint | null {
-  const snapshot = hostObject?.userData?.[PROCEDURAL_CITY_HOST_USER_DATA_KEY] as ProceduralCityHostSnapshot | null | undefined
+function resolveProceduralCityFootprint(snapshot: ProceduralCityHostSnapshot | null | undefined): ProceduralCityFootprint | null {
   if (!snapshot) {
     return null
   }
@@ -209,7 +271,10 @@ function resolveProceduralCityFootprint(hostObject: THREE.Object3D | null): Proc
     const points = normalizePolygonVertices(snapshot.mesh.vertices)
     return points.length >= 3 ? { kind: 'polygon', points } : null
   }
-
+  if (snapshot.type === 'Landform') {
+    const points = normalizePolygonVertices(snapshot.mesh.vertices)
+    return points.length >= 3 ? { kind: 'landform', points, mesh: snapshot.mesh } : null
+  }
   const vertices = normalizeIndexedVertices(snapshot.mesh.vertices)
   const segments = snapshot.mesh.segments
     .map(cloneRoadSegment)
@@ -305,6 +370,156 @@ function resolveLongestEdgeAngle(points: THREE.Vector2[]): number {
   return bestAngle
 }
 
+function resolvePolygonSurfaceHeight(snapshot: ProceduralCityHostSnapshot): number {
+  if (snapshot.type === 'Floor') {
+    return Number.isFinite(snapshot.mesh.thickness) ? Math.max(0, snapshot.mesh.thickness ?? 0) : 0
+  }
+  return 0
+}
+
+const proceduralCityMountPosition = new THREE.Vector3()
+const proceduralCityMountQuaternion = new THREE.Quaternion()
+const proceduralCityMountScale = new THREE.Vector3()
+
+function resolveProceduralCityMountObject(host: Object3D, snapshot: ProceduralCityHostSnapshot): Object3D {
+  if (snapshot.type === 'Landform') {
+    let current: Object3D = host
+    while (current.parent) {
+      current = current.parent
+    }
+    return current
+  }
+  const parent = host.parent
+  return parent ?? host
+}
+
+function copyWorldTransform(source: Object3D, target: Object3D): void {
+  source.updateMatrixWorld(true)
+  source.matrixWorld.decompose(proceduralCityMountPosition, proceduralCityMountQuaternion, proceduralCityMountScale)
+  target.position.copy(proceduralCityMountPosition)
+  target.quaternion.copy(proceduralCityMountQuaternion)
+  target.scale.copy(proceduralCityMountScale)
+}
+
+function toFiniteVector3(entry: unknown): THREE.Vector3 | null {
+  if (!entry || typeof entry !== 'object') {
+    return null
+  }
+  const source = entry as { x?: unknown; y?: unknown; z?: unknown }
+  const x = Number(source.x)
+  const y = Number(source.y)
+  const z = Number(source.z)
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+    return null
+  }
+  return new THREE.Vector3(x, y, z)
+}
+
+function sampleTriangleSurfaceHeight(
+  a: THREE.Vector3,
+  b: THREE.Vector3,
+  c: THREE.Vector3,
+  x: number,
+  z: number,
+): number | null {
+  const v0x = b.x - a.x
+  const v0z = b.z - a.z
+  const v1x = c.x - a.x
+  const v1z = c.z - a.z
+  const v2x = x - a.x
+  const v2z = z - a.z
+  const den = v0x * v1z - v1x * v0z
+  if (Math.abs(den) <= 1e-8) {
+    return null
+  }
+  const invDen = 1 / den
+  const u = (v2x * v1z - v1x * v2z) * invDen
+  const v = (v0x * v2z - v2x * v0z) * invDen
+  const w = 1 - u - v
+  if (u < -1e-4 || v < -1e-4 || w < -1e-4) {
+    return null
+  }
+  return a.y * w + b.y * u + c.y * v
+}
+
+function sampleLandformHeight(mesh: LandformDynamicMesh, x: number, z: number): number {
+  const renderCache = mesh.renderCache ?? null
+  const vertices = Array.isArray(renderCache?.surfaceVertices)
+    ? renderCache!.surfaceVertices.map(toFiniteVector3).filter((entry): entry is THREE.Vector3 => Boolean(entry))
+    : []
+  const indices = Array.isArray(renderCache?.surfaceIndices)
+    ? renderCache!.surfaceIndices.map((entry) => Math.trunc(Number(entry))).filter((entry) => Number.isInteger(entry) && entry >= 0)
+    : []
+  if (vertices.length >= 3 && indices.length >= 3) {
+    let bestDistanceSq = Number.POSITIVE_INFINITY
+    let bestHeight = 0
+    for (let index = 0; index < indices.length; index += 3) {
+      const a = vertices[indices[index] ?? -1]
+      const b = vertices[indices[index + 1] ?? -1]
+      const c = vertices[indices[index + 2] ?? -1]
+      if (!a || !b || !c) {
+        continue
+      }
+      const sample = sampleTriangleSurfaceHeight(a, b, c, x, z)
+      if (sample !== null) {
+        return sample
+      }
+      const centroidX = (a.x + b.x + c.x) / 3
+      const centroidZ = (a.z + b.z + c.z) / 3
+      const dx = centroidX - x
+      const dz = centroidZ - z
+      const distanceSq = dx * dx + dz * dz
+      if (distanceSq < bestDistanceSq) {
+        bestDistanceSq = distanceSq
+        bestHeight = (a.y + b.y + c.y) / 3
+      }
+    }
+    return bestHeight
+  }
+
+  const fallbackHeights = Array.isArray(mesh.vertexHeights) ? mesh.vertexHeights : []
+  if (!fallbackHeights.length) {
+    return 0
+  }
+  let sum = 0
+  let count = 0
+  fallbackHeights.forEach((value) => {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) {
+      sum += numeric
+      count += 1
+    }
+  })
+  return count > 0 ? sum / count : 0
+}
+
+function sampleLandformParcelSurfaceHeight(
+  mesh: LandformDynamicMesh,
+  centerX: number,
+  centerZ: number,
+  width: number,
+  depth: number,
+  rotationY: number,
+): number {
+  let surfaceY = sampleLandformHeight(mesh, centerX, centerZ)
+  const halfWidth = width * 0.5
+  const halfDepth = depth * 0.5
+  const cos = Math.cos(rotationY)
+  const sin = Math.sin(rotationY)
+  const offsets = [
+    [-halfWidth, -halfDepth],
+    [halfWidth, -halfDepth],
+    [halfWidth, halfDepth],
+    [-halfWidth, halfDepth],
+  ] as const
+  offsets.forEach(([dx, dz]) => {
+    const worldX = centerX + dx * cos - dz * sin
+    const worldZ = centerZ + dx * sin + dz * cos
+    surfaceY = Math.max(surfaceY, sampleLandformHeight(mesh, worldX, worldZ))
+  })
+  return surfaceY
+}
+
 function rotate2(point: THREE.Vector2, angle: number): THREE.Vector2 {
   const cos = Math.cos(angle)
   const sin = Math.sin(angle)
@@ -343,6 +558,7 @@ function generatePolygonParcels(
   points: THREE.Vector2[],
   props: ProceduralCityComponentProps,
   random: () => number,
+  surfaceY: number,
 ): ProceduralCityParcel[] {
   if (points.length < 3 || Math.abs(polygonArea(points)) <= 1e-5) {
     return []
@@ -396,7 +612,7 @@ function generatePolygonParcels(
       if (!isPointInsidePolygon(local, points) || !corners.every((corner) => isPointInsidePolygon(corner, points))) {
         continue
       }
-      parcels.push(createParcel(random, props, new THREE.Vector3(local.x, 0, local.y), -angle))
+      parcels.push(createParcel(random, props, new THREE.Vector3(local.x, surfaceY, local.y), -angle))
     }
   }
   return parcels
@@ -481,14 +697,98 @@ function generateRoadParcels(
   return parcels
 }
 
+function generateLandformParcels(
+  footprint: ProceduralCityLandformFootprint,
+  props: ProceduralCityComponentProps,
+  random: () => number,
+): ProceduralCityParcel[] {
+  if (footprint.points.length < 3 || Math.abs(polygonArea(footprint.points)) <= 1e-5) {
+    return []
+  }
+
+  const angle = resolveLongestEdgeAngle(footprint.points)
+  const inverse = -angle
+  const rotated = footprint.points.map((point) => rotate2(point, inverse))
+  const min = new THREE.Vector2(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
+  const max = new THREE.Vector2(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY)
+  rotated.forEach((point) => {
+    min.x = Math.min(min.x, point.x)
+    min.y = Math.min(min.y, point.y)
+    max.x = Math.max(max.x, point.x)
+    max.y = Math.max(max.y, point.y)
+  })
+
+  const parcels: ProceduralCityParcel[] = []
+  const stepX = Math.max(props.spacing, props.maxWidth + props.spacing)
+  const stepZ = Math.max(props.spacing, props.maxDepth + props.spacing)
+  const margin = props.inset
+  for (let z = min.y + margin + stepZ * 0.5; z <= max.y - margin; z += stepZ) {
+    for (let x = min.x + margin + stepX * 0.5; x <= max.x - margin; x += stepX) {
+      if (parcels.length >= props.maxBuildings) {
+        return parcels
+      }
+      if (random() > props.density) {
+        continue
+      }
+      const cellX = Math.floor((x - min.x) / stepX)
+      const cellZ = Math.floor((z - min.y) / stepZ)
+      const cluster = 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.5, 12)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.5, 12))) * 0.9
+      const lane = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
+      if (random() > props.density * cluster * lane) {
+        continue
+      }
+      const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * 0.42
+      const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * 0.42
+      const local = rotate2(new THREE.Vector2(x + jitterX, z + jitterZ), angle)
+      const widthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
+      const depthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
+      const halfX = Math.min(props.maxWidth, stepX * widthBias - props.spacing) * 0.5
+      const halfZ = Math.min(props.maxDepth, stepZ * depthBias - props.spacing) * 0.5
+      const corners = [
+        rotate2(new THREE.Vector2(local.x - halfX, local.y - halfZ), 0),
+        rotate2(new THREE.Vector2(local.x + halfX, local.y - halfZ), 0),
+        rotate2(new THREE.Vector2(local.x + halfX, local.y + halfZ), 0),
+        rotate2(new THREE.Vector2(local.x - halfX, local.y + halfZ), 0),
+      ]
+      if (!isPointInsidePolygon(local, footprint.points) || !corners.every((corner) => isPointInsidePolygon(corner, footprint.points))) {
+        continue
+      }
+      const worldX = local.x
+      const worldZ = local.y
+      const rotationY = -angle
+      const surfaceY = sampleLandformParcelSurfaceHeight(
+        footprint.mesh,
+        worldX,
+        worldZ,
+        Math.max(props.minWidth, halfX * 2),
+        Math.max(props.minDepth, halfZ * 2),
+        rotationY,
+      )
+      parcels.push(createParcel(
+        random,
+        props,
+        new THREE.Vector3(worldX, surfaceY, worldZ),
+        rotationY,
+      ))
+    }
+  }
+
+  return parcels
+}
+
 function generateProceduralCityParcels(
   footprint: ProceduralCityFootprint,
   props: ProceduralCityComponentProps,
+  surfaceY: number,
 ): ProceduralCityParcel[] {
   const random = createProceduralCityRandom(props.seed)
-  return footprint.kind === 'polygon'
-    ? generatePolygonParcels(footprint.points, props, random)
-    : generateRoadParcels(footprint, props, random)
+  if (footprint.kind === 'polygon') {
+    return generatePolygonParcels(footprint.points, props, random, surfaceY)
+  }
+  if (footprint.kind === 'landform') {
+    return generateLandformParcels(footprint, props, random)
+  }
+  return generateRoadParcels(footprint, props, random)
 }
 
 const BUILDING_VARIANT_COUNT = 12
@@ -771,13 +1071,79 @@ export function cloneProceduralCityComponentProps(
   return { ...props }
 }
 
-function tagComponentArtifact(object: Object3D, nodeId: string, componentId: string): void {
+function tagProceduralCityArtifact(object: Object3D, componentId: string): void {
   object.traverse((child) => {
     child.userData = child.userData ?? {}
     child.userData[COMPONENT_ARTIFACT_KEY] = true
-    child.userData[COMPONENT_ARTIFACT_NODE_ID_KEY] = nodeId
     child.userData[COMPONENT_ARTIFACT_COMPONENT_ID_KEY] = componentId
+    delete child.userData[COMPONENT_ARTIFACT_NODE_ID_KEY]
+    delete child.userData.nodeId
   })
+}
+
+function clearProceduralCityRuntimeArtifact(hostObject: Object3D): void {
+  const userData = hostObject.userData ?? (hostObject.userData = {})
+  const existingGroup = userData[PROCEDURAL_CITY_RUNTIME_GROUP_KEY] as Object3D | null | undefined
+  if (existingGroup) {
+    existingGroup.parent?.remove(existingGroup)
+    disposeProceduralCityObject(existingGroup)
+  }
+  delete userData[PROCEDURAL_CITY_RUNTIME_GROUP_KEY]
+}
+
+export function syncProceduralCityRuntimeArtifact(
+  hostObject: Object3D | null,
+  node: SceneNode,
+): void {
+  if (!hostObject) {
+    return
+  }
+
+  const userData = hostObject.userData ?? (hostObject.userData = {})
+  const componentEntry = node.components?.[PROCEDURAL_CITY_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ProceduralCityComponentProps>
+    | undefined
+
+  if (!componentEntry || componentEntry.enabled === false) {
+    clearProceduralCityRuntimeArtifact(hostObject)
+    delete userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY]
+    return
+  }
+
+  const snapshot = cloneProceduralCityHostSnapshot(node.dynamicMesh)
+  if (!snapshot) {
+    clearProceduralCityRuntimeArtifact(hostObject)
+    delete userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY]
+    return
+  }
+
+  userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY] = snapshot
+
+  const props = clampProceduralCityComponentProps(componentEntry?.props ?? PROCEDURAL_CITY_DEFAULT_PROPS)
+  const surfaceY = resolvePolygonSurfaceHeight(snapshot)
+  const footprint = resolveProceduralCityFootprint(snapshot)
+  if (!footprint) {
+    return
+  }
+
+  const parcels = generateProceduralCityParcels(footprint, props, surfaceY)
+  if (!parcels.length) {
+    return
+  }
+
+  const group = buildProceduralCityGroup(parcels)
+  const existingGroup = userData[PROCEDURAL_CITY_RUNTIME_GROUP_KEY] as Object3D | null | undefined
+  if (existingGroup) {
+    existingGroup.parent?.remove(existingGroup)
+    disposeProceduralCityObject(existingGroup)
+  }
+  tagProceduralCityArtifact(group, componentEntry.id)
+  const mountObject = resolveProceduralCityMountObject(hostObject, snapshot)
+  if (snapshot.type === 'Landform' || mountObject !== hostObject) {
+    copyWorldTransform(hostObject, group)
+  }
+  mountObject.add(group)
+  userData[PROCEDURAL_CITY_RUNTIME_GROUP_KEY] = group
 }
 
 class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
@@ -812,32 +1178,56 @@ class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
   }
 
   private clear(): void {
+    const host = this.context.getRuntimeObject()
     if (!this.cityObject) {
+      if (host) {
+        clearProceduralCityRuntimeArtifact(host)
+      }
       return
     }
-    this.cityObject.parent?.remove(this.cityObject)
-    disposeProceduralCityObject(this.cityObject)
+    if (host) {
+      clearProceduralCityRuntimeArtifact(host)
+    } else {
+      this.cityObject.parent?.remove(this.cityObject)
+      disposeProceduralCityObject(this.cityObject)
+    }
     this.cityObject = null
   }
 
   private rebuild(): void {
+    const host = this.context.getRuntimeObject()
     this.clear()
-    if (!this.context.isEnabled()) {
+    if (!this.context.isEnabled() || !host) {
       return
     }
-    const host = this.context.getRuntimeObject()
-    const footprint = resolveProceduralCityFootprint(host)
-    if (!host || !footprint) {
+    const snapshot = host.userData?.[PROCEDURAL_CITY_HOST_USER_DATA_KEY] as ProceduralCityHostSnapshot | null | undefined
+    if (!snapshot) {
       return
     }
     const props = clampProceduralCityComponentProps(this.context.getProps())
-    const parcels = generateProceduralCityParcels(footprint, props)
+    const surfaceY = resolvePolygonSurfaceHeight(snapshot)
+    const footprint = resolveProceduralCityFootprint(snapshot)
+    if (!footprint) {
+      return
+    }
+    const parcels = generateProceduralCityParcels(footprint, props, surfaceY)
     if (!parcels.length) {
       return
     }
     const group = buildProceduralCityGroup(parcels)
-    tagComponentArtifact(group, this.context.nodeId, this.context.componentId)
-    host.add(group)
+    const existingGroup = host.userData?.[PROCEDURAL_CITY_RUNTIME_GROUP_KEY] as Object3D | null | undefined
+    if (existingGroup) {
+      existingGroup.parent?.remove(existingGroup)
+      disposeProceduralCityObject(existingGroup)
+    }
+    tagProceduralCityArtifact(group, this.context.componentId)
+    const mountObject = resolveProceduralCityMountObject(host, snapshot)
+    if (snapshot.type === 'Landform' || mountObject !== host) {
+      copyWorldTransform(host, group)
+    }
+    mountObject.add(group)
+    const userData = host.userData ?? (host.userData = {})
+    userData[PROCEDURAL_CITY_RUNTIME_GROUP_KEY] = group
     this.cityObject = group
   }
 }
@@ -850,7 +1240,7 @@ const proceduralCityComponentDefinition: ComponentDefinition<ProceduralCityCompo
   recreateOnPropsChange: false,
   canAttach(node: SceneNode) {
     const type = node.dynamicMesh?.type
-    return type === 'Floor' || type === 'Region' || type === 'Road'
+    return type === 'Floor' || type === 'Region' || type === 'Road' || type === 'Landform'
   },
   createDefaultProps() {
     return cloneProceduralCityComponentProps(PROCEDURAL_CITY_DEFAULT_PROPS)

@@ -254,6 +254,7 @@ import {
 import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
+import { syncProceduralCityRuntimeArtifact } from '@schema/components/definitions/proceduralCityComponent'
 import { useTerrainStore, type GroundPanelTab } from '@/stores/terrainStore'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
@@ -23111,6 +23112,8 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     if (typeof containerData.dynamicMeshType === 'undefined') {
       containerData.dynamicMeshType = node.dynamicMesh?.type ?? null
     }
+
+    syncProceduralCityRuntimeArtifact(container, node)
     object = container
     registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Camera') {

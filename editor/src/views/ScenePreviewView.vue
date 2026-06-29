@@ -187,6 +187,8 @@ import {
 	displayBoardComponentDefinition,
 	floorComponentDefinition,
 	proceduralCityComponentDefinition,
+	PROCEDURAL_CITY_HOST_USER_DATA_KEY,
+	cloneProceduralCityHostSnapshot,
 	wallComponentDefinition,
 	roadComponentDefinition,
 	landformComponentDefinition,
@@ -4775,6 +4777,13 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D): void {
 	const nodeState = resolveNodeById(nodeId)
 	if (!nodeState) {
 		return
+	}
+	const userData = object.userData ?? (object.userData = {})
+	const snapshot = cloneProceduralCityHostSnapshot(nodeState.dynamicMesh)
+	if (snapshot) {
+		userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY] = snapshot
+	} else {
+		delete userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY]
 	}
 	previewComponentManager.attachRuntime(nodeState, object)
 }

@@ -721,6 +721,8 @@ import {
 } from '@harmony/schema/components/definitions/floorComponent';
 import {
   proceduralCityComponentDefinition,
+  PROCEDURAL_CITY_HOST_USER_DATA_KEY,
+  cloneProceduralCityHostSnapshot,
 } from '@harmony/schema/components/definitions/proceduralCityComponent';
 import {
   wallComponentDefinition,
@@ -8392,6 +8394,13 @@ function attachRuntimeForNode(nodeId: string, object: THREE.Object3D) {
   const nodeState = resolveNodeById(nodeId);
   if (!nodeState) {
     return;
+  }
+  const userData = object.userData ?? (object.userData = {});
+  const snapshot = cloneProceduralCityHostSnapshot(nodeState.dynamicMesh);
+  if (snapshot) {
+    userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY] = snapshot;
+  } else {
+    delete userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY];
   }
   previewComponentManager.attachRuntime(nodeState, object);
 }
