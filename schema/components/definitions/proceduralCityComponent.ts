@@ -240,6 +240,21 @@ function randomRange(random: () => number, min: number, max: number): number {
   return min + (max - min) * random()
 }
 
+function hashUint32(value: number): number {
+  let x = value >>> 0
+  x ^= x >>> 16
+  x = Math.imul(x, 0x7feb352d)
+  x ^= x >>> 15
+  x = Math.imul(x, 0x846ca68b)
+  x ^= x >>> 16
+  return x >>> 0
+}
+
+function hash2D(seed: number, x: number, y: number): number {
+  const combined = Math.imul((x | 0) ^ Math.imul(y | 0, 374761393), 668265263) ^ (seed | 0)
+  return hashUint32(combined) / 4294967296
+}
+
 const BUILDING_PALETTE = [
   new THREE.Color('#b9b3a9'),
   new THREE.Color('#9fa8ad'),
@@ -349,22 +364,34 @@ function generatePolygonParcels(
   const stepX = Math.max(props.spacing, props.maxWidth + props.spacing)
   const stepZ = Math.max(props.spacing, props.maxDepth + props.spacing)
   const margin = props.inset
+  const coarseCellX = Math.max(stepX * 2.5, 12)
+  const coarseCellZ = Math.max(stepZ * 2.5, 12)
+  const centerX = (min.x + max.x) * 0.5
+  const centerZ = (min.y + max.y) * 0.5
   for (let z = min.y + margin + stepZ * 0.5; z <= max.y - margin; z += stepZ) {
     for (let x = min.x + margin + stepX * 0.5; x <= max.x - margin; x += stepX) {
       if (parcels.length >= props.maxBuildings) {
         return parcels
       }
-      if (random() > props.density) {
+      const cellX = Math.floor((x - min.x) / stepX)
+      const cellZ = Math.floor((z - min.y) / stepZ)
+      const cluster = 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.9
+      const lane = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
+      if (random() > props.density * cluster * lane) {
         continue
       }
-      const local = rotate2(new THREE.Vector2(x, z), angle)
-      const halfX = Math.min(props.maxWidth, stepX - props.spacing) * 0.5
-      const halfZ = Math.min(props.maxDepth, stepZ - props.spacing) * 0.5
+      const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * 0.42
+      const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * 0.42
+      const local = rotate2(new THREE.Vector2(x + jitterX, z + jitterZ), angle)
+      const widthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
+      const depthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
+      const halfX = Math.min(props.maxWidth, stepX * widthBias - props.spacing) * 0.5
+      const halfZ = Math.min(props.maxDepth, stepZ * depthBias - props.spacing) * 0.5
       const corners = [
-        rotate2(new THREE.Vector2(x - halfX, z - halfZ), angle),
-        rotate2(new THREE.Vector2(x + halfX, z - halfZ), angle),
-        rotate2(new THREE.Vector2(x + halfX, z + halfZ), angle),
-        rotate2(new THREE.Vector2(x - halfX, z + halfZ), angle),
+        rotate2(new THREE.Vector2(local.x - halfX, local.y - halfZ), 0),
+        rotate2(new THREE.Vector2(local.x + halfX, local.y - halfZ), 0),
+        rotate2(new THREE.Vector2(local.x + halfX, local.y + halfZ), 0),
+        rotate2(new THREE.Vector2(local.x - halfX, local.y + halfZ), 0),
       ]
       if (!isPointInsidePolygon(local, points) || !corners.every((corner) => isPointInsidePolygon(corner, points))) {
         continue
@@ -406,7 +433,7 @@ function generateRoadParcels(
 ): ProceduralCityParcel[] {
   const parcels: ProceduralCityParcel[] = []
   const endpointCounts = buildRoadEndpointCounts(road)
-  const step = Math.max(props.spacing, props.maxWidth + props.spacing)
+  const baseStep = Math.max(props.spacing, props.maxWidth + props.spacing)
   const lateralDistance = road.width * 0.5 + props.roadSetback + props.maxDepth * 0.5
   for (let segmentIndex = 0; segmentIndex < road.segments.length; segmentIndex += 1) {
     const segment = road.segments[segmentIndex]!
@@ -417,14 +444,16 @@ function generateRoadParcels(
     }
     const direction = b.clone().sub(a)
     const length = direction.length()
-    if (length <= step) {
+    if (length <= baseStep) {
       continue
     }
     direction.divideScalar(length)
     const normal = new THREE.Vector2(-direction.y, direction.x)
     const startGap = endpointCounts.get(segment.a)! > 1 ? props.junctionSetback : props.junctionSetback * 0.5
     const endGap = endpointCounts.get(segment.b)! > 1 ? props.junctionSetback : props.junctionSetback * 0.5
-    for (let distance = startGap + step * 0.5; distance <= length - endGap; distance += step) {
+    let distance = startGap + baseStep * (0.45 + hash2D(Math.trunc(props.seed) ^ 0x118b, segment.a, segment.b) * 0.2)
+    let slotIndex = 0
+    while (distance <= length - endGap) {
       const t = distance / length
       const center = a.clone().lerp(b, t)
       const height = sampleSegmentHeight(road.segmentHeights[segmentIndex], t)
@@ -435,7 +464,8 @@ function generateRoadParcels(
         if (random() > props.density) {
           continue
         }
-        const offset = normal.clone().multiplyScalar(lateralDistance * side)
+        const lateralJitter = (hash2D(Math.trunc(props.seed) ^ 0x214b, segmentIndex, slotIndex * 2 + (side > 0 ? 1 : 0)) - 0.5) * props.maxDepth * 0.35
+        const offset = normal.clone().multiplyScalar(lateralDistance * side + lateralJitter)
         parcels.push(createParcel(
           random,
           props,
@@ -443,6 +473,9 @@ function generateRoadParcels(
           -Math.atan2(direction.y, direction.x),
         ))
       }
+      const stepJitter = 0.72 + hash2D(Math.trunc(props.seed) ^ 0x5c31, segmentIndex, slotIndex) * 0.75
+      distance += baseStep * stepJitter
+      slotIndex += 1
     }
   }
   return parcels
