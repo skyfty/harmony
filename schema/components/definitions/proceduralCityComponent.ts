@@ -460,7 +460,6 @@ function generateProceduralCityParcels(
 
 const BUILDING_VARIANT_COUNT = 12
 const PROCEDURAL_CITY_TILE_SIZE = 48
-const PROCEDURAL_CITY_TILE_VISIBILITY_RANGE = 224
 let facadeTexture: THREE.Texture | null = null
 let wallMaterial: THREE.MeshLambertMaterial | null = null
 let archetypes: Array<{ geometry: THREE.BufferGeometry }> | null = null
@@ -612,14 +611,8 @@ type ProceduralCityTileBucket = {
   parcelsByVariant: Map<number, ProceduralCityParcel[]>
 }
 
-type ProceduralCityTileRuntime = {
-  group: THREE.Group
-  worldRadius: number
-}
-
 const proceduralCityTileGroupCenter = new THREE.Vector3()
 const proceduralCityTileWorldCenter = new THREE.Vector3()
-const proceduralCityTileCameraPosition = new THREE.Vector3()
 const proceduralCityTileMatrix = new THREE.Matrix4()
 const proceduralCityTileQuaternion = new THREE.Quaternion()
 const proceduralCityTileScale = new THREE.Vector3()
@@ -633,7 +626,7 @@ function getTileOrigin(tileX: number, tileZ: number): THREE.Vector2 {
   return new THREE.Vector2(tileX * PROCEDURAL_CITY_TILE_SIZE, tileZ * PROCEDURAL_CITY_TILE_SIZE)
 }
 
-function buildProceduralCityGroup(parcels: ProceduralCityParcel[]): { group: THREE.Group; tiles: ProceduralCityTileRuntime[] } {
+function buildProceduralCityGroup(parcels: ProceduralCityParcel[]): THREE.Group {
   const group = new THREE.Group()
   group.name = 'ProceduralCity'
   const tileBuckets = new Map<string, ProceduralCityTileBucket>()
@@ -656,7 +649,6 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[]): { group: THR
     tileBucket.parcelsByVariant.set(variant, variantBucket)
   })
 
-  const tiles: ProceduralCityTileRuntime[] = []
   const archetypeList = getArchetypes()
   tileBuckets.forEach((tileBucket) => {
     const tileGroup = new THREE.Group()
@@ -692,13 +684,9 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[]): { group: THR
     })
 
     group.add(tileGroup)
-    tiles.push({
-      group: tileGroup,
-      worldRadius: Math.hypot(PROCEDURAL_CITY_TILE_SIZE * 0.5, PROCEDURAL_CITY_TILE_SIZE * 0.5) + 24,
-    })
   })
 
-  return { group, tiles }
+  return group
 }
 
 function disposeProceduralCityObject(object: THREE.Object3D): void {
@@ -761,7 +749,6 @@ function tagComponentArtifact(object: Object3D, nodeId: string, componentId: str
 
 class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
   private cityObject: Object3D | null = null
-  private cityTiles: ProceduralCityTileRuntime[] = []
 
   constructor(context: ComponentRuntimeContext<ProceduralCityComponentProps>) {
     super(context)
@@ -769,30 +756,22 @@ class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
 
   onInit(): void {
     this.rebuild()
-    this.updateTileVisibility()
   }
 
   onRuntimeAttached(_object: Object3D | null): void {
     this.rebuild()
-    this.updateTileVisibility()
   }
 
   onPropsUpdated(): void {
     this.rebuild()
-    this.updateTileVisibility()
   }
 
   onEnabledChanged(enabled: boolean): void {
     if (enabled) {
       this.rebuild()
-      this.updateTileVisibility()
     } else {
       this.clear()
     }
-  }
-
-  onUpdate(): void {
-    this.updateTileVisibility()
   }
 
   onDestroy(): void {
@@ -806,7 +785,6 @@ class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
     this.cityObject.parent?.remove(this.cityObject)
     disposeProceduralCityObject(this.cityObject)
     this.cityObject = null
-    this.cityTiles = []
   }
 
   private rebuild(): void {
@@ -824,35 +802,10 @@ class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
     if (!parcels.length) {
       return
     }
-    const { group, tiles } = buildProceduralCityGroup(parcels)
+    const group = buildProceduralCityGroup(parcels)
     tagComponentArtifact(group, this.context.nodeId, this.context.componentId)
     host.add(group)
     this.cityObject = group
-    this.cityTiles = tiles
-  }
-
-  private updateTileVisibility(): void {
-    if (!this.cityObject || !this.cityTiles.length) {
-      return
-    }
-    const cameraWorldPosition = this.context.getFrameState().cameraWorldPosition
-    if (!cameraWorldPosition) {
-      this.cityTiles.forEach((tile) => {
-        tile.group.visible = true
-      })
-      return
-    }
-    proceduralCityTileCameraPosition.set(
-      cameraWorldPosition.x,
-      cameraWorldPosition.y,
-      cameraWorldPosition.z,
-    )
-    this.cityTiles.forEach((tile) => {
-      tile.group.getWorldPosition(proceduralCityTileWorldCenter)
-      const visibilityRadius = PROCEDURAL_CITY_TILE_VISIBILITY_RANGE + tile.worldRadius
-      const visible = proceduralCityTileWorldCenter.distanceToSquared(proceduralCityTileCameraPosition) <= visibilityRadius * visibilityRadius
-      tile.group.visible = visible
-    })
   }
 }
 
