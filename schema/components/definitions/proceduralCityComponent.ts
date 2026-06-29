@@ -95,8 +95,9 @@ function normalizeRange(minValue: number, maxValue: number, minimumGap: number):
 function configureCityTexture(texture: THREE.Texture): THREE.Texture {
   texture.wrapS = THREE.RepeatWrapping
   texture.wrapT = THREE.RepeatWrapping
-  texture.magFilter = THREE.NearestFilter
-  texture.minFilter = THREE.NearestFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.minFilter = THREE.LinearMipmapLinearFilter
+  texture.anisotropy = 8
   texture.colorSpace = THREE.SRGBColorSpace
   texture.generateMipmaps = true
   return texture
@@ -499,8 +500,8 @@ function loadFacadeTexture(): THREE.Texture {
     return texture
   }
   const data = new Uint8Array([
-    255, 255, 255, 255, 248, 248, 248, 255,
-    242, 242, 242, 255, 248, 248, 248, 255,
+    220, 216, 207, 255, 218, 214, 206, 255,
+    215, 210, 202, 255, 217, 212, 204, 255,
   ])
   const texture = configureCityTexture(new THREE.DataTexture(data, 2, 2, THREE.RGBAFormat))
   texture.needsUpdate = true
@@ -562,7 +563,7 @@ function createTaperedBoxGeometry(topScaleX: number, topScaleZ: number): THREE.B
   position.needsUpdate = true
   geometry.computeVertexNormals()
   geometry.translate(0, 0.5, 0)
-  applyProceduralCityVertexShade(geometry, 0.55, 1)
+  applyProceduralCityVertexShade(geometry, 0.3, 1)
   return geometry
 }
 
