@@ -6,6 +6,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import {
   PROCEDURAL_CITY_COMPONENT_TYPE,
   clampProceduralCityComponentProps,
+  type ProceduralCityStyle,
   type ProceduralCityComponentProps,
 } from '@schema/components'
 
@@ -20,6 +21,14 @@ const proceduralCityComponent = computed(
 
 const cityProps = computed(() => clampProceduralCityComponentProps(proceduralCityComponent.value?.props))
 
+const styleOptions: Array<{ title: string; value: ProceduralCityStyle }> = [
+  { title: 'Office', value: 'office' },
+  { title: 'Bright', value: 'bright' },
+  { title: 'Classic', value: 'classic' },
+  { title: 'Warm', value: 'warm' },
+  { title: 'Cool', value: 'cool' },
+]
+
 function updateNumber(key: keyof ProceduralCityComponentProps, value: number | string | null): void {
   const component = proceduralCityComponent.value
   const nodeId = selectedNodeId.value
@@ -31,6 +40,20 @@ function updateNumber(key: keyof ProceduralCityComponentProps, value: number | s
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: numeric }, { autoSaveMode: 'interactive' })
+}
+
+function updateStyle(value: string | null): void {
+  const component = proceduralCityComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId || !value) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(
+    nodeId,
+    component.id,
+    { style: value as ProceduralCityStyle },
+    { autoSaveMode: 'interactive' },
+  )
 }
 
 function handleToggleComponent(): void {
@@ -98,6 +121,17 @@ function handleRemoveComponent(): void {
           :model-value="cityProps.seed"
           :disabled="!proceduralCityComponent?.enabled"
           @update:modelValue="(value) => updateNumber('seed', value)"
+        />
+        <v-select
+          label="Style"
+          density="compact"
+          variant="underlined"
+          :items="styleOptions"
+          item-title="title"
+          item-value="value"
+          :model-value="cityProps.style"
+          :disabled="!proceduralCityComponent?.enabled"
+          @update:modelValue="(value) => updateStyle(value)"
         />
         <v-text-field
           label="Density"

@@ -22,6 +22,8 @@ export const PROCEDURAL_CITY_COMPONENT_TYPE = 'proceduralCity'
 export const PROCEDURAL_CITY_HOST_USER_DATA_KEY = 'proceduralCityHost'
 const PROCEDURAL_CITY_RUNTIME_GROUP_KEY = '__harmonyProceduralCityRuntimeGroup'
 
+export type ProceduralCityStyle = 'office' | 'bright' | 'classic' | 'warm' | 'cool'
+
 export const PROCEDURAL_CITY_DEFAULT_PROPS: ProceduralCityComponentProps = {
   seed: 1337,
   spacing: 3,
@@ -31,11 +33,12 @@ export const PROCEDURAL_CITY_DEFAULT_PROPS: ProceduralCityComponentProps = {
   maxWidth: 10,
   minDepth: 4,
   maxDepth: 12,
-  minHeight: 5,
-  maxHeight: 42,
+  minHeight: 12,
+  maxHeight: 96,
   roadSetback: 2,
   junctionSetback: 8,
   maxBuildings: 1200,
+  style: 'office',
 }
 
 export interface ProceduralCityComponentProps {
@@ -52,6 +55,7 @@ export interface ProceduralCityComponentProps {
   roadSetback: number
   junctionSetback: number
   maxBuildings: number
+  style: ProceduralCityStyle
 }
 
 type ProceduralCityHostSnapshot =
@@ -89,6 +93,113 @@ interface ProceduralCityParcel {
   height: number
   variantIndex: number
   color: THREE.Color
+}
+
+const PROCEDURAL_CITY_FLOOR_HEIGHT = 3
+const PROCEDURAL_CITY_MIN_FLOORS = 3
+const PROCEDURAL_CITY_FACADE_SOURCE_WIDTH = 128
+const PROCEDURAL_CITY_FACADE_SOURCE_HEIGHT = 256
+
+type ProceduralCityStyleTheme = {
+  parcelPalette: string[]
+  wallShades: string[]
+  frameShade: string
+  windowLit: string[]
+  windowDark: string[]
+  vertexBottomShade: number
+  vertexTopShade: number
+  floorBandAlpha: number
+  shadowAlpha: number
+  litChance: number
+  alternateFloorBands: boolean
+  bandTint: number
+  windowGap: number
+}
+
+const PROCEDURAL_CITY_STYLE_THEMES: Record<ProceduralCityStyle, ProceduralCityStyleTheme> = {
+  office: {
+    parcelPalette: ['#e5e8eb', '#d8dee4', '#eef0f2', '#dde3e8', '#e8e3da', '#dfe7ea'],
+    wallShades: ['#a3aab1', '#b0b6bc', '#bac0c6', '#c4c9cf'],
+    frameShade: '#667079',
+    windowLit: ['#f7fbfe', '#ffffff', '#fdf4d7', '#eef8ff'],
+    windowDark: ['#8b949c', '#95a0a7', '#a0aab0', '#abb4ba'],
+    vertexBottomShade: 0.76,
+    vertexTopShade: 1,
+    floorBandAlpha: 0.18,
+    shadowAlpha: 0.05,
+    litChance: 0.34,
+    alternateFloorBands: true,
+    bandTint: 0.065,
+    windowGap: 0.12,
+  },
+  bright: {
+    parcelPalette: ['#dcd9cf', '#d5dde2', '#e1d7c7', '#d7e0e4', '#e0d0c8', '#d3dfdb'],
+    wallShades: ['#88929c', '#95a0a8', '#a3adb4', '#b0b8be'],
+    frameShade: '#56606a',
+    windowLit: ['#f7fafc', '#fff6d4', '#eef7ff', '#f9ebbd'],
+    windowDark: ['#66717b', '#727d86', '#7d8790', '#88929b'],
+    vertexBottomShade: 0.7,
+    vertexTopShade: 1,
+    floorBandAlpha: 0.12,
+    shadowAlpha: 0.08,
+    litChance: 0.24,
+    alternateFloorBands: false,
+    bandTint: 0.03,
+    windowGap: 0.2,
+  },
+  classic: {
+    parcelPalette: ['#cfc8bc', '#bec7cd', '#d3c5b4', '#c6d0d4', '#d1c0b5', '#c1cdca'],
+    wallShades: ['#7d8790', '#89939b', '#949ea6', '#a1aab1'],
+    frameShade: '#4f5861',
+    windowLit: ['#f0f4f7', '#fcefb8', '#e4eff9', '#f4e4a8'],
+    windowDark: ['#5e6871', '#6b747d', '#768088', '#818a92'],
+    vertexBottomShade: 0.62,
+    vertexTopShade: 0.98,
+    floorBandAlpha: 0.1,
+    shadowAlpha: 0.1,
+    litChance: 0.3,
+    alternateFloorBands: false,
+    bandTint: 0.025,
+    windowGap: 0.2,
+  },
+  warm: {
+    parcelPalette: ['#dfd2c0', '#d9c7b1', '#e4d7c6', '#d8cec1', '#e1cdbb', '#d2d4cd'],
+    wallShades: ['#8e867c', '#9a9185', '#a69d92', '#b3a99d'],
+    frameShade: '#665a50',
+    windowLit: ['#fff4dc', '#fce4b8', '#fff1c6', '#fde8ad'],
+    windowDark: ['#786d61', '#85796d', '#918478', '#9d8f83'],
+    vertexBottomShade: 0.66,
+    vertexTopShade: 0.98,
+    floorBandAlpha: 0.12,
+    shadowAlpha: 0.08,
+    litChance: 0.28,
+    alternateFloorBands: false,
+    bandTint: 0.025,
+    windowGap: 0.2,
+  },
+  cool: {
+    parcelPalette: ['#d8dee6', '#ced8df', '#e0e6eb', '#d3dce3', '#dee4ea', '#cfd8d6'],
+    wallShades: ['#87939d', '#95a0aa', '#a1adb6', '#aeb8c1'],
+    frameShade: '#52606a',
+    windowLit: ['#eef7ff', '#f9fbfd', '#dceeff', '#f2f7fb'],
+    windowDark: ['#67727c', '#73808a', '#7f8a94', '#8b96a0'],
+    vertexBottomShade: 0.68,
+    vertexTopShade: 1,
+    floorBandAlpha: 0.11,
+    shadowAlpha: 0.07,
+    litChance: 0.26,
+    alternateFloorBands: false,
+    bandTint: 0.03,
+    windowGap: 0.2,
+  },
+}
+
+function resolveProceduralCityStyle(style: unknown): ProceduralCityStyle {
+  return style === 'office' || style === 'classic' || style === 'warm' || style === 'cool' ? style : 'bright'
+}
+
+function getProceduralCityStyleTheme(style: unknown): ProceduralCityStyleTheme {
+  return PROCEDURAL_CITY_STYLE_THEMES[resolveProceduralCityStyle(style)]
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -320,15 +431,6 @@ function hash2D(seed: number, x: number, y: number): number {
   return hashUint32(combined) / 4294967296
 }
 
-const BUILDING_PALETTE = [
-  new THREE.Color('#b9b3a9'),
-  new THREE.Color('#9fa8ad'),
-  new THREE.Color('#c2b7a3'),
-  new THREE.Color('#8f9aa3'),
-  new THREE.Color('#b4a69c'),
-  new THREE.Color('#a9b7b2'),
-]
-
 function polygonArea(points: THREE.Vector2[]): number {
   let area = 0
   for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
@@ -526,10 +628,15 @@ function rotate2(point: THREE.Vector2, angle: number): THREE.Vector2 {
   return new THREE.Vector2(point.x * cos - point.y * sin, point.x * sin + point.y * cos)
 }
 
-function createParcelColor(random: () => number): THREE.Color {
-  const base = BUILDING_PALETTE[Math.floor(random() * BUILDING_PALETTE.length)]!.clone()
-  const offset = randomRange(random, -0.08, 0.08)
-  base.offsetHSL(randomRange(random, -0.02, 0.02), randomRange(random, -0.05, 0.04), offset)
+function createParcelColor(random: () => number, style: ProceduralCityStyle): THREE.Color {
+  const theme = getProceduralCityStyleTheme(style)
+  const base = new THREE.Color(theme.parcelPalette[Math.floor(random() * theme.parcelPalette.length)]!)
+  base.offsetHSL(
+    randomRange(random, -0.014, 0.014),
+    randomRange(random, -0.04, 0.02),
+    randomRange(random, -0.06, 0.08),
+  )
+  base.lerp(new THREE.Color('#ffffff'), randomRange(random, 0.05, 0.14))
   return base
 }
 
@@ -539,10 +646,18 @@ function createParcel(
   position: THREE.Vector3,
   rotationY: number,
 ): ProceduralCityParcel {
-  const width = randomRange(random, props.minWidth, props.maxWidth)
-  const depth = randomRange(random, props.minDepth, props.maxDepth)
-  const heightT = Math.pow(random(), 1.7)
-  const height = props.minHeight + (props.maxHeight - props.minHeight) * heightT
+  const officeStyle = resolveProceduralCityStyle(props.style) === 'office'
+  const width = randomRange(random, props.minWidth, props.maxWidth) * randomRange(random, officeStyle ? 1.3 : 0.74, officeStyle ? 1.78 : 0.92)
+  const depth = randomRange(random, props.minDepth, props.maxDepth) * randomRange(random, officeStyle ? 1.24 : 0.74, officeStyle ? 1.68 : 0.92)
+  const minFloors = Math.max(officeStyle ? 3 : PROCEDURAL_CITY_MIN_FLOORS, Math.ceil(props.minHeight / PROCEDURAL_CITY_FLOOR_HEIGHT))
+  const maxFloors = Math.max(minFloors, Math.floor(props.maxHeight / PROCEDURAL_CITY_FLOOR_HEIGHT))
+  const floorMix = Math.pow(random(), officeStyle ? 1.3 : 0.78)
+  const floors = minFloors + Math.floor(floorMix * (maxFloors - minFloors + 1))
+  const roofHeight = randomRange(random, officeStyle ? 0.4 : 1.4, officeStyle ? 1.8 : 5.4)
+  const towerBonus = officeStyle
+    ? (random() > 0.9 ? randomRange(random, 0.8, 3.5) : 0)
+    : (random() > 0.7 ? randomRange(random, 4.0, 18.0) : 0)
+  const height = Math.max(props.minHeight, floors * PROCEDURAL_CITY_FLOOR_HEIGHT + roofHeight + towerBonus)
   return {
     position,
     rotationY,
@@ -550,7 +665,7 @@ function createParcel(
     depth,
     height,
     variantIndex: Math.floor(random() * 12),
-    color: createParcelColor(random),
+    color: createParcelColor(random, props.style),
   }
 }
 
@@ -577,11 +692,13 @@ function generatePolygonParcels(
   })
 
   const parcels: ProceduralCityParcel[] = []
-  const stepX = Math.max(props.spacing, props.maxWidth + props.spacing)
-  const stepZ = Math.max(props.spacing, props.maxDepth + props.spacing)
-  const margin = props.inset
-  const coarseCellX = Math.max(stepX * 2.5, 12)
-  const coarseCellZ = Math.max(stepZ * 2.5, 12)
+  const officeStyle = resolveProceduralCityStyle(props.style) === 'office'
+  const stepScale = officeStyle ? 1 : 1
+  const stepX = Math.max(props.spacing * stepScale, props.maxWidth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
+  const stepZ = Math.max(props.spacing * stepScale, props.maxDepth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
+  const margin = props.inset * (officeStyle ? 0.72 : 1)
+  const coarseCellX = Math.max(stepX * (officeStyle ? 2.1 : 2.5), officeStyle ? 11 : 12)
+  const coarseCellZ = Math.max(stepZ * (officeStyle ? 2.1 : 2.5), officeStyle ? 11 : 12)
   const centerX = (min.x + max.x) * 0.5
   const centerZ = (min.y + max.y) * 0.5
   for (let z = min.y + margin + stepZ * 0.5; z <= max.y - margin; z += stepZ) {
@@ -591,18 +708,27 @@ function generatePolygonParcels(
       }
       const cellX = Math.floor((x - min.x) / stepX)
       const cellZ = Math.floor((z - min.y) / stepZ)
-      const cluster = 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.9
-      const lane = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
+      const cluster = officeStyle
+        ? 0.84 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.34
+        : 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.9
+      const lane = officeStyle
+        ? 0.94 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
+        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
       if (random() > props.density * cluster * lane) {
         continue
       }
-      const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * 0.42
-      const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * 0.42
+      const jitterScale = officeStyle ? 0.08 : 0.42
+      const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * jitterScale
+      const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * jitterScale
       const local = rotate2(new THREE.Vector2(x + jitterX, z + jitterZ), angle)
-      const widthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
-      const depthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
-      const halfX = Math.min(props.maxWidth, stepX * widthBias - props.spacing) * 0.5
-      const halfZ = Math.min(props.maxDepth, stepZ * depthBias - props.spacing) * 0.5
+      const widthBias = officeStyle
+        ? 1.16 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.4
+        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
+      const depthBias = officeStyle
+        ? 1.12 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.36
+        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
+      const halfX = Math.min(props.maxWidth * (officeStyle ? 1.68 : 1), stepX * widthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
+      const halfZ = Math.min(props.maxDepth * (officeStyle ? 1.58 : 1), stepZ * depthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
       const corners = [
         rotate2(new THREE.Vector2(local.x - halfX, local.y - halfZ), 0),
         rotate2(new THREE.Vector2(local.x + halfX, local.y - halfZ), 0),
@@ -719,9 +845,11 @@ function generateLandformParcels(
   })
 
   const parcels: ProceduralCityParcel[] = []
-  const stepX = Math.max(props.spacing, props.maxWidth + props.spacing)
-  const stepZ = Math.max(props.spacing, props.maxDepth + props.spacing)
-  const margin = props.inset
+  const officeStyle = resolveProceduralCityStyle(props.style) === 'office'
+  const stepScale = officeStyle ? 1 : 1
+  const stepX = Math.max(props.spacing * stepScale, props.maxWidth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
+  const stepZ = Math.max(props.spacing * stepScale, props.maxDepth * (officeStyle ? 0.98 : 1) + props.spacing * stepScale)
+  const margin = props.inset * (officeStyle ? 0.72 : 1)
   for (let z = min.y + margin + stepZ * 0.5; z <= max.y - margin; z += stepZ) {
     for (let x = min.x + margin + stepX * 0.5; x <= max.x - margin; x += stepX) {
       if (parcels.length >= props.maxBuildings) {
@@ -732,18 +860,27 @@ function generateLandformParcels(
       }
       const cellX = Math.floor((x - min.x) / stepX)
       const cellZ = Math.floor((z - min.y) / stepZ)
-      const cluster = 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.5, 12)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.5, 12))) * 0.9
-      const lane = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
+      const cluster = officeStyle
+        ? 0.86 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.1, 11)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.1, 11))) * 0.32
+        : 0.45 + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.5, 12)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.5, 12))) * 0.9
+      const lane = officeStyle
+        ? 0.94 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
+        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.44
       if (random() > props.density * cluster * lane) {
         continue
       }
-      const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * 0.42
-      const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * 0.42
+      const jitterScale = officeStyle ? 0.08 : 0.42
+      const jitterX = (hash2D(Math.trunc(props.seed) ^ 0x7f4a, cellX, cellZ) - 0.5) * stepX * jitterScale
+      const jitterZ = (hash2D(Math.trunc(props.seed) ^ 0x1c93, cellX, cellZ) - 0.5) * stepZ * jitterScale
       const local = rotate2(new THREE.Vector2(x + jitterX, z + jitterZ), angle)
-      const widthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
-      const depthBias = 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
-      const halfX = Math.min(props.maxWidth, stepX * widthBias - props.spacing) * 0.5
-      const halfZ = Math.min(props.maxDepth, stepZ * depthBias - props.spacing) * 0.5
+      const widthBias = officeStyle
+        ? 1.16 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.4
+        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x3ab1, cellX, cellZ) * 0.55
+      const depthBias = officeStyle
+        ? 1.12 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.36
+        : 0.78 + hash2D(Math.trunc(props.seed) ^ 0x63c5, cellX, cellZ) * 0.55
+      const halfX = Math.min(props.maxWidth * (officeStyle ? 1.68 : 1), stepX * widthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
+      const halfZ = Math.min(props.maxDepth * (officeStyle ? 1.58 : 1), stepZ * depthBias - props.spacing * (officeStyle ? 0.1 : 1)) * 0.5
       const corners = [
         rotate2(new THREE.Vector2(local.x - halfX, local.y - halfZ), 0),
         rotate2(new THREE.Vector2(local.x + halfX, local.y - halfZ), 0),
@@ -793,31 +930,66 @@ function generateProceduralCityParcels(
 
 const BUILDING_VARIANT_COUNT = 12
 const PROCEDURAL_CITY_TILE_SIZE = 48
-let facadeTexture: THREE.Texture | null = null
-let wallMaterial: THREE.MeshLambertMaterial | null = null
-let archetypes: Array<{ geometry: THREE.BufferGeometry }> | null = null
+const facadeTextureByStyle = new Map<ProceduralCityStyle, THREE.Texture>()
+const wallMaterialByStyle = new Map<ProceduralCityStyle, THREE.MeshLambertMaterial>()
+const archetypesByStyle = new Map<ProceduralCityStyle, Array<{ geometry: THREE.BufferGeometry }>>()
 
-function loadFacadeTexture(): THREE.Texture {
-  if (facadeTexture) {
-    return facadeTexture
+function loadFacadeTexture(style: unknown): THREE.Texture {
+  const resolvedStyle = resolveProceduralCityStyle(style)
+  const cachedTexture = facadeTextureByStyle.get(resolvedStyle)
+  if (cachedTexture) {
+    return cachedTexture
   }
+  const theme = getProceduralCityStyleTheme(resolvedStyle)
   if (typeof document !== 'undefined') {
     const canvas = document.createElement('canvas')
-    canvas.width = 32
-    canvas.height = 64
+    canvas.width = PROCEDURAL_CITY_FACADE_SOURCE_WIDTH
+    canvas.height = PROCEDURAL_CITY_FACADE_SOURCE_HEIGHT
     const context = canvas.getContext('2d')!
-    context.fillStyle = '#ffffff'
+    context.fillStyle = theme.wallShades[0]!
     context.fillRect(0, 0, canvas.width, canvas.height)
     let seed = 0x2f6e2b1
     const nextRandom = () => {
       seed = (Math.imul(seed ^ (seed >>> 15), seed | 1) + 0x6d2b79f5) | 0
       return ((seed ^ (seed >>> 14)) >>> 0) / 4294967296
     }
-    for (let y = 2; y < canvas.height; y += 2) {
-      for (let x = 0; x < canvas.width; x += 2) {
-        const value = Math.floor(nextRandom() * 64)
-        context.fillStyle = `rgb(${value}, ${value}, ${value})`
-        context.fillRect(x, y, 2, 1)
+    const floorHeight = 18
+    const columnCount = 6
+    const wallShades = theme.wallShades
+    const frameShade = theme.frameShade
+    const windowLit = theme.windowLit
+    const windowDark = theme.windowDark
+    for (let y = 0; y < canvas.height; y += floorHeight) {
+      const bandIndex = Math.floor(nextRandom() * wallShades.length)
+      const bandShade = wallShades[bandIndex]!
+      context.fillStyle = bandShade
+      context.fillRect(0, y, canvas.width, floorHeight)
+      if (theme.alternateFloorBands && (Math.floor(y / floorHeight) % 2 === 1)) {
+        context.fillStyle = `rgba(255,255,255,${theme.bandTint})`
+        context.fillRect(0, y, canvas.width, floorHeight)
+      }
+      context.fillStyle = `rgba(255,255,255,${theme.floorBandAlpha})`
+      context.fillRect(0, y, canvas.width, 1)
+      context.fillStyle = 'rgba(0,0,0,0.035)'
+      context.fillRect(0, y + floorHeight - 1, canvas.width, 1)
+      const innerHeight = floorHeight - 4
+      const innerY = y + 2
+      for (let column = 0; column < columnCount; column += 1) {
+        const span = canvas.width / columnCount
+        const windowWidth = Math.max(5, Math.floor(span * (0.24 + nextRandom() * theme.windowGap)))
+        const windowHeight = Math.max(6, Math.floor(innerHeight * (0.7 + nextRandom() * 0.12)))
+        const offsetX = Math.floor(span * 0.14 + nextRandom() * span * theme.windowGap)
+        const windowX = Math.floor(column * span + offsetX)
+        const windowY = Math.floor(innerY + (innerHeight - windowHeight) * 0.5)
+        context.fillStyle = frameShade
+        context.fillRect(windowX - 2, windowY - 1, windowWidth + 4, windowHeight + 2)
+        const lit = nextRandom() > theme.litChance
+        context.fillStyle = lit ? windowLit[Math.floor(nextRandom() * windowLit.length)]! : windowDark[Math.floor(nextRandom() * windowDark.length)]!
+        context.fillRect(windowX, windowY, windowWidth, windowHeight)
+        if (lit) {
+          context.fillStyle = 'rgba(255,255,255,0.28)'
+          context.fillRect(windowX, windowY, windowWidth, 1)
+        }
       }
     }
     const upscale = document.createElement('canvas')
@@ -828,7 +1000,7 @@ function loadFacadeTexture(): THREE.Texture {
     upscaleContext.drawImage(canvas, 0, 0, upscale.width, upscale.height)
     const texture = configureCityTexture(new THREE.CanvasTexture(upscale))
     texture.needsUpdate = true
-    facadeTexture = texture
+    facadeTextureByStyle.set(resolvedStyle, texture)
     return texture
   }
   const data = new Uint8Array([
@@ -837,18 +1009,22 @@ function loadFacadeTexture(): THREE.Texture {
   ])
   const texture = configureCityTexture(new THREE.DataTexture(data, 2, 2, THREE.RGBAFormat))
   texture.needsUpdate = true
-  facadeTexture = texture
+  facadeTextureByStyle.set(resolvedStyle, texture)
   return texture
 }
 
-function getWallMaterial(): THREE.MeshLambertMaterial {
-  if (!wallMaterial) {
-    wallMaterial = new THREE.MeshLambertMaterial({
-      map: loadFacadeTexture(),
-      vertexColors: true,
-    })
+function getWallMaterial(style: unknown): THREE.MeshLambertMaterial {
+  const resolvedStyle = resolveProceduralCityStyle(style)
+  const cachedMaterial = wallMaterialByStyle.get(resolvedStyle)
+  if (cachedMaterial) {
+    return cachedMaterial
   }
-  return wallMaterial
+  const material = new THREE.MeshLambertMaterial({
+    map: loadFacadeTexture(resolvedStyle),
+    vertexColors: true,
+  })
+  wallMaterialByStyle.set(resolvedStyle, material)
+  return material
 }
 
 function applyProceduralCityVertexShade(geometry: THREE.BufferGeometry, bottomShade: number, topShade: number): void {
@@ -882,7 +1058,7 @@ function applyProceduralCityRoofColors(geometry: THREE.BufferGeometry): void {
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
 }
 
-function createTaperedBoxGeometry(topScaleX: number, topScaleZ: number): THREE.BoxGeometry {
+function createTaperedBoxGeometry(topScaleX: number, topScaleZ: number, bottomShade: number, topShade: number): THREE.BoxGeometry {
   const geometry = new THREE.BoxGeometry(1, 1, 1)
   const position = geometry.getAttribute('position') as THREE.BufferAttribute
   for (let index = 0; index < position.count; index += 1) {
@@ -895,24 +1071,45 @@ function createTaperedBoxGeometry(topScaleX: number, topScaleZ: number): THREE.B
   position.needsUpdate = true
   geometry.computeVertexNormals()
   geometry.translate(0, 0.5, 0)
-  applyProceduralCityVertexShade(geometry, 0.3, 1)
+  applyProceduralCityVertexShade(geometry, bottomShade, topShade)
   return geometry
 }
 
-function getArchetypes(): Array<{ geometry: THREE.BufferGeometry }> {
-  if (archetypes) {
-    return archetypes
+function getArchetypes(style: unknown): Array<{ geometry: THREE.BufferGeometry }> {
+  const resolvedStyle = resolveProceduralCityStyle(style)
+  const cached = archetypesByStyle.get(resolvedStyle)
+  if (cached) {
+    return cached
   }
-  archetypes = Array.from({ length: BUILDING_VARIANT_COUNT }, (_entry, index) => {
-    const taper = 1 - (index % 4) * 0.035
-    const roofHeight = 0.08 + (index % 3) * 0.035
-    const wall = createTaperedBoxGeometry(taper, 1 - ((index + 1) % 3) * 0.03)
-    const roof = new THREE.BoxGeometry(Math.max(0.55, taper - 0.08), roofHeight, Math.max(0.55, 0.88 - (index % 2) * 0.05))
+  const theme = getProceduralCityStyleTheme(resolvedStyle)
+  const archetypes = Array.from({ length: BUILDING_VARIANT_COUNT }, (_entry, index) => {
+    const officeStyle = resolvedStyle === 'office'
+    const taper = officeStyle ? 1 - (index % 6) * 0.012 : 1 - (index % 5) * 0.035
+    const sideTaper = officeStyle ? 1 - ((index + 3) % 4) * 0.01 : 1 - ((index + 2) % 4) * 0.03
+    const roofHeight = officeStyle ? 0.04 + (index % 3) * 0.018 : 0.08 + (index % 4) * 0.045
+    const wall = createTaperedBoxGeometry(
+      taper,
+      sideTaper,
+      theme.vertexBottomShade,
+      theme.vertexTopShade,
+    )
+    const roof = new THREE.BoxGeometry(
+      Math.max(0.5, officeStyle ? taper - 0.05 : taper - 0.12),
+      roofHeight,
+      Math.max(0.5, officeStyle ? sideTaper - 0.05 : sideTaper - 0.08),
+    )
     roof.translate(0, roofHeight * 0.5, 0)
     applyProceduralCityRoofColors(roof)
-    const geometry = mergeGeometries([wall, roof], false) ?? wall
+    const geometry = officeStyle ? wall : (mergeGeometries([wall, roof], false) ?? wall)
     if (geometry !== wall) {
       wall.dispose()
+    }
+    if (!officeStyle) {
+      roof.dispose()
+      geometry.computeVertexNormals()
+      geometry.computeBoundingBox()
+      geometry.computeBoundingSphere()
+      return { geometry }
     }
     roof.dispose()
     geometry.computeVertexNormals()
@@ -920,6 +1117,7 @@ function getArchetypes(): Array<{ geometry: THREE.BufferGeometry }> {
     geometry.computeBoundingSphere()
     return { geometry }
   })
+  archetypesByStyle.set(resolvedStyle, archetypes)
   return archetypes
 }
 
@@ -959,9 +1157,10 @@ function getTileOrigin(tileX: number, tileZ: number): THREE.Vector2 {
   return new THREE.Vector2(tileX * PROCEDURAL_CITY_TILE_SIZE, tileZ * PROCEDURAL_CITY_TILE_SIZE)
 }
 
-function buildProceduralCityGroup(parcels: ProceduralCityParcel[]): THREE.Group {
+function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknown): THREE.Group {
   const group = new THREE.Group()
   group.name = 'ProceduralCity'
+  const resolvedStyle = resolveProceduralCityStyle(style)
   const tileBuckets = new Map<string, ProceduralCityTileBucket>()
   parcels.forEach((parcel) => {
     const tileX = Math.floor(parcel.position.x / PROCEDURAL_CITY_TILE_SIZE)
@@ -982,7 +1181,7 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[]): THREE.Group 
     tileBucket.parcelsByVariant.set(variant, variantBucket)
   })
 
-  const archetypeList = getArchetypes()
+  const archetypeList = getArchetypes(resolvedStyle)
   tileBuckets.forEach((tileBucket) => {
     const tileGroup = new THREE.Group()
     tileGroup.name = `ProceduralCityTile_${tileBucket.tileX}_${tileBucket.tileZ}`
@@ -996,7 +1195,7 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[]): THREE.Group 
 
     tileBucket.parcelsByVariant.forEach((entries, variant) => {
       const archetype = archetypeList[variant]!
-      const cityMesh = createMesh(archetype.geometry, getWallMaterial(), entries.length, `ProceduralCity_${tileBucket.tileX}_${tileBucket.tileZ}_${variant}`)
+      const cityMesh = createMesh(archetype.geometry, getWallMaterial(resolvedStyle), entries.length, `ProceduralCity_${tileBucket.tileX}_${tileBucket.tileZ}_${variant}`)
       entries.forEach((parcel, index) => {
         proceduralCityTileQuaternion.setFromAxisAngle(proceduralCityTileUpAxis, parcel.rotationY)
         proceduralCityTileScale.set(parcel.width, parcel.height, parcel.depth)
@@ -1044,8 +1243,8 @@ export function clampProceduralCityComponentProps(
     0.1,
   )
   const heightRange = normalizeRange(
-    clampNumber(props?.minHeight, PROCEDURAL_CITY_DEFAULT_PROPS.minHeight, 0.2, 1000),
-    clampNumber(props?.maxHeight, PROCEDURAL_CITY_DEFAULT_PROPS.maxHeight, 0.2, 1000),
+    clampNumber(props?.minHeight, PROCEDURAL_CITY_DEFAULT_PROPS.minHeight, PROCEDURAL_CITY_FLOOR_HEIGHT * 2, 1000),
+    clampNumber(props?.maxHeight, PROCEDURAL_CITY_DEFAULT_PROPS.maxHeight, PROCEDURAL_CITY_FLOOR_HEIGHT * 2, 1000),
     0.1,
   )
   return {
@@ -1062,6 +1261,7 @@ export function clampProceduralCityComponentProps(
     roadSetback: clampNumber(props?.roadSetback, PROCEDURAL_CITY_DEFAULT_PROPS.roadSetback, 0, 100),
     junctionSetback: clampNumber(props?.junctionSetback, PROCEDURAL_CITY_DEFAULT_PROPS.junctionSetback, 0, 200),
     maxBuildings: Math.trunc(clampNumber(props?.maxBuildings, PROCEDURAL_CITY_DEFAULT_PROPS.maxBuildings, 0, 20000)),
+    style: resolveProceduralCityStyle(props?.style ?? PROCEDURAL_CITY_DEFAULT_PROPS.style),
   }
 }
 
@@ -1131,7 +1331,7 @@ export function syncProceduralCityRuntimeArtifact(
     return
   }
 
-  const group = buildProceduralCityGroup(parcels)
+  const group = buildProceduralCityGroup(parcels, props.style)
   const existingGroup = userData[PROCEDURAL_CITY_RUNTIME_GROUP_KEY] as Object3D | null | undefined
   if (existingGroup) {
     existingGroup.parent?.remove(existingGroup)
@@ -1214,7 +1414,7 @@ class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
     if (!parcels.length) {
       return
     }
-    const group = buildProceduralCityGroup(parcels)
+    const group = buildProceduralCityGroup(parcels, props.style)
     const existingGroup = host.userData?.[PROCEDURAL_CITY_RUNTIME_GROUP_KEY] as Object3D | null | undefined
     if (existingGroup) {
       existingGroup.parent?.remove(existingGroup)
