@@ -8198,13 +8198,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
     }
     syncInstancedTransform(object);
-    if (resolveDefaultControlledCharacterNodeId() === nodeId) {
-      syncProtagonistCameraPose({
-        force: true,
-        object,
-        applyToCamera: purposeActiveMode.value === 'level' && !vehicleDriveActive.value,
-      });
-    }
+
   });
   sceneCsmShadowRuntime?.registerObject(root);
 }
@@ -11421,69 +11415,6 @@ function resolveCharacterRootWorldPosition(
     protagonistObject.getWorldPosition(target);
   }
   return target;
-}
-
-type ProtagonistPoseOptions = {
-  force?: boolean;
-  applyToCamera?: boolean;
-  object?: THREE.Object3D | null;
-};
-
-function syncProtagonistCameraPose(options: ProtagonistPoseOptions = {}): boolean {
-  if (!options.force && protagonistPoseSynced) {
-    return false;
-  }
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  if (!controlledNodeId) {
-    return false;
-  }
-  const protagonistObject = options.object ?? findDefaultControlledCharacterObject();
-  if (!protagonistObject) {
-    return false;
-  }
-  registerProtagonistObject(protagonistObject);
-  resolveCharacterRootWorldPosition(controlledNodeId, protagonistObject, protagonistFollowRootPosition);
-  if (protagonistFollowHasSample && !options.force) {
-    if (protagonistFollowLastRootPosition.distanceToSquared(protagonistFollowRootPosition) <= 1e-6) {
-      return false;
-    }
-  }
-  protagonistFollowLastRootPosition.copy(protagonistFollowRootPosition);
-  protagonistFollowHasSample = true;
-  protagonistPosePosition.copy(protagonistFollowRootPosition);
-  protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
-  protagonistPoseDirection.set(1, 0, 0).applyQuaternion(protagonistPoseQuaternion);
-  if (protagonistPoseDirection.lengthSq() < 1e-8) {
-    protagonistPoseDirection.set(1, 0, 0);
-  } else {
-    protagonistPoseDirection.normalize();
-  }
-  protagonistPoseTarget.copy(protagonistPosePosition);
-  protagonistPoseTarget.y = HUMAN_EYE_HEIGHT;
-  const characterProps = resolveDefaultControlledCharacterComponentProps();
-  protagonistPoseCameraOffset.set(
-    0,
-    characterProps?.cameraFollowHeight ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
-    -(characterProps?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE),
-  ).applyQuaternion(protagonistPoseQuaternion);
-  protagonistPosePosition.copy(protagonistPoseTarget).add(protagonistPoseCameraOffset);
-  protagonistPoseTarget.addScaledVector(protagonistPoseDirection, CAMERA_FORWARD_OFFSET);
-  protagonistPoseSynced = true;
-  if (options.applyToCamera) {
-    const context = renderContext;
-    if (context) {
-      runWithProgrammaticCameraMutationAndAnchor(() => {
-        withControlsVerticalFreedom(context.controls, () => {
-          context.camera.position.copy(protagonistPosePosition);
-          context.controls.target.copy(protagonistPoseTarget);
-          context.camera.lookAt(protagonistPoseTarget);
-          context.controls.update();
-        });
-      });
-      lockControlsPitchToCurrent(context.controls, context.camera);
-    }
-  }
-  return true;
 }
 
 function getNormalizedMultiuserIdentity(): MultiuserIdentity | null {
@@ -18125,8 +18056,6 @@ async function mountGraphAndSyncSubsystems(
 /** Apply camera alignment and environment settings for the current document. */
 function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: THREE.PerspectiveCamera): void {
   const shouldAlignToProtagonist = purposeActiveMode.value === 'level' && !vehicleDriveActive.value;
-  syncProtagonistCameraPose({ force: true, applyToCamera: shouldAlignToProtagonist });
-
   resetRemovedSkyState();
 
   // Environment settings are applied asynchronously (e.g. texture loads) and will self-defer

@@ -7044,29 +7044,18 @@ function updateCharacterFollowCamera(
 		}
 	}
 	const desiredForwardWorld = tempDirection
-	const hasForwardMoveInput = Math.abs(characterAuthorityInput.moveZ) > 0.05
-	const isPureStrafeInput =
-		Math.abs(characterAuthorityInput.moveX) > 0.05
-		&& Math.abs(characterAuthorityInput.moveZ) <= 0.05
-	const planarVelocitySq =
-		(characterFollowVelocity.x * characterFollowVelocity.x)
-		+ (characterFollowVelocity.z * characterFollowVelocity.z)
-	if (planarVelocitySq > 1e-4 && hasForwardMoveInput && !isPureStrafeInput) {
-		desiredForwardWorld.set(characterFollowVelocity.x, 0, characterFollowVelocity.z)
-	} else {
-		protagonistObject.getWorldQuaternion(tempQuaternion)
-		resolveControlledCharacterForwardVector(characterFollowForwardScratch).applyQuaternion(tempQuaternion)
-		desiredForwardWorld.copy(characterFollowForwardScratch)
-		desiredForwardWorld.y = 0
-		if (desiredForwardWorld.lengthSq() < 1e-6) {
-			if (characterFollowCameraState.heading.lengthSq() > 1e-6) {
-				desiredForwardWorld.copy(characterFollowCameraState.heading)
-			} else if (!characterFollowCameraState.initialized || immediate) {
-				activeCamera.getWorldDirection(desiredForwardWorld)
-				desiredForwardWorld.y = 0
-			} else {
-				desiredForwardWorld.set(0, 0, 1)
-			}
+	protagonistObject.getWorldQuaternion(tempQuaternion)
+	resolveControlledCharacterForwardVector(characterFollowForwardScratch).applyQuaternion(tempQuaternion)
+	desiredForwardWorld.copy(characterFollowForwardScratch)
+	desiredForwardWorld.y = 0
+	if (desiredForwardWorld.lengthSq() < 1e-6) {
+		if (characterFollowCameraState.heading.lengthSq() > 1e-6) {
+			desiredForwardWorld.copy(characterFollowCameraState.heading)
+		} else if (!characterFollowCameraState.initialized || immediate) {
+			activeCamera.getWorldDirection(desiredForwardWorld)
+			desiredForwardWorld.y = 0
+		} else {
+			desiredForwardWorld.set(0, 0, 1)
 		}
 	}
 	if (desiredForwardWorld.lengthSq() < 1e-6) {
