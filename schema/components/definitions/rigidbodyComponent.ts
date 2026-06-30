@@ -97,15 +97,15 @@ export interface RigidbodyComponentMetadata {
   convexSimplify?: RigidbodyConvexSimplifyConfig
 }
 
-export const DEFAULT_RIGIDBODY_MASS = 10000
+export const DEFAULT_RIGIDBODY_MASS = 1400
 export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'STATIC'
 export const DEFAULT_RIGIDBODY_COLLIDER_TYPE: RigidbodyColliderType = 'convex'
 export const MIN_RIGIDBODY_MASS = 0
 export const MAX_RIGIDBODY_MASS = 100000
 export const DEFAULT_LINEAR_DAMPING = 0.01
-export const DEFAULT_ANGULAR_DAMPING = 0.4
-export const DEFAULT_RIGIDBODY_RESTITUTION = 0.2
-export const DEFAULT_RIGIDBODY_FRICTION = 0.5
+export const DEFAULT_ANGULAR_DAMPING = 0.35
+export const DEFAULT_RIGIDBODY_RESTITUTION = 0.1
+export const DEFAULT_RIGIDBODY_FRICTION = 0.75
 
 export function clampRigidbodyComponentProps(
   props: Partial<RigidbodyComponentProps> | null | undefined,

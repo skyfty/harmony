@@ -191,6 +191,10 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
   localBodyType.value = value
   if (LOCKED_BODY_TYPES.has(value)) {
     applyLockedMass(normalizedProps.value.mass)
+  } else if (Math.abs(localMass.value - LOCKED_BODY_TYPE_MASS) <= MASS_LOCK_EPSILON) {
+    localMass.value = DEFAULT_RIGIDBODY_MASS
+    updateComponent({ bodyType: value, mass: DEFAULT_RIGIDBODY_MASS })
+    return
   }
   if (value === normalizedProps.value.bodyType) {
     return

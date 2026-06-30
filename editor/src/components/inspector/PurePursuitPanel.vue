@@ -451,7 +451,6 @@ function handleRemoveComponent() {
         </v-expand-transition>
 
         <v-divider />
-        <div class="pure-pursuit-panel-section-title">Approach & Brake</div>
 
         <div class="pure-pursuit-panel-advanced-header">
           <div class="pure-pursuit-panel-section-title">Advanced Approach</div>
