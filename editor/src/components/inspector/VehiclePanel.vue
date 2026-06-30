@@ -23,6 +23,9 @@ import {
   DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
   DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
   DEFAULT_IS_FRONT_WHEEL,
+  DEFAULT_VEHICLE_MAX_SPEED_KMH,
+  MIN_VEHICLE_MAX_SPEED_KMH,
+  MAX_VEHICLE_MAX_SPEED_KMH,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
   createDefaultVehicleComponentProps,
@@ -70,6 +73,7 @@ const displayProps = computed(() =>
 
 const wheelEntries = computed(() => displayProps.value.wheels ?? [])
 const wheelDetailsActiveId = ref<string | null>(null)
+const localMaxSpeedKmh = ref(DEFAULT_VEHICLE_MAX_SPEED_KMH)
 const DEFAULT_VEHICLE_PROPS = createDefaultVehicleComponentProps()
 const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
   DEFAULT_VEHICLE_PROPS.wheels[0] ?? {
@@ -245,6 +249,14 @@ function updateComponent(patch: Partial<VehicleComponentProps>): void {
   sceneStore.updateNodeComponentProps(nodeId, component.id, nextStored as unknown as Partial<Record<string, unknown>>)
 }
 
+watch(
+  () => displayProps.value.maxSpeedKmh,
+  (value) => {
+    localMaxSpeedKmh.value = value
+  },
+  { immediate: true },
+)
+
 function commitClampedPatch(patch: Partial<VehicleComponentProps>): void {
   const clamped = clampVehicleComponentProps({
     ...displayProps.value,
@@ -400,6 +412,19 @@ function handleAxisChange(
   commitClampedPatch({ [key]: value } as Partial<VehicleComponentProps>)
 }
 
+function handleMaxSpeedChange(value: string | number): void {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  const clamped = clampVehicleComponentProps({ maxSpeedKmh: numeric }).maxSpeedKmh
+  localMaxSpeedKmh.value = clamped
+  if (Math.abs(clamped - displayProps.value.maxSpeedKmh) <= 1e-4) {
+    return
+  }
+  updateComponent({ maxSpeedKmh: clamped })
+}
+
 function handleToggleComponent(): void {
   const component = vehicleComponent.value
   const nodeId = selectedNodeId.value
@@ -519,6 +544,24 @@ function handleOpenSuspensionEditor(): void {
               :model-value="displayProps.wheelbaseMeters"
               readonly
               :disabled="!vehicleComponent?.enabled"
+            />
+          </div>
+        </div>
+
+        <div class="vehicle-panel__section">
+          <div class="vehicle-panel__section-title">Speed</div>
+          <div class="vehicle-panel__field-grid vehicle-panel__field-grid--two">
+            <v-text-field
+              label="最高速度 (km/h)"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :min="MIN_VEHICLE_MAX_SPEED_KMH"
+              :max="MAX_VEHICLE_MAX_SPEED_KMH"
+              :model-value="localMaxSpeedKmh"
+              :disabled="!vehicleComponent?.enabled"
+              @update:modelValue="handleMaxSpeedChange"
             />
           </div>
         </div>

@@ -212,7 +212,8 @@ const VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ = 0.0064
 const VEHICLE_FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ = 0.09
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
-const VEHICLE_SPEED_LIMIT_EPSILON = 1e-4
+const VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE = 10
+const VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE_NEAR_CAP = 2.5
 // 平滑停车默认阻尼
 const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
 // 平滑停车最大阻尼
@@ -993,23 +994,27 @@ export class VehicleDriveController {
         }
       } else {
         smoothStop.active = false
-        const targetDelta = targetSpeedMps - currentForwardVelocity
+        const currentForwardSpeedAbs = Math.abs(currentForwardVelocity)
+        const softCap = targetSpeedMps >= 0
+          ? Math.max(0.1, speedCaps.softCap)
+          : Math.max(0.1, speedCaps.reverseCap * VEHICLE_SPEED_GOVERNOR_SOFT_RATIO)
+        const hardCap = targetSpeedMps >= 0
+          ? Math.max(0.1, speedCaps.hardCap)
+          : Math.max(0.1, speedCaps.reverseCap)
+        const speedBlendRange = Math.max(0.1, hardCap - softCap)
+        const speedBlend = THREE.MathUtils.clamp((currentForwardSpeedAbs - softCap) / speedBlendRange, 0, 1)
+        const accelResponse = THREE.MathUtils.lerp(
+          VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE,
+          VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE_NEAR_CAP,
+          speedBlend,
+        )
+        const accelAlpha = 1 - Math.exp(-Math.max(0, accelResponse) * dt)
+        const targetDelta = (targetSpeedMps - currentForwardVelocity) * accelAlpha
         if (Math.abs(targetDelta) > 1e-4) {
           velocity.x += forwardWorld.x * targetDelta
           velocity.y += forwardWorld.y * targetDelta
           velocity.z += forwardWorld.z * targetDelta
         }
-        speedSq = velocity.lengthSquared()
-      }
-
-      const hardCap = Number.isFinite(speedCaps.hardCap) ? Math.max(0.1, speedCaps.hardCap) : Number.POSITIVE_INFINITY
-      const reverseCap = Number.isFinite(speedCaps.reverseCap) ? Math.max(0.1, speedCaps.reverseCap) : Number.POSITIVE_INFINITY
-      const clampedForwardVelocity = THREE.MathUtils.clamp(currentForwardVelocity, -reverseCap, hardCap)
-      const forwardVelocityDelta = currentForwardVelocity - clampedForwardVelocity
-      if (Math.abs(forwardVelocityDelta) > VEHICLE_SPEED_LIMIT_EPSILON) {
-        velocity.x -= forwardWorld.x * forwardVelocityDelta
-        velocity.y -= forwardWorld.y * forwardVelocityDelta
-        velocity.z -= forwardWorld.z * forwardVelocityDelta
         speedSq = velocity.lengthSquared()
       }
 

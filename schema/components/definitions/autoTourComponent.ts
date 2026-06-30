@@ -7,9 +7,9 @@ export const AUTO_TOUR_COMPONENT_TYPE = 'autoTour'
 export const DEFAULT_AUTO_TOUR_SPEED_MPS = 3.5
 export const MIN_AUTO_TOUR_SPEED_MPS = 0
 export const MAX_AUTO_TOUR_SPEED_MPS = 50
-export const DEFAULT_AUTO_TOUR_MAX_SPEED_MPS = 20
+export const DEFAULT_AUTO_TOUR_MAX_SPEED_MPS = 40 / 3.6
 export const MIN_AUTO_TOUR_MAX_SPEED_MPS = 0
-export const MAX_AUTO_TOUR_MAX_SPEED_MPS = 50
+export const MAX_AUTO_TOUR_MAX_SPEED_MPS = 40 / 3.6
 
 export interface AutoTourComponentProps {
   routeNodeId: string | null

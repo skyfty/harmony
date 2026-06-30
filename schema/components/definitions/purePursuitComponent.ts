@@ -94,9 +94,9 @@ export const DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 0.15
 export const MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 0
 export const MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 20
 
-export const DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS = 20
+export const DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS = 40 / 3.6
 export const MIN_PURE_PURSUIT_MAX_SPEED_MPS = 0
-export const MAX_PURE_PURSUIT_MAX_SPEED_MPS = 50
+export const MAX_PURE_PURSUIT_MAX_SPEED_MPS = 40 / 3.6
 
 export interface PurePursuitComponentProps {
   lookaheadBaseMeters: number
