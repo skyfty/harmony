@@ -1,245 +1,55 @@
-﻿import {
+import {
+  axisVectorForIndex,
+  distanceBetween,
+  normalizeVector,
+  normalizeQuaternion,
+  resolveCharacterProbeOffsets,
+  resolveSteerableWheelIndices,
+  rotateVectorByQuaternion,
+  PhysicsWorldBase,
+  type PhysicsWorldBodyState,
+  type PhysicsWorldCharacterState,
+  type PhysicsWorldVehicleControl,
+  type PhysicsWorldVehicleState,
+} from '@harmony/physics-core'
+import {
   createPhysicsCharacterMotorState,
   stepPhysicsCharacterMotor,
-  type PhysicsAddRuntimeBodiesCommand,
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
   type PhysicsBodyVelocityCommand,
   type PhysicsCharacterDesc,
-  type PhysicsCharacterInputCommand,
   type PhysicsContactEvent,
   type PhysicsMaterialDesc,
   type PhysicsQuaternion,
   type PhysicsRaycastCommand,
   type PhysicsRaycastHit,
-  type PhysicsRemoveRuntimeBodiesCommand,
-  type PhysicsSceneAsset,
   type PhysicsShapeDesc,
-  type PhysicsStepFrame,
   type PhysicsTransform,
   type PhysicsVector3,
   type PhysicsVehicleDesc,
   type PhysicsVehicleInputCommand,
-  type PhysicsWorldSettings,
 } from '@harmony/physics-core'
 import { createAmmoRigidBody } from './bodyFactory'
 import type { AmmoApi } from './ammoHelpers'
 import { createAmmoSceneShapeBindings } from './sceneShapeBindings'
 
-type BodyState = {
-  desc: PhysicsBodyDesc
-  body: any
-  cleanup: Array<() => void>
-}
+type BodyState = PhysicsWorldBodyState<any>
+type VehicleState = PhysicsWorldVehicleState<any, any>
+type CharacterState = PhysicsWorldCharacterState<any>
 
-type VehicleState = {
-  desc: PhysicsVehicleDesc
-  bodyId: number
-  body: any
-  vehicle: any
-  steerableWheelIndices: number[]
-  speedGovernorScale: number
-  speedGovernorBrakeAssist: number
-  speedGovernorOverHardCap: boolean
-  speedGovernorSmoothedForwardSpeedAbs: number
-  cleanup: Array<() => void>
-}
-
-type CharacterState = {
-  desc: PhysicsCharacterDesc
-  bodyId: number
-  body: any
-  input: PhysicsCharacterInputCommand | null
-  motorState: ReturnType<typeof createPhysicsCharacterMotorState>
-}
 const BT_DISABLE_DEACTIVATION = 4
 
-const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
-  gravity: [0, -9.8, 0],
-  fixedTimeStepMs: 1000 / 60,
-  maxSubSteps: 4,
-}
-
-const VEHICLE_ENGINE_FORCE = 420
-const VEHICLE_BRAKE_FORCE = 42
-const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
-const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.96
-const VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET = 0.45
-const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
-const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
-const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
-const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
-const VEHICLE_BRAKE_RELEASE_SPEED = 0.45
-const VEHICLE_WAKE_SPEED_THRESHOLD = 0.2
-
-export class AmmoPhysicsWorld {
+export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState, BodyState, VehicleState> {
   private ammo: AmmoApi | null = null
-  private scene: PhysicsSceneAsset | null = null
-  private worldSettings: PhysicsWorldSettings = DEFAULT_WORLD_SETTINGS
-  private frame = 0
   private world: any | null = null
   private collisionConfiguration: any | null = null
   private dispatcher: any | null = null
   private broadphase: any | null = null
   private solver: any | null = null
-  private readonly bodies = new Map<number, BodyState>()
-  private readonly shapes = new Map<number, PhysicsShapeDesc>()
-  private readonly runtimeBodies = new Map<number, BodyState>()
-  private readonly runtimeShapes = new Map<number, PhysicsShapeDesc>()
-  private readonly runtimeMaterials = new Map<number, PhysicsMaterialDesc>()
-  private readonly vehicles = new Map<number, VehicleState>()
-  private readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
-  private readonly characters = new Map<number, CharacterState>()
-  private readonly lastContactNormalYByBodyId = new Map<number, number>()
 
   setModule(module: unknown): void {
     this.ammo = module as AmmoApi
-  }
-
-  setWorldSettings(settings: PhysicsWorldSettings): void {
-    this.worldSettings = {
-      gravity: [...settings.gravity],
-      fixedTimeStepMs: settings.fixedTimeStepMs,
-      maxSubSteps: settings.maxSubSteps,
-    }
-    this.applyGravity()
-  }
-
-  loadScene(scene: PhysicsSceneAsset): { bodyCount: number; vehicleCount: number } {
-    this.ensureWorld()
-    this.scene = scene
-    this.frame = 0
-    scene.shapes.forEach((shape) => {
-      this.shapes.set(shape.id, shape)
-    })
-    scene.bodies.forEach((body) => {
-      this.bodies.set(body.id, this.createBodyState(body))
-    })
-    scene.vehicles.forEach((vehicle) => {
-      this.vehicles.set(vehicle.id, this.createVehicleState(vehicle))
-    })
-    scene.characters.forEach((character) => {
-      const body = this.bodies.get(character.bodyId)?.body ?? null
-      if (!body) {
-        return
-      }
-      const zeroFactor = createAmmoVector3(this.ammo!, [0, 0, 0])
-      const zeroVelocity = createAmmoVector3(this.ammo!, [0, 0, 0])
-      body.setAngularFactor?.(zeroFactor)
-      body.setAngularVelocity?.(zeroVelocity)
-      this.ammo!.destroy(zeroVelocity)
-      this.ammo!.destroy(zeroFactor)
-      this.characters.set(character.characterId, {
-        desc: character,
-        bodyId: character.bodyId,
-        body,
-        input: null,
-        motorState: createPhysicsCharacterMotorState(),
-      })
-    })
-    return {
-      bodyCount: scene.bodies.length,
-      vehicleCount: scene.vehicles.length,
-    }
-  }
-
-  async step(deltaMs: number): Promise<PhysicsStepFrame> {
-    if (!this.scene || !this.world) {
-      return {
-        frame: this.frame,
-        bodyCount: 0,
-        wheelCount: 0,
-        bodyTransforms: new Float32Array(0),
-        wheelTransforms: new Float32Array(0),
-      };
-    }
-    this.frame += 1
-    this.applyVehicleInputs()
-    this.applyCharacterInputs(deltaMs)
-
-    const deltaSeconds = Math.max(0, deltaMs) / 1000
-    if (deltaSeconds > 0) {
-      this.world.stepSimulation(
-        deltaSeconds,
-        Math.max(1, this.worldSettings.maxSubSteps | 0),
-        Math.max(1 / 240, this.worldSettings.fixedTimeStepMs / 1000),
-      )
-    }
-
-    const bodyCount = this.scene.bodies.length
-    const bodyTransforms = new Float32Array(bodyCount * 8)
-    const bodyMeta = new Uint32Array(bodyCount)
-    const bodyLinearVelocities = new Float32Array(bodyCount * 3)
-    const bodyAngularVelocities = new Float32Array(bodyCount * 3)
-    const bodySleeping = new Uint8Array(bodyCount)
-    this.scene.bodies.forEach((body, index) => {
-      const state = this.bodies.get(body.id)
-      const physicsBody = state?.body ?? null
-      const transform = physicsBody ? readAmmoBodyTransform(physicsBody) : body.transform
-      const base = index * 8
-      bodyTransforms[base] = transform.position[0]
-      bodyTransforms[base + 1] = transform.position[1]
-      bodyTransforms[base + 2] = transform.position[2]
-      bodyTransforms[base + 3] = transform.rotation[0]
-      bodyTransforms[base + 4] = transform.rotation[1]
-      bodyTransforms[base + 5] = transform.rotation[2]
-      bodyTransforms[base + 6] = transform.rotation[3]
-      bodyTransforms[base + 7] = body.type === 'dynamic' ? 1 : body.type === 'kinematic' ? 2 : 0
-      bodyMeta[index] = body.id
-      const linearBase = index * 3
-      const linearVelocity = physicsBody?.getLinearVelocity?.()
-      const angularVelocity = physicsBody?.getAngularVelocity?.()
-      bodyLinearVelocities[linearBase] = linearVelocity?.x?.() ?? 0
-      bodyLinearVelocities[linearBase + 1] = linearVelocity?.y?.() ?? 0
-      bodyLinearVelocities[linearBase + 2] = linearVelocity?.z?.() ?? 0
-      bodyAngularVelocities[linearBase] = angularVelocity?.x?.() ?? 0
-      bodyAngularVelocities[linearBase + 1] = angularVelocity?.y?.() ?? 0
-      bodyAngularVelocities[linearBase + 2] = angularVelocity?.z?.() ?? 0
-      bodySleeping[index] = physicsBody?.getActivationState?.() === 2 ? 1 : 0
-    })
-
-    const contacts = this.collectContacts()
-
-    const totalWheelCount = this.scene.vehicles.reduce((count, vehicle) => count + vehicle.wheels.length, 0)
-    const wheelTransforms = new Float32Array(totalWheelCount * 9)
-    let wheelOffset = 0
-    this.scene.vehicles.forEach((vehicleDesc) => {
-      const vehicleState = this.vehicles.get(vehicleDesc.id)
-      if (!vehicleState) {
-        wheelOffset += vehicleDesc.wheels.length
-        return
-      }
-      for (let wheelIndex = 0; wheelIndex < vehicleDesc.wheels.length; wheelIndex += 1) {
-        vehicleState.vehicle.updateWheelTransform?.(wheelIndex, true)
-        const wheelTransform = vehicleState.vehicle.getWheelTransformWS?.(wheelIndex)
-        const origin = wheelTransform?.getOrigin?.()
-        const rotation = wheelTransform?.getRotation?.()
-        const base = wheelOffset * 9
-        wheelTransforms[base] = vehicleDesc.id
-        wheelTransforms[base + 1] = wheelIndex
-        wheelTransforms[base + 2] = origin?.x?.() ?? 0
-        wheelTransforms[base + 3] = origin?.y?.() ?? 0
-        wheelTransforms[base + 4] = origin?.z?.() ?? 0
-        wheelTransforms[base + 5] = rotation?.x?.() ?? 0
-        wheelTransforms[base + 6] = rotation?.y?.() ?? 0
-        wheelTransforms[base + 7] = rotation?.z?.() ?? 0
-        wheelTransforms[base + 8] = rotation?.w?.() ?? 1
-        wheelOffset += 1
-      }
-    })
-
-    return {
-      frame: this.frame,
-      bodyCount,
-      wheelCount: totalWheelCount,
-      bodyTransforms,
-      wheelTransforms,
-      bodyMeta,
-      bodyLinearVelocities,
-      bodyAngularVelocities,
-      bodySleeping,
-      contacts: contacts.length ? contacts : undefined,
-    }
   }
 
   setBodyTransform(command: PhysicsBodyTransformCommand): void {
@@ -286,39 +96,6 @@ export class AmmoPhysicsWorld {
     }
   }
 
-  setVehicleInput(command: PhysicsVehicleInputCommand): void {
-    this.vehicleInputs.set(command.vehicleId, command)
-  }
-
-  setCharacterInput(command: PhysicsCharacterInputCommand): void {
-    const state = this.characters.get(command.characterId)
-    if (!state) {
-      return
-    }
-    state.input = command
-    state.body.activate?.(true)
-  }
-
-  addRuntimeBodies(command: PhysicsAddRuntimeBodiesCommand): void {
-    this.ensureWorld()
-    for (const entry of command.bodies) {
-      for (const material of entry.materials ?? []) {
-        this.runtimeMaterials.set(material.id, material)
-      }
-      for (const shape of entry.shapes) {
-        this.runtimeShapes.set(shape.id, shape)
-      }
-      this.removeRuntimeBodyById(entry.body.id)
-      this.runtimeBodies.set(entry.body.id, this.createBodyState(entry.body, this.runtimeShapes, this.runtimeMaterials))
-    }
-  }
-
-  removeRuntimeBodies(command: PhysicsRemoveRuntimeBodiesCommand): void {
-    for (const bodyId of command.bodyIds) {
-      this.removeRuntimeBodyById(bodyId)
-    }
-  }
-
   raycast(command: PhysicsRaycastCommand): PhysicsRaycastHit | null {
     const ammo = this.ammo
     if (!ammo || !this.world) {
@@ -359,59 +136,16 @@ export class AmmoPhysicsWorld {
     return hit.bodyId > 0 ? hit : null
   }
 
-  disposeScene(): void {
-    this.scene = null
-    this.frame = 0
-    this.shapes.clear()
-    this.runtimeShapes.clear()
-    this.runtimeMaterials.clear()
-    this.vehicleInputs.clear()
-    this.characters.clear()
-    this.lastContactNormalYByBodyId.clear()
-
-    Array.from(this.vehicles.values()).forEach((state) => {
-      state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
-    })
-    this.vehicles.clear()
-
-    Array.from(this.bodies.values()).forEach((state) => {
-      state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
-    })
-    this.bodies.clear()
-    Array.from(this.runtimeBodies.values()).forEach((state) => {
-      state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
-    })
-    this.runtimeBodies.clear()
-  }
-
   disposeWorld(): void {
-    if (!this.ammo) {
-      return
-    }
-    this.disposeScene()
-    if (this.world) {
-      this.ammo.destroy(this.world)
-      this.world = null
-    }
-    if (this.solver) {
-      this.ammo.destroy(this.solver)
-      this.solver = null
-    }
-    if (this.broadphase) {
-      this.ammo.destroy(this.broadphase)
-      this.broadphase = null
-    }
-    if (this.dispatcher) {
-      this.ammo.destroy(this.dispatcher)
-      this.dispatcher = null
-    }
-    if (this.collisionConfiguration) {
-      this.ammo.destroy(this.collisionConfiguration)
-      this.collisionConfiguration = null
-    }
+    super.disposeWorld()
+    this.world = null
+    this.solver = null
+    this.broadphase = null
+    this.dispatcher = null
+    this.collisionConfiguration = null
   }
 
-  private ensureWorld(): void {
+  protected ensureWorldReady(): void {
     if (!this.ammo) {
       throw new Error('Ammo module is not loaded')
     }
@@ -429,10 +163,14 @@ export class AmmoPhysicsWorld {
       this.solver,
       this.collisionConfiguration,
     )
-    this.applyGravity()
+    this.applyWorldSettings()
   }
 
-  private applyGravity(): void {
+  protected hasWorld(): boolean {
+    return this.world != null
+  }
+
+  protected applyWorldSettings(): void {
     const ammo = this.ammo
     if (!ammo || !this.world) {
       return
@@ -442,7 +180,39 @@ export class AmmoPhysicsWorld {
     ammo.destroy(gravity)
   }
 
-  private createBodyState(
+  protected stepWorld(deltaSeconds: number): void {
+    if (!this.world) {
+      return
+    }
+    this.world.stepSimulation(
+      deltaSeconds,
+      Math.max(1, this.worldSettings.maxSubSteps | 0),
+      Math.max(1 / 240, this.worldSettings.fixedTimeStepMs / 1000),
+    )
+  }
+
+  protected destroyWorldInstance(): void {
+    if (!this.ammo) {
+      return
+    }
+    if (this.world) {
+      this.ammo.destroy(this.world)
+    }
+    if (this.solver) {
+      this.ammo.destroy(this.solver)
+    }
+    if (this.broadphase) {
+      this.ammo.destroy(this.broadphase)
+    }
+    if (this.dispatcher) {
+      this.ammo.destroy(this.dispatcher)
+    }
+    if (this.collisionConfiguration) {
+      this.ammo.destroy(this.collisionConfiguration)
+    }
+  }
+
+  protected createBodyState(
     desc: PhysicsBodyDesc,
     shapeMap: Map<number, PhysicsShapeDesc> = this.shapes,
     materialMap: Map<number, PhysicsMaterialDesc> | null = null,
@@ -453,9 +223,7 @@ export class AmmoPhysicsWorld {
     if (!ammo || !world) {
       throw new Error('Ammo world is not initialized')
     }
-    const materials = materialMap
-      ? Array.from(materialMap.values())
-      : scene?.materials ?? []
+    const materials = materialMap ? Array.from(materialMap.values()) : scene?.materials ?? []
     const assembly = createAmmoRigidBody({
       ammo,
       world,
@@ -463,7 +231,6 @@ export class AmmoPhysicsWorld {
       shapes: createAmmoSceneShapeBindings(ammo, shapeMap, desc.shapeId, desc.type === 'dynamic'),
       desc,
     })
-
     return {
       desc,
       body: assembly.body,
@@ -471,20 +238,11 @@ export class AmmoPhysicsWorld {
     }
   }
 
-  private removeRuntimeBodyById(bodyId: number): void {
-    const state = this.runtimeBodies.get(bodyId)
-    if (!state) {
-      return
-    }
-    state.cleanup.slice().reverse().forEach((cleanup) => cleanup())
-    this.runtimeBodies.delete(bodyId)
-    this.runtimeShapes.delete(state.desc.shapeId)
-    if (state.desc.materialId != null) {
-      this.runtimeMaterials.delete(state.desc.materialId)
-    }
+  protected disposeBodyState(state: BodyState): void {
+    state.cleanup?.slice().reverse().forEach((cleanup) => cleanup())
   }
 
-  private createVehicleState(desc: PhysicsVehicleDesc): VehicleState {
+  protected createVehicleState(desc: PhysicsVehicleDesc): VehicleState {
     const ammo = this.ammo
     const world = this.world
     const body = this.bodies.get(desc.bodyId)?.body ?? null
@@ -495,9 +253,6 @@ export class AmmoPhysicsWorld {
     const tuning = new ammo.btVehicleTuning()
     const raycaster = new ammo.btDefaultVehicleRaycaster(world)
     const vehicle = new ammo.btRaycastVehicle(tuning, body, raycaster)
-    // Ammo's raycast-vehicle binding in this build expects the scene forward axis
-    // to be supplied in the first slot to preserve the same world-facing direction
-    // we use in the Cannon backend.
     vehicle.setCoordinateSystem?.(desc.indexForwardAxis, desc.indexUpAxis, desc.indexRightAxis)
     body.setActivationState?.(BT_DISABLE_DEACTIVATION)
     world.addAction?.(vehicle)
@@ -531,13 +286,12 @@ export class AmmoPhysicsWorld {
       }
     })
 
-    const steerableWheelIndices = resolveSteerableWheelIndices(desc)
     return {
       desc,
       bodyId: desc.bodyId,
       body,
       vehicle,
-      steerableWheelIndices,
+      steerableWheelIndices: resolveSteerableWheelIndices(desc),
       speedGovernorScale: 1,
       speedGovernorBrakeAssist: 0,
       speedGovernorOverHardCap: false,
@@ -554,58 +308,109 @@ export class AmmoPhysicsWorld {
     }
   }
 
-  private applyCharacterInputs(deltaMs: number): void {
-    const ammo = this.ammo
-    if (!ammo || !this.characters.size) {
-      return
-    }
-    const deltaSeconds = Math.max(0, deltaMs) / 1000
-    this.characters.forEach((characterState) => {
-      const input = characterState.input ?? {
-        characterId: characterState.desc.characterId,
-        moveX: 0,
-        moveZ: 0,
-        yaw: characterState.motorState.yaw,
-        jump: false,
-        sprint: false,
-        crouch: false,
-        interact: false,
-      }
-      const contactNormalY = this.lastContactNormalYByBodyId.get(characterState.bodyId) ?? null
-      const probe = this.resolveCharacterGroundProbe(characterState)
-      const stepResult = stepPhysicsCharacterMotor(characterState.desc, characterState.motorState, {
-        moveX: input.moveX,
-        moveZ: input.moveZ,
-        yaw: input.yaw,
-        jump: input.jump,
-        sprint: input.sprint,
-        crouch: input.crouch,
-        interact: input.interact,
-        deltaSeconds,
-        gravityY: this.worldSettings.gravity[1] ?? -9.8,
-        probe,
-        contactNormalY,
-      })
-      const linearVelocity = createAmmoVector3(ammo, stepResult.linearVelocity)
-      const angularVelocity = createAmmoVector3(ammo, [0, 0, 0])
-      const yawQuaternion = createAmmoQuaternionFromYaw(ammo, stepResult.yaw)
-      const transform = characterState.body.getWorldTransform?.()
-      characterState.body.setLinearVelocity?.(linearVelocity)
-      characterState.body.setAngularVelocity?.(angularVelocity)
-      if (transform && yawQuaternion) {
-        transform.setRotation?.(yawQuaternion)
-        characterState.body.setWorldTransform?.(transform)
-        const motionState = characterState.body.getMotionState?.()
-        motionState?.setWorldTransform?.(transform)
-      }
-      characterState.body.activate?.(true)
-      ammo.destroy(linearVelocity)
-      ammo.destroy(angularVelocity)
-      ammo.destroy(yawQuaternion)
-    })
+  protected disposeVehicleState(state: VehicleState): void {
+    state.cleanup?.slice().reverse().forEach((cleanup) => cleanup())
   }
 
-  private resolveCharacterGroundProbe(characterState: CharacterState): {
+  protected createCharacterState(desc: PhysicsCharacterDesc, body: any): CharacterState {
+    const ammo = this.ammo
+    if (!ammo) {
+      throw new Error('Ammo module is not loaded')
+    }
+    const zeroFactor = createAmmoVector3(ammo, [0, 0, 0])
+    const zeroVelocity = createAmmoVector3(ammo, [0, 0, 0])
+    body.setAngularFactor?.(zeroFactor)
+    body.setAngularVelocity?.(zeroVelocity)
+    ammo.destroy(zeroVelocity)
+    ammo.destroy(zeroFactor)
+    return {
+      desc,
+      bodyId: desc.bodyId,
+      body,
+      input: null,
+      motorState: createPhysicsCharacterMotorState(),
+    }
+  }
+
+  protected wakeCharacterBody(state: CharacterState): void {
+    state.body.activate?.(true)
+  }
+
+  protected wakeVehicleBody(state: VehicleState): void {
+    state.body.activate?.(true)
+  }
+
+  protected readBodyTransform(body: any): PhysicsTransform {
+    return readAmmoBodyTransform(body)
+  }
+
+  protected readBodyLinearVelocity(body: any): PhysicsVector3 {
+    const linearVelocity = body.getLinearVelocity?.()
+    return [
+      linearVelocity?.x?.() ?? 0,
+      linearVelocity?.y?.() ?? 0,
+      linearVelocity?.z?.() ?? 0,
+    ]
+  }
+
+  protected readBodyAngularVelocity(body: any): PhysicsVector3 {
+    const angularVelocity = body.getAngularVelocity?.()
+    return [
+      angularVelocity?.x?.() ?? 0,
+      angularVelocity?.y?.() ?? 0,
+      angularVelocity?.z?.() ?? 0,
+    ]
+  }
+
+  protected isBodySleeping(body: any): boolean {
+    return body.getActivationState?.() === 2
+  }
+
+  protected readWheelTransform(vehicleState: VehicleState, wheelIndex: number): PhysicsTransform {
+    vehicleState.vehicle.updateWheelTransform?.(wheelIndex, true)
+    const wheelTransform = vehicleState.vehicle.getWheelTransformWS?.(wheelIndex)
+    const origin = wheelTransform?.getOrigin?.()
+    const rotation = wheelTransform?.getRotation?.()
+    return {
+      position: [origin?.x?.() ?? 0, origin?.y?.() ?? 0, origin?.z?.() ?? 0],
+      rotation: [rotation?.x?.() ?? 0, rotation?.y?.() ?? 0, rotation?.z?.() ?? 0, rotation?.w?.() ?? 1],
+    }
+  }
+
+  protected getVehicleForwardSpeed(state: VehicleState): number {
+    const linearVelocity = this.readBodyLinearVelocity(state.body)
+    const forwardVector = rotateVectorByQuaternion(
+      axisVectorForIndex(state.desc.indexForwardAxis),
+      state.body.quaternion,
+    )
+    return linearVelocity[0] * forwardVector[0]
+      + linearVelocity[1] * forwardVector[1]
+      + linearVelocity[2] * forwardVector[2]
+  }
+
+  protected applyVehicleControls(state: VehicleState, control: PhysicsWorldVehicleControl): void {
+    const vehicle = state.vehicle
+    const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
+    const steerableWheelIndices = new Set(state.steerableWheelIndices)
+    for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
+      const applyControlToWheel = steerableWheelIndices.has(wheelIndex)
+      vehicle.setSteeringValue(applyControlToWheel ? control.steeringValue : 0, wheelIndex)
+      vehicle.applyEngineForce(applyControlToWheel ? control.engineForce : 0, wheelIndex)
+      vehicle.setBrake(control.brakeForce, wheelIndex)
+    }
+  }
+
+  protected shouldWakeVehicle(
+    _state: VehicleState,
+    input: PhysicsVehicleInputCommand | undefined,
+    speedForGovernor: number,
+  ): boolean {
+    return speedForGovernor > 0.2
+      || Math.abs(input?.throttle ?? 0) > 0.001
+      || Math.abs(input?.steering ?? 0) > 0.001
+  }
+
+  protected resolveCharacterGroundProbe(characterState: CharacterState): {
     hit: boolean
     distance: number
     normalY: number
@@ -679,7 +484,30 @@ export class AmmoPhysicsWorld {
     }
   }
 
-  private collectContacts(): PhysicsContactEvent[] {
+  protected applyCharacterStep(state: CharacterState, result: ReturnType<typeof stepPhysicsCharacterMotor>): void {
+    const ammo = this.ammo
+    if (!ammo) {
+      return
+    }
+    const linearVelocity = createAmmoVector3(ammo, result.linearVelocity)
+    const angularVelocity = createAmmoVector3(ammo, [0, 0, 0])
+    const yawQuaternion = createAmmoQuaternionFromYaw(ammo, result.yaw)
+    const transform = state.body.getWorldTransform?.()
+    state.body.setLinearVelocity?.(linearVelocity)
+    state.body.setAngularVelocity?.(angularVelocity)
+    if (transform && yawQuaternion) {
+      transform.setRotation?.(yawQuaternion)
+      state.body.setWorldTransform?.(transform)
+      const motionState = state.body.getMotionState?.()
+      motionState?.setWorldTransform?.(transform)
+    }
+    state.body.activate?.(true)
+    ammo.destroy(linearVelocity)
+    ammo.destroy(angularVelocity)
+    ammo.destroy(yawQuaternion)
+  }
+
+  protected collectContacts(): PhysicsContactEvent[] {
     const ammo = this.ammo
     const dispatcher = this.dispatcher
     if (!ammo || !dispatcher) {
@@ -737,122 +565,6 @@ export class AmmoPhysicsWorld {
     }
     return contacts
   }
-
-  private applyVehicleInputs(): void {
-    this.vehicles.forEach((state, vehicleId) => {
-      const input = this.vehicleInputs.get(vehicleId)
-      const steeringInput = clamp(input?.steering ?? 0, -1, 1)
-      const throttleInput = clamp(input?.throttle ?? 0, -1, 1)
-      const brakeInput = clamp(input?.brake ?? 0, 0, 1)
-      const handbrakeInput = clamp(input?.handbrake ?? 0, 0, 1)
-      const useEngineOnlySpeedGovernor = true
-      const steeringValue = steeringInput * VEHICLE_STEER_ANGLE
-      const dt = Math.max(1 / 240, Math.min(0.25, this.worldSettings.fixedTimeStepMs / 1000))
-      const linearVelocity = state.body.getLinearVelocity?.()
-      const forwardVector = rotateVectorByQuaternion(axisVectorForIndex(state.desc.indexForwardAxis), state.body.quaternion)
-      const forwardSpeed = linearVelocity
-        ? linearVelocity.x() * forwardVector[0]
-          + linearVelocity.y() * forwardVector[1]
-          + linearVelocity.z() * forwardVector[2]
-        : 0
-      const forwardSpeedAbs = Math.abs(forwardSpeed)
-      const speedSmoothAlpha = 1 - Math.exp(-6 * dt)
-      state.speedGovernorSmoothedForwardSpeedAbs += (forwardSpeedAbs - state.speedGovernorSmoothedForwardSpeedAbs) * speedSmoothAlpha
-      const speedForGovernor = Math.max(forwardSpeedAbs, state.speedGovernorSmoothedForwardSpeedAbs)
-      const throttleSign = Math.sign(throttleInput)
-      const brakeBlend = smoothstep(0.08, VEHICLE_BRAKE_RELEASE_SPEED, speedForGovernor)
-      let engineForce = throttleInput * VEHICLE_ENGINE_FORCE
-      let brakeAssist = state.speedGovernorBrakeAssist
-      const maxSpeedMps = resolveVehicleMaxSpeedMps(state.desc.maxSpeedKmh)
-      if (Math.abs(throttleInput) > 0.05 && Number.isFinite(maxSpeedMps)) {
-        const hardCap = Math.max(0.1, maxSpeedMps)
-        const softCap = Math.max(0.1, hardCap * VEHICLE_SPEED_GOVERNOR_SOFT_RATIO)
-        const acceleratingSameDirection = throttleSign !== 0 && Math.sign(forwardSpeed) === throttleSign
-        if (acceleratingSameDirection) {
-          const range = Math.max(0.1, hardCap - softCap)
-          const excess = Math.max(0, speedForGovernor - softCap)
-          const t = Math.min(1, excess / range)
-          const smooth = t * t * (3 - 2 * t)
-          const scaleTarget = Math.max(0, 1 - smooth)
-          const scaleAlpha = 1 - Math.exp(-14 * dt)
-          state.speedGovernorScale += (scaleTarget - state.speedGovernorScale) * scaleAlpha
-          engineForce *= state.speedGovernorScale
-
-          if (useEngineOnlySpeedGovernor) {
-            const relaxAlpha = 1 - Math.exp(-6 * dt)
-            state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
-            state.speedGovernorOverHardCap = false
-            brakeAssist = state.speedGovernorBrakeAssist
-          } else {
-            const hardCapEnter = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_ENTER_OFFSET
-            const hardCapExit = hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET
-            if (!state.speedGovernorOverHardCap) {
-              if (speedForGovernor > hardCapEnter) {
-                state.speedGovernorOverHardCap = true
-              }
-            } else if (speedForGovernor < hardCapExit) {
-              state.speedGovernorOverHardCap = false
-            }
-
-            const over = state.speedGovernorOverHardCap
-              ? Math.max(0, speedForGovernor - (hardCap + VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND))
-              : 0
-            const brakeRatio = Math.min(1, over / VEHICLE_SPEED_GOVERNOR_BRAKE_BAND)
-            const brakeTarget = brakeRatio * VEHICLE_BRAKE_FORCE * VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO
-            const brakeAlpha = 1 - Math.exp(-4 * dt)
-            state.speedGovernorBrakeAssist += (brakeTarget - state.speedGovernorBrakeAssist) * brakeAlpha
-            brakeAssist = state.speedGovernorBrakeAssist
-          }
-        } else {
-          const relaxAlpha = 1 - Math.exp(-6 * dt)
-          state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha
-          state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
-          state.speedGovernorOverHardCap = false
-          brakeAssist = state.speedGovernorBrakeAssist
-        }
-      } else {
-        const relaxAlpha = 1 - Math.exp(-6 * dt)
-        state.speedGovernorScale += (1 - state.speedGovernorScale) * relaxAlpha
-        state.speedGovernorBrakeAssist += (0 - state.speedGovernorBrakeAssist) * relaxAlpha
-        state.speedGovernorOverHardCap = false
-        brakeAssist = state.speedGovernorBrakeAssist
-      }
-
-      const brakeForce = Math.min(
-        VEHICLE_BRAKE_FORCE,
-        Math.max(0, Math.max(brakeInput, handbrakeInput) * VEHICLE_BRAKE_FORCE * brakeBlend + brakeAssist),
-      )
-
-      const vehicle = state.vehicle
-      const wheelCount = Math.max(0, vehicle.wheelInfos?.length ?? 0)
-      const steerableWheelIndices = new Set(state.steerableWheelIndices)
-      for (let wheelIndex = 0; wheelIndex < wheelCount; wheelIndex += 1) {
-        const applyControlToWheel = steerableWheelIndices.has(wheelIndex)
-        vehicle.setSteeringValue(applyControlToWheel ? steeringValue : 0, wheelIndex)
-        vehicle.applyEngineForce(applyControlToWheel ? engineForce : 0, wheelIndex)
-        vehicle.setBrake(brakeForce, wheelIndex)
-      }
-      if (state.body && (speedForGovernor > VEHICLE_WAKE_SPEED_THRESHOLD || Math.abs(throttleInput) > 0.001 || Math.abs(steeringInput) > 0.001)) {
-        state.body.activate?.(true)
-      }
-    })
-  }
-}
-
-function resolveSteerableWheelIndices(vehicle: PhysicsVehicleDesc): number[] {
-  const frontWheelIndices = vehicle.wheels.reduce<number[]>((indices, wheel, index) => {
-    if (wheel.isFrontWheel) {
-      indices.push(index)
-    }
-    return indices
-  }, [])
-  if (frontWheelIndices.length) {
-    return frontWheelIndices
-  }
-  if (vehicle.wheels.length >= 2) {
-    return [0, 1].filter((index) => index < vehicle.wheels.length)
-  }
-  return vehicle.wheels.map((_wheel, index) => index)
 }
 
 function createAmmoVector3(ammo: AmmoApi, vector: PhysicsVector3): any {
@@ -889,98 +601,4 @@ function readAmmoBodyTransform(body: any): PhysicsTransform {
     position: [origin.x(), origin.y(), origin.z()],
     rotation: normalizeQuaternion([rotation.x(), rotation.y(), rotation.z(), rotation.w()]),
   }
-}
-
-function distanceBetween(a: PhysicsVector3, b: PhysicsVector3): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2])
-}
-
-function normalizeVector(vector: PhysicsVector3): PhysicsVector3 {
-  const vectorLength = Math.hypot(vector[0], vector[1], vector[2])
-  if (!(vectorLength > 1e-6)) {
-    return [0, 1, 0]
-  }
-  return [vector[0] / vectorLength, vector[1] / vectorLength, vector[2] / vectorLength]
-}
-
-function normalizeQuaternion(quaternion: PhysicsQuaternion): PhysicsQuaternion {
-  const quaternionLength = Math.hypot(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
-  if (!(quaternionLength > 1e-6)) {
-    return [0, 0, 0, 1]
-  }
-  return [
-    quaternion[0] / quaternionLength,
-    quaternion[1] / quaternionLength,
-    quaternion[2] / quaternionLength,
-    quaternion[3] / quaternionLength,
-  ]
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
-}
-
-function resolveVehicleMaxSpeedMps(maxSpeedKmh: number | null | undefined): number {
-  if (typeof maxSpeedKmh !== 'number' || !Number.isFinite(maxSpeedKmh) || maxSpeedKmh <= 0) {
-    return 45 / 3.6
-  }
-  return maxSpeedKmh / 3.6
-}
-
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  if (edge0 === edge1) {
-    return x < edge0 ? 0 : 1
-  }
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
-  return t * t * (3 - 2 * t)
-}
-
-function resolveCharacterProbeOffsets(radius: number): Array<[number, number]> {
-  const ring = Math.max(0.06, radius + 0.02)
-  const diagonal = ring * Math.SQRT1_2
-  return [
-    [0, 0],
-    [ring, 0],
-    [-ring, 0],
-    [0, ring],
-    [0, -ring],
-    [diagonal, diagonal],
-    [diagonal, -diagonal],
-    [-diagonal, diagonal],
-    [-diagonal, -diagonal],
-  ]
-}
-
-function axisVectorForIndex(axisIndex: 0 | 1 | 2): PhysicsVector3 {
-  if (axisIndex === 1) {
-    return [0, 1, 0]
-  }
-  if (axisIndex === 2) {
-    return [0, 0, 1]
-  }
-  return [1, 0, 0]
-}
-
-function rotateVectorByQuaternion(
-  vector: PhysicsVector3,
-  quaternion: PhysicsQuaternion | { x?: number; y?: number; z?: number; w?: number } | null | undefined,
-): PhysicsVector3 {
-  const qx = Array.isArray(quaternion) ? quaternion[0] : quaternion?.x ?? 0
-  const qy = Array.isArray(quaternion) ? quaternion[1] : quaternion?.y ?? 0
-  const qz = Array.isArray(quaternion) ? quaternion[2] : quaternion?.z ?? 0
-  const qw = Array.isArray(quaternion) ? quaternion[3] : quaternion?.w ?? 1
-  const vx = vector[0]
-  const vy = vector[1]
-  const vz = vector[2]
-
-  const ix = qw * vx + qy * vz - qz * vy
-  const iy = qw * vy + qz * vx - qx * vz
-  const iz = qw * vz + qx * vy - qy * vx
-  const iw = -qx * vx - qy * vy - qz * vz
-
-  return [
-    ix * qw + iw * -qx + iy * -qz - iz * -qy,
-    iy * qw + iw * -qy + iz * -qx - ix * -qz,
-    iz * qw + iw * -qz + ix * -qy - iy * -qx,
-  ]
 }
