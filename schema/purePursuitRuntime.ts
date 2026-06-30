@@ -392,6 +392,7 @@ export function updateVehicleSpeedAndApplyParkingHoldSafe(params: {
   chassisBody: VehicleDriveVehicle['chassisBody']
   throttle: number
   brake: number
+  resolvedForwardSpeedMps?: number | null
   parkedSpeedEpsilon?: number
   parkingHoldSpeedEpsilon?: number
   engageParkingHold?: boolean
@@ -402,6 +403,23 @@ export function updateVehicleSpeedAndApplyParkingHoldSafe(params: {
   const engageParkingHold = params.engageParkingHold ?? true
 
   try {
+    if (typeof params.resolvedForwardSpeedMps === 'number' && Number.isFinite(params.resolvedForwardSpeedMps)) {
+      const forwardSpeed = Math.abs(params.resolvedForwardSpeedMps)
+      if (
+        engageParkingHold
+        && Math.abs(params.throttle) <= 0.05
+        && params.brake <= 0.05
+        && forwardSpeed <= parkingHoldSpeedEpsilon
+      ) {
+        const brakeForce = params.resolveBrakeForce(params.vehicleInstance)
+        holdVehicleBrakeSafe({ vehicleInstance: params.vehicleInstance, brakeForce })
+        stopPhysicsBodyMotion(params.chassisBody)
+        sleepPhysicsBody(params.chassisBody, { minSpeedLimit: 0.05, minTimeLimit: 0.05 })
+      }
+
+      return forwardSpeed >= parkedSpeedEpsilon ? forwardSpeed : 0
+    }
+
     parkedSpeedQuaternion.set(
       params.chassisBody.quaternion.x,
       params.chassisBody.quaternion.y,
@@ -455,6 +473,7 @@ export function applyPurePursuitVehicleControl(params: {
   deltaSeconds: number
   speedMps: number
   speedCapMps?: number
+  resolvedForwardSpeedMps?: number | null
   pursuitProps: PurePursuitComponentProps
   vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState
@@ -498,8 +517,11 @@ export function applyPurePursuitVehicleControl(params: {
   forwardWorld.normalize()
 
   const currentPosition = purePursuitChassisPosition
-  const currentVelocity = chassisBody.velocity
-  const forwardSpeed = currentVelocity.x * forwardWorld.x + currentVelocity.y * forwardWorld.y + currentVelocity.z * forwardWorld.z
+  const fallbackCurrentVelocity = chassisBody.velocity
+  const fallbackForwardSpeed = fallbackCurrentVelocity.x * forwardWorld.x + fallbackCurrentVelocity.y * forwardWorld.y + fallbackCurrentVelocity.z * forwardWorld.z
+  const forwardSpeed = typeof params.resolvedForwardSpeedMps === 'number' && Number.isFinite(params.resolvedForwardSpeedMps)
+    ? params.resolvedForwardSpeedMps
+    : fallbackForwardSpeed
   const longitudinalState = getLongitudinalState(state)
   const steeringState = getSteeringState(state)
   const governorState = getGovernorState(state)
@@ -688,6 +710,7 @@ export function applyPurePursuitVehicleControlSafe(params: {
   deltaSeconds: number
   speedMps: number
   speedCapMps?: number
+  resolvedForwardSpeedMps?: number | null
   pursuitProps: PurePursuitComponentProps
   vehicleProps: VehicleComponentProps
   state: PurePursuitVehicleControlState

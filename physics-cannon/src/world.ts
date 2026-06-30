@@ -54,7 +54,7 @@ const DEFAULT_WORLD_SETTINGS: PhysicsWorldSettings = {
   maxSubSteps: 4,
 }
 
-const VEHICLE_ENGINE_FORCE = 320
+const VEHICLE_ENGINE_FORCE = 80
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
 
 export class CannonPhysicsWorld {

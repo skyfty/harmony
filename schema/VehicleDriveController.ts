@@ -12,10 +12,6 @@ type SceneNode = any
 type SceneNodeComponentState<T> = { props: T } | null | undefined
 import type { VehicleComponentProps, RigidbodyComponentProps } from './components'
 import {
-  PURE_PURSUIT_COMPONENT_TYPE,
-  clampPurePursuitComponentProps,
-  AUTO_TOUR_COMPONENT_TYPE,
-  clampAutoTourComponentProps,
   clampVehicleComponentProps,
 } from './components'
 import type { BehaviorEventResolution } from './behaviors/runtime'
@@ -179,6 +175,7 @@ export type VehicleDriveControllerDeps = {
   // Follow camera fine tuning (optional, typically platform-specific).
   followCameraVelocityLerpSpeed?: number | (() => number)
   followCameraTuning?: Partial<CameraFollowTuning> | (() => Partial<CameraFollowTuning>)
+  resolveCurrentSpeedMps?: (nodeId: string, chassisBody: VehicleDriveChassisBody | null) => number | null
 
   resolveSurfaceSample?: (x: number, z: number, preferredHeight?: number | null, edgeMargin?: number | null) => VehicleSurfaceSample | null
   onVehicleObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
@@ -607,10 +604,17 @@ export class VehicleDriveController {
     if (!state.active) {
       return 0
     }
+    const nodeId = this.deps.normalizeNodeId(state.nodeId)
     if (!state.vehicle) {
       return Math.abs(this.transformDriveState.speed)
     }
     const velocity = state.vehicle.chassisBody?.velocity ?? null
+    if (nodeId && this.deps.resolveCurrentSpeedMps) {
+      const resolved = this.deps.resolveCurrentSpeedMps(nodeId, state.vehicle.chassisBody ?? null)
+      if (typeof resolved === 'number' && Number.isFinite(resolved)) {
+        return Math.max(0, resolved)
+      }
+    }
     if (!velocity) {
       return 0
     }

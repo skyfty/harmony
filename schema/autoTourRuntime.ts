@@ -5,6 +5,7 @@ import { applyPurePursuitVehicleControlSafe, holdVehicleBrakeSafe, resetPurePurs
 import { syncBodyFromObject } from './physicsBodySync'
 import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 import type { VehicleDriveVehicle } from './VehicleDriveController'
+import type { ControlledNodeMotionTelemetry } from './controlledNodeMotionRuntime'
 import type { PolylineMetricData } from './polylineProgress'
 import { buildPolylineMetricData, buildPolylineVertexArcLengths, projectPointToPolyline } from './polylineProgress'
 import {
@@ -43,6 +44,8 @@ export type AutoTourRuntimeDeps = {
   nodeObjectMap: Map<string, THREE.Object3D>
   /** Maps nodeId -> vehicle instance. */
   vehicleInstances: Map<string, AutoTourVehicleInstanceLike>
+  /** Optional resolver for actual runtime telemetry of the controlled node. */
+  resolveVehicleMotionTelemetry?: (nodeId: string) => ControlledNodeMotionTelemetry | null
   /** When true, AutoTour is paused (manual drive has priority). */
   isManualDriveActive: () => boolean
   /** Optional callback when AutoTour updates a runtime object's transform (useful for instanced meshes). */
@@ -424,6 +427,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   }
 
   function prepareAutoTourRouteMotion(options: {
+    nodeId: string
     state: AutoTourPlaybackState
     vehicleInstance: AutoTourVehicleInstanceLike | null
     points: THREE.Vector3[]
@@ -440,6 +444,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     isVehicleRoute: boolean
   }): { endIndex: number; distance: number; continueRoute: boolean } {
     const {
+      nodeId,
       state,
       vehicleInstance,
       points,
@@ -480,6 +485,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           deltaSeconds,
           speedMps: routeSpeed,
           speedCapMps: speedCap,
+          resolvedForwardSpeedMps: deps.resolveVehicleMotionTelemetry?.(nodeId)?.forwardSpeedMps ?? null,
           pursuitProps: resolvedPursuitProps,
           vehicleProps: resolvedVehicleProps,
           state: resolvedControlState,
@@ -600,6 +606,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     } = options
     const controlState = ensureVehicleControlStateForNode(nodeId, autoTourId)
     const route = prepareAutoTourRouteMotion({
+      nodeId,
       state,
       vehicleInstance,
       points,
@@ -626,6 +633,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       deltaSeconds,
       speedMps: routeSpeed,
       speedCapMps: speedCap,
+      resolvedForwardSpeedMps: deps.resolveVehicleMotionTelemetry?.(nodeId)?.forwardSpeedMps ?? null,
       pursuitProps,
       vehicleProps,
       state: controlState,
@@ -678,6 +686,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       vehicleInstance,
     } = options
     const route = prepareAutoTourRouteMotion({
+      nodeId: node.id,
       state,
       vehicleInstance,
       points,

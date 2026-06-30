@@ -873,6 +873,7 @@ import {
   createBridgeVehicleProxy,
   createPhysicsAwareAutoTourVehicleInstances,
   CharacterAutoTourRuntimeManager,
+  createControlledNodeMotionRuntime,
   resolveVehicleOrObjectWorldPosition,
   stopTourAndUnfollow,
   syncAutoTourActiveNodesFromRuntime,
@@ -2530,6 +2531,7 @@ const networkSyncNodeEntries = new Map<string, NetworkSyncNodeRuntimeEntry>();
 const physicsAuthorityNodeEntries = new Map<string, PhysicsAuthorityNodeRuntimeEntry>();
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager();
 const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager();
+const controlledNodeMotionRuntime = createControlledNodeMotionRuntime();
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
 const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
 const remotePhysicsAuthorityEntries = new Map<string, RemotePhysicsAuthorityEntry>();
@@ -3214,6 +3216,7 @@ let vehicleSpeedDisplayLastCommitAtMs = 0;
 let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null;
 const vehicleSpeedDisplayScratchPosition = new THREE.Vector3();
 const vehicleSpeedDisplayScratchDelta = new THREE.Vector3();
+const controlledNodeMotionForwardScratch = new THREE.Vector3();
 const autoTourTelemetryLastWorldPosition = new THREE.Vector3();
 let autoTourTelemetryHasWorldPositionSample = false;
 let autoTourTelemetryLastSampleAtMs = 0;
@@ -3288,6 +3291,56 @@ function getVehicleSpeedDisplayNowMs(): number {
 
 function getCharacterAnimationNowMs(): number {
   return getVehicleSpeedDisplayNowMs();
+}
+
+function sampleControlledNodeMotionFromObject(
+  nodeId: string,
+  object: THREE.Object3D,
+  deltaSeconds: number,
+  nowMs: number,
+  forwardAxis?: THREE.Vector3 | null,
+  fallbackLinearVelocity?: { x: number; y: number; z: number } | null,
+  fallbackAngularVelocity?: { x: number; y: number; z: number } | null,
+): void {
+  object.updateMatrixWorld(true);
+  object.getWorldPosition(vehicleSpeedDisplayScratchPosition);
+  object.getWorldQuaternion(vehicleCompassQuaternion);
+  controlledNodeMotionRuntime.recordSample(nodeId, {
+    position: vehicleSpeedDisplayScratchPosition,
+    quaternion: vehicleCompassQuaternion,
+    deltaSeconds,
+    nowMs,
+    forwardAxis,
+    fallbackLinearVelocity,
+    fallbackAngularVelocity,
+  });
+}
+
+function resolveControlledCharacterMotionForwardAxis(target = controlledNodeMotionForwardScratch): THREE.Vector3 {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const props = clampCharacterControllerComponentProps(
+    resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
+  );
+  return writeCharacterLocalForward(target, props.forwardAxis) as THREE.Vector3;
+}
+
+function sampleControlledCharacterMotionFromObject(
+  nodeId: string,
+  object: THREE.Object3D,
+  deltaSeconds: number,
+  nowMs: number,
+  fallbackLinearVelocity?: { x: number; y: number; z: number } | null,
+  fallbackAngularVelocity?: { x: number; y: number; z: number } | null,
+): void {
+  sampleControlledNodeMotionFromObject(
+    nodeId,
+    object,
+    deltaSeconds,
+    nowMs,
+    resolveControlledCharacterMotionForwardAxis(),
+    fallbackLinearVelocity,
+    fallbackAngularVelocity,
+  );
 }
 
 function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
@@ -4212,6 +4265,11 @@ const vehicleDriveController = new VehicleDriveController(
       if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId) {
         return false;
       }
+      const telemetry = controlledNodeMotionRuntime.get(nodeId);
+      if (telemetry) {
+        target.copy(telemetry.worldLinearVelocity);
+        return true;
+      }
       const v = chassisBody?.velocity as unknown as { x?: number; y?: number; z?: number } | null;
       if (!v) {
         return false;
@@ -4219,6 +4277,7 @@ const vehicleDriveController = new VehicleDriveController(
       target.set(Number(v.x) || 0, Number(v.y) || 0, Number(v.z) || 0);
       return true;
     },
+    resolveCurrentSpeedMps: (nodeId) => controlledNodeMotionRuntime.resolveLinearSpeedMps(nodeId, null),
     onVehicleObjectTransformUpdated: (nodeId, object) => {
       const node = resolveNodeById(nodeId);
       if (node) {
@@ -8344,6 +8403,7 @@ const autoTourRuntime = createAutoTourRuntime({
   resolveNodeById,
   nodeObjectMap,
   vehicleInstances: autoTourVehicleInstances,
+  resolveVehicleMotionTelemetry: (nodeId) => controlledNodeMotionRuntime.get(nodeId),
   isManualDriveActive: () => vehicleDriveActive.value,
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);
@@ -9610,12 +9670,11 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 function resolveSceneryCharacterInputYaw(): number {
   const controlledObject = findDefaultControlledCharacterObject();
   if (controlledObject) {
-    const controlledNodeId = resolveDefaultControlledCharacterNodeId();
     const props = clampCharacterControllerComponentProps(
-      resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
+      resolveCharacterControllerComponent(resolveNodeById(resolveDefaultControlledCharacterNodeId() ?? ''))?.props ?? null,
     );
     controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
-    writeCharacterLocalForward(characterControlYawForwardScratch, props.forwardAxis);
+    resolveControlledCharacterMotionForwardAxis(characterControlYawForwardScratch);
     characterControlYawForwardScratch.applyQuaternion(protagonistPoseQuaternion);
     characterControlYawForwardScratch.y = 0;
     if (characterControlYawForwardScratch.lengthSq() > 1e-8) {
@@ -9644,12 +9703,8 @@ function resolveSceneryCharacterInputYaw(): number {
     }
   }
   if (controlledObject) {
-    const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-    const props = clampCharacterControllerComponentProps(
-      resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
-    );
     controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
-    writeCharacterLocalForward(tempForwardVec, props.forwardAxis);
+    resolveControlledCharacterMotionForwardAxis(tempForwardVec);
     tempForwardVec.applyQuaternion(protagonistPoseQuaternion);
     tempForwardVec.y = 0;
     if (tempForwardVec.lengthSq() > 1e-8) {
@@ -12745,9 +12800,12 @@ function attachRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry, frameI
 function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuserPeerEntry, frameIndex: number): void {
   const root = ensureRemoteMultiuserPeerRoot();
   if (entry.root && entry.rootSignature === entry.signature) {
+    const subjectNodeId = typeof entry.targetState.subjectNodeId === 'string'
+      ? entry.targetState.subjectNodeId.trim()
+      : '';
     const shouldRetryWithRealObject = isRemoteMultiuserPlaceholderObject(entry.root)
-      && Boolean(entry.targetState.subjectNodeId)
-      && Boolean(nodeObjectMap.get(entry.targetState.subjectNodeId) ?? null);
+      && Boolean(subjectNodeId)
+      && Boolean(nodeObjectMap.get(subjectNodeId) ?? null);
     if (shouldRetryWithRealObject) {
       disposeRemoteMultiuserPeerRender(entry);
     } else {
@@ -15625,7 +15683,6 @@ function updateVehicleSpeedFromVehicle(): void {
   const telemetryNodeId = manualNodeId ?? autoTourNodeId;
   const manualVehicle = vehicleDriveVehicle;
   const manualChassisBody = manualVehicle?.chassisBody ?? null;
-  const manualVelocity = manualChassisBody?.velocity ?? null;
   const telemetryInstance = telemetryNodeId ? vehicleInstances.get(telemetryNodeId) ?? null : null;
   if (telemetryNodeId !== autoTourTelemetryLastNodeId) {
     autoTourTelemetryLastNodeId = telemetryNodeId;
@@ -15634,15 +15691,51 @@ function updateVehicleSpeedFromVehicle(): void {
   }
   const telemetryVehicle = telemetryInstance?.vehicle ?? manualVehicle;
   const chassisBody = telemetryVehicle?.chassisBody ?? manualChassisBody;
-  const velocity = chassisBody?.velocity ?? manualVelocity;
   const nowMs = getVehicleSpeedDisplayNowMs();
-  if (chassisBody && velocity) {
+  let telemetry = telemetryNodeId ? controlledNodeMotionRuntime.get(telemetryNodeId) : null;
+  const driveObject = telemetryNodeId ? nodeObjectMap.get(telemetryNodeId) ?? null : null;
+  if (telemetryNodeId && driveObject) {
+    const motionAxisForward = telemetryNodeId ? (vehicleInstances.get(telemetryNodeId)?.axisForward ?? null) : null;
+    sampleControlledNodeMotionFromObject(
+      telemetryNodeId,
+      driveObject,
+      0,
+      nowMs,
+      motionAxisForward,
+      chassisBody?.velocity ?? null,
+      chassisBody?.angularVelocity ?? null,
+    );
+    telemetry = controlledNodeMotionRuntime.get(telemetryNodeId);
+  } else if (telemetryNodeId && chassisBody) {
+    const motionAxisForward = telemetryNodeId ? (vehicleInstances.get(telemetryNodeId)?.axisForward ?? null) : null;
+    sampleControlledNodeMotionFromObject(
+      telemetryNodeId,
+      {
+        updateMatrixWorld: () => undefined,
+        getWorldPosition(target: THREE.Vector3): THREE.Vector3 {
+          return target.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z);
+        },
+        getWorldQuaternion(target: THREE.Quaternion): THREE.Quaternion {
+          return target.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w);
+        },
+      } as unknown as THREE.Object3D,
+      0,
+      nowMs,
+      motionAxisForward,
+      chassisBody.velocity ?? null,
+      chassisBody.angularVelocity ?? null,
+    );
+    telemetry = controlledNodeMotionRuntime.get(telemetryNodeId);
+  }
+
+  if (chassisBody && telemetry) {
     if (telemetryInstance) {
       updateVehicleSpeedAndApplyParkingHoldSafe({
         vehicleInstance: telemetryInstance,
         chassisBody,
         throttle: manualNodeId ? vehicleDriveInput.throttle : 0,
         brake: manualNodeId ? vehicleDriveInput.brake : 0,
+        resolvedForwardSpeedMps: telemetry.forwardSpeedMps,
         parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
         parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
         engageParkingHold: false,
@@ -15650,32 +15743,11 @@ function updateVehicleSpeedFromVehicle(): void {
       });
     }
 
-    const sampledSpeed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z);
-    commitVehicleSpeedDisplay(sampledSpeed, nowMs);
-
-    vehicleCompassQuaternion.set(
-      chassisBody.quaternion.x,
-      chassisBody.quaternion.y,
-      chassisBody.quaternion.z,
-      chassisBody.quaternion.w,
-    );
-    vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
-    vehicleCompassForward.y = 0;
-  const horizontalLengthSq =
-      vehicleCompassForward.x * vehicleCompassForward.x
-      + vehicleCompassForward.z * vehicleCompassForward.z;
-    if (horizontalLengthSq > 1e-8) {
-      vehicleCompassForward.multiplyScalar(1 / Math.sqrt(horizontalLengthSq));
-      const worldHeadingDegrees = THREE.MathUtils.radToDeg(
-        Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
-      );
-      const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
-      commitVehicleHeadingDegrees(worldHeadingDegrees - northDirectionAngleDegrees);
-    }
+    commitVehicleSpeedDisplay(telemetry.linearSpeedMps, nowMs);
+    commitVehicleHeadingDegrees(telemetry.headingYawDeg - resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection));
     return;
   }
 
-  const driveObject = telemetryNodeId ? nodeObjectMap.get(telemetryNodeId) ?? null : null;
   if (!driveObject) {
     const transformSpeed = vehicleDriveController.getCurrentSpeed();
     commitVehicleSpeedDisplay(transformSpeed, nowMs);
@@ -15700,19 +15772,32 @@ function updateVehicleSpeedFromVehicle(): void {
   autoTourTelemetryLastSampleAtMs = nowMs;
 
   driveObject.getWorldQuaternion(vehicleCompassQuaternion);
-  vehicleCompassForward.set(1, 0, 0).applyQuaternion(vehicleCompassQuaternion);
-  vehicleCompassForward.y = 0;
-  const objectHorizontalLengthSq =
-    vehicleCompassForward.x * vehicleCompassForward.x
-    + vehicleCompassForward.z * vehicleCompassForward.z;
-  if (objectHorizontalLengthSq > 1e-8) {
-    vehicleCompassForward.multiplyScalar(1 / Math.sqrt(objectHorizontalLengthSq));
-    const worldHeadingDegrees = THREE.MathUtils.radToDeg(
-      Math.atan2(vehicleCompassForward.z, vehicleCompassForward.x),
-    );
-    const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
-    commitVehicleHeadingDegrees(worldHeadingDegrees - northDirectionAngleDegrees);
+  const sampledTelemetry = telemetryNodeId ? controlledNodeMotionRuntime.get(telemetryNodeId) : null;
+  if (sampledTelemetry) {
+    commitVehicleHeadingDegrees(sampledTelemetry.headingYawDeg - resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection));
   }
+}
+
+function updateControlledCharacterMotionTelemetry(nowMs: number): void {
+  if (!characterControlUi.value.visible) {
+    return;
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return;
+  }
+  const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId);
+  const motionNodeId = bindingNodeId ?? controlledNodeId;
+  const motionObject = nodeObjectMap.get(motionNodeId) ?? null;
+  if (!motionObject) {
+    return;
+  }
+  sampleControlledCharacterMotionFromObject(
+    motionNodeId,
+    motionObject,
+    0,
+    nowMs,
+  );
 }
 
 function updateSceneCompassHeading(): void {
@@ -15720,7 +15805,11 @@ function updateSceneCompassHeading(): void {
     return;
   }
   if (characterControlUi.value.visible) {
-    const headingDegrees = THREE.MathUtils.radToDeg(resolveSceneryCharacterInputYaw());
+    const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+    const telemetry = controlledNodeId ? controlledNodeMotionRuntime.get(controlledNodeId) : null;
+    const headingDegrees = telemetry
+      ? telemetry.headingYawDeg
+      : THREE.MathUtils.radToDeg(resolveSceneryCharacterInputYaw());
     const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
     commitVehicleHeadingDegrees(headingDegrees - northDirectionAngleDegrees);
     return;
@@ -19231,6 +19320,7 @@ function startRenderLoop(
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
           updateVehicleSpeedFromVehicle();
+          updateControlledCharacterMotionTelemetry(getVehicleSpeedDisplayNowMs());
           updateSceneCompassHeading();
           updateVehicleWheelVisuals(deltaSeconds);
           syncRemoteMultiuserPeerVisibility(camera);

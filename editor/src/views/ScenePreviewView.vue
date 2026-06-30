@@ -273,10 +273,11 @@ import {
 } from '@schema/motion'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/motion'
 import {
-  holdVehicleBrakeSafe,
-  updateVehicleSpeedAndApplyParkingHoldSafe,
-  VEHICLE_PARKED_SPEED_EPSILON,
-  VEHICLE_PARKING_HOLD_SPEED_EPSILON,
+	holdVehicleBrakeSafe,
+	createControlledNodeMotionRuntime,
+	updateVehicleSpeedAndApplyParkingHoldSafe,
+	VEHICLE_PARKED_SPEED_EPSILON,
+	VEHICLE_PARKING_HOLD_SPEED_EPSILON,
 } from '@schema/motion'
 import {
   SIGNBOARD_CLOSE_FADE_DISTANCE,
@@ -3030,6 +3031,9 @@ const vehicleSpeedDisplayMps = ref(0)
 const vehicleSpeedKmh = computed(() => Math.round(vehicleSpeedDisplayMps.value * 3.6))
 let vehicleSpeedDisplayLastCommitAtMs = 0
 let vehicleSpeedDisplayLowSpeedSinceAtMs: number | null = null
+const vehicleSpeedDisplayScratchPosition = new THREE.Vector3()
+const vehicleMotionQuaternionScratch = new THREE.Quaternion()
+const controlledNodeMotionForwardScratch = new THREE.Vector3()
 const characterAuthorityInput = reactive({
 	moveX: 0,
 	moveZ: 0,
@@ -3059,6 +3063,53 @@ function getVehicleSpeedDisplayNowMs(): number {
 
 function getCharacterAnimationNowMs(): number {
 	return getVehicleSpeedDisplayNowMs()
+}
+
+function sampleControlledNodeMotionFromObject(
+	nodeId: string,
+	object: THREE.Object3D,
+	deltaSeconds: number,
+	nowMs: number,
+	forwardAxis?: THREE.Vector3 | null,
+	fallbackLinearVelocity?: { x: number; y: number; z: number } | null,
+	fallbackAngularVelocity?: { x: number; y: number; z: number } | null,
+): void {
+	object.updateMatrixWorld(true)
+	object.getWorldPosition(vehicleSpeedDisplayScratchPosition)
+	object.getWorldQuaternion(vehicleMotionQuaternionScratch)
+	controlledNodeMotionRuntime.recordSample(nodeId, {
+		position: vehicleSpeedDisplayScratchPosition,
+		quaternion: vehicleMotionQuaternionScratch,
+		deltaSeconds,
+		nowMs,
+		forwardAxis,
+		fallbackLinearVelocity,
+		fallbackAngularVelocity,
+	})
+}
+
+function resolveControlledCharacterMotionForwardAxis(target = controlledNodeMotionForwardScratch): THREE.Vector3 {
+	const props = resolveDefaultControlledCharacterComponentProps()
+	return writeCharacterLocalForward(target, props?.forwardAxis ?? '+x') as THREE.Vector3
+}
+
+function sampleControlledCharacterMotionFromObject(
+	nodeId: string,
+	object: THREE.Object3D,
+	deltaSeconds: number,
+	nowMs: number,
+	fallbackLinearVelocity?: { x: number; y: number; z: number } | null,
+	fallbackAngularVelocity?: { x: number; y: number; z: number } | null,
+): void {
+	sampleControlledNodeMotionFromObject(
+		nodeId,
+		object,
+		deltaSeconds,
+		nowMs,
+		resolveControlledCharacterMotionForwardAxis(),
+		fallbackLinearVelocity,
+		fallbackAngularVelocity,
+	)
 }
 
 function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
@@ -3153,9 +3204,9 @@ const vehicleDriveController = new VehicleDriveController(
 		resolveNodeById,
 	resolveRigidbodyComponent,
 	resolveVehicleComponent,
-		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-		ensureVehicleBindingForNode,
-		normalizeNodeId,
+	isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+	ensureVehicleBindingForNode,
+	normalizeNodeId,
 		setCameraViewState: (mode, targetId) => {
 			const nextMode: CameraViewMode = mode === 'watching' ? 'watching' : 'level'
 			setCameraViewState(nextMode, targetId ?? null)
@@ -3163,6 +3214,20 @@ const vehicleDriveController = new VehicleDriveController(
 		setCameraCaging,
 		updateOrbitLookTween: updateOrbitCameraLookTween,
 		onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
+		resolveChassisWorldVelocity: (nodeId, chassisBody, target) => {
+			const telemetry = controlledNodeMotionRuntime.get(nodeId)
+			if (telemetry) {
+				target.copy(telemetry.worldLinearVelocity)
+				return true
+			}
+			const v = chassisBody?.velocity ?? null
+			if (!v) {
+				return false
+			}
+			target.set(v.x, v.y, v.z)
+			return true
+		},
+		resolveCurrentSpeedMps: (nodeId) => controlledNodeMotionRuntime.resolveLinearSpeedMps(nodeId, null),
 		onVehicleObjectTransformUpdated: (_nodeId, object) => {
 			syncInstancedTransform(object)
 		},
@@ -3633,12 +3698,14 @@ const autoTourVehicleInstances = createPhysicsAwareAutoTourVehicleInstances(
 	vehicleInstances,
 	() => physicsEnvironmentEnabled.value,
 )
+const controlledNodeMotionRuntime = createControlledNodeMotionRuntime()
 
 const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),
 	resolveNodeById,
 	nodeObjectMap,
 	vehicleInstances: autoTourVehicleInstances,
+	resolveVehicleMotionTelemetry: (nodeId) => controlledNodeMotionRuntime.get(nodeId),
 	isManualDriveActive: () => vehicleDriveState.active,
 	requiresExplicitStart: true,
 	onDockRequestedPause: (nodeId, payload) => {
@@ -6907,8 +6974,7 @@ function findDefaultControlledCharacterObject(): THREE.Object3D | null {
 }
 
 function resolveControlledCharacterForwardVector(target: THREE.Vector3): THREE.Vector3 {
-	const props = resolveDefaultControlledCharacterComponentProps()
-	return writeCharacterLocalForward(target, props?.forwardAxis ?? '+x') as THREE.Vector3
+	return resolveControlledCharacterMotionForwardAxis(target)
 }
 
 function resolveCharacterFollowPlacementDimensions(_protagonistObject: THREE.Object3D | null): { width: number; height: number; length: number } {
@@ -8190,22 +8256,37 @@ function applyVehicleDriveForces(deltaSeconds: number): void {
 function updateVehicleSpeedFromVehicle(): void {
 	const vehicle = vehicleDriveState.vehicle
 	const chassisBody = vehicle?.chassisBody ?? null
-	const velocity = chassisBody?.velocity ?? null
 	const vehicleNodeId = normalizeNodeId(vehicleDriveState.nodeId)
 	const vehicleInstance = vehicleNodeId ? vehicleInstances.get(vehicleNodeId) ?? null : null
 	const nowMs = getVehicleSpeedDisplayNowMs()
-	if (!chassisBody || !velocity) {
+	const driveObject = vehicleNodeId ? nodeObjectMap.get(vehicleNodeId) ?? null : null
+	let telemetry = vehicleNodeId ? controlledNodeMotionRuntime.get(vehicleNodeId) : null
+	if (vehicleNodeId && driveObject) {
+		sampleControlledNodeMotionFromObject(
+			vehicleNodeId,
+			driveObject,
+			0,
+			nowMs,
+			vehicleInstance?.axisForward ?? null,
+			chassisBody?.velocity ?? null,
+			chassisBody?.angularVelocity ?? null,
+		)
+		telemetry = controlledNodeMotionRuntime.get(vehicleNodeId)
+	}
+
+	if (!telemetry) {
 		vehicleSpeedDisplayMps.value = vehicleDriveController.getCurrentSpeed()
 		vehicleSpeedDisplayLastCommitAtMs = nowMs
 		vehicleSpeedDisplayLowSpeedSinceAtMs = null
 		return
 	}
-	if (vehicleInstance) {
+	if (vehicleInstance && chassisBody) {
 		updateVehicleSpeedAndApplyParkingHoldSafe({
 			vehicleInstance,
 			chassisBody,
 			throttle: vehicleDriveInput.throttle,
 			brake: vehicleDriveInput.brake,
+			resolvedForwardSpeedMps: telemetry.forwardSpeedMps,
 			parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
 			parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
 			engageParkingHold: false,
@@ -8213,13 +8294,26 @@ function updateVehicleSpeedFromVehicle(): void {
 		})
 	}
 
-	const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
-	if (!vehicleInstance) {
-		vehicleSpeedDisplayMps.value = Number.isFinite(speed) && speed >= VEHICLE_PARKED_SPEED_EPSILON ? speed : 0
-		vehicleSpeedDisplayLastCommitAtMs = nowMs
-		vehicleSpeedDisplayLowSpeedSinceAtMs = null
+	commitVehicleSpeedDisplay(telemetry.linearSpeedMps, nowMs)
+}
+
+function updateControlledCharacterMotionTelemetry(nowMs: number): void {
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (!controlledNodeId) {
+		return
 	}
-	commitVehicleSpeedDisplay(speed, nowMs)
+	const controlledObject = findDefaultControlledCharacterObject()
+	if (!controlledObject) {
+		return
+	}
+	const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId)
+	const motionNodeId = bindingNodeId ?? controlledNodeId
+	sampleControlledCharacterMotionFromObject(
+		motionNodeId,
+		controlledObject,
+		0,
+		nowMs,
+	)
 }
 
 function resetActiveVehiclePose(): boolean {
@@ -9515,6 +9609,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 	syncScenePreviewPhysicsBridgeBodyTransforms()
 	stepScenePreviewPhysicsBridge(delta)
 	updateVehicleSpeedFromVehicle()
+	updateControlledCharacterMotionTelemetry(getVehicleSpeedDisplayNowMs())
 	updateVehicleWheelVisuals(delta)
 	return transformDriveUpdated
 }
@@ -11639,8 +11734,9 @@ function normalizeScenePreviewCharacterInputYaw(value: number): number {
 function resolveScenePreviewCharacterInputYawSeed(): number {
 	const controlledObject = findDefaultControlledCharacterObject()
 	if (controlledObject) {
+		resolveControlledCharacterMotionForwardAxis(tempDirection)
 		controlledObject.getWorldQuaternion(tempQuaternion)
-		resolveControlledCharacterForwardVector(tempDirection).applyQuaternion(tempQuaternion)
+		tempDirection.applyQuaternion(tempQuaternion)
 		tempDirection.y = 0
 		if (tempDirection.lengthSq() > 1e-8) {
 			tempDirection.normalize()
