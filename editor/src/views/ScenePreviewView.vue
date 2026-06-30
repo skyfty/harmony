@@ -254,16 +254,18 @@ import {
 } from '../utils/instancedLodCulling'
 import type { InstancedLodBoundsSnapshot } from '@schema/core'
 import { VehicleDriveController, resolveCharacterControlMovementMagnitude, CharacterAutoTourRuntimeManager } from '@schema/motion'
-import type { VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
+import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
 import { AutoTourCameraAvoidanceController, type AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
 import {
   FollowCameraController,
-  computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
+  createFollowCameraMotionState,
   getApproxDimensions,
   resetCameraFollowState,
+  resetFollowCameraMotionState,
+  updateMotionAwareFollowCamera,
 } from '@schema/motion'
 import {
   createPhysicsAwareAutoTourVehicleInstances,
@@ -3186,15 +3188,11 @@ const vehicleDriveCameraFollowState = {
 }
 const characterFollowCameraState = createCameraFollowState()
 const characterFollowCameraController = new FollowCameraController()
+const characterFollowCameraMotionState: FollowCameraMotionState = createFollowCameraMotionState()
 const characterFollowCameraOffsetScratch = new THREE.Vector3()
-const characterFollowVelocity = new THREE.Vector3()
-const characterFollowVelocityScratch = new THREE.Vector3()
-const characterFollowLastAnchor = new THREE.Vector3()
-const characterFollowLastRootPosition = new THREE.Vector3()
 let characterInputYaw = Math.PI
 let characterInputYawInitialized = false
 let characterInputYawNodeId: string | null = null
-let characterFollowHasSample = false
 
 const vehicleDriveController = new VehicleDriveController(
 	{
@@ -6942,14 +6940,10 @@ function resetProtagonistPoseState() {
 }
 
 function resetCharacterFollowCameraState(): void {
-	resetCameraFollowState(characterFollowCameraState)
-	characterFollowVelocity.set(0, 0, 0)
-	characterFollowVelocityScratch.set(0, 0, 0)
-	characterFollowLastAnchor.set(0, 0, 0)
-	characterFollowLastRootPosition.set(0, 0, 0)
-	characterInputYawInitialized = false
-	characterInputYawNodeId = null
-	characterFollowHasSample = false
+  resetCameraFollowState(characterFollowCameraState)
+  resetFollowCameraMotionState(characterFollowCameraMotionState)
+  characterInputYawInitialized = false
+  characterInputYawNodeId = null
 }
 
 function resolveDefaultControlledCharacterNodeId(): string | null {
@@ -7003,6 +6997,11 @@ function resolveCharacterRootWorldPosition(
 	protagonistObject: THREE.Object3D,
 	target: THREE.Vector3,
 ): THREE.Vector3 {
+	const motionTelemetry = controlledNodeMotionRuntime.get(nodeId)
+	if (motionTelemetry?.hasSample) {
+		target.copy(motionTelemetry.worldPosition)
+		return target
+	}
 	const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
 	if (physicsFrameState) {
 		target.copy(physicsFrameState.position)
@@ -7125,13 +7124,8 @@ function updateCharacterFollowCamera(
 		return false
 	}
 	protagonistObject.updateMatrixWorld(true)
-	const rootWorld = resolveCharacterRootWorldPosition(controlledNodeId, protagonistObject, characterFollowRootPosition)
-	if (characterFollowHasSample && !immediate) {
-		const rootDeltaSq = characterFollowLastRootPosition.distanceToSquared(rootWorld)
-		if (rootDeltaSq <= 1e-6) {
-			return false
-		}
-	}
+	const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId)
+	const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? controlledNodeId)
 	const desiredForwardWorld = tempDirection
 	protagonistObject.getWorldQuaternion(tempQuaternion)
 	resolveControlledCharacterForwardVector(characterFollowForwardScratch).applyQuaternion(tempQuaternion)
@@ -7158,32 +7152,21 @@ function updateCharacterFollowCamera(
 		desiredForwardWorld,
 		characterFollowAnchorPosition,
 	)
-	if (!characterFollowHasSample || delta <= 0 || immediate) {
-		characterFollowLastAnchor.copy(anchorWorld)
-		characterFollowLastRootPosition.copy(rootWorld)
-		characterFollowVelocity.set(0, 0, 0)
-		characterFollowHasSample = true
-	} else {
-		characterFollowVelocityScratch
-			.copy(anchorWorld)
-			.sub(characterFollowLastAnchor)
-			.multiplyScalar(1 / Math.max(delta, 1e-5))
-		characterFollowLastAnchor.copy(anchorWorld)
-		const alpha = computeFollowLerpAlpha(delta, 8)
-		characterFollowVelocity.lerp(characterFollowVelocityScratch, alpha)
-		characterFollowLastRootPosition.copy(rootWorld)
-	}
 	const characterFollowPlacement = computeFollowPlacement(resolveCharacterFollowPlacementDimensions(protagonistObject))
 	characterFollowPlacement.distance = Math.max(characterFollowPlacement.distance, CHARACTER_FOLLOW_CAMERA_DISTANCE_MIN)
 	characterFollowPlacement.heightOffset = Math.max(characterFollowPlacement.heightOffset, CHARACTER_FOLLOW_CAMERA_HEIGHT_MIN)
 	characterFollowPlacement.targetForward = Math.max(characterFollowPlacement.targetForward, CHARACTER_FOLLOW_CAMERA_TARGET_FORWARD_MIN)
 	const characterFollowCameraOffset = resolveCharacterFollowCameraOffset(characterFollowCameraOffsetScratch)
-	const updated = characterFollowCameraController.update({
+	const followControlsDirty = followCameraControlDirty
+	followCameraControlDirty = false
+	const updated = updateMotionAwareFollowCamera({
+		controller: characterFollowCameraController,
+		motion: characterFollowCameraMotionState,
 		follow: characterFollowCameraState,
 		placement: characterFollowPlacement,
 		anchorWorld,
 		desiredForwardWorld,
-		velocityWorld: characterFollowVelocity,
+		velocityWorld: motionTelemetry?.hasSample ? motionTelemetry.worldLinearVelocity : null,
 		deltaSeconds: delta,
 		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
 		worldUp: AUTO_TOUR_CAMERA_WORLD_UP,
@@ -7191,7 +7174,7 @@ function updateCharacterFollowCamera(
 		localOffsetOverride: characterFollowCameraOffset,
 		lockLocalOffset: true,
 		applyOrbitTween: false,
-		followControlsDirty: false,
+		followControlsDirty,
 		immediate,
 		tuning: {
 			distanceMin: 4.0,
