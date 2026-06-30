@@ -2098,7 +2098,13 @@ type InstancedMatrixCacheEntry = {
 	elements: Float32Array
 }
 
+type InstancedTransformTargetCacheEntry = {
+	revision: number
+	targets: THREE.Object3D[]
+}
+
 const instancedMatrixCache = new Map<string, InstancedMatrixCacheEntry>()
+const instancedTransformTargetCache = new WeakMap<THREE.Object3D, InstancedTransformTargetCacheEntry>()
 
 function clearInstancedMatrixCacheForNode(nodeId: string): void {
 	instancedMatrixCache.delete(nodeId)
@@ -2409,10 +2415,19 @@ type PhysicsBridgeBodyFrameState = {
 	motionState: number
 	linearVelocity?: THREE.Vector3
 }
+type PhysicsBridgeTransformSyncEntry = {
+	object: THREE.Object3D
+	worldPosition: THREE.Vector3
+	worldQuaternion: THREE.Quaternion
+	orientationAdjustment: RigidbodyOrientationAdjustment | null
+}
 const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameState>()
 const physicsBridgeSyncPositionHelper = new THREE.Vector3()
 const physicsBridgeSyncQuaternionHelper = new THREE.Quaternion()
 const physicsBridgeSyncParentQuaternionHelper = new THREE.Quaternion()
+const physicsBridgeSyncParentMatrixHelper = new THREE.Matrix4()
+const physicsBridgeSyncWorldPositionHelper = new THREE.Vector3()
+const physicsBridgeSyncWorldScaleHelper = new THREE.Vector3()
 const physicsBridgeHeightfieldAdjustment = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0))
 const physicsBridgeHeightfieldAdjustmentInverse = physicsBridgeHeightfieldAdjustment.clone().invert()
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
@@ -10521,11 +10536,13 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 	sceneCsmShadowRuntime?.registerObject(object)
 }
 
-function syncInstancedTransform(object: THREE.Object3D | null) {
+function syncInstancedTransform(object: THREE.Object3D | null, skipMatrixWorldUpdate = false) {
 	if (!object) {
 		return
 	}
-	object.updateMatrixWorld(true)
+	if (!skipMatrixWorldUpdate) {
+		object.updateMatrixWorld(true)
+	}
 	object.userData.__harmonyInstancedTransformRevision = getInstancedTransformRevision(object) + 1
 	const targets: THREE.Object3D[] = []
 	object.traverse((child) => {
@@ -11259,40 +11276,72 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 	if (!physicsBridgeFrameBodiesByNodeId.size) {
 		return
 	}
+	const transformSyncEntries: PhysicsBridgeTransformSyncEntry[] = []
 	physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
-		const rigidbodyEntry = rigidbodyInstances.get(nodeId)
-		if (rigidbodyEntry) {
-			if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
-				return
-			}
-			if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
-				return
-			}
-			applyScenePreviewPhysicsBridgeTransformToObject(
-				rigidbodyEntry.object,
-				state.position,
-				state.quaternion,
-				rigidbodyEntry.orientationAdjustment,
-			)
-			return
+		const entry = resolveScenePreviewPhysicsBridgeTransformSyncEntry(nodeId, state)
+		if (entry) {
+			transformSyncEntries.push(entry)
 		}
-		const characterControllerNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId) ?? null
-		const node = resolveNodeById(nodeId)
-		const component = resolvePhysicsRigidbodyComponent(node)
-		const bindingObject = node && component
-			? resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
-			: (characterControllerNodeId ? (nodeObjectMap.get(characterControllerNodeId) ?? null) : (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null))
-		if (!bindingObject) {
-			return
-		}
-		const orientationAdjustment = node && isGroundDynamicMesh(node.dynamicMesh)
-			? {
-				three: physicsBridgeHeightfieldAdjustment,
-				threeInverse: physicsBridgeHeightfieldAdjustmentInverse,
-			}
-			: null
-		applyScenePreviewPhysicsBridgeTransformToObject(bindingObject, state.position, state.quaternion, orientationAdjustment)
 	})
+	applyScenePreviewPhysicsBridgeTransformSyncBatch(transformSyncEntries)
+}
+
+function resolveScenePreviewPhysicsBridgeTransformSyncEntry(
+	nodeId: string,
+	state: PhysicsBridgeBodyFrameState,
+): PhysicsBridgeTransformSyncEntry | null {
+	const rigidbodyEntry = rigidbodyInstances.get(nodeId)
+	if (rigidbodyEntry) {
+		if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
+			return null
+		}
+		if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
+			return null
+		}
+		return {
+			object: rigidbodyEntry.object,
+			worldPosition: state.position,
+			worldQuaternion: state.quaternion,
+			orientationAdjustment: rigidbodyEntry.orientationAdjustment,
+		}
+	}
+
+	const node = resolveNodeById(nodeId)
+	const component = resolvePhysicsRigidbodyComponent(node)
+	const bindingObject = resolveScenePreviewPhysicsBridgeBindingObject(nodeId, node, component)
+	if (!bindingObject) {
+		return null
+	}
+	const orientationAdjustment = node && isGroundDynamicMesh(node.dynamicMesh)
+		? {
+			three: physicsBridgeHeightfieldAdjustment,
+			threeInverse: physicsBridgeHeightfieldAdjustmentInverse,
+		}
+		: null
+	return {
+		object: bindingObject,
+		worldPosition: state.position,
+		worldQuaternion: state.quaternion,
+		orientationAdjustment,
+	}
+}
+
+function resolveScenePreviewPhysicsBridgeBindingObject(
+	nodeId: string,
+	node: SceneNode | null,
+	component: SceneNodeComponentState<RigidbodyComponentProps> | null,
+): THREE.Object3D | null {
+	if (node && component) {
+		return resolveRigidbodyBindingObject(component, nodeObjectMap.get(nodeId) ?? null)
+	}
+	const characterControllerNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId) ?? null
+	if (characterControllerNodeId) {
+		return nodeObjectMap.get(characterControllerNodeId) ?? null
+	}
+	if (physicsBridgeCharacterIdByNodeId.has(nodeId)) {
+		return nodeObjectMap.get(nodeId) ?? null
+	}
+	return null
 }
 
 function applyScenePreviewPhysicsBridgeTransformToObject(
@@ -11300,24 +11349,74 @@ function applyScenePreviewPhysicsBridgeTransformToObject(
 	worldPosition: THREE.Vector3,
 	worldQuaternion: THREE.Quaternion,
 	orientationAdjustment: RigidbodyOrientationAdjustment | null,
+	parentMatrixWorld: THREE.Matrix4 | null,
 ): void {
 	physicsBridgeSyncPositionHelper.copy(worldPosition)
 	physicsBridgeSyncQuaternionHelper.copy(worldQuaternion)
 	if (orientationAdjustment) {
 		physicsBridgeSyncQuaternionHelper.multiply(orientationAdjustment.threeInverse)
 	}
-	if (object.parent) {
-		object.parent.updateMatrixWorld(true)
+	if (parentMatrixWorld) {
+		physicsBridgeSyncParentMatrixHelper.copy(parentMatrixWorld).invert()
+		physicsBridgeSyncPositionHelper.applyMatrix4(physicsBridgeSyncParentMatrixHelper)
+		parentMatrixWorld.decompose(
+			physicsBridgeSyncWorldPositionHelper,
+			physicsBridgeSyncParentQuaternionHelper,
+			physicsBridgeSyncWorldScaleHelper,
+		)
+		physicsBridgeSyncParentQuaternionHelper.invert()
 		object.position.copy(physicsBridgeSyncPositionHelper)
-		object.parent.worldToLocal(object.position)
-		object.parent.getWorldQuaternion(physicsBridgeSyncParentQuaternionHelper).invert()
 		object.quaternion.copy(physicsBridgeSyncParentQuaternionHelper).multiply(physicsBridgeSyncQuaternionHelper)
 	} else {
 		object.position.copy(physicsBridgeSyncPositionHelper)
 		object.quaternion.copy(physicsBridgeSyncQuaternionHelper)
 	}
-	object.updateMatrixWorld(true)
-	syncInstancedTransform(object)
+	object.updateMatrix()
+}
+
+function applyScenePreviewPhysicsBridgeTransformSyncBatch(
+	transformSyncEntries: PhysicsBridgeTransformSyncEntry[],
+): void {
+	if (!transformSyncEntries.length) {
+		return
+	}
+	const dirtyEntriesByObject = new Map<THREE.Object3D, PhysicsBridgeTransformSyncEntry>()
+	transformSyncEntries.forEach((entry) => {
+		dirtyEntriesByObject.set(entry.object, entry)
+	})
+	const dirtyEntries: Array<{ depth: number; object: THREE.Object3D; entry: PhysicsBridgeTransformSyncEntry }> = []
+	const syncRoots: THREE.Object3D[] = []
+	dirtyEntriesByObject.forEach((_entry, object) => {
+		let depth = 0
+		let parent = object.parent
+		let isRoot = true
+		while (parent) {
+			depth += 1
+			if (dirtyEntriesByObject.has(parent)) {
+				isRoot = false
+				break
+			}
+			parent = parent.parent
+		}
+		dirtyEntries.push({ depth, object, entry: _entry })
+		if (isRoot) {
+			syncRoots.push(object)
+		}
+	})
+	dirtyEntries.sort((left, right) => left.depth - right.depth)
+	dirtyEntries.forEach(({ object, entry }) => {
+		applyScenePreviewPhysicsBridgeTransformToObject(
+			object,
+			entry.worldPosition,
+			entry.worldQuaternion,
+			entry.orientationAdjustment,
+			object.parent?.matrixWorld ?? null,
+		)
+	})
+	syncRoots.forEach((root) => {
+		root.updateMatrixWorld(true)
+		syncInstancedTransform(root, true)
+	})
 }
 
 function stepScenePreviewPhysicsBridge(delta: number): void {
@@ -12176,59 +12275,34 @@ function normalizeVectorOrFallback(vector: THREE.Vector3, x: number, y: number, 
 }
 
 function collectInstancedTransformTargets(object: THREE.Object3D): THREE.Object3D[] {
+	const revision = getInstancedTransformRevision(object)
+	const cached = instancedTransformTargetCache.get(object)
+	if (cached && cached.revision === revision) {
+		return cached.targets
+	}
 	const targets: THREE.Object3D[] = []
 	object.traverse((child) => {
 		if (child.userData?.instancedAssetId) {
 			targets.push(child)
 		}
 	})
+	instancedTransformTargetCache.set(object, {
+		revision,
+		targets,
+	})
 	return targets
 }
 
 function syncInstancedTransformTarget(target: THREE.Object3D): void {
-	if (!target.userData?.instancedAssetId) {
+	const plan = resolveScenePreviewInstancedTransformTargetPlan(target)
+	if (!plan) {
 		return
 	}
-	const nodeId = target.userData.nodeId as string | undefined
-	if (!nodeId) {
-		return
-	}
-	const assetIdRaw = target.userData.instancedAssetId as string | undefined
-	const assetId = typeof assetIdRaw === 'string' ? assetIdRaw.trim() : ''
-	if (!assetId) {
-		return
-	}
-	const renderKind = target.userData?.instancedRenderKind === 'billboard' ? 'billboard' : 'model'
-	const node = resolveNodeById(nodeId)
-	if (!node) {
-		return
-	}
-	const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
-	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
-	const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
-	if (resolvedAssetId && resolvedAssetId !== assetId) {
-		// Asset changed; normally allow the document sync pipeline to rebuild this proxy.
-		// Exception: LOD switches intentionally swap instancedAssetId at runtime; still need to apply matrices.
-		const lodComponent = resolveLodComponent(node)
-		if (!lodComponent) {
-			return
-		}
-		const props = clampLodComponentProps(lodComponent.props)
-		const isKnownLodAsset = props.levels.some((level) => {
-			const levelTarget = resolveLodRenderTarget(level)
-			const levelAssetId = typeof levelTarget.assetId === 'string' ? levelTarget.assetId.trim() : ''
-			return Boolean(levelAssetId) && levelAssetId === assetId
-		})
-		if (!isKnownLodAsset) {
-			return
-		}
-	}
+	const { nodeId, assetId, renderKind, layout, desiredCount, bindingObject } = plan
 	const modelGroup = renderKind === 'model' ? getCachedModelObject(assetId) : null
 	if (renderKind === 'model' && !modelGroup) {
 		return
 	}
-
-	const desiredCount = getInstanceLayoutCount(layout)
 	const existingBindings = renderKind === 'billboard' ? getBillboardInstanceBindingsForNode(nodeId) : getModelInstanceBindingsForNode(nodeId)
 	if (existingBindings.length !== desiredCount) {
 		releaseBillboardInstance(nodeId)
@@ -12254,19 +12328,20 @@ function syncInstancedTransformTarget(target: THREE.Object3D): void {
 	}
 
 	removeVehicleInstance(nodeId)
-	const isCulled = target.userData?.__harmonyCulled === true
-	const isVisible = isRuntimeObjectEffectivelyVisible(target) && !isCulled
+	const targetObject = bindingObject
+	const isCulled = targetObject.userData?.__harmonyCulled === true
+	const isVisible = isRuntimeObjectEffectivelyVisible(targetObject) && !isCulled
 	if (isVisible) {
-		instancedMatrixHelper.copy(target.matrixWorld)
-		if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
+		instancedMatrixHelper.copy(targetObject.matrixWorld)
+		if (renderKind === 'model' && targetObject.userData?.__harmonyLodFaceCamera === true) {
 			applyModelFaceCameraMatrix(
 				instancedMatrixHelper,
-				(target.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
+				(targetObject.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
 					?? LOD_FACE_CAMERA_FORWARD_AXIS_X,
 			)
 		}
 	} else {
-		target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
+		targetObject.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 		instancedScaleHelper.setScalar(0)
 		instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper)
 	}
@@ -12275,8 +12350,8 @@ function syncInstancedTransformTarget(target: THREE.Object3D): void {
 		kind: 'billboard',
 		assetId,
 		sourceModelAssetId: typeof target.userData?.__harmonyBillboardSourceAssetId === 'string' ? target.userData.__harmonyBillboardSourceAssetId : null,
-		faceCamera: target.userData?.__harmonyLodFaceCamera === true,
-		forwardAxis: (target.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
+		faceCamera: targetObject.userData?.__harmonyLodFaceCamera === true,
+		forwardAxis: (targetObject.userData?.__harmonyLodForwardAxis as LodFaceCameraForwardAxis | undefined)
 			?? LOD_FACE_CAMERA_FORWARD_AXIS_Z,
 		key: null,
 	})
@@ -12336,6 +12411,73 @@ function syncInstancedTransformTarget(target: THREE.Object3D): void {
 
 	target.userData.__harmonyInstanceLayoutSignature = result.signature
 	target.userData.__harmonyInstanceLayoutLocals = result.locals
+}
+
+function collectScenePreviewLodAssetIds(node: SceneNode): string[] {
+	const lodComponent = resolveLodComponent(node)
+	if (!lodComponent) {
+		return []
+	}
+	const props = clampLodComponentProps(lodComponent.props)
+	const assetIds: string[] = []
+	props.levels.forEach((level) => {
+		const levelTarget = resolveLodRenderTarget(level)
+		const levelAssetId = typeof levelTarget.assetId === 'string' ? levelTarget.assetId.trim() : ''
+		if (levelAssetId) {
+			assetIds.push(levelAssetId)
+		}
+	})
+	return assetIds
+}
+
+function resolveScenePreviewInstancedTransformTargetPlan(target: THREE.Object3D): {
+	nodeId: string
+	assetId: string
+	renderKind: 'billboard' | 'model'
+	layout: ReturnType<typeof clampSceneNodeInstanceLayout>
+	desiredCount: number
+	bindingObject: THREE.Object3D
+} | null {
+	if (!target.userData?.instancedAssetId) {
+		return null
+	}
+	const nodeId = target.userData.nodeId as string | undefined
+	if (!nodeId) {
+		return null
+	}
+	const assetIdRaw = target.userData.instancedAssetId as string | undefined
+	const assetId = typeof assetIdRaw === 'string' ? assetIdRaw.trim() : ''
+	if (!assetId) {
+		return null
+	}
+	const renderKind = target.userData?.instancedRenderKind === 'billboard' ? 'billboard' : 'model'
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return null
+	}
+	const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
+	const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : { mode: 'single' as const, templateAssetId: null }
+	const resolvedAssetId = resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId ?? null)
+	const lodAssetIds = collectScenePreviewLodAssetIds(node)
+	if (resolvedAssetId && resolvedAssetId !== assetId) {
+		if (!lodAssetIds.includes(assetId)) {
+			return null
+		}
+	}
+
+	const bindingObject = resolveScenePreviewPhysicsBridgeBindingObject(nodeId, node, resolvePhysicsRigidbodyComponent(node))
+	if (!bindingObject) {
+		return null
+	}
+	const desiredCount = getInstanceLayoutCount(layout)
+	return {
+		nodeId,
+		assetId,
+		renderKind,
+		layout,
+		desiredCount,
+		bindingObject,
+	}
 }
 
 function updateNodeTransfrom(object: THREE.Object3D, node: SceneNode) {
