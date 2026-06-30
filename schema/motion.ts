@@ -10,7 +10,18 @@ export type {
 } from './characterAutoTourRuntime'
 export { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from './autoTourSync'
 export { createBridgeVehicleProxy } from './bridgeVehicleProxy'
-export { FollowCameraController, computeFollowLerpAlpha, computeFollowPlacement, createCameraFollowState, getApproxDimensions, resetCameraFollowState } from './followCameraController'
+export {
+  FollowCameraController,
+  computeFollowLerpAlpha,
+  computeFollowPlacement,
+  createCameraFollowState,
+  createFollowCameraMotionState,
+  getApproxDimensions,
+  resetCameraFollowState,
+  resetFollowCameraMotionState,
+  updateMotionAwareFollowCamera,
+} from './followCameraController'
+export type { FollowCameraMotionState } from './followCameraController'
 export { holdVehicleBrakeSafe, updateVehicleSpeedAndApplyParkingHoldSafe, VEHICLE_PARKED_SPEED_EPSILON, VEHICLE_PARKING_HOLD_SPEED_EPSILON, applyPurePursuitVehicleControl, applyPurePursuitVehicleControlSafe } from './purePursuitRuntime'
 export { createControlledNodeMotionRuntime, ControlledNodeMotionRuntime } from './controlledNodeMotionRuntime'
 export type { ControlledNodeMotionTelemetry, ControlledNodeMotionSampleInput } from './controlledNodeMotionRuntime'

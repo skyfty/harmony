@@ -306,17 +306,10 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
           />
         </div>
 
-        <div class="character-controller-panel__derived-note">
-          Walk and run are derived from sprint speed:
-          <span>walk {{ derivedMovementSpeeds.walkSpeed }}</span>
-          <span>run {{ derivedMovementSpeeds.runSpeed }}</span>
-        </div>
-
         <div class="character-controller-panel__section">
           <div class="character-controller-panel__section-header">
             <div>
               <div class="character-controller-panel__section-title">Advanced movement</div>
-              <p class="character-controller-panel__note">Turn, jump, collision, and locomotion tuning rarely change.</p>
             </div>
             <v-btn
               variant="text"
@@ -411,7 +404,6 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
           <div class="character-controller-panel__section-header">
             <div>
               <div class="character-controller-panel__section-title">Camera follow</div>
-              <p class="character-controller-panel__note">Only adjust if the default follow framing does not fit the character.</p>
             </div>
             <v-btn
               variant="text"
@@ -454,9 +446,7 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
           <div class="character-controller-panel__section-title">Animation bindings</div>
           <p v-if="clipLoadError" class="character-controller-panel__note">{{ clipLoadError }}</p>
           <p v-else-if="isLoadingClips" class="character-controller-panel__note">Loading animation clips…</p>
-          <p v-else-if="!clipItems.length" class="character-controller-panel__note">
-            No animation clips were found on this model.
-          </p>
+     
           <div class="character-controller-panel__binding-group">
             <div class="character-controller-panel__binding-group-title">Common</div>
             <div v-for="slot in commonAnimationSlots" :key="slot.value" class="character-controller-panel__binding-row">

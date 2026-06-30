@@ -1,11 +1,11 @@
 import * as THREE from 'three'
 import {
   FollowCameraController,
-  computeFollowLerpAlpha,
   type CameraFollowContext,
   type CameraFollowPlacement,
   type CameraFollowState,
   type CameraFollowTuning,
+  updateMotionAwareFollowCamera,
 } from './followCameraController'
 // Local structural types to avoid tight coupling with component module exports
 type SceneNode = any
@@ -208,8 +208,6 @@ const VEHICLE_BRAKE_FORCE = 36
 const DEFAULT_VEHICLE_SPEED_SOFT_CAP = 8.5
 const DEFAULT_VEHICLE_SPEED_HARD_CAP = 12.5
 const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.96
-const VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ = 0.0064
-const VEHICLE_FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ = 0.09
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
 const VEHICLE_MANUAL_DRIVE_ACCEL_RESPONSE = 14
@@ -353,10 +351,16 @@ export class VehicleDriveController {
     placement: null as VehicleFollowPlacement | null,
   }
 
-  private followCameraVelocityHasSample = false
   private readonly followCameraVelocity = new THREE.Vector3()
   private readonly followCameraVelocityScratch = new THREE.Vector3()
   private readonly followCameraLastAnchor = new THREE.Vector3()
+  private readonly followCameraVelocitySample = new THREE.Vector3()
+  private readonly followCameraMotionState = {
+    velocity: this.followCameraVelocity,
+    velocityScratch: this.followCameraVelocityScratch,
+    lastAnchor: this.followCameraLastAnchor,
+    hasSample: false,
+  }
   private followCameraSteerLookAngle = 0
 
   private readonly temp = {
@@ -894,8 +898,9 @@ export class VehicleDriveController {
     this.resetFollowCameraOffset()
     this.clearFollowCameraPlacementCache()
     this.clearSmoothStop()
-    this.followCameraVelocityHasSample = false
     this.followCameraVelocity.set(0, 0, 0)
+    this.followCameraVelocitySample.set(0, 0, 0)
+    this.followCameraMotionState.hasSample = false
     this.followCameraSteerLookAngle = 0
     this.bindings.exitBusy.value = false
     this.cameraMode = 'first-person'
@@ -1311,56 +1316,25 @@ export class VehicleDriveController {
     this.computeVehicleFollowAnchor(vehicleObject, instance, temp.seatPosition, temp.followAnchor)
     const selectedAnchor = temp.followAnchor
 
-    if (options.immediate) {
-      this.followCameraVelocityHasSample = false
-      this.followCameraVelocity.set(0, 0, 0)
-      this.followCameraLastAnchor.copy(selectedAnchor)
-      this.followCameraVelocityHasSample = true
-    } else if (deltaSeconds > 0 && this.followCameraVelocityHasSample) {
+    this.followCameraVelocitySample.set(0, 0, 0)
+    if (!options.immediate && deltaSeconds > 0) {
       const dt = Math.max(1e-6, Math.min(0.25, deltaSeconds))
       const chassisBody = instance?.vehicle?.chassisBody ?? null
       const nodeId = this.deps.normalizeNodeId(instance?.nodeId)
       const resolvedNodeId = nodeId ?? null
       const resolveVelocity = resolvedNodeId && chassisBody ? this.deps.resolveChassisWorldVelocity : undefined
 
-      if (resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocityScratch)) {
+      if (resolveVelocity && resolveVelocity(resolvedNodeId!, chassisBody!, this.followCameraVelocitySample)) {
         // Use host-provided velocity when available to keep sampling consistent across platforms.
       } else if (chassisBody?.velocity) {
-        this.followCameraVelocityScratch.set(chassisBody.velocity.x, chassisBody.velocity.y, chassisBody.velocity.z)
-      } else {
-        this.followCameraVelocityScratch
+        this.followCameraVelocitySample.set(chassisBody.velocity.x, chassisBody.velocity.y, chassisBody.velocity.z)
+      } else if (this.followCameraMotionState.hasSample) {
+        this.followCameraVelocitySample
           .copy(selectedAnchor)
-          .sub(this.followCameraLastAnchor)
+          .sub(this.followCameraMotionState.lastAnchor)
           .multiplyScalar(1 / dt)
       }
-      this.followCameraVelocityScratch.y = 0
-      const sampleSpeedSq =
-        (this.followCameraVelocityScratch.x * this.followCameraVelocityScratch.x)
-        + (this.followCameraVelocityScratch.z * this.followCameraVelocityScratch.z)
-      if (sampleSpeedSq <= VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ) {
-        if (this.followCameraVelocity.lengthSq() <= VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ) {
-          this.followCameraVelocity.set(0, 0, 0)
-        } else {
-          const releaseAlpha = computeFollowLerpAlpha(dt, Math.max(2, this.getFollowCameraVelocityLerpSpeed() * 0.5))
-          this.followCameraVelocity.lerp(this.followCameraVelocityScratch.set(0, 0, 0), releaseAlpha)
-        }
-      } else {
-        const smoothedSpeedSq = this.followCameraVelocity.x * this.followCameraVelocity.x + this.followCameraVelocity.z * this.followCameraVelocity.z
-        const isLowSpeedDirectionFlip =
-          smoothedSpeedSq > VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ
-          && this.followCameraVelocity.dot(this.followCameraVelocityScratch) < 0
-          && sampleSpeedSq < VEHICLE_FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ
-        const blendSpeed = isLowSpeedDirectionFlip
-          ? Math.max(2.5, this.getFollowCameraVelocityLerpSpeed() * 0.5)
-          : this.getFollowCameraVelocityLerpSpeed()
-        const alpha = computeFollowLerpAlpha(dt, blendSpeed)
-        this.followCameraVelocity.lerp(this.followCameraVelocityScratch, alpha)
-      }
-    } else if (!this.followCameraVelocityHasSample && deltaSeconds > 0) {
-      this.followCameraVelocity.set(0, 0, 0)
-      this.followCameraVelocityHasSample = true
     }
-    this.followCameraLastAnchor.copy(selectedAnchor)
 
     const desiredFollowForward = temp.cameraForward.copy(temp.seatForward)
     desiredFollowForward.y = 0
@@ -1405,12 +1379,14 @@ export class VehicleDriveController {
 
     const tuning = this.getFollowCameraTuning()
 
-    const updated = this.followCameraController.update({
+    return updateMotionAwareFollowCamera({
+      controller: this.followCameraController,
+      motion: this.followCameraMotionState,
       follow,
       placement,
       anchorWorld: selectedAnchor,
       desiredForwardWorld: desiredFollowForward,
-      velocityWorld: this.followCameraVelocity,
+      velocityWorld: this.followCameraVelocitySample,
       deltaSeconds,
       ctx,
       worldUp: VEHICLE_CAMERA_WORLD_UP,
@@ -1420,8 +1396,8 @@ export class VehicleDriveController {
       followControlsDirty: options.followControlsDirty ?? false,
       lockLocalOffset: true,
       immediate: options.immediate ?? false,
+      velocityLerpSpeed: this.getFollowCameraVelocityLerpSpeed(),
     })
-    return updated
   }
 
   private updateFirstPersonCamera(ctx: VehicleDriveCameraContext): boolean {

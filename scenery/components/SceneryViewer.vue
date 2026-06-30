@@ -691,8 +691,6 @@ import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   CHARACTER_ANIMATION_EDITOR_SLOTS,
   clampCharacterControllerComponentProps,
-  DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
-  DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
   characterControllerComponentDefinition,
   writeCharacterLocalForward,
   type CharacterAnimationSlot,
@@ -863,10 +861,13 @@ import {
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
+  createFollowCameraMotionState,
   getApproxDimensions,
   resetCameraFollowState,
+  resetFollowCameraMotionState,
+  updateMotionAwareFollowCamera,
 } from '@harmony/schema/motion';
-import type { CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
+import type { FollowCameraMotionState, CameraFollowPlacement, CameraFollowState, CameraFollowTuning } from '@harmony/schema/followCameraController';
 import {
   VehicleDriveController,
   createAutoTourRuntime,
@@ -2739,27 +2740,40 @@ const tempYawForwardVec = new THREE.Vector3();
 const tempCharacterForwardVec = new THREE.Vector3();
 const tempCharacterRightVec = new THREE.Vector3();
 const protagonistPosePosition = new THREE.Vector3();
-const protagonistPoseDirection = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
-const protagonistPoseTarget = new THREE.Vector3();
-const protagonistPoseCameraOffset = new THREE.Vector3();
-const protagonistFollowRootPosition = new THREE.Vector3();
-const protagonistFollowLastRootPosition = new THREE.Vector3();
-const characterCameraFollowVelocity = new THREE.Vector3();
-const characterCameraFollowVelocityScratch = new THREE.Vector3();
 const characterCameraFollowAnchorScratch = new THREE.Vector3();
 const characterCameraFollowForwardScratch = new THREE.Vector3();
+const characterCameraFollowPlacementCache = {
+  nodeId: null as string | null,
+  objectUuid: null as string | null,
+  dimensions: null as { width: number; height: number; length: number } | null,
+};
 const characterControlYawForwardScratch = new THREE.Vector3();
-const vehicleCompassForward = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
 const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
-let protagonistPoseSynced = false;
-let protagonistFollowHasSample = false;
 let characterCameraFollowNodeId: string | null = null;
 let characterControlDeltaSeconds = 1 / 60;
+const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCameraMotionState();
+const CHARACTER_FOLLOW_CAMERA_TUNING: Partial<CameraFollowTuning> = {
+  distanceMax: 16,
+  positionLerpSpeed: 0,
+  targetLerpSpeed: 4.8,
+  headingLerpSpeed: 2.8,
+  anchorLerpSpeed: 0,
+  lookaheadTime: 0,
+  lookaheadDistanceMax: 0,
+  lookaheadMinSpeedSq: 1,
+  lookaheadBlendStart: 99,
+  lookaheadBlendSpeed: 0,
+  motionSpeedThreshold: 99,
+  motionSpeedFull: 6,
+  motionBlendSpeed: 0,
+  motionDistanceBoost: 0,
+  motionHeightBoost: 0,
+};
 
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
@@ -11771,14 +11785,13 @@ function setCameraCaging(enabled: boolean): void {
 }
 
 function resetProtagonistPoseState(): void {
-  protagonistPoseSynced = false;
-  protagonistFollowHasSample = false;
-  protagonistFollowLastRootPosition.set(0, 0, 0);
   characterCameraFollowNodeId = null;
-  characterCameraFollowVelocity.set(0, 0, 0);
-  characterCameraFollowVelocityScratch.set(0, 0, 0);
+  resetFollowCameraMotionState(characterCameraFollowMotionState);
   characterCameraFollowAnchorScratch.set(0, 0, 0);
   characterCameraFollowForwardScratch.set(0, 0, 0);
+  characterCameraFollowPlacementCache.nodeId = null;
+  characterCameraFollowPlacementCache.objectUuid = null;
+  characterCameraFollowPlacementCache.dimensions = null;
   resetCameraFollowState(characterCameraFollowState);
 }
 
@@ -11793,9 +11806,15 @@ function findDefaultControlledCharacterObject(): THREE.Object3D | null {
 
 function resolveCharacterRootWorldPosition(
   nodeId: string,
+  bindingNodeId: string | null,
   protagonistObject: THREE.Object3D,
   target: THREE.Vector3,
 ): THREE.Vector3 {
+  const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? nodeId);
+  if (motionTelemetry?.hasSample) {
+    target.copy(motionTelemetry.worldPosition);
+    return target;
+  }
   const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null;
   const rigidbodyBody = rigidbodyEntry?.body ?? null;
   if (rigidbodyBody) {
@@ -11824,10 +11843,19 @@ function resolveCharacterFollowForwardWorld(
 }
 
 function resolveCharacterFollowPlacement(
+  nodeId: string,
   props: CharacterControllerComponentProps,
   object: THREE.Object3D | null,
 ): CameraFollowPlacement {
-  const dimensions = getApproxDimensions(object);
+  const objectUuid = object?.uuid ?? null;
+  const cache = characterCameraFollowPlacementCache;
+  let dimensions = cache.dimensions;
+  if (!dimensions || cache.nodeId !== nodeId || cache.objectUuid !== objectUuid) {
+    cache.nodeId = nodeId;
+    cache.objectUuid = objectUuid;
+    dimensions = getApproxDimensions(object);
+    cache.dimensions = dimensions;
+  }
   return {
     distance: props.cameraFollowDistance,
     heightOffset: props.cameraFollowHeight,
@@ -15892,38 +15920,35 @@ function updateCharacterFollowCamera(
     characterCameraFollowNodeId = controlledNodeId;
   }
 
-  const placement = resolveCharacterFollowPlacement(props, object);
-  resolveCharacterRootWorldPosition(controlledNodeId, object, characterCameraFollowAnchorScratch);
+  const placement = resolveCharacterFollowPlacement(controlledNodeId, props, object);
+  resolveCharacterRootWorldPosition(controlledNodeId, bindingNodeId, object, characterCameraFollowAnchorScratch);
   resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
 
-  if (deltaSeconds > 0 && protagonistFollowHasSample) {
-    characterCameraFollowVelocityScratch
-      .copy(characterCameraFollowAnchorScratch)
-      .sub(protagonistFollowLastRootPosition)
-      .multiplyScalar(1 / Math.max(1e-6, deltaSeconds));
-    characterCameraFollowVelocity.lerp(
-      characterCameraFollowVelocityScratch,
-      computeFollowLerpAlpha(deltaSeconds, 8),
-    );
-  } else if (options.immediate) {
-    characterCameraFollowVelocity.set(0, 0, 0);
-  }
+  const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? controlledNodeId);
+  const rawVelocity = motionTelemetry?.hasSample
+    ? motionTelemetry.worldLinearVelocity
+    : null;
 
-  const updated = runWithProgrammaticCameraMutationAndAnchor(() => characterCameraFollowController.update({
+  return runWithProgrammaticCameraMutationAndAnchor(() => updateMotionAwareFollowCamera({
+    controller: characterCameraFollowController,
+    motion: characterCameraFollowMotionState,
     follow: characterCameraFollowState,
     placement,
     anchorWorld: characterCameraFollowAnchorScratch,
     desiredForwardWorld: characterCameraFollowForwardScratch,
-    velocityWorld: characterCameraFollowVelocity,
     deltaSeconds,
-    ctx: { camera: context.camera },
+    ctx: {
+      camera: context.camera,
+      mapControls: context.controls,
+    },
+    velocityWorld: rawVelocity,
+    worldUp,
+    tuning: CHARACTER_FOLLOW_CAMERA_TUNING,
+    followControlsDirty: false,
     immediate: Boolean(options.immediate),
+    lockLocalOffset: true,
     smoothTargetForProgrammaticFollow: false,
   }));
-
-  protagonistFollowLastRootPosition.copy(characterCameraFollowAnchorScratch);
-  protagonistFollowHasSample = true;
-  return updated;
 }
 
 function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?: boolean } = {}): void {

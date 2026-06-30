@@ -56,6 +56,13 @@ type VelocityLike = Vector3Like & {
   lengthSq?: () => number
 }
 
+export type FollowCameraMotionState = {
+  velocity: THREE.Vector3
+  velocityScratch: THREE.Vector3
+  lastAnchor: THREE.Vector3
+  hasSample: boolean
+}
+
 export type CameraFollowTuning = {
   distanceMin: number
   distanceMax: number
@@ -251,6 +258,119 @@ const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE = 0.14
 const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ = FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE * FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE = 0.03
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ = FOLLOW_CAMERA_ANCHOR_DEAD_ZONE * FOLLOW_CAMERA_ANCHOR_DEAD_ZONE
+const FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ = 0.09
+const FOLLOW_CAMERA_VELOCITY_LERP_SPEED = 8
+
+export function createFollowCameraMotionState(): FollowCameraMotionState {
+  return {
+    velocity: new THREE.Vector3(),
+    velocityScratch: new THREE.Vector3(),
+    lastAnchor: new THREE.Vector3(),
+    hasSample: false,
+  }
+}
+
+export function resetFollowCameraMotionState(state: FollowCameraMotionState): void {
+  state.velocity.set(0, 0, 0)
+  state.velocityScratch.set(0, 0, 0)
+  state.lastAnchor.set(0, 0, 0)
+  state.hasSample = false
+}
+
+export type UpdateMotionAwareFollowCameraOptions = {
+  controller: FollowCameraController
+  motion: FollowCameraMotionState
+  follow: CameraFollowState
+  placement: CameraFollowPlacement
+  anchorWorld: THREE.Vector3
+  desiredForwardWorld: THREE.Vector3
+  deltaSeconds: number
+  ctx: CameraFollowContext
+  velocityWorld?: VelocityLike | null
+  worldUp?: THREE.Vector3
+  distanceScale?: number
+  tuning?: Partial<CameraFollowTuning>
+  followControlsDirty?: boolean
+  localOffsetOverride?: THREE.Vector3 | null
+  lockLocalOffset?: boolean
+  immediate?: boolean
+  applyOrbitTween?: boolean
+  smoothTargetForProgrammaticFollow?: boolean
+  velocityLerpSpeed?: number
+}
+
+export function updateMotionAwareFollowCamera(options: UpdateMotionAwareFollowCameraOptions): boolean {
+  const {
+    controller,
+    motion,
+    follow,
+    placement,
+    anchorWorld,
+    desiredForwardWorld,
+    deltaSeconds,
+    ctx,
+    velocityWorld,
+  } = options
+
+  if (options.immediate) {
+    motion.hasSample = false
+    motion.velocity.set(0, 0, 0)
+    motion.lastAnchor.copy(anchorWorld)
+    motion.hasSample = true
+  } else if (deltaSeconds > 0 && motion.hasSample) {
+    const dt = Math.max(1e-6, Math.min(0.25, deltaSeconds))
+    if (velocityWorld) {
+      motion.velocityScratch.set(velocityWorld.x, velocityWorld.y, velocityWorld.z)
+    } else {
+      motion.velocityScratch.copy(anchorWorld).sub(motion.lastAnchor).multiplyScalar(1 / dt)
+    }
+    motion.velocityScratch.y = 0
+    const sampleSpeedSq = (motion.velocityScratch.x * motion.velocityScratch.x) + (motion.velocityScratch.z * motion.velocityScratch.z)
+    if (sampleSpeedSq <= FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ) {
+      if (motion.velocity.lengthSq() <= FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ) {
+        motion.velocity.set(0, 0, 0)
+      } else {
+        const releaseAlpha = computeFollowLerpAlpha(dt, Math.max(2, (options.velocityLerpSpeed ?? FOLLOW_CAMERA_VELOCITY_LERP_SPEED) * 0.5))
+        motion.velocity.lerp(motion.velocityScratch.set(0, 0, 0), releaseAlpha)
+      }
+    } else {
+      const smoothedSpeedSq = motion.velocity.x * motion.velocity.x + motion.velocity.z * motion.velocity.z
+      const isLowSpeedDirectionFlip =
+        smoothedSpeedSq > FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ
+        && motion.velocity.dot(motion.velocityScratch) < 0
+        && sampleSpeedSq < FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ
+      const blendSpeed = isLowSpeedDirectionFlip
+        ? Math.max(2.5, (options.velocityLerpSpeed ?? FOLLOW_CAMERA_VELOCITY_LERP_SPEED) * 0.5)
+        : (options.velocityLerpSpeed ?? FOLLOW_CAMERA_VELOCITY_LERP_SPEED)
+      motion.velocity.lerp(motion.velocityScratch, computeFollowLerpAlpha(dt, blendSpeed))
+    }
+  } else if (!motion.hasSample && deltaSeconds > 0) {
+    motion.velocity.set(0, 0, 0)
+    motion.hasSample = true
+  }
+
+  motion.lastAnchor.copy(anchorWorld)
+  motion.hasSample = true
+
+  return controller.update({
+    follow,
+    placement,
+    anchorWorld,
+    desiredForwardWorld,
+    velocityWorld: motion.velocity,
+    deltaSeconds,
+    ctx,
+    worldUp: options.worldUp,
+    distanceScale: options.distanceScale,
+    tuning: options.tuning,
+    followControlsDirty: options.followControlsDirty,
+    localOffsetOverride: options.localOffsetOverride,
+    lockLocalOffset: options.lockLocalOffset,
+    immediate: Boolean(options.immediate),
+    applyOrbitTween: options.applyOrbitTween,
+    smoothTargetForProgrammaticFollow: options.smoothTargetForProgrammaticFollow,
+  })
+}
 
 
 
