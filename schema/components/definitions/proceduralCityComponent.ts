@@ -1155,10 +1155,13 @@ function createMesh(
 ): THREE.InstancedMesh {
   const mesh = new THREE.InstancedMesh(geometry, material, count)
   mesh.name = name
-  mesh.castShadow = true
-  mesh.receiveShadow = false
-  mesh.frustumCulled = false
-  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+  // Procedural city instances are static until the component is rebuilt.
+  // Treat them as static render data so the renderer can cull them and avoid
+  // extra shadow work in the viewport.
+  mesh.castShadow = false // 不投射阴影，减少阴影计算开销
+  mesh.receiveShadow = false // 不接收阴影，提升渲染性能
+  mesh.frustumCulled = true // 启用视锥体裁剪，不在视野内的网格将被跳过
+  mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage) // 实例矩阵设置为静态用途，GPU 可对其进行优化
   return mesh
 }
 
@@ -1234,6 +1237,7 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknow
         cityMesh.setColorAt(index, parcel.color)
       })
       cityMesh.count = entries.length
+      cityMesh.computeBoundingSphere()
       cityMesh.instanceMatrix.needsUpdate = true
       if (cityMesh.instanceColor) {
         cityMesh.instanceColor.needsUpdate = true
@@ -1380,6 +1384,7 @@ class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
   }
 
   onInit(): void {
+    console.log("lskjfl")
     this.rebuild()
   }
 

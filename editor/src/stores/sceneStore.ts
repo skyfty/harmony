@@ -211,6 +211,7 @@ import { compileRoadStaticMeshMetadata, createRoadGroup, resolveRoadLocalHeightS
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
 import { createGuideRouteGroup } from '@schema/guideRouteMesh'
+import { syncProceduralCityRuntimeArtifact } from '@schema/components/definitions/proceduralCityComponent'
 import { COMPILED_STATIC_MESH_USERDATA_KEY } from '@schema/compiledStaticMesh'
 import { buildRegionDynamicMeshFromLocalVertices, buildRegionDynamicMeshFromWorldPoints } from '@schema/regionUtils'
 import { computeBlobHash, blobToDataUrl, dataUrlToBlob, extractExtension } from '@/utils/blob'
@@ -4552,6 +4553,18 @@ export function unregisterRuntimeObject(id: string) {
 
 export function getRuntimeObject(id: string): Object3D | null {
   return runtimeObjectRegistry.get(id) ?? null
+}
+
+function syncProceduralCityRuntimeForNode(nodeId: string, nodes: SceneNode[]): void {
+  const node = findNodeById(nodes, nodeId)
+  if (!node) {
+    return
+  }
+  const runtimeObject = getRuntimeObject(nodeId)
+  if (!runtimeObject) {
+    return
+  }
+  syncProceduralCityRuntimeArtifact(runtimeObject, node)
 }
 
 function reattachRuntimeObjectsForNodes(nodes: SceneNode[]): void {
@@ -17458,6 +17471,7 @@ export const useSceneStore = defineStore('scene', {
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
+        syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
       commitSceneSnapshot(this)
       return { component: requestedState, created: true }
@@ -17485,6 +17499,7 @@ export const useSceneStore = defineStore('scene', {
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
+        syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
       commitSceneSnapshot(this)
       return true
@@ -17519,6 +17534,7 @@ export const useSceneStore = defineStore('scene', {
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
+        syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
       return true
     },
@@ -18224,6 +18240,7 @@ export const useSceneStore = defineStore('scene', {
       const updatedNode = findNodeById(this.nodes, nodeId)
       if (updatedNode) {
         componentManager.syncNode(updatedNode)
+        syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
       if (type === LANDFORM_COMPONENT_TYPE) {
         scheduleLandformGroundSplatBake(this, 'updateNodeComponentProps')
