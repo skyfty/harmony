@@ -12,6 +12,9 @@ export { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from 
 export { createBridgeVehicleProxy } from './bridgeVehicleProxy'
 export {
   FollowCameraController,
+  DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+  DEFAULT_BACK_FOLLOW_CAMERA_TUNING,
+  createBackFollowCameraTuning,
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
@@ -31,13 +34,11 @@ export * from './pathFollowCommon'
 export { VehicleDriveController } from './VehicleDriveController'
 export type {
   VehicleDriveCameraFollowState,
-  VehicleDriveCameraMode,
   VehicleDriveCameraRestoreState,
   VehicleDriveControlFlags,
   VehicleDriveControllerBindings,
   VehicleDriveControllerDeps,
   VehicleDriveInputState,
-  VehicleDriveOrbitMode,
   VehicleDriveRuntimeState,
   VehicleDriveVehicle,
   VehicleInstance,

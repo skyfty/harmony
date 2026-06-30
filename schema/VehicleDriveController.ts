@@ -21,9 +21,6 @@ import { applyPhysicsVehicleWheelControl } from '@harmony/physics-core'
 
 export type RefLike<T> = { value: T }
 
-export type VehicleDriveCameraMode = 'first-person' | 'follow' | 'free'
-export type VehicleDriveOrbitMode = 'follow' | 'free'
-
 export type VehicleDriveControlFlags = {
   forward: boolean
   backward: boolean
@@ -162,7 +159,6 @@ export type VehicleDriveControllerDeps = {
   setCameraCaging?: (enabled: boolean, options?: { force?: boolean }) => void
   withControlsVerticalFreedom?: <T>(controls: any, callback: () => T) => T
   lockControlsPitchToCurrent?: (controls: any, camera: THREE.PerspectiveCamera) => void
-  syncLastFirstPersonStateFromCamera?: () => void
   updateOrbitLookTween?: (delta: number) => void
   onToast?: (message: string) => void
   onResolveBehaviorToken?: (token: string, resolution: BehaviorEventResolution) => void
@@ -185,8 +181,6 @@ export type VehicleDriveControllerBindings = {
   state: VehicleDriveRuntimeState
   inputFlags: VehicleDriveControlFlags
   input: VehicleDriveInputState
-  cameraMode: RefLike<VehicleDriveCameraMode>
-  orbitMode: RefLike<VehicleDriveOrbitMode>
   uiOverride: RefLike<'auto' | 'show' | 'hide'>
   promptBusy: RefLike<boolean>
   exitBusy: RefLike<boolean>
@@ -195,10 +189,7 @@ export type VehicleDriveControllerBindings = {
   steeringKeyboardValue?: RefLike<number>
 }
 
-export type VehicleDriveCameraContext = {
-  firstPersonControls?: { object: THREE.Object3D }
-  desiredOrbitTarget?: THREE.Vector3
-} & CameraFollowContext
+export type VehicleDriveCameraContext = CameraFollowContext
 
 const isWeChatMiniProgram = Boolean((globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx
   && typeof (globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } }).wx?.getSystemInfoSync === 'function')
@@ -429,14 +420,6 @@ export class VehicleDriveController {
     return this.bindings.inputFlags
   }
 
-  get cameraMode(): VehicleDriveCameraMode {
-    return this.bindings.cameraMode.value
-  }
-
-  set cameraMode(mode: VehicleDriveCameraMode) {
-    this.bindings.cameraMode.value = mode
-  }
-
   resetFollowCameraOffset(): void {
     this.resetVehicleFollowLocalOffset()
   }
@@ -503,14 +486,6 @@ export class VehicleDriveController {
     this.followCameraPlacementCache.nodeId = null
     this.followCameraPlacementCache.objectUuid = null
     this.followCameraPlacementCache.placement = null
-  }
-
-  get orbitMode(): VehicleDriveOrbitMode {
-    return this.bindings.orbitMode.value
-  }
-
-  set orbitMode(mode: VehicleDriveOrbitMode) {
-    this.bindings.orbitMode.value = mode
   }
 
   setUiOverride(mode: 'auto' | 'show' | 'hide') {
@@ -819,7 +794,6 @@ export class VehicleDriveController {
     }
     state.sourceEvent = event as unknown
     this.bindings.exitBusy.value = false
-    this.cameraMode = 'follow'
     this.bindings.cameraFollowState.initialized = false
     this.followCameraSteerLookAngle = 0
     this.resetFollowCameraOffset()
@@ -903,7 +877,6 @@ export class VehicleDriveController {
     this.followCameraMotionState.hasSample = false
     this.followCameraSteerLookAngle = 0
     this.bindings.exitBusy.value = false
-    this.cameraMode = 'first-person'
     if (this.deps.setCameraCaging) {
       this.deps.setCameraCaging(false, { force: true })
     }
@@ -1294,13 +1267,7 @@ export class VehicleDriveController {
     if (!this.computeVehicleBasis(seatObject, vehicleObject, instance)) {
       return false
     }
-    if (this.cameraMode === 'follow') {
-      return this.updateFollowCamera(vehicleObject, instance, delta, ctx, options)
-    }
-    if (this.cameraMode === 'first-person') {
-      return this.updateFirstPersonCamera(ctx)
-    }
-    return false
+    return this.updateFollowCamera(vehicleObject, instance, delta, ctx, options)
   }
 
   private updateFollowCamera(
@@ -1400,23 +1367,6 @@ export class VehicleDriveController {
     })
   }
 
-  private updateFirstPersonCamera(ctx: VehicleDriveCameraContext): boolean {
-    const temp = this.temp
-    if (!ctx.camera) {
-      return false
-    }
-    ctx.camera.position.copy(temp.seatPosition)
-    ctx.camera.up.copy(temp.seatUp)
-    ctx.camera.lookAt(temp.cameraLook.copy(temp.seatPosition).addScaledVector(temp.seatForward, VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE))
-    if (ctx.mapControls) {
-      ctx.mapControls!.target.copy(temp.cameraLook)
-      ctx.mapControls!.update?.()
-    }
-   
-    this.deps.syncLastFirstPersonStateFromCamera?.()
-    return true
-  }
-
   private computeVehicleFollowAnchor(
     vehicleObject: THREE.Object3D | null,
     instance: VehicleInstance | null,
@@ -1485,7 +1435,4 @@ export class VehicleDriveController {
     return true
   }
 
-  toggleCameraMode(): void {
-    this.cameraMode = this.cameraMode === 'follow' ? 'first-person' : 'follow'
-  }
 }

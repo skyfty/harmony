@@ -847,17 +847,17 @@ import {
 import type {
   AutoTourRouteSnapResult,
   VehicleDriveCameraFollowState,
-  VehicleDriveCameraMode,
   VehicleDriveCameraRestoreState,
   VehicleDriveControlFlags,
   VehicleDriveInputState,
-  VehicleDriveOrbitMode,
   VehicleDriveRuntimeState,
   VehicleInstance,
   VehicleDriveVehicle,
 } from '@harmony/schema/motion';
 import {
   FollowCameraController,
+  DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+  createBackFollowCameraTuning,
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
@@ -867,7 +867,7 @@ import {
   resetFollowCameraMotionState,
   updateMotionAwareFollowCamera,
 } from '@harmony/schema/motion';
-import type { FollowCameraMotionState, CameraFollowPlacement, CameraFollowState, CameraFollowTuning } from '@harmony/schema/followCameraController';
+import type { FollowCameraMotionState, CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
 import {
   VehicleDriveController,
   createAutoTourRuntime,
@@ -2743,11 +2743,6 @@ const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const characterCameraFollowAnchorScratch = new THREE.Vector3();
 const characterCameraFollowForwardScratch = new THREE.Vector3();
-const characterCameraFollowPlacementCache = {
-  nodeId: null as string | null,
-  objectUuid: null as string | null,
-  dimensions: null as { width: number; height: number; length: number } | null,
-};
 const characterControlYawForwardScratch = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
@@ -2757,24 +2752,6 @@ let suppressSelfYawRecenter = false;
 let characterCameraFollowNodeId: string | null = null;
 let characterControlDeltaSeconds = 1 / 60;
 const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCameraMotionState();
-const CHARACTER_FOLLOW_CAMERA_TUNING: Partial<CameraFollowTuning> = {
-  distanceMax: 16,
-  positionLerpSpeed: 0,
-  targetLerpSpeed: 4.8,
-  headingLerpSpeed: 2.8,
-  anchorLerpSpeed: 0,
-  lookaheadTime: 0,
-  lookaheadDistanceMax: 0,
-  lookaheadMinSpeedSq: 1,
-  lookaheadBlendStart: 99,
-  lookaheadBlendSpeed: 0,
-  motionSpeedThreshold: 99,
-  motionSpeedFull: 6,
-  motionBlendSpeed: 0,
-  motionDistanceBoost: 0,
-  motionHeightBoost: 0,
-};
-
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
@@ -2852,11 +2829,6 @@ function runWithProgrammaticCameraMutationAndAnchor<T>(callback: () => T, onComp
       }
     }
   });
-}
-
-// Placeholder to satisfy controller dependency; first-person state persistence is editor-only.
-function syncLastFirstPersonStateFromCamera(): void {
-  // no-op for miniprogram
 }
 
 let wheelListenerCleanup: (() => void) | null = null;
@@ -3110,8 +3082,6 @@ const vehicleDriveInput = reactive<VehicleDriveInputState>({
   steering: 0,
   brake: 0,
 });
-const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('follow');
-const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow');
 const vehicleDriveCameraFollowState = reactive<VehicleDriveCameraFollowState>({
   desiredPosition: new THREE.Vector3(),
   currentPosition: new THREE.Vector3(),
@@ -3621,12 +3591,6 @@ const autoTourResumeBlendState = createCameraFollowState();
 const autoTourResumeBlendStartPosition = new THREE.Vector3();
 const autoTourResumeBlendStartTarget = new THREE.Vector3();
 const autoTourResumeBlendTempCamera = new THREE.PerspectiveCamera();
-const autoTourResumeBlendTempControlsTarget = new THREE.Vector3();
-const autoTourResumeBlendTempControls = {
-  target: autoTourResumeBlendTempControlsTarget,
-  update: () => undefined,
-  enabled: false,
-};
 let autoTourResumeBlendActive = false;
 let autoTourResumeBlendElapsedSeconds = 0;
 let autoTourResumeBlendNodeId: string | null = null;
@@ -3634,27 +3598,6 @@ let autoTourCameraFollowHasSample = false;
 let autoTourActiveSyncAccumSeconds = 0;
 const autoTourRotationOnlyHold = ref(false);
 let autoTourLastAnyActive = false;
-// Auto-tour needs a tighter follow profile than the generic controller so turns
-// stay framed instead of letting the vehicle outrun the camera.
-const AUTO_TOUR_CAMERA_FOLLOW_TUNING = {
-  distanceMin: 1.2,
-  distanceMax: 14,
-  heightMin: 4.5,
-  positionLerpSpeed: 5.8,
-  targetLerpSpeed: 7.2,
-  headingLerpSpeed: 4.8,
-  anchorLerpSpeed: 6.2,
-  lookaheadTime: 0.16,
-  lookaheadDistanceMax: 1.8,
-  lookaheadMinSpeedSq: 0.36,
-  lookaheadBlendStart: 0.35,
-  lookaheadBlendSpeed: 4.2,
-  motionSpeedThreshold: 0.9,
-  motionSpeedFull: 5.5,
-  motionBlendSpeed: 3.2,
-  motionDistanceBoost: 0.12,
-  motionHeightBoost: 0.08,
-};
 
 function applyAutoTourCameraInputPolicy(): void {
   if (vehicleDriveActive.value) {
@@ -3778,7 +3721,6 @@ function prepareAutoTourResumeBlendContext(
   );
   autoTourResumeBlendTempCamera.position.copy(autoTourResumeBlendStartPosition);
   autoTourResumeBlendTempCamera.up.copy(context.camera.up);
-  autoTourResumeBlendTempControlsTarget.copy(autoTourResumeBlendStartTarget);
   return computeFollowPlacement(getApproxDimensions(object));
 }
 
@@ -4237,30 +4179,13 @@ const vehicleDriveController = new VehicleDriveController(
     setCameraCaging,
     withControlsVerticalFreedom,
     lockControlsPitchToCurrent,
-    syncLastFirstPersonStateFromCamera,
     onToast: (message) => uni.showToast({ title: message, icon: 'none' }),
     onResolveBehaviorToken: (token, resolution) => resolveBehaviorToken(token, resolution),
 
     // Use one shared follow-camera tuning profile across platforms.
-    followCameraDistanceScale: () => 1.5,
+    followCameraDistanceScale: () => DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     followCameraVelocityLerpSpeed: () => 0,
-    followCameraTuning: () => ({
-      distanceMax: 16,
-      positionLerpSpeed: 0,
-      targetLerpSpeed: 4.8,
-      headingLerpSpeed: 2.8,
-      anchorLerpSpeed: 0,
-      lookaheadTime: 0,
-      lookaheadDistanceMax: 0,
-      lookaheadMinSpeedSq: 1,
-      lookaheadBlendStart: 99,
-      lookaheadBlendSpeed: 0,
-      motionSpeedThreshold: 99,
-      motionSpeedFull: 6,
-      motionBlendSpeed: 0,
-      motionDistanceBoost: 0,
-      motionHeightBoost: 0,
-    }),
+    followCameraTuning: () => createBackFollowCameraTuning(),
     resolveChassisWorldPosition: (nodeId, chassisBody, target) => {
       if (!physicsEnvironmentEnabled.value) {
         return false;
@@ -4304,8 +4229,6 @@ const vehicleDriveController = new VehicleDriveController(
     state: vehicleDriveStateBridge,
     inputFlags: vehicleDriveInputFlags,
     input: vehicleDriveInput,
-    cameraMode: vehicleDriveCameraMode,
-    orbitMode: vehicleDriveOrbitMode,
     uiOverride: vehicleDriveUiOverride,
     promptBusy: vehicleDrivePromptBusy,
     exitBusy: vehicleDriveExitBusy,
@@ -4353,29 +4276,9 @@ watch(
   },
 );
 
-watch(vehicleDriveCameraMode, (mode) => {
-  vehicleDriveCameraFollowState.initialized = false;
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  if (mode === 'follow') {
-    const nodeId = normalizeNodeId(vehicleDriveNodeId.value);
-    if (nodeId) {
-      setCameraViewState('watching', nodeId);
-      setCameraCaging(true);
-    }
-    setVehicleDriveUiOverride('show');
-    updateVehicleDriveCamera(0, { immediate: true });
-  } else {
-    setVehicleDriveUiOverride('hide');
-    updateVehicleDriveCamera(0, { immediate: true });
-  }
-});
-
 watch(vehicleDriveActive, (active) => {
   if (!active) {
     clearVehicleDriveIntroState();
-    vehicleDriveCameraMode.value = 'follow';
     vehicleDriveCameraFollowState.initialized = false;
     vehicleSpeedDisplayMps.value = 0;
     vehicleSpeedDisplayLastCommitAtMs = 0;
@@ -8614,7 +8517,6 @@ function clearLegacyPhysicsWorld(): void {
   vehicleDriveExitBusy.value = false;
   vehicleDriveResetBusy.value = false;
   resetVehicleDriveInputs();
-  vehicleDriveCameraMode.value = 'follow';
   vehicleDriveCameraFollowState.initialized = false;
   deactivateJoystick(true);
   setVehicleDriveUiOverride('hide');
@@ -11789,9 +11691,6 @@ function resetProtagonistPoseState(): void {
   resetFollowCameraMotionState(characterCameraFollowMotionState);
   characterCameraFollowAnchorScratch.set(0, 0, 0);
   characterCameraFollowForwardScratch.set(0, 0, 0);
-  characterCameraFollowPlacementCache.nodeId = null;
-  characterCameraFollowPlacementCache.objectUuid = null;
-  characterCameraFollowPlacementCache.dimensions = null;
   resetCameraFollowState(characterCameraFollowState);
 }
 
@@ -11843,25 +11742,9 @@ function resolveCharacterFollowForwardWorld(
 }
 
 function resolveCharacterFollowPlacement(
-  nodeId: string,
-  props: CharacterControllerComponentProps,
   object: THREE.Object3D | null,
 ): CameraFollowPlacement {
-  const objectUuid = object?.uuid ?? null;
-  const cache = characterCameraFollowPlacementCache;
-  let dimensions = cache.dimensions;
-  if (!dimensions || cache.nodeId !== nodeId || cache.objectUuid !== objectUuid) {
-    cache.nodeId = nodeId;
-    cache.objectUuid = objectUuid;
-    dimensions = getApproxDimensions(object);
-    cache.dimensions = dimensions;
-  }
-  return {
-    distance: props.cameraFollowDistance,
-    heightOffset: props.cameraFollowHeight,
-    targetLift: Math.max(props.colliderHeight * 0.7, dimensions.height * 0.35, 1),
-    targetForward: Math.max(props.colliderRadius * 1.5, Math.min(dimensions.length * 0.25, 1.2), 0.6),
-  };
+  return computeFollowPlacement(getApproxDimensions(object));
 }
 
 function getNormalizedMultiuserIdentity(): MultiuserIdentity | null {
@@ -15880,10 +15763,9 @@ function updateVehicleDriveCamera(
   if (!renderContext?.camera) {
     return false;
   }
-  const disableOrbitControlsForDriveFollow = vehicleDriveCameraMode.value === 'follow';
   const ctx = {
     camera: renderContext.camera,
-    mapControls: disableOrbitControlsForDriveFollow ? undefined : renderContext.controls,
+    mapControls: undefined,
   };
   return runWithProgrammaticCameraMutationAndAnchor(() =>
     vehicleDriveController.updateCamera(deltaSeconds, ctx, options),
@@ -15920,7 +15802,7 @@ function updateCharacterFollowCamera(
     characterCameraFollowNodeId = controlledNodeId;
   }
 
-  const placement = resolveCharacterFollowPlacement(controlledNodeId, props, object);
+  const placement = resolveCharacterFollowPlacement(object);
   resolveCharacterRootWorldPosition(controlledNodeId, bindingNodeId, object, characterCameraFollowAnchorScratch);
   resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
 
@@ -15939,11 +15821,12 @@ function updateCharacterFollowCamera(
     deltaSeconds,
     ctx: {
       camera: context.camera,
-      mapControls: context.controls,
+      mapControls: undefined,
     },
     velocityWorld: rawVelocity,
     worldUp,
-    tuning: CHARACTER_FOLLOW_CAMERA_TUNING,
+    tuning: createBackFollowCameraTuning(),
+    distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     followControlsDirty: false,
     immediate: Boolean(options.immediate),
     lockLocalOffset: true,
@@ -16022,8 +15905,10 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       desiredForwardWorld: autoTourCameraFollowForwardScratch,
       velocityWorld: autoTourCameraFollowVelocity,
       deltaSeconds: 1 / 60,
-      ctx: { camera: autoTourResumeBlendTempCamera, mapControls: autoTourResumeBlendTempControls },
+      ctx: { camera: autoTourResumeBlendTempCamera, mapControls: undefined },
       immediate: true,
+      tuning: createBackFollowCameraTuning(),
+      distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     });
 
     autoTourResumeBlendElapsedSeconds += Math.max(0, deltaSeconds);
@@ -16106,10 +15991,11 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     desiredForwardWorld: autoTourCameraFollowForwardScratch,
     velocityWorld: autoTourCameraFollowVelocity,
     deltaSeconds,
-    ctx: { camera: context.camera, mapControls: context.controls },
+    ctx: { camera: context.camera, mapControls: undefined },
     immediate: Boolean(options.immediate),
     smoothTargetForProgrammaticFollow: false,
-    tuning: AUTO_TOUR_CAMERA_FOLLOW_TUNING,
+    tuning: createBackFollowCameraTuning(),
+    distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
   })
 
 
@@ -16471,9 +16357,10 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
     desiredForwardWorld: autoTourCameraFollowForwardScratch,
     velocityWorld: autoTourCameraFollowVelocity,
     deltaSeconds: 1 / 60,
-    ctx: { camera: autoTourResumeBlendTempCamera, mapControls: autoTourResumeBlendTempControls },
+    ctx: { camera: autoTourResumeBlendTempCamera, mapControls: undefined },
     immediate: true,
-    tuning: AUTO_TOUR_CAMERA_FOLLOW_TUNING,
+    tuning: createBackFollowCameraTuning(),
+    distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
   });
 
   autoTourCameraFollowState.currentPosition.copy(autoTourResumeBlendStartPosition);

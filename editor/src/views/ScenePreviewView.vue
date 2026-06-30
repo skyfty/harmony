@@ -253,7 +253,13 @@ import {
 	type InstancedLodCullingRequest,
 } from '../utils/instancedLodCulling'
 import type { InstancedLodBoundsSnapshot } from '@schema/core'
-import { VehicleDriveController, resolveCharacterControlMovementMagnitude, CharacterAutoTourRuntimeManager } from '@schema/motion'
+import {
+	DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+	createBackFollowCameraTuning,
+	VehicleDriveController,
+	resolveCharacterControlMovementMagnitude,
+	CharacterAutoTourRuntimeManager,
+} from '@schema/motion'
 import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
 import { AutoTourCameraAvoidanceController, type AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
@@ -381,8 +387,6 @@ const terrainScatterRuntime = createTerrainScatterLodRuntime({
 
 type RuntimePanelMode = 'vehicle' | 'character'
 type RuntimePanelCameraMode = 'first-person' | 'follow'
-type VehicleDriveCameraMode = RuntimePanelCameraMode | 'free'
-type VehicleDriveOrbitMode = 'follow' | 'free'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('Waiting for scene data...')
@@ -460,8 +464,6 @@ const liveUpdatesDisabledLabel = computed(() => {
 	return 'Live updates disabled.'
 })
 const isPlaying = ref(true)
-const vehicleDriveCameraMode = ref<VehicleDriveCameraMode>('first-person')
-const vehicleDriveOrbitMode = ref<VehicleDriveOrbitMode>('follow')
 const characterCameraMode = ref<RuntimePanelCameraMode>('first-person')
 const volumePercent = ref(100)
 const isFullscreen = ref(false)
@@ -1617,7 +1619,15 @@ const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
-const CHARACTER_FOLLOW_CAMERA_DISTANCE_SCALE = 1.16
+const CHARACTER_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning({
+	distanceMin: 4.0,
+	distanceMax: 8.0,
+	heightMin: 2.0,
+	motionSpeedThreshold: 0.1,
+	motionSpeedFull: 3.5,
+	motionDistanceBoost: 0.12,
+	motionHeightBoost: 0.08,
+})
 const CHARACTER_FOLLOW_CAMERA_DISTANCE_MIN = 6.1
 const CHARACTER_FOLLOW_CAMERA_HEIGHT_MIN = 4.4
 const CHARACTER_FOLLOW_CAMERA_TARGET_FORWARD_MIN = 4.2
@@ -2949,7 +2959,7 @@ const runtimePanelUi = computed(() => {
 			mode: 'vehicle' as RuntimePanelMode,
 			label,
 			cameraLocked: vehicleDriveState.active,
-			cameraMode: vehicleDriveCameraMode.value === 'follow' ? 'follow' : 'first-person',
+			cameraMode: 'follow',
 			forwardActive: vehicleDriveState.active && vehicleDriveInputFlags.forward,
 			backwardActive: vehicleDriveState.active && vehicleDriveInputFlags.backward,
 			leftActive: vehicleDriveState.active && vehicleDriveInputFlags.left,
@@ -3226,6 +3236,8 @@ const vehicleDriveController = new VehicleDriveController(
 			return true
 		},
 		resolveCurrentSpeedMps: (nodeId) => controlledNodeMotionRuntime.resolveLinearSpeedMps(nodeId, null),
+		followCameraDistanceScale: () => DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+		followCameraTuning: () => CHARACTER_FOLLOW_CAMERA_TUNING,
 		onVehicleObjectTransformUpdated: (_nodeId, object) => {
 			syncInstancedTransform(object)
 		},
@@ -3234,8 +3246,6 @@ const vehicleDriveController = new VehicleDriveController(
 		state: vehicleDriveState,
 		inputFlags: vehicleDriveInputFlags,
 		input: vehicleDriveInput,
-		cameraMode: vehicleDriveCameraMode,
-		orbitMode: vehicleDriveOrbitMode,
 		uiOverride: vehicleDriveUiOverride,
 		promptBusy: vehicleDrivePromptBusy,
 		exitBusy: vehicleDriveExitBusy,
@@ -3415,32 +3425,11 @@ const runtimePanelCameraToggleConfig = computed(() => {
 			? { icon: 'mdi-crosshairs-off', label: 'Stop following' }
 			: { icon: 'mdi-crosshairs-gps', label: 'Follow character' }
 	}
-	const followActive = vehicleDriveCameraMode.value === 'follow'
-	return followActive
-		? { icon: 'mdi-crosshairs-off', label: 'Stop following' }
-		: { icon: 'mdi-crosshairs-gps', label: 'Follow driving' }
+	return { icon: 'mdi-crosshairs-gps', label: 'Reset driving camera' }
 })
 
 function setVehicleDriveUiOverride(mode: 'auto' | 'show' | 'hide'): void {
 	vehicleDriveUiOverride.value = mode
-}
-
-function setVehicleDriveOrbitMode(mode: VehicleDriveOrbitMode): void {
-	if (vehicleDriveOrbitMode.value === mode) {
-		return
-	}
-	vehicleDriveOrbitMode.value = mode
-	if (vehicleDriveState.active) {
-		syncVehicleDriveCameraMode()
-	}
-}
-
-function toggleVehicleDriveOrbitMode(): void {
-	const nextMode: VehicleDriveOrbitMode = vehicleDriveOrbitMode.value === 'follow' ? 'free' : 'follow'
-	if (nextMode === 'follow') {
-		resetVehicleFollowLocalOffset()
-	}
-	setVehicleDriveOrbitMode(nextMode)
 }
 
 function resolveGuideboardComponent(
@@ -5634,11 +5623,8 @@ function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
 	updateCameraControlActivation()
 }
 
-function syncVehicleDriveCameraMode(): void {
+function syncVehicleDriveCameraFollowState(): void {
 	if (!vehicleDriveState.active) {
-		if (vehicleDriveCameraMode.value !== 'first-person') {
-			vehicleDriveCameraMode.value = 'first-person'
-		}
 		vehicleDriveCameraFollowState.initialized = false
 		resetVehicleFollowLocalOffset()
 		followCameraControlActive = false
@@ -5646,27 +5632,14 @@ function syncVehicleDriveCameraMode(): void {
 		applyMapControlFollowSettings(false)
 		return
 	}
-	const desiredMode: VehicleDriveCameraMode = vehicleDriveOrbitMode.value
-	const modeChanged = vehicleDriveCameraMode.value !== desiredMode
-	vehicleDriveCameraMode.value = desiredMode
-	if (desiredMode === 'follow') {
-		if (modeChanged) {
-			vehicleDriveCameraFollowState.initialized = false
-		}
-		applyMapControlFollowSettings(true)
-	} else {
-		vehicleDriveCameraFollowState.initialized = false
-		followCameraControlActive = false
-		followCameraControlDirty = false
-		applyMapControlFollowSettings(false)
-	}
+	applyMapControlFollowSettings(true)
 	setCameraCaging(false, { force: true })
 	if (!camera || !renderer) {
 		return
 	}
 	updateVehicleDriveCamera(0, {
 		immediate: true,
-		applyOrbitTween: desiredMode === 'follow',
+		applyOrbitTween: true,
 	})
 }
 
@@ -7170,21 +7143,13 @@ function updateCharacterFollowCamera(
 		deltaSeconds: delta,
 		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
 		worldUp: AUTO_TOUR_CAMERA_WORLD_UP,
-		distanceScale: CHARACTER_FOLLOW_CAMERA_DISTANCE_SCALE,
+		distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
 		localOffsetOverride: characterFollowCameraOffset,
 		lockLocalOffset: true,
 		applyOrbitTween: false,
 		followControlsDirty,
 		immediate,
-		tuning: {
-			distanceMin: 4.0,
-			distanceMax: 8.0,
-			heightMin: 2.0,
-			motionSpeedThreshold: 0.1,
-			motionSpeedFull: 3.5,
-			motionDistanceBoost: 0.12,
-			motionHeightBoost: 0.08,
-		},
+		tuning: CHARACTER_FOLLOW_CAMERA_TUNING,
 	})
 	if (updated) {
 		lastOrbitState.position.copy(activeCamera.position)
@@ -8189,7 +8154,7 @@ function startVehicleDriveMode(
 	activeCameraLookTween = null
 	setCameraViewState('watching', targetNodeId)
 	setVehicleDriveUiOverride('show')
-	syncVehicleDriveCameraMode()
+	syncVehicleDriveCameraFollowState()
 	return { success: true }
 }
 
@@ -8213,7 +8178,6 @@ function stopVehicleDriveMode(options: { resolution?: BehaviorEventResolution; p
 	resetVehicleFollowLocalOffset()
 	followCameraControlActive = false
 	followCameraControlDirty = false
-	vehicleDriveCameraMode.value = 'first-person'
 	applyMapControlFollowSettings(false)
 	vehicleDriveExitBusy.value = false
 	if (options.preserveCamera) {
@@ -8854,11 +8818,11 @@ function retryPendingVehicleDriveIfNeeded(): void {
 	pendingVehicleDriveRetryRequested.value = false
 }
 
-function handleVehicleDriveCameraToggle(): void {
+function handleVehicleDriveCameraReset(): void {
 	if (!vehicleDriveState.active) {
 		return
 	}
-	toggleVehicleDriveOrbitMode()
+	syncVehicleDriveCameraFollowState()
 }
 
 function handleCharacterCameraToggle(): void {
@@ -8877,7 +8841,7 @@ function handleRuntimePanelCameraToggle(): void {
 		handleCharacterCameraToggle()
 		return
 	}
-	handleVehicleDriveCameraToggle()
+	handleVehicleDriveCameraReset()
 }
 
 function handleCharacterControlExitClick(): void {
@@ -9371,7 +9335,7 @@ function initControls() {
 	mapControls.target.copy(lastOrbitState.target)
 	mapControls.addEventListener('start', () => {
 		activeCameraLookTween = null
-		if (vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow') {
+		if (vehicleDriveState.active) {
 			followCameraControlActive = true
 		}
 	})
@@ -9858,7 +9822,7 @@ function startAnimationLoop() {
 		// 1) Input / camera controls
 		updateSteeringAutoCenter(delta)
 		syncAutoTourCameraInputPolicyForFrame(delta)
-		const vehicleFollowCameraActive = vehicleDriveState.active && vehicleDriveCameraMode.value === 'follow'
+		const vehicleFollowCameraActive = vehicleDriveState.active
 		const characterFollowCameraActive =
 			!vehicleDriveState.active
 			&& characterCameraMode.value === 'follow'

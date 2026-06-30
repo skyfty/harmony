@@ -127,6 +127,33 @@ export const DEFAULT_CAMERA_FOLLOW_TUNING: CameraFollowTuning = {
   movingSpeedSq: 0.04,
 }
 
+export const DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE = 1.5
+
+export const DEFAULT_BACK_FOLLOW_CAMERA_TUNING: Partial<CameraFollowTuning> = {
+  distanceMax: 16,
+  positionLerpSpeed: 0,
+  targetLerpSpeed: 4.8,
+  headingLerpSpeed: 2.8,
+  anchorLerpSpeed: 0,
+  lookaheadTime: 0,
+  lookaheadDistanceMax: 0,
+  lookaheadMinSpeedSq: 1,
+  lookaheadBlendStart: 99,
+  lookaheadBlendSpeed: 0,
+  motionSpeedThreshold: 99,
+  motionSpeedFull: 6,
+  motionBlendSpeed: 0,
+  motionDistanceBoost: 0,
+  motionHeightBoost: 0,
+}
+
+export function createBackFollowCameraTuning(overrides: Partial<CameraFollowTuning> = {}): Partial<CameraFollowTuning> {
+  return {
+    ...DEFAULT_BACK_FOLLOW_CAMERA_TUNING,
+    ...overrides,
+  }
+}
+
 export const DEFAULT_OBJECT_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 
 export function createCameraFollowState(): CameraFollowState {
