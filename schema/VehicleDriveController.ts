@@ -212,6 +212,7 @@ const VEHICLE_FOLLOW_CAMERA_VELOCITY_DEAD_ZONE_SQ = 0.0064
 const VEHICLE_FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ = 0.09
 // 松开油门时的惯性阻尼
 const VEHICLE_COASTING_DAMPING = 0.04
+const VEHICLE_SPEED_LIMIT_EPSILON = 1e-4
 // 平滑停车默认阻尼
 const VEHICLE_SMOOTH_STOP_DEFAULT_DAMPING = 0.18
 // 平滑停车最大阻尼
@@ -929,15 +930,6 @@ export class VehicleDriveController {
       }
     const targetSpeedMps = this.resolveManualDriveTargetSpeed(throttleInput, speedCaps)
     if (!state.vehicle || this.deps.isPhysicsEnabled?.() === false) {
-      if (state.vehicle && this.deps.isPhysicsEnabled?.() === false) {
-        const vehicleObject = this.deps.nodeObjectMap.get(nodeId) ?? null
-        if (vehicleObject) {
-          this.initializeTransformDrive(vehicleObject)
-          state.vehicle = null
-          state.wheelCount = 0
-          state.steerableWheelIndices = []
-        }
-      }
       this.applyTransformDrive(nodeId, deltaSeconds)
       return
     }
@@ -952,7 +944,6 @@ export class VehicleDriveController {
     let brakeInput = brakeInputRaw
     const smoothStop = this.smoothStopState
     let speedSq = 0
-    let forwardVelocity: number | null = null
 
     if (velocity && chassisBody && instance.axisForward) {
       speedSq = velocity.lengthSquared()
@@ -972,8 +963,7 @@ export class VehicleDriveController {
         forwardWorld.set(0, 0, 1)
       }
       forwardWorld.applyQuaternion(this.temp.tempQuaternion).normalize()
-      forwardVelocity = velocity.x * forwardWorld.x + velocity.y * forwardWorld.y + velocity.z * forwardWorld.z
-      const currentForwardVelocity = forwardVelocity ?? 0
+      const currentForwardVelocity = velocity.x * forwardWorld.x + velocity.y * forwardWorld.y + velocity.z * forwardWorld.z
       if (Math.abs(targetSpeedMps) < 0.05) {
         let damping = VEHICLE_COASTING_DAMPING
         if (smoothStop.active) {
@@ -1009,6 +999,17 @@ export class VehicleDriveController {
           velocity.y += forwardWorld.y * targetDelta
           velocity.z += forwardWorld.z * targetDelta
         }
+        speedSq = velocity.lengthSquared()
+      }
+
+      const hardCap = Number.isFinite(speedCaps.hardCap) ? Math.max(0.1, speedCaps.hardCap) : Number.POSITIVE_INFINITY
+      const reverseCap = Number.isFinite(speedCaps.reverseCap) ? Math.max(0.1, speedCaps.reverseCap) : Number.POSITIVE_INFINITY
+      const clampedForwardVelocity = THREE.MathUtils.clamp(currentForwardVelocity, -reverseCap, hardCap)
+      const forwardVelocityDelta = currentForwardVelocity - clampedForwardVelocity
+      if (Math.abs(forwardVelocityDelta) > VEHICLE_SPEED_LIMIT_EPSILON) {
+        velocity.x -= forwardWorld.x * forwardVelocityDelta
+        velocity.y -= forwardWorld.y * forwardVelocityDelta
+        velocity.z -= forwardWorld.z * forwardVelocityDelta
         speedSq = velocity.lengthSquared()
       }
 
