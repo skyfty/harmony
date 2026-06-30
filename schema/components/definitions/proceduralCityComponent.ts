@@ -239,8 +239,8 @@ function configureCityTexture(texture: THREE.Texture): THREE.Texture {
   texture.wrapS = THREE.RepeatWrapping
   texture.wrapT = THREE.RepeatWrapping
   texture.magFilter = THREE.LinearFilter
-  texture.minFilter = THREE.LinearMipmapLinearFilter
-  texture.anisotropy = 8
+  texture.minFilter = THREE.LinearFilter
+  texture.anisotropy = 1
   texture.colorSpace = THREE.SRGBColorSpace
   texture.generateMipmaps = true
   return texture
@@ -934,8 +934,10 @@ function generateProceduralCityParcels(
 
 const BUILDING_VARIANT_COUNT = 12
 const PROCEDURAL_CITY_TILE_SIZE = 48
+const PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH = 64
+const PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT = 128
 const facadeTextureByStyle = new Map<ProceduralCityStyle, THREE.Texture>()
-const wallMaterialByStyle = new Map<ProceduralCityStyle, THREE.MeshLambertMaterial>()
+const wallMaterialByStyle = new Map<ProceduralCityStyle, THREE.Material>()
 const archetypesByStyle = new Map<ProceduralCityStyle, Array<{ geometry: THREE.BufferGeometry }>>()
 
 function loadFacadeTexture(style: unknown): THREE.Texture {
@@ -966,8 +968,8 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
         }
       }
       const upscale = document.createElement('canvas')
-      upscale.width = 512
-      upscale.height = 1024
+      upscale.width = PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH
+      upscale.height = PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT
       const upscaleContext = upscale.getContext('2d')!
       upscaleContext.imageSmoothingEnabled = false
       upscaleContext.drawImage(canvas, 0, 0, upscale.width, upscale.height)
@@ -1030,8 +1032,8 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
       }
     }
     const upscale = document.createElement('canvas')
-    upscale.width = 512
-    upscale.height = 1024
+    upscale.width = PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH
+    upscale.height = PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT
     const upscaleContext = upscale.getContext('2d')!
     upscaleContext.imageSmoothingEnabled = false
     upscaleContext.drawImage(canvas, 0, 0, upscale.width, upscale.height)
@@ -1050,13 +1052,13 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
   return texture
 }
 
-function getWallMaterial(style: unknown): THREE.MeshLambertMaterial {
+function getWallMaterial(style: unknown): THREE.Material {
   const resolvedStyle = resolveProceduralCityStyle(style)
   const cachedMaterial = wallMaterialByStyle.get(resolvedStyle)
   if (cachedMaterial) {
     return cachedMaterial
   }
-  const material = new THREE.MeshLambertMaterial({
+  const material = new THREE.MeshBasicMaterial({
     map: loadFacadeTexture(resolvedStyle),
     vertexColors: true,
   })
@@ -1155,6 +1157,7 @@ function createMesh(
 ): THREE.InstancedMesh {
   const mesh = new THREE.InstancedMesh(geometry, material, count)
   mesh.name = name
+  mesh.matrixAutoUpdate = false
   // Procedural city instances are static until the component is rebuilt.
   // Treat them as static render data so the renderer can cull them and avoid
   // extra shadow work in the viewport.
@@ -1221,6 +1224,7 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknow
       tileOrigin.y + PROCEDURAL_CITY_TILE_SIZE * 0.5,
     )
     tileGroup.position.copy(proceduralCityTileGroupCenter)
+    tileGroup.updateMatrix()
 
     tileBucket.parcelsByVariant.forEach((entries, variant) => {
       const archetype = archetypeList[variant]!
@@ -1384,7 +1388,6 @@ class ProceduralCityComponent extends Component<ProceduralCityComponentProps> {
   }
 
   onInit(): void {
-    console.log("lskjfl")
     this.rebuild()
   }
 
