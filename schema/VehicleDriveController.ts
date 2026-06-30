@@ -673,20 +673,6 @@ export class VehicleDriveController {
             hardCap = Math.min(hardCap, vehicleCap)
           }
         }
-        const pureComp = node.components?.[PURE_PURSUIT_COMPONENT_TYPE] as any
-        if (pureComp && pureComp.enabled) {
-          const pp = clampPurePursuitComponentProps(pureComp.props ?? null)
-          if (Number.isFinite(pp.maxSpeedMps) && pp.maxSpeedMps > 0) {
-            hardCap = Math.min(hardCap, pp.maxSpeedMps)
-          }
-        }
-        const autoComp = node.components?.[AUTO_TOUR_COMPONENT_TYPE] as any
-        if (autoComp && autoComp.enabled) {
-          const at = clampAutoTourComponentProps(autoComp.props ?? null)
-          if (Number.isFinite(at.maxSpeedMps) && at.maxSpeedMps > 0) {
-            hardCap = Math.min(hardCap, at.maxSpeedMps)
-          }
-        }
       }
     } catch {
       hardCap = Number.POSITIVE_INFINITY
@@ -920,7 +906,7 @@ export class VehicleDriveController {
 
   }
 
-  applyForces(deltaSeconds?: number): void {
+  applyForces(deltaSeconds: number): void {
     const state = this.state
     if (!state.active || !state.nodeId) {
       return
@@ -966,9 +952,7 @@ export class VehicleDriveController {
 
     if (velocity && chassisBody && instance.axisForward) {
       speedSq = velocity.lengthSquared()
-      const dt = typeof deltaSeconds === 'number' && Number.isFinite(deltaSeconds)
-        ? Math.max(0, Math.min(0.25, deltaSeconds))
-        : 1 / 60
+      const dt = Math.max(0, Math.min(0.25, deltaSeconds))
 
       // Compute forward velocity once. Using total speed (|v|) for limiting can cause oscillation
       // if there's small lateral/vertical velocity noise at high speed.

@@ -281,9 +281,9 @@ export const DEFAULT_VEHICLE_BRAKE_FORCE_MAX = 16
 export const MIN_VEHICLE_BRAKE_FORCE_MAX = 0
 export const MAX_VEHICLE_BRAKE_FORCE_MAX = 1000
 
-export const DEFAULT_VEHICLE_MAX_SPEED_KMH = 45
+export const DEFAULT_VEHICLE_MAX_SPEED_KMH = 30
 export const MIN_VEHICLE_MAX_SPEED_KMH = 0
-export const MAX_VEHICLE_MAX_SPEED_KMH = 300
+export const MAX_VEHICLE_MAX_SPEED_KMH = 30
 export const DEFAULT_RADIUS = 0.5
 export const DEFAULT_DIRECTION: Vector3Like = createVector(0, -1, 0)
 export const DEFAULT_AXLE: Vector3Like = createVector(0, 0, 1)

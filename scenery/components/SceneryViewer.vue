@@ -9592,6 +9592,7 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
           brake: 0,
         };
 
+
   syncPhysicsBridgeVehicleInput({
     state: physicsBridgeVehicleInputSyncState,
     bridge: physicsBridge,
