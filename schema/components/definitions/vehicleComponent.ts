@@ -299,6 +299,115 @@ export const DEFAULT_MAX_SUSPENSION_FORCE = 100000
 export const DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED = false
 export const DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED = -30
 export const DEFAULT_IS_FRONT_WHEEL = true
+
+export interface VehicleDerivedTuning {
+  maxSteerDegrees: number
+  maxSteerRateDegPerSec: number
+  engineForceMax: number
+  brakeForceMax: number
+  wheelTemplate: Omit<VehicleWheelProps, 'id'>
+}
+
+function clampRatio(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+export function resolveVehicleDerivedTuning(maxSpeedKmh: number): VehicleDerivedTuning {
+  const speedKmh = Number.isFinite(maxSpeedKmh) ? Math.max(0, maxSpeedKmh) : DEFAULT_VEHICLE_MAX_SPEED_KMH
+  const referenceSpeed = Math.max(1, DEFAULT_VEHICLE_MAX_SPEED_KMH)
+  const speedRatio = clampRatio(speedKmh / referenceSpeed, 0.2, 2.5)
+  const steerRatio = clampRatio(Math.max(speedRatio, 0.2), 0.2, 2.5)
+  const wheelRatio = clampRatio(Math.max(speedRatio, 0.2), 0.2, 2.5)
+
+  return {
+    maxSteerDegrees: clampNumberRange(
+      DEFAULT_VEHICLE_MAX_STEER_DEGREES / Math.pow(steerRatio, 0.35),
+      DEFAULT_VEHICLE_MAX_STEER_DEGREES,
+      MIN_VEHICLE_MAX_STEER_DEGREES,
+      MAX_VEHICLE_MAX_STEER_DEGREES,
+    ),
+    maxSteerRateDegPerSec: clampNumberRange(
+      DEFAULT_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC * Math.pow(steerRatio, 0.25),
+      DEFAULT_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC,
+      MIN_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC,
+      MAX_VEHICLE_MAX_STEER_RATE_DEG_PER_SEC,
+    ),
+    engineForceMax: clampNumberRange(
+      DEFAULT_VEHICLE_ENGINE_FORCE_MAX * Math.pow(speedRatio, 1.3),
+      DEFAULT_VEHICLE_ENGINE_FORCE_MAX,
+      MIN_VEHICLE_ENGINE_FORCE_MAX,
+      MAX_VEHICLE_ENGINE_FORCE_MAX,
+    ),
+    brakeForceMax: clampNumberRange(
+      DEFAULT_VEHICLE_BRAKE_FORCE_MAX * Math.pow(speedRatio, 0.85),
+      DEFAULT_VEHICLE_BRAKE_FORCE_MAX,
+      MIN_VEHICLE_BRAKE_FORCE_MAX,
+      MAX_VEHICLE_BRAKE_FORCE_MAX,
+    ),
+    wheelTemplate: {
+      nodeId: null,
+      chassisConnectionPointLocal: cloneVectorLike(DEFAULT_CHASSIS_CONNECTION_POINT),
+      radius: DEFAULT_RADIUS,
+      suspensionRestLength: clampNumberRange(
+        DEFAULT_SUSPENSION_REST_LENGTH * Math.pow(wheelRatio, -0.1),
+        DEFAULT_SUSPENSION_REST_LENGTH,
+        0.05,
+        2,
+      ),
+      suspensionStiffness: clampNumberRange(
+        DEFAULT_SUSPENSION_STIFFNESS * Math.pow(wheelRatio, 0.95),
+        DEFAULT_SUSPENSION_STIFFNESS,
+        1,
+        400,
+      ),
+      dampingRelaxation: clampNumberRange(
+        DEFAULT_DAMPING_RELAXATION * Math.pow(wheelRatio, 0.75),
+        DEFAULT_DAMPING_RELAXATION,
+        0.1,
+        20,
+      ),
+      dampingCompression: clampNumberRange(
+        DEFAULT_DAMPING_COMPRESSION * Math.pow(wheelRatio, 0.82),
+        DEFAULT_DAMPING_COMPRESSION,
+        0.1,
+        20,
+      ),
+      frictionSlip: clampNumberRange(
+        DEFAULT_FRICTION_SLIP + (wheelRatio - 1) * 0.25,
+        DEFAULT_FRICTION_SLIP,
+        0.5,
+        5,
+      ),
+      maxSuspensionTravel: clampNumberRange(
+        DEFAULT_MAX_SUSPENSION_TRAVEL * Math.pow(wheelRatio, -0.2),
+        DEFAULT_MAX_SUSPENSION_TRAVEL,
+        0.05,
+        2,
+      ),
+      maxSuspensionForce: clampNumberRange(
+        DEFAULT_MAX_SUSPENSION_FORCE * Math.pow(wheelRatio, 1.2),
+        DEFAULT_MAX_SUSPENSION_FORCE,
+        1000,
+        500000,
+      ),
+      useCustomSlidingRotationalSpeed: DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+      customSlidingRotationalSpeed: clampNumber(
+        DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED * Math.pow(wheelRatio, 0.6),
+        DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
+      ),
+      isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
+      rollInfluence: clampNumberRange(
+        DEFAULT_ROLL_INFLUENCE / Math.pow(wheelRatio, 0.35),
+        DEFAULT_ROLL_INFLUENCE,
+        0.001,
+        0.1,
+      ),
+      directionLocal: cloneVectorLike(DEFAULT_DIRECTION),
+      axleLocal: cloneVectorLike(DEFAULT_AXLE),
+    },
+  }
+}
+
 export const DEFAULT_WHEEL_TEMPLATE: Omit<VehicleWheelProps, 'id'> = {
   nodeId: null,
   chassisConnectionPointLocal: cloneVectorLike(DEFAULT_CHASSIS_CONNECTION_POINT),
@@ -389,6 +498,7 @@ type LegacyWheelProps = {
   customSlidingRotationalSpeed?: unknown
   isFrontWheel?: unknown
   chassisConnectionPointLocal?: unknown
+  maxSpeedKmh?: unknown
 }
 
 type LegacyComponentVectors = {
@@ -465,8 +575,16 @@ function resolveLegacyWheelTemplate(
   props: LegacyWheelProps | null | undefined,
   vectors: { directionLocal: Vector3Like; axleLocal: Vector3Like },
 ): Omit<VehicleWheelProps, 'id'> {
+  const derived = resolveVehicleDerivedTuning(
+    clampNumberRange(
+      props?.maxSpeedKmh,
+      DEFAULT_VEHICLE_MAX_SPEED_KMH,
+      MIN_VEHICLE_MAX_SPEED_KMH,
+      MAX_VEHICLE_MAX_SPEED_KMH,
+    ),
+  ).wheelTemplate
   return {
-    ...DEFAULT_WHEEL_TEMPLATE,
+    ...derived,
     radius: clampPositive(props?.radius, DEFAULT_RADIUS, { min: 0.01 }),
     suspensionRestLength: clampPositive(props?.suspensionRestLength, DEFAULT_SUSPENSION_REST_LENGTH, { min: 0 }),
     suspensionStiffness: clampPositive(props?.suspensionStiffness, DEFAULT_SUSPENSION_STIFFNESS, { min: 0 }),

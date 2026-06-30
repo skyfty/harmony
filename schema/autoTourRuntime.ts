@@ -174,6 +174,14 @@ function setVector3Like(target: any, x: number, y: number, z: number): void {
   target.z = z
 }
 
+function resolveVehicleSpeedCapMps(vehicleProps: VehicleComponentProps | null | undefined): number {
+  const maxSpeedKmh = vehicleProps?.maxSpeedKmh
+  if (typeof maxSpeedKmh !== 'number' || !Number.isFinite(maxSpeedKmh) || maxSpeedKmh <= 0) {
+    return Number.POSITIVE_INFINITY
+  }
+  return maxSpeedKmh / 3.6
+}
+
 function resolveRemainingRouteDistance(
   polylineData3d: PolylineMetricData | undefined,
   projectedS: number | undefined,
@@ -437,7 +445,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     arrivalDistance: number
     tourProps: AutoTourComponentProps
     routeSpeed?: number
-    speedCap?: number
     pursuitProps?: PurePursuitComponentProps
     vehicleProps?: VehicleComponentProps
     controlState?: PurePursuitVehicleControlState
@@ -454,7 +461,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       arrivalDistance,
       tourProps,
       routeSpeed = 0,
-      speedCap = 0,
       pursuitProps,
       vehicleProps,
       controlState,
@@ -473,6 +479,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const reachedStart = !Number.isFinite(distanceToStart) || distanceToStart <= arrivalDistance
 
       if (isVehicleRoute && vehicleInstance && resolvedPursuitProps && resolvedVehicleProps && resolvedControlState) {
+        const vehicleSpeedCap = resolveVehicleSpeedCapMps(resolvedVehicleProps)
         const nextPoint = points[Math.min(1, endIndex)]!
         returnToStartPointA.set(autoTourCurrentPosition.x, autoTourCurrentPosition.y, autoTourCurrentPosition.z)
         returnToStartPointB.set(startPoint.x, autoTourCurrentPosition.y, startPoint.z)
@@ -484,7 +491,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           loop: false,
           deltaSeconds,
           speedMps: routeSpeed,
-          speedCapMps: speedCap,
+          speedCapMps: vehicleSpeedCap,
           resolvedForwardSpeedMps: deps.resolveVehicleMotionTelemetry?.(nodeId)?.forwardSpeedMps ?? null,
           pursuitProps: resolvedPursuitProps,
           vehicleProps: resolvedVehicleProps,
@@ -612,7 +619,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       points,
       dockFlags: options.dockFlags,
       routeSpeed,
-      speedCap,
       moveSpeed,
       deltaSeconds,
       arrivalDistance,
@@ -905,7 +911,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     dockFlags: boolean[]
     endIndex: number
     routeSpeed: number
-    speedCap: number
     moveSpeed: number
     deltaSeconds: number
     arrivalDistance: number
@@ -926,7 +931,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       dockFlags,
       endIndex,
       routeSpeed,
-      speedCap,
       moveSpeed,
       deltaSeconds,
       arrivalDistance,
@@ -940,6 +944,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     } = options
 
     const directMoveVehicle = hasVehicleComponent && (!hasVehicleInstance || !usePhysicsDrive)
+    const vehicleSpeedCap = resolveVehicleSpeedCapMps(vehicleProps)
 
     if (hasVehicleComponent) {
       const shouldContinue = prepareAutoTourVehicleNodeState({
@@ -979,7 +984,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         points,
         dockFlags,
         routeSpeed,
-        speedCap,
+        speedCap: vehicleSpeedCap,
         moveSpeed,
         deltaSeconds,
         arrivalDistance,
@@ -1497,15 +1502,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       // 将巡游配置速度先归一为非负值，避免外部配置误写负数时引入反向速度或其他异常行为。
       const routeSpeed = Math.max(0, tourProps.speedMps)
-      // 读取 PurePursuit 的速度上限：这是底层追踪/巡航实现允许的最大速度。
-      // 若未配置或值不是有限数字，则按“不限制”处理，用正无穷大表示。
-      const pursuitMax = Number.isFinite(pursuitProps.maxSpeedMps) ? Math.max(0, pursuitProps.maxSpeedMps) : Number.POSITIVE_INFINITY
-      // 读取 AutoTour 任务自身的速度上限：这是当前自动巡游任务可接受的最大速度。
-      // 同样，未配置或非法值都视为不限制。
-      const tourMax = Number.isFinite(tourProps.maxSpeedMps) ? Math.max(0, tourProps.maxSpeedMps) : Number.POSITIVE_INFINITY
-      // 物理车辆的速度 governor 使用的综合上限：既不能突破底层算法能力边界，也不能超过任务配置边界。
-      const speedCap = Math.min(pursuitMax, tourMax)
-      // 直接位移分支仍按综合上限做硬限速，避免视觉运动超出 AutoTour 配置。
+      // Vehicle route uses the vehicle's own top speed as the hard cap.
+      const speedCap = resolveVehicleSpeedCapMps(vehicleProps)
       const moveSpeed = Math.min(routeSpeed, speedCap)
       if (moveSpeed <= 0) {
         continue
@@ -1571,7 +1569,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           dockFlags,
           endIndex,
           routeSpeed,
-          speedCap,
           moveSpeed,
           deltaSeconds,
           arrivalDistance,

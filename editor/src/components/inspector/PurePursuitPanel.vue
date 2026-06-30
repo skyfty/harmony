@@ -69,9 +69,6 @@ import {
   DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
   MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
-  DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS,
-  MIN_PURE_PURSUIT_MAX_SPEED_MPS,
-  MAX_PURE_PURSUIT_MAX_SPEED_MPS,
 } from '@schema/components'
 
 const sceneStore = useSceneStore()
@@ -114,7 +111,9 @@ const localDockYawEnabled = ref(DEFAULT_PURE_PURSUIT_DOCK_YAW_ENABLED)
 const localDockYawSlerpRate = ref(DEFAULT_PURE_PURSUIT_DOCK_YAW_SLERP_RATE)
 const localDockStopEpsilonMeters = ref(DEFAULT_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS)
 const localDockStopSpeedEpsilonMps = ref(DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS)
-const localMaxSpeedMps = ref(DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS)
+const advancedSpeedExpanded = ref(false)
+const advancedApproachExpanded = ref(false)
+const advancedDockingExpanded = ref(false)
 
 watch(
   () => normalizedProps.value,
@@ -143,7 +142,6 @@ watch(
     localDockYawSlerpRate.value = props.dockYawSlerpRate
     localDockStopEpsilonMeters.value = props.dockStopEpsilonMeters
     localDockStopSpeedEpsilonMps.value = props.dockStopSpeedEpsilonMps * 3.6
-    localMaxSpeedMps.value = props.maxSpeedMps * 3.6
   },
   { immediate: true, deep: true },
 )
@@ -181,7 +179,6 @@ const numberLocals: Partial<Record<PurePursuitNumericKey, typeof localLookaheadB
   dockStartDistanceMeters: localDockStartDistanceMeters,
   dockMaxSpeedMps: localDockMaxSpeedMps,
   dockVelocityKp: localDockVelocityKp,
-  maxSpeedMps: localMaxSpeedMps,
   dockYawSlerpRate: localDockYawSlerpRate,
   dockStopEpsilonMeters: localDockStopEpsilonMeters,
   dockStopSpeedEpsilonMps: localDockStopSpeedEpsilonMps,
@@ -196,7 +193,6 @@ function handleNumberField(key: PurePursuitNumericKey, value: string | number): 
   // Keys that represent speeds (stored in m/s). UI shows km/h.
   const speedKeys = new Set<PurePursuitNumericKey>([
     'minSpeedMps',
-    'maxSpeedMps' as PurePursuitNumericKey,
     'dockMaxSpeedMps' as PurePursuitNumericKey,
     'dockStopSpeedEpsilonMps' as PurePursuitNumericKey,
   ])
@@ -246,6 +242,18 @@ function handleDockYawEnabledChange(value: boolean | null) {
     return
   }
   updateComponent({ dockYawEnabled: value })
+}
+
+function toggleAdvancedSpeed() {
+  advancedSpeedExpanded.value = !advancedSpeedExpanded.value
+}
+
+function toggleAdvancedApproach() {
+  advancedApproachExpanded.value = !advancedApproachExpanded.value
+}
+
+function toggleAdvancedDocking() {
+  advancedDockingExpanded.value = !advancedDockingExpanded.value
 }
 
 function handleToggleComponent() {
@@ -306,6 +314,7 @@ function handleRemoveComponent() {
 
     <v-expansion-panel-text>
       <div class="pure-pursuit-panel-body" :class="{ 'is-disabled': !componentEnabled }">
+  
         <div class="pure-pursuit-panel-section-title">Lookahead</div>
         <v-text-field
           label="Base Lookahead (m)"
@@ -334,74 +343,6 @@ function handleRemoveComponent() {
         />
 
         <v-text-field
-          label="Min Lookahead (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_LOOKAHEAD_MIN_METERS"
-          :max="MAX_PURE_PURSUIT_LOOKAHEAD_MIN_METERS"
-          :model-value="localLookaheadMinMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('lookaheadMinMeters', v)"
-        />
-
-        <v-text-field
-          label="Max Lookahead (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_LOOKAHEAD_MAX_METERS"
-          :max="MAX_PURE_PURSUIT_LOOKAHEAD_MAX_METERS"
-          :model-value="localLookaheadMaxMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('lookaheadMaxMeters', v)"
-        />
-
-        <v-divider />
-        <div class="pure-pursuit-panel-section-title">Speed Control</div>
-
-        <v-text-field
-          label="Speed Kp"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_SPEED_KP"
-          :max="MAX_PURE_PURSUIT_SPEED_KP"
-          :model-value="localSpeedKp"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('speedKp', v)"
-        />
-
-        <v-text-field
-          label="Speed Ki"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_SPEED_KI"
-          :max="MAX_PURE_PURSUIT_SPEED_KI"
-          :model-value="localSpeedKi"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('speedKi', v)"
-        />
-
-        <v-text-field
-          label="Integral Clamp"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_SPEED_INTEGRAL_MAX"
-          :max="MAX_PURE_PURSUIT_SPEED_INTEGRAL_MAX"
-          :model-value="localSpeedIntegralMax"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('speedIntegralMax', v)"
-        />
-
-        <v-text-field
           label="Min Speed (km/h)"
           type="number"
           density="compact"
@@ -414,99 +355,185 @@ function handleRemoveComponent() {
           @update:modelValue="(v) => handleNumberField('minSpeedMps', v)"
         />
 
-        <v-text-field
-          label="Cruise Max Speed (km/h)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_MAX_SPEED_MPS * 3.6"
-          :max="MAX_PURE_PURSUIT_MAX_SPEED_MPS * 3.6"
-          :model-value="localMaxSpeedMps"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('maxSpeedMps', v)"
-        />
+        <div class="pure-pursuit-panel-advanced-header">
+          <div class="pure-pursuit-panel-section-title">Advanced Speed</div>
+          <v-btn
+            variant="text"
+            size="small"
+            density="compact"
+            class="pure-pursuit-panel-advanced-toggle"
+            @click="toggleAdvancedSpeed"
+          >
+            {{ advancedSpeedExpanded ? 'Hide' : 'Show' }}
+          </v-btn>
+        </div>
 
-        <v-text-field
-          label="Curvature Slowdown"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_CURVATURE_SPEED_FACTOR"
-          :max="MAX_PURE_PURSUIT_CURVATURE_SPEED_FACTOR"
-          :model-value="localCurvatureSpeedFactor"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('curvatureSpeedFactor', v)"
-        />
+        <v-expand-transition>
+          <div v-show="advancedSpeedExpanded" class="pure-pursuit-panel-advanced-body">
+            <v-text-field
+              label="Min Lookahead (m)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_LOOKAHEAD_MIN_METERS"
+              :max="MAX_PURE_PURSUIT_LOOKAHEAD_MIN_METERS"
+              :model-value="localLookaheadMinMeters"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('lookaheadMinMeters', v)"
+            />
+
+            <v-text-field
+              label="Max Lookahead (m)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_LOOKAHEAD_MAX_METERS"
+              :max="MAX_PURE_PURSUIT_LOOKAHEAD_MAX_METERS"
+              :model-value="localLookaheadMaxMeters"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('lookaheadMaxMeters', v)"
+            />
+
+            <v-text-field
+              label="Speed Kp"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_SPEED_KP"
+              :max="MAX_PURE_PURSUIT_SPEED_KP"
+              :model-value="localSpeedKp"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('speedKp', v)"
+            />
+
+            <v-text-field
+              label="Speed Ki"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_SPEED_KI"
+              :max="MAX_PURE_PURSUIT_SPEED_KI"
+              :model-value="localSpeedKi"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('speedKi', v)"
+            />
+
+            <v-text-field
+              label="Integral Clamp"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_SPEED_INTEGRAL_MAX"
+              :max="MAX_PURE_PURSUIT_SPEED_INTEGRAL_MAX"
+              :model-value="localSpeedIntegralMax"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('speedIntegralMax', v)"
+            />
+
+            <v-text-field
+              label="Curvature Slowdown"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_CURVATURE_SPEED_FACTOR"
+              :max="MAX_PURE_PURSUIT_CURVATURE_SPEED_FACTOR"
+              :model-value="localCurvatureSpeedFactor"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('curvatureSpeedFactor', v)"
+            />
+          </div>
+        </v-expand-transition>
 
         <v-divider />
         <div class="pure-pursuit-panel-section-title">Approach & Brake</div>
 
-        <v-text-field
-          label="Approach Min (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS"
-          :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS"
-          :model-value="localArrivalDistanceMinMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('arrivalDistanceMinMeters', v)"
-        />
+        <div class="pure-pursuit-panel-advanced-header">
+          <div class="pure-pursuit-panel-section-title">Advanced Approach</div>
+          <v-btn
+            variant="text"
+            size="small"
+            density="compact"
+            class="pure-pursuit-panel-advanced-toggle"
+            @click="toggleAdvancedApproach"
+          >
+            {{ advancedApproachExpanded ? 'Hide' : 'Show' }}
+          </v-btn>
+        </div>
 
-        <v-text-field
-          label="Approach Max (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS"
-          :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS"
-          :model-value="localArrivalDistanceMaxMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('arrivalDistanceMaxMeters', v)"
-        />
+        <v-expand-transition>
+          <div v-show="advancedApproachExpanded" class="pure-pursuit-panel-advanced-body">
+            <v-text-field
+              label="Approach Min (m)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS"
+              :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MIN_METERS"
+              :model-value="localArrivalDistanceMinMeters"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('arrivalDistanceMinMeters', v)"
+            />
 
-        <v-text-field
-          label="Approach Speed Gain"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR"
-          :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR"
-          :model-value="localArrivalDistanceSpeedFactor"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('arrivalDistanceSpeedFactor', v)"
-        />
+            <v-text-field
+              label="Approach Max (m)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS"
+              :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_MAX_METERS"
+              :model-value="localArrivalDistanceMaxMeters"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('arrivalDistanceMaxMeters', v)"
+            />
 
-        <v-text-field
-          label="Brake Min (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS"
-          :max="MAX_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS"
-          :model-value="localBrakeDistanceMinMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('brakeDistanceMinMeters', v)"
-        />
+            <v-text-field
+              label="Approach Speed Gain"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR"
+              :max="MAX_PURE_PURSUIT_ARRIVAL_DISTANCE_SPEED_FACTOR"
+              :model-value="localArrivalDistanceSpeedFactor"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('arrivalDistanceSpeedFactor', v)"
+            />
 
-        <v-text-field
-          label="Brake Speed Gain"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR"
-          :max="MAX_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR"
-          :model-value="localBrakeDistanceSpeedFactor"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('brakeDistanceSpeedFactor', v)"
-        />
+            <v-text-field
+              label="Brake Min (m)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS"
+              :max="MAX_PURE_PURSUIT_BRAKE_DISTANCE_MIN_METERS"
+              :model-value="localBrakeDistanceMinMeters"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('brakeDistanceMinMeters', v)"
+            />
+
+            <v-text-field
+              label="Brake Speed Gain"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR"
+              :max="MAX_PURE_PURSUIT_BRAKE_DISTANCE_SPEED_FACTOR"
+              :model-value="localBrakeDistanceSpeedFactor"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('brakeDistanceSpeedFactor', v)"
+            />
+          </div>
+        </v-expand-transition>
 
         <v-divider />
         <div class="pure-pursuit-panel-section-title">Docking</div>
@@ -518,19 +545,6 @@ function handleRemoveComponent() {
           :model-value="localDockingEnabled"
           :disabled="!componentEnabled"
           @update:model-value="handleDockingEnabledChange"
-        />
-
-        <v-text-field
-          label="Dock Start (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_DOCK_START_DISTANCE_METERS"
-          :max="MAX_PURE_PURSUIT_DOCK_START_DISTANCE_METERS"
-          :model-value="localDockStartDistanceMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('dockStartDistanceMeters', v)"
         />
 
         <v-text-field
@@ -546,66 +560,96 @@ function handleRemoveComponent() {
           @update:modelValue="(v) => handleNumberField('dockMaxSpeedMps', v)"
         />
 
-        <v-text-field
-          label="Dock Velocity Kp"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_DOCK_VELOCITY_KP"
-          :max="MAX_PURE_PURSUIT_DOCK_VELOCITY_KP"
-          :model-value="localDockVelocityKp"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('dockVelocityKp', v)"
-        />
+        <div class="pure-pursuit-panel-advanced-header">
+          <div class="pure-pursuit-panel-section-title">Advanced Docking</div>
+          <v-btn
+            variant="text"
+            size="small"
+            density="compact"
+            class="pure-pursuit-panel-advanced-toggle"
+            @click="toggleAdvancedDocking"
+          >
+            {{ advancedDockingExpanded ? 'Hide' : 'Show' }}
+          </v-btn>
+        </div>
 
-        <v-switch
-          label="Dock Yaw Enabled"
-          density="compact"
-          hide-details
-          :model-value="localDockYawEnabled"
-          :disabled="!componentEnabled"
-          @update:model-value="handleDockYawEnabledChange"
-        />
+        <v-expand-transition>
+          <div v-show="advancedDockingExpanded" class="pure-pursuit-panel-advanced-body">
+            <v-text-field
+              label="Dock Start (m)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_DOCK_START_DISTANCE_METERS"
+              :max="MAX_PURE_PURSUIT_DOCK_START_DISTANCE_METERS"
+              :model-value="localDockStartDistanceMeters"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('dockStartDistanceMeters', v)"
+            />
 
-        <v-text-field
-          label="Dock Yaw Rate"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_DOCK_YAW_SLERP_RATE"
-          :max="MAX_PURE_PURSUIT_DOCK_YAW_SLERP_RATE"
-          :model-value="localDockYawSlerpRate"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('dockYawSlerpRate', v)"
-        />
+            <v-text-field
+              label="Dock Velocity Kp"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_DOCK_VELOCITY_KP"
+              :max="MAX_PURE_PURSUIT_DOCK_VELOCITY_KP"
+              :model-value="localDockVelocityKp"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('dockVelocityKp', v)"
+            />
 
-        <v-text-field
-          label="Dock Stop Epsilon (m)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS"
-          :max="MAX_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS"
-          :model-value="localDockStopEpsilonMeters"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('dockStopEpsilonMeters', v)"
-        />
+            <v-switch
+              label="Dock Yaw Enabled"
+              density="compact"
+              hide-details
+              :model-value="localDockYawEnabled"
+              :disabled="!componentEnabled"
+              @update:model-value="handleDockYawEnabledChange"
+            />
 
-        <v-text-field
-          label="Dock Stop Speed (km/h)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS * 3.6"
-          :max="MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS * 3.6"
-          :model-value="localDockStopSpeedEpsilonMps"
-          :disabled="!componentEnabled"
-          @update:modelValue="(v) => handleNumberField('dockStopSpeedEpsilonMps', v)"
-        />
+            <v-text-field
+              label="Dock Yaw Rate"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_DOCK_YAW_SLERP_RATE"
+              :max="MAX_PURE_PURSUIT_DOCK_YAW_SLERP_RATE"
+              :model-value="localDockYawSlerpRate"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('dockYawSlerpRate', v)"
+            />
+
+            <v-text-field
+              label="Dock Stop Epsilon (m)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS"
+              :max="MAX_PURE_PURSUIT_DOCK_STOP_EPSILON_METERS"
+              :model-value="localDockStopEpsilonMeters"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('dockStopEpsilonMeters', v)"
+            />
+
+            <v-text-field
+              label="Dock Stop Speed (km/h)"
+              type="number"
+              density="compact"
+              variant="solo"
+              hide-details
+              :min="MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS * 3.6"
+              :max="MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS * 3.6"
+              :model-value="localDockStopSpeedEpsilonMps"
+              :disabled="!componentEnabled"
+              @update:modelValue="(v) => handleNumberField('dockStopSpeedEpsilonMps', v)"
+            />
+          </div>
+        </v-expand-transition>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -629,6 +673,12 @@ function handleRemoveComponent() {
   gap: 0.6rem;
 }
 
+.pure-pursuit-panel-note {
+  margin: 0 0 0.15rem;
+  font-size: 0.78rem;
+  color: rgba(233, 236, 241, 0.64);
+}
+
 .pure-pursuit-panel-section-title {
   margin-top: 0.35rem;
   font-size: 0.78rem;
@@ -636,6 +686,25 @@ function handleRemoveComponent() {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(233, 236, 241, 0.72);
+}
+
+.pure-pursuit-panel-advanced-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.pure-pursuit-panel-advanced-toggle {
+  color: rgba(233, 236, 241, 0.8);
+  text-transform: none;
+}
+
+.pure-pursuit-panel-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-left: 0.4rem;
 }
 
 .component-menu-btn {

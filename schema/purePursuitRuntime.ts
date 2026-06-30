@@ -66,6 +66,7 @@ const purePursuitClosestPoint = new THREE.Vector3()
 const purePursuitTargetDelta = new THREE.Vector3()
 const yawTargetQuat = new THREE.Quaternion()
 const objectWorldQuat = new THREE.Quaternion()
+const PURE_PURSUIT_DEFAULT_RUNTIME_SPEED_CAP_MPS = 40 / 3.6
 
 const PURE_PURSUIT_STOP_HOLD_BRAKE_MULTIPLIER = 6
 function clamp01(value: number): number {
@@ -264,7 +265,7 @@ function resolvePurePursuitLongitudinalControl(params: {
     dockHoldActive,
   } = params
 
-  const hardCapMps = Number.isFinite(speedCapMps) ? Math.max(0, speedCapMps as number) : Math.max(0, pursuitProps.maxSpeedMps)
+  const hardCapMps = Number.isFinite(speedCapMps) ? Math.max(0, speedCapMps as number) : PURE_PURSUIT_DEFAULT_RUNTIME_SPEED_CAP_MPS
   const commandedCruiseSpeed = clampNumber(Math.max(0, speedMps), 0, hardCapMps)
   const currentSpeedAbs = Math.abs(forwardSignedSpeed)
   const wheelbaseMeters = Math.max(0.25, Number.isFinite(vehicleProps.wheelbaseMeters) ? vehicleProps.wheelbaseMeters : 0)
@@ -335,7 +336,7 @@ function resolvePurePursuitLongitudinalControl(params: {
   }
 
   const piTerm = Math.max(0, pursuitProps.speedKp) * speedError + Math.max(0, pursuitProps.speedKi) * nextIntegral
-  const engineGain = Math.max(1, hardCapMps, pursuitProps.maxSpeedMps)
+  const engineGain = Math.max(1, hardCapMps)
   const engineForceMax = Math.max(0, vehicleProps.engineForceMax)
   const brakeForceMax = Math.max(0, vehicleProps.brakeForceMax)
   const coastDecelForceLimit = engineForceMax * clamp01(pursuitProps.coastDecelForceFactor)

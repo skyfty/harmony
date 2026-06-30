@@ -791,7 +791,7 @@
                   :key="item.id"
                   :title="item.label"
                   :prepend-icon="item.icon"
-                  :disabled="isViewportPlacementItemDisabled(item)"
+                :disabled="isViewportPlacementItemDisabled()"
                   @click="handleViewportPlacementSelect(item)"
                 />
               </div>
@@ -1936,40 +1936,6 @@ const canRecenterGroupOrigin = computed(() => {
   return Array.isArray(node.children) && node.children.length > 0
 })
 
-function hasNodeByPredicate(predicate: (node: any) => boolean, nodes: any[] | undefined = sceneStore.nodes): boolean {
-  if (!nodes?.length) {
-    return false
-  }
-
-  const queue = [...nodes]
-  const visited = new Set<string>()
-
-  while (queue.length > 0) {
-    const node = queue.shift()
-    if (!node) {
-      continue
-    }
-
-    const nodeId = typeof node.id === 'string' ? node.id : null
-    if (nodeId) {
-      if (visited.has(nodeId)) {
-        continue
-      }
-      visited.add(nodeId)
-    }
-
-    if (predicate(node)) {
-      return true
-    }
-
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      queue.push(...node.children)
-    }
-  }
-
-  return false
-}
-
 function handleGroupSelection() {
   if ((selectionCount.value ?? 0) < 1) return
   // call the store action to group selected nodes
@@ -2331,12 +2297,12 @@ function handleViewportPlacementMenuModelUpdate(value: boolean) {
   emit('update:viewport-placement-menu-open', open)
 }
 
-function isViewportPlacementItemDisabled(item: ViewportPlacementItem): boolean {
+function isViewportPlacementItemDisabled(): boolean {
   return false
 }
 
 function handleViewportPlacementSelect(item: ViewportPlacementItem) {
-  if (isViewportPlacementItemDisabled(item)) {
+  if (isViewportPlacementItemDisabled()) {
     return
   }
   emit('start-viewport-placement', item)

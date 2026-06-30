@@ -9,11 +9,8 @@ import {
   type AutoTourComponentProps,
   clampAutoTourComponentProps,
   DEFAULT_AUTO_TOUR_SPEED_MPS,
-  DEFAULT_AUTO_TOUR_MAX_SPEED_MPS,
   MIN_AUTO_TOUR_SPEED_MPS,
   MAX_AUTO_TOUR_SPEED_MPS,
-  MIN_AUTO_TOUR_MAX_SPEED_MPS,
-  MAX_AUTO_TOUR_MAX_SPEED_MPS,
 } from '@schema/components'
 
 const props = withDefaults(defineProps<{
@@ -21,13 +18,11 @@ const props = withDefaults(defineProps<{
   title?: string
   routePickHint?: string
   routePlaceholder?: string
-  showMaxSpeed?: boolean
 }>(), {
   componentType: AUTO_TOUR_COMPONENT_TYPE,
   title: 'Auto Tour',
   routePickHint: '选择导览线路节点 (GuideRoute)',
   routePlaceholder: '未选择导览线路',
-  showMaxSpeed: true,
 })
 
 const sceneStore = useSceneStore()
@@ -49,7 +44,6 @@ const normalizedProps = computed(() => {
 const localRouteNodeId = ref<string | null>(null)
 // Display values in km/h in the UI; stored props remain in m/s.
 const localSpeedMps = ref(DEFAULT_AUTO_TOUR_SPEED_MPS * 3.6)
-const localMaxSpeedMps = ref(DEFAULT_AUTO_TOUR_MAX_SPEED_MPS * 3.6)
 const localLoop = ref(false)
 const localAlignToPath = ref(true)
 const localUsePhysicsDrive = ref(true)
@@ -60,7 +54,6 @@ watch(
   (props) => {
     localRouteNodeId.value = props.routeNodeId
     localSpeedMps.value = props.speedMps * 3.6
-    localMaxSpeedMps.value = props.maxSpeedMps * 3.6
     localLoop.value = props.loop
     localAlignToPath.value = props.alignToPath
     localUsePhysicsDrive.value = props.usePhysicsDrive
@@ -99,21 +92,6 @@ function handleSpeedInput(value: string | number) {
     return
   }
   updateComponent({ speedMps: clamped })
-}
-
-function handleMaxSpeedInput(value: string | number) {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  // Input is km/h; convert to m/s for storage and clamping.
-  const mps = numeric / 3.6
-  const clamped = clampAutoTourComponentProps({ maxSpeedMps: mps }).maxSpeedMps
-  localMaxSpeedMps.value = clamped * 3.6
-  if (Math.abs(clamped - normalizedProps.value.maxSpeedMps) <= 1e-4) {
-    return
-  }
-  updateComponent({ maxSpeedMps: clamped })
 }
 
 function handleLoopChange(value: boolean | null) {
@@ -238,20 +216,6 @@ function handleRemoveComponent() {
           :model-value="localSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="handleSpeedInput"
-        />
-
-        <v-text-field
-          v-if="props.showMaxSpeed"
-          label="Max Speed (km/h)"
-          type="number"
-          density="compact"
-          variant="solo"
-          hide-details
-          :min="MIN_AUTO_TOUR_MAX_SPEED_MPS * 3.6"
-          :max="MAX_AUTO_TOUR_MAX_SPEED_MPS * 3.6"
-          :model-value="localMaxSpeedMps"
-          :disabled="!componentEnabled"
-          @update:modelValue="handleMaxSpeedInput"
         />
 
         <v-switch

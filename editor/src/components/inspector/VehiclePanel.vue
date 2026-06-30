@@ -8,29 +8,14 @@ import NodePicker from '@/components/common/NodePicker.vue'
 import { generateUuid } from '@/utils/uuid'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
-  DEFAULT_RADIUS,
-  DEFAULT_DIRECTION,
-  DEFAULT_AXLE,
-  DEFAULT_SUSPENSION_REST_LENGTH,
-  DEFAULT_SUSPENSION_STIFFNESS,
-  DEFAULT_DAMPING_RELAXATION,
-  DEFAULT_DAMPING_COMPRESSION,
-  DEFAULT_CHASSIS_CONNECTION_POINT,
-  DEFAULT_FRICTION_SLIP,
-  DEFAULT_ROLL_INFLUENCE,
-  DEFAULT_MAX_SUSPENSION_TRAVEL,
-  DEFAULT_MAX_SUSPENSION_FORCE,
-  DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
-  DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
-  DEFAULT_IS_FRONT_WHEEL,
   DEFAULT_VEHICLE_MAX_SPEED_KMH,
   MIN_VEHICLE_MAX_SPEED_KMH,
   MAX_VEHICLE_MAX_SPEED_KMH,
   VEHICLE_COMPONENT_TYPE,
   clampVehicleComponentProps,
-  createDefaultVehicleComponentProps,
   projectVehicleComponentPropsToWorldScale,
   resolveVehicleScaleFactors,
+  resolveVehicleDerivedTuning,
   serializeVehicleComponentPropsFromWorldScale,
   type VehicleComponentProps,
   type VehicleWheelProps,
@@ -74,27 +59,12 @@ const displayProps = computed(() =>
 const wheelEntries = computed(() => displayProps.value.wheels ?? [])
 const wheelDetailsActiveId = ref<string | null>(null)
 const localMaxSpeedKmh = ref(DEFAULT_VEHICLE_MAX_SPEED_KMH)
-const DEFAULT_VEHICLE_PROPS = createDefaultVehicleComponentProps()
-const BASE_WHEEL_TEMPLATE: VehicleWheelProps =
-  DEFAULT_VEHICLE_PROPS.wheels[0] ?? {
-    id: 'wheel-template',
-    nodeId: null,
-    radius: DEFAULT_RADIUS,
-    suspensionRestLength: DEFAULT_SUSPENSION_REST_LENGTH,
-    suspensionStiffness: DEFAULT_SUSPENSION_STIFFNESS,
-    dampingRelaxation: DEFAULT_DAMPING_RELAXATION,
-    dampingCompression: DEFAULT_DAMPING_COMPRESSION,
-    frictionSlip: DEFAULT_FRICTION_SLIP,
-    maxSuspensionTravel: DEFAULT_MAX_SUSPENSION_TRAVEL,
-    maxSuspensionForce: DEFAULT_MAX_SUSPENSION_FORCE,
-    useCustomSlidingRotationalSpeed: DEFAULT_USE_CUSTOM_SLIDING_ROTATIONAL_SPEED,
-    customSlidingRotationalSpeed: DEFAULT_CUSTOM_SLIDING_ROTATIONAL_SPEED,
-    isFrontWheel: DEFAULT_IS_FRONT_WHEEL,
-    rollInfluence: DEFAULT_ROLL_INFLUENCE,
-    directionLocal: cloneVector(DEFAULT_DIRECTION),
-    axleLocal: cloneVector(DEFAULT_AXLE),
-    chassisConnectionPointLocal: cloneVector(DEFAULT_CHASSIS_CONNECTION_POINT),
-  }
+const advancedVehicleExpanded = ref(false)
+const derivedVehicleTuning = computed(() => resolveVehicleDerivedTuning(displayProps.value.maxSpeedKmh))
+const baseWheelTemplate = computed<VehicleWheelProps>(() => ({
+  id: 'wheel-template',
+  ...derivedVehicleTuning.value.wheelTemplate,
+}))
 
 const tempBoundingBox = new Box3()
 const tempBoundingSize = new Vector3()
@@ -185,7 +155,7 @@ function autoPopulateWheelConnectionPoint(wheelId: string, wheelNodeId: string):
     return
   }
   const existingWheel = wheelEntries.value.find((wheel) => wheel.id === wheelId)
-  const suspensionRestLength = existingWheel?.suspensionRestLength ?? BASE_WHEEL_TEMPLATE.suspensionRestLength
+  const suspensionRestLength = existingWheel?.suspensionRestLength ?? baseWheelTemplate.value.suspensionRestLength
   const connectionPoint: Vector3Like = {
     x: localPosition.x,
     y: localPosition.y + suspensionRestLength,
@@ -212,20 +182,20 @@ function autoPopulateWheelParametersFromNode(wheelId: string, node: SceneNode): 
 function resetWheelParameters(wheelId: string): void {
   const defaults: Partial<VehicleWheelProps> = {
     nodeId: null,
-    radius: BASE_WHEEL_TEMPLATE.radius,
-    suspensionRestLength: BASE_WHEEL_TEMPLATE.suspensionRestLength,
-    suspensionStiffness: BASE_WHEEL_TEMPLATE.suspensionStiffness,
-    dampingRelaxation: BASE_WHEEL_TEMPLATE.dampingRelaxation,
-    dampingCompression: BASE_WHEEL_TEMPLATE.dampingCompression,
-    frictionSlip: BASE_WHEEL_TEMPLATE.frictionSlip,
-    maxSuspensionTravel: BASE_WHEEL_TEMPLATE.maxSuspensionTravel,
-    maxSuspensionForce: BASE_WHEEL_TEMPLATE.maxSuspensionForce,
-    useCustomSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.useCustomSlidingRotationalSpeed,
-    customSlidingRotationalSpeed: BASE_WHEEL_TEMPLATE.customSlidingRotationalSpeed,
-    rollInfluence: BASE_WHEEL_TEMPLATE.rollInfluence,
-    directionLocal: cloneVector(BASE_WHEEL_TEMPLATE.directionLocal),
-    axleLocal: cloneVector(BASE_WHEEL_TEMPLATE.axleLocal),
-    chassisConnectionPointLocal: cloneVector(BASE_WHEEL_TEMPLATE.chassisConnectionPointLocal),
+    radius: baseWheelTemplate.value.radius,
+    suspensionRestLength: baseWheelTemplate.value.suspensionRestLength,
+    suspensionStiffness: baseWheelTemplate.value.suspensionStiffness,
+    dampingRelaxation: baseWheelTemplate.value.dampingRelaxation,
+    dampingCompression: baseWheelTemplate.value.dampingCompression,
+    frictionSlip: baseWheelTemplate.value.frictionSlip,
+    maxSuspensionTravel: baseWheelTemplate.value.maxSuspensionTravel,
+    maxSuspensionForce: baseWheelTemplate.value.maxSuspensionForce,
+    useCustomSlidingRotationalSpeed: baseWheelTemplate.value.useCustomSlidingRotationalSpeed,
+    customSlidingRotationalSpeed: baseWheelTemplate.value.customSlidingRotationalSpeed,
+    rollInfluence: baseWheelTemplate.value.rollInfluence,
+    directionLocal: cloneVector(baseWheelTemplate.value.directionLocal),
+    axleLocal: cloneVector(baseWheelTemplate.value.axleLocal),
+    chassisConnectionPointLocal: cloneVector(baseWheelTemplate.value.chassisConnectionPointLocal),
   }
   updateWheelEntry(wheelId, defaults)
 }
@@ -318,7 +288,7 @@ function handleWheelNodeChange(wheelId: string, value: string | null): void {
 }
 
 function createWheelFromTemplate(source?: VehicleWheelProps): VehicleWheelProps {
-  const base = source ?? BASE_WHEEL_TEMPLATE
+  const base = source ?? baseWheelTemplate.value
   return {
     id: generateUuid(),
     nodeId: null,
@@ -422,7 +392,14 @@ function handleMaxSpeedChange(value: string | number): void {
   if (Math.abs(clamped - displayProps.value.maxSpeedKmh) <= 1e-4) {
     return
   }
-  updateComponent({ maxSpeedKmh: clamped })
+  const derived = resolveVehicleDerivedTuning(clamped)
+  updateComponent({
+    maxSpeedKmh: clamped,
+    maxSteerDegrees: derived.maxSteerDegrees,
+    maxSteerRateDegPerSec: derived.maxSteerRateDegPerSec,
+    engineForceMax: derived.engineForceMax,
+    brakeForceMax: derived.brakeForceMax,
+  })
 }
 
 function handleToggleComponent(): void {
@@ -502,57 +479,9 @@ function handleOpenSuspensionEditor(): void {
     <v-expansion-panel-text>
       <div class="vehicle-panel__body">
         <div class="vehicle-panel__section">
-          <div class="vehicle-panel__section-title">Raycast Axes</div>
-          <div class="vehicle-panel__field-grid">
-            <v-select
-              label="Right Axis"
-              density="compact"
-              variant="underlined"
-              :items="AXIS_OPTIONS"
-              item-title="label"
-              item-value="value"
-              :model-value="displayProps.indexRightAxis"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleAxisChange('indexRightAxis', value as number | null)"
-            />
-            <v-select
-              label="Up Axis"
-              density="compact"
-              variant="underlined"
-              :items="AXIS_OPTIONS"
-              item-title="label"
-              item-value="value"
-              :model-value="displayProps.indexUpAxis"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleAxisChange('indexUpAxis', value as number | null)"
-            />
-            <v-select
-              label="Forward Axis"
-              density="compact"
-              variant="underlined"
-              :items="AXIS_OPTIONS"
-              item-title="label"
-              item-value="value"
-              :model-value="displayProps.indexForwardAxis"
-              :disabled="!vehicleComponent?.enabled"
-              @update:modelValue="(value) => handleAxisChange('indexForwardAxis', value as number | null)"
-            />
-            <v-text-field
-              label="Wheelbase (m)"
-              density="compact"
-              variant="underlined"
-              :model-value="displayProps.wheelbaseMeters"
-              readonly
-              :disabled="!vehicleComponent?.enabled"
-            />
-          </div>
-        </div>
-
-        <div class="vehicle-panel__section">
           <div class="vehicle-panel__section-title">Speed</div>
           <div class="vehicle-panel__field-grid vehicle-panel__field-grid--two">
             <v-text-field
-              label="最高速度 (km/h)"
               type="number"
               density="compact"
               variant="underlined"
@@ -564,6 +493,73 @@ function handleOpenSuspensionEditor(): void {
               @update:modelValue="handleMaxSpeedChange"
             />
           </div>
+          <div class="vehicle-panel__section-hint">
+            Derived tuning: steer {{ derivedVehicleTuning.maxSteerDegrees.toFixed(1) }}°,
+            engine {{ Math.round(derivedVehicleTuning.engineForceMax) }},
+            brake {{ Math.round(derivedVehicleTuning.brakeForceMax) }}
+          </div>
+        </div>
+
+        <div class="vehicle-panel__section">
+          <div class="vehicle-panel__section-header">
+            <div>
+              <div class="vehicle-panel__section-title">Advanced geometry</div>
+              <div class="vehicle-panel__section-hint">Raycast axes and wheelbase rarely need edits.</div>
+            </div>
+            <v-btn
+              variant="text"
+              size="x-small"
+              class="component-menu-btn"
+              @click="advancedVehicleExpanded = !advancedVehicleExpanded"
+            >
+              {{ advancedVehicleExpanded ? 'Hide' : 'Show' }}
+            </v-btn>
+          </div>
+          <v-expand-transition>
+            <div v-show="advancedVehicleExpanded" class="vehicle-panel__field-grid">
+              <v-select
+                label="Right Axis"
+                density="compact"
+                variant="underlined"
+                :items="AXIS_OPTIONS"
+                item-title="label"
+                item-value="value"
+                :model-value="displayProps.indexRightAxis"
+                :disabled="!vehicleComponent?.enabled"
+                @update:modelValue="(value) => handleAxisChange('indexRightAxis', value as number | null)"
+              />
+              <v-select
+                label="Up Axis"
+                density="compact"
+                variant="underlined"
+                :items="AXIS_OPTIONS"
+                item-title="label"
+                item-value="value"
+                :model-value="displayProps.indexUpAxis"
+                :disabled="!vehicleComponent?.enabled"
+                @update:modelValue="(value) => handleAxisChange('indexUpAxis', value as number | null)"
+              />
+              <v-select
+                label="Forward Axis"
+                density="compact"
+                variant="underlined"
+                :items="AXIS_OPTIONS"
+                item-title="label"
+                item-value="value"
+                :model-value="displayProps.indexForwardAxis"
+                :disabled="!vehicleComponent?.enabled"
+                @update:modelValue="(value) => handleAxisChange('indexForwardAxis', value as number | null)"
+              />
+              <v-text-field
+                label="Wheelbase (m)"
+                density="compact"
+                variant="underlined"
+                :model-value="displayProps.wheelbaseMeters"
+                readonly
+                :disabled="!vehicleComponent?.enabled"
+              />
+            </div>
+          </v-expand-transition>
         </div>
 
         <div class="vehicle-panel__section">

@@ -94,10 +94,6 @@ export const DEFAULT_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 0.15
 export const MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 0
 export const MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS = 20
 
-export const DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS = 40 / 3.6
-export const MIN_PURE_PURSUIT_MAX_SPEED_MPS = 0
-export const MAX_PURE_PURSUIT_MAX_SPEED_MPS = 40 / 3.6
-
 export interface PurePursuitComponentProps {
   lookaheadBaseMeters: number
   lookaheadSpeedGain: number
@@ -125,7 +121,6 @@ export interface PurePursuitComponentProps {
   dockYawSlerpRate: number
   dockStopEpsilonMeters: number
   dockStopSpeedEpsilonMps: number
-  maxSpeedMps: number
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -286,12 +281,6 @@ export function clampPurePursuitComponentProps(
       MIN_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
       MAX_PURE_PURSUIT_DOCK_STOP_SPEED_EPSILON_MPS,
     ),
-    maxSpeedMps: clampNumber(
-      raw.maxSpeedMps,
-      DEFAULT_PURE_PURSUIT_MAX_SPEED_MPS,
-      MIN_PURE_PURSUIT_MAX_SPEED_MPS,
-      MAX_PURE_PURSUIT_MAX_SPEED_MPS,
-    ),
   }
 }
 
@@ -323,7 +312,6 @@ export function clonePurePursuitComponentProps(props: PurePursuitComponentProps)
     dockYawSlerpRate: props.dockYawSlerpRate,
     dockStopEpsilonMeters: props.dockStopEpsilonMeters,
     dockStopSpeedEpsilonMps: props.dockStopSpeedEpsilonMps,
-    maxSpeedMps: props.maxSpeedMps,
   }
 }
 
@@ -354,7 +342,6 @@ const purePursuitComponentDefinition: ComponentDefinition<PurePursuitComponentPr
       label: 'Speed Control',
       fields: [
         { kind: 'number', key: 'minSpeedMps', label: 'Min Speed (m/s)', min: MIN_PURE_PURSUIT_MIN_SPEED_MPS, max: MAX_PURE_PURSUIT_MIN_SPEED_MPS, step: 0.1, precision: 2 },
-        { kind: 'number', key: 'maxSpeedMps', label: 'Max Speed (m/s)', min: MIN_PURE_PURSUIT_MAX_SPEED_MPS, max: MAX_PURE_PURSUIT_MAX_SPEED_MPS, step: 0.1, precision: 2 },
         { kind: 'number', key: 'curvatureSpeedFactor', label: 'Curvature Slowdown', min: MIN_PURE_PURSUIT_CURVATURE_SPEED_FACTOR, max: MAX_PURE_PURSUIT_CURVATURE_SPEED_FACTOR, step: 0.05, precision: 2 },
         { kind: 'number', key: 'coastDecelForceFactor', label: 'Coast Decel Force', min: MIN_PURE_PURSUIT_COAST_DECEL_FORCE_FACTOR, max: MAX_PURE_PURSUIT_COAST_DECEL_FORCE_FACTOR, step: 0.01, precision: 2 },
         { kind: 'number', key: 'coastDeadbandMps', label: 'Coast Deadband (m/s)', min: MIN_PURE_PURSUIT_COAST_DEADBAND_MPS, max: MAX_PURE_PURSUIT_COAST_DEADBAND_MPS, step: 0.01, precision: 2 },

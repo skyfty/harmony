@@ -294,13 +294,7 @@ export class CharacterAutoTourRuntimeManager {
       }
 
       const controllerProps = entry.controllerProps ?? clampCharacterControllerComponentProps(null)
-      const speedMps = Math.max(
-        0,
-        Math.min(
-          entry.props.speedMps,
-          Number.isFinite(entry.props.maxSpeedMps) ? entry.props.maxSpeedMps : entry.props.speedMps,
-        ),
-      )
+      const speedMps = Math.max(0, entry.props.speedMps)
       const lookaheadDistance = resolvePathFollowLookaheadDistance({
         speedMps,
         baseMeters: 1.4,

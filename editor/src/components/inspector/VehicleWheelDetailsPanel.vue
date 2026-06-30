@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState, Vector3Like } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -45,6 +45,7 @@ const activeWheel = computed<VehicleWheelProps | null>(() => {
   return displayProps.value.wheels.find((wheel) => wheel.id === props.wheelId) ?? null
 })
 const isDisabled = computed(() => !vehicleComponent.value?.enabled)
+const advancedWheelExpanded = ref(false)
 const panelStyle = computed(() => {
   if (!props.anchor) {
     return {}
@@ -230,118 +231,6 @@ watch(
                 @update:modelValue="(value) => handleWheelInput('radius', value)"
               />
               <v-text-field
-                label="Suspension Rest Length (m)"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                type="number"
-                inputmode="decimal"
-                hide-details
-                :min="0"
-                :step="0.01"
-                :model-value="formatWheelValue('suspensionRestLength', activeWheel.suspensionRestLength)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('suspensionRestLength', value)"
-              />
-              <v-text-field
-                label="Suspension Stiffness"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                inputmode="decimal"
-                type="number"
-                hide-details
-                :min="0"
-                :step="1"
-                :model-value="formatWheelValue('suspensionStiffness', activeWheel.suspensionStiffness)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('suspensionStiffness', value)"
-              />
-              <v-text-field
-                label="Damping Relaxation"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                inputmode="decimal"
-                type="number"
-                hide-details
-                :min="0"
-                :step="0.1"
-                :model-value="formatWheelValue('dampingRelaxation', activeWheel.dampingRelaxation)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('dampingRelaxation', value)"
-              />
-              <v-text-field
-                label="Damping Compression"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                inputmode="decimal"
-                type="number"
-                hide-details
-                :min="0"
-                :step="0.1"
-                :model-value="formatWheelValue('dampingCompression', activeWheel.dampingCompression)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('dampingCompression', value)"
-              />
-              <v-text-field
-                label="Friction Coefficient"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                inputmode="decimal"
-                type="number"
-                hide-details
-                :min="0"
-                :step="0.1"
-                :model-value="formatWheelValue('frictionSlip', activeWheel.frictionSlip)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
-              />
-              <v-text-field
-                label="Max Suspension Travel (m)"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                inputmode="decimal"
-                type="number"
-                hide-details
-                :min="0"
-                :step="0.01"
-                :model-value="formatWheelValue('maxSuspensionTravel', activeWheel.maxSuspensionTravel)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('maxSuspensionTravel', value)"
-              />
-              <v-text-field
-                label="Max Suspension Force"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                type="number"
-                inputmode="decimal"
-                hide-details
-                :min="0"
-                :step="100"
-                :model-value="formatWheelValue('maxSuspensionForce', activeWheel.maxSuspensionForce)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('maxSuspensionForce', value)"
-              />
-              <v-text-field
-                label="Anti-Roll"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                inputmode="decimal"
-                type="number"
-                hide-details
-                :min="0"
-                :step="0.001"
-                :model-value="formatWheelValue('rollInfluence', activeWheel.rollInfluence)"
-                :disabled="isDisabled"
-                @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
-              />
-              <v-text-field
                 label="Custom Sliding Rot. Speed"
                 class="slider-input"
                 density="compact"
@@ -370,6 +259,136 @@ watch(
                 :disabled="isDisabled"
                 @update:modelValue="(value) => handleWheelBooleanInput('useCustomSlidingRotationalSpeed', Boolean(value))"
               />
+            </div>
+
+            <div class="vehicle-wheel-details__subsection">
+              <div class="vehicle-wheel-details__section-header">
+                <div class="vehicle-wheel-details__section-title">Advanced wheel tuning</div>
+                <v-btn
+                  variant="text"
+                  size="x-small"
+                  class="component-menu-btn"
+                  @click="advancedWheelExpanded = !advancedWheelExpanded"
+                >
+                  {{ advancedWheelExpanded ? 'Hide' : 'Show' }}
+                </v-btn>
+              </div>
+              <v-expand-transition>
+                <div v-show="advancedWheelExpanded" class="material-properties">
+                  <v-text-field
+                    label="Suspension Rest Length (m)"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    inputmode="decimal"
+                    hide-details
+                    :min="0"
+                    :step="0.01"
+                    :model-value="formatWheelValue('suspensionRestLength', activeWheel.suspensionRestLength)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('suspensionRestLength', value)"
+                  />
+                  <v-text-field
+                    label="Suspension Stiffness"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    inputmode="decimal"
+                    type="number"
+                    hide-details
+                    :min="0"
+                    :step="1"
+                    :model-value="formatWheelValue('suspensionStiffness', activeWheel.suspensionStiffness)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('suspensionStiffness', value)"
+                  />
+                  <v-text-field
+                    label="Damping Relaxation"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    inputmode="decimal"
+                    type="number"
+                    hide-details
+                    :min="0"
+                    :step="0.1"
+                    :model-value="formatWheelValue('dampingRelaxation', activeWheel.dampingRelaxation)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('dampingRelaxation', value)"
+                  />
+                  <v-text-field
+                    label="Damping Compression"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    inputmode="decimal"
+                    type="number"
+                    hide-details
+                    :min="0"
+                    :step="0.1"
+                    :model-value="formatWheelValue('dampingCompression', activeWheel.dampingCompression)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('dampingCompression', value)"
+                  />
+                  <v-text-field
+                    label="Friction Coefficient"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    inputmode="decimal"
+                    type="number"
+                    hide-details
+                    :min="0"
+                    :step="0.1"
+                    :model-value="formatWheelValue('frictionSlip', activeWheel.frictionSlip)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('frictionSlip', value)"
+                  />
+                  <v-text-field
+                    label="Max Suspension Travel (m)"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    inputmode="decimal"
+                    type="number"
+                    hide-details
+                    :min="0"
+                    :step="0.01"
+                    :model-value="formatWheelValue('maxSuspensionTravel', activeWheel.maxSuspensionTravel)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('maxSuspensionTravel', value)"
+                  />
+                  <v-text-field
+                    label="Max Suspension Force"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    type="number"
+                    inputmode="decimal"
+                    hide-details
+                    :min="0"
+                    :step="100"
+                    :model-value="formatWheelValue('maxSuspensionForce', activeWheel.maxSuspensionForce)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('maxSuspensionForce', value)"
+                  />
+                  <v-text-field
+                    label="Anti-Roll"
+                    class="slider-input"
+                    density="compact"
+                    variant="underlined"
+                    inputmode="decimal"
+                    type="number"
+                    hide-details
+                    :min="0"
+                    :step="0.001"
+                    :model-value="formatWheelValue('rollInfluence', activeWheel.rollInfluence)"
+                    :disabled="isDisabled"
+                    @update:modelValue="(value) => handleWheelInput('rollInfluence', value)"
+                  />
+                </div>
+              </v-expand-transition>
             </div>
 
             <div class="vehicle-wheel-details__subsection">
@@ -498,6 +517,26 @@ border-radius: 6px;
 
 .vehicle-wheel-details__subsection {
   margin-top: 0.85rem;
+}
+
+.vehicle-wheel-details__section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.vehicle-wheel-details__section-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-btn {
+  min-width: 0;
+  padding-inline: 0.35rem;
+  color: rgba(233, 236, 241, 0.82);
 }
 
 .slider-input :deep(.v-field-label) {

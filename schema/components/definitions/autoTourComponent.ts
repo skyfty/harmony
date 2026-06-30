@@ -7,14 +7,10 @@ export const AUTO_TOUR_COMPONENT_TYPE = 'autoTour'
 export const DEFAULT_AUTO_TOUR_SPEED_MPS = 3.5
 export const MIN_AUTO_TOUR_SPEED_MPS = 0
 export const MAX_AUTO_TOUR_SPEED_MPS = 50
-export const DEFAULT_AUTO_TOUR_MAX_SPEED_MPS = 40 / 3.6
-export const MIN_AUTO_TOUR_MAX_SPEED_MPS = 0
-export const MAX_AUTO_TOUR_MAX_SPEED_MPS = 40 / 3.6
 
 export interface AutoTourComponentProps {
   routeNodeId: string | null
   speedMps: number
-  maxSpeedMps: number
   loop: boolean
   alignToPath: boolean
   usePhysicsDrive: boolean
@@ -57,7 +53,6 @@ export function clampAutoTourComponentProps(
   return {
     routeNodeId: normalizeNodeId(raw.routeNodeId),
     speedMps: clampNumber(raw.speedMps, DEFAULT_AUTO_TOUR_SPEED_MPS, MIN_AUTO_TOUR_SPEED_MPS, MAX_AUTO_TOUR_SPEED_MPS),
-    maxSpeedMps: clampNumber(raw.maxSpeedMps, DEFAULT_AUTO_TOUR_MAX_SPEED_MPS, MIN_AUTO_TOUR_MAX_SPEED_MPS, MAX_AUTO_TOUR_MAX_SPEED_MPS),
     loop: clampBoolean(raw.loop, false),
     alignToPath: clampBoolean(raw.alignToPath, true),
     usePhysicsDrive: clampBoolean(raw.usePhysicsDrive, true),
@@ -69,7 +64,6 @@ export function cloneAutoTourComponentProps(props: AutoTourComponentProps): Auto
   return {
     routeNodeId: props.routeNodeId ?? null,
     speedMps: props.speedMps,
-    maxSpeedMps: props.maxSpeedMps,
     loop: props.loop,
     alignToPath: props.alignToPath,
     usePhysicsDrive: props.usePhysicsDrive,
@@ -94,7 +88,6 @@ const autoTourComponentDefinition: ComponentDefinition<AutoTourComponentProps> =
       label: 'Speed',
       fields: [
         { kind: 'number', key: 'speedMps', label: 'Base Speed (m/s)', min: MIN_AUTO_TOUR_SPEED_MPS, max: MAX_AUTO_TOUR_SPEED_MPS, step: 0.1, precision: 2 },
-        { kind: 'number', key: 'maxSpeedMps', label: 'Max Speed (m/s)', min: MIN_AUTO_TOUR_MAX_SPEED_MPS, max: MAX_AUTO_TOUR_MAX_SPEED_MPS, step: 0.1, precision: 2 },
         { kind: 'boolean', key: 'loop', label: 'Loop' },
         { kind: 'boolean', key: 'alignToPath', label: 'Align To Path' },
         { kind: 'boolean', key: 'usePhysicsDrive', label: 'Use Physics Drive' },

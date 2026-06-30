@@ -45,6 +45,8 @@ const animationComponent = computed(() =>
 const clipOptions = ref<Array<{ label: string; value: string }>>([])
 const isLoadingClips = ref(false)
 const clipLoadError = ref<string | null>(null)
+const advancedMovementExpanded = ref(false)
+const advancedCameraExpanded = ref(false)
 const advancedBindingsExpanded = ref(false)
 let clipLoadRequestId = 0
 const forwardAxisItems: Array<{ label: string; value: CharacterForwardAxis }> = CHARACTER_FORWARD_AXIS_OPTIONS.map((value) => ({
@@ -80,6 +82,15 @@ function updateField<K extends keyof CharacterControllerComponentProps>(key: K, 
   updateComponent({ [key]: value } as Partial<CharacterControllerComponentProps>)
 }
 
+const derivedMovementSpeeds = computed(() => {
+  const sprintSpeed = Math.max(0, normalizedProps.value.sprintSpeed)
+  return {
+    walkSpeed: Number((sprintSpeed * 0.375).toFixed(2)),
+    runSpeed: Number((sprintSpeed * 0.75).toFixed(2)),
+    sprintSpeed: Number(sprintSpeed.toFixed(2)),
+  }
+})
+
 function updateAnimationBinding(slot: CharacterControllerComponentProps['animationBindings'][number]['slot'], clipName: string | null) {
   const bindingMap = new Map(
     normalizedProps.value.animationBindings.map((binding) => [binding.slot, { slot: binding.slot, clipName: binding.clipName }] as const),
@@ -96,6 +107,23 @@ function updateCameraFollowDistance(value: number) {
 
 function updateCameraFollowHeight(value: number) {
   updateField('cameraFollowHeight', value)
+}
+
+function updateSprintSpeed(value: number) {
+  const sprintSpeed = Number.isFinite(value) ? Math.max(0, value) : 0
+  updateComponent({
+    walkSpeed: Number((sprintSpeed * 0.375).toFixed(2)),
+    runSpeed: Number((sprintSpeed * 0.75).toFixed(2)),
+    sprintSpeed,
+  })
+}
+
+function toggleAdvancedMovement() {
+  advancedMovementExpanded.value = !advancedMovementExpanded.value
+}
+
+function toggleAdvancedCamera() {
+  advancedCameraExpanded.value = !advancedCameraExpanded.value
 }
 
 function handleTargetNodeIdChange(value: string | null) {
@@ -267,140 +295,159 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
 
         <div class="character-controller-panel__grid">
           <v-text-field
-            :model-value="normalizedProps.walkSpeed"
-            type="number"
-            label="Walk speed"
-            density="compact"
-            variant="underlined"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('walkSpeed', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.runSpeed"
-            type="number"
-            label="Run speed"
-            variant="underlined"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('runSpeed', Number(value))"
-          />
-          <v-text-field
             :model-value="normalizedProps.sprintSpeed"
             type="number"
-            label="Sprint speed"
+            label="Max speed / Sprint speed"
             density="compact"
             hide-details
             variant="underlined"
             :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('sprintSpeed', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.turnRateDegreesPerSecond"
-            type="number"
-            variant="underlined"
-            label="Turn rate (deg/s)"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('turnRateDegreesPerSecond', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.jumpImpulse"
-            type="number"
-            variant="underlined"
-            label="Jump impulse"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('jumpImpulse', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.airControl"
-            type="number"
-            step="0.05"
-            variant="underlined"
-            label="Air control"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('airControl', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.stepHeight"
-            type="number"
-            variant="underlined"
-            step="0.05"
-            label="Step height"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('stepHeight', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.slopeLimitDegrees"
-            type="number"
-            variant="underlined"
-            label="Slope limit"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('slopeLimitDegrees', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.colliderRadius"
-            type="number"
-            variant="underlined"
-            step="0.05"
-            label="Collider radius"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('colliderRadius', Number(value))"
-          />
-          <v-text-field
-            :model-value="normalizedProps.colliderHeight"
-            type="number"
-            step="0.05"
-            variant="underlined"
-            label="Collider height"
-            density="compact"
-            hide-details
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => updateField('colliderHeight', Number(value))"
+            @update:model-value="(value) => updateSprintSpeed(Number(value))"
           />
         </div>
 
-        <div class="character-controller-panel__field">
-          <div class="character-controller-panel__section-title">Camera follow</div>
-          <p class="character-controller-panel__note">
-            Controls how far behind and how high above the character the camera stays.
-          </p>
-          <div class="character-controller-panel__grid">
-            <v-text-field
-              :model-value="normalizedProps.cameraFollowDistance"
-              type="number"
-              step="0.1"
-              variant="underlined"
-              label="Follow distance"
-              density="compact"
-              hide-details
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => updateCameraFollowDistance(Number(value))"
-            />
-            <v-text-field
-              :model-value="normalizedProps.cameraFollowHeight"
-              type="number"
-              step="0.1"
-              variant="underlined"
-              label="Follow height"
-              density="compact"
-              hide-details
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => updateCameraFollowHeight(Number(value))"
-            />
+        <div class="character-controller-panel__derived-note">
+          Walk and run are derived from sprint speed:
+          <span>walk {{ derivedMovementSpeeds.walkSpeed }}</span>
+          <span>run {{ derivedMovementSpeeds.runSpeed }}</span>
+        </div>
+
+        <div class="character-controller-panel__section">
+          <div class="character-controller-panel__section-header">
+            <div>
+              <div class="character-controller-panel__section-title">Advanced movement</div>
+              <p class="character-controller-panel__note">Turn, jump, collision, and locomotion tuning rarely change.</p>
+            </div>
+            <v-btn
+              variant="text"
+              size="x-small"
+              class="character-controller-panel__binding-toggle"
+              @click="toggleAdvancedMovement"
+            >
+              {{ advancedMovementExpanded ? 'Hide' : 'Show' }}
+            </v-btn>
           </div>
+          <v-expand-transition>
+            <div v-show="advancedMovementExpanded" class="character-controller-panel__grid">
+              <v-text-field
+                :model-value="normalizedProps.turnRateDegreesPerSecond"
+                type="number"
+                variant="underlined"
+                label="Turn rate (deg/s)"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('turnRateDegreesPerSecond', Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.jumpImpulse"
+                type="number"
+                variant="underlined"
+                label="Jump impulse"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('jumpImpulse', Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.airControl"
+                type="number"
+                step="0.05"
+                variant="underlined"
+                label="Air control"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('airControl', Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.stepHeight"
+                type="number"
+                variant="underlined"
+                step="0.05"
+                label="Step height"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('stepHeight', Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.slopeLimitDegrees"
+                type="number"
+                variant="underlined"
+                label="Slope limit"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('slopeLimitDegrees', Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.colliderRadius"
+                type="number"
+                variant="underlined"
+                step="0.05"
+                label="Collider radius"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('colliderRadius', Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.colliderHeight"
+                type="number"
+                step="0.05"
+                variant="underlined"
+                label="Collider height"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('colliderHeight', Number(value))"
+              />
+            </div>
+          </v-expand-transition>
+        </div>
+
+        <div class="character-controller-panel__section">
+          <div class="character-controller-panel__section-header">
+            <div>
+              <div class="character-controller-panel__section-title">Camera follow</div>
+              <p class="character-controller-panel__note">Only adjust if the default follow framing does not fit the character.</p>
+            </div>
+            <v-btn
+              variant="text"
+              size="x-small"
+              class="character-controller-panel__binding-toggle"
+              @click="toggleAdvancedCamera"
+            >
+              {{ advancedCameraExpanded ? 'Hide' : 'Show' }}
+            </v-btn>
+          </div>
+          <v-expand-transition>
+            <div v-show="advancedCameraExpanded" class="character-controller-panel__grid">
+              <v-text-field
+                :model-value="normalizedProps.cameraFollowDistance"
+                type="number"
+                step="0.1"
+                variant="underlined"
+                label="Follow distance"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateCameraFollowDistance(Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.cameraFollowHeight"
+                type="number"
+                step="0.1"
+                variant="underlined"
+                label="Follow height"
+                density="compact"
+                hide-details
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateCameraFollowHeight(Number(value))"
+              />
+            </div>
+          </v-expand-transition>
         </div>
 
         <div class="character-controller-panel__animations">
@@ -502,9 +549,31 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
   gap: 0.35rem;
 }
 
+.character-controller-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.character-controller-panel__section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
 .character-controller-panel__field-label {
   font-size: 0.82rem;
   font-weight: 500;
+}
+
+.character-controller-panel__derived-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.76rem;
+  color: rgba(233, 236, 241, 0.68);
 }
 
 .character-controller-panel__grid {
