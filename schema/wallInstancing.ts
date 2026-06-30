@@ -94,6 +94,13 @@ const wallInstancedBoundsCorners = [
   THREE.Vector3,
 ]
 
+type WallInstancedBindingSyncCacheEntry = {
+  bindings: WallInstancedBindingSpec[]
+  worldMatrixElements: Float32Array
+}
+
+const wallInstancedBindingSyncCache = new WeakMap<THREE.Object3D, WallInstancedBindingSyncCacheEntry>()
+
 const WALL_SYNC_EPSILON = 1e-6
 const WALL_SYNC_MIN_TILE_LENGTH = 1e-4
 const WALL_SYNC_REPEAT_BUCKETS_MAX = 6
@@ -111,6 +118,15 @@ function distanceSqXZ(a: THREE.Vector3, b: THREE.Vector3): number {
   const dx = a.x - b.x
   const dz = a.z - b.z
   return dx * dx + dz * dz
+}
+
+function matrixElementsAlmostEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon = 1e-6): boolean {
+  for (let index = 0; index < 16; index += 1) {
+    if (Math.abs((a[index] ?? 0) - (b[index] ?? 0)) > epsilon) {
+      return false
+    }
+  }
+  return true
 }
 
 function splitWallSegmentsIntoChains(segments: WallRenderSegment[]): WallRenderSegment[][] {
@@ -1287,7 +1303,15 @@ export function buildWallInstancedRenderPlan(params: WallInstancedPlanParams): W
 }
 
 function normalizeWallInstancedBindingsUserData(value: unknown): WallInstancedBindingSpec[] {
-  return Array.isArray(value) ? value.filter((entry) => Boolean(entry && typeof entry === 'object')) as WallInstancedBindingSpec[] : []
+  if (!Array.isArray(value)) {
+    return []
+  }
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') {
+      return value.filter((candidate) => Boolean(candidate && typeof candidate === 'object')) as WallInstancedBindingSpec[]
+    }
+  }
+  return value as WallInstancedBindingSpec[]
 }
 
 export function setWallInstancedBindingsOnObject(object: THREE.Object3D, plan: WallInstancedRenderPlan): void {
@@ -1364,7 +1388,18 @@ export function syncWallInstancedBindingsForObject(object: THREE.Object3D | null
   if (!nodeId || !bindings.length) {
     return false
   }
-  return applyWallInstancedBindings({ nodeId, object, bindings })
+  const cached = wallInstancedBindingSyncCache.get(object)
+  if (cached && cached.bindings === bindings && matrixElementsAlmostEqual(cached.worldMatrixElements, object.matrixWorld.elements)) {
+    return true
+  }
+  const applied = applyWallInstancedBindings({ nodeId, object, bindings })
+  if (applied) {
+    wallInstancedBindingSyncCache.set(object, {
+      bindings,
+      worldMatrixElements: Float32Array.from(object.matrixWorld.elements),
+    })
+  }
+  return applied
 }
 
 export function syncWallDragBindingMatrices(params: {

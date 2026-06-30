@@ -1370,6 +1370,13 @@ type InstancedProxySyncSnapshot = {
 
 const instancedProxySyncSnapshotCache = new WeakMap<THREE.Object3D, InstancedProxySyncSnapshot>();
 
+type InstancedTransformTargetCacheEntry = {
+  revision: number;
+  targets: THREE.Object3D[];
+};
+
+const instancedTransformTargetCache = new WeakMap<THREE.Object3D, InstancedTransformTargetCacheEntry>();
+
 function clearInstancedTransformCacheForNode(nodeId: string): void {
   instancedTransformCache.delete(nodeId);
   const prefix = `${nodeId}:instance:`;
@@ -10385,11 +10392,20 @@ function updateVehicleWheelVisuals(delta: number): void {
 }
 
 function collectInstancedTransformTargets(object: THREE.Object3D): THREE.Object3D[] {
+  const revision = getInstancedTransformRevision(object);
+  const cached = instancedTransformTargetCache.get(object);
+  if (cached && cached.revision === revision) {
+    return cached.targets;
+  }
   const targets: THREE.Object3D[] = [];
   object.traverse((child) => {
     if (child.userData?.instancedAssetId) {
       targets.push(child);
     }
+  });
+  instancedTransformTargetCache.set(object, {
+    revision,
+    targets,
   });
   return targets;
 }

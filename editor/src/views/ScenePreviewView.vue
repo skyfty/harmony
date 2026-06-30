@@ -10511,17 +10511,23 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 			const wallProps = wallState?.props as { isAirWall?: unknown } | undefined
 			const isAirWall = Boolean(wallState?.enabled !== false && wallProps?.isAirWall === true)
 			const initialVisibility = resolveGuideboardInitialVisibility(nodeState)
+			let nextVisible = child.visible
 			if (initialVisibility !== null) {
-				child.visible = initialVisibility
-				updateBehaviorVisibility(nodeId, child.visible)
-				syncInstancedTransform(child)
+				nextVisible = initialVisibility
 			}
 
 			// Ensure air walls remain invisible even in preview.
 			// Collision is handled by physics bodies and is unaffected by render visibility.
 			if (isAirWall) {
-				child.visible = false
-				updateBehaviorVisibility(nodeId, false)
+				nextVisible = false
+			}
+
+			if (nextVisible !== child.visible) {
+				child.visible = nextVisible
+				updateBehaviorVisibility(nodeId, nextVisible)
+			}
+
+			if (instancedAssetId) {
 				syncInstancedTransform(child)
 			}
 			if (resolveDefaultControlledCharacterNodeId() === nodeId) {
