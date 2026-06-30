@@ -16,6 +16,7 @@ import type {
   SceneNode,
   SceneNodeComponentState,
 } from '../../core'
+import { createCanvas } from '../../canvas'
 
 export const PROCEDURAL_CITY_COMPONENT_TYPE = 'proceduralCity'
 export const PROCEDURAL_CITY_HOST_USER_DATA_KEY = 'proceduralCityHost'
@@ -947,9 +948,9 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
     return cachedTexture
   }
   const theme = getProceduralCityStyleTheme(resolvedStyle)
-  if (typeof document !== 'undefined') {
+  try {
     if (resolvedStyle === 'office') {
-      const canvas = document.createElement('canvas')
+      const canvas = createCanvas(32, 64)
       canvas.width = 32
       canvas.height = 64
       const context = canvas.getContext('2d')!
@@ -967,18 +968,18 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
           context.fillRect(x, y, 2, 1)
         }
       }
-      const upscale = document.createElement('canvas')
+      const upscale = createCanvas(PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH, PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT)
       upscale.width = PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH
       upscale.height = PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT
       const upscaleContext = upscale.getContext('2d')!
       upscaleContext.imageSmoothingEnabled = false
-      upscaleContext.drawImage(canvas, 0, 0, upscale.width, upscale.height)
-      const texture = configureCityTexture(new THREE.CanvasTexture(upscale))
+      upscaleContext.drawImage(canvas as unknown as CanvasImageSource, 0, 0, upscale.width, upscale.height)
+      const texture = configureCityTexture(new THREE.CanvasTexture(upscale as unknown as CanvasImageSource))
       texture.needsUpdate = true
       facadeTextureByStyle.set(resolvedStyle, texture)
       return texture
     }
-    const canvas = document.createElement('canvas')
+    const canvas = createCanvas(PROCEDURAL_CITY_FACADE_SOURCE_WIDTH, PROCEDURAL_CITY_FACADE_SOURCE_HEIGHT)
     canvas.width = PROCEDURAL_CITY_FACADE_SOURCE_WIDTH
     canvas.height = PROCEDURAL_CITY_FACADE_SOURCE_HEIGHT
     const context = canvas.getContext('2d')!
@@ -1031,16 +1032,18 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
         }
       }
     }
-    const upscale = document.createElement('canvas')
+    const upscale = createCanvas(PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH, PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT)
     upscale.width = PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH
     upscale.height = PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT
     const upscaleContext = upscale.getContext('2d')!
     upscaleContext.imageSmoothingEnabled = false
-    upscaleContext.drawImage(canvas, 0, 0, upscale.width, upscale.height)
-    const texture = configureCityTexture(new THREE.CanvasTexture(upscale))
+    upscaleContext.drawImage(canvas as unknown as CanvasImageSource, 0, 0, upscale.width, upscale.height)
+    const texture = configureCityTexture(new THREE.CanvasTexture(upscale as unknown as CanvasImageSource))
     texture.needsUpdate = true
     facadeTextureByStyle.set(resolvedStyle, texture)
     return texture
+  } catch {
+    // If canvas creation fails in a constrained runtime, fall back to a tiny data texture.
   }
   const data = new Uint8Array([
     220, 216, 207, 255, 218, 214, 206, 255,

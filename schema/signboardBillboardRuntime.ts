@@ -6,16 +6,17 @@ import {
   SIGNBOARD_WORLD_Y_OFFSET,
   formatSignboardDistance,
 } from './signboardOverlay'
+import { createCanvas, type HarmonyCanvas, type HarmonyCanvas2DContext } from './canvas'
 
-type SignboardCanvas = HTMLCanvasElement | OffscreenCanvas | { width: number; height: number; getContext: (type: '2d') => SignboardCanvasContext }
-type SignboardCanvasContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | any
+type SignboardCanvas = HarmonyCanvas
+type SignboardCanvasContext = HarmonyCanvas2DContext
 
 interface SignboardRuntimeEntry {
   sprite: THREE.Sprite
   material: THREE.SpriteMaterial
   texture: THREE.CanvasTexture
   canvas: SignboardCanvas
-  context: SignboardCanvasContext
+  context: HarmonyCanvas2DContext
   labelText: string
   distanceText: string
   punchBadgeVisible: boolean
@@ -88,32 +89,6 @@ const DEFAULT_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   punchBadgeTextColor: '#c88c12',
   punchBadgeShadowColor: 'rgba(255, 196, 77, 0.28)',
   distanceTextAccentColor: '#c88c12',
-}
-
-function createCanvas(width: number, height: number): SignboardCanvas {
-  const globalObject = globalThis as typeof globalThis & {
-    OffscreenCanvas?: new (width: number, height: number) => OffscreenCanvas
-    uni?: { createOffscreenCanvas?: (options: { type?: '2d'; width: number; height: number }) => SignboardCanvas }
-    wx?: { createOffscreenCanvas?: (options: { type?: '2d'; width: number; height: number }) => SignboardCanvas }
-  }
-
-  if (typeof globalObject.OffscreenCanvas === 'function') {
-    return new globalObject.OffscreenCanvas(width, height)
-  }
-  if (typeof globalObject.uni?.createOffscreenCanvas === 'function') {
-    return globalObject.uni.createOffscreenCanvas({ type: '2d', width, height })
-  }
-  if (typeof globalObject.wx?.createOffscreenCanvas === 'function') {
-    return globalObject.wx.createOffscreenCanvas({ type: '2d', width, height })
-  }
-  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    return canvas
-  }
-
-  throw new Error('Unable to create a canvas for signboard billboards')
 }
 
 function roundRectPath(context: SignboardCanvasContext, x: number, y: number, width: number, height: number, radius: number): void {
