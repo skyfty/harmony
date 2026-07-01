@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import type { SceneNodeComponentState } from '@schema/core'
+import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
@@ -9,6 +9,7 @@ import {
   STEER_COMPONENT_TYPE,
   STEER_TARGET_TYPES,
   clampSteerComponentProps,
+  inferSteerTargetTypeFromNodeId,
   isSteerTargetNode,
   type SteerComponentProps,
   type SteerControllableTargetType,
@@ -44,25 +45,29 @@ const targetPickHint = computed(() => {
   }
   return 'Select steer target node'
 })
+function findNodeById(nodes: SceneNode[] | null | undefined, id: string | null | undefined): SceneNode | null {
+  if (!nodes?.length || !id) {
+    return null
+  }
+  for (const node of nodes) {
+    if (node.id === id) {
+      return node
+    }
+    const match = findNodeById(node.children, id)
+    if (match) {
+      return match
+    }
+  }
+  return null
+}
+
 const selectedTargetValid = computed(() => {
   const targetNodeId = normalizedProps.value.targetNodeId
   if (!targetNodeId) {
     return true
   }
-  const stack = [...(sceneStore.nodes ?? [])]
-  while (stack.length) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (node.id === targetNodeId) {
-      return isSteerTargetNode(node, normalizedProps.value.targetType)
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children)
-    }
-  }
-  return false
+  const targetNode = findNodeById(sceneStore.nodes ?? [], targetNodeId)
+  return Boolean(targetNode && isSteerTargetNode(targetNode, normalizedProps.value.targetType))
 })
 
 function handleToggleComponent() {
@@ -100,7 +105,11 @@ function handleTargetTypeChange(value: unknown) {
 }
 
 function handleTargetNodeIdChange(value: string | null) {
-  updateProps({ targetNodeId: value })
+  const inferredType = inferSteerTargetTypeFromNodeId(sceneStore.nodes ?? [], value)
+  updateProps({
+    targetNodeId: value,
+    ...(inferredType ? { targetType: inferredType } : {}),
+  })
 }
 
 function handleDefaultIdentifierChange(value: string) {
@@ -198,9 +207,6 @@ function handleAutoEnterChange(value: boolean | null) {
           :model-value="normalizedProps.autoEnterOnSceneLoad"
           @update:modelValue="(value) => handleAutoEnterChange(value as boolean | null)"
         />
-      </div>
-      <div class="steer-panel-hint">
-        First phase stores a single default controllable node. Runtime steering activation and target filtering will build on this schema.
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>

@@ -34,6 +34,11 @@ function normalizeTargetType(value: unknown): SteerControllableTargetType {
     : DEFAULT_STEER_TARGET_TYPE
 }
 
+function hasEnabledComponent(node: SceneNode | null | undefined, type: string): boolean {
+  const component = node?.components?.[type]
+  return Boolean(component && component.enabled !== false)
+}
+
 export function clampSteerComponentProps(props: Partial<SteerComponentProps> | null | undefined): SteerComponentProps {
   return {
     targetNodeId: normalizeString(props?.targetNodeId),
@@ -51,9 +56,9 @@ export function isSteerTargetNode(
     return false
   }
   if (targetType === 'character') {
-    return Boolean(node.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE]?.enabled !== false)
+    return hasEnabledComponent(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)
   }
-  return Boolean(node.components?.[VEHICLE_COMPONENT_TYPE]?.enabled !== false)
+  return hasEnabledComponent(node, VEHICLE_COMPONENT_TYPE)
 }
 
 export function isAnySteerTargetNode(node: SceneNode | null | undefined): boolean {
@@ -61,6 +66,44 @@ export function isAnySteerTargetNode(node: SceneNode | null | undefined): boolea
     return false
   }
   return isSteerTargetNode(node, 'character') || isSteerTargetNode(node, 'vehicle')
+}
+
+export function inferSteerTargetTypeFromNode(
+  node: SceneNode | null | undefined,
+): SteerControllableTargetType | null {
+  if (!node) {
+    return null
+  }
+  if (hasEnabledComponent(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)) {
+    return 'character'
+  }
+  if (hasEnabledComponent(node, VEHICLE_COMPONENT_TYPE)) {
+    return 'vehicle'
+  }
+  return null
+}
+
+export function inferSteerTargetTypeFromNodeId(
+  nodes: SceneNode[] | null | undefined,
+  nodeId: string | null | undefined,
+): SteerControllableTargetType | null {
+  if (!nodes?.length || !nodeId) {
+    return null
+  }
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (node.id === nodeId) {
+      return inferSteerTargetTypeFromNode(node)
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return null
 }
 
 class SteerComponent extends Component<SteerComponentProps> {
