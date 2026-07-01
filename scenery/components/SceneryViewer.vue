@@ -13284,10 +13284,6 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
 }
 
 function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCharacterPresentation | null {
-  if (!nodeAnimationRuntime.has(nodeId)) {
-    localMultiuserCharacterPresentationByNodeId.delete(nodeId);
-    return null;
-  }
   const animation = nodeAnimationRuntime.getPresentation(nodeId);
   if (animation) {
     localMultiuserCharacterPresentationByNodeId.set(nodeId, animation);

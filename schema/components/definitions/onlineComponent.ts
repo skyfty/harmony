@@ -3,15 +3,16 @@ import { MULTIUSER_NODE_ID } from '../../core'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
 import {
-  getActiveMultiuserRuntimeBridge,
-  getActiveMultiuserSceneId,
-  type MultiuserCharacterPresentation,
-  type MultiuserNodeSyncSnapshot,
-  type MultiuserNodeSyncState,
-  type MultiuserPeerPresentationState,
-  type MultiuserPeerSnapshot,
-  type MultiuserPeerState,
-  type MultiuserVehiclePresentation,
+	getActiveMultiuserRuntimeBridge,
+	getActiveMultiuserSceneId,
+	type MultiuserCharacterPresentation,
+	type MultiuserNodeSyncSnapshot,
+	type MultiuserNodeSyncState,
+	type MultiuserNodeSyncPresentation,
+	type MultiuserPeerPresentationState,
+	type MultiuserPeerSnapshot,
+	type MultiuserPeerState,
+	type MultiuserVehiclePresentation,
 } from '../../multiuserContext'
 import {
   createRuntimeSocketAdapter,
@@ -187,6 +188,98 @@ function getMultiuserPresentationSignature(presentation: MultiuserPeerPresentati
     getMultiuserVehiclePresentationSignature(presentation.vehicle ?? null),
     getMultiuserCharacterPresentationSignature(presentation.character ?? null),
   ].join('#')
+}
+
+function cloneMultiuserVehiclePresentation(presentation: MultiuserVehiclePresentation | null | undefined): MultiuserVehiclePresentation | null {
+  if (!presentation) {
+    return null
+  }
+  return {
+    speedMps: presentation.speedMps ?? null,
+    linearVelocity: presentation.linearVelocity
+      ? { ...presentation.linearVelocity }
+      : null,
+    wheels: Array.isArray(presentation.wheels)
+      ? presentation.wheels.map((wheel) => ({
+          nodeId: wheel.nodeId ?? null,
+          wheelIndex: wheel.wheelIndex,
+          position: { ...wheel.position },
+          quaternion: { ...wheel.quaternion },
+          scale: wheel.scale ? { ...wheel.scale } : null,
+          steeringAxis: wheel.steeringAxis ? { ...wheel.steeringAxis } : null,
+          spinAxis: wheel.spinAxis ? { ...wheel.spinAxis } : null,
+          steeringAngle: wheel.steeringAngle ?? null,
+          spinAngle: wheel.spinAngle ?? null,
+        }))
+      : [],
+  }
+}
+
+function cloneMultiuserCharacterPresentation(presentation: MultiuserCharacterPresentation | null | undefined): MultiuserCharacterPresentation | null {
+  if (!presentation) {
+    return null
+  }
+  return {
+    animation: presentation.animation
+      ? {
+          clipName: presentation.animation.clipName,
+          time: presentation.animation.time,
+          duration: presentation.animation.duration,
+          loop: presentation.animation.loop,
+          timeScale: presentation.animation.timeScale,
+          normalizedTime: presentation.animation.normalizedTime ?? null,
+        }
+      : null,
+  }
+}
+
+function cloneMultiuserPeerPresentation(presentation: MultiuserPeerPresentationState | null | undefined): MultiuserPeerPresentationState | null {
+  if (!presentation) {
+    return null
+  }
+  const vehicle = cloneMultiuserVehiclePresentation(presentation.vehicle ?? null)
+  const character = cloneMultiuserCharacterPresentation(presentation.character ?? null)
+  if (!vehicle && !character) {
+    return null
+  }
+  return {
+    vehicle,
+    character,
+  }
+}
+
+function cloneMultiuserPeerState(state: MultiuserPeerState): MultiuserPeerState {
+  return {
+    ...state,
+    position: { ...state.position },
+    quaternion: { ...state.quaternion },
+    presentation: cloneMultiuserPeerPresentation(state.presentation ?? null),
+  }
+}
+
+function cloneMultiuserNodeSyncPresentation(
+  presentation: MultiuserNodeSyncPresentation | null | undefined,
+): MultiuserNodeSyncPresentation | null {
+  if (!presentation) {
+    return null
+  }
+  return {
+    vehicle: cloneMultiuserVehiclePresentation(presentation.vehicle ?? null),
+    character: cloneMultiuserCharacterPresentation(presentation.character ?? null),
+  }
+}
+
+function cloneMultiuserNodeSyncState(state: MultiuserNodeSyncState): MultiuserNodeSyncState {
+  return {
+    ...state,
+    transform: {
+      position: { ...state.transform.position },
+      quaternion: { ...state.transform.quaternion },
+      scale: state.transform.scale ? { ...state.transform.scale } : null,
+    },
+    lease: state.lease ? { ...state.lease } : null,
+    presentation: cloneMultiuserNodeSyncPresentation(state.presentation ?? null),
+  }
 }
 
 function getMultiuserStateSignature(state: MultiuserPeerState): string {
@@ -622,11 +715,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
         this.socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
         this.lastPeerSyncTimestamp = now
         if (changed) {
-          this.lastSentState = {
-            ...peerState,
-            position: { ...peerState.position },
-            quaternion: { ...peerState.quaternion },
-          }
+          this.lastSentState = cloneMultiuserPeerState(peerState)
           this.lastSentStateSignature = signature
         }
         this.lastKeepaliveTimestamp = now
@@ -656,52 +745,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
             entity: state,
           }
           socket.send(JSON.stringify(message satisfies MultiuserClientMessage))
-          this.lastSharedEntityById.set(state.entityId, {
-            ...state,
-            transform: {
-              position: { ...state.transform.position },
-              quaternion: { ...state.transform.quaternion },
-              scale: state.transform.scale ? { ...state.transform.scale } : null,
-            },
-            lease: state.lease ? { ...state.lease } : null,
-            presentation: state.presentation
-              ? {
-                  vehicle: state.presentation.vehicle
-                    ? {
-                        speedMps: state.presentation.vehicle.speedMps ?? null,
-                        linearVelocity: state.presentation.vehicle.linearVelocity
-                          ? { ...state.presentation.vehicle.linearVelocity }
-                          : null,
-                        wheels: state.presentation.vehicle.wheels.map((wheel) => ({
-                          nodeId: wheel.nodeId ?? null,
-                          wheelIndex: wheel.wheelIndex,
-                          position: { ...wheel.position },
-                          quaternion: { ...wheel.quaternion },
-                          scale: wheel.scale ? { ...wheel.scale } : null,
-                          steeringAxis: wheel.steeringAxis ? { ...wheel.steeringAxis } : null,
-                          spinAxis: wheel.spinAxis ? { ...wheel.spinAxis } : null,
-                          steeringAngle: wheel.steeringAngle ?? null,
-                          spinAngle: wheel.spinAngle ?? null,
-                        })),
-                      }
-                    : null,
-                  character: state.presentation.character
-                    ? {
-                        animation: state.presentation.character.animation
-                          ? {
-                              clipName: state.presentation.character.animation.clipName,
-                              time: state.presentation.character.animation.time,
-                              duration: state.presentation.character.animation.duration,
-                              loop: state.presentation.character.animation.loop,
-                              timeScale: state.presentation.character.animation.timeScale,
-                              normalizedTime: state.presentation.character.animation.normalizedTime ?? null,
-                            }
-                          : null,
-                      }
-                    : null,
-                }
-              : null,
-          })
+          this.lastSharedEntityById.set(state.entityId, cloneMultiuserNodeSyncState(state))
           this.lastSharedEntitySignatureById.set(state.entityId, signature)
         }
       })
