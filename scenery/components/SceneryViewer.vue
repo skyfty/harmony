@@ -3580,6 +3580,7 @@ const autoTourCameraFollowVelocity = new THREE.Vector3();
 const autoTourCameraFollowVelocityScratch = new THREE.Vector3();
 const autoTourCameraFollowAnchorScratch = new THREE.Vector3();
 const autoTourCameraFollowForwardScratch = new THREE.Vector3();
+const autoTourCameraFollowOffsetScratch = new THREE.Vector3();
 const autoTourCameraFollowQuaternionScratch = new THREE.Quaternion();
 const autoTourCameraFollowBox = new THREE.Box3();
 const AUTO_TOUR_RESUME_BLEND_SECONDS = 0.28;
@@ -6343,6 +6344,24 @@ function resolveDefaultControlledCharacterComponentProps(): CharacterControllerC
     return null;
   }
   return clampCharacterControllerComponentProps(resolveCharacterControllerComponent(resolveNodeById(controlledNodeId))?.props ?? null);
+}
+
+function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null {
+  const node = resolveNodeById(nodeId);
+  if (!node) {
+    return null;
+  }
+  const vehicleComponent = resolveVehicleComponent(node);
+  if (vehicleComponent) {
+    const props = clampVehicleComponentProps(vehicleComponent.props ?? null);
+    return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance);
+  }
+  const characterComponent = resolveCharacterControllerComponent(node);
+  if (characterComponent) {
+    const props = clampCharacterControllerComponentProps(characterComponent.props ?? null);
+    return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance);
+  }
+  return null;
 }
 
 function resolveCameraDistanceReferenceNodeId(): string | null {
@@ -15897,6 +15916,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   if (autoTourResumeBlendActive && autoTourResumeBlendNodeId === nodeId && !options.immediate) {
+    const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId);
     const placement = prepareAutoTourResumeBlendContext(nodeId, object, context);
     autoTourCameraFollowController.update({
       follow: autoTourResumeBlendState,
@@ -15907,6 +15927,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       deltaSeconds: 1 / 60,
       ctx: { camera: autoTourResumeBlendTempCamera, mapControls: undefined },
       immediate: true,
+      ...(localOffsetOverride ? { localOffsetOverride } : {}),
       tuning: createBackFollowCameraTuning(),
       distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     });
@@ -15959,6 +15980,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   const placement = computeFollowPlacement(getApproxDimensions(object));
+  const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId);
   if (deltaSeconds > 0 && autoTourCameraFollowHasSample) {
     autoTourCameraFollowVelocityScratch
       .copy(autoTourCameraFollowAnchorScratch)
@@ -15994,6 +16016,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     ctx: { camera: context.camera, mapControls: undefined },
     immediate: Boolean(options.immediate),
     smoothTargetForProgrammaticFollow: false,
+    ...(localOffsetOverride ? { localOffsetOverride } : {}),
     tuning: createBackFollowCameraTuning(),
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
   })

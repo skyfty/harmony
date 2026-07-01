@@ -224,8 +224,6 @@ const VEHICLE_STEER_HARD_CAP = 10
 const VEHICLE_STEER_SOFT_CAP_SQ = VEHICLE_STEER_SOFT_CAP * VEHICLE_STEER_SOFT_CAP
 // 相机世界上方向
 const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
-// 第一人称默认观察距离
-const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 // 相机高度兜底值
 const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
 // 相机高度兜底比例
@@ -371,6 +369,7 @@ export class VehicleDriveController {
     followWorldOffset: new THREE.Vector3(),
     followPredicted: new THREE.Vector3(),
     predictionOffset: new THREE.Vector3(),
+    vehicleFollowLocalOffset: new THREE.Vector3(),
     planarVelocity: new THREE.Vector3(),
     cameraQuaternionInverse: new THREE.Quaternion(),
     resetQuaternion: new THREE.Quaternion(),
@@ -450,6 +449,24 @@ export class VehicleDriveController {
       return undefined
     }
     return resolved
+  }
+
+  private resolveVehicleFollowLocalOffset(instance: VehicleInstance | null): THREE.Vector3 | null {
+    const nodeId = this.deps.normalizeNodeId(instance?.nodeId ?? null) ?? this.state.nodeId ?? null
+    if (!nodeId) {
+      return null
+    }
+    const node = this.deps.resolveNodeById(nodeId) ?? null
+    const component = this.deps.resolveVehicleComponent(node)
+    if (!component) {
+      return null
+    }
+    const props = clampVehicleComponentProps(component.props ?? null)
+    return this.temp.vehicleFollowLocalOffset.set(
+      0,
+      props.cameraFollowHeight,
+      -props.cameraFollowDistance,
+    )
   }
 
   private resolveFollowCameraPlacement(vehicleObject: THREE.Object3D | null, instance: VehicleInstance | null): VehicleFollowPlacement {
@@ -1345,6 +1362,10 @@ export class VehicleDriveController {
     }
 
     const tuning = this.getFollowCameraTuning()
+    const localOffsetOverride = this.resolveVehicleFollowLocalOffset(instance)
+    if (!localOffsetOverride) {
+      this.resetVehicleFollowLocalOffset()
+    }
 
     return updateMotionAwareFollowCamera({
       controller: this.followCameraController,
@@ -1359,6 +1380,7 @@ export class VehicleDriveController {
       worldUp: VEHICLE_CAMERA_WORLD_UP,
       distanceScale: this.getFollowDistanceScale(),
       ...(tuning ? { tuning } : {}),
+      ...(localOffsetOverride ? { localOffsetOverride } : {}),
       applyOrbitTween: options.applyOrbitTween ?? false,
       followControlsDirty: options.followControlsDirty ?? false,
       lockLocalOffset: true,

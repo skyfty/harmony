@@ -60,6 +60,7 @@ const wheelEntries = computed(() => displayProps.value.wheels ?? [])
 const wheelDetailsActiveId = ref<string | null>(null)
 const localMaxSpeedKmh = ref(DEFAULT_VEHICLE_MAX_SPEED_KMH)
 const advancedVehicleExpanded = ref(false)
+const advancedCameraExpanded = ref(false)
 const derivedVehicleTuning = computed(() => resolveVehicleDerivedTuning(displayProps.value.maxSpeedKmh))
 const baseWheelTemplate = computed<VehicleWheelProps>(() => ({
   id: 'wheel-template',
@@ -217,6 +218,10 @@ function updateComponent(patch: Partial<VehicleComponentProps>): void {
   } as VehicleComponentProps)
   const nextStored = serializeVehicleComponentPropsFromWorldScale(nextDisplay, selectedNodeScale.value)
   sceneStore.updateNodeComponentProps(nodeId, component.id, nextStored as unknown as Partial<Record<string, unknown>>)
+}
+
+function updateField<K extends keyof VehicleComponentProps>(key: K, value: VehicleComponentProps[K]): void {
+  updateComponent({ [key]: value } as Partial<VehicleComponentProps>)
 }
 
 watch(
@@ -402,6 +407,14 @@ function handleMaxSpeedChange(value: string | number): void {
   })
 }
 
+function updateCameraFollowDistance(value: number): void {
+  updateField('cameraFollowDistance', value)
+}
+
+function updateCameraFollowHeight(value: number): void {
+  updateField('cameraFollowHeight', value)
+}
+
 function handleToggleComponent(): void {
   const component = vehicleComponent.value
   const nodeId = selectedNodeId.value
@@ -503,8 +516,49 @@ function handleOpenSuspensionEditor(): void {
         <div class="vehicle-panel__section">
           <div class="vehicle-panel__section-header">
             <div>
+              <div class="vehicle-panel__section-title">Camera follow</div>
+            </div>
+            <v-btn
+              variant="text"
+              size="x-small"
+              class="component-menu-btn"
+              @click="advancedCameraExpanded = !advancedCameraExpanded"
+            >
+              {{ advancedCameraExpanded ? 'Hide' : 'Show' }}
+            </v-btn>
+          </div>
+          <v-expand-transition>
+            <div v-show="advancedCameraExpanded" class="vehicle-panel__field-grid vehicle-panel__field-grid--two">
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                step="0.1"
+                label="Follow distance"
+                :model-value="displayProps.cameraFollowDistance"
+                :disabled="!vehicleComponent?.enabled"
+                @update:modelValue="(value) => updateCameraFollowDistance(Number(value))"
+              />
+              <v-text-field
+                type="number"
+                density="compact"
+                variant="underlined"
+                hide-details
+                step="0.1"
+                label="Follow height"
+                :model-value="displayProps.cameraFollowHeight"
+                :disabled="!vehicleComponent?.enabled"
+                @update:modelValue="(value) => updateCameraFollowHeight(Number(value))"
+              />
+            </div>
+          </v-expand-transition>
+        </div>
+
+        <div class="vehicle-panel__section">
+          <div class="vehicle-panel__section-header">
+            <div>
               <div class="vehicle-panel__section-title">Advanced geometry</div>
-              <div class="vehicle-panel__section-hint">Raycast axes and wheelbase rarely need edits.</div>
             </div>
             <v-btn
               variant="text"

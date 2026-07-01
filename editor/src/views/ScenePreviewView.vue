@@ -262,9 +262,10 @@ import {
 } from '@schema/motion'
 import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
-import { AutoTourCameraAvoidanceController, type AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
+import type { AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
 import {
   FollowCameraController,
+  computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
   createFollowCameraMotionState,
@@ -1431,7 +1432,17 @@ const autoTourPausedIsTerminal = ref(false)
 const autoTourPausedNodeId = ref<string | null>(null)
 
 const autoTourFollowNodeId = ref<string | null>(null)
-const autoTourCameraAvoidanceController = new AutoTourCameraAvoidanceController()
+const autoTourCameraFollowState = createCameraFollowState()
+const autoTourCameraFollowController = new FollowCameraController()
+const autoTourCameraFollowLastAnchor = new THREE.Vector3()
+const autoTourCameraFollowVelocity = new THREE.Vector3()
+const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
+const autoTourCameraFollowAnchorScratch = new THREE.Vector3()
+const autoTourCameraFollowForwardScratch = new THREE.Vector3()
+const autoTourCameraFollowBox = new THREE.Box3()
+const autoTourCameraFollowOffsetScratch = new THREE.Vector3()
+const autoTourCameraFollowQuaternionScratch = new THREE.Quaternion()
+let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
 const autoTourCameraRoutePointsScratch: THREE.Vector3[] = []
@@ -6931,6 +6942,82 @@ function resolveDefaultControlledCharacterComponentProps(): CharacterControllerC
 	return clampCharacterControllerComponentProps(resolveCharacterControllerComponent(resolveNodeById(controlledNodeId))?.props ?? null)
 }
 
+function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null {
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return null
+	}
+	const vehicleComponent = resolveVehicleComponent(node)
+	if (vehicleComponent) {
+		const props = clampVehicleComponentProps(vehicleComponent.props ?? null)
+		return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance)
+	}
+	const characterComponent = resolveCharacterControllerComponent(node)
+	if (characterComponent) {
+		const props = clampCharacterControllerComponentProps(characterComponent.props ?? null)
+		return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance)
+	}
+	return null
+}
+
+function resolveAutoTourVehicleForwardWorld(
+	nodeId: string,
+	object: THREE.Object3D,
+	target: THREE.Vector3,
+): boolean {
+	const instance = vehicleInstances.get(nodeId) ?? null
+	const axisForward = instance?.axisForward ?? null
+	if (!axisForward || axisForward.lengthSq() < 1e-8) {
+		return false
+	}
+
+	const chassisQuaternion = physicsEnvironmentEnabled.value
+		? instance?.vehicle?.chassisBody?.quaternion ?? null
+		: null
+	if (chassisQuaternion) {
+		autoTourCameraFollowQuaternionScratch
+			.set(chassisQuaternion.x, chassisQuaternion.y, chassisQuaternion.z, chassisQuaternion.w)
+			.normalize()
+	} else {
+		object.getWorldQuaternion(autoTourCameraFollowQuaternionScratch).normalize()
+	}
+
+	target.copy(axisForward).applyQuaternion(autoTourCameraFollowQuaternionScratch)
+	target.y = 0
+	if (target.lengthSq() < 1e-8) {
+		return false
+	}
+	target.normalize()
+	return true
+}
+
+function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3D): THREE.Vector3 {
+	if (resolveVehicleOrObjectWorldPosition({
+		nodeId,
+		vehicleInstances,
+		nodeObjectMap,
+		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+		target: autoTourCameraFollowAnchorScratch,
+	})) {
+		return autoTourCameraFollowAnchorScratch
+	}
+	autoTourCameraFollowBox.makeEmpty()
+	autoTourCameraFollowBox.setFromObject(object)
+	if (autoTourCameraFollowBox.isEmpty()) {
+		object.getWorldPosition(autoTourCameraFollowAnchorScratch)
+		return autoTourCameraFollowAnchorScratch
+	}
+	autoTourCameraFollowBox.getCenter(autoTourCameraFollowAnchorScratch)
+	return autoTourCameraFollowAnchorScratch
+}
+
+function resetAutoTourCameraFollowState(): void {
+	resetCameraFollowState(autoTourCameraFollowState)
+	autoTourCameraFollowHasSample = false
+	autoTourCameraFollowLastAnchor.set(0, 0, 0)
+	autoTourCameraFollowVelocity.set(0, 0, 0)
+}
+
 function findDefaultControlledCharacterObject(): THREE.Object3D | null {
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
 	if (!controlledNodeId) {
@@ -8613,7 +8700,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 		startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.add(n)
 			autoTourFollowNodeId.value = n
-			autoTourCameraAvoidanceController.reset()
+			resetAutoTourCameraFollowState()
 			followCameraControlActive = false
 			followCameraControlDirty = false
 			setCameraViewState('watching', n)
@@ -8688,10 +8775,10 @@ function handleVehicleAutoTourStopClick(): void {
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
-		autoTourFollowNodeId.value = null
-		autoTourCameraAvoidanceController.reset()
-		followCameraControlActive = false
-		followCameraControlDirty = false
+				autoTourFollowNodeId.value = null
+				resetAutoTourCameraFollowState()
+				followCameraControlActive = false
+				followCameraControlDirty = false
 				setCameraViewState('level', null)
 			}
 		})
@@ -8721,7 +8808,7 @@ async function handleVehicleDrivePromptConfirm(): Promise<void> {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
 				autoTourFollowNodeId.value = null
-				autoTourCameraAvoidanceController.reset()
+				resetAutoTourCameraFollowState()
 			}
 		})
 	}
@@ -9584,86 +9671,81 @@ function updateAutoTourCameraForFrame(
 	if (!nodeId) {
 		if (autoTourFollowNodeId.value) {
 			autoTourFollowNodeId.value = null
-			autoTourCameraAvoidanceController.reset()
+			resetAutoTourCameraFollowState()
 		}
 		return
 	}
 	if (autoTourFollowNodeId.value !== nodeId) {
 		autoTourFollowNodeId.value = nodeId
-		autoTourCameraAvoidanceController.reset()
+		resetAutoTourCameraFollowState()
 	}
 	const object = nodeObjectMap.get(nodeId) ?? null
 	if (!object) {
 		return
 	}
-	object.updateMatrixWorld(true)
-	if (resolveVehicleOrObjectWorldPosition({
-		nodeId,
-		vehicleInstances,
-		nodeObjectMap,
-		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
-		target: tempPosition,
-	})) {
-		// use physics-backed chassis position for vehicle follow anchors
-	} else {
-	tempBox.makeEmpty()
-	tempBox.setFromObject(object)
-	if (tempBox.isEmpty()) {
-		object.getWorldPosition(tempPosition)
-	} else {
-		tempBox.getCenter(tempPosition)
-	}
-	}
-
-	object.getWorldDirection(tempDirection)
-	tempDirection.y = 0
-	if (tempDirection.lengthSq() < 1e-8) {
-		tempDirection.set(0, 0, 1)
-	} else {
-		tempDirection.normalize()
-	}
+	resolveAutoTourCameraFollowAnchor(nodeId, object)
 	const routeData = resolveAutoTourCameraRouteData(nodeId)
 	if (!routeData) {
 		return
 	}
-	tempTarget.copy(tempPosition).add(tempDirection)
+	const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId)
 	if (autoTourPaused.value) {
-		autoTourCameraAvoidanceController.seedFromPose({
-			cameraPosition: activeCamera.position,
-			cameraTarget: mapControls?.target ?? tempTarget,
-			anchorWorld: tempPosition,
-			forwardWorld: tempDirection,
-		})
+		autoTourCameraFollowVelocity.set(0, 0, 0)
+		autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch)
+		autoTourCameraFollowHasSample = true
 		return
 	}
+	if (!resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch)) {
+		object.getWorldDirection(autoTourCameraFollowForwardScratch)
+		autoTourCameraFollowForwardScratch.y = 0
+	}
+	if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+		autoTourCameraFollowForwardScratch.set(0, 0, 1)
+	} else {
+		autoTourCameraFollowForwardScratch.normalize()
+	}
 	const placement = computeFollowPlacement(getApproxDimensions(object))
-	const autoTourComponent = resolveAutoTourComponent(resolveNodeById(nodeId))
-	const avoidance = autoTourCameraAvoidanceController.update({
-		nodeId,
-		routeData,
+	if (delta > 0 && autoTourCameraFollowHasSample) {
+		autoTourCameraFollowVelocityScratch
+			.copy(autoTourCameraFollowAnchorScratch)
+			.sub(autoTourCameraFollowLastAnchor)
+			.multiplyScalar(1 / Math.max(1e-6, delta))
+		const alpha = computeFollowLerpAlpha(delta, 8)
+		autoTourCameraFollowVelocity.lerp(autoTourCameraFollowVelocityScratch, alpha)
+	} else if (followCameraActive) {
+		autoTourCameraFollowVelocity.set(0, 0, 0)
+	}
+	const hasVehicleForward = resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch)
+	if (!hasVehicleForward && autoTourCameraFollowVelocity.lengthSq() > 1e-6) {
+		autoTourCameraFollowForwardScratch.set(autoTourCameraFollowVelocity.x, 0, autoTourCameraFollowVelocity.z)
+	} else if (!hasVehicleForward) {
+		object.getWorldDirection(autoTourCameraFollowForwardScratch)
+		autoTourCameraFollowForwardScratch.y = 0
+	}
+	if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
+		autoTourCameraFollowForwardScratch.set(0, 0, 1)
+	} else {
+		autoTourCameraFollowForwardScratch.normalize()
+	}
+	autoTourCameraFollowController.update({
+		follow: autoTourCameraFollowState,
 		placement,
-		anchorWorld: tempPosition,
-		desiredForwardWorld: tempDirection,
-		velocityWorld: tempDirection,
-		up: AUTO_TOUR_CAMERA_WORLD_UP,
+		anchorWorld: autoTourCameraFollowAnchorScratch,
+		desiredForwardWorld: autoTourCameraFollowForwardScratch,
+		velocityWorld: autoTourCameraFollowVelocity,
 		deltaSeconds: delta,
-		roots: {
-			sceneGraphRoot: rootGroup,
-			instancedMeshGroup,
-		},
-		occlusionIgnoreNodeIds: [nodeId, routeData.routeNodeId],
+		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
 		immediate: false,
-		obstacleAvoidanceEnabled: autoTourComponent?.props?.followCameraObstacleAvoidanceEnabled !== false,
+		smoothTargetForProgrammaticFollow: false,
+		...(localOffsetOverride ? { localOffsetOverride } : {}),
+		tuning: createBackFollowCameraTuning(),
+		distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
 	})
-
-	activeCamera.position.copy(avoidance.currentPosition)
 	if (mapControls) {
-		mapControls.target.copy(avoidance.currentTarget)
-		mapControls.update()
 		lastOrbitState.position.copy(activeCamera.position)
 		lastOrbitState.target.copy(mapControls.target)
 	}
-	activeCamera.lookAt(mapControls?.target ?? avoidance.currentTarget)
+	autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch)
 }
 
 /**
@@ -9927,7 +10009,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	waterRuntime.reset()
 	activeAutoTourNodeIds.clear()
 	autoTourFollowNodeId.value = null
-	autoTourCameraAvoidanceController.reset()
+	resetAutoTourCameraFollowState()
 	followCameraControlActive = false
 	followCameraControlDirty = false
 	physicsBridgeContactsByNodeId.clear()

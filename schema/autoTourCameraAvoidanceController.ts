@@ -45,6 +45,7 @@ export type AutoTourCameraAvoidanceUpdateParams = {
   velocityWorld: THREE.Vector3
   up: THREE.Vector3
   placement: CameraFollowPlacement
+  localOffsetOverride?: THREE.Vector3 | null
   roots: AutoTourCameraAvoidanceRoots
   occlusionIgnoreNodeIds: readonly string[]
   deltaSeconds: number
@@ -265,6 +266,7 @@ export class AutoTourCameraAvoidanceController {
     right: THREE.Vector3
     up: THREE.Vector3
     placement: CameraFollowPlacement
+    localOffsetOverride?: THREE.Vector3 | null
     turnSeverity: number
     preferredSide: -1 | 0 | 1
     narrowBlendPreview: number
@@ -272,13 +274,19 @@ export class AutoTourCameraAvoidanceController {
     roots: AutoTourCameraAvoidanceRoots
   }): AutoTourCameraCandidate[] {
     const narrowBlendPreview = params.narrowBlendPreview
-    const baseDistance = params.placement.distance
-    const baseHeight = params.placement.heightOffset
+    const fallbackDistance = params.localOffsetOverride
+      ? Math.max(0.1, Math.abs(params.localOffsetOverride.z))
+      : params.placement.distance
+    const fallbackHeight = params.localOffsetOverride
+      ? Math.max(0.1, params.localOffsetOverride.y)
+      : params.placement.heightOffset
+    const baseDistance = fallbackDistance
+    const baseHeight = fallbackHeight
     const baseTargetLift = params.placement.targetLift
     const baseTargetForward = params.placement.targetForward
     const sideShift = Math.max(
       0.28,
-      params.placement.distance * AUTO_TOUR_CAMERA_FOLLOW_SIDE_GAIN * (0.45 + params.turnSeverity * 0.9) * (1 - narrowBlendPreview * 0.35),
+      fallbackDistance * AUTO_TOUR_CAMERA_FOLLOW_SIDE_GAIN * (0.45 + params.turnSeverity * 0.9) * (1 - narrowBlendPreview * 0.35),
     )
 
     const candidateSpecs: Array<{
@@ -346,6 +354,12 @@ export class AutoTourCameraAvoidanceController {
   update(params: AutoTourCameraAvoidanceUpdateParams): AutoTourCameraAvoidanceUpdateResult {
     const deltaSeconds = Math.max(0, params.deltaSeconds)
     const obstacleAvoidanceEnabled = params.obstacleAvoidanceEnabled ?? false
+    const fallbackDistance = params.localOffsetOverride
+      ? Math.max(0.1, Math.abs(params.localOffsetOverride.z))
+      : params.placement.distance
+    const fallbackHeight = params.localOffsetOverride
+      ? Math.max(0.1, params.localOffsetOverride.y)
+      : params.placement.heightOffset
     if (deltaSeconds > 0 && this.hasSample) {
       this.velocityScratch
         .copy(params.anchorWorld)
@@ -446,8 +460,8 @@ export class AutoTourCameraAvoidanceController {
     }
 
     this.wallProbeOriginScratch.copy(this.lookaheadPointScratch)
-    this.wallProbeOriginScratch.addScaledVector(this.upScratch, params.placement.heightOffset * 0.35 + 0.8)
-    const wallProbeDistance = THREE.MathUtils.clamp(params.placement.distance * 0.42, 1.8, 5.4)
+    this.wallProbeOriginScratch.addScaledVector(this.upScratch, fallbackHeight * 0.35 + 0.8)
+    const wallProbeDistance = THREE.MathUtils.clamp(fallbackDistance * 0.42, 1.8, 5.4)
     this.wallProbeTargetScratch
       .copy(this.wallProbeOriginScratch)
       .addScaledVector(this.rightScratch, -wallProbeDistance)
@@ -493,14 +507,14 @@ export class AutoTourCameraAvoidanceController {
     const nearEndBlend = routeDistanceToEnd <= 1e-6
       ? 1
       : THREE.MathUtils.clamp(1 - routeDistanceToEnd / Math.max(6, lookaheadDistance * 2), 0, 1)
-    const motionBlend = THREE.MathUtils.clamp(this.followState.lastVelocityDirection.length() / Math.max(1, params.placement.distance), 0, 1)
+    const motionBlend = THREE.MathUtils.clamp(this.followState.lastVelocityDirection.length() / Math.max(1, fallbackDistance), 0, 1)
 
-    const baseDistance = params.placement.distance * THREE.MathUtils.clamp(
+    const baseDistance = fallbackDistance * THREE.MathUtils.clamp(
       1 + motionBlend * 0.08 + turnSeverity * 0.35 + dockBlend * 0.18 + nearEndBlend * 0.2 + narrowBlendPreview * 0.24,
       AUTO_TOUR_CAMERA_FOLLOW_MIN_DISTANCE_GAIN,
       AUTO_TOUR_CAMERA_FOLLOW_MAX_DISTANCE_GAIN,
     )
-    const baseHeight = params.placement.heightOffset * THREE.MathUtils.clamp(
+    const baseHeight = fallbackHeight * THREE.MathUtils.clamp(
       0.92 + turnSeverity * 0.16 + dockBlend * 0.08 + nearEndBlend * 0.12 + narrowBlendPreview * 0.4,
       0.82,
       AUTO_TOUR_CAMERA_FOLLOW_MAX_HEIGHT_GAIN,
@@ -695,15 +709,15 @@ export class AutoTourCameraAvoidanceController {
     if (wallBiasSide !== 0 && this.wallBlend > 1e-4) {
       this.desiredPositionScratch.addScaledVector(
         this.rightScratch,
-        wallBiasSide * params.placement.distance * AUTO_TOUR_CAMERA_FOLLOW_WALL_SIDE_SHIFT_RATIO * this.wallBlend,
+        wallBiasSide * fallbackDistance * AUTO_TOUR_CAMERA_FOLLOW_WALL_SIDE_SHIFT_RATIO * this.wallBlend,
       )
       this.desiredPositionScratch.addScaledVector(
         this.tangentScratch,
-        -params.placement.distance * 0.05 * this.wallBlend,
+        -fallbackDistance * 0.05 * this.wallBlend,
       )
       this.desiredTargetScratch.addScaledVector(
         this.rightScratch,
-        wallBiasSide * params.placement.targetLift * AUTO_TOUR_CAMERA_FOLLOW_WALL_TARGET_SHIFT_RATIO * this.wallBlend,
+        wallBiasSide * fallbackHeight * AUTO_TOUR_CAMERA_FOLLOW_WALL_TARGET_SHIFT_RATIO * this.wallBlend,
       )
       this.desiredTargetScratch.addScaledVector(
         this.rightScratch,

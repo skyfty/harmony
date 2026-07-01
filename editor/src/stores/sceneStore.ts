@@ -18102,6 +18102,8 @@ export const useSceneStore = defineStore('scene', {
           currentProps.indexRightAxis !== merged.indexRightAxis ||
           currentProps.indexUpAxis !== merged.indexUpAxis ||
           currentProps.indexForwardAxis !== merged.indexForwardAxis ||
+          currentProps.cameraFollowDistance !== merged.cameraFollowDistance ||
+          currentProps.cameraFollowHeight !== merged.cameraFollowHeight ||
           wheelsChanged
         if (!hasChanges) {
           return false

@@ -82,15 +82,6 @@ function updateField<K extends keyof CharacterControllerComponentProps>(key: K, 
   updateComponent({ [key]: value } as Partial<CharacterControllerComponentProps>)
 }
 
-const derivedMovementSpeeds = computed(() => {
-  const sprintSpeed = Math.max(0, normalizedProps.value.sprintSpeed)
-  return {
-    walkSpeed: Number((sprintSpeed * 0.375).toFixed(2)),
-    runSpeed: Number((sprintSpeed * 0.75).toFixed(2)),
-    sprintSpeed: Number(sprintSpeed.toFixed(2)),
-  }
-})
-
 function updateAnimationBinding(slot: CharacterControllerComponentProps['animationBindings'][number]['slot'], clipName: string | null) {
   const bindingMap = new Map(
     normalizedProps.value.animationBindings.map((binding) => [binding.slot, { slot: binding.slot, clipName: binding.clipName }] as const),

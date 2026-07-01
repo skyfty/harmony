@@ -1,6 +1,10 @@
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode, SceneNodeComponentState, Vector3Like } from '../../index'
+import {
+  DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
+  DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
+} from './characterControllerComponent'
 
 export const VEHICLE_COMPONENT_TYPE = 'vehicle'
 export type VehicleScaleMode = 'relative'
@@ -34,6 +38,8 @@ export interface VehicleWheelProps {
 export interface VehicleComponentProps {
   // Newer saves store wheel sizes relative to node scale.
   wheelScaleMode?: VehicleScaleMode
+  cameraFollowDistance: number
+  cameraFollowHeight: number
   indexRightAxis: number
   indexUpAxis: number
   indexForwardAxis: number
@@ -48,6 +54,8 @@ export interface VehicleComponentProps {
 }
 
 export const DEFAULT_VEHICLE_WHEEL_SCALE_MODE: VehicleScaleMode = 'relative'
+export const DEFAULT_VEHICLE_CAMERA_FOLLOW_DISTANCE = DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE
+export const DEFAULT_VEHICLE_CAMERA_FOLLOW_HEIGHT = DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT
 
 export function createDefaultVehicleComponentProps(): VehicleComponentProps {
   return clampVehicleComponentProps({ wheelScaleMode: DEFAULT_VEHICLE_WHEEL_SCALE_MODE })
@@ -636,6 +644,18 @@ export function clampVehicleComponentProps(
   const wheelTemplate = resolveLegacyWheelTemplate(props ?? null, legacyVectors)
   const clamped: VehicleComponentProps = {
     wheelScaleMode: isRelativeVehicleScaleMode(props) ? DEFAULT_VEHICLE_WHEEL_SCALE_MODE : undefined,
+    cameraFollowDistance: clampNumberRange(
+      props?.cameraFollowDistance,
+      DEFAULT_VEHICLE_CAMERA_FOLLOW_DISTANCE,
+      0.1,
+      100,
+    ),
+    cameraFollowHeight: clampNumberRange(
+      props?.cameraFollowHeight,
+      DEFAULT_VEHICLE_CAMERA_FOLLOW_HEIGHT,
+      0,
+      100,
+    ),
     indexRightAxis: clampAxisIndex(props?.indexRightAxis, DEFAULT_RIGHT_AXIS),
     indexUpAxis: clampAxisIndex(props?.indexUpAxis, DEFAULT_UP_AXIS),
     indexForwardAxis: clampAxisIndex(props?.indexForwardAxis, DEFAULT_FORWARD_AXIS),
@@ -680,6 +700,8 @@ export function clampVehicleComponentProps(
 export function cloneVehicleComponentProps(props: VehicleComponentProps): VehicleComponentProps {
   return {
     wheelScaleMode: props.wheelScaleMode,
+    cameraFollowDistance: props.cameraFollowDistance,
+    cameraFollowHeight: props.cameraFollowHeight,
     indexRightAxis: props.indexRightAxis,
     indexUpAxis: props.indexUpAxis,
     indexForwardAxis: props.indexForwardAxis,
