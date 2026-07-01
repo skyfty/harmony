@@ -2517,6 +2517,7 @@ const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
 const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
 const remoteMultiuserCharacterStatesByNodeId = new Map<string, RemoteMultiuserCharacterState>();
 const remoteMultiuserCharacterNodeIdByUserId = new Map<string, string>();
+const localMultiuserVehiclePresentationByNodeId = new Map<string, MultiuserVehiclePresentation>();
 const localMultiuserCharacterPresentationByNodeId = new Map<string, MultiuserCharacterAnimationPresentation>();
 const REMOTE_MULTIUSER_SMOOTHING_SECONDS = 0.16;
 const remoteMultiuserDisplayPositionScratch = new THREE.Vector3();
@@ -11795,6 +11796,32 @@ function cloneRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresent
   };
 }
 
+function formatRemoteMultiuserVehiclePresentation(presentation: MultiuserVehiclePresentation | null | undefined): string {
+  if (!presentation) {
+    return 'vehicle=null';
+  }
+  const wheels = Array.isArray(presentation.wheels) ? presentation.wheels.length : 0;
+  const linearVelocity = presentation.linearVelocity
+    ? `(${presentation.linearVelocity.x.toFixed(2)},${presentation.linearVelocity.y.toFixed(2)},${presentation.linearVelocity.z.toFixed(2)})`
+    : 'null';
+  return `vehicle{speedMps=${presentation.speedMps ?? 'null'},linearVelocity=${linearVelocity},wheels=${wheels}}`;
+}
+
+function formatRemoteMultiuserCharacterPresentation(presentation: MultiuserCharacterPresentation | null | undefined): string {
+  if (!presentation || !presentation.animation) {
+    return 'character=null';
+  }
+  const animation = presentation.animation;
+  return `character{clipName=${animation.clipName ?? 'null'},time=${Number.isFinite(animation.time) ? animation.time.toFixed(3) : 'null'},duration=${Number.isFinite(animation.duration) ? animation.duration.toFixed(3) : 'null'},loop=${animation.loop},timeScale=${Number.isFinite(animation.timeScale) ? animation.timeScale.toFixed(3) : 'null'},normalizedTime=${animation.normalizedTime ?? 'null'}}`;
+}
+
+function formatRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresentationState | null | undefined): string {
+  if (!presentation) {
+    return 'presentation=null';
+  }
+  return `presentation{${formatRemoteMultiuserVehiclePresentation(presentation.vehicle ?? null)};${formatRemoteMultiuserCharacterPresentation(presentation.character ?? null)}}`;
+}
+
 function isFiniteVector3Like(value: MultiuserPresentationVector3Like | null | undefined): value is MultiuserPresentationVector3Like {
   if (!value) {
     return false;
@@ -12494,6 +12521,9 @@ function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, del
   const alpha = 1 - Math.exp(-Math.max(0, deltaSeconds) / smoothingSeconds);
   const targetState = entry.targetState;
   const displayState = entry.displayState;
+  if (!targetState.presentation) {
+    console.debug(`[Multiuser] remote peer transform missing presentation: subjectType=${targetState.subjectType}, nodeId=${targetState.subjectNodeId ?? 'null'}, action=${targetState.action ?? 'null'}, ${formatRemoteMultiuserPeerPresentation(targetState.presentation)}`);
+  }
   if (!displayState) {
     entry.displayState = cloneRemoteMultiuserPeerState(targetState);
     if (entry.root) {
@@ -13194,6 +13224,7 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   if (localIdentity && peer.userId === localIdentity.userId) {
     return;
   }
+  console.debug(`[Multiuser] remote peer snapshot received: userId=${peer.userId}, subjectType=${peer.state?.subjectType ?? 'null'}, nodeId=${peer.state?.subjectNodeId ?? 'null'}, action=${peer.state?.action ?? 'null'}, ${formatRemoteMultiuserPeerPresentation(peer.state?.presentation ?? null)}`);
   if (!peer.state) {
     clearRemoteMultiuserCharacterStateForUser(peer.userId);
     removeRemoteMultiuserPeer(peer.userId);
@@ -13221,7 +13252,11 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
 function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehiclePresentation | null {
   const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
   if (!vehicleInstance || !Array.isArray(vehicleInstance.wheelBindings) || !vehicleInstance.wheelBindings.length) {
-    return null;
+    const cachedPresentation = localMultiuserVehiclePresentationByNodeId.get(nodeId) ?? null;
+    if (!cachedPresentation) {
+      console.debug(`[Multiuser] local vehicle presentation missing: nodeId=${nodeId}, vehicleInstance=${vehicleInstance ? 'yes' : 'no'}, wheelBindings=${Array.isArray(vehicleInstance?.wheelBindings) ? vehicleInstance.wheelBindings.length : 'n/a'}, cached=${formatRemoteMultiuserVehiclePresentation(cachedPresentation)}`);
+    }
+    return cachedPresentation;
   }
   const chassisVelocity = vehicleInstance.vehicle?.chassisBody?.velocity ?? null;
   const wheels: MultiuserVehicleWheelPresentation[] = [];
@@ -13266,9 +13301,11 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
     });
   });
   if (!wheels.length) {
-    return null;
+    const cachedPresentation = localMultiuserVehiclePresentationByNodeId.get(nodeId) ?? null;
+    console.debug(`[Multiuser] local vehicle presentation empty wheels: nodeId=${nodeId}, cached=${formatRemoteMultiuserVehiclePresentation(cachedPresentation)}`);
+    return cachedPresentation;
   }
-  return {
+  const presentation = {
     speedMps: chassisVelocity
       ? Math.hypot(chassisVelocity.x ?? 0, chassisVelocity.y ?? 0, chassisVelocity.z ?? 0)
       : null,
@@ -13281,6 +13318,8 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
       : null,
     wheels,
   };
+  localMultiuserVehiclePresentationByNodeId.set(nodeId, presentation);
+  return presentation;
 }
 
 function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCharacterPresentation | null {
@@ -13317,6 +13356,7 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
       ) ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, nodeId, node?.name ?? null);
       object.getWorldPosition(protagonistPosePosition);
       object.getWorldQuaternion(protagonistPoseQuaternion);
+      const vehiclePresentation = resolveLocalMultiuserVehiclePresentation(nodeId);
       return {
         subjectType: 'vehicle',
         subjectNodeId: nodeId,
@@ -13336,10 +13376,12 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
           z: protagonistPoseQuaternion.z,
           w: protagonistPoseQuaternion.w,
         },
-        presentation: {
-          vehicle: resolveLocalMultiuserVehiclePresentation(nodeId),
-          character: null,
-        },
+        presentation: vehiclePresentation
+          ? {
+              vehicle: vehiclePresentation,
+              character: null,
+            }
+          : null,
       };
     }
   }
@@ -13352,6 +13394,7 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   const node = resolveNodeById(resolvedNodeId);
   protagonistObject.getWorldPosition(protagonistPosePosition);
   protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
+  const characterPresentation = resolveLocalMultiuserCharacterPresentation(resolvedNodeId);
   return {
     subjectType: 'character',
     subjectNodeId: resolvedNodeId,
@@ -13370,10 +13413,12 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
       z: protagonistPoseQuaternion.z,
       w: protagonistPoseQuaternion.w,
     },
-    presentation: {
-      vehicle: null,
-      character: resolveLocalMultiuserCharacterPresentation(resolvedNodeId),
-    },
+    presentation: characterPresentation
+      ? {
+          vehicle: null,
+          character: characterPresentation,
+        }
+      : null,
   };
 }
 
@@ -17879,6 +17924,7 @@ function resetScenePreviewRuntimeState(): void {
   resetRemovedSkyState();
   clearSceneInitState();
   warnings.value = [];
+  localMultiuserVehiclePresentationByNodeId.clear();
   localMultiuserCharacterPresentationByNodeId.clear();
 }
 
@@ -19531,6 +19577,7 @@ function cleanupRuntime(): void {
   setActiveMultiuserRuntimeBridge(null);
   sharedResourceCache = null;
   lanternViewerInstance = null;
+  localMultiuserVehiclePresentationByNodeId.clear();
   localMultiuserCharacterPresentationByNodeId.clear();
   setGroundTextureSourceResolver(null);
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];

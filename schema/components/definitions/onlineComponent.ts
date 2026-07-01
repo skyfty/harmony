@@ -701,6 +701,11 @@ class OnlineComponent extends Component<OnlineComponentProps> {
     const now = Date.now()
     const peerState = bridge.resolveLocalPeerState()
     if (peerState) {
+      if (!peerState.presentation) {
+        console.debug(`[Multiuser] local peer state presentation is null: subjectType=${peerState.subjectType}, nodeId=${peerState.subjectNodeId ?? 'null'}, action=${peerState.action ?? 'null'}`)
+      } else {
+        console.debug(`[Multiuser] local peer state presentation ready: subjectType=${peerState.subjectType}, nodeId=${peerState.subjectNodeId ?? 'null'}, presentation=${getMultiuserPresentationSignature(peerState.presentation) || 'empty'}`)
+      }
       const signature = getMultiuserStateSignature(peerState)
       const shouldKeepalive = now - this.lastKeepaliveTimestamp >= STATE_KEEPALIVE_INTERVAL
       const changed = signature !== this.lastSentStateSignature && isMultiuserStateMeaningfullyChanged(this.lastSentState, peerState)
