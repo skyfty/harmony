@@ -13272,6 +13272,33 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
   };
 }
 
+function resolveVehicleWorldPose(nodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
+  const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
+  const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null;
+  if (chassisBody) {
+    return {
+      position: new THREE.Vector3(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z),
+      quaternion: new THREE.Quaternion(
+        chassisBody.quaternion.x,
+        chassisBody.quaternion.y,
+        chassisBody.quaternion.z,
+        chassisBody.quaternion.w,
+      ),
+    };
+  }
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
+    return null;
+  }
+  object.updateWorldMatrix(true, false);
+  object.getWorldPosition(protagonistPosePosition);
+  object.getWorldQuaternion(protagonistPoseQuaternion);
+  return {
+    position: protagonistPosePosition.clone(),
+    quaternion: protagonistPoseQuaternion.clone(),
+  };
+}
+
 function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCharacterPresentation | null {
   if (!nodeAnimationRuntime.has(nodeId)) {
     localMultiuserCharacterPresentationByNodeId.delete(nodeId);
@@ -13297,8 +13324,8 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
     const nodeId = vehicleDriveNodeId.value;
     const node = resolveNodeById(nodeId);
-    const object = nodeObjectMap.get(nodeId) ?? null;
-    if (object) {
+    const pose = resolveVehicleWorldPose(nodeId);
+    if (pose) {
       const steerBinding = resolveSteerBindingByTargetNodeId(currentDocument, nodeId);
       const resolvedVehicleIdentifier = steerBinding?.steerProps.defaultIdentifier?.trim()
         || findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, nodeId, node?.name ?? null)?.vehicleIdentifier?.trim()
@@ -13308,8 +13335,6 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
         props.runtimePrefabSpawns,
         resolvedVehicleIdentifier || null,
       ) ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, nodeId, node?.name ?? null);
-      object.getWorldPosition(protagonistPosePosition);
-      object.getWorldQuaternion(protagonistPoseQuaternion);
       return {
         subjectType: 'vehicle',
         subjectNodeId: nodeId,
@@ -13319,15 +13344,15 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
           : matchedRequest?.assetId ?? null,
         subjectAssetUrl: matchedRequest?.assetUrl ?? null,
         position: {
-          x: protagonistPosePosition.x,
-          y: protagonistPosePosition.y,
-          z: protagonistPosePosition.z,
+          x: pose.position.x,
+          y: pose.position.y,
+          z: pose.position.z,
         },
         quaternion: {
-          x: protagonistPoseQuaternion.x,
-          y: protagonistPoseQuaternion.y,
-          z: protagonistPoseQuaternion.z,
-          w: protagonistPoseQuaternion.w,
+          x: pose.quaternion.x,
+          y: pose.quaternion.y,
+          z: pose.quaternion.z,
+          w: pose.quaternion.w,
         },
         presentation: {
           vehicle: resolveLocalMultiuserVehiclePresentation(nodeId),
@@ -13382,9 +13407,15 @@ function resolveLocalNodeSyncStates(): MultiuserNodeSyncState[] {
     if (!object) {
       return;
     }
-    object.updateWorldMatrix(true, false);
-    object.getWorldPosition(protagonistPosePosition);
-    object.getWorldQuaternion(protagonistPoseQuaternion);
+    const vehiclePose = resolveVehicleWorldPose(nodeId);
+    if (vehiclePose) {
+      protagonistPosePosition.copy(vehiclePose.position);
+      protagonistPoseQuaternion.copy(vehiclePose.quaternion);
+    } else {
+      object.updateWorldMatrix(true, false);
+      object.getWorldPosition(protagonistPosePosition);
+      object.getWorldQuaternion(protagonistPoseQuaternion);
+    }
     const worldScale = object.getWorldScale(remoteSharedEntityTargetScaleScratch);
     const signature = buildLocalNetworkSyncSignature(entry.props, protagonistPosePosition, protagonistPoseQuaternion, worldScale);
     if (!entry.lastLocalSignature) {
