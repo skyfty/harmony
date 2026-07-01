@@ -12004,6 +12004,13 @@ function cloneRemoteMultiuserObjectFromRuntime(nodeId: string | null): THREE.Obj
   if (!source) {
     return null;
   }
+  if (source.children.length === 0) {
+    return null;
+  }
+  const sourceNodeId = source.children[0].userData.nodeId;
+  if (lazyPlaceholderStates.has(sourceNodeId)){
+    return null;
+  }
   return sanitizeRemoteMultiuserObject(cloneSkinned(source));
 }
 
