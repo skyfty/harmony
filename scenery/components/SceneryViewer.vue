@@ -12115,7 +12115,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     applyWeChatShadowPolicy(rootNode);
     return {
       object: sanitizeRemoteMultiuserObject(rootNode),
-      wheelNodeIds: state.subjectType === 'vehicle'?collectPrefabVehicleWheelNodeIds(source.prefab, cloned.idMap):[]
+      wheelNodeIds: state.subjectType === 'vehicle' ? collectPrefabVehicleWheelNodeIds(source.prefab, cloned.idMap) : [],
     };
   } catch (error) {
     console.warn('[SceneryViewer] Failed to instantiate remote multiuser prefab', {
@@ -12137,7 +12137,7 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
       ? matchedVehicleRequest.assetId.trim()
       : typeof state.subjectAssetUrl === 'string' && state.subjectAssetUrl.trim().length
         ? state.subjectAssetUrl.trim()
-        : typeof matchedVehicleRequest?.assetUrl === 'string' && matchedVehicleRequest.assetUrl.trim().length
+      : typeof matchedVehicleRequest?.assetUrl === 'string' && matchedVehicleRequest.assetUrl.trim().length
           ? matchedVehicleRequest.assetUrl.trim()
           : '';
   if (!resourceCache || !assetId) {

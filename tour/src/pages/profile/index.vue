@@ -88,15 +88,12 @@ const defaultProfile: UserProfile = {
 
 onShow(() => {
   applyLightNavigationBar();
-  console.info('[mini-auth-profile-page] onShow reloadProfile start')
   void reloadProfile();
 });
 
 async function retryProfileAuth() {
   try {
-    console.info('[mini-auth-profile-page] retryProfileAuth tapped')
     const ok = await requestProfileAndSync()
-    console.info('[mini-auth-profile-page] retryProfileAuth resolved', { ok })
     if (ok) {
       void uni.showToast({ title: '同步成功', icon: 'success' })
       void reloadProfile()
@@ -110,15 +107,9 @@ async function retryProfileAuth() {
 
 async function reloadProfile() {
   try {
-    console.info('[mini-auth-profile-page] reloadProfile request start')
     profile.value = await getProfile();
-    console.info('[mini-auth-profile-page] reloadProfile success', {
-      displayName: profile.value.displayName,
-      isAnonymousDisplay: Boolean(profile.value.isAnonymousDisplay),
-      hasAvatarUrl: Boolean(profile.value.avatarUrl),
-    })
+
   } catch {
-    console.info('[mini-auth-profile-page] reloadProfile failed')
     uni.showToast({ title: '加载失败', icon: 'none' });
   }
 }
