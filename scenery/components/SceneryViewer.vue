@@ -863,9 +863,10 @@ import {
   createCameraFollowState,
   createFollowCameraMotionState,
   getApproxDimensions,
+  resolveBackFollowCameraLocalOffset,
   resetCameraFollowState,
   resetFollowCameraMotionState,
-  updateMotionAwareFollowCamera,
+  updateBackFollowCamera,
 } from '@harmony/schema/motion';
 import type { FollowCameraMotionState, CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
 import {
@@ -6354,12 +6355,20 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
   const vehicleComponent = resolveVehicleComponent(node);
   if (vehicleComponent) {
     const props = clampVehicleComponentProps(vehicleComponent.props ?? null);
-    return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance);
+    return resolveBackFollowCameraLocalOffset(
+      autoTourCameraFollowOffsetScratch,
+      props.cameraFollowDistance,
+      props.cameraFollowHeight,
+    );
   }
   const characterComponent = resolveCharacterControllerComponent(node);
   if (characterComponent) {
     const props = clampCharacterControllerComponentProps(characterComponent.props ?? null);
-    return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance);
+    return resolveBackFollowCameraLocalOffset(
+      autoTourCameraFollowOffsetScratch,
+      props.cameraFollowDistance,
+      props.cameraFollowHeight,
+    );
   }
   return null;
 }
@@ -15830,7 +15839,7 @@ function updateCharacterFollowCamera(
     ? motionTelemetry.worldLinearVelocity
     : null;
 
-  return runWithProgrammaticCameraMutationAndAnchor(() => updateMotionAwareFollowCamera({
+  return runWithProgrammaticCameraMutationAndAnchor(() => updateBackFollowCamera({
     controller: characterCameraFollowController,
     motion: characterCameraFollowMotionState,
     follow: characterCameraFollowState,
@@ -15930,6 +15939,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       ...(localOffsetOverride ? { localOffsetOverride } : {}),
       tuning: createBackFollowCameraTuning(),
       distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+      lockLocalOffset: true,
     });
 
     autoTourResumeBlendElapsedSeconds += Math.max(0, deltaSeconds);
@@ -16019,6 +16029,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     ...(localOffsetOverride ? { localOffsetOverride } : {}),
     tuning: createBackFollowCameraTuning(),
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+    lockLocalOffset: true,
   })
 
 
@@ -16384,6 +16395,7 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
     immediate: true,
     tuning: createBackFollowCameraTuning(),
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+    lockLocalOffset: true,
   });
 
   autoTourCameraFollowState.currentPosition.copy(autoTourResumeBlendStartPosition);

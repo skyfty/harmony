@@ -154,6 +154,10 @@ export function createBackFollowCameraTuning(overrides: Partial<CameraFollowTuni
   }
 }
 
+export function resolveBackFollowCameraLocalOffset(target: THREE.Vector3, distance: number, height: number): THREE.Vector3 {
+  return target.set(0, height, -distance)
+}
+
 export const DEFAULT_OBJECT_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
 
 export function createCameraFollowState(): CameraFollowState {
@@ -396,6 +400,33 @@ export function updateMotionAwareFollowCamera(options: UpdateMotionAwareFollowCa
     immediate: Boolean(options.immediate),
     applyOrbitTween: options.applyOrbitTween,
     smoothTargetForProgrammaticFollow: options.smoothTargetForProgrammaticFollow,
+  })
+}
+
+export type BackFollowCameraUpdateOptions = Omit<
+  UpdateMotionAwareFollowCameraOptions,
+  'tuning' | 'distanceScale' | 'localOffsetOverride' | 'lockLocalOffset' | 'smoothTargetForProgrammaticFollow'
+> & {
+  tuning?: Partial<CameraFollowTuning>
+  distanceScale?: number
+  localOffsetOverride?: THREE.Vector3 | null
+  lockLocalOffset?: boolean
+  smoothTargetForProgrammaticFollow?: boolean
+  velocityLerpSpeed?: number
+}
+
+export function updateBackFollowCamera(options: BackFollowCameraUpdateOptions): boolean {
+  return updateMotionAwareFollowCamera({
+    ...options,
+    tuning: {
+      ...createBackFollowCameraTuning(),
+      ...(options.tuning ?? {}),
+    },
+    distanceScale: options.distanceScale ?? DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+    localOffsetOverride: options.localOffsetOverride,
+    lockLocalOffset: options.lockLocalOffset ?? true,
+    smoothTargetForProgrammaticFollow: options.smoothTargetForProgrammaticFollow ?? false,
+    velocityLerpSpeed: options.velocityLerpSpeed,
   })
 }
 

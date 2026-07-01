@@ -1,11 +1,13 @@
 import * as THREE from 'three'
 import {
   FollowCameraController,
+  computeFollowPlacement,
   type CameraFollowContext,
   type CameraFollowPlacement,
   type CameraFollowState,
   type CameraFollowTuning,
-  updateMotionAwareFollowCamera,
+  resolveBackFollowCameraLocalOffset,
+  updateBackFollowCamera,
 } from './followCameraController'
 // Local structural types to avoid tight coupling with component module exports
 type SceneNode = any
@@ -242,10 +244,6 @@ const VEHICLE_EXIT_FORWARD_MIN = 1.25
 const VEHICLE_EXIT_VERTICAL_MIN = 0.6
 // 车辆尺寸兜底值
 const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
-// 跟随相机最小距离
-const VEHICLE_FOLLOW_DISTANCE_MIN = 1
-// 跟随相机最大距离
-const VEHICLE_FOLLOW_DISTANCE_MAX = 10
 // 跟随相机基于转向输入的即时偏航反馈上限
 const VEHICLE_FOLLOW_STEER_LOOK_MAX = THREE.MathUtils.degToRad(14)
 // 低于该速度时基本不施加转向视觉偏航
@@ -257,18 +255,6 @@ const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 5.5
 const VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT = 0.22
 // 非零目标转向时的跟随时间常数（秒）；值越小越跟手
 const VEHICLE_FOLLOW_STEER_LOOK_TRACK_TIME_CONSTANT = 0.08
-// 跟随相机高度比例（调高让车辆在画面中更靠下）
-const VEHICLE_FOLLOW_HEIGHT_RATIO = 0.7 // 降低相机高度比例
-const VEHICLE_FOLLOW_HEIGHT_MIN = 4.0   // 降低相机最小高度
-const VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO = 2.8 // 恢复默认距离比例
-const VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO = 0.4
-const VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO = 0.45
-const VEHICLE_FOLLOW_TARGET_LIFT_RATIO = 0.3 // 降低目标抬升比例
-const VEHICLE_FOLLOW_TARGET_LIFT_MIN = 0.5   // 降低最小抬升
-// 目标点前向偏移比例
-const VEHICLE_FOLLOW_TARGET_FORWARD_RATIO = 0.82
-// 目标点最小前向偏移
-const VEHICLE_FOLLOW_TARGET_FORWARD_MIN = 3
 // 重置车辆时的抬升高度
 const VEHICLE_RESET_LIFT = 0.75
 // 转向输入响应指数，越大越不敏感
@@ -316,18 +302,6 @@ function getVehicleApproxDimensions(object: THREE.Object3D | null): { width: num
     height: Math.max(size.y, VEHICLE_SIZE_FALLBACK.height),
     length: Math.max(size.z, VEHICLE_SIZE_FALLBACK.length),
   }
-}
-
-function computeVehicleFollowPlacement(dimensions: { width: number; height: number; length: number }): VehicleFollowPlacement {
-  const lengthComponent = dimensions.length * VEHICLE_FOLLOW_DISTANCE_LENGTH_RATIO
-  const widthComponent = dimensions.width * VEHICLE_FOLLOW_DISTANCE_WIDTH_RATIO
-  const diagonalComponent = Math.hypot(dimensions.length, dimensions.height) * VEHICLE_FOLLOW_DISTANCE_DIAGONAL_RATIO
-  const unclampedDistance = Math.max(VEHICLE_FOLLOW_DISTANCE_MIN, lengthComponent + widthComponent + diagonalComponent)
-  const distance = Math.min(unclampedDistance, VEHICLE_FOLLOW_DISTANCE_MAX)
-  const heightOffset = Math.max(dimensions.height * VEHICLE_FOLLOW_HEIGHT_RATIO, VEHICLE_FOLLOW_HEIGHT_MIN)
-  const targetLift = Math.max(dimensions.height * VEHICLE_FOLLOW_TARGET_LIFT_RATIO, VEHICLE_FOLLOW_TARGET_LIFT_MIN)
-  const targetForward = Math.max(dimensions.length * VEHICLE_FOLLOW_TARGET_FORWARD_RATIO, VEHICLE_FOLLOW_TARGET_FORWARD_MIN)
-  return { distance, heightOffset, targetLift, targetForward }
 }
 
 export class VehicleDriveController {
@@ -462,10 +436,10 @@ export class VehicleDriveController {
       return null
     }
     const props = clampVehicleComponentProps(component.props ?? null)
-    return this.temp.vehicleFollowLocalOffset.set(
-      0,
+    return resolveBackFollowCameraLocalOffset(
+      this.temp.vehicleFollowLocalOffset,
+      props.cameraFollowDistance,
       props.cameraFollowHeight,
-      -props.cameraFollowDistance,
     )
   }
 
@@ -482,7 +456,7 @@ export class VehicleDriveController {
       }
     }
 
-    const placement = computeVehicleFollowPlacement(getVehicleApproxDimensions(vehicleObject))
+    const placement = computeFollowPlacement(getVehicleApproxDimensions(vehicleObject))
     cache.nodeId = nodeId
     cache.objectUuid = objectUuid
     cache.placement = {
@@ -1367,7 +1341,7 @@ export class VehicleDriveController {
       this.resetVehicleFollowLocalOffset()
     }
 
-    return updateMotionAwareFollowCamera({
+    return updateBackFollowCamera({
       controller: this.followCameraController,
       motion: this.followCameraMotionState,
       follow,
@@ -1377,13 +1351,12 @@ export class VehicleDriveController {
       velocityWorld: this.followCameraVelocitySample,
       deltaSeconds,
       ctx,
-      worldUp: VEHICLE_CAMERA_WORLD_UP,
       distanceScale: this.getFollowDistanceScale(),
-      ...(tuning ? { tuning } : {}),
-      ...(localOffsetOverride ? { localOffsetOverride } : {}),
+      worldUp: VEHICLE_CAMERA_WORLD_UP,
+      tuning: tuning ?? undefined,
+      localOffsetOverride: localOffsetOverride ?? undefined,
       applyOrbitTween: options.applyOrbitTween ?? false,
       followControlsDirty: options.followControlsDirty ?? false,
-      lockLocalOffset: true,
       immediate: options.immediate ?? false,
       velocityLerpSpeed: this.getFollowCameraVelocityLerpSpeed(),
     })

@@ -259,6 +259,7 @@ import {
 	VehicleDriveController,
 	resolveCharacterControlMovementMagnitude,
 	CharacterAutoTourRuntimeManager,
+	updateBackFollowCamera,
 } from '@schema/motion'
 import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
@@ -270,9 +271,9 @@ import {
   createCameraFollowState,
   createFollowCameraMotionState,
   getApproxDimensions,
+  resolveBackFollowCameraLocalOffset,
   resetCameraFollowState,
   resetFollowCameraMotionState,
-  updateMotionAwareFollowCamera,
 } from '@schema/motion'
 import {
   createPhysicsAwareAutoTourVehicleInstances,
@@ -6950,12 +6951,20 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
 	const vehicleComponent = resolveVehicleComponent(node)
 	if (vehicleComponent) {
 		const props = clampVehicleComponentProps(vehicleComponent.props ?? null)
-		return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance)
+		return resolveBackFollowCameraLocalOffset(
+			autoTourCameraFollowOffsetScratch,
+			props.cameraFollowDistance,
+			props.cameraFollowHeight,
+		)
 	}
 	const characterComponent = resolveCharacterControllerComponent(node)
 	if (characterComponent) {
 		const props = clampCharacterControllerComponentProps(characterComponent.props ?? null)
-		return autoTourCameraFollowOffsetScratch.set(0, props.cameraFollowHeight, -props.cameraFollowDistance)
+		return resolveBackFollowCameraLocalOffset(
+			autoTourCameraFollowOffsetScratch,
+			props.cameraFollowDistance,
+			props.cameraFollowHeight,
+		)
 	}
 	return null
 }
@@ -7045,10 +7054,10 @@ function resolveCharacterFollowPlacementDimensions(_protagonistObject: THREE.Obj
 
 function resolveCharacterFollowCameraOffset(target: THREE.Vector3): THREE.Vector3 {
 	const props = resolveDefaultControlledCharacterComponentProps()
-	return target.set(
-		0,
+	return resolveBackFollowCameraLocalOffset(
+		target,
+		props?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
 		props?.cameraFollowHeight ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT,
-		-(props?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE),
 	)
 }
 
@@ -7219,7 +7228,7 @@ function updateCharacterFollowCamera(
 	const characterFollowCameraOffset = resolveCharacterFollowCameraOffset(characterFollowCameraOffsetScratch)
 	const followControlsDirty = followCameraControlDirty
 	followCameraControlDirty = false
-	const updated = updateMotionAwareFollowCamera({
+	const updated = updateBackFollowCamera({
 		controller: characterFollowCameraController,
 		motion: characterFollowCameraMotionState,
 		follow: characterFollowCameraState,
@@ -9740,6 +9749,7 @@ function updateAutoTourCameraForFrame(
 		...(localOffsetOverride ? { localOffsetOverride } : {}),
 		tuning: createBackFollowCameraTuning(),
 		distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+		lockLocalOffset: true,
 	})
 	if (mapControls) {
 		lastOrbitState.position.copy(activeCamera.position)

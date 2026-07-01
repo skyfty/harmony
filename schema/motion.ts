@@ -20,6 +20,8 @@ export {
   createCameraFollowState,
   createFollowCameraMotionState,
   getApproxDimensions,
+  resolveBackFollowCameraLocalOffset,
+  updateBackFollowCamera,
   resetCameraFollowState,
   resetFollowCameraMotionState,
   updateMotionAwareFollowCamera,
