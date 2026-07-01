@@ -100,7 +100,7 @@ function handleTeleportThresholdChange(value: string) {
   <v-expansion-panel value="networkSync">
     <v-expansion-panel-title>
       <div class="network-sync-panel__header">
-        <span class="network-sync-panel__title">Network Sync</span>
+        <span class="network-sync-panel__title">Node Sync</span>
         <v-spacer />
         <v-menu
           v-if="networkSyncComponent"

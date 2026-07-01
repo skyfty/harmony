@@ -82,13 +82,13 @@ class NetworkSyncComponent extends Component<NetworkSyncComponentProps> {
 
 const networkSyncComponentDefinition: ComponentDefinition<NetworkSyncComponentProps> = {
   type: NETWORK_SYNC_COMPONENT_TYPE,
-  label: 'Network Sync',
+  label: 'Node Sync',
   icon: 'mdi-lan-connect',
   order: 301,
   inspector: [
     {
       id: 'network-sync',
-      label: 'Network Sync',
+      label: 'Node Sync',
       fields: [
         { kind: 'boolean', key: 'enabled', label: 'Enabled' },
         { kind: 'boolean', key: 'syncPosition', label: 'Sync Position' },

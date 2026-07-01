@@ -26,7 +26,6 @@ import SignboardPanel from '@/components/inspector/SignboardPanel.vue'
 import BoundaryWallPanel from '@/components/inspector/BoundaryWallPanel.vue'
 import OnlinePanel from '@/components/inspector/OnlinePanel.vue'
 import NetworkSyncPanel from '@/components/inspector/NetworkSyncPanel.vue'
-import PhysicsAuthorityPanel from '@/components/inspector/PhysicsAuthorityPanel.vue'
 import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
 import SteerPanel from '@/components/inspector/SteerPanel.vue'
@@ -63,7 +62,6 @@ import {
   COUPON_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
   NETWORK_SYNC_COMPONENT_TYPE,
-  PHYSICS_AUTHORITY_COMPONENT_TYPE,
   PLANNING_IMAGES_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   VEHICLE_COMPONENT_TYPE,
@@ -604,7 +602,6 @@ watch(
               <ViewPointPanel v-else-if="component.type === VIEW_POINT_COMPONENT_TYPE" />
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />
               <NetworkSyncPanel v-else-if="component.type === NETWORK_SYNC_COMPONENT_TYPE" />
-              <PhysicsAuthorityPanel v-else-if="component.type === PHYSICS_AUTHORITY_COMPONENT_TYPE" />
               <AnimationComponentPanel v-else-if="component.type === ANIMATION_COMPONENT_TYPE" />
               <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
               <GroundAnchorPanel v-else-if="component.type === GROUND_ANCHOR_COMPONENT_TYPE" />

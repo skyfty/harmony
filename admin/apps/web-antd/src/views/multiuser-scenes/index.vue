@@ -10,7 +10,6 @@ import {
   type MultiuserRuntimeActivityItem,
   type MultiuserRuntimeEntityItem,
   type MultiuserRuntimePeerItem,
-  type MultiuserRuntimePhysicsItem,
   type MultiuserRuntimeRoomDetail,
   type MultiuserRuntimeRoomItem,
   type MultiuserRuntimePeerState,
@@ -22,7 +21,7 @@ import { Button, Card, Col, Descriptions, Drawer, Empty, Input, Modal, Row, Sele
 import { DeleteOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 
 type RoomStatusFilter = 'all' | 'active'
-type ActivityTimelineFilter = 'all' | 'peer' | 'entity' | 'physics' | 'admin'
+type ActivityTimelineFilter = 'all' | 'peer' | 'entity' | 'admin'
 type RoomLike = {
   sceneId?: string
   sceneName?: string | null
@@ -89,12 +88,6 @@ const roomColumns: TableColumnsType<MultiuserRuntimeRoomItem> = [
     width: 110,
   },
   {
-    title: '权威物理',
-    dataIndex: 'physicsAuthorityCount',
-    key: 'physicsAuthorityCount',
-    width: 120,
-  },
-  {
     title: '最近活动',
     dataIndex: 'updatedAt',
     key: 'updatedAt',
@@ -127,15 +120,6 @@ const entityColumns: TableColumnsType<MultiuserRuntimeEntityItem> = [
   { title: '位置', key: 'position', width: 220 },
 ]
 
-const physicsColumns: TableColumnsType<MultiuserRuntimePhysicsItem> = [
-  { title: '节点 ID', dataIndex: 'nodeId', key: 'nodeId', width: 200 },
-  { title: '类型', key: 'actorType', width: 120 },
-  { title: '拥有者', key: 'ownerUserId', width: 180 },
-  { title: 'Body', key: 'bodyId', width: 110 },
-  { title: 'Tick', key: 'tick', width: 100 },
-  { title: '最近更新', key: 'updatedAt', width: 180 },
-]
-
 const filteredRooms = computed(() => {
   const keyword = roomKeyword.value.trim().toLowerCase()
   return rooms.value.filter((room) => {
@@ -155,7 +139,6 @@ const filteredRooms = computed(() => {
 const totalRooms = computed(() => filteredRooms.value.length)
 const totalUsers = computed(() => filteredRooms.value.reduce((sum, room) => sum + room.userCount, 0))
 const totalEntities = computed(() => filteredRooms.value.reduce((sum, room) => sum + room.entityCount, 0))
-const totalPhysics = computed(() => filteredRooms.value.reduce((sum, room) => sum + room.physicsAuthorityCount, 0))
 const selectedPeer = computed(() => {
   if (!selectedRoom.value || !selectedPeerSessionId.value) {
     return null
@@ -250,9 +233,6 @@ function getActivityTagColor(activity: MultiuserRuntimeActivityItem | null | und
   if (activity.type === 'peer-disconnected') {
     return 'orange'
   }
-  if (activity.type === 'physics-input') {
-    return 'blue'
-  }
   if (activity.type === 'entity-state') {
     return 'cyan'
   }
@@ -272,7 +252,6 @@ function formatActivityLabel(activity: MultiuserRuntimeActivityItem | null | und
     'peer-state': '状态更新',
     'entity-state': '实体更新',
     'entity-removed': '实体移除',
-    'physics-input': '物理输入',
     'admin-kick-connection': '管理员踢连接',
     'admin-kick-user': '管理员踢用户',
     'admin-clear': '管理员清房',
@@ -285,7 +264,6 @@ function formatActivityFilterLabel(filter: ActivityTimelineFilter): string {
     all: '全部活动',
     peer: '连接/离线/状态',
     entity: '共享实体',
-    physics: '物理输入',
     admin: '管理员动作',
   }
   return labelMap[filter]
@@ -303,9 +281,6 @@ function matchesActivityFilter(activity: MultiuserRuntimeActivityItem, filter: A
   }
   if (filter === 'entity') {
     return activity.type === 'entity-state' || activity.type === 'entity-removed'
-  }
-  if (filter === 'physics') {
-    return activity.type === 'physics-input'
   }
   return true
 }
@@ -584,9 +559,6 @@ onMounted(async () => {
           <Col :xs="24" :sm="12" :lg="6">
             <Statistic title="共享实体" :value="totalEntities" />
           </Col>
-          <Col :xs="24" :sm="12" :lg="6">
-            <Statistic title="权威物理节点" :value="totalPhysics" />
-          </Col>
         </Row>
       </Card>
 
@@ -691,9 +663,6 @@ onMounted(async () => {
                 <Statistic title="共享实体" :value="selectedRoom.entityCount" />
               </Col>
               <Col :xs="24" :sm="12" :lg="6">
-                <Statistic title="权威物理节点" :value="selectedRoom.physicsAuthorityCount" />
-              </Col>
-              <Col :xs="24" :sm="12" :lg="6">
                 <Statistic title="最近更新" :value="formatTimestamp(selectedRoom.updatedAt)" />
               </Col>
             </Row>
@@ -707,14 +676,13 @@ onMounted(async () => {
 
             <Row :gutter="12" align="middle" class="mt-4">
               <Col :xs="24" :md="12">
-                <Select
+                  <Select
                   v-model:value="activityTimelineFilter"
                   style="width: 100%"
                   :options="[
                     { label: '全部活动', value: 'all' },
                     { label: '连接 / 离线 / 状态', value: 'peer' },
                     { label: '共享实体', value: 'entity' },
-                    { label: '物理输入', value: 'physics' },
                     { label: '管理员动作', value: 'admin' },
                   ]"
                 />
@@ -916,34 +884,6 @@ onMounted(async () => {
                     {{ entity.state.transform.position.x.toFixed(2) }}, {{ entity.state.transform.position.y.toFixed(2) }}, {{ entity.state.transform.position.z.toFixed(2) }}
                   </span>
                   <span v-else>-</span>
-                </template>
-              </template>
-            </Table>
-          </Card>
-
-          <Card v-if="selectedRoom" size="small" title="权威物理">
-            <Table
-              :columns="physicsColumns"
-              :data-source="selectedRoom.physicsAuthority"
-              :pagination="false"
-              row-key="nodeId"
-              :scroll="{ x: 1200 }"
-            >
-              <template #bodyCell="{ column, record: physics }">
-                <template v-if="column.key === 'actorType'">
-                  <Tag>{{ physics.snapshot.actorType }}</Tag>
-                </template>
-                <template v-else-if="column.key === 'ownerUserId'">
-                  {{ physics.snapshot.ownerUserId || '-' }}
-                </template>
-                <template v-else-if="column.key === 'bodyId'">
-                  {{ physics.snapshot.bodyId ?? '-' }}
-                </template>
-                <template v-else-if="column.key === 'tick'">
-                  {{ physics.snapshot.tick }}
-                </template>
-                <template v-else-if="column.key === 'updatedAt'">
-                  {{ formatTimestamp(physics.snapshot.updatedAt) }}
                 </template>
               </template>
             </Table>

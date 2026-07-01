@@ -87,50 +87,18 @@ export interface MultiuserRuntimeEntityItem {
   state: MultiuserRuntimeEntityState | null
 }
 
-export interface MultiuserRuntimePhysicsAuthoritySnapshot {
-  nodeId: string
-  actorType: 'auto' | 'vehicle' | 'character'
-  ownerUserId?: string | null
-  tick: number
-  revision: number
-  updatedAt: string
-  bodyId: number | null
-  transform: {
-    position: MultiuserRuntimeVector3
-    quaternion: MultiuserRuntimeQuaternion
-  }
-  linearVelocity?: MultiuserRuntimeVector3 | null
-  angularVelocity?: MultiuserRuntimeVector3 | null
-  sleeping?: boolean
-  contacts?: Array<{
-    bodyIdA: number
-    bodyIdB: number
-    normal: MultiuserRuntimeVector3
-    point: MultiuserRuntimeVector3
-    impulse?: number | null
-    impactSpeed?: number | null
-  }> | null
-}
-
-export interface MultiuserRuntimePhysicsItem {
-  nodeId: string
-  snapshot: MultiuserRuntimePhysicsAuthoritySnapshot
-}
-
 export interface MultiuserRuntimeRoomItem {
   sceneId: string
   sceneName?: string | null
   userCount: number
   maxUsers: number
   entityCount: number
-  physicsAuthorityCount: number
   updatedAt: string
 }
 
 export interface MultiuserRuntimeRoomDetail extends MultiuserRuntimeRoomItem {
   connections: MultiuserRuntimePeerItem[]
   entities: MultiuserRuntimeEntityItem[]
-  physicsAuthority: MultiuserRuntimePhysicsItem[]
   activities: MultiuserRuntimeActivityItem[]
 }
 
@@ -142,7 +110,6 @@ export interface MultiuserRuntimeActivityItem {
     | 'peer-state'
     | 'entity-state'
     | 'entity-removed'
-    | 'physics-input'
     | 'admin-kick-connection'
     | 'admin-kick-user'
     | 'admin-clear'

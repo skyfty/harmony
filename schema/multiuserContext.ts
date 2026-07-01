@@ -3,7 +3,6 @@ let currentSceneId: string | null = null
 export type MultiuserSubjectType = 'vehicle' | 'character'
 export type MultiuserSharedEntityMode = 'transform'
 export type MultiuserOwnershipMode = 'lease'
-export type MultiuserPhysicsAuthorityActorType = 'auto' | 'vehicle' | 'character'
 
 export type MultiuserVector3Like = { x: number; y: number; z: number }
 export type MultiuserQuaternionLike = { x: number; y: number; z: number; w: number }
@@ -39,6 +38,8 @@ export interface MultiuserVehicleWheelPresentation {
 }
 
 export interface MultiuserVehiclePresentation {
+  speedMps?: number | null
+  linearVelocity?: MultiuserPresentationVector3Like | null
   wheels: MultiuserVehicleWheelPresentation[]
 }
 
@@ -105,69 +106,38 @@ export interface MultiuserSharedEntitySnapshot {
   state: MultiuserSharedEntityState | null
 }
 
-export interface MultiuserPhysicsAuthorityInput {
-  nodeId: string
-  actorType: MultiuserPhysicsAuthorityActorType
-  inputSequence: number
-  ownerUserId?: string | null
-  leaseMs: number
-  vehicle?: {
-    vehicleId: number
-    steering: number
-    throttle: number
-    brake: number
-    handbrake?: number | null
-  } | null
-  character?: {
-    moveX: number
-    moveZ: number
-    yaw?: number | null
-    jump: boolean
-    sprint: boolean
-    crouch: boolean
-    interact: boolean
-  } | null
+export interface MultiuserNodeSyncPresentation {
+  vehicle?: MultiuserVehiclePresentation | null
+  character?: MultiuserCharacterPresentation | null
 }
 
-export interface MultiuserPhysicsAuthoritySnapshot {
+export interface MultiuserNodeSyncState {
+  entityId: string
   nodeId: string
-  actorType: MultiuserPhysicsAuthorityActorType
   ownerUserId?: string | null
-  tick: number
+  mode: MultiuserSharedEntityMode
+  transform: MultiuserSharedEntityTransform
   revision: number
   updatedAt: string
-  bodyId: number | null
-  transform: {
-    position: MultiuserVector3Like
-    quaternion: MultiuserQuaternionLike
-  }
-  linearVelocity?: MultiuserVector3Like | null
-  angularVelocity?: MultiuserVector3Like | null
-  sleeping?: boolean
-  contacts?: Array<{
-    bodyIdA: number
-    bodyIdB: number
-    normal: MultiuserVector3Like
-    point: MultiuserVector3Like
-    impulse?: number | null
-    impactSpeed?: number | null
-  }> | null
+  lease?: MultiuserSharedEntityLease | null
+  presentation?: MultiuserNodeSyncPresentation | null
+}
+
+export interface MultiuserNodeSyncSnapshot {
+  entityId: string
+  state: MultiuserNodeSyncState | null
 }
 
 export interface MultiuserRuntimeBridge {
   getIdentity(): MultiuserIdentity | null
   resolveLocalPeerState(): MultiuserPeerState | null
-  resolveLocalSharedEntityStates(): MultiuserSharedEntityState[]
-  resolveLocalPhysicsAuthorityInputs(): MultiuserPhysicsAuthorityInput[]
+  resolveLocalNodeSyncStates(): MultiuserNodeSyncState[]
   handleRemotePeerSnapshot(peer: MultiuserPeerSnapshot): void
   handleRemotePeerLeft(userId: string): void
-  handleRemoteSharedEntitySnapshot(snapshot: MultiuserSharedEntitySnapshot): void
-  handleRemoteSharedEntityRemoved(entityId: string): void
-  handleRemotePhysicsAuthoritySnapshot(snapshot: MultiuserPhysicsAuthoritySnapshot): void
-  handleRemotePhysicsAuthorityRemoved(nodeId: string): void
+  handleRemoteNodeSyncSnapshot(snapshot: MultiuserNodeSyncSnapshot): void
+  handleRemoteNodeSyncRemoved(entityId: string): void
   clearRemotePeers(): void
-  clearRemoteSharedEntities(): void
-  clearRemotePhysicsAuthority(): void
+  clearRemoteNodeSync(): void
 }
 
 let currentRuntimeBridge: MultiuserRuntimeBridge | null = null

@@ -669,15 +669,14 @@ import {
   type MultiuserCharacterAnimationPresentation,
   type MultiuserIdentity,
   type MultiuserPeerPresentationState,
-  type MultiuserPhysicsAuthorityInput,
-  type MultiuserPhysicsAuthoritySnapshot,
   type MultiuserPeerSnapshot,
   type MultiuserPeerState,
   type MultiuserPresentationVector3Like,
   type MultiuserVehiclePresentation,
   type MultiuserVehicleWheelPresentation,
-  type MultiuserSharedEntitySnapshot,
-  type MultiuserSharedEntityState,
+  type MultiuserNodeSyncSnapshot,
+  type MultiuserNodeSyncState,
+  type MultiuserNodeSyncPresentation,
   type MultiuserRuntimeBridge,
 } from '@harmony/schema/multiuserContext';
 type RigidbodyComponentProps = any;
@@ -815,11 +814,6 @@ import {
   clampNetworkSyncComponentProps,
   type NetworkSyncComponentProps,
 } from '@harmony/schema/components/definitions/networkSyncComponent';
-import {
-  PHYSICS_AUTHORITY_COMPONENT_TYPE,
-  clampPhysicsAuthorityComponentProps,
-  type PhysicsAuthorityComponentProps,
-} from '@harmony/schema/components/definitions/physicsAuthorityComponent';
 import {
   guideRouteComponentDefinition,
 } from '@harmony/schema/components/definitions/guideRouteComponent';
@@ -2497,26 +2491,13 @@ type NetworkSyncNodeRuntimeEntry = {
   ownerUserId: string | null;
   updatedAt: string;
 };
-type PhysicsAuthorityNodeRuntimeEntry = {
-  nodeId: string;
-  props: PhysicsAuthorityComponentProps;
-  localInputSequence: number;
-  ownerUserId: string | null;
-  updatedAt: string;
-  lastLocalSignature: string;
-};
 type RemoteSharedEntityEntry = {
   entityId: string;
   nodeId: string;
   props: NetworkSyncComponentProps;
-  targetState: MultiuserSharedEntityState;
-  displayState: MultiuserSharedEntityState | null;
-};
-type RemotePhysicsAuthorityEntry = {
-  nodeId: string;
-  props: PhysicsAuthorityComponentProps;
-  targetState: MultiuserPhysicsAuthoritySnapshot;
-  displayState: MultiuserPhysicsAuthoritySnapshot | null;
+  targetState: MultiuserNodeSyncState;
+  displayState: MultiuserNodeSyncState | null;
+  presentation: MultiuserNodeSyncPresentation | null;
 };
 type RemoteMultiuserCharacterState = {
   userId: string;
@@ -2524,20 +2505,16 @@ type RemoteMultiuserCharacterState = {
   action: string | null;
   animation: MultiuserCharacterAnimationPresentation | null;
 };
-type PhysicsAuthorityContactPairKey = string;
 const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
 const remoteMultiuserPeerLoadTokens = new Map<string, number>();
 const remoteMultiuserPeerRoot = new THREE.Group();
 remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
 const networkSyncNodeEntries = new Map<string, NetworkSyncNodeRuntimeEntry>();
-const physicsAuthorityNodeEntries = new Map<string, PhysicsAuthorityNodeRuntimeEntry>();
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager();
 const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager();
 const controlledNodeMotionRuntime = createControlledNodeMotionRuntime();
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
 const remoteSharedEntityEntries = new Map<string, RemoteSharedEntityEntry>();
-const remotePhysicsAuthorityEntries = new Map<string, RemotePhysicsAuthorityEntry>();
-const remotePhysicsAuthorityContactPairs = new Map<string, Set<PhysicsAuthorityContactPairKey>>();
 const remoteMultiuserCharacterStatesByNodeId = new Map<string, RemoteMultiuserCharacterState>();
 const remoteMultiuserCharacterNodeIdByUserId = new Map<string, string>();
 const localMultiuserCharacterPresentationByNodeId = new Map<string, MultiuserCharacterAnimationPresentation>();
@@ -2559,9 +2536,6 @@ const remoteMultiuserWheelCurrentQuaternionScratch = new THREE.Quaternion();
 const remoteMultiuserWheelCurrentScaleScratch = new THREE.Vector3();
 const remoteSharedEntityDisplayScaleScratch = new THREE.Vector3();
 const remoteSharedEntityTargetScaleScratch = new THREE.Vector3();
-const remotePhysicsAuthorityTargetPositionScratch = new THREE.Vector3();
-const remotePhysicsAuthorityTargetQuaternionScratch = new THREE.Quaternion();
-const remotePhysicsAuthorityDisplayQuaternionScratch = new THREE.Quaternion();
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
@@ -2738,8 +2712,6 @@ const tempForwardVec = new THREE.Vector3();
 const tempRightVec = new THREE.Vector3();
 const tempMovementVec = new THREE.Vector3();
 const tempYawForwardVec = new THREE.Vector3();
-const tempCharacterForwardVec = new THREE.Vector3();
-const tempCharacterRightVec = new THREE.Vector3();
 const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const characterCameraFollowAnchorScratch = new THREE.Vector3();
@@ -6633,33 +6605,7 @@ function collectNetworkSyncNodeEntries(document: SceneJsonExportDocument | null)
   }
 }
 
-function collectPhysicsAuthorityNodeEntries(document: SceneJsonExportDocument | null): void {
-  physicsAuthorityNodeEntries.clear();
-  if (!document?.nodes?.length) {
-    return;
-  }
-  const stack: SceneNode[] = [...document.nodes];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    const component = node.components?.[PHYSICS_AUTHORITY_COMPONENT_TYPE] as SceneNodeComponentState<PhysicsAuthorityComponentProps> | undefined;
-    if (component && component.enabled !== false) {
-      physicsAuthorityNodeEntries.set(node.id, {
-        nodeId: node.id,
-        props: clampPhysicsAuthorityComponentProps(component.props),
-        localInputSequence: 0,
-        ownerUserId: null,
-        updatedAt: new Date(0).toISOString(),
-        lastLocalSignature: '',
-      });
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-}
+function collectPhysicsAuthorityNodeEntries(_document: SceneJsonExportDocument | null): void {}
 
 function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
@@ -6844,128 +6790,16 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
       locallyControlled: true,
     };
   }
-  const entry = remotePhysicsAuthorityEntries.get(nodeId) ?? null;
-  if (!entry || entry.targetState.actorType !== 'character') {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
-  }
   const remotePeerState = resolveRemoteMultiuserCharacterState(nodeId);
   if (remotePeerState) {
     return resolveRemoteCharacterAnimationInput(nodeId, remotePeerState);
   }
-  return resolveRemoteCharacterAnimationInputFromPhysics(nodeId);
-}
-
-function resolveRemoteCharacterAnimationInputFromPhysics(nodeId: string): {
-  moveX: number;
-  moveZ: number;
-  turn: number;
-  jump: boolean;
-  sprint: boolean;
-  crouch: boolean;
-  interact: boolean;
-  locallyControlled: boolean;
-} {
-  const entry = remotePhysicsAuthorityEntries.get(nodeId) ?? null;
-  if (!entry || entry.targetState.actorType !== 'character') {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
-  }
-  const linearVelocity = entry.displayState?.linearVelocity ?? entry.targetState.linearVelocity ?? null;
-  if (!linearVelocity) {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
-  }
-  const speed = Math.hypot(linearVelocity.x ?? 0, linearVelocity.z ?? 0);
-  if (!(speed > 0.05)) {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
-  }
-  const node = resolveNodeById(nodeId);
-  const props = clampCharacterControllerComponentProps(resolveCharacterControllerComponent(node)?.props ?? null);
-  const speedScale = Math.max(0.01, props.sprintSpeed || props.runSpeed || props.walkSpeed || 1);
-  const movementMagnitude = Math.min(1, speed / speedScale);
-  writeCharacterLocalForward(tempCharacterForwardVec, props.forwardAxis);
-  const bindingNodeId = resolveCharacterControllerBindingNodeId(nodeId);
-  const object = bindingNodeId ? (nodeObjectMap.get(bindingNodeId) ?? null) : null;
-  if (object) {
-    object.getWorldQuaternion(protagonistPoseQuaternion);
-  } else {
-    const fallbackState = entry.displayState ?? entry.targetState;
-    protagonistPoseQuaternion.set(
-      fallbackState.transform.quaternion.x,
-      fallbackState.transform.quaternion.y,
-      fallbackState.transform.quaternion.z,
-      fallbackState.transform.quaternion.w,
-    ).normalize();
-  }
-  tempCharacterForwardVec.applyQuaternion(protagonistPoseQuaternion);
-  tempCharacterForwardVec.y = 0;
-  if (tempCharacterForwardVec.lengthSq() <= 1e-8) {
-    tempCharacterForwardVec.set(0, 0, 1);
-  } else {
-    tempCharacterForwardVec.normalize();
-  }
-  tempCharacterRightVec.crossVectors(worldUp, tempCharacterForwardVec);
-  if (tempCharacterRightVec.lengthSq() <= 1e-8) {
-    tempCharacterRightVec.set(1, 0, 0);
-  } else {
-    tempCharacterRightVec.normalize();
-  }
-  tempMovementVec.set(linearVelocity.x ?? 0, 0, linearVelocity.z ?? 0);
-  if (tempMovementVec.lengthSq() <= 1e-8) {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
-  }
-  tempMovementVec.normalize().multiplyScalar(movementMagnitude);
-  const moveX = THREE.MathUtils.clamp(tempMovementVec.dot(tempCharacterRightVec), -1, 1);
-  const moveZ = THREE.MathUtils.clamp(tempMovementVec.dot(tempCharacterForwardVec), -1, 1);
   return {
-    moveX,
-    moveZ,
+    moveX: 0,
+    moveZ: 0,
     turn: 0,
     jump: false,
-    sprint: speed >= Math.max(props.runSpeed, props.walkSpeed + 0.01),
+    sprint: false,
     crouch: false,
     interact: false,
     locallyControlled: false,
@@ -6973,7 +6807,7 @@ function resolveRemoteCharacterAnimationInputFromPhysics(nodeId: string): {
 }
 
 function resolveRemoteCharacterAnimationInput(
-  nodeId: string,
+  _nodeId: string,
   remoteState: RemoteMultiuserCharacterState,
 ): {
   moveX: number;
@@ -6985,14 +6819,21 @@ function resolveRemoteCharacterAnimationInput(
   interact: boolean;
   locallyControlled: boolean;
 } {
-  const input = resolveRemoteCharacterAnimationInputFromPhysics(nodeId);
   const action = remoteState.action ?? inferCharacterActionFromAnimation(remoteState.animation);
   if (!action) {
-    return input;
+    return {
+      moveX: 0,
+      moveZ: 0,
+      turn: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
+      interact: false,
+      locallyControlled: false,
+    };
   }
   if (action === 'idle') {
     return {
-      ...input,
       moveX: 0,
       moveZ: 0,
       turn: 0,
@@ -7004,12 +6845,12 @@ function resolveRemoteCharacterAnimationInput(
     };
   }
   if (action === 'move' || action === 'sprint') {
-    const hasMovement = Math.abs(input.moveX) > 0.001 || Math.abs(input.moveZ) > 0.001;
     return {
-      ...input,
-      moveZ: hasMovement ? input.moveZ : 1,
-      sprint: action === 'sprint' || input.sprint,
+      moveX: 0,
+      moveZ: 1,
+      turn: 0,
       jump: false,
+      sprint: action === 'sprint',
       crouch: false,
       interact: false,
       locallyControlled: false,
@@ -7017,8 +6858,11 @@ function resolveRemoteCharacterAnimationInput(
   }
   if (action === 'jump') {
     return {
-      ...input,
+      moveX: 0,
+      moveZ: 0,
+      turn: 0,
       jump: true,
+      sprint: false,
       crouch: false,
       interact: false,
       locallyControlled: false,
@@ -7026,11 +6870,11 @@ function resolveRemoteCharacterAnimationInput(
   }
   if (action === 'crouch') {
     return {
-      ...input,
       moveX: 0,
       moveZ: 0,
-      sprint: false,
+      turn: 0,
       jump: false,
+      sprint: false,
       crouch: true,
       interact: false,
       locallyControlled: false,
@@ -7038,12 +6882,26 @@ function resolveRemoteCharacterAnimationInput(
   }
   if (action === 'interact') {
     return {
-      ...input,
+      moveX: 0,
+      moveZ: 0,
+      turn: 0,
+      jump: false,
+      sprint: false,
+      crouch: false,
       interact: true,
       locallyControlled: false,
     };
   }
-  return input;
+  return {
+    moveX: 0,
+    moveZ: 0,
+    turn: 0,
+    jump: false,
+    sprint: false,
+    crouch: false,
+    interact: false,
+    locallyControlled: false,
+  };
 }
 
 function isCharacterControllerAnimationNode(nodeId: string): boolean {
@@ -12924,7 +12782,7 @@ function clearRemoteMultiuserPeers(): void {
   markInstancedCullingDirty();
 }
 
-function cloneSharedEntityState(state: MultiuserSharedEntityState): MultiuserSharedEntityState {
+function cloneSharedEntityState(state: MultiuserNodeSyncState): MultiuserNodeSyncState {
   return {
     entityId: state.entityId,
     nodeId: state.nodeId,
@@ -12938,6 +12796,52 @@ function cloneSharedEntityState(state: MultiuserSharedEntityState): MultiuserSha
     revision: state.revision,
     updatedAt: state.updatedAt,
     lease: state.lease ? { ...state.lease } : null,
+    presentation: cloneMultiuserNodeSyncPresentation(state.presentation ?? null),
+  };
+}
+
+function cloneMultiuserNodeSyncPresentation(
+  presentation: MultiuserNodeSyncPresentation | null | undefined,
+): MultiuserNodeSyncPresentation | null {
+  if (!presentation) {
+    return null;
+  }
+  return {
+    vehicle: presentation.vehicle
+      ? {
+          speedMps: presentation.vehicle.speedMps ?? null,
+          linearVelocity: presentation.vehicle.linearVelocity
+            ? { ...presentation.vehicle.linearVelocity }
+            : null,
+          wheels: Array.isArray(presentation.vehicle.wheels)
+            ? presentation.vehicle.wheels.map((wheel) => ({
+                nodeId: wheel.nodeId ?? null,
+                wheelIndex: wheel.wheelIndex,
+                position: { ...wheel.position },
+                quaternion: { ...wheel.quaternion },
+                scale: wheel.scale ? { ...wheel.scale } : null,
+                steeringAxis: wheel.steeringAxis ? { ...wheel.steeringAxis } : null,
+                spinAxis: wheel.spinAxis ? { ...wheel.spinAxis } : null,
+                steeringAngle: wheel.steeringAngle ?? null,
+                spinAngle: wheel.spinAngle ?? null,
+              }))
+            : [],
+        }
+      : null,
+    character: presentation.character
+      ? {
+          animation: presentation.character.animation
+            ? {
+                clipName: presentation.character.animation.clipName,
+                time: presentation.character.animation.time,
+                duration: presentation.character.animation.duration,
+                loop: presentation.character.animation.loop,
+                timeScale: presentation.character.animation.timeScale,
+                normalizedTime: presentation.character.animation.normalizedTime ?? null,
+              }
+            : null,
+        }
+      : null,
   };
 }
 
@@ -12956,7 +12860,7 @@ function buildLocalNetworkSyncSignature(
 
 function applyNetworkSyncTransformToObject(
   object: THREE.Object3D,
-  state: MultiuserSharedEntityState,
+  state: MultiuserNodeSyncState,
 ): void {
   remoteMultiuserTargetPositionScratch.set(
     state.transform.position.x,
@@ -13068,10 +12972,11 @@ function updateRemoteSharedEntityTransforms(deltaSeconds: number): void {
       display.transform.scale.z = remoteSharedEntityDisplayScaleScratch.z;
     }
     applyNetworkSyncTransformToObject(object, display);
+    applyRemoteNodeSyncPresentation(entry, display, alpha, deltaSeconds);
   });
 }
 
-function processRemoteSharedEntitySnapshot(snapshot: MultiuserSharedEntitySnapshot): void {
+function processRemoteSharedEntitySnapshot(snapshot: MultiuserNodeSyncSnapshot): void {
   const localIdentity = getNormalizedMultiuserIdentity();
   const state = snapshot.state;
   if (!state) {
@@ -13110,6 +13015,7 @@ function processRemoteSharedEntitySnapshot(snapshot: MultiuserSharedEntitySnapsh
     props: runtimeEntry.props,
     targetState: cloneSharedEntityState(state),
     displayState: remoteSharedEntityEntries.get(state.entityId)?.displayState ?? null,
+    presentation: cloneMultiuserNodeSyncPresentation(state.presentation ?? null),
   });
 }
 
@@ -13131,440 +13037,135 @@ function resetRemoteSharedEntities(): void {
   });
 }
 
-function clonePhysicsAuthoritySnapshot(snapshot: MultiuserPhysicsAuthoritySnapshot): MultiuserPhysicsAuthoritySnapshot {
-  return {
-    nodeId: snapshot.nodeId,
-    actorType: snapshot.actorType,
-    ownerUserId: snapshot.ownerUserId ?? null,
-    tick: snapshot.tick,
-    revision: snapshot.revision,
-    updatedAt: snapshot.updatedAt,
-    bodyId: snapshot.bodyId,
-    transform: {
-      position: {
-        x: snapshot.transform.position.x,
-        y: snapshot.transform.position.y,
-        z: snapshot.transform.position.z,
-      },
-      quaternion: {
-        x: snapshot.transform.quaternion.x,
-        y: snapshot.transform.quaternion.y,
-        z: snapshot.transform.quaternion.z,
-        w: snapshot.transform.quaternion.w,
-      },
-    },
-    linearVelocity: snapshot.linearVelocity
-      ? {
-          x: snapshot.linearVelocity.x,
-          y: snapshot.linearVelocity.y,
-          z: snapshot.linearVelocity.z,
-        }
-      : null,
-    angularVelocity: snapshot.angularVelocity
-      ? {
-          x: snapshot.angularVelocity.x,
-          y: snapshot.angularVelocity.y,
-          z: snapshot.angularVelocity.z,
-        }
-      : null,
-    sleeping: snapshot.sleeping ?? false,
-    contacts: Array.isArray(snapshot.contacts)
-      ? snapshot.contacts.map((contact) => ({
-          bodyIdA: contact.bodyIdA,
-          bodyIdB: contact.bodyIdB,
-          normal: {
-            x: contact.normal.x,
-            y: contact.normal.y,
-            z: contact.normal.z,
-          },
-          point: {
-            x: contact.point.x,
-            y: contact.point.y,
-            z: contact.point.z,
-          },
-          impulse: contact.impulse ?? null,
-          impactSpeed: contact.impactSpeed ?? null,
-        }))
-      : null,
-  };
-}
-
-function applyPhysicsAuthoritySnapshotToObject(object: THREE.Object3D, snapshot: MultiuserPhysicsAuthoritySnapshot): void {
-  remotePhysicsAuthorityTargetPositionScratch.set(
-    snapshot.transform.position.x,
-    snapshot.transform.position.y,
-    snapshot.transform.position.z,
-  );
-  remotePhysicsAuthorityTargetQuaternionScratch.set(
-    snapshot.transform.quaternion.x,
-    snapshot.transform.quaternion.y,
-    snapshot.transform.quaternion.z,
-    snapshot.transform.quaternion.w,
-  );
-  applyObjectWorldPose(object, remotePhysicsAuthorityTargetPositionScratch, remotePhysicsAuthorityTargetQuaternionScratch);
-  syncInstancedTransform(object, true, true);
-}
-
-function getPhysicsAuthoritySnapThreshold(props: PhysicsAuthorityComponentProps): number {
-  return Math.max(0.01, props.snapThreshold)
-}
-
-function getPhysicsAuthorityLerpAlpha(props: PhysicsAuthorityComponentProps, deltaSeconds: number): number {
-  const lerpSeconds = Math.max(0.016, (props.snapshotLerpMs || 120) / 1000)
-  if (!Number.isFinite(deltaSeconds) || deltaSeconds <= 0) {
-    return 1
-  }
-  return Math.min(1, Math.max(0.01, deltaSeconds / lerpSeconds))
-}
-
-function shouldSnapPhysicsAuthoritySnapshot(
-  displayState: MultiuserPhysicsAuthoritySnapshot | null,
-  targetState: MultiuserPhysicsAuthoritySnapshot,
-  props: PhysicsAuthorityComponentProps,
-): boolean {
-  if (!displayState) {
-    return true
-  }
-  const dx = targetState.transform.position.x - displayState.transform.position.x
-  const dy = targetState.transform.position.y - displayState.transform.position.y
-  const dz = targetState.transform.position.z - displayState.transform.position.z
-  const positionDistance = Math.hypot(dx, dy, dz)
-  if (positionDistance >= getPhysicsAuthoritySnapThreshold(props)) {
-    return true
-  }
-  const dot =
-    displayState.transform.quaternion.x * targetState.transform.quaternion.x
-    + displayState.transform.quaternion.y * targetState.transform.quaternion.y
-    + displayState.transform.quaternion.z * targetState.transform.quaternion.z
-    + displayState.transform.quaternion.w * targetState.transform.quaternion.w
-  return Math.abs(dot) < 0.82
-}
-
-function updateRemotePhysicsAuthorityTransforms(deltaSeconds: number): void {
-  if (!remotePhysicsAuthorityEntries.size || deltaSeconds < 0) {
+function applyRemoteNodeSyncPresentation(
+  entry: RemoteSharedEntityEntry,
+  state: MultiuserNodeSyncState,
+  alpha: number,
+  deltaSeconds: number,
+): void {
+  const presentation = state.presentation ?? null;
+  if (!presentation) {
     return;
   }
-  remotePhysicsAuthorityEntries.forEach((entry) => {
-    const object = nodeObjectMap.get(entry.nodeId) ?? null;
-    if (!object) {
+  const nodeId = entry.nodeId;
+  if (presentation.vehicle) {
+    applyRemoteNodeVehiclePresentation(nodeId, presentation.vehicle, alpha);
+  }
+  if (presentation.character?.animation) {
+    applyRemoteNodeCharacterAnimationPresentation(nodeId, presentation.character.animation, deltaSeconds);
+  }
+}
+
+function applyRemoteNodeVehiclePresentation(
+  nodeId: string,
+  presentation: MultiuserVehiclePresentation,
+  alpha: number,
+): void {
+  if (!presentation || !Array.isArray(presentation.wheels) || !presentation.wheels.length) {
+    return;
+  }
+  const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
+  const wheelBindings = vehicleInstance?.wheelBindings as VehicleWheelBinding[] | undefined;
+  if (!Array.isArray(wheelBindings) || !wheelBindings.length) {
+    return;
+  }
+  const wheelStateByNodeId = new Map<string, MultiuserVehicleWheelPresentation>();
+  presentation.wheels.forEach((wheel) => {
+    const wheelNodeId = typeof wheel.nodeId === 'string' ? wheel.nodeId.trim() : '';
+    if (wheelNodeId) {
+      wheelStateByNodeId.set(wheelNodeId, wheel);
+    }
+  });
+  wheelBindings.forEach((binding, index) => {
+    const wheelState = (binding.nodeId ? wheelStateByNodeId.get(binding.nodeId) ?? null : null)
+      ?? presentation.wheels[index]
+      ?? null;
+    if (!wheelState) {
       return;
     }
-    const target = entry.targetState;
-    const bodyId = entry.targetState.bodyId ?? physicsBridgeBodyIdByNodeId.get(entry.nodeId) ?? null;
-    const node = resolveNodeById(entry.nodeId);
-    if (!node) {
+    if (alpha >= 1 || !binding.object) {
+      applyRemoteMultiuserVehicleWheelState(binding as unknown as RemoteMultiuserWheelBinding, wheelState);
       return;
     }
-    const displayState = entry.displayState ?? clonePhysicsAuthoritySnapshot(target);
-    const shouldSnap = shouldSnapPhysicsAuthoritySnapshot(displayState, target, entry.props);
-    if (shouldSnap) {
-      entry.displayState = clonePhysicsAuthoritySnapshot(target);
+    remoteMultiuserWheelCurrentPositionScratch.copy(binding.object.position);
+    remoteMultiuserWheelCurrentPositionScratch.lerp(
+      remoteMultiuserWheelTargetPositionScratch.set(wheelState.position.x, wheelState.position.y, wheelState.position.z),
+      alpha,
+    );
+    remoteMultiuserWheelCurrentQuaternionScratch.copy(binding.object.quaternion);
+    remoteMultiuserWheelCurrentQuaternionScratch.slerp(
+      remoteMultiuserWheelTargetQuaternionScratch.set(
+        wheelState.quaternion.x,
+        wheelState.quaternion.y,
+        wheelState.quaternion.z,
+        wheelState.quaternion.w,
+      ),
+      alpha,
+    );
+    binding.object.position.copy(remoteMultiuserWheelCurrentPositionScratch);
+    binding.object.quaternion.copy(remoteMultiuserWheelCurrentQuaternionScratch);
+    if (wheelState.scale) {
+      remoteMultiuserWheelCurrentScaleScratch.copy(binding.object.scale);
+      remoteMultiuserWheelCurrentScaleScratch.lerp(
+        remoteMultiuserWheelScaleScratch.set(wheelState.scale.x, wheelState.scale.y, wheelState.scale.z),
+        alpha,
+      );
+      binding.object.scale.copy(remoteMultiuserWheelCurrentScaleScratch);
+    }
+    binding.object.updateWorldMatrix(false, true);
+  });
+}
+
+function applyRemoteNodeCharacterAnimationPresentation(
+  nodeId: string,
+  animation: MultiuserCharacterAnimationPresentation,
+  deltaSeconds: number,
+): void {
+  const controller = nodeAnimationRuntime.get(nodeId) as {
+    activeClipName: string | null;
+    activeAction: THREE.AnimationAction | null;
+    activeLoop: boolean;
+    activeTimeScale: number;
+    mixer: THREE.AnimationMixer;
+  } | null;
+  if (!controller) {
+    return;
+  }
+  const clipName = typeof animation.clipName === 'string' && animation.clipName.trim().length
+    ? animation.clipName.trim()
+    : null;
+  if (!clipName) {
+    if (controller.activeAction) {
+      nodeAnimationRuntime.stopNodeAnimation(nodeId, { restoreDefault: true });
     } else {
-      const alpha = getPhysicsAuthorityLerpAlpha(entry.props, deltaSeconds)
-      displayState.transform.position.x += (target.transform.position.x - displayState.transform.position.x) * alpha
-      displayState.transform.position.y += (target.transform.position.y - displayState.transform.position.y) * alpha
-      displayState.transform.position.z += (target.transform.position.z - displayState.transform.position.z) * alpha
-      remotePhysicsAuthorityDisplayQuaternionScratch.set(
-        displayState.transform.quaternion.x,
-        displayState.transform.quaternion.y,
-        displayState.transform.quaternion.z,
-        displayState.transform.quaternion.w,
-      )
-      remotePhysicsAuthorityTargetQuaternionScratch.set(
-        target.transform.quaternion.x,
-        target.transform.quaternion.y,
-        target.transform.quaternion.z,
-        target.transform.quaternion.w,
-      )
-      remotePhysicsAuthorityDisplayQuaternionScratch.slerp(remotePhysicsAuthorityTargetQuaternionScratch, alpha)
-      displayState.transform.quaternion.x = remotePhysicsAuthorityDisplayQuaternionScratch.x
-      displayState.transform.quaternion.y = remotePhysicsAuthorityDisplayQuaternionScratch.y
-      displayState.transform.quaternion.z = remotePhysicsAuthorityDisplayQuaternionScratch.z
-      displayState.transform.quaternion.w = remotePhysicsAuthorityDisplayQuaternionScratch.w
-      if (typeof target.linearVelocity?.x === 'number' && typeof displayState.linearVelocity?.x === 'number') {
-        displayState.linearVelocity.x += (target.linearVelocity.x - displayState.linearVelocity.x) * alpha
-        displayState.linearVelocity.y += (target.linearVelocity.y - displayState.linearVelocity.y) * alpha
-        displayState.linearVelocity.z += (target.linearVelocity.z - displayState.linearVelocity.z) * alpha
-      }
-      if (typeof target.angularVelocity?.x === 'number' && typeof displayState.angularVelocity?.x === 'number') {
-        displayState.angularVelocity.x += (target.angularVelocity.x - displayState.angularVelocity.x) * alpha
-        displayState.angularVelocity.y += (target.angularVelocity.y - displayState.angularVelocity.y) * alpha
-        displayState.angularVelocity.z += (target.angularVelocity.z - displayState.angularVelocity.z) * alpha
-      }
-      entry.displayState = displayState
+      nodeAnimationRuntime.restoreDefaultNodeAnimation(nodeId);
     }
-    applyPhysicsAuthoritySnapshotToObject(object, entry.displayState)
-    syncSceneNodeLocalTransformFromObject(node, object);
-    if (bodyId !== null) {
-      try {
-        physicsBridge?.setBodyTransform({
-          bodyId,
-          transform: {
-            position: [
-              entry.displayState.transform.position.x,
-              entry.displayState.transform.position.y,
-              entry.displayState.transform.position.z,
-            ],
-            rotation: [
-              entry.displayState.transform.quaternion.x,
-              entry.displayState.transform.quaternion.y,
-              entry.displayState.transform.quaternion.z,
-              entry.displayState.transform.quaternion.w,
-            ],
-          },
-          resetVelocity: shouldSnap,
-        });
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to apply authoritative physics snapshot', error);
-      }
-    }
-    const rigidbodyEntry = rigidbodyInstances.get(entry.nodeId) ?? null;
-    if (rigidbodyEntry) {
-      syncSharedBodyFromObject(rigidbodyEntry.body, object, rigidbodyEntry.orientationAdjustment);
-      if (entry.displayState.linearVelocity) {
-        rigidbodyEntry.body.velocity.set(
-          entry.displayState.linearVelocity.x,
-          entry.displayState.linearVelocity.y,
-          entry.displayState.linearVelocity.z,
-        );
-      }
-      if (entry.displayState.angularVelocity) {
-        rigidbodyEntry.body.angularVelocity.set(
-          entry.displayState.angularVelocity.x,
-          entry.displayState.angularVelocity.y,
-          entry.displayState.angularVelocity.z,
-        );
-      }
-      resetPhysicsInterpolationState(rigidbodyEntry.body);
-      if (entry.displayState.sleeping) {
-        trySleepBody(rigidbodyEntry.body as PhysicsBodyLike);
-      }
-      markPhysicsBridgeBodyDirty(entry.nodeId);
-    }
-    const vehicleInstance = vehicleInstances.get(entry.nodeId) ?? null;
-    if (vehicleInstance?.vehicle?.chassisBody) {
-      if (entry.displayState.linearVelocity) {
-        vehicleInstance.vehicle.chassisBody.velocity.set(
-          entry.displayState.linearVelocity.x,
-          entry.displayState.linearVelocity.y,
-          entry.displayState.linearVelocity.z,
-        );
-      }
-      if (entry.displayState.angularVelocity) {
-        vehicleInstance.vehicle.chassisBody.angularVelocity.set(
-          entry.displayState.angularVelocity.x,
-          entry.displayState.angularVelocity.y,
-          entry.displayState.angularVelocity.z,
-        );
-      }
-      resetPhysicsInterpolationState(vehicleInstance.vehicle.chassisBody as PhysicsBodyLike);
-      if (entry.displayState.sleeping) {
-        trySleepBody(vehicleInstance.vehicle.chassisBody as PhysicsBodyLike);
-      }
-      markPhysicsBridgeBodyDirty(entry.nodeId);
-    }
-  });
-}
-
-function processRemotePhysicsAuthoritySnapshot(snapshot: MultiuserPhysicsAuthoritySnapshot): void {
-  const runtimeEntry = physicsAuthorityNodeEntries.get(snapshot.nodeId);
-  if (!runtimeEntry) {
     return;
   }
-  runtimeEntry.ownerUserId = snapshot.ownerUserId ?? null;
-  runtimeEntry.updatedAt = snapshot.updatedAt;
-  runtimeEntry.lastLocalSignature = [
-    snapshot.tick,
-    snapshot.revision,
-    snapshot.transform.position.x,
-    snapshot.transform.position.y,
-    snapshot.transform.position.z,
-    snapshot.transform.quaternion.x,
-    snapshot.transform.quaternion.y,
-    snapshot.transform.quaternion.z,
-    snapshot.transform.quaternion.w,
-  ].join('|');
-  remotePhysicsAuthorityEntries.set(snapshot.nodeId, {
-    nodeId: snapshot.nodeId,
-    props: runtimeEntry.props,
-    targetState: clonePhysicsAuthoritySnapshot(snapshot),
-    displayState: clonePhysicsAuthoritySnapshot(snapshot),
-  });
-  processPhysicsAuthorityCollisionContacts(snapshot);
-  updateRemotePhysicsAuthorityTransforms(0);
-}
-
-function processRemotePhysicsAuthorityRemoved(nodeId: string): void {
-  remotePhysicsAuthorityEntries.delete(nodeId);
-  remotePhysicsAuthorityContactPairs.delete(nodeId);
-  const runtimeEntry = physicsAuthorityNodeEntries.get(nodeId);
-  if (runtimeEntry) {
-    runtimeEntry.ownerUserId = null;
+  const clip = nodeAnimationRuntime.resolveClip(nodeId, clipName);
+  if (!clip) {
+    return;
   }
-}
-
-function resetRemotePhysicsAuthority(): void {
-  remotePhysicsAuthorityEntries.clear();
-  remotePhysicsAuthorityContactPairs.clear();
-  physicsAuthorityNodeEntries.forEach((entry) => {
-    entry.ownerUserId = null;
-  });
-}
-
-function buildPhysicsAuthorityContactPairKey(bodyIdA: number, bodyIdB: number): PhysicsAuthorityContactPairKey {
-  return bodyIdA < bodyIdB ? `${bodyIdA}:${bodyIdB}` : `${bodyIdB}:${bodyIdA}`;
-}
-
-function processPhysicsAuthorityCollisionContacts(snapshot: MultiuserPhysicsAuthoritySnapshot): void {
-  const bodyId = snapshot.bodyId
-  if (bodyId === null || !Array.isArray(snapshot.contacts) || !snapshot.contacts.length) {
-    remotePhysicsAuthorityContactPairs.delete(snapshot.nodeId)
-    return
-  }
-  const previousPairs = remotePhysicsAuthorityContactPairs.get(snapshot.nodeId) ?? new Set<PhysicsAuthorityContactPairKey>()
-  const nextPairs = new Set<PhysicsAuthorityContactPairKey>()
-  snapshot.contacts.forEach((contact) => {
-    if (contact.bodyIdA !== bodyId && contact.bodyIdB !== bodyId) {
-      return
-    }
-    const pairKey = buildPhysicsAuthorityContactPairKey(contact.bodyIdA, contact.bodyIdB)
-    nextPairs.add(pairKey)
-    if (previousPairs.has(pairKey)) {
-      return
-    }
-    const otherBodyId = contact.bodyIdA === bodyId ? contact.bodyIdB : contact.bodyIdA
-    const otherNodeId = physicsBridgeNodeIdByBodyId.get(otherBodyId) ?? null
-    const followUps = triggerBehaviorAction(snapshot.nodeId, 'collision', {
-      payload: {
-        nodeId: snapshot.nodeId,
-        otherNodeId,
-        bodyId,
-        otherBodyId,
-        pairKey,
-        tick: snapshot.tick,
-        revision: snapshot.revision,
-        ownerUserId: snapshot.ownerUserId ?? null,
-        impactSpeed: contact.impactSpeed ?? null,
-        normal: {
-          x: contact.normal.x,
-          y: contact.normal.y,
-          z: contact.normal.z,
-        },
-        point: {
-          x: contact.point.x,
-          y: contact.point.y,
-          z: contact.point.z,
-        },
-        impulse: contact.impulse ?? null,
-      },
-    })
-    if (followUps.length) {
-      processBehaviorEvents(followUps)
-    }
-  })
-  remotePhysicsAuthorityContactPairs.set(snapshot.nodeId, nextPairs)
-}
-
-function resolveLocalPhysicsAuthorityInputs(): MultiuserPhysicsAuthorityInput[] {
-  const identity = getNormalizedMultiuserIdentity();
-  if (!identity) {
-    return [];
-  }
-  const inputs: MultiuserPhysicsAuthorityInput[] = [];
-  physicsAuthorityNodeEntries.forEach((entry, nodeId) => {
-    const node = resolveNodeById(nodeId);
-    if (!node) {
-      return;
-    }
-    const resolvedActorType = entry.props.actorType === 'auto'
-      ? (resolveVehicleComponent(node) ? 'vehicle' : 'character')
-      : entry.props.actorType;
-    if (!vehicleDriveActive.value || vehicleDriveNodeId.value !== nodeId || resolvedActorType !== 'vehicle') {
-      return;
-    }
-    const vehicleId = physicsBridgeVehicleIdByNodeId.get(nodeId) ?? null;
-    if (vehicleId === null) {
-      return;
-    }
-    entry.localInputSequence += 1;
-    entry.ownerUserId = identity.userId;
-    entry.updatedAt = new Date().toISOString();
-    entry.lastLocalSignature = [
-      vehicleDriveInput.steering,
-      vehicleDriveInput.throttle,
-      vehicleDriveInput.brake,
-      vehicleDriveInputFlags.brake ? 1 : 0,
-      vehicleId,
-    ].join('|');
-    inputs.push({
-      nodeId,
-      actorType: 'vehicle',
-      inputSequence: entry.localInputSequence,
-      ownerUserId: identity.userId,
-      leaseMs: entry.props.inputLeaseMs,
-      vehicle: {
-        vehicleId,
-        steering: vehicleDriveInput.steering,
-        throttle: vehicleDriveInput.throttle,
-        brake: vehicleDriveInput.brake,
-        handbrake: vehicleDriveInputFlags.brake ? 1 : 0,
-      },
-      character: null,
+  if (controller.activeClipName !== clip.name) {
+    nodeAnimationRuntime.playNodeAnimation(nodeId, clip.name, {
+      loop: animation.loop,
+      timeScale: animation.timeScale,
     });
-  });
-  physicsAuthorityNodeEntries.forEach((entry, nodeId) => {
-    const node = resolveNodeById(nodeId);
-    if (!node) {
-      return;
-    }
-    const resolvedActorType = entry.props.actorType === 'auto'
-      ? (resolveVehicleComponent(node) ? 'vehicle' : 'character')
-      : entry.props.actorType;
-    if (resolvedActorType !== 'character') {
-      return;
-    }
-    const characterInput = {
-      moveX: characterAuthorityInput.moveX,
-      moveZ: characterAuthorityInput.moveZ,
-      yaw: resolveSceneryCharacterInputYaw(),
-      jump: characterAuthorityInput.jump,
-      sprint: characterAuthorityInput.sprint,
-      crouch: characterAuthorityInput.crouch,
-      interact: characterAuthorityInput.interact,
-    };
-    const hasAnyCharacterInput =
-      Math.abs(characterInput.moveX) > 0.001
-      || Math.abs(characterInput.moveZ) > 0.001
-      || characterInput.jump
-      || characterInput.sprint
-      || characterInput.crouch
-      || characterInput.interact;
-    if (!hasAnyCharacterInput && entry.ownerUserId !== identity.userId) {
-      return;
-    }
-    entry.localInputSequence += 1;
-    entry.ownerUserId = identity.userId;
-    entry.updatedAt = new Date().toISOString();
-    entry.lastLocalSignature = [
-      characterInput.moveX,
-      characterInput.moveZ,
-      characterInput.yaw ?? '',
-      characterInput.jump ? 1 : 0,
-      characterInput.sprint ? 1 : 0,
-      characterInput.crouch ? 1 : 0,
-      characterInput.interact ? 1 : 0,
-    ].join('|');
-    inputs.push({
-      nodeId,
-      actorType: 'character',
-      inputSequence: entry.localInputSequence,
-      ownerUserId: identity.userId,
-      leaseMs: entry.props.inputLeaseMs,
-      vehicle: null,
-      character: characterInput,
-    });
-  });
-  return inputs;
+  }
+  if (controller.activeAction) {
+    controller.activeAction.timeScale = Number.isFinite(animation.timeScale) ? animation.timeScale : 1;
+    const duration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : clip.duration;
+    const nextTime = Number.isFinite(animation.time) ? Math.max(0, animation.time) : 0;
+    controller.activeAction.time = duration > 0 && animation.loop
+      ? THREE.MathUtils.euclideanModulo(nextTime, duration)
+      : nextTime;
+    controller.activeAction.clampWhenFinished = !animation.loop;
+    controller.activeLoop = animation.loop;
+    controller.activeTimeScale = controller.activeAction.timeScale;
+  }
+  if (deltaSeconds > 0) {
+    controller.mixer.update(deltaSeconds);
+  }
 }
 
 function getRemoteMultiuserPeerSignature(state: MultiuserPeerState): string {
@@ -13611,6 +13212,7 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
   if (!vehicleInstance || !Array.isArray(vehicleInstance.wheelBindings) || !vehicleInstance.wheelBindings.length) {
     return null;
   }
+  const chassisVelocity = vehicleInstance.vehicle?.chassisBody?.velocity ?? null;
   const wheels: MultiuserVehicleWheelPresentation[] = [];
   const wheelBindings = vehicleInstance.wheelBindings as VehicleWheelBinding[];
   wheelBindings.forEach((binding: VehicleWheelBinding, wheelIndex: number) => {
@@ -13655,7 +13257,19 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
   if (!wheels.length) {
     return null;
   }
-  return { wheels };
+  return {
+    speedMps: chassisVelocity
+      ? Math.hypot(chassisVelocity.x ?? 0, chassisVelocity.y ?? 0, chassisVelocity.z ?? 0)
+      : null,
+    linearVelocity: chassisVelocity
+      ? {
+          x: chassisVelocity.x ?? 0,
+          y: chassisVelocity.y ?? 0,
+          z: chassisVelocity.z ?? 0,
+        }
+      : null,
+    wheels,
+  };
 }
 
 function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCharacterPresentation | null {
@@ -13756,13 +13370,14 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   };
 }
 
-function resolveLocalSharedEntityStates(): MultiuserSharedEntityState[] {
+function resolveLocalNodeSyncStates(): MultiuserNodeSyncState[] {
   const identity = getNormalizedMultiuserIdentity();
   if (!identity) {
     return [];
   }
-  const states: MultiuserSharedEntityState[] = [];
+  const states: MultiuserNodeSyncState[] = [];
   networkSyncNodeEntries.forEach((entry, nodeId) => {
+    const node = resolveNodeById(nodeId);
     const object = nodeObjectMap.get(nodeId) ?? null;
     if (!object) {
       return;
@@ -13788,6 +13403,8 @@ function resolveLocalSharedEntityStates(): MultiuserSharedEntityState[] {
     if (entry.ownerUserId !== identity.userId && !changed) {
       return;
     }
+    const vehiclePresentation = resolveVehicleComponent(node) ? resolveLocalMultiuserVehiclePresentation(nodeId) : null;
+    const characterPresentation = resolveCharacterControllerComponent(node) ? resolveLocalMultiuserCharacterPresentation(nodeId) : null;
     states.push({
       entityId: nodeId,
       nodeId,
@@ -13819,6 +13436,12 @@ function resolveLocalSharedEntityStates(): MultiuserSharedEntityState[] {
         mode: 'lease',
         leaseMs: entry.props.leaseMs,
       },
+      presentation: vehiclePresentation || characterPresentation
+        ? {
+            vehicle: vehiclePresentation,
+            character: characterPresentation,
+          }
+        : null,
     });
   });
   return states;
@@ -13831,11 +13454,8 @@ const multiuserRuntimeBridge: MultiuserRuntimeBridge = {
   resolveLocalPeerState() {
     return resolveLocalMultiuserPeerState();
   },
-  resolveLocalSharedEntityStates() {
-    return resolveLocalSharedEntityStates();
-  },
-  resolveLocalPhysicsAuthorityInputs() {
-    return resolveLocalPhysicsAuthorityInputs();
+  resolveLocalNodeSyncStates() {
+    return resolveLocalNodeSyncStates();
   },
   handleRemotePeerSnapshot(peer) {
     handleRemoteMultiuserPeerSnapshot(peer);
@@ -13843,26 +13463,17 @@ const multiuserRuntimeBridge: MultiuserRuntimeBridge = {
   handleRemotePeerLeft(userId) {
     removeRemoteMultiuserPeer(userId);
   },
-  handleRemoteSharedEntitySnapshot(snapshot) {
+  handleRemoteNodeSyncSnapshot(snapshot) {
     processRemoteSharedEntitySnapshot(snapshot);
   },
-  handleRemoteSharedEntityRemoved(entityId) {
+  handleRemoteNodeSyncRemoved(entityId) {
     processRemoteSharedEntityRemoved(entityId);
-  },
-  handleRemotePhysicsAuthoritySnapshot(snapshot) {
-    processRemotePhysicsAuthoritySnapshot(snapshot);
-  },
-  handleRemotePhysicsAuthorityRemoved(nodeId) {
-    processRemotePhysicsAuthorityRemoved(nodeId);
   },
   clearRemotePeers() {
     clearRemoteMultiuserPeers();
   },
-  clearRemoteSharedEntities() {
+  clearRemoteNodeSync() {
     resetRemoteSharedEntities();
-  },
-  clearRemotePhysicsAuthority() {
-    resetRemotePhysicsAuthority();
   },
 };
 
@@ -18553,12 +18164,10 @@ function teardownRenderer() {
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
   networkSyncNodeEntries.clear();
-  physicsAuthorityNodeEntries.clear();
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
   physicsBridgeContactsByNodeId.clear();
   remoteSharedEntityEntries.clear();
-  remotePhysicsAuthorityEntries.clear();
   resetPhysicsWorld();
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
@@ -18584,7 +18193,6 @@ function teardownRenderer() {
   canvasResult = null;
   clearRemoteMultiuserPeers();
   resetRemoteSharedEntities();
-  resetRemotePhysicsAuthority();
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   currentDocument = null;
@@ -19273,7 +18881,6 @@ function startRenderLoop(
           syncRemoteMultiuserPeerVisibility(camera);
           updateRemoteMultiuserPeers(deltaSeconds);
           updateRemoteSharedEntityTransforms(deltaSeconds);
-          updateRemotePhysicsAuthorityTransforms(deltaSeconds);
           retryPendingVehicleDriveIfNeeded();
           activatePendingDefaultSteerDriveIfNeeded();
         }
@@ -19431,12 +19038,10 @@ function cleanupForUnrelatedSceneSwitch(): void {
   multiuserNodeIds.clear();
   multiuserNodeObjects.clear();
   networkSyncNodeEntries.clear();
-  physicsAuthorityNodeEntries.clear();
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
   physicsBridgeContactsByNodeId.clear();
   remoteSharedEntityEntries.clear();
-  remotePhysicsAuthorityEntries.clear();
   clearSceneryCompiledGroundRenderRuntime();
 
   resetPhysicsWorld();
@@ -19467,7 +19072,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   sceneGraphRoot = null;
   dynamicGroundCache = null;
   clearRemoteMultiuserPeers();
-  resetRemotePhysicsAuthority();
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   viewerResourceCache = null;

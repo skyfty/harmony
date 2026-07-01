@@ -1,41 +1,13 @@
 import type { IncomingMessage } from 'node:http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { nanoid } from 'nanoid'
-import fs from 'fs-extra'
-import path from 'node:path'
 import { appConfig } from '@/config/env'
-import { SceneModel } from '@/models/Scene'
-import { createCannonPhysicsController } from '@harmony/physics-cannon'
-import {
-  decodeScenePackageSceneDocument,
-  readBinaryFileFromScenePackage,
-  unzipScenePackage,
-  type SceneJsonExportDocument,
-  type SceneNode,
-} from '@harmony/schema/core'
-import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset'
-import {
-  PHYSICS_AUTHORITY_COMPONENT_TYPE,
-  type PhysicsAuthorityComponentProps,
-} from '@harmony/schema/components'
-import {
-  CHARACTER_CONTROLLER_COMPONENT_TYPE,
-  type CharacterControllerComponentProps,
-  clampCharacterControllerComponentProps,
-} from '@harmony/schema/components/definitions/characterControllerComponent'
-import type {
-  MultiuserPhysicsAuthorityActorType,
-  MultiuserPhysicsAuthorityInput,
-  MultiuserPhysicsAuthoritySnapshot,
-} from '@harmony/schema/multiuserContext'
 
 const DEFAULT_MAX_USERS_PER_SCENE = 32
 const MAX_USERS_LIMIT = 128
 const MIN_USERS_LIMIT = 2
 const MIN_LEASE_MS = 250
 const MAX_LEASE_MS = 30000
-const DEFAULT_AUTH_PHYSICS_TICK_MS = 33
-const AUTHORITY_DEFAULT_LEASE_MS = 3000
 
 type Vector3 = { x: number; y: number; z: number }
 type Quaternion = { x: number; y: number; z: number; w: number }
@@ -56,6 +28,8 @@ interface MultiuserVehicleWheelPresentation {
 }
 
 interface MultiuserVehiclePresentation {
+  speedMps?: number | null
+  linearVelocity?: Vector3 | null
   wheels: MultiuserVehicleWheelPresentation[]
 }
 
@@ -73,6 +47,11 @@ interface MultiuserCharacterPresentation {
 }
 
 interface MultiuserPeerPresentationState {
+  vehicle?: MultiuserVehiclePresentation | null
+  character?: MultiuserCharacterPresentation | null
+}
+
+interface MultiuserNodeSyncPresentation {
   vehicle?: MultiuserVehiclePresentation | null
   character?: MultiuserCharacterPresentation | null
 }
@@ -109,6 +88,7 @@ interface MultiuserSharedEntityState {
   revision: number
   updatedAt: string
   lease?: MultiuserSharedEntityLease | null
+  presentation?: MultiuserNodeSyncPresentation | null
 }
 
 interface StoredSharedEntity {
@@ -121,6 +101,7 @@ interface StoredSharedEntity {
   updatedAt: string
   lease: MultiuserSharedEntityLease
   leaseExpiresAt: number
+  presentation: MultiuserNodeSyncPresentation | null
 }
 
 interface MultiuserJoinMessage {
@@ -141,12 +122,7 @@ interface MultiuserEntityStateMessage {
   entity: MultiuserSharedEntityState
 }
 
-interface MultiuserPhysicsInputMessage {
-  type: 'physics-input'
-  input: MultiuserPhysicsAuthorityInput
-}
-
-type MultiuserClientMessage = MultiuserJoinMessage | MultiuserStateMessage | MultiuserEntityStateMessage | MultiuserPhysicsInputMessage
+type MultiuserClientMessage = MultiuserJoinMessage | MultiuserStateMessage | MultiuserEntityStateMessage
 
 interface MultiuserPeerSnapshot {
   userId: string
@@ -166,8 +142,6 @@ type MultiuserServerMessage =
   | { type: 'peer-left'; sceneId: string; userId: string }
   | { type: 'entity-state'; sceneId: string; entity: MultiuserSharedEntitySnapshot }
   | { type: 'entity-removed'; sceneId: string; entityId: string }
-  | { type: 'physics-snapshot'; sceneId: string; snapshot: MultiuserPhysicsAuthoritySnapshot }
-  | { type: 'physics-removed'; sceneId: string; nodeId: string }
   | { type: 'error'; reason?: string }
 
 export interface MultiuserRuntimeConnectionSummary {
@@ -196,7 +170,6 @@ export interface MultiuserRuntimeActivitySummary {
     | 'peer-state'
     | 'entity-state'
     | 'entity-removed'
-    | 'physics-input'
     | 'admin-kick-connection'
     | 'admin-kick-user'
     | 'admin-clear'
@@ -210,24 +183,18 @@ export interface MultiuserRuntimeActivitySummary {
   createdAt: string
 }
 
-export interface MultiuserRuntimePhysicsAuthoritySummary {
-  nodeId: string
-  snapshot: MultiuserPhysicsAuthoritySnapshot
-}
-
 export interface MultiuserRuntimeRoomSummary {
   sceneId: string
   userCount: number
   maxUsers: number
   entityCount: number
-  physicsAuthorityCount: number
+  nodeSyncCount: number
   updatedAt: string
 }
 
 export interface MultiuserRuntimeRoomDetail extends MultiuserRuntimeRoomSummary {
   connections: MultiuserRuntimeConnectionSummary[]
   entities: MultiuserRuntimeEntitySummary[]
-  physicsAuthority: MultiuserRuntimePhysicsAuthoritySummary[]
   activities: MultiuserRuntimeActivitySummary[]
 }
 
@@ -255,7 +222,6 @@ class SceneSession {
   public readonly clients = new Set<SceneClient>()
   public readonly sharedEntities = new Map<string, StoredSharedEntity>()
   public readonly activities: MultiuserRuntimeActivitySummary[] = []
-  public authoritativePhysicsRoom: AuthoritativePhysicsRoom | null = null
   public readonly createdAt: string = new Date().toISOString()
   public updatedAt: string = this.createdAt
 
@@ -402,7 +368,7 @@ class SceneSession {
       userCount: this.clients.size,
       maxUsers: this.maxUsers,
       entityCount,
-      physicsAuthorityCount: this.authoritativePhysicsRoom?.getLatestSnapshots().length ?? 0,
+      nodeSyncCount: entityCount,
       updatedAt: this.updatedAt,
     }
   }
@@ -547,6 +513,14 @@ function normalizeVehiclePresentation(value: unknown): MultiuserVehiclePresentat
     })
   })
   return {
+    speedMps: typeof candidate.speedMps === 'number' && Number.isFinite(candidate.speedMps) ? candidate.speedMps : null,
+    linearVelocity: isVector3(candidate.linearVelocity)
+      ? {
+          x: candidate.linearVelocity.x,
+          y: candidate.linearVelocity.y,
+          z: candidate.linearVelocity.z,
+        }
+      : null,
     wheels,
   }
 }
@@ -613,6 +587,7 @@ function normalizeSharedEntityState(value: unknown): MultiuserSharedEntityState 
   const normalizedScale = isVector3(scale)
     ? { x: scale.x, y: scale.y, z: scale.z }
     : null
+  const presentation = normalizePeerPresentation((candidate as { presentation?: unknown }).presentation) as MultiuserNodeSyncPresentation | null
   return {
     entityId,
     nodeId,
@@ -638,6 +613,7 @@ function normalizeSharedEntityState(value: unknown): MultiuserSharedEntityState 
       mode: 'lease',
       leaseMs: clampLeaseMs((candidate.lease as Partial<MultiuserSharedEntityLease> | undefined)?.leaseMs),
     },
+    presentation,
   }
 }
 
@@ -658,493 +634,12 @@ function toSharedEntityState(entity: StoredSharedEntity): MultiuserSharedEntityS
       mode: entity.lease.mode,
       leaseMs: entity.lease.leaseMs,
     },
+    presentation: (entity as StoredSharedEntity & { presentation?: MultiuserNodeSyncPresentation | null }).presentation ?? null,
   }
-}
-
-function resolveAbsoluteSceneFilePath(fileKey: string): string {
-  const normalizedKey = fileKey.replace(/\\+/g, '/').replace(/^\/+/u, '')
-  const root = path.resolve(appConfig.assetStoragePath)
-  const absolute = path.resolve(root, normalizedKey)
-  if (!absolute.startsWith(root)) {
-    throw new Error('Invalid scene file path')
-  }
-  return absolute
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function normalizePhysicsAuthorityComponentProps(
-  props: Partial<PhysicsAuthorityComponentProps> | null | undefined,
-): PhysicsAuthorityComponentProps {
-  const clampBoolean = (value: unknown, fallback: boolean): boolean => {
-    if (typeof value === 'boolean') {
-      return value
-    }
-    if (typeof value === 'string') {
-      const normalized = value.trim().toLowerCase()
-      if (normalized === 'true') {
-        return true
-      }
-      if (normalized === 'false') {
-        return false
-      }
-    }
-    return fallback
-  }
-  const clampNumber = (value: unknown, fallback: number, min: number, max: number): number => {
-    const numeric = typeof value === 'number' ? value : Number(value)
-    if (!Number.isFinite(numeric)) {
-      return fallback
-    }
-    return Math.min(max, Math.max(min, Math.round(numeric)))
-  }
-  const clampNullableInteger = (value: unknown, min: number, max: number): number | null => {
-    if (value === null || value === undefined || value === '') {
-      return null
-    }
-    const numeric = typeof value === 'number' ? value : Number(value)
-    if (!Number.isFinite(numeric)) {
-      return null
-    }
-    return Math.min(max, Math.max(min, Math.round(numeric)))
-  }
-  return {
-    enabled: clampBoolean(props?.enabled, true),
-    actorType: props?.actorType === 'vehicle' || props?.actorType === 'character' ? props.actorType : 'auto',
-    allowClientPrediction: clampBoolean(props?.allowClientPrediction, true),
-    inputSendIntervalMs: clampNullableInteger(props?.inputSendIntervalMs, 16, 5000),
-    snapshotLerpMs: clampNumber(props?.snapshotLerpMs, 120, 16, 5000),
-    snapThreshold: clampNumber(props?.snapThreshold, 1.5, 0.01, 1000),
-    inputLeaseMs: clampNumber(props?.inputLeaseMs, AUTHORITY_DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS),
-    syncLinearVelocity: clampBoolean(props?.syncLinearVelocity, true),
-    syncAngularVelocity: clampBoolean(props?.syncAngularVelocity, true),
-    syncSleeping: clampBoolean(props?.syncSleeping, true),
-  }
-}
-
-function normalizeCharacterControllerComponentProps(
-  props: Partial<CharacterControllerComponentProps> | null | undefined,
-): CharacterControllerComponentProps {
-  return clampCharacterControllerComponentProps(props)
-}
-
-function findSceneNodeById(nodes: SceneNode[] | undefined | null, nodeId: string): SceneNode | null {
-  if (!Array.isArray(nodes) || !nodeId) {
-    return null
-  }
-  const stack: SceneNode[] = [...nodes]
-  while (stack.length) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (node.id === nodeId) {
-      return node
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children)
-    }
-  }
-  return null
-}
-
-type LoadedPhysicsAuthorityNode = {
-  nodeId: string
-  actorType: MultiuserPhysicsAuthorityActorType
-  props: PhysicsAuthorityComponentProps
-  characterProps: CharacterControllerComponentProps | null
-  bodyId: number | null
-  vehicleId: number | null
-  characterId: number | null
-  ownerUserId: string | null
-  leaseExpiresAt: number
-  inputSequence: number
-  revision: number
-  updatedAt: string
-}
-
-type LoadedPhysicsScene = {
-  asset: Awaited<ReturnType<typeof buildPhysicsSceneAsset>>
-  nodes: Map<string, LoadedPhysicsAuthorityNode>
-  bodyNodeIdByBodyId: Map<number, string>
-}
-
-type LoadedPhysicsStepFrame = Awaited<ReturnType<ReturnType<typeof createCannonPhysicsController>['step']>>
-type LoadedPhysicsStepContact = NonNullable<LoadedPhysicsStepFrame['contacts']>[number] & {
-  impactSpeed?: number | null
-}
-
-class AuthoritativePhysicsRoom {
-  private readonly inputByNodeId = new Map<string, MultiuserPhysicsAuthorityInput>()
-  private readonly latestSnapshotByNodeId = new Map<string, MultiuserPhysicsAuthoritySnapshot>()
-  private readonly loadPromise: Promise<void> | null = null
-  private loadPromiseInternal: Promise<void> | null = null
-  private loadedScene: LoadedPhysicsScene | null = null
-  private controller: ReturnType<typeof createCannonPhysicsController> | null = null
-  private tickHandle: ReturnType<typeof globalThis.setInterval> | null = null
-  private tick = 0
-
-  constructor(private readonly session: SceneSession) {}
-
-  async ensureLoaded(): Promise<void> {
-    if (this.loadedScene) {
-      return
-    }
-    if (this.loadPromiseInternal) {
-      return this.loadPromiseInternal
-    }
-    this.loadPromiseInternal = this.loadScene();
-    return this.loadPromiseInternal;
-  }
-
-  private async loadScene(): Promise<void> {
-    const scene = await SceneModel.findById(this.session.sceneId).lean().exec()
-    if (!scene || !scene.fileKey) {
-      throw new Error(`Unable to resolve authoritative physics scene: ${this.session.sceneId}`)
-    }
-    const absolutePath = resolveAbsoluteSceneFilePath(scene.fileKey)
-    const exists = await fs.pathExists(absolutePath)
-    if (!exists) {
-      throw new Error(`Scene package not found for authoritative physics scene: ${this.session.sceneId}`)
-    }
-    const zipBytes = await fs.readFile(absolutePath)
-    const pkg = unzipScenePackage(zipBytes)
-    const sceneEntry = pkg.manifest.scenes.find((entry) => entry.sceneId === this.session.sceneId) ?? pkg.manifest.scenes[0] ?? null
-    if (!sceneEntry) {
-      throw new Error(`No scene entry found for authoritative physics scene: ${this.session.sceneId}`)
-    }
-    const document = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as SceneJsonExportDocument
-    const asset = await buildPhysicsSceneAsset(document)
-
-    const nodes = new Map<string, LoadedPhysicsAuthorityNode>()
-    const bodyNodeIdByBodyId = new Map<number, string>()
-    const bodyIdByNodeId = new Map<string, number>()
-    const vehicleIdByNodeId = new Map<string, number>()
-    const characterIdByNodeId = new Map<string, number>()
-    asset.bodies.forEach((body) => {
-      if (typeof body.userDataKey === 'string' && body.userDataKey.trim()) {
-        const nodeId = body.userDataKey.trim()
-        bodyNodeIdByBodyId.set(body.id, nodeId)
-        bodyIdByNodeId.set(nodeId, body.id)
-      }
-    })
-    asset.vehicles.forEach((vehicle) => {
-      const nodeId = bodyNodeIdByBodyId.get(vehicle.bodyId) ?? null
-      if (nodeId) {
-        vehicleIdByNodeId.set(nodeId, vehicle.id)
-      }
-    })
-    asset.characters.forEach((character) => {
-      const nodeId = bodyNodeIdByBodyId.get(character.bodyId) ?? null
-      if (nodeId) {
-        characterIdByNodeId.set(nodeId, character.characterId)
-      }
-    })
-
-    const scanNodes = (sceneNodes: SceneNode[] | undefined | null): void => {
-      if (!Array.isArray(sceneNodes)) {
-        return
-      }
-      const stack: SceneNode[] = [...sceneNodes]
-      while (stack.length) {
-        const node = stack.pop()
-        if (!node) {
-          continue
-        }
-        const component = node.components?.[PHYSICS_AUTHORITY_COMPONENT_TYPE]
-        if (component && typeof component === 'object' && component.enabled !== false) {
-          const props = normalizePhysicsAuthorityComponentProps((component as { props?: Partial<PhysicsAuthorityComponentProps> | null | undefined }).props)
-          const characterController = node.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE]
-          const characterProps = characterController && typeof characterController === 'object' && characterController.enabled !== false
-            ? normalizeCharacterControllerComponentProps((characterController as { props?: Partial<CharacterControllerComponentProps> | null | undefined }).props)
-            : null
-          const resolvedActorType: MultiuserPhysicsAuthorityActorType = props.actorType === 'auto'
-            ? (vehicleIdByNodeId.has(node.id) ? 'vehicle' : 'character')
-            : props.actorType
-          nodes.set(node.id, {
-            nodeId: node.id,
-            actorType: resolvedActorType,
-            props,
-            characterProps,
-            bodyId: bodyIdByNodeId.get(node.id) ?? null,
-            vehicleId: vehicleIdByNodeId.get(node.id) ?? null,
-            characterId: characterIdByNodeId.get(node.id) ?? null,
-            ownerUserId: null,
-            leaseExpiresAt: 0,
-            inputSequence: 0,
-            revision: 0,
-            updatedAt: new Date(0).toISOString(),
-          })
-        }
-        if (Array.isArray(node.children) && node.children.length) {
-          stack.push(...node.children)
-        }
-      }
-    }
-    scanNodes(document.nodes)
-
-    this.controller = createCannonPhysicsController()
-    await this.controller.init({
-      world: {
-        gravity: [0, -9.8, 0],
-        fixedTimeStepMs: DEFAULT_AUTH_PHYSICS_TICK_MS,
-        maxSubSteps: 4,
-      },
-    })
-    await this.controller.loadScene(asset)
-    this.loadedScene = {
-      asset,
-      nodes,
-      bodyNodeIdByBodyId,
-    }
-    this.tick = 0
-    this.startTicker()
-  }
-
-  private startTicker(): void {
-    if (this.tickHandle || !this.loadedScene) {
-      return
-    }
-    this.tickHandle = globalThis.setInterval(() => {
-      void this.step()
-    }, DEFAULT_AUTH_PHYSICS_TICK_MS)
-  }
-
-  private stopTicker(): void {
-    if (this.tickHandle) {
-      globalThis.clearInterval(this.tickHandle)
-      this.tickHandle = null
-    }
-  }
-
-  private buildSnapshotMessage(node: LoadedPhysicsAuthorityNode, frame: { bodyMeta?: Uint32Array; bodyTransforms: Float32Array; bodyLinearVelocities?: Float32Array; bodyAngularVelocities?: Float32Array; bodySleeping?: Uint8Array; contacts?: LoadedPhysicsStepContact[] }): MultiuserServerMessage | null {
-    if (!this.loadedScene || !node.bodyId) {
-      return null
-    }
-    const bodyMeta = frame.bodyMeta ?? null
-    const bodyIndex = bodyMeta ? Array.from(bodyMeta).indexOf(node.bodyId) : -1
-    if (bodyIndex < 0) {
-      return null
-    }
-    const base = bodyIndex * 8
-    const position = {
-      x: frame.bodyTransforms[base] ?? 0,
-      y: frame.bodyTransforms[base + 1] ?? 0,
-      z: frame.bodyTransforms[base + 2] ?? 0,
-    }
-    const quaternion = {
-      x: frame.bodyTransforms[base + 3] ?? 0,
-      y: frame.bodyTransforms[base + 4] ?? 0,
-      z: frame.bodyTransforms[base + 5] ?? 0,
-      w: frame.bodyTransforms[base + 6] ?? 1,
-    }
-    const linearVelocity = frame.bodyLinearVelocities
-      ? {
-          x: frame.bodyLinearVelocities[bodyIndex * 3] ?? 0,
-          y: frame.bodyLinearVelocities[bodyIndex * 3 + 1] ?? 0,
-          z: frame.bodyLinearVelocities[bodyIndex * 3 + 2] ?? 0,
-        }
-      : null
-    const angularVelocity = frame.bodyAngularVelocities
-      ? {
-          x: frame.bodyAngularVelocities[bodyIndex * 3] ?? 0,
-          y: frame.bodyAngularVelocities[bodyIndex * 3 + 1] ?? 0,
-          z: frame.bodyAngularVelocities[bodyIndex * 3 + 2] ?? 0,
-        }
-      : null
-    const sleeping = frame.bodySleeping ? Boolean(frame.bodySleeping[bodyIndex]) : false
-    const ownerUserId = node.ownerUserId || null
-    node.revision += 1
-    node.updatedAt = new Date().toISOString()
-    const snapshot = {
-      nodeId: node.nodeId,
-      actorType: node.actorType,
-      ownerUserId,
-      tick: this.tick,
-      revision: node.revision,
-      updatedAt: node.updatedAt,
-      bodyId: node.bodyId,
-      transform: { position, quaternion },
-      linearVelocity: node.props.syncLinearVelocity ? linearVelocity : null,
-      angularVelocity: node.props.syncAngularVelocity ? angularVelocity : null,
-      sleeping: node.props.syncSleeping ? sleeping : false,
-      contacts: Array.isArray(frame.contacts)
-        ? frame.contacts.map((contact) => ({
-            bodyIdA: contact.bodyIdA,
-            bodyIdB: contact.bodyIdB,
-            normal: { ...contact.normal },
-            point: { ...contact.point },
-            impulse: contact.impulse ?? null,
-            impactSpeed: (contact as LoadedPhysicsStepContact).impactSpeed ?? null,
-          }))
-        : null,
-    }
-    this.latestSnapshotByNodeId.set(node.nodeId, snapshot as MultiuserPhysicsAuthoritySnapshot)
-    return {
-      type: 'physics-snapshot',
-      sceneId: this.session.sceneId,
-      snapshot: snapshot as MultiuserPhysicsAuthoritySnapshot,
-    }
-  }
-
-  private async applyCharacterInputs(now: number): Promise<void> {
-    if (!this.controller || !this.loadedScene) {
-      return
-    }
-    for (const node of this.loadedScene.nodes.values()) {
-      if (node.actorType !== 'character' || node.characterId === null) {
-        continue
-      }
-      const input = this.inputByNodeId.get(node.nodeId) ?? null
-      if (!input?.character) {
-        continue
-      }
-      const leaseMs = Math.min(MAX_LEASE_MS, Math.max(MIN_LEASE_MS, Math.round(input.leaseMs || AUTHORITY_DEFAULT_LEASE_MS)))
-      node.ownerUserId = input.ownerUserId ?? node.ownerUserId
-      node.leaseExpiresAt = now + leaseMs
-      await this.controller.setCharacterInput({
-        characterId: node.characterId,
-        moveX: input.character.moveX,
-        moveZ: input.character.moveZ,
-        yaw: input.character.yaw ?? null,
-        jump: input.character.jump,
-        sprint: input.character.sprint,
-        crouch: input.character.crouch,
-        interact: input.character.interact,
-      })
-    }
-  }
-
-  private async step(): Promise<void> {
-    if (!this.controller || !this.loadedScene) {
-      return
-    }
-    this.tick += 1
-    const now = Date.now()
-    this.loadedScene.nodes.forEach((node) => {
-      if (node.actorType === 'vehicle' && node.vehicleId !== null) {
-        const input = this.inputByNodeId.get(node.nodeId) ?? null
-        this.controller?.setVehicleInput({
-          vehicleId: node.vehicleId,
-          steering: input?.vehicle?.steering ?? 0,
-          throttle: input?.vehicle?.throttle ?? 0,
-          brake: input?.vehicle?.brake ?? 0,
-          handbrake: input?.vehicle?.handbrake ?? 0,
-        })
-      }
-    })
-    await this.applyCharacterInputs(now)
-    const frame = await this.controller.step(DEFAULT_AUTH_PHYSICS_TICK_MS)
-    const messages: MultiuserServerMessage[] = []
-    this.loadedScene.nodes.forEach((node) => {
-      const ownerExpired = node.ownerUserId && node.leaseExpiresAt > 0 && node.leaseExpiresAt < now
-      if (ownerExpired) {
-        node.ownerUserId = null
-      }
-      const message = this.buildSnapshotMessage(node, frame)
-      if (message) {
-        messages.push(message)
-      }
-    })
-    messages.forEach((message) => {
-      this.session.broadcast(message)
-    })
-  }
-
-  async handleInput(client: SceneClient, input: MultiuserPhysicsAuthorityInput): Promise<void> {
-    await this.ensureLoaded()
-    if (!this.loadedScene || !client.userId) {
-      return
-    }
-    const node = this.loadedScene.nodes.get(input.nodeId)
-    if (!node) {
-      return
-    }
-    const now = Date.now()
-    if (node.ownerUserId && node.ownerUserId !== client.userId && node.leaseExpiresAt > now) {
-      const snapshot = this.latestSnapshotByNodeId.get(node.nodeId) ?? null
-      if (snapshot) {
-        try {
-          client.socket.send(JSON.stringify({
-            type: 'physics-snapshot',
-            sceneId: this.session.sceneId,
-            snapshot,
-          } satisfies MultiuserServerMessage))
-        } catch (error) {
-          console.warn('Failed to return authoritative physics snapshot to denied client', error)
-        }
-      }
-      return
-    }
-    const leaseMs = Math.min(MAX_LEASE_MS, Math.max(MIN_LEASE_MS, Math.round(input.leaseMs || AUTHORITY_DEFAULT_LEASE_MS)))
-    node.ownerUserId = client.userId
-    node.leaseExpiresAt = now + leaseMs
-    node.inputSequence = Math.max(node.inputSequence + 1, Math.trunc(Number(input.inputSequence) || 0))
-    this.inputByNodeId.set(node.nodeId, {
-      ...input,
-      ownerUserId: client.userId,
-      leaseMs,
-      inputSequence: node.inputSequence,
-    })
-    if (!this.tickHandle) {
-      this.startTicker()
-    }
-  }
-
-  releaseOwnership(userId: string): void {
-    if (!this.loadedScene) {
-      return
-    }
-    this.loadedScene.nodes.forEach((node) => {
-      if (node.ownerUserId !== userId) {
-        return
-      }
-      node.ownerUserId = null
-      node.leaseExpiresAt = 0
-      this.inputByNodeId.delete(node.nodeId)
-    })
-  }
-
-  getSnapshotMessages(): MultiuserServerMessage[] {
-    if (!this.loadedScene) {
-      return []
-    }
-    return Array.from(this.latestSnapshotByNodeId.values()).map((snapshot) => ({
-      type: 'physics-snapshot',
-      sceneId: this.session.sceneId,
-      snapshot,
-    }))
-  }
-
-  getLatestSnapshots(): MultiuserPhysicsAuthoritySnapshot[] {
-    return Array.from(this.latestSnapshotByNodeId.values()).map((snapshot) => ({
-      ...snapshot,
-      transform: {
-        position: { ...snapshot.transform.position },
-        quaternion: { ...snapshot.transform.quaternion },
-      },
-      linearVelocity: snapshot.linearVelocity ? { ...snapshot.linearVelocity } : null,
-      angularVelocity: snapshot.angularVelocity ? { ...snapshot.angularVelocity } : null,
-    }))
-  }
-
-  async dispose(): Promise<void> {
-    this.stopTicker()
-    this.inputByNodeId.clear()
-    this.latestSnapshotByNodeId.clear()
-    this.loadedScene = null
-    if (this.controller) {
-      const controller = this.controller
-      this.controller = null
-      try {
-        await controller.destroy()
-      } catch (error) {
-        console.warn('Failed to destroy authoritative physics controller', error)
-      }
-    }
-  }
 }
 
 export class MultiuserService {
@@ -1191,10 +686,6 @@ export class MultiuserService {
       ...session.getSummary(),
       connections: session.getConnectionSummaries(),
       entities: session.getEntitySummaries(),
-      physicsAuthority: session.authoritativePhysicsRoom?.getLatestSnapshots().map((snapshot) => ({
-        nodeId: snapshot.nodeId,
-        snapshot,
-      })) ?? [],
       activities: session.getActivities(),
     }
   }
@@ -1315,7 +806,6 @@ export class MultiuserService {
     const server = this.wsServer
     this.wsServer = null
     this.sessions.forEach((session) => {
-      void session.authoritativePhysicsRoom?.dispose()
       session.clients.forEach((client) => {
         try {
           client.socket.close()
@@ -1401,10 +891,6 @@ export class MultiuserService {
       this.handleEntityState(client, message.entity)
       return
     }
-    if (message.type === 'physics-input') {
-      await this.handlePhysicsInput(client, message.input)
-      return
-    }
     this.sendError(client.socket, 'Unknown message type')
   }
 
@@ -1455,17 +941,6 @@ export class MultiuserService {
       entities,
     }
     client.socket.send(JSON.stringify(welcome))
-    if (session.authoritativePhysicsRoom) {
-      const snapshotMessages = session.authoritativePhysicsRoom.getSnapshotMessages()
-      snapshotMessages.forEach((message) => {
-        try {
-          client.socket.send(JSON.stringify(message))
-        } catch (error) {
-          console.warn('Failed to send authoritative physics snapshot to joining client', error)
-        }
-      })
-    }
-
     const joinedMessage: MultiuserServerMessage = {
       type: 'peer-joined',
       sceneId,
@@ -1585,6 +1060,33 @@ export class MultiuserService {
         leaseMs,
       },
       leaseExpiresAt: now + leaseMs,
+      presentation: entity.presentation ? {
+        vehicle: entity.presentation.vehicle ? {
+          speedMps: entity.presentation.vehicle.speedMps ?? null,
+          linearVelocity: entity.presentation.vehicle.linearVelocity ? { ...entity.presentation.vehicle.linearVelocity } : null,
+          wheels: entity.presentation.vehicle.wheels.map((wheel) => ({
+            nodeId: wheel.nodeId ?? null,
+            wheelIndex: wheel.wheelIndex,
+            position: { ...wheel.position },
+            quaternion: { ...wheel.quaternion },
+            scale: wheel.scale ? { ...wheel.scale } : null,
+            steeringAxis: wheel.steeringAxis ? { ...wheel.steeringAxis } : null,
+            spinAxis: wheel.spinAxis ? { ...wheel.spinAxis } : null,
+            steeringAngle: wheel.steeringAngle ?? null,
+            spinAngle: wheel.spinAngle ?? null,
+          })),
+        } : null,
+        character: entity.presentation.character ? {
+          animation: entity.presentation.character.animation ? {
+            clipName: entity.presentation.character.animation.clipName,
+            time: entity.presentation.character.animation.time,
+            duration: entity.presentation.character.animation.duration,
+            loop: entity.presentation.character.animation.loop,
+            timeScale: entity.presentation.character.animation.timeScale,
+            normalizedTime: entity.presentation.character.animation.normalizedTime ?? null,
+          } : null,
+        } : null,
+      } : null,
     }
     session.sharedEntities.set(entity.entityId, stored)
     session.touch()
@@ -1607,39 +1109,6 @@ export class MultiuserService {
       },
     }
     session.broadcast(message, { exclude: client })
-  }
-
-  private getOrCreatePhysicsRoom(session: SceneSession): AuthoritativePhysicsRoom {
-    if (!session.authoritativePhysicsRoom) {
-      session.authoritativePhysicsRoom = new AuthoritativePhysicsRoom(session)
-    }
-    return session.authoritativePhysicsRoom
-  }
-
-  private async handlePhysicsInput(client: SceneClient, input: MultiuserPhysicsAuthorityInput): Promise<void> {
-    const session = client.session
-    if (!session || !client.userId) {
-      this.sendError(client.socket, 'Must join a scene before sending physics input')
-      return
-    }
-    const room = this.getOrCreatePhysicsRoom(session)
-    try {
-      await room.handleInput(client, input)
-      session.touch()
-      session.recordActivity({
-        type: 'physics-input',
-        sessionId: client.sessionId,
-        userId: client.userId,
-        displayName: client.displayName,
-        entityId: null,
-        nodeId: input.nodeId ?? null,
-        summary: `${client.displayName} 提交物理输入`,
-      })
-      this.emitRuntimeSnapshot(session.sceneId)
-    } catch (error) {
-      console.warn('Failed to process authoritative physics input', error)
-      this.sendError(client.socket, 'Failed to process authoritative physics input')
-    }
   }
 
   private handleClientDisconnection(client: SceneClient): void {
@@ -1680,10 +1149,7 @@ export class MultiuserService {
       }
       session.broadcast(removed)
     })
-    session.authoritativePhysicsRoom?.releaseOwnership(client.userId)
     if (!session.clients.size) {
-      void session.authoritativePhysicsRoom?.dispose()
-      session.authoritativePhysicsRoom = null
       this.sessions.delete(session.sceneId)
       this.emitRuntimeSnapshot(session.sceneId)
     }
