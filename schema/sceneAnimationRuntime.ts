@@ -253,23 +253,25 @@ export class SceneAnimationRuntimeManager {
   getPresentation(nodeId: string): AnimationRuntimePresentation | null {
     const controller = this.controllers.get(nodeId)
     const action = controller?.activeAction ?? null
-    if (!controller || !action) {
+    if (!controller) {
       return null
     }
     const clip = findAnimationClipByName(controller.clips, controller.activeClipName)
-      ?? action.getClip()
+      ?? action?.getClip()
+      ?? findAnimationClipByName(controller.clips, controller.defaultClipName)
+      ?? controller.clips[0]
       ?? null
     if (!clip) {
       return null
     }
     const duration = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 0
-    const time = Number.isFinite(action.time) ? action.time : 0
-    const timeScale = Number.isFinite(action.timeScale) ? action.timeScale : controller.activeTimeScale
+    const time = action && Number.isFinite(action.time) ? action.time : 0
+    const timeScale = action && Number.isFinite(action.timeScale) ? action.timeScale : controller.activeTimeScale
     return {
       clipName: sanitizeAnimationClipName(clip.name),
       time,
       duration,
-      loop: controller.activeLoop,
+      loop: action ? controller.activeLoop : controller.defaultLoop,
       timeScale,
       normalizedTime: duration > 0 ? time / duration : null,
     }
