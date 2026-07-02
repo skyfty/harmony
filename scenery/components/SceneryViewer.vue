@@ -2577,6 +2577,7 @@ const REMOTE_MULTIUSER_NICKNAME_BG_BOTTOM = 'rgba(210, 222, 242, 0.05)';
 const REMOTE_MULTIUSER_NICKNAME_BORDER = 'rgba(255, 255, 255, 0.28)';
 const REMOTE_MULTIUSER_NICKNAME_TEXT = '#ffffff';
 const REMOTE_MULTIUSER_NICKNAME_GLOW = 'rgba(255, 255, 255, 0.12)';
+const REMOTE_MULTIUSER_NICKNAME_MAX_CHARS = 6;
 type PhysicsInterpolationState = {
   prevPos: THREE.Vector3;
   prevQuat: THREE.Quaternion;
@@ -11777,9 +11778,20 @@ function isRemoteMultiuserPlaceholderObject(object: THREE.Object3D | null | unde
   return Boolean(object?.userData?.remoteMultiuserPlaceholder);
 }
 
+function truncateRemoteMultiuserDisplayName(displayName: string, maxChars = REMOTE_MULTIUSER_NICKNAME_MAX_CHARS): string {
+  if (maxChars <= 0) {
+    return '';
+  }
+  const characters = Array.from(displayName);
+  if (characters.length <= maxChars) {
+    return displayName;
+  }
+  return characters.slice(0, maxChars).join('');
+}
+
 function normalizeRemoteMultiuserDisplayName(displayName: string | null | undefined, fallbackUserId: string): string {
   const trimmed = typeof displayName === 'string' ? displayName.trim() : '';
-  return trimmed.length ? trimmed : fallbackUserId;
+  return truncateRemoteMultiuserDisplayName(trimmed.length ? trimmed : fallbackUserId);
 }
 
 function resolveRemoteMultiuserNicknameWorldWidth(fontSize: number, textWidth: number): number {
