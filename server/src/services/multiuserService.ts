@@ -64,6 +64,7 @@ interface MultiuserPeerState {
   subjectAssetUrl?: string | null
   position: Vector3
   quaternion: Quaternion
+  scale: Vector3
   action?: string | null
   presentation?: MultiuserPeerPresentationState | null
 }
@@ -71,7 +72,7 @@ interface MultiuserPeerState {
 interface MultiuserSharedEntityTransform {
   position: Vector3
   quaternion: Quaternion
-  scale?: Vector3 | null
+  scale: Vector3
 }
 
 interface MultiuserSharedEntityLease {
@@ -447,6 +448,11 @@ function normalizePeerState(value: unknown): MultiuserPeerState | null {
       z: candidate.quaternion.z,
       w: candidate.quaternion.w,
     },
+    scale: {
+      x: candidate.scale.x,
+      y: candidate.scale.y,
+      z: candidate.scale.z,
+    },
     action: normalizeOptionalText(candidate.action),
     presentation,
   }
@@ -583,10 +589,7 @@ function normalizeSharedEntityState(value: unknown): MultiuserSharedEntityState 
   if (!transformCandidate || !isVector3(transformCandidate.position) || !isQuaternion(transformCandidate.quaternion)) {
     return null
   }
-  const scale = transformCandidate.scale
-  const normalizedScale = isVector3(scale)
-    ? { x: scale.x, y: scale.y, z: scale.z }
-    : null
+
   const presentation = normalizePeerPresentation((candidate as { presentation?: unknown }).presentation) as MultiuserNodeSyncPresentation | null
   return {
     entityId,
@@ -605,7 +608,11 @@ function normalizeSharedEntityState(value: unknown): MultiuserSharedEntityState 
         z: transformCandidate.quaternion.z,
         w: transformCandidate.quaternion.w,
       },
-      scale: normalizedScale,
+      scale: {
+        x: transformCandidate.scale.x,
+        y: transformCandidate.scale.y, 
+        z: transformCandidate.scale.z 
+      },
     },
     revision: Math.max(0, Math.trunc(Number(candidate.revision) || 0)),
     updatedAt: normalizeOptionalText(candidate.updatedAt) ?? new Date().toISOString(),

@@ -12221,6 +12221,7 @@ async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promi
 function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: MultiuserPeerState): void {
   object.position.set(state.position.x, state.position.y, state.position.z);
   object.quaternion.set(state.quaternion.x, state.quaternion.y, state.quaternion.z, state.quaternion.w);
+  object.scale.set(state.scale.x, state.scale.y, state.scale.z);
   object.visible = true;
   object.updateWorldMatrix(true, false);
 }
@@ -13004,6 +13005,12 @@ function updateRemoteSharedEntityTransforms(deltaSeconds: number): void {
       display.transform.scale.x = remoteSharedEntityDisplayScaleScratch.x;
       display.transform.scale.y = remoteSharedEntityDisplayScaleScratch.y;
       display.transform.scale.z = remoteSharedEntityDisplayScaleScratch.z;
+    } else if (target.transform.scale) {
+      display.transform.scale = {
+        x: target.transform.scale.x,
+        y: target.transform.scale.y,
+        z: target.transform.scale.z,
+      };
     }
     applyNetworkSyncTransformToObject(object, display);
     applyRemoteNodeSyncPresentation(entry, display, alpha, deltaSeconds);
@@ -13339,6 +13346,7 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
       ) ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, nodeId, node?.name ?? null);
       object.getWorldPosition(protagonistPosePosition);
       object.getWorldQuaternion(protagonistPoseQuaternion);
+      object.getWorldScale(remoteSharedEntityTargetScaleScratch);
       const vehiclePresentation = resolveLocalMultiuserVehiclePresentation(nodeId);
       return {
         subjectType: 'vehicle',
@@ -13359,6 +13367,11 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
           z: protagonistPoseQuaternion.z,
           w: protagonistPoseQuaternion.w,
         },
+        scale: {
+          x: remoteSharedEntityTargetScaleScratch.x,
+          y: remoteSharedEntityTargetScaleScratch.y,
+          z: remoteSharedEntityTargetScaleScratch.z,
+        },
         presentation: vehiclePresentation
           ? {
               vehicle: vehiclePresentation,
@@ -13377,6 +13390,7 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   const node = resolveNodeById(resolvedNodeId);
   protagonistObject.getWorldPosition(protagonistPosePosition);
   protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
+  protagonistObject.getWorldScale(remoteSharedEntityTargetScaleScratch);
   const characterPresentation = resolveLocalMultiuserCharacterPresentation(resolvedNodeId);
   return {
     subjectType: 'character',
@@ -13395,6 +13409,11 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
       y: protagonistPoseQuaternion.y,
       z: protagonistPoseQuaternion.z,
       w: protagonistPoseQuaternion.w,
+    },
+    scale: {
+      x: remoteSharedEntityTargetScaleScratch.x,
+      y: remoteSharedEntityTargetScaleScratch.y,
+      z: remoteSharedEntityTargetScaleScratch.z,
     },
     presentation: characterPresentation
       ? {
@@ -13458,13 +13477,11 @@ function resolveLocalNodeSyncStates(): MultiuserNodeSyncState[] {
           z: protagonistPoseQuaternion.z,
           w: protagonistPoseQuaternion.w,
         },
-        scale: entry.props.syncScale
-          ? {
-            x: worldScale.x,
-            y: worldScale.y,
-            z: worldScale.z,
-          }
-          : null,
+        scale: {
+          x: worldScale.x,
+          y: worldScale.y,
+          z: worldScale.z,
+        },
       },
       revision: entry.localRevision,
       updatedAt: entry.updatedAt,

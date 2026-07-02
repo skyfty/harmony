@@ -253,6 +253,7 @@ function cloneMultiuserPeerState(state: MultiuserPeerState): MultiuserPeerState 
     ...state,
     position: { ...state.position },
     quaternion: { ...state.quaternion },
+    scale:  { ...state.scale },
     presentation: cloneMultiuserPeerPresentation(state.presentation ?? null),
   }
 }
@@ -275,7 +276,7 @@ function cloneMultiuserNodeSyncState(state: MultiuserNodeSyncState): MultiuserNo
     transform: {
       position: { ...state.transform.position },
       quaternion: { ...state.transform.quaternion },
-      scale: state.transform.scale ? { ...state.transform.scale } : null,
+      scale: { ...state.transform.scale },
     },
     lease: state.lease ? { ...state.lease } : null,
     presentation: cloneMultiuserNodeSyncPresentation(state.presentation ?? null),
@@ -296,6 +297,7 @@ function getMultiuserStateSignature(state: MultiuserPeerState): string {
     state.quaternion.y,
     state.quaternion.z,
     state.quaternion.w,
+    getPresentationVectorSignature(state.scale),
     normalizeOptionalString(state.action) ?? '',
     getMultiuserPresentationSignature(state.presentation ?? null),
   ].join('|')
@@ -318,6 +320,9 @@ function isMultiuserStateMeaningfullyChanged(prev: MultiuserPeerState | null, ne
     return true
   }
   if (normalizeOptionalString(prev.subjectAssetUrl) !== normalizeOptionalString(next.subjectAssetUrl)) {
+    return true
+  }
+  if (getPresentationVectorSignature(prev.scale ?? null) !== getPresentationVectorSignature(next.scale ?? null)) {
     return true
   }
   if (normalizeOptionalString(prev.action) !== normalizeOptionalString(next.action)) {
@@ -351,11 +356,6 @@ function computeIdleSyncInterval(baseInterval: number): number {
   return Math.max(DEFAULT_IDLE_SYNC_INTERVAL, baseInterval)
 }
 
-function getScaleSignature(state: MultiuserNodeSyncState): string {
-  const scale = state.transform.scale
-  return scale ? `${scale.x}|${scale.y}|${scale.z}` : ''
-}
-
 function getMultiuserEntityStateSignature(state: MultiuserNodeSyncState): string {
   return [
     state.entityId,
@@ -369,7 +369,9 @@ function getMultiuserEntityStateSignature(state: MultiuserNodeSyncState): string
     state.transform.quaternion.y,
     state.transform.quaternion.z,
     state.transform.quaternion.w,
-    getScaleSignature(state),
+    state.transform.scale.x,
+    state.transform.scale.y,
+    state.transform.scale.z,
     state.revision,
     state.updatedAt,
     state.lease?.mode ?? '',

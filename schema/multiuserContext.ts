@@ -69,6 +69,7 @@ export interface MultiuserPeerState {
   subjectAssetUrl?: string | null
   position: MultiuserVector3Like
   quaternion: MultiuserQuaternionLike
+  scale: MultiuserVector3Like
   action?: string | null
   presentation?: MultiuserPeerPresentationState | null
 }
@@ -82,7 +83,7 @@ export interface MultiuserPeerSnapshot {
 export interface MultiuserSharedEntityTransform {
   position: MultiuserVector3Like
   quaternion: MultiuserQuaternionLike
-  scale?: MultiuserVector3Like | null
+  scale: MultiuserVector3Like
 }
 
 export interface MultiuserSharedEntityLease {
