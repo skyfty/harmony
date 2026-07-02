@@ -427,7 +427,7 @@ function normalizePeerState(value: unknown): MultiuserPeerState | null {
     return null
   }
   const candidate = value as Partial<MultiuserPeerState>
-  if ((candidate.subjectType !== 'vehicle' && candidate.subjectType !== 'character') || !isVector3(candidate.position) || !isQuaternion(candidate.quaternion)) {
+  if ((candidate.subjectType !== 'vehicle' && candidate.subjectType !== 'character') || !isVector3(candidate.position) || !isVector3(candidate.scale) || !isQuaternion(candidate.quaternion)) {
     return null
   }
   const presentation = normalizePeerPresentation(candidate.presentation)
@@ -586,7 +586,7 @@ function normalizeSharedEntityState(value: unknown): MultiuserSharedEntityState 
     return null
   }
   const transformCandidate = candidate.transform as Partial<MultiuserSharedEntityTransform> | undefined
-  if (!transformCandidate || !isVector3(transformCandidate.position) || !isQuaternion(transformCandidate.quaternion)) {
+  if (!transformCandidate || !isVector3(transformCandidate.position) || !isVector3(transformCandidate.scale) || !isQuaternion(transformCandidate.quaternion)) {
     return null
   }
 
@@ -633,7 +633,7 @@ function toSharedEntityState(entity: StoredSharedEntity): MultiuserSharedEntityS
     transform: {
       position: { ...entity.transform.position },
       quaternion: { ...entity.transform.quaternion },
-      scale: entity.transform.scale ? { ...entity.transform.scale } : null,
+      scale:  { ...entity.transform.scale },
     },
     revision: entity.revision,
     updatedAt: entity.updatedAt,
@@ -1058,7 +1058,7 @@ export class MultiuserService {
       transform: {
         position: { ...entity.transform.position },
         quaternion: { ...entity.transform.quaternion },
-        scale: entity.transform.scale ? { ...entity.transform.scale } : null,
+        scale: { ...entity.transform.scale },
       },
       revision: Math.max((existing?.revision ?? 0) + 1, entity.revision || 0),
       updatedAt: new Date(now).toISOString(),
