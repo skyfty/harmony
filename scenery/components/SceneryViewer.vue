@@ -893,6 +893,7 @@ import {
   resolveSignboardAnchorWorldPosition,
   smoothSignboardPlacement,
 } from '@harmony/schema/overlay';
+import { createCanvas, type HarmonyCanvas, type HarmonyCanvas2DContext } from '@harmony/schema/canvas';
 import { createTerrainScatterLodRuntime } from '@harmony/schema/scatter';
 import type { InstancedLodBoundsSnapshot } from '@harmony/schema/core';
 import {
@@ -2474,9 +2475,11 @@ type RemoteMultiuserAnimationController = {
 type RemoteMultiuserPeerEntry = RemoteMultiuserPeerVisibilityState & {
   root: THREE.Object3D | null;
   signature: string;
+  displayName: string;
   targetState: MultiuserPeerState;
   displayState: MultiuserPeerState | null;
   ownsResources: boolean;
+  nicknameRuntime: RemoteMultiuserNicknameRuntimeEntry | null;
   wheelNodeIds: string[];
   wheelBindings: RemoteMultiuserWheelBinding[];
   animationControllers: Map<string, RemoteMultiuserAnimationController>;
@@ -2504,6 +2507,16 @@ type RemoteMultiuserCharacterState = {
   nodeId: string;
   action: string | null;
   animation: MultiuserCharacterAnimationPresentation | null;
+};
+type RemoteMultiuserNicknameRuntimeEntry = {
+  sprite: THREE.Sprite;
+  material: THREE.SpriteMaterial;
+  texture: THREE.CanvasTexture;
+  canvas: HarmonyCanvas;
+  context: HarmonyCanvas2DContext;
+  displayName: string;
+  worldWidth: number;
+  worldHeight: number;
 };
 const remoteMultiuserPeerEntries = new Map<string, RemoteMultiuserPeerEntry>();
 const remoteMultiuserPeerLoadTokens = new Map<string, number>();
@@ -2537,6 +2550,8 @@ const remoteMultiuserWheelCurrentQuaternionScratch = new THREE.Quaternion();
 const remoteMultiuserWheelCurrentScaleScratch = new THREE.Vector3();
 const remoteSharedEntityDisplayScaleScratch = new THREE.Vector3();
 const remoteSharedEntityTargetScaleScratch = new THREE.Vector3();
+const remoteMultiuserNicknameBoundsScratch = new THREE.Box3();
+const remoteMultiuserNicknameCenterScratch = new THREE.Vector3();
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
 // On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
 const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
@@ -2545,6 +2560,22 @@ const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 4 : 5;
 const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02;
 const CAMERA_DEPENDENT_POSITION_EPSILON_SQ = CAMERA_DEPENDENT_POSITION_EPSILON * CAMERA_DEPENDENT_POSITION_EPSILON;
 const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12;
+const REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR = 2;
+const REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X = 16;
+const REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y = 8;
+const REMOTE_MULTIUSER_NICKNAME_CARD_GAP = 10;
+const REMOTE_MULTIUSER_NICKNAME_CARD_MIN_WIDTH = 128;
+const REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH = 320;
+const REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MAX = 24;
+const REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN = 14;
+const REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT = 0.28;
+const REMOTE_MULTIUSER_NICKNAME_WORLD_Y_OFFSET = 0.28;
+const REMOTE_MULTIUSER_NICKNAME_DEFAULT_LOCAL_Y = 1.15;
+const REMOTE_MULTIUSER_NICKNAME_BG_TOP = 'rgba(10, 18, 34, 0.78)';
+const REMOTE_MULTIUSER_NICKNAME_BG_BOTTOM = 'rgba(10, 18, 34, 0.52)';
+const REMOTE_MULTIUSER_NICKNAME_BORDER = 'rgba(255, 255, 255, 0.16)';
+const REMOTE_MULTIUSER_NICKNAME_TEXT = '#f7fbff';
+const REMOTE_MULTIUSER_NICKNAME_GLOW = 'rgba(119, 184, 255, 0.08)';
 type PhysicsInterpolationState = {
   prevPos: THREE.Vector3;
   prevQuat: THREE.Quaternion;
@@ -11716,9 +11747,11 @@ function createRemoteMultiuserPeerPlaceholderEntry(peerState: MultiuserPeerState
     ...createRemoteMultiuserPeerVisibilityState(),
     root: null,
     signature: getRemoteMultiuserPeerSignature(peerState),
+    displayName: '',
     targetState: cloneRemoteMultiuserPeerState(peerState),
     displayState: null,
     ownsResources: true,
+    nicknameRuntime: null,
     wheelNodeIds: [],
     wheelBindings: [],
     animationControllers: new Map(),
@@ -11741,6 +11774,181 @@ function createRemoteMultiuserPlaceholder(subjectType: 'vehicle' | 'character'):
 
 function isRemoteMultiuserPlaceholderObject(object: THREE.Object3D | null | undefined): boolean {
   return Boolean(object?.userData?.remoteMultiuserPlaceholder);
+}
+
+function normalizeRemoteMultiuserDisplayName(displayName: string | null | undefined, fallbackUserId: string): string {
+  const trimmed = typeof displayName === 'string' ? displayName.trim() : '';
+  return trimmed.length ? trimmed : fallbackUserId;
+}
+
+function resolveRemoteMultiuserNicknameWorldWidth(fontSize: number, textWidth: number): number {
+  const textAreaWidth = Math.min(Math.max(textWidth + 8, 84), REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH - REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2);
+  const cardWidth = Math.min(
+    REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH,
+    Math.max(REMOTE_MULTIUSER_NICKNAME_CARD_MIN_WIDTH, Math.ceil(textAreaWidth + REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2)),
+  );
+  const cardHeight = Math.ceil(REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y * 2 + fontSize + 8);
+  return Math.max(0.54, (cardWidth / cardHeight) * REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT);
+}
+
+function drawRemoteMultiuserNicknameTexture(entry: RemoteMultiuserNicknameRuntimeEntry): void {
+  const context = entry.context;
+  const label = entry.displayName || '';
+
+  context.resetTransform?.();
+  context.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
+  context.scale(REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR, REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR);
+
+  const maxTextWidth = REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH - (REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2) - REMOTE_MULTIUSER_NICKNAME_CARD_GAP;
+  let fontSize = REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MAX;
+  while (fontSize > REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN) {
+    context.font = `700 ${fontSize}px sans-serif`;
+    if (context.measureText(label).width <= maxTextWidth) {
+      break;
+    }
+    fontSize -= 1;
+  }
+  if (fontSize < REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN) {
+    fontSize = REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN;
+  }
+  context.font = `700 ${fontSize}px sans-serif`;
+  const labelWidth = context.measureText(label).width;
+  const cardWidth = Math.min(
+    REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH,
+    Math.max(
+      REMOTE_MULTIUSER_NICKNAME_CARD_MIN_WIDTH,
+      Math.ceil(labelWidth + (REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2) + REMOTE_MULTIUSER_NICKNAME_CARD_GAP),
+    ),
+  );
+  const cardHeight = Math.ceil(REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y * 2 + fontSize + 8);
+
+  const canvasWidth = cardWidth * REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR;
+  const canvasHeight = cardHeight * REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR;
+  if (entry.canvas.width !== canvasWidth) {
+    entry.canvas.width = canvasWidth;
+  }
+  if (entry.canvas.height !== canvasHeight) {
+    entry.canvas.height = canvasHeight;
+  }
+
+  context.resetTransform?.();
+  context.scale(REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR, REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR);
+  const radius = Math.min(16, cardHeight / 2);
+  context.beginPath();
+  context.moveTo(radius, 0);
+  context.arcTo(cardWidth, 0, cardWidth, cardHeight, radius);
+  context.arcTo(cardWidth, cardHeight, 0, cardHeight, radius);
+  context.arcTo(0, cardHeight, 0, 0, radius);
+  context.arcTo(0, 0, cardWidth, 0, radius);
+  context.closePath();
+  const background = context.createLinearGradient(0, 0, 0, cardHeight);
+  background.addColorStop(0, REMOTE_MULTIUSER_NICKNAME_BG_TOP);
+  background.addColorStop(1, REMOTE_MULTIUSER_NICKNAME_BG_BOTTOM);
+  context.fillStyle = background;
+  context.fill();
+  context.lineWidth = 1.2;
+  context.strokeStyle = REMOTE_MULTIUSER_NICKNAME_BORDER;
+  context.stroke();
+  const glow = context.createRadialGradient(cardWidth * 0.25, cardHeight * 0.25, 0, cardWidth * 0.25, cardHeight * 0.25, cardWidth * 0.8);
+  glow.addColorStop(0, 'rgba(255, 255, 255, 0.12)');
+  glow.addColorStop(0.45, REMOTE_MULTIUSER_NICKNAME_GLOW);
+  glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  context.fillStyle = glow;
+  context.fillRect(0, 0, cardWidth, cardHeight);
+
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillStyle = REMOTE_MULTIUSER_NICKNAME_TEXT;
+  context.shadowColor = 'rgba(0, 0, 0, 0.28)';
+  context.shadowBlur = 4;
+  context.shadowOffsetY = 1;
+  context.font = `700 ${fontSize}px sans-serif`;
+  context.fillText(label || ' ', cardWidth / 2, cardHeight / 2 + 0.5);
+
+  entry.texture.needsUpdate = true;
+  entry.worldHeight = REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT;
+  entry.worldWidth = resolveRemoteMultiuserNicknameWorldWidth(fontSize, labelWidth);
+}
+
+function createRemoteMultiuserNicknameRuntime(displayName: string): RemoteMultiuserNicknameRuntimeEntry {
+  const canvas = createCanvas(REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH * REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR, 64 * REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR);
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Unable to acquire a 2D context for remote multiuser nicknames');
+  }
+
+  const texture = new THREE.CanvasTexture(canvas as CanvasImageSource);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+
+  const material = new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 1,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.center.set(0.5, 0);
+  sprite.name = 'RemotePeerNickname';
+  sprite.renderOrder = 6000;
+  sprite.visible = true;
+  const entry: RemoteMultiuserNicknameRuntimeEntry = {
+    sprite,
+    material,
+    texture,
+    canvas,
+    context,
+    displayName,
+    worldWidth: 1,
+    worldHeight: REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT,
+  };
+  drawRemoteMultiuserNicknameTexture(entry);
+  sprite.scale.set(entry.worldWidth, entry.worldHeight, 1);
+  return entry;
+}
+
+function disposeRemoteMultiuserNicknameRuntime(entry: RemoteMultiuserPeerEntry): void {
+  const runtime = entry.nicknameRuntime;
+  if (!runtime) {
+    return;
+  }
+  runtime.sprite.parent?.remove(runtime.sprite);
+  runtime.texture.dispose();
+  runtime.material.dispose();
+  entry.nicknameRuntime = null;
+}
+
+function syncRemoteMultiuserNicknameRuntime(entry: RemoteMultiuserPeerEntry): void {
+  if (!entry.root) {
+    return;
+  }
+  const runtime = entry.nicknameRuntime ?? (entry.nicknameRuntime = createRemoteMultiuserNicknameRuntime(entry.displayName));
+  if (runtime.displayName !== entry.displayName) {
+    runtime.displayName = entry.displayName;
+    drawRemoteMultiuserNicknameTexture(runtime);
+    runtime.sprite.scale.set(runtime.worldWidth, runtime.worldHeight, 1);
+  }
+  if (runtime.sprite.parent !== entry.root) {
+    runtime.sprite.parent?.remove(runtime.sprite);
+    entry.root.updateWorldMatrix(true, false);
+    remoteMultiuserNicknameBoundsScratch.setFromObject(entry.root);
+    if (remoteMultiuserNicknameBoundsScratch.isEmpty()) {
+      runtime.sprite.position.set(0, REMOTE_MULTIUSER_NICKNAME_DEFAULT_LOCAL_Y, 0);
+    } else {
+      remoteMultiuserNicknameBoundsScratch.getCenter(remoteMultiuserNicknameCenterScratch);
+      remoteMultiuserNicknameCenterScratch.y = remoteMultiuserNicknameBoundsScratch.max.y + REMOTE_MULTIUSER_NICKNAME_WORLD_Y_OFFSET;
+      entry.root.worldToLocal(remoteMultiuserNicknameCenterScratch);
+      runtime.sprite.position.copy(remoteMultiuserNicknameCenterScratch);
+    }
+    entry.root.add(runtime.sprite);
+  }
+  runtime.sprite.visible = true;
 }
 
 function cloneRemoteMultiuserPeerState(state: MultiuserPeerState): MultiuserPeerState {
@@ -11840,32 +12048,6 @@ function cloneRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresent
     vehicle,
     character,
   };
-}
-
-function formatRemoteMultiuserVehiclePresentation(presentation: MultiuserVehiclePresentation | null | undefined): string {
-  if (!presentation) {
-    return 'vehicle=null';
-  }
-  const wheels = Array.isArray(presentation.wheels) ? presentation.wheels.length : 0;
-  const linearVelocity = presentation.linearVelocity
-    ? `(${presentation.linearVelocity.x.toFixed(2)},${presentation.linearVelocity.y.toFixed(2)},${presentation.linearVelocity.z.toFixed(2)})`
-    : 'null';
-  return `vehicle{speedMps=${presentation.speedMps ?? 'null'},linearVelocity=${linearVelocity},wheels=${wheels}}`;
-}
-
-function formatRemoteMultiuserCharacterPresentation(presentation: MultiuserCharacterPresentation | null | undefined): string {
-  if (!presentation || !presentation.animation) {
-    return 'character=null';
-  }
-  const animation = presentation.animation;
-  return `character{clipName=${animation.clipName ?? 'null'},time=${Number.isFinite(animation.time) ? animation.time.toFixed(3) : 'null'},duration=${Number.isFinite(animation.duration) ? animation.duration.toFixed(3) : 'null'},loop=${animation.loop},timeScale=${Number.isFinite(animation.timeScale) ? animation.timeScale.toFixed(3) : 'null'},normalizedTime=${animation.normalizedTime ?? 'null'}}`;
-}
-
-function formatRemoteMultiuserPeerPresentation(presentation: MultiuserPeerPresentationState | null | undefined): string {
-  if (!presentation) {
-    return 'presentation=null';
-  }
-  return `presentation{${formatRemoteMultiuserVehiclePresentation(presentation.vehicle ?? null)};${formatRemoteMultiuserCharacterPresentation(presentation.character ?? null)}}`;
 }
 
 function isFiniteVector3Like(value: MultiuserPresentationVector3Like | null | undefined): value is MultiuserPresentationVector3Like {
@@ -12642,6 +12824,7 @@ function applyRemoteMultiuserPeerRuntime(
 
 function disposeRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry): void {
   if (entry.root) {
+    runtimeDetachRemoteMultiuserNickname(entry);
     entry.root.parent?.remove(entry.root);
     releaseRemoteMultiuserPeerRuntime(entry);
     disposeRemoteMultiuserObject(entry.root, entry.ownsResources);
@@ -12650,6 +12833,14 @@ function disposeRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry): void
   entry.visible = false;
   entry.displayState = null;
   entry.rootSignature = '';
+}
+
+function runtimeDetachRemoteMultiuserNickname(entry: RemoteMultiuserPeerEntry): void {
+  const runtime = entry.nicknameRuntime;
+  if (!runtime) {
+    return;
+  }
+  runtime.sprite.parent?.remove(runtime.sprite);
 }
 
 function attachRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry, frameIndex: number): void {
@@ -12671,6 +12862,7 @@ function attachRemoteMultiuserPeerRender(entry: RemoteMultiuserPeerEntry, frameI
   entry.displayState = displayState;
   applyRemoteMultiuserPeerTransform(entry.root, displayState);
   applyRemoteMultiuserPeerRuntime(entry, displayState, 1, 0);
+  syncRemoteMultiuserNicknameRuntime(entry);
   markRemoteMultiuserPeerVisible(entry, frameIndex);
   markInstancedCullingDirty();
 }
@@ -12718,6 +12910,7 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
   entry.wheelBindings = [];
   entry.animationControllers = new Map();
   entry.displayState = cloneRemoteMultiuserPeerState(entry.displayState ?? entry.targetState);
+  syncRemoteMultiuserNicknameRuntime(entry);
   markRemoteMultiuserPeerVisible(entry, frameIndex);
   markInstancedCullingDirty();
 
@@ -12733,6 +12926,7 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
     }
     const currentRoot = latestEntry.root;
     if (currentRoot) {
+      runtimeDetachRemoteMultiuserNickname(latestEntry);
       currentRoot.parent?.remove(currentRoot);
       releaseRemoteMultiuserPeerRuntime(latestEntry);
       disposeRemoteMultiuserObject(currentRoot, latestEntry.ownsResources);
@@ -12748,6 +12942,7 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
     };
     attachRemoteMultiuserPeerRuntime(runtimeEntry);
     applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
+    syncRemoteMultiuserNicknameRuntime(runtimeEntry);
     markRemoteMultiuserPeerVisible(runtimeEntry, frameIndex);
     remoteMultiuserPeerEntries.set(userId, runtimeEntry);
     markInstancedCullingDirty();
@@ -12844,6 +13039,7 @@ function removeRemoteMultiuserPeer(userId: string): void {
     return;
   }
   disposeRemoteMultiuserPeerRender(entry);
+  disposeRemoteMultiuserNicknameRuntime(entry);
   remoteMultiuserPeerEntries.delete(userId);
   remoteMultiuserPeerLoadTokens.delete(userId);
   syncRemoteMultiuserPeerVisibility();
@@ -12853,6 +13049,7 @@ function removeRemoteMultiuserPeer(userId: string): void {
 function clearRemoteMultiuserPeers(): void {
   remoteMultiuserPeerEntries.forEach((entry) => {
     disposeRemoteMultiuserPeerRender(entry);
+    disposeRemoteMultiuserNicknameRuntime(entry);
   });
   remoteMultiuserPeerEntries.clear();
   remoteMultiuserPeerLoadTokens.clear();
@@ -12872,7 +13069,7 @@ function cloneSharedEntityState(state: MultiuserNodeSyncState): MultiuserNodeSyn
     transform: {
       position: { ...state.transform.position },
       quaternion: { ...state.transform.quaternion },
-      scale: state.transform.scale ? { ...state.transform.scale } : null,
+      scale: { ...state.transform.scale },
     },
     revision: state.revision,
     updatedAt: state.updatedAt,
@@ -13271,20 +13468,25 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     return;
   }
   syncRemoteMultiuserCharacterState(peer);
+  const displayName = normalizeRemoteMultiuserDisplayName(peer.displayName, peer.userId);
   const signature = getRemoteMultiuserPeerSignature(peer.state);
   const existing = remoteMultiuserPeerEntries.get(peer.userId) ?? null;
   if (existing && existing.signature === signature) {
     existing.targetState = cloneRemoteMultiuserPeerState(peer.state);
+    existing.displayName = displayName;
     if (!existing.displayState) {
       existing.displayState = cloneRemoteMultiuserPeerState(peer.state);
     }
+    syncRemoteMultiuserNicknameRuntime(existing);
     syncRemoteMultiuserPeerVisibility();
     return;
   }
   const nextEntry = existing ?? createRemoteMultiuserPeerPlaceholderEntry(peer.state);
   nextEntry.signature = signature;
+  nextEntry.displayName = displayName;
   nextEntry.targetState = cloneRemoteMultiuserPeerState(peer.state);
   nextEntry.displayState = nextEntry.displayState ?? cloneRemoteMultiuserPeerState(peer.state);
+  syncRemoteMultiuserNicknameRuntime(nextEntry);
   remoteMultiuserPeerEntries.set(peer.userId, nextEntry);
   syncRemoteMultiuserPeerVisibility();
 }
