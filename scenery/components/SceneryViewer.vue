@@ -11721,6 +11721,11 @@ function cloneRemoteMultiuserPeerState(state: MultiuserPeerState): MultiuserPeer
       z: state.quaternion.z,
       w: state.quaternion.w,
     },
+    scale: {
+      x: state.scale.x,
+      y: state.scale.y,
+      z: state.scale.z,
+    },
     presentation: cloneRemoteMultiuserPeerPresentation(state.presentation ?? null),
   };
 }
