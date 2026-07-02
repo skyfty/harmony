@@ -2735,6 +2735,8 @@ const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
 const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.38;
+const CHARACTER_TURN_CATCH_SPEED = 5;
+const CHARACTER_TURN_RETURN_SPEED = 9;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -3229,6 +3231,7 @@ const characterAuthorityInput = reactive({
   crouch: false,
   interact: false,
 });
+const characterAuthorityTurnTarget = ref(0);
 const characterKeyState = reactive({
   forward: false,
   backward: false,
@@ -14365,7 +14368,7 @@ function updateCharacterAuthorityInputFromKeys(): void {
   const joystickInput = resolveJoystickCharacterInput();
   characterAuthorityInput.moveX = clampAxisScalar(keyMoveX);
   characterAuthorityInput.moveZ = clampAxisScalar(keyMoveZ + joystickInput.moveZ);
-  characterAuthorityInput.turn = clampAxisScalar(joystickInput.turn);
+  characterAuthorityTurnTarget.value = clampAxisScalar(joystickInput.turn);
   characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
@@ -14380,6 +14383,16 @@ function updateCharacterAuthorityInputFromKeys(): void {
   }
   characterInputJumpLatch = false;
   characterAuthorityInput.jump = false;
+}
+
+function updateCharacterAuthorityTurnRelaxation(delta: number): void {
+  if (!Number.isFinite(delta) || delta <= 0) {
+    return;
+  }
+  const target = characterAuthorityTurnTarget.value;
+  const speed = target === 0 ? CHARACTER_TURN_RETURN_SPEED : CHARACTER_TURN_CATCH_SPEED;
+  const nextTurn = approachAxisValue(characterAuthorityInput.turn, target, speed, delta);
+  characterAuthorityInput.turn = clampAxisScalar(nextTurn);
 }
 
 function clearCharacterActionJumpReleaseTimer(): void {
@@ -14544,6 +14557,7 @@ function resetCharacterControlInputs(): void {
   characterAuthorityInput.moveX = 0;
   characterAuthorityInput.moveZ = 0;
   characterAuthorityInput.turn = 0;
+  characterAuthorityTurnTarget.value = 0;
   characterAuthorityInput.jump = false;
   characterAuthorityInput.sprint = false;
   characterAuthorityInput.crouch = false;
@@ -18919,6 +18933,7 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           updateDriveInputRelaxation(deltaSeconds);
+          updateCharacterAuthorityTurnRelaxation(deltaSeconds);
         }
 
         // Camera tween has priority over user controls.
