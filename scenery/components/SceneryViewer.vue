@@ -12521,9 +12521,7 @@ function updateRemoteMultiuserPeerTransform(entry: RemoteMultiuserPeerEntry, del
   const alpha = 1 - Math.exp(-Math.max(0, deltaSeconds) / smoothingSeconds);
   const targetState = entry.targetState;
   const displayState = entry.displayState;
-  if (!targetState.presentation) {
-    console.debug(`[Multiuser] remote peer transform missing presentation: subjectType=${targetState.subjectType}, nodeId=${targetState.subjectNodeId ?? 'null'}, action=${targetState.action ?? 'null'}, ${formatRemoteMultiuserPeerPresentation(targetState.presentation)}`);
-  }
+
   if (!displayState) {
     entry.displayState = cloneRemoteMultiuserPeerState(targetState);
     if (entry.root) {
@@ -13224,7 +13222,6 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   if (localIdentity && peer.userId === localIdentity.userId) {
     return;
   }
-  console.debug(`[Multiuser] remote peer snapshot received: userId=${peer.userId}, subjectType=${peer.state?.subjectType ?? 'null'}, nodeId=${peer.state?.subjectNodeId ?? 'null'}, action=${peer.state?.action ?? 'null'}, ${formatRemoteMultiuserPeerPresentation(peer.state?.presentation ?? null)}`);
   if (!peer.state) {
     clearRemoteMultiuserCharacterStateForUser(peer.userId);
     removeRemoteMultiuserPeer(peer.userId);
@@ -13253,9 +13250,6 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
   const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
   if (!vehicleInstance || !Array.isArray(vehicleInstance.wheelBindings) || !vehicleInstance.wheelBindings.length) {
     const cachedPresentation = localMultiuserVehiclePresentationByNodeId.get(nodeId) ?? null;
-    if (!cachedPresentation) {
-      console.debug(`[Multiuser] local vehicle presentation missing: nodeId=${nodeId}, vehicleInstance=${vehicleInstance ? 'yes' : 'no'}, wheelBindings=${Array.isArray(vehicleInstance?.wheelBindings) ? vehicleInstance.wheelBindings.length : 'n/a'}, cached=${formatRemoteMultiuserVehiclePresentation(cachedPresentation)}`);
-    }
     return cachedPresentation;
   }
   const chassisVelocity = vehicleInstance.vehicle?.chassisBody?.velocity ?? null;
@@ -13302,7 +13296,6 @@ function resolveLocalMultiuserVehiclePresentation(nodeId: string): MultiuserVehi
   });
   if (!wheels.length) {
     const cachedPresentation = localMultiuserVehiclePresentationByNodeId.get(nodeId) ?? null;
-    console.debug(`[Multiuser] local vehicle presentation empty wheels: nodeId=${nodeId}, cached=${formatRemoteMultiuserVehiclePresentation(cachedPresentation)}`);
     return cachedPresentation;
   }
   const presentation = {
@@ -13387,10 +13380,10 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   }
 
   const protagonistObject = findDefaultControlledCharacterObject();
-  const resolvedNodeId = resolveDefaultControlledCharacterNodeId();
-  if (!protagonistObject || !resolvedNodeId) {
+  if (!protagonistObject) {
     return null;
   }
+  const resolvedNodeId = protagonistObject.userData.nodeId;
   const node = resolveNodeById(resolvedNodeId);
   protagonistObject.getWorldPosition(protagonistPosePosition);
   protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
