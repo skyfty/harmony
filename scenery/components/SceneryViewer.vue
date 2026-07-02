@@ -2735,10 +2735,6 @@ const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
 const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.38;
-const CHARACTER_INPUT_MOVE_CATCH_SPEED = 12;
-const CHARACTER_INPUT_MOVE_RETURN_SPEED = 16;
-const CHARACTER_INPUT_TURN_CATCH_SPEED = 7;
-const CHARACTER_INPUT_TURN_RETURN_SPEED = 11;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -3225,15 +3221,6 @@ type CharacterActionButtonEntry = {
 };
 
 const characterAuthorityInput = reactive({
-  moveX: 0,
-  moveZ: 0,
-  turn: 0,
-  jump: false,
-  sprint: false,
-  crouch: false,
-  interact: false,
-});
-const characterAuthorityTargetInput = reactive({
   moveX: 0,
   moveZ: 0,
   turn: 0,
@@ -14376,28 +14363,22 @@ function updateCharacterAuthorityInputFromKeys(): void {
   const keyMoveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
   const keyMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
   const joystickInput = resolveJoystickCharacterInput();
-  characterAuthorityTargetInput.moveX = clampAxisScalar(keyMoveX);
-  characterAuthorityTargetInput.moveZ = clampAxisScalar(keyMoveZ + joystickInput.moveZ);
-  characterAuthorityTargetInput.turn = clampAxisScalar(joystickInput.turn);
-  characterAuthorityTargetInput.sprint = characterKeyState.sprint;
-  characterAuthorityTargetInput.crouch = characterKeyState.crouch;
-  characterAuthorityTargetInput.interact = characterKeyState.interact;
-  characterAuthorityInput.sprint = characterAuthorityTargetInput.sprint;
-  characterAuthorityInput.crouch = characterAuthorityTargetInput.crouch;
-  characterAuthorityInput.interact = characterAuthorityTargetInput.interact;
+  characterAuthorityInput.moveX = clampAxisScalar(keyMoveX);
+  characterAuthorityInput.moveZ = clampAxisScalar(keyMoveZ + joystickInput.moveZ);
+  characterAuthorityInput.turn = clampAxisScalar(joystickInput.turn);
+  characterAuthorityInput.sprint = characterKeyState.sprint;
+  characterAuthorityInput.crouch = characterKeyState.crouch;
+  characterAuthorityInput.interact = characterKeyState.interact;
   if (characterKeyState.jump) {
     if (!characterInputJumpLatch) {
-      characterAuthorityTargetInput.jump = true;
       characterAuthorityInput.jump = true;
       characterInputJumpLatch = true;
       return;
     }
-    characterAuthorityTargetInput.jump = false;
     characterAuthorityInput.jump = false;
     return;
   }
   characterInputJumpLatch = false;
-  characterAuthorityTargetInput.jump = false;
   characterAuthorityInput.jump = false;
 }
 
@@ -14506,7 +14487,6 @@ function resetCharacterActionButtonState(): void {
   applyCharacterHoldActionState('crouch', false);
   applyCharacterHoldActionState('interact', false);
   characterInputJumpLatch = false;
-  characterAuthorityTargetInput.jump = false;
   characterAuthorityInput.jump = false;
   releaseActiveCharacterActionAnimation();
 }
@@ -14561,13 +14541,6 @@ function setCharacterKeyState(key: string, pressed: boolean): void {
 function resetCharacterControlInputs(): void {
   clearCharacterActionJumpReleaseTimer();
   releaseActiveCharacterActionAnimation();
-  characterAuthorityTargetInput.moveX = 0;
-  characterAuthorityTargetInput.moveZ = 0;
-  characterAuthorityTargetInput.turn = 0;
-  characterAuthorityTargetInput.jump = false;
-  characterAuthorityTargetInput.sprint = false;
-  characterAuthorityTargetInput.crouch = false;
-  characterAuthorityTargetInput.interact = false;
   characterAuthorityInput.moveX = 0;
   characterAuthorityInput.moveZ = 0;
   characterAuthorityInput.turn = 0;
@@ -14656,41 +14629,6 @@ function updateDriveInputRelaxation(delta: number): void {
     steeringKeyboardValue.value = clampAxisScalar(nextKeyboard);
     recomputeVehicleDriveInputs();
   }
-}
-
-function updateCharacterAuthorityInputRelaxation(delta: number): void {
-  if (!Number.isFinite(delta) || delta <= 0) {
-    return;
-  }
-  const moveXTarget = characterAuthorityTargetInput.moveX;
-  const moveZTarget = characterAuthorityTargetInput.moveZ;
-  const turnTarget = characterAuthorityTargetInput.turn;
-  const nextMoveX = approachAxisValue(
-    characterAuthorityInput.moveX,
-    moveXTarget,
-    moveXTarget === 0 ? CHARACTER_INPUT_MOVE_RETURN_SPEED : CHARACTER_INPUT_MOVE_CATCH_SPEED,
-    delta,
-  );
-  const nextMoveZ = approachAxisValue(
-    characterAuthorityInput.moveZ,
-    moveZTarget,
-    moveZTarget === 0 ? CHARACTER_INPUT_MOVE_RETURN_SPEED : CHARACTER_INPUT_MOVE_CATCH_SPEED,
-    delta,
-  );
-  const nextTurn = approachAxisValue(
-    characterAuthorityInput.turn,
-    turnTarget,
-    turnTarget === 0 ? CHARACTER_INPUT_TURN_RETURN_SPEED : CHARACTER_INPUT_TURN_CATCH_SPEED,
-    delta,
-  );
-
-  characterAuthorityInput.moveX = clampAxisScalar(nextMoveX);
-  characterAuthorityInput.moveZ = clampAxisScalar(nextMoveZ);
-  characterAuthorityInput.turn = clampAxisScalar(nextTurn);
-  characterAuthorityInput.jump = characterAuthorityTargetInput.jump;
-  characterAuthorityInput.sprint = characterAuthorityTargetInput.sprint;
-  characterAuthorityInput.crouch = characterAuthorityTargetInput.crouch;
-  characterAuthorityInput.interact = characterAuthorityTargetInput.interact;
 }
 
 function extractTouchById(event: TouchEvent, identifier: number): Touch | null {
@@ -18981,7 +18919,6 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           updateDriveInputRelaxation(deltaSeconds);
-          updateCharacterAuthorityInputRelaxation(deltaSeconds);
         }
 
         // Camera tween has priority over user controls.
