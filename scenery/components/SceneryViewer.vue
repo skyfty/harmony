@@ -12364,14 +12364,9 @@ function applyRemoteMultiuserAnimationControllerState(
   if (controller.activeAction) {
     controller.activeAction.timeScale = Number.isFinite(animation.timeScale) ? animation.timeScale : 1;
     controller.activeTimeScale = controller.activeAction.timeScale;
-    if (Number.isFinite(animation.time)) {
-      const clipDuration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : (Number.isFinite(clip.duration) ? clip.duration : 0);
-      const nextTime = Math.max(0, animation.time);
-      controller.activeAction.time = clipDuration > 0 && animation.loop ? THREE.MathUtils.euclideanModulo(nextTime, clipDuration) : nextTime;
-      controller.activeAction.clampWhenFinished = !animation.loop;
-      controller.activeLoop = animation.loop;
-      controller.activeAction.play();
-    }
+    controller.activeAction.clampWhenFinished = !animation.loop;
+    controller.activeLoop = animation.loop;
+    controller.activeAction.play();
   }
   mixer.update(deltaSeconds);
 }
@@ -13193,11 +13188,6 @@ function applyRemoteNodeCharacterAnimationPresentation(
   }
   if (controller.activeAction) {
     controller.activeAction.timeScale = Number.isFinite(animation.timeScale) ? animation.timeScale : 1;
-    const duration = Number.isFinite(animation.duration) && animation.duration > 0 ? animation.duration : clip.duration;
-    const nextTime = Number.isFinite(animation.time) ? Math.max(0, animation.time) : 0;
-    controller.activeAction.time = duration > 0 && animation.loop
-      ? THREE.MathUtils.euclideanModulo(nextTime, duration)
-      : nextTime;
     controller.activeAction.clampWhenFinished = !animation.loop;
     controller.activeLoop = animation.loop;
     controller.activeTimeScale = controller.activeAction.timeScale;
