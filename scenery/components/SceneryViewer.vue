@@ -2724,6 +2724,11 @@ const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let characterCameraFollowNodeId: string | null = null;
+const characterCameraFollowPlacementCache = {
+  nodeId: null as string | null,
+  objectUuid: null as string | null,
+  placement: null as CameraFollowPlacement | null,
+};
 let characterControlDeltaSeconds = 1 / 60;
 const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCameraMotionState();
 const JOYSTICK_INPUT_RADIUS = 64;
@@ -11575,6 +11580,9 @@ function setCameraCaging(enabled: boolean): void {
 
 function resetProtagonistPoseState(): void {
   characterCameraFollowNodeId = null;
+  characterCameraFollowPlacementCache.nodeId = null;
+  characterCameraFollowPlacementCache.objectUuid = null;
+  characterCameraFollowPlacementCache.placement = null;
   resetFollowCameraMotionState(characterCameraFollowMotionState);
   characterCameraFollowAnchorScratch.set(0, 0, 0);
   characterCameraFollowForwardScratch.set(0, 0, 0);
@@ -11629,9 +11637,39 @@ function resolveCharacterFollowForwardWorld(
 }
 
 function resolveCharacterFollowPlacement(
+  nodeId: string,
   object: THREE.Object3D | null,
 ): CameraFollowPlacement {
-  return computeFollowPlacement(getApproxDimensions(object));
+  const objectUuid = object?.uuid ?? null;
+  if (
+    characterCameraFollowPlacementCache.placement
+    && characterCameraFollowPlacementCache.nodeId === nodeId
+    && characterCameraFollowPlacementCache.objectUuid === objectUuid
+  ) {
+    return {
+      distance: characterCameraFollowPlacementCache.placement.distance,
+      heightOffset: characterCameraFollowPlacementCache.placement.heightOffset,
+      targetLift: characterCameraFollowPlacementCache.placement.targetLift,
+      targetForward: characterCameraFollowPlacementCache.placement.targetForward,
+    };
+  }
+
+  const placement = computeFollowPlacement(getApproxDimensions(object));
+  
+  characterCameraFollowPlacementCache.nodeId = nodeId;
+  characterCameraFollowPlacementCache.objectUuid = objectUuid;
+  characterCameraFollowPlacementCache.placement = {
+    distance: placement.distance,
+    heightOffset: placement.heightOffset,
+    targetLift: placement.targetLift,
+    targetForward: placement.targetForward,
+  };
+  return {
+    distance: placement.distance,
+    heightOffset: placement.heightOffset,
+    targetLift: placement.targetLift,
+    targetForward: placement.targetForward,
+  };
 }
 
 function getNormalizedMultiuserIdentity(): MultiuserIdentity | null {
@@ -15499,7 +15537,7 @@ function updateCharacterFollowCamera(
     characterCameraFollowNodeId = controlledNodeId;
   }
 
-  const placement = resolveCharacterFollowPlacement(object);
+  const placement = resolveCharacterFollowPlacement(controlledNodeId, object);
   resolveCharacterRootWorldPosition(controlledNodeId, bindingNodeId, object, characterCameraFollowAnchorScratch);
   resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
 
