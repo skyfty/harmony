@@ -2561,21 +2561,23 @@ const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02;
 const CAMERA_DEPENDENT_POSITION_EPSILON_SQ = CAMERA_DEPENDENT_POSITION_EPSILON * CAMERA_DEPENDENT_POSITION_EPSILON;
 const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12;
 const REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR = 2;
-const REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X = 16;
-const REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y = 8;
-const REMOTE_MULTIUSER_NICKNAME_CARD_GAP = 10;
-const REMOTE_MULTIUSER_NICKNAME_CARD_MIN_WIDTH = 128;
-const REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH = 320;
-const REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MAX = 24;
-const REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN = 14;
-const REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT = 0.28;
-const REMOTE_MULTIUSER_NICKNAME_WORLD_Y_OFFSET = 0.28;
-const REMOTE_MULTIUSER_NICKNAME_DEFAULT_LOCAL_Y = 1.15;
-const REMOTE_MULTIUSER_NICKNAME_BG_TOP = 'rgba(10, 18, 34, 0.78)';
-const REMOTE_MULTIUSER_NICKNAME_BG_BOTTOM = 'rgba(10, 18, 34, 0.52)';
-const REMOTE_MULTIUSER_NICKNAME_BORDER = 'rgba(255, 255, 255, 0.16)';
-const REMOTE_MULTIUSER_NICKNAME_TEXT = '#f7fbff';
-const REMOTE_MULTIUSER_NICKNAME_GLOW = 'rgba(119, 184, 255, 0.08)';
+const REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X = 24;
+const REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y = 14;
+const REMOTE_MULTIUSER_NICKNAME_CARD_GAP = 18;
+const REMOTE_MULTIUSER_NICKNAME_CARD_MIN_WIDTH = 210;
+const REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH = 500;
+const REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MAX = 40;
+const REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN = 24;
+const REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT = 0.52;
+const REMOTE_MULTIUSER_NICKNAME_WORLD_Y_OFFSET = 0.42;
+const REMOTE_MULTIUSER_NICKNAME_DEFAULT_LOCAL_Y = 1.36;
+const REMOTE_MULTIUSER_NICKNAME_BG_TOP = 'rgba(11, 18, 38, 0.96)';
+const REMOTE_MULTIUSER_NICKNAME_BG_MIDDLE = 'rgba(18, 36, 70, 0.9)';
+const REMOTE_MULTIUSER_NICKNAME_BG_BOTTOM = 'rgba(7, 12, 24, 0.72)';
+const REMOTE_MULTIUSER_NICKNAME_BORDER = 'rgba(188, 221, 255, 0.34)';
+const REMOTE_MULTIUSER_NICKNAME_TEXT = '#ffffff';
+const REMOTE_MULTIUSER_NICKNAME_GLOW = 'rgba(119, 189, 255, 0.22)';
+const REMOTE_MULTIUSER_NICKNAME_ACCENT = 'rgba(126, 200, 255, 1)';
 type PhysicsInterpolationState = {
   prevPos: THREE.Vector3;
   prevQuat: THREE.Quaternion;
@@ -11782,13 +11784,13 @@ function normalizeRemoteMultiuserDisplayName(displayName: string | null | undefi
 }
 
 function resolveRemoteMultiuserNicknameWorldWidth(fontSize: number, textWidth: number): number {
-  const textAreaWidth = Math.min(Math.max(textWidth + 8, 84), REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH - REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2);
+  const textAreaWidth = Math.min(Math.max(textWidth + 34, 132), REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH - REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2);
   const cardWidth = Math.min(
     REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH,
     Math.max(REMOTE_MULTIUSER_NICKNAME_CARD_MIN_WIDTH, Math.ceil(textAreaWidth + REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2)),
   );
-  const cardHeight = Math.ceil(REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y * 2 + fontSize + 8);
-  return Math.max(0.54, (cardWidth / cardHeight) * REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT);
+  const cardHeight = Math.ceil(REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y * 2 + fontSize + 14);
+  return Math.max(0.82, (cardWidth / cardHeight) * REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT);
 }
 
 function drawRemoteMultiuserNicknameTexture(entry: RemoteMultiuserNicknameRuntimeEntry): void {
@@ -11799,10 +11801,11 @@ function drawRemoteMultiuserNicknameTexture(entry: RemoteMultiuserNicknameRuntim
   context.clearRect(0, 0, entry.canvas.width, entry.canvas.height);
   context.scale(REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR, REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR);
 
-  const maxTextWidth = REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH - (REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2) - REMOTE_MULTIUSER_NICKNAME_CARD_GAP;
+  const accentSpace = 42;
+  const maxTextWidth = REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH - (REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2) - REMOTE_MULTIUSER_NICKNAME_CARD_GAP - accentSpace;
   let fontSize = REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MAX;
   while (fontSize > REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN) {
-    context.font = `700 ${fontSize}px sans-serif`;
+    context.font = `800 ${fontSize}px sans-serif`;
     if (context.measureText(label).width <= maxTextWidth) {
       break;
     }
@@ -11811,16 +11814,16 @@ function drawRemoteMultiuserNicknameTexture(entry: RemoteMultiuserNicknameRuntim
   if (fontSize < REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN) {
     fontSize = REMOTE_MULTIUSER_NICKNAME_LABEL_FONT_MIN;
   }
-  context.font = `700 ${fontSize}px sans-serif`;
+  context.font = `800 ${fontSize}px sans-serif`;
   const labelWidth = context.measureText(label).width;
   const cardWidth = Math.min(
     REMOTE_MULTIUSER_NICKNAME_CARD_MAX_WIDTH,
     Math.max(
       REMOTE_MULTIUSER_NICKNAME_CARD_MIN_WIDTH,
-      Math.ceil(labelWidth + (REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2) + REMOTE_MULTIUSER_NICKNAME_CARD_GAP),
+      Math.ceil(labelWidth + (REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X * 2) + REMOTE_MULTIUSER_NICKNAME_CARD_GAP + accentSpace),
     ),
   );
-  const cardHeight = Math.ceil(REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y * 2 + fontSize + 8);
+  const cardHeight = Math.ceil(REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_Y * 2 + fontSize + 14);
 
   const canvasWidth = cardWidth * REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR;
   const canvasHeight = cardHeight * REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR;
@@ -11833,7 +11836,7 @@ function drawRemoteMultiuserNicknameTexture(entry: RemoteMultiuserNicknameRuntim
 
   context.resetTransform?.();
   context.scale(REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR, REMOTE_MULTIUSER_NICKNAME_TEXTURE_DPR);
-  const radius = Math.min(16, cardHeight / 2);
+  const radius = Math.min(28, cardHeight / 2);
   context.beginPath();
   context.moveTo(radius, 0);
   context.arcTo(cardWidth, 0, cardWidth, cardHeight, radius);
@@ -11843,27 +11846,40 @@ function drawRemoteMultiuserNicknameTexture(entry: RemoteMultiuserNicknameRuntim
   context.closePath();
   const background = context.createLinearGradient(0, 0, 0, cardHeight);
   background.addColorStop(0, REMOTE_MULTIUSER_NICKNAME_BG_TOP);
+  background.addColorStop(0.55, REMOTE_MULTIUSER_NICKNAME_BG_MIDDLE);
   background.addColorStop(1, REMOTE_MULTIUSER_NICKNAME_BG_BOTTOM);
   context.fillStyle = background;
   context.fill();
-  context.lineWidth = 1.2;
+  context.lineWidth = 2;
   context.strokeStyle = REMOTE_MULTIUSER_NICKNAME_BORDER;
   context.stroke();
-  const glow = context.createRadialGradient(cardWidth * 0.25, cardHeight * 0.25, 0, cardWidth * 0.25, cardHeight * 0.25, cardWidth * 0.8);
-  glow.addColorStop(0, 'rgba(255, 255, 255, 0.12)');
+  const glow = context.createRadialGradient(cardWidth * 0.2, cardHeight * 0.24, 0, cardWidth * 0.2, cardHeight * 0.24, cardWidth * 0.92);
+  glow.addColorStop(0, 'rgba(255, 255, 255, 0.24)');
   glow.addColorStop(0.45, REMOTE_MULTIUSER_NICKNAME_GLOW);
   glow.addColorStop(1, 'rgba(255, 255, 255, 0)');
   context.fillStyle = glow;
   context.fillRect(0, 0, cardWidth, cardHeight);
 
+  const accentWidth = 7;
+  const accentX = REMOTE_MULTIUSER_NICKNAME_CARD_PADDING_X - 4;
+  const accent = context.createLinearGradient(accentX, 0, accentX + accentWidth, 0);
+  accent.addColorStop(0, 'rgba(255, 255, 255, 0)');
+  accent.addColorStop(0.35, REMOTE_MULTIUSER_NICKNAME_ACCENT);
+  accent.addColorStop(0.5, 'rgba(255, 255, 255, 1)');
+  accent.addColorStop(0.65, REMOTE_MULTIUSER_NICKNAME_ACCENT);
+  accent.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  context.fillStyle = accent;
+  context.fillRect(accentX, 10, accentWidth, cardHeight - 20);
+
   context.textAlign = 'center';
   context.textBaseline = 'middle';
   context.fillStyle = REMOTE_MULTIUSER_NICKNAME_TEXT;
-  context.shadowColor = 'rgba(0, 0, 0, 0.28)';
-  context.shadowBlur = 4;
+  context.shadowColor = 'rgba(4, 10, 22, 0.44)';
+  context.shadowBlur = 8;
   context.shadowOffsetY = 1;
-  context.font = `700 ${fontSize}px sans-serif`;
-  context.fillText(label || ' ', cardWidth / 2, cardHeight / 2 + 0.5);
+  context.font = `900 ${fontSize}px sans-serif`;
+  const textX = accentX + accentWidth + ((cardWidth - (accentX + accentWidth)) / 2) + 4;
+  context.fillText(label || ' ', textX, cardHeight / 2 + 0.5);
 
   entry.texture.needsUpdate = true;
   entry.worldHeight = REMOTE_MULTIUSER_NICKNAME_WORLD_HEIGHT;
