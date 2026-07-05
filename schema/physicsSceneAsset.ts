@@ -287,7 +287,6 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'box',
-      applyScale: false,
       halfExtents: [
         shape.halfExtents[0] * scale[0],
         shape.halfExtents[1] * scale[1],
@@ -301,7 +300,6 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'sphere',
-      applyScale: false,
       radius: shape.radius * Math.max(scale[0], scale[1], scale[2]),
     })
     return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
@@ -312,7 +310,6 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'cylinder',
-      applyScale: false,
       radiusTop: shape.radiusTop * radiusScale,
       radiusBottom: shape.radiusBottom * radiusScale,
       height: shape.height * scale[1],
@@ -331,7 +328,6 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'convex-hull',
-      applyScale: false,
       vertices,
       faces: Array.isArray(shape.faces)
         ? shape.faces
@@ -362,7 +358,6 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'heightfield',
-      applyScale: false,
       rows,
       columns,
       elementSize: shape.elementSize * Math.max(scale[0], scale[2]),
@@ -388,7 +383,6 @@ function buildShapeInstancesFromDefinition(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'static-mesh',
-      applyScale: false,
       vertices,
       indices,
     })
@@ -422,7 +416,6 @@ function buildBoundaryWallShapeInstances(
     const shapeId = pushShapeDescriptor(shapes, {
       id: nextShapeId(),
       kind: 'box',
-      applyScale: false,
       halfExtents: [hx as number, hy as number, hz as number],
     })
     children.push({
