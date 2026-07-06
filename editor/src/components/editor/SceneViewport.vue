@@ -497,7 +497,7 @@ const nodePickerStore = useNodePickerStore()
 const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
-const { panelVisibility, sceneLifecycle, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
+const { panelVisibility, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
 const {
   brushRadius,
   brushStrength,
@@ -518,8 +518,8 @@ const {
 } =
   storeToRefs(terrainStore)
 
-const sceneSwitchToken = computed(() => sceneLifecycle.value.sessionToken)
-const isSceneReady = computed(() => sceneLifecycle.value.status === 'ready')
+const sceneSwitchToken = computed(() => sceneStore.sceneSwitchToken)
+const isSceneReady = computed(() => sceneStore.isSceneReady)
 
 const hasGroundNode = computed(() => {
   const ground = sceneStore.groundNode
@@ -23696,10 +23696,16 @@ onMounted(() => {
     })
     viewportResizeObserver.observe(viewportEl.value)
   }
-  if (isSceneReady.value) {
-    syncSceneGraph()
-    void restoreGroundAllGuarded()
-  }
+  void sceneStore.ensureCurrentSceneLoaded().catch((error) => {
+    console.warn(
+      '[SceneViewport] Failed to hydrate current scene runtime\n'
+      + JSON.stringify({
+        sceneId: sceneStore.currentSceneId,
+        sceneSwitchToken: sceneStore.sceneSwitchToken,
+        error: error instanceof Error ? error.message : String(error),
+      }, null, 2),
+    )
+  })
 })
 
 onBeforeUnmount(() => {

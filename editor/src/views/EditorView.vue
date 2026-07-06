@@ -98,14 +98,13 @@ const {
   camera,
   panelVisibility,
   currentSceneId,
-  sceneLifecycle,
   cameraFocusNodeId,
   cameraFocusRequestId,
   nodeHighlightTargetId,
   nodeHighlightRequestId,
 } = storeToRefs(sceneStore)
 
-const sceneSwitchToken = computed(() => sceneLifecycle.value.sessionToken)
+const sceneSwitchToken = computed(() => sceneStore.sceneSwitchToken)
 
 const { sortedMetadata: allSceneSummaries } = storeToRefs(scenesStore)
 const sceneSummaries = computed(() => {
@@ -1751,7 +1750,7 @@ watch(
     const ready = await new Promise<boolean>((resolve) => {
       let innerStop: (() => void) | null = null
       innerStop = watch(
-        [() => sceneLifecycle.value.status === 'ready', currentSceneId],
+        [() => sceneStore.isSceneReady, currentSceneId],
         ([isReady, currentId]) => {
           if (isStale()) {
             innerStop?.()
@@ -1968,7 +1967,15 @@ async function handleSelectScene(sceneId: string) {
       return
     }
   }
-  const changed = await sceneStore.openScene(sceneId, {
+  const activeProjectId = projectsStore.activeProjectId ?? sceneStore.currentSceneMeta?.projectId ?? null
+  if (activeProjectId) {
+    await scenesStore.syncUserWorkspaceFromServer({
+      replace: false,
+      projectId: activeProjectId,
+      sceneId,
+    })
+  }
+  const changed = await sceneStore.selectScene(sceneId, {
     projectId: projectsStore.activeProjectId ?? sceneStore.currentSceneMeta?.projectId ?? null,
     setLastEdited: true,
     showLoadingOverlay: false,

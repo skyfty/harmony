@@ -115,7 +115,6 @@ const projectsStore = useProjectsStore()
 const authStore = useAuthStore()
 const route = useRoute()
 const router = useRouter()
-const sceneStore = useSceneStore()
 
 const currentComponent = shallowRef<typeof LoadingScreen | typeof EditorView>(LoadingScreen)
 const progress = ref(5)
@@ -125,33 +124,6 @@ const errorMessage = ref<string | null>(null)
 const errorCode = ref<BootstrapErrorCode | null>(null)
 const isBooting = ref(false)
 const isRetrying = ref(false)
-
-function formatLifecycleStatus(status: string): string {
-  if (!status) {
-    return ''
-  }
-  if (status === 'ready') {
-    return 'Loading complete'
-  }
-  return status
-    .split('-')
-    .map((part) => part.length ? `${part[0]!.toUpperCase()}${part.slice(1)}` : part)
-    .join(' ')
-}
-
-watch(
-  () => sceneStore.sceneLifecycle,
-  (lifecycle) => {
-    if (currentComponent.value !== LoadingScreen) {
-      return
-    }
-    progress.value = Math.max(0, Math.min(100, Math.round(lifecycle.progress)))
-    statusMessage.value = formatLifecycleStatus(lifecycle.status)
-    statusDetail.value = lifecycle.detail
-    errorMessage.value = lifecycle.error
-  },
-  { deep: true, immediate: true },
-)
 
 function resolveTargetSceneId(
   project: NonNullable<Awaited<ReturnType<typeof projectsStore.loadProjectDocument>>>,
@@ -263,6 +235,7 @@ async function bootstrap() {
       detail: 'Waiting for persisted editor state.',
     })
     await waitForPiniaHydration()
+    const sceneStore = useSceneStore()
 
     statusMessage.value = 'Checking scene data...'
     progress.value = 46
@@ -275,6 +248,26 @@ async function bootstrap() {
     const latestProject = (await projectsStore.loadProjectDocument(projectId)) ?? project
     const preferred = resolveTargetSceneId(latestProject, routeSceneId)
 
+    statusMessage.value = 'Syncing scene workspace...'
+    progress.value = 60
+    setBootstrapStatus({
+      status: 'Syncing scene workspace',
+      progress: 60,
+      detail: 'Preloading local scene bundles before opening the editor.',
+    })
+    await scenesStore.syncUserWorkspaceFromServer({
+      replace: false,
+      projectId,
+      sceneId: preferred,
+      onProgress: ({ step, progress: nextProgress, detail }) => {
+        setBootstrapStatus({
+          status: step,
+          progress: 60 + nextProgress * 0.18,
+          detail,
+        })
+      },
+    })
+
     statusMessage.value = 'Opening project...'
     progress.value = 78
     setBootstrapStatus({
@@ -282,10 +275,18 @@ async function bootstrap() {
       progress: 78,
       detail: 'Preparing scene graph, assets, and terrain cache.',
     })
-    const opened = await sceneStore.openScene(preferred, {
+    const opened = await sceneStore.selectScene(preferred, {
       projectId,
       setLastEdited: false,
+      forceReload: true,
       showLoadingOverlay: false,
+      onProgress: ({ step, progress: nextProgress, detail }) => {
+        setBootstrapStatus({
+          status: step,
+          progress: 78 + nextProgress * 0.22,
+          detail,
+        })
+      },
     })
     if (!opened) {
       throw new Error('Failed to open scene')
