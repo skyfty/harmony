@@ -1947,46 +1947,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           emitDetailedProgress(options, 'Terrain dataset ready…', 29, { phase: 'terrain-dataset-ready' })
         }
         await yieldController.maybeYield(true)
-        const groundDefinitionDebug = groundDefinition as unknown as Record<string, unknown> | null | undefined
-        console.info(
-          `[planningDemToGround] before saveGroundDataImmediately\n${JSON.stringify({
-            sceneId: sceneStore.currentSceneId ?? null,
-            groundNodeId: groundNode.id,
-            groundDefinition: {
-              type: groundDefinition?.type ?? null,
-              surfaceRevision: typeof groundDefinitionDebug?.surfaceRevision === 'number'
-                ? groundDefinitionDebug.surfaceRevision
-                : null,
-              runtimeHydratedHeightState: groundDefinitionDebug?.runtimeHydratedHeightState ?? null,
-              runtimeDisableOptimizedChunks:
-                typeof groundDefinitionDebug?.runtimeDisableOptimizedChunks === 'boolean'
-                  ? groundDefinitionDebug.runtimeDisableOptimizedChunks
-                  : null,
-            },
-            terrainDatasetReady: Boolean(terrainDataset),
-            planningRegion: demResult.region ?? null,
-          }, null, 2)}`,
-        )
         await sceneStore.saveGroundDataImmediately(groundNode.id)
-        console.info(
-          `[planningDemToGround] after saveGroundDataImmediately\n${JSON.stringify({
-            sceneId: sceneStore.currentSceneId ?? null,
-            groundNodeId: groundNode.id,
-            groundDefinition: {
-              type: groundDefinition?.type ?? null,
-              surfaceRevision: typeof groundDefinitionDebug?.surfaceRevision === 'number'
-                ? groundDefinitionDebug.surfaceRevision
-                : null,
-              runtimeHydratedHeightState: groundDefinitionDebug?.runtimeHydratedHeightState ?? null,
-              runtimeDisableOptimizedChunks:
-                typeof groundDefinitionDebug?.runtimeDisableOptimizedChunks === 'boolean'
-                  ? groundDefinitionDebug.runtimeDisableOptimizedChunks
-                  : null,
-            },
-            terrainDatasetReady: Boolean(terrainDataset),
-            planningRegion: demResult.region ?? null,
-          }, null, 2)}`,
-        )
       } else if (sceneStore.currentSceneId) {
         await scenesStore.replaceTerrainDatasetBundle(sceneStore.currentSceneId, null, {})
         groundDefinition = await syncGroundTerrainDatasetRuntime({

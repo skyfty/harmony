@@ -2325,32 +2325,6 @@ function createSceneLifecycleState(overrides: Partial<SceneLifecycleState> = {})
   }
 }
 
-function formatDebugLog(title: string, payload: unknown): string {
-  return `${title}\n${JSON.stringify(payload, null, 2)}`
-}
-
-function describeGroundNodeForDebug(groundNode: SceneNode | null | undefined) {
-  if (!groundNode) {
-    return null
-  }
-
-  const dynamicMesh = groundNode.dynamicMesh as unknown as Record<string, unknown> | null | undefined
-  return {
-    id: groundNode.id,
-    name: groundNode.name,
-    type: groundNode.dynamicMesh?.type ?? null,
-    surfaceRevision: typeof dynamicMesh?.surfaceRevision === 'number' ? dynamicMesh.surfaceRevision : null,
-    runtimeHydratedHeightState: dynamicMesh?.runtimeHydratedHeightState ?? null,
-    runtimeDisableOptimizedChunks:
-      typeof dynamicMesh?.runtimeDisableOptimizedChunks === 'boolean'
-        ? dynamicMesh.runtimeDisableOptimizedChunks
-        : null,
-    groundSurfaceChunksLength: Array.isArray(dynamicMesh?.groundSurfaceChunks)
-      ? dynamicMesh.groundSurfaceChunks.length
-      : null,
-  }
-}
-
 function updateSceneLifecycle(
   store: Pick<SceneState, 'sceneLifecycle'> & { sceneLifecycle: SceneLifecycleState },
   patch: Partial<SceneLifecycleState>,
@@ -10884,34 +10858,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const sidecar = useGroundHeightmapStore().buildSceneDocumentSidecar(target)
-      console.info(formatDebugLog('[SceneStore] saveGroundDataImmediately.before', {
-        sceneId,
-        nodeId,
-        isSceneReady: this.isSceneReady,
-        sceneSwitchToken: this.sceneSwitchToken,
-        ground: describeGroundNodeForDebug(target),
-        sidecarByteLength: sidecar?.byteLength ?? null,
-      }))
-      try {
-        await useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar)
-        console.info(formatDebugLog('[SceneStore] saveGroundDataImmediately.after', {
-          sceneId,
-          nodeId,
-          isSceneReady: this.isSceneReady,
-          sceneSwitchToken: this.sceneSwitchToken,
-          sidecarByteLength: sidecar?.byteLength ?? null,
-        }))
-      } catch (error) {
-        console.warn(formatDebugLog('[SceneStore] saveGroundDataImmediately.failed', {
-          sceneId,
-          nodeId,
-          isSceneReady: this.isSceneReady,
-          sceneSwitchToken: this.sceneSwitchToken,
-          sidecarByteLength: sidecar?.byteLength ?? null,
-          error: error instanceof Error ? error.message : String(error),
-        }))
-        throw error
-      }
+      await useScenesStore().saveSceneGroundHeightSidecar(sceneId, sidecar)
       await this.flushPendingSceneAutoSave({ force: true })
       return true
     },
@@ -19601,29 +19548,12 @@ export const useSceneStore = defineStore('scene', {
           const scenesStore = useScenesStore()
           const groundNode = findGroundNode(this.nodes)
           const heightSidecar = await scenesStore.loadGroundHeightSidecar(sceneId)
-          console.info(formatDebugLog('[SceneStore] ensureCurrentSceneLoaded.heightSidecar', {
-            sceneId,
-            sceneSwitchToken,
-            hasGroundNode: Boolean(groundNode),
-            sidecarByteLength: heightSidecar?.byteLength ?? null,
-            ground: describeGroundNodeForDebug(groundNode),
-          }))
           await useGroundHeightmapStore().hydrateSceneDocument(groundNode, heightSidecar)
 
           const splatSidecar = await scenesStore.loadGroundSplatSidecar(sceneId)
-          console.info(formatDebugLog('[SceneStore] ensureCurrentSceneLoaded.splatSidecar', {
-            sceneId,
-            sceneSwitchToken,
-            sidecarByteLength: splatSidecar?.byteLength ?? null,
-          }))
           await useGroundSplatStore().hydrateSceneDocument(sceneId, findGroundNode(this.nodes), splatSidecar)
 
           const scatterSidecar = await scenesStore.loadGroundScatterSidecar(sceneId)
-          console.info(formatDebugLog('[SceneStore] ensureCurrentSceneLoaded.scatterSidecar', {
-            sceneId,
-            sceneSwitchToken,
-            sidecarByteLength: scatterSidecar?.byteLength ?? null,
-          }))
           await useGroundScatterStore().hydrateSceneDocument(sceneId, findGroundNode(this.nodes), scatterSidecar)
 
           const hydratedGroundNode = findGroundNode(this.nodes)

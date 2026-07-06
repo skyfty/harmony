@@ -23696,16 +23696,7 @@ onMounted(() => {
     })
     viewportResizeObserver.observe(viewportEl.value)
   }
-  void sceneStore.ensureCurrentSceneLoaded().catch((error) => {
-    console.warn(
-      '[SceneViewport] Failed to hydrate current scene runtime\n'
-      + JSON.stringify({
-        sceneId: sceneStore.currentSceneId,
-        sceneSwitchToken: sceneStore.sceneSwitchToken,
-        error: error instanceof Error ? error.message : String(error),
-      }, null, 2),
-    )
-  })
+  void sceneStore.ensureCurrentSceneLoaded()
 })
 
 onBeforeUnmount(() => {
