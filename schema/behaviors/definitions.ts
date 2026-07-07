@@ -71,12 +71,12 @@ const actionDefinitions: BehaviorActionDefinition[] = [
   {
     id: 'approach',
     label: 'On Approach',
-    description: 'Triggered when the camera moves within range of the node.',
+    description: 'Triggered when the active controlled observer enters the node\'s range.',
   },
   {
     id: 'depart',
     label: 'On Depart',
-    description: 'Triggered when the camera exits the node\'s proximity.',
+    description: 'Triggered when the active controlled observer exits the node\'s proximity.',
   },
   {
     id: 'perform',

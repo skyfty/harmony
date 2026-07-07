@@ -909,6 +909,9 @@ import {
 } from '@harmony/schema/behaviors/runtime';
 import {
   createBehaviorProximityRuntime,
+  resolveBehaviorObserverContext,
+  type BehaviorObserverCandidate,
+  type BehaviorObserverContext,
   type BehaviorProximityCandidate,
   type BehaviorProximityState,
 } from '@harmony/schema/behaviors/proximity';
@@ -4308,26 +4311,43 @@ const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: '
 
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
+const behaviorObserverContextScratch = new THREE.Vector3();
+function resolveSceneryBehaviorObserverContext(): BehaviorObserverContext {
+  const candidates: BehaviorObserverCandidate[] = [];
+  if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
+    candidates.push({ nodeId: vehicleDriveNodeId.value, kind: 'vehicle' });
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (controlledNodeId) {
+    candidates.push({ nodeId: controlledNodeId, kind: 'character' });
+  }
+  if (activeAutoTourNodeIds.size > 0) {
+    const autoTourNodeId = resolveAutoTourFollowNodeId(
+      autoTourFollowNodeId.value,
+      cameraViewState.targetNodeId,
+      activeAutoTourNodeIds,
+      previewNodeMap.keys(),
+      autoTourRuntime,
+    );
+    if (autoTourNodeId) {
+      candidates.push({ nodeId: autoTourNodeId, kind: 'other' });
+    }
+  }
+  if (cameraViewState.mode === 'watching' && cameraViewState.targetNodeId) {
+    candidates.push({ nodeId: cameraViewState.targetNodeId, kind: 'other' });
+  }
+  return resolveBehaviorObserverContext(
+    {
+      candidates,
+      getCamera: () => renderContext?.camera ?? null,
+      resolveNodePosition: (nodeId, scratch) =>
+        resolveNodeFocusPoint(nodeId) ?? nodeObjectMap.get(nodeId)?.getWorldPosition(scratch) ?? null,
+    },
+    behaviorObserverContextScratch,
+  );
+}
 const behaviorProximityRuntime = createBehaviorProximityRuntime({
-  getCamera: () => renderContext?.camera ?? null,
-  getObserverNodeId: () => {
-    if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
-      return vehicleDriveNodeId.value;
-    }
-    if (activeAutoTourNodeIds.size > 0) {
-      return resolveAutoTourFollowNodeId(
-        autoTourFollowNodeId.value,
-        cameraViewState.targetNodeId,
-        activeAutoTourNodeIds,
-        previewNodeMap.keys(),
-        autoTourRuntime,
-      );
-    }
-    return null;
-  },
-  resolveObserverPosition: (observerNodeId, scratch) => {
-    return resolveNodeFocusPoint(observerNodeId) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(scratch) ?? null;
-  },
+  resolveObserverContext: () => resolveSceneryBehaviorObserverContext(),
   behaviorProximityCandidates,
   behaviorProximityState,
   nodeObjectMap,

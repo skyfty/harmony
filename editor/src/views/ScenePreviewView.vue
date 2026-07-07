@@ -341,6 +341,9 @@ import {
 } from '@schema/behaviors/runtime'
 import {
 	createBehaviorProximityRuntime,
+	resolveBehaviorObserverContext,
+	type BehaviorObserverCandidate,
+	type BehaviorObserverContext,
 	type BehaviorProximityCandidate,
 	type BehaviorProximityState,
 } from '@schema/behaviors/proximity'
@@ -2183,26 +2186,43 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+const behaviorObserverContextScratch = new THREE.Vector3()
+function resolveScenePreviewBehaviorObserverContext(): BehaviorObserverContext {
+	const candidates: BehaviorObserverCandidate[] = []
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		candidates.push({ nodeId: vehicleDriveState.nodeId, kind: 'vehicle' })
+	}
+	const characterNodeId = resolveDefaultControlledCharacterNodeId()
+	if (characterNodeId) {
+		candidates.push({ nodeId: characterNodeId, kind: 'character' })
+	}
+	if (activeAutoTourNodeIds.size > 0) {
+		const autoTourNodeId = resolveAutoTourFollowNodeId(
+			autoTourFollowNodeId.value,
+			cameraViewState.watchTargetId,
+			activeAutoTourNodeIds,
+			previewNodeMap.keys(),
+			autoTourRuntime,
+		)
+		if (autoTourNodeId) {
+			candidates.push({ nodeId: autoTourNodeId, kind: 'other' })
+		}
+	}
+	if (cameraViewState.mode === 'watching' && cameraViewState.watchTargetId) {
+		candidates.push({ nodeId: cameraViewState.watchTargetId, kind: 'other' })
+	}
+	return resolveBehaviorObserverContext(
+		{
+			candidates,
+			getCamera: () => camera,
+			resolveNodePosition: (nodeId, scratch) =>
+				resolveNodeFocusPoint(nodeId, scratch) ?? nodeObjectMap.get(nodeId)?.getWorldPosition(scratch) ?? null,
+		},
+		behaviorObserverContextScratch,
+	)
+}
 const behaviorProximityRuntime = createBehaviorProximityRuntime({
-	getCamera: () => camera,
-	getObserverNodeId: () => {
-		if (vehicleDriveState.active && vehicleDriveState.nodeId) {
-			return vehicleDriveState.nodeId
-		}
-		if (activeAutoTourNodeIds.size > 0) {
-			return resolveAutoTourFollowNodeId(
-				autoTourFollowNodeId.value,
-				cameraViewState.watchTargetId,
-				activeAutoTourNodeIds,
-				previewNodeMap.keys(),
-				autoTourRuntime,
-			)
-		}
-		return null
-	},
-	resolveObserverPosition: (observerNodeId, scratch) => {
-		return resolveNodeFocusPoint(observerNodeId, scratch) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(scratch) ?? null
-	},
+	resolveObserverContext: () => resolveScenePreviewBehaviorObserverContext(),
 	behaviorProximityCandidates,
 	behaviorProximityState,
 	nodeObjectMap,
