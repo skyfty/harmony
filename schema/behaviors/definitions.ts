@@ -28,6 +28,7 @@ import type {
   LanternSlideLayout,
   HideBehaviorParams,
   WatchBehaviorParams,
+  ShowPurposeBehaviorButton,
   ShowPurposeBehaviorParams,
   HidePurposeBehaviorParams,
   TriggerBehaviorParams,
@@ -201,9 +202,44 @@ function normalizeSoundDistanceResponseMode(value: string | null | undefined): S
 
 let lanternSlideCounter = 0
 
+let showPurposeButtonCounter = 0
+
 function generateLanternSlideId(): string {
   lanternSlideCounter += 1
   return `lantern_slide_${Date.now()}_${lanternSlideCounter.toString(16)}`
+}
+
+function generateShowPurposeButtonId(): string {
+  showPurposeButtonCounter += 1
+  return `show_purpose_button_${Date.now()}_${showPurposeButtonCounter.toString(16)}`
+}
+
+function normalizeShowPurposeButton(
+  button: Partial<ShowPurposeBehaviorButton> | null | undefined,
+): ShowPurposeBehaviorButton {
+  const id = typeof button?.id === 'string' && button.id.trim().length ? button.id.trim() : generateShowPurposeButtonId()
+  const targetNodeId = typeof button?.targetNodeId === 'string' && button.targetNodeId.trim().length
+    ? button.targetNodeId.trim()
+    : null
+  const targetSequenceId = typeof button?.targetSequenceId === 'string' && button.targetSequenceId.trim().length
+    ? button.targetSequenceId.trim()
+    : null
+  const label = typeof button?.label === 'string' ? button.label.trim() : ''
+  return {
+    id,
+    targetNodeId,
+    targetSequenceId,
+    label,
+  }
+}
+
+function normalizeShowPurposeButtons(
+  buttons: ShowPurposeBehaviorButton[] | Partial<ShowPurposeBehaviorButton>[] | null | undefined,
+): ShowPurposeBehaviorButton[] {
+  if (!Array.isArray(buttons) || !buttons.length) {
+    return []
+  }
+  return buttons.map((button) => normalizeShowPurposeButton(button))
 }
 
 function normalizeLanternLayout(layout: string | null | undefined): LanternSlideLayout {
@@ -467,11 +503,17 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   {
     id: 'showPurpose',
     label: 'Show Purpose',
-    description: 'Display observe and level view buttons in the viewer.',
+    description: 'Display configurable purpose buttons in the viewer.',
     icon: 'mdi-crosshairs',
     createDefaultParams(): ShowPurposeBehaviorParams {
       return {
-        targetNodeId: null,
+        buttons: [
+          normalizeShowPurposeButton({
+            targetNodeId: null,
+            targetSequenceId: null,
+            label: '',
+          }),
+        ],
       }
     },
   },
@@ -796,7 +838,13 @@ export function createWarpGateBehaviorSequence(options: WarpGateBehaviorOptions)
     {
       type: 'showPurpose',
       params: {
-        targetNodeId: sharedTarget,
+        buttons: [
+          normalizeShowPurposeButton({
+            targetNodeId: sharedTarget,
+            targetSequenceId: null,
+            label: '',
+          }),
+        ],
       },
     } as SceneBehaviorScriptBinding,
     {
@@ -1082,7 +1130,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
       return {
         type: 'showPurpose',
         params: {
-          targetNodeId: params?.targetNodeId ?? null,
+          buttons: normalizeShowPurposeButtons(params?.buttons),
         },
       }
     }
@@ -1507,7 +1555,7 @@ export function ensureBehaviorParams(
         return {
           type: 'showPurpose',
           params: {
-            targetNodeId: params?.targetNodeId ?? null,
+            buttons: normalizeShowPurposeButtons(params?.buttons),
           },
         }
       }

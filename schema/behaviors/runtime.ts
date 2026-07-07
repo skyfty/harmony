@@ -20,6 +20,7 @@ import type {
   RuntimePrefabInitializationMode,
   RuntimePrefabPlacementOptions,
   WatchBehaviorParams,
+  ShowPurposeBehaviorButton,
   ShowPurposeBehaviorParams,
   TriggerBehaviorParams,
   PlayAnimationBehaviorParams,
@@ -181,7 +182,7 @@ export type BehaviorRuntimeEvent =
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
-      targetNodeId: string | null
+      buttons: ShowPurposeBehaviorButton[]
     }
   | {
       type: 'hide-purpose-controls'
@@ -725,8 +726,20 @@ function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
 
 function createShowPurposeEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
   const params = behavior.script.params as ShowPurposeBehaviorParams | undefined
-  const fallbackTarget = state.nodeId
-  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId : fallbackTarget
+  const buttons = Array.isArray(params?.buttons)
+    ? params.buttons
+        .map((button) => ({
+          id: typeof button?.id === 'string' && button.id.trim().length ? button.id.trim() : '',
+          targetNodeId: typeof button?.targetNodeId === 'string' && button.targetNodeId.trim().length
+            ? button.targetNodeId.trim()
+            : null,
+          targetSequenceId: typeof button?.targetSequenceId === 'string' && button.targetSequenceId.trim().length
+            ? button.targetSequenceId.trim()
+            : null,
+          label: typeof button?.label === 'string' ? button.label.trim() : '',
+        }))
+        .filter((button) => button.targetNodeId)
+    : []
   return {
     type: 'show-purpose-controls',
     nodeId: state.nodeId,
@@ -734,7 +747,7 @@ function createShowPurposeEvent(state: BehaviorSequenceState, behavior: SceneBeh
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
-    targetNodeId,
+    buttons,
   }
 }
 

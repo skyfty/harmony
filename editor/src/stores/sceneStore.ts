@@ -12501,7 +12501,9 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested asset')
       }
 
-      const placementAsset = asset
+      const placementAsset = this.ensureSceneAssetRegistered(asset, {
+        source: asset.source ?? undefined,
+      })
 
       const parentMap = buildParentMap(this.nodes)
       let targetParentId = options.parentId ?? null
@@ -12581,7 +12583,7 @@ export const useSceneStore = defineStore('scene', {
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldTransform(node.id))
         }
-        return { asset, node }
+        return { asset: placementAsset, node }
       }
 
       const placeholder = this.addPlaceholderNode(placementAsset, {
@@ -12619,6 +12621,10 @@ export const useSceneStore = defineStore('scene', {
       if (!asset) {
         throw new Error('Unable to find the requested asset')
       }
+
+      const placementAsset = this.ensureSceneAssetRegistered(asset, {
+        source: asset.source ?? undefined,
+      })
 
       const parentMap = buildParentMap(this.nodes)
       let targetParentId = options.parentId ?? null
@@ -12671,21 +12677,21 @@ export const useSceneStore = defineStore('scene', {
         })
       }
 
-      if (asset.type === 'prefab') {
-        const node = await this.spawnPrefabWithPlaceholder(asset.id, position ?? null, {
+      if (placementAsset.type === 'prefab') {
+        const node = await this.spawnPrefabWithPlaceholder(placementAsset.id, position ?? null, {
           parentId: targetParentId,
           rotation: options.rotation ?? null,
         })
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldPosition(node?.id ?? null, position))
         }
-        return { asset, node }
+        return { asset: placementAsset, node }
       }
 
-      const supportsDirectPlacement = asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod'
+      const supportsDirectPlacement = placementAsset.type === 'model' || placementAsset.type === 'mesh' || placementAsset.type === 'lod'
       const node = supportsDirectPlacement
         ? await this.addPlaceableAssetNode({
-            asset,
+            asset: placementAsset,
             position,
             rotation: options.rotation,
             parentId: targetParentId ?? undefined,
@@ -12695,22 +12701,22 @@ export const useSceneStore = defineStore('scene', {
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldPosition(node.id, position))
         }
-        return { asset, node }
+        return { asset: placementAsset, node }
       }
 
       const assetCache = useAssetCacheStore()
-      const transform = computeAssetSpawnTransform(asset, position, {
+      const transform = computeAssetSpawnTransform(placementAsset, position, {
         rotation: options.rotation ? toPlainVector(options.rotation) : null,
       })
-      const placeholder = this.addPlaceholderNode(asset, transform, {
+      const placeholder = this.addPlaceholderNode(placementAsset, transform, {
         parentId: targetParentId,
       })
       if (options.preserveWorldPosition) {
         await this.withHistorySuppressed(() => adjustNodeWorldPosition(placeholder.id, position))
       }
-      this.observeAssetDownloadForNode(placeholder.id, asset)
-      assetCache.setError(asset.id, null)
-      void assetCache.downloadProjectAsset(asset).catch((error) => {
+      this.observeAssetDownloadForNode(placeholder.id, placementAsset)
+      assetCache.setError(placementAsset.id, null)
+      void assetCache.downloadProjectAsset(placementAsset).catch((error) => {
         const target = findNodeById(this.nodes, placeholder.id)
       if (target) {
         target.downloadStatus = 'error'
@@ -12719,7 +12725,7 @@ export const useSceneStore = defineStore('scene', {
       }
       })
 
-      return { asset, node: placeholder }
+      return { asset: placementAsset, node: placeholder }
     },
     resetProjectTree() {
       this.packageDirectoryCache = {}
@@ -13215,7 +13221,7 @@ export const useSceneStore = defineStore('scene', {
         gleaned: asset.gleaned ?? true,
       }
 
-      const existing = this.getRegisteredAsset(assetId)
+      const existing = this.getCatalogAsset(assetId)
       if (existing) {
         const syncSource = options.source ?? existing.source ?? normalizedAsset.source
         if (syncSource) {
@@ -13251,6 +13257,12 @@ export const useSceneStore = defineStore('scene', {
         autoSave: options.autoSave,
       })
     },
+    /**
+     * Legacy browse lookup used by UI selection code.
+     * This can resolve assets that are visible in the project tree even if they
+     * are not yet registered in the scene catalog.
+     * Use `getCatalogAsset()` when the caller needs a strict scene-catalog asset.
+     */
     getRegisteredAsset(assetId: string): ProjectAsset | null {
       const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
       if (!normalizedAssetId) {
@@ -13264,6 +13276,20 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return findAssetInTree(this.projectTree, canonicalAssetId)
+    },
+
+    /**
+     * Strict scene-catalog lookup.
+     * Returns only assets that are already registered in the active scene asset library.
+     */
+    getCatalogAsset(assetId: string): ProjectAsset | null {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      const canonicalAssetId = normalizeAssetIdWithRegistry(normalizedAssetId, this.assetRegistry) ?? normalizedAssetId
+      return this.findAssetInCatalog(canonicalAssetId)
     },
 
     getAssetRegistryEntry(assetId: string): SceneAssetRegistryEntry | null {
@@ -14043,6 +14069,10 @@ export const useSceneStore = defineStore('scene', {
           // Only skip registration when the asset already exists in scene assets.
           const existingServerAsset = this.findAssetInCatalog(asset.id)
           if (existingServerAsset) {
+            const existingRegistryEntry = this.getAssetRegistryEntry(existingServerAsset.id)
+            if (!existingRegistryEntry) {
+              void this.syncAssetRegistryEntry(existingServerAsset, createServerAssetSource(existingServerAsset.id))
+            }
             resolved.push(existingServerAsset)
             return
           }

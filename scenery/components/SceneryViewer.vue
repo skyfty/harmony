@@ -229,38 +229,21 @@
         class="viewer-purpose-controls"
       >
         <button
-          class="viewer-purpose-chip viewer-purpose-chip--watch"
-          :class="{ 'is-active': purposeActiveMode === 'watch' }"
-          aria-label="观察模式"
-          @tap="handlePurposeWatchTap"
+          v-for="button in purposeButtons"
+          :key="button.id"
+          class="viewer-purpose-chip"
+          :aria-label="resolvePurposeButtonLabel(button)"
+          @tap="handlePurposeButtonTap(button)"
         >
           <view class="viewer-purpose-chip__halo"></view>
           <view class="viewer-purpose-chip__content">
             <view class="viewer-purpose-chip__icon-wrap">
               <view class="viewer-purpose-chip__icon-pulse"></view>
-              <text class="viewer-purpose-chip__icon">{{ purposeWatchIcon }}</text>
+              <text class="viewer-purpose-chip__icon">▶</text>
             </view>
             <view class="viewer-purpose-chip__texts">
-              <text class="viewer-purpose-chip__title">观察</text>
-              <text class="viewer-purpose-chip__subtitle">锁定目标视角</text>
-            </view>
-          </view>
-        </button>
-        <button
-          class="viewer-purpose-chip viewer-purpose-chip--level"
-          :class="{ 'is-active': purposeActiveMode === 'level' }"
-          aria-label="平视模式"
-          @tap="handlePurposeResetTap"
-        >
-          <view class="viewer-purpose-chip__halo"></view>
-          <view class="viewer-purpose-chip__content">
-            <view class="viewer-purpose-chip__icon-wrap">
-              <view class="viewer-purpose-chip__icon-pulse"></view>
-              <text class="viewer-purpose-chip__icon">{{ purposeResetIcon }}</text>
-            </view>
-            <view class="viewer-purpose-chip__texts">
-              <text class="viewer-purpose-chip__title">平视</text>
-              <text class="viewer-purpose-chip__subtitle">回到人眼高度</text>
+              <text class="viewer-purpose-chip__title">{{ resolvePurposeButtonLabel(button) }}</text>
+              <text class="viewer-purpose-chip__subtitle">触发目标节点脚本</text>
             </view>
           </view>
         </button>
@@ -905,7 +888,7 @@ import {
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
 } from '../common/utils/instancedLodCulling';
-import type { InstancedLodTarget } from '@harmony/schema/core';
+import type { InstancedLodTarget, ShowPurposeBehaviorButton } from '@harmony/schema/core';
 import type {
   SignboardPlacementSmoothingState,
   SignboardBillboardStyle,
@@ -936,6 +919,7 @@ import {
   handleBehaviorStopAnimationEvent,
   dispatchPerformBehaviorEvent,
 } from '@harmony/schema/behaviors/eventHelpers';
+import { resolvePerformSequenceLabel } from '@harmony/schema/behaviors/sequenceOptions';
 import {
   loadStoredPunchedNodeIds,
   mergeStoredPunchedNodeId,
@@ -1600,10 +1584,6 @@ function resolveSceneExposure(exposure: unknown): number {
     DEFAULT_SCENE_EXPOSURE * SCENE_VIEWER_EXPOSURE_BOOST,
   );
 }
-
-
-const purposeWatchIcon = '👁️';
-const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
 
 let backgroundTexture: THREE.Texture | null = null;
@@ -3068,7 +3048,7 @@ const ensureLanternImage = lanternAssets.ensureLanternImage;
 const pruneLanternAssets = lanternAssets.pruneActiveAssets;
 
 const purposeControlsVisible = ref(false);
-const purposeTargetNodeId = ref<string | null>(null);
+const purposeButtons = ref<ShowPurposeBehaviorButton[]>([]);
 const purposeSourceNodeId = ref<string | null>(null);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
 
@@ -14210,45 +14190,58 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
-function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
+function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
   purposeSourceNodeId.value = sourceNodeId ?? null;
-  purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null;
-  purposeControlsVisible.value = true;
+  purposeButtons.value = Array.isArray(buttons) ? buttons.slice() : [];
+  purposeControlsVisible.value = purposeButtons.value.length > 0;
 }
 
 function hidePurposeControls(): void {
   purposeControlsVisible.value = false;
+  purposeButtons.value = [];
+  purposeSourceNodeId.value = null;
 }
 
 function handleShowPurposeControlsEvent(
   event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
 ): void {
-  showPurposeControls(event.targetNodeId ?? null, event.nodeId ?? null);
+  showPurposeControls(event.buttons ?? [], event.nodeId ?? null);
 }
 
 function handleHidePurposeControlsEvent(): void {
   hidePurposeControls();
 }
 
-function handlePurposeWatchTap(): void {
-  const targetNodeId = purposeTargetNodeId.value ?? purposeSourceNodeId.value;
-  if (!targetNodeId) {
-    uni.showToast({ title: '缺少观察目标', icon: 'none' });
-    return;
+function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
+  const explicit = button.label?.trim();
+  if (explicit) {
+    return explicit;
   }
-  const result = performWatchFocus(targetNodeId, true);
-  if (!result.success) {
-    uni.showToast({ title: result.message || '无法定位观察目标', icon: 'none' });
-    return;
+  const sequenceLabel = resolvePerformSequenceLabel(currentDocument?.nodes ?? [], button.targetNodeId, button.targetSequenceId);
+  if (sequenceLabel) {
+    return sequenceLabel;
   }
+  return button.targetSequenceId ?? '未命名按钮';
 }
 
-function handlePurposeResetTap(): void {
-  const result = resetCameraToLevelView();
-  if (!result.success) {
-    uni.showToast({ title: result.message || '相机不可用', icon: 'none' });
+function handlePurposeButtonTap(button: ShowPurposeBehaviorButton): void {
+  const targetNodeId = button.targetNodeId?.trim() ?? '';
+  const targetSequenceId = button.targetSequenceId?.trim() ?? '';
+  if (!targetNodeId || !targetSequenceId) {
+    uni.showToast({ title: '缺少可触发的目标脚本', icon: 'none' });
     return;
   }
+  const results = triggerBehaviorAction(
+    targetNodeId,
+    'perform',
+    {
+      payload: {
+        sourceNodeId: purposeSourceNodeId.value ?? targetNodeId,
+      },
+    },
+    { sequenceId: targetSequenceId },
+  );
+  processBehaviorEvents(results);
 }
 
 function resetCameraToLevelView(): { success: boolean; message?: string } {

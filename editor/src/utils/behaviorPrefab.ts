@@ -92,7 +92,12 @@ function applyDefaultTarget(step: SceneBehavior, nodeId: string | null): void {
   if (!nodeId) {
     return
   }
-  const params = step.script?.params as { targetNodeId?: string | null } | undefined
+  const params = step.script?.params as
+    | {
+        targetNodeId?: string | null
+        buttons?: Array<{ targetNodeId?: string | null }>
+      }
+    | undefined
   switch (step.script?.type) {
     case 'show':
     case 'hide':
@@ -103,6 +108,13 @@ function applyDefaultTarget(step: SceneBehavior, nodeId: string | null): void {
     case 'moveTo':
       if (params && Object.prototype.hasOwnProperty.call(params, 'targetNodeId') && params.targetNodeId === null) {
         params.targetNodeId = nodeId
+      }
+      if (step.script?.type === 'showPurpose' && params && 'buttons' in params && Array.isArray(params.buttons)) {
+        params.buttons.forEach((button) => {
+          if (button && button.targetNodeId === null) {
+            button.targetNodeId = nodeId
+          }
+        })
       }
       break
     default:

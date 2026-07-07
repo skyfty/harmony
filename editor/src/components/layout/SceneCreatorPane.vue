@@ -17,13 +17,12 @@ const name = computed({
 </script>
 
 <template>
-  <v-divider class="my-4" />
 
   <v-text-field
     id="new-scene-name"
     v-model="name"
     label="Scene Name"
-    variant="underlined"
+    variant="outlined"
     density="comfortable"
     autofocus
   />

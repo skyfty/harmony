@@ -175,7 +175,7 @@ async function persistThumbnailToCatalog(assetId: string, thumbnailDataUrl: stri
   try {
     const { useSceneStore } = await import('@/stores/sceneStore')
     const sceneStore = useSceneStore()
-    const current = sceneStore.getRegisteredAsset(assetId)
+    const current = sceneStore.getCatalogAsset(assetId)
     if (!current || current.thumbnail === thumbnailDataUrl) {
       return
     }

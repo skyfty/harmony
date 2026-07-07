@@ -28,6 +28,7 @@ import {
   loadSkyCubeTexture,
 	isSkyCubeArchiveExtension,
 	isRuntimeHiddenInPreview,
+	type ShowPurposeBehaviorButton,
 	type InstancedLodTarget,
 } from '@schema/core'
 import {
@@ -350,6 +351,7 @@ import {
 	handleBehaviorStopAnimationEvent,
 	dispatchPerformBehaviorEvent,
 } from '@schema/behaviors/eventHelpers'
+import { resolvePerformSequenceLabel } from '@schema/behaviors/sequenceOptions'
 import {
 	loadStoredPunchedNodeIds,
 	mergeStoredPunchedNodeId,
@@ -1386,7 +1388,7 @@ const lanternActiveSlideIndex = ref(0)
 const lanternEventToken = ref<string | null>(null)
 
 const purposeControlsVisible = ref(false)
-const purposeTargetNodeId = ref<string | null>(null)
+const purposeButtons = ref<ShowPurposeBehaviorButton[]>([])
 const purposeSourceNodeId = ref<string | null>(null)
 
 type VehicleDriveControlFlags = {
@@ -7618,43 +7620,58 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
-function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
+function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
 	purposeSourceNodeId.value = sourceNodeId ?? null
-	purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null
-	purposeControlsVisible.value = true
+	purposeButtons.value = Array.isArray(buttons) ? buttons.slice() : []
+	purposeControlsVisible.value = purposeButtons.value.length > 0
 }
 
 function hidePurposeControls(): void {
 	purposeControlsVisible.value = false
-	purposeTargetNodeId.value = null
+	purposeButtons.value = []
 	purposeSourceNodeId.value = null
 }
 
 function handleShowPurposeControlsEvent(
 	event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
 ): void {
-	showPurposeControls(event.targetNodeId ?? null, event.nodeId ?? null)
+	showPurposeControls(event.buttons ?? [], event.nodeId ?? null)
 }
 
 function handleHidePurposeControlsEvent(): void {
 	hidePurposeControls()
 }
 
-function handlePurposeWatchClick(): void {
-	const targetId = purposeTargetNodeId.value ?? purposeSourceNodeId.value
-	if (!targetId) {
-		console.warn('[ScenePreview] Watch button ignored: no target node available')
-		return
+function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
+	const explicit = button.label?.trim()
+	if (explicit) {
+		return explicit
 	}
-	const result = performWatchFocus(targetId, true)
-	if (!result.success) {
-		console.warn('[ScenePreview] Failed to move camera to watch target', result.message)
-		return
+	const sequenceLabel = resolvePerformSequenceLabel(currentDocument?.nodes ?? [], button.targetNodeId, button.targetSequenceId)
+	if (sequenceLabel) {
+		return sequenceLabel
 	}
+	return button.targetSequenceId ?? '未命名按钮'
 }
 
-function handlePurposeResetClick(): void {
-	resetCameraToLevelView()
+function handlePurposeButtonClick(button: ShowPurposeBehaviorButton): void {
+	const targetNodeId = button.targetNodeId?.trim() ?? ''
+	const targetSequenceId = button.targetSequenceId?.trim() ?? ''
+	if (!targetNodeId || !targetSequenceId) {
+		console.warn('[ScenePreview] Purpose button ignored: incomplete target configuration')
+		return
+	}
+	const results = triggerBehaviorAction(
+		targetNodeId,
+		'perform',
+		{
+			payload: {
+				sourceNodeId: purposeSourceNodeId.value ?? targetNodeId,
+			},
+		},
+		{ sequenceId: targetSequenceId },
+	)
+	processBehaviorEvents(results)
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
@@ -13802,32 +13819,18 @@ watch(
 			class="scene-preview__purpose-controls"
 		>
 			<v-btn
-				class="scene-preview__purpose-button scene-preview__purpose-button--watch"
-				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'watching' }"
-				prepend-icon="mdi-eye-outline"
+				v-for="button in purposeButtons"
+				:key="button.id"
+				class="scene-preview__purpose-button"
+				prepend-icon="mdi-play-circle-outline"
 				rounded="pill"
 				variant="flat"
 				:elevation="0"
 				:ripple="false"
-				:aria-pressed="cameraViewState.mode === 'watching'"
-				title="Watch view"
-				@click="handlePurposeWatchClick"
+				:title="resolvePurposeButtonLabel(button)"
+				@click="handlePurposeButtonClick(button)"
 			>
-				<span class="scene-preview__purpose-label">Watch</span>
-			</v-btn>
-			<v-btn
-				class="scene-preview__purpose-button scene-preview__purpose-button--level"
-				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'level' }"
-				prepend-icon="mdi-panorama-horizontal-outline"
-				rounded="pill"
-				variant="flat"
-				:elevation="0"
-				:ripple="false"
-				:aria-pressed="cameraViewState.mode === 'level'"
-				title="Reset to level"
-				@click="handlePurposeResetClick"
-			>
-				<span class="scene-preview__purpose-label">Level</span>
+				<span class="scene-preview__purpose-label">{{ resolvePurposeButtonLabel(button) }}</span>
 			</v-btn>
 		</div>
 		<v-btn-group

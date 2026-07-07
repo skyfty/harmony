@@ -1,15 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import type {
-  BehaviorComponentProps,
-  SceneBehavior,
-  SceneNode,
-  SceneNodeComponentState,
-  TriggerBehaviorParams,
-} from '@schema/core'
-import { BEHAVIOR_COMPONENT_TYPE } from '@schema/components'
-import { behaviorMapToList } from '@schema/behaviors/definitions'
+import type { TriggerBehaviorParams } from '@schema/core'
+import { collectPerformSequenceOptions, resolveSceneNodeName } from '@schema/behaviors/sequenceOptions'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 
@@ -33,77 +26,9 @@ const params = computed<TriggerBehaviorParams>(() => ({
 
 const isPicking = ref(false)
 let activeRequestId: number | null = null
+const targetNodeName = computed(() => resolveSceneNodeName(nodes.value, params.value.targetNodeId))
 
-function findNodeName(tree: SceneNode[] | undefined, id: string | null): string | null {
-  if (!tree || !id) {
-    return null
-  }
-  for (const node of tree) {
-    if (node.id === id) {
-      return node.name?.trim().length ? node.name : node.id
-    }
-    const child = findNodeName(node.children, id)
-    if (child) {
-      return child
-    }
-  }
-  return null
-}
-
-function findNodeById(tree: SceneNode[] | undefined, id: string | null): SceneNode | null {
-  if (!tree || !id) {
-    return null
-  }
-  for (const node of tree) {
-    if (node.id === id) {
-      return node
-    }
-    const child = findNodeById(node.children, id)
-    if (child) {
-      return child
-    }
-  }
-  return null
-}
-
-const targetNodeName = computed(() => findNodeName(nodes.value, params.value.targetNodeId))
-
-const performBehaviors = computed(() => {
-  const targetNode = findNodeById(nodes.value, params.value.targetNodeId)
-  if (!targetNode) {
-    return [] as Array<{ label: string; sequenceId: string }>
-  }
-  const component = targetNode.components?.[BEHAVIOR_COMPONENT_TYPE] as
-    | SceneNodeComponentState<BehaviorComponentProps>
-    | undefined
-  if (!component) {
-    return [] as Array<{ label: string; sequenceId: string }>
-  }
-  const source = component.props?.behaviors
-  const list: SceneBehavior[] = Array.isArray(source)
-    ? source
-    : behaviorMapToList(source)
-  const seen = new Map<string, string>()
-  let unnamedIndex = 1
-  list.forEach((entry) => {
-    if (!entry || entry.action !== 'perform') {
-      return
-    }
-    const key = entry.sequenceId?.trim()
-    if (!key) {
-      return
-    }
-    if (seen.has(key)) {
-      return
-    }
-    const label = entry.name?.trim() || `Perform Sequence ${unnamedIndex}`
-    if (!entry.name?.trim()) {
-      unnamedIndex += 1
-    }
-    seen.set(key, label)
-  })
-  return Array.from(seen.entries()).map(([sequenceId, label]) => ({ label, sequenceId }))
-})
+const performBehaviors = computed(() => collectPerformSequenceOptions(nodes.value, params.value.targetNodeId))
 
 function updateParams(next: TriggerBehaviorParams) {
   emit('update:modelValue', next)
