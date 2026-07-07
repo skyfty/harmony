@@ -2743,7 +2743,7 @@ let characterCameraFollowNodeId: string | null = null;
 let characterInputYaw = Math.PI;
 let characterInputYawInitialized = false;
 let characterInputYawNodeId: string | null = null;
-let characterInputYawMovementLatched = false;
+const CHARACTER_CONTROL_DEBUG_LOGGING = Boolean(import.meta.env?.DEV);
 const characterCameraFollowPlacementCache = {
   nodeId: null as string | null,
   objectUuid: null as string | null,
@@ -2756,8 +2756,6 @@ const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
 const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.38;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
-const CHARACTER_TURN_CATCH_SPEED = 5;
-const CHARACTER_TURN_RETURN_SPEED = 9;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -3252,7 +3250,6 @@ const characterAuthorityInput = reactive({
   crouch: false,
   interact: false,
 });
-const characterAuthorityTurnTarget = ref(0);
 const characterKeyState = reactive({
   forward: false,
   backward: false,
@@ -6829,7 +6826,7 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
     return {
       moveX: characterAuthorityInput.moveX,
       moveZ: characterAuthorityInput.moveZ,
-      turn: 0,
+      turn: characterAuthorityInput.turn,
       jump: characterAuthorityInput.jump,
       sprint: characterAuthorityInput.sprint,
       crouch: characterAuthorityInput.crouch,
@@ -9519,7 +9516,6 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 function resolveSceneryCharacterInputYaw(): number | null {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.001;
-  const hasLocalMovementInput = hasSceneryEffectiveMovementInput();
   resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId);
   ensureSceneryCharacterInputYawInitialized();
   if (hasTurnInput) {
@@ -9529,29 +9525,22 @@ function resolveSceneryCharacterInputYaw(): number | null {
     const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
     characterInputYaw += turnRateRadiansPerSecond * characterAuthorityInput.turn * characterControlDeltaSeconds;
     characterInputYaw = normalizeSceneryCharacterInputYaw(characterInputYaw);
-    characterInputYawMovementLatched = hasLocalMovementInput;
+    logSceneryCharacterControlDebug(
+      'yaw-turn',
+      `turn=${characterAuthorityInput.turn.toFixed(3)} moveZ=${characterAuthorityInput.moveZ.toFixed(3)} yaw=${characterInputYaw.toFixed(3)} turnRateDeg=${props.turnRateDegreesPerSecond.toFixed(1)}`,
+    );
     return characterInputYaw;
   }
 
-  if (hasLocalMovementInput) {
-    if (!characterInputYawMovementLatched) {
-      const moveYaw = resolveSceneryCharacterMovementYaw();
-      if (typeof moveYaw === 'number') {
-        characterInputYaw = moveYaw;
-        characterInputYaw = normalizeSceneryCharacterInputYaw(characterInputYaw);
-      }
-    }
-    characterInputYawMovementLatched = true;
+  if (Math.abs(characterAuthorityInput.moveZ) > CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD) {
+    logSceneryCharacterControlDebug(
+      'yaw-hold',
+      `moveZ=${characterAuthorityInput.moveZ.toFixed(3)} yaw=${characterInputYaw.toFixed(3)}`,
+    );
     return characterInputYaw;
   }
 
-  characterInputYawMovementLatched = false;
   return null;
-}
-
-function hasSceneryEffectiveMovementInput(): boolean {
-  return Math.min(1, Math.hypot(characterAuthorityInput.moveX, characterAuthorityInput.moveZ))
-    > CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD;
 }
 
 function resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId: string | null): void {
@@ -9560,7 +9549,6 @@ function resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId: string | n
   }
   characterInputYawNodeId = controlledNodeId;
   characterInputYawInitialized = false;
-  characterInputYawMovementLatched = false;
 }
 
 function ensureSceneryCharacterInputYawInitialized(): void {
@@ -9575,33 +9563,22 @@ function normalizeSceneryCharacterInputYaw(value: number): number {
   return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI;
 }
 
+function logSceneryCharacterControlDebug(stage: string, message: string): void {
+  if (!CHARACTER_CONTROL_DEBUG_LOGGING) {
+    return;
+  }
+  console.log(`[SceneryViewer:${stage}] ${message}`);
+}
+
 function resolveSceneryCharacterInputYawSeed(): number {
   const stableYaw = resolveSceneryControlledCharacterStableYaw();
   if (typeof stableYaw === 'number') {
     return stableYaw;
   }
-  const moveYaw = resolveSceneryCharacterMovementYaw();
-  if (typeof moveYaw === 'number') {
-    return moveYaw;
+  if (Number.isFinite(characterInputYaw)) {
+    return characterInputYaw;
   }
   return Math.PI;
-}
-
-function resolveSceneryCharacterMovementYaw(): number | null {
-  const stableYaw = resolveSceneryControlledCharacterStableYaw();
-  if (characterJoystickState.active) {
-    return stableYaw;
-  }
-  const activeCamera = renderContext?.camera ?? null;
-  if (activeCamera) {
-    activeCamera.getWorldDirection(tempForwardVec);
-    tempForwardVec.y = 0;
-    if (tempForwardVec.lengthSq() > 1e-8) {
-      tempForwardVec.normalize();
-      return Math.atan2(tempForwardVec.x, tempForwardVec.z);
-    }
-  }
-  return stableYaw;
 }
 
 function resolveSceneryControlledCharacterStableYaw(): number | null {
@@ -9646,7 +9623,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     return;
   }
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const localYaw = resolveSceneryCharacterInputYaw();
+  const localYaw = characterInputYaw;
   physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
     const isControlled = nodeId === controlledNodeId;
     const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
@@ -9665,6 +9642,15 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
       ? pathFollowInput.yaw
       : (isControlled ? localYaw : null);
+    if (isControlled) {
+      logSceneryCharacterControlDebug(
+        'bridge',
+        `node=${nodeId} source=${hasPathFollowInput ? 'autotour' : 'local'} `
+          + `moveX=${(hasPathFollowInput ? pathFollowInput!.moveX : characterAuthorityInput.moveX).toFixed(3)} `
+          + `moveZ=${(hasPathFollowInput ? pathFollowInput!.moveZ : characterAuthorityInput.moveZ).toFixed(3)} `
+          + `yaw=${typeof activeYaw === 'number' ? activeYaw.toFixed(3) : 'null'}`,
+      );
+    }
     void physicsBridge?.setCharacterInput({
       characterId,
       moveX: hasPathFollowInput ? pathFollowInput!.moveX : (isControlled ? characterAuthorityInput.moveX : 0),
@@ -14686,12 +14672,14 @@ function resolveJoystickCharacterInput(): { turn: number; moveZ: number } {
 }
 
 function updateCharacterAuthorityInputFromKeys(): void {
-  const keyMoveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
-  const keyMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
   const joystickInput = resolveJoystickCharacterInput();
-  characterAuthorityInput.moveX = clampAxisScalar(keyMoveX);
-  characterAuthorityInput.moveZ = clampAxisScalar(keyMoveZ + joystickInput.moveZ);
-  characterAuthorityTurnTarget.value = clampAxisScalar(joystickInput.turn);
+  const keyboardMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
+  const keyboardTurn = (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0);
+  const moveZ = clampAxisScalar(joystickInput.moveZ + keyboardMoveZ);
+  const turn = clampAxisScalar(joystickInput.turn + keyboardTurn);
+  characterAuthorityInput.moveX = 0;
+  characterAuthorityInput.moveZ = moveZ;
+  characterAuthorityInput.turn = turn;
   characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
@@ -14706,16 +14694,12 @@ function updateCharacterAuthorityInputFromKeys(): void {
   }
   characterInputJumpLatch = false;
   characterAuthorityInput.jump = false;
-}
-
-function updateCharacterAuthorityTurnRelaxation(delta: number): void {
-  if (!Number.isFinite(delta) || delta <= 0) {
-    return;
-  }
-  const target = characterAuthorityTurnTarget.value;
-  const speed = target === 0 ? CHARACTER_TURN_RETURN_SPEED : CHARACTER_TURN_CATCH_SPEED;
-  const nextTurn = approachAxisValue(characterAuthorityInput.turn, target, speed, delta);
-  characterAuthorityInput.turn = clampAxisScalar(nextTurn);
+  logSceneryCharacterControlDebug(
+    'input',
+    `stick=(${characterJoystickVector.x.toFixed(3)},${characterJoystickVector.y.toFixed(3)}) `
+      + `moveZ=${characterAuthorityInput.moveZ.toFixed(3)} turn=${characterAuthorityInput.turn.toFixed(3)} `
+      + `yaw=${characterInputYaw.toFixed(3)} keys=(f:${Number(characterKeyState.forward)} b:${Number(characterKeyState.backward)} l:${Number(characterKeyState.left)} r:${Number(characterKeyState.right)})`,
+  );
 }
 
 function clearCharacterActionJumpReleaseTimer(): void {
@@ -14880,7 +14864,6 @@ function resetCharacterControlInputs(): void {
   characterAuthorityInput.moveX = 0;
   characterAuthorityInput.moveZ = 0;
   characterAuthorityInput.turn = 0;
-  characterAuthorityTurnTarget.value = 0;
   characterAuthorityInput.jump = false;
   characterAuthorityInput.sprint = false;
   characterAuthorityInput.crouch = false;
@@ -15234,7 +15217,7 @@ function handleControlPadMouseDown(event: MouseEvent): void {
     handleDrivePadMouseDown(event);
     return;
   }
-  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+  if (characterControlUi.value.visible) {
     if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
       return;
     }
@@ -15400,17 +15383,20 @@ function handleCharacterDrivePadTouchStart(event: TouchEvent): void {
   if (!characterControlUi.value.visible || vehicleDriveUi.value.visible) {
     return;
   }
-  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const touch = event.changedTouches?.[0] ?? null;
   const coords = getTouchCoordinates(touch);
   if (!coords) {
     return;
   }
-  if (!shouldActivateDrivePad(coords.y, characterDrivePadViewportRect)) {
+  if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
+    return;
+  }
+  if (isPointInsideCharacterActionsBar(coords.x, coords.y)) {
     return;
   }
   event.stopPropagation();
   event.preventDefault();
+  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
   summonCharacterDrivePadAt(localCoords.x, localCoords.y);
   handleCharacterJoystickTouchStart(event);
@@ -15460,16 +15446,19 @@ function detachCharacterDrivePadMouseListeners(): void {
 }
 
 function handleCharacterDrivePadMouseDown(event: MouseEvent): void {
-  if (!characterControlUi.value.visible || !isWeChatMiniProgram || event.button !== 0) {
+  if (!characterControlUi.value.visible || event.button !== 0) {
     return;
   }
-  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const coords = { x: event.clientX, y: event.clientY };
-  if (!shouldActivateDrivePad(coords.y, characterDrivePadViewportRect)) {
+  if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
+    return;
+  }
+  if (isPointInsideCharacterActionsBar(coords.x, coords.y)) {
     return;
   }
   event.stopPropagation();
   event.preventDefault();
+  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
   summonCharacterDrivePadAt(localCoords.x, localCoords.y);
   characterJoystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
@@ -15494,7 +15483,6 @@ function handleCharacterDrivePadMouseUp(): void {
     scheduleCharacterDrivePadFade();
   }
   detachCharacterDrivePadMouseListeners();
-  hideCharacterDrivePadImmediate();
 }
 
 function handleJoystickTouchStart(event: TouchEvent): void {
@@ -19257,7 +19245,6 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           updateDriveInputRelaxation(deltaSeconds);
-          updateCharacterAuthorityTurnRelaxation(deltaSeconds);
         }
 
         // Camera tween has priority over user controls.
@@ -19272,6 +19259,7 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           characterControlDeltaSeconds = deltaSeconds;
+          updateCharacterAuthorityInputFromKeys();
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
