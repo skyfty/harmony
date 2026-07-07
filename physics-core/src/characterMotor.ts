@@ -1,4 +1,5 @@
-import type { PhysicsCharacterDesc } from './types'
+import { rotateVectorByQuaternion } from './worldMath'
+import type { PhysicsCharacterDesc, PhysicsQuaternion } from './types'
 
 export type PhysicsCharacterMotorGroundProbe = {
   hit: boolean
@@ -40,14 +41,27 @@ const GROUND_PROBE_EPSILON = 0.08
 const GROUND_SNAP_DISTANCE = 0.18
 const GROUND_STICK_VELOCITY = -2
 
-export function createPhysicsCharacterMotorState(): PhysicsCharacterMotorState {
+export function createPhysicsCharacterMotorState(initialYaw = Math.PI): PhysicsCharacterMotorState {
   return {
     grounded: false,
     jumpBuffered: false,
     verticalVelocity: 0,
-    yaw: Math.PI,
+    yaw: initialYaw,
     coyoteTimeRemaining: 0,
   }
+}
+
+export function resolvePhysicsCharacterMotorYawFromWorldQuaternion(
+  quaternion: PhysicsQuaternion | { x?: number; y?: number; z?: number; w?: number } | null | undefined,
+  forwardAxis: PhysicsCharacterDesc['forwardAxis'],
+): number {
+  const localForward = resolveCharacterLocalForwardVector(forwardAxis)
+  const worldForward = rotateVectorByQuaternion(localForward, quaternion)
+  const horizontalLength = Math.hypot(worldForward[0], worldForward[2])
+  if (!(horizontalLength > 1e-6)) {
+    return Math.PI
+  }
+  return Math.atan2(worldForward[0], worldForward[2])
 }
 
 export function stepPhysicsCharacterMotor(
@@ -192,4 +206,18 @@ function normalizeVector(vector: [number, number, number]): [number, number, num
     return [0, 1, 0]
   }
   return [vector[0] / length, vector[1] / length, vector[2] / length]
+}
+
+function resolveCharacterLocalForwardVector(forwardAxis: PhysicsCharacterDesc['forwardAxis']): [number, number, number] {
+  switch (forwardAxis) {
+    case '-x':
+      return [-1, 0, 0]
+    case '+z':
+      return [0, 0, 1]
+    case '-z':
+      return [0, 0, -1]
+    case '+x':
+    default:
+      return [1, 0, 0]
+  }
 }

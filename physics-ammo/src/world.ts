@@ -5,6 +5,7 @@ import {
   normalizeQuaternion,
   resolveCharacterProbeOffsets,
   resolveSteerableWheelIndices,
+  resolvePhysicsCharacterMotorYawFromWorldQuaternion,
   rotateVectorByQuaternion,
   PhysicsWorldBase,
   type PhysicsWorldBodyState,
@@ -317,6 +318,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
     if (!ammo) {
       throw new Error('Ammo module is not loaded')
     }
+    const motorYaw = resolvePhysicsCharacterMotorYawFromWorldQuaternion(body.quaternion, desc.forwardAxis)
     const zeroFactor = createAmmoVector3(ammo, [0, 0, 0])
     const zeroVelocity = createAmmoVector3(ammo, [0, 0, 0])
     body.setAngularFactor?.(zeroFactor)
@@ -328,7 +330,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
       bodyId: desc.bodyId,
       body,
       input: null,
-      motorState: createPhysicsCharacterMotorState(),
+      motorState: createPhysicsCharacterMotorState(motorYaw),
     }
   }
 

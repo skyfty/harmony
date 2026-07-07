@@ -854,6 +854,7 @@ export async function buildPhysicsSceneAsset(
         asset.characters.push({
           characterId: nextCharacterId++,
           bodyId,
+          forwardAxis: characterProps.forwardAxis,
           radius: Math.max(0.05, characterProps.colliderRadius),
           height: Math.max(Math.max(0.05, characterProps.colliderRadius) * 2, characterProps.colliderHeight),
           stepHeight: characterProps.stepHeight,

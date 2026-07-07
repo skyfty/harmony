@@ -1431,6 +1431,21 @@ const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
 const scenePreviewDriveBindingsReady = ref(false)
 const activeAutoTourNodeIds = reactive(new Set<string>())
+const characterControlUi = computed(() => {
+	const ui = runtimePanelUi.value
+	if (!ui.visible || ui.mode !== 'character') {
+		return {
+			visible: false,
+			label: '',
+			joystickActive: false,
+		} as const
+	}
+	return {
+		visible: true,
+		label: ui.label || 'Character',
+		joystickActive: false,
+	} as const
+})
 
 // Auto-tour pause only affects tour (not global playback), and does not change manual-drive behavior.
 const autoTourPaused = ref(false)
@@ -11901,7 +11916,7 @@ function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number | nul
 		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
 	}
 	if (hasLocalMovementInput && !hasTurnInput) {
-		if (characterControlUi.value.joystickActive) {
+		if (characterControlUi.value?.joystickActive) {
 			const stableYaw = resolveScenePreviewControlledCharacterStableYaw()
 			if (typeof stableYaw === 'number') {
 				characterInputYaw = stableYaw
