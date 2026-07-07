@@ -11808,6 +11808,10 @@ function normalizeScenePreviewCharacterInputYaw(value: number): number {
 }
 
 function resolveScenePreviewCharacterInputYawSeed(): number {
+	const stableYaw = resolveScenePreviewControlledCharacterStableYaw()
+	if (typeof stableYaw === 'number') {
+		return stableYaw
+	}
 	const controlledObject = findDefaultControlledCharacterObject()
 	if (controlledObject) {
 		resolveControlledCharacterMotionForwardAxis(tempDirection)
@@ -11831,9 +11835,41 @@ function resolveScenePreviewCharacterInputYawSeed(): number {
 	return Math.PI
 }
 
+function resolveScenePreviewControlledCharacterStableYaw(): number | null {
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (!controlledNodeId) {
+		return null
+	}
+	const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(controlledNodeId) ?? controlledNodeId
+	const frameState = physicsBridgeFrameBodiesByNodeId.get(bodyNodeId) ?? null
+	if (!frameState) {
+		return null
+	}
+	resolveControlledCharacterMotionForwardAxis(tempDirection)
+	return resolveScenePreviewCharacterYawFromQuaternion(frameState.quaternion, tempDirection)
+}
+
+function resolveScenePreviewCharacterYawFromQuaternion(
+	quaternion: THREE.Quaternion | null | undefined,
+	forwardAxis: THREE.Vector3,
+): number | null {
+	if (!quaternion) {
+		return null
+	}
+	tempDirection.copy(forwardAxis)
+	tempDirection.applyQuaternion(quaternion)
+	tempDirection.y = 0
+	if (tempDirection.lengthSq() <= 1e-8) {
+		return null
+	}
+	tempDirection.normalize()
+	return Math.atan2(tempDirection.x, tempDirection.z)
+}
+
 const CHARACTER_PREVIEW_MAX_TURN_RATE_DEGREES_PER_SECOND = 180
 const CHARACTER_PREVIEW_MOVING_TURN_RATE_SCALE = 0.5
 const CHARACTER_PREVIEW_REVERSE_TURN_RATE_SCALE = 0.88
+const CHARACTER_PREVIEW_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05
 
 function resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude: number, moveZ: number): number {
 	const props = resolveDefaultControlledCharacterComponentProps()
@@ -11845,13 +11881,11 @@ function resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude:
 	return ((cappedTurnRate * turnScale * reverseScale) * Math.PI) / 180
 }
 
-function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number {
+function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number | null {
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
 	const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.05
-	const movementMagnitude = resolveCharacterControlMovementMagnitude(
-		characterAuthorityInput.moveX,
-		characterAuthorityInput.moveZ,
-	)
+	const movementMagnitude = resolveCharacterControlMovementMagnitude(characterAuthorityInput.moveX, characterAuthorityInput.moveZ)
+	const hasLocalMovementInput = movementMagnitude > CHARACTER_PREVIEW_EFFECTIVE_MOVEMENT_THRESHOLD
 	if (characterInputYawNodeId !== controlledNodeId) {
 		characterInputYawNodeId = controlledNodeId
 		characterInputYawInitialized = false
@@ -11866,7 +11900,28 @@ function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number {
 			* deltaSeconds
 		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
 	}
-	return characterInputYaw
+	if (hasLocalMovementInput && !hasTurnInput) {
+		if (characterControlUi.value.joystickActive) {
+			const stableYaw = resolveScenePreviewControlledCharacterStableYaw()
+			if (typeof stableYaw === 'number') {
+				characterInputYaw = stableYaw
+			}
+		} else {
+			const activeCamera = camera
+			if (activeCamera) {
+				activeCamera.getWorldDirection(tempDirection)
+				tempDirection.y = 0
+				if (tempDirection.lengthSq() > 1e-8) {
+					tempDirection.normalize()
+					characterInputYaw = Math.atan2(tempDirection.x, tempDirection.z)
+				}
+			}
+		}
+	}
+	if (hasTurnInput || hasLocalMovementInput) {
+		return characterInputYaw
+	}
+	return null
 }
 
 function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void {
@@ -11874,7 +11929,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 		return
 	}
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
-	const yaw = updateScenePreviewCharacterInputYaw(deltaSeconds)
+	const localYaw = updateScenePreviewCharacterInputYaw(deltaSeconds)
 	physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
 		const isControlled = nodeId === controlledNodeId
 		const pathFollowInput = characterAutoTourRuntime.getInput(nodeId)
@@ -11884,6 +11939,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 				Math.abs(pathFollowInput!.moveX) > 0.001
 				|| Math.abs(pathFollowInput!.moveZ) > 0.001
 				|| Math.abs(pathFollowInput!.turn) > 0.001
+				|| typeof pathFollowInput!.yaw === 'number'
 				|| pathFollowInput!.jump
 				|| pathFollowInput!.sprint
 				|| pathFollowInput!.crouch
@@ -11891,7 +11947,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 			)
 		const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
 			? pathFollowInput.yaw
-			: yaw
+			: (isControlled ? localYaw : null)
 		void physicsBridge?.setCharacterInput({
 			characterId,
 			moveX: hasPathFollowInput ? pathFollowInput!.moveX : 0,

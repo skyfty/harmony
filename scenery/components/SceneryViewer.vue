@@ -2740,6 +2740,10 @@ const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let characterCameraFollowNodeId: string | null = null;
+let characterInputYaw = Math.PI;
+let characterInputYawInitialized = false;
+let characterInputYawNodeId: string | null = null;
+let characterInputYawMovementLatched = false;
 const characterCameraFollowPlacementCache = {
   nodeId: null as string | null,
   objectUuid: null as string | null,
@@ -2751,6 +2755,7 @@ const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
 const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.38;
+const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
 const CHARACTER_TURN_CATCH_SPEED = 5;
 const CHARACTER_TURN_RETURN_SPEED = 9;
 
@@ -9511,34 +9516,84 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   });
 }
 
-function resolveSceneryCharacterInputYaw(): number {
-  const controlledObject = findDefaultControlledCharacterObject();
-  if (controlledObject) {
+function resolveSceneryCharacterInputYaw(): number | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.001;
+  const hasLocalMovementInput = hasSceneryEffectiveMovementInput();
+  resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId);
+  ensureSceneryCharacterInputYawInitialized();
+  if (hasTurnInput) {
     const props = clampCharacterControllerComponentProps(
-      resolveCharacterControllerComponent(resolveNodeById(resolveDefaultControlledCharacterNodeId() ?? ''))?.props ?? null,
+      resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
     );
-    controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
-    resolveControlledCharacterMotionForwardAxis(characterControlYawForwardScratch);
-    characterControlYawForwardScratch.applyQuaternion(protagonistPoseQuaternion);
-    characterControlYawForwardScratch.y = 0;
-    if (characterControlYawForwardScratch.lengthSq() > 1e-8) {
-      characterControlYawForwardScratch.normalize();
-      const currentYaw = Math.atan2(characterControlYawForwardScratch.x, characterControlYawForwardScratch.z);
-      if (Math.abs(characterAuthorityInput.turn) > 0.001) {
-        const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
-        return currentYaw + (turnRateRadiansPerSecond * characterAuthorityInput.turn * characterControlDeltaSeconds);
-      }
-      if (characterJoystickState.active) {
-        return currentYaw;
-      }
-    }
+    const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
+    characterInputYaw += turnRateRadiansPerSecond * characterAuthorityInput.turn * characterControlDeltaSeconds;
+    characterInputYaw = normalizeSceneryCharacterInputYaw(characterInputYaw);
+    characterInputYawMovementLatched = hasLocalMovementInput;
+    return characterInputYaw;
   }
 
-  const hasLocalMovementInput =
-    Math.abs(characterAuthorityInput.moveX) > 0.001
-    || Math.abs(characterAuthorityInput.moveZ) > 0.001;
+  if (hasLocalMovementInput) {
+    if (!characterInputYawMovementLatched) {
+      const moveYaw = resolveSceneryCharacterMovementYaw();
+      if (typeof moveYaw === 'number') {
+        characterInputYaw = moveYaw;
+        characterInputYaw = normalizeSceneryCharacterInputYaw(characterInputYaw);
+      }
+    }
+    characterInputYawMovementLatched = true;
+    return characterInputYaw;
+  }
+
+  characterInputYawMovementLatched = false;
+  return null;
+}
+
+function hasSceneryEffectiveMovementInput(): boolean {
+  return Math.min(1, Math.hypot(characterAuthorityInput.moveX, characterAuthorityInput.moveZ))
+    > CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD;
+}
+
+function resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId: string | null): void {
+  if (characterInputYawNodeId === controlledNodeId) {
+    return;
+  }
+  characterInputYawNodeId = controlledNodeId;
+  characterInputYawInitialized = false;
+  characterInputYawMovementLatched = false;
+}
+
+function ensureSceneryCharacterInputYawInitialized(): void {
+  if (characterInputYawInitialized) {
+    return;
+  }
+  characterInputYaw = resolveSceneryCharacterInputYawSeed();
+  characterInputYawInitialized = true;
+}
+
+function normalizeSceneryCharacterInputYaw(value: number): number {
+  return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI;
+}
+
+function resolveSceneryCharacterInputYawSeed(): number {
+  const stableYaw = resolveSceneryControlledCharacterStableYaw();
+  if (typeof stableYaw === 'number') {
+    return stableYaw;
+  }
+  const moveYaw = resolveSceneryCharacterMovementYaw();
+  if (typeof moveYaw === 'number') {
+    return moveYaw;
+  }
+  return Math.PI;
+}
+
+function resolveSceneryCharacterMovementYaw(): number | null {
+  const stableYaw = resolveSceneryControlledCharacterStableYaw();
+  if (characterJoystickState.active) {
+    return stableYaw;
+  }
   const activeCamera = renderContext?.camera ?? null;
-  if (activeCamera && hasLocalMovementInput) {
+  if (activeCamera) {
     activeCamera.getWorldDirection(tempForwardVec);
     tempForwardVec.y = 0;
     if (tempForwardVec.lengthSq() > 1e-8) {
@@ -9546,17 +9601,44 @@ function resolveSceneryCharacterInputYaw(): number {
       return Math.atan2(tempForwardVec.x, tempForwardVec.z);
     }
   }
-  if (controlledObject) {
-    controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
-    resolveControlledCharacterMotionForwardAxis(tempForwardVec);
-    tempForwardVec.applyQuaternion(protagonistPoseQuaternion);
-    tempForwardVec.y = 0;
-    if (tempForwardVec.lengthSq() > 1e-8) {
-      tempForwardVec.normalize();
-      return Math.atan2(tempForwardVec.x, tempForwardVec.z);
-    }
+  return stableYaw;
+}
+
+function resolveSceneryControlledCharacterStableYaw(): number | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return null;
   }
-  return Math.PI;
+  const forwardAxis = resolveControlledCharacterMotionForwardAxis(characterControlYawForwardScratch);
+  const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(controlledNodeId) ?? controlledNodeId;
+  const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(bodyNodeId) ?? null;
+  const physicsYaw = resolveSceneryCharacterYawFromQuaternion(physicsFrameState?.quaternion ?? null, forwardAxis);
+  if (typeof physicsYaw === 'number') {
+    return physicsYaw;
+  }
+  const controlledObject = findDefaultControlledCharacterObject();
+  if (!controlledObject) {
+    return null;
+  }
+  controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
+  return resolveSceneryCharacterYawFromQuaternion(protagonistPoseQuaternion, forwardAxis);
+}
+
+function resolveSceneryCharacterYawFromQuaternion(
+  quaternion: THREE.Quaternion | null | undefined,
+  forwardAxis: THREE.Vector3,
+): number | null {
+  if (!quaternion) {
+    return null;
+  }
+  tempYawForwardVec.copy(forwardAxis);
+  tempYawForwardVec.applyQuaternion(quaternion);
+  tempYawForwardVec.y = 0;
+  if (tempYawForwardVec.lengthSq() <= 1e-8) {
+    return null;
+  }
+  tempYawForwardVec.normalize();
+  return Math.atan2(tempYawForwardVec.x, tempYawForwardVec.z);
 }
 
 function syncSceneryPhysicsBridgeCharacterInput(): void {
@@ -9564,7 +9646,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     return;
   }
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const yaw = resolveSceneryCharacterInputYaw();
+  const localYaw = resolveSceneryCharacterInputYaw();
   physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
     const isControlled = nodeId === controlledNodeId;
     const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
@@ -9574,6 +9656,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
         Math.abs(pathFollowInput!.moveX) > 0.001
         || Math.abs(pathFollowInput!.moveZ) > 0.001
         || Math.abs(pathFollowInput!.turn) > 0.001
+        || typeof pathFollowInput!.yaw === 'number'
         || pathFollowInput!.jump
         || pathFollowInput!.sprint
         || pathFollowInput!.crouch
@@ -9581,7 +9664,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       );
     const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
       ? pathFollowInput.yaw
-      : yaw;
+      : (isControlled ? localYaw : null);
     void physicsBridge?.setCharacterInput({
       characterId,
       moveX: hasPathFollowInput ? pathFollowInput!.moveX : (isControlled ? characterAuthorityInput.moveX : 0),
@@ -15707,9 +15790,10 @@ function updateSceneCompassHeading(): void {
   if (characterControlUi.value.visible) {
     const controlledNodeId = resolveDefaultControlledCharacterNodeId();
     const telemetry = controlledNodeId ? controlledNodeMotionRuntime.get(controlledNodeId) : null;
+    const resolvedYaw = resolveSceneryCharacterInputYaw();
     const headingDegrees = telemetry
       ? telemetry.headingYawDeg
-      : THREE.MathUtils.radToDeg(resolveSceneryCharacterInputYaw());
+      : THREE.MathUtils.radToDeg(resolvedYaw ?? Math.PI);
     const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
     commitVehicleHeadingDegrees(headingDegrees - northDirectionAngleDegrees);
     return;
@@ -19500,6 +19584,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 5: apply view settings (camera alignment, environment, projection).
   applyDocumentViewSettings(payload.document, camera);
   activatePendingDefaultSteerDriveIfNeeded();
+  updateCharacterFollowCamera(0, { immediate: true });
   markInstancedCullingDirty();
 
   // Phase 6: start the render loop.
