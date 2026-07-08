@@ -348,12 +348,12 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
   {
     id: 'moveTo',
     label: 'Move To',
-    description: 'Slide the camera to the node and orient it relative to the node.',
+    description: 'Move the active subject to the node and orient it relative to the node.',
     icon: 'mdi-camera-control',
     createDefaultParams(): MoveToBehaviorParams {
       return {
         targetNodeId: null,
-        duration: 0.8,
+        kinetics: false,
       }
     },
   },
@@ -982,16 +982,16 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
           seconds: Math.max(0, binding.params?.seconds ?? 0),
         },
       }
-    case 'moveTo': {
-      const params = binding.params as MoveToBehaviorParams | undefined
-      return {
-        type: 'moveTo',
-        params: {
-          targetNodeId: params?.targetNodeId ?? null,
-          duration: Math.max(0, params?.duration ?? 0.6),
-        },
+      case 'moveTo': {
+        const params = binding.params as MoveToBehaviorParams | undefined
+        return {
+          type: 'moveTo',
+          params: {
+            targetNodeId: params?.targetNodeId ?? null,
+            kinetics: params?.kinetics === true,
+          },
+        }
       }
-    }
     case 'playParticleEffect': {
       const params = binding.params as PlayParticleEffectBehaviorParams | undefined
       return {
@@ -1398,7 +1398,7 @@ export function ensureBehaviorParams(
           type: 'moveTo',
           params: {
             targetNodeId: params?.targetNodeId ?? null,
-            duration: Math.max(0, params?.duration ?? 0.6),
+            kinetics: params?.kinetics === true,
           },
         }
       }

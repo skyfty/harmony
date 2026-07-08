@@ -258,7 +258,6 @@ import {
 	DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
 	createBackFollowCameraTuning,
 	VehicleDriveController,
-	resolveCharacterControlMovementMagnitude,
 	CharacterAutoTourRuntimeManager,
 	updateBackFollowCamera,
 } from '@schema/motion'
@@ -266,12 +265,8 @@ import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVeh
 import { createBridgeVehicleProxy } from '@schema/motion'
 import type { AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
 import {
-	type CharacterNavigationControllerOutput,
-	type CharacterNavigationTargetSource,
 	createCharacterNavigationControllerState,
-	formatCharacterNavigationDebugLine,
 	resetCharacterNavigationControllerState,
-	updateCharacterNavigationController,
 } from '@schema/characterNavigationController'
 import {
   FollowCameraController,
@@ -3242,32 +3237,8 @@ const characterFollowCameraController = new FollowCameraController()
 const characterFollowCameraMotionState: FollowCameraMotionState = createFollowCameraMotionState()
 const characterFollowCameraOffsetScratch = new THREE.Vector3()
 let characterInputYaw = Math.PI
-let characterInputYawInitialized = false
-let characterInputYawNodeId: string | null = null
-let characterMovementIntent = 0
 const CHARACTER_CONTROL_DEBUG_LOGGING = import.meta.env.DEV
 const characterNavigationControllerState = createCharacterNavigationControllerState(Math.PI)
-const characterNavigationPointerWorldTarget = new THREE.Vector3()
-const characterNavigationPointerTargetScratch = new THREE.Vector3()
-const characterNavigationPointerPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
-const characterNavigationPointerRayRoots: THREE.Object3D[] = []
-let characterNavigationPointerActive = false
-let characterNavigationPointerId = -1
-let characterNavigationPointerTargetSource: CharacterNavigationTargetSource = 'none'
-let characterNavigationFrame: CharacterNavigationControllerOutput = {
-	targetWorld: null,
-	targetSource: 'none',
-	desiredYaw: Math.PI,
-	currentYaw: Math.PI,
-	moveX: 0,
-	moveZ: 0,
-	turn: 0,
-	speed: 0,
-	distanceToTarget: 0,
-	movementMagnitude: 0,
-	isMoving: false,
-	isTurning: false,
-}
 
 const vehicleDriveController = new VehicleDriveController(
 	{
@@ -6980,18 +6951,7 @@ function resetProtagonistPoseState() {
 function resetCharacterFollowCameraState(): void {
   resetCameraFollowState(characterFollowCameraState)
   resetFollowCameraMotionState(characterFollowCameraMotionState)
-  characterInputYawInitialized = false
-  characterInputYawNodeId = null
-  characterNavigationPointerActive = false
-  characterNavigationPointerId = -1
-  characterNavigationPointerTargetSource = 'none'
-  characterNavigationPointerWorldTarget.set(0, 0, 0)
   resetCharacterNavigationControllerState(characterNavigationControllerState, characterInputYaw)
-  characterNavigationFrame.currentYaw = characterInputYaw
-  characterNavigationFrame.desiredYaw = characterInputYaw
-  characterNavigationFrame.moveX = 0
-  characterNavigationFrame.moveZ = 0
-  characterNavigationFrame.turn = 0
 }
 
 function resolveDefaultControlledCharacterNodeId(): string | null {
@@ -7391,24 +7351,12 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
 	})
 }
 
-function updateCharacterAuthorityInputFromKeys(deltaSeconds = 1 / 60): void {
-	const frame = updateScenePreviewCharacterNavigationFromInput(deltaSeconds)
-	logScenePreviewCharacterControlDebug(
-		'input',
-		formatCharacterNavigationDebugLine('ScenePreview:input', {
-			forward: characterKeyState.forward,
-			backward: characterKeyState.backward,
-			left: characterKeyState.left,
-			right: characterKeyState.right,
-			moveZ: frame.moveZ,
-			turn: frame.turn,
-			yaw: frame.currentYaw,
-			pointer: characterNavigationPointerTargetSource,
-		}),
-	)
-	characterAuthorityInput.moveX = frame.moveX
-	characterAuthorityInput.moveZ = frame.moveZ
-	characterAuthorityInput.turn = frame.turn
+function updateCharacterAuthorityInputFromKeys(deltaSeconds = 0): void {
+	const keyboardMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0)
+	const keyboardTurn = (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0)
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = keyboardMoveZ
+	characterAuthorityInput.turn = keyboardTurn
 	characterAuthorityInput.sprint = characterKeyState.sprint
 	characterAuthorityInput.crouch = characterKeyState.crouch
 	characterAuthorityInput.interact = characterKeyState.interact
@@ -7423,6 +7371,24 @@ function updateCharacterAuthorityInputFromKeys(deltaSeconds = 1 / 60): void {
 	}
 	characterInputJumpLatch = false
 	characterAuthorityInput.jump = false
+	if (deltaSeconds > 0 && Math.abs(keyboardTurn) > 0.001) {
+		const props = resolveDefaultControlledCharacterComponentProps()
+		const turnRateDegreesPerSecond = props?.turnRateDegreesPerSecond ?? 210
+		const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(turnRateDegreesPerSecond)
+		characterInputYaw += turnRateRadiansPerSecond * keyboardTurn * deltaSeconds
+		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
+	}
+	if (CHARACTER_CONTROL_DEBUG_LOGGING) {
+		console.log(
+			`[ScenePreview:input] keys=(f:${Number(characterKeyState.forward)} b:${Number(characterKeyState.backward)} l:${Number(characterKeyState.left)} r:${Number(characterKeyState.right)}) `
+			+ `moveZ=${characterAuthorityInput.moveZ.toFixed(3)} turn=${characterAuthorityInput.turn.toFixed(3)} `
+			+ `yaw=${characterInputYaw.toFixed(3)} delta=${deltaSeconds.toFixed(3)}`,
+		)
+	}
+}
+
+function normalizeScenePreviewCharacterInputYaw(value: number): number {
+	return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI
 }
 
 function updateCharacterControllerAnimations(delta: number): void {
@@ -9571,14 +9537,7 @@ function handleWindowBlur() {
 	characterKeyState.crouch = false
 	characterKeyState.interact = false
 	characterInputJumpLatch = false
-	characterNavigationPointerActive = false
-	characterNavigationPointerId = -1
-	characterNavigationPointerTargetSource = 'none'
-	characterNavigationPointerWorldTarget.set(0, 0, 0)
 	resetCharacterNavigationControllerState(characterNavigationControllerState, characterInputYaw)
-	if (!vehicleDriveState.active) {
-		return
-	}
 }
 
 function handleKeyDown(event: KeyboardEvent) {
@@ -11862,289 +11821,11 @@ function syncScenePreviewPhysicsBridgeVehicleInput(deltaSeconds: number): void {
 	})
 }
 
-function normalizeScenePreviewCharacterInputYaw(value: number): number {
-	return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI
-}
-
 function logScenePreviewCharacterControlDebug(stage: string, message: string): void {
 	if (!CHARACTER_CONTROL_DEBUG_LOGGING) {
 		return
 	}
 	console.log(`[ScenePreview:${stage}] ${message}`)
-}
-
-function resolveScenePreviewCharacterForwardAxisOffsetRadians(): number {
-	const props = resolveDefaultControlledCharacterComponentProps()
-	switch (props?.forwardAxis ?? '+x') {
-		case '+z':
-			return Math.PI * 0.5
-		case '-x':
-			return Math.PI
-		case '-z':
-			return -Math.PI * 0.5
-		case '+x':
-		default:
-			return 0
-	}
-}
-
-function resolveScenePreviewCharacterCameraReferenceYaw(moveDirection = 1): number | null {
-	const activeCamera = camera
-	if (activeCamera) {
-		activeCamera.getWorldDirection(tempDirection)
-		tempDirection.y = 0
-		if (tempDirection.lengthSq() > 1e-8) {
-			tempDirection.normalize()
-			if (moveDirection < 0) {
-				tempDirection.multiplyScalar(-1)
-			}
-			const offset = resolveScenePreviewCharacterForwardAxisOffsetRadians()
-			const yaw = Math.atan2(-tempDirection.z, tempDirection.x) + offset
-			logScenePreviewCharacterControlDebug(
-				'camera-yaw',
-				`moveIntent=${moveDirection} cameraForward=(${tempDirection.x.toFixed(3)},${tempDirection.y.toFixed(3)},${tempDirection.z.toFixed(3)}) offset=${offset.toFixed(3)} yaw=${yaw.toFixed(3)}`,
-			)
-			return yaw
-		}
-	}
-	return resolveScenePreviewControlledCharacterStableYaw()
-}
-
-function resolveScenePreviewCharacterInputYawSeed(): number {
-	const stableYaw = resolveScenePreviewControlledCharacterStableYaw()
-	if (typeof stableYaw === 'number') {
-		return stableYaw
-	}
-	const controlledObject = findDefaultControlledCharacterObject()
-	if (controlledObject) {
-		resolveControlledCharacterMotionForwardAxis(tempDirection)
-		controlledObject.getWorldQuaternion(tempQuaternion)
-		tempDirection.applyQuaternion(tempQuaternion)
-		tempDirection.y = 0
-		if (tempDirection.lengthSq() > 1e-8) {
-			tempDirection.normalize()
-			return Math.atan2(tempDirection.x, tempDirection.z)
-		}
-	}
-	const cameraYaw = resolveScenePreviewCharacterCameraReferenceYaw(1)
-	if (typeof cameraYaw === 'number') {
-		return cameraYaw
-	}
-	return Math.PI
-}
-
-function resolveScenePreviewControlledCharacterStableYaw(): number | null {
-	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
-	if (!controlledNodeId) {
-		return null
-	}
-	const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(controlledNodeId) ?? controlledNodeId
-	const frameState = physicsBridgeFrameBodiesByNodeId.get(bodyNodeId) ?? null
-	if (!frameState) {
-		return null
-	}
-	resolveControlledCharacterMotionForwardAxis(tempDirection)
-	return resolveScenePreviewCharacterYawFromQuaternion(frameState.quaternion, tempDirection)
-}
-
-function resolveScenePreviewCharacterYawFromQuaternion(
-	quaternion: THREE.Quaternion | null | undefined,
-	forwardAxis: THREE.Vector3,
-): number | null {
-	if (!quaternion) {
-		return null
-	}
-	tempDirection.copy(forwardAxis)
-	tempDirection.applyQuaternion(quaternion)
-	tempDirection.y = 0
-	if (tempDirection.lengthSq() <= 1e-8) {
-		return null
-	}
-	tempDirection.normalize()
-	return Math.atan2(tempDirection.x, tempDirection.z)
-}
-
-const CHARACTER_PREVIEW_MAX_TURN_RATE_DEGREES_PER_SECOND = 180
-const CHARACTER_PREVIEW_MOVING_TURN_RATE_SCALE = 0.5
-const CHARACTER_PREVIEW_REVERSE_TURN_RATE_SCALE = 0.88
-const CHARACTER_PREVIEW_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05
-
-function resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude: number, moveZ: number): number {
-	const props = resolveDefaultControlledCharacterComponentProps()
-	const configuredTurnRate = props?.turnRateDegreesPerSecond ?? 540
-	const cappedTurnRate = Math.min(configuredTurnRate, CHARACTER_PREVIEW_MAX_TURN_RATE_DEGREES_PER_SECOND)
-	const movingBlend = THREE.MathUtils.clamp(movementMagnitude, 0, 1)
-	const turnScale = THREE.MathUtils.lerp(1, CHARACTER_PREVIEW_MOVING_TURN_RATE_SCALE, movingBlend)
-	const reverseScale = moveZ < -0.05 ? CHARACTER_PREVIEW_REVERSE_TURN_RATE_SCALE : 1
-	return ((cappedTurnRate * turnScale * reverseScale) * Math.PI) / 180
-}
-
-function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number | null {
-	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
-	const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.05
-	const movementMagnitude = resolveCharacterControlMovementMagnitude(characterAuthorityInput.moveX, characterAuthorityInput.moveZ)
-	const hasLocalMovementInput = movementMagnitude > CHARACTER_PREVIEW_EFFECTIVE_MOVEMENT_THRESHOLD
-	if (characterInputYawNodeId !== controlledNodeId) {
-		characterInputYawNodeId = controlledNodeId
-		characterInputYawInitialized = false
-	}
-	if (!characterInputYawInitialized) {
-		characterInputYaw = resolveScenePreviewCharacterInputYawSeed()
-		characterInputYawInitialized = true
-	}
-	if (hasTurnInput && Number.isFinite(deltaSeconds) && deltaSeconds > 0) {
-		characterInputYaw += characterAuthorityInput.turn
-			* resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude, characterAuthorityInput.moveZ)
-			* deltaSeconds
-		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
-		logScenePreviewCharacterControlDebug(
-			'yaw-turn',
-			`turn=${characterAuthorityInput.turn.toFixed(3)} moveIntent=${characterMovementIntent} moveZ=${characterAuthorityInput.moveZ.toFixed(3)} yaw=${characterInputYaw.toFixed(3)} dt=${deltaSeconds.toFixed(3)}`,
-		)
-	}
-	if (hasLocalMovementInput && !hasTurnInput) {
-		const moveDirection = characterMovementIntent < 0 ? -1 : 1
-		const moveYaw = resolveScenePreviewCharacterCameraReferenceYaw(moveDirection)
-		if (typeof moveYaw === 'number') {
-			characterInputYaw = normalizeScenePreviewCharacterInputYaw(moveYaw)
-		}
-		logScenePreviewCharacterControlDebug(
-			'yaw-move',
-			`moveIntent=${moveDirection} moveZ=${characterAuthorityInput.moveZ.toFixed(3)} yaw=${characterInputYaw.toFixed(3)} cameraYaw=${typeof moveYaw === 'number' ? moveYaw.toFixed(3) : 'null'}`,
-		)
-	}
-	if (hasTurnInput || hasLocalMovementInput) {
-		return characterInputYaw
-	}
-	return null
-}
-
-function resolveScenePreviewCharacterNavigationPosition(target = characterNavigationPointerTargetScratch): THREE.Vector3 {
-	const controlledObject = findDefaultControlledCharacterObject()
-	if (controlledObject) {
-		controlledObject.getWorldPosition(target)
-		return target
-	}
-	target.set(0, 0, 0)
-	return target
-}
-
-function resolveScenePreviewCharacterNavigationPointerTargetWorld(clientX: number, clientY: number): THREE.Vector3 | null {
-	const activeCamera = camera
-	if (!activeCamera) {
-		return null
-	}
-	const canvas = containerRef.value
-	const rect = canvas?.getBoundingClientRect?.() ?? null
-	if (!rect || rect.width <= 0 || rect.height <= 0) {
-		return null
-	}
-	behaviorPointer.x = ((clientX - rect.left) / rect.width) * 2 - 1
-	behaviorPointer.y = -((clientY - rect.top) / rect.height) * 2 + 1
-	behaviorRaycaster.setFromCamera(behaviorPointer, activeCamera)
-	characterNavigationPointerRayRoots.length = 0
-	if (scene) {
-		characterNavigationPointerRayRoots.push(scene)
-	}
-	if (characterNavigationPointerRayRoots.length > 0) {
-		const intersections = behaviorRaycaster.intersectObjects(characterNavigationPointerRayRoots, true)
-		if (intersections.length > 0) {
-			const hit = intersections[0]
-			if (hit?.point) {
-				return hit.point.clone()
-			}
-		}
-	}
-	const characterPosition = resolveScenePreviewCharacterNavigationPosition(characterNavigationPointerTargetScratch)
-	characterNavigationPointerPlane.constant = -characterPosition.y
-	if (behaviorRaycaster.ray.intersectPlane(characterNavigationPointerPlane, characterNavigationPointerTargetScratch)) {
-		return characterNavigationPointerTargetScratch.clone()
-	}
-	return null
-}
-
-function updateScenePreviewCharacterNavigationFromInput(deltaSeconds = 1 / 60): CharacterNavigationControllerOutput {
-	const characterPosition = resolveScenePreviewCharacterNavigationPosition(characterNavigationPointerTargetScratch)
-	const props = resolveDefaultControlledCharacterComponentProps()
-	const navigation = updateCharacterNavigationController({
-		state: characterNavigationControllerState,
-		deltaSeconds: Math.max(0, deltaSeconds),
-		characterPosition,
-		characterYaw: characterInputYaw,
-		camera,
-		pointerTargetWorld: characterNavigationPointerActive ? characterNavigationPointerWorldTarget : null,
-		pointerActive: characterNavigationPointerActive,
-		keyboardX: (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0),
-		keyboardY: (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0),
-		sprint: characterKeyState.sprint,
-		crouch: characterKeyState.crouch,
-		stopDistance: 0.45,
-		slowDistance: 2.2,
-		keyboardTargetDistance: 4.8,
-		yawTurnRateDegreesPerSecond: props?.turnRateDegreesPerSecond ?? 360,
-	})
-	characterNavigationFrame = navigation
-	characterInputYaw = navigation.currentYaw
-	characterNavigationPointerTargetSource = navigation.targetSource
-	logScenePreviewCharacterControlDebug(
-		'frame',
-		formatCharacterNavigationDebugLine('ScenePreview:frame', {
-			target: navigation.targetSource,
-			yaw: navigation.currentYaw,
-			desiredYaw: navigation.desiredYaw,
-			moveZ: navigation.moveZ,
-			turn: navigation.turn,
-			distance: navigation.distanceToTarget,
-			active: characterNavigationPointerActive,
-		}),
-	)
-	return navigation
-}
-
-function handleCharacterNavigationPointerDown(event: PointerEvent): void {
-	if (vehicleDriveState.active || runtimePanelUi.value.mode !== 'character') {
-		return
-	}
-	if (event.button !== 0) {
-		return
-	}
-	const target = resolveScenePreviewCharacterNavigationPointerTargetWorld(event.clientX, event.clientY)
-	if (!target) {
-		return
-	}
-	characterNavigationPointerId = event.pointerId
-	characterNavigationPointerActive = true
-	characterNavigationPointerTargetSource = 'pointer'
-	characterNavigationPointerWorldTarget.copy(target)
-	const currentTarget = event.currentTarget as HTMLElement | null
-	currentTarget?.setPointerCapture?.(event.pointerId)
-	updateCharacterAuthorityInputFromKeys(0)
-}
-
-function handleCharacterNavigationPointerMove(event: PointerEvent): void {
-	if (characterNavigationPointerId !== event.pointerId) {
-		return
-	}
-	const target = resolveScenePreviewCharacterNavigationPointerTargetWorld(event.clientX, event.clientY)
-	if (!target) {
-		return
-	}
-	characterNavigationPointerWorldTarget.copy(target)
-	characterNavigationPointerTargetSource = 'pointer'
-	characterNavigationPointerActive = true
-	updateCharacterAuthorityInputFromKeys(0)
-}
-
-function handleCharacterNavigationPointerEnd(event: PointerEvent): void {
-	if (characterNavigationPointerId !== event.pointerId) {
-		return
-	}
-	const currentTarget = event.currentTarget as HTMLElement | null
-	currentTarget?.releasePointerCapture?.(event.pointerId)
-	characterNavigationPointerId = -1
-	characterNavigationPointerActive = false
-	characterNavigationPointerTargetSource = 'none'
-	updateCharacterAuthorityInputFromKeys(0)
 }
 
 function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void {
@@ -12153,7 +11834,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 		return
 	}
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
-	const localYaw = characterNavigationFrame.currentYaw
+	const localYaw = characterInputYaw
 	physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
 		const isControlled = nodeId === controlledNodeId
 		const pathFollowInput = characterAutoTourRuntime.getInput(nodeId)
@@ -12175,13 +11856,10 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 		if (isControlled) {
 			logScenePreviewCharacterControlDebug(
 				'bridge',
-				formatCharacterNavigationDebugLine('ScenePreview:bridge', {
-					node: nodeId,
-					source: hasPathFollowInput ? 'autotour' : 'local',
-					moveX: hasPathFollowInput ? pathFollowInput!.moveX : characterAuthorityInput.moveX,
-					moveZ: hasPathFollowInput ? pathFollowInput!.moveZ : characterAuthorityInput.moveZ,
-					yaw: typeof activeYaw === 'number' ? activeYaw : null,
-				}),
+				`node=${nodeId} source=${hasPathFollowInput ? 'autotour' : 'local'} `
+					+ `moveX=${(hasPathFollowInput ? pathFollowInput!.moveX : characterAuthorityInput.moveX).toFixed(3)} `
+					+ `moveZ=${(hasPathFollowInput ? pathFollowInput!.moveZ : characterAuthorityInput.moveZ).toFixed(3)} `
+					+ `yaw=${typeof activeYaw === 'number' ? activeYaw.toFixed(3) : 'null'}`,
 			)
 		}
 		void physicsBridge?.setCharacterInput({
@@ -12196,15 +11874,6 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 		})
 	})
 }
-
-void [
-  characterMovementIntent,
-  updateScenePreviewCharacterInputYaw,
-  resolveScenePreviewCharacterCameraReferenceYaw,
-  resolveScenePreviewCharacterInputYawSeed,
-  resolveScenePreviewControlledCharacterStableYaw,
-  resolveScenePreviewCharacterTurnRateRadiansPerSecond,
-]
 
 async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeSceneRequestId += 1
@@ -13880,10 +13549,6 @@ watch(
 		<div
 			ref="containerRef"
 			class="scene-preview__canvas"
-			@pointerdown.prevent="handleCharacterNavigationPointerDown"
-			@pointermove.prevent="handleCharacterNavigationPointerMove"
-			@pointerup.prevent="handleCharacterNavigationPointerEnd"
-			@pointercancel.prevent="handleCharacterNavigationPointerEnd"
 		></div>
 		<div v-if="punchBadgeOverlayEntries.length" class="scene-preview__punch-badge-layer" aria-hidden="true">
 			<div
@@ -14342,9 +14007,7 @@ watch(
 					</div>
 				</div>
 				<div v-else class="scene-preview__character-controls">
-					<div class="scene-preview__character-row">
-						<div class="scene-preview__character-navigation-hint">拖动画面来设置目标点，键盘 WASD 作为辅助。</div>
-					</div>
+		
 					<div class="scene-preview__character-row">
 						<v-btn
 							class="scene-preview__pedal-button"

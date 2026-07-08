@@ -833,10 +833,10 @@ export interface DelayBehaviorParams {
 }
 
 export interface MoveToBehaviorParams {
-  /** Target scene node id the camera should move to. */
+  /** Target scene node id the mover should align to. */
   targetNodeId: string | null
-  /** Camera travel duration in seconds. */
-  duration: number
+  /** Whether the mover should travel naturally instead of snapping immediately. */
+  kinetics: boolean
 }
 
 export interface SpawnPrefabBehaviorParams {

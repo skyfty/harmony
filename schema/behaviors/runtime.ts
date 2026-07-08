@@ -59,15 +59,14 @@ export type BehaviorRuntimeEvent =
       token: string
     }
   | {
-      type: 'move-camera'
+      type: 'move-to'
       nodeId: string
       action: BehaviorEventType
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
       targetNodeId: string
-      /** Movement duration in seconds. */
-      duration: number
+      kinetics: boolean
       token: string
     }
   | {
@@ -573,7 +572,7 @@ function createDelayEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
   }
 }
 
-function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
+function createMoveToEvent(state: BehaviorSequenceState, behavior: SceneBehavior): BehaviorRuntimeEvent {
   const token = createToken(state.id, state.index)
   pendingTokens.set(token, {
     token,
@@ -585,16 +584,15 @@ function createMoveCameraEvent(state: BehaviorSequenceState, behavior: SceneBeha
   const fallbackTarget = state.nodeId
   const candidate = typeof params?.targetNodeId === 'string' ? params.targetNodeId.trim() : ''
   const targetNodeId = candidate.length ? candidate : fallbackTarget
-  const durationSeconds = Math.max(0, params.duration ?? 0.6)
   return {
-    type: 'move-camera',
+    type: 'move-to',
     nodeId: state.nodeId,
     action: state.action,
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
     targetNodeId,
-    duration: durationSeconds,
+    kinetics: params?.kinetics === true,
     token,
   }
 }
@@ -1159,7 +1157,7 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         events.push(createDelayEvent(state, behavior))
         return events
       case 'moveTo':
-        events.push(createMoveCameraEvent(state, behavior))
+        events.push(createMoveToEvent(state, behavior))
         return events
       case 'spawnPrefab': {
         const params = script.params as SpawnPrefabBehaviorParams
