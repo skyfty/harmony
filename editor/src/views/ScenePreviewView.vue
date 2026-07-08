@@ -54,8 +54,13 @@ import {
 } from '@schema/behaviors/moveToRuntime'
 import {
 	GUIDE_ROUTE_COMPONENT_TYPE,
+	VIEW_POINT_COMPONENT_TYPE,
+	applyViewPointCameraProjection,
 	clampGuideRouteComponentProps,
+	resolveViewPointComponentProps,
+	resolveViewPointWorldCameraPose,
 	type GuideRouteComponentProps,
+	type ViewPointComponentProps,
 } from '@schema/components'
 import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
 import { extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
@@ -515,7 +520,15 @@ type SceneNodeTransformSnapshot = {
 type SceneViewControlSnapshot = {
 	cameraViewState: { mode: CameraViewMode; watchTargetId: string | null }
 	isCameraCaged: boolean
-	camera: { position: Vec3Tuple; quaternion: QuatTuple; up: Vec3Tuple }
+	camera: {
+		position: Vec3Tuple
+		quaternion: QuatTuple
+		up: Vec3Tuple
+		fov: number
+		near: number
+		far: number
+		zoom: number
+	}
 	mapTarget: Vec3Tuple | null
 	lastOrbit: { position: Vec3Tuple; target: Vec3Tuple }
 	nodeTransforms: Record<string, SceneNodeTransformSnapshot>
@@ -712,6 +725,11 @@ const cameraViewState = reactive<{ mode: CameraViewMode; watchTargetId: string |
 	mode: 'level',
 	watchTargetId: null,
 })
+const activeWatchRestoreSnapshot = ref<SceneViewControlSnapshot | null>(null)
+const watchLeaveVisible = computed(
+	() => cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null,
+)
+const watchExclusiveUiActive = computed(() => watchLeaveVisible.value)
 
 const resourceProgress = reactive({
 	active: false,
@@ -1419,6 +1437,12 @@ const lanternEventToken = ref<string | null>(null)
 const purposeControlsVisible = ref(false)
 const purposeButtons = ref<ShowPurposeBehaviorButton[]>([])
 const purposeSourceNodeId = ref<string | null>(null)
+type WatchUiRestoreState = {
+	purposeControlsVisible: boolean
+	isDebugMenuOpen: boolean
+	isVolumeMenuOpen: boolean
+}
+const watchUiRestoreState = ref<WatchUiRestoreState | null>(null)
 
 type VehicleDriveControlFlags = {
 	forward: boolean
@@ -1683,12 +1707,23 @@ const DEFAULT_TONE_MAPPING_EXPOSURE = 1
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'orbit'
+type CameraProjectionState = {
+	fov: number
+	near: number
+	far: number
+	zoom: number
+}
 type CameraLookTween = {
 	mode: CameraLookTweenMode
-	from: THREE.Vector3
-	to: THREE.Vector3
+	fromPosition: THREE.Vector3
+	toPosition: THREE.Vector3
+	fromTarget: THREE.Vector3
+	toTarget: THREE.Vector3
+	fromProjection: CameraProjectionState
+	toProjection: CameraProjectionState
 	duration: number
 	elapsed: number
+	onComplete?: (() => void) | null
 }
 let activeCameraLookTween: CameraLookTween | null = null
 const assetObjectUrlCache = new Map<string, string>()
@@ -7199,6 +7234,9 @@ function updateCharacterFollowCamera(
 	activeCamera: THREE.PerspectiveCamera,
 	immediate = false,
 ): boolean {
+	if (isWatchCameraLocked() || activeCameraLookTween) {
+		return false
+	}
 	if (vehicleDriveState.active || characterCameraMode.value !== 'follow') {
 		return false
 	}
@@ -7887,6 +7925,139 @@ function isCameraWatchRedundant(targetNodeId: string | null): boolean {
 	return cameraViewState.mode === 'watching' && cameraViewState.watchTargetId === targetNodeId
 }
 
+function isWatchCameraLocked(): boolean {
+	return cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null
+}
+
+function resolveViewPointPropsForNodeId(nodeId: string | null): ViewPointComponentProps | null {
+	if (!nodeId) {
+		return null
+	}
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return null
+	}
+	return resolveViewPointComponentProps(
+		(node.components?.[VIEW_POINT_COMPONENT_TYPE] as SceneNodeComponentState<ViewPointComponentProps> | undefined) ?? null,
+	)
+}
+
+function captureCameraProjectionState(activeCamera: THREE.PerspectiveCamera): CameraProjectionState {
+	return {
+		fov: activeCamera.fov,
+		near: activeCamera.near,
+		far: activeCamera.far,
+		zoom: activeCamera.zoom,
+	}
+}
+
+function applyCameraProjectionState(activeCamera: THREE.PerspectiveCamera, projection: CameraProjectionState): void {
+	activeCamera.fov = projection.fov
+	activeCamera.near = projection.near
+	activeCamera.far = Math.max(projection.near + 1e-3, projection.far)
+	activeCamera.zoom = projection.zoom
+	activeCamera.updateProjectionMatrix()
+}
+
+function resolveCameraTweenTarget(activeCamera: THREE.PerspectiveCamera): THREE.Vector3 {
+	if (mapControls) {
+		return mapControls.target.clone()
+	}
+	return activeCamera.position.clone().add(activeCamera.getWorldDirection(new THREE.Vector3()))
+}
+
+function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
+	if (activeWatchRestoreSnapshot.value && isCameraWatchRedundant(targetNodeId)) {
+		return
+	}
+	activeWatchRestoreSnapshot.value = captureViewControlSnapshot()
+	watchUiRestoreState.value = {
+		purposeControlsVisible: purposeControlsVisible.value,
+		isDebugMenuOpen: isDebugMenuOpen.value,
+		isVolumeMenuOpen: isVolumeMenuOpen.value,
+	}
+}
+
+function clearActiveWatchState(): void {
+	activeWatchRestoreSnapshot.value = null
+	watchUiRestoreState.value = null
+}
+
+function restoreWatchUiState(): void {
+	const snapshot = watchUiRestoreState.value
+	if (!snapshot) {
+		return
+	}
+	purposeControlsVisible.value = snapshot.purposeControlsVisible
+	isDebugMenuOpen.value = snapshot.isDebugMenuOpen
+	isVolumeMenuOpen.value = snapshot.isVolumeMenuOpen
+}
+
+function startCameraLookTween(params: {
+	toPosition: THREE.Vector3
+	toTarget: THREE.Vector3
+	toProjection?: CameraProjectionState | null
+	duration: number
+	onComplete?: (() => void) | null
+}): void {
+	const activeCamera = camera
+	if (!activeCamera) {
+		params.onComplete?.()
+		return
+	}
+	const fromPosition = activeCamera.position.clone()
+	const fromTarget = resolveCameraTweenTarget(activeCamera)
+	const fromProjection = captureCameraProjectionState(activeCamera)
+	const toProjection = params.toProjection
+		? {
+			fov: params.toProjection.fov,
+			near: params.toProjection.near,
+			far: Math.max(params.toProjection.near + 1e-3, params.toProjection.far),
+			zoom: params.toProjection.zoom,
+		}
+		: fromProjection
+	activeCameraLookTween = {
+		mode: 'orbit',
+		fromPosition,
+		toPosition: params.toPosition.clone(),
+		fromTarget,
+		toTarget: params.toTarget.clone(),
+		fromProjection,
+		toProjection,
+		duration: Math.max(0, params.duration),
+		elapsed: 0,
+		onComplete: params.onComplete ?? null,
+	}
+	scenePreviewPerf.markInstancedCullingDirty()
+}
+
+function leaveActiveWatchView(): void {
+	const snapshot = activeWatchRestoreSnapshot.value
+	const activeCamera = camera
+	if (!snapshot || !activeCamera) {
+		return
+	}
+	startCameraLookTween({
+		toPosition: new THREE.Vector3(...snapshot.camera.position),
+		toTarget: snapshot.mapTarget
+			? new THREE.Vector3(...snapshot.mapTarget)
+			: new THREE.Vector3(...snapshot.lastOrbit.target),
+		toProjection: {
+			fov: snapshot.camera.fov,
+			near: snapshot.camera.near,
+			far: snapshot.camera.far,
+			zoom: snapshot.camera.zoom,
+		},
+		duration: CAMERA_WATCH_TWEEN_DURATION,
+		onComplete: () => {
+			applyViewControlSnapshot(snapshot)
+			restoreWatchUiState()
+			clearActiveWatchState()
+			scenePreviewPerf.markInstancedCullingDirty()
+		},
+	})
+}
+
 function performWatchFocus(targetNodeId: string | null, caging = false): { success: boolean; message?: string } {
 	const activeCamera = camera
 	if (!activeCamera) {
@@ -7901,27 +8072,48 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 		return { success: true }
 	}
 	activeCameraLookTween = null
+	captureWatchRestoreSnapshotIfNeeded(resolvedTarget)
+	const viewPointProps = resolveViewPointPropsForNodeId(resolvedTarget)
+	const targetObject = nodeObjectMap.get(resolvedTarget) ?? null
+	if (viewPointProps && targetObject) {
+		targetObject.updateWorldMatrix(true, false)
+		const pose = resolveViewPointWorldCameraPose(targetObject.matrixWorld, viewPointProps)
+		startCameraLookTween({
+			toPosition: pose.position.clone(),
+			toTarget: pose.target.clone(),
+			toProjection: {
+				fov: pose.fov,
+				near: pose.near,
+				far: pose.far,
+				zoom: pose.zoom,
+			},
+			duration: CAMERA_WATCH_TWEEN_DURATION,
+			onComplete: () => {
+				if (camera) {
+					applyViewPointCameraProjection(camera, viewPointProps)
+				}
+				scenePreviewPerf.markInstancedCullingDirty()
+			},
+		})
+		setCameraCaging(Boolean(caging))
+		setCameraViewState('watching', resolvedTarget)
+		return { success: true }
+	}
 	const focus = resolveNodeAnchorPoint(resolvedTarget, tempTarget) ?? resolveNodeFocusPoint(resolvedTarget, tempTarget)
 	if (!focus) {
+		clearActiveWatchState()
 		return { success: false, message: 'Target node not found' }
 	}
 	const focusPoint = focus.clone()
-	const orbitControls = mapControls ?? null
-	if (orbitControls) {
-		const startTarget = orbitControls.target.clone()
-		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
-			orbitControls.target.copy(focusPoint)
-			orbitControls.update()
-		} else {
-			activeCameraLookTween = {
-				mode: 'orbit',
-				from: startTarget,
-				to: focusPoint.clone(),
-				duration: CAMERA_WATCH_TWEEN_DURATION,
-				elapsed: 0,
-			}
-		}
+	if (focusPoint.distanceToSquared(activeCamera.position) < 1e-8) {
+		focusPoint.copy(activeCamera.position).add(activeCamera.getWorldDirection(tempDirection).normalize())
 	}
+	startCameraLookTween({
+		toPosition: activeCamera.position.clone(),
+		toTarget: focusPoint,
+		toProjection: captureCameraProjectionState(activeCamera),
+		duration: CAMERA_WATCH_TWEEN_DURATION,
+	})
 	setCameraCaging(Boolean(caging))
 	setCameraViewState('watching', resolvedTarget)
 	scenePreviewPerf.markInstancedCullingDirty()
@@ -8271,6 +8463,10 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
 			position: sceneStackVec3ToTuple(camera.position),
 			quaternion: sceneStackQuatToTuple(camera.quaternion),
 			up: sceneStackVec3ToTuple(camera.up),
+			fov: camera.fov,
+			near: camera.near,
+			far: camera.far,
+			zoom: camera.zoom,
 		},
 		mapTarget,
 		lastOrbit: {
@@ -8294,6 +8490,11 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
 	sceneStackApplyVec3Tuple(camera.position, snapshot.camera.position)
 	sceneStackApplyQuatTuple(camera.quaternion, snapshot.camera.quaternion)
 	sceneStackApplyVec3Tuple(camera.up, snapshot.camera.up)
+	camera.fov = snapshot.camera.fov
+	camera.near = snapshot.camera.near
+	camera.far = snapshot.camera.far
+	camera.zoom = snapshot.camera.zoom
+	camera.updateProjectionMatrix()
 	camera.updateMatrixWorld(true)
 
 	// Restore view caches used by the preview camera state.
@@ -8707,6 +8908,9 @@ function resetActiveVehiclePose(): boolean {
 type VehicleDriveCameraOptions = { immediate?: boolean; applyOrbitTween?: boolean }
 
 function updateVehicleDriveCamera(delta: number, options: VehicleDriveCameraOptions = {}): boolean {
+	if (isWatchCameraLocked() || activeCameraLookTween) {
+		return false
+	}
 	if (!vehicleDriveState.active || !camera) {
 		return false
 	}
@@ -9520,31 +9724,17 @@ function resetCameraToLevelView() {
 	}
 	activeCameraLookTween = null
 	setCameraCaging(false)
-	if (mapControls && camera) {
-		const startTarget = mapControls.target.clone()
-		const levelTarget = startTarget.clone()
-		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-			mapControls.target.copy(levelTarget)
-			mapControls.update()
-			camera.lookAt(levelTarget)
-			lastOrbitState.target.copy(levelTarget)
-			lastOrbitState.position.copy(camera.position)
-		} else {
-			activeCameraLookTween = {
-				mode: 'orbit',
-				from: startTarget,
-				to: levelTarget,
-				duration: CAMERA_LEVEL_TWEEN_DURATION,
-				elapsed: 0,
-			}
-		}
-	} else {
-		tempDirection.set(0, 0, 0)
-		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
-		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
-		tempTarget.copy(camera.position).add(tempDirection)
-		camera.lookAt(tempTarget)
+	const levelTarget = resolveCameraTweenTarget(camera)
+	levelTarget.y = camera.position.y
+	if (levelTarget.distanceToSquared(camera.position) < 1e-8) {
+		levelTarget.copy(camera.position).add(camera.getWorldDirection(tempDirection).setY(0).normalize())
 	}
+	startCameraLookTween({
+		toPosition: camera.position.clone(),
+		toTarget: levelTarget,
+		toProjection: captureCameraProjectionState(camera),
+		duration: CAMERA_LEVEL_TWEEN_DURATION,
+	})
 	setCameraViewState('level')
 	scenePreviewPerf.markInstancedCullingDirty()
 }
@@ -9561,18 +9751,45 @@ function easeInOutCubic(t: number): number {
 }
 
 function updateOrbitCameraLookTween(delta: number): void {
-	if (!activeCameraLookTween || activeCameraLookTween.mode !== 'orbit' || !mapControls) {
+	if (!activeCameraLookTween || activeCameraLookTween.mode !== 'orbit' || !camera) {
 		return
 	}
 	const tween = activeCameraLookTween
 	const duration = tween.duration > 0 ? tween.duration : 0.0001
 	tween.elapsed = Math.min(tween.elapsed + delta, tween.duration)
 	const progress = easeInOutCubic(Math.min(1, tween.elapsed / duration))
-	tempTarget.copy(tween.from).lerp(tween.to, progress)
-	mapControls.target.copy(tempTarget)
+	camera.position.lerpVectors(tween.fromPosition, tween.toPosition, progress)
+	tempTarget.copy(tween.fromTarget).lerp(tween.toTarget, progress)
+	applyCameraProjectionState(camera, {
+		fov: THREE.MathUtils.lerp(tween.fromProjection.fov, tween.toProjection.fov, progress),
+		near: THREE.MathUtils.lerp(tween.fromProjection.near, tween.toProjection.near, progress),
+		far: THREE.MathUtils.lerp(tween.fromProjection.far, tween.toProjection.far, progress),
+		zoom: THREE.MathUtils.lerp(tween.fromProjection.zoom, tween.toProjection.zoom, progress),
+	})
+	if (mapControls) {
+		mapControls.target.copy(tempTarget)
+		camera.lookAt(mapControls.target)
+		mapControls.update()
+	} else {
+		camera.lookAt(tempTarget)
+	}
+	lastOrbitState.position.copy(camera.position)
+	lastOrbitState.target.copy(tempTarget)
 	if (tween.elapsed >= tween.duration) {
-		mapControls.target.copy(tween.to)
+		camera.position.copy(tween.toPosition)
+		applyCameraProjectionState(camera, tween.toProjection)
+		if (mapControls) {
+			mapControls.target.copy(tween.toTarget)
+			camera.lookAt(mapControls.target)
+			mapControls.update()
+		} else {
+			camera.lookAt(tween.toTarget)
+		}
+		lastOrbitState.position.copy(camera.position)
+		lastOrbitState.target.copy(tween.toTarget)
+		const onComplete = tween.onComplete ?? null
 		activeCameraLookTween = null
+		onComplete?.()
 		scenePreviewPerf.markInstancedCullingDirty()
 	}
 }
@@ -9997,6 +10214,9 @@ function updateAutoTourCameraForFrame(
 	followCameraActive: boolean,
 	activeCamera: THREE.PerspectiveCamera,
 ): void {
+	if (isWatchCameraLocked() || activeCameraLookTween) {
+		return
+	}
 	if (!followCameraActive) {
 		return
 	}
@@ -10249,11 +10469,13 @@ function startAnimationLoop() {
 		// 1) Input / camera controls
 		updateSteeringAutoCenter(delta)
 		syncAutoTourCameraInputPolicyForFrame(delta)
-		const vehicleFollowCameraActive = vehicleDriveState.active
+		const watchCameraLocked = isWatchCameraLocked()
+		const vehicleFollowCameraActive = !watchCameraLocked && vehicleDriveState.active
 		const characterFollowCameraActive =
+			!watchCameraLocked &&
 			!vehicleDriveState.active
 			&& characterCameraMode.value === 'follow'
-		const autoTourFollowCameraActive = Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
+		const autoTourFollowCameraActive = !watchCameraLocked && Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
 		const followCameraActive = vehicleFollowCameraActive || characterFollowCameraActive || autoTourFollowCameraActive
 		let vehicleTransformDriveUpdated = false
 		updateCameraControlsForFrame(delta, activeCamera, followCameraActive)
@@ -10278,7 +10500,7 @@ function startAnimationLoop() {
 		// 3) Vehicle camera and camera-dependent systems
 		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera, vehicleTransformDriveUpdated)
-		if (!autoTourFollowCameraActive) {
+		if (!watchCameraLocked && characterFollowCameraActive && !autoTourFollowCameraActive) {
 			updateCharacterFollowCamera(delta, activeCamera, false)
 		}
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
@@ -13998,7 +14220,7 @@ watch(
 			</div>
 			<div ref="statsContainerRef" class="scene-preview__stats-panels"></div>
 		</div>
-		<div class="scene-preview__debug-menu">
+		<div v-if="!watchExclusiveUiActive" class="scene-preview__debug-menu">
 			<v-menu
 				v-model="isDebugMenuOpen"
 				location="bottom end"
@@ -14171,7 +14393,7 @@ watch(
 			</div>
 		</v-alert>
 		<div
-			v-if="purposeControlsVisible"
+			v-if="purposeControlsVisible && !watchExclusiveUiActive"
 			class="scene-preview__purpose-controls"
 			:style="purposeControlsStyle"
 		>
@@ -14190,8 +14412,19 @@ watch(
 				<span class="scene-preview__purpose-label">{{ resolvePurposeButtonLabel(button) }}</span>
 			</v-btn>
 		</div>
+		<v-btn
+			v-if="watchLeaveVisible"
+			class="scene-preview__watch-leave"
+			rounded="pill"
+			variant="flat"
+			color="warning"
+			prepend-icon="mdi-exit-run"
+			@click="leaveActiveWatchView"
+		>
+			离开
+		</v-btn>
 		<v-btn-group
-			v-if="vehicleDrivePrompt.visible"
+			v-if="vehicleDrivePrompt.visible && !watchExclusiveUiActive"
 			class="scene-preview__drive-start-button"
 			density="comfortable"
 			divided
@@ -14256,7 +14489,7 @@ watch(
 			</v-btn>
 		</v-btn-group>
 		<div
-			v-if="runtimePanelUi.visible"
+			v-if="runtimePanelUi.visible && !watchExclusiveUiActive"
 			class="scene-preview__drive-panel"
 		>
 			<div class="scene-preview__drive-panel-inner">
@@ -14437,7 +14670,7 @@ watch(
 				</div>
 			</div>
 		</div>
-		<v-sheet class="scene-preview__control-bar" elevation="10">
+		<v-sheet v-if="!watchExclusiveUiActive" class="scene-preview__control-bar" elevation="10">
 			<div class="scene-preview__controls">
 				<v-btn
 					class="scene-preview__control-button"
@@ -15665,6 +15898,21 @@ watch(
 	z-index: 1;
 }
 
+.scene-preview__watch-leave {
+	position: absolute;
+	left: 50%;
+	bottom: 24px;
+	transform: translateX(-50%);
+	z-index: 1900;
+	min-width: 132px;
+	height: 48px;
+	padding: 0 24px;
+	border-radius: 999px;
+	background: linear-gradient(135deg, rgba(255, 153, 80, 0.96), rgba(255, 198, 82, 0.94)) !important;
+	color: #231204 !important;
+	box-shadow: 0 18px 40px rgba(255, 153, 80, 0.28);
+}
+
 @media (max-width: 720px) {
 	.scene-preview__purpose-controls {
 		flex-direction: column;
@@ -15677,6 +15925,11 @@ watch(
 	.scene-preview__purpose-button {
 		min-width: 0;
 		width: 180px;
+	}
+
+	.scene-preview__watch-leave {
+		bottom: 16px;
+		min-width: 118px;
 	}
 }
 

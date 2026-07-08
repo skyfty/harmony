@@ -4400,6 +4400,13 @@ function evaluateViewPointAttributes(
   const next: Record<string, unknown> = {}
   let mutated = false
   let overrideVisibility: boolean | undefined
+  const cameraOverrides: Partial<ViewPointComponentProps> = {}
+
+  const assignNumericOverride = (key: keyof ViewPointComponentProps, value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      cameraOverrides[key] = value as never
+    }
+  }
 
   for (const [key, value] of Object.entries(userData)) {
     if (key === 'viewPoint') {
@@ -4418,6 +4425,26 @@ function evaluateViewPointAttributes(
       }
       continue
     }
+    if (key === 'cameraFov') {
+      mutated = true
+      assignNumericOverride('cameraFov', value)
+      continue
+    }
+    if (key === 'cameraNear') {
+      mutated = true
+      assignNumericOverride('cameraNear', value)
+      continue
+    }
+    if (key === 'cameraFar') {
+      mutated = true
+      assignNumericOverride('cameraFar', value)
+      continue
+    }
+    if (key === 'cameraZoom') {
+      mutated = true
+      assignNumericOverride('cameraZoom', value)
+      continue
+    }
     if (key === 'viewPointRadius' || key === 'viewPointBaseScale') {
       mutated = true
       continue
@@ -4427,6 +4454,9 @@ function evaluateViewPointAttributes(
 
   if (overrideVisibility !== undefined) {
     componentOverrides = { ...(componentOverrides ?? {}), initiallyVisible: overrideVisibility }
+  }
+  if (Object.keys(cameraOverrides).length) {
+    componentOverrides = { ...(componentOverrides ?? {}), ...cameraOverrides }
   }
 
   sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData

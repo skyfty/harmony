@@ -32,7 +32,7 @@
         <text class="viewer-vehicle-intro-banner__text">出发！</text>
       </view>
       <button
-        v-if="floatingAutoTourButton.visible"
+        v-if="floatingAutoTourButton.visible && !watchExclusiveUiActive"
         class="viewer-auto-tour-trigger"
         :class="{
           'is-active': floatingAutoTourButton.active,
@@ -50,7 +50,7 @@
         </view>
       </button>
       <button
-        v-if="floatingAutoTourPauseButton.visible"
+        v-if="floatingAutoTourPauseButton.visible && !watchExclusiveUiActive"
         class="viewer-auto-tour-trigger viewer-auto-tour-trigger--secondary"
         :class="{
           'is-active': floatingAutoTourPauseButton.pressed,
@@ -225,7 +225,7 @@
         <text>{{ error }}</text>
       </view>
       <view
-        v-if="purposeControlsVisible"
+        v-if="purposeControlsVisible && !watchExclusiveUiActive"
         class="viewer-purpose-controls"
         data-control-skip="purpose-controls"
       >
@@ -245,8 +245,19 @@
           </view>
         </button>
       </view>
+      <view v-if="watchLeaveVisible" class="viewer-watch-leave-bar" data-control-skip="watch-leave">
+        <button
+          class="viewer-watch-leave-button"
+          type="button"
+          hover-class="none"
+          data-control-skip="watch-leave"
+          @tap.stop.prevent="leaveActiveWatchView"
+        >
+          <text>离开</text>
+        </button>
+      </view>
       <view
-        v-if="vehicleDriveUi.visible"
+        v-if="vehicleDriveUi.visible && !watchExclusiveUiActive"
         class="viewer-drive-console viewer-drive-console--mobile"
       >
         <view
@@ -277,7 +288,7 @@
         </view>
         
       </view>
-      <view v-if="autoTourTelemetryUiVisible" class="viewer-drive-speed-left-floating">
+      <view v-if="autoTourTelemetryUiVisible && !watchExclusiveUiActive" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
         <button
           v-if="vehicleDriveUi.visible"
@@ -296,7 +307,7 @@
       </view>
 
       <view
-        v-if="autoTourTelemetryUiVisible || (characterControlUi.visible && isWeChatMiniProgram)"
+        v-if="(autoTourTelemetryUiVisible || (characterControlUi.visible && isWeChatMiniProgram)) && !watchExclusiveUiActive"
         class="viewer-drive-compass-right-floating"
         aria-hidden="true"
       >
@@ -308,7 +319,7 @@
       </view>
 
       <view
-        v-if="characterControlUi.visible && isWeChatMiniProgram"
+        v-if="characterControlUi.visible && isWeChatMiniProgram && !watchExclusiveUiActive"
         class="viewer-character-console viewer-character-console--mobile"
       >
         <view
@@ -425,7 +436,6 @@ import {
   createMoveToRuntimeSession,
   resetMoveToRuntimeSession,
   resolveMoveToTargetPoseFromObject,
-  syncMoveToRigidBodyFromObject,
   resolveMoveToAlignedQuaternionForLocalForwardAxis,
   MOVE_TO_SNAP_DISTANCE,
   MOVE_TO_CHARACTER_SLOW_DISTANCE,
@@ -740,6 +750,11 @@ import {
 } from '@harmony/schema/components/definitions/landformComponent';
 import {
   viewPointComponentDefinition,
+  VIEW_POINT_COMPONENT_TYPE,
+  applyViewPointCameraProjection,
+  resolveViewPointComponentProps,
+  resolveViewPointWorldCameraPose,
+  type ViewPointComponentProps,
 } from '@harmony/schema/components/definitions/viewPointComponent';
 import {
   particleSystemComponentDefinition,
@@ -1005,7 +1020,15 @@ type SceneViewControlSnapshot = {
   cameraViewState: { mode: CameraViewMode; targetNodeId: string | null };
   isCameraCaged: boolean;
   purposeMode: 'watch' | 'level';
-  camera: { position: SceneStackVec3Tuple; quaternion: SceneStackQuatTuple; up: SceneStackVec3Tuple };
+  camera: {
+    position: SceneStackVec3Tuple;
+    quaternion: SceneStackQuatTuple;
+    up: SceneStackVec3Tuple;
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
   orbitTarget: SceneStackVec3Tuple;
   nodeTransforms: Record<string, SceneNodeTransformSnapshot>;
 };
@@ -1582,15 +1605,14 @@ const sceneLoadBytesLabel = computed(() => {
 const sceneLoadPercentText = computed(() => `${sceneLoadPercent.value}%`);
 
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
-const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const DEFAULT_SCENE_CAMERA_FAR = 1000;
 const SCENERY_FOG_HEADROOM_RATIO = 0.88;
 const SCENERY_FOG_MIN_DISTANCE = 0.001;
 const SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4;
 const SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5;
-const CAMERA_WATCH_DURATION = 0.35;
-const CAMERA_LEVEL_DURATION = 0.35;
+const CAMERA_WATCH_DURATION = 2.0;
+const CAMERA_LEVEL_DURATION = 2.5;
 const VEHICLE_DRIVE_INTRO_HOLD_SECONDS = 2.0;
 const VEHICLE_DRIVE_INTRO_BLEND_SECONDS = 1.2;
 const VEHICLE_DRIVE_INTRO_READY_TIMEOUT_MS = 3200;
@@ -2749,6 +2771,8 @@ const worldUp = new THREE.Vector3(0, 1, 0);
 const tempForwardVec = new THREE.Vector3();
 const tempRightVec = new THREE.Vector3();
 const tempMovementVec = new THREE.Vector3();
+const tempQuaternionVec = new THREE.Quaternion();
+const cameraWatchLookMatrixScratch = new THREE.Matrix4();
 const tempYawForwardVec = new THREE.Vector3();
 const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
@@ -2764,7 +2788,6 @@ let characterCameraFollowNodeId: string | null = null;
 let characterInputYaw = Math.PI;
 let characterInputYawInitialized = false;
 let characterInputYawNodeId: string | null = null;
-const CHARACTER_CONTROL_DEBUG_LOGGING = Boolean(import.meta.env?.DEV);
 const characterCameraFollowPlacementCache = {
   nodeId: null as string | null,
   objectUuid: null as string | null,
@@ -3078,6 +3101,12 @@ const purposeControlsVisible = ref(false);
 const purposeButtons = ref<ShowPurposeBehaviorButton[]>([]);
 const purposeSourceNodeId = ref<string | null>(null);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
+const activeWatchRestoreSnapshot = ref<SceneViewControlSnapshot | null>(null);
+const activeWatchSource = ref<'viewPoint' | 'target-look' | null>(null);
+type WatchUiRestoreState = {
+  purposeControlsVisible: boolean;
+};
+const watchUiRestoreState = ref<WatchUiRestoreState | null>(null);
 
 const pageInstance = getCurrentInstance();
 
@@ -3199,6 +3228,10 @@ const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | 
   mode: 'level',
   targetNodeId: null,
 });
+const watchLeaveVisible = computed(() =>
+  cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null,
+);
+const watchExclusiveUiActive = computed(() => watchLeaveVisible.value);
 
 const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   hasSnapshot: false,
@@ -4435,14 +4468,44 @@ let lanternSwipeStartY: number | null = null;
 let lanternSwipeActive = false;
 
 type CameraWatchTween = {
-  from: THREE.Vector3;
-  to: THREE.Vector3;
-  startPosition: THREE.Vector3;
+  fromPosition: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  fromQuaternion: THREE.Quaternion;
+  toQuaternion: THREE.Quaternion;
+  fromTarget: THREE.Vector3;
+  toTarget: THREE.Vector3;
+  fromTargetDistance: number;
+  toTargetDistance: number;
+  fromProjection: {
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
+  toProjection: {
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
   duration: number;
   elapsed: number;
+  lastLoggedBucket: number;
+  onComplete?: (() => void) | null;
+};
+
+type CameraWatchTransitionPlan = {
+  fromPosition: THREE.Vector3;
+  fromQuaternion: THREE.Quaternion;
+  fromTargetDistance: number;
+  toPosition: THREE.Vector3;
+  toQuaternion: THREE.Quaternion;
+  toTargetDistance: number;
 };
 
 let activeCameraWatchTween: CameraWatchTween | null = null;
+let activeWatchTransitionPlan: CameraWatchTransitionPlan | null = null;
+let watchCameraSuppressionLogged = false;
 type FrameDeltaMode = 'seconds' | 'milliseconds';
 let frameDeltaMode: FrameDeltaMode | null = null;
 
@@ -6675,6 +6738,19 @@ function collectPhysicsAuthorityNodeEntries(_document: SceneJsonExportDocument |
 
 function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
+}
+
+function resolveViewPointPropsForNodeId(nodeId: string | null): ViewPointComponentProps | null {
+  if (!nodeId) {
+    return null;
+  }
+  const node = resolveNodeById(nodeId);
+  if (!node) {
+    return null;
+  }
+  return resolveViewPointComponentProps(
+    (node.components?.[VIEW_POINT_COMPONENT_TYPE] as SceneNodeComponentState<ViewPointComponentProps> | undefined) ?? null,
+  );
 }
 
 function resolveCharacterControllerComponent(
@@ -9587,18 +9663,10 @@ function resolveSceneryCharacterInputYaw(): number | null {
     const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
     characterInputYaw += turnRateRadiansPerSecond * characterAuthorityInput.turn * characterControlDeltaSeconds;
     characterInputYaw = normalizeSceneryCharacterInputYaw(characterInputYaw);
-    logSceneryCharacterControlDebug(
-      'yaw-turn',
-      `turn=${characterAuthorityInput.turn.toFixed(3)} moveZ=${characterAuthorityInput.moveZ.toFixed(3)} yaw=${characterInputYaw.toFixed(3)} turnRateDeg=${props.turnRateDegreesPerSecond.toFixed(1)}`,
-    );
     return characterInputYaw;
   }
 
   if (Math.abs(characterAuthorityInput.moveZ) > CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD) {
-    logSceneryCharacterControlDebug(
-      'yaw-hold',
-      `moveZ=${characterAuthorityInput.moveZ.toFixed(3)} yaw=${characterInputYaw.toFixed(3)}`,
-    );
     return characterInputYaw;
   }
 
@@ -9623,13 +9691,6 @@ function ensureSceneryCharacterInputYawInitialized(): void {
 
 function normalizeSceneryCharacterInputYaw(value: number): number {
   return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI;
-}
-
-function logSceneryCharacterControlDebug(stage: string, message: string): void {
-  if (!CHARACTER_CONTROL_DEBUG_LOGGING) {
-    return;
-  }
-  console.log(`[SceneryViewer:${stage}] ${message}`);
 }
 
 function resolveSceneryCharacterInputYawSeed(): number {
@@ -9704,15 +9765,6 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
       ? pathFollowInput.yaw
       : (isControlled ? localYaw : null);
-    if (isControlled) {
-      logSceneryCharacterControlDebug(
-        'bridge',
-        `node=${nodeId} source=${hasPathFollowInput ? 'autotour' : 'local'} `
-          + `moveX=${(hasPathFollowInput ? pathFollowInput!.moveX : characterAuthorityInput.moveX).toFixed(3)} `
-          + `moveZ=${(hasPathFollowInput ? pathFollowInput!.moveZ : characterAuthorityInput.moveZ).toFixed(3)} `
-          + `yaw=${typeof activeYaw === 'number' ? activeYaw.toFixed(3) : 'null'}`,
-      );
-    }
     void physicsBridge?.setCharacterInput({
       characterId,
       moveX: hasPathFollowInput ? pathFollowInput!.moveX : (isControlled ? characterAuthorityInput.moveX : 0),
@@ -11698,52 +11750,6 @@ function handlePlaySoundEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play
     return;
   }
   void playBehaviorSoundEvent(event);
-}
-
-function startTimedAnimation(
-  token: string,
-  durationSeconds: number,
-  onUpdate: (alpha: number) => void,
-  onComplete: () => void,
-): void {
-  stopBehaviorAnimation(token);
-  const durationMs = Math.max(0, durationSeconds) * 1000;
-  if (durationMs <= 0) {
-    onUpdate(1);
-    onComplete();
-    return;
-  }
-  const startTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
-  const raf = typeof requestAnimationFrame === 'function'
-    ? requestAnimationFrame
-    : ((callback: FrameRequestCallback) => {
-        return setTimeout(() => callback(Date.now()), 16) as unknown as number;
-      });
-  const cancelRaf = typeof cancelAnimationFrame === 'function'
-    ? cancelAnimationFrame
-    : ((handle: number) => clearTimeout(handle));
-  let frameHandle: number | null = null;
-  const cancel = () => {
-    if (frameHandle != null) {
-      cancelRaf(frameHandle);
-      frameHandle = null;
-    }
-    activeBehaviorAnimations.delete(token);
-  };
-  const step = (timestamp: number) => {
-    const now = Number.isFinite(timestamp) ? timestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
-    const elapsed = Math.max(0, now - startTime);
-    const alpha = Math.min(1, elapsed / durationMs);
-    onUpdate(alpha);
-    if (alpha >= 1) {
-      cancel();
-      onComplete();
-      return;
-    }
-    frameHandle = raf(step);
-  };
-  frameHandle = raf(step);
-  activeBehaviorAnimations.set(token, cancel);
 }
 
 function resolveNodeFocusPoint(nodeId: string | null | undefined): THREE.Vector3 | null {
@@ -14024,6 +14030,23 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+function formatWatchVector3(vec: THREE.Vector3): string {
+  return `${vec.x.toFixed(2)},${vec.y.toFixed(2)},${vec.z.toFixed(2)}`;
+}
+
+
+function resolveWatchTargetQuaternion(
+  position: THREE.Vector3,
+  target: THREE.Vector3,
+  fallbackQuaternion: THREE.Quaternion,
+): THREE.Quaternion {
+  if (position.distanceToSquared(target) < 1e-8) {
+    return tempQuaternionVec.copy(fallbackQuaternion);
+  }
+  cameraWatchLookMatrixScratch.lookAt(position, target, worldUp);
+  return tempQuaternionVec.setFromRotationMatrix(cameraWatchLookMatrixScratch);
+}
+
 function applyCameraWatchTween(deltaSeconds: number): void {
   if (!activeCameraWatchTween || !renderContext || deltaSeconds <= 0) {
     return;
@@ -14033,12 +14056,27 @@ function applyCameraWatchTween(deltaSeconds: number): void {
   const duration = tween.duration > 0 ? tween.duration : 0.0001;
   tween.elapsed = Math.min(tween.elapsed + deltaSeconds, tween.duration);
   const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
-  tempMovementVec.copy(tween.from).lerp(tween.to, eased);
+  const progressBucket = Math.min(10, Math.floor((eased * 100) / 10));
+  camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+  camera.quaternion.slerpQuaternions(tween.fromQuaternion, tween.toQuaternion, eased);
+  const targetDistance = THREE.MathUtils.lerp(tween.fromTargetDistance, tween.toTargetDistance, eased);
+  tempForwardVec.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  tempMovementVec.copy(camera.position).addScaledVector(tempForwardVec, targetDistance);
+  if (progressBucket !== tween.lastLoggedBucket || tween.elapsed >= tween.duration) {
+    tween.lastLoggedBucket = progressBucket;
+
+  }
   runWithProgrammaticCameraMutationAndAnchor(() => {
     withControlsVerticalFreedom(controls, () => {
       controls.target.copy(tempMovementVec);
-      camera.position.copy(tween.startPosition);
-      camera.lookAt(controls.target);
+      camera.fov = THREE.MathUtils.lerp(tween.fromProjection.fov, tween.toProjection.fov, eased);
+      camera.near = THREE.MathUtils.lerp(tween.fromProjection.near, tween.toProjection.near, eased);
+      camera.far = Math.max(
+        THREE.MathUtils.lerp(tween.fromProjection.near, tween.toProjection.near, eased) + 1e-3,
+        THREE.MathUtils.lerp(tween.fromProjection.far, tween.toProjection.far, eased),
+      );
+      camera.zoom = THREE.MathUtils.lerp(tween.fromProjection.zoom, tween.toProjection.zoom, eased);
+      camera.updateProjectionMatrix();
       controls.update();
     });
   });
@@ -14046,13 +14084,21 @@ function applyCameraWatchTween(deltaSeconds: number): void {
   if (tween.elapsed >= tween.duration) {
     runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
-        controls.target.copy(tween.to);
-        camera.lookAt(controls.target);
+        camera.position.copy(tween.toPosition);
+        camera.quaternion.copy(tween.toQuaternion);
+        controls.target.copy(tween.toTarget);
+        camera.fov = tween.toProjection.fov;
+        camera.near = tween.toProjection.near;
+        camera.far = Math.max(tween.toProjection.near + 1e-3, tween.toProjection.far);
+        camera.zoom = tween.toProjection.zoom;
+        camera.updateProjectionMatrix();
         controls.update();
       });
     });
     lockControlsPitchToCurrent(controls, camera);
+    const onComplete = tween.onComplete ?? null;
     activeCameraWatchTween = null;
+    onComplete?.();
     markInstancedCullingDirty();
   }
 }
@@ -14632,6 +14678,138 @@ function isRedundantWatchRequest(targetNodeId: string | null): boolean {
   return cameraViewState.mode === 'watching' && cameraViewState.targetNodeId === targetNodeId;
 }
 
+function isWatchCameraLocked(): boolean {
+  return cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null;
+}
+
+function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
+  if (activeWatchRestoreSnapshot.value && isRedundantWatchRequest(targetNodeId)) {
+    return;
+  }
+  activeWatchRestoreSnapshot.value = captureViewControlSnapshot();
+  watchUiRestoreState.value = {
+    purposeControlsVisible: purposeControlsVisible.value,
+  };
+}
+
+function clearActiveWatchState(): void {
+  activeWatchRestoreSnapshot.value = null;
+  activeWatchSource.value = null;
+  watchUiRestoreState.value = null;
+  activeWatchTransitionPlan = null;
+  watchCameraSuppressionLogged = false;
+}
+
+function restoreWatchUiState(): void {
+  const snapshot = watchUiRestoreState.value;
+  if (!snapshot) {
+    return;
+  }
+  purposeControlsVisible.value = snapshot.purposeControlsVisible;
+}
+
+function captureCameraProjectionState(camera: THREE.PerspectiveCamera): {
+  fov: number;
+  near: number;
+  far: number;
+  zoom: number;
+} {
+  return {
+    fov: camera.fov,
+    near: camera.near,
+    far: camera.far,
+    zoom: camera.zoom,
+  };
+}
+
+function startCameraWatchTween(params: {
+  toPosition: THREE.Vector3;
+  toTarget: THREE.Vector3;
+  toProjection?: { fov: number; near: number; far: number; zoom: number } | null;
+  toQuaternion?: THREE.Quaternion | null;
+  toTargetDistance?: number | null;
+  duration: number;
+  onComplete?: (() => void) | null;
+}): void {
+  const context = renderContext;
+  if (!context) {
+    params.onComplete?.();
+    return;
+  }
+  const { camera, controls } = context;
+  const toQuaternion = params.toQuaternion
+    ? params.toQuaternion.clone()
+    : resolveWatchTargetQuaternion(params.toPosition, params.toTarget, camera.quaternion);
+  activeCameraWatchTween = {
+    fromPosition: camera.position.clone(),
+    toPosition: params.toPosition.clone(),
+    fromQuaternion: camera.quaternion.clone(),
+    toQuaternion: toQuaternion.clone(),
+    fromTarget: controls.target.clone(),
+    toTarget: params.toTarget.clone(),
+    fromTargetDistance: camera.position.distanceTo(controls.target),
+    toTargetDistance: params.toTargetDistance ?? params.toPosition.distanceTo(params.toTarget),
+    fromProjection: captureCameraProjectionState(camera),
+    toProjection: params.toProjection
+      ? {
+          fov: params.toProjection.fov,
+          near: params.toProjection.near,
+          far: Math.max(params.toProjection.near + 1e-3, params.toProjection.far),
+          zoom: params.toProjection.zoom,
+        }
+      : captureCameraProjectionState(camera),
+    duration: Math.max(0, params.duration),
+    elapsed: 0,
+    lastLoggedBucket: -1,
+    onComplete: params.onComplete ?? null,
+  };
+  activeWatchTransitionPlan = {
+    fromPosition: activeCameraWatchTween.fromPosition.clone(),
+    fromQuaternion: activeCameraWatchTween.fromQuaternion.clone(),
+    fromTargetDistance: activeCameraWatchTween.fromTargetDistance,
+    toPosition: activeCameraWatchTween.toPosition.clone(),
+    toQuaternion: activeCameraWatchTween.toQuaternion.clone(),
+    toTargetDistance: activeCameraWatchTween.toTargetDistance,
+  };
+  markInstancedCullingDirty();
+}
+
+function leaveActiveWatchView(): void {
+  const snapshot = activeWatchRestoreSnapshot.value;
+  if (snapshot) {
+    const transitionPlan = activeWatchTransitionPlan;
+    const restorePosition = transitionPlan ? transitionPlan.fromPosition.clone() : new THREE.Vector3(...snapshot.camera.position);
+    const restoreQuaternion = transitionPlan ? transitionPlan.fromQuaternion.clone() : null;
+    const restoreTargetDistance = transitionPlan ? transitionPlan.fromTargetDistance : null;
+    startCameraWatchTween({
+      toPosition: restorePosition,
+      toTarget: new THREE.Vector3(...snapshot.orbitTarget),
+      toQuaternion: restoreQuaternion,
+      toTargetDistance: restoreTargetDistance,
+      toProjection: {
+        fov: snapshot.camera.fov,
+        near: snapshot.camera.near,
+        far: snapshot.camera.far,
+        zoom: snapshot.camera.zoom,
+      },
+      duration: CAMERA_WATCH_DURATION,
+      onComplete: () => {
+        applyViewControlSnapshot(snapshot);
+        restoreWatchUiState();
+        clearActiveWatchState();
+        markInstancedCullingDirty();
+      },
+    });
+    return;
+  }
+  clearActiveWatchState();
+  setCameraViewState('level');
+  purposeActiveMode.value = 'level';
+  setCameraCaging(false);
+  activeCameraWatchTween = null;
+  markInstancedCullingDirty();
+}
+
 function performWatchFocus(targetNodeId: string | null, caging?: boolean): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
@@ -14647,58 +14825,56 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
     return { success: true };
   }
   const { camera, controls } = context;
+  const viewPointProps = resolveViewPointPropsForNodeId(targetNodeId);
+  const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null;
+  captureWatchRestoreSnapshotIfNeeded(targetNodeId);
+
+  if (viewPointProps && targetObject) {
+    targetObject.updateWorldMatrix(true, false);
+    const pose = resolveViewPointWorldCameraPose(targetObject.matrixWorld, viewPointProps);
+    startCameraWatchTween({
+      toPosition: pose.position.clone(),
+      toTarget: pose.target.clone(),
+      toProjection: {
+        fov: pose.fov,
+        near: pose.near,
+        far: pose.far,
+        zoom: pose.zoom,
+      },
+      duration: CAMERA_WATCH_DURATION,
+    });
+    setCameraCaging(Boolean(caging));
+    purposeActiveMode.value = 'watch';
+    setCameraViewState('watching', targetNodeId);
+    activeWatchSource.value = 'viewPoint';
+    markInstancedCullingDirty();
+    return { success: true };
+  }
+
   const focus = resolveNodeAnchorPoint(targetNodeId) ?? resolveNodeFocusPoint(targetNodeId);
   if (!focus) {
+    clearActiveWatchState();
     return { success: false, message: '未找到目标节点' };
   }
   const finishSuccess = () => {
     setCameraCaging(Boolean(caging));
     purposeActiveMode.value = 'watch';
     setCameraViewState('watching', targetNodeId);
+    activeWatchSource.value = 'target-look';
     return { success: true };
   };
   activeCameraWatchTween = null;
-  const startPosition = camera.position.clone();
-
-  tempMovementVec.copy(focus).sub(startPosition);
-  if (tempMovementVec.lengthSq() < 1e-8) {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        controls.target.copy(focus);
-        camera.position.copy(startPosition);
-        camera.lookAt(focus);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    markInstancedCullingDirty();
-    return finishSuccess();
+  const watchTarget = focus.clone();
+  if (watchTarget.distanceToSquared(camera.position) < 1e-8) {
+    tempForwardVec.copy(camera.getWorldDirection(tempForwardVec));
+    watchTarget.copy(camera.position).addScaledVector(tempForwardVec, CAMERA_FORWARD_OFFSET);
   }
-
-  tempMovementVec.normalize();
-  tempForwardVec.copy(tempMovementVec).multiplyScalar(CAMERA_FORWARD_OFFSET).add(startPosition);
-  const startTarget = controls.target.clone();
-  if (startTarget.distanceToSquared(tempForwardVec) < 1e-6) {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        camera.position.copy(startPosition);
-        controls.target.copy(tempForwardVec);
-        camera.lookAt(tempForwardVec);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    markInstancedCullingDirty();
-    return finishSuccess();
-  }
-
-  activeCameraWatchTween = {
-    from: startTarget,
-    to: tempForwardVec.clone(),
-    startPosition,
+  startCameraWatchTween({
+    toPosition: camera.position.clone(),
+    toTarget: watchTarget,
+    toProjection: captureCameraProjectionState(camera),
     duration: CAMERA_WATCH_DURATION,
-    elapsed: 0,
-  };
+  });
 
   markInstancedCullingDirty();
 
@@ -14782,33 +14958,28 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   activeCameraWatchTween = null;
   markInstancedCullingDirty();
   setCameraCaging(false);
-  const startTarget = controls.target.clone();
-  const levelTarget = startTarget.clone();
+  const levelTarget = controls.target.clone();
   levelTarget.y = camera.position.y;
   const finishSuccess = () => {
     purposeActiveMode.value = 'level';
     setCameraViewState('level');
     return { success: true };
   };
-  if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        controls.target.copy(levelTarget);
-        camera.lookAt(levelTarget);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    return finishSuccess();
+  if (levelTarget.distanceToSquared(camera.position) < 1e-8) {
+    tempForwardVec.copy(camera.getWorldDirection(tempForwardVec)).setY(0);
+    if (tempForwardVec.lengthSq() < 1e-8) {
+      tempForwardVec.set(0, 0, -1);
+    } else {
+      tempForwardVec.normalize();
+    }
+    levelTarget.copy(camera.position).addScaledVector(tempForwardVec, CAMERA_FORWARD_OFFSET);
   }
-  const startPosition = camera.position.clone();
-  activeCameraWatchTween = {
-    from: startTarget,
-    to: levelTarget.clone(),
-    startPosition,
+  startCameraWatchTween({
+    toPosition: camera.position.clone(),
+    toTarget: levelTarget,
+    toProjection: captureCameraProjectionState(camera),
     duration: CAMERA_LEVEL_DURATION,
-    elapsed: 0,
-  };
+  });
   markInstancedCullingDirty();
   return finishSuccess();
 }
@@ -15129,12 +15300,6 @@ function updateCharacterAuthorityInputFromKeys(): void {
   }
   characterInputJumpLatch = false;
   characterAuthorityInput.jump = false;
-  logSceneryCharacterControlDebug(
-    'input',
-    `stick=(${characterJoystickVector.x.toFixed(3)},${characterJoystickVector.y.toFixed(3)}) `
-      + `moveZ=${characterAuthorityInput.moveZ.toFixed(3)} turn=${characterAuthorityInput.turn.toFixed(3)} `
-      + `yaw=${characterInputYaw.toFixed(3)} keys=(f:${Number(characterKeyState.forward)} b:${Number(characterKeyState.backward)} l:${Number(characterKeyState.left)} r:${Number(characterKeyState.right)})`,
-  );
 }
 
 function clearCharacterActionJumpReleaseTimer(): void {
@@ -15611,11 +15776,11 @@ function isPointInsidePurposeControls(x: number, y: number): boolean {
 function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null): boolean {
   const candidate = target as { dataset?: Record<string, unknown>; parentElement?: Element | null } | null;
   const datasetValue = candidate?.dataset?.controlSkip;
-  if (datasetValue === 'character-actions' || datasetValue === 'purpose-controls') {
+  if (datasetValue === 'character-actions' || datasetValue === 'purpose-controls' || datasetValue === 'watch-leave') {
     return true;
   }
   if (typeof (target as Element | null)?.closest === 'function') {
-    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"]'));
+    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"], [data-control-skip="watch-leave"]'));
   }
   return false;
 }
@@ -16273,6 +16438,9 @@ function updateVehicleDriveCamera(
   deltaSeconds = 0,
   options: VehicleDriveCameraUpdateOptions = {},
 ): boolean {
+  if (isWatchCameraLocked() || activeCameraWatchTween) {
+    return false;
+  }
   if (!renderContext?.camera) {
     return false;
   }
@@ -16290,7 +16458,7 @@ function updateCharacterFollowCamera(
   options: { immediate?: boolean } = {},
 ): boolean {
   const context = renderContext;
-  if (!context || vehicleDriveActive.value || activeCameraWatchTween || activeAutoTourNodeIds.size > 0) {
+  if (!context || isWatchCameraLocked() || vehicleDriveActive.value || activeCameraWatchTween || activeAutoTourNodeIds.size > 0) {
     resetProtagonistPoseState();
     return false;
   }
@@ -16372,7 +16540,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   autoTourLastAnyActive = anyActive;
   applyAutoTourCameraInputPolicy();
 
-  if (vehicleDriveActive.value || activeCameraWatchTween) {
+  if (isWatchCameraLocked() || vehicleDriveActive.value || activeCameraWatchTween) {
     return;
   }
 
@@ -17074,6 +17242,10 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
       position: sceneStackVec3ToTuple(camera.position),
       quaternion: sceneStackQuatToTuple(camera.quaternion),
       up: sceneStackVec3ToTuple(camera.up),
+      fov: camera.fov,
+      near: camera.near,
+      far: camera.far,
+      zoom: camera.zoom,
     },
     orbitTarget: sceneStackVec3ToTuple(controls.target),
     nodeTransforms: captureSceneNodeTransformSnapshot(),
@@ -17093,6 +17265,11 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
       sceneStackApplyVec3Tuple(camera.position, snapshot.camera.position);
       sceneStackApplyQuatTuple(camera.quaternion, snapshot.camera.quaternion);
       sceneStackApplyVec3Tuple(camera.up, snapshot.camera.up);
+      camera.fov = snapshot.camera.fov;
+      camera.near = snapshot.camera.near;
+      camera.far = snapshot.camera.far;
+      camera.zoom = snapshot.camera.zoom;
+      camera.updateProjectionMatrix();
       sceneStackApplyVec3Tuple(controls.target, snapshot.orbitTarget);
       camera.lookAt(controls.target);
       controls.update();
@@ -19711,6 +19888,7 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           characterControlDeltaSeconds = deltaSeconds;
+          const watchCameraLocked = isWatchCameraLocked();
           updateCharacterAuthorityInputFromKeys();
           updateMoveToSessionForFrame(deltaSeconds);
           previewFrameCameraWorldPosition.x = camera.position.x;
@@ -19740,7 +19918,7 @@ function startRenderLoop(
           }
           const manualDriveNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
           const autoTourControlsVehicle = manualDriveNodeId ? activeAutoTourNodeIds.has(manualDriveNodeId) : false;
-          if (vehicleDriveActive.value && !autoTourControlsVehicle) {
+          if (!watchCameraLocked && vehicleDriveActive.value && !autoTourControlsVehicle) {
             applyVehicleDriveForces(deltaSeconds);
             if (!physicsEnvironmentEnabled.value && !vehicleDriveIntroState.active && !vehicleDriveIntroPendingState.active) {
               updateVehicleDriveCamera(deltaSeconds);
@@ -19766,11 +19944,11 @@ function startRenderLoop(
           updateAutoTourFollowCamera(deltaSeconds);
         }
 
-        if (deltaSeconds >= 0 && !vehicleDriveActive.value && activeAutoTourNodeIds.size === 0) {
+        if (deltaSeconds >= 0 && !isWatchCameraLocked() && !vehicleDriveActive.value && activeAutoTourNodeIds.size === 0) {
           updateCharacterFollowCamera(deltaSeconds);
         }
 
-        if (vehicleDriveActive.value) {
+        if (!isWatchCameraLocked() && vehicleDriveActive.value) {
           if (vehicleDriveIntroState.active) {
             updateVehicleDriveIntroCamera(deltaSeconds);
           } else if (physicsEnvironmentEnabled.value && !vehicleDriveIntroPendingState.active) {
@@ -22794,6 +22972,30 @@ onUnmounted(() => {
   gap: 14px;
   align-items: flex-end;
   z-index: 1600;
+}
+
+.viewer-watch-leave-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 1601;
+}
+
+.viewer-watch-leave-button {
+  min-width: 144px;
+  min-height: 46px;
+  padding: 0 28px;
+  border: none;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(237, 245, 255, 0.84)),
+    linear-gradient(135deg, rgba(122, 198, 255, 0.16), rgba(255, 255, 255, 0.06));
+  color: #173149;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  box-shadow: 0 12px 30px rgba(8, 20, 36, 0.18);
 }
 
 .viewer-purpose-chip {

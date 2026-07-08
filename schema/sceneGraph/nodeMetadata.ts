@@ -11,7 +11,7 @@ import {
 } from '../components/definitions/guideboardComponent';
 
 import type { ViewPointComponentProps } from '../components/definitions/viewPointComponent';
-import { VIEW_POINT_COMPONENT_TYPE } from '../components/definitions/viewPointComponent';
+import { VIEW_POINT_COMPONENT_TYPE, getViewPointCameraMetadata } from '../components/definitions/viewPointComponent';
 import { PARTICLE_SYSTEM_COMPONENT_TYPE } from '../components/definitions/particleSystemComponent';
 import {
   PROCEDURAL_CITY_HOST_USER_DATA_KEY,
@@ -53,6 +53,7 @@ export function applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExt
     metadata.viewPoint = true;
     const viewPointProps = viewPointState.props as ViewPointComponentProps | undefined;
     metadata.viewPointInitiallyVisible = viewPointProps?.initiallyVisible === true;
+    Object.assign(metadata, getViewPointCameraMetadata(viewPointProps));
   }
 
   const particleSystemState = node.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
