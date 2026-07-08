@@ -4,11 +4,13 @@ import { createBehaviorTemplate, ensureBehaviorParams } from '../behaviors/defin
 import {
   buildMoveToCameraPlacement,
   buildMoveToTargetPose,
+  resolveMoveToAlignedQuaternionForLocalForwardAxis,
   resolveBindingByNodeId,
   resolveMoveToTargetPoseFromObject,
   resolveMoveToSubjectType,
   resolveMoveToYawDeltaRadians,
   resolveMoveToYawRadiansFromForward,
+  resolveMoveToWorldForwardFromQuaternion,
 } from '../behaviors/moveToRuntime.ts'
 import { type PhysicsBodyBindingEntry } from '../physicsBodySync.ts'
 import { resolveBindingKind } from '../sceneBindingRuntime.ts'
@@ -104,6 +106,16 @@ test('moveTo yaw helpers use local +X as forward', () => {
   assert.equal(resolveMoveToYawRadiansFromForward(new THREE.Vector3(1, 0, 0)), 0)
   assert.equal(resolveMoveToYawDeltaRadians(0, Math.PI / 2), Math.PI / 2)
   assert.equal(resolveMoveToYawDeltaRadians(Math.PI, -Math.PI), 0)
+})
+
+test('moveTo alignment helper maps local +z forward to target +x', () => {
+  const aligned = resolveMoveToAlignedQuaternionForLocalForwardAxis(
+    new THREE.Quaternion(),
+    new THREE.Vector3(0, 0, 1),
+  )
+  const worldForward = resolveMoveToWorldForwardFromQuaternion(aligned, new THREE.Vector3(0, 0, 1))
+
+  assert.ok(worldForward.distanceTo(new THREE.Vector3(1, 0, 0)) < 1e-8)
 })
 
 test('resolveBindingKind recognizes all supported binding kinds', () => {

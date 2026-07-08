@@ -61,6 +61,9 @@ const targetRightScratch = new THREE.Vector3()
 const targetMatrixScratch = new THREE.Matrix4()
 const objectWorldPositionScratch = new THREE.Vector3()
 const objectWorldQuaternionScratch = new THREE.Quaternion()
+const alignmentFromAxisScratch = new THREE.Vector3()
+const alignmentToAxisScratch = new THREE.Vector3(1, 0, 0)
+const alignmentQuaternionScratch = new THREE.Quaternion()
 const worldUpScratch = new THREE.Vector3(0, 1, 0)
 const worldForwardScratch = new THREE.Vector3(0, 0, 1)
 const yawForwardScratch = new THREE.Vector3()
@@ -172,6 +175,38 @@ export function resolveMoveToYawRadiansFromForward(forward: THREE.Vector3): numb
   }
   yawForwardScratch.normalize()
   return Math.atan2(yawForwardScratch.x, yawForwardScratch.z)
+}
+
+export function resolveMoveToWorldForwardFromQuaternion(
+  quaternion: THREE.Quaternion,
+  localForwardAxis: THREE.Vector3,
+  target = new THREE.Vector3(),
+): THREE.Vector3 {
+  return target.copy(localForwardAxis).applyQuaternion(quaternion)
+}
+
+export function resolveMoveToAlignedQuaternionForLocalForwardAxis(
+  targetQuaternion: THREE.Quaternion,
+  localForwardAxis: THREE.Vector3,
+  target = new THREE.Quaternion(),
+): THREE.Quaternion {
+  alignmentFromAxisScratch.copy(localForwardAxis)
+  if (alignmentFromAxisScratch.lengthSq() <= 1e-8) {
+    return target.copy(targetQuaternion)
+  }
+  alignmentFromAxisScratch.normalize()
+  const dot = THREE.MathUtils.clamp(alignmentFromAxisScratch.dot(alignmentToAxisScratch), -1, 1)
+  if (dot >= 1 - 1e-8) {
+    return target.copy(targetQuaternion)
+  }
+  if (dot <= -1 + 1e-8) {
+    alignmentQuaternionScratch.setFromAxisAngle(worldUpScratch, Math.PI)
+    return target.copy(targetQuaternion).multiply(alignmentQuaternionScratch)
+  }
+  alignmentQuaternionScratch
+    .setFromUnitVectors(alignmentFromAxisScratch, alignmentToAxisScratch)
+    .normalize()
+  return target.copy(targetQuaternion).multiply(alignmentQuaternionScratch)
 }
 
 export function resolveMoveToYawDeltaRadians(currentYaw: number, targetYaw: number): number {

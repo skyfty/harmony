@@ -36,6 +36,7 @@ import {
 	applyMoveToPhysicsBodyWorldPose,
 	buildMoveToTargetPose,
 	buildMoveToCameraPlacement,
+	resolveMoveToAlignedQuaternionForLocalForwardAxis,
 	resolveBindingByNodeId as resolveMoveToBindingByNodeId,
 	resolveMoveToSubjectType,
 	createMoveToRuntimeSession,
@@ -49,6 +50,7 @@ import {
 	MOVE_TO_CAMERA_LERP_SPEED,
 	resolveMoveToYawDeltaRadians,
 	resolveMoveToYawRadiansFromForward,
+	resolveMoveToWorldForwardFromQuaternion,
 } from '@schema/behaviors/moveToRuntime'
 import {
 	GUIDE_ROUTE_COMPONENT_TYPE,
@@ -90,6 +92,7 @@ import {
 	type PhysicsSceneAsset,
 	type PhysicsStepFrame,
 	type PhysicsTransform,
+	resolvePhysicsCharacterMotorYawFromWorldQuaternion,
 } from '@harmony/physics-core'
 import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
 import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
@@ -7459,38 +7462,9 @@ function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }
 
 const moveToTransitionStartPosition = new THREE.Vector3()
 const moveToTransitionStartQuaternion = new THREE.Quaternion()
+const moveToSubjectForwardAxisScratch = new THREE.Vector3()
 const moveToTransitionCurrentForward = new THREE.Vector3()
 let moveToTransitionFrameHandle: number | null = null
-const MOVE_TO_DEBUG_LOGGING_ENABLED = true
-
-function formatMoveToDebugNumber(value: number): string {
-	return Number.isFinite(value) ? value.toFixed(3) : String(value)
-}
-
-function formatMoveToDebugVec3(value: THREE.Vector3 | null | undefined): string {
-	if (!value) {
-		return 'null'
-	}
-	return `${formatMoveToDebugNumber(value.x)},${formatMoveToDebugNumber(value.y)},${formatMoveToDebugNumber(value.z)}`
-}
-
-function formatMoveToDebugQuat(value: THREE.Quaternion | null | undefined): string {
-	if (!value) {
-		return 'null'
-	}
-	return `${formatMoveToDebugNumber(value.x)},${formatMoveToDebugNumber(value.y)},${formatMoveToDebugNumber(value.z)},${formatMoveToDebugNumber(value.w)}`
-}
-
-function logMoveToDebug(stage: string, message: string): void {
-	if (!MOVE_TO_DEBUG_LOGGING_ENABLED) {
-		return
-	}
-	console.info(`[MoveTo][${stage}] ${message}`)
-}
-
-function formatMoveToTargetPoseDebug(targetPose: ReturnType<typeof buildMoveToTargetPose>): string {
-	return `pos=(${formatMoveToDebugVec3(targetPose.position)}) quat=(${formatMoveToDebugQuat(targetPose.quaternion)}) forward=(${formatMoveToDebugVec3(targetPose.forward)}) up=(${formatMoveToDebugVec3(targetPose.up)})`
-}
 
 function cancelMoveToTransition(): void {
 	if (moveToTransitionFrameHandle !== null) {
@@ -7515,6 +7489,20 @@ function resolveMoveToSubjectObject(subjectNodeId: string): THREE.Object3D | nul
 	return binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null
 }
 
+function resolveMoveToSubjectForwardAxis(subjectNodeId: string, bindingKind: string | null): THREE.Vector3 {
+	if (bindingKind === 'vehicle') {
+		const vehicle = resolveVehicleComponent(resolveNodeById(subjectNodeId))
+		const props = clampVehicleComponentProps(vehicle?.props ?? null)
+		return resolveVehicleAxisVector(clampVehicleAxisIndex(props.indexForwardAxis))
+	}
+	if (bindingKind === 'character') {
+		const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId))
+		const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis
+		return writeCharacterLocalForward(moveToSubjectForwardAxisScratch, forwardAxis) as THREE.Vector3
+	}
+	return moveToSubjectForwardAxisScratch.set(1, 0, 0)
+}
+
 function resolveMoveToSubjectBridgeNodeId(subjectNodeId: string): string | null {
 	if (physicsBridgeBodyIdByNodeId.has(subjectNodeId)) {
 		return subjectNodeId
@@ -7535,12 +7523,10 @@ function syncMoveToSubjectTargetToPhysicsBridge(
 	}
 	const bridgeNodeId = resolveMoveToSubjectBridgeNodeId(subjectNodeId)
 	if (!bridgeNodeId) {
-		logMoveToDebug('bridge-set', `subject=${subjectNodeId} bridgeNodeId=null skipped=true target=${formatMoveToTargetPoseDebug(targetPose)}`)
 		return
 	}
 	const bodyId = physicsBridgeBodyIdByNodeId.get(bridgeNodeId)
 	if (typeof bodyId !== 'number') {
-		logMoveToDebug('bridge-set', `subject=${subjectNodeId} bridgeNodeId=${bridgeNodeId} bodyId=null skipped=true target=${formatMoveToTargetPoseDebug(targetPose)}`)
 		return
 	}
 	physicsBridgeFrameBodiesByNodeId.set(bridgeNodeId, {
@@ -7548,10 +7534,6 @@ function syncMoveToSubjectTargetToPhysicsBridge(
 		quaternion: targetPose.quaternion.clone(),
 		motionState: 0,
 	})
-	logMoveToDebug(
-		'bridge-set',
-		`subject=${subjectNodeId} bridgeNodeId=${bridgeNodeId} bodyId=${bodyId} target=${formatMoveToTargetPoseDebug(targetPose)}`,
-	)
 	void physicsBridge.setBodyTransform({
 		bodyId,
 		transform: {
@@ -7564,6 +7546,19 @@ function syncMoveToSubjectTargetToPhysicsBridge(
 			],
 		},
 	})
+}
+
+function resolveMoveToCharacterTargetYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): number {
+	const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId))
+	const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis
+	return resolvePhysicsCharacterMotorYawFromWorldQuaternion(targetQuaternion, forwardAxis)
+}
+
+function syncMoveToCharacterControllerYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): void {
+	const nextYaw = resolveMoveToCharacterTargetYaw(subjectNodeId, targetQuaternion)
+	characterInputYaw = nextYaw
+	resetCharacterNavigationControllerState(characterNavigationControllerState, nextYaw)
+	characterAuthorityInput.turn = 0
 }
 
 function getMoveToSubjectCurrentPose(subjectNodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
@@ -7586,42 +7581,46 @@ function applyMoveToSubjectTargetPose(
 ): void {
 	const binding = resolveMoveToSubjectBinding(subjectNodeId)
 	const bindingKind = binding?.bindingKind ?? 'none'
+	const subjectForwardAxis = resolveMoveToSubjectForwardAxis(subjectNodeId, bindingKind)
+	const characterTargetQuaternion = resolveMoveToAlignedQuaternionForLocalForwardAxis(
+		targetPose.quaternion,
+		subjectForwardAxis,
+	)
 	if (binding?.body) {
-		logMoveToDebug(
-			'apply-target',
-			`subject=${subjectNodeId} binding=${bindingKind} object=${Boolean(binding.object)} beforeBodyPos=(${formatMoveToDebugVec3(new THREE.Vector3(binding.body.position.x, binding.body.position.y, binding.body.position.z))}) beforeBodyQuat=(${formatMoveToDebugQuat(new THREE.Quaternion(binding.body.quaternion.x, binding.body.quaternion.y, binding.body.quaternion.z, binding.body.quaternion.w))}) ${formatMoveToTargetPoseDebug(targetPose)}`,
-		)
 		applyMoveToPhysicsBodyWorldPose({
 			body: binding.body,
 			worldPosition: targetPose.position,
-			worldQuaternion: targetPose.quaternion,
+			worldQuaternion: characterTargetQuaternion,
 			orientationAdjustment: binding.orientationAdjustment,
 		})
 		if (binding.object) {
-			applyMoveToObjectWorldPose(binding.object, targetPose.position, targetPose.quaternion)
+			applyMoveToObjectWorldPose(binding.object, targetPose.position, characterTargetQuaternion)
 		}
-		syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, targetPose)
-		logMoveToDebug(
-			'apply-target',
-			`subject=${subjectNodeId} binding=${bindingKind} afterBodyPos=(${formatMoveToDebugVec3(new THREE.Vector3(binding.body.position.x, binding.body.position.y, binding.body.position.z))}) afterBodyQuat=(${formatMoveToDebugQuat(new THREE.Quaternion(binding.body.quaternion.x, binding.body.quaternion.y, binding.body.quaternion.z, binding.body.quaternion.w))}) object=${binding.object ? formatMoveToDebugVec3(binding.object.position) : 'null'}`,
-		)
+		syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
+			position: targetPose.position,
+			forward: targetPose.forward,
+			up: targetPose.up,
+			quaternion: characterTargetQuaternion,
+		})
+		if (bindingKind === 'character') {
+			syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion)
+		}
 		return
 	}
 	const object = resolveMoveToSubjectObject(subjectNodeId)
 	if (!object) {
-		logMoveToDebug('apply-target', `subject=${subjectNodeId} binding=${bindingKind} object=null target=${formatMoveToTargetPoseDebug(targetPose)} skipped=true`)
 		return
 	}
-	logMoveToDebug(
-		'apply-target',
-		`subject=${subjectNodeId} binding=${bindingKind} objectBefore=(${formatMoveToDebugVec3(object.position)}) quatBefore=(${formatMoveToDebugQuat(object.quaternion)}) ${formatMoveToTargetPoseDebug(targetPose)}`,
-	)
-	applyMoveToObjectWorldPose(object, targetPose.position, targetPose.quaternion)
-	syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, targetPose)
-	logMoveToDebug(
-		'apply-target',
-		`subject=${subjectNodeId} binding=${bindingKind} objectAfter=(${formatMoveToDebugVec3(object.position)}) quatAfter=(${formatMoveToDebugQuat(object.quaternion)})`,
-	)
+	applyMoveToObjectWorldPose(object, targetPose.position, characterTargetQuaternion)
+	syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
+		position: targetPose.position,
+		forward: targetPose.forward,
+		up: targetPose.up,
+		quaternion: characterTargetQuaternion,
+	})
+	if (bindingKind === 'character') {
+		syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion)
+	}
 }
 
 function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
@@ -7676,6 +7675,7 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
 	}
 	const subjectNodeId = moveToRuntimeSession.subjectNodeId
 	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	const bindingKind = binding?.bindingKind ?? null
 	const object = binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null
 	if (!object) {
 		finalizeMoveToSession({ type: 'fail', message: 'Move To subject object not found.' })
@@ -7688,7 +7688,12 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
 	}
 	const currentPosition = currentPose.position
 	const currentQuaternion = currentPose.quaternion
-	const currentForward = moveToTransitionCurrentForward.copy(new THREE.Vector3(1, 0, 0)).applyQuaternion(currentQuaternion)
+	const subjectForwardAxis = resolveMoveToSubjectForwardAxis(subjectNodeId, bindingKind)
+	const currentForward = resolveMoveToWorldForwardFromQuaternion(
+		currentQuaternion,
+		subjectForwardAxis,
+		moveToTransitionCurrentForward,
+	)
 	currentForward.y = 0
 	if (currentForward.lengthSq() <= 1e-8) {
 		currentForward.set(1, 0, 0)
@@ -7707,10 +7712,6 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
 	const positionDelta = targetPosition.clone().sub(currentPosition)
 	positionDelta.y = 0
 	const planarDistance = positionDelta.length()
-	logMoveToDebug(
-		'frame',
-		`subject=${subjectNodeId} type=${moveToRuntimeSession.subjectType} currentPos=(${formatMoveToDebugVec3(currentPose.position)}) currentQuat=(${formatMoveToDebugQuat(currentPose.quaternion)}) targetPos=(${formatMoveToDebugVec3(targetPose.position)}) targetQuat=(${formatMoveToDebugQuat(targetPose.quaternion)}) planarDistance=${formatMoveToDebugNumber(planarDistance)} kinetics=${moveToRuntimeSession.kinetics}`,
-	)
 	if (moveToRuntimeSession.subjectType === 'camera') {
 		const activeCamera = camera
 		if (!activeCamera) {
@@ -7721,7 +7722,6 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
 		const cameraDelta = placement.position.clone().sub(activeCamera.position)
 		const cameraDistance = cameraDelta.length()
 		if (cameraDistance <= MOVE_TO_SNAP_DISTANCE) {
-			logMoveToDebug('frame', `subject=${subjectNodeId} type=camera snap=true cameraPos=(${formatMoveToDebugVec3(activeCamera.position)}) targetCameraPos=(${formatMoveToDebugVec3(placement.position)})`)
 			applyMoveToCameraTargetPose(targetPose)
 			finalizeMoveToSession({ type: 'continue' })
 			return
@@ -7737,7 +7737,6 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
 		const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw)
 		const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(12)
 		if (shouldSnap) {
-			logMoveToDebug('frame', `subject=${subjectNodeId} type=vehicle snap=true yawError=${formatMoveToDebugNumber(yawError)} target=${formatMoveToTargetPoseDebug(targetPose)}`)
 			applyMoveToSubjectTargetPose(subjectNodeId, targetPose)
 			finalizeMoveToSession({ type: 'continue' })
 			return
@@ -7758,7 +7757,6 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
 	const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw)
 	const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(10)
 	if (shouldSnap) {
-		logMoveToDebug('frame', `subject=${subjectNodeId} type=character snap=true yawError=${formatMoveToDebugNumber(yawError)} target=${formatMoveToTargetPoseDebug(targetPose)}`)
 		applyMoveToSubjectTargetPose(subjectNodeId, targetPose)
 		finalizeMoveToSession({ type: 'continue' })
 		return
@@ -7786,10 +7784,6 @@ function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to
 		hasControlledCharacter: Boolean(resolveDefaultControlledCharacterNodeId()),
 	})
 	const subjectNodeId = subjectType === 'camera' ? null : resolveMoveToSubjectNodeId()
-	logMoveToDebug(
-		'handle',
-		`token=${event.token} targetNodeId=${targetNodeId} subjectType=${subjectType} subjectNodeId=${subjectNodeId ?? 'null'} kinetics=${Boolean(event.kinetics)} target=${formatMoveToTargetPoseDebug(targetPose)}`,
-	)
 	if (subjectType !== 'camera' && !subjectNodeId) {
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'No movable subject available.' })
 		return
@@ -11765,10 +11759,6 @@ function resolveScenePreviewPhysicsBridgeTransformSyncEntry(
 	const rigidbodyEntry = rigidbodyInstances.get(nodeId)
 	if (rigidbodyEntry) {
 		if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId && rigidbodyEntry.object) {
-			logMoveToDebug(
-				'frame-apply',
-				`subject=${nodeId} binding=${rigidbodyEntry.bindingKind ?? 'rigidbody'} objectBefore=(${formatMoveToDebugVec3(rigidbodyEntry.object.position)}) quatBefore=(${formatMoveToDebugQuat(rigidbodyEntry.object.quaternion)}) framePos=(${formatMoveToDebugVec3(state.position)}) frameQuat=(${formatMoveToDebugQuat(state.quaternion)})`,
-			)
 		}
 		if (rigidbodyEntry.bindingKind === 'character') {
 			if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
@@ -11799,10 +11789,6 @@ function resolveScenePreviewPhysicsBridgeTransformSyncEntry(
 		return null
 	}
 	if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
-		logMoveToDebug(
-			'frame-apply',
-			`subject=${nodeId} binding=fallback objectBefore=(${formatMoveToDebugVec3(bindingObject.position)}) quatBefore=(${formatMoveToDebugQuat(bindingObject.quaternion)}) framePos=(${formatMoveToDebugVec3(state.position)}) frameQuat=(${formatMoveToDebugQuat(state.quaternion)})`,
-		)
 	}
 	const orientationAdjustment = node && isGroundDynamicMesh(node.dynamicMesh)
 		? {
@@ -11952,10 +11938,6 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 	rigidbodyInstances.forEach((entry, nodeId) => {
 		if (entry.bindingKind === 'character') {
 			if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId && entry.body) {
-				logMoveToDebug(
-					'sync-out',
-					`subject=${nodeId} binding=character skippedOutgoingSync=true bodyPos=(${formatMoveToDebugVec3(new THREE.Vector3(entry.body.position.x, entry.body.position.y, entry.body.position.z))}) bodyQuat=(${formatMoveToDebugQuat(new THREE.Quaternion(entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w))})`,
-				)
 			}
 			return
 		}
@@ -11968,10 +11950,6 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		}
 		const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
 		if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
-			logMoveToDebug(
-				'sync-out',
-				`subject=${nodeId} binding=${entry.bindingKind ?? 'rigidbody'} bodyPos=(${formatMoveToDebugVec3(new THREE.Vector3(entry.body.position.x, entry.body.position.y, entry.body.position.z))}) bodyQuat=(${formatMoveToDebugQuat(new THREE.Quaternion(entry.body.quaternion.x, entry.body.quaternion.y, entry.body.quaternion.z, entry.body.quaternion.w))}) framePos=(${frameState ? formatMoveToDebugVec3(frameState.position) : 'null'}) frameQuat=(${frameState ? formatMoveToDebugQuat(frameState.quaternion) : 'null'})`,
-			)
 		}
 		if (isPhysicsTransformClose(entry.body.position, entry.body.quaternion, frameState)) {
 			return
@@ -12008,10 +11986,6 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize()
 		const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
 		if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
-			logMoveToDebug(
-				'sync-out',
-				`subject=${nodeId} binding=object-only objectPos=(${formatMoveToDebugVec3(physicsBridgeBodySyncPositionHelper)}) objectQuat=(${formatMoveToDebugQuat(physicsBridgeBodySyncQuaternionHelper)}) framePos=(${frameState ? formatMoveToDebugVec3(frameState.position) : 'null'}) frameQuat=(${frameState ? formatMoveToDebugQuat(frameState.quaternion) : 'null'})`,
-			)
 		}
 		if (isPhysicsTransformClose(physicsBridgeBodySyncPositionHelper, physicsBridgeBodySyncQuaternionHelper, frameState)) {
 			return
