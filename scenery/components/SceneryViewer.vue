@@ -2778,6 +2778,7 @@ const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const characterCameraFollowAnchorScratch = new THREE.Vector3();
 const characterCameraFollowForwardScratch = new THREE.Vector3();
+const characterCameraFollowOffsetScratch = new THREE.Vector3();
 const characterControlYawForwardScratch = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
@@ -6440,6 +6441,14 @@ function resolveDefaultControlledCharacterNodeId(): string | null {
   return resolveDefaultCharacterSteerNodeId(currentDocument, defaultSteerIdentifier);
 }
 
+function resolveControlledCharacterMotionNodeId(): string | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return null;
+  }
+  return resolveCharacterControllerBindingNodeId(controlledNodeId) ?? controlledNodeId;
+}
+
 function resolveDefaultControlledCharacterComponentProps(): CharacterControllerComponentProps | null {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   if (!controlledNodeId) {
@@ -6472,6 +6481,14 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
     );
   }
   return null;
+}
+
+function resolveCharacterFollowCameraOffset(props: CharacterControllerComponentProps): THREE.Vector3 {
+  return resolveBackFollowCameraLocalOffset(
+    characterCameraFollowOffsetScratch,
+    props.cameraFollowDistance,
+    props.cameraFollowHeight,
+  );
 }
 
 function resolveCameraDistanceReferenceNodeId(): string | null {
@@ -16370,12 +16387,10 @@ function updateControlledCharacterMotionTelemetry(nowMs: number): void {
   if (!characterControlUi.value.visible) {
     return;
   }
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  if (!controlledNodeId) {
+  const motionNodeId = resolveControlledCharacterMotionNodeId();
+  if (!motionNodeId) {
     return;
   }
-  const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId);
-  const motionNodeId = bindingNodeId ?? controlledNodeId;
   const motionObject = nodeObjectMap.get(motionNodeId) ?? null;
   if (!motionObject) {
     return;
@@ -16393,8 +16408,8 @@ function updateSceneCompassHeading(): void {
     return;
   }
   if (characterControlUi.value.visible) {
-    const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-    const telemetry = controlledNodeId ? controlledNodeMotionRuntime.get(controlledNodeId) : null;
+    const telemetryNodeId = resolveControlledCharacterMotionNodeId();
+    const telemetry = telemetryNodeId ? controlledNodeMotionRuntime.get(telemetryNodeId) : null;
     const resolvedYaw = resolveSceneryCharacterInputYaw();
     const headingDegrees = telemetry
       ? telemetry.headingYawDeg
@@ -16486,6 +16501,7 @@ function updateCharacterFollowCamera(
   const placement = resolveCharacterFollowPlacement(controlledNodeId, object);
   resolveCharacterRootWorldPosition(controlledNodeId, bindingNodeId, object, characterCameraFollowAnchorScratch);
   resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+  const localOffsetOverride = resolveCharacterFollowCameraOffset(props);
 
   const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? controlledNodeId);
   const rawVelocity = motionTelemetry?.hasSample
@@ -16508,6 +16524,7 @@ function updateCharacterFollowCamera(
     worldUp,
     tuning: createBackFollowCameraTuning(),
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+    localOffsetOverride,
     followControlsDirty: false,
     immediate: Boolean(options.immediate),
     lockLocalOffset: true,
