@@ -227,23 +227,20 @@
       <view
         v-if="purposeControlsVisible"
         class="viewer-purpose-controls"
+        data-control-skip="purpose-controls"
       >
         <button
           v-for="button in purposeButtons"
           :key="button.id"
           class="viewer-purpose-chip"
           :aria-label="resolvePurposeButtonLabel(button)"
-          @tap="handlePurposeButtonTap(button)"
+          data-control-skip="purpose-controls"
+          @tap.stop.prevent="handlePurposeButtonTap(button)"
         >
           <view class="viewer-purpose-chip__halo"></view>
           <view class="viewer-purpose-chip__content">
-            <view class="viewer-purpose-chip__icon-wrap">
-              <view class="viewer-purpose-chip__icon-pulse"></view>
-              <text class="viewer-purpose-chip__icon">▶</text>
-            </view>
             <view class="viewer-purpose-chip__texts">
               <text class="viewer-purpose-chip__title">{{ resolvePurposeButtonLabel(button) }}</text>
-              <text class="viewer-purpose-chip__subtitle">触发目标节点脚本</text>
             </view>
           </view>
         </button>
@@ -15600,14 +15597,25 @@ function isPointInsideCharacterActionsBar(x: number, y: number): boolean {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
+function isPointInsidePurposeControls(x: number, y: number): boolean {
+  if (!purposeControlsVisible.value || !purposeButtons.value.length) {
+    return false;
+  }
+  const rect = resolveInteractiveElementRect(null, '.viewer-purpose-controls');
+  if (!rect) {
+    return false;
+  }
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
 function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null): boolean {
   const candidate = target as { dataset?: Record<string, unknown>; parentElement?: Element | null } | null;
   const datasetValue = candidate?.dataset?.controlSkip;
-  if (datasetValue === 'character-actions') {
+  if (datasetValue === 'character-actions' || datasetValue === 'purpose-controls') {
     return true;
   }
   if (typeof (target as Element | null)?.closest === 'function') {
-    return Boolean((target as Element).closest('[data-control-skip="character-actions"]'));
+    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"]'));
   }
   return false;
 }
@@ -15624,6 +15632,9 @@ function handleControlPadTouchStart(event: TouchEvent): void {
     const touch = event.changedTouches?.[0] ?? null;
     const coords = getTouchCoordinates(touch);
     if (coords && isPointInsideCharacterActionsBar(coords.x, coords.y)) {
+      return;
+    }
+    if (coords && isPointInsidePurposeControls(coords.x, coords.y)) {
       return;
     }
     handleCharacterDrivePadTouchStart(event);
@@ -15660,6 +15671,9 @@ function handleControlPadMouseDown(event: MouseEvent): void {
       return;
     }
     if (isPointInsideCharacterActionsBar(event.clientX, event.clientY)) {
+      return;
+    }
+    if (isPointInsidePurposeControls(event.clientX, event.clientY)) {
       return;
     }
     handleCharacterDrivePadMouseDown(event);
@@ -22773,7 +22787,7 @@ onUnmounted(() => {
   position: absolute;
   left: 16px;
   right: 16px;
-  bottom: 16px;
+  bottom: 86px;
   display: flex;
   flex-direction: row;
   justify-content: space-between;
@@ -22785,21 +22799,25 @@ onUnmounted(() => {
 .viewer-purpose-chip {
   position: relative;
   min-width: 160px;
-  min-height: 64px;
+  min-height: 52px;
   padding: 0;
   margin: 0;
   border: none;
   border-radius: 18px;
-  background-color: transparent;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(244, 249, 255, 0.12)),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(210, 232, 255, 0.06));
+  border: 1px solid rgba(153, 193, 255, 0.14);
   overflow: hidden;
   display: flex;
   align-items: stretch;
   justify-content: center;
   color: #15324f;
   opacity: 0.96;
-  box-shadow: 0 12px 28px rgba(52, 87, 128, 0.14);
+  box-shadow: 0 12px 28px rgba(52, 87, 128, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.34);
   transition: transform 0.28s ease, box-shadow 0.28s ease, opacity 0.28s ease;
-  text-align: left;
+  text-align: center;
+  backdrop-filter: blur(18px) saturate(1.08);
   flex: 1 1 0;
 }
 
@@ -22826,66 +22844,37 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 14px;
-  padding: 14px 20px;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
   border-radius: 16px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 249, 255, 0.78)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(210, 232, 255, 0.08));
-  border: 1px solid rgba(153, 193, 255, 0.2);
-  backdrop-filter: blur(16px) saturate(1.06);
-}
-
-.viewer-purpose-chip__icon-wrap {
-  position: relative;
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.82);
-  overflow: hidden;
-}
-
-.viewer-purpose-chip__icon-pulse {
-  position: absolute;
-  inset: 0;
-  border-radius: 14px;
-  border: 2px solid rgba(153, 193, 255, 0.3);
-  opacity: 0.2;
-  animation: viewer-purpose-icon-pulse 3.2s ease-in-out infinite;
-  pointer-events: none;
-}
-
-.viewer-purpose-chip__icon {
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  line-height: 1;
-  z-index: 1;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(244, 249, 255, 0.34)),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(210, 232, 255, 0.08));
+  border: 1px solid rgba(153, 193, 255, 0.22);
+  backdrop-filter: blur(22px) saturate(1.12);
 }
 
 .viewer-purpose-chip__texts {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
 }
 
 .viewer-purpose-chip__title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  letter-spacing: 1px;
+  letter-spacing: 0.6px;
   line-height: 1.1;
   color: #12314d;
+  text-align: center;
 }
 
 .viewer-purpose-chip__subtitle {
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.3;
   opacity: 0.74;
   letter-spacing: 0.5px;
@@ -22902,15 +22891,6 @@ onUnmounted(() => {
 .viewer-purpose-chip--watch .viewer-purpose-chip__halo {
   background: linear-gradient(125deg, rgba(94, 161, 255, 0.2), rgba(120, 208, 255, 0.12), rgba(14, 35, 78, 0));
   animation: viewer-purpose-watch-halo 7s linear infinite;
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__icon-wrap {
-  background: rgba(235, 244, 255, 0.86);
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__icon-pulse {
-  border-color: rgba(94, 161, 255, 0.32);
-  box-shadow: 0 0 16px rgba(94, 161, 255, 0.22);
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__title {
@@ -22931,15 +22911,6 @@ onUnmounted(() => {
 .viewer-purpose-chip--level .viewer-purpose-chip__halo {
   background: linear-gradient(140deg, rgba(115, 231, 170, 0.16), rgba(94, 161, 255, 0.12), rgba(5, 18, 36, 0));
   animation: viewer-purpose-level-halo 5s ease-in-out infinite;
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__icon-wrap {
-  background: rgba(242, 255, 248, 0.88);
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__icon-pulse {
-  border-color: rgba(115, 231, 170, 0.32);
-  box-shadow: 0 0 14px rgba(115, 231, 170, 0.18);
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__title {
@@ -22988,27 +22959,8 @@ onUnmounted(() => {
   opacity: 0.98;
 }
 
-.viewer-purpose-chip.is-active .viewer-purpose-chip__icon-pulse {
-  animation-duration: 1.8s;
-}
-
 .viewer-purpose-chip:active {
   transform: scale(0.97);
-}
-
-@keyframes viewer-purpose-icon-pulse {
-  0%, 100% {
-    opacity: 0.25;
-    transform: scale(0.92);
-  }
-  45% {
-    opacity: 0.85;
-    transform: scale(1);
-  }
-  70% {
-    opacity: 0.4;
-    transform: scale(1.08);
-  }
 }
 
 @keyframes viewer-purpose-watch-halo {

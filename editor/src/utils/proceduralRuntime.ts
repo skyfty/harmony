@@ -1,3 +1,4 @@
+import * as THREE from 'three'
 import { Object3D } from 'three'
 import { createPrimitiveMesh, isGeometryType } from '@schema/import'
 import type { SceneNode, SceneNodeComponentState } from '@schema/core'
@@ -35,6 +36,10 @@ function hasEnabledComponent(node: SceneNode, componentType: string): boolean {
   return entry?.enabled !== false
 }
 
+function hasEmptyNodeMarker(node: SceneNode): boolean {
+  return (node.userData as { emptyNode?: unknown } | undefined)?.emptyNode === true
+}
+
 /**
  * 判断一个节点是否需要创建过程化的 runtime 对象。
  *
@@ -43,6 +48,7 @@ function hasEnabledComponent(node: SceneNode, componentType: string): boolean {
  * - 否则当满足下列任一条件时认为是过程化节点：
  *   - `nodeType` 为 `WarpGate` 或存在已启用的 Particle System 组件
  *   - `nodeType` 为 `Guideboard` 或存在已启用的 Guideboard 组件
+ *   - `nodeType` 为 `Empty` 且显式带有 `emptyNode` 标记
  *   - `nodeType` 为 `Plane` 且存在已启用的 DisplayBoard 组件
  *   - `nodeType` 为 `Sphere` 且存在已启用的 ViewPoint 组件
  */
@@ -59,6 +65,9 @@ export function shouldCreateProceduralRuntimeObject(node: SceneNode): boolean {
   if (nodeType === 'Guideboard' || hasEnabledComponent(node, GUIDEBOARD_COMPONENT_TYPE)) {
     return true
   }
+  if (nodeType === 'Empty' && hasEmptyNodeMarker(node)) {
+    return true
+  }
   if (nodeType === 'Plane' && hasEnabledComponent(node, DISPLAY_BOARD_COMPONENT_TYPE)) {
     return true
   }
@@ -72,6 +81,7 @@ export function shouldCreateProceduralRuntimeObject(node: SceneNode): boolean {
  * 为过程化节点创建轻量的运行时 `Object3D`。
  *
  * - 对于 `WarpGate` / `Guideboard`，创建一个空的 `Object3D` 占位（组件会附加可视或行为）。
+ * - 对于带有 `emptyNode` 标记的 `Empty` 节点，创建一个可视锚点。
  * - 对于 `Plane` / `Sphere`，使用 `@schema` 提供的 `createPrimitiveMesh` 创建基础几何，
  *   使其可被选中并预览。
  * - 兜底情况下创建通用的空 `Object3D`。
@@ -90,6 +100,41 @@ export function createProceduralRuntimeObject(
     object.visible = node.visible ?? true
     options.tagObjectWithNodeId(object, node.id)
     return object
+  }
+
+  if (nodeType === 'Empty' && hasEmptyNodeMarker(node)) {
+    const markerCore = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0x67c7ff }),
+    )
+    markerCore.name = `${node.name ?? nodeType} Core`
+    markerCore.castShadow = false
+    markerCore.receiveShadow = false
+    markerCore.renderOrder = 1000
+    markerCore.userData = {
+      ...(markerCore.userData ?? {}),
+      ignoreGridSnapping: true,
+      emptyNode: true,
+    }
+
+    const markerAxes = new THREE.AxesHelper(0.55)
+    markerAxes.renderOrder = 1000
+    markerAxes.userData = {
+      ...(markerAxes.userData ?? {}),
+      ignoreGridSnapping: true,
+      emptyNode: true,
+    }
+
+    const markerRoot = new Object3D()
+    markerRoot.name = node.name ?? nodeType
+    markerRoot.add(markerAxes, markerCore)
+    markerRoot.userData = {
+      ...(markerRoot.userData ?? {}),
+      ignoreGridSnapping: true,
+      emptyNode: true,
+    }
+    options.tagObjectWithNodeId(markerRoot, node.id)
+    return markerRoot
   }
 
   if (isGeometryType(nodeType)) {

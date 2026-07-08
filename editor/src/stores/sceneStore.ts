@@ -1772,6 +1772,7 @@ function sceneNodeTypeSupportsMaterials(nodeType: SceneNodeType | string | null 
     normalized !== 'Light'
     && normalized !== 'Group'
     && normalized !== 'Camera'
+    && normalized !== 'Empty'
     && normalized !== 'WarpGate'
     && normalized !== 'Guideboard'
   )

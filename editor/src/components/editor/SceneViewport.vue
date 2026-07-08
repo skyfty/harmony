@@ -8788,6 +8788,40 @@ function buildGuideboardPlacementRoot(name: string): THREE.Object3D {
   return guideboardRoot
 }
 
+function buildEmptyNodePlacementRoot(name: string): THREE.Object3D {
+  const markerCore = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x67c7ff }),
+  )
+  markerCore.name = `${name} Core`
+  markerCore.castShadow = false
+  markerCore.receiveShadow = false
+  markerCore.renderOrder = 1000
+  markerCore.userData = {
+    ...(markerCore.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerAxes = new THREE.AxesHelper(0.55)
+  markerAxes.renderOrder = 1000
+  markerAxes.userData = {
+    ...(markerAxes.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerRoot = new THREE.Object3D()
+  markerRoot.name = name
+  markerRoot.add(markerAxes, markerCore)
+  markerRoot.userData = {
+    ...(markerRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+  return markerRoot
+}
+
 function handleStartViewportPlacement(item: ViewportPlacementItem): void {
   viewportPlacementMenuOpen.value = false
   if (activeBuildTool.value) {
@@ -8887,6 +8921,23 @@ async function placeViewportItemAtPoint(item: ViewportPlacementItem, basePoint: 
       }
       ensureBehaviorComponentForNode(created.id)
     }
+    return Boolean(created)
+  }
+
+  if (item.kind === 'empty-node') {
+    const name = getNextViewportPlacementName('Empty Node')
+    const created = await sceneStore.addModelNode({
+      object: buildEmptyNodePlacementRoot(name),
+      nodeType: 'Empty',
+      name,
+      position: basePoint.clone(),
+      rotation,
+      parentId: parentId ?? undefined,
+      snapToGrid: false,
+      editorFlags: {
+        ignoreGridSnapping: true,
+      },
+    })
     return Boolean(created)
   }
 
@@ -23167,6 +23218,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = createGuideboardPlaceholderObject(node)
       registerRuntimeObject(node.id, object)
     }
+  } else if (nodeType === 'Empty' && node.userData?.emptyNode === true) {
+    const runtimeObject = getRuntimeObject(node.id)
+    if (runtimeObject) {
+      runtimeObject.userData.usesRuntimeObject = true
+      object = runtimeObject
+    } else {
+      object = buildEmptyNodeRuntimeObject(node)
+      registerRuntimeObject(node.id, object)
+    }
   } else {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
@@ -23220,6 +23280,40 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   sceneCsmShadowRuntime?.registerObject(object)
 
   return object
+}
+
+function buildEmptyNodeRuntimeObject(node: SceneNode): THREE.Object3D {
+  const markerCore = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x67c7ff }),
+  )
+  markerCore.name = `${node.name ?? 'Empty Node'} Core`
+  markerCore.castShadow = false
+  markerCore.receiveShadow = false
+  markerCore.renderOrder = 1000
+  markerCore.userData = {
+    ...(markerCore.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerAxes = new THREE.AxesHelper(0.55)
+  markerAxes.renderOrder = 1000
+  markerAxes.userData = {
+    ...(markerAxes.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerRoot = new THREE.Object3D()
+  markerRoot.name = node.name ?? 'Empty Node'
+  markerRoot.add(markerAxes, markerCore)
+  markerRoot.userData = {
+    ...(markerRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+  return markerRoot
 }
 
 function applyTransformSpaceForSelection(tool: EditorTool, primaryId: string | null): void {

@@ -25,7 +25,7 @@ type OtherPlacementItem = {
   id: string
   label: string
   tab: 'other'
-  kind: 'guideboard' | 'view-point'
+  kind: 'guideboard' | 'view-point' | 'empty-node'
   icon: string
 }
 
@@ -128,10 +128,12 @@ export const VIEWPORT_LIGHT_ITEMS: LightPlacementItem[] = [
 export const VIEWPORT_OTHER_ITEMS: OtherPlacementItem[] = [
   { id: 'other-guideboard', label: 'Guideboard', tab: 'other', kind: 'guideboard', icon: 'mdi-sign-direction' },
   { id: 'other-view-point', label: 'View Point', tab: 'other', kind: 'view-point', icon: 'mdi-map-marker-radius-outline' },
+  { id: 'other-empty-node', label: 'Empty Node', tab: 'other', kind: 'empty-node', icon: 'mdi-vector-point-select' },
 ]
 
 const LIGHT_PREVIEW_COLOR = 0xf8c14f
 const VIEW_POINT_PREVIEW_COLOR = 0xff8a65
+const EMPTY_NODE_PREVIEW_COLOR = 0x67c7ff
 const previewBounds = new THREE.Box3()
 
 function setPreviewMaterialState(object: THREE.Object3D): void {
@@ -273,6 +275,26 @@ function createViewPointPreview(): THREE.Object3D {
   return root
 }
 
+function createEmptyNodePreview(): THREE.Object3D {
+  const root = new THREE.Group()
+  root.name = 'Empty Node Preview'
+
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.11, 16, 12),
+    new THREE.MeshBasicMaterial({ color: EMPTY_NODE_PREVIEW_COLOR }),
+  )
+  const axes = new THREE.AxesHelper(0.55)
+  axes.renderOrder = 1000
+  axes.userData = {
+    ...(axes.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  root.add(axes, core)
+  return root
+}
+
 export function buildViewportPlacementPreview(item: ViewportPlacementItem): THREE.Object3D {
   let preview: THREE.Object3D
 
@@ -284,6 +306,8 @@ export function buildViewportPlacementPreview(item: ViewportPlacementItem): THRE
     preview = createGuideboardPreview()
   } else if (item.kind === 'view-point') {
     preview = createViewPointPreview()
+  } else if (item.kind === 'empty-node') {
+    preview = createEmptyNodePreview()
   } else {
     preview = new THREE.Group()
   }

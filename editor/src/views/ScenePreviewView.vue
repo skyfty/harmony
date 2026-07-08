@@ -3066,6 +3066,14 @@ const runtimePanelUi = computed(() => {
 	}
 })
 
+const purposeControlsStyle = computed(() => ({
+	left: '50%',
+	bottom: lanternViewportSize.width <= 720 ? '16px' : '24px',
+	transform: 'translateX(-50%)',
+	width: 'calc(100% - 32px)',
+	justifyContent: 'center',
+}))
+
 const steeringWheelRef = ref<HTMLDivElement | null>(null)
 const steeringWheelValue = ref(0)
 const steeringKeyboardValue = ref(0)
@@ -14164,6 +14172,7 @@ watch(
 		<div
 			v-if="purposeControlsVisible"
 			class="scene-preview__purpose-controls"
+			:style="purposeControlsStyle"
 		>
 			<v-btn
 				v-for="button in purposeButtons"
@@ -15295,6 +15304,8 @@ watch(
 	gap: 16px;
 	z-index: 1900;
 	pointer-events: auto;
+	width: auto;
+	max-width: calc(100% - 48px);
 }
 
 
