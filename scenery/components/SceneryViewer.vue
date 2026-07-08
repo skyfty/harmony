@@ -227,23 +227,28 @@
       <view
         v-if="purposeControlsVisible && !watchExclusiveUiActive"
         class="viewer-purpose-controls"
-        data-control-skip="purpose-controls"
       >
-        <button
-          v-for="button in purposeButtons"
+        <view
+          v-for="(button, index) in purposeButtons"
           :key="button.id"
-          class="viewer-purpose-chip"
-          :aria-label="resolvePurposeButtonLabel(button)"
+          class="viewer-purpose-control-slot"
+          :class="index === 0 ? 'is-left' : 'is-right'"
           data-control-skip="purpose-controls"
-          @tap.stop.prevent="handlePurposeButtonTap(button)"
         >
-          <view class="viewer-purpose-chip__halo"></view>
-          <view class="viewer-purpose-chip__content">
-            <view class="viewer-purpose-chip__texts">
-              <text class="viewer-purpose-chip__title">{{ resolvePurposeButtonLabel(button) }}</text>
+          <button
+            class="viewer-purpose-chip"
+            :aria-label="resolvePurposeButtonLabel(button)"
+            data-control-skip="purpose-controls"
+            @tap.stop.prevent="handlePurposeButtonTap(button)"
+          >
+            <view class="viewer-purpose-chip__halo"></view>
+            <view class="viewer-purpose-chip__content">
+              <view class="viewer-purpose-chip__texts">
+                <text class="viewer-purpose-chip__title">{{ resolvePurposeButtonLabel(button) }}</text>
+              </view>
             </view>
-          </view>
-        </button>
+          </button>
+        </view>
       </view>
       <view v-if="watchLeaveVisible" class="viewer-watch-leave-bar" data-control-skip="watch-leave">
         <button
@@ -286,7 +291,6 @@
             />
           </view>
         </view>
-        
       </view>
       <view v-if="autoTourTelemetryUiVisible && !watchExclusiveUiActive" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
@@ -15783,11 +15787,35 @@ function isPointInsidePurposeControls(x: number, y: number): boolean {
   if (!purposeControlsVisible.value || !purposeButtons.value.length) {
     return false;
   }
-  const rect = resolveInteractiveElementRect(null, '.viewer-purpose-controls');
-  if (!rect) {
+  try {
+    const query = uni.createSelectorQuery();
+    if (typeof query.in === 'function') {
+      query.in((pageInstance?.proxy as unknown) ?? null);
+    }
+    let hit = false;
+    query
+      .selectAll('.viewer-purpose-control-slot')
+      .boundingClientRect((rects: unknown) => {
+        const items = Array.isArray(rects) ? rects : [];
+        hit = items.some((item) => {
+          const rect = item as UniApp.NodeInfo | null;
+          const left = rect?.left ?? 0;
+          const top = rect?.top ?? 0;
+          const width = rect?.width ?? 0;
+          const height = rect?.height ?? 0;
+          if (width <= 0 || height <= 0) {
+            return false;
+          }
+          const right = left + width;
+          const bottom = top + height;
+          return x >= left && x <= right && y >= top && y <= bottom;
+        });
+      })
+      .exec();
+    return hit;
+  } catch {
     return false;
   }
-  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
 function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null): boolean {
@@ -22980,15 +23008,26 @@ onUnmounted(() => {
 
 .viewer-purpose-controls {
   position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 86px;
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: flex-end;
+  left: 0;
+  right: 0;
+  bottom: calc(18px + var(--viewer-safe-area-bottom, 0px));
+  height: 54px;
   z-index: 1600;
+  pointer-events: none;
+}
+
+.viewer-purpose-control-slot {
+  position: absolute;
+  bottom: 0;
+  pointer-events: auto;
+}
+
+.viewer-purpose-control-slot.is-left {
+  left: 16px;
+}
+
+.viewer-purpose-control-slot.is-right {
+  right: 16px;
 }
 
 .viewer-watch-leave-bar {
@@ -23017,12 +23056,12 @@ onUnmounted(() => {
 
 .viewer-purpose-chip {
   position: relative;
-  min-width: 160px;
-  min-height: 52px;
+  min-width: 136px;
+  min-height: 40px;
   padding: 0;
   margin: 0;
   border: none;
-  border-radius: 18px;
+  border-radius: 15px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(244, 249, 255, 0.12)),
     linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(210, 232, 255, 0.06));
@@ -23037,7 +23076,7 @@ onUnmounted(() => {
   transition: transform 0.28s ease, box-shadow 0.28s ease, opacity 0.28s ease;
   text-align: center;
   backdrop-filter: blur(18px) saturate(1.08);
-  flex: 1 1 0;
+  flex: none;
 }
 
 .viewer-purpose-chip--watch {
@@ -23050,8 +23089,8 @@ onUnmounted(() => {
 
 .viewer-purpose-chip__halo {
   position: absolute;
-  inset: -24%;
-  border-radius: 28px;
+  inset: -18%;
+  border-radius: 22px;
   opacity: 0.28;
   pointer-events: none;
   transition: opacity 0.28s ease;
@@ -23064,9 +23103,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-radius: 16px;
+  gap: 6px;
+  padding: 7px 11px;
+  border-radius: 13px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(244, 249, 255, 0.34)),
     linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(210, 232, 255, 0.08));
@@ -23084,9 +23123,9 @@ onUnmounted(() => {
 }
 
 .viewer-purpose-chip__title {
-  font-size: 16px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.3px;
   line-height: 1.1;
   color: #12314d;
   text-align: center;
@@ -23149,8 +23188,8 @@ onUnmounted(() => {
 .viewer-purpose-chip.is-active::after {
   content: '';
   position: absolute;
-  inset: -10px;
-  border-radius: 20px;
+  inset: -8px;
+  border-radius: 18px;
   border: 1px solid rgba(153, 193, 255, 0.35);
   background: radial-gradient(circle, rgba(120, 208, 255, 0.26) 0%, rgba(120, 208, 255, 0.08) 60%, transparent 100%);
   box-shadow:
