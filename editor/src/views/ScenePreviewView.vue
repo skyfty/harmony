@@ -2581,7 +2581,8 @@ const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
 const defaultProtagonistState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
-	direction: new THREE.Vector3(0, 0, -1),
+	// Match the editor's default character forward axis so preview fallback facing stays aligned.
+	direction: new THREE.Vector3(1, 0, 0),
 }
 const defaultOrbitState = {
 	position: new THREE.Vector3(8, 6, 8),
