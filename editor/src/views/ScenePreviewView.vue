@@ -32,6 +32,25 @@ import {
 	type InstancedLodTarget,
 } from '@schema/core'
 import {
+	applyMoveToObjectWorldPose,
+	applyMoveToPhysicsBodyWorldPose,
+	buildMoveToTargetPose,
+	buildMoveToCameraPlacement,
+	resolveBindingByNodeId as resolveMoveToBindingByNodeId,
+	resolveMoveToSubjectType,
+	createMoveToRuntimeSession,
+	resetMoveToRuntimeSession,
+	resolveMoveToTargetPoseFromObject,
+	MOVE_TO_SNAP_DISTANCE,
+	MOVE_TO_CHARACTER_SLOW_DISTANCE,
+	MOVE_TO_CHARACTER_STOP_DISTANCE,
+	MOVE_TO_VEHICLE_SLOW_DISTANCE,
+	MOVE_TO_VEHICLE_STOP_DISTANCE,
+	MOVE_TO_CAMERA_LERP_SPEED,
+	resolveMoveToYawDeltaRadians,
+	resolveMoveToYawRadiansFromForward,
+} from '@schema/behaviors/moveToRuntime'
+import {
 	GUIDE_ROUTE_COMPONENT_TYPE,
 	clampGuideRouteComponentProps,
 	type GuideRouteComponentProps,
@@ -3237,8 +3256,8 @@ const characterFollowCameraController = new FollowCameraController()
 const characterFollowCameraMotionState: FollowCameraMotionState = createFollowCameraMotionState()
 const characterFollowCameraOffsetScratch = new THREE.Vector3()
 let characterInputYaw = Math.PI
-const CHARACTER_CONTROL_DEBUG_LOGGING = import.meta.env.DEV
 const characterNavigationControllerState = createCharacterNavigationControllerState(Math.PI)
+const moveToRuntimeSession = createMoveToRuntimeSession()
 
 const vehicleDriveController = new VehicleDriveController(
 	{
@@ -6878,43 +6897,6 @@ function restartDefaultAnimation(nodeId: string): void {
 	nodeAnimationRuntime.restoreDefaultNodeAnimation(nodeId)
 }
 
-function startTimedAnimation(
-	token: string,
-	durationSeconds: number,
-	onUpdate: (alpha: number) => void,
-	onComplete: () => void,
-): void {
-	stopBehaviorAnimation(token)
-	const durationMs = Math.max(0, durationSeconds) * 1000
-	if (durationMs <= 0) {
-		onUpdate(1)
-		onComplete()
-		return
-	}
-	const startTime = performance.now()
-	let frameHandle = 0
-	const cancel = () => {
-		if (frameHandle) {
-			cancelAnimationFrame(frameHandle)
-			frameHandle = 0
-		}
-		activeBehaviorAnimations.delete(token)
-	}
-	const step = (now: number) => {
-		const elapsed = Math.max(0, now - startTime)
-		const alpha = Math.min(1, elapsed / durationMs)
-		onUpdate(alpha)
-		if (alpha >= 1) {
-			cancel()
-			onComplete()
-			return
-		}
-		frameHandle = requestAnimationFrame(step)
-	}
-	frameHandle = requestAnimationFrame(step)
-	activeBehaviorAnimations.set(token, cancel)
-}
-
 function resolveNodeFocusPoint(nodeId: string | null, fallback: THREE.Vector3): THREE.Vector3 | null {
 	if (!nodeId) {
 		return null
@@ -7378,13 +7360,6 @@ function updateCharacterAuthorityInputFromKeys(deltaSeconds = 0): void {
 		characterInputYaw += turnRateRadiansPerSecond * keyboardTurn * deltaSeconds
 		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
 	}
-	if (CHARACTER_CONTROL_DEBUG_LOGGING) {
-		console.log(
-			`[ScenePreview:input] keys=(f:${Number(characterKeyState.forward)} b:${Number(characterKeyState.backward)} l:${Number(characterKeyState.left)} r:${Number(characterKeyState.right)}) `
-			+ `moveZ=${characterAuthorityInput.moveZ.toFixed(3)} turn=${characterAuthorityInput.turn.toFixed(3)} `
-			+ `yaw=${characterInputYaw.toFixed(3)} delta=${deltaSeconds.toFixed(3)}`,
-		)
-	}
 }
 
 function normalizeScenePreviewCharacterInputYaw(value: number): number {
@@ -7481,67 +7456,252 @@ function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }
 	})
 }
 
-function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
-	const activeCamera = camera
-	if (!activeCamera) {
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
-		return
+const moveToTransitionStartPosition = new THREE.Vector3()
+const moveToTransitionStartQuaternion = new THREE.Quaternion()
+const moveToTransitionCurrentForward = new THREE.Vector3()
+let moveToTransitionFrameHandle: number | null = null
+
+function cancelMoveToTransition(): void {
+	if (moveToTransitionFrameHandle !== null) {
+		cancelAnimationFrame(moveToTransitionFrameHandle)
+		moveToTransitionFrameHandle = null
 	}
-	const targetNodeId = event.targetNodeId ?? event.nodeId
-	const anchorPoint = resolveNodeAnchorPoint(targetNodeId, tempTarget) ?? resolveNodeFocusPoint(targetNodeId, tempTarget)
-	if (!anchorPoint) {
-		resolveBehaviorToken(event.token, {
-			type: 'fail',
-			message: 'Behavior target object not found.',
+}
+
+function resolveMoveToSubjectNodeId(): string | null {
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		return vehicleDriveState.nodeId
+	}
+	return resolveDefaultControlledCharacterNodeId()
+}
+
+function resolveMoveToSubjectBinding(subjectNodeId: string) {
+	return resolveMoveToBindingByNodeId(subjectNodeId, rigidbodyInstances)
+}
+
+function resolveMoveToSubjectObject(subjectNodeId: string): THREE.Object3D | null {
+	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	return binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null
+}
+
+function getMoveToSubjectCurrentPose(subjectNodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
+	const object = resolveMoveToSubjectObject(subjectNodeId)
+	if (!object) {
+		return null
+	}
+	object.updateWorldMatrix(true, false)
+	object.getWorldPosition(moveToTransitionStartPosition)
+	object.getWorldQuaternion(moveToTransitionStartQuaternion)
+	return {
+		position: moveToTransitionStartPosition.clone(),
+		quaternion: moveToTransitionStartQuaternion.clone(),
+	}
+}
+
+function applyMoveToSubjectTargetPose(
+	subjectNodeId: string,
+	targetPose: ReturnType<typeof buildMoveToTargetPose>,
+): void {
+	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	if (binding?.body) {
+		applyMoveToPhysicsBodyWorldPose({
+			body: binding.body,
+			worldPosition: targetPose.position,
+			worldQuaternion: targetPose.quaternion,
+			orientationAdjustment: binding.orientationAdjustment,
 		})
 		return
 	}
-	const focusPoint = anchorPoint.clone()
-	const startPosition = activeCamera.position.clone()
-	const startQuaternion = activeCamera.quaternion.clone()
-	const orbitControls = mapControls ?? null
-	const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + CAMERA_HEIGHT, focusPoint.z)
-	const startTarget = orbitControls ? orbitControls.target.clone() : null
-	const translation = destination.clone().sub(startPosition)
-	const targetDestination = startTarget ? startTarget.clone().add(translation) : null
-	const forwardDirection = new THREE.Vector3(0, 0, 0)
-	activeCamera.getWorldDirection(forwardDirection)
-	forwardDirection.y = 0
-	if (forwardDirection.lengthSq() < 1e-8) {
-		forwardDirection.set(0, 0, -1)
+	const object = resolveMoveToSubjectObject(subjectNodeId)
+	if (!object) {
+		return
+	}
+	applyMoveToObjectWorldPose(object, targetPose.position, targetPose.quaternion)
+}
+
+function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
+	const activeCamera = camera
+	if (!activeCamera) {
+		return
+	}
+	const placement = buildMoveToCameraPlacement(targetPose)
+	activeCamera.position.copy(placement.position)
+	if (mapControls) {
+		mapControls.target.copy(placement.lookAt)
+		mapControls.update()
+	}
+}
+
+function resetMoveToSubjectInputs(): void {
+	vehicleDriveInput.throttle = 0
+	vehicleDriveInput.steering = 0
+	vehicleDriveInput.brake = 0
+	vehicleDriveInputFlags.forward = false
+	vehicleDriveInputFlags.backward = false
+	vehicleDriveInputFlags.left = false
+	vehicleDriveInputFlags.right = false
+	vehicleDriveInputFlags.brake = false
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = 0
+	characterAuthorityInput.turn = 0
+	characterAuthorityInput.jump = false
+	characterAuthorityInput.sprint = false
+	characterAuthorityInput.crouch = false
+	characterAuthorityInput.interact = false
+}
+
+function finalizeMoveToSession(resolution: { type: 'continue' | 'fail'; message?: string } = { type: 'continue' }): void {
+	const token = moveToRuntimeSession.token
+	resetMoveToRuntimeSession(moveToRuntimeSession)
+	cancelMoveToTransition()
+	resetMoveToSubjectInputs()
+	if (token) {
+		resolveBehaviorToken(token, resolution)
+	}
+}
+
+function resolveMoveToFacingYaw(subjectNodeId: string, targetPose: ReturnType<typeof buildMoveToTargetPose>): number {
+	void subjectNodeId
+	return resolveMoveToYawRadiansFromForward(targetPose.forward)
+}
+
+function updateMoveToSessionForFrame(deltaSeconds: number): void {
+	if (!moveToRuntimeSession.active || !moveToRuntimeSession.token || !moveToRuntimeSession.subjectNodeId || !moveToRuntimeSession.targetNodeId) {
+		return
+	}
+	const subjectNodeId = moveToRuntimeSession.subjectNodeId
+	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	const object = binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null
+	if (!object) {
+		finalizeMoveToSession({ type: 'fail', message: 'Move To subject object not found.' })
+		return
+	}
+	const currentPose = getMoveToSubjectCurrentPose(subjectNodeId)
+	if (!currentPose) {
+		finalizeMoveToSession({ type: 'fail', message: 'Move To subject pose unavailable.' })
+		return
+	}
+	const currentPosition = currentPose.position
+	const currentQuaternion = currentPose.quaternion
+	const currentForward = moveToTransitionCurrentForward.copy(new THREE.Vector3(1, 0, 0)).applyQuaternion(currentQuaternion)
+	currentForward.y = 0
+	if (currentForward.lengthSq() <= 1e-8) {
+		currentForward.set(1, 0, 0)
 	} else {
-		forwardDirection.normalize()
+		currentForward.normalize()
 	}
-	const recoveryLookTarget = destination.clone().addScaledVector(forwardDirection, 1)
-	if (targetDestination && targetDestination.distanceToSquared(destination) < 1e-6) {
-		targetDestination.copy(recoveryLookTarget)
-	}
-	const durationSeconds = Math.max(0, event.duration ?? 0)
-	const updateFrame = (alpha: number) => {
-		activeCamera.position.lerpVectors(startPosition, destination, alpha)
-		if (orbitControls && startTarget && targetDestination) {
-			orbitControls.target.copy(startTarget)
-			orbitControls.target.lerp(targetDestination, alpha)
-			orbitControls.update()
-		} else {
-			activeCamera.quaternion.copy(startQuaternion)
+	const currentYaw = Math.atan2(currentForward.x, currentForward.z)
+	const targetPose = {
+		position: moveToRuntimeSession.targetPosition.clone(),
+		forward: moveToRuntimeSession.targetForward.clone(),
+		up: moveToRuntimeSession.targetUp.clone(),
+		quaternion: moveToRuntimeSession.targetQuaternion.clone(),
+	} satisfies ReturnType<typeof buildMoveToTargetPose>
+	const targetYaw = resolveMoveToFacingYaw(subjectNodeId, targetPose)
+	const targetPosition = moveToRuntimeSession.targetPosition
+	const positionDelta = targetPosition.clone().sub(currentPosition)
+	positionDelta.y = 0
+	const planarDistance = positionDelta.length()
+	if (moveToRuntimeSession.subjectType === 'camera') {
+		const activeCamera = camera
+		if (!activeCamera) {
+			finalizeMoveToSession({ type: 'fail', message: 'Camera unavailable.' })
+			return
 		}
-	}
-	const finalize = () => {
-		activeCamera.position.copy(destination)
-		if (orbitControls && targetDestination) {
-			orbitControls.target.copy(targetDestination)
-			orbitControls.update()
-			if (orbitControls.target.distanceToSquared(activeCamera.position) < 1e-6) {
-				orbitControls.target.copy(recoveryLookTarget)
-				orbitControls.update()
-			}
-		} else {
-			activeCamera.quaternion.copy(startQuaternion)
+		const placement = buildMoveToCameraPlacement(targetPose)
+		const cameraDelta = placement.position.clone().sub(activeCamera.position)
+		const cameraDistance = cameraDelta.length()
+		if (cameraDistance <= MOVE_TO_SNAP_DISTANCE) {
+			applyMoveToCameraTargetPose(targetPose)
+			finalizeMoveToSession({ type: 'continue' })
+			return
 		}
-		resolveBehaviorToken(event.token, { type: 'continue' })
+		activeCamera.position.lerp(placement.position, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED))
+		mapControls?.target.lerp(placement.lookAt, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED))
+		mapControls?.update()
+		return
 	}
-	startTimedAnimation(event.token, durationSeconds, updateFrame, finalize)
+	if (moveToRuntimeSession.subjectType === 'vehicle') {
+		const stopDistance = MOVE_TO_VEHICLE_STOP_DISTANCE
+		const slowDistance = MOVE_TO_VEHICLE_SLOW_DISTANCE
+		const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw)
+		const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(12)
+		if (shouldSnap) {
+			applyMoveToSubjectTargetPose(subjectNodeId, targetPose)
+			finalizeMoveToSession({ type: 'continue' })
+			return
+		}
+		const distanceBlend = THREE.MathUtils.clamp((planarDistance - stopDistance) / Math.max(1e-6, slowDistance - stopDistance), 0, 1)
+		vehicleDriveInput.throttle = distanceBlend
+		vehicleDriveInput.brake = planarDistance <= stopDistance ? 1 : 0
+		vehicleDriveInput.steering = THREE.MathUtils.clamp(yawError / (Math.PI * 0.65), -1, 1)
+		vehicleDriveInputFlags.forward = vehicleDriveInput.throttle > 0.05
+		vehicleDriveInputFlags.backward = false
+		vehicleDriveInputFlags.left = vehicleDriveInput.steering < -0.05
+		vehicleDriveInputFlags.right = vehicleDriveInput.steering > 0.05
+		vehicleDriveInputFlags.brake = vehicleDriveInput.brake > 0.5
+		return
+	}
+	const stopDistance = MOVE_TO_CHARACTER_STOP_DISTANCE
+	const slowDistance = MOVE_TO_CHARACTER_SLOW_DISTANCE
+	const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw)
+	const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(10)
+	if (shouldSnap) {
+		applyMoveToSubjectTargetPose(subjectNodeId, targetPose)
+		finalizeMoveToSession({ type: 'continue' })
+		return
+	}
+	const distanceBlend = THREE.MathUtils.clamp((planarDistance - stopDistance) / Math.max(1e-6, slowDistance - stopDistance), 0, 1)
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = planarDistance <= stopDistance ? 0 : distanceBlend
+	characterAuthorityInput.turn = THREE.MathUtils.clamp(yawError / (Math.PI * 0.55), -1, 1)
+	characterAuthorityInput.jump = false
+	characterAuthorityInput.sprint = distanceBlend > 0.75
+	characterAuthorityInput.crouch = false
+	characterAuthorityInput.interact = false
+}
+
+function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to' }>): void {
+	const targetNodeId = event.targetNodeId || event.nodeId
+	const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null
+	if (!targetObject) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Behavior target object not found.' })
+		return
+	}
+	const targetPose = resolveMoveToTargetPoseFromObject(targetObject)
+	const subjectType = resolveMoveToSubjectType({
+		vehicleActive: vehicleDriveState.active,
+		hasControlledCharacter: Boolean(resolveDefaultControlledCharacterNodeId()),
+	})
+	const subjectNodeId = subjectType === 'camera' ? null : resolveMoveToSubjectNodeId()
+	if (subjectType !== 'camera' && !subjectNodeId) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No movable subject available.' })
+		return
+	}
+	const resolvedSubjectNodeId = subjectNodeId ?? ''
+	resetMoveToRuntimeSession(moveToRuntimeSession)
+	moveToRuntimeSession.active = true
+	moveToRuntimeSession.token = event.token
+	moveToRuntimeSession.subjectType = subjectType
+	moveToRuntimeSession.subjectNodeId = subjectNodeId
+	moveToRuntimeSession.kinetics = Boolean(event.kinetics)
+	moveToRuntimeSession.targetNodeId = targetNodeId
+	moveToRuntimeSession.targetPosition.copy(targetPose.position)
+	moveToRuntimeSession.targetForward.copy(targetPose.forward)
+	moveToRuntimeSession.targetUp.copy(targetPose.up)
+	moveToRuntimeSession.targetQuaternion.copy(targetPose.quaternion)
+	moveToRuntimeSession.cameraTargetPosition.copy(buildMoveToCameraPlacement(targetPose).position)
+	moveToRuntimeSession.cameraTargetLookAt.copy(buildMoveToCameraPlacement(targetPose).lookAt)
+	if (subjectType === 'camera') {
+		applyMoveToCameraTargetPose(targetPose)
+		finalizeMoveToSession({ type: 'continue' })
+		return
+	}
+	if (!event.kinetics) {
+		applyMoveToSubjectTargetPose(resolvedSubjectNodeId, targetPose)
+		finalizeMoveToSession({ type: 'continue' })
+		return
+	}
 }
 
 function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
@@ -9028,8 +9188,8 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'delay':
 			handleDelayEvent(event)
 			break
-		case 'move-camera':
-			handleMoveCameraEvent(event)
+		case 'move-to':
+			handleMoveToEvent(event)
 			break
 		case 'spawn-prefab':
 			void spawnBehaviorRuntimePrefab(event)
@@ -9684,6 +9844,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 	updateCharacterPathFollow(delta)
 	flushParticleRuntimeCommands()
 	updateCharacterAuthorityInputFromKeys(delta)
+	updateMoveToSessionForFrame(delta)
 	updateCharacterControllerAnimations(delta)
 	nodeAnimationRuntime.update(delta)
 	activeBehaviorSounds.forEach((instance) => {
@@ -11487,8 +11648,16 @@ function resolveScenePreviewPhysicsBridgeTransformSyncEntry(
 ): PhysicsBridgeTransformSyncEntry | null {
 	const rigidbodyEntry = rigidbodyInstances.get(nodeId)
 	if (rigidbodyEntry) {
-		if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
-			return null
+		if (rigidbodyEntry.bindingKind === 'character') {
+			if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
+				return null
+			}
+			return {
+				object: rigidbodyEntry.object,
+				worldPosition: state.position,
+				worldQuaternion: state.quaternion,
+				orientationAdjustment: rigidbodyEntry.orientationAdjustment,
+			}
 		}
 		if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
 			return null
@@ -11653,10 +11822,10 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 	const commands: Array<Promise<void>> = []
 	const syncedNodeIds = new Set<string>()
 	rigidbodyInstances.forEach((entry, nodeId) => {
-		if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
+		if (entry.bindingKind === 'character') {
 			return
 		}
-		if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
+		if (!entry.body || entry.body.type === LEGACY_STATIC_BODY_TYPE) {
 			return
 		}
 		const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
@@ -11820,14 +11989,6 @@ function syncScenePreviewPhysicsBridgeVehicleInput(deltaSeconds: number): void {
 		warningPrefix: '[ScenePreview]',
 	})
 }
-
-function logScenePreviewCharacterControlDebug(stage: string, message: string): void {
-	if (!CHARACTER_CONTROL_DEBUG_LOGGING) {
-		return
-	}
-	console.log(`[ScenePreview:${stage}] ${message}`)
-}
-
 function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void {
 	void deltaSeconds
 	if (!physicsBridge || !physicsBridgeSceneLoaded || !physicsBridgeCharacterIdByNodeId.size) {
@@ -11853,15 +12014,6 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 		const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
 			? pathFollowInput.yaw
 			: (isControlled ? localYaw : null)
-		if (isControlled) {
-			logScenePreviewCharacterControlDebug(
-				'bridge',
-				`node=${nodeId} source=${hasPathFollowInput ? 'autotour' : 'local'} `
-					+ `moveX=${(hasPathFollowInput ? pathFollowInput!.moveX : characterAuthorityInput.moveX).toFixed(3)} `
-					+ `moveZ=${(hasPathFollowInput ? pathFollowInput!.moveZ : characterAuthorityInput.moveZ).toFixed(3)} `
-					+ `yaw=${typeof activeYaw === 'number' ? activeYaw.toFixed(3) : 'null'}`,
-			)
-		}
 		void physicsBridge?.setCharacterInput({
 			characterId,
 			moveX: hasPathFollowInput ? pathFollowInput!.moveX : 0,
@@ -12123,6 +12275,7 @@ function syncVehicleRigidbodyInstance(nodeId: string, instance: VehicleInstance,
 		bodies: [chassisBody],
 		object,
 		orientationAdjustment: null,
+		bindingKind: 'vehicle',
 	})
 }
 
@@ -12156,6 +12309,35 @@ function ensureVehicleBindingForNode(nodeId: string): void {
 		vehicleInstances.set(nodeId, instance)
 		syncVehicleRigidbodyInstance(nodeId, instance, object)
 	}
+}
+
+function removeCharacterBinding(nodeId: string): void {
+	const entry = rigidbodyInstances.get(nodeId) ?? null
+	if (!entry || entry.bindingKind !== 'character') {
+		return
+	}
+	rigidbodyInstances.delete(nodeId)
+}
+
+function ensureCharacterBindingForNode(nodeId: string): void {
+	const node = resolveNodeById(nodeId)
+	const component = resolveCharacterControllerComponent(node)
+	if (!node || !component) {
+		removeCharacterBinding(nodeId)
+		return
+	}
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!object) {
+		return
+	}
+	rigidbodyInstances.set(nodeId, {
+		nodeId,
+		body: null as never,
+		bodies: [],
+		object,
+		orientationAdjustment: null,
+		bindingKind: 'character',
+	})
 }
 
 function resolveRigidbodyBindingObject(
@@ -12213,6 +12395,49 @@ function syncVehicleBindingsForDocument(document: SceneJsonExportDocument | null
 	})
 }
 
+function collectCharacterNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+	const collected: SceneNode[] = []
+	if (!Array.isArray(nodes)) {
+		return collected
+	}
+	const stack: SceneNode[] = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (resolveCharacterControllerComponent(node)) {
+			collected.push(node)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return collected
+}
+
+function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | null): void {
+	if (!document) {
+		Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+			if (entry.bindingKind === 'character') {
+				rigidbodyInstances.delete(nodeId)
+			}
+		})
+		return
+	}
+	const characterNodes = collectCharacterNodes(document.nodes)
+	const desiredIds = new Set<string>()
+	characterNodes.forEach((node) => desiredIds.add(node.id))
+	Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+		if (entry.bindingKind === 'character' && !desiredIds.has(nodeId)) {
+			rigidbodyInstances.delete(nodeId)
+		}
+	})
+	characterNodes.forEach((node) => {
+		ensureCharacterBindingForNode(node.id)
+	})
+}
+
 type SceneSubsystemProgressReporter = (progress: {
 	phase: SceneInitStage
 	percent: number
@@ -12248,11 +12473,13 @@ async function syncPhysicsBodiesForDocument(
 	if (!document) {
 		resetPhysicsWorld()
 		syncVehicleBindingsForDocument(null)
+		syncCharacterBindingsForDocument(null)
 		return
 	}
 	await loadScenePreviewPhysicsBridgeScene(document, onProgress)
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
+	syncCharacterBindingsForDocument(document)
 }
 
 function stepPhysicsWorld(delta: number): void {
@@ -13438,6 +13665,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	cancelMoveToTransition()
 	clearSceneInitState()
 	if (typeof window !== 'undefined') {
 		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)

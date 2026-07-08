@@ -38,6 +38,7 @@ export type PhysicsBodyBindingEntry = {
   bodies: PhysicsBodyLike[]
   object: THREE.Object3D | null
   orientationAdjustment: PhysicsOrientationAdjustment | null
+  bindingKind?: 'rigidbody' | 'vehicle' | 'character'
   signature?: string
   syncObjectFromBody?: boolean
 }

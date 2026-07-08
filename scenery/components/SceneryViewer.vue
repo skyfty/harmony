@@ -419,6 +419,26 @@ import SceneLoadOverlay from './SceneLoadOverlay.vue';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
 import { loadTextureFromSourceUrl } from '@harmony/schema/textureSourceLoader';
 import {
+  applyMoveToObjectWorldPose,
+  applyMoveToPhysicsBodyWorldPose,
+  buildMoveToTargetPose,
+  buildMoveToCameraPlacement,
+  resolveBindingByNodeId as resolveMoveToBindingByNodeId,
+  resolveMoveToSubjectType,
+  createMoveToRuntimeSession,
+  resetMoveToRuntimeSession,
+  resolveMoveToTargetPoseFromObject,
+  syncMoveToRigidBodyFromObject,
+  MOVE_TO_SNAP_DISTANCE,
+  MOVE_TO_CHARACTER_SLOW_DISTANCE,
+  MOVE_TO_CHARACTER_STOP_DISTANCE,
+  MOVE_TO_VEHICLE_SLOW_DISTANCE,
+  MOVE_TO_VEHICLE_STOP_DISTANCE,
+  MOVE_TO_CAMERA_LERP_SPEED,
+  resolveMoveToYawDeltaRadians,
+  resolveMoveToYawRadiansFromForward,
+} from '@harmony/schema/behaviors/moveToRuntime';
+import {
   type PhysicsBackendPreference,
   type PhysicsBridge,
   type PhysicsContactEvent,
@@ -3261,6 +3281,7 @@ const characterKeyState = reactive({
   interact: false,
 });
 let characterInputJumpLatch = false;
+const moveToRuntimeSession = createMoveToRuntimeSession();
 let characterActionJumpReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 let activeCharacterActionAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 let activeCharacterActionAnimationToken: string | null = null;
@@ -9009,7 +9030,16 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
     const rigidbodyEntry = rigidbodyInstances.get(nodeId);
     if (rigidbodyEntry) {
-      if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
+      if (rigidbodyEntry.bindingKind === 'character') {
+        if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
+          return;
+        }
+        applySceneryPhysicsBridgeTransformToObject(
+          rigidbodyEntry.object,
+          state.position,
+          state.quaternion,
+          rigidbodyEntry.orientationAdjustment,
+        );
         return;
       }
       if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
@@ -9206,14 +9236,33 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
       physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
       return;
     }
-    if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
-      physicsBridgeDirtyBodyNodeIds.delete(nodeId);
-      physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
-      physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
-      return;
-    }
     const entry = rigidbodyInstances.get(nodeId) ?? null;
     if (entry) {
+      if (entry.bindingKind === 'character') {
+        const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+        if (!frameState || !entry.object) {
+          physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+          physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+          physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+          return;
+        }
+        applySceneryPhysicsBridgeTransformToObject(
+          entry.object,
+          frameState.position,
+          frameState.quaternion,
+          entry.orientationAdjustment,
+        );
+        physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+        physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+        physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+        return;
+      }
+      if (!entry.body) {
+        physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+        physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+        physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+        return;
+      }
       if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
         physicsBridgeDirtyBodyNodeIds.delete(nodeId);
         physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
@@ -9927,6 +9976,7 @@ function syncVehicleRigidbodyInstance(
     bodies: [chassisBody],
     object,
     orientationAdjustment: null,
+    bindingKind: 'vehicle',
     bridgeSyncDirty: true,
   });
   markPhysicsBridgeBodyDirty(nodeId);
@@ -9959,6 +10009,35 @@ function ensureVehicleBindingForNode(nodeId: string): void {
     vehicleInstances.set(nodeId, instance);
     syncVehicleRigidbodyInstance(nodeId, instance, object);
   }
+}
+
+function removeCharacterBinding(nodeId: string): void {
+  const entry = rigidbodyInstances.get(nodeId) ?? null;
+  if (!entry || entry.bindingKind !== 'character') {
+    return;
+  }
+  rigidbodyInstances.delete(nodeId);
+}
+
+function ensureCharacterBindingForNode(nodeId: string): void {
+  const node = resolveNodeById(nodeId);
+  const component = resolveCharacterControllerComponent(node);
+  if (!node || !component) {
+    removeCharacterBinding(nodeId);
+    return;
+  }
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
+    return;
+  }
+  rigidbodyInstances.set(nodeId, {
+    nodeId,
+    body: null as never,
+    bodies: [],
+    object,
+    orientationAdjustment: null,
+    bindingKind: 'character',
+  });
 }
 
 function getPhysicsInterpolationState(body: PhysicsBodyLike): PhysicsInterpolationState {
@@ -10010,6 +10089,27 @@ function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[]
       continue;
     }
     if (resolveVehicleComponent(node)) {
+      collected.push(node);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return collected;
+}
+
+function collectCharacterNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+  const collected: SceneNode[] = [];
+  if (!Array.isArray(nodes)) {
+    return collected;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (resolveCharacterControllerComponent(node)) {
       collected.push(node);
     }
     if (Array.isArray(node.children) && node.children.length) {
@@ -10082,6 +10182,25 @@ function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | nul
   });
 }
 
+function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | null): void {
+  if (!document) {
+    Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+      if (entry.bindingKind === 'character') {
+        rigidbodyInstances.delete(nodeId);
+      }
+    });
+    return;
+  }
+  const characterNodes = collectCharacterNodes(document.nodes);
+  const desiredIds = new Set(characterNodes.map((node) => node.id));
+  characterNodes.forEach((node) => ensureCharacterBindingForNode(node.id));
+  Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+    if (entry.bindingKind === 'character' && !desiredIds.has(nodeId)) {
+      rigidbodyInstances.delete(nodeId);
+    }
+  });
+}
+
 type SceneSubsystemProgressReporter = (progress: {
   phase: SceneInitStage;
   percent: number;
@@ -10098,6 +10217,7 @@ async function syncPhysicsBodiesForDocument(
   if (!document) {
     resetPhysicsWorld();
     syncVehicleInstancesForDocument(null);
+    syncCharacterBindingsForDocument(null);
     syncAirWallsForDocument(null);
     return;
   }
@@ -10113,6 +10233,7 @@ async function syncPhysicsBodiesForDocument(
     await disposeSceneryPhysicsBridgeScene();
     clearLegacyPhysicsWorld();
     syncVehicleInstancesForDocument(document);
+    syncCharacterBindingsForDocument(document);
     syncAirWallsForDocument(document);
     return;
   }
@@ -10128,6 +10249,7 @@ async function syncPhysicsBodiesForDocument(
     await disposeSceneryPhysicsBridgeScene();
     clearLegacyPhysicsWorld();
     syncVehicleInstancesForDocument(document);
+    syncCharacterBindingsForDocument(document);
     syncAirWallsForDocument(document);
     return;
   }
@@ -10150,6 +10272,7 @@ async function syncPhysicsBodiesForDocument(
   });
   clearLegacyPhysicsWorld();
   syncVehicleInstancesForDocument(document);
+  syncCharacterBindingsForDocument(document);
   syncAirWallsForDocument(document);
   onProgress?.({
     phase: 'syncingPhysics',
@@ -14089,53 +14212,239 @@ function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }
   });
 }
 
-function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
-  const context = renderContext;
-  if (!context) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+const moveToTransitionStartPosition = new THREE.Vector3();
+const moveToTransitionStartQuaternion = new THREE.Quaternion();
+const moveToTransitionCurrentForward = new THREE.Vector3();
+let moveToTransitionFrameHandle: number | null = null;
+
+function cancelMoveToTransition(): void {
+  if (moveToTransitionFrameHandle !== null) {
+    cancelAnimationFrame(moveToTransitionFrameHandle);
+    moveToTransitionFrameHandle = null;
+  }
+}
+
+function resolveMoveToSubjectNodeId(): string | null {
+  if (vehicleDriveStateBridge.active && vehicleDriveStateBridge.nodeId) {
+    return vehicleDriveStateBridge.nodeId;
+  }
+  return resolveDefaultControlledCharacterNodeId();
+}
+
+function resolveMoveToSubjectBinding(subjectNodeId: string) {
+  return resolveMoveToBindingByNodeId(subjectNodeId, rigidbodyInstances);
+}
+
+function resolveMoveToSubjectObject(subjectNodeId: string): THREE.Object3D | null {
+  const binding = resolveMoveToSubjectBinding(subjectNodeId);
+  return binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null;
+}
+
+function getMoveToSubjectCurrentPose(subjectNodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
+  const object = resolveMoveToSubjectObject(subjectNodeId);
+  if (!object) {
+    return null;
+  }
+  object.updateWorldMatrix(true, false);
+  object.getWorldPosition(moveToTransitionStartPosition);
+  object.getWorldQuaternion(moveToTransitionStartQuaternion);
+  return {
+    position: moveToTransitionStartPosition.clone(),
+    quaternion: moveToTransitionStartQuaternion.clone(),
+  };
+}
+
+function applyMoveToSubjectTargetPose(
+  subjectNodeId: string,
+  targetPose: ReturnType<typeof buildMoveToTargetPose>,
+): void {
+  const binding = resolveMoveToSubjectBinding(subjectNodeId);
+  if (binding?.body) {
+    applyMoveToPhysicsBodyWorldPose({
+      body: binding.body,
+      worldPosition: targetPose.position,
+      worldQuaternion: targetPose.quaternion,
+      orientationAdjustment: binding.orientationAdjustment,
+    });
     return;
   }
-  const { camera, controls } = context;
-  const targetNodeId = event.targetNodeId ?? event.nodeId;
-  const anchorPoint = resolveNodeAnchorPoint(targetNodeId) ?? resolveNodeFocusPoint(targetNodeId);
-  if (!anchorPoint) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
+  const object = resolveMoveToSubjectObject(subjectNodeId);
+  if (!object) {
+    return;
+  }
+  applyMoveToObjectWorldPose(object, targetPose.position, targetPose.quaternion);
+}
+
+function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const placement = buildMoveToCameraPlacement(targetPose);
+  context.camera.position.copy(placement.position);
+  context.controls.target.copy(placement.lookAt);
+  context.controls.update();
+}
+
+function resetMoveToSubjectInputs(): void {
+  vehicleDriveInput.throttle = 0;
+  vehicleDriveInput.steering = 0;
+  vehicleDriveInput.brake = 0;
+  characterAuthorityInput.moveX = 0;
+  characterAuthorityInput.moveZ = 0;
+  characterAuthorityInput.turn = 0;
+  characterAuthorityInput.jump = false;
+  characterAuthorityInput.sprint = false;
+  characterAuthorityInput.crouch = false;
+  characterAuthorityInput.interact = false;
+}
+
+function finalizeMoveToSession(resolution: { type: 'continue' | 'fail'; message?: string } = { type: 'continue' }): void {
+  const token = moveToRuntimeSession.token;
+  resetMoveToRuntimeSession(moveToRuntimeSession);
+  cancelMoveToTransition();
+  resetMoveToSubjectInputs();
+  if (token) {
+    resolveBehaviorToken(token, resolution);
+  }
+}
+
+function resolveMoveToFacingYaw(targetPose: ReturnType<typeof buildMoveToTargetPose>): number {
+  return resolveMoveToYawRadiansFromForward(targetPose.forward);
+}
+
+function updateMoveToSessionForFrame(deltaSeconds: number): void {
+  if (!moveToRuntimeSession.active || !moveToRuntimeSession.token || !moveToRuntimeSession.subjectNodeId || !moveToRuntimeSession.targetNodeId) {
+    return;
+  }
+  const subjectNodeId = moveToRuntimeSession.subjectNodeId;
+  const currentPose = getMoveToSubjectCurrentPose(subjectNodeId);
+  if (!currentPose) {
+    finalizeMoveToSession({ type: 'fail', message: 'Move To subject pose unavailable.' });
+    return;
+  }
+  const targetPose = {
+    position: moveToRuntimeSession.targetPosition.clone(),
+    forward: moveToRuntimeSession.targetForward.clone(),
+    up: moveToRuntimeSession.targetUp.clone(),
+    quaternion: moveToRuntimeSession.targetQuaternion.clone(),
+  } satisfies ReturnType<typeof buildMoveToTargetPose>;
+  const currentForward = moveToTransitionCurrentForward.copy(new THREE.Vector3(1, 0, 0)).applyQuaternion(currentPose.quaternion);
+  currentForward.y = 0;
+  if (currentForward.lengthSq() <= 1e-8) {
+    currentForward.set(1, 0, 0);
+  } else {
+    currentForward.normalize();
+  }
+  const currentYaw = Math.atan2(currentForward.x, currentForward.z);
+  const targetYaw = resolveMoveToFacingYaw(targetPose);
+  const positionDelta = targetPose.position.clone().sub(currentPose.position);
+  positionDelta.y = 0;
+  const planarDistance = positionDelta.length();
+
+  if (moveToRuntimeSession.subjectType === 'camera') {
+    const context = renderContext;
+    if (!context) {
+      finalizeMoveToSession({ type: 'fail', message: '相机不可用' });
+      return;
+    }
+    const placement = buildMoveToCameraPlacement(targetPose);
+    const cameraDistance = placement.position.distanceTo(context.camera.position);
+    if (cameraDistance <= MOVE_TO_SNAP_DISTANCE) {
+      applyMoveToCameraTargetPose(targetPose);
+      finalizeMoveToSession({ type: 'continue' });
+      return;
+    }
+    context.camera.position.lerp(placement.position, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED));
+    context.controls.target.lerp(placement.lookAt, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED));
+    context.controls.update();
     return;
   }
 
-  const focusPoint = anchorPoint.clone();
-  const startPosition = camera.position.clone();
-  const startTarget = controls.target.clone();
-  const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + HUMAN_EYE_HEIGHT, focusPoint.z);
-  const translation = destination.clone().sub(startPosition);
-  const targetDestination = startTarget.clone().add(translation);
-  if (targetDestination.distanceToSquared(destination) < 1e-6) {
-    targetDestination.copy(destination);
+  if (moveToRuntimeSession.subjectType === 'vehicle') {
+    const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw);
+    const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(12);
+    if (shouldSnap) {
+      applyMoveToSubjectTargetPose(subjectNodeId, targetPose);
+      finalizeMoveToSession({ type: 'continue' });
+      return;
+    }
+    const distanceBlend = THREE.MathUtils.clamp(
+      (planarDistance - MOVE_TO_VEHICLE_STOP_DISTANCE) / Math.max(1e-6, MOVE_TO_VEHICLE_SLOW_DISTANCE - MOVE_TO_VEHICLE_STOP_DISTANCE),
+      0,
+      1,
+    );
+    vehicleDriveInput.throttle = distanceBlend;
+    vehicleDriveInput.brake = planarDistance <= MOVE_TO_VEHICLE_STOP_DISTANCE ? 1 : 0;
+    vehicleDriveInput.steering = THREE.MathUtils.clamp(yawError / (Math.PI * 0.65), -1, 1);
+    return;
   }
-  const durationSeconds = Math.max(0, event.duration ?? 0);
-  
-  const updateFrame = (alpha: number) => {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        camera.position.lerpVectors(startPosition, destination, alpha);
-        controls.target.lerpVectors(startTarget, targetDestination, alpha);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-  };
-  const finalize = () => {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        camera.position.copy(destination);
-        controls.target.copy(targetDestination);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    resolveBehaviorToken(event.token, { type: 'continue' });
-  };
-  startTimedAnimation(event.token, durationSeconds, updateFrame, finalize);
+
+  const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw);
+  const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(10);
+  if (shouldSnap) {
+    applyMoveToSubjectTargetPose(subjectNodeId, targetPose);
+    finalizeMoveToSession({ type: 'continue' });
+    return;
+  }
+  const distanceBlend = THREE.MathUtils.clamp(
+    (planarDistance - MOVE_TO_CHARACTER_STOP_DISTANCE) / Math.max(1e-6, MOVE_TO_CHARACTER_SLOW_DISTANCE - MOVE_TO_CHARACTER_STOP_DISTANCE),
+    0,
+    1,
+  );
+  characterAuthorityInput.moveZ = planarDistance <= MOVE_TO_CHARACTER_STOP_DISTANCE ? 0 : distanceBlend;
+  characterAuthorityInput.turn = THREE.MathUtils.clamp(yawError / (Math.PI * 0.55), -1, 1);
+  characterAuthorityInput.sprint = distanceBlend > 0.75;
+  characterAuthorityInput.jump = false;
+  characterAuthorityInput.crouch = false;
+  characterAuthorityInput.interact = false;
+}
+
+function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to' }>): void {
+  const targetNodeId = event.targetNodeId || event.nodeId;
+  const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null;
+  if (!targetObject) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
+    return;
+  }
+  const targetPose = resolveMoveToTargetPoseFromObject(targetObject);
+  const subjectType = resolveMoveToSubjectType({
+    vehicleActive: vehicleDriveStateBridge.active,
+    hasControlledCharacter: Boolean(resolveDefaultControlledCharacterNodeId()),
+  });
+  const subjectNodeId = subjectType === 'camera' ? null : resolveMoveToSubjectNodeId();
+  if (subjectType !== 'camera' && !subjectNodeId) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '没有可移动的主控对象' });
+    return;
+  }
+  const resolvedSubjectNodeId = subjectNodeId ?? '';
+  resetMoveToRuntimeSession(moveToRuntimeSession);
+  moveToRuntimeSession.active = true;
+  moveToRuntimeSession.token = event.token;
+  moveToRuntimeSession.subjectType = subjectType;
+  moveToRuntimeSession.subjectNodeId = subjectNodeId;
+  moveToRuntimeSession.kinetics = Boolean(event.kinetics);
+  moveToRuntimeSession.targetNodeId = targetNodeId;
+  moveToRuntimeSession.targetPosition.copy(targetPose.position);
+  moveToRuntimeSession.targetForward.copy(targetPose.forward);
+  moveToRuntimeSession.targetUp.copy(targetPose.up);
+  moveToRuntimeSession.targetQuaternion.copy(targetPose.quaternion);
+  const cameraPlacement = buildMoveToCameraPlacement(targetPose);
+  moveToRuntimeSession.cameraTargetPosition.copy(cameraPlacement.position);
+  moveToRuntimeSession.cameraTargetLookAt.copy(cameraPlacement.lookAt);
+  if (subjectType === 'camera') {
+    if (!renderContext) {
+      resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+      return;
+    }
+    applyMoveToCameraTargetPose(targetPose);
+    finalizeMoveToSession({ type: 'continue' });
+    return;
+  }
+  if (!event.kinetics) {
+    applyMoveToSubjectTargetPose(resolvedSubjectNodeId, targetPose);
+    finalizeMoveToSession({ type: 'continue' });
+  }
 }
 
 function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
@@ -16841,8 +17150,8 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'delay':
       handleDelayEvent(event);
       break;
-    case 'move-camera':
-      handleMoveCameraEvent(event);
+    case 'move-to':
+      handleMoveToEvent(event);
       break;
     case 'spawn-prefab':
       runtimePrefabBehaviorCounter += 1;
@@ -19260,6 +19569,7 @@ function startRenderLoop(
         if (deltaSeconds > 0) {
           characterControlDeltaSeconds = deltaSeconds;
           updateCharacterAuthorityInputFromKeys();
+          updateMoveToSessionForFrame(deltaSeconds);
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
@@ -19956,6 +20266,7 @@ function cleanupRuntime(): void {
 }
 
 onUnmounted(() => {
+  cancelMoveToTransition();
   resetCharacterActionButtonState();
   void destroySceneryPhysicsBridge();
   if (typeof window !== 'undefined') {
