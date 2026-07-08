@@ -282,6 +282,7 @@ import {
 } from '@schema/motion'
 import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
+import { createBridgePhysicsBodyProxy } from '@schema/bridgePhysicsBodyProxy'
 import type { AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
 import {
 	createCharacterNavigationControllerState,
@@ -7510,6 +7511,9 @@ function applyMoveToSubjectTargetPose(
 			worldQuaternion: targetPose.quaternion,
 			orientationAdjustment: binding.orientationAdjustment,
 		})
+		if (binding.object) {
+			applyMoveToObjectWorldPose(binding.object, targetPose.position, targetPose.quaternion)
+		}
 		return
 	}
 	const object = resolveMoveToSubjectObject(subjectNodeId)
@@ -12330,10 +12334,16 @@ function ensureCharacterBindingForNode(nodeId: string): void {
 	if (!object) {
 		return
 	}
+	object.updateWorldMatrix(true, false)
+	const worldPosition = new THREE.Vector3()
+	const worldQuaternion = new THREE.Quaternion()
+	object.getWorldPosition(worldPosition)
+	object.getWorldQuaternion(worldQuaternion).normalize()
+	const body = createBridgePhysicsBodyProxy(worldPosition, worldQuaternion)
 	rigidbodyInstances.set(nodeId, {
 		nodeId,
-		body: null as never,
-		bodies: [],
+		body,
+		bodies: [body],
 		object,
 		orientationAdjustment: null,
 		bindingKind: 'character',
