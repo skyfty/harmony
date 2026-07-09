@@ -41,6 +41,28 @@ export interface SignboardPlacementSmoothingState {
   opacity: number
 }
 
+export interface PurposeOverlayPlacement extends SignboardOverlayPlacement {}
+
+export interface PurposeOverlayPlacementCandidate {
+  id: string
+  placement: PurposeOverlayPlacement
+  estimatedWidthPx: number
+  estimatedHeightPx: number
+}
+
+const purposeAnchorWorldBox = new THREE.Box3()
+const purposeAnchorWorldCenter = new THREE.Vector3()
+const purposePlacementWorld = new THREE.Vector3()
+const purposePlacementReference = new THREE.Vector3()
+const purposePlacementProjected = new THREE.Vector3()
+const purposeResolvedPlacements: Array<{
+  id: string
+  placement: PurposeOverlayPlacement
+  estimatedWidthPx: number
+  estimatedHeightPx: number
+  rect: { left: number; top: number; right: number; bottom: number }
+}> = []
+
 const placementWorld = new THREE.Vector3()
 const placementReference = new THREE.Vector3()
 const projected = new THREE.Vector3()
@@ -196,6 +218,272 @@ export function resolveSignboardAnchorWorldPosition(
   object.getWorldPosition(target)
   target.y += yOffset
   return target
+}
+
+export function resolvePurposeOverlayAnchorWorldPosition(
+  object: THREE.Object3D,
+  target = new THREE.Vector3(),
+  options: {
+    shortHeightThreshold?: number
+    tallHeightThreshold?: number
+    topOffset?: number
+    middleRatio?: number
+  } = {},
+): THREE.Vector3 {
+  const shortHeightThreshold = options.shortHeightThreshold ?? 1.6
+  const tallHeightThreshold = Math.max(options.tallHeightThreshold ?? 5.4, shortHeightThreshold + 1e-3)
+  const topOffset = options.topOffset ?? SIGNBOARD_WORLD_Y_OFFSET
+  const middleRatio = options.middleRatio ?? 0.58
+
+  purposeAnchorWorldBox.setFromObject(object)
+  if (purposeAnchorWorldBox.isEmpty()) {
+    object.getWorldPosition(target)
+    target.y += topOffset
+    return target
+  }
+
+  purposeAnchorWorldBox.getCenter(purposeAnchorWorldCenter)
+  const height = Math.max(0, purposeAnchorWorldBox.max.y - purposeAnchorWorldBox.min.y)
+  if (height <= shortHeightThreshold) {
+    target.set(purposeAnchorWorldCenter.x, purposeAnchorWorldBox.max.y + topOffset, purposeAnchorWorldCenter.z)
+    return target
+  }
+
+  const topY = purposeAnchorWorldBox.max.y + topOffset
+  const middleY = purposeAnchorWorldBox.min.y + (height * middleRatio)
+  if (height >= tallHeightThreshold) {
+    target.set(purposeAnchorWorldCenter.x, middleY, purposeAnchorWorldCenter.z)
+    return target
+  }
+
+  const blend = clamp01((height - shortHeightThreshold) / (tallHeightThreshold - shortHeightThreshold))
+  target.set(
+    purposeAnchorWorldCenter.x,
+    lerp(topY, middleY, blend),
+    purposeAnchorWorldCenter.z,
+  )
+  return target
+}
+
+function clampPurposeOverlayPlacement(
+  placement: PurposeOverlayPlacement,
+  params: {
+    viewportWidth: number
+    viewportHeight: number
+    estimatedWidthPx: number
+    estimatedHeightPx: number
+    screenMarginPx: number
+  },
+): PurposeOverlayPlacement {
+  const viewportWidth = Math.max(1, params.viewportWidth)
+  const viewportHeight = Math.max(1, params.viewportHeight)
+  const estimatedWidthPx = Math.max(0, params.estimatedWidthPx)
+  const estimatedHeightPx = Math.max(0, params.estimatedHeightPx)
+  const halfWidthPercent = ((estimatedWidthPx * 0.5) + params.screenMarginPx) / viewportWidth * 100
+  const heightPercent = ((estimatedHeightPx) + params.screenMarginPx) / viewportHeight * 100
+
+  const minX = Math.min(50, halfWidthPercent)
+  const maxX = Math.max(minX, 100 - halfWidthPercent)
+  const minY = Math.min(50, heightPercent)
+  const maxY = Math.max(minY, 100 - (params.screenMarginPx / viewportHeight * 100))
+
+  return {
+    ...placement,
+    xPercent: Math.min(Math.max(placement.xPercent, minX), maxX),
+    yPercent: Math.min(Math.max(placement.yPercent, minY), maxY),
+  }
+}
+
+export function computePurposeOverlayPlacement(params: {
+  anchorWorld: THREE.Vector3 | Vector3Like
+  referenceWorld: THREE.Vector3 | Vector3Like
+  camera: THREE.Camera
+  viewportWidth: number
+  viewportHeight: number
+  maxDistance?: number
+  fadeStartDistance?: number
+  fullScaleDistance?: number
+  closeFadeDistance?: number
+  minScreenYPercent?: number
+  minScale?: number
+  maxScale?: number
+  screenMarginPx?: number
+  estimatedWidthPx?: number
+  estimatedHeightPx?: number
+}): PurposeOverlayPlacement | null {
+  const maxDistance = params.maxDistance ?? SIGNBOARD_MAX_DISTANCE
+  const fadeStartDistance = Math.min(params.fadeStartDistance ?? SIGNBOARD_FADE_START_DISTANCE, maxDistance)
+  const fullScaleDistance = Math.min(params.fullScaleDistance ?? SIGNBOARD_FULL_SCALE_DISTANCE, fadeStartDistance)
+  const closeFadeDistance = Math.max(params.closeFadeDistance ?? SIGNBOARD_CLOSE_FADE_DISTANCE, 0)
+  const minScreenYPercent = Math.max(params.minScreenYPercent ?? 0, 0)
+  const minScale = params.minScale ?? SIGNBOARD_MIN_SCALE
+  const maxScale = params.maxScale ?? SIGNBOARD_MAX_SCALE
+  const screenMarginPx = Math.max(params.screenMarginPx ?? 12, 0)
+
+  copyVector3(purposePlacementWorld, params.anchorWorld)
+  copyVector3(purposePlacementReference, params.referenceWorld)
+
+  const distanceMeters = purposePlacementWorld.distanceTo(purposePlacementReference)
+  if (!Number.isFinite(distanceMeters) || distanceMeters > maxDistance) {
+    return null
+  }
+
+  purposePlacementProjected.copy(purposePlacementWorld)
+  purposePlacementProjected.project(params.camera)
+  if (!Number.isFinite(purposePlacementProjected.x) || !Number.isFinite(purposePlacementProjected.y) || !Number.isFinite(purposePlacementProjected.z)) {
+    return null
+  }
+  if (purposePlacementProjected.z < -1 || purposePlacementProjected.z > 1) {
+    return null
+  }
+
+  const xNorm = purposePlacementProjected.x * 0.5 + 0.5
+  const rawYNorm = purposePlacementProjected.y * -0.5 + 0.5
+  const minScreenYNorm = minScreenYPercent / 100
+  const yNorm = minScreenYNorm > 0
+    ? Math.max(rawYNorm - 0.03, minScreenYNorm)
+    : Math.max(rawYNorm - 0.03, 0)
+
+  const scaleRange = Math.max(fadeStartDistance - fullScaleDistance, 1e-6)
+  const scaleAmount = clamp01((distanceMeters - fullScaleDistance) / scaleRange)
+  const fadeRange = Math.max(maxDistance - fadeStartDistance, 1e-6)
+  const fadeAmount = clamp01((distanceMeters - fadeStartDistance) / fadeRange)
+  const closeFadeAmount = closeFadeDistance > 0 ? clamp01(distanceMeters / closeFadeDistance) : 1
+
+  const placement = clampPurposeOverlayPlacement(
+    {
+      xPercent: xNorm * 100,
+      yPercent: yNorm * 100,
+      scale: lerp(maxScale, minScale, scaleAmount),
+      opacity: lerp(1, 0, fadeAmount) * closeFadeAmount,
+      distanceMeters,
+      distanceLabel: formatSignboardDistance(distanceMeters),
+    },
+    {
+      viewportWidth: params.viewportWidth,
+      viewportHeight: params.viewportHeight,
+      estimatedWidthPx: params.estimatedWidthPx ?? 120,
+      estimatedHeightPx: params.estimatedHeightPx ?? 40,
+      screenMarginPx,
+    },
+  )
+
+  return placement
+}
+
+function buildPurposeOverlayRect(
+  placement: PurposeOverlayPlacement,
+  estimatedWidthPx: number,
+  estimatedHeightPx: number,
+  viewportWidth: number,
+  viewportHeight: number,
+): { left: number; top: number; right: number; bottom: number } {
+  const left = (placement.xPercent / 100) * viewportWidth - (estimatedWidthPx / 2)
+  const top = (placement.yPercent / 100) * viewportHeight - estimatedHeightPx
+  return {
+    left,
+    top,
+    right: left + estimatedWidthPx,
+    bottom: top + estimatedHeightPx,
+  }
+}
+
+function rectsOverlap(
+  a: { left: number; top: number; right: number; bottom: number },
+  b: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom)
+}
+
+export function resolvePurposeOverlayPlacements(params: {
+  placements: PurposeOverlayPlacementCandidate[]
+  viewportWidth: number
+  viewportHeight: number
+  screenMarginPx?: number
+}): PurposeOverlayPlacementCandidate[] {
+  purposeResolvedPlacements.length = 0
+  const viewportWidth = Math.max(1, params.viewportWidth)
+  const viewportHeight = Math.max(1, params.viewportHeight)
+  const screenMarginPx = Math.max(params.screenMarginPx ?? 12, 0)
+  const sortedPlacements = params.placements
+    .map((entry) => ({ ...entry }))
+    .sort((a, b) => (
+      a.placement.yPercent - b.placement.yPercent
+      || a.placement.xPercent - b.placement.xPercent
+      || a.id.localeCompare(b.id)
+    ))
+  const stepX = Math.max(8, Math.min(20, Math.round(viewportWidth * 0.015)))
+  const stepY = Math.max(12, Math.min(28, Math.round(viewportHeight * 0.022)))
+  const offsetPatterns = [
+    { x: 0, y: 0 },
+    { x: 0, y: -stepY },
+    { x: 0, y: stepY },
+    { x: stepX, y: 0 },
+    { x: -stepX, y: 0 },
+    { x: stepX, y: -stepY },
+    { x: -stepX, y: -stepY },
+    { x: stepX, y: stepY },
+    { x: -stepX, y: stepY },
+  ]
+
+  for (const entry of sortedPlacements) {
+    const widthPx = Math.max(36, entry.estimatedWidthPx)
+    const heightPx = Math.max(28, entry.estimatedHeightPx)
+    let placement = entry.placement
+    let rect = buildPurposeOverlayRect(placement, widthPx, heightPx, viewportWidth, viewportHeight)
+    const resolvePlacement = (candidate: PurposeOverlayPlacement): {
+      placement: PurposeOverlayPlacement
+      rect: { left: number; top: number; right: number; bottom: number }
+    } => ({
+      placement: clampPurposeOverlayPlacement(candidate, {
+        viewportWidth,
+        viewportHeight,
+        estimatedWidthPx: widthPx,
+        estimatedHeightPx: heightPx,
+        screenMarginPx,
+      }),
+      rect: buildPurposeOverlayRect(
+        clampPurposeOverlayPlacement(candidate, {
+          viewportWidth,
+          viewportHeight,
+          estimatedWidthPx: widthPx,
+          estimatedHeightPx: heightPx,
+          screenMarginPx,
+        }),
+        widthPx,
+        heightPx,
+        viewportWidth,
+        viewportHeight,
+      ),
+    })
+
+    let conflict = purposeResolvedPlacements.some((resolved) => rectsOverlap(rect, resolved.rect))
+    if (conflict) {
+      for (const offset of offsetPatterns) {
+        const shifted = resolvePlacement({
+          ...placement,
+          xPercent: placement.xPercent + (offset.x / viewportWidth) * 100,
+          yPercent: placement.yPercent + (offset.y / viewportHeight) * 100,
+        })
+        placement = shifted.placement
+        rect = shifted.rect
+        conflict = purposeResolvedPlacements.some((resolved) => rectsOverlap(rect, resolved.rect))
+        if (!conflict) {
+          break
+        }
+      }
+    }
+
+    purposeResolvedPlacements.push({
+      ...entry,
+      placement,
+      estimatedWidthPx: widthPx,
+      estimatedHeightPx: heightPx,
+      rect,
+    })
+  }
+
+  return purposeResolvedPlacements.map(({ rect: _rect, ...entry }) => entry)
 }
 
 export function computeSignboardPlacement(params: {

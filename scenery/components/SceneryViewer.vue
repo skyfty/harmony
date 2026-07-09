@@ -225,30 +225,29 @@
         <text>{{ error }}</text>
       </view>
       <view
-        v-if="purposeControlsVisible && !watchExclusiveUiActive"
+        v-for="entry in purposeControlEntries"
+        :key="entry.nodeId"
+        v-show="!watchExclusiveUiActive"
         class="viewer-purpose-controls"
+        :style="resolvePurposeControlStyle(entry)"
+        :data-purpose-node-id="entry.nodeId"
+        data-control-skip="purpose-controls"
       >
-        <view
-          v-for="(button, index) in purposeButtons"
+        <button
+          v-for="button in entry.buttons"
           :key="button.id"
-          class="viewer-purpose-control-slot"
-          :class="index === 0 ? 'is-left' : 'is-right'"
+          class="viewer-purpose-chip"
+          :aria-label="resolvePurposeButtonLabel(button)"
           data-control-skip="purpose-controls"
+          @tap.stop.prevent="handlePurposeButtonTap(entry, button)"
         >
-          <button
-            class="viewer-purpose-chip"
-            :aria-label="resolvePurposeButtonLabel(button)"
-            data-control-skip="purpose-controls"
-            @tap.stop.prevent="handlePurposeButtonTap(button)"
-          >
-            <view class="viewer-purpose-chip__halo"></view>
-            <view class="viewer-purpose-chip__content">
-              <view class="viewer-purpose-chip__texts">
-                <text class="viewer-purpose-chip__title">{{ resolvePurposeButtonLabel(button) }}</text>
-              </view>
+          <view class="viewer-purpose-chip__halo"></view>
+          <view class="viewer-purpose-chip__content">
+            <view class="viewer-purpose-chip__texts">
+              <text class="viewer-purpose-chip__title">{{ resolvePurposeButtonDisplayLabel(button) }}</text>
             </view>
-          </button>
-        </view>
+          </view>
+        </button>
       </view>
       <view v-if="watchLeaveVisible" class="viewer-watch-leave-bar" data-control-skip="watch-leave">
         <button
@@ -916,6 +915,10 @@ import {
   DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
   computeSignboardPlacement,
   resolveSignboardAnchorWorldPosition,
+  computePurposeOverlayPlacement,
+  resolvePurposeOverlayAnchorWorldPosition,
+  resolvePurposeOverlayPlacements,
+  type PurposeOverlayPlacement,
   smoothSignboardPlacement,
 } from '@harmony/schema/overlay';
 import { createCanvas, type HarmonyCanvas, type HarmonyCanvas2DContext } from '@harmony/schema/canvas';
@@ -2334,6 +2337,7 @@ const punchSceneRevision = ref(0);
 const punchBadgePlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>();
 const signboardReferenceScratch = new THREE.Vector3();
 const signboardAnchorScratch = new THREE.Vector3();
+const purposeAnchorScratch = new THREE.Vector3();
 const overlayDistanceReferenceScratch = new THREE.Vector3();
 const overlayDistanceTargetAnchorScratch = new THREE.Vector3();
 const overlayDistanceReferenceAnchorScratch = new THREE.Vector3();
@@ -3104,9 +3108,14 @@ const ensureLanternText = lanternAssets.ensureLanternText;
 const ensureLanternImage = lanternAssets.ensureLanternImage;
 const pruneLanternAssets = lanternAssets.pruneActiveAssets;
 
-const purposeControlsVisible = ref(false);
-const purposeButtons = ref<ShowPurposeBehaviorButton[]>([]);
-const purposeSourceNodeId = ref<string | null>(null);
+type PurposeControlRecord = {
+  nodeId: string;
+  buttons: ShowPurposeBehaviorButton[];
+  placement: PurposeOverlayPlacement;
+};
+
+const purposeControlEntries = ref<PurposeControlRecord[]>([]);
+const purposeControlsVisible = computed(() => purposeControlEntries.value.length > 0);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
 const activeWatchRestoreSnapshot = ref<SceneViewControlSnapshot | null>(null);
 const activeWatchSource = ref<'viewPoint' | 'target-look' | null>(null);
@@ -14730,7 +14739,6 @@ function restoreWatchUiState(): void {
   if (!snapshot) {
     return;
   }
-  purposeControlsVisible.value = snapshot.purposeControlsVisible;
 }
 
 function captureCameraProjectionState(camera: THREE.PerspectiveCamera): {
@@ -14915,26 +14923,16 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
-function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
-  purposeSourceNodeId.value = sourceNodeId ?? null;
-  purposeButtons.value = Array.isArray(buttons) ? buttons.slice() : [];
-  purposeControlsVisible.value = purposeButtons.value.length > 0;
-}
-
-function hidePurposeControls(): void {
-  purposeControlsVisible.value = false;
-  purposeButtons.value = [];
-  purposeSourceNodeId.value = null;
-}
-
-function handleShowPurposeControlsEvent(
-  event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
-): void {
-  showPurposeControls(event.buttons ?? [], event.nodeId ?? null);
-}
-
-function handleHidePurposeControlsEvent(): void {
-  hidePurposeControls();
+function truncatePurposeButtonLabel(label: string, maxVisibleChars = 6): string {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const chars = Array.from(trimmed);
+  if (chars.length <= maxVisibleChars) {
+    return trimmed;
+  }
+  return `${chars.slice(0, maxVisibleChars).join('')}…`;
 }
 
 function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
@@ -14949,7 +14947,76 @@ function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
   return button.targetSequenceId ?? '未命名按钮';
 }
 
-function handlePurposeButtonTap(button: ShowPurposeBehaviorButton): void {
+function resolvePurposeButtonDisplayLabel(button: ShowPurposeBehaviorButton): string {
+  return truncatePurposeButtonLabel(resolvePurposeButtonLabel(button), 6);
+}
+
+function estimatePurposeControlGroupSize(buttons: ShowPurposeBehaviorButton[]): { widthPx: number; heightPx: number } {
+  const longestLabelLength = buttons.reduce((max, button) => {
+    const length = Array.from(resolvePurposeButtonDisplayLabel(button)).length;
+    return Math.max(max, length);
+  }, 0);
+  const buttonCount = Math.max(buttons.length, 1);
+  return {
+    widthPx: Math.min(180, Math.max(104, 58 + (longestLabelLength * 10))),
+    heightPx: Math.min(180, Math.max(34, (buttonCount * 31) + ((buttonCount - 1) * 6) + 8)),
+  };
+}
+
+function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
+  const nodeId = sourceNodeId?.trim() ?? '';
+  if (!nodeId) {
+    return;
+  }
+  const normalizedButtons = Array.isArray(buttons) ? buttons.slice() : [];
+  if (!normalizedButtons.length) {
+    hidePurposeControls(nodeId);
+    return;
+  }
+  const existingIndex = purposeControlEntries.value.findIndex((entry) => entry.nodeId === nodeId);
+  const existingPlacement = existingIndex >= 0 ? purposeControlEntries.value[existingIndex]?.placement : null;
+  const nextEntry: PurposeControlRecord = {
+    nodeId,
+    buttons: normalizedButtons,
+    placement: existingPlacement ?? {
+      xPercent: 50,
+      yPercent: 50,
+      scale: 1,
+      opacity: 1,
+      distanceMeters: 0,
+      distanceLabel: '--',
+    },
+  };
+  if (existingIndex >= 0) {
+    purposeControlEntries.value.splice(existingIndex, 1, nextEntry);
+  } else {
+    purposeControlEntries.value = [...purposeControlEntries.value, nextEntry];
+  }
+}
+
+function hidePurposeControls(nodeId: string | null = null): void {
+  if (!nodeId) {
+    purposeControlEntries.value = [];
+    return;
+  }
+  const normalizedNodeId = nodeId.trim();
+  if (!normalizedNodeId) {
+    return;
+  }
+  purposeControlEntries.value = purposeControlEntries.value.filter((entry) => entry.nodeId !== normalizedNodeId);
+}
+
+function handleShowPurposeControlsEvent(
+  event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
+): void {
+  showPurposeControls(event.buttons ?? [], event.nodeId ?? null);
+}
+
+function handleHidePurposeControlsEvent(event: Extract<BehaviorRuntimeEvent, { type: 'hide-purpose-controls' }>): void {
+  hidePurposeControls(event.nodeId ?? null);
+}
+
+function handlePurposeButtonTap(entry: PurposeControlRecord, button: ShowPurposeBehaviorButton): void {
   const targetNodeId = button.targetNodeId?.trim() ?? '';
   const targetSequenceId = button.targetSequenceId?.trim() ?? '';
   if (!targetNodeId || !targetSequenceId) {
@@ -14961,12 +15028,82 @@ function handlePurposeButtonTap(button: ShowPurposeBehaviorButton): void {
     'perform',
     {
       payload: {
-        sourceNodeId: purposeSourceNodeId.value ?? targetNodeId,
+        sourceNodeId: entry.nodeId,
       },
     },
     { sequenceId: targetSequenceId },
   );
   processBehaviorEvents(results);
+}
+
+function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void {
+  const entries = purposeControlEntries.value;
+  if (!entries.length || !activeCamera) {
+    return;
+  }
+  const viewportWidth = Math.max(1, lanternViewportSize.width || 375);
+  const viewportHeight = Math.max(1, lanternViewportSize.height || 667);
+  const candidates = entries.flatMap((entry) => {
+    const object = nodeObjectMap.get(entry.nodeId) ?? null;
+    if (!object) {
+      return [];
+    }
+    object.updateWorldMatrix(true, false);
+    resolvePurposeOverlayAnchorWorldPosition(object, purposeAnchorScratch);
+    const size = estimatePurposeControlGroupSize(entry.buttons);
+    const placement = computePurposeOverlayPlacement({
+      anchorWorld: purposeAnchorScratch,
+      referenceWorld: activeCamera.position,
+      camera: activeCamera,
+      viewportWidth,
+      viewportHeight,
+      closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+      minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+      estimatedWidthPx: size.widthPx,
+      estimatedHeightPx: size.heightPx,
+    });
+    if (!placement) {
+      return [];
+    }
+    return [{
+      id: entry.nodeId,
+      placement,
+      estimatedWidthPx: size.widthPx,
+      estimatedHeightPx: size.heightPx,
+    }];
+  });
+  if (!candidates.length) {
+    purposeControlEntries.value = [];
+    return;
+  }
+  const resolvedPlacements = resolvePurposeOverlayPlacements({
+    placements: candidates,
+    viewportWidth,
+    viewportHeight,
+    screenMarginPx: 12,
+  });
+  const placementByNodeId = new Map(resolvedPlacements.map((entry) => [entry.id, entry.placement] as const));
+  purposeControlEntries.value = entries
+    .map((entry) => {
+      const placement = placementByNodeId.get(entry.nodeId);
+      if (!placement) {
+        return null;
+      }
+      return {
+        ...entry,
+        placement,
+      };
+    })
+    .filter((entry): entry is PurposeControlRecord => entry !== null);
+}
+
+function resolvePurposeControlStyle(entry: PurposeControlRecord): Record<string, string> {
+  return {
+    left: `${entry.placement.xPercent}%`,
+    top: `${entry.placement.yPercent}%`,
+    transform: `translate(-50%, -100%) scale(${Math.max(0.75, Math.min(1.1, entry.placement.scale))})`,
+    opacity: `${Math.max(0.35, Math.min(1, entry.placement.opacity))}`,
+  };
 }
 
 function resetCameraToLevelView(): { success: boolean; message?: string } {
@@ -15788,7 +15925,7 @@ function isPointInsideCharacterActionsBar(x: number, y: number): boolean {
 }
 
 function isPointInsidePurposeControls(x: number, y: number): boolean {
-  if (!purposeControlsVisible.value || !purposeButtons.value.length) {
+  if (!purposeControlsVisible.value || !purposeControlEntries.value.length) {
     return false;
   }
   try {
@@ -15798,7 +15935,7 @@ function isPointInsidePurposeControls(x: number, y: number): boolean {
     }
     let hit = false;
     query
-      .selectAll('.viewer-purpose-control-slot')
+      .selectAll('.viewer-purpose-controls')
       .boundingClientRect((rects: unknown) => {
         const items = Array.isArray(rects) ? rects : [];
         hit = items.some((item) => {
@@ -17597,7 +17734,7 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       handleShowPurposeControlsEvent(event);
       break;
     case 'hide-purpose-controls':
-      handleHidePurposeControlsEvent();
+      handleHidePurposeControlsEvent(event);
       break;
     case 'set-visibility':
       handleSetVisibilityEvent(event);
@@ -19983,6 +20120,7 @@ function startRenderLoop(
           updatePunchBadgeOverlayEntries(camera, deltaSeconds, overlayReference);
           syncSceneSignboardsWithReference(overlayReference);
         }
+        updatePurposeControlsPlacement(camera);
         applyFogSettings(activeEnvironmentSettings, camera, cameraFrameSnapshot);
 
         // Keep chunked ground meshes in sync with camera position.
@@ -22977,25 +23115,16 @@ onUnmounted(() => {
 .viewer-purpose-controls {
   position: absolute;
   left: 0;
-  right: 0;
-  bottom: calc(18px + var(--viewer-safe-area-bottom, 0px));
-  height: 54px;
+  top: 0;
   z-index: 1600;
-  pointer-events: none;
-}
-
-.viewer-purpose-control-slot {
-  position: absolute;
-  bottom: 0;
   pointer-events: auto;
-}
-
-.viewer-purpose-control-slot.is-left {
-  left: 16px;
-}
-
-.viewer-purpose-control-slot.is-right {
-  right: 16px;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 20px));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  overflow: visible;
 }
 
 .viewer-watch-leave-bar {
@@ -23024,42 +23153,52 @@ onUnmounted(() => {
 
 .viewer-purpose-chip {
   position: relative;
-  min-width: 136px;
-  min-height: 40px;
+  min-width: 104px;
+  min-height: 32px;
+  width: 100%;
   padding: 0;
   margin: 0;
   border: none;
-  border-radius: 15px;
+  border-radius: 999px;
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(244, 249, 255, 0.12)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(210, 232, 255, 0.06));
-  border: 1px solid rgba(153, 193, 255, 0.14);
+    linear-gradient(90deg, rgba(18, 23, 32, 0.82) 0%, rgba(18, 23, 32, 0.7) 50%, rgba(18, 23, 32, 0.32) 78%, rgba(18, 23, 32, 0) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  border-right-color: rgba(255, 255, 255, 0.18);
+  border-bottom-color: rgba(255, 255, 255, 0.18);
   overflow: hidden;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  color: #15324f;
+  color: #f3f7fb;
   opacity: 0.96;
-  box-shadow: 0 12px 28px rgba(52, 87, 128, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.34);
-  transition: transform 0.28s ease, box-shadow 0.28s ease, opacity 0.28s ease;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset -18px 0 22px rgba(255, 255, 255, 0.02);
+  transition: transform 0.24s ease, box-shadow 0.24s ease, opacity 0.24s ease;
   text-align: center;
   backdrop-filter: blur(18px) saturate(1.08);
   flex: none;
 }
 
-.viewer-purpose-chip--watch {
-  margin-right: auto;
-}
-
-.viewer-purpose-chip--level {
-  margin-left: auto;
+.viewer-purpose-chip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.08) 48%, rgba(255, 255, 255, 0) 100%),
+    linear-gradient(90deg, rgba(18, 23, 32, 0) 52%, rgba(18, 23, 32, 0.08) 78%, rgba(18, 23, 32, 0.2) 100%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .viewer-purpose-chip__halo {
   position: absolute;
   inset: -18%;
   border-radius: 22px;
-  opacity: 0.28;
+  opacity: 0.14;
   pointer-events: none;
   transition: opacity 0.28s ease;
 }
@@ -23070,52 +23209,54 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 7px 11px;
-  border-radius: 13px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(244, 249, 255, 0.34)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.18), rgba(210, 232, 255, 0.08));
-  border: 1px solid rgba(153, 193, 255, 0.22);
-  backdrop-filter: blur(22px) saturate(1.12);
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 5px 12px 5px 10px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  backdrop-filter: none;
 }
 
 .viewer-purpose-chip__texts {
   display: flex;
   flex-direction: column;
   gap: 1px;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   width: 100%;
 }
 
 .viewer-purpose-chip__title {
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.3px;
-  line-height: 1.1;
-  color: #12314d;
-  text-align: center;
+  letter-spacing: 0.15px;
+  line-height: 1;
+  color: #f5f8fb;
+  text-align: left;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .viewer-purpose-chip__subtitle {
-  font-size: 11px;
+  font-size: 10px;
   line-height: 1.3;
-  opacity: 0.74;
+  opacity: 0.62;
   letter-spacing: 0.5px;
-  color: rgba(21, 50, 79, 0.78);
+  color: rgba(233, 240, 248, 0.68);
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__content {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 249, 255, 0.8)),
-    linear-gradient(135deg, rgba(94, 161, 255, 0.12), rgba(255, 255, 255, 0.06));
-  box-shadow: inset 0 0 18px rgba(94, 161, 255, 0.1);
+  background: transparent;
+  box-shadow: none;
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__halo {
-  background: linear-gradient(125deg, rgba(94, 161, 255, 0.2), rgba(120, 208, 255, 0.12), rgba(14, 35, 78, 0));
+  background: linear-gradient(125deg, rgba(255, 255, 255, 0.14), rgba(120, 208, 255, 0.08), rgba(14, 35, 78, 0));
   animation: viewer-purpose-watch-halo 7s linear infinite;
 }
 
@@ -23124,18 +23265,16 @@ onUnmounted(() => {
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__subtitle {
-  color: rgba(21, 50, 79, 0.74);
+  color: rgba(233, 240, 248, 0.7);
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__content {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(242, 255, 248, 0.82)),
-    linear-gradient(135deg, rgba(115, 231, 170, 0.12), rgba(255, 255, 255, 0.06));
-  box-shadow: inset 0 0 16px rgba(115, 231, 170, 0.08);
+  background: transparent;
+  box-shadow: none;
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__halo {
-  background: linear-gradient(140deg, rgba(115, 231, 170, 0.16), rgba(94, 161, 255, 0.12), rgba(5, 18, 36, 0));
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.14), rgba(115, 231, 170, 0.08), rgba(5, 18, 36, 0));
   animation: viewer-purpose-level-halo 5s ease-in-out infinite;
 }
 
@@ -23144,7 +23283,7 @@ onUnmounted(() => {
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__subtitle {
-  color: rgba(21, 50, 79, 0.74);
+  color: rgba(233, 240, 248, 0.7);
 }
 
 .viewer-purpose-chip.is-active {

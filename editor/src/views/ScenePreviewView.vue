@@ -330,6 +330,10 @@ import {
   DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
   computeSignboardPlacement,
   resolveSignboardAnchorWorldPosition,
+  computePurposeOverlayPlacement,
+  resolvePurposeOverlayAnchorWorldPosition,
+  resolvePurposeOverlayPlacements,
+  type PurposeOverlayPlacement,
   smoothSignboardPlacement,
   smoothSignboardReference,
   type SignboardPlacementSmoothingState,
@@ -1434,11 +1438,15 @@ const lanternSlides = ref<LanternSlideDefinition[]>([])
 const lanternActiveSlideIndex = ref(0)
 const lanternEventToken = ref<string | null>(null)
 
-const purposeControlsVisible = ref(false)
-const purposeButtons = ref<ShowPurposeBehaviorButton[]>([])
-const purposeSourceNodeId = ref<string | null>(null)
+type PurposeControlRecord = {
+	nodeId: string
+	buttons: ShowPurposeBehaviorButton[]
+	placement: PurposeOverlayPlacement
+}
+
+const purposeControlEntries = ref<PurposeControlRecord[]>([])
+const purposeControlsVisible = computed(() => purposeControlEntries.value.length > 0)
 type WatchUiRestoreState = {
-	purposeControlsVisible: boolean
 	isDebugMenuOpen: boolean
 	isVolumeMenuOpen: boolean
 }
@@ -2328,6 +2336,7 @@ const signboardReferenceSmoothingState = createSignboardReferenceSmoothingState(
 const punchBadgePlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>()
 const signboardReferenceScratch = new THREE.Vector3()
 const signboardAnchorScratch = new THREE.Vector3()
+const purposeAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceScratch = new THREE.Vector3()
 const overlayDistanceTargetAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceAnchorScratch = new THREE.Vector3()
@@ -3103,14 +3112,6 @@ const runtimePanelUi = computed(() => {
 		interactActive: characterKeyState.interact,
 	}
 })
-
-const purposeControlsStyle = computed(() => ({
-	left: '50%',
-	bottom: lanternViewportSize.width <= 720 ? '16px' : '24px',
-	transform: 'translateX(-50%)',
-	width: 'calc(100% - 32px)',
-	justifyContent: 'center',
-}))
 
 const steeringWheelRef = ref<HTMLDivElement | null>(null)
 const steeringWheelValue = ref(0)
@@ -7974,7 +7975,6 @@ function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void 
 	}
 	activeWatchRestoreSnapshot.value = captureViewControlSnapshot()
 	watchUiRestoreState.value = {
-		purposeControlsVisible: purposeControlsVisible.value,
 		isDebugMenuOpen: isDebugMenuOpen.value,
 		isVolumeMenuOpen: isVolumeMenuOpen.value,
 	}
@@ -7990,7 +7990,6 @@ function restoreWatchUiState(): void {
 	if (!snapshot) {
 		return
 	}
-	purposeControlsVisible.value = snapshot.purposeControlsVisible
 	isDebugMenuOpen.value = snapshot.isDebugMenuOpen
 	isVolumeMenuOpen.value = snapshot.isVolumeMenuOpen
 }
@@ -8132,26 +8131,16 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
-function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
-	purposeSourceNodeId.value = sourceNodeId ?? null
-	purposeButtons.value = Array.isArray(buttons) ? buttons.slice() : []
-	purposeControlsVisible.value = purposeButtons.value.length > 0
-}
-
-function hidePurposeControls(): void {
-	purposeControlsVisible.value = false
-	purposeButtons.value = []
-	purposeSourceNodeId.value = null
-}
-
-function handleShowPurposeControlsEvent(
-	event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
-): void {
-	showPurposeControls(event.buttons ?? [], event.nodeId ?? null)
-}
-
-function handleHidePurposeControlsEvent(): void {
-	hidePurposeControls()
+function truncatePurposeButtonLabel(label: string, maxVisibleChars = 6): string {
+	const trimmed = label.trim()
+	if (!trimmed) {
+		return ''
+	}
+	const chars = Array.from(trimmed)
+	if (chars.length <= maxVisibleChars) {
+		return trimmed
+	}
+	return `${chars.slice(0, maxVisibleChars).join('')}…`
 }
 
 function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
@@ -8166,7 +8155,76 @@ function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
 	return button.targetSequenceId ?? '未命名按钮'
 }
 
-function handlePurposeButtonClick(button: ShowPurposeBehaviorButton): void {
+function resolvePurposeButtonDisplayLabel(button: ShowPurposeBehaviorButton): string {
+	return truncatePurposeButtonLabel(resolvePurposeButtonLabel(button), 6)
+}
+
+function estimatePurposeControlGroupSize(buttons: ShowPurposeBehaviorButton[]): { widthPx: number; heightPx: number } {
+	const longestLabelLength = buttons.reduce((max, button) => {
+		const length = Array.from(resolvePurposeButtonDisplayLabel(button)).length
+		return Math.max(max, length)
+	}, 0)
+	const buttonCount = Math.max(buttons.length, 1)
+	return {
+		widthPx: Math.min(180, Math.max(104, 58 + (longestLabelLength * 10))),
+		heightPx: Math.min(180, Math.max(34, (buttonCount * 31) + ((buttonCount - 1) * 6) + 8)),
+	}
+}
+
+function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
+	const nodeId = sourceNodeId?.trim() ?? ''
+	if (!nodeId) {
+		return
+	}
+	const normalizedButtons = Array.isArray(buttons) ? buttons.slice() : []
+	if (!normalizedButtons.length) {
+		hidePurposeControls(nodeId)
+		return
+	}
+	const existingIndex = purposeControlEntries.value.findIndex((entry) => entry.nodeId === nodeId)
+	const existingPlacement = existingIndex >= 0 ? purposeControlEntries.value[existingIndex]?.placement : null
+	const nextEntry: PurposeControlRecord = {
+		nodeId,
+		buttons: normalizedButtons,
+		placement: existingPlacement ?? {
+			xPercent: 50,
+			yPercent: 50,
+			scale: 1,
+			opacity: 1,
+			distanceMeters: 0,
+			distanceLabel: '--',
+		},
+	}
+	if (existingIndex >= 0) {
+		purposeControlEntries.value.splice(existingIndex, 1, nextEntry)
+	} else {
+		purposeControlEntries.value = [...purposeControlEntries.value, nextEntry]
+	}
+}
+
+function hidePurposeControls(nodeId: string | null = null): void {
+	if (!nodeId) {
+		purposeControlEntries.value = []
+		return
+	}
+	const normalizedNodeId = nodeId.trim()
+	if (!normalizedNodeId) {
+		return
+	}
+	purposeControlEntries.value = purposeControlEntries.value.filter((entry) => entry.nodeId !== normalizedNodeId)
+}
+
+function handleShowPurposeControlsEvent(
+	event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
+): void {
+	showPurposeControls(event.buttons ?? [], event.nodeId ?? null)
+}
+
+function handleHidePurposeControlsEvent(event: Extract<BehaviorRuntimeEvent, { type: 'hide-purpose-controls' }>): void {
+	hidePurposeControls(event.nodeId ?? null)
+}
+
+function handlePurposeButtonClick(entry: PurposeControlRecord, button: ShowPurposeBehaviorButton): void {
 	const targetNodeId = button.targetNodeId?.trim() ?? ''
 	const targetSequenceId = button.targetSequenceId?.trim() ?? ''
 	if (!targetNodeId || !targetSequenceId) {
@@ -8178,12 +8236,82 @@ function handlePurposeButtonClick(button: ShowPurposeBehaviorButton): void {
 		'perform',
 		{
 			payload: {
-				sourceNodeId: purposeSourceNodeId.value ?? targetNodeId,
+				sourceNodeId: entry.nodeId,
 			},
 		},
 		{ sequenceId: targetSequenceId },
 	)
 	processBehaviorEvents(results)
+}
+
+function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void {
+	const entries = purposeControlEntries.value
+	if (!entries.length || !activeCamera) {
+		return
+	}
+	const viewportWidth = Math.max(1, lanternViewportSize.width || 375)
+	const viewportHeight = Math.max(1, lanternViewportSize.height || 667)
+	const candidates = entries.flatMap((entry) => {
+		const object = nodeObjectMap.get(entry.nodeId) ?? null
+		if (!object) {
+			return []
+		}
+		object.updateWorldMatrix(true, false)
+		resolvePurposeOverlayAnchorWorldPosition(object, purposeAnchorScratch)
+		const size = estimatePurposeControlGroupSize(entry.buttons)
+		const placement = computePurposeOverlayPlacement({
+			anchorWorld: purposeAnchorScratch,
+			referenceWorld: activeCamera.position,
+			camera: activeCamera,
+			viewportWidth,
+			viewportHeight,
+			closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+			minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+			estimatedWidthPx: size.widthPx,
+			estimatedHeightPx: size.heightPx,
+		})
+		if (!placement) {
+			return []
+		}
+		return [{
+			id: entry.nodeId,
+			placement,
+			estimatedWidthPx: size.widthPx,
+			estimatedHeightPx: size.heightPx,
+		}]
+	})
+	if (!candidates.length) {
+		purposeControlEntries.value = []
+		return
+	}
+	const resolvedPlacements = resolvePurposeOverlayPlacements({
+		placements: candidates,
+		viewportWidth,
+		viewportHeight,
+		screenMarginPx: 12,
+	})
+	const placementByNodeId = new Map(resolvedPlacements.map((entry) => [entry.id, entry.placement] as const))
+	purposeControlEntries.value = entries
+		.map((entry) => {
+			const placement = placementByNodeId.get(entry.nodeId)
+			if (!placement) {
+				return null
+			}
+			return {
+				...entry,
+				placement,
+			}
+		})
+		.filter((entry): entry is PurposeControlRecord => entry !== null)
+}
+
+function resolvePurposeControlStyle(entry: PurposeControlRecord): Record<string, string> {
+	return {
+		left: `${entry.placement.xPercent}%`,
+		top: `${entry.placement.yPercent}%`,
+		transform: `translate(-50%, -100%) scale(${Math.max(0.75, Math.min(1.1, entry.placement.scale))})`,
+		opacity: `${Math.max(0.35, Math.min(1, entry.placement.opacity))}`,
+	}
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
@@ -9584,7 +9712,7 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			handleShowPurposeControlsEvent(event)
 			break
 		case 'hide-purpose-controls':
-			handleHidePurposeControlsEvent()
+			handleHidePurposeControlsEvent(event)
 			break
 		case 'set-visibility':
 			handleSetVisibilityEvent(event)
@@ -10510,6 +10638,7 @@ function startAnimationLoop() {
 		updatePunchBadgeOverlayEntries(activeCamera, delta)
 		syncSceneSignboards(currentScene, activeCamera)
 		updateInfoBoardOverlayPlacement(activeCamera)
+		updatePurposeControlsPlacement(activeCamera)
 		updatePerFrameDiagnostics(delta)
 		physicsCollisionDebugRuntime.update()
 
@@ -14394,26 +14523,33 @@ watch(
 				{{ message }}
 			</div>
 		</v-alert>
-		<div
-			v-if="purposeControlsVisible && !watchExclusiveUiActive"
-			class="scene-preview__purpose-controls"
-			:style="purposeControlsStyle"
-		>
-			<v-btn
-				v-for="button in purposeButtons"
-				:key="button.id"
-				class="scene-preview__purpose-button"
-				prepend-icon="mdi-play-circle-outline"
-				rounded="pill"
-				variant="flat"
-				:elevation="0"
-				:ripple="false"
-				:title="resolvePurposeButtonLabel(button)"
-				@click="handlePurposeButtonClick(button)"
+		<template v-if="purposeControlsVisible && !watchExclusiveUiActive">
+			<div
+				v-for="entry in purposeControlEntries"
+				:key="entry.nodeId"
+				class="scene-preview__purpose-controls"
+				:style="resolvePurposeControlStyle(entry)"
+				:data-purpose-node-id="entry.nodeId"
 			>
-				<span class="scene-preview__purpose-label">{{ resolvePurposeButtonLabel(button) }}</span>
-			</v-btn>
-		</div>
+				<v-btn
+					v-for="button in entry.buttons"
+					:key="button.id"
+					class="scene-preview__purpose-button"
+					prepend-icon="mdi-play-circle-outline"
+					rounded="pill"
+					variant="flat"
+					:elevation="0"
+					:ripple="false"
+					size="small"
+					:block="true"
+					:title="resolvePurposeButtonLabel(button)"
+					:aria-label="resolvePurposeButtonLabel(button)"
+					@click="handlePurposeButtonClick(entry, button)"
+				>
+					<span class="scene-preview__purpose-label">{{ resolvePurposeButtonDisplayLabel(button) }}</span>
+				</v-btn>
+			</div>
+		</template>
 		<v-btn
 			v-if="watchLeaveVisible"
 			class="scene-preview__watch-leave"
@@ -15533,15 +15669,18 @@ watch(
 
 .scene-preview__purpose-controls {
 	position: absolute;
-	left: 24px;
-	bottom: 24px;
+	left: 0;
+	top: 0;
 	display: flex;
-	flex-wrap: wrap;
-	gap: 16px;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
 	z-index: 1900;
 	pointer-events: auto;
-	width: auto;
-	max-width: calc(100% - 48px);
+	width: max-content;
+	max-width: min(220px, calc(100vw - 24px));
+	padding: 0;
+	overflow: visible;
 }
 
 
@@ -15553,19 +15692,20 @@ watch(
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	padding: 0 28px;
-	height: 56px;
-	min-width: 156px;
+	padding: 0 12px;
+	height: 34px;
+	min-width: 104px;
+	width: 100%;
 	border-radius: 999px;
 	box-sizing: border-box;
 	z-index: 0;
 	color: #f9fbff !important;
 	background: linear-gradient(135deg, var(--purpose-accent-start), var(--purpose-accent-mid), var(--purpose-accent-end));
 	background-size: 240% 240%;
-	box-shadow: 0 16px 35px rgba(24, 196, 255, 0.25);
+	box-shadow: 0 12px 24px rgba(24, 196, 255, 0.22);
 	animation: scene-preview-purpose-flow 7s ease infinite;
-	transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease;
-	letter-spacing: 0.04em;
+	transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+	letter-spacing: 0.02em;
 	text-transform: none;
 	font-weight: 600;
 	filter: saturate(0.95);
@@ -15577,12 +15717,12 @@ watch(
 	position: absolute;
 	top: 50%;
 	left: 50%;
-	width: calc(100% + 42px);
-	height: calc(100% + 42px);
+	width: calc(100% + 28px);
+	height: calc(100% + 28px);
 	border-radius: inherit;
 	background: linear-gradient(135deg, var(--purpose-accent-start), var(--purpose-accent-mid), var(--purpose-accent-end));
 	transform: translate(-50%, -50%);
-	filter: blur(38px);
+	filter: blur(28px);
 	opacity: 0.55;
 	transition: opacity 0.35s ease, filter 0.35s ease;
 	pointer-events: none;
@@ -15605,8 +15745,8 @@ watch(
 }
 
 .scene-preview__purpose-button:hover {
-	transform: translateY(-3px) scale(1.02);
-	box-shadow: 0 22px 44px rgba(24, 196, 255, 0.4);
+	transform: translateY(-2px) scale(1.02);
+	box-shadow: 0 18px 34px rgba(24, 196, 255, 0.34);
 	filter: saturate(1.05);
 }
 
@@ -15623,7 +15763,7 @@ watch(
 
 .scene-preview__purpose-button:focus-visible {
 	outline: none;
-	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35), 0 20px 46px rgba(24, 196, 255, 0.45);
+	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.28), 0 18px 36px rgba(24, 196, 255, 0.38);
 	filter: saturate(1.1);
 }
 
@@ -15675,10 +15815,12 @@ watch(
 .scene-preview__purpose-button :deep(.v-btn__content) {
 	position: relative;
 	z-index: 1;
-	gap: 10px;
+	gap: 6px;
 	font-weight: 600;
-	font-size: 1.05rem;
+	font-size: 0.76rem;
 	text-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+	justify-content: center;
+	width: 100%;
 }
 
 .scene-preview__drive-panel {
@@ -15898,6 +16040,13 @@ watch(
 .scene-preview__purpose-label {
 	position: relative;
 	z-index: 1;
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-size: 0.76rem;
+	line-height: 1;
 }
 
 .scene-preview__watch-leave {
