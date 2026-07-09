@@ -647,6 +647,9 @@ import {
   createTerrainDatasetHeightSamplerFromScenePackage,
   readTerrainDatasetManifestFromScenePackage,
 } from '../common/utils/terrainDatasetPackage';
+import {
+  createGroundRuntimeMeshFromSidecar,
+} from '@harmony/schema/groundHeightSidecar';
 import type {
   SceneNode,
   SceneNodeComponentState,
@@ -663,7 +666,6 @@ import type {
 import {
   isRuntimeHiddenInPreview,
   deserializeCompiledGroundManifest,
-  resolveGroundWorkingGridSize,
 } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
@@ -5646,6 +5648,9 @@ type ResolvedSteerBinding = {
 };
 
 function cloneScenePreviewDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(document);
+  }
   return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
 }
 
@@ -7240,7 +7245,9 @@ async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Pr
     return document;
   }
 
-  const nextDocument = JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
+  const nextDocument = typeof structuredClone === 'function'
+    ? structuredClone(document)
+    : JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
   nextDocument.nodes = pruneCouponNodes(nextDocument.nodes, couponMap);
   nextDocument.couponIds = couponIds;
   return nextDocument;
@@ -7327,10 +7334,7 @@ function attachScenePackageCompiledGroundRuntime(
     return;
   }
   const compiledManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
-  if (!compiledManifest) {
-    return;
-  }
-  if (!Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
+  if (!compiledManifest || !Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
     return;
   }
   const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
@@ -18281,12 +18285,7 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
-const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32;
-const GROUND_HEIGHTMAP_SIDECAR_VERSION = 2;
-const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 32;
-const EMPTY_GROUND_BOUND = -1;
-
-function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDynamicMesh | null {
+function findFirstGroundNode(document: SceneJsonExportDocument): SceneNode | null {
   const stack = [...document.nodes];
   while (stack.length) {
     const node = stack.pop();
@@ -18294,7 +18293,7 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
       continue;
     }
     if (node.dynamicMesh?.type === 'Ground') {
-      return node.dynamicMesh as GroundDynamicMesh;
+      return node;
     }
     if (Array.isArray(node.children) && node.children.length) {
       stack.push(...node.children);
@@ -18326,70 +18325,37 @@ function hydrateGroundSidecarFromPackage(
   sceneEntry: {
     sceneId: string;
     path: string;
-    groundHeightsPath?: string;
+    groundHeightPath?: string;
     groundSplatPath?: string;
     groundScatterPath?: string;
   },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
-  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
-  if (!definition) {
+  const groundNode = findFirstGroundNode(document);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return document;
   }
   const hasLandformNodes = countLandformNodes(document) > 0;
-  const sidecarPath = typeof sceneEntry.groundHeightsPath === 'string' ? sceneEntry.groundHeightsPath.trim() : '';
+  const sidecarPath = typeof sceneEntry.groundHeightPath === 'string' ? sceneEntry.groundHeightPath.trim() : '';
   if (sidecarPath) {
     const sidecarBytes = pkg.files[sidecarPath];
-    if (!sidecarBytes) {
-      console.warn(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件，已回退为场景内置地形数据`);
-    } else {
-      const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
-      const { rows, columns } = resolveGroundWorkingGridSize(definition);
-      const vertexCount = getGroundVertexCount(rows, columns);
-      const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
-      if (sidecarBuffer.byteLength !== expectedByteLength) {
-        throw new Error(
-          `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
-        );
-      }
-
-      const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
-      const magic = headerView.getUint32(0, true);
-      const version = headerView.getUint32(4, true);
-      if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
-        throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
-      }
-
-      const minRow = headerView.getInt32(8, true);
-      const maxRow = headerView.getInt32(12, true);
-      const minColumn = headerView.getInt32(16, true);
-      const maxColumn = headerView.getInt32(20, true);
-      const generatedAt = headerView.getFloat64(24, true);
-      const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
-      const hasGeneratedAt = Number.isFinite(generatedAt);
-
-      definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
-      definition.planningHeightMap = new Float64Array(
-        sidecarBuffer,
-        GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
-        vertexCount,
+    if (sidecarBytes) {
+      const sidecarBuffer = sidecarBytes.buffer.slice(
+        sidecarBytes.byteOffset,
+        sidecarBytes.byteOffset + sidecarBytes.byteLength,
       );
-      definition.planningMetadata = hasBounds || hasGeneratedAt
-        ? {
-            contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
-            generatedAt: hasGeneratedAt ? generatedAt : undefined,
-          }
-        : null;
-      definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
-        ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
-        : 0;
+      try {
+        groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecarBuffer);
+      } catch (_error) {
+        // Keep embedded terrain data if sidecar hydration fails.
+      }
     }
   }
-  (definition as GroundDynamicMesh & {
+  (groundNode.dynamicMesh as GroundDynamicMesh & {
     runtimeHydratedHeightState?: 'pristine' | 'dirty';
     runtimeDisableOptimizedChunks?: boolean;
   }).runtimeHydratedHeightState = 'pristine';
-  definition.runtimeDisableOptimizedChunks = false;
+  (groundNode.dynamicMesh as GroundDynamicMesh & { runtimeDisableOptimizedChunks?: boolean }).runtimeDisableOptimizedChunks = false;
 
   const splatSidecarPath = typeof sceneEntry.groundSplatPath === 'string' ? sceneEntry.groundSplatPath.trim() : '';
   if (splatSidecarPath) {
@@ -18398,8 +18364,8 @@ function hydrateGroundSidecarFromPackage(
       if (hasLandformNodes) {
         throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件内容`);
       }
-      definition.groundSurfaceChunks = null;
-      definition.groundSplatBake = null;
+      (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = null;
+      (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = null;
     } else {
       const splatSidecarBuffer = new ArrayBuffer(splatSidecarBytes.byteLength);
       new Uint8Array(splatSidecarBuffer).set(splatSidecarBytes);
@@ -18411,11 +18377,11 @@ function hydrateGroundSidecarFromPackage(
         if (hasLandformNodes) {
           throw new Error(`场景 ${sceneEntry.sceneId} 的 ground splat sidecar 缺少 baked chunk 数据`);
         }
-        definition.groundSurfaceChunks = null;
-        definition.groundSplatBake = null;
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = null;
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = null;
       } else {
-        definition.groundSurfaceChunks = JSON.parse(JSON.stringify(bakedChunks));
-        definition.groundSplatBake = {
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = JSON.parse(JSON.stringify(bakedChunks));
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = {
           revision: Number.isFinite(splatPayload.revision) ? Math.max(0, Math.trunc(splatPayload.revision)) : 0,
           chunkTextureMap: JSON.parse(JSON.stringify(bakedChunks)),
           surfaceLayerTextureAssetIds: Array.isArray(splatPayload.surfaceLayerTextureAssetIds)
@@ -18425,8 +18391,8 @@ function hydrateGroundSidecarFromPackage(
       }
     }
   } else {
-    definition.groundSurfaceChunks = null;
-    definition.groundSplatBake = null;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = null;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = null;
     if (hasLandformNodes) {
       throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件`);
     }
@@ -18434,7 +18400,7 @@ function hydrateGroundSidecarFromPackage(
 
   const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
   if (!scatterSidecarPath) {
-    definition.terrainScatter = null;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).terrainScatter = null;
   } else {
     const scatterSidecarBytes = pkg.files[scatterSidecarPath];
     if (!scatterSidecarBytes) {
@@ -18443,7 +18409,7 @@ function hydrateGroundSidecarFromPackage(
     const scatterSidecarBuffer = new ArrayBuffer(scatterSidecarBytes.byteLength);
     new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
     const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
-    definition.terrainScatter = scatterPayload.terrainScatter;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).terrainScatter = scatterPayload.terrainScatter;
   }
 
   return document;
@@ -18654,7 +18620,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     loading.value = false;
   }
 }
-function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroundBuildKey: string): ScenePackageProjectData {
+async function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroundBuildKey: string): Promise<ScenePackageProjectData> {
   const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
   type ScenePackageProjectConfig = {
     id?: unknown;
@@ -18769,7 +18735,8 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
   };
 
   const scenes: ScenePackageSceneEntry[] = [];
-  pkg.manifest.scenes.forEach((sceneEntry) => {
+  for (let sceneIndex = 0; sceneIndex < pkg.manifest.scenes.length; sceneIndex += 1) {
+    const sceneEntry = pkg.manifest.scenes[sceneIndex];
     const sceneRaw = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as unknown;
     if (!sceneRaw || typeof sceneRaw !== 'object') {
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
@@ -18818,7 +18785,8 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
       updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
       document,
     });
-  });
+    await yieldToMainThread();
+  }
 
     return {
       project: {
@@ -18886,7 +18854,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
 
   const normalizedBuildKey = compiledGroundBuildKey.trim();
   activeScenePackageBuildKey = normalizedBuildKey || null;
-  const projectData = parseScenePackageToProjectData(activeScenePackagePkg, normalizedBuildKey);
+  const projectData = await parseScenePackageToProjectData(activeScenePackagePkg, normalizedBuildKey);
   setSceneDownloadState({
     phase: 'bundle',
     label: '正在组装场景索引',

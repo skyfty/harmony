@@ -16,10 +16,6 @@ export type PrepareRuntimeGroundSplatSceneDocumentResult = {
   groundSurfaceChunkCount: number
   landformNodeCount: number
 }
-function cloneSceneJsonExportDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-
-  return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
-}
 
 function cloneGroundSurfaceChunkTextureMap(
   value: GroundSurfaceChunkTextureMap | null | undefined,
@@ -88,7 +84,7 @@ function stripLandformNodes(nodes: SceneNode[] | undefined | null): boolean {
 export async function prepareRuntimeGroundSplatSceneDocument(
   document: SceneJsonExportDocument,
 ): Promise<PrepareRuntimeGroundSplatSceneDocumentResult> {
-  const runtimeDocument = cloneSceneJsonExportDocument(document)
+  const runtimeDocument = document
   const groundNode = resolveDocumentGroundNode(runtimeDocument)
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground' ? (groundNode.dynamicMesh as GroundDynamicMesh)  : null
   const directChunks = cloneGroundSurfaceChunkTextureMap(groundDefinition?.groundSurfaceChunks ?? null)

@@ -4,6 +4,7 @@ import {
   inferExtFromMimeType,
   SCENE_PACKAGE_FORMAT,
   SCENE_PACKAGE_VERSION,
+  serializeCompiledGroundManifest,
   serializeScenePackageManifest,
   serializeGroundScatterSidecar,
   serializeGroundSplatSidecar,
@@ -20,7 +21,7 @@ import {
   type QuantizedTerrainDatasetRootManifest,
 } from '@schema/core'
 import { resolveDocumentGroundNode } from '@schema/groundNode'
-import { GROUND_HEIGHTMAP_SIDECAR_FILENAME, serializeGroundHeightSidecar } from '@/utils/groundHeightSidecar'
+import { GROUND_HEIGHTMAP_SIDECAR_FILENAME } from '@/utils/groundHeightSidecar'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import { BUILTIN_WATER_NORMAL_FILENAME, isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
 import { fetchResourceAsset } from '@/api/resourceAssets'
@@ -398,20 +399,6 @@ function cloneSceneDocumentForPublishPackageExport(
   document: SceneJsonExportDocument,
 ): ScenePackagePublishSceneDocument {
   return cloneSceneDocumentWithRuntimeGroundSidecars(structuredClone(document) as import('@/types/stored-scene-document').StoredSceneDocument) as ScenePackagePublishSceneDocument
-}
-
-function buildPublishSceneGroundHeightSidecar(
-  document: ScenePackagePublishSceneDocument,
-): ArrayBuffer | null {
-  const groundNode = resolveDocumentGroundNode(document)
-  if (!groundNode || groundNode.dynamicMesh?.type !== 'Ground') {
-    return null
-  }
-  const definition = groundNode.dynamicMesh as GroundRuntimeDynamicMesh
-  if (!definition.manualHeightMap || !definition.planningHeightMap) {
-    return null
-  }
-  return serializeGroundHeightSidecar(definition)
 }
 
 function buildPublishSceneGroundSplatSidecar(
@@ -1358,6 +1345,7 @@ function writePublishCompiledGroundFiles(
   files: Record<string, Uint8Array>,
 ): ScenePackageManifestV1['scenes'][number]['compiledGround'] {
   const compiledPaths = resolveSceneCompiledGroundPackagePaths(sceneId)
+  files[compiledPaths.manifestPath] = serializeCompiledGroundManifest(compiled.manifest)
   compiled.files.forEach((bytes, path) => {
     files[path] = new Uint8Array(bytes)
   })
@@ -1608,7 +1596,7 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       resources,
     })
 
-    const groundHeightSidecar = buildPublishSceneGroundHeightSidecar(preparedDocument)
+    const groundHeightSidecar = await scenesStore.loadGroundHeightSidecar(scene.id)
     if (groundHeightSidecar) {
       groundHeightPath = `scenes/${encodeURIComponent(scene.id)}/${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`
       files[groundHeightPath] = new Uint8Array(groundHeightSidecar)

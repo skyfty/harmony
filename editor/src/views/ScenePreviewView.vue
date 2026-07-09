@@ -114,7 +114,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
-import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
+import { createGroundRuntimeMeshFromSidecar } from '@schema/groundHeightSidecar'
 import { attachRoadCollisionCompiledExportToDocument } from '@/utils/roadCollisionCompiledExport'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -2772,7 +2772,9 @@ async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Pr
 	if (!couponMap.size) {
 		return document
 	}
-	const nextDocument = JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
+	const nextDocument = typeof structuredClone === 'function'
+		? structuredClone(document)
+		: JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
 	nextDocument.nodes = pruneCouponNodes(nextDocument.nodes, couponMap)
 	nextDocument.couponIds = couponIds
 	return nextDocument
