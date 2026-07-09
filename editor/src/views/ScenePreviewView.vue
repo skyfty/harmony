@@ -432,6 +432,8 @@ type RuntimePanelCameraMode = 'first-person' | 'follow'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('Waiting for scene data...')
+const screenshotBusy = ref(false)
+let screenshotStatusTimer: ReturnType<typeof setTimeout> | null = null
 
 const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
 const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
@@ -14105,24 +14107,129 @@ function toggleFullscreen() {
 	}
 }
 
-function captureScreenshot() {
+function sanitizeScreenshotFileNamePart(input: string): string {
+	return input
+		.trim()
+		.replace(/[\\/:*?"<>|]+/g, '_')
+		.replace(/\s+/g, ' ')
+		.replace(/\.+$/g, '')
+		.slice(0, 64) || 'preview'
+}
+
+function buildScreenshotFileName(): string {
+	const now = new Date()
+	const pad = (value: number) => String(value).padStart(2, '0')
+	const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+	const baseName = sanitizeScreenshotFileNamePart(currentDocument?.name?.trim() || 'preview')
+	return `${baseName}-${stamp}.png`
+}
+
+function triggerDownload(blob: Blob, fileName: string) {
+	const url = URL.createObjectURL(blob)
+	const anchor = document.createElement('a')
+	anchor.style.display = 'none'
+	anchor.href = url
+	anchor.download = fileName
+	document.body.appendChild(anchor)
+	anchor.click()
+	document.body.removeChild(anchor)
+	window.setTimeout(() => URL.revokeObjectURL(url), 250)
+}
+
+function blobFromDataUrl(dataUrl: string): Blob | null {
+	const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl)
+	if (!match) {
+		return null
+	}
+	const mimeType = match[1] || 'image/png'
+	const isBase64 = Boolean(match[2])
+	const payload = match[3] || ''
+	try {
+		const raw = isBase64 ? atob(payload) : decodeURIComponent(payload)
+		const bytes = new Uint8Array(raw.length)
+		for (let index = 0; index < raw.length; index += 1) {
+			bytes[index] = raw.charCodeAt(index)
+		}
+		return new Blob([bytes], { type: mimeType })
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to decode screenshot data URL', error)
+		return null
+	}
+}
+
+async function canvasToBlob(canvas: HTMLCanvasElement, mimeType = 'image/png'): Promise<Blob | null> {
+	if (typeof canvas.toBlob === 'function') {
+		const blob = await new Promise<Blob | null>((resolve) => {
+			try {
+				canvas.toBlob((value) => resolve(value), mimeType)
+			} catch (error) {
+				console.warn('[ScenePreviewView] canvas.toBlob failed', error)
+				resolve(null)
+			}
+		})
+		if (blob) {
+			return blob
+		}
+	}
+
+	try {
+		const dataUrl = canvas.toDataURL(mimeType)
+		const dataBlob = blobFromDataUrl(dataUrl)
+		if (dataBlob) {
+			return dataBlob
+		}
+		const response = await fetch(dataUrl)
+		return await response.blob()
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to convert screenshot canvas to blob', error)
+		return null
+	}
+}
+
+function setTransientStatusMessage(message: string): void {
+	if (screenshotStatusTimer) {
+		clearTimeout(screenshotStatusTimer)
+		screenshotStatusTimer = null
+	}
+	const previousMessage = statusMessage.value
+	statusMessage.value = message
+	screenshotStatusTimer = setTimeout(() => {
+		screenshotStatusTimer = null
+		if (statusMessage.value === message) {
+			statusMessage.value = previousMessage
+		}
+	}, 2200)
+}
+
+async function captureScreenshot() {
+	if (screenshotBusy.value) {
+		return
+	}
 	const currentRenderer = renderer
 	const currentScene = scene
 	const activeCamera = camera
 	if (!currentRenderer || !currentScene || !activeCamera) {
+		setTransientStatusMessage('Screenshot unavailable right now')
 		return
 	}
-	currentRenderer.render(currentScene, activeCamera)
-	const dataUrl = currentRenderer.domElement.toDataURL('image/png')
-	if (!dataUrl) {
-		return
+
+	screenshotBusy.value = true
+	try {
+		currentRenderer.render(currentScene, activeCamera)
+		const blob = await canvasToBlob(currentRenderer.domElement, 'image/png')
+		if (!blob) {
+			setTransientStatusMessage('Failed to capture screenshot')
+			return
+		}
+		const fileName = buildScreenshotFileName()
+		triggerDownload(blob, fileName)
+		setTransientStatusMessage(`Saved screenshot: ${fileName}`)
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to capture screenshot', error)
+		setTransientStatusMessage('Failed to save screenshot')
+	} finally {
+		screenshotBusy.value = false
 	}
-	const link = document.createElement('a')
-	link.href = dataUrl
-	link.download = `harmony-scene-${Date.now()}.png`
-	document.body.appendChild(link)
-	link.click()
-	document.body.removeChild(link)
 }
 
 
@@ -14155,6 +14262,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
 	cancelMoveToTransition()
 	clearSceneInitState()
+	if (screenshotStatusTimer) {
+		clearTimeout(screenshotStatusTimer)
+		screenshotStatusTimer = null
+	}
 	if (typeof window !== 'undefined') {
 		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
 	}
@@ -14550,17 +14661,37 @@ watch(
 				</v-btn>
 			</div>
 		</template>
-		<v-btn
+		<div
 			v-if="watchLeaveVisible"
 			class="scene-preview__watch-leave"
-			rounded="pill"
-			variant="flat"
-			color="warning"
-			prepend-icon="mdi-exit-run"
-			@click="leaveActiveWatchView"
 		>
-			离开
-		</v-btn>
+			<div class="scene-preview__watch-actions">
+				<v-btn
+					class="scene-preview__watch-action"
+					rounded="pill"
+					variant="flat"
+					color="warning"
+					prepend-icon="mdi-exit-run"
+					@click="leaveActiveWatchView"
+				>
+					离开
+				</v-btn>
+				<v-btn
+					class="scene-preview__watch-action"
+					rounded="pill"
+					variant="flat"
+					color="secondary"
+					prepend-icon="mdi-camera"
+					:loading="screenshotBusy"
+					:disabled="screenshotBusy"
+					:title="'拍照保存当前视野'"
+					:aria-label="'拍照保存当前视野'"
+					@click="captureScreenshot"
+				>
+					拍照
+				</v-btn>
+			</div>
+		</div>
 		<v-btn-group
 			v-if="vehicleDrivePrompt.visible && !watchExclusiveUiActive"
 			class="scene-preview__drive-start-button"
@@ -14860,6 +14991,8 @@ watch(
 					size="small"
 					:aria-label="'Screenshot (Hotkey P)'"
 					:title="'Screenshot (Hotkey P)'"
+					:loading="screenshotBusy"
+					:disabled="screenshotBusy"
 					@click="captureScreenshot"
 				/>
 				<v-btn
@@ -16055,13 +16188,34 @@ watch(
 	bottom: 24px;
 	transform: translateX(-50%);
 	z-index: 1900;
-	min-width: 132px;
-	height: 48px;
-	padding: 0 24px;
+	pointer-events: auto;
+}
+
+.scene-preview__watch-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
 	border-radius: 999px;
-	background: linear-gradient(135deg, rgba(255, 153, 80, 0.96), rgba(255, 198, 82, 0.94)) !important;
-	color: #231204 !important;
-	box-shadow: 0 18px 40px rgba(255, 153, 80, 0.28);
+	background: rgba(18, 18, 32, 0.72);
+	backdrop-filter: blur(14px);
+	box-shadow: 0 18px 40px rgba(16, 18, 30, 0.24);
+}
+
+.scene-preview__watch-action {
+	min-width: 120px;
+	height: 44px;
+	padding: 0 18px;
+	border-radius: 999px;
+}
+
+.scene-preview__watch-action :deep(.v-btn__content) {
+	letter-spacing: 0.04em;
+}
+
+.scene-preview__watch-action :deep(.v-btn__overlay),
+.scene-preview__watch-action :deep(.v-btn__underlay) {
+	opacity: 0;
 }
 
 @media (max-width: 720px) {
@@ -16080,7 +16234,20 @@ watch(
 
 	.scene-preview__watch-leave {
 		bottom: 16px;
-		min-width: 118px;
+		left: 16px;
+		transform: none;
+	}
+
+	.scene-preview__watch-actions {
+		flex-direction: column;
+		align-items: stretch;
+		border-radius: 20px;
+		padding: 10px;
+	}
+
+	.scene-preview__watch-action {
+		min-width: 154px;
+		width: 100%;
 	}
 }
 

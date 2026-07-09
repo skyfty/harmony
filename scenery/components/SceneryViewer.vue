@@ -250,15 +250,28 @@
         </button>
       </view>
       <view v-if="watchLeaveVisible" class="viewer-watch-leave-bar" data-control-skip="watch-leave">
-        <button
-          class="viewer-watch-leave-button"
-          type="button"
-          hover-class="none"
-          data-control-skip="watch-leave"
-          @tap.stop.prevent="leaveActiveWatchView"
-        >
-          <text>离开</text>
-        </button>
+        <view class="viewer-watch-leave-actions">
+          <button
+            class="viewer-watch-leave-button viewer-watch-action-button"
+            type="button"
+            hover-class="none"
+            data-control-skip="watch-leave"
+            @tap.stop.prevent="leaveActiveWatchView"
+          >
+            <text>离开</text>
+          </button>
+          <button
+            class="viewer-watch-photo-button viewer-watch-action-button"
+            type="button"
+            hover-class="none"
+            :disabled="watchSnapshotBusy"
+            :aria-label="watchSnapshotBusy ? '正在保存截图' : '拍照保存当前视野'"
+            data-control-skip="watch-leave"
+            @tap.stop.prevent="handleWatchSnapshotTap"
+          >
+            <text>{{ watchSnapshotBusy ? '保存中...' : '拍照' }}</text>
+          </button>
+        </view>
       </view>
       <view
         v-if="vehicleDriveUi.visible && !watchExclusiveUiActive"
@@ -3248,6 +3261,7 @@ const watchLeaveVisible = computed(() =>
   cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null,
 );
 const watchExclusiveUiActive = computed(() => watchLeaveVisible.value);
+const watchSnapshotBusy = ref(false);
 
 const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   hasSnapshot: false,
@@ -4742,6 +4756,281 @@ function closeLanternImageFullscreen(): void {
   // #endif
   const viewer = resolveLanternViewer();
   viewer?.hide?.();
+}
+
+function resolveWatchSnapshotBaseName(): string {
+  const fallbackName = previewPayload.value?.title || currentDocument?.name || 'scene';
+  return fallbackName
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/\.+$/g, '')
+    .trim()
+    .slice(0, 64) || 'scene';
+}
+
+function buildWatchSnapshotFileName(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `${resolveWatchSnapshotBaseName()}-${stamp}.png`;
+}
+
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+
+  const mimeType = match[1] || 'image/png';
+  const isBase64 = Boolean(match[2]);
+  const payload = match[3] || '';
+
+  try {
+    const binary = isBase64
+      ? (typeof atob === 'function' ? atob(payload) : '')
+      : decodeURIComponent(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mimeType });
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to convert data URL to blob', error);
+    return null;
+  }
+}
+
+async function canvasToBlob(canvas: HTMLCanvasElement, mimeType = 'image/png'): Promise<Blob | null> {
+  if (typeof canvas.toBlob === 'function') {
+    const blob = await new Promise<Blob | null>((resolve) => {
+      try {
+        canvas.toBlob((value) => resolve(value), mimeType);
+      } catch (error) {
+        console.warn('[SceneryViewer] canvas.toBlob failed', error);
+        resolve(null);
+      }
+    });
+    if (blob) {
+      return blob;
+    }
+  }
+
+  try {
+    const dataUrl = canvas.toDataURL(mimeType);
+    const dataUrlBlob = dataUrlToBlob(dataUrl);
+    if (dataUrlBlob) {
+      return dataUrlBlob;
+    }
+    if (typeof fetch === 'function') {
+      const response = await fetch(dataUrl);
+      if (response.ok) {
+        return await response.blob();
+      }
+    }
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to convert canvas to blob', error);
+  }
+
+  return null;
+}
+
+type MiniProgramFsManager = {
+  mkdirSync?: (dirPath: string, recursive?: boolean) => void;
+  writeFile?: (options: {
+    filePath: string;
+    data: ArrayBuffer | Uint8Array;
+    success?: () => void;
+    fail?: (error: unknown) => void;
+  }) => void;
+};
+
+type MiniProgramPlatform = {
+  getFileSystemManager?: () => MiniProgramFsManager;
+  env?: {
+    USER_DATA_PATH?: string;
+  };
+};
+
+async function captureWatchSnapshotBlob(): Promise<Blob | null> {
+  const context = renderContext;
+  const canvas = canvasResult?.canvas ?? null;
+  if (!context || !canvas) {
+    return null;
+  }
+
+  try {
+    context.renderer.render(context.scene, context.camera);
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to render frame before capture', error);
+  }
+
+  return await canvasToBlob(canvas, 'image/png');
+}
+
+function triggerWatchSnapshotDownload(blob: Blob, fileName: string): void {
+  if (typeof document === 'undefined') {
+    throw new Error('当前环境不支持文件下载');
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.style.display = 'none';
+  link.rel = 'noopener';
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function getMiniProgramFsManager(): MiniProgramFsManager | null {
+  const uniAny = uni as typeof uni & { getFileSystemManager?: () => MiniProgramFsManager };
+  if (typeof uniAny.getFileSystemManager === 'function') {
+    return uniAny.getFileSystemManager();
+  }
+
+  const wxAny = typeof globalThis !== 'undefined' ? (globalThis as typeof globalThis & { wx?: MiniProgramPlatform }).wx : null;
+  if (wxAny && typeof wxAny.getFileSystemManager === 'function') {
+    return wxAny.getFileSystemManager();
+  }
+
+  return null;
+}
+
+async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  const anyBlob = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> };
+  if (typeof anyBlob.arrayBuffer === 'function') {
+    return await anyBlob.arrayBuffer();
+  }
+
+  return await new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as ArrayBuffer) || new ArrayBuffer(0));
+    reader.onerror = () => reject(reader.error ?? new Error('读取截图失败'));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+function resolveMiniProgramSnapshotPath(fileName: string): string {
+  const wxAny = typeof globalThis !== 'undefined' ? (globalThis as typeof globalThis & { wx?: MiniProgramPlatform }).wx : null;
+  const basePath = wxAny?.env?.USER_DATA_PATH;
+  if (typeof basePath !== 'string' || !basePath.trim()) {
+    throw new Error('无法获取本地存储路径');
+  }
+  return `${basePath.replace(/\/$/, '')}/harmony/watch-snapshots/${fileName}`;
+}
+
+async function ensureWritePhotosAlbumPermission(): Promise<boolean> {
+  if (typeof uni.getSetting !== 'function') {
+    return true;
+  }
+
+  const hasPermission = await new Promise<boolean>((resolve) => {
+    uni.getSetting({
+      success: (result: { authSetting?: Record<string, boolean> }) => {
+        resolve(result.authSetting?.['scope.writePhotosAlbum'] !== false);
+      },
+      fail: () => resolve(true),
+    });
+  });
+
+  if (hasPermission) {
+    return true;
+  }
+
+  if (typeof uni.authorize !== 'function') {
+    return false;
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      uni.authorize({
+        scope: 'scope.writePhotosAlbum',
+        success: () => resolve(),
+        fail: reject,
+      });
+    });
+    return true;
+  } catch {
+    uni.showToast({ title: '请先授权保存到相册', icon: 'none' });
+    return false;
+  }
+}
+
+async function saveWatchSnapshotToMiniProgram(blob: Blob, fileName: string): Promise<void> {
+  const fs = getMiniProgramFsManager();
+  if (!fs || typeof fs.writeFile !== 'function') {
+    throw new Error('当前环境不支持文件写入');
+  }
+
+  const filePath = resolveMiniProgramSnapshotPath(fileName);
+  const dir = filePath.slice(0, filePath.lastIndexOf('/'));
+  try {
+    if (typeof fs.mkdirSync === 'function') {
+      fs.mkdirSync(dir, true);
+    }
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to prepare snapshot directory', error);
+  }
+
+  const bytes = await blobToArrayBuffer(blob);
+  const writeFile = fs.writeFile;
+  if (typeof writeFile !== 'function') {
+    throw new Error('当前环境不支持文件写入');
+  }
+  await new Promise<void>((resolve, reject) => {
+    writeFile({
+      filePath,
+      data: bytes,
+      success: () => resolve(),
+      fail: reject,
+    });
+  });
+
+  if (!(await ensureWritePhotosAlbumPermission())) {
+    throw new Error('未获得保存到相册的权限');
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    uni.saveImageToPhotosAlbum({
+      filePath,
+      success: () => resolve(),
+      fail: reject,
+    });
+  });
+}
+
+async function handleWatchSnapshotTap(): Promise<void> {
+  if (watchSnapshotBusy.value) {
+    return;
+  }
+
+  watchSnapshotBusy.value = true;
+  try {
+    const blob = await captureWatchSnapshotBlob();
+    if (!blob) {
+      uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
+      return;
+    }
+
+    const fileName = buildWatchSnapshotFileName();
+    if (isWeChatMiniProgram) {
+      await saveWatchSnapshotToMiniProgram(blob, fileName);
+      uni.showToast({ title: '已保存到相册', icon: 'success' });
+      return;
+    }
+
+    triggerWatchSnapshotDownload(blob, fileName);
+    uni.showToast({ title: '截图已下载', icon: 'success' });
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to save watch snapshot', error);
+    const message = error instanceof Error ? error.message : '截图保存失败';
+    uni.showToast({ title: message || '截图保存失败', icon: 'none' });
+  } finally {
+    watchSnapshotBusy.value = false;
+  }
 }
 
 refreshLanternViewportSize();
@@ -23133,22 +23422,64 @@ onUnmounted(() => {
   bottom: 28px;
   transform: translateX(-50%);
   z-index: 1601;
+  pointer-events: auto;
 }
 
-.viewer-watch-leave-button {
+.viewer-watch-leave-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.viewer-watch-action-button {
   min-width: 144px;
   min-height: 46px;
-  padding: 0 28px;
+  padding: 0 22px;
   border: none;
   border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(237, 245, 255, 0.84)),
-    linear-gradient(135deg, rgba(122, 198, 255, 0.16), rgba(255, 255, 255, 0.06));
-  color: #173149;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.08em;
   box-shadow: 0 12px 30px rgba(8, 20, 36, 0.18);
+  backdrop-filter: blur(16px) saturate(1.06);
+  transition: transform 0.18s cubic-bezier(.2,.9,.2,1), opacity 0.18s ease, box-shadow 0.18s ease;
+}
+
+.viewer-watch-leave-button {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(237, 245, 255, 0.84)),
+    linear-gradient(135deg, rgba(122, 198, 255, 0.16), rgba(255, 255, 255, 0.06));
+  color: #173149;
+}
+
+.viewer-watch-photo-button {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(236, 247, 255, 0.86)),
+    linear-gradient(135deg, rgba(110, 190, 255, 0.16), rgba(255, 255, 255, 0.06));
+  color: #28506f;
+  border: 1px solid rgba(153, 193, 255, 0.2);
+}
+
+.viewer-watch-action-button.is-busy,
+.viewer-watch-action-button:disabled {
+  opacity: 0.72;
+}
+
+.viewer-watch-action-button:active {
+  transform: scale(0.97);
+}
+
+.viewer-watch-photo-button .viewer-drive-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.viewer-watch-photo-button .viewer-drive-icon-text {
+  font-size: 18px;
 }
 
 .viewer-purpose-chip {
