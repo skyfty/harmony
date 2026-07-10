@@ -71,7 +71,7 @@ import { computed, reactive, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
-import { createBusinessOrder, getBusinessBootstrap } from '@/api/mini';
+import { createBusinessOrder, getBusinessBootstrap, getProfile } from '@/api/mini';
 import type { BusinessBootstrapData } from '@/types/business';
 
 const loading = ref(true);
@@ -108,17 +108,29 @@ const selectedCategoryName = computed(() => {
 async function loadBootstrap() {
   loading.value = true;
   try {
-    const response = await getBusinessBootstrap();
+    const [response, profile] = await Promise.all([
+      getBusinessBootstrap(),
+      getProfile().catch(() => null),
+    ]);
     bootstrap.contractStatus = response.contractStatus;
     bootstrap.latestOrder = response.latestOrder;
     bootstrap.scenicTypes = response.scenicTypes || [];
     bootstrap.specialLandscapeOptions = response.specialLandscapeOptions || [];
     bootstrap.businessContactPhone = response.businessContactPhone || '400-000-0000';
+
+    const profilePhone = String(profile?.phone || '').trim();
+    if (!form.contactPhone.trim() && profilePhone) {
+      form.contactPhone = profilePhone;
+    }
   } catch {
     void uni.showToast({ title: '加载失败', icon: 'none' });
   } finally {
     loading.value = false;
   }
+}
+
+function isValidPhone(phone: string) {
+  return /^1[3-9]\d{9}$/.test(phone);
 }
 
 function handleCategoryChange(event: { detail?: { value?: number | string } }) {
@@ -177,6 +189,11 @@ async function submitForm() {
     void uni.showToast({ title: '请输入联系电话', icon: 'none' });
     return;
   }
+  const contactPhone = form.contactPhone.trim();
+  if (!isValidPhone(contactPhone)) {
+    void uni.showToast({ title: '请输入有效的手机号', icon: 'none' });
+    return;
+  }
   if (!form.sceneSpotCategoryId) {
     void uni.showToast({ title: '请选择景点类型', icon: 'none' });
     return;
@@ -188,7 +205,7 @@ async function submitForm() {
       scenicName: form.scenicName.trim(),
       addressText: form.addressText.trim(),
       location: form.location,
-      contactPhone: form.contactPhone.trim(),
+      contactPhone,
       scenicArea: form.scenicArea ? Number(form.scenicArea) : null,
       sceneSpotCategoryId: form.sceneSpotCategoryId,
       specialLandscapeTags: form.specialLandscapeTags,

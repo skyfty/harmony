@@ -1,18 +1,22 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <template>
   <view class="page">
+    <view class="page-ambient" aria-hidden="true">
+      <view class="page-ambient__glow page-ambient__glow--one" />
+      <view class="page-ambient__glow page-ambient__glow--two" />
+      <view class="page-ambient__glow page-ambient__glow--three" />
+      <view class="page-ambient__mesh" />
+      <view class="page-ambient__stripe" />
+    </view>
     <MiniAuthRecovery />
     <PageHeader title="商业订单中心">
       <template #right>
-        <view class="header-action" @tap="openCreatePage">+</view>
+        <BusinessHeaderAction @tap="openCreatePage" />
       </template>
     </PageHeader>
 
     <view class="content">
-      <view class="hero-card">
-        <text class="hero-title">商业场景运营中心</text>
-      </view>
-
+ 
       <view v-if="loading" class="state-card">
         <text class="state-title">加载中...</text>
       </view>
@@ -84,6 +88,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
+import BusinessHeaderAction from '@/components/BusinessHeaderAction.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import { listBusinessOrders } from '@/api/mini';
@@ -171,28 +176,78 @@ function footerTip(order: BusinessOrder) {
 
 <style scoped lang="scss">
 .page {
+  position: relative;
   min-height: 100vh;
   background:
-    radial-gradient(circle at 0 0, rgba(255, 179, 71, 0.22), transparent 30%),
-    linear-gradient(180deg, #0f1a2a 0%, #14233a 26%, #eef1f5 26%, #f4f6f9 100%);
+    radial-gradient(circle at 12% 8%, rgba(255, 176, 88, 0.22), transparent 24%),
+    radial-gradient(circle at 88% 12%, rgba(93, 145, 255, 0.16), transparent 22%),
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.08), transparent 18%),
+    linear-gradient(180deg, #0a1220 0%, #101c31 18%, #172948 28%, #eef1f5 28%, #f4f6f9 100%);
+  overflow: hidden;
+}
+
+.page-ambient {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.page-ambient__glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(14px);
+  opacity: 0.9;
+}
+
+.page-ambient__glow--one {
+  top: 18px;
+  left: -36px;
+  width: 160px;
+  height: 160px;
+  background: radial-gradient(circle, rgba(255, 164, 72, 0.34) 0%, rgba(255, 164, 72, 0) 68%);
+}
+
+.page-ambient__glow--two {
+  top: 46px;
+  right: -48px;
+  width: 190px;
+  height: 190px;
+  background: radial-gradient(circle, rgba(91, 145, 255, 0.24) 0%, rgba(91, 145, 255, 0) 70%);
+}
+
+.page-ambient__glow--three {
+  top: 220px;
+  left: 18%;
+  width: 280px;
+  height: 280px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0) 72%);
+}
+
+.page-ambient__mesh {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(transparent 95%, rgba(255, 255, 255, 0.045) 96%, transparent 97%) 0 0 / 100% 28px,
+    linear-gradient(90deg, transparent 95%, rgba(255, 255, 255, 0.04) 96%, transparent 97%) 0 0 / 28px 100%;
+  opacity: 0.45;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.55) 30%, transparent 78%);
+}
+
+.page-ambient__stripe {
+  position: absolute;
+  top: 92px;
+  left: -8%;
+  width: 116%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.12) 18%, rgba(255, 255, 255, 0.24) 50%, rgba(255, 255, 255, 0.12) 82%, transparent 100%);
+  opacity: 0.8;
 }
 
 .content {
+  position: relative;
+  z-index: 1;
   padding: 16px 16px 28px;
-}
-
-.header-action {
-  width: 30px;
-  height: 30px;
-  border-radius: 15px;
-  background: linear-gradient(135deg, #ff9f43, #ff6b00);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  line-height: 1;
-  font-weight: 600;
 }
 
 .hero-card,
@@ -244,7 +299,7 @@ function footerTip(order: BusinessOrder) {
 }
 
 .section-title {
-  color: #162338;
+  color: #f3f3f3;
   font-size: 18px;
   font-weight: 700;
 }
@@ -258,7 +313,9 @@ function footerTip(order: BusinessOrder) {
 .state-card,
 .order-card {
   background: #fff;
-  box-shadow: 0 16px 36px rgba(15, 35, 58, 0.08);
+  box-shadow:
+    0 16px 36px rgba(15, 35, 58, 0.08),
+    0 2px 0 rgba(255, 255, 255, 0.75) inset;
 }
 
 .empty-card {
@@ -292,6 +349,18 @@ function footerTip(order: BusinessOrder) {
 .order-card {
   padding: 18px;
   margin-bottom: 14px;
+  position: relative;
+  overflow: hidden;
+}
+
+.order-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #ff9f43 0%, #5b91ff 55%, #ff6b00 100%);
 }
 
 .order-card__top {
@@ -330,8 +399,9 @@ function footerTip(order: BusinessOrder) {
 }
 
 .stage-badge {
-  background: rgba(20, 35, 58, 0.08);
+  background: linear-gradient(135deg, rgba(20, 35, 58, 0.08), rgba(91, 145, 255, 0.12));
   color: #17314f;
+  border: 1px solid rgba(23, 49, 79, 0.08);
 }
 
 .service-badge {
@@ -357,8 +427,8 @@ function footerTip(order: BusinessOrder) {
 .meta-grid {
   margin-top: 16px;
   padding: 14px 0;
-  border-top: 1px solid #eef2f7;
-  border-bottom: 1px solid #eef2f7;
+  border-top: 1px solid #e9eef5;
+  border-bottom: 1px solid #e9eef5;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px 10px;
@@ -404,7 +474,7 @@ function footerTip(order: BusinessOrder) {
 }
 
 .footer-link {
-  color: #0f2748;
+  color: #12345a;
   font-size: 12px;
   font-weight: 600;
 }

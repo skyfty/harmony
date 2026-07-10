@@ -106,7 +106,15 @@ export async function payBusinessOrderRenewalHandler(ctx: Context): Promise<void
 export async function getBusinessOrderAnalyticsHandler(ctx: Context): Promise<void> {
   const userId = ensureMiniUserId(ctx)
   try {
-    ctx.body = await getBusinessOrderAnalyticsByOrder(String(ctx.params?.id || ''), userId)
+    const { dimension, granularity, metric, limit, start, end } = ctx.query as Record<string, string>
+    ctx.body = await getBusinessOrderAnalyticsByOrder(String(ctx.params?.id || ''), userId, {
+      dimension: dimension === 'category' ? 'category' : 'checkpoint',
+      granularity: granularity === 'month' ? 'month' : 'day',
+      metric: metric === 'pv' || metric === 'uv' || metric === 'newUsers' || metric === 'punchCount' ? metric : 'uv',
+      limit: Number(limit) || 8,
+      start,
+      end,
+    })
   } catch (error) {
     ctx.throw(400, error instanceof Error ? error.message : 'Load business order analytics failed')
   }

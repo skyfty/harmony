@@ -132,9 +132,16 @@ export async function listBusinessOrderRenewalsHandler(ctx: Context): Promise<vo
 
 export async function getBusinessOrderAnalyticsHandler(ctx: Context): Promise<void> {
   try {
-    ctx.body = await getBusinessOrderAnalyticsByOrder(String(ctx.params?.id || ''))
+    const { dimension, granularity, metric, limit, start, end } = ctx.query as Record<string, string>
+    ctx.body = await getBusinessOrderAnalyticsByOrder(String(ctx.params?.id || ''), undefined, {
+      dimension: dimension === 'category' ? 'category' : 'checkpoint',
+      granularity: granularity === 'month' ? 'month' : 'day',
+      metric: metric === 'pv' || metric === 'uv' || metric === 'newUsers' || metric === 'punchCount' ? metric : 'uv',
+      limit: Number(limit) || 8,
+      start,
+      end,
+    })
   } catch (error) {
     ctx.throw(getErrorStatus(error), error instanceof Error ? error.message : 'Load business order analytics failed')
   }
 }
-

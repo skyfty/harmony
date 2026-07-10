@@ -1,5 +1,6 @@
 import type {
   BusinessBootstrapData,
+  BusinessOrderAnalyticsQuery,
   BusinessOrder,
   BusinessOrderAnalytics,
   BusinessOrderRenewalPreview,
@@ -60,9 +61,10 @@ export async function payBusinessOrderRenewal(id: string): Promise<BusinessRenew
   })
 }
 
-export async function getBusinessOrderAnalytics(id: string): Promise<BusinessOrderAnalytics> {
+export async function getBusinessOrderAnalytics(id: string, query?: BusinessOrderAnalyticsQuery): Promise<BusinessOrderAnalytics> {
   await ensureMiniAuth()
   return await miniRequest<BusinessOrderAnalytics>(`/business-orders/${encodeURIComponent(id)}/analytics`, {
     method: 'GET',
+    query: query ? { ...query } : undefined,
   })
 }

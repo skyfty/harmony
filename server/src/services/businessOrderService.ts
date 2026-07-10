@@ -1160,7 +1160,14 @@ export async function applyBusinessOrderRenewalPaymentFailure(params: {
   await renewalOrder.save()
 }
 
-export async function getBusinessOrderAnalyticsByOrder(id: string, userId?: string) {
+export async function getBusinessOrderAnalyticsByOrder(id: string, userId?: string, options?: {
+  dimension?: 'checkpoint' | 'category'
+  granularity?: 'day' | 'month'
+  limit?: number
+  metric?: 'pv' | 'uv' | 'newUsers' | 'punchCount'
+  start?: string
+  end?: string
+}) {
   const rootOrder = await loadRootOrderById(id)
   if (userId && String(rootOrder.userId) !== userId) {
     throw new Error('Business order not found')
@@ -1171,5 +1178,11 @@ export async function getBusinessOrderAnalyticsByOrder(id: string, userId?: stri
   return getBusinessOrderAnalytics({
     sceneId: String(rootOrder.deliverySceneId),
     sceneSpotId: String(rootOrder.deliverySceneSpotId),
+    dimension: options?.dimension,
+    granularity: options?.granularity,
+    start: options?.start,
+    limit: options?.limit,
+    metric: options?.metric,
+    end: options?.end,
   })
 }

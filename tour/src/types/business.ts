@@ -36,6 +36,24 @@ export interface BusinessRenewalHistoryItem {
   serviceStatus: BusinessServiceStatus
 }
 
+export type BusinessAnalyticsGranularity = 'day' | 'month'
+export type BusinessAnalyticsDimension = 'checkpoint' | 'category'
+export type BusinessAnalyticsMetric = 'pv' | 'uv' | 'newUsers' | 'punchCount'
+
+export interface BusinessAnalyticsChartSeries {
+  name: string
+  data: number[]
+}
+
+export interface BusinessAnalyticsChartBlock {
+  categories: string[]
+  dimension?: BusinessAnalyticsDimension
+  granularity?: BusinessAnalyticsGranularity
+  metric?: BusinessAnalyticsMetric
+  series: BusinessAnalyticsChartSeries[]
+  total: number
+}
+
 export interface BusinessOrder {
   id: string
   orderNumber: string
@@ -97,6 +115,10 @@ export interface BusinessOrderAnalytics {
     punchCount: number
     userCount: number
   }>
+  charts?: {
+    breakdown: BusinessAnalyticsChartBlock
+    trend: BusinessAnalyticsChartBlock
+  }
   overview: {
     todayNewUsers: number
     todayUv: number
@@ -123,6 +145,15 @@ export interface BusinessOrderRenewalPreview {
   durationDays: number
   nextServiceEndAt: string
   nextServiceStartAt: string
+}
+
+export interface BusinessOrderAnalyticsQuery {
+  dimension?: BusinessAnalyticsDimension
+  granularity?: BusinessAnalyticsGranularity
+  limit?: number
+  metric?: BusinessAnalyticsMetric
+  end?: string
+  start?: string
 }
 
 export interface BusinessRenewalPaymentResult {
