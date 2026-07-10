@@ -5,9 +5,9 @@ import { VehicleModel } from '@/models/Vehicle'
 import { UserProductModel } from '@/models/UserProduct'
 import { UserVehicleModel } from '@/models/UserVehicle'
 import {
-  applyBusinessOrderRenewalPaymentFailure,
-  applyBusinessOrderRenewalPaymentSuccess,
-} from '@/services/businessOrderService'
+  applyBusinessHubRenewalPaymentFailure,
+  applyBusinessHubRenewalPaymentSuccess,
+} from '@/services/businessHubService'
 import {
   decryptWechatNotifyResource,
   parseWechatNotifyBody,
@@ -148,7 +148,7 @@ export async function wechatPayNotify(ctx: Context): Promise<void> {
   if (!order) {
     if (transaction.trade_state === 'SUCCESS') {
       try {
-        await applyBusinessOrderRenewalPaymentSuccess({
+        await applyBusinessHubRenewalPaymentSuccess({
           renewalOrderNumber: transaction.out_trade_no,
           transactionId: transaction.transaction_id,
           notifyId: notifyBody.id,
@@ -171,7 +171,7 @@ export async function wechatPayNotify(ctx: Context): Promise<void> {
       return
     }
 
-    await applyBusinessOrderRenewalPaymentFailure({
+    await applyBusinessHubRenewalPaymentFailure({
       renewalOrderNumber: transaction.out_trade_no,
       notifyId: notifyBody.id,
       transaction,

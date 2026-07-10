@@ -99,16 +99,6 @@ import {
 } from '@/controllers/miniprogram/travelRecordController'
 import { getMiniPunchProgress } from '@/controllers/miniprogram/punchRecordController'
 import {
-  createBusinessOrderHandler,
-  createBusinessOrderRenewalHandler,
-  getBusinessOrderAnalyticsHandler,
-  getBusinessOrderDetailHandler,
-  getBusinessOrderBootstrapHandler,
-  getBusinessOrderRenewalPreviewHandler,
-  listBusinessOrdersHandler,
-  payBusinessOrderRenewalHandler,
-} from '@/controllers/miniprogram/businessOrderController'
-import {
   createBusinessHubRenewalHandler,
   closeBusinessHubReminderHandler,
   getBusinessHubBootstrapHandler,
@@ -228,16 +218,6 @@ miniRouter.delete('/addresses/:id', deleteAddress)
 // feedback
 miniRouter.get('/feedback', listFeedback)
 miniRouter.post('/feedback', createFeedback)
-
-// business orders
-miniRouter.get('/business-orders/bootstrap', getBusinessOrderBootstrapHandler)
-miniRouter.get('/business-orders', listBusinessOrdersHandler)
-miniRouter.get('/business-orders/:id', getBusinessOrderDetailHandler)
-miniRouter.get('/business-orders/:id/renewal-preview', getBusinessOrderRenewalPreviewHandler)
-miniRouter.get('/business-orders/:id/analytics', getBusinessOrderAnalyticsHandler)
-miniRouter.post('/business-orders', createBusinessOrderHandler)
-miniRouter.post('/business-orders/:id/renew', createBusinessOrderRenewalHandler)
-miniRouter.post('/business-orders/:id/renew/pay', payBusinessOrderRenewalHandler)
 
 // business hub
 miniRouter.get('/business-hub/bootstrap', getBusinessHubBootstrapHandler)

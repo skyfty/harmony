@@ -18,7 +18,6 @@
       <view class="hero">
         <text class="hero__eyebrow">BUSINESS HUB</text>
         <text class="hero__title">项目、任务、提醒、素材统一看板</text>
-        <text class="hero__desc">这里展示你当前绑定手机号对应的商业项目，续费、交付、审批和素材都集中在一个入口里。</text>
       </view>
 
       <view v-if="loading" class="state-card">

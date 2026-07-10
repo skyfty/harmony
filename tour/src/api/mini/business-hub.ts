@@ -12,6 +12,20 @@ import type {
 import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
+export interface BusinessHubRenewalCheckoutResult {
+  renewal: BusinessHubRenewal
+  orderNumber: string
+  paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  payParams?: {
+    appId: string
+    timeStamp: string
+    nonceStr: string
+    package: string
+    signType: 'RSA'
+    paySign: string
+  } | null
+}
+
 export async function getBusinessHubBootstrap(): Promise<BusinessHubBootstrapData> {
   await ensureMiniAuth()
   return await miniRequest<BusinessHubBootstrapData>('/business-hub/bootstrap', {
@@ -40,9 +54,9 @@ export async function getBusinessHubRenewalPreview(id: string): Promise<Business
   })
 }
 
-export async function createBusinessHubRenewal(id: string, payload: CreateBusinessHubRenewalPayload = {}): Promise<BusinessHubRenewal> {
+export async function createBusinessHubRenewal(id: string, payload: CreateBusinessHubRenewalPayload = {}): Promise<BusinessHubRenewalCheckoutResult> {
   await ensureMiniAuth()
-  return await miniRequest<BusinessHubRenewal>(`/business-hub/projects/${encodeURIComponent(id)}/renewals`, {
+  return await miniRequest<BusinessHubRenewalCheckoutResult>(`/business-hub/projects/${encodeURIComponent(id)}/renewals`, {
     method: 'POST',
     body: payload,
   })

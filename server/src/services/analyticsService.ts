@@ -1,6 +1,6 @@
 import { Types } from 'mongoose'
 import { AnalyticsEventModel } from '@/models/AnalyticsEvent'
-import { BusinessOrderModel } from '@/models/BusinessOrder'
+import { BusinessHubProjectModel } from '@/models/BusinessHubProject'
 import { AppUserModel } from '@/models/AppUser'
 import { OrderModel } from '@/models/Order'
 import { PunchRecordModel } from '@/models/PunchRecord'
@@ -668,9 +668,9 @@ async function getOrderDomainSummary(query: AnalyticsDomainQuery): Promise<Analy
       { $group: { _id: { $ifNull: ['$refundStatus', 'none'] }, value: { $sum: 1 } } },
       { $sort: { value: -1 } },
     ]),
-    BusinessOrderModel.aggregate<{ _id: string; value: number }>([
+    BusinessHubProjectModel.aggregate<{ _id: string; value: number }>([
       { $match: baseMatch },
-      { $group: { _id: { $ifNull: ['$topStage', 'quote'] }, value: { $sum: 1 } } },
+      { $group: { _id: { $ifNull: ['$stage', 'lead'] }, value: { $sum: 1 } } },
       { $sort: { value: -1 } },
     ]),
     OrderModel.find(baseMatch).sort({ createdAt: -1 }).limit(limit).lean().exec(),

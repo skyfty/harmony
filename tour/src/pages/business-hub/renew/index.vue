@@ -69,6 +69,7 @@ import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { createBusinessHubRenewal, getBusinessHubProjectDetail, getBusinessHubRenewalPreview } from '@/api/mini'
 import type { BusinessHubProject, BusinessHubRenewalPreview } from '@/types/business-hub'
+import { requestMiniProgramPayment } from '@/utils/checkout'
 
 const loading = ref(true)
 const submitting = ref(false)
@@ -112,11 +113,14 @@ async function submit() {
   submitting.value = true
   void uni.showLoading({ title: '提交中...' })
   try {
-    await createBusinessHubRenewal(projectId.value, {
+    const result = await createBusinessHubRenewal(projectId.value, {
       remark: remark.value.trim() || null,
       durationDays: preview.value?.durationDays,
       price: preview.value?.amount,
     })
+    if (result.payParams) {
+      await requestMiniProgramPayment(result.payParams)
+    }
     void uni.showToast({ title: '续费申请已提交', icon: 'success' })
     setTimeout(() => {
       void uni.redirectTo({ url: `/pages/business-hub/detail/index?id=${encodeURIComponent(projectId.value)}` })

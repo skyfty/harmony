@@ -1,6 +1,7 @@
 import { Types } from 'mongoose'
 import { SceneSpotModel } from '@/models/SceneSpot'
 import { BusinessHubProjectModel } from '@/models/BusinessHubProject'
+import { createOrderPayment } from '@/services/paymentService'
 
 type BusinessHubStage = 'lead' | 'quote' | 'signing' | 'production' | 'publish' | 'operation'
 type BusinessHubStatus = 'active' | 'paused' | 'completed' | 'archived'
@@ -72,6 +73,20 @@ export interface BusinessHubRenewalView {
   remark: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface BusinessHubRenewalPaymentResult {
+  renewal: BusinessHubRenewalView
+  orderNumber: string
+  paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  payParams: {
+    appId: string
+    timeStamp: string
+    nonceStr: string
+    package: string
+    signType: 'RSA'
+    paySign: string
+  } | null
 }
 
 export interface BusinessHubActivityView {
@@ -1227,6 +1242,110 @@ export async function approveBusinessHubRenewal(renewalId: string): Promise<Busi
   }
   pushActivity(project, 'renewal.approved', `审批续费：${renewal.renewalNumber}`, 'admin')
   await project.save()
+  return mapProject(project.toObject())
+}
+
+export async function createBusinessHubRenewalPaymentForPhone(
+  id: string,
+  phone: string | null | undefined,
+  openId: string,
+  miniAppId: string | undefined,
+  input: BusinessHubRenewalInput = {},
+): Promise<BusinessHubRenewalPaymentResult> {
+  const project = await loadProject(id)
+  ensureProjectOwnedByPhone(project, phone)
+  const updated = await createBusinessHubRenewal(id, input)
+  const renewal = updated.renewals[updated.renewals.length - 1]
+  if (!renewal) {
+    throw new Error('创建续费单失败')
+  }
+
+  const paymentResult = await createOrderPayment({
+    channel: 'wechat',
+    miniAppId,
+    orderNumber: renewal.renewalNumber,
+    description: `${updated.title} 续费`,
+    amount: renewal.price,
+    openId,
+    attach: JSON.stringify({
+      businessHubProjectId: updated.id,
+      renewalId: renewal.id,
+      phone: normalizePhone(phone),
+      type: 'business-hub-renewal',
+    }),
+  })
+
+  return {
+    renewal,
+    orderNumber: renewal.renewalNumber,
+    paymentStatus: paymentResult.status === 'pending' ? 'processing' : 'failed',
+    payParams: paymentResult.payParams ?? null,
+  }
+}
+
+export async function applyBusinessHubRenewalPaymentSuccess(params: {
+  renewalOrderNumber: string
+  transactionId?: string
+  notifyId?: string
+  transaction: Record<string, unknown>
+  origin?: string
+}): Promise<BusinessHubProjectView | null> {
+  const project = await BusinessHubProjectModel.findOne({ 'renewals.renewalNumber': params.renewalOrderNumber }).exec()
+  if (!project) {
+    return null
+  }
+
+  const renewal = (project.renewals as any[]).find((item) => String(item.renewalNumber) === params.renewalOrderNumber)
+  if (!renewal) {
+    return null
+  }
+
+  const now = new Date()
+  if (renewal.status === 'approved' && renewal.paymentStatus === 'succeeded') {
+    return mapProject(project.toObject())
+  }
+
+  renewal.status = 'approved'
+  renewal.paymentStatus = 'succeeded'
+  renewal.approvedAt = now
+  renewal.updatedAt = now
+  project.serviceStartAt = renewal.serviceStartAt ?? project.serviceStartAt
+  project.serviceEndAt = renewal.serviceEndAt ?? project.serviceEndAt
+  project.serviceDurationDays = renewal.durationDays ?? project.serviceDurationDays
+  project.servicePrice = renewal.price ?? project.servicePrice
+  refreshServiceStatus(project)
+  const approval = Array.isArray(project.approvals)
+    ? project.approvals.find((item: any) => item.kind === 'renewal' && item.status === 'pending')
+    : null
+  if (approval) {
+    approval.status = 'approved'
+    approval.decidedAt = now
+    approval.updatedAt = now
+  }
+  pushActivity(project, 'renewal.paid', `续费支付成功：${renewal.renewalNumber}`, 'system')
+  await project.save()
+  return mapProject(project.toObject())
+}
+
+export async function applyBusinessHubRenewalPaymentFailure(params: {
+  renewalOrderNumber: string
+  notifyId?: string
+  transaction: Record<string, unknown>
+}): Promise<BusinessHubProjectView | null> {
+  const project = await BusinessHubProjectModel.findOne({ 'renewals.renewalNumber': params.renewalOrderNumber }).exec()
+  if (!project) {
+    return null
+  }
+  const renewal = (project.renewals as any[]).find((item) => String(item.renewalNumber) === params.renewalOrderNumber)
+  if (!renewal) {
+    return null
+  }
+  if (renewal.paymentStatus !== 'succeeded') {
+    renewal.paymentStatus = 'failed'
+    renewal.updatedAt = new Date()
+    pushActivity(project, 'renewal.payment_failed', `续费支付失败：${renewal.renewalNumber}`, 'system')
+    await project.save()
+  }
   return mapProject(project.toObject())
 }
 

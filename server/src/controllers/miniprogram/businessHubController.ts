@@ -1,7 +1,7 @@
 import type { Context } from 'koa'
 import { AppUserModel } from '@/models/AppUser'
 import {
-  createBusinessHubRenewalForPhone,
+  createBusinessHubRenewalPaymentForPhone,
   closeBusinessHubReminderForPhone,
   getBusinessHubBootstrapForPhone,
   getBusinessHubProjectForPhone,
@@ -14,6 +14,8 @@ import {
 async function resolveMiniBusinessOwner(ctx: Context): Promise<{
   userId: string
   phone: string | null
+  openId: string | null
+  miniAppId: string | null
 }> {
   const userId = ctx.state.miniAuthUser?.id
   if (!userId) {
@@ -26,9 +28,13 @@ async function resolveMiniBusinessOwner(ctx: Context): Promise<{
   }
 
   const phone = typeof user.phone === 'string' ? user.phone.trim() : ''
+  const openId = typeof user.wxOpenId === 'string' ? user.wxOpenId.trim() : ''
+  const miniAppId = typeof ctx.state.miniAuthUser?.miniAppId === 'string' ? ctx.state.miniAuthUser.miniAppId.trim() : ''
   return {
     userId,
     phone: phone || null,
+    openId: openId || null,
+    miniAppId: miniAppId || null,
   }
 }
 
@@ -75,10 +81,14 @@ export async function getBusinessHubRenewalPreviewHandler(ctx: Context): Promise
 }
 
 export async function createBusinessHubRenewalHandler(ctx: Context): Promise<void> {
-  const { phone } = await resolveMiniBusinessOwner(ctx)
+  const { phone, openId, miniAppId } = await resolveMiniBusinessOwner(ctx)
   try {
+    if (!openId) {
+      ctx.throw(412, '请先完成微信授权后再发起续费支付')
+      return
+    }
     const body = (ctx.request.body as Record<string, unknown>) || {}
-    const renewal = await createBusinessHubRenewalForPhone(String(ctx.params?.id || ''), phone, {
+    const renewal = await createBusinessHubRenewalPaymentForPhone(String(ctx.params?.id || ''), phone, openId, miniAppId ?? undefined, {
       durationDays: body.durationDays,
       price: body.price,
       remark: body.remark as string | null | undefined,

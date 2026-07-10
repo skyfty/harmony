@@ -145,71 +145,7 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
-export type BusinessOrderTopStage = 'quote' | 'signing' | 'production' | 'publish' | 'operation'
-export type BusinessOrderKind = 'new' | 'renewal'
-export type BusinessOrderServiceStatus = 'pending' | 'active' | 'expiring' | 'expired'
-
-export type BusinessOrderProductionNodeStatus = 'pending' | 'active' | 'completed'
-
-export interface BusinessOrderProductionNode {
-  code: string
-  label: string
-  status: BusinessOrderProductionNodeStatus
-  activatedAt?: Date | null
-  remark?: string | null
-  sortOrder: number
-}
-
-export interface BusinessOrderDocument extends Document<Types.ObjectId> {
-  userId: Types.ObjectId
-  orderNumber: string
-  rootOrderId?: Types.ObjectId | null
-  parentOrderId?: Types.ObjectId | null
-  orderKind: BusinessOrderKind
-  paymentStatus?: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
-  paymentMethod?: string | null
-  paymentProvider?: string | null
-  prepayId?: string | null
-  transactionId?: string | null
-  paidAt?: Date | null
-  paymentResult?: Record<string, unknown> | null
-  scenicName: string
-  addressText: string
-  location?: {
-    lat: number
-    lng: number
-  } | null
-  contactPhone: string
-  scenicArea?: number | null
-  sceneSpotCategoryId?: Types.ObjectId | null
-  specialLandscapeTags: string[]
-  topStage: BusinessOrderTopStage
-  productionProgress: BusinessOrderProductionNode[]
-  deliverySceneSpotId?: Types.ObjectId | null
-  deliverySceneId?: Types.ObjectId | null
-  deliverySceneSpotTitle?: string | null
-  deliveryBoundAt?: Date | null
-  contactPhoneForBusiness?: string | null
-  notes?: string | null
-  serviceDurationDays?: number | null
-  servicePrice?: number | null
-  serviceStartAt?: Date | null
-  serviceEndAt?: Date | null
-  serviceStatus?: BusinessOrderServiceStatus
-  renewalWarningDays?: number | null
-  renewalCount?: number
-  lastRenewedAt?: Date | null
-  renewalApprovedAt?: Date | null
-  quotedAt?: Date | null
-  signedAt?: Date | null
-  productionStartedAt?: Date | null
-  productionCompletedAt?: Date | null
-  publishReadyAt?: Date | null
-  publishedAt?: Date | null
-  operatingAt?: Date | null
-  createdAt: Date
-  updatedAt: Date
-}
+export type BusinessHubServiceStatus = 'pending' | 'active' | 'expiring' | 'expired'
 
 export type BusinessHubStage = 'lead' | 'quote' | 'signing' | 'production' | 'publish' | 'operation'
 export type BusinessHubStatus = 'active' | 'paused' | 'completed' | 'archived'
@@ -304,7 +240,7 @@ export interface BusinessHubProjectDocument extends Document<Types.ObjectId> {
   stage: BusinessHubStage
   status: BusinessHubStatus
   contractStatus: 'unsigned' | 'signed'
-  serviceStatus: BusinessOrderServiceStatus
+  serviceStatus: BusinessHubServiceStatus
   serviceDurationDays: number
   servicePrice: number
   serviceStartAt?: Date | null
