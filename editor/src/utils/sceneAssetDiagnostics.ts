@@ -870,9 +870,6 @@ export function validateSceneAssetReferences(
 
     if (!isValidRegistryEntry(entry)) {
       const issueAssetId = canonicalAssetId ?? assetId
-      console.warn(
-        `[SceneDiagnostics] invalid registry entry | assetId=${issueAssetId} | sourceType=${entry.sourceType ?? 'null'} | serverAssetId=${typeof entry.serverAssetId === 'string' ? entry.serverAssetId : ''} | zipPath=${typeof entry.zipPath === 'string' ? entry.zipPath : ''} | url=${typeof entry.url === 'string' ? entry.url : ''} | fileKey=${typeof entry.fileKey === 'string' ? entry.fileKey : ''} | resolvedUrl=${typeof entry.resolvedUrl === 'string' ? entry.resolvedUrl : ''} | catalogHasAsset=${Boolean(catalogAsset)} | referenceCount=${assetReferences.length}`,
-      )
       issues.push(
         createIssue(
           'error',
