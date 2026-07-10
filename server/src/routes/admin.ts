@@ -113,6 +113,31 @@ import {
   updateBusinessOrderHandler,
 } from '@/controllers/admin/businessOrderController'
 import {
+  advanceBusinessHubProductionHandler,
+  approveBusinessHubRenewalHandler,
+  bindBusinessHubDeliveryHandler,
+  blockBusinessHubTaskHandler,
+  closeBusinessHubReminderHandler,
+  closeBusinessHubTaskHandler,
+  completeBusinessHubOperationHandler,
+  completeBusinessHubProductionHandler,
+  completeBusinessHubPublishHandler,
+  createBusinessHubApprovalHandler,
+  createBusinessHubMaterialHandler,
+  createBusinessHubProjectHandler,
+  createBusinessHubReminderHandler,
+  createBusinessHubRenewalHandler,
+  createBusinessHubTaskHandler,
+  decideBusinessHubApprovalHandler,
+  deleteBusinessHubMaterialHandler,
+  getBusinessHubDashboardHandler,
+  getBusinessHubProjectHandler,
+  listBusinessHubProjectsHandler,
+  signBusinessHubProjectHandler,
+  updateBusinessHubProjectHandler,
+  updateBusinessHubTaskHandler,
+} from '@/controllers/admin/businessHubController'
+import {
   getBusinessConfigHandler,
   updateBusinessConfigHandler,
 } from '@/controllers/admin/businessConfigController'
@@ -371,6 +396,30 @@ adminRouter.post('/business-orders/:id/operation/complete', requireAnyPermission
 adminRouter.get('/business-orders/:id/renewals', requireAnyPermission(['order:read']), listBusinessOrderRenewalsHandler)
 adminRouter.post('/business-orders/:id/renewal/approve', requireAnyPermission(['order:write']), approveBusinessOrderRenewalHandler)
 adminRouter.get('/business-orders/:id/analytics', requireAnyPermission(['order:read']), getBusinessOrderAnalyticsHandler)
+
+adminRouter.get('/business-hub/dashboard', requireAnyPermission(['order:read']), getBusinessHubDashboardHandler)
+adminRouter.get('/business-hub/projects', requireAnyPermission(['order:read']), listBusinessHubProjectsHandler)
+adminRouter.get('/business-hub/projects/:id', requireAnyPermission(['order:read']), getBusinessHubProjectHandler)
+adminRouter.post('/business-hub/projects', requireAnyPermission(['order:write']), createBusinessHubProjectHandler)
+adminRouter.put('/business-hub/projects/:id', requireAnyPermission(['order:write']), updateBusinessHubProjectHandler)
+adminRouter.post('/business-hub/projects/:id/sign', requireAnyPermission(['order:write']), signBusinessHubProjectHandler)
+adminRouter.post('/business-hub/projects/:id/production/advance', requireAnyPermission(['order:write']), advanceBusinessHubProductionHandler)
+adminRouter.post('/business-hub/projects/:id/production/complete', requireAnyPermission(['order:write']), completeBusinessHubProductionHandler)
+adminRouter.post('/business-hub/projects/:id/publish/complete', requireAnyPermission(['order:write']), completeBusinessHubPublishHandler)
+adminRouter.post('/business-hub/projects/:id/operation/complete', requireAnyPermission(['order:write']), completeBusinessHubOperationHandler)
+adminRouter.put('/business-hub/projects/:id/delivery-binding', requireAnyPermission(['order:write']), bindBusinessHubDeliveryHandler)
+adminRouter.post('/business-hub/projects/:id/tasks', requireAnyPermission(['order:write']), createBusinessHubTaskHandler)
+adminRouter.put('/business-hub/tasks/:taskId', requireAnyPermission(['order:write']), updateBusinessHubTaskHandler)
+adminRouter.post('/business-hub/tasks/:taskId/complete', requireAnyPermission(['order:write']), closeBusinessHubTaskHandler)
+adminRouter.post('/business-hub/tasks/:taskId/block', requireAnyPermission(['order:write']), blockBusinessHubTaskHandler)
+adminRouter.post('/business-hub/projects/:id/reminders', requireAnyPermission(['order:write']), createBusinessHubReminderHandler)
+adminRouter.post('/business-hub/reminders/:reminderId/close', requireAnyPermission(['order:write']), closeBusinessHubReminderHandler)
+adminRouter.post('/business-hub/projects/:id/materials', requireAnyPermission(['order:write']), createBusinessHubMaterialHandler)
+adminRouter.delete('/business-hub/materials/:materialId', requireAnyPermission(['order:write']), deleteBusinessHubMaterialHandler)
+adminRouter.post('/business-hub/projects/:id/approvals', requireAnyPermission(['order:write']), createBusinessHubApprovalHandler)
+adminRouter.post('/business-hub/approvals/:approvalId/decide', requireAnyPermission(['order:write']), decideBusinessHubApprovalHandler)
+adminRouter.post('/business-hub/projects/:id/renewals', requireAnyPermission(['order:write']), createBusinessHubRenewalHandler)
+adminRouter.post('/business-hub/renewals/:renewalId/approve', requireAnyPermission(['order:write']), approveBusinessHubRenewalHandler)
 
 adminRouter.get('/users', requireAnyPermission(['user:read']), listAppUsers)
 adminRouter.get('/users/:id', requireAnyPermission(['user:read']), getAppUser)

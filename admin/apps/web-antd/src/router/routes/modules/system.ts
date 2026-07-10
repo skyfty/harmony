@@ -300,6 +300,34 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    name: 'BusinessHub',
+    path: '/business-hub',
+    meta: {
+      icon: 'lucide:workflow',
+      title: '商业协作台',
+    },
+    children: [
+      {
+        name: 'BusinessHubIndex',
+        path: '',
+        component: () => import('#/views/business-hub/index.vue'),
+        meta: {
+          icon: 'lucide:layout-dashboard',
+          title: '商业项目总览',
+        },
+      },
+      {
+        name: 'BusinessHubDetail',
+        path: ':id',
+        component: () => import('#/views/business-hub/detail.vue'),
+        meta: {
+          title: '商业项目详情',
+          hideInMenu: true,
+        },
+      },
+    ],
+  },
+  {
     name: 'Users',
     path: '/users',
     component: () => import('#/views/users/index.vue'),
