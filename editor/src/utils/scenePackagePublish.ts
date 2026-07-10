@@ -21,6 +21,7 @@ import {
   type QuantizedTerrainDatasetRootManifest,
 } from '@schema/core'
 import { resolveDocumentGroundNode } from '@schema/groundNode'
+import { isGroundDynamicMesh } from '@schema/groundHeightfield'
 import { GROUND_HEIGHTMAP_SIDECAR_FILENAME } from '@/utils/groundHeightSidecar'
 import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import { BUILTIN_WATER_NORMAL_FILENAME, isBuiltinWaterNormalAsset } from '@/constants/builtinAssets'
@@ -1623,6 +1624,14 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       scenesWorkspaceId,
       files,
     })
+    if (groundNode && isGroundDynamicMesh(groundNode.dynamicMesh)) {
+      if (!groundHeightPath) {
+        throw new Error(`场景 ${sceneName} 缺少 ground height sidecar，无法导出为小程序运行时场景包`)
+      }
+      if (!compiledGround) {
+        throw new Error(`场景 ${sceneName} 缺少 compiled ground，无法导出为小程序运行时场景包`)
+      }
+    }
     const roadCollisionPackage = buildPublishRoadCollisionPackage(preparedDocument as SceneJsonExportDocument)
     Object.assign(files, roadCollisionPackage.files)
     roadCollision = roadCollisionPackage.roadCollision

@@ -4,8 +4,6 @@ import type {
   SceneJsonExportDocument,
   SceneNode,
 } from './core'
-import { buildGroundOptimizedMeshData } from './groundOptimizedMesh'
-import { isGroundDynamicMesh } from './groundHeightfield'
 import { resolveDocumentGroundNode } from './groundNode'
 
 export type PrepareRuntimeGroundSplatSceneDocumentResult = {
@@ -44,15 +42,6 @@ function countLandformNodes(nodes: SceneNode[] | undefined | null): number {
     }
   }
   return count
-}
-
-export function attachOptimizedGroundMeshToDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-  const groundNode = resolveDocumentGroundNode(document)
-  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    return document
-  }
-  groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh)
-  return document
 }
 
 function stripLandformNodes(nodes: SceneNode[] | undefined | null): boolean {
@@ -120,7 +109,5 @@ export async function prepareRuntimeGroundSplatSceneDocument(
 export async function prepareRuntimeGroundSceneDocument(
   document: SceneJsonExportDocument,
 ): Promise<PrepareRuntimeGroundSplatSceneDocumentResult> {
-  const prepared = await prepareRuntimeGroundSplatSceneDocument(document)
-  attachOptimizedGroundMeshToDocument(prepared.document)
-  return prepared
+  return prepareRuntimeGroundSplatSceneDocument(document)
 }

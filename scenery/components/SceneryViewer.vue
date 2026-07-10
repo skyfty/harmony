@@ -573,7 +573,7 @@ import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from 
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { collectGroundAnchorWorldPositions } from '@harmony/schema/groundAnchorRuntime';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
-import { attachOptimizedGroundMeshToDocument, prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
+import { prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
 import { onGroundChunkTextureReady, refreshGroundChunkMaterials, resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
@@ -1239,6 +1239,31 @@ function clampPercent(value: number): number {
     return 0;
   }
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function hasHydratedGroundHeight(document: SceneJsonExportDocument | null | undefined): boolean {
+  const groundNode = resolveSharedDocumentGroundNode(document);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return false;
+  }
+  const runtimeGroundMesh = groundNode.dynamicMesh as GroundDynamicMesh & {
+    runtimeHydratedHeightState?: 'pristine' | 'dirty' | 'none';
+  };
+  return runtimeGroundMesh.runtimeHydratedHeightState === 'pristine';
+}
+
+function requireGroundRuntimeAssets(
+  document: SceneJsonExportDocument,
+  compiledTileCount: number,
+): void {
+  const groundNode = resolveSharedDocumentGroundNode(document);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return;
+  }
+  if (compiledTileCount > 0 || hasHydratedGroundHeight(document)) {
+    return;
+  }
+  throw new Error('场景缺少地形运行时数据，请重新导出场景包');
 }
 
 async function yieldToMainThread(): Promise<void> {
@@ -5905,6 +5930,10 @@ async function prepareRenderPayloadForSceneEntry(
   const renderPayload = buildRenderPayloadWithRuntimePrefabContext(payload, runtimePrefabPreloadContext);
   const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
   const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
+  const groundNode = resolveSharedDocumentGroundNode(runtimeGroundPrepared.document);
+  const compiledGroundManifest = groundNode?.userData?.compiledGroundManifest as { renderTiles?: unknown[] } | null | undefined;
+  const compiledTileCount = Array.isArray(compiledGroundManifest?.renderTiles) ? compiledGroundManifest.renderTiles.length : 0;
+  requireGroundRuntimeAssets(runtimeGroundPrepared.document, compiledTileCount);
 
   return {
     ...steerPreparedPayload,
@@ -7623,17 +7652,15 @@ function readCompiledGroundManifestFromScenePackage(
 }
 
 function attachScenePackageCompiledGroundRuntime(
-  pkg: ScenePackageUnzipped,
-  sceneEntry: ScenePackageManifestSceneEntry,
+  compiledManifest: Parameters<typeof syncCompiledGroundRenderTiles>[0]['manifest'] | null,
   document: SceneJsonExportDocument,
-): void {
+): Parameters<typeof syncCompiledGroundRenderTiles>[0]['manifest'] | null {
   const groundNode = resolveDocumentGroundNode(document);
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    return;
+    return null;
   }
-  const compiledManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
   if (!compiledManifest || !Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
-    return;
+    return null;
   }
   const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
     ? (groundNode.userData as Record<string, unknown>)
@@ -7641,6 +7668,7 @@ function attachScenePackageCompiledGroundRuntime(
   groundUserData.compiledGroundEnabled = true;
   groundUserData.compiledGroundManifest = compiledManifest;
   groundNode.userData = groundUserData;
+  return compiledManifest;
 }
 
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
@@ -18765,23 +18793,25 @@ function hydrateGroundSidecarFromPackage(
   const sidecarPath = typeof sceneEntry.groundHeightPath === 'string' ? sceneEntry.groundHeightPath.trim() : '';
   if (sidecarPath) {
     const sidecarBytes = pkg.files[sidecarPath];
-    if (sidecarBytes) {
-      const sidecarBuffer = sidecarBytes.buffer.slice(
-        sidecarBytes.byteOffset,
-        sidecarBytes.byteOffset + sidecarBytes.byteLength,
-      );
-      try {
-        groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecarBuffer);
-      } catch (_error) {
-        // Keep embedded terrain data if sidecar hydration fails.
-      }
+    if (!sidecarBytes) {
+      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground height sidecar 文件内容`);
+    }
+    const sidecarBuffer = sidecarBytes.buffer.slice(
+      sidecarBytes.byteOffset,
+      sidecarBytes.byteOffset + sidecarBytes.byteLength,
+    );
+    try {
+      groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecarBuffer);
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : `场景 ${sceneEntry.sceneId} 的 ground height sidecar 无效`);
     }
   }
-  (groundNode.dynamicMesh as GroundDynamicMesh & {
-    runtimeHydratedHeightState?: 'pristine' | 'dirty';
+  const runtimeGroundMesh = groundNode.dynamicMesh as GroundDynamicMesh & {
+    runtimeHydratedHeightState?: 'pristine' | 'dirty' | 'none';
     runtimeDisableOptimizedChunks?: boolean;
-  }).runtimeHydratedHeightState = 'pristine';
-  (groundNode.dynamicMesh as GroundDynamicMesh & { runtimeDisableOptimizedChunks?: boolean }).runtimeDisableOptimizedChunks = false;
+  };
+  runtimeGroundMesh.runtimeHydratedHeightState = sidecarPath ? (runtimeGroundMesh.runtimeHydratedHeightState ?? 'none') : 'none';
+  runtimeGroundMesh.runtimeDisableOptimizedChunks = false;
 
   const splatSidecarPath = typeof sceneEntry.groundSplatPath === 'string' ? sceneEntry.groundSplatPath.trim() : '';
   if (splatSidecarPath) {
@@ -19169,8 +19199,12 @@ async function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compile
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
     attachScenePackageTerrainRuntime(pkg, sceneEntry, document);
-    attachScenePackageCompiledGroundRuntime(pkg, sceneEntry, document);
-    attachOptimizedGroundMeshToDocument(document);
+    const compiledGroundManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
+    const attachedCompiledGroundManifest = attachScenePackageCompiledGroundRuntime(compiledGroundManifest, document);
+    const compiledTileCount = Array.isArray(attachedCompiledGroundManifest?.renderTiles)
+      ? attachedCompiledGroundManifest.renderTiles.length
+      : 0;
+    requireGroundRuntimeAssets(document, compiledTileCount);
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };
