@@ -1,136 +1,78 @@
+<!-- eslint-disable vue/multi-word-component-names -->
 <template>
   <view class="page">
     <MiniAuthRecovery />
-    <PageHeader title="商业页面" />
+    <PageHeader title="商业订单中心">
+      <template #right>
+        <view class="header-action" @tap="openCreatePage">+</view>
+      </template>
+    </PageHeader>
 
     <view class="content">
-      <view class="content-section hero-card">
-        <text class="hero-title">商业合作中心</text>
-        <text class="hero-desc">从需求提交到运营上线，实时查看项目推进状态。</text>
+      <view class="hero-card">
+        <text class="hero-title">商业场景运营中心</text>
       </view>
 
-      <view class="content-section timeline-scroll">
-        <view class="timeline-row">
-          <view v-for="(item, index) in stageItems" :key="item.key" class="timeline-item">
-            <view class="timeline-dot" :class="timelineDotClass(item.key)">{{ index + 1 }}</view>
-            <text class="timeline-label" :class="{ 'timeline-label--active': isStageReached(item.key) }">{{ item.label }}</text>
-            <view v-if="index < stageItems.length - 1" class="timeline-line" :class="{ 'timeline-line--active': isStageReached(stageItems[index + 1].key) }" />
-          </view>
-        </view>
-      </view>
-
-      <view v-if="loading" class="content-section state-card">
+      <view v-if="loading" class="state-card">
         <text class="state-title">加载中...</text>
       </view>
 
       <template v-else>
-        <view v-if="showQuoteForm" class="content-section card form-card">
-          <text class="section-title">需求订单表单</text>
+        <view v-if="orders.length === 0" class="empty-card">
+          <text class="empty-title">还没有商业订单</text>
+          <text class="empty-desc">创建第一个商业场景订单后，你可以持续查看交付进度、上线链接和运营数据。</text>
+          <button class="primary-btn" @tap="openCreatePage">新建订单</button>
+        </view>
 
-          <view class="field">
-            <text class="field-label">景点名称</text>
-            <input v-model="form.scenicName" class="field-input" placeholder="请输入景点名称" />
+        <view v-else class="section">
+          <view class="section-head">
+            <text class="section-title">我的服务</text>
+            <text class="section-subtitle">{{ orders.length }} 个服务链</text>
           </view>
 
-          <view class="field">
-            <view class="field-header">
-              <text class="field-label">地址</text>
-              <button class="ghost-btn" @tap="pickLocation">定位获取</button>
-            </view>
-            <textarea v-model="form.addressText" class="field-textarea" placeholder="请输入详细地址或使用定位获取" />
-          </view>
-
-          <view class="field-row">
-            <view class="field field-row__item">
-              <text class="field-label">联系电话</text>
-              <input v-model="form.contactPhone" class="field-input" type="number" placeholder="请输入联系电话" />
-            </view>
-            <view class="field field-row__item">
-              <text class="field-label">景点面积</text>
-              <input v-model="form.scenicArea" class="field-input" type="digit" placeholder="平方米" />
-            </view>
-          </view>
-
-          <view class="field">
-            <text class="field-label">景点类型</text>
-            <picker :range="scenicTypeNames" :value="selectedCategoryIndex" @change="handleCategoryChange">
-              <view class="field-picker">{{ selectedCategoryName }}</view>
-            </picker>
-          </view>
-
-          <view class="field">
-            <text class="field-label">特殊景观</text>
-            <view class="chips">
-              <view
-                v-for="item in bootstrap.specialLandscapeOptions"
-                :key="item.code"
-                class="chip"
-                :class="{ 'chip--active': form.specialLandscapeTags.includes(item.code) }"
-                @tap="toggleLandscape(item.code)"
-              >
-                {{ item.label }}
+          <view
+            v-for="item in orders"
+            :key="item.id"
+            class="order-card"
+            @tap="openDetail(item.id)"
+          >
+            <view class="order-card__top">
+              <view>
+                <text class="order-card__title">{{ item.scenicName }}</text>
+                <text class="order-card__no">{{ item.orderNumber }}</text>
+              </view>
+              <view class="status-group">
+                <text class="stage-badge">{{ stageText(item.topStage) }}</text>
+                <text class="service-badge" :class="`service-badge--${item.service.status}`">
+                  {{ serviceStatusText(item.service.status) }}
+                </text>
               </view>
             </view>
-          </view>
 
-          <view class="form-actions">
-            <button class="primary-btn" :disabled="submitting" @tap="submitForm">{{ submitting ? '提交中...' : '提交需求' }}</button>
-            <button class="secondary-btn" @tap="contactBusiness">联系商务</button>
-          </view>
-        </view>
-
-        <view v-else-if="currentStage === 'signing'" class="content-section state-card">
-          <text class="state-title">等待签约</text>
-          <text class="state-desc">需求已提交，商务团队会尽快与你联系确认方案与签约安排。</text>
-          <button class="secondary-btn state-btn" @tap="contactBusiness">联系商务</button>
-        </view>
-
-        <view v-else-if="currentStage === 'publish'" class="content-section state-card">
-          <text class="state-title">发布进度</text>
-          <text class="state-desc">等待审核</text>
-        </view>
-
-        <view v-else-if="currentStage === 'operation'" class="content-section state-card success-card">
-          <text class="state-title">运营中</text>
-          <text class="state-desc">项目已发布上线，当前处于运营阶段。</text>
-        </view>
-
-        <view v-if="currentOrder" class="content-section card summary-card">
-          <text class="section-title">订单信息</text>
-          <view class="summary-grid">
-            <view class="summary-item">
-              <text class="summary-label">订单编号</text>
-              <text class="summary-value">{{ currentOrder.orderNumber }}</text>
-            </view>
-            <view class="summary-item">
-              <text class="summary-label">景点名称</text>
-              <text class="summary-value">{{ currentOrder.scenicName }}</text>
-            </view>
-            <view class="summary-item">
-              <text class="summary-label">景点类型</text>
-              <text class="summary-value">{{ currentOrder.sceneSpotCategoryName || '未选择' }}</text>
-            </view>
-            <view class="summary-item">
-              <text class="summary-label">联系电话</text>
-              <text class="summary-value">{{ currentOrder.contactPhone }}</text>
-            </view>
-          </view>
-        </view>
-
-        <view v-if="showProductionTimeline" class="content-section card progress-card">
-          <text class="section-title">制作进度</text>
-          <view class="vertical-timeline">
-            <view v-for="item in currentOrder?.productionProgress || []" :key="item.code" class="vertical-node">
-              <view class="vertical-track">
-                <view class="vertical-dot" :class="verticalDotClass(item.status)" />
-                <view class="vertical-line" />
+            <view class="meta-grid">
+              <view class="meta-item">
+                <text class="meta-label">服务时间</text>
+                <text class="meta-value">{{ formatServiceWindow(item) }}</text>
               </view>
-              <view class="vertical-content">
-                <text class="vertical-title">{{ item.label }}</text>
-                <text class="vertical-status">{{ productionStatusText(item.status) }}</text>
-                <text v-if="item.activatedAt" class="vertical-meta">{{ formatDateTime(item.activatedAt) }}</text>
-                <text v-if="item.remark" class="vertical-meta">{{ item.remark }}</text>
+              <view class="meta-item">
+                <text class="meta-label">交付场景</text>
+                <text class="meta-value">{{ item.delivery.sceneSpotTitle || '待绑定' }}</text>
               </view>
+              <view class="meta-item">
+                <text class="meta-label">剩余天数</text>
+                <text class="meta-value" :class="{ 'meta-value--warn': item.service.status === 'expiring', 'meta-value--danger': item.service.status === 'expired' }">
+                  {{ daysRemainingText(item) }}
+                </text>
+              </view>
+              <view class="meta-item">
+                <text class="meta-label">续费次数</text>
+                <text class="meta-value">{{ item.renewalCount }}</text>
+              </view>
+            </view>
+
+            <view class="order-card__footer">
+              <text class="footer-tip">{{ footerTip(item) }}</text>
+              <text class="footer-link">查看详情</text>
             </view>
           </view>
         </view>
@@ -140,610 +82,330 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
-import { createBusinessOrder, getBusinessBootstrap } from '@/api/mini';
-import type { BusinessBootstrapData, BusinessTopStage } from '@/types/business';
-
-const stageItems = [
-  { key: 'quote', label: '报价' },
-  { key: 'signing', label: '签约' },
-  { key: 'production', label: '制作' },
-  { key: 'publish', label: '发布' },
-  { key: 'operation', label: '运营' },
-] as const;
+import { listBusinessOrders } from '@/api/mini';
+import type { BusinessOrder, BusinessServiceStatus, BusinessTopStage } from '@/types/business';
 
 const loading = ref(true);
-const submitting = ref(false);
-const bootstrap = reactive<BusinessBootstrapData>({
-  contractStatus: 'unsigned',
-  latestOrder: null,
-  scenicTypes: [],
-  specialLandscapeOptions: [],
-  businessContactPhone: '400-000-0000',
-});
-
-const form = reactive({
-  scenicName: '',
-  addressText: '',
-  contactPhone: '',
-  scenicArea: '',
-  sceneSpotCategoryId: '',
-  specialLandscapeTags: [] as string[],
-  location: null as { lat: number; lng: number } | null,
-});
+const orders = ref<BusinessOrder[]>([]);
+let redirectedSingleOrderId = '';
 
 onShow(() => {
-  void loadBootstrap();
+  void loadOrders();
 });
 
-const currentOrder = computed(() => bootstrap.latestOrder);
-const currentStage = computed<BusinessTopStage>(() => {
-  return currentOrder.value?.topStage || 'quote';
-});
-const showQuoteForm = computed(() => !currentOrder.value && bootstrap.contractStatus === 'unsigned');
-const showProductionTimeline = computed(() => currentStage.value === 'production' || currentStage.value === 'publish' || currentStage.value === 'operation');
-const scenicTypeNames = computed(() => bootstrap.scenicTypes.map((item) => item.name));
-const selectedCategoryIndex = computed(() => bootstrap.scenicTypes.findIndex((item) => item.id === form.sceneSpotCategoryId));
-const selectedCategoryName = computed(() => {
-  const found = bootstrap.scenicTypes.find((item) => item.id === form.sceneSpotCategoryId);
-  return found?.name || '请选择景点类型';
-});
-
-async function loadBootstrap() {
+async function loadOrders() {
   loading.value = true;
   try {
-    const response = await getBusinessBootstrap();
-    bootstrap.contractStatus = response.contractStatus;
-    bootstrap.latestOrder = response.latestOrder;
-    bootstrap.scenicTypes = response.scenicTypes || [];
-    bootstrap.specialLandscapeOptions = response.specialLandscapeOptions || [];
-    bootstrap.businessContactPhone = response.businessContactPhone || '400-000-0000';
-    if (!form.contactPhone && currentOrder.value?.contactPhone) {
-      form.contactPhone = currentOrder.value.contactPhone;
+    const response = await listBusinessOrders();
+    orders.value = response || [];
+    if (orders.value.length === 1) {
+      const singleId = orders.value[0]?.id || '';
+      if (singleId && redirectedSingleOrderId !== singleId) {
+        redirectedSingleOrderId = singleId;
+        void uni.redirectTo({ url: `/pages/business/detail/index?id=${encodeURIComponent(singleId)}` });
+        return;
+      }
     }
+    redirectedSingleOrderId = '';
   } catch {
-    uni.showToast({ title: '商业页面加载失败', icon: 'none' });
+    void uni.showToast({ title: '商业订单加载失败', icon: 'none' });
   } finally {
     loading.value = false;
   }
 }
 
-function stageIndex(stage: BusinessTopStage) {
-  return stageItems.findIndex((item) => item.key === stage);
+function openDetail(id: string) {
+  void uni.navigateTo({ url: `/pages/business/detail/index?id=${encodeURIComponent(id)}` });
 }
 
-function isStageReached(stage: BusinessTopStage) {
-  return stageIndex(currentStage.value) >= stageIndex(stage);
+function openCreatePage() {
+  void uni.navigateTo({ url: '/pages/business/create/index' });
 }
 
-function timelineDotClass(stage: BusinessTopStage) {
-  if (currentStage.value === stage) {
-    return 'timeline-dot--current';
-  }
-  return isStageReached(stage) ? 'timeline-dot--done' : '';
+function stageText(stage: BusinessTopStage) {
+  if (stage === 'signing') return '签约中';
+  if (stage === 'production') return '制作中';
+  if (stage === 'publish') return '待运营';
+  if (stage === 'operation') return '运营中';
+  return '待确认';
 }
 
-function verticalDotClass(status: 'pending' | 'active' | 'completed') {
-  if (status === 'completed') {
-    return 'vertical-dot--done';
-  }
-  if (status === 'active') {
-    return 'vertical-dot--active';
-  }
-  return '';
+function serviceStatusText(status: BusinessServiceStatus) {
+  if (status === 'active') return '服务中';
+  if (status === 'expiring') return '即将到期';
+  if (status === 'expired') return '已到期';
+  return '待生效';
 }
 
-function handleCategoryChange(event: { detail?: { value?: number | string } }) {
-  const index = Number(event?.detail?.value ?? -1);
-  const option = bootstrap.scenicTypes[index];
-  form.sceneSpotCategoryId = option?.id || '';
+function formatServiceWindow(order: BusinessOrder) {
+  if (!order.service.startAt || !order.service.endAt) return '待设置';
+  return `${formatDate(order.service.startAt)} - ${formatDate(order.service.endAt)}`;
 }
 
-function toggleLandscape(code: string) {
-  const exists = form.specialLandscapeTags.includes(code);
-  form.specialLandscapeTags = exists
-    ? form.specialLandscapeTags.filter((item) => item !== code)
-    : [...form.specialLandscapeTags, code];
-}
-
-async function pickLocation() {
-  try {
-    const result = await uni.chooseLocation({});
-    if (result) {
-      form.addressText = result.address || result.name || form.addressText;
-      if (typeof result.latitude === 'number' && typeof result.longitude === 'number') {
-        form.location = { lat: result.latitude, lng: result.longitude };
-      }
-    }
-  } catch {
-    uni.showToast({ title: '定位获取失败', icon: 'none' });
-  }
-}
-
-function contactBusiness() {
-  const phoneNumber = currentOrder.value?.contactPhoneForBusiness || bootstrap.businessContactPhone;
-  if (!phoneNumber) {
-    uni.showToast({ title: '暂无商务联系电话', icon: 'none' });
-    return;
-  }
-  uni.makePhoneCall({
-    phoneNumber,
-    fail: () => {
-      uni.showToast({ title: '拨号失败', icon: 'none' });
-    },
-  });
-}
-
-async function submitForm() {
-  if (submitting.value) {
-    return;
-  }
-  if (!form.scenicName.trim()) {
-    uni.showToast({ title: '请输入景点名称', icon: 'none' });
-    return;
-  }
-  if (!form.addressText.trim()) {
-    uni.showToast({ title: '请输入地址', icon: 'none' });
-    return;
-  }
-  if (!form.contactPhone.trim()) {
-    uni.showToast({ title: '请输入联系电话', icon: 'none' });
-    return;
-  }
-  if (!form.sceneSpotCategoryId) {
-    uni.showToast({ title: '请选择景点类型', icon: 'none' });
-    return;
-  }
-
-  submitting.value = true;
-  try {
-    const order = await createBusinessOrder({
-      scenicName: form.scenicName.trim(),
-      addressText: form.addressText.trim(),
-      location: form.location,
-      contactPhone: form.contactPhone.trim(),
-      scenicArea: form.scenicArea ? Number(form.scenicArea) : null,
-      sceneSpotCategoryId: form.sceneSpotCategoryId,
-      specialLandscapeTags: form.specialLandscapeTags,
-    });
-    bootstrap.latestOrder = order;
-    uni.showToast({ title: '需求已提交', icon: 'success' });
-  } catch (error: any) {
-    uni.showToast({ title: error?.message || '提交失败', icon: 'none' });
-  } finally {
-    submitting.value = false;
-  }
-}
-
-function productionStatusText(status: 'pending' | 'active' | 'completed') {
-  if (status === 'completed') return '已完成';
-  if (status === 'active') return '进行中';
-  return '待开始';
-}
-
-function formatDateTime(value: string) {
+function formatDate(value: string) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
+  if (Number.isNaN(date.getTime())) return value;
+  const year = date.getFullYear();
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
   const day = `${date.getDate()}`.padStart(2, '0');
-  const hours = `${date.getHours()}`.padStart(2, '0');
-  const minutes = `${date.getMinutes()}`.padStart(2, '0');
-  return `${month}-${day} ${hours}:${minutes}`;
+  return `${year}.${month}.${day}`;
+}
+
+function daysRemainingText(order: BusinessOrder) {
+  if (order.service.daysRemaining == null) return '待生效';
+  if (order.service.daysRemaining <= 0) return '已到期';
+  return `${order.service.daysRemaining} 天`;
+}
+
+function footerTip(order: BusinessOrder) {
+  if (order.service.status === 'expired') return '服务已结束，可发起续费恢复';
+  if (order.service.status === 'expiring') return '服务临近结束，建议尽快续费';
+  if (order.topStage !== 'operation') return '当前仍在交付流程中';
+  return '可查看运营数据与分享链接';
 }
 </script>
 
 <style scoped lang="scss">
 .page {
   min-height: 100vh;
-  width: 100%;
-  overflow-x: hidden;
   background:
-    radial-gradient(circle at top left, rgba(30, 112, 255, 0.18), transparent 32%),
-    linear-gradient(180deg, #eef5ff 0%, #f8fafc 42%, #f3f6fb 100%);
+    radial-gradient(circle at 0 0, rgba(255, 179, 71, 0.22), transparent 30%),
+    linear-gradient(180deg, #0f1a2a 0%, #14233a 26%, #eef1f5 26%, #f4f6f9 100%);
 }
 
 .content {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 14px 16px 28px;
-  display: flex;
-  flex-direction: column;
-  overflow-x: hidden;
+  padding: 16px 16px 28px;
 }
 
-.content-section {
-  width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  margin-bottom: 14px;
-}
-
-.content-section:last-child {
-  margin-bottom: 0;
-}
-
-.hero-card,
-.card,
-.state-card {
-  width: 100%;
-  box-sizing: border-box;
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(8px);
-  border-radius: 20px;
-  box-shadow: 0 14px 32px rgba(36, 79, 145, 0.08);
-}
-
-.hero-card {
-  padding: 18px;
-  display: flex;
-  flex-direction: column;
-}
-
-.hero-title {
-  font-size: 20px;
-  font-weight: 700;
-  color: #172033;
-}
-
-.hero-desc {
-  margin-top: 6px;
-  font-size: 13px;
-  color: #667085;
-  line-height: 1.5;
-}
-
-.timeline-scroll {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.timeline-row {
-  display: flex;
-  align-items: flex-start;
-  width: 100%;
-  padding: 8px 4px 0;
-}
-
-.timeline-item {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  position: relative;
-  padding: 0 4px;
-}
-
-.timeline-dot {
+.header-action {
   width: 30px;
   height: 30px;
   border-radius: 15px;
-  background: #d7e3f5;
-  color: #8a94a6;
+  background: linear-gradient(135deg, #ff9f43, #ff6b00);
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.timeline-dot--done {
-  background: #194185;
-  color: #ffffff;
-}
-
-.timeline-dot--current {
-  background: #ff7a00;
-  color: #ffffff;
-  box-shadow: 0 0 0 6px rgba(255, 122, 0, 0.15);
-}
-
-.timeline-label {
-  margin-top: 8px;
-  color: #8a94a6;
-  font-size: 12px;
-  line-height: 1.4;
-  text-align: center;
-  white-space: normal;
-  word-break: break-word;
-}
-
-.timeline-label--active {
-  color: #172033;
+  font-size: 22px;
+  line-height: 1;
   font-weight: 600;
 }
 
-.timeline-line {
-  position: absolute;
-  top: 14px;
-  left: calc(50% + 19px);
-  width: calc(100% - 38px);
-  height: 2px;
-  background: #d7e3f5;
-  margin: 0;
+.hero-card,
+.empty-card,
+.state-card,
+.order-card {
+  border-radius: 24px;
+  box-sizing: border-box;
 }
 
-.timeline-line--active {
-  background: #194185;
+.hero-card {
+  padding: 22px 20px;
+  background:
+    linear-gradient(135deg, rgba(248, 183, 84, 0.24), rgba(255, 121, 63, 0.16)),
+    rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff;
+  box-shadow: 0 22px 44px rgba(4, 11, 24, 0.25);
 }
 
-.card,
-.state-card {
-  padding: 16px;
+.hero-eyebrow {
+  font-size: 11px;
+  letter-spacing: 2px;
+  opacity: 0.72;
 }
 
-.section-title,
-.state-title {
-  font-size: 16px;
+.hero-title {
+  margin-top: 10px;
+  font-size: 24px;
   font-weight: 700;
-  color: #172033;
 }
 
-.state-card {
-  display: flex;
-  flex-direction: column;
-}
-
-.state-desc {
+.hero-desc {
   margin-top: 8px;
   font-size: 13px;
-  color: #667085;
-  line-height: 1.6;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.76);
 }
 
-.success-card {
-  background: linear-gradient(135deg, rgba(17, 153, 142, 0.12), rgba(56, 239, 125, 0.06));
+.section {
+  margin-top: 18px;
 }
 
-.field {
-  display: flex;
-  flex-direction: column;
-  margin-top: 14px;
-}
-
-.field-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.field-row__item {
-  margin-top: 0;
-}
-
-.field-label {
-  font-size: 13px;
-  color: #344054;
-  font-weight: 600;
-}
-
-.field-header {
+.section-head {
+  margin-bottom: 12px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+}
+
+.section-title {
+  color: #162338;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.section-subtitle {
+  color: #7d8899;
+  font-size: 12px;
+}
+
+.empty-card,
+.state-card,
+.order-card {
+  background: #fff;
+  box-shadow: 0 16px 36px rgba(15, 35, 58, 0.08);
+}
+
+.empty-card {
+  margin-top: 18px;
+  padding: 28px 20px;
+  text-align: center;
+}
+
+.empty-title {
+  color: #14233a;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.empty-desc {
+  margin-top: 10px;
+  display: block;
+  color: #6e7d91;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.primary-btn {
+  margin-top: 18px;
+  background: linear-gradient(135deg, #0f2748, #294c7c);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 14px;
+}
+
+.order-card {
+  padding: 18px;
+  margin-bottom: 14px;
+}
+
+.order-card__top {
+  display: flex;
   justify-content: space-between;
   gap: 12px;
 }
 
-.field-input,
-.field-picker,
-.field-textarea {
+.order-card__title {
   display: block;
-  width: 100%;
-  box-sizing: border-box;
-  border-radius: 14px;
-  background: #f7f9fc;
-  border: 1px solid #dde5f0;
-  padding: 16px 14px;
-  color: #172033;
-  font-size: 14px;
-  line-height: 1.5;
-  min-height: 52px;
-  margin-top: 8px;
+  color: #12233b;
+  font-size: 18px;
+  font-weight: 700;
 }
 
-.field-textarea {
-  min-height: 88px;
+.order-card__no {
+  display: block;
+  margin-top: 6px;
+  color: #8996a9;
+  font-size: 12px;
 }
 
-.chips {
+.status-group {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 8px;
 }
 
-.chip {
-  padding: 8px 12px;
+.stage-badge,
+.service-badge {
+  padding: 6px 10px;
   border-radius: 999px;
-  background: #edf2f7;
-  color: #526072;
-  font-size: 12px;
-}
-
-.chip--active {
-  background: #194185;
-  color: #ffffff;
-}
-
-.form-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.primary-btn,
-.secondary-btn,
-.ghost-btn {
-  margin: 0;
-  border-radius: 999px;
-  font-size: 13px;
-}
-
-.primary-btn {
-  background: linear-gradient(135deg, #194185, #2d68c4);
-  color: #ffffff;
-}
-
-.secondary-btn {
-  background: #e7eefb;
-  color: #194185;
-}
-
-.ghost-btn {
-  height: 28px;
-  line-height: 28px;
-  padding: 0 12px;
-  background: rgba(25, 65, 133, 0.08);
-  color: #194185;
-}
-
-.state-btn {
-  width: 160px;
-}
-
-.summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
-}
-
-.summary-item {
-  display: flex;
-  flex-direction: column;
-}
-
-.summary-label {
-  font-size: 12px;
-  color: #8a94a6;
-}
-
-.summary-value {
-  margin-top: 4px;
-  font-size: 13px;
-  color: #172033;
-  word-break: break-all;
-}
-
-.vertical-timeline {
-  margin-top: 16px;
-}
-
-.vertical-node {
-  display: flex;
-  gap: 10px;
-}
-
-.vertical-track {
-  width: 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-
-.vertical-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 6px;
-  background: #d7e3f5;
-  margin-top: 4px;
-}
-
-.vertical-dot--active {
-  background: #ff7a00;
-}
-
-.vertical-dot--done {
-  background: #194185;
-}
-
-.vertical-line {
-  width: 2px;
-  flex: 1;
-  min-height: 42px;
-  background: #d7e3f5;
-  margin-top: 4px;
-}
-
-.vertical-node:last-child .vertical-line {
-  display: none;
-}
-
-.vertical-content {
-  flex: 1;
-  padding-bottom: 18px;
-  display: flex;
-  flex-direction: column;
-}
-
-.vertical-title {
-  font-size: 14px;
-  color: #172033;
+  font-size: 11px;
   font-weight: 600;
 }
 
-.vertical-status,
-.vertical-meta {
+.stage-badge {
+  background: rgba(20, 35, 58, 0.08);
+  color: #17314f;
+}
+
+.service-badge {
+  color: #fff;
+}
+
+.service-badge--pending {
+  background: #8d99ae;
+}
+
+.service-badge--active {
+  background: #117864;
+}
+
+.service-badge--expiring {
+  background: #f39c12;
+}
+
+.service-badge--expired {
+  background: #c0392b;
+}
+
+.meta-grid {
+  margin-top: 16px;
+  padding: 14px 0;
+  border-top: 1px solid #eef2f7;
+  border-bottom: 1px solid #eef2f7;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 10px;
+}
+
+.meta-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.meta-label {
+  color: #93a0b4;
+  font-size: 11px;
+}
+
+.meta-value {
+  margin-top: 4px;
+  color: #17263d;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.meta-value--warn {
+  color: #d97706;
+  font-weight: 600;
+}
+
+.meta-value--danger {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.order-card__footer {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.footer-tip {
+  color: #607086;
   font-size: 12px;
-  color: #667085;
 }
 
-.vertical-status {
-  margin-top: 4px;
-}
-
-.vertical-meta {
-  margin-top: 4px;
-}
-
-@media (max-width: 420px) {
-  .content {
-    padding-left: 12px;
-    padding-right: 12px;
-  }
-
-  .timeline-row {
-    padding-left: 0;
-    padding-right: 0;
-  }
-
-  .timeline-dot {
-    width: 26px;
-    height: 26px;
-    border-radius: 13px;
-    font-size: 11px;
-  }
-
-  .timeline-line {
-    top: 12px;
-    left: calc(50% + 17px);
-    width: calc(100% - 34px);
-  }
-
-  .timeline-label {
-    font-size: 11px;
-  }
-
-  .field-header {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .ghost-btn,
-  .state-btn {
-    width: 100%;
-  }
-
-  .field-row,
-  .form-actions,
-  .summary-grid {
-    grid-template-columns: 1fr;
-  }
+.footer-link {
+  color: #0f2748;
+  font-size: 12px;
+  font-weight: 600;
 }
 </style>

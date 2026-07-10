@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { BusinessConfigItem, BusinessOrderItem, BusinessOrderTopStage } from '#/api';
+import type { BusinessConfigItem, BusinessOrderItem, BusinessOrderServiceStatus, BusinessOrderTopStage } from '#/api';
 
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
@@ -82,6 +82,55 @@ function stageColor(stage: BusinessOrderTopStage) {
   }
 }
 
+function serviceStatusText(status: BusinessOrderServiceStatus) {
+  switch (status) {
+    case 'active':
+      return '服务中';
+    case 'expiring':
+      return '即将到期';
+    case 'expired':
+      return '已到期';
+    default:
+      return '待生效';
+  }
+}
+
+function serviceStatusColor(status: BusinessOrderServiceStatus) {
+  switch (status) {
+    case 'active':
+      return 'success';
+    case 'expiring':
+      return 'warning';
+    case 'expired':
+      return 'error';
+    default:
+      return 'default';
+  }
+}
+
+function formatServiceWindow(row: BusinessOrderItem) {
+  if (!row.service.startAt || !row.service.endAt) {
+    return '-';
+  }
+  return `${row.service.startAt.slice(0, 10)} ~ ${row.service.endAt.slice(0, 10)}`;
+}
+
+const summaryCards = computed(() => {
+  const rows = latestGridRows.value;
+  const total = rows.length;
+  const expiring = rows.filter((item) => item.service.status === 'expiring').length;
+  const expired = rows.filter((item) => item.service.status === 'expired').length;
+  const operating = rows.filter((item) => item.topStage === 'operation').length;
+  return [
+    { label: '当前页订单', value: total, tone: 'text-slate-900' },
+    { label: '运营中', value: operating, tone: 'text-emerald-600' },
+    { label: '即将到期', value: expiring, tone: 'text-amber-600' },
+    { label: '已到期', value: expired, tone: 'text-rose-600' },
+  ];
+});
+
+const latestGridRows = ref<BusinessOrderItem[]>([]);
+
 const [BusinessOrderGrid] = useVbenVxeGrid<BusinessOrderItem>({
   formOptions: {
     schema: [
@@ -111,6 +160,20 @@ const [BusinessOrderGrid] = useVbenVxeGrid<BusinessOrderItem>({
       },
       {
         component: 'Select',
+        fieldName: 'serviceStatus',
+        label: '服务状态',
+        componentProps: {
+          allowClear: true,
+          options: [
+            { label: '待生效', value: 'pending' },
+            { label: '服务中', value: 'active' },
+            { label: '即将到期', value: 'expiring' },
+            { label: '已到期', value: 'expired' },
+          ],
+        },
+      },
+      {
+        component: 'Select',
         fieldName: 'contractStatus',
         label: '签约状态',
         componentProps: {
@@ -128,12 +191,13 @@ const [BusinessOrderGrid] = useVbenVxeGrid<BusinessOrderItem>({
     columns: [
       { field: 'orderNumber', minWidth: 180, title: '订单编号' },
       { field: 'scenicName', minWidth: 180, title: '景点名称' },
-      { field: 'sceneSpotCategoryName', minWidth: 140, title: '景点类型' },
+      { field: 'delivery.sceneSpotTitle', minWidth: 180, title: '交付场景' },
       { field: 'userInfo.displayName', minWidth: 140, title: '用户昵称' },
-      { field: 'contactPhone', minWidth: 140, title: '联系电话' },
       { field: 'topStage', minWidth: 120, title: '当前阶段', slots: { default: 'stage' } },
-      { field: 'userInfo.contractStatus', minWidth: 120, title: '签约状态', slots: { default: 'contractStatus' } },
-      { field: 'createdAt', minWidth: 180, formatter: 'formatDateTime', title: '创建时间' },
+      { field: 'service.status', minWidth: 120, title: '服务状态', slots: { default: 'serviceStatus' } },
+      { field: 'serviceWindow', minWidth: 220, title: '服务时间', slots: { default: 'serviceWindow' } },
+      { field: 'service.daysRemaining', minWidth: 120, title: '剩余天数', slots: { default: 'daysRemaining' } },
+      { field: 'renewalCount', minWidth: 110, title: '续费次数' },
       { field: 'updatedAt', minWidth: 180, formatter: 'formatDateTime', title: '更新时间' },
       { field: 'actions', minWidth: 100, fixed: 'right', title: '操作', slots: { default: 'actions' } },
     ],
@@ -141,13 +205,16 @@ const [BusinessOrderGrid] = useVbenVxeGrid<BusinessOrderItem>({
     proxyConfig: {
       ajax: {
         query: async ({ page }: any, formValues: Record<string, any>) => {
-          return await listBusinessOrdersApi({
+          const result = await listBusinessOrdersApi({
             keyword: formValues.keyword || undefined,
             topStage: formValues.topStage || undefined,
             contractStatus: formValues.contractStatus || undefined,
+            serviceStatus: formValues.serviceStatus || undefined,
             page: page.currentPage,
             pageSize: page.pageSize,
           });
+          latestGridRows.value = result.items || [];
+          return result;
         },
       },
     },
@@ -178,15 +245,31 @@ onMounted(() => {
       </div>
     </Card>
 
+    <div class="mb-4 grid gap-4 md:grid-cols-4">
+      <Card v-for="card in summaryCards" :key="card.label" size="small">
+        <div class="text-sm text-slate-500">{{ card.label }}</div>
+        <div class="mt-2 text-2xl font-semibold" :class="card.tone">{{ card.value }}</div>
+      </Card>
+    </div>
+
     <BusinessOrderGrid>
       <template #stage="{ row }">
         <Tag :color="stageColor(row.topStage)">{{ stageText(row.topStage) }}</Tag>
       </template>
 
-      <template #contractStatus="{ row }">
-        <Tag :color="row.userInfo?.contractStatus === 'signed' ? 'success' : 'default'">
-          {{ row.userInfo?.contractStatus === 'signed' ? '已签约' : '未签约' }}
-        </Tag>
+      <template #serviceStatus="{ row }">
+        <Tag :color="serviceStatusColor(row.service.status)">{{ serviceStatusText(row.service.status) }}</Tag>
+      </template>
+
+      <template #serviceWindow="{ row }">
+        <div>{{ formatServiceWindow(row) }}</div>
+      </template>
+
+      <template #daysRemaining="{ row }">
+        <span v-if="row.service.daysRemaining == null">-</span>
+        <span v-else-if="row.service.daysRemaining <= 0" class="text-rose-600">已到期</span>
+        <span v-else-if="row.service.status === 'expiring'" class="font-medium text-amber-600">{{ row.service.daysRemaining }} 天</span>
+        <span v-else>{{ row.service.daysRemaining }} 天</span>
       </template>
 
       <template #actions="{ row }">
@@ -201,3 +284,4 @@ onMounted(() => {
     </BusinessOrderGrid>
   </div>
 </template>
+

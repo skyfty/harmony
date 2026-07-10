@@ -1,10 +1,32 @@
-import type { BusinessBootstrapData, BusinessOrder, CreateBusinessOrderPayload } from '@/types/business'
+import type {
+  BusinessBootstrapData,
+  BusinessOrder,
+  BusinessOrderAnalytics,
+  BusinessOrderRenewalPreview,
+  BusinessRenewalPaymentResult,
+  BusinessRenewalHistoryItem,
+  CreateBusinessOrderPayload,
+} from '@/types/business'
 import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
 export async function getBusinessBootstrap(): Promise<BusinessBootstrapData> {
   await ensureMiniAuth()
   return await miniRequest<BusinessBootstrapData>('/business-orders/bootstrap', {
+    method: 'GET',
+  })
+}
+
+export async function listBusinessOrders(): Promise<BusinessOrder[]> {
+  await ensureMiniAuth()
+  return await miniRequest<BusinessOrder[]>('/business-orders', {
+    method: 'GET',
+  })
+}
+
+export async function getBusinessOrderDetail(id: string): Promise<BusinessOrder> {
+  await ensureMiniAuth()
+  return await miniRequest<BusinessOrder>(`/business-orders/${encodeURIComponent(id)}`, {
     method: 'GET',
   })
 }
@@ -17,10 +39,30 @@ export async function createBusinessOrder(payload: CreateBusinessOrderPayload): 
   })
 }
 
-export async function getCurrentBusinessOrder(): Promise<BusinessOrder | null> {
+export async function getBusinessOrderRenewalPreview(id: string): Promise<BusinessOrderRenewalPreview> {
   await ensureMiniAuth()
-  const response = await miniRequest<{ order: BusinessOrder | null }>('/business-orders/current', {
+  return await miniRequest<BusinessOrderRenewalPreview>(`/business-orders/${encodeURIComponent(id)}/renewal-preview`, {
     method: 'GET',
   })
-  return response.order ?? null
+}
+
+export async function createBusinessOrderRenewal(id: string): Promise<BusinessRenewalHistoryItem> {
+  await ensureMiniAuth()
+  return await miniRequest<BusinessRenewalHistoryItem>(`/business-orders/${encodeURIComponent(id)}/renew`, {
+    method: 'POST',
+  })
+}
+
+export async function payBusinessOrderRenewal(id: string): Promise<BusinessRenewalPaymentResult> {
+  await ensureMiniAuth()
+  return await miniRequest<BusinessRenewalPaymentResult>(`/business-orders/${encodeURIComponent(id)}/renew/pay`, {
+    method: 'POST',
+  })
+}
+
+export async function getBusinessOrderAnalytics(id: string): Promise<BusinessOrderAnalytics> {
+  await ensureMiniAuth()
+  return await miniRequest<BusinessOrderAnalytics>(`/business-orders/${encodeURIComponent(id)}/analytics`, {
+    method: 'GET',
+  })
 }

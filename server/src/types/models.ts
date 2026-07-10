@@ -146,6 +146,8 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
 }
 
 export type BusinessOrderTopStage = 'quote' | 'signing' | 'production' | 'publish' | 'operation'
+export type BusinessOrderKind = 'new' | 'renewal'
+export type BusinessOrderServiceStatus = 'pending' | 'active' | 'expiring' | 'expired'
 
 export type BusinessOrderProductionNodeStatus = 'pending' | 'active' | 'completed'
 
@@ -161,6 +163,16 @@ export interface BusinessOrderProductionNode {
 export interface BusinessOrderDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   orderNumber: string
+  rootOrderId?: Types.ObjectId | null
+  parentOrderId?: Types.ObjectId | null
+  orderKind: BusinessOrderKind
+  paymentStatus?: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  paymentMethod?: string | null
+  paymentProvider?: string | null
+  prepayId?: string | null
+  transactionId?: string | null
+  paidAt?: Date | null
+  paymentResult?: Record<string, unknown> | null
   scenicName: string
   addressText: string
   location?: {
@@ -173,8 +185,21 @@ export interface BusinessOrderDocument extends Document<Types.ObjectId> {
   specialLandscapeTags: string[]
   topStage: BusinessOrderTopStage
   productionProgress: BusinessOrderProductionNode[]
+  deliverySceneSpotId?: Types.ObjectId | null
+  deliverySceneId?: Types.ObjectId | null
+  deliverySceneSpotTitle?: string | null
+  deliveryBoundAt?: Date | null
   contactPhoneForBusiness?: string | null
   notes?: string | null
+  serviceDurationDays?: number | null
+  servicePrice?: number | null
+  serviceStartAt?: Date | null
+  serviceEndAt?: Date | null
+  serviceStatus?: BusinessOrderServiceStatus
+  renewalWarningDays?: number | null
+  renewalCount?: number
+  lastRenewedAt?: Date | null
+  renewalApprovedAt?: Date | null
   quotedAt?: Date | null
   signedAt?: Date | null
   productionStartedAt?: Date | null

@@ -100,9 +100,14 @@ import {
 } from '@/controllers/admin/orderController'
 import {
   advanceBusinessOrderProductionHandler,
+  approveBusinessOrderRenewalHandler,
+  bindBusinessOrderDeliveryHandler,
+  completeBusinessOrderOperationHandler,
   completeBusinessOrderProductionHandler,
   completeBusinessOrderPublishHandler,
+  getBusinessOrderAnalyticsHandler,
   getBusinessOrderHandler,
+  listBusinessOrderRenewalsHandler,
   listBusinessOrdersHandler,
   markBusinessOrderSignedHandler,
   updateBusinessOrderHandler,
@@ -357,10 +362,15 @@ adminRouter.get('/business-config', requireAnyPermission(['order:read']), getBus
 adminRouter.get('/business-orders/:id', requireAnyPermission(['order:read']), getBusinessOrderHandler)
 adminRouter.put('/business-config', requireAnyPermission(['order:write']), updateBusinessConfigHandler)
 adminRouter.put('/business-orders/:id', requireAnyPermission(['order:write']), updateBusinessOrderHandler)
+adminRouter.put('/business-orders/:id/delivery-binding', requireAnyPermission(['order:write']), bindBusinessOrderDeliveryHandler)
 adminRouter.post('/business-orders/:id/sign', requireAnyPermission(['order:write']), markBusinessOrderSignedHandler)
 adminRouter.post('/business-orders/:id/production/advance', requireAnyPermission(['order:write']), advanceBusinessOrderProductionHandler)
 adminRouter.post('/business-orders/:id/production/complete', requireAnyPermission(['order:write']), completeBusinessOrderProductionHandler)
 adminRouter.post('/business-orders/:id/publish/complete', requireAnyPermission(['order:write']), completeBusinessOrderPublishHandler)
+adminRouter.post('/business-orders/:id/operation/complete', requireAnyPermission(['order:write']), completeBusinessOrderOperationHandler)
+adminRouter.get('/business-orders/:id/renewals', requireAnyPermission(['order:read']), listBusinessOrderRenewalsHandler)
+adminRouter.post('/business-orders/:id/renewal/approve', requireAnyPermission(['order:write']), approveBusinessOrderRenewalHandler)
+adminRouter.get('/business-orders/:id/analytics', requireAnyPermission(['order:read']), getBusinessOrderAnalyticsHandler)
 
 adminRouter.get('/users', requireAnyPermission(['user:read']), listAppUsers)
 adminRouter.get('/users/:id', requireAnyPermission(['user:read']), getAppUser)
