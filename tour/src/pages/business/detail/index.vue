@@ -1369,12 +1369,26 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 .timeline {
   margin-top: 12px;
+  position: relative;
+}
+
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 1px;
+  background: #e3e9f2;
+  z-index: 0;
 }
 
 .timeline-item {
   display: flex;
   gap: 10px;
   padding: 8px 0;
+  padding-left: 10px;
 }
 
 .timeline-dot {
@@ -1384,6 +1398,8 @@ function getErrorMessage(error: unknown, fallback: string): string {
   margin-top: 6px;
   background: #c7d0db;
   flex-shrink: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .timeline-dot--completed {
