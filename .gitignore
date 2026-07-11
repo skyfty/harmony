@@ -68,3 +68,13 @@ editor/src/wasm/pkg/**
 
 # Turborepo local cache (ignore per-package .turbo folders)
 **/.turbo/
+tour/src/pages/physics-ammo/engine
+tour/src/pages/physics-cannon/cannon-es
+tour/src/pages/physics-cannon/engine
+tour/src/pages/scenery/physics-bridge
+tour/src/pages/scenery/physics-core
+tour/src/pages/scenery/schema
+tour/src/pages/scenery/three
+tour/src/pages/scenery/three-mesh-bvh
+tour/src/pages/scenery/uni_modules/scenery
+tour/src/pages/scenery/utils
