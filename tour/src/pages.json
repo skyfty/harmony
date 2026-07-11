@@ -16,9 +16,10 @@
     { "path": "pages/feedback/create" },
     { "path": "pages/settings/index" },
     { "path": "pages/profile/edit" },
-    { "path": "pages/business-hub/index" },
-    { "path": "pages/business-hub/detail/index" },
-    { "path": "pages/business-hub/renew/index" },
+    { "path": "pages/business/index" },
+    { "path": "pages/business/detail/index" },
+    { "path": "pages/business/create/index" },
+    { "path": "pages/business/renew/index" },
     { "path": "pages/policy/index" }
   ],
   
