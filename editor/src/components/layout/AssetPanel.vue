@@ -43,6 +43,7 @@ import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
+import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
@@ -953,7 +954,6 @@ async function handleAddAsset(asset: ProjectAsset) {
   let preparedAsset: ProjectAsset | null = null
   try {
     preparedAsset = prepareAssetForOperations(asset)
-    assetCacheStore.setError(preparedAsset.id, null)
     const currentNode = selectedSceneNode.value
     const parentNode = resolveModelParentNode(currentNode)
     if (preparedAsset.type === 'prefab') {
@@ -962,16 +962,29 @@ async function handleAddAsset(asset: ProjectAsset) {
         activateBuildPresetAsset(preparedAsset, presetKind)
         return
       }
-      await sceneStore.preparePrefabAsset(preparedAsset.id, {
-        prefabAssetIdForDownloadProgress: preparedAsset.id,
+    }
+
+    const providerId = providerIdForAsset(asset)
+    const packagePathSegments = assetPackagePathMap.value.get(asset.id) ?? []
+    const sceneAsset = providerId
+      ? sceneStore.ensureSceneAssetRegistered(preparedAsset, {
+          providerId,
+          packagePathSegments,
+        })
+      : sceneStore.ensureSceneAssetRegistered(preparedAsset)
+    assetCacheStore.setError(sceneAsset.id, null)
+
+    if (sceneAsset.type === 'prefab') {
+      await sceneStore.preparePrefabAsset(sceneAsset.id, {
+        prefabAssetIdForDownloadProgress: sceneAsset.id,
       })
       const spawnPosition = parentNode?.id ? sceneStore.getNodeWorldCenter(parentNode.id) : null
-      await sceneStore.spawnPrefabWithPlaceholder(preparedAsset.id, spawnPosition, { parentId: null })
+      await sceneStore.spawnPrefabWithPlaceholder(sceneAsset.id, spawnPosition, { parentId: null })
       return
     }
-    await ensureAssetCached(preparedAsset)
-    if (MODEL_ASSET_TYPES.has(preparedAsset.type)) {
-      const node = await sceneStore.addPlaceableAssetNode({ asset: preparedAsset, parentId: parentNode?.id ?? undefined })
+    await ensureAssetCached(sceneAsset)
+    if (MODEL_ASSET_TYPES.has(sceneAsset.type)) {
+      const node = await sceneStore.addPlaceableAssetNode({ asset: sceneAsset, parentId: parentNode?.id ?? undefined })
       if (!node) {
         throw new Error('Asset is not ready yet')
       }
@@ -980,38 +993,38 @@ async function handleAddAsset(asset: ProjectAsset) {
       }
       return
     }
-    if (MATERIAL_ASSET_TYPES.has(preparedAsset.type)) {
+    if (MATERIAL_ASSET_TYPES.has(sceneAsset.type)) {
       if (!currentNode || !nodeSupportsMaterials(currentNode)) {
         throw new Error('Select a compatible node to apply the material')
       }
-      const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(preparedAsset.id)
+      const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(sceneAsset.id)
       if (!materialDefinition) {
         throw new Error('Failed to load material asset definition')
       }
       const primary = currentNode.materials?.[0] ?? null
       const slot = primary ?? sceneStore.addNodeMaterial(currentNode.id)
       const applied = slot
-        ? Boolean(await sceneStore.applyMaterialAssetToNodeMaterialSlot(currentNode.id, slot.id, preparedAsset.id))
+        ? Boolean(await sceneStore.applyMaterialAssetToNodeMaterialSlot(currentNode.id, slot.id, sceneAsset.id))
         : false
       if (!applied) {
         throw new Error('Failed to apply material to the selected node')
       }
       return
     }
-    if (TEXTURE_ASSET_TYPES.has(preparedAsset.type)) {
+    if (TEXTURE_ASSET_TYPES.has(sceneAsset.type)) {
       if (!currentNode || !nodeSupportsMaterials(currentNode)) {
         throw new Error('Select a compatible node to apply the texture')
       }
-      const textureRef: SceneMaterialTextureRef = preparedAsset.name?.trim().length
-        ? { assetId: preparedAsset.id, name: preparedAsset.name }
-        : { assetId: preparedAsset.id }
+      const textureRef: SceneMaterialTextureRef = sceneAsset.name?.trim().length
+        ? { assetId: sceneAsset.id, name: sceneAsset.name }
+        : { assetId: sceneAsset.id }
       const applied = sceneStore.setNodePrimaryTexture(currentNode.id, textureRef, 'albedo')
       if (!applied) {
         throw new Error('Failed to apply texture to the selected node')
       }
       return
     }
-    console.warn('Add asset action is not implemented for asset type', preparedAsset.type)
+    console.warn('Add asset action is not implemented for asset type', sceneAsset.type)
   } catch (error) {
     console.error('Failed to add asset', error)
     const cacheId = preparedAsset?.id ?? resolveAssetCacheId(asset)
@@ -3535,41 +3548,47 @@ function resolveAssetCacheId(asset: ProjectAsset): string {
   return asset.id
 }
 
+function getCatalogAsset(assetId: string): ProjectAsset | null {
+  const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!normalizedAssetId) {
+    return null
+  }
+
+  const canonicalAssetId = normalizeAssetIdWithRegistry(normalizedAssetId, sceneStore.assetRegistry) ?? normalizedAssetId
+  return sceneStore.findAssetInCatalog(canonicalAssetId)
+}
+
 function prepareAssetForOperations(asset: ProjectAsset): ProjectAsset {
   const providerId = providerIdForAsset(asset)
   if (!providerId) {
     return asset
   }
-  const packagePathSegments = assetPackagePathMap.value.get(asset.id) ?? []
 
-  // If this asset is already registered under its id, return that registered instance.
-  const already = sceneStore.getRegisteredAsset(asset.id)
+  // Only treat assets that are already in the scene catalog as registered.
+  const already = getCatalogAsset(asset.id)
   if (already) {
     return already
   }
 
   // Try to normalize by serverAssetId: some assets are persisted with a server id
   // while registry keys remain the original sha/hash. If we find a registry entry
-  // whose `serverAssetId` matches the clicked asset id, use that registered asset
-  // to avoid duplicate registrations.
+  // whose `serverAssetId` matches the clicked asset id, normalize to the registry key
+  // but do not register yet.
   const registry = sceneStore.assetRegistry ?? {}
   for (const [registryKey, entry] of Object.entries(registry)) {
     if (!entry) continue
     const serverAssetId = typeof (entry as any).serverAssetId === 'string' ? (entry as any).serverAssetId.trim() : ''
     if (serverAssetId && serverAssetId === asset.id) {
-      const mapped = sceneStore.getRegisteredAsset(registryKey)
+      const mapped = getCatalogAsset(registryKey)
       if (mapped) {
         return mapped
       }
 
-      // If registry entry exists but not yet in catalog, normalize the incoming
-      // asset id to the registry key and register that instead.
-      const normalized: ProjectAsset = { ...asset, id: registryKey }
-      return sceneStore.ensureSceneAssetRegistered(normalized, { providerId, packagePathSegments })
+      return { ...asset, id: registryKey }
     }
   }
 
-  return sceneStore.ensureSceneAssetRegistered(asset, { providerId, packagePathSegments })
+  return asset
 }
 
 const indexedDbLoadQueue = new Set<string>()

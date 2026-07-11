@@ -31,7 +31,7 @@ import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } fr
 import type { GuideboardComponentProps } from './components/definitions/guideboardComponent';
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
 import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
-import { VIEW_POINT_COMPONENT_TYPE } from './components/definitions/viewPointComponent';
+import { VIEW_POINT_COMPONENT_TYPE, getViewPointCameraMetadata } from './components/definitions/viewPointComponent';
 import { PARTICLE_SYSTEM_COMPONENT_TYPE } from './components/definitions/particleSystemComponent';
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
@@ -1062,6 +1062,7 @@ class SceneGraphBuilder {
       helperData.viewPoint = true;
       const props = viewPointState.props as ViewPointComponentProps | undefined;
       helperData.viewPointInitiallyVisible = props?.initiallyVisible === true;
+      Object.assign(helperData, getViewPointCameraMetadata(props));
     } else if (node.nodeType === 'Sphere' && node.editorFlags?.ignoreGridSnapping) {
       helperData.viewPoint = true;
     }

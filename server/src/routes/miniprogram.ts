@@ -99,10 +99,15 @@ import {
 } from '@/controllers/miniprogram/travelRecordController'
 import { getMiniPunchProgress } from '@/controllers/miniprogram/punchRecordController'
 import {
-  createBusinessOrderHandler,
-  getBusinessOrderBootstrapHandler,
-  getCurrentBusinessOrderHandler,
-} from '@/controllers/miniprogram/businessOrderController'
+  createBusinessHubRenewalHandler,
+  closeBusinessHubReminderHandler,
+  getBusinessHubBootstrapHandler,
+  getBusinessHubProjectHandler,
+  getBusinessHubRenewalPreviewHandler,
+  listBusinessHubProjectsHandler,
+  decideBusinessHubApprovalHandler,
+  updateBusinessHubTaskHandler,
+} from '@/controllers/miniprogram/businessHubController'
 
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
 const miniRouter = new Router({ prefix: '/api/mini' })
@@ -214,9 +219,14 @@ miniRouter.delete('/addresses/:id', deleteAddress)
 miniRouter.get('/feedback', listFeedback)
 miniRouter.post('/feedback', createFeedback)
 
-// business orders
-miniRouter.get('/business-orders/bootstrap', getBusinessOrderBootstrapHandler)
-miniRouter.get('/business-orders/current', getCurrentBusinessOrderHandler)
-miniRouter.post('/business-orders', createBusinessOrderHandler)
+// business hub
+miniRouter.get('/business-hub/bootstrap', getBusinessHubBootstrapHandler)
+miniRouter.get('/business-hub/projects', listBusinessHubProjectsHandler)
+miniRouter.get('/business-hub/projects/:id', getBusinessHubProjectHandler)
+miniRouter.get('/business-hub/projects/:id/renewal-preview', getBusinessHubRenewalPreviewHandler)
+miniRouter.post('/business-hub/projects/:id/renewals', createBusinessHubRenewalHandler)
+miniRouter.post('/business-hub/tasks/:taskId/status', updateBusinessHubTaskHandler)
+miniRouter.post('/business-hub/reminders/:reminderId/close', closeBusinessHubReminderHandler)
+miniRouter.post('/business-hub/approvals/:approvalId/decide', decideBusinessHubApprovalHandler)
 
 export default miniRouter

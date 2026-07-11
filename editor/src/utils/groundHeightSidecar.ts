@@ -1,5 +1,4 @@
 import {
-  formatGroundLocalEditTileKey,
   getGroundVertexCount,
   type GroundDynamicMesh,
   type GroundLocalEditTileMap,
@@ -8,13 +7,19 @@ import {
   type GroundPlanningMetadata,
   resolveGroundWorkingGridSize,
 } from '@schema/core'
+import {
+  GROUND_HEIGHTMAP_SIDECAR_MAGIC,
+  GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES,
+  GROUND_HEIGHTMAP_SIDECAR_VERSION,
+} from '@schema/groundHeightSidecar'
+export {
+  GROUND_HEIGHTMAP_SIDECAR_FILENAME,
+  GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES,
+  GROUND_HEIGHTMAP_SIDECAR_VERSION,
+} from '@schema/groundHeightSidecar'
+export { createGroundRuntimeMeshFromSidecar } from '@schema/groundHeightSidecar'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 
-export const GROUND_HEIGHTMAP_SIDECAR_FILENAME = 'ground-heightmaps.bin'
-export const GROUND_HEIGHTMAP_SIDECAR_VERSION = 5
-
-const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32
-const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 40
 const EMPTY_BOUND = -1
 const FLOAT64_ALIGNMENT_BYTES = Float64Array.BYTES_PER_ELEMENT
 const NULL_STRING_BYTE_LENGTH = 0xffffffff
@@ -27,11 +32,6 @@ const LOCAL_EDIT_TILE_SECTION_HEADER_BYTES = 8
 const LOCAL_EDIT_TILE_BINARY_HEADER_BYTES = 32
 
 const textEncoder = new TextEncoder()
-const textDecoder = new TextDecoder()
-
-type GroundHeightSidecarHeader = {
-  planningMetadata: GroundPlanningMetadata | null
-}
 
 type GroundHeightSidecarLayout = {
   metadataByteLength: number
@@ -269,38 +269,9 @@ function writeOptionalString(target: Uint8Array, view: DataView, offset: number,
   return offset + 4 + bytes.byteLength
 }
 
-function readOptionalString(bytes: Uint8Array, view: DataView, offset: number): { value: string | null; offset: number } | null {
-  if (offset + 4 > bytes.byteLength) {
-    return null
-  }
-  const byteLength = view.getUint32(offset, true)
-  if (byteLength === NULL_STRING_BYTE_LENGTH) {
-    return {
-      value: null,
-      offset: offset + 4,
-    }
-  }
-  const nextOffset = offset + 4 + byteLength
-  if (nextOffset > bytes.byteLength) {
-    return null
-  }
-  return {
-    value: textDecoder.decode(bytes.subarray(offset + 4, nextOffset)),
-    offset: nextOffset,
-  }
-}
-
 function writeOptionalFloat64(view: DataView, offset: number, value: number | null | undefined): number {
   view.setFloat64(offset, Number.isFinite(value) ? Number(value) : Number.NaN, true)
   return offset + Float64Array.BYTES_PER_ELEMENT
-}
-
-function readOptionalFloat64(view: DataView, offset: number): { value: number | undefined; offset: number } {
-  const value = view.getFloat64(offset, true)
-  return {
-    value: Number.isFinite(value) ? value : undefined,
-    offset: offset + Float64Array.BYTES_PER_ELEMENT,
-  }
 }
 
 function encodeLocalEditTileSource(source: GroundLocalEditTileSource | null | undefined): number {
@@ -313,19 +284,6 @@ function encodeLocalEditTileSource(source: GroundLocalEditTileSource | null | un
       return 3
     default:
       return 0
-  }
-}
-
-function decodeLocalEditTileSource(code: number): GroundLocalEditTileSource | null {
-  switch (code) {
-    case 1:
-      return 'manual'
-    case 2:
-      return 'dem'
-    case 3:
-      return 'mixed'
-    default:
-      return null
   }
 }
 
@@ -417,125 +375,6 @@ function encodePlanningMetadataPayload(metadata: GroundPlanningMetadata | null):
   return offset === totalByteLength ? target : target.subarray(0, offset)
 }
 
-function decodePlanningMetadataPayload(bytes: Uint8Array): GroundPlanningMetadata | null {
-  if (!bytes.byteLength) {
-    return null
-  }
-  try {
-    if (bytes.byteLength < PLANNING_METADATA_BINARY_FIXED_BYTES) {
-      return null
-    }
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-    let offset = 0
-    const flags = view.getUint32(offset, true)
-    offset += 4
-    const width = Math.max(1, view.getUint32(offset, true))
-    offset += 4
-    const height = Math.max(1, view.getUint32(offset, true))
-    offset += 4
-    const targetRows = Math.max(1, view.getUint32(offset, true))
-    offset += 4
-    const targetColumns = Math.max(1, view.getUint32(offset, true))
-    offset += 4
-    const localEditTileResolutionRaw = view.getUint32(offset, true)
-    offset += 4
-    const minElevation = readOptionalFloat64(view, offset)
-    offset = minElevation.offset
-    const maxElevation = readOptionalFloat64(view, offset)
-    offset = maxElevation.offset
-    const elevationOffsetMeters = readOptionalFloat64(view, offset)
-    offset = elevationOffsetMeters.offset
-    const sampleStepMeters = readOptionalFloat64(view, offset)
-    offset = sampleStepMeters.offset
-    const appliedSampleStepMeters = readOptionalFloat64(view, offset)
-    offset = appliedSampleStepMeters.offset
-    const sampleStepX = readOptionalFloat64(view, offset)
-    offset = sampleStepX.offset
-    const sampleStepY = readOptionalFloat64(view, offset)
-    offset = sampleStepY.offset
-    const targetCellSize = readOptionalFloat64(view, offset)
-    offset = targetCellSize.offset
-    const localEditCellSize = readOptionalFloat64(view, offset)
-    offset = localEditCellSize.offset
-    const localEditTileSizeMeters = readOptionalFloat64(view, offset)
-    offset = localEditTileSizeMeters.offset
-    const sourceFileHash = readOptionalString(bytes, view, offset)
-    if (!sourceFileHash) {
-      return null
-    }
-    offset = sourceFileHash.offset
-    const filename = readOptionalString(bytes, view, offset)
-    if (!filename) {
-      return null
-    }
-    offset = filename.offset
-    const mimeType = readOptionalString(bytes, view, offset)
-    if (!mimeType) {
-      return null
-    }
-    offset = mimeType.offset
-    const worldBounds = (flags & PLANNING_METADATA_BINARY_FLAGS_WORLD_BOUNDS) !== 0
-      ? {
-          minX: view.getFloat64(offset, true),
-          minY: view.getFloat64(offset + 8, true),
-          maxX: view.getFloat64(offset + 16, true),
-          maxY: view.getFloat64(offset + 24, true),
-        }
-      : null
-    if (worldBounds) {
-      offset += 32
-    }
-    const tileLayout = (flags & PLANNING_METADATA_BINARY_FLAGS_TILE_LAYOUT) !== 0
-      ? {
-          tileRows: Math.max(1, view.getUint32(offset, true)),
-          tileColumns: Math.max(1, view.getUint32(offset + 4, true)),
-          tileWorldWidth: view.getFloat64(offset + 8, true),
-          tileWorldHeight: view.getFloat64(offset + 16, true),
-          sourceSamplesPerTileX: Math.max(1, view.getUint32(offset + 24, true)),
-          sourceSamplesPerTileY: Math.max(1, view.getUint32(offset + 28, true)),
-          targetSamplesPerTileX: Math.max(1, view.getUint32(offset + 32, true)),
-          targetSamplesPerTileY: Math.max(1, view.getUint32(offset + 36, true)),
-        }
-      : null
-    if (tileLayout) {
-      offset += 40
-    }
-    if (offset !== bytes.byteLength) {
-      return null
-    }
-    return normalizePlanningMetadata({
-      contourBounds: null,
-      generatedAt: undefined,
-      demSource: {
-        sourceFileHash: sourceFileHash.value,
-        filename: filename.value,
-        mimeType: mimeType.value,
-        width,
-        height,
-        minElevation: minElevation.value ?? null,
-        maxElevation: maxElevation.value ?? null,
-        elevationOffsetMeters: elevationOffsetMeters.value ?? null,
-        sampleStepMeters: sampleStepMeters.value ?? null,
-        appliedSampleStepMeters: appliedSampleStepMeters.value ?? null,
-        sampleStepX: sampleStepX.value ?? null,
-        sampleStepY: sampleStepY.value ?? null,
-        worldBounds,
-        targetRows,
-        targetColumns,
-        targetCellSize: targetCellSize.value ?? 1,
-        localEditCellSize: localEditCellSize.value,
-        localEditTileSizeMeters: localEditTileSizeMeters.value,
-        localEditTileResolution: localEditTileResolutionRaw > 0 ? localEditTileResolutionRaw : undefined,
-        tileLayout,
-        detailLimitedByGroundGrid: (flags & PLANNING_METADATA_BINARY_FLAGS_LIMITED_BY_GROUND_GRID) !== 0,
-        detailLimitedByEditResolution: (flags & PLANNING_METADATA_BINARY_FLAGS_LIMITED_BY_EDIT_RESOLUTION) !== 0,
-      },
-    })
-  } catch (_error) {
-    return null
-  }
-}
-
 function encodeLocalEditTilesPayload(localEditTiles: GroundLocalEditTileMap | null | undefined): Uint8Array {
   const normalized = normalizeLocalEditTiles(localEditTiles)
   if (!normalized) {
@@ -581,62 +420,6 @@ function encodeLocalEditTilesPayload(localEditTiles: GroundLocalEditTileMap | nu
   return new Uint8Array(buffer)
 }
 
-function decodeLocalEditTilesPayload(bytes: Uint8Array): GroundLocalEditTileMap | null {
-  if (!bytes.byteLength) {
-    return null
-  }
-  try {
-    if (bytes.byteLength < LOCAL_EDIT_TILE_SECTION_HEADER_BYTES) {
-      return null
-    }
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-    let offset = 0
-    const tileCount = view.getUint32(offset, true)
-    offset += 8
-    const localEditTiles: GroundLocalEditTileMap = {}
-    for (let tileIndex = 0; tileIndex < tileCount; tileIndex += 1) {
-      if (offset + LOCAL_EDIT_TILE_BINARY_HEADER_BYTES > bytes.byteLength) {
-        return null
-      }
-      const tileRow = view.getInt32(offset, true)
-      offset += 4
-      const tileColumn = view.getInt32(offset, true)
-      offset += 4
-      const tileSizeMeters = view.getFloat64(offset, true)
-      offset += 8
-      const resolution = Math.max(1, view.getUint32(offset, true))
-      offset += 4
-      const source = decodeLocalEditTileSource(view.getUint8(offset))
-      offset += 4
-      const updatedAtValue = view.getFloat64(offset, true)
-      offset += 8
-      const valueCount = (resolution + 1) * (resolution + 1)
-      if (offset + valueCount * Float64Array.BYTES_PER_ELEMENT > bytes.byteLength) {
-        return null
-      }
-      const values = new Array<number>(valueCount)
-      for (let index = 0; index < valueCount; index += 1) {
-        values[index] = view.getFloat64(offset, true)
-        offset += 8
-      }
-      const key = formatGroundLocalEditTileKey(tileRow, tileColumn)
-      localEditTiles[key] = {
-        key,
-        tileRow,
-        tileColumn,
-        tileSizeMeters: Number.isFinite(tileSizeMeters) ? Math.max(0, tileSizeMeters) : 0,
-        resolution,
-        values,
-        source,
-        updatedAt: Number.isFinite(updatedAtValue) ? updatedAtValue : undefined,
-      }
-    }
-    return offset === bytes.byteLength ? normalizeLocalEditTiles(localEditTiles) : null
-  } catch (_error) {
-    return null
-  }
-}
-
 function writeSidecarHeader(
   view: DataView,
   metadata: GroundPlanningMetadata | null,
@@ -653,42 +436,6 @@ function writeSidecarHeader(
   view.setFloat64(24, Number.isFinite(normalized?.generatedAt) ? Number(normalized?.generatedAt) : Number.NaN, true)
   view.setUint32(32, metadataPayload.byteLength, true)
   view.setUint32(36, localEditTilesByteLength, true)
-}
-
-function readSidecarHeader(view: DataView): GroundHeightSidecarHeader {
-  const magic = view.getUint32(0, true)
-  const version = view.getUint32(4, true)
-  if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
-    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
-  }
-  const minRow = view.getInt32(8, true)
-  const maxRow = view.getInt32(12, true)
-  const minColumn = view.getInt32(16, true)
-  const maxColumn = view.getInt32(20, true)
-  const generatedAt = view.getFloat64(24, true)
-  const hasBounds = minRow !== EMPTY_BOUND && maxRow !== EMPTY_BOUND && minColumn !== EMPTY_BOUND && maxColumn !== EMPTY_BOUND
-  const hasGeneratedAt = Number.isFinite(generatedAt)
-  let planningMetadata: GroundPlanningMetadata | null = hasBounds || hasGeneratedAt
-    ? {
-        contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
-        generatedAt: hasGeneratedAt ? generatedAt : undefined,
-      }
-    : null
-  const metadataByteLength = view.getUint32(32, true)
-  if (metadataByteLength > 0) {
-    const metadataBytes = new Uint8Array(view.buffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, metadataByteLength)
-    const payloadMetadata = decodePlanningMetadataPayload(metadataBytes)
-    if (payloadMetadata?.demSource) {
-      planningMetadata = normalizePlanningMetadata({
-        contourBounds: planningMetadata?.contourBounds ?? null,
-        generatedAt: planningMetadata?.generatedAt,
-        demSource: payloadMetadata.demSource,
-      }) ?? planningMetadata
-    }
-  }
-  return {
-    planningMetadata,
-  }
 }
 
 function writeGroundHeightSidecarValues(
@@ -784,65 +531,3 @@ export function stripGroundHeightMapsFromSceneDocument(document: StoredSceneDocu
   return document
 }
 
-export function createGroundRuntimeMeshFromSidecar(
-  definition: GroundDynamicMesh,
-  sidecar: ArrayBuffer | null | undefined,
-): GroundRuntimeDynamicMesh {
-  const gridSize = resolveGroundWorkingGridSize(definition)
-  const vertexCount = getGroundVertexCount(gridSize.rows, gridSize.columns)
-  if (!sidecar) {
-    throw new Error(`Missing ${GROUND_HEIGHTMAP_SIDECAR_FILENAME}`)
-  }
-  let buffer = sidecar
-  if (buffer.byteLength < 8) {
-    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
-  }
-  const headerByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES
-  if (buffer.byteLength < headerByteLength) {
-    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
-  }
-  if (buffer.byteLength < headerByteLength + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2) {
-    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: received ${buffer.byteLength}`)
-  }
-  const headerView = new DataView(buffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES)
-  readSidecarHeader(headerView)
-  const metadataByteLength = headerView.getUint32(32, true)
-  const localEditTilesByteLength = headerView.getUint32(36, true)
-  if (headerByteLength + metadataByteLength > buffer.byteLength) {
-    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} header`)
-  }
-  const layout = resolveGroundHeightSidecarLayoutFromHeader(
-    headerByteLength,
-    metadataByteLength,
-    vertexCount,
-    localEditTilesByteLength,
-  )
-  const expectedByteLength = layout.totalByteLength
-  if (buffer.byteLength > expectedByteLength) {
-    const trailingBytes = new Uint8Array(buffer, expectedByteLength)
-    const hasNonZeroTrailingBytes = trailingBytes.some((byte) => byte !== 0)
-    if (hasNonZeroTrailingBytes) {
-      throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: expected ${expectedByteLength}, received ${buffer.byteLength}`)
-    }
-    buffer = buffer.slice(0, expectedByteLength)
-  } else if (buffer.byteLength !== expectedByteLength) {
-    throw new Error(`Invalid ${GROUND_HEIGHTMAP_SIDECAR_FILENAME} size: expected ${expectedByteLength}, received ${buffer.byteLength}`)
-  }
-
-  const header = readSidecarHeader(new DataView(buffer, 0, headerByteLength + metadataByteLength))
-  const manualHeightMap = new Float64Array(buffer, layout.manualOffset, vertexCount)
-  const planningHeightMap = new Float64Array(buffer, layout.planningOffset, vertexCount)
-  const localEditTiles = layout.localEditTilesByteLength > 0
-    ? decodeLocalEditTilesPayload(new Uint8Array(buffer, layout.localEditTilesOffset, layout.localEditTilesByteLength))
-    : null
-  return {
-    ...definition,
-    manualHeightMap,
-    planningHeightMap,
-    planningMetadata: header.planningMetadata,
-    localEditTiles,
-    surfaceRevision: Number.isFinite(definition.surfaceRevision) ? Math.max(0, Math.trunc(definition.surfaceRevision as number)) : 0,
-    runtimeHydratedHeightState: 'pristine',
-    runtimeDisableOptimizedChunks: false,
-  }
-}

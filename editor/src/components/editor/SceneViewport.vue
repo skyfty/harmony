@@ -381,6 +381,8 @@ import {
   clampBoundaryWallComponentProps,
   clampWallProps,
   resolveModelCollisionComponentPropsFromNode,
+  resolveViewPointComponentProps,
+  resolveViewPointWorldCameraPose,
 } from '@schema/components'
 
 import type {
@@ -497,7 +499,7 @@ const nodePickerStore = useNodePickerStore()
 const assetCacheStore = useAssetCacheStore()
 const terrainStore = useTerrainStore()
 
-const { panelVisibility, sceneLifecycle, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
+const { panelVisibility, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
 const {
   brushRadius,
   brushStrength,
@@ -518,8 +520,8 @@ const {
 } =
   storeToRefs(terrainStore)
 
-const sceneSwitchToken = computed(() => sceneLifecycle.value.sessionToken)
-const isSceneReady = computed(() => sceneLifecycle.value.status === 'ready')
+const sceneSwitchToken = computed(() => sceneStore.sceneSwitchToken)
+const isSceneReady = computed(() => sceneStore.isSceneReady)
 
 const hasGroundNode = computed(() => {
   const ground = sceneStore.groundNode
@@ -635,6 +637,7 @@ const groundScatterRuntimeReason = computed(() => {
 const viewportEl = ref<HTMLDivElement | null>(null)
 const surfaceRef = ref<HTMLDivElement | null>(null)
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const viewPointPreviewCanvasRef = ref<HTMLCanvasElement | null>(null)
 const gizmoContainerRef = ref<HTMLDivElement | null>(null)
 const statsHostRef = ref<HTMLDivElement | null>(null)
 
@@ -1069,6 +1072,10 @@ let scene: THREE.Scene | null = null
 let renderer: THREE.WebGLRenderer | null = null
 let camera: THREE.PerspectiveCamera | null = null
 let perspectiveCamera: THREE.PerspectiveCamera | null = null
+let viewPointPreviewRenderer: THREE.WebGLRenderer | null = null
+let viewPointPreviewCamera: THREE.PerspectiveCamera | null = null
+let viewPointCameraHelper: THREE.CameraHelper | null = null
+let viewPointPreviewDirty = true
 let mapControls: SceneViewportCameraControls | null = null
 let transformControls: TransformControls | null = null
 let transformControlsDirty = false
@@ -8788,6 +8795,40 @@ function buildGuideboardPlacementRoot(name: string): THREE.Object3D {
   return guideboardRoot
 }
 
+function buildEmptyNodePlacementRoot(name: string): THREE.Object3D {
+  const markerCore = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x67c7ff }),
+  )
+  markerCore.name = `${name} Core`
+  markerCore.castShadow = false
+  markerCore.receiveShadow = false
+  markerCore.renderOrder = 1000
+  markerCore.userData = {
+    ...(markerCore.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerAxes = new THREE.AxesHelper(0.55)
+  markerAxes.renderOrder = 1000
+  markerAxes.userData = {
+    ...(markerAxes.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerRoot = new THREE.Object3D()
+  markerRoot.name = name
+  markerRoot.add(markerAxes, markerCore)
+  markerRoot.userData = {
+    ...(markerRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+  return markerRoot
+}
+
 function handleStartViewportPlacement(item: ViewportPlacementItem): void {
   viewportPlacementMenuOpen.value = false
   if (activeBuildTool.value) {
@@ -8887,6 +8928,23 @@ async function placeViewportItemAtPoint(item: ViewportPlacementItem, basePoint: 
       }
       ensureBehaviorComponentForNode(created.id)
     }
+    return Boolean(created)
+  }
+
+  if (item.kind === 'empty-node') {
+    const name = getNextViewportPlacementName('Empty Node')
+    const created = await sceneStore.addModelNode({
+      object: buildEmptyNodePlacementRoot(name),
+      nodeType: 'Empty',
+      name,
+      position: basePoint.clone(),
+      rotation,
+      parentId: parentId ?? undefined,
+      snapToGrid: false,
+      editorFlags: {
+        ignoreGridSnapping: true,
+      },
+    })
     return Boolean(created)
   }
 
@@ -10666,8 +10724,141 @@ const selectionDragIntersectionHelper = new THREE.Vector3()
 const viewPointScaleHelper = new THREE.Vector3()
 const viewPointParentScaleHelper = new THREE.Vector3()
 const viewPointNodeScaleHelper = new THREE.Vector3()
+const viewPointPreviewWorldPosition = new THREE.Vector3()
+const viewPointPreviewWorldQuaternion = new THREE.Quaternion()
+const viewPointPreviewWorldUp = new THREE.Vector3()
+const viewPointPreviewWorldTarget = new THREE.Vector3()
+const viewPointPreviewCameraPose = {
+  position: viewPointPreviewWorldPosition,
+  quaternion: viewPointPreviewWorldQuaternion,
+  up: viewPointPreviewWorldUp,
+  target: viewPointPreviewWorldTarget,
+  fov: 0,
+  near: 0,
+  far: 0,
+  zoom: 1,
+}
+const selectedViewPointComponent = computed(() => {
+  const node = sceneStore.selectedNode ?? null
+  if (!node) {
+    return null
+  }
+  return resolveViewPointComponentProps(
+    (node.components?.[VIEW_POINT_COMPONENT_TYPE] as SceneNodeComponentState<ViewPointComponentProps> | undefined) ?? null,
+  )
+})
+const viewPointPreviewVisible = computed(() =>
+  Boolean(sceneStore.selectedNodeId && selectedViewPointComponent.value),
+)
 const cameraTransitionCurrentPosition = new THREE.Vector3()
 const cameraTransitionCurrentTarget = new THREE.Vector3()
+
+function syncViewPointPreviewRendererSize(): void {
+  const previewRenderer = viewPointPreviewRenderer
+  const previewCanvas = viewPointPreviewCanvasRef.value
+  if (!previewRenderer || !previewCanvas) {
+    return
+  }
+  const width = Math.max(1, Math.round(previewCanvas.clientWidth || 220))
+  const height = Math.max(1, Math.round(previewCanvas.clientHeight || 132))
+  previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  previewRenderer.setSize(width, height, false)
+  if (viewPointPreviewCamera) {
+    viewPointPreviewCamera.aspect = width / Math.max(height, 1)
+    viewPointPreviewCamera.updateProjectionMatrix()
+  }
+}
+
+function resolveSelectedViewPointNodeObject(): THREE.Object3D | null {
+  const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  if (!selectedId) {
+    return null
+  }
+  return objectMap.get(selectedId) ?? null
+}
+
+function syncSelectedViewPointCameraFromProps(): boolean {
+  const previewCamera = viewPointPreviewCamera
+  const componentProps = selectedViewPointComponent.value
+  const targetObject = resolveSelectedViewPointNodeObject()
+  if (!previewCamera || !componentProps || !targetObject) {
+    if (viewPointCameraHelper) {
+      viewPointCameraHelper.visible = false
+    }
+    return false
+  }
+  targetObject.updateWorldMatrix(true, false)
+  const pose = resolveViewPointWorldCameraPose(targetObject.matrixWorld, componentProps, viewPointPreviewCameraPose)
+  previewCamera.position.copy(pose.position)
+  previewCamera.quaternion.copy(pose.quaternion)
+  previewCamera.up.copy(pose.up)
+  previewCamera.lookAt(pose.target)
+  previewCamera.fov = pose.fov
+  previewCamera.near = pose.near
+  previewCamera.far = pose.far
+  previewCamera.zoom = pose.zoom
+  previewCamera.updateProjectionMatrix()
+  previewCamera.updateMatrixWorld(true)
+  if (viewPointCameraHelper) {
+    viewPointCameraHelper.visible = true
+    viewPointCameraHelper.update()
+  }
+  viewPointPreviewDirty = true
+  return true
+}
+
+function renderViewPointPreview(): void {
+  if (!viewPointPreviewDirty) {
+    return
+  }
+  const previewRenderer = viewPointPreviewRenderer
+  const previewCamera = viewPointPreviewCamera
+  if (!previewRenderer || !previewCamera || !scene) {
+    return
+  }
+  if (!syncSelectedViewPointCameraFromProps()) {
+    return
+  }
+  const helperVisible = viewPointCameraHelper?.visible ?? false
+  const transformHelper = transformControls?.getHelper?.() ?? null
+  const transformHelperVisible = transformHelper?.visible ?? false
+  if (viewPointCameraHelper) {
+    viewPointCameraHelper.visible = false
+  }
+  if (transformHelper) {
+    transformHelper.visible = false
+  }
+  previewRenderer.render(scene, previewCamera)
+  if (viewPointCameraHelper) {
+    viewPointCameraHelper.visible = helperVisible
+  }
+  if (transformHelper) {
+    transformHelper.visible = transformHelperVisible
+  }
+  viewPointPreviewDirty = false
+}
+
+watch(viewPointPreviewVisible, async (visible) => {
+  if (!visible) {
+    if (viewPointCameraHelper) {
+      viewPointCameraHelper.visible = false
+    }
+    return
+  }
+  await nextTick()
+  if (!viewPointPreviewRenderer && viewPointPreviewCanvasRef.value) {
+    viewPointPreviewRenderer = new THREE.WebGLRenderer({
+      canvas: viewPointPreviewCanvasRef.value,
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: false,
+    })
+    viewPointPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace
+  }
+  syncViewPointPreviewRendererSize()
+  viewPointPreviewDirty = true
+}, { immediate: true })
 
 type InstancedPickProxyBoundsPayload = { min: [number, number, number]; max: [number, number, number] }
 
@@ -14004,6 +14195,22 @@ function initScene() {
   perspectiveCamera.position.set(DEFAULT_CAMERA_POSITION.x, DEFAULT_CAMERA_POSITION.y, DEFAULT_CAMERA_POSITION.z)
   perspectiveCamera.lookAt(new THREE.Vector3(DEFAULT_CAMERA_TARGET.x, DEFAULT_CAMERA_TARGET.y, DEFAULT_CAMERA_TARGET.z))
   camera = perspectiveCamera
+  viewPointPreviewCamera = new THREE.PerspectiveCamera(DEFAULT_PERSPECTIVE_FOV, 220 / 132, 0.1, 5000)
+  viewPointCameraHelper = new THREE.CameraHelper(viewPointPreviewCamera)
+  viewPointCameraHelper.visible = false
+  scene.add(viewPointPreviewCamera)
+  scene.add(viewPointCameraHelper)
+  if (!viewPointPreviewRenderer && viewPointPreviewCanvasRef.value) {
+    viewPointPreviewRenderer = new THREE.WebGLRenderer({
+      canvas: viewPointPreviewCanvasRef.value,
+      antialias: true,
+      alpha: true,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: false,
+    })
+    viewPointPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace
+    syncViewPointPreviewRendererSize()
+  }
   ensureSceneCsmShadowRuntime()
 
   applyCameraControlMode()
@@ -14062,6 +14269,8 @@ function initScene() {
     ;(mapControls as any)?.handleResize?.()
     gizmoControls?.update()
     scheduleViewportCompositionUpdate(true)
+    syncViewPointPreviewRendererSize()
+    viewPointPreviewDirty = true
   })
   resizeObserver.observe(viewportEl.value)
 
@@ -14661,6 +14870,8 @@ function animate() {
   updateCameraNorthHeading()
   sceneCsmShadowRuntime?.update()
   renderViewportFrame()
+  viewPointPreviewDirty = true
+  renderViewPointPreview()
   prof.render = performance.now() - t0_render
   const t0_gizmoRender = performance.now()
   gizmoControls?.render()
@@ -14720,6 +14931,21 @@ function disposeScene() {
   disposeSkyResources()
   disposeSceneCsmShadowRuntime()
   disposeBackgroundResources()
+  if (viewPointCameraHelper) {
+    viewPointCameraHelper.removeFromParent()
+    viewPointCameraHelper.geometry?.dispose?.()
+    const materials = Array.isArray(viewPointCameraHelper.material)
+      ? viewPointCameraHelper.material
+      : [viewPointCameraHelper.material]
+    materials.forEach((material) => material?.dispose?.())
+    viewPointCameraHelper = null
+  }
+  if (viewPointPreviewCamera) {
+    viewPointPreviewCamera.removeFromParent()
+    viewPointPreviewCamera = null
+  }
+  viewPointPreviewRenderer?.dispose()
+  viewPointPreviewRenderer = null
 
   if (gizmoControls) {
     gizmoControls.dispose()
@@ -23167,6 +23393,15 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       object = createGuideboardPlaceholderObject(node)
       registerRuntimeObject(node.id, object)
     }
+  } else if (nodeType === 'Empty' && node.userData?.emptyNode === true) {
+    const runtimeObject = getRuntimeObject(node.id)
+    if (runtimeObject) {
+      runtimeObject.userData.usesRuntimeObject = true
+      object = runtimeObject
+    } else {
+      object = buildEmptyNodeRuntimeObject(node)
+      registerRuntimeObject(node.id, object)
+    }
   } else {
     let container = getRuntimeObject(node.id)
     if (container !== null) {
@@ -23220,6 +23455,40 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   sceneCsmShadowRuntime?.registerObject(object)
 
   return object
+}
+
+function buildEmptyNodeRuntimeObject(node: SceneNode): THREE.Object3D {
+  const markerCore = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0x67c7ff }),
+  )
+  markerCore.name = `${node.name ?? 'Empty Node'} Core`
+  markerCore.castShadow = false
+  markerCore.receiveShadow = false
+  markerCore.renderOrder = 1000
+  markerCore.userData = {
+    ...(markerCore.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerAxes = new THREE.AxesHelper(0.55)
+  markerAxes.renderOrder = 1000
+  markerAxes.userData = {
+    ...(markerAxes.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+
+  const markerRoot = new THREE.Object3D()
+  markerRoot.name = node.name ?? 'Empty Node'
+  markerRoot.add(markerAxes, markerCore)
+  markerRoot.userData = {
+    ...(markerRoot.userData ?? {}),
+    ignoreGridSnapping: true,
+    emptyNode: true,
+  }
+  return markerRoot
 }
 
 function applyTransformSpaceForSelection(tool: EditorTool, primaryId: string | null): void {
@@ -23696,10 +23965,7 @@ onMounted(() => {
     })
     viewportResizeObserver.observe(viewportEl.value)
   }
-  if (isSceneReady.value) {
-    syncSceneGraph()
-    void restoreGroundAllGuarded()
-  }
+  void sceneStore.ensureCurrentSceneLoaded()
 })
 
 onBeforeUnmount(() => {
@@ -24493,6 +24759,10 @@ defineExpose({
         </div>
       </div>
       <div class="viewport-bottom-right-hud">
+        <div v-if="viewPointPreviewVisible" class="view-point-preview-card">
+          <div class="view-point-preview-card__header">ViewPoint Camera</div>
+          <canvas ref="viewPointPreviewCanvasRef" class="view-point-preview-card__canvas" />
+        </div>
         <div class="csm-hud">
           <v-menu
             v-model="csmMenuOpen"
@@ -24865,9 +25135,37 @@ defineExpose({
   bottom: 16px;
   z-index: 10;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 6px;
   pointer-events: auto;
+}
+
+.view-point-preview-card {
+  width: 220px;
+  padding: 10px;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(236, 244, 255, 0.82)),
+    linear-gradient(135deg, rgba(130, 206, 255, 0.16), rgba(255, 255, 255, 0.04));
+  box-shadow: 0 14px 32px rgba(6, 16, 28, 0.24);
+  backdrop-filter: blur(10px);
+}
+
+.view-point-preview-card__header {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(32, 48, 68, 0.72);
+}
+
+.view-point-preview-card__canvas {
+  display: block;
+  width: 200px;
+  height: 120px;
+  border-radius: 10px;
+  background: radial-gradient(circle at 30% 20%, rgba(116, 207, 255, 0.2), rgba(10, 16, 24, 0.96));
 }
 
 .viewport-bottom-right-hud__compass {

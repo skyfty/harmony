@@ -15,7 +15,8 @@
   "exclude": [
     "node_modules",
     "common/**/__tests__/*",
-    "components/**/__tests__/*"
+    "components/**/__tests__/*",
+    "../schema/tests/**/*"
   ],
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
@@ -28,6 +29,7 @@
     "moduleResolution": "bundler",
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "paths": {
+      "@schema": ["../schema/index.ts"],
       "@harmony/schema": ["../schema/index.ts"],
       "@harmony/schema/*": ["../schema/*"],
       "@harmony/physics-core": ["../physics-core/src/index.ts"],

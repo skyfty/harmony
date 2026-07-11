@@ -141,7 +141,7 @@ function openProfileEdit() {
 }
 
 function openBusinessPage() {
-  uni.navigateTo({ url: '/pages/business/index' });
+  uni.navigateTo({ url: '/pages/business-hub/index' });
 }
 
 function nav(url: string) {

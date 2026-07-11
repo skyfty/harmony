@@ -1106,7 +1106,7 @@ function buildSceneDocumentSidecarPayload(document: StoredSceneDocument): SceneD
 type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
   assetCatalog?: Record<string, ProjectAsset[]>
   currentSceneId?: string | null
-  sceneLifecycle?: SceneLifecycleState
+  isSceneReady?: boolean
   hasUnsavedChanges?: boolean
   requestSceneAutoSave?: (options?: { mode?: SceneAutoSaveMode }) => void
   queueSceneNodePatch: (nodeId: string, fields: ScenePatchField[], options?: { bumpVersion?: boolean }) => boolean
@@ -1122,7 +1122,7 @@ type SceneStoreGroundSplatBakeTarget = Pick<SceneState, 'nodes'> & {
 }
 
 function requestSceneAutoSaveAfterLandformBake(store: SceneStoreGroundSplatBakeTarget): void {
-  if (!store.currentSceneId || store.sceneLifecycle?.status !== 'ready' || !store.requestSceneAutoSave) {
+  if (!store.currentSceneId || !store.isSceneReady || !store.requestSceneAutoSave) {
     return
   }
   if (typeof store.hasUnsavedChanges === 'boolean') {
@@ -1772,6 +1772,7 @@ function sceneNodeTypeSupportsMaterials(nodeType: SceneNodeType | string | null 
     normalized !== 'Light'
     && normalized !== 'Group'
     && normalized !== 'Camera'
+    && normalized !== 'Empty'
     && normalized !== 'WarpGate'
     && normalized !== 'Guideboard'
   )
@@ -2277,15 +2278,18 @@ type SceneLoadProgress = {
   detail?: string
 }
 
-type OpenSceneOptions = {
+type SelectSceneOptions = {
   projectId?: string | null
   setLastEdited?: boolean
+  forceReload?: boolean
   showLoadingOverlay?: boolean
   onProgress?: (progress: SceneLoadProgress) => void
 }
 
+type OpenSceneOptions = Omit<SelectSceneOptions, 'forceReload'>
+
 function emitSceneLoadProgress(
-  callback: OpenSceneOptions['onProgress'],
+  callback: SelectSceneOptions['onProgress'],
   payload: SceneLoadProgress,
 ): void {
   callback?.({
@@ -4396,6 +4400,13 @@ function evaluateViewPointAttributes(
   const next: Record<string, unknown> = {}
   let mutated = false
   let overrideVisibility: boolean | undefined
+  const cameraOverrides: Partial<ViewPointComponentProps> = {}
+
+  const assignNumericOverride = (key: keyof ViewPointComponentProps, value: unknown) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      cameraOverrides[key] = value as never
+    }
+  }
 
   for (const [key, value] of Object.entries(userData)) {
     if (key === 'viewPoint') {
@@ -4414,6 +4425,26 @@ function evaluateViewPointAttributes(
       }
       continue
     }
+    if (key === 'cameraFov') {
+      mutated = true
+      assignNumericOverride('cameraFov', value)
+      continue
+    }
+    if (key === 'cameraNear') {
+      mutated = true
+      assignNumericOverride('cameraNear', value)
+      continue
+    }
+    if (key === 'cameraFar') {
+      mutated = true
+      assignNumericOverride('cameraFar', value)
+      continue
+    }
+    if (key === 'cameraZoom') {
+      mutated = true
+      assignNumericOverride('cameraZoom', value)
+      continue
+    }
     if (key === 'viewPointRadius' || key === 'viewPointBaseScale') {
       mutated = true
       continue
@@ -4423,6 +4454,9 @@ function evaluateViewPointAttributes(
 
   if (overrideVisibility !== undefined) {
     componentOverrides = { ...(componentOverrides ?? {}), initiallyVisible: overrideVisibility }
+  }
+  if (Object.keys(cameraOverrides).length) {
+    componentOverrides = { ...(componentOverrides ?? {}), ...cameraOverrides }
   }
 
   sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData
@@ -8394,7 +8428,7 @@ function clearSceneAutoSaveTimer(): void {
 }
 
 function computeSceneAutoSaveMode(store: SceneAutoSaveTarget): SceneAutoSaveMode {
-  if (store.activeTransformNodeId && store.sceneLifecycle.status === 'ready') {
+  if (store.activeTransformNodeId && store.isSceneReady) {
     return 'interactive'
   }
   if (sceneAutoSaveRequestedGeneration - sceneAutoSaveSavedGeneration >= 2) {
@@ -8427,7 +8461,7 @@ function scheduleSceneAutoSave(store: SceneAutoSaveTarget, mode?: SceneAutoSaveM
 const groundHeightSidecarSaveScheduler = createLatestIdleScheduler<{ sceneId: string }>((request) => {
   void (async () => {
     const sceneStore = useSceneStore()
-    if (sceneStore.currentSceneId !== request.sceneId || sceneStore.sceneLifecycle.status !== 'ready') {
+    if (sceneStore.currentSceneId !== request.sceneId || !sceneStore.isSceneReady) {
       return
     }
     const groundNode = findGroundNode(sceneStore.nodes)
@@ -8450,7 +8484,7 @@ const groundHeightSidecarSaveScheduler = createLatestIdleScheduler<{ sceneId: st
 const groundScatterSidecarSaveScheduler = createLatestIdleScheduler<{ sceneId: string }>((request) => {
   void (async () => {
     const sceneStore = useSceneStore()
-    if (sceneStore.currentSceneId !== request.sceneId || sceneStore.sceneLifecycle.status !== 'ready') {
+    if (sceneStore.currentSceneId !== request.sceneId || !sceneStore.isSceneReady) {
       return
     }
     const groundNode = findGroundNode(sceneStore.nodes)
@@ -8479,7 +8513,7 @@ const SCENE_AUTO_SAVE_DELAY_MS: Record<SceneAutoSaveMode, number> = {
 
 type SceneAutoSaveTarget = Pick<
   SceneState,
-  'currentSceneId' | 'hasUnsavedChanges' | 'activeTransformNodeId' | 'sceneLifecycle'
+  'currentSceneId' | 'hasUnsavedChanges' | 'activeTransformNodeId' | 'isSceneReady'
 > & {
   requestSceneAutoSave: (options?: { mode?: SceneAutoSaveMode }) => void
   flushPendingSceneAutoSave: (options?: { force?: boolean }) => Promise<StoredSceneDocument | null>
@@ -8488,14 +8522,14 @@ type SceneAutoSaveTarget = Pick<
 function commitSceneSnapshot(
   store: Pick<
     SceneState,
-    'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta' | 'activeTransformNodeId' | 'sceneLifecycle'
+    'nodes' | 'currentSceneId' | 'environment' | 'hasUnsavedChanges' | 'groundNode' | 'currentSceneMeta' | 'activeTransformNodeId' | 'isSceneReady'
   > & { requestSceneAutoSave?: (options?: { mode?: SceneAutoSaveMode }) => void },
   options: { updateNodes?: boolean; autoSaveMode?: SceneAutoSaveMode } = {},
 ) {
   if (!store.currentSceneId) {
     return
   }
-  if (store.sceneLifecycle.status !== 'ready') {
+  if (!store.isSceneReady) {
     return
   }
 
@@ -8511,7 +8545,7 @@ function commitSceneSnapshot(
   store.requestSceneAutoSave?.({
     mode:
       options.autoSaveMode
-      ?? (store.activeTransformNodeId && store.sceneLifecycle.status === 'ready' ? 'interactive' : 'structural'),
+      ?? (store.activeTransformNodeId && store.isSceneReady ? 'interactive' : 'structural'),
   })
 }
 
@@ -8543,6 +8577,8 @@ function createInitialSceneState(): SceneState {
     currentSceneId: null,
     currentSceneMeta: null,
     sceneLifecycle: createSceneLifecycleState(),
+    sceneSwitchToken: 0,
+    isSceneReady: false,
     nodes: clonedNodes,
     groundNode: initialGroundNode,
     materials: cloneSceneMaterials(initialMaterials),
@@ -8603,6 +8639,8 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.currentSceneId = null
   store.currentSceneMeta = null
   store.sceneLifecycle = createSceneLifecycleState()
+  store.sceneSwitchToken += 1
+  store.isSceneReady = false
   replaceSceneNodes(store, cloneSceneNodes(initialState.nodes))
   store.environment = cloneEnvironmentSettings(initialState.environment)
   store.materials = cloneSceneMaterials(initialState.materials)
@@ -12494,7 +12532,9 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested asset')
       }
 
-      const placementAsset = asset
+      const placementAsset = this.ensureSceneAssetRegistered(asset, {
+        source: asset.source ?? undefined,
+      })
 
       const parentMap = buildParentMap(this.nodes)
       let targetParentId = options.parentId ?? null
@@ -12574,7 +12614,7 @@ export const useSceneStore = defineStore('scene', {
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldTransform(node.id))
         }
-        return { asset, node }
+        return { asset: placementAsset, node }
       }
 
       const placeholder = this.addPlaceholderNode(placementAsset, {
@@ -12612,6 +12652,10 @@ export const useSceneStore = defineStore('scene', {
       if (!asset) {
         throw new Error('Unable to find the requested asset')
       }
+
+      const placementAsset = this.ensureSceneAssetRegistered(asset, {
+        source: asset.source ?? undefined,
+      })
 
       const parentMap = buildParentMap(this.nodes)
       let targetParentId = options.parentId ?? null
@@ -12664,21 +12708,21 @@ export const useSceneStore = defineStore('scene', {
         })
       }
 
-      if (asset.type === 'prefab') {
-        const node = await this.spawnPrefabWithPlaceholder(asset.id, position ?? null, {
+      if (placementAsset.type === 'prefab') {
+        const node = await this.spawnPrefabWithPlaceholder(placementAsset.id, position ?? null, {
           parentId: targetParentId,
           rotation: options.rotation ?? null,
         })
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldPosition(node?.id ?? null, position))
         }
-        return { asset, node }
+        return { asset: placementAsset, node }
       }
 
-      const supportsDirectPlacement = asset.type === 'model' || asset.type === 'mesh' || asset.type === 'lod'
+      const supportsDirectPlacement = placementAsset.type === 'model' || placementAsset.type === 'mesh' || placementAsset.type === 'lod'
       const node = supportsDirectPlacement
         ? await this.addPlaceableAssetNode({
-            asset,
+            asset: placementAsset,
             position,
             rotation: options.rotation,
             parentId: targetParentId ?? undefined,
@@ -12688,22 +12732,22 @@ export const useSceneStore = defineStore('scene', {
         if (options.preserveWorldPosition) {
           await this.withHistorySuppressed(() => adjustNodeWorldPosition(node.id, position))
         }
-        return { asset, node }
+        return { asset: placementAsset, node }
       }
 
       const assetCache = useAssetCacheStore()
-      const transform = computeAssetSpawnTransform(asset, position, {
+      const transform = computeAssetSpawnTransform(placementAsset, position, {
         rotation: options.rotation ? toPlainVector(options.rotation) : null,
       })
-      const placeholder = this.addPlaceholderNode(asset, transform, {
+      const placeholder = this.addPlaceholderNode(placementAsset, transform, {
         parentId: targetParentId,
       })
       if (options.preserveWorldPosition) {
         await this.withHistorySuppressed(() => adjustNodeWorldPosition(placeholder.id, position))
       }
-      this.observeAssetDownloadForNode(placeholder.id, asset)
-      assetCache.setError(asset.id, null)
-      void assetCache.downloadProjectAsset(asset).catch((error) => {
+      this.observeAssetDownloadForNode(placeholder.id, placementAsset)
+      assetCache.setError(placementAsset.id, null)
+      void assetCache.downloadProjectAsset(placementAsset).catch((error) => {
         const target = findNodeById(this.nodes, placeholder.id)
       if (target) {
         target.downloadStatus = 'error'
@@ -12712,7 +12756,7 @@ export const useSceneStore = defineStore('scene', {
       }
       })
 
-      return { asset, node: placeholder }
+      return { asset: placementAsset, node: placeholder }
     },
     resetProjectTree() {
       this.packageDirectoryCache = {}
@@ -13208,7 +13252,7 @@ export const useSceneStore = defineStore('scene', {
         gleaned: asset.gleaned ?? true,
       }
 
-      const existing = this.getRegisteredAsset(assetId)
+      const existing = this.getCatalogAsset(assetId)
       if (existing) {
         const syncSource = options.source ?? existing.source ?? normalizedAsset.source
         if (syncSource) {
@@ -13244,6 +13288,12 @@ export const useSceneStore = defineStore('scene', {
         autoSave: options.autoSave,
       })
     },
+    /**
+     * Legacy browse lookup used by UI selection code.
+     * This can resolve assets that are visible in the project tree even if they
+     * are not yet registered in the scene catalog.
+     * Use `getCatalogAsset()` when the caller needs a strict scene-catalog asset.
+     */
     getRegisteredAsset(assetId: string): ProjectAsset | null {
       const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
       if (!normalizedAssetId) {
@@ -13257,6 +13307,20 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return findAssetInTree(this.projectTree, canonicalAssetId)
+    },
+
+    /**
+     * Strict scene-catalog lookup.
+     * Returns only assets that are already registered in the active scene asset library.
+     */
+    getCatalogAsset(assetId: string): ProjectAsset | null {
+      const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : ''
+      if (!normalizedAssetId) {
+        return null
+      }
+
+      const canonicalAssetId = normalizeAssetIdWithRegistry(normalizedAssetId, this.assetRegistry) ?? normalizedAssetId
+      return this.findAssetInCatalog(canonicalAssetId)
     },
 
     getAssetRegistryEntry(assetId: string): SceneAssetRegistryEntry | null {
@@ -14036,6 +14100,10 @@ export const useSceneStore = defineStore('scene', {
           // Only skip registration when the asset already exists in scene assets.
           const existingServerAsset = this.findAssetInCatalog(asset.id)
           if (existingServerAsset) {
+            const existingRegistryEntry = this.getAssetRegistryEntry(existingServerAsset.id)
+            if (!existingRegistryEntry) {
+              void this.syncAssetRegistryEntry(existingServerAsset, createServerAssetSource(existingServerAsset.id))
+            }
             resolved.push(existingServerAsset)
             return
           }
@@ -19205,7 +19273,7 @@ export const useSceneStore = defineStore('scene', {
       if (!this.currentSceneId) {
         return
       }
-      if (this.sceneLifecycle.status !== 'ready') {
+      if (!this.isSceneReady) {
         return
       }
       if (!this.hasUnsavedChanges) {
@@ -19223,7 +19291,7 @@ export const useSceneStore = defineStore('scene', {
         }
       }
 
-      if (!this.currentSceneId || this.sceneLifecycle.status !== 'ready' || !this.hasUnsavedChanges) {
+      if (!this.currentSceneId || !this.isSceneReady || !this.hasUnsavedChanges) {
         return null
       }
 
@@ -19292,6 +19360,8 @@ export const useSceneStore = defineStore('scene', {
       options?: GroundSettings | { groundSettings?: Partial<GroundSettings>; planningData?: PlanningSceneData | null } | null,
     ) {
       beginSceneLifecycleSession(this, null, 'applying-scene')
+      this.sceneSwitchToken += 1
+      this.isSceneReady = false
       const scenesStore = useScenesStore()
       const projectsStore = useProjectsStore()
       const projectId = projectsStore.activeProjectId
@@ -19333,6 +19403,7 @@ export const useSceneStore = defineStore('scene', {
       try {
         await scenesStore.saveSceneDocument(sceneDocument)
         this.applySceneDocumentToState(sceneDocument)
+        this.isSceneReady = true
         updateSceneLifecycle(this, {
           sceneId: sceneDocument.id,
           status: 'ready',
@@ -19341,6 +19412,7 @@ export const useSceneStore = defineStore('scene', {
           error: null,
         })
       } catch (error) {
+        this.isSceneReady = false
         updateSceneLifecycle(this, {
           sceneId: null,
           status: 'failed',
@@ -19355,7 +19427,7 @@ export const useSceneStore = defineStore('scene', {
       await projectsStore.setLastEditedScene(projectId, sceneDocument.id)
       return sceneDocument.id
     },
-    async openScene(sceneId: string, options: OpenSceneOptions = {}) {
+    async selectScene(sceneId: string, options: SelectSceneOptions = {}) {
       const normalizedSceneId = typeof sceneId === 'string' ? sceneId.trim() : ''
       if (!normalizedSceneId) {
         throw new Error('Scene id is required')
@@ -19363,10 +19435,17 @@ export const useSceneStore = defineStore('scene', {
 
       const projectsStore = useProjectsStore()
       const scenesStore = useScenesStore()
+      this.sceneSwitchToken += 1
+      const sceneSwitchToken = this.sceneSwitchToken
       const projectId = typeof options.projectId === 'string' && options.projectId.trim().length
         ? options.projectId.trim()
         : projectsStore.activeProjectId ?? null
       const showLoadingOverlay = options.showLoadingOverlay ?? !options.onProgress
+      const forceReload = options.forceReload === true
+      if (!forceReload && normalizedSceneId === this.currentSceneId) {
+        await this.ensureCurrentSceneLoaded()
+        return true
+      }
       const reportProgress = (step: string, progress: number, detail?: string) => {
         const nextProgress = Math.max(0, Math.min(100, Math.round(progress)))
         updateSceneLifecycle(this, {
@@ -19377,6 +19456,7 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const sessionToken = beginSceneLifecycleSession(this, normalizedSceneId, 'syncing-workspace')
+      this.isSceneReady = false
       this.clearCurrentCompiledGroundPackage()
       updateSceneLifecycle(this, {
         sceneId: normalizedSceneId,
@@ -19398,7 +19478,7 @@ export const useSceneStore = defineStore('scene', {
               reportProgress(step, 8 + progress * 0.12, detail)
             },
           })
-          if (!isCurrentSceneLifecycleSession(this, sessionToken)) {
+          if (!isCurrentSceneLifecycleSession(this, sessionToken) || sceneSwitchToken !== this.sceneSwitchToken) {
             return false
           }
         }
@@ -19415,7 +19495,7 @@ export const useSceneStore = defineStore('scene', {
           })
           return false
         }
-        if (!isCurrentSceneLifecycleSession(this, sessionToken)) {
+        if (!isCurrentSceneLifecycleSession(this, sessionToken) || sceneSwitchToken !== this.sceneSwitchToken) {
           return false
         }
 
@@ -19423,7 +19503,7 @@ export const useSceneStore = defineStore('scene', {
         updateSceneLifecycle(this, { status: 'hydrating-assets' })
         const embeddedMigration = await hydrateSceneDocumentWithEmbeddedAssets(scene)
         this.nodes.forEach((node) => releaseRuntimeTree(node))
-        if (!isCurrentSceneLifecycleSession(this, sessionToken)) {
+        if (!isCurrentSceneLifecycleSession(this, sessionToken) || sceneSwitchToken !== this.sceneSwitchToken) {
           return false
         }
 
@@ -19445,7 +19525,7 @@ export const useSceneStore = defineStore('scene', {
             reportProgress(mapped.step, mapped.progress, mapped.detail)
           },
         })
-        if (!isCurrentSceneLifecycleSession(this, sessionToken)) {
+        if (!isCurrentSceneLifecycleSession(this, sessionToken) || sceneSwitchToken !== this.sceneSwitchToken) {
           return false
         }
 
@@ -19481,7 +19561,7 @@ export const useSceneStore = defineStore('scene', {
             reportProgress(mapped.step, mapped.progress, mapped.detail)
           },
         })
-        if (!isCurrentSceneLifecycleSession(this, sessionToken)) {
+        if (!isCurrentSceneLifecycleSession(this, sessionToken) || sceneSwitchToken !== this.sceneSwitchToken) {
           return false
         }
 
@@ -19492,6 +19572,7 @@ export const useSceneStore = defineStore('scene', {
           detail: 'Scene graph, assets, and terrain cache are ready.',
           error: null,
         })
+        this.isSceneReady = true
 
         const setLastEdited = options.setLastEdited !== false
         if (setLastEdited && projectsStore.activeProjectId && projectsStore.activeProjectId === scene.projectId) {
@@ -19513,6 +19594,41 @@ export const useSceneStore = defineStore('scene', {
           })
         }
         throw error
+      }
+    },
+    async openScene(sceneId: string, options: OpenSceneOptions = {}) {
+      return await this.selectScene(sceneId, options)
+    },
+    async ensureCurrentSceneLoaded() {
+      this.isSceneReady = false
+      const sceneId = this.currentSceneId
+      const sceneSwitchToken = this.sceneSwitchToken
+      let hydrationSucceeded = false
+      try {
+        if (sceneId) {
+          const scenesStore = useScenesStore()
+          const groundNode = findGroundNode(this.nodes)
+          const heightSidecar = await scenesStore.loadGroundHeightSidecar(sceneId)
+          await useGroundHeightmapStore().hydrateSceneDocument(groundNode, heightSidecar)
+
+          const splatSidecar = await scenesStore.loadGroundSplatSidecar(sceneId)
+          await useGroundSplatStore().hydrateSceneDocument(sceneId, findGroundNode(this.nodes), splatSidecar)
+
+          const scatterSidecar = await scenesStore.loadGroundScatterSidecar(sceneId)
+          await useGroundScatterStore().hydrateSceneDocument(sceneId, findGroundNode(this.nodes), scatterSidecar)
+
+          const hydratedGroundNode = findGroundNode(this.nodes)
+          attachGroundSplatRuntimeToNode(sceneId, hydratedGroundNode)
+          attachGroundScatterRuntimeToNode(sceneId, hydratedGroundNode)
+          await this.ensureCurrentSceneCompiledGroundReady()
+        }
+
+        await this.refreshRuntimeState({ showOverlay: true, refreshViewport: false })
+        hydrationSucceeded = true
+      } finally {
+        if (sceneSwitchToken === this.sceneSwitchToken) {
+          this.isSceneReady = hydrationSucceeded && Boolean(sceneId)
+        }
       }
     },
     async deleteScene(sceneId: string): Promise<{ deleted: boolean; projectId: string | null; hasRemainingScenes: boolean }> {

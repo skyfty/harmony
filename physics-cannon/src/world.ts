@@ -4,6 +4,7 @@ import {
   normalizeVector,
   resolveCharacterProbeOffsets,
   resolveSteerableWheelIndices,
+  resolvePhysicsCharacterMotorYawFromWorldQuaternion,
   rotateVectorByQuaternion,
   PhysicsWorldBase,
   type PhysicsWorldBodyState,
@@ -234,6 +235,7 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
 
   protected createCharacterState(desc: PhysicsCharacterDesc, body: CANNON.Body): CharacterState {
     const groundProbe = resolveCharacterGroundProbeGeometry(body, desc)
+    const motorYaw = resolvePhysicsCharacterMotorYawFromWorldQuaternion(body.quaternion, desc.forwardAxis)
     body.material = new CANNON.Material(`character:${desc.characterId}`)
     body.material.friction = 0
     body.material.restitution = 0
@@ -247,7 +249,7 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
       bodyId: desc.bodyId,
       body,
       input: null,
-      motorState: createPhysicsCharacterMotorState(),
+      motorState: createPhysicsCharacterMotorState(motorYaw),
       groundProbeRadius: groundProbe.radius,
       groundProbeBaseOffsetY: groundProbe.baseOffsetY,
     }

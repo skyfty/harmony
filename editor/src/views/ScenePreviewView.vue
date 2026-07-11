@@ -28,12 +28,39 @@ import {
   loadSkyCubeTexture,
 	isSkyCubeArchiveExtension,
 	isRuntimeHiddenInPreview,
+	type ShowPurposeBehaviorButton,
 	type InstancedLodTarget,
 } from '@schema/core'
 import {
+	applyMoveToObjectWorldPose,
+	applyMoveToPhysicsBodyWorldPose,
+	buildMoveToTargetPose,
+	buildMoveToCameraPlacement,
+	resolveMoveToAlignedQuaternionForLocalForwardAxis,
+	resolveBindingByNodeId as resolveMoveToBindingByNodeId,
+	resolveMoveToSubjectType,
+	createMoveToRuntimeSession,
+	resetMoveToRuntimeSession,
+	resolveMoveToTargetPoseFromObject,
+	MOVE_TO_SNAP_DISTANCE,
+	MOVE_TO_CHARACTER_SLOW_DISTANCE,
+	MOVE_TO_CHARACTER_STOP_DISTANCE,
+	MOVE_TO_VEHICLE_SLOW_DISTANCE,
+	MOVE_TO_VEHICLE_STOP_DISTANCE,
+	MOVE_TO_CAMERA_LERP_SPEED,
+	resolveMoveToYawDeltaRadians,
+	resolveMoveToYawRadiansFromForward,
+	resolveMoveToWorldForwardFromQuaternion,
+} from '@schema/behaviors/moveToRuntime'
+import {
 	GUIDE_ROUTE_COMPONENT_TYPE,
+	VIEW_POINT_COMPONENT_TYPE,
+	applyViewPointCameraProjection,
 	clampGuideRouteComponentProps,
+	resolveViewPointComponentProps,
+	resolveViewPointWorldCameraPose,
 	type GuideRouteComponentProps,
+	type ViewPointComponentProps,
 } from '@schema/components'
 import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
 import { extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
@@ -70,6 +97,7 @@ import {
 	type PhysicsSceneAsset,
 	type PhysicsStepFrame,
 	type PhysicsTransform,
+	resolvePhysicsCharacterMotorYawFromWorldQuaternion,
 } from '@harmony/physics-core'
 import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
 import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
@@ -86,7 +114,7 @@ import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
-import { createGroundRuntimeMeshFromSidecar } from '@/utils/groundHeightSidecar'
+import { createGroundRuntimeMeshFromSidecar } from '@schema/groundHeightSidecar'
 import { attachRoadCollisionCompiledExportToDocument } from '@/utils/roadCollisionCompiledExport'
 import { useGroundHeightmapStore } from '@/stores/groundHeightmapStore'
 import { useScenesStore } from '@/stores/scenesStore'
@@ -257,13 +285,17 @@ import {
 	DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
 	createBackFollowCameraTuning,
 	VehicleDriveController,
-	resolveCharacterControlMovementMagnitude,
 	CharacterAutoTourRuntimeManager,
 	updateBackFollowCamera,
 } from '@schema/motion'
 import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
 import { createBridgeVehicleProxy } from '@schema/motion'
+import { createBridgePhysicsBodyProxy } from '@schema/bridgePhysicsBodyProxy'
 import type { AutoTourCameraRouteData } from '@harmony/schema/autoTourCameraAvoidanceController'
+import {
+	createCharacterNavigationControllerState,
+	resetCharacterNavigationControllerState,
+} from '@schema/characterNavigationController'
 import {
   FollowCameraController,
   computeFollowLerpAlpha,
@@ -298,6 +330,10 @@ import {
   DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED,
   computeSignboardPlacement,
   resolveSignboardAnchorWorldPosition,
+  computePurposeOverlayPlacement,
+  resolvePurposeOverlayAnchorWorldPosition,
+  resolvePurposeOverlayPlacements,
+  type PurposeOverlayPlacement,
   smoothSignboardPlacement,
   smoothSignboardReference,
   type SignboardPlacementSmoothingState,
@@ -340,6 +376,9 @@ import {
 } from '@schema/behaviors/runtime'
 import {
 	createBehaviorProximityRuntime,
+	resolveBehaviorObserverContext,
+	type BehaviorObserverCandidate,
+	type BehaviorObserverContext,
 	type BehaviorProximityCandidate,
 	type BehaviorProximityState,
 } from '@schema/behaviors/proximity'
@@ -350,6 +389,7 @@ import {
 	handleBehaviorStopAnimationEvent,
 	dispatchPerformBehaviorEvent,
 } from '@schema/behaviors/eventHelpers'
+import { resolvePerformSequenceLabel } from '@schema/behaviors/sequenceOptions'
 import {
 	loadStoredPunchedNodeIds,
 	mergeStoredPunchedNodeId,
@@ -392,6 +432,8 @@ type RuntimePanelCameraMode = 'first-person' | 'follow'
 const containerRef = ref<HTMLDivElement | null>(null)
 const statsContainerRef = ref<HTMLDivElement | null>(null)
 const statusMessage = ref('Waiting for scene data...')
+const screenshotBusy = ref(false)
+let screenshotStatusTimer: ReturnType<typeof setTimeout> | null = null
 
 const liveUpdatesDisabledSourceUrl = ref<string | null>(null)
 const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUrl.value))
@@ -484,7 +526,15 @@ type SceneNodeTransformSnapshot = {
 type SceneViewControlSnapshot = {
 	cameraViewState: { mode: CameraViewMode; watchTargetId: string | null }
 	isCameraCaged: boolean
-	camera: { position: Vec3Tuple; quaternion: QuatTuple; up: Vec3Tuple }
+	camera: {
+		position: Vec3Tuple
+		quaternion: QuatTuple
+		up: Vec3Tuple
+		fov: number
+		near: number
+		far: number
+		zoom: number
+	}
 	mapTarget: Vec3Tuple | null
 	lastOrbit: { position: Vec3Tuple; target: Vec3Tuple }
 	nodeTransforms: Record<string, SceneNodeTransformSnapshot>
@@ -681,6 +731,11 @@ const cameraViewState = reactive<{ mode: CameraViewMode; watchTargetId: string |
 	mode: 'level',
 	watchTargetId: null,
 })
+const activeWatchRestoreSnapshot = ref<SceneViewControlSnapshot | null>(null)
+const watchLeaveVisible = computed(
+	() => cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null,
+)
+const watchExclusiveUiActive = computed(() => watchLeaveVisible.value)
 
 const resourceProgress = reactive({
 	active: false,
@@ -1385,9 +1440,19 @@ const lanternSlides = ref<LanternSlideDefinition[]>([])
 const lanternActiveSlideIndex = ref(0)
 const lanternEventToken = ref<string | null>(null)
 
-const purposeControlsVisible = ref(false)
-const purposeTargetNodeId = ref<string | null>(null)
-const purposeSourceNodeId = ref<string | null>(null)
+type PurposeControlRecord = {
+	nodeId: string
+	buttons: ShowPurposeBehaviorButton[]
+	placement: PurposeOverlayPlacement
+}
+
+const purposeControlEntries = ref<PurposeControlRecord[]>([])
+const purposeControlsVisible = computed(() => purposeControlEntries.value.length > 0)
+type WatchUiRestoreState = {
+	isDebugMenuOpen: boolean
+	isVolumeMenuOpen: boolean
+}
+const watchUiRestoreState = ref<WatchUiRestoreState | null>(null)
 
 type VehicleDriveControlFlags = {
 	forward: boolean
@@ -1426,7 +1491,6 @@ const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
 const scenePreviewDriveBindingsReady = ref(false)
 const activeAutoTourNodeIds = reactive(new Set<string>())
-
 // Auto-tour pause only affects tour (not global playback), and does not change manual-drive behavior.
 const autoTourPaused = ref(false)
 const autoTourPausedIsTerminal = ref(false)
@@ -1653,12 +1717,23 @@ const DEFAULT_TONE_MAPPING_EXPOSURE = 1
 const CAMERA_WATCH_TWEEN_DURATION = 0.45
 const CAMERA_LEVEL_TWEEN_DURATION = 0.35
 type CameraLookTweenMode = 'orbit'
+type CameraProjectionState = {
+	fov: number
+	near: number
+	far: number
+	zoom: number
+}
 type CameraLookTween = {
 	mode: CameraLookTweenMode
-	from: THREE.Vector3
-	to: THREE.Vector3
+	fromPosition: THREE.Vector3
+	toPosition: THREE.Vector3
+	fromTarget: THREE.Vector3
+	toTarget: THREE.Vector3
+	fromProjection: CameraProjectionState
+	toProjection: CameraProjectionState
 	duration: number
 	elapsed: number
+	onComplete?: (() => void) | null
 }
 let activeCameraLookTween: CameraLookTween | null = null
 const assetObjectUrlCache = new Map<string, string>()
@@ -2181,26 +2256,43 @@ const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
+const behaviorObserverContextScratch = new THREE.Vector3()
+function resolveScenePreviewBehaviorObserverContext(): BehaviorObserverContext {
+	const candidates: BehaviorObserverCandidate[] = []
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		candidates.push({ nodeId: vehicleDriveState.nodeId, kind: 'vehicle' })
+	}
+	const characterNodeId = resolveDefaultControlledCharacterNodeId()
+	if (characterNodeId) {
+		candidates.push({ nodeId: characterNodeId, kind: 'character' })
+	}
+	if (activeAutoTourNodeIds.size > 0) {
+		const autoTourNodeId = resolveAutoTourFollowNodeId(
+			autoTourFollowNodeId.value,
+			cameraViewState.watchTargetId,
+			activeAutoTourNodeIds,
+			previewNodeMap.keys(),
+			autoTourRuntime,
+		)
+		if (autoTourNodeId) {
+			candidates.push({ nodeId: autoTourNodeId, kind: 'other' })
+		}
+	}
+	if (cameraViewState.mode === 'watching' && cameraViewState.watchTargetId) {
+		candidates.push({ nodeId: cameraViewState.watchTargetId, kind: 'other' })
+	}
+	return resolveBehaviorObserverContext(
+		{
+			candidates,
+			getCamera: () => camera,
+			resolveNodePosition: (nodeId, scratch) =>
+				resolveNodeFocusPoint(nodeId, scratch) ?? nodeObjectMap.get(nodeId)?.getWorldPosition(scratch) ?? null,
+		},
+		behaviorObserverContextScratch,
+	)
+}
 const behaviorProximityRuntime = createBehaviorProximityRuntime({
-	getCamera: () => camera,
-	getObserverNodeId: () => {
-		if (vehicleDriveState.active && vehicleDriveState.nodeId) {
-			return vehicleDriveState.nodeId
-		}
-		if (activeAutoTourNodeIds.size > 0) {
-			return resolveAutoTourFollowNodeId(
-				autoTourFollowNodeId.value,
-				cameraViewState.watchTargetId,
-				activeAutoTourNodeIds,
-				previewNodeMap.keys(),
-				autoTourRuntime,
-			)
-		}
-		return null
-	},
-	resolveObserverPosition: (observerNodeId, scratch) => {
-		return resolveNodeFocusPoint(observerNodeId, scratch) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(scratch) ?? null
-	},
+	resolveObserverContext: () => resolveScenePreviewBehaviorObserverContext(),
 	behaviorProximityCandidates,
 	behaviorProximityState,
 	nodeObjectMap,
@@ -2246,6 +2338,7 @@ const signboardReferenceSmoothingState = createSignboardReferenceSmoothingState(
 const punchBadgePlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>()
 const signboardReferenceScratch = new THREE.Vector3()
 const signboardAnchorScratch = new THREE.Vector3()
+const purposeAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceScratch = new THREE.Vector3()
 const overlayDistanceTargetAnchorScratch = new THREE.Vector3()
 const overlayDistanceReferenceAnchorScratch = new THREE.Vector3()
@@ -2534,7 +2627,8 @@ const PHYSICS_FIXED_TIMESTEP = 1 / 60
 const PHYSICS_MAX_SUB_STEPS = 5
 const defaultProtagonistState = {
 	position: new THREE.Vector3(0, CAMERA_HEIGHT, 0),
-	direction: new THREE.Vector3(0, 0, -1),
+	// Match the editor's default character forward axis so preview fallback facing stays aligned.
+	direction: new THREE.Vector3(1, 0, 0),
 }
 const defaultOrbitState = {
 	position: new THREE.Vector3(8, 6, 8),
@@ -2689,7 +2783,9 @@ async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Pr
 	if (!couponMap.size) {
 		return document
 	}
-	const nextDocument = JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
+	const nextDocument = typeof structuredClone === 'function'
+		? structuredClone(document)
+		: JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
 	nextDocument.nodes = pruneCouponNodes(nextDocument.nodes, couponMap)
 	nextDocument.couponIds = couponIds
 	return nextDocument
@@ -3213,8 +3309,8 @@ const characterFollowCameraController = new FollowCameraController()
 const characterFollowCameraMotionState: FollowCameraMotionState = createFollowCameraMotionState()
 const characterFollowCameraOffsetScratch = new THREE.Vector3()
 let characterInputYaw = Math.PI
-let characterInputYawInitialized = false
-let characterInputYawNodeId: string | null = null
+const characterNavigationControllerState = createCharacterNavigationControllerState(Math.PI)
+const moveToRuntimeSession = createMoveToRuntimeSession()
 
 const vehicleDriveController = new VehicleDriveController(
 	{
@@ -6854,43 +6950,6 @@ function restartDefaultAnimation(nodeId: string): void {
 	nodeAnimationRuntime.restoreDefaultNodeAnimation(nodeId)
 }
 
-function startTimedAnimation(
-	token: string,
-	durationSeconds: number,
-	onUpdate: (alpha: number) => void,
-	onComplete: () => void,
-): void {
-	stopBehaviorAnimation(token)
-	const durationMs = Math.max(0, durationSeconds) * 1000
-	if (durationMs <= 0) {
-		onUpdate(1)
-		onComplete()
-		return
-	}
-	const startTime = performance.now()
-	let frameHandle = 0
-	const cancel = () => {
-		if (frameHandle) {
-			cancelAnimationFrame(frameHandle)
-			frameHandle = 0
-		}
-		activeBehaviorAnimations.delete(token)
-	}
-	const step = (now: number) => {
-		const elapsed = Math.max(0, now - startTime)
-		const alpha = Math.min(1, elapsed / durationMs)
-		onUpdate(alpha)
-		if (alpha >= 1) {
-			cancel()
-			onComplete()
-			return
-		}
-		frameHandle = requestAnimationFrame(step)
-	}
-	frameHandle = requestAnimationFrame(step)
-	activeBehaviorAnimations.set(token, cancel)
-}
-
 function resolveNodeFocusPoint(nodeId: string | null, fallback: THREE.Vector3): THREE.Vector3 | null {
 	if (!nodeId) {
 		return null
@@ -6927,8 +6986,7 @@ function resetProtagonistPoseState() {
 function resetCharacterFollowCameraState(): void {
   resetCameraFollowState(characterFollowCameraState)
   resetFollowCameraMotionState(characterFollowCameraMotionState)
-  characterInputYawInitialized = false
-  characterInputYawNodeId = null
+  resetCharacterNavigationControllerState(characterNavigationControllerState, characterInputYaw)
 }
 
 function resolveDefaultControlledCharacterNodeId(): string | null {
@@ -7181,6 +7239,9 @@ function updateCharacterFollowCamera(
 	activeCamera: THREE.PerspectiveCamera,
 	immediate = false,
 ): boolean {
+	if (isWatchCameraLocked() || activeCameraLookTween) {
+		return false
+	}
 	if (vehicleDriveState.active || characterCameraMode.value !== 'follow') {
 		return false
 	}
@@ -7328,12 +7389,12 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
 	})
 }
 
-function updateCharacterAuthorityInputFromKeys(): void {
-	const moveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0)
-	const turn = (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0)
+function updateCharacterAuthorityInputFromKeys(deltaSeconds = 0): void {
+	const keyboardMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0)
+	const keyboardTurn = (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0)
 	characterAuthorityInput.moveX = 0
-	characterAuthorityInput.moveZ = THREE.MathUtils.clamp(moveZ, -1, 1)
-	characterAuthorityInput.turn = THREE.MathUtils.clamp(turn, -1, 1)
+	characterAuthorityInput.moveZ = keyboardMoveZ
+	characterAuthorityInput.turn = keyboardTurn
 	characterAuthorityInput.sprint = characterKeyState.sprint
 	characterAuthorityInput.crouch = characterKeyState.crouch
 	characterAuthorityInput.interact = characterKeyState.interact
@@ -7348,6 +7409,17 @@ function updateCharacterAuthorityInputFromKeys(): void {
 	}
 	characterInputJumpLatch = false
 	characterAuthorityInput.jump = false
+	if (deltaSeconds > 0 && Math.abs(keyboardTurn) > 0.001) {
+		const props = resolveDefaultControlledCharacterComponentProps()
+		const turnRateDegreesPerSecond = props?.turnRateDegreesPerSecond ?? 210
+		const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(turnRateDegreesPerSecond)
+		characterInputYaw += turnRateRadiansPerSecond * keyboardTurn * deltaSeconds
+		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
+	}
+}
+
+function normalizeScenePreviewCharacterInputYaw(value: number): number {
+	return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI
 }
 
 function updateCharacterControllerAnimations(delta: number): void {
@@ -7440,67 +7512,358 @@ function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }
 	})
 }
 
-function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
+const moveToTransitionStartPosition = new THREE.Vector3()
+const moveToTransitionStartQuaternion = new THREE.Quaternion()
+const moveToSubjectForwardAxisScratch = new THREE.Vector3()
+const moveToTransitionCurrentForward = new THREE.Vector3()
+let moveToTransitionFrameHandle: number | null = null
+
+function cancelMoveToTransition(): void {
+	if (moveToTransitionFrameHandle !== null) {
+		cancelAnimationFrame(moveToTransitionFrameHandle)
+		moveToTransitionFrameHandle = null
+	}
+}
+
+function resolveMoveToSubjectNodeId(): string | null {
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		return vehicleDriveState.nodeId
+	}
+	return resolveDefaultControlledCharacterNodeId()
+}
+
+function resolveMoveToSubjectBinding(subjectNodeId: string) {
+	return resolveMoveToBindingByNodeId(subjectNodeId, rigidbodyInstances)
+}
+
+function resolveMoveToSubjectObject(subjectNodeId: string): THREE.Object3D | null {
+	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	return binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null
+}
+
+function resolveMoveToSubjectForwardAxis(subjectNodeId: string, bindingKind: string | null): THREE.Vector3 {
+	if (bindingKind === 'vehicle') {
+		const vehicle = resolveVehicleComponent(resolveNodeById(subjectNodeId))
+		const props = clampVehicleComponentProps(vehicle?.props ?? null)
+		return resolveVehicleAxisVector(clampVehicleAxisIndex(props.indexForwardAxis))
+	}
+	if (bindingKind === 'character') {
+		const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId))
+		const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis
+		return writeCharacterLocalForward(moveToSubjectForwardAxisScratch, forwardAxis) as THREE.Vector3
+	}
+	return moveToSubjectForwardAxisScratch.set(1, 0, 0)
+}
+
+function resolveMoveToSubjectBridgeNodeId(subjectNodeId: string): string | null {
+	if (physicsBridgeBodyIdByNodeId.has(subjectNodeId)) {
+		return subjectNodeId
+	}
+	const characterBodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(subjectNodeId) ?? null
+	if (characterBodyNodeId && physicsBridgeBodyIdByNodeId.has(characterBodyNodeId)) {
+		return characterBodyNodeId
+	}
+	return null
+}
+
+function syncMoveToSubjectTargetToPhysicsBridge(
+	subjectNodeId: string,
+	targetPose: ReturnType<typeof buildMoveToTargetPose>,
+): void {
+	if (!physicsBridge || !physicsBridgeSceneLoaded) {
+		return
+	}
+	const bridgeNodeId = resolveMoveToSubjectBridgeNodeId(subjectNodeId)
+	if (!bridgeNodeId) {
+		return
+	}
+	const bodyId = physicsBridgeBodyIdByNodeId.get(bridgeNodeId)
+	if (typeof bodyId !== 'number') {
+		return
+	}
+	physicsBridgeFrameBodiesByNodeId.set(bridgeNodeId, {
+		position: targetPose.position.clone(),
+		quaternion: targetPose.quaternion.clone(),
+		motionState: 0,
+	})
+	void physicsBridge.setBodyTransform({
+		bodyId,
+		transform: {
+			position: [targetPose.position.x, targetPose.position.y, targetPose.position.z],
+			rotation: [
+				targetPose.quaternion.x,
+				targetPose.quaternion.y,
+				targetPose.quaternion.z,
+				targetPose.quaternion.w,
+			],
+		},
+	})
+}
+
+function resolveMoveToCharacterTargetYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): number {
+	const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId))
+	const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis
+	return resolvePhysicsCharacterMotorYawFromWorldQuaternion(targetQuaternion, forwardAxis)
+}
+
+function syncMoveToCharacterControllerYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): void {
+	const nextYaw = resolveMoveToCharacterTargetYaw(subjectNodeId, targetQuaternion)
+	characterInputYaw = nextYaw
+	resetCharacterNavigationControllerState(characterNavigationControllerState, nextYaw)
+	characterAuthorityInput.turn = 0
+}
+
+function getMoveToSubjectCurrentPose(subjectNodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
+	const object = resolveMoveToSubjectObject(subjectNodeId)
+	if (!object) {
+		return null
+	}
+	object.updateWorldMatrix(true, false)
+	object.getWorldPosition(moveToTransitionStartPosition)
+	object.getWorldQuaternion(moveToTransitionStartQuaternion)
+	return {
+		position: moveToTransitionStartPosition.clone(),
+		quaternion: moveToTransitionStartQuaternion.clone(),
+	}
+}
+
+function applyMoveToSubjectTargetPose(
+	subjectNodeId: string,
+	targetPose: ReturnType<typeof buildMoveToTargetPose>,
+): void {
+	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	const bindingKind = binding?.bindingKind ?? 'none'
+	const subjectForwardAxis = resolveMoveToSubjectForwardAxis(subjectNodeId, bindingKind)
+	const characterTargetQuaternion = resolveMoveToAlignedQuaternionForLocalForwardAxis(
+		targetPose.quaternion,
+		subjectForwardAxis,
+	)
+	if (binding?.body) {
+		applyMoveToPhysicsBodyWorldPose({
+			body: binding.body,
+			worldPosition: targetPose.position,
+			worldQuaternion: characterTargetQuaternion,
+			orientationAdjustment: binding.orientationAdjustment,
+		})
+		if (binding.object) {
+			applyMoveToObjectWorldPose(binding.object, targetPose.position, characterTargetQuaternion)
+		}
+		syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
+			position: targetPose.position,
+			forward: targetPose.forward,
+			up: targetPose.up,
+			quaternion: characterTargetQuaternion,
+		})
+		if (bindingKind === 'character') {
+			syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion)
+		}
+		return
+	}
+	const object = resolveMoveToSubjectObject(subjectNodeId)
+	if (!object) {
+		return
+	}
+	applyMoveToObjectWorldPose(object, targetPose.position, characterTargetQuaternion)
+	syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
+		position: targetPose.position,
+		forward: targetPose.forward,
+		up: targetPose.up,
+		quaternion: characterTargetQuaternion,
+	})
+	if (bindingKind === 'character') {
+		syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion)
+	}
+}
+
+function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
 	const activeCamera = camera
 	if (!activeCamera) {
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'Camera unavailable' })
 		return
 	}
-	const targetNodeId = event.targetNodeId ?? event.nodeId
-	const anchorPoint = resolveNodeAnchorPoint(targetNodeId, tempTarget) ?? resolveNodeFocusPoint(targetNodeId, tempTarget)
-	if (!anchorPoint) {
-		resolveBehaviorToken(event.token, {
-			type: 'fail',
-			message: 'Behavior target object not found.',
-		})
+	const placement = buildMoveToCameraPlacement(targetPose)
+	activeCamera.position.copy(placement.position)
+	if (mapControls) {
+		mapControls.target.copy(placement.lookAt)
+		mapControls.update()
+	}
+}
+
+function resetMoveToSubjectInputs(): void {
+	vehicleDriveInput.throttle = 0
+	vehicleDriveInput.steering = 0
+	vehicleDriveInput.brake = 0
+	vehicleDriveInputFlags.forward = false
+	vehicleDriveInputFlags.backward = false
+	vehicleDriveInputFlags.left = false
+	vehicleDriveInputFlags.right = false
+	vehicleDriveInputFlags.brake = false
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = 0
+	characterAuthorityInput.turn = 0
+	characterAuthorityInput.jump = false
+	characterAuthorityInput.sprint = false
+	characterAuthorityInput.crouch = false
+	characterAuthorityInput.interact = false
+}
+
+function finalizeMoveToSession(resolution: { type: 'continue' | 'fail'; message?: string } = { type: 'continue' }): void {
+	const token = moveToRuntimeSession.token
+	resetMoveToRuntimeSession(moveToRuntimeSession)
+	cancelMoveToTransition()
+	resetMoveToSubjectInputs()
+	if (token) {
+		resolveBehaviorToken(token, resolution)
+	}
+}
+
+function resolveMoveToFacingYaw(subjectNodeId: string, targetPose: ReturnType<typeof buildMoveToTargetPose>): number {
+	void subjectNodeId
+	return resolveMoveToYawRadiansFromForward(targetPose.forward)
+}
+
+function updateMoveToSessionForFrame(deltaSeconds: number): void {
+	if (!moveToRuntimeSession.active || !moveToRuntimeSession.token || !moveToRuntimeSession.subjectNodeId || !moveToRuntimeSession.targetNodeId) {
 		return
 	}
-	const focusPoint = anchorPoint.clone()
-	const startPosition = activeCamera.position.clone()
-	const startQuaternion = activeCamera.quaternion.clone()
-	const orbitControls = mapControls ?? null
-	const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + CAMERA_HEIGHT, focusPoint.z)
-	const startTarget = orbitControls ? orbitControls.target.clone() : null
-	const translation = destination.clone().sub(startPosition)
-	const targetDestination = startTarget ? startTarget.clone().add(translation) : null
-	const forwardDirection = new THREE.Vector3(0, 0, 0)
-	activeCamera.getWorldDirection(forwardDirection)
-	forwardDirection.y = 0
-	if (forwardDirection.lengthSq() < 1e-8) {
-		forwardDirection.set(0, 0, -1)
+	const subjectNodeId = moveToRuntimeSession.subjectNodeId
+	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	const bindingKind = binding?.bindingKind ?? null
+	const object = binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null
+	if (!object) {
+		finalizeMoveToSession({ type: 'fail', message: 'Move To subject object not found.' })
+		return
+	}
+	const currentPose = getMoveToSubjectCurrentPose(subjectNodeId)
+	if (!currentPose) {
+		finalizeMoveToSession({ type: 'fail', message: 'Move To subject pose unavailable.' })
+		return
+	}
+	const currentPosition = currentPose.position
+	const currentQuaternion = currentPose.quaternion
+	const subjectForwardAxis = resolveMoveToSubjectForwardAxis(subjectNodeId, bindingKind)
+	const currentForward = resolveMoveToWorldForwardFromQuaternion(
+		currentQuaternion,
+		subjectForwardAxis,
+		moveToTransitionCurrentForward,
+	)
+	currentForward.y = 0
+	if (currentForward.lengthSq() <= 1e-8) {
+		currentForward.set(1, 0, 0)
 	} else {
-		forwardDirection.normalize()
+		currentForward.normalize()
 	}
-	const recoveryLookTarget = destination.clone().addScaledVector(forwardDirection, 1)
-	if (targetDestination && targetDestination.distanceToSquared(destination) < 1e-6) {
-		targetDestination.copy(recoveryLookTarget)
-	}
-	const durationSeconds = Math.max(0, event.duration ?? 0)
-	const updateFrame = (alpha: number) => {
-		activeCamera.position.lerpVectors(startPosition, destination, alpha)
-		if (orbitControls && startTarget && targetDestination) {
-			orbitControls.target.copy(startTarget)
-			orbitControls.target.lerp(targetDestination, alpha)
-			orbitControls.update()
-		} else {
-			activeCamera.quaternion.copy(startQuaternion)
+	const currentYaw = Math.atan2(currentForward.x, currentForward.z)
+	const targetPose = {
+		position: moveToRuntimeSession.targetPosition.clone(),
+		forward: moveToRuntimeSession.targetForward.clone(),
+		up: moveToRuntimeSession.targetUp.clone(),
+		quaternion: moveToRuntimeSession.targetQuaternion.clone(),
+	} satisfies ReturnType<typeof buildMoveToTargetPose>
+	const targetYaw = resolveMoveToFacingYaw(subjectNodeId, targetPose)
+	const targetPosition = moveToRuntimeSession.targetPosition
+	const positionDelta = targetPosition.clone().sub(currentPosition)
+	positionDelta.y = 0
+	const planarDistance = positionDelta.length()
+	if (moveToRuntimeSession.subjectType === 'camera') {
+		const activeCamera = camera
+		if (!activeCamera) {
+			finalizeMoveToSession({ type: 'fail', message: 'Camera unavailable.' })
+			return
 		}
-	}
-	const finalize = () => {
-		activeCamera.position.copy(destination)
-		if (orbitControls && targetDestination) {
-			orbitControls.target.copy(targetDestination)
-			orbitControls.update()
-			if (orbitControls.target.distanceToSquared(activeCamera.position) < 1e-6) {
-				orbitControls.target.copy(recoveryLookTarget)
-				orbitControls.update()
-			}
-		} else {
-			activeCamera.quaternion.copy(startQuaternion)
+		const placement = buildMoveToCameraPlacement(targetPose)
+		const cameraDelta = placement.position.clone().sub(activeCamera.position)
+		const cameraDistance = cameraDelta.length()
+		if (cameraDistance <= MOVE_TO_SNAP_DISTANCE) {
+			applyMoveToCameraTargetPose(targetPose)
+			finalizeMoveToSession({ type: 'continue' })
+			return
 		}
-		resolveBehaviorToken(event.token, { type: 'continue' })
+		activeCamera.position.lerp(placement.position, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED))
+		mapControls?.target.lerp(placement.lookAt, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED))
+		mapControls?.update()
+		return
 	}
-	startTimedAnimation(event.token, durationSeconds, updateFrame, finalize)
+	if (moveToRuntimeSession.subjectType === 'vehicle') {
+		const stopDistance = MOVE_TO_VEHICLE_STOP_DISTANCE
+		const slowDistance = MOVE_TO_VEHICLE_SLOW_DISTANCE
+		const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw)
+		const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(12)
+		if (shouldSnap) {
+			applyMoveToSubjectTargetPose(subjectNodeId, targetPose)
+			finalizeMoveToSession({ type: 'continue' })
+			return
+		}
+		const distanceBlend = THREE.MathUtils.clamp((planarDistance - stopDistance) / Math.max(1e-6, slowDistance - stopDistance), 0, 1)
+		vehicleDriveInput.throttle = distanceBlend
+		vehicleDriveInput.brake = planarDistance <= stopDistance ? 1 : 0
+		vehicleDriveInput.steering = THREE.MathUtils.clamp(yawError / (Math.PI * 0.65), -1, 1)
+		vehicleDriveInputFlags.forward = vehicleDriveInput.throttle > 0.05
+		vehicleDriveInputFlags.backward = false
+		vehicleDriveInputFlags.left = vehicleDriveInput.steering < -0.05
+		vehicleDriveInputFlags.right = vehicleDriveInput.steering > 0.05
+		vehicleDriveInputFlags.brake = vehicleDriveInput.brake > 0.5
+		return
+	}
+	const stopDistance = MOVE_TO_CHARACTER_STOP_DISTANCE
+	const slowDistance = MOVE_TO_CHARACTER_SLOW_DISTANCE
+	const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw)
+	const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(10)
+	if (shouldSnap) {
+		applyMoveToSubjectTargetPose(subjectNodeId, targetPose)
+		finalizeMoveToSession({ type: 'continue' })
+		return
+	}
+	const distanceBlend = THREE.MathUtils.clamp((planarDistance - stopDistance) / Math.max(1e-6, slowDistance - stopDistance), 0, 1)
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = planarDistance <= stopDistance ? 0 : distanceBlend
+	characterAuthorityInput.turn = THREE.MathUtils.clamp(yawError / (Math.PI * 0.55), -1, 1)
+	characterAuthorityInput.jump = false
+	characterAuthorityInput.sprint = distanceBlend > 0.75
+	characterAuthorityInput.crouch = false
+	characterAuthorityInput.interact = false
+}
+
+function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to' }>): void {
+	const targetNodeId = event.targetNodeId || event.nodeId
+	const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null
+	if (!targetObject) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Behavior target object not found.' })
+		return
+	}
+	const targetPose = resolveMoveToTargetPoseFromObject(targetObject)
+	const subjectType = resolveMoveToSubjectType({
+		vehicleActive: vehicleDriveState.active,
+		hasControlledCharacter: Boolean(resolveDefaultControlledCharacterNodeId()),
+	})
+	const subjectNodeId = subjectType === 'camera' ? null : resolveMoveToSubjectNodeId()
+	if (subjectType !== 'camera' && !subjectNodeId) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No movable subject available.' })
+		return
+	}
+	const resolvedSubjectNodeId = subjectNodeId ?? ''
+	resetMoveToRuntimeSession(moveToRuntimeSession)
+	moveToRuntimeSession.active = true
+	moveToRuntimeSession.token = event.token
+	moveToRuntimeSession.subjectType = subjectType
+	moveToRuntimeSession.subjectNodeId = subjectNodeId
+	moveToRuntimeSession.kinetics = Boolean(event.kinetics)
+	moveToRuntimeSession.targetNodeId = targetNodeId
+	moveToRuntimeSession.targetPosition.copy(targetPose.position)
+	moveToRuntimeSession.targetForward.copy(targetPose.forward)
+	moveToRuntimeSession.targetUp.copy(targetPose.up)
+	moveToRuntimeSession.targetQuaternion.copy(targetPose.quaternion)
+	moveToRuntimeSession.cameraTargetPosition.copy(buildMoveToCameraPlacement(targetPose).position)
+	moveToRuntimeSession.cameraTargetLookAt.copy(buildMoveToCameraPlacement(targetPose).lookAt)
+	if (subjectType === 'camera') {
+		applyMoveToCameraTargetPose(targetPose)
+		finalizeMoveToSession({ type: 'continue' })
+		return
+	}
+	if (!event.kinetics) {
+		applyMoveToSubjectTargetPose(resolvedSubjectNodeId, targetPose)
+		finalizeMoveToSession({ type: 'continue' })
+		return
+	}
 }
 
 function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
@@ -7567,6 +7930,137 @@ function isCameraWatchRedundant(targetNodeId: string | null): boolean {
 	return cameraViewState.mode === 'watching' && cameraViewState.watchTargetId === targetNodeId
 }
 
+function isWatchCameraLocked(): boolean {
+	return cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null
+}
+
+function resolveViewPointPropsForNodeId(nodeId: string | null): ViewPointComponentProps | null {
+	if (!nodeId) {
+		return null
+	}
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return null
+	}
+	return resolveViewPointComponentProps(
+		(node.components?.[VIEW_POINT_COMPONENT_TYPE] as SceneNodeComponentState<ViewPointComponentProps> | undefined) ?? null,
+	)
+}
+
+function captureCameraProjectionState(activeCamera: THREE.PerspectiveCamera): CameraProjectionState {
+	return {
+		fov: activeCamera.fov,
+		near: activeCamera.near,
+		far: activeCamera.far,
+		zoom: activeCamera.zoom,
+	}
+}
+
+function applyCameraProjectionState(activeCamera: THREE.PerspectiveCamera, projection: CameraProjectionState): void {
+	activeCamera.fov = projection.fov
+	activeCamera.near = projection.near
+	activeCamera.far = Math.max(projection.near + 1e-3, projection.far)
+	activeCamera.zoom = projection.zoom
+	activeCamera.updateProjectionMatrix()
+}
+
+function resolveCameraTweenTarget(activeCamera: THREE.PerspectiveCamera): THREE.Vector3 {
+	if (mapControls) {
+		return mapControls.target.clone()
+	}
+	return activeCamera.position.clone().add(activeCamera.getWorldDirection(new THREE.Vector3()))
+}
+
+function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
+	if (activeWatchRestoreSnapshot.value && isCameraWatchRedundant(targetNodeId)) {
+		return
+	}
+	activeWatchRestoreSnapshot.value = captureViewControlSnapshot()
+	watchUiRestoreState.value = {
+		isDebugMenuOpen: isDebugMenuOpen.value,
+		isVolumeMenuOpen: isVolumeMenuOpen.value,
+	}
+}
+
+function clearActiveWatchState(): void {
+	activeWatchRestoreSnapshot.value = null
+	watchUiRestoreState.value = null
+}
+
+function restoreWatchUiState(): void {
+	const snapshot = watchUiRestoreState.value
+	if (!snapshot) {
+		return
+	}
+	isDebugMenuOpen.value = snapshot.isDebugMenuOpen
+	isVolumeMenuOpen.value = snapshot.isVolumeMenuOpen
+}
+
+function startCameraLookTween(params: {
+	toPosition: THREE.Vector3
+	toTarget: THREE.Vector3
+	toProjection?: CameraProjectionState | null
+	duration: number
+	onComplete?: (() => void) | null
+}): void {
+	const activeCamera = camera
+	if (!activeCamera) {
+		params.onComplete?.()
+		return
+	}
+	const fromPosition = activeCamera.position.clone()
+	const fromTarget = resolveCameraTweenTarget(activeCamera)
+	const fromProjection = captureCameraProjectionState(activeCamera)
+	const toProjection = params.toProjection
+		? {
+			fov: params.toProjection.fov,
+			near: params.toProjection.near,
+			far: Math.max(params.toProjection.near + 1e-3, params.toProjection.far),
+			zoom: params.toProjection.zoom,
+		}
+		: fromProjection
+	activeCameraLookTween = {
+		mode: 'orbit',
+		fromPosition,
+		toPosition: params.toPosition.clone(),
+		fromTarget,
+		toTarget: params.toTarget.clone(),
+		fromProjection,
+		toProjection,
+		duration: Math.max(0, params.duration),
+		elapsed: 0,
+		onComplete: params.onComplete ?? null,
+	}
+	scenePreviewPerf.markInstancedCullingDirty()
+}
+
+function leaveActiveWatchView(): void {
+	const snapshot = activeWatchRestoreSnapshot.value
+	const activeCamera = camera
+	if (!snapshot || !activeCamera) {
+		return
+	}
+	startCameraLookTween({
+		toPosition: new THREE.Vector3(...snapshot.camera.position),
+		toTarget: snapshot.mapTarget
+			? new THREE.Vector3(...snapshot.mapTarget)
+			: new THREE.Vector3(...snapshot.lastOrbit.target),
+		toProjection: {
+			fov: snapshot.camera.fov,
+			near: snapshot.camera.near,
+			far: snapshot.camera.far,
+			zoom: snapshot.camera.zoom,
+		},
+		duration: CAMERA_WATCH_TWEEN_DURATION,
+		onComplete: () => {
+			applyViewControlSnapshot(snapshot)
+			restoreWatchUiState()
+			clearActiveWatchState()
+			scenePreviewPerf.markInstancedCullingDirty()
+		},
+	})
+}
+
 function performWatchFocus(targetNodeId: string | null, caging = false): { success: boolean; message?: string } {
 	const activeCamera = camera
 	if (!activeCamera) {
@@ -7581,27 +8075,48 @@ function performWatchFocus(targetNodeId: string | null, caging = false): { succe
 		return { success: true }
 	}
 	activeCameraLookTween = null
+	captureWatchRestoreSnapshotIfNeeded(resolvedTarget)
+	const viewPointProps = resolveViewPointPropsForNodeId(resolvedTarget)
+	const targetObject = nodeObjectMap.get(resolvedTarget) ?? null
+	if (viewPointProps && targetObject) {
+		targetObject.updateWorldMatrix(true, false)
+		const pose = resolveViewPointWorldCameraPose(targetObject.matrixWorld, viewPointProps)
+		startCameraLookTween({
+			toPosition: pose.position.clone(),
+			toTarget: pose.target.clone(),
+			toProjection: {
+				fov: pose.fov,
+				near: pose.near,
+				far: pose.far,
+				zoom: pose.zoom,
+			},
+			duration: CAMERA_WATCH_TWEEN_DURATION,
+			onComplete: () => {
+				if (camera) {
+					applyViewPointCameraProjection(camera, viewPointProps)
+				}
+				scenePreviewPerf.markInstancedCullingDirty()
+			},
+		})
+		setCameraCaging(Boolean(caging))
+		setCameraViewState('watching', resolvedTarget)
+		return { success: true }
+	}
 	const focus = resolveNodeAnchorPoint(resolvedTarget, tempTarget) ?? resolveNodeFocusPoint(resolvedTarget, tempTarget)
 	if (!focus) {
+		clearActiveWatchState()
 		return { success: false, message: 'Target node not found' }
 	}
 	const focusPoint = focus.clone()
-	const orbitControls = mapControls ?? null
-	if (orbitControls) {
-		const startTarget = orbitControls.target.clone()
-		if (startTarget.distanceToSquared(focusPoint) < 1e-6) {
-			orbitControls.target.copy(focusPoint)
-			orbitControls.update()
-		} else {
-			activeCameraLookTween = {
-				mode: 'orbit',
-				from: startTarget,
-				to: focusPoint.clone(),
-				duration: CAMERA_WATCH_TWEEN_DURATION,
-				elapsed: 0,
-			}
-		}
+	if (focusPoint.distanceToSquared(activeCamera.position) < 1e-8) {
+		focusPoint.copy(activeCamera.position).add(activeCamera.getWorldDirection(tempDirection).normalize())
 	}
+	startCameraLookTween({
+		toPosition: activeCamera.position.clone(),
+		toTarget: focusPoint,
+		toProjection: captureCameraProjectionState(activeCamera),
+		duration: CAMERA_WATCH_TWEEN_DURATION,
+	})
 	setCameraCaging(Boolean(caging))
 	setCameraViewState('watching', resolvedTarget)
 	scenePreviewPerf.markInstancedCullingDirty()
@@ -7618,43 +8133,187 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
-function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
-	purposeSourceNodeId.value = sourceNodeId ?? null
-	purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null
-	purposeControlsVisible.value = true
+function truncatePurposeButtonLabel(label: string, maxVisibleChars = 6): string {
+	const trimmed = label.trim()
+	if (!trimmed) {
+		return ''
+	}
+	const chars = Array.from(trimmed)
+	if (chars.length <= maxVisibleChars) {
+		return trimmed
+	}
+	return `${chars.slice(0, maxVisibleChars).join('')}…`
 }
 
-function hidePurposeControls(): void {
-	purposeControlsVisible.value = false
-	purposeTargetNodeId.value = null
-	purposeSourceNodeId.value = null
+function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
+	const explicit = button.label?.trim()
+	if (explicit) {
+		return explicit
+	}
+	const sequenceLabel = resolvePerformSequenceLabel(currentDocument?.nodes ?? [], button.targetNodeId, button.targetSequenceId)
+	if (sequenceLabel) {
+		return sequenceLabel
+	}
+	return button.targetSequenceId ?? '未命名按钮'
+}
+
+function resolvePurposeButtonDisplayLabel(button: ShowPurposeBehaviorButton): string {
+	return truncatePurposeButtonLabel(resolvePurposeButtonLabel(button), 6)
+}
+
+function estimatePurposeControlGroupSize(buttons: ShowPurposeBehaviorButton[]): { widthPx: number; heightPx: number } {
+	const longestLabelLength = buttons.reduce((max, button) => {
+		const length = Array.from(resolvePurposeButtonDisplayLabel(button)).length
+		return Math.max(max, length)
+	}, 0)
+	const buttonCount = Math.max(buttons.length, 1)
+	return {
+		widthPx: Math.min(180, Math.max(104, 58 + (longestLabelLength * 10))),
+		heightPx: Math.min(180, Math.max(34, (buttonCount * 31) + ((buttonCount - 1) * 6) + 8)),
+	}
+}
+
+function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
+	const nodeId = sourceNodeId?.trim() ?? ''
+	if (!nodeId) {
+		return
+	}
+	const normalizedButtons = Array.isArray(buttons) ? buttons.slice() : []
+	if (!normalizedButtons.length) {
+		hidePurposeControls(nodeId)
+		return
+	}
+	const existingIndex = purposeControlEntries.value.findIndex((entry) => entry.nodeId === nodeId)
+	const existingPlacement = existingIndex >= 0 ? purposeControlEntries.value[existingIndex]?.placement : null
+	const nextEntry: PurposeControlRecord = {
+		nodeId,
+		buttons: normalizedButtons,
+		placement: existingPlacement ?? {
+			xPercent: 50,
+			yPercent: 50,
+			scale: 1,
+			opacity: 1,
+			distanceMeters: 0,
+			distanceLabel: '--',
+		},
+	}
+	if (existingIndex >= 0) {
+		purposeControlEntries.value.splice(existingIndex, 1, nextEntry)
+	} else {
+		purposeControlEntries.value = [...purposeControlEntries.value, nextEntry]
+	}
+}
+
+function hidePurposeControls(nodeId: string | null = null): void {
+	if (!nodeId) {
+		purposeControlEntries.value = []
+		return
+	}
+	const normalizedNodeId = nodeId.trim()
+	if (!normalizedNodeId) {
+		return
+	}
+	purposeControlEntries.value = purposeControlEntries.value.filter((entry) => entry.nodeId !== normalizedNodeId)
 }
 
 function handleShowPurposeControlsEvent(
 	event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
 ): void {
-	showPurposeControls(event.targetNodeId ?? null, event.nodeId ?? null)
+	showPurposeControls(event.buttons ?? [], event.nodeId ?? null)
 }
 
-function handleHidePurposeControlsEvent(): void {
-	hidePurposeControls()
+function handleHidePurposeControlsEvent(event: Extract<BehaviorRuntimeEvent, { type: 'hide-purpose-controls' }>): void {
+	hidePurposeControls(event.nodeId ?? null)
 }
 
-function handlePurposeWatchClick(): void {
-	const targetId = purposeTargetNodeId.value ?? purposeSourceNodeId.value
-	if (!targetId) {
-		console.warn('[ScenePreview] Watch button ignored: no target node available')
+function handlePurposeButtonClick(entry: PurposeControlRecord, button: ShowPurposeBehaviorButton): void {
+	const targetNodeId = button.targetNodeId?.trim() ?? ''
+	const targetSequenceId = button.targetSequenceId?.trim() ?? ''
+	if (!targetNodeId || !targetSequenceId) {
+		console.warn('[ScenePreview] Purpose button ignored: incomplete target configuration')
 		return
 	}
-	const result = performWatchFocus(targetId, true)
-	if (!result.success) {
-		console.warn('[ScenePreview] Failed to move camera to watch target', result.message)
-		return
-	}
+	const results = triggerBehaviorAction(
+		targetNodeId,
+		'perform',
+		{
+			payload: {
+				sourceNodeId: entry.nodeId,
+			},
+		},
+		{ sequenceId: targetSequenceId },
+	)
+	processBehaviorEvents(results)
 }
 
-function handlePurposeResetClick(): void {
-	resetCameraToLevelView()
+function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void {
+	const entries = purposeControlEntries.value
+	if (!entries.length || !activeCamera) {
+		return
+	}
+	const viewportWidth = Math.max(1, lanternViewportSize.width || 375)
+	const viewportHeight = Math.max(1, lanternViewportSize.height || 667)
+	const candidates = entries.flatMap((entry) => {
+		const object = nodeObjectMap.get(entry.nodeId) ?? null
+		if (!object) {
+			return []
+		}
+		object.updateWorldMatrix(true, false)
+		resolvePurposeOverlayAnchorWorldPosition(object, purposeAnchorScratch)
+		const size = estimatePurposeControlGroupSize(entry.buttons)
+		const placement = computePurposeOverlayPlacement({
+			anchorWorld: purposeAnchorScratch,
+			referenceWorld: activeCamera.position,
+			camera: activeCamera,
+			viewportWidth,
+			viewportHeight,
+			closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+			minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+			estimatedWidthPx: size.widthPx,
+			estimatedHeightPx: size.heightPx,
+		})
+		if (!placement) {
+			return []
+		}
+		return [{
+			id: entry.nodeId,
+			placement,
+			estimatedWidthPx: size.widthPx,
+			estimatedHeightPx: size.heightPx,
+		}]
+	})
+	if (!candidates.length) {
+		purposeControlEntries.value = []
+		return
+	}
+	const resolvedPlacements = resolvePurposeOverlayPlacements({
+		placements: candidates,
+		viewportWidth,
+		viewportHeight,
+		screenMarginPx: 12,
+	})
+	const placementByNodeId = new Map(resolvedPlacements.map((entry) => [entry.id, entry.placement] as const))
+	purposeControlEntries.value = entries
+		.map((entry) => {
+			const placement = placementByNodeId.get(entry.nodeId)
+			if (!placement) {
+				return null
+			}
+			return {
+				...entry,
+				placement,
+			}
+		})
+		.filter((entry): entry is PurposeControlRecord => entry !== null)
+}
+
+function resolvePurposeControlStyle(entry: PurposeControlRecord): Record<string, string> {
+	return {
+		left: `${entry.placement.xPercent}%`,
+		top: `${entry.placement.yPercent}%`,
+		transform: `translate(-50%, -100%) scale(${Math.max(0.75, Math.min(1.1, entry.placement.scale))})`,
+		opacity: `${Math.max(0.35, Math.min(1, entry.placement.opacity))}`,
+	}
 }
 
 function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look-level' }>) {
@@ -7936,6 +8595,10 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
 			position: sceneStackVec3ToTuple(camera.position),
 			quaternion: sceneStackQuatToTuple(camera.quaternion),
 			up: sceneStackVec3ToTuple(camera.up),
+			fov: camera.fov,
+			near: camera.near,
+			far: camera.far,
+			zoom: camera.zoom,
 		},
 		mapTarget,
 		lastOrbit: {
@@ -7959,6 +8622,11 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
 	sceneStackApplyVec3Tuple(camera.position, snapshot.camera.position)
 	sceneStackApplyQuatTuple(camera.quaternion, snapshot.camera.quaternion)
 	sceneStackApplyVec3Tuple(camera.up, snapshot.camera.up)
+	camera.fov = snapshot.camera.fov
+	camera.near = snapshot.camera.near
+	camera.far = snapshot.camera.far
+	camera.zoom = snapshot.camera.zoom
+	camera.updateProjectionMatrix()
 	camera.updateMatrixWorld(true)
 
 	// Restore view caches used by the preview camera state.
@@ -8372,6 +9040,9 @@ function resetActiveVehiclePose(): boolean {
 type VehicleDriveCameraOptions = { immediate?: boolean; applyOrbitTween?: boolean }
 
 function updateVehicleDriveCamera(delta: number, options: VehicleDriveCameraOptions = {}): boolean {
+	if (isWatchCameraLocked() || activeCameraLookTween) {
+		return false
+	}
 	if (!vehicleDriveState.active || !camera) {
 		return false
 	}
@@ -8972,8 +9643,8 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 		case 'delay':
 			handleDelayEvent(event)
 			break
-		case 'move-camera':
-			handleMoveCameraEvent(event)
+		case 'move-to':
+			handleMoveToEvent(event)
 			break
 		case 'spawn-prefab':
 			void spawnBehaviorRuntimePrefab(event)
@@ -9043,7 +9714,7 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			handleShowPurposeControlsEvent(event)
 			break
 		case 'hide-purpose-controls':
-			handleHidePurposeControlsEvent()
+			handleHidePurposeControlsEvent(event)
 			break
 		case 'set-visibility':
 			handleSetVisibilityEvent(event)
@@ -9185,31 +9856,17 @@ function resetCameraToLevelView() {
 	}
 	activeCameraLookTween = null
 	setCameraCaging(false)
-	if (mapControls && camera) {
-		const startTarget = mapControls.target.clone()
-		const levelTarget = startTarget.clone()
-		if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-			mapControls.target.copy(levelTarget)
-			mapControls.update()
-			camera.lookAt(levelTarget)
-			lastOrbitState.target.copy(levelTarget)
-			lastOrbitState.position.copy(camera.position)
-		} else {
-			activeCameraLookTween = {
-				mode: 'orbit',
-				from: startTarget,
-				to: levelTarget,
-				duration: CAMERA_LEVEL_TWEEN_DURATION,
-				elapsed: 0,
-			}
-		}
-	} else {
-		tempDirection.set(0, 0, 0)
-		const yaw = Math.atan2(tempDirection.x, -tempDirection.z)
-		tempDirection.set(Math.sin(yaw), 0, -Math.cos(yaw))
-		tempTarget.copy(camera.position).add(tempDirection)
-		camera.lookAt(tempTarget)
+	const levelTarget = resolveCameraTweenTarget(camera)
+	levelTarget.y = camera.position.y
+	if (levelTarget.distanceToSquared(camera.position) < 1e-8) {
+		levelTarget.copy(camera.position).add(camera.getWorldDirection(tempDirection).setY(0).normalize())
 	}
+	startCameraLookTween({
+		toPosition: camera.position.clone(),
+		toTarget: levelTarget,
+		toProjection: captureCameraProjectionState(camera),
+		duration: CAMERA_LEVEL_TWEEN_DURATION,
+	})
 	setCameraViewState('level')
 	scenePreviewPerf.markInstancedCullingDirty()
 }
@@ -9226,18 +9883,45 @@ function easeInOutCubic(t: number): number {
 }
 
 function updateOrbitCameraLookTween(delta: number): void {
-	if (!activeCameraLookTween || activeCameraLookTween.mode !== 'orbit' || !mapControls) {
+	if (!activeCameraLookTween || activeCameraLookTween.mode !== 'orbit' || !camera) {
 		return
 	}
 	const tween = activeCameraLookTween
 	const duration = tween.duration > 0 ? tween.duration : 0.0001
 	tween.elapsed = Math.min(tween.elapsed + delta, tween.duration)
 	const progress = easeInOutCubic(Math.min(1, tween.elapsed / duration))
-	tempTarget.copy(tween.from).lerp(tween.to, progress)
-	mapControls.target.copy(tempTarget)
+	camera.position.lerpVectors(tween.fromPosition, tween.toPosition, progress)
+	tempTarget.copy(tween.fromTarget).lerp(tween.toTarget, progress)
+	applyCameraProjectionState(camera, {
+		fov: THREE.MathUtils.lerp(tween.fromProjection.fov, tween.toProjection.fov, progress),
+		near: THREE.MathUtils.lerp(tween.fromProjection.near, tween.toProjection.near, progress),
+		far: THREE.MathUtils.lerp(tween.fromProjection.far, tween.toProjection.far, progress),
+		zoom: THREE.MathUtils.lerp(tween.fromProjection.zoom, tween.toProjection.zoom, progress),
+	})
+	if (mapControls) {
+		mapControls.target.copy(tempTarget)
+		camera.lookAt(mapControls.target)
+		mapControls.update()
+	} else {
+		camera.lookAt(tempTarget)
+	}
+	lastOrbitState.position.copy(camera.position)
+	lastOrbitState.target.copy(tempTarget)
 	if (tween.elapsed >= tween.duration) {
-		mapControls.target.copy(tween.to)
+		camera.position.copy(tween.toPosition)
+		applyCameraProjectionState(camera, tween.toProjection)
+		if (mapControls) {
+			mapControls.target.copy(tween.toTarget)
+			camera.lookAt(mapControls.target)
+			mapControls.update()
+		} else {
+			camera.lookAt(tween.toTarget)
+		}
+		lastOrbitState.position.copy(camera.position)
+		lastOrbitState.target.copy(tween.toTarget)
+		const onComplete = tween.onComplete ?? null
 		activeCameraLookTween = null
+		onComplete?.()
 		scenePreviewPerf.markInstancedCullingDirty()
 	}
 }
@@ -9481,9 +10165,7 @@ function handleWindowBlur() {
 	characterKeyState.crouch = false
 	characterKeyState.interact = false
 	characterInputJumpLatch = false
-	if (!vehicleDriveState.active) {
-		return
-	}
+	resetCharacterNavigationControllerState(characterNavigationControllerState, characterInputYaw)
 }
 
 function handleKeyDown(event: KeyboardEvent) {
@@ -9629,6 +10311,8 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 	previewComponentManager.update(delta)
 	updateCharacterPathFollow(delta)
 	flushParticleRuntimeCommands()
+	updateCharacterAuthorityInputFromKeys(delta)
+	updateMoveToSessionForFrame(delta)
 	updateCharacterControllerAnimations(delta)
 	nodeAnimationRuntime.update(delta)
 	activeBehaviorSounds.forEach((instance) => {
@@ -9662,6 +10346,9 @@ function updateAutoTourCameraForFrame(
 	followCameraActive: boolean,
 	activeCamera: THREE.PerspectiveCamera,
 ): void {
+	if (isWatchCameraLocked() || activeCameraLookTween) {
+		return
+	}
 	if (!followCameraActive) {
 		return
 	}
@@ -9914,11 +10601,13 @@ function startAnimationLoop() {
 		// 1) Input / camera controls
 		updateSteeringAutoCenter(delta)
 		syncAutoTourCameraInputPolicyForFrame(delta)
-		const vehicleFollowCameraActive = vehicleDriveState.active
+		const watchCameraLocked = isWatchCameraLocked()
+		const vehicleFollowCameraActive = !watchCameraLocked && vehicleDriveState.active
 		const characterFollowCameraActive =
+			!watchCameraLocked &&
 			!vehicleDriveState.active
 			&& characterCameraMode.value === 'follow'
-		const autoTourFollowCameraActive = Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
+		const autoTourFollowCameraActive = !watchCameraLocked && Boolean(autoTourFollowNodeId.value) && !vehicleDriveState.active
 		const followCameraActive = vehicleFollowCameraActive || characterFollowCameraActive || autoTourFollowCameraActive
 		let vehicleTransformDriveUpdated = false
 		updateCameraControlsForFrame(delta, activeCamera, followCameraActive)
@@ -9943,7 +10632,7 @@ function startAnimationLoop() {
 		// 3) Vehicle camera and camera-dependent systems
 		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera, vehicleTransformDriveUpdated)
-		if (!autoTourFollowCameraActive) {
+		if (!watchCameraLocked && characterFollowCameraActive && !autoTourFollowCameraActive) {
 			updateCharacterFollowCamera(delta, activeCamera, false)
 		}
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
@@ -9951,6 +10640,7 @@ function startAnimationLoop() {
 		updatePunchBadgeOverlayEntries(activeCamera, delta)
 		syncSceneSignboards(currentScene, activeCamera)
 		updateInfoBoardOverlayPlacement(activeCamera)
+		updatePurposeControlsPlacement(activeCamera)
 		updatePerFrameDiagnostics(delta)
 		physicsCollisionDebugRuntime.update()
 
@@ -11432,8 +12122,18 @@ function resolveScenePreviewPhysicsBridgeTransformSyncEntry(
 ): PhysicsBridgeTransformSyncEntry | null {
 	const rigidbodyEntry = rigidbodyInstances.get(nodeId)
 	if (rigidbodyEntry) {
-		if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
-			return null
+		if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId && rigidbodyEntry.object) {
+		}
+		if (rigidbodyEntry.bindingKind === 'character') {
+			if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
+				return null
+			}
+			return {
+				object: rigidbodyEntry.object,
+				worldPosition: state.position,
+				worldQuaternion: state.quaternion,
+				orientationAdjustment: rigidbodyEntry.orientationAdjustment,
+			}
 		}
 		if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
 			return null
@@ -11451,6 +12151,8 @@ function resolveScenePreviewPhysicsBridgeTransformSyncEntry(
 	const bindingObject = resolveScenePreviewPhysicsBridgeBindingObject(nodeId, node, component)
 	if (!bindingObject) {
 		return null
+	}
+	if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
 	}
 	const orientationAdjustment = node && isGroundDynamicMesh(node.dynamicMesh)
 		? {
@@ -11598,10 +12300,12 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 	const commands: Array<Promise<void>> = []
 	const syncedNodeIds = new Set<string>()
 	rigidbodyInstances.forEach((entry, nodeId) => {
-		if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
+		if (entry.bindingKind === 'character') {
+			if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId && entry.body) {
+			}
 			return
 		}
-		if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
+		if (!entry.body || entry.body.type === LEGACY_STATIC_BODY_TYPE) {
 			return
 		}
 		const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
@@ -11609,6 +12313,8 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 			return
 		}
 		const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
+		if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
+		}
 		if (isPhysicsTransformClose(entry.body.position, entry.body.quaternion, frameState)) {
 			return
 		}
@@ -11643,6 +12349,8 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		object.getWorldPosition(physicsBridgeBodySyncPositionHelper)
 		object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize()
 		const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
+		if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
+		}
 		if (isPhysicsTransformClose(physicsBridgeBodySyncPositionHelper, physicsBridgeBodySyncQuaternionHelper, frameState)) {
 			return
 		}
@@ -11765,79 +12473,13 @@ function syncScenePreviewPhysicsBridgeVehicleInput(deltaSeconds: number): void {
 		warningPrefix: '[ScenePreview]',
 	})
 }
-
-function normalizeScenePreviewCharacterInputYaw(value: number): number {
-	return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI
-}
-
-function resolveScenePreviewCharacterInputYawSeed(): number {
-	const controlledObject = findDefaultControlledCharacterObject()
-	if (controlledObject) {
-		resolveControlledCharacterMotionForwardAxis(tempDirection)
-		controlledObject.getWorldQuaternion(tempQuaternion)
-		tempDirection.applyQuaternion(tempQuaternion)
-		tempDirection.y = 0
-		if (tempDirection.lengthSq() > 1e-8) {
-			tempDirection.normalize()
-			return Math.atan2(tempDirection.x, tempDirection.z)
-		}
-	}
-	const activeCamera = camera
-	if (activeCamera) {
-		activeCamera.getWorldDirection(tempDirection)
-		tempDirection.y = 0
-		if (tempDirection.lengthSq() > 1e-8) {
-			tempDirection.normalize()
-			return Math.atan2(tempDirection.x, tempDirection.z)
-		}
-	}
-	return Math.PI
-}
-
-const CHARACTER_PREVIEW_MAX_TURN_RATE_DEGREES_PER_SECOND = 180
-const CHARACTER_PREVIEW_MOVING_TURN_RATE_SCALE = 0.5
-const CHARACTER_PREVIEW_REVERSE_TURN_RATE_SCALE = 0.88
-
-function resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude: number, moveZ: number): number {
-	const props = resolveDefaultControlledCharacterComponentProps()
-	const configuredTurnRate = props?.turnRateDegreesPerSecond ?? 540
-	const cappedTurnRate = Math.min(configuredTurnRate, CHARACTER_PREVIEW_MAX_TURN_RATE_DEGREES_PER_SECOND)
-	const movingBlend = THREE.MathUtils.clamp(movementMagnitude, 0, 1)
-	const turnScale = THREE.MathUtils.lerp(1, CHARACTER_PREVIEW_MOVING_TURN_RATE_SCALE, movingBlend)
-	const reverseScale = moveZ < -0.05 ? CHARACTER_PREVIEW_REVERSE_TURN_RATE_SCALE : 1
-	return ((cappedTurnRate * turnScale * reverseScale) * Math.PI) / 180
-}
-
-function updateScenePreviewCharacterInputYaw(deltaSeconds: number): number {
-	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
-	const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.05
-	const movementMagnitude = resolveCharacterControlMovementMagnitude(
-		characterAuthorityInput.moveX,
-		characterAuthorityInput.moveZ,
-	)
-	if (characterInputYawNodeId !== controlledNodeId) {
-		characterInputYawNodeId = controlledNodeId
-		characterInputYawInitialized = false
-	}
-	if (!characterInputYawInitialized) {
-		characterInputYaw = resolveScenePreviewCharacterInputYawSeed()
-		characterInputYawInitialized = true
-	}
-	if (hasTurnInput && Number.isFinite(deltaSeconds) && deltaSeconds > 0) {
-		characterInputYaw += characterAuthorityInput.turn
-			* resolveScenePreviewCharacterTurnRateRadiansPerSecond(movementMagnitude, characterAuthorityInput.moveZ)
-			* deltaSeconds
-		characterInputYaw = normalizeScenePreviewCharacterInputYaw(characterInputYaw)
-	}
-	return characterInputYaw
-}
-
 function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void {
+	void deltaSeconds
 	if (!physicsBridge || !physicsBridgeSceneLoaded || !physicsBridgeCharacterIdByNodeId.size) {
 		return
 	}
 	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
-	const yaw = updateScenePreviewCharacterInputYaw(deltaSeconds)
+	const localYaw = characterInputYaw
 	physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
 		const isControlled = nodeId === controlledNodeId
 		const pathFollowInput = characterAutoTourRuntime.getInput(nodeId)
@@ -11847,6 +12489,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 				Math.abs(pathFollowInput!.moveX) > 0.001
 				|| Math.abs(pathFollowInput!.moveZ) > 0.001
 				|| Math.abs(pathFollowInput!.turn) > 0.001
+				|| typeof pathFollowInput!.yaw === 'number'
 				|| pathFollowInput!.jump
 				|| pathFollowInput!.sprint
 				|| pathFollowInput!.crouch
@@ -11854,7 +12497,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(deltaSeconds: number): void
 			)
 		const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
 			? pathFollowInput.yaw
-			: yaw
+			: (isControlled ? localYaw : null)
 		void physicsBridge?.setCharacterInput({
 			characterId,
 			moveX: hasPathFollowInput ? pathFollowInput!.moveX : 0,
@@ -12116,6 +12759,7 @@ function syncVehicleRigidbodyInstance(nodeId: string, instance: VehicleInstance,
 		bodies: [chassisBody],
 		object,
 		orientationAdjustment: null,
+		bindingKind: 'vehicle',
 	})
 }
 
@@ -12149,6 +12793,41 @@ function ensureVehicleBindingForNode(nodeId: string): void {
 		vehicleInstances.set(nodeId, instance)
 		syncVehicleRigidbodyInstance(nodeId, instance, object)
 	}
+}
+
+function removeCharacterBinding(nodeId: string): void {
+	const entry = rigidbodyInstances.get(nodeId) ?? null
+	if (!entry || entry.bindingKind !== 'character') {
+		return
+	}
+	rigidbodyInstances.delete(nodeId)
+}
+
+function ensureCharacterBindingForNode(nodeId: string): void {
+	const node = resolveNodeById(nodeId)
+	const component = resolveCharacterControllerComponent(node)
+	if (!node || !component) {
+		removeCharacterBinding(nodeId)
+		return
+	}
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!object) {
+		return
+	}
+	object.updateWorldMatrix(true, false)
+	const worldPosition = new THREE.Vector3()
+	const worldQuaternion = new THREE.Quaternion()
+	object.getWorldPosition(worldPosition)
+	object.getWorldQuaternion(worldQuaternion).normalize()
+	const body = createBridgePhysicsBodyProxy(worldPosition, worldQuaternion)
+	rigidbodyInstances.set(nodeId, {
+		nodeId,
+		body,
+		bodies: [body],
+		object,
+		orientationAdjustment: null,
+		bindingKind: 'character',
+	})
 }
 
 function resolveRigidbodyBindingObject(
@@ -12206,6 +12885,49 @@ function syncVehicleBindingsForDocument(document: SceneJsonExportDocument | null
 	})
 }
 
+function collectCharacterNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+	const collected: SceneNode[] = []
+	if (!Array.isArray(nodes)) {
+		return collected
+	}
+	const stack: SceneNode[] = [...nodes]
+	while (stack.length) {
+		const node = stack.pop()
+		if (!node) {
+			continue
+		}
+		if (resolveCharacterControllerComponent(node)) {
+			collected.push(node)
+		}
+		if (Array.isArray(node.children) && node.children.length) {
+			stack.push(...node.children)
+		}
+	}
+	return collected
+}
+
+function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | null): void {
+	if (!document) {
+		Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+			if (entry.bindingKind === 'character') {
+				rigidbodyInstances.delete(nodeId)
+			}
+		})
+		return
+	}
+	const characterNodes = collectCharacterNodes(document.nodes)
+	const desiredIds = new Set<string>()
+	characterNodes.forEach((node) => desiredIds.add(node.id))
+	Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+		if (entry.bindingKind === 'character' && !desiredIds.has(nodeId)) {
+			rigidbodyInstances.delete(nodeId)
+		}
+	})
+	characterNodes.forEach((node) => {
+		ensureCharacterBindingForNode(node.id)
+	})
+}
+
 type SceneSubsystemProgressReporter = (progress: {
 	phase: SceneInitStage
 	percent: number
@@ -12241,11 +12963,13 @@ async function syncPhysicsBodiesForDocument(
 	if (!document) {
 		resetPhysicsWorld()
 		syncVehicleBindingsForDocument(null)
+		syncCharacterBindingsForDocument(null)
 		return
 	}
 	await loadScenePreviewPhysicsBridgeScene(document, onProgress)
 	clearLegacyPhysicsWorld()
 	syncVehicleBindingsForDocument(document)
+	syncCharacterBindingsForDocument(document)
 }
 
 function stepPhysicsWorld(delta: number): void {
@@ -13383,24 +14107,129 @@ function toggleFullscreen() {
 	}
 }
 
-function captureScreenshot() {
+function sanitizeScreenshotFileNamePart(input: string): string {
+	return input
+		.trim()
+		.replace(/[\\/:*?"<>|]+/g, '_')
+		.replace(/\s+/g, ' ')
+		.replace(/\.+$/g, '')
+		.slice(0, 64) || 'preview'
+}
+
+function buildScreenshotFileName(): string {
+	const now = new Date()
+	const pad = (value: number) => String(value).padStart(2, '0')
+	const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+	const baseName = sanitizeScreenshotFileNamePart(currentDocument?.name?.trim() || 'preview')
+	return `${baseName}-${stamp}.png`
+}
+
+function triggerDownload(blob: Blob, fileName: string) {
+	const url = URL.createObjectURL(blob)
+	const anchor = document.createElement('a')
+	anchor.style.display = 'none'
+	anchor.href = url
+	anchor.download = fileName
+	document.body.appendChild(anchor)
+	anchor.click()
+	document.body.removeChild(anchor)
+	window.setTimeout(() => URL.revokeObjectURL(url), 250)
+}
+
+function blobFromDataUrl(dataUrl: string): Blob | null {
+	const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl)
+	if (!match) {
+		return null
+	}
+	const mimeType = match[1] || 'image/png'
+	const isBase64 = Boolean(match[2])
+	const payload = match[3] || ''
+	try {
+		const raw = isBase64 ? atob(payload) : decodeURIComponent(payload)
+		const bytes = new Uint8Array(raw.length)
+		for (let index = 0; index < raw.length; index += 1) {
+			bytes[index] = raw.charCodeAt(index)
+		}
+		return new Blob([bytes], { type: mimeType })
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to decode screenshot data URL', error)
+		return null
+	}
+}
+
+async function canvasToBlob(canvas: HTMLCanvasElement, mimeType = 'image/png'): Promise<Blob | null> {
+	if (typeof canvas.toBlob === 'function') {
+		const blob = await new Promise<Blob | null>((resolve) => {
+			try {
+				canvas.toBlob((value) => resolve(value), mimeType)
+			} catch (error) {
+				console.warn('[ScenePreviewView] canvas.toBlob failed', error)
+				resolve(null)
+			}
+		})
+		if (blob) {
+			return blob
+		}
+	}
+
+	try {
+		const dataUrl = canvas.toDataURL(mimeType)
+		const dataBlob = blobFromDataUrl(dataUrl)
+		if (dataBlob) {
+			return dataBlob
+		}
+		const response = await fetch(dataUrl)
+		return await response.blob()
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to convert screenshot canvas to blob', error)
+		return null
+	}
+}
+
+function setTransientStatusMessage(message: string): void {
+	if (screenshotStatusTimer) {
+		clearTimeout(screenshotStatusTimer)
+		screenshotStatusTimer = null
+	}
+	const previousMessage = statusMessage.value
+	statusMessage.value = message
+	screenshotStatusTimer = setTimeout(() => {
+		screenshotStatusTimer = null
+		if (statusMessage.value === message) {
+			statusMessage.value = previousMessage
+		}
+	}, 2200)
+}
+
+async function captureScreenshot() {
+	if (screenshotBusy.value) {
+		return
+	}
 	const currentRenderer = renderer
 	const currentScene = scene
 	const activeCamera = camera
 	if (!currentRenderer || !currentScene || !activeCamera) {
+		setTransientStatusMessage('Screenshot unavailable right now')
 		return
 	}
-	currentRenderer.render(currentScene, activeCamera)
-	const dataUrl = currentRenderer.domElement.toDataURL('image/png')
-	if (!dataUrl) {
-		return
+
+	screenshotBusy.value = true
+	try {
+		currentRenderer.render(currentScene, activeCamera)
+		const blob = await canvasToBlob(currentRenderer.domElement, 'image/png')
+		if (!blob) {
+			setTransientStatusMessage('Failed to capture screenshot')
+			return
+		}
+		const fileName = buildScreenshotFileName()
+		triggerDownload(blob, fileName)
+		setTransientStatusMessage(`Saved screenshot: ${fileName}`)
+	} catch (error) {
+		console.warn('[ScenePreviewView] Failed to capture screenshot', error)
+		setTransientStatusMessage('Failed to save screenshot')
+	} finally {
+		screenshotBusy.value = false
 	}
-	const link = document.createElement('a')
-	link.href = dataUrl
-	link.download = `harmony-scene-${Date.now()}.png`
-	document.body.appendChild(link)
-	link.click()
-	document.body.removeChild(link)
 }
 
 
@@ -13431,7 +14260,12 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	cancelMoveToTransition()
 	clearSceneInitState()
+	if (screenshotStatusTimer) {
+		clearTimeout(screenshotStatusTimer)
+		screenshotStatusTimer = null
+	}
 	if (typeof window !== 'undefined') {
 		window.removeEventListener('harmony-preview-nominate-change', syncPreviewNominateStateMap)
 	}
@@ -13539,7 +14373,10 @@ watch(
 				</v-btn>
 			</div>
 		</v-alert>
-		<div ref="containerRef" class="scene-preview__canvas"></div>
+		<div
+			ref="containerRef"
+			class="scene-preview__canvas"
+		></div>
 		<div v-if="punchBadgeOverlayEntries.length" class="scene-preview__punch-badge-layer" aria-hidden="true">
 			<div
 				v-for="entry in punchBadgeOverlayEntries"
@@ -13625,7 +14462,7 @@ watch(
 			</div>
 			<div ref="statsContainerRef" class="scene-preview__stats-panels"></div>
 		</div>
-		<div class="scene-preview__debug-menu">
+		<div v-if="!watchExclusiveUiActive" class="scene-preview__debug-menu">
 			<v-menu
 				v-model="isDebugMenuOpen"
 				location="bottom end"
@@ -13797,41 +14634,66 @@ watch(
 				{{ message }}
 			</div>
 		</v-alert>
+		<template v-if="purposeControlsVisible && !watchExclusiveUiActive">
+			<div
+				v-for="entry in purposeControlEntries"
+				:key="entry.nodeId"
+				class="scene-preview__purpose-controls"
+				:style="resolvePurposeControlStyle(entry)"
+				:data-purpose-node-id="entry.nodeId"
+			>
+				<v-btn
+					v-for="button in entry.buttons"
+					:key="button.id"
+					class="scene-preview__purpose-button"
+					prepend-icon="mdi-play-circle-outline"
+					rounded="pill"
+					variant="flat"
+					:elevation="0"
+					:ripple="false"
+					size="small"
+					:block="true"
+					:title="resolvePurposeButtonLabel(button)"
+					:aria-label="resolvePurposeButtonLabel(button)"
+					@click="handlePurposeButtonClick(entry, button)"
+				>
+					<span class="scene-preview__purpose-label">{{ resolvePurposeButtonDisplayLabel(button) }}</span>
+				</v-btn>
+			</div>
+		</template>
 		<div
-			v-if="purposeControlsVisible"
-			class="scene-preview__purpose-controls"
+			v-if="watchLeaveVisible"
+			class="scene-preview__watch-leave"
 		>
-			<v-btn
-				class="scene-preview__purpose-button scene-preview__purpose-button--watch"
-				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'watching' }"
-				prepend-icon="mdi-eye-outline"
-				rounded="pill"
-				variant="flat"
-				:elevation="0"
-				:ripple="false"
-				:aria-pressed="cameraViewState.mode === 'watching'"
-				title="Watch view"
-				@click="handlePurposeWatchClick"
-			>
-				<span class="scene-preview__purpose-label">Watch</span>
-			</v-btn>
-			<v-btn
-				class="scene-preview__purpose-button scene-preview__purpose-button--level"
-				:class="{ 'scene-preview__purpose-button--active': cameraViewState.mode === 'level' }"
-				prepend-icon="mdi-panorama-horizontal-outline"
-				rounded="pill"
-				variant="flat"
-				:elevation="0"
-				:ripple="false"
-				:aria-pressed="cameraViewState.mode === 'level'"
-				title="Reset to level"
-				@click="handlePurposeResetClick"
-			>
-				<span class="scene-preview__purpose-label">Level</span>
-			</v-btn>
+			<div class="scene-preview__watch-actions">
+				<v-btn
+					class="scene-preview__watch-action"
+					rounded="pill"
+					variant="flat"
+					color="warning"
+					prepend-icon="mdi-exit-run"
+					@click="leaveActiveWatchView"
+				>
+					离开
+				</v-btn>
+				<v-btn
+					class="scene-preview__watch-action"
+					rounded="pill"
+					variant="flat"
+					color="secondary"
+					prepend-icon="mdi-camera"
+					:loading="screenshotBusy"
+					:disabled="screenshotBusy"
+					:title="'拍照保存当前视野'"
+					:aria-label="'拍照保存当前视野'"
+					@click="captureScreenshot"
+				>
+					拍照
+				</v-btn>
+			</div>
 		</div>
 		<v-btn-group
-			v-if="vehicleDrivePrompt.visible"
+			v-if="vehicleDrivePrompt.visible && !watchExclusiveUiActive"
 			class="scene-preview__drive-start-button"
 			density="comfortable"
 			divided
@@ -13896,7 +14758,7 @@ watch(
 			</v-btn>
 		</v-btn-group>
 		<div
-			v-if="runtimePanelUi.visible"
+			v-if="runtimePanelUi.visible && !watchExclusiveUiActive"
 			class="scene-preview__drive-panel"
 		>
 			<div class="scene-preview__drive-panel-inner">
@@ -14011,68 +14873,7 @@ watch(
 					</div>
 				</div>
 				<div v-else class="scene-preview__character-controls">
-					<div class="scene-preview__character-row">
-						<v-btn
-							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.leftActive }"
-							variant="tonal"
-							color="secondary"
-							size="small"
-							icon="mdi-arrow-left-bold"
-							title="Left (A)"
-							aria-label="Left"
-							@click.prevent
-							@pointerdown.prevent="handleCharacterControlPointer('left', true, $event)"
-							@pointerup.prevent="handleCharacterControlPointer('left', false, $event)"
-							@pointerleave="handleCharacterControlPointer('left', false)"
-							@pointercancel="handleCharacterControlPointer('left', false)"
-						/>
-						<v-btn
-							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.forwardActive }"
-							variant="tonal"
-							color="primary"
-							size="small"
-							icon="mdi-arrow-up-bold"
-							title="Forward (W)"
-							aria-label="Forward"
-							@click.prevent
-							@pointerdown.prevent="handleCharacterControlPointer('forward', true, $event)"
-							@pointerup.prevent="handleCharacterControlPointer('forward', false, $event)"
-							@pointerleave="handleCharacterControlPointer('forward', false)"
-							@pointercancel="handleCharacterControlPointer('forward', false)"
-						/>
-						<v-btn
-							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.rightActive }"
-							variant="tonal"
-							color="secondary"
-							size="small"
-							icon="mdi-arrow-right-bold"
-							title="Right (D)"
-							aria-label="Right"
-							@click.prevent
-							@pointerdown.prevent="handleCharacterControlPointer('right', true, $event)"
-							@pointerup.prevent="handleCharacterControlPointer('right', false, $event)"
-							@pointerleave="handleCharacterControlPointer('right', false)"
-							@pointercancel="handleCharacterControlPointer('right', false)"
-						/>
-						<v-btn
-							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.backwardActive }"
-							variant="tonal"
-							color="secondary"
-							size="small"
-							icon="mdi-arrow-down-bold"
-							title="Backward (S)"
-							aria-label="Backward"
-							@click.prevent
-							@pointerdown.prevent="handleCharacterControlPointer('backward', true, $event)"
-							@pointerup.prevent="handleCharacterControlPointer('backward', false, $event)"
-							@pointerleave="handleCharacterControlPointer('backward', false)"
-							@pointercancel="handleCharacterControlPointer('backward', false)"
-						/>
-					</div>
+		
 					<div class="scene-preview__character-row">
 						<v-btn
 							class="scene-preview__pedal-button"
@@ -14138,7 +14939,7 @@ watch(
 				</div>
 			</div>
 		</div>
-		<v-sheet class="scene-preview__control-bar" elevation="10">
+		<v-sheet v-if="!watchExclusiveUiActive" class="scene-preview__control-bar" elevation="10">
 			<div class="scene-preview__controls">
 				<v-btn
 					class="scene-preview__control-button"
@@ -14190,6 +14991,8 @@ watch(
 					size="small"
 					:aria-label="'Screenshot (Hotkey P)'"
 					:title="'Screenshot (Hotkey P)'"
+					:loading="screenshotBusy"
+					:disabled="screenshotBusy"
 					@click="captureScreenshot"
 				/>
 				<v-btn
@@ -14999,13 +15802,18 @@ watch(
 
 .scene-preview__purpose-controls {
 	position: absolute;
-	left: 24px;
-	bottom: 24px;
+	left: 0;
+	top: 0;
 	display: flex;
-	flex-wrap: wrap;
-	gap: 16px;
+	flex-direction: column;
+	align-items: stretch;
+	gap: 8px;
 	z-index: 1900;
 	pointer-events: auto;
+	width: max-content;
+	max-width: min(220px, calc(100vw - 24px));
+	padding: 0;
+	overflow: visible;
 }
 
 
@@ -15017,19 +15825,20 @@ watch(
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	padding: 0 28px;
-	height: 56px;
-	min-width: 156px;
+	padding: 0 12px;
+	height: 34px;
+	min-width: 104px;
+	width: 100%;
 	border-radius: 999px;
 	box-sizing: border-box;
 	z-index: 0;
 	color: #f9fbff !important;
 	background: linear-gradient(135deg, var(--purpose-accent-start), var(--purpose-accent-mid), var(--purpose-accent-end));
 	background-size: 240% 240%;
-	box-shadow: 0 16px 35px rgba(24, 196, 255, 0.25);
+	box-shadow: 0 12px 24px rgba(24, 196, 255, 0.22);
 	animation: scene-preview-purpose-flow 7s ease infinite;
-	transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease;
-	letter-spacing: 0.04em;
+	transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+	letter-spacing: 0.02em;
 	text-transform: none;
 	font-weight: 600;
 	filter: saturate(0.95);
@@ -15041,12 +15850,12 @@ watch(
 	position: absolute;
 	top: 50%;
 	left: 50%;
-	width: calc(100% + 42px);
-	height: calc(100% + 42px);
+	width: calc(100% + 28px);
+	height: calc(100% + 28px);
 	border-radius: inherit;
 	background: linear-gradient(135deg, var(--purpose-accent-start), var(--purpose-accent-mid), var(--purpose-accent-end));
 	transform: translate(-50%, -50%);
-	filter: blur(38px);
+	filter: blur(28px);
 	opacity: 0.55;
 	transition: opacity 0.35s ease, filter 0.35s ease;
 	pointer-events: none;
@@ -15069,8 +15878,8 @@ watch(
 }
 
 .scene-preview__purpose-button:hover {
-	transform: translateY(-3px) scale(1.02);
-	box-shadow: 0 22px 44px rgba(24, 196, 255, 0.4);
+	transform: translateY(-2px) scale(1.02);
+	box-shadow: 0 18px 34px rgba(24, 196, 255, 0.34);
 	filter: saturate(1.05);
 }
 
@@ -15087,7 +15896,7 @@ watch(
 
 .scene-preview__purpose-button:focus-visible {
 	outline: none;
-	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.35), 0 20px 46px rgba(24, 196, 255, 0.45);
+	box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.28), 0 18px 36px rgba(24, 196, 255, 0.38);
 	filter: saturate(1.1);
 }
 
@@ -15139,10 +15948,12 @@ watch(
 .scene-preview__purpose-button :deep(.v-btn__content) {
 	position: relative;
 	z-index: 1;
-	gap: 10px;
+	gap: 6px;
 	font-weight: 600;
-	font-size: 1.05rem;
+	font-size: 0.76rem;
 	text-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+	justify-content: center;
+	width: 100%;
 }
 
 .scene-preview__drive-panel {
@@ -15362,6 +16173,49 @@ watch(
 .scene-preview__purpose-label {
 	position: relative;
 	z-index: 1;
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	font-size: 0.76rem;
+	line-height: 1;
+}
+
+.scene-preview__watch-leave {
+	position: absolute;
+	left: 50%;
+	bottom: 24px;
+	transform: translateX(-50%);
+	z-index: 1900;
+	pointer-events: auto;
+}
+
+.scene-preview__watch-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	border-radius: 999px;
+	background: rgba(18, 18, 32, 0.72);
+	backdrop-filter: blur(14px);
+	box-shadow: 0 18px 40px rgba(16, 18, 30, 0.24);
+}
+
+.scene-preview__watch-action {
+	min-width: 120px;
+	height: 44px;
+	padding: 0 18px;
+	border-radius: 999px;
+}
+
+.scene-preview__watch-action :deep(.v-btn__content) {
+	letter-spacing: 0.04em;
+}
+
+.scene-preview__watch-action :deep(.v-btn__overlay),
+.scene-preview__watch-action :deep(.v-btn__underlay) {
+	opacity: 0;
 }
 
 @media (max-width: 720px) {
@@ -15376,6 +16230,24 @@ watch(
 	.scene-preview__purpose-button {
 		min-width: 0;
 		width: 180px;
+	}
+
+	.scene-preview__watch-leave {
+		bottom: 16px;
+		left: 16px;
+		transform: none;
+	}
+
+	.scene-preview__watch-actions {
+		flex-direction: column;
+		align-items: stretch;
+		border-radius: 20px;
+		padding: 10px;
+	}
+
+	.scene-preview__watch-action {
+		min-width: 154px;
+		width: 100%;
 	}
 }
 

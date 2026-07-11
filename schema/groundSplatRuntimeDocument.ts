@@ -4,8 +4,6 @@ import type {
   SceneJsonExportDocument,
   SceneNode,
 } from './core'
-import { buildGroundOptimizedMeshData } from './groundOptimizedMesh'
-import { isGroundDynamicMesh } from './groundHeightfield'
 import { resolveDocumentGroundNode } from './groundNode'
 
 export type PrepareRuntimeGroundSplatSceneDocumentResult = {
@@ -15,10 +13,6 @@ export type PrepareRuntimeGroundSplatSceneDocumentResult = {
   strippedLandformNodes: boolean
   groundSurfaceChunkCount: number
   landformNodeCount: number
-}
-function cloneSceneJsonExportDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-
-  return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument
 }
 
 function cloneGroundSurfaceChunkTextureMap(
@@ -50,15 +44,6 @@ function countLandformNodes(nodes: SceneNode[] | undefined | null): number {
   return count
 }
 
-export function attachOptimizedGroundMeshToDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-  const groundNode = resolveDocumentGroundNode(document)
-  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    return document
-  }
-  groundNode.dynamicMesh.optimizedMesh = buildGroundOptimizedMeshData(groundNode.dynamicMesh)
-  return document
-}
-
 function stripLandformNodes(nodes: SceneNode[] | undefined | null): boolean {
   if (!Array.isArray(nodes)) {
     return false
@@ -88,7 +73,7 @@ function stripLandformNodes(nodes: SceneNode[] | undefined | null): boolean {
 export async function prepareRuntimeGroundSplatSceneDocument(
   document: SceneJsonExportDocument,
 ): Promise<PrepareRuntimeGroundSplatSceneDocumentResult> {
-  const runtimeDocument = cloneSceneJsonExportDocument(document)
+  const runtimeDocument = document
   const groundNode = resolveDocumentGroundNode(runtimeDocument)
   const groundDefinition = groundNode?.dynamicMesh?.type === 'Ground' ? (groundNode.dynamicMesh as GroundDynamicMesh)  : null
   const directChunks = cloneGroundSurfaceChunkTextureMap(groundDefinition?.groundSurfaceChunks ?? null)
@@ -124,7 +109,5 @@ export async function prepareRuntimeGroundSplatSceneDocument(
 export async function prepareRuntimeGroundSceneDocument(
   document: SceneJsonExportDocument,
 ): Promise<PrepareRuntimeGroundSplatSceneDocumentResult> {
-  const prepared = await prepareRuntimeGroundSplatSceneDocument(document)
-  attachOptimizedGroundMeshToDocument(prepared.document)
-  return prepared
+  return prepareRuntimeGroundSplatSceneDocument(document)
 }

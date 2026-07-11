@@ -39,10 +39,13 @@ import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
 import NominatePanel from '@/components/inspector/NominatePanel.vue'
 import CouponPanel from '@/components/inspector/CouponPanel.vue'
 import ProceduralCityPanel from '@/components/inspector/ProceduralCityPanel.vue'
-import { useSceneStore, GROUND_NODE_ID, ENVIRONMENT_NODE_ID,MULTIUSER_NODE_ID } from '@/stores/sceneStore'
+import { useSceneStore, getRuntimeObject, GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
+import { findSceneNodeById } from '@/utils/animationClipCatalog'
 import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema/core'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
+import { collectAnimationClipCatalog } from '@schema/runtimeAnimationCatalog'
+import { resolveCharacterControllerAnimationBindings } from '@schema/characterControllerAnimationRuntime'
 
 import {
   BEHAVIOR_COMPONENT_TYPE,
@@ -72,6 +75,7 @@ import {
   NOMINATE_COMPONENT_TYPE,
   componentManager,
   type RigidbodyColliderType,
+  type CharacterControllerComponentProps,
   FLOOR_COMPONENT_TYPE,
   LANDFORM_COMPONENT_TYPE,
   MODEL_COLLISION_COMPONENT_TYPE,
@@ -480,9 +484,18 @@ function handleAddComponent(type: string) {
   if (!selectedNode.value) {
     return
   }
-  if (type !== RIGIDBODY_COMPONENT_TYPE) {
-    // For non-rigidbody, just attempt to add and return
+  if (type !== RIGIDBODY_COMPONENT_TYPE && type !== CHARACTER_CONTROLLER_COMPONENT_TYPE) {
+    // For components without custom post-processing, just add and return.
     sceneStore.addNodeComponent(selectedNode.value.id, type)
+    return
+  }
+
+  if (type === CHARACTER_CONTROLLER_COMPONENT_TYPE) {
+    const result = sceneStore.addNodeComponent<typeof CHARACTER_CONTROLLER_COMPONENT_TYPE>(selectedNode.value.id, CHARACTER_CONTROLLER_COMPONENT_TYPE)
+    if (!result?.created) {
+      return
+    }
+    applyCharacterControllerAnimationBindings(result.component.id)
     return
   }
 
@@ -496,6 +509,43 @@ function handleAddComponent(type: string) {
     return
   }
   sceneStore.updateNodeComponentProps(selectedNode.value.id, created.id, { colliderType: preferredColliderType })
+}
+
+function applyCharacterControllerAnimationBindings(componentId: string) {
+  const node = selectedNode.value
+  if (!node) {
+    return
+  }
+  const component = node.components?.[CHARACTER_CONTROLLER_COMPONENT_TYPE] as SceneNodeComponentState<{
+    targetNodeId: CharacterControllerComponentProps['targetNodeId']
+    animationBindings: CharacterControllerComponentProps['animationBindings']
+  }> | undefined
+  if (!component) {
+    return
+  }
+  const targetNodeId = component.props?.targetNodeId?.trim() ?? ''
+  if (!targetNodeId) {
+    return
+  }
+  const targetNode = findSceneNodeById([node], targetNodeId)
+  if (!targetNode) {
+    return
+  }
+  const runtimeObject = getRuntimeObject(targetNodeId)
+  if (!runtimeObject) {
+    return
+  }
+  const clipCatalog = collectAnimationClipCatalog(runtimeObject)
+  if (!clipCatalog.length) {
+    return
+  }
+  const animationBindings = resolveCharacterControllerAnimationBindings(clipCatalog.map((entry) => entry.value))
+  if (!animationBindings.some((binding) => binding.clipName)) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(node.id, componentId, {
+    animationBindings,
+  })
 }
 
 function resolvePreferredRigidbodyColliderType(nodeType: string | null | undefined): RigidbodyColliderType | null {

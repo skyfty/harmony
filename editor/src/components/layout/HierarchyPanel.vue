@@ -43,6 +43,7 @@ const HIERARCHY_ROW_HEIGHT = 30
 
 const selectionAnchorId = ref<string | null>(null)
 const suppressSelectionSync = ref(false)
+const RIGHT_CLICK_DRAG_THRESHOLD_PX = 4
 type DragState = {
   sourceIds: string[]
   primaryId: string | null
@@ -64,6 +65,15 @@ const dragState = ref<DragState>({
 })
 
 const dragSession = ref<DragSessionCache | null>(null)
+type PendingRightClickSelection = {
+  pointerId: number
+  nodeId: string
+  startX: number
+  startY: number
+  moved: boolean
+}
+
+const pendingRightClickSelection = ref<PendingRightClickSelection | null>(null)
 
 let dragHoverRaf: number | null = null
 let pendingDragHover: { targetId: string | null; position: HierarchyDropPosition | null } | null = null
@@ -236,6 +246,7 @@ onBeforeUnmount(() => {
     dragHoverRaf = null
   }
   pendingDragHover = null
+  handleWindowRightClickPointerCancel()
 
   stopAutoScroll()
 
@@ -1283,55 +1294,18 @@ function canCompleteNodePick(nodeId: string): boolean {
   return true
 }
 
-function handleNodeClick(event: MouseEvent, nodeId: string) {
-  event.stopPropagation()
-  event.preventDefault()
-  if (event.button !== 0) return
-
-  if (nodePickerStore.isActive) {
-    if (canCompleteNodePick(nodeId)) {
-      nodePickerStore.completePick(nodeId)
+function clearSelectedAssetForNodeSelectionChange() {
+  if (sceneStore.selectedAssetId && selectedNodeIds.value.length) {
+    if (uiStore.activeSelectionContext === 'asset-panel') {
+      uiStore.setActiveSelectionContext(null)
     }
-    return
+    sceneStore.selectAsset(null)
   }
+}
 
-  const isToggle = event.ctrlKey || event.metaKey
-  const isRangeSelect = event.shiftKey && selectionAnchorId.value
-  const currentlySelected = isItemSelected(nodeId)
-
-  const currentSelection = [...selectedNodeIds.value]
-  let nextSelection: string[] = currentSelection
-
-  if (isRangeSelect) {
-    const anchorId = selectionAnchorId.value
-    const order = rangeOrderNodeIds.value
-    const anchorIndex = anchorId ? order.indexOf(anchorId) : -1
-    const targetIndex = order.indexOf(nodeId)
-    if (anchorIndex !== -1 && targetIndex !== -1) {
-      const [start, end] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
-      const rangeIds = order.slice(start, end + 1)
-      const base = isToggle ? currentSelection : []
-      nextSelection = Array.from(new Set([...base, ...rangeIds]))
-    } else {
-      nextSelection = [nodeId]
-    }
-  } else if (isToggle) {
-    nextSelection = currentlySelected
-      ? currentSelection.filter((id) => id !== nodeId)
-      : [...currentSelection, nodeId]
-  } else {
-    if (currentSelection.length !== 1 || !currentlySelected) {
-      nextSelection = [nodeId]
-    }
-  }
-
+function applyNodeSelection(nextSelection: string[]) {
   if (!nextSelection.length) {
-    if (sceneStore.selectedAssetId && selectedNodeIds.value.length) {
-      if (uiStore.activeSelectionContext === 'asset-panel') {
-        uiStore.setActiveSelectionContext(null)
-      }
-      sceneStore.selectAsset(null)
-    }
+    clearSelectedAssetForNodeSelectionChange()
     suppressSelectionSync.value = true
     sceneStore.clearSelection()
     selectionAnchorId.value = null
@@ -1347,6 +1321,77 @@ function handleNodeClick(event: MouseEvent, nodeId: string) {
   suppressSelectionSync.value = true
   sceneStore.setSelection(nextSelection)
   selectionAnchorId.value = nextSelection[nextSelection.length - 1] ?? null
+}
+
+function selectNodeByInteraction(nodeId: string, options: { toggle: boolean; range: boolean }) {
+  if (nodePickerStore.isActive) {
+    if (canCompleteNodePick(nodeId)) {
+      nodePickerStore.completePick(nodeId)
+    }
+    return
+  }
+
+  const currentlySelected = isItemSelected(nodeId)
+  const currentSelection = [...selectedNodeIds.value]
+  let nextSelection: string[] = currentSelection
+
+  if (options.range) {
+    const anchorId = selectionAnchorId.value
+    const order = rangeOrderNodeIds.value
+    const anchorIndex = anchorId ? order.indexOf(anchorId) : -1
+    const targetIndex = order.indexOf(nodeId)
+    if (anchorIndex !== -1 && targetIndex !== -1) {
+      const [start, end] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
+      const rangeIds = order.slice(start, end + 1)
+      const base = options.toggle ? currentSelection : []
+      nextSelection = Array.from(new Set([...base, ...rangeIds]))
+    } else {
+      nextSelection = [nodeId]
+    }
+  } else if (options.toggle) {
+    nextSelection = currentlySelected
+      ? currentSelection.filter((id) => id !== nodeId)
+      : [...currentSelection, nodeId]
+  } else if (currentSelection.length !== 1 || !currentlySelected) {
+    nextSelection = [nodeId]
+  }
+
+  applyNodeSelection(nextSelection)
+}
+
+function handleNodeClick(event: MouseEvent, nodeId: string) {
+  event.stopPropagation()
+  event.preventDefault()
+  if (event.button !== 0) return
+
+  selectNodeByInteraction(nodeId, {
+    toggle: event.ctrlKey || event.metaKey,
+    range: event.shiftKey && Boolean(selectionAnchorId.value),
+  })
+}
+
+function handleNodeSecondaryPointerDown(event: PointerEvent, nodeId: string) {
+  if (event.button !== 2) {
+    return
+  }
+  event.stopPropagation()
+  event.preventDefault()
+  handleWindowRightClickPointerCancel()
+  pendingRightClickSelection.value = {
+    pointerId: event.pointerId,
+    nodeId,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+  }
+  window.addEventListener('pointermove', handleWindowRightClickPointerMove, true)
+  window.addEventListener('pointerup', handleWindowRightClickPointerUp, true)
+  window.addEventListener('pointercancel', handleWindowRightClickPointerCancel, true)
+}
+
+function handleNodeContextMenu(event: MouseEvent) {
+  event.stopPropagation()
+  event.preventDefault()
 }
 
 function handleTreeBackgroundMouseDown(event: MouseEvent) {
@@ -1399,6 +1444,49 @@ function resetDragState() {
   materialDropTargetId.value = null
   assetDropTargetId.value = null
   assetRootDropActive.value = false
+}
+
+function clearPendingRightClickSelection() {
+  pendingRightClickSelection.value = null
+}
+
+function handleWindowRightClickPointerMove(event: PointerEvent) {
+  const pending = pendingRightClickSelection.value
+  if (!pending || event.pointerId !== pending.pointerId) {
+    return
+  }
+  const dx = Math.abs(event.clientX - pending.startX)
+  const dy = Math.abs(event.clientY - pending.startY)
+  if (dx >= RIGHT_CLICK_DRAG_THRESHOLD_PX || dy >= RIGHT_CLICK_DRAG_THRESHOLD_PX) {
+    pending.moved = true
+  }
+}
+
+function handleWindowRightClickPointerUp(event: PointerEvent) {
+  const pending = pendingRightClickSelection.value
+  if (!pending || event.pointerId !== pending.pointerId) {
+    return
+  }
+
+  window.removeEventListener('pointermove', handleWindowRightClickPointerMove, true)
+  window.removeEventListener('pointerup', handleWindowRightClickPointerUp, true)
+  window.removeEventListener('pointercancel', handleWindowRightClickPointerCancel, true)
+
+  const shouldSelect = !pending.moved
+  const nodeId = pending.nodeId
+  clearPendingRightClickSelection()
+  if (!shouldSelect) {
+    return
+  }
+
+  selectNodeByInteraction(nodeId, { toggle: false, range: false })
+}
+
+function handleWindowRightClickPointerCancel() {
+  window.removeEventListener('pointermove', handleWindowRightClickPointerMove, true)
+  window.removeEventListener('pointerup', handleWindowRightClickPointerUp, true)
+  window.removeEventListener('pointercancel', handleWindowRightClickPointerCancel, true)
+  clearPendingRightClickSelection()
 }
 
 function getNodeDropClasses(id: string) {
@@ -2095,6 +2183,8 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
                 @dragleave="handleDragLeave($event, row.id)"
                 @drop="handleDrop($event, row.id)"
                 @click="handleNodeClick($event, row.id)"
+                @pointerdown="handleNodeSecondaryPointerDown($event, row.id)"
+                @contextmenu.stop.prevent="handleNodeContextMenu"
                 @dblclick.stop.prevent="handleNodeDoubleClick(row.id)"
               >
                 <v-btn
@@ -2105,13 +2195,14 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
                   size="24"
                   class="group-expander-btn"
                   :disabled="!row.hasChildren || isSearchActive"
+                  @pointerdown.stop
                   @click.stop="sceneStore.toggleGroupExpansion(row.id, { captureHistory: false })"
                 />
 
                 <v-icon size="small" class="node-icon" :icon="resolveRowIcon(row)" />
                 <span class="node-label-text" :title="row.item.name">{{ row.item.name }}</span>
 
-                <div class="tree-node-trailing" @mousedown.stop @click.stop>
+                <div class="tree-node-trailing" @mousedown.stop @pointerdown.stop @click.stop>
                   <v-btn
                     :icon="isNodeEffectivelyVisible(row.id) ? 'mdi-eye-outline' : 'mdi-eye-off-outline'"
                     variant="text"

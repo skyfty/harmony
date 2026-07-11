@@ -833,10 +833,10 @@ export interface DelayBehaviorParams {
 }
 
 export interface MoveToBehaviorParams {
-  /** Target scene node id the camera should move to. */
+  /** Target scene node id the mover should align to. */
   targetNodeId: string | null
-  /** Camera travel duration in seconds. */
-  duration: number
+  /** Whether the mover should travel naturally instead of snapping immediately. */
+  kinetics: boolean
 }
 
 export interface SpawnPrefabBehaviorParams {
@@ -996,9 +996,20 @@ export interface WatchBehaviorParams {
   caging?: boolean
 }
 
-export interface ShowPurposeBehaviorParams {
-  /** Target scene node id to focus when the observe button is pressed. */
+export interface ShowPurposeBehaviorButton {
+  /** Stable identifier used by the editor to track this button. */
+  id: string
+  /** Target node that owns the perform sequence. */
   targetNodeId: string | null
+  /** Optional perform sequence id to trigger. */
+  targetSequenceId: string | null
+  /** Optional override label shown in the viewer. */
+  label: string
+}
+
+export interface ShowPurposeBehaviorParams {
+  /** Buttons shown in the viewer for purpose interactions. */
+  buttons: ShowPurposeBehaviorButton[]
 }
 
 export interface HidePurposeBehaviorParams {

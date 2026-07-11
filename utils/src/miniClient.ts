@@ -408,7 +408,6 @@ async function executeWithAuthRecovery<T>(path: string, target: string, options:
 export async function miniRequest<T>(path: string, options: HttpRequestOptions = {}): Promise<T> {
   const method = options.method ?? 'GET';
   const target = resolveRequestTarget(path);
-  const token = options.auth === false ? undefined : getAuthToken();
   if (method === 'GET') {
     const requestKey = buildGetRequestKey(target, options);
     const inFlight = inFlightGetRequests.get(requestKey) as Promise<T> | undefined;

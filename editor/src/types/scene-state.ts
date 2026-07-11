@@ -48,6 +48,8 @@ export interface SceneState {
     projectId: string
   } | null
   sceneLifecycle: SceneLifecycleState
+  sceneSwitchToken: number
+  isSceneReady: boolean
   nodes: SceneNode[]
   /** Runtime-only cached reference to the current unique ground node derived from nodes. */
   groundNode: SceneNode | null

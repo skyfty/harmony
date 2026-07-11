@@ -14,7 +14,7 @@ const emit = defineEmits<{
 
 const params = computed<MoveToBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
-  duration: Math.max(0, props.modelValue?.duration ?? 0.6),
+  kinetics: props.modelValue?.kinetics === true,
 }))
 
 const pickerRef = ref<{ cancelPicking: () => void } | null>(null)
@@ -26,14 +26,12 @@ function emitUpdate(patch: Partial<MoveToBehaviorParams>) {
   })
 }
 
-function updateDuration(value: string | number) {
-  const numeric = typeof value === 'number' ? value : parseFloat(value)
-  const normalized = Number.isFinite(numeric) ? Math.max(0, numeric) : 0
-  emitUpdate({ duration: normalized })
-}
-
 function updateTarget(nodeId: string | null) {
   emitUpdate({ targetNodeId: nodeId })
+}
+
+function updateKinetics(value: boolean) {
+  emitUpdate({ kinetics: value })
 }
 
 function handlePickStateChange(active: boolean) {
@@ -62,16 +60,13 @@ onBeforeUnmount(() => {
       @update:modelValue="updateTarget"
       @pick-state-change="handlePickStateChange"
     />
-    <v-text-field
-      :model-value="params.duration"
-      type="number"
-      label="Movement duration (s)"
+    <v-checkbox
+      :model-value="params.kinetics"
+      class="move-to-params__kinetics"
+      label="Kinetics"
       density="compact"
-      variant="underlined"
       hide-details
-      min="0"
-      step="0.1"
-      @update:model-value="updateDuration($event)"
+      @update:model-value="updateKinetics(Boolean($event))"
     />
   </div>
 </template>

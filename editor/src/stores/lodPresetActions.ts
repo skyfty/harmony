@@ -28,6 +28,7 @@ export type LodPresetStoreLike = {
   packageDirectoryCache: Record<string, any>
 
   getAsset: (id: string) => ProjectAsset | null
+  getCatalogAsset: (id: string) => ProjectAsset | null
   getRegisteredAsset: (id: string) => ProjectAsset | null
   registerAsset: (asset: ProjectAsset, options: any) => ProjectAsset
   setActiveDirectory: (categoryId: string) => void
@@ -152,7 +153,7 @@ function resolveLodModelAssetById(
 ): ProjectAsset | null {
   const candidates = collectLodModelAssetIdCandidates(preset, modelAssetId)
   for (const candidateId of candidates) {
-    const registered = store.getRegisteredAsset(candidateId)
+    const registered = store.getCatalogAsset(candidateId)
     if (registered) {
       return registered
     }

@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <view class="viewer-page">
     <view
       class="viewer-canvas-wrapper"
@@ -32,7 +32,7 @@
         <text class="viewer-vehicle-intro-banner__text">出发！</text>
       </view>
       <button
-        v-if="floatingAutoTourButton.visible"
+        v-if="floatingAutoTourButton.visible && !watchExclusiveUiActive"
         class="viewer-auto-tour-trigger"
         :class="{
           'is-active': floatingAutoTourButton.active,
@@ -50,7 +50,7 @@
         </view>
       </button>
       <button
-        v-if="floatingAutoTourPauseButton.visible"
+        v-if="floatingAutoTourPauseButton.visible && !watchExclusiveUiActive"
         class="viewer-auto-tour-trigger viewer-auto-tour-trigger--secondary"
         :class="{
           'is-active': floatingAutoTourPauseButton.pressed,
@@ -225,48 +225,56 @@
         <text>{{ error }}</text>
       </view>
       <view
-        v-if="purposeControlsVisible"
+        v-for="entry in purposeControlEntries"
+        :key="entry.nodeId"
+        v-show="!watchExclusiveUiActive"
         class="viewer-purpose-controls"
+        :style="resolvePurposeControlStyle(entry)"
+        :data-purpose-node-id="entry.nodeId"
+        data-control-skip="purpose-controls"
       >
         <button
-          class="viewer-purpose-chip viewer-purpose-chip--watch"
-          :class="{ 'is-active': purposeActiveMode === 'watch' }"
-          aria-label="观察模式"
-          @tap="handlePurposeWatchTap"
+          v-for="button in entry.buttons"
+          :key="button.id"
+          class="viewer-purpose-chip"
+          :aria-label="resolvePurposeButtonLabel(button)"
+          data-control-skip="purpose-controls"
+          @tap.stop.prevent="handlePurposeButtonTap(entry, button)"
         >
           <view class="viewer-purpose-chip__halo"></view>
           <view class="viewer-purpose-chip__content">
-            <view class="viewer-purpose-chip__icon-wrap">
-              <view class="viewer-purpose-chip__icon-pulse"></view>
-              <text class="viewer-purpose-chip__icon">{{ purposeWatchIcon }}</text>
-            </view>
             <view class="viewer-purpose-chip__texts">
-              <text class="viewer-purpose-chip__title">观察</text>
-              <text class="viewer-purpose-chip__subtitle">锁定目标视角</text>
-            </view>
-          </view>
-        </button>
-        <button
-          class="viewer-purpose-chip viewer-purpose-chip--level"
-          :class="{ 'is-active': purposeActiveMode === 'level' }"
-          aria-label="平视模式"
-          @tap="handlePurposeResetTap"
-        >
-          <view class="viewer-purpose-chip__halo"></view>
-          <view class="viewer-purpose-chip__content">
-            <view class="viewer-purpose-chip__icon-wrap">
-              <view class="viewer-purpose-chip__icon-pulse"></view>
-              <text class="viewer-purpose-chip__icon">{{ purposeResetIcon }}</text>
-            </view>
-            <view class="viewer-purpose-chip__texts">
-              <text class="viewer-purpose-chip__title">平视</text>
-              <text class="viewer-purpose-chip__subtitle">回到人眼高度</text>
+              <text class="viewer-purpose-chip__title">{{ resolvePurposeButtonDisplayLabel(button) }}</text>
             </view>
           </view>
         </button>
       </view>
+      <view v-if="watchLeaveVisible" class="viewer-watch-leave-bar" data-control-skip="watch-leave">
+        <view class="viewer-watch-leave-actions">
+          <button
+            class="viewer-watch-leave-button viewer-watch-action-button"
+            type="button"
+            hover-class="none"
+            data-control-skip="watch-leave"
+            @tap.stop.prevent="leaveActiveWatchView"
+          >
+            <text>离开</text>
+          </button>
+          <button
+            class="viewer-watch-photo-button viewer-watch-action-button"
+            type="button"
+            hover-class="none"
+            :disabled="watchSnapshotBusy"
+            :aria-label="watchSnapshotBusy ? '正在保存截图' : '拍照保存当前视野'"
+            data-control-skip="watch-leave"
+            @tap.stop.prevent="handleWatchSnapshotTap"
+          >
+            <text>{{ watchSnapshotBusy ? '保存中...' : '拍照' }}</text>
+          </button>
+        </view>
+      </view>
       <view
-        v-if="vehicleDriveUi.visible"
+        v-if="vehicleDriveUi.visible && !watchExclusiveUiActive"
         class="viewer-drive-console viewer-drive-console--mobile"
       >
         <view
@@ -295,9 +303,8 @@
             />
           </view>
         </view>
-        
       </view>
-      <view v-if="autoTourTelemetryUiVisible" class="viewer-drive-speed-left-floating">
+      <view v-if="autoTourTelemetryUiVisible && !watchExclusiveUiActive" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
         <button
           v-if="vehicleDriveUi.visible"
@@ -316,7 +323,7 @@
       </view>
 
       <view
-        v-if="autoTourTelemetryUiVisible || (characterControlUi.visible && isWeChatMiniProgram)"
+        v-if="(autoTourTelemetryUiVisible || (characterControlUi.visible && isWeChatMiniProgram)) && !watchExclusiveUiActive"
         class="viewer-drive-compass-right-floating"
         aria-hidden="true"
       >
@@ -328,7 +335,7 @@
       </view>
 
       <view
-        v-if="characterControlUi.visible && isWeChatMiniProgram"
+        v-if="characterControlUi.visible && isWeChatMiniProgram && !watchExclusiveUiActive"
         class="viewer-character-console viewer-character-console--mobile"
       >
         <view
@@ -436,12 +443,34 @@ import SceneLoadOverlay from './SceneLoadOverlay.vue';
 import { buildPhysicsSceneAsset } from '@harmony/schema/physicsSceneAsset';
 import { loadTextureFromSourceUrl } from '@harmony/schema/textureSourceLoader';
 import {
+  applyMoveToObjectWorldPose,
+  applyMoveToPhysicsBodyWorldPose,
+  buildMoveToTargetPose,
+  buildMoveToCameraPlacement,
+  resolveBindingByNodeId as resolveMoveToBindingByNodeId,
+  resolveMoveToSubjectType,
+  createMoveToRuntimeSession,
+  resetMoveToRuntimeSession,
+  resolveMoveToTargetPoseFromObject,
+  resolveMoveToAlignedQuaternionForLocalForwardAxis,
+  MOVE_TO_SNAP_DISTANCE,
+  MOVE_TO_CHARACTER_SLOW_DISTANCE,
+  MOVE_TO_CHARACTER_STOP_DISTANCE,
+  MOVE_TO_VEHICLE_SLOW_DISTANCE,
+  MOVE_TO_VEHICLE_STOP_DISTANCE,
+  MOVE_TO_CAMERA_LERP_SPEED,
+  resolveMoveToYawDeltaRadians,
+  resolveMoveToYawRadiansFromForward,
+  resolveMoveToWorldForwardFromQuaternion,
+} from '@harmony/schema/behaviors/moveToRuntime';
+import {
   type PhysicsBackendPreference,
   type PhysicsBridge,
   type PhysicsContactEvent,
   type PhysicsSceneAsset,
   type PhysicsStepFrame,
   type PhysicsTransform,
+  resolvePhysicsCharacterMotorYawFromWorldQuaternion,
 } from '@harmony/physics-core';
 import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
 
@@ -544,7 +573,7 @@ import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from 
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { collectGroundAnchorWorldPositions } from '@harmony/schema/groundAnchorRuntime';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
-import { attachOptimizedGroundMeshToDocument, prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
+import { prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
 import { onGroundChunkTextureReady, refreshGroundChunkMaterials, resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
@@ -630,6 +659,9 @@ import {
   createTerrainDatasetHeightSamplerFromScenePackage,
   readTerrainDatasetManifestFromScenePackage,
 } from '../common/utils/terrainDatasetPackage';
+import {
+  createGroundRuntimeMeshFromSidecar,
+} from '@harmony/schema/groundHeightSidecar';
 import type {
   SceneNode,
   SceneNodeComponentState,
@@ -646,7 +678,6 @@ import type {
 import {
   isRuntimeHiddenInPreview,
   deserializeCompiledGroundManifest,
-  resolveGroundWorkingGridSize,
 } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
@@ -737,6 +768,11 @@ import {
 } from '@harmony/schema/components/definitions/landformComponent';
 import {
   viewPointComponentDefinition,
+  VIEW_POINT_COMPONENT_TYPE,
+  applyViewPointCameraProjection,
+  resolveViewPointComponentProps,
+  resolveViewPointWorldCameraPose,
+  type ViewPointComponentProps,
 } from '@harmony/schema/components/definitions/viewPointComponent';
 import {
   particleSystemComponentDefinition,
@@ -879,6 +915,7 @@ import {
   VEHICLE_PARKED_SPEED_EPSILON,
   VEHICLE_PARKING_HOLD_SPEED_EPSILON,
 } from '@harmony/schema/motion';
+import { createBridgePhysicsBodyProxy } from '@harmony/schema/bridgePhysicsBodyProxy';
 import {
   createScenePreviewPerfController,
   disposeSignboardBillboards,
@@ -891,6 +928,10 @@ import {
   DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED,
   computeSignboardPlacement,
   resolveSignboardAnchorWorldPosition,
+  computePurposeOverlayPlacement,
+  resolvePurposeOverlayAnchorWorldPosition,
+  resolvePurposeOverlayPlacements,
+  type PurposeOverlayPlacement,
   smoothSignboardPlacement,
 } from '@harmony/schema/overlay';
 import { createCanvas, type HarmonyCanvas, type HarmonyCanvas2DContext } from '@harmony/schema/canvas';
@@ -905,7 +946,7 @@ import {
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
 } from '../common/utils/instancedLodCulling';
-import type { InstancedLodTarget } from '@harmony/schema/core';
+import type { InstancedLodTarget, ShowPurposeBehaviorButton } from '@harmony/schema/core';
 import type {
   SignboardPlacementSmoothingState,
   SignboardBillboardStyle,
@@ -926,6 +967,9 @@ import {
 } from '@harmony/schema/behaviors/runtime';
 import {
   createBehaviorProximityRuntime,
+  resolveBehaviorObserverContext,
+  type BehaviorObserverCandidate,
+  type BehaviorObserverContext,
   type BehaviorProximityCandidate,
   type BehaviorProximityState,
 } from '@harmony/schema/behaviors/proximity';
@@ -936,6 +980,7 @@ import {
   handleBehaviorStopAnimationEvent,
   dispatchPerformBehaviorEvent,
 } from '@harmony/schema/behaviors/eventHelpers';
+import { resolvePerformSequenceLabel } from '@harmony/schema/behaviors/sequenceOptions';
 import {
   loadStoredPunchedNodeIds,
   mergeStoredPunchedNodeId,
@@ -997,7 +1042,15 @@ type SceneViewControlSnapshot = {
   cameraViewState: { mode: CameraViewMode; targetNodeId: string | null };
   isCameraCaged: boolean;
   purposeMode: 'watch' | 'level';
-  camera: { position: SceneStackVec3Tuple; quaternion: SceneStackQuatTuple; up: SceneStackVec3Tuple };
+  camera: {
+    position: SceneStackVec3Tuple;
+    quaternion: SceneStackQuatTuple;
+    up: SceneStackVec3Tuple;
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
   orbitTarget: SceneStackVec3Tuple;
   nodeTransforms: Record<string, SceneNodeTransformSnapshot>;
 };
@@ -1186,6 +1239,31 @@ function clampPercent(value: number): number {
     return 0;
   }
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function hasHydratedGroundHeight(document: SceneJsonExportDocument | null | undefined): boolean {
+  const groundNode = resolveSharedDocumentGroundNode(document);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return false;
+  }
+  const runtimeGroundMesh = groundNode.dynamicMesh as GroundDynamicMesh & {
+    runtimeHydratedHeightState?: 'pristine' | 'dirty' | 'none';
+  };
+  return runtimeGroundMesh.runtimeHydratedHeightState === 'pristine';
+}
+
+function requireGroundRuntimeAssets(
+  document: SceneJsonExportDocument,
+  compiledTileCount: number,
+): void {
+  const groundNode = resolveSharedDocumentGroundNode(document);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
+    return;
+  }
+  if (compiledTileCount > 0 || hasHydratedGroundHeight(document)) {
+    return;
+  }
+  throw new Error('场景缺少地形运行时数据，请重新导出场景包');
 }
 
 async function yieldToMainThread(): Promise<void> {
@@ -1574,15 +1652,14 @@ const sceneLoadBytesLabel = computed(() => {
 const sceneLoadPercentText = computed(() => `${sceneLoadPercent.value}%`);
 
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
-const HUMAN_EYE_HEIGHT = 1.7;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const DEFAULT_SCENE_CAMERA_FAR = 1000;
 const SCENERY_FOG_HEADROOM_RATIO = 0.88;
 const SCENERY_FOG_MIN_DISTANCE = 0.001;
 const SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4;
 const SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5;
-const CAMERA_WATCH_DURATION = 0.35;
-const CAMERA_LEVEL_DURATION = 0.35;
+const CAMERA_WATCH_DURATION = 2.0;
+const CAMERA_LEVEL_DURATION = 2.5;
 const VEHICLE_DRIVE_INTRO_HOLD_SECONDS = 2.0;
 const VEHICLE_DRIVE_INTRO_BLEND_SECONDS = 1.2;
 const VEHICLE_DRIVE_INTRO_READY_TIMEOUT_MS = 3200;
@@ -1600,10 +1677,6 @@ function resolveSceneExposure(exposure: unknown): number {
     DEFAULT_SCENE_EXPOSURE * SCENE_VIEWER_EXPOSURE_BOOST,
   );
 }
-
-
-const purposeWatchIcon = '👁️';
-const purposeResetIcon = '↕️';
 const lanternCloseIcon = '✖️';
 
 let backgroundTexture: THREE.Texture | null = null;
@@ -2302,6 +2375,7 @@ const punchSceneRevision = ref(0);
 const punchBadgePlacementSmoothingStates = new Map<string, SignboardPlacementSmoothingState>();
 const signboardReferenceScratch = new THREE.Vector3();
 const signboardAnchorScratch = new THREE.Vector3();
+const purposeAnchorScratch = new THREE.Vector3();
 const overlayDistanceReferenceScratch = new THREE.Vector3();
 const overlayDistanceTargetAnchorScratch = new THREE.Vector3();
 const overlayDistanceReferenceAnchorScratch = new THREE.Vector3();
@@ -2745,11 +2819,14 @@ const worldUp = new THREE.Vector3(0, 1, 0);
 const tempForwardVec = new THREE.Vector3();
 const tempRightVec = new THREE.Vector3();
 const tempMovementVec = new THREE.Vector3();
+const tempQuaternionVec = new THREE.Quaternion();
+const cameraWatchLookMatrixScratch = new THREE.Matrix4();
 const tempYawForwardVec = new THREE.Vector3();
 const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const characterCameraFollowAnchorScratch = new THREE.Vector3();
 const characterCameraFollowForwardScratch = new THREE.Vector3();
+const characterCameraFollowOffsetScratch = new THREE.Vector3();
 const characterControlYawForwardScratch = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
@@ -2757,6 +2834,9 @@ const STEERING_KEYBOARD_CATCH_SPEED = 18;
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let characterCameraFollowNodeId: string | null = null;
+let characterInputYaw = Math.PI;
+let characterInputYawInitialized = false;
+let characterInputYawNodeId: string | null = null;
 const characterCameraFollowPlacementCache = {
   nodeId: null as string | null,
   objectUuid: null as string | null,
@@ -2768,8 +2848,7 @@ const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.25;
 const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.38;
-const CHARACTER_TURN_CATCH_SPEED = 5;
-const CHARACTER_TURN_RETURN_SPEED = 9;
+const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -3067,10 +3146,21 @@ const ensureLanternText = lanternAssets.ensureLanternText;
 const ensureLanternImage = lanternAssets.ensureLanternImage;
 const pruneLanternAssets = lanternAssets.pruneActiveAssets;
 
-const purposeControlsVisible = ref(false);
-const purposeTargetNodeId = ref<string | null>(null);
-const purposeSourceNodeId = ref<string | null>(null);
+type PurposeControlRecord = {
+  nodeId: string;
+  buttons: ShowPurposeBehaviorButton[];
+  placement: PurposeOverlayPlacement;
+};
+
+const purposeControlEntries = ref<PurposeControlRecord[]>([]);
+const purposeControlsVisible = computed(() => purposeControlEntries.value.length > 0);
 const purposeActiveMode = ref<'watch' | 'level'>('level');
+const activeWatchRestoreSnapshot = ref<SceneViewControlSnapshot | null>(null);
+const activeWatchSource = ref<'viewPoint' | 'target-look' | null>(null);
+type WatchUiRestoreState = {
+  purposeControlsVisible: boolean;
+};
+const watchUiRestoreState = ref<WatchUiRestoreState | null>(null);
 
 const pageInstance = getCurrentInstance();
 
@@ -3192,6 +3282,11 @@ const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | 
   mode: 'level',
   targetNodeId: null,
 });
+const watchLeaveVisible = computed(() =>
+  cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null,
+);
+const watchExclusiveUiActive = computed(() => watchLeaveVisible.value);
+const watchSnapshotBusy = ref(false);
 
 const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   hasSnapshot: false,
@@ -3264,7 +3359,6 @@ const characterAuthorityInput = reactive({
   crouch: false,
   interact: false,
 });
-const characterAuthorityTurnTarget = ref(0);
 const characterKeyState = reactive({
   forward: false,
   backward: false,
@@ -3276,6 +3370,7 @@ const characterKeyState = reactive({
   interact: false,
 });
 let characterInputJumpLatch = false;
+const moveToRuntimeSession = createMoveToRuntimeSession();
 let characterActionJumpReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 let activeCharacterActionAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 let activeCharacterActionAnimationToken: string | null = null;
@@ -4328,26 +4423,43 @@ const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: '
 
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
+const behaviorObserverContextScratch = new THREE.Vector3();
+function resolveSceneryBehaviorObserverContext(): BehaviorObserverContext {
+  const candidates: BehaviorObserverCandidate[] = [];
+  if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
+    candidates.push({ nodeId: vehicleDriveNodeId.value, kind: 'vehicle' });
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (controlledNodeId) {
+    candidates.push({ nodeId: controlledNodeId, kind: 'character' });
+  }
+  if (activeAutoTourNodeIds.size > 0) {
+    const autoTourNodeId = resolveAutoTourFollowNodeId(
+      autoTourFollowNodeId.value,
+      cameraViewState.targetNodeId,
+      activeAutoTourNodeIds,
+      previewNodeMap.keys(),
+      autoTourRuntime,
+    );
+    if (autoTourNodeId) {
+      candidates.push({ nodeId: autoTourNodeId, kind: 'other' });
+    }
+  }
+  if (cameraViewState.mode === 'watching' && cameraViewState.targetNodeId) {
+    candidates.push({ nodeId: cameraViewState.targetNodeId, kind: 'other' });
+  }
+  return resolveBehaviorObserverContext(
+    {
+      candidates,
+      getCamera: () => renderContext?.camera ?? null,
+      resolveNodePosition: (nodeId, scratch) =>
+        resolveNodeFocusPoint(nodeId) ?? nodeObjectMap.get(nodeId)?.getWorldPosition(scratch) ?? null,
+    },
+    behaviorObserverContextScratch,
+  );
+}
 const behaviorProximityRuntime = createBehaviorProximityRuntime({
-  getCamera: () => renderContext?.camera ?? null,
-  getObserverNodeId: () => {
-    if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
-      return vehicleDriveNodeId.value;
-    }
-    if (activeAutoTourNodeIds.size > 0) {
-      return resolveAutoTourFollowNodeId(
-        autoTourFollowNodeId.value,
-        cameraViewState.targetNodeId,
-        activeAutoTourNodeIds,
-        previewNodeMap.keys(),
-        autoTourRuntime,
-      );
-    }
-    return null;
-  },
-  resolveObserverPosition: (observerNodeId, scratch) => {
-    return resolveNodeFocusPoint(observerNodeId) ?? nodeObjectMap.get(observerNodeId)?.getWorldPosition(scratch) ?? null;
-  },
+  resolveObserverContext: () => resolveSceneryBehaviorObserverContext(),
   behaviorProximityCandidates,
   behaviorProximityState,
   nodeObjectMap,
@@ -4411,14 +4523,44 @@ let lanternSwipeStartY: number | null = null;
 let lanternSwipeActive = false;
 
 type CameraWatchTween = {
-  from: THREE.Vector3;
-  to: THREE.Vector3;
-  startPosition: THREE.Vector3;
+  fromPosition: THREE.Vector3;
+  toPosition: THREE.Vector3;
+  fromQuaternion: THREE.Quaternion;
+  toQuaternion: THREE.Quaternion;
+  fromTarget: THREE.Vector3;
+  toTarget: THREE.Vector3;
+  fromTargetDistance: number;
+  toTargetDistance: number;
+  fromProjection: {
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
+  toProjection: {
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
   duration: number;
   elapsed: number;
+  lastLoggedBucket: number;
+  onComplete?: (() => void) | null;
+};
+
+type CameraWatchTransitionPlan = {
+  fromPosition: THREE.Vector3;
+  fromQuaternion: THREE.Quaternion;
+  fromTargetDistance: number;
+  toPosition: THREE.Vector3;
+  toQuaternion: THREE.Quaternion;
+  toTargetDistance: number;
 };
 
 let activeCameraWatchTween: CameraWatchTween | null = null;
+let activeWatchTransitionPlan: CameraWatchTransitionPlan | null = null;
+let watchCameraSuppressionLogged = false;
 type FrameDeltaMode = 'seconds' | 'milliseconds';
 let frameDeltaMode: FrameDeltaMode | null = null;
 
@@ -4639,6 +4781,281 @@ function closeLanternImageFullscreen(): void {
   // #endif
   const viewer = resolveLanternViewer();
   viewer?.hide?.();
+}
+
+function resolveWatchSnapshotBaseName(): string {
+  const fallbackName = previewPayload.value?.title || currentDocument?.name || 'scene';
+  return fallbackName
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, ' ')
+    .replace(/\.+$/g, '')
+    .trim()
+    .slice(0, 64) || 'scene';
+}
+
+function buildWatchSnapshotFileName(): string {
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `${resolveWatchSnapshotBaseName()}-${stamp}.png`;
+}
+
+function dataUrlToBlob(dataUrl: string): Blob | null {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+
+  const mimeType = match[1] || 'image/png';
+  const isBase64 = Boolean(match[2]);
+  const payload = match[3] || '';
+
+  try {
+    const binary = isBase64
+      ? (typeof atob === 'function' ? atob(payload) : '')
+      : decodeURIComponent(payload);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return new Blob([bytes], { type: mimeType });
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to convert data URL to blob', error);
+    return null;
+  }
+}
+
+async function canvasToBlob(canvas: HTMLCanvasElement, mimeType = 'image/png'): Promise<Blob | null> {
+  if (typeof canvas.toBlob === 'function') {
+    const blob = await new Promise<Blob | null>((resolve) => {
+      try {
+        canvas.toBlob((value) => resolve(value), mimeType);
+      } catch (error) {
+        console.warn('[SceneryViewer] canvas.toBlob failed', error);
+        resolve(null);
+      }
+    });
+    if (blob) {
+      return blob;
+    }
+  }
+
+  try {
+    const dataUrl = canvas.toDataURL(mimeType);
+    const dataUrlBlob = dataUrlToBlob(dataUrl);
+    if (dataUrlBlob) {
+      return dataUrlBlob;
+    }
+    if (typeof fetch === 'function') {
+      const response = await fetch(dataUrl);
+      if (response.ok) {
+        return await response.blob();
+      }
+    }
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to convert canvas to blob', error);
+  }
+
+  return null;
+}
+
+type MiniProgramFsManager = {
+  mkdirSync?: (dirPath: string, recursive?: boolean) => void;
+  writeFile?: (options: {
+    filePath: string;
+    data: ArrayBuffer | Uint8Array;
+    success?: () => void;
+    fail?: (error: unknown) => void;
+  }) => void;
+};
+
+type MiniProgramPlatform = {
+  getFileSystemManager?: () => MiniProgramFsManager;
+  env?: {
+    USER_DATA_PATH?: string;
+  };
+};
+
+async function captureWatchSnapshotBlob(): Promise<Blob | null> {
+  const context = renderContext;
+  const canvas = canvasResult?.canvas ?? null;
+  if (!context || !canvas) {
+    return null;
+  }
+
+  try {
+    context.renderer.render(context.scene, context.camera);
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to render frame before capture', error);
+  }
+
+  return await canvasToBlob(canvas, 'image/png');
+}
+
+function triggerWatchSnapshotDownload(blob: Blob, fileName: string): void {
+  if (typeof document === 'undefined') {
+    throw new Error('当前环境不支持文件下载');
+  }
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.style.display = 'none';
+  link.rel = 'noopener';
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function getMiniProgramFsManager(): MiniProgramFsManager | null {
+  const uniAny = uni as typeof uni & { getFileSystemManager?: () => MiniProgramFsManager };
+  if (typeof uniAny.getFileSystemManager === 'function') {
+    return uniAny.getFileSystemManager();
+  }
+
+  const wxAny = typeof globalThis !== 'undefined' ? (globalThis as typeof globalThis & { wx?: MiniProgramPlatform }).wx : null;
+  if (wxAny && typeof wxAny.getFileSystemManager === 'function') {
+    return wxAny.getFileSystemManager();
+  }
+
+  return null;
+}
+
+async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  const anyBlob = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> };
+  if (typeof anyBlob.arrayBuffer === 'function') {
+    return await anyBlob.arrayBuffer();
+  }
+
+  return await new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as ArrayBuffer) || new ArrayBuffer(0));
+    reader.onerror = () => reject(reader.error ?? new Error('读取截图失败'));
+    reader.readAsArrayBuffer(blob);
+  });
+}
+
+function resolveMiniProgramSnapshotPath(fileName: string): string {
+  const wxAny = typeof globalThis !== 'undefined' ? (globalThis as typeof globalThis & { wx?: MiniProgramPlatform }).wx : null;
+  const basePath = wxAny?.env?.USER_DATA_PATH;
+  if (typeof basePath !== 'string' || !basePath.trim()) {
+    throw new Error('无法获取本地存储路径');
+  }
+  return `${basePath.replace(/\/$/, '')}/harmony/watch-snapshots/${fileName}`;
+}
+
+async function ensureWritePhotosAlbumPermission(): Promise<boolean> {
+  if (typeof uni.getSetting !== 'function') {
+    return true;
+  }
+
+  const hasPermission = await new Promise<boolean>((resolve) => {
+    uni.getSetting({
+      success: (result: { authSetting?: Record<string, boolean> }) => {
+        resolve(result.authSetting?.['scope.writePhotosAlbum'] !== false);
+      },
+      fail: () => resolve(true),
+    });
+  });
+
+  if (hasPermission) {
+    return true;
+  }
+
+  if (typeof uni.authorize !== 'function') {
+    return false;
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      uni.authorize({
+        scope: 'scope.writePhotosAlbum',
+        success: () => resolve(),
+        fail: reject,
+      });
+    });
+    return true;
+  } catch {
+    uni.showToast({ title: '请先授权保存到相册', icon: 'none' });
+    return false;
+  }
+}
+
+async function saveWatchSnapshotToMiniProgram(blob: Blob, fileName: string): Promise<void> {
+  const fs = getMiniProgramFsManager();
+  if (!fs || typeof fs.writeFile !== 'function') {
+    throw new Error('当前环境不支持文件写入');
+  }
+
+  const filePath = resolveMiniProgramSnapshotPath(fileName);
+  const dir = filePath.slice(0, filePath.lastIndexOf('/'));
+  try {
+    if (typeof fs.mkdirSync === 'function') {
+      fs.mkdirSync(dir, true);
+    }
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to prepare snapshot directory', error);
+  }
+
+  const bytes = await blobToArrayBuffer(blob);
+  const writeFile = fs.writeFile;
+  if (typeof writeFile !== 'function') {
+    throw new Error('当前环境不支持文件写入');
+  }
+  await new Promise<void>((resolve, reject) => {
+    writeFile({
+      filePath,
+      data: bytes,
+      success: () => resolve(),
+      fail: reject,
+    });
+  });
+
+  if (!(await ensureWritePhotosAlbumPermission())) {
+    throw new Error('未获得保存到相册的权限');
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    uni.saveImageToPhotosAlbum({
+      filePath,
+      success: () => resolve(),
+      fail: reject,
+    });
+  });
+}
+
+async function handleWatchSnapshotTap(): Promise<void> {
+  if (watchSnapshotBusy.value) {
+    return;
+  }
+
+  watchSnapshotBusy.value = true;
+  try {
+    const blob = await captureWatchSnapshotBlob();
+    if (!blob) {
+      uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
+      return;
+    }
+
+    const fileName = buildWatchSnapshotFileName();
+    if (isWeChatMiniProgram) {
+      await saveWatchSnapshotToMiniProgram(blob, fileName);
+      uni.showToast({ title: '已保存到相册', icon: 'success' });
+      return;
+    }
+
+    triggerWatchSnapshotDownload(blob, fileName);
+    uni.showToast({ title: '截图已下载', icon: 'success' });
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to save watch snapshot', error);
+    const message = error instanceof Error ? error.message : '截图保存失败';
+    uni.showToast({ title: message || '截图保存失败', icon: 'none' });
+  } finally {
+    watchSnapshotBusy.value = false;
+  }
 }
 
 refreshLanternViewportSize();
@@ -5513,6 +5930,10 @@ async function prepareRenderPayloadForSceneEntry(
   const renderPayload = buildRenderPayloadWithRuntimePrefabContext(payload, runtimePrefabPreloadContext);
   const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
   const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
+  const groundNode = resolveSharedDocumentGroundNode(runtimeGroundPrepared.document);
+  const compiledGroundManifest = groundNode?.userData?.compiledGroundManifest as { renderTiles?: unknown[] } | null | undefined;
+  const compiledTileCount = Array.isArray(compiledGroundManifest?.renderTiles) ? compiledGroundManifest.renderTiles.length : 0;
+  requireGroundRuntimeAssets(runtimeGroundPrepared.document, compiledTileCount);
 
   return {
     ...steerPreparedPayload,
@@ -5554,6 +5975,9 @@ type ResolvedSteerBinding = {
 };
 
 function cloneScenePreviewDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(document);
+  }
   return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
 }
 
@@ -6353,6 +6777,14 @@ function resolveDefaultControlledCharacterNodeId(): string | null {
   return resolveDefaultCharacterSteerNodeId(currentDocument, defaultSteerIdentifier);
 }
 
+function resolveControlledCharacterMotionNodeId(): string | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return null;
+  }
+  return resolveCharacterControllerBindingNodeId(controlledNodeId) ?? controlledNodeId;
+}
+
 function resolveDefaultControlledCharacterComponentProps(): CharacterControllerComponentProps | null {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   if (!controlledNodeId) {
@@ -6385,6 +6817,14 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
     );
   }
   return null;
+}
+
+function resolveCharacterFollowCameraOffset(props: CharacterControllerComponentProps): THREE.Vector3 {
+  return resolveBackFollowCameraLocalOffset(
+    characterCameraFollowOffsetScratch,
+    props.cameraFollowDistance,
+    props.cameraFollowHeight,
+  );
 }
 
 function resolveCameraDistanceReferenceNodeId(): string | null {
@@ -6653,6 +7093,19 @@ function resolveNodeById(nodeId: string): SceneNode | null {
   return resolveSceneNodeById(previewNodeMap, nodeId);
 }
 
+function resolveViewPointPropsForNodeId(nodeId: string | null): ViewPointComponentProps | null {
+  if (!nodeId) {
+    return null;
+  }
+  const node = resolveNodeById(nodeId);
+  if (!node) {
+    return null;
+  }
+  return resolveViewPointComponentProps(
+    (node.components?.[VIEW_POINT_COMPONENT_TYPE] as SceneNodeComponentState<ViewPointComponentProps> | undefined) ?? null,
+  );
+}
+
 function resolveCharacterControllerComponent(
   node: SceneNode | null | undefined,
 ): SceneNodeComponentState<CharacterControllerComponentProps> | null {
@@ -6824,7 +7277,7 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
     return {
       moveX: characterAuthorityInput.moveX,
       moveZ: characterAuthorityInput.moveZ,
-      turn: 0,
+      turn: characterAuthorityInput.turn,
       jump: characterAuthorityInput.jump,
       sprint: characterAuthorityInput.sprint,
       crouch: characterAuthorityInput.crouch,
@@ -7119,7 +7572,9 @@ async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Pr
     return document;
   }
 
-  const nextDocument = JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
+  const nextDocument = typeof structuredClone === 'function'
+    ? structuredClone(document)
+    : JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
   nextDocument.nodes = pruneCouponNodes(nextDocument.nodes, couponMap);
   nextDocument.couponIds = couponIds;
   return nextDocument;
@@ -7197,20 +7652,15 @@ function readCompiledGroundManifestFromScenePackage(
 }
 
 function attachScenePackageCompiledGroundRuntime(
-  pkg: ScenePackageUnzipped,
-  sceneEntry: ScenePackageManifestSceneEntry,
+  compiledManifest: Parameters<typeof syncCompiledGroundRenderTiles>[0]['manifest'] | null,
   document: SceneJsonExportDocument,
-): void {
+): Parameters<typeof syncCompiledGroundRenderTiles>[0]['manifest'] | null {
   const groundNode = resolveDocumentGroundNode(document);
   if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
-    return;
+    return null;
   }
-  const compiledManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
-  if (!compiledManifest) {
-    return;
-  }
-  if (!Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
-    return;
+  if (!compiledManifest || !Array.isArray(compiledManifest.renderTiles) || compiledManifest.renderTiles.length === 0) {
+    return null;
   }
   const groundUserData = groundNode.userData && typeof groundNode.userData === 'object'
     ? (groundNode.userData as Record<string, unknown>)
@@ -7218,6 +7668,7 @@ function attachScenePackageCompiledGroundRuntime(
   groundUserData.compiledGroundEnabled = true;
   groundUserData.compiledGroundManifest = compiledManifest;
   groundNode.userData = groundUserData;
+  return compiledManifest;
 }
 
 function refreshDynamicGroundCache(document: SceneJsonExportDocument | null): void {
@@ -9007,11 +9458,24 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
     const rigidbodyEntry = rigidbodyInstances.get(nodeId);
     if (rigidbodyEntry) {
-      if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
+      if (rigidbodyEntry.bindingKind === 'character') {
+        if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
+          return;
+        }
+        if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
+        }
+        applySceneryPhysicsBridgeTransformToObject(
+          rigidbodyEntry.object,
+          state.position,
+          state.quaternion,
+          rigidbodyEntry.orientationAdjustment,
+        );
         return;
       }
       if (rigidbodyEntry.syncObjectFromBody === false || !rigidbodyEntry.object) {
         return;
+      }
+      if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
       }
       applySceneryPhysicsBridgeTransformToObject(
         rigidbodyEntry.object,
@@ -9032,6 +9496,8 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
       : (characterControllerNodeId ? (nodeObjectMap.get(characterControllerNodeId) ?? null) : (physicsBridgeCharacterIdByNodeId.has(nodeId) ? (nodeObjectMap.get(nodeId) ?? null) : null));
     if (!bindingObject) {
       return;
+    }
+    if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
     }
     const orientationAdjustment = node && isGroundDynamicMesh(node.dynamicMesh)
       ? {
@@ -9204,14 +9670,35 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
       physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
       return;
     }
-    if (physicsBridgeCharacterControllerNodeIdByBodyNodeId.has(nodeId)) {
-      physicsBridgeDirtyBodyNodeIds.delete(nodeId);
-      physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
-      physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
-      return;
-    }
     const entry = rigidbodyInstances.get(nodeId) ?? null;
     if (entry) {
+      if (entry.bindingKind === 'character') {
+        const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+        if (!frameState || !entry.object) {
+          physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+          physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+          physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+          return;
+        }
+        if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
+        }
+        applySceneryPhysicsBridgeTransformToObject(
+          entry.object,
+          frameState.position,
+          frameState.quaternion,
+          entry.orientationAdjustment,
+        );
+        physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+        physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+        physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+        return;
+      }
+      if (!entry.body) {
+        physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+        physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+        physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+        return;
+      }
       if (entry.body.type === LEGACY_STATIC_BODY_TYPE) {
         physicsBridgeDirtyBodyNodeIds.delete(nodeId);
         physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
@@ -9220,6 +9707,8 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
         return;
       }
       const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+      if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
+      }
       if (isPhysicsTransformClose(entry.body.position, entry.body.quaternion, frameState)) {
         physicsBridgeDirtyBodyNodeIds.delete(nodeId);
         physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
@@ -9257,6 +9746,8 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
     object.getWorldPosition(physicsBridgeBodySyncPositionHelper);
     object.getWorldQuaternion(physicsBridgeBodySyncQuaternionHelper).normalize();
     const frameState = physicsBridgeFrameBodiesByNodeId.get(nodeId);
+    if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
+    }
     if (isPhysicsTransformClose(physicsBridgeBodySyncPositionHelper, physicsBridgeBodySyncQuaternionHelper, frameState)) {
       physicsBridgeDirtyBodyNodeIds.delete(nodeId);
       physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
@@ -9511,52 +10002,94 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   });
 }
 
-function resolveSceneryCharacterInputYaw(): number {
-  const controlledObject = findDefaultControlledCharacterObject();
-  if (controlledObject) {
+function resolveSceneryCharacterInputYaw(): number | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.001;
+  resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId);
+  ensureSceneryCharacterInputYawInitialized();
+  if (hasTurnInput) {
     const props = clampCharacterControllerComponentProps(
-      resolveCharacterControllerComponent(resolveNodeById(resolveDefaultControlledCharacterNodeId() ?? ''))?.props ?? null,
+      resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
     );
-    controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
-    resolveControlledCharacterMotionForwardAxis(characterControlYawForwardScratch);
-    characterControlYawForwardScratch.applyQuaternion(protagonistPoseQuaternion);
-    characterControlYawForwardScratch.y = 0;
-    if (characterControlYawForwardScratch.lengthSq() > 1e-8) {
-      characterControlYawForwardScratch.normalize();
-      const currentYaw = Math.atan2(characterControlYawForwardScratch.x, characterControlYawForwardScratch.z);
-      if (Math.abs(characterAuthorityInput.turn) > 0.001) {
-        const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
-        return currentYaw + (turnRateRadiansPerSecond * characterAuthorityInput.turn * characterControlDeltaSeconds);
-      }
-      if (characterJoystickState.active) {
-        return currentYaw;
-      }
-    }
+    const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
+    characterInputYaw += turnRateRadiansPerSecond * characterAuthorityInput.turn * characterControlDeltaSeconds;
+    characterInputYaw = normalizeSceneryCharacterInputYaw(characterInputYaw);
+    return characterInputYaw;
   }
 
-  const hasLocalMovementInput =
-    Math.abs(characterAuthorityInput.moveX) > 0.001
-    || Math.abs(characterAuthorityInput.moveZ) > 0.001;
-  const activeCamera = renderContext?.camera ?? null;
-  if (activeCamera && hasLocalMovementInput) {
-    activeCamera.getWorldDirection(tempForwardVec);
-    tempForwardVec.y = 0;
-    if (tempForwardVec.lengthSq() > 1e-8) {
-      tempForwardVec.normalize();
-      return Math.atan2(tempForwardVec.x, tempForwardVec.z);
-    }
+  if (Math.abs(characterAuthorityInput.moveZ) > CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD) {
+    return characterInputYaw;
   }
-  if (controlledObject) {
-    controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
-    resolveControlledCharacterMotionForwardAxis(tempForwardVec);
-    tempForwardVec.applyQuaternion(protagonistPoseQuaternion);
-    tempForwardVec.y = 0;
-    if (tempForwardVec.lengthSq() > 1e-8) {
-      tempForwardVec.normalize();
-      return Math.atan2(tempForwardVec.x, tempForwardVec.z);
-    }
+
+  return null;
+}
+
+function resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId: string | null): void {
+  if (characterInputYawNodeId === controlledNodeId) {
+    return;
+  }
+  characterInputYawNodeId = controlledNodeId;
+  characterInputYawInitialized = false;
+}
+
+function ensureSceneryCharacterInputYawInitialized(): void {
+  if (characterInputYawInitialized) {
+    return;
+  }
+  characterInputYaw = resolveSceneryCharacterInputYawSeed();
+  characterInputYawInitialized = true;
+}
+
+function normalizeSceneryCharacterInputYaw(value: number): number {
+  return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI;
+}
+
+function resolveSceneryCharacterInputYawSeed(): number {
+  const stableYaw = resolveSceneryControlledCharacterStableYaw();
+  if (typeof stableYaw === 'number') {
+    return stableYaw;
+  }
+  if (Number.isFinite(characterInputYaw)) {
+    return characterInputYaw;
   }
   return Math.PI;
+}
+
+function resolveSceneryControlledCharacterStableYaw(): number | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return null;
+  }
+  const forwardAxis = resolveControlledCharacterMotionForwardAxis(characterControlYawForwardScratch);
+  const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(controlledNodeId) ?? controlledNodeId;
+  const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(bodyNodeId) ?? null;
+  const physicsYaw = resolveSceneryCharacterYawFromQuaternion(physicsFrameState?.quaternion ?? null, forwardAxis);
+  if (typeof physicsYaw === 'number') {
+    return physicsYaw;
+  }
+  const controlledObject = findDefaultControlledCharacterObject();
+  if (!controlledObject) {
+    return null;
+  }
+  controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
+  return resolveSceneryCharacterYawFromQuaternion(protagonistPoseQuaternion, forwardAxis);
+}
+
+function resolveSceneryCharacterYawFromQuaternion(
+  quaternion: THREE.Quaternion | null | undefined,
+  forwardAxis: THREE.Vector3,
+): number | null {
+  if (!quaternion) {
+    return null;
+  }
+  tempYawForwardVec.copy(forwardAxis);
+  tempYawForwardVec.applyQuaternion(quaternion);
+  tempYawForwardVec.y = 0;
+  if (tempYawForwardVec.lengthSq() <= 1e-8) {
+    return null;
+  }
+  tempYawForwardVec.normalize();
+  return Math.atan2(tempYawForwardVec.x, tempYawForwardVec.z);
 }
 
 function syncSceneryPhysicsBridgeCharacterInput(): void {
@@ -9564,7 +10097,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     return;
   }
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const yaw = resolveSceneryCharacterInputYaw();
+  const localYaw = characterInputYaw;
   physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
     const isControlled = nodeId === controlledNodeId;
     const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
@@ -9574,6 +10107,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
         Math.abs(pathFollowInput!.moveX) > 0.001
         || Math.abs(pathFollowInput!.moveZ) > 0.001
         || Math.abs(pathFollowInput!.turn) > 0.001
+        || typeof pathFollowInput!.yaw === 'number'
         || pathFollowInput!.jump
         || pathFollowInput!.sprint
         || pathFollowInput!.crouch
@@ -9581,7 +10115,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       );
     const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
       ? pathFollowInput.yaw
-      : yaw;
+      : (isControlled ? localYaw : null);
     void physicsBridge?.setCharacterInput({
       characterId,
       moveX: hasPathFollowInput ? pathFollowInput!.moveX : (isControlled ? characterAuthorityInput.moveX : 0),
@@ -9858,6 +10392,7 @@ function syncVehicleRigidbodyInstance(
     bodies: [chassisBody],
     object,
     orientationAdjustment: null,
+    bindingKind: 'vehicle',
     bridgeSyncDirty: true,
   });
   markPhysicsBridgeBodyDirty(nodeId);
@@ -9890,6 +10425,41 @@ function ensureVehicleBindingForNode(nodeId: string): void {
     vehicleInstances.set(nodeId, instance);
     syncVehicleRigidbodyInstance(nodeId, instance, object);
   }
+}
+
+function removeCharacterBinding(nodeId: string): void {
+  const entry = rigidbodyInstances.get(nodeId) ?? null;
+  if (!entry || entry.bindingKind !== 'character') {
+    return;
+  }
+  rigidbodyInstances.delete(nodeId);
+}
+
+function ensureCharacterBindingForNode(nodeId: string): void {
+  const node = resolveNodeById(nodeId);
+  const component = resolveCharacterControllerComponent(node);
+  if (!node || !component) {
+    removeCharacterBinding(nodeId);
+    return;
+  }
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
+    return;
+  }
+  object.updateWorldMatrix(true, false);
+  const worldPosition = new THREE.Vector3();
+  const worldQuaternion = new THREE.Quaternion();
+  object.getWorldPosition(worldPosition);
+  object.getWorldQuaternion(worldQuaternion).normalize();
+  const body = createBridgePhysicsBodyProxy(worldPosition, worldQuaternion);
+  rigidbodyInstances.set(nodeId, {
+    nodeId,
+    body,
+    bodies: [body],
+    object,
+    orientationAdjustment: null,
+    bindingKind: 'character',
+  });
 }
 
 function getPhysicsInterpolationState(body: PhysicsBodyLike): PhysicsInterpolationState {
@@ -9941,6 +10511,27 @@ function collectVehicleNodes(nodes: SceneNode[] | undefined | null): SceneNode[]
       continue;
     }
     if (resolveVehicleComponent(node)) {
+      collected.push(node);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return collected;
+}
+
+function collectCharacterNodes(nodes: SceneNode[] | undefined | null): SceneNode[] {
+  const collected: SceneNode[] = [];
+  if (!Array.isArray(nodes)) {
+    return collected;
+  }
+  const stack: SceneNode[] = [...nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (resolveCharacterControllerComponent(node)) {
       collected.push(node);
     }
     if (Array.isArray(node.children) && node.children.length) {
@@ -10013,6 +10604,25 @@ function syncVehicleInstancesForDocument(document: SceneJsonExportDocument | nul
   });
 }
 
+function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | null): void {
+  if (!document) {
+    Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+      if (entry.bindingKind === 'character') {
+        rigidbodyInstances.delete(nodeId);
+      }
+    });
+    return;
+  }
+  const characterNodes = collectCharacterNodes(document.nodes);
+  const desiredIds = new Set(characterNodes.map((node) => node.id));
+  characterNodes.forEach((node) => ensureCharacterBindingForNode(node.id));
+  Array.from(rigidbodyInstances.entries()).forEach(([nodeId, entry]) => {
+    if (entry.bindingKind === 'character' && !desiredIds.has(nodeId)) {
+      rigidbodyInstances.delete(nodeId);
+    }
+  });
+}
+
 type SceneSubsystemProgressReporter = (progress: {
   phase: SceneInitStage;
   percent: number;
@@ -10029,6 +10639,7 @@ async function syncPhysicsBodiesForDocument(
   if (!document) {
     resetPhysicsWorld();
     syncVehicleInstancesForDocument(null);
+    syncCharacterBindingsForDocument(null);
     syncAirWallsForDocument(null);
     return;
   }
@@ -10044,6 +10655,7 @@ async function syncPhysicsBodiesForDocument(
     await disposeSceneryPhysicsBridgeScene();
     clearLegacyPhysicsWorld();
     syncVehicleInstancesForDocument(document);
+    syncCharacterBindingsForDocument(document);
     syncAirWallsForDocument(document);
     return;
   }
@@ -10059,6 +10671,7 @@ async function syncPhysicsBodiesForDocument(
     await disposeSceneryPhysicsBridgeScene();
     clearLegacyPhysicsWorld();
     syncVehicleInstancesForDocument(document);
+    syncCharacterBindingsForDocument(document);
     syncAirWallsForDocument(document);
     return;
   }
@@ -10081,6 +10694,7 @@ async function syncPhysicsBodiesForDocument(
   });
   clearLegacyPhysicsWorld();
   syncVehicleInstancesForDocument(document);
+  syncCharacterBindingsForDocument(document);
   syncAirWallsForDocument(document);
   onProgress?.({
     phase: 'syncingPhysics',
@@ -11487,52 +12101,6 @@ function handlePlaySoundEvent(event: Extract<BehaviorRuntimeEvent, { type: 'play
     return;
   }
   void playBehaviorSoundEvent(event);
-}
-
-function startTimedAnimation(
-  token: string,
-  durationSeconds: number,
-  onUpdate: (alpha: number) => void,
-  onComplete: () => void,
-): void {
-  stopBehaviorAnimation(token);
-  const durationMs = Math.max(0, durationSeconds) * 1000;
-  if (durationMs <= 0) {
-    onUpdate(1);
-    onComplete();
-    return;
-  }
-  const startTime = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
-  const raf = typeof requestAnimationFrame === 'function'
-    ? requestAnimationFrame
-    : ((callback: FrameRequestCallback) => {
-        return setTimeout(() => callback(Date.now()), 16) as unknown as number;
-      });
-  const cancelRaf = typeof cancelAnimationFrame === 'function'
-    ? cancelAnimationFrame
-    : ((handle: number) => clearTimeout(handle));
-  let frameHandle: number | null = null;
-  const cancel = () => {
-    if (frameHandle != null) {
-      cancelRaf(frameHandle);
-      frameHandle = null;
-    }
-    activeBehaviorAnimations.delete(token);
-  };
-  const step = (timestamp: number) => {
-    const now = Number.isFinite(timestamp) ? timestamp : (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
-    const elapsed = Math.max(0, now - startTime);
-    const alpha = Math.min(1, elapsed / durationMs);
-    onUpdate(alpha);
-    if (alpha >= 1) {
-      cancel();
-      onComplete();
-      return;
-    }
-    frameHandle = raf(step);
-  };
-  frameHandle = raf(step);
-  activeBehaviorAnimations.set(token, cancel);
 }
 
 function resolveNodeFocusPoint(nodeId: string | null | undefined): THREE.Vector3 | null {
@@ -13813,6 +14381,23 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
+function formatWatchVector3(vec: THREE.Vector3): string {
+  return `${vec.x.toFixed(2)},${vec.y.toFixed(2)},${vec.z.toFixed(2)}`;
+}
+
+
+function resolveWatchTargetQuaternion(
+  position: THREE.Vector3,
+  target: THREE.Vector3,
+  fallbackQuaternion: THREE.Quaternion,
+): THREE.Quaternion {
+  if (position.distanceToSquared(target) < 1e-8) {
+    return tempQuaternionVec.copy(fallbackQuaternion);
+  }
+  cameraWatchLookMatrixScratch.lookAt(position, target, worldUp);
+  return tempQuaternionVec.setFromRotationMatrix(cameraWatchLookMatrixScratch);
+}
+
 function applyCameraWatchTween(deltaSeconds: number): void {
   if (!activeCameraWatchTween || !renderContext || deltaSeconds <= 0) {
     return;
@@ -13822,12 +14407,27 @@ function applyCameraWatchTween(deltaSeconds: number): void {
   const duration = tween.duration > 0 ? tween.duration : 0.0001;
   tween.elapsed = Math.min(tween.elapsed + deltaSeconds, tween.duration);
   const eased = easeInOutCubic(Math.min(1, tween.elapsed / duration));
-  tempMovementVec.copy(tween.from).lerp(tween.to, eased);
+  const progressBucket = Math.min(10, Math.floor((eased * 100) / 10));
+  camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+  camera.quaternion.slerpQuaternions(tween.fromQuaternion, tween.toQuaternion, eased);
+  const targetDistance = THREE.MathUtils.lerp(tween.fromTargetDistance, tween.toTargetDistance, eased);
+  tempForwardVec.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  tempMovementVec.copy(camera.position).addScaledVector(tempForwardVec, targetDistance);
+  if (progressBucket !== tween.lastLoggedBucket || tween.elapsed >= tween.duration) {
+    tween.lastLoggedBucket = progressBucket;
+
+  }
   runWithProgrammaticCameraMutationAndAnchor(() => {
     withControlsVerticalFreedom(controls, () => {
       controls.target.copy(tempMovementVec);
-      camera.position.copy(tween.startPosition);
-      camera.lookAt(controls.target);
+      camera.fov = THREE.MathUtils.lerp(tween.fromProjection.fov, tween.toProjection.fov, eased);
+      camera.near = THREE.MathUtils.lerp(tween.fromProjection.near, tween.toProjection.near, eased);
+      camera.far = Math.max(
+        THREE.MathUtils.lerp(tween.fromProjection.near, tween.toProjection.near, eased) + 1e-3,
+        THREE.MathUtils.lerp(tween.fromProjection.far, tween.toProjection.far, eased),
+      );
+      camera.zoom = THREE.MathUtils.lerp(tween.fromProjection.zoom, tween.toProjection.zoom, eased);
+      camera.updateProjectionMatrix();
       controls.update();
     });
   });
@@ -13835,13 +14435,21 @@ function applyCameraWatchTween(deltaSeconds: number): void {
   if (tween.elapsed >= tween.duration) {
     runWithProgrammaticCameraMutationAndAnchor(() => {
       withControlsVerticalFreedom(controls, () => {
-        controls.target.copy(tween.to);
-        camera.lookAt(controls.target);
+        camera.position.copy(tween.toPosition);
+        camera.quaternion.copy(tween.toQuaternion);
+        controls.target.copy(tween.toTarget);
+        camera.fov = tween.toProjection.fov;
+        camera.near = tween.toProjection.near;
+        camera.far = Math.max(tween.toProjection.near + 1e-3, tween.toProjection.far);
+        camera.zoom = tween.toProjection.zoom;
+        camera.updateProjectionMatrix();
         controls.update();
       });
     });
     lockControlsPitchToCurrent(controls, camera);
+    const onComplete = tween.onComplete ?? null;
     activeCameraWatchTween = null;
+    onComplete?.();
     markInstancedCullingDirty();
   }
 }
@@ -14020,53 +14628,346 @@ function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }
   });
 }
 
-function handleMoveCameraEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-camera' }>) {
-  const context = renderContext;
-  if (!context) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+const moveToTransitionStartPosition = new THREE.Vector3();
+const moveToTransitionStartQuaternion = new THREE.Quaternion();
+const moveToSubjectForwardAxisScratch = new THREE.Vector3();
+const moveToTransitionCurrentForward = new THREE.Vector3();
+let moveToTransitionFrameHandle: number | null = null;
+
+function cancelMoveToTransition(): void {
+  if (moveToTransitionFrameHandle !== null) {
+    cancelAnimationFrame(moveToTransitionFrameHandle);
+    moveToTransitionFrameHandle = null;
+  }
+}
+
+function resolveMoveToSubjectNodeId(): string | null {
+  if (vehicleDriveStateBridge.active && vehicleDriveStateBridge.nodeId) {
+    return vehicleDriveStateBridge.nodeId;
+  }
+  return resolveDefaultControlledCharacterNodeId();
+}
+
+function resolveMoveToSubjectBinding(subjectNodeId: string) {
+  return resolveMoveToBindingByNodeId(subjectNodeId, rigidbodyInstances);
+}
+
+function resolveMoveToSubjectObject(subjectNodeId: string): THREE.Object3D | null {
+  const binding = resolveMoveToSubjectBinding(subjectNodeId);
+  return binding?.object ?? nodeObjectMap.get(subjectNodeId) ?? null;
+}
+
+function resolveMoveToSubjectForwardAxis(subjectNodeId: string, bindingKind: string | null): THREE.Vector3 {
+  if (bindingKind === 'vehicle') {
+    const vehicle = resolveVehicleComponent(resolveNodeById(subjectNodeId));
+    const props = clampVehicleComponentProps(vehicle?.props ?? null);
+    return resolveVehicleAxisVector(clampVehicleAxisIndex(props.indexForwardAxis));
+  }
+  if (bindingKind === 'character') {
+    const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId));
+    const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis;
+    return writeCharacterLocalForward(moveToSubjectForwardAxisScratch, forwardAxis) as THREE.Vector3;
+  }
+  return moveToSubjectForwardAxisScratch.set(1, 0, 0);
+}
+
+function resolveMoveToSubjectBridgeNodeId(subjectNodeId: string): string | null {
+  if (physicsBridgeBodyIdByNodeId.has(subjectNodeId)) {
+    return subjectNodeId;
+  }
+  const characterBodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(subjectNodeId) ?? null;
+  if (characterBodyNodeId && physicsBridgeBodyIdByNodeId.has(characterBodyNodeId)) {
+    return characterBodyNodeId;
+  }
+  return null;
+}
+
+function syncMoveToSubjectTargetToPhysicsBridge(
+  subjectNodeId: string,
+  targetPose: ReturnType<typeof buildMoveToTargetPose>,
+): void {
+  if (!physicsBridge || !physicsBridgeSceneLoaded) {
     return;
   }
-  const { camera, controls } = context;
-  const targetNodeId = event.targetNodeId ?? event.nodeId;
-  const anchorPoint = resolveNodeAnchorPoint(targetNodeId) ?? resolveNodeFocusPoint(targetNodeId);
-  if (!anchorPoint) {
-    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
+  const bridgeNodeId = resolveMoveToSubjectBridgeNodeId(subjectNodeId);
+  if (!bridgeNodeId) {
+    return;
+  }
+  const bodyId = physicsBridgeBodyIdByNodeId.get(bridgeNodeId);
+  if (typeof bodyId !== 'number') {
+    return;
+  }
+  physicsBridgeFrameBodiesByNodeId.set(bridgeNodeId, {
+    position: targetPose.position.clone(),
+    quaternion: targetPose.quaternion.clone(),
+    motionState: 0,
+  });
+  void physicsBridge.setBodyTransform({
+    bodyId,
+    transform: {
+      position: [targetPose.position.x, targetPose.position.y, targetPose.position.z],
+      rotation: [
+        targetPose.quaternion.x,
+        targetPose.quaternion.y,
+        targetPose.quaternion.z,
+        targetPose.quaternion.w,
+      ],
+    },
+  });
+}
+
+function resolveMoveToCharacterTargetYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): number {
+  const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId));
+  const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis;
+  return resolvePhysicsCharacterMotorYawFromWorldQuaternion(targetQuaternion, forwardAxis);
+}
+
+function syncMoveToCharacterControllerYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): void {
+  const nextYaw = resolveMoveToCharacterTargetYaw(subjectNodeId, targetQuaternion);
+  characterInputYaw = nextYaw;
+  characterInputYawInitialized = true;
+  resetSceneryCharacterInputYawStateIfNeeded(resolveDefaultControlledCharacterNodeId());
+  characterAuthorityInput.turn = 0;
+}
+
+function getMoveToSubjectCurrentPose(subjectNodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
+  const object = resolveMoveToSubjectObject(subjectNodeId);
+  if (!object) {
+    return null;
+  }
+  object.updateWorldMatrix(true, false);
+  object.getWorldPosition(moveToTransitionStartPosition);
+  object.getWorldQuaternion(moveToTransitionStartQuaternion);
+  return {
+    position: moveToTransitionStartPosition.clone(),
+    quaternion: moveToTransitionStartQuaternion.clone(),
+  };
+}
+
+function applyMoveToSubjectTargetPose(
+  subjectNodeId: string,
+  targetPose: ReturnType<typeof buildMoveToTargetPose>,
+): void {
+  const binding = resolveMoveToSubjectBinding(subjectNodeId);
+  const bindingKind = binding?.bindingKind ?? 'none';
+  const subjectForwardAxis = resolveMoveToSubjectForwardAxis(subjectNodeId, bindingKind);
+  const characterTargetQuaternion = resolveMoveToAlignedQuaternionForLocalForwardAxis(
+    targetPose.quaternion,
+    subjectForwardAxis,
+  );
+  if (binding?.body) {
+    applyMoveToPhysicsBodyWorldPose({
+      body: binding.body,
+      worldPosition: targetPose.position,
+      worldQuaternion: characterTargetQuaternion,
+      orientationAdjustment: binding.orientationAdjustment,
+    });
+    if (binding.object) {
+      applyMoveToObjectWorldPose(binding.object, targetPose.position, characterTargetQuaternion);
+    }
+    syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
+      position: targetPose.position,
+      forward: targetPose.forward,
+      up: targetPose.up,
+      quaternion: characterTargetQuaternion,
+    });
+    if (bindingKind === 'character') {
+      syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion);
+    }
+    return;
+  }
+  const object = resolveMoveToSubjectObject(subjectNodeId);
+  if (!object) {
+    return;
+  }
+  applyMoveToObjectWorldPose(object, targetPose.position, characterTargetQuaternion);
+  syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
+    position: targetPose.position,
+    forward: targetPose.forward,
+    up: targetPose.up,
+    quaternion: characterTargetQuaternion,
+  });
+  if (bindingKind === 'character') {
+    syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion);
+  }
+}
+
+function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const placement = buildMoveToCameraPlacement(targetPose);
+  context.camera.position.copy(placement.position);
+  context.controls.target.copy(placement.lookAt);
+  context.controls.update();
+}
+
+function resetMoveToSubjectInputs(): void {
+  vehicleDriveInput.throttle = 0;
+  vehicleDriveInput.steering = 0;
+  vehicleDriveInput.brake = 0;
+  characterAuthorityInput.moveX = 0;
+  characterAuthorityInput.moveZ = 0;
+  characterAuthorityInput.turn = 0;
+  characterAuthorityInput.jump = false;
+  characterAuthorityInput.sprint = false;
+  characterAuthorityInput.crouch = false;
+  characterAuthorityInput.interact = false;
+}
+
+function finalizeMoveToSession(resolution: { type: 'continue' | 'fail'; message?: string } = { type: 'continue' }): void {
+  const token = moveToRuntimeSession.token;
+  resetMoveToRuntimeSession(moveToRuntimeSession);
+  cancelMoveToTransition();
+  resetMoveToSubjectInputs();
+  if (token) {
+    resolveBehaviorToken(token, resolution);
+  }
+}
+
+function resolveMoveToFacingYaw(targetPose: ReturnType<typeof buildMoveToTargetPose>): number {
+  return resolveMoveToYawRadiansFromForward(targetPose.forward);
+}
+
+function updateMoveToSessionForFrame(deltaSeconds: number): void {
+  if (!moveToRuntimeSession.active || !moveToRuntimeSession.token || !moveToRuntimeSession.subjectNodeId || !moveToRuntimeSession.targetNodeId) {
+    return;
+  }
+  const subjectNodeId = moveToRuntimeSession.subjectNodeId;
+  const binding = resolveMoveToSubjectBinding(subjectNodeId);
+  const currentPose = getMoveToSubjectCurrentPose(subjectNodeId);
+  if (!currentPose) {
+    finalizeMoveToSession({ type: 'fail', message: 'Move To subject pose unavailable.' });
+    return;
+  }
+  const targetPose = {
+    position: moveToRuntimeSession.targetPosition.clone(),
+    forward: moveToRuntimeSession.targetForward.clone(),
+    up: moveToRuntimeSession.targetUp.clone(),
+    quaternion: moveToRuntimeSession.targetQuaternion.clone(),
+  } satisfies ReturnType<typeof buildMoveToTargetPose>;
+  const subjectForwardAxis = resolveMoveToSubjectForwardAxis(subjectNodeId, binding?.bindingKind ?? null);
+  const currentForward = resolveMoveToWorldForwardFromQuaternion(
+    currentPose.quaternion,
+    subjectForwardAxis,
+    moveToTransitionCurrentForward,
+  );
+  currentForward.y = 0;
+  if (currentForward.lengthSq() <= 1e-8) {
+    currentForward.set(1, 0, 0);
+  } else {
+    currentForward.normalize();
+  }
+  const currentYaw = Math.atan2(currentForward.x, currentForward.z);
+  const targetYaw = resolveMoveToFacingYaw(targetPose);
+  const positionDelta = targetPose.position.clone().sub(currentPose.position);
+  positionDelta.y = 0;
+  const planarDistance = positionDelta.length();
+
+  if (moveToRuntimeSession.subjectType === 'camera') {
+    const context = renderContext;
+    if (!context) {
+      finalizeMoveToSession({ type: 'fail', message: '相机不可用' });
+      return;
+    }
+    const placement = buildMoveToCameraPlacement(targetPose);
+    const cameraDistance = placement.position.distanceTo(context.camera.position);
+    if (cameraDistance <= MOVE_TO_SNAP_DISTANCE) {
+      applyMoveToCameraTargetPose(targetPose);
+      finalizeMoveToSession({ type: 'continue' });
+      return;
+    }
+    context.camera.position.lerp(placement.position, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED));
+    context.controls.target.lerp(placement.lookAt, Math.min(1, deltaSeconds * MOVE_TO_CAMERA_LERP_SPEED));
+    context.controls.update();
     return;
   }
 
-  const focusPoint = anchorPoint.clone();
-  const startPosition = camera.position.clone();
-  const startTarget = controls.target.clone();
-  const destination = new THREE.Vector3(focusPoint.x, focusPoint.y + HUMAN_EYE_HEIGHT, focusPoint.z);
-  const translation = destination.clone().sub(startPosition);
-  const targetDestination = startTarget.clone().add(translation);
-  if (targetDestination.distanceToSquared(destination) < 1e-6) {
-    targetDestination.copy(destination);
+  if (moveToRuntimeSession.subjectType === 'vehicle') {
+    const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw);
+    const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(12);
+    if (shouldSnap) {
+      applyMoveToSubjectTargetPose(subjectNodeId, targetPose);
+      finalizeMoveToSession({ type: 'continue' });
+      return;
+    }
+    const distanceBlend = THREE.MathUtils.clamp(
+      (planarDistance - MOVE_TO_VEHICLE_STOP_DISTANCE) / Math.max(1e-6, MOVE_TO_VEHICLE_SLOW_DISTANCE - MOVE_TO_VEHICLE_STOP_DISTANCE),
+      0,
+      1,
+    );
+    vehicleDriveInput.throttle = distanceBlend;
+    vehicleDriveInput.brake = planarDistance <= MOVE_TO_VEHICLE_STOP_DISTANCE ? 1 : 0;
+    vehicleDriveInput.steering = THREE.MathUtils.clamp(yawError / (Math.PI * 0.65), -1, 1);
+    return;
   }
-  const durationSeconds = Math.max(0, event.duration ?? 0);
-  
-  const updateFrame = (alpha: number) => {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        camera.position.lerpVectors(startPosition, destination, alpha);
-        controls.target.lerpVectors(startTarget, targetDestination, alpha);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-  };
-  const finalize = () => {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        camera.position.copy(destination);
-        controls.target.copy(targetDestination);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    resolveBehaviorToken(event.token, { type: 'continue' });
-  };
-  startTimedAnimation(event.token, durationSeconds, updateFrame, finalize);
+
+  const yawError = resolveMoveToYawDeltaRadians(currentYaw, targetYaw);
+  const shouldSnap = planarDistance <= MOVE_TO_SNAP_DISTANCE && Math.abs(yawError) <= THREE.MathUtils.degToRad(10);
+  if (shouldSnap) {
+    applyMoveToSubjectTargetPose(subjectNodeId, targetPose);
+    finalizeMoveToSession({ type: 'continue' });
+    return;
+  }
+  const distanceBlend = THREE.MathUtils.clamp(
+    (planarDistance - MOVE_TO_CHARACTER_STOP_DISTANCE) / Math.max(1e-6, MOVE_TO_CHARACTER_SLOW_DISTANCE - MOVE_TO_CHARACTER_STOP_DISTANCE),
+    0,
+    1,
+  );
+  characterAuthorityInput.moveZ = planarDistance <= MOVE_TO_CHARACTER_STOP_DISTANCE ? 0 : distanceBlend;
+  characterAuthorityInput.turn = THREE.MathUtils.clamp(yawError / (Math.PI * 0.55), -1, 1);
+  characterAuthorityInput.sprint = distanceBlend > 0.75;
+  characterAuthorityInput.jump = false;
+  characterAuthorityInput.crouch = false;
+  characterAuthorityInput.interact = false;
+}
+
+function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to' }>): void {
+  const targetNodeId = event.targetNodeId || event.nodeId;
+  const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null;
+  if (!targetObject) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '未找到目标节点' });
+    return;
+  }
+  const targetPose = resolveMoveToTargetPoseFromObject(targetObject);
+  const subjectType = resolveMoveToSubjectType({
+    vehicleActive: vehicleDriveStateBridge.active,
+    hasControlledCharacter: Boolean(resolveDefaultControlledCharacterNodeId()),
+  });
+  const subjectNodeId = subjectType === 'camera' ? null : resolveMoveToSubjectNodeId();
+  if (subjectType !== 'camera' && !subjectNodeId) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '没有可移动的主控对象' });
+    return;
+  }
+  const resolvedSubjectNodeId = subjectNodeId ?? '';
+  resetMoveToRuntimeSession(moveToRuntimeSession);
+  moveToRuntimeSession.active = true;
+  moveToRuntimeSession.token = event.token;
+  moveToRuntimeSession.subjectType = subjectType;
+  moveToRuntimeSession.subjectNodeId = subjectNodeId;
+  moveToRuntimeSession.kinetics = Boolean(event.kinetics);
+  moveToRuntimeSession.targetNodeId = targetNodeId;
+  moveToRuntimeSession.targetPosition.copy(targetPose.position);
+  moveToRuntimeSession.targetForward.copy(targetPose.forward);
+  moveToRuntimeSession.targetUp.copy(targetPose.up);
+  moveToRuntimeSession.targetQuaternion.copy(targetPose.quaternion);
+  const cameraPlacement = buildMoveToCameraPlacement(targetPose);
+  moveToRuntimeSession.cameraTargetPosition.copy(cameraPlacement.position);
+  moveToRuntimeSession.cameraTargetLookAt.copy(cameraPlacement.lookAt);
+  if (subjectType === 'camera') {
+    if (!renderContext) {
+      resolveBehaviorToken(event.token, { type: 'fail', message: '相机不可用' });
+      return;
+    }
+    applyMoveToCameraTargetPose(targetPose);
+    finalizeMoveToSession({ type: 'continue' });
+    return;
+  }
+  if (!event.kinetics) {
+    applyMoveToSubjectTargetPose(resolvedSubjectNodeId, targetPose);
+    finalizeMoveToSession({ type: 'continue' });
+  }
 }
 
 function handleSetVisibilityEvent(event: Extract<BehaviorRuntimeEvent, { type: 'set-visibility' }>) {
@@ -14128,6 +15029,137 @@ function isRedundantWatchRequest(targetNodeId: string | null): boolean {
   return cameraViewState.mode === 'watching' && cameraViewState.targetNodeId === targetNodeId;
 }
 
+function isWatchCameraLocked(): boolean {
+  return cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null;
+}
+
+function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
+  if (activeWatchRestoreSnapshot.value && isRedundantWatchRequest(targetNodeId)) {
+    return;
+  }
+  activeWatchRestoreSnapshot.value = captureViewControlSnapshot();
+  watchUiRestoreState.value = {
+    purposeControlsVisible: purposeControlsVisible.value,
+  };
+}
+
+function clearActiveWatchState(): void {
+  activeWatchRestoreSnapshot.value = null;
+  activeWatchSource.value = null;
+  watchUiRestoreState.value = null;
+  activeWatchTransitionPlan = null;
+  watchCameraSuppressionLogged = false;
+}
+
+function restoreWatchUiState(): void {
+  const snapshot = watchUiRestoreState.value;
+  if (!snapshot) {
+    return;
+  }
+}
+
+function captureCameraProjectionState(camera: THREE.PerspectiveCamera): {
+  fov: number;
+  near: number;
+  far: number;
+  zoom: number;
+} {
+  return {
+    fov: camera.fov,
+    near: camera.near,
+    far: camera.far,
+    zoom: camera.zoom,
+  };
+}
+
+function startCameraWatchTween(params: {
+  toPosition: THREE.Vector3;
+  toTarget: THREE.Vector3;
+  toProjection?: { fov: number; near: number; far: number; zoom: number } | null;
+  toQuaternion?: THREE.Quaternion | null;
+  toTargetDistance?: number | null;
+  duration: number;
+  onComplete?: (() => void) | null;
+}): void {
+  const context = renderContext;
+  if (!context) {
+    params.onComplete?.();
+    return;
+  }
+  const { camera, controls } = context;
+  const toQuaternion = params.toQuaternion
+    ? params.toQuaternion.clone()
+    : resolveWatchTargetQuaternion(params.toPosition, params.toTarget, camera.quaternion);
+  activeCameraWatchTween = {
+    fromPosition: camera.position.clone(),
+    toPosition: params.toPosition.clone(),
+    fromQuaternion: camera.quaternion.clone(),
+    toQuaternion: toQuaternion.clone(),
+    fromTarget: controls.target.clone(),
+    toTarget: params.toTarget.clone(),
+    fromTargetDistance: camera.position.distanceTo(controls.target),
+    toTargetDistance: params.toTargetDistance ?? params.toPosition.distanceTo(params.toTarget),
+    fromProjection: captureCameraProjectionState(camera),
+    toProjection: params.toProjection
+      ? {
+          fov: params.toProjection.fov,
+          near: params.toProjection.near,
+          far: Math.max(params.toProjection.near + 1e-3, params.toProjection.far),
+          zoom: params.toProjection.zoom,
+        }
+      : captureCameraProjectionState(camera),
+    duration: Math.max(0, params.duration),
+    elapsed: 0,
+    lastLoggedBucket: -1,
+    onComplete: params.onComplete ?? null,
+  };
+  activeWatchTransitionPlan = {
+    fromPosition: activeCameraWatchTween.fromPosition.clone(),
+    fromQuaternion: activeCameraWatchTween.fromQuaternion.clone(),
+    fromTargetDistance: activeCameraWatchTween.fromTargetDistance,
+    toPosition: activeCameraWatchTween.toPosition.clone(),
+    toQuaternion: activeCameraWatchTween.toQuaternion.clone(),
+    toTargetDistance: activeCameraWatchTween.toTargetDistance,
+  };
+  markInstancedCullingDirty();
+}
+
+function leaveActiveWatchView(): void {
+  const snapshot = activeWatchRestoreSnapshot.value;
+  if (snapshot) {
+    const transitionPlan = activeWatchTransitionPlan;
+    const restorePosition = transitionPlan ? transitionPlan.fromPosition.clone() : new THREE.Vector3(...snapshot.camera.position);
+    const restoreQuaternion = transitionPlan ? transitionPlan.fromQuaternion.clone() : null;
+    const restoreTargetDistance = transitionPlan ? transitionPlan.fromTargetDistance : null;
+    startCameraWatchTween({
+      toPosition: restorePosition,
+      toTarget: new THREE.Vector3(...snapshot.orbitTarget),
+      toQuaternion: restoreQuaternion,
+      toTargetDistance: restoreTargetDistance,
+      toProjection: {
+        fov: snapshot.camera.fov,
+        near: snapshot.camera.near,
+        far: snapshot.camera.far,
+        zoom: snapshot.camera.zoom,
+      },
+      duration: CAMERA_WATCH_DURATION,
+      onComplete: () => {
+        applyViewControlSnapshot(snapshot);
+        restoreWatchUiState();
+        clearActiveWatchState();
+        markInstancedCullingDirty();
+      },
+    });
+    return;
+  }
+  clearActiveWatchState();
+  setCameraViewState('level');
+  purposeActiveMode.value = 'level';
+  setCameraCaging(false);
+  activeCameraWatchTween = null;
+  markInstancedCullingDirty();
+}
+
 function performWatchFocus(targetNodeId: string | null, caging?: boolean): { success: boolean; message?: string } {
   const context = renderContext;
   if (!context) {
@@ -14143,58 +15175,56 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
     return { success: true };
   }
   const { camera, controls } = context;
+  const viewPointProps = resolveViewPointPropsForNodeId(targetNodeId);
+  const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null;
+  captureWatchRestoreSnapshotIfNeeded(targetNodeId);
+
+  if (viewPointProps && targetObject) {
+    targetObject.updateWorldMatrix(true, false);
+    const pose = resolveViewPointWorldCameraPose(targetObject.matrixWorld, viewPointProps);
+    startCameraWatchTween({
+      toPosition: pose.position.clone(),
+      toTarget: pose.target.clone(),
+      toProjection: {
+        fov: pose.fov,
+        near: pose.near,
+        far: pose.far,
+        zoom: pose.zoom,
+      },
+      duration: CAMERA_WATCH_DURATION,
+    });
+    setCameraCaging(Boolean(caging));
+    purposeActiveMode.value = 'watch';
+    setCameraViewState('watching', targetNodeId);
+    activeWatchSource.value = 'viewPoint';
+    markInstancedCullingDirty();
+    return { success: true };
+  }
+
   const focus = resolveNodeAnchorPoint(targetNodeId) ?? resolveNodeFocusPoint(targetNodeId);
   if (!focus) {
+    clearActiveWatchState();
     return { success: false, message: '未找到目标节点' };
   }
   const finishSuccess = () => {
     setCameraCaging(Boolean(caging));
     purposeActiveMode.value = 'watch';
     setCameraViewState('watching', targetNodeId);
+    activeWatchSource.value = 'target-look';
     return { success: true };
   };
   activeCameraWatchTween = null;
-  const startPosition = camera.position.clone();
-
-  tempMovementVec.copy(focus).sub(startPosition);
-  if (tempMovementVec.lengthSq() < 1e-8) {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        controls.target.copy(focus);
-        camera.position.copy(startPosition);
-        camera.lookAt(focus);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    markInstancedCullingDirty();
-    return finishSuccess();
+  const watchTarget = focus.clone();
+  if (watchTarget.distanceToSquared(camera.position) < 1e-8) {
+    tempForwardVec.copy(camera.getWorldDirection(tempForwardVec));
+    watchTarget.copy(camera.position).addScaledVector(tempForwardVec, CAMERA_FORWARD_OFFSET);
   }
-
-  tempMovementVec.normalize();
-  tempForwardVec.copy(tempMovementVec).multiplyScalar(CAMERA_FORWARD_OFFSET).add(startPosition);
-  const startTarget = controls.target.clone();
-  if (startTarget.distanceToSquared(tempForwardVec) < 1e-6) {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        camera.position.copy(startPosition);
-        controls.target.copy(tempForwardVec);
-        camera.lookAt(tempForwardVec);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    markInstancedCullingDirty();
-    return finishSuccess();
-  }
-
-  activeCameraWatchTween = {
-    from: startTarget,
-    to: tempForwardVec.clone(),
-    startPosition,
+  startCameraWatchTween({
+    toPosition: camera.position.clone(),
+    toTarget: watchTarget,
+    toProjection: captureCameraProjectionState(camera),
     duration: CAMERA_WATCH_DURATION,
-    elapsed: 0,
-  };
+  });
 
   markInstancedCullingDirty();
 
@@ -14210,45 +15240,187 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
-function showPurposeControls(targetNodeId: string | null, sourceNodeId: string | null): void {
-  purposeSourceNodeId.value = sourceNodeId ?? null;
-  purposeTargetNodeId.value = targetNodeId ?? sourceNodeId ?? null;
-  purposeControlsVisible.value = true;
+function truncatePurposeButtonLabel(label: string, maxVisibleChars = 6): string {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const chars = Array.from(trimmed);
+  if (chars.length <= maxVisibleChars) {
+    return trimmed;
+  }
+  return `${chars.slice(0, maxVisibleChars).join('')}…`;
 }
 
-function hidePurposeControls(): void {
-  purposeControlsVisible.value = false;
+function resolvePurposeButtonLabel(button: ShowPurposeBehaviorButton): string {
+  const explicit = button.label?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const sequenceLabel = resolvePerformSequenceLabel(currentDocument?.nodes ?? [], button.targetNodeId, button.targetSequenceId);
+  if (sequenceLabel) {
+    return sequenceLabel;
+  }
+  return button.targetSequenceId ?? '未命名按钮';
+}
+
+function resolvePurposeButtonDisplayLabel(button: ShowPurposeBehaviorButton): string {
+  return truncatePurposeButtonLabel(resolvePurposeButtonLabel(button), 6);
+}
+
+function estimatePurposeControlGroupSize(buttons: ShowPurposeBehaviorButton[]): { widthPx: number; heightPx: number } {
+  const longestLabelLength = buttons.reduce((max, button) => {
+    const length = Array.from(resolvePurposeButtonDisplayLabel(button)).length;
+    return Math.max(max, length);
+  }, 0);
+  const buttonCount = Math.max(buttons.length, 1);
+  return {
+    widthPx: Math.min(180, Math.max(104, 58 + (longestLabelLength * 10))),
+    heightPx: Math.min(180, Math.max(34, (buttonCount * 31) + ((buttonCount - 1) * 6) + 8)),
+  };
+}
+
+function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId: string | null): void {
+  const nodeId = sourceNodeId?.trim() ?? '';
+  if (!nodeId) {
+    return;
+  }
+  const normalizedButtons = Array.isArray(buttons) ? buttons.slice() : [];
+  if (!normalizedButtons.length) {
+    hidePurposeControls(nodeId);
+    return;
+  }
+  const existingIndex = purposeControlEntries.value.findIndex((entry) => entry.nodeId === nodeId);
+  const existingPlacement = existingIndex >= 0 ? purposeControlEntries.value[existingIndex]?.placement : null;
+  const nextEntry: PurposeControlRecord = {
+    nodeId,
+    buttons: normalizedButtons,
+    placement: existingPlacement ?? {
+      xPercent: 50,
+      yPercent: 50,
+      scale: 1,
+      opacity: 1,
+      distanceMeters: 0,
+      distanceLabel: '--',
+    },
+  };
+  if (existingIndex >= 0) {
+    purposeControlEntries.value.splice(existingIndex, 1, nextEntry);
+  } else {
+    purposeControlEntries.value = [...purposeControlEntries.value, nextEntry];
+  }
+}
+
+function hidePurposeControls(nodeId: string | null = null): void {
+  if (!nodeId) {
+    purposeControlEntries.value = [];
+    return;
+  }
+  const normalizedNodeId = nodeId.trim();
+  if (!normalizedNodeId) {
+    return;
+  }
+  purposeControlEntries.value = purposeControlEntries.value.filter((entry) => entry.nodeId !== normalizedNodeId);
 }
 
 function handleShowPurposeControlsEvent(
   event: Extract<BehaviorRuntimeEvent, { type: 'show-purpose-controls' }>,
 ): void {
-  showPurposeControls(event.targetNodeId ?? null, event.nodeId ?? null);
+  showPurposeControls(event.buttons ?? [], event.nodeId ?? null);
 }
 
-function handleHidePurposeControlsEvent(): void {
-  hidePurposeControls();
+function handleHidePurposeControlsEvent(event: Extract<BehaviorRuntimeEvent, { type: 'hide-purpose-controls' }>): void {
+  hidePurposeControls(event.nodeId ?? null);
 }
 
-function handlePurposeWatchTap(): void {
-  const targetNodeId = purposeTargetNodeId.value ?? purposeSourceNodeId.value;
-  if (!targetNodeId) {
-    uni.showToast({ title: '缺少观察目标', icon: 'none' });
+function handlePurposeButtonTap(entry: PurposeControlRecord, button: ShowPurposeBehaviorButton): void {
+  const targetNodeId = button.targetNodeId?.trim() ?? '';
+  const targetSequenceId = button.targetSequenceId?.trim() ?? '';
+  if (!targetNodeId || !targetSequenceId) {
+    uni.showToast({ title: '缺少可触发的目标脚本', icon: 'none' });
     return;
   }
-  const result = performWatchFocus(targetNodeId, true);
-  if (!result.success) {
-    uni.showToast({ title: result.message || '无法定位观察目标', icon: 'none' });
-    return;
-  }
+  const results = triggerBehaviorAction(
+    targetNodeId,
+    'perform',
+    {
+      payload: {
+        sourceNodeId: entry.nodeId,
+      },
+    },
+    { sequenceId: targetSequenceId },
+  );
+  processBehaviorEvents(results);
 }
 
-function handlePurposeResetTap(): void {
-  const result = resetCameraToLevelView();
-  if (!result.success) {
-    uni.showToast({ title: result.message || '相机不可用', icon: 'none' });
+function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void {
+  const entries = purposeControlEntries.value;
+  if (!entries.length || !activeCamera) {
     return;
   }
+  const viewportWidth = Math.max(1, lanternViewportSize.width || 375);
+  const viewportHeight = Math.max(1, lanternViewportSize.height || 667);
+  const candidates = entries.flatMap((entry) => {
+    const object = nodeObjectMap.get(entry.nodeId) ?? null;
+    if (!object) {
+      return [];
+    }
+    object.updateWorldMatrix(true, false);
+    resolvePurposeOverlayAnchorWorldPosition(object, purposeAnchorScratch);
+    const size = estimatePurposeControlGroupSize(entry.buttons);
+    const placement = computePurposeOverlayPlacement({
+      anchorWorld: purposeAnchorScratch,
+      referenceWorld: activeCamera.position,
+      camera: activeCamera,
+      viewportWidth,
+      viewportHeight,
+      closeFadeDistance: SIGNBOARD_CLOSE_FADE_DISTANCE,
+      minScreenYPercent: SIGNBOARD_MIN_SCREEN_Y_PERCENT,
+      estimatedWidthPx: size.widthPx,
+      estimatedHeightPx: size.heightPx,
+    });
+    if (!placement) {
+      return [];
+    }
+    return [{
+      id: entry.nodeId,
+      placement,
+      estimatedWidthPx: size.widthPx,
+      estimatedHeightPx: size.heightPx,
+    }];
+  });
+  if (!candidates.length) {
+    purposeControlEntries.value = [];
+    return;
+  }
+  const resolvedPlacements = resolvePurposeOverlayPlacements({
+    placements: candidates,
+    viewportWidth,
+    viewportHeight,
+    screenMarginPx: 12,
+  });
+  const placementByNodeId = new Map(resolvedPlacements.map((entry) => [entry.id, entry.placement] as const));
+  purposeControlEntries.value = entries
+    .map((entry) => {
+      const placement = placementByNodeId.get(entry.nodeId);
+      if (!placement) {
+        return null;
+      }
+      return {
+        ...entry,
+        placement,
+      };
+    })
+    .filter((entry): entry is PurposeControlRecord => entry !== null);
+}
+
+function resolvePurposeControlStyle(entry: PurposeControlRecord): Record<string, string> {
+  return {
+    left: `${entry.placement.xPercent}%`,
+    top: `${entry.placement.yPercent}%`,
+    transform: `translate(-50%, -100%) scale(${Math.max(0.75, Math.min(1.1, entry.placement.scale))})`,
+    opacity: `${Math.max(0.35, Math.min(1, entry.placement.opacity))}`,
+  };
 }
 
 function resetCameraToLevelView(): { success: boolean; message?: string } {
@@ -14265,33 +15437,28 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
   activeCameraWatchTween = null;
   markInstancedCullingDirty();
   setCameraCaging(false);
-  const startTarget = controls.target.clone();
-  const levelTarget = startTarget.clone();
+  const levelTarget = controls.target.clone();
   levelTarget.y = camera.position.y;
   const finishSuccess = () => {
     purposeActiveMode.value = 'level';
     setCameraViewState('level');
     return { success: true };
   };
-  if (startTarget.distanceToSquared(levelTarget) < 1e-6) {
-    runWithProgrammaticCameraMutationAndAnchor(() => {
-      withControlsVerticalFreedom(controls, () => {
-        controls.target.copy(levelTarget);
-        camera.lookAt(levelTarget);
-        controls.update();
-      });
-    });
-    lockControlsPitchToCurrent(controls, camera);
-    return finishSuccess();
+  if (levelTarget.distanceToSquared(camera.position) < 1e-8) {
+    tempForwardVec.copy(camera.getWorldDirection(tempForwardVec)).setY(0);
+    if (tempForwardVec.lengthSq() < 1e-8) {
+      tempForwardVec.set(0, 0, -1);
+    } else {
+      tempForwardVec.normalize();
+    }
+    levelTarget.copy(camera.position).addScaledVector(tempForwardVec, CAMERA_FORWARD_OFFSET);
   }
-  const startPosition = camera.position.clone();
-  activeCameraWatchTween = {
-    from: startTarget,
-    to: levelTarget.clone(),
-    startPosition,
+  startCameraWatchTween({
+    toPosition: camera.position.clone(),
+    toTarget: levelTarget,
+    toProjection: captureCameraProjectionState(camera),
     duration: CAMERA_LEVEL_DURATION,
-    elapsed: 0,
-  };
+  });
   markInstancedCullingDirty();
   return finishSuccess();
 }
@@ -14590,12 +15757,14 @@ function resolveJoystickCharacterInput(): { turn: number; moveZ: number } {
 }
 
 function updateCharacterAuthorityInputFromKeys(): void {
-  const keyMoveX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
-  const keyMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
   const joystickInput = resolveJoystickCharacterInput();
-  characterAuthorityInput.moveX = clampAxisScalar(keyMoveX);
-  characterAuthorityInput.moveZ = clampAxisScalar(keyMoveZ + joystickInput.moveZ);
-  characterAuthorityTurnTarget.value = clampAxisScalar(joystickInput.turn);
+  const keyboardMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
+  const keyboardTurn = (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0);
+  const moveZ = clampAxisScalar(joystickInput.moveZ + keyboardMoveZ);
+  const turn = clampAxisScalar(joystickInput.turn + keyboardTurn);
+  characterAuthorityInput.moveX = 0;
+  characterAuthorityInput.moveZ = moveZ;
+  characterAuthorityInput.turn = turn;
   characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
@@ -14610,16 +15779,6 @@ function updateCharacterAuthorityInputFromKeys(): void {
   }
   characterInputJumpLatch = false;
   characterAuthorityInput.jump = false;
-}
-
-function updateCharacterAuthorityTurnRelaxation(delta: number): void {
-  if (!Number.isFinite(delta) || delta <= 0) {
-    return;
-  }
-  const target = characterAuthorityTurnTarget.value;
-  const speed = target === 0 ? CHARACTER_TURN_RETURN_SPEED : CHARACTER_TURN_CATCH_SPEED;
-  const nextTurn = approachAxisValue(characterAuthorityInput.turn, target, speed, delta);
-  characterAuthorityInput.turn = clampAxisScalar(nextTurn);
 }
 
 function clearCharacterActionJumpReleaseTimer(): void {
@@ -14784,7 +15943,6 @@ function resetCharacterControlInputs(): void {
   characterAuthorityInput.moveX = 0;
   characterAuthorityInput.moveZ = 0;
   characterAuthorityInput.turn = 0;
-  characterAuthorityTurnTarget.value = 0;
   characterAuthorityInput.jump = false;
   characterAuthorityInput.sprint = false;
   characterAuthorityInput.crouch = false;
@@ -15083,14 +16241,49 @@ function isPointInsideCharacterActionsBar(x: number, y: number): boolean {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
+function isPointInsidePurposeControls(x: number, y: number): boolean {
+  if (!purposeControlsVisible.value || !purposeControlEntries.value.length) {
+    return false;
+  }
+  try {
+    const query = uni.createSelectorQuery();
+    if (typeof query.in === 'function') {
+      query.in((pageInstance?.proxy as unknown) ?? null);
+    }
+    let hit = false;
+    query
+      .selectAll('.viewer-purpose-controls')
+      .boundingClientRect((rects: unknown) => {
+        const items = Array.isArray(rects) ? rects : [];
+        hit = items.some((item) => {
+          const rect = item as UniApp.NodeInfo | null;
+          const left = rect?.left ?? 0;
+          const top = rect?.top ?? 0;
+          const width = rect?.width ?? 0;
+          const height = rect?.height ?? 0;
+          if (width <= 0 || height <= 0) {
+            return false;
+          }
+          const right = left + width;
+          const bottom = top + height;
+          return x >= left && x <= right && y >= top && y <= bottom;
+        });
+      })
+      .exec();
+    return hit;
+  } catch {
+    return false;
+  }
+}
+
 function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null): boolean {
   const candidate = target as { dataset?: Record<string, unknown>; parentElement?: Element | null } | null;
   const datasetValue = candidate?.dataset?.controlSkip;
-  if (datasetValue === 'character-actions') {
+  if (datasetValue === 'character-actions' || datasetValue === 'purpose-controls' || datasetValue === 'watch-leave') {
     return true;
   }
   if (typeof (target as Element | null)?.closest === 'function') {
-    return Boolean((target as Element).closest('[data-control-skip="character-actions"]'));
+    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"], [data-control-skip="watch-leave"]'));
   }
   return false;
 }
@@ -15107,6 +16300,9 @@ function handleControlPadTouchStart(event: TouchEvent): void {
     const touch = event.changedTouches?.[0] ?? null;
     const coords = getTouchCoordinates(touch);
     if (coords && isPointInsideCharacterActionsBar(coords.x, coords.y)) {
+      return;
+    }
+    if (coords && isPointInsidePurposeControls(coords.x, coords.y)) {
       return;
     }
     handleCharacterDrivePadTouchStart(event);
@@ -15138,11 +16334,14 @@ function handleControlPadMouseDown(event: MouseEvent): void {
     handleDrivePadMouseDown(event);
     return;
   }
-  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+  if (characterControlUi.value.visible) {
     if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
       return;
     }
     if (isPointInsideCharacterActionsBar(event.clientX, event.clientY)) {
+      return;
+    }
+    if (isPointInsidePurposeControls(event.clientX, event.clientY)) {
       return;
     }
     handleCharacterDrivePadMouseDown(event);
@@ -15304,17 +16503,20 @@ function handleCharacterDrivePadTouchStart(event: TouchEvent): void {
   if (!characterControlUi.value.visible || vehicleDriveUi.value.visible) {
     return;
   }
-  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const touch = event.changedTouches?.[0] ?? null;
   const coords = getTouchCoordinates(touch);
   if (!coords) {
     return;
   }
-  if (!shouldActivateDrivePad(coords.y, characterDrivePadViewportRect)) {
+  if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
+    return;
+  }
+  if (isPointInsideCharacterActionsBar(coords.x, coords.y)) {
     return;
   }
   event.stopPropagation();
   event.preventDefault();
+  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
   summonCharacterDrivePadAt(localCoords.x, localCoords.y);
   handleCharacterJoystickTouchStart(event);
@@ -15364,16 +16566,19 @@ function detachCharacterDrivePadMouseListeners(): void {
 }
 
 function handleCharacterDrivePadMouseDown(event: MouseEvent): void {
-  if (!characterControlUi.value.visible || !isWeChatMiniProgram || event.button !== 0) {
+  if (!characterControlUi.value.visible || event.button !== 0) {
     return;
   }
-  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const coords = { x: event.clientX, y: event.clientY };
-  if (!shouldActivateDrivePad(coords.y, characterDrivePadViewportRect)) {
+  if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
+    return;
+  }
+  if (isPointInsideCharacterActionsBar(coords.x, coords.y)) {
     return;
   }
   event.stopPropagation();
   event.preventDefault();
+  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
   const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
   summonCharacterDrivePadAt(localCoords.x, localCoords.y);
   characterJoystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
@@ -15398,7 +16603,6 @@ function handleCharacterDrivePadMouseUp(): void {
     scheduleCharacterDrivePadFade();
   }
   detachCharacterDrivePadMouseListeners();
-  hideCharacterDrivePadImmediate();
 }
 
 function handleJoystickTouchStart(event: TouchEvent): void {
@@ -15669,12 +16873,10 @@ function updateControlledCharacterMotionTelemetry(nowMs: number): void {
   if (!characterControlUi.value.visible) {
     return;
   }
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  if (!controlledNodeId) {
+  const motionNodeId = resolveControlledCharacterMotionNodeId();
+  if (!motionNodeId) {
     return;
   }
-  const bindingNodeId = resolveCharacterControllerBindingNodeId(controlledNodeId);
-  const motionNodeId = bindingNodeId ?? controlledNodeId;
   const motionObject = nodeObjectMap.get(motionNodeId) ?? null;
   if (!motionObject) {
     return;
@@ -15692,11 +16894,12 @@ function updateSceneCompassHeading(): void {
     return;
   }
   if (characterControlUi.value.visible) {
-    const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-    const telemetry = controlledNodeId ? controlledNodeMotionRuntime.get(controlledNodeId) : null;
+    const telemetryNodeId = resolveControlledCharacterMotionNodeId();
+    const telemetry = telemetryNodeId ? controlledNodeMotionRuntime.get(telemetryNodeId) : null;
+    const resolvedYaw = resolveSceneryCharacterInputYaw();
     const headingDegrees = telemetry
       ? telemetry.headingYawDeg
-      : THREE.MathUtils.radToDeg(resolveSceneryCharacterInputYaw());
+      : THREE.MathUtils.radToDeg(resolvedYaw ?? Math.PI);
     const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
     commitVehicleHeadingDegrees(headingDegrees - northDirectionAngleDegrees);
     return;
@@ -15736,6 +16939,9 @@ function updateVehicleDriveCamera(
   deltaSeconds = 0,
   options: VehicleDriveCameraUpdateOptions = {},
 ): boolean {
+  if (isWatchCameraLocked() || activeCameraWatchTween) {
+    return false;
+  }
   if (!renderContext?.camera) {
     return false;
   }
@@ -15753,7 +16959,7 @@ function updateCharacterFollowCamera(
   options: { immediate?: boolean } = {},
 ): boolean {
   const context = renderContext;
-  if (!context || vehicleDriveActive.value || activeCameraWatchTween || activeAutoTourNodeIds.size > 0) {
+  if (!context || isWatchCameraLocked() || vehicleDriveActive.value || activeCameraWatchTween || activeAutoTourNodeIds.size > 0) {
     resetProtagonistPoseState();
     return false;
   }
@@ -15781,6 +16987,7 @@ function updateCharacterFollowCamera(
   const placement = resolveCharacterFollowPlacement(controlledNodeId, object);
   resolveCharacterRootWorldPosition(controlledNodeId, bindingNodeId, object, characterCameraFollowAnchorScratch);
   resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+  const localOffsetOverride = resolveCharacterFollowCameraOffset(props);
 
   const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? controlledNodeId);
   const rawVelocity = motionTelemetry?.hasSample
@@ -15803,6 +17010,7 @@ function updateCharacterFollowCamera(
     worldUp,
     tuning: createBackFollowCameraTuning(),
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+    localOffsetOverride,
     followControlsDirty: false,
     immediate: Boolean(options.immediate),
     lockLocalOffset: true,
@@ -15835,7 +17043,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   autoTourLastAnyActive = anyActive;
   applyAutoTourCameraInputPolicy();
 
-  if (vehicleDriveActive.value || activeCameraWatchTween) {
+  if (isWatchCameraLocked() || vehicleDriveActive.value || activeCameraWatchTween) {
     return;
   }
 
@@ -16537,6 +17745,10 @@ function captureViewControlSnapshot(): SceneViewControlSnapshot | null {
       position: sceneStackVec3ToTuple(camera.position),
       quaternion: sceneStackQuatToTuple(camera.quaternion),
       up: sceneStackVec3ToTuple(camera.up),
+      fov: camera.fov,
+      near: camera.near,
+      far: camera.far,
+      zoom: camera.zoom,
     },
     orbitTarget: sceneStackVec3ToTuple(controls.target),
     nodeTransforms: captureSceneNodeTransformSnapshot(),
@@ -16556,6 +17768,11 @@ function applyViewControlSnapshot(snapshot: SceneViewControlSnapshot): void {
       sceneStackApplyVec3Tuple(camera.position, snapshot.camera.position);
       sceneStackApplyQuatTuple(camera.quaternion, snapshot.camera.quaternion);
       sceneStackApplyVec3Tuple(camera.up, snapshot.camera.up);
+      camera.fov = snapshot.camera.fov;
+      camera.near = snapshot.camera.near;
+      camera.far = snapshot.camera.far;
+      camera.zoom = snapshot.camera.zoom;
+      camera.updateProjectionMatrix();
       sceneStackApplyVec3Tuple(controls.target, snapshot.orbitTarget);
       camera.lookAt(controls.target);
       controls.update();
@@ -16756,8 +17973,8 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
     case 'delay':
       handleDelayEvent(event);
       break;
-    case 'move-camera':
-      handleMoveCameraEvent(event);
+    case 'move-to':
+      handleMoveToEvent(event);
       break;
     case 'spawn-prefab':
       runtimePrefabBehaviorCounter += 1;
@@ -16834,7 +18051,7 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       handleShowPurposeControlsEvent(event);
       break;
     case 'hide-purpose-controls':
-      handleHidePurposeControlsEvent();
+      handleHidePurposeControlsEvent(event);
       break;
     case 'set-visibility':
       handleSetVisibilityEvent(event);
@@ -17522,12 +18739,7 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
-const GROUND_HEIGHTMAP_SIDECAR_MAGIC = 0x48474d32;
-const GROUND_HEIGHTMAP_SIDECAR_VERSION = 2;
-const GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES = 32;
-const EMPTY_GROUND_BOUND = -1;
-
-function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDynamicMesh | null {
+function findFirstGroundNode(document: SceneJsonExportDocument): SceneNode | null {
   const stack = [...document.nodes];
   while (stack.length) {
     const node = stack.pop();
@@ -17535,7 +18747,7 @@ function findFirstGroundDynamicMesh(document: SceneJsonExportDocument): GroundDy
       continue;
     }
     if (node.dynamicMesh?.type === 'Ground') {
-      return node.dynamicMesh as GroundDynamicMesh;
+      return node;
     }
     if (Array.isArray(node.children) && node.children.length) {
       stack.push(...node.children);
@@ -17567,70 +18779,39 @@ function hydrateGroundSidecarFromPackage(
   sceneEntry: {
     sceneId: string;
     path: string;
-    groundHeightsPath?: string;
+    groundHeightPath?: string;
     groundSplatPath?: string;
     groundScatterPath?: string;
   },
   document: SceneJsonExportDocument,
 ): SceneJsonExportDocument {
-  const definition = findFirstGroundDynamicMesh(document) as GroundRuntimeDynamicMesh | null;
-  if (!definition) {
+  const groundNode = findFirstGroundNode(document);
+  if (!groundNode || !isGroundDynamicMesh(groundNode.dynamicMesh)) {
     return document;
   }
   const hasLandformNodes = countLandformNodes(document) > 0;
-  const sidecarPath = typeof sceneEntry.groundHeightsPath === 'string' ? sceneEntry.groundHeightsPath.trim() : '';
+  const sidecarPath = typeof sceneEntry.groundHeightPath === 'string' ? sceneEntry.groundHeightPath.trim() : '';
   if (sidecarPath) {
     const sidecarBytes = pkg.files[sidecarPath];
     if (!sidecarBytes) {
-      console.warn(`场景 ${sceneEntry.sceneId} 缺少 ground 高度 sidecar 文件，已回退为场景内置地形数据`);
-    } else {
-      const sidecarBuffer = sidecarBytes.buffer.slice(sidecarBytes.byteOffset, sidecarBytes.byteOffset + sidecarBytes.byteLength);
-      const { rows, columns } = resolveGroundWorkingGridSize(definition);
-      const vertexCount = getGroundVertexCount(rows, columns);
-      const expectedByteLength = GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT * 2;
-      if (sidecarBuffer.byteLength !== expectedByteLength) {
-        throw new Error(
-          `场景 ${sceneEntry.sceneId} 的 ground sidecar 大小异常：期望 ${expectedByteLength}，实际 ${sidecarBuffer.byteLength}`,
-        );
-      }
-
-      const headerView = new DataView(sidecarBuffer, 0, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES);
-      const magic = headerView.getUint32(0, true);
-      const version = headerView.getUint32(4, true);
-      if (magic !== GROUND_HEIGHTMAP_SIDECAR_MAGIC || version !== GROUND_HEIGHTMAP_SIDECAR_VERSION) {
-        throw new Error(`场景 ${sceneEntry.sceneId} 的 ground sidecar 头无效`);
-      }
-
-      const minRow = headerView.getInt32(8, true);
-      const maxRow = headerView.getInt32(12, true);
-      const minColumn = headerView.getInt32(16, true);
-      const maxColumn = headerView.getInt32(20, true);
-      const generatedAt = headerView.getFloat64(24, true);
-      const hasBounds = minRow !== EMPTY_GROUND_BOUND && maxRow !== EMPTY_GROUND_BOUND && minColumn !== EMPTY_GROUND_BOUND && maxColumn !== EMPTY_GROUND_BOUND;
-      const hasGeneratedAt = Number.isFinite(generatedAt);
-
-      definition.manualHeightMap = new Float64Array(sidecarBuffer, GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES, vertexCount);
-      definition.planningHeightMap = new Float64Array(
-        sidecarBuffer,
-        GROUND_HEIGHTMAP_SIDECAR_HEADER_BYTES + vertexCount * Float64Array.BYTES_PER_ELEMENT,
-        vertexCount,
-      );
-      definition.planningMetadata = hasBounds || hasGeneratedAt
-        ? {
-            contourBounds: hasBounds ? { minRow, maxRow, minColumn, maxColumn } : null,
-            generatedAt: hasGeneratedAt ? generatedAt : undefined,
-          }
-        : null;
-      definition.surfaceRevision = Number.isFinite(definition.surfaceRevision)
-        ? Math.max(0, Math.trunc(definition.surfaceRevision as number))
-        : 0;
+      throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground height sidecar 文件内容`);
+    }
+    const sidecarBuffer = sidecarBytes.buffer.slice(
+      sidecarBytes.byteOffset,
+      sidecarBytes.byteOffset + sidecarBytes.byteLength,
+    );
+    try {
+      groundNode.dynamicMesh = createGroundRuntimeMeshFromSidecar(groundNode.dynamicMesh, sidecarBuffer);
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : `场景 ${sceneEntry.sceneId} 的 ground height sidecar 无效`);
     }
   }
-  (definition as GroundDynamicMesh & {
-    runtimeHydratedHeightState?: 'pristine' | 'dirty';
+  const runtimeGroundMesh = groundNode.dynamicMesh as GroundDynamicMesh & {
+    runtimeHydratedHeightState?: 'pristine' | 'dirty' | 'none';
     runtimeDisableOptimizedChunks?: boolean;
-  }).runtimeHydratedHeightState = 'pristine';
-  definition.runtimeDisableOptimizedChunks = false;
+  };
+  runtimeGroundMesh.runtimeHydratedHeightState = sidecarPath ? (runtimeGroundMesh.runtimeHydratedHeightState ?? 'none') : 'none';
+  runtimeGroundMesh.runtimeDisableOptimizedChunks = false;
 
   const splatSidecarPath = typeof sceneEntry.groundSplatPath === 'string' ? sceneEntry.groundSplatPath.trim() : '';
   if (splatSidecarPath) {
@@ -17639,8 +18820,8 @@ function hydrateGroundSidecarFromPackage(
       if (hasLandformNodes) {
         throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件内容`);
       }
-      definition.groundSurfaceChunks = null;
-      definition.groundSplatBake = null;
+      (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = null;
+      (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = null;
     } else {
       const splatSidecarBuffer = new ArrayBuffer(splatSidecarBytes.byteLength);
       new Uint8Array(splatSidecarBuffer).set(splatSidecarBytes);
@@ -17652,11 +18833,11 @@ function hydrateGroundSidecarFromPackage(
         if (hasLandformNodes) {
           throw new Error(`场景 ${sceneEntry.sceneId} 的 ground splat sidecar 缺少 baked chunk 数据`);
         }
-        definition.groundSurfaceChunks = null;
-        definition.groundSplatBake = null;
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = null;
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = null;
       } else {
-        definition.groundSurfaceChunks = JSON.parse(JSON.stringify(bakedChunks));
-        definition.groundSplatBake = {
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = JSON.parse(JSON.stringify(bakedChunks));
+        (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = {
           revision: Number.isFinite(splatPayload.revision) ? Math.max(0, Math.trunc(splatPayload.revision)) : 0,
           chunkTextureMap: JSON.parse(JSON.stringify(bakedChunks)),
           surfaceLayerTextureAssetIds: Array.isArray(splatPayload.surfaceLayerTextureAssetIds)
@@ -17666,8 +18847,8 @@ function hydrateGroundSidecarFromPackage(
       }
     }
   } else {
-    definition.groundSurfaceChunks = null;
-    definition.groundSplatBake = null;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSurfaceChunks = null;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).groundSplatBake = null;
     if (hasLandformNodes) {
       throw new Error(`场景 ${sceneEntry.sceneId} 缺少 ground splat sidecar 文件`);
     }
@@ -17675,7 +18856,7 @@ function hydrateGroundSidecarFromPackage(
 
   const scatterSidecarPath = typeof sceneEntry.groundScatterPath === 'string' ? sceneEntry.groundScatterPath.trim() : '';
   if (!scatterSidecarPath) {
-    definition.terrainScatter = null;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).terrainScatter = null;
   } else {
     const scatterSidecarBytes = pkg.files[scatterSidecarPath];
     if (!scatterSidecarBytes) {
@@ -17684,7 +18865,7 @@ function hydrateGroundSidecarFromPackage(
     const scatterSidecarBuffer = new ArrayBuffer(scatterSidecarBytes.byteLength);
     new Uint8Array(scatterSidecarBuffer).set(scatterSidecarBytes);
     const scatterPayload = deserializeGroundScatterSidecar(scatterSidecarBuffer);
-    definition.terrainScatter = scatterPayload.terrainScatter;
+    (groundNode.dynamicMesh as GroundRuntimeDynamicMesh).terrainScatter = scatterPayload.terrainScatter;
   }
 
   return document;
@@ -17895,7 +19076,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     loading.value = false;
   }
 }
-function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroundBuildKey: string): ScenePackageProjectData {
+async function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroundBuildKey: string): Promise<ScenePackageProjectData> {
   const projectText = readTextFileFromScenePackage(pkg, pkg.manifest.project.path);
   type ScenePackageProjectConfig = {
     id?: unknown;
@@ -18010,15 +19191,20 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
   };
 
   const scenes: ScenePackageSceneEntry[] = [];
-  pkg.manifest.scenes.forEach((sceneEntry) => {
+  for (let sceneIndex = 0; sceneIndex < pkg.manifest.scenes.length; sceneIndex += 1) {
+    const sceneEntry = pkg.manifest.scenes[sceneIndex];
     const sceneRaw = decodeScenePackageSceneDocument(readBinaryFileFromScenePackage(pkg, sceneEntry.path)) as unknown;
     if (!sceneRaw || typeof sceneRaw !== 'object') {
       throw new Error(`场景包内场景数据无效：${sceneEntry.path}`);
     }
     const document = hydrateGroundSidecarFromPackage(pkg, sceneEntry, sceneRaw as SceneJsonExportDocument);
     attachScenePackageTerrainRuntime(pkg, sceneEntry, document);
-    attachScenePackageCompiledGroundRuntime(pkg, sceneEntry, document);
-    attachOptimizedGroundMeshToDocument(document);
+    const compiledGroundManifest = readCompiledGroundManifestFromScenePackage(pkg, sceneEntry);
+    const attachedCompiledGroundManifest = attachScenePackageCompiledGroundRuntime(compiledGroundManifest, document);
+    const compiledTileCount = Array.isArray(attachedCompiledGroundManifest?.renderTiles)
+      ? attachedCompiledGroundManifest.renderTiles.length
+      : 0;
+    requireGroundRuntimeAssets(document, compiledTileCount);
     const assetRegistry: Record<string, SceneAssetRegistryEntry> = {
       ...(document.assetRegistry ?? {}),
     };
@@ -18059,7 +19245,8 @@ function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroun
       updatedAt: typeof documentMeta.updatedAt === 'string' ? documentMeta.updatedAt : null,
       document,
     });
-  });
+    await yieldToMainThread();
+  }
 
     return {
       project: {
@@ -18127,7 +19314,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
 
   const normalizedBuildKey = compiledGroundBuildKey.trim();
   activeScenePackageBuildKey = normalizedBuildKey || null;
-  const projectData = parseScenePackageToProjectData(activeScenePackagePkg, normalizedBuildKey);
+  const projectData = await parseScenePackageToProjectData(activeScenePackagePkg, normalizedBuildKey);
   setSceneDownloadState({
     phase: 'bundle',
     label: '正在组装场景索引',
@@ -19160,7 +20347,6 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           updateDriveInputRelaxation(deltaSeconds);
-          updateCharacterAuthorityTurnRelaxation(deltaSeconds);
         }
 
         // Camera tween has priority over user controls.
@@ -19175,6 +20361,9 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           characterControlDeltaSeconds = deltaSeconds;
+          const watchCameraLocked = isWatchCameraLocked();
+          updateCharacterAuthorityInputFromKeys();
+          updateMoveToSessionForFrame(deltaSeconds);
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
@@ -19202,7 +20391,7 @@ function startRenderLoop(
           }
           const manualDriveNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
           const autoTourControlsVehicle = manualDriveNodeId ? activeAutoTourNodeIds.has(manualDriveNodeId) : false;
-          if (vehicleDriveActive.value && !autoTourControlsVehicle) {
+          if (!watchCameraLocked && vehicleDriveActive.value && !autoTourControlsVehicle) {
             applyVehicleDriveForces(deltaSeconds);
             if (!physicsEnvironmentEnabled.value && !vehicleDriveIntroState.active && !vehicleDriveIntroPendingState.active) {
               updateVehicleDriveCamera(deltaSeconds);
@@ -19228,11 +20417,11 @@ function startRenderLoop(
           updateAutoTourFollowCamera(deltaSeconds);
         }
 
-        if (deltaSeconds >= 0 && !vehicleDriveActive.value && activeAutoTourNodeIds.size === 0) {
+        if (deltaSeconds >= 0 && !isWatchCameraLocked() && !vehicleDriveActive.value && activeAutoTourNodeIds.size === 0) {
           updateCharacterFollowCamera(deltaSeconds);
         }
 
-        if (vehicleDriveActive.value) {
+        if (!isWatchCameraLocked() && vehicleDriveActive.value) {
           if (vehicleDriveIntroState.active) {
             updateVehicleDriveIntroCamera(deltaSeconds);
           } else if (physicsEnvironmentEnabled.value && !vehicleDriveIntroPendingState.active) {
@@ -19254,6 +20443,7 @@ function startRenderLoop(
           updatePunchBadgeOverlayEntries(camera, deltaSeconds, overlayReference);
           syncSceneSignboardsWithReference(overlayReference);
         }
+        updatePurposeControlsPlacement(camera);
         applyFogSettings(activeEnvironmentSettings, camera, cameraFrameSnapshot);
 
         // Keep chunked ground meshes in sync with camera position.
@@ -19487,6 +20677,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 5: apply view settings (camera alignment, environment, projection).
   applyDocumentViewSettings(payload.document, camera);
   activatePendingDefaultSteerDriveIfNeeded();
+  updateCharacterFollowCamera(0, { immediate: true });
   markInstancedCullingDirty();
 
   // Phase 6: start the render loop.
@@ -19870,6 +21061,7 @@ function cleanupRuntime(): void {
 }
 
 onUnmounted(() => {
+  cancelMoveToTransition();
   resetCharacterActionButtonState();
   void destroySceneryPhysicsBridge();
   if (typeof window !== 'undefined') {
@@ -22245,51 +23437,133 @@ onUnmounted(() => {
 
 .viewer-purpose-controls {
   position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  gap: 14px;
-  align-items: flex-end;
+  left: 0;
+  top: 0;
   z-index: 1600;
+  pointer-events: auto;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 20px));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  overflow: visible;
+}
+
+.viewer-watch-leave-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 1601;
+  pointer-events: auto;
+}
+
+.viewer-watch-leave-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.viewer-watch-action-button {
+  min-width: 144px;
+  min-height: 46px;
+  padding: 0 22px;
+  border: none;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  box-shadow: 0 12px 30px rgba(8, 20, 36, 0.18);
+  backdrop-filter: blur(16px) saturate(1.06);
+  transition: transform 0.18s cubic-bezier(.2,.9,.2,1), opacity 0.18s ease, box-shadow 0.18s ease;
+}
+
+.viewer-watch-leave-button {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(237, 245, 255, 0.84)),
+    linear-gradient(135deg, rgba(122, 198, 255, 0.16), rgba(255, 255, 255, 0.06));
+  color: #173149;
+}
+
+.viewer-watch-photo-button {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(236, 247, 255, 0.86)),
+    linear-gradient(135deg, rgba(110, 190, 255, 0.16), rgba(255, 255, 255, 0.06));
+  color: #28506f;
+  border: 1px solid rgba(153, 193, 255, 0.2);
+}
+
+.viewer-watch-action-button.is-busy,
+.viewer-watch-action-button:disabled {
+  opacity: 0.72;
+}
+
+.viewer-watch-action-button:active {
+  transform: scale(0.97);
+}
+
+.viewer-watch-photo-button .viewer-drive-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.viewer-watch-photo-button .viewer-drive-icon-text {
+  font-size: 18px;
 }
 
 .viewer-purpose-chip {
   position: relative;
-  min-width: 160px;
-  min-height: 64px;
+  min-width: 104px;
+  min-height: 32px;
+  width: 100%;
   padding: 0;
   margin: 0;
   border: none;
-  border-radius: 18px;
-  background-color: transparent;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, rgba(18, 23, 32, 0.82) 0%, rgba(18, 23, 32, 0.7) 50%, rgba(18, 23, 32, 0.32) 78%, rgba(18, 23, 32, 0) 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  border-right-color: rgba(255, 255, 255, 0.18);
+  border-bottom-color: rgba(255, 255, 255, 0.18);
   overflow: hidden;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  color: #15324f;
+  color: #f3f7fb;
   opacity: 0.96;
-  box-shadow: 0 12px 28px rgba(52, 87, 128, 0.14);
-  transition: transform 0.28s ease, box-shadow 0.28s ease, opacity 0.28s ease;
-  text-align: left;
-  flex: 1 1 0;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset -18px 0 22px rgba(255, 255, 255, 0.02);
+  transition: transform 0.24s ease, box-shadow 0.24s ease, opacity 0.24s ease;
+  text-align: center;
+  backdrop-filter: blur(18px) saturate(1.08);
+  flex: none;
 }
 
-.viewer-purpose-chip--watch {
-  margin-right: auto;
-}
-
-.viewer-purpose-chip--level {
-  margin-left: auto;
+.viewer-purpose-chip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.08) 48%, rgba(255, 255, 255, 0) 100%),
+    linear-gradient(90deg, rgba(18, 23, 32, 0) 52%, rgba(18, 23, 32, 0.08) 78%, rgba(18, 23, 32, 0.2) 100%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .viewer-purpose-chip__halo {
   position: absolute;
-  inset: -24%;
-  border-radius: 28px;
-  opacity: 0.28;
+  inset: -18%;
+  border-radius: 22px;
+  opacity: 0.14;
   pointer-events: none;
   transition: opacity 0.28s ease;
 }
@@ -22301,90 +23575,54 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 14px;
-  padding: 14px 20px;
-  border-radius: 16px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 249, 255, 0.78)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(210, 232, 255, 0.08));
-  border: 1px solid rgba(153, 193, 255, 0.2);
-  backdrop-filter: blur(16px) saturate(1.06);
-}
-
-.viewer-purpose-chip__icon-wrap {
-  position: relative;
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.82);
-  overflow: hidden;
-}
-
-.viewer-purpose-chip__icon-pulse {
-  position: absolute;
-  inset: 0;
-  border-radius: 14px;
-  border: 2px solid rgba(153, 193, 255, 0.3);
-  opacity: 0.2;
-  animation: viewer-purpose-icon-pulse 3.2s ease-in-out infinite;
-  pointer-events: none;
-}
-
-.viewer-purpose-chip__icon {
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  line-height: 1;
-  z-index: 1;
+  gap: 4px;
+  padding: 5px 12px 5px 10px;
+  border-radius: 999px;
+  background: transparent;
+  border: none;
+  backdrop-filter: none;
 }
 
 .viewer-purpose-chip__texts {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
 }
 
 .viewer-purpose-chip__title {
-  font-size: 18px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: 1px;
-  line-height: 1.1;
-  color: #12314d;
+  letter-spacing: 0.15px;
+  line-height: 1;
+  color: #f5f8fb;
+  text-align: left;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .viewer-purpose-chip__subtitle {
-  font-size: 12px;
+  font-size: 10px;
   line-height: 1.3;
-  opacity: 0.74;
+  opacity: 0.62;
   letter-spacing: 0.5px;
-  color: rgba(21, 50, 79, 0.78);
+  color: rgba(233, 240, 248, 0.68);
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__content {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 249, 255, 0.8)),
-    linear-gradient(135deg, rgba(94, 161, 255, 0.12), rgba(255, 255, 255, 0.06));
-  box-shadow: inset 0 0 18px rgba(94, 161, 255, 0.1);
+  background: transparent;
+  box-shadow: none;
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__halo {
-  background: linear-gradient(125deg, rgba(94, 161, 255, 0.2), rgba(120, 208, 255, 0.12), rgba(14, 35, 78, 0));
+  background: linear-gradient(125deg, rgba(255, 255, 255, 0.14), rgba(120, 208, 255, 0.08), rgba(14, 35, 78, 0));
   animation: viewer-purpose-watch-halo 7s linear infinite;
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__icon-wrap {
-  background: rgba(235, 244, 255, 0.86);
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__icon-pulse {
-  border-color: rgba(94, 161, 255, 0.32);
-  box-shadow: 0 0 16px rgba(94, 161, 255, 0.22);
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__title {
@@ -22392,28 +23630,17 @@ onUnmounted(() => {
 }
 
 .viewer-purpose-chip--watch .viewer-purpose-chip__subtitle {
-  color: rgba(21, 50, 79, 0.74);
+  color: rgba(233, 240, 248, 0.7);
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__content {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(242, 255, 248, 0.82)),
-    linear-gradient(135deg, rgba(115, 231, 170, 0.12), rgba(255, 255, 255, 0.06));
-  box-shadow: inset 0 0 16px rgba(115, 231, 170, 0.08);
+  background: transparent;
+  box-shadow: none;
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__halo {
-  background: linear-gradient(140deg, rgba(115, 231, 170, 0.16), rgba(94, 161, 255, 0.12), rgba(5, 18, 36, 0));
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.14), rgba(115, 231, 170, 0.08), rgba(5, 18, 36, 0));
   animation: viewer-purpose-level-halo 5s ease-in-out infinite;
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__icon-wrap {
-  background: rgba(242, 255, 248, 0.88);
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__icon-pulse {
-  border-color: rgba(115, 231, 170, 0.32);
-  box-shadow: 0 0 14px rgba(115, 231, 170, 0.18);
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__title {
@@ -22421,7 +23648,7 @@ onUnmounted(() => {
 }
 
 .viewer-purpose-chip--level .viewer-purpose-chip__subtitle {
-  color: rgba(21, 50, 79, 0.74);
+  color: rgba(233, 240, 248, 0.7);
 }
 
 .viewer-purpose-chip.is-active {
@@ -22433,8 +23660,8 @@ onUnmounted(() => {
 .viewer-purpose-chip.is-active::after {
   content: '';
   position: absolute;
-  inset: -10px;
-  border-radius: 20px;
+  inset: -8px;
+  border-radius: 18px;
   border: 1px solid rgba(153, 193, 255, 0.35);
   background: radial-gradient(circle, rgba(120, 208, 255, 0.26) 0%, rgba(120, 208, 255, 0.08) 60%, transparent 100%);
   box-shadow:
@@ -22462,27 +23689,8 @@ onUnmounted(() => {
   opacity: 0.98;
 }
 
-.viewer-purpose-chip.is-active .viewer-purpose-chip__icon-pulse {
-  animation-duration: 1.8s;
-}
-
 .viewer-purpose-chip:active {
   transform: scale(0.97);
-}
-
-@keyframes viewer-purpose-icon-pulse {
-  0%, 100% {
-    opacity: 0.25;
-    transform: scale(0.92);
-  }
-  45% {
-    opacity: 0.85;
-    transform: scale(1);
-  }
-  70% {
-    opacity: 0.4;
-    transform: scale(1.08);
-  }
 }
 
 @keyframes viewer-purpose-watch-halo {

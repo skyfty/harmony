@@ -1,13 +1,17 @@
 import type { PhysicsContactEvent } from '@harmony/physics-core'
 import type { SceneNode, SceneNodeComponentState } from './core'
 import { SceneAnimationRuntimeManager } from './sceneAnimationRuntime'
+import { sanitizeAnimationClipName } from './runtimeAnimationCatalog'
 import {
 	ANIMATION_COMPONENT_TYPE,
 	type AnimationComponentProps,
 } from './components/definitions/animationComponent'
 import {
+	CHARACTER_ANIMATION_EDITOR_SLOTS,
 	CHARACTER_CONTROLLER_COMPONENT_TYPE,
 	clampCharacterControllerComponentProps,
+	type CharacterAnimationBinding,
+	type CharacterAnimationSlot,
 	type CharacterControllerComponentProps,
 } from './components/definitions/characterControllerComponent'
 import {
@@ -51,6 +55,7 @@ export type CharacterControllerAnimationRuntimeHost = {
 const CHARACTER_JUMP_START_FALLBACK_MS = 180
 const CHARACTER_JUMP_LOOP_FALLBACK_MS = 500
 const CHARACTER_JUMP_LAND_FALLBACK_MS = 160
+const CHARACTER_ANIMATION_MATCH_SLOTS: CharacterAnimationSlot[] = CHARACTER_ANIMATION_EDITOR_SLOTS.map((slot) => slot.value)
 
 function resolveAnimationComponentForNode(node: SceneNode | null | undefined): SceneNodeComponentState<AnimationComponentProps> | null {
 	const component = node?.components?.[ANIMATION_COMPONENT_TYPE] as SceneNodeComponentState<AnimationComponentProps> | undefined
@@ -66,6 +71,62 @@ function resolveCharacterControllerComponentForNode(node: SceneNode | null | und
 		return null
 	}
 	return component
+}
+
+function normalizeAnimationMatchKey(value: string): string {
+	return value.toLowerCase().replace(/[^a-z0-9]+/g, '')
+}
+
+function findBestClipIndexForSlot(
+	slot: CharacterAnimationSlot,
+	clipNames: string[],
+	usedClipIndices: Set<number>,
+): number {
+	const normalizedSlot = normalizeAnimationMatchKey(slot)
+	let fallbackIndex = -1
+
+	for (let index = 0; index < clipNames.length; index += 1) {
+		if (usedClipIndices.has(index)) {
+			continue
+		}
+		const clipName = sanitizeAnimationClipName(clipNames[index])
+		if (!clipName) {
+			continue
+		}
+		const normalizedClip = normalizeAnimationMatchKey(clipName)
+		if (!normalizedClip) {
+			continue
+		}
+		if (normalizedClip === normalizedSlot) {
+			return index
+		}
+		if (fallbackIndex < 0 && normalizedClip.includes(normalizedSlot)) {
+			fallbackIndex = index
+		}
+	}
+
+	return fallbackIndex
+}
+
+export function resolveCharacterControllerAnimationBindings(
+	clipNames: Array<string | null | undefined>,
+): CharacterAnimationBinding[] {
+	const normalizedClipNames = clipNames
+		.map((clipName) => sanitizeAnimationClipName(clipName))
+		.filter((clipName): clipName is string => Boolean(clipName))
+	const usedClipIndices = new Set<number>()
+
+	return CHARACTER_ANIMATION_MATCH_SLOTS.map((slot) => {
+		const clipIndex = findBestClipIndexForSlot(slot, normalizedClipNames, usedClipIndices)
+		if (clipIndex < 0) {
+			return { slot, clipName: null }
+		}
+		usedClipIndices.add(clipIndex)
+		return {
+			slot,
+			clipName: normalizedClipNames[clipIndex] ?? null,
+		}
+	})
 }
 
 export class CharacterControllerAnimationRuntimeManager {

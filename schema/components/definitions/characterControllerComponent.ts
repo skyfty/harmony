@@ -2,6 +2,7 @@ import type { Object3D } from 'three'
 import type { SceneNode, SceneNodeComponentState } from '../../index'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
+import { ANIMATION_COMPONENT_TYPE } from './animationComponent'
 
 export const CHARACTER_CONTROLLER_COMPONENT_TYPE = 'characterController'
 
@@ -98,6 +99,26 @@ function sanitizeClipName(value: unknown): string | null {
 function normalizeNodeId(value: unknown): string | null {
   const trimmed = sanitizeString(value)
   return trimmed.length ? trimmed : null
+}
+
+function hasAnimationComponent(node: SceneNode | null | undefined): boolean {
+  return Boolean(node?.components?.[ANIMATION_COMPONENT_TYPE])
+}
+
+function resolveDefaultTargetNodeId(node: SceneNode | null | undefined): string | null {
+  if (!node) {
+    return null
+  }
+  if (hasAnimationComponent(node)) {
+    return node.id
+  }
+  for (const child of node.children ?? []) {
+    const resolved = resolveDefaultTargetNodeId(child)
+    if (resolved) {
+      return resolved
+    }
+  }
+  return null
 }
 
 function normalizeForwardAxis(value: unknown): CharacterForwardAxis {
@@ -223,6 +244,7 @@ const characterControllerComponentDefinition: ComponentDefinition<CharacterContr
   createDefaultProps(node: SceneNode) {
     return clampCharacterControllerComponentProps({
       label: node.name?.trim().length ? node.name : 'Character Controller',
+      targetNodeId: resolveDefaultTargetNodeId(node),
     })
   },
   createInstance(context) {

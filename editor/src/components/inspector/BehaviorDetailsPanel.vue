@@ -28,6 +28,7 @@ import PlaySoundParams from '@/components/inspector/behavior/PlaySoundParams.vue
 import InfoBoardParams from '@/components/inspector/behavior/InfoBoardParams.vue'
 import InfoBoardHideParams from '@/components/inspector/behavior/InfoBoardHideParams.vue'
 import WatchParams from '@/components/inspector/behavior/WatchParams.vue'
+import ShowPurposeParams from '@/components/inspector/behavior/ShowPurposeParams.vue'
 import ShowParams from '@/components/inspector/behavior/ShowParams.vue'
 import HideParams from '@/components/inspector/behavior/HideParams.vue'
 import LanternParams from '@/components/inspector/behavior/LanternParams.vue'
@@ -108,7 +109,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   showInfoBoard: InfoBoardParams,
   hideInfoBoard: InfoBoardHideParams,
   watch: WatchParams,
-  showPurpose: WatchParams,
+  showPurpose: ShowPurposeParams,
   show: ShowParams,
   hide: HideParams,
   lantern: LanternParams,
@@ -200,10 +201,6 @@ function resolveScriptLabel(type: BehaviorScriptType): string {
   return resolveScriptDefinition(type)?.label ?? 'Unknown Script'
 }
 
-function resolveScriptDescription(type: BehaviorScriptType): string {
-  return resolveScriptDefinition(type)?.description ?? 'Unknown Script'
-}
-
 function resolveScriptIcon(type: BehaviorScriptType): string {
   return resolveScriptDefinition(type)?.icon ?? 'mdi-script-text-outline'
 }
@@ -239,7 +236,8 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'burstParticleEffect' &&
     scriptType !== 'controlCharacter' &&
     scriptType !== 'spawnPrefab' &&
-    scriptType !== 'coupon'
+    scriptType !== 'coupon' &&
+    scriptType !== 'showPurpose'
   ) {
     return
   }
@@ -251,11 +249,20 @@ function applyDefaultTarget(step: SceneBehavior): void {
     return
   }
   const params = step.script.params as { targetNodeId?: string | null } | undefined
-  if (!params) {
+  if (scriptType === 'showPurpose') {
+    const purposeParams = step.script.params as { buttons?: Array<{ targetNodeId?: string | null }> } | undefined
+    const buttons = purposeParams && Array.isArray(purposeParams.buttons) ? purposeParams.buttons : []
+    if (buttons.length) {
+      buttons.forEach((button) => {
+        if (button && button.targetNodeId === null) {
+          button.targetNodeId = props.nodeId
+        }
+      })
+    }
+  } else if (!params) {
     defaultTargetApplied.add(identifier)
     return
-  }
-  if (params.targetNodeId === null) {
+  } else if (params.targetNodeId === null) {
     params.targetNodeId = props.nodeId
   }
   defaultTargetApplied.add(identifier)
@@ -697,14 +704,10 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
               @dragover.prevent
               @drop.prevent="handlePaletteDrop"
             >
-              <v-tooltip
+                  <div
                 v-for="script in scripts"
                 :key="script.id"
                 :text="script.description"
-                location="top"
-              >
-                <template #activator="{ props }">
-                  <div
                     class="behavior-palette__item"
                     v-bind="props"
                     draggable="true"
@@ -715,8 +718,6 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
                     <v-icon size="20">{{ script.icon }}</v-icon>
                     <span>{{ script.label }}</span>
                   </div>
-                </template>
-              </v-tooltip>
             </div>
             <div class="behavior-details__sequence">
               <div class="behavior-sequence">
@@ -729,22 +730,17 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
                       @drop.prevent="handleSequenceDrop(index, $event)"
                     />
                     <div class="behavior-sequence__item-group">
-                      <v-tooltip :text="resolveScriptDescription(step.script.type)" location="top">
-                        <template #activator="{ props }">
-                          <div
-                            class="behavior-sequence__item"
-                            :class="{ 'is-selected': selectedStepId === step.id }"
-                            v-bind="props"
-                            draggable="true"
-                            @dragstart="handleSequenceDragStart(step, index, $event)"
-                            @dragend="handleDragEnd"
-                            @click="selectStep(step.id)"
-                          >
-                            <v-icon size="18">{{ resolveScriptIcon(step.script.type) }}</v-icon>
-                            <span>{{ resolveScriptLabel(step.script.type) }}</span>
-                          </div>
-                        </template>
-                      </v-tooltip>
+                      <div
+                        class="behavior-sequence__item"
+                        :class="{ 'is-selected': selectedStepId === step.id }"
+                        draggable="true"
+                        @dragstart="handleSequenceDragStart(step, index, $event)"
+                        @dragend="handleDragEnd"
+                        @click="selectStep(step.id)"
+                      >
+                        <v-icon size="18">{{ resolveScriptIcon(step.script.type) }}</v-icon>
+                        <span>{{ resolveScriptLabel(step.script.type) }}</span>
+                      </div>
                       <v-icon
                         v-if="index < localSequence.length - 1"
                         size="16"
@@ -777,6 +773,7 @@ const dialogTitle = computed(() => (props.mode === 'create' ? 'Add Behavior Sequ
                 <component
                   :is="parameterComponent"
                   :model-value="selectedStep.script.params"
+                  :node-id="nodeId"
                   ref="parameterComponentRef"
                   @pick-state-change="handlePickStateChange"
                   @update:modelValue="handleParamsUpdate"

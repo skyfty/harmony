@@ -5,6 +5,10 @@ import { VehicleModel } from '@/models/Vehicle'
 import { UserProductModel } from '@/models/UserProduct'
 import { UserVehicleModel } from '@/models/UserVehicle'
 import {
+  applyBusinessHubRenewalPaymentFailure,
+  applyBusinessHubRenewalPaymentSuccess,
+} from '@/services/businessHubService'
+import {
   decryptWechatNotifyResource,
   parseWechatNotifyBody,
   verifyWechatCallbackSignature,
@@ -142,6 +146,36 @@ export async function wechatPayNotify(ctx: Context): Promise<void> {
 
   const order = await OrderModel.findOne({ orderNumber: transaction.out_trade_no }).exec()
   if (!order) {
+    if (transaction.trade_state === 'SUCCESS') {
+      try {
+        await applyBusinessHubRenewalPaymentSuccess({
+          renewalOrderNumber: transaction.out_trade_no,
+          transactionId: transaction.transaction_id,
+          notifyId: notifyBody.id,
+          transaction,
+        })
+      } catch (error) {
+        console.error('[wechat-pay] business renewal settlement failed, wait notify retry', {
+          orderNumber: transaction.out_trade_no,
+          transactionId: transaction.transaction_id,
+          error,
+        })
+        ctx.status = 500
+        ctx.body = {
+          code: 'FAIL',
+          message: '结算失败，请重试',
+        }
+        return
+      }
+      notifySuccess(ctx)
+      return
+    }
+
+    await applyBusinessHubRenewalPaymentFailure({
+      renewalOrderNumber: transaction.out_trade_no,
+      notifyId: notifyBody.id,
+      transaction,
+    })
     notifySuccess(ctx)
     return
   }

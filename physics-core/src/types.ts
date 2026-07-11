@@ -149,6 +149,7 @@ export type PhysicsVehicleDesc = {
 export type PhysicsCharacterDesc = {
   characterId: number
   bodyId: number
+  forwardAxis?: '+x' | '-x' | '+z' | '-z'
   radius: number
   height: number
   stepHeight: number

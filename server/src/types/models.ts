@@ -145,43 +145,124 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   updatedAt: Date
 }
 
-export type BusinessOrderTopStage = 'quote' | 'signing' | 'production' | 'publish' | 'operation'
+export type BusinessHubServiceStatus = 'pending' | 'active' | 'expiring' | 'expired'
 
-export type BusinessOrderProductionNodeStatus = 'pending' | 'active' | 'completed'
+export type BusinessHubStage = 'lead' | 'quote' | 'signing' | 'production' | 'publish' | 'operation'
+export type BusinessHubStatus = 'active' | 'paused' | 'completed' | 'archived'
+export type BusinessHubTaskStatus = 'todo' | 'doing' | 'done' | 'blocked'
+export type BusinessHubTaskPriority = 'low' | 'medium' | 'high'
+export type BusinessHubReminderStatus = 'open' | 'closed'
+export type BusinessHubApprovalStatus = 'pending' | 'approved' | 'rejected'
+export type BusinessHubRenewalStatus = 'pending' | 'approved' | 'rejected'
+export type BusinessHubMaterialKind = 'poster' | 'qrcode' | 'copy' | 'link' | 'file'
 
-export interface BusinessOrderProductionNode {
-  code: string
-  label: string
-  status: BusinessOrderProductionNodeStatus
-  activatedAt?: Date | null
+export interface BusinessHubTaskItem {
+  _id: Types.ObjectId
+  title: string
+  status: BusinessHubTaskStatus
+  priority: BusinessHubTaskPriority
+  assignee?: string | null
+  dueAt?: Date | null
   remark?: string | null
-  sortOrder: number
+  completedAt?: Date | null
+  createdAt: Date
+  updatedAt: Date
 }
 
-export interface BusinessOrderDocument extends Document<Types.ObjectId> {
-  userId: Types.ObjectId
-  orderNumber: string
-  scenicName: string
-  addressText: string
-  location?: {
-    lat: number
-    lng: number
-  } | null
-  contactPhone: string
-  scenicArea?: number | null
-  sceneSpotCategoryId?: Types.ObjectId | null
-  specialLandscapeTags: string[]
-  topStage: BusinessOrderTopStage
-  productionProgress: BusinessOrderProductionNode[]
-  contactPhoneForBusiness?: string | null
+export interface BusinessHubReminderItem {
+  _id: Types.ObjectId
+  kind: 'service-expiring' | 'service-expired' | 'delivery-blocked' | 'workflow-note' | 'custom'
+  title: string
+  message?: string | null
+  status: BusinessHubReminderStatus
+  dueAt?: Date | null
+  closedAt?: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface BusinessHubMaterialItem {
+  _id: Types.ObjectId
+  kind: BusinessHubMaterialKind
+  title: string
+  content?: string | null
+  url?: string | null
+  fileUrl?: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface BusinessHubApprovalItem {
+  _id: Types.ObjectId
+  kind: 'quote' | 'signing' | 'delivery' | 'publish' | 'renewal' | 'custom'
+  title: string
+  status: BusinessHubApprovalStatus
+  remark?: string | null
+  decidedAt?: Date | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface BusinessHubRenewalItem {
+  _id: Types.ObjectId
+  renewalNumber: string
+  status: BusinessHubRenewalStatus
+  paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
+  durationDays: number
+  price: number
+  serviceStartAt?: Date | null
+  serviceEndAt?: Date | null
+  requestedAt: Date
+  approvedAt?: Date | null
+  remark?: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface BusinessHubActivityItem {
+  _id: Types.ObjectId
+  action: string
+  actorType: 'admin' | 'system'
+  actorName?: string | null
+  content: string
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface BusinessHubProjectDocument extends Document<Types.ObjectId> {
+  projectNumber: string
+  title: string
+  customerName: string
+  customerPhone: string
+  sourceChannel?: string | null
+  summary?: string | null
   notes?: string | null
-  quotedAt?: Date | null
-  signedAt?: Date | null
-  productionStartedAt?: Date | null
-  productionCompletedAt?: Date | null
-  publishReadyAt?: Date | null
-  publishedAt?: Date | null
-  operatingAt?: Date | null
+  stage: BusinessHubStage
+  status: BusinessHubStatus
+  contractStatus: 'unsigned' | 'signed'
+  serviceStatus: BusinessHubServiceStatus
+  serviceDurationDays: number
+  servicePrice: number
+  serviceStartAt?: Date | null
+  serviceEndAt?: Date | null
+  renewalWarningDays: number
+  deliverySceneId?: Types.ObjectId | null
+  deliverySceneSpotId?: Types.ObjectId | null
+  deliverySceneSpotTitle?: string | null
+  deliveryBoundAt?: Date | null
+  tasks: BusinessHubTaskItem[]
+  reminders: BusinessHubReminderItem[]
+  materials: BusinessHubMaterialItem[]
+  approvals: BusinessHubApprovalItem[]
+  renewals: BusinessHubRenewalItem[]
+  activityLogs: BusinessHubActivityItem[]
+  analyticsSnapshot?: {
+    todayUv: number
+    todayNewUsers: number
+    totalUv: number
+    totalPunchCount: number
+    updatedAt?: Date | null
+  } | null
   createdAt: Date
   updatedAt: Date
 }

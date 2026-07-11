@@ -41,6 +41,26 @@
           <text class="viewer-progress__percent">{{ overlayPercentText }}</text>
           <text v-if="overlayBytesLabel" class="viewer-progress__bytes">{{ overlayBytesLabel }}</text>
         </view>
+        <view v-if="overlayTimeline.length" class="viewer-progress__timeline" aria-hidden="true">
+          <view
+            v-for="(item, index) in overlayTimeline"
+            :key="item.key"
+            class="viewer-progress__timeline-item"
+            :class="`is-${item.state}`"
+          >
+            <view class="viewer-progress__timeline-rail">
+              <view class="viewer-progress__timeline-dot"></view>
+              <view
+                v-if="index !== overlayTimeline.length - 1"
+                class="viewer-progress__timeline-line"
+              ></view>
+            </view>
+            <view class="viewer-progress__timeline-body">
+              <text class="viewer-progress__timeline-label">{{ item.label }}</text>
+              <text class="viewer-progress__timeline-state">{{ item.stateLabel }}</text>
+            </view>
+          </view>
+        </view>
       </view>
       <text v-if="overlayDetail" class="viewer-overlay__detail">{{ overlayDetail }}</text>
     </view>
@@ -321,6 +341,154 @@ const overlayIndeterminate = computed(() => {
 });
 const overlayPercentText = computed(() => (overlayIndeterminate.value ? '解析中…' : `${overlayPercent.value}%`));
 const overlayProgressStyle = computed(() => (overlayIndeterminate.value ? {} : { width: `${overlayPercent.value}%` }));
+
+type TimelineState = 'done' | 'active' | 'pending' | 'error';
+
+type TimelineItem = {
+  key: string;
+  label: string;
+  state: TimelineState;
+  stateLabel: string;
+};
+
+const sceneInitTimelineSteps = [
+  { key: 'preparing', label: '预热' },
+  { key: 'building', label: '构建' },
+  { key: 'mounting', label: '挂载' },
+  { key: 'syncing', label: '同步' },
+  { key: 'finalizing', label: '完成' },
+] as const;
+
+type SceneDownloadTimelineStep = {
+  key: string;
+  label: string;
+  phases: SceneLoadPhase[];
+};
+
+const sceneDownloadTimelineSteps: SceneDownloadTimelineStep[] = [
+  { key: 'download', label: '下载', phases: ['download'] },
+  { key: 'read-cache', label: '缓存', phases: ['read-cache'] },
+  { key: 'unzip', label: '解压', phases: ['unzip'] },
+  { key: 'parse', label: '解析', phases: ['manifest', 'resource-map', 'project-meta', 'scene-documents'] },
+  { key: 'runtime', label: '运行时', phases: ['scene-runtime', 'bundle'] },
+  { key: 'render', label: '渲染', phases: ['render'] },
+] as const;
+
+function resolveTimelineStateLabel(state: TimelineState): string {
+  switch (state) {
+    case 'done':
+      return '已完成';
+    case 'active':
+      return '进行中';
+    case 'error':
+      return '异常';
+    default:
+      return '待开始';
+  }
+}
+
+function resolveSceneInitTimelineState(stepKey: string): TimelineState {
+  const stage = props.sceneInit.stage;
+  if (stage === 'error') {
+    return stepKey === 'finalizing' ? 'error' : 'done';
+  }
+  if (stage === 'cancelled') {
+    return stepKey === 'finalizing' ? 'error' : 'done';
+  }
+  if (stage === 'ready') {
+    return 'done';
+  }
+
+  const currentOrder = (() => {
+    switch (stage) {
+      case 'preparing':
+        return 0;
+      case 'building':
+        return 1;
+      case 'mounting':
+        return 2;
+      case 'syncingPreviewIndex':
+      case 'syncingPhysics':
+      case 'syncingScatter':
+        return 3;
+      case 'finalizing':
+        return 4;
+      default:
+        return -1;
+    }
+  })();
+  const stepOrder = sceneInitTimelineSteps.findIndex((item) => item.key === stepKey);
+  if (stepOrder < 0) {
+    return 'pending';
+  }
+  if (stepOrder < currentOrder) {
+    return 'done';
+  }
+  if (stepOrder === currentOrder) {
+    return 'active';
+  }
+  return 'pending';
+}
+
+function resolveSceneDownloadGroupIndex(): number {
+  const load = props.sceneDownload;
+  if (load.active) {
+    const groupIndex = sceneDownloadTimelineSteps.findIndex((item) => item.phases.includes(load.phase));
+    if (groupIndex >= 0) {
+      return groupIndex;
+    }
+  }
+  if (props.resourcePreload.active) {
+    return sceneDownloadTimelineSteps.findIndex((item) => item.key === 'render');
+  }
+  return -1;
+}
+
+function resolveSceneDownloadTimelineState(stepKey: string): TimelineState {
+  const stepOrder = sceneDownloadTimelineSteps.findIndex((item) => item.key === stepKey);
+  if (stepOrder < 0) {
+    return 'pending';
+  }
+  const currentOrder = resolveSceneDownloadGroupIndex();
+  if (currentOrder < 0) {
+    return 'pending';
+  }
+  if (stepOrder < currentOrder) {
+    return 'done';
+  }
+  if (stepOrder === currentOrder) {
+    return 'active';
+  }
+  return 'pending';
+}
+
+const overlayTimeline = computed<TimelineItem[]>(() => {
+  if (props.sceneInit.active || props.sceneInit.percent > 0) {
+    return sceneInitTimelineSteps.map((item) => {
+      const state = resolveSceneInitTimelineState(item.key);
+      return {
+        key: item.key,
+        label: item.label,
+        state,
+        stateLabel: resolveTimelineStateLabel(state),
+      };
+    });
+  }
+
+  if (props.sceneDownload.active || props.resourcePreload.active) {
+    return sceneDownloadTimelineSteps.map((item) => {
+      const state = resolveSceneDownloadTimelineState(item.key);
+      return {
+        key: item.key,
+        label: item.label,
+        state,
+        stateLabel: resolveTimelineStateLabel(state),
+      };
+    });
+  }
+
+  return [];
+});
 
 const overlayDetail = computed(() => {
   const load = props.sceneDownload;
@@ -690,6 +858,16 @@ const overlayDetail = computed(() => {
   }
 }
 
+@keyframes viewer-progress-timeline-pulse {
+  0%,
+  100% {
+    transform: scale(0.96);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
 @keyframes viewer-overlay-aurora {
   0%,
   100% {
@@ -805,6 +983,107 @@ const overlayDetail = computed(() => {
 .viewer-progress__bytes {
   font-size: 12px;
   color: rgba(21, 50, 79, 0.62);
+}
+
+.viewer-progress__timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(120, 152, 194, 0.14);
+}
+
+.viewer-progress__timeline-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+}
+
+.viewer-progress__timeline-rail {
+  position: relative;
+  width: 14px;
+  flex: 0 0 14px;
+  display: flex;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.viewer-progress__timeline-dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  border-radius: 999px;
+  background: rgba(120, 152, 194, 0.28);
+  border: 2px solid rgba(255, 255, 255, 0.78);
+  box-shadow: 0 0 0 3px rgba(120, 152, 194, 0.08);
+  z-index: 1;
+}
+
+.viewer-progress__timeline-line {
+  position: absolute;
+  top: 8px;
+  bottom: -8px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(120, 152, 194, 0.28), rgba(120, 152, 194, 0.1));
+}
+
+.viewer-progress__timeline-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0 2px;
+}
+
+.viewer-progress__timeline-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: rgba(21, 50, 79, 0.82);
+}
+
+.viewer-progress__timeline-state {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: rgba(21, 50, 79, 0.56);
+}
+
+.viewer-progress__timeline-item.is-done .viewer-progress__timeline-dot {
+  background: linear-gradient(180deg, rgba(157, 229, 143, 0.96), rgba(82, 188, 255, 0.88));
+  border-color: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 3px rgba(123, 206, 166, 0.14), 0 0 14px rgba(100, 198, 255, 0.18);
+}
+
+.viewer-progress__timeline-item.is-active .viewer-progress__timeline-dot {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(111, 233, 255, 0.96));
+  border-color: rgba(94, 161, 255, 0.92);
+  box-shadow: 0 0 0 4px rgba(94, 161, 255, 0.16), 0 0 18px rgba(94, 161, 255, 0.28);
+  animation: viewer-progress-timeline-pulse 1.6s ease-in-out infinite;
+}
+
+.viewer-progress__timeline-item.is-active .viewer-progress__timeline-label {
+  color: rgba(15, 44, 73, 0.98);
+}
+
+.viewer-progress__timeline-item.is-active .viewer-progress__timeline-state {
+  color: rgba(67, 118, 177, 0.9);
+}
+
+.viewer-progress__timeline-item.is-error .viewer-progress__timeline-dot {
+  background: linear-gradient(180deg, rgba(255, 183, 161, 0.96), rgba(255, 118, 118, 0.9));
+  box-shadow: 0 0 0 4px rgba(255, 127, 127, 0.14), 0 0 16px rgba(255, 127, 127, 0.18);
+}
+
+.viewer-progress__timeline-item.is-error .viewer-progress__timeline-label,
+.viewer-progress__timeline-item.is-error .viewer-progress__timeline-state {
+  color: rgba(136, 55, 55, 0.92);
 }
 
 .viewer-overlay__caption {

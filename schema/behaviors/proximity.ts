@@ -10,6 +10,21 @@ import {
 export type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
 export type BehaviorProximityState = { inside: boolean; lastDistance: number | null }
 export type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
+export type BehaviorObserverKind = 'vehicle' | 'character' | 'other' | 'camera'
+export type BehaviorObserverCandidate = {
+	nodeId: string | null
+	kind: Exclude<BehaviorObserverKind, 'camera'>
+}
+export type BehaviorObserverContext = {
+	observerNodeId: string | null
+	observerPosition: THREE.Vector3 | null
+	kind: BehaviorObserverKind
+}
+export type BehaviorObserverContextDeps = {
+	candidates: readonly BehaviorObserverCandidate[]
+	getCamera: () => THREE.PerspectiveCamera | null
+	resolveNodePosition: (nodeId: string, scratch: THREE.Vector3) => THREE.Vector3 | null
+}
 
 export type BehaviorProximityRegionNode = {
 	dynamicMesh?: {
@@ -19,9 +34,7 @@ export type BehaviorProximityRegionNode = {
 }
 
 export type BehaviorProximityRuntimeDeps = {
-	getCamera: () => THREE.PerspectiveCamera | null
-	getObserverNodeId: () => string | null
-	resolveObserverPosition: (observerNodeId: string, scratch: THREE.Vector3) => THREE.Vector3 | null
+	resolveObserverContext: () => BehaviorObserverContext | null
 	behaviorProximityCandidates: Map<string, BehaviorProximityCandidate>
 	behaviorProximityState: Map<string, BehaviorProximityState>
 	nodeObjectMap: Map<string, THREE.Object3D>
@@ -45,12 +58,45 @@ export type BehaviorProximityRuntime = {
 
 const REGION_TYPES = ['Region', 'Floor', 'Road', 'Water', 'Landform'] as const
 
+export function resolveBehaviorObserverContext(
+	deps: BehaviorObserverContextDeps,
+	scratch: THREE.Vector3,
+): BehaviorObserverContext {
+	for (const candidate of deps.candidates) {
+		const nodeId = typeof candidate?.nodeId === 'string' ? candidate.nodeId.trim() : ''
+		if (!nodeId) {
+			continue
+		}
+		const position = deps.resolveNodePosition(nodeId, scratch)
+		if (position) {
+			return {
+				observerNodeId: nodeId,
+				observerPosition: position,
+				kind: candidate.kind,
+			}
+		}
+	}
+	const camera = deps.getCamera()
+	if (camera) {
+		scratch.copy(camera.position)
+		return {
+			observerNodeId: null,
+			observerPosition: scratch,
+			kind: 'camera',
+		}
+	}
+	return {
+		observerNodeId: null,
+		observerPosition: null,
+		kind: 'camera',
+	}
+}
+
 export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDeps): BehaviorProximityRuntime {
 	const thresholdCache = new Map<string, BehaviorProximityThreshold>()
 	const tempBox = new THREE.Box3()
 	const tempSphere = new THREE.Sphere()
 	const tempRegionObserverPosition = new THREE.Vector3()
-	const tempObserverPosition = new THREE.Vector3()
 	const tempFocusPosition = new THREE.Vector3()
 
 	function computeObjectBoundingRadius(object: THREE.Object3D): number {
@@ -114,18 +160,14 @@ export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDep
 	}
 
 	function updateBehaviorProximity(): void {
-		const camera = deps.getCamera()
-		if (!camera || !deps.behaviorProximityCandidates.size) {
+		if (!deps.behaviorProximityCandidates.size) {
 			return
 		}
-		let observerPosition = camera.position
-		const observerNodeId = deps.getObserverNodeId()
-		if (observerNodeId) {
-			const observerPoint = deps.resolveObserverPosition(observerNodeId, tempObserverPosition)
-			if (observerPoint) {
-				observerPosition = observerPoint
-			}
+		const observerContext = deps.resolveObserverContext()
+		if (!observerContext || !observerContext.observerPosition) {
+			return
 		}
+		const observerPosition = observerContext.observerPosition
 		deps.behaviorProximityCandidates.forEach((candidate, nodeId) => {
 			const object = deps.nodeObjectMap.get(nodeId)
 			if (!object) {

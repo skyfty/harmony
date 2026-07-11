@@ -143,7 +143,7 @@ export async function createWarpGateNode(
           type: 'moveTo',
           params: {
             targetNodeId: created.id,
-            duration: 0.8,
+            kinetics: false,
           },
         }),
       },
