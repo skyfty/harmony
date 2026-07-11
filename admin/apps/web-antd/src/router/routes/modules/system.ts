@@ -272,28 +272,28 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
-    name: 'BusinessHub',
-    path: '/business-hub',
+    name: 'BusinessOrders',
+    path: '/business-orders',
     meta: {
-      icon: 'lucide:workflow',
-      title: '商业协作台',
+      icon: 'lucide:briefcase-business',
+      title: '商业管理',
     },
     children: [
       {
-        name: 'BusinessHubIndex',
+        name: 'BusinessOrdersIndex',
         path: '',
-        component: () => import('#/views/business-hub/index.vue'),
+        component: () => import('#/views/business-orders/index.vue'),
         meta: {
-          icon: 'lucide:layout-dashboard',
-          title: '商业项目总览',
+          icon: 'lucide:briefcase-business',
+          title: '商业订单管理',
         },
       },
       {
-        name: 'BusinessHubDetail',
+        name: 'BusinessOrderDetail',
         path: ':id',
-        component: () => import('#/views/business-hub/detail.vue'),
+        component: () => import('#/views/business-orders/detail.vue'),
         meta: {
-          title: '商业项目详情',
+          title: '商业订单详情',
           hideInMenu: true,
         },
       },

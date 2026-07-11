@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type {
+  BusinessOrderItem,
   LoginLogItem,
   OrderItem,
   PunchRecordItem,
@@ -14,6 +15,7 @@ import { useRoute, useRouter } from 'vue-router';
 
 import {
   getUserApi,
+  listBusinessOrdersApi,
   listLoginLogsApi,
   listOrdersApi,
   listPunchRecordsApi,
@@ -62,6 +64,7 @@ const travelState = createPagedState<TravelRecordItem>();
 const loginState = createPagedState<LoginLogItem>();
 const medalState = createPagedState<UserMedalStatusItem>();
 const orderState = createPagedState<OrderItem>();
+const businessOrderState = createPagedState<BusinessOrderItem>();
 const couponClaimState = createPagedState<UserCouponItem>();
 const couponState = createPagedState<UserCouponItem>();
 
@@ -189,6 +192,52 @@ function formatCouponAcquisitionSource(source?: null | string) {
   }
 }
 
+function formatBusinessOrderStage(stage?: null | string) {
+  switch (stage) {
+    case 'quote': {
+      return '报价';
+    }
+    case 'signing': {
+      return '签约';
+    }
+    case 'production': {
+      return '制作';
+    }
+    case 'publish': {
+      return '发布';
+    }
+    case 'operation': {
+      return '运营';
+    }
+    default: {
+      return stage || '-';
+    }
+  }
+}
+
+function getBusinessOrderStageColor(stage?: null | string) {
+  switch (stage) {
+    case 'quote': {
+      return 'default';
+    }
+    case 'signing': {
+      return 'gold';
+    }
+    case 'production': {
+      return 'processing';
+    }
+    case 'publish': {
+      return 'purple';
+    }
+    case 'operation': {
+      return 'success';
+    }
+    default: {
+      return 'default';
+    }
+  }
+}
+
 function goBack() {
   router.back();
 }
@@ -200,6 +249,10 @@ function openScenicDetail(scenicId?: string) {
 
 function openOrderDetail(orderId: string) {
   router.push({ name: 'OrderDetail', params: { id: orderId } });
+}
+
+function openBusinessOrderDetail(orderId: string) {
+  router.push({ name: 'BusinessOrderDetail', params: { id: orderId } });
 }
 
 async function loadUser() {
@@ -287,6 +340,21 @@ async function loadOrders(page = orderState.page, pageSize = orderState.pageSize
   }
 }
 
+async function loadBusinessOrders(page = businessOrderState.page, pageSize = businessOrderState.pageSize) {
+  if (!userId.value) return;
+  businessOrderState.loading = true;
+  try {
+    const res = await listBusinessOrdersApi({ page, pageSize, userId: userId.value });
+    businessOrderState.items = res.items || [];
+    businessOrderState.total = res.total || 0;
+    businessOrderState.page = page;
+    businessOrderState.pageSize = pageSize;
+    businessOrderState.loaded = true;
+  } finally {
+    businessOrderState.loading = false;
+  }
+}
+
 async function loadCouponClaims(page = couponClaimState.page, pageSize = couponClaimState.pageSize) {
   if (!userId.value) return;
   couponClaimState.loading = true;
@@ -342,6 +410,10 @@ async function ensureActiveTabLoaded(key: string) {
     }
     case 'order': {
       if (!orderState.loaded) await loadOrders();
+      break;
+    }
+    case 'business-order': {
+      if (!businessOrderState.loaded) await loadBusinessOrders();
       break;
     }
     case 'coupon-claim': {
@@ -600,6 +672,52 @@ onMounted(async () => {
                 </template>
                 <template v-else-if="column.key === 'actions'">
                   <Button type="link" size="small" @click="openOrderDetail(record.id)">查看详情</Button>
+                </template>
+                <template v-else>
+                  {{ getCellValue(record, column.dataIndex) ?? '-' }}
+                </template>
+              </template>
+            </Table>
+          </Tabs.TabPane>
+
+          <Tabs.TabPane
+            key="business-order"
+            :tab="formatTabTitle('商业订单', businessOrderState.total, businessOrderState.loaded)"
+          >
+            <Table
+              size="small"
+              row-key="id"
+              :columns="businessOrderColumns"
+              :data-source="businessOrderState.items"
+              :loading="businessOrderState.loading"
+              :scroll="{ x: 1200 }"
+              :pagination="{
+                current: businessOrderState.page,
+                pageSize: businessOrderState.pageSize,
+                total: businessOrderState.total,
+                showSizeChanger: true,
+                showTotal: (total) => `共 ${total} 条`,
+                onChange: (page, pageSize) => loadBusinessOrders(page, pageSize),
+              }"
+            >
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'orderNumber'">
+                  <Button type="link" size="small" @click="openBusinessOrderDetail(record.id)">
+                    {{ record.orderNumber || '-' }}
+                  </Button>
+                </template>
+                <template v-else-if="column.key === 'topStage'">
+                  <Tag :color="getBusinessOrderStageColor(record.topStage)">
+                    {{ formatBusinessOrderStage(record.topStage) }}
+                  </Tag>
+                </template>
+                <template v-else-if="column.key === 'contractStatus'">
+                  <Tag :color="record.userInfo?.contractStatus === 'signed' ? 'success' : 'default'">
+                    {{ record.userInfo?.contractStatus === 'signed' ? '已签约' : '未签约' }}
+                  </Tag>
+                </template>
+                <template v-else-if="column.key === 'actions'">
+                  <Button type="link" size="small" @click="openBusinessOrderDetail(record.id)">查看详情</Button>
                 </template>
                 <template v-else>
                   {{ getCellValue(record, column.dataIndex) ?? '-' }}
