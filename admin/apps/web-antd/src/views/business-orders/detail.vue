@@ -54,6 +54,16 @@ const serviceStartDraft = ref<string | null>(null);
 const serviceEndDraft = ref<string | null>(null);
 const selectedSceneSpotId = ref<string | undefined>(undefined);
 const sceneSpotOptions = ref<Array<{ label: string; value: string }>>([]);
+const specialLandscapeLabelMap = new Map([
+  ['light-show', '灯光秀'],
+  ['water-fountain', '水景喷泉'],
+  ['glass-skywalk', '玻璃栈道'],
+  ['night-performance', '夜游演艺'],
+  ['naked-eye-3d', '裸眼3D大屏'],
+  ['mountain-projection', '山体投影'],
+  ['interactive-device', '互动装置'],
+  ['ropeway-elevator', '索道/观光电梯'],
+]);
 
 const currentProductionNode = computed(() => order.value?.productionProgress.find((item) => item.status === 'active') || null);
 const pendingRenewals = computed(() => (order.value?.renewalHistory || []).filter((item) => !item.approvedAt));
@@ -154,6 +164,11 @@ function productionStatusColor(status: string) {
   if (status === 'completed') return 'green';
   if (status === 'active') return 'blue';
   return 'gray';
+}
+
+function specialLandscapeText(tags: string[] | undefined | null) {
+  if (!tags?.length) return '-';
+  return tags.map((tag) => specialLandscapeLabelMap.get(tag) || tag).join('、');
 }
 
 async function loadSceneSpotOptions() {
@@ -352,7 +367,7 @@ onMounted(async () => {
           <Descriptions.Item label="续费次数">{{ order.renewalCount }}</Descriptions.Item>
           <Descriptions.Item label="最近续费">{{ order.lastRenewedAt || '-' }}</Descriptions.Item>
           <Descriptions.Item label="地址" :span="2">{{ order.addressText }}</Descriptions.Item>
-          <Descriptions.Item label="特殊景观" :span="2">{{ order.specialLandscapeTags.join('、') || '-' }}</Descriptions.Item>
+          <Descriptions.Item label="特殊景观" :span="2">{{ specialLandscapeText(order.specialLandscapeTags) }}</Descriptions.Item>
           <Descriptions.Item label="分享链接" :span="2">
             <div class="break-all">{{ order.share.miniProgramPath || '-' }}</div>
           </Descriptions.Item>

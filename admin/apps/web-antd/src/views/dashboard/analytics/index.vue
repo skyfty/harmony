@@ -261,15 +261,11 @@ onMounted(async () => {
         <div class="pointer-events-none absolute inset-y-0 right-0 hidden w-1/2 bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.3),transparent_58%)] lg:block" />
         <div class="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
           <div class="max-w-3xl">
-            <div class="inline-flex items-center rounded-full border border-white/15 bg-white/10 px-3 py-1 text-xs tracking-[0.24em] text-white/70">
-              ANALYTICS OVERVIEW
-            </div>
+         
             <h1 class="mt-4 text-3xl font-semibold tracking-tight text-white lg:text-4xl">
               {{ isSpotDetail ? `${selectedSpotLabel} 经营洞察` : '全站运营分析总览' }}
             </h1>
-            <p class="mt-3 max-w-2xl text-sm leading-6 text-slate-300 lg:text-base">
-              聚合访问、登录、来源与景点热度，让首页先回答“现在发生了什么”，再指向需要继续追踪的业务域。
-            </p>
+            
             <div class="mt-6 grid gap-3 sm:grid-cols-3">
               <div
                 v-for="metric in heroMetrics"
