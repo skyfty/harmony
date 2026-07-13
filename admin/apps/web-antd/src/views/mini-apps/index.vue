@@ -1,34 +1,13 @@
 <script setup lang="ts">
 import type { FormInstance } from 'ant-design-vue';
-import type {
-  MiniAppItem,
-  MiniAppPlatformConfig,
-  MiniAppType,
-  MiniPlatformKind,
-} from '#/api';
+import type { MiniAppItem, MiniAppPlatformConfig, MiniPlatformKind } from '#/api';
 
 import { computed, reactive, ref } from 'vue';
 
 import { useVbenVxeGrid } from '#/adapter/vxe-table';
-import {
-  createMiniAppApi,
-  deleteMiniAppApi,
-  listMiniAppsApi,
-  updateMiniAppApi,
-} from '#/api';
+import { createMiniAppApi, deleteMiniAppApi, listMiniAppsApi, updateMiniAppApi } from '#/api';
 
-import {
-  Button,
-  Form,
-  Input,
-  message,
-  Modal,
-  Select,
-  Space,
-  Switch,
-  Tabs,
-  Tooltip,
-} from 'ant-design-vue';
+import { Button, Form, Input, message, Modal, Select, Space, Switch, Tabs, Tooltip } from 'ant-design-vue';
 import { DeleteOutlined, EditOutlined } from '@ant-design/icons-vue';
 
 type PlatformFormModel = {
@@ -65,13 +44,9 @@ type PlatformFormModel = {
 
 type MiniAppFormModel = {
   appKey: string;
-  appType: MiniAppType;
   name: string;
   enabled: boolean;
   isDefault: boolean;
-  brandingAppName: string;
-  brandingLogoUrl: string;
-  brandingThemeColor: string;
   runtimeFeaturesText: string;
   runtimeValuesText: string;
   userServiceAgreementContent: string;
@@ -85,6 +60,18 @@ const PLATFORM_OPTIONS: Array<{ key: MiniPlatformKind; label: string }> = [
   { key: 'xiaohongshu', label: '小红书' },
 ];
 
+const UPDATE_PROMPT_OPTIONS = [
+  { label: '关闭', value: 'none' },
+  { label: '软提示', value: 'soft' },
+  { label: '强制', value: 'force' },
+];
+
+const PLATFORM_HEALTH_LABELS: Record<string, string> = {
+  configured: '已配置',
+  disabled: '已禁用',
+  incomplete: '配置不完整',
+};
+
 function safeJsonStringify(value: unknown): string {
   return JSON.stringify(value ?? {}, null, 2);
 }
@@ -94,6 +81,7 @@ function safeJsonParse(value: string): Record<string, unknown> {
   if (!trimmed) {
     return {};
   }
+
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -148,13 +136,9 @@ function createDefaultPlatformForm(): PlatformFormModel {
 function createDefaultFormModel(): MiniAppFormModel {
   return {
     appKey: '',
-    appType: 'tour',
     name: '',
     enabled: true,
     isDefault: false,
-    brandingAppName: '',
-    brandingLogoUrl: '',
-    brandingThemeColor: '',
     runtimeFeaturesText: '{}',
     runtimeValuesText: '{}',
     userServiceAgreementContent: '',
@@ -246,11 +230,14 @@ function buildPlatformPayload(platform: PlatformFormModel): Partial<MiniAppPlatf
 }
 
 function renderPlatformSummary(row: MiniAppItem) {
-  return row.configuredPlatforms.length ? row.configuredPlatforms.join(', ') : '未配置';
+  return row.configuredPlatforms.length ? row.configuredPlatforms.join('、') : '未配置';
 }
 
 function renderPlatformHealth(row: MiniAppItem) {
-  return PLATFORM_OPTIONS.map(({ key, label }) => `${label}:${row.platformHealth?.[key] ?? 'disabled'}`).join(' | ');
+  return PLATFORM_OPTIONS.map(({ key, label }) => {
+    const status = row.platformHealth?.[key] ?? 'disabled';
+    return `${label}:${PLATFORM_HEALTH_LABELS[status] ?? status}`;
+  }).join(' ｜ ');
 }
 
 function toRow(slotProps: { row: MiniAppItem }): MiniAppItem {
@@ -261,13 +248,13 @@ const modalOpen = ref(false);
 const submitting = ref(false);
 const editingId = ref<null | string>(null);
 const formRef = ref<FormInstance>();
-const activePlatformTab = ref<MiniPlatformKind>('wechat');
+const activeTab = ref<'app-basics' | 'runtime' | 'policy' | MiniPlatformKind>('app-basics');
 const formModel = reactive(createDefaultFormModel());
 const modalTitle = computed(() => (editingId.value ? '编辑小程序应用' : '新增小程序应用'));
 
 function resetForm() {
   Object.assign(formModel, createDefaultFormModel());
-  activePlatformTab.value = 'wechat';
+  activeTab.value = 'app-basics';
 }
 
 function openCreate() {
@@ -280,20 +267,18 @@ function openEdit(row: MiniAppItem) {
   editingId.value = row.id;
   resetForm();
   formModel.appKey = row.appKey;
-  formModel.appType = row.appType;
   formModel.name = row.name;
   formModel.enabled = row.enabled;
   formModel.isDefault = row.isDefault;
-  formModel.brandingAppName = row.branding.appName;
-  formModel.brandingLogoUrl = row.branding.logoUrl;
-  formModel.brandingThemeColor = row.branding.themeColor;
   formModel.runtimeFeaturesText = safeJsonStringify(row.runtimeConfig.features);
   formModel.runtimeValuesText = safeJsonStringify(row.runtimeConfig.values);
   formModel.userServiceAgreementContent = row.userServiceAgreement.content;
   formModel.privacyPolicyContent = row.privacyPolicy.content;
+
   PLATFORM_OPTIONS.forEach(({ key }) => {
     applyPlatformConfig(formModel.platforms[key], row.platformConfigs.find((item) => item.platform === key));
   });
+
   modalOpen.value = true;
 }
 
@@ -302,20 +287,16 @@ async function submit() {
   if (!form) {
     return;
   }
+
   await form.validate();
   submitting.value = true;
+
   try {
     const payload = {
       appKey: formModel.appKey.trim(),
-      appType: formModel.appType,
       name: formModel.name.trim(),
       enabled: formModel.enabled,
       isDefault: formModel.isDefault,
-      branding: {
-        appName: formModel.brandingAppName.trim(),
-        logoUrl: formModel.brandingLogoUrl.trim(),
-        themeColor: formModel.brandingThemeColor.trim(),
-      },
       runtimeConfig: {
         features: parseFeatureFlags(formModel.runtimeFeaturesText),
         values: parseRuntimeValues(formModel.runtimeValuesText),
@@ -355,6 +336,7 @@ function handleDelete(row: MiniAppItem) {
     message.warning('默认应用不可删除');
     return;
   }
+
   Modal.confirm({
     title: `确认删除应用 ${row.name}？`,
     okType: 'danger',
@@ -371,9 +353,8 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'appKey', minWidth: 180, title: 'App Key' },
-      { field: 'name', minWidth: 180, title: '名称' },
-      { field: 'appType', minWidth: 100, title: '类型' },
+      { field: 'appKey', minWidth: 180, title: '应用 Key' },
+      { field: 'name', minWidth: 180, title: '应用名称' },
       {
         field: 'configuredPlatforms',
         minWidth: 180,
@@ -383,7 +364,7 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
       {
         field: 'platformHealth',
         minWidth: 260,
-        title: '平台健康',
+        title: '平台状态',
         formatter: ({ row }: { row: MiniAppItem }) => renderPlatformHealth(row),
       },
       { field: 'enabled', minWidth: 90, title: '启用', slots: { default: 'enabled' } },
@@ -414,7 +395,14 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
 </script>
 
 <template>
-  <div class="p-5">
+  <div class="mini-app-page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">小程序应用</div>
+      </div>
+      <Button v-access:code="'admin:super'" type="primary" @click="openCreate">新增应用</Button>
+    </div>
+
     <Grid>
       <template #toolbar-actions>
         <Button v-access:code="'admin:super'" type="primary" @click="openCreate">新增应用</Button>
@@ -458,91 +446,154 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
       ok-text="保存"
       cancel-text="取消"
       destroy-on-close
-      width="1080px"
+      width="1120px"
       @cancel="() => (modalOpen = false)"
       @ok="submit"
     >
-      <Form ref="formRef" :model="formModel" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
-        <Form.Item label="App Key" name="appKey" :rules="[{ required: true, message: '请输入 App Key' }]">
-          <Input v-model:value="formModel.appKey" :disabled="Boolean(editingId)" allow-clear />
-        </Form.Item>
-        <Form.Item label="应用名称" name="name" :rules="[{ required: true, message: '请输入应用名称' }]">
-          <Input v-model:value="formModel.name" allow-clear />
-        </Form.Item>
-        <Form.Item label="应用类型" name="appType">
-          <Select v-model:value="formModel.appType" :options="[{ label: 'Tour', value: 'tour' }, { label: 'Viewer', value: 'viewer' }]" />
-        </Form.Item>
-        <Form.Item label="启用" name="enabled">
-          <Switch v-model:checked="formModel.enabled" />
-        </Form.Item>
-        <Form.Item label="默认应用" name="isDefault">
-          <Switch v-model:checked="formModel.isDefault" />
-        </Form.Item>
-        <Form.Item label="品牌名称" name="brandingAppName">
-          <Input v-model:value="formModel.brandingAppName" allow-clear />
-        </Form.Item>
-        <Form.Item label="Logo URL" name="brandingLogoUrl">
-          <Input v-model:value="formModel.brandingLogoUrl" allow-clear />
-        </Form.Item>
-        <Form.Item label="主题色" name="brandingThemeColor">
-          <Input v-model:value="formModel.brandingThemeColor" allow-clear />
-        </Form.Item>
-        <Form.Item label="功能开关 JSON" name="runtimeFeaturesText">
-          <Input.TextArea v-model:value="formModel.runtimeFeaturesText" :auto-size="{ minRows: 3, maxRows: 6 }" />
-        </Form.Item>
-        <Form.Item label="运行时参数 JSON" name="runtimeValuesText">
-          <Input.TextArea v-model:value="formModel.runtimeValuesText" :auto-size="{ minRows: 3, maxRows: 6 }" />
-        </Form.Item>
-        <Form.Item label="用户服务协议" name="userServiceAgreementContent">
-          <Input.TextArea v-model:value="formModel.userServiceAgreementContent" :auto-size="{ minRows: 6, maxRows: 10 }" />
-        </Form.Item>
-        <Form.Item label="隐私政策" name="privacyPolicyContent">
-          <Input.TextArea v-model:value="formModel.privacyPolicyContent" :auto-size="{ minRows: 6, maxRows: 10 }" />
-        </Form.Item>
-      </Form>
 
-      <Tabs v-model:activeKey="activePlatformTab">
+      <Tabs v-model:activeKey="activeTab" class="mini-app-tabs">
+        <Tabs.TabPane key="app-basics" tab="应用基础信息">
+          <Form ref="formRef" :model="formModel" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+            <div class="tab-panel">
+              <Form.Item label="应用 Key" name="appKey" :rules="[{ required: true, message: '请输入应用 Key' }]">
+                <Input v-model:value="formModel.appKey" :disabled="Boolean(editingId)" allow-clear />
+              </Form.Item>
+              <Form.Item label="应用名称" name="name" :rules="[{ required: true, message: '请输入应用名称' }]">
+                <Input v-model:value="formModel.name" allow-clear />
+              </Form.Item>
+              <Form.Item label="启用" name="enabled">
+                <Switch v-model:checked="formModel.enabled" />
+              </Form.Item>
+              <Form.Item label="默认应用" name="isDefault">
+                <Switch v-model:checked="formModel.isDefault" />
+              </Form.Item>
+            </div>
+          </Form>
+        </Tabs.TabPane>
+
+        <Tabs.TabPane key="runtime" tab="运行配置">
+          <Form :model="formModel" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+            <div class="tab-panel">
+              <Form.Item label="运行特性 JSON" name="runtimeFeaturesText">
+                <Input.TextArea v-model:value="formModel.runtimeFeaturesText" :auto-size="{ minRows: 8, maxRows: 14 }" />
+              </Form.Item>
+              <Form.Item label="运行参数 JSON" name="runtimeValuesText">
+                <Input.TextArea v-model:value="formModel.runtimeValuesText" :auto-size="{ minRows: 8, maxRows: 14 }" />
+              </Form.Item>
+            </div>
+          </Form>
+        </Tabs.TabPane>
+
+        <Tabs.TabPane key="policy" tab="协议内容">
+          <Form :model="formModel" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+            <div class="tab-panel">
+              <Form.Item label="用户服务协议" name="userServiceAgreementContent">
+                <Input.TextArea v-model:value="formModel.userServiceAgreementContent" :auto-size="{ minRows: 10, maxRows: 14 }" />
+              </Form.Item>
+              <Form.Item label="隐私政策" name="privacyPolicyContent">
+                <Input.TextArea v-model:value="formModel.privacyPolicyContent" :auto-size="{ minRows: 10, maxRows: 14 }" />
+              </Form.Item>
+            </div>
+          </Form>
+        </Tabs.TabPane>
+
         <Tabs.TabPane v-for="platform in PLATFORM_OPTIONS" :key="platform.key" :tab="platform.label">
           <div class="platform-pane">
             <Form :model="formModel.platforms[platform.key]" :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
-              <Form.Item label="平台启用"><Switch v-model:checked="formModel.platforms[platform.key].enabled" /></Form.Item>
-              <Form.Item label="App ID"><Input v-model:value="formModel.platforms[platform.key].appId" allow-clear /></Form.Item>
-              <Form.Item label="App Secret"><Input.Password v-model:value="formModel.platforms[platform.key].appSecret" allow-clear /></Form.Item>
-              <Form.Item label="登录启用"><Switch v-model:checked="formModel.platforms[platform.key].loginEnabled" /></Form.Item>
-              <Form.Item label="登录 Scopes"><Input.TextArea v-model:value="formModel.platforms[platform.key].loginScopes" :auto-size="{ minRows: 2, maxRows: 4 }" /></Form.Item>
-              <Form.Item label="支付启用"><Switch v-model:checked="formModel.platforms[platform.key].paymentEnabled" /></Form.Item>
-              <Form.Item label="支付渠道"><Input v-model:value="formModel.platforms[platform.key].paymentChannel" allow-clear /></Form.Item>
-              <Form.Item label="商户号"><Input v-model:value="formModel.platforms[platform.key].mchId" allow-clear /></Form.Item>
-              <Form.Item label="证书序列号"><Input v-model:value="formModel.platforms[platform.key].serialNo" allow-clear /></Form.Item>
-              <Form.Item label="支付私钥"><Input.TextArea v-model:value="formModel.platforms[platform.key].privateKey" :auto-size="{ minRows: 3, maxRows: 6 }" /></Form.Item>
-              <Form.Item label="API V3 Key"><Input v-model:value="formModel.platforms[platform.key].apiV3Key" allow-clear /></Form.Item>
-              <Form.Item label="支付回调"><Input v-model:value="formModel.platforms[platform.key].notifyUrl" allow-clear /></Form.Item>
-              <Form.Item label="退款回调"><Input v-model:value="formModel.platforms[platform.key].refundNotifyUrl" allow-clear /></Form.Item>
-              <Form.Item label="支付网关"><Input v-model:value="formModel.platforms[platform.key].baseUrl" allow-clear /></Form.Item>
-              <Form.Item label="平台公钥"><Input.TextArea v-model:value="formModel.platforms[platform.key].platformPublicKey" :auto-size="{ minRows: 3, maxRows: 6 }" /></Form.Item>
-              <Form.Item label="开发跳过验签"><Switch v-model:checked="formModel.platforms[platform.key].callbackSkipVerifyInDev" /></Form.Item>
-              <Form.Item label="Mock 平台私钥"><Input.TextArea v-model:value="formModel.platforms[platform.key].mockPlatformPrivateKey" :auto-size="{ minRows: 2, maxRows: 4 }" /></Form.Item>
-              <Form.Item label="分享启用"><Switch v-model:checked="formModel.platforms[platform.key].shareEnabled" /></Form.Item>
-              <Form.Item label="默认分享路径"><Input v-model:value="formModel.platforms[platform.key].shareDefaultPath" allow-clear /></Form.Item>
-              <Form.Item label="默认分享标题"><Input v-model:value="formModel.platforms[platform.key].shareDefaultTitle" allow-clear /></Form.Item>
-              <Form.Item label="海报开关"><Switch v-model:checked="formModel.platforms[platform.key].posterEnabled" /></Form.Item>
-              <Form.Item label="二维码规则链接"><Input v-model:value="formModel.platforms[platform.key].qrCodeRuleLink" allow-clear /></Form.Item>
-              <Form.Item label="隐私启用"><Switch v-model:checked="formModel.platforms[platform.key].privacyEnabled" /></Form.Item>
-              <Form.Item label="使用前同意隐私"><Switch v-model:checked="formModel.platforms[platform.key].requireConsentBeforeUse" /></Form.Item>
-              <Form.Item label="更新启用"><Switch v-model:checked="formModel.platforms[platform.key].updateEnabled" /></Form.Item>
-              <Form.Item label="更新提示模式">
-                <Select
-                  v-model:value="formModel.platforms[platform.key].updatePromptMode"
-                  :options="[
-                    { label: '关闭', value: 'none' },
-                    { label: '软提示', value: 'soft' },
-                    { label: '强制', value: 'force' },
-                  ]"
+              <Form.Item label="平台启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].enabled" />
+              </Form.Item>
+              <Form.Item label="应用 ID">
+                <Input v-model:value="formModel.platforms[platform.key].appId" allow-clear />
+              </Form.Item>
+              <Form.Item label="应用密钥">
+                <Input.Password v-model:value="formModel.platforms[platform.key].appSecret" allow-clear />
+              </Form.Item>
+              <Form.Item label="登录启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].loginEnabled" />
+              </Form.Item>
+              <Form.Item label="登录 Scope">
+                <Input.TextArea
+                  v-model:value="formModel.platforms[platform.key].loginScopes"
+                  :auto-size="{ minRows: 2, maxRows: 4 }"
+                  placeholder="每行一个 scope"
                 />
               </Form.Item>
-              <Form.Item label="导航启用"><Switch v-model:checked="formModel.platforms[platform.key].navigateEnabled" /></Form.Item>
-              <Form.Item label="落地页"><Input v-model:value="formModel.platforms[platform.key].landingPage" allow-clear /></Form.Item>
-              <Form.Item label="扩展配置 JSON"><Input.TextArea v-model:value="formModel.platforms[platform.key].extConfigText" :auto-size="{ minRows: 4, maxRows: 8 }" /></Form.Item>
+              <Form.Item label="支付启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].paymentEnabled" />
+              </Form.Item>
+              <Form.Item label="支付渠道">
+                <Input v-model:value="formModel.platforms[platform.key].paymentChannel" allow-clear />
+              </Form.Item>
+              <Form.Item label="商户号">
+                <Input v-model:value="formModel.platforms[platform.key].mchId" allow-clear />
+              </Form.Item>
+              <Form.Item label="证书序列号">
+                <Input v-model:value="formModel.platforms[platform.key].serialNo" allow-clear />
+              </Form.Item>
+              <Form.Item label="支付私钥">
+                <Input.TextArea v-model:value="formModel.platforms[platform.key].privateKey" :auto-size="{ minRows: 3, maxRows: 6 }" />
+              </Form.Item>
+              <Form.Item label="API V3 密钥">
+                <Input v-model:value="formModel.platforms[platform.key].apiV3Key" allow-clear />
+              </Form.Item>
+              <Form.Item label="支付回调">
+                <Input v-model:value="formModel.platforms[platform.key].notifyUrl" allow-clear />
+              </Form.Item>
+              <Form.Item label="退款回调">
+                <Input v-model:value="formModel.platforms[platform.key].refundNotifyUrl" allow-clear />
+              </Form.Item>
+              <Form.Item label="支付网关">
+                <Input v-model:value="formModel.platforms[platform.key].baseUrl" allow-clear />
+              </Form.Item>
+              <Form.Item label="平台公钥">
+                <Input.TextArea v-model:value="formModel.platforms[platform.key].platformPublicKey" :auto-size="{ minRows: 3, maxRows: 6 }" />
+              </Form.Item>
+              <Form.Item label="开发环境跳过验签">
+                <Switch v-model:checked="formModel.platforms[platform.key].callbackSkipVerifyInDev" />
+              </Form.Item>
+              <Form.Item label="Mock 平台私钥">
+                <Input.TextArea
+                  v-model:value="formModel.platforms[platform.key].mockPlatformPrivateKey"
+                  :auto-size="{ minRows: 2, maxRows: 4 }"
+                />
+              </Form.Item>
+              <Form.Item label="分享启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].shareEnabled" />
+              </Form.Item>
+              <Form.Item label="默认分享路径">
+                <Input v-model:value="formModel.platforms[platform.key].shareDefaultPath" allow-clear />
+              </Form.Item>
+              <Form.Item label="默认分享标题">
+                <Input v-model:value="formModel.platforms[platform.key].shareDefaultTitle" allow-clear />
+              </Form.Item>
+              <Form.Item label="海报启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].posterEnabled" />
+              </Form.Item>
+              <Form.Item label="二维码规则链接">
+                <Input v-model:value="formModel.platforms[platform.key].qrCodeRuleLink" allow-clear />
+              </Form.Item>
+              <Form.Item label="隐私启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].privacyEnabled" />
+              </Form.Item>
+              <Form.Item label="使用前同意">
+                <Switch v-model:checked="formModel.platforms[platform.key].requireConsentBeforeUse" />
+              </Form.Item>
+              <Form.Item label="更新启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].updateEnabled" />
+              </Form.Item>
+              <Form.Item label="更新提示模式">
+                <Select v-model:value="formModel.platforms[platform.key].updatePromptMode" :options="UPDATE_PROMPT_OPTIONS" />
+              </Form.Item>
+              <Form.Item label="导航启用">
+                <Switch v-model:checked="formModel.platforms[platform.key].navigateEnabled" />
+              </Form.Item>
+              <Form.Item label="落地页">
+                <Input v-model:value="formModel.platforms[platform.key].landingPage" allow-clear />
+              </Form.Item>
+              <Form.Item label="扩展配置 JSON">
+                <Input.TextArea v-model:value="formModel.platforms[platform.key].extConfigText" :auto-size="{ minRows: 4, maxRows: 8 }" />
+              </Form.Item>
             </Form>
           </div>
         </Tabs.TabPane>
@@ -552,9 +603,61 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
 </template>
 
 <style scoped>
+.mini-app-page {
+  padding: 20px;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.page-subtitle {
+  margin-top: 4px;
+  color: #6b7280;
+}
+
+.modal-tip {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.mini-app-tabs :deep(.ant-tabs-nav) {
+  margin-bottom: 16px;
+}
+
+.mini-app-tabs :deep(.ant-tabs-nav-list) {
+  flex-wrap: nowrap;
+}
+
+.mini-app-tabs :deep(.ant-tabs-tab) {
+  white-space: nowrap;
+}
+
+.tab-panel {
+  padding-top: 4px;
+}
+
 .platform-pane {
   max-height: 58vh;
   overflow: auto;
   padding-right: 12px;
+}
+
+.platform-hint {
+  margin-bottom: 12px;
+  color: #6b7280;
 }
 </style>

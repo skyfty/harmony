@@ -97,11 +97,9 @@ export async function getMiniAppApi(id: string) {
 
 export async function createMiniAppApi(payload: {
   appKey: string;
-  appType: MiniAppType;
   name: string;
   enabled?: boolean;
   isDefault?: boolean;
-  branding?: Partial<MiniAppBrandingConfig>;
   runtimeConfig?: Partial<MiniAppRuntimeConfig>;
   userServiceAgreement?: Partial<MiniAppPolicyContent>;
   privacyPolicy?: Partial<MiniAppPolicyContent>;
@@ -113,11 +111,9 @@ export async function createMiniAppApi(payload: {
 export async function updateMiniAppApi(
   id: string,
   payload: {
-    appType?: MiniAppType;
     name?: string;
     enabled?: boolean;
     isDefault?: boolean;
-    branding?: Partial<MiniAppBrandingConfig>;
     runtimeConfig?: Partial<MiniAppRuntimeConfig>;
     userServiceAgreement?: Partial<MiniAppPolicyContent>;
     privacyPolicy?: Partial<MiniAppPolicyContent>;

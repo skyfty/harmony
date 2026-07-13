@@ -215,7 +215,6 @@ export async function createMiniApp(ctx: Context): Promise<void> {
   const body = (ctx.request.body ?? {}) as Record<string, any>
   const appKey = normalizeString(body.appKey)
   const name = normalizeString(body.name)
-  const appType = normalizeString(body.appType) === 'viewer' ? 'viewer' : 'tour'
   if (!appKey || !name) {
     ctx.throw(400, 'appKey and name are required')
   }
@@ -227,15 +226,9 @@ export async function createMiniApp(ctx: Context): Promise<void> {
 
   const created = await MiniAppModel.create({
     appKey,
-    appType,
     name,
     enabled: body.enabled !== false,
     isDefault: body.isDefault === true,
-    branding: {
-      appName: normalizeString(body.branding?.appName),
-      logoUrl: normalizeString(body.branding?.logoUrl),
-      themeColor: normalizeString(body.branding?.themeColor),
-    },
     runtimeConfig: {
       features: body.runtimeConfig?.features ?? {},
       values: body.runtimeConfig?.values ?? {},
@@ -282,22 +275,11 @@ export async function updateMiniApp(ctx: Context): Promise<void> {
   if (name) {
     row.name = name
   }
-  if (typeof body.appType === 'string') {
-    row.appType = body.appType === 'viewer' ? 'viewer' : 'tour'
-  }
   if (typeof body.enabled === 'boolean') {
     row.enabled = body.enabled
   }
   if (typeof body.isDefault === 'boolean') {
     row.isDefault = body.isDefault
-  }
-
-  if (body.branding && typeof body.branding === 'object') {
-    row.branding = {
-      appName: normalizeString(body.branding.appName),
-      logoUrl: normalizeString(body.branding.logoUrl),
-      themeColor: normalizeString(body.branding.themeColor),
-    }
   }
   if (body.runtimeConfig && typeof body.runtimeConfig === 'object') {
     row.runtimeConfig = {

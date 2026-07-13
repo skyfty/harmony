@@ -3,8 +3,8 @@ import { detectMiniPlatform } from '@mini-platform/core';
 
 const apiBaseUrl = import.meta.env.VITE_MINI_TEST_API_BASE || import.meta.env.VITE_MINI_API_BASE || '';
 
-let cachedRuntimeConfig: MiniRuntimeConfig | null = null;
-let pendingRuntimeConfig: MiniRuntimeConfig | null | Promise<MiniRuntimeConfig> = null;
+const runtimeConfigCache = new Map<string, MiniRuntimeConfig>();
+const pendingRuntimeConfigMap = new Map<string, Promise<MiniRuntimeConfig>>();
 
 export function getMiniAppKey(): string {
   return String(import.meta.env.VITE_MINI_APP_KEY ?? '').trim();
@@ -15,20 +15,27 @@ export function getMiniApiBaseUrl(): string {
 }
 
 export function getCachedMiniRuntimeConfig(): MiniRuntimeConfig | null {
-  return cachedRuntimeConfig;
+  const appKey = getMiniAppKey();
+  const platform = detectMiniPlatform();
+  return runtimeConfigCache.get(`${appKey}::${platform}`) ?? null;
 }
 
 export async function ensureMiniRuntimeConfig(): Promise<MiniRuntimeConfig> {
+  const appKey = getMiniAppKey();
+  const platform = detectMiniPlatform();
+  const cacheKey = `${appKey}::${platform}`;
+
+  const cachedRuntimeConfig = runtimeConfigCache.get(cacheKey);
   if (cachedRuntimeConfig) {
     return cachedRuntimeConfig;
   }
-  if (pendingRuntimeConfig && !(pendingRuntimeConfig instanceof Promise)) {
-    return pendingRuntimeConfig;
+
+  const pendingRuntimeConfig = pendingRuntimeConfigMap.get(cacheKey);
+  if (pendingRuntimeConfig) {
+    return await pendingRuntimeConfig;
   }
 
-  const appKey = getMiniAppKey();
-  const platform = detectMiniPlatform();
-  pendingRuntimeConfig = new Promise<MiniRuntimeConfig>((resolve, reject) => {
+  const requestPromise = new Promise<MiniRuntimeConfig>((resolve, reject) => {
     uni.request({
       url: `${getMiniApiBaseUrl()}/api/mini/runtime-config`,
       method: 'GET',
@@ -41,20 +48,22 @@ export async function ensureMiniRuntimeConfig(): Promise<MiniRuntimeConfig> {
         platform,
       },
       success: (response) => {
-        cachedRuntimeConfig = response.data as MiniRuntimeConfig;
-        pendingRuntimeConfig = cachedRuntimeConfig;
+        const runtimeConfig = response.data as MiniRuntimeConfig;
+        runtimeConfigCache.set(cacheKey, runtimeConfig);
+        pendingRuntimeConfigMap.delete(cacheKey);
         (globalThis as typeof globalThis & { __miniPlatformRuntime?: { apiBaseUrl?: string; runtimeConfig?: MiniRuntimeConfig } }).__miniPlatformRuntime = {
           apiBaseUrl: getMiniApiBaseUrl(),
-          runtimeConfig: cachedRuntimeConfig,
+          runtimeConfig,
         };
-        resolve(cachedRuntimeConfig);
+        resolve(runtimeConfig);
       },
       fail: (error) => {
-        pendingRuntimeConfig = null;
+        pendingRuntimeConfigMap.delete(cacheKey);
         reject(error);
       },
     });
   });
 
-  return await pendingRuntimeConfig;
+  pendingRuntimeConfigMap.set(cacheKey, requestPromise);
+  return await requestPromise;
 }
