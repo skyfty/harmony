@@ -14,6 +14,21 @@ function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function toIsoString(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString()
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return null
+    }
+    const parsed = new Date(trimmed)
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+  }
+  return null
+}
+
 function mapMiniAppPolicy(kind: 'user-service-agreement' | 'privacy-policy', row: any) {
   const fallback = getDefaultMiniAppPolicyContent(kind)
   const source = kind === 'user-service-agreement' ? row.userServiceAgreement : row.privacyPolicy
@@ -118,8 +133,8 @@ function mapMiniApp(row: any, platformConfigs: any[] = []) {
       result[item.platform] = item.enabled && item.appId && item.appSecret ? 'configured' : item.enabled ? 'incomplete' : 'disabled'
       return result
     }, {}),
-    createdAt: row.createdAt?.toISOString?.() ?? new Date(row.createdAt).toISOString(),
-    updatedAt: row.updatedAt?.toISOString?.() ?? new Date(row.updatedAt).toISOString(),
+    createdAt: toIsoString(row.createdAt),
+    updatedAt: toIsoString(row.updatedAt),
   }
 }
 

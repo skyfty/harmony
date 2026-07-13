@@ -769,7 +769,6 @@ import {
 import {
   viewPointComponentDefinition,
   VIEW_POINT_COMPONENT_TYPE,
-  applyViewPointCameraProjection,
   resolveViewPointComponentProps,
   resolveViewPointWorldCameraPose,
   type ViewPointComponentProps,
@@ -1401,11 +1400,6 @@ async function loadKtx2TextureFromUrl(
     ? new PlatformKTX2Loader(manager).detectSupport(renderer)
     : await createKtx2Loader(renderer, { manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH })
   return await ktx2Loader.loadAsync(url)
-}
-
-
-function getGroundVertexCount(rows: number, columns: number): number {
-  return (Math.max(1, Math.trunc(rows)) + 1) * (Math.max(1, Math.trunc(columns)) + 1);
 }
 
 // Debug switch: when disabled, do not render the overlay and do not compute debug stats.
@@ -4560,7 +4554,6 @@ type CameraWatchTransitionPlan = {
 
 let activeCameraWatchTween: CameraWatchTween | null = null;
 let activeWatchTransitionPlan: CameraWatchTransitionPlan | null = null;
-let watchCameraSuppressionLogged = false;
 type FrameDeltaMode = 'seconds' | 'milliseconds';
 let frameDeltaMode: FrameDeltaMode | null = null;
 
@@ -14381,10 +14374,6 @@ function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function formatWatchVector3(vec: THREE.Vector3): string {
-  return `${vec.x.toFixed(2)},${vec.y.toFixed(2)},${vec.z.toFixed(2)}`;
-}
-
 
 function resolveWatchTargetQuaternion(
   position: THREE.Vector3,
@@ -15048,7 +15037,6 @@ function clearActiveWatchState(): void {
   activeWatchSource.value = null;
   watchUiRestoreState.value = null;
   activeWatchTransitionPlan = null;
-  watchCameraSuppressionLogged = false;
 }
 
 function restoreWatchUiState(): void {
@@ -15174,7 +15162,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
     setCameraViewState('watching', targetNodeId);
     return { success: true };
   }
-  const { camera, controls } = context;
+  const { camera } = context;
   const viewPointProps = resolveViewPointPropsForNodeId(targetNodeId);
   const targetObject = targetNodeId ? nodeObjectMap.get(targetNodeId) ?? null : null;
   captureWatchRestoreSnapshotIfNeeded(targetNodeId);

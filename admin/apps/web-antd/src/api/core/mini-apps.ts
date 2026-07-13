@@ -83,8 +83,8 @@ export interface MiniAppItem {
   platformConfigs: MiniAppPlatformConfig[];
   configuredPlatforms: MiniPlatformKind[];
   platformHealth: Partial<Record<MiniPlatformKind, 'configured' | 'disabled' | 'incomplete'>>;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 export async function listMiniAppsApi(params?: { enabled?: boolean; keyword?: string }) {

@@ -82,6 +82,21 @@ function normalizePolicyText(value: unknown, fallback: string): string {
   return text || fallback
 }
 
+function toIsoString(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString()
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return null
+    }
+    const parsed = new Date(trimmed)
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+  }
+  return null
+}
+
 function splitParagraphs(content: string): string[] {
   return String(content ?? '')
     .replace(/\r\n/g, '\n')
@@ -164,12 +179,7 @@ export function mapPolicyContent(kind: MiniAppPolicyKind, content?: Partial<Mini
     content: normalized.content,
     fileKey: normalized.fileKey,
     fileUrl: normalized.fileUrl,
-    generatedAt:
-      normalized.generatedAt instanceof Date
-        ? normalized.generatedAt.toISOString()
-        : typeof normalized.generatedAt === 'string'
-          ? normalized.generatedAt
-          : null,
+    generatedAt: toIsoString(normalized.generatedAt),
     version: normalized.version,
   }
 }
