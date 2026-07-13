@@ -951,6 +951,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
   position: absolute;
   border-radius: 999px;
   filter: blur(2px);
+  z-index: 0;
   pointer-events: none;
 }
 
@@ -987,10 +988,13 @@ function getErrorMessage(error: unknown, fallback: string): string {
   background: linear-gradient(120deg, transparent 28%, rgba(255, 255, 255, 0.12) 46%, transparent 62%);
   transform: translateX(-40%);
   animation: shineSweep 10s ease-in-out infinite;
+  z-index: 0;
   pointer-events: none;
 }
 
-.hero-card > :not(.hero-card__glow):not(.hero-card__line) {
+.hero-title,
+.hero-order,
+.hero-badges {
   position: relative;
   z-index: 1;
 }

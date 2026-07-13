@@ -98,7 +98,7 @@ export async function uploadProfileAvatar(filePath: string): Promise<string> {
       name: 'avatar',
       timeout: 30000,
       header: token ? { Authorization: `Bearer ${token}` } : undefined,
-      success: (response) => {
+      success: (response: { statusCode?: number; data?: string | unknown }) => {
         const statusCode = Number(response.statusCode ?? 0)
         const bodyText = typeof response.data === 'string' ? response.data : ''
         if (!bodyText) {

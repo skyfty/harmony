@@ -281,6 +281,7 @@ export async function loginWithMiniCode(code: string, displayName?: string): Pro
     ...(typeof displayName === 'string' && displayName ? { displayName } : {}),
   }) as MiniAuthLoginResponse
 
+  logMiniAuth('/mini/auth/login response received',data)
   logMiniAuth('/mini/auth/login response received', {
     hasToken: typeof data.accessToken === 'string' || typeof data.token === 'string',
   })

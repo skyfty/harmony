@@ -33,8 +33,8 @@ docker compose -f docker-compose.prod.yml ps
 docker compose -f docker-compose.prod.yml build mongo
 docker compose -f docker-compose.prod.yml up -d mongo
 
-docker compose -f docker-compose.prod.yml build server
-docker compose -f docker-compose.prod.yml up -d server
+docker compose -f docker-compose.prod.yml build admin
+docker compose -f docker-compose.prod.yml up -d admin
 docker compose -f docker-compose.prod.yml logs -f server
 
 docker system prune -a -f

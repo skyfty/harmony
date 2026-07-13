@@ -7,11 +7,18 @@ let cachedRuntimeConfig: MiniRuntimeConfig | null = null;
 let pendingRuntimeConfig: MiniRuntimeConfig | null | Promise<MiniRuntimeConfig | null> = null;
 
 export function getMiniAppKey(): string {
-  return String(import.meta.env.VITE_MINI_APP_KEY ?? '').trim();
+  return String(import.meta.env.VITE_MINI_APP_KEY ?? import.meta.env.VITE_MINI_APP_ID ?? '').trim();
 }
 
 export function getMiniApiBaseUrl(): string {
   return String(apiBaseUrl).replace(/\/$/, '');
+}
+
+function getMiniRuntimeConfigUrl(): string {
+  const baseUrl = getMiniApiBaseUrl();
+  return baseUrl.endsWith('/api/mini')
+    ? `${baseUrl}/runtime-config`
+    : `${baseUrl}/api/mini/runtime-config`;
 }
 
 export async function ensureMiniRuntimeConfig(): Promise<MiniRuntimeConfig | null> {
@@ -30,7 +37,7 @@ export async function ensureMiniRuntimeConfig(): Promise<MiniRuntimeConfig | nul
   const platform = detectMiniPlatform();
   pendingRuntimeConfig = new Promise((resolve) => {
     uni.request({
-      url: `${getMiniApiBaseUrl()}/api/mini/runtime-config`,
+      url: getMiniRuntimeConfigUrl(),
       method: 'GET',
       header: {
         'X-Mini-App-Key': appKey,

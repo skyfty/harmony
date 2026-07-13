@@ -22,6 +22,20 @@ type MiniPlatformRuntimeState = {
   };
 };
 
+type MiniApiEnvelope<T> = {
+  code: number;
+  data: T;
+  message: string;
+};
+
+function isMiniApiEnvelope<T>(value: unknown): value is MiniApiEnvelope<T> {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.code === 'number' && 'data' in candidate && typeof candidate.message === 'string';
+}
+
 async function requestMiniApi<T>(path: string, options: {
   body?: Record<string, unknown>;
   headers?: Record<string, string>;
@@ -29,16 +43,38 @@ async function requestMiniApi<T>(path: string, options: {
 }): Promise<T> {
   const runtime = getRuntimeState();
   const baseUrl = String(runtime.apiBaseUrl ?? '').replace(/\/$/, '');
+  const apiBaseUrl = baseUrl.endsWith('/api/mini') ? baseUrl : `${baseUrl}/api/mini`;
   return await new Promise<T>((resolve, reject) => {
     uni.request({
-      url: `${baseUrl}/api/mini${path}`,
+      url: `${apiBaseUrl}${path}`,
       method: options.method ?? 'POST',
       header: {
         'Content-Type': 'application/json',
         ...(options.headers ?? {}),
       },
       data: options.body ?? {},
-      success: (response) => resolve(response.data as T),
+      success: (response: { statusCode?: number; data?: unknown }) => {
+        const statusCode = Number(response.statusCode ?? 0);
+        const data = response.data as unknown;
+        if (statusCode < 200 || statusCode >= 300) {
+          const message = typeof (data as { message?: unknown } | undefined)?.message === 'string'
+            ? String((data as { message: string }).message)
+            : `HTTP ${statusCode}`;
+          reject(new Error(message));
+          return;
+        }
+
+        if (isMiniApiEnvelope<T>(data)) {
+          if (data.code !== 0) {
+            reject(new Error(data.message || 'API request failed'));
+            return;
+          }
+          resolve(data.data);
+          return;
+        }
+
+        resolve(data as T);
+      },
       fail: (error: unknown) => reject(error),
     });
   });
@@ -86,7 +122,7 @@ async function genericBindPhone(payload: UnifiedPhonePayload, platform: MiniPlat
 async function getSystemInfo(): Promise<UnifiedSystemInfo> {
   return await new Promise((resolve) => {
     uni.getSystemInfo({
-      success: (result) => {
+      success: (result: { platform?: string; model?: string; system?: string }) => {
         resolve({
           platform: String(result.platform ?? ''),
           model: String(result.model ?? ''),
@@ -152,11 +188,11 @@ function chooseFileByUni(options: UnifiedChooseFileOptions): Promise<unknown[]> 
     uni.chooseFile({
       count: options.count ?? 1,
       extension: options.extension ?? [],
-      success: (result) => {
+      success: (result: { tempFiles?: unknown[] | unknown }) => {
         const files = Array.isArray(result.tempFiles) ? result.tempFiles : [result.tempFiles];
         resolve(files.filter(Boolean));
       },
-      fail: (error) => reject(error),
+      fail: (error: unknown) => reject(error),
     });
   });
 }
@@ -304,7 +340,7 @@ function createAdapter(platform: MiniPlatform, provider: string | null): MiniPla
             }
             resolve(result.code);
           },
-          fail: (error) => reject(error),
+          fail: (error: unknown) => reject(error),
         });
       });
     },
