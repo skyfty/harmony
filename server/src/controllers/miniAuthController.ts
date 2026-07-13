@@ -205,8 +205,9 @@ export async function miniLogin(ctx: Context): Promise<void> {
 }
 
 export async function miniWechatLogin(ctx: Context): Promise<void> {
-  const { code, miniAppId, displayName, avatarUrl } = ctx.request.body as {
+  const { code, appKey, miniAppId, displayName, avatarUrl } = ctx.request.body as {
     code?: string
+    appKey?: string
     miniAppId?: string
     displayName?: string
     avatarUrl?: string
@@ -217,11 +218,14 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
   console.log('[mini-wechat-login] code received', { code: typeof code === 'string' ? `${code.slice(0, 6)}***` : code, miniAppId, displayName, avatarUrl })
   try {
     const requestedMiniAppId =
+      (typeof appKey === 'string' && appKey.trim()) ||
       (typeof miniAppId === 'string' && miniAppId.trim()) ||
       (typeof ctx.get === 'function' ? ctx.get('X-Mini-App-Id') : '') ||
       undefined
-    const identity = await exchangeMiniProgramCode(code, requestedMiniAppId)
+    const identity = await exchangeMiniProgramCode(code, requestedMiniAppId, 'wechat')
     const session = await miniLoginWithOpenId({
+      appKey: identity.appKey,
+      platform: 'wechat',
       miniAppId: identity.miniAppId,
       openId: identity.openId,
       unionId: identity.unionId,
@@ -250,6 +254,7 @@ export async function miniWechatLogin(ctx: Context): Promise<void> {
     ctx.body = session
   } catch (error) {
     const requestedMiniAppId =
+      (typeof appKey === 'string' && appKey.trim()) ||
       (typeof miniAppId === 'string' && miniAppId.trim()) ||
       (typeof ctx.get === 'function' ? ctx.get('X-Mini-App-Id') : '') ||
       undefined
@@ -289,8 +294,9 @@ export async function miniBindWechatPhone(ctx: Context): Promise<void> {
     ctx.throw(401, 'Unauthorized')
   }
 
-  const { code, miniAppId } = ctx.request.body as {
+  const { code, appKey, miniAppId } = ctx.request.body as {
     code?: string
+    appKey?: string
     miniAppId?: string
   }
   if (!code) {
@@ -298,7 +304,9 @@ export async function miniBindWechatPhone(ctx: Context): Promise<void> {
   }
 
   const requestedMiniAppId =
+    (typeof appKey === 'string' && appKey.trim()) ||
     (typeof miniAppId === 'string' && miniAppId.trim()) ||
+    ctx.state.miniAuthUser?.appKey ||
     (typeof ctx.get === 'function' ? ctx.get('X-Mini-App-Id') : '') ||
     ctx.state.miniAuthUser?.miniAppId ||
     undefined
@@ -307,6 +315,8 @@ export async function miniBindWechatPhone(ctx: Context): Promise<void> {
     ctx.body = await miniBindPhone({
       userId,
       code,
+      appKey: requestedMiniAppId,
+      platform: 'wechat',
       miniAppId: requestedMiniAppId,
     })
   } catch (error) {

@@ -18,6 +18,8 @@ declare module 'koa' {
     }
     miniAuthUser?: {
       id: string
+      appKey?: string
+      platform?: 'wechat' | 'douyin' | 'xiaohongshu'
       miniAppId?: string
       username?: string
       wxOpenId?: string

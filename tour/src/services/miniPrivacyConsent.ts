@@ -1,4 +1,5 @@
 import { getMiniAppPolicies, type MiniPolicyDocument } from '@/api/mini/policies'
+import { getMiniAppKey } from '@/platform/runtime'
 
 type MiniPrivacyConsentRecord = {
   acceptedAt: string
@@ -19,13 +20,9 @@ type MiniPrivacyConsentSummary = {
 
 const MINI_PRIVACY_CONSENT_STORAGE_PREFIX = 'tour:mini-privacy-consent:v1'
 
-function getMiniAppId(): string {
-  return String(import.meta.env.VITE_MINI_APP_ID ?? '').trim()
-}
-
 function getStorageKey(): string {
-  const miniAppId = getMiniAppId() || 'default'
-  return `${MINI_PRIVACY_CONSENT_STORAGE_PREFIX}:${miniAppId}`
+  const appKey = getMiniAppKey() || 'default'
+  return `${MINI_PRIVACY_CONSENT_STORAGE_PREFIX}:${appKey}`
 }
 
 function safeJsonParse<T>(raw: unknown): T | null {
@@ -68,7 +65,7 @@ export function readMiniPrivacyConsentRecord(): MiniPrivacyConsentRecord | null 
 
 export async function loadMiniPrivacyConsentSummary(): Promise<MiniPrivacyConsentSummary> {
   const record = readMiniPrivacyConsentRecord()
-  const response = await getMiniAppPolicies(getMiniAppId() || undefined)
+  const response = await getMiniAppPolicies(getMiniAppKey() || undefined)
   const policies = response.policies
   const accepted =
     Boolean(record) &&

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onLaunch, onShow, onHide } from "@dcloudio/uni-app";
+import { ensureMiniRuntimeConfig } from '@/platform/runtime';
 
 onLaunch(() => {
+  void ensureMiniRuntimeConfig();
   console.log("App Launch");
 });
 onShow(() => {

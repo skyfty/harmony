@@ -17,7 +17,7 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
-import { bindWechatPhone } from '@/api/mini';
+import { bindMiniPhone } from '@/api/mini';
 
 defineProps<{
   modelValue: boolean;
@@ -46,7 +46,7 @@ async function handleGetPhoneNumber(event: { detail?: { code?: string } }) {
 
   loading.value = true;
   try {
-    await bindWechatPhone(code);
+    await bindMiniPhone(code);
     emit('bound');
     emit('update:modelValue', false);
   } catch {

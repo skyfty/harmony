@@ -117,6 +117,8 @@ export interface FileUploadDocument extends Document<Types.ObjectId> {
 }
 
 export interface AppUserDocument extends Document<Types.ObjectId> {
+  appKey?: string
+  platform?: 'wechat' | 'douyin' | 'xiaohongshu'
   miniAppId?: string
   username?: string
   password?: string
@@ -224,6 +226,69 @@ export interface MiniAppWechatPayConfig {
   mockPlatformPrivateKey?: string
 }
 
+export type MiniPlatformKind = 'wechat' | 'douyin' | 'xiaohongshu'
+export type MiniAppType = 'tour' | 'viewer'
+
+export interface MiniAppBrandingConfig {
+  appName?: string
+  logoUrl?: string
+  themeColor?: string
+}
+
+export interface MiniAppRuntimeConfig {
+  features?: Record<string, boolean>
+  values?: Record<string, string | number | boolean | null>
+}
+
+export interface MiniAppPlatformLoginConfig {
+  enabled: boolean
+  scopes?: string[]
+  extConfig?: Record<string, unknown>
+}
+
+export interface MiniAppPlatformPaymentConfig {
+  enabled: boolean
+  channel?: string
+  mchId?: string
+  serialNo?: string
+  privateKey?: string
+  apiV3Key?: string
+  notifyUrl?: string
+  refundNotifyUrl?: string
+  baseUrl?: string
+  platformPublicKey?: string
+  callbackSkipVerifyInDev?: boolean
+  mockPlatformPrivateKey?: string
+  extConfig?: Record<string, unknown>
+}
+
+export interface MiniAppPlatformShareConfig {
+  enabled: boolean
+  defaultPath?: string
+  defaultTitle?: string
+  posterEnabled?: boolean
+  qrCodeRuleLink?: string
+  extConfig?: Record<string, unknown>
+}
+
+export interface MiniAppPlatformPrivacyConfig {
+  enabled: boolean
+  requireConsentBeforeUse?: boolean
+  extConfig?: Record<string, unknown>
+}
+
+export interface MiniAppPlatformUpdateConfig {
+  enabled: boolean
+  promptMode?: 'none' | 'soft' | 'force'
+  extConfig?: Record<string, unknown>
+}
+
+export interface MiniAppPlatformNavigateConfig {
+  enabled: boolean
+  landingPage?: string
+  extConfig?: Record<string, unknown>
+}
+
 export type MiniAppPolicyKind = 'user-service-agreement' | 'privacy-policy'
 
 export interface MiniAppPolicyContent {
@@ -236,14 +301,32 @@ export interface MiniAppPolicyContent {
 }
 
 export interface MiniAppDocument extends Document<Types.ObjectId> {
-  miniAppId: string
+  appKey: string
+  appType: MiniAppType
   name: string
-  appSecret: string
   enabled: boolean
   isDefault: boolean
-  wechatPay: MiniAppWechatPayConfig
+  branding?: MiniAppBrandingConfig
+  runtimeConfig?: MiniAppRuntimeConfig
   userServiceAgreement: MiniAppPolicyContent
   privacyPolicy: MiniAppPolicyContent
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface MiniAppPlatformConfigDocument extends Document<Types.ObjectId> {
+  appKey: string
+  platform: MiniPlatformKind
+  enabled: boolean
+  appId: string
+  appSecret: string
+  loginConfig: MiniAppPlatformLoginConfig
+  paymentConfig: MiniAppPlatformPaymentConfig
+  shareConfig: MiniAppPlatformShareConfig
+  privacyConfig: MiniAppPlatformPrivacyConfig
+  updateConfig: MiniAppPlatformUpdateConfig
+  navigateConfig: MiniAppPlatformNavigateConfig
+  extConfig?: Record<string, unknown>
   createdAt: Date
   updatedAt: Date
 }

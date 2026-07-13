@@ -137,6 +137,8 @@ import {
   deleteMiniApp,
   getMiniApp,
   listMiniApps,
+  listMiniAppPlatforms,
+  updateMiniAppPlatform,
   updateMiniApp,
 } from '@/controllers/admin/miniAppController'
 import {
@@ -393,6 +395,8 @@ adminRouter.get('/mini-apps', requireAnyPermission(['admin:super']), listMiniApp
 adminRouter.get('/mini-apps/:id', requireAnyPermission(['admin:super']), getMiniApp)
 adminRouter.post('/mini-apps', requireAnyPermission(['admin:super']), createMiniApp)
 adminRouter.put('/mini-apps/:id', requireAnyPermission(['admin:super']), updateMiniApp)
+adminRouter.get('/mini-apps/:id/platforms', requireAnyPermission(['admin:super']), listMiniAppPlatforms)
+adminRouter.put('/mini-apps/:id/platforms/:platform', requireAnyPermission(['admin:super']), updateMiniAppPlatform)
 adminRouter.delete('/mini-apps/:id', requireAnyPermission(['admin:super']), deleteMiniApp)
 
 adminRouter.get('/resources/assets', requireAnyPermission(['resource:read']), listAssets)

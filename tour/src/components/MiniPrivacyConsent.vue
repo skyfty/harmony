@@ -38,6 +38,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { MiniPolicyDocument } from '@/api/mini/policies'
+import { getMiniPlatformAdapter } from '@/platform/adapter'
 import { acceptMiniPrivacyConsent, hasMiniPrivacyConsent, loadMiniPrivacyConsentSummary } from '@/services/miniPrivacyConsent'
 
 type PrivacyResolve = (granted?: boolean) => void
@@ -138,9 +139,7 @@ function handleNeedPrivacyAuthorization(resolve: PrivacyResolve, _eventInfo?: un
 
 onMounted(() => {
   void refresh()
-  if (typeof wx !== 'undefined' && typeof wx.onNeedPrivacyAuthorization === 'function') {
-    wx.onNeedPrivacyAuthorization(handleNeedPrivacyAuthorization as never)
-  }
+  getMiniPlatformAdapter().registerPrivacyAuthorizationListener?.(handleNeedPrivacyAuthorization)
 })
 
 onBeforeUnmount(() => {

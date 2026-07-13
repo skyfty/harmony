@@ -6,7 +6,7 @@ import type { MiniAppDocument, MiniAppPolicyContent, MiniAppPolicyKind } from '@
 export type MiniAppPolicyFilePayload = {
   format: 'harmony-mini-app-policy'
   kind: MiniAppPolicyKind
-  miniAppId: string
+  appKey: string
   title: string
   content: string
   paragraphs: string[]
@@ -73,8 +73,8 @@ const DEFAULT_POLICY_CONTENTS: Record<MiniAppPolicyKind, { title: string; conten
   },
 }
 
-function normalizeMiniAppId(miniAppId: string): string {
-  return String(miniAppId ?? '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-')
+function normalizeAppKey(appKey: string): string {
+  return String(appKey ?? '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-')
 }
 
 function normalizePolicyText(value: unknown, fallback: string): string {
@@ -90,8 +90,8 @@ function splitParagraphs(content: string): string[] {
     .filter(Boolean)
 }
 
-function buildPolicyFileKey(miniAppId: string, kind: MiniAppPolicyKind): string {
-  return `${POLICY_DIRECTORY}/${normalizeMiniAppId(miniAppId)}/${kind}.json`
+function buildPolicyFileKey(appKey: string, kind: MiniAppPolicyKind): string {
+  return `${POLICY_DIRECTORY}/${normalizeAppKey(appKey)}/${kind}.json`
 }
 
 function buildPolicyFileUrl(fileKey: string): string {
@@ -100,7 +100,7 @@ function buildPolicyFileUrl(fileKey: string): string {
 }
 
 function buildPolicyPayload(
-  miniAppId: string,
+  appKey: string,
   kind: MiniAppPolicyKind,
   content: string,
   version: number,
@@ -112,7 +112,7 @@ function buildPolicyPayload(
   return {
     format: 'harmony-mini-app-policy',
     kind,
-    miniAppId: miniAppId.trim(),
+    appKey: appKey.trim(),
     title,
     content: normalizedContent,
     paragraphs: splitParagraphs(normalizedContent),
@@ -183,11 +183,11 @@ export async function syncMiniAppPolicyFiles(app: MiniAppDocument): Promise<void
   let touched = false
   for (const entry of policyEntries) {
     const normalizedContent = normalizeMiniAppPolicyContent(entry.kind, entry.field)
-    const fileKey = buildPolicyFileKey(app.miniAppId, entry.kind)
+    const fileKey = buildPolicyFileKey(app.appKey, entry.kind)
     const fileUrl = await writePolicyFile(
       fileKey,
       buildPolicyPayload(
-        app.miniAppId,
+        app.appKey,
         entry.kind,
         normalizedContent.content,
         normalizedContent.version + 1,

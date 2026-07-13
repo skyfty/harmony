@@ -23,7 +23,7 @@ export async function createSceneryPhysicsBridge(engine?: PhysicsBackendPreferen
 
   return createWechatPhysicsBridge({
     subpackageName: backend.subpackageName,
-    loadSubpackage: loadWechatSubpackage,
+    loadSubpackage: loadMiniSubpackage,
     createWorker: () => createInMemoryWechatPhysicsWorker(backend.createController()),
   });
 }
@@ -32,8 +32,32 @@ function resolvePhysicsBackendId(engine: PhysicsBackendPreference | undefined): 
   return engine === 'ammo' ? 'ammo' : 'cannon';
 }
 
-function loadWechatSubpackage(name: string): Promise<void> {
-  const wxAny = typeof wx !== 'undefined' ? (wx as typeof wx & { loadSubpackage?: (...args: any[]) => any }) : null;
+function loadMiniSubpackage(name: string): Promise<void> {
+  const uniAny = typeof uni !== 'undefined' ? (uni as typeof uni & { loadSubPackage?: (options: {
+    name: string;
+    success: () => void;
+    fail: (error: unknown) => void;
+    complete?: () => void;
+  }) => unknown }) : null;
+  const uniLoadSubPackage = uniAny?.loadSubPackage;
+  if (typeof uniLoadSubPackage === 'function') {
+    return new Promise<void>((resolve, reject) => {
+      const task = uniLoadSubPackage({
+        name,
+        success: () => resolve(),
+        fail: (error: unknown) => reject(error),
+      });
+      const taskAny = task as { onError?: (callback: (error: unknown) => void) => void } | null;
+      taskAny?.onError?.((error: unknown) => reject(error));
+    });
+  }
+
+  const wxAny = typeof wx !== 'undefined' ? (wx as typeof wx & { loadSubpackage?: (options: {
+    name: string;
+    success: () => void;
+    fail: (error: unknown) => void;
+    complete?: () => void;
+  }) => unknown }) : null;
   if (!wxAny || typeof wxAny.loadSubpackage !== 'function') {
     return Promise.resolve();
   }

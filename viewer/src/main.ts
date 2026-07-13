@@ -1,4 +1,4 @@
-// #ifndef H5
+// #ifdef MP-WEIXIN
 import '@minisheep/mini-program-polyfill-core/wechat-polyfill';
 // import '@minisheep/mini-program-polyfill-core/xml-addon'; // if the project needs DOMParser support later, import it here
 // #endif

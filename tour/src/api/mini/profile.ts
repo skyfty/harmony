@@ -1,5 +1,7 @@
 import type { Gender, UserProfile } from '@/types/profile'
 import { getApiOrigin, miniRequest } from '@harmony/utils'
+import { getMiniPlatformAdapter } from '@/platform/adapter'
+import { getMiniAppKey } from '@/platform/runtime'
 import { ensureMiniAuth } from './session'
 import { getAccessToken, setAccessToken } from './token'
 import { applyAnonymousProfileView, setAnonymousDisplayEnabled } from '@/utils/miniProfile'
@@ -136,14 +138,20 @@ export async function uploadProfileAvatar(filePath: string): Promise<string> {
   return avatarUrl
 }
 
-export async function bindWechatPhone(code: string): Promise<UserProfile> {
+export async function bindMiniPhone(code: string): Promise<UserProfile> {
   await ensureMiniAuth()
-  const response = await miniRequest<MiniProfileResponse>('/mini-auth/bind-phone', {
-    method: 'POST',
-    body: { code },
-  })
+  const appKey = getMiniAppKey()
+  const adapter = getMiniPlatformAdapter()
+  const response = adapter.requestPhoneNumber
+    ? await adapter.requestPhoneNumber({ code, appKey })
+    : await miniRequest<MiniProfileResponse>('/mini-auth/bind-phone', {
+        method: 'POST',
+        body: { code },
+      })
   if (response.token) {
     setAccessToken(response.token)
   }
-  return toUserProfile(response.user)
+  return toUserProfile((response.user ?? {}) as MiniProfileUser)
 }
+
+export const bindWechatPhone = bindMiniPhone

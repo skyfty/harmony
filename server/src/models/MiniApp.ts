@@ -15,32 +15,32 @@ const miniAppPolicyContentSchema = new Schema(
   },
 )
 
-const miniAppWechatPaySchema = new Schema(
+const miniAppBrandingSchema = new Schema(
   {
-    enabled: { type: Boolean, default: false },
-    mchId: { type: String, trim: true, default: '' },
-    serialNo: { type: String, trim: true, default: '' },
-    privateKey: { type: String, default: '' },
-    apiV3Key: { type: String, trim: true, default: '' },
-    notifyUrl: { type: String, trim: true, default: '' },
-    baseUrl: { type: String, trim: true, default: 'https://api.mch.weixin.qq.com' },
-    platformPublicKey: { type: String, default: '' },
-    callbackSkipVerifyInDev: { type: Boolean, default: false },
-    mockPlatformPrivateKey: { type: String, default: '' },
+    appName: { type: String, trim: true, default: '' },
+    logoUrl: { type: String, trim: true, default: '' },
+    themeColor: { type: String, trim: true, default: '' },
   },
+  { _id: false },
+)
+
+const miniAppRuntimeConfigSchema = new Schema(
   {
-    _id: false,
+    features: { type: Schema.Types.Mixed, default: () => ({}) },
+    values: { type: Schema.Types.Mixed, default: () => ({}) },
   },
+  { _id: false },
 )
 
 const miniAppSchema = new Schema<MiniAppDocument>(
   {
-    miniAppId: { type: String, required: true, trim: true, unique: true },
+    appKey: { type: String, required: true, trim: true, unique: true },
+    appType: { type: String, enum: ['tour', 'viewer'], required: true, default: 'tour' },
     name: { type: String, required: true, trim: true },
-    appSecret: { type: String, required: true },
     enabled: { type: Boolean, default: true },
     isDefault: { type: Boolean, default: false },
-    wechatPay: { type: miniAppWechatPaySchema, default: () => ({ enabled: false }) },
+    branding: { type: miniAppBrandingSchema, default: () => ({}) },
+    runtimeConfig: { type: miniAppRuntimeConfigSchema, default: () => ({}) },
     userServiceAgreement: {
       type: miniAppPolicyContentSchema,
       default: () => ({
@@ -70,7 +70,7 @@ const miniAppSchema = new Schema<MiniAppDocument>(
   },
 )
 
-miniAppSchema.index({ miniAppId: 1 }, { unique: true })
+miniAppSchema.index({ appKey: 1 }, { unique: true })
 miniAppSchema.index({ enabled: 1, isDefault: 1 })
 
 export const MiniAppModel = model<MiniAppDocument>('MiniApp', miniAppSchema, 'mini_apps')

@@ -62,7 +62,7 @@ import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
-import { bindWechatPhone, getProfile } from '@/api/mini';
+import { bindMiniPhone, getProfile } from '@/api/mini';
 import { requestProfileAndSync } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
@@ -166,7 +166,7 @@ async function handleGetPhoneNumber(event: { detail?: { code?: string; errMsg?: 
   }
 
   try {
-    profile.value = await bindWechatPhone(code);
+    profile.value = await bindMiniPhone(code);
     uni.showToast({ title: '手机号已绑定', icon: 'none' });
   } catch {
     uni.showToast({ title: '手机号绑定失败', icon: 'none' });

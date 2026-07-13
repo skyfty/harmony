@@ -12,13 +12,13 @@ export interface MiniPolicyDocument {
 }
 
 export interface MiniPolicyResponse {
-  miniAppId: string
+  appKey: string
   kind: MiniPolicyKind
   policy: MiniPolicyDocument
 }
 
 export interface MiniPoliciesResponse {
-  miniAppId: string
+  appKey: string
   policies: {
     userServiceAgreement: MiniPolicyDocument
     privacyPolicy: MiniPolicyDocument
@@ -28,7 +28,7 @@ export interface MiniPoliciesResponse {
 export interface MiniPolicyFile {
   format: 'harmony-mini-app-policy'
   kind: MiniPolicyKind
-  miniAppId: string
+  appKey: string
   title: string
   content: string
   paragraphs: string[]
@@ -37,24 +37,24 @@ export interface MiniPolicyFile {
   updatedAt: string
 }
 
-export async function getMiniAppPolicy(kind: MiniPolicyKind, miniAppId?: string): Promise<MiniPolicyResponse> {
+export async function getMiniAppPolicy(kind: MiniPolicyKind, appKey?: string): Promise<MiniPolicyResponse> {
   return await miniRequest<MiniPolicyResponse>('/mini-apps/policies', {
     method: 'GET',
     auth: false,
     query: {
       kind,
-      ...(miniAppId ? { miniAppId } : {}),
+      ...(appKey ? { appKey } : {}),
     },
   })
 }
 
-export async function getMiniAppPolicies(miniAppId?: string): Promise<MiniPoliciesResponse> {
+export async function getMiniAppPolicies(appKey?: string): Promise<MiniPoliciesResponse> {
   return await miniRequest<MiniPoliciesResponse>('/mini-apps/policies', {
     method: 'GET',
     auth: false,
     query: {
       kind: 'all',
-      ...(miniAppId ? { miniAppId } : {}),
+      ...(appKey ? { appKey } : {}),
     },
   })
 }

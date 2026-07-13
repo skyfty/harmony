@@ -30,6 +30,8 @@ function decodeJwtPayloadPreview(token: string): Record<string, unknown> {
       exp: payload.exp,
       iat: payload.iat,
       kind: payload.kind,
+      appKey: payload.appKey,
+      platform: payload.platform,
       miniAppId: payload.miniAppId,
     }
   } catch {
@@ -70,6 +72,8 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
     let payload:
       | {
           sub: string
+          appKey?: string
+          platform?: 'wechat' | 'douyin' | 'xiaohongshu'
           miniAppId?: string
           username?: string
           wxOpenId?: string
@@ -108,6 +112,8 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
     if (payload) {
       ctx.state.miniAuthUser = {
         id: payload.sub,
+        appKey: payload.appKey,
+        platform: payload.platform,
         miniAppId: payload.miniAppId,
         username: payload.username,
         wxOpenId: payload.wxOpenId,
@@ -129,6 +135,8 @@ export async function requireMiniAuth(ctx: Context, next: Next): Promise<void> {
     if (testUser) {
       ctx.state.miniAuthUser = {
         id: testUser.id,
+        appKey: testUser.appKey,
+        platform: testUser.platform,
         miniAppId: testUser.miniAppId,
         username: testUser.username,
         wxOpenId: testUser.wxOpenId,
@@ -173,8 +181,10 @@ export async function optionalMiniAuth(ctx: Context, next: Next): Promise<void> 
   try {
     const payload = verifyMiniAuthToken(token)
     ctx.state.miniAuthUser = {
-      id: payload.sub,
-      miniAppId: payload.miniAppId,
+        id: payload.sub,
+        appKey: payload.appKey,
+        platform: payload.platform,
+        miniAppId: payload.miniAppId,
       username: payload.username,
       wxOpenId: payload.wxOpenId,
     }

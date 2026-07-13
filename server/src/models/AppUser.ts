@@ -3,6 +3,8 @@ import type { AppUserDocument } from '@/types/models'
 
 const appUserSchema = new Schema<AppUserDocument>(
   {
+    appKey: { type: String, trim: true },
+    platform: { type: String, enum: ['wechat', 'douyin', 'xiaohongshu'], default: undefined },
     miniAppId: { type: String, trim: true },
     username: { type: String, trim: true },
     password: { type: String },
@@ -35,6 +37,18 @@ const appUserSchema = new Schema<AppUserDocument>(
 )
 
 appUserSchema.index({ username: 1 }, { unique: true, sparse: true })
+appUserSchema.index({ appKey: 1, platform: 1, wxOpenId: 1 }, { unique: true, sparse: true })
+appUserSchema.index(
+  { appKey: 1, platform: 1, wxUnionId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      appKey: { $type: 'string', $gt: '' },
+      platform: { $type: 'string', $gt: '' },
+      wxUnionId: { $type: 'string', $gt: '' },
+    },
+  },
+)
 appUserSchema.index({ miniAppId: 1, wxOpenId: 1 }, { unique: true, sparse: true })
 appUserSchema.index(
   { miniAppId: 1, wxUnionId: 1 },

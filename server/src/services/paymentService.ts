@@ -1,6 +1,11 @@
 import { createDecipheriv, createSign, createVerify, randomBytes } from 'node:crypto'
 import { appConfig } from '@/config/env'
-import { listEnabledMiniApps, resolveMiniAppConfig } from '@/services/miniAppService'
+import {
+  listEnabledMiniAppPlatformConfigs,
+  resolveMiniApp,
+  resolveMiniAppPlatformConfig,
+} from '@/services/miniPlatformConfigService'
+import type { MiniPlatformKind } from '@/types/models'
 
 type PaymentChannel = 'wechat'
 
@@ -18,6 +23,8 @@ export interface WechatPrepayResult {
 
 export interface CreatePaymentOptions {
   channel: PaymentChannel
+  appKey?: string
+  platform?: MiniPlatformKind
   miniAppId?: string
   orderNumber: string
   description: string
@@ -33,10 +40,12 @@ export interface PaymentResult {
   prepayId?: string
   message?: string
   raw?: Record<string, unknown>
-  payParams?: WechatPrepayResult
+  payParams?: Record<string, unknown>
 }
 
 export interface CreateRefundOptions {
+  appKey?: string
+  platform?: MiniPlatformKind
   miniAppId?: string
   orderNumber: string
   refundRequestNo: string
@@ -116,22 +125,25 @@ export type WechatRefundTransaction = {
   }
 }
 
-async function resolveWechatPayConfig(miniAppId?: string) {
-  const app = await resolveMiniAppConfig(miniAppId)
+async function resolveWechatPayConfig(appKey?: string, platform: MiniPlatformKind = 'wechat', miniAppId?: string) {
+  const app = await resolveMiniApp(appKey)
+  const platformConfig = await resolveMiniAppPlatformConfig(platform, app.appKey)
   const config = {
-    ...app.wechatPay,
-    appId: app.miniAppId,
+    ...platformConfig.paymentConfig,
+    appId: platformConfig.appId || miniAppId || app.appKey,
+    appSecret: platformConfig.appSecret,
   }
   return {
-    miniAppId: app.miniAppId,
+    appKey: app.appKey,
+    miniAppId: platformConfig.appId || miniAppId || app.appKey,
     config,
   }
 }
 
 type WechatPayConfigResolved = Awaited<ReturnType<typeof getWechatConfig>>
 
-async function getWechatConfig(miniAppId?: string) {
-  const { config } = await resolveWechatPayConfig(miniAppId)
+async function getWechatConfig(appKey?: string, platform: MiniPlatformKind = 'wechat', miniAppId?: string) {
+  const { config } = await resolveWechatPayConfig(appKey, platform, miniAppId)
   if (!config.enabled) {
     throw new Error('WeChat pay is disabled')
   }
@@ -145,15 +157,17 @@ async function getWechatConfig(miniAppId?: string) {
   return config
 }
 
-async function listWechatPayConfigs() {
-  const apps = await listEnabledMiniApps()
+async function listWechatPayConfigs(platform: MiniPlatformKind = 'wechat') {
+  const apps = await listEnabledMiniAppPlatformConfigs(platform)
   return apps
-    .filter((item) => item.wechatPay.enabled)
+    .filter((item) => item.paymentConfig.enabled)
     .map((item) => ({
-      miniAppId: item.miniAppId,
+      appKey: item.appKey,
+      miniAppId: item.appId,
       config: {
-        ...item.wechatPay,
-        appId: item.miniAppId,
+        ...item.paymentConfig,
+        appId: item.appId,
+        appSecret: item.appSecret,
       },
     }))
 }
@@ -193,9 +207,11 @@ async function requestWechat<T>(
   method: 'GET' | 'POST',
   requestPath: string,
   payload: Record<string, unknown> | undefined,
+  appKey?: string,
+  platform: MiniPlatformKind = 'wechat',
   miniAppId?: string,
 ): Promise<T> {
-  const config = await getWechatConfig(miniAppId)
+  const config = await getWechatConfig(appKey, platform, miniAppId)
   const body = payload ? JSON.stringify(payload) : ''
   const { authorization } = buildAuthorizationByConfig(config, method, requestPath, body)
   const response = await fetch(`${config.baseUrl}${requestPath}`, {
@@ -224,8 +240,8 @@ async function requestWechat<T>(
   return parsed as T
 }
 
-async function buildWechatClientPayParams(prepayId: string, miniAppId?: string): Promise<WechatPrepayResult> {
-  const config = await getWechatConfig(miniAppId)
+async function buildWechatClientPayParams(prepayId: string, appKey?: string, platform: MiniPlatformKind = 'wechat', miniAppId?: string): Promise<WechatPrepayResult> {
+  const config = await getWechatConfig(appKey, platform, miniAppId)
   const timeStamp = String(Math.floor(Date.now() / 1000))
   const nonceStr = randomBytes(16).toString('hex')
   const packageValue = `prepay_id=${prepayId}`
@@ -243,7 +259,7 @@ async function buildWechatClientPayParams(prepayId: string, miniAppId?: string):
 }
 
 export async function createOrderPayment(options: CreatePaymentOptions): Promise<PaymentResult> {
-  const { channel, miniAppId, orderNumber, description, amount, openId, attach } = options
+  const { channel, appKey, platform = 'wechat', miniAppId, orderNumber, description, amount, openId, attach } = options
   if (channel !== 'wechat') {
     return {
       status: 'failed',
@@ -251,7 +267,7 @@ export async function createOrderPayment(options: CreatePaymentOptions): Promise
       message: 'Unsupported payment channel',
     }
   }
-  const config = await getWechatConfig(miniAppId)
+  const config = await getWechatConfig(appKey, platform, miniAppId)
   const payload: Record<string, unknown> = {
     appid: config.appId,
     mchid: config.mchId,
@@ -269,29 +285,36 @@ export async function createOrderPayment(options: CreatePaymentOptions): Promise
   if (attach) {
     payload.attach = attach
   }
-  const result = await requestWechat<{ prepay_id: string }>('POST', '/v3/pay/transactions/jsapi', payload, miniAppId)
+  const result = await requestWechat<{ prepay_id: string }>('POST', '/v3/pay/transactions/jsapi', payload, appKey, platform, miniAppId)
   if (!result?.prepay_id) {
     throw new Error('Failed to create prepay order')
   }
-  const payParams = await buildWechatClientPayParams(result.prepay_id, miniAppId)
+  const payParams = await buildWechatClientPayParams(result.prepay_id, appKey, platform, miniAppId)
   return {
     status: 'pending',
     provider: 'wechat',
     prepayId: result.prepay_id,
-    payParams,
+    payParams: payParams as unknown as Record<string, unknown>,
     raw: {
       prepayId: result.prepay_id,
     },
   }
 }
 
-export async function queryWechatOrderByOutTradeNo(orderNumber: string, miniAppId?: string): Promise<WechatTransaction> {
+export async function queryWechatOrderByOutTradeNo(
+  orderNumber: string,
+  appKey?: string,
+  platform: MiniPlatformKind = 'wechat',
+  miniAppId?: string,
+): Promise<WechatTransaction> {
   const safeOrderNumber = (orderNumber || '').trim()
   if (!safeOrderNumber) {
     throw new Error('orderNumber is required')
   }
 
-  const candidates = miniAppId ? [{ miniAppId, config: await getWechatConfig(miniAppId) }] : await listWechatPayConfigs()
+  const candidates = miniAppId || appKey
+    ? [{ appKey, miniAppId, config: await getWechatConfig(appKey, platform, miniAppId) }]
+    : await listWechatPayConfigs(platform)
   let lastError: unknown = null
 
   for (const { config } of candidates) {
@@ -332,8 +355,8 @@ export async function queryWechatOrderByOutTradeNo(orderNumber: string, miniAppI
 }
 
 export async function createOrderRefund(options: CreateRefundOptions): Promise<WechatRefundResult> {
-  const { miniAppId, orderNumber, refundRequestNo, reason, refundAmount, totalAmount } = options
-  const config = await getWechatConfig(miniAppId)
+  const { appKey, platform = 'wechat', miniAppId, orderNumber, refundRequestNo, reason, refundAmount, totalAmount } = options
+  const config = await getWechatConfig(appKey, platform, miniAppId)
   const payload: Record<string, unknown> = {
     out_trade_no: orderNumber,
     out_refund_no: refundRequestNo,
@@ -345,7 +368,7 @@ export async function createOrderRefund(options: CreateRefundOptions): Promise<W
       currency: 'CNY',
     },
   }
-  const result = await requestWechat<Record<string, unknown>>('POST', '/v3/refund/domestic/refunds', payload, miniAppId)
+  const result = await requestWechat<Record<string, unknown>>('POST', '/v3/refund/domestic/refunds', payload, appKey, platform, miniAppId)
   return {
     refundId: typeof result.refund_id === 'string' ? result.refund_id : undefined,
     outRefundNo: typeof result.out_refund_no === 'string' ? result.out_refund_no : refundRequestNo,
@@ -357,6 +380,8 @@ export async function createOrderRefund(options: CreateRefundOptions): Promise<W
 export function verifyWechatCallbackSignature(
   rawBody: string,
   headers: Record<string, string | string[] | undefined>,
+  appKey?: string,
+  platform: MiniPlatformKind = 'wechat',
   miniAppId?: string,
 ): Promise<boolean> {
   return (async () => {
@@ -367,7 +392,9 @@ export function verifyWechatCallbackSignature(
     return false
   }
   const message = `${timestamp}\n${nonce}\n${rawBody}\n`
-  const candidates = miniAppId ? [{ miniAppId, config: await getWechatConfig(miniAppId) }] : await listWechatPayConfigs()
+  const candidates = miniAppId || appKey
+    ? [{ appKey, miniAppId, config: await getWechatConfig(appKey, platform, miniAppId) }]
+    : await listWechatPayConfigs(platform)
   for (const { config } of candidates) {
     if (appConfig.isDevelopment && config.callbackSkipVerifyInDev) {
       return true
@@ -386,11 +413,18 @@ export function verifyWechatCallbackSignature(
   })()
 }
 
-export async function decryptWechatNotifyResource(resource: WechatNotifyResource, miniAppId?: string): Promise<WechatTransaction> {
+export async function decryptWechatNotifyResource(
+  resource: WechatNotifyResource,
+  appKey?: string,
+  platform: MiniPlatformKind = 'wechat',
+  miniAppId?: string,
+): Promise<WechatTransaction> {
   if (resource.algorithm !== 'AEAD_AES_256_GCM') {
     throw new Error('Unsupported notify encryption algorithm')
   }
-  const candidates = miniAppId ? [{ miniAppId, config: await getWechatConfig(miniAppId) }] : await listWechatPayConfigs()
+  const candidates = miniAppId || appKey
+    ? [{ appKey, miniAppId, config: await getWechatConfig(appKey, platform, miniAppId) }]
+    : await listWechatPayConfigs(platform)
   let lastError: unknown = null
   for (const { config } of candidates) {
     try {

@@ -335,6 +335,8 @@ export default defineConfig({
       { find: '@harmony/utils/scene-package-storage', replacement: `${utilsSrcPath}/scenePackageStorage.ts` },
       { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
+      { find: '@mini-platform/core', replacement: fileURLToPath(new URL('../packages/mini-platform-core/src/index.ts', import.meta.url)) },
+      { find: '@mini-platform/adapters', replacement: fileURLToPath(new URL('../packages/mini-platform-adapters/src/index.ts', import.meta.url)) },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
       { find: '@harmony/physics-ammo', replacement: fileURLToPath(new URL('./src/pages/physics-ammo/runtime.ts', import.meta.url)) },
       { find: /^@harmony\/physics-cannon\/(.*)$/, replacement: fileURLToPath(new URL('./src/pages/physics-cannon/$1', import.meta.url)) },

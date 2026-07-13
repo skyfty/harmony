@@ -1,0 +1,29 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.json",
+  "include": [
+    "src/env.d.ts",
+    "src/**/*",
+    "src/**/*.vue",
+    "__PACKAGES_RELATIVE__/mini-platform-core/src/**/*.ts",
+    "__PACKAGES_RELATIVE__/mini-platform-adapters/src/**/*.ts"
+  ],
+  "compilerOptions": {
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["@dcloudio/types", "miniprogram-api-typings"],
+    "composite": true,
+    "allowJs": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "strict": true,
+    "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "paths": {
+      "@/*": ["./src/*"],
+      "@mini-platform/core": ["__PACKAGES_RELATIVE__/mini-platform-core/src/index.ts"],
+      "@mini-platform/adapters": ["__PACKAGES_RELATIVE__/mini-platform-adapters/src/index.ts"]
+    }
+  }
+}

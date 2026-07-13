@@ -2,6 +2,7 @@ export {
   getAccessToken,
   setAccessToken,
   loginWithCredentials,
+  loginWithMiniCode,
   loginWithWechatCode,
   ensureMiniAuth,
   recoverMiniAuthSession,

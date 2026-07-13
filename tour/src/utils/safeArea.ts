@@ -71,12 +71,6 @@ export function applyLightNavigationBar() {
     },
   };
 
-  const wechatApi = (globalThis as { wx?: { setNavigationBarColor?: (options: typeof config) => void } }).wx;
-  if (wechatApi?.setNavigationBarColor) {
-    wechatApi.setNavigationBarColor(config);
-    return;
-  }
-
   if (typeof uni.setNavigationBarColor === 'function') {
     void uni.setNavigationBarColor(config);
   }

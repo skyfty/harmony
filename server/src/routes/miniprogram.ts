@@ -108,6 +108,13 @@ import {
   listBusinessOrdersHandler,
   payBusinessOrderRenewalHandler,
 } from '@/controllers/miniprogram/businessOrderController'
+import {
+  acceptMiniPlatformPrivacyConsentHandler,
+  bindMiniPlatformPhoneHandler,
+  createMiniPlatformLoginHandler,
+  createMiniPlatformPaymentHandler,
+  getMiniRuntimeConfigHandler,
+} from '@/controllers/miniprogram/miniPlatformController'
 
 // Align with other API prefixes under /api/* so reverse proxy & clients use /api/mini
 const miniRouter = new Router({ prefix: '/api/mini' })
@@ -132,6 +139,8 @@ miniRouter.get('/featured-spots', optionalMiniAuth, listFeaturedSpotsPublic)
 
 miniRouter.get('/events/hot', optionalMiniAuth, listHotEvents)
 miniRouter.get('/mini-apps/policies', optionalMiniAuth, getMiniAppPolicies)
+miniRouter.get('/runtime-config', optionalMiniAuth, getMiniRuntimeConfigHandler)
+miniRouter.post('/auth/login', createMiniPlatformLoginHandler)
 miniRouter.post('/analytics/events', optionalMiniAuth, trackAnalyticsEvent)
 
 // products can be read anonymously; login adds purchased/state
@@ -141,6 +150,10 @@ miniRouter.get('/vehicles', optionalMiniAuth, listVehicles)
 miniRouter.get('/coupons/catalog', optionalMiniAuth, listCouponCatalog)
 
 miniRouter.use(requireMiniAuth)
+
+miniRouter.post('/auth/bind-phone', bindMiniPlatformPhoneHandler)
+miniRouter.post('/payment/create', createMiniPlatformPaymentHandler)
+miniRouter.post('/privacy/consent', acceptMiniPlatformPrivacyConsentHandler)
 
 // scenic interactions
 miniRouter.post('/scene-spots/:id/favorite', toggleSceneSpotFavorite)

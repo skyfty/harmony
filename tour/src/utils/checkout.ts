@@ -1,3 +1,5 @@
+import { getMiniPlatformAdapter } from '@/platform/adapter'
+
 export interface MiniPayParams {
   appId: string
   timeStamp: string
@@ -19,12 +21,5 @@ export function isPhoneBindingRequiredError(error: unknown): boolean {
 }
 
 export async function requestMiniProgramPayment(payParams: MiniPayParams): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    uni.requestPayment({
-      provider: 'wxpay',
-      ...payParams,
-      success: () => resolve(),
-      fail: (error) => reject(error),
-    })
-  })
+  await getMiniPlatformAdapter().requestPayment(payParams as unknown as Record<string, unknown>)
 }

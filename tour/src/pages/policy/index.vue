@@ -59,7 +59,7 @@ const loading = ref(true)
 const errorMessage = ref('')
 const paragraphs = ref<string[]>([])
 
-const miniAppId = String(import.meta.env.VITE_MINI_APP_ID ?? '').trim()
+const appKey = String(import.meta.env.VITE_MINI_APP_KEY ?? '').trim()
 
 function normalizeParagraphs(policy: MiniPolicyFile): string[] {
   if (Array.isArray(policy.paragraphs) && policy.paragraphs.length) {
@@ -76,7 +76,7 @@ async function loadPolicy() {
   loading.value = true
   errorMessage.value = ''
   try {
-    const response = await getMiniAppPolicy(currentKind.value, miniAppId || undefined)
+    const response = await getMiniAppPolicy(currentKind.value, appKey || undefined)
     const fileUrl = String(response.policy?.fileUrl || '').trim()
     if (fileUrl) {
       try {

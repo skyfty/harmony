@@ -5,6 +5,8 @@ import {
   normalizeMiniProfileText,
   setAnonymousDisplayEnabled,
 } from '@/utils/miniProfile'
+import { getMiniPlatformAdapter } from '@/platform/adapter'
+import { ensureMiniRuntimeConfig, getMiniAppKey } from '@/platform/runtime'
 import { syncMiniProfileDraft } from './profileSync'
 import { requestMiniAuthRecovery } from './recoveryPresenter'
 import type { MiniAuthLoginResponse, MiniAuthUser } from './types'
@@ -69,10 +71,6 @@ function clearMiniAuthLocalState(reason: string): void {
   logMiniAuth('mini auth local state cleared', { reason })
 }
 
-function getMiniAppId(): string {
-  return String(import.meta.env.VITE_MINI_APP_ID ?? '').trim()
-}
-
 function shouldUseTestLogin(): boolean {
   const raw = String(import.meta.env.VITE_MINI_USE_TEST_LOGIN ?? '').trim().toLowerCase()
   return raw === '1' || raw === 'true' || raw === 'yes'
@@ -108,26 +106,16 @@ async function fetchMiniAuthProfile(): Promise<MiniAuthUser> {
   return response.user || {}
 }
 
-async function getWechatLoginCode(): Promise<string> {
-  logMiniAuth('starting wx.login')
-  return await new Promise<string>((resolve, reject) => {
-    uni.login({
-      provider: 'weixin',
-      success: (res: { code?: string }) => {
-        if (!res.code) {
-          errorMiniAuth('wx.login success callback without code')
-          reject(new Error('Wechat login code not found'))
-          return
-        }
-        logMiniAuth('wx.login success, got code')
-        resolve(res.code)
-      },
-      fail: (error: unknown) => {
-        errorMiniAuth('wx.login failed', error)
-        reject(new Error('Wechat login failed'))
-      },
-    })
-  })
+async function getPlatformLoginCode(): Promise<string> {
+  logMiniAuth('starting adapter login flow')
+  try {
+    const code = await getMiniPlatformAdapter().getLoginCode()
+    logMiniAuth('adapter login code acquired')
+    return code
+  } catch (error) {
+    errorMiniAuth('adapter login failed', error)
+    throw new Error('Platform login failed')
+  }
 }
 
 async function promptForIncompleteProfile(currentUsername?: string): Promise<void> {
@@ -229,9 +217,9 @@ async function performMiniAuth(force = false, options: MiniAuthFlowOptions = {})
         return token
       }
 
-      logMiniAuth('using wechat login flow')
-      const code = await getWechatLoginCode()
-      const response = await loginWithWechatCode(code)
+      logMiniAuth('using platform login flow')
+      const code = await getPlatformLoginCode()
+      const response = await loginWithMiniCode(code)
       const token = readTokenFromResponse(response)
       if (!token) {
         throw new Error('Wechat login succeeded but no token returned')
@@ -279,23 +267,21 @@ export async function loginWithCredentials(username: string, password: string): 
   return token
 }
 
-export async function loginWithWechatCode(code: string, displayName?: string): Promise<MiniAuthLoginResponse> {
-  const miniAppId = getMiniAppId()
-  logMiniAuth('requesting /mini-auth/wechat-login', {
-    miniAppId: miniAppId || '(empty)',
+export async function loginWithMiniCode(code: string, displayName?: string): Promise<MiniAuthLoginResponse> {
+  const runtimeConfig = await ensureMiniRuntimeConfig()
+  const appKey = getMiniAppKey()
+  const adapter = getMiniPlatformAdapter()
+  logMiniAuth('requesting /mini/auth/login', {
+    appKey: appKey || '(empty)',
+    platform: runtimeConfig.platform,
   })
-  const data = await miniRequest<MiniAuthLoginResponse>('/mini-auth/wechat-login', {
-    method: 'POST',
-    auth: false,
-    headers: miniAppId ? { 'X-Mini-App-Id': miniAppId } : undefined,
-    body: {
-      code,
-      miniAppId: miniAppId || undefined,
-      ...(typeof displayName === 'string' && displayName ? { displayName } : {}),
-    },
-  })
+  const data = await adapter.login({
+    code,
+    appKey,
+    ...(typeof displayName === 'string' && displayName ? { displayName } : {}),
+  }) as MiniAuthLoginResponse
 
-  logMiniAuth('/mini-auth/wechat-login response received', {
+  logMiniAuth('/mini/auth/login response received', {
     hasToken: typeof data.accessToken === 'string' || typeof data.token === 'string',
   })
 
@@ -306,9 +292,11 @@ export async function loginWithWechatCode(code: string, displayName?: string): P
   }
 
   setAccessToken(token)
-  logMiniAuth('wechat-login success, token stored', { tokenLength: token.length })
+  logMiniAuth('platform login success, token stored', { tokenLength: token.length })
   return data
 }
+
+export const loginWithWechatCode = loginWithMiniCode
 
 export async function ensureMiniAuth(force = false, options: MiniAuthFlowOptions = {}): Promise<string> {
   return await performMiniAuth(force, options)
@@ -332,7 +320,7 @@ export async function prewarmMiniAuth(): Promise<string> {
   logMiniAuth('prewarmMiniAuth invoked', {
     autoLoginEnabled,
     useTestLogin: shouldUseTestLogin(),
-    miniAppId: getMiniAppId() || '(empty)',
+    appKey: getMiniAppKey() || '(empty)',
     hasExistingToken: Boolean(getAccessToken()),
   })
   if (!autoLoginEnabled) {

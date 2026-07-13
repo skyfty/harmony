@@ -1,6 +1,6 @@
 {
   "extends": "@vue/tsconfig/tsconfig.json",
-  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue", "src/services/**/*.ts", "../schema/**/*.ts"],
+  "include": ["src/env.d.ts", "src/**/*", "src/**/*.vue", "src/services/**/*.ts", "../schema/**/*.ts", "../packages/mini-platform-core/src/**/*.ts", "../packages/mini-platform-adapters/src/**/*.ts"],
   "exclude": ["src/**/__tests__/*"],
   "compilerOptions": {
     "lib": [
@@ -40,6 +40,8 @@
       "@harmony/utils/scene-package-storage": ["./src/pages/scenery/utils/scenePackageStorage.ts"],
       "@harmony/utils/scene-package-fs": ["./src/pages/scenery/utils/scenePackageFs.ts"],
       "@harmony/utils/query": ["./src/pages/scenery/utils/query.ts"],
+      "@mini-platform/core": ["../packages/mini-platform-core/src/index.ts"],
+      "@mini-platform/adapters": ["../packages/mini-platform-adapters/src/index.ts"],
       "three": ["./src/pages/scenery/three"],
       "three/examples": ["./src/pages/scenery/three/examples"],
       "@three-examples/*": ["./src/pages/scenery/three/examples/jsm/*"],

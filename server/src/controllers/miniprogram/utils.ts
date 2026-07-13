@@ -15,6 +15,8 @@ export function getOptionalUserId(ctx: Context): string | undefined {
 
 export async function ensureMiniCheckoutUser(ctx: Context): Promise<{
   id: string
+  appKey?: string
+  platform?: 'wechat' | 'douyin' | 'xiaohongshu'
   miniAppId?: string
   wxOpenId: string
   phone?: string
@@ -34,6 +36,11 @@ export async function ensureMiniCheckoutUser(ctx: Context): Promise<{
 
   return {
     id: userId,
+    appKey: typeof user.appKey === 'string' ? user.appKey.trim() || undefined : undefined,
+    platform:
+      user.platform === 'douyin' || user.platform === 'xiaohongshu' || user.platform === 'wechat'
+        ? user.platform
+        : undefined,
     miniAppId: typeof user.miniAppId === 'string' ? user.miniAppId.trim() || undefined : undefined,
     wxOpenId,
     phone: phone || undefined,

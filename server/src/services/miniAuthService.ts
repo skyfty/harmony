@@ -1,14 +1,17 @@
 import { appConfig } from '@/config/env'
 import { AppUserModel } from '@/models/AppUser'
-import { resolveMiniAppConfig } from '@/services/miniAppService'
+import { resolveMiniApp } from '@/services/miniPlatformConfigService'
 import { exchangeMiniProgramPhoneCode } from '@/services/wechatMiniUserService'
 import { signMiniAuthToken } from '@/utils/domainJwt'
 import { hashPassword, verifyPassword } from '@/utils/password'
 
 type AuthProvider = 'wechat-mini-program' | 'password'
+type MiniPlatform = 'wechat' | 'douyin' | 'xiaohongshu'
 
 type AppUserLean = {
   _id: { toString(): string }
+  appKey?: string
+  platform?: MiniPlatform
   miniAppId?: string
   username?: string
   password?: string
@@ -38,6 +41,8 @@ type AppUserLean = {
 
 export interface MiniSessionUser {
   id: string
+  appKey?: string
+  platform?: MiniPlatform
   miniAppId?: string
   username?: string
   authProvider: AuthProvider
@@ -90,6 +95,8 @@ function isMiniProfileComplete(profile: { displayName?: string; avatarUrl?: stri
 function buildMiniUser(user: AppUserLean): MiniSessionUser {
   return {
     id: user._id.toString(),
+    appKey: user.appKey ?? undefined,
+    platform: user.platform ?? undefined,
     miniAppId: user.miniAppId ?? undefined,
     username: user.username ?? undefined,
     authProvider: user.authProvider,
@@ -122,6 +129,8 @@ function issueMiniToken(user: MiniSessionUser): string {
   return signMiniAuthToken({
     kind: 'user',
     sub: user.id,
+    appKey: user.appKey,
+    platform: user.platform,
     miniAppId: user.miniAppId,
     username: user.username,
     wxOpenId: user.wxOpenId,
@@ -165,10 +174,25 @@ function syncWechatProfile(
 }
 
 async function pickCanonicalWechatUser(input: {
+  appKey: string
+  platform: MiniPlatform
   miniAppId: string
   openId: string
   unionId?: string
 }) {
+  const modernFilters: Array<Record<string, string>> = [{ appKey: input.appKey, platform: input.platform, wxOpenId: input.openId }]
+  if (input.unionId) {
+    modernFilters.push({ appKey: input.appKey, platform: input.platform, wxUnionId: input.unionId })
+  }
+  const modernMatches = await AppUserModel.find({ $or: modernFilters }).sort({ createdAt: 1, _id: 1 }).exec()
+  if (modernMatches.length) {
+    const [canonical, ...duplicates] = modernMatches
+    if (duplicates.length) {
+      await AppUserModel.deleteMany({ _id: { $in: duplicates.map((item) => item._id) } }).exec()
+    }
+    return canonical
+  }
+
   const orFilters: Array<Record<string, string>> = [{ miniAppId: input.miniAppId, wxOpenId: input.openId }]
   if (input.unionId) {
     orFilters.push({ miniAppId: input.miniAppId, wxUnionId: input.unionId })
@@ -255,12 +279,19 @@ export async function miniLoginWithPassword(username: string, password: string):
 }
 
 export async function miniLoginWithOpenId(input: {
+  appKey: string
+  platform: MiniPlatform
   miniAppId: string
   openId: string
   unionId?: string
   displayName?: string
   avatarUrl?: string
 }): Promise<MiniSessionResponse> {
+  const appKey = input.appKey.trim()
+  if (!appKey) {
+    throw new Error('appKey is required')
+  }
+  const platform = input.platform
   const miniAppId = input.miniAppId.trim()
   if (!miniAppId) {
     throw new Error('miniAppId is required')
@@ -274,12 +305,14 @@ export async function miniLoginWithOpenId(input: {
   const unionId = normalizeOptionalString(input.unionId)
   const displayName = normalizeOptionalString(input.displayName)
   const avatarUrl = normalizeOptionalString(input.avatarUrl)
-  let user = await pickCanonicalWechatUser({ miniAppId, openId, unionId })
+  let user = await pickCanonicalWechatUser({ appKey, platform, miniAppId, openId, unionId })
   let shouldPromptProfileCompletion = false
 
   if (!user) {
     const createdAt = new Date()
     user = await AppUserModel.create({
+      appKey,
+      platform,
       miniAppId,
       authProvider: 'wechat-mini-program',
       wxOpenId: openId,
@@ -297,6 +330,8 @@ export async function miniLoginWithOpenId(input: {
       avatarUrl: user.avatarUrl,
     })
   } else {
+    user.appKey = appKey
+    user.platform = platform
     user.miniAppId = miniAppId
     user.authProvider = 'wechat-mini-program'
     if (user.wxOpenId !== openId) {
@@ -329,6 +364,8 @@ export async function miniLoginWithOpenId(input: {
 export async function miniBindPhone(input: {
   userId: string
   code: string
+  appKey?: string
+  platform?: MiniPlatform
   miniAppId?: string
 }): Promise<MiniSessionResponse> {
   const user = await AppUserModel.findById(input.userId).exec()
@@ -336,12 +373,19 @@ export async function miniBindPhone(input: {
     throw new Error('User not found')
   }
 
+  const appKey = normalizeOptionalString(input.appKey) ?? normalizeOptionalString(user.appKey)
+  const platform = input.platform ?? user.platform ?? 'wechat'
   const miniAppId = normalizeOptionalString(input.miniAppId) ?? normalizeOptionalString(user.miniAppId)
+  if (!appKey) {
+    throw new Error('appKey is required')
+  }
   if (!miniAppId) {
     throw new Error('miniAppId is required')
   }
 
-  const phone = await exchangeMiniProgramPhoneCode(input.code, miniAppId)
+  const phone = await exchangeMiniProgramPhoneCode(input.code, appKey, platform === 'wechat' ? 'wechat' : 'wechat')
+  user.appKey = appKey
+  user.platform = platform
   user.miniAppId = miniAppId
   user.phone = phone.purePhoneNumber || phone.phoneNumber
   user.phoneCountryCode = phone.countryCode
@@ -367,8 +411,9 @@ export async function miniGetProfile(userId: string): Promise<MiniSessionRespons
 }
 
 export async function ensureMiniProgramTestUserV2(): Promise<void> {
-  const miniApp = await resolveMiniAppConfig().catch(() => null)
-  const miniAppId = miniApp?.miniAppId
+  const miniApp = await resolveMiniApp().catch(() => null)
+  const appKey = miniApp?.appKey
+  const miniAppId = appKey
   const username = appConfig.miniProgramTestUser.username.trim()
   const password = appConfig.miniProgramTestUser.password
   const displayName = appConfig.miniProgramTestUser.displayName
@@ -381,6 +426,8 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
   if (!existing) {
     await AppUserModel.create({
       miniAppId,
+      appKey,
+      platform: 'wechat',
       username,
       password: await hashPassword(password),
       authProvider: 'password',
@@ -393,6 +440,14 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
   }
 
   let shouldSave = false
+  if ((existing.appKey ?? undefined) !== appKey) {
+    existing.appKey = appKey
+    shouldSave = true
+  }
+  if ((existing.platform ?? undefined) !== 'wechat') {
+    existing.platform = 'wechat'
+    shouldSave = true
+  }
   if ((existing.miniAppId ?? undefined) !== miniAppId) {
     existing.miniAppId = miniAppId
     shouldSave = true
@@ -430,14 +485,14 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
 }
 
 export async function getMiniProgramTestSessionUser(): Promise<MiniSessionUser | null> {
-  const miniApp = await resolveMiniAppConfig().catch(() => null)
-  const miniAppId = miniApp?.miniAppId
+  const miniApp = await resolveMiniApp().catch(() => null)
+  const appKey = miniApp?.appKey
   const username = appConfig.miniProgramTestUser.username.trim()
   if (!username) {
     return null
   }
 
-  const user = await AppUserModel.findOne({ username, miniAppId }).lean<AppUserLean>().exec()
+  const user = await AppUserModel.findOne({ username, appKey }).lean<AppUserLean>().exec()
     ?? await AppUserModel.findOne({ username }).lean<AppUserLean>().exec()
   if (!user || user.status !== 'active') {
     return null

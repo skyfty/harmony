@@ -12,6 +12,8 @@ export interface AdminAuthTokenPayload {
 export interface MiniAuthTokenPayload {
   kind: 'user'
   sub: string
+  appKey?: string
+  platform?: 'wechat' | 'douyin' | 'xiaohongshu'
   miniAppId?: string
   username?: string
   wxOpenId?: string

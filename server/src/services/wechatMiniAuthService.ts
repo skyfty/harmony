@@ -1,5 +1,5 @@
 import { appConfig } from '@/config/env'
-import { resolveMiniAppConfig } from '@/services/miniAppService'
+import { resolveMiniAppPlatformConfig } from '@/services/miniPlatformConfigService'
 
 interface WechatCode2SessionSuccess {
   openid: string
@@ -15,17 +15,24 @@ interface WechatCode2SessionError {
 type WechatCode2SessionResponse = WechatCode2SessionSuccess | WechatCode2SessionError
 
 export interface WechatMiniIdentity {
+  appKey: string
+  platform: 'wechat'
   miniAppId: string
   openId: string
   unionId?: string
   sessionKey?: string
 }
 
-async function getWechatMiniConfig(miniAppId?: string) {
-  const match = await resolveMiniAppConfig(miniAppId)
+async function getWechatMiniConfig(appKey?: string, platform: 'wechat' = 'wechat') {
+  const safeAppKey = String(appKey ?? '').trim()
+  if (!safeAppKey) {
+    throw new Error('appKey is required')
+  }
+  const match = await resolveMiniAppPlatformConfig(platform, safeAppKey)
   return {
-    miniAppId: match.miniAppId,
-    appId: match.miniAppId,
+    appKey: match.appKey,
+    miniAppId: match.appId,
+    appId: match.appId,
     appSecret: match.appSecret,
     baseUrl: appConfig.miniAuth.wechatApiBaseUrl,
   }
@@ -47,13 +54,17 @@ function normalizeWechatError(response: WechatCode2SessionError): string {
     : `Wechat login failed [${code}]`
 }
 
-export async function exchangeMiniProgramCode(code: string, miniAppId?: string): Promise<WechatMiniIdentity> {
+export async function exchangeMiniProgramCode(
+  code: string,
+  appKey?: string,
+  platform: 'wechat' = 'wechat',
+): Promise<WechatMiniIdentity> {
   const safeCode = code.trim()
   if (!safeCode) {
     throw new Error('code is required')
   }
 
-  const config = await getWechatMiniConfig(miniAppId)
+  const config = await getWechatMiniConfig(appKey, platform)
   const params = new URLSearchParams({
     appid: config.appId,
     secret: config.appSecret,
@@ -111,6 +122,8 @@ export async function exchangeMiniProgramCode(code: string, miniAppId?: string):
   }
 
   return {
+    appKey: config.appKey,
+    platform,
     miniAppId: config.miniAppId,
     openId: parsed.openid,
     unionId: parsed.unionid,

@@ -1,5 +1,5 @@
 import { appConfig } from '@/config/env'
-import { resolveMiniAppConfig } from '@/services/miniAppService'
+import { resolveMiniAppPlatformConfig } from '@/services/miniPlatformConfigService'
 
 type StableAccessTokenSuccess = {
   access_token: string
@@ -46,19 +46,24 @@ function normalizeWechatError(response: { errcode?: number; errmsg?: string }, f
   return response.errmsg ? `${fallback}: ${response.errmsg}` : fallback
 }
 
-async function getMiniAppWechatConfig(miniAppId?: string) {
-  const match = await resolveMiniAppConfig(miniAppId)
+async function getMiniAppWechatConfig(appKey?: string, platform: 'wechat' = 'wechat') {
+  const safeAppKey = String(appKey ?? '').trim()
+  if (!safeAppKey) {
+    throw new Error('appKey is required')
+  }
+  const match = await resolveMiniAppPlatformConfig(platform, safeAppKey)
   return {
-    miniAppId: match.miniAppId,
-    appId: match.miniAppId,
+    appKey: match.appKey,
+    miniAppId: match.appId,
+    appId: match.appId,
     appSecret: match.appSecret,
     baseUrl: appConfig.miniAuth.wechatApiBaseUrl,
   }
 }
 
-async function requestStableAccessToken(miniAppId?: string, forceRefresh = false): Promise<string> {
-  const config = await getMiniAppWechatConfig(miniAppId)
-  const cacheKey = config.miniAppId
+async function requestStableAccessToken(appKey?: string, forceRefresh = false): Promise<string> {
+  const config = await getMiniAppWechatConfig(appKey)
+  const cacheKey = config.appKey
   const cached = accessTokenCache.get(cacheKey)
   if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
     return cached.value
@@ -95,9 +100,9 @@ async function requestStableAccessToken(miniAppId?: string, forceRefresh = false
   return parsed.access_token
 }
 
-async function requestPhoneByCode(code: string, miniAppId?: string, forceRefreshToken = false): Promise<BoundWechatPhone> {
-  const accessToken = await requestStableAccessToken(miniAppId, forceRefreshToken)
-  const config = await getMiniAppWechatConfig(miniAppId)
+async function requestPhoneByCode(code: string, appKey?: string, forceRefreshToken = false): Promise<BoundWechatPhone> {
+  const accessToken = await requestStableAccessToken(appKey, forceRefreshToken)
+  const config = await getMiniAppWechatConfig(appKey)
   const response = await fetch(`${config.baseUrl}/wxa/business/getuserphonenumber?access_token=${encodeURIComponent(accessToken)}`, {
     method: 'POST',
     headers: {
@@ -130,20 +135,27 @@ async function requestPhoneByCode(code: string, miniAppId?: string, forceRefresh
   }
 }
 
-export async function exchangeMiniProgramPhoneCode(code: string, miniAppId?: string): Promise<BoundWechatPhone> {
+export async function exchangeMiniProgramPhoneCode(
+  code: string,
+  appKey?: string,
+  platform: 'wechat' = 'wechat',
+): Promise<BoundWechatPhone> {
   const safeCode = code.trim()
   if (!safeCode) {
     throw new Error('code is required')
   }
 
   try {
-    return await requestPhoneByCode(safeCode, miniAppId, false)
+    return await requestPhoneByCode(safeCode, appKey, false)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to fetch WeChat phone number'
     const shouldForceRefresh = /access token|credential/i.test(message)
     if (!shouldForceRefresh) {
       throw error
     }
-    return await requestPhoneByCode(safeCode, miniAppId, true)
+    if (platform !== 'wechat') {
+      throw new Error(`Platform phone exchange is not implemented for ${platform}`)
+    }
+    return await requestPhoneByCode(safeCode, appKey, true)
   }
 }

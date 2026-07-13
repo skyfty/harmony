@@ -9,11 +9,16 @@
 import { onLaunch, onHide } from "@dcloudio/uni-app";
 import { initializeMiniAuth } from '@/api/mini/session';
 import { installMiniAuthRuntime } from '@/services/miniAuth/runtime'
+import { ensureMiniRuntimeConfig } from '@/platform/runtime'
 import MiniPrivacyConsent from '@/components/MiniPrivacyConsent.vue'
+import { installMiniProgramUpdateRuntime } from '@/services/update/runtime'
 
 installMiniAuthRuntime()
 
 onLaunch(() => {
+  void ensureMiniRuntimeConfig().finally(() => {
+    installMiniProgramUpdateRuntime()
+  })
   initializeMiniAuth();
 });
 // Do not automatically prewarm auth on every app show to avoid

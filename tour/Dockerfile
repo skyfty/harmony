@@ -26,7 +26,7 @@ WORKDIR /app/tour
 # Make the H5 bundle behave like the development env so it auto-logs in with
 # the test account when opened in a browser.
 ENV VITE_MINI_API_BASE=https://v.touchmagic.cn/api/mini
-ENV VITE_MINI_APP_ID=wxbee5b017bdf26cc1
+ENV VITE_MINI_APP_KEY=touchmagic-tour-h5
 ENV VITE_MINI_DOWNLOAD_CDN_BASE=https://cdn.v.touchmagic.cn/uploads
 ENV VITE_MINI_AUTO_LOGIN=1
 ENV VITE_MINI_USE_TEST_LOGIN=1

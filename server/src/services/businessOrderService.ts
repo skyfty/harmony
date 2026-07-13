@@ -49,14 +49,7 @@ export interface BusinessOrderRenewalPaymentResult {
   renewal: BusinessOrderRenewalHistoryItem
   orderNumber: string
   paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
-  payParams: {
-    appId: string
-    timeStamp: string
-    nonceStr: string
-    package: string
-    signType: 'RSA'
-    paySign: string
-  } | null
+  payParams: Record<string, unknown> | null
 }
 
 export interface BusinessOrderView {

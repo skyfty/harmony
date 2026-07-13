@@ -1,0 +1,38 @@
+{
+  "name": "__APP_NAME__",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev:mp-weixin": "pnpm exec cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
+    "build:mp-weixin": "uni build -p mp-weixin",
+    "dev:mp-douyin": "pnpm exec cross-env DEBUG=none uni -p mp-toutiao --mode mp-toutiao.development",
+    "build:mp-douyin": "uni build -p mp-toutiao",
+    "dev:mp-xiaohongshu": "pnpm exec cross-env DEBUG=none uni -p mp-xhs --mode mp-xhs.development",
+    "build:mp-xiaohongshu": "uni build -p mp-xhs",
+    "dev:h5": "pnpm exec cross-env DEBUG=none uni -p h5",
+    "build:h5": "uni build -p h5",
+    "type-check": "vue-tsc -b"
+  },
+  "dependencies": {
+    "@dcloudio/uni-app": "3.0.0-alpha-4050320250224001",
+    "@dcloudio/uni-app-harmony": "3.0.0-alpha-4050320250224001",
+    "@dcloudio/uni-components": "3.0.0-alpha-4050320250224001",
+    "@dcloudio/uni-h5": "3.0.0-alpha-4050320250224001",
+    "@dcloudio/uni-mp-weixin": "3.0.0-alpha-4050320250224001",
+    "@mini-platform/adapters": "file:__PACKAGES_RELATIVE__/mini-platform-adapters",
+    "@mini-platform/core": "file:__PACKAGES_RELATIVE__/mini-platform-core",
+    "vue": "^3.4.21"
+  },
+  "devDependencies": {
+    "@dcloudio/types": "^3.4.14",
+    "@dcloudio/uni-cli-shared": "3.0.0-alpha-4050320250224001",
+    "@dcloudio/uni-stacktracey": "3.0.0-alpha-4050320250224001",
+    "@dcloudio/vite-plugin-uni": "3.0.0-alpha-4050320250224001",
+    "@vue/runtime-core": "^3.4.21",
+    "@vue/tsconfig": "^0.7.0",
+    "cross-env": "^7.0.3",
+    "typescript": "~5.6.3",
+    "vite": "^5.4.14",
+    "vue-tsc": "^2.1.10"
+  }
+}
