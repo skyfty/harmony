@@ -6,7 +6,7 @@ import { getBusinessOrderAnalytics } from '@/services/businessOrderAnalyticsServ
 import { getBusinessContactPhone } from '@/services/businessConfigService'
 import { buildBusinessOrderShareLinks } from '@/services/businessOrderShareService'
 import { getBusinessServiceSnapshot } from '@/services/businessOrderStatusService'
-import { createOrderPayment } from '@/services/paymentService'
+import { getMiniPlatformPaymentProvider } from '@/services/miniPlatformProviders'
 import { listSceneSpotCategories } from '@/services/sceneSpotCategoryService'
 import type {
   BusinessOrderDocument,
@@ -14,6 +14,7 @@ import type {
   BusinessOrderProductionNode,
   BusinessOrderServiceStatus,
   BusinessOrderTopStage,
+  MiniPlatformKind,
 } from '@/types/models'
 
 const DEFAULT_SERVICE_DURATION_DAYS = 365
@@ -924,7 +925,8 @@ export async function createBusinessOrderRenewal(id: string, userId: string): Pr
 export async function createBusinessOrderRenewalPayment(
   id: string,
   userId: string,
-  miniAppId: string | undefined,
+  appKey: string | undefined,
+  platform: MiniPlatformKind,
   openId: string,
   origin?: string,
 ): Promise<BusinessOrderRenewalPaymentResult> {
@@ -976,7 +978,7 @@ export async function createBusinessOrderRenewalPayment(
       serviceEndAt: preview.nextServiceEndAt,
       serviceStatus: 'pending',
       paymentStatus: 'unpaid',
-      paymentMethod: 'wechat',
+      paymentMethod: platform,
       paymentProvider: null,
       prepayId: null,
       transactionId: null,
@@ -995,7 +997,7 @@ export async function createBusinessOrderRenewalPayment(
     renewalOrder.serviceEndAt = preview.nextServiceEndAt
     renewalOrder.serviceStatus = 'pending'
     renewalOrder.paymentStatus = 'unpaid'
-    renewalOrder.paymentMethod = 'wechat'
+    renewalOrder.paymentMethod = platform
     renewalOrder.paymentProvider = null
     renewalOrder.prepayId = null
     renewalOrder.transactionId = null
@@ -1007,9 +1009,8 @@ export async function createBusinessOrderRenewalPayment(
     await renewalOrder.save()
   }
 
-  const paymentResult = await createOrderPayment({
-    channel: 'wechat',
-    miniAppId,
+  const paymentResult = await getMiniPlatformPaymentProvider(platform).createPayment({
+    appKey,
     orderNumber: renewalOrder.orderNumber,
     description: `${rootOrder.scenicName} 续费`,
     amount: preview.amount,

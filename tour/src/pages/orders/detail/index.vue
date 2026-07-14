@@ -255,6 +255,7 @@ import {
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 defineOptions({
   name: 'OrderDetailPage',
@@ -267,6 +268,7 @@ const refundSubmitting = ref(false);
 const refundReason = ref('');
 const showPhoneBindSheet = ref(false);
 const pendingOrderId = ref('');
+const paymentEnabled = ref(false);
 
 const vehicleItems = computed<OrderItem[]>(() => {
   if (!order.value) return [];
@@ -274,6 +276,7 @@ const vehicleItems = computed<OrderItem[]>(() => {
 });
 
 const showPayAction = computed(() => {
+  if (!paymentEnabled.value) return false;
   if (!order.value) return false;
   const status = order.value.orderStatus || order.value.status;
   return status === 'pending' && ['unpaid', 'failed', 'closed'].includes(order.value.paymentStatus);
@@ -292,6 +295,7 @@ const canApplyRefund = computed(() => {
 });
 
 onLoad((query) => {
+  void ensureMiniCapability('payment').then((enabled) => { paymentEnabled.value = enabled; }).catch(() => { paymentEnabled.value = false; });
   const id = typeof query?.id === 'string' ? query.id : '';
   if (!id) {
     order.value = null;

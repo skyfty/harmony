@@ -44,6 +44,7 @@ async function exchangeMiniPlatformCodeByHttp(input: {
   endpoint: string
   appIdKey: 'appid' | 'app_id'
   appSecretKey: 'secret' | 'app_secret'
+  method?: 'GET' | 'POST'
 }): Promise<{
   appKey?: string
   platform: MiniPlatformKind
@@ -59,14 +60,23 @@ async function exchangeMiniPlatformCodeByHttp(input: {
     throw new Error(`Missing platform app credentials for ${input.platform}`)
   }
 
+  const requestPayload = {
+    code: input.code,
+    [input.appIdKey]: platformConfig.appId,
+    [input.appSecretKey]: platformConfig.appSecret,
+  }
   const url = new URL(input.endpoint)
-  url.searchParams.set('code', input.code)
-  url.searchParams.set(input.appIdKey, platformConfig.appId)
-  url.searchParams.set(input.appSecretKey, platformConfig.appSecret)
-
-  const response = await fetch(url.toString(), { method: 'GET' })
+  if (input.method !== 'POST') {
+    Object.entries(requestPayload).forEach(([key, value]) => url.searchParams.set(key, value))
+  }
+  const response = await fetch(url.toString(), input.method === 'POST' ? {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestPayload),
+  } : { method: 'GET' })
   const payload = await response.json().catch(() => null)
-  if (!response.ok) {
+  const businessCode = Number(payload?.err_no ?? payload?.errno ?? payload?.code ?? 0)
+  if (!response.ok || businessCode !== 0) {
     throw new Error(
       typeof payload === 'object' && payload && 'message' in payload
         ? String((payload as Record<string, unknown>).message)
@@ -94,6 +104,51 @@ async function exchangeMiniPlatformCodeByHttp(input: {
   }
 }
 
+async function exchangePlatformPhoneCode(input: {
+  appKey?: string
+  code: string
+  platform: 'douyin' | 'xiaohongshu'
+  defaultEndpoint?: string
+}): Promise<{ phoneNumber: string; purePhoneNumber: string; countryCode?: string }> {
+  const platformConfig = await resolveMiniAppPlatformConfig(input.platform, input.appKey)
+  const configuredEndpoint = String(platformConfig.loginConfig.phoneEndpoint ?? '').trim()
+  const endpoint = configuredEndpoint || input.defaultEndpoint
+  if (!endpoint) {
+    throw new Error(`Phone endpoint is not configured for ${input.platform}`)
+  }
+  if (!platformConfig.loginConfig.enabled || !platformConfig.appId || !platformConfig.appSecret) {
+    throw new Error(`Phone capability is not configured for ${input.platform}`)
+  }
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      appid: platformConfig.appId,
+      app_id: platformConfig.appId,
+      secret: platformConfig.appSecret,
+      app_secret: platformConfig.appSecret,
+      code: input.code,
+    }),
+  })
+  const payload = await response.json().catch(() => null)
+  const businessCode = Number(payload?.err_no ?? payload?.errno ?? payload?.code ?? 0)
+  if (!response.ok || businessCode !== 0) {
+    throw new Error(String(payload?.err_tips ?? payload?.errmsg ?? payload?.message ?? `Phone exchange failed for ${input.platform}`))
+  }
+  const data = payload?.data ?? payload
+  const phoneNumber = String(data?.phoneNumber ?? data?.phone_number ?? '').trim()
+  const purePhoneNumber = String(data?.purePhoneNumber ?? data?.pure_phone_number ?? phoneNumber).trim()
+  if (!phoneNumber && !purePhoneNumber) {
+    throw new Error(`Phone response is missing a phone number for ${input.platform}`)
+  }
+  return {
+    phoneNumber: phoneNumber || purePhoneNumber,
+    purePhoneNumber: purePhoneNumber || phoneNumber,
+    countryCode: String(data?.countryCode ?? data?.country_code ?? '').trim() || undefined,
+  }
+}
+
 const wechatAuthProvider: MiniPlatformAuthProvider = {
   platform: 'wechat',
   async exchangeCode(input) {
@@ -118,9 +173,17 @@ const douyinAuthProvider: MiniPlatformAuthProvider = {
       appKey: input.appKey,
       code: input.code,
       platform: 'douyin',
-      endpoint: 'https://developer.toutiao.com/api/apps/jscode2session',
+      endpoint: 'https://developer.toutiao.com/api/apps/v2/jscode2session',
       appIdKey: 'appid',
       appSecretKey: 'secret',
+      method: 'POST',
+    })
+  },
+  async exchangePhoneCode(input) {
+    return await exchangePlatformPhoneCode({
+      ...input,
+      platform: 'douyin',
+      defaultEndpoint: 'https://developer.toutiao.com/api/apps/v2/phonenumber',
     })
   },
 }
@@ -137,12 +200,19 @@ const xiaohongshuAuthProvider: MiniPlatformAuthProvider = {
       appSecretKey: 'app_secret',
     })
   },
+  async exchangePhoneCode(input) {
+    return await exchangePlatformPhoneCode({ ...input, platform: 'xiaohongshu' })
+  },
 }
 
 const wechatPaymentProvider: MiniPlatformPaymentProvider = {
   platform: 'wechat',
   async createPayment(input) {
-    return await createOrderPayment({
+    const platformConfig = await resolveMiniAppPlatformConfig('wechat', input.appKey)
+    if (!platformConfig.paymentConfig.enabled) {
+      throw createPaymentDisabledError('wechat')
+    }
+    const result = await createOrderPayment({
       channel: 'wechat',
       appKey: input.appKey,
       platform: 'wechat',
@@ -152,7 +222,22 @@ const wechatPaymentProvider: MiniPlatformPaymentProvider = {
       openId: input.openId,
       attach: input.attach,
     })
+    return {
+      ...result,
+      payParams: result.payParams ? {
+        kind: 'wechat',
+        provider: 'wxpay',
+        params: result.payParams,
+      } : undefined,
+    }
   },
+}
+
+function createPaymentDisabledError(platform: MiniPlatformKind): Error {
+  return Object.assign(new Error(`当前平台支付未开放：${platform}`), {
+    status: 400,
+    code: 'MINI_PAYMENT_DISABLED',
+  })
 }
 
 async function createGenericPlatformPayment(platform: MiniPlatformKind, input: {
@@ -165,17 +250,35 @@ async function createGenericPlatformPayment(platform: MiniPlatformKind, input: {
 }): Promise<PaymentResult> {
   const platformConfig = await resolveMiniAppPlatformConfig(platform, input.appKey)
   if (!platformConfig.paymentConfig.enabled) {
-    throw new Error(`Platform payment is disabled for ${platform}`)
+    throw createPaymentDisabledError(platform)
   }
   const extConfig = platformConfig.paymentConfig.extConfig as Record<string, unknown> | undefined
   const clientPayParams = extConfig?.clientPayParams as Record<string, unknown> | undefined
   if (!clientPayParams || typeof clientPayParams !== 'object') {
     throw new Error(`Missing clientPayParams for ${platform}`)
   }
+  const payParams = platform === 'douyin'
+    ? {
+        kind: 'douyin-guarantee',
+        orderInfo: {
+          order_id: String(clientPayParams.order_id ?? ''),
+          order_token: String(clientPayParams.order_token ?? ''),
+        },
+        service: 5,
+      }
+    : {
+        kind: 'xiaohongshu-order',
+        orderInfo: clientPayParams.orderInfo && typeof clientPayParams.orderInfo === 'object'
+          ? clientPayParams.orderInfo as Record<string, unknown>
+          : clientPayParams,
+      }
+  if (platform === 'douyin' && (!payParams.orderInfo.order_id || !payParams.orderInfo.order_token)) {
+    throw new Error('Douyin payment order_id or order_token is missing')
+  }
   return {
     status: 'pending',
     provider: String(platformConfig.paymentConfig.channel || platform),
-    payParams: clientPayParams as Record<string, unknown>,
+    payParams,
     raw: {
       platform,
       appKey: platformConfig.appKey,

@@ -12,6 +12,10 @@ export type MiniRuntimeConfigResponse = {
     share: boolean
     update: boolean
     phone: boolean
+    scenery: boolean
+    locationPicker: boolean
+    albumSave: boolean
+    avatarSelection: boolean
   }
   publicRuntimeConfig: {
     branding: {
@@ -53,6 +57,14 @@ export async function buildMiniRuntimeConfig(appKey: string | undefined, platfor
     throw new Error('MiniApp platform config not found')
   }
 
+  const capabilityOverrides = (
+    currentPlatformConfig.extConfig?.capabilities
+    && typeof currentPlatformConfig.extConfig.capabilities === 'object'
+  ) ? currentPlatformConfig.extConfig.capabilities as Record<string, unknown> : {}
+  const resolveCapability = (name: string, fallback: boolean): boolean => (
+    typeof capabilityOverrides[name] === 'boolean' ? capabilityOverrides[name] as boolean : fallback
+  )
+
   return {
     appKey: app.appKey,
     appType: app.appType,
@@ -63,7 +75,15 @@ export async function buildMiniRuntimeConfig(appKey: string | undefined, platfor
       privacy: currentPlatformConfig.privacyConfig.enabled,
       share: currentPlatformConfig.shareConfig.enabled,
       update: currentPlatformConfig.updateConfig.enabled,
-      phone: currentPlatformConfig.loginConfig.enabled,
+      phone: resolveCapability(
+        'phone',
+        currentPlatformConfig.loginConfig.enabled
+          && (platform !== 'xiaohongshu' || Boolean(currentPlatformConfig.loginConfig.phoneEndpoint)),
+      ),
+      scenery: resolveCapability('scenery', platform === 'wechat'),
+      locationPicker: resolveCapability('locationPicker', true),
+      albumSave: resolveCapability('albumSave', true),
+      avatarSelection: resolveCapability('avatarSelection', true),
     },
     publicRuntimeConfig: {
       branding: app.branding,

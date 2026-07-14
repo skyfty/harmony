@@ -1,5 +1,7 @@
 import type { App } from 'vue';
 import { buildQueryString } from '@harmony/utils';
+import { detectMiniPlatform } from '@mini-platform/core';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 export type ShareMessage = {
   title: string;
@@ -93,11 +95,18 @@ export function installShareSupport(app: App): void {
       handleShareLaunch(query);
     },
     onShow() {
-      if (typeof uni.showShareMenu === 'function') {
-        void uni.showShareMenu({
-          menus: ['shareAppMessage', 'shareTimeline'],
-        });
-      }
+      void ensureMiniCapability('share').then((enabled) => {
+        if (!enabled) {
+          if (typeof uni.hideShareMenu === 'function') void uni.hideShareMenu({});
+          return;
+        }
+        if (typeof uni.showShareMenu === 'function') {
+          const menus = detectMiniPlatform() === 'wechat'
+            ? ['shareAppMessage', 'shareTimeline']
+            : ['shareAppMessage'];
+          void uni.showShareMenu({ menus: menus as never });
+        }
+      }).catch(() => undefined);
     },
     onShareAppMessage() {
       return buildShareMessage();

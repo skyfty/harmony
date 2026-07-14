@@ -1,7 +1,6 @@
 import { appConfig } from '@/config/env'
 import { AppUserModel } from '@/models/AppUser'
-import { resolveMiniApp } from '@/services/miniPlatformConfigService'
-import { exchangeMiniProgramPhoneCode } from '@/services/wechatMiniUserService'
+import { MiniPlatformIdentityModel } from '@/models/MiniPlatformIdentity'
 import { signMiniAuthToken } from '@/utils/domainJwt'
 import { hashPassword, verifyPassword } from '@/utils/password'
 
@@ -173,44 +172,6 @@ function syncWechatProfile(
   }
 }
 
-async function pickCanonicalWechatUser(input: {
-  appKey: string
-  platform: MiniPlatform
-  miniAppId: string
-  openId: string
-  unionId?: string
-}) {
-  const modernFilters: Array<Record<string, string>> = [{ appKey: input.appKey, platform: input.platform, wxOpenId: input.openId }]
-  if (input.unionId) {
-    modernFilters.push({ appKey: input.appKey, platform: input.platform, wxUnionId: input.unionId })
-  }
-  const modernMatches = await AppUserModel.find({ $or: modernFilters }).sort({ createdAt: 1, _id: 1 }).exec()
-  if (modernMatches.length) {
-    const [canonical, ...duplicates] = modernMatches
-    if (duplicates.length) {
-      await AppUserModel.deleteMany({ _id: { $in: duplicates.map((item) => item._id) } }).exec()
-    }
-    return canonical
-  }
-
-  const orFilters: Array<Record<string, string>> = [{ miniAppId: input.miniAppId, wxOpenId: input.openId }]
-  if (input.unionId) {
-    orFilters.push({ miniAppId: input.miniAppId, wxUnionId: input.unionId })
-  }
-
-  const matches = await AppUserModel.find({ $or: orFilters }).sort({ createdAt: 1, _id: 1 }).exec()
-  if (!matches.length) {
-    return null
-  }
-
-  const [canonical, ...duplicates] = matches
-  if (duplicates.length) {
-    await AppUserModel.deleteMany({ _id: { $in: duplicates.map((item) => item._id) } }).exec()
-  }
-
-  return canonical
-}
-
 export async function miniRegisterWithPassword(input: {
   username: string
   password: string
@@ -305,7 +266,12 @@ export async function miniLoginWithOpenId(input: {
   const unionId = normalizeOptionalString(input.unionId)
   const displayName = normalizeOptionalString(input.displayName)
   const avatarUrl = normalizeOptionalString(input.avatarUrl)
-  let user = await pickCanonicalWechatUser({ appKey, platform, miniAppId, openId, unionId })
+  const identityFilters: Array<Record<string, string>> = [{ appKey, platform, openId }]
+  if (unionId) {
+    identityFilters.push({ appKey, platform, unionId })
+  }
+  let identity = await MiniPlatformIdentityModel.findOne({ $or: identityFilters }).exec()
+  let user = identity ? await AppUserModel.findById(identity.userId).exec() : null
   let shouldPromptProfileCompletion = false
 
   if (!user) {
@@ -315,8 +281,6 @@ export async function miniLoginWithOpenId(input: {
       platform,
       miniAppId,
       authProvider: 'wechat-mini-program',
-      wxOpenId: openId,
-      ...(unionId ? { wxUnionId: unionId, wechatIdentitySyncedAt: createdAt } : {}),
       displayName: displayName ?? appConfig.miniAuth.defaultDisplayName,
       avatarUrl,
       lastLoginAt: createdAt,
@@ -324,6 +288,15 @@ export async function miniLoginWithOpenId(input: {
       wechatProfileSyncedAt: displayName || avatarUrl ? createdAt : undefined,
       status: 'active',
       contractStatus: 'unsigned',
+    })
+    identity = await MiniPlatformIdentityModel.create({
+      appKey,
+      platform,
+      miniAppId,
+      openId,
+      unionId,
+      userId: user._id,
+      lastLoginAt: createdAt,
     })
     shouldPromptProfileCompletion = !isMiniProfileComplete({
       displayName: user.displayName,
@@ -334,19 +307,19 @@ export async function miniLoginWithOpenId(input: {
     user.platform = platform
     user.miniAppId = miniAppId
     user.authProvider = 'wechat-mini-program'
-    if (user.wxOpenId !== openId) {
-      user.wxOpenId = openId
-    }
-    if (unionId && user.wxUnionId !== unionId) {
-      user.wxUnionId = unionId
-      user.wechatIdentitySyncedAt = new Date()
-    }
     if (!user.displayName) {
       user.displayName = appConfig.miniAuth.defaultDisplayName
     }
     syncWechatProfile(user, displayName, avatarUrl)
     markLogin(user)
     await user.save()
+  }
+
+  if (identity) {
+    identity.miniAppId = miniAppId
+    identity.unionId = unionId
+    identity.lastLoginAt = new Date()
+    await identity.save()
   }
 
   if (user.status !== 'active') {
@@ -363,7 +336,10 @@ export async function miniLoginWithOpenId(input: {
 
 export async function miniBindPhone(input: {
   userId: string
-  code: string
+  code?: string
+  phoneNumber?: string
+  purePhoneNumber?: string
+  countryCode?: string
   appKey?: string
   platform?: MiniPlatform
   miniAppId?: string
@@ -383,13 +359,18 @@ export async function miniBindPhone(input: {
     throw new Error('miniAppId is required')
   }
 
-  const phone = await exchangeMiniProgramPhoneCode(input.code, appKey, platform === 'wechat' ? 'wechat' : 'wechat')
+  let resolvedPhoneNumber = normalizeOptionalString(input.purePhoneNumber) ?? normalizeOptionalString(input.phoneNumber)
+  let resolvedCountryCode = input.countryCode
+  const phoneNumber = resolvedPhoneNumber
+  if (!phoneNumber) {
+    throw new Error('Phone number is required')
+  }
+  user.phone = phoneNumber
+  user.phoneCountryCode = resolvedCountryCode
+  user.phoneBoundAt = user.phoneBoundAt ?? new Date()
   user.appKey = appKey
   user.platform = platform
   user.miniAppId = miniAppId
-  user.phone = phone.purePhoneNumber || phone.phoneNumber
-  user.phoneCountryCode = phone.countryCode
-  user.phoneBoundAt = new Date()
   await user.save()
 
   const sessionUser = buildMiniUser(user.toObject() as AppUserLean)
@@ -411,8 +392,7 @@ export async function miniGetProfile(userId: string): Promise<MiniSessionRespons
 }
 
 export async function ensureMiniProgramTestUserV2(): Promise<void> {
-  const miniApp = await resolveMiniApp().catch(() => null)
-  const appKey = miniApp?.appKey
+  const appKey = undefined
   const miniAppId = appKey
   const username = appConfig.miniProgramTestUser.username.trim()
   const password = appConfig.miniProgramTestUser.password
@@ -485,15 +465,12 @@ export async function ensureMiniProgramTestUserV2(): Promise<void> {
 }
 
 export async function getMiniProgramTestSessionUser(): Promise<MiniSessionUser | null> {
-  const miniApp = await resolveMiniApp().catch(() => null)
-  const appKey = miniApp?.appKey
   const username = appConfig.miniProgramTestUser.username.trim()
   if (!username) {
     return null
   }
 
-  const user = await AppUserModel.findOne({ username, appKey }).lean<AppUserLean>().exec()
-    ?? await AppUserModel.findOne({ username }).lean<AppUserLean>().exec()
+  const user = await AppUserModel.findOne({ username }).lean<AppUserLean>().exec()
   if (!user || user.status !== 'active') {
     return null
   }

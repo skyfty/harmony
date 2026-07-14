@@ -53,6 +53,31 @@
         "workers" : "pages/scenery/workers",
         "usingComponents" : true
     },
+    "mp-toutiao" : {
+        "appid" : "",
+        "projectname" : "harmony-tour-douyin",
+        "optimization" : {
+            "subPackages" : true
+        },
+        "setting" : {
+            "urlCheck" : false,
+            "es6": false
+        },
+        "usingComponents" : true
+    },
+    "mp-xhs" : {
+        "appid" : "",
+        "__usePrivacyCheck__" : true,
+        "optimization" : {
+            "subPackages" : true
+        },
+        "setting" : {
+            "urlCheck" : false,
+            "es6": false,
+            "useNewCompiler": false
+        },
+        "usingComponents" : true
+    },
     "uniStatistics": {
         "enable": false
     },

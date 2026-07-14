@@ -226,6 +226,18 @@ export interface MiniAppWechatPayConfig {
   mockPlatformPrivateKey?: string
 }
 
+export interface MiniPlatformIdentityDocument extends Document<Types.ObjectId> {
+  appKey: string
+  platform: MiniPlatformKind
+  miniAppId: string
+  openId: string
+  unionId?: string
+  userId: Types.ObjectId
+  lastLoginAt?: Date
+  createdAt: Date
+  updatedAt: Date
+}
+
 export type MiniPlatformKind = 'wechat' | 'douyin' | 'xiaohongshu'
 export type MiniAppType = 'tour' | 'viewer'
 

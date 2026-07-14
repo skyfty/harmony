@@ -1,4 +1,4 @@
-import type { MiniRuntimeConfig } from '@mini-platform/core';
+import type { MiniCapability, MiniRuntimeConfig } from '@mini-platform/core';
 import { detectMiniPlatform } from '@mini-platform/core';
 import { miniRequest } from '@harmony/utils';
 
@@ -19,6 +19,15 @@ export function getCachedMiniRuntimeConfig(): MiniRuntimeConfig | null {
   const appKey = getMiniAppKey();
   const platform = detectMiniPlatform();
   return runtimeConfigCache.get(`${appKey}::${platform}`) ?? null;
+}
+
+export function hasMiniCapability(capability: MiniCapability): boolean {
+  return getCachedMiniRuntimeConfig()?.capabilities[capability] === true;
+}
+
+export async function ensureMiniCapability(capability: MiniCapability): Promise<boolean> {
+  const config = await ensureMiniRuntimeConfig();
+  return config.capabilities[capability] === true;
 }
 
 export async function ensureMiniRuntimeConfig(): Promise<MiniRuntimeConfig> {

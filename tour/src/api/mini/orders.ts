@@ -1,4 +1,5 @@
 import type { OrderDetail, OrderListItem, OrderStatus } from '@/types/order'
+import type { MiniPaymentAction } from '@mini-platform/core'
 import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
@@ -29,7 +30,7 @@ export async function getOrderDetail(id: string): Promise<OrderDetail | null> {
 }
 
 export interface CreateOrderPayload {
-  paymentMethod?: 'wechat'
+  paymentMethod?: 'wechat' | 'douyin' | 'xiaohongshu'
   shippingAddress?: string
   metadata?: Record<string, unknown>
   items: Array<{
@@ -44,15 +45,7 @@ export interface PayOrderResult {
   orderNumber: string
   status: OrderStatus
   paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
-  payParams?: {
-    appId: string
-    timeStamp: string
-    nonceStr: string
-    package: string
-    signType: 'RSA'
-    paySign: string
-    prepayId: string
-  }
+  payParams?: MiniPaymentAction
 }
 
 export async function createOrder(payload: CreateOrderPayload): Promise<OrderDetail> {

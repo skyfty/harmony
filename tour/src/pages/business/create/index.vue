@@ -73,6 +73,7 @@ import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import { createBusinessOrder, getBusinessBootstrap, getProfile } from '@/api/mini';
 import type { BusinessBootstrapData } from '@/types/business';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 const loading = ref(true);
 const submitting = ref(false);
@@ -148,6 +149,10 @@ function toggleLandscape(code: string) {
 
 async function pickLocation() {
   try {
+    if (!await ensureMiniCapability('locationPicker')) {
+      void uni.showToast({ title: '当前平台暂不支持地图选点', icon: 'none' });
+      return;
+    }
     const result = await uni.chooseLocation({});
     if (result) {
       form.addressText = result.address || result.name || form.addressText;

@@ -12,6 +12,7 @@ import {
   miniRegisterWithPassword,
 } from '@/services/miniAuthService'
 import { exchangeMiniProgramCode } from '@/services/wechatMiniAuthService'
+import { exchangeMiniProgramPhoneCode } from '@/services/wechatMiniUserService'
 import { recordLogin } from '@/services/loginAuditService'
 import { inferDeviceFromUserAgent, recordAnalyticsEvent } from '@/services/analyticsService'
 
@@ -312,12 +313,15 @@ export async function miniBindWechatPhone(ctx: Context): Promise<void> {
     undefined
 
   try {
+    const phone = await exchangeMiniProgramPhoneCode(code, requestedMiniAppId)
     ctx.body = await miniBindPhone({
       userId,
-      code,
       appKey: requestedMiniAppId,
       platform: 'wechat',
       miniAppId: requestedMiniAppId,
+      phoneNumber: phone.phoneNumber,
+      purePhoneNumber: phone.purePhoneNumber,
+      countryCode: phone.countryCode,
     })
   } catch (error) {
     ctx.throw(400, error instanceof Error ? error.message : 'Bind phone failed')

@@ -53,9 +53,16 @@ export async function bindMiniPlatformPhoneHandler(ctx: Context): Promise<void> 
   if (!code) {
     ctx.throw(400, 'code is required')
   }
+  const provider = getMiniPlatformAuthProvider(resolved.platform)
+  if (!provider.exchangePhoneCode) {
+    ctx.throw(409, `Phone binding is not available for ${resolved.platform}`)
+  }
+  const phone = await provider.exchangePhoneCode({ appKey: resolved.appKey, code })
   const session = await miniBindPhone({
     userId: ctx.state.miniAuthUser?.id ?? '',
-    code,
+    phoneNumber: phone.phoneNumber,
+    purePhoneNumber: phone.purePhoneNumber,
+    countryCode: phone.countryCode,
     appKey: resolved.appKey,
     platform: resolved.platform,
   })

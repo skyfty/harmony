@@ -1,17 +1,24 @@
 export type MiniPlatform = 'wechat' | 'douyin' | 'xiaohongshu';
 
+export type MiniCapability =
+  | 'auth'
+  | 'payment'
+  | 'privacy'
+  | 'share'
+  | 'update'
+  | 'phone'
+  | 'scenery'
+  | 'locationPicker'
+  | 'albumSave'
+  | 'avatarSelection';
+
+export type MiniCapabilities = Record<MiniCapability, boolean>;
+
 export interface MiniRuntimeConfig {
   appKey: string;
   appType: 'tour' | 'viewer';
   platform: MiniPlatform;
-  capabilities: {
-    auth: boolean;
-    payment: boolean;
-    privacy: boolean;
-    share: boolean;
-    update: boolean;
-    phone: boolean;
-  };
+  capabilities: MiniCapabilities;
   publicRuntimeConfig: {
     branding: {
       appName: string;
@@ -67,9 +74,16 @@ export interface UnifiedPaymentPayload {
   attach?: string;
 }
 
+export type MiniPaymentAction =
+  | { kind: 'wechat'; provider: 'wxpay'; params: Record<string, unknown> }
+  | { kind: 'douyin-guarantee'; orderInfo: { order_id: string; order_token: string }; service: 5 }
+  | { kind: 'xiaohongshu-order'; orderInfo: Record<string, unknown> };
+
 export interface UnifiedPhonePayload {
   code: string;
   appKey: string;
+  encryptedData?: string;
+  iv?: string;
 }
 
 export interface UnifiedPhoneResult {
@@ -93,7 +107,7 @@ export interface MiniPlatformAdapter {
   getLoginCode(): Promise<string>;
   login(payload: UnifiedLoginPayload): Promise<UnifiedLoginResult>;
   requestPhoneNumber?(payload: UnifiedPhonePayload): Promise<UnifiedPhoneResult>;
-  requestPayment(payload: Record<string, unknown>): Promise<void>;
+  requestPayment(payload: MiniPaymentAction | Record<string, unknown>): Promise<void>;
   ensurePrivacyConsent(): Promise<boolean>;
   chooseFile?(options: UnifiedChooseFileOptions): Promise<unknown[]>;
   readFileAsArrayBuffer?(file: unknown): Promise<ArrayBuffer>;

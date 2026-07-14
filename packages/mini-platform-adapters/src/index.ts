@@ -1,6 +1,7 @@
 import type {
   MiniPlatform,
   MiniPlatformAdapter,
+  MiniPaymentAction,
   UnifiedChooseFileOptions,
   UnifiedLoginPayload,
   UnifiedLoginResult,
@@ -146,6 +147,44 @@ function requestPaymentByProvider(provider: string, payload: Record<string, unkn
       fail: (error: unknown) => reject(error),
     }
     uni.requestPayment(paymentOptions as never)
+  });
+}
+
+function isMiniPaymentAction(payload: Record<string, unknown> | MiniPaymentAction): payload is MiniPaymentAction {
+  return typeof (payload as { kind?: unknown }).kind === 'string';
+}
+
+function requestPlatformPayment(payload: Record<string, unknown> | MiniPaymentAction, fallbackProvider: string): Promise<void> {
+  if (!isMiniPaymentAction(payload)) {
+    return requestPaymentByProvider(fallbackProvider, payload);
+  }
+  if (payload.kind === 'wechat') {
+    return requestPaymentByProvider(payload.provider, payload.params);
+  }
+  if (payload.kind === 'douyin-guarantee') {
+    return new Promise((resolve, reject) => {
+      const runtime = globalThis as typeof globalThis & { tt?: { pay?: (options: Record<string, unknown>) => void } };
+      if (typeof runtime.tt?.pay !== 'function') {
+        reject(new Error('Douyin payment is not available'));
+        return;
+      }
+      runtime.tt.pay({
+        orderInfo: payload.orderInfo,
+        service: payload.service,
+        success: (result: { code?: number }) => result.code === 0
+          ? resolve()
+          : reject(new Error(`Douyin payment result: ${result.code ?? 'unknown'}`)),
+        fail: reject,
+      });
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const runtime = globalThis as typeof globalThis & { xhs?: { requestOrderPayment?: (options: Record<string, unknown>) => void } };
+    if (typeof runtime.xhs?.requestOrderPayment !== 'function') {
+      reject(new Error('Xiaohongshu payment is not available'));
+      return;
+    }
+    runtime.xhs.requestOrderPayment({ orderInfo: payload.orderInfo, success: resolve, fail: reject });
   });
 }
 
@@ -353,9 +392,9 @@ function createAdapter(platform: MiniPlatform, provider: string | null): MiniPla
     async requestPhoneNumber(payload: UnifiedPhonePayload) {
       return await genericBindPhone(payload, platform);
     },
-    async requestPayment(payload: Record<string, unknown>) {
+    async requestPayment(payload: Record<string, unknown> | MiniPaymentAction) {
       const resolvedProvider = provider ?? await resolvePaymentProvider(platform);
-      await requestPaymentByProvider(resolvedProvider, payload);
+      await requestPlatformPayment(payload, resolvedProvider);
     },
     async ensurePrivacyConsent() {
       return true;

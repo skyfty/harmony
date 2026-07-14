@@ -19,7 +19,9 @@
       </text>
     </view>
 
+    <!-- #ifdef MP-WEIXIN -->
     <SceneryViewer
+      v-if="sceneryEnabled"
       :project-id="projectId"
       :package-url="packageUrl"
       :package-cache-key="packageCacheKey"
@@ -37,14 +39,25 @@
       @punch="handlePunch"
       @coupon="handleCoupon"
     />
+    <!-- #endif -->
+
+    <view v-if="!sceneryEnabled" class="scenery-fallback">
+      <view class="scenery-fallback__card">
+        <text class="scenery-fallback__title">{{ scenicTitle || '景区导览' }}</text>
+        <text class="scenery-fallback__description">当前平台的 3D 景区功能正在适配中，其他景区信息和账户功能仍可正常使用。</text>
+        <button class="scenery-fallback__button" @tap="handleBack">返回景区详情</button>
+      </view>
+    </view>
   </view>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
+// #ifdef MP-WEIXIN
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
+// #endif
 import { getProfile } from '@/api/mini/profile';
 import { getDownloadCdnBaseUrl } from '@harmony/utils/http';
 import {
@@ -58,6 +71,7 @@ import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicle, getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 defineOptions({
   name: 'SceneryPage',
@@ -86,6 +100,7 @@ const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const multiuserIdentity = ref<{ userId: string; displayName?: string | null } | null>(null);
 const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefined);
+const sceneryEnabled = ref(false);
 
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
@@ -195,19 +210,6 @@ type CouponEventPayload = {
   };
 };
 
-function resolvePhysicsEngineFromQuery(value: unknown): 'ammo' | 'cannon' | 'auto' | undefined {
-  if (value === 'ammo' || value === 'cannon' || value === 'auto') {
-    return value;
-  }
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'ammo' || normalized === 'cannon' || normalized === 'auto') {
-    return normalized;
-  }
-  return undefined;
-}
 function handlePunch(payload: PunchEventPayload): void {
   if (!sceneSpotId.value) {
     return;
@@ -319,6 +321,14 @@ function decodeQueryValue(value: unknown): string {
 
 onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
+  void ensureMiniCapability('scenery').then((enabled) => {
+    // The renderer dependency is currently validated only for WeChat.
+    // #ifdef MP-WEIXIN
+    sceneryEnabled.value = enabled;
+    // #endif
+  }).catch(() => {
+    sceneryEnabled.value = false;
+  });
 
   const record: Record<string, unknown> = query ?? {};
   const qrQuery = typeof record.q === 'string' ? extractQueryFromQrLink(record.q) : {};
@@ -454,6 +464,48 @@ onUnload(() => {
 .page {
   width: 100%;
   height: 100vh;
+}
+
+.scenery-fallback {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  background: linear-gradient(160deg, #eef7f3 0%, #f8faf9 100%);
+}
+
+.scenery-fallback__card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 420px;
+  padding: 28px 24px;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 12px 36px rgba(25, 74, 55, 0.12);
+}
+
+.scenery-fallback__title {
+  color: #173d30;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.scenery-fallback__description {
+  color: #5f716a;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.scenery-fallback__button {
+  width: 100%;
+  margin: 4px 0 0;
+  color: #ffffff;
+  background: #1d8f63;
 }
 
 .floating-back {

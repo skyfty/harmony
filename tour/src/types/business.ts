@@ -1,3 +1,5 @@
+import type { MiniPaymentAction } from '@mini-platform/core'
+
 export type BusinessContractStatus = 'unsigned' | 'signed'
 export type BusinessTopStage = 'quote' | 'signing' | 'production' | 'publish' | 'operation'
 export type BusinessOrderKind = 'new' | 'renewal'
@@ -160,15 +162,7 @@ export interface BusinessRenewalPaymentResult {
   orderNumber: string
   paymentStatus: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
   renewal: BusinessRenewalHistoryItem
-  payParams: {
-    appId: string
-    timeStamp: string
-    nonceStr: string
-    package: string
-    signType: 'RSA'
-    paySign: string
-    prepayId?: string
-  } | null
+  payParams: MiniPaymentAction | null
 }
 
 export interface BusinessBootstrapData {

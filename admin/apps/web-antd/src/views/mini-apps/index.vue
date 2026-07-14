@@ -39,6 +39,11 @@ type PlatformFormModel = {
   updatePromptMode: 'force' | 'none' | 'soft';
   navigateEnabled: boolean;
   landingPage: string;
+  phoneEnabled: boolean;
+  sceneryEnabled: boolean;
+  locationPickerEnabled: boolean;
+  albumSaveEnabled: boolean;
+  avatarSelectionEnabled: boolean;
   extConfigText: string;
 };
 
@@ -129,6 +134,11 @@ function createDefaultPlatformForm(): PlatformFormModel {
     updatePromptMode: 'soft',
     navigateEnabled: true,
     landingPage: '',
+    phoneEnabled: true,
+    sceneryEnabled: false,
+    locationPickerEnabled: true,
+    albumSaveEnabled: true,
+    avatarSelectionEnabled: true,
     extConfigText: '{}',
   };
 }
@@ -180,10 +190,28 @@ function applyPlatformConfig(target: PlatformFormModel, source?: MiniAppPlatform
   target.updatePromptMode = source?.updateConfig?.promptMode ?? 'soft';
   target.navigateEnabled = source?.navigateConfig?.enabled !== false;
   target.landingPage = source?.navigateConfig?.landingPage ?? '';
+  const capabilities = source?.extConfig?.capabilities as Record<string, unknown> | undefined;
+  target.phoneEnabled = typeof capabilities?.phone === 'boolean' ? capabilities.phone : source?.loginConfig?.enabled !== false;
+  target.sceneryEnabled = typeof capabilities?.scenery === 'boolean' ? capabilities.scenery : source?.platform === 'wechat';
+  target.locationPickerEnabled = typeof capabilities?.locationPicker === 'boolean' ? capabilities.locationPicker : true;
+  target.albumSaveEnabled = typeof capabilities?.albumSave === 'boolean' ? capabilities.albumSave : true;
+  target.avatarSelectionEnabled = typeof capabilities?.avatarSelection === 'boolean' ? capabilities.avatarSelection : true;
   target.extConfigText = safeJsonStringify(source?.extConfig ?? {});
 }
 
 function buildPlatformPayload(platform: PlatformFormModel): Partial<MiniAppPlatformConfig> {
+  const extConfig = safeJsonParse(platform.extConfigText);
+  const existingCapabilities = extConfig.capabilities && typeof extConfig.capabilities === 'object'
+    ? extConfig.capabilities as Record<string, unknown>
+    : {};
+  extConfig.capabilities = {
+    ...existingCapabilities,
+    phone: platform.phoneEnabled,
+    scenery: platform.sceneryEnabled,
+    locationPicker: platform.locationPickerEnabled,
+    albumSave: platform.albumSaveEnabled,
+    avatarSelection: platform.avatarSelectionEnabled,
+  };
   return {
     enabled: platform.enabled,
     appId: platform.appId.trim(),
@@ -225,7 +253,7 @@ function buildPlatformPayload(platform: PlatformFormModel): Partial<MiniAppPlatf
       enabled: platform.navigateEnabled,
       landingPage: platform.landingPage.trim(),
     },
-    extConfig: safeJsonParse(platform.extConfigText),
+    extConfig,
   };
 }
 
@@ -590,6 +618,21 @@ const [Grid, gridApi] = useVbenVxeGrid<MiniAppItem>({
               </Form.Item>
               <Form.Item label="落地页">
                 <Input v-model:value="formModel.platforms[platform.key].landingPage" allow-clear />
+              </Form.Item>
+              <Form.Item label="手机号授权">
+                <Switch v-model:checked="formModel.platforms[platform.key].phoneEnabled" />
+              </Form.Item>
+              <Form.Item label="3D 景区">
+                <Switch v-model:checked="formModel.platforms[platform.key].sceneryEnabled" />
+              </Form.Item>
+              <Form.Item label="地图选点">
+                <Switch v-model:checked="formModel.platforms[platform.key].locationPickerEnabled" />
+              </Form.Item>
+              <Form.Item label="保存到相册">
+                <Switch v-model:checked="formModel.platforms[platform.key].albumSaveEnabled" />
+              </Form.Item>
+              <Form.Item label="头像选择">
+                <Switch v-model:checked="formModel.platforms[platform.key].avatarSelectionEnabled" />
               </Form.Item>
               <Form.Item label="扩展配置 JSON">
                 <Input.TextArea v-model:value="formModel.platforms[platform.key].extConfigText" :auto-size="{ minRows: 4, maxRows: 8 }" />

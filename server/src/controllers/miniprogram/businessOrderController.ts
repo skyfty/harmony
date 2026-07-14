@@ -87,8 +87,9 @@ export async function payBusinessOrderRenewalHandler(ctx: Context): Promise<void
     const result = await createBusinessOrderRenewalPayment(
       String(ctx.params?.id || ''),
       checkoutUser.id,
-      checkoutUser.miniAppId,
-      checkoutUser.wxOpenId,
+      checkoutUser.appKey,
+      checkoutUser.platform ?? 'wechat',
+      checkoutUser.openId,
       ctx.origin,
     )
     ctx.status = 201

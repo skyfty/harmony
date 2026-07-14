@@ -337,6 +337,7 @@
 
 <script setup lang="ts">
 import { computed, getCurrentInstance, nextTick, ref, watch } from 'vue'
+import { ensureMiniCapability } from '@/platform/runtime'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import QRCode from 'qrcode'
 import BusinessHeaderAction from '@/components/BusinessHeaderAction.vue'
@@ -877,6 +878,9 @@ async function renderShareQrImage(link: string): Promise<string> {
 }
 
 async function saveImageToAlbum(filePath: string): Promise<void> {
+  if (!await ensureMiniCapability('albumSave')) {
+    throw new Error('当前平台暂不支持保存图片到相册')
+  }
   await new Promise<void>((resolve, reject) => {
     uni.saveImageToPhotosAlbum({
       filePath,

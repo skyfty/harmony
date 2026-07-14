@@ -46,7 +46,8 @@
           </view>
         </view>
 
-        <button class="primary-btn" :disabled="submitting" @tap="submitRenewal">{{ submitting ? '提交中...' : '确认续费' }}</button>
+        <button v-if="paymentEnabled" class="primary-btn" :disabled="submitting" @tap="submitRenewal">{{ submitting ? '提交中...' : '确认续费' }}</button>
+        <view v-else class="card">当前平台暂未开放续费支付。</view>
       </template>
     </view>
   </view>
@@ -60,14 +61,17 @@ import PageHeader from '@/components/PageHeader.vue';
 import { getBusinessOrderDetail, getBusinessOrderRenewalPreview, payBusinessOrderRenewal } from '@/api/mini';
 import type { BusinessOrder, BusinessOrderRenewalPreview } from '@/types/business';
 import { requestMiniProgramPayment, toCheckoutErrorMessage } from '@/utils/checkout';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 const loading = ref(true);
 const submitting = ref(false);
 const orderId = ref('');
 const order = ref<BusinessOrder | null>(null);
 const preview = ref<BusinessOrderRenewalPreview | null>(null);
+const paymentEnabled = ref(false);
 
 onLoad((options) => {
+  void ensureMiniCapability('payment').then((enabled) => { paymentEnabled.value = enabled; }).catch(() => { paymentEnabled.value = false; });
   orderId.value = typeof options?.id === 'string' ? options.id : '';
 });
 

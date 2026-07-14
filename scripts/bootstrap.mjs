@@ -154,10 +154,10 @@ function cleanPackageOutputs(packageNames) {
 
 function cleanAppCaches(appName, platform = '', phase = 'build') {
   rmSync(resolve(packageRoots[appName], 'node_modules/.vite'), { recursive: true, force: true });
-  rmSync(resolve(packageRoots[appName], 'dist'), { recursive: true, force: true });
-
-  if ((appName === 'viewer' || appName === 'tour') && platform === 'mp' && phase === 'dev') {
-    rmSync(resolve(packageRoots[appName], 'dist/dev/mp-weixin'), { recursive: true, force: true });
+  if ((appName === 'viewer' || appName === 'tour') && platform.startsWith('mp-')) {
+    rmSync(resolve(packageRoots[appName], `dist/${phase}/${platform}`), { recursive: true, force: true });
+  } else {
+    rmSync(resolve(packageRoots[appName], 'dist'), { recursive: true, force: true });
   }
 }
 
@@ -299,7 +299,7 @@ function printHelp() {
 
 Usage:
   node scripts/bootstrap.mjs viewer <shared|mp|h5> <dev|build>
-  node scripts/bootstrap.mjs tour <shared|mp|h5> <dev|build>
+  node scripts/bootstrap.mjs tour <shared|mp-weixin|mp-toutiao|mp-xhs|h5> <dev|build>
   node scripts/bootstrap.mjs editor
   node scripts/bootstrap.mjs exhibition
 
@@ -308,7 +308,7 @@ Examples:
   node scripts/bootstrap.mjs viewer mp dev
   node scripts/bootstrap.mjs viewer h5 build
   node scripts/bootstrap.mjs tour shared
-  node scripts/bootstrap.mjs tour mp dev
+  node scripts/bootstrap.mjs tour mp-xhs dev
   node scripts/bootstrap.mjs tour h5 build
   node scripts/bootstrap.mjs editor
 `);
@@ -327,8 +327,8 @@ if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
       }
       await bootstrapViewer(platform, phase);
     } else if (target === 'tour') {
-      if (platform !== 'shared' && platform !== 'mp' && platform !== 'h5') {
-        throw new Error('tour bootstrap requires a platform: shared, mp, or h5');
+      if (!['shared', 'mp-weixin', 'mp-toutiao', 'mp-xhs', 'h5'].includes(platform)) {
+        throw new Error('tour bootstrap requires a platform: shared, mp-weixin, mp-toutiao, mp-xhs, or h5');
       }
       if (phase !== 'dev' && phase !== 'build') {
         throw new Error('tour bootstrap requires a phase: dev or build');

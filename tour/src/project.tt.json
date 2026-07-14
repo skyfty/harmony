@@ -1,0 +1,9 @@
+{
+  "projectname": "harmony-tour-douyin",
+  "appid": "",
+  "setting": {
+    "urlCheck": false,
+    "es6": false,
+    "minified": true
+  }
+}

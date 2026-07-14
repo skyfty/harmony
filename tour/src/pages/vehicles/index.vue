@@ -58,6 +58,7 @@ import VehicleCard from '@/components/VehicleCard.vue';
 import { listVehicles, purchaseVehicleByProduct, selectCurrentVehicle } from '@/api/mini/vehicles';
 import type { Vehicle } from '@/types/vehicle';
 import type { VehicleStatus } from '@/types/vehicle';
+import type { MiniPaymentAction } from '@mini-platform/core';
 import {
   isPhoneBindingRequiredError,
   requestMiniProgramPayment,
@@ -65,6 +66,7 @@ import {
 } from '@/utils/checkout';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { getSelectedVehicleId, setSelectedVehicle, setSelectedVehicleId } from '@/utils/vehicleSelection';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 const vehicles = ref<Vehicle[]>([]);
 const selectedId = ref(getSelectedVehicleId());
@@ -74,6 +76,7 @@ const pendingPurchaseProductId = ref<string>('');
 const showPurchaseConfirmDialog = ref(false);
 const purchaseConfirmVehicleId = ref<string>('');
 const purchaseConfirmVehicleName = ref('');
+const paymentEnabled = ref(false);
 const purchaseVehicle = purchaseVehicleByProduct as unknown as (productId: string) => Promise<unknown>;
 const selectVehicleAsCurrent =
   selectCurrentVehicle as unknown as (vehicleId: string) => Promise<{ currentVehicleId: string }>;
@@ -162,6 +165,7 @@ onMounted(() => {
 });
 
 onShow(() => {
+  void ensureMiniCapability('payment').then((enabled) => { paymentEnabled.value = enabled; }).catch(() => { paymentEnabled.value = false; });
   void reload().catch(() => {
     // Keep silent on foreground refresh failure to avoid noisy toasts.
   });
@@ -177,14 +181,7 @@ async function purchaseVehicleWithProductId(productId: string) {
   try {
     const result = (await purchaseVehicle(productId)) as {
       order?: { id: string };
-      payParams?: {
-        appId: string;
-        timeStamp: string;
-        nonceStr: string;
-        package: string;
-        signType: 'RSA';
-        paySign: string;
-      };
+      payParams?: MiniPaymentAction;
     };
     if (result.payParams) {
       await requestMiniProgramPayment(result.payParams);
@@ -226,6 +223,10 @@ async function select(id: string, status: VehicleStatus) {
     return;
   }
   if (status === 'locked') {
+    if (!paymentEnabled.value) {
+      void uni.showToast({ title: '当前平台暂未开放购买功能', icon: 'none' });
+      return;
+    }
     purchaseConfirmVehicleId.value = selectedVehicle.id;
     purchaseConfirmVehicleName.value = selectedVehicle.name;
     showPurchaseConfirmDialog.value = true;

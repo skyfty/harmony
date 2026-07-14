@@ -1,5 +1,6 @@
 import type { Vehicle } from '@/types/vehicle'
 import type { UserVehicle } from '@/types/vehicle'
+import type { MiniPaymentAction } from '@mini-platform/core'
 import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 
@@ -94,14 +95,7 @@ type PurchaseVehicleResponse = {
     orderNumber?: string
     paymentStatus?: string
   }
-  payParams?: {
-    appId: string
-    timeStamp: string
-    nonceStr: string
-    package: string
-    signType: 'RSA'
-    paySign: string
-  }
+  payParams?: MiniPaymentAction
 }
 
 export async function purchaseVehicleByProduct(productId: string): Promise<PurchaseVehicleResponse> {

@@ -15,11 +15,14 @@
             <text v-else class="avatar-text">{{ form.displayName.slice(0, 1) || 'U' }}</text>
           </view>
         </button>
-        <view v-else class="avatar-row" @tap="handleAvatarTap">
+        <view v-else-if="avatarSelectionEnabled" class="avatar-row" @tap="handleAvatarTap">
           <view class="avatar">
             <image v-if="form.avatarUrl" class="avatar-img" :src="form.avatarUrl" mode="aspectFill" />
             <text v-else class="avatar-text">{{ form.displayName.slice(0, 1) || 'U' }}</text>
           </view>
+        </view>
+        <view v-else class="avatar-row">
+          <text>当前平台暂不支持选择头像</text>
         </view>
         <view class="field">
           <text class="label">昵称</text>
@@ -43,12 +46,13 @@
 </template>
 
 <script setup lang="ts">
-import { reactive } from 'vue';
+import { reactive, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { getProfile, saveProfile, uploadProfileAvatar } from '@/api/mini';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import type { Gender, UserProfile } from '@/types/profile';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 const isWechatMiniProgram = typeof wx !== 'undefined';
 
@@ -60,8 +64,10 @@ const form = reactive<UserProfile>({
   birthDate: '',
 });
 const avatarUploading = reactive({ value: false });
+const avatarSelectionEnabled = ref(false);
 
 onShow(() => {
+  void ensureMiniCapability('avatarSelection').then((enabled) => { avatarSelectionEnabled.value = enabled; }).catch(() => { avatarSelectionEnabled.value = false; });
   void loadProfile();
 });
 
@@ -99,7 +105,7 @@ function pickGender() {
 }
 
 function pickAvatar() {
-  if (typeof uni.chooseImage !== 'function') {
+  if (!avatarSelectionEnabled.value || typeof uni.chooseImage !== 'function') {
     return;
   }
   uni.chooseImage({

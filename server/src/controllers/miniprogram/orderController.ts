@@ -5,7 +5,7 @@ import { ProductModel } from '@/models/Product'
 import { VehicleModel } from '@/models/Vehicle'
 import { AppUserModel } from '@/models/AppUser'
 import { ensureMiniCheckoutUser, ensureUserId } from './utils'
-import { createOrderPayment } from '@/services/paymentService'
+import { getMiniPlatformPaymentProvider } from '@/services/miniPlatformProviders'
 import { syncOrderWithWechat } from '@/services/orderSettlementService'
 import { generateOrderNumber } from '@/utils/orderNumber'
 
@@ -444,7 +444,7 @@ export async function createOrder(ctx: Context): Promise<void> {
     orderStatus: 'pending',
     paymentStatus: 'unpaid',
     totalAmount,
-    paymentMethod: body.paymentMethod || 'wechat',
+    paymentMethod: body.paymentMethod || checkoutUser.platform || 'wechat',
     shippingAddress: body.shippingAddress,
     items: orderItems,
     metadata: {
@@ -497,17 +497,17 @@ export async function payOrder(ctx: Context): Promise<void> {
   }
 
   const description = (order.items[0]?.name || 'Harmony商品支付').slice(0, 120)
-  const paymentResult = await createOrderPayment({
-    channel: 'wechat',
-    miniAppId: checkoutUser.miniAppId,
+  const paymentPlatform = checkoutUser.platform ?? 'wechat'
+  const paymentResult = await getMiniPlatformPaymentProvider(paymentPlatform).createPayment({
+    appKey: checkoutUser.appKey,
     orderNumber: order.orderNumber,
     description,
     amount: order.totalAmount,
-    openId: checkoutUser.wxOpenId,
+    openId: checkoutUser.openId,
     attach: JSON.stringify({ orderId: order._id.toString(), userId }),
   })
 
-  order.paymentMethod = order.paymentMethod || 'wechat'
+  order.paymentMethod = order.paymentMethod || paymentPlatform
   order.paymentProvider = paymentResult.provider
   order.paymentStatus = paymentResult.status === 'pending' ? 'processing' : 'failed'
   order.prepayId = paymentResult.prepayId

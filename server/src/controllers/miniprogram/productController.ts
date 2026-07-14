@@ -6,7 +6,7 @@ import { UserProductModel } from '@/models/UserProduct'
 import { ensureMiniCheckoutUser, ensureUserId, getOptionalUserId } from './utils'
 import { generateOrderNumber } from '@/utils/orderNumber'
 import type { ProductUsageConfig, UserProductState } from '@/types/models'
-import { createOrderPayment } from '@/services/paymentService'
+import { getMiniPlatformPaymentProvider } from '@/services/miniPlatformProviders'
 
 function computeUserProductState(entry: {
   state?: UserProductState
@@ -166,7 +166,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
   }
 
   const orderMetadata: Record<string, unknown> = metadata ? { ...metadata } : {}
-  orderMetadata.source = 'legacy-product-purchase'
+  orderMetadata.source = 'product-purchase'
   const orderNumber = generateOrderNumber()
   const order = await OrderModel.create({
     userId,
@@ -175,7 +175,7 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     orderStatus: 'pending',
     paymentStatus: 'unpaid',
     totalAmount: product.price,
-    paymentMethod: paymentMethod ?? 'wechat',
+    paymentMethod: paymentMethod ?? checkoutUser.platform ?? 'wechat',
     shippingAddress,
     items: [
       {
@@ -189,13 +189,13 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
     metadata: orderMetadata,
   })
 
-  const paymentResult = await createOrderPayment({
-    channel: 'wechat',
-    miniAppId: checkoutUser.miniAppId,
+  const paymentPlatform = checkoutUser.platform ?? 'wechat'
+  const paymentResult = await getMiniPlatformPaymentProvider(paymentPlatform).createPayment({
+    appKey: checkoutUser.appKey,
     orderNumber,
     description: product.name,
     amount: product.price,
-    openId: checkoutUser.wxOpenId,
+    openId: checkoutUser.openId,
     attach: JSON.stringify({ orderId: order._id.toString(), userId, productId: product._id.toString() }),
   })
 

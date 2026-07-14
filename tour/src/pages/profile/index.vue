@@ -34,10 +34,12 @@
           <text class="label">手机号</text>
           <view class="phone-cell">
             <button
+              v-if="phoneEnabled"
               class="phone-action"
               open-type="getPhoneNumber"
               @getphonenumber="handleGetPhoneNumber"
             >{{ maskedPhone }}</button>
+            <text v-else class="phone-action">当前平台暂不支持手机号授权</text>
             
           </view>
         </view>
@@ -69,6 +71,7 @@ import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
 import { isMiniProfileIncomplete } from '@/utils/miniProfile';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 const profile = ref<UserProfile>({
   id: '',
@@ -85,9 +88,11 @@ const defaultProfile: UserProfile = {
   gender: 'other',
   birthDate: '',
 };
+const phoneEnabled = ref(false);
 
 onShow(() => {
   applyLightNavigationBar();
+  void ensureMiniCapability('phone').then((enabled) => { phoneEnabled.value = enabled; }).catch(() => { phoneEnabled.value = false; });
   void reloadProfile();
 });
 

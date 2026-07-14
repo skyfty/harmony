@@ -48,13 +48,16 @@ import {
   requestMiniProgramPayment,
   toCheckoutErrorMessage,
 } from '@/utils/checkout';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 const orders = ref<OrderListItem[]>([]);
 const payingOrderId = ref('');
 const showPhoneBindSheet = ref(false);
 const pendingOrderId = ref('');
+const paymentEnabled = ref(false);
 
 onShow(() => {
+  void ensureMiniCapability('payment').then((enabled) => { paymentEnabled.value = enabled; }).catch(() => { paymentEnabled.value = false; });
   void reload();
 });
 
@@ -75,6 +78,7 @@ function openDetail(id: string) {
 }
 
 function showPayAction(order: OrderListItem) {
+  if (!paymentEnabled.value) return false;
   const status = order.orderStatus || order.status;
   return status === 'pending' && ['unpaid', 'failed', 'closed'].includes(order.paymentStatus);
 }

@@ -5,6 +5,7 @@
       <text class="phone-bind-sheet__title">绑定手机号</text>
       <text class="phone-bind-sheet__desc">绑定后可用于联系方式和账号信息补充，支持微信手机号授权。</text>
       <button
+        v-if="phoneEnabled"
         class="phone-bind-sheet__confirm"
         :disabled="loading"
         open-type="getPhoneNumber"
@@ -16,8 +17,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { bindMiniPhone } from '@/api/mini';
+import { ensureMiniCapability } from '@/platform/runtime';
 
 defineProps<{
   modelValue: boolean;
@@ -29,6 +31,11 @@ const emit = defineEmits<{
 }>();
 
 const loading = ref(false);
+const phoneEnabled = ref(false);
+
+onMounted(() => {
+  void ensureMiniCapability('phone').then((enabled) => { phoneEnabled.value = enabled; }).catch(() => { phoneEnabled.value = false; });
+});
 
 function close() {
   if (loading.value) {

@@ -49,15 +49,5 @@ appUserSchema.index(
     },
   },
 )
-appUserSchema.index({ miniAppId: 1, wxOpenId: 1 }, { unique: true, sparse: true })
-appUserSchema.index(
-  { miniAppId: 1, wxUnionId: 1 },
-  {
-    unique: true,
-    partialFilterExpression: {
-      wxUnionId: { $type: 'string', $gt: '' },
-    },
-  },
-)
 
 export const AppUserModel = model<AppUserDocument>('AppUser', appUserSchema, 'users')
