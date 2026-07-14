@@ -255,7 +255,7 @@ function handleDelete(row: VehicleItem) {
     onOk: async () => {
       await deleteVehicleApi(row.id);
       message.success('车辆已删除');
-      vehicleGridApi.reload();
+      await vehicleGridApi.query();
     },
   });
 }

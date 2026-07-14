@@ -148,7 +148,7 @@ function handleDelete(row: UserVehicleItem) {
     onOk: async () => {
       await deleteUserVehicleApi(row.id);
       message.success('已删除');
-      userVehicleGridApi.reload();
+      await userVehicleGridApi.query();
     },
   });
 }

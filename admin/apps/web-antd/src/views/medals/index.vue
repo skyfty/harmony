@@ -438,7 +438,7 @@ function handleDelete(row: any) {
     onOk: async () => {
       await deleteMedalApi(row.id);
       message.success('删除成功');
-      medalGridApi.reload();
+      await medalGridApi.query();
     },
   });
 }

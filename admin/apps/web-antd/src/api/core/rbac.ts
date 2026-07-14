@@ -78,6 +78,7 @@ export interface UpdateUserPayload {
   roleIds?: string[];
   status?: 'active' | 'disabled';
   avatarUrl?: string;
+  username?: string;
 }
 
 export interface AdminItem {

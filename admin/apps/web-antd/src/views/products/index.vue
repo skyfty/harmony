@@ -151,7 +151,7 @@ function handleDelete(row: any) {
     onOk: async () => {
       await deleteProductApi(row.id);
       message.success(t('page.products.index.message.deleteSuccess'));
-      productGridApi.reload();
+      await productGridApi.query();
     },
   });
 }

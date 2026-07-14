@@ -343,7 +343,7 @@ function handleDelete(row: MiniAppItem) {
     onOk: async () => {
       await deleteMiniAppApi(row.id);
       message.success('删除成功');
-      gridApi.reload();
+      await gridApi.query();
     },
   });
 }

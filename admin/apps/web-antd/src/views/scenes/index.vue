@@ -139,7 +139,7 @@ function handleDeleteScene(row: SceneItem) {
     onOk: async () => {
       await deleteSceneApi(row.id);
       message.success(t('page.scenes.index.message.deleteSuccess'));
-      sceneGridApi.reload();
+      await sceneGridApi.query();
     },
   });
 }

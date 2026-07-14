@@ -85,7 +85,7 @@ function handleDelete(row: ResourceSeriesItem) {
     onOk: async () => {
       await deleteResourceSeriesApi(row.id);
       message.success('系列已删除');
-      seriesGridApi.reload();
+      await seriesGridApi.query();
     },
   });
 }

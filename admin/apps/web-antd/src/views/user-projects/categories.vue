@@ -113,7 +113,7 @@ function handleDelete(row: UserProjectCategoryItem) {
     onOk: async () => {
       await deleteProjectCategoryApi(row.id);
       message.success(t('page.userProjects.categories.message.deleteSuccess'));
-      gridApi.reload();
+      await gridApi.query();
     },
   });
 }

@@ -602,7 +602,7 @@ function handleDelete(row: SceneSpotItem) {
     onOk: async () => {
       await deleteSceneSpotApi(row.id);
       message.success(t('page.sceneSpots.index.message.deleteSuccess'));
-      sceneSpotGridApi.reload();
+      await sceneSpotGridApi.query();
     },
   });
 }

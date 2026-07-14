@@ -174,6 +174,7 @@ async function submitUser() {
         displayName: userFormModel.displayName || undefined,
         email: userFormModel.email || undefined,
         phone: userFormModel.phone || undefined,
+        username: userFormModel.username.trim(),
         status: userFormModel.status,
         avatarUrl: uploadedAvatarUrl,
       };
@@ -211,7 +212,7 @@ function handleDelete(record: UserItem) {
     onOk: async () => {
       await deleteUserApi(record.id);
       message.success(t('page.systemUsers.index.message.deleteSuccess'));
-      userGridApi.reload();
+      await userGridApi.query();
     },
   });
 }
@@ -440,7 +441,6 @@ function handleAvatarBeforeUpload(file: UploadFile) {
         <Form.Item :label="t('page.systemUsers.index.form.username.label')" name="username">
           <Input
             v-model:value="userFormModel.username"
-            :disabled="!!editingUserId"
             allow-clear
             :placeholder="t('page.systemUsers.index.form.username.placeholder')"
           />

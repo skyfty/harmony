@@ -59,7 +59,7 @@ function handleDelete(row: any) {
     onOk: async () => {
       await deleteOrderApi(row.id);
       message.success(t('page.orders.index.message.deleteSuccess'));
-      orderGridApi.reload();
+      await orderGridApi.query();
     },
   });
 }

@@ -78,7 +78,7 @@ function handleDelete(row: any) {
     onOk: async () => {
       await deleteAchievementApi(row.id)
       message.success('删除成功')
-      gridApi.reload()
+      await gridApi.query()
     },
   })
 }

@@ -142,7 +142,7 @@ function handleDelete(row: CouponItem) {
     onOk: async () => {
       await deleteCouponApi(row.id);
       message.success('卡券删除成功');
-      couponGridApi.reload();
+      await couponGridApi.query();
     },
   });
 }

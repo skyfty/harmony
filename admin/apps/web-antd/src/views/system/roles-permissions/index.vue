@@ -190,7 +190,7 @@ function handleDeleteRole(record: RoleItem) {
     onOk: async () => {
       await deleteRoleApi(record.id);
       message.success(t('page.rolesPermissions.index.role.message.deleteSuccess'));
-      roleGridApi.reload();
+      await roleGridApi.query();
     },
   });
 }
@@ -255,8 +255,8 @@ function handleDeletePermission(record: PermissionItem) {
       await deletePermissionApi(record.id);
       message.success(t('page.rolesPermissions.index.permission.message.deleteSuccess'));
       await loadPermissionOptions();
-      permissionGridApi.reload();
-      roleGridApi.reload();
+      await permissionGridApi.query();
+      await roleGridApi.query();
     },
   });
 }

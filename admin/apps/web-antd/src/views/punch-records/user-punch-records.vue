@@ -68,7 +68,7 @@ function handleDelete(row: PunchRecordItem) {
     onOk: async () => {
       await deletePunchRecordApi(row.id);
       message.success('打卡记录已删除');
-      punchGridApi.reload();
+      await punchGridApi.query();
     },
   });
 }

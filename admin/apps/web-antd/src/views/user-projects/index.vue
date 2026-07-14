@@ -170,7 +170,7 @@ function handleDeleteProject(row: UserProjectListItem) {
           : t('page.userProjects.index.message.deleteSuccess'),
       );
       clearProjectSelection();
-      await projectGridApi.reload();
+      await projectGridApi.query();
     },
   });
 }
@@ -201,7 +201,7 @@ async function handleBulkDeleteProjects() {
       );
       message.success(permanentDelete ? '已彻底删除选中的项目' : '已删除选中的项目');
       clearProjectSelection();
-      await projectGridApi.reload();
+      await projectGridApi.query();
     },
   });
 }
@@ -220,7 +220,7 @@ async function handleEmptyProjectTrash() {
       });
       message.success('回收站已清空');
       clearProjectSelection();
-      await projectGridApi.reload();
+      await projectGridApi.query();
     },
   });
 }
@@ -229,13 +229,13 @@ async function handleRestoreProject(row: UserProjectListItem) {
   await restoreProjectApi(row.userId, row.id);
   message.success(t('page.userProjects.index.message.restoreSuccess'));
   clearProjectSelection();
-  await projectGridApi.reload();
+  await projectGridApi.query();
 }
 
 async function toggleTrashView() {
   showDeletedOnly.value = !showDeletedOnly.value;
   clearProjectSelection();
-  await projectGridApi.reload();
+  await projectGridApi.query();
 }
 
 const router = useRouter();

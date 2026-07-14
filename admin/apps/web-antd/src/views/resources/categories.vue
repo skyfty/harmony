@@ -472,7 +472,7 @@ function handleDelete(row: CategoryFlatItem) {
       await deleteResourceCategoryApi(row.id);
       message.success('分类已删除');
       await loadCategories();
-      categoryGridApi.reload();
+      await categoryGridApi.query();
     },
   });
 }

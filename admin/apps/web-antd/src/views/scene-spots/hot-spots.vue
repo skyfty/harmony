@@ -117,7 +117,7 @@ async function handleDelete(row: any) {
     onOk: async () => {
       await deleteHotSpotApi(row.id);
       message.success('删除成功');
-      gridApi.reload();
+      await gridApi.query();
     },
   });
 }

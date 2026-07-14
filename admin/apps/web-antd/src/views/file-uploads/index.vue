@@ -185,7 +185,7 @@ function handleDelete(record: FileUploadItem) {
     onOk: async () => {
       await deleteFileUploadApi(record.id)
       message.success('删除成功')
-      fileUploadGridApi.reload()
+      await fileUploadGridApi.query()
     },
   })
 }

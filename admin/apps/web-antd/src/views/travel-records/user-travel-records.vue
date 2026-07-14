@@ -68,7 +68,7 @@ function handleDelete(row: TravelRecordItem) {
     onOk: async () => {
       await deleteTravelRecordApi(row.id);
       message.success('游历记录已删除');
-      travelGridApi.reload();
+      await travelGridApi.query();
     },
   });
 }

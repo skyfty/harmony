@@ -62,7 +62,7 @@ function handleDelete(row: any) {
       deleting.value = row.id
       await deleteLoginLogApi(row.id)
       message.success('删除成功')
-      gridApi.reload()
+      await gridApi.query()
       deleting.value = null
     },
   })
@@ -81,7 +81,7 @@ async function handleBulkDelete() {
       const ids = selected.map((r: any) => r.id)
       await bulkDeleteLoginLogsApi(ids)
       message.success('删除成功')
-      gridApi.reload()
+      await gridApi.query()
     },
   })
 }

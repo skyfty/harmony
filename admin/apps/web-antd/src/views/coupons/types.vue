@@ -116,7 +116,7 @@ function handleDelete(row: CouponTypeItem) {
     onOk: async () => {
       await deleteCouponTypeApi(row.id);
       message.success(t('page.coupons.types.message.deleteSuccess'));
-      gridApi.reload();
+      await gridApi.query();
     },
   });
 }

@@ -100,7 +100,7 @@ function handleDelete(row: any) {
     onOk: async () => {
       await deleteTravelRecordApi(row.id)
       message.success(t('page.travelRecords.index.message.deleteSuccess'))
-      gridApi.reload()
+      await gridApi.query()
     },
   })
 }

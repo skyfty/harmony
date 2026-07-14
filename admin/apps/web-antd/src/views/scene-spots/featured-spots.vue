@@ -86,7 +86,7 @@ async function handleUpdateOrder(row: any) {
 }
 
 async function handleDelete(row: any) {
-  Modal.confirm({ title: `删除精选景点`, content: `确定删除 ${row.sceneSpotTitle || ''} 吗？`, onOk: async () => { await deleteFeaturedSpotApi(row.id); message.success('删除成功'); gridApi.reload(); } });
+  Modal.confirm({ title: `删除精选景点`, content: `确定删除 ${row.sceneSpotTitle || ''} 吗？`, onOk: async () => { await deleteFeaturedSpotApi(row.id); message.success('删除成功'); await gridApi.query(); } });
 }
 
 onMounted(async () => {

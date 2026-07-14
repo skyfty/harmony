@@ -179,7 +179,7 @@ function handleDelete(record: AdminItem) {
     onOk: async () => {
       await deleteAdminApi(record.id);
       message.success(t('page.systemAdmins.index.message.deleteSuccess'));
-      adminGridApi.reload();
+      await adminGridApi.query();
     },
   });
 }

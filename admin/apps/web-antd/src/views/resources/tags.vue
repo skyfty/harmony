@@ -85,7 +85,7 @@ function handleDelete(row: ResourceTagItem) {
     onOk: async () => {
       await deleteResourceTagApi(row.id);
       message.success('标签已删除');
-      tagGridApi.reload();
+      await tagGridApi.query();
     },
   });
 }

@@ -219,7 +219,7 @@ function handleDelete(row: SceneSpotCommentItem) {
     onOk: async () => {
       await deleteSceneSpotCommentApi(row.id);
       message.success(t('page.sceneSpotComments.index.message.deleteSuccess'));
-      gridApi.reload();
+      await gridApi.query();
     },
   });
 }

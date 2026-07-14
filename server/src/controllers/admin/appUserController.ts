@@ -123,7 +123,7 @@ export async function updateAppUser(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid user id')
   }
-  const { email, displayName, avatarUrl, phone, bio, gender, birthDate, status, contractStatus } = ctx.request.body as Record<string, unknown>
+  const { username, email, displayName, avatarUrl, phone, bio, gender, birthDate, status, contractStatus } = ctx.request.body as Record<string, unknown>
   const update: Record<string, unknown> = {
     email,
     displayName,
@@ -131,6 +131,17 @@ export async function updateAppUser(ctx: Context): Promise<void> {
     phone,
     bio,
     status,
+  }
+  if (typeof username === 'string') {
+    const safeUsername = username.trim()
+    if (!safeUsername) {
+      ctx.throw(400, 'Username is required')
+    }
+    const exists = await AppUserModel.findOne({ username: safeUsername, _id: { $ne: id } }).lean().exec()
+    if (exists) {
+      ctx.throw(409, 'Username already exists')
+    }
+    update.username = safeUsername
   }
   if (typeof contractStatus === 'string' && ['unsigned', 'signed'].includes(contractStatus)) {
     update.contractStatus = contractStatus

@@ -253,7 +253,7 @@ function handleDelete(row: CategoryTreeRow) {
       await deleteSceneSpotCategoryApi(row.id);
       message.success(t('page.sceneSpotCategories.message.deleteSuccess'));
       await loadCategories();
-      gridApi.reload();
+      await gridApi.query();
     },
   });
 }

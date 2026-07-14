@@ -84,7 +84,7 @@ function handleDelete(row: any) {
     onOk: async () => {
       await deletePunchRecordApi(row.id)
       message.success(t('page.punchRecords.index.message.deleteSuccess'))
-      gridApi.reload()
+      await gridApi.query()
     },
   })
 }

@@ -91,7 +91,7 @@ function handleDelete(row: OrderItem) {
     onOk: async () => {
       await deleteOrderApi(row.id);
       message.success('订单已删除');
-      orderGridApi.reload();
+      await orderGridApi.query();
     },
   });
 }

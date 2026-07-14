@@ -9,6 +9,7 @@ import type {
   UnifiedSystemInfo,
 } from '../../mini-platform-core/src/index';
 import { detectMiniPlatform } from '../../mini-platform-core/src/index';
+import { getAuthToken } from '@harmony/utils';
 
 type MiniPlatformRuntimeState = {
   apiBaseUrl?: string;
@@ -85,11 +86,7 @@ function getRuntimeState(): MiniPlatformRuntimeState {
 }
 
 function getToken(): string {
-  try {
-    return String(uni.getStorageSync('mini-access-token') ?? '');
-  } catch {
-    return '';
-  }
+  return getAuthToken() ?? '';
 }
 
 async function genericLogin(payload: UnifiedLoginPayload, platform: MiniPlatform): Promise<UnifiedLoginResult> {
@@ -106,16 +103,22 @@ async function genericLogin(payload: UnifiedLoginPayload, platform: MiniPlatform
 }
 
 async function genericBindPhone(payload: UnifiedPhonePayload, platform: MiniPlatform): Promise<UnifiedPhoneResult> {
+  const token = getToken();
   return await requestMiniApi<UnifiedPhoneResult>('/auth/bind-phone', {
     body: {
       ...payload,
       platform,
     },
-    headers: {
-      Authorization: getToken() ? `Bearer ${getToken()}` : '',
-      'X-Mini-App-Key': payload.appKey,
-      'X-Mini-Platform': platform,
-    },
+    headers: token
+      ? {
+          Authorization: `Bearer ${token}`,
+          'X-Mini-App-Key': payload.appKey,
+          'X-Mini-Platform': platform,
+        }
+      : {
+          'X-Mini-App-Key': payload.appKey,
+          'X-Mini-Platform': platform,
+        },
   });
 }
 

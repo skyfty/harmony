@@ -114,7 +114,7 @@ function handleDelete(row: ProductCategoryItem) {
     onOk: async () => {
       await deleteProductCategoryApi(row.id);
       message.success(t('page.products.categories.message.deleteSuccess'));
-      gridApi.reload();
+      await gridApi.query();
     },
   });
 }
