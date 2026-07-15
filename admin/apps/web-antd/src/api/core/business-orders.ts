@@ -100,6 +100,30 @@ export interface BusinessOrderItem {
 }
 
 export interface BusinessOrderAnalyticsItem {
+  charts: {
+    breakdown: {
+      categories: string[];
+      dimension?: 'category' | 'checkpoint';
+      granularity?: 'day' | 'month';
+      metric?: 'pv' | 'uv' | 'newUsers' | 'punchCount';
+      series: Array<{
+        data: number[];
+        name: string;
+      }>;
+      total: number;
+    };
+    trend: {
+      categories: string[];
+      dimension?: 'category' | 'checkpoint';
+      granularity?: 'day' | 'month';
+      metric?: 'pv' | 'uv' | 'newUsers' | 'punchCount';
+      series: Array<{
+        data: number[];
+        name: string;
+      }>;
+      total: number;
+    };
+  };
   checkpointStats: Array<{
     nodeId: string;
     nodeName: string;
@@ -124,6 +148,15 @@ export interface BusinessOrderAnalyticsItem {
     pv: number;
     uv: number;
   }>;
+}
+
+export interface BusinessOrderAnalyticsQueryParams {
+  dimension?: 'category' | 'checkpoint';
+  end?: string;
+  granularity?: 'day' | 'month';
+  limit?: number;
+  metric?: 'pv' | 'uv' | 'newUsers' | 'punchCount';
+  start?: string;
 }
 
 export interface BusinessConfigItem {
@@ -159,8 +192,10 @@ export async function getBusinessOrderApi(id: string) {
   return requestClient.get<BusinessOrderItem>(`/admin/business-orders/${id}`);
 }
 
-export async function getBusinessOrderAnalyticsApi(id: string) {
-  return requestClient.get<BusinessOrderAnalyticsItem>(`/admin/business-orders/${id}/analytics`);
+export async function getBusinessOrderAnalyticsApi(id: string, params?: BusinessOrderAnalyticsQueryParams) {
+  return requestClient.get<BusinessOrderAnalyticsItem>(`/admin/business-orders/${id}/analytics`, {
+    params,
+  });
 }
 
 export async function listBusinessOrderRenewalsApi(id: string) {
@@ -178,6 +213,7 @@ export async function updateBusinessConfigApi(payload: { contactPhone: string })
 export async function updateBusinessOrderApi(id: string, payload: {
   contactPhoneForBusiness?: string;
   notes?: string;
+  sceneSpotId?: string | null;
   renewalWarningDays?: number;
   serviceDurationDays?: number;
   serviceEndAt?: string | null;
@@ -185,10 +221,6 @@ export async function updateBusinessOrderApi(id: string, payload: {
   serviceStartAt?: string | null;
 }) {
   return requestClient.put<BusinessOrderItem>(`/admin/business-orders/${id}`, payload);
-}
-
-export async function bindBusinessOrderDeliveryApi(id: string, payload: { sceneSpotId: string }) {
-  return requestClient.put<BusinessOrderItem>(`/admin/business-orders/${id}/delivery-binding`, payload);
 }
 
 export async function signBusinessOrderApi(id: string) {
