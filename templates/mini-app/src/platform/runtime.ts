@@ -16,9 +16,7 @@ export function getMiniApiBaseUrl(): string {
 
 function getMiniRuntimeConfigUrl(): string {
   const baseUrl = getMiniApiBaseUrl();
-  return baseUrl.endsWith('/api/mini')
-    ? `${baseUrl}/runtime-config`
-    : `${baseUrl}/api/mini/runtime-config`;
+  return `${baseUrl}/runtime-config`;
 }
 
 export async function ensureMiniRuntimeConfig(): Promise<MiniRuntimeConfig | null> {

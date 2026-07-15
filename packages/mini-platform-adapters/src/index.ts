@@ -45,10 +45,9 @@ async function requestMiniApi<T>(path: string, options: {
 }): Promise<T> {
   const runtime = getRuntimeState();
   const baseUrl = String(runtime.apiBaseUrl ?? '').replace(/\/$/, '');
-  const apiBaseUrl = baseUrl.endsWith('/api/mini') ? baseUrl : `${baseUrl}/api/mini`;
   return await new Promise<T>((resolve, reject) => {
     uni.request({
-      url: `${apiBaseUrl}${path}`,
+      url: `${baseUrl}${path}`,
       method: options.method ?? 'POST',
       header: {
         'Content-Type': 'application/json',

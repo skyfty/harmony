@@ -30,7 +30,7 @@ export async function ensureMiniRuntimeConfig(): Promise<MiniRuntimeConfig | nul
   const platform = detectMiniPlatform();
   pendingRuntimeConfig = new Promise((resolve) => {
     uni.request({
-      url: `${getMiniApiBaseUrl()}/api/mini/runtime-config`,
+      url: `${getMiniApiBaseUrl()}/runtime-config`,
       method: 'GET',
       header: {
         'X-Mini-App-Key': appKey,

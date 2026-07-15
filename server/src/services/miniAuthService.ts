@@ -172,6 +172,10 @@ function syncWechatProfile(
   }
 }
 
+function isDuplicateKeyError(error: unknown): boolean {
+  return Boolean((error as { code?: number } | null)?.code === 11000)
+}
+
 export async function miniRegisterWithPassword(input: {
   username: string
   password: string
@@ -276,7 +280,7 @@ export async function miniLoginWithOpenId(input: {
 
   if (!user) {
     const createdAt = new Date()
-    user = await AppUserModel.create({
+    const createdUser = await AppUserModel.create({
       appKey,
       platform,
       miniAppId,
@@ -289,15 +293,44 @@ export async function miniLoginWithOpenId(input: {
       status: 'active',
       contractStatus: 'unsigned',
     })
-    identity = await MiniPlatformIdentityModel.create({
-      appKey,
-      platform,
-      miniAppId,
-      openId,
-      unionId,
-      userId: user._id,
-      lastLoginAt: createdAt,
-    })
+
+    try {
+      identity = await MiniPlatformIdentityModel.create({
+        appKey,
+        platform,
+        miniAppId,
+        openId,
+        unionId,
+        userId: createdUser._id,
+        lastLoginAt: createdAt,
+      })
+      user = createdUser
+    } catch (error) {
+      if (!isDuplicateKeyError(error)) {
+        throw error
+      }
+
+      const existingIdentity = await MiniPlatformIdentityModel.findOne({ appKey, platform, openId }).exec()
+      if (!existingIdentity) {
+        throw error
+      }
+
+      const existingUser = await AppUserModel.findById(existingIdentity.userId).exec()
+      if (existingUser) {
+        await AppUserModel.deleteOne({ _id: createdUser._id }).exec().catch(() => undefined)
+        identity = existingIdentity
+        user = existingUser
+      } else {
+        existingIdentity.userId = createdUser._id
+        existingIdentity.miniAppId = miniAppId
+        existingIdentity.unionId = unionId
+        existingIdentity.lastLoginAt = createdAt
+        await existingIdentity.save()
+        identity = existingIdentity
+        user = createdUser
+      }
+    }
+
     shouldPromptProfileCompletion = !isMiniProfileComplete({
       displayName: user.displayName,
       avatarUrl: user.avatarUrl,
