@@ -290,6 +290,7 @@ async function submitForm() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  margin-top: 10px;
 }
 
 .field-row__item {
