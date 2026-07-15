@@ -1,6 +1,13 @@
 <template>
   <view class="page">
     <MiniAuthRecovery />
+    <RouteLoadingOverlay
+      v-if="isInitialLoading"
+      title="景点列表加载中"
+      subtitle="正在为你准备全量景点"
+      hint="马上就能开始探索"
+      compact
+    />
     <PageHeader :title="headerTitle" />
 
     <view class="content">
@@ -71,6 +78,7 @@ import { guardedNavigateTo } from '@/utils/navigationGuard'
 import BottomNav from '@/components/BottomNav.vue'
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue'
 import PageHeader from '@/components/PageHeader.vue'
+import RouteLoadingOverlay from '@/components/RouteLoadingOverlay.vue'
 import ScenicCard from '@/components/ScenicCard.vue'
 import { listScenics } from '@/api/mini'
 import { listAchievements } from '@/api/mini/achievements'
@@ -86,6 +94,7 @@ type ScenicListItem = ScenicSummary & {
 const keyword = ref('')
 const scenics = ref<ScenicListItem[]>([])
 const scenicCheckinProgresses = ref<ScenicCheckinProgressItem[]>([])
+const isInitialLoading = ref(true)
 const listScenicsSafe = listScenics as (query?: { featured?: boolean; q?: string }) => Promise<ScenicListItem[]>
 type ScenicFilter = 'all' | 'hot' | 'featured'
 
@@ -116,10 +125,18 @@ async function reload(searchKeyword?: string) {
   scenics.value = Array.isArray(all) ? all : []
 }
 
-onMounted(() => {
-  void reload(keyword.value).catch(() => {
+async function loadInitialData() {
+  try {
+    await reload(keyword.value)
+  } catch {
     void uni.showToast({ title: '加载失败', icon: 'none' })
-  })
+  } finally {
+    isInitialLoading.value = false
+  }
+}
+
+onMounted(() => {
+  void loadInitialData()
   void loadScenicCheckinProgresses()
 })
 

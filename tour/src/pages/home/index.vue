@@ -1,6 +1,13 @@
 <template>
   <view class="page">
     <MiniAuthRecovery />
+    <RouteLoadingOverlay
+      v-if="isInitialLoading"
+      title="首页内容加载中"
+      subtitle="正在整理今日推荐景点"
+      hint="精选内容马上就绪"
+      compact
+    />
     <view class="hero">
       <view class="hero-bg">
         <view class="hero-orb hero-orb-left" />
@@ -58,6 +65,7 @@ import { guardedNavigateTo } from '@/utils/navigationGuard';
 
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
+import RouteLoadingOverlay from '@/components/RouteLoadingOverlay.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
 import { listScenics } from '@/api/mini';
 import { listAchievements } from '@/api/mini/achievements';
@@ -75,6 +83,7 @@ type HomeScenicSummary = ScenicSummary & {
 const keyword = ref('');
 const scenics = ref<HomeScenicSummary[]>([]);
 const scenicCheckinProgresses = ref<ScenicCheckinProgressItem[]>([]);
+const isInitialLoading = ref(true);
 const listScenicsSafe = listScenics as (query?: {
   featured?: boolean;
   homepage?: boolean;
@@ -87,10 +96,18 @@ async function reload() {
   scenics.value = res;
 }
 
-onMounted(() => {
-  void reload().catch(() => {
+async function loadInitialData() {
+  try {
+    await reload();
+  } catch {
     void uni.showToast({ title: '加载失败', icon: 'none' });
-  });
+  } finally {
+    isInitialLoading.value = false;
+  }
+}
+
+onMounted(() => {
+  void loadInitialData();
   void loadScenicCheckinProgresses();
 });
 

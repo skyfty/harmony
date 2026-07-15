@@ -230,13 +230,58 @@ async function submitForm() {
 
 <style scoped lang="scss">
 .page {
+  position: relative;
+  isolation: isolate;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top right, rgba(255, 159, 67, 0.18), transparent 32%),
+    radial-gradient(circle at top right, rgba(255, 159, 67, 0.2), transparent 30%),
+    radial-gradient(circle at 16% 8%, rgba(255, 255, 255, 0.08), transparent 18%),
+    radial-gradient(circle at 78% 10%, rgba(101, 164, 255, 0.14), transparent 22%),
     linear-gradient(180deg, #13243b 0%, #13243b 16%, #f3f5f8 16%, #f7f8fa 100%);
 }
 
+.page::before,
+.page::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.page::before {
+  top: 0;
+  height: 240px;
+  background:
+    radial-gradient(circle at 18% 26%, rgba(255, 255, 255, 0.12), transparent 18%),
+    radial-gradient(circle at 82% 18%, rgba(255, 159, 67, 0.22), transparent 18%),
+    radial-gradient(circle at 52% 76%, rgba(90, 145, 220, 0.14), transparent 22%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.05) 0,
+      rgba(255, 255, 255, 0.05) 1px,
+      transparent 1px,
+      transparent 18px
+    );
+  opacity: 0.82;
+  animation: pageGlowDrift 12s ease-in-out infinite alternate;
+}
+
+.page::after {
+  top: -28px;
+  height: 180px;
+  width: 55%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+  filter: blur(10px);
+  transform: skewX(-18deg);
+  opacity: 0.72;
+  animation: pageLightSweep 8s linear infinite;
+}
+
 .content {
+  position: relative;
+  z-index: 1;
   padding: 16px;
 }
 
@@ -386,5 +431,25 @@ async function submitForm() {
 .secondary-btn {
   background: rgba(15, 39, 72, 0.08);
   color: #10284a;
+}
+
+@keyframes pageGlowDrift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  100% {
+    transform: translate3d(0, 10px, 0) scale(1.03);
+  }
+}
+
+@keyframes pageLightSweep {
+  0% {
+    transform: translateX(-30%) skewX(-18deg);
+  }
+
+  100% {
+    transform: translateX(170%) skewX(-18deg);
+  }
 }
 </style>
