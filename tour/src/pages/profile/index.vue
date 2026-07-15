@@ -64,7 +64,7 @@ import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
-import { bindMiniPhone, getProfile } from '@/api/mini';
+import { bindMiniPhone, ensureMiniAuth, getProfile } from '@/api/mini';
 import { requestProfileAndSync } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
@@ -145,8 +145,13 @@ function openProfileEdit() {
   uni.navigateTo({ url: '/pages/profile/edit' });
 }
 
-function openBusinessPage() {
-  uni.navigateTo({ url: '/pages/business/index' });
+async function openBusinessPage() {
+  try {
+    await ensureMiniAuth();
+    uni.navigateTo({ url: '/pages/business/index' });
+  } catch {
+    uni.showToast({ title: '请先登录微信后再进入商业订单', icon: 'none' });
+  }
 }
 
 function nav(url: string) {
