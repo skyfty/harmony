@@ -43,6 +43,14 @@
     "mp-weixin" : {
         "appid" : "",
         "__usePrivacyCheck__" : true,
+        "permission" : {
+            "scope.userLocation" : {
+                "desc" : "用于获取景点地址并在地图中选点"
+            }
+        },
+        "requiredPrivateInfos" : [
+            "chooseLocation"
+        ],
         "optimization" : {
             "subPackages" : true
         },

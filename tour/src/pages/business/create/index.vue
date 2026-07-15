@@ -153,6 +153,11 @@ async function pickLocation() {
       void uni.showToast({ title: '当前平台暂不支持地图选点', icon: 'none' });
       return;
     }
+    const permissionResult = await ensureLocationPermission();
+    if (permissionResult !== 'granted') {
+      showLocationPermissionHint(permissionResult);
+      return;
+    }
     const result = await uni.chooseLocation({});
     if (result) {
       form.addressText = result.address || result.name || form.addressText;
@@ -163,6 +168,56 @@ async function pickLocation() {
   } catch {
     void uni.showToast({ title: '定位获取失败', icon: 'none' });
   }
+}
+
+type LocationPermissionResult = 'granted' | 'not_requested' | 'denied';
+
+async function ensureLocationPermission(): Promise<LocationPermissionResult> {
+  if (typeof uni.getSetting !== 'function' || typeof uni.authorize !== 'function') {
+    return 'granted';
+  }
+
+  const setting = await new Promise<{ authSetting: Record<string, boolean | undefined> }>((resolve, reject) => {
+    uni.getSetting({
+      success: (result) => resolve(result as { authSetting: Record<string, boolean | undefined> }),
+      fail: (error: unknown) => reject(error),
+    });
+  });
+
+  const locationAuth = setting.authSetting['scope.userLocation'];
+  if (locationAuth === true) {
+    return 'granted';
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      uni.authorize({
+        scope: 'scope.userLocation',
+        success: () => resolve(),
+        fail: (error: unknown) => reject(error),
+      });
+    });
+    return 'granted';
+  } catch {
+    return locationAuth === false ? 'denied' : 'not_requested';
+  }
+}
+
+function showLocationPermissionHint(result: LocationPermissionResult) {
+  const content = result === 'denied'
+    ? '你之前关闭了定位权限，请到设置里手动开启后再试。'
+    : '需要先允许定位权限，才能打开地图选点。';
+  void uni.showModal({
+    title: '需要定位权限',
+    content,
+    confirmText: '去设置',
+    cancelText: '取消',
+    success: (res) => {
+      if (res.confirm && typeof uni.openSetting === 'function') {
+        uni.openSetting({});
+      }
+    },
+  });
 }
 
 function contactBusiness() {
