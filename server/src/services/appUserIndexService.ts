@@ -32,9 +32,22 @@ function hasExpectedUnionIndexShape(index: MongoIndexInfo | undefined): boolean 
   return Boolean(index?.unique && unionFilter?.$type === 'string' && unionFilter.$gt === '')
 }
 
+function hasWxOpenIdIndex(index: MongoIndexInfo | undefined): boolean {
+  return Boolean(index?.key && Object.prototype.hasOwnProperty.call(index.key, 'wxOpenId'))
+}
+
 export async function ensureAppUserWechatIndexes(): Promise<void> {
   const indexes = (await AppUserModel.collection.indexes()) as MongoIndexInfo[]
+  const legacyWxOpenIdIndexes = indexes.filter(hasWxOpenIdIndex)
   const existingUnionIndex = indexes.find((index) => index.name === APP_USER_WECHAT_UNION_INDEX_NAME)
+
+  for (const legacyIndex of legacyWxOpenIdIndexes) {
+    if (!legacyIndex.name) {
+      continue
+    }
+    await AppUserModel.collection.dropIndex(legacyIndex.name)
+    console.log(`[app-user-indexes] dropped legacy wxOpenId index ${legacyIndex.name}`)
+  }
 
   if (hasExpectedUnionIndexShape(existingUnionIndex)) {
     return

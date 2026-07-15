@@ -1,50 +1,134 @@
 import type { Context } from 'koa'
 import { Types } from 'mongoose'
 import { AppUserModel } from '@/models/AppUser'
+import { MiniPlatformIdentityModel } from '@/models/MiniPlatformIdentity'
 import { hashPassword } from '@/utils/password'
 
-function mapAppUser(user: any) {
+type AppUserView = {
+  _id: { toString(): string }
+  miniAppId?: string
+  username?: string
+  authProvider?: string
+  wxOpenId?: string | null
+  wxUnionId?: string | null
+  email?: string
+  displayName?: string
+  avatarUrl?: string
+  phone?: string
+  phoneCountryCode?: string
+  phoneBoundAt?: Date | string | null
+  bio?: string
+  gender?: string | null
+  birthDate?: Date | string | null
+  lastLoginAt?: Date | string | null
+  lastLoginSource?: string
+  wechatProfileSyncedAt?: Date | string | null
+  wechatIdentitySyncedAt?: Date | string | null
+  currentVehicleId?: { toString(): string } | null
+  status?: string
+  contractStatus?: string
+  workShareCount?: number
+  exhibitionShareCount?: number
+  createdAt?: Date | string
+  updatedAt?: Date | string
+}
+
+function toIsoString(value: unknown): string | null {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const date =
+    value instanceof Date
+      ? value
+      : typeof value === 'string' || typeof value === 'number'
+        ? new Date(value)
+        : null
+  if (!date) {
+    return null
+  }
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+}
+
+function mapAppUser(user: AppUserView, wxOpenId?: string | null) {
   return {
     id: user._id.toString(),
     miniAppId: user.miniAppId ?? null,
     username: user.username ?? null,
     authProvider: user.authProvider ?? null,
-    wxOpenId: user.wxOpenId ?? null,
+    wxOpenId: wxOpenId ?? null,
     wxUnionId: user.wxUnionId ?? null,
     email: user.email ?? null,
     displayName: user.displayName ?? null,
     avatarUrl: user.avatarUrl ?? null,
     phone: user.phone ?? null,
     phoneCountryCode: user.phoneCountryCode ?? null,
-    phoneBoundAt: user.phoneBoundAt ? new Date(user.phoneBoundAt).toISOString() : null,
+    phoneBoundAt: toIsoString(user.phoneBoundAt),
     bio: user.bio ?? null,
     gender: user.gender ?? null,
-    birthDate: user.birthDate ? new Date(user.birthDate).toISOString() : null,
-    lastLoginAt: user.lastLoginAt ? new Date(user.lastLoginAt).toISOString() : null,
+    birthDate: toIsoString(user.birthDate),
+    lastLoginAt: toIsoString(user.lastLoginAt),
     lastLoginSource: user.lastLoginSource ?? null,
-    wechatProfileSyncedAt: user.wechatProfileSyncedAt ? new Date(user.wechatProfileSyncedAt).toISOString() : null,
-    wechatIdentitySyncedAt: user.wechatIdentitySyncedAt ? new Date(user.wechatIdentitySyncedAt).toISOString() : null,
+    wechatProfileSyncedAt: toIsoString(user.wechatProfileSyncedAt),
+    wechatIdentitySyncedAt: toIsoString(user.wechatIdentitySyncedAt),
     currentVehicleId: user.currentVehicleId?.toString?.() ?? null,
     status: user.status,
     contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
     workShareCount: user.workShareCount ?? 0,
     exhibitionShareCount: user.exhibitionShareCount ?? 0,
-    createdAt: user.createdAt?.toISOString?.() ?? new Date(user.createdAt).toISOString(),
-    updatedAt: user.updatedAt?.toISOString?.() ?? new Date(user.updatedAt).toISOString(),
+    createdAt: toIsoString(user.createdAt) ?? new Date().toISOString(),
+    updatedAt: toIsoString(user.updatedAt) ?? new Date().toISOString(),
   }
+}
+
+async function resolveUserWxOpenIds(users: AppUserView[]): Promise<Map<string, string>> {
+  const userIds = users.map((user) => user._id.toString())
+  if (!userIds.length) {
+    return new Map()
+  }
+
+  const identities = await MiniPlatformIdentityModel.find({
+    userId: { $in: userIds },
+  })
+    .sort({ lastLoginAt: -1, updatedAt: -1 })
+    .lean()
+    .exec()
+
+  const openIdMap = new Map<string, string>()
+  for (const identity of identities) {
+    const userId = identity.userId?.toString?.()
+    const openId = typeof identity.openId === 'string' ? identity.openId.trim() : ''
+    if (!userId || !openId || openIdMap.has(userId)) {
+      continue
+    }
+    openIdMap.set(userId, openId)
+  }
+
+  return openIdMap
 }
 
 export async function listAppUsers(ctx: Context): Promise<void> {
   const { page = 1, pageSize = 10, keyword, status } = ctx.query as Record<string, string>
-  const filter: Record<string, unknown> = {}
+  const filter: Record<string, unknown> & { $or?: Array<Record<string, unknown>> } = {}
   if (keyword) {
+    const identityMatches = await MiniPlatformIdentityModel.find({
+      openId: new RegExp(keyword, 'i'),
+    })
+      .select({ userId: 1 })
+      .lean()
+      .exec()
+    const matchedUserIds = identityMatches
+      .map((identity) => identity.userId?.toString?.())
+      .filter((userId): userId is string => Boolean(userId))
+
     filter.$or = [
       { username: new RegExp(keyword, 'i') },
       { email: new RegExp(keyword, 'i') },
       { displayName: new RegExp(keyword, 'i') },
       { phone: new RegExp(keyword, 'i') },
-      { wxOpenId: new RegExp(keyword, 'i') },
     ]
+    if (matchedUserIds.length) {
+      filter.$or.push({ _id: { $in: matchedUserIds } })
+    }
   }
   if (status) {
     filter.status = status
@@ -56,8 +140,9 @@ export async function listAppUsers(ctx: Context): Promise<void> {
     AppUserModel.find(filter).skip(skip).limit(limit).sort({ createdAt: -1 }).lean(),
     AppUserModel.countDocuments(filter),
   ])
+  const openIdMap = await resolveUserWxOpenIds(users as AppUserView[])
   ctx.body = {
-    data: users.map(mapAppUser),
+    data: (users as AppUserView[]).map((user) => mapAppUser(user, openIdMap.get(user._id.toString()))),
     page: pageNumber,
     pageSize: limit,
     total,
@@ -73,7 +158,8 @@ export async function getAppUser(ctx: Context): Promise<void> {
   if (!user) {
     ctx.throw(404, 'User not found')
   }
-  ctx.body = mapAppUser(user)
+  const openIdMap = await resolveUserWxOpenIds([user as AppUserView])
+  ctx.body = mapAppUser(user as AppUserView, openIdMap.get(user._id.toString()))
 }
 
 export async function createAppUser(ctx: Context): Promise<void> {

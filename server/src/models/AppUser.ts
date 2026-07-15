@@ -9,6 +9,7 @@ const appUserSchema = new Schema<AppUserDocument>(
     username: { type: String, trim: true },
     password: { type: String },
     authProvider: { type: String, enum: ['wechat-mini-program', 'password'], default: 'wechat-mini-program' },
+    // Legacy field: canonical WeChat OpenId is stored in MiniPlatformIdentity.openId.
     wxOpenId: { type: String, trim: true },
     wxUnionId: { type: String, trim: true },
     displayName: { type: String },
@@ -37,7 +38,6 @@ const appUserSchema = new Schema<AppUserDocument>(
 )
 
 appUserSchema.index({ username: 1 }, { unique: true, sparse: true })
-appUserSchema.index({ appKey: 1, platform: 1, wxOpenId: 1 }, { unique: true, sparse: true })
 appUserSchema.index(
   { appKey: 1, platform: 1, wxUnionId: 1 },
   {
