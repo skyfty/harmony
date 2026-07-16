@@ -1,4 +1,4 @@
-import { Types } from 'mongoose'
+﻿import { Types } from 'mongoose'
 import { BusinessOrderModel } from '@/models/BusinessOrder'
 import { SceneSpotModel } from '@/models/SceneSpot'
 import { AppUserModel } from '@/models/AppUser'
@@ -859,6 +859,7 @@ export async function updateBusinessOrderAdminFields(id: string, payload: {
   notes?: unknown
   contactPhoneForBusiness?: unknown
   promoterPhone?: unknown
+  sceneSpotId?: unknown
   serviceDurationDays?: unknown
   servicePrice?: unknown
   serviceStartAt?: unknown
@@ -882,6 +883,27 @@ export async function updateBusinessOrderAdminFields(id: string, payload: {
     const promoterUser = promoterPhone ? await AppUserModel.findOne({ phone: promoterPhone }).exec() : null
     order.promoterPhone = promoterPhone
     order.promoterUserId = promoterUser?._id ?? null
+  }
+  if (payload.sceneSpotId !== undefined) {
+    const sceneSpotId = normalizeNullableString(payload.sceneSpotId)
+    if (!sceneSpotId) {
+      order.deliverySceneSpotId = null
+      order.deliverySceneId = null
+      order.deliverySceneSpotTitle = null
+      order.deliveryBoundAt = null
+    } else {
+      if (!Types.ObjectId.isValid(sceneSpotId)) {
+        throw new Error('Invalid scene spot id')
+      }
+      const spot = await SceneSpotModel.findById(sceneSpotId).lean().exec()
+      if (!spot) {
+        throw new Error('Scene spot not found')
+      }
+      order.deliverySceneSpotId = new Types.ObjectId(sceneSpotId)
+      order.deliverySceneId = new Types.ObjectId(String(spot.sceneId))
+      order.deliverySceneSpotTitle = String(spot.title ?? '')
+      order.deliveryBoundAt = new Date()
+    }
   }
   if (payload.serviceDurationDays !== undefined) {
     order.serviceDurationDays = normalizePositiveNumber(payload.serviceDurationDays, DEFAULT_SERVICE_DURATION_DAYS, '服务时长')
