@@ -28,6 +28,8 @@ const businessOrderSchema = new Schema<BusinessOrderDocument>(
     rootOrderId: { type: Schema.Types.ObjectId, ref: 'BusinessOrder', default: null, index: true },
     parentOrderId: { type: Schema.Types.ObjectId, ref: 'BusinessOrder', default: null, index: true },
     orderKind: { type: String, enum: ['new', 'renewal'], default: 'new', index: true },
+    promoterPhone: { type: String, default: null, trim: true, index: true },
+    promoterUserId: { type: Schema.Types.ObjectId, ref: 'AppUser', default: null, index: true },
     paymentStatus: {
       type: String,
       enum: ['unpaid', 'processing', 'succeeded', 'failed', 'refunded', 'closed'],
@@ -83,5 +85,7 @@ businessOrderSchema.index({ topStage: 1, createdAt: -1 })
 businessOrderSchema.index({ rootOrderId: 1, createdAt: -1 })
 businessOrderSchema.index({ parentOrderId: 1, createdAt: -1 })
 businessOrderSchema.index({ userId: 1, parentOrderId: 1, createdAt: -1 })
+businessOrderSchema.index({ promoterPhone: 1, createdAt: -1 })
+businessOrderSchema.index({ promoterUserId: 1, createdAt: -1 })
 
 export const BusinessOrderModel = model<BusinessOrderDocument>('BusinessOrder', businessOrderSchema)

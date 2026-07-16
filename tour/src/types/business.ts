@@ -63,6 +63,14 @@ export interface BusinessOrder {
   rootOrderId: string
   parentOrderId: string | null
   orderKind: BusinessOrderKind
+  promoterPhone: string | null
+  promoterUserInfo: {
+    contractStatus: 'unsigned' | 'signed'
+    displayName: null | string
+    id: string
+    phone: null | string
+    username: null | string
+  } | null
   scenicName: string
   addressText: string
   location: { lat: number; lng: number } | null
@@ -178,6 +186,7 @@ export interface CreateBusinessOrderPayload {
   addressText: string
   location?: { lat: number; lng: number } | null
   contactPhone: string
+  promoterPhone?: string | null
   scenicArea?: number | null
   sceneSpotCategoryId?: string | null
   specialLandscapeTags?: string[]

@@ -33,6 +33,7 @@ export async function createBusinessOrderHandler(ctx: Context): Promise<void> {
       addressText: (ctx.request.body as Record<string, unknown>)?.addressText as string,
       location: (ctx.request.body as Record<string, unknown>)?.location as { lat?: number; lng?: number } | null,
       contactPhone: (ctx.request.body as Record<string, unknown>)?.contactPhone as string,
+      promoterPhone: (ctx.request.body as Record<string, unknown>)?.promoterPhone as string | null,
       scenicArea: (ctx.request.body as Record<string, unknown>)?.scenicArea as number | null,
       sceneSpotCategoryId: (ctx.request.body as Record<string, unknown>)?.sceneSpotCategoryId as string | null,
       specialLandscapeTags: (ctx.request.body as Record<string, unknown>)?.specialLandscapeTags as string[],

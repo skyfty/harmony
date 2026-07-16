@@ -36,6 +36,12 @@
         </view>
 
         <view class="field">
+          <text class="field-label">推广人</text>
+          <input v-model="form.promoterPhone" class="field-input" type="number" placeholder="请输入推广人手机号（选填）" />
+          <text class="field-help">用于后续订单归因、收益分成和统计分析</text>
+        </view>
+
+        <view class="field">
           <text class="field-label">景点类型</text>
           <picker :range="scenicTypeNames" :value="selectedCategoryIndex" @change="handleCategoryChange">
             <view class="field-picker">{{ selectedCategoryName }}</view>
@@ -89,6 +95,7 @@ const form = reactive({
   scenicName: '',
   addressText: '',
   contactPhone: '',
+  promoterPhone: '',
   scenicArea: '',
   sceneSpotCategoryId: '',
   specialLandscapeTags: [] as string[],
@@ -179,7 +186,7 @@ async function ensureLocationPermission(): Promise<LocationPermissionResult> {
 
   const setting = await new Promise<{ authSetting: Record<string, boolean | undefined> }>((resolve, reject) => {
     uni.getSetting({
-      success: (result) => resolve(result as { authSetting: Record<string, boolean | undefined> }),
+      success: (result) => resolve(result as unknown as { authSetting: Record<string, boolean | undefined> }),
       fail: (error: unknown) => reject(error),
     });
   });
@@ -254,6 +261,11 @@ async function submitForm() {
     void uni.showToast({ title: '请输入有效的手机号', icon: 'none' });
     return;
   }
+  const promoterPhone = form.promoterPhone.trim();
+  if (promoterPhone && !isValidPhone(promoterPhone)) {
+    void uni.showToast({ title: '请输入有效的推广人手机号', icon: 'none' });
+    return;
+  }
   if (!form.sceneSpotCategoryId) {
     void uni.showToast({ title: '请选择景点类型', icon: 'none' });
     return;
@@ -266,6 +278,7 @@ async function submitForm() {
       addressText: form.addressText.trim(),
       location: form.location,
       contactPhone,
+      promoterPhone: promoterPhone || null,
       scenicArea: form.scenicArea ? Number(form.scenicArea) : null,
       sceneSpotCategoryId: form.sceneSpotCategoryId,
       specialLandscapeTags: form.specialLandscapeTags,
@@ -401,6 +414,14 @@ async function submitForm() {
   color: #41556f;
   font-size: 12px;
   font-weight: 600;
+}
+
+.field-help {
+  display: block;
+  margin-top: 6px;
+  color: rgba(65, 85, 111, 0.72);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .field-input,

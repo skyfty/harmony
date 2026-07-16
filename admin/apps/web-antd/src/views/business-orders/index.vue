@@ -144,6 +144,15 @@ const [BusinessOrderGrid] = useVbenVxeGrid<BusinessOrderItem>({
         },
       },
       {
+        component: 'Input',
+        fieldName: 'promoterPhone',
+        label: '推广人手机号',
+        componentProps: {
+          allowClear: true,
+          placeholder: '输入推广人手机号',
+        },
+      },
+      {
         component: 'Select',
         fieldName: 'topStage',
         label: '阶段',
@@ -193,6 +202,8 @@ const [BusinessOrderGrid] = useVbenVxeGrid<BusinessOrderItem>({
       { field: 'scenicName', minWidth: 180, title: '景点名称' },
       { field: 'delivery.sceneSpotTitle', minWidth: 180, title: '交付场景' },
       { field: 'userInfo.displayName', minWidth: 140, title: '用户昵称' },
+      { field: 'promoterPhone', minWidth: 140, title: '推广人手机号' },
+      { field: 'promoterUserInfo.displayName', minWidth: 160, title: '推广人信息', slots: { default: 'promoter' } },
       { field: 'topStage', minWidth: 120, title: '当前阶段', slots: { default: 'stage' } },
       { field: 'service.status', minWidth: 120, title: '服务状态', slots: { default: 'serviceStatus' } },
       { field: 'serviceWindow', minWidth: 220, title: '服务时间', slots: { default: 'serviceWindow' } },
@@ -207,6 +218,7 @@ const [BusinessOrderGrid] = useVbenVxeGrid<BusinessOrderItem>({
         query: async ({ page }: any, formValues: Record<string, any>) => {
           const result = await listBusinessOrdersApi({
             keyword: formValues.keyword || undefined,
+            promoterPhone: formValues.promoterPhone || undefined,
             topStage: formValues.topStage || undefined,
             contractStatus: formValues.contractStatus || undefined,
             serviceStatus: formValues.serviceStatus || undefined,
@@ -259,6 +271,10 @@ onMounted(() => {
 
       <template #serviceStatus="{ row }">
         <Tag :color="serviceStatusColor(row.service.status)">{{ serviceStatusText(row.service.status) }}</Tag>
+      </template>
+
+      <template #promoter="{ row }">
+        <span>{{ row.promoterUserInfo?.displayName || row.promoterUserInfo?.phone || '-' }}</span>
       </template>
 
       <template #serviceWindow="{ row }">

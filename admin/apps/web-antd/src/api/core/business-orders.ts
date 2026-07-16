@@ -58,6 +58,14 @@ export interface BusinessOrderItem {
   orderKind: BusinessOrderKind;
   orderNumber: string;
   parentOrderId: null | string;
+  promoterPhone: null | string;
+  promoterUserInfo: null | {
+    contractStatus: 'unsigned' | 'signed';
+    displayName: null | string;
+    id: string;
+    phone: null | string;
+    username: null | string;
+  };
   productionCompletedAt: null | string;
   productionProgress: BusinessOrderProductionNode[];
   productionStartedAt: null | string;
@@ -167,6 +175,7 @@ export interface BusinessConfigItem {
 export interface ListBusinessOrdersParams {
   contractStatus?: '' | 'signed' | 'unsigned';
   keyword?: string;
+  promoterPhone?: string;
   page?: number;
   pageSize?: number;
   serviceStatus?: '' | BusinessOrderServiceStatus;
@@ -213,6 +222,7 @@ export async function updateBusinessConfigApi(payload: { contactPhone: string })
 export async function updateBusinessOrderApi(id: string, payload: {
   contactPhoneForBusiness?: string;
   notes?: string;
+  promoterPhone?: string | null;
   sceneSpotId?: string | null;
   renewalWarningDays?: number;
   serviceDurationDays?: number;

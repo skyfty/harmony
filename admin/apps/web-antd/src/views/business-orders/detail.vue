@@ -62,6 +62,7 @@ const analyticsDimensionDraft = ref<'category' | 'checkpoint'>('checkpoint');
 const analyticsLimitDraft = ref<number>(8);
 const notesDraft = ref('');
 const contactDraft = ref('');
+const promoterPhoneDraft = ref('');
 const productionRemark = ref('');
 const serviceDurationDaysDraft = ref<number>(365);
 const servicePriceDraft = ref<number>(0);
@@ -475,6 +476,7 @@ async function loadOrder() {
     order.value = response;
     notesDraft.value = response.notes || '';
     contactDraft.value = response.contactPhoneForBusiness || '';
+    promoterPhoneDraft.value = response.promoterPhone || '';
     serviceDurationDaysDraft.value = response.service.durationDays;
     servicePriceDraft.value = response.service.price;
     renewalWarningDaysDraft.value = response.service.warningDays;
@@ -503,6 +505,7 @@ async function saveAdminFields() {
     await updateBusinessOrderApi(id, {
       notes: notesDraft.value,
       contactPhoneForBusiness: contactDraft.value,
+        promoterPhone: promoterPhoneDraft.value || null,
       sceneSpotId: selectedSceneSpotId.value || null,
       serviceDurationDays: serviceDurationDaysDraft.value,
       servicePrice: servicePriceDraft.value,
@@ -622,6 +625,8 @@ onMounted(async () => {
                 <Descriptions.Item label="用户">
                   {{ order.userInfo?.displayName || order.userInfo?.username || '-' }}
                 </Descriptions.Item>
+                <Descriptions.Item label="推广人手机号">{{ order.promoterPhone || '-' }}</Descriptions.Item>
+                <Descriptions.Item label="推广人信息">{{ order.promoterUserInfo?.displayName || order.promoterUserInfo?.username || order.promoterUserInfo?.phone || '-' }}</Descriptions.Item>
                 <Descriptions.Item label="签约状态">
                   <Tag :color="order.userInfo?.contractStatus === 'signed' ? 'success' : 'default'">
                     {{ order.userInfo?.contractStatus === 'signed' ? '已签约' : '未签约' }}
@@ -703,6 +708,10 @@ onMounted(async () => {
                 <div>
                   <div class="mb-2 text-sm font-medium">商务联系电话</div>
                   <Input v-model:value="contactDraft" placeholder="商务联系电话" />
+                </div>
+                <div>
+                  <div class="mb-2 text-sm font-medium">推广人手机号</div>
+                  <Input v-model:value="promoterPhoneDraft" placeholder="推广人手机号" />
                 </div>
                 <div>
                   <div class="mb-2 text-sm font-medium">服务时长(天)</div>
@@ -899,5 +908,4 @@ onMounted(async () => {
     </Spin>
   </div>
 </template>
-
 

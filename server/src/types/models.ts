@@ -168,6 +168,8 @@ export interface BusinessOrderDocument extends Document<Types.ObjectId> {
   rootOrderId?: Types.ObjectId | null
   parentOrderId?: Types.ObjectId | null
   orderKind: BusinessOrderKind
+  promoterPhone?: string | null
+  promoterUserId?: Types.ObjectId | null
   paymentStatus?: 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
   paymentMethod?: string | null
   paymentProvider?: string | null

@@ -32,6 +32,14 @@ export interface BusinessOrderCategoryOption {
   name: string
 }
 
+export interface BusinessOrderPersonInfo {
+  id: string
+  displayName: string | null
+  username: string | null
+  phone: string | null
+  contractStatus: 'unsigned' | 'signed'
+}
+
 export interface BusinessOrderRenewalHistoryItem {
   id: string
   orderNumber: string
@@ -60,13 +68,9 @@ export interface BusinessOrderView {
   rootOrderId: string
   parentOrderId: string | null
   orderKind: BusinessOrderKind
-  userInfo: {
-    id: string
-    displayName: string | null
-    username: string | null
-    phone: string | null
-    contractStatus: 'unsigned' | 'signed'
-  } | null
+  userInfo: BusinessOrderPersonInfo | null
+  promoterPhone: string | null
+  promoterUserInfo: BusinessOrderPersonInfo | null
   scenicName: string
   addressText: string
   location: { lat: number; lng: number } | null
@@ -135,6 +139,7 @@ export interface CreateBusinessOrderInput {
   addressText: string
   location?: { lat?: number; lng?: number } | null
   contactPhone: string
+  promoterPhone?: string | null
   scenicArea?: number | null
   sceneSpotCategoryId?: string | null
   specialLandscapeTags?: string[]
@@ -174,6 +179,22 @@ function normalizeString(value: unknown): string {
 function normalizeNullableString(value: unknown): string | null {
   const text = normalizeString(value)
   return text || null
+}
+
+function isMobilePhone(phone: string): boolean {
+  return /^1[3-9]\d{9}$/.test(phone)
+}
+
+function normalizeNullablePhone(value: unknown): string | null {
+  const phone = normalizeNullableString(value)
+  return phone || null
+}
+
+function ensureMobilePhone(phone: string, fieldLabel: string): string {
+  if (!isMobilePhone(phone)) {
+    throw new Error(`${fieldLabel}格式无效`)
+  }
+  return phone
 }
 
 function normalizeArea(value: unknown): number | null {
@@ -228,6 +249,16 @@ function buildProductionTemplate(): BusinessOrderProductionNode[] {
     activatedAt: null,
     remark: null,
   }))
+}
+
+function buildBusinessOrderPersonInfo(user: any): BusinessOrderPersonInfo {
+  return {
+    id: String(user._id),
+    displayName: user.displayName ?? null,
+    username: user.username ?? null,
+    phone: user.phone ?? null,
+    contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
+  }
 }
 
 function toIso(value: Date | null | undefined): string | null {
@@ -349,6 +380,20 @@ async function buildUserMap(userIds: string[]): Promise<Map<string, any>> {
   return new Map(users.map((user: any) => [String(user._id), user]))
 }
 
+async function buildPromoterUserMap(promoterPhones: string[]): Promise<Map<string, any>> {
+  const normalizedPhones = Array.from(new Set(promoterPhones.map((phone) => normalizeNullablePhone(phone)).filter((phone): phone is string => Boolean(phone))))
+  if (!normalizedPhones.length) {
+    return new Map()
+  }
+  const users = await AppUserModel.find(
+    { phone: { $in: normalizedPhones } },
+    { _id: 1, username: 1, displayName: 1, phone: 1, contractStatus: 1 },
+  )
+    .lean()
+    .exec()
+  return new Map(users.map((user: any) => [String(user.phone), user]))
+}
+
 async function loadRenewalRows(rootOrderId: string): Promise<any[]> {
   return BusinessOrderModel.find({ rootOrderId, parentOrderId: { $ne: null }, orderKind: 'renewal' })
     .sort({ createdAt: -1 })
@@ -361,12 +406,16 @@ async function mapBusinessOrder(order: any, dependencies?: {
   includeRenewals?: boolean
   origin?: string
   renewalRows?: any[]
+  promoterUserMap?: Map<string, any>
   userMap?: Map<string, any>
 }): Promise<BusinessOrderView> {
   const categoryNameMap = dependencies?.categoryNameMap ?? await getCategoryNameMap()
   const userMap = dependencies?.userMap ?? await buildUserMap([String(order.userId)])
   const renewalRows = dependencies?.renewalRows ?? (dependencies?.includeRenewals ? await loadRenewalRows(String(order._id)) : [])
   const user = userMap.get(String(order.userId)) ?? null
+  const promoterPhone = normalizeNullablePhone(order.promoterPhone)
+  const promoterUserMap = dependencies?.promoterUserMap ?? (promoterPhone ? await buildPromoterUserMap([promoterPhone]) : new Map())
+  const promoterUser = promoterPhone ? promoterUserMap.get(promoterPhone) ?? null : null
   const categoryId = order.sceneSpotCategoryId ? String(order.sceneSpotCategoryId) : null
   const serviceStartAt = order.serviceStartAt ? new Date(order.serviceStartAt) : null
   const serviceEndAt = order.serviceEndAt ? new Date(order.serviceEndAt) : null
@@ -397,14 +446,10 @@ async function mapBusinessOrder(order: any, dependencies?: {
     parentOrderId: order.parentOrderId ? String(order.parentOrderId) : null,
     orderKind: order.orderKind === 'renewal' ? 'renewal' : 'new',
     userInfo: user
-      ? {
-        id: String(user._id),
-        displayName: user.displayName ?? null,
-        username: user.username ?? null,
-        phone: user.phone ?? null,
-        contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
-      }
+      ? buildBusinessOrderPersonInfo(user)
       : null,
+    promoterPhone,
+    promoterUserInfo: promoterUser ? buildBusinessOrderPersonInfo(promoterUser) : null,
     scenicName: String(order.scenicName ?? ''),
     addressText: String(order.addressText ?? ''),
     location:
@@ -505,6 +550,7 @@ export async function createBusinessOrder(input: CreateBusinessOrderInput, origi
   const scenicName = normalizeString(input.scenicName)
   const addressText = normalizeString(input.addressText)
   const contactPhone = normalizeString(input.contactPhone)
+  const promoterPhone = normalizeNullablePhone(input.promoterPhone)
   if (!scenicName) {
     throw new Error('景点名称不能为空')
   }
@@ -514,12 +560,16 @@ export async function createBusinessOrder(input: CreateBusinessOrderInput, origi
   if (!contactPhone) {
     throw new Error('联系电话不能为空')
   }
+  if (promoterPhone) {
+    ensureMobilePhone(promoterPhone, '推广人手机号')
+  }
 
   const user = await AppUserModel.findById(input.userId).exec()
   if (!user) {
     throw new Error('User not found')
   }
   const businessContactPhone = await getBusinessContactPhone()
+  const promoterUser = promoterPhone ? await AppUserModel.findOne({ phone: promoterPhone }).exec() : null
 
   const existingOrder = await BusinessOrderModel.findOne({
     userId: input.userId,
@@ -539,6 +589,8 @@ export async function createBusinessOrder(input: CreateBusinessOrderInput, origi
     userId: new Types.ObjectId(input.userId),
     orderNumber: generateBusinessOrderNumber(),
     orderKind: 'new',
+    promoterPhone,
+    promoterUserId: promoterUser?._id ?? null,
     scenicName,
     addressText,
     location: normalizeLocation(input.location),
@@ -560,6 +612,7 @@ export async function createBusinessOrder(input: CreateBusinessOrderInput, origi
 
   const view = await mapBusinessOrder(created.toObject(), {
     userMap: new Map([[String(user._id), user.toObject()]]),
+    promoterUserMap: promoterUser ? new Map([[String(promoterUser.phone), promoterUser.toObject()]]) : undefined,
     origin,
   })
   return view
@@ -574,6 +627,7 @@ export async function listBusinessOrders(params: {
   page?: number
   pageSize?: number
   keyword?: string
+  promoterPhone?: string
   topStage?: string
   contractStatus?: string
   userId?: string
@@ -585,17 +639,21 @@ export async function listBusinessOrders(params: {
   const skip = (page - 1) * pageSize
   const applyDynamicServiceFilter = Boolean(params.serviceStatus && ['pending', 'active', 'expiring', 'expired'].includes(params.serviceStatus))
   const filter: Record<string, unknown> = { parentOrderId: null }
-  const userObjectId = ensureObjectId(normalizeNullableString(params.userId), 'Invalid user id')
-  if (userObjectId) {
-    filter.userId = userObjectId
-  }
-  if (params.keyword && params.keyword.trim()) {
-    const regex = new RegExp(params.keyword.trim(), 'i')
-    filter.$or = [{ orderNumber: regex }, { scenicName: regex }, { addressText: regex }, { contactPhone: regex }]
-  }
-  if (params.topStage && ['quote', 'signing', 'production', 'publish', 'operation'].includes(params.topStage)) {
-    filter.topStage = params.topStage
-  }
+    const userObjectId = ensureObjectId(normalizeNullableString(params.userId), 'Invalid user id')
+    if (userObjectId) {
+      filter.userId = userObjectId
+    }
+    if (params.keyword && params.keyword.trim()) {
+      const regex = new RegExp(params.keyword.trim(), 'i')
+      filter.$or = [{ orderNumber: regex }, { scenicName: regex }, { addressText: regex }, { contactPhone: regex }, { promoterPhone: regex }]
+    }
+    const promoterPhone = normalizeNullablePhone(params.promoterPhone)
+    if (promoterPhone) {
+      filter.promoterPhone = promoterPhone
+    }
+    if (params.topStage && ['quote', 'signing', 'production', 'publish', 'operation'].includes(params.topStage)) {
+      filter.topStage = params.topStage
+    }
   if (params.contractStatus && ['unsigned', 'signed'].includes(params.contractStatus)) {
     const users = await AppUserModel.find({ contractStatus: params.contractStatus }, { _id: 1 }).lean().exec()
     const contractUserIds = users.map((user: any) => user._id)
@@ -606,18 +664,20 @@ export async function listBusinessOrders(params: {
     }
   }
   const [rows, total, categoryNameMap] = await Promise.all([
-    applyDynamicServiceFilter
-      ? BusinessOrderModel.find(filter).sort({ createdAt: -1 }).lean().exec()
-      : BusinessOrderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(pageSize).lean().exec(),
-    BusinessOrderModel.countDocuments(filter),
-    getCategoryNameMap(),
-  ])
-  const userMap = await buildUserMap(rows.map((row: any) => String(row.userId)))
-  const mappedRows = await Promise.all(rows.map(async (row: any) => mapBusinessOrder(row, {
-    categoryNameMap,
-    userMap,
-    origin: params.origin,
-  })))
+      applyDynamicServiceFilter
+        ? BusinessOrderModel.find(filter).sort({ createdAt: -1 }).lean().exec()
+        : BusinessOrderModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(pageSize).lean().exec(),
+      BusinessOrderModel.countDocuments(filter),
+      getCategoryNameMap(),
+    ])
+    const userMap = await buildUserMap(rows.map((row: any) => String(row.userId)))
+    const promoterUserMap = await buildPromoterUserMap(rows.map((row: any) => normalizeNullablePhone(row.promoterPhone)).filter((phone): phone is string => Boolean(phone)))
+    const mappedRows = await Promise.all(rows.map(async (row: any) => mapBusinessOrder(row, {
+      categoryNameMap,
+      promoterUserMap,
+      userMap,
+      origin: params.origin,
+    })))
   const filteredRows = applyDynamicServiceFilter
     ? mappedRows.filter((item) => item.service.status === params.serviceStatus)
     : mappedRows
@@ -798,6 +858,7 @@ export async function completeBusinessOrderOperation(id: string, origin?: string
 export async function updateBusinessOrderAdminFields(id: string, payload: {
   notes?: unknown
   contactPhoneForBusiness?: unknown
+  promoterPhone?: unknown
   serviceDurationDays?: unknown
   servicePrice?: unknown
   serviceStartAt?: unknown
@@ -812,6 +873,15 @@ export async function updateBusinessOrderAdminFields(id: string, payload: {
     order.contactPhoneForBusiness =
       normalizeNullableString(payload.contactPhoneForBusiness) ??
       (await getBusinessContactPhone())
+  }
+  if (payload.promoterPhone !== undefined) {
+    const promoterPhone = normalizeNullablePhone(payload.promoterPhone)
+    if (promoterPhone) {
+      ensureMobilePhone(promoterPhone, '推广人手机号')
+    }
+    const promoterUser = promoterPhone ? await AppUserModel.findOne({ phone: promoterPhone }).exec() : null
+    order.promoterPhone = promoterPhone
+    order.promoterUserId = promoterUser?._id ?? null
   }
   if (payload.serviceDurationDays !== undefined) {
     order.serviceDurationDays = normalizePositiveNumber(payload.serviceDurationDays, DEFAULT_SERVICE_DURATION_DAYS, '服务时长')
@@ -833,6 +903,15 @@ export async function updateBusinessOrderAdminFields(id: string, payload: {
   }
   await refreshServiceStatus(order)
   await order.save()
+  if (payload.promoterPhone !== undefined) {
+    await BusinessOrderModel.updateMany(
+      { rootOrderId: order.rootOrderId ?? order._id },
+      {
+        promoterPhone: order.promoterPhone ?? null,
+        promoterUserId: order.promoterUserId ?? null,
+      },
+    ).exec()
+  }
   return (await getBusinessOrderById(String(order._id), { includeRenewals: true, origin })) as BusinessOrderView
 }
 
@@ -884,6 +963,8 @@ export async function createBusinessOrderRenewal(id: string, userId: string): Pr
     rootOrderId: rootOrder._id,
     parentOrderId: rootOrder._id,
     orderKind: 'renewal',
+    promoterPhone: rootOrder.promoterPhone ?? null,
+    promoterUserId: rootOrder.promoterUserId ?? null,
     scenicName: rootOrder.scenicName,
     addressText: rootOrder.addressText,
     location: rootOrder.location ?? null,
@@ -957,6 +1038,8 @@ export async function createBusinessOrderRenewalPayment(
       rootOrderId: rootOrder._id,
       parentOrderId: rootOrder._id,
       orderKind: 'renewal',
+      promoterPhone: rootOrder.promoterPhone ?? null,
+      promoterUserId: rootOrder.promoterUserId ?? null,
       scenicName: rootOrder.scenicName,
       addressText: rootOrder.addressText,
       location: rootOrder.location ?? null,
@@ -1006,6 +1089,8 @@ export async function createBusinessOrderRenewalPayment(
     renewalOrder.renewalWarningDays = rootOrder.renewalWarningDays ?? DEFAULT_WARNING_DAYS
     renewalOrder.renewalCount = rootOrder.renewalCount ?? 0
     renewalOrder.quotedAt = now
+    renewalOrder.promoterPhone = rootOrder.promoterPhone ?? null
+    renewalOrder.promoterUserId = rootOrder.promoterUserId ?? null
     await renewalOrder.save()
   }
 
