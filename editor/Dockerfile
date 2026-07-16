@@ -81,4 +81,4 @@ RUN printf '%s\n' \
   > /etc/nginx/conf.d/default.conf
 EXPOSE 80
 # Write the pid file to /tmp so the container does not need write access to /run.
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["nginx", "-g", "pid /tmp/nginx.pid; daemon off;"]
