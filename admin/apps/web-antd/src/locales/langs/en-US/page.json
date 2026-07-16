@@ -1,4 +1,4 @@
-{
+﻿{
   "auth": {
     "login": "Login",
     "register": "Register",
@@ -278,6 +278,12 @@
         "address": {
           "label": "Address"
         },
+        "location": {
+          "label": "Coordinates (lng,lat)",
+          "placeholder": "e.g. 116.33,39.92",
+          "openMap": "Open Baidu point picker",
+          "invalid": "Please enter coordinates in lng,lat format, for example 116.33,39.92"
+        },
         "order": {
           "label": "Order"
         },
@@ -306,7 +312,8 @@
       },
       "help": {
         "coverImageSize": "Image must be {width}x{height} to upload",
-        "slideImageSize": "Each slide image should use a {ratio} ratio, recommended size {width}x{height}, up to {max} images"
+        "slideImageSize": "Each slide image should use a {ratio} ratio, recommended size {width}x{height}, up to {max} images",
+        "location": "You can locate the place by address in Baidu Map first, then paste the coordinates here. Direct lng,lat pasting is also supported, for example 116.33,39.92."
       }
     },
     "detail": {
@@ -1522,3 +1529,4 @@
     }
   }
 }
+

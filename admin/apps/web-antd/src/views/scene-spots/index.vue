@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import type { FormInstance, UploadChangeParam, UploadFile, UploadProps } from 'ant-design-vue';
 import type { SceneItem, SceneSpotItem } from '#/api';
 
@@ -20,7 +20,7 @@ import { apiURL } from '#/api/request';
 import { $t } from '#/locales';
 
 import { Button, Form, Input, InputNumber, message, Modal, Select, Space, Switch, TreeSelect, Upload, Tooltip, Tabs } from 'ant-design-vue';
-import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined, StarOutlined, FireOutlined, QrcodeOutlined } from '@ant-design/icons-vue';
+import { EyeOutlined, CommentOutlined, EditOutlined, DeleteOutlined, StarOutlined, FireOutlined, QrcodeOutlined, LinkOutlined } from '@ant-design/icons-vue';
 
 interface SceneSpotFormModel {
   sceneId: string;
@@ -29,6 +29,7 @@ interface SceneSpotFormModel {
   address: string;
   distance: string;
   phone: string;
+  locationText: string;
   locationLat?: number;
   locationLng?: number;
   order: number;
@@ -82,6 +83,7 @@ const sceneSpotFormModel = reactive<SceneSpotFormModel>({
   distance: '',
   address: '',
   phone: '',
+  locationText: '',
   locationLat: undefined,
   locationLng: undefined,
   order: 0,
@@ -124,10 +126,58 @@ const WECHAT_MINI_PROGRAM_APP_ID = 'wxbee5b017bdf26cc1';
 const WECHAT_MINI_PROGRAM_SCENERY_PATH = 'pages/scenery/index';
 const DEFAULT_VEHICLE_IDENTIFIER = 'car1';
 const WECHAT_QR_RULE_LINK_BASE = 'https://v.touchmagic.cn';
+const BAIDU_MAP_GETPOINT_URL = 'https://lbsyun.baidu.com/maptool/getpoint';
 
 function buildScenePackageDownloadUrl(sceneId: string): string {
   const base = apiURL.replace(/\/+$/u, '')
   return `${base}/mini/scenes/${encodeURIComponent(sceneId)}/package`
+}
+
+function formatLocationText(lng?: number, lat?: number) {
+  if (lng == null || lat == null) {
+    return '';
+  }
+
+  const normalizedLng = Number(lng);
+  const normalizedLat = Number(lat);
+  if (!Number.isFinite(normalizedLng) || !Number.isFinite(normalizedLat)) {
+    return '';
+  }
+
+  return `${normalizedLng},${normalizedLat}`;
+}
+
+function parseLocationText(value: string) {
+  const normalized = value
+    .trim()
+    .replace(/\uFF0C/gu, ',')
+    .replace(/\s+/gu, '');
+
+  if (!normalized) {
+    return null;
+  }
+
+  const parts = normalized.split(',');
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const [lngText, latText] = parts;
+  const lng = Number(lngText);
+  const lat = Number(latText);
+  if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+    return null;
+  }
+
+  return {
+    lat,
+    lng,
+    text: `${lng},${lat}`,
+  };
+}
+
+function openBaiduMapGetPoint() {
+  window.open(BAIDU_MAP_GETPOINT_URL, '_blank', 'noopener,noreferrer');
 }
 
 const uploadProps: UploadProps = {
@@ -173,6 +223,7 @@ function resetForm() {
   sceneSpotFormModel.distance = '';
   sceneSpotFormModel.address = '';
   sceneSpotFormModel.phone = '';
+  sceneSpotFormModel.locationText = '';
   sceneSpotFormModel.locationLat = undefined;
   sceneSpotFormModel.locationLng = undefined;
   sceneSpotFormModel.order = 0;
@@ -418,6 +469,7 @@ async function openEditModal(row: SceneSpotItem) {
   sceneSpotFormModel.phone = data.phone ?? '';
   sceneSpotFormModel.locationLat = data.location?.lat ?? undefined;
   sceneSpotFormModel.locationLng = data.location?.lng ?? undefined;
+  sceneSpotFormModel.locationText = formatLocationText(sceneSpotFormModel.locationLng, sceneSpotFormModel.locationLat);
   sceneSpotFormModel.categoryId = data.categoryId ?? undefined;
   originalCoverImageUrl.value = data.coverImage || '';
   originalSlides.value = [...(data.slides || [])];
@@ -528,6 +580,13 @@ async function submitSceneSpot() {
   }
   await form.validate();
 
+  const parsedLocation = parseLocationText(sceneSpotFormModel.locationText);
+  if (parsedLocation) {
+    sceneSpotFormModel.locationText = parsedLocation.text;
+    sceneSpotFormModel.locationLng = parsedLocation.lng;
+    sceneSpotFormModel.locationLat = parsedLocation.lat;
+  }
+
   const payload = new FormData();
   payload.append('sceneId', sceneSpotFormModel.sceneId);
   payload.append('title', sceneSpotFormModel.title.trim());
@@ -542,7 +601,7 @@ async function submitSceneSpot() {
   if (sceneSpotFormModel.phone) {
     payload.append('phone', String(sceneSpotFormModel.phone).trim())
   }
-  if (sceneSpotFormModel.locationLat != null && sceneSpotFormModel.locationLng != null) {
+  if (parsedLocation) {
     payload.append('locationLat', String(sceneSpotFormModel.locationLat))
     payload.append('locationLng', String(sceneSpotFormModel.locationLng))
   }
@@ -593,6 +652,21 @@ async function submitSceneSpot() {
     submitting.value = false;
   }
 }
+
+const locationRules = [
+  {
+    validator: async () => {
+      const value = sceneSpotFormModel.locationText.trim();
+      if (!value) {
+        return;
+      }
+
+      if (!parseLocationText(value)) {
+        throw new Error(t('page.sceneSpots.index.formFields.location.invalid'));
+      }
+    },
+  },
+];
 
 function handleDelete(row: SceneSpotItem) {
   Modal.confirm({
@@ -873,17 +947,20 @@ onMounted(async () => {
             <Form.Item :label="t('page.sceneSpots.index.formFields.address.label')" name="address">
               <Input v-model:value="sceneSpotFormModel.address" allow-clear />
             </Form.Item>
-            <Form.Item label="距离" name="distance">
-              <Input v-model:value="sceneSpotFormModel.distance" allow-clear />
-            </Form.Item>
-            <Form.Item label="电话" name="phone">
-              <Input v-model:value="sceneSpotFormModel.phone" allow-clear />
-            </Form.Item>
-            <Form.Item label="坐标（纬度 / 经度）" name="location">
-              <div style="display:flex;gap:8px;">
-                <InputNumber v-model:value="sceneSpotFormModel.locationLat" :step="0.000001" placeholder="纬度" style="width:50%" />
-                <InputNumber v-model:value="sceneSpotFormModel.locationLng" :step="0.000001" placeholder="经度" style="width:50%" />
+            <Form.Item :label="t('page.sceneSpots.index.formFields.location.label')" name="locationText" :rules="locationRules">
+              <div class="location-field">
+                <Input
+                  v-model:value="sceneSpotFormModel.locationText"
+                  allow-clear
+                  class="location-input"
+                  :placeholder="t('page.sceneSpots.index.formFields.location.placeholder')"
+                />
+                <Button class="location-open-map" html-type="button" type="default" @click="openBaiduMapGetPoint">
+                  <LinkOutlined />
+                  <span>{{ t('page.sceneSpots.index.formFields.location.openMap') }}</span>
+                </Button>
               </div>
+              <div class="location-help">{{ t('page.sceneSpots.index.help.location') }}</div>
             </Form.Item>
             <Form.Item :label="t('page.sceneSpots.index.formFields.order.label')" name="order">
               <InputNumber v-model:value="sceneSpotFormModel.order" :min="0" style="width: 100%" />
@@ -998,6 +1075,31 @@ onMounted(async () => {
   font-weight: 600;
   margin-top: 12px;
 }
+
+.location-field {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.location-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.location-open-map {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.location-help {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
 @keyframes featuredHighlight {
   0% { box-shadow: 0 0 0 rgba(255,77,79,0.0); }
   40% { box-shadow: 0 0 10px rgba(255,77,79,0.28); }
@@ -1037,3 +1139,4 @@ onMounted(async () => {
   color: #ffffff;
 }
 </style>
+

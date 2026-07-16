@@ -1,4 +1,4 @@
-{
+﻿{
   "auth": {
     "login": "登录",
     "register": "注册",
@@ -282,6 +282,12 @@
         "address": {
           "label": "地址"
         },
+        "location": {
+          "label": "坐标（经度,纬度）",
+          "placeholder": "例如 116.33,39.92",
+          "openMap": "打开百度取点",
+          "invalid": "请输入正确的坐标格式，例如 116.33,39.92"
+        },
         "order": {
           "label": "排序"
         },
@@ -312,7 +318,8 @@
       },
       "help": {
         "coverImageSize": "图片必须为 {width}x{height} 大小，才能上传",
-        "slideImageSize": "每张幻灯片图片建议为 {ratio} 比例，推荐尺寸 {width}x{height}，如 1280x720 这类 {ratio} 图片也适合展示，最多可上传 {max} 张"
+        "slideImageSize": "每张幻灯片图片建议为 {ratio} 比例，推荐尺寸 {width}x{height}，如 1280x720 这类 {ratio} 图片也适合展示，最多可上传 {max} 张",
+        "location": "可以先在百度取点页按地址定位，再复制坐标粘贴到这里；也支持直接粘贴经度,纬度，例如 116.33,39.92。"
       }
     },
     "detail": {
@@ -1072,3 +1079,4 @@
     }
   }
 }
+
