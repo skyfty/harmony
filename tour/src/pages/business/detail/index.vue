@@ -14,18 +14,7 @@
       </view>
 
       <template v-else-if="order">
-        <view
-          v-if="order.service.status === 'expiring' || order.service.status === 'expired'"
-          class="alert-banner"
-          :class="`alert-banner--${order.service.status}`"
-        >
-          <text class="alert-title">{{ order.service.status === 'expired' ? '服务已结束' : '服务即将到期' }}</text>
-          <text class="alert-desc">
-            {{ order.service.status === 'expired' ? '请尽快续费以恢复服务与运营支持。' : `当前服务剩余 ${order.service.daysRemaining || 0} 天，建议尽快续费。` }}
-          </text>
-          <button class="alert-btn" @tap="openRenewPage">立即续费</button>
-        </view>
-
+     
         <view class="hero-card">
           <view class="hero-card__glow hero-card__glow--one" />
           <view class="hero-card__glow hero-card__glow--two" />
