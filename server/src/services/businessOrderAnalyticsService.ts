@@ -167,7 +167,11 @@ export async function getBusinessOrderAnalytics(query: BusinessOrderAnalyticsQue
 
   const punchMatch: Record<string, unknown> = {
     createdAt: { $gte: startBucket, $lte: endBucket },
-    sceneId: query.sceneId,
+  }
+  if (sceneSpotObjectId) {
+    punchMatch.scenicId = query.sceneSpotId
+  } else {
+    punchMatch.sceneId = query.sceneId
   }
 
   const trendFormat = granularity === 'month' ? '%Y-%m' : '%Y-%m-%d'
