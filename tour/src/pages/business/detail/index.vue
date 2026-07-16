@@ -361,6 +361,7 @@ const shareQrError = ref('')
 const currentInstance = getCurrentInstance()
 const shareQrCanvasId = 'business-share-qrcode'
 let latestShareQrRequest: symbol | null = null
+const trendScreenWidth = getTrendScreenWidth()
 
 const trendRangeOptions: Array<{ label: string; value: 7 | 30 | 90 }> = [
   { label: '7天', value: 7 },
@@ -381,7 +382,12 @@ const trendChartType = computed(() => (trendGranularity.value === 'month' ? 'col
 const trendChartData = computed(() => {
   const chart = analytics.value?.charts?.trend
   const categories = chart?.categories ?? analytics.value?.visitTrend.map((item) => item.date) ?? []
-  const displayCategories = buildReadableTrendCategories(categories, trendGranularity.value, trendRangeDays.value)
+  const displayCategories = buildReadableTrendCategories(
+    categories,
+    trendGranularity.value,
+    trendRangeDays.value,
+    trendScreenWidth,
+  )
   if (chart) {
     return {
       categories: displayCategories,
@@ -425,33 +431,37 @@ const breakdownRows = computed(() => {
     ratio: maxValue > 0 ? Math.max(8, Math.round((item.punchCount / maxValue) * 100)) : 0,
   }))
 })
-const trendSummaryText = computed(() => {
-  const granularityLabel = trendGranularity.value === 'month' ? '按月' : '按日'
-  return `${granularityLabel} · ${metricLabel(trendMetric.value)} · 最近 ${trendRangeDays.value} 天`
-})
 const isOperationStage = computed(() => order.value?.topStage === 'operation')
 const sharePath = computed(() => order.value?.share.miniProgramPath?.trim() ?? '')
 const shareQrLink = computed(() => order.value?.share.wechatRuleLink?.trim() ?? '')
 const shareQrTitle = computed(() => '微信小程序二维码')
 const sharePathHintText = computed(() => (sharePath.value ? '复制后可手动粘贴使用' : '暂无可复制路径'))
-const shareQrHintText = computed(() => {
-  if (shareQrLink.value) {
-    return '图片内容与微信小程序二维码规则链接一致'
-  }
-  return '暂无可生成二维码的规则链接'
-})
+
 
 const trendChartOpts = computed(() => ({
   color: colorPaletteForMetric(trendMetric.value),
-  padding: [14, 8, 18, 0],
+  padding: trendGranularity.value === 'day'
+    ? [14, 8, 20, 0]
+    : [14, 8, 18, 0],
   legend: { show: false },
   dataLabel: false,
   enableScroll: trendGranularity.value === 'day',
   xAxis: {
     disableGrid: true,
-    itemCount: trendGranularity.value === 'day' ? 3 : 4,
-    labelCount: trendGranularity.value === 'day' ? 3 : 4,
-    fontSize: 9,
+    scrollAlign: trendGranularity.value === 'day' ? 'right' : 'left',
+    itemCount: getTrendXAxisItemCount(
+      trendRangeDays.value,
+      trendGranularity.value,
+      trendScreenWidth,
+      trendChartData.value.categories.length,
+    ),
+    labelCount: getTrendXAxisLabelCount(
+      trendRangeDays.value,
+      trendGranularity.value,
+      trendScreenWidth,
+      trendChartData.value.categories.length,
+    ),
+    fontSize: trendGranularity.value === 'month' ? 8 : 9,
     rotateLabel: false,
   },
   yAxis: {
@@ -748,15 +758,25 @@ function formatDateTime(value?: string | null) {
 }
 
 function formatChartCategory(value: string, granularity: BusinessAnalyticsGranularity) {
+  const normalizedValue = value.split(' ')[0]?.split('T')[0] ?? value
   if (granularity === 'month') {
-    const [year, month] = value.split('-')
-    return year && month ? `${year.slice(2)}-${month}` : value
+    const [year, month] = normalizedValue.split('-')
+    const monthNumber = Number(month)
+    if (year && Number.isFinite(monthNumber)) {
+      return `${year.slice(2)}/${monthNumber}`
+    }
+    return year && month ? `${year.slice(2)}/${month}` : normalizedValue
   }
-  const parts = value.split('-')
+  const parts = normalizedValue.split('-')
   if (parts.length === 3) {
+    const month = Number(parts[1])
+    const day = Number(parts[2])
+    if (Number.isFinite(month) && Number.isFinite(day)) {
+      return `${month}/${day}`
+    }
     return `${parts[1]}/${parts[2]}`
   }
-  return value
+  return normalizedValue
 }
 
 function buildTrendDateRange(rangeDays: 7 | 30 | 90, granularity: BusinessAnalyticsGranularity) {
@@ -774,7 +794,24 @@ function buildTrendDateRange(rangeDays: 7 | 30 | 90, granularity: BusinessAnalyt
   }
 }
 
-function buildReadableTrendCategories(categories: string[], granularity: BusinessAnalyticsGranularity, rangeDays: 7 | 30 | 90) {
+function buildReadableTrendCategories(
+  categories: string[],
+  granularity: BusinessAnalyticsGranularity,
+  rangeDays: 7 | 30 | 90,
+  screenWidth: number,
+) {
+  if (granularity === 'month') {
+    if (categories.length <= 4 || screenWidth > 360) {
+      return categories.map((item) => formatChartCategory(item, granularity))
+    }
+    const monthSparseCount = categories.length <= 6 ? 4 : 3
+    const bucket = Math.max(1, Math.ceil(categories.length / monthSparseCount))
+    return categories.map((item, index) => {
+      const isEdge = index === 0 || index === categories.length - 1
+      const isMiddle = index > 0 && index < categories.length - 1 && index % bucket === 0
+      return isEdge || isMiddle ? formatChartCategory(item, granularity) : ''
+    })
+  }
   if (categories.length <= 8) {
     return categories.map((item) => formatChartCategory(item, granularity))
   }
@@ -785,6 +822,56 @@ function buildReadableTrendCategories(categories: string[], granularity: Busines
     const isMiddle = index > 0 && index < categories.length - 1 && index % bucket === 0
     return isEdge || isMiddle ? formatChartCategory(item, granularity) : ''
   })
+}
+
+function getTrendScreenWidth() {
+  try {
+    return uni.getSystemInfoSync().screenWidth || 375
+  } catch {
+    return 375
+  }
+}
+
+function getTrendXAxisItemCount(
+  rangeDays: 7 | 30 | 90,
+  granularity: BusinessAnalyticsGranularity,
+  screenWidth: number,
+  categoryCount: number,
+) {
+  if (granularity !== 'day') {
+    if (categoryCount <= 4) {
+      return categoryCount
+    }
+    return screenWidth <= 360 ? 4 : 5
+  }
+  if (rangeDays <= 7) {
+    return screenWidth <= 360 ? 4 : 5
+  }
+  if (rangeDays <= 30) {
+    return screenWidth <= 360 ? 4 : 5
+  }
+  return 4
+}
+
+function getTrendXAxisLabelCount(
+  rangeDays: 7 | 30 | 90,
+  granularity: BusinessAnalyticsGranularity,
+  screenWidth: number,
+  categoryCount: number,
+) {
+  if (granularity !== 'day') {
+    if (categoryCount <= 4) {
+      return categoryCount
+    }
+    return screenWidth <= 360 ? 3 : 4
+  }
+  if (rangeDays <= 7) {
+    return screenWidth <= 360 ? 2 : 3
+  }
+  if (rangeDays <= 30) {
+    return screenWidth <= 360 ? 2 : 3
+  }
+  return 2
 }
 
 function metricLabel(metric: BusinessAnalyticsMetric) {
@@ -1527,6 +1614,14 @@ function getErrorMessage(error: unknown, fallback: string): string {
 .chart-wrap {
   margin-top: 10px;
   min-height: 260px;
+}
+
+.chart-hint {
+  margin-top: 8px;
+  display: block;
+  color: #7a8798;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .chart-controls {
