@@ -4,12 +4,15 @@
       v-if="pageReady && !loadError"
       :project-id="projectId"
       :package-url="packageUrl"
+      :package-cache-key="packageCacheKey"
       :nominate-state-map="nominateStateMap"
       :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
       :server-asset-base-url="serverAssetBaseUrl"
       :initial-punched-node-ids="initialPunchedNodeIds"
       :physics-engine="resolvedPhysicsEngine"
+      @loaded="handleViewerLoaded"
+      @error="handleViewerError"
       @punch="handlePunch"
     />
 
@@ -34,6 +37,7 @@ import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
 
 const projectId = ref<string>('');
 const packageUrl = ref<string>('');
+const packageCacheKey = ref<string>('');
 // sceneUrl removed: use packageUrl instead
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
@@ -118,6 +122,14 @@ function handlePunch(payload: PunchEventPayload): void {
   });
 }
 
+function handleViewerLoaded(): void {
+  loadError.value = '';
+}
+
+function handleViewerError(message: string): void {
+  loadError.value = message || '场景预览加载失败';
+}
+
 async function loadPunchProgress(): Promise<void> {
   if (!sceneId.value || !sceneSpotId.value) {
     initialPunchedNodeIds.value = [];
@@ -143,6 +155,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   const record = (query ?? {}) as Record<string, unknown>;
   projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
   packageUrl.value = decodeQueryValue(record.packageUrl);
+  packageCacheKey.value = decodeQueryValue(record.packageCacheKey);
   sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
   sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
   selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';

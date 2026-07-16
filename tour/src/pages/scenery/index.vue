@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <view class="page">
     <view
       class="floating-back"
@@ -19,9 +19,8 @@
       </text>
     </view>
 
-    <!-- #ifdef MP-WEIXIN -->
     <SceneryViewer
-      v-if="sceneryEnabled"
+      v-if="sceneryVisible"
       :project-id="projectId"
       :package-url="packageUrl"
       :package-cache-key="packageCacheKey"
@@ -36,15 +35,18 @@
       :debug-console-max-entries="200"
       :initial-punched-node-ids="initialPunchedNodeIds"
       :physics-engine="resolvedPhysicsEngine"
+      @loaded="handleViewerLoaded"
+      @error="handleViewerError"
       @punch="handlePunch"
       @coupon="handleCoupon"
     />
-    <!-- #endif -->
 
-    <view v-if="!sceneryEnabled" class="scenery-fallback">
+    <view v-if="!sceneryVisible" class="scenery-fallback">
       <view class="scenery-fallback__card">
         <text class="scenery-fallback__title">{{ scenicTitle || '景区导览' }}</text>
-        <text class="scenery-fallback__description">当前平台的 3D 景区功能正在适配中，其他景区信息和账户功能仍可正常使用。</text>
+        <text class="scenery-fallback__message">
+          {{ sceneryLoadError || '当前场景暂时无法预览，请返回后重试。其他景区信息和账户功能仍可正常使用。' }}
+        </text>
         <button class="scenery-fallback__button" @tap="handleBack">返回景区详情</button>
       </view>
     </view>
@@ -54,10 +56,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onShow, onUnload } from '@dcloudio/uni-app';
-// #ifdef MP-WEIXIN
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue';
 import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
-// #endif
 import { getProfile } from '@/api/mini/profile';
 import { getDownloadCdnBaseUrl } from '@harmony/utils/http';
 import {
@@ -101,6 +101,15 @@ const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const multiuserIdentity = ref<{ userId: string; displayName?: string | null } | null>(null);
 const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefined);
 const sceneryEnabled = ref(false);
+const sceneryLoadError = ref('');
+const isH5 = ref(false);
+
+// #ifdef H5
+isH5.value = true;
+// #endif
+
+const hasRenderableSceneInput = computed(() => Boolean(projectId.value.trim() || packageUrl.value.trim()));
+const sceneryVisible = computed(() => hasRenderableSceneInput.value && !sceneryLoadError.value && (isH5.value || sceneryEnabled.value));
 
 const nominateStateMap = computed(() => {
   const vehicleIdentifier = selectedVehicleIdentifier.value.trim();
@@ -241,6 +250,14 @@ function handleCoupon(payload: CouponEventPayload): void {
   });
 }
 
+function handleViewerLoaded(): void {
+  sceneryLoadError.value = '';
+}
+
+function handleViewerError(message: string): void {
+  sceneryLoadError.value = message || '当前场景预览加载失败';
+}
+
 async function loadPunchProgress(): Promise<void> {
   if (!sceneId.value || !sceneSpotId.value) {
     initialPunchedNodeIds.value = [];
@@ -319,16 +336,33 @@ function decodeQueryValue(value: unknown): string {
   }
 }
 
+function resolvePhysicsEngineFromQuery(value: unknown): 'ammo' | 'cannon' | 'auto' | undefined {
+  if (value === 'ammo' || value === 'cannon' || value === 'auto') {
+    return value;
+  }
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'ammo' || normalized === 'cannon' || normalized === 'auto') {
+    return normalized;
+  }
+  return undefined;
+}
+
 onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
+  sceneryLoadError.value = '';
+  // #ifdef MP-WEIXIN
   void ensureMiniCapability('scenery').then((enabled) => {
-    // The renderer dependency is currently validated only for WeChat.
-    // #ifdef MP-WEIXIN
     sceneryEnabled.value = enabled;
-    // #endif
   }).catch(() => {
     sceneryEnabled.value = false;
   });
+  // #endif
+  // #ifdef H5
+  sceneryEnabled.value = true;
+  // #endif
 
   const record: Record<string, unknown> = query ?? {};
   const qrQuery = typeof record.q === 'string' ? extractQueryFromQrLink(record.q) : {};
@@ -349,6 +383,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
       : '';
   sceneSpotId.value = decodeQueryValue(mergedRecord.sceneSpotId);
   sceneId.value = decodeQueryValue(mergedRecord.sceneId);
+  resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(mergedRecord.physicsEngine);
   selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
     ? decodeQueryValue(mergedRecord.vehicleIdentifier)
     : getSelectedVehicleIdentifier();
@@ -377,6 +412,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
       scenicTitle: scenicTitle.value,
       sceneSpotId: sceneSpotId.value,
       sceneId: sceneId.value,
+      physicsEngine: resolvedPhysicsEngine.value || '',
       vehicleIdentifier: selectedVehicleIdentifier.value,
       prefabUrl: explicitPrefabUrl.value,
       prefabTargetNodeId: explicitPrefabTargetNodeId.value,
@@ -495,10 +531,14 @@ onUnload(() => {
   font-weight: 600;
 }
 
-.scenery-fallback__description {
+.scenery-fallback__message {
   color: #5f716a;
   font-size: 15px;
   line-height: 1.7;
+}
+
+.scenery-fallback__description {
+  display: none;
 }
 
 .scenery-fallback__button {

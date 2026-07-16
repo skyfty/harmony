@@ -423,7 +423,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type EffectScope, type ComponentPublicInstance } from 'vue';
+import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, toRaw, type EffectScope, type ComponentPublicInstance } from 'vue';
 // #ifdef MP-WEIXIN
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
@@ -5968,9 +5968,6 @@ type ResolvedSteerBinding = {
 };
 
 function cloneScenePreviewDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(document);
-  }
   return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
 }
 
@@ -6209,7 +6206,7 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
   if (matchedRequest) {
     const source = await resolveRuntimePrefabSource(matchedRequest);
     if (source) {
-      const nextDocument = cloneScenePreviewDocument(payload.document);
+      const nextDocument = JSON.parse(JSON.stringify(payload.document));
       const documentNodeMap = new Map<string, SceneNode>();
       const documentParentMap = new Map<string, string | null>();
       rebuildSceneNodeIndex(nextDocument.nodes ?? null, documentNodeMap, documentParentMap);
@@ -7565,9 +7562,7 @@ async function prepareCouponSceneDocument(document: SceneJsonExportDocument): Pr
     return document;
   }
 
-  const nextDocument = typeof structuredClone === 'function'
-    ? structuredClone(document)
-    : JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
+  const nextDocument = JSON.parse(JSON.stringify(document));
   nextDocument.nodes = pruneCouponNodes(nextDocument.nodes, couponMap);
   nextDocument.couponIds = couponIds;
   return nextDocument;
