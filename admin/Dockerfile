@@ -50,4 +50,4 @@ RUN printf '%s\n' \
 
 EXPOSE 80
 # Write the pid file to /tmp so the container does not need write access to /run.
-CMD ["nginx", "-g", "pid /tmp/nginx.pid; daemon off;"]
+CMD ["nginx", "-g", "daemon off;"]
