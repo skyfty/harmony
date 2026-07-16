@@ -19,6 +19,7 @@ export * from './analytics';
 export * from './punchRecords';
 export * from './travelRecords';
 export * from './vehicles';
+export * from './controllable-assets';
 export * from './mini-apps';
 export * from './medals';
 export * from './business-orders';

@@ -1,4 +1,4 @@
-export type NavKey = 'scenic' | 'coupon' | 'achievement' | 'vehicle' | 'profile';
+export type NavKey = 'scenic' | 'coupon' | 'achievement' | 'products' | 'profile';
 
 export function resolveNavUrl(key: NavKey): string {
   switch (key) {
@@ -8,8 +8,8 @@ export function resolveNavUrl(key: NavKey): string {
       return '/pages/coupons/index';
     case 'achievement':
       return '/pages/achievements/index';
-    case 'vehicle':
-      return '/pages/vehicles/index';
+    case 'products':
+      return '/pages/products/index';
     case 'profile':
       return '/pages/profile/index';
     default:

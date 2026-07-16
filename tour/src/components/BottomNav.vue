@@ -76,8 +76,8 @@ const navItems: ReadonlyArray<NavItem> = [
     },
   },
   {
-    key: 'vehicle',
-    label: '车辆',
+    key: 'products',
+    label: '商品',
     icon: {
       inactive: '/static/icons/bottom-nav/vehicle-inactive.png',
       active: '/static/icons/bottom-nav/vehicle-active.png',
@@ -101,7 +101,7 @@ function go(value: NavKey) {
   }
 
   // For sensitive tabs that require profile/login, trigger auth via user gesture.
-  const sensitive: NavKey[] = ['coupon', 'achievement', 'vehicle', 'profile'];
+  const sensitive: NavKey[] = ['coupon', 'achievement', 'products', 'profile'];
   if (sensitive.includes(value)) {
     logMiniAuthNav('sensitive tab requires auth', { tab: value })
     void ensureAuthThenNavigate(value).catch(() => {
@@ -177,9 +177,9 @@ function go(value: NavKey) {
   color: #f59e0b;
 }
 
-.nav-item--vehicle.active {
-  color: #059669;
-}
+  .nav-item--products.active {
+    color: #059669;
+  }
 
 .nav-item--profile.active {
   color: #1e293b;

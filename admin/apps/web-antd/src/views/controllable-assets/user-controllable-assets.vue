@@ -111,7 +111,7 @@ async function openEditModal(row: UserVehicleItem) {
     }
     modalOpen.value = true;
   } catch {
-    message.error('读取用户车辆失败');
+  message.error('读取用户可控资产失败');
   }
 }
 
@@ -129,10 +129,10 @@ async function submitUserVehicle() {
 
     if (editingId.value) {
       await updateUserVehicleApi(editingId.value, payload);
-      message.success('用户车辆更新成功');
+      message.success('用户可控资产更新成功');
     } else {
       await createUserVehicleApi(payload);
-      message.success('用户车辆创建成功');
+      message.success('用户可控资产创建成功');
     }
     modalOpen.value = false;
     userVehicleGridApi.reload();
@@ -143,7 +143,7 @@ async function submitUserVehicle() {
 
 function handleDelete(row: UserVehicleItem) {
   Modal.confirm({
-    title: '确认删除该用户车辆关系吗？',
+    title: '确认删除该用户可控资产关系吗？',
     okType: 'danger',
     onOk: async () => {
       await deleteUserVehicleApi(row.id);
@@ -160,15 +160,15 @@ const [UserVehicleGrid, userVehicleGridApi] = useVbenVxeGrid<UserVehicleItem>({
         component: 'Input',
         fieldName: 'keyword',
         label: '关键字',
-        componentProps: { allowClear: true, placeholder: '用户/车辆关键词' },
+        componentProps: { allowClear: true, placeholder: '用户/可控资产关键词' },
       },
       {
         component: 'Select',
         fieldName: 'vehicleId',
-        label: '车辆',
+        label: '可控资产',
         componentProps: {
           allowClear: true,
-          placeholder: '全部车辆',
+          placeholder: '全部可控资产',
           options: vehicleOptions,
         },
       },
@@ -177,8 +177,8 @@ const [UserVehicleGrid, userVehicleGridApi] = useVbenVxeGrid<UserVehicleItem>({
   gridOptions: {
     border: true,
     columns: [
-      { field: 'vehicle.identifier', minWidth: 180, title: '车辆标识符' },
-      { field: 'vehicle.name', minWidth: 160, title: '车辆名称' },
+      { field: 'vehicle.identifier', minWidth: 180, title: '资产标识符' },
+      { field: 'vehicle.name', minWidth: 160, title: '资产名称' },
       { field: 'user.displayName', minWidth: 160, title: '用户昵称' },
       { field: 'user.username', minWidth: 180, title: '用户名' },
       { field: 'ownedAt', minWidth: 180, formatter: 'formatDateTime', title: '拥有时间' },
@@ -212,7 +212,7 @@ onMounted(async () => {
   <div class="p-5">
     <UserVehicleGrid>
       <template #toolbar-actions>
-        <Button v-access:code="'vehicle:write'" type="primary" @click="openCreateModal">新增用户车辆</Button>
+        <Button v-access:code="'vehicle:write'" type="primary" @click="openCreateModal">新增用户可控资产</Button>
       </template>
 
       <template #actions="{ row }">
@@ -234,7 +234,7 @@ onMounted(async () => {
 
     <Modal
       :open="modalOpen"
-      :title="editingId ? '编辑用户车辆' : '新增用户车辆'"
+      :title="editingId ? '编辑用户可控资产' : '新增用户可控资产'"
       :confirm-loading="submitting"
       ok-text="保存"
       cancel-text="取消"
@@ -255,13 +255,13 @@ onMounted(async () => {
             @search="handleUserSearch"
           />
         </Form.Item>
-        <Form.Item label="车辆" name="vehicleId" :rules="[{ required: true, message: '请选择车辆' }]">
+        <Form.Item label="可控资产" name="vehicleId" :rules="[{ required: true, message: '请选择可控资产' }]">
           <Select
             v-model:value="userVehicleFormModel.vehicleId"
             :options="vehicleOptions"
             show-search
             option-filter-prop="label"
-            placeholder="请选择车辆"
+            placeholder="请选择可控资产"
           />
         </Form.Item>
       </Form>

@@ -72,6 +72,13 @@ import {
   updateVehicle,
 } from '@/controllers/admin/vehicleController'
 import {
+  createControllableAsset,
+  deleteControllableAsset,
+  getControllableAsset,
+  listControllableAssets,
+  updateControllableAsset,
+} from '@/controllers/admin/controllableAssetController'
+import {
   createCoupon,
   deleteCoupon,
   distributeCouponBatch,
@@ -329,6 +336,12 @@ adminRouter.get('/vehicles/:id', requireAnyPermission(['vehicle:read']), getVehi
 adminRouter.post('/vehicles', requireAnyPermission(['vehicle:write']), createVehicle)
 adminRouter.put('/vehicles/:id', requireAnyPermission(['vehicle:write']), updateVehicle)
 adminRouter.delete('/vehicles/:id', requireAnyPermission(['vehicle:write']), deleteVehicle)
+
+adminRouter.get('/controllable-assets', requireAnyPermission(['controllableAsset:read', 'product:read']), listControllableAssets)
+adminRouter.get('/controllable-assets/:id', requireAnyPermission(['controllableAsset:read', 'product:read']), getControllableAsset)
+adminRouter.post('/controllable-assets', requireAnyPermission(['controllableAsset:write', 'product:write']), createControllableAsset)
+adminRouter.put('/controllable-assets/:id', requireAnyPermission(['controllableAsset:write', 'product:write']), updateControllableAsset)
+adminRouter.delete('/controllable-assets/:id', requireAnyPermission(['controllableAsset:write', 'product:write']), deleteControllableAsset)
 
 adminRouter.get('/user-vehicles', requireAnyPermission(['vehicle:read']), listUserVehicles)
 adminRouter.get('/user-vehicles/:id', requireAnyPermission(['vehicle:read']), getUserVehicle)

@@ -30,10 +30,6 @@
       </view>
 
       <view class="card">
-        <view class="row" @tap="syncWechatProfile">
-          <text class="label">同步微信资料</text>
-          <text class="arrow">›</text>
-        </view>
         <view class="row" @tap="nav('/pages/orders/index')">
           <text class="label">订单中心</text>
           <text class="arrow">›</text>

@@ -7,6 +7,8 @@ import { UserProductModel } from '@/models/UserProduct'
 import { UserCouponModel } from '@/models/UserCoupon'
 import { VehicleModel } from '@/models/Vehicle'
 import { UserVehicleModel } from '@/models/UserVehicle'
+import { ControllableAssetModel } from '@/models/ControllableAsset'
+import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
 import { addProductToWarehouse } from '@/services/warehouseService'
 import { queryWechatOrderByOutTradeNo } from '@/services/paymentService'
 import type { WechatTransaction } from '@/services/paymentService'
@@ -127,6 +129,25 @@ async function fulfillOrder(order: any, session?: ClientSession): Promise<void> 
 						userId: order.userId,
 						vehicleId: boundVehicle._id,
 						ownedAt: now,
+					},
+				},
+				{ upsert: true, session },
+			).exec()
+		}
+
+		const controllableQuery = ControllableAssetModel.findOne({ productId: product._id, isActive: true }).select({ _id: 1, type: 1 })
+		if (session) {
+			controllableQuery.session(session)
+		}
+		const controllable = await controllableQuery.lean().exec()
+		if (controllable?._id) {
+			await UserControllableSelectionModel.updateOne(
+				{ userId: order.userId, controllableType: controllable.type },
+				{
+					$setOnInsert: {
+						userId: order.userId,
+						controllableType: controllable.type,
+						controllableAssetId: controllable._id,
 					},
 				},
 				{ upsert: true, session },

@@ -170,29 +170,29 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
-    name: 'Vehicles',
-    path: '/vehicles',
+    name: 'ControllableAssets',
+    path: '/controllable-assets',
     meta: {
-      icon: 'lucide:car',
-      title: '车辆管理',
+      icon: 'lucide:package',
+      title: '可控资产管理',
     },
     children: [
       {
-        name: 'VehiclesIndex',
+        name: 'ControllableAssetsIndex',
         path: '',
-        component: () => import('#/views/vehicles/index.vue'),
+        component: () => import('#/views/controllable-assets/index.vue'),
         meta: {
-          icon: 'lucide:car',
-          title: '车辆管理',
+          icon: 'lucide:package',
+          title: '可控资产管理',
         },
       },
       {
-        name: 'UserVehicles',
-        path: 'user-vehicles',
-        component: () => import('#/views/vehicles/user-vehicles.vue'),
+        name: 'UserControllableAssets',
+        path: 'user-controllable-assets',
+        component: () => import('#/views/controllable-assets/user-controllable-assets.vue'),
         meta: {
           icon: 'lucide:car-front',
-          title: '用户车辆',
+          title: '用户可控资产',
         },
       },
     ],

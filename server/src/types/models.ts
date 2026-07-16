@@ -620,6 +620,10 @@ export interface ProductDocument extends Document<Types.ObjectId> {
   slug: string
   /** 中文：商品分类 ID（可选） */
   categoryId?: Types.ObjectId | null
+  /** 中文：关联的可控对象 ID（可选） */
+  controllableAssetId?: Types.ObjectId | null
+  /** 中文：关联的可控对象类型（可选） */
+  controllableType?: ControllableAssetType | null
   /** 中文：商品价格 */
   price: number
   /** 中文：封面 URL（可选） */
@@ -643,6 +647,32 @@ export interface ProductDocument extends Document<Types.ObjectId> {
   /** 中文：创建时间 */
   createdAt: Date
   /** 中文：更新时间 */
+  updatedAt: Date
+}
+
+export type ControllableAssetType = 'vehicle' | 'character' | 'ship' | 'aircraft'
+
+export interface ControllableAssetDocument extends Document<Types.ObjectId> {
+  identifier: string
+  name: string
+  type: ControllableAssetType
+  sortOrder: number
+  description?: string
+  prefabUrl?: string
+  isActive: boolean
+  isDefault: boolean
+  productId: Types.ObjectId
+  runtimeConfig?: Record<string, unknown> | null
+  metadata?: Record<string, unknown> | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface UserControllableSelectionDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  controllableType: ControllableAssetType
+  controllableAssetId: Types.ObjectId
+  createdAt: Date
   updatedAt: Date
 }
 

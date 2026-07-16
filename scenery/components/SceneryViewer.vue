@@ -423,7 +423,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, toRaw, type EffectScope, type ComponentPublicInstance } from 'vue';
+import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type EffectScope, type ComponentPublicInstance } from 'vue';
 // #ifdef MP-WEIXIN
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
@@ -498,6 +498,7 @@ type SceneryProps = {
   physicsEngine?: PhysicsBackendPreference;
   createPhysicsBridge?: (engine?: PhysicsBackendPreference) => Promise<PhysicsBridge> | PhysicsBridge;
   defaultSteerIdentifier?: string;
+  defaultSteerTargetType?: SteerControllableTargetType;
   multiuserIdentity?: MultiuserIdentity | null;
   nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
@@ -812,6 +813,7 @@ import {
   STEER_COMPONENT_TYPE,
   clampSteerComponentProps,
   type SteerComponentProps,
+  type SteerControllableTargetType,
 } from '@harmony/schema/components/definitions/steerComponent';
 import {
   waterComponentDefinition,
@@ -5215,7 +5217,7 @@ function shouldSpawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): bo
     ? props.defaultSteerIdentifier.trim() || null
     : null;
   const binding = currentDocument
-    ? resolveDefaultSteerBinding(currentDocument, defaultSteerIdentifier)
+    ? resolveDefaultSteerBinding(currentDocument, defaultSteerIdentifier, resolveDefaultSteerTargetType())
     : null;
   return binding?.steerProps.targetType === 'vehicle';
 }
@@ -5623,12 +5625,15 @@ function normalizeRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null
   const assetId = typeof request.assetId === 'string' ? request.assetId.trim() : '';
   const assetUrl = typeof request.assetUrl === 'string' ? request.assetUrl.trim() : '';
   const vehicleIdentifier = typeof request.vehicleIdentifier === 'string' ? request.vehicleIdentifier.trim() : '';
+  const controllableIdentifier = typeof request.controllableIdentifier === 'string' ? request.controllableIdentifier.trim() : '';
   if (!assetId && !assetUrl) {
     return null;
   }
   return {
     requestId: typeof request.requestId === 'string' ? request.requestId.trim() || null : null,
     vehicleIdentifier: vehicleIdentifier || null,
+    controllableIdentifier: controllableIdentifier || null,
+    controllableType: request.controllableType ?? null,
     assetId: assetId || null,
     assetUrl: assetUrl || null,
     targetNodeId: typeof request.targetNodeId === 'string' ? request.targetNodeId.trim() || null : null,
@@ -5967,10 +5972,6 @@ type ResolvedSteerBinding = {
   targetNodeId: string;
 };
 
-function cloneScenePreviewDocument(document: SceneJsonExportDocument): SceneJsonExportDocument {
-  return JSON.parse(JSON.stringify(document)) as SceneJsonExportDocument;
-}
-
 function findFirstVehicleNodeId(node: SceneNode | null | undefined): string | null {
   if (!node) {
     return null;
@@ -5987,6 +5988,21 @@ function findFirstVehicleNodeId(node: SceneNode | null | undefined): string | nu
     if (Array.isArray(current.children) && current.children.length) {
       stack.push(...current.children);
     }
+  }
+  return null;
+}
+
+function findFirstSteerTargetNodeId(node: SceneNode | null | undefined, targetType: SteerControllableTargetType): string | null {
+  if (!node) return null;
+  const stack: SceneNode[] = [node];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) continue;
+    const hasTarget = targetType === 'character'
+      ? resolveEnabledComponentState(current, CHARACTER_CONTROLLER_COMPONENT_TYPE)
+      : resolveEnabledComponentState<VehicleComponentProps>(current, VEHICLE_COMPONENT_TYPE);
+    if (hasTarget) return current.id ?? null;
+    if (Array.isArray(current.children)) stack.push(...current.children);
   }
   return null;
 }
@@ -6024,6 +6040,7 @@ function applySteerTargetTransform(targetNode: SceneNode, replacementRoot: Scene
 function resolveDefaultSteerBinding(
   document: SceneJsonExportDocument,
   defaultSteerIdentifier: string | null,
+  targetType: SteerControllableTargetType,
 ): ResolvedSteerBinding | null {
   const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
   let fallback: ResolvedSteerBinding | null = null;
@@ -6035,7 +6052,7 @@ function resolveDefaultSteerBinding(
     const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
     if (steerComponent) {
       const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
-      if (steerProps.targetType === 'vehicle' && steerProps.targetNodeId && steerProps.autoEnterOnSceneLoad) {
+      if (steerProps.targetType === targetType && steerProps.targetNodeId && steerProps.autoEnterOnSceneLoad) {
         const binding: ResolvedSteerBinding = {
           steerNodeId: node.id,
           steerNode: node,
@@ -6054,6 +6071,14 @@ function resolveDefaultSteerBinding(
     }
   }
   return fallback;
+}
+
+function resolveDefaultSteerTargetType(): SteerControllableTargetType {
+  const requested = props.defaultSteerTargetType;
+  if (requested === 'vehicle' || requested === 'character' || requested === 'ship' || requested === 'aircraft') {
+    return requested;
+  }
+  return 'vehicle';
 }
 
 function resolveDefaultCharacterSteerNodeId(
@@ -6135,7 +6160,7 @@ function findMatchingSteerRuntimePrefabRequest(
     return null;
   }
   if (vehicleIdentifier) {
-    const matched = normalized.find((request) => request.vehicleIdentifier === vehicleIdentifier);
+    const matched = normalized.find((request) => request.vehicleIdentifier === vehicleIdentifier || request.controllableIdentifier === vehicleIdentifier);
     if (matched) {
       return matched;
     }
@@ -6192,15 +6217,15 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
   const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
     ? props.defaultSteerIdentifier.trim() || null
     : null;
-  const binding = resolveDefaultSteerBinding(payload.document, defaultSteerIdentifier);
+  const binding = resolveDefaultSteerBinding(payload.document, defaultSteerIdentifier, resolveDefaultSteerTargetType());
   if (!binding) {
     return payload;
   }
 
   let finalTargetNodeId = binding.targetNodeId;
   let nextPayload = payload;
-  const shouldInstantiateSelectedVehicle = binding.steerProps.targetType === 'vehicle';
-  const matchedRequest = shouldInstantiateSelectedVehicle
+  const shouldInstantiateSelectedTarget = binding.steerProps.targetType !== 'character';
+  const matchedRequest = shouldInstantiateSelectedTarget
     ? findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier)
     : null;
   if (matchedRequest) {
@@ -6218,16 +6243,16 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
       if (targetNode && steerHostNode && steerHostComponent) {
         const cloned = cloneRuntimePrefabNode(source.prefab);
         applySteerTargetTransform(targetNode, cloned.root);
-        const replacementVehicleNodeId = findFirstVehicleNodeId(cloned.root) ?? cloned.root.id ?? null;
-        if (replacementVehicleNodeId && replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
+        const replacementTargetNodeId = findFirstSteerTargetNodeId(cloned.root, binding.steerProps.targetType) ?? findFirstVehicleNodeId(cloned.root) ?? cloned.root.id ?? null;
+        if (replacementTargetNodeId && replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
           transferAutoTourComponentProps(targetNode, cloned.root);
           steerHostComponent.props = clampSteerComponentProps({
             ...(steerHostComponent.props ?? {}),
-            targetNodeId: replacementVehicleNodeId,
+            targetNodeId: replacementTargetNodeId,
             defaultIdentifier: defaultSteerIdentifier ?? binding.steerProps.defaultIdentifier ?? null,
           });
           nextDocument.updatedAt = new Date().toISOString();
-          finalTargetNodeId = replacementVehicleNodeId;
+          finalTargetNodeId = replacementTargetNodeId;
           nextPayload = {
             ...payload,
             document: nextDocument,

@@ -28,6 +28,7 @@
       :nominate-state-map="nominateStateMap"
       :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
+      :default-steer-target-type="selectedControllableType"
       :runtime-prefab-spawns="runtimePrefabSpawns"
       :server-asset-base-url="serverAssetBaseUrl"
       :debug-console-enabled="false"
@@ -70,6 +71,7 @@ import {
 import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicle, getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
+import { getSelectedControllable, type ControllableType } from '@/utils/controllableSelection';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
 import { ensureMiniCapability } from '@/platform/runtime';
 
@@ -88,6 +90,8 @@ const sceneId = ref<string>('');
 const enterAt = ref<number>(0);
 const selectedVehicleIdentifier = ref<string>('');
 const selectedVehiclePrefabUrl = ref<string>('');
+const selectedControllableType = ref<ControllableType>('vehicle');
+const selectedControllablePrefabUrl = ref<string>('');
 const explicitPrefabUrl = ref<string>('');
 const explicitPrefabTargetNodeId = ref<string>('');
 const explicitPrefabTargetNodeName = ref<string>('');
@@ -125,14 +129,17 @@ const nominateStateMap = computed(() => {
 
 const runtimePrefabSpawns = computed(() => {
   const prefabUrl = explicitPrefabUrl.value.trim() || selectedVehiclePrefabUrl.value.trim();
-  if (!prefabUrl) {
+  const controllablePrefabUrl = selectedControllablePrefabUrl.value.trim();
+  if (!prefabUrl && !controllablePrefabUrl) {
     return [];
   }
   return [{
     requestId: explicitPrefabUrl.value.trim().length
       ? `route-prefab:${prefabUrl}`
       : `vehicle-prefab:${selectedVehicleIdentifier.value.trim() || prefabUrl}`,
-    assetUrl: prefabUrl,
+    assetUrl: prefabUrl || controllablePrefabUrl || null,
+    controllableIdentifier: selectedVehicleIdentifier.value || null,
+    controllableType: selectedControllableType.value,
     preloadPolicy: 'before-entry' as const,
     targetNodeId: explicitPrefabTargetNodeId.value.trim() || null,
     targetNodeName: explicitPrefabTargetNodeName.value.trim() || null,
@@ -384,15 +391,39 @@ onLoad((query: Record<string, unknown> | undefined) => {
   sceneSpotId.value = decodeQueryValue(mergedRecord.sceneSpotId);
   sceneId.value = decodeQueryValue(mergedRecord.sceneId);
   resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(mergedRecord.physicsEngine);
-  selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
-    ? decodeQueryValue(mergedRecord.vehicleIdentifier)
-    : getSelectedVehicleIdentifier();
+  const requestedControllableType = mergedRecord.controllableType === 'vehicle'
+    || mergedRecord.controllableType === 'character'
+    || mergedRecord.controllableType === 'ship'
+    || mergedRecord.controllableType === 'aircraft'
+    ? mergedRecord.controllableType as ControllableType
+    : null;
   {
-    const selectedVehicle = getSelectedVehicle();
+    const selectedVehicle = (requestedControllableType ? getSelectedControllable(requestedControllableType) : null)
+      ?? getSelectedControllable('vehicle')
+      ?? getSelectedControllable('character')
+      ?? getSelectedControllable('ship')
+      ?? getSelectedControllable('aircraft')
+      ?? getSelectedVehicle();
+    const selectedType = selectedVehicle && typeof (selectedVehicle as { type?: unknown }).type === 'string'
+      ? (selectedVehicle as { type: string }).type
+      : '';
+    selectedControllableType.value = selectedType === 'character'
+      || selectedType === 'ship'
+      || selectedType === 'aircraft'
+      ? selectedType
+      : 'vehicle';
+    selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
+      ? decodeQueryValue(mergedRecord.vehicleIdentifier)
+      : typeof selectedVehicle?.identifier === 'string'
+        ? selectedVehicle.identifier.trim()
+        : getSelectedVehicleIdentifier();
     const selectedPrefabUrl = selectedVehicle && typeof selectedVehicle === 'object'
       ? (selectedVehicle as { prefabUrl?: unknown }).prefabUrl
       : null;
     selectedVehiclePrefabUrl.value = typeof selectedPrefabUrl === 'string'
+      ? selectedPrefabUrl.trim()
+      : '';
+    selectedControllablePrefabUrl.value = typeof selectedPrefabUrl === 'string'
       ? selectedPrefabUrl.trim()
       : '';
   }

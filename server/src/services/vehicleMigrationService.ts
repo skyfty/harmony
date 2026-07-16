@@ -1,4 +1,8 @@
 import { VehicleModel } from '@/models/Vehicle'
+import { ControllableAssetModel } from '@/models/ControllableAsset'
+import { AppUserModel } from '@/models/AppUser'
+import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
+import { ProductModel } from '@/models/Product'
 
 export async function ensureVehicleCoverUrlField(): Promise<void> {
   const legacyRows = await VehicleModel.find({
@@ -93,4 +97,63 @@ export async function ensureVehicleSortOrderField(): Promise<void> {
       $set: { sortOrder: 0 },
     },
   ).exec()
+}
+
+/**
+ * Copies legacy vehicle records into the generic controllable-asset catalog.
+ * The legacy collections remain intact so older clients can continue to work.
+ */
+export async function migrateVehiclesToControllableAssets(): Promise<void> {
+  const vehicles = await VehicleModel.find({}).lean().exec()
+  for (const vehicle of vehicles as any[]) {
+    if (!vehicle.productId) continue
+    const product = await ProductModel.findById(vehicle.productId).select({ _id: 1 }).lean().exec()
+    if (!product) continue
+    const existing = await ControllableAssetModel.findOne({
+      $or: [{ productId: vehicle.productId }, { type: 'vehicle', identifier: String(vehicle.identifier) }],
+    }).select({ _id: 1 }).lean().exec()
+    if (existing) {
+      await ProductModel.updateOne({ _id: vehicle.productId }, { $set: { controllableAssetId: existing._id, controllableType: 'vehicle' } }).exec()
+      continue
+    }
+    const asset = await ControllableAssetModel.create({
+      identifier: String(vehicle.identifier),
+      name: vehicle.name,
+      type: 'vehicle',
+      sortOrder: vehicle.sortOrder ?? 0,
+      description: vehicle.description ?? '',
+      coverUrl: vehicle.coverUrl ?? '',
+      prefabUrl: vehicle.prefabUrl ?? '',
+      isActive: vehicle.isActive !== false,
+      isDefault: vehicle.isDefault === true,
+      productId: vehicle.productId,
+      runtimeConfig: {
+        maxSpeed: vehicle.maxSpeed,
+        acceleration: vehicle.acceleration,
+        braking: vehicle.braking,
+        handling: vehicle.handling,
+        mass: vehicle.mass,
+        drag: vehicle.drag,
+      },
+      metadata: { migratedFrom: 'Vehicle', legacyVehicleId: vehicle._id.toString() },
+    })
+    await ProductModel.updateOne({ _id: vehicle.productId }, { $set: { controllableAssetId: asset._id, controllableType: 'vehicle' } }).exec()
+  }
+
+  const users = await AppUserModel.find({ currentVehicleId: { $exists: true, $ne: null } })
+    .select({ _id: 1, currentVehicleId: 1 }).lean().exec()
+  for (const user of users as any[]) {
+    const vehicle = await VehicleModel.findById(user.currentVehicleId).select({ _id: 1 }).lean().exec()
+    if (!vehicle) continue
+    const asset = await ControllableAssetModel.findOne({
+      type: 'vehicle',
+      'metadata.legacyVehicleId': vehicle._id.toString(),
+    }).select({ _id: 1 }).lean().exec()
+    if (!asset) continue
+    await UserControllableSelectionModel.updateOne(
+      { userId: user._id, controllableType: 'vehicle' },
+      { $set: { controllableAssetId: asset._id } },
+      { upsert: true },
+    ).exec()
+  }
 }

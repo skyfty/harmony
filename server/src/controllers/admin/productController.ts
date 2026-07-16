@@ -1,8 +1,9 @@
 import type { Context } from 'koa'
+import { Types } from 'mongoose'
 import { ProductModel } from '@/models/Product'
 import { ProductCategoryModel } from '@/models/ProductCategory'
 import { VehicleModel } from '@/models/Vehicle'
-import { Types } from 'mongoose'
+import { ControllableAssetModel } from '@/models/ControllableAsset'
 
 type ProductPayload = {
   name?: string
@@ -53,7 +54,7 @@ function mapProduct(row: any) {
   }
 }
 
-async function resolveCategoryPayload(payload: ProductPayload, fallback: { categoryId?: any | null }) {
+async function resolveCategoryPayload(payload: ProductPayload, fallback: { categoryId?: Types.ObjectId | null }) {
   const categoryIdText = toStringValue(payload.categoryId)
   if (categoryIdText) {
     if (!Types.ObjectId.isValid(categoryIdText)) {
@@ -64,7 +65,7 @@ async function resolveCategoryPayload(payload: ProductPayload, fallback: { categ
       throw new Error('Category not found or disabled')
     }
     return {
-      categoryId: categoryRow._id,
+      categoryId: categoryRow._id as Types.ObjectId,
     }
   }
 
@@ -79,16 +80,21 @@ export async function listProducts(ctx: Context): Promise<void> {
   const limit = Math.min(Math.max(Number(pageSize) || 10, 1), 100)
   const skip = (pageNumber - 1) * limit
   const filter: Record<string, unknown> = { isDeleted: { $ne: true } }
+
   if (keyword && keyword.trim()) {
-    filter.$or = [{ name: new RegExp(keyword.trim(), 'i') }, { slug: new RegExp(keyword.trim(), 'i') }]
+    const pattern = new RegExp(keyword.trim(), 'i')
+    filter.$or = [{ name: pattern }, { slug: pattern }, { description: pattern }, { tags: pattern }]
   }
+
   if (categoryId && Types.ObjectId.isValid(categoryId)) {
     filter.categoryId = new Types.ObjectId(categoryId)
   }
+
   const [rows, total] = await Promise.all([
     ProductModel.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean().exec(),
     ProductModel.countDocuments(filter),
   ])
+
   ctx.body = {
     data: rows.map(mapProduct),
     page: pageNumber,
@@ -122,6 +128,7 @@ export async function createProduct(ctx: Context): Promise<void> {
   }
   const validityDays = body.validityDays === null || body.validityDays === undefined ? null : toNumberValue(body.validityDays)
   const price = toNumberValue(body.price) ?? 0
+
   if (!name || !slug || !categoryPayload.categoryId) {
     ctx.throw(400, 'name, slug and categoryId are required')
   }
@@ -131,10 +138,12 @@ export async function createProduct(ctx: Context): Promise<void> {
   if (price < 0) {
     ctx.throw(400, 'price must be greater than or equal to 0')
   }
+
   const exists = await ProductModel.findOne({ slug }).lean().exec()
   if (exists) {
     ctx.throw(409, 'slug already exists')
   }
+
   const created = await ProductModel.create({
     name,
     slug,
@@ -160,6 +169,7 @@ export async function updateProduct(ctx: Context): Promise<void> {
   if (!current) {
     ctx.throw(404, 'Product not found')
   }
+
   const body = (ctx.request.body ?? {}) as ProductPayload
   const nextName = toStringValue(body.name) ?? current.name
   const nextSlug = toStringValue(body.slug)?.toLowerCase() ?? current.slug
@@ -179,7 +189,8 @@ export async function updateProduct(ctx: Context): Promise<void> {
         ? null
         : toNumberValue(body.validityDays)
   const nextPrice = body.price === undefined ? current.price : toNumberValue(body.price)
-  if (nextValidityDays !== null && (nextValidityDays === null || nextValidityDays < 1)) {
+
+  if (nextValidityDays !== null && nextValidityDays < 1) {
     ctx.throw(400, 'validityDays must be greater than 0')
   }
   if (nextPrice === null || nextPrice < 0) {
@@ -191,6 +202,7 @@ export async function updateProduct(ctx: Context): Promise<void> {
       ctx.throw(409, 'slug already exists')
     }
   }
+
   const updated = await ProductModel.findByIdAndUpdate(
     id,
     {
@@ -217,10 +229,17 @@ export async function deleteProduct(ctx: Context): Promise<void> {
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid product id')
   }
+
   const vehicle = await VehicleModel.findOne({ productId: id }).select({ _id: 1, name: 1 }).lean().exec()
   if (vehicle) {
     ctx.throw(409, `该商品已关联车辆“${vehicle.name ?? '未知'}”，请先删除车辆`)
   }
+
+  const controllableAsset = await ControllableAssetModel.findOne({ productId: id }).select({ _id: 1, name: 1 }).lean().exec()
+  if (controllableAsset) {
+    ctx.throw(409, `该商品已关联可控资产“${controllableAsset.name ?? '未知'}”，请先删除可控资产`)
+  }
+
   await ProductModel.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() }).exec()
   ctx.status = 200
   ctx.body = {}

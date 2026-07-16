@@ -774,6 +774,10 @@ export interface RuntimePrefabSpawnRequest {
   preloadPolicy?: 'before-entry' | 'after-entry' | null
   /** Optional external/default steer identifier used to match runtime controllable targets. */
   vehicleIdentifier?: string | null
+  /** Generic controllable-object identifier; vehicleIdentifier remains for compatibility. */
+  controllableIdentifier?: string | null
+  /** Generic controllable-object type used by selection and runtime injection. */
+  controllableType?: 'vehicle' | 'character' | 'ship' | 'aircraft' | null
   /** Existing registered scene/project asset id for a prefab asset. */
   assetId?: string | null
   /** External direct download URL when the prefab does not exist in the asset registry. */
