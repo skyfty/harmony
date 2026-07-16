@@ -48,6 +48,24 @@ RUN printf '%s\n' \
   '}' \
   > /etc/nginx/conf.d/default.conf
 
+RUN printf '%s\n' \
+  'user nginx;' \
+  'worker_processes auto;' \
+  'pid /tmp/nginx.pid;' \
+  'error_log /var/log/nginx/error.log warn;' \
+  '' \
+  'events {' \
+  '  worker_connections 1024;' \
+  '}' \
+  '' \
+  'http {' \
+  '  include /etc/nginx/mime.types;' \
+  '  default_type application/octet-stream;' \
+  '  sendfile on;' \
+  '  keepalive_timeout 65;' \
+  '  include /etc/nginx/conf.d/*.conf;' \
+  '}' \
+  > /etc/nginx/nginx.conf
+
 EXPOSE 80
-# Write the pid file to /tmp so the container does not need write access to /run.
-CMD ["nginx", "-g", "pid /tmp/nginx.pid; daemon off;"]
+CMD ["nginx", "-g", "daemon off;"]
