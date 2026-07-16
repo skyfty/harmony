@@ -51,7 +51,7 @@ RUN printf '%s\n' \
 RUN printf '%s\n' \
   'user nginx;' \
   'worker_processes auto;' \
-  'pid /tmp/nginx.pid;' \
+  'pid /dev/shm/nginx.pid;' \
   'error_log /var/log/nginx/error.log warn;' \
   '' \
   'events {' \
