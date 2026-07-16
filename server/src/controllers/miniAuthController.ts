@@ -24,6 +24,7 @@ interface UpdateProfileBody {
   bio?: string
   gender?: 'male' | 'female' | 'other'
   birthDate?: string
+  realSceneCheckinEnabled?: boolean
 }
 
 type UploadedFilePayload = {
@@ -342,7 +343,7 @@ export async function miniUpdateProfile(ctx: Context): Promise<void> {
   if (!userId) {
     ctx.throw(401, 'Unauthorized')
   }
-  const { displayName, email, avatarUrl, phone, bio, gender, birthDate } = ctx.request.body as UpdateProfileBody
+  const { displayName, email, avatarUrl, phone, bio, gender, birthDate, realSceneCheckinEnabled } = ctx.request.body as UpdateProfileBody
   const updatePayload: Record<string, unknown> = {}
   if (typeof displayName === 'string') {
     updatePayload.displayName = displayName
@@ -368,6 +369,9 @@ export async function miniUpdateProfile(ctx: Context): Promise<void> {
     if (!isNaN(date.getTime())) {
       updatePayload.birthDate = date
     }
+  }
+  if (typeof realSceneCheckinEnabled === 'boolean') {
+    updatePayload.realSceneCheckinEnabled = realSceneCheckinEnabled
   }
   if (!Object.keys(updatePayload).length) {
     ctx.throw(400, 'No profile fields provided')

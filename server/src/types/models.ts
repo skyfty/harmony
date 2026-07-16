@@ -140,6 +140,7 @@ export interface AppUserDocument extends Document<Types.ObjectId> {
   wechatIdentitySyncedAt?: Date
   status: 'active' | 'disabled'
   contractStatus: 'unsigned' | 'signed'
+  realSceneCheckinEnabled?: boolean
   currentVehicleId?: Types.ObjectId | null
   workShareCount?: number
   exhibitionShareCount?: number
@@ -1128,6 +1129,7 @@ export interface SceneSpotInteractionDocument extends Document<Types.ObjectId> {
   userId: Types.ObjectId
   favorited: boolean
   rating?: number | null
+  realSceneCheckedInAt?: Date | null
   createdAt: Date
   updatedAt: Date
 }

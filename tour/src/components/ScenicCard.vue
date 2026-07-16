@@ -8,7 +8,7 @@
             <view class="name-fav">
               <text class="name">{{ name }}</text>
               <view v-if="typeof favoriteCount === 'number'" class="fav">
-                <text class="fav-icon">♥</text>
+                <text class="fav-icon">❤</text>
                 <text class="fav-count">{{ favoriteCount }}</text>
               </view>
             </view>
@@ -17,16 +17,18 @@
               <text class="value">{{ rating.toFixed(1) }}</text>
             </view>
           </view>
-            <view class="meta-row">
-              <!-- show homepage badge: 热门 > 精选; remove previous review-count area -->
-              <view class="badge-wrap">
-                <view v-if="isHot" class="badge badge-hot">热门</view>
-                <view v-if="isFeatured" class="badge badge-featured">精选</view>
-              </view>
-              <!-- <text v-if="distance" class="distance">{{ distance }}</text> -->
-              <text v-if="address" class="address">{{ address }}</text>
+
+          <view class="meta-row">
+            <view class="badge-wrap">
+              <view v-if="isHot" class="badge badge-hot">热门</view>
+              <view v-if="isFeatured" class="badge badge-featured">精选</view>
+              <view v-if="realSceneCheckedIn" class="badge badge-checkin">实景打卡</view>
             </view>
-        <text v-if="summary" class="summary">{{ summary }}</text>
+            <text v-if="address" class="address">{{ address }}</text>
+          </view>
+
+          <text v-if="summary" class="summary">{{ summary }}</text>
+
           <view v-if="typeof progressPercent === 'number'" class="progress-row list-progress-row">
             <image class="progress-icon" src="/static/images/checkin.jpg" mode="aspectFit" aria-hidden="true" />
             <view class="progress-bar-wrap">
@@ -40,7 +42,7 @@
                 <view
                   class="progress-bar-fill"
                   :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
-                ></view>
+                />
               </view>
               <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
             </view>
@@ -48,6 +50,7 @@
         </view>
       </view>
     </template>
+
     <template v-else>
       <image class="cover" :src="coverUrl" mode="aspectFill" />
       <view class="body">
@@ -55,7 +58,7 @@
           <view class="name-fav">
             <text class="name">{{ name }}</text>
             <view v-if="typeof favoriteCount === 'number'" class="fav">
-              <text class="fav-icon">♥</text>
+              <text class="fav-icon">❤</text>
               <text class="fav-count">{{ favoriteCount }}</text>
             </view>
           </view>
@@ -64,6 +67,7 @@
             <text class="value">{{ rating.toFixed(1) }}</text>
           </view>
         </view>
+
         <view v-if="typeof progressPercent === 'number'" class="progress-row">
           <image class="progress-icon" src="/static/images/checkin.jpg" mode="aspectFit" aria-hidden="true" />
           <view class="progress-bar-wrap">
@@ -77,11 +81,16 @@
               <view
                 class="progress-bar-fill"
                 :style="{ width: Math.max(0, Math.min(100, Math.round(progressPercent))) + '%' }"
-              ></view>
+              />
             </view>
             <text class="progress-perc">{{ Math.max(0, Math.min(100, Math.round(progressPercent))) }}%</text>
           </view>
         </view>
+
+        <view v-if="realSceneCheckedIn" class="checkin-chip">
+          <text class="checkin-chip__text">实景打卡</text>
+        </view>
+
         <text v-if="summary" class="summary">{{ summary }}</text>
       </view>
     </template>
@@ -90,32 +99,23 @@
 
 <script setup lang="ts">
 defineProps<{
-  name: string;
-  summary: string | null;
-  coverUrl: string;
-  isFeatured?: boolean;
-  isHot?: boolean;
-  rating?: number;
-  ratingCount?: number;
-  favoriteCount?: number;
-  progressPercent?: number;
-  progressText?: string;
-  distance?: string | null;
-  address?: string | null;
-  variant?: 'card' | 'list';
-}>();
+  name: string
+  summary: string | null
+  coverUrl: string
+  isFeatured?: boolean
+  isHot?: boolean
+  realSceneCheckedIn?: boolean
+  rating?: number
+  ratingCount?: number
+  favoriteCount?: number
+  progressPercent?: number
+  progressText?: string
+  distance?: string | null
+  address?: string | null
+  variant?: 'card' | 'list'
+}>()
 
-const emit = defineEmits<{ (event: 'tap'): void }>();
-
-function formatCount(n?: number): string {
-  if (typeof n !== 'number' || isNaN(n) || n <= 0) return '0条';
-  if (n >= 10000) {
-    // show one decimal place in 万, trim trailing .0
-    const v = (n / 10000).toFixed(1).replace(/\.0$/, '');
-    return `${v}万条`;
-  }
-  return `${n}条`;
-}
+const emit = defineEmits<{ (event: 'tap'): void }>()
 </script>
 
 <style scoped lang="scss">
@@ -124,8 +124,8 @@ function formatCount(n?: number): string {
   height: 110px;
   border-radius: 10px;
   overflow: hidden;
-  -webkit-box-shadow: 0 6px 16px rgba(26, 31, 46, 0.10), 0 3px 10px rgba(31, 122, 236, 0.06);
-  box-shadow: 0 6px 16px rgba(26, 31, 46, 0.10), 0 3px 10px rgba(31, 122, 236, 0.06);
+  -webkit-box-shadow: 0 6px 16px rgba(26, 31, 46, 0.1), 0 3px 10px rgba(31, 122, 236, 0.06);
+  box-shadow: 0 6px 16px rgba(26, 31, 46, 0.1), 0 3px 10px rgba(31, 122, 236, 0.06);
   transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
@@ -170,12 +170,6 @@ function formatCount(n?: number): string {
   align-items: flex-start;
 }
 
-.list-progress-row {
-  margin-top: auto;
-  padding-left: 0px; /* align with body content after thumb (thumb width + gap) */
-  align-self: flex-end;
-}
-
 .body-list {
   display: flex;
   flex-direction: column;
@@ -189,28 +183,54 @@ function formatCount(n?: number): string {
   margin-top: 6px;
   display: flex;
   gap: 6px;
-  align-items: center;
-}
-
-.distance {
-  font-size: 12px;
-  color: #8a94a6;
-}
-
-.body-list .meta-row {
-  flex-direction: column;
   align-items: flex-start;
-  gap: 4px;
+  flex-direction: column;
 }
 
-.review-count {
-  font-size: 12px;
-  color: #8a94a6;
+.badge-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.badge {
+  height: 18px;
+  border-radius: 4px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(10, 14, 33, 0.1);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.badge-hot {
+  background: linear-gradient(90deg, #ff7a6b, #ff3b3b);
+}
+
+.badge-featured {
+  background: linear-gradient(90deg, #fff2b8, #ffd07a);
+  color: #1a1f2e;
+}
+
+.badge-checkin {
+  background: linear-gradient(90deg, #16b574, #0f9d58);
 }
 
 .address {
   font-size: 12px;
   color: #8a94a6;
+}
+
+.summary {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #5f6b83;
 }
 
 .body {
@@ -253,162 +273,78 @@ function formatCount(n?: number): string {
   font-size: 12px;
 }
 
-.fav-icon {
+.fav-icon,
+.star {
   font-size: 12px;
-  color: #ff6b6b;
-}
-
-.progress-icon {
-  width: 22px;
-  height: 22px;
-  min-width: 22px;
-  border-radius: 50%;
-  background: rgba(22, 161, 109, 0.12);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 8px;
-}
-
-.progress-icon .percent-symbol {
-  font-size: 12px;
-  color: #16a16d;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.fav-count {
-  font-size: 12px;
-  color: #8a94a6;
 }
 
 .rating {
   display: flex;
   align-items: center;
   gap: 4px;
-}
-
-.star {
+  color: #ffb400;
   font-size: 12px;
-  color: #ffb340;
-}
-
-.value {
-  font-size: 12px;
-  color: #5f6b83;
-}
-
-.summary {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: #5f6b83;
-  line-height: 18px;
 }
 
 .progress-row {
-  margin-top: 8px;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  width: 100%;
   gap: 8px;
-  flex-wrap: nowrap;
+  margin-top: 8px;
 }
 
-.progress-label {
-  font-size: 11px;
-  color: #8a94a6;
-  white-space: nowrap;
-  flex: 0 0 auto;
+.list-progress-row {
+  margin-top: 10px;
 }
 
-.progress-tag {
-  height: 22px;
-  border-radius: 999px;
-  padding: 0 8px;
-  background: rgba(32, 188, 126, 0.14);
-  display: flex;
-  align-items: center;
+.progress-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
 }
 
 .progress-bar-wrap {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: auto;
-  flex: 1 1 auto;
+  gap: 6px;
 }
 
 .progress-bar-bg {
-  flex: 1 1 auto;
-  height: 8px;
-  background: #eef3f7;
-  border-radius: 8px;
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(122, 132, 255, 0.16);
   overflow: hidden;
 }
 
 .progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #20bc7e, #16a16d);
-  border-radius: 8px;
-  transition: width 0.36s cubic-bezier(.2,.8,.2,1);
+  border-radius: inherit;
+  background: linear-gradient(90deg, #7b74e7, #4ec3ff);
 }
 
 .progress-perc {
   font-size: 11px;
-  font-weight: 700;
-  color: #16a16d;
+  color: #4a5568;
+  min-width: 30px;
+  text-align: right;
 }
 
-.progress-perc {
-  flex: 0 0 auto;
-}
-
-.badge-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-
-.badge {
-  height: 18px;
-  border-radius: 4px;
-  padding: 0 6px;
+.checkin-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(22, 181, 116, 0.12);
+  border: 1px solid rgba(22, 181, 116, 0.2);
+}
+
+.checkin-chip__text {
   font-size: 11px;
-  font-weight: 600;
-  color: #ffffff;
-  box-shadow: 0 6px 14px rgba(10, 14, 33, 0.10);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
-}
-
-
-.badge:hover {
-  transform: translateY(-1px);
-}
-
-.badge-hot {
-  background: linear-gradient(90deg, #ff7a6b, #ff3b3b);
-}
-
-.badge-hot::before {
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06) inset;
-}
-
-.badge-featured {
-  background: linear-gradient(90deg, #fff2b8, #ffd07a);
-  color: #1a1f2e;
-}
-
-.badge-featured::before {
-  background: rgba(255, 255, 255, 0.98);
+  font-weight: 700;
+  color: #0f9d58;
 }
 </style>

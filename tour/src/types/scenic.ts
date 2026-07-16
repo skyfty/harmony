@@ -15,6 +15,7 @@ export interface ScenicSummary {
   favoriteCount: number;
   favorited: boolean;
   userRating: number | null;
+  realSceneCheckedIn?: boolean;
   scene: {
     id: string;
     name: string;

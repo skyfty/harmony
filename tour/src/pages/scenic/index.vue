@@ -52,6 +52,7 @@
             :rating="scenic.averageRating"
             :is-featured="scenic.isFeatured"
             :is-hot="scenic.isHot"
+            :real-scene-checked-in="scenic.realSceneCheckedIn"
             variant="list"
             :progress-percent="resolveScenicProgress(scenic.id).percent"
             :progress-text="resolveScenicProgress(scenic.id).description"
@@ -72,7 +73,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
-import { buildQueryString } from '@harmony/utils'
 import { guardedNavigateTo } from '@/utils/navigationGuard'
 
 import BottomNav from '@/components/BottomNav.vue'

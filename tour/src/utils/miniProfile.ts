@@ -1,6 +1,7 @@
 export type MiniProfileShape = {
   displayName?: string
   avatarUrl?: string
+  realSceneCheckinEnabled?: boolean
 }
 
 export type MiniProfileDraft = {

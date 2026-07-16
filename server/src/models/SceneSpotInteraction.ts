@@ -7,6 +7,7 @@ const sceneSpotInteractionSchema = new Schema<SceneSpotInteractionDocument>(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     favorited: { type: Boolean, default: false },
     rating: { type: Number, min: 1, max: 5, default: null },
+    realSceneCheckedInAt: { type: Date, default: null },
   },
   {
     timestamps: true,

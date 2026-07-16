@@ -124,10 +124,6 @@ async function handleUse() {
   }
 }
 
-function back() {
-  void uni.navigateBack();
-}
-
 function statusText(status: CouponStatus) {
   if (status === 'used') return '已使用';
   if (status === 'expired') return '已过期';

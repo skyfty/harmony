@@ -15,8 +15,19 @@
         <view class="hero-curve" />
       </view>
       <view class="hero-content">
-        <text class="hero-title">探索你想去的景点</text>
-        <text class="hero-subtitle">轻松查找景区路线与游玩进度</text>
+        <view class="hero-top-row">
+          <view class="hero-copy">
+            <text class="hero-title">探索你想去的景点</text>
+            <text class="hero-subtitle">轻松查找景区路线与游玩进度</text>
+          </view>
+          <view
+            class="location-entry"
+            :class="{ 'location-entry--active': realSceneCheckinEnabled }"
+            @tap="handleLocationTap"
+          >
+            <text class="location-entry__text">{{ locationLabel }}</text>
+          </view>
+        </view>
 
         <view class="search-box" @tap="openScenicSearch">
           <image src="/static/images/fangdajing.png" class="search-icon" mode="aspectFit" />
@@ -38,12 +49,13 @@
             :summary="null"
             :cover-url="scenic.coverImage"
             :rating="scenic.averageRating"
-              :distance="scenic.distance"
-              :rating-count="scenic.ratingCount"
-              :address="scenic.address"
-              :favorite-count="scenic.favoriteCount"
-              :is-featured="scenic.isFeatured"
-              :is-hot="scenic.isHot"
+            :distance="scenic.distance"
+            :rating-count="scenic.ratingCount"
+            :address="scenic.address"
+            :favorite-count="scenic.favoriteCount"
+            :is-featured="scenic.isFeatured"
+            :is-hot="scenic.isHot"
+            :real-scene-checked-in="scenic.realSceneCheckedIn"
             variant="list"
             :progress-percent="resolveScenicProgress(scenic.id).percent"
             :progress-text="resolveScenicProgress(scenic.id).description"
@@ -67,12 +79,14 @@ import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import RouteLoadingOverlay from '@/components/RouteLoadingOverlay.vue';
 import ScenicCard from '@/components/ScenicCard.vue';
-import { listScenics } from '@/api/mini';
+import { getProfile, listScenics } from '@/api/mini';
 import { listAchievements } from '@/api/mini/achievements';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
 import type { ScenicCheckinProgressItem } from '@/types/achievement';
+import type { UserProfile } from '@/types/profile';
 import type { ScenicSummary } from '@/types/scenic';
+import { formatLocationText, startRealSceneCheckin } from '@/services/realSceneCheckin';
 
 type HomeScenicSummary = ScenicSummary & {
   isFeatured?: boolean;
@@ -84,11 +98,15 @@ const keyword = ref('');
 const scenics = ref<HomeScenicSummary[]>([]);
 const scenicCheckinProgresses = ref<ScenicCheckinProgressItem[]>([]);
 const isInitialLoading = ref(true);
+const profile = ref<UserProfile | null>(null);
+const locationLabel = ref('当前位置');
+const locationUpdating = ref(false);
 const listScenicsSafe = listScenics as (query?: {
   featured?: boolean;
   homepage?: boolean;
   q?: string;
 }) => Promise<HomeScenicSummary[]>;
+const realSceneCheckinEnabled = computed(() => profile.value?.realSceneCheckinEnabled === true);
 
 async function reload() {
   // request homepage-ordered list: featured -> hot -> others, each ordered by their `order` field
@@ -104,6 +122,7 @@ async function loadInitialData() {
   } finally {
     isInitialLoading.value = false;
   }
+  void loadProfile();
 }
 
 onMounted(() => {
@@ -113,6 +132,7 @@ onMounted(() => {
 
 onShow(() => {
   applyLightNavigationBar();
+  void loadProfile();
   void loadScenicCheckinProgresses();
 });
 
@@ -129,6 +149,45 @@ function openDetail(id: string) {
 
 function openScenicSearch() {
   void guardedNavigateTo('/pages/scenic/index');
+}
+
+async function loadProfile(): Promise<void> {
+  try {
+    profile.value = await getProfile();
+  } catch {
+    profile.value = null;
+  }
+}
+
+async function handleLocationTap(): Promise<void> {
+  if (!realSceneCheckinEnabled.value) {
+    uni.showToast({ title: '请先在我的页面开启实景打卡', icon: 'none' });
+    return;
+  }
+
+  if (locationUpdating.value) {
+    return;
+  }
+
+  locationUpdating.value = true;
+  try {
+    const result = await startRealSceneCheckin({
+      path: '/pages/home/index',
+    });
+    const locationText = formatLocationText(result);
+    locationLabel.value = locationText ? `当前位置 · ${locationText}` : '当前位置';
+
+    if (result.matchedSceneSpotTitle) {
+      uni.showToast({ title: `已打卡 ${result.matchedSceneSpotTitle}`, icon: 'none' });
+    } else {
+      uni.showToast({ title: '定位成功', icon: 'none' });
+    }
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : '定位失败';
+    uni.showToast({ title: message, icon: 'none' });
+  } finally {
+    locationUpdating.value = false;
+  }
 }
 
 function resolveScenicProgress(_scenicId: string): { percent: number; description: string } {
@@ -233,6 +292,51 @@ function handleNavigate(key: NavKey) {
   flex-direction: column;
   gap: 6px;
   margin-top: 20px;
+}
+
+.hero-top-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.hero-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.location-entry {
+  min-width: 76px;
+  max-width: 42vw;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  color: rgba(255, 255, 255, 0.96);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  align-self: flex-end;
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 24px rgba(18, 38, 92, 0.14);
+}
+
+.location-entry--active {
+  background: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.98);
+}
+
+.location-entry__text {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .hero-tag {

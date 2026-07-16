@@ -43,6 +43,18 @@
             
           </view>
         </view>
+        <view class="row switch-row">
+          <view class="row-content">
+            <text class="label">实景打卡</text>
+            <text class="sub-label">开启后仅首页会申请定位并上报</text>
+          </view>
+          <switch
+            class="toggle"
+            :checked="profile.realSceneCheckinEnabled === true"
+            color="#1f7aec"
+            @change="(e: any) => { void handleRealSceneCheckinChange(e) }"
+          />
+        </view>
       </view>
 
       <view class="card">
@@ -64,7 +76,7 @@ import { onShow } from '@dcloudio/uni-app';
 import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
-import { bindMiniPhone, ensureMiniAuth, getProfile } from '@/api/mini';
+import { bindMiniPhone, ensureMiniAuth, getProfile, saveProfile } from '@/api/mini';
 import { requestProfileAndSync } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
@@ -72,6 +84,7 @@ import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
 import { isMiniProfileIncomplete } from '@/utils/miniProfile';
 import { ensureMiniCapability } from '@/platform/runtime';
+import { ensureLocationPermission } from '@/services/realSceneCheckin';
 
 const profile = ref<UserProfile>({
   id: '',
@@ -79,6 +92,7 @@ const profile = ref<UserProfile>({
   hasBoundPhone: false,
   gender: 'other',
   birthDate: '',
+  realSceneCheckinEnabled: false,
 });
 
 const defaultProfile: UserProfile = {
@@ -87,6 +101,7 @@ const defaultProfile: UserProfile = {
   hasBoundPhone: false,
   gender: 'other',
   birthDate: '',
+  realSceneCheckinEnabled: false,
 };
 const phoneEnabled = ref(false);
 
@@ -180,6 +195,53 @@ async function handleGetPhoneNumber(event: { detail?: { code?: string; errMsg?: 
     uni.showToast({ title: '手机号已绑定', icon: 'none' });
   } catch {
     uni.showToast({ title: '手机号绑定失败', icon: 'none' });
+  }
+}
+
+async function handleRealSceneCheckinChange(event: { detail?: { value?: boolean } }) {
+  const nextEnabled = Boolean(event?.detail?.value);
+
+  if (!nextEnabled) {
+    await persistRealSceneCheckinEnabled(false);
+    return;
+  }
+
+  try {
+    const capabilityEnabled = await ensureMiniCapability('locationPicker');
+    if (!capabilityEnabled) {
+      uni.showToast({ title: '当前平台不支持定位', icon: 'none' });
+      await persistRealSceneCheckinEnabled(false);
+      return;
+    }
+
+    const permission = await ensureLocationPermission();
+    if (permission !== 'granted') {
+      uni.showToast({ title: '请先授权定位权限', icon: 'none' });
+      await persistRealSceneCheckinEnabled(false);
+      return;
+    }
+
+    await persistRealSceneCheckinEnabled(true);
+    uni.showToast({ title: '实景打卡已开启', icon: 'none' });
+  } catch {
+    uni.showToast({ title: '开启失败', icon: 'none' });
+    await persistRealSceneCheckinEnabled(false);
+  }
+}
+
+async function persistRealSceneCheckinEnabled(enabled: boolean): Promise<boolean> {
+  try {
+    profile.value = await saveProfile({
+      ...profile.value,
+      realSceneCheckinEnabled: enabled,
+    });
+    return true;
+  } catch {
+    profile.value = {
+      ...profile.value,
+      realSceneCheckinEnabled: enabled,
+    };
+    return false;
   }
 }
 
@@ -370,6 +432,19 @@ function handleNavigate(key: NavKey) {
   gap: 10px;
 }
 
+.row-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sub-label {
+  font-size: 12px;
+  color: #7b8799;
+  line-height: 1.4;
+}
+
 .phone-value {
   font-size: 13px;
   color: #1a1f2e;
@@ -385,6 +460,14 @@ function handleNavigate(key: NavKey) {
   color: #1f7aec;
   font-size: 14px;
   padding: 0 12px;
+}
+
+.switch-row {
+  gap: 12px;
+}
+
+.toggle {
+  flex-shrink: 0;
 }
 
 .phone-action::after {

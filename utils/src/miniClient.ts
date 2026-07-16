@@ -21,6 +21,8 @@ export interface TrackAnalyticsEventPayload {
   device?: string;
   path?: string;
   dwellMs?: number;
+  latitude?: number;
+  longitude?: number;
   metadata?: Record<string, unknown>;
 }
 

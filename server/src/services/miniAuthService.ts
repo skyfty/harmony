@@ -32,6 +32,7 @@ type AppUserLean = {
   wechatIdentitySyncedAt?: Date
   status: 'active' | 'disabled'
   contractStatus: 'unsigned' | 'signed'
+  realSceneCheckinEnabled?: boolean
   workShareCount?: number
   exhibitionShareCount?: number
   createdAt: Date
@@ -63,6 +64,7 @@ export interface MiniSessionUser {
   wechatIdentitySyncedAt?: string
   status: 'active' | 'disabled'
   contractStatus: 'unsigned' | 'signed'
+  realSceneCheckinEnabled: boolean
   workShareCount: number
   exhibitionShareCount: number
   createdAt: string
@@ -117,6 +119,7 @@ function buildMiniUser(user: AppUserLean): MiniSessionUser {
     wechatIdentitySyncedAt: user.wechatIdentitySyncedAt?.toISOString(),
     status: user.status,
     contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
+    realSceneCheckinEnabled: user.realSceneCheckinEnabled === true,
     workShareCount: user.workShareCount ?? 0,
     exhibitionShareCount: user.exhibitionShareCount ?? 0,
     createdAt: user.createdAt.toISOString(),

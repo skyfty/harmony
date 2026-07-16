@@ -17,4 +17,5 @@ export interface UserProfile {
   birthDate?: string; // YYYY-MM-DD
   lastLoginAt?: string;
   contractStatus?: 'unsigned' | 'signed';
+  realSceneCheckinEnabled?: boolean;
 }

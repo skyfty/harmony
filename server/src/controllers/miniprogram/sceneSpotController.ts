@@ -248,6 +248,7 @@ function buildSceneSpotSummaryDto(ctx: Context, spot: any, scene: any) {
         : null,
     favorited: false,
     userRating: null,
+    realSceneCheckedIn: false,
     scene: buildSceneDto(ctx, scene),
   }
 }
@@ -256,6 +257,7 @@ type SceneSpotInteractionLean = {
   sceneSpotId: Types.ObjectId
   favorited?: boolean
   rating?: number | null
+  realSceneCheckedInAt?: Date | string | null
 }
 
 function withInteractionState(
@@ -266,6 +268,7 @@ function withInteractionState(
     ...dto,
     favorited: interaction?.favorited === true,
     userRating: typeof interaction?.rating === 'number' ? interaction.rating : null,
+    realSceneCheckedIn: interaction?.realSceneCheckedInAt != null,
   }
 }
 
@@ -638,6 +641,7 @@ export async function toggleSceneSpotFavorite(ctx: Context): Promise<void> {
       userId,
       favorited: nextFavorited,
       rating: null,
+      realSceneCheckedInAt: null,
     })
   }
 
@@ -683,6 +687,7 @@ export async function rateSceneSpot(ctx: Context): Promise<void> {
       userId,
       favorited: false,
       rating: score,
+      realSceneCheckedInAt: null,
     })
   }
 

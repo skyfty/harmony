@@ -43,6 +43,7 @@
             <view class="badge-wrap-detail">
               <view v-if="scenic.isHot" class="badge badge-hot">热门</view>
               <view v-if="scenic.isHome || scenic.isFeatured" class="badge badge-featured">精选</view>
+              <view v-if="scenic.realSceneCheckedIn" class="badge badge-checkin">实景打卡</view>
             </view>
             <view class="rating-row">
               <view class="stars-inline">
