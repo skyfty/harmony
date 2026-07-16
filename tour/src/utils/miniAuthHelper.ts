@@ -1,5 +1,7 @@
 import { getAccessToken } from '@/api/mini/token'
+import { getProfile, saveProfile } from '@/api/mini/profile'
 import { ensureMiniAuth } from '@/api/mini/session'
+import { getMiniPlatformAdapter } from '@/platform/adapter'
 import { redirectToNav } from '@/utils/navKey'
 import {
   normalizeMiniProfileText,
@@ -83,6 +85,33 @@ export async function requestProfileAndSync(options: MiniAuthRecoveryOptions = D
     })
   } catch {
     logMiniAuthHelper('requestProfileAndSync failed')
+    return false
+  }
+}
+
+export async function syncProfileFromMiniPlatform(): Promise<boolean> {
+  try {
+    await ensureMiniAuth()
+    const adapter = getMiniPlatformAdapter()
+    if (!adapter.requestUserProfile) {
+      return false
+    }
+
+    const platformProfile = await adapter.requestUserProfile()
+    if (!platformProfile) {
+      return false
+    }
+
+    const currentProfile = await getProfile()
+    await saveProfile({
+      ...currentProfile,
+      displayName: normalizeMiniProfileText(platformProfile.displayName) ?? currentProfile.displayName,
+      avatarUrl: normalizeMiniProfileText(platformProfile.avatarUrl) ?? currentProfile.avatarUrl,
+      gender: platformProfile.gender ?? currentProfile.gender,
+    })
+    return true
+  } catch {
+    logMiniAuthHelper('syncProfileFromMiniPlatform failed')
     return false
   }
 }

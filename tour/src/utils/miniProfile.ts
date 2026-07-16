@@ -1,3 +1,5 @@
+import type { Gender } from '@/types/profile'
+
 export type MiniProfileShape = {
   displayName?: string
   avatarUrl?: string
@@ -7,6 +9,8 @@ export type MiniProfileShape = {
 export type MiniProfileDraft = {
   displayName?: string
   avatarFilePath?: string
+  avatarUrl?: string
+  gender?: Gender
 }
 
 const ANONYMOUS_DISPLAY_STORAGE_KEY = 'tour:mini-auth-anonymous-display'

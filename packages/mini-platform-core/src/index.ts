@@ -1,5 +1,7 @@
 export type MiniPlatform = 'wechat' | 'douyin' | 'xiaohongshu';
 
+export type MiniProfileGender = 'male' | 'female' | 'other';
+
 export type MiniCapability =
   | 'auth'
   | 'payment'
@@ -58,6 +60,12 @@ export interface UnifiedLoginPayload {
   avatarUrl?: string;
 }
 
+export interface MiniUserProfile {
+  displayName?: string;
+  avatarUrl?: string;
+  gender?: MiniProfileGender;
+}
+
 export interface UnifiedLoginResult {
   token?: string;
   appKey?: string;
@@ -106,6 +114,7 @@ export interface MiniPlatformAdapter {
   platform: MiniPlatform;
   getLoginCode(): Promise<string>;
   login(payload: UnifiedLoginPayload): Promise<UnifiedLoginResult>;
+  requestUserProfile?(): Promise<MiniUserProfile | null>;
   requestPhoneNumber?(payload: UnifiedPhonePayload): Promise<UnifiedPhoneResult>;
   requestPayment(payload: MiniPaymentAction | Record<string, unknown>): Promise<void>;
   ensurePrivacyConsent(): Promise<boolean>;

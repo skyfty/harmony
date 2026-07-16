@@ -108,20 +108,22 @@ async function uploadAvatar(filePath: string): Promise<string> {
 export async function syncMiniProfileDraft(draft: MiniProfileDraft): Promise<boolean> {
   const currentProfile = await getRawProfile()
   const nextDisplayName = normalizeMiniProfileText(draft.displayName) ?? currentProfile.displayName
-
-  let nextAvatarUrl = String(currentProfile.avatarUrl || '').trim()
+  const nextGender = draft.gender ?? currentProfile.gender
+  let nextAvatarUrl = normalizeMiniProfileText(draft.avatarUrl) ?? String(currentProfile.avatarUrl || '').trim()
   if (draft.avatarFilePath) {
     nextAvatarUrl = await uploadAvatar(draft.avatarFilePath)
   }
 
   const hasDisplayNameChanged = nextDisplayName !== currentProfile.displayName
   const hasAvatarChanged = nextAvatarUrl !== String(currentProfile.avatarUrl || '').trim()
+  const hasGenderChanged = nextGender !== currentProfile.gender
 
-  if (hasDisplayNameChanged || hasAvatarChanged) {
+  if (hasDisplayNameChanged || hasAvatarChanged || hasGenderChanged) {
     await saveRawProfile({
       ...currentProfile,
       displayName: nextDisplayName,
       avatarUrl: nextAvatarUrl || undefined,
+      gender: nextGender,
     })
   }
 

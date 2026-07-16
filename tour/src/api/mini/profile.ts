@@ -56,7 +56,7 @@ function toUserProfile(user: MiniProfileUser): UserProfile {
     birthDate: user.birthDate ? user.birthDate.slice(0, 10) : '',
     lastLoginAt: user.lastLoginAt,
     contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
-    realSceneCheckinEnabled: user.realSceneCheckinEnabled === true,
+    realSceneCheckinEnabled: user.realSceneCheckinEnabled !== false,
   })
 }
 
@@ -75,7 +75,7 @@ export async function saveProfile(profile: UserProfile): Promise<UserProfile> {
     avatarUrl: profile.avatarUrl,
     gender: profile.gender,
     birthDate: profile.birthDate || undefined,
-    realSceneCheckinEnabled: profile.realSceneCheckinEnabled === true,
+    realSceneCheckinEnabled: profile.realSceneCheckinEnabled !== false,
   }
   const response = await miniRequest<MiniProfileResponse>('/mini-auth/profile', {
     method: 'PATCH',

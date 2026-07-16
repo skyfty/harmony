@@ -29,8 +29,8 @@ function getLocationValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-export async function ensureLocationPermission(): Promise<LocationPermissionState> {
-  if (typeof uni.getSetting !== 'function' || typeof uni.authorize !== 'function') {
+export async function getLocationPermissionState(): Promise<LocationPermissionState> {
+  if (typeof uni.getSetting !== 'function') {
     return 'granted'
   }
 
@@ -45,6 +45,21 @@ export async function ensureLocationPermission(): Promise<LocationPermissionStat
   if (locationAuth === true) {
     return 'granted'
   }
+  if (locationAuth === false) {
+    return 'denied'
+  }
+  return 'not_requested'
+}
+
+export async function requestLocationPermission(): Promise<LocationPermissionState> {
+  const currentState = await getLocationPermissionState()
+  if (currentState === 'granted') {
+    return 'granted'
+  }
+
+  if (typeof uni.authorize !== 'function') {
+    return 'granted'
+  }
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -56,8 +71,48 @@ export async function ensureLocationPermission(): Promise<LocationPermissionStat
     })
     return 'granted'
   } catch {
-    return locationAuth === false ? 'denied' : 'not_requested'
+    return currentState === 'denied' ? 'denied' : 'not_requested'
   }
+}
+
+export async function promptOpenLocationSetting(permissionState: LocationPermissionState): Promise<boolean> {
+  if (typeof uni.showModal !== 'function') {
+    if (typeof uni.openSetting === 'function') {
+      uni.openSetting({})
+    }
+    return true
+  }
+
+  const content =
+    permissionState === 'denied'
+      ? '你之前关闭了定位权限，请到设置里手动开启后重试。'
+      : '需要先允许定位权限，才能获取当前位置并完成实景打卡。'
+
+  const confirmed = await new Promise<boolean>((resolve) => {
+    uni.showModal({
+      title: '需要定位权限',
+      content,
+      confirmText: '去设置',
+      cancelText: '取消',
+      success: (result) => {
+        resolve(Boolean(result.confirm))
+        if (result.confirm && typeof uni.openSetting === 'function') {
+          uni.openSetting({})
+        }
+      },
+      fail: () => resolve(false),
+    })
+  })
+
+  return confirmed
+}
+
+export async function ensureLocationPermission(): Promise<LocationPermissionState> {
+  const state = await getLocationPermissionState()
+  if (state === 'granted') {
+    return 'granted'
+  }
+  return await requestLocationPermission()
 }
 
 export async function getCurrentLocation(): Promise<CurrentLocation> {
@@ -96,21 +151,26 @@ export function formatLocationText(location: CurrentLocation | null | undefined)
   return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`
 }
 
-export async function startRealSceneCheckin(source: {
-  path: string
-  sceneId?: string
-  sceneSpotId?: string
-  metadata?: Record<string, unknown>
-}): Promise<RealSceneCheckinResult> {
+export async function startRealSceneCheckin(
+  source: {
+    path: string
+    sceneId?: string
+    sceneSpotId?: string
+    metadata?: Record<string, unknown>
+  },
+  options?: {
+    permissionGranted?: boolean
+  },
+): Promise<RealSceneCheckinResult> {
   await ensureMiniAuth()
   const capabilityEnabled = await ensureMiniCapability('locationPicker')
   if (!capabilityEnabled) {
     throw new Error('当前平台暂不支持定位')
   }
 
-  const permission = await ensureLocationPermission()
+  const permission = options?.permissionGranted === true ? 'granted' : await requestLocationPermission()
   if (permission !== 'granted') {
-    throw new Error(permission === 'denied' ? '定位权限已关闭，请到设置中开启' : '需要授权定位权限')
+    throw new Error(permission === 'denied' ? '定位权限已关闭' : '需要授予定位权限')
   }
 
   const location = await getCurrentLocation()

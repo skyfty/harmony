@@ -119,7 +119,7 @@ function buildMiniUser(user: AppUserLean): MiniSessionUser {
     wechatIdentitySyncedAt: user.wechatIdentitySyncedAt?.toISOString(),
     status: user.status,
     contractStatus: user.contractStatus === 'signed' ? 'signed' : 'unsigned',
-    realSceneCheckinEnabled: user.realSceneCheckinEnabled === true,
+    realSceneCheckinEnabled: user.realSceneCheckinEnabled !== false,
     workShareCount: user.workShareCount ?? 0,
     exhibitionShareCount: user.exhibitionShareCount ?? 0,
     createdAt: user.createdAt.toISOString(),

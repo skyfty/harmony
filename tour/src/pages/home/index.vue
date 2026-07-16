@@ -15,11 +15,8 @@
         <view class="hero-curve" />
       </view>
       <view class="hero-content">
-        <view class="hero-top-row">
-          <view class="hero-copy">
-            <text class="hero-title">探索你想去的景点</text>
-            <text class="hero-subtitle">轻松查找景区路线与游玩进度</text>
-          </view>
+        <view class="hero-copy">
+          <text class="hero-title">探索你想去的景点</text>
           <view
             class="location-entry"
             :class="{ 'location-entry--active': realSceneCheckinEnabled }"
@@ -86,7 +83,14 @@ import { applyLightNavigationBar } from '@/utils/safeArea';
 import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { UserProfile } from '@/types/profile';
 import type { ScenicSummary } from '@/types/scenic';
-import { formatLocationText, startRealSceneCheckin } from '@/services/realSceneCheckin';
+import {
+  formatLocationText,
+  getLocationPermissionState,
+  promptOpenLocationSetting,
+  requestLocationPermission,
+  startRealSceneCheckin,
+  type LocationPermissionState,
+} from '@/services/realSceneCheckin';
 
 type HomeScenicSummary = ScenicSummary & {
   isFeatured?: boolean;
@@ -101,12 +105,13 @@ const isInitialLoading = ref(true);
 const profile = ref<UserProfile | null>(null);
 const locationLabel = ref('当前位置');
 const locationUpdating = ref(false);
+const locationPermissionState = ref<LocationPermissionState>('not_requested');
 const listScenicsSafe = listScenics as (query?: {
   featured?: boolean;
   homepage?: boolean;
   q?: string;
 }) => Promise<HomeScenicSummary[]>;
-const realSceneCheckinEnabled = computed(() => profile.value?.realSceneCheckinEnabled === true);
+const realSceneCheckinEnabled = computed(() => profile.value?.realSceneCheckinEnabled !== false);
 
 async function reload() {
   // request homepage-ordered list: featured -> hot -> others, each ordered by their `order` field
@@ -122,7 +127,6 @@ async function loadInitialData() {
   } finally {
     isInitialLoading.value = false;
   }
-  void loadProfile();
 }
 
 onMounted(() => {
@@ -132,7 +136,7 @@ onMounted(() => {
 
 onShow(() => {
   applyLightNavigationBar();
-  void loadProfile();
+  void syncProfileAndAutoLocate();
   void loadScenicCheckinProgresses();
 });
 
@@ -159,7 +163,25 @@ async function loadProfile(): Promise<void> {
   }
 }
 
-async function handleLocationTap(): Promise<void> {
+async function syncProfileAndAutoLocate(): Promise<void> {
+  await loadProfile();
+  if (!realSceneCheckinEnabled.value) {
+    locationPermissionState.value = 'not_requested';
+    locationLabel.value = '请先在我的页面开启实景打卡';
+    return;
+  }
+
+  const permissionState = await getLocationPermissionState();
+  locationPermissionState.value = permissionState;
+  if (permissionState === 'granted') {
+    void handleLocationTap(true);
+    return;
+  }
+
+  locationLabel.value = permissionState === 'denied' ? '去设置开启定位' : '开启定位';
+}
+
+async function handleLocationTap(skipPermissionRequest = false): Promise<void> {
   if (!realSceneCheckinEnabled.value) {
     uni.showToast({ title: '请先在我的页面开启实景打卡', icon: 'none' });
     return;
@@ -171,8 +193,20 @@ async function handleLocationTap(): Promise<void> {
 
   locationUpdating.value = true;
   try {
+    if (!skipPermissionRequest) {
+      const permissionState = await requestLocationPermission();
+      locationPermissionState.value = permissionState;
+      if (permissionState !== 'granted') {
+        locationLabel.value = permissionState === 'denied' ? '去设置开启定位' : '开启定位';
+        await promptOpenLocationSetting(permissionState);
+        return;
+      }
+    }
+
     const result = await startRealSceneCheckin({
       path: '/pages/home/index',
+    }, {
+      permissionGranted: true,
     });
     const locationText = formatLocationText(result);
     locationLabel.value = locationText ? `当前位置 · ${locationText}` : '当前位置';
@@ -294,25 +328,20 @@ function handleNavigate(key: NavKey) {
   margin-top: 20px;
 }
 
-.hero-top-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-}
-
 .hero-copy {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+  align-items: flex-start;
 }
 
 .location-entry {
   min-width: 76px;
   max-width: 42vw;
   height: 28px;
-  padding: 0 12px;
+  padding: 12px 12px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.24);
   border: 1px solid rgba(255, 255, 255, 0.32);
@@ -322,7 +351,7 @@ function handleNavigate(key: NavKey) {
   justify-content: center;
   box-sizing: border-box;
   flex-shrink: 0;
-  align-self: flex-end;
+  align-self: flex-start;
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
   box-shadow: 0 8px 24px rgba(18, 38, 92, 0.14);
@@ -359,11 +388,6 @@ function handleNavigate(key: NavKey) {
   font-size: 22px;
   font-weight: 700;
   color: #ffffff;
-}
-
-.hero-subtitle {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.88);
 }
 
 .search-box {

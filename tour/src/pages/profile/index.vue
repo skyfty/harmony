@@ -3,9 +3,10 @@
     <MiniAuthRecovery />
     <PageHeader title="">
       <template #left>
-        <button class="business-entry" @tap="openBusinessPage">我是商业管理员</button>
+        <button class="business-entry" @tap="openBusinessPage">我是商家管理端</button>
       </template>
     </PageHeader>
+
     <view class="header">
       <view class="profile" @tap="openProfileEdit">
         <view class="avatar">
@@ -14,6 +15,7 @@
         </view>
         <view class="info">
           <text class="name">{{ profile.displayName }}</text>
+          <text class="badge">{{ genderLabel }}</text>
         </view>
       </view>
     </view>
@@ -21,17 +23,23 @@
     <view class="content">
       <view v-if="isProfileIncomplete" class="tips-card">
         <text class="tips-title">{{ isAnonymousDisplay ? '当前为匿名使用' : '当前资料未完善' }}</text>
-        <text class="tips-desc">{{ isAnonymousDisplay ? '你已跳过微信头像昵称授权，可稍后手动获取并自动同步到账号。' : '补充微信头像和昵称后，个人资料会自动更新到服务端。' }}</text>
+        <text class="tips-desc">
+          {{ isAnonymousDisplay ? '你已跳过微信头像昵称授权，可稍后手动获取并自动同步到账号。' : '补充微信头像、昵称和性别后，个人资料会自动更新到服务端。' }}
+        </text>
         <button class="tips-action" @tap="retryProfileAuth">{{ isAnonymousDisplay ? '获取微信头像昵称' : '完善微信资料' }}</button>
       </view>
 
       <view class="card">
+        <view class="row" @tap="syncWechatProfile">
+          <text class="label">同步微信资料</text>
+          <text class="arrow">›</text>
+        </view>
         <view class="row" @tap="nav('/pages/orders/index')">
           <text class="label">订单中心</text>
           <text class="arrow">›</text>
         </view>
         <view class="row phone-row">
-          <text class="label">手机号</text>
+          <text class="label">手机号码</text>
           <view class="phone-cell">
             <button
               v-if="phoneEnabled"
@@ -39,8 +47,7 @@
               open-type="getPhoneNumber"
               @getphonenumber="handleGetPhoneNumber"
             >{{ maskedPhone }}</button>
-            <text v-else class="phone-action">当前平台暂不支持手机号授权</text>
-            
+            <text v-else class="phone-action">当前平台暂不支持手机号码授权</text>
           </view>
         </view>
         <view class="row switch-row">
@@ -58,8 +65,14 @@
       </view>
 
       <view class="card">
-        <view class="row" @tap="openPolicy('user-service-agreement')"><text class="label">用户服务协议</text><text class="arrow">›</text></view>
-        <view class="row" @tap="openPolicy('privacy-policy')"><text class="label">隐私政策</text><text class="arrow">›</text></view>
+        <view class="row" @tap="openPolicy('user-service-agreement')">
+          <text class="label">用户服务协议</text>
+          <text class="arrow">›</text>
+        </view>
+        <view class="row" @tap="openPolicy('privacy-policy')">
+          <text class="label">隐私政策</text>
+          <text class="arrow">›</text>
+        </view>
       </view>
 
       <button class="logout" @tap="logout">退出登录</button>
@@ -77,14 +90,14 @@ import BottomNav from '@/components/BottomNav.vue';
 import MiniAuthRecovery from '@/components/MiniAuthRecovery.vue';
 import PageHeader from '@/components/PageHeader.vue';
 import { bindMiniPhone, ensureMiniAuth, getProfile, saveProfile } from '@/api/mini';
-import { requestProfileAndSync } from '@/utils/miniAuthHelper';
+import { requestProfileAndSync, syncProfileFromMiniPlatform } from '@/utils/miniAuthHelper';
 import { resetMiniAuthSession } from '@/api/mini/session';
 import type { UserProfile } from '@/types/profile';
 import { redirectToNav, type NavKey } from '@/utils/navKey';
 import { applyLightNavigationBar } from '@/utils/safeArea';
 import { isMiniProfileIncomplete } from '@/utils/miniProfile';
 import { ensureMiniCapability } from '@/platform/runtime';
-import { ensureLocationPermission } from '@/services/realSceneCheckin';
+import { promptOpenLocationSetting, requestLocationPermission } from '@/services/realSceneCheckin';
 
 const profile = ref<UserProfile>({
   id: '',
@@ -92,7 +105,7 @@ const profile = ref<UserProfile>({
   hasBoundPhone: false,
   gender: 'other',
   birthDate: '',
-  realSceneCheckinEnabled: false,
+  realSceneCheckinEnabled: true,
 });
 
 const defaultProfile: UserProfile = {
@@ -101,34 +114,50 @@ const defaultProfile: UserProfile = {
   hasBoundPhone: false,
   gender: 'other',
   birthDate: '',
-  realSceneCheckinEnabled: false,
+  realSceneCheckinEnabled: true,
 };
+
 const phoneEnabled = ref(false);
 
 onShow(() => {
   applyLightNavigationBar();
-  void ensureMiniCapability('phone').then((enabled) => { phoneEnabled.value = enabled; }).catch(() => { phoneEnabled.value = false; });
+  void ensureMiniCapability('phone')
+    .then((enabled) => { phoneEnabled.value = enabled; })
+    .catch(() => { phoneEnabled.value = false; });
   void reloadProfile();
 });
 
 async function retryProfileAuth() {
   try {
-    const ok = await requestProfileAndSync()
+    const ok = await requestProfileAndSync();
     if (ok) {
-      void uni.showToast({ title: '同步成功', icon: 'success' })
-      void reloadProfile()
-    } else {
-      void uni.showToast({ title: '未授权或操作取消', icon: 'none' })
+      void uni.showToast({ title: '同步成功', icon: 'success' });
+      void reloadProfile();
+      return;
     }
+    void uni.showToast({ title: '未授权或操作取消', icon: 'none' });
   } catch {
-    void uni.showToast({ title: '操作失败', icon: 'none' })
+    void uni.showToast({ title: '操作失败', icon: 'none' });
+  }
+}
+
+async function syncWechatProfile() {
+  try {
+    const ok = await syncProfileFromMiniPlatform();
+    if (!ok) {
+      uni.showToast({ title: '微信当前未返回昵称、头像或性别', icon: 'none' });
+      return;
+    }
+    await reloadProfile();
+    uni.showToast({ title: '微信资料已同步', icon: 'none' });
+  } catch {
+    uni.showToast({ title: '同步失败', icon: 'none' });
   }
 }
 
 async function reloadProfile() {
   try {
     profile.value = await getProfile();
-
   } catch {
     uni.showToast({ title: '加载失败', icon: 'none' });
   }
@@ -137,6 +166,16 @@ async function reloadProfile() {
 const initials = computed(() => {
   const name = profile.value.displayName || '游客';
   return name.slice(0, 1);
+});
+
+const genderLabel = computed(() => {
+  if (profile.value.gender === 'male') {
+    return '男';
+  }
+  if (profile.value.gender === 'female') {
+    return '女';
+  }
+  return '其他';
 });
 
 const maskedPhone = computed(() => {
@@ -165,7 +204,7 @@ async function openBusinessPage() {
     await ensureMiniAuth();
     uni.navigateTo({ url: '/pages/business/index' });
   } catch {
-    uni.showToast({ title: '请先登录微信后再进入商业订单', icon: 'none' });
+    uni.showToast({ title: '请先登录微信后再进入商家订单', icon: 'none' });
   }
 }
 
@@ -186,15 +225,15 @@ function logout() {
 async function handleGetPhoneNumber(event: { detail?: { code?: string; errMsg?: string } }) {
   const code = String(event?.detail?.code || '').trim();
   if (!code) {
-    uni.showToast({ title: '未获取到手机号授权', icon: 'none' });
+    uni.showToast({ title: '未获取到手机号码授权码', icon: 'none' });
     return;
   }
 
   try {
     profile.value = await bindMiniPhone(code);
-    uni.showToast({ title: '手机号已绑定', icon: 'none' });
+    uni.showToast({ title: '手机号码已绑定', icon: 'none' });
   } catch {
-    uni.showToast({ title: '手机号绑定失败', icon: 'none' });
+    uni.showToast({ title: '手机号码绑定失败', icon: 'none' });
   }
 }
 
@@ -214,9 +253,9 @@ async function handleRealSceneCheckinChange(event: { detail?: { value?: boolean 
       return;
     }
 
-    const permission = await ensureLocationPermission();
+    const permission = await requestLocationPermission();
     if (permission !== 'granted') {
-      uni.showToast({ title: '请先授权定位权限', icon: 'none' });
+      await promptOpenLocationSetting(permission);
       await persistRealSceneCheckinEnabled(false);
       return;
     }
@@ -382,14 +421,6 @@ function handleNavigate(key: NavKey) {
   margin-bottom: 12px;
 }
 
-.section {
-  display: block;
-  font-size: 14px;
-  font-weight: 700;
-  color: #1a1f2e;
-  margin-bottom: 8px;
-}
-
 .label {
   font-size: 13px;
   color: #1a1f2e;
@@ -405,13 +436,6 @@ function handleNavigate(key: NavKey) {
   font-size: 15px;
   font-weight: 700;
   box-shadow: 0 10px 24px rgba(31, 122, 236, 0.06);
-}
-
-.menu {
-  background: #ffffff;
-  border-radius: 18px;
-  overflow: hidden;
-  box-shadow: 0 10px 24px rgba(31, 122, 236, 0.08);
 }
 
 .row {

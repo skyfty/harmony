@@ -2,6 +2,8 @@ import type {
   MiniPlatform,
   MiniPlatformAdapter,
   MiniPaymentAction,
+  MiniProfileGender,
+  MiniUserProfile,
   UnifiedChooseFileOptions,
   UnifiedLoginPayload,
   UnifiedLoginResult,
@@ -87,6 +89,40 @@ function getRuntimeState(): MiniPlatformRuntimeState {
 
 function getToken(): string {
   return getAuthToken() ?? '';
+}
+
+function normalizeMiniProfileGender(value: unknown): MiniProfileGender | undefined {
+  if (value === 1 || value === '1' || value === 'male') {
+    return 'male';
+  }
+  if (value === 2 || value === '2' || value === 'female') {
+    return 'female';
+  }
+  if (value === 'other') {
+    return 'other';
+  }
+  return undefined;
+}
+
+function normalizeMiniUserProfile(input: {
+  nickName?: unknown;
+  nickname?: unknown;
+  avatarUrl?: unknown;
+  gender?: unknown;
+}): MiniUserProfile | null {
+  const displayName = String(input.nickName ?? input.nickname ?? '').trim();
+  const avatarUrl = String(input.avatarUrl ?? '').trim();
+  const gender = normalizeMiniProfileGender(input.gender);
+
+  if (!displayName && !avatarUrl && !gender) {
+    return null;
+  }
+
+  return {
+    displayName: displayName || undefined,
+    avatarUrl: avatarUrl || undefined,
+    gender,
+  };
 }
 
 async function genericLogin(payload: UnifiedLoginPayload, platform: MiniPlatform): Promise<UnifiedLoginResult> {
@@ -387,6 +423,40 @@ function createAdapter(platform: MiniPlatform, provider: string | null): MiniPla
     },
     async login(payload: UnifiedLoginPayload) {
       return await genericLogin(payload, platform);
+    },
+    async requestUserProfile() {
+      if (platform !== 'wechat') {
+        return null;
+      }
+
+      const profileRequester =
+        typeof uni.getUserProfile === 'function'
+          ? uni.getUserProfile.bind(uni)
+          : typeof wx !== 'undefined' && typeof wx.getUserProfile === 'function'
+            ? wx.getUserProfile.bind(wx)
+            : null;
+
+      if (!profileRequester) {
+        return null;
+      }
+
+      try {
+        const response = await new Promise<{ userInfo?: Record<string, unknown> }>((resolve, reject) => {
+          profileRequester({
+            desc: '用于同步个人资料',
+            success: resolve,
+            fail: reject,
+          });
+        });
+        return normalizeMiniUserProfile({
+          nickName: response.userInfo?.nickName,
+          nickname: response.userInfo?.nickname,
+          avatarUrl: response.userInfo?.avatarUrl,
+          gender: response.userInfo?.gender,
+        });
+      } catch {
+        return null;
+      }
     },
     async requestPhoneNumber(payload: UnifiedPhonePayload) {
       return await genericBindPhone(payload, platform);
