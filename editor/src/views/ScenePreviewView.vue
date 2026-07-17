@@ -121,6 +121,10 @@ import { useScenesStore } from '@/stores/scenesStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import {
+	instantiateRuntimePrefabControlSwitchInstance,
+	performRuntimePrefabControlSwitch,
+} from '@schema/runtimePrefabControlSwitch'
 import { createTerrainScatterLodRuntime } from '@schema/scatter'
 
 import ResourceCache from '@schema/ResourceCache'
@@ -6412,16 +6416,145 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 	}
 
 	try {
+		console.info(`[ScenePreview][RuntimePrefabSwitch] start targetNodeId=${targetNodeId} targetType=${event.targetType} prefabAssetId=${prefabAssetId}`)
 		const raw = await loadTextAssetContent(prefabAssetId)
 		if (!raw) {
+			console.warn(`[ScenePreview][RuntimePrefabSwitch] load-failed prefabAssetId=${prefabAssetId}`)
 			resolveBehaviorToken(event.token, { type: 'fail', message: `Failed to load prefab asset: ${prefabAssetId}` })
 			return
 		}
-		const prefab = parseRuntimePrefabData(raw)
-
-		
+		const instanced = await instantiateRuntimePrefabControlSwitchInstance(raw, {
+			buildOptions: async (runtimeDocument) => {
+				const localAssetOverrides = await buildPreviewLocalAssetOverrides(runtimeDocument)
+				const buildOptions: SceneGraphBuildOptions = {
+					serverAssetBaseUrl: readServerDownloadBaseUrl(),
+					materialFactoryOptions: {
+						hdrLoader: rgbeLoader,
+					},
+				}
+				const mergedAssetOverrides = mergePreviewAssetOverrides(
+					activeScenePackageAssetOverrides,
+					Object.keys(localAssetOverrides).length ? localAssetOverrides : undefined,
+				)
+				if (mergedAssetOverrides) {
+					buildOptions.assetOverrides = mergedAssetOverrides
+				}
+				return buildOptions
+			},
+			createResourceCache: ensureEditorResourceCache,
+			buildSceneGraph,
+			prepareClonedRoot: (root) => {
+				const anchor = resolveRuntimePrefabAnchorTransform(targetNodeId, null)
+				if (anchor.position) {
+					root.position = anchor.position
+				}
+				if (anchor.rotation) {
+					root.rotation = anchor.rotation
+				}
+			},
+		})
+		if (!instanced) {
+			console.warn(`[ScenePreview][RuntimePrefabSwitch] instantiate-failed prefabAssetId=${prefabAssetId} targetNodeId=${targetNodeId}`)
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Prefab root is missing a usable control node.' })
+			return
+		}
+		const { sceneRootObject, cloned } = instanced
+		const effectiveNode = cloned.root;
+		const effectiveNodeId = effectiveNode.id ?? null
+		if (!effectiveNodeId) {
+			console.warn(`[ScenePreview][RuntimePrefabSwitch] effective-node-missing prefabAssetId=${prefabAssetId} targetNodeId=${targetNodeId} sceneRootType=${sceneRootObject.type}`)
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Prefab root is missing a usable control node.' })
+			return
+		}
+		const isCharacterTarget = event.targetType === 'character'
+		const effectiveCharacterComponent = resolveCharacterControllerComponent(effectiveNode)
+		const effectiveVehicleComponent = resolveVehicleComponent(effectiveNode)
+		console.info(`[ScenePreview][RuntimePrefabSwitch] instantiated targetNodeId=${targetNodeId} effectiveNodeId=${effectiveNodeId} effectiveNodeName=${effectiveNode.name ?? ''} sceneRootType=${sceneRootObject.type} hasCharacter=${Boolean(effectiveCharacterComponent)} hasVehicle=${Boolean(effectiveVehicleComponent)}`)
+		if (isCharacterTarget && !effectiveCharacterComponent) {
+			console.warn(`[ScenePreview][RuntimePrefabSwitch] type-mismatch expected=character effectiveNodeId=${effectiveNodeId}`)
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Instantiated prefab does not contain a character controller.' })
+			return
+		}
+		if (!isCharacterTarget && !effectiveVehicleComponent) {
+			console.warn(`[ScenePreview][RuntimePrefabSwitch] type-mismatch expected=vehicle effectiveNodeId=${effectiveNodeId}`)
+			resolveBehaviorToken(event.token, { type: 'fail', message: 'Instantiated prefab does not contain a vehicle controller.' })
+			return
+		}
+		if (vehicleDriveState.active) {
+			stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Control node was replaced.' }, preserveCamera: true })
+		}
+		const oldObject = nodeObjectMap.get(targetNodeId) ?? null
+		const previousNode = targetNode
+		console.info(`[ScenePreview][RuntimePrefabSwitch] swap-begin targetNodeId=${targetNodeId} previousNodeId=${previousNode.id ?? ''} oldObjectExists=${Boolean(oldObject)} effectiveNodeId=${effectiveNodeId}`)
+		const result = await performRuntimePrefabControlSwitch(
+			{
+				document: currentDocument,
+				targetNodeId,
+				previousNode,
+				oldObject,
+				instance: instanced,
+			},
+			{
+				scene,
+				replaceSceneNodeById,
+				rebuildNodeMap: rebuildPreviewNodeMap,
+				onCommit: async () => {
+					registerSubtree(sceneRootObject)
+					rebuildPreviewNodeMap(currentDocument)
+					refreshBehaviorProximityCandidates()
+					await syncPhysicsBodiesForDocument(currentDocument)
+				},
+				onRollback: async () => {
+					refreshBehaviorProximityCandidates()
+					await syncPhysicsBodiesForDocument(currentDocument)
+				},
+				cleanupNewObject: async () => {
+					disposeObjectResources(sceneRootObject)
+				},
+				cleanupOldObject: async () => {
+					if (oldObject) {
+						oldObject.parent?.remove(oldObject)
+						nodeObjectMap.delete(targetNodeId)
+						releaseModelInstance(targetNodeId)
+						disposeObjectResources(oldObject)
+					}
+				},
+				activate: async () => {
+					if (isCharacterTarget) {
+						pendingDefaultCharacterControlNodeId.value = effectiveNodeId
+						if (characterCameraMode.value !== 'follow') {
+							characterCameraMode.value = 'follow'
+						}
+						if (camera && !updateCharacterFollowCamera(0, camera, true)) {
+							appendWarningMessage('Character control switched, but the follow camera could not be updated immediately.')
+						}
+						refreshCharacterControllerAnimationRuntimeEntries()
+						refreshCharacterPathFollowRuntimeEntries()
+						return { success: true }
+					}
+					pendingDefaultCharacterControlNodeId.value = null
+					const driveEvent = buildDefaultSteerDriveEvent(effectiveNodeId)
+					const driveResult = startVehicleDriveMode(driveEvent)
+					if (!driveResult.success) {
+						return {
+							success: false,
+							message: driveResult.message ?? 'Failed to start vehicle drive for the replacement node.',
+						}
+					}
+					return { success: true }
+				},
+			},
+		)
+		if (!result.success) {
+			console.warn(`[ScenePreview][RuntimePrefabSwitch] swap-failed targetNodeId=${targetNodeId} message=${result.message ?? 'unknown'}`)
+			resolveBehaviorToken(event.token, { type: 'fail', message: result.message ?? 'Failed to switch control node.' })
+			return
+		}
+		console.info(`[ScenePreview][RuntimePrefabSwitch] swap-success targetNodeId=${targetNodeId} effectiveNodeId=${effectiveNodeId} mode=${event.targetType}`)
+		resolveBehaviorToken(event.token, { type: 'continue' })
 	} catch (error) {
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'Failed to switch control node.' })
+		console.warn(`[ScenePreview][RuntimePrefabSwitch] exception targetNodeId=${targetNodeId} error=${(error as Error)?.message ?? String(error)}`)
+		resolveBehaviorToken(event.token, { type: 'fail', message: (error as Error)?.message ?? 'Failed to switch control node.' })
 	}
 }
 

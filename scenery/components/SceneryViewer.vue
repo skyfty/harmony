@@ -557,9 +557,21 @@ import {
   type SceneGraphBuildOptions,
 } from '@harmony/schema/sceneGraph';
 import {
+  instantiateRuntimePrefabControlSwitchInstanceFromPrefab,
+  performRuntimePrefabControlSwitch,
+} from '@harmony/schema/runtimePrefabControlSwitch';
+import {
+  buildRuntimePrefabRequestKey,
+  collectRuntimePrefabPreloadContext,
+  normalizeAssetIdList,
+  normalizeRuntimePrefabRequest,
+  resolveRuntimePrefabSource,
+  type RuntimePrefabPreloadContext,
+  type RuntimePrefabSource,
+} from '@harmony/schema/runtimePrefabLoading';
+import {
   cloneRuntimePrefabNode,
   createRuntimePrefabDocument,
-  parseRuntimePrefabData,
   type RuntimePrefabInitializationMode,
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
@@ -5202,16 +5214,6 @@ function mergeSceneAssetOverrides(
   };
 }
 
-type RuntimePrefabPreloadContext = {
-  assetRegistry: Record<string, SceneAssetRegistryEntry> | null;
-  meshAssetIds: string[];
-  warmAssetIds: string[];
-};
-
-function shouldPreloadRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null | undefined): boolean {
-  return request?.preloadPolicy === 'before-entry';
-}
-
 function shouldSpawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): boolean {
   if (!request.requestId?.startsWith('vehicle-prefab:')) {
     return true;
@@ -5223,46 +5225,6 @@ function shouldSpawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): bo
     ? resolveDefaultSteerBinding(currentDocument, defaultSteerIdentifier, resolveDefaultSteerTargetType())
     : null;
   return binding?.steerProps.targetType === 'vehicle';
-}
-
-function normalizeAssetIdList(assetIds: Iterable<string>): string[] {
-  const uniqueIds = new Set<string>();
-  for (const assetId of assetIds) {
-    if (typeof assetId !== 'string') {
-      continue;
-    }
-    const trimmed = assetId.trim();
-    if (trimmed) {
-      uniqueIds.add(trimmed);
-    }
-  }
-  return Array.from(uniqueIds).sort();
-}
-
-function collectRuntimePrefabAssetIds(assetRegistry: Record<string, SceneAssetRegistryEntry>): {
-  meshAssetIds: string[];
-  warmAssetIds: string[];
-} {
-  const meshAssetIds = new Set<string>();
-  const warmAssetIds = new Set<string>();
-
-  Object.entries(assetRegistry).forEach(([assetId, entry]) => {
-    const normalizedAssetId = typeof assetId === 'string' ? assetId.trim() : '';
-    if (!normalizedAssetId) {
-      return;
-    }
-    warmAssetIds.add(normalizedAssetId);
-
-    const assetType = entry?.assetType ?? inferAssetTypeOrNull({ nameOrUrl: normalizedAssetId });
-    if (assetType === 'model' || assetType === 'mesh') {
-      meshAssetIds.add(normalizedAssetId);
-    }
-  });
-
-  return {
-    meshAssetIds: normalizeAssetIdList(meshAssetIds),
-    warmAssetIds: normalizeAssetIdList(warmAssetIds),
-  };
 }
 
 function mergeAssetPreloadMeshInfo(
@@ -5586,24 +5548,6 @@ async function loadTextAssetContent(assetId: string): Promise<string | null> {
   return null;
 }
 
-function buildRuntimePrefabRequestKey(request: RuntimePrefabSpawnRequest): string {
-  const requestId = typeof request.requestId === 'string' ? request.requestId.trim() : '';
-  if (requestId.length) {
-    return requestId;
-  }
-  return JSON.stringify({
-    assetId: request.assetId ?? null,
-    assetUrl: request.assetUrl ?? null,
-    targetNodeId: request.targetNodeId ?? null,
-    targetNodeName: request.targetNodeName ?? null,
-    position: request.position ?? null,
-    rotation: request.rotation ?? null,
-    scale: request.scale ?? null,
-    initializationMode: request.initializationMode ?? 'full',
-    placement: request.placement ?? null,
-  });
-}
-
 function normalizeRuntimePrefabMode(value: unknown): RuntimePrefabInitializationMode {
   return value === 'render-only' ? 'render-only' : 'full';
 }
@@ -5618,34 +5562,6 @@ function normalizeRuntimePrefabPlacement(value: unknown): RuntimePrefabPlacement
   return {
     alignment,
     offset: cloneVectorLikeValue(candidate?.offset),
-  };
-}
-
-function normalizeRuntimePrefabRequest(request: RuntimePrefabSpawnRequest | null | undefined): RuntimePrefabSpawnRequest | null {
-  if (!request || typeof request !== 'object') {
-    return null;
-  }
-  const assetId = typeof request.assetId === 'string' ? request.assetId.trim() : '';
-  const assetUrl = typeof request.assetUrl === 'string' ? request.assetUrl.trim() : '';
-  const vehicleIdentifier = typeof request.vehicleIdentifier === 'string' ? request.vehicleIdentifier.trim() : '';
-  const controllableIdentifier = typeof request.controllableIdentifier === 'string' ? request.controllableIdentifier.trim() : '';
-  if (!assetId && !assetUrl) {
-    return null;
-  }
-  return {
-    requestId: typeof request.requestId === 'string' ? request.requestId.trim() || null : null,
-    vehicleIdentifier: vehicleIdentifier || null,
-    controllableIdentifier: controllableIdentifier || null,
-    controllableType: request.controllableType ?? null,
-    assetId: assetId || null,
-    assetUrl: assetUrl || null,
-    targetNodeId: typeof request.targetNodeId === 'string' ? request.targetNodeId.trim() || null : null,
-    targetNodeName: typeof request.targetNodeName === 'string' ? request.targetNodeName.trim() || null : null,
-    position: request.position ?? null,
-    rotation: request.rotation ?? null,
-    scale: request.scale ?? null,
-    initializationMode: normalizeRuntimePrefabMode(request.initializationMode),
-    placement: normalizeRuntimePrefabPlacement(request.placement),
   };
 }
 
@@ -5814,83 +5730,24 @@ function mergeRuntimePrefabAssetRegistry(document: SceneJsonExportDocument, runt
   };
 }
 
-type ResolvedRuntimePrefabSource = {
-  prefab: ReturnType<typeof parseRuntimePrefabData>;
-  assetRegistry: Record<string, SceneAssetRegistryEntry> | null;
-};
+const runtimePrefabSourceCache = new Map<string, Promise<RuntimePrefabSource | null>>();
 
-const runtimePrefabSourceCache = new Map<string, Promise<ResolvedRuntimePrefabSource | null>>();
-
-async function resolveRuntimePrefabSource(request: RuntimePrefabSpawnRequest): Promise<ResolvedRuntimePrefabSource | null> {
-  const normalized = normalizeRuntimePrefabRequest(request);
-  if (!normalized) {
-    return null;
-  }
-
-  const requestKey = buildRuntimePrefabRequestKey(normalized);
-  const cached = runtimePrefabSourceCache.get(requestKey);
-  if (cached) {
-    return await cached;
-  }
-
-  const task = (async () => {
-    const raw = await resolveRuntimePrefabSourceText(normalized);
-    if (!raw) {
-      return null;
+const runtimePrefabSourceResolverOptions = {
+  resolveText: async (request: RuntimePrefabSpawnRequest) => {
+    if (request.assetId) {
+      return await loadTextAssetContent(request.assetId);
     }
-    const prefab = parseRuntimePrefabData(raw);
-    return {
-      prefab,
-      assetRegistry: prefab.assetRegistry
-        ? JSON.parse(JSON.stringify(prefab.assetRegistry)) as Record<string, SceneAssetRegistryEntry>
-        : null,
-    };
-  })().catch((error) => {
+    if (request.assetUrl) {
+      return await fetchTextFromUrl(request.assetUrl);
+    }
+    return null;
+  },
+  cache: runtimePrefabSourceCache,
+  buildCacheKey: buildRuntimePrefabRequestKey,
+  onError: (requestKey: string, error: unknown) => {
     console.warn('[SceneViewer] Failed to resolve runtime prefab source', requestKey, error);
-    return null;
-  });
-
-  runtimePrefabSourceCache.set(requestKey, task);
-  return await task;
-}
-
-async function collectRuntimePrefabPreloadContext(
-  requests: RuntimePrefabSpawnRequest[] | undefined,
-): Promise<RuntimePrefabPreloadContext | null> {
-  if (!Array.isArray(requests) || !requests.length) {
-    return null;
-  }
-
-  const selectedRequests = requests.filter((request) => shouldPreloadRuntimePrefabRequest(request));
-  if (!selectedRequests.length) {
-    return null;
-  }
-
-  const resolved = await Promise.all(selectedRequests.map((request) => resolveRuntimePrefabSource(request)));
-  const mergedAssetRegistry: Record<string, SceneAssetRegistryEntry> = {};
-  const meshAssetIds = new Set<string>();
-  const warmAssetIds = new Set<string>();
-
-  resolved.forEach((entry) => {
-    if (!entry?.assetRegistry) {
-      return;
-    }
-    Object.assign(mergedAssetRegistry, entry.assetRegistry);
-    const assetIds = collectRuntimePrefabAssetIds(entry.assetRegistry);
-    assetIds.meshAssetIds.forEach((assetId) => meshAssetIds.add(assetId));
-    assetIds.warmAssetIds.forEach((assetId) => warmAssetIds.add(assetId));
-  });
-
-  if (!Object.keys(mergedAssetRegistry).length && !meshAssetIds.size && !warmAssetIds.size) {
-    return null;
-  }
-
-  return {
-    assetRegistry: Object.keys(mergedAssetRegistry).length ? mergedAssetRegistry : null,
-    meshAssetIds: normalizeAssetIdList(meshAssetIds),
-    warmAssetIds: normalizeAssetIdList(warmAssetIds),
-  };
-}
+  },
+};
 
 function isCurrentInitializationToken(token: number): boolean {
   return token === initializeToken;
@@ -6074,17 +5931,6 @@ function resolveDefaultSteerBinding(
     }
   }
   return fallback;
-}
-
-function removeSceneNodeById(nodes: SceneNode[] | undefined | null, nodeId: string): SceneNode | null {
-  if (!Array.isArray(nodes) || !nodeId.trim()) return null;
-  const index = nodes.findIndex((node) => node?.id === nodeId);
-  if (index >= 0) return nodes.splice(index, 1)[0] ?? null;
-  for (const node of nodes) {
-    const removed = removeSceneNodeById(node.children, nodeId);
-    if (removed) return removed;
-  }
-  return null;
 }
 
 function resolveDefaultSteerTargetType(): SteerControllableTargetType {
@@ -6284,7 +6130,7 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
     ? buildControllableAssetSpawnRequest(selectedAsset)
     : findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier);
   if (matchedRequest) {
-    const source = await resolveRuntimePrefabSource(matchedRequest);
+    const source = await resolveRuntimePrefabSource(matchedRequest, runtimePrefabSourceResolverOptions);
     if (source) {
       const nextDocument = JSON.parse(JSON.stringify(payload.document));
       const documentNodeMap = new Map<string, SceneNode>();
@@ -6335,16 +6181,6 @@ function clearSpawnedRuntimePrefabRoots(): void {
   spawnedRuntimePrefabRoots.clear();
 }
 
-async function resolveRuntimePrefabSourceText(request: RuntimePrefabSpawnRequest): Promise<string | null> {
-  if (request.assetId) {
-    return await loadTextAssetContent(request.assetId);
-  }
-  if (request.assetUrl) {
-    return await fetchTextFromUrl(request.assetUrl);
-  }
-  return null;
-}
-
 async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Promise<boolean> {
   const scene = renderContext?.scene ?? null;
   const document = currentDocument;
@@ -6353,7 +6189,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   }
 
   const requestKey = buildRuntimePrefabRequestKey(request);
-  const source = await resolveRuntimePrefabSource(request);
+  const source = await resolveRuntimePrefabSource(request, runtimePrefabSourceResolverOptions);
   if (!source) {
     return false;
   }
@@ -6406,82 +6242,175 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   return true;
 }
 
-function createFallbackControllableAssetSpawnRequest(
-  targetType: SteerControllableTargetType,
-  prefabAssetId: string | null | undefined,
-): RuntimePrefabSpawnRequest | null {
-  const assetId = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''
-  if (!assetId) {
-    return null
-  }
-  return buildControllableAssetSpawnRequest({
-    id: `fallback-${targetType}-${assetId}`,
-    identifier: assetId,
-    type: targetType,
-    prefabUrl: null,
-    assetId,
-    isSelected: true,
-  })
-}
-
 async function switchControlNodeToAsset(targetType: SteerControllableTargetType, prefabAssetId?: string | null): Promise<boolean> {
   try {
     const document = currentDocument;
-    if (!document) return false;
-    const asset = resolveSelectedControllableAsset(targetType);
-    const request = asset ? buildControllableAssetSpawnRequest(asset) : null;
-    const fallbackRequest = createFallbackControllableAssetSpawnRequest(targetType, prefabAssetId);
-    const selectedRequest = request ?? fallbackRequest;
-    if (!selectedRequest) return false;
+    if (!document) {
+      return false;
+    }
+    const assetId = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : '';
+    if (!assetId) {
+      return false;
+    }
 
-  const currentTargetNodeId = vehicleDriveNodeId.value
-    ?? resolveDefaultControlledCharacterNodeId()
-    ?? resolveSceneAutoEnterSteerBinding(document)?.targetNodeId
-    ?? null;
-  if (!currentTargetNodeId) return false;
-  const binding = resolveSteerBindingByTargetNodeId(document, currentTargetNodeId)
-    ?? resolveSceneAutoEnterSteerBinding(document);
-  if (!binding) return false;
+    const currentTargetNodeId = vehicleDriveNodeId.value
+      ?? resolveDefaultControlledCharacterNodeId()
+      ?? resolveSceneAutoEnterSteerBinding(document)?.targetNodeId
+      ?? null;
+    if (!currentTargetNodeId) {
+      return false;
+    }
+    const binding = resolveSteerBindingByTargetNodeId(document, currentTargetNodeId)
+      ?? resolveSceneAutoEnterSteerBinding(document);
+    if (!binding) {
+      return false;
+    }
 
-  const oldObject = nodeObjectMap.get(currentTargetNodeId) ?? null;
-  selectedRequest.targetNodeId = currentTargetNodeId;
-  selectedRequest.placement = { alignment: 'origin', offset: null };
-  const requestKey = buildRuntimePrefabRequestKey(selectedRequest);
-  const spawned = await spawnRuntimePrefabRequest(selectedRequest);
-  if (!spawned) return false;
-  const spawnedEntry = spawnedRuntimePrefabRoots.get(requestKey);
-  const newNodeId = spawnedEntry?.nodeId
-    ?? (document.nodes ?? []).find((node) => node.id !== currentTargetNodeId && node.sourceAssetId === (selectedRequest.assetId ?? null))?.id
-    ?? null;
-  if (!newNodeId) return false;
+    const request: RuntimePrefabSpawnRequest = {
+      requestId: `control-node-switch:${Date.now().toString(36)}`,
+      controllableIdentifier: binding.steerProps.defaultIdentifier ?? null,
+      controllableType: targetType,
+      assetId,
+      assetUrl: null,
+      targetNodeId: currentTargetNodeId,
+      targetNodeName: null,
+      position: null,
+      rotation: null,
+      scale: null,
+      initializationMode: 'full',
+      placement: { alignment: 'origin', offset: null },
+    };
 
-  binding.steerComponent.props = clampSteerComponentProps({
-    ...binding.steerComponent.props,
-    targetType,
-    targetNodeId: newNodeId,
-    defaultIdentifier: asset?.identifier ?? binding.steerProps.defaultIdentifier,
-  });
-  removeSceneNodeById(document.nodes, currentTargetNodeId);
-  if (oldObject) {
-    oldObject.parent?.remove(oldObject);
-    nodeObjectMap.delete(currentTargetNodeId);
-    releaseModelInstance(currentTargetNodeId);
-    disposeObject(oldObject);
-  }
-  refreshMultiuserNodeReferences(document);
-  refreshBehaviorProximityCandidates();
-    if (targetType === 'character') {
-      vehicleDriveNodeId.value = null;
-      vehicleDriveActive.value = false;
-      resetVehicleDriveInputs();
-    } else {
-      const driveEvent = buildFloatingAutoTourDriveEvent(newNodeId, null);
-      const result = startVehicleDriveMode(driveEvent);
-      if (result.success) {
-        vehicleDriveNodeId.value = newNodeId;
-        vehicleDriveActive.value = true;
-        activeVehicleDriveEvent.value = driveEvent;
-      }
+    const source = await resolveRuntimePrefabSource(request, runtimePrefabSourceResolverOptions);
+    if (!source) {
+      return false;
+    }
+    const instanced = await instantiateRuntimePrefabControlSwitchInstanceFromPrefab(source.prefab, {
+      buildOptions: () => {
+        const buildOptions: SceneGraphBuildOptions = {};
+        if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
+          buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
+        }
+        return buildOptions;
+      },
+      createResourceCache: ensureResourceCache,
+      buildSceneGraph,
+      prepareClonedRoot: (root) => {
+        applyRuntimePrefabTransform(root, request);
+      },
+    });
+    if (!instanced) {
+      return false;
+    }
+
+    const { prefab, sceneRootObject, effectiveNode } = instanced;
+    const effectiveNodeId = effectiveNode.id ?? null;
+    if (!effectiveNodeId) {
+      return false;
+    }
+
+    const isCharacterTarget = targetType === 'character';
+    const effectiveCharacterComponent = resolveCharacterControllerComponent(effectiveNode);
+    const effectiveVehicleComponent = resolveVehicleComponent(effectiveNode);
+    if (isCharacterTarget && !effectiveCharacterComponent) {
+      return false;
+    }
+    if (!isCharacterTarget && !effectiveVehicleComponent) {
+      return false;
+    }
+
+    if (vehicleDriveActive.value) {
+      handleHideVehicleCockpitEvent();
+      vehicleDriveController.stopDrive(
+        { resolution: { type: 'abort', message: 'Control node was replaced.' }, preserveCamera: true },
+        renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
+      );
+    }
+
+    const previousNode = resolveNodeById(currentTargetNodeId);
+    if (!previousNode) {
+      return false;
+    }
+    const oldObject = nodeObjectMap.get(currentTargetNodeId) ?? null;
+    const activeScene = renderContext?.scene ?? null;
+    if (!activeScene) {
+      return false;
+    }
+    const result = await performRuntimePrefabControlSwitch(
+      {
+        document,
+        targetNodeId: currentTargetNodeId,
+        previousNode,
+        oldObject,
+        instance: instanced,
+      },
+      {
+        scene: activeScene,
+        replaceSceneNodeById,
+        rebuildNodeMap: rebuildPreviewNodeMap,
+        onCommit: async () => {
+          registerSceneSubtree(sceneRootObject);
+          rebuildPreviewNodeMap(document);
+          refreshMultiuserNodeReferences(document);
+          refreshBehaviorProximityCandidates();
+          if (prefab.physicsRelevant) {
+            await syncPhysicsBodiesForDocument(document);
+          }
+        },
+        onRollback: async () => {
+          refreshMultiuserNodeReferences(document);
+          refreshBehaviorProximityCandidates();
+          if (prefab.physicsRelevant) {
+            await syncPhysicsBodiesForDocument(document);
+          }
+        },
+        cleanupNewObject: async () => {
+          disposeObject(sceneRootObject);
+        },
+        cleanupOldObject: async () => {
+          if (oldObject) {
+            oldObject.parent?.remove(oldObject);
+            nodeObjectMap.delete(currentTargetNodeId);
+            releaseModelInstance(currentTargetNodeId);
+            disposeObject(oldObject);
+          }
+        },
+        activate: async () => {
+          const nextSteerProps = clampSteerComponentProps({
+            ...binding.steerComponent.props,
+            targetType,
+            targetNodeId: effectiveNodeId,
+            defaultIdentifier: binding.steerProps.defaultIdentifier,
+          });
+
+          if (isCharacterTarget) {
+            resetCharacterControlInputs();
+            resetProtagonistPoseState();
+            if (!vehicleDriveActive.value && characterControlUi.value.visible) {
+              updateCharacterFollowCamera(0, { immediate: true });
+            }
+            binding.steerComponent.props = nextSteerProps;
+            return { success: true };
+          }
+
+          const driveEvent = buildFloatingAutoTourDriveEvent(effectiveNodeId, null);
+          const startResult = startVehicleDriveMode(driveEvent);
+          if (!startResult.success) {
+            return {
+              success: false,
+              message: startResult.message ?? 'Failed to start vehicle drive for the replacement node.',
+            };
+          }
+          binding.steerComponent.props = nextSteerProps;
+          vehicleDriveNodeId.value = effectiveNodeId;
+          vehicleDriveActive.value = true;
+          activeVehicleDriveEvent.value = driveEvent;
+          return { success: true };
+        },
+      },
+    );
+    if (!result.success) {
+      return false;
     }
     return true;
   } catch (error) {
@@ -13109,7 +13038,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     return null;
   }
   try {
-    const source = await resolveRuntimePrefabSource(sourceRequest);
+    const source = await resolveRuntimePrefabSource(sourceRequest, runtimePrefabSourceResolverOptions);
     if (!source) {
       return null;
     }
@@ -19652,7 +19581,7 @@ async function startRenderIfReady() {
   try {
     await ensureRendererContext(canvas);
     resourcePreload.label = '正在准备运行时 prefab 资源...';
-    const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns);
+    const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns, runtimePrefabSourceResolverOptions);
     if (!isCurrentInitializationToken(token)) {
       return;
     }
