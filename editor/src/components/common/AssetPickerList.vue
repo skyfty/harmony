@@ -18,6 +18,7 @@ const props = withDefaults(
     active?: boolean
     assetId?: string
     assetType?: string
+    exactTypeMatch?: boolean
     seriesId?: string
     multiple?: boolean
     selectedAssetIds?: string[]
@@ -32,6 +33,7 @@ const props = withDefaults(
     active: true,
     assetId: '',
     assetType: '',
+    exactTypeMatch: false,
     seriesId: '',
     multiple: false,
     selectedAssetIds: () => [],
@@ -145,6 +147,10 @@ function matchesRequestedType(asset: ProjectAsset): boolean {
 
   if (typeFilters.includes(asset.type)) {
     return true
+  }
+
+  if (props.exactTypeMatch) {
+    return false
   }
 
   const requestedPresetKind = resolveRequestedPresetKind(asset)

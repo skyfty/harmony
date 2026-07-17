@@ -1090,6 +1090,7 @@ export interface ControlCharacterBehaviorParams {
 
 export interface SwitchControlNodeBehaviorParams {
   targetType: SteerControllableTargetType
+  prefabAssetId: string | null
 }
 
 export interface DebusBehaviorParams {

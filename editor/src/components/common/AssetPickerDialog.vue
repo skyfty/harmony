@@ -9,6 +9,7 @@ const props = withDefaults(
     modelValue: boolean
     assetId?: string
     assetType?: string
+    exactTypeMatch?: boolean
     seriesId?: string
     multiple?: boolean
     selectedAssetIds?: string[]
@@ -26,6 +27,7 @@ const props = withDefaults(
   {
     assetId: '',
     assetType: '',
+    exactTypeMatch: false,
     seriesId: '',
     multiple: false,
     selectedAssetIds: () => [],
@@ -270,6 +272,7 @@ watch(
             :active="dialogOpen"
             :asset-id="assetId"
             :asset-type="assetType"
+            :exact-type-match="exactTypeMatch"
             :series-id="seriesId"
             :multiple="multiple"
             v-model:selected-asset-ids="selectedAssetIds"

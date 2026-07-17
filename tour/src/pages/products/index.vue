@@ -38,8 +38,6 @@
 
                               <view v-if="product.controllableAsset || !isOwnedProduct(product)" class="asset-row">
             <view v-if="product.controllableAsset" class="asset-row__meta">
-              <text class="asset-type">{{ controllableLabel(product.controllableAsset.type) }}</text>
-              <text class="asset-id">编号 {{ product.controllableAsset.identifier }}</text>
             </view>
 
           </view>

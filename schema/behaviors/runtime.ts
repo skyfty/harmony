@@ -300,6 +300,7 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       targetType: SwitchControlNodeBehaviorParams['targetType']
+      prefabAssetId: string | null
       token: string
     }
   | {
@@ -1075,6 +1076,9 @@ function createSwitchControlNodeEvent(
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
     targetType,
+    prefabAssetId: typeof params?.prefabAssetId === 'string' && params.prefabAssetId.trim().length
+      ? params.prefabAssetId.trim()
+      : null,
     token,
   }
 }

@@ -706,7 +706,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     description: 'Replace the active control node with the selected owned asset of the target type.',
     icon: 'mdi-swap-horizontal-circle-outline',
     createDefaultParams(): SwitchControlNodeBehaviorParams {
-      return { targetType: 'vehicle' }
+      return { targetType: 'vehicle', prefabAssetId: null }
     },
   },
   {
@@ -1223,6 +1223,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
           targetType: ['vehicle', 'ship', 'aircraft', 'character'].includes(params?.targetType as string)
             ? params?.targetType ?? 'vehicle'
             : 'vehicle',
+          prefabAssetId: normalizeAssetId(params?.prefabAssetId),
         },
       }
     }
@@ -1686,6 +1687,7 @@ export function ensureBehaviorParams(
             targetType: ['vehicle', 'ship', 'aircraft', 'character'].includes(params?.targetType as string)
               ? params?.targetType ?? 'vehicle'
               : 'vehicle',
+            prefabAssetId: normalizeAssetId(params?.prefabAssetId),
           },
         }
       }

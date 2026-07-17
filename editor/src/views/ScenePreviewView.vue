@@ -6337,6 +6337,10 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 	}
 	const resourceCache = ensureEditorResourceCache(runtimeDocument, buildOptions)
 	const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions)
+	graph.root.userData = {
+		...(graph.root.userData ?? {}),
+		nodeId: cloned.root.id ?? event.assetId,
+	}
 	applyRuntimePrefabPlacement(graph.root, event.placement, anchor.position, rootGroup)
 	cloned.root.position = {
 		x: graph.root.position.x,
@@ -6357,6 +6361,68 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 		refreshBehaviorProximityCandidates()
 	}
 	warningMessages.value = [...warningMessages.value, ...graph.warnings]
+}
+
+function replaceSceneNodeById(nodes: SceneNode[] | null | undefined, nodeId: string, replacement: SceneNode): boolean {
+	if (!Array.isArray(nodes)) {
+		return false
+	}
+	for (let index = 0; index < nodes.length; index += 1) {
+		const node = nodes[index]
+		if (!node) {
+			continue
+		}
+		if (node.id === nodeId) {
+			nodes[index] = replacement
+			return true
+		}
+		if (replaceSceneNodeById(node.children, nodeId, replacement)) {
+			return true
+		}
+	}
+	return false
+}
+
+function resolveControlNodeSwitchTargetNodeId(): string | null {
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		return vehicleDriveState.nodeId
+	}
+	return pendingDefaultCharacterControlNodeId.value ?? resolveDefaultControlledCharacterNodeId()
+}
+
+async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }>): Promise<void> {
+	if (!currentDocument || !rootGroup || !scene) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Scene is not ready.' })
+		return
+	}
+	const targetNodeId = resolveControlNodeSwitchTargetNodeId()
+	if (!targetNodeId) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No active control node was found.' })
+		return
+	}
+	const targetNode = resolveNodeById(targetNodeId)
+	if (!targetNode) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Control node is missing.' })
+		return
+	}
+	const prefabAssetId = typeof event.prefabAssetId === 'string' ? event.prefabAssetId.trim() : ''
+	if (!prefabAssetId) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No fallback prefab asset was selected.' })
+		return
+	}
+
+	try {
+		const raw = await loadTextAssetContent(prefabAssetId)
+		if (!raw) {
+			resolveBehaviorToken(event.token, { type: 'fail', message: `Failed to load prefab asset: ${prefabAssetId}` })
+			return
+		}
+		const prefab = parseRuntimePrefabData(raw)
+
+		
+	} catch (error) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'Failed to switch control node.' })
+	}
 }
 
 async function ensureLanternText(assetId: string): Promise<void> {
@@ -9733,6 +9799,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'vehicle-hide-cockpit':
 			handleHideVehicleCockpitEvent()
+			break
+		case 'control-node-switch':
+			void switchControlNodeRuntimePrefab(event)
 			break
 		case 'load-scene':
 			void handleLoadSceneEvent(event)

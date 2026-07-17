@@ -6369,6 +6369,10 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   }
   const resourceCache = ensureResourceCache(runtimeDocument, buildOptions);
   const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions);
+  graph.root.userData = {
+    ...(graph.root.userData ?? {}),
+    nodeId: cloned.root.id ?? request.assetId ?? null,
+  };
   applyWeChatShadowPolicy(graph.root);
   applyRuntimePrefabPlacement(graph.root, request.placement, anchorTransform.position, sceneGraphRoot ?? scene);
   cloned.root.position = {
@@ -6402,12 +6406,33 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   return true;
 }
 
-async function switchControlNodeToAsset(targetType: SteerControllableTargetType): Promise<boolean> {
-  const document = currentDocument;
-  if (!document) return false;
-  const asset = resolveSelectedControllableAsset(targetType);
-  const request = asset ? buildControllableAssetSpawnRequest(asset) : null;
-  if (!request) return false;
+function createFallbackControllableAssetSpawnRequest(
+  targetType: SteerControllableTargetType,
+  prefabAssetId: string | null | undefined,
+): RuntimePrefabSpawnRequest | null {
+  const assetId = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''
+  if (!assetId) {
+    return null
+  }
+  return buildControllableAssetSpawnRequest({
+    id: `fallback-${targetType}-${assetId}`,
+    identifier: assetId,
+    type: targetType,
+    prefabUrl: null,
+    assetId,
+    isSelected: true,
+  })
+}
+
+async function switchControlNodeToAsset(targetType: SteerControllableTargetType, prefabAssetId?: string | null): Promise<boolean> {
+  try {
+    const document = currentDocument;
+    if (!document) return false;
+    const asset = resolveSelectedControllableAsset(targetType);
+    const request = asset ? buildControllableAssetSpawnRequest(asset) : null;
+    const fallbackRequest = createFallbackControllableAssetSpawnRequest(targetType, prefabAssetId);
+    const selectedRequest = request ?? fallbackRequest;
+    if (!selectedRequest) return false;
 
   const currentTargetNodeId = vehicleDriveNodeId.value
     ?? resolveDefaultControlledCharacterNodeId()
@@ -6419,14 +6444,14 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType)
   if (!binding) return false;
 
   const oldObject = nodeObjectMap.get(currentTargetNodeId) ?? null;
-  request.targetNodeId = currentTargetNodeId;
-  request.placement = { alignment: 'origin', offset: null };
-  const requestKey = buildRuntimePrefabRequestKey(request);
-  const spawned = await spawnRuntimePrefabRequest(request);
+  selectedRequest.targetNodeId = currentTargetNodeId;
+  selectedRequest.placement = { alignment: 'origin', offset: null };
+  const requestKey = buildRuntimePrefabRequestKey(selectedRequest);
+  const spawned = await spawnRuntimePrefabRequest(selectedRequest);
   if (!spawned) return false;
   const spawnedEntry = spawnedRuntimePrefabRoots.get(requestKey);
   const newNodeId = spawnedEntry?.nodeId
-    ?? (document.nodes ?? []).find((node) => node.id !== currentTargetNodeId && node.sourceAssetId === (request.assetId ?? null))?.id
+    ?? (document.nodes ?? []).find((node) => node.id !== currentTargetNodeId && node.sourceAssetId === (selectedRequest.assetId ?? null))?.id
     ?? null;
   if (!newNodeId) return false;
 
@@ -6445,20 +6470,24 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType)
   }
   refreshMultiuserNodeReferences(document);
   refreshBehaviorProximityCandidates();
-  if (targetType === 'character') {
-    vehicleDriveNodeId.value = null;
-    vehicleDriveActive.value = false;
-    resetVehicleDriveInputs();
-  } else {
-    const driveEvent = buildFloatingAutoTourDriveEvent(newNodeId, null);
-    const result = startVehicleDriveMode(driveEvent);
-    if (result.success) {
-      vehicleDriveNodeId.value = newNodeId;
-      vehicleDriveActive.value = true;
-      activeVehicleDriveEvent.value = driveEvent;
+    if (targetType === 'character') {
+      vehicleDriveNodeId.value = null;
+      vehicleDriveActive.value = false;
+      resetVehicleDriveInputs();
+    } else {
+      const driveEvent = buildFloatingAutoTourDriveEvent(newNodeId, null);
+      const result = startVehicleDriveMode(driveEvent);
+      if (result.success) {
+        vehicleDriveNodeId.value = newNodeId;
+        vehicleDriveActive.value = true;
+        activeVehicleDriveEvent.value = driveEvent;
+      }
     }
+    return true;
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to switch control node', error);
+    return false;
   }
-  return true;
 }
 
 async function flushPendingRuntimePrefabSpawnRequests(): Promise<void> {
@@ -13094,6 +13123,10 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     }
     const resourceCache = ensureResourceCache(runtimeDocument, buildOptions);
     const graph = await buildSceneGraph(runtimeDocument, resourceCache, buildOptions);
+    graph.root.userData = {
+      ...(graph.root.userData ?? {}),
+      nodeId: cloned.root.id ?? sourceRequest.assetId ?? null,
+    };
     if (graph.root.children.length === 0) {
       return null;
     }
@@ -18103,7 +18136,7 @@ async function handleCouponEvent(event: Extract<BehaviorRuntimeEvent, { type: 'c
 async function handleSwitchControlNodeEvent(
   event: Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }>,
 ): Promise<void> {
-  const success = await switchControlNodeToAsset(event.targetType);
+  const success = await switchControlNodeToAsset(event.targetType, event.prefabAssetId);
   resolveBehaviorToken(event.token, success
     ? { type: 'continue' }
     : { type: 'fail', message: '未找到可用的控制资产或实例化失败' });
