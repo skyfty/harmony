@@ -11,7 +11,7 @@ const MAX_LEASE_MS = 30000
 
 type Vector3 = { x: number; y: number; z: number }
 type Quaternion = { x: number; y: number; z: number; w: number }
-type MultiuserSubjectType = 'vehicle' | 'character'
+type MultiuserSubjectType = 'vehicle' | 'character' | 'ship' | 'aircraft'
 type MultiuserSharedEntityMode = 'transform'
 type MultiuserOwnershipMode = 'lease'
 
@@ -427,7 +427,7 @@ function normalizePeerState(value: unknown): MultiuserPeerState | null {
     return null
   }
   const candidate = value as Partial<MultiuserPeerState>
-  if ((candidate.subjectType !== 'vehicle' && candidate.subjectType !== 'character') || !isVector3(candidate.position) || !isVector3(candidate.scale) || !isQuaternion(candidate.quaternion)) {
+  if ((candidate.subjectType !== 'vehicle' && candidate.subjectType !== 'character' && candidate.subjectType !== 'ship' && candidate.subjectType !== 'aircraft') || !isVector3(candidate.position) || !isVector3(candidate.scale) || !isQuaternion(candidate.quaternion)) {
     return null
   }
   const presentation = normalizePeerPresentation(candidate.presentation)

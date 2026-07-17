@@ -62,7 +62,7 @@ export function shouldKeepRemoteMultiuserPeerVisible(
 }
 
 export function getRemoteMultiuserPeerSelectionRadius(state: MultiuserPeerState): number {
-  if (state.subjectType === 'vehicle') {
+  if (state.subjectType === 'vehicle' || state.subjectType === 'ship' || state.subjectType === 'aircraft') {
     return 4.5
   }
   if (state.subjectType === 'character') {

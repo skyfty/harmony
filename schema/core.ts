@@ -756,6 +756,22 @@ export type SceneNodeOutlineMesh = SceneOutlineMesh
 
 export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform' | 'collision'
 
+export const CONTROLLABLE_TARGET_TYPES = ['vehicle', 'ship', 'aircraft', 'character'] as const
+export type ControllableTargetType = (typeof CONTROLLABLE_TARGET_TYPES)[number]
+export type SteerControllableTargetType = ControllableTargetType
+
+export interface ExternalControllableAsset {
+  id: string
+  identifier?: string | null
+  name?: string | null
+  type: ControllableTargetType
+  prefabUrl?: string | null
+  assetId?: string | null
+  isSelected?: boolean
+  sortOrder?: number
+  [key: string]: unknown
+}
+
 export type RuntimePrefabInitializationMode = 'full' | 'render-only'
 
 export type RuntimePrefabPlacementAlignment = 'origin' | 'bottom-to-anchor' | 'center-to-anchor' | 'place-on-surface' | 'custom-offset'
@@ -826,6 +842,7 @@ export type BehaviorScriptType =
   | 'hideCockpit'
   | 'drive'
   | 'controlCharacter'
+  | 'switchControlNode'
   | 'releaseCharacter'
   | 'debus'
   | 'punch'
@@ -1073,6 +1090,10 @@ export interface ControlCharacterBehaviorParams {
   targetNodeId: string | null
 }
 
+export interface SwitchControlNodeBehaviorParams {
+  targetType: SteerControllableTargetType
+}
+
 export interface DebusBehaviorParams {
   // no configuration required
 }
@@ -1232,6 +1253,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'controlCharacter'
       params: ControlCharacterBehaviorParams
+    }
+  | {
+      type: 'switchControlNode'
+      params: SwitchControlNodeBehaviorParams
     }
   | {
       type: 'releaseCharacter'

@@ -29,6 +29,7 @@
       :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
       :default-steer-target-type="selectedControllableType"
+      :controllable-assets="controllableAssets"
       :runtime-prefab-spawns="runtimePrefabSpawns"
       :server-asset-base-url="serverAssetBaseUrl"
       :debug-console-enabled="false"
@@ -72,6 +73,7 @@ import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedVehicle, getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
 import { getSelectedControllable, type ControllableType } from '@/utils/controllableSelection';
+import { listControllableAssets, type ControllableAsset } from '@/api/mini/controllableAssets';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
 import { ensureMiniCapability } from '@/platform/runtime';
 
@@ -92,6 +94,7 @@ const selectedVehicleIdentifier = ref<string>('');
 const selectedVehiclePrefabUrl = ref<string>('');
 const selectedControllableType = ref<ControllableType>('vehicle');
 const selectedControllablePrefabUrl = ref<string>('');
+const controllableAssets = ref<ControllableAsset[]>([]);
 const explicitPrefabUrl = ref<string>('');
 const explicitPrefabTargetNodeId = ref<string>('');
 const explicitPrefabTargetNodeName = ref<string>('');
@@ -360,6 +363,11 @@ function resolvePhysicsEngineFromQuery(value: unknown): 'ammo' | 'cannon' | 'aut
 onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
   sceneryLoadError.value = '';
+  void listControllableAssets({ ownedOnly: true }).then((assets) => {
+    controllableAssets.value = assets;
+  }).catch(() => {
+    controllableAssets.value = [];
+  });
   // #ifdef MP-WEIXIN
   void ensureMiniCapability('scenery').then((enabled) => {
     sceneryEnabled.value = enabled;

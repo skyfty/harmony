@@ -499,6 +499,7 @@ type SceneryProps = {
   createPhysicsBridge?: (engine?: PhysicsBackendPreference) => Promise<PhysicsBridge> | PhysicsBridge;
   defaultSteerIdentifier?: string;
   defaultSteerTargetType?: SteerControllableTargetType;
+  controllableAssets?: ExternalControllableAsset[];
   multiuserIdentity?: MultiuserIdentity | null;
   nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
@@ -562,6 +563,7 @@ import {
   type RuntimePrefabInitializationMode,
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
+  type ExternalControllableAsset,
 } from '@harmony/schema/core';
 import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
@@ -710,6 +712,7 @@ import {
   type MultiuserNodeSyncState,
   type MultiuserNodeSyncPresentation,
   type MultiuserRuntimeBridge,
+  type MultiuserSubjectType,
 } from '@harmony/schema/multiuserContext';
 type RigidbodyComponentProps = any;
 import {
@@ -1710,7 +1713,7 @@ let remoteMultiuserVisiblePeerLimit = DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS;
 let remoteMultiuserVisibilityFrame = 0;
 const pendingRuntimePrefabSpawnRequests: RuntimePrefabSpawnRequest[] = [];
 const appliedRuntimePrefabSpawnKeys = new Set<string>();
-const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode; wheelNodeIds: string[] }>();
+const spawnedRuntimePrefabRoots = new Map<string, { root: THREE.Object3D; mode: RuntimePrefabInitializationMode; wheelNodeIds: string[]; nodeId?: string | null }>();
 let runtimePrefabBehaviorCounter = 0;
 let runtimePrefabFlushInFlight = false;
 let dynamicGroundCache: { nodeId: string; node: SceneNode; dynamicMesh: GroundRuntimeDynamicMesh } | null = null;
@@ -6073,12 +6076,62 @@ function resolveDefaultSteerBinding(
   return fallback;
 }
 
+function removeSceneNodeById(nodes: SceneNode[] | undefined | null, nodeId: string): SceneNode | null {
+  if (!Array.isArray(nodes) || !nodeId.trim()) return null;
+  const index = nodes.findIndex((node) => node?.id === nodeId);
+  if (index >= 0) return nodes.splice(index, 1)[0] ?? null;
+  for (const node of nodes) {
+    const removed = removeSceneNodeById(node.children, nodeId);
+    if (removed) return removed;
+  }
+  return null;
+}
+
 function resolveDefaultSteerTargetType(): SteerControllableTargetType {
   const requested = props.defaultSteerTargetType;
   if (requested === 'vehicle' || requested === 'character' || requested === 'ship' || requested === 'aircraft') {
     return requested;
   }
   return 'vehicle';
+}
+
+function resolveSceneAutoEnterSteerBinding(document: SceneJsonExportDocument): ResolvedSteerBinding | null {
+  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) continue;
+    const component = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
+    if (component) {
+      const steerProps = clampSteerComponentProps(component.props ?? null);
+      if (steerProps.autoEnterOnSceneLoad && steerProps.targetNodeId) {
+        return { steerNodeId: node.id, steerNode: node, steerComponent: component, steerProps, targetNodeId: steerProps.targetNodeId };
+      }
+    }
+    if (Array.isArray(node.children)) stack.push(...node.children);
+  }
+  return null;
+}
+
+function resolveSelectedControllableAsset(targetType: SteerControllableTargetType): ExternalControllableAsset | null {
+  return (props.controllableAssets ?? [])
+    .filter((asset) => asset?.type === targetType && asset.isSelected === true)
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0] ?? null;
+}
+
+function buildControllableAssetSpawnRequest(asset: ExternalControllableAsset): RuntimePrefabSpawnRequest | null {
+  const prefabUrl = typeof asset.prefabUrl === 'string' ? asset.prefabUrl.trim() : '';
+  const assetId = typeof asset.assetId === 'string' ? asset.assetId.trim() : '';
+  if (!prefabUrl && !assetId) return null;
+  return {
+    requestId: `controllable-asset:${asset.id}`,
+    controllableIdentifier: asset.identifier?.trim() || asset.id,
+    controllableType: asset.type,
+    assetUrl: prefabUrl || null,
+    assetId: assetId || null,
+    preloadPolicy: 'before-entry',
+    initializationMode: 'full',
+    placement: { alignment: 'origin', offset: null },
+  };
 }
 
 function resolveDefaultCharacterSteerNodeId(
@@ -6129,7 +6182,7 @@ function resolveSteerBindingByTargetNodeId(
     const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
     if (steerComponent) {
       const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
-      if (steerProps.targetType === 'vehicle' && steerProps.targetNodeId === normalizedTargetNodeId) {
+      if (steerProps.targetNodeId === normalizedTargetNodeId) {
         return {
           steerNodeId: node.id,
           steerNode: node,
@@ -6217,17 +6270,19 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
   const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
     ? props.defaultSteerIdentifier.trim() || null
     : null;
-  const binding = resolveDefaultSteerBinding(payload.document, defaultSteerIdentifier, resolveDefaultSteerTargetType());
+  const binding = props.controllableAssets?.length
+    ? resolveSceneAutoEnterSteerBinding(payload.document)
+    : resolveDefaultSteerBinding(payload.document, defaultSteerIdentifier, resolveDefaultSteerTargetType());
   if (!binding) {
     return payload;
   }
 
   let finalTargetNodeId = binding.targetNodeId;
   let nextPayload = payload;
-  const shouldInstantiateSelectedTarget = binding.steerProps.targetType !== 'character';
-  const matchedRequest = shouldInstantiateSelectedTarget
-    ? findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier)
-    : null;
+  const selectedAsset = resolveSelectedControllableAsset(binding.steerProps.targetType);
+  const matchedRequest = selectedAsset
+    ? buildControllableAssetSpawnRequest(selectedAsset)
+    : findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier);
   if (matchedRequest) {
     const source = await resolveRuntimePrefabSource(matchedRequest);
     if (source) {
@@ -6327,6 +6382,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
     root: graph.root,
     mode: normalizeRuntimePrefabMode(request.initializationMode),
     wheelNodeIds,
+    nodeId: cloned.root.id ?? null,
   });
 
   if (normalizeRuntimePrefabMode(request.initializationMode) === 'full') {
@@ -6343,6 +6399,65 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
     }
   }
 
+  return true;
+}
+
+async function switchControlNodeToAsset(targetType: SteerControllableTargetType): Promise<boolean> {
+  const document = currentDocument;
+  if (!document) return false;
+  const asset = resolveSelectedControllableAsset(targetType);
+  const request = asset ? buildControllableAssetSpawnRequest(asset) : null;
+  if (!request) return false;
+
+  const currentTargetNodeId = vehicleDriveNodeId.value
+    ?? resolveDefaultControlledCharacterNodeId()
+    ?? resolveSceneAutoEnterSteerBinding(document)?.targetNodeId
+    ?? null;
+  if (!currentTargetNodeId) return false;
+  const binding = resolveSteerBindingByTargetNodeId(document, currentTargetNodeId)
+    ?? resolveSceneAutoEnterSteerBinding(document);
+  if (!binding) return false;
+
+  const oldObject = nodeObjectMap.get(currentTargetNodeId) ?? null;
+  request.targetNodeId = currentTargetNodeId;
+  request.placement = { alignment: 'origin', offset: null };
+  const requestKey = buildRuntimePrefabRequestKey(request);
+  const spawned = await spawnRuntimePrefabRequest(request);
+  if (!spawned) return false;
+  const spawnedEntry = spawnedRuntimePrefabRoots.get(requestKey);
+  const newNodeId = spawnedEntry?.nodeId
+    ?? (document.nodes ?? []).find((node) => node.id !== currentTargetNodeId && node.sourceAssetId === (request.assetId ?? null))?.id
+    ?? null;
+  if (!newNodeId) return false;
+
+  binding.steerComponent.props = clampSteerComponentProps({
+    ...binding.steerComponent.props,
+    targetType,
+    targetNodeId: newNodeId,
+    defaultIdentifier: asset?.identifier ?? binding.steerProps.defaultIdentifier,
+  });
+  removeSceneNodeById(document.nodes, currentTargetNodeId);
+  if (oldObject) {
+    oldObject.parent?.remove(oldObject);
+    nodeObjectMap.delete(currentTargetNodeId);
+    releaseModelInstance(currentTargetNodeId);
+    disposeObject(oldObject);
+  }
+  refreshMultiuserNodeReferences(document);
+  refreshBehaviorProximityCandidates();
+  if (targetType === 'character') {
+    vehicleDriveNodeId.value = null;
+    vehicleDriveActive.value = false;
+    resetVehicleDriveInputs();
+  } else {
+    const driveEvent = buildFloatingAutoTourDriveEvent(newNodeId, null);
+    const result = startVehicleDriveMode(driveEvent);
+    if (result.success) {
+      vehicleDriveNodeId.value = newNodeId;
+      vehicleDriveActive.value = true;
+      activeVehicleDriveEvent.value = driveEvent;
+    }
+  }
   return true;
 }
 
@@ -12343,14 +12458,18 @@ function createRemoteMultiuserPeerPlaceholderEntry(peerState: MultiuserPeerState
   };
 }
 
-function createRemoteMultiuserPlaceholder(subjectType: 'vehicle' | 'character'): THREE.Object3D {
-  const color = subjectType === 'vehicle' ? 0xffb300 : 0x4d9bff;
+function isVehicleLikeMultiuserSubjectType(subjectType: MultiuserSubjectType): boolean {
+  return subjectType === 'vehicle' || subjectType === 'ship' || subjectType === 'aircraft';
+}
+
+function createRemoteMultiuserPlaceholder(subjectType: MultiuserSubjectType): THREE.Object3D {
+  const color = isVehicleLikeMultiuserSubjectType(subjectType) ? 0xffb300 : 0x4d9bff;
   const geometry = new THREE.CapsuleGeometry(0.32, 0.9, 4, 8);
   const material = new THREE.MeshStandardMaterial({ color });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.castShadow = true;
   mesh.receiveShadow = true;
-  mesh.name = subjectType === 'vehicle' ? 'RemoteVehiclePlaceholder' : 'RemoteCharacterPlaceholder';
+  mesh.name = isVehicleLikeMultiuserSubjectType(subjectType) ? 'RemoteVehiclePlaceholder' : 'RemoteCharacterPlaceholder';
   mesh.userData.remoteMultiuserPlaceholder = true;
   return mesh;
 }
@@ -12875,7 +12994,7 @@ function cloneRemoteMultiuserObjectFromRuntime(nodeId: string | null): THREE.Obj
 }
 
 function cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state: MultiuserPeerState): { object: THREE.Object3D; wheelNodeIds: string[] } | null {
-  if (state.subjectType !== 'vehicle') {
+  if (!isVehicleLikeMultiuserSubjectType(state.subjectType)) {
     return null;
   }
   const matchedVehicleRequest = resolveRemoteMultiuserVehiclePrefabRequest(state);
@@ -12942,7 +13061,7 @@ function resolveRemoteMultiuserPrefabSpawnRequest(state: MultiuserPeerState): Ru
 }
 
 function resolveRemoteMultiuserVehiclePrefabRequest(state: MultiuserPeerState): RuntimePrefabSpawnRequest | null {
-  if (state.subjectType !== 'vehicle') {
+  if (!isVehicleLikeMultiuserSubjectType(state.subjectType)) {
     return null;
   }
   const subjectIdentifier = typeof state.subjectIdentifier === 'string' ? state.subjectIdentifier.trim() : '';
@@ -12982,7 +13101,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     applyWeChatShadowPolicy(rootNode);
     return {
       object: sanitizeRemoteMultiuserObject(rootNode),
-      wheelNodeIds: state.subjectType === 'vehicle' ? collectPrefabVehicleWheelNodeIds(source.prefab, cloned.idMap) : [],
+      wheelNodeIds: isVehicleLikeMultiuserSubjectType(state.subjectType) ? collectPrefabVehicleWheelNodeIds(source.prefab, cloned.idMap) : [],
     };
   } catch (error) {
     console.warn('[SceneryViewer] Failed to instantiate remote multiuser prefab', {
@@ -13412,7 +13531,7 @@ function applyRemoteMultiuserPeerRuntime(
     });
     return;
   }
-  if (state.subjectType === 'vehicle') {
+  if (isVehicleLikeMultiuserSubjectType(state.subjectType)) {
     applyRemoteMultiuserVehiclePresentation(entry, state.presentation.vehicle ?? null, alpha);
   }
   const animation = state.presentation.character?.animation ?? null;
@@ -14190,6 +14309,11 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
     const object = nodeObjectMap.get(nodeId) ?? null;
     if (object) {
       const steerBinding = resolveSteerBindingByTargetNodeId(currentDocument, nodeId);
+      const resolvedSubjectType: MultiuserSubjectType = steerBinding?.steerProps.targetType === 'ship'
+        ? 'ship'
+        : steerBinding?.steerProps.targetType === 'aircraft'
+          ? 'aircraft'
+          : 'vehicle';
       const resolvedVehicleIdentifier = steerBinding?.steerProps.defaultIdentifier?.trim()
         || findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, nodeId, node?.name ?? null)?.vehicleIdentifier?.trim()
         || props.defaultSteerIdentifier?.trim()
@@ -14203,7 +14327,7 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
       object.getWorldScale(remoteSharedEntityTargetScaleScratch);
       const vehiclePresentation = resolveLocalMultiuserVehiclePresentation(nodeId);
       return {
-        subjectType: 'vehicle',
+        subjectType: resolvedSubjectType,
         subjectNodeId: nodeId,
         subjectIdentifier: resolvedVehicleIdentifier,
         subjectAssetId: typeof node?.sourceAssetId === 'string' && node.sourceAssetId.trim().length
@@ -17976,6 +18100,15 @@ async function handleCouponEvent(event: Extract<BehaviorRuntimeEvent, { type: 'c
 }
 
 
+async function handleSwitchControlNodeEvent(
+  event: Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }>,
+): Promise<void> {
+  const success = await switchControlNodeToAsset(event.targetType);
+  resolveBehaviorToken(event.token, success
+    ? { type: 'continue' }
+    : { type: 'fail', message: '未找到可用的控制资产或实例化失败' });
+}
+
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
   switch (event.type) {
     case 'delay':
@@ -18075,6 +18208,9 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
       break;
     case 'vehicle-drive':
       handleVehicleDriveEvent(event);
+      break;
+    case 'control-node-switch':
+      void handleSwitchControlNodeEvent(event);
       break;
     case 'vehicle-debus':
       handleVehicleDebusEvent();
@@ -21007,6 +21143,16 @@ watch(
   () => props.nominateStateMap,
   () => {
     applyNominateOverridesForCurrentScene();
+  },
+  { deep: true },
+);
+
+watch(
+  () => props.controllableAssets,
+  () => {
+    if (previewPayload.value) {
+      handlePreviewPayload(previewPayload.value);
+    }
   },
   { deep: true },
 );

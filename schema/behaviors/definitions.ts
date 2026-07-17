@@ -38,6 +38,7 @@ import type {
   HideCockpitBehaviorParams,
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
+  SwitchControlNodeBehaviorParams,
   ReleaseCharacterBehaviorParams,
   DebusBehaviorParams,
   CouponBehaviorParams,
@@ -700,6 +701,15 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     },
   },
   {
+    id: 'switchControlNode',
+    label: 'Switch Control Node',
+    description: 'Replace the active control node with the selected owned asset of the target type.',
+    icon: 'mdi-swap-horizontal-circle-outline',
+    createDefaultParams(): SwitchControlNodeBehaviorParams {
+      return { targetType: 'vehicle' }
+    },
+  },
+  {
     id: 'releaseCharacter',
     label: 'Release Character',
     description: 'Exit character control mode and restore default controls.',
@@ -1205,6 +1215,17 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         },
       }
     }
+    case 'switchControlNode': {
+      const params = binding.params as Partial<SwitchControlNodeBehaviorParams> | undefined
+      return {
+        type: 'switchControlNode',
+        params: {
+          targetType: ['vehicle', 'ship', 'aircraft', 'character'].includes(params?.targetType as string)
+            ? params?.targetType ?? 'vehicle'
+            : 'vehicle',
+        },
+      }
+    }
     case 'releaseCharacter':
       return {
         type: 'releaseCharacter',
@@ -1654,6 +1675,17 @@ export function ensureBehaviorParams(
           type: 'controlCharacter',
           params: {
             targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          },
+        }
+      }
+      case 'switchControlNode': {
+        const params = script.params as Partial<SwitchControlNodeBehaviorParams> | undefined
+        return {
+          type: 'switchControlNode',
+          params: {
+            targetType: ['vehicle', 'ship', 'aircraft', 'character'].includes(params?.targetType as string)
+              ? params?.targetType ?? 'vehicle'
+              : 'vehicle',
           },
         }
       }

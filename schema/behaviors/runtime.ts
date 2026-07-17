@@ -27,6 +27,7 @@ import type {
   StopAnimationBehaviorParams,
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
+  SwitchControlNodeBehaviorParams,
   CouponBehaviorParams,
 } from '../core'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
@@ -289,6 +290,16 @@ export type BehaviorRuntimeEvent =
       behaviorSequenceId: string
       behaviorId: string
       targetNodeId: string
+      token: string
+    }
+  | {
+      type: 'control-node-switch'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetType: SwitchControlNodeBehaviorParams['targetType']
       token: string
     }
   | {
@@ -1045,6 +1056,29 @@ function createControlCharacterEvent(
   }
 }
 
+function createSwitchControlNodeEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }> {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, { token, sequenceId: state.id, stepIndex: state.index })
+  state.status = 'waiting'
+  const params = behavior.script.params as Partial<SwitchControlNodeBehaviorParams> | undefined
+  const targetType = params?.targetType === 'character' || params?.targetType === 'ship' || params?.targetType === 'aircraft'
+    ? params.targetType
+    : 'vehicle'
+  return {
+    type: 'control-node-switch',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetType,
+    token,
+  }
+}
+
 function createReleaseCharacterEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
@@ -1280,6 +1314,9 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         return events
       case 'controlCharacter':
         events.push(createControlCharacterEvent(state, behavior))
+        return events
+      case 'switchControlNode':
+        events.push(createSwitchControlNodeEvent(state, behavior))
         return events
       case 'releaseCharacter':
         events.push(createReleaseCharacterEvent(state, behavior))

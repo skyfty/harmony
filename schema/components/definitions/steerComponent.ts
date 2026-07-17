@@ -3,12 +3,12 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode } from '../../index'
 import { CHARACTER_CONTROLLER_COMPONENT_TYPE } from './characterControllerComponent'
 import { VEHICLE_COMPONENT_TYPE } from './vehicleComponent'
+import { CONTROLLABLE_TARGET_TYPES, type SteerControllableTargetType } from '../../core'
 
 export const STEER_COMPONENT_TYPE = 'steer'
 
-export const STEER_TARGET_TYPES = ['vehicle', 'ship', 'aircraft', 'character'] as const
-
-export type SteerControllableTargetType = (typeof STEER_TARGET_TYPES)[number]
+export const STEER_TARGET_TYPES = CONTROLLABLE_TARGET_TYPES
+export type { SteerControllableTargetType }
 
 export interface SteerComponentProps {
   targetNodeId: string | null

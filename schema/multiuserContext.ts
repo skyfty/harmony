@@ -1,6 +1,6 @@
 let currentSceneId: string | null = null
 
-export type MultiuserSubjectType = 'vehicle' | 'character'
+export type MultiuserSubjectType = 'vehicle' | 'character' | 'ship' | 'aircraft'
 export type MultiuserSharedEntityMode = 'transform'
 export type MultiuserOwnershipMode = 'lease'
 
