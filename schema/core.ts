@@ -6,7 +6,9 @@ import type { SceneNodeInstanceLayout } from './instanceLayout'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 import type { AssetBundleHashAlgorithm } from './asset-api'
 import type { AssetType } from './asset-types'
+import type { ControllableTargetType, SteerControllableTargetType } from './controllableTargetTypes'
 import { createUvDebugMaterial } from './debugTextures'
+export { CONTROLLABLE_TARGET_TYPES } from './controllableTargetTypes'
 
 export const GROUND_NODE_ID = 'harmony:ground'
 export const GROUND_TERRAIN_CHUNK_SIZE_METERS = 100
@@ -755,10 +757,6 @@ export type SceneOutlineMeshMap = Record<string, SceneOutlineMesh>
 export type SceneNodeOutlineMesh = SceneOutlineMesh
 
 export type BehaviorEventType = 'click' | 'approach' | 'depart' | 'perform' | 'collision'
-
-export const CONTROLLABLE_TARGET_TYPES = ['vehicle', 'ship', 'aircraft', 'character'] as const
-export type ControllableTargetType = (typeof CONTROLLABLE_TARGET_TYPES)[number]
-export type SteerControllableTargetType = ControllableTargetType
 
 export interface ExternalControllableAsset {
   id: string

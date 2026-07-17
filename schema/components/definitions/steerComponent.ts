@@ -3,7 +3,7 @@ import { componentManager, type ComponentDefinition } from '../componentManager'
 import type { SceneNode } from '../../index'
 import { CHARACTER_CONTROLLER_COMPONENT_TYPE } from './characterControllerComponent'
 import { VEHICLE_COMPONENT_TYPE } from './vehicleComponent'
-import { CONTROLLABLE_TARGET_TYPES, type SteerControllableTargetType } from '../../core'
+import { CONTROLLABLE_TARGET_TYPES, type SteerControllableTargetType } from '../../controllableTargetTypes'
 
 export const STEER_COMPONENT_TYPE = 'steer'
 
