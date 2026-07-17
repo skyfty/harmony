@@ -708,11 +708,6 @@ const instancingDebug = reactive({
 	scatterVisible: 0,
 	scatterTotal: 0,
 })
-
-
-let lastRendererDebugLogAt = 0
-let lastRendererDebugSignature = ''
-
 const rendererSizeHelper = new THREE.Vector2()
 const instancedMatrixUploadMeshes = new Set<THREE.InstancedMesh>()
 function appendWarningMessage(message: string): void {
@@ -2523,6 +2518,7 @@ let physicsBridgeStepPromise: Promise<void> | null = null
 let physicsBridgeBodySyncPromise: Promise<void> | null = null
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState()
 let physicsBridgeSceneLoaded = false
+let physicsBridgeSceneReloading = false
 let physicsBridgeSceneRequestId = 0
 const currentPhysicsBridgePreference = ref<PhysicsBackendPreference | undefined>()
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
@@ -2559,6 +2555,7 @@ const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
 let previewGroundCollisionNextRuntimeId = 0x70000000
 let previewGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve()
+let previewGroundCollisionBridgeMutationEpoch = 0
 const previewGroundCollisionRuntimeBodyIds = new Set<number>()
 
 type GroundChunkUserData = {
@@ -6458,7 +6455,6 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 	}
 
 	try {
-		console.info(`[ScenePreview][RuntimePrefabSwitch] start eventNodeId=${event.nodeId ?? ''} targetNodeId=${targetNodeId} targetType=${event.targetType} prefabAssetId=${prefabAssetId} token=${event.token}`)
 		const raw = await loadTextAssetContent(prefabAssetId)
 		if (!raw) {
 			console.warn(`[ScenePreview][RuntimePrefabSwitch] load-failed prefabAssetId=${prefabAssetId}`)
@@ -6510,7 +6506,6 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 		}
 		const effectiveCharacterComponent = resolveCharacterControllerComponent(effectiveNode)
 		const effectiveVehicleComponent = resolveVehicleComponent(effectiveNode)
-		console.info(`[ScenePreview][RuntimePrefabSwitch] instantiated targetNodeId=${targetNodeId} effectiveNodeId=${effectiveNodeId} effectiveNodeName=${effectiveNode.name ?? ''} sceneRootType=${sceneRootObject.type} hasCharacter=${Boolean(effectiveCharacterComponent)} hasVehicle=${Boolean(effectiveVehicleComponent)}`)
 		if (isCharacterTarget && !effectiveCharacterComponent) {
 			console.warn(`[ScenePreview][RuntimePrefabSwitch] type-mismatch expected=character effectiveNodeId=${effectiveNodeId}`)
 			resolveBehaviorToken(event.token, { type: 'fail', message: 'Instantiated prefab does not contain a character controller.' })
@@ -6526,7 +6521,6 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 		}
 		const oldObject = nodeObjectMap.get(targetNodeId) ?? null
 		const previousNode = targetNode
-		console.info(`[ScenePreview][RuntimePrefabSwitch] swap-begin targetNodeId=${targetNodeId} previousNodeId=${previousNode.id ?? ''} oldObjectExists=${Boolean(oldObject)} effectiveNodeId=${effectiveNodeId}`)
 		const result = await performRuntimePrefabControlSwitch(
 			{
 				document: currentDocument,
@@ -6598,7 +6592,6 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 			resolveBehaviorToken(event.token, { type: 'fail', message: result.message ?? 'Failed to switch control node.' })
 			return
 		}
-		console.info(`[ScenePreview][RuntimePrefabSwitch] swap-success targetNodeId=${targetNodeId} effectiveNodeId=${effectiveNodeId} mode=${event.targetType}`)
 		resolveBehaviorToken(event.token, { type: 'continue' })
 	} catch (error) {
 		console.warn(`[ScenePreview][RuntimePrefabSwitch] exception targetNodeId=${targetNodeId} error=${(error as Error)?.message ?? String(error)}`)
@@ -10727,6 +10720,9 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	if (environmentSettings) {
 		applyFogSettings(environmentSettings, activeCamera)
 	}
+	if (physicsBridgeSceneReloading) {
+		return
+	}
 	const shouldUpdateCameraSystems = shouldUpdateCameraDependentSystems(activeCamera, delta)
 	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)
 	if (!hasGroundCollisionReference) {
@@ -10793,26 +10789,6 @@ function syncRendererDebugForFrame(currentRenderer: THREE.WebGLRenderer, current
 	rendererDebug.geometries = currentRenderer.info?.memory?.geometries ?? 0
 	rendererDebug.textures = currentRenderer.info?.memory?.textures ?? 0
 
-	const now = performance.now()
-	const signature = [
-		rendererDebug.calls,
-		rendererDebug.triangles,
-		rendererDebug.renderTriangles,
-		rendererDebug.groundChunkTriangles,
-		rendererDebug.groundVisibleChunks,
-	].join('|')
-	if (signature !== lastRendererDebugSignature && now - lastRendererDebugLogAt >= 250) {
-		lastRendererDebugLogAt = now
-		lastRendererDebugSignature = signature
-		console.info('[ScenePreview][Renderer] frame stats', {
-			drawCalls: rendererDebug.calls,
-			sceneTriangleEstimate: rendererDebug.triangles,
-			gpuRenderTrianglesRaw: rendererDebug.renderTriangles,
-			groundVisibleChunkCount: rendererDebug.groundVisibleChunks,
-			groundVisibleChunkTriangleEstimate: rendererDebug.groundChunkTriangles,
-			triangleLabelMeaning: 'sceneTriangleEstimate traverses visible meshes; gpuRenderTrianglesRaw comes from renderer.info.render.triangles',
-		})
-	}
 }
 
 function syncInstancedMatrixUploadEstimateForFrame(): void {
@@ -11911,8 +11887,14 @@ function nextPreviewGroundCollisionRuntimeId(): number {
 }
 
 function enqueuePreviewGroundCollisionBridgeMutation(task: () => Promise<void>): void {
+	const taskEpoch = previewGroundCollisionBridgeMutationEpoch
 	previewGroundCollisionBridgeMutationChain = previewGroundCollisionBridgeMutationChain
-		.then(task)
+		.then(async () => {
+			if (taskEpoch !== previewGroundCollisionBridgeMutationEpoch) {
+				return
+			}
+			await task()
+		})
 		.catch((error) => {
 			console.warn('[ScenePreview] Ground collision bridge mutation failed', error)
 		})
@@ -11923,7 +11905,7 @@ function resolveScenePreviewGroundCollisionRuntimeDeps(): NonNullable<
 > | null {
 	return createGroundCollisionRuntimeBridgeDeps({
 		enabled: physicsEnvironmentEnabled.value,
-		sceneLoaded: physicsBridgeSceneLoaded,
+		sceneLoaded: physicsBridgeSceneLoaded && !physicsBridgeSceneReloading,
 		getPhysicsBridge: () => physicsBridge,
 		runtimeBodyIds: previewGroundCollisionRuntimeBodyIds,
 		nextRuntimeId: nextPreviewGroundCollisionRuntimeId,
@@ -12122,11 +12104,8 @@ async function loadScenePreviewPhysicsBridgeScene(
 	const groundNode = resolveSharedDocumentGroundNode(document)
 	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
 	const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null
-	if (resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)) {
-		syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
-	} else if (groundObject && isGroundDynamicMesh(groundMesh)) {
-		clearGroundCollisionRuntimeHost(groundObject)
-	}
+	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)
+	physicsBridgeSceneReloading = true
 	const requestId = ++physicsBridgeSceneRequestId
 	const asset = await buildPhysicsSceneAsset(document, {
 		onProgress: (progress) => {
@@ -12144,7 +12123,14 @@ async function loadScenePreviewPhysicsBridgeScene(
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
 		}
+		physicsBridgeSceneLoaded = true
 		updateScenePreviewPhysicsBridgeIndex(document, asset)
+		physicsBridgeSceneReloading = false
+		if (hasGroundCollisionReference && groundObject && isGroundDynamicMesh(groundMesh)) {
+			previewGroundCollisionBridgeMutationEpoch += 1
+			clearGroundCollisionRuntimeHost(groundObject)
+			syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
+		}
 		const missingCharacterControllers: string[] = []
 		const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
 		while (stack.length) {
@@ -12164,12 +12150,13 @@ async function loadScenePreviewPhysicsBridgeScene(
 				`CharacterController nodes need a Rigidbody on the same node to move in preview: ${missingCharacterControllers.join(', ')}`,
 			)
 		}
-		physicsBridgeSceneLoaded = true
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Scene preview physics load failed'
 		statusMessage.value = message
 		warningMessages.value = [message]
 		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
+	} finally {
+		physicsBridgeSceneReloading = false
 	}
 }
 
@@ -12803,6 +12790,7 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		return
 	}
 	const bridge = physicsBridge
+	previewGroundCollisionBridgeMutationEpoch += 1
 	physicsBridge = null
 	physicsBridgeInitPromise = null
 	physicsBridgeStepPromise = null

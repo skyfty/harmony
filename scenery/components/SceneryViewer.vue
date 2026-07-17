@@ -2493,9 +2493,11 @@ let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
 let physicsBridgeSceneLoaded = false;
+let physicsBridgeSceneReloading = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
+let sceneryGroundCollisionBridgeMutationEpoch = 0;
 let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
 const sceneryGroundCollisionReferencePositions: THREE.Vector3[] = [];
@@ -9080,8 +9082,14 @@ function shouldUpdateSceneryGroundCollisionForFrame(delta: number, referenceWorl
 }
 
 function enqueueSceneryGroundCollisionBridgeMutation(task: () => Promise<void>): void {
+  const taskEpoch = sceneryGroundCollisionBridgeMutationEpoch;
   sceneryGroundCollisionBridgeMutationChain = sceneryGroundCollisionBridgeMutationChain
-    .then(task)
+    .then(async () => {
+      if (taskEpoch !== sceneryGroundCollisionBridgeMutationEpoch) {
+        return;
+      }
+      await task();
+    })
     .catch((error) => {
       console.warn('[SceneViewer] Ground collision bridge mutation failed', error);
     });
@@ -9092,7 +9100,7 @@ function resolveSceneryGroundCollisionRuntimeDeps(): NonNullable<
 > | null {
   return createGroundCollisionRuntimeBridgeDeps({
     enabled: physicsEnvironmentEnabled.value,
-    sceneLoaded: physicsBridgeSceneLoaded,
+    sceneLoaded: physicsBridgeSceneLoaded && !physicsBridgeSceneReloading,
     getPhysicsBridge: () => physicsBridge,
     runtimeBodyIds: sceneryGroundCollisionRuntimeBodyIds,
     nextRuntimeId: nextSceneryGroundCollisionRuntimeId,
@@ -9364,6 +9372,7 @@ async function loadSceneryPhysicsBridgeScene(
     currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(resolveDocumentEnvironment(document));
     // void syncCannonDebugger();
     const requestId = ++physicsBridgeSceneRequestId;
+    physicsBridgeSceneReloading = true;
     const asset = await buildPhysicsSceneAsset(document, {
       onProgress: (progress) => {
         onProgress?.({
@@ -9396,9 +9405,18 @@ async function loadSceneryPhysicsBridgeScene(
     }
     updateSceneryPhysicsBridgeIndex(document, asset);
     physicsBridgeSceneLoaded = true;
-    syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
+    physicsBridgeSceneReloading = false;
+    const groundNode = resolveDocumentGroundNode(document);
+    const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null;
+    if (groundObject && isGroundDynamicMesh(groundNode?.dynamicMesh)) {
+      sceneryGroundCollisionBridgeMutationEpoch += 1;
+      clearGroundCollisionRuntimeHost(groundObject);
+      syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
+    }
   } catch (error) {
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);
+  } finally {
+    physicsBridgeSceneReloading = false;
   }
 }
 
@@ -10206,6 +10224,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
 
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeSceneRequestId += 1;
+  sceneryGroundCollisionBridgeMutationEpoch += 1;
   sceneryGroundCollisionRuntimeBodyIds.clear();
   const groundNode = resolveCurrentGroundNode();
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
@@ -10256,6 +10275,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     return;
   }
   const bridge = physicsBridge;
+  sceneryGroundCollisionBridgeMutationEpoch += 1;
   physicsBridge = null;
   physicsBridgeInitPromise = null;
   physicsBridgeStepPromise = null;
@@ -20545,17 +20565,19 @@ function startRenderLoop(
         try {
           if (cachedGround && shouldRunCompiledGroundTileSync(cameraFrameSnapshot)) {
             syncSceneryCompiledGroundRenderTiles(camera);
-            const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
-            if (groundObject) {
-              const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePositions);
-              if (!hasGroundCollisionReference) {
-                clearGroundCollisionRuntimeHost(groundObject);
-              }
-              const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
-                ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePositions)
-                : false;
-              if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
-                syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
+            if (!physicsBridgeSceneReloading) {
+              const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
+              if (groundObject) {
+                const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePositions);
+                if (!hasGroundCollisionReference) {
+                  clearGroundCollisionRuntimeHost(groundObject);
+                }
+                const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
+                  ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePositions)
+                  : false;
+                if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
+                  syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
+                }
               }
             }
           }
