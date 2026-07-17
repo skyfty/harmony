@@ -128,7 +128,18 @@ function buildProductResponse(product: ProductLean, userEntry?: {
 export async function listProducts(ctx: Context): Promise<void> {
   const userId = getOptionalUserId(ctx)
   const { keyword, categoryId } = ctx.query as Record<string, string>
-  const filter: Record<string, unknown> = { isDeleted: { $ne: true } }
+  const visibleCategories = await ProductCategoryModel.find({
+    enabled: { $ne: false },
+    purchasable: { $ne: false },
+  })
+    .select({ _id: 1 })
+    .lean()
+    .exec()
+  const visibleCategoryIds = visibleCategories.map((row: any) => row._id)
+  const filter: Record<string, unknown> = {
+    isDeleted: { $ne: true },
+    categoryId: { $in: visibleCategoryIds },
+  }
   if (keyword?.trim()) {
     const pattern = new RegExp(keyword.trim(), 'i')
     filter.$or = [
@@ -139,7 +150,15 @@ export async function listProducts(ctx: Context): Promise<void> {
     ]
   }
   if (categoryId && Types.ObjectId.isValid(categoryId)) {
-    filter.categoryId = new Types.ObjectId(categoryId)
+    const selectedCategoryId = new Types.ObjectId(categoryId)
+    if (!visibleCategoryIds.some((row) => row.toString() === selectedCategoryId.toString())) {
+      ctx.body = {
+        total: 0,
+        products: [],
+      }
+      return
+    }
+    filter.categoryId = selectedCategoryId
   }
 
   const products = (await ProductModel.find(filter).sort({ createdAt: -1 }).lean().exec()) as ProductLean[]
@@ -222,7 +241,13 @@ export async function getProduct(ctx: Context): Promise<void> {
 }
 
 export async function listProductCategories(ctx: Context): Promise<void> {
-  const rows = await ProductCategoryModel.find({}).sort({ sortOrder: 1, createdAt: -1 }).lean().exec()
+  const rows = await ProductCategoryModel.find({
+    enabled: { $ne: false },
+    purchasable: { $ne: false },
+  })
+    .sort({ sortOrder: 1, createdAt: -1 })
+    .lean()
+    .exec()
   ctx.body = {
     categories: (rows as any[]).map((row) => ({
       id: row._id.toString(),
@@ -230,6 +255,7 @@ export async function listProductCategories(ctx: Context): Promise<void> {
       description: row.description ?? null,
       sortOrder: Number(row.sortOrder) || 0,
       enabled: row.enabled !== false,
+      purchasable: row.purchasable !== false,
       isBuiltin: row.isBuiltin === true,
       createdAt: row.createdAt?.toISOString?.() ?? null,
       updatedAt: row.updatedAt?.toISOString?.() ?? null,

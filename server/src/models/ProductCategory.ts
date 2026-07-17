@@ -7,6 +7,7 @@ const productCategorySchema = new Schema<ProductCategoryDocument>(
     description: { type: String, default: null },
     sortOrder: { type: Number, required: true, default: 0 },
     enabled: { type: Boolean, required: true, default: true },
+    purchasable: { type: Boolean, required: true, default: true },
     normalizedName: { type: String, required: true, trim: true },
     isBuiltin: { type: Boolean, required: true, default: false },
   },

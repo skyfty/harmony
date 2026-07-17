@@ -748,6 +748,7 @@
         "description": "Description",
         "sortOrder": "Sort Order",
         "enabled": "Enabled",
+        "purchasable": "Purchasable",
         "isBuiltin": "Built-in",
         "updatedAt": "Updated At",
         "actions": "Actions"
@@ -776,6 +777,9 @@
         },
         "enabled": {
           "label": "Enabled"
+        },
+        "purchasable": {
+          "label": "Purchasable"
         }
       }
     }

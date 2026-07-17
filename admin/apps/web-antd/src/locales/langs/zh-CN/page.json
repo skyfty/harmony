@@ -650,6 +650,7 @@
         "description": "描述",
         "sortOrder": "排序",
         "enabled": "启用",
+        "purchasable": "可购买",
         "isBuiltin": "内置",
         "updatedAt": "更新时间",
         "actions": "操作"
@@ -661,7 +662,8 @@
         "name": { "label": "名称", "required": "请输入分类名称" },
         "description": { "label": "描述" },
         "sortOrder": { "label": "排序" },
-        "enabled": { "label": "启用" }
+        "enabled": { "label": "启用" },
+        "purchasable": { "label": "可购买" }
       }
     }
   },

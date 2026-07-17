@@ -9,6 +9,7 @@ export interface ProductCategoryItem {
   description: string | null
   sortOrder: number
   enabled: boolean
+  purchasable: boolean
   isBuiltin: boolean
   createdAt: string | null
   updatedAt: string | null

@@ -6,6 +6,7 @@ export interface ProductCategoryItem {
   description: null | string;
   sortOrder: number;
   enabled: boolean;
+  purchasable: boolean;
   isBuiltin: boolean;
   createdAt: string;
   updatedAt: string;
@@ -19,6 +20,7 @@ export async function createProductCategoryApi(payload: {
   description?: string;
   enabled?: boolean;
   name: string;
+  purchasable?: boolean;
   sortOrder?: number;
 }) {
   return requestClient.post<ProductCategoryItem>('/admin/product-categories', payload);
@@ -30,6 +32,7 @@ export async function updateProductCategoryApi(
     description?: null | string;
     enabled?: boolean;
     name?: string;
+    purchasable?: boolean;
     sortOrder?: number;
   },
 ) {

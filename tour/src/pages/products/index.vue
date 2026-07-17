@@ -3,11 +3,6 @@
     <MiniAuthRecovery />
     <PageHeader title="商品中心" :show-back="false" />
 
-    <view class="hero">
-      <text class="hero__title">统一购买与使用中心</text>
-      <text class="hero__desc">车辆、人物、船舶、飞行器等都在这里购买，购买后可按类型单独设置使用中状态。</text>
-    </view>
-
     <view class="toolbar">
       <input
         v-model="keyword"
@@ -120,7 +115,7 @@ const products = ref<ProductListItem[]>([])
 const categoryChips = computed(() => [
   { value: '', label: '全部' },
   ...categories.value
-    .filter((item) => item.enabled !== false)
+    .filter((item) => item.enabled !== false && item.purchasable !== false)
     .map((item) => ({
       value: item.id,
       label: item.name,

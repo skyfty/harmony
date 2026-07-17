@@ -30,6 +30,7 @@ interface CategoryFormModel {
   description: string;
   enabled: boolean;
   name: string;
+  purchasable: boolean;
   sortOrder: number;
 }
 
@@ -43,6 +44,7 @@ const formModel = reactive<CategoryFormModel>({
   description: '',
   sortOrder: 0,
   enabled: true,
+  purchasable: true,
 });
 
 const { t } = useI18n();
@@ -53,6 +55,7 @@ function resetForm() {
   formModel.description = '';
   formModel.sortOrder = 0;
   formModel.enabled = true;
+  formModel.purchasable = true;
 }
 
 function openCreate() {
@@ -67,6 +70,7 @@ function openEdit(row: ProductCategoryItem) {
   formModel.description = row.description || '';
   formModel.sortOrder = row.sortOrder || 0;
   formModel.enabled = row.enabled !== false;
+  formModel.purchasable = row.purchasable !== false;
   modalOpen.value = true;
 }
 
@@ -84,6 +88,7 @@ async function submit() {
         description: formModel.description || null,
         sortOrder: formModel.sortOrder,
         enabled: formModel.enabled,
+        purchasable: formModel.purchasable,
       });
       message.success(t('page.products.categories.message.updateSuccess'));
     } else {
@@ -92,6 +97,7 @@ async function submit() {
         description: formModel.description || undefined,
         sortOrder: formModel.sortOrder,
         enabled: formModel.enabled,
+        purchasable: formModel.purchasable,
       });
       message.success(t('page.products.categories.message.createSuccess'));
     }
@@ -134,6 +140,12 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
         minWidth: 100,
         title: t('page.products.categories.table.enabled'),
         slots: { default: 'enabled' },
+      },
+      {
+        field: 'purchasable',
+        minWidth: 100,
+        title: t('page.products.categories.table.purchasable'),
+        slots: { default: 'purchasable' },
       },
       {
         field: 'isBuiltin',
@@ -189,6 +201,10 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
         <Switch :checked="row.enabled" disabled />
       </template>
 
+      <template #purchasable="{ row }">
+        <Switch :checked="row.purchasable" disabled />
+      </template>
+
       <template #builtin="{ row }">
         <span>{{ row.isBuiltin ? t('page.products.categories.values.yes') : t('page.products.categories.values.no') }}</span>
       </template>
@@ -232,13 +248,16 @@ const [Grid, gridApi] = useVbenVxeGrid<ProductCategoryItem>({
           <Input v-model:value="formModel.name" allow-clear />
         </Form.Item>
         <Form.Item :label="t('page.products.categories.form.description.label')" name="description">
-          <Input.TextArea v-model:value="formModel.description" allow-clear rows="4" />
+          <Input.TextArea v-model:value="formModel.description" allow-clear :rows="4" />
         </Form.Item>
         <Form.Item :label="t('page.products.categories.form.sortOrder.label')" name="sortOrder">
           <InputNumber v-model:value="formModel.sortOrder" :min="0" style="width: 100%" />
         </Form.Item>
         <Form.Item :label="t('page.products.categories.form.enabled.label')" name="enabled">
           <Switch v-model:checked="formModel.enabled" />
+        </Form.Item>
+        <Form.Item :label="t('page.products.categories.form.purchasable.label')" name="purchasable">
+          <Switch v-model:checked="formModel.purchasable" />
         </Form.Item>
       </Form>
     </Modal>

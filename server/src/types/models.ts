@@ -686,6 +686,8 @@ export interface ProductCategoryDocument extends Document<Types.ObjectId> {
   sortOrder: number
   /** 中文：是否启用 */
   enabled: boolean
+  /** 中文：是否可购买 */
+  purchasable: boolean
   /** 中文：规范化名称 */
   normalizedName: string
   /** 中文：是否内置 */
