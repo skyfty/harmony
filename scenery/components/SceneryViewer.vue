@@ -6287,8 +6287,9 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
       return false;
     }
 
-    const { prefab, sceneRootObject, effectiveNode } = instanced;
-    const effectiveNodeId = effectiveNode.id ?? null;
+    const { prefab, sceneRootObject, cloned } = instanced;
+    const effectiveNode = cloned.root
+    const effectiveNodeId = effectiveNode.id ?? null
     if (!effectiveNodeId) {
       return false;
     }
@@ -6335,6 +6336,7 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
         onCommit: async () => {
           registerSceneSubtree(sceneRootObject);
           rebuildPreviewNodeMap(document);
+          refreshAnimationControllers(activeScene);
           refreshMultiuserNodeReferences(document);
           refreshBehaviorProximityCandidates();
           if (prefab.physicsRelevant) {
@@ -6374,6 +6376,8 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
               updateCharacterFollowCamera(0, { immediate: true });
             }
             binding.steerComponent.props = nextSteerProps;
+            refreshCharacterControllerAnimationRuntimeEntries();
+            refreshCharacterPathFollowRuntimeEntries();
             return { success: true };
           }
 

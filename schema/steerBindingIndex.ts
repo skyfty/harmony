@@ -50,8 +50,12 @@ export function createSteerBindingIndex(): SteerBindingIndex {
     if (!steerNodeId) {
       return
     }
+    const steerNode = node
+    if (!steerNode) {
+      return
+    }
     removeNode(steerNodeId)
-    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE)
+    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(steerNode, STEER_COMPONENT_TYPE)
     if (!steerComponent) {
       return
     }
@@ -62,7 +66,7 @@ export function createSteerBindingIndex(): SteerBindingIndex {
     }
     const binding: ResolvedSteerBinding = {
       steerNodeId,
-      steerNode: node,
+      steerNode,
       steerComponent,
       steerProps,
       targetNodeId,

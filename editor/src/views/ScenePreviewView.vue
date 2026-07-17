@@ -6536,6 +6536,7 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 				onCommit: async () => {
 					registerSubtree(sceneRootObject)
 					rebuildPreviewNodeMap(currentDocument)
+					refreshAnimations()
 					refreshBehaviorProximityCandidates()
 					await syncPhysicsBodiesForDocument(currentDocument)
 				},
@@ -6562,6 +6563,8 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 							targetNodeId: effectiveNodeId,
 							defaultIdentifier: steerBinding!.steerProps.defaultIdentifier,
 						})
+						resetCharacterControlInputs()
+						resetProtagonistPoseState()
 						steerBinding!.steerComponent.props = nextSteerProps
 						pendingDefaultCharacterControlNodeId.value = effectiveNodeId
 						if (characterCameraMode.value !== 'follow') {
@@ -7224,6 +7227,25 @@ function resolveNodeAnchorPoint(nodeId: string | null, fallback: THREE.Vector3):
 
 function resetProtagonistPoseState() {
 	protagonistPoseSynced = false
+}
+
+function resetCharacterControlInputs(): void {
+	characterAuthorityInput.moveX = 0
+	characterAuthorityInput.moveZ = 0
+	characterAuthorityInput.turn = 0
+	characterAuthorityInput.jump = false
+	characterAuthorityInput.sprint = false
+	characterAuthorityInput.crouch = false
+	characterAuthorityInput.interact = false
+	characterKeyState.forward = false
+	characterKeyState.backward = false
+	characterKeyState.left = false
+	characterKeyState.right = false
+	characterKeyState.jump = false
+	characterKeyState.sprint = false
+	characterKeyState.crouch = false
+	characterKeyState.interact = false
+	characterInputJumpLatch = false
 }
 
 function resetCharacterFollowCameraState(): void {

@@ -10,7 +10,7 @@ import {
   type RuntimePrefabCloneResult,
 } from './runtimePrefab'
 
-export interface RuntimePrefabControlSwitchInstance<TGraph = unknown> {
+export interface RuntimePrefabControlSwitchInstance<TGraph extends { root: Object3D } = { root: Object3D }> {
   prefab: NodePrefabData
   cloned: RuntimePrefabCloneResult
   runtimeDocument: SceneJsonExportDocument
@@ -18,7 +18,7 @@ export interface RuntimePrefabControlSwitchInstance<TGraph = unknown> {
   sceneRootObject: Object3D
 }
 
-export interface RuntimePrefabControlSwitchInstantiationOptions<TGraph> {
+export interface RuntimePrefabControlSwitchInstantiationOptions<TGraph extends { root: Object3D }> {
   buildOptions: SceneGraphBuildOptions | ((document: SceneJsonExportDocument, prefab: NodePrefabData, cloned: RuntimePrefabCloneResult) => SceneGraphBuildOptions | Promise<SceneGraphBuildOptions>)
   createResourceCache: (document: SceneJsonExportDocument, buildOptions: SceneGraphBuildOptions) => ResourceCache
   buildSceneGraph: (document: SceneJsonExportDocument, resourceCache: ResourceCache, buildOptions: SceneGraphBuildOptions) => Promise<TGraph>
@@ -31,7 +31,7 @@ export interface RuntimePrefabControlSwitchActivationResult {
   message?: string
 }
 
-export interface RuntimePrefabControlSwitchSwapContext<TGraph> {
+export interface RuntimePrefabControlSwitchSwapContext<TGraph extends { root: Object3D }> {
   document: SceneJsonExportDocument
   targetNodeId: string
   previousNode: SceneNode
@@ -39,7 +39,7 @@ export interface RuntimePrefabControlSwitchSwapContext<TGraph> {
   instance: RuntimePrefabControlSwitchInstance<TGraph>
 }
 
-export interface RuntimePrefabControlSwitchSwapOptions<TGraph> {
+export interface RuntimePrefabControlSwitchSwapOptions<TGraph extends { root: Object3D }> {
   scene: { add: (object: Object3D) => void; remove: (object: Object3D) => void } | null
   replaceSceneNodeById: (nodes: SceneNode[] | null | undefined, nodeId: string, replacement: SceneNode) => boolean
   rebuildNodeMap: (document: SceneJsonExportDocument) => void
@@ -50,7 +50,7 @@ export interface RuntimePrefabControlSwitchSwapOptions<TGraph> {
   activate: (context: RuntimePrefabControlSwitchSwapContext<TGraph>) => Promise<RuntimePrefabControlSwitchActivationResult> | RuntimePrefabControlSwitchActivationResult
 }
 
-export async function instantiateRuntimePrefabControlSwitchInstance<TGraph>(
+export async function instantiateRuntimePrefabControlSwitchInstance<TGraph extends { root: Object3D }>(
   raw: string,
   options: RuntimePrefabControlSwitchInstantiationOptions<TGraph>,
 ): Promise<RuntimePrefabControlSwitchInstance<TGraph> | null> {
@@ -58,7 +58,7 @@ export async function instantiateRuntimePrefabControlSwitchInstance<TGraph>(
   return await instantiateRuntimePrefabControlSwitchInstanceFromPrefab(prefab, options)
 }
 
-export async function instantiateRuntimePrefabControlSwitchInstanceFromPrefab<TGraph>(
+export async function instantiateRuntimePrefabControlSwitchInstanceFromPrefab<TGraph extends { root: Object3D }>(
   prefab: NodePrefabData,
   options: RuntimePrefabControlSwitchInstantiationOptions<TGraph>,
 ): Promise<RuntimePrefabControlSwitchInstance<TGraph> | null> {
@@ -136,7 +136,7 @@ function alignReplacementObjectBottomToOldObject(
   }
 }
 
-export async function performRuntimePrefabControlSwitch<TGraph>(
+export async function performRuntimePrefabControlSwitch<TGraph extends { root: Object3D }>(
   context: RuntimePrefabControlSwitchSwapContext<TGraph>,
   options: RuntimePrefabControlSwitchSwapOptions<TGraph>,
 ): Promise<RuntimePrefabControlSwitchActivationResult> {

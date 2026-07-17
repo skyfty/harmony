@@ -501,15 +501,15 @@ export function collectRuntimeRequiredConfigAssetIds(scene: StoredSceneDocument)
 export function collectSceneAssetReferences(scene: StoredSceneDocument): Set<string> {
   const bucket = collectDirectSceneAssetReferenceIds(scene)
 
-  const catalog = scene.assetCatalog ?? {}
-  const removable: string[] = []
-  bucket.forEach((assetId) => {
-    const asset = getAssetFromCatalog(catalog, assetId)
-    if (asset?.type === 'prefab') {
-      removable.push(assetId)
-    }
-  })
-  removable.forEach((assetId) => bucket.delete(assetId))
+  // const catalog = scene.assetCatalog ?? {}
+  // const removable: string[] = []
+  // bucket.forEach((assetId) => {
+  //   const asset = getAssetFromCatalog(catalog, assetId)
+  //   if (asset?.type === 'prefab') {
+  //     removable.push(assetId)
+  //   }
+  // })
+  // removable.forEach((assetId) => bucket.delete(assetId))
 
   return bucket
 }
