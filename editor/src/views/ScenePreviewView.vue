@@ -25,7 +25,8 @@ import {
 	disposeSkyCubeTexture,
 	createRuntimePrefabDocument,
 	parseRuntimePrefabData,
-  loadSkyCubeTexture,
+	createSteerBindingIndex,
+	loadSkyCubeTexture,
 	isSkyCubeArchiveExtension,
 	isRuntimeHiddenInPreview,
 	type ShowPurposeBehaviorButton,
@@ -2650,6 +2651,7 @@ const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: '
 
 function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined): void {
 	disposeSignboardBillboards(scene)
+	clearSteerBindingIndex()
 	rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap)
 	signboardNodeIds.clear()
 	punchNodeIds.clear()
@@ -2663,6 +2665,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
 		})
 	}
 	for (const [nodeId, node] of previewNodeMap.entries()) {
+		syncSteerBindingIndexForNode(node)
 		const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as
 			| SceneNodeComponentState<SignboardComponentProps>
 			| undefined
@@ -3635,6 +3638,26 @@ function resolveCharacterControllerComponent(
 	node: SceneNode | null | undefined,
 ): SceneNodeComponentState<CharacterControllerComponentProps> | null {
 	return resolveEnabledComponentState<CharacterControllerComponentProps>(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)
+}
+
+const steerBindingIndex = createSteerBindingIndex()
+let runtimePrefabControlSwitchInFlight = false
+let runtimePrefabControlSwitchSuppressUntil = 0
+const RUNTIME_PREFAB_CONTROL_SWITCH_SUPPRESS_MS = 250
+
+function clearSteerBindingIndex(): void {
+	steerBindingIndex.clear()
+}
+
+function syncSteerBindingIndexForNode(node: SceneNode | null | undefined): void {
+	steerBindingIndex.syncNode(node)
+}
+
+function resolveSteerBindingByTargetNodeId(
+	_document: SceneJsonExportDocument | null,
+	targetNodeId: string | null,
+) {
+	return steerBindingIndex.resolveByTargetNodeId(targetNodeId)
 }
 
 function resolveCharacterControllerBindingNodeId(nodeId: string | null): string | null {
@@ -6399,24 +6422,43 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'Scene is not ready.' })
 		return
 	}
+	const now = Date.now()
+	if (runtimePrefabControlSwitchInFlight || now < runtimePrefabControlSwitchSuppressUntil) {
+		console.warn(
+			`[ScenePreview][RuntimePrefabSwitch] ignored-reentrant eventNodeId=${event.nodeId ?? ''} targetType=${event.targetType} prefabAssetId=${typeof event.prefabAssetId === 'string' ? event.prefabAssetId.trim() : ''}`,
+		)
+		resolveBehaviorToken(event.token, { type: 'continue' })
+		return
+	}
+	runtimePrefabControlSwitchInFlight = true
 	const targetNodeId = resolveControlNodeSwitchTargetNodeId()
 	if (!targetNodeId) {
+		runtimePrefabControlSwitchInFlight = false
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'No active control node was found.' })
 		return
 	}
 	const targetNode = resolveNodeById(targetNodeId)
 	if (!targetNode) {
+		runtimePrefabControlSwitchInFlight = false
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'Control node is missing.' })
 		return
 	}
 	const prefabAssetId = typeof event.prefabAssetId === 'string' ? event.prefabAssetId.trim() : ''
 	if (!prefabAssetId) {
+		runtimePrefabControlSwitchInFlight = false
 		resolveBehaviorToken(event.token, { type: 'fail', message: 'No fallback prefab asset was selected.' })
+		return
+	}
+	const isCharacterTarget = event.targetType === 'character'
+	const steerBinding = isCharacterTarget ? resolveSteerBindingByTargetNodeId(currentDocument, targetNodeId) : null
+	if (isCharacterTarget && !steerBinding) {
+		runtimePrefabControlSwitchInFlight = false
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No active character steer binding was found.' })
 		return
 	}
 
 	try {
-		console.info(`[ScenePreview][RuntimePrefabSwitch] start targetNodeId=${targetNodeId} targetType=${event.targetType} prefabAssetId=${prefabAssetId}`)
+		console.info(`[ScenePreview][RuntimePrefabSwitch] start eventNodeId=${event.nodeId ?? ''} targetNodeId=${targetNodeId} targetType=${event.targetType} prefabAssetId=${prefabAssetId} token=${event.token}`)
 		const raw = await loadTextAssetContent(prefabAssetId)
 		if (!raw) {
 			console.warn(`[ScenePreview][RuntimePrefabSwitch] load-failed prefabAssetId=${prefabAssetId}`)
@@ -6459,14 +6501,13 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 			return
 		}
 		const { sceneRootObject, cloned } = instanced
-		const effectiveNode = cloned.root;
+		const effectiveNode = cloned.root
 		const effectiveNodeId = effectiveNode.id ?? null
 		if (!effectiveNodeId) {
 			console.warn(`[ScenePreview][RuntimePrefabSwitch] effective-node-missing prefabAssetId=${prefabAssetId} targetNodeId=${targetNodeId} sceneRootType=${sceneRootObject.type}`)
 			resolveBehaviorToken(event.token, { type: 'fail', message: 'Prefab root is missing a usable control node.' })
 			return
 		}
-		const isCharacterTarget = event.targetType === 'character'
 		const effectiveCharacterComponent = resolveCharacterControllerComponent(effectiveNode)
 		const effectiveVehicleComponent = resolveVehicleComponent(effectiveNode)
 		console.info(`[ScenePreview][RuntimePrefabSwitch] instantiated targetNodeId=${targetNodeId} effectiveNodeId=${effectiveNodeId} effectiveNodeName=${effectiveNode.name ?? ''} sceneRootType=${sceneRootObject.type} hasCharacter=${Boolean(effectiveCharacterComponent)} hasVehicle=${Boolean(effectiveVehicleComponent)}`)
@@ -6521,6 +6562,13 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 				},
 				activate: async () => {
 					if (isCharacterTarget) {
+						const nextSteerProps = clampSteerComponentProps({
+							...steerBinding!.steerComponent.props,
+							targetType: 'character',
+							targetNodeId: effectiveNodeId,
+							defaultIdentifier: steerBinding!.steerProps.defaultIdentifier,
+						})
+						steerBinding!.steerComponent.props = nextSteerProps
 						pendingDefaultCharacterControlNodeId.value = effectiveNodeId
 						if (characterCameraMode.value !== 'follow') {
 							characterCameraMode.value = 'follow'
@@ -6555,6 +6603,9 @@ async function switchControlNodeRuntimePrefab(event: Extract<BehaviorRuntimeEven
 	} catch (error) {
 		console.warn(`[ScenePreview][RuntimePrefabSwitch] exception targetNodeId=${targetNodeId} error=${(error as Error)?.message ?? String(error)}`)
 		resolveBehaviorToken(event.token, { type: 'fail', message: (error as Error)?.message ?? 'Failed to switch control node.' })
+	} finally {
+		runtimePrefabControlSwitchInFlight = false
+		runtimePrefabControlSwitchSuppressUntil = Date.now() + RUNTIME_PREFAB_CONTROL_SWITCH_SUPPRESS_MS
 	}
 }
 
@@ -10924,6 +10975,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
 	if (!options.preservePreviewNodeMap) {
 		previewNodeMap.clear()
+		clearSteerBindingIndex()
 	}
 	previewComponentManager.reset()
 	resetBehaviorRuntime()
@@ -11488,6 +11540,7 @@ function removeNodeSubtree(nodeId: string) {
 	target.traverse((child) => {
 		const id = child.userData?.nodeId as string | undefined
 		if (id) {
+			steerBindingIndex.removeNode(id)
 			releaseModelInstance(id)
 			nodeObjectMap.delete(id)
 			clearInstancedLodRuntimeEntryCacheForNode(id)
@@ -11521,12 +11574,13 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 			pending?.delete(nodeId)
 			attachRuntimeForNode(nodeId, child)
 			syncInteractionLayersForNode(nodeId, child)
+			const nodeState = resolveNodeById(nodeId)
+			syncSteerBindingIndexForNode(nodeState)
 			const instancedAssetId = child.userData?.instancedAssetId as string | undefined
 			if (instancedAssetId) {
 				ensureInstancedMeshesRegistered(instancedAssetId)
 				syncInstancedTransform(child)
 			}
-			const nodeState = resolveNodeById(nodeId)
 			if (!nodeState) {
 				console.warn(
 					'[ScenePreview] Runtime object has nodeId missing from preview node state; runtime bindings may be incomplete',

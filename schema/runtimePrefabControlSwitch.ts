@@ -1,4 +1,4 @@
-import type { Object3D } from 'three'
+import { Box3, type Object3D } from 'three'
 import type { SceneJsonExportDocument, SceneNode } from './core'
 import ResourceCache from './ResourceCache'
 import type { SceneGraphBuildOptions } from './sceneGraph'
@@ -99,6 +99,43 @@ async function cleanupSceneObject(object: Object3D | null | undefined, remove: (
   }
 }
 
+function getObjectWorldBounds(object: Object3D | null | undefined): Box3 | null {
+  if (!object) {
+    return null
+  }
+  object.updateWorldMatrix(true, true)
+  const bounds = new Box3().setFromObject(object)
+  return bounds.isEmpty() ? null : bounds
+}
+
+function alignReplacementObjectBottomToOldObject(
+  replacementObject: Object3D,
+  replacementNode: SceneNode,
+  oldObject: Object3D | null,
+): { oldMinY: number; newMinY: number; deltaY: number } | null {
+  const oldBounds = getObjectWorldBounds(oldObject)
+  const newBounds = getObjectWorldBounds(replacementObject)
+  if (!oldBounds || !newBounds) {
+    return null
+  }
+  const deltaY = oldBounds.min.y - newBounds.min.y
+  if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1e-6) {
+    return {
+      oldMinY: oldBounds.min.y,
+      newMinY: newBounds.min.y,
+      deltaY: 0,
+    }
+  }
+  replacementObject.position.y += deltaY
+  replacementNode.position.y += deltaY
+  replacementObject.updateMatrixWorld(true)
+  return {
+    oldMinY: oldBounds.min.y,
+    newMinY: newBounds.min.y,
+    deltaY,
+  }
+}
+
 export async function performRuntimePrefabControlSwitch<TGraph>(
   context: RuntimePrefabControlSwitchSwapContext<TGraph>,
   options: RuntimePrefabControlSwitchSwapOptions<TGraph>,
@@ -107,7 +144,7 @@ export async function performRuntimePrefabControlSwitch<TGraph>(
   if (!scene) {
     return { success: false, message: 'Scene is not ready.' }
   }
-  const { document, targetNodeId, previousNode, instance } = context
+  const { document, targetNodeId, previousNode, oldObject, instance } = context
   const { sceneRootObject, cloned } = instance
   const effectiveNode = cloned.root
   const effectiveNodeId = effectiveNode.id ?? null
@@ -120,6 +157,12 @@ export async function performRuntimePrefabControlSwitch<TGraph>(
 
   document.updatedAt = new Date().toISOString()
   scene.add(sceneRootObject)
+  const placementAlignment = alignReplacementObjectBottomToOldObject(sceneRootObject, effectiveNode, oldObject)
+  if (placementAlignment) {
+    console.info(
+      `[RuntimePrefabControlSwitch] bottom-align targetNodeId=${targetNodeId} oldMinY=${placementAlignment.oldMinY.toFixed(3)} newMinY=${placementAlignment.newMinY.toFixed(3)} deltaY=${placementAlignment.deltaY.toFixed(3)} oldObjectExists=${Boolean(oldObject)}`,
+    )
+  }
 
   try {
     await options.onCommit?.(context)

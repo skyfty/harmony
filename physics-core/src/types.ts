@@ -215,6 +215,7 @@ export type PhysicsCharacterInputCommand = {
   sprint: boolean
   crouch: boolean
   interact: boolean
+  resetState?: boolean
 }
 
 export type PhysicsRaycastCommand = {

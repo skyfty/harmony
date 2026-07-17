@@ -212,6 +212,13 @@ export abstract class PhysicsWorldBase<
     if (!state) {
       return
     }
+    if (command.resetState) {
+      state.motorState = createPhysicsCharacterMotorState(
+        typeof command.yaw === 'number' && Number.isFinite(command.yaw)
+          ? command.yaw
+          : state.motorState.yaw,
+      )
+    }
     state.input = command
     this.wakeCharacterBody(state)
   }

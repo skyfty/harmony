@@ -88,6 +88,11 @@ export type {
 } from './skyCubeTexture'
 
 export { computePlaySoundDistanceGain, resolvePlaySoundSourcePoint } from './soundDistance'
+export {
+  createSteerBindingIndex,
+  type ResolvedSteerBinding,
+  type SteerBindingIndex,
+} from './steerBindingIndex'
 
 export { getDefaultUvDebugTexture, createUvDebugMaterial } from './debugTextures'
 

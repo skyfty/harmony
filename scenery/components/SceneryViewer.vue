@@ -572,6 +572,7 @@ import {
 import {
   cloneRuntimePrefabNode,
   createRuntimePrefabDocument,
+  createSteerBindingIndex,
   type RuntimePrefabInitializationMode,
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
@@ -2049,6 +2050,7 @@ previewComponentManager.registerDefinition(preloadableComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
+const steerBindingIndex = createSteerBindingIndex();
 const hiddenVehicleDriveNodeIds = new Set<string>();
 const assetNodeIdMap = new Map<string, Set<string>>();
 const multiuserNodeIds = new Set<string>();
@@ -5824,14 +5826,6 @@ async function commitSceneEntryRendering(
   return isCurrentInitializationToken(token) && !error.value;
 }
 
-type ResolvedSteerBinding = {
-  steerNodeId: string;
-  steerNode: SceneNode;
-  steerComponent: SceneNodeComponentState<SteerComponentProps>;
-  steerProps: SteerComponentProps;
-  targetNodeId: string;
-};
-
 function findFirstVehicleNodeId(node: SceneNode | null | undefined): string | null {
   if (!node) {
     return null;
@@ -6011,38 +6005,19 @@ function resolveDefaultCharacterSteerNodeId(
   return fallback;
 }
 
+function clearSteerBindingIndex(): void {
+  steerBindingIndex.clear();
+}
+
+function syncSteerBindingIndexForNode(node: SceneNode | null | undefined): void {
+  steerBindingIndex.syncNode(node);
+}
+
 function resolveSteerBindingByTargetNodeId(
-  document: SceneJsonExportDocument | null,
+  _document: SceneJsonExportDocument | null,
   targetNodeId: string | null,
-): ResolvedSteerBinding | null {
-  const normalizedTargetNodeId = typeof targetNodeId === 'string' ? targetNodeId.trim() : '';
-  if (!document || !normalizedTargetNodeId) {
-    return null;
-  }
-  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : [];
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
-    if (steerComponent) {
-      const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
-      if (steerProps.targetNodeId === normalizedTargetNodeId) {
-        return {
-          steerNodeId: node.id,
-          steerNode: node,
-          steerComponent,
-          steerProps,
-          targetNodeId: normalizedTargetNodeId,
-        };
-      }
-    }
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return null;
+) {
+  return steerBindingIndex.resolveByTargetNodeId(targetNodeId);
 }
 
 function findMatchingSteerRuntimePrefabRequest(
@@ -6242,7 +6217,14 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   return true;
 }
 
+let runtimePrefabControlSwitchInFlight = false;
+
 async function switchControlNodeToAsset(targetType: SteerControllableTargetType, prefabAssetId?: string | null): Promise<boolean> {
+  if (runtimePrefabControlSwitchInFlight) {
+    console.warn(`[SceneryViewer] Ignored reentrant control-node switch targetType=${targetType} prefabAssetId=${typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''}`);
+    return false;
+  }
+  runtimePrefabControlSwitchInFlight = true;
   try {
     const document = currentDocument;
     if (!document) {
@@ -6414,8 +6396,10 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     }
     return true;
   } catch (error) {
-    console.warn('[SceneryViewer] Failed to switch control node', error);
+    console.warn(`[SceneryViewer] Failed to switch control node error=${(error as Error)?.message ?? String(error)}`);
     return false;
+  } finally {
+    runtimePrefabControlSwitchInFlight = false;
   }
 }
 
@@ -6800,6 +6784,7 @@ const cancelBehaviorAlert = behaviorAlert.cancel;
 function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined) {
   assetNodeIdMap.clear();
   disposeSignboardBillboards(renderContext?.scene ?? null);
+  clearSteerBindingIndex();
   rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap);
   signboardNodeIds.clear();
   punchNodeIds.clear();
@@ -6816,6 +6801,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
   }
 
   for (const [nodeId, node] of previewNodeMap.entries()) {
+    syncSteerBindingIndexForNode(node);
     const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
     if (signboardState?.enabled) {
       signboardNodeIds.add(nodeId);
@@ -8936,6 +8922,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       ensureInstancedMeshesRegistered(instancedAssetId);
     }
     const nodeState = resolveNodeById(nodeId);
+    syncSteerBindingIndexForNode(nodeState);
     const guideboardVisibility = resolveGuideboardInitialVisibility(nodeState);
     if (guideboardVisibility !== null) {
       object.visible = guideboardVisibility;
@@ -19779,6 +19766,7 @@ function teardownRenderer() {
   pendingDefaultSteerDriveEvent.value = null;
   clearSpawnedRuntimePrefabRoots();
   previewNodeMap.clear();
+  clearSteerBindingIndex();
   autoTourRuntime.reset();
   activeAutoTourNodeIds.clear();
   autoTourRotationOnlyHold.value = false;
@@ -20655,6 +20643,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   clearSpawnedRuntimePrefabRoots();
 
   previewNodeMap.clear();
+  clearSteerBindingIndex();
   autoTourRuntime.reset();
   waterRuntime.reset();
   activeAutoTourNodeIds.clear();
