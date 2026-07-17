@@ -56,6 +56,7 @@ interface ProductResponse {
     name: string
     type: string
     prefabUrl?: string
+    isDefault?: boolean
     selected?: boolean
   } | null
 }
@@ -119,6 +120,7 @@ function buildProductResponse(product: ProductLean, userEntry?: {
           name: controllableAsset.name ?? '',
           type: controllableAsset.type,
           prefabUrl: controllableAsset.prefabUrl ?? '',
+          isDefault: controllableAsset.isDefault === true,
           selected,
         }
       : null,

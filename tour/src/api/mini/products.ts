@@ -28,6 +28,7 @@ export interface ProductListItem {
   purchasedAt?: string
   state?: 'locked' | 'unused' | 'used' | 'expired'
   controllableAsset?: (Pick<ControllableAsset, 'id' | 'identifier' | 'name' | 'type' | 'prefabUrl'> & {
+    isDefault?: boolean
     selected?: boolean
   }) | null
 }

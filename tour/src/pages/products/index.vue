@@ -4,33 +4,20 @@
     <PageHeader title="商品中心" :show-back="false" />
 
     <view class="toolbar">
-      <input
-        v-model="keyword"
-        class="search"
-        placeholder="搜索商品名称或编号"
-        confirm-type="search"
-      />
-
       <scroll-view scroll-x class="categories" show-scrollbar="false">
-        <text
-          v-for="item in categoryChips"
-          :key="item.value || 'all'"
-          class="category"
-          :class="{ active: selectedCategoryId === item.value }"
-          @tap="selectedCategoryId = item.value"
-        >
-          {{ item.label }}
-        </text>
+        <view class="category-strip">
+          <text
+            v-for="item in categoryChips"
+            :key="item.value || 'all'"
+            class="category"
+            :class="{ active: selectedCategoryId === item.value }"
+            @tap="selectedCategoryId = item.value"
+          >
+            {{ item.label }}
+          </text>
+        </view>
       </scroll-view>
 
-      <view class="filters">
-        <view class="filter-pill" :class="{ active: ownedOnly }" @tap="ownedOnly = !ownedOnly">
-          {{ ownedOnly ? '显示全部商品' : '只看已购商品' }}
-        </view>
-        <view class="filter-pill filter-pill--ghost" @tap="reload">
-          刷新
-        </view>
-      </view>
     </view>
 
     <view class="content">
@@ -49,12 +36,15 @@
 
           <text v-if="product.description" class="description">{{ product.description }}</text>
 
-          <view v-if="product.controllableAsset" class="asset-row">
-            <text class="asset-type">{{ controllableLabel(product.controllableAsset.type) }}</text>
-            <text class="asset-id">编号 {{ product.controllableAsset.identifier }}</text>
+                              <view v-if="product.controllableAsset || !isOwnedProduct(product)" class="asset-row">
+            <view v-if="product.controllableAsset" class="asset-row__meta">
+              <text class="asset-type">{{ controllableLabel(product.controllableAsset.type) }}</text>
+              <text class="asset-id">编号 {{ product.controllableAsset.identifier }}</text>
+            </view>
+
           </view>
 
-          <view class="actions">
+          <view v-else class="actions">
             <button
               class="action-btn"
               :class="actionButtonClass(product)"
@@ -102,9 +92,7 @@ import type { MiniPaymentAction } from '@mini-platform/core'
 const fallbackCover = '/static/images/checkin.jpg'
 const controllableLabel = resolveControllableLabel
 
-const keyword = ref('')
 const selectedCategoryId = ref('')
-const ownedOnly = ref(false)
 const loading = ref(false)
 const paymentEnabled = ref(false)
 const showPhoneBindSheet = ref(false)
@@ -123,7 +111,7 @@ const categoryChips = computed(() => [
 ])
 
 const visibleProducts = computed(() => {
-  return products.value.filter((item) => !ownedOnly.value || item.purchased)
+  return products.value
 })
 
 function categoryName(categoryId: string | null | undefined): string {
@@ -139,7 +127,7 @@ function formatPrice(price: number): string {
 }
 
 function statusText(product: ProductListItem): string {
-  if (!product.purchased) {
+  if (!isOwnedProduct(product)) {
     return '可购买'
   }
   if (product.controllableAsset?.selected) {
@@ -155,7 +143,7 @@ function statusText(product: ProductListItem): string {
 }
 
 function statusClass(product: ProductListItem): string {
-  if (!product.purchased) {
+  if (!isOwnedProduct(product)) {
     return 'badge--buy'
   }
   if (product.controllableAsset?.selected) {
@@ -165,9 +153,6 @@ function statusClass(product: ProductListItem): string {
 }
 
 function actionButtonLabel(product: ProductListItem): string {
-  if (!product.purchased) {
-    return '购买'
-  }
   if (product.controllableAsset?.selected) {
     return '使用中'
   }
@@ -178,9 +163,6 @@ function actionButtonLabel(product: ProductListItem): string {
 }
 
 function actionButtonClass(product: ProductListItem): string {
-  if (!product.purchased) {
-    return 'action-btn--primary'
-  }
   if (product.controllableAsset?.selected) {
     return 'action-btn--success'
   }
@@ -191,7 +173,11 @@ function actionButtonClass(product: ProductListItem): string {
 }
 
 function actionDisabled(product: ProductListItem): boolean {
-  return Boolean(product.purchased && !product.controllableAsset)
+  return Boolean(isOwnedProduct(product) && !product.controllableAsset)
+}
+
+function isOwnedProduct(product: ProductListItem): boolean {
+  return Boolean(product.purchased || product.controllableAsset?.isDefault)
 }
 
 async function reload() {
@@ -200,7 +186,6 @@ async function reload() {
     const [categoryRows, productRows] = await Promise.all([
       listProductCategories(),
       listProducts({
-        keyword: keyword.value.trim() || undefined,
         categoryId: selectedCategoryId.value || undefined,
       }),
     ])
@@ -211,7 +196,7 @@ async function reload() {
   }
 }
 
-watch([keyword, selectedCategoryId], () => {
+watch(selectedCategoryId, () => {
   void reload()
 })
 
@@ -231,7 +216,7 @@ onShow(() => {
 })
 
 async function handleCardTap(product: ProductListItem) {
-  if (!product.purchased) {
+  if (!isOwnedProduct(product)) {
     await handlePurchase(product)
     return
   }
@@ -241,7 +226,7 @@ async function handleCardTap(product: ProductListItem) {
 }
 
 async function handlePrimaryAction(product: ProductListItem) {
-  if (!product.purchased) {
+  if (!isOwnedProduct(product)) {
     await handlePurchase(product)
     return
   }
@@ -366,27 +351,25 @@ function handleNavigate(key: NavKey) {
   padding: 0 16px 8px;
 }
 
-.search {
-  box-sizing: border-box;
-  width: 100%;
-  height: 42px;
-  padding: 0 14px;
-  border-radius: 22px;
-  background: #ffffff;
-  box-shadow: 0 8px 20px rgba(31, 47, 77, 0.06);
-}
-
 .categories {
   display: block;
   margin-top: 12px;
+  width: 100%;
+}
+
+.category-strip {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
   white-space: nowrap;
 }
 
 .category {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  margin-right: 8px;
   padding: 8px 14px;
   border-radius: 999px;
   background: #ffffff;
@@ -398,31 +381,6 @@ function handleNavigate(key: NavKey) {
   color: #1f7aec;
   background: #eaf2ff;
   font-weight: 600;
-}
-
-.filters {
-  display: flex;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.filter-pill {
-  height: 32px;
-  line-height: 32px;
-  padding: 0 12px;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #596579;
-  font-size: 12px;
-}
-
-.filter-pill.active {
-  color: #1f7aec;
-  background: #eaf2ff;
-}
-
-.filter-pill--ghost {
-  color: #344054;
 }
 
 .content {
@@ -521,9 +479,17 @@ function handleNavigate(key: NavKey) {
 
 .asset-row {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.asset-row__meta {
+  display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  min-width: 0;
 }
 
 .asset-type,
@@ -556,13 +522,26 @@ function handleNavigate(key: NavKey) {
   font-weight: 600;
 }
 
-.action-btn::after {
-  border: 0;
+.action-btn--cart {
+  display: inline-flex;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
 }
 
-.action-btn--primary {
-  background: linear-gradient(135deg, #2d7ff9, #1f5bd6);
-  color: #ffffff;
+.action-btn__icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.action-btn::after {
+  border: 0;
 }
 
 .action-btn--secondary {
