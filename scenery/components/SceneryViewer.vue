@@ -423,7 +423,7 @@
 </template>
 
 <script setup lang="ts">
-import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, markRaw, shallowRef, toRaw, type EffectScope, type ComponentPublicInstance } from 'vue';
+import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type EffectScope, type ComponentPublicInstance } from 'vue';
 // #ifdef MP-WEIXIN
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
@@ -578,6 +578,7 @@ import {
   type RuntimePrefabSpawnRequest,
   type ExternalControllableAsset,
 } from '@harmony/schema/core';
+import type { ResolvedSteerBinding } from '@harmony/schema/steerBindingIndex';
 import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
 import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, fetchAssetBlob, type AssetCacheEntry } from '@harmony/schema/assetCache';
@@ -813,7 +814,6 @@ import {
 } from '@harmony/schema/components/definitions/modelCollisionComponent';
 import {
   resolveInstancedLodTargetFromSnapshot,
-  type ResolvedSteerBinding,
 } from '@harmony/schema/core';
 import {
   vehicleComponentDefinition,
@@ -6221,64 +6221,38 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
 }
 
 let runtimePrefabControlSwitchInFlight = false;
-
-type ControlNodeSwitchRestoreSnapshot = {
-  targetNodeId: string;
-  replacementNodeId: string | null;
+type ControlNodeRestoreSnapshot = {
   targetType: SteerControllableTargetType;
   prefabAssetId: string;
-  previousNode: SceneNode;
-  previousObject: THREE.Object3D | null;
-  previousSteerBinding: ResolvedSteerBinding | null;
 };
+let latestControlNodeRestoreSnapshot: ControlNodeRestoreSnapshot | null = null;
 
-type ControlNodeRestoreResult =
-  | { type: 'skipped' }
-  | { type: 'continue' }
-  | { type: 'fail'; message?: string };
-
-const lastControlNodeSwitchSnapshot = shallowRef<ControlNodeSwitchRestoreSnapshot | null>(null);
-
-function disposeControlNodeSwitchSnapshot(snapshot: ControlNodeSwitchRestoreSnapshot | null | undefined): void {
-  if (!snapshot?.previousObject) {
-    return;
+function resolveControlNodePrefabAssetId(node: SceneNode | null | undefined): string | null {
+  const userData = node?.userData;
+  const metadataAssetId = userData && typeof userData === 'object'
+    ? (userData as Record<string, unknown>).__prefabAssetId
+    : null;
+  const candidates = [metadataAssetId, node?.sourceAssetId, node?.importMetadata?.assetId];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length) {
+      return candidate.trim();
+    }
   }
-  try {
-    snapshot.previousObject.parent?.remove(snapshot.previousObject);
-    disposeObject(snapshot.previousObject);
-  } catch (error) {
-    console.warn('[SceneryViewer] Failed to dispose control node restore snapshot', error);
-  }
+  return null;
 }
 
-function clearControlNodeSwitchSnapshot(): void {
-  const snapshot = lastControlNodeSwitchSnapshot.value;
-  if (!snapshot) {
-    return;
-  }
-  disposeControlNodeSwitchSnapshot(snapshot);
-  lastControlNodeSwitchSnapshot.value = null;
+function attachControlNodePrefabMetadata(node: SceneNode, prefabAssetId: string): void {
+  node.userData = {
+    ...(node.userData && typeof node.userData === 'object' ? node.userData : {}),
+    __prefabAssetId: prefabAssetId,
+  };
 }
 
-function setControlNodeSwitchSnapshot(snapshot: ControlNodeSwitchRestoreSnapshot | null): void {
-  const previous = lastControlNodeSwitchSnapshot.value;
-  if (previous && previous !== snapshot) {
-    disposeControlNodeSwitchSnapshot(previous);
-  }
-  lastControlNodeSwitchSnapshot.value = snapshot;
-}
-
-function resolveControlNodeSwitchTargetNodeId(document: SceneJsonExportDocument | null | undefined): string | null {
-  if (!document) {
-    return null;
-  }
-  return vehicleDriveNodeId.value
-    ?? resolveDefaultControlledCharacterNodeId()
-    ?? resolveSceneAutoEnterSteerBinding(document)?.targetNodeId
-    ?? null;
-}
-
-async function switchControlNodeToAsset(targetType: SteerControllableTargetType, prefabAssetId?: string | null): Promise<boolean> {
+async function switchControlNodeToAsset(
+  targetType: SteerControllableTargetType,
+  prefabAssetId?: string | null,
+  options: { captureRestoreSnapshot?: boolean } = {},
+): Promise<boolean> {
   if (runtimePrefabControlSwitchInFlight) {
     console.warn(`[SceneryViewer] Ignored reentrant control-node switch targetType=${targetType} prefabAssetId=${typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''}`);
     return false;
@@ -6294,7 +6268,10 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
       return false;
     }
 
-    const currentTargetNodeId = resolveControlNodeSwitchTargetNodeId(document);
+    const currentTargetNodeId = vehicleDriveNodeId.value
+      ?? resolveDefaultControlledCharacterNodeId()
+      ?? resolveSceneAutoEnterSteerBinding(document)?.targetNodeId
+      ?? null;
     if (!currentTargetNodeId) {
       return false;
     }
@@ -6370,20 +6347,14 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     if (!previousNode) {
       return false;
     }
-    const oldObject = nodeObjectMap.get(currentTargetNodeId) ?? null;
-    const oldObjectRaw = oldObject ? toRaw(oldObject) : null;
-    const previousSteerBinding = binding ? markRaw(toRaw(binding)) : null;
-    const restoreSnapshotCandidate: ControlNodeSwitchRestoreSnapshot | null = oldObject
+    const previousPrefabAssetId = resolveControlNodePrefabAssetId(previousNode);
+    const previousControlNodeSnapshot = previousPrefabAssetId
       ? {
-        targetNodeId: currentTargetNodeId,
-        replacementNodeId: effectiveNodeId,
-        targetType,
-        prefabAssetId: assetId,
-        previousNode: markRaw(toRaw(previousNode)),
-        previousObject: markRaw(toRaw(oldObject)),
-        previousSteerBinding,
-      }
+          targetType: binding.steerProps.targetType,
+          prefabAssetId: previousPrefabAssetId,
+        }
       : null;
+    const oldObject = nodeObjectMap.get(currentTargetNodeId) ?? null;
     const activeScene = renderContext?.scene ?? null;
     if (!activeScene) {
       return false;
@@ -6393,7 +6364,7 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
         document,
         targetNodeId: currentTargetNodeId,
         previousNode,
-      oldObject: oldObjectRaw,
+        oldObject,
         instance: instanced,
       },
       {
@@ -6421,40 +6392,29 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
           disposeObject(sceneRootObject);
         },
         cleanupOldObject: async () => {
-          if (oldObjectRaw && !restoreSnapshotCandidate) {
-            oldObjectRaw.parent?.remove(oldObjectRaw);
+          if (oldObject) {
+            oldObject.parent?.remove(oldObject);
             nodeObjectMap.delete(currentTargetNodeId);
             releaseModelInstance(currentTargetNodeId);
-            disposeObject(oldObjectRaw);
-          } else if (oldObjectRaw) {
-            oldObjectRaw.parent?.remove(oldObjectRaw);
-            nodeObjectMap.delete(currentTargetNodeId);
-            releaseModelInstance(currentTargetNodeId);
+            disposeObject(oldObject);
           }
         },
         activate: async () => {
-          const restoreBinding = snapshot.previousSteerBinding;
           const nextSteerProps = clampSteerComponentProps({
-            ...(restoreBinding?.steerProps ?? binding.steerProps),
+            ...binding.steerComponent.props,
             targetType,
             targetNodeId: effectiveNodeId,
-            defaultIdentifier: restoreBinding?.steerProps.defaultIdentifier ?? binding.steerProps.defaultIdentifier,
+            defaultIdentifier: binding.steerProps.defaultIdentifier,
           });
 
           if (isCharacterTarget) {
-            if (!restoreBinding) {
-              return {
-                success: false,
-                message: 'No cached steer binding was found for the restored node.',
-              };
-            }
             resetCharacterControlInputs();
             resetProtagonistPoseState();
             if (!vehicleDriveActive.value && characterControlUi.value.visible) {
               updateCharacterFollowCamera(0, { immediate: true });
             }
-            restoreBinding.steerComponent.props = nextSteerProps;
-            syncSteerBindingIndexForNode(restoreBinding.steerNode);
+            binding.steerComponent.props = nextSteerProps;
+            syncSteerBindingIndexForNode(binding.steerNode);
             refreshCharacterControllerAnimationRuntimeEntries();
             refreshCharacterPathFollowRuntimeEntries();
             return { success: true };
@@ -6468,11 +6428,8 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
               message: startResult.message ?? 'Failed to start vehicle drive for the replacement node.',
             };
           }
-          if (restoreBinding) {
-            restoreBinding.steerComponent.props = nextSteerProps;
-          } else {
-            binding.steerComponent.props = nextSteerProps;
-          }
+          binding.steerComponent.props = nextSteerProps;
+          syncSteerBindingIndexForNode(binding.steerNode);
           vehicleDriveNodeId.value = effectiveNodeId;
           vehicleDriveActive.value = true;
           activeVehicleDriveEvent.value = driveEvent;
@@ -6483,9 +6440,10 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     if (!result.success) {
       return false;
     }
-    if (restoreSnapshotCandidate) {
-      setControlNodeSwitchSnapshot(restoreSnapshotCandidate);
-    }
+    attachControlNodePrefabMetadata(effectiveNode, assetId);
+    latestControlNodeRestoreSnapshot = options.captureRestoreSnapshot === false
+      ? null
+      : previousControlNodeSnapshot;
     return true;
   } catch (error) {
     console.warn(`[SceneryViewer] Failed to switch control node error=${(error as Error)?.message ?? String(error)}`);
@@ -6493,149 +6451,6 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
   } finally {
     runtimePrefabControlSwitchInFlight = false;
   }
-}
-
-async function restoreControlNodeFromSnapshot(): Promise<ControlNodeRestoreResult> {
-  const document = currentDocument;
-  const snapshot = lastControlNodeSwitchSnapshot.value;
-  if (!document || !renderContext || !snapshot) {
-    return { type: 'skipped' };
-  }
-
-  const currentTargetNodeId = resolveControlNodeSwitchTargetNodeId(document);
-  if (!currentTargetNodeId || currentTargetNodeId !== snapshot.replacementNodeId) {
-    return { type: 'skipped' };
-  }
-
-  const currentTargetNode = resolveNodeById(currentTargetNodeId);
-  const currentTargetObject = nodeObjectMap.get(currentTargetNodeId) ?? null;
-  if (!currentTargetNode || !currentTargetObject || !snapshot.previousNode?.id || !snapshot.previousObject) {
-    return { type: 'skipped' };
-  }
-
-  const activeScene = renderContext.scene;
-  if (!activeScene) {
-    return { type: 'skipped' };
-  }
-
-  if (vehicleDriveActive.value) {
-    handleHideVehicleCockpitEvent();
-    vehicleDriveController.stopDrive(
-      { resolution: { type: 'abort', message: 'Control node was replaced.' }, preserveCamera: true },
-      renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
-    );
-  }
-
-  const previousNodeId = snapshot.previousNode.id;
-  const previousObject = toRaw(snapshot.previousObject);
-  const currentTargetNodeRaw = toRaw(currentTargetNode);
-  const currentObject = toRaw(currentTargetObject);
-  const restoreInstance = {
-    prefab: null,
-    cloned: { root: previousObject },
-    runtimeDocument: document,
-    graph: { root: previousObject },
-    sceneRootObject: previousObject,
-  } as unknown as {
-    prefab: null;
-    cloned: { root: SceneNode };
-    runtimeDocument: SceneJsonExportDocument;
-    graph: { root: THREE.Object3D };
-    sceneRootObject: THREE.Object3D;
-  };
-
-  const result = await performRuntimePrefabControlSwitch(
-    {
-      document,
-      targetNodeId: currentTargetNodeId,
-      previousNode: currentTargetNodeRaw,
-      oldObject: currentObject,
-      instance: restoreInstance,
-    },
-    {
-      scene: activeScene,
-      replaceSceneNodeById,
-      rebuildNodeMap: rebuildPreviewNodeMap,
-      onCommit: async () => {
-        registerSceneSubtree(previousObject as THREE.Object3D);
-        rebuildPreviewNodeMap(document);
-        refreshAnimationControllers(activeScene);
-        refreshMultiuserNodeReferences(document);
-        refreshBehaviorProximityCandidates();
-        if (previousObject?.userData?.instancedAssetId) {
-          await syncPhysicsBodiesForDocument(document);
-        }
-      },
-      onRollback: async () => {
-        refreshMultiuserNodeReferences(document);
-        refreshBehaviorProximityCandidates();
-        if (previousObject?.userData?.instancedAssetId) {
-          await syncPhysicsBodiesForDocument(document);
-        }
-      },
-      cleanupNewObject: async () => {
-        // Keep the restored snapshot object alive so it can be reused if needed.
-      },
-      cleanupOldObject: async () => {
-        if (currentObject) {
-          currentObject.parent?.remove(currentObject);
-          nodeObjectMap.delete(currentTargetNodeId);
-          releaseModelInstance(currentTargetNodeId);
-          disposeObject(currentObject);
-        }
-      },
-      activate: async () => {
-        const restoreBinding = snapshot.previousSteerBinding
-          ?? resolveSceneAutoEnterSteerBinding(document);
-        if (!restoreBinding) {
-          return {
-            success: false,
-            message: 'No cached steer binding was found for the restored node.',
-          };
-        }
-        const restoredTargetType = restoreBinding.steerProps.targetType;
-        const nextSteerProps = clampSteerComponentProps({
-          ...restoreBinding.steerProps,
-          targetType: restoredTargetType,
-          targetNodeId: previousNodeId,
-          defaultIdentifier: restoreBinding.steerProps.defaultIdentifier,
-        });
-
-        if (restoredTargetType === 'character') {
-          resetCharacterControlInputs();
-          resetProtagonistPoseState();
-          restoreBinding.steerComponent.props = nextSteerProps;
-          if (!vehicleDriveActive.value && characterControlUi.value.visible) {
-            updateCharacterFollowCamera(0, { immediate: true });
-          }
-          refreshCharacterControllerAnimationRuntimeEntries();
-          refreshCharacterPathFollowRuntimeEntries();
-          return { success: true };
-        }
-
-        const driveEvent = buildFloatingAutoTourDriveEvent(previousNodeId, null);
-        const startResult = startVehicleDriveMode(driveEvent);
-        if (!startResult.success) {
-          return {
-            success: false,
-            message: startResult.message ?? 'Failed to restore vehicle drive for the previous control node.',
-          };
-        }
-        restoreBinding.steerComponent.props = nextSteerProps;
-        syncSteerBindingIndexForNode(restoreBinding.steerNode);
-        vehicleDriveNodeId.value = previousNodeId;
-        vehicleDriveActive.value = true;
-        activeVehicleDriveEvent.value = driveEvent;
-        return { success: true };
-      },
-    },
-  );
-  if (!result.success) {
-    return { type: 'fail', message: result.message ?? 'Failed to restore control node snapshot.' };
-  }
-
-  lastControlNodeSwitchSnapshot.value = null;
-  return { type: 'continue' };
 }
 
 async function flushPendingRuntimePrefabSpawnRequests(): Promise<void> {
@@ -18314,12 +18129,17 @@ async function handleSwitchControlNodeEvent(
 async function handleRestoreControlNodeEvent(
   event: Extract<BehaviorRuntimeEvent, { type: 'control-node-restore' }>,
 ): Promise<void> {
-  const result = await restoreControlNodeFromSnapshot();
-  if (result.type === 'fail') {
-    resolveBehaviorToken(event.token, result.message ? { type: 'fail', message: result.message } : { type: 'fail' });
+  const snapshot = latestControlNodeRestoreSnapshot;
+  if (!snapshot) {
+    resolveBehaviorToken(event.token, { type: 'fail', message: '没有可恢复的上一个控制节点' });
     return;
   }
-  resolveBehaviorToken(event.token, { type: 'continue' });
+  const success = await switchControlNodeToAsset(snapshot.targetType, snapshot.prefabAssetId, {
+    captureRestoreSnapshot: false,
+  });
+  resolveBehaviorToken(event.token, success
+    ? { type: 'continue' }
+    : { type: 'fail', message: '未找到可恢复的控制资产或实例化失败' });
 }
 
 function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
@@ -19997,7 +19817,6 @@ function teardownRenderer() {
   teardownWheelControls();
   clearSceneInitState();
   clearVehicleDriveIntroState();
-  clearControlNodeSwitchSnapshot();
   if (!renderContext) {
     return;
   }
@@ -20083,6 +19902,7 @@ function teardownRenderer() {
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   currentDocument = null;
+  latestControlNodeRestoreSnapshot = null;
   dynamicGroundCache = null;
   sceneGraphRoot = null;
   viewerResourceCache = null;
@@ -20875,7 +20695,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
     return;
   }
 
-  clearControlNodeSwitchSnapshot();
   clearVehicleDriveIntroState();
 
   // Stop the old frame loop to avoid stacking multiple useFrame() tickers.
@@ -20996,6 +20815,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
+  latestControlNodeRestoreSnapshot = null;
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserRuntimeBridge(multiuserRuntimeBridge);
   setActiveMultiuserSceneId(payload.document.id ?? null);
