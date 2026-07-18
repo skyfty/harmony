@@ -38,6 +38,7 @@ import StopAnimationParams from '@/components/inspector/behavior/StopAnimationPa
 import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
 import ControlCharacterParams from '@/components/inspector/behavior/ControlCharacterParams.vue'
 import SwitchControlNodeParams from '@/components/inspector/behavior/SwitchControlNodeParams.vue'
+import RestoreControlNodeParams from '@/components/inspector/behavior/RestoreControlNodeParams.vue'
 import ReleaseCharacterParams from '@/components/inspector/behavior/ReleaseCharacterParams.vue'
 import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
 import CouponParams from '@/components/inspector/behavior/CouponParams.vue'
@@ -124,6 +125,7 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   drive: DriveParams,
   controlCharacter: ControlCharacterParams,
   switchControlNode: SwitchControlNodeParams,
+  restoreControlNode: RestoreControlNodeParams,
   releaseCharacter: ReleaseCharacterParams,
   debus: DebusParams,
   coupon: CouponParams,

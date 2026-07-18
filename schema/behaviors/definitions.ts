@@ -710,6 +710,15 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     },
   },
   {
+    id: 'restoreControlNode',
+    label: 'Restore Control Node',
+    description: 'Restore the most recent control node switch, if one is available.',
+    icon: 'mdi-swap-horizontal',
+    createDefaultParams(): Record<string, never> {
+      return {}
+    },
+  },
+  {
     id: 'releaseCharacter',
     label: 'Release Character',
     description: 'Exit character control mode and restore default controls.',
@@ -1691,6 +1700,11 @@ export function ensureBehaviorParams(
           },
         }
       }
+      case 'restoreControlNode':
+        return {
+          type: 'restoreControlNode',
+          params: {},
+        }
       case 'releaseCharacter':
         return {
           type: 'releaseCharacter',

@@ -304,6 +304,15 @@ export type BehaviorRuntimeEvent =
       token: string
     }
   | {
+      type: 'control-node-restore'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      token: string
+    }
+  | {
       type: 'character-release'
       nodeId: string
       action: BehaviorEventType
@@ -1083,6 +1092,24 @@ function createSwitchControlNodeEvent(
   }
 }
 
+function createRestoreControlNodeEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'control-node-restore' }> {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, { token, sequenceId: state.id, stepIndex: state.index })
+  state.status = 'waiting'
+  return {
+    type: 'control-node-restore',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    token,
+  }
+}
+
 function createReleaseCharacterEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
@@ -1321,6 +1348,9 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         return events
       case 'switchControlNode':
         events.push(createSwitchControlNodeEvent(state, behavior))
+        return events
+      case 'restoreControlNode':
+        events.push(createRestoreControlNodeEvent(state, behavior))
         return events
       case 'releaseCharacter':
         events.push(createReleaseCharacterEvent(state, behavior))

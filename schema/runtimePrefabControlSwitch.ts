@@ -89,11 +89,14 @@ export async function instantiateRuntimePrefabControlSwitchInstanceFromPrefab<TG
   }
 }
 
-async function cleanupSceneObject(object: Object3D | null | undefined, remove: (object: Object3D) => void): Promise<void> {
+async function cleanupSceneObject(
+  object: Object3D | null | undefined,
+  scene: { remove: (object: Object3D) => void } | null | undefined,
+): Promise<void> {
   if (!object) {
     return
   }
-  remove(object)
+  scene?.remove(object)
   if (object.parent) {
     object.parent.remove(object)
   }
@@ -157,18 +160,13 @@ export async function performRuntimePrefabControlSwitch<TGraph extends { root: O
 
   document.updatedAt = new Date().toISOString()
   scene.add(sceneRootObject)
-  const placementAlignment = alignReplacementObjectBottomToOldObject(sceneRootObject, effectiveNode, oldObject)
-  if (placementAlignment) {
-    console.info(
-      `[RuntimePrefabControlSwitch] bottom-align targetNodeId=${targetNodeId} oldMinY=${placementAlignment.oldMinY.toFixed(3)} newMinY=${placementAlignment.newMinY.toFixed(3)} deltaY=${placementAlignment.deltaY.toFixed(3)} oldObjectExists=${Boolean(oldObject)}`,
-    )
-  }
+  alignReplacementObjectBottomToOldObject(sceneRootObject, effectiveNode, oldObject)
 
   try {
     await options.onCommit?.(context)
   } catch (error) {
     await options.cleanupNewObject?.(context)
-    await cleanupSceneObject(sceneRootObject, scene.remove)
+    await cleanupSceneObject(sceneRootObject, scene)
     options.replaceSceneNodeById(document.nodes, effectiveNodeId, previousNode)
     document.updatedAt = new Date().toISOString()
     options.rebuildNodeMap(document)
@@ -182,7 +180,7 @@ export async function performRuntimePrefabControlSwitch<TGraph extends { root: O
   const activation = await options.activate(context)
   if (!activation.success) {
     await options.cleanupNewObject?.(context)
-    await cleanupSceneObject(sceneRootObject, scene.remove)
+    await cleanupSceneObject(sceneRootObject, scene)
     options.replaceSceneNodeById(document.nodes, effectiveNodeId, previousNode)
     document.updatedAt = new Date().toISOString()
     options.rebuildNodeMap(document)

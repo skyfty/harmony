@@ -846,6 +846,7 @@ export type BehaviorScriptType =
   | 'drive'
   | 'controlCharacter'
   | 'switchControlNode'
+  | 'restoreControlNode'
   | 'releaseCharacter'
   | 'debus'
   | 'punch'
@@ -1261,6 +1262,10 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'switchControlNode'
       params: SwitchControlNodeBehaviorParams
+    }
+  | {
+      type: 'restoreControlNode'
+      params: Record<string, never>
     }
   | {
       type: 'releaseCharacter'
