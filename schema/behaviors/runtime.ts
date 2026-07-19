@@ -427,6 +427,12 @@ let tokenCounter = 0
 
 export type BehaviorRuntimeListener = {
   onRegistryChanged?: (nodeId: string) => void
+  onSequenceFinished?: (event: {
+    sequenceId: string
+    nodeId: string
+    action: BehaviorEventType
+    status: BehaviorSequenceStatus
+  }) => void
 }
 
 const runtimeListeners = new Set<BehaviorRuntimeListener>()
@@ -541,6 +547,18 @@ function finalizeSequence(
   state.status = 'done'
   sequences.delete(state.id)
   cleanupPendingTokens(state.id)
+  runtimeListeners.forEach((listener) => {
+    try {
+      listener.onSequenceFinished?.({
+        sequenceId: state.id,
+        nodeId: state.nodeId,
+        action: state.action,
+        status,
+      })
+    } catch {
+      /* ignore listener errors */
+    }
+  })
   return {
     type: 'sequence-complete',
     nodeId: state.nodeId,

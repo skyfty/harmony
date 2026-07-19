@@ -7720,6 +7720,9 @@ const behaviorRuntimeListener: BehaviorRuntimeListener = {
 		syncBehaviorProximityCandidate(nodeId)
 		syncInteractionLayersForNode(nodeId)
 	},
+	onSequenceFinished(event) {
+		behaviorProximityRuntime.handleSequenceFinished(event.sequenceId)
+	},
 }
 
 function updateBehaviorProximity(): void {

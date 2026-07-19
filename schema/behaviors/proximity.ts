@@ -8,7 +8,13 @@ import {
 } from './runtime'
 
 export type BehaviorProximityCandidate = { hasApproach: boolean; hasDepart: boolean }
-export type BehaviorProximityState = { inside: boolean; lastDistance: number | null }
+export type BehaviorProximityState = {
+	inside: boolean
+	lastDistance: number | null
+	pendingAction?: 'approach' | 'depart' | null
+	pendingSequenceId?: string | null
+	rebaselineRequired?: boolean
+}
 export type BehaviorProximityThreshold = { enter: number; exit: number; objectId: string }
 export type BehaviorObserverKind = 'vehicle' | 'character' | 'other' | 'camera'
 export type BehaviorObserverCandidate = {
@@ -47,6 +53,7 @@ export type BehaviorProximityRuntimeDeps = {
 export type BehaviorProximityRuntime = {
 	reset: () => void
 	removeNode: (nodeId: string) => void
+	handleSequenceFinished: (sequenceId: string) => void
 	resolveProximityThresholds: (nodeId: string, object: THREE.Object3D) => BehaviorProximityThreshold
 	resolveRegionBehaviorContainment: (
 		nodeId: string,
@@ -98,6 +105,33 @@ export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDep
 	const tempSphere = new THREE.Sphere()
 	const tempRegionObserverPosition = new THREE.Vector3()
 	const tempFocusPosition = new THREE.Vector3()
+	const tempRegionEdge = new THREE.Vector2()
+	const tempRegionPoint = new THREE.Vector2()
+
+	function distanceToRegionBoundary(point: THREE.Vector2, vertices: Array<[number, number]>): number {
+		let minimumDistanceSquared = Number.POSITIVE_INFINITY
+		for (let index = 0; index < vertices.length; index += 1) {
+			const current = vertices[index]
+			const next = vertices[(index + 1) % vertices.length]
+			if (!current || !next) continue
+			tempRegionEdge.set(next[0] - current[0], next[1] - current[1])
+			const edgeLengthSquared = tempRegionEdge.lengthSq()
+			const projection = edgeLengthSquared > 1e-12
+				? THREE.MathUtils.clamp(
+					((point.x - current[0]) * tempRegionEdge.x + (point.y - current[1]) * tempRegionEdge.y) / edgeLengthSquared,
+					0,
+					1,
+				)
+				: 0
+			const closestX = current[0] + tempRegionEdge.x * projection
+			const closestY = current[1] + tempRegionEdge.y * projection
+			minimumDistanceSquared = Math.min(
+				minimumDistanceSquared,
+				(point.x - closestX) ** 2 + (point.y - closestY) ** 2,
+			)
+		}
+		return Number.isFinite(minimumDistanceSquared) ? Math.sqrt(minimumDistanceSquared) : 0
+	}
 
 	function computeObjectBoundingRadius(object: THREE.Object3D): number {
 		tempBox.setFromObject(object)
@@ -137,7 +171,7 @@ export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDep
 		nodeId: string,
 		object: THREE.Object3D,
 		observerPosition: THREE.Vector3,
-	): { inside: boolean; distance: number } | null {
+	): { inside: boolean; distance: number; boundaryDistance: number } | null {
 		const node = deps.resolveRegionNode(nodeId)
 		const dynamicMesh = node?.dynamicMesh ?? null
 		const regionType = dynamicMesh?.type ?? null
@@ -148,15 +182,33 @@ export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDep
 			.map((entry) => [Number(entry?.[0]), Number(entry?.[1])] as [number, number])
 			.filter(([x, z]) => Number.isFinite(x) && Number.isFinite(z))
 		if (vertices.length < 3) {
-			return { inside: false, distance: Number.POSITIVE_INFINITY }
+			return { inside: false, distance: Number.POSITIVE_INFINITY, boundaryDistance: 0 }
 		}
 		const localObserver = object.worldToLocal(tempRegionObserverPosition.copy(observerPosition))
+		tempRegionPoint.set(localObserver.x, localObserver.z)
 		const inside = isPointInsideRegionXZ({ x: localObserver.x, z: localObserver.z }, vertices)
 		const focusPoint = deps.resolveNodeFocusPoint(nodeId, tempFocusPosition) ?? object.getWorldPosition(tempFocusPosition)
 		return {
 			inside,
 			distance: focusPoint.distanceTo(observerPosition),
+			boundaryDistance: distanceToRegionBoundary(tempRegionPoint, vertices),
 		}
+	}
+
+	function dispatchTransition(
+		nodeId: string,
+		state: BehaviorProximityState,
+		action: 'approach' | 'depart',
+		payload: { distance: number; threshold: number },
+	): void {
+		const followUps = deps.triggerBehaviorAction(nodeId, action, { payload })
+		const sequenceId = followUps.find((event) => typeof event?.sequenceId === 'string')?.sequenceId ?? null
+		if (sequenceId && !followUps.some((event) => event?.type === 'sequence-complete' || event?.type === 'sequence-error')) {
+			state.pendingAction = action
+			state.pendingSequenceId = sequenceId
+			state.rebaselineRequired = false
+		}
+		deps.processBehaviorEvents(followUps)
 	}
 
 	function updateBehaviorProximity(): void {
@@ -178,28 +230,28 @@ export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDep
 				return
 			}
 			const regionContainment = resolveRegionBehaviorContainment(nodeId, object, observerPosition)
+			if (state.pendingSequenceId) {
+				state.lastDistance = regionContainment?.distance ?? state.lastDistance
+				return
+			}
 			if (regionContainment) {
-				if (!state.inside && regionContainment.inside) {
+				const safelyInside = regionContainment.inside && regionContainment.boundaryDistance >= PROXIMITY_EXIT_PADDING
+				const safelyOutside = !regionContainment.inside && regionContainment.boundaryDistance >= PROXIMITY_EXIT_PADDING
+				if (state.rebaselineRequired) {
+					state.inside = safelyInside
+					state.lastDistance = regionContainment.distance
+					state.rebaselineRequired = false
+					return
+				}
+				if (!state.inside && safelyInside) {
 					state.inside = true
 					if (candidate.hasApproach) {
-						const followUps = deps.triggerBehaviorAction(nodeId, 'approach', {
-							payload: {
-								distance: regionContainment.distance,
-								threshold: 0,
-							},
-						})
-						deps.processBehaviorEvents(followUps)
+						dispatchTransition(nodeId, state, 'approach', { distance: regionContainment.distance, threshold: PROXIMITY_EXIT_PADDING })
 					}
-				} else if (state.inside && !regionContainment.inside) {
+				} else if (state.inside && safelyOutside) {
 					state.inside = false
 					if (candidate.hasDepart) {
-						const followUps = deps.triggerBehaviorAction(nodeId, 'depart', {
-							payload: {
-								distance: regionContainment.distance,
-								threshold: 0,
-							},
-						})
-						deps.processBehaviorEvents(followUps)
+						dispatchTransition(nodeId, state, 'depart', { distance: regionContainment.distance, threshold: PROXIMITY_EXIT_PADDING })
 					}
 				}
 				state.lastDistance = regionContainment.distance
@@ -211,27 +263,21 @@ export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDep
 			if (!Number.isFinite(distance)) {
 				return
 			}
+			if (state.rebaselineRequired) {
+				state.inside = distance <= thresholds.enter
+				state.lastDistance = distance
+				state.rebaselineRequired = false
+				return
+			}
 			if (!state.inside && distance <= thresholds.enter) {
 				state.inside = true
 				if (candidate.hasApproach) {
-					const followUps = deps.triggerBehaviorAction(nodeId, 'approach', {
-						payload: {
-							distance,
-							threshold: thresholds.enter,
-						},
-					})
-					deps.processBehaviorEvents(followUps)
+					dispatchTransition(nodeId, state, 'approach', { distance, threshold: thresholds.enter })
 				}
 			} else if (state.inside && distance >= thresholds.exit) {
 				state.inside = false
 				if (candidate.hasDepart) {
-					const followUps = deps.triggerBehaviorAction(nodeId, 'depart', {
-						payload: {
-							distance,
-							threshold: thresholds.exit,
-						},
-					})
-					deps.processBehaviorEvents(followUps)
+					dispatchTransition(nodeId, state, 'depart', { distance, threshold: thresholds.exit })
 				}
 			}
 			state.lastDistance = distance
@@ -241,9 +287,22 @@ export function createBehaviorProximityRuntime(deps: BehaviorProximityRuntimeDep
 	return {
 		reset: () => {
 			thresholdCache.clear()
+			deps.behaviorProximityState.forEach((state) => {
+				state.pendingAction = null
+				state.pendingSequenceId = null
+				state.rebaselineRequired = false
+			})
 		},
 		removeNode: (nodeId: string) => {
 			thresholdCache.delete(nodeId)
+		},
+		handleSequenceFinished: (sequenceId: string) => {
+			deps.behaviorProximityState.forEach((state) => {
+				if (state.pendingSequenceId !== sequenceId) return
+				state.pendingAction = null
+				state.pendingSequenceId = null
+				state.rebaselineRequired = true
+			})
 		},
 		resolveProximityThresholds,
 		resolveRegionBehaviorContainment,
