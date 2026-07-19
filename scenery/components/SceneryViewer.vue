@@ -22302,7 +22302,17 @@ onUnmounted(() => {
 @keyframes viewer-control-switch-scan { from { transform: translateY(-55%); } to { transform: translateY(55%); } }
 @keyframes viewer-control-switch-reveal { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(2.2); } }
 @keyframes viewer-control-switch-glitch { 0%, 100% { filter: none; transform: translate(0); } 50% { filter: hue-rotate(90deg); transform: translate(4px, -2px); } }
-@media (prefers-reduced-motion: reduce) { .viewer-control-switch-overlay *, .viewer-control-switch-overlay::before { animation-duration: .2s !important; } }
+@media (prefers-reduced-motion: reduce) {
+  .viewer-control-switch-overlay .viewer-control-switch-backdrop,
+  .viewer-control-switch-overlay .viewer-control-switch-particle,
+  .viewer-control-switch-overlay .viewer-control-switch-ring,
+  .viewer-control-switch-overlay .viewer-control-switch-scanline,
+  .viewer-control-switch-overlay .viewer-control-switch-label,
+  .viewer-control-switch-overlay .viewer-control-switch-spinner,
+  .viewer-control-switch-overlay::before {
+    animation-duration: .2s !important;
+  }
+}
 
 .viewer-control-switch-spinner {
   width: 22px;
