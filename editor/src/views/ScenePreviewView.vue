@@ -6542,7 +6542,8 @@ async function switchControlNodeRuntimePrefab(
 			prepareClonedRoot: (root) => {
 				const position = new THREE.Vector3(); const rotation = new THREE.Quaternion()
 				currentObject.getWorldPosition(position); currentObject.getWorldQuaternion(rotation)
-				const euler = new THREE.Euler().setFromQuaternion(rotation, 'XYZ')
+				const switchRotation = resolveControlNodeSwitchQuaternion(currentObject, resolveNodeById(resolvedCurrentNodeId), root)
+				const euler = new THREE.Euler().setFromQuaternion(switchRotation, 'XYZ')
 				root.position = { x: position.x, y: position.y, z: position.z }
 				root.rotation = { x: euler.x, y: euler.y, z: euler.z }
 			},
@@ -12832,6 +12833,41 @@ function resolveVehicleAxisVector(index: number): THREE.Vector3 {
 	}
 }
 
+function resolveControlNodeLocalForwardAxis(node: SceneNode | null | undefined, target: THREE.Vector3): THREE.Vector3 {
+	const vehicle = resolveVehicleComponent(node)
+	if (vehicle) {
+		return target.copy(resolveVehicleAxisVector(clampVehicleAxisIndex(clampVehicleComponentProps(vehicle.props).indexForwardAxis)))
+	}
+	const character = resolveCharacterControllerComponent(node)
+	if (character) {
+		return writeCharacterLocalForward(target, clampCharacterControllerComponentProps(character.props).forwardAxis) as THREE.Vector3
+	}
+	return target.set(1, 0, 0)
+}
+
+function resolveControlNodeSwitchQuaternion(
+	sourceObject: THREE.Object3D,
+	sourceNode: SceneNode | null | undefined,
+	targetNode: SceneNode | null | undefined,
+): THREE.Quaternion {
+	sourceObject.getWorldQuaternion(controlNodeSwitchSourceQuaternionScratch)
+	resolveControlNodeLocalForwardAxis(sourceNode, controlNodeSwitchSourceForwardScratch).normalize()
+	resolveControlNodeLocalForwardAxis(targetNode, controlNodeSwitchTargetForwardScratch).normalize()
+	controlNodeSwitchAxisCorrectionQuaternionScratch.setFromUnitVectors(
+		controlNodeSwitchTargetForwardScratch,
+		controlNodeSwitchSourceForwardScratch,
+	)
+	return controlNodeSwitchTargetQuaternionScratch
+		.copy(controlNodeSwitchSourceQuaternionScratch)
+		.multiply(controlNodeSwitchAxisCorrectionQuaternionScratch)
+}
+
+const controlNodeSwitchSourceQuaternionScratch = new THREE.Quaternion()
+const controlNodeSwitchTargetQuaternionScratch = new THREE.Quaternion()
+const controlNodeSwitchAxisCorrectionQuaternionScratch = new THREE.Quaternion()
+const controlNodeSwitchSourceForwardScratch = new THREE.Vector3()
+const controlNodeSwitchTargetForwardScratch = new THREE.Vector3()
+
 type VehicleVectorValue = Vector3Like | number[] | null | undefined
 
 function toFiniteVectorComponent(value: unknown): number | null {
@@ -14623,7 +14659,6 @@ watch(
 			<div class="scene-preview__control-switch-scanline" aria-hidden="true"></div>
 			<div class="scene-preview__control-switch-label">
 				<v-progress-circular indeterminate color="primary" size="30" width="3" />
-				<span>正在初始化交换控制节点…</span>
 			</div>
 		</div>
 		<div v-if="punchBadgeOverlayEntries.length" class="scene-preview__punch-badge-layer" aria-hidden="true">

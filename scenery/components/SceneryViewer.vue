@@ -241,7 +241,6 @@
         <view class="viewer-control-switch-scanline" aria-hidden="true"></view>
         <view class="viewer-control-switch-label">
           <view class="viewer-control-switch-spinner" aria-hidden="true"></view>
-          <text>正在初始化交换控制节点…</text>
         </view>
       </view>
       <view v-if="error" class="viewer-overlay error">
@@ -6392,7 +6391,12 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     const request: RuntimePrefabSpawnRequest = { requestId: `control-node-switch:${Date.now().toString(36)}`, controllableIdentifier: binding.steerProps.defaultIdentifier ?? null, controllableType: targetType, assetId, assetUrl: null, targetNodeId: currentNodeId, targetNodeName: null, position: null, rotation: null, scale: null, initializationMode: 'full', placement: { alignment: 'origin', offset: null } };
     const source = await resolveRuntimePrefabSource(request, runtimePrefabSourceResolverOptions);
     if (!source) return false;
-    const instanced = await instantiateRuntimePrefabControlSwitchInstanceFromPrefab(source.prefab, { buildOptions: () => (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim() ? { serverAssetBaseUrl: props.serverAssetBaseUrl.trim() } : {}), createResourceCache: ensureResourceCache, buildSceneGraph, prepareClonedRoot: (root) => { applyRuntimePrefabTransform(root, request); } });
+    const instanced = await instantiateRuntimePrefabControlSwitchInstanceFromPrefab(source.prefab, { buildOptions: () => (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim() ? { serverAssetBaseUrl: props.serverAssetBaseUrl.trim() } : {}), createResourceCache: ensureResourceCache, buildSceneGraph, prepareClonedRoot: (root) => {
+      applyRuntimePrefabTransform(root, request);
+      const sourceQuaternion = resolveControlNodeSwitchQuaternion(currentObject, resolveNodeById(currentNodeId), root);
+      const euler = new THREE.Euler().setFromQuaternion(sourceQuaternion, 'XYZ');
+      root.rotation = { x: euler.x, y: euler.y, z: euler.z };
+    } });
     if (!instanced?.cloned.root.id) return false;
     const effectiveNode = instanced.cloned.root; const effectiveNodeId = effectiveNode.id;
     const isCharacter = targetType === 'character';
@@ -10363,6 +10367,41 @@ const VEHICLE_AXIS_VECTORS: readonly [THREE.Vector3, THREE.Vector3, THREE.Vector
 function resolveVehicleAxisVector(index: 0 | 1 | 2): THREE.Vector3 {
   return VEHICLE_AXIS_VECTORS[index];
 }
+
+function resolveControlNodeLocalForwardAxis(node: SceneNode | null | undefined, target: THREE.Vector3): THREE.Vector3 {
+  const vehicle = resolveVehicleComponent(node);
+  if (vehicle) {
+    return target.copy(resolveVehicleAxisVector(clampVehicleAxisIndex(clampVehicleComponentProps(vehicle.props).indexForwardAxis)));
+  }
+  const character = resolveCharacterControllerComponent(node);
+  if (character) {
+    return writeCharacterLocalForward(target, clampCharacterControllerComponentProps(character.props).forwardAxis) as THREE.Vector3;
+  }
+  return target.set(1, 0, 0);
+}
+
+function resolveControlNodeSwitchQuaternion(
+  sourceObject: THREE.Object3D,
+  sourceNode: SceneNode | null | undefined,
+  targetNode: SceneNode | null | undefined,
+): THREE.Quaternion {
+  sourceObject.getWorldQuaternion(controlNodeSwitchSourceQuaternionScratch);
+  resolveControlNodeLocalForwardAxis(sourceNode, controlNodeSwitchSourceForwardScratch).normalize();
+  resolveControlNodeLocalForwardAxis(targetNode, controlNodeSwitchTargetForwardScratch).normalize();
+  controlNodeSwitchAxisCorrectionQuaternionScratch.setFromUnitVectors(
+    controlNodeSwitchTargetForwardScratch,
+    controlNodeSwitchSourceForwardScratch,
+  );
+  return controlNodeSwitchTargetQuaternionScratch
+    .copy(controlNodeSwitchSourceQuaternionScratch)
+    .multiply(controlNodeSwitchAxisCorrectionQuaternionScratch);
+}
+
+const controlNodeSwitchSourceQuaternionScratch = new THREE.Quaternion();
+const controlNodeSwitchTargetQuaternionScratch = new THREE.Quaternion();
+const controlNodeSwitchAxisCorrectionQuaternionScratch = new THREE.Quaternion();
+const controlNodeSwitchSourceForwardScratch = new THREE.Vector3();
+const controlNodeSwitchTargetForwardScratch = new THREE.Vector3();
 
 type VehicleVectorValue = Vector3Like | number[] | null | undefined;
 
