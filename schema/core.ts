@@ -1094,9 +1094,34 @@ export interface ControlCharacterBehaviorParams {
   targetNodeId: string | null
 }
 
+export type ControlNodeTransitionPreset = 'none' | 'quantum' | 'scanline' | 'vortex' | 'glitch'
+
+export const CONTROL_NODE_TRANSITION_PRESETS: Array<{
+  title: string
+  value: ControlNodeTransitionPreset
+  description: string
+}> = [
+  { title: '量子粒子', value: 'quantum', description: '粒子、能量环与闪光' },
+  { title: '扫描线', value: 'scanline', description: '扫描线、网格与 HUD' },
+  { title: '能量旋涡', value: 'vortex', description: '径向光圈与旋涡爆发' },
+  { title: '数字故障', value: 'glitch', description: '色偏、闪烁与分片切换' },
+  { title: '无特效', value: 'none', description: '仅显示加载提示' },
+]
+
+export function normalizeControlNodeTransitionPreset(value: unknown): ControlNodeTransitionPreset {
+  return value === 'none' || value === 'scanline' || value === 'vortex' || value === 'glitch' || value === 'quantum'
+    ? value
+    : 'quantum'
+}
+
 export interface SwitchControlNodeBehaviorParams {
   targetType: SteerControllableTargetType
   prefabAssetId: string | null
+  transitionPreset: ControlNodeTransitionPreset
+}
+
+export interface RestoreControlNodeBehaviorParams {
+  transitionPreset: ControlNodeTransitionPreset
 }
 
 export interface DebusBehaviorParams {
@@ -1265,7 +1290,7 @@ export type SceneBehaviorScriptBinding =
     }
   | {
       type: 'restoreControlNode'
-      params: Record<string, never>
+      params: RestoreControlNodeBehaviorParams
     }
   | {
       type: 'releaseCharacter'

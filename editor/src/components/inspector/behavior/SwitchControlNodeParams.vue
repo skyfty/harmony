@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
-import type { SwitchControlNodeBehaviorParams } from '@schema/core'
+import { CONTROL_NODE_TRANSITION_PRESETS, type SwitchControlNodeBehaviorParams } from '@schema/core'
 import { STEER_TARGET_TYPES } from '@schema/components'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
@@ -22,6 +22,7 @@ const assetPickerAnchor = ref<{ x: number; y: number } | null>(null)
 const params = computed<SwitchControlNodeBehaviorParams>(() => ({
   targetType: props.modelValue?.targetType ?? 'vehicle',
   prefabAssetId: props.modelValue?.prefabAssetId ?? null,
+  transitionPreset: props.modelValue?.transitionPreset ?? 'quantum',
 }))
 
 const selectedPrefabAsset = computed<ProjectAsset | null>(() => {
@@ -72,6 +73,22 @@ function handlePrefabSelected(asset: ProjectAsset | null) {
       :model-value="params.targetType"
       @update:model-value="updateTargetType"
     />
+
+    <v-select
+      label="切换动画"
+      density="compact"
+      variant="underlined"
+      hide-details
+      :items="CONTROL_NODE_TRANSITION_PRESETS"
+      item-title="title"
+      item-value="value"
+      :model-value="params.transitionPreset"
+      @update:model-value="emitUpdate({ transitionPreset: $event })"
+    >
+      <template #item="{ props: itemProps, item }">
+        <v-list-item v-bind="itemProps" :subtitle="item.raw.description" />
+      </template>
+    </v-select>
 
     <div class="switch-control-node-params__asset-row">
       <v-text-field

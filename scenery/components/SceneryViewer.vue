@@ -221,9 +221,28 @@
         :scene-download="sceneDownload"
         :resource-preload="resourcePreload"
       />
-      <view v-if="controlNodeSwitchBusy" class="viewer-control-switch-overlay" role="status" aria-live="polite">
-        <view class="viewer-control-switch-spinner" aria-hidden="true"></view>
-        <text>正在初始化交换控制节点…</text>
+      <view
+        v-if="controlNodeSwitchBusy"
+        class="viewer-control-switch-overlay"
+        :class="[`viewer-control-switch-overlay--${controlNodeSwitchTransitionPreset}`, { 'is-revealing': controlNodeSwitchTransitionPhase === 'revealing' }]"
+        role="status"
+        aria-live="polite"
+      >
+        <view class="viewer-control-switch-backdrop" aria-hidden="true">
+          <view
+            v-for="slot in controlNodeTransitionParticleSlots"
+            :key="slot"
+            class="viewer-control-switch-particle"
+            :style="{ '--particle-index': slot }"
+          ></view>
+        </view>
+        <view class="viewer-control-switch-ring viewer-control-switch-ring--outer" aria-hidden="true"></view>
+        <view class="viewer-control-switch-ring viewer-control-switch-ring--inner" aria-hidden="true"></view>
+        <view class="viewer-control-switch-scanline" aria-hidden="true"></view>
+        <view class="viewer-control-switch-label">
+          <view class="viewer-control-switch-spinner" aria-hidden="true"></view>
+          <text>正在初始化交换控制节点…</text>
+        </view>
       </view>
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
@@ -6225,6 +6244,25 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
 
 let runtimePrefabControlSwitchInFlight = false;
 const controlNodeSwitchBusy = ref(false);
+const controlNodeSwitchTransitionPreset = ref<'none' | 'quantum' | 'scanline' | 'vortex' | 'glitch'>('quantum');
+const controlNodeSwitchTransitionPhase = ref<'loading' | 'revealing'>('loading');
+const controlNodeTransitionParticleSlots = Array.from({ length: 16 }, (_, index) => index);
+
+function beginControlNodeTransition(preset: typeof controlNodeSwitchTransitionPreset.value): void {
+  controlNodeSwitchTransitionPreset.value = preset;
+  controlNodeSwitchTransitionPhase.value = 'loading';
+  controlNodeSwitchBusy.value = true;
+}
+
+async function finishControlNodeTransition(success: boolean): Promise<void> {
+  if (!success || controlNodeSwitchTransitionPreset.value === 'none') {
+    controlNodeSwitchBusy.value = false;
+    return;
+  }
+  controlNodeSwitchTransitionPhase.value = 'revealing';
+  await new Promise<void>((resolve) => setTimeout(resolve, 760));
+  controlNodeSwitchBusy.value = false;
+}
 type ControlNodeRestoreSnapshot = {
   targetType: SteerControllableTargetType;
   mainNodeId?: string;
@@ -6272,9 +6310,12 @@ function restoreControlNodeComponentEnabled(node: SceneNode, states?: Record<str
   }
 }
 
-async function restoreControlNodeRuntime(): Promise<boolean> {
+async function restoreControlNodeRuntime(transitionPreset: Extract<BehaviorRuntimeEvent, { type: 'control-node-restore' }>['transitionPreset'] = 'quantum'): Promise<boolean> {
   const snapshot = latestControlNodeRestoreSnapshot;
   if (!snapshot?.mainNodeId || !snapshot.temporaryNodeId || !currentDocument) return false;
+  beginControlNodeTransition(transitionPreset);
+  let succeeded = false;
+  try {
   const mainNode = resolveNodeById(snapshot.mainNodeId);
   const temporaryObject = nodeObjectMap.get(snapshot.temporaryNodeId) ?? null;
   const mainObject = nodeObjectMap.get(snapshot.mainNodeId) ?? null;
@@ -6311,15 +6352,20 @@ async function restoreControlNodeRuntime(): Promise<boolean> {
     vehicleDriveActive.value = true;
   }
   latestControlNodeRestoreSnapshot = null;
+  succeeded = true;
   return true;
+  } finally {
+    await finishControlNodeTransition(succeeded);
+  }
 }
 
-async function switchControlNodeToAsset(targetType: SteerControllableTargetType, prefabAssetId?: string | null): Promise<boolean> {
+async function switchControlNodeToAsset(targetType: SteerControllableTargetType, prefabAssetId?: string | null, transitionPreset: Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }>['transitionPreset'] = 'quantum'): Promise<boolean> {
   if (runtimePrefabControlSwitchInFlight || !currentDocument || !renderContext?.scene) return false;
   const assetId = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : '';
   if (!assetId) return false;
   runtimePrefabControlSwitchInFlight = true;
-  controlNodeSwitchBusy.value = true;
+  beginControlNodeTransition(transitionPreset);
+  let succeeded = false;
   resetCharacterControlInputs();
   resetVehicleDriveInputs();
   // vehicleDriveController.stopDrive clears the bridged drive state
@@ -6375,11 +6421,12 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
       vehicleDriveNodeId.value = effectiveNodeId; vehicleDriveActive.value = true;
     }
     refreshAnimationControllers(renderContext.scene); refreshMultiuserNodeReferences(currentDocument);
+    succeeded = true;
     return true;
   } catch (error) {
     console.warn('[SceneryViewer][RuntimePrefabSwitch] failed', error); return false;
   } finally {
-    controlNodeSwitchBusy.value = false;
+    await finishControlNodeTransition(succeeded);
     runtimePrefabControlSwitchInFlight = false;
   }
 }
@@ -18076,7 +18123,7 @@ async function handleCouponEvent(event: Extract<BehaviorRuntimeEvent, { type: 'c
 async function handleSwitchControlNodeEvent(
   event: Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }>,
 ): Promise<void> {
-  const success = await switchControlNodeToAsset(event.targetType, event.prefabAssetId);
+  const success = await switchControlNodeToAsset(event.targetType, event.prefabAssetId, event.transitionPreset);
   resolveBehaviorToken(event.token, success
     ? { type: 'continue' }
     : { type: 'fail', message: '未找到可用的控制资产或实例化失败' });
@@ -18085,7 +18132,7 @@ async function handleSwitchControlNodeEvent(
 async function handleRestoreControlNodeEvent(
   event: Extract<BehaviorRuntimeEvent, { type: 'control-node-restore' }>,
 ): Promise<void> {
-  const success = await restoreControlNodeRuntime();
+  const success = await restoreControlNodeRuntime(event.transitionPreset);
   resolveBehaviorToken(event.token, success
     ? { type: 'continue' }
     : { type: 'fail', message: '未找到可恢复的控制资产或实例化失败' });
@@ -22177,7 +22224,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  overflow: hidden;
   background: rgba(8, 14, 24, 0.58);
   backdrop-filter: blur(3px);
   color: rgba(245, 249, 255, 0.94);
@@ -22185,6 +22232,36 @@ onUnmounted(() => {
   font-weight: 500;
   pointer-events: auto;
 }
+
+.viewer-control-switch-backdrop,
+.viewer-control-switch-ring,
+.viewer-control-switch-scanline,
+.viewer-control-switch-label { position: absolute; }
+.viewer-control-switch-backdrop { inset: -20%; border-radius: 50%; background: radial-gradient(circle, rgba(47, 208, 255, .18), transparent 52%); animation: viewer-control-switch-pulse 1.8s ease-in-out infinite; }
+.viewer-control-switch-particle { position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; border-radius: 50%; background: #8ff4ff; box-shadow: 0 0 12px #34d9ff; transform: rotate(calc(var(--particle-index) * 22.5deg)) translateY(-260px); animation: viewer-control-switch-particle 1.4s ease-out infinite; animation-delay: calc(var(--particle-index) * -0.06s); }
+.viewer-control-switch-ring { border-radius: 50%; border: 1px solid rgba(92, 232, 255, .8); box-shadow: 0 0 24px rgba(43, 207, 255, .7), inset 0 0 24px rgba(43, 207, 255, .35); }
+.viewer-control-switch-ring--outer { width: min(60vw, 520px); height: min(60vw, 520px); animation: viewer-control-switch-ring 1.5s ease-out infinite; }
+.viewer-control-switch-ring--inner { width: min(28vw, 250px); height: min(28vw, 250px); border-style: dashed; animation: viewer-control-switch-ring 1s linear infinite reverse; }
+.viewer-control-switch-scanline { left: -10%; right: -10%; top: -20%; height: 40%; background: linear-gradient(180deg, transparent, rgba(111, 241, 255, .5), transparent); animation: viewer-control-switch-scan 1.1s linear infinite; }
+.viewer-control-switch-label { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border: 1px solid rgba(127, 233, 255, .35); border-radius: 999px; background: rgba(5, 18, 31, .78); box-shadow: 0 12px 40px rgba(0, 0, 0, .28); z-index: 1; }
+.viewer-control-switch-overlay--none .viewer-control-switch-backdrop,
+.viewer-control-switch-overlay--none .viewer-control-switch-ring,
+.viewer-control-switch-overlay--none .viewer-control-switch-scanline { display: none; }
+.viewer-control-switch-overlay--scanline .viewer-control-switch-particle { display: none; }
+.viewer-control-switch-overlay--scanline .viewer-control-switch-ring { border-radius: 8px; transform: perspective(500px) rotateX(62deg); }
+.viewer-control-switch-overlay--vortex .viewer-control-switch-ring--outer { border-color: rgba(177, 107, 255, .9); animation-duration: 1s; }
+.viewer-control-switch-overlay--vortex .viewer-control-switch-particle { background: #d0a1ff; box-shadow: 0 0 14px #9d58ff; }
+.viewer-control-switch-overlay--glitch .viewer-control-switch-ring { border-color: #ff5fc8; border-radius: 0; animation: viewer-control-switch-glitch .35s steps(2) infinite; }
+.viewer-control-switch-overlay--glitch .viewer-control-switch-backdrop { background: repeating-linear-gradient(0deg, rgba(255, 73, 177, .12) 0 2px, transparent 2px 7px); animation: viewer-control-switch-glitch .25s steps(2) infinite; }
+.viewer-control-switch-overlay.is-revealing .viewer-control-switch-ring--outer { animation: viewer-control-switch-reveal .76s ease-out forwards; }
+.viewer-control-switch-overlay.is-revealing .viewer-control-switch-ring--inner { animation: viewer-control-switch-reveal .6s ease-out forwards; }
+@keyframes viewer-control-switch-pulse { 50% { transform: scale(1.18); opacity: .55; } }
+@keyframes viewer-control-switch-particle { 0% { opacity: 0; transform: rotate(calc(var(--particle-index) * 22.5deg)) translateY(-40px) scale(.3); } 30%, 70% { opacity: 1; } 100% { opacity: 0; transform: rotate(calc(var(--particle-index) * 22.5deg)) translateY(-260px) scale(1); } }
+@keyframes viewer-control-switch-ring { 0% { transform: scale(.15) rotate(0); opacity: 0; } 35% { opacity: 1; } 100% { transform: scale(1.08) rotate(180deg); opacity: .15; } }
+@keyframes viewer-control-switch-scan { from { transform: translateY(-55%); } to { transform: translateY(55%); } }
+@keyframes viewer-control-switch-reveal { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(2.2); } }
+@keyframes viewer-control-switch-glitch { 0%, 100% { filter: none; transform: translate(0); } 50% { filter: hue-rotate(90deg); transform: translate(4px, -2px); } }
+@media (prefers-reduced-motion: reduce) { .viewer-control-switch-overlay *, .viewer-control-switch-overlay::before { animation-duration: .2s !important; } }
 
 .viewer-control-switch-spinner {
   width: 22px;

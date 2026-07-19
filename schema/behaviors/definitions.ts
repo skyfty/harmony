@@ -39,6 +39,7 @@ import type {
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
   SwitchControlNodeBehaviorParams,
+  RestoreControlNodeBehaviorParams,
   ReleaseCharacterBehaviorParams,
   DebusBehaviorParams,
   CouponBehaviorParams,
@@ -48,6 +49,7 @@ import type {
   RuntimePrefabInitializationMode,
   RuntimePrefabPlacementOptions,
 } from '../core'
+import { normalizeControlNodeTransitionPreset } from '../core'
 
 export interface BehaviorActionDefinition {
   id: BehaviorEventType
@@ -706,7 +708,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     description: 'Replace the active control node with the selected owned asset of the target type.',
     icon: 'mdi-swap-horizontal-circle-outline',
     createDefaultParams(): SwitchControlNodeBehaviorParams {
-      return { targetType: 'vehicle', prefabAssetId: null }
+      return { targetType: 'vehicle', prefabAssetId: null, transitionPreset: 'quantum' }
     },
   },
   {
@@ -714,8 +716,8 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     label: 'Restore Control Node',
     description: 'Restore the most recent control node switch, if one is available.',
     icon: 'mdi-swap-horizontal',
-    createDefaultParams(): Record<string, never> {
-      return {}
+    createDefaultParams(): RestoreControlNodeBehaviorParams {
+      return { transitionPreset: 'quantum' }
     },
   },
   {
@@ -1233,6 +1235,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
             ? params?.targetType ?? 'vehicle'
             : 'vehicle',
           prefabAssetId: normalizeAssetId(params?.prefabAssetId),
+          transitionPreset: normalizeControlNodeTransitionPreset(params?.transitionPreset),
         },
       }
     }
@@ -1697,13 +1700,19 @@ export function ensureBehaviorParams(
               ? params?.targetType ?? 'vehicle'
               : 'vehicle',
             prefabAssetId: normalizeAssetId(params?.prefabAssetId),
+            transitionPreset: normalizeControlNodeTransitionPreset(params?.transitionPreset),
           },
         }
       }
       case 'restoreControlNode':
+        {
+          const params = script.params as Partial<RestoreControlNodeBehaviorParams> | undefined
         return {
           type: 'restoreControlNode',
-          params: {},
+          params: {
+            transitionPreset: normalizeControlNodeTransitionPreset(params?.transitionPreset),
+          },
+        }
         }
       case 'releaseCharacter':
         return {

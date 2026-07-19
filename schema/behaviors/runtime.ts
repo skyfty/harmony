@@ -28,8 +28,10 @@ import type {
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
   SwitchControlNodeBehaviorParams,
+  RestoreControlNodeBehaviorParams,
   CouponBehaviorParams,
 } from '../core'
+import { normalizeControlNodeTransitionPreset } from '../core'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
 export type BehaviorTriggerContext = {
@@ -301,6 +303,7 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       targetType: SwitchControlNodeBehaviorParams['targetType']
       prefabAssetId: string | null
+      transitionPreset: SwitchControlNodeBehaviorParams['transitionPreset']
       token: string
     }
   | {
@@ -310,6 +313,7 @@ export type BehaviorRuntimeEvent =
       sequenceId: string
       behaviorSequenceId: string
       behaviorId: string
+      transitionPreset: RestoreControlNodeBehaviorParams['transitionPreset']
       token: string
     }
   | {
@@ -1106,6 +1110,7 @@ function createSwitchControlNodeEvent(
     prefabAssetId: typeof params?.prefabAssetId === 'string' && params.prefabAssetId.trim().length
       ? params.prefabAssetId.trim()
       : null,
+    transitionPreset: normalizeControlNodeTransitionPreset(params?.transitionPreset),
     token,
   }
 }
@@ -1124,6 +1129,7 @@ function createRestoreControlNodeEvent(
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
+    transitionPreset: normalizeControlNodeTransitionPreset((behavior.script.params as Partial<RestoreControlNodeBehaviorParams> | undefined)?.transitionPreset),
     token,
   }
 }
