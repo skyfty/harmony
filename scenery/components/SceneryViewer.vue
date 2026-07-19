@@ -819,6 +819,7 @@ import {
   applyParticleRuntimeCommand,
   setParticleTextureResolver,
 } from '@harmony/schema/components/definitions/particleSystemComponent';
+import { warpGateComponentDefinition } from '@harmony/schema/components/definitions/warpGateComponent';
 import { setGroundTextureSourceResolver } from '@harmony/schema/groundTextureSourceResolver';
 import {
   couponComponentDefinition,
@@ -2053,6 +2054,7 @@ previewComponentManager.registerDefinition(billboardComponentDefinition);
 previewComponentManager.registerDefinition(signboardComponentDefinition);
 previewComponentManager.registerDefinition(viewPointComponentDefinition);
 previewComponentManager.registerDefinition(particleSystemComponentDefinition);
+previewComponentManager.registerDefinition(warpGateComponentDefinition);
 previewComponentManager.registerDefinition(couponComponentDefinition);
 previewComponentManager.registerDefinition(behaviorComponentDefinition);
 previewComponentManager.registerDefinition(characterControllerComponentDefinition);

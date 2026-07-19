@@ -12,7 +12,13 @@ import {
 
 import type { ViewPointComponentProps } from '../components/definitions/viewPointComponent';
 import { VIEW_POINT_COMPONENT_TYPE, getViewPointCameraMetadata } from '../components/definitions/viewPointComponent';
-import { PARTICLE_SYSTEM_COMPONENT_TYPE } from '../components/definitions/particleSystemComponent';
+import type { WarpGateComponentProps } from '../components/definitions/warpGateComponent';
+import {
+  WARP_GATE_COMPONENT_TYPE,
+  WARP_GATE_EFFECT_METADATA_KEY,
+  clampWarpGateComponentProps,
+  cloneWarpGateComponentProps,
+} from '../components/definitions/warpGateComponent';
 import {
   PROCEDURAL_CITY_HOST_USER_DATA_KEY,
   cloneProceduralCityHostSnapshot,
@@ -56,10 +62,13 @@ export function applyNodeMetadata(object: THREE.Object3D, node: SceneNodeWithExt
     Object.assign(metadata, getViewPointCameraMetadata(viewPointProps));
   }
 
-  const particleSystemState = node.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
-    | SceneNodeComponentState<unknown>
+  const warpGateState = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<WarpGateComponentProps>
     | undefined;
-  if (particleSystemState?.enabled && node.nodeType === 'WarpGate') {
+  if (warpGateState?.enabled) {
     metadata.warpGate = true;
+    metadata[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(
+      clampWarpGateComponentProps(warpGateState.props),
+    );
   }
 }

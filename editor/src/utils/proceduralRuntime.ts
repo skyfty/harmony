@@ -5,7 +5,7 @@ import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import {
   DISPLAY_BOARD_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
-  PARTICLE_SYSTEM_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
 } from '@schema/components'
 
@@ -59,7 +59,7 @@ export function shouldCreateProceduralRuntimeObject(node: SceneNode): boolean {
 
   const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
 
-  if (nodeType === 'WarpGate' || hasEnabledComponent(node, PARTICLE_SYSTEM_COMPONENT_TYPE)) {
+  if (nodeType === 'WarpGate' || hasEnabledComponent(node, WARP_GATE_COMPONENT_TYPE)) {
     return true
   }
   if (nodeType === 'Guideboard' || hasEnabledComponent(node, GUIDEBOARD_COMPONENT_TYPE)) {

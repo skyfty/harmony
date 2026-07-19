@@ -16,6 +16,7 @@ import AnimationComponentPanel from '@/components/inspector/AnimationComponentPa
 import CharacterControllerPanel from '@/components/inspector/CharacterControllerPanel.vue'
 import GroundAnchorPanel from '@/components/inspector/GroundAnchorPanel.vue'
 import ParticleSystemPanel from '@/components/inspector/ParticleSystemPanel.vue'
+import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
 import WaterPanel from '@/components/inspector/WaterPanel.vue'
 import EnvironmentPanel from '@/components/inspector/EnvironmentPanel.vue'
@@ -50,6 +51,7 @@ import { resolveCharacterControllerAnimationBindings } from '@schema/characterCo
 import {
   BEHAVIOR_COMPONENT_TYPE,
   PARTICLE_SYSTEM_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
   SIGNBOARD_COMPONENT_TYPE,
@@ -659,6 +661,7 @@ watch(
               <CouponPanel v-else-if="component.type === COUPON_COMPONENT_TYPE" />
               <PlanningImagesPanel v-else-if="component.type === PLANNING_IMAGES_COMPONENT_TYPE" />
               <ParticleSystemPanel v-else-if="component.type === PARTICLE_SYSTEM_COMPONENT_TYPE" />
+              <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <RigidbodyPanel
                 v-else-if="component.type === RIGIDBODY_COMPONENT_TYPE"
                 @open-collider-editor="handleOpenRigidbodyColliderEditor"

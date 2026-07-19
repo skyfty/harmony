@@ -317,6 +317,7 @@ import type {
   LandformComponentProps,
   PlanningImagesComponentProps,
   ParticleSystemComponentProps,
+  WarpGateComponentProps,
   WaterComponentProps,
 } from '@schema/components'
 import {
@@ -327,6 +328,7 @@ import {
   GUIDEBOARD_COMPONENT_TYPE,
   VIEW_POINT_COMPONENT_TYPE,
   PARTICLE_SYSTEM_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
@@ -355,6 +357,8 @@ import {
   cloneBillboardComponentProps,
   clampParticleSystemComponentProps,
   cloneParticleSystemComponentProps,
+  clampWarpGateComponentProps,
+  cloneWarpGateComponentProps,
   clampRigidbodyComponentProps,
   cloneRigidbodyComponentProps,
   clampVehicleComponentProps,
@@ -412,6 +416,7 @@ type NodeComponentPropsByType = {
   [GUIDEBOARD_COMPONENT_TYPE]: GuideboardComponentProps
   [VIEW_POINT_COMPONENT_TYPE]: ViewPointComponentProps
   [PARTICLE_SYSTEM_COMPONENT_TYPE]: ParticleSystemComponentProps
+  [WARP_GATE_COMPONENT_TYPE]: WarpGateComponentProps
   [DISPLAY_BOARD_COMPONENT_TYPE]: DisplayBoardComponentProps
   [BILLBOARD_COMPONENT_TYPE]: BillboardComponentProps
   [PLANNING_IMAGES_COMPONENT_TYPE]: PlanningImagesComponentProps
@@ -4537,27 +4542,8 @@ function evaluateGuideboardAttributes(
 function evaluateWarpGateAttributes(
   userData: Record<string, unknown> | undefined,
 ): { sanitizedUserData?: Record<string, unknown>; shouldAttachWarpGate: boolean } {
-  if (!userData) {
-    return { sanitizedUserData: undefined, shouldAttachWarpGate: false }
-  }
-
-  const next: Record<string, unknown> = {}
-  let mutated = false
-  let shouldAttachWarpGate = false
-
-  for (const [key, value] of Object.entries(userData)) {
-    if (key === 'warpGate') {
-      mutated = true
-      if (value === true) {
-        shouldAttachWarpGate = true
-      }
-      continue
-    }
-    next[key] = value
-  }
-
-  const sanitizedUserData = mutated ? (Object.keys(next).length ? next : undefined) : userData
-  return { sanitizedUserData, shouldAttachWarpGate }
+  // WarpGate is component-owned. Legacy userData markers are intentionally ignored.
+  return { sanitizedUserData: userData, shouldAttachWarpGate: false }
 }
 
 const runtimeObjectRegistry = new Map<string, Object3D>()
@@ -18067,6 +18053,13 @@ export const useSceneStore = defineStore('scene', {
           return false
         }
         nextProps = cloneParticleSystemComponentProps(merged)
+      } else if (type === WARP_GATE_COMPONENT_TYPE) {
+        const currentProps = clampWarpGateComponentProps(component.props as WarpGateComponentProps)
+        const merged = clampWarpGateComponentProps({ ...currentProps, ...(patch as Partial<WarpGateComponentProps>) })
+        if (JSON.stringify(currentProps) === JSON.stringify(merged)) {
+          return false
+        }
+        nextProps = cloneWarpGateComponentProps(merged) as any
       } else if (type === FLOOR_COMPONENT_TYPE) {
         const currentProps = component.props as FloorComponentProps
         const typedPatch = patch as Partial<FloorComponentProps>

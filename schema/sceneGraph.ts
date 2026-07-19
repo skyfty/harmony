@@ -32,7 +32,13 @@ import type { GuideboardComponentProps } from './components/definitions/guideboa
 import { GUIDEBOARD_COMPONENT_TYPE } from './components/definitions/guideboardComponent';
 import type { ViewPointComponentProps } from './components/definitions/viewPointComponent';
 import { VIEW_POINT_COMPONENT_TYPE, getViewPointCameraMetadata } from './components/definitions/viewPointComponent';
-import { PARTICLE_SYSTEM_COMPONENT_TYPE } from './components/definitions/particleSystemComponent';
+import type { WarpGateComponentProps } from './components/definitions/warpGateComponent';
+import {
+  WARP_GATE_COMPONENT_TYPE,
+  WARP_GATE_EFFECT_METADATA_KEY,
+  clampWarpGateComponentProps,
+  cloneWarpGateComponentProps,
+} from './components/definitions/warpGateComponent';
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
 import type { WallComponentProps } from './components/definitions/wallComponent'
@@ -974,8 +980,8 @@ class SceneGraphBuilder {
   }
 
   private hasEnabledWarpGateComponent(node: SceneNodeWithExtras): boolean {
-    const state = node.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
-      | SceneNodeComponentState<unknown>
+    const state = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
       | undefined
     return Boolean(state?.enabled)
   }
@@ -1066,11 +1072,14 @@ class SceneGraphBuilder {
     } else if (node.nodeType === 'Sphere' && node.editorFlags?.ignoreGridSnapping) {
       helperData.viewPoint = true;
     }
-    const particleSystemState = node.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
-      | SceneNodeComponentState<unknown>
+    const warpGateState = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<WarpGateComponentProps>
       | undefined;
-    if (particleSystemState?.enabled && node.nodeType === 'WarpGate') {
+    if (warpGateState?.enabled) {
       helperData.warpGate = true;
+      helperData[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(
+        clampWarpGateComponentProps(warpGateState.props),
+      );
     }
     placeholder.userData = helperData;
 

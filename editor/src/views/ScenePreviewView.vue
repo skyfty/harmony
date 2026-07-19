@@ -227,6 +227,7 @@ import {
 	viewPointComponentDefinition,
 	animationComponentDefinition,
 	particleSystemComponentDefinition,
+	warpGateComponentDefinition,
 	rigidbodyComponentDefinition,
 	vehicleComponentDefinition,
 	steerComponentDefinition,
@@ -1291,7 +1292,8 @@ previewComponentManager.registerDefinition(billboardComponentDefinition)
 previewComponentManager.registerDefinition(signboardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(animationComponentDefinition)
-previewComponentManager.registerDefinition(particleSystemComponentDefinition)
+	previewComponentManager.registerDefinition(particleSystemComponentDefinition)
+	previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(couponComponentDefinition)
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(vehicleComponentDefinition)

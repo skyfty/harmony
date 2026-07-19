@@ -1,9 +1,10 @@
 import type * as THREE from 'three'
 import {
   GUIDEBOARD_RUNTIME_REGISTRY_KEY,
+  WARP_GATE_RUNTIME_REGISTRY_KEY,
   PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
 } from '@schema/components'
-import type { GuideboardComponentProps, ParticleRuntimeRegistryEntry } from '@schema/components'
+import type { GuideboardComponentProps, WarpGateComponentProps, ParticleRuntimeRegistryEntry } from '@schema/components'
 
 export type EffectPlaybackEntry = {
   id: string
@@ -29,6 +30,11 @@ type GuideboardRuntimeRegistryEntry = {
   setPlaybackActive?: (active: boolean) => void
   props?: Partial<GuideboardComponentProps> | null
 }
+type WarpGateRuntimeRegistryEntry = {
+  tick?: (delta: number) => void
+  setPlaybackActive?: (active: boolean) => void
+  props?: Partial<WarpGateComponentProps> | null
+}
 
 export function createEffectPlaybackManager(): EffectPlaybackManager {
   const activeEntries = new Map<string, EffectPlaybackEntry>()
@@ -38,14 +44,27 @@ export function createEffectPlaybackManager(): EffectPlaybackManager {
     {
       registryKey: PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
       collect(object, nodeId) {
-        const registry = object.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as
-          | Record<string, ParticleRuntimeRegistryEntry>
+        const registry = object.userData?.[PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY] as Record<string, ParticleRuntimeRegistryEntry> | undefined
+        if (!registry) return []
+        return Object.entries(registry).map(([componentId, entry]) => ({
+          id: `${nodeId}:${PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY}:${componentId}`,
+          tick: typeof entry.tick === 'function' ? entry.tick.bind(entry) : undefined,
+          activate: typeof entry.setPlaybackActive === 'function' ? () => entry.setPlaybackActive?.(true) : undefined,
+          deactivate: typeof entry.setPlaybackActive === 'function' ? () => entry.setPlaybackActive?.(false) : undefined,
+        }))
+      },
+    },
+    {
+      registryKey: WARP_GATE_RUNTIME_REGISTRY_KEY,
+      collect(object, nodeId) {
+        const registry = object.userData?.[WARP_GATE_RUNTIME_REGISTRY_KEY] as
+          | Record<string, WarpGateRuntimeRegistryEntry>
           | undefined
         if (!registry) {
           return []
         }
         return Object.entries(registry).map(([componentId, entry]) => {
-          const playbackId = `${nodeId}:${PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY}:${componentId}`
+          const playbackId = `${nodeId}:${WARP_GATE_RUNTIME_REGISTRY_KEY}:${componentId}`
           return {
             id: playbackId,
             tick: typeof entry.tick === 'function' ? entry.tick.bind(entry) : undefined,
@@ -54,11 +73,7 @@ export function createEffectPlaybackManager(): EffectPlaybackManager {
                 ? () => entry.setPlaybackActive?.(true)
                 : undefined,
             deactivate:
-              typeof entry.stop === 'function'
-                ? () => entry.stop?.({ soft: false })
-                : typeof entry.setPlaybackActive === 'function'
-                  ? () => entry.setPlaybackActive?.(false)
-                : undefined,
+              typeof entry.setPlaybackActive === 'function' ? () => entry.setPlaybackActive?.(false) : undefined,
           }
         })
       },

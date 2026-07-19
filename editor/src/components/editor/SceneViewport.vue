@@ -345,7 +345,7 @@ import { generateUuid } from '@/utils/uuid'
 import {
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
-  PARTICLE_SYSTEM_COMPONENT_TYPE,
+  WARP_GATE_COMPONENT_TYPE,
   GUIDEBOARD_COMPONENT_TYPE,
   BEHAVIOR_COMPONENT_TYPE,
   isAnySteerTargetNode,
@@ -361,21 +361,19 @@ import {
   ROAD_DEFAULT_WIDTH,
   ROAD_DEFAULT_JUNCTION_SMOOTHING,
   ROAD_COMPONENT_TYPE,
-  PARTICLE_SYSTEM_ACTIVE_FLAG,
-  PARTICLE_SYSTEM_METADATA_KEY,
-  clampParticleSystemComponentProps,
+  clampWarpGateComponentProps,
+  computeWarpGateEffectActive,
   clampGuideboardComponentProps,
   computeGuideboardEffectActive,
   GUIDEBOARD_EFFECT_METADATA_KEY,
   GUIDEBOARD_EFFECT_ACTIVE_FLAG,
-  cloneParticleSystemComponentProps,
+  cloneWarpGateComponentProps,
   cloneGuideboardComponentProps,
   GUIDE_ROUTE_COMPONENT_TYPE,
-  createParticlePresetProps,
-  createParticleSystemRuntime,
+  createWarpGateEffectInstance,
   createGuideboardEffectInstance,
-  registerParticleSystemRuntime,
-  unregisterParticleSystemRuntime,
+  WARP_GATE_EFFECT_METADATA_KEY,
+  WARP_GATE_EFFECT_ACTIVE_FLAG,
   LOD_COMPONENT_TYPE,
   clampLodComponentProps,
   clampBoundaryWallComponentProps,
@@ -391,10 +389,10 @@ import type {
   GuideboardComponentProps,
   GuideRouteComponentProps,
   BoundaryWallComponentProps,
-  ParticleSystemComponentProps,
   WallComponentProps,
   RoadComponentProps,
-  ParticleSystemRuntimeHandle,
+  WarpGateComponentProps,
+  WarpGateEffectInstance,
   GuideboardEffectInstance,
   LodComponentProps,
 
@@ -1922,11 +1920,8 @@ const snapController = useSnapController({
 
 const renderClock = new THREE.Clock()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
-const PARTICLE_PORTAL_PLACEHOLDER_KEY = '__harmonyParticlePortalPlaceholder'
-const PARTICLE_PORTAL_PLACEHOLDER_COMPONENT_ID = '__particle_portal_placeholder__'
-type ParticlePortalPlaceholderHandle = {
-  runtime: ParticleSystemRuntimeHandle | null
-}
+const WARP_GATE_PLACEHOLDER_KEY = '__harmonyWarpGatePlaceholder'
+type WarpGatePlaceholderHandle = { controller: WarpGateEffectInstance | null }
 
 const GUIDEBOARD_PLACEHOLDER_KEY = '__harmonyGuideboardPlaceholder'
 type GuideboardPlaceholderHandle = {
@@ -11575,15 +11570,12 @@ let toolOverrideSnapshot: AltOverrideSnapshot | null = null
 let vOverrideSnapshotTool: EditorTool | null = null
 
 function disposeObjectResources(object: THREE.Object3D) {
-  const placeholderHandle = object.userData?.[PARTICLE_PORTAL_PLACEHOLDER_KEY] as ParticlePortalPlaceholderHandle | undefined
-  if (placeholderHandle?.runtime) {
-    unregisterParticleSystemRuntime(object, PARTICLE_PORTAL_PLACEHOLDER_COMPONENT_ID)
-    placeholderHandle.runtime.group.removeFromParent()
-    placeholderHandle.runtime.dispose()
-    placeholderHandle.runtime = null
-    if (object.userData) {
-      delete object.userData[PARTICLE_PORTAL_PLACEHOLDER_KEY]
-    }
+  const warpGateHandle = object.userData?.[WARP_GATE_PLACEHOLDER_KEY] as WarpGatePlaceholderHandle | undefined
+  if (warpGateHandle?.controller) {
+    warpGateHandle.controller.group.removeFromParent()
+    warpGateHandle.controller.dispose()
+    warpGateHandle.controller = null
+    delete object.userData[WARP_GATE_PLACEHOLDER_KEY]
   }
 
   object.traverse((child) => {
@@ -11615,27 +11607,27 @@ const dragPreview = useDragPreview({
     sceneStore.preparePrefabAsset(assetId, { prefabAssetIdForDownloadProgress: assetId }),
 })
 const dragPreviewGroup = dragPreview.group
-const warpGateParticlePreviewRuntime = createParticleSystemRuntime(createParticlePresetProps('warpColumnLite'))
-const warpGateParticlePreviewGroup = new THREE.Group()
-warpGateParticlePreviewGroup.name = 'Warp Gate Particle Preview'
-warpGateParticlePreviewGroup.visible = false
-warpGateParticlePreviewGroup.castShadow = false
-warpGateParticlePreviewGroup.receiveShadow = false
-warpGateParticlePreviewGroup.userData = {
-  ...(warpGateParticlePreviewGroup.userData ?? {}),
+const warpGatePlacementPreviewController = createWarpGateEffectInstance(clampWarpGateComponentProps(null))
+const warpGatePlacementPreviewGroup = new THREE.Group()
+warpGatePlacementPreviewGroup.name = 'Warp Gate Preview'
+warpGatePlacementPreviewGroup.visible = false
+warpGatePlacementPreviewGroup.castShadow = false
+warpGatePlacementPreviewGroup.receiveShadow = false
+warpGatePlacementPreviewGroup.userData = {
+  ...(warpGatePlacementPreviewGroup.userData ?? {}),
   editorOnly: true,
   warpGate: true,
-  warpGateParticlePreview: true,
+  warpGatePreview: true,
   ignoreGridSnapping: true,
 }
-warpGateParticlePreviewRuntime.group.removeFromParent()
-warpGateParticlePreviewGroup.add(warpGateParticlePreviewRuntime.group)
-warpGateParticlePreviewGroup.traverse((child) => {
+warpGatePlacementPreviewController.group.removeFromParent()
+warpGatePlacementPreviewGroup.add(warpGatePlacementPreviewController.group)
+warpGatePlacementPreviewGroup.traverse((child) => {
   child.userData = {
     ...(child.userData ?? {}),
     editorOnly: true,
     warpGate: true,
-    warpGateParticlePreview: true,
+    warpGatePreview: true,
     ignoreGridSnapping: true,
   }
 })
@@ -11656,7 +11648,7 @@ type AssetPlacementPreviewSnapshot = {
 }
 
 function hideWarpGatePlacementPreview(): void {
-  warpGateParticlePreviewGroup.visible = false
+  warpGatePlacementPreviewGroup.visible = false
 }
 
 function updateWarpGatePlacementPreview(event: PointerEvent): void {
@@ -11677,10 +11669,10 @@ function updateWarpGatePlacementPreview(event: PointerEvent): void {
     return
   }
 
-  const aligned = computeWorldAabbBottomAlignedPoint(basePoint, warpGateParticlePreviewGroup) ?? basePoint
-  warpGateParticlePreviewGroup.position.copy(aligned)
-  warpGateParticlePreviewGroup.rotation.set(0, 0, 0)
-  warpGateParticlePreviewGroup.visible = true
+  const aligned = computeWorldAabbBottomAlignedPoint(basePoint, warpGatePlacementPreviewGroup) ?? basePoint
+  warpGatePlacementPreviewGroup.position.copy(aligned)
+  warpGatePlacementPreviewGroup.rotation.set(0, 0, 0)
+  warpGatePlacementPreviewGroup.visible = true
 }
 
 function computeWorldAabbBottomAlignedPoint(
@@ -14166,7 +14158,7 @@ function initScene() {
   scene.add(scatterPreviewGroup)
   scene.add(groundSelectionGroup)
   scene.add(dragPreviewGroup)
-  scene.add(warpGateParticlePreviewGroup)
+  scene.add(warpGatePlacementPreviewGroup)
   gridHighlight = createGridHighlight()
   if (gridHighlight) {
     scene.add(gridHighlight)
@@ -14811,9 +14803,9 @@ function animate() {
     })
     prof.effectTickers = performance.now() - t0
   }
-  if (effectiveDelta > 0 && warpGateParticlePreviewGroup.visible) {
+  if (effectiveDelta > 0 && warpGatePlacementPreviewGroup.visible) {
     try {
-      warpGateParticlePreviewRuntime.tick(effectiveDelta)
+    warpGatePlacementPreviewController.tick(effectiveDelta)
     } catch (error) {
       console.warn('[SceneViewport] Failed to advance warp gate placement preview', error)
     }
@@ -15017,9 +15009,9 @@ function disposeScene() {
   dragPreview.dispose()
   dragPreviewGroup.removeFromParent()
   hideWarpGatePlacementPreview()
-  warpGateParticlePreviewRuntime.group.removeFromParent()
-  warpGateParticlePreviewRuntime.dispose()
-  warpGateParticlePreviewGroup.removeFromParent()
+  warpGatePlacementPreviewController.group.removeFromParent()
+  warpGatePlacementPreviewController.dispose()
+  warpGatePlacementPreviewGroup.removeFromParent()
 
   clearSelectionHighlights()
   disposeNodePickerHighlight()
@@ -22053,7 +22045,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
 
 
   if (nodeType === 'WarpGate' && !hasRuntimeObject) {
-    applyWarpGateParticlePlaceholderState(object, node)
+    applyWarpGatePlaceholderState(object, node)
   }
 
   if (nodeType === 'Guideboard' && !hasRuntimeObject) {
@@ -23009,109 +23001,38 @@ function ensureUvDebugMaterialsForMissingMeshes(
 }
 
 
-function resolveWarpGateParticleProps(node: SceneNode): ParticleSystemComponentProps {
-  const entry = node.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
-    | SceneNodeComponentState<ParticleSystemComponentProps>
+function resolveWarpGateProps(node: SceneNode): WarpGateComponentProps {
+  const entry = node.components?.[WARP_GATE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<WarpGateComponentProps>
     | undefined
-  const defaults = createParticlePresetProps('warpColumnLite')
-  if (!entry) {
-    return defaults
-  }
-  if (entry.enabled === false) {
-    return {
-      ...defaults,
-      playback: {
-        ...defaults.playback,
-        autoPlay: false,
-        startActive: false,
-      },
-      exposedParams: {
-        ...defaults.exposedParams,
-        emissionRate: 0,
-        burstCount: 0,
-        opacity: 0,
-      },
-    }
-  }
-  return clampParticleSystemComponentProps(entry.props)
+  return clampWarpGateComponentProps(entry?.props)
 }
 
-function createWarpGateParticlePlaceholderObject(node: SceneNode): THREE.Object3D {
-  // Lightweight particle preview used when no runtime particle-backed warp gate object exists yet.
+function createWarpGatePlaceholderObject(node: SceneNode): THREE.Object3D {
   const root = new THREE.Group()
   root.name = node.name ?? 'Warp Gate'
-  root.castShadow = false
-  root.receiveShadow = false
-
-  const props = resolveWarpGateParticleProps(node)
-  const runtime = createParticleSystemRuntime(props)
-  runtime.group.removeFromParent()
-  root.add(runtime.group)
-
-  const userData = root.userData ?? (root.userData = {})
-  userData.warpGate = true
-  userData.warpGatePlaceholder = true
-  const handle: ParticlePortalPlaceholderHandle = { runtime }
-  userData[PARTICLE_PORTAL_PLACEHOLDER_KEY] = handle
-  registerParticleSystemRuntime(root, PARTICLE_PORTAL_PLACEHOLDER_COMPONENT_ID, runtime)
-
-  applyWarpGateParticlePlaceholderState(root, node, props)
-
+  const controller = createWarpGateEffectInstance(resolveWarpGateProps(node))
+  root.add(controller.group)
+  root.userData[WARP_GATE_PLACEHOLDER_KEY] = { controller } satisfies WarpGatePlaceholderHandle
   return root
 }
 
-function applyWarpGateParticlePlaceholderState(
-  object: THREE.Object3D,
-  node: SceneNode,
-  providedProps?: ParticleSystemComponentProps,
-): void {
-  const handle = object.userData?.[PARTICLE_PORTAL_PLACEHOLDER_KEY] as ParticlePortalPlaceholderHandle | undefined
-  if (!handle) {
+function applyWarpGatePlaceholderState(object: THREE.Object3D, node: SceneNode): void {
+  const handle = object.userData?.[WARP_GATE_PLACEHOLDER_KEY] as WarpGatePlaceholderHandle | undefined
+  if (!handle?.controller) return
+  const entry = node.components?.[WARP_GATE_COMPONENT_TYPE] as SceneNodeComponentState<WarpGateComponentProps> | undefined
+  if (entry?.enabled === false) {
+    handle.controller.group.visible = false
+    delete object.userData[WARP_GATE_EFFECT_METADATA_KEY]
+    delete object.userData[WARP_GATE_EFFECT_ACTIVE_FLAG]
     return
   }
-
-  const props = providedProps ?? resolveWarpGateParticleProps(node)
-  const userData = object.userData ?? (object.userData = {})
-  userData.warpGatePlaceholder = true
-
-  const componentEntry = node.components?.[PARTICLE_SYSTEM_COMPONENT_TYPE] as
-    | SceneNodeComponentState<ParticleSystemComponentProps>
-    | undefined
-  const enabled = componentEntry?.enabled !== false
-
-  const currentMetadata = userData[PARTICLE_SYSTEM_METADATA_KEY] as ParticleSystemComponentProps | undefined
-  const shouldRebuild =
-    !handle.runtime
-    || JSON.stringify(currentMetadata ?? null) !== JSON.stringify(props)
-
-  if (shouldRebuild) {
-    if (handle.runtime) {
-      unregisterParticleSystemRuntime(object, PARTICLE_PORTAL_PLACEHOLDER_COMPONENT_ID)
-      handle.runtime.group.removeFromParent()
-      handle.runtime.dispose()
-    }
-    handle.runtime = createParticleSystemRuntime(props)
-    handle.runtime.group.removeFromParent()
-    object.add(handle.runtime.group)
-    registerParticleSystemRuntime(object, PARTICLE_PORTAL_PLACEHOLDER_COMPONENT_ID, handle.runtime)
-  }
-
-  if (!enabled) {
-    handle.runtime?.setPlaybackActive(false)
-    delete userData.warpGate
-    delete userData[PARTICLE_SYSTEM_METADATA_KEY]
-    if (PARTICLE_SYSTEM_ACTIVE_FLAG in userData) {
-      delete userData[PARTICLE_SYSTEM_ACTIVE_FLAG]
-    }
-    userData.warpGateVisible = false
-    return
-  }
-
-  handle.runtime?.setPlaybackActive(true)
-  userData.warpGate = true
-  userData.warpGateVisible = true
-  userData[PARTICLE_SYSTEM_ACTIVE_FLAG] = true
-  userData[PARTICLE_SYSTEM_METADATA_KEY] = cloneParticleSystemComponentProps(props)
+  const props = resolveWarpGateProps(node)
+  handle.controller.update(props)
+  handle.controller.group.visible = true
+  object.userData.warpGate = true
+  object.userData[WARP_GATE_EFFECT_METADATA_KEY] = cloneWarpGateComponentProps(props)
+  object.userData[WARP_GATE_EFFECT_ACTIVE_FLAG] = computeWarpGateEffectActive(props)
 }
 
 function resolveGuideboardProps(node: SceneNode): GuideboardComponentProps {
@@ -23381,7 +23302,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       runtimeObject.userData.usesRuntimeObject = true
       object = runtimeObject
     } else {
-      object = createWarpGateParticlePlaceholderObject(node)
+      object = createWarpGatePlaceholderObject(node)
       registerRuntimeObject(node.id, object)
     }
   } else if (nodeType === 'Guideboard') {
@@ -23445,7 +23366,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
   applyNodeMaterialOverrides(object, node)
 
   if (nodeType === 'WarpGate' && !sceneStore.hasRuntimeObject(node.id)) {
-    applyWarpGateParticlePlaceholderState(object, node)
+    applyWarpGatePlaceholderState(object, node)
   } else if (nodeType === 'Guideboard' && !sceneStore.hasRuntimeObject(node.id)) {
     applyGuideboardPlaceholderState(object, node)
   }
