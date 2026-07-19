@@ -6489,11 +6489,14 @@ async function switchControlNodeRuntimePrefab(
 	controlNodeSwitchBusy.value = true
 	resetCharacterControlInputs()
 	resetVehicleDriveInputs()
+	// stopVehicleDriveMode clears vehicleDriveState synchronously. Preserve the
+	// currently driven node before stopping so it remains the switch's main node.
+	const activeVehicleNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
 	if (vehicleDriveState.active) stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Control node is initializing.' }, preserveCamera: true })
 	try {
 		const existing = latestControlNodeRestoreSnapshot
-		const mainNodeId = existing?.mainNodeId ?? resolveControlNodeSwitchTargetNodeId()
-		const currentNodeId = existing?.temporaryNodeId ?? resolveControlNodeSwitchTargetNodeId()
+		const mainNodeId = existing?.mainNodeId ?? activeVehicleNodeId ?? resolveControlNodeSwitchTargetNodeId()
+		const currentNodeId = existing?.temporaryNodeId ?? activeVehicleNodeId ?? resolveControlNodeSwitchTargetNodeId()
 		if (!mainNodeId || !currentNodeId) return false
 		const mainNode = mainNodeId ? resolveNodeById(mainNodeId) : null
 		const currentObject = currentNodeId ? nodeObjectMap.get(currentNodeId) ?? null : null

@@ -6322,6 +6322,9 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
   controlNodeSwitchBusy.value = true;
   resetCharacterControlInputs();
   resetVehicleDriveInputs();
+  // vehicleDriveController.stopDrive clears the bridged drive state
+  // synchronously; retain the active vehicle node for this switch operation.
+  const activeVehicleNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
   if (vehicleDriveActive.value) {
     vehicleDriveController.stopDrive(
       { resolution: { type: 'abort', message: 'Control node is initializing.' }, preserveCamera: true },
@@ -6330,8 +6333,8 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
   }
   try {
     const existing = latestControlNodeRestoreSnapshot;
-    const mainNodeId = existing?.mainNodeId ?? (vehicleDriveNodeId.value ?? resolveDefaultControlledCharacterNodeId() ?? resolveSceneAutoEnterSteerBinding(currentDocument)?.targetNodeId ?? null);
-    const currentNodeId = existing?.temporaryNodeId ?? mainNodeId;
+    const mainNodeId = existing?.mainNodeId ?? (activeVehicleNodeId ?? resolveDefaultControlledCharacterNodeId() ?? resolveSceneAutoEnterSteerBinding(currentDocument)?.targetNodeId ?? null);
+    const currentNodeId = existing?.temporaryNodeId ?? activeVehicleNodeId ?? mainNodeId;
     if (!mainNodeId || !currentNodeId) return false;
     const mainNode = mainNodeId ? resolveNodeById(mainNodeId) : null;
     const currentObject = currentNodeId ? nodeObjectMap.get(currentNodeId) ?? null : null;
