@@ -12281,17 +12281,31 @@ function resolveCharacterRootWorldPosition(
   target: THREE.Vector3,
 ): THREE.Vector3 {
   const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? nodeId);
-  if (motionTelemetry?.hasSample) {
+  if (motionTelemetry?.hasSample
+    && Number.isFinite(motionTelemetry.worldPosition.x)
+    && Number.isFinite(motionTelemetry.worldPosition.y)
+    && Number.isFinite(motionTelemetry.worldPosition.z)) {
     target.copy(motionTelemetry.worldPosition);
     return target;
   }
-  const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null;
-  const rigidbodyBody = rigidbodyEntry?.body ?? null;
-  if (rigidbodyBody) {
-    target.set(rigidbodyBody.position.x, rigidbodyBody.position.y, rigidbodyBody.position.z);
-  } else {
-    protagonistObject.getWorldPosition(target);
+  const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(bindingNodeId ?? nodeId);
+  if (physicsFrameState
+    && Number.isFinite(physicsFrameState.position.x)
+    && Number.isFinite(physicsFrameState.position.y)
+    && Number.isFinite(physicsFrameState.position.z)) {
+    target.copy(physicsFrameState.position);
+    return target;
   }
+  const rigidbodyEntry = rigidbodyInstances.get(bindingNodeId ?? nodeId) ?? rigidbodyInstances.get(nodeId) ?? null;
+  const rigidbodyBody = rigidbodyEntry?.body ?? null;
+  if (rigidbodyBody
+    && Number.isFinite(rigidbodyBody.position.x)
+    && Number.isFinite(rigidbodyBody.position.y)
+    && Number.isFinite(rigidbodyBody.position.z)) {
+    target.set(rigidbodyBody.position.x, rigidbodyBody.position.y, rigidbodyBody.position.z);
+    return target;
+  }
+  protagonistObject.getWorldPosition(target);
   return target;
 }
 
@@ -12330,8 +12344,16 @@ function resolveCharacterFollowPlacement(
     };
   }
 
-  const placement = computeFollowPlacement(getApproxDimensions(object));
-  
+  const props = resolveDefaultControlledCharacterComponentProps();
+  const colliderRadius = Math.max(0.05, props?.colliderRadius ?? 0.35);
+  const colliderHeight = Math.max(0.1, props?.colliderHeight ?? 1.7);
+  const capsuleDiameter = Math.max(0.4, colliderRadius * 2);
+  const placement = computeFollowPlacement({
+    width: capsuleDiameter,
+    height: colliderHeight,
+    length: Math.max(capsuleDiameter, colliderHeight * 0.72),
+  });
+
   characterCameraFollowPlacementCache.nodeId = nodeId;
   characterCameraFollowPlacementCache.objectUuid = objectUuid;
   characterCameraFollowPlacementCache.placement = {

@@ -289,6 +289,7 @@ const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE = 0.14
 const FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE_SQ = FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE * FOLLOW_CAMERA_PLANAR_VELOCITY_DEAD_ZONE
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE = 0.03
 const FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ = FOLLOW_CAMERA_ANCHOR_DEAD_ZONE * FOLLOW_CAMERA_ANCHOR_DEAD_ZONE
+const FOLLOW_CAMERA_VERTICAL_ANCHOR_EPSILON = 0.005
 const FOLLOW_CAMERA_VELOCITY_FLIP_SPEED_SQ = 0.09
 const FOLLOW_CAMERA_VELOCITY_LERP_SPEED = 8
 
@@ -667,7 +668,12 @@ export class FollowCameraController {
     } else {
       // 目标基本静止时，若预测锚点与当前锚点的差异很小，则保持现有锚点，避免微抖。
       temp.tempVector.copy(temp.followPredictedAnchor).sub(follow.currentAnchor)
-      if (temp.tempVector.lengthSq() <= FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ) {
+      const horizontalAnchorDeltaSq = temp.tempVector.x * temp.tempVector.x + temp.tempVector.z * temp.tempVector.z
+      const verticalAnchorDelta = Math.abs(temp.tempVector.y)
+      if (
+        horizontalAnchorDeltaSq <= FOLLOW_CAMERA_ANCHOR_DEAD_ZONE_SQ
+        && verticalAnchorDelta <= FOLLOW_CAMERA_VERTICAL_ANCHOR_EPSILON
+      ) {
         follow.desiredAnchor.copy(follow.currentAnchor)
       } else {
         follow.desiredAnchor.copy(temp.followPredictedAnchor)

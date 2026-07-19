@@ -1676,10 +1676,7 @@ const protagonistPosePosition = new THREE.Vector3()
 const protagonistPoseDirection = new THREE.Vector3()
 const protagonistPoseTarget = new THREE.Vector3()
 const characterFollowAnchorPosition = new THREE.Vector3()
-const characterFollowRootPosition = new THREE.Vector3()
 const characterFollowForwardScratch = new THREE.Vector3()
-const characterFollowGroundSamplePosition = new THREE.Vector3()
-const characterFollowGroundRayOrigin = new THREE.Vector3()
 const tempBox = new THREE.Box3()
 const tempPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
@@ -1706,10 +1703,6 @@ const CHARACTER_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning({
 const CHARACTER_FOLLOW_CAMERA_DISTANCE_MIN = 6.1
 const CHARACTER_FOLLOW_CAMERA_HEIGHT_MIN = 4.4
 const CHARACTER_FOLLOW_CAMERA_TARGET_FORWARD_MIN = 4.2
-const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_RATIO = 0.55
-const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MIN = 0.9
-const CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MAX = 1.8
-const CHARACTER_FOLLOW_GROUND_RAYCAST_HEIGHT = 100000
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
 const DEFAULT_TONE_MAPPING_EXPOSURE = 1
@@ -7347,76 +7340,45 @@ function resolveCharacterFollowCameraOffset(target: THREE.Vector3): THREE.Vector
 
 function resolveCharacterRootWorldPosition(
 	nodeId: string,
+	bindingNodeId: string | null,
 	protagonistObject: THREE.Object3D,
 	target: THREE.Vector3,
 ): THREE.Vector3 {
-	const motionTelemetry = controlledNodeMotionRuntime.get(nodeId)
-	if (motionTelemetry?.hasSample) {
+	const physicsNodeId = bindingNodeId ?? nodeId
+	const motionTelemetry = controlledNodeMotionRuntime.get(physicsNodeId)
+	if (motionTelemetry?.hasSample
+		&& Number.isFinite(motionTelemetry.worldPosition.x)
+		&& Number.isFinite(motionTelemetry.worldPosition.y)
+		&& Number.isFinite(motionTelemetry.worldPosition.z)) {
 		target.copy(motionTelemetry.worldPosition)
 		return target
 	}
-	const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(nodeId)
-	if (physicsFrameState) {
+	const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(physicsNodeId)
+	if (physicsFrameState && Number.isFinite(physicsFrameState.position.x)
+		&& Number.isFinite(physicsFrameState.position.y)
+		&& Number.isFinite(physicsFrameState.position.z)) {
 		target.copy(physicsFrameState.position)
-	} else {
-		const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null
-		const rigidbodyBody = rigidbodyEntry?.body ?? null
-		if (rigidbodyBody) {
-			target.set(rigidbodyBody.position.x, rigidbodyBody.position.y, rigidbodyBody.position.z)
-		} else {
-			protagonistObject.getWorldPosition(target)
-		}
+		return target
 	}
+	const rigidbodyEntry = rigidbodyInstances.get(physicsNodeId) ?? rigidbodyInstances.get(nodeId) ?? null
+	const rigidbodyBody = rigidbodyEntry?.body ?? null
+	if (rigidbodyBody && Number.isFinite(rigidbodyBody.position.x)
+		&& Number.isFinite(rigidbodyBody.position.y)
+		&& Number.isFinite(rigidbodyBody.position.z)) {
+		target.set(rigidbodyBody.position.x, rigidbodyBody.position.y, rigidbodyBody.position.z)
+		return target
+	}
+	protagonistObject.getWorldPosition(target)
 	return target
-}
-
-function resolveCharacterFollowGroundProjectionY(sampleX: number, sampleZ: number): number | null {
-	if (!Number.isFinite(sampleX) || !Number.isFinite(sampleZ) || !cachedGroundNodeId) {
-		return null
-	}
-	const groundObject = nodeObjectMap.get(cachedGroundNodeId) ?? null
-	if (!groundObject) {
-		return null
-	}
-	const raycaster = new THREE.Raycaster()
-	characterFollowGroundRayOrigin.set(sampleX, CHARACTER_FOLLOW_GROUND_RAYCAST_HEIGHT, sampleZ)
-	raycaster.set(characterFollowGroundRayOrigin, new THREE.Vector3(0, -1, 0))
-	raycaster.far = CHARACTER_FOLLOW_GROUND_RAYCAST_HEIGHT * 2
-	const intersections = raycaster.intersectObject(groundObject, true)
-	const hit = intersections.find((entry) => entry.object.visible && Number.isFinite(entry.point.y))
-	return hit?.point.y ?? null
 }
 
 function resolveCharacterFollowAnchorWorld(
 	nodeId: string,
+	bindingNodeId: string | null,
 	protagonistObject: THREE.Object3D,
-	forwardWorld: THREE.Vector3,
 	target: THREE.Vector3,
 ): THREE.Vector3 {
-	const rootWorld = resolveCharacterRootWorldPosition(nodeId, protagonistObject, characterFollowRootPosition)
-	target.copy(rootWorld)
-	const props = resolveDefaultControlledCharacterComponentProps()
-	const projectionDistance = THREE.MathUtils.clamp(
-		(props?.colliderHeight ?? 1.7) * CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_RATIO,
-		CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MIN,
-		CHARACTER_FOLLOW_GROUND_PROJECTION_DISTANCE_MAX,
-	)
-	characterFollowGroundSamplePosition.copy(rootWorld)
-	if (forwardWorld.lengthSq() > 1e-6) {
-		characterFollowGroundSamplePosition.addScaledVector(forwardWorld, projectionDistance)
-	}
-	const projectedY = resolveCharacterFollowGroundProjectionY(
-		characterFollowGroundSamplePosition.x,
-		characterFollowGroundSamplePosition.z,
-	)
-	if (Number.isFinite(projectedY)) {
-		target.set(
-			characterFollowGroundSamplePosition.x,
-			projectedY as number,
-			characterFollowGroundSamplePosition.z,
-		)
-	}
-	return target
+	return resolveCharacterRootWorldPosition(nodeId, bindingNodeId, protagonistObject, target)
 }
 
 type ProtagonistPoseOptions = {
@@ -7504,8 +7466,8 @@ function updateCharacterFollowCamera(
 	}
 	const anchorWorld = resolveCharacterFollowAnchorWorld(
 		controlledNodeId,
+		bindingNodeId,
 		protagonistObject,
-		desiredForwardWorld,
 		characterFollowAnchorPosition,
 	)
 	const characterFollowPlacement = computeFollowPlacement(resolveCharacterFollowPlacementDimensions(protagonistObject))
