@@ -5,6 +5,7 @@ import type { RuntimePrefabInitializationMode, RuntimePrefabPlacementAlignment, 
 import { useSceneStore } from '@/stores/sceneStore'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import NodePicker from '@/components/common/NodePicker.vue'
+import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
 
 const props = defineProps<{
   modelValue: SpawnPrefabBehaviorParams | undefined
@@ -125,7 +126,8 @@ function openAssetPicker(event: MouseEvent) {
 
 function handleAssetSelected(asset: ProjectAsset | null) {
   assetDialogVisible.value = false
-  emitUpdate({ assetId: asset?.id ?? null })
+  const registered = asset ? ensureBehaviorAssetRegistered(sceneStore, asset, 'spawn prefab') : null
+  emitUpdate({ assetId: registered?.id ?? null })
 }
 
 function clearAsset() {

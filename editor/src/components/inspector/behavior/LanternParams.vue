@@ -5,6 +5,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
 
 const props = defineProps<{
   modelValue: LanternBehaviorParams | undefined
@@ -299,10 +300,11 @@ function handleImageDrop(index: number, event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   draggingSlideIndex.value = null
-  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
+  const registered = ensureBehaviorAssetRegistered(sceneStore, asset, 'lantern slide image')
+  updateSlideAsset(index, registered.id)
+  void assetCacheStore.downloadProjectAsset(registered).catch((error: unknown) => {
     console.warn('Failed to cache image asset for lantern slide', error)
   })
-  updateSlideAsset(index, asset.id)
 }
 
 function handleDescriptionDragEnter(index: number, event: DragEvent) {
@@ -354,10 +356,11 @@ function handleDescriptionDrop(index: number, event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   descriptionDragIndex.value = null
-  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
+  const registered = ensureBehaviorAssetRegistered(sceneStore, asset, 'lantern slide description')
+  updateSlideDescriptionAsset(index, registered.id)
+  void assetCacheStore.downloadProjectAsset(registered).catch((error: unknown) => {
     console.warn('Failed to cache text asset for lantern slide', error)
   })
-  updateSlideDescriptionAsset(index, asset.id)
 }
 
 function clearSlideDescriptionAsset(index: number) {

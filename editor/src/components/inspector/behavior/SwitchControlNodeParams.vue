@@ -5,6 +5,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import type { SwitchControlNodeBehaviorParams } from '@schema/core'
 import { STEER_TARGET_TYPES } from '@schema/components'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
 
 const props = defineProps<{
   modelValue: SwitchControlNodeBehaviorParams | undefined
@@ -54,12 +55,10 @@ function openAssetPicker(event: MouseEvent) {
 
 function handlePrefabSelected(asset: ProjectAsset | null) {
   assetDialogVisible.value = false
-  emitUpdate({ prefabAssetId: asset?.id ?? null })
+  const registered = asset ? ensureBehaviorAssetRegistered(sceneStore, asset, 'switch control fallback prefab') : null
+  emitUpdate({ prefabAssetId: registered?.id ?? null })
 }
 
-function clearPrefabAsset() {
-  emitUpdate({ prefabAssetId: null })
-}
 </script>
 
 <template>
@@ -85,14 +84,6 @@ function clearPrefabAsset() {
         placeholder="Select a prefab asset"
         @click="openAssetPicker($event as MouseEvent)"
       />
-      <v-btn
-        size="small"
-        variant="text"
-        :disabled="!params.prefabAssetId"
-        @click="clearPrefabAsset"
-      >
-        Clear
-      </v-btn>
     </div>
 
     <AssetPickerDialog

@@ -11,6 +11,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
 
 const props = defineProps<{
   modelValue: BubbleBehaviorParams | undefined
@@ -194,8 +195,9 @@ function handleContentDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   isContentDragActive.value = false
-  updateField('contentAssetId', asset.id)
-  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
+  const registered = ensureBehaviorAssetRegistered(sceneStore, asset, 'bubble text')
+  updateField('contentAssetId', registered.id)
+  void assetCacheStore.downloadProjectAsset(registered).catch((error: unknown) => {
     console.warn('Failed to cache bubble text asset', error)
   })
 }

@@ -5,6 +5,7 @@ import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
 
 const props = defineProps<{
   modelValue: ShowAlertBehaviorParams | undefined
@@ -134,8 +135,9 @@ function handleContentDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   isContentDragActive.value = false
-  updateContentAsset(asset.id)
-  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
+  const registered = ensureBehaviorAssetRegistered(sceneStore, asset, 'show alert text')
+  updateContentAsset(registered.id)
+  void assetCacheStore.downloadProjectAsset(registered).catch((error: unknown) => {
     console.warn('Failed to cache alert text asset', error)
   })
 }

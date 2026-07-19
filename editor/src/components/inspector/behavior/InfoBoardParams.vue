@@ -6,6 +6,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
 
 const props = defineProps<{
   modelValue: InfoBoardBehaviorParams | undefined
@@ -89,6 +90,10 @@ const dialogConfirmText = computed(() => (assetPickerTarget.value === 'audio' ? 
 function setAudioAsset(assetId: string | null) {
   audioAssetIdDraft.value = assetId
   emitParamsUpdate({ audioAssetId: assetId })
+}
+
+function registerAsset(asset: ProjectAsset, context: string): ProjectAsset {
+  return ensureBehaviorAssetRegistered(sceneStore, asset, context)
 }
 
 function setContentAsset(assetId: string | null) {
@@ -195,8 +200,9 @@ function handleContentDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   contentDragActive.value = false
-  setContentAsset(asset.id)
-  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
+  const registered = registerAsset(asset, 'info board text')
+  setContentAsset(registered.id)
+  void assetCacheStore.downloadProjectAsset(registered).catch((error: unknown) => {
     console.warn('Failed to cache info board text asset', error)
   })
 }
@@ -248,8 +254,9 @@ function handleAudioDrop(event: DragEvent) {
   event.preventDefault()
   event.stopPropagation()
   audioDragActive.value = false
-  setAudioAsset(asset.id)
-  void assetCacheStore.downloadProjectAsset(asset).catch((error: unknown) => {
+  const registered = registerAsset(asset, 'info board narration audio')
+  setAudioAsset(registered.id)
+  void assetCacheStore.downloadProjectAsset(registered).catch((error: unknown) => {
     console.warn('Failed to cache info board audio asset', error)
   })
 }
@@ -302,10 +309,11 @@ function openAssetDialog(kind: 'content' | 'audio', event?: MouseEvent) {
 }
 
 function handleAssetDialogUpdate(asset: ProjectAsset | null) {
+  const registered = asset ? registerAsset(asset, assetPickerTarget.value === 'audio' ? 'info board narration audio' : 'info board text') : null
   if (assetPickerTarget.value === 'audio') {
-    setAudioAsset(asset?.id ?? null)
+    setAudioAsset(registered?.id ?? null)
   } else {
-    setContentAsset(asset?.id ?? null)
+    setContentAsset(registered?.id ?? null)
   }
   assetDialogVisible.value = false
 }

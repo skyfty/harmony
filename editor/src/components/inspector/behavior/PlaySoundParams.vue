@@ -7,6 +7,7 @@ import type {
   SoundPlaybackMode,
 } from '@schema/core'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import { ensureBehaviorAssetRegistered } from '@/utils/behaviorAssetRegistration'
 import NodePicker from '@/components/common/NodePicker.vue'
 import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -393,7 +394,8 @@ function openAssetDialog(event?: MouseEvent) {
 }
 
 function handleAssetDialogUpdate(asset: ProjectAsset | null) {
-  updateField('assetId', asset?.id ?? null)
+  const registered = asset ? ensureBehaviorAssetRegistered(sceneStore, asset, 'play sound') : null
+  updateField('assetId', registered?.id ?? null)
   assetDialogVisible.value = false
 }
 
