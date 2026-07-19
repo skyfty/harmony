@@ -3638,6 +3638,7 @@ function resolveCharacterControllerComponent(
 
 const steerBindingIndex = createSteerBindingIndex()
 let runtimePrefabControlSwitchInFlight = false
+const controlNodeSwitchBusy = ref(false)
 type ControlNodeRestoreSnapshot = {
 	targetType: 'vehicle' | 'ship' | 'aircraft' | 'character'
 	mainNodeId?: string
@@ -6485,6 +6486,10 @@ async function switchControlNodeRuntimePrefab(
 	const assetId = event.prefabAssetId?.trim() ?? ''
 	if (!assetId) return false
 	runtimePrefabControlSwitchInFlight = true
+	controlNodeSwitchBusy.value = true
+	resetCharacterControlInputs()
+	resetVehicleDriveInputs()
+	if (vehicleDriveState.active) stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Control node is initializing.' }, preserveCamera: true })
 	try {
 		const existing = latestControlNodeRestoreSnapshot
 		const mainNodeId = existing?.mainNodeId ?? resolveControlNodeSwitchTargetNodeId()
@@ -6517,13 +6522,12 @@ async function switchControlNodeRuntimePrefab(
 				root.rotation = { x: euler.x, y: euler.y, z: euler.z }
 			},
 		})
-		if (!instanced?.cloned.root.id) return false
+	if (!instanced?.cloned.root.id) return false
 		const effectiveNode = instanced.cloned.root; const effectiveNodeId = effectiveNode.id
 		if (!effectiveNodeId) return false
 		const resolvedEffectiveNodeId = effectiveNodeId
 		const isCharacter = event.targetType === 'character'
 		if (isCharacter ? !resolveCharacterControllerComponent(effectiveNode) : !resolveVehicleComponent(effectiveNode)) return false
-		if (vehicleDriveState.active) stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Control node was replaced.' }, preserveCamera: true })
 		if (!existing) {
 			latestControlNodeRestoreSnapshot = {
 				targetType: binding.steerProps.targetType, mainNodeId: resolvedMainNodeId, temporaryNodeId: resolvedEffectiveNodeId,
@@ -6554,6 +6558,7 @@ async function switchControlNodeRuntimePrefab(
 	} catch (error) {
 		console.warn('[ScenePreview][RuntimePrefabSwitch] failed', error); return false
 	} finally {
+		controlNodeSwitchBusy.value = false
 		runtimePrefabControlSwitchInFlight = false
 	}
 }
@@ -10393,7 +10398,7 @@ function handleWindowBlur() {
 }
 
 function handleKeyDown(event: KeyboardEvent) {
-	if (sceneSwitching.value) {
+	if (sceneSwitching.value || controlNodeSwitchBusy.value) {
 		return
 	}
 	if (isInputLikeElement(event.target)) {
@@ -10439,7 +10444,7 @@ function handleKeyDown(event: KeyboardEvent) {
 }
 
 function handleKeyUp(event: KeyboardEvent) {
-	if (sceneSwitching.value) {
+	if (sceneSwitching.value || controlNodeSwitchBusy.value) {
 		return
 	}
 	if (isInputLikeElement(event.target)) {
@@ -14600,6 +14605,10 @@ watch(
 			ref="containerRef"
 			class="scene-preview__canvas"
 		></div>
+		<div v-if="controlNodeSwitchBusy" class="scene-preview__control-switch-overlay" role="status" aria-live="polite">
+			<v-progress-circular indeterminate color="primary" size="32" width="3" />
+			<span>正在初始化交换控制节点…</span>
+		</div>
 		<div v-if="punchBadgeOverlayEntries.length" class="scene-preview__punch-badge-layer" aria-hidden="true">
 			<div
 				v-for="entry in punchBadgeOverlayEntries"
@@ -15454,6 +15463,22 @@ watch(
 	width: 100%;
 	height: 100%;
 	display: block;
+}
+
+.scene-preview__control-switch-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	background: rgba(8, 14, 24, 0.58);
+	backdrop-filter: blur(3px);
+	color: rgba(245, 249, 255, 0.94);
+	font-size: 14px;
+	font-weight: 500;
+	pointer-events: auto;
 }
 
 .scene-preview__punch-badge-layer {

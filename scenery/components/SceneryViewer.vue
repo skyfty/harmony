@@ -221,6 +221,10 @@
         :scene-download="sceneDownload"
         :resource-preload="resourcePreload"
       />
+      <view v-if="controlNodeSwitchBusy" class="viewer-control-switch-overlay" role="status" aria-live="polite">
+        <view class="viewer-control-switch-spinner" aria-hidden="true"></view>
+        <text>正在初始化交换控制节点…</text>
+      </view>
       <view v-if="error" class="viewer-overlay error">
         <text>{{ error }}</text>
       </view>
@@ -6220,6 +6224,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
 }
 
 let runtimePrefabControlSwitchInFlight = false;
+const controlNodeSwitchBusy = ref(false);
 type ControlNodeRestoreSnapshot = {
   targetType: SteerControllableTargetType;
   mainNodeId?: string;
@@ -6314,6 +6319,15 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
   const assetId = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : '';
   if (!assetId) return false;
   runtimePrefabControlSwitchInFlight = true;
+  controlNodeSwitchBusy.value = true;
+  resetCharacterControlInputs();
+  resetVehicleDriveInputs();
+  if (vehicleDriveActive.value) {
+    vehicleDriveController.stopDrive(
+      { resolution: { type: 'abort', message: 'Control node is initializing.' }, preserveCamera: true },
+      { camera: renderContext?.camera ?? null, mapControls: renderContext?.controls },
+    );
+  }
   try {
     const existing = latestControlNodeRestoreSnapshot;
     const mainNodeId = existing?.mainNodeId ?? (vehicleDriveNodeId.value ?? resolveDefaultControlledCharacterNodeId() ?? resolveSceneAutoEnterSteerBinding(currentDocument)?.targetNodeId ?? null);
@@ -6332,10 +6346,6 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     const effectiveNode = instanced.cloned.root; const effectiveNodeId = effectiveNode.id;
     const isCharacter = targetType === 'character';
     if (isCharacter ? !resolveCharacterControllerComponent(effectiveNode) : !resolveVehicleComponent(effectiveNode)) return false;
-    if (vehicleDriveActive.value) {
-      handleHideVehicleCockpitEvent();
-      vehicleDriveController.stopDrive({ resolution: { type: 'abort', message: 'Control node was replaced.' }, preserveCamera: true }, { camera: renderContext.camera, mapControls: renderContext.controls });
-    }
     if (!existing) {
       latestControlNodeRestoreSnapshot = { targetType: binding.steerProps.targetType, mainNodeId, temporaryNodeId: effectiveNodeId, mainVisible: nodeObjectMap.get(mainNodeId)?.visible !== false, componentEnabled: setControlNodeComponentEnabled(mainNode, false) };
     } else if (existing.temporaryNodeId) {
@@ -6366,6 +6376,7 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
   } catch (error) {
     console.warn('[SceneryViewer][RuntimePrefabSwitch] failed', error); return false;
   } finally {
+    controlNodeSwitchBusy.value = false;
     runtimePrefabControlSwitchInFlight = false;
   }
 }
@@ -16032,14 +16043,14 @@ function handleWindowBlur(): void {
 }
 
 function handleWindowKeyDown(event: KeyboardEvent): void {
-  if (event.defaultPrevented) {
+  if (event.defaultPrevented || controlNodeSwitchBusy.value) {
     return;
   }
   setCharacterKeyState(event.key, true);
 }
 
 function handleWindowKeyUp(event: KeyboardEvent): void {
-  if (event.defaultPrevented) {
+  if (event.defaultPrevented || controlNodeSwitchBusy.value) {
     return;
   }
   setCharacterKeyState(event.key, false);
@@ -22129,6 +22140,35 @@ onUnmounted(() => {
   text-align: center;
   padding: 12px;
   z-index: 1600;
+}
+
+.viewer-control-switch-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(8, 14, 24, 0.58);
+  backdrop-filter: blur(3px);
+  color: rgba(245, 249, 255, 0.94);
+  font-size: 14px;
+  font-weight: 500;
+  pointer-events: auto;
+}
+
+.viewer-control-switch-spinner {
+  width: 22px;
+  height: 22px;
+  border: 3px solid rgba(255, 255, 255, 0.28);
+  border-top-color: #70e1ff;
+  border-radius: 50%;
+  animation: viewer-control-switch-spin 0.8s linear infinite;
+}
+
+@keyframes viewer-control-switch-spin {
+  to { transform: rotate(360deg); }
 }
 
 .viewer-overlay__backdrop {
