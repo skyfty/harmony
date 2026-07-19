@@ -124,7 +124,6 @@ import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/store
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
 import {
 	instantiateRuntimePrefabControlSwitchInstance,
-	performRuntimePrefabControlSwitch,
 } from '@schema/runtimePrefabControlSwitch'
 import { createTerrainScatterLodRuntime } from '@schema/scatter'
 
@@ -3639,11 +3638,12 @@ function resolveCharacterControllerComponent(
 
 const steerBindingIndex = createSteerBindingIndex()
 let runtimePrefabControlSwitchInFlight = false
-let runtimePrefabControlSwitchSuppressUntil = 0
-const RUNTIME_PREFAB_CONTROL_SWITCH_SUPPRESS_MS = 250
 type ControlNodeRestoreSnapshot = {
 	targetType: 'vehicle' | 'ship' | 'aircraft' | 'character'
-	prefabAssetId: string
+	mainNodeId?: string
+	temporaryNodeId?: string | null
+	mainVisible?: boolean
+	componentEnabled?: Record<string, boolean | undefined>
 }
 let latestControlNodeRestoreSnapshot: ControlNodeRestoreSnapshot | null = null
 
@@ -6392,53 +6392,11 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 	warningMessages.value = [...warningMessages.value, ...graph.warnings]
 }
 
-function replaceSceneNodeById(nodes: SceneNode[] | null | undefined, nodeId: string, replacement: SceneNode): boolean {
-	if (!Array.isArray(nodes)) {
-		return false
-	}
-	for (let index = 0; index < nodes.length; index += 1) {
-		const node = nodes[index]
-		if (!node) {
-			continue
-		}
-		if (node.id === nodeId) {
-			nodes[index] = replacement
-			return true
-		}
-		if (replaceSceneNodeById(node.children, nodeId, replacement)) {
-			return true
-		}
-	}
-	return false
-}
-
 function resolveControlNodeSwitchTargetNodeId(): string | null {
 	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
 		return vehicleDriveState.nodeId
 	}
 	return pendingDefaultCharacterControlNodeId.value ?? resolveDefaultControlledCharacterNodeId()
-}
-
-function resolveControlNodePrefabAssetId(node: SceneNode | null | undefined): string | null {
-	const userData = node?.userData
-	const metadataAssetId = userData && typeof userData === 'object'
-		? (userData as Record<string, unknown>).__prefabAssetId
-		: null
-	const candidates = [metadataAssetId, node?.sourceAssetId, node?.importMetadata?.assetId]
-	for (const candidate of candidates) {
-		if (typeof candidate === 'string' && candidate.trim().length) {
-			return candidate.trim()
-		}
-	}
-	return null
-}
-
-function resolveControlNodeTargetType(node: SceneNode | null | undefined): ControlNodeRestoreSnapshot['targetType'] {
-	const steerProps = resolveSteerComponent(node)?.props as { targetType?: unknown } | undefined
-	if (steerProps?.targetType === 'character' || steerProps?.targetType === 'ship' || steerProps?.targetType === 'aircraft') {
-		return steerProps.targetType
-	}
-	return resolveCharacterControllerComponent(node) ? 'character' : 'vehicle'
 }
 
 function attachControlNodePrefabMetadata(node: SceneNode, prefabAssetId: string): void {
@@ -6448,216 +6406,155 @@ function attachControlNodePrefabMetadata(node: SceneNode, prefabAssetId: string)
 	}
 }
 
-async function switchControlNodeRuntimePrefab(
-	event: Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }>
-		| Extract<BehaviorRuntimeEvent, { type: 'control-node-restore' }>,
-): Promise<void> {
-	const restoreSnapshot = event.type === 'control-node-restore' ? latestControlNodeRestoreSnapshot : null
-	if (event.type === 'control-node-restore' && !restoreSnapshot) {
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'No previous control node is available to restore.' })
-		return
+function removeSceneNodeById(nodes: SceneNode[] | null | undefined, nodeId: string): boolean {
+	if (!Array.isArray(nodes)) return false
+	for (let index = 0; index < nodes.length; index += 1) {
+		const node = nodes[index]
+		if (!node) continue
+		if (node.id === nodeId) { nodes.splice(index, 1); return true }
+		if (removeSceneNodeById(node.children, nodeId)) return true
 	}
-	const targetType = event.type === 'control-node-switch' ? event.targetType : restoreSnapshot!.targetType
-	const prefabAssetId = event.type === 'control-node-switch' ? event.prefabAssetId : restoreSnapshot!.prefabAssetId
-	if (!currentDocument || !rootGroup || !scene) {
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'Scene is not ready.' })
-		return
-	}
-	const now = Date.now()
-	if (runtimePrefabControlSwitchInFlight || now < runtimePrefabControlSwitchSuppressUntil) {
-		console.warn(
-			`[ScenePreview][RuntimePrefabSwitch] ignored-reentrant eventNodeId=${event.nodeId ?? ''} targetType=${targetType} prefabAssetId=${typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''}`,
-		)
-		resolveBehaviorToken(event.token, { type: 'continue' })
-		return
-	}
-	runtimePrefabControlSwitchInFlight = true
-	const targetNodeId = resolveControlNodeSwitchTargetNodeId()
-	if (!targetNodeId) {
-		runtimePrefabControlSwitchInFlight = false
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'No active control node was found.' })
-		return
-	}
-	const targetNode = resolveNodeById(targetNodeId)
-	if (!targetNode) {
-		runtimePrefabControlSwitchInFlight = false
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'Control node is missing.' })
-		return
-	}
-	const previousPrefabAssetId = resolveControlNodePrefabAssetId(targetNode)
-	const previousControlNodeSnapshot = previousPrefabAssetId
-		? {
-			targetType: resolveControlNodeTargetType(targetNode),
-			prefabAssetId: previousPrefabAssetId,
-		}
-		: null
-	const normalizedPrefabAssetId = typeof prefabAssetId === 'string' ? prefabAssetId.trim() : ''
-	if (!normalizedPrefabAssetId) {
-		runtimePrefabControlSwitchInFlight = false
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'No fallback prefab asset was selected.' })
-		return
-	}
-	const isCharacterTarget = targetType === 'character'
-	const steerBinding = isCharacterTarget ? resolveSteerBindingByTargetNodeId(currentDocument, targetNodeId) : null
-	if (isCharacterTarget && !steerBinding) {
-		runtimePrefabControlSwitchInFlight = false
-		resolveBehaviorToken(event.token, { type: 'fail', message: 'No active character steer binding was found.' })
-		return
-	}
+	return false
+}
 
+
+function syncSceneNodeLocalTransformFromObject(node: SceneNode, object: THREE.Object3D): void {
+	if (node.position) {
+		node.position.x = object.position.x; node.position.y = object.position.y; node.position.z = object.position.z
+	}
+	const euler = new THREE.Euler().setFromQuaternion(object.quaternion, 'XYZ')
+	if (node.rotation) { node.rotation.x = euler.x; node.rotation.y = euler.y; node.rotation.z = euler.z }
+}
+
+function setControlNodeComponentEnabled(node: SceneNode, enabled: boolean): Record<string, boolean | undefined> {
+	const states: Record<string, boolean | undefined> = {}
+	for (const type of [VEHICLE_COMPONENT_TYPE, CHARACTER_CONTROLLER_COMPONENT_TYPE, RIGIDBODY_COMPONENT_TYPE]) {
+		const component = node.components?.[type] as { enabled?: boolean } | undefined
+		if (!component) continue
+		states[type] = component.enabled
+		component.enabled = enabled
+	}
+	return states
+}
+
+function restoreControlNodeComponentEnabled(node: SceneNode, states?: Record<string, boolean | undefined>): void {
+	if (!states) return
+	for (const [type, enabled] of Object.entries(states)) {
+		const component = node.components?.[type] as { enabled?: boolean } | undefined
+		if (component) component.enabled = enabled ?? true
+	}
+}
+
+async function restoreControlNodeRuntime(): Promise<boolean> {
+	const snapshot = latestControlNodeRestoreSnapshot
+	if (!snapshot?.mainNodeId || !currentDocument || !scene || !snapshot.temporaryNodeId) return false
+	const mainNode = resolveNodeById(snapshot.mainNodeId)
+	const temporaryObject = nodeObjectMap.get(snapshot.temporaryNodeId) ?? null
+	const mainObject = nodeObjectMap.get(snapshot.mainNodeId) ?? null
+	const binding = resolveSteerBindingByTargetNodeId(currentDocument, snapshot.temporaryNodeId)
+	if (!mainNode || !temporaryObject || !mainObject || !binding) return false
+	const worldPosition = new THREE.Vector3(); const worldQuaternion = new THREE.Quaternion()
+	temporaryObject.getWorldPosition(worldPosition); temporaryObject.getWorldQuaternion(worldQuaternion)
+	if (vehicleDriveState.active) stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Control node restored.' }, preserveCamera: true })
+	applyMoveToObjectWorldPose(mainObject, worldPosition, worldQuaternion)
+	syncSceneNodeLocalTransformFromObject(mainNode, mainObject)
+	mainObject.visible = snapshot.mainVisible !== false
+	restoreControlNodeComponentEnabled(mainNode, snapshot.componentEnabled)
+	binding.steerComponent.props = clampSteerComponentProps({ ...binding.steerComponent.props, targetNodeId: snapshot.mainNodeId })
+	syncSteerBindingIndexForNode(binding.steerNode)
+	removeSceneNodeById(currentDocument.nodes, snapshot.temporaryNodeId)
+	removeNodeSubtree(snapshot.temporaryNodeId)
+	rebuildPreviewNodeMap(currentDocument)
+	await syncPhysicsBodiesForDocument(currentDocument)
+	refreshAnimations()
+	if (snapshot.targetType === 'character') {
+		pendingDefaultCharacterControlNodeId.value = snapshot.mainNodeId
+		refreshCharacterControllerAnimationRuntimeEntries(); refreshCharacterPathFollowRuntimeEntries()
+	} else {
+		const driveResult = startVehicleDriveMode(buildDefaultSteerDriveEvent(snapshot.mainNodeId))
+		if (!driveResult.success) return false
+	}
+	latestControlNodeRestoreSnapshot = null
+	return true
+}
+
+async function switchControlNodeRuntimePrefab(
+	event: Extract<BehaviorRuntimeEvent, { type: 'control-node-switch' }>,
+): Promise<boolean> {
+	if (runtimePrefabControlSwitchInFlight || !currentDocument || !scene || !rootGroup) return false
+	const assetId = event.prefabAssetId?.trim() ?? ''
+	if (!assetId) return false
+	runtimePrefabControlSwitchInFlight = true
 	try {
-		const raw = await loadTextAssetContent(normalizedPrefabAssetId)
-		if (!raw) {
-			console.warn(`[ScenePreview][RuntimePrefabSwitch] load-failed prefabAssetId=${normalizedPrefabAssetId}`)
-			resolveBehaviorToken(event.token, { type: 'fail', message: `Failed to load prefab asset: ${normalizedPrefabAssetId}` })
-			return
-		}
+		const existing = latestControlNodeRestoreSnapshot
+		const mainNodeId = existing?.mainNodeId ?? resolveControlNodeSwitchTargetNodeId()
+		const currentNodeId = existing?.temporaryNodeId ?? resolveControlNodeSwitchTargetNodeId()
+		if (!mainNodeId || !currentNodeId) return false
+		const mainNode = mainNodeId ? resolveNodeById(mainNodeId) : null
+		const currentObject = currentNodeId ? nodeObjectMap.get(currentNodeId) ?? null : null
+		if (!mainNode || !currentObject) return false
+		const resolvedMainNodeId = mainNodeId
+		const resolvedCurrentNodeId = currentNodeId
+		const binding = resolveSteerBindingByTargetNodeId(currentDocument, resolvedCurrentNodeId)
+		if (!binding) return false
+		const raw = await loadTextAssetContent(assetId)
+		if (!raw) return false
 		const instanced = await instantiateRuntimePrefabControlSwitchInstance(raw, {
 			buildOptions: async (runtimeDocument) => {
-				const localAssetOverrides = await buildPreviewLocalAssetOverrides(runtimeDocument)
-				const buildOptions: SceneGraphBuildOptions = {
-					serverAssetBaseUrl: readServerDownloadBaseUrl(),
-					materialFactoryOptions: {
-						hdrLoader: rgbeLoader,
-					},
-				}
-				const mergedAssetOverrides = mergePreviewAssetOverrides(
-					activeScenePackageAssetOverrides,
-					Object.keys(localAssetOverrides).length ? localAssetOverrides : undefined,
-				)
-				if (mergedAssetOverrides) {
-					buildOptions.assetOverrides = mergedAssetOverrides
-				}
-				return buildOptions
+				const localOverrides = await buildPreviewLocalAssetOverrides(runtimeDocument)
+				const options: SceneGraphBuildOptions = { serverAssetBaseUrl: readServerDownloadBaseUrl(), materialFactoryOptions: { hdrLoader: rgbeLoader } }
+				const merged = mergePreviewAssetOverrides(activeScenePackageAssetOverrides, Object.keys(localOverrides).length ? localOverrides : undefined)
+				if (merged) options.assetOverrides = merged
+				return options
 			},
 			createResourceCache: ensureEditorResourceCache,
 			buildSceneGraph,
 			prepareClonedRoot: (root) => {
-				const anchor = resolveRuntimePrefabAnchorTransform(targetNodeId, null)
-				if (anchor.position) {
-					root.position = anchor.position
-				}
-				if (anchor.rotation) {
-					root.rotation = anchor.rotation
-				}
+				const position = new THREE.Vector3(); const rotation = new THREE.Quaternion()
+				currentObject.getWorldPosition(position); currentObject.getWorldQuaternion(rotation)
+				const euler = new THREE.Euler().setFromQuaternion(rotation, 'XYZ')
+				root.position = { x: position.x, y: position.y, z: position.z }
+				root.rotation = { x: euler.x, y: euler.y, z: euler.z }
 			},
 		})
-		if (!instanced) {
-			console.warn(`[ScenePreview][RuntimePrefabSwitch] instantiate-failed prefabAssetId=${normalizedPrefabAssetId} targetNodeId=${targetNodeId}`)
-			resolveBehaviorToken(event.token, { type: 'fail', message: 'Prefab root is missing a usable control node.' })
-			return
+		if (!instanced?.cloned.root.id) return false
+		const effectiveNode = instanced.cloned.root; const effectiveNodeId = effectiveNode.id
+		if (!effectiveNodeId) return false
+		const resolvedEffectiveNodeId = effectiveNodeId
+		const isCharacter = event.targetType === 'character'
+		if (isCharacter ? !resolveCharacterControllerComponent(effectiveNode) : !resolveVehicleComponent(effectiveNode)) return false
+		if (vehicleDriveState.active) stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Control node was replaced.' }, preserveCamera: true })
+		if (!existing) {
+			latestControlNodeRestoreSnapshot = {
+				targetType: binding.steerProps.targetType, mainNodeId: resolvedMainNodeId, temporaryNodeId: resolvedEffectiveNodeId,
+				mainVisible: nodeObjectMap.get(resolvedMainNodeId)?.visible !== false,
+				componentEnabled: setControlNodeComponentEnabled(mainNode, false),
+			}
+		} else if (existing.temporaryNodeId) {
+			removeSceneNodeById(currentDocument.nodes, existing.temporaryNodeId)
+			removeNodeSubtree(existing.temporaryNodeId)
 		}
-		const { sceneRootObject, cloned } = instanced
-		const effectiveNode = cloned.root
-		const effectiveNodeId = effectiveNode.id ?? null
-		if (!effectiveNodeId) {
-			console.warn(`[ScenePreview][RuntimePrefabSwitch] effective-node-missing prefabAssetId=${normalizedPrefabAssetId} targetNodeId=${targetNodeId} sceneRootType=${sceneRootObject.type}`)
-			resolveBehaviorToken(event.token, { type: 'fail', message: 'Prefab root is missing a usable control node.' })
-			return
+		const mainObject = nodeObjectMap.get(resolvedMainNodeId) ?? null
+		if (mainObject) mainObject.visible = false
+		currentDocument.nodes = [...(currentDocument.nodes ?? []), effectiveNode]
+		scene.add(instanced.sceneRootObject); registerSubtree(instanced.sceneRootObject); rebuildPreviewNodeMap(currentDocument)
+		binding.steerComponent.props = clampSteerComponentProps({ ...binding.steerComponent.props, targetType: event.targetType, targetNodeId: resolvedEffectiveNodeId })
+		syncSteerBindingIndexForNode(binding.steerNode); attachControlNodePrefabMetadata(effectiveNode, assetId)
+		latestControlNodeRestoreSnapshot!.temporaryNodeId = effectiveNodeId
+		await syncPhysicsBodiesForDocument(currentDocument)
+		if (isCharacter) {
+			pendingDefaultCharacterControlNodeId.value = effectiveNodeId; resetCharacterControlInputs(); resetProtagonistPoseState()
+			refreshCharacterControllerAnimationRuntimeEntries(); refreshCharacterPathFollowRuntimeEntries()
+		} else {
+			const driveResult = startVehicleDriveMode(buildDefaultSteerDriveEvent(effectiveNodeId))
+			if (!driveResult.success) return false
 		}
-		attachControlNodePrefabMetadata(effectiveNode, normalizedPrefabAssetId)
-		const effectiveCharacterComponent = resolveCharacterControllerComponent(effectiveNode)
-		const effectiveVehicleComponent = resolveVehicleComponent(effectiveNode)
-		if (isCharacterTarget && !effectiveCharacterComponent) {
-			console.warn(`[ScenePreview][RuntimePrefabSwitch] type-mismatch expected=character effectiveNodeId=${effectiveNodeId}`)
-			resolveBehaviorToken(event.token, { type: 'fail', message: 'Instantiated prefab does not contain a character controller.' })
-			return
-		}
-		if (!isCharacterTarget && !effectiveVehicleComponent) {
-			console.warn(`[ScenePreview][RuntimePrefabSwitch] type-mismatch expected=vehicle effectiveNodeId=${effectiveNodeId}`)
-			resolveBehaviorToken(event.token, { type: 'fail', message: 'Instantiated prefab does not contain a vehicle controller.' })
-			return
-		}
-		if (vehicleDriveState.active) {
-			stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Control node was replaced.' }, preserveCamera: true })
-		}
-		const oldObject = nodeObjectMap.get(targetNodeId) ?? null
-		const previousNode = targetNode
-		const result = await performRuntimePrefabControlSwitch(
-			{
-				document: currentDocument,
-				targetNodeId,
-				previousNode,
-				oldObject,
-				instance: instanced,
-			},
-			{
-				scene,
-				replaceSceneNodeById,
-				rebuildNodeMap: rebuildPreviewNodeMap,
-				onCommit: async () => {
-					registerSubtree(sceneRootObject)
-					rebuildPreviewNodeMap(currentDocument)
-					refreshAnimations()
-					refreshBehaviorProximityCandidates()
-					await syncPhysicsBodiesForDocument(currentDocument)
-				},
-				onRollback: async () => {
-					refreshBehaviorProximityCandidates()
-					await syncPhysicsBodiesForDocument(currentDocument)
-				},
-				cleanupNewObject: async () => {
-					disposeObjectResources(sceneRootObject)
-				},
-				cleanupOldObject: async () => {
-					if (oldObject) {
-						oldObject.parent?.remove(oldObject)
-						nodeObjectMap.delete(targetNodeId)
-						releaseModelInstance(targetNodeId)
-						disposeObjectResources(oldObject)
-					}
-				},
-				activate: async () => {
-					if (isCharacterTarget) {
-						const nextSteerProps = clampSteerComponentProps({
-							...steerBinding!.steerComponent.props,
-							targetType: 'character',
-							targetNodeId: effectiveNodeId,
-							defaultIdentifier: steerBinding!.steerProps.defaultIdentifier,
-						})
-						resetCharacterControlInputs()
-						resetProtagonistPoseState()
-						steerBinding!.steerComponent.props = nextSteerProps
-						syncSteerBindingIndexForNode(steerBinding!.steerNode)
-						pendingDefaultCharacterControlNodeId.value = effectiveNodeId
-						if (characterCameraMode.value !== 'follow') {
-							characterCameraMode.value = 'follow'
-						}
-						if (camera && !updateCharacterFollowCamera(0, camera, true)) {
-							appendWarningMessage('Character control switched, but the follow camera could not be updated immediately.')
-						}
-						refreshCharacterControllerAnimationRuntimeEntries()
-						refreshCharacterPathFollowRuntimeEntries()
-						return { success: true }
-					}
-					pendingDefaultCharacterControlNodeId.value = null
-					const driveEvent = buildDefaultSteerDriveEvent(effectiveNodeId)
-					const driveResult = startVehicleDriveMode(driveEvent)
-					if (!driveResult.success) {
-						return {
-							success: false,
-							message: driveResult.message ?? 'Failed to start vehicle drive for the replacement node.',
-						}
-					}
-					return { success: true }
-				},
-			},
-		)
-		if (!result.success) {
-			console.warn(`[ScenePreview][RuntimePrefabSwitch] swap-failed targetNodeId=${targetNodeId} message=${result.message ?? 'unknown'}`)
-			resolveBehaviorToken(event.token, { type: 'fail', message: result.message ?? 'Failed to switch control node.' })
-			return
-		}
-		latestControlNodeRestoreSnapshot = event.type === 'control-node-restore'
-			? null
-			: previousControlNodeSnapshot
-		resolveBehaviorToken(event.token, { type: 'continue' })
+		refreshAnimations()
+		return true
 	} catch (error) {
-		console.warn(`[ScenePreview][RuntimePrefabSwitch] exception targetNodeId=${targetNodeId} error=${(error as Error)?.message ?? String(error)}`)
-		resolveBehaviorToken(event.token, { type: 'fail', message: (error as Error)?.message ?? 'Failed to switch control node.' })
+		console.warn('[ScenePreview][RuntimePrefabSwitch] failed', error); return false
 	} finally {
 		runtimePrefabControlSwitchInFlight = false
-		runtimePrefabControlSwitchSuppressUntil = Date.now() + RUNTIME_PREFAB_CONTROL_SWITCH_SUPPRESS_MS
 	}
 }
 
@@ -10056,10 +9953,10 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			handleHideVehicleCockpitEvent()
 			break
 		case 'control-node-switch':
-			void switchControlNodeRuntimePrefab(event)
+			void switchControlNodeRuntimePrefab(event).then((success) => resolveBehaviorToken(event.token, success ? { type: 'continue' } : { type: 'fail', message: 'Failed to switch control node.' }))
 			break
 		case 'control-node-restore':
-			void switchControlNodeRuntimePrefab(event)
+			void restoreControlNodeRuntime().then((success) => resolveBehaviorToken(event.token, success ? { type: 'continue' } : { type: 'fail', message: 'Failed to restore control node.' }))
 			break
 		case 'load-scene':
 			void handleLoadSceneEvent(event)
