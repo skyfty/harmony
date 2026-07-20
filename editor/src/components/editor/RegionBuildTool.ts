@@ -49,9 +49,9 @@ function createPreviewGroup(points: THREE.Vector3[]): THREE.Group {
   const line = new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints(points),
     new THREE.LineBasicMaterial({
-      color: 0x26a69a,
-      transparent: true,
-      opacity: 0.95,
+      color: 0xff0000,
+      transparent: false,
+      opacity: 1,
       depthWrite: false,
     }),
   )
