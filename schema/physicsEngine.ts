@@ -46,10 +46,12 @@ import {
 	resolveGroundHeightfieldShape,
 	resolveModelCollisionDynamicMesh as resolveSharedModelCollisionDynamicMesh,
 	resolveModelCollisionFaceSegments as resolveSharedModelCollisionFaceSegments,
+	resolveRegionShape,
 	resolveWallShape,
 	type FloorShapeCache,
 	type FloorShapeCacheEntry,
 	type GroundHeightfieldCacheEntry,
+	type RegionShapeCache,
 	type WallTrimeshCache,
 	type WallTrimeshCacheEntry,
 } from './physicsShapeResolvers'
@@ -193,6 +195,7 @@ export type CreateRigidbodyBodyOptions = {
 	world: PhysicsWorldLike
 	groundHeightfieldCache: Map<string, GroundHeightfieldCacheEntry>
 	floorShapeCache?: FloorShapeCache
+	regionShapeCache?: RegionShapeCache
 	wallTrimeshCache?: WallTrimeshCache
 	rigidbodyMaterialCache: Map<string, RigidbodyMaterialEntry>
 	rigidbodyContactMaterialKeys: Set<string>
@@ -214,6 +217,7 @@ export function createRigidbodyBody(
 		world,
 		groundHeightfieldCache,
 		floorShapeCache,
+		regionShapeCache,
 		wallTrimeshCache,
 		rigidbodyMaterialCache,
 		rigidbodyContactMaterialKeys,
@@ -228,6 +232,7 @@ export function createRigidbodyBody(
 	let groundSegments: GroundHeightfieldCacheEntry['segments'] | null = null
 	let wallSegments: WallTrimeshCacheEntry['segments'] | null = null
 	let floorSegments: FloorShapeCacheEntry['segments'] | null = null
+	let regionSegments: FloorShapeCacheEntry['segments'] | null = null
 	let modelCollisionSegments: Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> | null = null
 	let boundaryWallSegments: ReturnType<typeof buildBoundaryWallSegments> | null = null
 	let needsHeightfieldOrientation = false
@@ -248,15 +253,22 @@ export function createRigidbodyBody(
 			offsetTuple = null
 		}
 	}
-	if (!resolvedShape && !wallSegments && isFloorDynamicMesh(node.dynamicMesh) && floorShapeCache) {
-		const entry = resolveFloorShape(node, node.dynamicMesh, floorShapeCache)
+	if (!resolvedShape && !wallSegments && isFloorDynamicMesh(node.dynamicMesh)) {
+		const entry = resolveFloorShape(node, node.dynamicMesh, floorShapeCache ?? new Map())
 		if (entry) {
 			floorSegments = entry.segments
 			offsetTuple = null
 		}
 	}
+	if (!resolvedShape && !wallSegments && !floorSegments && node.dynamicMesh?.type === 'Region') {
+		const entry = resolveRegionShape(node, node.dynamicMesh, regionShapeCache ?? new Map())
+		if (entry) {
+			regionSegments = entry.segments
+			offsetTuple = null
+		}
+	}
 	const modelCollisionDefinition = resolveSharedModelCollisionDynamicMesh(node)
-	if (!resolvedShape && !wallSegments && !floorSegments && modelCollisionDefinition) {
+	if (!resolvedShape && !wallSegments && !floorSegments && !regionSegments && modelCollisionDefinition) {
 		const segments = resolveSharedModelCollisionFaceSegments(modelCollisionDefinition)
 		if (segments.length) {
 			modelCollisionSegments = segments
@@ -287,7 +299,7 @@ export function createRigidbodyBody(
 			needsHeightfieldOrientation = true
 		}
 	}
-	if (!resolvedShape && !groundSegments && !wallSegments && !floorSegments && !modelCollisionSegments?.length && !boundaryWallSegments?.length) {
+	if (!resolvedShape && !groundSegments && !wallSegments && !floorSegments && !regionSegments && !modelCollisionSegments?.length && !boundaryWallSegments?.length) {
 		return null
 	}
 	const props = component.props as RigidbodyComponentProps
@@ -340,6 +352,11 @@ export function createRigidbodyBody(
 	if (floorSegments && floorSegments.length) {
 		for (const segment of floorSegments) {
 			pushHeightfieldBinding(segment.shape, segment.shape.offset ?? [0, 0, 0])
+		}
+	}
+	if (regionSegments && regionSegments.length) {
+		for (const segment of regionSegments) {
+			shapeBindings.push({ definition: segment.shape })
 		}
 	}
 	if (modelCollisionSegments && modelCollisionSegments.length) {

@@ -4,6 +4,7 @@ import type {
   SceneNodeComponentState,
   GroundDynamicMesh,
   FloorDynamicMesh,
+  RegionDynamicMesh,
   WallDynamicMesh,
   ModelCollisionDynamicMesh,
 } from './core'
@@ -20,6 +21,7 @@ import { buildAdaptiveGroundCollisionData, type GroundCollisionData } from './gr
 
 const WALL_FORBIDDEN_COLLIDER_HEIGHT = 100
 const FLOOR_EPSILON = 1e-6
+export const MIN_PLANAR_COLLISION_THICKNESS = 1e-3
 const MODEL_COLLISION_EPSILON = 1e-5
 const MODEL_COLLISION_DEFAULT_THICKNESS = 0.05
 const MODEL_COLLISION_MIN_THICKNESS = 0.01
@@ -67,6 +69,7 @@ export type FloorShapeCacheEntry = {
 }
 
 export type FloorShapeCache = Map<string, FloorShapeCacheEntry>
+export type RegionShapeCache = Map<string, FloorShapeCacheEntry>
 
 export function resolveModelCollisionDynamicMesh(
   node: SceneNode | null | undefined,
@@ -347,6 +350,30 @@ function buildTrianglePrismShape(
   }
 }
 
+function buildPlanarPolygonPrismSegments(
+  outline: THREE.Vector2[],
+  thickness: number,
+): Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> {
+  const triangles = THREE.ShapeUtils.triangulateShape(outline, [])
+  const segments: Array<{ shape: Extract<RigidbodyPhysicsShape, { kind: 'convex' }> }> = []
+  triangles.forEach((triangle) => {
+    if (!Array.isArray(triangle) || triangle.length !== 3) {
+      return
+    }
+    const a = outline[triangle[0] ?? -1]
+    const b = outline[triangle[1] ?? -1]
+    const c = outline[triangle[2] ?? -1]
+    if (!a || !b || !c) {
+      return
+    }
+    const shape = buildTrianglePrismShape(a, b, c, thickness)
+    if (shape) {
+      segments.push({ shape })
+    }
+  })
+  return segments
+}
+
 function clampModelCollisionThickness(value: unknown, fallback: unknown): number {
   const primary = Number(value)
   const secondary = Number(fallback)
@@ -515,11 +542,7 @@ export function resolveFloorShape(
   cache: FloorShapeCache,
 ): FloorShapeCacheEntry | null {
   const nodeId = node.id
-  const thickness = clampFloorThickness(definition.thickness)
-  if (thickness <= FLOOR_EPSILON) {
-    cache.delete(nodeId)
-    return null
-  }
+  const thickness = Math.max(MIN_PLANAR_COLLISION_THICKNESS, clampFloorThickness(definition.thickness))
   const outline = buildFloorOutlinePoints(definition)
   if (outline.length < 3) {
     cache.delete(nodeId)
@@ -530,29 +553,73 @@ export function resolveFloorShape(
   if (cached && cached.signature === signature) {
     return cached
   }
-  const triangles = THREE.ShapeUtils.triangulateShape(outline, [])
-  const segments: FloorShapeCacheEntry['segments'] = []
-  triangles.forEach((triangle) => {
-    if (!Array.isArray(triangle) || triangle.length !== 3) {
-      return
-    }
-    const a = outline[triangle[0] ?? -1]
-    const b = outline[triangle[1] ?? -1]
-    const c = outline[triangle[2] ?? -1]
-    if (!a || !b || !c) {
-      return
-    }
-    const shape = buildTrianglePrismShape(a, b, c, thickness)
-    if (shape) {
-      segments.push({ shape })
-    }
-  })
+  const segments = buildPlanarPolygonPrismSegments(outline, thickness)
   if (!segments.length) {
     cache.delete(nodeId)
     return null
   }
   const entry: FloorShapeCacheEntry = { signature, segments }
   cache.set(nodeId, entry)
+  return entry
+}
+
+function buildRegionOutlinePoints(definition: RegionDynamicMesh): THREE.Vector2[] {
+  if (!Array.isArray(definition.vertices)) {
+    return []
+  }
+  const outline: THREE.Vector2[] = []
+  definition.vertices.forEach((vertex) => {
+    const x = Number(vertex?.[0])
+    const z = Number(vertex?.[1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      return
+    }
+    const point = new THREE.Vector2(x, -z)
+    const previous = outline[outline.length - 1]
+    if (!previous || previous.distanceToSquared(point) > FLOOR_EPSILON) {
+      outline.push(point)
+    }
+  })
+  if (outline.length >= 2 && outline[0]!.distanceToSquared(outline[outline.length - 1]!) <= FLOOR_EPSILON) {
+    outline.pop()
+  }
+  return outline.length >= 3 ? outline : []
+}
+
+function createRegionSignature(outline: THREE.Vector2[]): string {
+  let hash = 2166136261
+  outline.forEach((point) => {
+    hash ^= Math.round(point.x * 1000) | 0
+    hash = Math.imul(hash, 16777619) >>> 0
+    hash ^= Math.round(point.y * 1000) | 0
+    hash = Math.imul(hash, 16777619) >>> 0
+  })
+  hash ^= Math.round(MIN_PLANAR_COLLISION_THICKNESS * 1000) | 0
+  return `r:${outline.length}:${hash.toString(16)}`
+}
+
+export function resolveRegionShape(
+  node: SceneNode,
+  definition: RegionDynamicMesh,
+  cache: RegionShapeCache,
+): FloorShapeCacheEntry | null {
+  const outline = buildRegionOutlinePoints(definition)
+  if (outline.length < 3) {
+    cache.delete(node.id)
+    return null
+  }
+  const signature = createRegionSignature(outline)
+  const cached = cache.get(node.id)
+  if (cached?.signature === signature) {
+    return cached
+  }
+  const segments = buildPlanarPolygonPrismSegments(outline, MIN_PLANAR_COLLISION_THICKNESS)
+  if (!segments.length) {
+    cache.delete(node.id)
+    return null
+  }
+  const entry = { signature, segments }
+  cache.set(node.id, entry)
   return entry
 }
 

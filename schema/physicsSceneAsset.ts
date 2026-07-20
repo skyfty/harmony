@@ -1,13 +1,13 @@
 import * as THREE from 'three'
 import { type PhysicsBodyDesc, type PhysicsBodyType, type PhysicsCompoundChildDesc, type PhysicsMaterialDesc, type PhysicsSceneAsset, type PhysicsShapeDesc, type PhysicsTransform, type PhysicsVector3, type PhysicsVehicleDesc, type PhysicsVehicleWheelDesc } from '@harmony/physics-core'
-import type { SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './core'
+import type { RegionDynamicMesh, SceneJsonExportDocument, SceneNode, SceneNodeComponentState, Vector3Like } from './core'
 import { buildGroundAirWallDefinitions } from './airWall'
 import { buildBoundaryWallSegments } from './boundaryWall'
 import {
   isGroundDynamicMesh,
 } from './groundHeightfield'
 import { resolveDocumentGroundNode } from './groundNode'
-import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveWallShape, type FloorShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
+import { resolveFloorShape, resolveModelCollisionFaceSegments, resolveRegionShape, resolveWallShape, type FloorShapeCache, type RegionShapeCache, type WallTrimeshCache } from './physicsShapeResolvers'
 import { isRoadDynamicMesh } from './roadCollision'
 import {
   extractRoadCollisionCompiledPackageFromUserData,
@@ -446,6 +446,23 @@ function buildFloorShapeInstances(
   return entry.segments.flatMap((segment) => buildShapeInstancesFromDefinition(segment.shape, worldScale, nextShapeId, shapes))
 }
 
+function buildRegionShapeInstances(
+  node: SceneNode,
+  worldScale: THREE.Vector3,
+  nextShapeId: () => number,
+  shapes: PhysicsShapeDesc[],
+  regionShapeCache: RegionShapeCache,
+): BuildShapeInstance[] {
+  if (node.dynamicMesh?.type !== 'Region') {
+    return []
+  }
+  const entry = resolveRegionShape(node, node.dynamicMesh as RegionDynamicMesh, regionShapeCache)
+  if (!entry) {
+    return []
+  }
+  return entry.segments.flatMap((segment) => buildShapeInstancesFromDefinition(segment.shape, worldScale, nextShapeId, shapes))
+}
+
 function buildWallShapeInstances(
   node: SceneNode,
   nextShapeId: () => number,
@@ -697,6 +714,7 @@ export async function buildPhysicsSceneAsset(
   const materialIds = new Map<string, number>()
   const bodyIdsByNodeId = new Map<string, number>()
   const floorShapeCache: FloorShapeCache = new Map()
+  const regionShapeCache: RegionShapeCache = new Map()
   const wallShapeCache: WallTrimeshCache = new Map()
   const groundNode = resolveDocumentGroundNode(document)
   let groundWorldTransform: PhysicsTransform | null = null
@@ -786,6 +804,7 @@ export async function buildPhysicsSceneAsset(
         }
       } else {
         const floorShapeInstances = buildFloorShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, floorShapeCache)
+        const regionShapeInstances = buildRegionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes, regionShapeCache)
         const wallShapeInstances = buildWallShapeInstances(node, nextShapeId, asset.shapes, wallShapeCache)
         const modelCollisionShapeInstances = buildModelCollisionShapeInstances(node, worldScaleHelper, nextShapeId, asset.shapes)
         const primaryShapeInstances = wallShapeInstances.length > 0
@@ -802,6 +821,7 @@ export async function buildPhysicsSceneAsset(
         const shapeInstances = [
           ...primaryShapeInstances,
           ...floorShapeInstances,
+          ...regionShapeInstances,
           ...wallShapeInstances,
           ...modelCollisionShapeInstances,
           ...boundaryWallInstances,
