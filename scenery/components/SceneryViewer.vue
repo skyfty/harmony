@@ -6365,7 +6365,11 @@ async function restoreControlNodeRuntime(transitionPreset: Extract<BehaviorRunti
   if (renderContext?.scene) refreshAnimationControllers(renderContext.scene);
   refreshMultiuserNodeReferences(currentDocument);
   if (snapshot.targetType === 'character') {
-    if (!vehicleDriveActive.value && characterControlUi.value.visible) updateCharacterFollowCamera(0, { immediate: true });
+    // The vehicle stop intentionally preserves its camera pose. Once the
+    // character binding is restored, replace that pose synchronously so the
+    // first frame cannot show the vehicle camera looking upward while the
+    // follow camera catches up over subsequent frames.
+    updateCharacterFollowCamera(0, { immediate: true });
     refreshCharacterControllerAnimationRuntimeEntries(); refreshCharacterPathFollowRuntimeEntries();
   } else {
     const result = startVehicleDriveMode(buildFloatingAutoTourDriveEvent(snapshot.mainNodeId, null));
@@ -15315,6 +15319,14 @@ function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to
   }
   if (!event.kinetics) {
     applyMoveToSubjectTargetPose(resolvedSubjectNodeId, targetPose);
+    // A non-kinetic move teleports the controlled subject. Synchronize the
+    // active follow camera state as part of the same operation so the next
+    // frame does not interpolate from the subject's old position.
+    if (subjectType === 'vehicle') {
+      updateVehicleDriveCamera(0, { immediate: true });
+    } else {
+      updateCharacterFollowCamera(0, { immediate: true });
+    }
     finalizeMoveToSession({ type: 'continue' });
   }
 }

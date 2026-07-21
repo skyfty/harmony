@@ -6507,6 +6507,8 @@ async function restoreControlNodeRuntime(transitionPreset: Extract<BehaviorRunti
 	refreshAnimations()
 	if (snapshot.targetType === 'character') {
 		pendingDefaultCharacterControlNodeId.value = snapshot.mainNodeId
+		if (characterCameraMode.value !== 'follow') characterCameraMode.value = 'follow'
+		if (camera) updateCharacterFollowCamera(0, camera, true)
 		refreshCharacterControllerAnimationRuntimeEntries(); refreshCharacterPathFollowRuntimeEntries()
 	} else {
 		const driveResult = startVehicleDriveMode(buildDefaultSteerDriveEvent(snapshot.mainNodeId))
@@ -8228,6 +8230,14 @@ function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to
 	}
 	if (!event.kinetics) {
 		applyMoveToSubjectTargetPose(resolvedSubjectNodeId, targetPose)
+		// A non-kinetic move teleports the controlled subject. Synchronize the
+		// active follow camera state immediately to avoid interpolating from the
+		// subject's previous position on the next frame.
+		if (subjectType === 'vehicle') {
+			updateVehicleDriveCamera(0, { immediate: true })
+		} else if (camera) {
+			updateCharacterFollowCamera(0, camera, true)
+		}
 		finalizeMoveToSession({ type: 'continue' })
 		return
 	}
