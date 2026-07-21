@@ -93,6 +93,13 @@ function createCylinderWireframe(
   return createWireframeFromGeometry(geometry)
 }
 
+function createCapsuleWireframe(radius: number, height: number): THREE.BufferGeometry {
+  const safeRadius = Math.max(1e-3, radius)
+  const safeHeight = Math.max(safeRadius * 2, height)
+  const geometry = new THREE.CapsuleGeometry(safeRadius, safeHeight - safeRadius * 2, 8, 16)
+  return createWireframeFromGeometry(geometry)
+}
+
 function createConvexWireframe(shape: Extract<PhysicsShapeDesc, { kind: 'convex-hull' }>): THREE.BufferGeometry | null {
   if (shape.vertices.length < 9) {
     return null
@@ -191,6 +198,8 @@ function createShapeWireframeGeometry(shape: PhysicsShapeDesc): THREE.BufferGeom
       return createSphereWireframe(shape.radius)
     case 'cylinder':
       return createCylinderWireframe(shape.radiusTop, shape.radiusBottom, shape.height, shape.segments)
+    case 'capsule':
+      return createCapsuleWireframe(shape.radius, shape.height)
     case 'convex-hull':
       return createConvexWireframe(shape)
     case 'static-mesh':

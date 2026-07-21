@@ -32,7 +32,7 @@ const emit = defineEmits<{
   (event: 'close'): void
 }>()
 
-type ColliderShapeKind = 'box' | 'sphere' | 'convex'
+type ColliderShapeKind = 'box' | 'sphere' | 'capsule' | 'convex'
 
 type EditableShape = {
   kind: ColliderShapeKind
@@ -44,6 +44,7 @@ const COLLIDER_SHAPE_OPTIONS: Array<{ label: string; value: ColliderShapeKind }>
   { label: 'Convex (Mesh)', value: 'convex' },
   { label: 'Box', value: 'box' },
   { label: 'Sphere', value: 'sphere' },
+  { label: 'Capsule', value: 'capsule' },
 ]
 
 const sceneStore = useSceneStore()
@@ -267,6 +268,9 @@ function normalizeColliderKind(type: string | null | undefined): ColliderShapeKi
   if (type === 'box') {
     return 'box'
   }
+  if (type === 'capsule') {
+    return 'capsule'
+  }
   return 'convex'
 }
 
@@ -287,6 +291,9 @@ function updateColliderStateFromGroup() {
     colliderDimensions.y = colliderGroup.scale.y
     colliderDimensions.z = colliderGroup.scale.z
   }
+  if (colliderKind.value === 'capsule') {
+    colliderDimensions.y = colliderGroup.scale.y * 2
+  }
 }
 
 function constrainColliderTransform() {
@@ -297,6 +304,9 @@ function constrainColliderTransform() {
     const average = (colliderGroup.scale.x + colliderGroup.scale.y + colliderGroup.scale.z) / 3
     const safe = Math.max(0.05, average)
     colliderGroup.scale.set(safe, safe, safe)
+  } else if (colliderKind.value === 'capsule') {
+    const diameter = Math.max(colliderGroup.scale.x, colliderGroup.scale.z)
+    colliderGroup.scale.set(diameter, Math.max(diameter * 0.5, colliderGroup.scale.y), diameter)
   } else {
     colliderGroup.scale.set(
       Math.max(0.05, colliderGroup.scale.x),
@@ -370,6 +380,8 @@ function rebuildColliderGeometry(kind: ColliderShapeKind, options: { forceConvex
     geometry = previewConvexGeometry
   } else if (kind === 'sphere') {
     geometry = new THREE.SphereGeometry(0.5, 36, 24)
+  } else if (kind === 'capsule') {
+    geometry = new THREE.CapsuleGeometry(0.5, 1, 16, 32)
   } else if (kind === 'box') {
     geometry = new THREE.BoxGeometry(1, 1, 1)
   }
@@ -463,6 +475,15 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
       offset: center,
     }
   }
+  if (kind === 'capsule') {
+    const diameter = Math.max(size.x, size.z)
+    const safeDiameter = Math.max(minSize, diameter || minSize)
+    return {
+      kind,
+      dimensions: new THREE.Vector3(safeDiameter, Math.max(safeDiameter, size.y || safeDiameter), safeDiameter),
+      offset: center,
+    }
+  }
   const diameter = Math.max(size.x, size.z)
   const safeDiameter = Math.max(minSize, diameter || minSize)
   const safeHeight = Math.max(minSize, size.y || minSize)
@@ -506,6 +527,15 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
       offset: actualOffset,
     }
   }
+  if (shape.kind === 'capsule' && kind === 'capsule') {
+    const radius = Math.max(0.025, shape.radius * Math.max(scaleX, scaleZ))
+    const height = Math.max(radius * 2, shape.height * scaleY)
+    return {
+      kind: 'capsule',
+      dimensions: new THREE.Vector3(radius * 2, height, radius * 2),
+      offset: actualOffset,
+    }
+  }
   if (shape.kind === 'convex' && kind === 'convex') {
     const geometry = buildConvexGeometryFromDefinition(shape, new THREE.Vector3(scaleX, scaleY, scaleZ))
     if (!geometry) {
@@ -543,6 +573,8 @@ function applyEditableShape(shape: EditableShape) {
   colliderGroup.position.copy(shape.offset)
   if (shape.kind === 'convex') {
     colliderGroup.scale.set(1, 1, 1)
+  } else if (shape.kind === 'capsule') {
+    colliderGroup.scale.set(shape.dimensions.x, shape.dimensions.y * 0.5, shape.dimensions.z)
   } else {
     colliderGroup.scale.set(shape.dimensions.x, shape.dimensions.y, shape.dimensions.z)
   }
@@ -772,6 +804,20 @@ function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?
       shape: {
         kind: 'sphere',
         radius: Math.max(1e-4, radius / dominant),
+        offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        applyScale: true,
+      },
+    }
+  }
+
+  if (colliderKind.value === 'capsule') {
+    const radius = Math.max(colliderGroup.scale.x, colliderGroup.scale.z) * 0.5
+    const dominant = Math.max(scale.x, scale.z)
+    return {
+      shape: {
+        kind: 'capsule',
+        radius: Math.max(1e-4, radius / dominant),
+        height: Math.max(2 * radius / scale.y, (colliderGroup.scale.y * 2) / scale.y),
         offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
         applyScale: true,
       },

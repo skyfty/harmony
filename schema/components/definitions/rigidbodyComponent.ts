@@ -4,13 +4,14 @@ import type { SceneNode, SceneNodeComponentState } from '../../index'
 
 export const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
 export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
-export type RigidbodyColliderType = 'box' | 'convex' | 'sphere' | 'cylinder'
+export type RigidbodyColliderType = 'box' | 'convex' | 'sphere' | 'cylinder' | 'capsule'
 
 const VALID_RIGIDBODY_COLLIDER_TYPES: readonly RigidbodyColliderType[] = [
   'box',
   'convex',
   'sphere',
   'cylinder',
+  'capsule',
 ] as const
 
 function isRigidbodyColliderType(value: unknown): value is RigidbodyColliderType {
@@ -80,6 +81,11 @@ export type RigidbodyPhysicsShape =
   | ({
       kind: 'sphere'
       radius: number
+    } & RigidbodyPhysicsShapeBase)
+  | ({
+      kind: 'capsule'
+      radius: number
+      height: number
     } & RigidbodyPhysicsShapeBase)
   | ({
       kind: 'cylinder'

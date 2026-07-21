@@ -15,6 +15,7 @@ export type AmmoApi = {
   btBoxShape: new (halfExtents: unknown) => any
   btSphereShape: new (radius: number) => any
   btCylinderShape: new (halfExtents: unknown) => any
+  btCapsuleShapeY?: new (radius: number, halfHeight: number) => any
   btConvexHullShape: new () => any
   btCompoundShape: new (enableDynamicAabbTree?: boolean) => any
   btHeightfieldTerrainShape: new (

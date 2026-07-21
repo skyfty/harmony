@@ -66,6 +66,12 @@ export type PhysicsCylinderShapeDefinition = {
   segments?: number
 } & PhysicsShapeDefinitionBase
 
+export type PhysicsCapsuleShapeDefinition = {
+  kind: 'capsule'
+  radius: number
+  height: number
+} & PhysicsShapeDefinitionBase
+
 export type PhysicsConvexShapeDefinition = {
   kind: 'convex'
   vertices: Array<[number, number, number]>
@@ -90,6 +96,7 @@ export type PhysicsShapeDefinition =
   | PhysicsBoxShapeDefinition
   | PhysicsSphereShapeDefinition
   | PhysicsCylinderShapeDefinition
+  | PhysicsCapsuleShapeDefinition
   | PhysicsConvexShapeDefinition
   | PhysicsStaticMeshShapeDefinition
   | PhysicsHeightfieldShapeDefinition

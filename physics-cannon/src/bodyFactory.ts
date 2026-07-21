@@ -1,6 +1,8 @@
 import * as CANNON from 'cannon-es'
 import {
   createCannonShape,
+  createCannonCapsuleCompoundParts,
+  normalizeCannonShapeScale,
   type CannonShapeDefinition,
   type CannonShapeScaleLike,
 } from './shapeFactory'
@@ -65,6 +67,27 @@ export function createCannonRigidbodyBody(params: CannonRigidBodyCreateParams): 
     contactSettings: params.contactSettings,
   })
   params.shapes.forEach((binding) => {
+    if (binding.definition.kind === 'capsule') {
+      const scale = normalizeCannonShapeScale(params.shapeScale)
+      const radiusScale = binding.definition.applyScale === true ? Math.max(scale.x, scale.z) : 1
+      const heightScale = binding.definition.applyScale === true ? scale.y : 1
+      const parts = createCannonCapsuleCompoundParts(
+        binding.definition.radius * radiusScale,
+        binding.definition.height * heightScale,
+      )
+      const basePosition = binding.position
+        ? new CANNON.Vec3(binding.position[0], binding.position[1], binding.position[2])
+        : new CANNON.Vec3(0, 0, 0)
+      const baseQuaternion = binding.quaternion
+        ? new CANNON.Quaternion(binding.quaternion[0], binding.quaternion[1], binding.quaternion[2], binding.quaternion[3])
+        : new CANNON.Quaternion(0, 0, 0, 1)
+      parts.forEach((part) => {
+        const position = baseQuaternion.vmult(part.position)
+        position.vadd(basePosition, position)
+        body.addShape(part.shape, position, baseQuaternion)
+      })
+      return
+    }
     const shape = createCannonShape(binding.definition, undefined, params.shapeScale)
     if (!shape) {
       return

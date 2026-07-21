@@ -33,6 +33,12 @@ export type CannonShapeDefinition =
       segments?: number
       applyScale?: boolean
     }
+  | {
+      kind: 'capsule'
+      radius: number
+      height: number
+      applyScale?: boolean
+    }
 
 type SanitizedFaces = { faces: number[][]; invalidCount: number }
 type LoggerTag = string | undefined
@@ -130,7 +136,31 @@ export function createCannonShape(
     return cylinder
   }
 
+  if (definition.kind === 'capsule') {
+    // Capsules are expanded into three Body shapes by bodyFactory and
+    // sceneShapeBindings. They cannot be represented by one Cannon shape.
+    return null
+  }
+
   return null
+}
+
+export type CannonCapsuleCompoundPart = {
+  shape: CANNON.Shape
+  position: CANNON.Vec3
+}
+
+export function createCannonCapsuleCompoundParts(radius: number, height: number): CannonCapsuleCompoundPart[] {
+  const safeRadius = Math.max(1e-4, Number(radius))
+  const safeHeight = Math.max(safeRadius * 2, Number(height))
+  const halfCylinder = Math.max(0, safeHeight * 0.5 - safeRadius)
+  const cylinder = new CANNON.Cylinder(safeRadius, safeRadius, halfCylinder * 2, 16)
+  cylinder.transformAllPoints(cylinderShapeOffsetHelper.set(0, 0, 0), cylinderShapeRotationHelper)
+  return [
+    { shape: cylinder, position: new CANNON.Vec3(0, 0, 0) },
+    { shape: new CANNON.Sphere(safeRadius), position: new CANNON.Vec3(0, halfCylinder, 0) },
+    { shape: new CANNON.Sphere(safeRadius), position: new CANNON.Vec3(0, -halfCylinder, 0) },
+  ]
 }
 
 export function createCannonConvexPolyhedron(

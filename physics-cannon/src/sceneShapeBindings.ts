@@ -7,7 +7,7 @@ import type {
   PhysicsTransform,
   PhysicsVector3,
 } from '@harmony/physics-core'
-import { createCannonConvexPolyhedron } from './shapeFactory'
+import { createCannonCapsuleCompoundParts, createCannonConvexPolyhedron } from './shapeFactory'
 
 export type CannonSceneShapeBinding = {
   shapeKind: PhysicsShapeDesc['kind']
@@ -42,6 +42,14 @@ export function createCannonSceneShapeBindings(
       quaternion: quatClone(identityQuaternion),
     }]
   }
+  if (shapeDesc.kind === 'capsule') {
+    return createCannonCapsuleCompoundParts(shapeDesc.radius, shapeDesc.height).map((part) => ({
+      shapeKind: shapeDesc.kind,
+      shape: part.shape,
+      position: part.position,
+      quaternion: quatClone(identityQuaternion),
+    }))
+  }
   return [{
     shapeKind: shapeDesc.kind,
     shape: createShape(shapeDesc),
@@ -72,6 +80,8 @@ function createShape(shapeDesc: Exclude<PhysicsShapeDesc, PhysicsCompoundShapeDe
       return createStaticMeshShape(shapeDesc)
     case 'heightfield':
       return createHeightfieldShape(shapeDesc)
+    case 'capsule':
+      throw new Error('Cannon capsule shapes must be expanded as compound bindings')
     default: {
       const exhaustive: never = shapeDesc
       throw new Error(`Unsupported cannon shape: ${String(exhaustive)}`)

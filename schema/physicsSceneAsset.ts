@@ -318,6 +318,19 @@ function buildShapeInstancesFromDefinition(
     return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
   }
 
+  if (shape.kind === 'capsule') {
+    const radiusScale = Math.max(scale[0], scale[2])
+    const radius = Math.max(1e-4, shape.radius * radiusScale)
+    const height = Math.max(radius * 2, shape.height * scale[1])
+    const shapeId = pushShapeDescriptor(shapes, {
+      id: nextShapeId(),
+      kind: 'capsule',
+      radius,
+      height,
+    })
+    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+  }
+
   if (shape.kind === 'convex') {
     const vertices = new Float32Array(shape.vertices.length * 3)
     shape.vertices.forEach((vertex, index) => {
@@ -558,6 +571,14 @@ function cloneRoadCollisionShapeDesc(
         radiusBottom: shape.radiusBottom,
         height: shape.height,
         segments: shape.segments,
+      }
+    case 'capsule':
+      return {
+        id: shapeIdMap.get(shape.id) ?? shape.id,
+        kind: 'capsule',
+        applyScale: false,
+        radius: shape.radius,
+        height: shape.height,
       }
     case 'convex-hull':
       return {

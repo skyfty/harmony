@@ -50,6 +50,18 @@ export function createAmmoSchemaShape(
       segments: definition.segments,
     } as any, false)
   }
+  if (definition.kind === 'capsule') {
+    const radiusScale = definition.applyScale === true ? Math.max(safeScale.x, safeScale.z) : 1
+    const heightScale = definition.applyScale === true ? safeScale.y : 1
+    const radius = Math.max(1e-4, Number(definition.radius) * radiusScale)
+    const height = Math.max(radius * 2, Number(definition.height) * heightScale)
+    return createAmmoShape(ammo, {
+      id: -1,
+      kind: 'capsule',
+      radius,
+      height,
+    } as any, false)
+  }
   if (definition.kind === 'convex') {
     const vertices = Array.isArray(definition.vertices)
       ? definition.vertices.map((tuple) => [

@@ -59,6 +59,19 @@ export function createAmmoShape(
     }
   }
 
+  if (shapeDesc.kind === 'capsule') {
+    if (!ammo.btCapsuleShapeY) {
+      throw new Error('Ammo capsule shape is unavailable')
+    }
+    const radius = Math.max(1e-4, shapeDesc.radius)
+    const height = Math.max(radius * 2, shapeDesc.height)
+    const shape = new ammo.btCapsuleShapeY(radius, Math.max(0, height * 0.5 - radius))
+    return {
+      shape,
+      cleanup: [() => ammo.destroy(shape)],
+    }
+  }
+
   if (shapeDesc.kind === 'convex-hull') {
     const shape = new ammo.btConvexHullShape()
     const point = createAmmoVector3(ammo, [0, 0, 0])

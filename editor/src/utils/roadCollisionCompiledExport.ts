@@ -158,6 +158,18 @@ function buildShapeInstanceFromRigidbodyShape(
     return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
   }
 
+  if (shape.kind === 'capsule') {
+    const shapeId = nextShapeId()
+    const radiusScale = Math.max(scale[0], scale[2])
+    shapes.push({
+      id: shapeId,
+      kind: 'capsule',
+      radius: shape.radius * radiusScale,
+      height: Math.max(shape.radius * radiusScale * 2, shape.height * scale[1]),
+    })
+    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+  }
+
   if (shape.kind === 'convex') {
     const vertices = new Float32Array(shape.vertices.length * 3)
     shape.vertices.forEach((vertex, index) => {

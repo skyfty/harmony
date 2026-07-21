@@ -134,6 +134,13 @@ function normalizePhysicsShapeDesc(raw: any): any | null {
         height: normalizeNumber(raw.height, 0),
         segments: Number.isFinite(Number(raw.segments)) ? Math.trunc(Number(raw.segments)) : undefined,
       }
+    case 'capsule':
+      return {
+        id,
+        kind,
+        radius: normalizeNumber(raw.radius, 0),
+        height: normalizeNumber(raw.height, 0),
+      }
     case 'convex-hull':
       return {
         id,

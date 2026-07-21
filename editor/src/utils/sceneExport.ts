@@ -27,6 +27,7 @@ import {
   buildBoxShapeFromObject,
   buildSphereShapeFromObject,
   buildCylinderShapeFromObject,
+  buildCapsuleShapeFromObject,
 } from '@/utils/rigidbodyCollider'
 import { createGroundMesh } from '@schema/groundMesh'
 import { createWallGroup } from '@schema/wallMesh'
@@ -855,12 +856,14 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     const buildBox = () => buildBoxShapeFromObject(samplingObject, nodeScale)
     const buildSphere = () => buildSphereShapeFromObject(samplingObject, nodeScale)
     const buildCylinder = () => buildCylinderShapeFromObject(samplingObject, nodeScale)
+    const buildCapsule = () => buildCapsuleShapeFromObject(samplingObject, nodeScale)
     const rigidbodyProps = clampRigidbodyComponentProps(entry.component.props)
     const builderPriority: Record<RigidbodyColliderType, Array<() => RigidbodyPhysicsShape | null>> = {
       convex: [buildConvex, buildBox, buildSphere, buildCylinder],
       box: [buildBox, buildConvex, buildSphere, buildCylinder],
       sphere: [buildSphere, buildConvex, buildBox, buildCylinder],
       cylinder: [buildCylinder, buildConvex, buildBox, buildSphere],
+      capsule: [buildCapsule, buildConvex, buildBox, buildSphere],
     }
     const builders = builderPriority[rigidbodyProps.colliderType]
     for (const builder of builders) {

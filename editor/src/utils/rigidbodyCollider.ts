@@ -145,3 +145,26 @@ export function buildCylinderShapeFromObject(
     applyScale: true,
   }
 }
+
+export function buildCapsuleShapeFromObject(
+  object: THREE.Object3D,
+  _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
+): RigidbodyPhysicsShape | null {
+  const box = computeColliderLocalBoundingBox(object)
+  if (!box) {
+    return null
+  }
+  const size = box.getSize(colliderBoxSizeHelper)
+  if (![size.x, size.y, size.z].every((value) => Number.isFinite(value) && value > 0)) {
+    return null
+  }
+  const radius = Math.max(1e-4, Math.max(size.x, size.z) * 0.5)
+  const center = box.getCenter(colliderBoxCenterHelper)
+  return {
+    kind: 'capsule',
+    radius,
+    height: Math.max(radius * 2, size.y),
+    offset: [center.x, center.y, center.z],
+    applyScale: true,
+  }
+}

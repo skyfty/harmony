@@ -2,7 +2,7 @@
 export type PhysicsBackendId = 'ammo' | 'cannon' | 'noop'
 export type PhysicsBackendPreference = PhysicsBackendId | 'auto'
 
-export type PhysicsShapeKind = 'box' | 'sphere' | 'cylinder' | 'convex-hull' | 'heightfield' | 'static-mesh' | 'compound'
+export type PhysicsShapeKind = 'box' | 'sphere' | 'cylinder' | 'capsule' | 'convex-hull' | 'heightfield' | 'static-mesh' | 'compound'
 export type PhysicsBodyType = 'static' | 'dynamic' | 'kinematic'
 
 export type PhysicsVector3 = [number, number, number]
@@ -69,6 +69,14 @@ export type PhysicsCylinderShapeDesc = {
   applyScale?: boolean
 }
 
+export type PhysicsCapsuleShapeDesc = {
+  id: number
+  kind: 'capsule'
+  radius: number
+  height: number
+  applyScale?: boolean
+}
+
 export type PhysicsConvexHullShapeDesc = {
   id: number
   kind: 'convex-hull'
@@ -114,6 +122,7 @@ export type PhysicsShapeDesc =
   | PhysicsBoxShapeDesc
   | PhysicsSphereShapeDesc
   | PhysicsCylinderShapeDesc
+  | PhysicsCapsuleShapeDesc
   | PhysicsConvexHullShapeDesc
   | PhysicsHeightfieldDesc
   | PhysicsStaticMeshDesc
