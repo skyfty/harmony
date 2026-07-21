@@ -4,6 +4,7 @@ import { addWallOpeningToDefinition, removeWallOpeningFromDefinition, compileWal
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, reactive, toRaw, type Ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import * as THREE from 'three'
+import { acceleratedRaycast, MeshBVH } from 'three-mesh-bvh'
 import { offsetPolyline } from '../../utils/overlayPlacementUtils'
 import { SceneViewportCameraControls } from '@/utils/SceneViewportCameraControls'
 import {
@@ -10603,6 +10604,40 @@ const placementSurfaceTargets: THREE.Object3D[] = []
 const placementSurfaceTargetsByNodeId = new Map<string, THREE.Object3D[]>()
 let placementSurfaceTargetsDirty = true
 let placementSurfaceTargetsInstancedRevision = -1
+const placementBvhCache = new WeakMap<THREE.BufferGeometry, MeshBVH>()
+const placementAcceleratedMeshes = new WeakSet<THREE.Mesh>()
+
+function preparePlacementSurfaceRaycast(object: THREE.Object3D): void {
+  // BVH acceleration is safe for static Mesh geometry. Skinned and instanced
+  // meshes have per-frame/per-instance transforms and must keep their native
+  // raycast implementation here.
+  const mesh = object as THREE.Mesh
+  const meshFlags = mesh as THREE.Mesh & { isSkinnedMesh?: boolean; isInstancedMesh?: boolean }
+  if (!mesh.isMesh || meshFlags.isSkinnedMesh || meshFlags.isInstancedMesh || placementAcceleratedMeshes.has(mesh)) {
+    return
+  }
+
+  const geometry = mesh.geometry as THREE.BufferGeometry | undefined
+  if (!geometry) {
+    return
+  }
+
+  try {
+    const geometryWithBoundsTree = geometry as THREE.BufferGeometry & { boundsTree?: MeshBVH }
+    let boundsTree = geometryWithBoundsTree.boundsTree ?? placementBvhCache.get(geometry)
+    if (!boundsTree) {
+      boundsTree = new MeshBVH(geometry)
+      placementBvhCache.set(geometry, boundsTree)
+    }
+    geometryWithBoundsTree.boundsTree = boundsTree
+    mesh.raycast = acceleratedRaycast as unknown as THREE.Mesh['raycast']
+    placementAcceleratedMeshes.add(mesh)
+  } catch (error) {
+    // A malformed/dynamic geometry should remain placeable through the native
+    // raycast path instead of making pointer handling fail.
+    console.warn('Failed to build placement raycast BVH', error)
+  }
+}
 
 function shouldIncludePlacementSurfaceCandidate(object: THREE.Object3D): boolean {
   const userData = object.userData as Record<string, unknown> | undefined
@@ -19964,8 +19999,21 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } 
     return null
   }
 
-  const intersections = raycaster.intersectObjects(targets, true)
-  intersections.sort((a, b) => a.distance - b.distance)
+  for (const target of targets) {
+    preparePlacementSurfaceRaycast(target)
+  }
+
+  // three-mesh-bvh uses this flag to traverse only the nearest triangle in
+  // each object. Raycaster still sorts the (small) cross-object result set.
+  const placementRaycaster = raycaster as THREE.Raycaster & { firstHitOnly?: boolean }
+  const previousFirstHitOnly = placementRaycaster.firstHitOnly
+  placementRaycaster.firstHitOnly = true
+  let intersections: THREE.Intersection[]
+  try {
+    intersections = raycaster.intersectObjects(targets, false)
+  } finally {
+    placementRaycaster.firstHitOnly = previousFirstHitOnly
+  }
 
   for (const intersection of intersections) {
     if (!intersection?.point) {
