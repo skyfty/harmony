@@ -1622,6 +1622,22 @@ const characterControllerAnimationRuntime = new CharacterControllerAnimationRunt
 const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager()
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>()
 const behaviorProximityState = new Map<string, BehaviorProximityState>()
+type BehaviorCollisionState = {
+	subjectKey: string
+	inside: boolean
+}
+
+type ScenePreviewCollisionSubject = {
+	nodeId: string
+	object: THREE.Object3D
+	bodyId: number | null
+}
+
+const behaviorCollisionCandidates = new Set<string>()
+const behaviorCollisionState = new Map<string, BehaviorCollisionState>()
+const behaviorCollisionTargetBoxScratch = new THREE.Box3()
+const behaviorCollisionSubjectBoxScratch = new THREE.Box3()
+const behaviorCollisionPointScratch = new THREE.Vector3()
 const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
 type ScenePreviewKtx2Loader = Awaited<ReturnType<typeof createKtx2Loader>>
 const materialTextureCache = new Map<string, THREE.Texture>()
@@ -7672,6 +7688,8 @@ function updateCharacterPathFollow(delta: number): void {
 function resetBehaviorProximity(): void {
 	behaviorProximityCandidates.clear()
 	behaviorProximityState.clear()
+	behaviorCollisionCandidates.clear()
+	behaviorCollisionState.clear()
 	behaviorProximityRuntime.reset()
 }
 
@@ -7708,12 +7726,23 @@ function refreshBehaviorProximityCandidates(): void {
 	resetBehaviorProximity()
 	previewNodeMap.forEach((_node, nodeId) => {
 		syncBehaviorProximityCandidate(nodeId)
+		syncBehaviorCollisionCandidate(nodeId)
 	})
+}
+
+function syncBehaviorCollisionCandidate(nodeId: string): void {
+	if (!previewNodeMap.has(nodeId) || !listRegisteredBehaviorActions(nodeId).includes('collision')) {
+		behaviorCollisionCandidates.delete(nodeId)
+		behaviorCollisionState.delete(nodeId)
+		return
+	}
+	behaviorCollisionCandidates.add(nodeId)
 }
 
 const behaviorRuntimeListener: BehaviorRuntimeListener = {
 	onRegistryChanged(nodeId) {
 		syncBehaviorProximityCandidate(nodeId)
+		syncBehaviorCollisionCandidate(nodeId)
 		syncInteractionLayersForNode(nodeId)
 	},
 	onSequenceFinished(event) {
@@ -7723,6 +7752,118 @@ const behaviorRuntimeListener: BehaviorRuntimeListener = {
 
 function updateBehaviorProximity(): void {
 	behaviorProximityRuntime.updateBehaviorProximity()
+}
+
+function resolveScenePreviewCollisionSubject(): ScenePreviewCollisionSubject | null {
+	const nodeId = vehicleDriveState.active && vehicleDriveState.nodeId
+		? vehicleDriveState.nodeId
+		: resolveDefaultControlledCharacterNodeId()
+	if (!nodeId) {
+		return null
+	}
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!object) {
+		return null
+	}
+	const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(nodeId) ?? nodeId
+	return {
+		nodeId,
+		object,
+		bodyId: physicsBridgeBodyIdByNodeId.get(bodyNodeId) ?? null,
+	}
+}
+
+function resolveScenePreviewCollisionContact(
+	targetBodyId: number,
+	subjectBodyId: number,
+): PhysicsContactEvent | null {
+	const targetNodeId = physicsBridgeNodeIdByBodyId.get(targetBodyId) ?? ''
+	const contacts = physicsBridgeContactsByNodeId.get(targetNodeId) ?? []
+	return contacts.find((contact) => (
+		(contact.bodyIdA === targetBodyId && contact.bodyIdB === subjectBodyId)
+		|| (contact.bodyIdA === subjectBodyId && contact.bodyIdB === targetBodyId)
+	)) ?? null
+}
+
+function updateBehaviorCollisions(): void {
+	if (!behaviorCollisionCandidates.size) {
+		return
+	}
+	const subject = resolveScenePreviewCollisionSubject()
+	if (!subject) {
+		behaviorCollisionState.clear()
+		return
+	}
+
+	const subjectKey = `${subject.nodeId}:${subject.bodyId ?? 'bounds'}`
+	behaviorCollisionCandidates.forEach((nodeId) => {
+		const node = previewNodeMap.get(nodeId) ?? null
+		const targetObject = nodeObjectMap.get(nodeId) ?? null
+		if (!node || !targetObject || !getBehaviorNodeVisible(nodeId)) {
+			behaviorCollisionState.delete(nodeId)
+			return
+		}
+
+		const targetBodyId = physicsBridgeBodyIdByNodeId.get(nodeId) ?? null
+		let inside = false
+		let detectionMode: 'physics' | 'bounds' = 'physics'
+		let collisionPoint: THREE.Vector3 | null = null
+
+		if (typeof targetBodyId === 'number') {
+			if (typeof subject.bodyId === 'number') {
+				const contact = resolveScenePreviewCollisionContact(targetBodyId, subject.bodyId)
+				inside = Boolean(contact)
+				collisionPoint = contact
+					? new THREE.Vector3(contact.point[0], contact.point[1], contact.point[2])
+					: null
+			}
+		} else {
+			detectionMode = 'bounds'
+			targetObject.updateWorldMatrix(true, true)
+			subject.object.updateWorldMatrix(true, true)
+			behaviorCollisionTargetBoxScratch.setFromObject(targetObject)
+			behaviorCollisionSubjectBoxScratch.setFromObject(subject.object)
+			const hasFiniteBounds = [
+				behaviorCollisionTargetBoxScratch.min.x,
+				behaviorCollisionTargetBoxScratch.min.y,
+				behaviorCollisionTargetBoxScratch.min.z,
+				behaviorCollisionTargetBoxScratch.max.x,
+				behaviorCollisionTargetBoxScratch.max.y,
+				behaviorCollisionTargetBoxScratch.max.z,
+				behaviorCollisionSubjectBoxScratch.min.x,
+				behaviorCollisionSubjectBoxScratch.min.y,
+				behaviorCollisionSubjectBoxScratch.min.z,
+				behaviorCollisionSubjectBoxScratch.max.x,
+				behaviorCollisionSubjectBoxScratch.max.y,
+				behaviorCollisionSubjectBoxScratch.max.z,
+			].every((value) => Number.isFinite(value))
+			if (hasFiniteBounds) {
+				inside = behaviorCollisionTargetBoxScratch.intersectsBox(behaviorCollisionSubjectBoxScratch)
+				if (inside) {
+					behaviorCollisionTargetBoxScratch.getCenter(behaviorCollisionPointScratch)
+					collisionPoint = behaviorCollisionPointScratch.clone()
+				}
+			}
+		}
+
+		const state = behaviorCollisionState.get(nodeId)
+		const wasInside = state?.subjectKey === subjectKey && state.inside
+		behaviorCollisionState.set(nodeId, { subjectKey, inside })
+		if (!inside || wasInside) {
+			return
+		}
+
+		const results = triggerBehaviorAction(nodeId, 'collision', {
+			payload: {
+				otherNodeId: subject.nodeId,
+				detectionMode,
+				point: collisionPoint
+					? { x: collisionPoint.x, y: collisionPoint.y, z: collisionPoint.z }
+					: null,
+			},
+		})
+		processBehaviorEvents(results)
+	})
 }
 
 function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
@@ -12021,6 +12162,7 @@ function updateScenePreviewPhysicsBridgeIndex(document: SceneJsonExportDocument,
 	physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
 	physicsBridgeContactsByNodeId.clear()
+	behaviorCollisionState.clear()
 	asset.bodies.forEach((body) => {
 		if (!body.userDataKey) {
 			return
@@ -12503,6 +12645,7 @@ function stepScenePreviewPhysicsBridge(delta: number): void {
 				return
 			}
 			consumeScenePreviewPhysicsBridgeStepFrame(frame)
+			updateBehaviorCollisions()
 		})
 		.catch((error) => {
 			console.warn('[ScenePreview] Failed to step physics bridge', error)
@@ -14555,6 +14698,8 @@ onBeforeUnmount(() => {
 	characterControllerAnimationRuntime.clear()
 	characterAutoTourRuntime.clear()
 	physicsBridgeContactsByNodeId.clear()
+	behaviorCollisionCandidates.clear()
+	behaviorCollisionState.clear()
 	clearBehaviorSounds()
 	unsubscribe?.()
 	unsubscribe = null

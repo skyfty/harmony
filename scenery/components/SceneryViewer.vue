@@ -4462,6 +4462,22 @@ const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: '
 
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
+type BehaviorCollisionState = {
+  subjectKey: string;
+  inside: boolean;
+};
+
+type SceneryCollisionSubject = {
+  nodeId: string;
+  object: THREE.Object3D;
+  bodyId: number | null;
+};
+
+const behaviorCollisionCandidates = new Set<string>();
+const behaviorCollisionState = new Map<string, BehaviorCollisionState>();
+const behaviorCollisionTargetBoxScratch = new THREE.Box3();
+const behaviorCollisionSubjectBoxScratch = new THREE.Box3();
+const behaviorCollisionPointScratch = new THREE.Vector3();
 const behaviorObserverContextScratch = new THREE.Vector3();
 function resolveSceneryBehaviorObserverContext(): BehaviorObserverContext {
   const candidates: BehaviorObserverCandidate[] = [];
@@ -6235,6 +6251,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
     registerSceneSubtree(graph.root);
     refreshMultiuserNodeReferences(document);
     refreshBehaviorProximityCandidates();
+    refreshBehaviorCollisionCandidates();
     if (source.prefab.physicsRelevant) {
       await syncPhysicsBodiesForDocument(document);
     }
@@ -9754,6 +9771,7 @@ function stepSceneryPhysicsBridge(delta: number): void {
         return;
       }
       consumeSceneryPhysicsBridgeStepFrame(frame);
+      updateBehaviorCollisions();
     })
     .catch((error) => {
       console.warn('[SceneViewer] Failed to step physics bridge', error);
@@ -14688,12 +14706,145 @@ function refreshBehaviorProximityCandidates(): void {
 const behaviorRuntimeListener: BehaviorRuntimeListener = {
   onRegistryChanged(nodeId) {
     syncBehaviorProximityCandidate(nodeId);
+    syncBehaviorCollisionCandidate(nodeId);
     syncInteractionLayersForNode(nodeId);
   },
   onSequenceFinished(event) {
     behaviorProximityRuntime.handleSequenceFinished(event.sequenceId);
   },
 };
+
+function syncBehaviorCollisionCandidate(nodeId: string): void {
+  if (!previewNodeMap.has(nodeId) || !listRegisteredBehaviorActions(nodeId).includes('collision')) {
+    behaviorCollisionCandidates.delete(nodeId);
+    behaviorCollisionState.delete(nodeId);
+    return;
+  }
+  behaviorCollisionCandidates.add(nodeId);
+}
+
+function refreshBehaviorCollisionCandidates(): void {
+  const registeredNodeIds = new Set<string>();
+  previewNodeMap.forEach((_node, nodeId) => {
+    registeredNodeIds.add(nodeId);
+    syncBehaviorCollisionCandidate(nodeId);
+  });
+  behaviorCollisionCandidates.forEach((nodeId) => {
+    if (!registeredNodeIds.has(nodeId)) {
+      behaviorCollisionCandidates.delete(nodeId);
+      behaviorCollisionState.delete(nodeId);
+    }
+  });
+}
+
+function resolveSceneryCollisionSubject(): SceneryCollisionSubject | null {
+  const nodeId = vehicleDriveActive.value && vehicleDriveNodeId.value
+    ? vehicleDriveNodeId.value
+    : resolveDefaultControlledCharacterNodeId();
+  if (!nodeId) {
+    return null;
+  }
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
+    return null;
+  }
+  const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(nodeId) ?? nodeId;
+  return {
+    nodeId,
+    object,
+    bodyId: physicsBridgeBodyIdByNodeId.get(bodyNodeId) ?? null,
+  };
+}
+
+function resolveSceneryCollisionContact(
+  targetBodyId: number,
+  subjectBodyId: number,
+): PhysicsContactEvent | null {
+  const contacts = physicsBridgeContactsByNodeId.get(physicsBridgeNodeIdByBodyId.get(targetBodyId) ?? '') ?? [];
+  return contacts.find((contact) => (
+    (contact.bodyIdA === targetBodyId && contact.bodyIdB === subjectBodyId)
+    || (contact.bodyIdA === subjectBodyId && contact.bodyIdB === targetBodyId)
+  )) ?? null;
+}
+
+function updateBehaviorCollisions(): void {
+  if (!behaviorCollisionCandidates.size) {
+    return;
+  }
+  const subject = resolveSceneryCollisionSubject();
+  if (!subject) {
+    behaviorCollisionState.clear();
+    return;
+  }
+
+  const subjectKey = `${subject.nodeId}:${subject.bodyId ?? 'bounds'}`;
+  behaviorCollisionCandidates.forEach((nodeId) => {
+    const node = previewNodeMap.get(nodeId) ?? null;
+    const targetObject = nodeObjectMap.get(nodeId) ?? null;
+    if (!node || !targetObject || !getBehaviorNodeVisible(nodeId)) {
+      behaviorCollisionState.delete(nodeId);
+      return;
+    }
+
+    const targetBodyId = physicsBridgeBodyIdByNodeId.get(nodeId) ?? null;
+    let inside = false;
+    let detectionMode: 'physics' | 'bounds' = 'physics';
+    let collisionPoint: THREE.Vector3 | null = null;
+
+    if (typeof targetBodyId === 'number') {
+      if (typeof subject.bodyId === 'number') {
+        const contact = resolveSceneryCollisionContact(targetBodyId, subject.bodyId);
+        inside = Boolean(contact);
+        collisionPoint = contact ? new THREE.Vector3(contact.point[0], contact.point[1], contact.point[2]) : null;
+      }
+    } else {
+      detectionMode = 'bounds';
+      targetObject.updateWorldMatrix(true, true);
+      subject.object.updateWorldMatrix(true, true);
+      behaviorCollisionTargetBoxScratch.setFromObject(targetObject);
+      behaviorCollisionSubjectBoxScratch.setFromObject(subject.object);
+      const hasFiniteBounds = [
+        behaviorCollisionTargetBoxScratch.min.x,
+        behaviorCollisionTargetBoxScratch.min.y,
+        behaviorCollisionTargetBoxScratch.min.z,
+        behaviorCollisionTargetBoxScratch.max.x,
+        behaviorCollisionTargetBoxScratch.max.y,
+        behaviorCollisionTargetBoxScratch.max.z,
+        behaviorCollisionSubjectBoxScratch.min.x,
+        behaviorCollisionSubjectBoxScratch.min.y,
+        behaviorCollisionSubjectBoxScratch.min.z,
+        behaviorCollisionSubjectBoxScratch.max.x,
+        behaviorCollisionSubjectBoxScratch.max.y,
+        behaviorCollisionSubjectBoxScratch.max.z,
+      ].every((value) => Number.isFinite(value));
+      if (hasFiniteBounds) {
+        inside = behaviorCollisionTargetBoxScratch.intersectsBox(behaviorCollisionSubjectBoxScratch);
+        if (inside) {
+          behaviorCollisionTargetBoxScratch.getCenter(behaviorCollisionPointScratch);
+          collisionPoint = behaviorCollisionPointScratch.clone();
+        }
+      }
+    }
+
+    const state = behaviorCollisionState.get(nodeId);
+    const wasInside = state?.subjectKey === subjectKey && state.inside;
+    behaviorCollisionState.set(nodeId, { subjectKey, inside });
+    if (!inside || wasInside) {
+      return;
+    }
+
+    const results = triggerBehaviorAction(nodeId, 'collision', {
+      payload: {
+        otherNodeId: subject.nodeId,
+        detectionMode,
+        point: collisionPoint
+          ? { x: collisionPoint.x, y: collisionPoint.y, z: collisionPoint.z }
+          : null,
+      },
+    });
+    processBehaviorEvents(results);
+  });
+}
 
 function updateBehaviorProximity(): void {
   behaviorProximityRuntime.updateBehaviorProximity();
@@ -19910,6 +20061,8 @@ function teardownRenderer() {
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
   physicsBridgeContactsByNodeId.clear();
+  behaviorCollisionCandidates.clear();
+  behaviorCollisionState.clear();
   remoteSharedEntityEntries.clear();
   resetPhysicsWorld();
   lazyPlaceholderStates.clear();
@@ -20385,6 +20538,7 @@ async function mountGraphAndSyncSubsystems(
   collectNetworkSyncNodeEntries(payload.document);
   collectPhysicsAuthorityNodeEntries(payload.document);
   refreshBehaviorProximityCandidates();
+  refreshBehaviorCollisionCandidates();
   await yieldToMainThread();
 
   setSceneInitState({
@@ -20792,6 +20946,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
   physicsBridgeContactsByNodeId.clear();
+  behaviorCollisionCandidates.clear();
+  behaviorCollisionState.clear();
   remoteSharedEntityEntries.clear();
   clearSceneryCompiledGroundRenderRuntime();
 
