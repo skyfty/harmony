@@ -6494,7 +6494,11 @@ async function restoreControlNodeRuntime(transitionPreset: Extract<BehaviorRunti
 	syncSceneNodeLocalTransformFromObject(mainNode, mainObject)
 	mainObject.visible = snapshot.mainVisible !== false
 	restoreControlNodeComponentEnabled(mainNode, snapshot.componentEnabled)
-	binding.steerComponent.props = clampSteerComponentProps({ ...binding.steerComponent.props, targetNodeId: snapshot.mainNodeId })
+	binding.steerComponent.props = clampSteerComponentProps({
+		...binding.steerComponent.props,
+		targetType: snapshot.targetType,
+		targetNodeId: snapshot.mainNodeId,
+	})
 	syncSteerBindingIndexForNode(binding.steerNode)
 	removeSceneNodeById(currentDocument.nodes, snapshot.temporaryNodeId)
 	removeNodeSubtree(snapshot.temporaryNodeId)
