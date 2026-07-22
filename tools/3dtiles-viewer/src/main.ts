@@ -1,23 +1,23 @@
 import * as THREE from 'three'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TilesRenderer, CAMERA_FRAME } from '3d-tiles-renderer'
+import type { Tile } from '3d-tiles-renderer/core'
 import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins'
 import { GLTFExtensionsPlugin, TilesFadePlugin, UpdateOnChangePlugin } from '3d-tiles-renderer/three/plugins'
 import stylesText from './styles.css?raw'
 
 type Settings = { lon: number; lat: number; groundElevation: number; height: number }
-type CameraAnchor = { id: string; label: string; position: THREE.Vector3; quaternion: THREE.Quaternion; far: number }
-type ExportAnchor = { id: string; label: string; position: THREE.Vector3; quaternion: THREE.Quaternion; far: number }
-type ScanView = {
-  position: THREE.Vector3
-  quaternion: THREE.Quaternion
-  direction: THREE.Vector3
-  up: THREE.Vector3
-  far: number
-  topDown: boolean
+type CaptureAnchor = { id: string; label: string; capturedCount: number; position: THREE.Vector3 }
+type CapturableTile = Tile & {
+  engineData?: { scene?: THREE.Object3D | null }
+  traversal?: { visible?: boolean; isLeaf?: boolean }
+  internal?: { depth?: number }
+}
+type CapturableObject = THREE.Object3D & {
+  geometry?: THREE.BufferGeometry
+  material?: THREE.Material | THREE.Material[]
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -28,14 +28,13 @@ document.head.append(style)
 app.innerHTML = `
   <div class="shell">
     <header class="hero">
-
       <span class="chip" id="status-chip">等待配置</span>
     </header>
 
     <main class="layout">
       <section class="panel controls">
         <div class="panel-header"><h2>观察点</h2><span class="chip">固定位置</span></div>
-        <label>经纬度 <input id="coordinate-text" type="text" inputmode="text" placeholder="29°38'38.24\"N 91°06'57.03\"E" /></label>
+        <label>经纬度 <input id="coordinate-text" type="text" inputmode="text" placeholder="29°38'38.24&quot;N 91°06'57.03&quot;E" /></label>
         <div class="coordinate-grid">
           <label>地面海拔 (m)<input id="ground-elevation" type="number" step="0.1" placeholder="0" /></label>
           <label>观察高度 (m)<input id="height" type="number" step="0.1" min="0" value="0" /></label>
@@ -46,7 +45,6 @@ app.innerHTML = `
         <label>相机 Far 范围 (m)<input id="camera-far" type="number" min="50" max="10000000" step="1000" value="10000" /></label>
         <div class="actions wide"><button id="add-anchor" disabled>添加当前相机为锚点</button></div>
         <div class="anchor-list" id="anchor-list"></div>
-        <div class="actions"><button id="export-glb" disabled>导出 GLB</button><button id="preview-glb" class="secondary" disabled>预览 GLB</button></div>
         <div class="progress-wrap" id="progress" hidden><div class="progress"><div id="progress-bar"></div></div><div class="progress-label" id="progress-label"></div></div>
 
         <div class="callout" id="config-help" hidden>
@@ -60,18 +58,22 @@ app.innerHTML = `
         </div>
       </section>
 
-      <section class="panel viewer">
-        <div class="viewport" id="viewport"><div class="placeholder" id="placeholder">正在初始化…</div></div>
+      <section class="workspace">
+        <section class="panel viewer">
+          <div class="panel-header"><h2>实时预览</h2><span class="chip">Left renderer</span></div>
+          <div class="viewport" id="viewport"><div class="placeholder" id="placeholder">正在初始化实时预览…</div></div>
+          <p class="help">拖动旋转，滚轮缩放，右键平移。按 <code>A</code> 可添加锚点。</p>
+        </section>
+
+        <section class="panel glb-panel">
+          <div class="panel-header"><h2>GLB 预览</h2><button class="secondary" id="export-current-glb" disabled>导出 GLB</button></div>
+          <div class="glb-preview-viewport" id="glb-preview-viewport">
+            <div class="placeholder" id="glb-preview-placeholder">等待首次锚点捕获</div>
+          </div>
+          <p class="help glb-preview-progress" id="glb-preview-progress">右侧场景与实时预览独立渲染。每次添加锚点都会把当前高精度叶节点复制到右侧。</p>
+        </section>
       </section>
     </main>
-    <div class="glb-preview" id="glb-preview" hidden>
-      <div class="glb-preview-panel">
-        <button id="export-current-glb" disabled>Export current GLB</button>
-        <div class="panel-header"><h2>GLB 预览</h2><button class="secondary" id="close-glb-preview">关闭</button></div>
-        <div class="glb-preview-viewport" id="glb-preview-viewport"><div class="placeholder" id="glb-preview-placeholder">等待 GLB 数据</div></div>
-        <p class="help">拖动旋转，滚轮缩放，右键拖动平移。</p>
-      </div>
-    </div>
   </div>
 `
 
@@ -95,17 +97,10 @@ const progress = $('#progress')
 const progressBar = $('#progress-bar')
 const progressLabel = $('#progress-label')
 const configHelp = $('#config-help')
-const exportGlbButton = $('#export-glb') as HTMLButtonElement
 const exportCurrentGlbButton = $('#export-current-glb') as HTMLButtonElement
-const previewGlbButton = $('#preview-glb') as HTMLButtonElement
-const glbPreview = $('#glb-preview')
-const closeGlbPreviewButton = $('#close-glb-preview') as HTMLButtonElement
 const glbPreviewViewport = $('#glb-preview-viewport')
 const glbPreviewPlaceholder = $('#glb-preview-placeholder')
-const glbPreviewProgress = document.createElement('p')
-glbPreviewProgress.className = 'help glb-preview-progress'
-glbPreview.querySelector('.glb-preview-panel')?.append(glbPreviewProgress)
-glbPreview.querySelector('.panel-header')?.append(exportCurrentGlbButton)
+const glbPreviewProgress = $('#glb-preview-progress')
 
 const query = new URLSearchParams(window.location.search)
 const settings: Settings = {
@@ -120,25 +115,24 @@ coordinateTextInput.value = query.has('lat') || query.has('lon')
 groundElevationInput.value = String(settings.groundElevation)
 heightInput.value = String(settings.height)
 
-const scene = new THREE.Scene()
-scene.background = new THREE.Color('#050d18')
-scene.add(new THREE.HemisphereLight('#c9e9ff', '#142034', 1.25))
+const mainScene = new THREE.Scene()
+mainScene.background = new THREE.Color('#050d18')
+mainScene.add(new THREE.HemisphereLight('#c9e9ff', '#142034', 1.25))
 const sun = new THREE.DirectionalLight('#fff2d4', 2.2)
 sun.position.set(20, 40, 10)
-scene.add(sun)
+mainScene.add(sun)
 const cameraMarkerGroup = new THREE.Group()
 cameraMarkerGroup.name = 'camera-markers'
-scene.add(cameraMarkerGroup)
+mainScene.add(cameraMarkerGroup)
 
-const camera = new THREE.PerspectiveCamera(75, 1, 0.5, 10_000)
-const previewCamera = camera
-const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-renderer.outputColorSpace = THREE.SRGBColorSpace
-renderer.toneMapping = THREE.AgXToneMapping
-renderer.toneMappingExposure = 1.25
-viewport.append(renderer.domElement)
-const mainControls = new MapControls(camera, renderer.domElement)
+const mainCamera = new THREE.PerspectiveCamera(75, 1, 0.5, 10_000)
+const mainRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
+mainRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+mainRenderer.outputColorSpace = THREE.SRGBColorSpace
+mainRenderer.toneMapping = THREE.AgXToneMapping
+mainRenderer.toneMappingExposure = 1.25
+viewport.append(mainRenderer.domElement)
+const mainControls = new MapControls(mainCamera, mainRenderer.domElement)
 mainControls.enableDamping = true
 mainControls.dampingFactor = 0.05
 mainControls.screenSpacePanning = false
@@ -146,7 +140,32 @@ mainControls.minDistance = 100
 mainControls.maxDistance = 500
 mainControls.maxPolarAngle = Math.PI
 mainControls.zoomToCursor = true
-rendererStat.textContent = renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'
+
+const glbScene = new THREE.Scene()
+glbScene.background = new THREE.Color('#020811')
+glbScene.add(new THREE.HemisphereLight('#d9efff', '#18243a', 1.6))
+const glbSun = new THREE.DirectionalLight('#ffffff', 2.4)
+glbSun.position.set(10, 20, 10)
+glbScene.add(glbSun)
+const glbCaptureRoot = new THREE.Group()
+glbCaptureRoot.name = 'glb-capture-root'
+glbScene.add(glbCaptureRoot)
+
+const glbCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000)
+const glbRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
+glbRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+glbRenderer.outputColorSpace = THREE.SRGBColorSpace
+glbRenderer.toneMapping = THREE.AgXToneMapping
+glbRenderer.toneMappingExposure = 1.25
+glbPreviewViewport.replaceChildren(glbRenderer.domElement)
+const glbControls = new MapControls(glbCamera, glbRenderer.domElement)
+glbControls.enableDamping = true
+glbControls.dampingFactor = 0.05
+glbControls.screenSpacePanning = false
+glbControls.minDistance = 25
+glbControls.maxDistance = 100000
+glbControls.maxPolarAngle = Math.PI
+glbControls.zoomToCursor = true
 
 let tiles: TilesRenderer | null = null
 let sourceLabel = '-'
@@ -155,55 +174,13 @@ let baseQuaternion = new THREE.Quaternion()
 let yaw = 0
 let pitch = 0
 let exporting = false
-let lastExportedGlb: ArrayBuffer | null = null
-let anchors: CameraAnchor[] = []
-let glbPreviewRenderer: THREE.WebGLRenderer | null = null
-let glbPreviewScene: THREE.Scene | null = null
-let glbPreviewCamera: THREE.PerspectiveCamera | null = null
-let glbPreviewControls: MapControls | null = null
-let glbPreviewModel: THREE.Object3D | null = null
-let previewSession: {
-  views: ScanView[]
-  scanIndex: number
-  scanCamera: THREE.PerspectiveCamera
-  scanCameraRegistered: boolean
-  previousCameras: THREE.Camera[]
-  previousDisplayActiveTiles: boolean
-  mainCamera: {
-    position: THREE.Vector3
-    quaternion: THREE.Quaternion
-    up: THREE.Vector3
-    near: number
-    far: number
-    fov: number
-    aspect: number
-    target: THREE.Vector3
-  }
-  radius: number
-  generation: number
-  stableFrames: number
-  lastSignature: string
-  stable: boolean
-  scanComplete: boolean
-  selectedTiles: Set<unknown>
-  selectedSceneByTile: Map<unknown, THREE.Object3D>
-  selectedScenes: Set<THREE.Object3D>
-  generationTimer: number | null
-  generationInFlight: boolean
-  closed: boolean
-} | null = null
+let anchors: CaptureAnchor[] = []
+let capturedTileNodes = new Map<Tile, THREE.Object3D>()
+let glbCameraFramed = false
+const baseFrameMatrix = new THREE.Matrix4()
+const baseFrameInverse = new THREE.Matrix4()
 
-function invalidateGlbCache(): void {
-  lastExportedGlb = null
-  previewGlbButton.disabled = !tiles
-  exportCurrentGlbButton.disabled = true
-  if (previewSession) {
-    const radius = Number(cameraFarInput.value)
-    stopPreviewSession()
-    beginPreviewSession(Number.isFinite(radius) ? radius : 10_000)
-    schedulePreviewGeneration()
-  }
-}
+rendererStat.textContent = `${mainRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'} / ${glbRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'}`
 
 function setStatus(text: string, tone: 'idle' | 'ok' | 'error' = 'idle'): void {
   statusChip.textContent = text
@@ -216,7 +193,161 @@ function setPlaceholder(text: string, state: 'idle' | 'loading' | 'error' = 'idl
   placeholder.hidden = false
 }
 
-function hidePlaceholder(): void { placeholder.hidden = true }
+function setGlbPlaceholder(text: string, state: 'idle' | 'loading' | 'error' = 'idle'): void {
+  glbPreviewPlaceholder.textContent = text
+  glbPreviewPlaceholder.dataset.state = state
+  glbPreviewPlaceholder.hidden = false
+}
+
+function hidePlaceholder(): void {
+  placeholder.hidden = true
+}
+
+function hideGlbPlaceholder(): void {
+  glbPreviewPlaceholder.hidden = true
+}
+
+function updateStats(): void {
+  sourceStat.textContent = sourceLabel
+  tilesStat.textContent = tiles ? `${tiles.group.children.length} objects` : '-'
+  locationStat.textContent = `${settings.lat.toFixed(5)}, ${settings.lon.toFixed(5)} @ ground ${settings.groundElevation.toFixed(1)}m / camera ${(settings.groundElevation + settings.height).toFixed(1)}m`
+}
+
+function formatLogValue(value: unknown): string {
+  if (value == null) return String(value)
+  if (typeof value === 'string') return value
+  if (typeof value === 'number') return Number.isFinite(value) ? value.toFixed(3) : String(value)
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (value instanceof THREE.Vector3) return `vec3(${value.x.toFixed(2)},${value.y.toFixed(2)},${value.z.toFixed(2)})`
+  if (value instanceof THREE.Quaternion) return `quat(${value.x.toFixed(2)},${value.y.toFixed(2)},${value.z.toFixed(2)},${value.w.toFixed(2)})`
+  if (Array.isArray(value)) return `[${value.map((item) => formatLogValue(item)).join(',')}]`
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+function logSummary(event: string, details: Record<string, unknown> = {}): void {
+  const tail = Object.entries(details).map(([key, value]) => `${key}=${formatLogValue(value)}`).join(' | ')
+  console.log(`[3dtiles-viewer] ${event}${tail ? ` | ${tail}` : ''}`)
+}
+
+function updateProgressUI(): void {
+  if (!tiles) {
+    progress.hidden = true
+    return
+  }
+  progress.hidden = false
+  progressBar.style.width = `${Math.max(0, Math.min(1, tiles.loadProgress)) * 100}%`
+  const loaded = Math.max(0, Number((tiles.stats as Record<string, number>).loaded) || 0)
+  const queued = Math.max(
+    0,
+    (Number((tiles.stats as Record<string, number>).queued) || 0)
+      + (Number((tiles.stats as Record<string, number>).downloading) || 0)
+      + (Number((tiles.stats as Record<string, number>).parsing) || 0)
+      + (Number((tiles.stats as Record<string, number>).processing) || 0),
+  )
+  progressLabel.textContent = `已加载 ${loaded} · 队列 ${queued} · 锚点 ${anchors.length} · 捕获叶节点 ${capturedTileNodes.size}`
+}
+
+function syncGlbOrigin(): void {
+  glbCaptureRoot.position.set(0, 0, 0)
+  glbCaptureRoot.quaternion.identity()
+  glbCaptureRoot.scale.set(1, 1, 1)
+  glbCaptureRoot.updateMatrixWorld(true)
+}
+
+function syncGlbCameraToMainView(): void {
+  const mainViewMatrix = new THREE.Matrix4().compose(mainCamera.position, mainCamera.quaternion, new THREE.Vector3(1, 1, 1))
+  const localViewMatrix = baseFrameInverse.clone().multiply(mainViewMatrix)
+  localViewMatrix.decompose(glbCamera.position, glbCamera.quaternion, glbCamera.scale)
+  const localTarget = mainControls.target.clone().applyMatrix4(baseFrameInverse)
+  glbCamera.up.set(0, 1, 0).applyQuaternion(glbCamera.quaternion).normalize()
+  glbCamera.near = Math.max(0.01, mainCamera.near * 0.1)
+  glbCamera.far = Math.max(1000, Number(cameraFarInput.value) || mainCamera.far)
+  glbCamera.updateProjectionMatrix()
+  glbControls.target.copy(localTarget)
+  glbControls.maxDistance = Math.max(glbCamera.far * 0.5, 1000)
+  glbControls.update()
+}
+
+function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
+  for (const child of [...glbCaptureRoot.children]) glbCaptureRoot.remove(child)
+  capturedTileNodes.clear()
+  anchors = []
+  glbCameraFramed = false
+  exportCurrentGlbButton.disabled = true
+  glbPreviewProgress.textContent = message
+  setGlbPlaceholder(message)
+  renderAnchorList()
+  updateCameraMarkers()
+  updateProgressUI()
+}
+
+function cloneTexture(texture: THREE.Texture): THREE.Texture {
+  const next = texture.clone()
+  next.needsUpdate = true
+  return next
+}
+
+function cloneMaterialDeep(material: THREE.Material): THREE.Material {
+  const next = material.clone()
+  const record = next as unknown as Record<string, unknown>
+  for (const key of Object.keys(record)) {
+    const value = record[key]
+    if (value instanceof THREE.Texture) {
+      record[key] = cloneTexture(value)
+      continue
+    }
+    if (Array.isArray(value)) {
+      record[key] = value.map((item) => item instanceof THREE.Texture ? cloneTexture(item) : item)
+    }
+  }
+  return next
+}
+
+function isRenderableLeaf(node: THREE.Object3D): boolean {
+  const renderable = node as CapturableObject & { isSprite?: boolean }
+  const hasGeometry = Boolean(renderable.geometry)
+  const hasMaterial = Boolean(renderable.material)
+  if (!hasGeometry && !renderable.isSprite) return false
+  for (const child of node.children) {
+    if (isRenderableLeaf(child)) return false
+  }
+  return hasMaterial || renderable.isSprite
+}
+
+function cloneRenderableLeafForCapture(source: CapturableObject): CapturableObject {
+  const clone = source.clone(false) as CapturableObject
+  if (source.geometry) clone.geometry = source.geometry.clone()
+  if (source.material) {
+    clone.material = Array.isArray(source.material)
+      ? source.material.map((item) => cloneMaterialDeep(item))
+      : cloneMaterialDeep(source.material)
+  }
+  const matrix = baseFrameInverse.clone().multiply(source.matrixWorld)
+  clone.matrix.copy(matrix)
+  clone.matrix.decompose(clone.position, clone.quaternion, clone.scale)
+  clone.matrixAutoUpdate = false
+  clone.updateMatrix()
+  clone.updateMatrixWorld(true)
+  return clone
+}
+
+function createCapturedTileGroup(source: THREE.Object3D): THREE.Group {
+  source.updateMatrixWorld(true)
+  const group = new THREE.Group()
+  group.matrixAutoUpdate = false
+  group.matrix.identity()
+  group.position.set(0, 0, 0)
+  group.quaternion.identity()
+  group.scale.set(1, 1, 1)
+  source.traverse((node) => {
+    if (!isRenderableLeaf(node)) return
+    group.add(cloneRenderableLeafForCapture(node as CapturableObject))
+  })
+  group.updateMatrix()
+  group.updateMatrixWorld(true)
+  return group
+}
 
 function createCameraMarker(position: THREE.Vector3, label: string, color: number): THREE.Group {
   const marker = new THREE.Group()
@@ -288,25 +419,25 @@ function updateCameraMarkers(): void {
   })
 }
 
-function isValidSettings(value: Settings): boolean {
-  return Number.isFinite(value.lon) && value.lon >= -180 && value.lon <= 180 && Number.isFinite(value.lat) && value.lat >= -90 && value.lat <= 90 && Number.isFinite(value.groundElevation) && Number.isFinite(value.height) && value.height >= 0
-}
-
 function parseCoordinate(value: string, axis: 'lat' | 'lon'): number {
-  const normalized = value.trim().replace(/[′’]/g, "'").replace(/[″”]/g, '"').replace(/，/g, ',')
+  const normalized = value.trim()
+    .replace(/[，]/g, ',')
+    .replace(/[’′]/g, '\'')
+    .replace(/[“”]/g, '"')
+
   if (!normalized) throw new Error(`${axis === 'lat' ? '纬度' : '经度'}不能为空。`)
 
   const hemisphere = normalized.match(/[NSEW]$/i)?.[0].toUpperCase() as 'N' | 'S' | 'E' | 'W' | undefined
   const body = normalized.replace(/[NSEW]$/i, '').trim()
-  const dms = body.match(/^([+-]?\d+(?:\.\d+)?)\s*°\s*(?:(\d+(?:\.\d+)?)\s*['′]\s*)?(?:(\d+(?:\.\d+)?)\s*["″])?$/)
+  const dmsMatch = body.match(/^([+-]?\d+(?:\.\d+)?)\s*°\s*(?:(\d+(?:\.\d+)?)\s*['′]?\s*)?(?:(\d+(?:\.\d+)?)\s*["″]?\s*)?$/)
   const decimal = Number(body)
-  let result: number
 
-  if (dms) {
-    const degrees = Number(dms[1])
-    const minutes = dms[2] ? Number(dms[2]) : 0
-    const seconds = dms[3] ? Number(dms[3]) : 0
-    if (minutes >= 60 || seconds >= 60) throw new Error(`${axis === 'lat' ? '纬度' : '经度'}的分或秒必须小于 60。`)
+  let result: number
+  if (dmsMatch) {
+    const degrees = Number(dmsMatch[1])
+    const minutes = dmsMatch[2] ? Number(dmsMatch[2]) : 0
+    const seconds = dmsMatch[3] ? Number(dmsMatch[3]) : 0
+    if (minutes >= 60 || seconds >= 60) throw new Error(`${axis === 'lat' ? '纬度' : '经度'}的分和秒必须小于 60。`)
     const sign = degrees < 0 || hemisphere === 'S' || hemisphere === 'W' ? -1 : 1
     result = sign * (Math.abs(degrees) + minutes / 60 + seconds / 3600)
   } else if (Number.isFinite(decimal)) {
@@ -324,11 +455,11 @@ function parseCoordinate(value: string, axis: 'lat' | 'lon'): number {
 }
 
 function parseCoordinatePair(value: string): { lat: number; lon: number } {
-  const normalized = value.trim().replace(/[′’]/g, "'").replace(/[″”]/g, '"')
+  const normalized = value.trim().replace(/[，]/g, ',')
   const dmsMatch = normalized.match(/^(.+?[NS])\s*[,;\s]+(.+?[EW])$/i)
   if (dmsMatch) return { lat: parseCoordinate(dmsMatch[1], 'lat'), lon: parseCoordinate(dmsMatch[2], 'lon') }
 
-  const decimalParts = normalized.split(/\s*[,，;]\s*|\s+/).filter(Boolean)
+  const decimalParts = normalized.split(/\s*[,]\s*|\s+/).filter(Boolean)
   if (decimalParts.length === 2) {
     return { lat: parseCoordinate(decimalParts[0], 'lat'), lon: parseCoordinate(decimalParts[1], 'lon') }
   }
@@ -346,6 +477,18 @@ function readSettings(): Settings {
   }
 }
 
+function isValidSettings(value: Settings): boolean {
+  return Number.isFinite(value.lon)
+    && value.lon >= -180
+    && value.lon <= 180
+    && Number.isFinite(value.lat)
+    && value.lat >= -90
+    && value.lat <= 90
+    && Number.isFinite(value.groundElevation)
+    && Number.isFinite(value.height)
+    && value.height >= 0
+}
+
 function syncUrl(value: Settings): void {
   const next = new URL(window.location.href)
   next.searchParams.set('lon', value.lon.toFixed(6))
@@ -355,70 +498,13 @@ function syncUrl(value: Settings): void {
   window.history.replaceState(null, '', next)
 }
 
-function updateStats(): void {
-  sourceStat.textContent = sourceLabel
-  tilesStat.textContent = tiles ? `${tiles.group.children.length} objects` : '-'
-  locationStat.textContent = `${settings.lat.toFixed(5)}, ${settings.lon.toFixed(5)} @ ground ${settings.groundElevation.toFixed(1)}m / camera ${(settings.groundElevation + settings.height).toFixed(1)}m`
-}
-
 function applyCameraRotation(): void {
   const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'))
-  camera.position.copy(basePosition)
-  camera.quaternion.copy(baseQuaternion).multiply(rotation)
-  camera.up.set(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
-  camera.updateMatrixWorld()
-  mainControls.target.copy(basePosition).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).multiplyScalar(100))
-  mainControls.update()
-}
-
-function renderAnchorList(): void {
-  anchorList.replaceChildren()
-  for (const anchor of anchors) {
-    const row = document.createElement('div')
-    row.className = 'anchor-row'
-    row.innerHTML = `<span>${anchor.label}</span><span class="anchor-actions"><button data-action="view">查看</button><button data-action="level">水平</button><button data-action="delete" class="secondary">删除</button></span>`
-    row.querySelector('[data-action="view"]')?.addEventListener('click', () => focusAnchor(anchor, false))
-    row.querySelector('[data-action="level"]')?.addEventListener('click', () => focusAnchor(anchor, true))
-    row.querySelector('[data-action="delete"]')?.addEventListener('click', () => {
-      anchors = anchors.filter((item) => item.id !== anchor.id)
-      renderAnchorList()
-      updateCameraMarkers()
-      invalidateGlbCache()
-    })
-    anchorList.append(row)
-  }
-}
-
-function addCurrentCameraAnchor(): void {
-  const anchor: CameraAnchor = {
-    id: `anchor-${Date.now()}-${anchors.length}`,
-    label: `锚点 ${anchors.length + 1}`,
-    position: camera.position.clone(),
-    quaternion: camera.quaternion.clone(),
-    far: Number(cameraFarInput.value),
-  }
-  anchors.push(anchor)
-  renderAnchorList()
-  updateCameraMarkers()
-  invalidateGlbCache()
-}
-
-function focusAnchor(anchor: CameraAnchor, horizontal: boolean): void {
-  camera.position.copy(anchor.position)
-  camera.quaternion.copy(anchor.quaternion)
-  camera.up.set(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
-  camera.far = anchor.far
-  cameraFarInput.value = String(anchor.far)
-  camera.updateProjectionMatrix()
-  if (horizontal) {
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(anchor.quaternion)
-    forward.addScaledVector(up, -forward.dot(up)).normalize()
-    camera.up.copy(up)
-    camera.lookAt(anchor.position.clone().add(forward))
-  }
-  camera.updateMatrixWorld(true)
-  mainControls.target.copy(camera.position).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).multiplyScalar(100))
+  mainCamera.position.copy(basePosition)
+  mainCamera.quaternion.copy(baseQuaternion).multiply(rotation)
+  mainCamera.up.set(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
+  mainCamera.updateMatrixWorld(true)
+  mainControls.target.copy(basePosition).add(new THREE.Vector3(0, 0, -1).applyQuaternion(mainCamera.quaternion).multiplyScalar(100))
   mainControls.update()
 }
 
@@ -426,21 +512,218 @@ function positionCamera(ellipsoid = tiles?.ellipsoid): void {
   if (!ellipsoid) return
   const radians = Math.PI / 180
   const matrix = new THREE.Matrix4()
-  ellipsoid.getObjectFrame(settings.lat * radians, settings.lon * radians, settings.groundElevation + settings.height, -90 * radians, 0, 0, matrix, CAMERA_FRAME)
+  ellipsoid.getObjectFrame(
+    settings.lat * radians,
+    settings.lon * radians,
+    settings.groundElevation + settings.height,
+    -90 * radians,
+    0,
+    0,
+    matrix,
+    CAMERA_FRAME,
+  )
   matrix.decompose(basePosition, baseQuaternion, new THREE.Vector3())
+  baseFrameMatrix.compose(basePosition, baseQuaternion, new THREE.Vector3(1, 1, 1))
+  baseFrameInverse.copy(baseFrameMatrix).invert()
   yaw = 0
   pitch = 0
   applyCameraRotation()
+  syncGlbOrigin()
   updateCameraMarkers()
 }
 
+function renderAnchorList(): void {
+  anchorList.replaceChildren()
+  for (const anchor of anchors) {
+    const row = document.createElement('div')
+    row.className = 'anchor-row'
+    row.innerHTML = `<span>${anchor.label}</span><span class="anchor-meta">${anchor.capturedCount} 个叶节点</span>`
+    anchorList.append(row)
+  }
+}
+
+function clearCapturedTiles(message = '等待首次锚点捕获'): void {
+  resetGlbCaptureScene(message)
+}
+
+function setCaptureButtonState(): void {
+  addAnchorButton.disabled = !tiles
+  exportCurrentGlbButton.disabled = capturedTileNodes.size === 0
+}
+
+function hasVisibleDescendant(tile: CapturableTile, visibleTiles: Set<CapturableTile>): boolean {
+  const children = tile.children ?? []
+  for (const child of children as CapturableTile[]) {
+    if (visibleTiles.has(child) || hasVisibleDescendant(child, visibleTiles)) return true
+  }
+  return false
+}
+
+function isCapturedDescendant(candidate: CapturableTile): boolean {
+  for (const existingTile of capturedTileNodes.keys() as IterableIterator<CapturableTile>) {
+    let current: CapturableTile | null = existingTile
+    while (current.parent) {
+      current = current.parent as CapturableTile
+      if (current === candidate) return true
+    }
+  }
+  return false
+}
+
+function removeCapturedAncestors(candidate: CapturableTile): void {
+  for (const [capturedTile, capturedNode] of [...capturedTileNodes.entries()] as Array<[CapturableTile, THREE.Object3D]>) {
+    let current: CapturableTile | null = candidate
+    while (current.parent) {
+      current = current.parent as CapturableTile
+      if (current === capturedTile) {
+        glbCaptureRoot.remove(capturedNode)
+        capturedTileNodes.delete(capturedTile)
+        break
+      }
+    }
+  }
+}
+
+function collectCurrentLeafTiles(): CapturableTile[] {
+  if (!tiles) return []
+  const visibleTiles = tiles.visibleTiles as Set<CapturableTile>
+  return [...visibleTiles]
+    .filter((tile) => Boolean(tile.engineData?.scene))
+    .filter((tile) => !hasVisibleDescendant(tile, visibleTiles))
+    .sort((a, b) => (b.internal?.depth ?? 0) - (a.internal?.depth ?? 0))
+}
+
+function captureVisibleTiles(): number {
+  if (!tiles) return 0
+  tiles.update()
+  const candidates = collectCurrentLeafTiles()
+  let added = 0
+
+
+  for (const tile of candidates) {
+    const scene = tile.engineData?.scene
+    if (!scene) continue
+    if (capturedTileNodes.has(tile)) continue
+    if (isCapturedDescendant(tile)) continue
+
+    removeCapturedAncestors(tile)
+    const tileGroup = createCapturedTileGroup(scene)
+    tileGroup.name = `captured-${capturedTileNodes.size + 1}`
+    glbCaptureRoot.add(tileGroup)
+    capturedTileNodes.set(tile, tileGroup)
+    added += 1
+  }
+
+  if (added > 0) {
+    if (!glbCameraFramed) {
+      frameGlbPreview()
+      glbCameraFramed = true
+    }
+    hideGlbPlaceholder()
+    exportCurrentGlbButton.disabled = false
+    glbPreviewProgress.textContent = `已捕获 ${capturedTileNodes.size} 个高精度叶节点。`
+  } else if (capturedTileNodes.size === 0) {
+    setGlbPlaceholder('当前视图没有可捕获的高精度叶节点', 'idle')
+    glbPreviewProgress.textContent = '当前视图没有可捕获的高精度叶节点。'
+  } else {
+    glbPreviewProgress.textContent = '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
+  }
+  logSummary('capture-summary', { added, captured: capturedTileNodes.size, sceneChildren: glbCaptureRoot.children.length, framed: glbCameraFramed })
+
+  const count = added > 0 ? added : 0
+  if (count > 0) {
+    anchors.push({
+      id: `anchor-${Date.now()}-${anchors.length}`,
+      label: `锚点 ${anchors.length + 1}`,
+      capturedCount: count,
+      position: mainCamera.position.clone(),
+    })
+    renderAnchorList()
+    updateCameraMarkers()
+  }
+  updateProgressUI()
+  setCaptureButtonState()
+  return added
+}
+
+function frameGlbPreview(): void {
+  const box = new THREE.Box3().setFromObject(glbCaptureRoot)
+  if (box.isEmpty()) {
+    return
+  }
+  const sphere = box.getBoundingSphere(new THREE.Sphere())
+  syncGlbCameraToMainView()
+  logSummary('frame-summary', {
+    state: 'framed',
+    childCount: glbCaptureRoot.children.length,
+    radius: sphere.radius,
+  })
+}
+
+function exportObject3D(object: THREE.Object3D): Promise<ArrayBuffer> {
+  object.updateMatrixWorld(true)
+  return new Promise<ArrayBuffer>((resolve, reject) => {
+    new GLTFExporter().parse(
+      object,
+      (value) => value instanceof ArrayBuffer ? resolve(value) : reject(new Error('GLB 生成结果无效。')),
+      (error) => reject(error instanceof Error ? error : new Error('GLB 生成失败。')),
+      { binary: true, onlyVisible: true, includeCustomExtensions: true },
+    )
+  })
+}
+
+async function exportCurrentGlb(): Promise<void> {
+  if (exporting) return
+  if (capturedTileNodes.size === 0) {
+    glbPreviewProgress.textContent = '没有可导出的锚点内容。'
+    return
+  }
+  exporting = true
+  exportCurrentGlbButton.disabled = true
+  try {
+    const result = await exportObject3D(glbCaptureRoot)
+    const blob = new Blob([result], { type: 'model/gltf-binary' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `scene-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.glb`
+    link.click()
+    logSummary('export-ready', { children: glbCaptureRoot.children.length, captured: capturedTileNodes.size, bytes: result.byteLength })
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+    glbPreviewProgress.textContent = 'GLB 导出完成。'
+  } catch (error) {
+    glbPreviewProgress.textContent = error instanceof Error ? error.message : 'GLB 导出失败。'
+  } finally {
+    exporting = false
+    setCaptureButtonState()
+  }
+}
+
+function resizeMain(): void {
+  const width = Math.max(1, viewport.clientWidth)
+  const height = Math.max(1, viewport.clientHeight)
+  mainRenderer.setSize(width, height, false)
+  mainCamera.aspect = width / height
+  mainCamera.updateProjectionMatrix()
+  tiles?.setResolutionFromRenderer(mainCamera, mainRenderer)
+}
+
+function resizeGlb(): void {
+  const width = Math.max(1, glbPreviewViewport.clientWidth)
+  const height = Math.max(1, glbPreviewViewport.clientHeight)
+  glbRenderer.setSize(width, height, false)
+  glbCamera.aspect = width / height
+  glbCamera.updateProjectionMatrix()
+}
+
 function disposeTiles(): void {
-  if (previewSession) stopPreviewSession()
   if (!tiles) return
   tiles.dispose()
-  scene.remove(tiles.group)
+  mainScene.remove(tiles.group)
   tiles = null
+  sourceLabel = '-'
+  clearCapturedTiles()
   updateStats()
+  setCaptureButtonState()
 }
 
 async function loadTiles(): Promise<void> {
@@ -449,18 +732,23 @@ async function loadTiles(): Promise<void> {
   const ionToken = String(env.VITE_CESIUM_ION_TOKEN ?? '').trim()
   const ionAssetId = String(env.VITE_CESIUM_ION_ASSET_ID ?? '').trim()
   const hasIon = Boolean(ionToken && ionAssetId)
+
   if (!tilesUrl && !hasIon) {
     configHelp.hidden = false
     sourceLabel = '未配置'
-    setStatus('需要配置', 'error')
-    setPlaceholder('请配置 VITE_TILES_URL，或配置 Cesium Ion Token + Asset ID', 'error')
+    setStatus('需要配置数据源', 'error')
+    setPlaceholder('请配置 VITE_TILES_URL，或配置 Cesium Ion Token + Asset ID。', 'error')
     updateStats()
+    setCaptureButtonState()
     return
   }
+
   configHelp.hidden = true
   setPlaceholder('正在加载 3D Tiles…', 'loading')
   setStatus('加载中…')
   disposeTiles()
+  clearCapturedTiles()
+
   try {
     const next = new TilesRenderer(tilesUrl || undefined)
     next.errorTarget = Number(precisionInput.value)
@@ -469,42 +757,33 @@ async function loadTiles(): Promise<void> {
     next.registerPlugin(new TilesFadePlugin())
     next.registerPlugin(new UpdateOnChangePlugin())
     if (hasIon) next.registerPlugin(new CesiumIonAuthPlugin({ apiToken: ionToken, assetId: ionAssetId, autoRefreshToken: true }))
-    // Place the camera as soon as the tiles renderer exists, before the first
-    // frame can render at Three.js's default origin.
+
     positionCamera(next.ellipsoid)
-    next.setCamera(camera)
-    next.setResolutionFromRenderer(camera, renderer)
+    next.setCamera(mainCamera)
+    next.setResolutionFromRenderer(mainCamera, mainRenderer)
     next.addEventListener('load-error', (event: unknown) => {
       const message = event instanceof Error ? event.message : '3D Tiles 请求失败，请检查 URL、Token 和 CORS 配置。'
       setStatus('加载错误', 'error')
       setPlaceholder(message, 'error')
     })
+
     tiles = next
     sourceLabel = hasIon ? `Cesium Ion / ${ionAssetId}` : tilesUrl
-    scene.add(next.group)
+    mainScene.add(next.group)
     positionCamera()
     hidePlaceholder()
     setStatus('已就绪', 'ok')
-    exportGlbButton.disabled = false
-    previewGlbButton.disabled = false
     addAnchorButton.disabled = false
+    logSummary('load-ready', { source: sourceLabel, visible: next.visibleTiles.size, active: next.activeTiles.size, progress: next.loadProgress })
     updateStats()
+    updateProgressUI()
+    setCaptureButtonState()
   } catch (error) {
     disposeTiles()
     setStatus('加载失败', 'error')
-    setPlaceholder(error instanceof Error ? error.message : '无法初始化 3D Tiles', 'error')
+    setPlaceholder(error instanceof Error ? error.message : '无法初始化 3D Tiles。', 'error')
   }
 }
-
-function resize(): void {
-  const width = Math.max(1, viewport.clientWidth)
-  const height = Math.max(1, viewport.clientHeight)
-  renderer.setSize(width, height, false)
-  camera.aspect = width / height
-  camera.updateProjectionMatrix()
-  tiles?.setResolutionFromRenderer(camera, renderer)
-}
- 
 
 function applyLocation(): void {
   let next: Settings
@@ -515,506 +794,107 @@ function applyLocation(): void {
     setPlaceholder(error instanceof Error ? error.message : '无法解析坐标。', 'error')
     return
   }
+
   if (!isValidSettings(next)) {
     setStatus('坐标无效', 'error')
-    setPlaceholder('经度需在 -180..180，纬度需在 -90..90，地面海拔和观察高度必须是有效数字，观察高度不能小于 0。', 'error')
+    setPlaceholder('经度需在 -180..180，纬度需在 -90..90，地面海拔和观察高度必须是有效数字，且观察高度不能小于 0。', 'error')
     return
   }
+
   Object.assign(settings, next)
   syncUrl(settings)
   if (tiles) positionCamera()
-  invalidateGlbCache()
+  clearCapturedTiles()
   updateStats()
   setStatus(tiles ? '已定位' : '等待数据源', tiles ? 'ok' : 'idle')
 }
 
-$('#apply-location').addEventListener('click', applyLocation)
-addAnchorButton.addEventListener('click', addCurrentCameraAnchor)
+function updateTileCameraRange(): void {
+  const value = Number(cameraFarInput.value)
+  if (!Number.isFinite(value) || value <= mainCamera.near) return
+  mainCamera.far = value
+  mainCamera.updateProjectionMatrix()
+  tiles?.update()
+  clearCapturedTiles()
+}
 
-$('#reset-location').addEventListener('click', () => {
+function resetLocation(): void {
   coordinateTextInput.value = `${settings.lat}, ${settings.lon}`
   groundElevationInput.value = String(settings.groundElevation)
   heightInput.value = String(settings.height)
   yaw = 0
   pitch = 0
   applyCameraRotation()
-})
-
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  clearCapturedTiles()
 }
 
-function getTileLoadStats(renderer: TilesRenderer): { loaded: number; pending: number; total: number } {
-  const stats = renderer.stats as Record<string, number>
-  const loaded = Math.max(0, Number(stats.loaded) || 0)
-  const pending = Math.max(0, (Number(stats.queued) || 0) + (Number(stats.downloading) || 0) + (Number(stats.parsing) || 0) + (Number(stats.processing) || 0))
-  return { loaded, pending, total: loaded + pending }
-}
-
-function createExportAnchors(radius: number): ExportAnchor[] {
-  return [
-    { id: 'base', label: 'base', position: basePosition.clone(), quaternion: baseQuaternion.clone(), far: radius },
-    ...anchors.map((anchor) => ({ ...anchor, position: anchor.position.clone(), quaternion: anchor.quaternion.clone() })),
-  ]
-}
-
-function createScanCameras(radius: number): ScanView[] {
-  const directions: Array<{ direction: THREE.Vector3; up: THREE.Vector3; topDown: boolean }> = []
-  for (let azimuth = 0; azimuth < 8; azimuth += 1) {
-    for (const elevation of [-30, 0, 30]) {
-      const azimuthRadians = azimuth / 8 * Math.PI * 2
-      const elevationRadians = elevation * Math.PI / 180
-      directions.push({
-        direction: new THREE.Vector3(
-          Math.sin(azimuthRadians) * Math.cos(elevationRadians),
-          Math.sin(elevationRadians),
-          -Math.cos(azimuthRadians) * Math.cos(elevationRadians),
-        ),
-        up: new THREE.Vector3(0, 1, 0),
-        topDown: false,
-      })
-    }
-  }
-
-  const scanViews: ScanView[] = []
-  const addScanViews = (position: THREE.Vector3, quaternion: THREE.Quaternion, far: number): void => {
-    for (const { direction, up, topDown } of directions) {
-      scanViews.push({
-        position: position.clone(),
-        quaternion: quaternion.clone(),
-        direction: direction.clone(),
-        up: up.clone(),
-        far,
-        topDown,
-      })
-    }
-  }
-  addScanViews(basePosition, baseQuaternion, radius)
-  for (const anchor of anchors) addScanViews(anchor.position, anchor.quaternion, anchor.far)
-  return scanViews
-}
-
-function getPreviewSignature(): string {
-  if (!tiles) return ''
-  const stats = getTileLoadStats(tiles)
-  const active = [...tiles.activeTiles].map((tile) => String((tile as { id?: string }).id ?? tile)).sort().join(',')
-  const visible = [...tiles.visibleTiles].map((tile) => String((tile as { id?: string }).id ?? tile)).sort().join(',')
-  return `${stats.loaded}:${stats.pending}:${tiles.loadProgress}:${active}:${visible}`
-}
-
-type ScanTile = {
-  parent: ScanTile | null
-  refine?: 'REPLACE' | 'ADD'
-  engineData?: { scene?: THREE.Object3D | null }
-}
-
-function getScanTileScene(tile: ScanTile): THREE.Object3D | null {
-  return tile.engineData?.scene ?? null
-}
-
-function hasSelectedReplacementDescendant(tile: ScanTile, selectedTiles: Set<unknown>): boolean {
-  for (const selected of selectedTiles) {
-    let current = selected as ScanTile
-    while (current.parent) {
-      current = current.parent
-      if (current === tile) return tile.refine === 'REPLACE'
-    }
-  }
-  return false
-}
-
-function collectStableScanTiles(session: NonNullable<typeof previewSession>): void {
+function handleAddAnchor(): void {
   if (!tiles) return
-
-  for (const candidate of tiles.activeTiles as Set<ScanTile>) {
-    const scene = getScanTileScene(candidate)
-    if (!scene || hasSelectedReplacementDescendant(candidate, session.selectedTiles)) continue
-    if (session.selectedTiles.has(candidate)) continue
-
-    let ancestor = candidate.parent
-    while (ancestor) {
-      if (ancestor.refine === 'REPLACE') {
-        session.selectedTiles.delete(ancestor)
-        const ancestorScene = session.selectedSceneByTile.get(ancestor)
-        session.selectedSceneByTile.delete(ancestor)
-        if (ancestorScene) session.selectedScenes.delete(ancestorScene)
-      }
-      ancestor = ancestor.parent
-    }
-
-    session.selectedTiles.add(candidate)
-    const sceneCopy = scene.clone(true)
-    session.selectedSceneByTile.set(candidate, sceneCopy)
-    session.selectedScenes.add(sceneCopy)
-  }
-}
-
-function registerNextScanCamera(session: NonNullable<typeof previewSession>): void {
-  if (!tiles || session.closed) return
-
-  const nextView = session.views[session.scanIndex] ?? null
-  session.stableFrames = 0
-  session.lastSignature = ''
-  session.stable = false
-
-  if (!nextView) {
-    session.scanComplete = true
-    session.stable = true
-    glbPreviewProgress.textContent = `扫描完成 · 已收集 ${session.selectedScenes.size} 个最高精度瓦片`
-    schedulePreviewGeneration()
-    return
-  }
-
-  const scanCamera = session.scanCamera
-  const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(nextView.quaternion)
-  scanCamera.position.copy(nextView.position)
-  if (nextView.topDown) scanCamera.position.add(worldUp.clone().multiplyScalar(nextView.far))
-  scanCamera.up.copy(nextView.up).applyQuaternion(nextView.quaternion)
-  const target = nextView.topDown
-    ? nextView.position
-    : nextView.position.clone().add(nextView.direction.clone().applyQuaternion(nextView.quaternion))
-  scanCamera.lookAt(target)
-  scanCamera.near = camera.near
-  scanCamera.far = nextView.topDown ? nextView.far * 2 : nextView.far
-  scanCamera.fov = camera.fov
-  scanCamera.aspect = 1
-  scanCamera.updateProjectionMatrix()
-  scanCamera.updateMatrixWorld(true)
-  if (!session.scanCameraRegistered) {
-    tiles.setCamera(scanCamera)
-    tiles.setResolutionFromRenderer(scanCamera, renderer)
-    session.scanCameraRegistered = true
-  }
-  tiles.update()
-  const anchorIndex = Math.floor(session.scanIndex / 24)
-  const directionIndex = session.scanIndex % 24
-  glbPreviewProgress.textContent = `正在扫描锚点 ${anchorIndex + 1} · 方向 ${directionIndex + 1}/24 · 已收集 ${session.selectedScenes.size}`
-}
-
-function finishCurrentScanCamera(session: NonNullable<typeof previewSession>): void {
-  if (!tiles || session.closed) return
-
-  collectStableScanTiles(session)
-  session.scanIndex += 1
-  schedulePreviewGeneration()
-  registerNextScanCamera(session)
-}
-
-function updatePreviewStability(): void {
-  if (!previewSession || !tiles || previewSession.closed) return
-  const signature = getPreviewSignature()
-  const stats = getTileLoadStats(tiles)
-  const loading = Boolean((tiles as TilesRenderer & { isLoading?: boolean }).isLoading)
-  if (signature === previewSession.lastSignature && stats.pending === 0 && !loading && tiles.loadProgress >= 1) {
-    previewSession.stableFrames += 1
-  } else {
-    previewSession.stableFrames = 0
-  }
-  previewSession.lastSignature = signature
-  previewSession.stable = previewSession.stableFrames >= 8
-  glbPreviewProgress.textContent = `${previewSession.stable ? 'LOD 已稳定' : '正在持续细分…'} · 已加载 ${stats.loaded} · 队列 ${stats.pending}`
-  if (previewSession.stable) finishCurrentScanCamera(previewSession)
-}
-
-function beginPreviewSession(radius: number): void {
-  if (!tiles) return
-  stopPreviewSession()
-  const session = {
-    views: createScanCameras(radius),
-    scanIndex: 0,
-    scanCamera: new THREE.PerspectiveCamera(camera.fov, 1, camera.near, radius),
-    scanCameraRegistered: false,
-    previousCameras: [...tiles.cameras],
-    previousDisplayActiveTiles: tiles.displayActiveTiles,
-    mainCamera: {
-      position: camera.position.clone(),
-      quaternion: camera.quaternion.clone(),
-      up: camera.up.clone(),
-      near: camera.near,
-      far: camera.far,
-      fov: camera.fov,
-      aspect: camera.aspect,
-      target: mainControls.target.clone(),
-    },
-    radius,
-    generation: 0,
-    stableFrames: 0,
-    lastSignature: '',
-    stable: false,
-    scanComplete: false,
-    selectedTiles: new Set<unknown>(),
-    selectedSceneByTile: new Map<unknown, THREE.Object3D>(),
-    selectedScenes: new Set<THREE.Object3D>(),
-    generationTimer: null as number | null,
-    generationInFlight: false,
-    closed: false,
-  }
-  previewSession = session
-  // Remove the interactive camera (and any prior renderer cameras) from the
-  // traversal. Only the temporary base/anchor scan cameras below drive LOD.
-  for (const previousCamera of session.previousCameras) tiles.deleteCamera(previousCamera)
-  tiles.displayActiveTiles = true
-  registerNextScanCamera(session)
-  glbPreviewProgress.textContent = '正在注册联合扫描相机…'
-}
-
-function stopPreviewSession(): void {
-  if (!previewSession || !tiles) return
-  const session = previewSession
-  session.closed = true
-  if (session.generationTimer !== null) window.clearTimeout(session.generationTimer)
-  if (session.scanCameraRegistered) tiles.deleteCamera(session.scanCamera)
-  tiles.displayActiveTiles = session.previousDisplayActiveTiles
-  for (const previousCamera of session.previousCameras) {
-    tiles.setCamera(previousCamera)
-    tiles.setResolutionFromRenderer(previousCamera, renderer)
-  }
-  camera.position.copy(session.mainCamera.position)
-  camera.quaternion.copy(session.mainCamera.quaternion)
-  camera.up.copy(session.mainCamera.up)
-  camera.near = session.mainCamera.near
-  camera.far = session.mainCamera.far
-  camera.fov = session.mainCamera.fov
-  camera.aspect = session.mainCamera.aspect
-  camera.updateProjectionMatrix()
-  camera.updateMatrixWorld(true)
-  mainControls.target.copy(session.mainCamera.target)
   mainControls.update()
-  previewSession = null
-}
-
-function collectExportScenes(radius: number): Set<THREE.Object3D> {
-  if (!tiles || !previewSession) return new Set()
-  const scenes = new Set<THREE.Object3D>()
-  const exportAnchors = createExportAnchors(radius)
-  for (const child of previewSession.selectedScenes) {
-    child.updateMatrixWorld(true)
-    const bounds = new THREE.Box3().setFromObject(child)
-    const sphere = bounds.getBoundingSphere(new THREE.Sphere())
-    if (exportAnchors.some((anchor) => sphere.center.distanceTo(anchor.position) - sphere.radius <= anchor.far)) scenes.add(child)
-  }
-  return scenes
-}
-
-async function encodeCurrentPreview(): Promise<ArrayBuffer> {
-  if (!tiles || !previewSession) throw new Error('GLB 预览尚未初始化。')
-  const exportGroup = new THREE.Group()
-  const exportScenes = collectExportScenes(previewSession.radius)
-  for (const sourceScene of exportScenes) exportGroup.add(sourceScene.clone(true))
-  if (exportGroup.children.length === 0) throw new Error('导出范围内尚未加载到瓦片。')
-  exportGroup.position.copy(basePosition).multiplyScalar(-1)
-  exportGroup.updateMatrixWorld(true)
-  return await new Promise<ArrayBuffer>((resolve, reject) => {
-    new GLTFExporter().parse(
-      exportGroup,
-      (value) => value instanceof ArrayBuffer ? resolve(value) : reject(new Error('GLB 生成结果无效。')),
-      (error) => reject(error instanceof Error ? error : new Error('GLB 生成失败。')),
-      { binary: true, onlyVisible: true, includeCustomExtensions: true },
-    )
-  })
-}
-
-function replacePreviewModel(data: ArrayBuffer): void {
-  if (!glbPreviewScene) return
-  new GLTFLoader().parse(data.slice(0), '', (gltf) => {
-    if (!glbPreviewScene) return
-    const shouldFrame = glbPreviewModel === null
-    if (glbPreviewModel) glbPreviewScene.remove(glbPreviewModel)
-    glbPreviewModel = gltf.scene
-    glbPreviewScene.add(glbPreviewModel)
-    if (shouldFrame) frameGlbPreview(glbPreviewModel)
-    glbPreviewPlaceholder.hidden = true
-  }, (error) => {
-    glbPreviewPlaceholder.textContent = error instanceof Error ? error.message : 'GLB 加载失败'
-    glbPreviewPlaceholder.dataset.state = 'error'
-    glbPreviewPlaceholder.hidden = false
-  })
-}
-
-async function generatePreviewGlb(): Promise<void> {
-  const session = previewSession
-  if (!session || session.closed || session.generationInFlight) return
-  session.generationInFlight = true
-  const generation = ++session.generation
-  try {
-    glbPreviewProgress.textContent = '正在生成 GLB…'
-    const result = await encodeCurrentPreview()
-    if (previewSession !== session || session.closed || generation !== session.generation) return
-    lastExportedGlb = result.slice(0)
-    replacePreviewModel(result)
-    exportCurrentGlbButton.disabled = false
-    glbPreviewProgress.textContent = session.stable ? 'GLB 已更新 · LOD 已稳定' : 'GLB 已更新 · 正在继续细分…'
-  } catch (error) {
-    if (previewSession === session && !session.closed) glbPreviewProgress.textContent = error instanceof Error ? error.message : 'GLB 生成失败'
-  } finally {
-    if (previewSession === session) {
-      session.generationInFlight = false
-      if (session.stable && session.generationTimer === null) schedulePreviewGeneration()
-    }
+  const added = captureVisibleTiles()
+  if (added === 0 && capturedTileNodes.size === 0) {
+    setStatus('没有可捕获内容', 'error')
+  } else if (added > 0) {
+    setStatus(`已添加锚点 ${anchors.length}`, 'ok')
   }
 }
 
-function schedulePreviewGeneration(): void {
-  const session = previewSession
-  if (!session || session.closed || session.generationInFlight || session.generationTimer !== null) return
-  session.generationTimer = window.setTimeout(() => {
-    session.generationTimer = null
-    void generatePreviewGlb()
-  }, session.stable ? 250 : 600)
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.matches('input, textarea, select, [contenteditable="true"]')
 }
 
-async function exportCurrentGlb(): Promise<void> {
-  if (exporting || !tiles || !previewSession) return
-  exporting = true
-  exportCurrentGlbButton.disabled = true
-  try {
-    const started = performance.now()
-    while (previewSession && !previewSession.stable && performance.now() - started < 30_000) {
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 100))
-    }
-    if (!lastExportedGlb) {
-      await generatePreviewGlb()
-    }
-    if (!lastExportedGlb) throw new Error('GLB 仍在生成，请稍后重试。')
-    downloadBlob(new Blob([lastExportedGlb], { type: 'model/gltf-binary' }), `scene-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.glb`)
-    glbPreviewProgress.textContent = 'GLB 导出完成'
-  } catch (error) {
-    glbPreviewProgress.textContent = error instanceof Error ? error.message : 'GLB 导出失败'
-  } finally {
-    exporting = false
-    exportCurrentGlbButton.disabled = !lastExportedGlb
-  }
+function handleShortcut(event: KeyboardEvent): void {
+  if (event.defaultPrevented || event.repeat) return
+  if (event.altKey || event.ctrlKey || event.metaKey) return
+  if (isTypingTarget(event.target)) return
+  if (event.key.toLowerCase() !== 'a') return
+  event.preventDefault()
+  addAnchorButton.click()
 }
 
-function resizeGlbPreview(): void {
-  if (!glbPreviewRenderer || !glbPreviewCamera) return
-  const width = Math.max(1, glbPreviewViewport.clientWidth)
-  const height = Math.max(1, glbPreviewViewport.clientHeight)
-  glbPreviewRenderer.setSize(width, height, false)
-  glbPreviewCamera.aspect = width / height
-  glbPreviewCamera.updateProjectionMatrix()
-}
-
-function frameGlbPreview(model: THREE.Object3D): void {
-  if (!glbPreviewCamera || !glbPreviewControls) return
-  const box = new THREE.Box3().setFromObject(model)
-  const sphere = box.getBoundingSphere(new THREE.Sphere())
-  const horizontalDirection = new THREE.Vector3(0, 0, -1).applyQuaternion(baseQuaternion).normalize()
-  const upDirection = new THREE.Vector3(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
-  const lookDistance = Math.max(1, Math.min(sphere.radius * 0.25, 100))
-  glbPreviewCamera.position.set(0, 0, 0)
-  glbPreviewCamera.up.copy(upDirection)
-  glbPreviewCamera.lookAt(horizontalDirection.clone().multiplyScalar(lookDistance))
-  glbPreviewCamera.near = Math.max(0.01, sphere.radius / 1000)
-  glbPreviewCamera.far = Math.max(1000, sphere.radius * 100)
-  glbPreviewCamera.updateProjectionMatrix()
-  glbPreviewControls.target.copy(horizontalDirection).multiplyScalar(lookDistance)
-  glbPreviewControls.update()
-}
-
-function closeGlbPreview(): void {
-  stopPreviewSession()
-  glbPreview.hidden = true
-  glbPreviewControls?.dispose()
-  glbPreviewRenderer?.dispose()
-  glbPreviewControls = null
-  glbPreviewRenderer = null
-  glbPreviewScene = null
-  glbPreviewCamera = null
-  glbPreviewModel = null
-  glbPreviewViewport.replaceChildren(glbPreviewPlaceholder)
-  glbPreviewPlaceholder.hidden = false
-}
-
-async function openGlbPreview(): Promise<void> {
-  if (exporting || !tiles) return
-  closeGlbPreview()
-  glbPreview.hidden = false
-  glbPreviewPlaceholder.textContent = '正在准备动态 GLB 预览…'
-  glbPreviewPlaceholder.dataset.state = 'loading'
-  glbPreviewPlaceholder.hidden = false
-  glbPreviewProgress.textContent = '正在启动联合扫描…'
-  glbPreviewScene = new THREE.Scene()
-  glbPreviewScene.background = new THREE.Color('#020811')
-  glbPreviewScene.add(new THREE.HemisphereLight('#d9efff', '#18243a', 1.6))
-  const light = new THREE.DirectionalLight('#ffffff', 2.4)
-  light.position.set(10, 20, 10)
-  glbPreviewScene.add(light)
-  glbPreviewCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000)
-  glbPreviewRenderer = new THREE.WebGLRenderer({ antialias: true })
-  glbPreviewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-  glbPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace
-  glbPreviewViewport.replaceChildren(glbPreviewRenderer.domElement)
-  glbPreviewControls = new MapControls(glbPreviewCamera, glbPreviewRenderer.domElement)
-  glbPreviewControls.enableDamping = true
-  glbPreviewControls.dampingFactor = 0.05
-  glbPreviewControls.screenSpacePanning = false
-  glbPreviewControls.minDistance = 100
-  glbPreviewControls.maxDistance = 500
-  glbPreviewControls.maxPolarAngle = Math.PI
-  glbPreviewControls.zoomToCursor = true
-  resizeGlbPreview()
-  lastExportedGlb = null
-  exportCurrentGlbButton.disabled = true
-  beginPreviewSession(Number(cameraFarInput.value))
-  schedulePreviewGeneration()
-}
-
-exportGlbButton.style.display = 'none'
+$('#apply-location').addEventListener('click', applyLocation)
+$('#reset-location').addEventListener('click', resetLocation)
+addAnchorButton.addEventListener('click', handleAddAnchor)
 exportCurrentGlbButton.addEventListener('click', () => void exportCurrentGlb())
-previewGlbButton.addEventListener('click', openGlbPreview)
-closeGlbPreviewButton.addEventListener('click', closeGlbPreview)
+
 precisionInput.addEventListener('input', () => {
   const value = Number(precisionInput.value)
   precisionValue.textContent = String(value)
-  invalidateGlbCache()
   if (tiles) {
     tiles.errorTarget = value
     tiles.update()
+    clearCapturedTiles()
   }
 })
-cameraFarInput.addEventListener('input', () => {
-  const value = Number(cameraFarInput.value)
-  if (!Number.isFinite(value) || value <= camera.near) return
-  camera.far = value
-  camera.updateProjectionMatrix()
-  invalidateGlbCache()
-  tiles?.update()
-})
-window.addEventListener('resize', resize)
-window.addEventListener('resize', resizeGlbPreview)
 
-// The viewer panel can change size without a window resize (for example when
-// the responsive grid changes or its layout is affected by dynamic content).
-// Keep the WebGL drawing buffer and camera projection in sync with the actual
-// viewport dimensions in those cases as well.
+cameraFarInput.addEventListener('input', updateTileCameraRange)
+window.addEventListener('keydown', handleShortcut)
+window.addEventListener('resize', () => {
+  resizeMain()
+  resizeGlb()
+})
+
 const viewportResizeObserver = new ResizeObserver(() => {
-  resize()
-  resizeGlbPreview()
+  resizeMain()
+  resizeGlb()
 })
 viewportResizeObserver.observe(viewport)
 viewportResizeObserver.observe(glbPreviewViewport)
 
 function animate(): void {
   tiles?.update()
-  updatePreviewStability()
-  if (glbPreviewRenderer && glbPreviewScene && glbPreviewCamera) {
-    glbPreviewControls?.update()
-    glbPreviewRenderer.render(glbPreviewScene, glbPreviewCamera)
-  } else {
-    mainControls.update()
-    renderer.render(scene, previewCamera)
-  }
+  mainControls.update()
+  glbControls.update()
+  mainRenderer.render(mainScene, mainCamera)
+  glbRenderer.render(glbScene, glbCamera)
+  updateProgressUI()
   tilesStat.textContent = tiles ? `${tiles.group.children.length} objects` : '-'
   requestAnimationFrame(animate)
 }
 
-resize()
+resizeMain()
+resizeGlb()
 loadTiles().catch((error) => {
   setStatus('初始化失败', 'error')
   setPlaceholder(error instanceof Error ? error.message : '初始化失败', 'error')
