@@ -29,6 +29,8 @@
     "build": "tsc -p tsconfig.build.json",
     "dev:dem-lab": "vite --config ./dem-lab/vite.config.ts",
     "build:dem-lab": "vite build --config ./dem-lab/vite.config.ts",
+    "dev:3dtiles-viewer": "vite --config ./3dtiles-viewer/vite.config.ts",
+    "build:3dtiles-viewer": "vite build --config ./3dtiles-viewer/vite.config.ts",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepare": "pnpm run build"
   },
@@ -37,10 +39,11 @@
   },
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
+    "3d-tiles-renderer": "^0.4.28",
     "@resvg/resvg-js": "^2.6.2",
     "geotiff": "^3.0.5",
-    "three": "^0.172.0",
-    "svgo": "^4.0.0"
+    "svgo": "^4.0.0",
+    "three": "^0.172.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
