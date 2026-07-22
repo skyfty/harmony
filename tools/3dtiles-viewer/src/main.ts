@@ -188,6 +188,8 @@ let glbPreviewRefreshRequested = false
 let glbSkippedLargeLeafCount = 0
 const baseFrameMatrix = new THREE.Matrix4()
 const baseFrameInverse = new THREE.Matrix4()
+const mainViewSphere = new THREE.Sphere()
+const mainViewBox = new THREE.Box3()
 
 rendererStat.textContent = `${mainRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'} / ${glbRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'}`
 
@@ -364,7 +366,59 @@ function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
 }
 
 function cloneTexture(texture: THREE.Texture): THREE.Texture {
-  const next = texture.clone()
+  const source = texture.image
+  let image: CanvasImageSource | null = null
+
+  if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
+    const canvas = document.createElement('canvas')
+    canvas.width = source.width
+    canvas.height = source.height
+    const context = canvas.getContext('2d')
+    if (context) context.drawImage(source, 0, 0)
+    image = canvas
+  } else if (typeof ImageBitmap !== 'undefined' && source instanceof ImageBitmap) {
+    const canvas = document.createElement('canvas')
+    canvas.width = source.width
+    canvas.height = source.height
+    const context = canvas.getContext('2d')
+    if (context) context.drawImage(source, 0, 0)
+    image = canvas
+  } else if (typeof HTMLImageElement !== 'undefined' && source instanceof HTMLImageElement) {
+    const canvas = document.createElement('canvas')
+    canvas.width = source.naturalWidth || source.width
+    canvas.height = source.naturalHeight || source.height
+    const context = canvas.getContext('2d')
+    if (context) context.drawImage(source, 0, 0)
+    image = canvas
+  } else {
+    image = source as CanvasImageSource | null
+  }
+
+  const next = new THREE.Texture(image)
+  next.name = texture.name
+  next.mapping = texture.mapping
+  next.channel = texture.channel
+  next.wrapS = texture.wrapS
+  next.wrapT = texture.wrapT
+  next.magFilter = texture.magFilter
+  next.minFilter = texture.minFilter
+  next.anisotropy = texture.anisotropy
+  next.format = texture.format
+  next.internalFormat = texture.internalFormat
+  next.type = texture.type
+  next.offset.copy(texture.offset)
+  next.repeat.copy(texture.repeat)
+  next.center.copy(texture.center)
+  next.rotation = texture.rotation
+  next.matrixAutoUpdate = texture.matrixAutoUpdate
+  next.matrix.copy(texture.matrix)
+  next.generateMipmaps = texture.generateMipmaps
+  next.premultiplyAlpha = texture.premultiplyAlpha
+  next.flipY = texture.flipY
+  next.unpackAlignment = texture.unpackAlignment
+  next.colorSpace = texture.colorSpace
+  next.userData = JSON.parse(JSON.stringify(texture.userData))
+  next.mipmaps = texture.mipmaps.slice(0)
   next.needsUpdate = true
   return next
 }
@@ -799,6 +853,33 @@ function isCapturedDescendant(candidate: CapturableTile): boolean {
   return false
 }
 
+function getMainCameraFrustum(): THREE.Frustum {
+  mainCamera.updateMatrixWorld(true)
+  const matrix = new THREE.Matrix4().multiplyMatrices(mainCamera.projectionMatrix, mainCamera.matrixWorldInverse)
+  return new THREE.Frustum().setFromProjectionMatrix(matrix)
+}
+
+function isTileInMainView(tile: CapturableTile, frustum: THREE.Frustum): boolean {
+  const boundingVolume = (tile.engineData as { boundingVolume?: { getSphere?: (target: THREE.Sphere) => void; getAABB?: (target: THREE.Box3) => void } } | undefined)?.boundingVolume
+  if (boundingVolume?.getSphere) {
+    boundingVolume.getSphere(mainViewSphere)
+    if (!frustum.intersectsSphere(mainViewSphere)) return false
+    return true
+  }
+
+  if (boundingVolume?.getAABB) {
+    boundingVolume.getAABB(mainViewBox)
+    if (mainViewBox.isEmpty()) return false
+    return frustum.intersectsBox(mainViewBox)
+  }
+
+  const scene = tile.engineData?.scene
+  if (!scene) return false
+  mainViewBox.setFromObject(scene)
+  if (mainViewBox.isEmpty()) return false
+  return frustum.intersectsBox(mainViewBox)
+}
+
 function removeCapturedAncestors(candidate: CapturableTile): void {
   for (const [capturedTile, capturedNode] of [...capturedTileNodes.entries()] as Array<[CapturableTile, THREE.Object3D]>) {
     let current: CapturableTile | null = candidate
@@ -813,19 +894,25 @@ function removeCapturedAncestors(candidate: CapturableTile): void {
   }
 }
 
-function collectCurrentLeafTiles(): CapturableTile[] {
-  if (!tiles) return []
+function collectCurrentLeafTiles(): { tiles: CapturableTile[]; visibleCount: number; inFrustumCount: number } {
+  if (!tiles) return { tiles: [], visibleCount: 0, inFrustumCount: 0 }
   const visibleTiles = tiles.visibleTiles as Set<CapturableTile>
-  return [...visibleTiles]
+  const frustum = getMainCameraFrustum()
+  const visible = [...visibleTiles]
     .filter((tile) => Boolean(tile.engineData?.scene))
     .filter((tile) => !hasVisibleDescendant(tile, visibleTiles))
-    .sort((a, b) => (b.internal?.depth ?? 0) - (a.internal?.depth ?? 0))
+  const inFrustum = visible.filter((tile) => isTileInMainView(tile, frustum))
+  return {
+    tiles: inFrustum.sort((a, b) => (b.internal?.depth ?? 0) - (a.internal?.depth ?? 0)),
+    visibleCount: visible.length,
+    inFrustumCount: inFrustum.length,
+  }
 }
 
 function captureVisibleTiles(): number {
   if (!tiles) return 0
   tiles.update()
-  const candidates = collectCurrentLeafTiles()
+  const { tiles: candidates, visibleCount, inFrustumCount } = collectCurrentLeafTiles()
   let added = 0
 
 
@@ -862,7 +949,7 @@ function captureVisibleTiles(): number {
   } else {
     glbPreviewProgress.textContent = '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
   }
-  logSummary('capture-summary', { added, captured: capturedTileNodes.size, skippedLarge: glbSkippedLargeLeafCount, sceneChildren: glbCaptureRoot.children.length, framed: glbCameraFramed })
+  logSummary('capture-summary', { added, captured: capturedTileNodes.size, visible: visibleCount, inFrustum: inFrustumCount, skippedLarge: glbSkippedLargeLeafCount, framed: glbCameraFramed })
 
   const count = added > 0 ? added : 0
   if (count > 0) {
@@ -906,7 +993,6 @@ async function exportCurrentGlb(): Promise<void> {
   exporting = true
   exportCurrentGlbButton.disabled = true
   try {
-    await refreshGlbPreview()
     if (!glbPreviewBuffer) throw new Error('GLB 预览还未准备好。')
     const blob = new Blob([glbPreviewBuffer], { type: 'model/gltf-binary' })
     const link = document.createElement('a')
