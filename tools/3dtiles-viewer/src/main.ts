@@ -11,6 +11,14 @@ import stylesText from './styles.css?raw'
 type Settings = { lon: number; lat: number; groundElevation: number; height: number }
 type CameraAnchor = { id: string; label: string; position: THREE.Vector3; quaternion: THREE.Quaternion; far: number }
 type ExportAnchor = { id: string; label: string; position: THREE.Vector3; quaternion: THREE.Quaternion; far: number }
+type ScanView = {
+  position: THREE.Vector3
+  quaternion: THREE.Quaternion
+  direction: THREE.Vector3
+  up: THREE.Vector3
+  far: number
+  topDown: boolean
+}
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const style = document.createElement('style')
@@ -148,7 +156,6 @@ let yaw = 0
 let pitch = 0
 let exporting = false
 let lastExportedGlb: ArrayBuffer | null = null
-let previewRequested = false
 let anchors: CameraAnchor[] = []
 let glbPreviewRenderer: THREE.WebGLRenderer | null = null
 let glbPreviewScene: THREE.Scene | null = null
@@ -156,7 +163,10 @@ let glbPreviewCamera: THREE.PerspectiveCamera | null = null
 let glbPreviewControls: MapControls | null = null
 let glbPreviewModel: THREE.Object3D | null = null
 let previewSession: {
-  cameras: THREE.PerspectiveCamera[]
+  views: ScanView[]
+  scanIndex: number
+  scanCamera: THREE.PerspectiveCamera
+  scanCameraRegistered: boolean
   previousCameras: THREE.Camera[]
   previousDisplayActiveTiles: boolean
   mainCamera: {
@@ -174,6 +184,10 @@ let previewSession: {
   stableFrames: number
   lastSignature: string
   stable: boolean
+  scanComplete: boolean
+  selectedTiles: Set<unknown>
+  selectedSceneByTile: Map<unknown, THREE.Object3D>
+  selectedScenes: Set<THREE.Object3D>
   generationTimer: number | null
   generationInFlight: boolean
   closed: boolean
@@ -535,119 +549,11 @@ function downloadBlob(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-function setExportProgress(value: number, label: string): void {
-  progress.hidden = false
-  progressBar.style.width = `${Math.round(value * 100)}%`
-  progressLabel.textContent = label
-}
-
 function getTileLoadStats(renderer: TilesRenderer): { loaded: number; pending: number; total: number } {
   const stats = renderer.stats as Record<string, number>
   const loaded = Math.max(0, Number(stats.loaded) || 0)
   const pending = Math.max(0, (Number(stats.queued) || 0) + (Number(stats.downloading) || 0) + (Number(stats.parsing) || 0) + (Number(stats.processing) || 0))
   return { loaded, pending, total: loaded + pending }
-}
-
-function waitForTileLoads(renderer: TilesRenderer, onProgress?: () => void, timeoutMs = 30_000): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false
-    let minimumWaitFinished = false
-    const isRendererLoading = (): boolean => Boolean((renderer as TilesRenderer & { isLoading?: boolean }).isLoading)
-    const finish = () => {
-      if (settled || !minimumWaitFinished) return
-      const stats = getTileLoadStats(renderer)
-      if (stats.pending > 0 || isRendererLoading() || renderer.loadProgress < 1) return
-      settled = true
-      renderer.removeEventListener('tiles-load-end', finish)
-      window.clearTimeout(timeout)
-      window.clearInterval(progressTimer)
-      window.clearInterval(loadCheckTimer)
-      resolve()
-    }
-    const timeout = window.setTimeout(() => {
-      if (settled) return
-      settled = true
-      renderer.removeEventListener('tiles-load-end', finish)
-      window.clearInterval(progressTimer)
-      window.clearInterval(loadCheckTimer)
-      resolve()
-    }, timeoutMs)
-    const progressTimer = window.setInterval(() => onProgress?.(), 250)
-    const loadCheckTimer = window.setInterval(finish, 100)
-    window.setTimeout(() => {
-      minimumWaitFinished = true
-      finish()
-    }, 400)
-    renderer.addEventListener('tiles-load-end', finish)
-  })
-}
-
-async function legacyPreloadExportArea(radius: number): Promise<Set<THREE.Object3D>> {
-  if (!tiles) throw new Error('没有可导出的 3D Tiles 场景。')
-  const exportScenes = new Set<THREE.Object3D>()
-  const directions: Array<{ direction: THREE.Vector3; up: THREE.Vector3; topDown: boolean }> = []
-  for (let azimuth = 0; azimuth < 8; azimuth += 1) {
-    for (const elevation of [-30, 0, 30]) {
-      const azimuthRadians = azimuth / 8 * Math.PI * 2
-      const elevationRadians = elevation * Math.PI / 180
-      directions.push({
-        direction: new THREE.Vector3(
-          Math.sin(azimuthRadians) * Math.cos(elevationRadians),
-          Math.sin(elevationRadians),
-          -Math.cos(azimuthRadians) * Math.cos(elevationRadians),
-        ),
-        up: new THREE.Vector3(0, 1, 0),
-        topDown: false,
-      })
-    }
-  }
-  directions.push({ direction: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, -1), topDown: true })
-  const previousCameras = [...tiles.cameras]
-  const previousDisplayActiveTiles = tiles.displayActiveTiles
-  const scanCameras: THREE.PerspectiveCamera[] = []
-
-  const addScanCameras = (position: THREE.Vector3, quaternion: THREE.Quaternion, far: number): void => {
-    for (const { direction, up, topDown } of directions) {
-      const scanCamera = new THREE.PerspectiveCamera(camera.fov, 1, camera.near, topDown ? far * 2 : far)
-      const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)
-      scanCamera.position.copy(position)
-      if (topDown) scanCamera.position.add(worldUp.multiplyScalar(far))
-      scanCamera.up.copy(up).applyQuaternion(quaternion)
-      const worldDirection = direction.clone().applyQuaternion(quaternion)
-      scanCamera.lookAt(topDown ? position : position.clone().add(worldDirection))
-      scanCamera.updateMatrixWorld(true)
-      scanCameras.push(scanCamera)
-    }
-  }
-
-  // The default camera covers the low-detail fallback area. Anchor cameras are
-  // added to the same traversal so the renderer can refine only where an anchor
-  // sees the tiles. This preserves the renderer's REPLACE parent/child handling.
-  addScanCameras(basePosition, baseQuaternion, radius)
-  for (const anchor of anchors) addScanCameras(anchor.position, anchor.quaternion, anchor.far)
-
-  tiles.displayActiveTiles = true
-  try {
-    for (const previousCamera of previousCameras) tiles.deleteCamera(previousCamera)
-    for (const scanCamera of scanCameras) {
-      tiles.setCamera(scanCamera)
-      tiles.setResolutionFromRenderer(scanCamera, renderer)
-      tiles.update()
-      await waitForTileLoads(tiles)
-      for (const child of tiles.group.children) exportScenes.add(child)
-      const stats = getTileLoadStats(tiles)
-      setExportProgress(0.35, `正在加载导出范围 · 已发现 ${stats.total} · 已完成 ${stats.loaded}`)
-    }
-    setExportProgress(0.75, `已合并最终可见瓦片 · ${exportScenes.size}`)
-  } finally {
-    tiles.displayActiveTiles = previousDisplayActiveTiles
-    for (const scanCamera of scanCameras) tiles.deleteCamera(scanCamera)
-    for (const previousCamera of previousCameras) {
-      tiles.setCamera(previousCamera)
-      tiles.setResolutionFromRenderer(previousCamera, renderer)
-    }
-  }
-  return exportScenes
 }
 
 function createExportAnchors(radius: number): ExportAnchor[] {
@@ -657,9 +563,7 @@ function createExportAnchors(radius: number): ExportAnchor[] {
   ]
 }
 
-function createScanCameras(radius: number): THREE.PerspectiveCamera[] {
-  // These cameras are deliberately short-lived copies. The user's main
-  // camera is never passed to the export traversal.
+function createScanCameras(radius: number): ScanView[] {
   const directions: Array<{ direction: THREE.Vector3; up: THREE.Vector3; topDown: boolean }> = []
   for (let azimuth = 0; azimuth < 8; azimuth += 1) {
     for (const elevation of [-30, 0, 30]) {
@@ -676,23 +580,23 @@ function createScanCameras(radius: number): THREE.PerspectiveCamera[] {
       })
     }
   }
-  directions.push({ direction: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, -1), topDown: true })
-  const scanCameras: THREE.PerspectiveCamera[] = []
-  const addScanCameras = (position: THREE.Vector3, quaternion: THREE.Quaternion, far: number): void => {
+
+  const scanViews: ScanView[] = []
+  const addScanViews = (position: THREE.Vector3, quaternion: THREE.Quaternion, far: number): void => {
     for (const { direction, up, topDown } of directions) {
-      const scanCamera = new THREE.PerspectiveCamera(camera.fov, 1, camera.near, topDown ? far * 2 : far)
-      const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)
-      scanCamera.position.copy(position)
-      if (topDown) scanCamera.position.add(worldUp.multiplyScalar(far))
-      scanCamera.up.copy(up).applyQuaternion(quaternion)
-      scanCamera.lookAt(topDown ? position : position.clone().add(direction.clone().applyQuaternion(quaternion)))
-      scanCamera.updateMatrixWorld(true)
-      scanCameras.push(scanCamera)
+      scanViews.push({
+        position: position.clone(),
+        quaternion: quaternion.clone(),
+        direction: direction.clone(),
+        up: up.clone(),
+        far,
+        topDown,
+      })
     }
   }
-  addScanCameras(basePosition, baseQuaternion, radius)
-  for (const anchor of anchors) addScanCameras(anchor.position, anchor.quaternion, anchor.far)
-  return scanCameras
+  addScanViews(basePosition, baseQuaternion, radius)
+  for (const anchor of anchors) addScanViews(anchor.position, anchor.quaternion, anchor.far)
+  return scanViews
 }
 
 function getPreviewSignature(): string {
@@ -701,6 +605,104 @@ function getPreviewSignature(): string {
   const active = [...tiles.activeTiles].map((tile) => String((tile as { id?: string }).id ?? tile)).sort().join(',')
   const visible = [...tiles.visibleTiles].map((tile) => String((tile as { id?: string }).id ?? tile)).sort().join(',')
   return `${stats.loaded}:${stats.pending}:${tiles.loadProgress}:${active}:${visible}`
+}
+
+type ScanTile = {
+  parent: ScanTile | null
+  refine?: 'REPLACE' | 'ADD'
+  engineData?: { scene?: THREE.Object3D | null }
+}
+
+function getScanTileScene(tile: ScanTile): THREE.Object3D | null {
+  return tile.engineData?.scene ?? null
+}
+
+function hasSelectedReplacementDescendant(tile: ScanTile, selectedTiles: Set<unknown>): boolean {
+  for (const selected of selectedTiles) {
+    let current = selected as ScanTile
+    while (current.parent) {
+      current = current.parent
+      if (current === tile) return tile.refine === 'REPLACE'
+    }
+  }
+  return false
+}
+
+function collectStableScanTiles(session: NonNullable<typeof previewSession>): void {
+  if (!tiles) return
+
+  for (const candidate of tiles.activeTiles as Set<ScanTile>) {
+    const scene = getScanTileScene(candidate)
+    if (!scene || hasSelectedReplacementDescendant(candidate, session.selectedTiles)) continue
+    if (session.selectedTiles.has(candidate)) continue
+
+    let ancestor = candidate.parent
+    while (ancestor) {
+      if (ancestor.refine === 'REPLACE') {
+        session.selectedTiles.delete(ancestor)
+        const ancestorScene = session.selectedSceneByTile.get(ancestor)
+        session.selectedSceneByTile.delete(ancestor)
+        if (ancestorScene) session.selectedScenes.delete(ancestorScene)
+      }
+      ancestor = ancestor.parent
+    }
+
+    session.selectedTiles.add(candidate)
+    const sceneCopy = scene.clone(true)
+    session.selectedSceneByTile.set(candidate, sceneCopy)
+    session.selectedScenes.add(sceneCopy)
+  }
+}
+
+function registerNextScanCamera(session: NonNullable<typeof previewSession>): void {
+  if (!tiles || session.closed) return
+
+  const nextView = session.views[session.scanIndex] ?? null
+  session.stableFrames = 0
+  session.lastSignature = ''
+  session.stable = false
+
+  if (!nextView) {
+    session.scanComplete = true
+    session.stable = true
+    glbPreviewProgress.textContent = `扫描完成 · 已收集 ${session.selectedScenes.size} 个最高精度瓦片`
+    schedulePreviewGeneration()
+    return
+  }
+
+  const scanCamera = session.scanCamera
+  const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(nextView.quaternion)
+  scanCamera.position.copy(nextView.position)
+  if (nextView.topDown) scanCamera.position.add(worldUp.clone().multiplyScalar(nextView.far))
+  scanCamera.up.copy(nextView.up).applyQuaternion(nextView.quaternion)
+  const target = nextView.topDown
+    ? nextView.position
+    : nextView.position.clone().add(nextView.direction.clone().applyQuaternion(nextView.quaternion))
+  scanCamera.lookAt(target)
+  scanCamera.near = camera.near
+  scanCamera.far = nextView.topDown ? nextView.far * 2 : nextView.far
+  scanCamera.fov = camera.fov
+  scanCamera.aspect = 1
+  scanCamera.updateProjectionMatrix()
+  scanCamera.updateMatrixWorld(true)
+  if (!session.scanCameraRegistered) {
+    tiles.setCamera(scanCamera)
+    tiles.setResolutionFromRenderer(scanCamera, renderer)
+    session.scanCameraRegistered = true
+  }
+  tiles.update()
+  const anchorIndex = Math.floor(session.scanIndex / 24)
+  const directionIndex = session.scanIndex % 24
+  glbPreviewProgress.textContent = `正在扫描锚点 ${anchorIndex + 1} · 方向 ${directionIndex + 1}/24 · 已收集 ${session.selectedScenes.size}`
+}
+
+function finishCurrentScanCamera(session: NonNullable<typeof previewSession>): void {
+  if (!tiles || session.closed) return
+
+  collectStableScanTiles(session)
+  session.scanIndex += 1
+  schedulePreviewGeneration()
+  registerNextScanCamera(session)
 }
 
 function updatePreviewStability(): void {
@@ -716,14 +718,17 @@ function updatePreviewStability(): void {
   previewSession.lastSignature = signature
   previewSession.stable = previewSession.stableFrames >= 8
   glbPreviewProgress.textContent = `${previewSession.stable ? 'LOD 已稳定' : '正在持续细分…'} · 已加载 ${stats.loaded} · 队列 ${stats.pending}`
-  if (previewSession.stable) schedulePreviewGeneration()
+  if (previewSession.stable) finishCurrentScanCamera(previewSession)
 }
 
 function beginPreviewSession(radius: number): void {
   if (!tiles) return
   stopPreviewSession()
   const session = {
-    cameras: createScanCameras(radius),
+    views: createScanCameras(radius),
+    scanIndex: 0,
+    scanCamera: new THREE.PerspectiveCamera(camera.fov, 1, camera.near, radius),
+    scanCameraRegistered: false,
     previousCameras: [...tiles.cameras],
     previousDisplayActiveTiles: tiles.displayActiveTiles,
     mainCamera: {
@@ -741,6 +746,10 @@ function beginPreviewSession(radius: number): void {
     stableFrames: 0,
     lastSignature: '',
     stable: false,
+    scanComplete: false,
+    selectedTiles: new Set<unknown>(),
+    selectedSceneByTile: new Map<unknown, THREE.Object3D>(),
+    selectedScenes: new Set<THREE.Object3D>(),
     generationTimer: null as number | null,
     generationInFlight: false,
     closed: false,
@@ -750,11 +759,7 @@ function beginPreviewSession(radius: number): void {
   // traversal. Only the temporary base/anchor scan cameras below drive LOD.
   for (const previousCamera of session.previousCameras) tiles.deleteCamera(previousCamera)
   tiles.displayActiveTiles = true
-  for (const scanCamera of session.cameras) {
-    tiles.setCamera(scanCamera)
-    tiles.setResolutionFromRenderer(scanCamera, renderer)
-  }
-  tiles.update()
+  registerNextScanCamera(session)
   glbPreviewProgress.textContent = '正在注册联合扫描相机…'
 }
 
@@ -763,7 +768,7 @@ function stopPreviewSession(): void {
   const session = previewSession
   session.closed = true
   if (session.generationTimer !== null) window.clearTimeout(session.generationTimer)
-  for (const scanCamera of session.cameras) tiles.deleteCamera(scanCamera)
+  if (session.scanCameraRegistered) tiles.deleteCamera(session.scanCamera)
   tiles.displayActiveTiles = session.previousDisplayActiveTiles
   for (const previousCamera of session.previousCameras) {
     tiles.setCamera(previousCamera)
@@ -784,15 +789,13 @@ function stopPreviewSession(): void {
 }
 
 function collectExportScenes(radius: number): Set<THREE.Object3D> {
-  if (!tiles) return new Set()
+  if (!tiles || !previewSession) return new Set()
   const scenes = new Set<THREE.Object3D>()
-  const bounds = new THREE.Box3()
-  const sphere = new THREE.Sphere()
   const exportAnchors = createExportAnchors(radius)
-  for (const child of tiles.group.children) {
+  for (const child of previewSession.selectedScenes) {
     child.updateMatrixWorld(true)
-    bounds.setFromObject(child)
-    bounds.getBoundingSphere(sphere)
+    const bounds = new THREE.Box3().setFromObject(child)
+    const sphere = bounds.getBoundingSphere(new THREE.Sphere())
     if (exportAnchors.some((anchor) => sphere.center.distanceTo(anchor.position) - sphere.radius <= anchor.far)) scenes.add(child)
   }
   return scenes
