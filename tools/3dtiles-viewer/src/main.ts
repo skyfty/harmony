@@ -2,13 +2,14 @@ import * as THREE from 'three'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TilesRenderer, CAMERA_FRAME } from '3d-tiles-renderer'
 import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins'
 import { GLTFExtensionsPlugin, TilesFadePlugin, UpdateOnChangePlugin } from '3d-tiles-renderer/three/plugins'
 import stylesText from './styles.css?raw'
 
 type Settings = { lon: number; lat: number; groundElevation: number; height: number }
+type CameraAnchor = { id: string; label: string; position: THREE.Vector3; quaternion: THREE.Quaternion; far: number }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const style = document.createElement('style')
@@ -28,12 +29,14 @@ app.innerHTML = `
         <label>经纬度 <input id="coordinate-text" type="text" inputmode="text" placeholder="29°38'38.24\"N 91°06'57.03\"E" /></label>
         <div class="coordinate-grid">
           <label>地面海拔 (m)<input id="ground-elevation" type="number" step="0.1" placeholder="0" /></label>
-          <label>观察高度 (m)<input id="height" type="number" step="0.1" min="0" value="2" /></label>
+          <label>观察高度 (m)<input id="height" type="number" step="0.1" min="0" value="0" /></label>
         </div>
         <div class="actions"><button id="apply-location">定位并加载</button><button class="secondary" id="reset-location">恢复视点</button></div>
 
         <label class="range-label">瓦片精度 <span><strong id="precision-value">6</strong> px</span><input id="precision" type="range" min="1" max="32" step="1" value="6" /></label>
-        <label>GLB 导出范围 (m)<input id="export-radius" type="number" min="50" max="10000" step="50" value="500" /></label>
+        <label>相机 Far 范围 (m)<input id="camera-far" type="number" min="50" max="10000000" step="1000" value="10000" /></label>
+        <div class="actions wide"><button id="add-anchor" disabled>添加当前相机为锚点</button></div>
+        <div class="anchor-list" id="anchor-list"></div>
         <div class="actions"><button id="export-glb" disabled>导出 GLB</button><button id="preview-glb" class="secondary" disabled>预览 GLB</button></div>
         <div class="progress-wrap" id="progress" hidden><div class="progress"><div id="progress-bar"></div></div><div class="progress-label" id="progress-label"></div></div>
 
@@ -49,7 +52,6 @@ app.innerHTML = `
       </section>
 
       <section class="panel viewer">
-        <div class="panel-header"><h2>实时预览</h2><span class="chip">WebGL</span></div>
         <div class="viewport" id="viewport"><div class="placeholder" id="placeholder">正在初始化…</div></div>
       </section>
     </main>
@@ -72,7 +74,9 @@ const heightInput = $('#height') as HTMLInputElement
 const coordinateTextInput = $('#coordinate-text') as HTMLInputElement
 const precisionInput = $('#precision') as HTMLInputElement
 const precisionValue = $('#precision-value')
-const exportRadiusInput = $('#export-radius') as HTMLInputElement
+const cameraFarInput = $('#camera-far') as HTMLInputElement
+const addAnchorButton = $('#add-anchor') as HTMLButtonElement
+const anchorList = $('#anchor-list')
 const sourceStat = $('#source-stat')
 const tilesStat = $('#tiles-stat')
 const locationStat = $('#location-stat')
@@ -90,10 +94,10 @@ const glbPreviewPlaceholder = $('#glb-preview-placeholder')
 
 const query = new URLSearchParams(window.location.search)
 const settings: Settings = {
-  lon: Number(query.get('lon') ?? 139.80),
-  lat: Number(query.get('lat') ?? 35.6812),
-  groundElevation: Number(query.get('ground') ?? query.get('groundElevation') ?? 0),
-  height: Number(query.get('height') ?? 2),
+  lon: Number(query.get('lon') ?? 29.643956),
+  lat: Number(query.get('lat') ?? 91.115842),
+  groundElevation: Number(query.get('ground') ?? query.get('groundElevation') ?? 3651.5),
+  height: Number(query.get('height') ?? 0),
 }
 coordinateTextInput.value = `${settings.lat}, ${settings.lon}`
 groundElevationInput.value = String(settings.groundElevation)
@@ -105,8 +109,11 @@ scene.add(new THREE.HemisphereLight('#c9e9ff', '#142034', 1.25))
 const sun = new THREE.DirectionalLight('#fff2d4', 2.2)
 sun.position.set(20, 40, 10)
 scene.add(sun)
+const cameraMarkerGroup = new THREE.Group()
+cameraMarkerGroup.name = 'camera-markers'
+scene.add(cameraMarkerGroup)
 
-const camera = new THREE.PerspectiveCamera(75, 1, 0.5, 10_000_000)
+const camera = new THREE.PerspectiveCamera(75, 1, 0.5, 10_000)
 const previewCamera = camera
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -114,6 +121,14 @@ renderer.outputColorSpace = THREE.SRGBColorSpace
 renderer.toneMapping = THREE.AgXToneMapping
 renderer.toneMappingExposure = 1.25
 viewport.append(renderer.domElement)
+const mainControls = new MapControls(camera, renderer.domElement)
+mainControls.enableDamping = true
+mainControls.dampingFactor = 0.05
+mainControls.screenSpacePanning = false
+mainControls.minDistance = 100
+mainControls.maxDistance = 500
+mainControls.maxPolarAngle = Math.PI
+mainControls.zoomToCursor = true
 rendererStat.textContent = renderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'
 
 let tiles: TilesRenderer | null = null
@@ -129,10 +144,11 @@ let exporting = false
 let freezeTileUpdates = false
 let lastExportedGlb: ArrayBuffer | null = null
 let previewRequested = false
+let anchors: CameraAnchor[] = []
 let glbPreviewRenderer: THREE.WebGLRenderer | null = null
 let glbPreviewScene: THREE.Scene | null = null
 let glbPreviewCamera: THREE.PerspectiveCamera | null = null
-let glbPreviewControls: OrbitControls | null = null
+let glbPreviewControls: MapControls | null = null
 let glbPreviewModel: THREE.Object3D | null = null
 
 function invalidateGlbCache(): void {
@@ -152,6 +168,76 @@ function setPlaceholder(text: string, state: 'idle' | 'loading' | 'error' = 'idl
 }
 
 function hidePlaceholder(): void { placeholder.hidden = true }
+
+function createCameraMarker(position: THREE.Vector3, label: string, color: number): THREE.Group {
+  const marker = new THREE.Group()
+  marker.position.copy(position)
+
+  const point = new THREE.Mesh(
+    new THREE.SphereGeometry(3.5, 16, 12),
+    new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false }),
+  )
+  point.renderOrder = 1000
+  marker.add(point)
+
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(7, 1.1, 8, 32),
+    new THREE.MeshBasicMaterial({ color, depthTest: false, depthWrite: false }),
+  )
+  ring.position.y = -4
+  ring.renderOrder = 1000
+  marker.add(ring)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 64
+  const context = canvas.getContext('2d')!
+  context.font = '700 28px sans-serif'
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+  context.fillStyle = '#ffffff'
+  context.strokeStyle = '#07131f'
+  context.lineWidth = 8
+  context.strokeText(label, canvas.width / 2, canvas.height / 2)
+  context.fillText(label, canvas.width / 2, canvas.height / 2)
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  const text = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  }))
+  text.position.y = 12
+  text.scale.set(28, 7, 1)
+  text.renderOrder = 1001
+  marker.add(text)
+
+  return marker
+}
+
+function disposeCameraMarkers(): void {
+  cameraMarkerGroup.traverse((object) => {
+    const renderable = object as THREE.Mesh | THREE.Sprite
+    if (renderable.geometry) renderable.geometry.dispose()
+    const material = renderable.material
+    if (!material) return
+    const materials = Array.isArray(material) ? material : [material]
+    for (const item of materials) {
+      item.map?.dispose()
+      item.dispose()
+    }
+  })
+  cameraMarkerGroup.clear()
+}
+
+function updateCameraMarkers(): void {
+  disposeCameraMarkers()
+  cameraMarkerGroup.add(createCameraMarker(basePosition, 'BASE', 0x42e8a0))
+  anchors.forEach((anchor, index) => {
+    cameraMarkerGroup.add(createCameraMarker(anchor.position, `A${index + 1}`, 0xff9d52))
+  })
+}
 
 function isValidSettings(value: Settings): boolean {
   return Number.isFinite(value.lon) && value.lon >= -180 && value.lon <= 180 && Number.isFinite(value.lat) && value.lat >= -90 && value.lat <= 90 && Number.isFinite(value.groundElevation) && Number.isFinite(value.height) && value.height >= 0
@@ -230,18 +316,73 @@ function applyCameraRotation(): void {
   const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'))
   camera.position.copy(basePosition)
   camera.quaternion.copy(baseQuaternion).multiply(rotation)
+  camera.up.set(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
   camera.updateMatrixWorld()
+  mainControls.target.copy(basePosition).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).multiplyScalar(100))
+  mainControls.update()
 }
 
-function positionCamera(): void {
-  if (!tiles) return
+function renderAnchorList(): void {
+  anchorList.replaceChildren()
+  for (const anchor of anchors) {
+    const row = document.createElement('div')
+    row.className = 'anchor-row'
+    row.innerHTML = `<span>${anchor.label}</span><span class="anchor-actions"><button data-action="view">查看</button><button data-action="level">水平</button><button data-action="delete" class="secondary">删除</button></span>`
+    row.querySelector('[data-action="view"]')?.addEventListener('click', () => focusAnchor(anchor, false))
+    row.querySelector('[data-action="level"]')?.addEventListener('click', () => focusAnchor(anchor, true))
+    row.querySelector('[data-action="delete"]')?.addEventListener('click', () => {
+      anchors = anchors.filter((item) => item.id !== anchor.id)
+      renderAnchorList()
+      updateCameraMarkers()
+      invalidateGlbCache()
+    })
+    anchorList.append(row)
+  }
+}
+
+function addCurrentCameraAnchor(): void {
+  const anchor: CameraAnchor = {
+    id: `anchor-${Date.now()}-${anchors.length}`,
+    label: `锚点 ${anchors.length + 1}`,
+    position: camera.position.clone(),
+    quaternion: camera.quaternion.clone(),
+    far: Number(cameraFarInput.value),
+  }
+  anchors.push(anchor)
+  renderAnchorList()
+  updateCameraMarkers()
+  invalidateGlbCache()
+}
+
+function focusAnchor(anchor: CameraAnchor, horizontal: boolean): void {
+  camera.position.copy(anchor.position)
+  camera.quaternion.copy(anchor.quaternion)
+  camera.up.set(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
+  camera.far = anchor.far
+  cameraFarInput.value = String(anchor.far)
+  camera.updateProjectionMatrix()
+  if (horizontal) {
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(anchor.quaternion)
+    forward.addScaledVector(up, -forward.dot(up)).normalize()
+    camera.up.copy(up)
+    camera.lookAt(anchor.position.clone().add(forward))
+  }
+  camera.updateMatrixWorld(true)
+  mainControls.target.copy(camera.position).add(new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).multiplyScalar(100))
+  mainControls.update()
+}
+
+function positionCamera(ellipsoid = tiles?.ellipsoid): void {
+  if (!ellipsoid) return
   const radians = Math.PI / 180
   const matrix = new THREE.Matrix4()
-  tiles.ellipsoid.getObjectFrame(settings.lat * radians, settings.lon * radians, settings.groundElevation + settings.height, -90 * radians, -10 * radians, 0, matrix, CAMERA_FRAME)
+  ellipsoid.getObjectFrame(settings.lat * radians, settings.lon * radians, settings.groundElevation + settings.height, -90 * radians, 0, 0, matrix, CAMERA_FRAME)
   matrix.decompose(basePosition, baseQuaternion, new THREE.Vector3())
   yaw = 0
   pitch = 0
   applyCameraRotation()
+  updateCameraMarkers()
 }
 
 function disposeTiles(): void {
@@ -278,6 +419,9 @@ async function loadTiles(): Promise<void> {
     next.registerPlugin(new TilesFadePlugin())
     next.registerPlugin(new UpdateOnChangePlugin())
     if (hasIon) next.registerPlugin(new CesiumIonAuthPlugin({ apiToken: ionToken, assetId: ionAssetId, autoRefreshToken: true }))
+    // Place the camera as soon as the tiles renderer exists, before the first
+    // frame can render at Three.js's default origin.
+    positionCamera(next.ellipsoid)
     next.setCamera(camera)
     next.setResolutionFromRenderer(camera, renderer)
     next.addEventListener('load-error', (event: unknown) => {
@@ -293,6 +437,7 @@ async function loadTiles(): Promise<void> {
     setStatus('已就绪', 'ok')
     exportGlbButton.disabled = false
     previewGlbButton.disabled = false
+    addAnchorButton.disabled = false
     updateStats()
   } catch (error) {
     disposeTiles()
@@ -310,6 +455,7 @@ function resize(): void {
   tiles?.setResolutionFromRenderer(camera, renderer)
 }
 
+/*
 viewport.addEventListener('contextmenu', (event) => event.preventDefault())
 viewport.addEventListener('wheel', (event) => event.preventDefault(), { passive: false })
 viewport.addEventListener('pointerdown', (event) => {
@@ -330,6 +476,7 @@ viewport.addEventListener('pointermove', (event) => {
 })
 viewport.addEventListener('pointerup', () => { dragging = false })
 viewport.addEventListener('pointercancel', () => { dragging = false })
+*/
 
 function applyLocation(): void {
   let next: Settings
@@ -354,6 +501,7 @@ function applyLocation(): void {
 }
 
 $('#apply-location').addEventListener('click', applyLocation)
+addAnchorButton.addEventListener('click', addCurrentCameraAnchor)
 
 $('#reset-location').addEventListener('click', () => {
   coordinateTextInput.value = `${settings.lat}, ${settings.lon}`
@@ -386,38 +534,36 @@ function getTileLoadStats(renderer: TilesRenderer): { loaded: number; pending: n
   return { loaded, pending, total: loaded + pending }
 }
 
-function waitForTileLoads(renderer: TilesRenderer, onProgress?: () => void, timeoutMs = 12_000): Promise<void> {
+function waitForTileLoads(renderer: TilesRenderer, onProgress?: () => void, timeoutMs = 30_000): Promise<void> {
   return new Promise((resolve) => {
     let settled = false
     let minimumWaitFinished = false
-    let loadFinished = renderer.loadProgress >= 1
+    const isRendererLoading = (): boolean => Boolean((renderer as TilesRenderer & { isLoading?: boolean }).isLoading)
     const finish = () => {
-      if (settled || !minimumWaitFinished || !loadFinished) return
+      if (settled || !minimumWaitFinished) return
+      const stats = getTileLoadStats(renderer)
+      if (stats.pending > 0 || isRendererLoading() || renderer.loadProgress < 1) return
       settled = true
       renderer.removeEventListener('tiles-load-end', finish)
-      renderer.removeEventListener('tiles-load-end', onLoadEnd)
       window.clearTimeout(timeout)
       window.clearInterval(progressTimer)
+      window.clearInterval(loadCheckTimer)
       resolve()
     }
     const timeout = window.setTimeout(() => {
       if (settled) return
       settled = true
       renderer.removeEventListener('tiles-load-end', finish)
-      renderer.removeEventListener('tiles-load-end', onLoadEnd)
       window.clearInterval(progressTimer)
+      window.clearInterval(loadCheckTimer)
       resolve()
     }, timeoutMs)
     const progressTimer = window.setInterval(() => onProgress?.(), 250)
+    const loadCheckTimer = window.setInterval(finish, 100)
     window.setTimeout(() => {
       minimumWaitFinished = true
       finish()
     }, 400)
-    const onLoadEnd = () => {
-      loadFinished = true
-      finish()
-    }
-    renderer.addEventListener('tiles-load-end', onLoadEnd)
     renderer.addEventListener('tiles-load-end', finish)
   })
 }
@@ -425,56 +571,67 @@ function waitForTileLoads(renderer: TilesRenderer, onProgress?: () => void, time
 async function preloadExportArea(radius: number): Promise<Set<THREE.Object3D>> {
   if (!tiles) throw new Error('没有可导出的 3D Tiles 场景。')
   const exportScenes = new Set<THREE.Object3D>()
-  const exportCamera = new THREE.PerspectiveCamera(camera.fov, 1, camera.near, radius * 3)
-  const directions = [
-    { direction: new THREE.Vector3(0, 0, -1), up: new THREE.Vector3(0, 1, 0), topDown: false },
-    { direction: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 1, 0), topDown: false },
-    { direction: new THREE.Vector3(0, 0, 1), up: new THREE.Vector3(0, 1, 0), topDown: false },
-    { direction: new THREE.Vector3(-1, 0, 0), up: new THREE.Vector3(0, 1, 0), topDown: false },
-    { direction: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, 1), topDown: false },
-    { direction: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, -1), topDown: false },
-    { direction: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, -1), topDown: true },
-  ]
-  const previousCamera = tiles.camera
+  const directions: Array<{ direction: THREE.Vector3; up: THREE.Vector3; topDown: boolean }> = []
+  for (let azimuth = 0; azimuth < 12; azimuth += 1) {
+    for (const elevation of [-60, -30, 0, 30, 60]) {
+      const azimuthRadians = azimuth / 12 * Math.PI * 2
+      const elevationRadians = elevation * Math.PI / 180
+      directions.push({
+        direction: new THREE.Vector3(
+          Math.sin(azimuthRadians) * Math.cos(elevationRadians),
+          Math.sin(elevationRadians),
+          -Math.cos(azimuthRadians) * Math.cos(elevationRadians),
+        ),
+        up: new THREE.Vector3(0, 1, 0),
+        topDown: false,
+      })
+    }
+  }
+  directions.push({ direction: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, -1), topDown: true })
+  const previousCameras = [...tiles.cameras]
   const previousDisplayActiveTiles = tiles.displayActiveTiles
+  const scanCameras: THREE.PerspectiveCamera[] = []
+
+  const addScanCameras = (position: THREE.Vector3, quaternion: THREE.Quaternion, far: number): void => {
+    for (const { direction, up, topDown } of directions) {
+      const scanCamera = new THREE.PerspectiveCamera(camera.fov, 1, camera.near, topDown ? far * 2 : far)
+      const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)
+      scanCamera.position.copy(position)
+      if (topDown) scanCamera.position.add(worldUp.multiplyScalar(far))
+      scanCamera.up.copy(up).applyQuaternion(quaternion)
+      const worldDirection = direction.clone().applyQuaternion(quaternion)
+      scanCamera.lookAt(topDown ? position : position.clone().add(worldDirection))
+      scanCamera.updateMatrixWorld(true)
+      scanCameras.push(scanCamera)
+    }
+  }
+
+  // The default camera covers the low-detail fallback area. Anchor cameras are
+  // added to the same traversal so the renderer can refine only where an anchor
+  // sees the tiles. This preserves the renderer's REPLACE parent/child handling.
+  addScanCameras(basePosition, baseQuaternion, radius)
+  for (const anchor of anchors) addScanCameras(anchor.position, anchor.quaternion, anchor.far)
+
   tiles.displayActiveTiles = true
   try {
-    tiles.setCamera(camera)
-    tiles.setResolutionFromRenderer(camera, renderer)
-    tiles.update()
-    await waitForTileLoads(tiles)
-    for (const child of tiles.group.children) exportScenes.add(child)
-    setExportProgress(0.08, `已收集实时预览场景 · 当前瓦片 ${exportScenes.size}`)
-
-    for (let index = 0; index < directions.length; index += 1) {
-      const { direction, up, topDown } = directions[index]
-      const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(baseQuaternion)
-      exportCamera.position.copy(basePosition)
-      if (topDown) exportCamera.position.add(worldUp.multiplyScalar(radius))
-      exportCamera.up.copy(up).applyQuaternion(baseQuaternion)
-      const worldDirection = direction.clone().applyQuaternion(baseQuaternion)
-      exportCamera.lookAt(topDown ? basePosition : basePosition.clone().add(worldDirection))
-      exportCamera.updateMatrixWorld(true)
-      tiles.setCamera(exportCamera)
-      tiles.setResolutionFromRenderer(exportCamera, renderer)
+    for (const previousCamera of previousCameras) tiles.deleteCamera(previousCamera)
+    for (const scanCamera of scanCameras) {
+      tiles.setCamera(scanCamera)
+      tiles.setResolutionFromRenderer(scanCamera, renderer)
       tiles.update()
-      for (const child of tiles.group.children) exportScenes.add(child)
-      const updateLoadProgress = () => {
-        const stats = getTileLoadStats(tiles!)
-        const pendingLabel = stats.pending > 0 ? `，待处理 ${stats.pending}` : ''
-        setExportProgress((index + 0.5) / directions.length * 0.75, `扫描 ${index + 1}/${directions.length} · 已发现 ${stats.total} · 已完成 ${stats.loaded}${pendingLabel}`)
-      }
-      updateLoadProgress()
-      await waitForTileLoads(tiles, updateLoadProgress)
+      await waitForTileLoads(tiles)
       for (const child of tiles.group.children) exportScenes.add(child)
       const stats = getTileLoadStats(tiles)
-      setExportProgress((index + 1) / directions.length * 0.75, `扫描 ${index + 1}/${directions.length} 完成 · 共发现 ${stats.total} · 已完成 ${stats.loaded}`)
-      setExportProgress((index + 1) / directions.length * 0.75, `正在加载导出范围 ${index + 1}/${directions.length}…`)
+      setExportProgress(0.35, `正在加载导出范围 · 已发现 ${stats.total} · 已完成 ${stats.loaded}`)
     }
+    setExportProgress(0.75, `已合并最终可见瓦片 · ${exportScenes.size}`)
   } finally {
     tiles.displayActiveTiles = previousDisplayActiveTiles
-    tiles.setCamera(previousCamera ?? camera)
-    tiles.setResolutionFromRenderer(previousCamera ?? camera, renderer)
+    for (const scanCamera of scanCameras) tiles.deleteCamera(scanCamera)
+    for (const previousCamera of previousCameras) {
+      tiles.setCamera(previousCamera)
+      tiles.setResolutionFromRenderer(previousCamera, renderer)
+    }
     applyCameraRotation()
   }
   return exportScenes
@@ -606,8 +763,8 @@ async function exportGlb(): Promise<void> {
   exportGlbButton.disabled = true
   setExportProgress(0.1, '正在准备 GLB 场景…')
   try {
-    const radius = Number(exportRadiusInput.value)
-    if (!Number.isFinite(radius) || radius < 50 || radius > 10_000) {
+    const radius = Number(cameraFarInput.value)
+    if (!Number.isFinite(radius) || radius < 50 || radius > 10_000_000) {
       throw new Error('GLB 导出范围必须在 50 到 10000 米之间。')
     }
     const exportScenes = await preloadExportArea(radius)
@@ -615,17 +772,25 @@ async function exportGlb(): Promise<void> {
     const bounds = new THREE.Box3()
     const center = new THREE.Vector3()
     const sphere = new THREE.Sphere()
+    const exportAnchors = [
+      { id: 'base', label: '基础相机', position: basePosition.clone(), quaternion: baseQuaternion.clone(), far: radius },
+      ...anchors,
+    ]
     for (const sourceScene of exportScenes) {
       sourceScene.updateMatrixWorld(true)
       bounds.setFromObject(sourceScene)
       bounds.getBoundingSphere(sphere)
       center.copy(sphere.center)
-      const distance = center.distanceTo(basePosition)
-      if (distance - sphere.radius > radius || sphere.radius > radius * 4) continue
+      const withinAnchor = exportAnchors.some((anchor) => {
+        const distance = center.distanceTo(anchor.position)
+        return distance - sphere.radius <= anchor.far
+      })
+      if (!withinAnchor) continue
       exportGroup.add(sourceScene.clone(true))
     }
     if (exportGroup.children.length === 0) throw new Error('导出范围内没有已加载的瓦片。')
-    exportGroup.position.copy(basePosition).multiplyScalar(-1)
+    const exportOrigin = exportAnchors[0]!.position
+    exportGroup.position.copy(exportOrigin).multiplyScalar(-1)
     exportGroup.updateMatrixWorld(true)
     freezeTileUpdates = true
     const exporter = new GLTFExporter()
@@ -725,13 +890,14 @@ async function openGlbPreview(): Promise<void> {
   glbPreviewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   glbPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace
   glbPreviewViewport.replaceChildren(glbPreviewRenderer.domElement)
-  glbPreviewControls = new OrbitControls(glbPreviewCamera, glbPreviewRenderer.domElement)
+  glbPreviewControls = new MapControls(glbPreviewCamera, glbPreviewRenderer.domElement)
   glbPreviewControls.enableDamping = true
-  glbPreviewControls.dampingFactor = 0.08
-  glbPreviewControls.rotateSpeed = 0.35
-  glbPreviewControls.zoomSpeed = 0.5
-  glbPreviewControls.panSpeed = 0.35
-  glbPreviewControls.screenSpacePanning = true
+  glbPreviewControls.dampingFactor = 0.05
+  glbPreviewControls.screenSpacePanning = false
+  glbPreviewControls.minDistance = 100
+  glbPreviewControls.maxDistance = 500
+  glbPreviewControls.maxPolarAngle = Math.PI
+  glbPreviewControls.zoomToCursor = true
   resizeGlbPreview()
   new GLTFLoader().parse(lastExportedGlb.slice(0), '', (gltf) => {
     glbPreviewModel = gltf.scene
@@ -757,11 +923,19 @@ precisionInput.addEventListener('input', () => {
     tiles.update()
   }
 })
-exportRadiusInput.addEventListener('input', invalidateGlbCache)
+cameraFarInput.addEventListener('input', () => {
+  const value = Number(cameraFarInput.value)
+  if (!Number.isFinite(value) || value <= camera.near) return
+  camera.far = value
+  camera.updateProjectionMatrix()
+  invalidateGlbCache()
+  tiles?.update()
+})
 window.addEventListener('resize', resize)
 window.addEventListener('resize', resizeGlbPreview)
 
 function animate(): void {
+  mainControls.update()
   if (!freezeTileUpdates) tiles?.update()
   renderer.render(scene, previewCamera)
   if (glbPreviewRenderer && glbPreviewScene && glbPreviewCamera) {
