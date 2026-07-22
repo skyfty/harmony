@@ -10,6 +10,7 @@ import stylesText from './styles.css?raw'
 
 type Settings = { lon: number; lat: number; groundElevation: number; height: number }
 type CameraAnchor = { id: string; label: string; position: THREE.Vector3; quaternion: THREE.Quaternion; far: number }
+type ExportAnchor = { id: string; label: string; position: THREE.Vector3; quaternion: THREE.Quaternion; far: number }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const style = document.createElement('style')
@@ -57,6 +58,7 @@ app.innerHTML = `
     </main>
     <div class="glb-preview" id="glb-preview" hidden>
       <div class="glb-preview-panel">
+        <button id="export-current-glb" disabled>Export current GLB</button>
         <div class="panel-header"><h2>GLB 预览</h2><button class="secondary" id="close-glb-preview">关闭</button></div>
         <div class="glb-preview-viewport" id="glb-preview-viewport"><div class="placeholder" id="glb-preview-placeholder">等待 GLB 数据</div></div>
         <p class="help">拖动旋转，滚轮缩放，右键拖动平移。</p>
@@ -86,20 +88,27 @@ const progressBar = $('#progress-bar')
 const progressLabel = $('#progress-label')
 const configHelp = $('#config-help')
 const exportGlbButton = $('#export-glb') as HTMLButtonElement
+const exportCurrentGlbButton = $('#export-current-glb') as HTMLButtonElement
 const previewGlbButton = $('#preview-glb') as HTMLButtonElement
 const glbPreview = $('#glb-preview')
 const closeGlbPreviewButton = $('#close-glb-preview') as HTMLButtonElement
 const glbPreviewViewport = $('#glb-preview-viewport')
 const glbPreviewPlaceholder = $('#glb-preview-placeholder')
+const glbPreviewProgress = document.createElement('p')
+glbPreviewProgress.className = 'help glb-preview-progress'
+glbPreview.querySelector('.glb-preview-panel')?.append(glbPreviewProgress)
+glbPreview.querySelector('.panel-header')?.append(exportCurrentGlbButton)
 
 const query = new URLSearchParams(window.location.search)
 const settings: Settings = {
-  lon: Number(query.get('lon') ?? 29.643956),
-  lat: Number(query.get('lat') ?? 91.115842),
+  lon: Number(query.get('lon') ?? 91.1158416667),
+  lat: Number(query.get('lat') ?? 29.6439555556),
   groundElevation: Number(query.get('ground') ?? query.get('groundElevation') ?? 3651.5),
   height: Number(query.get('height') ?? 0),
 }
-coordinateTextInput.value = `${settings.lat}, ${settings.lon}`
+coordinateTextInput.value = query.has('lat') || query.has('lon')
+  ? `${settings.lat}, ${settings.lon}`
+  : `29°38'38.24"N 91°06'57.03"E`
 groundElevationInput.value = String(settings.groundElevation)
 heightInput.value = String(settings.height)
 
@@ -137,11 +146,7 @@ let basePosition = new THREE.Vector3()
 let baseQuaternion = new THREE.Quaternion()
 let yaw = 0
 let pitch = 0
-let dragging = false
-let lastPointerX = 0
-let lastPointerY = 0
 let exporting = false
-let freezeTileUpdates = false
 let lastExportedGlb: ArrayBuffer | null = null
 let previewRequested = false
 let anchors: CameraAnchor[] = []
@@ -150,10 +155,40 @@ let glbPreviewScene: THREE.Scene | null = null
 let glbPreviewCamera: THREE.PerspectiveCamera | null = null
 let glbPreviewControls: MapControls | null = null
 let glbPreviewModel: THREE.Object3D | null = null
+let previewSession: {
+  cameras: THREE.PerspectiveCamera[]
+  previousCameras: THREE.Camera[]
+  previousDisplayActiveTiles: boolean
+  mainCamera: {
+    position: THREE.Vector3
+    quaternion: THREE.Quaternion
+    up: THREE.Vector3
+    near: number
+    far: number
+    fov: number
+    aspect: number
+    target: THREE.Vector3
+  }
+  radius: number
+  generation: number
+  stableFrames: number
+  lastSignature: string
+  stable: boolean
+  generationTimer: number | null
+  generationInFlight: boolean
+  closed: boolean
+} | null = null
 
 function invalidateGlbCache(): void {
   lastExportedGlb = null
   previewGlbButton.disabled = !tiles
+  exportCurrentGlbButton.disabled = true
+  if (previewSession) {
+    const radius = Number(cameraFarInput.value)
+    stopPreviewSession()
+    beginPreviewSession(Number.isFinite(radius) ? radius : 10_000)
+    schedulePreviewGeneration()
+  }
 }
 
 function setStatus(text: string, tone: 'idle' | 'ok' | 'error' = 'idle'): void {
@@ -386,6 +421,7 @@ function positionCamera(ellipsoid = tiles?.ellipsoid): void {
 }
 
 function disposeTiles(): void {
+  if (previewSession) stopPreviewSession()
   if (!tiles) return
   tiles.dispose()
   scene.remove(tiles.group)
@@ -454,29 +490,7 @@ function resize(): void {
   camera.updateProjectionMatrix()
   tiles?.setResolutionFromRenderer(camera, renderer)
 }
-
-/*
-viewport.addEventListener('contextmenu', (event) => event.preventDefault())
-viewport.addEventListener('wheel', (event) => event.preventDefault(), { passive: false })
-viewport.addEventListener('pointerdown', (event) => {
-  if (exporting) return
-  dragging = true
-  lastPointerX = event.clientX
-  lastPointerY = event.clientY
-  renderer.domElement.setPointerCapture(event.pointerId)
-})
-viewport.addEventListener('pointermove', (event) => {
-  if (!dragging) return
-  yaw -= (event.clientX - lastPointerX) * 0.004
-  pitch -= (event.clientY - lastPointerY) * 0.004
-  pitch = THREE.MathUtils.clamp(pitch, -Math.PI * 0.49, Math.PI * 0.49)
-  lastPointerX = event.clientX
-  lastPointerY = event.clientY
-  applyCameraRotation()
-})
-viewport.addEventListener('pointerup', () => { dragging = false })
-viewport.addEventListener('pointercancel', () => { dragging = false })
-*/
+ 
 
 function applyLocation(): void {
   let next: Settings
@@ -493,9 +507,9 @@ function applyLocation(): void {
     return
   }
   Object.assign(settings, next)
-  invalidateGlbCache()
   syncUrl(settings)
   if (tiles) positionCamera()
+  invalidateGlbCache()
   updateStats()
   setStatus(tiles ? '已定位' : '等待数据源', tiles ? 'ok' : 'idle')
 }
@@ -568,13 +582,13 @@ function waitForTileLoads(renderer: TilesRenderer, onProgress?: () => void, time
   })
 }
 
-async function preloadExportArea(radius: number): Promise<Set<THREE.Object3D>> {
+async function legacyPreloadExportArea(radius: number): Promise<Set<THREE.Object3D>> {
   if (!tiles) throw new Error('没有可导出的 3D Tiles 场景。')
   const exportScenes = new Set<THREE.Object3D>()
   const directions: Array<{ direction: THREE.Vector3; up: THREE.Vector3; topDown: boolean }> = []
-  for (let azimuth = 0; azimuth < 12; azimuth += 1) {
-    for (const elevation of [-60, -30, 0, 30, 60]) {
-      const azimuthRadians = azimuth / 12 * Math.PI * 2
+  for (let azimuth = 0; azimuth < 8; azimuth += 1) {
+    for (const elevation of [-30, 0, 30]) {
+      const azimuthRadians = azimuth / 8 * Math.PI * 2
       const elevationRadians = elevation * Math.PI / 180
       directions.push({
         direction: new THREE.Vector3(
@@ -632,121 +646,159 @@ async function preloadExportArea(radius: number): Promise<Set<THREE.Object3D>> {
       tiles.setCamera(previousCamera)
       tiles.setResolutionFromRenderer(previousCamera, renderer)
     }
-    applyCameraRotation()
   }
   return exportScenes
 }
 
-/*
-async function captureFaces(size: number, format: CaptureFormat): Promise<FacePixels[]> {
-  if (!tiles) throw new Error('没有可导出的 3D Tiles 场景。')
-  const target = new THREE.WebGLRenderTarget(size, size, { type: format === 'exr' ? THREE.FloatType : THREE.UnsignedByteType, depthBuffer: true, stencilBuffer: false })
-  target.texture.colorSpace = format === 'exr' ? THREE.NoColorSpace : THREE.SRGBColorSpace
-  const faceCamera = new THREE.PerspectiveCamera(90, 1, camera.near, camera.far)
-  const worldDirection = new THREE.Vector3()
-  const worldUp = new THREE.Vector3()
-  const faces: FacePixels[] = []
-  const oldToneMapping = renderer.toneMapping
-  const oldColorSpace = renderer.outputColorSpace
-  if (format === 'exr') { renderer.toneMapping = THREE.NoToneMapping; renderer.outputColorSpace = THREE.NoColorSpace }
-  try {
-    for (let index = 0; index < faceDefinitions.length; index += 1) {
-      const definition = faceDefinitions[index]
-      worldDirection.copy(definition.direction).applyQuaternion(baseQuaternion)
-      worldUp.copy(definition.up).applyQuaternion(baseQuaternion)
-      faceCamera.position.copy(basePosition)
-      faceCamera.up.copy(worldUp)
-      faceCamera.lookAt(basePosition.clone().add(worldDirection))
-      faceCamera.updateMatrixWorld()
-      tiles.setCamera(faceCamera)
-      tiles.setResolutionFromRenderer(faceCamera, renderer)
-      tiles.update()
-      renderer.setRenderTarget(target)
-      renderer.render(scene, faceCamera)
-      faces.push(readFace(target, size, format))
-      setExportProgress((index + 1) / 6, `正在渲染方向 ${index + 1}/6`)
-    }
-  } finally {
-    renderer.setRenderTarget(null)
-    renderer.toneMapping = oldToneMapping
-    renderer.outputColorSpace = oldColorSpace
-    tiles.setCamera(camera)
-    tiles.setResolutionFromRenderer(camera, renderer)
-    target.dispose()
-    applyCameraRotation()
-  }
-  return faces
+function createExportAnchors(radius: number): ExportAnchor[] {
+  return [
+    { id: 'base', label: 'base', position: basePosition.clone(), quaternion: baseQuaternion.clone(), far: radius },
+    ...anchors.map((anchor) => ({ ...anchor, position: anchor.position.clone(), quaternion: anchor.quaternion.clone() })),
+  ]
 }
 
-async function exportPanorama(format: CaptureFormat): Promise<void> {
-  if (exporting || !tiles) return
-  exporting = true
-  exportGlbButton.disabled = true
-  previewGlbButton.disabled = true
-  const width = Number(resolutionInput.value)
-  const height = width / 2
-  try {
-    const faces = await captureFaces(width / 2, format)
-    if (format === 'png') {
-      const canvas = document.createElement('canvas')
-      canvas.width = width
-      canvas.height = height
-      const context = canvas.getContext('2d')!
-      const pixels = new Uint8ClampedArray(width * height * 4)
-      const direction = new THREE.Vector3()
-      for (let y = 0; y < height; y += 1) {
-        for (let x = 0; x < width; x += 1) {
-          const phi = (x / width - 0.5) * Math.PI * 2
-          const theta = (y / height) * Math.PI
-          direction.set(Math.sin(theta) * Math.cos(phi), Math.cos(theta), Math.sin(theta) * Math.sin(phi))
-          const offset = (y * width + x) * 4
-          pixels[offset] = sampleFace(faces, direction, 0)
-          pixels[offset + 1] = sampleFace(faces, direction, 1)
-          pixels[offset + 2] = sampleFace(faces, direction, 2)
-          pixels[offset + 3] = 255
-        }
-      }
-      context.putImageData(new ImageData(pixels, width, height), 0, 0)
-      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error('PNG 编码失败')), 'image/png'))
-      downloadBlob(blob, `environment-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.png`)
-    } else {
-      const pixels = new Float32Array(width * height * 4)
-      const direction = new THREE.Vector3()
-      for (let y = 0; y < height; y += 1) {
-        for (let x = 0; x < width; x += 1) {
-          const phi = (x / width - 0.5) * Math.PI * 2
-          const theta = (y / height) * Math.PI
-          direction.set(Math.sin(theta) * Math.cos(phi), Math.cos(theta), Math.sin(theta) * Math.sin(phi))
-          const offset = (y * width + x) * 4
-          pixels[offset] = sampleFace(faces, direction, 0)
-          pixels[offset + 1] = sampleFace(faces, direction, 1)
-          pixels[offset + 2] = sampleFace(faces, direction, 2)
-          pixels[offset + 3] = 1
-        }
-        if (y % 64 === 0) setExportProgress(0.85 + y / height * 0.12, '正在拼接 HDR 数据…')
-      }
-      const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat, THREE.FloatType)
-      texture.colorSpace = THREE.NoColorSpace
-      texture.needsUpdate = true
-      const exr = await new EXRExporter().parse(texture)
-      texture.dispose()
-      downloadBlob(new Blob([exr], { type: 'image/x-exr' }), `environment-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.exr`)
+function createScanCameras(radius: number): THREE.PerspectiveCamera[] {
+  // These cameras are deliberately short-lived copies. The user's main
+  // camera is never passed to the export traversal.
+  const directions: Array<{ direction: THREE.Vector3; up: THREE.Vector3; topDown: boolean }> = []
+  for (let azimuth = 0; azimuth < 8; azimuth += 1) {
+    for (const elevation of [-30, 0, 30]) {
+      const azimuthRadians = azimuth / 8 * Math.PI * 2
+      const elevationRadians = elevation * Math.PI / 180
+      directions.push({
+        direction: new THREE.Vector3(
+          Math.sin(azimuthRadians) * Math.cos(elevationRadians),
+          Math.sin(elevationRadians),
+          -Math.cos(azimuthRadians) * Math.cos(elevationRadians),
+        ),
+        up: new THREE.Vector3(0, 1, 0),
+        topDown: false,
+      })
     }
-    setExportProgress(1, `${format.toUpperCase()} 导出完成`)
-  } catch (error) {
-    setExportProgress(0, error instanceof Error ? error.message : '导出失败')
-  } finally {
-    exporting = false
-    exportPngButton.disabled = false
-    exportExrButton.disabled = false
-    exportGlbButton.disabled = false
-    window.setTimeout(() => { progress.hidden = true }, 2500)
   }
+  directions.push({ direction: new THREE.Vector3(0, -1, 0), up: new THREE.Vector3(0, 0, -1), topDown: true })
+  const scanCameras: THREE.PerspectiveCamera[] = []
+  const addScanCameras = (position: THREE.Vector3, quaternion: THREE.Quaternion, far: number): void => {
+    for (const { direction, up, topDown } of directions) {
+      const scanCamera = new THREE.PerspectiveCamera(camera.fov, 1, camera.near, topDown ? far * 2 : far)
+      const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion)
+      scanCamera.position.copy(position)
+      if (topDown) scanCamera.position.add(worldUp.multiplyScalar(far))
+      scanCamera.up.copy(up).applyQuaternion(quaternion)
+      scanCamera.lookAt(topDown ? position : position.clone().add(direction.clone().applyQuaternion(quaternion)))
+      scanCamera.updateMatrixWorld(true)
+      scanCameras.push(scanCamera)
+    }
+  }
+  addScanCameras(basePosition, baseQuaternion, radius)
+  for (const anchor of anchors) addScanCameras(anchor.position, anchor.quaternion, anchor.far)
+  return scanCameras
 }
 
+function getPreviewSignature(): string {
+  if (!tiles) return ''
+  const stats = getTileLoadStats(tiles)
+  const active = [...tiles.activeTiles].map((tile) => String((tile as { id?: string }).id ?? tile)).sort().join(',')
+  const visible = [...tiles.visibleTiles].map((tile) => String((tile as { id?: string }).id ?? tile)).sort().join(',')
+  return `${stats.loaded}:${stats.pending}:${tiles.loadProgress}:${active}:${visible}`
 }
-*/
-async function exportGlb(): Promise<void> {
+
+function updatePreviewStability(): void {
+  if (!previewSession || !tiles || previewSession.closed) return
+  const signature = getPreviewSignature()
+  const stats = getTileLoadStats(tiles)
+  const loading = Boolean((tiles as TilesRenderer & { isLoading?: boolean }).isLoading)
+  if (signature === previewSession.lastSignature && stats.pending === 0 && !loading && tiles.loadProgress >= 1) {
+    previewSession.stableFrames += 1
+  } else {
+    previewSession.stableFrames = 0
+  }
+  previewSession.lastSignature = signature
+  previewSession.stable = previewSession.stableFrames >= 8
+  glbPreviewProgress.textContent = `${previewSession.stable ? 'LOD 已稳定' : '正在持续细分…'} · 已加载 ${stats.loaded} · 队列 ${stats.pending}`
+  if (previewSession.stable) schedulePreviewGeneration()
+}
+
+function beginPreviewSession(radius: number): void {
+  if (!tiles) return
+  stopPreviewSession()
+  const session = {
+    cameras: createScanCameras(radius),
+    previousCameras: [...tiles.cameras],
+    previousDisplayActiveTiles: tiles.displayActiveTiles,
+    mainCamera: {
+      position: camera.position.clone(),
+      quaternion: camera.quaternion.clone(),
+      up: camera.up.clone(),
+      near: camera.near,
+      far: camera.far,
+      fov: camera.fov,
+      aspect: camera.aspect,
+      target: mainControls.target.clone(),
+    },
+    radius,
+    generation: 0,
+    stableFrames: 0,
+    lastSignature: '',
+    stable: false,
+    generationTimer: null as number | null,
+    generationInFlight: false,
+    closed: false,
+  }
+  previewSession = session
+  // Remove the interactive camera (and any prior renderer cameras) from the
+  // traversal. Only the temporary base/anchor scan cameras below drive LOD.
+  for (const previousCamera of session.previousCameras) tiles.deleteCamera(previousCamera)
+  tiles.displayActiveTiles = true
+  for (const scanCamera of session.cameras) {
+    tiles.setCamera(scanCamera)
+    tiles.setResolutionFromRenderer(scanCamera, renderer)
+  }
+  tiles.update()
+  glbPreviewProgress.textContent = '正在注册联合扫描相机…'
+}
+
+function stopPreviewSession(): void {
+  if (!previewSession || !tiles) return
+  const session = previewSession
+  session.closed = true
+  if (session.generationTimer !== null) window.clearTimeout(session.generationTimer)
+  for (const scanCamera of session.cameras) tiles.deleteCamera(scanCamera)
+  tiles.displayActiveTiles = session.previousDisplayActiveTiles
+  for (const previousCamera of session.previousCameras) {
+    tiles.setCamera(previousCamera)
+    tiles.setResolutionFromRenderer(previousCamera, renderer)
+  }
+  camera.position.copy(session.mainCamera.position)
+  camera.quaternion.copy(session.mainCamera.quaternion)
+  camera.up.copy(session.mainCamera.up)
+  camera.near = session.mainCamera.near
+  camera.far = session.mainCamera.far
+  camera.fov = session.mainCamera.fov
+  camera.aspect = session.mainCamera.aspect
+  camera.updateProjectionMatrix()
+  camera.updateMatrixWorld(true)
+  mainControls.target.copy(session.mainCamera.target)
+  mainControls.update()
+  previewSession = null
+}
+
+function collectExportScenes(radius: number): Set<THREE.Object3D> {
+  if (!tiles) return new Set()
+  const scenes = new Set<THREE.Object3D>()
+  const bounds = new THREE.Box3()
+  const sphere = new THREE.Sphere()
+  const exportAnchors = createExportAnchors(radius)
+  for (const child of tiles.group.children) {
+    child.updateMatrixWorld(true)
+    bounds.setFromObject(child)
+    bounds.getBoundingSphere(sphere)
+    if (exportAnchors.some((anchor) => sphere.center.distanceTo(anchor.position) - sphere.radius <= anchor.far)) scenes.add(child)
+  }
+  return scenes
+}
+
+async function legacyExportGlb(): Promise<void> {
   if (exporting || !tiles) return
   exporting = true
   const cache = tiles.lruCache
@@ -767,7 +819,7 @@ async function exportGlb(): Promise<void> {
     if (!Number.isFinite(radius) || radius < 50 || radius > 10_000_000) {
       throw new Error('GLB 导出范围必须在 50 到 10000 米之间。')
     }
-    const exportScenes = await preloadExportArea(radius)
+    const exportScenes = await legacyPreloadExportArea(radius)
     const exportGroup = new THREE.Group()
     const bounds = new THREE.Box3()
     const center = new THREE.Vector3()
@@ -829,6 +881,96 @@ async function exportGlb(): Promise<void> {
   }
 }
 
+async function encodeCurrentPreview(): Promise<ArrayBuffer> {
+  if (!tiles || !previewSession) throw new Error('GLB 预览尚未初始化。')
+  const exportGroup = new THREE.Group()
+  const exportScenes = collectExportScenes(previewSession.radius)
+  for (const sourceScene of exportScenes) exportGroup.add(sourceScene.clone(true))
+  if (exportGroup.children.length === 0) throw new Error('导出范围内尚未加载到瓦片。')
+  exportGroup.position.copy(basePosition).multiplyScalar(-1)
+  exportGroup.updateMatrixWorld(true)
+  return await new Promise<ArrayBuffer>((resolve, reject) => {
+    new GLTFExporter().parse(
+      exportGroup,
+      (value) => value instanceof ArrayBuffer ? resolve(value) : reject(new Error('GLB 生成结果无效。')),
+      (error) => reject(error instanceof Error ? error : new Error('GLB 生成失败。')),
+      { binary: true, onlyVisible: true, includeCustomExtensions: true },
+    )
+  })
+}
+
+function replacePreviewModel(data: ArrayBuffer): void {
+  if (!glbPreviewScene) return
+  new GLTFLoader().parse(data.slice(0), '', (gltf) => {
+    if (!glbPreviewScene) return
+    const shouldFrame = glbPreviewModel === null
+    if (glbPreviewModel) glbPreviewScene.remove(glbPreviewModel)
+    glbPreviewModel = gltf.scene
+    glbPreviewScene.add(glbPreviewModel)
+    if (shouldFrame) frameGlbPreview(glbPreviewModel)
+    glbPreviewPlaceholder.hidden = true
+  }, (error) => {
+    glbPreviewPlaceholder.textContent = error instanceof Error ? error.message : 'GLB 加载失败'
+    glbPreviewPlaceholder.dataset.state = 'error'
+    glbPreviewPlaceholder.hidden = false
+  })
+}
+
+async function generatePreviewGlb(): Promise<void> {
+  const session = previewSession
+  if (!session || session.closed || session.generationInFlight) return
+  session.generationInFlight = true
+  const generation = ++session.generation
+  try {
+    glbPreviewProgress.textContent = '正在生成 GLB…'
+    const result = await encodeCurrentPreview()
+    if (previewSession !== session || session.closed || generation !== session.generation) return
+    lastExportedGlb = result.slice(0)
+    replacePreviewModel(result)
+    exportCurrentGlbButton.disabled = false
+    glbPreviewProgress.textContent = session.stable ? 'GLB 已更新 · LOD 已稳定' : 'GLB 已更新 · 正在继续细分…'
+  } catch (error) {
+    if (previewSession === session && !session.closed) glbPreviewProgress.textContent = error instanceof Error ? error.message : 'GLB 生成失败'
+  } finally {
+    if (previewSession === session) {
+      session.generationInFlight = false
+      if (session.stable && session.generationTimer === null) schedulePreviewGeneration()
+    }
+  }
+}
+
+function schedulePreviewGeneration(): void {
+  const session = previewSession
+  if (!session || session.closed || session.generationInFlight || session.generationTimer !== null) return
+  session.generationTimer = window.setTimeout(() => {
+    session.generationTimer = null
+    void generatePreviewGlb()
+  }, session.stable ? 250 : 600)
+}
+
+async function exportCurrentGlb(): Promise<void> {
+  if (exporting || !tiles || !previewSession) return
+  exporting = true
+  exportCurrentGlbButton.disabled = true
+  try {
+    const started = performance.now()
+    while (previewSession && !previewSession.stable && performance.now() - started < 30_000) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 100))
+    }
+    if (!lastExportedGlb) {
+      await generatePreviewGlb()
+    }
+    if (!lastExportedGlb) throw new Error('GLB 仍在生成，请稍后重试。')
+    downloadBlob(new Blob([lastExportedGlb], { type: 'model/gltf-binary' }), `scene-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.glb`)
+    glbPreviewProgress.textContent = 'GLB 导出完成'
+  } catch (error) {
+    glbPreviewProgress.textContent = error instanceof Error ? error.message : 'GLB 导出失败'
+  } finally {
+    exporting = false
+    exportCurrentGlbButton.disabled = !lastExportedGlb
+  }
+}
+
 function resizeGlbPreview(): void {
   if (!glbPreviewRenderer || !glbPreviewCamera) return
   const width = Math.max(1, glbPreviewViewport.clientWidth)
@@ -856,6 +998,7 @@ function frameGlbPreview(model: THREE.Object3D): void {
 }
 
 function closeGlbPreview(): void {
+  stopPreviewSession()
   glbPreview.hidden = true
   glbPreviewControls?.dispose()
   glbPreviewRenderer?.dispose()
@@ -869,16 +1012,13 @@ function closeGlbPreview(): void {
 }
 
 async function openGlbPreview(): Promise<void> {
-  if (!lastExportedGlb) {
-    if (exporting || !tiles) return
-    previewRequested = true
-    await exportGlb()
-    return
-  }
+  if (exporting || !tiles) return
   closeGlbPreview()
   glbPreview.hidden = false
-  glbPreviewPlaceholder.textContent = '正在加载 GLB…'
+  glbPreviewPlaceholder.textContent = '正在准备动态 GLB 预览…'
   glbPreviewPlaceholder.dataset.state = 'loading'
+  glbPreviewPlaceholder.hidden = false
+  glbPreviewProgress.textContent = '正在启动联合扫描…'
   glbPreviewScene = new THREE.Scene()
   glbPreviewScene.background = new THREE.Color('#020811')
   glbPreviewScene.add(new THREE.HemisphereLight('#d9efff', '#18243a', 1.6))
@@ -899,19 +1039,14 @@ async function openGlbPreview(): Promise<void> {
   glbPreviewControls.maxPolarAngle = Math.PI
   glbPreviewControls.zoomToCursor = true
   resizeGlbPreview()
-  new GLTFLoader().parse(lastExportedGlb.slice(0), '', (gltf) => {
-    glbPreviewModel = gltf.scene
-    glbPreviewScene!.add(glbPreviewModel)
-    frameGlbPreview(glbPreviewModel)
-    glbPreviewPlaceholder.hidden = true
-  }, (error) => {
-    glbPreviewPlaceholder.textContent = error instanceof Error ? error.message : 'GLB 加载失败'
-    glbPreviewPlaceholder.dataset.state = 'error'
-    glbPreviewPlaceholder.hidden = false
-  })
+  lastExportedGlb = null
+  exportCurrentGlbButton.disabled = true
+  beginPreviewSession(Number(cameraFarInput.value))
+  schedulePreviewGeneration()
 }
 
-exportGlbButton.addEventListener('click', () => void exportGlb())
+exportGlbButton.style.display = 'none'
+exportCurrentGlbButton.addEventListener('click', () => void exportCurrentGlb())
 previewGlbButton.addEventListener('click', openGlbPreview)
 closeGlbPreviewButton.addEventListener('click', closeGlbPreview)
 precisionInput.addEventListener('input', () => {
@@ -934,13 +1069,26 @@ cameraFarInput.addEventListener('input', () => {
 window.addEventListener('resize', resize)
 window.addEventListener('resize', resizeGlbPreview)
 
+// The viewer panel can change size without a window resize (for example when
+// the responsive grid changes or its layout is affected by dynamic content).
+// Keep the WebGL drawing buffer and camera projection in sync with the actual
+// viewport dimensions in those cases as well.
+const viewportResizeObserver = new ResizeObserver(() => {
+  resize()
+  resizeGlbPreview()
+})
+viewportResizeObserver.observe(viewport)
+viewportResizeObserver.observe(glbPreviewViewport)
+
 function animate(): void {
-  mainControls.update()
-  if (!freezeTileUpdates) tiles?.update()
-  renderer.render(scene, previewCamera)
+  tiles?.update()
+  updatePreviewStability()
   if (glbPreviewRenderer && glbPreviewScene && glbPreviewCamera) {
     glbPreviewControls?.update()
     glbPreviewRenderer.render(glbPreviewScene, glbPreviewCamera)
+  } else {
+    mainControls.update()
+    renderer.render(scene, previewCamera)
   }
   tilesStat.textContent = tiles ? `${tiles.group.children.length} objects` : '-'
   requestAnimationFrame(animate)

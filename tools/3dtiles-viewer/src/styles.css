@@ -44,6 +44,8 @@ input:focus, select:focus { border-color: var(--accent); }
 .coordinate-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .actions.wide { grid-template-columns: 1fr; }
+#export-glb { display: none; }
+#export-current-glb { margin-left: auto; }
 .anchor-list { display: grid; gap: 7px; }
 .anchor-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted); font-size: .8rem; }
 .anchor-actions { display: flex; gap: 5px; }
