@@ -335,6 +335,10 @@ function syncGlbCameraToMainView(): void {
   glbControls.target.copy(localTarget)
   glbControls.maxDistance = Math.max(glbCamera.far * 0.5, 1000)
   glbControls.update()
+  logSummary('camera-sync', {
+    glbPos: glbCamera.position,
+    glbTarget: glbControls.target,
+  })
 }
 
 function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
@@ -516,26 +520,15 @@ function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promis
         hideGlbPlaceholder()
 
         if (!glbCameraFramed) {
-          frameGlbPreviewFromModel(glbPreviewModel)
+          syncGlbCameraToMainView()
           glbCameraFramed = true
         }
 
         glbPreviewLoadedRevision = revision
         glbPreviewProgress.textContent = `GLB 预览已同步，当前捕获 ${capturedTileNodes.size} 个高精度叶节点。`
-        logSummary('preview-ready', {
-          revision,
-          captured: capturedTileNodes.size,
-          children: glbPreviewModel.children.length,
-          sample: describeObject3D(glbPreviewModel.children[0]),
-          leaf: describeGeometry(findFirstRenderableDescendant(glbPreviewModel)),
-          bytes: buffer.byteLength,
-        })
         logSummary('preview-loaded', {
           revision,
-          sceneChildren: glbScene.children.length,
-          modelChildren: glbPreviewModel.children.length,
-          sample: describeObject3D(glbPreviewModel.children[0]),
-          leaf: describeGeometry(findFirstRenderableDescendant(glbPreviewModel)),
+          children: glbPreviewModel.children.length,
           bytes: buffer.byteLength,
         })
         resolve()
@@ -569,7 +562,6 @@ async function refreshGlbPreview(): Promise<void> {
           captured: capturedTileNodes.size,
           rootChildren: glbCaptureRoot.children.length,
         })
-        recenterGlbCaptureRoot()
         const buffer = await exportObject3D(glbCaptureRoot)
         if (revision !== glbPreviewRevision) {
           glbPreviewRefreshRequested = true
@@ -858,6 +850,10 @@ function captureVisibleTiles(): number {
     glbPreviewRevision += 1
     hideGlbPlaceholder()
     exportCurrentGlbButton.disabled = false
+    if (!glbCameraFramed) {
+      syncGlbCameraToMainView()
+      glbCameraFramed = true
+    }
     void refreshGlbPreview()
     glbPreviewProgress.textContent = `已捕获 ${capturedTileNodes.size} 个高精度叶节点。`
   } else if (capturedTileNodes.size === 0) {
@@ -886,7 +882,7 @@ function captureVisibleTiles(): number {
 
 function frameGlbPreview(): void {
   if (!glbPreviewModel) return
-  frameGlbPreviewFromModel(glbPreviewModel)
+  syncGlbCameraToMainView()
 }
 
 function exportObject3D(object: THREE.Object3D): Promise<ArrayBuffer> {
