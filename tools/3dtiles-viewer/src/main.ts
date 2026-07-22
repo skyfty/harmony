@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { TilesRenderer, CAMERA_FRAME } from '3d-tiles-renderer'
 import type { Tile } from '3d-tiles-renderer/core'
@@ -19,6 +20,8 @@ type CapturableObject = THREE.Object3D & {
   geometry?: THREE.BufferGeometry
   material?: THREE.Material | THREE.Material[]
 }
+
+const MAX_CAPTURE_LEAF_RADIUS = 100_000
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 const style = document.createElement('style')
@@ -149,7 +152,6 @@ glbSun.position.set(10, 20, 10)
 glbScene.add(glbSun)
 const glbCaptureRoot = new THREE.Group()
 glbCaptureRoot.name = 'glb-capture-root'
-glbScene.add(glbCaptureRoot)
 
 const glbCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000)
 const glbRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
@@ -177,6 +179,13 @@ let exporting = false
 let anchors: CaptureAnchor[] = []
 let capturedTileNodes = new Map<Tile, THREE.Object3D>()
 let glbCameraFramed = false
+let glbPreviewModel: THREE.Object3D | null = null
+let glbPreviewBuffer: ArrayBuffer | null = null
+let glbPreviewRevision = 0
+let glbPreviewLoadedRevision = 0
+let glbPreviewRefreshPromise: Promise<void> | null = null
+let glbPreviewRefreshRequested = false
+let glbSkippedLargeLeafCount = 0
 const baseFrameMatrix = new THREE.Matrix4()
 const baseFrameInverse = new THREE.Matrix4()
 
@@ -207,6 +216,24 @@ function hideGlbPlaceholder(): void {
   glbPreviewPlaceholder.hidden = true
 }
 
+function disposeObject3DResources(object: THREE.Object3D | null): void {
+  if (!object) return
+  object.traverse((node) => {
+    const renderable = node as THREE.Mesh & { material?: THREE.Material | THREE.Material[]; geometry?: THREE.BufferGeometry }
+    renderable.geometry?.dispose()
+    const material = renderable.material
+    if (!material) return
+    const materials = Array.isArray(material) ? material : [material]
+    for (const item of materials) {
+      const record = item as THREE.Material & Record<string, unknown>
+      for (const value of Object.values(record)) {
+        if (value instanceof THREE.Texture) value.dispose()
+      }
+      item.dispose()
+    }
+  })
+}
+
 function updateStats(): void {
   sourceStat.textContent = sourceLabel
   tilesStat.textContent = tiles ? `${tiles.group.children.length} objects` : '-'
@@ -228,6 +255,33 @@ function formatLogValue(value: unknown): string {
 function logSummary(event: string, details: Record<string, unknown> = {}): void {
   const tail = Object.entries(details).map(([key, value]) => `${key}=${formatLogValue(value)}`).join(' | ')
   console.log(`[3dtiles-viewer] ${event}${tail ? ` | ${tail}` : ''}`)
+}
+
+function describeObject3D(object: THREE.Object3D | null | undefined): string {
+  if (!object) return '-'
+  return `${object.type}${object.name ? `:${object.name}` : ''}`
+}
+
+function findFirstRenderableDescendant(object: THREE.Object3D | null | undefined): THREE.Object3D | null {
+  if (!object) return null
+  let match: THREE.Object3D | null = null
+  object.traverse((node) => {
+    if (match) return
+    const renderable = node as CapturableObject & { isSprite?: boolean }
+    if (renderable.geometry || renderable.isSprite) match = node
+  })
+  return match
+}
+
+function describeGeometry(object: THREE.Object3D | null | undefined): string {
+  if (!object) return '-'
+  const renderable = object as CapturableObject
+  const geometry = renderable.geometry
+  if (!geometry) return describeObject3D(object)
+  geometry.computeBoundingSphere()
+  const radius = geometry.boundingSphere?.radius ?? 0
+  const vertexCount = geometry.attributes.position?.count ?? 0
+  return `${describeObject3D(object)}|r=${radius.toFixed(3)}|v=${vertexCount}`
 }
 
 function updateProgressUI(): void {
@@ -255,6 +309,20 @@ function syncGlbOrigin(): void {
   glbCaptureRoot.updateMatrixWorld(true)
 }
 
+function syncGlbCameraToMainViewLegacy(): void {
+  const mainViewMatrix = new THREE.Matrix4().compose(mainCamera.position, mainCamera.quaternion, new THREE.Vector3(1, 1, 1))
+  const localViewMatrix = baseFrameInverse.clone().multiply(mainViewMatrix)
+  localViewMatrix.decompose(glbCamera.position, glbCamera.quaternion, glbCamera.scale)
+  const localTarget = mainControls.target.clone().applyMatrix4(baseFrameInverse)
+  glbCamera.up.set(0, 1, 0).applyQuaternion(glbCamera.quaternion).normalize()
+  glbCamera.near = Math.max(0.01, mainCamera.near * 0.1)
+  glbCamera.far = Math.max(1000, Number(cameraFarInput.value) || mainCamera.far)
+  glbCamera.updateProjectionMatrix()
+  glbControls.target.copy(localTarget)
+  glbControls.maxDistance = Math.max(glbCamera.far * 0.5, 1000)
+  glbControls.update()
+}
+
 function syncGlbCameraToMainView(): void {
   const mainViewMatrix = new THREE.Matrix4().compose(mainCamera.position, mainCamera.quaternion, new THREE.Vector3(1, 1, 1))
   const localViewMatrix = baseFrameInverse.clone().multiply(mainViewMatrix)
@@ -274,6 +342,15 @@ function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
   capturedTileNodes.clear()
   anchors = []
   glbCameraFramed = false
+  glbSkippedLargeLeafCount = 0
+  glbPreviewRevision += 1
+  glbPreviewLoadedRevision = 0
+  glbPreviewBuffer = null
+  if (glbPreviewModel) {
+    disposeObject3DResources(glbPreviewModel)
+    glbScene.remove(glbPreviewModel)
+    glbPreviewModel = null
+  }
   exportCurrentGlbButton.disabled = true
   glbPreviewProgress.textContent = message
   setGlbPlaceholder(message)
@@ -315,17 +392,28 @@ function isRenderableLeaf(node: THREE.Object3D): boolean {
   return hasMaterial || renderable.isSprite
 }
 
-function cloneRenderableLeafForCapture(source: CapturableObject): CapturableObject {
+function cloneRenderableLeafForCapture(source: CapturableObject): CapturableObject | null {
   const clone = source.clone(false) as CapturableObject
-  if (source.geometry) clone.geometry = source.geometry.clone()
+  if (source.geometry) {
+    const geometry = source.geometry.clone()
+    geometry.computeBoundingSphere()
+    const geometryRadius = geometry.boundingSphere?.radius ?? 0
+    if (geometryRadius > MAX_CAPTURE_LEAF_RADIUS) return null
+    clone.geometry = geometry
+  }
   if (source.material) {
     clone.material = Array.isArray(source.material)
       ? source.material.map((item) => cloneMaterialDeep(item))
       : cloneMaterialDeep(source.material)
   }
   const matrix = baseFrameInverse.clone().multiply(source.matrixWorld)
-  clone.matrix.copy(matrix)
-  clone.matrix.decompose(clone.position, clone.quaternion, clone.scale)
+  if (clone.geometry) {
+    clone.geometry.applyMatrix4(matrix)
+  }
+  clone.position.set(0, 0, 0)
+  clone.quaternion.identity()
+  clone.scale.set(1, 1, 1)
+  clone.matrix.identity()
   clone.matrixAutoUpdate = false
   clone.updateMatrix()
   clone.updateMatrixWorld(true)
@@ -335,6 +423,7 @@ function cloneRenderableLeafForCapture(source: CapturableObject): CapturableObje
 function createCapturedTileGroup(source: THREE.Object3D): THREE.Group {
   source.updateMatrixWorld(true)
   const group = new THREE.Group()
+  let skippedLarge = 0
   group.matrixAutoUpdate = false
   group.matrix.identity()
   group.position.set(0, 0, 0)
@@ -342,11 +431,159 @@ function createCapturedTileGroup(source: THREE.Object3D): THREE.Group {
   group.scale.set(1, 1, 1)
   source.traverse((node) => {
     if (!isRenderableLeaf(node)) return
-    group.add(cloneRenderableLeafForCapture(node as CapturableObject))
+    const cloned = cloneRenderableLeafForCapture(node as CapturableObject)
+    if (cloned) {
+      group.add(cloned)
+    } else {
+      skippedLarge += 1
+    }
   })
   group.updateMatrix()
   group.updateMatrixWorld(true)
+  ;(group as THREE.Group & { userData: { skippedLarge?: number } }).userData.skippedLarge = skippedLarge
   return group
+}
+
+function recenterGlbCaptureRoot(): boolean {
+  glbCaptureRoot.position.set(0, 0, 0)
+  glbCaptureRoot.quaternion.identity()
+  glbCaptureRoot.scale.set(1, 1, 1)
+  glbCaptureRoot.updateMatrixWorld(true)
+
+  const box = new THREE.Box3().setFromObject(glbCaptureRoot)
+  if (box.isEmpty()) return false
+
+  const center = box.getCenter(new THREE.Vector3())
+  glbCaptureRoot.position.copy(center).multiplyScalar(-1)
+  glbCaptureRoot.updateMatrixWorld(true)
+  return true
+}
+
+function frameGlbPreviewFromModel(model: THREE.Object3D): void {
+  const box = new THREE.Box3().setFromObject(model)
+  if (box.isEmpty()) return
+
+  const sphere = box.getBoundingSphere(new THREE.Sphere())
+  const center = sphere.center.clone()
+  const radius = Math.max(sphere.radius, 1)
+  const halfFov = THREE.MathUtils.degToRad(glbCamera.fov * 0.5)
+  const distance = radius / Math.sin(Math.max(halfFov, 0.1))
+  const direction = new THREE.Vector3(1, 1, 1).normalize()
+
+  glbCamera.position.copy(center).addScaledVector(direction, distance)
+  glbCamera.near = Math.max(0.01, radius / 1000)
+  glbCamera.far = Math.max(1000, radius * 100)
+  glbCamera.updateProjectionMatrix()
+
+  glbControls.target.copy(center)
+  glbControls.maxDistance = Math.max(radius * 20, 1000)
+  glbControls.update()
+
+  logSummary('frame-summary', {
+    state: 'framed',
+    childCount: model.children.length,
+    radius,
+  })
+}
+
+function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const loader = new GLTFLoader()
+    loader.parse(
+      buffer,
+      '',
+      (gltf) => {
+        if (revision !== glbPreviewRevision) {
+          glbPreviewRefreshRequested = true
+          resolve()
+          return
+        }
+
+        const previewScene = gltf.scene ?? gltf.scenes?.[0]
+        if (!previewScene) {
+          reject(new Error('GLB 预览加载失败。'))
+          return
+        }
+
+        if (glbPreviewModel) {
+          disposeObject3DResources(glbPreviewModel)
+          glbScene.remove(glbPreviewModel)
+        }
+
+        glbPreviewModel = previewScene
+        glbPreviewModel.name = 'glb-preview-model'
+        glbScene.add(glbPreviewModel)
+        hideGlbPlaceholder()
+
+        if (!glbCameraFramed) {
+          frameGlbPreviewFromModel(glbPreviewModel)
+          glbCameraFramed = true
+        }
+
+        glbPreviewLoadedRevision = revision
+        glbPreviewProgress.textContent = `GLB 预览已同步，当前捕获 ${capturedTileNodes.size} 个高精度叶节点。`
+        logSummary('preview-ready', {
+          revision,
+          captured: capturedTileNodes.size,
+          children: glbPreviewModel.children.length,
+          sample: describeObject3D(glbPreviewModel.children[0]),
+          leaf: describeGeometry(findFirstRenderableDescendant(glbPreviewModel)),
+          bytes: buffer.byteLength,
+        })
+        logSummary('preview-loaded', {
+          revision,
+          sceneChildren: glbScene.children.length,
+          modelChildren: glbPreviewModel.children.length,
+          sample: describeObject3D(glbPreviewModel.children[0]),
+          leaf: describeGeometry(findFirstRenderableDescendant(glbPreviewModel)),
+          bytes: buffer.byteLength,
+        })
+        resolve()
+      },
+      (error) => reject(error instanceof Error ? error : new Error('GLB 预览解析失败。')),
+    )
+  })
+}
+
+async function refreshGlbPreview(): Promise<void> {
+  if (capturedTileNodes.size === 0) {
+    glbPreviewBuffer = null
+    glbPreviewLoadedRevision = 0
+    glbPreviewProgress.textContent = '当前视图没有可捕获的高精度叶节点。'
+    setGlbPlaceholder('当前视图没有可捕获的高精度叶节点', 'idle')
+    return
+  }
+
+  glbPreviewRefreshRequested = true
+  if (glbPreviewRefreshPromise) return glbPreviewRefreshPromise
+
+  glbPreviewRefreshPromise = (async () => {
+    try {
+      while (glbPreviewRefreshRequested) {
+        glbPreviewRefreshRequested = false
+        const revision = glbPreviewRevision
+        if (!glbPreviewModel) setGlbPlaceholder('正在生成 GLB 预览...', 'loading')
+        glbPreviewProgress.textContent = '正在同步最终的 GLB 预览...'
+        logSummary('preview-build', {
+          revision,
+          captured: capturedTileNodes.size,
+          rootChildren: glbCaptureRoot.children.length,
+        })
+        recenterGlbCaptureRoot()
+        const buffer = await exportObject3D(glbCaptureRoot)
+        if (revision !== glbPreviewRevision) {
+          glbPreviewRefreshRequested = true
+          continue
+        }
+        glbPreviewBuffer = buffer.slice(0)
+        await loadGlbPreviewFromBuffer(buffer, revision)
+      }
+    } finally {
+      glbPreviewRefreshPromise = null
+    }
+  })()
+
+  return glbPreviewRefreshPromise
 }
 
 function createCameraMarker(position: THREE.Vector3, label: string, color: number): THREE.Group {
@@ -608,6 +845,9 @@ function captureVisibleTiles(): number {
 
     removeCapturedAncestors(tile)
     const tileGroup = createCapturedTileGroup(scene)
+    const skippedLarge = (tileGroup.userData as { skippedLarge?: number }).skippedLarge ?? 0
+    glbSkippedLargeLeafCount += skippedLarge
+    if (tileGroup.children.length === 0) continue
     tileGroup.name = `captured-${capturedTileNodes.size + 1}`
     glbCaptureRoot.add(tileGroup)
     capturedTileNodes.set(tile, tileGroup)
@@ -615,12 +855,10 @@ function captureVisibleTiles(): number {
   }
 
   if (added > 0) {
-    if (!glbCameraFramed) {
-      frameGlbPreview()
-      glbCameraFramed = true
-    }
+    glbPreviewRevision += 1
     hideGlbPlaceholder()
     exportCurrentGlbButton.disabled = false
+    void refreshGlbPreview()
     glbPreviewProgress.textContent = `已捕获 ${capturedTileNodes.size} 个高精度叶节点。`
   } else if (capturedTileNodes.size === 0) {
     setGlbPlaceholder('当前视图没有可捕获的高精度叶节点', 'idle')
@@ -628,7 +866,7 @@ function captureVisibleTiles(): number {
   } else {
     glbPreviewProgress.textContent = '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
   }
-  logSummary('capture-summary', { added, captured: capturedTileNodes.size, sceneChildren: glbCaptureRoot.children.length, framed: glbCameraFramed })
+  logSummary('capture-summary', { added, captured: capturedTileNodes.size, skippedLarge: glbSkippedLargeLeafCount, sceneChildren: glbCaptureRoot.children.length, framed: glbCameraFramed })
 
   const count = added > 0 ? added : 0
   if (count > 0) {
@@ -647,17 +885,8 @@ function captureVisibleTiles(): number {
 }
 
 function frameGlbPreview(): void {
-  const box = new THREE.Box3().setFromObject(glbCaptureRoot)
-  if (box.isEmpty()) {
-    return
-  }
-  const sphere = box.getBoundingSphere(new THREE.Sphere())
-  syncGlbCameraToMainView()
-  logSummary('frame-summary', {
-    state: 'framed',
-    childCount: glbCaptureRoot.children.length,
-    radius: sphere.radius,
-  })
+  if (!glbPreviewModel) return
+  frameGlbPreviewFromModel(glbPreviewModel)
 }
 
 function exportObject3D(object: THREE.Object3D): Promise<ArrayBuffer> {
@@ -681,13 +910,14 @@ async function exportCurrentGlb(): Promise<void> {
   exporting = true
   exportCurrentGlbButton.disabled = true
   try {
-    const result = await exportObject3D(glbCaptureRoot)
-    const blob = new Blob([result], { type: 'model/gltf-binary' })
+    await refreshGlbPreview()
+    if (!glbPreviewBuffer) throw new Error('GLB 预览还未准备好。')
+    const blob = new Blob([glbPreviewBuffer], { type: 'model/gltf-binary' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
     link.download = `scene-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.glb`
     link.click()
-    logSummary('export-ready', { children: glbCaptureRoot.children.length, captured: capturedTileNodes.size, bytes: result.byteLength })
+    logSummary('export-ready', { children: glbCaptureRoot.children.length, captured: capturedTileNodes.size, bytes: glbPreviewBuffer.byteLength })
     window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
     glbPreviewProgress.textContent = 'GLB 导出完成。'
   } catch (error) {
