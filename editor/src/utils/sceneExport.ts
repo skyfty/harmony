@@ -439,15 +439,6 @@ function reportNodeExportDone(progress: NodeExportProgressTracker | null): void 
   })
 }
 
-export async function prepareJsonSceneExport(
-  snapshot: StoredSceneDocument,
-  options: SceneExportOptions,
-  reportEvent?: SceneExportEventReporter,
-): Promise<SceneJsonExportDocument> {
-  const bundle = await prepareJsonSceneExportBundle(snapshot, options, reportEvent)
-  return bundle.document
-}
-
 export async function prepareJsonSceneExportBundle(
   snapshot: StoredSceneDocument,
   options: SceneExportOptions,
@@ -497,15 +488,6 @@ export async function prepareJsonSceneExportBundle(
     document: sanitizedDocument,
     diagnostics,
   }
-}
-
-export async function prepareStoredSceneJsonExport(
-  snapshot: StoredSceneDocument,
-  options: SceneExportOptions,
-  reportEvent?: SceneExportEventReporter,
-): Promise<SceneJsonExportDocument> {
-  const bundle = await prepareStoredSceneJsonExportBundle(snapshot, options, reportEvent)
-  return bundle.document
 }
 
 export async function prepareStoredSceneJsonExportBundle(

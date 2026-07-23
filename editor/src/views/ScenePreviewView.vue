@@ -5183,11 +5183,12 @@ function buildResolvedAssetUrl(assetId: string, entry: AssetCacheEntry | null): 
 		return null
 	}
 	const mimeType = entry.mimeType ?? inferMimeTypeFromAssetId(assetId)
-	if (entry.downloadUrl) {
-		return { url: entry.downloadUrl, mimeType }
-	}
+
 	if (entry.blobUrl) {
 		return { url: entry.blobUrl, mimeType }
+	}	
+	if (entry.downloadUrl) {
+		return { url: entry.downloadUrl, mimeType }
 	}
 	if (entry.blob) {
 		const url = getOrCreateObjectUrl(assetId, entry.blob, mimeType ?? undefined)
@@ -11166,11 +11167,15 @@ function disposeBackgroundResources() {
 async function loadEnvironmentTextureFromAsset(
 	assetId: string,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
-	const resolved = await resolveAssetUrlReference(assetId)
+	const trimmedAssetId = assetId.trim()
+	if (!trimmedAssetId.length) {
+		return null
+	}
+	const resolved = await resolveAssetUrlReference(trimmedAssetId)
 	if (!resolved) {
 		return null
 	}
-	const extension = inferEnvironmentAssetExtension(assetId, resolved)
+	const extension = inferEnvironmentAssetExtension(trimmedAssetId, resolved)
 	const mimeType = resolved.mimeType?.toLowerCase() ?? ''
 	const dispose = resolved.dispose
 	try {
@@ -11202,30 +11207,6 @@ type ScenePreviewFogState =
 	  }
 	| null
 
-function resolveScenePreviewGroundFogCoverageDistance(activeCamera: THREE.PerspectiveCamera | null): number | null {
-	if (!activeCamera || !cachedGroundNodeId || !cachedGroundDynamicMesh) {
-		return null
-	}
-	const chunkSizeMeters = Number.isFinite(cachedGroundDynamicMesh.chunkSizeMeters) && Number(cachedGroundDynamicMesh.chunkSizeMeters) > 0
-		? Number(cachedGroundDynamicMesh.chunkSizeMeters)
-		: 100
-	const renderRadiusChunks = Number.isFinite(cachedGroundDynamicMesh.renderRadiusChunks) && Number(cachedGroundDynamicMesh.renderRadiusChunks) > 0
-		? Math.max(1, Math.trunc(Number(cachedGroundDynamicMesh.renderRadiusChunks)))
-		: 4
-	const unloadBufferChunks = Math.max(
-		SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS,
-		Math.ceil(renderRadiusChunks * SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_RATIO),
-	)
-	let coverageDistance = (renderRadiusChunks + unloadBufferChunks) * chunkSizeMeters
-	if (cachedGroundDynamicMesh.farHorizonEnabled) {
-		const farHorizonDistance = Number(cachedGroundDynamicMesh.farHorizonDistanceMeters)
-		if (Number.isFinite(farHorizonDistance) && farHorizonDistance > 0) {
-			coverageDistance = Math.min(coverageDistance, farHorizonDistance)
-		}
-	}
-	return Math.max(SCENE_PREVIEW_FOG_MIN_DISTANCE, coverageDistance)
-}
-
 function syncScenePreviewCameraFar(nextFar: number): void {
 	if (!camera || !scene) {
 		return
@@ -11240,19 +11221,17 @@ function syncScenePreviewCameraFar(nextFar: number): void {
 }
 
 function resolveScenePreviewFogState(
-	settings: EnvironmentSettings,
-	activeCamera: THREE.PerspectiveCamera | null = camera,
+	settings: EnvironmentSettings
 ): ScenePreviewFogState {
 	if (settings.fogMode === 'none') {
 		return null
 	}
-	const groundCoverageDistance = resolveScenePreviewGroundFogCoverageDistance(activeCamera)
 	if (settings.fogMode === 'linear') {
 		const sourceNear = Math.max(0, settings.fogNear)
 		const sourceFar = Math.max(sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE, settings.fogFar)
 		const cameraFar = Math.max(
 			sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE,
-			Math.min(sourceFar, groundCoverageDistance ?? sourceFar),
+			Math.min(sourceFar, sourceFar),
 		)
 		const fogFar = Math.max(
 			sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE,
@@ -11273,7 +11252,7 @@ function resolveScenePreviewFogState(
 	const baseCameraFar = DEFAULT_SCENE_CAMERA_FAR
 	const cameraFar = Math.max(
 		SCENE_PREVIEW_FOG_MIN_DISTANCE,
-		Math.min(baseCameraFar, groundCoverageDistance ?? baseCameraFar),
+		baseCameraFar,
 	)
 	const coverageScale = THREE.MathUtils.clamp(baseCameraFar / cameraFar, 0.5, 4)
 	return {
@@ -11284,11 +11263,11 @@ function resolveScenePreviewFogState(
 	}
 }
 
-function applyFogSettings(settings: EnvironmentSettings, activeCamera: THREE.PerspectiveCamera | null = camera) {
+function applyFogSettings(settings: EnvironmentSettings) {
 	if (!scene) {
 		return
 	}
-	const fogState = resolveScenePreviewFogState(settings, activeCamera)
+	const fogState = resolveScenePreviewFogState(settings)
 	const fogColor = new THREE.Color(settings.fogColor)
 	if (!fogState) {
 		scene.fog = null
@@ -11493,7 +11472,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 		pendingEnvironmentSettings = snapshot
 		return
 	}
-	applyFogSettings(snapshot, camera)
+	applyFogSettings(snapshot)
 	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
 	const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background)
 

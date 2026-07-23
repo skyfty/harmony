@@ -916,7 +916,7 @@ import {
 } from '@harmony/schema/components/definitions/preloadableComponent';
 import {
   generalMeshComponentDefinition,
-} from '@harmony/schema/components/definitions/generalMeshComponentDefinition';
+} from '@harmony/schema/components/definitions/generalMeshComponent';
 import type {
   AutoTourRouteSnapResult,
   VehicleDriveCameraFollowState,
@@ -18627,7 +18627,11 @@ async function loadEnvironmentTextureFromAsset(
   assetId: string,
   mode: EnvironmentBackgroundMode,
 ): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
-  const resolve = await resolveAssetUrlReference(assetId);
+  const trimmedAssetId = assetId.trim();
+  if (!trimmedAssetId.length) {
+    return null;
+  }
+  const resolve = await resolveAssetUrlReference(trimmedAssetId);
   if (!resolve) {
     return null;
   }
@@ -18717,20 +18721,17 @@ function resolveSceneryGroundFogCoverageDistance(
 }
 
 function resolveSceneryFogState(
-  settings: EnvironmentSettings,
-  activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null,
-  snapshot: CameraFrameSnapshot | null = null,
+  settings: EnvironmentSettings
 ): SceneryFogState {
   if (settings.fogMode === 'none') {
     return null;
   }
-  const groundCoverageDistance = resolveSceneryGroundFogCoverageDistance(activeCamera, snapshot);
   if (settings.fogMode === 'linear') {
     const sourceNear = Math.max(0, settings.fogNear);
     const sourceFar = Math.max(sourceNear + SCENERY_FOG_MIN_DISTANCE, settings.fogFar);
     const cameraFar = Math.max(
       sourceNear + SCENERY_FOG_MIN_DISTANCE,
-      Math.min(sourceFar, groundCoverageDistance ?? sourceFar),
+      Math.min(sourceFar, sourceFar),
     );
     const fogFar = Math.max(
       sourceNear + SCENERY_FOG_MIN_DISTANCE,
@@ -18751,7 +18752,7 @@ function resolveSceneryFogState(
   const baseCameraFar = DEFAULT_SCENE_CAMERA_FAR;
   const cameraFar = Math.max(
     SCENERY_FOG_MIN_DISTANCE,
-    Math.min(baseCameraFar, groundCoverageDistance ?? baseCameraFar),
+    baseCameraFar,
   );
   const coverageScale = THREE.MathUtils.clamp(baseCameraFar / cameraFar, 0.5, 4);
   return {
@@ -18771,7 +18772,7 @@ function applyFogSettings(
   if (!scene) {
     return;
   }
-  const fogState = resolveSceneryFogState(settings, activeCamera, snapshot);
+  const fogState = resolveSceneryFogState(settings);
   const syncCameraFar = (nextFar: number) => {
     if (!activeCamera || Math.abs(activeCamera.far - nextFar) <= 1e-6) {
       return;

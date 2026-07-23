@@ -792,7 +792,24 @@ class SceneGraphBuilder {
       }
     }
 
+    const backgroundAssetId = this.collectEnvironmentBackgroundAssetId();
+    if (backgroundAssetId) {
+      ids.add(backgroundAssetId);
+    }
+
     return Array.from(ids);
+  }
+
+  private collectEnvironmentBackgroundAssetId(): string | null {
+    const background = this.document.environment?.background ?? null;
+    if (!background || background.mode === 'solidColor') {
+      return null;
+    }
+    const assetId = typeof background.backgroundAssetId === 'string' ? background.backgroundAssetId.trim() : '';
+    if (!assetId) {
+      return null;
+    }
+    return assetId;
   }
 
   private collectTextureRefsFromMaterial(
