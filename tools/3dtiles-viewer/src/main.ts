@@ -1,4 +1,4 @@
-import * as THREE from 'three'
+﻿import * as THREE from 'three'
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
@@ -10,8 +10,8 @@ import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins'
 import { GLTFExtensionsPlugin, TilesFadePlugin, UpdateOnChangePlugin } from '3d-tiles-renderer/three/plugins'
 import stylesText from './styles.css?raw'
 
-type Settings = { lon: number; lat: number; groundElevation: number; height: number }
-type CaptureAnchor = { id: string; label: string; capturedCount: number; position: THREE.Vector3 }
+type Settings = { lon: number; lat: number; groundElevation: number;}
+type CaptureAnchor = { id: string; label: string; position: THREE.Vector3; capturedTiles: CapturableTile[] }
 type CapturableTile = Tile & {
   engineData?: { scene?: THREE.Object3D | null }
   traversal?: { visible?: boolean; isLeaf?: boolean }
@@ -34,37 +34,33 @@ app.innerHTML = `
     </header>
 
     <main class="layout">
-      <section class="panel controls">
-        <div class="panel-header"><h2>观察点</h2><span class="chip">固定位置</span></div>
-        <label>经纬度 <input id="coordinate-text" type="text" inputmode="text" placeholder="29°38'38.24&quot;N 91°06'57.03&quot;E" /></label>
-        <div class="coordinate-grid">
-          <label>地面海拔 (m)<input id="ground-elevation" type="number" step="0.1" placeholder="0" /></label>
-          <label>观察高度 (m)<input id="height" type="number" step="0.1" min="0" value="0" /></label>
-        </div>
-        <div class="actions"><button id="apply-location">定位并加载</button><button class="secondary" id="reset-location">恢复视点</button></div>
-
-        <label class="range-label">瓦片精度 <span><strong id="precision-value">6</strong> px</span><input id="precision" type="range" min="1" max="32" step="1" value="6" /></label>
-        <label>相机 Far 范围 (m)<input id="camera-far" type="number" min="50" max="10000000" step="1000" value="10000" /></label>
-        <div class="actions wide"><button id="add-anchor" disabled>添加当前相机为锚点</button></div>
-        <div class="anchor-list" id="anchor-list"></div>
-        <div class="progress-wrap" id="progress" hidden><div class="progress"><div id="progress-bar"></div></div><div class="progress-label" id="progress-label"></div></div>
-
-        <div class="callout" id="config-help" hidden>
-          请在 <code>tools/3dtiles-viewer/.env.local</code> 配置 <code>VITE_TILES_URL</code>，或同时配置 <code>VITE_CESIUM_ION_TOKEN</code> 与 <code>VITE_CESIUM_ION_ASSET_ID</code>。
-        </div>
-        <div class="stats">
-          <div class="stat"><span>数据源</span><strong id="source-stat">-</strong></div>
-          <div class="stat"><span>Tiles group</span><strong id="tiles-stat">-</strong></div>
-          <div class="stat"><span>观察点</span><strong id="location-stat">-</strong></div>
-          <div class="stat"><span>渲染器</span><strong id="renderer-stat">-</strong></div>
-        </div>
-      </section>
-
       <section class="workspace">
         <section class="panel viewer">
-          <div class="panel-header"><h2>实时预览</h2><span class="chip">Left renderer</span></div>
-          <div class="viewport" id="viewport"><div class="placeholder" id="placeholder">正在初始化实时预览…</div></div>
-          <p class="help">拖动旋转，滚轮缩放，右键平移。按 <code>A</code> 可添加锚点。</p>
+          <div class="viewport" id="viewport">
+            <div class="viewer-overlays">
+              <section class="floating-panel floating-panel--location" id="location-panel">
+              
+                <label>经纬度<input id="coordinate-text" type="text" inputmode="text" placeholder="29°38'38.24&quot;N 91°06'57.03&quot;E" /></label>
+                <label>地面海拔 (m)<input id="ground-elevation" type="number" step="0.1" placeholder="0" /></label>
+
+                <label class="range-label">瓦片精度 <span><strong id="precision-value">6</strong> px</span><input id="precision" type="range" min="1" max="32" step="1" value="6" /></label>
+                <label>相机 Far 范围 (m)<input id="camera-far" type="number" min="50" max="10000000" step="1000" value="10000" /></label>
+                                <div class="actions wide"><button id="apply-location">定位并加载</button></div>
+
+                <div class="progress-wrap" id="progress" hidden><div class="progress"><div id="progress-bar"></div></div><div class="progress-label" id="progress-label"></div></div>
+                <div class="callout" id="config-help" hidden>
+                  请在 <code>tools/3dtiles-viewer/.env.local</code> 配置 <code>VITE_TILES_URL</code>，或同时配置 <code>VITE_CESIUM_ION_TOKEN</code> 与 <code>VITE_CESIUM_ION_ASSET_ID</code>。
+                </div>
+              </section>
+
+              <section class="floating-panel floating-panel--anchors" id="anchor-panel">
+               
+                <div class="anchor-list" id="anchor-list"></div>
+                <div class="actions wide"><button id="add-anchor" disabled>添加当前相机为锚点</button></div>
+              </section>
+            </div>
+            <div class="placeholder" id="placeholder">正在初始化实时预览…</div>
+          </div>
         </section>
 
         <section class="panel glb-panel">
@@ -83,18 +79,14 @@ const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>
 const viewport = $('#viewport')
 const placeholder = $('#placeholder')
 const statusChip = $('#status-chip')
+const anchorPanel = $('#anchor-panel') as HTMLElement
 const groundElevationInput = $('#ground-elevation') as HTMLInputElement
-const heightInput = $('#height') as HTMLInputElement
 const coordinateTextInput = $('#coordinate-text') as HTMLInputElement
 const precisionInput = $('#precision') as HTMLInputElement
 const precisionValue = $('#precision-value')
 const cameraFarInput = $('#camera-far') as HTMLInputElement
 const addAnchorButton = $('#add-anchor') as HTMLButtonElement
 const anchorList = $('#anchor-list')
-const sourceStat = $('#source-stat')
-const tilesStat = $('#tiles-stat')
-const locationStat = $('#location-stat')
-const rendererStat = $('#renderer-stat')
 const progress = $('#progress')
 const progressBar = $('#progress-bar')
 const progressLabel = $('#progress-label')
@@ -115,7 +107,6 @@ coordinateTextInput.value = query.has('lat') || query.has('lon')
   ? `${settings.lat}, ${settings.lon}`
   : `29°38'38.24"N 91°06'57.03"E`
 groundElevationInput.value = String(settings.groundElevation)
-heightInput.value = String(settings.height)
 
 const mainScene = new THREE.Scene()
 mainScene.background = new THREE.Color('#050d18')
@@ -188,8 +179,6 @@ let glbSkippedLargeLeafCount = 0
 const baseFrameMatrix = new THREE.Matrix4()
 const baseFrameInverse = new THREE.Matrix4()
 
-rendererStat.textContent = `${mainRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'} / ${glbRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'}`
-
 function setStatus(text: string, tone: 'idle' | 'ok' | 'error' = 'idle'): void {
   statusChip.textContent = text
   statusChip.dataset.tone = tone
@@ -215,6 +204,19 @@ function hideGlbPlaceholder(): void {
   glbPreviewPlaceholder.hidden = true
 }
 
+function syncFloatingPanelState(panel: HTMLElement, toggleButton: HTMLButtonElement, visible: boolean): void {
+  panel.hidden = !visible
+  toggleButton.hidden = visible
+}
+
+function showAnchorPanel(): void {
+  syncFloatingPanelState(anchorPanel, showAnchorPanelButton, true)
+}
+
+function hideAnchorPanel(): void {
+  syncFloatingPanelState(anchorPanel, showAnchorPanelButton, false)
+}
+
 function disposeObject3DResources(object: THREE.Object3D | null): void {
   if (!object) return
   object.traverse((node) => {
@@ -234,9 +236,9 @@ function disposeObject3DResources(object: THREE.Object3D | null): void {
 }
 
 function updateStats(): void {
-  sourceStat.textContent = sourceLabel
-  tilesStat.textContent = tiles ? `${tiles.group.children.length} objects` : '-'
-  locationStat.textContent = `${settings.lat.toFixed(5)}, ${settings.lon.toFixed(5)} @ ground ${settings.groundElevation.toFixed(1)}m / camera ${(settings.groundElevation + settings.height).toFixed(1)}m`
+  void sourceLabel
+  void tiles
+  void settings
 }
 
 function updateProgressUI(): void {
@@ -837,7 +839,6 @@ function readSettings(): Settings {
     lon: coordinates.lon,
     lat: coordinates.lat,
     groundElevation: Number(groundElevationInput.value),
-    height: Number(heightInput.value),
   }
 }
 
@@ -901,9 +902,62 @@ function renderAnchorList(): void {
   for (const anchor of anchors) {
     const row = document.createElement('div')
     row.className = 'anchor-row'
-    row.innerHTML = `<span>${anchor.label}</span><span class="anchor-meta">${anchor.capturedCount} 个叶节点</span>`
+    row.innerHTML = `
+      <span>${anchor.label}</span>
+      <span class="anchor-actions">
+        <span class="anchor-meta">${anchor.capturedTiles.length} 个叶节点</span>
+        <button class="secondary anchor-delete" type="button" data-anchor-id="${anchor.id}">删除</button>
+      </span>
+    `
     anchorList.append(row)
   }
+}
+
+function removeAnchor(anchorId: string): void {
+  const index = anchors.findIndex((anchor) => anchor.id === anchorId)
+  if (index < 0) return
+  const [anchor] = anchors.splice(index, 1)
+  for (const tile of anchor.capturedTiles) {
+    discardCapturedTile(tile)
+  }
+  renderAnchorList()
+  updateCameraMarkers()
+  updateProgressUI()
+  syncGlbPreviewAfterCaptureMutation()
+}
+
+function discardCapturedTile(tile: CapturableTile): void {
+  const capturedNode = capturedTileNodes.get(tile)
+  if (capturedNode) {
+    glbCaptureRoot.remove(capturedNode)
+    disposeObject3DResources(capturedNode)
+    capturedTileNodes.delete(tile)
+  }
+  for (const anchor of anchors) {
+    anchor.capturedTiles = anchor.capturedTiles.filter((capturedTile) => capturedTile !== tile)
+  }
+}
+
+function syncGlbPreviewAfterCaptureMutation(messageIfEmpty = '当前视图没有可捕获的高精度叶节点'): void {
+  if (capturedTileNodes.size === 0) {
+    if (glbPreviewModel) {
+      disposeObject3DResources(glbPreviewModel)
+      glbScene.remove(glbPreviewModel)
+      glbPreviewModel = null
+    }
+    glbPreviewBuffer = null
+    glbPreviewLoadedRevision = 0
+    glbPreviewRevision += 1
+    glbPreviewRefreshRequested = false
+    glbCameraFramed = false
+    exportCurrentGlbButton.disabled = true
+    setGlbPlaceholder(messageIfEmpty, 'idle')
+    glbPreviewProgress.textContent = messageIfEmpty
+    return
+  }
+
+  glbPreviewRevision += 1
+  void refreshGlbPreview()
 }
 
 function clearCapturedTiles(message = '等待首次锚点捕获'): void {
@@ -965,11 +1019,10 @@ function pruneCoveredCapturedTiles(visibleLeafTiles: CapturableTile[]): void {
   let changed = true
   while (changed) {
     changed = false
-    for (const [capturedTile, capturedNode] of [...capturedTileNodes.entries()] as Array<[CapturableTile, THREE.Object3D]>) {
+    for (const capturedTile of [...capturedTileNodes.keys()] as CapturableTile[]) {
       if (!hasCapturedDescendant(capturedTile)) continue
       if (hasUncapturedVisibleDescendant(capturedTile, visibleLeafTiles)) continue
-      glbCaptureRoot.remove(capturedNode)
-      capturedTileNodes.delete(capturedTile)
+      discardCapturedTile(capturedTile)
       changed = true
     }
   }
@@ -980,6 +1033,7 @@ function captureVisibleTiles(): number {
   tiles.update()
   const { tiles: candidates, visibleCount, inFrustumCount } = collectCurrentLeafTiles()
   let added = 0
+  const capturedTilesForAnchor: CapturableTile[] = []
 
 
   for (const tile of candidates) {
@@ -991,6 +1045,7 @@ function captureVisibleTiles(): number {
     tileGroup.name = `captured-${capturedTileNodes.size + 1}`
     glbCaptureRoot.add(tileGroup)
     capturedTileNodes.set(tile, tileGroup)
+    capturedTilesForAnchor.push(tile)
     added += 1
   }
 
@@ -1012,13 +1067,13 @@ function captureVisibleTiles(): number {
   } else {
     glbPreviewProgress.textContent = '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
   }
-  const count = added > 0 ? added : 0
-  if (count > 0) {
+  const anchorTiles = capturedTilesForAnchor.filter((tile) => capturedTileNodes.has(tile))
+  if (anchorTiles.length > 0) {
     anchors.push({
       id: `anchor-${Date.now()}-${anchors.length}`,
       label: `锚点 ${anchors.length + 1}`,
-      capturedCount: count,
       position: mainCamera.position.clone(),
+      capturedTiles: anchorTiles,
     })
     renderAnchorList()
     updateCameraMarkers()
@@ -1192,7 +1247,6 @@ function updateTileCameraRange(): void {
 function resetLocation(): void {
   coordinateTextInput.value = `${settings.lat}, ${settings.lon}`
   groundElevationInput.value = String(settings.groundElevation)
-  heightInput.value = String(settings.height)
   yaw = 0
   pitch = 0
   applyCameraRotation()
@@ -1225,10 +1279,17 @@ function handleShortcut(event: KeyboardEvent): void {
 }
 
 $('#apply-location').addEventListener('click', applyLocation)
-$('#reset-location').addEventListener('click', resetLocation)
 addAnchorButton.addEventListener('click', handleAddAnchor)
 exportCurrentGlbButton.addEventListener('click', () => void exportCurrentGlb())
-
+anchorList.addEventListener('click', (event) => {
+  const target = event.target
+  if (!(target instanceof HTMLElement)) return
+  const deleteButton = target.closest<HTMLButtonElement>('.anchor-delete')
+  if (!deleteButton) return
+  const anchorId = deleteButton.dataset.anchorId
+  if (!anchorId) return
+  removeAnchor(anchorId)
+})
 precisionInput.addEventListener('input', () => {
   const value = Number(precisionInput.value)
   precisionValue.textContent = String(value)
@@ -1260,7 +1321,6 @@ function animate(): void {
   mainRenderer.render(mainScene, mainCamera)
   glbRenderer.render(glbScene, glbCamera)
   updateProgressUI()
-  tilesStat.textContent = tiles ? `${tiles.group.children.length} objects` : '-'
   requestAnimationFrame(animate)
 }
 
