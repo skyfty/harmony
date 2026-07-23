@@ -242,50 +242,6 @@ function updateStats(): void {
   locationStat.textContent = `${settings.lat.toFixed(5)}, ${settings.lon.toFixed(5)} @ ground ${settings.groundElevation.toFixed(1)}m / camera ${(settings.groundElevation + settings.height).toFixed(1)}m`
 }
 
-function formatLogValue(value: unknown): string {
-  if (value == null) return String(value)
-  if (typeof value === 'string') return value
-  if (typeof value === 'number') return Number.isFinite(value) ? value.toFixed(3) : String(value)
-  if (typeof value === 'boolean') return value ? 'true' : 'false'
-  if (value instanceof THREE.Vector3) return `vec3(${value.x.toFixed(2)},${value.y.toFixed(2)},${value.z.toFixed(2)})`
-  if (value instanceof THREE.Quaternion) return `quat(${value.x.toFixed(2)},${value.y.toFixed(2)},${value.z.toFixed(2)},${value.w.toFixed(2)})`
-  if (Array.isArray(value)) return `[${value.map((item) => formatLogValue(item)).join(',')}]`
-  if (typeof value === 'object') return JSON.stringify(value)
-  return String(value)
-}
-
-function logSummary(event: string, details: Record<string, unknown> = {}): void {
-  const tail = Object.entries(details).map(([key, value]) => `${key}=${formatLogValue(value)}`).join(' | ')
-  console.log(`[3dtiles-viewer] ${event}${tail ? ` | ${tail}` : ''}`)
-}
-
-function describeObject3D(object: THREE.Object3D | null | undefined): string {
-  if (!object) return '-'
-  return `${object.type}${object.name ? `:${object.name}` : ''}`
-}
-
-function findFirstRenderableDescendant(object: THREE.Object3D | null | undefined): THREE.Object3D | null {
-  if (!object) return null
-  let match: THREE.Object3D | null = null
-  object.traverse((node) => {
-    if (match) return
-    const renderable = node as CapturableObject & { isSprite?: boolean }
-    if (renderable.geometry || renderable.isSprite) match = node
-  })
-  return match
-}
-
-function describeGeometry(object: THREE.Object3D | null | undefined): string {
-  if (!object) return '-'
-  const renderable = object as CapturableObject
-  const geometry = renderable.geometry
-  if (!geometry) return describeObject3D(object)
-  geometry.computeBoundingSphere()
-  const radius = geometry.boundingSphere?.radius ?? 0
-  const vertexCount = geometry.attributes.position?.count ?? 0
-  return `${describeObject3D(object)}|r=${radius.toFixed(3)}|v=${vertexCount}`
-}
-
 function updateProgressUI(): void {
   if (!tiles) {
     progress.hidden = true
@@ -337,10 +293,6 @@ function syncGlbCameraToMainView(): void {
   glbControls.target.copy(localTarget)
   glbControls.maxDistance = Math.max(glbCamera.far * 0.5, 1000)
   glbControls.update()
-  logSummary('camera-sync', {
-    glbPos: glbCamera.position,
-    glbTarget: glbControls.target,
-  })
 }
 
 function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
@@ -517,33 +469,6 @@ function recenterGlbCaptureRoot(): boolean {
   return true
 }
 
-function frameGlbPreviewFromModel(model: THREE.Object3D): void {
-  const box = new THREE.Box3().setFromObject(model)
-  if (box.isEmpty()) return
-
-  const sphere = box.getBoundingSphere(new THREE.Sphere())
-  const center = sphere.center.clone()
-  const radius = Math.max(sphere.radius, 1)
-  const halfFov = THREE.MathUtils.degToRad(glbCamera.fov * 0.5)
-  const distance = radius / Math.sin(Math.max(halfFov, 0.1))
-  const direction = new THREE.Vector3(1, 1, 1).normalize()
-
-  glbCamera.position.copy(center).addScaledVector(direction, distance)
-  glbCamera.near = Math.max(0.01, radius / 1000)
-  glbCamera.far = Math.max(1000, radius * 100)
-  glbCamera.updateProjectionMatrix()
-
-  glbControls.target.copy(center)
-  glbControls.maxDistance = Math.max(radius * 20, 1000)
-  glbControls.update()
-
-  logSummary('frame-summary', {
-    state: 'framed',
-    childCount: model.children.length,
-    radius,
-  })
-}
-
 function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const loader = new GLTFLoader()
@@ -580,11 +505,6 @@ function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promis
 
         glbPreviewLoadedRevision = revision
         glbPreviewProgress.textContent = `GLB 预览已同步，当前捕获 ${capturedTileNodes.size} 个高精度叶节点。`
-        logSummary('preview-loaded', {
-          revision,
-          children: glbPreviewModel.children.length,
-          bytes: buffer.byteLength,
-        })
         resolve()
       },
       (error) => reject(error instanceof Error ? error : new Error('GLB 预览解析失败。')),
@@ -611,11 +531,6 @@ async function refreshGlbPreview(): Promise<void> {
         const revision = glbPreviewRevision
         if (!glbPreviewModel) setGlbPlaceholder('正在生成 GLB 预览...', 'loading')
         glbPreviewProgress.textContent = '正在同步最终的 GLB 预览...'
-        logSummary('preview-build', {
-          revision,
-          captured: capturedTileNodes.size,
-          rootChildren: glbCaptureRoot.children.length,
-        })
         const buffer = await exportObject3D(glbCaptureRoot)
         if (revision !== glbPreviewRevision) {
           glbPreviewRefreshRequested = true
@@ -949,8 +864,6 @@ function captureVisibleTiles(): number {
   } else {
     glbPreviewProgress.textContent = '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
   }
-  logSummary('capture-summary', { added, captured: capturedTileNodes.size, visible: visibleCount, inFrustum: inFrustumCount, skippedLarge: glbSkippedLargeLeafCount, framed: glbCameraFramed })
-
   const count = added > 0 ? added : 0
   if (count > 0) {
     anchors.push({
@@ -999,7 +912,6 @@ async function exportCurrentGlb(): Promise<void> {
     link.href = URL.createObjectURL(blob)
     link.download = `scene-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.glb`
     link.click()
-    logSummary('export-ready', { children: glbCaptureRoot.children.length, captured: capturedTileNodes.size, bytes: glbPreviewBuffer.byteLength })
     window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
     glbPreviewProgress.textContent = 'GLB 导出完成。'
   } catch (error) {
@@ -1086,7 +998,6 @@ async function loadTiles(): Promise<void> {
     hidePlaceholder()
     setStatus('已就绪', 'ok')
     addAnchorButton.disabled = false
-    logSummary('load-ready', { source: sourceLabel, visible: next.visibleTiles.size, active: next.activeTiles.size, progress: next.loadProgress })
     updateStats()
     updateProgressUI()
     setCaptureButtonState()
