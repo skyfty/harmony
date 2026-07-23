@@ -3,6 +3,7 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { TilesRenderer, CAMERA_FRAME } from '3d-tiles-renderer'
 import type { Tile } from '3d-tiles-renderer/core'
 import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins'
@@ -316,6 +317,9 @@ function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
 function cloneTexture(texture: THREE.Texture): THREE.Texture {
   const source = texture.image
   let image: CanvasImageSource | null = null
+  const sourceKey = (texture.userData as Record<string, unknown>).__captureSourceTextureKey
+    ?? texture.source?.uuid
+    ?? texture.uuid
 
   if (typeof HTMLCanvasElement !== 'undefined' && source instanceof HTMLCanvasElement) {
     const canvas = document.createElement('canvas')
@@ -366,6 +370,7 @@ function cloneTexture(texture: THREE.Texture): THREE.Texture {
   next.unpackAlignment = texture.unpackAlignment
   next.colorSpace = texture.colorSpace
   next.userData = JSON.parse(JSON.stringify(texture.userData))
+  next.userData.__captureSourceTextureKey = sourceKey
   next.mipmaps = texture.mipmaps.slice(0)
   next.needsUpdate = true
   return next
@@ -385,6 +390,175 @@ function cloneMaterialDeep(material: THREE.Material): THREE.Material {
     }
   }
   return next
+}
+
+function cloneGeometryForExport(source: CapturableObject): THREE.BufferGeometry | null {
+  if (!source.geometry) return null
+  const geometry = source.geometry.clone()
+  geometry.applyMatrix4(source.matrixWorld)
+  return geometry
+}
+
+function getTextureCaptureKey(texture: THREE.Texture | null | undefined): string {
+  if (!texture) return '-'
+  const userData = texture.userData as Record<string, unknown>
+  const sourceKey = userData.__captureSourceTextureKey ?? texture.source?.uuid ?? texture.uuid
+  return [
+    sourceKey,
+    texture.name || '-',
+    texture.mapping,
+    texture.wrapS,
+    texture.wrapT,
+    texture.magFilter,
+    texture.minFilter,
+    texture.anisotropy,
+    texture.flipY ? 1 : 0,
+    texture.colorSpace || '-',
+  ].join(':')
+}
+
+function getMaterialCaptureKey(material: THREE.Material): string {
+  const record = material as THREE.Material & Record<string, unknown>
+  const textureKeys = [
+    'map',
+    'alphaMap',
+    'aoMap',
+    'bumpMap',
+    'displacementMap',
+    'emissiveMap',
+    'envMap',
+    'lightMap',
+    'metalnessMap',
+    'normalMap',
+    'roughnessMap',
+    'specularMap',
+  ].map((key) => getTextureCaptureKey(record[key] as THREE.Texture | null | undefined))
+
+  return [
+    material.type,
+    material.name || '-',
+    material.blending,
+    material.side,
+    material.transparent ? 1 : 0,
+    material.opacity,
+    material.depthTest ? 1 : 0,
+    material.depthWrite ? 1 : 0,
+    material.visible ? 1 : 0,
+    material.alphaTest,
+    (record.color instanceof THREE.Color) ? record.color.getHexString() : '-',
+    (record.emissive instanceof THREE.Color) ? record.emissive.getHexString() : '-',
+    record.roughness ?? '-',
+    record.metalness ?? '-',
+    record.vertexColors ? 1 : 0,
+    record.flatShading ? 1 : 0,
+    textureKeys.join('|'),
+  ].join('|')
+}
+
+function getGeometryLayoutKey(geometry: THREE.BufferGeometry): string {
+  const attributeNames = Object.keys(geometry.attributes).sort()
+  const attributes = attributeNames.map((name) => {
+    const attribute = geometry.getAttribute(name)
+    return `${name}:${attribute.itemSize}:${attribute.normalized ? 1 : 0}:${attribute.array.constructor.name}`
+  }).join(',')
+  return [
+    geometry.index ? 1 : 0,
+    attributes,
+    geometry.groups.length,
+  ].join('|')
+}
+
+function cloneLeafNodeForExport(source: CapturableObject): THREE.Object3D {
+  const clone = source.clone(false)
+  const geometry = cloneGeometryForExport(source)
+  if (geometry) (clone as CapturableObject).geometry = geometry
+  if (source.material) {
+    ;(clone as CapturableObject).material = Array.isArray(source.material)
+      ? source.material.map((item) => cloneMaterialDeep(item))
+      : cloneMaterialDeep(source.material)
+  }
+  clone.position.set(0, 0, 0)
+  clone.quaternion.identity()
+  clone.scale.set(1, 1, 1)
+  clone.matrix.identity()
+  clone.matrixAutoUpdate = false
+  clone.updateMatrix()
+  clone.updateMatrixWorld(true)
+  return clone
+}
+
+function buildMergedCaptureRoot(): THREE.Group {
+  glbCaptureRoot.updateMatrixWorld(true)
+  const exportRoot = new THREE.Group()
+  exportRoot.name = 'glb-export-root'
+  exportRoot.matrixAutoUpdate = false
+  exportRoot.matrix.identity()
+  exportRoot.position.set(0, 0, 0)
+  exportRoot.quaternion.identity()
+  exportRoot.scale.set(1, 1, 1)
+
+  type MergeBucket = {
+    material: THREE.Material
+    sourceNodes: CapturableObject[]
+  }
+
+  const buckets = new Map<string, MergeBucket>()
+  const looseNodes: CapturableObject[] = []
+
+  glbCaptureRoot.traverse((node) => {
+    const renderable = node as CapturableObject & { isSprite?: boolean }
+    if (!renderable.geometry && !renderable.isSprite) return
+
+    if (renderable.isSprite || !renderable.geometry || !renderable.material || Array.isArray(renderable.material) || renderable.geometry.groups.length > 0) {
+      looseNodes.push(renderable)
+      return
+    }
+
+    const materialKey = getMaterialCaptureKey(renderable.material)
+    const geometryKey = getGeometryLayoutKey(renderable.geometry)
+    const bucketKey = `${materialKey}||${geometryKey}`
+    const bucket = buckets.get(bucketKey) ?? {
+      material: cloneMaterialDeep(renderable.material),
+      sourceNodes: [],
+    }
+    bucket.sourceNodes.push(renderable)
+    buckets.set(bucketKey, bucket)
+  })
+
+  for (const bucket of buckets.values()) {
+    if (bucket.sourceNodes.length === 1) {
+      exportRoot.add(cloneLeafNodeForExport(bucket.sourceNodes[0]))
+      continue
+    }
+
+    const geometries = bucket.sourceNodes
+      .map((node) => cloneGeometryForExport(node))
+      .filter((geometry): geometry is THREE.BufferGeometry => Boolean(geometry))
+
+    const mergedGeometry = mergeGeometries(geometries, false)
+    if (!mergedGeometry) {
+      for (const node of bucket.sourceNodes) exportRoot.add(cloneLeafNodeForExport(node))
+      continue
+    }
+
+    const mergedMesh = new THREE.Mesh(mergedGeometry, cloneMaterialDeep(bucket.material))
+    mergedMesh.name = 'merged-mesh'
+    mergedMesh.matrixAutoUpdate = false
+    mergedMesh.matrix.identity()
+    mergedMesh.position.set(0, 0, 0)
+    mergedMesh.quaternion.identity()
+    mergedMesh.scale.set(1, 1, 1)
+    mergedMesh.updateMatrix()
+    mergedMesh.updateMatrixWorld(true)
+    exportRoot.add(mergedMesh)
+  }
+
+  for (const node of looseNodes) {
+    exportRoot.add(cloneLeafNodeForExport(node))
+  }
+
+  exportRoot.updateMatrixWorld(true)
+  return exportRoot
 }
 
 function isRenderableLeaf(node: THREE.Object3D): boolean {
@@ -518,13 +692,18 @@ async function refreshGlbPreview(): Promise<void> {
         const revision = glbPreviewRevision
         if (!glbPreviewModel) setGlbPlaceholder('正在生成 GLB 预览...', 'loading')
         glbPreviewProgress.textContent = '正在同步最终的 GLB 预览...'
-        const buffer = await exportObject3D(glbCaptureRoot)
-        if (revision !== glbPreviewRevision) {
-          glbPreviewRefreshRequested = true
-          continue
+        const exportRoot = buildMergedCaptureRoot()
+        try {
+          const buffer = await exportObject3D(exportRoot)
+          if (revision !== glbPreviewRevision) {
+            glbPreviewRefreshRequested = true
+            continue
+          }
+          glbPreviewBuffer = buffer.slice(0)
+          await loadGlbPreviewFromBuffer(buffer, revision)
+        } finally {
+          disposeObject3DResources(exportRoot)
         }
-        glbPreviewBuffer = buffer.slice(0)
-        await loadGlbPreviewFromBuffer(buffer, revision)
       }
     } finally {
       glbPreviewRefreshPromise = null
