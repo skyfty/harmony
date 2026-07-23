@@ -21,8 +21,6 @@ type CapturableObject = THREE.Object3D & {
   material?: THREE.Material | THREE.Material[]
 }
 
-const MAX_CAPTURE_LEAF_RADIUS = 100_000
-
 const app = document.querySelector<HTMLDivElement>('#app')!
 const style = document.createElement('style')
 style.textContent = stylesText
@@ -188,8 +186,6 @@ let glbPreviewRefreshRequested = false
 let glbSkippedLargeLeafCount = 0
 const baseFrameMatrix = new THREE.Matrix4()
 const baseFrameInverse = new THREE.Matrix4()
-const mainViewSphere = new THREE.Sphere()
-const mainViewBox = new THREE.Box3()
 
 rendererStat.textContent = `${mainRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'} / ${glbRenderer.capabilities.isWebGL2 ? 'WebGL2' : 'WebGL1'}`
 
@@ -406,9 +402,6 @@ function cloneRenderableLeafForCapture(source: CapturableObject): CapturableObje
   const clone = source.clone(false) as CapturableObject
   if (source.geometry) {
     const geometry = source.geometry.clone()
-    geometry.computeBoundingSphere()
-    const geometryRadius = geometry.boundingSphere?.radius ?? 0
-    if (geometryRadius > MAX_CAPTURE_LEAF_RADIUS) return null
     clone.geometry = geometry
   }
   if (source.material) {
@@ -433,7 +426,6 @@ function cloneRenderableLeafForCapture(source: CapturableObject): CapturableObje
 function createCapturedTileGroup(source: THREE.Object3D): THREE.Group {
   source.updateMatrixWorld(true)
   const group = new THREE.Group()
-  let skippedLarge = 0
   group.matrixAutoUpdate = false
   group.matrix.identity()
   group.position.set(0, 0, 0)
@@ -442,15 +434,10 @@ function createCapturedTileGroup(source: THREE.Object3D): THREE.Group {
   source.traverse((node) => {
     if (!isRenderableLeaf(node)) return
     const cloned = cloneRenderableLeafForCapture(node as CapturableObject)
-    if (cloned) {
-      group.add(cloned)
-    } else {
-      skippedLarge += 1
-    }
+    if (cloned) group.add(cloned)
   })
   group.updateMatrix()
   group.updateMatrixWorld(true)
-  ;(group as THREE.Group & { userData: { skippedLarge?: number } }).userData.skippedLarge = skippedLarge
   return group
 }
 
@@ -757,70 +744,55 @@ function hasVisibleDescendant(tile: CapturableTile, visibleTiles: Set<Capturable
   return false
 }
 
-function isCapturedDescendant(candidate: CapturableTile): boolean {
-  for (const existingTile of capturedTileNodes.keys() as IterableIterator<CapturableTile>) {
-    let current: CapturableTile | null = existingTile
-    while (current.parent) {
-      current = current.parent as CapturableTile
-      if (current === candidate) return true
-    }
+function collectCurrentLeafTiles(): { tiles: CapturableTile[]; visibleCount: number; inFrustumCount: number } {
+  if (!tiles) return { tiles: [], visibleCount: 0, inFrustumCount: 0 }
+  const visibleTiles = tiles.visibleTiles as Set<CapturableTile>
+  const visible = [...visibleTiles]
+    .filter((tile) => Boolean(tile.engineData?.scene))
+    .filter((tile) => !hasVisibleDescendant(tile, visibleTiles))
+  return {
+    tiles: visible.sort((a, b) => (b.internal?.depth ?? 0) - (a.internal?.depth ?? 0)),
+    visibleCount: visible.length,
+    inFrustumCount: visible.length,
+  }
+}
+
+function isDescendantOf(candidate: CapturableTile, ancestor: CapturableTile): boolean {
+  let current: CapturableTile | null = candidate
+  while (current.parent) {
+    current = current.parent as CapturableTile
+    if (current === ancestor) return true
   }
   return false
 }
 
-function getMainCameraFrustum(): THREE.Frustum {
-  mainCamera.updateMatrixWorld(true)
-  const matrix = new THREE.Matrix4().multiplyMatrices(mainCamera.projectionMatrix, mainCamera.matrixWorldInverse)
-  return new THREE.Frustum().setFromProjectionMatrix(matrix)
+function hasCapturedDescendant(ancestor: CapturableTile): boolean {
+  for (const capturedTile of capturedTileNodes.keys() as IterableIterator<CapturableTile>) {
+    if (capturedTile === ancestor) continue
+    if (isDescendantOf(capturedTile, ancestor)) return true
+  }
+  return false
 }
 
-function isTileInMainView(tile: CapturableTile, frustum: THREE.Frustum): boolean {
-  const boundingVolume = (tile.engineData as { boundingVolume?: { getSphere?: (target: THREE.Sphere) => void; getAABB?: (target: THREE.Box3) => void } } | undefined)?.boundingVolume
-  if (boundingVolume?.getSphere) {
-    boundingVolume.getSphere(mainViewSphere)
-    if (!frustum.intersectsSphere(mainViewSphere)) return false
-    return true
+function hasUncapturedVisibleDescendant(ancestor: CapturableTile, visibleLeafTiles: CapturableTile[]): boolean {
+  for (const visibleTile of visibleLeafTiles) {
+    if (!isDescendantOf(visibleTile, ancestor)) continue
+    if (!capturedTileNodes.has(visibleTile)) return true
   }
-
-  if (boundingVolume?.getAABB) {
-    boundingVolume.getAABB(mainViewBox)
-    if (mainViewBox.isEmpty()) return false
-    return frustum.intersectsBox(mainViewBox)
-  }
-
-  const scene = tile.engineData?.scene
-  if (!scene) return false
-  mainViewBox.setFromObject(scene)
-  if (mainViewBox.isEmpty()) return false
-  return frustum.intersectsBox(mainViewBox)
+  return false
 }
 
-function removeCapturedAncestors(candidate: CapturableTile): void {
-  for (const [capturedTile, capturedNode] of [...capturedTileNodes.entries()] as Array<[CapturableTile, THREE.Object3D]>) {
-    let current: CapturableTile | null = candidate
-    while (current.parent) {
-      current = current.parent as CapturableTile
-      if (current === capturedTile) {
-        glbCaptureRoot.remove(capturedNode)
-        capturedTileNodes.delete(capturedTile)
-        break
-      }
+function pruneCoveredCapturedTiles(visibleLeafTiles: CapturableTile[]): void {
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const [capturedTile, capturedNode] of [...capturedTileNodes.entries()] as Array<[CapturableTile, THREE.Object3D]>) {
+      if (!hasCapturedDescendant(capturedTile)) continue
+      if (hasUncapturedVisibleDescendant(capturedTile, visibleLeafTiles)) continue
+      glbCaptureRoot.remove(capturedNode)
+      capturedTileNodes.delete(capturedTile)
+      changed = true
     }
-  }
-}
-
-function collectCurrentLeafTiles(): { tiles: CapturableTile[]; visibleCount: number; inFrustumCount: number } {
-  if (!tiles) return { tiles: [], visibleCount: 0, inFrustumCount: 0 }
-  const visibleTiles = tiles.visibleTiles as Set<CapturableTile>
-  const frustum = getMainCameraFrustum()
-  const visible = [...visibleTiles]
-    .filter((tile) => Boolean(tile.engineData?.scene))
-    .filter((tile) => !hasVisibleDescendant(tile, visibleTiles))
-  const inFrustum = visible.filter((tile) => isTileInMainView(tile, frustum))
-  return {
-    tiles: inFrustum.sort((a, b) => (b.internal?.depth ?? 0) - (a.internal?.depth ?? 0)),
-    visibleCount: visible.length,
-    inFrustumCount: inFrustum.length,
   }
 }
 
@@ -835,18 +807,15 @@ function captureVisibleTiles(): number {
     const scene = tile.engineData?.scene
     if (!scene) continue
     if (capturedTileNodes.has(tile)) continue
-    if (isCapturedDescendant(tile)) continue
-
-    removeCapturedAncestors(tile)
     const tileGroup = createCapturedTileGroup(scene)
-    const skippedLarge = (tileGroup.userData as { skippedLarge?: number }).skippedLarge ?? 0
-    glbSkippedLargeLeafCount += skippedLarge
     if (tileGroup.children.length === 0) continue
     tileGroup.name = `captured-${capturedTileNodes.size + 1}`
     glbCaptureRoot.add(tileGroup)
     capturedTileNodes.set(tile, tileGroup)
     added += 1
   }
+
+  pruneCoveredCapturedTiles(candidates)
 
   if (added > 0) {
     glbPreviewRevision += 1
