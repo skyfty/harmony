@@ -151,14 +151,16 @@ const emit = defineEmits<{ (event: 'tap'): void }>()
 }
 
 .list {
-  display: block;
-  padding: 8px;
+  display: flex;
+  height: 142px;
+  padding: 10px;
+  box-sizing: border-box;
 }
 
 .thumb {
-  width: 110px;
-  height: 110px;
-  border-radius: 6px;
+  width: 124px;
+  height: 124px;
+  border-radius: 8px;
   object-fit: cover;
   flex-shrink: 0;
 }
@@ -167,16 +169,21 @@ const emit = defineEmits<{ (event: 'tap'): void }>()
   display: flex;
   flex-direction: row;
   gap: 12px;
-  align-items: flex-start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
 }
 
 .body-list {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  padding-left: 12px;
-  padding-top: 6px;
+  padding-left: 10px;
+  padding-top: 4px;
+  padding-bottom: 6px;
   flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 
 .meta-row {
@@ -291,10 +298,6 @@ const emit = defineEmits<{ (event: 'tap'): void }>()
   align-items: center;
   gap: 8px;
   margin-top: 8px;
-}
-
-.list-progress-row {
-  margin-top: 10px;
 }
 
 .progress-icon {
