@@ -4878,6 +4878,9 @@ async function prepareInstancedNodesForDocument(
 	const tasks: Promise<void>[] = []
 	grouped.forEach((nodes, assetId) => {
 		const filteredNodes = nodes.filter((node) => {
+			if (!canNodeUseRuntimeModelInstancing(node)) {
+				return false
+			}
 			if (includeNodeIds && !includeNodeIds.has(node.id)) {
 				return false
 			}
