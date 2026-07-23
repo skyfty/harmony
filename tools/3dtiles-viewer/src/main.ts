@@ -980,16 +980,14 @@ function hasVisibleDescendant(tile: CapturableTile, visibleTiles: Set<Capturable
   return false
 }
 
-function collectCurrentLeafTiles(): { tiles: CapturableTile[]; visibleCount: number; inFrustumCount: number } {
-  if (!tiles) return { tiles: [], visibleCount: 0, inFrustumCount: 0 }
+function collectCurrentLeafTiles(): { tiles: CapturableTile[];  } {
+  if (!tiles) return { tiles: [] }
   const visibleTiles = tiles.visibleTiles as Set<CapturableTile>
   const visible = [...visibleTiles]
     .filter((tile) => Boolean(tile.engineData?.scene))
     .filter((tile) => !hasVisibleDescendant(tile, visibleTiles))
   return {
-    tiles: visible.sort((a, b) => (b.internal?.depth ?? 0) - (a.internal?.depth ?? 0)),
-    visibleCount: visible.length,
-    inFrustumCount: visible.length,
+    tiles: visible.sort((a, b) => (b.internal?.depth ?? 0) - (a.internal?.depth ?? 0))
   }
 }
 
@@ -1034,17 +1032,19 @@ function pruneCoveredCapturedTiles(visibleLeafTiles: CapturableTile[]): void {
 function captureVisibleTiles(): number {
   if (!tiles) return 0
   tiles.update()
-  const { tiles: candidates, visibleCount, inFrustumCount } = collectCurrentLeafTiles()
+  const { tiles: candidates } = collectCurrentLeafTiles()
   let added = 0
   const capturedTilesForAnchor: CapturableTile[] = []
 
-
   for (const tile of candidates) {
     const scene = tile.engineData?.scene
-    if (!scene) continue
-    if (capturedTileNodes.has(tile)) continue
+    if (!scene)
+       continue
+    if (capturedTileNodes.has(tile)) 
+      continue
     const tileGroup = createCapturedTileGroup(scene)
-    if (tileGroup.children.length === 0) continue
+    if (tileGroup.children.length === 0)
+       continue
     tileGroup.name = `captured-${capturedTileNodes.size + 1}`
     glbCaptureRoot.add(tileGroup)
     capturedTileNodes.set(tile, tileGroup)
