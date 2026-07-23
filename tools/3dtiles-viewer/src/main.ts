@@ -151,13 +151,16 @@ glbRenderer.toneMapping = THREE.AgXToneMapping
 glbRenderer.toneMappingExposure = 1.25
 glbPreviewViewport.replaceChildren(glbRenderer.domElement)
 const glbControls = new MapControls(glbCamera, glbRenderer.domElement)
-glbControls.enableDamping = true
+glbControls.enableDamping = false
 glbControls.dampingFactor = 0.05
 glbControls.screenSpacePanning = false
 glbControls.minDistance = 25
 glbControls.maxDistance = 100000
 glbControls.maxPolarAngle = Math.PI
 glbControls.zoomToCursor = true
+glbControls.rotateSpeed = 1.2
+glbControls.zoomSpeed = 1.15
+glbControls.panSpeed = 1.05
 
 let tiles: TilesRenderer | null = null
 let sourceLabel = '-'
