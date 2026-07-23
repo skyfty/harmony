@@ -24,13 +24,6 @@ function handleToggleComponent() {
   }
 }
 
-function handleEnabledChange(value: boolean | null) {
-  if (!component.value || !selectedNodeId.value || value === null) {
-    return
-  }
-  sceneStore.setNodeComponentEnabled(selectedNodeId.value, component.value.id, value)
-}
-
 function handleFrustumCullingChange(value: boolean | null) {
   if (!component.value || !selectedNodeId.value || value === null) {
     return

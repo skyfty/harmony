@@ -63,6 +63,7 @@ import {
   extractCompiledStaticMeshMetadataFromUserData,
 } from './compiledStaticMesh';
 import { compileRoadStaticMeshMetadata } from './roadMesh'
+import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
 
 
 export interface SceneGraphBuildResult {
@@ -108,6 +109,11 @@ async function loadAssetImportModule(): Promise<typeof import('./assetImport')> 
     assetImportModulePromise = import('./assetImport')
   }
   return assetImportModulePromise
+}
+
+function hasEnabledGeneralMeshComponent(node: Pick<SceneNode, 'components'>): boolean {
+  const component = node.components?.[GENERAL_MESH_COMPONENT_TYPE]
+  return Boolean(component && component.enabled !== false)
 }
 
 class SceneGraphBuilder {
@@ -383,7 +389,7 @@ class SceneGraphBuilder {
         const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
         if (assetId) {
           const outline = this.resolveOutlineMeshForNode(node);
-          const shouldLazySkip = this.lazyLoadMeshes && outline && assetId;
+          const shouldLazySkip = this.lazyLoadMeshes && outline && assetId && !hasEnabledGeneralMeshComponent(node);
           if (!shouldLazySkip) {
             ids.add(assetId);
           }
@@ -442,7 +448,7 @@ class SceneGraphBuilder {
           const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
           if (assetId) {
             const outline = this.resolveOutlineMeshForNode(node);
-            const shouldLazySkip = this.lazyLoadMeshes && outline && assetId;
+            const shouldLazySkip = this.lazyLoadMeshes && outline && assetId && !hasEnabledGeneralMeshComponent(node);
             if (!shouldLazySkip) {
               ids.add(assetId);
             }
@@ -1098,7 +1104,7 @@ class SceneGraphBuilder {
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
-    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId && !hasEnabledGeneralMeshComponent(node)) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
         placeholder.name = `${node.name ?? 'Group'}::LazyPlaceholder`;
@@ -1217,7 +1223,7 @@ class SceneGraphBuilder {
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
-    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId) {
+    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId && !hasEnabledGeneralMeshComponent(node)) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
         const container = new THREE.Group();

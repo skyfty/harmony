@@ -226,6 +226,7 @@ import {
 	landformComponentDefinition,
 	viewPointComponentDefinition,
 	animationComponentDefinition,
+	generalMeshComponentDefinition,
 	particleSystemComponentDefinition,
 	warpGateComponentDefinition,
 	rigidbodyComponentDefinition,
@@ -1292,8 +1293,8 @@ previewComponentManager.registerDefinition(billboardComponentDefinition)
 previewComponentManager.registerDefinition(signboardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(animationComponentDefinition)
-	previewComponentManager.registerDefinition(particleSystemComponentDefinition)
-	previewComponentManager.registerDefinition(warpGateComponentDefinition)
+previewComponentManager.registerDefinition(particleSystemComponentDefinition)
+previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(couponComponentDefinition)
 previewComponentManager.registerDefinition(rigidbodyComponentDefinition)
 previewComponentManager.registerDefinition(vehicleComponentDefinition)
@@ -1310,6 +1311,7 @@ previewComponentManager.registerDefinition(groundAnchorComponentDefinition)
 previewComponentManager.registerDefinition(nominateComponentDefinition)
 previewComponentManager.registerDefinition(preloadableComponentDefinition)
 previewComponentManager.registerDefinition(onlineComponentDefinition)
+previewComponentManager.registerDefinition(generalMeshComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()

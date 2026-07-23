@@ -914,6 +914,9 @@ import {
 import {
   preloadableComponentDefinition,
 } from '@harmony/schema/components/definitions/preloadableComponent';
+import {
+  generalMeshComponentDefinition,
+} from '@harmony/schema/components/definitions/generalMeshComponentDefinition';
 import type {
   AutoTourRouteSnapResult,
   VehicleDriveCameraFollowState,
@@ -2071,6 +2074,7 @@ previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(groundAnchorComponentDefinition);
 previewComponentManager.registerDefinition(nominateComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
+previewComponentManager.registerDefinition(generalMeshComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
