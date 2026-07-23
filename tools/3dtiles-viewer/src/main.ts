@@ -10,7 +10,7 @@ import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins'
 import { GLTFExtensionsPlugin, TilesFadePlugin, UpdateOnChangePlugin } from '3d-tiles-renderer/three/plugins'
 import stylesText from './styles.css?raw'
 
-type Settings = { lon: number; lat: number; groundElevation: number;}
+type Settings = { lon: number; lat: number; groundElevation: number }
 type CaptureAnchor = { id: string; label: string; position: THREE.Vector3; capturedTiles: CapturableTile[] }
 type CapturableTile = Tile & {
   engineData?: { scene?: THREE.Object3D | null }
@@ -20,6 +20,10 @@ type CapturableTile = Tile & {
 type CapturableObject = THREE.Object3D & {
   geometry?: THREE.BufferGeometry
   material?: THREE.Material | THREE.Material[]
+}
+type CtrlClickFlyTargetResolver = (raycaster: THREE.Raycaster, event: PointerEvent) => THREE.Vector3 | null
+type CtrlClickFlyController = {
+  update: (now: number) => void
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -42,7 +46,6 @@ app.innerHTML = `
               
                 <label>经纬度<input id="coordinate-text" type="text" inputmode="text" placeholder="29°38'38.24&quot;N 91°06'57.03&quot;E" /></label>
                 <label>地面海拔 (m)<input id="ground-elevation" type="number" step="0.1" placeholder="0" /></label>
-
                 <label class="range-label">瓦片精度 <span><strong id="precision-value">6</strong> px</span><input id="precision" type="range" min="1" max="32" step="1" value="6" /></label>
                 <label>相机 Far 范围 (m)<input id="camera-far" type="number" min="50" max="10000000" step="1000" value="10000" /></label>
                                 <div class="actions wide"><button id="apply-location">定位并加载</button></div>
@@ -96,12 +99,14 @@ const glbPreviewViewport = $('#glb-preview-viewport')
 const glbPreviewPlaceholder = $('#glb-preview-placeholder')
 const glbPreviewProgress = $('#glb-preview-progress')
 
+const CTRL_CLICK_FLY_DURATION_MS = 280
+const CTRL_CLICK_MOVE_THRESHOLD_PX = 6
+
 const query = new URLSearchParams(window.location.search)
 const settings: Settings = {
   lon: Number(query.get('lon') ?? 91.1158416667),
   lat: Number(query.get('lat') ?? 29.6439555556),
   groundElevation: Number(query.get('ground') ?? query.get('groundElevation') ?? 3651.5),
-  height: Number(query.get('height') ?? 0),
 }
 coordinateTextInput.value = query.has('lat') || query.has('lon')
   ? `${settings.lat}, ${settings.lon}`
@@ -162,6 +167,30 @@ glbControls.rotateSpeed = 1.2
 glbControls.zoomSpeed = 1.15
 glbControls.panSpeed = 1.05
 
+const mainFlyController = createCtrlClickFlyController(
+  mainCamera,
+  mainControls,
+  mainRenderer.domElement,
+  (raycaster, event) => {
+    void raycaster
+    const planePoint = basePosition.lengthSq() > 0 ? basePosition : mainControls.target
+    const planeNormal = tmpFlyVector2.set(0, 1, 0).applyQuaternion(baseQuaternion).normalize()
+    return resolvePointerPlaneTarget(mainCamera, mainRenderer.domElement, event, planePoint, planeNormal)
+  },
+)
+
+const glbFlyController = createCtrlClickFlyController(
+  glbCamera,
+  glbControls,
+  glbRenderer.domElement,
+  (raycaster, event) => {
+    void raycaster
+    const planePoint = glbControls.target
+    const planeNormal = tmpFlyVector2.set(0, 1, 0)
+    return resolvePointerPlaneTarget(glbCamera, glbRenderer.domElement, event, planePoint, planeNormal)
+  },
+)
+
 let tiles: TilesRenderer | null = null
 let sourceLabel = '-'
 let basePosition = new THREE.Vector3()
@@ -175,12 +204,17 @@ let glbCameraFramed = false
 let glbPreviewModel: THREE.Object3D | null = null
 let glbPreviewBuffer: ArrayBuffer | null = null
 let glbPreviewRevision = 0
-let glbPreviewLoadedRevision = 0
 let glbPreviewRefreshPromise: Promise<void> | null = null
 let glbPreviewRefreshRequested = false
 let glbSkippedLargeLeafCount = 0
 const baseFrameMatrix = new THREE.Matrix4()
 const baseFrameInverse = new THREE.Matrix4()
+const tmpFlyVector = new THREE.Vector3()
+const tmpFlyVector2 = new THREE.Vector3()
+const tmpFlyVector3 = new THREE.Vector3()
+const tmpFlyVector4 = new THREE.Vector3()
+const tmpFlyPlane = new THREE.Plane()
+const tmpFlyRaycaster = new THREE.Raycaster()
 
 function setStatus(text: string, tone: 'idle' | 'ok' | 'error' = 'idle'): void {
   statusChip.textContent = text
@@ -212,12 +246,175 @@ function syncFloatingPanelState(panel: HTMLElement, toggleButton: HTMLButtonElem
   toggleButton.hidden = visible
 }
 
-function showAnchorPanel(): void {
-  syncFloatingPanelState(anchorPanel, showAnchorPanelButton, true)
+function resolvePointerPlaneTarget(
+  camera: THREE.PerspectiveCamera,
+  domElement: HTMLElement,
+  event: PointerEvent,
+  planePoint: THREE.Vector3,
+  planeNormal: THREE.Vector3,
+): THREE.Vector3 | null {
+  const rect = domElement.getBoundingClientRect()
+  const width = Math.max(1, rect.width)
+  const height = Math.max(1, rect.height)
+  const ndcX = ((event.clientX - rect.left) / width) * 2 - 1
+  const ndcY = -(((event.clientY - rect.top) / height) * 2 - 1)
+  tmpFlyVector.set(ndcX, ndcY, 0)
+  tmpFlyRaycaster.setFromCamera(tmpFlyVector, camera)
+  tmpFlyPlane.setFromNormalAndCoplanarPoint(planeNormal, planePoint)
+  return tmpFlyRaycaster.ray.intersectPlane(tmpFlyPlane, tmpFlyVector4)
 }
 
-function hideAnchorPanel(): void {
-  syncFloatingPanelState(anchorPanel, showAnchorPanelButton, false)
+function createCtrlClickFlyController(
+  camera: THREE.PerspectiveCamera,
+  controls: MapControls,
+  domElement: HTMLElement,
+  resolveTarget: CtrlClickFlyTargetResolver,
+): CtrlClickFlyController {
+  type PendingPointer = {
+    pointerId: number
+    startX: number
+    startY: number
+    moved: boolean
+    captured: boolean
+  }
+
+  type ActiveFlight = {
+    startedAt: number
+    duration: number
+    fromPosition: THREE.Vector3
+    fromTarget: THREE.Vector3
+    toPosition: THREE.Vector3
+    toTarget: THREE.Vector3
+    restoreEnabled: boolean
+  }
+
+  let pendingPointer: PendingPointer | null = null
+  let activeFlight: ActiveFlight | null = null
+
+  function releasePointerCapture(pointerId: number): void {
+    if (!pendingPointer?.captured) return
+    try {
+      domElement.releasePointerCapture(pointerId)
+    } catch {
+      // Pointer capture is best-effort and can already be released by the browser.
+    }
+  }
+
+  function stopPendingPointer(): void {
+    if (!pendingPointer) return
+    releasePointerCapture(pendingPointer.pointerId)
+    pendingPointer = null
+  }
+
+  function startFlight(target: THREE.Vector3): void {
+    const startPosition = camera.position.clone()
+    const startTarget = controls.target.clone()
+    const offset = startPosition.clone().sub(startTarget)
+    if (offset.lengthSq() < 1e-6) {
+      camera.getWorldDirection(tmpFlyVector).multiplyScalar(-Math.max(controls.minDistance || 1, 100))
+      offset.copy(tmpFlyVector)
+    }
+
+    activeFlight = {
+      startedAt: performance.now(),
+      duration: CTRL_CLICK_FLY_DURATION_MS,
+      fromPosition: startPosition,
+      fromTarget: startTarget,
+      toTarget: target.clone(),
+      toPosition: target.clone().add(offset),
+      restoreEnabled: activeFlight?.restoreEnabled ?? controls.enabled,
+    }
+    controls.enabled = false
+  }
+
+  function resolveTargetPoint(event: PointerEvent): THREE.Vector3 | null {
+    const target = resolveTarget(tmpFlyRaycaster, event)
+    if (target) return target
+    camera.getWorldDirection(tmpFlyVector2)
+    tmpFlyPlane.setFromNormalAndCoplanarPoint(tmpFlyVector2, controls.target)
+    const rect = domElement.getBoundingClientRect()
+    const width = Math.max(1, rect.width)
+    const height = Math.max(1, rect.height)
+    const ndcX = ((event.clientX - rect.left) / width) * 2 - 1
+    const ndcY = -(((event.clientY - rect.top) / height) * 2 - 1)
+    tmpFlyVector.set(ndcX, ndcY, 0)
+    tmpFlyRaycaster.setFromCamera(tmpFlyVector, camera)
+    return tmpFlyRaycaster.ray.intersectPlane(tmpFlyPlane, tmpFlyVector3)
+  }
+
+  function onPointerDown(event: PointerEvent): void {
+    if (!event.ctrlKey || event.button !== 0 || event.defaultPrevented) return
+    pendingPointer = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      captured: false,
+    }
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    try {
+      domElement.setPointerCapture(event.pointerId)
+      pendingPointer.captured = true
+    } catch {
+      // Pointer capture is best-effort.
+    }
+  }
+
+  function onPointerMove(event: PointerEvent): void {
+    if (!pendingPointer || event.pointerId !== pendingPointer.pointerId) return
+    const movedX = event.clientX - pendingPointer.startX
+    const movedY = event.clientY - pendingPointer.startY
+    if (movedX * movedX + movedY * movedY > CTRL_CLICK_MOVE_THRESHOLD_PX * CTRL_CLICK_MOVE_THRESHOLD_PX) {
+      pendingPointer.moved = true
+    }
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  }
+
+  function onPointerUp(event: PointerEvent): void {
+    if (!pendingPointer || event.pointerId !== pendingPointer.pointerId) return
+    const shouldFly = !pendingPointer.moved && event.button === 0
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    stopPendingPointer()
+    if (!shouldFly) return
+    const target = resolveTargetPoint(event)
+    if (!target) return
+    startFlight(target)
+  }
+
+  function onPointerCancel(event: PointerEvent): void {
+    if (!pendingPointer || event.pointerId !== pendingPointer.pointerId) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    stopPendingPointer()
+  }
+
+  domElement.addEventListener('pointerdown', onPointerDown, true)
+  domElement.addEventListener('pointermove', onPointerMove, true)
+  domElement.addEventListener('pointerup', onPointerUp, true)
+  domElement.addEventListener('pointercancel', onPointerCancel, true)
+
+  return {
+    update(now: number): void {
+      if (!activeFlight) return
+
+      const elapsed = Math.max(0, now - activeFlight.startedAt)
+      const t = Math.min(1, elapsed / activeFlight.duration)
+      const eased = t * t * (3 - 2 * t)
+
+      camera.position.lerpVectors(activeFlight.fromPosition, activeFlight.toPosition, eased)
+      controls.target.lerpVectors(activeFlight.fromTarget, activeFlight.toTarget, eased)
+      camera.updateMatrixWorld(true)
+      controls.update()
+
+      if (t >= 1) {
+        controls.enabled = activeFlight.restoreEnabled
+        activeFlight = null
+      }
+    },
+  }
 }
 
 function disposeObject3DResources(object: THREE.Object3D | null): void {
@@ -259,7 +456,7 @@ function updateProgressUI(): void {
       + (Number((tiles.stats as Record<string, number>).parsing) || 0)
       + (Number((tiles.stats as Record<string, number>).processing) || 0),
   )
-  progressLabel.textContent = `已加载 ${loaded} · 队列 ${queued} · 锚点 ${anchors.length} · 捕获叶节点 ${capturedTileNodes.size}`
+  progressLabel.textContent = `已加载 ${loaded} · 队列 ${queued} · 锚点 ${anchors.length} · 捕获叶节点 ${capturedTileNodes.size} · 过滤 ${glbSkippedLargeLeafCount}`
 }
 
 function syncGlbOrigin(): void {
@@ -267,20 +464,6 @@ function syncGlbOrigin(): void {
   glbCaptureRoot.quaternion.identity()
   glbCaptureRoot.scale.set(1, 1, 1)
   glbCaptureRoot.updateMatrixWorld(true)
-}
-
-function syncGlbCameraToMainViewLegacy(): void {
-  const mainViewMatrix = new THREE.Matrix4().compose(mainCamera.position, mainCamera.quaternion, new THREE.Vector3(1, 1, 1))
-  const localViewMatrix = baseFrameInverse.clone().multiply(mainViewMatrix)
-  localViewMatrix.decompose(glbCamera.position, glbCamera.quaternion, glbCamera.scale)
-  const localTarget = mainControls.target.clone().applyMatrix4(baseFrameInverse)
-  glbCamera.up.set(0, 1, 0).applyQuaternion(glbCamera.quaternion).normalize()
-  glbCamera.near = Math.max(0.01, mainCamera.near * 0.1)
-  glbCamera.far = Math.max(1000, Number(cameraFarInput.value) || mainCamera.far)
-  glbCamera.updateProjectionMatrix()
-  glbControls.target.copy(localTarget)
-  glbControls.maxDistance = Math.max(glbCamera.far * 0.5, 1000)
-  glbControls.update()
 }
 
 function syncGlbCameraToMainView(): void {
@@ -304,7 +487,6 @@ function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
   glbCameraFramed = false
   glbSkippedLargeLeafCount = 0
   glbPreviewRevision += 1
-  glbPreviewLoadedRevision = 0
   glbPreviewBuffer = null
   if (glbPreviewModel) {
     disposeObject3DResources(glbPreviewModel)
@@ -620,18 +802,18 @@ function createCapturedTileGroup(source: THREE.Object3D): THREE.Group {
   return group
 }
 
-function recenterGlbCaptureRoot(): boolean {
-  glbCaptureRoot.position.set(0, 0, 0)
-  glbCaptureRoot.quaternion.identity()
-  glbCaptureRoot.scale.set(1, 1, 1)
-  glbCaptureRoot.updateMatrixWorld(true)
+function recenterObject3D(root: THREE.Object3D): boolean {
+  root.position.set(0, 0, 0)
+  root.quaternion.identity()
+  root.scale.set(1, 1, 1)
+  root.updateMatrixWorld(true)
 
-  const box = new THREE.Box3().setFromObject(glbCaptureRoot)
+  const box = new THREE.Box3().setFromObject(root)
   if (box.isEmpty()) return false
 
   const center = box.getCenter(new THREE.Vector3())
-  glbCaptureRoot.position.copy(center).multiplyScalar(-1)
-  glbCaptureRoot.updateMatrixWorld(true)
+  root.position.copy(center).multiplyScalar(-1)
+  root.updateMatrixWorld(true)
   return true
 }
 
@@ -669,7 +851,6 @@ function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promis
           glbCameraFramed = true
         }
 
-        glbPreviewLoadedRevision = revision
         glbPreviewProgress.textContent = `GLB 预览已同步，当前捕获 ${capturedTileNodes.size} 个高精度叶节点。`
         resolve()
       },
@@ -681,7 +862,6 @@ function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promis
 async function refreshGlbPreview(): Promise<void> {
   if (capturedTileNodes.size === 0) {
     glbPreviewBuffer = null
-    glbPreviewLoadedRevision = 0
     glbPreviewProgress.textContent = '当前视图没有可捕获的高精度叶节点。'
     setGlbPlaceholder('当前视图没有可捕获的高精度叶节点', 'idle')
     return
@@ -699,6 +879,7 @@ async function refreshGlbPreview(): Promise<void> {
         glbPreviewProgress.textContent = '正在同步最终的 GLB 预览...'
         const exportRoot = buildMergedCaptureRoot()
         try {
+          recenterObject3D(exportRoot)
           const buffer = await exportObject3D(exportRoot)
           if (revision !== glbPreviewRevision) {
             glbPreviewRefreshRequested = true
@@ -853,8 +1034,6 @@ function isValidSettings(value: Settings): boolean {
     && value.lat >= -90
     && value.lat <= 90
     && Number.isFinite(value.groundElevation)
-    && Number.isFinite(value.height)
-    && value.height >= 0
 }
 
 function syncUrl(value: Settings): void {
@@ -862,8 +1041,29 @@ function syncUrl(value: Settings): void {
   next.searchParams.set('lon', value.lon.toFixed(6))
   next.searchParams.set('lat', value.lat.toFixed(6))
   next.searchParams.set('ground', value.groundElevation.toFixed(1))
-  next.searchParams.set('height', value.height.toFixed(1))
+  next.searchParams.delete('height')
   window.history.replaceState(null, '', next)
+}
+
+function syncCameraOrbitToTarget(): void {
+  mainCamera.up.set(0, 1, 0)
+  mainCamera.lookAt(mainControls.target)
+  mainCamera.updateMatrixWorld(true)
+  mainControls.update()
+}
+
+function applyInitialOrbitView(): void {
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(baseQuaternion)
+  forward.y = 0
+  if (forward.lengthSq() < 1e-6) {
+    forward.set(0, 0, -1)
+  }
+  forward.normalize()
+  const orbitDistance = Math.max(120, Math.min(mainControls.maxDistance * 0.4, 220))
+  mainControls.target.copy(basePosition)
+  mainCamera.position.copy(basePosition).add(forward.multiplyScalar(orbitDistance))
+  mainCamera.position.y = basePosition.y
+  syncCameraOrbitToTarget()
 }
 
 function applyCameraRotation(): void {
@@ -883,7 +1083,7 @@ function positionCamera(ellipsoid = tiles?.ellipsoid): void {
   ellipsoid.getObjectFrame(
     settings.lat * radians,
     settings.lon * radians,
-    settings.groundElevation + settings.height,
+    settings.groundElevation,
     -90 * radians,
     0,
     0,
@@ -893,9 +1093,10 @@ function positionCamera(ellipsoid = tiles?.ellipsoid): void {
   matrix.decompose(basePosition, baseQuaternion, new THREE.Vector3())
   baseFrameMatrix.compose(basePosition, baseQuaternion, new THREE.Vector3(1, 1, 1))
   baseFrameInverse.copy(baseFrameMatrix).invert()
-  yaw = 0
+   yaw = 0
   pitch = 0
   applyCameraRotation()
+  // applyInitialOrbitView()
   syncGlbOrigin()
   updateCameraMarkers()
 }
@@ -949,7 +1150,6 @@ function syncGlbPreviewAfterCaptureMutation(messageIfEmpty = '当前视图没有
       glbPreviewModel = null
     }
     glbPreviewBuffer = null
-    glbPreviewLoadedRevision = 0
     glbPreviewRevision += 1
     glbPreviewRefreshRequested = false
     glbCameraFramed = false
@@ -1033,8 +1233,10 @@ function captureVisibleTiles(): number {
   if (!tiles) return 0
   tiles.update()
   const { tiles: candidates } = collectCurrentLeafTiles()
+  const captureRadius = Math.max(mainCamera.near, Number(cameraFarInput.value) || mainCamera.far)
   let added = 0
   const capturedTilesForAnchor: CapturableTile[] = []
+  let skippedLargeLeaves = 0
 
   for (const tile of candidates) {
     const scene = tile.engineData?.scene
@@ -1042,6 +1244,17 @@ function captureVisibleTiles(): number {
        continue
     if (capturedTileNodes.has(tile)) 
       continue
+    const captureBox = new THREE.Box3().setFromObject(scene)
+    if (!captureBox.isEmpty()) {
+      const captureSphere = captureBox.getBoundingSphere(new THREE.Sphere())
+      const distanceToBase = captureSphere.center.distanceTo(basePosition)
+      const intersectsCaptureRadius = distanceToBase - captureSphere.radius <= captureRadius
+      const withinSizeLimit = captureSphere.radius <= captureRadius * 1.5
+      if (!intersectsCaptureRadius || !withinSizeLimit) {
+        skippedLargeLeaves += 1
+        continue
+      }
+    }
     const tileGroup = createCapturedTileGroup(scene)
     if (tileGroup.children.length === 0)
        continue
@@ -1053,6 +1266,7 @@ function captureVisibleTiles(): number {
   }
 
   pruneCoveredCapturedTiles(candidates)
+  glbSkippedLargeLeafCount += skippedLargeLeaves
 
   if (added > 0) {
     glbPreviewRevision += 1
@@ -1063,12 +1277,18 @@ function captureVisibleTiles(): number {
       glbCameraFramed = true
     }
     void refreshGlbPreview()
-    glbPreviewProgress.textContent = `已捕获 ${capturedTileNodes.size} 个高精度叶节点。`
+    glbPreviewProgress.textContent = skippedLargeLeaves > 0
+      ? `已捕获 ${capturedTileNodes.size} 个高精度叶节点，已过滤 ${skippedLargeLeaves} 个过大瓦片。`
+      : `已捕获 ${capturedTileNodes.size} 个高精度叶节点。`
   } else if (capturedTileNodes.size === 0) {
     setGlbPlaceholder('当前视图没有可捕获的高精度叶节点', 'idle')
-    glbPreviewProgress.textContent = '当前视图没有可捕获的高精度叶节点。'
+    glbPreviewProgress.textContent = skippedLargeLeaves > 0
+      ? `当前视图没有可捕获的高精度叶节点，已过滤 ${skippedLargeLeaves} 个过大瓦片。`
+      : '当前视图没有可捕获的高精度叶节点。'
   } else {
-    glbPreviewProgress.textContent = '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
+    glbPreviewProgress.textContent = skippedLargeLeaves > 0
+      ? `当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片，并过滤 ${skippedLargeLeaves} 个过大瓦片。`
+      : '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
   }
   const anchorTiles = capturedTilesForAnchor.filter((tile) => capturedTileNodes.has(tile))
   if (anchorTiles.length > 0) {
@@ -1084,11 +1304,6 @@ function captureVisibleTiles(): number {
   updateProgressUI()
   setCaptureButtonState()
   return added
-}
-
-function frameGlbPreview(): void {
-  if (!glbPreviewModel) return
-  syncGlbCameraToMainView()
 }
 
 function exportObject3D(object: THREE.Object3D): Promise<ArrayBuffer> {
@@ -1246,16 +1461,6 @@ function updateTileCameraRange(): void {
   tiles?.update()
   clearCapturedTiles()
 }
-
-function resetLocation(): void {
-  coordinateTextInput.value = `${settings.lat}, ${settings.lon}`
-  groundElevationInput.value = String(settings.groundElevation)
-  yaw = 0
-  pitch = 0
-  applyCameraRotation()
-  clearCapturedTiles()
-}
-
 function handleAddAnchor(): void {
   if (!tiles) return
   mainControls.update()
@@ -1276,7 +1481,8 @@ function handleShortcut(event: KeyboardEvent): void {
   if (event.defaultPrevented || event.repeat) return
   if (event.altKey || event.ctrlKey || event.metaKey) return
   if (isTypingTarget(event.target)) return
-  if (event.key.toLowerCase() !== 'a') return
+  const key = event.key.toLowerCase()
+  if (key !== 'c') return
   event.preventDefault()
   addAnchorButton.click()
 }
@@ -1318,9 +1524,12 @@ viewportResizeObserver.observe(viewport)
 viewportResizeObserver.observe(glbPreviewViewport)
 
 function animate(): void {
-  tiles?.update()
+  const now = performance.now()
+  mainFlyController.update(now)
+  glbFlyController.update(now)
   mainControls.update()
   glbControls.update()
+  tiles?.update()
   mainRenderer.render(mainScene, mainCamera)
   glbRenderer.render(glbScene, glbCamera)
   updateProgressUI()
