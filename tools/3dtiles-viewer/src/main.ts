@@ -50,7 +50,6 @@ app.innerHTML = `
                 <label>相机 Far 范围 (m)<input id="camera-far" type="number" min="50" max="10000000" step="1000" value="10000" /></label>
                                 <div class="actions wide"><button id="apply-location">定位并加载</button></div>
 
-                <div class="progress-wrap" id="progress" hidden><div class="progress"><div id="progress-bar"></div></div><div class="progress-label" id="progress-label"></div></div>
                 <div class="callout" id="config-help" hidden>
                   请在 <code>tools/3dtiles-viewer/.env.local</code> 配置 <code>VITE_TILES_URL</code>，或同时配置 <code>VITE_CESIUM_ION_TOKEN</code> 与 <code>VITE_CESIUM_ION_ASSET_ID</code>。
                 </div>
@@ -63,6 +62,10 @@ app.innerHTML = `
               </section>
             </div>
             <div class="placeholder" id="placeholder">正在初始化实时预览…</div>
+            <div class="progress-wrap progress-wrap--viewport" id="progress" hidden>
+              <div class="progress"><div id="progress-bar"></div></div>
+              <div class="progress-label" id="progress-label"></div>
+            </div>
           </div>
         </section>
 
@@ -70,8 +73,17 @@ app.innerHTML = `
           <div class="panel-header"><h2>GLB 预览</h2><button class="secondary" id="export-current-glb" disabled>导出 GLB</button></div>
           <div class="glb-preview-viewport" id="glb-preview-viewport">
             <div class="placeholder" id="glb-preview-placeholder">等待首次锚点捕获</div>
+            <div class="glb-preview-progress" id="glb-preview-progress" hidden aria-live="polite">
+              <div class="glb-preview-progress__row">
+                <span class="glb-preview-progress__status" id="glb-preview-progress-status"></span>
+                <span class="glb-preview-progress__tone" id="glb-preview-progress-tone"></span>
+              </div>
+              <div class="glb-preview-progress__track">
+                <div class="glb-preview-progress__fill" id="glb-preview-progress-fill"></div>
+              </div>
+              <div class="glb-preview-progress__detail" id="glb-preview-progress-detail"></div>
+            </div>
           </div>
-          <p class="help glb-preview-progress" id="glb-preview-progress">右侧场景与实时预览独立渲染。每次添加锚点都会把当前高精度叶节点复制到右侧。</p>
         </section>
       </section>
     </main>
@@ -98,6 +110,10 @@ const exportCurrentGlbButton = $('#export-current-glb') as HTMLButtonElement
 const glbPreviewViewport = $('#glb-preview-viewport')
 const glbPreviewPlaceholder = $('#glb-preview-placeholder')
 const glbPreviewProgress = $('#glb-preview-progress')
+const glbPreviewProgressStatus = $('#glb-preview-progress-status')
+const glbPreviewProgressTone = $('#glb-preview-progress-tone')
+const glbPreviewProgressFill = $('#glb-preview-progress-fill')
+const glbPreviewProgressDetail = $('#glb-preview-progress-detail')
 
 const CTRL_CLICK_FLY_DURATION_MS = 280
 const CTRL_CLICK_MOVE_THRESHOLD_PX = 6
@@ -207,6 +223,7 @@ let glbPreviewRevision = 0
 let glbPreviewRefreshPromise: Promise<void> | null = null
 let glbPreviewRefreshRequested = false
 let glbSkippedLargeLeafCount = 0
+let glbPreviewStatusHideTimer: number | null = null
 const baseFrameMatrix = new THREE.Matrix4()
 const baseFrameInverse = new THREE.Matrix4()
 const tmpFlyVector = new THREE.Vector3()
@@ -239,6 +256,43 @@ function hidePlaceholder(): void {
 
 function hideGlbPlaceholder(): void {
   glbPreviewPlaceholder.hidden = true
+}
+
+type GlbPreviewStatusTone = 'idle' | 'loading' | 'ok' | 'error'
+
+function hideGlbPreviewStatus(): void {
+  if (glbPreviewStatusHideTimer !== null) {
+    window.clearTimeout(glbPreviewStatusHideTimer)
+    glbPreviewStatusHideTimer = null
+  }
+  glbPreviewProgress.hidden = true
+}
+
+function setGlbPreviewStatus(
+  text: string,
+  tone: GlbPreviewStatusTone = 'idle',
+  detail = '',
+  autoHideMs?: number,
+): void {
+  if (glbPreviewStatusHideTimer !== null) {
+    window.clearTimeout(glbPreviewStatusHideTimer)
+    glbPreviewStatusHideTimer = null
+  }
+  glbPreviewProgress.hidden = false
+  glbPreviewProgress.dataset.state = tone
+  glbPreviewProgressStatus.textContent = text
+  glbPreviewProgressTone.textContent = tone === 'loading' ? '处理中' : tone === 'ok' ? '完成' : tone === 'error' ? '错误' : '提示'
+  glbPreviewProgressDetail.textContent = detail
+  glbPreviewProgressFill.classList.toggle('is-loading', tone === 'loading')
+  glbPreviewProgressFill.style.width = tone === 'loading' ? '62%' : tone === 'ok' || tone === 'error' ? '100%' : '42%'
+
+  if (autoHideMs !== undefined) {
+    glbPreviewStatusHideTimer = window.setTimeout(() => {
+      if (glbPreviewProgress.dataset.state === tone) {
+        hideGlbPreviewStatus()
+      }
+    }, autoHideMs)
+  }
 }
 
 function syncFloatingPanelState(panel: HTMLElement, toggleButton: HTMLButtonElement, visible: boolean): void {
@@ -441,9 +495,22 @@ function updateStats(): void {
   void settings
 }
 
+function isTilesReady(): boolean {
+  if (!tiles) return false
+  const queued = Math.max(
+    0,
+    (Number((tiles.stats as Record<string, number>).queued) || 0)
+      + (Number((tiles.stats as Record<string, number>).downloading) || 0)
+      + (Number((tiles.stats as Record<string, number>).parsing) || 0)
+      + (Number((tiles.stats as Record<string, number>).processing) || 0),
+  )
+  return tiles.loadProgress >= 1 && queued === 0
+}
+
 function updateProgressUI(): void {
   if (!tiles) {
     progress.hidden = true
+    setCaptureButtonState()
     return
   }
   progress.hidden = false
@@ -457,6 +524,7 @@ function updateProgressUI(): void {
       + (Number((tiles.stats as Record<string, number>).processing) || 0),
   )
   progressLabel.textContent = `已加载 ${loaded} · 队列 ${queued} · 锚点 ${anchors.length} · 捕获叶节点 ${capturedTileNodes.size} · 过滤 ${glbSkippedLargeLeafCount}`
+  setCaptureButtonState()
 }
 
 function syncGlbOrigin(): void {
@@ -494,7 +562,7 @@ function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
     glbPreviewModel = null
   }
   exportCurrentGlbButton.disabled = true
-  glbPreviewProgress.textContent = message
+  setGlbPreviewStatus(message, 'idle', '', 1200)
   setGlbPlaceholder(message)
   renderAnchorList()
   updateCameraMarkers()
@@ -851,7 +919,12 @@ function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promis
           glbCameraFramed = true
         }
 
-        glbPreviewProgress.textContent = `GLB 预览已同步，当前捕获 ${capturedTileNodes.size} 个高精度叶节点。`
+        setGlbPreviewStatus(
+          'GLB 预览已同步',
+          'ok',
+          `当前捕获 ${capturedTileNodes.size} 个高精度叶节点`,
+          1600,
+        )
         resolve()
       },
       (error) => reject(error instanceof Error ? error : new Error('GLB 预览解析失败。')),
@@ -862,7 +935,7 @@ function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promis
 async function refreshGlbPreview(): Promise<void> {
   if (capturedTileNodes.size === 0) {
     glbPreviewBuffer = null
-    glbPreviewProgress.textContent = '当前视图没有可捕获的高精度叶节点。'
+    setGlbPreviewStatus('当前视图没有可捕获的高精度叶节点', 'idle', '请先添加一个相机锚点', 1800)
     setGlbPlaceholder('当前视图没有可捕获的高精度叶节点', 'idle')
     return
   }
@@ -876,7 +949,11 @@ async function refreshGlbPreview(): Promise<void> {
         glbPreviewRefreshRequested = false
         const revision = glbPreviewRevision
         if (!glbPreviewModel) setGlbPlaceholder('正在生成 GLB 预览...', 'loading')
-        glbPreviewProgress.textContent = '正在同步最终的 GLB 预览...'
+        setGlbPreviewStatus(
+          '正在生成 GLB 预览…',
+          'loading',
+          `当前捕获 ${capturedTileNodes.size} 个高精度叶节点`,
+        )
         const exportRoot = buildMergedCaptureRoot()
         try {
           recenterObject3D(exportRoot)
@@ -1155,10 +1232,15 @@ function syncGlbPreviewAfterCaptureMutation(messageIfEmpty = '当前视图没有
     glbCameraFramed = false
     exportCurrentGlbButton.disabled = true
     setGlbPlaceholder(messageIfEmpty, 'idle')
-    glbPreviewProgress.textContent = messageIfEmpty
+    setGlbPreviewStatus(messageIfEmpty, 'idle', '右侧预览已清空', 1800)
     return
   }
 
+  setGlbPreviewStatus(
+    '已删除锚点，正在重建 GLB 预览…',
+    'loading',
+    `当前保留 ${capturedTileNodes.size} 个高精度叶节点`,
+  )
   glbPreviewRevision += 1
   void refreshGlbPreview()
 }
@@ -1168,7 +1250,13 @@ function clearCapturedTiles(message = '等待首次锚点捕获'): void {
 }
 
 function setCaptureButtonState(): void {
-  addAnchorButton.disabled = !tiles
+  const ready = isTilesReady()
+  addAnchorButton.disabled = !ready
+  addAnchorButton.title = ready
+    ? '添加当前相机为锚点'
+    : tiles
+      ? '瓦片仍在加载中，完成后才能添加锚点'
+      : '请先加载 3D Tiles 数据源'
   exportCurrentGlbButton.disabled = capturedTileNodes.size === 0
 }
 
@@ -1276,19 +1364,33 @@ function captureVisibleTiles(): number {
       syncGlbCameraToMainView()
       glbCameraFramed = true
     }
+    setGlbPreviewStatus(
+      '已捕获相机锚点',
+      'loading',
+      skippedLargeLeaves > 0
+        ? `已捕获 ${capturedTileNodes.size} 个高精度叶节点，已过滤 ${skippedLargeLeaves} 个过大瓦片`
+        : `已捕获 ${capturedTileNodes.size} 个高精度叶节点`,
+    )
     void refreshGlbPreview()
-    glbPreviewProgress.textContent = skippedLargeLeaves > 0
-      ? `已捕获 ${capturedTileNodes.size} 个高精度叶节点，已过滤 ${skippedLargeLeaves} 个过大瓦片。`
-      : `已捕获 ${capturedTileNodes.size} 个高精度叶节点。`
   } else if (capturedTileNodes.size === 0) {
     setGlbPlaceholder('当前视图没有可捕获的高精度叶节点', 'idle')
-    glbPreviewProgress.textContent = skippedLargeLeaves > 0
-      ? `当前视图没有可捕获的高精度叶节点，已过滤 ${skippedLargeLeaves} 个过大瓦片。`
-      : '当前视图没有可捕获的高精度叶节点。'
+    setGlbPreviewStatus(
+      '当前视图没有可捕获的高精度叶节点',
+      'idle',
+      skippedLargeLeaves > 0
+        ? `已过滤 ${skippedLargeLeaves} 个过大瓦片`
+        : '请调整视角后重新添加锚点',
+      1800,
+    )
   } else {
-    glbPreviewProgress.textContent = skippedLargeLeaves > 0
-      ? `当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片，并过滤 ${skippedLargeLeaves} 个过大瓦片。`
-      : '当前视图没有新增叶节点，已保留之前捕获的最高精度瓦片。'
+    setGlbPreviewStatus(
+      '当前视图没有新增叶节点',
+      'idle',
+      skippedLargeLeaves > 0
+        ? `已保留之前捕获的最高精度瓦片，并过滤 ${skippedLargeLeaves} 个过大瓦片`
+        : '已保留之前捕获的最高精度瓦片',
+      1800,
+    )
   }
   const anchorTiles = capturedTilesForAnchor.filter((tile) => capturedTileNodes.has(tile))
   if (anchorTiles.length > 0) {
@@ -1321,7 +1423,7 @@ function exportObject3D(object: THREE.Object3D): Promise<ArrayBuffer> {
 async function exportCurrentGlb(): Promise<void> {
   if (exporting) return
   if (capturedTileNodes.size === 0) {
-    glbPreviewProgress.textContent = '没有可导出的锚点内容。'
+    setGlbPreviewStatus('没有可导出的锚点内容', 'error', '请先添加一个锚点', 2200)
     return
   }
   exporting = true
@@ -1334,9 +1436,14 @@ async function exportCurrentGlb(): Promise<void> {
     link.download = `scene-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.glb`
     link.click()
     window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
-    glbPreviewProgress.textContent = 'GLB 导出完成。'
+    setGlbPreviewStatus('GLB 导出完成', 'ok', '文件已开始下载', 1600)
   } catch (error) {
-    glbPreviewProgress.textContent = error instanceof Error ? error.message : 'GLB 导出失败。'
+    setGlbPreviewStatus(
+      'GLB 导出失败',
+      'error',
+      error instanceof Error ? error.message : '请稍后重试',
+      2400,
+    )
   } finally {
     exporting = false
     setCaptureButtonState()
@@ -1463,7 +1570,22 @@ function updateTileCameraRange(): void {
 }
 function handleAddAnchor(): void {
   if (!tiles) return
+  if (!isTilesReady()) {
+    setStatus('瓦片加载中，暂不可添加锚点', 'idle')
+    setGlbPreviewStatus(
+      '瓦片加载中，暂不可添加锚点',
+      'loading',
+      '等待当前 3D Tiles 完全加载后再添加锚点',
+      1800,
+    )
+    return
+  }
   mainControls.update()
+  setGlbPreviewStatus(
+    '正在捕获相机锚点…',
+    'loading',
+    '正在筛选当前可见的高精度叶节点',
+  )
   const added = captureVisibleTiles()
   if (added === 0 && capturedTileNodes.size === 0) {
     setStatus('没有可捕获内容', 'error')
@@ -1482,6 +1604,18 @@ function handleShortcut(event: KeyboardEvent): void {
   if (event.altKey || event.ctrlKey || event.metaKey) return
   if (isTypingTarget(event.target)) return
   const key = event.key.toLowerCase()
+  if (key === 'q') {
+    event.preventDefault()
+    syncGlbCameraToMainView()
+    glbCameraFramed = true
+    setGlbPreviewStatus(
+      '右侧视角已同步',
+      'ok',
+      '已跟随左侧当前相机角度',
+      1600,
+    )
+    return
+  }
   if (key !== 'c') return
   event.preventDefault()
   addAnchorButton.click()
