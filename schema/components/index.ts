@@ -31,6 +31,7 @@ import './definitions/signboardComponent'
 import './definitions/boundaryWallComponent'
 import './definitions/modelCollisionComponent'
 import './definitions/proceduralCityComponent'
+import './definitions/generalMeshComponent'
 
 export {
 	componentManager,
@@ -79,3 +80,4 @@ export * from './definitions/signboardComponent'
 export * from './definitions/boundaryWallComponent'
 export * from './definitions/modelCollisionComponent'
 export * from './definitions/proceduralCityComponent'
+export * from './definitions/generalMeshComponent'

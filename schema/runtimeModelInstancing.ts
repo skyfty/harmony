@@ -1,5 +1,6 @@
 import type { SceneNode, SceneNodeComponentState } from './core'
 import { ANIMATION_COMPONENT_TYPE } from './components/definitions/animationComponent'
+import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
 
 function isSceneNodeComponentState(value: unknown): value is SceneNodeComponentState<unknown> {
@@ -21,7 +22,9 @@ export function canNodeUseRuntimeModelInstancing(node: SceneNode | null | undefi
   if (!node) {
     return false
   }
-  return !hasEnabledAnimationComponent(node)
+  const generalMesh = node.components?.[GENERAL_MESH_COMPONENT_TYPE]
+  const hasEnabledGeneralMesh = Boolean(generalMesh && generalMesh.enabled !== false)
+  return !hasEnabledAnimationComponent(node) && !hasEnabledGeneralMesh
 }
 
 export function collectRuntimeModelNodesByAssetId(

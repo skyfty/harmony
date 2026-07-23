@@ -40,6 +40,7 @@ import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
 import NominatePanel from '@/components/inspector/NominatePanel.vue'
 import CouponPanel from '@/components/inspector/CouponPanel.vue'
 import ProceduralCityPanel from '@/components/inspector/ProceduralCityPanel.vue'
+import GeneralMeshPanel from '@/components/inspector/GeneralMeshPanel.vue'
 import { useSceneStore, getRuntimeObject, GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { findSceneNodeById } from '@/utils/animationClipCatalog'
@@ -85,6 +86,7 @@ import {
   
   LOD_COMPONENT_TYPE,
   PROCEDURAL_CITY_COMPONENT_TYPE,
+  GENERAL_MESH_COMPONENT_TYPE,
 } from '@schema/components'
 
 type BehaviorDetailsPayload = {
@@ -685,6 +687,7 @@ watch(
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />
               <ProceduralCityPanel v-else-if="component.type === PROCEDURAL_CITY_COMPONENT_TYPE" />
+              <GeneralMeshPanel v-else-if="component.type === GENERAL_MESH_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
                 @open-details="handleOpenBehaviorDetails"

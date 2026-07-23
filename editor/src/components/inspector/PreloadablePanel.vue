@@ -86,9 +86,6 @@ function handleRemoveComponent() {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div class="preloadable-panel__content">
-        <div class="preloadable-panel__hint">
-        Export will add the model assets referenced by "this node + its subtree" to the scene's preload list so they can be displayed immediately when the scene is entered.
-        </div>
         <v-switch
           label="Enable preload on entry"
           density="compact"
