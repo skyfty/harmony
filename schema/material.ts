@@ -207,6 +207,15 @@ export type MaterialBaselineState = {
   wireframe?: boolean
   metalness?: number
   roughness?: number
+  specular?: THREE.Color
+  shininess?: number
+  transmission?: number
+  thickness?: number
+  ior?: number
+  clearcoat?: number
+  clearcoatRoughness?: number
+  attenuationColor?: THREE.Color
+  attenuationDistance?: number
   emissive?: THREE.Color
   emissiveIntensity?: number
   side?: THREE.Side
@@ -543,6 +552,22 @@ export const DEFAULT_SCENE_MATERIAL_ID = '__scene_default_material__';
 
 export const DEFAULT_SCENE_MATERIAL_TYPE: SceneMaterialType = 'MeshStandardMaterial';
 
+export const PHYSICAL_GLASS_MATERIAL_DEFAULTS: Partial<SceneMaterialProps> = {
+  color: '#ffffff',
+  transparent: true,
+  opacity: 1,
+  metalness: 0,
+  roughness: 0.02,
+  transmission: 0.75,
+  thickness: 0.35,
+  ior: 1.45,
+  clearcoat: 0,
+  clearcoatRoughness: 0,
+  attenuationColor: '#ffffff',
+  attenuationDistance: 4,
+  side: 'double',
+}
+
 export class SceneMaterialFactory {
   private readonly textureCache = new Map<string, Promise<THREE.Texture | null>>();
   private readonly disposableUrls = new Set<string>();
@@ -642,15 +667,26 @@ export class SceneMaterialFactory {
   }
 
   private extractMaterialProps(material: SceneMaterial | SceneNodeMaterial): SceneMaterialProps {
+    const isPhysicalMaterial = material.type === 'MeshPhysicalMaterial';
+    const physicalDefaults = isPhysicalMaterial ? PHYSICAL_GLASS_MATERIAL_DEFAULTS : null;
     return {
       color: material.color ?? '#ffffff',
-      transparent: material.transparent ?? false,
+      transparent: material.transparent ?? (isPhysicalMaterial ? true : false),
       opacity: material.opacity ?? 1,
       alphaTest: material.alphaTest,
-      side: material.side ?? 'front',
+      side: material.side ?? (isPhysicalMaterial ? 'double' : 'front'),
       wireframe: material.wireframe ?? false,
-      metalness: material.metalness ?? 0.1,
-      roughness: material.roughness ?? 1.0,
+      metalness: material.metalness ?? physicalDefaults?.metalness ?? 0.1,
+      roughness: material.roughness ?? physicalDefaults?.roughness ?? 1.0,
+      specular: material.specular ?? '#111111',
+      shininess: material.shininess ?? 30,
+      transmission: material.transmission ?? physicalDefaults?.transmission ?? 0,
+      thickness: material.thickness ?? physicalDefaults?.thickness ?? 0,
+      ior: material.ior ?? physicalDefaults?.ior ?? 1.5,
+      clearcoat: material.clearcoat ?? physicalDefaults?.clearcoat ?? 0,
+      clearcoatRoughness: material.clearcoatRoughness ?? physicalDefaults?.clearcoatRoughness ?? 0,
+      attenuationColor: material.attenuationColor ?? physicalDefaults?.attenuationColor ?? '#ffffff',
+      attenuationDistance: material.attenuationDistance ?? physicalDefaults?.attenuationDistance ?? 0,
       emissive: material.emissive ?? '#000000',
       emissiveIntensity: material.emissiveIntensity ?? 0,
       aoStrength: material.aoStrength ?? 1,
@@ -689,6 +725,33 @@ export class SceneMaterialFactory {
     }
     if (typeof props.roughness === 'number' && 'roughness' in materialAny) {
       materialAny.roughness = props.roughness;
+    }
+    if (typeof props.specular === 'string' && 'specular' in materialAny && materialAny.specular?.set) {
+      materialAny.specular.set(props.specular);
+    }
+    if (typeof props.shininess === 'number' && 'shininess' in materialAny) {
+      materialAny.shininess = props.shininess;
+    }
+    if (typeof props.transmission === 'number' && 'transmission' in materialAny) {
+      materialAny.transmission = props.transmission;
+    }
+    if (typeof props.thickness === 'number' && 'thickness' in materialAny) {
+      materialAny.thickness = props.thickness;
+    }
+    if (typeof props.ior === 'number' && 'ior' in materialAny) {
+      materialAny.ior = props.ior;
+    }
+    if (typeof props.clearcoat === 'number' && 'clearcoat' in materialAny) {
+      materialAny.clearcoat = props.clearcoat;
+    }
+    if (typeof props.clearcoatRoughness === 'number' && 'clearcoatRoughness' in materialAny) {
+      materialAny.clearcoatRoughness = props.clearcoatRoughness;
+    }
+    if (typeof props.attenuationColor === 'string' && 'attenuationColor' in materialAny && materialAny.attenuationColor?.set) {
+      materialAny.attenuationColor.set(props.attenuationColor);
+    }
+    if (typeof props.attenuationDistance === 'number' && 'attenuationDistance' in materialAny) {
+      materialAny.attenuationDistance = props.attenuationDistance;
     }
     if (typeof props.envMapIntensity === 'number' && 'envMapIntensity' in materialAny) {
       materialAny.envMapIntensity = props.envMapIntensity;
@@ -731,6 +794,8 @@ export class SceneMaterialFactory {
       case 'MeshPhongMaterial':
         instance = new THREE.MeshPhongMaterial({
           color,
+          specular: new THREE.Color(props.specular ?? '#111111'),
+          shininess: props.shininess ?? 30,
           emissive: emissiveColor,
           emissiveIntensity: props.emissiveIntensity,
           transparent: props.transparent,
@@ -759,11 +824,18 @@ export class SceneMaterialFactory {
       case 'MeshPhysicalMaterial':
         instance = new THREE.MeshPhysicalMaterial({
           color,
-          metalness: props.metalness,
-          roughness: props.roughness,
+          metalness: props.metalness ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.metalness ?? 0,
+          roughness: props.roughness ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.roughness ?? 0,
+          transmission: props.transmission ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.transmission ?? 0,
+          thickness: props.thickness ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.thickness ?? 0,
+          ior: props.ior ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.ior ?? 1.5,
+          clearcoat: props.clearcoat ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.clearcoat ?? 0,
+          clearcoatRoughness: props.clearcoatRoughness ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.clearcoatRoughness ?? 0,
+          attenuationColor: new THREE.Color(props.attenuationColor ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.attenuationColor ?? '#ffffff'),
+          attenuationDistance: props.attenuationDistance ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.attenuationDistance ?? 0,
           emissive: emissiveColor,
           emissiveIntensity: props.emissiveIntensity,
-          transparent: props.transparent,
+          transparent: props.transparent || (props.transmission ?? PHYSICAL_GLASS_MATERIAL_DEFAULTS.transmission ?? 0) > 0,
           opacity: props.opacity,
           wireframe: props.wireframe,
           side,
@@ -1032,6 +1104,7 @@ function getMaterialBaseline(material: THREE.Material): MaterialBaselineState {
 
   const typed = material as THREE.Material & { color?: THREE.Color; wireframe?: boolean };
   const standard = material as THREE.MeshStandardMaterial & { emissive?: THREE.Color };
+  const phong = material as THREE.MeshPhongMaterial & { specular?: THREE.Color; shininess?: number };
 
   const textureBaseline: Partial<Record<MeshStandardTextureKey, THREE.Texture | null>> = {};
   const textureSource = standard as unknown as Record<string, unknown>;
@@ -1052,6 +1125,8 @@ function getMaterialBaseline(material: THREE.Material): MaterialBaselineState {
     wireframe: typeof typed.wireframe === 'boolean' ? typed.wireframe : undefined,
     metalness: 'metalness' in standard ? standard.metalness : undefined,
     roughness: 'roughness' in standard ? standard.roughness : undefined,
+    specular: phong.specular ? phong.specular.clone() : undefined,
+    shininess: typeof phong.shininess === 'number' ? phong.shininess : undefined,
     emissive: standard.emissive ? standard.emissive.clone() : undefined,
     emissiveIntensity: 'emissiveIntensity' in standard ? standard.emissiveIntensity : undefined,
     side: material.side,
@@ -1283,6 +1358,72 @@ export function applyMaterialConfigToMaterial(
     needsUpdate = true;
   }
 
+  const phong = material as THREE.MeshPhongMaterial & { specular?: THREE.Color; shininess?: number };
+  if (typeof config.specular === 'string' && phong.specular) {
+    const specularColor = new THREE.Color(config.specular);
+    if (!phong.specular.equals(specularColor)) {
+      phong.specular.copy(specularColor);
+      needsUpdate = true;
+    }
+  }
+
+  if (typeof config.shininess === 'number' && phong.shininess !== config.shininess) {
+    phong.shininess = config.shininess;
+    needsUpdate = true;
+  }
+
+  const physical = material as THREE.MeshPhysicalMaterial & {
+    transmission?: number
+    thickness?: number
+    ior?: number
+    clearcoat?: number
+    clearcoatRoughness?: number
+    attenuationColor?: THREE.Color
+    attenuationDistance?: number
+  }
+  if ('transmission' in physical && typeof config.transmission === 'number' && physical.transmission !== config.transmission) {
+    physical.transmission = config.transmission
+    needsUpdate = true
+  }
+  if ('thickness' in physical && typeof config.thickness === 'number' && physical.thickness !== config.thickness) {
+    physical.thickness = config.thickness
+    needsUpdate = true
+  }
+  if ('ior' in physical && typeof config.ior === 'number' && physical.ior !== config.ior) {
+    physical.ior = config.ior
+    needsUpdate = true
+  }
+  if ('clearcoat' in physical && typeof config.clearcoat === 'number' && physical.clearcoat !== config.clearcoat) {
+    physical.clearcoat = config.clearcoat
+    needsUpdate = true
+  }
+  if ('clearcoatRoughness' in physical && typeof config.clearcoatRoughness === 'number' && physical.clearcoatRoughness !== config.clearcoatRoughness) {
+    physical.clearcoatRoughness = config.clearcoatRoughness
+    needsUpdate = true
+  }
+  if ('attenuationColor' in physical && typeof config.attenuationColor === 'string' && physical.attenuationColor) {
+    const attenuationColor = new THREE.Color(config.attenuationColor)
+    if (!physical.attenuationColor.equals(attenuationColor)) {
+      physical.attenuationColor.copy(attenuationColor)
+      needsUpdate = true
+    }
+  }
+  if ('attenuationDistance' in physical && typeof config.attenuationDistance === 'number' && physical.attenuationDistance !== config.attenuationDistance) {
+    physical.attenuationDistance = config.attenuationDistance
+    needsUpdate = true
+  }
+
+  if ('transmission' in physical && typeof config.transmission === 'number' && config.transmission > 0) {
+    if (typed.transparent !== true) {
+      typed.transparent = true
+      needsUpdate = true
+    }
+    if (typed.depthWrite !== false) {
+      typed.depthWrite = false
+      needsUpdate = true
+    }
+  }
+
   const emissiveColor = config.emissive ? new THREE.Color(config.emissive) : null;
   if (emissiveColor && 'emissive' in standard && standard.emissive) {
     standard.emissive.copy(emissiveColor);
@@ -1364,6 +1505,43 @@ export function restoreMaterialFromBaseline(material: THREE.Material): void {
   }
   if (baseline.roughness !== undefined && 'roughness' in standard) {
     standard.roughness = baseline.roughness;
+  }
+  const phong = material as THREE.MeshPhongMaterial & { specular?: THREE.Color; shininess?: number };
+  if (baseline.specular && phong.specular) {
+    phong.specular.copy(baseline.specular);
+  }
+  if (baseline.shininess !== undefined) {
+    phong.shininess = baseline.shininess;
+  }
+  const physical = material as THREE.MeshPhysicalMaterial & {
+    transmission?: number
+    thickness?: number
+    ior?: number
+    clearcoat?: number
+    clearcoatRoughness?: number
+    attenuationColor?: THREE.Color
+    attenuationDistance?: number
+  }
+  if (baseline.transmission !== undefined && 'transmission' in physical) {
+    physical.transmission = baseline.transmission
+  }
+  if (baseline.thickness !== undefined && 'thickness' in physical) {
+    physical.thickness = baseline.thickness
+  }
+  if (baseline.ior !== undefined && 'ior' in physical) {
+    physical.ior = baseline.ior
+  }
+  if (baseline.clearcoat !== undefined && 'clearcoat' in physical) {
+    physical.clearcoat = baseline.clearcoat
+  }
+  if (baseline.clearcoatRoughness !== undefined && 'clearcoatRoughness' in physical) {
+    physical.clearcoatRoughness = baseline.clearcoatRoughness
+  }
+  if (baseline.attenuationColor && 'attenuationColor' in physical && physical.attenuationColor) {
+    physical.attenuationColor.copy(baseline.attenuationColor)
+  }
+  if (baseline.attenuationDistance !== undefined && 'attenuationDistance' in physical) {
+    physical.attenuationDistance = baseline.attenuationDistance
   }
   if (baseline.emissive && 'emissive' in standard && standard.emissive) {
     standard.emissive.copy(baseline.emissive);

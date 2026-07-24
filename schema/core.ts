@@ -665,6 +665,15 @@ export interface SceneMaterialProps {
   wireframe: boolean;
   metalness: number;
   roughness: number;
+  specular?: string;
+  shininess?: number;
+  transmission?: number;
+  thickness?: number;
+  ior?: number;
+  clearcoat?: number;
+  clearcoatRoughness?: number;
+  attenuationColor?: string;
+  attenuationDistance?: number;
   emissive: string;
   emissiveIntensity: number;
   aoStrength: number;

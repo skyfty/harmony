@@ -1,23 +1,23 @@
 <template>
   <view :class="['card', variant === 'list' ? 'list' : 'card-bg']" @tap="emit('tap')">
     <template v-if="variant === 'list'">
+      <view class="title-row title-row--list">
+        <view class="name-fav">
+          <text class="name">{{ name }}</text>
+          <view v-if="typeof favoriteCount === 'number'" class="fav">
+            <text class="fav-icon">❤</text>
+            <text class="fav-count">{{ favoriteCount }}</text>
+          </view>
+        </view>
+        <view v-if="typeof rating === 'number'" class="rating">
+          <text class="star">★</text>
+          <text class="value">{{ rating.toFixed(1) }}</text>
+        </view>
+      </view>
+
       <view class="list-row">
         <image class="thumb" :src="coverUrl" mode="aspectFill" />
         <view class="body-list">
-          <view class="title-row">
-            <view class="name-fav">
-              <text class="name">{{ name }}</text>
-              <view v-if="typeof favoriteCount === 'number'" class="fav">
-                <text class="fav-icon">❤</text>
-                <text class="fav-count">{{ favoriteCount }}</text>
-              </view>
-            </view>
-            <view v-if="typeof rating === 'number'" class="rating">
-              <text class="star">★</text>
-              <text class="value">{{ rating.toFixed(1) }}</text>
-            </view>
-          </view>
-
           <view class="meta-row">
             <view class="badge-wrap">
               <view v-if="isHot" class="badge badge-hot">热门</view>
@@ -152,9 +152,72 @@ const emit = defineEmits<{ (event: 'tap'): void }>()
 
 .list {
   display: flex;
-  height: 142px;
+  flex-direction: column;
+  height: auto;
   padding: 10px;
   box-sizing: border-box;
+}
+
+.title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.title-row--list {
+  margin-bottom: 10px;
+}
+
+.list-row {
+  display: grid;
+  grid-template-columns: 124px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: start;
+  width: 100%;
+  min-width: 0;
+}
+
+.name-fav {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.name {
+  display: block;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #1a1f2e;
+  word-break: break-all;
+}
+
+.fav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #ff6b6b;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.fav-icon,
+.star {
+  font-size: 12px;
+}
+
+.rating {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #ffb400;
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .thumb {
@@ -165,29 +228,16 @@ const emit = defineEmits<{ (event: 'tap'): void }>()
   flex-shrink: 0;
 }
 
-.list-row {
-  display: flex;
-  flex-direction: row;
-  gap: 12px;
-  align-items: stretch;
-  flex: 1;
-  min-height: 0;
-}
-
 .body-list {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  padding-left: 10px;
   padding-top: 4px;
   padding-bottom: 6px;
-  flex: 1;
-  min-height: 0;
-  height: 100%;
+  min-width: 0;
 }
 
 .meta-row {
-  margin-top: 6px;
   display: flex;
   gap: 6px;
   align-items: flex-start;
@@ -251,46 +301,6 @@ const emit = defineEmits<{ (event: 'tap'): void }>()
   -webkit-backdrop-filter: blur(5px);
   backdrop-filter: blur(5px);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.name {
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1f2e;
-}
-
-.name-fav {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.fav {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #ff6b6b;
-  font-size: 12px;
-}
-
-.fav-icon,
-.star {
-  font-size: 12px;
-}
-
-.rating {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: #ffb400;
-  font-size: 12px;
 }
 
 .progress-row {

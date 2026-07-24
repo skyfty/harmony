@@ -26,9 +26,25 @@ interface MaterialFormState extends Omit<SceneMaterialProps, 'textures'> {
   textures: TextureMapState
 }
 
-const SLIDER_FIELDS = ['opacity', 'metalness', 'roughness', 'emissiveIntensity', 'aoStrength', 'envMapIntensity'] as const
+const SLIDER_FIELDS = ['opacity', 'metalness', 'roughness', 'shininess', 'transmission', 'thickness', 'ior', 'clearcoat', 'clearcoatRoughness', 'attenuationDistance', 'emissiveIntensity', 'aoStrength', 'envMapIntensity'] as const
 
-const COMMON_SLIDER_FIELDS: readonly SliderField[] = ['opacity', 'metalness', 'roughness']
+const MATERIAL_TYPE_OPTIONS: Array<{ value: SceneMaterialType; label: string }> = [
+  { value: 'MeshStandardMaterial', label: 'Standard' },
+  { value: 'MeshPhongMaterial', label: 'Phong' },
+  { value: 'MeshBasicMaterial', label: 'Basic' },
+  { value: 'MeshLambertMaterial', label: 'Lambert' },
+  { value: 'MeshMatcapMaterial', label: 'MatCap' },
+  { value: 'MeshToonMaterial', label: 'Toon' },
+  { value: 'MeshPhysicalMaterial', label: 'Physical' },
+  { value: 'MeshNormalMaterial', label: 'Normal' },
+]
+
+const STANDARD_COMMON_SLIDER_FIELDS: readonly SliderField[] = ['opacity', 'metalness', 'roughness']
+const STANDARD_ADVANCED_SLIDER_FIELDS: readonly SliderField[] = ['emissiveIntensity', 'aoStrength', 'envMapIntensity']
+const PHONG_COMMON_SLIDER_FIELDS: readonly SliderField[] = ['opacity', 'shininess', 'emissiveIntensity']
+const PHONG_ADVANCED_SLIDER_FIELDS: readonly SliderField[] = ['aoStrength', 'envMapIntensity']
+const PHYSICAL_COMMON_SLIDER_FIELDS: readonly SliderField[] = ['opacity', 'metalness', 'roughness', 'transmission', 'thickness', 'ior']
+const PHYSICAL_ADVANCED_SLIDER_FIELDS: readonly SliderField[] = ['clearcoat', 'clearcoatRoughness', 'attenuationDistance', 'emissiveIntensity', 'aoStrength', 'envMapIntensity']
 const MATERIAL_PROPS_COMMIT_DEBOUNCE_MS = 48
 
 type SliderField = (typeof SLIDER_FIELDS)[number]
@@ -52,7 +68,8 @@ const emit = defineEmits<{
 }>()
 
 const TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'metalness', 'roughness', 'ao', 'emissive', 'displacement']
-const COMMON_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'roughness']
+const STANDARD_COMMON_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['albedo', 'normal', 'roughness']
+const STANDARD_ADVANCED_TEXTURE_SLOTS: SceneMaterialTextureSlot[] = ['metalness', 'ao', 'emissive', 'displacement']
 const MATERIAL_FLAG_OPTIONS = [
   { value: 'transparent', label: 'Transparent' },
   { value: 'wireframe', label: 'Wireframe' },
@@ -77,6 +94,13 @@ const SLIDER_CONFIG: Record<SliderField, SliderConfigEntry> = {
   opacity: { min: 0, max: 1, step: 0.05, decimals: 2 },
   metalness: { min: 0, max: 1, step: 0.01, decimals: 2 },
   roughness: { min: 0, max: 1, step: 0.01, decimals: 2 },
+  shininess: { min: 0, max: 100, step: 1, decimals: 0 },
+  transmission: { min: 0, max: 1, step: 0.01, decimals: 2 },
+  thickness: { min: 0, max: 50, step: 0.01, decimals: 2 },
+  ior: { min: 1, max: 3, step: 0.01, decimals: 2 },
+  clearcoat: { min: 0, max: 1, step: 0.01, decimals: 2 },
+  clearcoatRoughness: { min: 0, max: 1, step: 0.01, decimals: 2 },
+  attenuationDistance: { min: 0, max: 1000, step: 0.1, decimals: 2 },
   emissiveIntensity: { min: 0, max: 10, step: 0.1, decimals: 2 },
   aoStrength: { min: 0, max: 2, step: 0.05, decimals: 2 },
   envMapIntensity: { min: 0, max: 10, step: 0.1, decimals: 2 },
@@ -109,6 +133,15 @@ const DEFAULT_PROPS: SceneMaterialProps = {
   wireframe: false,
   metalness: 0.1,
   roughness: 1.0,
+  specular: '#111111',
+  shininess: 30,
+  transmission: 0,
+  thickness: 0,
+  ior: 1.5,
+  clearcoat: 0,
+  clearcoatRoughness: 0,
+  attenuationColor: '#ffffff',
+  attenuationDistance: 0,
   emissive: '#000000',
   emissiveIntensity: 0,
   aoStrength: 1,
@@ -147,6 +180,15 @@ const materialForm = reactive<MaterialFormState>({
   wireframe: DEFAULT_PROPS.wireframe,
   metalness: DEFAULT_PROPS.metalness,
   roughness: DEFAULT_PROPS.roughness,
+  specular: DEFAULT_PROPS.specular,
+  shininess: DEFAULT_PROPS.shininess,
+  transmission: DEFAULT_PROPS.transmission,
+  thickness: DEFAULT_PROPS.thickness,
+  ior: DEFAULT_PROPS.ior,
+  clearcoat: DEFAULT_PROPS.clearcoat,
+  clearcoatRoughness: DEFAULT_PROPS.clearcoatRoughness,
+  attenuationColor: DEFAULT_PROPS.attenuationColor,
+  attenuationDistance: DEFAULT_PROPS.attenuationDistance,
   emissive: DEFAULT_PROPS.emissive,
   emissiveIntensity: DEFAULT_PROPS.emissiveIntensity,
   aoStrength: DEFAULT_PROPS.aoStrength,
@@ -191,15 +233,26 @@ const activeMaterialIndex = computed(() => {
   return nodeMaterials.value.findIndex((item) => item.id === entry.id)
 })
 
-const selectedMaterialType = ref<SceneMaterialType | null>(null)
+const selectedMaterialType = computed<SceneMaterialType | null>(() => activeNodeMaterial.value?.type ?? null)
+const selectedMaterialTypeLabel = computed(() => {
+  const type = selectedMaterialType.value
+  return MATERIAL_TYPE_OPTIONS.find((option) => option.value === type)?.label ?? type ?? 'Unknown'
+})
 const isUiDisabled = computed(() => !!props.disabled)
 
+const isPhongMaterial = computed(() => selectedMaterialType.value === 'MeshPhongMaterial')
+const isPhysicalMaterial = computed(() => selectedMaterialType.value === 'MeshPhysicalMaterial')
+
 const visibleSliderFields = computed<SliderField[]>(() =>
-  showAllProperties.value ? [...SLIDER_FIELDS] : [...COMMON_SLIDER_FIELDS],
+  isPhongMaterial.value
+    ? (showAllProperties.value ? [...PHONG_COMMON_SLIDER_FIELDS, ...PHONG_ADVANCED_SLIDER_FIELDS] : [...PHONG_COMMON_SLIDER_FIELDS])
+    : isPhysicalMaterial.value
+      ? (showAllProperties.value ? [...PHYSICAL_COMMON_SLIDER_FIELDS, ...PHYSICAL_ADVANCED_SLIDER_FIELDS] : [...PHYSICAL_COMMON_SLIDER_FIELDS])
+      : (showAllProperties.value ? [...STANDARD_COMMON_SLIDER_FIELDS, ...STANDARD_ADVANCED_SLIDER_FIELDS] : [...STANDARD_COMMON_SLIDER_FIELDS]),
 )
 
 const visibleTextureSlots = computed<SceneMaterialTextureSlot[]>(() =>
-  showAllProperties.value ? [...TEXTURE_SLOTS] : [...COMMON_TEXTURE_SLOTS],
+  showAllProperties.value ? [...STANDARD_COMMON_TEXTURE_SLOTS, ...STANDARD_ADVANCED_TEXTURE_SLOTS] : [...STANDARD_COMMON_TEXTURE_SLOTS],
 )
 
 const materialFlagSelection = computed<MaterialFlagOption[]>({
@@ -290,7 +343,6 @@ watch(
       baseColorMenuOpen.value = false
       emissiveColorMenuOpen.value = false
       lastSyncedMaterialId.value = null
-      selectedMaterialType.value = null
       resetDirtyState()
       resetMaterialSaveState()
       showAllProperties.value = false
@@ -300,7 +352,6 @@ watch(
     }
     const isNewSelection = entry.id !== lastSyncedMaterialId.value
     applyPropsToForm(entry, { name: entry.name ?? '', description: '' })
-    selectedMaterialType.value = entry.type ?? null
     if (isNewSelection) {
       resetDirtyState()
       resetMaterialSaveState()
@@ -391,20 +442,22 @@ function clampNumber(value: number, min: number, max: number, fallback: number):
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {
-  return tryNormalizeHexColor(value) ?? fallback
+  return parseHexColor(value) ?? fallback
 }
 
-function tryNormalizeHexColor(value: unknown): string | null {
+function parseHexColor(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null
   }
-  const trimmed = value.trim()
-  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
-  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(prefixed)
-  if (!match) {
+  const trimmed = value.replace(/\s+/g, '').trim()
+  if (!trimmed) {
     return null
   }
-  const hexValue = match[1] ?? ''
+  const prefixed = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
+  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(prefixed)) {
+    return null
+  }
+  const hexValue = prefixed.slice(1)
   if (hexValue.length === 3) {
     const [r, g, b] = hexValue.split('')
     return `#${r}${r}${g}${g}${b}${b}`.toLowerCase()
@@ -423,6 +476,34 @@ function applyPropsToForm(
   materialForm.wireframe = !!props.wireframe
   materialForm.metalness = clampNumber(props.metalness ?? DEFAULT_PROPS.metalness, 0, 1, DEFAULT_PROPS.metalness)
   materialForm.roughness = clampNumber(props.roughness ?? DEFAULT_PROPS.roughness, 0, 1, DEFAULT_PROPS.roughness)
+  const defaultSpecular = DEFAULT_PROPS.specular ?? '#111111'
+  const defaultShininess = DEFAULT_PROPS.shininess ?? 30
+  const defaultTransmission = DEFAULT_PROPS.transmission ?? 0
+  const defaultThickness = DEFAULT_PROPS.thickness ?? 0
+  const defaultIor = DEFAULT_PROPS.ior ?? 1.5
+  const defaultClearcoat = DEFAULT_PROPS.clearcoat ?? 0
+  const defaultClearcoatRoughness = DEFAULT_PROPS.clearcoatRoughness ?? 0
+  const defaultAttenuationColor = DEFAULT_PROPS.attenuationColor ?? '#ffffff'
+  const defaultAttenuationDistance = DEFAULT_PROPS.attenuationDistance ?? 0
+  materialForm.specular = normalizeHexColor(props.specular ?? defaultSpecular, defaultSpecular)
+  materialForm.shininess = clampNumber(props.shininess ?? defaultShininess, 0, 100, defaultShininess)
+  materialForm.transmission = clampNumber(props.transmission ?? defaultTransmission, 0, 1, defaultTransmission)
+  materialForm.thickness = clampNumber(props.thickness ?? defaultThickness, 0, 50, defaultThickness)
+  materialForm.ior = clampNumber(props.ior ?? defaultIor, 1, 3, defaultIor)
+  materialForm.clearcoat = clampNumber(props.clearcoat ?? defaultClearcoat, 0, 1, defaultClearcoat)
+  materialForm.clearcoatRoughness = clampNumber(
+    props.clearcoatRoughness ?? defaultClearcoatRoughness,
+    0,
+    1,
+    defaultClearcoatRoughness,
+  )
+  materialForm.attenuationColor = normalizeHexColor(props.attenuationColor ?? defaultAttenuationColor, defaultAttenuationColor)
+  materialForm.attenuationDistance = clampNumber(
+    props.attenuationDistance ?? defaultAttenuationDistance,
+    0,
+    SLIDER_CONFIG.attenuationDistance.max,
+    defaultAttenuationDistance,
+  )
   materialForm.emissive = normalizeHexColor(props.emissive, DEFAULT_PROPS.emissive)
   materialForm.emissiveIntensity = clampNumber(
     props.emissiveIntensity ?? DEFAULT_PROPS.emissiveIntensity,
@@ -501,7 +582,7 @@ function commitMaterialMetadata(update: { name?: string }) {
 function handleHexColorChange(field: 'color' | 'emissive', value: string | null) {
   const nextValue = typeof value === 'string' ? value : ''
   materialForm[field] = nextValue
-  const normalized = tryNormalizeHexColor(nextValue)
+  const normalized = parseHexColor(nextValue)
   if (!normalized) {
     return
   }
@@ -511,6 +592,28 @@ function handleHexColorChange(field: 'color' | 'emissive', value: string | null)
   } else {
     commitMaterialProps({ emissive: normalized })
   }
+}
+
+function handlePhongHexColorChange(field: 'specular', value: string | null) {
+  const nextValue = typeof value === 'string' ? value : ''
+  materialForm[field] = nextValue
+  const normalized = parseHexColor(nextValue)
+  if (!normalized) {
+    return
+  }
+  materialForm[field] = normalized
+  commitMaterialProps({ specular: normalized })
+}
+
+function handlePhysicalHexColorChange(field: 'attenuationColor', value: string | null) {
+  const nextValue = typeof value === 'string' ? value : ''
+  materialForm[field] = nextValue
+  const normalized = parseHexColor(nextValue)
+  if (!normalized) {
+    return
+  }
+  materialForm[field] = normalized
+  commitMaterialProps({ attenuationColor: normalized })
 }
 
 function handleColorPickerInput(field: 'color' | 'emissive', value: string | null) {
@@ -1029,6 +1132,18 @@ async function handleImportFileChange(event: Event) {
               />
             </div>
 
+            <div class="material-metadata">
+              <v-text-field
+                label="Material Type"
+                variant="solo"
+                density="compact"
+                hide-details
+                :model-value="selectedMaterialTypeLabel"
+                readonly
+                :disabled="isUiDisabled"
+              />
+            </div>
+
             <v-alert
               v-if="materialSaveError"
               density="compact"
@@ -1117,6 +1232,82 @@ async function handleImportFileChange(event: Event) {
                   </v-menu>
                 </div>
               </div>
+              <div v-if="isPhongMaterial" class="material-color">
+                <div class="color-input">
+                  <v-text-field
+                    class="slider-input"
+                    label="Specular"
+                    :model-value="materialForm.specular"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    @update:model-value="(value) => handlePhongHexColorChange('specular', value ?? '')"
+                  />
+                  <v-menu
+                    :close-on-content-click="false"
+                    transition="scale-transition"
+                    location="bottom start"
+                  >
+                    <template #activator="{ props: menuProps }">
+                      <button
+                        class="color-swatch"
+                        type="button"
+                        v-bind="menuProps"
+                        :style="{ backgroundColor: materialForm.specular }"
+                      >
+                        <span class="sr-only">Choose specular color</span>
+                      </button>
+                    </template>
+                    <div class="color-picker">
+                      <v-color-picker
+                        :model-value="materialForm.specular"
+                        mode="hex"
+                        :modes="['hex']"
+                        hide-inputs
+                        @update:model-value="(value) => handlePhongHexColorChange('specular', value)"
+                      />
+                    </div>
+                  </v-menu>
+                </div>
+              </div>
+              <div v-if="isPhysicalMaterial" class="material-color">
+                <div class="color-input">
+                  <v-text-field
+                    class="slider-input"
+                    label="Attenuation Color"
+                    :model-value="materialForm.attenuationColor"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    @update:model-value="(value) => handlePhysicalHexColorChange('attenuationColor', value ?? '')"
+                  />
+                  <v-menu
+                    :close-on-content-click="false"
+                    transition="scale-transition"
+                    location="bottom start"
+                  >
+                    <template #activator="{ props: menuProps }">
+                      <button
+                        class="color-swatch"
+                        type="button"
+                        v-bind="menuProps"
+                        :style="{ backgroundColor: materialForm.attenuationColor }"
+                      >
+                        <span class="sr-only">Choose attenuation color</span>
+                      </button>
+                    </template>
+                    <div class="color-picker">
+                      <v-color-picker
+                        :model-value="materialForm.attenuationColor"
+                        mode="hex"
+                        :modes="['hex']"
+                        hide-inputs
+                        @update:model-value="(value) => handlePhysicalHexColorChange('attenuationColor', value)"
+                      />
+                    </div>
+                  </v-menu>
+                </div>
+              </div>
               <v-select
                 class="side-select"
                 label="Side"
@@ -1130,6 +1321,23 @@ async function handleImportFileChange(event: Event) {
                 :model-value="materialForm.side"
                 @update:model-value="handleSideChange"
               />
+
+              <div v-if="isPhongMaterial" class="slider-row">
+                <v-text-field
+                  class="slider-input"
+                  label="Shininess"
+                  :model-value="formatSliderValue('shininess')"
+                  :min="SLIDER_CONFIG.shininess.min"
+                  :max="SLIDER_CONFIG.shininess.max"
+                  :step="SLIDER_CONFIG.shininess.step"
+                  type="number"
+                  density="compact"
+                  hide-details
+                  variant="underlined"
+                  inputmode="numeric"
+                  @update:model-value="(value) => handleSliderChange('shininess', value)"
+                />
+              </div>
 
               <v-select
                 v-if="showAllProperties"

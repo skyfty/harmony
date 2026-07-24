@@ -179,6 +179,7 @@ import {
   DEFAULT_SCENE_MATERIAL_TYPE,
   MATERIAL_TEXTURE_SLOTS,
 } from '@/types/material'
+import { PHYSICAL_GLASS_MATERIAL_DEFAULTS } from '@schema/material'
 import { createBehaviorSequenceId } from '@schema/behaviors/definitions'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 
@@ -1349,6 +1350,15 @@ const DEFAULT_MATERIAL_PROPS: SceneMaterialProps = {
   wireframe: false,
   metalness: 0.1,
   roughness: 1.0,
+  specular: '#111111',
+  shininess: 30,
+  transmission: 0,
+  thickness: 0,
+  ior: 1.5,
+  clearcoat: 0,
+  clearcoatRoughness: 0,
+  attenuationColor: '#ffffff',
+  attenuationDistance: 0,
   emissive: '#000000',
   emissiveIntensity: 0,
   aoStrength: 1,
@@ -1555,6 +1565,18 @@ function createMaterialProps(overrides?: Partial<SceneMaterialProps> | null): Sc
   }, overrides)
 }
 
+function createMaterialPropsForType(
+  type?: SceneMaterialType,
+  overrides?: Partial<SceneMaterialProps> | null,
+): SceneMaterialProps {
+  const base = mergeMaterialProps({
+    ...DEFAULT_MATERIAL_PROPS,
+    ...(type === 'MeshPhysicalMaterial' ? PHYSICAL_GLASS_MATERIAL_DEFAULTS : {}),
+    textures: cloneTextureMap(DEFAULT_MATERIAL_PROPS.textures),
+  }, null)
+  return mergeMaterialProps(base, overrides ?? null)
+}
+
 function cloneMaterialProps(props: SceneMaterialProps): SceneMaterialProps {
   return mergeMaterialProps({
     ...DEFAULT_MATERIAL_PROPS,
@@ -1570,7 +1592,7 @@ function createSceneMaterial(
 ): SceneMaterial {
   const now = new Date().toISOString()
   const resolvedName = name.trim() || 'New Material'
-  const resolvedProps = createMaterialProps(props)
+  const resolvedProps = createMaterialPropsForType(options.type, props)
   return {
     id: options.id ?? generateUuid(),
     name: resolvedName,
@@ -1839,6 +1861,15 @@ function materialUpdateToProps(update: Partial<SceneNodeMaterial> | Partial<Scen
   if (update.wireframe !== undefined) result.wireframe = update.wireframe
   if (update.metalness !== undefined) result.metalness = update.metalness
   if (update.roughness !== undefined) result.roughness = update.roughness
+  if (update.specular !== undefined) result.specular = update.specular
+  if (update.shininess !== undefined) result.shininess = update.shininess
+  if (update.transmission !== undefined) result.transmission = update.transmission
+  if (update.thickness !== undefined) result.thickness = update.thickness
+  if (update.ior !== undefined) result.ior = update.ior
+  if (update.clearcoat !== undefined) result.clearcoat = update.clearcoat
+  if (update.clearcoatRoughness !== undefined) result.clearcoatRoughness = update.clearcoatRoughness
+  if (update.attenuationColor !== undefined) result.attenuationColor = update.attenuationColor
+  if (update.attenuationDistance !== undefined) result.attenuationDistance = update.attenuationDistance
   if (update.emissive !== undefined) result.emissive = update.emissive
   if (update.emissiveIntensity !== undefined) result.emissiveIntensity = update.emissiveIntensity
   if (update.aoStrength !== undefined) result.aoStrength = update.aoStrength
@@ -10941,7 +10972,7 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const baseProps = createMaterialProps(options.props ?? null)
+      const baseProps = createMaterialPropsForType(options.type ?? DEFAULT_SCENE_MATERIAL_TYPE, options.props ?? null)
 
       let created: SceneNodeMaterial | null = null
       let requiresDynamicMeshPatch = false

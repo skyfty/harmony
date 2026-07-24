@@ -20,6 +20,7 @@ export {
   DEFAULT_TEXTURE_SETTINGS,
   DEFAULT_TEXTURE_SETTINGS_SIGNATURE,
   MATERIAL_TEXTURE_SLOTS,
+  PHYSICAL_GLASS_MATERIAL_DEFAULTS,
   applyMaterialConfigToMaterial,
   applyMaterialOverrides,
   disposeMaterialOverrides,

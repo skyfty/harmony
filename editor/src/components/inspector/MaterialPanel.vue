@@ -8,6 +8,7 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { cloneTextureSettings, createTextureSettings, type SceneNodeMaterial } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 import { renderMaterialThumbnailDataUrl } from '@/utils/materialAsset'
+import type { SceneMaterialType } from '@schema/core'
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
 type TextureAsset = ProjectAsset & { type: 'image' | 'texture' }
@@ -41,6 +42,16 @@ const groundDefaultPreviewThumbnail = ref<string | null>(null)
 let groundDefaultPreviewToken = 0
 
 const DEFAULT_MATERIAL_COLOR = '#ffffff'
+const MATERIAL_CREATE_OPTIONS: Array<{ value: SceneMaterialType; label: string; description: string }> = [
+  { value: 'MeshStandardMaterial', label: '标准材质槽', description: 'PBR 标准材质' },
+  { value: 'MeshPhongMaterial', label: 'Phong 材质槽', description: '高光材质' },
+  { value: 'MeshBasicMaterial', label: '基础材质槽', description: '不受光照影响' },
+  { value: 'MeshLambertMaterial', label: 'Lambert 材质槽', description: '漫反射材质' },
+  { value: 'MeshMatcapMaterial', label: 'MatCap 材质槽', description: '基于材质球贴图' },
+  { value: 'MeshToonMaterial', label: 'Toon 材质槽', description: '卡通着色材质' },
+  { value: 'MeshPhysicalMaterial', label: 'Physical 材质槽', description: '更完整的物理材质' },
+  { value: 'MeshNormalMaterial', label: '法线材质槽', description: '按法线显示颜色' },
+]
 const GROUND_DEFAULT_MATERIAL_PROPS = {
   color: '#707070',
   transparent: false,
@@ -233,11 +244,14 @@ function clearMaterialPreviewThumbnail(slotId: string) {
   materialPreviewThumbnails.value = next
 }
 
-function handleAddMaterialSlot() {
+function handleAddMaterialSlot(type?: SceneMaterialType) {
   if (!canAddMaterialSlot.value || !selectedNodeId.value) {
     return
   }
-  const created = sceneStore.addNodeMaterial(selectedNodeId.value) as SceneNodeMaterial | null
+  if (!type) {
+    return
+  }
+  const created = sceneStore.addNodeMaterial(selectedNodeId.value, { type }) as SceneNodeMaterial | null
   if (!created) {
     return
   }
@@ -574,13 +588,27 @@ function handleConfirmDeleteSlot() {
     <v-expansion-panel-title>
       <span class="material-panel-title__label">Material</span>
       <v-spacer />
-      <v-btn
-        icon="mdi-plus"
-        size="small"
-        variant="text"
-        :disabled="!canAddMaterialSlot"
-        @click.stop="handleAddMaterialSlot"
-      />
+      <v-menu location="bottom end" :close-on-content-click="true">
+        <template #activator="{ props: menuProps }">
+          <v-btn
+            icon="mdi-plus"
+            size="small"
+            variant="text"
+            :disabled="!canAddMaterialSlot"
+            v-bind="menuProps"
+          />
+        </template>
+        <v-list density="compact" min-width="240" class="material-create-menu">
+          <v-list-item
+            v-for="option in MATERIAL_CREATE_OPTIONS"
+            :key="option.value"
+            @click="handleAddMaterialSlot(option.value)"
+          >
+            <v-list-item-title>{{ option.label }}</v-list-item-title>
+            <v-list-item-subtitle>{{ option.description }}</v-list-item-subtitle>
+          </v-list-item>
+        </v-list>
+      </v-menu>
       <v-btn
         icon="mdi-minus"
         size="small"
