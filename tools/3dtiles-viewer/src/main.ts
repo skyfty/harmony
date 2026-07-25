@@ -3,6 +3,7 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
+import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { TilesRenderer, CAMERA_FRAME } from '3d-tiles-renderer'
 import type { Tile } from '3d-tiles-renderer/core'
@@ -164,6 +165,8 @@ glbScene.add(glbSun)
 const glbCaptureRoot = new THREE.Group()
 glbCaptureRoot.name = 'glb-capture-root'
 
+const defaultSkyboxUrl = new URL('./background.exr', import.meta.url).href
+
 const glbCamera = new THREE.PerspectiveCamera(45, 1, 0.01, 100000)
 const glbRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: false })
 glbRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
@@ -206,6 +209,28 @@ const glbFlyController = createCtrlClickFlyController(
     return resolvePointerPlaneTarget(glbCamera, glbRenderer.domElement, event, planePoint, planeNormal)
   },
 )
+
+async function applyDefaultSkybox(): Promise<void> {
+  try {
+    const texture = await new EXRLoader().loadAsync(defaultSkyboxUrl)
+    texture.mapping = THREE.EquirectangularReflectionMapping
+
+    const mainPmremGenerator = new THREE.PMREMGenerator(mainRenderer)
+    const mainEnvironment = mainPmremGenerator.fromEquirectangular(texture).texture
+    mainPmremGenerator.dispose()
+
+    const glbPmremGenerator = new THREE.PMREMGenerator(glbRenderer)
+    const glbEnvironment = glbPmremGenerator.fromEquirectangular(texture).texture
+    glbPmremGenerator.dispose()
+
+    mainScene.background = texture
+    mainScene.environment = mainEnvironment
+    glbScene.background = texture
+    glbScene.environment = glbEnvironment
+  } catch (error) {
+    console.warn('Failed to load default skybox EXR.', error)
+  }
+}
 
 let tiles: TilesRenderer | null = null
 let sourceLabel = '-'
@@ -1672,8 +1697,14 @@ function animate(): void {
 
 resizeMain()
 resizeGlb()
-loadTiles().catch((error) => {
-  setStatus('初始化失败', 'error')
-  setPlaceholder(error instanceof Error ? error.message : '初始化失败', 'error')
-})
-animate()
+
+async function bootstrap(): Promise<void> {
+  await applyDefaultSkybox()
+  loadTiles().catch((error) => {
+    setStatus('初始化失败', 'error')
+    setPlaceholder(error instanceof Error ? error.message : '初始化失败', 'error')
+  })
+  animate()
+}
+
+void bootstrap()

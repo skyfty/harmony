@@ -12203,12 +12203,20 @@ export const useSceneStore = defineStore('scene', {
       if (!selection.length) {
         return false
       }
-      const nodes = selection
-        .map((id) => findNodeById(this.nodes, id))
-        .filter((node): node is SceneNode => Boolean(node))
-      if (!nodes.length) {
+      const subtreeIds = new Set<string>()
+      selection.forEach((id) => {
+        const node = findNodeById(this.nodes, id)
+        if (!node) {
+          return
+        }
+        collectNodeSubtreeIds(node).forEach((subtreeId) => subtreeIds.add(subtreeId))
+      })
+      if (!subtreeIds.size) {
         return false
       }
+      const nodes = Array.from(subtreeIds)
+        .map((id) => findNodeById(this.nodes, id))
+        .filter((node): node is SceneNode => Boolean(node))
       const shouldLock = nodes.some((node) => !(node.locked ?? false))
       const targetLock = shouldLock
       const shouldUpdate = nodes.some((node) => (node.locked ?? false) !== targetLock)

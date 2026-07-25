@@ -13670,6 +13670,9 @@ function pickSceneNodeAtPointerIncludingHiddenLandform(
 }
 
 function handleViewportDoubleClickNode(nodeId: string): void {
+  if (sceneStore.isNodeSelectionLocked(nodeId)) {
+    return
+  }
   const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
   const toolForNode = resolveBuildToolForNodeId(nodeId)
 
@@ -16764,7 +16767,9 @@ async function handlePointerDown(event: PointerEvent) {
     }
 
     flushPendingScenePatchesForInteraction()
-    const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event)
+    const hit = pickSceneNodeAtPointerIncludingHiddenLandform(event, {
+      includeSelectionLocked: Boolean(event.ctrlKey || event.metaKey),
+    })
     if (hit) {
       const hitNodeId = hit.nodeId
       handleViewportDoubleClickNode(hitNodeId)

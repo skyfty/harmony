@@ -32,9 +32,9 @@ import { getCachedModelObject } from '@schema/modelObjectCache'
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
-const localHeight = ref<number>(WALL_DEFAULT_HEIGHT)
-const localWidth = ref<number>(WALL_DEFAULT_WIDTH)
-const localRepeatInstanceStep = ref<number>(WALL_DEFAULT_REPEAT_INSTANCE_STEP)
+const localHeight = ref<string>(String(WALL_DEFAULT_HEIGHT))
+const localWidth = ref<string>(String(WALL_DEFAULT_WIDTH))
+const localRepeatInstanceStep = ref<string>(String(WALL_DEFAULT_REPEAT_INSTANCE_STEP))
 
 const isSyncingFromScene = ref(false)
 const isApplyingDimensions = ref(false)
@@ -426,11 +426,13 @@ watch(
       return
     }
     isSyncingFromScene.value = true
-      localHeight.value = toFixedTwoDecimals(props.height ?? WALL_DEFAULT_HEIGHT)
-    localWidth.value = toFixedTwoDecimals(props.width ?? WALL_DEFAULT_WIDTH)
-    localRepeatInstanceStep.value = Number.isFinite((props as any).repeatInstanceStep)
-      ? Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, Number((props as any).repeatInstanceStep))
-      : WALL_DEFAULT_REPEAT_INSTANCE_STEP
+    localHeight.value = String(toFixedTwoDecimals(props.height ?? WALL_DEFAULT_HEIGHT))
+    localWidth.value = String(toFixedTwoDecimals(props.width ?? WALL_DEFAULT_WIDTH))
+    localRepeatInstanceStep.value = String(
+      Number.isFinite((props as any).repeatInstanceStep)
+        ? Math.max(WALL_MIN_REPEAT_INSTANCE_STEP, Number((props as any).repeatInstanceStep))
+        : WALL_DEFAULT_REPEAT_INSTANCE_STEP,
+    )
     nextTick(() => {
       isSyncingFromScene.value = false
     })
@@ -471,11 +473,13 @@ function commitWallDimensions(raw: WallDimensionValues) {
       props.width !== nextDimensions.width ||
       (hasThickness && props.thickness !== nextDimensions.thickness)
 
-    if (localHeight.value !== nextDimensions.height) {
-      localHeight.value = nextDimensions.height
+    const nextHeightText = String(nextDimensions.height)
+    const nextWidthText = String(nextDimensions.width)
+    if (localHeight.value !== nextHeightText) {
+      localHeight.value = nextHeightText
     }
-    if (localWidth.value !== nextDimensions.width) {
-      localWidth.value = nextDimensions.width
+    if (localWidth.value !== nextWidthText) {
+      localWidth.value = nextWidthText
     }
 
     if (hasChanges) {
@@ -1264,18 +1268,13 @@ function applyRepeatInstanceStepUpdate(rawValue: unknown) {
   const nextValue = normalizeRepeatInstanceStep(rawValue)
   const currentValue = normalizeRepeatInstanceStep((component.props as any)?.repeatInstanceStep)
   if (Math.abs(currentValue - nextValue) <= 1e-6) {
-    if (Math.abs(localRepeatInstanceStep.value - nextValue) > 1e-6) {
-      localRepeatInstanceStep.value = nextValue
+    if (localRepeatInstanceStep.value !== String(nextValue)) {
+      localRepeatInstanceStep.value = String(nextValue)
     }
     return
   }
-  localRepeatInstanceStep.value = nextValue
+  localRepeatInstanceStep.value = String(nextValue)
   sceneStore.updateNodeComponentProps(nodeId, component.id, { repeatInstanceStep: nextValue } as any)
-}
-
-function handleRepeatInstanceStepModelUpdate(value: unknown): void {
-  localRepeatInstanceStep.value = normalizeRepeatInstanceStep(value)
-  applyRepeatInstanceStepUpdate(value)
 }
 
 async function resolveBodyAssetAutoFitRepeatInstanceStep(
@@ -1394,9 +1393,9 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
 
             <div class="wall-dimension-row">
               <v-text-field
-                v-model.number="localHeight"
+                v-model="localHeight"
                 label="Height (m)"
-                type="number"
+                type="text"
                 density="compact"
                 variant="underlined"
                 class="slider-input"
@@ -1407,9 +1406,9 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
                 @keydown.enter.prevent="applyDimensions"
               />
               <v-text-field
-                v-model.number="localWidth"
+                v-model="localWidth"
                 label="Width (m)"
-                type="number"
+                type="text"
                 density="compact"
                 variant="underlined"
                 class="slider-input"
@@ -1458,14 +1457,14 @@ async function handleAutoFitRepeatInstanceStep(): Promise<void> {
             <v-text-field
               density="compact"
               variant="underlined"
-              type="number"
+              type="text"
               label="Step (m)"
               hide-details
               step="0.01"
               :min="WALL_MIN_REPEAT_INSTANCE_STEP"
               :disabled="((wallComponent?.props as any)?.wallRenderMode ?? 'stretch') !== 'repeatInstances'"
-              :model-value="localRepeatInstanceStep"
-              @update:modelValue="handleRepeatInstanceStepModelUpdate"
+              v-model="localRepeatInstanceStep"
+              inputmode="decimal"
               @blur="applyRepeatInstanceStepUpdate(localRepeatInstanceStep)"
               @keydown.enter.prevent="applyRepeatInstanceStepUpdate(localRepeatInstanceStep)"
             />

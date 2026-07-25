@@ -25,8 +25,13 @@ export const VIEW_POINT_CAMERA_ZOOM_MAX = 100
 export const VIEW_POINT_RUNTIME_METADATA_KEY = '__harmonyViewPointCamera'
 
 const viewPointWorldMatrixHelper = new THREE.Matrix4()
+const viewPointNodePositionHelper = new THREE.Vector3()
+const viewPointNodeQuaternionHelper = new THREE.Quaternion()
+const viewPointLocalPositionHelper = new THREE.Vector3()
+const viewPointLocalQuaternionHelper = new THREE.Quaternion()
 const viewPointDecomposeScaleHelper = new THREE.Vector3()
 const viewPointForwardHelper = new THREE.Vector3()
+const viewPointLocalEulerHelper = new THREE.Euler(0, 0, 0, 'XYZ')
 
 export interface ViewPointComponentProps {
   initiallyVisible: boolean
@@ -167,7 +172,24 @@ export function resolveViewPointWorldCameraPose(
   const target = out?.target ?? new THREE.Vector3()
 
   viewPointWorldMatrixHelper.copy(nodeWorldMatrix)
-  viewPointWorldMatrixHelper.decompose(position, quaternion, viewPointDecomposeScaleHelper)
+  viewPointWorldMatrixHelper.decompose(viewPointNodePositionHelper, viewPointNodeQuaternionHelper, viewPointDecomposeScaleHelper)
+
+  viewPointLocalPositionHelper.set(
+    normalized.cameraLocalPositionX,
+    normalized.cameraLocalPositionY,
+    normalized.cameraLocalPositionZ,
+  )
+  viewPointLocalPositionHelper.applyQuaternion(viewPointNodeQuaternionHelper)
+  position.copy(viewPointNodePositionHelper).add(viewPointLocalPositionHelper)
+
+  viewPointLocalEulerHelper.set(
+    normalized.cameraLocalRotationX,
+    normalized.cameraLocalRotationY,
+    normalized.cameraLocalRotationZ,
+    'XYZ',
+  )
+  viewPointLocalQuaternionHelper.setFromEuler(viewPointLocalEulerHelper)
+  quaternion.copy(viewPointNodeQuaternionHelper).multiply(viewPointLocalQuaternionHelper)
 
   up.set(0, 1, 0).applyQuaternion(quaternion).normalize()
   viewPointForwardHelper.set(0, 0, -1).applyQuaternion(quaternion).normalize()
