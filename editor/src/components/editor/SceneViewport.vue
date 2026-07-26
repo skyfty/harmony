@@ -2047,6 +2047,12 @@ const cameraStatusZoomRatioText = computed(() => {
   return `${Math.max(0, ratio).toFixed(2)}x`
 })
 const transformToolKeyMap = new Map<string, EditorTool>(TRANSFORM_TOOLS.map((tool) => [tool.key, tool.value]))
+const transformNudgeAxisByArrowKey: Partial<Record<string, 'x' | 'y' | 'z'>> = {
+  ArrowLeft: 'x',
+  ArrowRight: 'z',
+  ArrowUp: 'y',
+  ArrowDown: 'y',
+}
 
 const buildToolsStore = useBuildToolsStore()
 const {
@@ -2194,6 +2200,79 @@ function getSafeTransformTool(tool: EditorTool): EditorTool {
     return 'translate'
   }
   return tool
+}
+
+function getTransformNudgeStep(event: KeyboardEvent): number {
+  const baseStep =  0.01
+  const multiplier = event.ctrlKey || event.metaKey ? 10 : 1
+  const direction = event.shiftKey ? -1 : 1
+  return baseStep * multiplier * direction
+}
+
+function applyTransformNudgeShortcut(event: KeyboardEvent): boolean {
+  const activeTool = getSafeTransformTool(props.activeTool)
+  if (activeTool !== 'translate' && activeTool !== 'rotate' && activeTool !== 'scale') {
+    return false
+  }
+  if (transformControls?.dragging) {
+    return false
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds.filter(Boolean) : []
+  if (selectedIds.length !== 1) {
+    return false
+  }
+
+  const nodeId = getPrimarySelectedNodeId()
+  if (!nodeId || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return false
+  }
+
+  const axis = transformNudgeAxisByArrowKey[event.code]
+  if (!axis) {
+    return false
+  }
+
+  const object = objectMap.get(nodeId) ?? null
+  if (!object) {
+    return false
+  }
+
+  const step = getTransformNudgeStep(event)
+  const nextPosition = object.position.clone()
+  const nextRotation = object.rotation.clone()
+  const nextScale = object.scale.clone()
+
+  switch (activeTool) {
+    case 'translate':
+      nextPosition[axis] += step
+      object.position.copy(nextPosition)
+      break
+    case 'rotate':
+      nextRotation[axis] += step
+      object.rotation.copy(nextRotation)
+      break
+    case 'scale':
+      nextScale[axis] += step
+      object.scale.copy(nextScale)
+      break
+    default:
+      return false
+  }
+
+  object.updateMatrixWorld(true)
+  syncInstancedTransform(object, true)
+  syncInstancedOutlineEntryTransform(nodeId)
+  emitTransformUpdates([
+    {
+      id: nodeId,
+      position: nextPosition,
+      rotation: toEulerLike(nextRotation),
+      scale: nextScale,
+    },
+  ])
+  updateGridHighlightFromObject(object)
+  updateSelectionHighlights()
+  return true
 }
 
 function getPrimarySelectedNodeId(): string | null {
@@ -23676,7 +23755,11 @@ function handleViewportShortcut(event: KeyboardEvent) {
     handled = openCoordinateEditor()
   }
 
-  if (!event.ctrlKey && !event.metaKey && event.altKey && !event.shiftKey) {
+  if (!handled) {
+    handled = applyTransformNudgeShortcut(event)
+  }
+
+  if (!handled && !event.ctrlKey && !event.metaKey && event.altKey && !event.shiftKey) {
     handled = handleDirectionalCameraShortcut(event.code)
   }
 

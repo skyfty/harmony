@@ -86,6 +86,11 @@ export function createUvDebugMaterial(options: UvDebugMaterialOptions = {}): THR
 
   material.side = options.side ?? THREE.DoubleSide
   material.name = style === 'uv' ? 'UV Debug Material' : 'Grid Debug Material'
+  material.userData = {
+    ...(material.userData ?? {}),
+    harmonyDebugMaterial: true,
+    harmonyDebugMaterialStyle: style,
+  }
   material.needsUpdate = true
 
   return material

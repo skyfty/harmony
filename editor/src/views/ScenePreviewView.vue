@@ -1705,8 +1705,6 @@ const instancedCullingBox = new THREE.Box3()
 const instancedCullingSphere = new THREE.Sphere()
 const SCENE_PREVIEW_FOG_HEADROOM_RATIO = 0.88
 const SCENE_PREVIEW_FOG_MIN_DISTANCE = 0.001
-const SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4
-const SCENE_PREVIEW_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5
 const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
@@ -10861,8 +10859,12 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	activeCamera.updateMatrixWorld(true)
 	const environmentSettings = currentScenePreviewEnvironmentSettings
 	if (environmentSettings) {
-		applyFogSettings(environmentSettings, activeCamera)
+		applyFogSettings(environmentSettings)
 	}
+	// Proximity is driven by the controlled node/vehicle position, not by the
+	// camera pose. Keep it on the frame path so On Approach/On Depart still
+	// fire when a first-person camera barely moves or while physics reloads.
+	updateBehaviorProximity()
 	if (physicsBridgeSceneReloading) {
 		return
 	}
@@ -10890,7 +10892,6 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 		if (scenePreviewPerf.shouldRunInstancedCulling(activeCamera, nowMs)) {
 			void updateInstancedCullingAndLod(activeCamera)
 		}
-		updateBehaviorProximity()
 	}
 	// Keep ground chunk meshes in sync with camera position.
 	if (shouldUpdateCameraSystems && cachedGroundNodeId && cachedGroundDynamicMesh && cachedGroundNode) {

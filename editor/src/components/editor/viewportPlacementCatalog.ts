@@ -2,6 +2,7 @@ import * as THREE from 'three'
 
 import { createPrimitiveMesh } from '@schema/import'
 import type { GeometryType, LightNodeType } from '@schema/core'
+import { tintPreviewFallbackMaterials } from './previewFallbackMaterials'
 
 export type ViewportPlacementTab = 'geometry' | 'light' | 'other'
 
@@ -319,6 +320,7 @@ export function buildViewportPlacementPreview(item: ViewportPlacementItem): THRE
 
   groundPreviewObject(preview)
   setPreviewMaterialState(preview)
+  tintPreviewFallbackMaterials(preview, item.id, { opacity: 0.82 })
 
   return preview
 }

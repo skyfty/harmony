@@ -12,6 +12,7 @@ import { cloneObject3DShared } from '@/utils/prefabPreviewCache'
 import { acquirePrefabPreviewRoot, type PrefabPreviewHandle } from '@/utils/prefabPreviewBuilder'
 import type { AssetCacheStoreLike } from '@/stores/assetCacheStore'
 import { isBuildPresetAsset } from '@/utils/buildPresetAsset'
+import { tintPreviewFallbackMaterials } from './previewFallbackMaterials'
 
 export type DragPreviewController = {
   group: THREE.Group
@@ -109,12 +110,13 @@ function findAssetMetadata(assetId: string, projectTree: ProjectDirectory[] | un
   return search(projectTree)
 }
 
-function applyPreviewVisualTweaks(object: THREE.Object3D) {
+function applyPreviewVisualTweaks(object: THREE.Object3D, previewSeed: string) {
   object.position.set(0, 0, 0)
   object.rotation.set(0, 0, 0)
   object.scale.set(1, 1, 1)
   // Intentionally keep original materials for preview rendering.
   // We avoid forcing transparency/opacity so the drag preview matches the final object visually.
+  tintPreviewFallbackMaterials(object, previewSeed, { opacity: 0.88 })
 }
 
 export function useDragPreview(options: Options): DragPreviewController {
@@ -175,7 +177,7 @@ export function useDragPreview(options: Options): DragPreviewController {
     clearObject(true)
 
     const previewObject = cloneObject3DShared(object)
-    applyPreviewVisualTweaks(previewObject)
+    applyPreviewVisualTweaks(previewObject, previewId)
     dragPreviewObject = previewObject
     dragPreviewAssetId = previewId
     group.add(previewObject)
@@ -216,7 +218,7 @@ export function useDragPreview(options: Options): DragPreviewController {
 
       // Clone to avoid mutating cached modelObjectCache entries.
       const previewObject = cloneObject3DShared(baseGroup.object)
-      applyPreviewVisualTweaks(previewObject)
+      applyPreviewVisualTweaks(previewObject, previewId)
       dragPreviewObject = previewObject
       dragPreviewAssetId = previewId
       group.add(previewObject)
@@ -298,7 +300,7 @@ export function useDragPreview(options: Options): DragPreviewController {
         const root = handle.root
 
         root.position.set(0, 0, 0)
-        applyPreviewVisualTweaks(root)
+        applyPreviewVisualTweaks(root, asset.id)
         dragPreviewObject = root
         dragPreviewAssetId = asset.id
         activePrefabHandle = handle
