@@ -71,8 +71,7 @@ import {
 } from '@harmony/utils/mini-client';
 import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
-import { getSelectedVehicle, getSelectedVehicleIdentifier } from '@/utils/vehicleSelection';
-import { getSelectedControllable, type ControllableType } from '@/utils/controllableSelection';
+import { getSelectedControllable, getSelectedControllableIdentifier, type ControllableType } from '@/utils/controllableSelection';
 import { listControllableAssets, type ControllableAsset } from '@/api/mini/controllableAssets';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
 import { ensureMiniCapability } from '@/platform/runtime';
@@ -406,27 +405,27 @@ onLoad((query: Record<string, unknown> | undefined) => {
     ? mergedRecord.controllableType as ControllableType
     : null;
   {
-    const selectedVehicle = (requestedControllableType ? getSelectedControllable(requestedControllableType) : null)
+    const selectedControllable = (requestedControllableType ? getSelectedControllable(requestedControllableType) : null)
       ?? getSelectedControllable('vehicle')
       ?? getSelectedControllable('character')
       ?? getSelectedControllable('ship')
       ?? getSelectedControllable('aircraft')
-      ?? getSelectedVehicle();
-    const selectedType = selectedVehicle && typeof (selectedVehicle as { type?: unknown }).type === 'string'
-      ? (selectedVehicle as { type: string }).type
+      ?? null;
+    const selectedType = selectedControllable && typeof (selectedControllable as { type?: unknown }).type === 'string'
+      ? (selectedControllable as { type: string }).type
       : '';
     selectedControllableType.value = selectedType === 'character'
       || selectedType === 'ship'
       || selectedType === 'aircraft'
       ? selectedType
       : 'vehicle';
-    selectedVehicleIdentifier.value = typeof mergedRecord.vehicleIdentifier === 'string'
-      ? decodeQueryValue(mergedRecord.vehicleIdentifier)
-      : typeof selectedVehicle?.identifier === 'string'
-        ? selectedVehicle.identifier.trim()
-        : getSelectedVehicleIdentifier();
-    const selectedPrefabUrl = selectedVehicle && typeof selectedVehicle === 'object'
-      ? (selectedVehicle as { prefabUrl?: unknown }).prefabUrl
+    selectedVehicleIdentifier.value = typeof mergedRecord.controllableIdentifier === 'string'
+      ? decodeQueryValue(mergedRecord.controllableIdentifier)
+      : typeof selectedControllable?.identifier === 'string'
+        ? selectedControllable.identifier.trim()
+        : getSelectedControllableIdentifier(selectedControllableType.value);
+    const selectedPrefabUrl = selectedControllable && typeof selectedControllable === 'object'
+      ? (selectedControllable as { prefabUrl?: unknown }).prefabUrl
       : null;
     selectedVehiclePrefabUrl.value = typeof selectedPrefabUrl === 'string'
       ? selectedPrefabUrl.trim()

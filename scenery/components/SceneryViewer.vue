@@ -5872,26 +5872,6 @@ async function commitSceneEntryRendering(
   return isCurrentInitializationToken(token) && !error.value;
 }
 
-function findFirstVehicleNodeId(node: SceneNode | null | undefined): string | null {
-  if (!node) {
-    return null;
-  }
-  const stack: SceneNode[] = [node];
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    if (resolveEnabledComponentState<VehicleComponentProps>(current, VEHICLE_COMPONENT_TYPE)) {
-      return current.id ?? null;
-    }
-    if (Array.isArray(current.children) && current.children.length) {
-      stack.push(...current.children);
-    }
-  }
-  return null;
-}
-
 function findFirstSteerTargetNodeId(node: SceneNode | null | undefined, targetType: SteerControllableTargetType): string | null {
   if (!node) return null;
   const stack: SceneNode[] = [node];
@@ -6147,41 +6127,50 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
   let finalTargetNodeId = binding.targetNodeId;
   let nextPayload = payload;
   const selectedAsset = resolveSelectedControllableAsset(binding.steerProps.targetType);
-  const matchedRequest = selectedAsset
-    ? buildControllableAssetSpawnRequest(selectedAsset)
-    : findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, defaultSteerIdentifier);
-  if (matchedRequest) {
-    const source = await resolveRuntimePrefabSource(matchedRequest, runtimePrefabSourceResolverOptions);
-    if (source) {
-      const nextDocument = JSON.parse(JSON.stringify(payload.document));
-      const documentNodeMap = new Map<string, SceneNode>();
-      const documentParentMap = new Map<string, string | null>();
-      rebuildSceneNodeIndex(nextDocument.nodes ?? null, documentNodeMap, documentParentMap);
-      const targetNode = resolveSceneNodeById(documentNodeMap, binding.targetNodeId);
-      const steerHostNode = resolveSceneNodeById(documentNodeMap, binding.steerNodeId);
-      const steerHostComponent = steerHostNode
-        ? resolveEnabledComponentState<SteerComponentProps>(steerHostNode, STEER_COMPONENT_TYPE)
-        : null;
-      if (targetNode && steerHostNode && steerHostComponent) {
-        const cloned = cloneRuntimePrefabNode(source.prefab);
-        applySteerTargetTransform(targetNode, cloned.root);
-        const replacementTargetNodeId = findFirstSteerTargetNodeId(cloned.root, binding.steerProps.targetType) ?? findFirstVehicleNodeId(cloned.root) ?? cloned.root.id ?? null;
-        if (replacementTargetNodeId && replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
-          transferAutoTourComponentProps(targetNode, cloned.root);
-          steerHostComponent.props = clampSteerComponentProps({
-            ...(steerHostComponent.props ?? {}),
-            targetNodeId: replacementTargetNodeId,
-            defaultIdentifier: defaultSteerIdentifier ?? binding.steerProps.defaultIdentifier ?? null,
-          });
-          nextDocument.updatedAt = new Date().toISOString();
-          finalTargetNodeId = replacementTargetNodeId;
-          nextPayload = {
-            ...payload,
-            document: nextDocument,
-          };
-          appliedRuntimePrefabSpawnKeys.add(buildRuntimePrefabRequestKey(matchedRequest));
-        }
-      }
+  if (!selectedAsset) {
+    throw new Error(`未找到与 Steer targetType="${binding.steerProps.targetType}" 匹配的已选可实例化资产`);
+  }
+
+  const matchedRequest = buildControllableAssetSpawnRequest(selectedAsset);
+  if (!matchedRequest) {
+    throw new Error(`可实例化资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 缺少 prefabUrl 或 assetId`);
+  }
+
+  const source = await resolveRuntimePrefabSource(matchedRequest, runtimePrefabSourceResolverOptions);
+  if (!source) {
+    throw new Error(`无法加载可实例化资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 的预制体资源`);
+  }
+
+  const nextDocument = JSON.parse(JSON.stringify(payload.document));
+  const documentNodeMap = new Map<string, SceneNode>();
+  const documentParentMap = new Map<string, string | null>();
+  rebuildSceneNodeIndex(nextDocument.nodes ?? null, documentNodeMap, documentParentMap);
+  const targetNode = resolveSceneNodeById(documentNodeMap, binding.targetNodeId);
+  const steerHostNode = resolveSceneNodeById(documentNodeMap, binding.steerNodeId);
+  const steerHostComponent = steerHostNode
+    ? resolveEnabledComponentState<SteerComponentProps>(steerHostNode, STEER_COMPONENT_TYPE)
+    : null;
+  if (targetNode && steerHostNode && steerHostComponent) {
+    const cloned = cloneRuntimePrefabNode(source.prefab);
+    applySteerTargetTransform(targetNode, cloned.root);
+    const replacementTargetNodeId = findFirstSteerTargetNodeId(cloned.root, binding.steerProps.targetType) ?? cloned.root.id ?? null;
+    if (!replacementTargetNodeId) {
+      throw new Error(`资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 不包含 targetType="${binding.steerProps.targetType}" 的可控节点`);
+    }
+    if (replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
+      transferAutoTourComponentProps(targetNode, cloned.root);
+      steerHostComponent.props = clampSteerComponentProps({
+        ...(steerHostComponent.props ?? {}),
+        targetNodeId: replacementTargetNodeId,
+        defaultIdentifier: defaultSteerIdentifier ?? binding.steerProps.defaultIdentifier ?? null,
+      });
+      nextDocument.updatedAt = new Date().toISOString();
+      finalTargetNodeId = replacementTargetNodeId;
+      nextPayload = {
+        ...payload,
+        document: nextDocument,
+      };
+      appliedRuntimePrefabSpawnKeys.add(buildRuntimePrefabRequestKey(matchedRequest));
     }
   }
 

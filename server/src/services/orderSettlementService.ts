@@ -5,8 +5,6 @@ import { ProductModel } from '@/models/Product'
 import { CouponModel } from '@/models/Coupon'
 import { UserProductModel } from '@/models/UserProduct'
 import { UserCouponModel } from '@/models/UserCoupon'
-import { VehicleModel } from '@/models/Vehicle'
-import { UserVehicleModel } from '@/models/UserVehicle'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
 import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
 import { addProductToWarehouse } from '@/services/warehouseService'
@@ -115,25 +113,6 @@ async function fulfillOrder(order: any, session?: ClientSession): Promise<void> 
 			},
 			{ upsert: true, session },
 		).exec()
-
-		const boundVehicleQuery = VehicleModel.findOne({ productId: product._id }).select({ _id: 1 })
-		if (session) {
-			boundVehicleQuery.session(session)
-		}
-		const boundVehicle = await boundVehicleQuery.lean().exec()
-		if (boundVehicle?._id) {
-			await UserVehicleModel.updateOne(
-				{ userId: order.userId, vehicleId: boundVehicle._id },
-				{
-					$setOnInsert: {
-						userId: order.userId,
-						vehicleId: boundVehicle._id,
-						ownedAt: now,
-					},
-				},
-				{ upsert: true, session },
-			).exec()
-		}
 
 		const controllableQuery = ControllableAssetModel.findOne({ productId: product._id, isActive: true }).select({ _id: 1, type: 1 })
 		if (session) {

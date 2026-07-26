@@ -67,11 +67,6 @@ import {
   purchaseProduct,
 } from '@/controllers/miniprogram/productController'
 import {
-  listUserVehicles,
-  listVehicles,
-  setCurrentVehicle,
-} from '@/controllers/miniprogram/vehicleController'
-import {
   listControllableAssets,
   listUserControllableSelections,
   setCurrentControllableAsset,
@@ -153,7 +148,6 @@ miniRouter.post('/analytics/events', optionalMiniAuth, trackAnalyticsEvent)
 miniRouter.get('/products', optionalMiniAuth, listProducts)
 miniRouter.get('/products/:id', optionalMiniAuth, getProduct)
 miniRouter.get('/product-categories', optionalMiniAuth, listProductCategories)
-miniRouter.get('/vehicles', optionalMiniAuth, listVehicles)
 miniRouter.get('/controllable-assets', optionalMiniAuth, listControllableAssets)
 miniRouter.get('/coupons/catalog', optionalMiniAuth, listCouponCatalog)
 
@@ -209,8 +203,6 @@ miniRouter.post('/exhibitions/:id/share', shareExhibition)
 
 // products
 miniRouter.post('/products/:id/purchase', purchaseProduct)
-miniRouter.get('/user-vehicles', listUserVehicles)
-miniRouter.post('/vehicles/:id/select', setCurrentVehicle)
 miniRouter.get('/user-controllable-selections', listUserControllableSelections)
 miniRouter.post('/controllable-assets/:id/select', setCurrentControllableAsset)
 

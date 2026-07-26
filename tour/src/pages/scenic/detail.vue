@@ -125,10 +125,10 @@ import {
   listAchievements,
   toggleScenicFavorite,
 } from '@/api/mini';
+import { listControllableAssets, selectControllableAsset } from '@/api/mini/controllableAssets';
 import type { ScenicCheckinProgressItem } from '@/types/achievement';
 import type { ScenicDetail } from '@/types/scenic';
-import { getSelectedVehicleIdentifier, setSelectedVehicle } from '@/utils/vehicleSelection';
-import { listVehicles } from '@/api/mini/vehicles';
+import { getSelectedControllable, setSelectedControllable, type ControllableType } from '@/utils/controllableSelection';
 import { getStatusBarHeight, getViewportSize } from '@/utils/systemInfo';
 
 type ScenicDetailWithFlags = ScenicDetail & {
@@ -229,21 +229,29 @@ async function loadScenicCheckinProgress(scenicId: string): Promise<void> {
 async function enterScenery() {
   if (!scenic.value) return;
 
-  let vehicleIdentifier = getSelectedVehicleIdentifier();
-  // 若本地未同步车辆信息，则主动同步
-  if (!vehicleIdentifier) {
+  let selectedControllable = getSelectedControllable('vehicle')
+    || getSelectedControllable('character')
+    || getSelectedControllable('ship')
+    || getSelectedControllable('aircraft');
+
+  if (!selectedControllable) {
     try {
-      const vehicles = await listVehicles();
-      const current = vehicles.find((v) => v.isCurrent) || vehicles.find((v) => v.owned);
+      const assets = await listControllableAssets({ ownedOnly: true });
+      const current = assets.find((asset) => asset.isSelected) || assets.find((asset) => asset.isDefault) || assets[0];
       if (current) {
-        setSelectedVehicle(current);
-        vehicleIdentifier = typeof current.identifier === 'string' ? current.identifier.trim() : '';
+        await selectControllableAsset(current.id);
+        setSelectedControllable(current.type as ControllableType, current);
+        selectedControllable = current;
       }
-    } catch (e) {
-      // ignore, fallback to empty
+    } catch {
+      selectedControllable = null;
     }
   }
-  
+
+  const controllableIdentifier = typeof selectedControllable?.identifier === 'string'
+    ? selectedControllable.identifier.trim()
+    : '';
+  const controllableType = selectedControllable?.type ?? 'vehicle';
 
   const queryParts = [
     `packageUrl=${encodeURIComponent(scenic.value.scene.fileUrl)}`,
@@ -251,7 +259,8 @@ async function enterScenery() {
     `sceneSpotId=${encodeURIComponent(scenic.value.id)}`,
     `sceneId=${encodeURIComponent(scenic.value.sceneId)}`,
     `scenicTitle=${encodeURIComponent(scenic.value.title)}`,
-    `vehicleIdentifier=${encodeURIComponent(vehicleIdentifier)}`,
+    `controllableType=${encodeURIComponent(controllableType)}`,
+    `controllableIdentifier=${encodeURIComponent(controllableIdentifier)}`,
   ];
   console.log(queryParts);
   uni.navigateTo({

@@ -1,9 +1,9 @@
 import type { Context } from 'koa'
 import { OrderModel } from '@/models/Order'
 import { ProductModel } from '@/models/Product'
-import { VehicleModel } from '@/models/Vehicle'
 import { UserProductModel } from '@/models/UserProduct'
-import { UserVehicleModel } from '@/models/UserVehicle'
+import { ControllableAssetModel } from '@/models/ControllableAsset'
+import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
 import {
   applyBusinessOrderRenewalPaymentFailure,
   applyBusinessOrderRenewalPaymentSuccess,
@@ -69,15 +69,15 @@ async function fulfillPaidOrder(order: any): Promise<void> {
       { upsert: true },
     ).exec()
 
-    const boundVehicle = await VehicleModel.findOne({ productId: product._id }).select({ _id: 1 }).lean().exec()
-    if (boundVehicle?._id) {
-      await UserVehicleModel.updateOne(
-        { userId: order.userId, vehicleId: boundVehicle._id },
+    const controllable = await ControllableAssetModel.findOne({ productId: product._id, isActive: true }).select({ _id: 1, type: 1 }).lean().exec()
+    if (controllable?._id) {
+      await UserControllableSelectionModel.updateOne(
+        { userId: order.userId, controllableType: controllable.type },
         {
           $setOnInsert: {
             userId: order.userId,
-            vehicleId: boundVehicle._id,
-            ownedAt: now,
+            controllableType: controllable.type,
+            controllableAssetId: controllable._id,
           },
         },
         { upsert: true },
@@ -110,11 +110,12 @@ async function revokeRefundedOrderBenefits(order: any): Promise<void> {
       orderId: order._id,
     }).exec()
 
-    const boundVehicle = await VehicleModel.findOne({ productId: product._id }).select({ _id: 1 }).lean().exec()
-    if (boundVehicle?._id) {
-      await UserVehicleModel.deleteOne({
+    const controllable = await ControllableAssetModel.findOne({ productId: product._id, isActive: true }).select({ _id: 1, type: 1 }).lean().exec()
+    if (controllable?._id) {
+      await UserControllableSelectionModel.deleteOne({
         userId: order.userId,
-        vehicleId: boundVehicle._id,
+        controllableType: controllable.type,
+        controllableAssetId: controllable._id,
       }).exec()
     }
 

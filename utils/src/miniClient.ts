@@ -119,6 +119,30 @@ export interface CreateTravelLeavePayload {
   metadata?: Record<string, unknown>;
 }
 
+export type ControllableType = 'vehicle' | 'character' | 'ship' | 'aircraft';
+
+export interface ControllableAssetSelection {
+  id: string;
+  identifier: string;
+  name: string;
+  type: ControllableType;
+  sortOrder: number;
+  description: string;
+  prefabUrl?: string | null;
+  isActive: boolean;
+  isDefault: boolean;
+  productId: string | null;
+  product: {
+    id: string;
+    name: string;
+    price: number;
+    categoryId: string | null;
+  } | null;
+  runtimeConfig?: Record<string, unknown> | null;
+  owned: boolean;
+  isSelected: boolean;
+}
+
 export class MiniApiError extends Error {
   kind: RequestErrorKind;
   status?: number;
@@ -486,4 +510,14 @@ export function completeTravelLeaveRecord(payload: CreateTravelLeavePayload): Pr
     method: 'POST',
     body: payload,
   });
+}
+
+export async function listControllableAssets(options: { ownedOnly?: boolean } = {}): Promise<ControllableAssetSelection[]> {
+  const response = await miniRequest<{ total: number; assets: ControllableAssetSelection[] }>('/controllable-assets', {
+    method: 'GET',
+    query: {
+      ownedOnly: options.ownedOnly ? 'true' : undefined,
+    },
+  });
+  return Array.isArray(response.assets) ? response.assets : [];
 }

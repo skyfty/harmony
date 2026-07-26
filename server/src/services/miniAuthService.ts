@@ -3,6 +3,9 @@ import { AppUserModel } from '@/models/AppUser'
 import { MiniPlatformIdentityModel } from '@/models/MiniPlatformIdentity'
 import { signMiniAuthToken } from '@/utils/domainJwt'
 import { hashPassword, verifyPassword } from '@/utils/password'
+import { Types } from 'mongoose'
+import { ControllableAssetModel } from '@/models/ControllableAsset'
+import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
 
 type AuthProvider = 'wechat-mini-program' | 'password'
 type MiniPlatform = 'wechat' | 'douyin' | 'xiaohongshu'
@@ -39,6 +42,11 @@ type AppUserLean = {
   updatedAt: Date
 }
 
+type ControllableAssetLean = {
+  _id: Types.ObjectId
+  type: 'vehicle' | 'character' | 'ship' | 'aircraft'
+}
+
 export interface MiniSessionUser {
   id: string
   appKey?: string
@@ -69,6 +77,45 @@ export interface MiniSessionUser {
   exhibitionShareCount: number
   createdAt: string
   updatedAt: string
+}
+
+async function ensureDefaultControllableSelections(userId: Types.ObjectId): Promise<void> {
+  const defaultAssets = await ControllableAssetModel.find({
+    isActive: true,
+    isDefault: true,
+  })
+    .sort({ type: 1, sortOrder: 1, createdAt: -1 })
+    .select({ _id: 1, type: 1 })
+    .lean()
+    .exec() as ControllableAssetLean[]
+
+  if (!defaultAssets.length) {
+    return
+  }
+
+  const defaultAssetByType = new Map<ControllableAssetLean['type'], ControllableAssetLean>()
+  for (const asset of defaultAssets) {
+    if (!defaultAssetByType.has(asset.type)) {
+      defaultAssetByType.set(asset.type, asset)
+    }
+  }
+
+  await UserControllableSelectionModel.bulkWrite(
+    Array.from(defaultAssetByType.values()).map((asset) => ({
+      updateOne: {
+        filter: { userId, controllableType: asset.type },
+        update: {
+          $setOnInsert: {
+            userId,
+            controllableType: asset.type,
+            controllableAssetId: asset._id,
+          },
+        },
+        upsert: true,
+      },
+    })),
+    { ordered: false },
+  )
 }
 
 export interface MiniSessionResponse {
@@ -210,6 +257,13 @@ export async function miniRegisterWithPassword(input: {
     status: 'active',
   })
 
+  await ensureDefaultControllableSelections(created._id).catch((error) => {
+    console.warn('[mini-auth] failed to ensure default controllable selections after register', {
+      userId: created._id.toString(),
+      error,
+    })
+  })
+
   const user = buildMiniUser(created.toObject() as AppUserLean)
   return {
     token: issueMiniToken(user),
@@ -331,6 +385,13 @@ export async function miniLoginWithOpenId(input: {
         await existingIdentity.save()
         identity = existingIdentity
         user = createdUser
+
+        await ensureDefaultControllableSelections(createdUser._id).catch((error) => {
+          console.warn('[mini-auth] failed to ensure default controllable selections after wechat register', {
+            userId: createdUser._id.toString(),
+            error,
+          })
+        })
       }
     }
 

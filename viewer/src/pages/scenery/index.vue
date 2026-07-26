@@ -8,6 +8,7 @@
       :nominate-state-map="nominateStateMap"
       :create-physics-bridge="createSceneryPhysicsBridge"
       :default-steer-identifier="selectedVehicleIdentifier"
+      :controllable-assets="controllableAssets"
       :server-asset-base-url="serverAssetBaseUrl"
       :initial-punched-node-ids="initialPunchedNodeIds"
       :physics-engine="resolvedPhysicsEngine"
@@ -30,7 +31,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad, onUnload } from '@dcloudio/uni-app';
-import { createPunchRecord, getPunchProgress } from './utils/miniClient';
+import type { ExternalControllableAsset } from './schema/core';
+import { createPunchRecord, getPunchProgress, listControllableAssets } from './utils/miniClient';
 import { getDownloadCdnBaseUrl } from './utils/http';
 import SceneryViewer from './uni_modules/scenery/components/SceneryViewer.vue?async';
 import { createSceneryPhysicsBridge } from './createSceneryPhysicsBridge';
@@ -42,6 +44,7 @@ const packageCacheKey = ref<string>('');
 const sceneSpotId = ref<string>('');
 const sceneId = ref<string>('');
 const selectedVehicleIdentifier = ref<string>('');
+const controllableAssets = ref<ExternalControllableAsset[]>([]);
 const initialPunchedNodeIds = ref<string[]>([]);
 const serverAssetBaseUrl = getDownloadCdnBaseUrl();
 const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefined);
@@ -149,20 +152,44 @@ async function loadPunchProgress(): Promise<void> {
   }
 }
 
+async function loadControllableAssets(): Promise<void> {
+  try {
+    const assets = await listControllableAssets({ ownedOnly: true });
+    controllableAssets.value = assets as ExternalControllableAsset[];
+    if (!controllableAssets.value.length) {
+      loadError.value = '未找到可实例化资产，请先确认当前账号已拥有 vehicle 或 character 资产';
+    }
+  } catch {
+    controllableAssets.value = [];
+    loadError.value = '可实例化资产加载失败，无法进入场景';
+  }
+}
+
 onLoad((query: Record<string, unknown> | undefined) => {
   pageReady.value = false;
   loadError.value = '';
-  const record = (query ?? {}) as Record<string, unknown>;
-  projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
-  packageUrl.value = decodeQueryValue(record.packageUrl);
-  packageCacheKey.value = decodeQueryValue(record.packageCacheKey);
-  sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
-  sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
-  selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
-  resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(record.physicsEngine);
+  void (async () => {
+    const record = (query ?? {}) as Record<string, unknown>;
+    projectId.value = typeof record.projectId === 'string' ? record.projectId : '';
+    packageUrl.value = decodeQueryValue(record.packageUrl);
+    packageCacheKey.value = decodeQueryValue(record.packageCacheKey);
+    sceneSpotId.value = typeof record.sceneSpotId === 'string' ? record.sceneSpotId : '';
+    sceneId.value = typeof record.sceneId === 'string' ? record.sceneId : '';
+    selectedVehicleIdentifier.value = typeof record.vehicleIdentifier === 'string' ? record.vehicleIdentifier : 'car1';
+    resolvedPhysicsEngine.value = resolvePhysicsEngineFromQuery(record.physicsEngine);
 
-  void loadPunchProgress();
-  pageReady.value = true;
+    await loadControllableAssets();
+    if (loadError.value) {
+      return;
+    }
+
+    await loadPunchProgress();
+    if (loadError.value) {
+      return;
+    }
+
+    pageReady.value = true;
+  })();
 });
 
 onUnload(() => {
