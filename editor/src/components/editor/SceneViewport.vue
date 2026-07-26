@@ -10955,9 +10955,17 @@ watch(viewPointPreviewVisible, async (visible) => {
     return
   }
   await nextTick()
-  if (!viewPointPreviewRenderer && viewPointPreviewCanvasRef.value) {
+  const previewCanvas = viewPointPreviewCanvasRef.value
+  if (!previewCanvas) {
+    return
+  }
+  if (viewPointPreviewRenderer && viewPointPreviewRenderer.domElement !== previewCanvas) {
+    viewPointPreviewRenderer.dispose()
+    viewPointPreviewRenderer = null
+  }
+  if (!viewPointPreviewRenderer) {
     viewPointPreviewRenderer = new THREE.WebGLRenderer({
-      canvas: viewPointPreviewCanvasRef.value,
+      canvas: previewCanvas,
       antialias: true,
       alpha: true,
       powerPreference: 'high-performance',
