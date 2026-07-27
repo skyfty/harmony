@@ -1761,7 +1761,7 @@ let activeScenePackageBuildKey: string | null = null;
 let lastCompiledGroundLoadedChunkVersion = -1;
 type WindowResizeCallback = Parameters<typeof uni.onWindowResize>[0];
 let resizeListener: WindowResizeCallback | null = null;
-let canvasResult: UseCanvasResult | null = null;
+let canvasResult: WatchSnapshotCanvasResult | null = null;
 let initializing = false;
 let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
@@ -4918,21 +4918,8 @@ async function canvasToBlob(canvas: HTMLCanvasElement, mimeType = 'image/png'): 
   return null;
 }
 
-type MiniProgramFsManager = {
-  mkdirSync?: (dirPath: string, recursive?: boolean) => void;
-  writeFile?: (options: {
-    filePath: string;
-    data: ArrayBuffer | Uint8Array;
-    success?: () => void;
-    fail?: (error: unknown) => void;
-  }) => void;
-};
-
-type MiniProgramPlatform = {
-  getFileSystemManager?: () => MiniProgramFsManager;
-  env?: {
-    USER_DATA_PATH?: string;
-  };
+type WatchSnapshotCanvasResult = UseCanvasResult & {
+  componentInstance?: ComponentPublicInstance | null;
 };
 
 async function captureWatchSnapshotBlob(): Promise<Blob | null> {
@@ -4951,6 +4938,35 @@ async function captureWatchSnapshotBlob(): Promise<Blob | null> {
   return await canvasToBlob(canvas, 'image/png');
 }
 
+async function captureWatchSnapshotTempFilePath(): Promise<string | null> {
+  const context = renderContext;
+  const canvas = canvasResult?.canvas ?? null;
+  const componentInstance = canvasResult?.componentInstance ?? null;
+  if (!context || !canvas || !componentInstance) {
+    return null;
+  }
+
+  try {
+    context.renderer.render(context.scene, context.camera);
+  } catch (error) {
+    console.warn('[SceneryViewer] Failed to render frame before capture', error);
+  }
+
+  await yieldToMainThread();
+
+  return await new Promise<string | null>((resolve, reject) => {
+    uni.canvasToTempFilePath(
+      {
+        canvasId,
+        fileType: 'png',
+        success: (result: { tempFilePath: string }) => resolve(result.tempFilePath),
+        fail: reject,
+      },
+      componentInstance,
+    );
+  });
+}
+
 function triggerWatchSnapshotDownload(blob: Blob, fileName: string): void {
   if (typeof document === 'undefined') {
     throw new Error('当前环境不支持文件下载');
@@ -4966,43 +4982,6 @@ function triggerWatchSnapshotDownload(blob: Blob, fileName: string): void {
   link.click();
   document.body.removeChild(link);
   window.setTimeout(() => URL.revokeObjectURL(url), 500);
-}
-
-function getMiniProgramFsManager(): MiniProgramFsManager | null {
-  const uniAny = uni as typeof uni & { getFileSystemManager?: () => MiniProgramFsManager };
-  if (typeof uniAny.getFileSystemManager === 'function') {
-    return uniAny.getFileSystemManager();
-  }
-
-  const wxAny = typeof globalThis !== 'undefined' ? (globalThis as typeof globalThis & { wx?: MiniProgramPlatform }).wx : null;
-  if (wxAny && typeof wxAny.getFileSystemManager === 'function') {
-    return wxAny.getFileSystemManager();
-  }
-
-  return null;
-}
-
-async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
-  const anyBlob = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> };
-  if (typeof anyBlob.arrayBuffer === 'function') {
-    return await anyBlob.arrayBuffer();
-  }
-
-  return await new Promise<ArrayBuffer>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve((reader.result as ArrayBuffer) || new ArrayBuffer(0));
-    reader.onerror = () => reject(reader.error ?? new Error('读取截图失败'));
-    reader.readAsArrayBuffer(blob);
-  });
-}
-
-function resolveMiniProgramSnapshotPath(fileName: string): string {
-  const wxAny = typeof globalThis !== 'undefined' ? (globalThis as typeof globalThis & { wx?: MiniProgramPlatform }).wx : null;
-  const basePath = wxAny?.env?.USER_DATA_PATH;
-  if (typeof basePath !== 'string' || !basePath.trim()) {
-    throw new Error('无法获取本地存储路径');
-  }
-  return `${basePath.replace(/\/$/, '')}/harmony/watch-snapshots/${fileName}`;
 }
 
 async function ensureWritePhotosAlbumPermission(): Promise<boolean> {
@@ -5042,36 +5021,7 @@ async function ensureWritePhotosAlbumPermission(): Promise<boolean> {
   }
 }
 
-async function saveWatchSnapshotToMiniProgram(blob: Blob, fileName: string): Promise<void> {
-  const fs = getMiniProgramFsManager();
-  if (!fs || typeof fs.writeFile !== 'function') {
-    throw new Error('当前环境不支持文件写入');
-  }
-
-  const filePath = resolveMiniProgramSnapshotPath(fileName);
-  const dir = filePath.slice(0, filePath.lastIndexOf('/'));
-  try {
-    if (typeof fs.mkdirSync === 'function') {
-      fs.mkdirSync(dir, true);
-    }
-  } catch (error) {
-    console.warn('[SceneryViewer] Failed to prepare snapshot directory', error);
-  }
-
-  const bytes = await blobToArrayBuffer(blob);
-  const writeFile = fs.writeFile;
-  if (typeof writeFile !== 'function') {
-    throw new Error('当前环境不支持文件写入');
-  }
-  await new Promise<void>((resolve, reject) => {
-    writeFile({
-      filePath,
-      data: bytes,
-      success: () => resolve(),
-      fail: reject,
-    });
-  });
-
+async function saveWatchSnapshotToMiniProgram(filePath: string): Promise<void> {
   if (!(await ensureWritePhotosAlbumPermission())) {
     throw new Error('未获得保存到相册的权限');
   }
@@ -5092,16 +5042,22 @@ async function handleWatchSnapshotTap(): Promise<void> {
 
   watchSnapshotBusy.value = true;
   try {
-    const blob = await captureWatchSnapshotBlob();
-    if (!blob) {
-      uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
+    const fileName = buildWatchSnapshotFileName();
+    if (isWeChatMiniProgram) {
+      const filePath = await captureWatchSnapshotTempFilePath();
+      if (!filePath) {
+        uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
+        return;
+      }
+
+      await saveWatchSnapshotToMiniProgram(filePath);
+      uni.showToast({ title: '已保存到相册', icon: 'success' });
       return;
     }
 
-    const fileName = buildWatchSnapshotFileName();
-    if (isWeChatMiniProgram) {
-      await saveWatchSnapshotToMiniProgram(blob, fileName);
-      uni.showToast({ title: '已保存到相册', icon: 'success' });
+    const blob = await captureWatchSnapshotBlob();
+    if (!blob) {
+      uni.showToast({ title: '当前画面暂时无法保存', icon: 'none' });
       return;
     }
 
@@ -5979,9 +5935,17 @@ function resolveSceneAutoEnterSteerBinding(document: SceneJsonExportDocument): R
 }
 
 function resolveSelectedControllableAsset(targetType: SteerControllableTargetType): ExternalControllableAsset | null {
-  return (props.controllableAssets ?? [])
+  const assets =  (props.controllableAssets ?? [])
     .filter((asset) => asset?.type === targetType && asset.isSelected === true)
     .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))[0] ?? null;
+    if (assets == null || assets.length === 0) {
+      for (const asset of props.controllableAssets ?? []) {
+        if (asset?.type === targetType && asset.isActive && asset.isDefault) {
+          return asset;
+        }
+      }
+    }
+  return assets;
 }
 
 function buildControllableAssetSpawnRequest(asset: ExternalControllableAsset): RuntimePrefabSpawnRequest | null {
@@ -20116,7 +20080,7 @@ function teardownRenderer() {
   overlaySyncForceNextUpdate = true;
 }
 
-function handleUseCanvas(result: UseCanvasResult) {
+function handleUseCanvas(result: WatchSnapshotCanvasResult) {
   canvasResult = result;
   startRenderIfReady();
 }

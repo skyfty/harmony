@@ -30,7 +30,7 @@
 
 <script lang="ts" setup>
 import { adapter, type UseCanvasResult, type TouchEventLike } from "@minisheep/three-platform-adapter";
-import { getCurrentInstance, onMounted } from 'vue';
+import { getCurrentInstance, onMounted, type ComponentPublicInstance } from 'vue';
 
 export interface PlatformCanvasProps {
   type: '2d' | 'webgl' | 'webgl2';
@@ -51,7 +51,7 @@ const emit = defineEmits<{
   tap: [e: TouchEventLike];
   touchcancel: [e: TouchEventLike];
   dispatch: [e: TouchEventLike];
-  useCanvas: [e: UseCanvasResult];
+  useCanvas: [e: UseCanvasResult & { componentInstance?: ComponentPublicInstance | null }];
 }>();
 
 let additionHandler: (e: TouchEventLike) => void = () => {
@@ -76,7 +76,10 @@ onMounted(() => {
       result.eventHandler(e, false)
     }
     console.info(`[PlatformCanvas] useCanvas result`, result);
-    emit('useCanvas', result);
+    emit('useCanvas', {
+      ...result,
+      componentInstance: instance?.proxy ?? null,
+    });
   })
 })
 </script>

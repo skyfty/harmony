@@ -120,12 +120,6 @@ export default class Loader {
     }
   }
 
-  public loadItemList(items: DataTransferItemList) {
-    this.getFilesFromItemList(items, (files) => {
-      this.loadFiles(files);
-    });
-  }
-
   public loadFiles(files: File[]){
     if (files.length === 0) {
       return;
