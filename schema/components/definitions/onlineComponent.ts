@@ -732,7 +732,7 @@ class OnlineComponent extends Component<OnlineComponentProps> {
         ? computeMovingSyncInterval(this.props.syncInterval)
         : computeIdleSyncInterval(this.props.syncInterval)
       if (now - this.lastPeerSyncTimestamp >= effectiveSyncInterval && (changed || shouldKeepalive)) {
-        console.debug(`[Multiuser][peer-state] subjectType=${peerState.subjectType} nodeId=${normalizeOptionalString(peerState.subjectNodeId) ?? 'none'} action=${normalizeOptionalString(peerState.action) ?? 'none'} presentation=${getMultiuserPresentationSignature(peerState.presentation ?? null)}`)
+        // console.debug(`[Multiuser][peer-state] subjectType=${peerState.subjectType} nodeId=${normalizeOptionalString(peerState.subjectNodeId) ?? 'none'} action=${normalizeOptionalString(peerState.action) ?? 'none'} presentation=${getMultiuserPresentationSignature(peerState.presentation ?? null)}`)
         const message: MultiuserStateMessage = {
           type: 'state',
           state: peerState,

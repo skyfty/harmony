@@ -12950,7 +12950,8 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
   const controllers = new Map<string, RemoteMultiuserAnimationController>();
   root.traverse((object) => {
     const nodeId = typeof object.userData?.nodeId === 'string' ? object.userData.nodeId.trim() : '';
-    if (!nodeId) {
+    const controllerId = nodeId || object.uuid;
+    if (!controllerId) {
       return;
     }
     const clips = (object as unknown as { animations?: THREE.AnimationClip[] })?.animations;
@@ -12967,8 +12968,8 @@ function collectRemoteMultiuserAnimationControllers(root: THREE.Object3D): Map<s
     if (defaultClip) {
       activeAction = playAnimationClip(mixer, defaultClip, { loop: true });
     }
-    controllers.set(nodeId, {
-      nodeId,
+    controllers.set(controllerId, {
+      nodeId: controllerId,
       object,
       mixer,
       clips: validClips,
