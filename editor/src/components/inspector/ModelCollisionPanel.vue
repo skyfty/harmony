@@ -24,6 +24,7 @@ const modelCollisionComponent = computed(
     | SceneNodeComponentState<ModelCollisionComponentProps>
     | undefined,
 )
+const componentEnabled = computed(() => modelCollisionComponent.value?.enabled !== false)
 
 const modelCollisionProps = computed<ModelCollisionComponentProps | null>(() => {
   return resolveModelCollisionComponentPropsFromNode(selectedNode.value) ?? null
@@ -31,6 +32,30 @@ const modelCollisionProps = computed<ModelCollisionComponentProps | null>(() => 
 
 const isDrawActive = computed(() => activeBuildTool.value === 'modelCollision')
 const faceCount = computed(() => Array.isArray(modelCollisionProps.value?.faces) ? modelCollisionProps.value!.faces.length : 0)
+
+function handleToggleComponent() {
+  const component = modelCollisionComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  if (componentEnabled.value && isDrawActive.value) {
+    buildToolsStore.setActiveBuildTool(null)
+  }
+  sceneStore.toggleNodeComponentEnabled(nodeId, component.id)
+}
+
+function handleRemoveComponent() {
+  const component = modelCollisionComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId) {
+    return
+  }
+  if (isDrawActive.value) {
+    buildToolsStore.setActiveBuildTool(null)
+  }
+  sceneStore.removeNodeComponent(nodeId, component.id)
+}
 
 watch(
   modelCollisionProps,
@@ -84,7 +109,7 @@ function syncLegacyRuntimeData(props: ModelCollisionComponentProps): void {
 function updateComponent(patch: Partial<ModelCollisionComponentProps>): void {
   const component = ensureModelCollisionComponent()
   const nodeId = selectedNodeId.value
-  if (!component || !nodeId) {
+  if (!component || !nodeId || !componentEnabled.value) {
     return
   }
   const nextProps = {
@@ -96,6 +121,9 @@ function updateComponent(patch: Partial<ModelCollisionComponentProps>): void {
 }
 
 function handleStartEdit(): void {
+  if (!componentEnabled.value) {
+    return
+  }
   const component = ensureModelCollisionComponent()
   if (!component) {
     return
@@ -134,6 +162,35 @@ function handleClearFaces(): void {
     <v-expansion-panel-title>
       <div class="model-collision-panel-header">
         <span class="model-collision-panel-title">Model Collision Faces</span>
+        <v-spacer />
+        <v-menu
+          v-if="modelCollisionComponent"
+          location="bottom end"
+          origin="auto"
+          transition="fade-transition"
+        >
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              variant="text"
+              size="small"
+              class="component-menu-btn"
+              @click.stop
+            >
+              <v-icon size="18">mdi-dots-vertical</v-icon>
+            </v-btn>
+          </template>
+          <v-list density="compact">
+            <v-list-item @click.stop="handleToggleComponent">
+              <v-list-item-title>{{ componentEnabled ? 'Disable' : 'Enable' }}</v-list-item-title>
+            </v-list-item>
+            <v-divider class="component-menu-divider" inset />
+            <v-list-item @click.stop="handleRemoveComponent">
+              <v-list-item-title>Remove</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
@@ -146,6 +203,7 @@ function handleClearFaces(): void {
           variant="underlined"
           min="0.01"
           step="0.01"
+          :disabled="!componentEnabled"
           @blur="applyDefaultThickness"
           @keydown.enter.prevent="applyDefaultThickness"
         />
@@ -157,6 +215,7 @@ function handleClearFaces(): void {
             size="small"
             color="primary"
             variant="flat"
+            :disabled="!componentEnabled"
             @click="handleStartEdit"
           >
             {{ isDrawActive ? 'Editing...' : 'Edit Faces' }}
@@ -164,7 +223,7 @@ function handleClearFaces(): void {
           <v-btn
             size="small"
             variant="tonal"
-            :disabled="!isDrawActive"
+            :disabled="!componentEnabled || !isDrawActive"
             @click="handleStopEdit"
           >
             Stop
@@ -172,7 +231,7 @@ function handleClearFaces(): void {
           <v-btn
             size="small"
             variant="text"
-            :disabled="faceCount === 0"
+            :disabled="!componentEnabled || faceCount === 0"
             @click="handleClearFaces"
           >
             Clear Faces
@@ -187,6 +246,26 @@ function handleClearFaces(): void {
 </template>
 
 <style scoped>
+.model-collision-panel-header {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 0.4rem;
+}
+
+.model-collision-panel-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.component-menu-btn {
+  color: rgba(233, 236, 241, 0.82);
+}
+
+.component-menu-divider {
+  margin-inline: 0.6rem;
+}
+
 .model-collision-settings {
   display: flex;
   flex-direction: column;

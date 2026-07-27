@@ -80,6 +80,7 @@
     "three-nebula": "^10.0.3",
     "three-csm": "^4.2.1",
     "three-mesh-bvh": "^0.9.1",
+    "three-player-controller": "0.4.9",
     "uuid": "^3.4.0"
   },
   "devDependencies": {

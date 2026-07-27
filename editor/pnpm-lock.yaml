@@ -86,6 +86,9 @@ importers:
       three-mesh-bvh:
         specifier: ^0.9.1
         version: 0.9.8(three@0.172.0)
+      three-player-controller:
+        specifier: 0.4.9
+        version: 0.4.9(three-mesh-bvh@0.9.8(three@0.172.0))(three@0.172.0)
       three-viewport-gizmo:
         specifier: ^2.2.0
         version: 2.2.0(three@0.172.0)
@@ -1029,6 +1032,16 @@ packages:
     peerDependencies:
       three: '>=0.122.0 <1.0.0'
 
+  three-player-controller@0.4.9:
+    resolution: {integrity: sha512-DR9NObdwYqeEWf3PED/TDJ7coRXUwsj91qWPqXudCOCrstrBdQSHyehQOgX0WtuWC/3N6aU7zylLvhFfa/jXEw==}
+    peerDependencies:
+      '@dimforge/rapier3d-compat': ^0.12.0
+      three: '>=0.180.0'
+      three-mesh-bvh: '>=0.9.9'
+    peerDependenciesMeta:
+      '@dimforge/rapier3d-compat':
+        optional: true
+
   three-viewport-gizmo@2.2.0:
     resolution: {integrity: sha512-Jo9Liur1rUmdKk75FZumLU/+hbF+RtJHi1qsKZpntjKlCYScK6tjbYoqvJ9M+IJphrlQJF5oReFW7Sambh0N4Q==}
     peerDependencies:
@@ -1352,7 +1365,10 @@ snapshots:
       three-csm: 4.2.1
       three-mesh-bvh: 0.9.8(three@0.172.0)
       three-nebula: 10.0.3(three@0.172.0)
+      three-player-controller: 0.4.9(three-mesh-bvh@0.9.8(three@0.172.0))(three@0.172.0)
       uuid: 3.4.0
+    transitivePeerDependencies:
+      - '@dimforge/rapier3d-compat'
 
   '@harmony/utils@file:../utils': {}
 
@@ -1970,6 +1986,11 @@ snapshots:
       potpack: 1.0.2
       three: 0.172.0
       uuid: 3.4.0
+
+  three-player-controller@0.4.9(three-mesh-bvh@0.9.8(three@0.172.0))(three@0.172.0):
+    dependencies:
+      three: 0.172.0
+      three-mesh-bvh: 0.9.8(three@0.172.0)
 
   three-viewport-gizmo@2.2.0(three@0.172.0):
     dependencies:
