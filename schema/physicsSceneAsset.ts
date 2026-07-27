@@ -57,6 +57,8 @@ const legacyConvexOffsetInverseQuaternionHelper = new THREE.Quaternion()
 const groundAirWallPositionHelper = new THREE.Vector3()
 const groundAirWallQuaternionHelper = new THREE.Quaternion()
 const groundAirWallScaleHelper = new THREE.Vector3()
+const rigidbodyShapeRotationHelper = new THREE.Euler()
+const rigidbodyShapeQuaternionHelper = new THREE.Quaternion()
 const identityPhysicsRotation: PhysicsTransform['rotation'] = [0, 0, 0, 1]
 
 function createEmptyPhysicsSceneAsset(): PhysicsSceneAsset {
@@ -229,6 +231,20 @@ function scaleShapeOffset(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector
   return [ox * worldScale.x, oy * worldScale.y, oz * worldScale.z]
 }
 
+function toPhysicsRotation(rotation: RigidbodyPhysicsShape['rotation']): PhysicsTransform['rotation'] {
+  if (!rotation) {
+    return identityPhysicsRotation
+  }
+  rigidbodyShapeRotationHelper.set(rotation[0] ?? 0, rotation[1] ?? 0, rotation[2] ?? 0, 'XYZ')
+  rigidbodyShapeQuaternionHelper.setFromEuler(rigidbodyShapeRotationHelper).normalize()
+  return [
+    rigidbodyShapeQuaternionHelper.x,
+    rigidbodyShapeQuaternionHelper.y,
+    rigidbodyShapeQuaternionHelper.z,
+    rigidbodyShapeQuaternionHelper.w,
+  ]
+}
+
 function getShapeScale(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector3): PhysicsVector3 {
   if (shape.applyScale !== true) {
     return [1, 1, 1]
@@ -282,6 +298,7 @@ function buildShapeInstancesFromDefinition(
 ): BuildShapeInstance[] {
   const scale = getShapeScale(shape, worldScale)
   const scaledOffset = scaleShapeOffset(shape, worldScale)
+  const scaledRotation = toPhysicsRotation(shape.rotation)
 
   if (shape.kind === 'box') {
     const shapeId = pushShapeDescriptor(shapes, {
@@ -293,7 +310,7 @@ function buildShapeInstancesFromDefinition(
         shape.halfExtents[2] * scale[2],
       ],
     })
-    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+    return [{ shapeId, transform: { position: scaledOffset, rotation: scaledRotation } }]
   }
 
   if (shape.kind === 'sphere') {
@@ -302,7 +319,7 @@ function buildShapeInstancesFromDefinition(
       kind: 'sphere',
       radius: shape.radius * Math.max(scale[0], scale[1], scale[2]),
     })
-    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+    return [{ shapeId, transform: { position: scaledOffset, rotation: scaledRotation } }]
   }
 
   if (shape.kind === 'cylinder') {
@@ -315,7 +332,7 @@ function buildShapeInstancesFromDefinition(
       height: shape.height * scale[1],
       segments: shape.segments,
     })
-    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+    return [{ shapeId, transform: { position: scaledOffset, rotation: scaledRotation } }]
   }
 
   if (shape.kind === 'capsule') {
@@ -328,7 +345,7 @@ function buildShapeInstancesFromDefinition(
       radius,
       height,
     })
-    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+    return [{ shapeId, transform: { position: scaledOffset, rotation: scaledRotation } }]
   }
 
   if (shape.kind === 'convex') {
@@ -348,7 +365,7 @@ function buildShapeInstancesFromDefinition(
           .map((face) => face.map((index) => Math.trunc(index)))
         : undefined,
     })
-    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+    return [{ shapeId, transform: { position: scaledOffset, rotation: scaledRotation } }]
   }
 
   if (shape.kind === 'heightfield') {
@@ -379,7 +396,7 @@ function buildShapeInstancesFromDefinition(
       maxHeight: Number.isFinite(maxHeight) ? maxHeight : 0,
       localOffset: scaledOffset,
     })
-    return [{ shapeId, transform: { position: [0, 0, 0], rotation: identityPhysicsRotation } }]
+    return [{ shapeId, transform: { position: [0, 0, 0], rotation: scaledRotation } }]
   }
 
   if (shape.kind === 'static-mesh') {
@@ -399,7 +416,7 @@ function buildShapeInstancesFromDefinition(
       vertices,
       indices,
     })
-    return [{ shapeId, transform: { position: scaledOffset, rotation: identityPhysicsRotation } }]
+    return [{ shapeId, transform: { position: scaledOffset, rotation: scaledRotation } }]
   }
 
   return []

@@ -38,6 +38,7 @@ type EditableShape = {
   kind: ColliderShapeKind
   dimensions: THREE.Vector3
   offset: THREE.Vector3
+  rotation: THREE.Euler
 }
 
 const COLLIDER_SHAPE_OPTIONS: Array<{ label: string; value: ColliderShapeKind }> = [
@@ -296,6 +297,31 @@ function updateColliderStateFromGroup() {
   }
 }
 
+function getColliderGroupRotationTuple(): [number, number, number] {
+  if (!colliderGroup) {
+    return [0, 0, 0]
+  }
+  return [colliderGroup.rotation.x, colliderGroup.rotation.y, colliderGroup.rotation.z]
+}
+
+function buildPreviewObjectInLocalRotationFrame(): THREE.Group | null {
+  if (!previewModelGroup || !targetNode.value) {
+    return null
+  }
+
+  const frame = new THREE.Group()
+  const previewClone = previewModelGroup.clone(true)
+  const rotation = targetNode.value.rotation
+  const rotationQuaternion = new THREE.Quaternion().setFromEuler(
+    new THREE.Euler(rotation.x, rotation.y, rotation.z, 'XYZ'),
+  ).invert()
+
+  frame.quaternion.copy(rotationQuaternion)
+  frame.add(previewClone)
+  frame.updateMatrixWorld(true)
+  return frame
+}
+
 function constrainColliderTransform() {
   if (!colliderGroup) {
     return
@@ -317,11 +343,12 @@ function constrainColliderTransform() {
 }
 
 function buildConvexGeometryFromPreview(): THREE.BufferGeometry | null {
-  if (!previewModelGroup) {
+  const previewFrame = buildPreviewObjectInLocalRotationFrame()
+  if (!previewFrame) {
     return null
   }
 
-  const built = buildConservativeConvexGeometryFromObject(previewModelGroup, componentConvexSimplify.value.primary)
+  const built = buildConservativeConvexGeometryFromObject(previewFrame, componentConvexSimplify.value.primary)
   return built?.geometry ?? null
 }
 
@@ -428,21 +455,26 @@ function rebuildColliderGeometry(kind: ColliderShapeKind, options: { forceConvex
 }
 
 function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | null {
-  if (!previewBounds) {
+  const previewFrame = buildPreviewObjectInLocalRotationFrame()
+  if (!previewFrame) {
     return null
   }
-  const size = previewBounds.getSize(new THREE.Vector3())
-  const center = previewBounds.getCenter(new THREE.Vector3())
+  const bounds = new THREE.Box3().setFromObject(previewFrame)
+  if (bounds.isEmpty()) {
+    return null
+  }
+  const size = bounds.getSize(new THREE.Vector3())
+  const center = bounds.getCenter(new THREE.Vector3())
   const minSize = 0.25
   if (kind === 'convex') {
-    if (!previewConvexGeometry) {
-      previewConvexGeometry = buildConvexGeometryFromPreview()
-    }
-    if (!previewConvexGeometry) {
+    const geometry = buildConvexGeometryFromPreview()
+    if (!geometry) {
       return null
     }
+    previewConvexGeometry?.dispose()
+    previewConvexGeometry = geometry
     previewConvexGeometry.computeBoundingBox()
-    const box = previewConvexGeometry.boundingBox ?? new THREE.Box3().setFromObject(previewModelGroup ?? new THREE.Group())
+    const box = previewConvexGeometry.boundingBox ?? bounds
     const convexSize = box.getSize(new THREE.Vector3())
     const convexCenter = box.getCenter(new THREE.Vector3())
     return {
@@ -453,6 +485,7 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
         Math.max(minSize, convexSize.z || minSize),
       ),
       offset: convexCenter,
+      rotation: new THREE.Euler(),
     }
   }
   if (kind === 'box') {
@@ -464,6 +497,7 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
         Math.max(minSize, size.z || minSize),
       ),
       offset: center,
+      rotation: new THREE.Euler(),
     }
   }
   if (kind === 'sphere') {
@@ -473,6 +507,7 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
       kind,
       dimensions: new THREE.Vector3(safeDiameter, safeDiameter, safeDiameter),
       offset: center,
+      rotation: new THREE.Euler(),
     }
   }
   if (kind === 'capsule') {
@@ -482,6 +517,7 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
       kind,
       dimensions: new THREE.Vector3(safeDiameter, Math.max(safeDiameter, size.y || safeDiameter), safeDiameter),
       offset: center,
+      rotation: new THREE.Euler(),
     }
   }
   const diameter = Math.max(size.x, size.z)
@@ -491,6 +527,7 @@ function buildDefaultShapeFromModel(kind: ColliderShapeKind): EditableShape | nu
     kind,
     dimensions: new THREE.Vector3(safeDiameter, safeHeight, safeDiameter),
     offset: center,
+    rotation: new THREE.Euler(),
   }
 }
 
@@ -506,6 +543,8 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
     offsetTuple[2] * scaleZ,
   )
   actualOffset.sub(previewOriginShift)
+  const rotationTuple = shape.rotation ?? [0, 0, 0]
+  const actualRotation = new THREE.Euler(rotationTuple[0], rotationTuple[1], rotationTuple[2], 'XYZ')
 
   if (shape.kind === 'box' && kind === 'box') {
     const [hx, hy, hz] = shape.halfExtents
@@ -517,6 +556,7 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
         Math.max(0.05, hz * 2 * scaleZ),
       ),
       offset: actualOffset,
+      rotation: actualRotation,
     }
   }
   if (shape.kind === 'sphere' && kind === 'sphere') {
@@ -525,6 +565,7 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
       kind: 'sphere',
       dimensions: new THREE.Vector3(diameter, diameter, diameter),
       offset: actualOffset,
+      rotation: actualRotation,
     }
   }
   if (shape.kind === 'capsule' && kind === 'capsule') {
@@ -534,6 +575,7 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
       kind: 'capsule',
       dimensions: new THREE.Vector3(radius * 2, height, radius * 2),
       offset: actualOffset,
+      rotation: actualRotation,
     }
   }
   if (shape.kind === 'convex' && kind === 'convex') {
@@ -554,6 +596,7 @@ function convertMetadataShape(shape: RigidbodyPhysicsShape, kind: ColliderShapeK
         Math.max(0.05, size.z),
       ),
       offset: actualOffset,
+      rotation: actualRotation,
     }
   }
   return null
@@ -571,6 +614,7 @@ function applyEditableShape(shape: EditableShape) {
     return
   }
   colliderGroup.position.copy(shape.offset)
+  colliderGroup.rotation.copy(shape.rotation)
   if (shape.kind === 'convex') {
     colliderGroup.scale.set(1, 1, 1)
   } else if (shape.kind === 'capsule') {
@@ -734,6 +778,7 @@ async function initializePreview(requestToken: number) {
     kind: 'box',
     dimensions: new THREE.Vector3(1, 1, 1),
     offset: new THREE.Vector3(),
+    rotation: new THREE.Euler(),
   }
   applyEditableShape(shape)
   isReady.value = true
@@ -781,6 +826,7 @@ function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?
 
   const scale = nodeScaleFactors.value
   const offset = colliderGroup.position.clone().add(previewOriginShift)
+  const rotation = getColliderGroupRotationTuple()
 
   if (colliderKind.value === 'box') {
     return {
@@ -792,6 +838,7 @@ function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?
           Math.max(1e-4, (colliderGroup.scale.z * 0.5) / scale.z),
         ],
         offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        rotation,
         applyScale: true,
       },
     }
@@ -805,6 +852,7 @@ function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?
         kind: 'sphere',
         radius: Math.max(1e-4, radius / dominant),
         offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        rotation,
         applyScale: true,
       },
     }
@@ -819,6 +867,7 @@ function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?
         radius: Math.max(1e-4, radius / dominant),
         height: Math.max(2 * radius / scale.y, (colliderGroup.scale.y * 2) / scale.y),
         offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        rotation,
         applyScale: true,
       },
     }
@@ -896,6 +945,7 @@ function buildMetadataPayload(): { shape: RigidbodyPhysicsShape; convexSimplify?
       vertices,
       faces,
       offset: [offset.x / scale.x, offset.y / scale.y, offset.z / scale.z],
+        rotation,
       applyScale: true,
     },
     convexSimplify: config,

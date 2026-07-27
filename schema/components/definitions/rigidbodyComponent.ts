@@ -53,6 +53,7 @@ export type RigidbodyConvexSimplifyConfig = {
 
 type RigidbodyPhysicsShapeBase = {
   offset?: RigidbodyVector3Tuple
+  rotation?: RigidbodyVector3Tuple
   applyScale: boolean
 }
 
