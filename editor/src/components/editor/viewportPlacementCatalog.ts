@@ -259,7 +259,7 @@ function createGuideboardPreview(): THREE.Object3D {
 }
 
 function createViewPointPreview(): THREE.Object3D {
-  const markerMesh = createPrimitiveMesh('Sphere', { color: VIEW_POINT_PREVIEW_COLOR, doubleSided: true })
+  const markerMesh = createPrimitiveMesh('Octahedron', { color: VIEW_POINT_PREVIEW_COLOR, doubleSided: true })
   markerMesh.name = 'View Point Helper'
   markerMesh.castShadow = false
   markerMesh.receiveShadow = false

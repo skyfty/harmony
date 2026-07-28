@@ -8756,7 +8756,7 @@ function handlePurposeButtonClick(entry: PurposeControlRecord, button: ShowPurpo
 	processBehaviorEvents(results)
 }
 
-function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void {
+function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null, delta: number): void {
 	const entries = purposeControlEntries.value
 	if (!entries.length || !activeCamera) {
 		return
@@ -11169,7 +11169,7 @@ function startAnimationLoop() {
 		updatePunchBadgeOverlayEntries(activeCamera, delta)
 		syncSceneSignboards(currentScene, activeCamera)
 		updateInfoBoardOverlayPlacement(activeCamera)
-		updatePurposeControlsPlacement(activeCamera)
+		updatePurposeControlsPlacement(activeCamera,delta)
 		updatePerFrameDiagnostics(delta)
 		physicsCollisionDebugRuntime.update()
 

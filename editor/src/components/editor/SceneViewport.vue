@@ -8954,7 +8954,7 @@ async function placeViewportItemAtPoint(item: ViewportPlacementItem, basePoint: 
     const name = getNextViewportPlacementName('View Point')
     const created = await sceneStore.addModelNode({
       object: buildViewPointPlacementRoot(name),
-      nodeType: 'Sphere',
+      nodeType: 'Octahedron',
       name,
       position: basePoint.clone(),
       rotation,
