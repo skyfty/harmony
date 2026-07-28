@@ -70,7 +70,5 @@ export type PhysicsBackendShapeScaleLike = { x?: number; y?: number; z?: number 
 
 export type PhysicsBackendBridge = {
   id: 'ammo' | 'cannon'
-  normalizeShapeScale: (scaleLike: PhysicsBackendShapeScaleLike) => { x: number; y: number; z: number }
-  createRigidbodyBody: (params: BackendRigidbodyCreateParams) => BackendRigidbodyResult
   ensurePhysicsWorld: (params: EnsurePhysicsWorldParams) => PhysicsWorldLike
 }

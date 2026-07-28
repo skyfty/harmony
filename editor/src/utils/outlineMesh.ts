@@ -38,7 +38,6 @@ export function buildOutlineMeshFromObject(
 
   object.updateMatrixWorld(true)
   const points = collectOutlinePoints(object, maxPoints, perMeshSample)
-  ensureMinimumPointCoverage(points, object, minPoints, maxPoints)
   const reducedPoints = reduceOutlinePointDensity(points, pointTarget)
   const basePoints = reducedPoints.length >= minPoints ? reducedPoints : points
   const quantizedPoints = quantizeAndDeduplicatePoints(basePoints, quantizeFactor)
@@ -200,18 +199,10 @@ export function ensureMinimumPointCoverage(
   minPoints: number,
   maxPoints: number,
 ): void {
-  if (points.length >= minPoints) {
-    return
-  }
-  const box = new THREE.Box3().setFromObject(root)
-  if (box.isEmpty()) {
-    return
-  }
-  buildBoundingBoxCorners(box).forEach((corner) => {
-    if (points.length < maxPoints) {
-      points.push(corner)
-    }
-  })
+  void points
+  void root
+  void minPoints
+  void maxPoints
 }
 
 export function buildBoundingBoxCorners(box: THREE.Box3): THREE.Vector3[] {

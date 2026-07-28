@@ -1,10 +1,6 @@
 import type {
-  PhysicsWorldLike,
   PhysicsBackendBridge,
   PhysicsBackendShapeScaleLike,
-  BackendRigidbodyCreateParams,
-  EnsurePhysicsWorldParams,
-  BackendRigidbodyResult,
 } from './physicsBackendTypes'
 
 export type { PhysicsBackendBridge, PhysicsBackendShapeScaleLike } from './physicsBackendTypes'
@@ -26,22 +22,4 @@ export function getPhysicsBackendBridge(): PhysicsBackendBridge {
     throw new Error('Physics backend bridge is not registered')
   }
   return activeBridge
-}
-
-export function hasPhysicsBackendBridge(): boolean {
-  return activeBridge != null
-}
-
-export function normalizeShapeScale(scaleLike: PhysicsBackendShapeScaleLike): { x: number; y: number; z: number } {
-  return getPhysicsBackendBridge().normalizeShapeScale(scaleLike)
-}
-
-export function createBackendRigidbodyBody(
-  params: BackendRigidbodyCreateParams,
-): BackendRigidbodyResult {
-  return getPhysicsBackendBridge().createRigidbodyBody(params)
-}
-
-export function ensureBackendPhysicsWorld(params: EnsurePhysicsWorldParams): PhysicsWorldLike {
-  return getPhysicsBackendBridge().ensurePhysicsWorld(params)
 }

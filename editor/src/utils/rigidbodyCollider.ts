@@ -12,50 +12,11 @@ const colliderBoxInverseHelper = new THREE.Matrix4()
 const colliderBoxScratch = new THREE.Box3()
 const colliderBoxSizeHelper = new THREE.Vector3()
 const colliderBoxCenterHelper = new THREE.Vector3()
-const colliderRotationNeutralCloneHelper = new THREE.Group()
-const colliderRotationNeutralQuaternionHelper = new THREE.Quaternion()
 
-function computeColliderRotationNeutralBoundingBox(object: THREE.Object3D): THREE.Box3 | null {
-  const rotation = object.rotation
-  if (
-    !Number.isFinite(rotation.x)
-    || !Number.isFinite(rotation.y)
-    || !Number.isFinite(rotation.z)
-  ) {
-    return computeColliderLocalBoundingBox(object)
-  }
-
-  colliderRotationNeutralCloneHelper.position.copy(object.position)
-  colliderRotationNeutralCloneHelper.quaternion.identity()
-  colliderRotationNeutralCloneHelper.scale.copy(object.scale)
-  colliderRotationNeutralCloneHelper.updateMatrixWorld(true)
-
-  const inverseRotation = colliderRotationNeutralQuaternionHelper.setFromEuler(
-    new THREE.Euler(rotation.x, rotation.y, rotation.z, 'XYZ'),
-  ).invert()
-  object.updateMatrixWorld(true)
-
-  const originalParent = object.parent
-  const originalMatrixWorld = object.matrixWorld.clone()
-  const originalPosition = object.position.clone()
-  const originalQuaternion = object.quaternion.clone()
-  const originalScale = object.scale.clone()
-
-  try {
-    object.position.set(0, 0, 0)
-    object.quaternion.copy(inverseRotation)
-    object.updateMatrixWorld(true)
-    return computeColliderLocalBoundingBox(object)
-  } finally {
-    object.position.copy(originalPosition)
-    object.quaternion.copy(originalQuaternion)
-    object.scale.copy(originalScale)
-    object.matrixWorld.copy(originalMatrixWorld)
-    if (originalParent) {
-      object.parent = originalParent
-    }
-    object.updateMatrixWorld(true)
-  }
+function computeColliderBoundingBox(object: THREE.Object3D): THREE.Box3 | null {
+  const clone = object.clone(true)
+  clone.updateMatrixWorld(true)
+  return computeColliderLocalBoundingBox(clone)
 }
 
 export function normalizeColliderScale(value: unknown): number {
@@ -106,7 +67,7 @@ export function buildBoxShapeFromObject(
   object: THREE.Object3D,
   _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
-  const box = computeColliderRotationNeutralBoundingBox(object)
+  const box = computeColliderBoundingBox(object)
   if (!box) {
     return null
   }
@@ -137,7 +98,7 @@ export function buildSphereShapeFromObject(
   object: THREE.Object3D,
   _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
-  const box = computeColliderRotationNeutralBoundingBox(object)
+  const box = computeColliderBoundingBox(object)
   if (!box) {
     return null
   }
@@ -164,7 +125,7 @@ export function buildCylinderShapeFromObject(
   object: THREE.Object3D,
   _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
-  const box = computeColliderRotationNeutralBoundingBox(object)
+  const box = computeColliderBoundingBox(object)
   if (!box) {
     return null
   }
@@ -195,7 +156,7 @@ export function buildCapsuleShapeFromObject(
   object: THREE.Object3D,
   _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
-  const box = computeColliderRotationNeutralBoundingBox(object)
+  const box = computeColliderBoundingBox(object)
   if (!box) {
     return null
   }

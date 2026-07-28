@@ -960,6 +960,7 @@ function handleConfirm() {
   if (!payload) {
     return
   }
+  console.info(`[RigidbodyColliderEditor] save node=${selectedNodeId.value} target=${targetNodeId.value ?? 'null'} kind=${payload.shape.kind} shape=${JSON.stringify(payload.shape)}`)
   const metadata: Record<string, unknown> = { ...(rigidbodyComponent.value.metadata ?? {}) }
   const next: RigidbodyComponentMetadata = {
     shape: payload.shape,

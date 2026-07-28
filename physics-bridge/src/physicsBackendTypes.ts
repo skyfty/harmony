@@ -161,7 +161,5 @@ export type BackendRigidbodyResult = {
 
 export type PhysicsBackendBridge = {
   id: 'ammo' | 'cannon'
-  normalizeShapeScale: (scaleLike: PhysicsBackendShapeScaleLike) => PhysicsShapeScale
-  createRigidbodyBody: (params: BackendRigidbodyCreateParams) => BackendRigidbodyResult
   ensurePhysicsWorld: (params: EnsurePhysicsWorldParams) => PhysicsWorldLike
 }
