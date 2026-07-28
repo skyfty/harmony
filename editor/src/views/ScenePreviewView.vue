@@ -11591,6 +11591,7 @@ async function resolveMaterialTexture(ref: SceneMaterialTextureRef): Promise<THR
 
 const materialOverrideOptions: MaterialTextureAssignmentOptions = {
 	resolveTexture: resolveMaterialTexture,
+	hideTransparentMaterials: true,
 	warn: (message) => {
 		if (message) {
 			console.warn('[ScenePreview] %s', message)

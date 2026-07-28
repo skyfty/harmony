@@ -227,6 +227,7 @@ export interface MaterialTextureAssignmentOptions {
   resolveTexture?: (ref: SceneMaterialTextureRef) => THREE.Texture | null | Promise<THREE.Texture | null>
   warn?: (message: string) => void
   defaultTextureSettingsSignature?: string
+  hideTransparentMaterials?: boolean
 }
 
 export function createTextureSettings(
@@ -1602,6 +1603,16 @@ export function applyMaterialOverrides(
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;
+    }
+
+    if (options.hideTransparentMaterials) {
+      const shouldHide = Array.isArray(mesh.material)
+        ? mesh.material.some((material) => Boolean(material && (material as THREE.Material & { transparent?: boolean }).transparent))
+        : Boolean(mesh.material && (mesh.material as THREE.Material & { transparent?: boolean }).transparent)
+      if (shouldHide) {
+        mesh.visible = false
+        return
+      }
     }
 
     // Never apply material overrides to the invisible instanced pick proxy.
