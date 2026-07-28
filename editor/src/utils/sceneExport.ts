@@ -71,73 +71,11 @@ type SceneNodeWorldTransform = {
   scale: THREE.Vector3
 }
 
-function formatTuple3(tuple: [number, number, number]): string {
-  return `(${tuple[0].toFixed(4)}, ${tuple[1].toFixed(4)}, ${tuple[2].toFixed(4)})`
-}
-
-function formatRigidbodyVector3(vector: THREE.Vector3 | null | undefined): string {
-  if (!vector) {
-    return '(null)'
-  }
-  return `(${vector.x.toFixed(4)}, ${vector.y.toFixed(4)}, ${vector.z.toFixed(4)})`
-}
-
-function formatRigidbodyQuaternion(quaternion: THREE.Quaternion | null | undefined): string {
-  if (!quaternion) {
-    return '(null)'
-  }
-  return `(${quaternion.x.toFixed(4)}, ${quaternion.y.toFixed(4)}, ${quaternion.z.toFixed(4)}, ${quaternion.w.toFixed(4)})`
-}
-
-function formatSceneNodeWorldTransform(transform: SceneNodeWorldTransform | null | undefined): string {
-  if (!transform) {
-    return '{position:(null), quaternion:(null), scale:(null)}'
-  }
-  return `{position:${formatRigidbodyVector3(transform.position)}, quaternion:${formatRigidbodyQuaternion(transform.quaternion)}, scale:${formatRigidbodyVector3(transform.scale)}}`
-}
-
-function formatRigidbodyPhysicsShape(shape: RigidbodyPhysicsShape | null | undefined): string {
-  if (!shape) {
-    return '{shape:null}'
-  }
-  const offset = shape.offset ? formatTuple3(shape.offset) : '(none)'
-  const rotation = shape.rotation ? formatTuple3(shape.rotation) : '(none)'
-  switch (shape.kind) {
-    case 'box':
-      return `{kind:box, halfExtents:${formatTuple3(shape.halfExtents)}, offset:${offset}, rotation:${rotation}, applyScale:${shape.applyScale === true}}`
-    case 'convex':
-      return `{kind:convex, vertices:${Array.isArray(shape.vertices) ? shape.vertices.length : 0}, faces:${Array.isArray(shape.faces) ? shape.faces.length : 0}, offset:${offset}, rotation:${rotation}, applyScale:${shape.applyScale === true}}`
-    case 'heightfield':
-      return `{kind:heightfield, rows:${shape.matrix[0]?.length ?? 0}, columns:${shape.matrix.length}, offset:${offset}, rotation:${rotation}, applyScale:${shape.applyScale === true}}`
-    case 'static-mesh':
-      return `{kind:static-mesh, vertices:${Array.isArray(shape.vertices) ? shape.vertices.length : 0}, indices:${Array.isArray(shape.indices) ? shape.indices.length : 0}, offset:${offset}, rotation:${rotation}, applyScale:${shape.applyScale === true}}`
-    case 'sphere':
-      return `{kind:sphere, radius:${shape.radius.toFixed(4)}, offset:${offset}, rotation:${rotation}, applyScale:${shape.applyScale === true}}`
-    case 'capsule':
-      return `{kind:capsule, radius:${shape.radius.toFixed(4)}, height:${shape.height.toFixed(4)}, offset:${offset}, rotation:${rotation}, applyScale:${shape.applyScale === true}}`
-    case 'cylinder':
-      return `{kind:cylinder, radiusTop:${shape.radiusTop.toFixed(4)}, radiusBottom:${shape.radiusBottom.toFixed(4)}, height:${shape.height.toFixed(4)}, offset:${offset}, rotation:${rotation}, applyScale:${shape.applyScale === true}}`
-    default:
-      return '{shape:unhandled}'
-  }
-}
-
 function composeWorldMatrix(transform: SceneNodeWorldTransform | null | undefined): THREE.Matrix4 {
   if (!transform) {
     return new THREE.Matrix4().identity()
   }
   return new THREE.Matrix4().compose(transform.position, transform.quaternion, transform.scale)
-}
-
-function logRigidbodyExportDebug(message: string): void {
-  console.info(`[sceneExport][rigidbody] ${message}`)
-}
-
-function formatRigidbodyExportProps(props: RigidbodyComponentProps | null | undefined): string {
-  if (!props) {
-    return '{props:null}'
-  }
-  return `{bodyType:${props.bodyType}, colliderType:${props.colliderType}, mass:${props.mass.toFixed(4)}, friction:${props.friction.toFixed(4)}, restitution:${props.restitution.toFixed(4)}, linearDamping:${props.linearDamping.toFixed(4)}, angularDamping:${props.angularDamping.toFixed(4)}, targetNodeId:${props.targetNodeId ?? 'null'}}`
 }
 
 function countSceneNodeCategory(
@@ -838,14 +776,11 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
   for (const entry of candidates) {
     const samplingNode = resolveRigidbodySamplingNode(entry, nodeLookup)
     if (!samplingNode || isGroundDynamicMesh(samplingNode.dynamicMesh)) {
-      logRigidbodyExportDebug(`skip node=${entry.node.id} reason=noSamplingNodeOrGround props=${formatRigidbodyExportProps(entry.component.props)}`)
       continue
     }
     const hostWorldTransform = worldTransformMap.get(entry.node.id) ?? null
     const sourceWorldTransform = worldTransformMap.get(samplingNode.id) ?? hostWorldTransform
-    logRigidbodyExportDebug(
-      `candidate node=${entry.node.id} target=${samplingNode.id} hostWorld=${formatSceneNodeWorldTransform(hostWorldTransform)} sourceWorld=${formatSceneNodeWorldTransform(sourceWorldTransform)} props=${formatRigidbodyExportProps(entry.component.props)}`,
-    )
+
     if (isRoadDynamicMesh(samplingNode.dynamicMesh)) {
       const rigidbodyMetadata = entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
       if (rigidbodyMetadata?.shape) {
@@ -855,17 +790,14 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
           [RIGIDBODY_METADATA_KEY]: rest,
         }
       }
-      logRigidbodyExportDebug(`skip node=${entry.node.id} reason=roadMeshShapeStripped`)
       continue
     }
     const existingRigidbodyMetadata = entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
     if (existingRigidbodyMetadata?.shape) {
-      logRigidbodyExportDebug(`skip node=${entry.node.id} reason=existingShapePreserved shape=${formatRigidbodyPhysicsShape(existingRigidbodyMetadata.shape)}`)
       continue
     }
     const samplingObject = await buildRigidbodySamplingObject(samplingNode, assetCacheStore, groundNode, sourceWorldTransform)
     if (!samplingObject) {
-      logRigidbodyExportDebug(`skip node=${entry.node.id} reason=noSamplingObject target=${samplingNode.id}`)
       continue
     }
     const nodeScale = hostWorldTransform
@@ -910,38 +842,23 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       config.usedPass = usedPass
       generatedConvexSimplify = config
       const convexShape = buildConvexShapeFromOutline(outline, nodeScale, sourceWorldTransform, hostWorldTransform)
-      if (convexShape) {
-        logRigidbodyExportDebug(`build node=${entry.node.id} builder=convex usedPass=${usedPass} shape=${formatRigidbodyPhysicsShape(convexShape)}`)
-      }
       return convexShape
     }
 
     const buildBox = () => {
       const shapeResult = buildBoxShapeFromObject(samplingObject, nodeScale)
-      if (shapeResult) {
-        logRigidbodyExportDebug(`build node=${entry.node.id} builder=box shape=${formatRigidbodyPhysicsShape(shapeResult)}`)
-      }
       return shapeResult
     }
     const buildSphere = () => {
       const shapeResult = buildSphereShapeFromObject(samplingObject, nodeScale)
-      if (shapeResult) {
-        logRigidbodyExportDebug(`build node=${entry.node.id} builder=sphere shape=${formatRigidbodyPhysicsShape(shapeResult)}`)
-      }
       return shapeResult
     }
     const buildCylinder = () => {
       const shapeResult = buildCylinderShapeFromObject(samplingObject, nodeScale)
-      if (shapeResult) {
-        logRigidbodyExportDebug(`build node=${entry.node.id} builder=cylinder shape=${formatRigidbodyPhysicsShape(shapeResult)}`)
-      }
       return shapeResult
     }
     const buildCapsule = () => {
       const shapeResult = buildCapsuleShapeFromObject(samplingObject, nodeScale)
-      if (shapeResult) {
-        logRigidbodyExportDebug(`build node=${entry.node.id} builder=capsule shape=${formatRigidbodyPhysicsShape(shapeResult)}`)
-      }
       return shapeResult
     }
     const rigidbodyProps = clampRigidbodyComponentProps(entry.component.props)
@@ -960,20 +877,12 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       }
     }
     if (!shape) {
-      logRigidbodyExportDebug(`skip node=${entry.node.id} reason=noShapeBuilt preferredCollider=${rigidbodyProps.colliderType}`)
       continue
     }
-    logRigidbodyExportDebug(
-      `node=${entry.node.id} target=${samplingNode.id} hostWorld=${formatSceneNodeWorldTransform(hostWorldTransform)} sourceWorld=${formatSceneNodeWorldTransform(sourceWorldTransform)} shapeBeforeSave=${formatRigidbodyPhysicsShape(shape)}`,
-    )
     entry.component.metadata = mergeRigidbodyMetadata(
       entry.component.metadata,
       shape,
       shape.kind === 'convex' ? generatedConvexSimplify : undefined,
-    )
-    const savedShape = (entry.component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined)?.shape ?? null
-    logRigidbodyExportDebug(
-      `node=${entry.node.id} target=${samplingNode.id} shapeAfterSave=${formatRigidbodyPhysicsShape(savedShape)}`,
     )
   }
 }

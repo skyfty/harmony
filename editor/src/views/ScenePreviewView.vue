@@ -550,41 +550,6 @@ const sceneStateById = new Map<string, SceneViewControlSnapshot>()
 const previousSceneById = new Map<string, string>()
 const physicsCollisionDebugRuntime = new ScenePreviewPhysicsCollisionDebugRuntime()
 
-function formatScenePreviewVector3(vector: { x: number; y: number; z: number } | readonly [number, number, number] | null | undefined): string {
-	if (!vector) {
-		return '(null)'
-	}
-	if (Array.isArray(vector)) {
-		return `(${Number(vector[0] ?? 0).toFixed(4)}, ${Number(vector[1] ?? 0).toFixed(4)}, ${Number(vector[2] ?? 0).toFixed(4)})`
-	}
-	return `(${Number(vector.x).toFixed(4)}, ${Number(vector.y).toFixed(4)}, ${Number(vector.z).toFixed(4)})`
-}
-
-function formatScenePreviewQuaternion(quaternion: { x: number; y: number; z: number; w: number } | readonly [number, number, number, number] | null | undefined): string {
-	if (!quaternion) {
-		return '(null)'
-	}
-	if (Array.isArray(quaternion)) {
-		return `(${Number(quaternion[0] ?? 0).toFixed(4)}, ${Number(quaternion[1] ?? 0).toFixed(4)}, ${Number(quaternion[2] ?? 0).toFixed(4)}, ${Number(quaternion[3] ?? 0).toFixed(4)})`
-	}
-	return `(${Number(quaternion.x).toFixed(4)}, ${Number(quaternion.y).toFixed(4)}, ${Number(quaternion.z).toFixed(4)}, ${Number(quaternion.w).toFixed(4)})`
-}
-
-function formatScenePreviewBodySummary(body: {
-	id?: number
-	userDataKey?: string | null
-	type?: string
-	materialId?: number | null
-	shapeId?: number | null
-	transform?: { position?: { x: number; y: number; z: number } | readonly [number, number, number] | null; rotation?: { x: number; y: number; z: number; w: number } | readonly [number, number, number, number] | null } | null
-}): string {
-	return `id=${body.id ?? 'n/a'} userDataKey=${body.userDataKey ?? 'null'} type=${body.type ?? 'n/a'} materialId=${body.materialId ?? 'null'} shapeId=${body.shapeId ?? 'null'} position=${formatScenePreviewVector3(body.transform?.position ?? null)} rotation=${formatScenePreviewQuaternion(body.transform?.rotation ?? null)}`
-}
-
-function logScenePreviewRigidBodyDebug(message: string): void {
-	console.info(`[ScenePreview][rigidbody] ${message}`)
-}
-
 const isPhysicsCollisionDebugVisible = ref(true)
 const isInstancedCullingVisualizationVisible = ref(false)
 const isRendererDebugVisible = ref(false)
@@ -12265,16 +12230,12 @@ async function loadScenePreviewPhysicsBridgeScene(
 	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)
 	physicsBridgeSceneReloading = true
 	const requestId = ++physicsBridgeSceneRequestId
-	logScenePreviewRigidBodyDebug(`build-start requestId=${requestId} nodeCount=${Array.isArray(document.nodes) ? document.nodes.length : 0}`)
 	const asset = await buildPhysicsSceneAsset(document, {
 		onProgress: (progress) => {
 			onProgress?.(createSceneSubsystemProgress('syncingPhysics', progress))
 		},
 	})
-	logScenePreviewRigidBodyDebug(`build-finish requestId=${requestId} bodies=${asset.bodies.length} shapes=${asset.shapes.length} materials=${asset.materials.length} vehicles=${asset.vehicles.length} characters=${asset.characters.length}`)
-	asset.bodies.slice(0, 8).forEach((body) => {
-		logScenePreviewRigidBodyDebug(`body ${formatScenePreviewBodySummary(body)}`)
-	})
+
 	try {
 		previewGroundCollisionRuntimeBodyIds.clear()
 		const activePhysicsBridge = physicsBridge
@@ -12283,14 +12244,11 @@ async function loadScenePreviewPhysicsBridgeScene(
 		}
 		physicsCollisionDebugRuntime.setSceneAsset(asset)
 		await activePhysicsBridge.loadScene(asset)
-		logScenePreviewRigidBodyDebug(`loadScene-complete requestId=${requestId} currentRequestId=${physicsBridgeSceneRequestId}`)
 		if (requestId !== physicsBridgeSceneRequestId) {
-			logScenePreviewRigidBodyDebug(`loadScene-stale requestId=${requestId} dropped`)
 			return
 		}
 		physicsBridgeSceneLoaded = true
 		updateScenePreviewPhysicsBridgeIndex(document, asset)
-		logScenePreviewRigidBodyDebug(`index-updated rigidbodyBodies=${physicsBridgeBodyIdByNodeId.size} rigidbodyVehicles=${physicsBridgeVehicleIdByNodeId.size} rigidbodyCharacters=${physicsBridgeCharacterIdByNodeId.size}`)
 		physicsBridgeSceneReloading = false
 		if (hasGroundCollisionReference && groundObject && isGroundDynamicMesh(groundMesh)) {
 			previewGroundCollisionBridgeMutationEpoch += 1
