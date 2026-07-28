@@ -854,6 +854,8 @@ export type BehaviorScriptType =
   | 'hideCockpit'
   | 'drive'
   | 'controlCharacter'
+  | 'offsetCamera'
+  | 'restoreCamera'
   | 'switchControlNode'
   | 'restoreControlNode'
   | 'releaseCharacter'
@@ -1103,6 +1105,20 @@ export interface ControlCharacterBehaviorParams {
   targetNodeId: string | null
 }
 
+export interface OffsetCameraBehaviorParams {
+  /** Controlled node whose follow camera offset should be adjusted. Defaults to the behavior owner node. */
+  targetNodeId: string | null
+  /** Temporary follow distance used while the offset override is active. */
+  cameraFollowDistance: number
+  /** Temporary follow height used while the offset override is active. */
+  cameraFollowHeight: number
+}
+
+export interface RestoreCameraBehaviorParams {
+  /** Controlled node whose follow camera offset should be restored. Defaults to the behavior owner node. */
+  targetNodeId: string | null
+}
+
 export type ControlNodeTransitionPreset = 'none' | 'quantum' | 'scanline' | 'vortex' | 'glitch'
 
 export const CONTROL_NODE_TRANSITION_PRESETS: Array<{
@@ -1292,6 +1308,14 @@ export type SceneBehaviorScriptBinding =
   | {
       type: 'controlCharacter'
       params: ControlCharacterBehaviorParams
+    }
+  | {
+      type: 'offsetCamera'
+      params: OffsetCameraBehaviorParams
+    }
+  | {
+      type: 'restoreCamera'
+      params: RestoreCameraBehaviorParams
     }
   | {
       type: 'switchControlNode'

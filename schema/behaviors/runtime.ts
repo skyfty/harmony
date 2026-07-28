@@ -27,6 +27,8 @@ import type {
   StopAnimationBehaviorParams,
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
+  OffsetCameraBehaviorParams,
+  RestoreCameraBehaviorParams,
   SwitchControlNodeBehaviorParams,
   RestoreControlNodeBehaviorParams,
   CouponBehaviorParams,
@@ -286,6 +288,28 @@ export type BehaviorRuntimeEvent =
     }
   | {
       type: 'character-control'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      token: string
+    }
+  | {
+      type: 'camera-offset'
+      nodeId: string
+      action: BehaviorEventType
+      sequenceId: string
+      behaviorSequenceId: string
+      behaviorId: string
+      targetNodeId: string
+      cameraFollowDistance: number
+      cameraFollowHeight: number
+      token: string
+    }
+  | {
+      type: 'camera-restore'
       nodeId: string
       action: BehaviorEventType
       sequenceId: string
@@ -1088,6 +1112,64 @@ function createControlCharacterEvent(
   }
 }
 
+function createCameraOffsetEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'camera-offset' }> {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, {
+    token,
+    sequenceId: state.id,
+    stepIndex: state.index,
+  })
+  state.status = 'waiting'
+  const params = behavior.script.params as Partial<OffsetCameraBehaviorParams> | undefined
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId.trim() : fallbackTarget
+  return {
+    type: 'camera-offset',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+    cameraFollowDistance: typeof params?.cameraFollowDistance === 'number' && Number.isFinite(params.cameraFollowDistance)
+      ? Math.max(0.1, params.cameraFollowDistance)
+      : 4.2,
+    cameraFollowHeight: typeof params?.cameraFollowHeight === 'number' && Number.isFinite(params.cameraFollowHeight)
+      ? Math.max(0, params.cameraFollowHeight)
+      : 3.2,
+    token,
+  }
+}
+
+function createCameraRestoreEvent(
+  state: BehaviorSequenceState,
+  behavior: SceneBehavior,
+): Extract<BehaviorRuntimeEvent, { type: 'camera-restore' }> {
+  const token = createToken(state.id, state.index)
+  pendingTokens.set(token, {
+    token,
+    sequenceId: state.id,
+    stepIndex: state.index,
+  })
+  state.status = 'waiting'
+  const params = behavior.script.params as Partial<RestoreCameraBehaviorParams> | undefined
+  const fallbackTarget = state.nodeId
+  const targetNodeId = params?.targetNodeId && params.targetNodeId.trim().length ? params.targetNodeId.trim() : fallbackTarget
+  return {
+    type: 'camera-restore',
+    nodeId: state.nodeId,
+    action: state.action,
+    sequenceId: state.id,
+    behaviorSequenceId: state.behaviorSequenceId,
+    behaviorId: behavior.id,
+    targetNodeId,
+    token,
+  }
+}
+
 function createSwitchControlNodeEvent(
   state: BehaviorSequenceState,
   behavior: SceneBehavior,
@@ -1369,6 +1451,12 @@ function advanceSequence(state: BehaviorSequenceState): BehaviorRuntimeEvent[] {
         return events
       case 'controlCharacter':
         events.push(createControlCharacterEvent(state, behavior))
+        return events
+      case 'offsetCamera':
+        events.push(createCameraOffsetEvent(state, behavior))
+        return events
+      case 'restoreCamera':
+        events.push(createCameraRestoreEvent(state, behavior))
         return events
       case 'switchControlNode':
         events.push(createSwitchControlNodeEvent(state, behavior))

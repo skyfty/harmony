@@ -38,6 +38,8 @@ import type {
   HideCockpitBehaviorParams,
   DriveBehaviorParams,
   ControlCharacterBehaviorParams,
+  OffsetCameraBehaviorParams,
+  RestoreCameraBehaviorParams,
   SwitchControlNodeBehaviorParams,
   RestoreControlNodeBehaviorParams,
   ReleaseCharacterBehaviorParams,
@@ -697,6 +699,30 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
     description: 'Attach the controller to a character node and show character movement controls.',
     icon: 'mdi-account-arrow-right-outline',
     createDefaultParams(): ControlCharacterBehaviorParams {
+      return {
+        targetNodeId: null,
+      }
+    },
+  },
+  {
+    id: 'offsetCamera',
+    label: 'Offset Camera',
+    description: 'Temporarily change the follow camera distance and height for the controlled node.',
+    icon: 'mdi-pan-vertical',
+    createDefaultParams(): OffsetCameraBehaviorParams {
+      return {
+        targetNodeId: null,
+        cameraFollowDistance: 4.2,
+        cameraFollowHeight: 3.2,
+      }
+    },
+  },
+  {
+    id: 'restoreCamera',
+    label: 'Restore Camera',
+    description: 'Restore the follow camera offset for the controlled node to its saved default values.',
+    icon: 'mdi-camera-restore',
+    createDefaultParams(): RestoreCameraBehaviorParams {
       return {
         targetNodeId: null,
       }
@@ -1686,6 +1712,26 @@ export function ensureBehaviorParams(
         const params = script.params as Partial<ControlCharacterBehaviorParams> | undefined
         return {
           type: 'controlCharacter',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+          },
+        }
+      }
+      case 'offsetCamera': {
+        const params = script.params as Partial<OffsetCameraBehaviorParams> | undefined
+        return {
+          type: 'offsetCamera',
+          params: {
+            targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
+            cameraFollowDistance: Math.max(0.1, normalizeNonNegativeNumber(params?.cameraFollowDistance, 4.2)),
+            cameraFollowHeight: Math.max(0, normalizeNonNegativeNumber(params?.cameraFollowHeight, 3.2)),
+          },
+        }
+      }
+      case 'restoreCamera': {
+        const params = script.params as Partial<RestoreCameraBehaviorParams> | undefined
+        return {
+          type: 'restoreCamera',
           params: {
             targetNodeId: normalizeTargetNodeId(params?.targetNodeId),
           },

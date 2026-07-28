@@ -7277,10 +7277,127 @@ function resolveDefaultControlledCharacterComponentProps(): CharacterControllerC
 	return clampCharacterControllerComponentProps(resolveCharacterControllerComponent(resolveNodeById(controlledNodeId))?.props ?? null)
 }
 
+function resolveCameraOffsetTargetNodeId(): string | null {
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		return vehicleDriveState.nodeId
+	}
+	return resolveDefaultControlledCharacterNodeId()
+}
+
+type CameraOffsetTransitionState = {
+	distance: number
+	height: number
+	targetDistance: number
+	targetHeight: number
+	kind: 'offset' | 'restore'
+}
+
+const CAMERA_OFFSET_TRANSITION_SPEED = 9
+const cameraOffsetOverrides = new Map<string, CameraOffsetTransitionState>()
+
+function resolveBaseCameraOffsetForNode(nodeId: string): { distance: number; height: number } | null {
+	const node = resolveNodeById(nodeId)
+	if (!node) {
+		return null
+	}
+	const vehicleComponent = resolveVehicleComponent(node)
+	if (vehicleComponent) {
+		const props = clampVehicleComponentProps(vehicleComponent.props ?? null)
+		return {
+			distance: props.cameraFollowDistance,
+			height: props.cameraFollowHeight,
+		}
+	}
+	const characterComponent = resolveCharacterControllerComponent(node)
+	if (characterComponent) {
+		const props = clampCharacterControllerComponentProps(characterComponent.props ?? null)
+		return {
+			distance: props.cameraFollowDistance,
+			height: props.cameraFollowHeight,
+		}
+	}
+	return null
+}
+
+function resolveCameraOffsetOverride(nodeId: string): { distance: number; height: number } | null {
+	const state = cameraOffsetOverrides.get(nodeId)
+	if (!state) {
+		return null
+	}
+	return { distance: state.distance, height: state.height }
+}
+
+function setCameraOffsetOverride(nodeId: string, distance: number, height: number): void {
+	const targetNodeId = nodeId.trim()
+	if (!targetNodeId) {
+		return
+	}
+	const base = cameraOffsetOverrides.get(targetNodeId) ?? resolveBaseCameraOffsetForNode(targetNodeId)
+	if (!base) {
+		return
+	}
+	cameraOffsetOverrides.set(targetNodeId, {
+		distance: base.distance,
+		height: base.height,
+		targetDistance: Math.max(0.1, distance),
+		targetHeight: Math.max(0, height),
+		kind: 'offset',
+	})
+}
+
+function clearCameraOffsetOverride(nodeId: string): void {
+	const targetNodeId = nodeId.trim()
+	if (!targetNodeId) {
+		return
+	}
+	const base = resolveBaseCameraOffsetForNode(targetNodeId)
+	if (!base) {
+		cameraOffsetOverrides.delete(targetNodeId)
+		return
+	}
+	const current = cameraOffsetOverrides.get(targetNodeId)
+	cameraOffsetOverrides.set(targetNodeId, {
+		distance: current?.distance ?? base.distance,
+		height: current?.height ?? base.height,
+		targetDistance: base.distance,
+		targetHeight: base.height,
+		kind: 'restore',
+	})
+}
+
+function advanceCameraOffsetOverrides(deltaSeconds: number): void {
+	if (deltaSeconds <= 0 || cameraOffsetOverrides.size === 0) {
+		return
+	}
+	const alpha = computeFollowLerpAlpha(deltaSeconds, CAMERA_OFFSET_TRANSITION_SPEED)
+	cameraOffsetOverrides.forEach((state, nodeId) => {
+		state.distance = THREE.MathUtils.lerp(state.distance, state.targetDistance, alpha)
+		state.height = THREE.MathUtils.lerp(state.height, state.targetHeight, alpha)
+		if (
+			Math.abs(state.distance - state.targetDistance) <= 0.001 &&
+			Math.abs(state.height - state.targetHeight) <= 0.001
+		) {
+			state.distance = state.targetDistance
+			state.height = state.targetHeight
+			if (state.kind === 'restore') {
+				cameraOffsetOverrides.delete(nodeId)
+			}
+		}
+	})
+}
+
 function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null {
 	const node = resolveNodeById(nodeId)
 	if (!node) {
 		return null
+	}
+	const override = resolveCameraOffsetOverride(nodeId)
+	if (override) {
+		return resolveBackFollowCameraLocalOffset(
+			autoTourCameraFollowOffsetScratch,
+			override.distance,
+			override.height,
+		)
 	}
 	const vehicleComponent = resolveVehicleComponent(node)
 	if (vehicleComponent) {
@@ -7388,6 +7505,17 @@ function resolveCharacterFollowPlacementDimensions(_protagonistObject: THREE.Obj
 
 function resolveCharacterFollowCameraOffset(target: THREE.Vector3): THREE.Vector3 {
 	const props = resolveDefaultControlledCharacterComponentProps()
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (controlledNodeId) {
+		const override = resolveCameraOffsetOverride(controlledNodeId)
+		if (override) {
+			return resolveBackFollowCameraLocalOffset(
+				target,
+				override.distance,
+				override.height,
+			)
+		}
+	}
 	return resolveBackFollowCameraLocalOffset(
 		target,
 		props?.cameraFollowDistance ?? DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE,
@@ -7531,6 +7659,7 @@ function updateCharacterFollowCamera(
 	characterFollowPlacement.distance = Math.max(characterFollowPlacement.distance, CHARACTER_FOLLOW_CAMERA_DISTANCE_MIN)
 	characterFollowPlacement.heightOffset = Math.max(characterFollowPlacement.heightOffset, CHARACTER_FOLLOW_CAMERA_HEIGHT_MIN)
 	characterFollowPlacement.targetForward = Math.max(characterFollowPlacement.targetForward, CHARACTER_FOLLOW_CAMERA_TARGET_FORWARD_MIN)
+	advanceCameraOffsetOverrides(delta)
 	const characterFollowCameraOffset = resolveCharacterFollowCameraOffset(characterFollowCameraOffsetScratch)
 	const followControlsDirty = followCameraControlDirty
 	followCameraControlDirty = false
@@ -8641,6 +8770,7 @@ function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void
 		}
 		object.updateWorldMatrix(true, false)
 		resolvePurposeOverlayAnchorWorldPosition(object, purposeAnchorScratch)
+		advanceCameraOffsetOverrides(delta)
 		const size = estimatePurposeControlGroupSize(entry.buttons)
 		const placement = computePurposeOverlayPlacement({
 			anchorWorld: purposeAnchorScratch,
@@ -8704,6 +8834,26 @@ function handleLookLevelEvent(event: Extract<BehaviorRuntimeEvent, { type: 'look
 		return
 	}
 	resetCameraToLevelView()
+	resolveBehaviorToken(event.token, { type: 'continue' })
+}
+
+function handleCameraOffsetEvent(event: Extract<BehaviorRuntimeEvent, { type: 'camera-offset' }>) {
+	const targetNodeId = resolveCameraOffsetTargetNodeId() ?? event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No node provided to offset.' })
+		return
+	}
+	setCameraOffsetOverride(targetNodeId, event.cameraFollowDistance, event.cameraFollowHeight)
+	resolveBehaviorToken(event.token, { type: 'continue' })
+}
+
+function handleCameraRestoreEvent(event: Extract<BehaviorRuntimeEvent, { type: 'camera-restore' }>) {
+	const targetNodeId = resolveCameraOffsetTargetNodeId() ?? event.targetNodeId ?? event.nodeId ?? null
+	if (!targetNodeId) {
+		resolveBehaviorToken(event.token, { type: 'fail', message: 'No node provided to restore.' })
+		return
+	}
+	clearCameraOffsetOverride(targetNodeId)
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
@@ -10102,6 +10252,12 @@ function handleBehaviorRuntimeEvent(event: BehaviorRuntimeEvent) {
 			break
 		case 'look-level':
 			handleLookLevelEvent(event)
+			break
+		case 'camera-offset':
+			handleCameraOffsetEvent(event)
+			break
+		case 'camera-restore':
+			handleCameraRestoreEvent(event)
 			break
 		case 'vehicle-drive':
 			handleVehicleDriveEvent(event)

@@ -37,8 +37,10 @@ import PlayAnimationParams from '@/components/inspector/behavior/PlayAnimationPa
 import StopAnimationParams from '@/components/inspector/behavior/StopAnimationParams.vue'
 import DriveParams from '@/components/inspector/behavior/DriveParams.vue'
 import ControlCharacterParams from '@/components/inspector/behavior/ControlCharacterParams.vue'
+import OffsetCameraParams from '@/components/inspector/behavior/OffsetCameraParams.vue'
 import SwitchControlNodeParams from '@/components/inspector/behavior/SwitchControlNodeParams.vue'
 import RestoreControlNodeParams from '@/components/inspector/behavior/RestoreControlNodeParams.vue'
+import RestoreCameraParams from '@/components/inspector/behavior/RestoreCameraParams.vue'
 import ReleaseCharacterParams from '@/components/inspector/behavior/ReleaseCharacterParams.vue'
 import DebusParams from '@/components/inspector/behavior/DebusParams.vue'
 import CouponParams from '@/components/inspector/behavior/CouponParams.vue'
@@ -124,6 +126,8 @@ const PARAMETER_COMPONENTS: Partial<Record<BehaviorScriptType, unknown>> = {
   hideCockpit: HideCockpitParams,
   drive: DriveParams,
   controlCharacter: ControlCharacterParams,
+  offsetCamera: OffsetCameraParams,
+  restoreCamera: RestoreCameraParams,
   switchControlNode: SwitchControlNodeParams,
   restoreControlNode: RestoreControlNodeParams,
   releaseCharacter: ReleaseCharacterParams,
@@ -239,6 +243,8 @@ function applyDefaultTarget(step: SceneBehavior): void {
     scriptType !== 'stopParticleEffect' &&
     scriptType !== 'burstParticleEffect' &&
     scriptType !== 'controlCharacter' &&
+    scriptType !== 'offsetCamera' &&
+    scriptType !== 'restoreCamera' &&
     scriptType !== 'spawnPrefab' &&
     scriptType !== 'coupon' &&
     scriptType !== 'showPurpose'
