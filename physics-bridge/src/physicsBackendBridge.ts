@@ -1,6 +1,5 @@
 import type {
   PhysicsBackendBridge,
-  PhysicsBackendShapeScaleLike,
 } from './physicsBackendTypes'
 
 export type { PhysicsBackendBridge, PhysicsBackendShapeScaleLike } from './physicsBackendTypes'

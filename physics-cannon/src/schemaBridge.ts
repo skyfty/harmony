@@ -1,5 +1,4 @@
 import { ensureCannonWorld } from './world'
-import { normalizeCannonShapeScale } from './shapeFactory'
 import type {
   EnsurePhysicsWorldParams,
   PhysicsBackendBridge,
