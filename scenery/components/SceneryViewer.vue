@@ -530,6 +530,14 @@ type SceneryProps = {
   runtimePrefabSpawns?: RuntimePrefabSpawnRequest[];
 };
 
+type WatchSnapshotSavedPayload = {
+  fileName: string;
+  platform: 'wechat-mini-program' | 'web';
+  source: 'watch-snapshot';
+  tempFilePath?: string;
+  blob?: Blob | null;
+};
+
 const props = defineProps<SceneryProps>();
 const emit = defineEmits<{
   loaded: [];
@@ -573,6 +581,7 @@ const emit = defineEmits<{
       validUntil: string | null;
     };
   }];
+  'watch-snapshot-saved': [payload: WatchSnapshotSavedPayload];
 }>();
 import {
   buildSceneGraph,
@@ -5052,6 +5061,12 @@ async function handleWatchSnapshotTap(): Promise<void> {
       }
 
       await saveWatchSnapshotToMiniProgram(filePath);
+      emit('watch-snapshot-saved', {
+        fileName,
+        platform: 'wechat-mini-program',
+        source: 'watch-snapshot',
+        tempFilePath: filePath,
+      });
       uni.showToast({ title: '已保存到相册', icon: 'success' });
       return;
     }
@@ -5063,6 +5078,12 @@ async function handleWatchSnapshotTap(): Promise<void> {
     }
 
     triggerWatchSnapshotDownload(blob, fileName);
+    emit('watch-snapshot-saved', {
+      fileName,
+      platform: 'web',
+      source: 'watch-snapshot',
+      blob,
+    });
     uni.showToast({ title: '截图已下载', icon: 'success' });
   } catch (error) {
     console.warn('[SceneryViewer] Failed to save watch snapshot', error);

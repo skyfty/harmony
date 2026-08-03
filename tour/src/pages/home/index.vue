@@ -208,14 +208,11 @@ async function handleLocationTap(skipPermissionRequest = false): Promise<void> {
     }, {
       permissionGranted: true,
     });
-    const locationText = formatLocationText(result);
-    locationLabel.value = locationText ? `当前位置 · ${locationText}` : '当前位置';
+    locationLabel.value =  '';
 
     if (result.matchedSceneSpotTitle) {
       uni.showToast({ title: `已打卡 ${result.matchedSceneSpotTitle}`, icon: 'none' });
-    } else {
-      uni.showToast({ title: '定位成功', icon: 'none' });
-    }
+    } 
   } catch (error) {
     const message = error instanceof Error && error.message ? error.message : '定位失败';
     uni.showToast({ title: message, icon: 'none' });

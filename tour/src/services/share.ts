@@ -19,6 +19,7 @@ type ShareContext = {
   title?: string;
   path?: string;
   query?: Record<string, string>;
+  imageUrl?: string;
 };
 
 const defaultHomeShare: ShareMessage = {
@@ -44,6 +45,7 @@ function buildShareMessage(): ShareMessage {
     const message = {
       title: sceneryShareContext.title || defaultHomeShare.title,
       path,
+      imageUrl: sceneryShareContext.imageUrl,
     };
     return message;
   }
@@ -58,6 +60,7 @@ function buildTimelineMessage(): ShareTimelineMessage {
     const message = {
       title: sceneryShareContext.title || defaultHomeShare.title,
       query,
+      imageUrl: sceneryShareContext.imageUrl,
     };
     return message;
   }

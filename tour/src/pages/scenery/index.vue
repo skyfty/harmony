@@ -41,6 +41,7 @@
       @error="handleViewerError"
       @punch="handlePunch"
       @coupon="handleCoupon"
+      @watch-snapshot-saved="handleWatchSnapshotSaved"
     />
 
     <view v-if="!sceneryVisible" class="scenery-fallback">
@@ -109,6 +110,7 @@ const resolvedPhysicsEngine = ref<'ammo' | 'cannon' | 'auto' | undefined>(undefi
 const sceneryEnabled = ref(false);
 const sceneryLoadError = ref('');
 const isH5 = ref(false);
+const latestWatchSnapshotShareImageUrl = ref('');
 
 // #ifdef H5
 isH5.value = true;
@@ -197,6 +199,27 @@ function syncBackButtonTop(): void {
   backButtonTop.value = metrics.topInset + Math.max((metrics.navBarHeight - 32) / 2, 6);
 }
 
+function syncSceneryShareContext(): void {
+  setSceneryShareContext({
+    title: scenicTitle.value || '景区导览',
+    imageUrl: latestWatchSnapshotShareImageUrl.value || undefined,
+    query: {
+      projectId: projectId.value,
+      packageUrl: packageUrl.value,
+      packageCacheKey: packageCacheKey.value,
+      scenicTitle: scenicTitle.value,
+      sceneSpotId: sceneSpotId.value,
+      sceneId: sceneId.value,
+      physicsEngine: resolvedPhysicsEngine.value || '',
+      vehicleIdentifier: selectedVehicleIdentifier.value,
+      prefabUrl: explicitPrefabUrl.value,
+      prefabTargetNodeId: explicitPrefabTargetNodeId.value,
+      prefabTargetNodeName: explicitPrefabTargetNodeName.value,
+      prefabPlacement: explicitPrefabPlacementAlignment.value ?? '',
+    },
+  });
+}
+
 type PunchEventPayload = {
   eventName: 'punch';
   sceneId: string;
@@ -228,6 +251,14 @@ type CouponEventPayload = {
   };
 };
 
+type WatchSnapshotSavedPayload = {
+  fileName: string;
+  platform: 'wechat-mini-program' | 'web';
+  source: 'watch-snapshot';
+  tempFilePath?: string;
+  blob?: Blob | null;
+};
+
 function handlePunch(payload: PunchEventPayload): void {
   if (!sceneSpotId.value) {
     return;
@@ -247,6 +278,16 @@ function handlePunch(payload: PunchEventPayload): void {
     source: 'tour-miniapp',
     path: '/pages/scenery/index',
   });
+}
+
+function handleWatchSnapshotSaved(payload: WatchSnapshotSavedPayload): void {
+  const tempFilePath = typeof payload.tempFilePath === 'string' ? payload.tempFilePath.trim() : '';
+  if (!tempFilePath) {
+    return;
+  }
+
+  latestWatchSnapshotShareImageUrl.value = tempFilePath;
+  syncSceneryShareContext();
 }
 
 function handleCoupon(payload: CouponEventPayload): void {
@@ -441,23 +482,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
   explicitPrefabRotation.value = decodeVector3QueryValue(mergedRecord, 'prefabRotation');
   explicitPrefabPlacementAlignment.value = decodePlacementAlignment(mergedRecord.prefabPlacement);
   explicitPrefabPlacementOffset.value = decodeVector3QueryValue(mergedRecord, 'prefabOffset');
-  setSceneryShareContext({
-    title: scenicTitle.value || '景区导览',
-    query: {
-      projectId: projectId.value,
-      packageUrl: packageUrl.value,
-      packageCacheKey: packageCacheKey.value,
-      scenicTitle: scenicTitle.value,
-      sceneSpotId: sceneSpotId.value,
-      sceneId: sceneId.value,
-      physicsEngine: resolvedPhysicsEngine.value || '',
-      vehicleIdentifier: selectedVehicleIdentifier.value,
-      prefabUrl: explicitPrefabUrl.value,
-      prefabTargetNodeId: explicitPrefabTargetNodeId.value,
-      prefabTargetNodeName: explicitPrefabTargetNodeName.value,
-      prefabPlacement: explicitPrefabPlacementAlignment.value ?? '',
-    },
-  });
+  syncSceneryShareContext();
 
   enterAt.value = Date.now();
   void loadPunchProgress();
@@ -501,6 +526,7 @@ onShow(() => {
 onUnload(() => {
   const dwellMs = enterAt.value > 0 ? Math.max(Date.now() - enterAt.value, 0) : 0;
   clearSceneryShareContext();
+  latestWatchSnapshotShareImageUrl.value = '';
 
   if (sceneId.value && sceneSpotId.value) {
     void completeTravelLeaveRecord({
