@@ -2529,6 +2529,7 @@ let physicsBridge: PhysicsBridge | null = null;
 let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null;
 let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeCharacterInputSyncPending = false;
+let physicsBridgeCharacterInputSyncPromise: Promise<void> | null = null;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
 let physicsBridgeSceneLoaded = false;
@@ -10364,12 +10365,14 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
   // it. Remember that the input changed so the latest authority input can be
   // queued immediately after the step completes instead of waiting for the
   // next render frame.
-  if (physicsBridgeStepPromise) {
+  if (physicsBridgeStepPromise || physicsBridgeCharacterInputSyncPromise) {
     physicsBridgeCharacterInputSyncPending = true;
     return;
   }
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   const localYaw = characterInputYaw;
+  const bridge = physicsBridge;
+  const inputSyncRequests: Promise<void>[] = [];
   physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
     const isControlled = nodeId === controlledNodeId;
     const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
@@ -10388,7 +10391,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
       ? pathFollowInput.yaw
       : (isControlled ? localYaw : null);
-    void physicsBridge?.setCharacterInput({
+    inputSyncRequests.push(bridge.setCharacterInput({
       characterId,
       moveX: hasPathFollowInput ? pathFollowInput!.moveX : (isControlled ? characterAuthorityInput.moveX : 0),
       moveZ: hasPathFollowInput ? pathFollowInput!.moveZ : (isControlled ? characterAuthorityInput.moveZ : 0),
@@ -10397,10 +10400,27 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       sprint: hasPathFollowInput ? pathFollowInput!.sprint : (isControlled ? characterAuthorityInput.sprint : false),
       crouch: hasPathFollowInput ? pathFollowInput!.crouch : (isControlled ? characterAuthorityInput.crouch : false),
       interact: hasPathFollowInput ? pathFollowInput!.interact : (isControlled ? characterAuthorityInput.interact : false),
-    }).catch((error) => {
-      console.warn('[SceneViewer] Failed to sync character input', error);
-    });
+    }));
   });
+  if (!inputSyncRequests.length) {
+    return;
+  }
+  physicsBridgeCharacterInputSyncPromise = Promise.all(inputSyncRequests)
+    .then(() => undefined)
+    .catch((error) => {
+      console.warn('[SceneViewer] Failed to sync character input', error);
+    })
+    .finally(() => {
+      if (bridge !== physicsBridge) {
+        return;
+      }
+      physicsBridgeCharacterInputSyncPromise = null;
+      if (physicsBridgeCharacterInputSyncPending) {
+        physicsBridgeCharacterInputSyncPending = false;
+        syncSceneryPhysicsBridgeCharacterInput();
+      }
+    });
+  
 }
 
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
@@ -10423,6 +10443,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
   if (!physicsBridge || !physicsBridgeSceneLoaded) {
     physicsBridgeStepPromise = null;
+    physicsBridgeCharacterInputSyncPromise = null;
     physicsBridgeBodySyncPromise = null;
     physicsBridgeCharacterInputSyncPending = false;
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
@@ -10439,6 +10460,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   } finally {
     physicsBridgeSceneLoaded = false;
     physicsBridgeStepPromise = null;
+    physicsBridgeCharacterInputSyncPromise = null;
     physicsBridgeBodySyncPromise = null;
     physicsBridgeCharacterInputSyncPending = false;
     sceneryGroundCollisionRuntimeBodyIds.clear();
@@ -10462,6 +10484,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
   physicsBridge = null;
   physicsBridgeInitPromise = null;
   physicsBridgeStepPromise = null;
+  physicsBridgeCharacterInputSyncPromise = null;
   physicsBridgeBodySyncPromise = null;
   physicsBridgeCharacterInputSyncPending = false;
   try {
