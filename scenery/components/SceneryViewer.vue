@@ -2528,6 +2528,7 @@ function arePunchBadgeEntriesEqual(nextEntries: PunchBadgeOverlayEntry[], curren
 let physicsBridge: PhysicsBridge | null = null;
 let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null;
 let physicsBridgeStepPromise: Promise<void> | null = null;
+let physicsBridgeCharacterInputSyncPending = false;
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
 let physicsBridgeSceneLoaded = false;
@@ -2900,7 +2901,12 @@ const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCa
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.15;
-const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.18;
+// Keep turning responsive after the shared joystick deadzone has already been
+// applied. A second large deadzone plus smoothstep made mid-range horizontal
+// input produce very little effective turn, especially on diagonal input.
+const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.08;
+const CHARACTER_TURN_ONLY_FORWARD_SPEED = 0.35;
+const CHARACTER_TURN_ONLY_FORWARD_Y_THRESHOLD = 0.12;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
 
 type VehicleWheelBinding = {
@@ -9143,6 +9149,7 @@ function resetPhysicsWorld(): void {
   physicsBridgeDirtyBodyNodeIds.clear();
   physicsBridgeBodyDirtyRevisionByNodeId.clear();
   physicsBridgePendingBodySyncRevisionByNodeId.clear();
+  physicsBridgeCharacterInputSyncPending = false;
   physicsBridgeLastFullBodySyncAtMs = 0;
   clearLegacyPhysicsWorld();
   sceneryGroundCollisionReferenceInitialized = false;
@@ -9890,6 +9897,10 @@ function stepSceneryPhysicsBridge(delta: number): void {
     })
     .finally(() => {
       physicsBridgeStepPromise = null;
+      if (physicsBridgeCharacterInputSyncPending) {
+        physicsBridgeCharacterInputSyncPending = false;
+        syncSceneryPhysicsBridgeCharacterInput();
+      }
     });
 }
 
@@ -10350,9 +10361,11 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     return;
   }
   // A step already in flight will consume the input that was queued before
-  // it. Do not enqueue another set-character-input request behind that step;
-  // the latest authority input is sent on the next frame after completion.
+  // it. Remember that the input changed so the latest authority input can be
+  // queued immediately after the step completes instead of waiting for the
+  // next render frame.
   if (physicsBridgeStepPromise) {
+    physicsBridgeCharacterInputSyncPending = true;
     return;
   }
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
@@ -10411,6 +10424,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   if (!physicsBridge || !physicsBridgeSceneLoaded) {
     physicsBridgeStepPromise = null;
     physicsBridgeBodySyncPromise = null;
+    physicsBridgeCharacterInputSyncPending = false;
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
     physicsBridgeDirtyBodyNodeIds.clear();
     physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -10426,6 +10440,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     physicsBridgeSceneLoaded = false;
     physicsBridgeStepPromise = null;
     physicsBridgeBodySyncPromise = null;
+    physicsBridgeCharacterInputSyncPending = false;
     sceneryGroundCollisionRuntimeBodyIds.clear();
     sceneryGroundCollisionReferenceInitialized = false;
     sceneryGroundCollisionReferenceElapsed = 0;
@@ -10448,6 +10463,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
   physicsBridgeInitPromise = null;
   physicsBridgeStepPromise = null;
   physicsBridgeBodySyncPromise = null;
+  physicsBridgeCharacterInputSyncPending = false;
   try {
     await bridge.destroy();
   } catch (error) {
@@ -16241,12 +16257,17 @@ function resolveJoystickCharacterInput(): { turn: number; moveZ: number } {
   const turnProgress = turnAbs <= CHARACTER_JOYSTICK_TURN_DEADZONE
     ? 0
     : (turnAbs - CHARACTER_JOYSTICK_TURN_DEADZONE) / (1 - CHARACTER_JOYSTICK_TURN_DEADZONE);
-  // Use a smooth response curve so a small correction still turns the
-  // character, while a large deflection reaches the full turn rate quickly.
-  const turnScale = turnProgress * turnProgress * (3 - 2 * turnProgress);
+  // Use a linear response here. The shared deadzone already removes small
+  // accidental movements; applying another smoothstep curve made the useful
+  // middle range of the joystick feel almost unresponsive.
+  const turnScale = Math.min(1, turnProgress);
+  const forwardFromJoystick = y * scale;
+  const moveZ = Math.abs(y) <= CHARACTER_TURN_ONLY_FORWARD_Y_THRESHOLD
+    ? turnScale * CHARACTER_TURN_ONLY_FORWARD_SPEED
+    : forwardFromJoystick;
   return {
     turn: -Math.sign(x) * turnScale,
-    moveZ: y * scale,
+    moveZ,
   };
 }
 
