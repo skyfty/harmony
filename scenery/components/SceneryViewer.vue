@@ -2680,10 +2680,10 @@ const remoteSharedEntityTargetScaleScratch = new THREE.Vector3();
 const remoteMultiuserNicknameBoundsScratch = new THREE.Box3();
 const remoteMultiuserNicknameCenterScratch = new THREE.Vector3();
 const physicsGravity = createHostPhysicsVec3(0, -DEFAULT_ENVIRONMENT_GRAVITY, 0);
-// On WeChat iOS, 30 Hz physics is sufficient for 1–2 dynamic bodies and halves step cost.
-const PHYSICS_FIXED_TIMESTEP = isWeChatMiniProgram ? 1 / 30 : 1 / 60;
-// Fewer substeps needed at 30 Hz; each covers more sim time.
-const PHYSICS_MAX_SUB_STEPS = isWeChatMiniProgram ? 4 : 5;
+// Character steering needs the same temporal resolution as the render loop;
+// 30 Hz makes direction changes visibly quantized on touch devices.
+const PHYSICS_FIXED_TIMESTEP = 1 / 60;
+const PHYSICS_MAX_SUB_STEPS = 5;
 const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02;
 const CAMERA_DEPENDENT_POSITION_EPSILON_SQ = CAMERA_DEPENDENT_POSITION_EPSILON * CAMERA_DEPENDENT_POSITION_EPSILON;
 const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12;
@@ -2899,8 +2899,8 @@ let characterControlDeltaSeconds = 1 / 60;
 const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCameraMotionState();
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
-const JOYSTICK_DEADZONE = 0.25;
-const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.38;
+const JOYSTICK_DEADZONE = 0.15;
+const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.18;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
 
 type VehicleWheelBinding = {
@@ -7489,6 +7489,7 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
   locallyControlled: boolean;
 } {
   const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   if (
     pathFollowInput
     && (
@@ -7506,7 +7507,6 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
       locallyControlled: false,
     };
   }
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   if (controlledNodeId === nodeId) {
     return {
       moveX: characterAuthorityInput.moveX,
@@ -10347,6 +10347,12 @@ function resolveSceneryCharacterYawFromQuaternion(
 
 function syncSceneryPhysicsBridgeCharacterInput(): void {
   if (!physicsBridge || !physicsBridgeSceneLoaded || !physicsBridgeCharacterIdByNodeId.size) {
+    return;
+  }
+  // A step already in flight will consume the input that was queued before
+  // it. Do not enqueue another set-character-input request behind that step;
+  // the latest authority input is sent on the next frame after completion.
+  if (physicsBridgeStepPromise) {
     return;
   }
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
@@ -16232,9 +16238,12 @@ function resolveJoystickCharacterInput(): { turn: number; moveZ: number } {
   const effectiveLength = (length - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
   const scale = length > 0 ? effectiveLength / length : 0;
   const turnAbs = Math.abs(x);
-  const turnScale = turnAbs <= CHARACTER_JOYSTICK_TURN_DEADZONE
+  const turnProgress = turnAbs <= CHARACTER_JOYSTICK_TURN_DEADZONE
     ? 0
     : (turnAbs - CHARACTER_JOYSTICK_TURN_DEADZONE) / (1 - CHARACTER_JOYSTICK_TURN_DEADZONE);
+  // Use a smooth response curve so a small correction still turns the
+  // character, while a large deflection reaches the full turn rate quickly.
+  const turnScale = turnProgress * turnProgress * (3 - 2 * turnProgress);
   return {
     turn: -Math.sign(x) * turnScale,
     moveZ: y * scale,
@@ -17381,10 +17390,12 @@ function updateSceneCompassHeading(): void {
   if (characterControlUi.value.visible) {
     const telemetryNodeId = resolveControlledCharacterMotionNodeId();
     const telemetry = telemetryNodeId ? controlledNodeMotionRuntime.get(telemetryNodeId) : null;
-    const resolvedYaw = resolveSceneryCharacterInputYaw();
+    // The yaw is integrated once, immediately before the physics input is
+    // synchronized. Do not resolve it again here or the turn would be applied
+    // twice during the same render frame.
     const headingDegrees = telemetry
       ? telemetry.headingYawDeg
-      : THREE.MathUtils.radToDeg(resolvedYaw ?? Math.PI);
+      : THREE.MathUtils.radToDeg(characterInputYaw);
     const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(activeEnvironmentSettings.northDirection);
     commitVehicleHeadingDegrees(headingDegrees - northDirectionAngleDegrees);
     return;
@@ -17495,7 +17506,13 @@ function updateCharacterFollowCamera(
     },
     velocityWorld: rawVelocity,
     worldUp,
-    tuning: createBackFollowCameraTuning(),
+    tuning: {
+      ...createBackFollowCameraTuning(),
+      // Local joystick control should feel immediate. Keep the smoother
+      // values for auto-tour, which uses a separate camera update path.
+      headingLerpSpeed: 10,
+      targetLerpSpeed: 8,
+    },
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     localOffsetOverride,
     followControlsDirty: false,
@@ -20923,6 +20940,11 @@ function startRenderLoop(
           }
           stepPhysicsWorld(deltaSeconds);
           syncSceneryPhysicsBridgeVehicleInput();
+          // Integrate the current joystick turn before sending the character
+          // input, otherwise physics receives the previous frame's yaw.
+          if (characterControlUi.value.visible) {
+            resolveSceneryCharacterInputYaw();
+          }
           syncSceneryPhysicsBridgeCharacterInput();
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);

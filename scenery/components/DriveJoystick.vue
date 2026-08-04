@@ -64,6 +64,12 @@ defineProps<{
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 
+/* During a drag the knob should track the finger directly. Keep the
+   transition for release/re-centering feedback only. */
+.viewer-drive-joystick__visual.is-active .viewer-drive-joystick__stick {
+  transition: none;
+}
+
 .viewer-drive-joystick__visual.is-active .viewer-drive-joystick__stick {
   box-shadow:
     inset 0 0 18px rgba(255, 255, 255, 0.22),
