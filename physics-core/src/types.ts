@@ -220,6 +220,7 @@ export type PhysicsCharacterInputCommand = {
   moveX: number
   moveZ: number
   yaw?: number | null
+  turnRateRadiansPerSecond?: number | null
   jump: boolean
   sprint: boolean
   crouch: boolean

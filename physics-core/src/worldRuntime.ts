@@ -333,6 +333,7 @@ export abstract class PhysicsWorldBase<
         moveX: input.moveX,
         moveZ: input.moveZ,
         yaw: input.yaw,
+        turnRateRadiansPerSecond: input.turnRateRadiansPerSecond,
         jump: input.jump,
         sprint: input.sprint,
         crouch: input.crouch,

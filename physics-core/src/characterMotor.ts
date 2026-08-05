@@ -20,6 +20,7 @@ export type PhysicsCharacterMotorInput = {
   moveX: number
   moveZ: number
   yaw?: number | null
+  turnRateRadiansPerSecond?: number | null
   jump: boolean
   sprint: boolean
   crouch: boolean
@@ -40,6 +41,7 @@ const COYOTE_TIME_SECONDS = 0.12
 const GROUND_PROBE_EPSILON = 0.08
 const GROUND_SNAP_DISTANCE = 0.18
 const GROUND_STICK_VELOCITY = -2
+const DEFAULT_TURN_RATE_RADIANS_PER_SECOND = Number.POSITIVE_INFINITY
 
 export function createPhysicsCharacterMotorState(initialYaw = Math.PI): PhysicsCharacterMotorState {
   return {
@@ -82,7 +84,12 @@ export function stepPhysicsCharacterMotor(
   const groundNormal = resolveGroundNormal(input)
 
   if (typeof input.yaw === 'number' && Number.isFinite(input.yaw)) {
-    state.yaw = input.yaw
+    const turnRate = Number.isFinite(input.turnRateRadiansPerSecond ?? NaN)
+      ? Math.max(0, input.turnRateRadiansPerSecond as number)
+      : DEFAULT_TURN_RATE_RADIANS_PER_SECOND
+    const yawDelta = resolveShortestAngleDelta(state.yaw, input.yaw)
+    state.yaw += Math.sign(yawDelta) * Math.min(Math.abs(yawDelta), turnRate * deltaSeconds)
+    state.yaw = normalizeYaw(state.yaw)
   }
   if (grounded) {
     state.coyoteTimeRemaining = COYOTE_TIME_SECONDS
@@ -149,6 +156,14 @@ export function stepPhysicsCharacterMotor(
     grounded: state.grounded,
     linearVelocity: [planarX, state.verticalVelocity, planarZ],
   }
+}
+
+function resolveShortestAngleDelta(current: number, target: number): number {
+  return normalizeYaw(target - current)
+}
+
+function normalizeYaw(value: number): number {
+  return ((value + Math.PI) % (Math.PI * 2) + (Math.PI * 2)) % (Math.PI * 2) - Math.PI
 }
 
 function resolveCharacterSpeed(
