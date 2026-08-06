@@ -54,6 +54,22 @@ function handleRemoveComponent() {
   if (isDrawActive.value) {
     buildToolsStore.setActiveBuildTool(null)
   }
+
+  // Model collision data is also kept in legacy runtime fields for compatibility.
+  // Clear those fields before removing the component; otherwise InspectorPanel's
+  // legacy-data migration watcher will recreate the component when this node is
+  // selected again.
+  const node = selectedNode.value
+  if (node) {
+    const { modelCollision: _removedModelCollision, ...nextUserData } = node.userData ?? {}
+    sceneStore.updateNodeUserData(
+      nodeId,
+      Object.keys(nextUserData).length > 0 ? nextUserData : null,
+    )
+    if (node.dynamicMesh?.type === 'ModelCollision') {
+      sceneStore.updateNodeDynamicMesh(nodeId, null)
+    }
+  }
   sceneStore.removeNodeComponent(nodeId, component.id)
 }
 

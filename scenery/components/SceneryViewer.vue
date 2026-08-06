@@ -2931,6 +2931,9 @@ const CHARACTER_TURN_ONLY_FORWARD_Y_THRESHOLD = 0.12;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
 const CHARACTER_TURN_RESPONSE_EXPONENT = 0.85;
 const CHARACTER_INPUT_MAX_DELTA_SECONDS = 0.05;
+// The editor default is tuned for desktop control. Reduce the runtime rate for
+// the mini program so a full joystick deflection does not rotate too quickly.
+const CHARACTER_RUNTIME_TURN_RATE_SCALE = 1;
 const PHYSICS_BRIDGE_MAX_STEP_DELTA_SECONDS = 0.05;
 const PHYSICS_BRIDGE_FIXED_STEP_DELTA_SECONDS = 1 / 60;
 const PHYSICS_BRIDGE_MAX_ACCUMULATED_DELTA_SECONDS = 0.2;
@@ -10389,7 +10392,8 @@ function resolveSceneryCharacterInputYaw(): number | null {
     const props = clampCharacterControllerComponentProps(
       resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
     );
-    const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond);
+    const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond)
+      * CHARACTER_RUNTIME_TURN_RATE_SCALE;
     const inputDeltaSeconds = Math.min(
       Math.max(0, characterControlDeltaSeconds),
       CHARACTER_INPUT_MAX_DELTA_SECONDS,
@@ -10520,6 +10524,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       yaw: activeYaw,
       turnRateRadiansPerSecond: controlledCharacterProps
         ? THREE.MathUtils.degToRad(controlledCharacterProps.turnRateDegreesPerSecond)
+          * CHARACTER_RUNTIME_TURN_RATE_SCALE
         : null,
       jump: hasPathFollowInput ? pathFollowInput!.jump : (isControlled ? characterAuthorityInput.jump : false),
       sprint: hasPathFollowInput ? pathFollowInput!.sprint : (isControlled ? characterAuthorityInput.sprint : false),
