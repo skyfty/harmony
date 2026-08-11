@@ -252,22 +252,24 @@ function createForceBehaviour(force: { x: number; y: number; z: number } | undef
   return new Force(vector.x, vector.y, vector.z)
 }
 
-function createEmissionRate(emissionRate: number): InstanceType<typeof Rate> {
+function createEmissionRate(emissionRate: number, updateHz: number): InstanceType<typeof Rate> {
   const particlesPerSecond = Math.max(0, emissionRate)
   if (particlesPerSecond <= 0) {
     return new Rate(new Span(0, 0), new Span(1, 1))
   }
-  const baseInterval = 1 / particlesPerSecond
-  const intervalJitter = baseInterval * 0.35
-  const minInterval = Math.max(1 / 120, baseInterval - intervalJitter)
-  const maxInterval = Math.max(minInterval, baseInterval + intervalJitter)
-  return new Rate(new Span(1, 1), new Span(minInterval, maxInterval))
+  const updatesPerSecond = Math.max(1, Math.round(updateHz))
+  const particlesPerEmission = Math.max(1, Math.min(8, Math.ceil(particlesPerSecond / updatesPerSecond)))
+  const emissionInterval = particlesPerEmission / particlesPerSecond
+  const intervalJitter = emissionInterval * 0.12
+  const minInterval = Math.max(1 / 120, emissionInterval - intervalJitter)
+  const maxInterval = Math.max(minInterval, emissionInterval + intervalJitter)
+  return new Rate(new Span(Math.max(1, particlesPerEmission - 1), particlesPerEmission + 1), new Span(minInterval, maxInterval))
 }
 
 function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemComponentProps, texture: THREE.Texture | null): any {
   const emitter = new Emitter()
   const budgeted = applyEmitterBudget(config, props.budget)
-  emitter.setRate(createEmissionRate(budgeted.emissionRate))
+  emitter.setRate(createEmissionRate(budgeted.emissionRate, props.budget.updateHz))
   emitter.setInitializers([
     new Body(createSpriteBody(props, texture)),
     new Position(createZone(budgeted)),
@@ -333,8 +335,13 @@ class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {
     }
     const groundThreshold = resolveWeatherGroundThreshold(this.props.presetId)
     const fadeRange = resolveWeatherFadeRange(this.props.presetId)
-    this.group.getWorldPosition(this.tempWorldPosition)
-    const groundY = this.tempWorldPosition.y
+    // Nebula keeps particle positions in the particle system's local space,
+    // while the group position is in world space. Comparing the two made all
+    // particles appear below ground as soon as the owning node was moved up
+    // (for example, a high Empty Node with a snow effect). Weather effects are
+    // grounded at the owning node's local origin, so keep this comparison in
+    // the same local coordinate space as particle.position.
+    const groundY = 0
     for (const entry of this.emitters) {
       const particles = entry.emitter?.particles
       if (!Array.isArray(particles) || !particles.length) {

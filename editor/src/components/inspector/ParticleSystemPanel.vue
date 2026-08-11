@@ -626,6 +626,38 @@ function handleRemoveComponent() {
         </div>
 
         <div class="particle-system-panel__section">
+          <div class="particle-system-panel__section-title">Budget</div>
+          <div class="particle-system-panel__field-list">
+            <v-text-field
+              :model-value="normalizedProps.budget.maxParticles"
+              label="Max Active Particles"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              :min="1"
+              :max="PARTICLE_COMPONENT_MAX_PARTICLES"
+              step="1"
+              @update:model-value="applyPatch({ budget: { maxParticles: Number($event) || 1 } })"
+            />
+            <v-text-field
+              :model-value="normalizedProps.budget.spawnRateScale"
+              label="Spawn Rate Scale"
+              type="number"
+              density="compact"
+              variant="underlined"
+              hide-details
+              :disabled="!componentEnabled"
+              min="0"
+              max="1"
+              step="0.05"
+              @update:model-value="applyPatch({ budget: { spawnRateScale: Number($event) || 0 } })"
+            />
+          </div>
+        </div>
+
+        <div class="particle-system-panel__section">
           <div class="particle-system-panel__section-title">Visual</div>
           <div class="particle-system-panel__texture-tile">
             <button
@@ -1102,6 +1134,39 @@ function handleRemoveComponent() {
                     :disabled="!componentEnabled"
                     v-bind="EMITTER_POSITION_INPUTS"
                     @update:model-value="updateEmitter(index, { position: { z: Number($event) || 0 } as any })"
+                  />
+                  <v-text-field
+                    :model-value="emitter.size.x"
+                    label="Size X"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    :disabled="!componentEnabled || emitter.shape !== 'box'"
+                    v-bind="EMITTER_POSITION_INPUTS"
+                    @update:model-value="updateEmitter(index, { size: { x: Number($event) || 0 } as any })"
+                  />
+                  <v-text-field
+                    :model-value="emitter.size.y"
+                    label="Size Y"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    :disabled="!componentEnabled || emitter.shape !== 'box'"
+                    v-bind="EMITTER_POSITION_INPUTS"
+                    @update:model-value="updateEmitter(index, { size: { y: Number($event) || 0 } as any })"
+                  />
+                  <v-text-field
+                    :model-value="emitter.size.z"
+                    label="Size Z"
+                    type="number"
+                    density="compact"
+                    variant="underlined"
+                    hide-details
+                    :disabled="!componentEnabled || emitter.shape !== 'box'"
+                    v-bind="EMITTER_POSITION_INPUTS"
+                    @update:model-value="updateEmitter(index, { size: { z: Number($event) || 0 } as any })"
                   />
                   <div class="particle-system-panel__emitter-physics">
                     <div class="particle-system-panel__emitter-physics-title">Force</div>

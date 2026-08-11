@@ -1020,7 +1020,11 @@ class SceneGraphBuilder {
     if (isRuntimeHiddenInPreview(node)) {
       return null;
     }
-    if (node.dynamicMesh?.type === 'GuideRoute') {
+    // Region nodes are runtime containers even though they do not have a
+    // visible mesh of their own. Build the container before falling through
+    // to primitive handling so components mounted on the region (for example
+    // ParticleSystemComponent) receive a runtime Object3D to attach to.
+    if (node.dynamicMesh?.type === 'GuideRoute' || node.dynamicMesh?.type === 'Region') {
       const dynamicMeshNode = await this.buildDynamicMeshNode(node);
       if (dynamicMeshNode) {
         return dynamicMeshNode;

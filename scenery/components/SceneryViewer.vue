@@ -766,6 +766,21 @@ import {
 } from '@harmony/schema/components/definitions/animationComponent';
 import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
 import {
+  createCapsuleCollisionWorld,
+  type CapsuleCollisionWorld,
+} from '@harmony/schema/capsuleCollision';
+import {
+  createNonPhysicsCharacterState,
+  resetNonPhysicsCharacterState,
+  type NonPhysicsCharacterInput,
+  type NonPhysicsCharacterState,
+  updateNonPhysicsCharacter,
+} from '@harmony/schema/nonPhysicsCharacterController';
+import {
+  createNonPhysicsCharacterFootIK,
+  type NonPhysicsCharacterFootIK,
+} from '@harmony/schema/nonPhysicsCharacterFootIK';
+import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   CHARACTER_ANIMATION_EDITOR_SLOTS,
   clampCharacterControllerComponentProps,
@@ -2564,6 +2579,9 @@ const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
 const physicsBridgeCharacterIdByNodeId = new Map<string, number>();
 const physicsBridgeCharacterBodyNodeIdByControllerNodeId = new Map<string, string>();
 const physicsBridgeCharacterControllerNodeIdByBodyNodeId = new Map<string, string>();
+const nonPhysicsCharacterStates = new Map<string, NonPhysicsCharacterState>();
+const nonPhysicsCharacterFootIK = new Map<string, NonPhysicsCharacterFootIK>();
+const nonPhysicsCollisionWorld: CapsuleCollisionWorld = createCapsuleCollisionWorld();
 function nextSceneryGroundCollisionRuntimeId(): number {
   sceneryGroundCollisionNextRuntimeId += 1;
   return sceneryGroundCollisionNextRuntimeId;
@@ -10586,6 +10604,8 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeCharacterIdByNodeId.clear();
   physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
   physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
+  nonPhysicsCharacterStates.clear();
+  nonPhysicsCollisionWorld.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
   physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -10660,6 +10680,8 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeCharacterIdByNodeId.clear();
     physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
     physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
+    nonPhysicsCharacterStates.clear();
+    nonPhysicsCollisionWorld.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
     characterPhysicsBridgeVisualStateByNodeId.clear();
     physicsBridgeDirtyBodyNodeIds.clear();
@@ -10921,10 +10943,35 @@ function ensureVehicleBindingForNode(nodeId: string): void {
 
 function removeCharacterBinding(nodeId: string): void {
   const entry = rigidbodyInstances.get(nodeId) ?? null;
-  if (!entry || entry.bindingKind !== 'character') {
-    return;
+  if (entry?.bindingKind === 'character') {
+    rigidbodyInstances.delete(nodeId);
   }
-  rigidbodyInstances.delete(nodeId);
+  nonPhysicsCharacterStates.delete(nodeId);
+  nonPhysicsCharacterFootIK.get(nodeId)?.dispose();
+  nonPhysicsCharacterFootIK.delete(nodeId);
+}
+
+function shouldUseLocalCharacterController(node: SceneNode | null): boolean {
+  return Boolean(
+    node
+    && resolveCharacterControllerComponent(node)
+    && !resolveRigidbodyComponent(node),
+  );
+}
+
+function rebuildNonPhysicsCharacterCollisionWorld(): void {
+  nonPhysicsCollisionWorld.clear();
+  nodeObjectMap.forEach((root, nodeId) => {
+    const node = resolveNodeById(nodeId);
+    if (resolveCharacterControllerComponent(node)) return;
+    const rigidbody = resolveRigidbodyComponent(node);
+    if (rigidbody && rigidbody.props.bodyType !== 'STATIC') return;
+    root.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      if (child.userData?.characterController || child.userData?.nonPhysicsCharacter) return;
+      nonPhysicsCollisionWorld.addMesh(child);
+    });
+  });
 }
 
 function ensureCharacterBindingForNode(nodeId: string): void {
@@ -10938,6 +10985,22 @@ function ensureCharacterBindingForNode(nodeId: string): void {
   if (!object) {
     return;
   }
+  if (shouldUseLocalCharacterController(node)) {
+    rigidbodyInstances.delete(nodeId);
+    const props = clampCharacterControllerComponentProps(component.props);
+    const existing = nonPhysicsCharacterStates.get(nodeId);
+    if (existing && existing.object === object) {
+      existing.props = props;
+      return;
+    }
+    object.userData.nonPhysicsCharacter = true;
+    nonPhysicsCharacterStates.set(nodeId, createNonPhysicsCharacterState({ nodeId, object, props }));
+    nonPhysicsCharacterFootIK.set(nodeId, createNonPhysicsCharacterFootIK(object, nonPhysicsCollisionWorld));
+    return;
+  }
+  nonPhysicsCharacterStates.delete(nodeId);
+  nonPhysicsCharacterFootIK.get(nodeId)?.dispose();
+  nonPhysicsCharacterFootIK.delete(nodeId);
   object.updateWorldMatrix(true, false);
   const worldPosition = new THREE.Vector3();
   const worldQuaternion = new THREE.Quaternion();
@@ -11103,6 +11166,10 @@ function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | nu
         rigidbodyInstances.delete(nodeId);
       }
     });
+    nonPhysicsCharacterStates.clear();
+    nonPhysicsCharacterFootIK.forEach((ik) => ik.dispose());
+    nonPhysicsCharacterFootIK.clear();
+    nonPhysicsCollisionWorld.clear();
     return;
   }
   const characterNodes = collectCharacterNodes(document.nodes);
@@ -11112,6 +11179,59 @@ function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | nu
     if (entry.bindingKind === 'character' && !desiredIds.has(nodeId)) {
       rigidbodyInstances.delete(nodeId);
     }
+  });
+  rebuildNonPhysicsCharacterCollisionWorld();
+}
+
+function resolveNonPhysicsCharacterInput(nodeId: string): NonPhysicsCharacterInput | null {
+  const activeCamera = renderContext?.camera ?? null;
+  if (!activeCamera) return null;
+  const animationInput = resolveSceneryCharacterAnimationInput(nodeId);
+  return {
+    moveX: animationInput.moveX,
+    moveZ: animationInput.moveZ,
+    turn: animationInput.turn,
+    jump: animationInput.jump,
+    sprint: animationInput.sprint,
+    crouch: animationInput.crouch,
+    interact: animationInput.interact,
+    camera: activeCamera,
+  };
+}
+
+function updateNonPhysicsCharacters(deltaSeconds: number): void {
+  const activeCamera = renderContext?.camera ?? null;
+  if (!activeCamera || !nonPhysicsCharacterStates.size) return;
+  nonPhysicsCharacterStates.forEach((state, nodeId) => {
+    const input = resolveNonPhysicsCharacterInput(nodeId);
+    if (!input) return;
+    const result = updateNonPhysicsCharacter(
+      state,
+      { ...input, camera: activeCamera },
+      nonPhysicsCollisionWorld,
+      deltaSeconds,
+    );
+    state.object.updateMatrixWorld(true);
+    if (shouldSyncInstancedTransform(state.object)) {
+      syncInstancedTransform(state.object);
+    }
+    if (result.justLanded) {
+      scheduleCharacterControllerAnimationResync(nodeId);
+    }
+  });
+}
+
+function restoreNonPhysicsCharacterFootIK(): void {
+  nonPhysicsCharacterFootIK.forEach((ik) => ik.restore());
+}
+
+function updateNonPhysicsCharacterFootIK(deltaSeconds: number): void {
+  nonPhysicsCharacterStates.forEach((state, nodeId) => {
+    nonPhysicsCharacterFootIK.get(nodeId)?.update(
+      deltaSeconds,
+      state.grounded,
+      state.velocity.x * state.velocity.x + state.velocity.z * state.velocity.z > 0.01,
+    );
   });
 }
 
@@ -15323,7 +15443,7 @@ function resolveMoveToSubjectForwardAxis(subjectNodeId: string, bindingKind: str
     const props = clampVehicleComponentProps(vehicle?.props ?? null);
     return resolveVehicleAxisVector(clampVehicleAxisIndex(props.indexForwardAxis));
   }
-  if (bindingKind === 'character') {
+  if (bindingKind === 'character' || resolveCharacterControllerComponent(resolveNodeById(subjectNodeId))) {
     const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId));
     const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis;
     return writeCharacterLocalForward(moveToSubjectForwardAxisScratch, forwardAxis) as THREE.Vector3;
@@ -15441,6 +15561,11 @@ function applyMoveToSubjectTargetPose(
     return;
   }
   applyMoveToObjectWorldPose(object, targetPose.position, characterTargetQuaternion);
+  const localCharacter = nonPhysicsCharacterStates.get(subjectNodeId);
+  if (localCharacter) {
+    resetNonPhysicsCharacterState(localCharacter, targetPose.position, characterTargetQuaternion);
+    syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion);
+  }
   syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
     position: targetPose.position,
     forward: targetPose.forward,
@@ -21111,6 +21236,8 @@ function startRenderLoop(
           const watchCameraLocked = isWatchCameraLocked();
           updateCharacterAuthorityInputFromKeys();
           updateMoveToSessionForFrame(deltaSeconds);
+          updateNonPhysicsCharacters(deltaSeconds);
+          restoreNonPhysicsCharacterFootIK();
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
@@ -21123,6 +21250,7 @@ function startRenderLoop(
           updateCharacterPathFollow(deltaSeconds);
           updateCharacterControllerAnimations(deltaSeconds);
           nodeAnimationRuntime.update(deltaSeconds);
+          updateNonPhysicsCharacterFootIK(deltaSeconds);
           activeBehaviorSounds.forEach((instance) => {
             if (!instance.audio || !instance.params.spatial || instance.stopped) {
               return;

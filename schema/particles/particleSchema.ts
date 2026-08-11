@@ -92,7 +92,7 @@ export interface ParticleSystemComponentProps {
   emitters: ParticleEmitterConfig[]
 }
 
-export const PARTICLE_COMPONENT_MAX_PARTICLES = 120
+export const PARTICLE_COMPONENT_MAX_PARTICLES = 1000
 export const PARTICLE_COMPONENT_MAX_BURST = 48
 export const PARTICLE_COMPONENT_MAX_SCENE_ACTIVE = 12
 export const PARTICLE_SCENE_SOFT_PARTICLE_LIMIT = 800
@@ -107,7 +107,7 @@ export const DEFAULT_PARTICLE_PLAYBACK: ParticlePlaybackProps = {
 
 export const DEFAULT_PARTICLE_BUDGET: ParticleBudgetProps = {
   qualityTier: 'mini-safe',
-  maxParticles: 72,
+  maxParticles: 500,
   spawnRateScale: 1,
   cullDistance: 24,
   updateHz: 30,
