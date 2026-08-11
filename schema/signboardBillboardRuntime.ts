@@ -30,6 +30,17 @@ const signboardEntries = new Map<string, SignboardRuntimeEntry>()
 const signboardAnchorScratch = new THREE.Vector3()
 const signboardCameraScratch = new THREE.Vector3()
 
+function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
+  let current = object
+  while (current) {
+    if (current.visible === false) {
+      return false
+    }
+    current = current.parent
+  }
+  return true
+}
+
 export interface SignboardBillboardStyle {
   backgroundTopColor: string
   backgroundMiddleColor: string
@@ -355,6 +366,16 @@ function updateSignboardEntry(
     if (entry) {
       entry.sprite.visible = false
       entry.material.opacity = 0
+      entry.opacity = 0
+    }
+    return
+  }
+
+  if (!isRuntimeObjectEffectivelyVisible(object)) {
+    if (entry) {
+      entry.sprite.visible = false
+      entry.material.opacity = 0
+      entry.opacity = 0
     }
     return
   }
