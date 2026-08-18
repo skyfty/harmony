@@ -2920,7 +2920,7 @@ const characterControlDebugQuaternion = new THREE.Quaternion();
 // Temporary debug logging for the character control pipeline. Logs are emitted
 // as a single copyable string: [CharacterControl] stage {"k":"v",...}
 const CHARACTER_CONTROL_DEBUG = true;
-const CHARACTER_CONTROL_DEBUG_INTERVAL_MS = 120;
+const CHARACTER_CONTROL_DEBUG_INTERVAL_MS = 500;
 let characterControlDebugLastLogMs = 0;
 let characterControlRenderFrame = 0;
 function characterControlDebugNumber(value: number | null | undefined): number | null {
@@ -10459,6 +10459,7 @@ function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
       frame: characterControlRenderFrame,
       controlledNodeId,
       motionNodeId,
+      forwardAxis: props.forwardAxis,
       objectFound: true,
       quat: {
         x: characterControlDebugNumber(characterInputYawQuaternionScratch.x),
@@ -10478,7 +10479,6 @@ function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
   }
   const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond)
     * CHARACTER_RUNTIME_TURN_RATE_SCALE;
-  const yawBeforeIntegration = characterInputYaw;
   if (typeof characterDesiredInputYaw === 'number' && Number.isFinite(characterDesiredInputYaw)) {
     // Camera-relative joystick/keyboard: rotate toward the pushed direction at
     // the configured turn rate; movement always follows the facing (no reverse).
@@ -10490,15 +10490,6 @@ function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
     characterInputYaw += characterAuthorityInput.turn * turnRateRadiansPerSecond * delta;
   }
   characterInputYaw = THREE.MathUtils.euclideanModulo(characterInputYaw + Math.PI, Math.PI * 2) - Math.PI;
-  logCharacterControlDebug('yaw', {
-    frame: characterControlRenderFrame,
-    node: controlledNodeId,
-    before: characterControlDebugNumber(yawBeforeIntegration),
-    desired: characterControlDebugNumber(characterDesiredInputYaw),
-    delta: characterControlDebugNumber(delta),
-    turnRate: characterControlDebugNumber(turnRateRadiansPerSecond),
-    after: characterControlDebugNumber(characterInputYaw),
-  });
   return characterInputYaw;
 }
 
@@ -10546,10 +10537,6 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
   }
   if (physicsBridgeCharacterInputSyncPromise) {
     physicsBridgeCharacterInputSyncPending = true;
-    logCharacterControlDebug('sync', {
-      frame: characterControlRenderFrame,
-      pending: true,
-    });
     return;
   }
   const bridge = physicsBridge;
@@ -10609,21 +10596,6 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       return;
     }
     physicsBridgeCharacterInputSnapshotByNodeId.set(controllerNodeId, snapshot);
-    logCharacterControlDebug('send', {
-      frame: characterControlRenderFrame,
-      node: controllerNodeId,
-      body: bodyNodeId,
-      charId: characterId,
-      controlled: controllerNodeId === controlledNodeId,
-      moveX: characterControlDebugNumber(moveX),
-      moveZ: characterControlDebugNumber(moveZ),
-      yaw: characterControlDebugNumber(yaw),
-      jump,
-      sprint,
-      crouch,
-      interact,
-      reset: !previous,
-    });
     pending.push(bridge.setCharacterInput({
       characterId,
       moveX: snapshot.moveX,
@@ -16616,23 +16588,6 @@ function updateCharacterAuthorityInputFromKeys(): void {
   characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
-  if (characterControlUi.value.visible) {
-    logCharacterControlDebug('input', {
-      frame: characterControlRenderFrame,
-      joyX: characterControlDebugNumber(joystickInput.x),
-      joyY: characterControlDebugNumber(joystickInput.y),
-      keyX: keyboardX,
-      keyY: keyboardY,
-      camFx: characterControlDebugNumber(frame.forwardX),
-      camFz: characterControlDebugNumber(frame.forwardZ),
-      camRx: characterControlDebugNumber(frame.rightX),
-      camRz: characterControlDebugNumber(frame.rightZ),
-      dirX: characterControlDebugNumber(directionX),
-      dirZ: characterControlDebugNumber(directionZ),
-      desiredYaw: characterControlDebugNumber(characterDesiredInputYaw),
-      moveZ: characterControlDebugNumber(characterAuthorityInput.moveZ),
-    });
-  }
   if (characterKeyState.jump) {
     if (!characterInputJumpLatch) {
       characterAuthorityInput.jump = true;
@@ -17859,7 +17814,22 @@ function updateCharacterFollowCamera(
 
   const placement = resolveCharacterFollowPlacement(controlledNodeId, object);
   resolveCharacterRootWorldPosition(controlledNodeId, bindingNodeId, object, characterCameraFollowAnchorScratch);
-  resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+  if (!characterCameraFollowState.initialized) {
+    // First frame after (re)initialization: frame the camera behind the
+    // character's current facing once, then keep that view direction stable
+    // while the joystick steers (Summer Afternoon style). Chasing the
+    // character's facing during camera-relative control creates a feedback
+    // loop where the character keeps spinning after the rotating camera.
+    resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+  } else {
+    context.camera.getWorldDirection(characterCameraFollowForwardScratch);
+    characterCameraFollowForwardScratch.y = 0;
+    if (characterCameraFollowForwardScratch.lengthSq() <= 1e-8) {
+      characterCameraFollowForwardScratch.set(0, 0, 1);
+    } else {
+      characterCameraFollowForwardScratch.normalize();
+    }
+  }
   const localOffsetOverride = resolveCharacterFollowCameraOffset(props);
 
   const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? controlledNodeId);
@@ -17877,16 +17847,19 @@ function updateCharacterFollowCamera(
     deltaSeconds,
     ctx: {
       camera: context.camera,
-      mapControls: undefined,
+      // Sync OrbitControls' target with the follow camera each frame. Without
+      // this, the per-frame controls.update() re-aims the camera at a stale
+      // target, which fights the follow camera and makes it orbit the
+      // character even while it stands still.
+      mapControls: context.controls,
     },
     velocityWorld: rawVelocity,
     worldUp,
     tuning: {
       ...createBackFollowCameraTuning(),
-      // Keep the camera mostly fixed in yaw while the joystick steers, so the
-      // character's turns stay visible. The heading slowly re-centers behind
-      // the character once it stops turning instead of chasing its facing.
-      headingLerpSpeed: 2.5,
+      // The desired forward equals the camera's own heading, so the heading
+      // stays fixed and the camera tracks only the character position.
+      headingLerpSpeed: 0,
       targetLerpSpeed: 8,
     },
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
@@ -21293,15 +21266,76 @@ function startRenderLoop(
             const debugVisualQuaternion = debugVisualObject
               ? debugVisualObject.getWorldQuaternion(characterControlDebugQuaternion)
               : null;
+            let debugMeshFwdYaw: number | null = null;
+            if (debugVisualQuaternion) {
+              // Yaw of the visual's +Z axis in world space, independent of the
+              // configured forwardAxis, to detect a mesh/forwardAxis mismatch.
+              const debugMeshFx = 2 * (
+                debugVisualQuaternion.x * debugVisualQuaternion.z
+                + debugVisualQuaternion.w * debugVisualQuaternion.y
+              );
+              const debugMeshFz = 1 - 2 * (
+                debugVisualQuaternion.x * debugVisualQuaternion.x
+                + debugVisualQuaternion.y * debugVisualQuaternion.y
+              );
+              const debugMeshLength = Math.hypot(debugMeshFx, debugMeshFz);
+              if (debugMeshLength > 1e-6) {
+                debugMeshFwdYaw = Math.atan2(debugMeshFx / debugMeshLength, debugMeshFz / debugMeshLength);
+              }
+            }
+            let debugCamYaw: number | null = null;
+            const debugCamera = renderContext?.camera ?? null;
+            if (debugCamera) {
+              debugCamera.getWorldDirection(characterControlYawForwardScratch);
+              const debugCamLength = Math.hypot(
+                characterControlYawForwardScratch.x,
+                characterControlYawForwardScratch.z,
+              );
+              if (debugCamLength > 1e-6) {
+                debugCamYaw = Math.atan2(
+                  characterControlYawForwardScratch.x / debugCamLength,
+                  characterControlYawForwardScratch.z / debugCamLength,
+                );
+              }
+            }
+            const debugFollowGate = !isWatchCameraLocked()
+              && !vehicleDriveActive.value
+              && activeAutoTourNodeIds.size === 0
+              && !activeCameraWatchTween;
             logCharacterControlDebug('state', {
               frame: characterControlRenderFrame,
               controlledNodeId: debugControlledNodeId,
               motionNodeId: debugMotionNodeId,
               bodyNodeId: debugBodyNodeId,
+              forwardAxis: debugProps?.forwardAxis ?? null,
               bindingsReady: physicsBridgeCharacterBindingsReady.value,
               hasMapEntry: debugControlledNodeId
                 ? physicsBridgeCharacterIdByNodeId.has(debugControlledNodeId)
                 : false,
+              followRan: debugFollowGate,
+              autoTourNodes: Array.from(activeAutoTourNodeIds),
+              tourFollowNodeId: autoTourFollowNodeId.value,
+              watchLocked: isWatchCameraLocked(),
+              watchTween: Boolean(activeCameraWatchTween),
+              watchExclusiveUi: watchExclusiveUiActive.value,
+              joyX: characterControlDebugNumber(characterJoystickVector.x),
+              joyY: characterControlDebugNumber(characterJoystickVector.y),
+              camYaw: characterControlDebugNumber(debugCamYaw),
+              camPos: debugCamera
+                ? [
+                    characterControlDebugNumber(debugCamera.position.x),
+                    characterControlDebugNumber(debugCamera.position.y),
+                    characterControlDebugNumber(debugCamera.position.z),
+                  ]
+                : null,
+              ctrlTarget: renderContext?.controls
+                ? [
+                    characterControlDebugNumber(renderContext.controls.target.x),
+                    characterControlDebugNumber(renderContext.controls.target.y),
+                    characterControlDebugNumber(renderContext.controls.target.z),
+                  ]
+                : null,
+              desiredYaw: characterControlDebugNumber(characterDesiredInputYaw),
               sentYaw: characterControlDebugNumber(characterResolvedInputYaw),
               bodyYaw: debugFrameState
                 ? characterControlDebugNumber(
@@ -21319,6 +21353,14 @@ function startRenderLoop(
                   ),
                 )
                 : null,
+              meshFwdYaw: characterControlDebugNumber(debugMeshFwdYaw),
+              velYaw: debugFrameState?.linearVelocity
+                ? characterControlDebugNumber(
+                  Math.atan2(debugFrameState.linearVelocity.x, debugFrameState.linearVelocity.z),
+                )
+                : null,
+              moveZ: characterControlDebugNumber(characterAuthorityInput.moveZ),
+              hasFrame: Boolean(debugFrameState),
               bodyPos: debugFrameState
                 ? [
                     characterControlDebugNumber(debugFrameState.position.x),
