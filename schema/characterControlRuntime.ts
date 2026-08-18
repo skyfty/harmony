@@ -28,42 +28,6 @@ export function resolveCharacterControlMovementMagnitude(moveX: number, moveZ: n
 	return Math.min(1, Math.hypot(moveX, moveZ))
 }
 
-export function resolveCharacterControlMoveVector(params: {
-	camera: THREE.Camera
-	moveX: number
-	moveZ: number
-	scratch: CharacterControlMoveVectorScratch
-}): number {
-	const { camera, moveX, moveZ, scratch } = params
-	const movementMagnitude = resolveCharacterControlMovementMagnitude(moveX, moveZ)
-	if (movementMagnitude <= 0.001) {
-		scratch.moveScratch.set(0, 0, 0)
-		return movementMagnitude
-	}
-	camera.getWorldDirection(scratch.facingScratch)
-	scratch.facingScratch.y = 0
-	if (scratch.facingScratch.lengthSq() < 1e-8) {
-		scratch.facingScratch.set(1, 0, 0)
-	} else {
-		scratch.facingScratch.normalize()
-	}
-	scratch.rightScratch.copy(scratch.facingScratch).cross(camera.up)
-	if (scratch.rightScratch.lengthSq() < 1e-8) {
-		scratch.rightScratch.set(0, 0, 1)
-	} else {
-		scratch.rightScratch.normalize()
-	}
-	scratch.moveScratch
-		.copy(scratch.facingScratch)
-		.multiplyScalar(moveZ)
-		.addScaledVector(scratch.rightScratch, moveX)
-	if (scratch.moveScratch.lengthSq() > 1e-8) {
-		scratch.moveScratch.normalize()
-	} else {
-		scratch.moveScratch.set(0, 0, 0)
-	}
-	return movementMagnitude
-}
 
 export function resolveCharacterControlSpeed(
 	props: CharacterControllerComponentProps,

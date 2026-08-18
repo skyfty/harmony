@@ -769,17 +769,8 @@ import {
   createCapsuleCollisionWorld,
   type CapsuleCollisionWorld,
 } from '@harmony/schema/capsuleCollision';
-import {
-  createNonPhysicsCharacterState,
-  resetNonPhysicsCharacterState,
-  type NonPhysicsCharacterInput,
-  type NonPhysicsCharacterState,
-  updateNonPhysicsCharacter,
-} from '@harmony/schema/nonPhysicsCharacterController';
-import {
-  createNonPhysicsCharacterFootIK,
-  type NonPhysicsCharacterFootIK,
-} from '@harmony/schema/nonPhysicsCharacterFootIK';
+
+
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   CHARACTER_ANIMATION_EDITOR_SLOTS,
@@ -2579,9 +2570,6 @@ const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
 const physicsBridgeCharacterIdByNodeId = new Map<string, number>();
 const physicsBridgeCharacterBodyNodeIdByControllerNodeId = new Map<string, string>();
 const physicsBridgeCharacterControllerNodeIdByBodyNodeId = new Map<string, string>();
-const nonPhysicsCharacterStates = new Map<string, NonPhysicsCharacterState>();
-const nonPhysicsCharacterFootIK = new Map<string, NonPhysicsCharacterFootIK>();
-const nonPhysicsCollisionWorld: CapsuleCollisionWorld = createCapsuleCollisionWorld();
 function nextSceneryGroundCollisionRuntimeId(): number {
   sceneryGroundCollisionNextRuntimeId += 1;
   return sceneryGroundCollisionNextRuntimeId;
@@ -10402,195 +10390,10 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 }
 
 function resolveSceneryCharacterInputYaw(): number | null {
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const hasTurnInput = Math.abs(characterAuthorityInput.turn) > 0.001;
-  resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId);
-  ensureSceneryCharacterInputYawInitialized();
-  if (hasTurnInput) {
-    const props = clampCharacterControllerComponentProps(
-      resolveCharacterControllerComponent(resolveNodeById(controlledNodeId ?? ''))?.props ?? null,
-    );
-    const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond)
-      * CHARACTER_RUNTIME_TURN_RATE_SCALE;
-    const inputDeltaSeconds = Math.min(
-      Math.max(0, characterControlDeltaSeconds),
-      CHARACTER_INPUT_MAX_DELTA_SECONDS,
-    );
-    characterInputYaw += turnRateRadiansPerSecond * characterAuthorityInput.turn * inputDeltaSeconds;
-    characterInputYaw = normalizeSceneryCharacterInputYaw(characterInputYaw);
-    return characterInputYaw;
-  }
-
-  if (Math.abs(characterAuthorityInput.moveZ) > CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD) {
-    return characterInputYaw;
-  }
 
   return null;
 }
 
-function resetSceneryCharacterInputYawStateIfNeeded(controlledNodeId: string | null): void {
-  if (characterInputYawNodeId === controlledNodeId) {
-    return;
-  }
-  characterInputYawNodeId = controlledNodeId;
-  characterInputYawInitialized = false;
-}
-
-function ensureSceneryCharacterInputYawInitialized(): void {
-  if (characterInputYawInitialized) {
-    return;
-  }
-  characterInputYaw = resolveSceneryCharacterInputYawSeed();
-  characterInputYawInitialized = true;
-}
-
-function normalizeSceneryCharacterInputYaw(value: number): number {
-  return THREE.MathUtils.euclideanModulo(value + Math.PI, Math.PI * 2) - Math.PI;
-}
-
-function resolveSceneryCharacterInputYawSeed(): number {
-  const stableYaw = resolveSceneryControlledCharacterStableYaw();
-  if (typeof stableYaw === 'number') {
-    return stableYaw;
-  }
-  if (Number.isFinite(characterInputYaw)) {
-    return characterInputYaw;
-  }
-  return Math.PI;
-}
-
-function resolveSceneryControlledCharacterStableYaw(): number | null {
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  if (!controlledNodeId) {
-    return null;
-  }
-  const forwardAxis = resolveControlledCharacterMotionForwardAxis(characterControlYawForwardScratch);
-  const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(controlledNodeId) ?? controlledNodeId;
-  const physicsFrameState = physicsBridgeFrameBodiesByNodeId.get(bodyNodeId) ?? null;
-  const physicsYaw = resolveSceneryCharacterYawFromQuaternion(physicsFrameState?.quaternion ?? null, forwardAxis);
-  if (typeof physicsYaw === 'number') {
-    return physicsYaw;
-  }
-  const controlledObject = findDefaultControlledCharacterObject();
-  if (!controlledObject) {
-    return null;
-  }
-  controlledObject.getWorldQuaternion(protagonistPoseQuaternion);
-  return resolveSceneryCharacterYawFromQuaternion(protagonistPoseQuaternion, forwardAxis);
-}
-
-function resolveSceneryCharacterYawFromQuaternion(
-  quaternion: THREE.Quaternion | null | undefined,
-  forwardAxis: THREE.Vector3,
-): number | null {
-  if (!quaternion) {
-    return null;
-  }
-  tempYawForwardVec.copy(forwardAxis);
-  tempYawForwardVec.applyQuaternion(quaternion);
-  tempYawForwardVec.y = 0;
-  if (tempYawForwardVec.lengthSq() <= 1e-8) {
-    return null;
-  }
-  tempYawForwardVec.normalize();
-  return Math.atan2(tempYawForwardVec.x, tempYawForwardVec.z);
-}
-
-function syncSceneryPhysicsBridgeCharacterInput(): void {
-  if (!physicsBridge || !physicsBridgeSceneLoaded || !physicsBridgeCharacterIdByNodeId.size) {
-    return;
-  }
-  // A step already in flight will consume the input that was queued before
-  // it. Remember that the input changed so the latest authority input can be
-  // queued immediately after the step completes instead of waiting for the
-  // next render frame.
-  if (physicsBridgeStepPromise || physicsBridgeCharacterInputSyncPromise) {
-    physicsBridgeCharacterInputSyncPending = true;
-    return;
-  }
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const localYaw = characterInputYaw;
-  const bridge = physicsBridge;
-  const inputSyncRequests: Promise<void>[] = [];
-  physicsBridgeCharacterIdByNodeId.forEach((characterId, nodeId) => {
-    const isControlled = nodeId === controlledNodeId;
-    const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
-    const hasPathFollowInput =
-      Boolean(pathFollowInput)
-      && (
-        Math.abs(pathFollowInput!.moveX) > 0.001
-        || Math.abs(pathFollowInput!.moveZ) > 0.001
-        || Math.abs(pathFollowInput!.turn) > 0.001
-        || typeof pathFollowInput!.yaw === 'number'
-        || pathFollowInput!.jump
-        || pathFollowInput!.sprint
-        || pathFollowInput!.crouch
-        || pathFollowInput!.interact
-      );
-    const activeYaw = hasPathFollowInput && typeof pathFollowInput?.yaw === 'number'
-      ? pathFollowInput.yaw
-      : (isControlled ? localYaw : null);
-    const controlledCharacterProps = isControlled
-      ? clampCharacterControllerComponentProps(
-          resolveCharacterControllerComponent(resolveNodeById(nodeId))?.props ?? null,
-        )
-      : null;
-    const inputCommand: PhysicsBridgeCharacterInputSnapshot = {
-      characterId,
-      moveX: hasPathFollowInput ? pathFollowInput!.moveX : (isControlled ? characterAuthorityInput.moveX : 0),
-      moveZ: hasPathFollowInput ? pathFollowInput!.moveZ : (isControlled ? characterAuthorityInput.moveZ : 0),
-      yaw: activeYaw,
-      turnRateRadiansPerSecond: controlledCharacterProps
-        ? THREE.MathUtils.degToRad(controlledCharacterProps.turnRateDegreesPerSecond)
-          * CHARACTER_RUNTIME_TURN_RATE_SCALE
-        : null,
-      jump: hasPathFollowInput ? pathFollowInput!.jump : (isControlled ? characterAuthorityInput.jump : false),
-      sprint: hasPathFollowInput ? pathFollowInput!.sprint : (isControlled ? characterAuthorityInput.sprint : false),
-      crouch: hasPathFollowInput ? pathFollowInput!.crouch : (isControlled ? characterAuthorityInput.crouch : false),
-      interact: hasPathFollowInput ? pathFollowInput!.interact : (isControlled ? characterAuthorityInput.interact : false),
-    };
-    const previousInput = physicsBridgeCharacterInputSnapshotByNodeId.get(nodeId);
-    if (previousInput
-      && previousInput.characterId === inputCommand.characterId
-      && previousInput.moveX === inputCommand.moveX
-      && previousInput.moveZ === inputCommand.moveZ
-      && previousInput.yaw === inputCommand.yaw
-      && previousInput.turnRateRadiansPerSecond === inputCommand.turnRateRadiansPerSecond
-      && previousInput.jump === inputCommand.jump
-      && previousInput.sprint === inputCommand.sprint
-      && previousInput.crouch === inputCommand.crouch
-      && previousInput.interact === inputCommand.interact) {
-      return;
-    }
-    physicsBridgeCharacterInputSnapshotByNodeId.set(nodeId, inputCommand);
-    inputSyncRequests.push(bridge.setCharacterInput(inputCommand));
-  });
-  if (!inputSyncRequests.length) {
-    return;
-  }
-  physicsBridgeCharacterInputSyncPromise = Promise.all(inputSyncRequests)
-    .then(() => undefined)
-    .catch((error) => {
-      console.warn('[SceneViewer] Failed to sync character input', error);
-      physicsBridgeCharacterInputSnapshotByNodeId.clear();
-    })
-    .finally(() => {
-      if (bridge !== physicsBridge) {
-        return;
-      }
-      physicsBridgeCharacterInputSyncPromise = null;
-      if (physicsBridgeCharacterInputSyncPending) {
-        physicsBridgeCharacterInputSyncPending = false;
-        syncSceneryPhysicsBridgeCharacterInput();
-        return;
-      }
-      if (physicsBridgeStepPendingDeltaSeconds > 0 && !physicsBridgeStepPromise) {
-        physicsBridgeStepPendingDeltaSeconds = 0;
-        stepSceneryPhysicsBridge(0);
-      }
-    });
-  
-}
 
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeSceneRequestId += 1;
@@ -10604,8 +10407,6 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeCharacterIdByNodeId.clear();
   physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
   physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
-  nonPhysicsCharacterStates.clear();
-  nonPhysicsCollisionWorld.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
   physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -10680,8 +10481,6 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeCharacterIdByNodeId.clear();
     physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
     physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
-    nonPhysicsCharacterStates.clear();
-    nonPhysicsCollisionWorld.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
     characterPhysicsBridgeVisualStateByNodeId.clear();
     physicsBridgeDirtyBodyNodeIds.clear();
@@ -10946,33 +10745,8 @@ function removeCharacterBinding(nodeId: string): void {
   if (entry?.bindingKind === 'character') {
     rigidbodyInstances.delete(nodeId);
   }
-  nonPhysicsCharacterStates.delete(nodeId);
-  nonPhysicsCharacterFootIK.get(nodeId)?.dispose();
-  nonPhysicsCharacterFootIK.delete(nodeId);
 }
 
-function shouldUseLocalCharacterController(node: SceneNode | null): boolean {
-  return Boolean(
-    node
-    && resolveCharacterControllerComponent(node)
-    && !resolveRigidbodyComponent(node),
-  );
-}
-
-function rebuildNonPhysicsCharacterCollisionWorld(): void {
-  nonPhysicsCollisionWorld.clear();
-  nodeObjectMap.forEach((root, nodeId) => {
-    const node = resolveNodeById(nodeId);
-    if (resolveCharacterControllerComponent(node)) return;
-    const rigidbody = resolveRigidbodyComponent(node);
-    if (rigidbody && rigidbody.props.bodyType !== 'STATIC') return;
-    root.traverse((child) => {
-      if (!(child instanceof THREE.Mesh)) return;
-      if (child.userData?.characterController || child.userData?.nonPhysicsCharacter) return;
-      nonPhysicsCollisionWorld.addMesh(child);
-    });
-  });
-}
 
 function ensureCharacterBindingForNode(nodeId: string): void {
   const node = resolveNodeById(nodeId);
@@ -10985,22 +10759,7 @@ function ensureCharacterBindingForNode(nodeId: string): void {
   if (!object) {
     return;
   }
-  if (shouldUseLocalCharacterController(node)) {
-    rigidbodyInstances.delete(nodeId);
-    const props = clampCharacterControllerComponentProps(component.props);
-    const existing = nonPhysicsCharacterStates.get(nodeId);
-    if (existing && existing.object === object) {
-      existing.props = props;
-      return;
-    }
-    object.userData.nonPhysicsCharacter = true;
-    nonPhysicsCharacterStates.set(nodeId, createNonPhysicsCharacterState({ nodeId, object, props }));
-    nonPhysicsCharacterFootIK.set(nodeId, createNonPhysicsCharacterFootIK(object, nonPhysicsCollisionWorld));
-    return;
-  }
-  nonPhysicsCharacterStates.delete(nodeId);
-  nonPhysicsCharacterFootIK.get(nodeId)?.dispose();
-  nonPhysicsCharacterFootIK.delete(nodeId);
+  
   object.updateWorldMatrix(true, false);
   const worldPosition = new THREE.Vector3();
   const worldQuaternion = new THREE.Quaternion();
@@ -11166,10 +10925,6 @@ function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | nu
         rigidbodyInstances.delete(nodeId);
       }
     });
-    nonPhysicsCharacterStates.clear();
-    nonPhysicsCharacterFootIK.forEach((ik) => ik.dispose());
-    nonPhysicsCharacterFootIK.clear();
-    nonPhysicsCollisionWorld.clear();
     return;
   }
   const characterNodes = collectCharacterNodes(document.nodes);
@@ -11180,60 +10935,8 @@ function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | nu
       rigidbodyInstances.delete(nodeId);
     }
   });
-  rebuildNonPhysicsCharacterCollisionWorld();
 }
 
-function resolveNonPhysicsCharacterInput(nodeId: string): NonPhysicsCharacterInput | null {
-  const activeCamera = renderContext?.camera ?? null;
-  if (!activeCamera) return null;
-  const animationInput = resolveSceneryCharacterAnimationInput(nodeId);
-  return {
-    moveX: animationInput.moveX,
-    moveZ: animationInput.moveZ,
-    turn: animationInput.turn,
-    jump: animationInput.jump,
-    sprint: animationInput.sprint,
-    crouch: animationInput.crouch,
-    interact: animationInput.interact,
-    camera: activeCamera,
-  };
-}
-
-function updateNonPhysicsCharacters(deltaSeconds: number): void {
-  const activeCamera = renderContext?.camera ?? null;
-  if (!activeCamera || !nonPhysicsCharacterStates.size) return;
-  nonPhysicsCharacterStates.forEach((state, nodeId) => {
-    const input = resolveNonPhysicsCharacterInput(nodeId);
-    if (!input) return;
-    const result = updateNonPhysicsCharacter(
-      state,
-      { ...input, camera: activeCamera },
-      nonPhysicsCollisionWorld,
-      deltaSeconds,
-    );
-    state.object.updateMatrixWorld(true);
-    if (shouldSyncInstancedTransform(state.object)) {
-      syncInstancedTransform(state.object);
-    }
-    if (result.justLanded) {
-      scheduleCharacterControllerAnimationResync(nodeId);
-    }
-  });
-}
-
-function restoreNonPhysicsCharacterFootIK(): void {
-  nonPhysicsCharacterFootIK.forEach((ik) => ik.restore());
-}
-
-function updateNonPhysicsCharacterFootIK(deltaSeconds: number): void {
-  nonPhysicsCharacterStates.forEach((state, nodeId) => {
-    nonPhysicsCharacterFootIK.get(nodeId)?.update(
-      deltaSeconds,
-      state.grounded,
-      state.velocity.x * state.velocity.x + state.velocity.z * state.velocity.z > 0.01,
-    );
-  });
-}
 
 type SceneSubsystemProgressReporter = (progress: {
   phase: SceneInitStage;
@@ -15496,18 +15199,8 @@ function syncMoveToSubjectTargetToPhysicsBridge(
   });
 }
 
-function resolveMoveToCharacterTargetYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): number {
-  const controller = resolveCharacterControllerComponent(resolveNodeById(subjectNodeId));
-  const forwardAxis = clampCharacterControllerComponentProps(controller?.props ?? null).forwardAxis;
-  return resolvePhysicsCharacterMotorYawFromWorldQuaternion(targetQuaternion, forwardAxis);
-}
-
 function syncMoveToCharacterControllerYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): void {
-  const nextYaw = resolveMoveToCharacterTargetYaw(subjectNodeId, targetQuaternion);
-  characterInputYaw = nextYaw;
-  characterInputYawInitialized = true;
-  resetSceneryCharacterInputYawStateIfNeeded(resolveDefaultControlledCharacterNodeId());
-  characterAuthorityInput.turn = 0;
+
 }
 
 function getMoveToSubjectCurrentPose(subjectNodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
@@ -15561,11 +15254,7 @@ function applyMoveToSubjectTargetPose(
     return;
   }
   applyMoveToObjectWorldPose(object, targetPose.position, characterTargetQuaternion);
-  const localCharacter = nonPhysicsCharacterStates.get(subjectNodeId);
-  if (localCharacter) {
-    resetNonPhysicsCharacterState(localCharacter, targetPose.position, characterTargetQuaternion);
-    syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion);
-  }
+
   syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
     position: targetPose.position,
     forward: targetPose.forward,
@@ -21236,8 +20925,6 @@ function startRenderLoop(
           const watchCameraLocked = isWatchCameraLocked();
           updateCharacterAuthorityInputFromKeys();
           updateMoveToSessionForFrame(deltaSeconds);
-          updateNonPhysicsCharacters(deltaSeconds);
-          restoreNonPhysicsCharacterFootIK();
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
@@ -21250,7 +20937,6 @@ function startRenderLoop(
           updateCharacterPathFollow(deltaSeconds);
           updateCharacterControllerAnimations(deltaSeconds);
           nodeAnimationRuntime.update(deltaSeconds);
-          updateNonPhysicsCharacterFootIK(deltaSeconds);
           activeBehaviorSounds.forEach((instance) => {
             if (!instance.audio || !instance.params.spatial || instance.stopped) {
               return;
@@ -21279,7 +20965,6 @@ function startRenderLoop(
           if (characterControlUi.value.visible) {
             resolveSceneryCharacterInputYaw();
           }
-          syncSceneryPhysicsBridgeCharacterInput();
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
           updateCharacterPhysicsBridgeVisuals(deltaSeconds);
