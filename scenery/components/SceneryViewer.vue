@@ -17814,14 +17814,18 @@ function updateCharacterFollowCamera(
 
   const placement = resolveCharacterFollowPlacement(controlledNodeId, object);
   resolveCharacterRootWorldPosition(controlledNodeId, bindingNodeId, object, characterCameraFollowAnchorScratch);
+  const characterSteeringActive = characterDesiredInputYaw !== null
+    || Math.abs(characterAuthorityInput.moveZ) > 1e-3
+    || Math.abs(characterAuthorityInput.turn) > 1e-4;
   if (!characterCameraFollowState.initialized) {
     // First frame after (re)initialization: frame the camera behind the
-    // character's current facing once, then keep that view direction stable
-    // while the joystick steers (Summer Afternoon style). Chasing the
-    // character's facing during camera-relative control creates a feedback
-    // loop where the character keeps spinning after the rotating camera.
+    // character's current facing once.
     resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
-  } else {
+  } else if (characterSteeringActive) {
+    // While the joystick steers, keep the current view direction stable so the
+    // camera-relative push directions stay meaningful (Summer Afternoon
+    // style). Chasing the character's facing during control creates a feedback
+    // loop where the character keeps spinning after the rotating camera.
     context.camera.getWorldDirection(characterCameraFollowForwardScratch);
     characterCameraFollowForwardScratch.y = 0;
     if (characterCameraFollowForwardScratch.lengthSq() <= 1e-8) {
@@ -17829,6 +17833,9 @@ function updateCharacterFollowCamera(
     } else {
       characterCameraFollowForwardScratch.normalize();
     }
+  } else {
+    // Idle: smoothly re-center the camera behind the character's facing.
+    resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
   }
   const localOffsetOverride = resolveCharacterFollowCameraOffset(props);
 
@@ -17857,9 +17864,9 @@ function updateCharacterFollowCamera(
     worldUp,
     tuning: {
       ...createBackFollowCameraTuning(),
-      // The desired forward equals the camera's own heading, so the heading
-      // stays fixed and the camera tracks only the character position.
-      headingLerpSpeed: 0,
+      // While steering the heading stays fixed; when the character stops it
+      // slowly drifts back to the behind-the-character follow position.
+      headingLerpSpeed: characterSteeringActive ? 0 : 1.5,
       targetLerpSpeed: 8,
     },
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
@@ -21320,6 +21327,9 @@ function startRenderLoop(
               watchExclusiveUi: watchExclusiveUiActive.value,
               joyX: characterControlDebugNumber(characterJoystickVector.x),
               joyY: characterControlDebugNumber(characterJoystickVector.y),
+              steering: characterDesiredInputYaw !== null
+                || Math.abs(characterAuthorityInput.moveZ) > 1e-3
+                || Math.abs(characterAuthorityInput.turn) > 1e-4,
               camYaw: characterControlDebugNumber(debugCamYaw),
               camPos: debugCamera
                 ? [
