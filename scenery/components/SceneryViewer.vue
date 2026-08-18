@@ -2916,32 +2916,6 @@ let characterInputYawNodeId: string | null = null;
 let characterDesiredInputYaw: number | null = null;
 let characterResolvedInputYaw: number | null = null;
 const characterInputYawQuaternionScratch = new THREE.Quaternion();
-const characterControlDebugQuaternion = new THREE.Quaternion();
-// Temporary debug logging for the character control pipeline. Logs are emitted
-// as a single copyable string: [CharacterControl] stage {"k":"v",...}
-const CHARACTER_CONTROL_DEBUG = true;
-const CHARACTER_CONTROL_DEBUG_INTERVAL_MS = 500;
-let characterControlDebugLastLogMs = 0;
-let characterControlRenderFrame = 0;
-function characterControlDebugNumber(value: number | null | undefined): number | null {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
-    return null;
-  }
-  return Number(value.toFixed(3));
-}
-function logCharacterControlDebug(stage: string, payload: Record<string, unknown>, force = false): void {
-  if (!CHARACTER_CONTROL_DEBUG) {
-    return;
-  }
-  const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
-    ? performance.now()
-    : Date.now();
-  if (!force && now - characterControlDebugLastLogMs < CHARACTER_CONTROL_DEBUG_INTERVAL_MS) {
-    return;
-  }
-  characterControlDebugLastLogMs = now;
-  console.log(`[CharacterControl] ${stage} ${JSON.stringify(payload)}`);
-}
 const characterCameraFollowPlacementCache = {
   nodeId: null as string | null,
   objectUuid: null as string | null,
@@ -9641,13 +9615,6 @@ async function loadSceneryPhysicsBridgeScene(
     physicsBridgeSceneLoaded = true;
     physicsBridgeCharacterBindingsReady.value = true;
     physicsBridgeSceneReloading = false;
-    logCharacterControlDebug('bindings', {
-      controlledNodeId: resolveDefaultControlledCharacterNodeId(),
-      characterIds: Array.from(physicsBridgeCharacterIdByNodeId.entries())
-        .map(([nodeId, characterId]) => `${nodeId}:${characterId}`),
-      controllerToBody: Array.from(physicsBridgeCharacterBodyNodeIdByControllerNodeId.entries())
-        .map(([controllerNodeId, bodyNodeId]) => `${controllerNodeId}->${bodyNodeId}`),
-    }, true);
     const groundNode = resolveDocumentGroundNode(document);
     const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null;
     if (groundObject && isGroundDynamicMesh(groundNode?.dynamicMesh)) {
@@ -10439,12 +10406,6 @@ function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
   if (!characterInputYawInitialized || characterInputYawNodeId !== controlledNodeId) {
     const object = nodeObjectMap.get(motionNodeId) ?? null;
     if (!object) {
-      logCharacterControlDebug('yaw-init', {
-        frame: characterControlRenderFrame,
-        controlledNodeId,
-        motionNodeId,
-        objectFound: false,
-      }, true);
       return null;
     }
     object.updateWorldMatrix(true, false);
@@ -10455,20 +10416,6 @@ function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
     );
     characterInputYawInitialized = true;
     characterInputYawNodeId = controlledNodeId;
-    logCharacterControlDebug('yaw-init', {
-      frame: characterControlRenderFrame,
-      controlledNodeId,
-      motionNodeId,
-      forwardAxis: props.forwardAxis,
-      objectFound: true,
-      quat: {
-        x: characterControlDebugNumber(characterInputYawQuaternionScratch.x),
-        y: characterControlDebugNumber(characterInputYawQuaternionScratch.y),
-        z: characterControlDebugNumber(characterInputYawQuaternionScratch.z),
-        w: characterControlDebugNumber(characterInputYawQuaternionScratch.w),
-      },
-      initYaw: characterControlDebugNumber(characterInputYaw),
-    }, true);
   }
   const delta = Number.isFinite(deltaSeconds)
     ? THREE.MathUtils.clamp(deltaSeconds, 0, CHARACTER_INPUT_MAX_DELTA_SECONDS)
@@ -17865,8 +17812,8 @@ function updateCharacterFollowCamera(
     tuning: {
       ...createBackFollowCameraTuning(),
       // While steering the heading stays fixed; when the character stops it
-      // slowly drifts back to the behind-the-character follow position.
-      headingLerpSpeed: characterSteeringActive ? 0 : 1.5,
+      // very slowly drifts back to the behind-the-character follow position.
+      headingLerpSpeed: characterSteeringActive ? 0 : 0.4,
       targetLerpSpeed: 8,
     },
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
@@ -21210,7 +21157,6 @@ function startRenderLoop(
         }
 
         if (deltaSeconds > 0) {
-          characterControlRenderFrame += 1;
           const watchCameraLocked = isWatchCameraLocked();
           updateCharacterAuthorityInputFromKeys();
           updateMoveToSessionForFrame(deltaSeconds);
@@ -21256,130 +21202,6 @@ function startRenderLoop(
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
           updateCharacterPhysicsBridgeVisuals(deltaSeconds);
-          if (characterControlUi.value.visible) {
-            const debugControlledNodeId = resolveDefaultControlledCharacterNodeId();
-            const debugMotionNodeId = resolveControlledCharacterMotionNodeId();
-            const debugBodyNodeId = debugControlledNodeId
-              ? (physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(debugControlledNodeId) ?? debugControlledNodeId)
-              : null;
-            const debugFrameState = debugBodyNodeId
-              ? physicsBridgeFrameBodiesByNodeId.get(debugBodyNodeId) ?? null
-              : null;
-            const debugVisualObject = debugMotionNodeId
-              ? nodeObjectMap.get(debugMotionNodeId) ?? null
-              : null;
-            const debugProps = resolveDefaultControlledCharacterComponentProps();
-            debugVisualObject?.updateWorldMatrix(true, false);
-            const debugVisualQuaternion = debugVisualObject
-              ? debugVisualObject.getWorldQuaternion(characterControlDebugQuaternion)
-              : null;
-            let debugMeshFwdYaw: number | null = null;
-            if (debugVisualQuaternion) {
-              // Yaw of the visual's +Z axis in world space, independent of the
-              // configured forwardAxis, to detect a mesh/forwardAxis mismatch.
-              const debugMeshFx = 2 * (
-                debugVisualQuaternion.x * debugVisualQuaternion.z
-                + debugVisualQuaternion.w * debugVisualQuaternion.y
-              );
-              const debugMeshFz = 1 - 2 * (
-                debugVisualQuaternion.x * debugVisualQuaternion.x
-                + debugVisualQuaternion.y * debugVisualQuaternion.y
-              );
-              const debugMeshLength = Math.hypot(debugMeshFx, debugMeshFz);
-              if (debugMeshLength > 1e-6) {
-                debugMeshFwdYaw = Math.atan2(debugMeshFx / debugMeshLength, debugMeshFz / debugMeshLength);
-              }
-            }
-            let debugCamYaw: number | null = null;
-            const debugCamera = renderContext?.camera ?? null;
-            if (debugCamera) {
-              debugCamera.getWorldDirection(characterControlYawForwardScratch);
-              const debugCamLength = Math.hypot(
-                characterControlYawForwardScratch.x,
-                characterControlYawForwardScratch.z,
-              );
-              if (debugCamLength > 1e-6) {
-                debugCamYaw = Math.atan2(
-                  characterControlYawForwardScratch.x / debugCamLength,
-                  characterControlYawForwardScratch.z / debugCamLength,
-                );
-              }
-            }
-            const debugFollowGate = !isWatchCameraLocked()
-              && !vehicleDriveActive.value
-              && activeAutoTourNodeIds.size === 0
-              && !activeCameraWatchTween;
-            logCharacterControlDebug('state', {
-              frame: characterControlRenderFrame,
-              controlledNodeId: debugControlledNodeId,
-              motionNodeId: debugMotionNodeId,
-              bodyNodeId: debugBodyNodeId,
-              forwardAxis: debugProps?.forwardAxis ?? null,
-              bindingsReady: physicsBridgeCharacterBindingsReady.value,
-              hasMapEntry: debugControlledNodeId
-                ? physicsBridgeCharacterIdByNodeId.has(debugControlledNodeId)
-                : false,
-              followRan: debugFollowGate,
-              autoTourNodes: Array.from(activeAutoTourNodeIds),
-              tourFollowNodeId: autoTourFollowNodeId.value,
-              watchLocked: isWatchCameraLocked(),
-              watchTween: Boolean(activeCameraWatchTween),
-              watchExclusiveUi: watchExclusiveUiActive.value,
-              joyX: characterControlDebugNumber(characterJoystickVector.x),
-              joyY: characterControlDebugNumber(characterJoystickVector.y),
-              steering: characterDesiredInputYaw !== null
-                || Math.abs(characterAuthorityInput.moveZ) > 1e-3
-                || Math.abs(characterAuthorityInput.turn) > 1e-4,
-              camYaw: characterControlDebugNumber(debugCamYaw),
-              camPos: debugCamera
-                ? [
-                    characterControlDebugNumber(debugCamera.position.x),
-                    characterControlDebugNumber(debugCamera.position.y),
-                    characterControlDebugNumber(debugCamera.position.z),
-                  ]
-                : null,
-              ctrlTarget: renderContext?.controls
-                ? [
-                    characterControlDebugNumber(renderContext.controls.target.x),
-                    characterControlDebugNumber(renderContext.controls.target.y),
-                    characterControlDebugNumber(renderContext.controls.target.z),
-                  ]
-                : null,
-              desiredYaw: characterControlDebugNumber(characterDesiredInputYaw),
-              sentYaw: characterControlDebugNumber(characterResolvedInputYaw),
-              bodyYaw: debugFrameState
-                ? characterControlDebugNumber(
-                  resolvePhysicsCharacterMotorYawFromWorldQuaternion(
-                    debugFrameState.quaternion,
-                    debugProps?.forwardAxis ?? '+x',
-                  ),
-                )
-                : null,
-              visualYaw: debugVisualQuaternion
-                ? characterControlDebugNumber(
-                  resolvePhysicsCharacterMotorYawFromWorldQuaternion(
-                    debugVisualQuaternion,
-                    debugProps?.forwardAxis ?? '+x',
-                  ),
-                )
-                : null,
-              meshFwdYaw: characterControlDebugNumber(debugMeshFwdYaw),
-              velYaw: debugFrameState?.linearVelocity
-                ? characterControlDebugNumber(
-                  Math.atan2(debugFrameState.linearVelocity.x, debugFrameState.linearVelocity.z),
-                )
-                : null,
-              moveZ: characterControlDebugNumber(characterAuthorityInput.moveZ),
-              hasFrame: Boolean(debugFrameState),
-              bodyPos: debugFrameState
-                ? [
-                    characterControlDebugNumber(debugFrameState.position.x),
-                    characterControlDebugNumber(debugFrameState.position.y),
-                    characterControlDebugNumber(debugFrameState.position.z),
-                  ]
-                : null,
-            });
-          }
           updateVehicleSpeedFromVehicle();
           updateControlledCharacterMotionTelemetry(getVehicleSpeedDisplayNowMs());
           updateSceneCompassHeading();
