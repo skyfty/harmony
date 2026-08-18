@@ -10068,12 +10068,19 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
         }
         if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId) {
         }
-        applySceneryPhysicsBridgeTransformToObject(
-          entry.object,
-          frameState.position,
-          frameState.quaternion,
-          entry.orientationAdjustment,
-        );
+        // Character visuals are driven by updateCharacterPhysicsBridgeVisuals
+        // with interpolation. Snapping here on every full-body-sync interval
+        // (250ms) would apply the accumulated interpolation lag in one frame
+        // and cause a visible stutter, so only fall back to a direct snap when
+        // the interpolated visual-state path is not tracking this node.
+        if (!characterPhysicsBridgeVisualStateByNodeId.has(nodeId)) {
+          applySceneryPhysicsBridgeTransformToObject(
+            entry.object,
+            frameState.position,
+            frameState.quaternion,
+            entry.orientationAdjustment,
+          );
+        }
         physicsBridgeDirtyBodyNodeIds.delete(nodeId);
         physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
         physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
@@ -17815,6 +17822,9 @@ function updateCharacterFollowCamera(
       // very slowly drifts back to the behind-the-character follow position.
       headingLerpSpeed: characterSteeringActive ? 0 : 0.4,
       targetLerpSpeed: 8,
+      // Smooth the camera position slightly so the physics/visual anchor's
+      // tiny per-frame steps are absorbed instead of being reproduced 1:1.
+      positionLerpSpeed: 10,
     },
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     localOffsetOverride,
