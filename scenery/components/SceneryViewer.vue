@@ -2930,6 +2930,16 @@ const CHARACTER_INPUT_MAX_DELTA_SECONDS = 0.05;
 // The editor default is tuned for desktop control. Reduce the runtime rate for
 // the mini program so a full joystick deflection does not rotate too quickly.
 const CHARACTER_RUNTIME_TURN_RATE_SCALE = 1;
+// Summer Afternoon style: while steering, the follow camera slowly chases the
+// character's facing. Because the joystick direction is re-expressed in the
+// camera frame every frame, a held off-axis push keeps the target yaw
+// advancing and the character walks an arc whose curvature grows with the
+// stick's deviation from straight-ahead. The chase is capped below the
+// character turn rate so this desired-yaw feedback loop stays stable, and is
+// scaled by how far the character turns away from the camera (mirroring the
+// reference's fit(dot, -1, 0, 0, 1) factor).
+const CHARACTER_CAMERA_CHASE_HEADING_SPEED_MAX = 1.8;
+const CHARACTER_CAMERA_CHASE_TURN_RATE_FRACTION = 0.5;
 const PHYSICS_BRIDGE_MAX_STEP_DELTA_SECONDS = 0.05;
 const PHYSICS_BRIDGE_FIXED_STEP_DELTA_SECONDS = 1 / 60;
 const PHYSICS_BRIDGE_MAX_ACCUMULATED_DELTA_SECONDS = 0.2;
@@ -16503,6 +16513,36 @@ function resolveCharacterCameraMoveFrame(frame: CharacterCameraMoveFrame): boole
   return true;
 }
 
+function resolveCharacterCameraChaseHeadingSpeed(): number {
+  const camera = renderContext?.camera ?? null;
+  if (!camera) {
+    return 0;
+  }
+  camera.getWorldDirection(characterControlYawForwardScratch);
+  const cameraForwardX = characterControlYawForwardScratch.x;
+  const cameraForwardZ = characterControlYawForwardScratch.z;
+  const cameraForwardLength = Math.hypot(cameraForwardX, cameraForwardZ);
+  const characterForwardX = characterCameraFollowForwardScratch.x;
+  const characterForwardZ = characterCameraFollowForwardScratch.z;
+  const dot = cameraForwardLength > 1e-6
+    ? (cameraForwardX * characterForwardX + cameraForwardZ * characterForwardZ) / cameraForwardLength
+    : 1;
+  const props = resolveDefaultControlledCharacterComponentProps();
+  const turnRateRadiansPerSecond = props
+    ? THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond) * CHARACTER_RUNTIME_TURN_RATE_SCALE
+    : 0;
+  const maxChaseSpeed = Math.min(
+    CHARACTER_CAMERA_CHASE_HEADING_SPEED_MAX,
+    Math.max(0, turnRateRadiansPerSecond) * CHARACTER_CAMERA_CHASE_TURN_RATE_FRACTION,
+  );
+  // Summer Afternoon scales its camera chase by fit(dot, -1, 0, 0, 1): full
+  // rate while the character turns away from the camera, tapering to zero
+  // when it turns to face the camera so a held backward push rotates in place
+  // instead of spinning the camera around the character.
+  const chaseScale = THREE.MathUtils.clamp(dot + 1, 0, 1);
+  return maxChaseSpeed * chaseScale;
+}
+
 function resolveJoystickCharacterInput(): { x: number; y: number } {
   const x = characterJoystickVector.x;
   const y = characterJoystickVector.y;
@@ -17771,21 +17811,32 @@ function updateCharacterFollowCamera(
   const characterSteeringActive = characterDesiredInputYaw !== null
     || Math.abs(characterAuthorityInput.moveZ) > 1e-3
     || Math.abs(characterAuthorityInput.turn) > 1e-4;
+  let characterCameraChaseHeadingSpeed = 0;
   if (!characterCameraFollowState.initialized) {
     // First frame after (re)initialization: frame the camera behind the
     // character's current facing once.
     resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
   } else if (characterSteeringActive) {
-    // While the joystick steers, keep the current view direction stable so the
-    // camera-relative push directions stay meaningful (Summer Afternoon
-    // style). Chasing the character's facing during control creates a feedback
-    // loop where the character keeps spinning after the rotating camera.
-    context.camera.getWorldDirection(characterCameraFollowForwardScratch);
-    characterCameraFollowForwardScratch.y = 0;
-    if (characterCameraFollowForwardScratch.lengthSq() <= 1e-8) {
-      characterCameraFollowForwardScratch.set(0, 0, 1);
-    } else {
-      characterCameraFollowForwardScratch.normalize();
+    // Summer Afternoon style: while steering, let the camera slowly chase the
+    // character's facing. The joystick direction is re-expressed in the camera
+    // frame every frame, so a held off-axis push keeps the target yaw
+    // advancing and the character walks an arc whose curvature grows with the
+    // stick's deviation from straight-ahead (pure up stays straight, pure
+    // sideways becomes a tight circle). Locking the heading here would let a
+    // diagonal push settle into a straight diagonal walk instead.
+    resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+    characterCameraChaseHeadingSpeed = resolveCharacterCameraChaseHeadingSpeed();
+    if (characterCameraChaseHeadingSpeed <= 1e-4) {
+      // The character is turning to face the camera (e.g. a held backward
+      // push); hold the current view direction instead of snapping behind the
+      // character, so the camera does not swing around and flip the input.
+      context.camera.getWorldDirection(characterCameraFollowForwardScratch);
+      characterCameraFollowForwardScratch.y = 0;
+      if (characterCameraFollowForwardScratch.lengthSq() <= 1e-8) {
+        characterCameraFollowForwardScratch.set(0, 0, 1);
+      } else {
+        characterCameraFollowForwardScratch.normalize();
+      }
     }
   } else {
     // Idle: smoothly re-center the camera behind the character's facing.
@@ -17818,9 +17869,12 @@ function updateCharacterFollowCamera(
     worldUp,
     tuning: {
       ...createBackFollowCameraTuning(),
-      // While steering the heading stays fixed; when the character stops it
-      // very slowly drifts back to the behind-the-character follow position.
-      headingLerpSpeed: characterSteeringActive ? 0 : 0.4,
+      // While steering the camera slowly chases the facing so diagonal pushes
+      // arc; when the character stops it very slowly drifts back to the
+      // behind-the-character follow position.
+      headingLerpSpeed: characterSteeringActive
+        ? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
+        : 0.4,
       targetLerpSpeed: 8,
       // Smooth the camera position slightly so the physics/visual anchor's
       // tiny per-frame steps are absorbed instead of being reproduced 1:1.
