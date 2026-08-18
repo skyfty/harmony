@@ -6,6 +6,7 @@ import {
   resolveCharacterProbeOffsets,
   resolveSteerableWheelIndices,
   resolvePhysicsCharacterMotorYawFromWorldQuaternion,
+  resolveCharacterForwardAxisYawOffset,
   rotateVectorByQuaternion,
   PhysicsWorldBase,
   type PhysicsWorldBodyState,
@@ -493,7 +494,10 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
     }
     const linearVelocity = createAmmoVector3(ammo, result.linearVelocity)
     const angularVelocity = createAmmoVector3(ammo, [0, 0, 0])
-    const yawQuaternion = createAmmoQuaternionFromYaw(ammo, result.yaw)
+    const yawQuaternion = createAmmoQuaternionFromYaw(
+      ammo,
+      result.yaw + resolveCharacterForwardAxisYawOffset(state.desc.forwardAxis),
+    )
     const transform = state.body.getWorldTransform?.()
     state.body.setLinearVelocity?.(linearVelocity)
     state.body.setAngularVelocity?.(angularVelocity)

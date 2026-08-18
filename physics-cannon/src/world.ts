@@ -5,6 +5,7 @@ import {
   resolveCharacterProbeOffsets,
   resolveSteerableWheelIndices,
   resolvePhysicsCharacterMotorYawFromWorldQuaternion,
+  resolveCharacterForwardAxisYawOffset,
   rotateVectorByQuaternion,
   PhysicsWorldBase,
   type PhysicsWorldBodyState,
@@ -393,7 +394,12 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
       result.linearVelocity[2],
     )
     state.body.angularVelocity.set(0, 0, 0)
-    state.body.quaternion.setFromEuler(0, result.yaw, 0, 'YXZ')
+    state.body.quaternion.setFromEuler(
+      0,
+      result.yaw + resolveCharacterForwardAxisYawOffset(state.desc.forwardAxis),
+      0,
+      'YXZ',
+    )
     state.body.aabbNeedsUpdate = true
     state.body.wakeUp()
   }

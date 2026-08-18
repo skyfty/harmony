@@ -66,6 +66,23 @@ export function resolvePhysicsCharacterMotorYawFromWorldQuaternion(
   return Math.atan2(worldForward[0], worldForward[2])
 }
 
+// The character motor expresses movement direction as (sin(yaw), 0, cos(yaw)).
+// A body whose local forward axis is not +Z must be rotated by this offset so
+// that its authored forward axis points along the movement direction.
+export function resolveCharacterForwardAxisYawOffset(forwardAxis: PhysicsCharacterDesc['forwardAxis']): number {
+  switch (forwardAxis) {
+    case '-x':
+      return Math.PI * 0.5
+    case '+z':
+      return 0
+    case '-z':
+      return Math.PI
+    case '+x':
+    default:
+      return -Math.PI * 0.5
+  }
+}
+
 export function stepPhysicsCharacterMotor(
   desc: PhysicsCharacterDesc,
   state: PhysicsCharacterMotorState,

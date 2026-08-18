@@ -621,7 +621,7 @@ import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCo
 import { collectGroundAnchorWorldPositions } from '@harmony/schema/groundAnchorRuntime';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
 import { prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
-import { onGroundChunkTextureReady, refreshGroundChunkMaterials, resolveInfiniteGroundVisibleChunkWindow, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
+import { onGroundChunkTextureReady, refreshGroundChunkMaterials, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
 
 import {
   type PhysicsBodyBindingEntry as RigidbodyInstance,
@@ -765,11 +765,6 @@ import {
   type AnimationComponentProps,
 } from '@harmony/schema/components/definitions/animationComponent';
 import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
-import {
-  createCapsuleCollisionWorld,
-  type CapsuleCollisionWorld,
-} from '@harmony/schema/capsuleCollision';
-
 
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
@@ -1709,8 +1704,6 @@ const CAMERA_FORWARD_OFFSET = 1.5;
 const DEFAULT_SCENE_CAMERA_FAR = 1000;
 const SCENERY_FOG_HEADROOM_RATIO = 0.88;
 const SCENERY_FOG_MIN_DISTANCE = 0.001;
-const SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS = 4;
-const SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO = 0.5;
 const CAMERA_WATCH_DURATION = 2.0;
 const CAMERA_LEVEL_DURATION = 2.5;
 const VEHICLE_DRIVE_INTRO_HOLD_SECONDS = 2.0;
@@ -1753,7 +1746,6 @@ type AppliedSceneryFogSnapshot = {
 };
 let appliedSceneryFogSnapshot: AppliedSceneryFogSnapshot | null = null;
 const sceneryFogColorScratch = new THREE.Color();
-const sceneryFogCameraWorldScratch = new THREE.Vector3();
 type CameraFrameSnapshot = {
   nowMs: number;
   position: THREE.Vector3;
@@ -2599,6 +2591,9 @@ let physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
 const physicsBridgeBodySyncPositionHelper = new THREE.Vector3();
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion();
 const physicsEnvironmentEnabled = ref(true);
+// Reactive gate so the character control UI only appears once the physics
+// bridge scene has finished loading and the character bindings are indexed.
+const physicsBridgeCharacterBindingsReady = ref(false);
 
 const rigidbodyInstances = new Map<string, ViewerRigidbodyInstance>();
 const physicsBridgeDirtyBodyNodeIds = new Set<string>();
@@ -2918,24 +2913,45 @@ let characterCameraFollowNodeId: string | null = null;
 let characterInputYaw = Math.PI;
 let characterInputYawInitialized = false;
 let characterInputYawNodeId: string | null = null;
+let characterDesiredInputYaw: number | null = null;
+let characterResolvedInputYaw: number | null = null;
+const characterInputYawQuaternionScratch = new THREE.Quaternion();
+const characterControlDebugQuaternion = new THREE.Quaternion();
+// Temporary debug logging for the character control pipeline. Logs are emitted
+// as a single copyable string: [CharacterControl] stage {"k":"v",...}
+const CHARACTER_CONTROL_DEBUG = true;
+const CHARACTER_CONTROL_DEBUG_INTERVAL_MS = 120;
+let characterControlDebugLastLogMs = 0;
+let characterControlRenderFrame = 0;
+function characterControlDebugNumber(value: number | null | undefined): number | null {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return null;
+  }
+  return Number(value.toFixed(3));
+}
+function logCharacterControlDebug(stage: string, payload: Record<string, unknown>, force = false): void {
+  if (!CHARACTER_CONTROL_DEBUG) {
+    return;
+  }
+  const now = typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+  if (!force && now - characterControlDebugLastLogMs < CHARACTER_CONTROL_DEBUG_INTERVAL_MS) {
+    return;
+  }
+  characterControlDebugLastLogMs = now;
+  console.log(`[CharacterControl] ${stage} ${JSON.stringify(payload)}`);
+}
 const characterCameraFollowPlacementCache = {
   nodeId: null as string | null,
   objectUuid: null as string | null,
   placement: null as CameraFollowPlacement | null,
 };
-let characterControlDeltaSeconds = 1 / 60;
 const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCameraMotionState();
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.15;
-// Keep turning responsive after the shared joystick deadzone has already been
-// applied. A second large deadzone plus smoothstep made mid-range horizontal
-// input produce very little effective turn, especially on diagonal input.
-const CHARACTER_JOYSTICK_TURN_DEADZONE = 0.08;
-const CHARACTER_TURN_ONLY_FORWARD_SPEED = 0.35;
-const CHARACTER_TURN_ONLY_FORWARD_Y_THRESHOLD = 0.12;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
-const CHARACTER_TURN_RESPONSE_EXPONENT = 0.85;
 const CHARACTER_INPUT_MAX_DELTA_SECONDS = 0.05;
 // The editor default is tuned for desktop control. Reduce the runtime rate for
 // the mini program so a full joystick deflection does not rotate too quickly.
@@ -3700,7 +3716,14 @@ const autoTourTelemetryUiVisible = computed(() => vehicleDriveUi.value.visible |
 
 const characterControlUi = computed(() => {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const visible = !vehicleDriveUi.value.visible && Boolean(controlledNodeId);
+  const motionNodeId = resolveControlledCharacterMotionNodeId();
+  const physicsReady = physicsEnvironmentEnabled.value
+    && physicsBridgeCharacterBindingsReady.value
+    && (
+      (controlledNodeId ? physicsBridgeCharacterIdByNodeId.has(controlledNodeId) : false)
+      || (motionNodeId ? physicsBridgeCharacterIdByNodeId.has(motionNodeId) : false)
+    );
+  const visible = !vehicleDriveUi.value.visible && Boolean(controlledNodeId) && physicsReady;
   if (!visible) {
     return {
       visible: false,
@@ -7528,6 +7551,7 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
   sprint: boolean;
   crouch: boolean;
   interact: boolean;
+  yaw?: number | null;
   locallyControlled: boolean;
 } {
   const pathFollowInput = characterAutoTourRuntime.getInput(nodeId);
@@ -7588,6 +7612,7 @@ function resolveRemoteCharacterAnimationInput(
   sprint: boolean;
   crouch: boolean;
   interact: boolean;
+  yaw?: number | null;
   locallyControlled: boolean;
 } {
   const action = remoteState.action ?? inferCharacterActionFromAnimation(remoteState.animation);
@@ -9614,7 +9639,15 @@ async function loadSceneryPhysicsBridgeScene(
     }
     updateSceneryPhysicsBridgeIndex(document, asset);
     physicsBridgeSceneLoaded = true;
+    physicsBridgeCharacterBindingsReady.value = true;
     physicsBridgeSceneReloading = false;
+    logCharacterControlDebug('bindings', {
+      controlledNodeId: resolveDefaultControlledCharacterNodeId(),
+      characterIds: Array.from(physicsBridgeCharacterIdByNodeId.entries())
+        .map(([nodeId, characterId]) => `${nodeId}:${characterId}`),
+      controllerToBody: Array.from(physicsBridgeCharacterBodyNodeIdByControllerNodeId.entries())
+        .map(([controllerNodeId, bodyNodeId]) => `${controllerNodeId}->${bodyNodeId}`),
+    }, true);
     const groundNode = resolveDocumentGroundNode(document);
     const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null;
     if (groundObject && isGroundDynamicMesh(groundNode?.dynamicMesh)) {
@@ -9984,15 +10017,14 @@ function stepSceneryPhysicsBridge(delta: number): void {
   if (physicsBridgeStepPromise || physicsBridgeAccumulatedDeltaSeconds < PHYSICS_BRIDGE_FIXED_STEP_DELTA_SECONDS) {
     return;
   }
-  if (physicsBridgeCharacterInputSyncPromise) {
-    physicsBridgeStepPendingDeltaSeconds = PHYSICS_BRIDGE_FIXED_STEP_DELTA_SECONDS;
-    return;
-  }
   // Bridge worker requests are processed strictly in-order, but if a local body
   // mutation is still waiting on an earlier `setBodyTransform` flush, stepping
   // again here can advance the remote world before that mutation has landed.
   // Hold the step for one frame in that narrow case so teleports/stops snap in
-  // before the next simulation advance.
+  // before the next simulation advance. Character input does NOT hold the step:
+  // setCharacterInput is posted before step in the same frame and the worker
+  // applies requests in order, so holding on the input round-trip starved the
+  // simulation whenever the worker reply took longer than one frame.
   if (physicsBridgeBodySyncPromise && physicsBridgePendingBodySyncRevisionByNodeId.size > 0) {
     return;
   }
@@ -10389,9 +10421,247 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   });
 }
 
-function resolveSceneryCharacterInputYaw(): number | null {
+const PHYSICS_BRIDGE_CHARACTER_INPUT_EPSILON = 1e-4;
 
-  return null;
+function resolveCharacterYawShortestDelta(current: number, target: number): number {
+  return THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
+}
+
+function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const motionNodeId = resolveControlledCharacterMotionNodeId();
+  const props = resolveDefaultControlledCharacterComponentProps();
+  if (!controlledNodeId || !motionNodeId || !props) {
+    characterInputYawInitialized = false;
+    characterInputYawNodeId = null;
+    return null;
+  }
+  if (!characterInputYawInitialized || characterInputYawNodeId !== controlledNodeId) {
+    const object = nodeObjectMap.get(motionNodeId) ?? null;
+    if (!object) {
+      logCharacterControlDebug('yaw-init', {
+        frame: characterControlRenderFrame,
+        controlledNodeId,
+        motionNodeId,
+        objectFound: false,
+      }, true);
+      return null;
+    }
+    object.updateWorldMatrix(true, false);
+    object.getWorldQuaternion(characterInputYawQuaternionScratch);
+    characterInputYaw = resolvePhysicsCharacterMotorYawFromWorldQuaternion(
+      characterInputYawQuaternionScratch,
+      props.forwardAxis,
+    );
+    characterInputYawInitialized = true;
+    characterInputYawNodeId = controlledNodeId;
+    logCharacterControlDebug('yaw-init', {
+      frame: characterControlRenderFrame,
+      controlledNodeId,
+      motionNodeId,
+      objectFound: true,
+      quat: {
+        x: characterControlDebugNumber(characterInputYawQuaternionScratch.x),
+        y: characterControlDebugNumber(characterInputYawQuaternionScratch.y),
+        z: characterControlDebugNumber(characterInputYawQuaternionScratch.z),
+        w: characterControlDebugNumber(characterInputYawQuaternionScratch.w),
+      },
+      initYaw: characterControlDebugNumber(characterInputYaw),
+    }, true);
+  }
+  const delta = Number.isFinite(deltaSeconds)
+    ? THREE.MathUtils.clamp(deltaSeconds, 0, CHARACTER_INPUT_MAX_DELTA_SECONDS)
+    : 0;
+  if (vehicleDriveUi.value.visible) {
+    // While driving a vehicle the character is not locally controlled.
+    return characterInputYaw;
+  }
+  const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond)
+    * CHARACTER_RUNTIME_TURN_RATE_SCALE;
+  const yawBeforeIntegration = characterInputYaw;
+  if (typeof characterDesiredInputYaw === 'number' && Number.isFinite(characterDesiredInputYaw)) {
+    // Camera-relative joystick/keyboard: rotate toward the pushed direction at
+    // the configured turn rate; movement always follows the facing (no reverse).
+    const yawDelta = resolveCharacterYawShortestDelta(characterInputYaw, characterDesiredInputYaw);
+    const turnAmount = Math.min(Math.abs(yawDelta), turnRateRadiansPerSecond * delta);
+    characterInputYaw += Math.sign(yawDelta) * turnAmount;
+  } else if (Math.abs(characterAuthorityInput.turn) > 1e-4 && delta > 0) {
+    // Relative turn integration used by the move-to runtime.
+    characterInputYaw += characterAuthorityInput.turn * turnRateRadiansPerSecond * delta;
+  }
+  characterInputYaw = THREE.MathUtils.euclideanModulo(characterInputYaw + Math.PI, Math.PI * 2) - Math.PI;
+  logCharacterControlDebug('yaw', {
+    frame: characterControlRenderFrame,
+    node: controlledNodeId,
+    before: characterControlDebugNumber(yawBeforeIntegration),
+    desired: characterControlDebugNumber(characterDesiredInputYaw),
+    delta: characterControlDebugNumber(delta),
+    turnRate: characterControlDebugNumber(turnRateRadiansPerSecond),
+    after: characterControlDebugNumber(characterInputYaw),
+  });
+  return characterInputYaw;
+}
+
+function isCharacterBridgeInputSnapshotClose(
+  current: PhysicsBridgeCharacterInputSnapshot,
+  next: PhysicsBridgeCharacterInputSnapshot,
+): boolean {
+  if (current.characterId !== next.characterId) {
+    return false;
+  }
+  if (
+    Math.abs(current.moveX - next.moveX) > PHYSICS_BRIDGE_CHARACTER_INPUT_EPSILON
+    || Math.abs(current.moveZ - next.moveZ) > PHYSICS_BRIDGE_CHARACTER_INPUT_EPSILON
+  ) {
+    return false;
+  }
+  if (current.yaw === null || next.yaw === null) {
+    if (current.yaw !== next.yaw) {
+      return false;
+    }
+  } else if (Math.abs(current.yaw - next.yaw) > PHYSICS_BRIDGE_CHARACTER_INPUT_EPSILON) {
+    return false;
+  }
+  if (current.turnRateRadiansPerSecond === null || next.turnRateRadiansPerSecond === null) {
+    if (current.turnRateRadiansPerSecond !== next.turnRateRadiansPerSecond) {
+      return false;
+    }
+  } else if (
+    Math.abs(current.turnRateRadiansPerSecond - next.turnRateRadiansPerSecond)
+    > PHYSICS_BRIDGE_CHARACTER_INPUT_EPSILON
+  ) {
+    return false;
+  }
+  return (
+    current.jump === next.jump
+    && current.sprint === next.sprint
+    && current.crouch === next.crouch
+    && current.interact === next.interact
+  );
+}
+
+function syncSceneryPhysicsBridgeCharacterInput(): void {
+  if (!physicsBridge || !physicsBridgeSceneLoaded) {
+    return;
+  }
+  if (physicsBridgeCharacterInputSyncPromise) {
+    physicsBridgeCharacterInputSyncPending = true;
+    logCharacterControlDebug('sync', {
+      frame: characterControlRenderFrame,
+      pending: true,
+    });
+    return;
+  }
+  const bridge = physicsBridge;
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  const pending: Array<Promise<void>> = [];
+  const nextSnapshotNodeIds = new Set<string>();
+  physicsBridgeCharacterBodyNodeIdByControllerNodeId.forEach((bodyNodeId, controllerNodeId) => {
+    if (!controllerNodeId || !bodyNodeId) {
+      return;
+    }
+    const characterId = physicsBridgeCharacterIdByNodeId.get(bodyNodeId);
+    if (typeof characterId !== 'number') {
+      return;
+    }
+    const input = resolveSceneryCharacterAnimationInput(controllerNodeId);
+    let yaw: number | null = null;
+    let moveX = input.moveX;
+    let moveZ = input.moveZ;
+    let jump = input.jump;
+    let sprint = input.sprint;
+    let crouch = input.crouch;
+    let interact = input.interact;
+    if (controllerNodeId === controlledNodeId) {
+      if (vehicleDriveUi.value.visible) {
+        // The player is driving a vehicle; the controlled character must stay
+        // put instead of walking along with the joystick.
+        moveX = 0;
+        moveZ = 0;
+        jump = false;
+        sprint = false;
+        crouch = false;
+        interact = false;
+      } else if (input.locallyControlled) {
+        yaw = characterResolvedInputYaw;
+      } else if (typeof input.yaw === 'number' && Number.isFinite(input.yaw)) {
+        // An auto-tour path is currently driving the controlled character;
+        // follow the path's smoothed yaw instead of the manual integration.
+        yaw = input.yaw;
+      }
+    } else if (typeof input.yaw === 'number' && Number.isFinite(input.yaw)) {
+      yaw = input.yaw;
+    }
+    const snapshot: PhysicsBridgeCharacterInputSnapshot = {
+      characterId,
+      moveX,
+      moveZ,
+      yaw,
+      turnRateRadiansPerSecond: null,
+      jump,
+      sprint,
+      crouch,
+      interact,
+    };
+    nextSnapshotNodeIds.add(controllerNodeId);
+    const previous = physicsBridgeCharacterInputSnapshotByNodeId.get(controllerNodeId) ?? null;
+    if (previous && isCharacterBridgeInputSnapshotClose(previous, snapshot)) {
+      return;
+    }
+    physicsBridgeCharacterInputSnapshotByNodeId.set(controllerNodeId, snapshot);
+    logCharacterControlDebug('send', {
+      frame: characterControlRenderFrame,
+      node: controllerNodeId,
+      body: bodyNodeId,
+      charId: characterId,
+      controlled: controllerNodeId === controlledNodeId,
+      moveX: characterControlDebugNumber(moveX),
+      moveZ: characterControlDebugNumber(moveZ),
+      yaw: characterControlDebugNumber(yaw),
+      jump,
+      sprint,
+      crouch,
+      interact,
+      reset: !previous,
+    });
+    pending.push(bridge.setCharacterInput({
+      characterId,
+      moveX: snapshot.moveX,
+      moveZ: snapshot.moveZ,
+      yaw: snapshot.yaw,
+      turnRateRadiansPerSecond: snapshot.turnRateRadiansPerSecond,
+      jump: snapshot.jump,
+      sprint: snapshot.sprint,
+      crouch: snapshot.crouch,
+      interact: snapshot.interact,
+      resetState: !previous,
+    }));
+  });
+  // Drop snapshots for nodes that are no longer physics characters so the next
+  // drive of a re-added node always starts from a clean motor state.
+  physicsBridgeCharacterInputSnapshotByNodeId.forEach((_snapshot, nodeId) => {
+    if (!nextSnapshotNodeIds.has(nodeId)) {
+      physicsBridgeCharacterInputSnapshotByNodeId.delete(nodeId);
+    }
+  });
+  if (!pending.length) {
+    return;
+  }
+  physicsBridgeCharacterInputSyncPromise = Promise.allSettled(pending)
+    .then((results) => {
+      results.forEach((result) => {
+        if (result.status === 'rejected') {
+          console.warn('[SceneViewer] Failed to sync character input', result.reason);
+        }
+      });
+    })
+    .finally(() => {
+      physicsBridgeCharacterInputSyncPromise = null;
+      if (physicsBridgeCharacterInputSyncPending) {
+        physicsBridgeCharacterInputSyncPending = false;
+        syncSceneryPhysicsBridgeCharacterInput();
+      }
+    });
 }
 
 
@@ -10414,6 +10684,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeLastFullBodySyncAtMs = 0;
   resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
   if (!physicsBridge || !physicsBridgeSceneLoaded) {
+    physicsBridgeCharacterBindingsReady.value = false;
     physicsBridgeStepPromise = null;
     physicsBridgeStepPendingDeltaSeconds = 0;
     physicsBridgeAccumulatedDeltaSeconds = 0;
@@ -10433,6 +10704,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     console.warn('[SceneViewer] Failed to dispose physics bridge scene', error);
   } finally {
     physicsBridgeSceneLoaded = false;
+    physicsBridgeCharacterBindingsReady.value = false;
     physicsBridgeStepPromise = null;
     physicsBridgeStepPendingDeltaSeconds = 0;
     physicsBridgeAccumulatedDeltaSeconds = 0;
@@ -10488,6 +10760,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgePendingBodySyncRevisionByNodeId.clear();
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
     physicsBridgeSceneLoaded = false;
+    physicsBridgeCharacterBindingsReady.value = false;
   }
 }
 
@@ -12506,6 +12779,13 @@ function resetProtagonistPoseState(): void {
   characterCameraFollowAnchorScratch.set(0, 0, 0);
   characterCameraFollowForwardScratch.set(0, 0, 0);
   resetCameraFollowState(characterCameraFollowState);
+}
+
+function resetSceneryCharacterInputYawState(): void {
+  characterInputYawInitialized = false;
+  characterInputYawNodeId = null;
+  characterDesiredInputYaw = null;
+  characterResolvedInputYaw = null;
 }
 
 function findDefaultControlledCharacterObject(): THREE.Object3D | null {
@@ -15200,7 +15480,25 @@ function syncMoveToSubjectTargetToPhysicsBridge(
 }
 
 function syncMoveToCharacterControllerYaw(subjectNodeId: string, targetQuaternion: THREE.Quaternion): void {
-
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!subjectNodeId || subjectNodeId !== controlledNodeId) {
+    return;
+  }
+  const props = resolveDefaultControlledCharacterComponentProps();
+  if (!props) {
+    return;
+  }
+  characterInputYaw = resolvePhysicsCharacterMotorYawFromWorldQuaternion(targetQuaternion, props.forwardAxis);
+  characterInputYawInitialized = true;
+  characterInputYawNodeId = controlledNodeId;
+  characterDesiredInputYaw = null;
+  // Force the next character input sync to re-send with resetState so the
+  // motor adopts the snapped pose instead of drifting back to its old yaw.
+  physicsBridgeCharacterInputSnapshotByNodeId.delete(subjectNodeId);
+  const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(subjectNodeId) ?? null;
+  if (bodyNodeId) {
+    physicsBridgeCharacterInputSnapshotByNodeId.delete(bodyNodeId);
+  }
 }
 
 function getMoveToSubjectCurrentPose(subjectNodeId: string): { position: THREE.Vector3; quaternion: THREE.Quaternion } | null {
@@ -15288,6 +15586,7 @@ function resetMoveToSubjectInputs(): void {
   characterAuthorityInput.sprint = false;
   characterAuthorityInput.crouch = false;
   characterAuthorityInput.interact = false;
+  resetSceneryCharacterInputYawState();
 }
 
 function finalizeMoveToSession(resolution: { type: 'continue' | 'fail'; message?: string } = { type: 'continue' }): void {
@@ -15384,6 +15683,9 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
     finalizeMoveToSession({ type: 'continue' });
     return;
   }
+  // The move-to runtime drives the character through relative turn input;
+  // clear any joystick intent so the two never fight for yaw control.
+  characterDesiredInputYaw = null;
   const distanceBlend = THREE.MathUtils.clamp(
     (planarDistance - MOVE_TO_CHARACTER_STOP_DISTANCE) / Math.max(1e-6, MOVE_TO_CHARACTER_SLOW_DISTANCE - MOVE_TO_CHARACTER_STOP_DISTANCE),
     0,
@@ -16240,45 +16542,97 @@ function resolveJoystickDriveInput(): { throttle: number; steering: number } {
   };
 }
 
-function resolveJoystickCharacterInput(): { turn: number; moveZ: number } {
+type CharacterCameraMoveFrame = {
+  forwardX: number;
+  forwardZ: number;
+  rightX: number;
+  rightZ: number;
+};
+
+function resolveCharacterCameraMoveFrame(frame: CharacterCameraMoveFrame): boolean {
+  const camera = renderContext?.camera ?? null;
+  if (!camera) {
+    frame.forwardX = 0;
+    frame.forwardZ = 1;
+    frame.rightX = 1;
+    frame.rightZ = 0;
+    return false;
+  }
+  camera.getWorldDirection(characterControlYawForwardScratch);
+  const forwardLength = Math.hypot(characterControlYawForwardScratch.x, characterControlYawForwardScratch.z);
+  if (forwardLength <= 1e-6) {
+    frame.forwardX = 0;
+    frame.forwardZ = 1;
+    frame.rightX = 1;
+    frame.rightZ = 0;
+    return false;
+  }
+  const forwardX = characterControlYawForwardScratch.x / forwardLength;
+  const forwardZ = characterControlYawForwardScratch.z / forwardLength;
+  frame.forwardX = forwardX;
+  frame.forwardZ = forwardZ;
+  // right = forward × up, with world up = +Y.
+  frame.rightX = -forwardZ;
+  frame.rightZ = forwardX;
+  return true;
+}
+
+function resolveJoystickCharacterInput(): { x: number; y: number } {
   const x = characterJoystickVector.x;
   const y = characterJoystickVector.y;
   const length = Math.hypot(x, y);
   if (length <= JOYSTICK_DEADZONE) {
-    return { turn: 0, moveZ: 0 };
+    return { x: 0, y: 0 };
   }
   const effectiveLength = (length - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE);
-  const scale = length > 0 ? effectiveLength / length : 0;
-  const turnAbs = Math.abs(x);
-  const turnProgress = turnAbs <= CHARACTER_JOYSTICK_TURN_DEADZONE
-    ? 0
-    : (turnAbs - CHARACTER_JOYSTICK_TURN_DEADZONE) / (1 - CHARACTER_JOYSTICK_TURN_DEADZONE);
-  // Use a linear response here. The shared deadzone already removes small
-  // accidental movements; applying another smoothstep curve made the useful
-  // middle range of the joystick feel almost unresponsive.
-  const turnScale = Math.min(1, Math.pow(Math.max(0, turnProgress), CHARACTER_TURN_RESPONSE_EXPONENT));
-  const forwardFromJoystick = y * scale;
-  const moveZ = Math.abs(y) <= CHARACTER_TURN_ONLY_FORWARD_Y_THRESHOLD
-    ? turnScale * CHARACTER_TURN_ONLY_FORWARD_SPEED
-    : forwardFromJoystick;
-  return {
-    turn: -Math.sign(x) * turnScale,
-    moveZ,
-  };
+  const scale = effectiveLength / length;
+  return { x: x * scale, y: y * scale };
 }
 
 function updateCharacterAuthorityInputFromKeys(): void {
   const joystickInput = resolveJoystickCharacterInput();
-  const keyboardMoveZ = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
-  const keyboardTurn = (characterKeyState.left ? 1 : 0) - (characterKeyState.right ? 1 : 0);
-  const moveZ = clampAxisScalar(joystickInput.moveZ + keyboardMoveZ);
-  const turn = clampAxisScalar(joystickInput.turn + keyboardTurn);
-  characterAuthorityInput.moveX = 0;
-  characterAuthorityInput.moveZ = moveZ;
-  characterAuthorityInput.turn = turn;
+  // Keyboard maps W/A/S/D to camera-relative directions, matching the mobile
+  // joystick so the character never walks backward.
+  const keyboardX = (characterKeyState.right ? 1 : 0) - (characterKeyState.left ? 1 : 0);
+  const keyboardY = (characterKeyState.forward ? 1 : 0) - (characterKeyState.backward ? 1 : 0);
+  const frame: CharacterCameraMoveFrame = { forwardX: 0, forwardZ: 1, rightX: 1, rightZ: 0 };
+  resolveCharacterCameraMoveFrame(frame);
+  const inputX = joystickInput.x + keyboardX;
+  const inputY = joystickInput.y + keyboardY;
+  const directionX = frame.forwardX * inputY + frame.rightX * inputX;
+  const directionZ = frame.forwardZ * inputY + frame.rightZ * inputX;
+  const length = Math.hypot(directionX, directionZ);
+  const hasMovement = length > CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD;
+  if (hasMovement) {
+    characterDesiredInputYaw = Math.atan2(directionX, directionZ);
+    characterAuthorityInput.moveX = 0;
+    characterAuthorityInput.moveZ = clampAxisScalar(length);
+  } else {
+    characterDesiredInputYaw = null;
+    characterAuthorityInput.moveX = 0;
+    characterAuthorityInput.moveZ = 0;
+  }
+  characterAuthorityInput.turn = 0;
   characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
+  if (characterControlUi.value.visible) {
+    logCharacterControlDebug('input', {
+      frame: characterControlRenderFrame,
+      joyX: characterControlDebugNumber(joystickInput.x),
+      joyY: characterControlDebugNumber(joystickInput.y),
+      keyX: keyboardX,
+      keyY: keyboardY,
+      camFx: characterControlDebugNumber(frame.forwardX),
+      camFz: characterControlDebugNumber(frame.forwardZ),
+      camRx: characterControlDebugNumber(frame.rightX),
+      camRz: characterControlDebugNumber(frame.rightZ),
+      dirX: characterControlDebugNumber(directionX),
+      dirZ: characterControlDebugNumber(directionZ),
+      desiredYaw: characterControlDebugNumber(characterDesiredInputYaw),
+      moveZ: characterControlDebugNumber(characterAuthorityInput.moveZ),
+    });
+  }
   if (characterKeyState.jump) {
     if (!characterInputJumpLatch) {
       characterAuthorityInput.jump = true;
@@ -16467,6 +16821,7 @@ function resetCharacterControlInputs(): void {
   characterKeyState.crouch = false;
   characterKeyState.interact = false;
   characterInputJumpLatch = false;
+  resetSceneryCharacterInputYawState();
   deactivateCharacterJoystick(true);
   hideCharacterDrivePadImmediate();
   detachCharacterDrivePadMouseListeners();
@@ -17528,9 +17883,10 @@ function updateCharacterFollowCamera(
     worldUp,
     tuning: {
       ...createBackFollowCameraTuning(),
-      // Local joystick control should feel immediate. Keep the smoother
-      // values for auto-tour, which uses a separate camera update path.
-      headingLerpSpeed: 10,
+      // Keep the camera mostly fixed in yaw while the joystick steers, so the
+      // character's turns stay visible. The heading slowly re-centers behind
+      // the character once it stops turning instead of chasing its facing.
+      headingLerpSpeed: 2.5,
       targetLerpSpeed: 8,
     },
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
@@ -18837,53 +19193,6 @@ type SceneryFogState =
     }
   | null;
 
-function resolveSceneryGroundFogCoverageDistance(
-  activeCamera: THREE.PerspectiveCamera | null,
-  snapshot: CameraFrameSnapshot | null = null,
-): number | null {
-  if (!activeCamera || !dynamicGroundCache) {
-    return null;
-  }
-  const groundObject = resolveSceneObjectByNodeId(dynamicGroundCache.nodeId);
-  if (!groundObject) {
-    return null;
-  }
-  const groundMesh = dynamicGroundCache.dynamicMesh;
-  const chunkSizeMeters = Number.isFinite(groundMesh.chunkSizeMeters) && Number(groundMesh.chunkSizeMeters) > 0
-    ? Number(groundMesh.chunkSizeMeters)
-    : 100;
-  const renderRadiusChunks = Number.isFinite(groundMesh.renderRadiusChunks) && Number(groundMesh.renderRadiusChunks) > 0
-    ? Math.max(1, Math.trunc(Number(groundMesh.renderRadiusChunks)))
-    : 4;
-  const unloadBufferChunks = Math.max(
-    SCENERY_GROUND_FOG_UNLOAD_BUFFER_MIN_CHUNKS,
-    Math.ceil(renderRadiusChunks * SCENERY_GROUND_FOG_UNLOAD_BUFFER_RATIO),
-  );
-  const visibleWindow = resolveInfiniteGroundVisibleChunkWindow(groundObject, groundMesh, activeCamera);
-  const { minX, maxX, minZ, maxZ } = visibleWindow.localBounds;
-  if (snapshot) {
-    sceneryFogCameraWorldScratch.copy(snapshot.position);
-  } else {
-        activeCamera.updateWorldMatrix(true, false);
-    activeCamera.getWorldPosition(sceneryFogCameraWorldScratch);
-  }
-  const cameraLocal = groundObject.worldToLocal(sceneryFogCameraWorldScratch);
-  const farCornerDistance = Math.max(
-    Math.hypot(cameraLocal.x - minX, cameraLocal.z - minZ),
-    Math.hypot(cameraLocal.x - minX, cameraLocal.z - maxZ),
-    Math.hypot(cameraLocal.x - maxX, cameraLocal.z - minZ),
-    Math.hypot(cameraLocal.x - maxX, cameraLocal.z - maxZ),
-  );
-  let coverageDistance = farCornerDistance + unloadBufferChunks * chunkSizeMeters;
-  if (groundMesh.farHorizonEnabled) {
-    const farHorizonDistance = Number(groundMesh.farHorizonDistanceMeters);
-    if (Number.isFinite(farHorizonDistance) && farHorizonDistance > 0) {
-      coverageDistance = Math.min(coverageDistance, farHorizonDistance);
-    }
-  }
-  return Math.max(SCENERY_FOG_MIN_DISTANCE, coverageDistance);
-}
-
 function resolveSceneryFogState(
   settings: EnvironmentSettings
 ): SceneryFogState {
@@ -18930,7 +19239,6 @@ function resolveSceneryFogState(
 function applyFogSettings(
   settings: EnvironmentSettings,
   activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null,
-  snapshot: CameraFrameSnapshot | null = null,
 ) {
   const scene = renderContext?.scene ?? null;
   if (!scene) {
@@ -20197,6 +20505,7 @@ function teardownRenderer() {
     return;
   }
   resetProtagonistPoseState();
+  resetSceneryCharacterInputYawState();
   const { renderer, scene, controls } = renderContext;
   releaseTerrainScatterInstances();
   if (canvasResult?.canvas && handleBehaviorClick) {
@@ -20921,7 +21230,7 @@ function startRenderLoop(
         }
 
         if (deltaSeconds > 0) {
-          characterControlDeltaSeconds = deltaSeconds;
+          characterControlRenderFrame += 1;
           const watchCameraLocked = isWatchCameraLocked();
           updateCharacterAuthorityInputFromKeys();
           updateMoveToSessionForFrame(deltaSeconds);
@@ -20962,12 +21271,63 @@ function startRenderLoop(
           syncSceneryPhysicsBridgeVehicleInput();
           // Integrate the current joystick turn before sending the character
           // input, otherwise physics receives the previous frame's yaw.
-          if (characterControlUi.value.visible) {
-            resolveSceneryCharacterInputYaw();
-          }
+          characterResolvedInputYaw = resolveSceneryCharacterInputYaw(deltaSeconds);
+          syncSceneryPhysicsBridgeCharacterInput();
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
           updateCharacterPhysicsBridgeVisuals(deltaSeconds);
+          if (characterControlUi.value.visible) {
+            const debugControlledNodeId = resolveDefaultControlledCharacterNodeId();
+            const debugMotionNodeId = resolveControlledCharacterMotionNodeId();
+            const debugBodyNodeId = debugControlledNodeId
+              ? (physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(debugControlledNodeId) ?? debugControlledNodeId)
+              : null;
+            const debugFrameState = debugBodyNodeId
+              ? physicsBridgeFrameBodiesByNodeId.get(debugBodyNodeId) ?? null
+              : null;
+            const debugVisualObject = debugMotionNodeId
+              ? nodeObjectMap.get(debugMotionNodeId) ?? null
+              : null;
+            const debugProps = resolveDefaultControlledCharacterComponentProps();
+            debugVisualObject?.updateWorldMatrix(true, false);
+            const debugVisualQuaternion = debugVisualObject
+              ? debugVisualObject.getWorldQuaternion(characterControlDebugQuaternion)
+              : null;
+            logCharacterControlDebug('state', {
+              frame: characterControlRenderFrame,
+              controlledNodeId: debugControlledNodeId,
+              motionNodeId: debugMotionNodeId,
+              bodyNodeId: debugBodyNodeId,
+              bindingsReady: physicsBridgeCharacterBindingsReady.value,
+              hasMapEntry: debugControlledNodeId
+                ? physicsBridgeCharacterIdByNodeId.has(debugControlledNodeId)
+                : false,
+              sentYaw: characterControlDebugNumber(characterResolvedInputYaw),
+              bodyYaw: debugFrameState
+                ? characterControlDebugNumber(
+                  resolvePhysicsCharacterMotorYawFromWorldQuaternion(
+                    debugFrameState.quaternion,
+                    debugProps?.forwardAxis ?? '+x',
+                  ),
+                )
+                : null,
+              visualYaw: debugVisualQuaternion
+                ? characterControlDebugNumber(
+                  resolvePhysicsCharacterMotorYawFromWorldQuaternion(
+                    debugVisualQuaternion,
+                    debugProps?.forwardAxis ?? '+x',
+                  ),
+                )
+                : null,
+              bodyPos: debugFrameState
+                ? [
+                    characterControlDebugNumber(debugFrameState.position.x),
+                    characterControlDebugNumber(debugFrameState.position.y),
+                    characterControlDebugNumber(debugFrameState.position.z),
+                  ]
+                : null,
+            });
+          }
           updateVehicleSpeedFromVehicle();
           updateControlledCharacterMotionTelemetry(getVehicleSpeedDisplayNowMs());
           updateSceneCompassHeading();
@@ -21010,7 +21370,7 @@ function startRenderLoop(
           syncSceneSignboardsWithReference(overlayReference);
         }
         updatePurposeControlsPlacement(camera);
-        applyFogSettings(activeEnvironmentSettings, camera, cameraFrameSnapshot);
+        applyFogSettings(activeEnvironmentSettings, camera);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
@@ -21086,6 +21446,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   renderScope = null;
 
   resetProtagonistPoseState();
+  resetSceneryCharacterInputYawState();
   releaseTerrainScatterInstances();
 
   if (behaviorAlertToken.value) {
@@ -21206,6 +21567,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   setActiveMultiuserRuntimeBridge(multiuserRuntimeBridge);
   setActiveMultiuserSceneId(payload.document.id ?? null);
   resetProtagonistPoseState();
+  resetSceneryCharacterInputYawState();
   if (behaviorAlertToken.value) {
     resolveBehaviorToken(behaviorAlertToken.value, {
       type: 'abort',
