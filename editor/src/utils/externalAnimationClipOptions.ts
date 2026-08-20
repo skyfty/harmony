@@ -68,11 +68,43 @@ export async function collectExternalAnimationClipOptions(assetId: string): Prom
     .filter((entry): entry is AnimationClipOption => Boolean(entry))
 }
 
+/**
+ * 收集模型自带（内置）动画的 clip 选项。
+ * 优先从运行时对象读取；若运行时对象尚未就绪（预览未构建/懒加载中），
+ * 则直接解析节点引用的模型资产作为兜底，保证内置动画列表始终可展示。
+ */
+export async function collectBuiltInAnimationClipOptions(
+  runtimeObject: Object3D | null | undefined,
+  fallbackAssetId: string | null | undefined,
+): Promise<AnimationClipOption[]> {
+  const fromObject = collectAnimationClipCatalog(runtimeObject)
+  if (fromObject.length) {
+    return fromObject
+  }
+  if (!fallbackAssetId) {
+    return []
+  }
+  const object = await getOrLoadExternalAnimationObject(
+    fallbackAssetId,
+    () => loadExternalAnimationObject(fallbackAssetId),
+  )
+  if (!object) {
+    return []
+  }
+  return collectAnimationClips(object)
+    .map((clip) => {
+      const value = sanitizeAnimationClipName(clip.name)
+      return value ? { label: value, value } : null
+    })
+    .filter((entry): entry is AnimationClipOption => Boolean(entry))
+}
+
 export async function collectAnimationClipOptionsWithExternalAsset(
   runtimeObject: Object3D | null | undefined,
   externalAssetId: string | null | undefined,
+  builtInFallbackAssetId?: string | null | undefined,
 ): Promise<AnimationClipOption[]> {
-  const builtIn = collectAnimationClipCatalog(runtimeObject)
+  const builtIn = await collectBuiltInAnimationClipOptions(runtimeObject, builtInFallbackAssetId)
   const external = externalAssetId ? await collectExternalAnimationClipOptions(externalAssetId) : []
   return mergeAnimationClipOptions(external, builtIn)
 }

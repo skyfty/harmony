@@ -213,8 +213,11 @@ import {
 import {
 	behaviorComponentDefinition,
 	ANIMATION_COMPONENT_TYPE,
+	SKIN_COMPONENT_TYPE,
 	type AnimationComponentProps,
+	type SkinComponentProps,
 	clampAnimationComponentProps,
+	clampSkinComponentProps,
 	billboardComponentDefinition,
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
@@ -227,6 +230,7 @@ import {
 	landformComponentDefinition,
 	viewPointComponentDefinition,
 	animationComponentDefinition,
+	skinComponentDefinition,
 	generalMeshComponentDefinition,
 	particleSystemComponentDefinition,
 	warpGateComponentDefinition,
@@ -284,6 +288,13 @@ import {
 	hasCachedExternalAnimationObject,
 	resetExternalAnimationAssetCache,
 } from '@schema/externalAnimationAssetCache'
+import {
+	cleanupInactiveSkinAttachments,
+	getMissingSkinAssetIds,
+	getOrLoadSkinAsset,
+	resetSkinRuntime,
+	syncSkinRuntimeForNode,
+} from '@schema/skinRuntime'
 import {
 	createCapsuleCollisionWorld,
 	type CapsuleCollisionWorld,
@@ -1315,6 +1326,7 @@ previewComponentManager.registerDefinition(billboardComponentDefinition)
 previewComponentManager.registerDefinition(signboardComponentDefinition)
 previewComponentManager.registerDefinition(viewPointComponentDefinition)
 previewComponentManager.registerDefinition(animationComponentDefinition)
+previewComponentManager.registerDefinition(skinComponentDefinition)
 previewComponentManager.registerDefinition(particleSystemComponentDefinition)
 previewComponentManager.registerDefinition(warpGateComponentDefinition)
 previewComponentManager.registerDefinition(couponComponentDefinition)
@@ -6534,6 +6546,7 @@ async function restoreControlNodeRuntime(transitionPreset: Extract<BehaviorRunti
 	rebuildPreviewNodeMap(currentDocument)
 	await syncPhysicsBodiesForDocument(currentDocument)
 	refreshAnimations()
+	refreshSkinRuntime()
 	if (snapshot.targetType === 'character') {
 		pendingDefaultCharacterControlNodeId.value = snapshot.mainNodeId
 		if (characterCameraMode.value !== 'follow') characterCameraMode.value = 'follow'
@@ -6631,6 +6644,7 @@ async function switchControlNodeRuntimePrefab(
 			if (!driveResult.success) return false
 		}
 		refreshAnimations()
+		refreshSkinRuntime()
 		succeeded = true
 		return true
 	} catch (error) {
@@ -11226,6 +11240,7 @@ function stopAnimationLoop() {
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	resetExternalAnimationAssetCache()
+	resetSkinRuntime()
 	clearBehaviorDelayTimers()
 	clearBehaviorSounds()
 	currentScenePreviewEnvironmentSettings = null
@@ -14341,6 +14356,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
 		deferredInstancingNodeIds.delete(state.nodeId)
 		lazyPlaceholderStates.delete(state.nodeId)
 		refreshAnimations()
+		refreshSkinRuntime()
 	} catch (error) {
 		console.warn('[ScenePreview] Deferred asset load failed', error)
 		lazyPlaceholderStates.delete(state.nodeId)
@@ -14473,6 +14489,44 @@ function refreshAnimations() {
 	})
 }
 
+function refreshSkinRuntime() {
+	const activeKeys = new Set<string>()
+	const missingAssetIds = new Set<string>()
+
+	previewNodeMap.forEach((node, nodeId) => {
+		const component = node.components?.[SKIN_COMPONENT_TYPE] as SceneNodeComponentState<SkinComponentProps> | undefined
+		if (!component || !component.id || component.enabled === false) {
+			return
+		}
+		const key = `${nodeId}\u0001${component.id}`
+		activeKeys.add(key)
+		const props = clampSkinComponentProps(component.props)
+		getMissingSkinAssetIds(props).forEach((assetId) => missingAssetIds.add(assetId))
+		syncSkinRuntimeForNode({
+			nodeId,
+			componentId: component.id,
+			runtimeObject: nodeObjectMap.get(nodeId) ?? null,
+			props,
+			loadAsset: (assetId) => (
+				editorResourceCache ? loadAssetObject(editorResourceCache, assetId) : Promise.resolve(null)
+			),
+		})
+	})
+	cleanupInactiveSkinAttachments(activeKeys)
+
+	if (missingAssetIds.size && editorResourceCache) {
+		const resourceCache = editorResourceCache
+		const requestedIds = Array.from(missingAssetIds)
+		void (async () => {
+			await Promise.all(requestedIds.map((assetId) => (
+				getOrLoadSkinAsset(assetId, () => loadAssetObject(resourceCache, assetId))
+			)))
+			// 外部换装资产加载完成后重新同步，使槽位挂件进入对应角色节点。
+			refreshSkinRuntime()
+		})()
+	}
+}
+
 function collectPendingObjects(root: THREE.Object3D): Map<string, THREE.Object3D> {
 	const pendingObjects = new Map<string, THREE.Object3D>()
 	root.traverse((object) => {
@@ -14568,6 +14622,7 @@ async function applyInitialDocumentGraph(
 		})
 	})
 	refreshAnimations()
+	refreshSkinRuntime()
 	initializeLazyPlaceholders(document)
 	const protagonistCameraActive = !vehicleDriveState.active
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })

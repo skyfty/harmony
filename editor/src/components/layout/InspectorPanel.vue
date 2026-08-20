@@ -13,6 +13,7 @@ import LandformPanel from '@/components/inspector/LandformPanel.vue'
 import GuideboardPanel from '@/components/inspector/GuideboardPanel.vue'
 import ViewPointPanel from '@/components/inspector/ViewPointPanel.vue'
 import AnimationComponentPanel from '@/components/inspector/AnimationComponentPanel.vue'
+import SkinComponentPanel from '@/components/inspector/SkinComponentPanel.vue'
 import CharacterControllerPanel from '@/components/inspector/CharacterControllerPanel.vue'
 import GroundAnchorPanel from '@/components/inspector/GroundAnchorPanel.vue'
 import ParticleSystemPanel from '@/components/inspector/ParticleSystemPanel.vue'
@@ -62,6 +63,7 @@ import {
   AUTO_TOUR_COMPONENT_TYPE,
   PURE_PURSUIT_COMPONENT_TYPE,
   ANIMATION_COMPONENT_TYPE,
+  SKIN_COMPONENT_TYPE,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   GROUND_ANCHOR_COMPONENT_TYPE,
   PRELOADABLE_COMPONENT_TYPE,
@@ -657,6 +659,7 @@ watch(
               <OnlinePanel v-else-if="component.type === ONLINE_COMPONENT_TYPE" />
               <NetworkSyncPanel v-else-if="component.type === NETWORK_SYNC_COMPONENT_TYPE" />
               <AnimationComponentPanel v-else-if="component.type === ANIMATION_COMPONENT_TYPE" />
+              <SkinComponentPanel v-else-if="component.type === SKIN_COMPONENT_TYPE" />
               <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
               <GroundAnchorPanel v-else-if="component.type === GROUND_ANCHOR_COMPONENT_TYPE" />
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />

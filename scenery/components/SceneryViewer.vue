@@ -765,6 +765,12 @@ import {
   clampAnimationComponentProps,
   type AnimationComponentProps,
 } from '@harmony/schema/components/definitions/animationComponent';
+import {
+  skinComponentDefinition,
+  SKIN_COMPONENT_TYPE,
+  clampSkinComponentProps,
+  type SkinComponentProps,
+} from '@harmony/schema/components/definitions/skinComponent';
 import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
 import {
   collectCachedExternalAnimationClips,
@@ -772,6 +778,13 @@ import {
   hasCachedExternalAnimationObject,
   resetExternalAnimationAssetCache,
 } from '@harmony/schema/externalAnimationAssetCache';
+import {
+  cleanupInactiveSkinAttachments,
+  getMissingSkinAssetIds,
+  getOrLoadSkinAsset,
+  resetSkinRuntime,
+  syncSkinRuntimeForNode,
+} from '@harmony/schema/skinRuntime';
 
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
@@ -2061,6 +2074,7 @@ const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(floorComponentDefinition);
 previewComponentManager.registerDefinition(proceduralCityComponentDefinition);
 previewComponentManager.registerDefinition(animationComponentDefinition);
+previewComponentManager.registerDefinition(skinComponentDefinition);
 previewComponentManager.registerDefinition(wallComponentDefinition);
 previewComponentManager.registerDefinition(boundaryWallComponentDefinition);
 previewComponentManager.registerDefinition(roadComponentDefinition);
@@ -6398,6 +6412,7 @@ async function restoreControlNodeRuntime(transitionPreset: Extract<BehaviorRunti
   rebuildPreviewNodeMap(currentDocument);
   await syncPhysicsBodiesForDocument(currentDocument);
   if (renderContext?.scene) refreshAnimationControllers(renderContext.scene);
+  if (renderContext?.scene) refreshSkinRuntime();
   refreshMultiuserNodeReferences(currentDocument);
   if (snapshot.targetType === 'character') {
     // The vehicle stop intentionally preserves its camera pose. Once the
@@ -6486,7 +6501,7 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
       if (!result.success) return false;
       vehicleDriveNodeId.value = effectiveNodeId; vehicleDriveActive.value = true;
     }
-    refreshAnimationControllers(renderContext.scene); refreshMultiuserNodeReferences(currentDocument);
+    refreshAnimationControllers(renderContext.scene); refreshSkinRuntime(); refreshMultiuserNodeReferences(currentDocument);
     succeeded = true;
     return true;
   } catch (error) {
@@ -11747,6 +11762,7 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
 
   if (renderContext?.scene) {
     refreshAnimationControllers(renderContext.scene);
+    refreshSkinRuntime();
   }
 
   return instancedObjectsByNodeId.has(nodeId);
@@ -11983,6 +11999,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
     registerSceneSubtree(detailed);
     markLoadedAndCleanup();
     refreshAnimationControllers(context.scene);
+    refreshSkinRuntime();
   } catch (error) {
     console.warn('[SceneViewer] 延迟资源加载失败', error);
     cleanupState();
@@ -15345,6 +15362,45 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
   refreshCharacterControllerAnimationRuntimeEntries();
   refreshCharacterPathFollowRuntimeEntries();
   refreshEffectRuntimeTickers();
+}
+
+function refreshSkinRuntime(): void {
+  const activeKeys = new Set<string>();
+  const missingAssetIds = new Set<string>();
+
+  nodeObjectMap.forEach((_object, nodeId) => {
+    const node = resolveNodeById(nodeId);
+    const component = node?.components?.[SKIN_COMPONENT_TYPE] as SceneNodeComponentState<SkinComponentProps> | undefined;
+    if (!component || !component.id || component.enabled === false) {
+      return;
+    }
+    const key = `${nodeId}\u0001${component.id}`;
+    activeKeys.add(key);
+    const props = clampSkinComponentProps(component.props);
+    getMissingSkinAssetIds(props).forEach((assetId) => missingAssetIds.add(assetId));
+    syncSkinRuntimeForNode({
+      nodeId,
+      componentId: component.id,
+      runtimeObject: nodeObjectMap.get(nodeId) ?? null,
+      props,
+      loadAsset: (assetId) => (
+        viewerResourceCache ? loadAssetObject(viewerResourceCache, assetId) : Promise.resolve(null)
+      ),
+    });
+  });
+  cleanupInactiveSkinAttachments(activeKeys);
+
+  if (missingAssetIds.size && viewerResourceCache) {
+    const resourceCache = viewerResourceCache;
+    const requestedIds = Array.from(missingAssetIds);
+    void (async () => {
+      await Promise.all(requestedIds.map((assetId) => (
+        getOrLoadSkinAsset(assetId, () => loadAssetObject(resourceCache, assetId))
+      )));
+      // 外部换装资产加载完成后重新同步，使槽位挂件进入对应角色节点。
+      refreshSkinRuntime();
+    })();
+  }
 }
 
 function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
@@ -20553,6 +20609,7 @@ function teardownRenderer() {
   activeBehaviorDelayTimers.clear();
   clearBehaviorSounds();
   resetAnimationControllers();
+  resetSkinRuntime();
   pendingRuntimePrefabSpawnRequests.length = 0;
   appliedRuntimePrefabSpawnKeys.clear();
   pendingDefaultSteerDriveEvent.value = null;
@@ -21069,6 +21126,7 @@ async function mountGraphAndSyncSubsystems(
     active: true,
   });
   refreshAnimationControllers(root);
+  refreshSkinRuntime();
   ensureBehaviorTapHandler(canvas, camera);
   await yieldToMainThread();
 
@@ -21163,6 +21221,7 @@ async function mountGraphAndSyncSubsystems(
     active: true,
   });
   refreshAnimationControllers(root);
+  refreshSkinRuntime();
   await yieldToMainThread();
 
   setSceneInitState({
@@ -21439,6 +21498,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   activeBehaviorDelayTimers.clear();
   clearBehaviorSounds();
   resetAnimationControllers();
+  resetSkinRuntime();
   pendingRuntimePrefabSpawnRequests.length = 0;
   appliedRuntimePrefabSpawnKeys.clear();
   pendingDefaultSteerDriveEvent.value = null;
@@ -21503,6 +21563,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
   resetExternalAnimationAssetCache();
+  resetSkinRuntime();
   viewerResourceCache = null;
   overlaySyncForceNextUpdate = true;
 }

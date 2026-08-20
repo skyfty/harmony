@@ -32,6 +32,7 @@ import './definitions/boundaryWallComponent'
 import './definitions/modelCollisionComponent'
 import './definitions/proceduralCityComponent'
 import './definitions/generalMeshComponent'
+import './definitions/skinComponent'
 
 export {
 	componentManager,
@@ -81,3 +82,4 @@ export * from './definitions/boundaryWallComponent'
 export * from './definitions/modelCollisionComponent'
 export * from './definitions/proceduralCityComponent'
 export * from './definitions/generalMeshComponent'
+export * from './definitions/skinComponent'

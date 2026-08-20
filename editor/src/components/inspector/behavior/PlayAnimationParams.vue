@@ -113,6 +113,7 @@ async function loadClipsForTarget(nodeId: string | null) {
     const nextOptions = await collectAnimationClipOptionsWithExternalAsset(
       runtimeObject,
       animationComponent?.animationAssetId,
+      ownerNode.sourceAssetId ?? null,
     )
     if (requestId === clipLoadRequestId) {
       clipOptions.value = nextOptions

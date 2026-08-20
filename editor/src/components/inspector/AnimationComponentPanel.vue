@@ -141,6 +141,7 @@ async function loadClipsForNode(nodeId: string | null) {
     const nextOptions = await collectAnimationClipOptionsWithExternalAsset(
       runtimeObject,
       normalizedProps.value.animationAssetId,
+      selectedNode.value?.sourceAssetId ?? null,
     )
     if (requestId === clipLoadRequestId) {
       clipOptions.value = nextOptions
@@ -244,9 +245,6 @@ watch(
               <v-icon size="16">mdi-close</v-icon>
             </v-btn>
           </div>
-          <p class="animation-component-panel__message">
-            Selected animation clips override the model's built-in clips (external wins on same clip name, built-in used as fallback).
-          </p>
         </div>
 
         <v-select

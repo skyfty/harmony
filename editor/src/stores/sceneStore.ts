@@ -300,6 +300,7 @@ import { installPlanningImagesResolver } from '@/utils/planningImageComponentRes
 import { rebuildOptimizedGroundMeshForDefinition } from '@/utils/groundOptimizedMeshExport'
 import type {
   AnimationComponentProps,
+  SkinComponentProps,
   BillboardComponentProps,
   DisplayBoardComponentProps,
   GuideRouteComponentProps,
@@ -323,6 +324,7 @@ import type {
 } from '@schema/components'
 import {
   ANIMATION_COMPONENT_TYPE,
+  SKIN_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
   ROAD_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
@@ -408,6 +410,7 @@ export type HierarchyDropPosition = 'before' | 'after' | 'inside'
 
 type NodeComponentPropsByType = {
   [ANIMATION_COMPONENT_TYPE]: AnimationComponentProps
+  [SKIN_COMPONENT_TYPE]: SkinComponentProps
   [WALL_COMPONENT_TYPE]: WallComponentProps
   [ROAD_COMPONENT_TYPE]: RoadComponentProps
   [FLOOR_COMPONENT_TYPE]: FloorComponentProps
