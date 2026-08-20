@@ -59,7 +59,26 @@ function slotAssetName(key: SkinSlotKey): string | null {
   if (!assetId) {
     return null
   }
-  return sceneStore.collectCatalogAssetMap().get(assetId)?.name ?? assetId
+  return slotAsset(key)?.name ?? assetId
+}
+
+function slotAsset(key: SkinSlotKey): ProjectAsset | null {
+  const assetId = normalizedProps.value[key]
+  if (!assetId) {
+    return null
+  }
+  return sceneStore.getAsset(assetId) ?? null
+}
+
+function slotAssetThumbnailStyle(key: SkinSlotKey): Record<string, string> | undefined {
+  const asset = slotAsset(key)
+  if (!asset) {
+    return undefined
+  }
+  if (asset.thumbnail?.trim()) {
+    return { backgroundImage: `url(${asset.thumbnail})` }
+  }
+  return asset.previewColor ? { backgroundColor: asset.previewColor } : undefined
 }
 
 function openAssetPicker(key: SkinSlotKey, event?: MouseEvent): void {
@@ -206,16 +225,23 @@ watch(
               </span>
             </div>
             <div class="skin-component-panel__asset-row">
-              <v-btn
-                variant="tonal"
-                density="compact"
-                prepend-icon="mdi-paperclip"
-                class="skin-component-panel__asset-button"
-                :disabled="!componentEnabled"
-                @click="openAssetPicker(slot.key, $event)"
+              <div
+                class="wall-asset-model-picker"
+                :class="{ 'is-disabled': !componentEnabled }"
               >
-                {{ slotAssetName(slot.key) ?? 'Select model asset' }}
-              </v-btn>
+                <div
+                  class="asset-thumbnail"
+                  :class="{ placeholder: !slotAsset(slot.key) }"
+                  :style="slotAssetThumbnailStyle(slot.key)"
+                  :title="slotAssetName(slot.key) ?? 'Select model asset'"
+                  @click.stop="openAssetPicker(slot.key, $event)"
+                />
+              </div>
+              <div class="skin-component-panel__asset-text">
+                <span class="asset-name">
+                  {{ slotAssetName(slot.key) ?? 'Select model asset' }}
+                </span>
+              </div>
               <v-btn
                 v-if="normalizedProps[slot.key]"
                 icon
@@ -317,15 +343,47 @@ watch(
 .skin-component-panel__asset-row {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.6rem;
 }
 
-.skin-component-panel__asset-button {
+.skin-component-panel__asset-text {
   flex: 1 1 auto;
   min-width: 0;
-  justify-content: flex-start;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.asset-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.wall-asset-model-picker {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.wall-asset-model-picker.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.asset-thumbnail {
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+}
+
+.asset-thumbnail.placeholder {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));
 }
 
 .component-menu-btn {
