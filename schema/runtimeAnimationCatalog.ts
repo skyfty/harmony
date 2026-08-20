@@ -114,25 +114,6 @@ export function collectAnimationClipCatalog(runtimeObject: THREE.Object3D | null
   return entries
 }
 
-export function collectAnimationClipsFromObjects(
-  objects: Array<THREE.Object3D | null | undefined>,
-): THREE.AnimationClip[] {
-  const clips: THREE.AnimationClip[] = []
-  const seen = new Set<THREE.AnimationClip>()
-  objects.forEach((object) => {
-    if (!object) {
-      return
-    }
-    collectAnimationClips(object).forEach((clip) => {
-      if (!seen.has(clip)) {
-        seen.add(clip)
-        clips.push(clip)
-      }
-    })
-  })
-  return clips
-}
-
 /**
  * 合并内置与外部动画片段：同名 clip 以外部为准；外部独有的片段追加；
  * 没有外部片段时完全回退到内置动画。

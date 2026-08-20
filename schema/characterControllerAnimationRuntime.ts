@@ -129,35 +129,6 @@ export function resolveCharacterControllerAnimationBindings(
 	})
 }
 
-/**
- * 找出所有“目标动画节点为 animationNodeId”的角色控制器所引用的外部动画资产。
- * 同一目标节点可以挂多个角色控制器，返回去重后的资产 ID 列表。
- */
-export function resolveCharacterControllerExternalAnimationAssetIds(
-	iterNodes: () => Iterable<[string, SceneNode]>,
-	animationNodeId: string,
-): string[] {
-	const assetIds: string[] = []
-	const seen = new Set<string>()
-	for (const [, node] of iterNodes()) {
-		const component = resolveCharacterControllerComponentForNode(node)
-		if (!component) {
-			continue
-		}
-		const props = clampCharacterControllerComponentProps(component.props)
-		const targetNodeId = normalizeNodeId(props.targetNodeId) ?? node.id
-		if (targetNodeId !== animationNodeId) {
-			continue
-		}
-		const assetId = normalizeNodeId(props.animationAssetId)
-		if (assetId && !seen.has(assetId)) {
-			seen.add(assetId)
-			assetIds.push(assetId)
-		}
-	}
-	return assetIds
-}
-
 export class CharacterControllerAnimationRuntimeManager {
 	private readonly entries = new Map<string, CharacterControllerAnimationRuntimeEntry>()
 	private readonly overrideNodeIdByToken = new Map<string, string>()

@@ -214,6 +214,7 @@ import {
 	behaviorComponentDefinition,
 	ANIMATION_COMPONENT_TYPE,
 	type AnimationComponentProps,
+	clampAnimationComponentProps,
 	billboardComponentDefinition,
 	guideboardComponentDefinition,
 	displayBoardComponentDefinition,
@@ -276,10 +277,7 @@ import {
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@schema/components'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
-import {
-	CharacterControllerAnimationRuntimeManager,
-	resolveCharacterControllerExternalAnimationAssetIds,
-} from '@schema/characterControllerAnimationRuntime'
+import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
 import {
 	collectCachedExternalAnimationClips,
 	getOrLoadExternalAnimationObject,
@@ -14436,10 +14434,8 @@ function refreshAnimations() {
 		}
 		const sourceNodeId = nodeId
 		const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null
-		const externalAssetIds = resolveCharacterControllerExternalAnimationAssetIds(
-			() => previewNodeMap.entries(),
-			nodeId,
-		)
+		const externalAssetId = clampAnimationComponentProps(component.props).animationAssetId
+		const externalAssetIds = externalAssetId ? [externalAssetId] : []
 		const externalClips: THREE.AnimationClip[] = []
 		externalAssetIds.forEach((assetId) => {
 			collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip))

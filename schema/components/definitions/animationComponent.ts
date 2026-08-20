@@ -8,6 +8,12 @@ export const ANIMATION_COMPONENT_TYPE = 'animationComponent'
 
 export interface AnimationComponentProps {
   defaultClipName: string | null
+  /**
+   * 外部动画资产（资产库中的 GLB/FBX 等模型资产）。
+   * 该资产中的动画片段会合并进当前节点的动画运行时，同名 clip 以外部为准；
+   * 未选择或外部无 clip 时回退到模型内置动画。
+   */
+  animationAssetId: string | null
   autoplay: boolean
   loop: boolean
   timeScale: number
@@ -31,11 +37,17 @@ function clampFiniteNumber(value: unknown, fallback: number): number {
   return Number.isFinite(numeric) ? numeric : fallback
 }
 
+function sanitizeAssetId(value: unknown): string | null {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed.length ? trimmed : null
+}
+
 export function clampAnimationComponentProps(
   props: Partial<AnimationComponentProps> | null | undefined,
 ): AnimationComponentProps {
   return {
     defaultClipName: sanitizeAnimationClipName(props?.defaultClipName),
+    animationAssetId: sanitizeAssetId(props?.animationAssetId),
     autoplay: clampBoolean(props?.autoplay, true),
     loop: clampBoolean(props?.loop, true),
     timeScale: clampFiniteNumber(props?.timeScale, 1),
@@ -47,6 +59,7 @@ export function cloneAnimationComponentProps(
 ): AnimationComponentProps {
   return {
     defaultClipName: props.defaultClipName,
+    animationAssetId: props.animationAssetId,
     autoplay: props.autoplay,
     loop: props.loop,
     timeScale: props.timeScale,

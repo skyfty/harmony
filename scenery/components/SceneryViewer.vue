@@ -762,12 +762,10 @@ type RigidbodyComponentProps = any;
 import {
   animationComponentDefinition,
   ANIMATION_COMPONENT_TYPE,
+  clampAnimationComponentProps,
   type AnimationComponentProps,
 } from '@harmony/schema/components/definitions/animationComponent';
-import {
-  CharacterControllerAnimationRuntimeManager,
-  resolveCharacterControllerExternalAnimationAssetIds,
-} from '@harmony/schema/characterControllerAnimationRuntime';
+import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
 import {
   collectCachedExternalAnimationClips,
   getOrLoadExternalAnimationObject,
@@ -15313,10 +15311,8 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
     }
     const sourceNodeId = nodeId;
     const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null;
-    const externalAssetIds = resolveCharacterControllerExternalAnimationAssetIds(
-      () => previewNodeMap.entries(),
-      nodeId,
-    );
+    const externalAssetId = clampAnimationComponentProps(component.props).animationAssetId;
+    const externalAssetIds = externalAssetId ? [externalAssetId] : [];
     const externalClips: THREE.AnimationClip[] = [];
     externalAssetIds.forEach((assetId) => {
       collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip));

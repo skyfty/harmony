@@ -2,14 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import NodePicker from '@/components/common/NodePicker.vue'
-import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
-import type { ProjectAsset } from '@/types/project-asset'
-import { useAssetCacheStore } from '@/stores/assetCacheStore'
-import { createFileFromEntry } from '@schema/modelAssetLoader'
-import { loadObjectFromFile } from '@schema/assetImport'
-import { collectAnimationClipCatalog, collectAnimationClips, sanitizeAnimationClipName } from '@schema/runtimeAnimationCatalog'
-import { getOrLoadExternalAnimationObject } from '@schema/externalAnimationAssetCache'
-import type { Object3D } from 'three'
 import {
   ANIMATION_COMPONENT_TYPE,
   CHARACTER_ANIMATION_ADVANCED_SLOTS,
@@ -24,10 +16,10 @@ import {
 } from '@schema/components'
 import type { SceneNodeComponentState } from '@schema/core'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
+import { collectAnimationClipCatalog } from '@schema/runtimeAnimationCatalog'
 import { findSceneNodeById } from '@/utils/animationClipCatalog'
 
 const sceneStore = useSceneStore()
-const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId, nodes } = storeToRefs(sceneStore)
 
 const component = computed(() =>
@@ -53,74 +45,10 @@ const animationComponent = computed(() =>
 const clipOptions = ref<Array<{ label: string; value: string }>>([])
 const isLoadingClips = ref(false)
 const clipLoadError = ref<string | null>(null)
-const externalAnimationAssetDialogVisible = ref(false)
-const externalAnimationAssetDialogSelectedId = ref('')
-const externalAnimationAssetAnchor = ref<{ x: number; y: number } | null>(null)
 const advancedMovementExpanded = ref(false)
 const advancedCameraExpanded = ref(false)
 const advancedBindingsExpanded = ref(false)
 let clipLoadRequestId = 0
-
-const externalAnimationAssetName = computed(() => {
-  const assetId = normalizedProps.value.animationAssetId
-  if (!assetId) {
-    return null
-  }
-  return sceneStore.collectCatalogAssetMap().get(assetId)?.name ?? assetId
-})
-
-function openExternalAnimationAssetDialog(event?: MouseEvent): void {
-  externalAnimationAssetDialogSelectedId.value = normalizedProps.value.animationAssetId ?? ''
-  externalAnimationAssetAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
-  externalAnimationAssetDialogVisible.value = true
-}
-
-function handleExternalAnimationAssetUpdate(asset: ProjectAsset | null): void {
-  updateField('animationAssetId', asset?.id ?? null)
-  externalAnimationAssetDialogVisible.value = false
-}
-
-function handleExternalAnimationAssetCancel(): void {
-  externalAnimationAssetDialogVisible.value = false
-}
-
-function clearExternalAnimationAsset(): void {
-  updateField('animationAssetId', null)
-}
-
-async function loadExternalAnimationObject(assetId: string): Promise<Object3D | null> {
-  const entry = await assetCacheStore.ensureAssetEntry(assetId, { contentHash: assetId })
-  if (!entry) {
-    return null
-  }
-  const file = createFileFromEntry(assetId, entry)
-  if (!file) {
-    return null
-  }
-  const ext = file.name.split('.').pop()?.toLowerCase()
-  return loadObjectFromFile(file, ext)
-}
-
-function mergeClipOptions(
-  external: Array<{ label: string; value: string }>,
-  builtIn: Array<{ label: string; value: string }>,
-): Array<{ label: string; value: string }> {
-  const merged: Array<{ label: string; value: string }> = []
-  const seen = new Set<string>()
-  external.forEach((entry) => {
-    if (entry.value && !seen.has(entry.value)) {
-      seen.add(entry.value)
-      merged.push(entry)
-    }
-  })
-  builtIn.forEach((entry) => {
-    if (entry.value && !seen.has(entry.value)) {
-      seen.add(entry.value)
-      merged.push(entry)
-    }
-  })
-  return merged
-}
 const forwardAxisItems: Array<{ label: string; value: CharacterForwardAxis }> = CHARACTER_FORWARD_AXIS_OPTIONS.map((value) => ({
   value,
   label:
@@ -238,25 +166,8 @@ async function loadClipsForNode(nodeId: string) {
     }
 
     const clipEntries = collectAnimationClipCatalog(runtimeObject)
-    const externalAssetId = normalizedProps.value.animationAssetId
-    let externalClipEntries: Array<{ label: string; value: string }> = []
-    if (externalAssetId) {
-      const externalObject = await getOrLoadExternalAnimationObject(
-        externalAssetId,
-        () => loadExternalAnimationObject(externalAssetId),
-      )
-      if (externalObject) {
-        externalClipEntries = collectAnimationClips(externalObject)
-          .map((clip) => {
-            const value = sanitizeAnimationClipName(clip.name)
-            return value ? { label: value, value } : null
-          })
-          .filter((entry): entry is { label: string; value: string } => Boolean(entry))
-      }
-    }
-    const mergedClipEntries = mergeClipOptions(externalClipEntries, clipEntries)
     if (requestId === clipLoadRequestId) {
-      clipOptions.value = mergedClipEntries
+      clipOptions.value = clipEntries
     }
   } catch (error) {
     console.warn('[CharacterControllerPanel] Failed to load animation clips', error)
@@ -271,13 +182,7 @@ async function loadClipsForNode(nodeId: string) {
 }
 
 watch(
-  () => [
-    selectedNodeId.value,
-    component.value?.id ?? null,
-    animationComponent.value?.id ?? null,
-    animationSourceNodeId.value,
-    normalizedProps.value.animationAssetId,
-  ] as const,
+  () => [selectedNodeId.value, component.value?.id ?? null, animationComponent.value?.id ?? null, animationSourceNodeId.value] as const,
   ([nodeId, componentId]) => {
     if (!componentId || !nodeId) {
       clipOptions.value = []
@@ -364,36 +269,6 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
             :disabled="!componentEnabled"
             @update:modelValue="handleTargetNodeIdChange"
           />
-        </div>
-
-        <div class="character-controller-panel__field">
-          <div class="character-controller-panel__field-label">External animation asset</div>
-          <div class="character-controller-panel__asset-row">
-            <v-btn
-              variant="tonal"
-              density="compact"
-              prepend-icon="mdi-movie-open-play"
-              class="character-controller-panel__asset-button"
-              :disabled="!componentEnabled"
-              @click="openExternalAnimationAssetDialog"
-            >
-              {{ externalAnimationAssetName ?? 'Select animation asset' }}
-            </v-btn>
-            <v-btn
-              v-if="normalizedProps.animationAssetId"
-              icon
-              size="x-small"
-              variant="text"
-              density="compact"
-              :disabled="!componentEnabled"
-              @click="clearExternalAnimationAsset"
-            >
-              <v-icon size="16">mdi-close</v-icon>
-            </v-btn>
-          </div>
-          <p class="character-controller-panel__note">
-            Selected animation clips override the target model's built-in clips (external wins on same clip name, built-in used as fallback).
-          </p>
         </div>
 
         <v-select
@@ -619,15 +494,6 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
         </div>
       </div>
 
-      <AssetPickerDialog
-        v-model="externalAnimationAssetDialogVisible"
-        :asset-id="externalAnimationAssetDialogSelectedId"
-        assetType="model,mesh"
-        title="Select External Animation Asset"
-        :anchor="externalAnimationAssetAnchor"
-        @update:asset="handleExternalAnimationAssetUpdate"
-        @cancel="handleExternalAnimationAssetCancel"
-      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -663,20 +529,6 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-}
-
-.character-controller-panel__asset-row {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.character-controller-panel__asset-button {
-  flex: 1 1 auto;
-  min-width: 0;
-  justify-content: flex-start;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .character-controller-panel__section {

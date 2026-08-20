@@ -8,7 +8,7 @@ import {
 } from '@schema/components'
 import NodePicker from '@/components/common/NodePicker.vue'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
-import { collectAnimationClipCatalog } from '@schema/runtimeAnimationCatalog'
+import { collectAnimationClipOptionsWithExternalAsset } from '@/utils/externalAnimationClipOptions'
 import { findSceneNodeById } from '@/utils/animationClipCatalog'
 
 const props = defineProps<{
@@ -110,8 +110,12 @@ async function loadClipsForTarget(nodeId: string | null) {
       await sceneStore.ensureSceneAssetsReady({ nodes: [ownerNode], showOverlay: false, refreshViewport: false })
       runtimeObject = getRuntimeObject(ownerNode.id)
     }
+    const nextOptions = await collectAnimationClipOptionsWithExternalAsset(
+      runtimeObject,
+      animationComponent?.animationAssetId,
+    )
     if (requestId === clipLoadRequestId) {
-      clipOptions.value = collectAnimationClipCatalog(runtimeObject)
+      clipOptions.value = nextOptions
     }
   } catch (error) {
     console.warn('[PlayAnimationParams] Failed to load animation clips', error)
