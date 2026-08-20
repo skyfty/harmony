@@ -3,6 +3,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import type ResourceCache from './ResourceCache'
 import type { AssetCacheEntry } from './assetCache'
 import type { SceneNodeImportMetadata } from './core'
+import { getExtensionFromMimeType, getLastExtensionFromFilenameOrUrl } from './assetTypeConversion'
 
 let assetImportModulePromise: Promise<typeof import('./assetImport')> | null = null
 
@@ -37,7 +38,7 @@ function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
 }
 
 export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): File | null {
-  const filename = entry.filename && entry.filename.trim().length ? entry.filename : `${assetId}.glb`
+  const filename = inferEntryFilename(assetId, entry)
   const mimeType = entry.mimeType ?? 'application/octet-stream'
 
   if (entry.blob instanceof File) {
@@ -53,6 +54,18 @@ export function createFileFromEntry(assetId: string, entry: AssetCacheEntry): Fi
   }
 
   return null
+}
+
+function inferEntryFilename(assetId: string, entry: AssetCacheEntry): string {
+  const explicitFilename = entry.filename?.trim()
+  if (explicitFilename) {
+    return explicitFilename
+  }
+  const extension =
+    getLastExtensionFromFilenameOrUrl(entry.downloadUrl) ??
+    getExtensionFromMimeType(entry.mimeType) ??
+    'glb'
+  return `${assetId}.${extension}`
 }
 
 export async function loadAssetObject(resourceCache: ResourceCache, assetId: string): Promise<THREE.Object3D | null> {

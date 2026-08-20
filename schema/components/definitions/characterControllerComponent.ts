@@ -56,6 +56,12 @@ export interface CharacterAnimationBinding {
 export interface CharacterControllerComponentProps {
   label: string
   targetNodeId: string | null
+  /**
+   * 外部动画资产（资产库中的 GLB/FBX 等模型资产）。
+   * 关联到 targetNodeId 指定的模型后，该资产中的动画片段会优先于模型内置动画播放
+   * （同名 clip 以外部为准；外部没有时回退到内置动画）。
+   */
+  animationAssetId: string | null
   forwardAxis: CharacterForwardAxis
   cameraFollowDistance: number
   cameraFollowHeight: number
@@ -99,6 +105,10 @@ function sanitizeClipName(value: unknown): string | null {
 function normalizeNodeId(value: unknown): string | null {
   const trimmed = sanitizeString(value)
   return trimmed.length ? trimmed : null
+}
+
+function sanitizeAssetId(value: unknown): string | null {
+  return normalizeNodeId(value)
 }
 
 function hasAnimationComponent(node: SceneNode | null | undefined): boolean {
@@ -155,6 +165,7 @@ export function clampCharacterControllerComponentProps(
   return {
     label: sanitizeString(props?.label) || 'Character Controller',
     targetNodeId: normalizeNodeId(props?.targetNodeId),
+    animationAssetId: sanitizeAssetId(props?.animationAssetId),
     forwardAxis: normalizeForwardAxis(props?.forwardAxis),
     cameraFollowDistance: sanitizeNumber(props?.cameraFollowDistance, DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE, 0.1, 100),
     cameraFollowHeight: sanitizeNumber(props?.cameraFollowHeight, DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT, 0, 100),
@@ -178,6 +189,7 @@ export function cloneCharacterControllerComponentProps(
   return {
     label: props.label,
     targetNodeId: props.targetNodeId,
+    animationAssetId: props.animationAssetId,
     forwardAxis: props.forwardAxis,
     cameraFollowDistance: props.cameraFollowDistance,
     cameraFollowHeight: props.cameraFollowHeight,

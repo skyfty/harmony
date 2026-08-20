@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import {
   collectAnimationClips,
+  mergeAnimationClipsWithExternalPrecedence,
   findAnimationClipByName,
   sanitizeAnimationClipName,
 } from './runtimeAnimationCatalog'
@@ -9,6 +10,11 @@ export interface AnimationRuntimeRegistration {
   nodeId: string
   sourceNodeId: string
   runtimeObject: THREE.Object3D | null
+  /**
+   * 外部动画资产的 clip。同名 clip 会覆盖模型内置动画（外部优先）；
+   * 没有外部 clip 时完全使用内置动画。
+   */
+  externalClips?: THREE.AnimationClip[]
   defaultClipName: string | null
   autoplay: boolean
   loop: boolean
@@ -43,6 +49,7 @@ type AnimationRuntimeController = {
   activeClipName: string | null
   activeLoop: boolean
   activeTimeScale: number
+  externalClipSignature: string | null
 }
 
 function normalizeAnimationLoop(value: unknown, fallback: boolean): boolean {
@@ -123,7 +130,14 @@ export class SceneAnimationRuntimeManager {
   }
 
   sync(registration: AnimationRuntimeRegistration): void {
-    const clips = collectAnimationClips(registration.runtimeObject)
+    const builtInClips = registration.runtimeObject ? collectAnimationClips(registration.runtimeObject) : []
+    const externalClips = Array.isArray(registration.externalClips)
+      ? registration.externalClips.filter((clip): clip is THREE.AnimationClip => Boolean(clip))
+      : []
+    const clips = mergeAnimationClipsWithExternalPrecedence(builtInClips, externalClips)
+    const nextExternalClipSignature = externalClips
+      .map((clip) => sanitizeAnimationClipName(clip.name) ?? clip.uuid)
+      .join('\u0001')
     if (!registration.runtimeObject || !clips.length) {
       this.unregister(registration.nodeId)
       return
@@ -138,6 +152,7 @@ export class SceneAnimationRuntimeManager {
       existing
       && existing.runtimeObject === registration.runtimeObject
       && existing.sourceNodeId === registration.sourceNodeId
+      && existing.externalClipSignature === nextExternalClipSignature
     ) {
       existing.clips = clips
       existing.defaultClipName = nextDefaultClipName
@@ -164,6 +179,7 @@ export class SceneAnimationRuntimeManager {
       activeClipName: null,
       activeLoop: false,
       activeTimeScale: 1,
+      externalClipSignature: nextExternalClipSignature,
     }
     this.controllers.set(registration.nodeId, controller)
     this.restoreDefaultNodeAnimation(registration.nodeId)

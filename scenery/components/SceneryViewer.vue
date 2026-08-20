@@ -628,7 +628,7 @@ import {
   type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
   syncBodyFromObject as syncSharedBodyFromObject,
 } from '@harmony/schema/physicsBodySync';
-import { loadNodeObject } from '@harmony/schema/modelAssetLoader';
+import { loadAssetObject, loadNodeObject } from '@harmony/schema/modelAssetLoader';
 
 import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
 import {
@@ -764,7 +764,16 @@ import {
   ANIMATION_COMPONENT_TYPE,
   type AnimationComponentProps,
 } from '@harmony/schema/components/definitions/animationComponent';
-import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
+import {
+  CharacterControllerAnimationRuntimeManager,
+  resolveCharacterControllerExternalAnimationAssetIds,
+} from '@harmony/schema/characterControllerAnimationRuntime';
+import {
+  collectCachedExternalAnimationClips,
+  getOrLoadExternalAnimationObject,
+  hasCachedExternalAnimationObject,
+  resetExternalAnimationAssetCache,
+} from '@harmony/schema/externalAnimationAssetCache';
 
 import {
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
@@ -15294,6 +15303,7 @@ function restartDefaultAnimation(nodeId: string): void {
 function refreshAnimationControllers(root: THREE.Object3D): void {
   void root;
   resetAnimationControllers();
+  const missingExternalAssetIds = new Set<string>();
   nodeObjectMap.forEach((_object, nodeId) => {
     const node = resolveNodeById(nodeId);
     const component = node?.components?.[ANIMATION_COMPONENT_TYPE] as SceneNodeComponentState<AnimationComponentProps> | undefined;
@@ -15303,16 +15313,39 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
     }
     const sourceNodeId = nodeId;
     const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null;
+    const externalAssetIds = resolveCharacterControllerExternalAnimationAssetIds(
+      () => previewNodeMap.entries(),
+      nodeId,
+    );
+    const externalClips: THREE.AnimationClip[] = [];
+    externalAssetIds.forEach((assetId) => {
+      collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip));
+      if (!hasCachedExternalAnimationObject(assetId)) {
+        missingExternalAssetIds.add(assetId);
+      }
+    });
     nodeAnimationRuntime.sync({
       nodeId,
       sourceNodeId,
       runtimeObject,
+      externalClips,
       defaultClipName: component.props.defaultClipName,
       autoplay: component.props.autoplay,
       loop: component.props.loop,
       timeScale: component.props.timeScale,
     });
   });
+  if (missingExternalAssetIds.size && viewerResourceCache) {
+    const resourceCache = viewerResourceCache;
+    const requestedIds = Array.from(missingExternalAssetIds);
+    void (async () => {
+      await Promise.all(requestedIds.map((assetId) => (
+        getOrLoadExternalAnimationObject(assetId, () => loadAssetObject(resourceCache, assetId))
+      )));
+      // 外部动画资产加载完成后重新同步，使外部 clip 进入对应动画节点的运行时。
+      refreshAnimationControllers(root);
+    })();
+  }
   refreshCharacterControllerAnimationRuntimeEntries();
   refreshCharacterPathFollowRuntimeEntries();
   refreshEffectRuntimeTickers();
@@ -21473,6 +21506,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   clearRemoteMultiuserPeers();
   setActiveMultiuserRuntimeBridge(null);
   setActiveMultiuserSceneId(null);
+  resetExternalAnimationAssetCache();
   viewerResourceCache = null;
   overlaySyncForceNextUpdate = true;
 }

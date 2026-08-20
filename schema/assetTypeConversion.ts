@@ -149,6 +149,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   // models
   gltf: 'model/gltf+json',
   glb: 'model/gltf-binary',
+  fbx: 'model/fbx',
 
   // misc
   json: 'application/json',
@@ -341,6 +342,7 @@ export function inferExtFromMimeType(mimeType: string | null | undefined): strin
   if (normalized.includes('json')) return 'json'
   if (normalized.includes('gltf')) return 'gltf'
   if (normalized.includes('glb')) return 'glb'
+  if (normalized.includes('fbx')) return 'fbx'
   if (normalized.includes('mp3')) return 'mp3'
   if (normalized.includes('mp4')) return 'mp4'
   if (normalized.includes('octet-stream')) return 'bin'

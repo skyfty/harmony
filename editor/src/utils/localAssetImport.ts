@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { createGltfLoader } from '@schema/loader'
+import { createFbxLoader, createGltfLoader } from '@schema/loader'
 import {
   createThumbnailFromCanvas,
   generateAssetThumbnail,
@@ -95,7 +95,7 @@ export async function prepareLocalAssetImport(
     }
   }
 
-  if (MODEL_ASSET_TYPES.has(asset.type) && isGltfLikeFile(file)) {
+  if (MODEL_ASSET_TYPES.has(asset.type) && isModelImportFile(file)) {
     options.onPhase?.('extract-metadata')
     const object = await loadModelObject(file, options.signal)
 
@@ -150,9 +150,9 @@ export async function renderModelFileThumbnailDataUrl(
   }
 }
 
-function isGltfLikeFile(file: File): boolean {
+function isModelImportFile(file: File): boolean {
   const extension = extractExtension(file.name)?.toLowerCase()
-  return extension === 'glb' || extension === 'gltf'
+  return extension === 'glb' || extension === 'gltf' || extension === 'fbx'
 }
 
 function isKtx2File(file: File): boolean {
@@ -199,6 +199,20 @@ async function readImageMetadata(file: File, signal?: AbortSignal): Promise<{ wi
 async function loadModelObject(file: File, signal?: AbortSignal): Promise<THREE.Object3D> {
   assertNotAborted(signal)
   const extension = extractExtension(file.name)?.toLowerCase()
+
+  if (extension === 'fbx') {
+    const buffer = await file.arrayBuffer()
+    assertNotAborted(signal)
+    const loader = await createFbxLoader()
+    try {
+      const object = loader.parse(buffer, '')
+      return object ?? new THREE.Group()
+    } finally {
+      loader.dracoLoader?.dispose?.()
+      loader.ktx2Loader?.dispose?.()
+    }
+  }
+
   const loader = await createGltfLoader()
 
   try {

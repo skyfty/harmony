@@ -167,7 +167,7 @@ import {
 	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
 	syncBodyFromObject as syncSharedBodyFromObject,
 } from '@schema/physicsBodySync'
-import { loadNodeObject } from '@schema/modelAssetLoader'
+import { loadAssetObject, loadNodeObject } from '@schema/modelAssetLoader'
 import {
 	getCachedModelObject,
 	getOrLoadModelObject,
@@ -276,7 +276,16 @@ import {
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@schema/components'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
-import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
+import {
+	CharacterControllerAnimationRuntimeManager,
+	resolveCharacterControllerExternalAnimationAssetIds,
+} from '@schema/characterControllerAnimationRuntime'
+import {
+	collectCachedExternalAnimationClips,
+	getOrLoadExternalAnimationObject,
+	hasCachedExternalAnimationObject,
+	resetExternalAnimationAssetCache,
+} from '@schema/externalAnimationAssetCache'
 import {
 	createCapsuleCollisionWorld,
 	type CapsuleCollisionWorld,
@@ -11218,6 +11227,7 @@ function stopAnimationLoop() {
 }
 
 function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
+	resetExternalAnimationAssetCache()
 	clearBehaviorDelayTimers()
 	clearBehaviorSounds()
 	currentScenePreviewEnvironmentSettings = null
@@ -14416,6 +14426,7 @@ function prepareImportedObjectForPreview(object: THREE.Object3D): void {
 
 function refreshAnimations() {
 	resetAnimationControllers()
+	const missingExternalAssetIds = new Set<string>()
 
 	previewNodeMap.forEach((node, nodeId) => {
 		const component = node.components?.[ANIMATION_COMPONENT_TYPE] as SceneNodeComponentState<AnimationComponentProps> | undefined
@@ -14425,16 +14436,39 @@ function refreshAnimations() {
 		}
 		const sourceNodeId = nodeId
 		const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null
+		const externalAssetIds = resolveCharacterControllerExternalAnimationAssetIds(
+			() => previewNodeMap.entries(),
+			nodeId,
+		)
+		const externalClips: THREE.AnimationClip[] = []
+		externalAssetIds.forEach((assetId) => {
+			collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip))
+			if (!hasCachedExternalAnimationObject(assetId)) {
+				missingExternalAssetIds.add(assetId)
+			}
+		})
 		nodeAnimationRuntime.sync({
 			nodeId,
 			sourceNodeId,
 			runtimeObject,
+			externalClips,
 			defaultClipName: component.props.defaultClipName,
 			autoplay: component.props.autoplay,
 			loop: component.props.loop,
 			timeScale: component.props.timeScale,
 		})
 	})
+	if (missingExternalAssetIds.size && editorResourceCache) {
+		const resourceCache = editorResourceCache
+		const requestedIds = Array.from(missingExternalAssetIds)
+		void (async () => {
+			await Promise.all(requestedIds.map((assetId) => (
+				getOrLoadExternalAnimationObject(assetId, () => loadAssetObject(resourceCache, assetId))
+			)))
+			// 外部动画资产加载完成后重新同步，使外部 clip 进入对应动画节点的运行时。
+			refreshAnimations()
+		})()
+	}
 	refreshCharacterControllerAnimationRuntimeEntries()
 	refreshCharacterPathFollowRuntimeEntries()
 

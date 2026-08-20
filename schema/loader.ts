@@ -3,6 +3,7 @@ import * as THREE from 'three';
 // import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 // import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -173,27 +174,29 @@ export default class Loader {
               (result: any) => {
                 try {
                   const scene = result?.scene;
-                  if (!scene) {
-                    this.emit('error', new Error(`GLTF 场景对象为空 (${filename})`));
+                  const animations = Array.isArray(result?.animations) ? result.animations : [];
+                  if (!scene && !animations.length) {
+                    this.emit('error', new Error(`模型场景对象为空 (${filename})`));
                     return;
                   }
-                  scene.name = filename;
-                  const animations = Array.isArray(result?.animations) ? result.animations : [];
+                  // 纯动画 GLB 可能没有 scene（只有骨骼动画片段），此时用一个占位 Group 承载动画。
+                  const host = scene ?? new THREE.Group();
+                  host.name = filename;
                   if (animations.length) {
-                    (scene as unknown as { animations?: THREE.AnimationClip[] }).animations = animations;
-                    scene.userData = scene.userData ?? {};
-                    scene.userData.__animations = animations.map((clip: THREE.AnimationClip) => clip.name);
+                    (host as unknown as { animations?: THREE.AnimationClip[] }).animations = animations;
+                    host.userData = host.userData ?? {};
+                    host.userData.__animations = animations.map((clip: THREE.AnimationClip) => clip.name);
                   }
-                  this.emit('loaded', scene);
+                  this.emit('loaded', host);
                 } catch (error) {
-                  this.emit('error', toError(error, `GLTF 结果处理失败 (${filename})`));
+                  this.emit('error', toError(error, `模型结果处理失败 (${filename})`));
                 } finally {
                   disposeLoaderResources(loader);
                 }
               },
               (error: unknown) => {
                 try {
-                  this.emit('error', toError(error, `GLTF 解析失败 (${filename})`));
+                  this.emit('error', toError(error, `模型解析失败 (${filename})`));
                 } finally {
                   disposeLoaderResources(loader);
                 }
@@ -201,7 +204,37 @@ export default class Loader {
             );
           } catch (error) {
             disposeLoaderResources(loader);
-            this.emit('error', toError(error, `GLTF 加载器初始化失败 (${filename})`));
+            this.emit('error', toError(error, `模型加载器初始化失败 (${filename})`));
+          }
+        });
+        reader.readAsArrayBuffer(file);
+        break;
+      }
+
+      case 'fbx': {
+        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
+          const contents = event.target?.result as ArrayBuffer;
+          if (!contents) {
+            this.emit('error', new Error(`资源文件内容为空 (${filename})`));
+            return;
+          }
+
+          try {
+            const loader = new FBXLoader();
+            const scene: THREE.Object3D & { animations?: THREE.AnimationClip[] } = loader.parse(contents, '');
+            if (!scene) {
+              this.emit('error', new Error(`FBX 场景对象为空 (${filename})`));
+              return;
+            }
+            scene.name = filename;
+            const animations = Array.isArray(scene.animations) ? scene.animations : [];
+            if (animations.length) {
+              scene.userData = scene.userData ?? {};
+              scene.userData.__animations = animations.map((clip: THREE.AnimationClip) => clip.name);
+            }
+            this.emit('loaded', scene);
+          } catch (error) {
+            this.emit('error', toError(error, `FBX 解析失败 (${filename})`));
           }
         });
         reader.readAsArrayBuffer(file);
@@ -209,7 +242,7 @@ export default class Loader {
       }
 
       default:
-        // this.emit('error', new Error(`不支持的文件格式 (${ext})`));
+        this.emit('error', new Error(`不支持的文件格式 (${ext})`));
         break;
     }
   }
@@ -266,4 +299,8 @@ export async function createGltfLoader(options: GltfParseOptions = {}): Promise<
   //   disposeKtx2SupportRenderer(renderer);
   // }
   return loader;
+}
+
+export async function createFbxLoader(options: GltfParseOptions = {}): Promise<any> {
+  return new FBXLoader(options.manager);
 }

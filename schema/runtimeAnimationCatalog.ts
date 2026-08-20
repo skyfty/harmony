@@ -114,6 +114,81 @@ export function collectAnimationClipCatalog(runtimeObject: THREE.Object3D | null
   return entries
 }
 
+export function collectAnimationClipsFromObjects(
+  objects: Array<THREE.Object3D | null | undefined>,
+): THREE.AnimationClip[] {
+  const clips: THREE.AnimationClip[] = []
+  const seen = new Set<THREE.AnimationClip>()
+  objects.forEach((object) => {
+    if (!object) {
+      return
+    }
+    collectAnimationClips(object).forEach((clip) => {
+      if (!seen.has(clip)) {
+        seen.add(clip)
+        clips.push(clip)
+      }
+    })
+  })
+  return clips
+}
+
+/**
+ * 合并内置与外部动画片段：同名 clip 以外部为准；外部独有的片段追加；
+ * 没有外部片段时完全回退到内置动画。
+ */
+export function mergeAnimationClipsWithExternalPrecedence(
+  builtInClips: THREE.AnimationClip[],
+  externalClips: THREE.AnimationClip[],
+): THREE.AnimationClip[] {
+  const builtIn = Array.isArray(builtInClips) ? builtInClips : []
+  const external = Array.isArray(externalClips) ? externalClips : []
+  if (!external.length) {
+    return [...builtIn]
+  }
+  if (!builtIn.length) {
+    return [...external]
+  }
+
+  const byName = new Map<string, THREE.AnimationClip>()
+  const unnamed: THREE.AnimationClip[] = []
+  const remember = (clip: THREE.AnimationClip): void => {
+    const name = sanitizeAnimationClipName(clip?.name)
+    if (name) {
+      // 后写入的（外部）覆盖先写入的（内置）。
+      byName.set(name, clip)
+    } else {
+      unnamed.push(clip)
+    }
+  }
+
+  builtIn.forEach(remember)
+  external.forEach(remember)
+
+  const merged: THREE.AnimationClip[] = []
+  const seenNames = new Set<string>()
+  builtIn.forEach((clip) => {
+    const name = sanitizeAnimationClipName(clip?.name)
+    if (name && !seenNames.has(name)) {
+      seenNames.add(name)
+      merged.push(byName.get(name) ?? clip)
+    }
+  })
+  external.forEach((clip) => {
+    const name = sanitizeAnimationClipName(clip?.name)
+    if (name && !seenNames.has(name)) {
+      seenNames.add(name)
+      merged.push(clip)
+    }
+  })
+  unnamed.forEach((clip) => {
+    if (!merged.includes(clip)) {
+      merged.push(clip)
+    }
+  })
+  return merged
+}
+
 export function findAnimationClipByName(
   clips: THREE.AnimationClip[],
   clipName: string | null | undefined,
