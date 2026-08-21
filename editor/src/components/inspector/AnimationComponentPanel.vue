@@ -221,7 +221,6 @@ watch(
       <div class="animation-component-panel">
 
         <div class="animation-component-panel__field">
-          <div class="animation-component-panel__field-label">External animation asset</div>
           <div class="animation-component-panel__asset-row">
             <v-btn
               variant="tonal"
