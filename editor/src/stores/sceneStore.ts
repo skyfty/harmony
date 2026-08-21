@@ -192,6 +192,14 @@ import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { createFileFromEntry } from '@schema/modelAssetLoader'
+import {
+  cleanupInactiveSkinAttachments,
+  getMissingSkinAssetIds,
+  getOrLoadSkinAsset,
+  resetSkinRuntime,
+  syncSkinRuntimeForNode,
+} from '@schema/skinRuntime'
 import { markGroundOptimizedMeshReady } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
 import {
@@ -343,6 +351,7 @@ import {
   WALL_DEFAULT_REPEAT_INSTANCE_STEP,
   WALL_DEFAULT_THICKNESS,
   WALL_DEFAULT_WIDTH,
+  clampSkinComponentProps,
   clampWallProps,
   cloneWallComponentProps,
   ROAD_DEFAULT_WIDTH,
@@ -4584,6 +4593,7 @@ const runtimeObjectRegistry = new Map<string, Object3D>()
 let runtimeRefreshInFlight: Promise<void> | null = null
 
 export function clearRuntimeObjectRegistry() {
+  resetSkinRuntime()
   runtimeObjectRegistry.forEach((_object, nodeId) => {
     releaseModelInstance(nodeId)
     componentManager.detachRuntime(nodeId)
@@ -4607,6 +4617,71 @@ export function unregisterRuntimeObject(id: string) {
 
 export function getRuntimeObject(id: string): Object3D | null {
   return runtimeObjectRegistry.get(id) ?? null
+}
+
+async function loadEditorSkinAsset(assetId: string): Promise<Object3D | null> {
+  const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
+  if (!trimmed) {
+    return null
+  }
+  const sceneStore = useSceneStore()
+  const assetCache = useAssetCacheStore()
+  const asset = sceneStore.collectCatalogAssetMap().get(trimmed) ?? null
+  const entry = await assetCache.ensureAssetEntry(trimmed, {
+    asset: asset ?? undefined,
+    contentHash: asset?.contentHash ?? trimmed,
+  })
+  if (!entry) {
+    return null
+  }
+  const file = createFileFromEntry(trimmed, entry)
+  if (!file) {
+    return null
+  }
+  const ext = file.name.split('.').pop()?.toLowerCase()
+  return loadObjectFromFile(file, ext)
+}
+
+function refreshSkinRuntimeForScene(nodes: SceneNode[]): void {
+  const activeKeys = new Set<string>()
+  const missingAssetIds = new Set<string>()
+
+  const visit = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      const component = node.components?.[SKIN_COMPONENT_TYPE] as
+        | SceneNodeComponentState<SkinComponentProps>
+        | undefined
+      if (component && component.id && component.enabled !== false) {
+        const key = `${node.id}\u0001${component.id}`
+        activeKeys.add(key)
+        const props = clampSkinComponentProps(component.props)
+        syncSkinRuntimeForNode({
+          nodeId: node.id,
+          componentId: component.id,
+          runtimeObject: getRuntimeObject(node.id),
+          props,
+          loadAsset: (assetId) => loadEditorSkinAsset(assetId),
+        })
+        getMissingSkinAssetIds(props).forEach((assetId) => missingAssetIds.add(assetId))
+      }
+      if (node.children?.length) {
+        visit(node.children)
+      }
+    })
+  }
+  visit(nodes)
+  cleanupInactiveSkinAttachments(activeKeys)
+
+  if (missingAssetIds.size) {
+    const requestedIds = Array.from(missingAssetIds)
+    void (async () => {
+      await Promise.all(requestedIds.map((assetId) => (
+        getOrLoadSkinAsset(assetId, () => loadEditorSkinAsset(assetId))
+      )))
+      // 编辑器换装资产加载完成后重新同步，使槽位挂件进入对应角色运行时对象。
+      refreshSkinRuntimeForScene(nodes)
+    })()
+  }
 }
 
 function syncProceduralCityRuntimeForNode(nodeId: string, nodes: SceneNode[]): void {
@@ -9483,6 +9558,7 @@ export const useSceneStore = defineStore('scene', {
     syncAllNodeComponents() {
       reattachRuntimeObjectsForNodes(this.nodes)
       componentManager.syncScene(this.nodes)
+      refreshSkinRuntimeForScene(this.nodes)
     },
 
     initialize() {
@@ -12361,6 +12437,7 @@ export const useSceneStore = defineStore('scene', {
       if (result.queuedRuntimeRefreshPatches) {
         this.bumpSceneNodePropertyVersion()
       }
+      refreshSkinRuntimeForScene(this.nodes)
     },
 
     setNodeWorldPositionPositionOnly(nodeId: string, worldPosition: THREE.Vector3): boolean {
@@ -15344,6 +15421,7 @@ export const useSceneStore = defineStore('scene', {
 
       assetCache.touch(asset.id)
       commitSceneSnapshot(this)
+      refreshSkinRuntimeForScene(this.nodes)
       return true
     },
 
@@ -17570,6 +17648,7 @@ export const useSceneStore = defineStore('scene', {
         syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
       commitSceneSnapshot(this)
+      refreshSkinRuntimeForScene(this.nodes)
       return { component: requestedState, created: true }
     },
     removeNodeComponent(nodeId: string, componentId: string): boolean {
@@ -17598,6 +17677,7 @@ export const useSceneStore = defineStore('scene', {
         syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
       commitSceneSnapshot(this)
+      refreshSkinRuntimeForScene(this.nodes)
       return true
     },
     setNodeComponentEnabled(nodeId: string, componentId: string, enabled: boolean): boolean {
@@ -17632,6 +17712,7 @@ export const useSceneStore = defineStore('scene', {
         componentManager.syncNode(updatedNode)
         syncProceduralCityRuntimeForNode(nodeId, this.nodes)
       }
+      refreshSkinRuntimeForScene(this.nodes)
       return true
     },
     toggleNodeComponentEnabled(nodeId: string, componentId: string): boolean {
@@ -18351,6 +18432,7 @@ export const useSceneStore = defineStore('scene', {
         scheduleLandformGroundSplatBake(this, 'updateNodeComponentProps')
       }
       commitSceneSnapshot(this, { autoSaveMode: options.autoSaveMode })
+      refreshSkinRuntimeForScene(this.nodes)
       return true
     },
     updateNodeComponentMetadata(nodeId: string, componentId: string, metadata: Record<string, unknown> | undefined): boolean {
