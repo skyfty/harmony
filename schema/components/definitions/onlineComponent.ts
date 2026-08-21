@@ -12,6 +12,7 @@ import {
 	type MultiuserPeerPresentationState,
 	type MultiuserPeerSnapshot,
 	type MultiuserPeerState,
+	type MultiuserSkinSelection,
 	type MultiuserVehiclePresentation,
 } from '../../multiuserContext'
 import {
@@ -272,8 +273,19 @@ function cloneMultiuserPeerState(state: MultiuserPeerState): MultiuserPeerState 
     position: { ...state.position },
     quaternion: { ...state.quaternion },
     scale:  { ...state.scale },
+    skins: Array.isArray(state.skins) ? state.skins.map((skin) => ({ ...skin })) : state.skins,
     presentation: cloneMultiuserPeerPresentation(state.presentation ?? null),
   }
+}
+
+function getMultiuserSkinSignature(skins: MultiuserSkinSelection[] | null | undefined): string {
+  if (!Array.isArray(skins) || !skins.length) {
+    return ''
+  }
+  return skins
+    .map((skin) => `${skin.slotKey}:${skin.skinId}:${skin.prefabUrl}`)
+    .sort()
+    .join('|')
 }
 
 function cloneMultiuserNodeSyncPresentation(
@@ -308,6 +320,7 @@ function getMultiuserStateSignature(state: MultiuserPeerState): string {
     normalizeOptionalString(state.subjectIdentifier) ?? '',
     normalizeOptionalString(state.subjectAssetId) ?? '',
     normalizeOptionalString(state.subjectAssetUrl) ?? '',
+    getMultiuserSkinSignature(state.skins),
     state.position.x,
     state.position.y,
     state.position.z,
@@ -338,6 +351,9 @@ function isMultiuserStateMeaningfullyChanged(prev: MultiuserPeerState | null, ne
     return true
   }
   if (normalizeOptionalString(prev.subjectAssetUrl) !== normalizeOptionalString(next.subjectAssetUrl)) {
+    return true
+  }
+  if (getMultiuserSkinSignature(prev.skins) !== getMultiuserSkinSignature(next.skins)) {
     return true
   }
   if (getPresentationVectorSignature(prev.scale ?? null) !== getPresentationVectorSignature(next.scale ?? null)) {

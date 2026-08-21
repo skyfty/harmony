@@ -135,6 +135,29 @@ const BACKEND_MENU_TREE: MenuNode[] = [
     ],
   },
   {
+    name: 'Skins',
+    path: '/skins',
+    component: 'BasicLayout',
+    requiredPermissions: ['skin:read', 'product:read'],
+    meta: { icon: 'lucide:shirt', title: '皮肤管理' },
+    children: [
+      {
+        name: 'SkinsIndex',
+        path: '/skins',
+        component: '/views/skins/index.vue',
+        requiredPermissions: ['skin:read', 'product:read'],
+        meta: { icon: 'lucide:shirt', title: '皮肤管理' },
+      },
+      {
+        name: 'SkinCategories',
+        path: '/skins/categories',
+        component: '/views/skins/categories.vue',
+        requiredPermissions: ['skinCategory:read', 'product:read'],
+        meta: { icon: 'lucide:tags', title: '皮肤分类' },
+      },
+    ],
+  },
+  {
     name: 'Coupons',
     path: '/coupons',
     component: 'BasicLayout',

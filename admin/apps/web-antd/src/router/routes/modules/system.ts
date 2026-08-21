@@ -198,6 +198,34 @@ const routes: RouteRecordRaw[] = [
     ],
   },
   {
+    name: 'Skins',
+    path: '/skins',
+    meta: {
+      icon: 'lucide:shirt',
+      title: '皮肤管理',
+    },
+    children: [
+      {
+        name: 'SkinsIndex',
+        path: '',
+        component: () => import('#/views/skins/index.vue'),
+        meta: {
+          icon: 'lucide:shirt',
+          title: '皮肤管理',
+        },
+      },
+      {
+        name: 'SkinCategories',
+        path: 'categories',
+        component: () => import('#/views/skins/categories.vue'),
+        meta: {
+          icon: 'lucide:tags',
+          title: '皮肤分类',
+        },
+      },
+    ],
+  },
+  {
     name: 'Coupons',
     path: '/coupons',
     meta: {

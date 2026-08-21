@@ -534,6 +534,44 @@ export interface SkinRuntimeSyncOptions {
   loadAsset: (assetId: string) => Promise<THREE.Object3D | null>
 }
 
+export interface SkinAssetOverride {
+  slotKey: SkinSlotKey
+  assetId: string
+}
+
+export interface SyncSkinAssetsForObjectOptions {
+  nodeId?: string
+  componentId?: string
+  loadAsset: (assetId: string) => Promise<THREE.Object3D | null>
+}
+
+/**
+ * 直接把一组按槽位划分的皮肤资产挂到角色对象上（不依赖场景文档中的 skinComponent）。
+ * 用于多人在线远端角色与运行时动态生成的、已注入 skinComponent 的角色。
+ * 使用固定的合成 nodeId/componentId，重复调用会先 detach 旧挂件再重新挂载。
+ */
+export function syncSkinAssetsForObject(
+  runtimeObject: THREE.Object3D | null,
+  overrides: SkinAssetOverride[] | null | undefined,
+  options: SyncSkinAssetsForObjectOptions,
+): void {
+  const props = clampSkinComponentProps(null)
+  ;(Array.isArray(overrides) ? overrides : []).forEach((override) => {
+    const key = override?.slotKey
+    const value = typeof override?.assetId === 'string' ? override.assetId.trim() : ''
+    if (key && key in props && value) {
+      props[key] = value
+    }
+  })
+  syncSkinRuntimeForNode({
+    nodeId: options.nodeId ?? 'skin-override',
+    componentId: options.componentId ?? 'skin-override',
+    runtimeObject,
+    props,
+    loadAsset: options.loadAsset,
+  })
+}
+
 export function syncSkinRuntimeForNode(options: SkinRuntimeSyncOptions): void {
   const normalized = clampSkinComponentProps(options.props)
   detachSkinAttachments(options.nodeId, options.componentId)

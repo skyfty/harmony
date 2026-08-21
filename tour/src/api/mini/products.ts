@@ -2,6 +2,7 @@ import type { MiniPaymentAction } from '@mini-platform/core'
 import { miniRequest } from '@harmony/utils'
 import { ensureMiniAuth } from './session'
 import type { ControllableAsset, ControllableType } from './controllableAssets'
+import type { SkinSelectionItem } from './skins'
 
 export interface ProductCategoryItem {
   id: string
@@ -29,6 +30,9 @@ export interface ProductListItem {
   state?: 'locked' | 'unused' | 'used' | 'expired'
   controllableAsset?: (Pick<ControllableAsset, 'id' | 'identifier' | 'name' | 'type' | 'prefabUrl'> & {
     isDefault?: boolean
+    selected?: boolean
+  }) | null
+  skin?: (Pick<SkinSelectionItem, 'id' | 'identifier' | 'name' | 'categoryId' | 'categoryName' | 'slotKey' | 'prefabUrl'> & {
     selected?: boolean
   }) | null
 }

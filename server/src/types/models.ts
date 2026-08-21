@@ -624,6 +624,8 @@ export interface ProductDocument extends Document<Types.ObjectId> {
   controllableAssetId?: Types.ObjectId | null
   /** 中文：关联的可控对象类型（可选） */
   controllableType?: ControllableAssetType | null
+  /** 中文：关联的皮肤 ID（可选） */
+  skinId?: Types.ObjectId | null
   /** 中文：商品价格 */
   price: number
   /** 中文：封面 URL（可选） */
@@ -672,6 +674,66 @@ export interface UserControllableSelectionDocument extends Document<Types.Object
   userId: Types.ObjectId
   controllableType: ControllableAssetType
   controllableAssetId: Types.ObjectId
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type SkinSlotKey =
+  | 'hatAssetId'
+  | 'glassesAssetId'
+  | 'hairAssetId'
+  | 'topAssetId'
+  | 'pantsAssetId'
+  | 'shoesAssetId'
+
+export interface SkinCategoryDocument extends Document<Types.ObjectId> {
+  /** 中文：分类名称 */
+  name: string
+  /** 中文：绑定的皮肤槽位 key（与 SkinComponent 槽位一致，全局唯一，创建后不可修改） */
+  slotKey: SkinSlotKey
+  /** 中文：排序值 */
+  sortOrder: number
+  /** 中文：是否启用 */
+  enabled: boolean
+  /** 中文：分类描述（可选） */
+  description?: string | null
+  /** 中文：是否内置 */
+  isBuiltin: boolean
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
+  updatedAt: Date
+}
+
+export interface SkinDocument extends Document<Types.ObjectId> {
+  /** 中文：皮肤标识（分类内唯一） */
+  identifier: string
+  /** 中文：皮肤名称 */
+  name: string
+  /** 中文：皮肤分类 ID */
+  categoryId: Types.ObjectId
+  /** 中文：皮肤模型下载地址（资产管理下载链接） */
+  prefabUrl?: string
+  /** 中文：排序值 */
+  sortOrder: number
+  /** 中文：描述 */
+  description?: string
+  /** 中文：是否启用 */
+  isActive: boolean
+  /** 中文：关联商品 ID */
+  productId: Types.ObjectId
+  /** 中文：额外元数据 */
+  metadata?: Record<string, unknown> | null
+  /** 中文：创建时间 */
+  createdAt: Date
+  /** 中文：更新时间 */
+  updatedAt: Date
+}
+
+export interface UserSkinSelectionDocument extends Document<Types.ObjectId> {
+  userId: Types.ObjectId
+  skinCategoryId: Types.ObjectId
+  skinId: Types.ObjectId
   createdAt: Date
   updatedAt: Date
 }

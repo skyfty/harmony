@@ -30,13 +30,13 @@
           </view>
 
           <view class="meta-row">
-            <text class="category-tag">{{ categoryName(product.categoryId) }}</text>
+            <text class="category-tag">{{ displayCategoryName(product) }}</text>
             <text class="price">¥{{ formatPrice(product.price) }}</text>
           </view>
 
           <text v-if="product.description" class="description">{{ product.description }}</text>
 
-                              <view v-if="product.controllableAsset || !isOwnedProduct(product)" class="asset-row">
+                              <view v-if="product.controllableAsset || product.skin || !isOwnedProduct(product)" class="asset-row">
             <view v-if="product.controllableAsset" class="asset-row__meta">
             </view>
 
@@ -81,6 +81,7 @@ import {
   type ProductListItem,
 } from '@/api/mini/products'
 import { selectControllableAsset } from '@/api/mini/controllableAssets'
+import { selectSkin } from '@/api/mini/skins'
 import { ensureMiniCapability } from '@/platform/runtime'
 import { redirectToNav, type NavKey } from '@/utils/navKey'
 import { setSelectedControllable } from '@/utils/controllableSelection'
@@ -88,7 +89,6 @@ import { isPhoneBindingRequiredError, requestMiniProgramPayment, toCheckoutError
 import type { MiniPaymentAction } from '@mini-platform/core'
 
 const fallbackCover = '/static/images/checkin.jpg'
-const controllableLabel = resolveControllableLabel
 
 const selectedCategoryId = ref('')
 const loading = ref(false)
@@ -119,6 +119,13 @@ function categoryName(categoryId: string | null | undefined): string {
   return categories.value.find((item) => item.id === categoryId)?.name || '未分类'
 }
 
+function displayCategoryName(product: ProductListItem): string {
+  if (product.skin?.categoryName) {
+    return product.skin.categoryName
+  }
+  return categoryName(product.categoryId)
+}
+
 function formatPrice(price: number): string {
   const value = Number.isFinite(Number(price)) ? Number(price) : 0
   return value.toFixed(2).replace(/\.00$/, '')
@@ -128,7 +135,7 @@ function statusText(product: ProductListItem): string {
   if (!isOwnedProduct(product)) {
     return '可购买'
   }
-  if (product.controllableAsset?.selected) {
+  if (product.controllableAsset?.selected || product.skin?.selected) {
     return '使用中'
   }
   if (product.state === 'expired') {
@@ -144,34 +151,34 @@ function statusClass(product: ProductListItem): string {
   if (!isOwnedProduct(product)) {
     return 'badge--buy'
   }
-  if (product.controllableAsset?.selected) {
+  if (product.controllableAsset?.selected || product.skin?.selected) {
     return 'badge--active'
   }
   return 'badge--owned'
 }
 
 function actionButtonLabel(product: ProductListItem): string {
-  if (product.controllableAsset?.selected) {
+  if (product.controllableAsset?.selected || product.skin?.selected) {
     return '使用中'
   }
-  if (product.controllableAsset) {
+  if (product.controllableAsset || product.skin) {
     return '设为使用'
   }
   return '已拥有'
 }
 
 function actionButtonClass(product: ProductListItem): string {
-  if (product.controllableAsset?.selected) {
+  if (product.controllableAsset?.selected || product.skin?.selected) {
     return 'action-btn--success'
   }
-  if (product.controllableAsset) {
+  if (product.controllableAsset || product.skin) {
     return 'action-btn--secondary'
   }
   return 'action-btn--disabled'
 }
 
 function actionDisabled(product: ProductListItem): boolean {
-  return Boolean(isOwnedProduct(product) && !product.controllableAsset)
+  return Boolean(isOwnedProduct(product) && !product.controllableAsset && !product.skin)
 }
 
 function isOwnedProduct(product: ProductListItem): boolean {
@@ -218,7 +225,7 @@ async function handleCardTap(product: ProductListItem) {
     await handlePurchase(product)
     return
   }
-  if (product.controllableAsset && !product.controllableAsset.selected) {
+  if ((product.controllableAsset && !product.controllableAsset.selected) || (product.skin && !product.skin.selected)) {
     await handleUse(product)
   }
 }
@@ -228,7 +235,7 @@ async function handlePrimaryAction(product: ProductListItem) {
     await handlePurchase(product)
     return
   }
-  if (product.controllableAsset && !product.controllableAsset.selected) {
+  if ((product.controllableAsset && !product.controllableAsset.selected) || (product.skin && !product.skin.selected)) {
     await handleUse(product)
     return
   }
@@ -271,23 +278,31 @@ async function handlePurchase(product: ProductListItem) {
 
 async function handleUse(product: ProductListItem) {
   const controllableAsset = product.controllableAsset
-  if (!controllableAsset || loading.value) {
+  const skin = product.skin
+  if ((!controllableAsset && !skin) || loading.value) {
     return
   }
 
   loading.value = true
   void uni.showLoading({ title: '设置中...' })
   try {
-    await selectControllableAsset(controllableAsset.id)
-    setSelectedControllable(controllableAsset.type, {
-      id: controllableAsset.id,
-      identifier: controllableAsset.identifier,
-      name: controllableAsset.name,
-      type: controllableAsset.type,
-      prefabUrl: controllableAsset.prefabUrl ?? '',
-    })
+    if (skin) {
+      await selectSkin(skin.id)
+    } else if (controllableAsset) {
+      await selectControllableAsset(controllableAsset.id)
+      setSelectedControllable(controllableAsset.type, {
+        id: controllableAsset.id,
+        identifier: controllableAsset.identifier,
+        name: controllableAsset.name,
+        type: controllableAsset.type,
+        prefabUrl: controllableAsset.prefabUrl ?? '',
+      })
+    }
     await reload()
-    void uni.showToast({ title: `${resolveControllableLabel(controllableAsset.type)}已设为使用中`, icon: 'none' })
+    void uni.showToast({
+      title: skin ? `${skin.name || '皮肤'}已设为使用中` : `${resolveControllableLabel(controllableAsset!.type)}已设为使用中`,
+      icon: 'none',
+    })
   } catch (error: unknown) {
     void uni.showToast({ title: toCheckoutErrorMessage(error, '设置失败'), icon: 'none' })
   } finally {

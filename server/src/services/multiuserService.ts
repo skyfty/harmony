@@ -14,6 +14,13 @@ type Quaternion = { x: number; y: number; z: number; w: number }
 type MultiuserSubjectType = 'vehicle' | 'character' | 'ship' | 'aircraft'
 type MultiuserSharedEntityMode = 'transform'
 type MultiuserOwnershipMode = 'lease'
+type MultiuserSkinSlotKey = 'hatAssetId' | 'glassesAssetId' | 'hairAssetId' | 'topAssetId' | 'pantsAssetId' | 'shoesAssetId'
+
+interface MultiuserSkinSelection {
+  skinId: string
+  slotKey: MultiuserSkinSlotKey
+  prefabUrl: string
+}
 
 interface MultiuserVehicleWheelPresentation {
   nodeId?: string | null
@@ -62,6 +69,7 @@ interface MultiuserPeerState {
   subjectIdentifier?: string | null
   subjectAssetId?: string | null
   subjectAssetUrl?: string | null
+  skins?: MultiuserSkinSelection[] | null
   position: Vector3
   quaternion: Quaternion
   scale: Vector3
@@ -422,6 +430,35 @@ function isQuaternion(value: unknown): value is Quaternion {
   return Number.isFinite(candidate.x) && Number.isFinite(candidate.y) && Number.isFinite(candidate.z) && Number.isFinite(candidate.w)
 }
 
+const SKIN_SLOT_KEYS = new Set<string>(['hatAssetId', 'glassesAssetId', 'hairAssetId', 'topAssetId', 'pantsAssetId', 'shoesAssetId'])
+
+function normalizeSkinSelections(value: unknown): MultiuserSkinSelection[] | null {
+  if (!Array.isArray(value)) {
+    return null
+  }
+  const selections: MultiuserSkinSelection[] = []
+  value.forEach((item) => {
+    if (!item || typeof item !== 'object') {
+      return
+    }
+    const candidate = item as Partial<MultiuserSkinSelection>
+    const skinId = normalizeOptionalText(candidate.skinId)
+    const slotKey = typeof candidate.slotKey === 'string' && SKIN_SLOT_KEYS.has(candidate.slotKey)
+      ? candidate.slotKey
+      : null
+    const prefabUrl = normalizeOptionalText(candidate.prefabUrl)
+    if (!skinId || !slotKey || !prefabUrl) {
+      return
+    }
+    selections.push({
+      skinId,
+      slotKey: slotKey as MultiuserSkinSlotKey,
+      prefabUrl,
+    })
+  })
+  return selections.length ? selections : null
+}
+
 function normalizePeerState(value: unknown): MultiuserPeerState | null {
   if (!value || typeof value !== 'object') {
     return null
@@ -437,6 +474,7 @@ function normalizePeerState(value: unknown): MultiuserPeerState | null {
     subjectIdentifier: normalizeOptionalText(candidate.subjectIdentifier),
     subjectAssetId: normalizeOptionalText(candidate.subjectAssetId),
     subjectAssetUrl: normalizeOptionalText(candidate.subjectAssetUrl),
+    skins: normalizeSkinSelections(candidate.skins),
     position: {
       x: candidate.position.x,
       y: candidate.position.y,

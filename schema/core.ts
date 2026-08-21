@@ -7,6 +7,7 @@ import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 import type { AssetBundleHashAlgorithm } from './asset-api'
 import type { AssetType } from './asset-types'
 import type { ControllableTargetType, SteerControllableTargetType } from './controllableTargetTypes'
+import type { SkinSlotKey } from './skinRuntime'
 import { createUvDebugMaterial } from './debugTextures'
 export { CONTROLLABLE_TARGET_TYPES } from './controllableTargetTypes'
 
@@ -780,6 +781,17 @@ export interface ExternalControllableAsset {
   prefabUrl?: string | null
   assetId?: string | null
   isSelected?: boolean
+  sortOrder?: number
+  [key: string]: unknown
+}
+
+export interface ExternalSkin {
+  id: string
+  categoryId: string | null
+  slotKey: SkinSlotKey
+  prefabUrl?: string | null
+  name?: string | null
+  identifier?: string | null
   sortOrder?: number
   [key: string]: unknown
 }

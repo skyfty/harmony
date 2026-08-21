@@ -1,6 +1,7 @@
 export * from './scenics'
 export * from './events'
 export * from './controllableAssets'
+export * from './skins'
 export * from './products'
 export * from './coupons'
 export * from './session'

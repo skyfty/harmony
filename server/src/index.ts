@@ -19,7 +19,8 @@ import { ensureMiniProgramTestUserV2 } from '@/services/miniAuthService'
 import { ensureEditorAuthBootstrap } from '@/services/authService'
 import { koaBody } from '@/utils/bodyParser'
 import { MultiuserService, setActiveMultiuserService } from '@/services/multiuserService'
-import { ensureCouponProductCategory, ensureTransportProductCategory } from '@/services/productCategoryService'
+import { ensureCouponProductCategory, ensureSkinProductCategory, ensureTransportProductCategory } from '@/services/productCategoryService'
+import { ensureDefaultSkinCategories } from '@/services/skinCategoryService'
 
 type HarmonyKoa = Koa<DefaultState, DefaultContext>
 
@@ -38,6 +39,8 @@ async function bootstrap(): Promise<void> {
   await ensureEditorAuthBootstrap()
   await ensureTransportProductCategory()
   await ensureCouponProductCategory()
+  await ensureSkinProductCategory()
+  await ensureDefaultSkinCategories()
 
   const app: HarmonyKoa = new Koa()
   // Trust the reverse proxy so ctx.origin reflects X-Forwarded-* headers.

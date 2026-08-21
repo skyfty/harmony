@@ -1,3 +1,5 @@
+import type { SkinSlotKey } from './skinRuntime'
+
 let currentSceneId: string | null = null
 
 export type MultiuserSubjectType = 'vehicle' | 'character' | 'ship' | 'aircraft'
@@ -6,6 +8,12 @@ export type MultiuserOwnershipMode = 'lease'
 
 export type MultiuserVector3Like = { x: number; y: number; z: number }
 export type MultiuserQuaternionLike = { x: number; y: number; z: number; w: number }
+
+export interface MultiuserSkinSelection {
+  skinId: string
+  slotKey: SkinSlotKey
+  prefabUrl: string
+}
 
 export interface MultiuserIdentity {
   userId: string
@@ -67,6 +75,7 @@ export interface MultiuserPeerState {
   subjectIdentifier?: string | null
   subjectAssetId?: string | null
   subjectAssetUrl?: string | null
+  skins?: MultiuserSkinSelection[] | null
   position: MultiuserVector3Like
   quaternion: MultiuserQuaternionLike
   scale: MultiuserVector3Like

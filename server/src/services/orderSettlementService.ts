@@ -7,6 +7,8 @@ import { UserProductModel } from '@/models/UserProduct'
 import { UserCouponModel } from '@/models/UserCoupon'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
 import { UserControllableSelectionModel } from '@/models/UserControllableSelection'
+import { SkinModel } from '@/models/Skin'
+import { UserSkinSelectionModel } from '@/models/UserSkinSelection'
 import { addProductToWarehouse } from '@/services/warehouseService'
 import { queryWechatOrderByOutTradeNo } from '@/services/paymentService'
 import type { WechatTransaction } from '@/services/paymentService'
@@ -127,6 +129,25 @@ async function fulfillOrder(order: any, session?: ClientSession): Promise<void> 
 						userId: order.userId,
 						controllableType: controllable.type,
 						controllableAssetId: controllable._id,
+					},
+				},
+				{ upsert: true, session },
+			).exec()
+		}
+
+		const skinQuery = SkinModel.findOne({ productId: product._id, isActive: true }).select({ _id: 1, categoryId: 1 })
+		if (session) {
+			skinQuery.session(session)
+		}
+		const skin = await skinQuery.lean().exec()
+		if (skin?._id) {
+			await UserSkinSelectionModel.updateOne(
+				{ userId: order.userId, skinCategoryId: skin.categoryId },
+				{
+					$set: {
+						userId: order.userId,
+						skinCategoryId: skin.categoryId,
+						skinId: skin._id,
 					},
 				},
 				{ upsert: true, session },

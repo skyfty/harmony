@@ -522,6 +522,7 @@ type SceneryProps = {
   defaultSteerIdentifier?: string;
   defaultSteerTargetType?: SteerControllableTargetType;
   controllableAssets?: ExternalControllableAsset[];
+  skins?: ExternalSkin[];
   multiuserIdentity?: MultiuserIdentity | null;
   nominateStateMap?: NominateExternalStateMap;
   physicsInterpolation?: boolean;
@@ -607,6 +608,7 @@ import {
   type RuntimePrefabPlacementOptions,
   type RuntimePrefabSpawnRequest,
   type ExternalControllableAsset,
+  type ExternalSkin,
 } from '@harmony/schema/core';
 import type { ResolvedSteerBinding } from '@harmony/schema/steerBindingIndex';
 import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
@@ -756,6 +758,7 @@ import {
   type MultiuserNodeSyncState,
   type MultiuserNodeSyncPresentation,
   type MultiuserRuntimeBridge,
+  type MultiuserSkinSelection,
   type MultiuserSubjectType,
 } from '@harmony/schema/multiuserContext';
 type RigidbodyComponentProps = any;
@@ -769,6 +772,7 @@ import {
   skinComponentDefinition,
   SKIN_COMPONENT_TYPE,
   clampSkinComponentProps,
+  createSkinComponentState,
   type SkinComponentProps,
 } from '@harmony/schema/components/definitions/skinComponent';
 import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
@@ -783,7 +787,10 @@ import {
   getMissingSkinAssetIds,
   getOrLoadSkinAsset,
   resetSkinRuntime,
+  syncSkinAssetsForObject,
   syncSkinRuntimeForNode,
+  type SkinAssetOverride,
+  type SkinSlotKey,
 } from '@harmony/schema/skinRuntime';
 
 import {
@@ -2656,6 +2663,7 @@ type RemoteMultiuserPeerEntry = RemoteMultiuserPeerVisibilityState & {
   animationControllers: Map<string, RemoteMultiuserAnimationController>;
   rootSignature: string;
   loadToken: number;
+  lastAppliedSkinSignature: string;
 };
 type NetworkSyncNodeRuntimeEntry = {
   nodeId: string;
@@ -6298,6 +6306,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
     rebuildPreviewNodeMap(document);
     viewerResourceCache = ensureResourceCache(document, buildOptions);
     registerSceneSubtree(graph.root);
+    refreshSkinRuntime();
     refreshMultiuserNodeReferences(document);
     refreshBehaviorProximityCandidates();
     refreshBehaviorCollisionCandidates();
@@ -12904,6 +12913,7 @@ function createRemoteMultiuserPeerPlaceholderEntry(peerState: MultiuserPeerState
     animationControllers: new Map(),
     rootSignature: '',
     loadToken: 0,
+    lastAppliedSkinSignature: '',
   };
 }
 
@@ -14120,6 +14130,7 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
     };
     attachRemoteMultiuserPeerRuntime(runtimeEntry);
     applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
+    applyRemoteMultiuserPeerSkins(runtimeEntry, userId);
     syncRemoteMultiuserNicknameRuntime(runtimeEntry);
     markRemoteMultiuserPeerVisible(runtimeEntry, frameIndex);
     remoteMultiuserPeerEntries.set(userId, runtimeEntry);
@@ -14636,6 +14647,37 @@ function getRemoteMultiuserPeerSignature(state: MultiuserPeerState): string {
   ].join('|');
 }
 
+function getMultiuserSkinSignature(skins: MultiuserSkinSelection[] | null | undefined): string {
+  if (!Array.isArray(skins) || !skins.length) {
+    return '';
+  }
+  return skins
+    .map((skin) => `${skin.slotKey}:${skin.skinId}:${skin.prefabUrl}`)
+    .sort()
+    .join('|');
+}
+
+function applyRemoteMultiuserPeerSkins(entry: RemoteMultiuserPeerEntry, userId: string): void {
+  if (!entry.root) {
+    return;
+  }
+  const skins = Array.isArray(entry.targetState.skins) ? entry.targetState.skins : [];
+  const overrides: SkinAssetOverride[] = skins
+    .map((skin) => ({
+      slotKey: skin.slotKey,
+      assetId: typeof skin.prefabUrl === 'string' ? skin.prefabUrl.trim() : '',
+    }))
+    .filter((override) => Boolean(override.slotKey && override.assetId.length));
+  syncSkinAssetsForObject(entry.root, overrides, {
+    nodeId: `remote-peer:${userId}`,
+    componentId: 'remote-skins',
+    loadAsset: (assetId) => (
+      viewerResourceCache ? loadAssetObject(viewerResourceCache, assetId) : Promise.resolve(null)
+    ),
+  });
+  entry.lastAppliedSkinSignature = getMultiuserSkinSignature(skins);
+}
+
 function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   const localIdentity = getNormalizedMultiuserIdentity();
   if (localIdentity && peer.userId === localIdentity.userId) {
@@ -14657,6 +14699,9 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
       existing.displayState = cloneRemoteMultiuserPeerState(peer.state);
     }
     syncRemoteMultiuserNicknameRuntime(existing);
+    if (existing.root && getMultiuserSkinSignature(existing.targetState.skins) !== existing.lastAppliedSkinSignature) {
+      applyRemoteMultiuserPeerSkins(existing, peer.userId);
+    }
     syncRemoteMultiuserPeerVisibility();
     return;
   }
@@ -14756,6 +14801,27 @@ function resolveLocalMultiuserCharacterPresentation(nodeId: string): MultiuserCh
   };
 }
 
+function resolveLocalMultiuserSkinSelections(): MultiuserSkinSelection[] | null {
+  const skins = Array.isArray(props.skins) ? props.skins : [];
+  const selections: MultiuserSkinSelection[] = [];
+  skins.forEach((skin) => {
+    if (!skin) {
+      return;
+    }
+    const skinId = typeof skin.id === 'string' ? skin.id.trim() : '';
+    const prefabUrl = typeof skin.prefabUrl === 'string' ? skin.prefabUrl.trim() : '';
+    if (!skinId || !skin.slotKey || !prefabUrl) {
+      return;
+    }
+    selections.push({
+      skinId,
+      slotKey: skin.slotKey,
+      prefabUrl,
+    });
+  });
+  return selections.length ? selections : null;
+}
+
 function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   if (vehicleDriveActive.value && vehicleDriveNodeId.value) {
     const nodeId = vehicleDriveNodeId.value;
@@ -14830,6 +14896,7 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
     subjectIdentifier: node?.name ?? resolvedNodeId,
     subjectAssetId: typeof node?.sourceAssetId === 'string' ? node.sourceAssetId : null,
     subjectAssetUrl: null,
+    skins: resolveLocalMultiuserSkinSelections(),
     action: resolveLocalCharacterPeerAction(resolvedNodeId),
     position: {
       x: protagonistPosePosition.x,
@@ -15364,9 +15431,151 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
   refreshEffectRuntimeTickers();
 }
 
+function collectSkinSlotOverrides(): Partial<Record<SkinSlotKey, string>> {
+  const result: Partial<Record<SkinSlotKey, string>> = {};
+  const skins = Array.isArray(props.skins) ? props.skins : [];
+  [...skins]
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    .forEach((skin) => {
+      if (!skin) {
+        return;
+      }
+      const slotKey = skin.slotKey;
+      const prefabUrl = typeof skin.prefabUrl === 'string' ? skin.prefabUrl.trim() : '';
+      if (!slotKey || !prefabUrl) {
+        return;
+      }
+      if (!(slotKey in result)) {
+        result[slotKey] = prefabUrl;
+      }
+    });
+  return result;
+}
+
+function collectCharacterSkinTargetNodeIds(document: SceneJsonExportDocument | null | undefined): Set<string> {
+  const result = new Set<string>();
+  if (!document || !Array.isArray(document.nodes)) {
+    return result;
+  }
+  const steerTargetNodeIds = new Set<string>();
+  const stack: Array<{ node: SceneNode; insideCharacter: boolean }> = document.nodes.map((node) => ({
+    node,
+    insideCharacter: false,
+  }));
+  while (stack.length) {
+    const entry = stack.pop();
+    if (!entry) {
+      continue;
+    }
+    const { node, insideCharacter } = entry;
+    const isCharacterSubtree = insideCharacter || Boolean(resolveCharacterControllerComponent(node));
+    const steerComponent = resolveEnabledComponentState<SteerComponentProps>(node, STEER_COMPONENT_TYPE);
+    if (steerComponent) {
+      const steerProps = clampSteerComponentProps(steerComponent.props ?? null);
+      if (steerProps.targetType === 'character' && steerProps.targetNodeId) {
+        steerTargetNodeIds.add(steerProps.targetNodeId);
+      }
+    }
+    const skinComponent = node.components?.[SKIN_COMPONENT_TYPE] as SceneNodeComponentState<SkinComponentProps> | undefined;
+    if (skinComponent && skinComponent.enabled !== false && isCharacterSubtree) {
+      result.add(node.id);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      node.children.forEach((child) => stack.push({ node: child, insideCharacter: isCharacterSubtree }));
+    }
+  }
+  // 兼容目标节点本身未挂 characterController 的场景：steer 指向的 character 主控节点子树也纳入。
+  steerTargetNodeIds.forEach((targetNodeId) => {
+    const targetNode = resolveNodeById(targetNodeId);
+    if (!targetNode) {
+      return;
+    }
+    const subStack: SceneNode[] = [targetNode];
+    while (subStack.length) {
+      const node = subStack.pop();
+      if (!node) {
+        continue;
+      }
+      const skinComponent = node.components?.[SKIN_COMPONENT_TYPE] as SceneNodeComponentState<SkinComponentProps> | undefined;
+      if (skinComponent && skinComponent.enabled !== false) {
+        result.add(node.id);
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        subStack.push(...node.children);
+      }
+    }
+  });
+  return result;
+}
+
+function ensureSkinComponentInjectedInSubtree(characterRoot: SceneNode): void {
+  let hasSkin = false;
+  let modelNode: SceneNode | null = null;
+  const stack: SceneNode[] = [characterRoot];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (node.components?.[SKIN_COMPONENT_TYPE]) {
+      hasSkin = true;
+      break;
+    }
+    if (
+      !modelNode
+      && (node.nodeType === 'Mesh' || node.nodeType === 'Group')
+      && typeof node.sourceAssetId === 'string'
+      && node.sourceAssetId.trim().length > 0
+    ) {
+      modelNode = node;
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  if (hasSkin || !modelNode) {
+    return;
+  }
+  const state = createSkinComponentState(modelNode, {}, { id: `runtime-skin-${modelNode.id}` });
+  modelNode.components = {
+    ...(modelNode.components ?? {}),
+    [SKIN_COMPONENT_TYPE]: state,
+  };
+}
+
+function injectMissingCharacterSkinComponents(document: SceneJsonExportDocument | null | undefined): void {
+  if (!document || !Array.isArray(document.nodes)) {
+    return;
+  }
+  if (!Object.keys(collectSkinSlotOverrides()).length) {
+    return;
+  }
+  const stack: SceneNode[] = [...document.nodes];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    if (resolveCharacterControllerComponent(node)) {
+      ensureSkinComponentInjectedInSubtree(node);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+}
+
 function refreshSkinRuntime(): void {
   const activeKeys = new Set<string>();
   const missingAssetIds = new Set<string>();
+  const skinOverrides = collectSkinSlotOverrides();
+  const characterSkinTargetNodeIds = Object.keys(skinOverrides).length
+    ? collectCharacterSkinTargetNodeIds(currentDocument)
+    : new Set<string>();
+  if (Object.keys(skinOverrides).length) {
+    // 运行时生成的 character 缺少 skinComponent 时注入，保证用户皮肤可以挂载。
+    injectMissingCharacterSkinComponents(currentDocument);
+  }
 
   nodeObjectMap.forEach((_object, nodeId) => {
     const node = resolveNodeById(nodeId);
@@ -15377,16 +15586,25 @@ function refreshSkinRuntime(): void {
     const key = `${nodeId}\u0001${component.id}`;
     activeKeys.add(key);
     const props = clampSkinComponentProps(component.props);
-    getMissingSkinAssetIds(props).forEach((assetId) => missingAssetIds.add(assetId));
+    const effectiveProps = characterSkinTargetNodeIds.has(nodeId)
+      ? clampSkinComponentProps({ ...props, ...skinOverrides })
+      : props;
+    getMissingSkinAssetIds(effectiveProps).forEach((assetId) => missingAssetIds.add(assetId));
     syncSkinRuntimeForNode({
       nodeId,
       componentId: component.id,
       runtimeObject: nodeObjectMap.get(nodeId) ?? null,
-      props,
+      props: effectiveProps,
       loadAsset: (assetId) => (
         viewerResourceCache ? loadAssetObject(viewerResourceCache, assetId) : Promise.resolve(null)
       ),
     });
+  });
+  // 多人在线远端角色使用合成的 nodeId/componentId 挂载皮肤，纳入 activeKeys 防止被清理。
+  remoteMultiuserPeerEntries.forEach((entry, userId) => {
+    if (entry.lastAppliedSkinSignature) {
+      activeKeys.add(`remote-peer:${userId}\u0001remote-skins`);
+    }
   });
   cleanupInactiveSkinAttachments(activeKeys);
 
@@ -21971,6 +22189,16 @@ watch(
   () => {
     if (previewPayload.value) {
       handlePreviewPayload(previewPayload.value);
+    }
+  },
+  { deep: true },
+);
+
+watch(
+  () => props.skins,
+  () => {
+    if (currentDocument && renderContext?.scene) {
+      refreshSkinRuntime();
     }
   },
   { deep: true },

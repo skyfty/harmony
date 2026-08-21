@@ -4,6 +4,7 @@ import { ProductModel } from '@/models/Product'
 import { ProductCategoryModel } from '@/models/ProductCategory'
 import { VehicleModel } from '@/models/Vehicle'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
+import { SkinModel } from '@/models/Skin'
 
 type ProductPayload = {
   name?: string
@@ -43,6 +44,7 @@ function mapProduct(row: any) {
     name: row.name,
     slug: row.slug,
     categoryId: row.categoryId?.toString?.() ?? null,
+    skinId: row.skinId?.toString?.() ?? null,
     coverUrl: row.coverUrl ?? null,
     validityDays: row.validityDays ?? null,
     applicableSceneTags: Array.isArray(row.applicableSceneTags) ? row.applicableSceneTags : [],
@@ -238,6 +240,11 @@ export async function deleteProduct(ctx: Context): Promise<void> {
   const controllableAsset = await ControllableAssetModel.findOne({ productId: id }).select({ _id: 1, name: 1 }).lean().exec()
   if (controllableAsset) {
     ctx.throw(409, `该商品已关联可控资产“${controllableAsset.name ?? '未知'}”，请先删除可控资产`)
+  }
+
+  const skin = await SkinModel.findOne({ productId: id }).select({ _id: 1, name: 1 }).lean().exec()
+  if (skin) {
+    ctx.throw(409, `该商品已关联皮肤“${skin.name ?? '未知'}”，请先删除皮肤`)
   }
 
   await ProductModel.findByIdAndUpdate(id, { isDeleted: true, deletedAt: new Date() }).exec()

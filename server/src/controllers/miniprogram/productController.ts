@@ -9,6 +9,9 @@ import { generateOrderNumber } from '@/utils/orderNumber'
 import type { ProductUsageConfig, UserProductState } from '@/types/models'
 import { getMiniPlatformPaymentProvider } from '@/services/miniPlatformProviders'
 import { ControllableAssetModel } from '@/models/ControllableAsset'
+import { SkinModel } from '@/models/Skin'
+import { SkinCategoryModel } from '@/models/SkinCategory'
+import { UserSkinSelectionModel } from '@/models/UserSkinSelection'
 import { ProductCategoryModel } from '@/models/ProductCategory'
 
 function computeUserProductState(entry: {
@@ -59,6 +62,16 @@ interface ProductResponse {
     isDefault?: boolean
     selected?: boolean
   } | null
+  skin?: {
+    id: string
+    identifier: string
+    name: string
+    categoryId: string | null
+    categoryName: string | null
+    slotKey: string | null
+    prefabUrl?: string
+    selected?: boolean
+  } | null
 }
 
 interface PurchaseBody {
@@ -84,6 +97,7 @@ interface ProductLean {
   updatedAt: Date
   controllableAssetId?: Types.ObjectId | null
   controllableType?: string | null
+  skinId?: Types.ObjectId | null
 }
 
 function buildProductResponse(product: ProductLean, userEntry?: {
@@ -91,7 +105,7 @@ function buildProductResponse(product: ProductLean, userEntry?: {
   state: UserProductState
   expiresAt?: Date | null
   usedAt?: Date | null
-} | null, controllableAsset?: any | null, selected = false): ProductResponse {
+} | null, controllableAsset?: any | null, selected = false, skin?: any | null, skinSelected = false): ProductResponse {
   const purchased = Boolean(userEntry)
   const state = computeUserProductState(userEntry ?? null)
   const locked = (product.metadata as any)?.locked === true
@@ -122,6 +136,18 @@ function buildProductResponse(product: ProductLean, userEntry?: {
           prefabUrl: controllableAsset.prefabUrl ?? '',
           isDefault: controllableAsset.isDefault === true,
           selected,
+        }
+      : null,
+    skin: skin
+      ? {
+          id: skin._id.toString(),
+          identifier: String(skin.identifier ?? ''),
+          name: skin.name ?? '',
+          categoryId: skin.categoryId?.toString?.() ?? null,
+          categoryName: skin.category?.name ?? null,
+          slotKey: skin.category?.slotKey ?? null,
+          prefabUrl: skin.prefabUrl ?? '',
+          selected: skinSelected,
         }
       : null,
   }
@@ -167,9 +193,17 @@ export async function listProducts(ctx: Context): Promise<void> {
   const controllableAssets = await ControllableAssetModel.find({ productId: { $in: products.map((product) => product._id) }, isActive: true }).lean().exec()
   const controllableByProductId = new Map(controllableAssets.map((asset: any) => [asset.productId.toString(), asset]))
   const controllableTypeByProductId = new Map(controllableAssets.map((asset: any) => [asset.productId.toString(), asset.type]))
+  const skins = await SkinModel.find({ productId: { $in: products.map((product) => product._id) }, isActive: true }).lean().exec()
+  const skinCategoryIds = Array.from(new Set(skins.map((skin: any) => skin.categoryId?.toString?.()).filter(Boolean)))
+  const skinCategories = skinCategoryIds.length
+    ? await SkinCategoryModel.find({ _id: { $in: skinCategoryIds } }).lean().exec()
+    : []
+  const skinCategoryById = new Map(skinCategories.map((category: any) => [category._id.toString(), category]))
+  const skinByProductId = new Map(skins.map((skin: any) => [skin.productId.toString(), { ...skin, category: skinCategoryById.get(skin.categoryId?.toString?.() ?? '') ?? null }]))
 
   const entriesByProductId = new Map<string, { acquiredAt: Date; state: UserProductState; expiresAt?: Date | null; usedAt?: Date | null }>()
   const selectedProductIds = new Set<string>()
+  const selectedSkinByCategory = new Map<string, string>()
   if (userId && products.length) {
     const [entries, selectedRows] = await Promise.all([
       UserProductModel.find({ userId, productId: { $in: products.map((product) => product._id) } }).lean().exec(),
@@ -195,16 +229,31 @@ export async function listProducts(ctx: Context): Promise<void> {
         selectedProductIds.add(asset.productId.toString())
       }
     }
+    if (skinCategoryIds.length) {
+      const skinSelectionRows = await UserSkinSelectionModel.find({
+        userId,
+        skinCategoryId: { $in: skinCategoryIds },
+      })
+        .select({ skinCategoryId: 1, skinId: 1 })
+        .lean()
+        .exec()
+      for (const entry of skinSelectionRows as any[]) {
+        selectedSkinByCategory.set(entry.skinCategoryId.toString(), entry.skinId.toString())
+      }
+    }
   }
   ctx.body = {
     total: products.length,
     products: products.map((product: ProductLean) => {
       const productId = product._id.toString()
+      const skin = skinByProductId.get(productId) ?? null
       return buildProductResponse(
         product,
         entriesByProductId.get(productId) ?? null,
         controllableByProductId.get(productId) ?? null,
         selectedProductIds.has(productId),
+        skin,
+        Boolean(skin && selectedSkinByCategory.get(skin.categoryId?.toString?.() ?? '') === skin._id.toString()),
       )
     }),
   }
@@ -227,6 +276,13 @@ export async function getProduct(ctx: Context): Promise<void> {
   const selectedRow = userId && controllableAsset
     ? await UserControllableSelectionModel.findOne({ userId, controllableType: controllableAsset.type, controllableAssetId: controllableAsset._id }).lean().exec()
     : null
+  const skin = product?.skinId
+    ? await SkinModel.findOne({ _id: product.skinId, productId: product._id, isActive: true }).lean().exec()
+    : null
+  const skinCategory = skin?.categoryId ? await SkinCategoryModel.findById(skin.categoryId).lean().exec() : null
+  const skinSelectedRow = userId && skin
+    ? await UserSkinSelectionModel.findOne({ userId, skinCategoryId: skin.categoryId, skinId: skin._id }).lean().exec()
+    : null
   ctx.body = buildProductResponse(
     product,
     userEntry
@@ -239,6 +295,8 @@ export async function getProduct(ctx: Context): Promise<void> {
       : null,
     controllableAsset,
     Boolean(selectedRow),
+    skin ? { ...skin, category: skinCategory } : null,
+    Boolean(skinSelectedRow),
   )
 }
 

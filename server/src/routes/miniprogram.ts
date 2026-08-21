@@ -72,6 +72,10 @@ import {
   setCurrentControllableAsset,
 } from '@/controllers/miniprogram/controllableAssetController'
 import {
+  listUserSkinSelections,
+  setCurrentSkin,
+} from '@/controllers/miniprogram/skinController'
+import {
   listOrders,
   getOrder,
   createOrder,
@@ -205,6 +209,8 @@ miniRouter.post('/exhibitions/:id/share', shareExhibition)
 miniRouter.post('/products/:id/purchase', purchaseProduct)
 miniRouter.get('/user-controllable-selections', listUserControllableSelections)
 miniRouter.post('/controllable-assets/:id/select', setCurrentControllableAsset)
+miniRouter.get('/user-skin-selections', listUserSkinSelections)
+miniRouter.post('/skins/:id/select', setCurrentSkin)
 
 // coupons (user-scoped)
 miniRouter.get('/coupons', listUserCoupons)

@@ -30,6 +30,7 @@
       :default-steer-identifier="selectedVehicleIdentifier"
       :default-steer-target-type="selectedControllableType"
       :controllable-assets="controllableAssets"
+      :skins="selectedSkins"
       :runtime-prefab-spawns="runtimePrefabSpawns"
       :server-asset-base-url="serverAssetBaseUrl"
       :debug-console-enabled="false"
@@ -74,8 +75,10 @@ import { parseQueryString } from '@harmony/utils';
 import { getTopSafeAreaMetrics } from '@/utils/safeArea';
 import { getSelectedControllable, getSelectedControllableIdentifier, type ControllableType } from '@/utils/controllableSelection';
 import { listControllableAssets, type ControllableAsset } from '@/api/mini/controllableAssets';
+import { listUserSkinSelections } from '@/api/mini/skins';
 import { clearSceneryShareContext, setSceneryShareContext } from '@/services/share';
 import { ensureMiniCapability } from '@/platform/runtime';
+import type { ExternalSkin } from '@harmony/schema/core';
 
 defineOptions({
   name: 'SceneryPage',
@@ -95,6 +98,7 @@ const selectedVehiclePrefabUrl = ref<string>('');
 const selectedControllableType = ref<ControllableType>('vehicle');
 const selectedControllablePrefabUrl = ref<string>('');
 const controllableAssets = ref<ControllableAsset[]>([]);
+const selectedSkins = ref<ExternalSkin[]>([]);
 const explicitPrefabUrl = ref<string>('');
 const explicitPrefabTargetNodeId = ref<string>('');
 const explicitPrefabTargetNodeName = ref<string>('');
@@ -407,6 +411,21 @@ onLoad((query: Record<string, unknown> | undefined) => {
     controllableAssets.value = assets;
   }).catch(() => {
     controllableAssets.value = [];
+  });
+  void listUserSkinSelections().then((skins) => {
+    selectedSkins.value = skins
+      .filter((skin) => Boolean(skin.slotKey && skin.prefabUrl))
+      .map((skin) => ({
+        id: skin.id,
+        categoryId: skin.categoryId,
+        slotKey: skin.slotKey as ExternalSkin['slotKey'],
+        prefabUrl: skin.prefabUrl,
+        name: skin.name,
+        identifier: skin.identifier,
+        sortOrder: skin.sortOrder,
+      }));
+  }).catch(() => {
+    selectedSkins.value = [];
   });
   // #ifdef MP-WEIXIN
   void ensureMiniCapability('scenery').then((enabled) => {
