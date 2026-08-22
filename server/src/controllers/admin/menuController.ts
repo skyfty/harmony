@@ -155,6 +155,13 @@ const BACKEND_MENU_TREE: MenuNode[] = [
         requiredPermissions: ['skinCategory:read', 'product:read'],
         meta: { icon: 'lucide:tags', title: '皮肤分类' },
       },
+      {
+        name: 'UserSkins',
+        path: '/skins/user-skins',
+        component: '/views/skins/user-skins.vue',
+        requiredPermissions: ['skin:read'],
+        meta: { icon: 'lucide:users', title: '用户皮肤' },
+      },
     ],
   },
   {

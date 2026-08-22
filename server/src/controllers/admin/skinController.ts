@@ -3,6 +3,8 @@ import { Types } from 'mongoose'
 import { SkinModel } from '@/models/Skin'
 import { SkinCategoryModel } from '@/models/SkinCategory'
 import { ProductModel } from '@/models/Product'
+import { UserModel } from '@/models/User'
+import { UserProductModel } from '@/models/UserProduct'
 import { UserSkinSelectionModel } from '@/models/UserSkinSelection'
 import { getSkinProductCategory } from '@/services/productCategoryService'
 
@@ -256,5 +258,254 @@ export async function deleteSkin(ctx: Context): Promise<void> {
       skinId: null,
     }).exec()
   }
+  ctx.body = {}
+}
+
+type UserSkinPayload = {
+  userId?: string
+  skinId?: string
+}
+
+function mapUserSkin(
+  row: any,
+  skinsByProductId: Map<string, any>,
+  categoriesById: Map<string, any>,
+) {
+  const user = row.userId
+  const product = row.productId
+  const productId = product?._id?.toString?.() ?? row.productId?.toString?.() ?? ''
+  const skin = skinsByProductId.get(productId) ?? null
+  const category = skin?.categoryId ? (categoriesById.get(skin.categoryId.toString()) ?? null) : null
+  const isAdminAssign = (row.metadata as any)?.source === 'admin-assign'
+  return {
+    id: row._id.toString(),
+    userId: user?._id?.toString?.() ?? user?.toString?.() ?? '',
+    user: user
+      ? {
+          id: user?._id?.toString?.() ?? user?.toString?.() ?? '',
+          username: user.username ?? null,
+          displayName: user.displayName ?? null,
+        }
+      : null,
+    productId: row.productId?.toString?.() ?? null,
+    product: product
+      ? {
+          id: product._id.toString(),
+          name: product.name,
+          slug: product.slug,
+          price: product.price,
+        }
+      : null,
+    skinId: skin?._id?.toString?.() ?? null,
+    skin: skin
+      ? {
+          id: skin._id.toString(),
+          identifier: String(skin.identifier ?? ''),
+          name: skin.name ?? '',
+          categoryId: skin.categoryId?.toString?.() ?? null,
+          categoryName: category?.name ?? null,
+          slotKey: category?.slotKey ?? null,
+          prefabUrl: skin.prefabUrl ?? '',
+          isActive: skin.isActive !== false,
+          sortOrder: Number(skin.sortOrder) || 0,
+        }
+      : null,
+    state: row.state ?? 'unused',
+    source: isAdminAssign ? 'admin-assign' : 'order',
+    acquiredAt: row.acquiredAt?.toISOString?.() ?? null,
+    expiresAt: row.expiresAt?.toISOString?.() ?? null,
+    orderId: row.orderId?.toString?.() ?? null,
+    createdAt: row.createdAt?.toISOString?.() ?? null,
+    updatedAt: row.updatedAt?.toISOString?.() ?? null,
+  }
+}
+
+export async function listUserSkins(ctx: Context): Promise<void> {
+  const { page = '1', pageSize = '20', keyword, userId, categoryId } = ctx.query as Record<string, string>
+  const pageNumber = Math.max(Number(page) || 1, 1)
+  const limit = Math.min(Math.max(Number(pageSize) || 20, 1), 100)
+  const skip = (pageNumber - 1) * limit
+
+  const skinProductIds = await SkinModel.distinct('productId').exec()
+  if (!skinProductIds.length) {
+    ctx.body = {
+      data: [],
+      page: pageNumber,
+      pageSize: limit,
+      total: 0,
+    }
+    return
+  }
+  const filter: Record<string, unknown> = {
+    productId: { $in: skinProductIds },
+  }
+  if (userId && Types.ObjectId.isValid(userId)) {
+    filter.userId = new Types.ObjectId(userId)
+  }
+
+  const keywordText = keyword?.trim()
+  const validCategoryId = categoryId && Types.ObjectId.isValid(categoryId) ? new Types.ObjectId(categoryId) : null
+
+  if (keywordText || validCategoryId) {
+    const skinFilter: Record<string, unknown> = {}
+    if (validCategoryId) {
+      skinFilter.categoryId = validCategoryId
+    }
+    if (keywordText) {
+      const pattern = new RegExp(keywordText, 'i')
+      skinFilter.$or = [{ identifier: pattern }, { name: pattern }, { description: pattern }]
+    }
+    const skinRows = await SkinModel.find(skinFilter).select({ _id: 1, productId: 1 }).lean().exec()
+    const productIds = skinRows.map((row: any) => row.productId).filter(Boolean)
+
+    const orParts: Array<Record<string, unknown>> = []
+    if (productIds.length) {
+      orParts.push({ productId: { $in: productIds } })
+    }
+    if (keywordText) {
+      const userRows = await UserModel.find({
+        $or: [{ username: new RegExp(keywordText, 'i') }, { displayName: new RegExp(keywordText, 'i') }],
+      })
+        .select({ _id: 1 })
+        .lean()
+        .exec()
+      const matchedUserIds = userRows.map((row: any) => row._id)
+      if (matchedUserIds.length) {
+        orParts.push({ userId: { $in: matchedUserIds }, productId: { $in: skinProductIds } })
+      }
+    }
+    if (!orParts.length) {
+      ctx.body = {
+        data: [],
+        page: pageNumber,
+        pageSize: limit,
+        total: 0,
+      }
+      return
+    }
+    filter.$or = orParts
+  }
+
+  const [rows, total] = await Promise.all([
+    UserProductModel.find(filter)
+      .populate('userId', 'username displayName')
+      .populate('productId', 'name slug price')
+      .sort({ acquiredAt: -1, createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean()
+      .exec(),
+    UserProductModel.countDocuments(filter),
+  ])
+
+  const productIds = Array.from(
+    new Set(
+      (rows as any[]).map((row) => row.productId?._id?.toString?.() ?? row.productId?.toString?.()).filter(Boolean),
+    ),
+  )
+  const skins = productIds.length
+    ? await SkinModel.find({ productId: { $in: productIds } }).lean().exec()
+    : []
+  const categoryIds = Array.from(
+    new Set(skins.map((skin: any) => skin.categoryId?.toString?.()).filter(Boolean)),
+  )
+  const categories = categoryIds.length
+    ? await SkinCategoryModel.find({ _id: { $in: categoryIds } }).lean().exec()
+    : []
+  const skinsByProductId = new Map(skins.map((skin: any) => [skin.productId.toString(), skin]))
+  const categoriesById = new Map(categories.map((category: any) => [category._id.toString(), category]))
+
+  ctx.body = {
+    data: (rows as any[]).map((row) => mapUserSkin(row, skinsByProductId, categoriesById)),
+    page: pageNumber,
+    pageSize: limit,
+    total,
+  }
+}
+
+export async function createUserSkin(ctx: Context): Promise<void> {
+  const body = (ctx.request.body ?? {}) as UserSkinPayload
+  const userId = typeof body.userId === 'string' ? body.userId.trim() : ''
+  const skinId = typeof body.skinId === 'string' ? body.skinId.trim() : ''
+  if (!userId || !Types.ObjectId.isValid(userId)) {
+    ctx.throw(400, 'Valid userId is required')
+  }
+  if (!skinId || !Types.ObjectId.isValid(skinId)) {
+    ctx.throw(400, 'Valid skinId is required')
+  }
+
+  const [user, skin] = await Promise.all([
+    UserModel.findById(userId).select({ _id: 1 }).lean().exec(),
+    SkinModel.findById(skinId).select({ _id: 1, categoryId: 1, productId: 1, isActive: 1 }).lean().exec(),
+  ])
+  if (!user) {
+    ctx.throw(404, 'User not found')
+  }
+  if (!skin) {
+    ctx.throw(404, 'Skin not found')
+  }
+  if (skin.isActive === false) {
+    ctx.throw(400, 'Skin is disabled')
+  }
+  if (!skin.productId) {
+    ctx.throw(400, 'Skin has no linked product')
+  }
+
+  const existing = await UserProductModel.findOne({ userId: user._id, productId: skin.productId })
+    .select({ _id: 1 })
+    .lean()
+    .exec()
+  if (existing) {
+    ctx.throw(409, 'User already owns this skin')
+  }
+
+  const created = await UserProductModel.create({
+    userId: user._id,
+    productId: skin.productId,
+    state: 'unused',
+    acquiredAt: new Date(),
+    orderId: null,
+    metadata: {
+      source: 'admin-assign',
+      assignedBy: ctx.state.adminAuthUser?.id ?? null,
+      assignedAt: new Date().toISOString(),
+    },
+  })
+  await UserSkinSelectionModel.findOneAndUpdate(
+    { userId: user._id, skinCategoryId: skin.categoryId },
+    { userId: user._id, skinCategoryId: skin.categoryId, skinId: skin._id },
+    { upsert: true, new: true, setDefaultsOnInsert: true },
+  ).exec()
+
+  const row = await UserProductModel.findById(created._id)
+    .populate('userId', 'username displayName')
+    .populate('productId', 'name slug price')
+    .lean()
+    .exec()
+  const skins = row?.productId?._id
+    ? await SkinModel.find({ productId: row.productId._id }).lean().exec()
+    : []
+  const category = skins[0]?.categoryId ? await SkinCategoryModel.findById(skins[0].categoryId).lean().exec() : null
+  const skinsByProductId = new Map(skins.map((skinRow: any) => [skinRow.productId.toString(), skinRow]))
+  const categoriesById = new Map(category ? [[category._id.toString(), category]] : [])
+  ctx.status = 201
+  ctx.body = mapUserSkin(row, skinsByProductId, categoriesById)
+}
+
+export async function deleteUserSkin(ctx: Context): Promise<void> {
+  const { id } = ctx.params
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid user skin id')
+  }
+  const row = await UserProductModel.findById(id).lean().exec()
+  if (!row) {
+    ctx.throw(404, 'User skin not found')
+  }
+  const skin = await SkinModel.findOne({ productId: row.productId }).select({ _id: 1 }).lean().exec()
+  if (!skin) {
+    ctx.throw(400, 'Not a skin ownership record')
+  }
+  await UserProductModel.deleteOne({ _id: row._id }).exec()
+  await UserSkinSelectionModel.deleteMany({ userId: row.userId, skinId: skin._id }).exec()
   ctx.body = {}
 }

@@ -73,16 +73,22 @@ import {
 } from '@/controllers/admin/vehicleController'
 import {
   createControllableAsset,
+  createUserControllableAsset,
   deleteControllableAsset,
+  deleteUserControllableAsset,
   getControllableAsset,
   listControllableAssets,
+  listUserControllableAssets,
   updateControllableAsset,
 } from '@/controllers/admin/controllableAssetController'
 import {
   createSkin,
+  createUserSkin,
   deleteSkin,
+  deleteUserSkin,
   getSkin,
   listSkins,
+  listUserSkins,
   updateSkin,
 } from '@/controllers/admin/skinController'
 import {
@@ -357,6 +363,10 @@ adminRouter.post('/controllable-assets', requireAnyPermission(['controllableAsse
 adminRouter.put('/controllable-assets/:id', requireAnyPermission(['controllableAsset:write', 'product:write']), updateControllableAsset)
 adminRouter.delete('/controllable-assets/:id', requireAnyPermission(['controllableAsset:write', 'product:write']), deleteControllableAsset)
 
+adminRouter.get('/user-controllable-assets', requireAnyPermission(['controllableAsset:read']), listUserControllableAssets)
+adminRouter.post('/user-controllable-assets', requireAnyPermission(['controllableAsset:write']), createUserControllableAsset)
+adminRouter.delete('/user-controllable-assets/:id', requireAnyPermission(['controllableAsset:write']), deleteUserControllableAsset)
+
 adminRouter.get('/skin-categories', requireAnyPermission(['skinCategory:read', 'product:read']), listSkinCategories)
 adminRouter.get('/skin-categories/:id', requireAnyPermission(['skinCategory:read', 'product:read']), getSkinCategory)
 adminRouter.post('/skin-categories', requireAnyPermission(['skinCategory:write', 'product:write']), createSkinCategory)
@@ -368,6 +378,10 @@ adminRouter.get('/skins/:id', requireAnyPermission(['skin:read', 'product:read']
 adminRouter.post('/skins', requireAnyPermission(['skin:write', 'product:write']), createSkin)
 adminRouter.put('/skins/:id', requireAnyPermission(['skin:write', 'product:write']), updateSkin)
 adminRouter.delete('/skins/:id', requireAnyPermission(['skin:write', 'product:write']), deleteSkin)
+
+adminRouter.get('/user-skins', requireAnyPermission(['skin:read']), listUserSkins)
+adminRouter.post('/user-skins', requireAnyPermission(['skin:write']), createUserSkin)
+adminRouter.delete('/user-skins/:id', requireAnyPermission(['skin:write']), deleteUserSkin)
 
 adminRouter.get('/user-vehicles', requireAnyPermission(['vehicle:read']), listUserVehicles)
 adminRouter.get('/user-vehicles/:id', requireAnyPermission(['vehicle:read']), getUserVehicle)

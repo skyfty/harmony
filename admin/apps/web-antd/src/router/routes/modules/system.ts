@@ -189,7 +189,8 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'UserControllableAssets',
         path: 'user-controllable-assets',
-        component: () => import('#/views/controllable-assets/user-controllable-assets.vue'),
+        component: () =>
+          import('#/views/controllable-assets/user-controllable-assets.vue'),
         meta: {
           icon: 'lucide:car-front',
           title: '用户可控资产',
@@ -221,6 +222,15 @@ const routes: RouteRecordRaw[] = [
         meta: {
           icon: 'lucide:tags',
           title: '皮肤分类',
+        },
+      },
+      {
+        name: 'UserSkins',
+        path: 'user-skins',
+        component: () => import('#/views/skins/user-skins.vue'),
+        meta: {
+          icon: 'lucide:users',
+          title: '用户皮肤',
         },
       },
     ],
@@ -385,7 +395,8 @@ const routes: RouteRecordRaw[] = [
       {
         name: 'UserTravelRecords',
         path: 'user-travel-records',
-        component: () => import('#/views/travel-records/user-travel-records.vue'),
+        component: () =>
+          import('#/views/travel-records/user-travel-records.vue'),
         meta: {
           icon: 'lucide:users',
           title: '用户游历记录',
@@ -401,7 +412,7 @@ const routes: RouteRecordRaw[] = [
       title: '勋章管理',
     },
     children: [
-      { 
+      {
         name: 'MedalsIndex',
         path: '',
         component: () => import('#/views/medals/index.vue'),
@@ -532,7 +543,7 @@ const routes: RouteRecordRaw[] = [
           title: $t('page.system.rbac'),
         },
       },
-      
+
       {
         name: 'LoginLogs',
         path: '/login-logs',
