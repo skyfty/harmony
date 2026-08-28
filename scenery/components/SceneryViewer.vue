@@ -295,37 +295,6 @@
           </button>
         </view>
       </view>
-      <view
-        v-if="vehicleDriveUi.visible && !watchExclusiveUiActive"
-        class="viewer-drive-console viewer-drive-console--mobile"
-      >
-        <view
-          v-show="drivePadState.visible"
-          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating"
-          :class="{ 'is-fading': drivePadState.fading }"
-          :style="drivePadStyle"
-        >
-          <view
-            ref="floatingJoystickRef"
-            class="viewer-drive-joystick"
-            :class="{ 'is-active': vehicleDriveUi.joystickActive }"
-            role="slider"
-            aria-label="驾驶摇杆"
-            aria-valuemin="-100"
-            aria-valuemax="100"
-            :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
-            @touchstart.stop.prevent="handleJoystickTouchStart"
-            @touchmove.stop.prevent="handleJoystickTouchMove"
-            @touchend.stop.prevent="handleJoystickTouchEnd"
-            @touchcancel.stop.prevent="handleJoystickTouchEnd"
-          >
-            <DriveJoystick
-              :is-active="vehicleDriveUi.joystickActive"
-              :knob-style="joystickKnobStyle"
-            />
-          </view>
-        </view>
-      </view>
       <view v-if="autoTourTelemetryUiVisible && !watchExclusiveUiActive" class="viewer-drive-speed-left-floating">
         <SpeedReadout :speed="vehicleSpeedKmh" :aria-hidden="true" />
         <button
@@ -360,33 +329,6 @@
         v-if="characterControlUi.visible && isWeChatMiniProgram && !watchExclusiveUiActive"
         class="viewer-character-console viewer-character-console--mobile"
       >
-        <view
-          v-show="characterDrivePadState.visible || characterDrivePadState.fading"
-          class="viewer-drive-cluster viewer-drive-cluster--joystick viewer-drive-cluster--floating viewer-character-drive-cluster"
-          :class="{ 'is-fading': characterDrivePadState.fading }"
-          :style="characterDrivePadStyle"
-        >
-          <view
-            v-show="characterDrivePadState.visible"
-            ref="characterFloatingJoystickRef"
-            class="viewer-drive-joystick"
-            :class="{ 'is-active': characterControlUi.joystickActive }"
-            role="slider"
-            :aria-label="`${characterControlUi.label}移动摇杆`"
-            aria-valuemin="-100"
-            aria-valuemax="100"
-            :aria-valuenow="Math.round(characterAuthorityInput.moveZ * 100)"
-            @touchstart.stop.prevent="handleCharacterJoystickTouchStart"
-            @touchmove.stop.prevent="handleCharacterJoystickTouchMove"
-            @touchend.stop.prevent="handleCharacterJoystickTouchEnd"
-            @touchcancel.stop.prevent="handleCharacterJoystickTouchEnd"
-          >
-            <DriveJoystick
-              :is-active="characterControlUi.joystickActive"
-              :knob-style="characterJoystickKnobStyle"
-            />
-          </view>
-        </view>
         <view
           v-if="characterActionButtons.length"
           ref="characterActionsBarRef"
@@ -1032,6 +974,11 @@ import {
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
 } from '../common/utils/instancedLodCulling';
+import {
+  createJoystickOverlay,
+  type JoystickOverlayViewport,
+  type WebglJoystickOverlay,
+} from '../common/webglJoystickOverlay';
 import type { InstancedLodTarget, ShowPurposeBehaviorButton } from '@harmony/schema/core';
 import type {
   SignboardPlacementSmoothingState,
@@ -3351,8 +3298,6 @@ const vehicleDriveIntroVisible = computed(() => (
   && vehicleDriveIntroState.elapsedSeconds < vehicleDriveIntroState.holdSeconds
 ));
 const lanternJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
-const floatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
-const characterFloatingJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const characterActionsBarRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const joystickVector = reactive({ x: 0, y: 0 });
 const joystickOffset = reactive({ x: 0, y: 0 });
@@ -3364,46 +3309,36 @@ const joystickState = reactive({
   ready: false,
 });
 const DRIVE_PAD_MOUSE_POINTER_ID = -2;
-const DRIVE_PAD_FADE_MS = 220;
-const drivePadState = reactive({ visible: false, fading: false, x: 0, y: 0 });
-const drivePadStyle = computed(() => ({
-  left: `${drivePadState.x}px`,
-  top: `${drivePadState.y}px`,
-}));
-let drivePadFadeTimer: ReturnType<typeof setTimeout> | null = null;
 let drivePadMouseTracking = false;
+let characterDrivePadMouseTracking = false;
 const isBrowserEnvironment = typeof window !== 'undefined';
-const drivePadViewportRect = { top: 0, left: 0, height: getViewportHeight() };
-const characterJoystickVector = reactive({ x: 0, y: 0 });
-const characterJoystickOffset = reactive({ x: 0, y: 0 });
-const characterJoystickState = reactive({
+// Plain (non-reactive) floating pad input. Touch/mouse handlers only mutate
+// these fields; the WebGL overlay visual and the drive inputs are sampled once
+// per render frame, matching the Summer Afternoon controls implementation.
+const vehiclePadInput = {
   active: false,
   pointerId: -1,
-  centerX: 0,
-  centerY: 0,
-  inputRadius: JOYSTICK_INPUT_RADIUS,
-  ready: false,
-});
-const characterDrivePadState = reactive({ visible: false, fading: false, x: 0, y: 0 });
-const characterDrivePadStyle = computed(() => ({
-  left: `${characterDrivePadState.x}px`,
-  top: `${characterDrivePadState.y}px`,
-}));
-let characterDrivePadFadeTimer: ReturnType<typeof setTimeout> | null = null;
-let characterDrivePadMouseTracking = false;
-const characterDrivePadViewportRect = { top: 0, left: 0, height: getViewportHeight() };
+  baseX: 0,
+  baseY: 0,
+  rawX: 0,
+  rawY: 0,
+};
+const characterPadInput = {
+  active: false,
+  pointerId: -1,
+  baseX: 0,
+  baseY: 0,
+  rawX: 0,
+  rawY: 0,
+};
+let vehicleJoystickOverlay: WebglJoystickOverlay | null = null;
+let characterJoystickOverlay: WebglJoystickOverlay | null = null;
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
 const joystickKnobStyle = computed(() => {
   const scale = joystickState.active ? 0.88 : 1;
   return {
     transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px)) scale(${scale})`,
-  };
-});
-const characterJoystickKnobStyle = computed(() => {
-  const scale = characterJoystickState.active ? 0.88 : 1;
-  return {
-    transform: `translate(calc(-50% + ${characterJoystickOffset.x}px), calc(-50% + ${characterJoystickOffset.y}px)) scale(${scale})`,
   };
 });
 const vehicleDriveResetBusy = ref(false);
@@ -3726,7 +3661,7 @@ const vehicleDriveUi = computed(() => {
     visible: true,
     label,
     cameraLocked: active,
-    joystickActive: active && joystickState.active,
+    joystickActive: active && (joystickState.active || vehiclePadInput.active),
     accelerating: active && vehicleDriveInput.throttle > 0.05,
     braking: active && vehicleDriveInputFlags.brake,
   } as const;
@@ -3755,7 +3690,7 @@ const characterControlUi = computed(() => {
   return {
     visible: true,
     label: node?.name?.trim() || controlledNodeId || 'Character',
-    joystickActive: characterJoystickState.active,
+    joystickActive: characterPadInput.active,
   } as const;
 });
 const characterActionButtons = computed<CharacterActionButtonEntry[]>(() => {
@@ -4494,7 +4429,7 @@ watch(
       refreshJoystickMetrics();
     } else {
       detachDrivePadMouseListeners();
-      hideDrivePadImmediate();
+      endVehiclePad();
       deactivateJoystick(true);
     }
   },
@@ -4504,17 +4439,22 @@ watch(
   () => characterControlUi.value.visible,
   (visible) => {
     if (visible) {
-      refreshCharacterJoystickMetrics();
       updateCharacterFollowCamera(0, { immediate: true });
     } else {
       resetCharacterActionButtonState();
       detachCharacterDrivePadMouseListeners();
-      hideCharacterDrivePadImmediate();
-      deactivateCharacterJoystick(true);
+      endCharacterPad();
       resetProtagonistPoseState();
     }
   },
 );
+
+watch(watchExclusiveUiActive, (active) => {
+  if (active) {
+    endVehiclePad();
+    endCharacterPad();
+  }
+});
 
 watch(
   () => resolveDefaultControlledCharacterNodeId(),
@@ -17048,9 +16988,7 @@ function refreshJoystickMetrics(): void {
       return null;
     };
 
-    const preferredElement = drivePadState.visible
-      ? resolveElement(floatingJoystickRef.value)
-      : resolveElement(lanternJoystickRef.value) ?? resolveElement(floatingJoystickRef.value);
+    const preferredElement = resolveElement(lanternJoystickRef.value);
 
     if (preferredElement) {
       const rect = preferredElement.getBoundingClientRect();
@@ -17065,165 +17003,21 @@ function refreshJoystickMetrics(): void {
       query.in((pageInstance?.proxy as unknown) ?? null);
     }
 
-    const expectedCenter = drivePadState.visible
-      ? {
-          x: drivePadViewportRect.left + drivePadState.x,
-          y: drivePadViewportRect.top + drivePadState.y,
-        }
-      : null;
-
     query
-      .selectAll('.viewer-drive-joystick')
-      .boundingClientRect((rects: unknown) => {
-        const items = (Array.isArray(rects) ? rects : []) as UniApp.NodeInfo[];
-        if (items.length === 0) {
-          joystickState.ready = false;
+      .select('.viewer-drive-joystick')
+      .boundingClientRect((rect: unknown) => {
+        const item = rect as UniApp.NodeInfo | null;
+        const left = item?.left ?? 0;
+        const top = item?.top ?? 0;
+        const width = item?.width ?? 0;
+        const height = item?.height ?? 0;
+        if (width > 0 && height > 0) {
+          joystickState.centerX = left + width / 2;
+          joystickState.centerY = top + height / 2;
+          joystickState.ready = true;
           return;
         }
-
-        let best: UniApp.NodeInfo | null = null;
-        let bestScore = Number.POSITIVE_INFINITY;
-        let bestArea = -1;
-
-        for (const rect of items) {
-          const left = rect.left ?? 0;
-          const top = rect.top ?? 0;
-          const width = rect.width ?? 0;
-          const height = rect.height ?? 0;
-          if (!(width > 0 && height > 0)) {
-            continue;
-          }
-          if (expectedCenter) {
-            const centerX = left + width / 2;
-            const centerY = top + height / 2;
-            const dx = centerX - expectedCenter.x;
-            const dy = centerY - expectedCenter.y;
-            const score = dx * dx + dy * dy;
-            if (score < bestScore) {
-              bestScore = score;
-              best = rect;
-            }
-          } else {
-            const area = width * height;
-            if (area > bestArea) {
-              bestArea = area;
-              best = rect;
-            }
-          }
-        }
-
-        if (!best) {
-          joystickState.ready = false;
-          return;
-        }
-
-        const left = best.left ?? 0;
-        const top = best.top ?? 0;
-        const width = best.width ?? 0;
-        const height = best.height ?? 0;
-        joystickState.centerX = left + width / 2;
-        joystickState.centerY = top + height / 2;
-        joystickState.ready = true;
-      })
-      .exec();
-  });
-}
-
-function refreshCharacterJoystickMetrics(): void {
-  nextTick(() => {
-    const resolveElement = (
-      value: ComponentPublicInstance | HTMLElement | { rootRef?: unknown } | null,
-    ): HTMLElement | null => {
-      if (!value) {
-        return null;
-      }
-      const exposedRootRef = (value as { rootRef?: unknown }).rootRef;
-      const resolvedValue = (exposedRootRef as { value?: unknown } | undefined)?.value
-        ?? exposedRootRef
-        ?? value;
-      if (typeof (resolvedValue as HTMLElement).getBoundingClientRect === 'function') {
-        return resolvedValue as HTMLElement;
-      }
-      const maybeEl = (resolvedValue as { $el?: unknown }).$el;
-      if (maybeEl && typeof (maybeEl as HTMLElement).getBoundingClientRect === 'function') {
-        return maybeEl as HTMLElement;
-      }
-      return null;
-    };
-
-    const preferredElement = resolveElement(characterFloatingJoystickRef.value);
-    if (preferredElement) {
-      const rect = preferredElement.getBoundingClientRect();
-      characterJoystickState.centerX = rect.left + rect.width / 2;
-      characterJoystickState.centerY = rect.top + rect.height / 2;
-      characterJoystickState.inputRadius = Math.max(1, Math.min(rect.width, rect.height) / 2);
-      characterJoystickState.ready = rect.width > 0 && rect.height > 0;
-      return;
-    }
-
-    const query = uni.createSelectorQuery();
-    if (typeof query.in === 'function') {
-      query.in((pageInstance?.proxy as unknown) ?? null);
-    }
-
-    const expectedCenter = characterDrivePadState.visible
-      ? {
-          x: characterDrivePadViewportRect.left + characterDrivePadState.x,
-          y: characterDrivePadViewportRect.top + characterDrivePadState.y,
-        }
-      : null;
-
-    query
-      .selectAll('.viewer-character-console .viewer-drive-joystick')
-      .boundingClientRect((rects: unknown) => {
-        const items = (Array.isArray(rects) ? rects : []) as UniApp.NodeInfo[];
-        if (items.length === 0) {
-          characterJoystickState.ready = false;
-          return;
-        }
-
-        let best: UniApp.NodeInfo | null = null;
-        let bestScore = Number.POSITIVE_INFINITY;
-        let bestArea = -1;
-
-        for (const rect of items) {
-          const left = rect.left ?? 0;
-          const top = rect.top ?? 0;
-          const width = rect.width ?? 0;
-          const height = rect.height ?? 0;
-          if (!(width > 0 && height > 0)) {
-            continue;
-          }
-          if (expectedCenter) {
-            const centerX = left + width / 2;
-            const centerY = top + height / 2;
-            const score = Math.hypot(centerX - expectedCenter.x, centerY - expectedCenter.y);
-            if (score < bestScore) {
-              best = rect;
-              bestScore = score;
-            }
-            continue;
-          }
-          const area = width * height;
-          if (area > bestArea) {
-            best = rect;
-            bestArea = area;
-          }
-        }
-
-        if (!best) {
-          characterJoystickState.ready = false;
-          return;
-        }
-
-        const left = best.left ?? 0;
-        const top = best.top ?? 0;
-        const width = best.width ?? 0;
-        const height = best.height ?? 0;
-        characterJoystickState.centerX = left + width / 2;
-        characterJoystickState.centerY = top + height / 2;
-        characterJoystickState.inputRadius = Math.max(1, Math.min(width, height) / 2);
-        characterJoystickState.ready = true;
+        joystickState.ready = false;
       })
       .exec();
   });
@@ -17266,9 +17060,7 @@ function deactivateJoystick(reset: boolean): void {
   }
 }
 
-function resolveJoystickDriveInput(): { throttle: number; steering: number } {
-  const x = joystickVector.x;
-  const y = joystickVector.y;
+function resolveJoystickDriveInput(x: number = joystickVector.x, y: number = joystickVector.y): { throttle: number; steering: number } {
   const length = Math.hypot(x, y);
   if (length <= JOYSTICK_DEADZONE) {
     return { throttle: 0, steering: 0 };
@@ -17346,9 +17138,7 @@ function resolveCharacterCameraChaseHeadingSpeed(): number {
   return maxChaseSpeed * chaseScale;
 }
 
-function resolveJoystickCharacterInput(): { x: number; y: number } {
-  const x = characterJoystickVector.x;
-  const y = characterJoystickVector.y;
+function resolveJoystickCharacterInput(x: number = characterPadInput.rawX, y: number = characterPadInput.rawY): { x: number; y: number } {
   const length = Math.hypot(x, y);
   if (length <= JOYSTICK_DEADZONE) {
     return { x: 0, y: 0 };
@@ -17574,8 +17364,7 @@ function resetCharacterControlInputs(): void {
   characterKeyState.interact = false;
   characterInputJumpLatch = false;
   resetSceneryCharacterInputYawState();
-  deactivateCharacterJoystick(true);
-  hideCharacterDrivePadImmediate();
+  endCharacterPad();
   detachCharacterDrivePadMouseListeners();
 }
 
@@ -17671,120 +17460,96 @@ function getViewportHeight(): number {
   return initialSystemInfo?.windowHeight ?? initialSystemInfo?.screenHeight ?? 0;
 }
 
-function shouldActivateDrivePad(
-  clientY: number,
-  viewportRect: { top: number; left: number; height: number } = drivePadViewportRect,
-): boolean {
-  const height = viewportRect.height > 0 ? viewportRect.height : getViewportHeight();
+function shouldActivateDrivePad(clientY: number): boolean {
+  const height = getViewportHeight();
   if (height <= 0) {
     return true;
   }
   // Activate only when touching the bottom third of the viewport
-  return clientY >= viewportRect.top + (height * 2) / 3;
+  return clientY >= (height * 2) / 3;
 }
 
-function updateDrivePadViewportRect(
-  target: EventTarget | null,
-  viewportRect: { top: number; left: number; height: number } = drivePadViewportRect,
-): void {
-  const element = target as { getBoundingClientRect?: () => DOMRect | ClientRect } | null;
-  if (element && typeof element.getBoundingClientRect === 'function') {
-    const rect = element.getBoundingClientRect();
-    if (rect) {
-      viewportRect.top = rect.top ?? 0;
-      viewportRect.left = rect.left ?? 0;
-      viewportRect.height = rect.height ?? getViewportHeight();
-      return;
-    }
+function resolvePadRawFromDelta(dx: number, dy: number): { x: number; y: number } {
+  const rawX = clampAxisScalar(dx / JOYSTICK_INPUT_RADIUS);
+  const rawY = clampAxisScalar(-dy / JOYSTICK_INPUT_RADIUS);
+  const length = Math.hypot(rawX, rawY);
+  if (length > 1) {
+    const inv = 1 / length;
+    return { x: rawX * inv, y: rawY * inv };
   }
-  viewportRect.top = 0;
-  viewportRect.left = 0;
-  viewportRect.height = getViewportHeight();
+  return { x: rawX, y: rawY };
 }
 
-function toDrivePadLocalCoords(
-  x: number,
-  y: number,
-  viewportRect: { top: number; left: number; height: number } = drivePadViewportRect,
-): { x: number; y: number } {
+function beginVehiclePad(pointerId: number, baseX: number, baseY: number): void {
+  vehiclePadInput.pointerId = pointerId;
+  vehiclePadInput.active = true;
+  vehiclePadInput.baseX = baseX;
+  vehiclePadInput.baseY = baseY;
+  vehiclePadInput.rawX = 0;
+  vehiclePadInput.rawY = 0;
+  vehicleJoystickOverlay?.begin(baseX, baseY);
+}
+
+function moveVehiclePad(x: number, y: number): void {
+  const raw = resolvePadRawFromDelta(x - vehiclePadInput.baseX, y - vehiclePadInput.baseY);
+  vehiclePadInput.rawX = raw.x;
+  vehiclePadInput.rawY = raw.y;
+  vehicleJoystickOverlay?.move(raw.x, raw.y);
+}
+
+function endVehiclePad(): void {
+  if (!vehiclePadInput.active && vehiclePadInput.pointerId === -1) {
+    return;
+  }
+  vehiclePadInput.active = false;
+  vehiclePadInput.pointerId = -1;
+  vehiclePadInput.rawX = 0;
+  vehiclePadInput.rawY = 0;
+  vehicleJoystickOverlay?.end();
+  recomputeVehicleDriveInputs(0, 0);
+}
+
+function beginCharacterPad(pointerId: number, baseX: number, baseY: number): void {
+  characterPadInput.pointerId = pointerId;
+  characterPadInput.active = true;
+  characterPadInput.baseX = baseX;
+  characterPadInput.baseY = baseY;
+  characterPadInput.rawX = 0;
+  characterPadInput.rawY = 0;
+  characterJoystickOverlay?.begin(baseX, baseY);
+}
+
+function moveCharacterPad(x: number, y: number): void {
+  const raw = resolvePadRawFromDelta(x - characterPadInput.baseX, y - characterPadInput.baseY);
+  characterPadInput.rawX = raw.x;
+  characterPadInput.rawY = raw.y;
+  characterJoystickOverlay?.move(raw.x, raw.y);
+}
+
+function endCharacterPad(): void {
+  if (!characterPadInput.active && characterPadInput.pointerId === -1) {
+    return;
+  }
+  characterPadInput.active = false;
+  characterPadInput.pointerId = -1;
+  characterPadInput.rawX = 0;
+  characterPadInput.rawY = 0;
+  characterJoystickOverlay?.end();
+  updateCharacterAuthorityInputFromKeys();
+}
+
+function resolveJoystickOverlayViewport(): JoystickOverlayViewport {
+  const canvas = canvasResult?.canvas ?? null;
+  const cssWidth = canvas?.clientWidth ?? canvas?.width ?? 1;
+  const cssHeight = canvas?.clientHeight ?? canvas?.height ?? 1;
+  const pxWidth = canvas?.width ?? cssWidth;
+  const pxHeight = canvas?.height ?? cssHeight;
   return {
-    x: x - viewportRect.left,
-    y: y - viewportRect.top,
+    cssWidth: cssWidth > 0 ? cssWidth : 1,
+    cssHeight: cssHeight > 0 ? cssHeight : 1,
+    pxWidth: pxWidth > 0 ? pxWidth : cssWidth,
+    pxHeight: pxHeight > 0 ? pxHeight : cssHeight,
   };
-}
-
-function cancelDrivePadFade(): void {
-  if (drivePadFadeTimer) {
-    clearTimeout(drivePadFadeTimer);
-    drivePadFadeTimer = null;
-  }
-}
-
-function summonDrivePadAt(x: number, y: number): void {
-  cancelDrivePadFade();
-  drivePadState.x = x;
-  drivePadState.y = y;
-  drivePadState.visible = true;
-  drivePadState.fading = false;
-}
-
-function scheduleDrivePadFade(): void {
-  if (!drivePadState.visible) {
-    return;
-  }
-  drivePadState.fading = true;
-  cancelDrivePadFade();
-  drivePadFadeTimer = setTimeout(() => {
-    drivePadState.visible = false;
-    drivePadState.fading = false;
-    drivePadFadeTimer = null;
-  }, DRIVE_PAD_FADE_MS);
-}
-
-function hideDrivePadImmediate(): void {
-  if (!drivePadState.visible && !drivePadState.fading) {
-    return;
-  }
-  cancelDrivePadFade();
-  drivePadState.visible = false;
-  drivePadState.fading = false;
-}
-
-function cancelCharacterDrivePadFade(): void {
-  if (characterDrivePadFadeTimer) {
-    clearTimeout(characterDrivePadFadeTimer);
-    characterDrivePadFadeTimer = null;
-  }
-}
-
-function summonCharacterDrivePadAt(x: number, y: number): void {
-  cancelCharacterDrivePadFade();
-  characterDrivePadState.x = x;
-  characterDrivePadState.y = y;
-  characterDrivePadState.visible = true;
-  characterDrivePadState.fading = false;
-}
-
-function scheduleCharacterDrivePadFade(): void {
-  if (!characterDrivePadState.visible) {
-    return;
-  }
-  characterDrivePadState.fading = true;
-  cancelCharacterDrivePadFade();
-  characterDrivePadFadeTimer = setTimeout(() => {
-    characterDrivePadState.visible = false;
-    characterDrivePadState.fading = false;
-    characterDrivePadFadeTimer = null;
-  }, DRIVE_PAD_FADE_MS);
-}
-
-function hideCharacterDrivePadImmediate(): void {
-  if (!characterDrivePadState.visible && !characterDrivePadState.fading) {
-    return;
-  }
-  cancelCharacterDrivePadFade();
-  characterDrivePadState.visible = false;
-  characterDrivePadState.fading = false;
 }
 
 function cancelVehicleSmoothStop(): void {
@@ -17967,10 +17732,9 @@ function handleControlPadMouseDown(event: MouseEvent): void {
 }
 
 function handleDrivePadTouchStart(event: TouchEvent): void {
-  if (!vehicleDriveUi.value.visible) {
+  if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value) {
     return;
   }
-  updateDrivePadViewportRect(event.currentTarget);
   const touch = event.changedTouches?.[0] ?? null;
   const coords = getTouchCoordinates(touch);
   if (!coords) {
@@ -17981,33 +17745,34 @@ function handleDrivePadTouchStart(event: TouchEvent): void {
   }
   event.stopPropagation();
   event.preventDefault();
-  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
   cancelVehicleSmoothStop();
-  summonDrivePadAt(localCoords.x, localCoords.y);
-  handleJoystickTouchStart(event);
+  beginVehiclePad(touch.identifier, coords.x, coords.y);
 }
 
 function handleDrivePadTouchMove(event: TouchEvent): void {
-  if (joystickState.pointerId === -1) {
+  if (vehiclePadInput.pointerId === -1) {
     return;
   }
-  const touch = extractTouchById(event, joystickState.pointerId);
+  const touch = extractTouchById(event, vehiclePadInput.pointerId);
   if (!touch) {
     return;
   }
-  handleJoystickTouchMove(event);
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
+    return;
+  }
+  moveVehiclePad(coords.x, coords.y);
 }
 
 function handleDrivePadTouchEnd(event: TouchEvent): void {
-  if (joystickState.pointerId === -1) {
+  if (vehiclePadInput.pointerId === -1) {
     return;
   }
-  const touch = extractTouchById(event, joystickState.pointerId);
-  if (!touch) {
+  const touch = extractTouchById(event, vehiclePadInput.pointerId);
+  if (!touch && event.type !== 'touchcancel') {
     return;
   }
-  handleJoystickTouchEnd(event);
-  scheduleDrivePadFade();
+  endVehiclePad();
 }
 
 function attachDrivePadMouseListeners(): void {
@@ -18031,97 +17796,37 @@ function detachDrivePadMouseListeners(): void {
 }
 
 function handleDrivePadMouseDown(event: MouseEvent): void {
-  if (!vehicleDriveUi.value.visible || event.button !== 0) {
+  if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value || event.button !== 0) {
     return;
   }
-  updateDrivePadViewportRect(event.currentTarget);
   const coords = { x: event.clientX, y: event.clientY };
   if (!shouldActivateDrivePad(coords.y)) {
     return;
   }
   event.stopPropagation();
   event.preventDefault();
-  const localCoords = toDrivePadLocalCoords(coords.x, coords.y);
   cancelVehicleSmoothStop();
-  summonDrivePadAt(localCoords.x, localCoords.y);
-  joystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
-  joystickState.active = true;
-  joystickState.ready = false;
-  setJoystickVector(0, 0);
-  applyJoystickFromPoint(coords.x, coords.y);
+  beginVehiclePad(DRIVE_PAD_MOUSE_POINTER_ID, coords.x, coords.y);
   attachDrivePadMouseListeners();
 }
 
 function handleDrivePadMouseMove(event: MouseEvent): void {
-  if (joystickState.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
+  if (vehiclePadInput.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
     return;
   }
   event.preventDefault();
-  applyJoystickFromPoint(event.clientX, event.clientY);
+  moveVehiclePad(event.clientX, event.clientY);
 }
 
 function handleDrivePadMouseUp(): void {
-  if (joystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
-    deactivateJoystick(true);
-    scheduleDrivePadFade();
+  if (vehiclePadInput.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
+    endVehiclePad();
   }
   detachDrivePadMouseListeners();
-  hideDrivePadImmediate();
-}
-
-function setCharacterJoystickVector(x: number, y: number): void {
-  let nextX = clampAxisScalar(x);
-  let nextY = clampAxisScalar(y);
-  const length = Math.hypot(nextX, nextY);
-  if (length > 1) {
-    const scale = 1 / length;
-    nextX *= scale;
-    nextY *= scale;
-  }
-  characterJoystickVector.x = nextX;
-  characterJoystickVector.y = nextY;
-  characterJoystickOffset.x = characterJoystickVector.x * JOYSTICK_VISUAL_RANGE;
-  characterJoystickOffset.y = -characterJoystickVector.y * JOYSTICK_VISUAL_RANGE;
-  updateCharacterAuthorityInputFromKeys();
-}
-
-function deactivateCharacterJoystick(reset: boolean): void {
-  characterJoystickState.active = false;
-  characterJoystickState.pointerId = -1;
-  characterJoystickState.ready = false;
-  characterJoystickState.inputRadius = JOYSTICK_INPUT_RADIUS;
-  if (reset) {
-    setCharacterJoystickVector(0, 0);
-  }
-}
-
-function applyCharacterJoystickFromPoint(x: number, y: number): void {
-  if (!characterJoystickState.ready) {
-    characterJoystickState.centerX = x;
-    characterJoystickState.centerY = y;
-    characterJoystickState.inputRadius = JOYSTICK_INPUT_RADIUS;
-    characterJoystickState.ready = true;
-    refreshCharacterJoystickMetrics();
-  }
-  const dx = x - characterJoystickState.centerX;
-  const dy = y - characterJoystickState.centerY;
-  if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-    return;
-  }
-  const inputRadius = Math.max(1, characterJoystickState.inputRadius);
-  const normalizedX = clampAxisScalar(dx / inputRadius);
-  const normalizedY = clampAxisScalar(-dy / inputRadius);
-  const length = Math.hypot(normalizedX, normalizedY);
-  if (length > 1) {
-    const inv = 1 / length;
-    setCharacterJoystickVector(normalizedX * inv, normalizedY * inv);
-    return;
-  }
-  setCharacterJoystickVector(normalizedX, normalizedY);
 }
 
 function handleCharacterDrivePadTouchStart(event: TouchEvent): void {
-  if (!characterControlUi.value.visible || vehicleDriveUi.value.visible) {
+  if (!characterControlUi.value.visible || vehicleDriveUi.value.visible || watchExclusiveUiActive.value) {
     return;
   }
   const touch = event.changedTouches?.[0] ?? null;
@@ -18137,33 +17842,33 @@ function handleCharacterDrivePadTouchStart(event: TouchEvent): void {
   }
   event.stopPropagation();
   event.preventDefault();
-  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
-  const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
-  summonCharacterDrivePadAt(localCoords.x, localCoords.y);
-  handleCharacterJoystickTouchStart(event);
+  beginCharacterPad(touch.identifier, coords.x, coords.y);
 }
 
 function handleCharacterDrivePadTouchMove(event: TouchEvent): void {
-  if (characterJoystickState.pointerId === -1) {
+  if (characterPadInput.pointerId === -1) {
     return;
   }
-  const touch = extractTouchById(event, characterJoystickState.pointerId);
+  const touch = extractTouchById(event, characterPadInput.pointerId);
   if (!touch) {
     return;
   }
-  handleCharacterJoystickTouchMove(event);
+  const coords = getTouchCoordinates(touch);
+  if (!coords) {
+    return;
+  }
+  moveCharacterPad(coords.x, coords.y);
 }
 
 function handleCharacterDrivePadTouchEnd(event: TouchEvent): void {
-  if (characterJoystickState.pointerId === -1) {
+  if (characterPadInput.pointerId === -1) {
     return;
   }
-  const touch = extractTouchById(event, characterJoystickState.pointerId);
-  if (!touch) {
+  const touch = extractTouchById(event, characterPadInput.pointerId);
+  if (!touch && event.type !== 'touchcancel') {
     return;
   }
-  handleCharacterJoystickTouchEnd(event);
-  scheduleCharacterDrivePadFade();
+  endCharacterPad();
 }
 
 function attachCharacterDrivePadMouseListeners(): void {
@@ -18187,7 +17892,7 @@ function detachCharacterDrivePadMouseListeners(): void {
 }
 
 function handleCharacterDrivePadMouseDown(event: MouseEvent): void {
-  if (!characterControlUi.value.visible || event.button !== 0) {
+  if (!characterControlUi.value.visible || watchExclusiveUiActive.value || event.button !== 0) {
     return;
   }
   const coords = { x: event.clientX, y: event.clientY };
@@ -18199,29 +17904,21 @@ function handleCharacterDrivePadMouseDown(event: MouseEvent): void {
   }
   event.stopPropagation();
   event.preventDefault();
-  updateDrivePadViewportRect(event.currentTarget, characterDrivePadViewportRect);
-  const localCoords = toDrivePadLocalCoords(coords.x, coords.y, characterDrivePadViewportRect);
-  summonCharacterDrivePadAt(localCoords.x, localCoords.y);
-  characterJoystickState.pointerId = DRIVE_PAD_MOUSE_POINTER_ID;
-  characterJoystickState.active = true;
-  characterJoystickState.ready = false;
-  setCharacterJoystickVector(0, 0);
-  applyCharacterJoystickFromPoint(coords.x, coords.y);
+  beginCharacterPad(DRIVE_PAD_MOUSE_POINTER_ID, coords.x, coords.y);
   attachCharacterDrivePadMouseListeners();
 }
 
 function handleCharacterDrivePadMouseMove(event: MouseEvent): void {
-  if (characterJoystickState.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
+  if (characterPadInput.pointerId !== DRIVE_PAD_MOUSE_POINTER_ID) {
     return;
   }
   event.preventDefault();
-  applyCharacterJoystickFromPoint(event.clientX, event.clientY);
+  moveCharacterPad(event.clientX, event.clientY);
 }
 
 function handleCharacterDrivePadMouseUp(): void {
-  if (characterJoystickState.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
-    deactivateCharacterJoystick(true);
-    scheduleCharacterDrivePadFade();
+  if (characterPadInput.pointerId === DRIVE_PAD_MOUSE_POINTER_ID) {
+    endCharacterPad();
   }
   detachCharacterDrivePadMouseListeners();
 }
@@ -18273,54 +17970,8 @@ function handleJoystickTouchEnd(event: TouchEvent): void {
   deactivateJoystick(true);
 }
 
-function handleCharacterJoystickTouchStart(event: TouchEvent): void {
-  if (!characterControlUi.value.visible || vehicleDriveUi.value.visible) {
-    return;
-  }
-  const touch = event.changedTouches?.[0] ?? null;
-  if (!touch) {
-    return;
-  }
-  if (!characterJoystickState.ready) {
-    refreshCharacterJoystickMetrics();
-  }
-  const coords = getTouchCoordinates(touch);
-  if (!coords) {
-    return;
-  }
-  characterJoystickState.pointerId = touch.identifier;
-  characterJoystickState.active = true;
-  applyCharacterJoystickFromPoint(coords.x, coords.y);
-}
-
-function handleCharacterJoystickTouchMove(event: TouchEvent): void {
-  if (!characterJoystickState.active || characterJoystickState.pointerId === -1) {
-    return;
-  }
-  const touch = extractTouchById(event, characterJoystickState.pointerId);
-  if (!touch) {
-    return;
-  }
-  const coords = getTouchCoordinates(touch);
-  if (!coords) {
-    return;
-  }
-  applyCharacterJoystickFromPoint(coords.x, coords.y);
-}
-
-function handleCharacterJoystickTouchEnd(event: TouchEvent): void {
-  if (characterJoystickState.pointerId === -1) {
-    return;
-  }
-  const touch = extractTouchById(event, characterJoystickState.pointerId);
-  if (!touch && event.type !== 'touchcancel') {
-    return;
-  }
-  deactivateCharacterJoystick(true);
-}
-
-function recomputeVehicleDriveInputs(): void {
-  const joystickInput = resolveJoystickDriveInput();
+function recomputeVehicleDriveInputs(x?: number, y?: number): void {
+  const joystickInput = resolveJoystickDriveInput(x, y);
   const throttleFromJoystick = clampAxisScalar(joystickInput.throttle);
   const steeringFromJoystick = clampAxisScalar(joystickInput.steering);
   // Keep joystick contribution, then let controller clamp and merge with flags/keyboard.
@@ -18335,6 +17986,7 @@ function recomputeVehicleDriveInputs(): void {
 
 function resetVehicleDriveInputs(): void {
   steeringKeyboardTarget.value = 0;
+  endVehiclePad();
   deactivateJoystick(true);
   vehicleDriveController.resetInputs();
 }
@@ -21289,13 +20941,29 @@ function handleWheelEvent(event: WheelEvent): void {
   });
 }
 
+function disposeJoystickOverlays(): void {
+  vehicleJoystickOverlay?.dispose();
+  vehicleJoystickOverlay = null;
+  characterJoystickOverlay?.dispose();
+  characterJoystickOverlay = null;
+}
+
 function teardownRenderer() {
+  disposeJoystickOverlays();
   renderScope?.stop();
   renderScope = null;
   teardownWheelControls();
   clearSceneInitState();
   clearVehicleDriveIntroState();
   if (!renderContext) {
+    vehiclePadInput.active = false;
+    vehiclePadInput.pointerId = -1;
+    vehiclePadInput.rawX = 0;
+    vehiclePadInput.rawY = 0;
+    characterPadInput.active = false;
+    characterPadInput.pointerId = -1;
+    characterPadInput.rawX = 0;
+    characterPadInput.rawY = 0;
     return;
   }
   resetProtagonistPoseState();
@@ -21507,6 +21175,9 @@ async function ensureRendererContext(result: UseCanvasResult) {
     camera,
     controls,
   };
+  disposeJoystickOverlays();
+  vehicleJoystickOverlay = createJoystickOverlay(scene);
+  characterJoystickOverlay = createJoystickOverlay(scene);
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);
   }
@@ -22028,6 +21699,12 @@ function startRenderLoop(
 
         if (deltaSeconds > 0) {
           const watchCameraLocked = isWatchCameraLocked();
+          const joystickViewport = resolveJoystickOverlayViewport();
+          vehicleJoystickOverlay?.update(deltaSeconds, joystickViewport);
+          characterJoystickOverlay?.update(deltaSeconds, joystickViewport);
+          if (vehiclePadInput.active && vehicleDriveActive.value) {
+            recomputeVehicleDriveInputs(vehiclePadInput.rawX, vehiclePadInput.rawY);
+          }
           updateCharacterAuthorityInputFromKeys();
           updateMoveToSessionForFrame(deltaSeconds);
           previewFrameCameraWorldPosition.x = camera.position.x;
@@ -22739,7 +22416,8 @@ function cleanupRuntime(): void {
     resizeListener = null;
   }
   detachDrivePadMouseListeners();
-  hideDrivePadImmediate();
+  endVehiclePad();
+  endCharacterPad();
   resetCharacterControlInputs();
   if (sceneDownloadController) {
     sceneDownloadController.abort();
@@ -24609,14 +24287,6 @@ onUnmounted(() => {
   animation: viewer-drive-busy-spin 0.9s linear infinite;
 }
 
-
-.viewer-drive-console {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 1550;
-}
-
 .viewer-drive-cluster {
   position: absolute;
   padding: 0;
@@ -24626,28 +24296,11 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
-.viewer-drive-console--mobile .viewer-drive-cluster {
-  max-width: none;
-}
-
 .viewer-drive-cluster--joystick {
   right: 16px;
   left: auto;
   bottom: 16px;
   align-items: center;
-}
-
-.viewer-drive-cluster--floating {
-  right: auto;
-  left: auto;
-  top: 0;
-  bottom: auto;
-  transform: translate(-50%, -50%);
-  transition: opacity 0.24s ease;
-}
-
-.viewer-drive-cluster--floating.is-fading {
-  opacity: 0;
 }
 
 .viewer-drive-joystick {
@@ -24690,11 +24343,6 @@ onUnmounted(() => {
 
 .viewer-character-console--mobile {
   display: block;
-}
-
-.viewer-character-drive-cluster {
-  gap: 10px;
-  align-items: center;
 }
 
 .viewer-character-actions-bar {
