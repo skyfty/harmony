@@ -743,6 +743,10 @@ import {
 import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { SceneAnimationRuntimeManager } from '@harmony/schema/sceneAnimationRuntime';
 import {
+  collectAnimationClips,
+  mergeAnimationClipsWithExternalPrecedence,
+} from '@harmony/schema/runtimeAnimationCatalog';
+import {
   setActiveMultiuserRuntimeBridge,
   setActiveMultiuserSceneId,
   type MultiuserCharacterPresentation,
@@ -784,9 +788,11 @@ import {
 } from '@harmony/schema/externalAnimationAssetCache';
 import {
   cleanupInactiveSkinAttachments,
+  hasCachedSkinAsset,
   getMissingSkinAssetIds,
   getOrLoadSkinAsset,
   resetSkinRuntime,
+  SKIN_SLOT_DESCRIPTORS,
   syncSkinAssetsForObject,
   syncSkinRuntimeForNode,
   type SkinAssetOverride,
@@ -2664,6 +2670,7 @@ type RemoteMultiuserPeerEntry = RemoteMultiuserPeerVisibilityState & {
   rootSignature: string;
   loadToken: number;
   lastAppliedSkinSignature: string;
+  defaultSkinOverrides: SkinAssetOverride[];
 };
 type NetworkSyncNodeRuntimeEntry = {
   nodeId: string;
@@ -6094,11 +6101,29 @@ function resolveLocalMultiuserControllableSpawnInfo(
       };
     }
   }
-  const matchedRequest = findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, fallbackIdentifier || null)
-    ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, subjectNodeId, subjectNodeName);
+  // 优先使用本端实际生效的 steer identifier（与 runtimePrefabSpawns.controllableIdentifier 同源），
+  // 确保页面存储/参数选择的角色资产能被上报给对端；其次才是场景节点名/ID。
+  const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
+    ? props.defaultSteerIdentifier.trim()
+    : '';
+  const matchedByIdentifier = findMatchingSteerRuntimePrefabRequest(
+    props.runtimePrefabSpawns,
+    defaultSteerIdentifier || fallbackIdentifier || null,
+  );
+  // 仅当请求声明的可控类型与当前主体一致（或未声明）时使用，
+  // 避免把用户已选的车辆资产误报成角色资产。
+  const matchedRequest = (
+    matchedByIdentifier
+    && (!matchedByIdentifier.controllableType || matchedByIdentifier.controllableType === subjectType)
+      ? matchedByIdentifier
+      : null
+  ) ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, subjectNodeId, subjectNodeName);
   if (matchedRequest) {
     return {
-      subjectIdentifier: matchedRequest.controllableIdentifier || matchedRequest.vehicleIdentifier || fallbackIdentifier,
+      subjectIdentifier: matchedRequest.controllableIdentifier
+        || matchedRequest.vehicleIdentifier
+        || defaultSteerIdentifier
+        || fallbackIdentifier,
       subjectAssetId: matchedRequest.assetId || null,
       subjectAssetUrl: matchedRequest.assetUrl || null,
     };
@@ -12967,6 +12992,7 @@ function createRemoteMultiuserPeerPlaceholderEntry(peerState: MultiuserPeerState
     rootSignature: '',
     loadToken: 0,
     lastAppliedSkinSignature: '',
+    defaultSkinOverrides: [],
   };
 }
 
@@ -13195,6 +13221,13 @@ function cloneRemoteMultiuserPeerState(state: MultiuserPeerState): MultiuserPeer
     subjectAssetId: state.subjectAssetId,
     subjectAssetUrl: state.subjectAssetUrl,
     action: state.action,
+    skins: Array.isArray(state.skins)
+      ? state.skins.map((skin) => ({
+          skinId: skin.skinId,
+          slotKey: skin.slotKey,
+          prefabUrl: skin.prefabUrl,
+        }))
+      : state.skins ?? null,
     position: {
       x: state.position.x,
       y: state.position.y,
@@ -13550,18 +13583,20 @@ function resolveRemoteMultiuserPrefabSpawnRequest(state: MultiuserPeerState): Ru
     : typeof matchedVehicleRequest?.assetUrl === 'string' && matchedVehicleRequest.assetUrl.trim().length
       ? matchedVehicleRequest.assetUrl.trim()
       : '';
-  const candidateAssetRef = candidateAssetId || candidateAssetUrl;
-  if (!candidateAssetRef) {
+  if (!candidateAssetUrl) {
     return null;
   }
-  const assetType = inferAssetTypeOrNull({ nameOrUrl: candidateAssetRef });
-  if (assetType !== 'prefab' && !candidateAssetRef.toLowerCase().endsWith('.prefab')) {
+  const assetType = inferAssetTypeOrNull({ nameOrUrl: candidateAssetUrl });
+  if (assetType !== 'prefab' && !candidateAssetUrl.toLowerCase().endsWith('.prefab')) {
     return null;
   }
   return normalizeRuntimePrefabRequest({
     requestId: matchedVehicleRequest?.requestId ?? null,
     vehicleIdentifier: state.subjectIdentifier ?? matchedVehicleRequest?.vehicleIdentifier ?? null,
-    assetId: candidateAssetId || candidateAssetRef,
+    // 远端携带权威 prefab 下载 URL 时优先直接用 URL 拉取文本；
+    // 同时携带 assetId 会导致 resolveText 优先走 assetId（可能解析到模型文件），
+    // 从而跳过 URL 导致 prefab 解析失败并回退成基础模型。
+    assetId: candidateAssetId && !candidateAssetUrl ? candidateAssetId : null,
     assetUrl: candidateAssetUrl || null,
     targetNodeId: matchedVehicleRequest?.targetNodeId ?? null,
     targetNodeName: matchedVehicleRequest?.targetNodeName ?? null,
@@ -13587,17 +13622,195 @@ function resolveRemoteMultiuserVehiclePrefabRequest(state: MultiuserPeerState): 
     ?? null;
 }
 
-async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; wheelNodeIds: string[] } | null> {
+interface RemotePrefabAnimationSource {
+  animationAssetIds: string[]
+}
+
+function collectRemotePrefabAnimationSources(root: SceneNode): Map<string, RemotePrefabAnimationSource> {
+  const sources = new Map<string, RemotePrefabAnimationSource>();
+  const stack: SceneNode[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const nodeId = typeof node.id === 'string' ? node.id.trim() : '';
+    const component = node.components?.[ANIMATION_COMPONENT_TYPE] as SceneNodeComponentState<AnimationComponentProps> | undefined;
+    if (nodeId && component && component.enabled !== false) {
+      const props = clampAnimationComponentProps(component.props ?? null);
+      if (Array.isArray(props.animationAssetIds) && props.animationAssetIds.length) {
+        sources.set(nodeId, {
+          animationAssetIds: props.animationAssetIds,
+        });
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return sources;
+}
+
+function collectRemotePrefabNodeById(root: SceneNode): Map<string, SceneNode> {
+  const nodeById = new Map<string, SceneNode>();
+  const stack: SceneNode[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const nodeId = typeof node.id === 'string' ? node.id.trim() : '';
+    if (nodeId) {
+      nodeById.set(nodeId, node);
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return nodeById;
+}
+
+function collectRemotePrefabSkinDefaults(root: SceneNode): SkinComponentProps | null {
+  const stack: SceneNode[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) {
+      continue;
+    }
+    const component = node.components?.[SKIN_COMPONENT_TYPE] as SceneNodeComponentState<SkinComponentProps> | undefined;
+    if (component && component.enabled !== false) {
+      const props = clampSkinComponentProps(component.props ?? null);
+      if (
+        props.hatAssetId
+        || props.glassesAssetId
+        || props.hairAssetId
+        || props.topAssetId
+        || props.pantsAssetId
+        || props.shoesAssetId
+      ) {
+        return props;
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children);
+    }
+  }
+  return null;
+}
+
+function toRemotePrefabSkinAssetOverrides(props: SkinComponentProps | null): SkinAssetOverride[] {
+  if (!props) {
+    return [];
+  }
+  const overrides: SkinAssetOverride[] = [];
+  SKIN_SLOT_DESCRIPTORS.forEach((slot) => {
+    const assetId = props[slot.key];
+    if (assetId) {
+      overrides.push({ slotKey: slot.key, assetId });
+    }
+  });
+  return overrides;
+}
+
+function findRemotePrefabAnimationTargetObjects(builtRoot: THREE.Object3D, node: SceneNode): THREE.Object3D[] {
+  const targets: THREE.Object3D[] = [];
+  const nodeId = typeof node.id === 'string' ? node.id.trim() : '';
+  const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+  const nodeName = typeof node.name === 'string' ? node.name.trim() : '';
+  if (nodeId) {
+    builtRoot.traverse((object) => {
+      if (object.userData?.nodeId === nodeId) {
+        targets.push(object);
+      }
+    });
+    if (targets.length) {
+      return targets;
+    }
+  }
+  if (sourceAssetId) {
+    builtRoot.traverse((object) => {
+      if (object.userData?.sourceAssetId === sourceAssetId) {
+        targets.push(object);
+      }
+    });
+    if (targets.length) {
+      return targets;
+    }
+  }
+  if (nodeName) {
+    builtRoot.traverse((object) => {
+      if (object.name === nodeName) {
+        targets.push(object);
+      }
+    });
+  }
+  return targets;
+}
+
+/**
+ * 远端 prefab 的动画通常挂在独立的外部动画资产（animationComponent.animationAssetIds）上，
+ * 基础模型可能不含任何 clip。剥离组件前收集这些资产引用，构建完成后加载并把外部 clip
+ * 以"外部优先"合并挂到对应模型对象，供 collectRemoteMultiuserAnimationControllers 播放。
+ */
+async function attachRemotePrefabExternalAnimations(
+  builtRoot: THREE.Object3D,
+  nodeById: Map<string, SceneNode>,
+  animationSources: Map<string, RemotePrefabAnimationSource>,
+  resourceCache: ResourceCache | null,
+): Promise<void> {
+  const externalAssetIds = new Set<string>();
+  animationSources.forEach((source) => {
+    source.animationAssetIds.forEach((assetId) => externalAssetIds.add(assetId));
+  });
+  if (!externalAssetIds.size) {
+    return;
+  }
+  const requestedIds = Array.from(externalAssetIds);
+  if (resourceCache) {
+    await Promise.all(requestedIds.map((assetId) => (
+      getOrLoadExternalAnimationObject(assetId, () => loadAssetObject(resourceCache, assetId))
+    )));
+  }
+  animationSources.forEach((source, nodeId) => {
+    const node = nodeById.get(nodeId) ?? null;
+    if (!node) {
+      return;
+    }
+    const externalClips: THREE.AnimationClip[] = [];
+    source.animationAssetIds.forEach((assetId) => {
+      collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip));
+    });
+    if (!externalClips.length) {
+      return;
+    }
+    const targets = findRemotePrefabAnimationTargetObjects(builtRoot, node);
+    targets.forEach((target) => {
+      const builtInClips = collectAnimationClips(target);
+      const merged = mergeAnimationClipsWithExternalPrecedence(builtInClips, externalClips);
+      if (merged.length) {
+        (target as unknown as { animations?: THREE.AnimationClip[] }).animations = merged;
+      }
+    });
+  });
+}
+
+async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; wheelNodeIds: string[]; defaultSkinOverrides: SkinAssetOverride[] } | null> {
   const sourceRequest = resolveRemoteMultiuserPrefabSpawnRequest(state);
   if (!sourceRequest) {
+    console.log(`[Multiuser][RemotePeer][PrefabLoad] subjectType=${state.subjectType} subjectAssetId=${state.subjectAssetId ?? ''} subjectAssetUrl=${state.subjectAssetUrl ?? ''} result=no-request`);
     return null;
   }
   try {
     const source = await resolveRuntimePrefabSource(sourceRequest, runtimePrefabSourceResolverOptions);
     if (!source) {
+      console.log(`[Multiuser][RemotePeer][PrefabLoad] subjectType=${state.subjectType} assetId=${sourceRequest.assetId ?? ''} assetUrl=${sourceRequest.assetUrl ?? ''} result=no-source`);
       return null;
     }
     const cloned = cloneRuntimePrefabNode(source.prefab);
+    // 剥离组件前先收集 animationComponent 的外部动画资产与 skinComponent 默认皮肤。
+    const animationSources = collectRemotePrefabAnimationSources(cloned.root);
+    const nodeById = collectRemotePrefabNodeById(cloned.root);
+    const defaultSkinOverrides = toRemotePrefabSkinAssetOverrides(collectRemotePrefabSkinDefaults(cloned.root));
 
     stripRemoteMultiuserPrefabRuntimeComponents(cloned.root);
     const runtimeDocument = createRuntimePrefabDocument(source.prefab, cloned.root);
@@ -13615,10 +13828,16 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
       return null;
     }
     const rootNode = graph.root.children[0];
+    rootNode.userData = {
+      ...(rootNode.userData ?? {}),
+      nodeId: cloned.root.id ?? null,
+    };
+    await attachRemotePrefabExternalAnimations(rootNode, nodeById, animationSources, resourceCache);
     applyWeChatShadowPolicy(rootNode);
     return {
       object: sanitizeRemoteMultiuserObject(rootNode),
       wheelNodeIds: isVehicleLikeMultiuserSubjectType(state.subjectType) ? collectPrefabVehicleWheelNodeIds(source.prefab, cloned.idMap) : [],
+      defaultSkinOverrides,
     };
   } catch (error) {
     console.warn('[SceneryViewer] Failed to instantiate remote multiuser prefab', {
@@ -13672,24 +13891,153 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
   }
 }
 
-async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean; wheelNodeIds: string[] }> {
-  const localRuntimePrefabClone = cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state);
-  if (localRuntimePrefabClone) {
-    return { object: localRuntimePrefabClone.object, ownsResources: false, wheelNodeIds: localRuntimePrefabClone.wheelNodeIds };
+async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean; wheelNodeIds: string[]; defaultSkinOverrides: SkinAssetOverride[] }> {
+  const localSourceAssetId = getRemoteMultiuserLocalNodeSourceAssetId(state);
+  const preferRemoteAsset = shouldPreferRemoteMultiuserAsset(state, localSourceAssetId);
+  console.log(`[Multiuser][RemotePeer][Create] ${formatMultiuserPeerStateForDebug(state)} localSourceAssetId=${localSourceAssetId || 'none'} preferRemoteAsset=${preferRemoteAsset}`);
+
+  let result: { object: THREE.Object3D; ownsResources: boolean; wheelNodeIds: string[]; defaultSkinOverrides: SkinAssetOverride[] } | null = null;
+  let path = 'placeholder';
+
+  // 1) 车辆：远端资产与本地已 spawn 的运行时 prefab 一致（或无资产引用）时，直接克隆本地实例。
+  const matchedVehicleRequest = isVehicleLikeMultiuserSubjectType(state.subjectType)
+    ? resolveRemoteMultiuserVehiclePrefabRequest(state)
+    : null;
+  if (remoteMultiuserAssetMatchesLocalPrefabRequest(state, matchedVehicleRequest)) {
+    const localRuntimePrefabClone = cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state);
+    if (localRuntimePrefabClone) {
+      result = { object: localRuntimePrefabClone.object, ownsResources: false, wheelNodeIds: localRuntimePrefabClone.wheelNodeIds, defaultSkinOverrides: [] };
+      path = 'local-runtime-prefab';
+    }
   }
-  const runtimeClone = cloneRemoteMultiuserObjectFromRuntime(state.subjectNodeId);
-  if (runtimeClone) {
-    return { object: runtimeClone, ownsResources: false, wheelNodeIds: [] };
+
+  // 2) 远端资产与本地主控节点不一致时，优先按远端上报的资产重建。
+  if (!result && preferRemoteAsset) {
+    const prefabObject = await loadRemoteMultiuserPrefabObject(state);
+    if (prefabObject) {
+      result = { object: prefabObject.object, ownsResources: true, wheelNodeIds: prefabObject.wheelNodeIds, defaultSkinOverrides: prefabObject.defaultSkinOverrides };
+      path = 'remote-prefab';
+    } else {
+      const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
+      if (resourceObject) {
+        result = { object: resourceObject, ownsResources: true, wheelNodeIds: [], defaultSkinOverrides: [] };
+        path = 'remote-asset';
+      }
+    }
   }
-  const prefabObject = await loadRemoteMultiuserPrefabObject(state);
-  if (prefabObject) {
-    return { object: prefabObject.object, ownsResources: true, wheelNodeIds: prefabObject.wheelNodeIds };
+
+  // 3) 场景主控角色配置：无资产引用、或与本地节点一致时直接克隆；
+  //    远端资产加载失败时也作为回退，保证不闪占位体。
+  if (!result) {
+    const runtimeClone = cloneRemoteMultiuserObjectFromRuntime(state.subjectNodeId);
+    if (runtimeClone) {
+      result = { object: runtimeClone, ownsResources: false, wheelNodeIds: [], defaultSkinOverrides: [] };
+      path = 'scene-clone';
+    }
   }
-  const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
-  if (resourceObject) {
-    return { object: resourceObject, ownsResources: true, wheelNodeIds: [] };
+
+  // 4) 本地节点不可用（懒加载/缺失）时，再尝试按远端资产加载。
+  if (!result && !preferRemoteAsset) {
+    const prefabObject = await loadRemoteMultiuserPrefabObject(state);
+    if (prefabObject) {
+      result = { object: prefabObject.object, ownsResources: true, wheelNodeIds: prefabObject.wheelNodeIds, defaultSkinOverrides: prefabObject.defaultSkinOverrides };
+      path = 'remote-prefab';
+    } else {
+      const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
+      if (resourceObject) {
+        result = { object: resourceObject, ownsResources: true, wheelNodeIds: [], defaultSkinOverrides: [] };
+        path = 'remote-asset';
+      }
+    }
   }
-  return { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true, wheelNodeIds: [] };
+
+  // 5) 占位体兜底。
+  if (!result) {
+    result = { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true, wheelNodeIds: [], defaultSkinOverrides: [] };
+    path = 'placeholder';
+  }
+
+  console.log(`[Multiuser][RemotePeer][CreateResult] subjectType=${state.subjectType} subjectNodeId=${state.subjectNodeId ?? ''} path=${path} ownsResources=${result.ownsResources} wheels=${result.wheelNodeIds.length}`);
+  return result;
+}
+
+function formatMultiuserPeerStateForDebug(state: MultiuserPeerState | null | undefined): string {
+  if (!state) {
+    return 'state=null';
+  }
+  const skins = Array.isArray(state.skins) && state.skins.length
+    ? state.skins.map((skin) => `${skin.slotKey}=${skin.prefabUrl || skin.skinId}`).join(',')
+    : 'none';
+  const animation = state.presentation?.character?.animation ?? null;
+  const positionX = Number.isFinite(state.position.x) ? state.position.x.toFixed(2) : '?';
+  const positionY = Number.isFinite(state.position.y) ? state.position.y.toFixed(2) : '?';
+  const positionZ = Number.isFinite(state.position.z) ? state.position.z.toFixed(2) : '?';
+  return [
+    `subjectType=${state.subjectType}`,
+    `subjectNodeId=${state.subjectNodeId ?? ''}`,
+    `subjectIdentifier=${state.subjectIdentifier ?? ''}`,
+    `subjectAssetId=${state.subjectAssetId ?? ''}`,
+    `subjectAssetUrl=${state.subjectAssetUrl ?? ''}`,
+    `skins=[${skins}]`,
+    `position=(${positionX},${positionY},${positionZ})`,
+    `action=${state.action ?? ''}`,
+    `animationClip=${animation?.clipName ?? ''}`,
+    `animationTime=${animation && Number.isFinite(animation.time) ? animation.time.toFixed(3) : ''}`,
+  ].join(' ');
+}
+
+function getRemoteMultiuserReportedAssetRef(state: MultiuserPeerState): { assetId: string; assetUrl: string } {
+  const assetId = typeof state.subjectAssetId === 'string' ? state.subjectAssetId.trim() : '';
+  const assetUrl = typeof state.subjectAssetUrl === 'string' ? state.subjectAssetUrl.trim() : '';
+  return { assetId, assetUrl };
+}
+
+function getRemoteMultiuserLocalNodeSourceAssetId(state: MultiuserPeerState): string {
+  const node = state.subjectNodeId ? resolveNodeById(state.subjectNodeId) : null;
+  return typeof node?.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+}
+
+/**
+ * 远端状态是否携带了与本地主控节点不同的资产引用。
+ * - 无任何资产引用：不优先远端加载，走本地克隆快路径。
+ * - 只有 assetId 且与本地节点 sourceAssetId 一致：同一基础资产，走本地克隆快路径。
+ * - 其余情况（携带 URL，或 assetId 与本地不一致）：优先按远端资产重建。
+ */
+function shouldPreferRemoteMultiuserAsset(state: MultiuserPeerState, localSourceAssetId: string): boolean {
+  const reported = getRemoteMultiuserReportedAssetRef(state);
+  if (!reported.assetId && !reported.assetUrl) {
+    return false;
+  }
+  if (reported.assetId && !reported.assetUrl) {
+    return !localSourceAssetId || reported.assetId !== localSourceAssetId;
+  }
+  return true;
+}
+
+/**
+ * 远端上报的资产引用与本地运行时 prefab 请求是否一致（或无引用）。
+ * 一致时可直接克隆本地已 spawn 的 prefab 实例，避免重复下载。
+ */
+function remoteMultiuserAssetMatchesLocalPrefabRequest(
+  state: MultiuserPeerState,
+  request: RuntimePrefabSpawnRequest | null,
+): boolean {
+  const reported = getRemoteMultiuserReportedAssetRef(state);
+  if (!reported.assetId && !reported.assetUrl) {
+    return true;
+  }
+  if (!request) {
+    return false;
+  }
+  const requestAssetId = typeof request.assetId === 'string' ? request.assetId.trim() : '';
+  const requestAssetUrl = typeof request.assetUrl === 'string' ? request.assetUrl.trim() : '';
+  if (reported.assetId && requestAssetId) {
+    return reported.assetId === requestAssetId;
+  }
+  if (reported.assetUrl && requestAssetUrl) {
+    return reported.assetUrl === requestAssetUrl;
+  }
+  return false;
 }
 
 function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: MultiuserPeerState): void {
@@ -14160,13 +14508,15 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
   markRemoteMultiuserPeerVisible(entry, frameIndex);
   markInstancedCullingDirty();
 
-  void createRemoteMultiuserPeerObject(entry.targetState).then(({ object, ownsResources }) => {
+  void createRemoteMultiuserPeerObject(entry.targetState).then(({ object, ownsResources, defaultSkinOverrides }) => {
     if (remoteMultiuserPeerLoadTokens.get(userId) !== currentLoadToken) {
+      console.log(`[Multiuser][RemotePeer][DiscardObject] userId=${userId} reason=stale-token`);
       disposeRemoteMultiuserObject(object, ownsResources);
       return;
     }
     const latestEntry = remoteMultiuserPeerEntries.get(userId) ?? null;
     if (!latestEntry || latestEntry.signature !== entry.signature || !latestEntry.visible) {
+      console.log(`[Multiuser][RemotePeer][DiscardObject] userId=${userId} reason=stale-entry signatureChanged=${latestEntry ? latestEntry.signature !== entry.signature : true} visible=${latestEntry ? latestEntry.visible : false}`);
       disposeRemoteMultiuserObject(object, ownsResources);
       return;
     }
@@ -14185,6 +14535,7 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
       root: object,
       ownsResources,
       rootSignature: latestEntry.signature,
+      defaultSkinOverrides: Array.isArray(defaultSkinOverrides) ? defaultSkinOverrides : [],
     };
     attachRemoteMultiuserPeerRuntime(runtimeEntry);
     applyRemoteMultiuserPeerRuntime(runtimeEntry, runtimeEntry.displayState ?? runtimeEntry.targetState, 1, 0);
@@ -14193,6 +14544,7 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
     markRemoteMultiuserPeerVisible(runtimeEntry, frameIndex);
     remoteMultiuserPeerEntries.set(userId, runtimeEntry);
     markInstancedCullingDirty();
+    console.log(`[Multiuser][RemotePeer][AttachObject] userId=${userId} placeholder=${isRemoteMultiuserPlaceholderObject(object)} ownsResources=${ownsResources}`);
   }).catch((error) => {
     console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
   });
@@ -14720,12 +15072,25 @@ function applyRemoteMultiuserPeerSkins(entry: RemoteMultiuserPeerEntry, userId: 
     return;
   }
   const skins = Array.isArray(entry.targetState.skins) ? entry.targetState.skins : [];
-  const overrides: SkinAssetOverride[] = skins
+  let overrides: SkinAssetOverride[] = skins
     .map((skin) => ({
       slotKey: skin.slotKey,
       assetId: typeof skin.prefabUrl === 'string' ? skin.prefabUrl.trim() : '',
     }))
     .filter((override) => Boolean(override.slotKey && override.assetId.length));
+  if (!overrides.length && Array.isArray(entry.defaultSkinOverrides) && entry.defaultSkinOverrides.length) {
+    // 对端未上报皮肤时，使用远端 prefab 自带的 skinComponent 默认皮肤兜底。
+    overrides = entry.defaultSkinOverrides;
+  }
+  const signature = getMultiuserSkinSignature(skins);
+  if (signature !== entry.lastAppliedSkinSignature) {
+    console.log(`[Multiuser][RemotePeer][ApplySkins] userId=${userId} skins=[${skins.length ? skins.map((skin) => `${skin.slotKey}=${skin.prefabUrl || ''}`).join(',') : 'none'}]`);
+  }
+  const missingAssetIds = Array.from(new Set(
+    overrides
+      .map((override) => override.assetId)
+      .filter((assetId) => !hasCachedSkinAsset(assetId)),
+  ));
   syncSkinAssetsForObject(entry.root, overrides, {
     nodeId: `remote-peer:${userId}`,
     componentId: 'remote-skins',
@@ -14733,7 +15098,22 @@ function applyRemoteMultiuserPeerSkins(entry: RemoteMultiuserPeerEntry, userId: 
       viewerResourceCache ? loadAssetObject(viewerResourceCache, assetId) : Promise.resolve(null)
     ),
   });
-  entry.lastAppliedSkinSignature = getMultiuserSkinSignature(skins);
+  if (missingAssetIds.length && viewerResourceCache) {
+    const resourceCache = viewerResourceCache;
+    const requestedIds = missingAssetIds;
+    void (async () => {
+      await Promise.all(requestedIds.map((assetId) => (
+        getOrLoadSkinAsset(assetId, () => loadAssetObject(resourceCache, assetId))
+      )));
+      // 首次应用时资产可能未缓存而跳过挂载，加载完成后重挂；
+      // 条目可能已被移除或重建，先校验再应用。
+      const latest = remoteMultiuserPeerEntries.get(userId) ?? null;
+      if (latest && latest.root && latest === entry) {
+        applyRemoteMultiuserPeerSkins(latest, userId);
+      }
+    })();
+  }
+  entry.lastAppliedSkinSignature = signature;
 }
 
 function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
@@ -14764,6 +15144,9 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
     return;
   }
   const nextEntry = existing ?? createRemoteMultiuserPeerPlaceholderEntry(peer.state);
+  if (!existing) {
+    console.log(`[Multiuser][RemotePeer][FirstSnapshot] userId=${peer.userId} displayName=${displayName} ${formatMultiuserPeerStateForDebug(peer.state)}`);
+  }
   nextEntry.signature = signature;
   nextEntry.displayName = displayName;
   nextEntry.targetState = cloneRemoteMultiuserPeerState(peer.state);
@@ -15661,8 +16044,19 @@ function refreshSkinRuntime(): void {
       ),
     });
   });
-  // 多人在线远端角色使用合成的 nodeId/componentId 挂载皮肤，纳入 activeKeys 防止被清理。
+  // 多人在线远端角色使用合成的 nodeId/componentId 挂载皮肤，纳入 activeKeys 防止被清理；
+  // 同时把未缓存的皮肤资产并入 missingAssetIds，加载完成后统一补挂。
   remoteMultiuserPeerEntries.forEach((entry, userId) => {
+    const remoteSkinProps = clampSkinComponentProps(null);
+    const skins = Array.isArray(entry.targetState.skins) ? entry.targetState.skins : [];
+    skins.forEach((skin) => {
+      const slotKey = skin?.slotKey;
+      const prefabUrl = typeof skin?.prefabUrl === 'string' ? skin.prefabUrl.trim() : '';
+      if (slotKey && slotKey in remoteSkinProps && prefabUrl) {
+        remoteSkinProps[slotKey] = prefabUrl;
+      }
+    });
+    getMissingSkinAssetIds(remoteSkinProps).forEach((assetId) => missingAssetIds.add(assetId));
     if (entry.lastAppliedSkinSignature) {
       activeKeys.add(`remote-peer:${userId}\u0001remote-skins`);
     }
@@ -15678,6 +16072,12 @@ function refreshSkinRuntime(): void {
       )));
       // 外部换装资产加载完成后重新同步，使槽位挂件进入对应角色节点。
       refreshSkinRuntime();
+      // 远端角色皮肤资产首次应用时可能未缓存而跳过挂载，加载完成后补挂。
+      remoteMultiuserPeerEntries.forEach((entry, userId) => {
+        if (entry.root && Array.isArray(entry.targetState.skins) && entry.targetState.skins.length) {
+          applyRemoteMultiuserPeerSkins(entry, userId);
+        }
+      });
     })();
   }
 }
