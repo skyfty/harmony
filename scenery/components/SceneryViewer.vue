@@ -13957,6 +13957,10 @@ async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promi
     path = 'placeholder';
   }
 
+  if (result && state.subjectType === 'character') {
+    bakeRemoteMultiuserCharacterFeetAlignment(result.object);
+  }
+
   console.log(`[Multiuser][RemotePeer][CreateResult] subjectType=${state.subjectType} subjectNodeId=${state.subjectNodeId ?? ''} path=${path} ownsResources=${result.ownsResources} wheels=${result.wheelNodeIds.length}`);
   return result;
 }
@@ -14038,6 +14042,35 @@ function remoteMultiuserAssetMatchesLocalPrefabRequest(
     return reported.assetUrl === requestAssetUrl;
   }
   return false;
+}
+
+/**
+ * 远端角色统一把模型脚底对齐到角色根部位置（root Y = 脚底 Y）。
+ * 不同角色资产的原点语义不同（根在脚底或身体中心），
+ * 这里把已有子层级包进一个 Y 偏移组，避免后续每帧 transform 覆盖根位置。
+ */
+function bakeRemoteMultiuserCharacterFeetAlignment(object: THREE.Object3D): void {
+  if (!object || object.children.length === 0) {
+    return;
+  }
+  const rootY = object.position.y;
+  const bounds = new THREE.Box3().setFromObject(object);
+  const bottomY = bounds.isEmpty() ? Number.NaN : bounds.min.y;
+  if (!Number.isFinite(bottomY)) {
+    return;
+  }
+  const offsetY = rootY - bottomY;
+  if (Math.abs(offsetY) < 1e-4) {
+    return;
+  }
+  const offsetGroup = new THREE.Group();
+  offsetGroup.name = 'RemotePeerFeetAlign';
+  while (object.children.length) {
+    offsetGroup.add(object.children[0]);
+  }
+  offsetGroup.position.y = offsetY;
+  object.add(offsetGroup);
+  object.updateWorldMatrix(true, true);
 }
 
 function applyRemoteMultiuserPeerTransform(object: THREE.Object3D, state: MultiuserPeerState): void {
@@ -15330,6 +15363,12 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   protagonistObject.getWorldPosition(protagonistPosePosition);
   protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
   protagonistObject.getWorldScale(remoteSharedEntityTargetScaleScratch);
+  // 角色位置统一按"脚底接地位置"上报：不同角色资产的原点语义不同
+  // （有的根在脚底、有的根在身体中心），远端按同一语义重建才不会下沉/悬空。
+  const protagonistFeetBounds = new THREE.Box3().setFromObject(protagonistObject);
+  if (!protagonistFeetBounds.isEmpty()) {
+    protagonistPosePosition.y = protagonistFeetBounds.min.y;
+  }
   const characterPresentation = resolveLocalMultiuserCharacterPresentation(resolvedNodeId);
   const characterSpawnInfo = resolveLocalMultiuserControllableSpawnInfo('character', resolvedNodeId, node?.name ?? null);
   return {
