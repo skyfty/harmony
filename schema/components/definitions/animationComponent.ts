@@ -9,11 +9,12 @@ export const ANIMATION_COMPONENT_TYPE = 'animationComponent'
 export interface AnimationComponentProps {
   defaultClipName: string | null
   /**
-   * 外部动画资产（资产库中的 GLB/FBX 等模型资产）。
-   * 该资产中的动画片段会合并进当前节点的动画运行时，同名 clip 以外部为准；
+   * 外部动画资产列表（资产库中的 GLB/FBX 等模型资产）。
+   * 这些资产中的动画片段会按列表顺序合并进当前节点的动画运行时：
+   * 同名 clip 以外部为准，多个外部资产同名时后添加的覆盖先添加的；
    * 未选择或外部无 clip 时回退到模型内置动画。
    */
-  animationAssetId: string | null
+  animationAssetIds: string[]
   autoplay: boolean
   loop: boolean
   timeScale: number
@@ -42,15 +43,41 @@ function sanitizeAssetId(value: unknown): string | null {
   return trimmed.length ? trimmed : null
 }
 
+function sanitizeAssetIds(value: unknown): string[] {
+  const ids = Array.isArray(value) ? value : []
+  const result: string[] = []
+  const seen = new Set<string>()
+  ids.forEach((id) => {
+    const normalized = sanitizeAssetId(id)
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized)
+      result.push(normalized)
+    }
+  })
+  return result
+}
+
 export function clampAnimationComponentProps(
-  props: Partial<AnimationComponentProps> | null | undefined,
+  props:
+    | Partial<AnimationComponentProps>
+    | { animationAssetId?: unknown }
+    | null
+    | undefined,
 ): AnimationComponentProps {
+  const raw = (props ?? {}) as Partial<AnimationComponentProps> & { animationAssetId?: unknown }
+  const hasAssetIdsArray = Array.isArray(raw.animationAssetIds)
+  const legacyAssetId = sanitizeAssetId(raw.animationAssetId)
+  const animationAssetIds = hasAssetIdsArray
+    ? sanitizeAssetIds(raw.animationAssetIds)
+    : legacyAssetId
+      ? [legacyAssetId]
+      : []
   return {
-    defaultClipName: sanitizeAnimationClipName(props?.defaultClipName),
-    animationAssetId: sanitizeAssetId(props?.animationAssetId),
-    autoplay: clampBoolean(props?.autoplay, true),
-    loop: clampBoolean(props?.loop, true),
-    timeScale: clampFiniteNumber(props?.timeScale, 1),
+    defaultClipName: sanitizeAnimationClipName(raw.defaultClipName),
+    animationAssetIds,
+    autoplay: clampBoolean(raw.autoplay, true),
+    loop: clampBoolean(raw.loop, true),
+    timeScale: clampFiniteNumber(raw.timeScale, 1),
   }
 }
 
@@ -59,7 +86,7 @@ export function cloneAnimationComponentProps(
 ): AnimationComponentProps {
   return {
     defaultClipName: props.defaultClipName,
-    animationAssetId: props.animationAssetId,
+    animationAssetIds: [...props.animationAssetIds],
     autoplay: props.autoplay,
     loop: props.loop,
     timeScale: props.timeScale,

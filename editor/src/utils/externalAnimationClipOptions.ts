@@ -101,10 +101,12 @@ export async function collectBuiltInAnimationClipOptions(
 
 export async function collectAnimationClipOptionsWithExternalAsset(
   runtimeObject: Object3D | null | undefined,
-  externalAssetId: string | null | undefined,
+  externalAssetIds: readonly string[] | null | undefined,
   builtInFallbackAssetId?: string | null | undefined,
 ): Promise<AnimationClipOption[]> {
   const builtIn = await collectBuiltInAnimationClipOptions(runtimeObject, builtInFallbackAssetId)
-  const external = externalAssetId ? await collectExternalAnimationClipOptions(externalAssetId) : []
+  const ids = Array.isArray(externalAssetIds) ? externalAssetIds : []
+  const nested = await Promise.all(ids.map((assetId) => collectExternalAnimationClipOptions(assetId)))
+  const external = nested.flat()
   return mergeAnimationClipOptions(external, builtIn)
 }

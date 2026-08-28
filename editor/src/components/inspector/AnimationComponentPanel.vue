@@ -27,27 +27,27 @@ const clipOptions = ref<Array<{ label: string; value: string }>>([])
 const isLoadingClips = ref(false)
 const clipLoadError = ref<string | null>(null)
 const externalAnimationAssetDialogVisible = ref(false)
-const externalAnimationAssetDialogSelectedId = ref('')
+const externalAnimationAssetDialogSelectedIds = ref<string[]>([])
 const externalAnimationAssetAnchor = ref<{ x: number; y: number } | null>(null)
 let clipLoadRequestId = 0
 
-const externalAnimationAssetName = computed(() => {
-  const assetId = normalizedProps.value.animationAssetId
-  if (!assetId) {
-    return null
-  }
-  return sceneStore.collectCatalogAssetMap().get(assetId)?.name ?? assetId
+const selectedAnimationAssets = computed(() => {
+  const assetMap = sceneStore.collectCatalogAssetMap()
+  return normalizedProps.value.animationAssetIds.map((assetId) => ({
+    id: assetId,
+    name: assetMap.get(assetId)?.name ?? assetId,
+  }))
 })
 
 function openExternalAnimationAssetDialog(event?: MouseEvent): void {
-  externalAnimationAssetDialogSelectedId.value = normalizedProps.value.animationAssetId ?? ''
+  externalAnimationAssetDialogSelectedIds.value = [...normalizedProps.value.animationAssetIds]
   externalAnimationAssetAnchor.value = event ? { x: event.clientX, y: event.clientY } : null
   externalAnimationAssetDialogVisible.value = true
 }
 
-function handleExternalAnimationAssetUpdate(asset: ProjectAsset | null): void {
+function handleExternalAnimationAssetsConfirm(assets: ProjectAsset[]): void {
   updateComponent({
-    animationAssetId: asset?.id ?? null,
+    animationAssetIds: assets.map((asset) => asset.id),
   })
   externalAnimationAssetDialogVisible.value = false
 }
@@ -56,9 +56,15 @@ function handleExternalAnimationAssetCancel(): void {
   externalAnimationAssetDialogVisible.value = false
 }
 
-function clearExternalAnimationAsset(): void {
+function removeExternalAnimationAsset(assetId: string): void {
   updateComponent({
-    animationAssetId: null,
+    animationAssetIds: normalizedProps.value.animationAssetIds.filter((id) => id !== assetId),
+  })
+}
+
+function clearExternalAnimationAssets(): void {
+  updateComponent({
+    animationAssetIds: [],
   })
 }
 
@@ -140,7 +146,7 @@ async function loadClipsForNode(nodeId: string | null) {
     }
     const nextOptions = await collectAnimationClipOptionsWithExternalAsset(
       runtimeObject,
-      normalizedProps.value.animationAssetId,
+      normalizedProps.value.animationAssetIds,
       selectedNode.value?.sourceAssetId ?? null,
     )
     if (requestId === clipLoadRequestId) {
@@ -159,7 +165,11 @@ async function loadClipsForNode(nodeId: string | null) {
 }
 
 watch(
-  () => [selectedNode.value?.id ?? null, normalizedProps.value.animationAssetId] as const,
+  () =>
+    [
+      selectedNode.value?.id ?? null,
+      normalizedProps.value.animationAssetIds.join('\u0001'),
+    ] as const,
   ([nodeId]) => {
     void loadClipsForNode(nodeId)
   },
@@ -187,6 +197,14 @@ watch(
       <div class="animation-component-panel__header">
         <span class="animation-component-panel__title">Animation</span>
         <v-spacer />
+          <v-btn
+            icon="mdi-plus"
+            size="small"
+            variant="text"
+          :disabled="!componentEnabled"
+          @click.stop="openExternalAnimationAssetDialog"
+          />
+
         <v-menu
           v-if="component"
           location="bottom end"
@@ -221,29 +239,43 @@ watch(
       <div class="animation-component-panel">
 
         <div class="animation-component-panel__field">
-          <div class="animation-component-panel__asset-row">
-            <v-btn
-              variant="tonal"
-              density="compact"
-              prepend-icon="mdi-movie-open-play"
-              class="animation-component-panel__asset-button"
-              :disabled="!componentEnabled"
-              @click="openExternalAnimationAssetDialog"
+          <div class="animation-component-panel__field-label">Animation Assets</div>
+          <div
+            v-if="selectedAnimationAssets.length"
+            class="animation-component-panel__asset-list"
+          >
+            <div
+              v-for="asset in selectedAnimationAssets"
+              :key="asset.id"
+              class="animation-component-panel__asset-row"
             >
-              {{ externalAnimationAssetName ?? 'Select animation asset' }}
-            </v-btn>
-            <v-btn
-              v-if="normalizedProps.animationAssetId"
-              icon
-              size="x-small"
-              variant="text"
-              density="compact"
-              :disabled="!componentEnabled"
-              @click="clearExternalAnimationAsset"
-            >
-              <v-icon size="16">mdi-close</v-icon>
-            </v-btn>
+              <span class="animation-component-panel__asset-name" :title="asset.id">
+                {{ asset.name }}
+              </span>
+              <v-btn
+                icon
+                size="x-small"
+                variant="text"
+                density="compact"
+                :disabled="!componentEnabled"
+                @click="removeExternalAnimationAsset(asset.id)"
+              >
+                <v-icon size="16">mdi-close</v-icon>
+              </v-btn>
+            </div>
           </div>
+          <div v-else class="animation-component-panel__empty">
+            No animation assets selected
+          </div>
+          <v-btn
+            v-if="selectedAnimationAssets.length"
+            variant="text"
+            density="compact"
+            :disabled="!componentEnabled"
+            @click="clearExternalAnimationAssets"
+          >
+            Clear
+          </v-btn>
         </div>
 
         <v-select
@@ -297,11 +329,12 @@ watch(
 
       <AssetPickerDialog
         v-model="externalAnimationAssetDialogVisible"
-        :asset-id="externalAnimationAssetDialogSelectedId"
+        multiple
+        v-model:selected-asset-ids="externalAnimationAssetDialogSelectedIds"
         assetType="model,mesh"
-        title="Select External Animation Asset"
+        title="Select Animation Assets"
         :anchor="externalAnimationAssetAnchor"
-        @update:asset="handleExternalAnimationAssetUpdate"
+        @confirm="handleExternalAnimationAssetsConfirm"
         @cancel="handleExternalAnimationAssetCancel"
       />
     </v-expansion-panel-text>
@@ -344,12 +377,30 @@ watch(
   gap: 0.35rem;
 }
 
-.animation-component-panel__asset-button {
+.animation-component-panel__asset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.animation-component-panel__asset-name {
   flex: 1 1 auto;
   min-width: 0;
-  justify-content: flex-start;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: rgba(233, 236, 241, 0.9);
+}
+
+.animation-component-panel__asset-button {
+  flex-shrink: 0;
+}
+
+.animation-component-panel__empty {
+  font-size: 0.8rem;
+  color: rgba(233, 236, 241, 0.55);
+  font-style: italic;
 }
 
 .animation-component-panel__message {

@@ -184,6 +184,25 @@ function decodeNumericQueryValue(value: unknown): number | null {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
+function normalizePrefabUrl(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) {
+    return '';
+  }
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) {
+    return raw;
+  }
+  const base = serverAssetBaseUrl;
+  let path = raw.replace(/^\/+/, '');
+  const baseLeaf = base.split('/').filter(Boolean).pop() ?? '';
+  if (baseLeaf && path.startsWith(`${baseLeaf}/`)) {
+    path = path.slice(baseLeaf.length + 1);
+  } else if (baseLeaf && path === baseLeaf) {
+    path = '';
+  }
+  return path ? `${base}/${path}` : base;
+}
+
 function decodeVector3QueryValue(record: Record<string, unknown>, prefix: string): { x: number; y: number; z: number } | null {
   const x = decodeNumericQueryValue(record[`${prefix}X`]);
   const y = decodeNumericQueryValue(record[`${prefix}Y`]);
@@ -408,7 +427,10 @@ onLoad((query: Record<string, unknown> | undefined) => {
   syncBackButtonTop();
   sceneryLoadError.value = '';
   void listControllableAssets({ ownedOnly: true }).then((assets) => {
-    controllableAssets.value = assets;
+    controllableAssets.value = assets.map((asset) => ({
+      ...asset,
+      prefabUrl: normalizePrefabUrl(asset.prefabUrl),
+    }));
   }).catch(() => {
     controllableAssets.value = [];
   });
@@ -419,7 +441,7 @@ onLoad((query: Record<string, unknown> | undefined) => {
         id: skin.id,
         categoryId: skin.categoryId,
         slotKey: skin.slotKey as ExternalSkin['slotKey'],
-        prefabUrl: skin.prefabUrl,
+        prefabUrl: normalizePrefabUrl(skin.prefabUrl),
         name: skin.name,
         identifier: skin.identifier,
         sortOrder: skin.sortOrder,
@@ -487,12 +509,8 @@ onLoad((query: Record<string, unknown> | undefined) => {
     const selectedPrefabUrl = selectedControllable && typeof selectedControllable === 'object'
       ? (selectedControllable as { prefabUrl?: unknown }).prefabUrl
       : null;
-    selectedVehiclePrefabUrl.value = typeof selectedPrefabUrl === 'string'
-      ? selectedPrefabUrl.trim()
-      : '';
-    selectedControllablePrefabUrl.value = typeof selectedPrefabUrl === 'string'
-      ? selectedPrefabUrl.trim()
-      : '';
+    selectedVehiclePrefabUrl.value = normalizePrefabUrl(selectedPrefabUrl);
+    selectedControllablePrefabUrl.value = normalizePrefabUrl(selectedPrefabUrl);
   }
   explicitPrefabUrl.value = decodeQueryValue(mergedRecord.prefabUrl);
   explicitPrefabTargetNodeId.value = decodeQueryValue(mergedRecord.prefabTargetNodeId);

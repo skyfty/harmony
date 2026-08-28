@@ -6064,6 +6064,59 @@ function buildControllableAssetSpawnRequest(asset: ExternalControllableAsset): R
   };
 }
 
+interface ResolvedLocalMultiuserSpawnInfo {
+  subjectIdentifier: string
+  subjectAssetId: string | null
+  subjectAssetUrl: string | null
+}
+
+/**
+ * 解析当前受控角色对应的资产信息，供本地 peer-state 上报：
+ * 1) 用户已选/默认的角色控制资产（与本地实际替换场景主控节点所用的资产一致）；
+ * 2) 运行时 prefab spawn 请求（按 identifier / 节点匹配）；
+ * 3) 运行时切换控制节点时记录的 __prefabAssetId。
+ * 解析不到时返回 null，调用方继续使用场景节点自身的 sourceAssetId 回退。
+ */
+function resolveLocalMultiuserControllableSpawnInfo(
+  subjectType: MultiuserSubjectType,
+  subjectNodeId: string | null,
+  subjectNodeName: string | null,
+): ResolvedLocalMultiuserSpawnInfo | null {
+  const fallbackIdentifier = subjectNodeName?.trim() || subjectNodeId?.trim() || '';
+  const selectedAsset = resolveSelectedControllableAsset(subjectType);
+  if (selectedAsset) {
+    const request = buildControllableAssetSpawnRequest(selectedAsset);
+    if (request) {
+      return {
+        subjectIdentifier: selectedAsset.identifier?.trim() || request.controllableIdentifier || fallbackIdentifier,
+        subjectAssetId: request.assetId || null,
+        subjectAssetUrl: request.assetUrl || null,
+      };
+    }
+  }
+  const matchedRequest = findMatchingSteerRuntimePrefabRequest(props.runtimePrefabSpawns, fallbackIdentifier || null)
+    ?? findRuntimePrefabRequestByVehicleNode(props.runtimePrefabSpawns, subjectNodeId, subjectNodeName);
+  if (matchedRequest) {
+    return {
+      subjectIdentifier: matchedRequest.controllableIdentifier || matchedRequest.vehicleIdentifier || fallbackIdentifier,
+      subjectAssetId: matchedRequest.assetId || null,
+      subjectAssetUrl: matchedRequest.assetUrl || null,
+    };
+  }
+  const node = subjectNodeId ? resolveNodeById(subjectNodeId) : null;
+  const prefabAssetId = typeof node?.userData?.__prefabAssetId === 'string'
+    ? node.userData.__prefabAssetId.trim()
+    : '';
+  if (prefabAssetId) {
+    return {
+      subjectIdentifier: fallbackIdentifier,
+      subjectAssetId: prefabAssetId,
+      subjectAssetUrl: null,
+    };
+  }
+  return null;
+}
+
 function resolveDefaultCharacterSteerNodeId(
   document: SceneJsonExportDocument | null,
   defaultSteerIdentifier: string | null,
@@ -13598,7 +13651,12 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
   }
   const sampleNode = state.subjectNodeId ? resolveNodeById(state.subjectNodeId) : null;
   try {
-    const object = await loadNodeObject(resourceCache, assetId, sampleNode?.importMetadata ?? null);
+    let object = await loadNodeObject(resourceCache, assetId, sampleNode?.importMetadata ?? null);
+    if (!object && sampleNode?.importMetadata?.objectPath) {
+      // 远端资产内部层级与场景节点 importMetadata.objectPath 不一致时，
+      // 回退为加载整个资产对象，避免因层级不匹配导致远端角色渲染失败。
+      object = await loadNodeObject(resourceCache, assetId, null);
+    }
     if (!object) {
       return null;
     }
@@ -14890,12 +14948,16 @@ function resolveLocalMultiuserPeerState(): MultiuserPeerState | null {
   protagonistObject.getWorldQuaternion(protagonistPoseQuaternion);
   protagonistObject.getWorldScale(remoteSharedEntityTargetScaleScratch);
   const characterPresentation = resolveLocalMultiuserCharacterPresentation(resolvedNodeId);
+  const characterSpawnInfo = resolveLocalMultiuserControllableSpawnInfo('character', resolvedNodeId, node?.name ?? null);
   return {
     subjectType: 'character',
     subjectNodeId: resolvedNodeId,
-    subjectIdentifier: node?.name ?? resolvedNodeId,
-    subjectAssetId: typeof node?.sourceAssetId === 'string' ? node.sourceAssetId : null,
-    subjectAssetUrl: null,
+    subjectIdentifier: characterSpawnInfo?.subjectIdentifier ?? node?.name ?? resolvedNodeId,
+    subjectAssetId: characterSpawnInfo?.subjectAssetId
+      ?? (typeof node?.sourceAssetId === 'string' && node.sourceAssetId.trim().length
+        ? node.sourceAssetId.trim()
+        : null),
+    subjectAssetUrl: characterSpawnInfo?.subjectAssetUrl ?? null,
     skins: resolveLocalMultiuserSkinSelections(),
     action: resolveLocalCharacterPeerAction(resolvedNodeId),
     position: {
@@ -15395,8 +15457,7 @@ function refreshAnimationControllers(root: THREE.Object3D): void {
     }
     const sourceNodeId = nodeId;
     const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null;
-    const externalAssetId = clampAnimationComponentProps(component.props).animationAssetId;
-    const externalAssetIds = externalAssetId ? [externalAssetId] : [];
+    const externalAssetIds = clampAnimationComponentProps(component.props).animationAssetIds;
     const externalClips: THREE.AnimationClip[] = [];
     externalAssetIds.forEach((assetId) => {
       collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip));

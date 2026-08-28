@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import type { PlayAnimationBehaviorParams } from '@schema/core'
 import {
   ANIMATION_COMPONENT_TYPE,
+  clampAnimationComponentProps,
   type AnimationComponentProps,
 } from '@schema/components'
 import NodePicker from '@/components/common/NodePicker.vue'
@@ -112,7 +113,7 @@ async function loadClipsForTarget(nodeId: string | null) {
     }
     const nextOptions = await collectAnimationClipOptionsWithExternalAsset(
       runtimeObject,
-      animationComponent?.animationAssetId,
+      clampAnimationComponentProps(animationComponent).animationAssetIds,
       ownerNode.sourceAssetId ?? null,
     )
     if (requestId === clipLoadRequestId) {

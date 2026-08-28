@@ -14450,8 +14450,7 @@ function refreshAnimations() {
 		}
 		const sourceNodeId = nodeId
 		const runtimeObject = nodeObjectMap.get(sourceNodeId) ?? null
-		const externalAssetId = clampAnimationComponentProps(component.props).animationAssetId
-		const externalAssetIds = externalAssetId ? [externalAssetId] : []
+		const externalAssetIds = clampAnimationComponentProps(component.props).animationAssetIds
 		const externalClips: THREE.AnimationClip[] = []
 		externalAssetIds.forEach((assetId) => {
 			collectCachedExternalAnimationClips(assetId).forEach((clip) => externalClips.push(clip))
