@@ -107,6 +107,11 @@ export async function collectAnimationClipOptionsWithExternalAsset(
   const builtIn = await collectBuiltInAnimationClipOptions(runtimeObject, builtInFallbackAssetId)
   const ids = Array.isArray(externalAssetIds) ? externalAssetIds : []
   const nested = await Promise.all(ids.map((assetId) => collectExternalAnimationClipOptions(assetId)))
-  const external = nested.flat()
+  // 同名动画去重，多个外部资产时靠后的资产优先（后写入覆盖先写入）。
+  const externalByName = new Map<string, AnimationClipOption>()
+  nested.forEach((options) => {
+    options.forEach((option) => externalByName.set(option.value, option))
+  })
+  const external = Array.from(externalByName.values())
   return mergeAnimationClipOptions(external, builtIn)
 }

@@ -44,10 +44,12 @@ function sanitizeAssetId(value: unknown): string | null {
 }
 
 function sanitizeAssetIds(value: unknown): string[] {
-  const ids = Array.isArray(value) ? value : []
+  if (!Array.isArray(value)) {
+    return []
+  }
   const result: string[] = []
   const seen = new Set<string>()
-  ids.forEach((id) => {
+  value.forEach((id) => {
     const normalized = sanitizeAssetId(id)
     if (normalized && !seen.has(normalized)) {
       seen.add(normalized)
@@ -58,26 +60,14 @@ function sanitizeAssetIds(value: unknown): string[] {
 }
 
 export function clampAnimationComponentProps(
-  props:
-    | Partial<AnimationComponentProps>
-    | { animationAssetId?: unknown }
-    | null
-    | undefined,
+  props: Partial<AnimationComponentProps> | null | undefined,
 ): AnimationComponentProps {
-  const raw = (props ?? {}) as Partial<AnimationComponentProps> & { animationAssetId?: unknown }
-  const hasAssetIdsArray = Array.isArray(raw.animationAssetIds)
-  const legacyAssetId = sanitizeAssetId(raw.animationAssetId)
-  const animationAssetIds = hasAssetIdsArray
-    ? sanitizeAssetIds(raw.animationAssetIds)
-    : legacyAssetId
-      ? [legacyAssetId]
-      : []
   return {
-    defaultClipName: sanitizeAnimationClipName(raw.defaultClipName),
-    animationAssetIds,
-    autoplay: clampBoolean(raw.autoplay, true),
-    loop: clampBoolean(raw.loop, true),
-    timeScale: clampFiniteNumber(raw.timeScale, 1),
+    defaultClipName: sanitizeAnimationClipName(props?.defaultClipName),
+    animationAssetIds: sanitizeAssetIds(props?.animationAssetIds),
+    autoplay: clampBoolean(props?.autoplay, true),
+    loop: clampBoolean(props?.loop, true),
+    timeScale: clampFiniteNumber(props?.timeScale, 1),
   }
 }
 

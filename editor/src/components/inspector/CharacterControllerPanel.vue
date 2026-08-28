@@ -10,13 +10,14 @@ import {
   CHARACTER_FORWARD_AXIS_OPTIONS,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   clampCharacterControllerComponentProps,
+  clampAnimationComponentProps,
   type CharacterForwardAxis,
   type AnimationComponentProps,
   type CharacterControllerComponentProps,
 } from '@schema/components'
 import type { SceneNodeComponentState } from '@schema/core'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
-import { collectAnimationClipCatalog } from '@schema/runtimeAnimationCatalog'
+import { collectAnimationClipOptionsWithExternalAsset } from '@/utils/externalAnimationClipOptions'
 import { findSceneNodeById } from '@/utils/animationClipCatalog'
 
 const sceneStore = useSceneStore()
@@ -161,11 +162,12 @@ async function loadClipsForNode(nodeId: string) {
         runtimeObject = getRuntimeObject(sourceId)
       }
     }
-    if (!runtimeObject) {
-      return
-    }
 
-    const clipEntries = collectAnimationClipCatalog(runtimeObject)
+    const clipEntries = await collectAnimationClipOptionsWithExternalAsset(
+      runtimeObject,
+      clampAnimationComponentProps(animationComponent.value?.props ?? null).animationAssetIds,
+      sourceNode?.sourceAssetId ?? null,
+    )
     if (requestId === clipLoadRequestId) {
       clipOptions.value = clipEntries
     }
@@ -182,7 +184,13 @@ async function loadClipsForNode(nodeId: string) {
 }
 
 watch(
-  () => [selectedNodeId.value, component.value?.id ?? null, animationComponent.value?.id ?? null, animationSourceNodeId.value] as const,
+  () => [
+    selectedNodeId.value,
+    component.value?.id ?? null,
+    animationComponent.value?.id ?? null,
+    animationSourceNodeId.value,
+    clampAnimationComponentProps(animationComponent.value?.props ?? null).animationAssetIds.join('\u0001'),
+  ] as const,
   ([nodeId, componentId]) => {
     if (!componentId || !nodeId) {
       clipOptions.value = []
@@ -437,6 +445,9 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
           <div class="character-controller-panel__section-title">Animation bindings</div>
           <p v-if="clipLoadError" class="character-controller-panel__note">{{ clipLoadError }}</p>
           <p v-else-if="isLoadingClips" class="character-controller-panel__note">Loading animation clips…</p>
+          <p v-else-if="!clipOptions.length" class="character-controller-panel__note">
+            No animation clips found on the target node.
+          </p>
      
           <div class="character-controller-panel__binding-group">
             <div class="character-controller-panel__binding-group-title">Common</div>
