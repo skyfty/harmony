@@ -438,7 +438,7 @@ import {
 } from '@harmony/physics-core';
 import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
 
-import { useProjectStore } from '../common/stores/projectStore';
+import { getStoredProjectById } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
 import { useBehaviorAlert } from '../composables/useBehaviorAlert';
 import { useBehaviorBubble } from '../composables/useBehaviorBubble';
@@ -1056,7 +1056,6 @@ interface RenderContext {
   controls: OrbitControls;
 }
 
-const projectStore = useProjectStore();
 const canvasId = `scene-viewer-${Date.now()}`;
 const currentSceneId = ref<string | null>(null);
 const currentProjectId = ref<string | null>(null);
@@ -22131,7 +22130,6 @@ function bootstrapRuntimeIfNeeded(): void {
     DISPLAY_BOARD_RESOLVER_KEY
   ] = resolveDisplayBoardMediaSource;
   addBehaviorRuntimeListener(behaviorRuntimeListener);
-  projectStore.bootstrap();
 }
 
 function configurePhysicsInterpolation(physinterpParam: string): void {
@@ -22271,8 +22269,8 @@ function startSceneLoad(input: ResolvedSceneInput): void {
   }
 
   if (input.mode === 'project-id') {
-    const entry = projectStore.getProject();
-    if (!entry || entry.id !== input.projectId) {
+    const entry = getStoredProjectById(input.projectId);
+    if (!entry) {
       reportProjectLoadMissing(input.projectId);
       return;
     }

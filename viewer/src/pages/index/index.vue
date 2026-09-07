@@ -1,31 +1,46 @@
 <template>
   <view class="page">
+    <view class="header">
+      <text class="header__title">场景项目</text>
+      <text class="header__subtitle">导入本地 ZIP 场景包，随时随地预览场景</text>
+    </view>
+
     <view class="content">
-      <view v-if="currentProject" class="current-project">
-        <view class="project-card" @tap="openProject">
-          <view class="card-header">
-            <text class="project-name">{{ currentProject.project.name || '未命名项目' }}</text>
+      <view v-if="currentProject" class="project-card" @tap="openProject">
+        <view class="project-name-row">
+          <text class="project-name">{{ currentProject.project.name || '未命名项目' }}</text>
+          <text class="status-badge">已导入</text>
+        </view>
+
+        <view class="meta-list">
+          <view class="meta-item">
+            <text class="meta-label">导入时间</text>
+            <text class="meta-value">{{ formatDate(currentProject.savedAt) }}</text>
           </view>
-          <view class="card-meta">
-            <text>导入时间：{{ formatDate(currentProject.savedAt) }}</text>
-            <text>场景数：{{ currentProject.sceneCount }}</text>
-          </view>
-          <view class="card-footer">
-            <text v-if="currentProject.origin" class="card-origin">来源：{{ currentProject.origin }}</text>
+          <view v-if="currentProject.origin" class="meta-item">
+            <text class="meta-label">来源文件</text>
+            <text class="meta-value meta-value--break">{{ currentProject.origin }}</text>
           </view>
         </view>
-        <button class="remove-button" @tap="removeProject">移除项目</button>
+
+        <view class="card-actions">
+          <button class="action action--primary" @tap.stop="openProject">进入预览</button>
+          <button class="action action--danger" @tap.stop="removeProject">移除项目</button>
+        </view>
       </view>
 
-      <view v-else class="empty">
+      <view v-else class="empty-card" @tap="handleLocalImport">
+        <view class="empty-card__icon">
+          <text class="empty-card__plus">＋</text>
+        </view>
         <text class="empty-title">暂无项目</text>
-        <text class="empty-desc">通过本地 ZIP 场景包导入一个项目</text>
+        <text class="empty-desc">点击此处或下方按钮，导入本地 ZIP 场景包开始预览</text>
       </view>
     </view>
 
     <view class="toolbar">
-      <button class="action primary" :disabled="importing" @tap="handleLocalImport">
-        {{ importing ? '导入中...' : '本地导入项目' }}
+      <button class="import-button" :disabled="importing" @tap="handleLocalImport">
+        {{ importing ? '导入中...' : (currentProject ? '导入其他项目替换' : '导入本地项目') }}
       </button>
     </view>
   </view>
@@ -187,8 +202,25 @@ async function handleLocalImport() {
   padding-top: 84px;
   padding-bottom: 96px;
   box-sizing: border-box;
-  background-color: #f5f7fb;
+  background: linear-gradient(180deg, #f5f7fb 0%, #eef3fa 100%);
   gap: 12px;
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.header__title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #162034;
+}
+
+.header__subtitle {
+  font-size: 13px;
+  color: #64748b;
 }
 
 .content {
@@ -210,87 +242,157 @@ async function handleLocalImport() {
   z-index: 10;
 }
 
-.action {
+.import-button {
   flex: 1;
-  padding: 10px 12px;
+  padding: 12px 16px;
   font-size: 15px;
+  font-weight: 600;
   border-radius: 24px;
   border: none;
-  background-color: #ffffff;
-  color: #1a1a1a;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-}
-
-.action.primary {
-  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
   color: #ffffff;
+  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
+  box-shadow: 0 6px 16px rgba(31, 122, 236, 0.28);
 }
 
-.action[disabled] {
-  opacity: 0.5;
+.import-button::after {
+  border: none;
 }
 
-.current-project {
-  width: 100%;
-  max-width: 320px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.import-button[disabled] {
+  opacity: 0.6;
 }
 
 .project-card {
-  padding: 16px;
-  border-radius: 16px;
+  width: 100%;
+  max-width: 420px;
+  padding: 18px 16px;
+  border-radius: 20px;
   background-color: #ffffff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 24px rgba(31, 47, 77, 0.1);
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+.project-name-row {
+  display: flex;
+  align-items: flex-start;
   gap: 10px;
 }
 
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
 .project-name {
-  font-size: 18px;
+  flex: 1;
+  font-size: 19px;
   font-weight: 700;
+  line-height: 1.4;
   color: #162034;
-}
-
-.card-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-  color: #64748b;
-}
-
-.card-footer {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.card-origin {
-  display: block;
   word-break: break-all;
 }
 
-.remove-button {
+.status-badge {
+  flex-shrink: 0;
+  margin-top: 2px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #e8f2ff;
+  color: #1f6fd6;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.meta-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #f7f9fc;
+}
+
+.meta-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.meta-label {
+  flex-shrink: 0;
+  width: 56px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #94a3b8;
+}
+
+.meta-value {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.meta-value--break {
+  word-break: break-all;
+}
+
+.card-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.action {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 600;
   border-radius: 20px;
-  background: #fff1f2;
+  border: none;
+}
+
+.action::after {
+  border: none;
+}
+
+.action--primary {
+  color: #ffffff;
+  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
+}
+
+.action--danger {
   color: #be123c;
+  background-color: #fff1f2;
   border: 1px solid rgba(190, 18, 60, 0.12);
 }
 
-.empty {
+.empty-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 40px 24px;
+  border: 2px dashed #c8d6ea;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.72);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  color: #64748b;
+  gap: 10px;
+}
+
+.empty-card__icon {
+  width: 58px;
+  height: 58px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background-image: linear-gradient(135deg, #1f7aec, #5d9bff);
+  box-shadow: 0 8px 18px rgba(31, 122, 236, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-card__plus {
+  color: #ffffff;
+  font-size: 30px;
+  font-weight: 400;
+  line-height: 1;
 }
 
 .empty-title {
@@ -300,7 +402,10 @@ async function handleLocalImport() {
 }
 
 .empty-desc {
+  max-width: 260px;
   font-size: 13px;
   line-height: 1.7;
+  text-align: center;
+  color: #64748b;
 }
 </style>
