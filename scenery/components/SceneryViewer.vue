@@ -3397,6 +3397,7 @@ let autoTourTelemetryHasWorldPositionSample = false;
 let autoTourTelemetryLastSampleAtMs = 0;
 let autoTourTelemetryLastNodeId: string | null = null;
 const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
+const VEHICLE_HEADING_UPDATE_MIN_INTERVAL_MS = isWeChatMiniProgram ? 100 : 66;
 const CHARACTER_ACTION_AUTOMATED_SLOTS = new Set<CharacterAnimationSlot>(['idle', 'walk', 'run']);
 const CHARACTER_ACTION_HOLD_SLOTS = new Set<CharacterAnimationSlot>(['sprint', 'crouch', 'interact']);
 const CHARACTER_ACTION_BUTTON_SLOTS = CHARACTER_ANIMATION_EDITOR_SLOTS
@@ -3554,6 +3555,7 @@ function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
 }
 
 const vehicleHeadingDegrees = ref(0);
+let vehicleHeadingLastCommitAtMs = 0;
 
 function normalizeHeadingDegrees(value: number): number {
   if (!Number.isFinite(value)) {
@@ -3574,7 +3576,13 @@ function commitVehicleHeadingDegrees(nextHeading: number): void {
   if (isHeadingCloseDegrees(vehicleHeadingDegrees.value, normalizedHeading)) {
     return;
   }
+  const nowMs = getVehicleSpeedDisplayNowMs();
+  const hasCommittedOnce = vehicleHeadingLastCommitAtMs > 0;
+  if (hasCommittedOnce && nowMs - vehicleHeadingLastCommitAtMs < VEHICLE_HEADING_UPDATE_MIN_INTERVAL_MS) {
+    return;
+  }
   vehicleHeadingDegrees.value = normalizedHeading;
+  vehicleHeadingLastCommitAtMs = nowMs;
 }
 const vehicleCompassStyle = computed(() => ({
   '--vehicle-heading': `${vehicleHeadingDegrees.value}deg`,
@@ -4488,6 +4496,7 @@ watch(vehicleDriveActive, (active) => {
     vehicleSpeedDisplayMps.value = 0;
     vehicleSpeedDisplayLastCommitAtMs = 0;
     vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+    vehicleHeadingLastCommitAtMs = 0;
   }
 });
 const isCameraCaged = ref(false);
@@ -4517,6 +4526,8 @@ const pendingParticleRuntimeCommands: Array<{ nodeId: string; command: { type: '
 
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>();
 const behaviorProximityState = new Map<string, BehaviorProximityState>();
+const BEHAVIOR_PROXIMITY_UPDATE_INTERVAL_MS = isWeChatMiniProgram ? 100 : 66;
+let behaviorProximityLastUpdateAtMs = 0;
 type BehaviorCollisionState = {
   subjectKey: string;
   inside: boolean;
@@ -15605,6 +15616,7 @@ function applyCameraWatchTween(deltaSeconds: number): void {
 function resetBehaviorProximity(): void {
   behaviorProximityCandidates.clear();
   behaviorProximityState.clear();
+  behaviorProximityLastUpdateAtMs = 0;
   behaviorProximityRuntime.reset();
 }
 
@@ -15786,6 +15798,14 @@ function updateBehaviorCollisions(): void {
 }
 
 function updateBehaviorProximity(): void {
+  if (!behaviorProximityCandidates.size) {
+    return;
+  }
+  const nowMs = getVehicleSpeedDisplayNowMs();
+  if (behaviorProximityLastUpdateAtMs > 0 && nowMs - behaviorProximityLastUpdateAtMs < BEHAVIOR_PROXIMITY_UPDATE_INTERVAL_MS) {
+    return;
+  }
+  behaviorProximityLastUpdateAtMs = nowMs;
   behaviorProximityRuntime.updateBehaviorProximity();
 }
 
@@ -16841,11 +16861,13 @@ function showPurposeControls(buttons: ShowPurposeBehaviorButton[], sourceNodeId:
   } else {
     purposeControlEntries.value = [...purposeControlEntries.value, nextEntry];
   }
+  markOverlayRuntimeDirty();
 }
 
 function hidePurposeControls(nodeId: string | null = null): void {
   if (!nodeId) {
     purposeControlEntries.value = [];
+    markOverlayRuntimeDirty();
     return;
   }
   const normalizedNodeId = nodeId.trim();
@@ -16853,6 +16875,7 @@ function hidePurposeControls(nodeId: string | null = null): void {
     return;
   }
   purposeControlEntries.value = purposeControlEntries.value.filter((entry) => entry.nodeId !== normalizedNodeId);
+  markOverlayRuntimeDirty();
 }
 
 function handleShowPurposeControlsEvent(
@@ -16922,7 +16945,9 @@ function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void
     }];
   });
   if (!candidates.length) {
-    purposeControlEntries.value = [];
+    if (purposeControlEntries.value.length > 0) {
+      purposeControlEntries.value = [];
+    }
     return;
   }
   const resolvedPlacements = resolvePurposeOverlayPlacements({
@@ -16932,7 +16957,7 @@ function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void
     screenMarginPx: 12,
   });
   const placementByNodeId = new Map(resolvedPlacements.map((entry) => [entry.id, entry.placement] as const));
-  purposeControlEntries.value = entries
+  const nextEntries = entries
     .map((entry) => {
       const placement = placementByNodeId.get(entry.nodeId);
       if (!placement) {
@@ -16944,6 +16969,32 @@ function updatePurposeControlsPlacement(activeCamera: THREE.Camera | null): void
       };
     })
     .filter((entry): entry is PurposeControlRecord => entry !== null);
+  if (!arePurposeControlEntriesEqual(nextEntries, entries)) {
+    purposeControlEntries.value = nextEntries;
+  }
+}
+
+function arePurposeControlEntriesEqual(
+  nextEntries: PurposeControlRecord[],
+  currentEntries: PurposeControlRecord[],
+): boolean {
+  if (nextEntries.length !== currentEntries.length) {
+    return false;
+  }
+  for (let index = 0; index < nextEntries.length; index += 1) {
+    const nextEntry = nextEntries[index];
+    const currentEntry = currentEntries[index];
+    if (
+      nextEntry.nodeId !== currentEntry.nodeId
+      || Math.abs(nextEntry.placement.xPercent - currentEntry.placement.xPercent) > 1e-4
+      || Math.abs(nextEntry.placement.yPercent - currentEntry.placement.yPercent) > 1e-4
+      || Math.abs(nextEntry.placement.scale - currentEntry.placement.scale) > 1e-4
+      || Math.abs(nextEntry.placement.opacity - currentEntry.placement.opacity) > 1e-4
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function resolvePurposeControlStyle(entry: PurposeControlRecord): Record<string, string> {
@@ -21860,8 +21911,8 @@ function startRenderLoop(
           overlayReference = resolvePunchBadgeReference(camera, cameraFrameSnapshot);
           updatePunchBadgeOverlayEntries(camera, deltaSeconds, overlayReference);
           syncSceneSignboardsWithReference(overlayReference);
+          updatePurposeControlsPlacement(camera);
         }
-        updatePurposeControlsPlacement(camera);
         applyFogSettings(activeEnvironmentSettings, camera);
 
         // Keep chunked ground meshes in sync with camera position.
