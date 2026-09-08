@@ -30,6 +30,15 @@ export type AssetBlobDownloader = (
   onProgress: (value: number) => void,
 ) => Promise<AssetBlobPayload>
 
+export type AssetBlobDownloadOptions = {
+  /**
+   * Prefer downloading via uni.downloadFile (streams to a temp file and supports
+   * onProgressUpdate on mini-program platforms). Falls back to fetch / uni.request
+   * when file download is unavailable.
+   */
+  fileDownload?: boolean
+}
+
 type AssetDownloadRuntimeState = {
   assetDownloadModuleTag: string
   assetDownloadHostMirrors: AssetDownloadHostMirrorMap | null
@@ -77,6 +86,7 @@ export async function fetchAssetBlob(
   url: string,
   controller: AbortController,
   onProgress: (value: number) => void,
+  options: AssetBlobDownloadOptions = {},
 ): Promise<AssetBlobPayload> {
   const candidates = createDownloadUrlCandidates(url)
   if (!candidates.length) {
@@ -85,7 +95,7 @@ export async function fetchAssetBlob(
   if (controller.signal.aborted) {
     throw createAbortError()
   }
-  return await downloadAssetBlob(candidates, controller, onProgress)
+  return await downloadAssetBlob(candidates, controller, onProgress, options)
 }
 
 export async function fetchAssetBlobWithResponse(
@@ -93,6 +103,7 @@ export async function fetchAssetBlobWithResponse(
   controller: AbortController,
   onProgress: (value: number) => void,
   requestHeaders?: Record<string, string>,
+  options: AssetBlobDownloadOptions = {},
 ): Promise<AssetBlobDownloadResult> {
   const candidates = createDownloadUrlCandidates(url)
   if (!candidates.length) {
@@ -101,7 +112,7 @@ export async function fetchAssetBlobWithResponse(
   if (controller.signal.aborted) {
     throw createAbortError()
   }
-  return await downloadAssetBlobWithResponse(candidates, controller, onProgress, requestHeaders)
+  return await downloadAssetBlobWithResponse(candidates, controller, onProgress, requestHeaders, options)
 }
 
 function createAbortError(): Error {
@@ -191,12 +202,13 @@ async function downloadAssetBlob(
   urlCandidates: string[],
   controller: AbortController,
   onProgress: (value: number) => void,
+  options: AssetBlobDownloadOptions,
 ): Promise<AssetBlobPayload> {
   let lastNetworkError: unknown = null
 
   for (const candidate of urlCandidates) {
     try {
-      return await downloadAssetBlobFromCandidate(candidate, controller, onProgress)
+      return await downloadAssetBlobFromCandidate(candidate, controller, onProgress, options)
     } catch (error) {
       if (isRetryableDownloadError(error) && candidate !== urlCandidates[0]) {
         lastNetworkError = error
@@ -218,12 +230,13 @@ async function downloadAssetBlobWithResponse(
   controller: AbortController,
   onProgress: (value: number) => void,
   requestHeaders?: Record<string, string>,
+  options: AssetBlobDownloadOptions = {},
 ): Promise<AssetBlobDownloadResult> {
   let lastNetworkError: unknown = null
 
   for (const candidate of urlCandidates) {
     try {
-      return await downloadAssetBlobFromCandidateWithResponse(candidate, controller, onProgress, requestHeaders)
+      return await downloadAssetBlobFromCandidateWithResponse(candidate, controller, onProgress, requestHeaders, options)
     } catch (error) {
       if (isRetryableDownloadError(error) && candidate !== urlCandidates[0]) {
         lastNetworkError = error
@@ -244,9 +257,17 @@ async function downloadAssetBlobFromCandidate(
   url: string,
   controller: AbortController,
   onProgress: (value: number) => void,
+  options: AssetBlobDownloadOptions = {},
 ): Promise<AssetBlobPayload> {
   if (controller.signal.aborted) {
     throw createAbortError()
+  }
+
+  if (options.fileDownload) {
+    const fileDownloadApi = resolveUniDownloadFileApi()
+    if (fileDownloadApi) {
+      return await downloadAssetBlobViaUniDownloadFile(fileDownloadApi, url, controller, onProgress)
+    }
   }
 
   if (typeof fetch === 'function') {
@@ -266,9 +287,17 @@ async function downloadAssetBlobFromCandidateWithResponse(
   controller: AbortController,
   onProgress: (value: number) => void,
   requestHeaders?: Record<string, string>,
+  options: AssetBlobDownloadOptions = {},
 ): Promise<AssetBlobDownloadResult> {
   if (controller.signal.aborted) {
     throw createAbortError()
+  }
+
+  if (options.fileDownload) {
+    const fileDownloadApi = resolveUniDownloadFileApi()
+    if (fileDownloadApi) {
+      return await downloadAssetBlobViaUniDownloadFileWithResponse(fileDownloadApi, url, controller, onProgress, requestHeaders)
+    }
   }
 
   if (typeof fetch === 'function') {
@@ -435,6 +464,265 @@ async function downloadAssetBlobViaFetchWithResponse(
     filename,
     headers: responseHeaders,
   }
+}
+
+type UniDownloadFilePayload = {
+  statusCode?: number
+  tempFilePath?: string
+  header?: Record<string, string> | null
+}
+
+type UniDownloadFileProgressPayload = {
+  progress?: number
+}
+
+type UniDownloadFileHeaderPayload = {
+  header?: Record<string, string> | null
+}
+
+type UniDownloadFileTask = {
+  abort?: () => void
+  onProgressUpdate?: (listener: (payload: UniDownloadFileProgressPayload) => void) => void
+  onHeadersReceived?: (listener: (payload: UniDownloadFileHeaderPayload) => void) => void
+}
+
+type UniReadFileFs = {
+  readFile?: (options: {
+    filePath: string
+    success: (result: { data?: unknown }) => void
+    fail: (error: unknown) => void
+  }) => void
+}
+
+type UniDownloadFileApi = {
+  downloadFile: (options: {
+    url: string
+    header?: Record<string, string>
+    success: (payload: UniDownloadFilePayload) => void
+    fail: (error: unknown) => void
+  }) => UniDownloadFileTask | undefined
+  readFileAsArrayBuffer: (filePath: string) => Promise<ArrayBuffer>
+}
+
+function resolveUniDownloadFileApi(): UniDownloadFileApi | null {
+  const uniApi = typeof uni !== 'undefined' ? uni : null
+  if (!uniApi || typeof uniApi.downloadFile !== 'function') {
+    return null
+  }
+
+  let platform = ''
+  try {
+    const systemInfo = typeof uniApi.getSystemInfoSync === 'function' ? uniApi.getSystemInfoSync() : null
+    platform = systemInfo && typeof systemInfo.uniPlatform === 'string' ? systemInfo.uniPlatform : ''
+  } catch {
+    /* noop */
+  }
+  if (platform === 'web') {
+    return null
+  }
+
+  const wxAny = typeof wx !== 'undefined' ? wx : null
+  const isWeChatRuntime = Boolean(wxAny && typeof wxAny.getFileSystemManager === 'function')
+  if (!isWeChatRuntime && !platform.startsWith('mp-')) {
+    return null
+  }
+
+  const fs =
+    (typeof uniApi.getFileSystemManager === 'function' ? uniApi.getFileSystemManager() : null) ??
+    (wxAny && typeof wxAny.getFileSystemManager === 'function' ? wxAny.getFileSystemManager() : null)
+  if (!fs || typeof fs.readFile !== 'function') {
+    return null
+  }
+
+  return {
+    downloadFile: (options) => uniApi.downloadFile?.(options) ?? undefined,
+    readFileAsArrayBuffer: (filePath) => readFileAsArrayBufferByUniFs(fs, filePath),
+  }
+}
+
+function readFileAsArrayBufferByUniFs(fs: UniReadFileFs, filePath: string): Promise<ArrayBuffer> {
+  return new Promise<ArrayBuffer>((resolve, reject) => {
+    const readFile = fs.readFile
+    if (typeof readFile !== 'function') {
+      reject(new Error('资源下载失败（当前环境不支持读取临时文件）'))
+      return
+    }
+    readFile({
+      filePath,
+      success: (result) => {
+        const data = result.data
+        if (data instanceof ArrayBuffer) {
+          resolve(data)
+          return
+        }
+        if (ArrayBuffer.isView(data)) {
+          const bytes = new Uint8Array(data.byteLength)
+          bytes.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+          resolve(bytes.buffer)
+          return
+        }
+        if (typeof data === 'string') {
+          let binary = true
+          for (let index = 0; index < data.length; index += 1) {
+            if (data.charCodeAt(index) > 0xff) {
+              binary = false
+              break
+            }
+          }
+          if (!binary) {
+            reject(new Error('资源下载失败（临时文件读取结果不是二进制数据）'))
+            return
+          }
+          const bytes = new Uint8Array(data.length)
+          for (let index = 0; index < data.length; index += 1) {
+            bytes[index] = data.charCodeAt(index)
+          }
+          resolve(bytes.buffer)
+          return
+        }
+        reject(new Error('资源下载失败（临时文件读取结果不是二进制数据）'))
+      },
+      fail: (error) => reject(error instanceof Error ? error : new Error(String(error))),
+    })
+  })
+}
+
+async function downloadAssetBlobViaUniDownloadFile(
+  api: UniDownloadFileApi,
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<AssetBlobPayload> {
+  const result = await downloadAssetBlobViaUniDownloadFileWithResponse(api, url, controller, onProgress)
+  if (result.kind === 'not-modified') {
+    throw new Error('资源下载失败（服务器返回未修改状态）')
+  }
+  return {
+    blob: result.blob,
+    mimeType: result.mimeType,
+    filename: result.filename,
+    url: result.url,
+  }
+}
+
+async function downloadAssetBlobViaUniDownloadFileWithResponse(
+  api: UniDownloadFileApi,
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+  requestHeaders?: Record<string, string>,
+): Promise<AssetBlobDownloadResult> {
+  return await new Promise<AssetBlobDownloadResult>((resolve, reject) => {
+    let settled = false
+    let task: UniDownloadFileTask | null = null
+    let responseHeaders: Record<string, string> | null = null
+
+    const abortListener = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      controller.signal.removeEventListener('abort', abortListener)
+      try {
+        task?.abort?.()
+      } catch {
+        /* noop */
+      }
+      reject(createAbortError())
+    }
+
+    const settleFailure = (error: unknown) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      controller.signal.removeEventListener('abort', abortListener)
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+
+    const settleDownloaded = (arrayBuffer: ArrayBuffer, statusCode: number, headers: Record<string, string>) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      controller.signal.removeEventListener('abort', abortListener)
+      const mimeType = headers['content-type'] ?? null
+      const filename = extractFilenameFromResponseHeader(headers, url)
+      onProgress(100)
+      resolve({
+        kind: 'downloaded',
+        statusCode,
+        url,
+        blob: new Blob([arrayBuffer], { type: mimeType ?? 'application/octet-stream' }),
+        mimeType,
+        filename,
+        headers,
+      })
+    }
+
+    const normalizedRequestHeaders = normalizeRequestHeaders(requestHeaders)
+    task = api.downloadFile({
+      url,
+      ...(normalizedRequestHeaders ? { header: normalizedRequestHeaders } : {}),
+      success: (payload) => {
+        const statusCode = payload.statusCode ?? 200
+        const headers = normalizeResponseHeaders(responseHeaders ?? payload.header)
+        if (statusCode === 304) {
+          if (settled) {
+            return
+          }
+          settled = true
+          controller.signal.removeEventListener('abort', abortListener)
+          resolve({
+            kind: 'not-modified',
+            statusCode: 304,
+            url,
+            headers,
+          })
+          return
+        }
+        if (statusCode < 200 || statusCode >= 300) {
+          settleFailure(new Error(`资源下载失败（${statusCode}）`))
+          return
+        }
+        const tempFilePath = typeof payload.tempFilePath === 'string' ? payload.tempFilePath.trim() : ''
+        if (!tempFilePath) {
+          settleFailure(new Error('资源下载失败（未返回临时文件路径）'))
+          return
+        }
+        api.readFileAsArrayBuffer(tempFilePath).then(
+          (arrayBuffer) => settleDownloaded(arrayBuffer, statusCode, headers),
+          (error) => settleFailure(error),
+        )
+      },
+      fail: (error) => settleFailure(error),
+    }) ?? null
+
+    task?.onProgressUpdate?.((info) => {
+      if (settled) {
+        return
+      }
+      const progress = typeof info?.progress === 'number' && Number.isFinite(info.progress) ? info.progress : 0
+      if (progress >= 0) {
+        onProgress(Math.min(99, Math.max(0, Math.round(progress))))
+      }
+    })
+    task?.onHeadersReceived?.((info) => {
+      if (settled) {
+        return
+      }
+      if (info?.header && typeof info.header === 'object') {
+        responseHeaders = info.header
+      }
+    })
+
+    if (controller.signal.aborted) {
+      abortListener()
+      return
+    }
+
+    controller.signal.addEventListener('abort', abortListener, { once: true })
+  })
 }
 
 async function downloadAssetBlobViaUniRequest(
@@ -752,5 +1040,19 @@ declare const uni:
         success: (payload: { statusCode?: number; data?: unknown }) => void
         fail: (error: unknown) => void
       }) => void
+      downloadFile?: (options: {
+        url: string
+        header?: Record<string, string>
+        success: (payload: UniDownloadFilePayload) => void
+        fail: (error: unknown) => void
+      }) => UniDownloadFileTask | void
+      getSystemInfoSync?: () => { uniPlatform?: string }
+      getFileSystemManager?: () => UniReadFileFs | null | undefined
+    }
+  | undefined
+
+declare const wx:
+  | {
+      getFileSystemManager?: () => UniReadFileFs | null | undefined
     }
   | undefined

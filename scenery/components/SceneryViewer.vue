@@ -20341,7 +20341,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
         sceneDownload.percent = clampPercent(progress);
         sceneDownload.indeterminate = false;
         sceneDownload.label = `正在下载场景包… ${sceneDownload.percent}%`;
-      }, requestHeaders).then((result) => result, async (requestError) => {
+      }, requestHeaders, { fileDownload: true }).then((result) => result, async (requestError) => {
         if (cachedBuffer && await loadCachedScenePackage()) {
           return null;
         }

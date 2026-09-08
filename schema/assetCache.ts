@@ -580,7 +580,7 @@ export class AssetLoader {
     const { blob, mimeType, filename, url: resolvedUrl } = await fetchAssetBlobInternal(source.url, controller, (progress) => {
       entry.progress = progress
       options.onProgress?.(progress)
-    })
+    }, { fileDownload: true })
 
     return this.cache.storeBlob(assetId, blob, {
       mimeType: source.mimeType ?? mimeType ?? null,
