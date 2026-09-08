@@ -50,6 +50,63 @@ type AnimationRuntimeController = {
   activeLoop: boolean
   activeTimeScale: number
   externalClipSignature: string | null
+  skippedClipLogKeys: Set<string>
+}
+
+const animationPlayableNodeCache = new WeakMap<THREE.Object3D, Set<string>>()
+
+function collectRuntimeNodeNames(root: THREE.Object3D): Set<string> {
+  const cached = animationPlayableNodeCache.get(root)
+  if (cached) {
+    return cached
+  }
+  const names = new Set<string>()
+  // 与 THREE.PropertyBinding 一致：目标节点可能是 mixer root 自身。
+  if (typeof root?.name === 'string' && root.name.trim().length > 0) {
+    names.add(root.name.trim())
+  }
+  root.traverse((object) => {
+    const name = object?.name
+    if (typeof name === 'string' && name.trim().length > 0) {
+      names.add(name.trim())
+    }
+  })
+  animationPlayableNodeCache.set(root, names)
+  return names
+}
+
+function isAnimationClipPlayable(mixer: THREE.AnimationMixer, clip: THREE.AnimationClip): boolean {
+  if (!mixer || !clip) {
+    return false
+  }
+  const root = mixer.getRoot()
+  if (!root || !(root as THREE.Object3D).isObject3D) {
+    return false
+  }
+  const tracks = Array.isArray(clip.tracks) ? clip.tracks : []
+  if (!tracks.length) {
+    return false
+  }
+  const nodeNames = collectRuntimeNodeNames(root as THREE.Object3D)
+  return tracks.every((track) => {
+    const rawName = typeof track?.name === 'string' ? track.name : ''
+    if (!rawName) {
+      return false
+    }
+    const parsed = THREE.PropertyBinding.parseTrackName(rawName)
+    // 空 nodeName 表示目标即 mixer root 本身。GLTF/FBX 骨骼动画通常都会写出节点名；
+    // 只有 root 是可动画对象（SkinnedMesh 等）且存在对应 property 时才可能真正绑定，
+    // 此处不额外放行，避免"以为能播"的假阳性。
+    if (!parsed.nodeName) {
+      return false
+    }
+    return nodeNames.has(parsed.nodeName)
+  })
+}
+
+function formatAnimationSkipMessage(nodeId: string, clipName: string | null): string {
+  const name = clipName || '<未命名>'
+  return `[AnimationRuntime] 节点 ${nodeId} 的动画 clip "${name}" 目标节点不在当前模型层级中，已跳过播放（真实模型加载/同步后会重试）`
 }
 
 function normalizeAnimationLoop(value: unknown, fallback: boolean): boolean {
@@ -74,7 +131,16 @@ function playAnimationClip(
   mixer: THREE.AnimationMixer,
   clip: THREE.AnimationClip,
   options: AnimationPlaybackOptions = {},
-): THREE.AnimationAction {
+  playbackGuard?: { nodeId: string; skippedClipLogKeys: Set<string> },
+): THREE.AnimationAction | null {
+  if (!isAnimationClipPlayable(mixer, clip)) {
+    const key = `${sanitizeAnimationClipName(clip.name) ?? clip.uuid}`
+    if (playbackGuard && !playbackGuard.skippedClipLogKeys.has(key)) {
+      playbackGuard.skippedClipLogKeys.add(key)
+      console.warn(formatAnimationSkipMessage(playbackGuard.nodeId, sanitizeAnimationClipName(clip.name)))
+    }
+    return null
+  }
   const action = mixer.clipAction(clip)
   action.reset()
   action.enabled = true
@@ -92,6 +158,13 @@ function playAnimationClip(
 
 export class SceneAnimationRuntimeManager {
   private readonly controllers = new Map<string, AnimationRuntimeController>()
+
+  private invalidatePlayableCache(root: THREE.Object3D | null | undefined): void {
+    if (!root) {
+      return
+    }
+    animationPlayableNodeCache.delete(root)
+  }
 
   get(nodeId: string): Readonly<AnimationRuntimeController> | null {
     return this.controllers.get(nodeId) ?? null
@@ -112,6 +185,7 @@ export class SceneAnimationRuntimeManager {
       } catch {
         /* ignore */
       }
+      this.invalidatePlayableCache(controller.runtimeObject)
     })
     this.controllers.clear()
   }
@@ -126,6 +200,7 @@ export class SceneAnimationRuntimeManager {
     } catch {
       /* ignore */
     }
+    this.invalidatePlayableCache(controller.runtimeObject)
     this.controllers.delete(nodeId)
   }
 
@@ -154,11 +229,21 @@ export class SceneAnimationRuntimeManager {
       && existing.sourceNodeId === registration.sourceNodeId
       && existing.externalClipSignature === nextExternalClipSignature
     ) {
+      try {
+        existing.mixer.stopAllAction()
+      } catch {
+        /* ignore */
+      }
       existing.clips = clips
       existing.defaultClipName = nextDefaultClipName
       existing.autoplay = registration.autoplay
       existing.defaultLoop = nextDefaultLoop
       existing.defaultTimeScale = nextDefaultTimeScale
+      existing.activeAction = null
+      existing.activeClipName = null
+      existing.activeLoop = false
+      existing.activeTimeScale = 1
+      this.restoreDefaultNodeAnimation(registration.nodeId)
       return
     }
 
@@ -180,6 +265,7 @@ export class SceneAnimationRuntimeManager {
       activeLoop: false,
       activeTimeScale: 1,
       externalClipSignature: nextExternalClipSignature,
+      skippedClipLogKeys: new Set<string>(),
     }
     this.controllers.set(registration.nodeId, controller)
     this.restoreDefaultNodeAnimation(registration.nodeId)
@@ -219,7 +305,17 @@ export class SceneAnimationRuntimeManager {
       return null
     }
     controller.mixer.stopAllAction()
-    const action = playAnimationClip(controller.mixer, clip, options)
+    const action = playAnimationClip(controller.mixer, clip, options, {
+      nodeId,
+      skippedClipLogKeys: controller.skippedClipLogKeys,
+    })
+    if (!action) {
+      controller.activeAction = null
+      controller.activeClipName = null
+      controller.activeLoop = false
+      controller.activeTimeScale = 1
+      return null
+    }
     controller.activeAction = action
     controller.activeClipName = sanitizeAnimationClipName(clip.name)
     controller.activeLoop = Boolean(options.loop)
