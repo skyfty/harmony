@@ -7246,10 +7246,9 @@ function updatePunchBadgeOverlayEntries(
   reference: { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null },
 ): void {
   if (!punchNodeIds.size) {
-    if (punchBadgeOverlayEntries.value.length) {
-      punchBadgeOverlayEntries.value = [];
+    if (punchBadgeOverlayEntries.value.length || punchBadgePlacementSmoothingStates.size > 0) {
+      resetPunchOverlaySmoothing();
     }
-    resetPunchOverlaySmoothing();
     return;
   }
 
