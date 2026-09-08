@@ -97,6 +97,28 @@ export type InstancedLodCullingRequest = {
 	candidateRadii: Float32Array
 }
 
+export type InstancedLodCullingSyncRequest = {
+	kind: 'sync-instanced-lod-candidates'
+	revision: number
+	candidates: InstancedLodStaticCandidateSnapshot[]
+}
+
+export function buildInstancedLodCullingSyncRequest(params: {
+	revision: number
+	candidates: InstancedLodStaticCandidateSnapshot[]
+}): InstancedLodCullingSyncRequest {
+	return {
+		kind: 'sync-instanced-lod-candidates',
+		revision: Number.isFinite(params.revision) ? Math.max(0, Math.trunc(params.revision)) : 0,
+		candidates: params.candidates.map((candidate) => ({
+			nodeId: typeof candidate.nodeId === 'string' ? candidate.nodeId : '',
+			sourceAssetId: candidate.sourceAssetId ?? null,
+			instanceLayout: candidate.instanceLayout ?? null,
+			lodProps: candidate.lodProps ?? null,
+		})),
+	}
+}
+
 export type InstancedLodCullingResponse = {
 	kind: 'cull-instanced-lod-result'
 	requestId: number

@@ -26,6 +26,24 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+function removeDuplicateMpWorkerAssets(outputDir: string, targetBaseName: string): void {
+  const assetsDir = path.resolve(outputDir, 'assets')
+  if (!fs.existsSync(assetsDir)) {
+    return
+  }
+  const expectedPattern = new RegExp(`^${escapeRegExp(targetBaseName)}-.*\\.js$`)
+  fs.readdirSync(assetsDir).forEach((name: string) => {
+    if (!expectedPattern.test(name)) {
+      return
+    }
+    try {
+      fs.unlinkSync(path.join(assetsDir, name))
+    } catch (error) {
+      console.warn(`[harmony-worker] failed to remove duplicate worker asset ${name}`, error)
+    }
+  })
+}
+
 export function emitMpWorkerAssetPlugin(options: EmitMpWorkerAssetPluginOptions): Plugin {
   const isMp = process.env.UNI_PLATFORM?.startsWith('mp-') ?? false
   return {
@@ -37,16 +55,11 @@ export function emitMpWorkerAssetPlugin(options: EmitMpWorkerAssetPluginOptions)
       }
 
       const bundleValues = Object.values(bundle) as BundleValueLike[]
-      const sourceChunk = bundleValues.find((item): item is BundleChunkLike => {
-        const chunk = item as BundleChunkLike | undefined
-        if (!chunk) {
-          return false
-        }
-        if (chunk.type !== 'chunk') {
-          return false
-        }
-        return chunk.name.includes(options.sourceChunkName)
+      const sourceChunkKey = Object.keys(bundle).find((key) => {
+        const chunk = bundle[key] as BundleChunkLike | undefined
+        return Boolean(chunk && chunk.type === 'chunk' && chunk.name.includes(options.sourceChunkName))
       })
+      const sourceChunk = sourceChunkKey ? bundle[sourceChunkKey] as BundleChunkLike | undefined : undefined
       if (!sourceChunk) {
         return
       }
@@ -63,6 +76,7 @@ export function emitMpWorkerAssetPlugin(options: EmitMpWorkerAssetPluginOptions)
       }
 
       const targetPath = path.resolve(outputOptions.dir, options.fileName)
+      const targetBaseName = path.basename(options.fileName, path.extname(options.fileName))
       fs.mkdirSync(path.dirname(targetPath), { recursive: true })
 
       const emittedAsset = Object.values(bundle).find((item): item is BundleAssetLike => {
@@ -74,29 +88,27 @@ export function emitMpWorkerAssetPlugin(options: EmitMpWorkerAssetPluginOptions)
 
       if (typeof emittedAsset?.source === 'string') {
         fs.writeFileSync(targetPath, emittedAsset.source)
+        removeDuplicateMpWorkerAssets(outputOptions.dir, targetBaseName)
         return
       }
 
       if (emittedAsset?.source instanceof Uint8Array) {
         fs.writeFileSync(targetPath, emittedAsset.source)
+        removeDuplicateMpWorkerAssets(outputOptions.dir, targetBaseName)
         return
       }
 
       const assetsDir = path.resolve(outputOptions.dir, 'assets')
-      if (!fs.existsSync(assetsDir)) {
-        return
-      }
-
-      const targetBaseName = path.basename(options.fileName, path.extname(options.fileName))
       const expectedPattern = new RegExp(`^${escapeRegExp(targetBaseName)}-.*\\.js$`)
-      const sourceFile = fs
-        .readdirSync(assetsDir)
-        .find((name: string) => expectedPattern.test(name))
-      if (!sourceFile) {
-        return
+      const sourceFile = fs.existsSync(assetsDir)
+        ? fs
+          .readdirSync(assetsDir)
+          .find((name: string) => expectedPattern.test(name))
+        : undefined
+      if (sourceFile) {
+        fs.copyFileSync(path.join(assetsDir, sourceFile), targetPath)
       }
-
-      fs.copyFileSync(path.join(assetsDir, sourceFile), targetPath)
+      removeDuplicateMpWorkerAssets(outputOptions.dir, targetBaseName)
     },
   }
 }

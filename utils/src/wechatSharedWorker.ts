@@ -1,5 +1,17 @@
 export const WECHAT_SHARED_WORKER_PATH = 'pages/scenery/workers/index.js';
 
+const INSTANCED_LOD_WORKER_SCOPE = 'instanced-lod';
+
+function resolveWorkerScope(scriptPath: string): string | null {
+  if (scriptPath.includes('physics-')) {
+    return 'physics';
+  }
+  if (scriptPath.includes('instancedLod')) {
+    return INSTANCED_LOD_WORKER_SCOPE;
+  }
+  return null;
+}
+
 type WechatWorkerLike = {
   postMessage(message: any, transferables?: Transferable[] | ArrayBuffer[]): void;
   onMessage(callback: (event: { data: any }) => void): void;
@@ -198,9 +210,12 @@ function ensureRealWorker(state: SharedWechatWorkerState): WechatWorkerLike {
     }
 
     const envelope = payload as { __scope?: unknown; clientId?: unknown; message?: unknown };
-    if (envelope.__scope === 'physics' && typeof envelope.clientId === 'number') {
-      deliverToClient(state, envelope.clientId, { data: envelope.message });
-      return;
+    if (typeof envelope.__scope === 'string' && typeof envelope.clientId === 'number') {
+      const scopedClient = state.clients.get(envelope.clientId);
+      if (scopedClient && scopedClient.alive && resolveWorkerScope(scopedClient.scriptPath) === envelope.__scope) {
+        deliverToClient(state, envelope.clientId, { data: envelope.message });
+        return;
+      }
     }
 
     if (typeof state.lastRawClientId === 'number') {
@@ -285,7 +300,7 @@ export function createWechatWorkerFacade(scriptPath: string): WechatWorkerFacade
   };
   state.clients.set(clientId, client);
 
-  const isPhysicsPath = scriptPath.includes('physics-');
+  const scope = resolveWorkerScope(scriptPath);
   ensureRealWorker(state);
 
   return {
@@ -294,9 +309,9 @@ export function createWechatWorkerFacade(scriptPath: string): WechatWorkerFacade
         return;
       }
       const worker = ensureRealWorker(state);
-      if (isPhysicsPath) {
+      if (scope !== null) {
         worker.postMessage(encodeOutgoingMessage({
-          __scope: 'physics',
+          __scope: scope,
           clientId,
           message,
         }, true) as never);

@@ -30,8 +30,8 @@ if (!worker || typeof worker.onMessage !== 'function' || typeof worker.postMessa
 // WeChat Worker only keeps ONE worker.onMessage listener: every later call
 // replaces the previous one, and the property itself cannot be reassigned or
 // redefined (assigning/defining it throws "Cannot redefine property:
-// onMessage"). All logical workers in this file (physics / basis / meshopt)
-// therefore have to share a single dispatcher.
+// onMessage"). All logical workers in this file (physics / basis / meshopt /
+// instanced LOD culling) therefore have to share a single dispatcher.
 //
 // The minisheep worker-adapter registers worker.onMessage exactly once at
 // module load and then exposes a DOM-like EventTarget through proxySelf
@@ -56,6 +56,12 @@ try {
   require('./physics-cannon.worker.js');
 } catch (error) {
   console.error('[harmony-shared-worker] physics worker init failed', error);
+}
+
+try {
+  require('./instancedLodCulling.worker.js');
+} catch (error) {
+  console.warn('[harmony-shared-worker] instanced LOD culling worker init failed', error);
 }
 
 try {

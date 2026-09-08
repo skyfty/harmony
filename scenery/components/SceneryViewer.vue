@@ -967,14 +967,20 @@ import { createCanvas, type HarmonyCanvas, type HarmonyCanvas2DContext } from '@
 import { createTerrainScatterLodRuntime } from '@harmony/schema/scatter';
 import type { InstancedLodBoundsSnapshot } from '@harmony/schema/core';
 import {
+	acquireInstancedLodCullingWorker,
 	buildInstancedLodCullingRequest,
 	buildInstancedLodCullingCandidateSnapshot,
 	buildInstancedLodTargetFromParallelSnapshot,
-	dispatchInstancedLodCullingRequestWithCandidates,
+	computeInstancedLodCullingResultSync,
+	consumeInstancedLodCullingResult,
+	dispatchInstancedLodCullingRequestToWorker,
+	hasInstancedLodCullingSettledResult,
+	isInstancedLodCullingRequestPending,
+	releaseInstancedLodCullingWorker,
 	type InstancedLodCullingResponse,
 	type InstancedLodCullingCandidateSnapshot,
 	type InstancedLodCullingRequest,
-} from '../common/utils/instancedLodCulling';
+} from '../common/utils/instancedLodCullingWorkerHost';
 import {
   createJoystickOverlay,
   type JoystickOverlayViewport,
@@ -1061,6 +1067,7 @@ const canvasId = `scene-viewer-${Date.now()}`;
 // #ifdef MP-WEIXIN
 installWechatWorkerShim();
 // #endif
+acquireInstancedLodCullingWorker();
 const currentSceneId = ref<string | null>(null);
 const currentProjectId = ref<string | null>(null);
 const requestedMode = ref<RequestedMode>(null);
@@ -8587,28 +8594,12 @@ function buildInstancedLodCullingRequestForFrame(
 
 
 // Enhanced: support both model and billboard LOD targets
-function updateInstancedCullingAndLod(): void {
-  const context = renderContext;
-  if (!context) {
-    return;
-  }
-  const now = Date.now();
-  const camera = context.camera;
-
-  if (
-    instancedLodLastProcessedRevision === instancedLodRuntimeRevision
-    && areInstancedLodCameraMatricesUnchanged(camera)
-  ) {
-    return;
-  }
-
-  const lodEntries = collectInstancedLodRuntimeEntries();
-  const cullingRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries);
-  const cullingResult: InstancedLodCullingResponse = dispatchInstancedLodCullingRequestWithCandidates(
-    cullingRequest,
-    lodEntries,
-    instancedLodRuntimeRevision,
-  );
+function applyInstancedLodCullingResult(
+  cullingResult: InstancedLodCullingResponse,
+  lodEntries: InstancedLodRuntimeEntry[],
+  camera: THREE.Camera,
+  now: number,
+): number {
   const visibleIndices = cullingResult.visibleIndices;
   const visibleCount = visibleIndices.length;
   let visibleCursor = 0;
@@ -8701,12 +8692,83 @@ function updateInstancedCullingAndLod(): void {
     }
   });
 
-  instancedLodLastProcessedRevision = instancedLodRuntimeRevision;
-  rememberInstancedLodCameraMatrices(camera);
+  return lodVisibleCount;
+}
 
+function syncInstancedLodCullingDebugCounters(
+  lodEntries: InstancedLodRuntimeEntry[],
+  lodVisibleCount: number,
+): void {
   if (debugEnabled.value && debugMode.value === 'full') {
     syncInstancingDebugCounters(lodEntries.length, lodVisibleCount, instancedMeshes, terrainScatterRuntime);
   }
+}
+
+function applyInstancedLodCullingResultSynchronously(
+  cullingRequest: InstancedLodCullingRequest,
+  lodEntries: InstancedLodRuntimeEntry[],
+  camera: THREE.Camera,
+  now: number,
+  runtimeRevision: number,
+): void {
+  const cullingResult = computeInstancedLodCullingResultSync(cullingRequest, lodEntries, runtimeRevision);
+  const lodVisibleCount = applyInstancedLodCullingResult(cullingResult, lodEntries, camera, now);
+  instancedLodLastProcessedRevision = runtimeRevision;
+  rememberInstancedLodCameraMatrices(camera);
+  syncInstancedLodCullingDebugCounters(lodEntries, lodVisibleCount);
+}
+
+function updateInstancedCullingAndLod(): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  const now = Date.now();
+  const camera = context.camera;
+
+  const lodEntries = collectInstancedLodRuntimeEntries();
+  const runtimeRevision = instancedLodRuntimeRevision;
+
+  // Apply the most recent worker result. Results may lag the current camera by
+  // at most one update cycle (latest-settled policy); results whose runtime
+  // revision no longer matches are discarded so per-entry indices stay valid.
+  const settledResult = consumeInstancedLodCullingResult();
+  if (settledResult) {
+    if (settledResult.revision === runtimeRevision) {
+      const lodVisibleCount = applyInstancedLodCullingResult(settledResult.response, lodEntries, camera, now);
+      instancedLodLastProcessedRevision = settledResult.revision;
+      instancedLodLastCameraProjectionMatrix.set(settledResult.cameraProjectionMatrix);
+      instancedLodLastCameraMatrixWorldInverse.set(settledResult.cameraMatrixWorldInverse);
+      instancedLodLastCameraStateValid = true;
+      syncInstancedLodCullingDebugCounters(lodEntries, lodVisibleCount);
+    }
+  }
+
+  if (
+    instancedLodLastProcessedRevision === runtimeRevision
+    && areInstancedLodCameraMatricesUnchanged(camera)
+  ) {
+    return;
+  }
+
+  // A previous request is still in flight; wait for it. While the worker is
+  // warming up (no result has ever settled) keep culling synchronously so
+  // startup frames do not briefly render every instance at full LOD.
+  if (isInstancedLodCullingRequestPending()) {
+    if (!hasInstancedLodCullingSettledResult()) {
+      const warmupRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries);
+      applyInstancedLodCullingResultSynchronously(warmupRequest, lodEntries, camera, now, runtimeRevision);
+    }
+    return;
+  }
+
+  const cullingRequest = buildInstancedLodCullingRequestForFrame(camera, lodEntries);
+  const dispatchStatus = dispatchInstancedLodCullingRequestToWorker(cullingRequest, lodEntries, runtimeRevision);
+  if (dispatchStatus === 'unavailable' || !hasInstancedLodCullingSettledResult()) {
+    applyInstancedLodCullingResultSynchronously(cullingRequest, lodEntries, camera, now, runtimeRevision);
+    return;
+  }
+  // 'posted' / 'busy': the worker result is consumed and applied on a later frame.
 }
 
 async function prepareInstancedNodesForGraph(
@@ -22451,6 +22513,7 @@ function cleanupRuntime(): void {
 }
 
 onUnmounted(() => {
+  releaseInstancedLodCullingWorker();
   cancelMoveToTransition();
   resetCharacterActionButtonState();
   void destroySceneryPhysicsBridge().finally(() => {
