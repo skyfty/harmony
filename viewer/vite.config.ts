@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 import uni from '@dcloudio/vite-plugin-uni';
 import bundleOptimizer from '@uni-ku/bundle-optimizer';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
-import { emitMpWorkerAssetPlugin, toCustomChunkPlugin } from '@harmony/tools/vite';
+import { emitMpWorkerAssetPlugin, emitMpWorkerBundlePlugin, toCustomChunkPlugin } from '@harmony/tools/vite';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 
@@ -295,6 +295,7 @@ export default defineConfig({
             { find: '@harmony/utils/scene-package-storage', replacement: `${utilsSrcPath}/scenePackageStorage.ts` },
             { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
             { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
+            { find: '@harmony/utils/wechat-shared-worker', replacement: `${utilsSrcPath}/wechatSharedWorker.ts` },
             { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
             { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
             { find: /^three\/examples\/jsm(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
@@ -317,6 +318,7 @@ export default defineConfig({
             { find: '@harmony/utils/scene-package-storage', replacement: `${utilsSrcPath}/scenePackageStorage.ts` },
             { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
             { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
+            { find: '@harmony/utils/wechat-shared-worker', replacement: `${utilsSrcPath}/wechatSharedWorker.ts` },
             { find: /^@harmony\/utils$/, replacement: `${utilsSrcPath}/index.ts` },
             { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
             { find: /^three\/examples\/jsm(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
@@ -335,6 +337,7 @@ export default defineConfig({
       { find: '@harmony/utils/scene-package-storage', replacement: `${utilsSrcPath}/scenePackageStorage.ts` },
       { find: '@harmony/utils/scene-package-fs', replacement: `${utilsSrcPath}/scenePackageFs.ts` },
       { find: '@harmony/utils/query', replacement: `${utilsSrcPath}/query.ts` },
+      { find: '@harmony/utils/wechat-shared-worker', replacement: `${utilsSrcPath}/wechatSharedWorker.ts` },
       { find: '@mini-platform/core', replacement: fileURLToPath(new URL('../packages/mini-platform-core/src/index.ts', import.meta.url)) },
       { find: '@mini-platform/adapters', replacement: fileURLToPath(new URL('../packages/mini-platform-adapters/src/index.ts', import.meta.url)) },
       { find: /^@harmony\/utils\/(.*)$/, replacement: `${utilsSrcPath}/$1` },
@@ -435,6 +438,19 @@ export default defineConfig({
     emitMpWorkerAssetPlugin({
       sourceChunkName: 'instancedLodCulling.worker',
       fileName: 'pages/scenery/workers/instancedLodCulling.worker.js',
+    }),
+    emitMpWorkerBundlePlugin({
+      enabled: isMp,
+      entryPath: fileURLToPath(new URL('./src/pages/scenery/workers/physicsCannon.worker.ts', import.meta.url)),
+      outputFileName: 'physics-cannon.worker.js',
+      aliases: [
+        { find: /^@harmony\/physics-core$/, replacement: physicsCoreMirrorPath },
+        { find: /^@harmony\/physics-core\/(.*)$/, replacement: `${physicsCoreMirrorPath}/$1` },
+        {
+          find: 'cannon-es',
+          replacement: fileURLToPath(new URL('../physics-cannon/node_modules/cannon-es', import.meta.url)),
+        },
+      ],
     }),
     {
       name: 'find-dep',

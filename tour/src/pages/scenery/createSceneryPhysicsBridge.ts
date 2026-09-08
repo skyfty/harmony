@@ -2,7 +2,12 @@ import type { PhysicsBackendPreference, PhysicsBridge } from '@harmony/physics-c
 import type { PhysicsBackendBridge } from '@harmony/physics-bridge';
 import type { PhysicsWorkerController } from '@harmony/physics-bridge/runtime';
 import { initializePhysicsBackendBridge } from '@harmony/schema/physicsBackendBridge';
-import { createInMemoryWechatPhysicsWorker, createWechatPhysicsBridge } from '@harmony/physics-bridge/wechat';
+import {
+  createInMemoryWechatPhysicsWorker,
+  createWechatPhysicsBridge,
+  type WechatWorkerLike,
+} from '@harmony/physics-bridge/wechat';
+import { createWechatWorkerFacade, isWechatSharedWorkerSupported } from '@harmony/utils/wechat-shared-worker';
 
 type LoadedPhysicsBackend = LoadedAmmoPhysicsBackend | LoadedCannonPhysicsBackend;
 type LoadedAmmoPhysicsBackend = {
@@ -24,8 +29,26 @@ export async function createSceneryPhysicsBridge(engine?: PhysicsBackendPreferen
   return createWechatPhysicsBridge({
     subpackageName: backend.subpackageName,
     loadSubpackage: loadMiniSubpackage,
-    createWorker: () => createInMemoryWechatPhysicsWorker(backend.createController()),
+    createWorker: createWechatWorkerFactory(backend),
   });
+}
+
+function createWechatWorkerFactory(backend: LoadedPhysicsBackend): () => WechatWorkerLike {
+  const canUseRealWorker = backend.subpackageName === 'physics-cannon' && isWechatSharedWorkerSupported();
+  return () => {
+    if (!canUseRealWorker) {
+      if (backend.subpackageName === 'physics-ammo' && isWechatSharedWorkerSupported()) {
+        console.warn('[harmony-scenery] Ammo real worker is not wired yet; using in-memory physics worker');
+      }
+      return createInMemoryWechatPhysicsWorker(backend.createController());
+    }
+    try {
+      return createWechatWorkerFacade('physics-cannon.worker.js');
+    } catch (error) {
+      console.warn('[harmony-scenery] falling back to in-memory physics worker', error);
+      return createInMemoryWechatPhysicsWorker(backend.createController());
+    }
+  };
 }
 
 function resolvePhysicsBackendId(engine: PhysicsBackendPreference | undefined): Extract<PhysicsBackendPreference, 'ammo' | 'cannon'> {

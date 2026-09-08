@@ -40,6 +40,7 @@
       "@harmony/utils/scene-package-storage": ["./src/pages/scenery/utils/scenePackageStorage.ts"],
       "@harmony/utils/scene-package-fs": ["./src/pages/scenery/utils/scenePackageFs.ts"],
       "@harmony/utils/query": ["./src/pages/scenery/utils/query.ts"],
+      "@harmony/utils/wechat-shared-worker": ["./src/pages/scenery/utils/wechatSharedWorker.ts"],
       "@mini-platform/core": ["../packages/mini-platform-core/src/index.ts"],
       "@mini-platform/adapters": ["../packages/mini-platform-adapters/src/index.ts"],
       "three": ["./src/pages/scenery/three"],

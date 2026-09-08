@@ -44,6 +44,7 @@
       "@harmony/physics-bridge/web": ["../physics-bridge/src/web.ts"],
       "@harmony/physics-bridge/wechat": ["../physics-bridge/src/wechat.ts"],
       "@harmony/utils": ["../utils/src/index.ts"],
+      "@harmony/utils/wechat-shared-worker": ["../utils/src/wechatSharedWorker.ts"],
       "@harmony/utils/scene-package-storage": ["../utils/src/scenePackageStorage.ts"],
       "@minisheep/three-platform-adapter": ["node_modules/@minisheep/three-platform-adapter/dist/typings/index.d.ts"],
       "@minisheep/three-platform-adapter/wechat": ["node_modules/@minisheep/three-platform-adapter/dist/typings/wechat/index.d.ts"],

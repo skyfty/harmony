@@ -52,6 +52,11 @@
       "import": "./dist/scenePackageFs.js",
       "default": "./dist/scenePackageFs.js",
       "types": "./dist/scenePackageFs.d.ts"
+    },
+    "./wechat-shared-worker": {
+      "import": "./dist/wechatSharedWorker.js",
+      "default": "./dist/wechatSharedWorker.js",
+      "types": "./dist/wechatSharedWorker.d.ts"
     }
   },
   "devDependencies": {

@@ -397,6 +397,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import { KTX2Loader as PlatformKTX2Loader } from '@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader';
+import { installWechatWorkerShim, terminateWechatSharedWorker } from '@harmony/utils/wechat-shared-worker';
 
 import PlatformCanvas from './PlatformCanvas.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
@@ -1057,6 +1058,9 @@ interface RenderContext {
 }
 
 const canvasId = `scene-viewer-${Date.now()}`;
+// #ifdef MP-WEIXIN
+installWechatWorkerShim();
+// #endif
 const currentSceneId = ref<string | null>(null);
 const currentProjectId = ref<string | null>(null);
 const requestedMode = ref<RequestedMode>(null);
@@ -22440,7 +22444,9 @@ function cleanupRuntime(): void {
 onUnmounted(() => {
   cancelMoveToTransition();
   resetCharacterActionButtonState();
-  void destroySceneryPhysicsBridge();
+  void destroySceneryPhysicsBridge().finally(() => {
+    terminateWechatSharedWorker();
+  });
   if (typeof window !== 'undefined') {
     window.removeEventListener('keydown', handleWindowKeyDown);
     window.removeEventListener('keyup', handleWindowKeyUp);
