@@ -423,9 +423,9 @@ export default defineConfig({
         ],
       },
     }),
-    visualizer({
-      emitFile: true,
-    }),
+    // rollup-plugin-visualizer emits stats.html into the build output; skip it
+    // for mini-program builds where that file is pure dead weight.
+    ...(isMp ? [] : [visualizer({ emitFile: true })]),
     // Adapter-generated workers/wasms stay inside the scenery package boundary.
     // The plugin only rewrites supported three example entry points and emits
     // the corresponding runtime assets; the core three runtime remains intact.
