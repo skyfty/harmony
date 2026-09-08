@@ -16,7 +16,7 @@ export const GROUND_TERRAIN_CHUNK_SIZE_METERS = 100
 export const ENVIRONMENT_NODE_ID = 'harmony:environment'
 export const MULTIUSER_NODE_ID = 'harmony:multiuser'
 
-export { AssetCache, AssetLoader } from './assetCache'
+export { AssetCache, AssetLoader, DEFAULT_ASSET_CACHE_MAX_ENTRIES } from './assetCache'
 export type { AssetCacheEntry, AssetCacheStatus, AssetSource, AssetLoadOptions, AssetLoadPersistenceOptions } from './assetCache'
 export * from './runtimePrefab'
 export * from './runtimeSocketAdapter'

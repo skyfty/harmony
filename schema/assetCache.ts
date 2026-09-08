@@ -49,6 +49,12 @@ export interface AssetSource {
   filename?: string | null
 }
 
+/**
+ * 默认的内存缓存条目上限（微信等受限环境下的兜底值）。
+ * 只限制内存中的 Blob/object URL，不影响持久化磁盘缓存。
+ */
+export const DEFAULT_ASSET_CACHE_MAX_ENTRIES = 80
+
 export interface AssetCacheOptions {
   maxEntries?: number
   persistentStorage?: PersistentAssetStorage | null
@@ -74,7 +80,8 @@ export class AssetCache {
   private maxEntries: number
 
   constructor(options: AssetCacheOptions = {}) {
-    this.maxEntries = Number.isFinite(options.maxEntries ?? Infinity) ? (options.maxEntries as number) : Infinity
+    const requestedMaxEntries = options.maxEntries ?? DEFAULT_ASSET_CACHE_MAX_ENTRIES
+    this.maxEntries = Number.isFinite(requestedMaxEntries) ? (requestedMaxEntries as number) : Infinity
     this.persistentStorage = options.persistentStorage ?? null
   }
 
@@ -233,6 +240,20 @@ export class AssetCache {
     entry.size = 0
     entry.abortController = null
     entry.lastUsedAt = now()
+  }
+
+  clearInMemory(): void {
+    for (const entry of this.entries.values()) {
+      if (entry.abortController) {
+        entry.abortController.abort()
+        entry.abortController = null
+      }
+      revokeEntryBlobUrl(entry)
+      entry.blob = null
+      entry.blobUrl = null
+    }
+    this.entries.clear()
+    this.pendingHydrations.clear()
   }
 
   evictIfNeeded(preferredAssetId?: string): void {

@@ -556,7 +556,7 @@ import {
 import type { ResolvedSteerBinding } from '@harmony/schema/steerBindingIndex';
 import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
-import { AssetCache, AssetLoader, configureAssetDownloadHostMirrors, fetchAssetBlob, type AssetCacheEntry } from '@harmony/schema/assetCache';
+import { AssetCache, AssetLoader, DEFAULT_ASSET_CACHE_MAX_ENTRIES, configureAssetDownloadHostMirrors, fetchAssetBlob, type AssetCacheEntry } from '@harmony/schema/assetCache';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import { resolveDocumentGroundNode as resolveSharedDocumentGroundNode } from '@harmony/schema/groundNode';
@@ -1391,8 +1391,8 @@ const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersiste
   : isIndexedDbPersistentAssetStorageSupported()
     ? createIndexedDbPersistentAssetStorage()
     : createNoopPersistentAssetStorage();
-const sceneAssetCache = new AssetCache({ persistentStorage: scenePersistentStorage });
-const sceneAssetLoader = new AssetLoader(sceneAssetCache);
+let sceneAssetCache = new AssetCache({ maxEntries: DEFAULT_ASSET_CACHE_MAX_ENTRIES, persistentStorage: scenePersistentStorage });
+let sceneAssetLoader = new AssetLoader(sceneAssetCache);
 let sharedResourceCache: ResourceCache | null = null;
 let viewerResourceCache: ResourceCache | null = null;
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
@@ -1523,6 +1523,12 @@ function ensureResourceCache(
     sharedResourceCache.setContext(document, options);
   }
   return sharedResourceCache;
+}
+
+function resetSceneAssetCache(): void {
+  sceneAssetCache.clearInMemory();
+  sceneAssetCache = new AssetCache({ maxEntries: DEFAULT_ASSET_CACHE_MAX_ENTRIES, persistentStorage: scenePersistentStorage });
+  sceneAssetLoader = new AssetLoader(sceneAssetCache);
 }
 
 // ---------------------------------
@@ -20951,6 +20957,7 @@ function disposeJoystickOverlays(): void {
 }
 
 function teardownRenderer() {
+  resetSceneAssetCache();
   disposeJoystickOverlays();
   renderScope?.stop();
   renderScope = null;
@@ -21961,6 +21968,9 @@ function cleanupForUnrelatedSceneSwitch(): void {
   setActiveMultiuserSceneId(null);
   resetExternalAnimationAssetCache();
   resetSkinRuntime();
+  disposeMaterialTextureCache();
+  resetAssetResolutionCaches();
+  sceneAssetCache.evictIfNeeded();
   viewerResourceCache = null;
   overlaySyncForceNextUpdate = true;
 }
