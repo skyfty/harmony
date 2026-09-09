@@ -8,8 +8,10 @@ import {
   type RigidbodyComponentProps,
   type RigidbodyColliderType,
   type RigidbodyBodyType,
+  type RigidbodyConvexDecompositionLevel,
   clampRigidbodyComponentProps,
   DEFAULT_RIGIDBODY_COLLIDER_TYPE,
+  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
   DEFAULT_RIGIDBODY_MASS,
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
@@ -38,6 +40,12 @@ const COLLIDER_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyColliderType
   { label: 'Capsule', value: 'capsule' },
 ]
 
+const DECOMPOSITION_LEVEL_OPTIONS: Array<{ label: string; value: RigidbodyConvexDecompositionLevel }> = [
+  { label: 'Default', value: 'default' },
+  { label: 'Fine', value: 'fine' },
+  { label: 'Coarse', value: 'coarse' },
+]
+
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
@@ -55,6 +63,9 @@ const normalizedProps = computed(() => {
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
 const localColliderType = ref<RigidbodyColliderType>(DEFAULT_RIGIDBODY_COLLIDER_TYPE)
+const localConvexDecompositionLevel = ref<RigidbodyConvexDecompositionLevel>(
+  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
+)
 const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
 const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
 const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
@@ -80,6 +91,7 @@ watch(
       localMass.value = props.mass
     }
     localColliderType.value = props.colliderType
+    localConvexDecompositionLevel.value = props.convexDecompositionLevel
     localLinearDamping.value = props.linearDamping
     localAngularDamping.value = props.angularDamping
     localRestitution.value = props.restitution
@@ -201,6 +213,14 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
     return
   }
   updateComponent({ bodyType: value })
+}
+
+function handleConvexDecompositionLevelChange(value: RigidbodyConvexDecompositionLevel | null) {
+  if (!value || value === normalizedProps.value.convexDecompositionLevel) {
+    return
+  }
+  localConvexDecompositionLevel.value = value
+  updateComponent({ convexDecompositionLevel: value })
 }
 
 function handleOpenColliderEditor() {
@@ -353,6 +373,19 @@ watch(selectedNodeId, () => {
             </template>
           </v-tooltip>
         </div>
+        <v-select
+          v-if="localColliderType === 'convex'"
+          label="Convex Detail"
+          density="compact"
+          variant="underlined"
+          :items="DECOMPOSITION_LEVEL_OPTIONS"
+          item-title="label"
+          item-value="value"
+          :model-value="localConvexDecompositionLevel"
+          :disabled="!rigidbodyComponent?.enabled"
+          persistent-hint
+          @update:modelValue="handleConvexDecompositionLevelChange"
+        />
         <v-text-field
           label="Mass"
           type="number"

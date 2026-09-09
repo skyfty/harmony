@@ -42,7 +42,7 @@ import {
   type RigidbodyConvexSimplifyConfig,
   type RigidbodyConvexDecompositionConfig,
   type RigidbodyConvexMeshPart,
-  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
+  resolveRigidbodyConvexDecompositionConfig,
   type RigidbodyPhysicsShape,
   type RigidbodyColliderType,
   PRELOADABLE_COMPONENT_TYPE,
@@ -818,10 +818,8 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     let generatedConvexSimplify: RigidbodyConvexSimplifyConfig | undefined
     let generatedConvexDecomposition: RigidbodyConvexDecompositionConfig | undefined
     const buildConvex = async (): Promise<RigidbodyPhysicsShape | null> => {
-      const decompositionBase = DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
-      const decompositionConfig: RigidbodyConvexDecompositionConfig = {
-        ...decompositionBase,
-      }
+      const decompositionLevel = clampRigidbodyComponentProps(entry.component.props).convexDecompositionLevel
+      const decompositionConfig = resolveRigidbodyConvexDecompositionConfig(decompositionLevel)
       const leafConfigBase = DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
       const leafConfig: RigidbodyConvexSimplifyConfig = {
         version: 1,

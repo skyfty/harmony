@@ -5,6 +5,7 @@ import type { SceneNode, SceneNodeComponentState } from '../../index'
 export const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
 export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
 export type RigidbodyColliderType = 'box' | 'convex' | 'sphere' | 'cylinder' | 'capsule'
+export type RigidbodyConvexDecompositionLevel = 'default' | 'fine' | 'coarse'
 
 const VALID_RIGIDBODY_COLLIDER_TYPES: readonly RigidbodyColliderType[] = [
   'box',
@@ -14,8 +15,19 @@ const VALID_RIGIDBODY_COLLIDER_TYPES: readonly RigidbodyColliderType[] = [
   'capsule',
 ] as const
 
+const VALID_RIGIDBODY_CONVEX_DECOMPOSITION_LEVELS: readonly RigidbodyConvexDecompositionLevel[] = [
+  'default',
+  'fine',
+  'coarse',
+] as const
+
 function isRigidbodyColliderType(value: unknown): value is RigidbodyColliderType {
   return typeof value === 'string' && (VALID_RIGIDBODY_COLLIDER_TYPES as readonly string[]).includes(value)
+}
+
+function isRigidbodyConvexDecompositionLevel(value: unknown): value is RigidbodyConvexDecompositionLevel {
+  return typeof value === 'string'
+    && (VALID_RIGIDBODY_CONVEX_DECOMPOSITION_LEVELS as readonly string[]).includes(value)
 }
 
 export interface RigidbodyComponentProps {
@@ -27,6 +39,7 @@ export interface RigidbodyComponentProps {
   restitution: number
   friction: number
   targetNodeId: string | null
+  convexDecompositionLevel: RigidbodyConvexDecompositionLevel
 }
 
 export type RigidbodyVector3Tuple = [number, number, number]
@@ -88,10 +101,35 @@ export const DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG: RigidbodyConvexDecom
   voxelResolution: 100000,
   maxVerticesPerHull: 32,
   minVolumePercentError: 1,
-  maxRecursionDepth: 3,
+  maxRecursionDepth: 2,
   shrinkWrap: true,
   fillMode: 'flood',
   findBestPlane: true,
+}
+
+export const FINE_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG: RigidbodyConvexDecompositionConfig = {
+  ...DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
+  maxHulls: 32,
+  voxelResolution: 200000,
+  maxRecursionDepth: 4,
+}
+
+export const COARSE_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG: RigidbodyConvexDecompositionConfig = {
+  ...DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
+  maxHulls: 4,
+  maxRecursionDepth: 1,
+}
+
+export function resolveRigidbodyConvexDecompositionConfig(
+  level: RigidbodyConvexDecompositionLevel | null | undefined,
+): RigidbodyConvexDecompositionConfig {
+  if (level === 'fine') {
+    return FINE_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
+  }
+  if (level === 'coarse') {
+    return COARSE_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
+  }
+  return DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
 }
 
 type RigidbodyPhysicsShapeBase = {
@@ -155,6 +193,7 @@ export interface RigidbodyComponentMetadata {
 export const DEFAULT_RIGIDBODY_MASS = 1400
 export const DEFAULT_RIGIDBODY_BODY_TYPE: RigidbodyBodyType = 'STATIC'
 export const DEFAULT_RIGIDBODY_COLLIDER_TYPE: RigidbodyColliderType = 'convex'
+export const DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL: RigidbodyConvexDecompositionLevel = 'default'
 export const MIN_RIGIDBODY_MASS = 0
 export const MAX_RIGIDBODY_MASS = 100000
 export const DEFAULT_LINEAR_DAMPING = 0.01
@@ -173,6 +212,10 @@ export function clampRigidbodyComponentProps(
   const normalizedColliderType: RigidbodyColliderType = isRigidbodyColliderType(props?.colliderType)
     ? props.colliderType
     : DEFAULT_RIGIDBODY_COLLIDER_TYPE
+  const normalizedConvexDecompositionLevel: RigidbodyConvexDecompositionLevel =
+    isRigidbodyConvexDecompositionLevel(props?.convexDecompositionLevel)
+      ? props!.convexDecompositionLevel
+      : DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL
   
   const rawLinearDamping = typeof props?.linearDamping === 'number' && Number.isFinite(props.linearDamping) ? props.linearDamping : DEFAULT_LINEAR_DAMPING
   const normalizedLinearDamping = Math.max(0, Math.min(1, rawLinearDamping))
@@ -207,6 +250,7 @@ export function clampRigidbodyComponentProps(
     restitution: normalizedRestitution,
     friction: normalizedFriction,
     targetNodeId: normalizedTargetNodeId,
+    convexDecompositionLevel: normalizedConvexDecompositionLevel,
   }
 }
 
@@ -220,6 +264,7 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
     restitution: props.restitution,
     friction: props.friction,
     targetNodeId: props.targetNodeId ?? null,
+    convexDecompositionLevel: props.convexDecompositionLevel ?? DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
   }
 }
 
