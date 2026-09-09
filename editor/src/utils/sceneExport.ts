@@ -57,6 +57,7 @@ import {
   resolveModelCollisionComponentPropsFromNode,
 } from '@schema/components'
 import { isGroundDynamicMesh } from '@schema/groundHeightfield'
+import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
 
 const sceneNodePositionHelper = new THREE.Vector3()
 const sceneNodeQuaternionHelper = new THREE.Quaternion()
@@ -816,12 +817,11 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
 
     let generatedConvexSimplify: RigidbodyConvexSimplifyConfig | undefined
     let generatedConvexDecomposition: RigidbodyConvexDecompositionConfig | undefined
-    const buildConvex = async () => {
+    const buildConvex = async (): Promise<RigidbodyPhysicsShape | null> => {
       const decompositionBase = DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
       const decompositionConfig: RigidbodyConvexDecompositionConfig = {
         ...decompositionBase,
       }
-      const leafMeshCount = countSamplingObjectMeshLeaves(samplingObject)
       const leafConfigBase = DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
       const leafConfig: RigidbodyConvexSimplifyConfig = {
         version: 1,
@@ -829,43 +829,82 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
         fallback: { ...leafConfigBase.fallback },
         limits: { ...leafConfigBase.limits },
       }
-      const leafShape = leafMeshCount >= 2 && leafMeshCount <= decompositionConfig.maxHulls
-        ? buildLeafConvexMeshShapeFromObject(
+
+      const samplingUnits = collectRigidbodySamplingUnitEntries(
+        samplingObject,
+        samplingNode.nodeType === 'Group',
+      )
+      if (samplingUnits.length >= 2) {
+        const parts: RigidbodyConvexMeshPart[] = []
+        for (const unit of samplingUnits) {
+          let unitParts: RigidbodyConvexMeshPart[] | null = null
+          const isSimplePrimitive = unit.kind === 'primitive'
+            && countSamplingObjectMeshLeaves(unit.object, 2) === 1
+          if (isSimplePrimitive) {
+            const quickShape = buildLeafConvexMeshShapeFromObject(
+              unit.object,
+              leafConfig,
+              nodeScale,
+              sourceWorldTransform,
+              hostWorldTransform,
+            )
+            if (quickShape && quickShape.parts.length === 1) {
+              unitParts = quickShape.parts
+            }
+          }
+          if (!unitParts) {
+            const decomposedUnit = await buildConvexMeshShapeFromObject(
+              unit.object,
+              decompositionConfig,
+              sourceWorldTransform,
+              hostWorldTransform,
+            )
+            unitParts = decomposedUnit?.shape.parts ?? null
+          }
+          if (unitParts && unitParts.length) {
+            parts.push(...unitParts)
+          }
+        }
+        if (parts.length) {
+          generatedConvexDecomposition = {
+            ...decompositionConfig,
+            usedHulls: parts.length,
+          }
+          return {
+            kind: 'convex-mesh',
+            parts,
+            offset: [0, 0, 0],
+            rotation: [0, 0, 0],
+            applyScale: true,
+          }
+        }
+      }
+
+      const isPlainPrimitiveTarget = !samplingNode.sourceAssetId
+        && samplingNode.nodeType !== 'Group'
+        && !samplingNode.dynamicMesh?.type
+      if (isPlainPrimitiveTarget) {
+        const quickShape = buildLeafConvexMeshShapeFromObject(
           samplingObject,
           leafConfig,
           nodeScale,
           sourceWorldTransform,
           hostWorldTransform,
         )
-        : null
-      const leafPartsAreSimple = Boolean(
-        leafShape
-        && leafShape.parts.length >= 2
-        && leafShape.parts.every((part) => part.vertices.length <= 24 && part.faces.length <= 48),
-      )
-      if (leafPartsAreSimple) {
-        generatedConvexDecomposition = {
-          ...decompositionConfig,
-          usedHulls: leafShape!.parts.length,
+        if (quickShape && quickShape.parts.length >= 1) {
+          return quickShape
         }
-        return leafShape
-      }
-      const decomposed = await buildConvexMeshShapeFromObject(
-        samplingObject,
-        decompositionConfig,
-        sourceWorldTransform,
-        hostWorldTransform,
-      )
-      if (decomposed) {
-        generatedConvexDecomposition = decomposed.config
-        return decomposed.shape
-      }
-      if (leafShape) {
-        generatedConvexDecomposition = {
-          ...decompositionConfig,
-          usedHulls: leafShape.parts.length,
+      } else {
+        const decomposed = await buildConvexMeshShapeFromObject(
+          samplingObject,
+          decompositionConfig,
+          sourceWorldTransform,
+          hostWorldTransform,
+        )
+        if (decomposed) {
+          generatedConvexDecomposition = decomposed.config
+          return decomposed.shape
         }
-        return leafShape
       }
 
       const base = DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
@@ -1015,6 +1054,7 @@ async function buildRigidbodySamplingObject(
         if (!childObject) {
           continue
         }
+        childObject.userData[RIGIDBODY_SAMPLING_UNIT_KIND_KEY] = resolveRigidbodySamplingUnitKind(child)
         applyPositionAndRotationToObject(childObject, child)
         childObject.updateMatrixWorld(true)
         empty.add(childObject)
@@ -1064,6 +1104,33 @@ function applyPositionAndRotationToObject(object: THREE.Object3D, node: SceneNod
   )
 }
 
+function buildInstancedSamplingObjectFromCachedMeshes(
+  cached: NonNullable<ReturnType<typeof getCachedModelObject>>,
+): THREE.Group | null {
+  const sourceMeshes = Array.isArray(cached.meshes) ? cached.meshes : []
+  if (!sourceMeshes.length) {
+    return null
+  }
+  const samplingGroup = new THREE.Group()
+  samplingGroup.name = `${cached.object.name || cached.assetId}:InstancedSamplingGeometry`
+  samplingGroup.userData.rigidbodyInstancedSampling = true
+  sourceMeshes.forEach((sourceMesh, index) => {
+    const positionAttribute = sourceMesh.geometry?.getAttribute('position')
+    if (!sourceMesh.geometry || !positionAttribute || positionAttribute.count < 3) {
+      return
+    }
+    const samplingMesh = new THREE.Mesh(sourceMesh.geometry)
+    samplingMesh.name = `${samplingGroup.name}:${index}`
+    samplingMesh.frustumCulled = false
+    samplingGroup.add(samplingMesh)
+  })
+  if (!samplingGroup.children.length) {
+    return null
+  }
+  samplingGroup.updateMatrixWorld(true)
+  return samplingGroup
+}
+
 async function loadAssetObjectForNode(
   node: SceneNode,
   assetCacheStore: ReturnType<typeof useAssetCacheStore>,
@@ -1086,6 +1153,23 @@ async function loadAssetObjectForNode(
   const baseObject = baseGroup?.object ?? null
   if (!baseObject) {
     return null
+  }
+  const importMetadata = node.importMetadata as { objectPath?: number[] | null } | null | undefined
+  const hasObjectPath = Array.isArray(importMetadata?.objectPath) && importMetadata.objectPath.length > 0
+  // Preview renders instancing-eligible whole-model nodes using baked local geometry (the import-time
+  // root normalization offset is baked out of the InstancedMesh geometry). Sampling the raw object clone
+  // would keep that root offset and produce a collider that does not hug the visible mesh. Reuse the
+  // exact cached instanced geometry so collider sampling and rendering share the same coordinate space.
+  if (
+    !hasObjectPath
+    && canNodeUseRuntimeModelInstancing(node)
+    && Array.isArray(baseGroup?.meshes)
+    && baseGroup!.meshes.length > 0
+  ) {
+    const instancedSamplingObject = buildInstancedSamplingObjectFromCachedMeshes(baseGroup!)
+    if (instancedSamplingObject) {
+      return instancedSamplingObject
+    }
   }
   const target = findObjectByPath(baseObject, node.importMetadata?.objectPath ?? null) ?? baseObject
   const clone = target.clone(true)
@@ -1259,10 +1343,63 @@ function buildConvexShapeFromOutline(
   }
 }
 
-function countSamplingObjectMeshLeaves(object: THREE.Object3D): number {
+const RIGIDBODY_SAMPLING_UNIT_KIND_KEY = 'harmonyRigidbodySamplingUnitKind'
+
+type RigidbodySamplingUnitKind = 'asset' | 'group' | 'dynamic' | 'primitive'
+
+type RigidbodySamplingUnitEntry = {
+  object: THREE.Object3D
+  kind: RigidbodySamplingUnitKind
+}
+
+function resolveRigidbodySamplingUnitKind(node: SceneNode): RigidbodySamplingUnitKind {
+  if (node.sourceAssetId) {
+    return 'asset'
+  }
+  if (node.nodeType === 'Group') {
+    return 'group'
+  }
+  if (node.dynamicMesh?.type) {
+    return 'dynamic'
+  }
+  return 'primitive'
+}
+
+function collectRigidbodySamplingUnitEntries(
+  samplingObject: THREE.Object3D,
+  isGroupNode: boolean,
+): RigidbodySamplingUnitEntry[] {
+  if (!isGroupNode) {
+    return [{ object: samplingObject, kind: 'asset' }]
+  }
+  const contentRoot = samplingObject.children[0]
+  if (!contentRoot) {
+    return []
+  }
+  const entries: RigidbodySamplingUnitEntry[] = []
+  for (const child of contentRoot.children) {
+    if (!child) {
+      continue
+    }
+    const userDataKind = child.userData?.[RIGIDBODY_SAMPLING_UNIT_KIND_KEY]
+    const kind: RigidbodySamplingUnitKind = userDataKind === 'asset'
+      || userDataKind === 'group'
+      || userDataKind === 'dynamic'
+      || userDataKind === 'primitive'
+      ? userDataKind
+      : 'asset'
+    entries.push({ object: child, kind })
+  }
+  return entries
+}
+
+function countSamplingObjectMeshLeaves(
+  object: THREE.Object3D,
+  limit = 64,
+): number {
   let count = 0
   object.traverse((child) => {
-    if (count >= 64) {
+    if (count >= limit) {
       return
     }
     const mesh = child as THREE.Object3D & {
