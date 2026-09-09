@@ -51,6 +51,49 @@ export type RigidbodyConvexSimplifyConfig = {
   usedPass?: 'primary' | 'fallback'
 }
 
+export type RigidbodyConvexMeshPart = {
+  vertices: RigidbodyVector3Tuple[]
+  faces: number[][]
+  offset?: RigidbodyVector3Tuple
+  rotation?: RigidbodyVector3Tuple
+}
+
+export type RigidbodyConvexDecompositionFillMode = 'flood' | 'surface' | 'raycast'
+
+export type RigidbodyConvexDecompositionConfig = {
+  version: 1
+  /** The maximum number of convex hulls to produce. */
+  maxHulls: number
+  /** The voxel resolution to use. */
+  voxelResolution: number
+  /** The maximum number of vertices allowed in any output convex hull. */
+  maxVerticesPerHull: number
+  /** If the voxels are within this percentage of the hull volume, stop splitting. */
+  minVolumePercentError: number
+  /** The maximum recursion depth. */
+  maxRecursionDepth: number
+  /** Whether to shrinkwrap the voxel positions to the source mesh on output. */
+  shrinkWrap: boolean
+  /** How to fill the interior of the voxelized mesh. */
+  fillMode: RigidbodyConvexDecompositionFillMode
+  /** Whether to attempt to split planes along the best location. */
+  findBestPlane: boolean
+  /** The actual number of hulls produced by the last run. */
+  usedHulls?: number
+}
+
+export const DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG: RigidbodyConvexDecompositionConfig = {
+  version: 1,
+  maxHulls: 16,
+  voxelResolution: 100000,
+  maxVerticesPerHull: 32,
+  minVolumePercentError: 1,
+  maxRecursionDepth: 3,
+  shrinkWrap: true,
+  fillMode: 'flood',
+  findBestPlane: true,
+}
+
 type RigidbodyPhysicsShapeBase = {
   offset?: RigidbodyVector3Tuple
   rotation?: RigidbodyVector3Tuple
@@ -66,6 +109,10 @@ export type RigidbodyPhysicsShape =
       kind: 'convex'
       vertices: RigidbodyVector3Tuple[]
       faces: number[][]
+    } & RigidbodyPhysicsShapeBase)
+  | ({
+      kind: 'convex-mesh'
+      parts: RigidbodyConvexMeshPart[]
     } & RigidbodyPhysicsShapeBase)
   | ({
       kind: 'heightfield'
@@ -102,6 +149,7 @@ export interface RigidbodyComponentMetadata {
   shape?: RigidbodyPhysicsShape | null
   generatedAt?: string
   convexSimplify?: RigidbodyConvexSimplifyConfig
+  convexDecomposition?: RigidbodyConvexDecompositionConfig
 }
 
 export const DEFAULT_RIGIDBODY_MASS = 1400

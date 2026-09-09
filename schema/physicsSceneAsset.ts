@@ -34,6 +34,7 @@ import {
   type RigidbodyComponentProps,
   type RoadComponentProps,
   type RigidbodyPhysicsShape,
+  type RigidbodyVector3Tuple,
   type VehicleComponentProps,
 } from './components'
 
@@ -59,6 +60,11 @@ const groundAirWallQuaternionHelper = new THREE.Quaternion()
 const groundAirWallScaleHelper = new THREE.Vector3()
 const rigidbodyShapeRotationHelper = new THREE.Euler()
 const rigidbodyShapeQuaternionHelper = new THREE.Quaternion()
+const convexMeshPartOffsetHelper = new THREE.Vector3()
+const convexMeshPartRotationHelper = new THREE.Euler()
+const convexMeshPartQuaternionHelper = new THREE.Quaternion()
+const convexMeshPartComposedPositionHelper = new THREE.Vector3()
+const convexMeshPartComposedQuaternionHelper = new THREE.Quaternion()
 const identityPhysicsRotation: PhysicsTransform['rotation'] = [0, 0, 0, 1]
 
 function createEmptyPhysicsSceneAsset(): PhysicsSceneAsset {
@@ -245,6 +251,58 @@ function toPhysicsRotation(rotation: RigidbodyPhysicsShape['rotation']): Physics
   ]
 }
 
+function composeConvexMeshPartTransform(
+  shapeOffset: PhysicsVector3,
+  shapeRotation: PhysicsTransform['rotation'],
+  partOffset: RigidbodyVector3Tuple | null | undefined,
+  partRotation: RigidbodyVector3Tuple | null | undefined,
+  scale: PhysicsVector3,
+): PhysicsTransform {
+  const partOffsetTuple = partOffset ?? [0, 0, 0]
+  convexMeshPartOffsetHelper.set(
+    (partOffsetTuple[0] ?? 0) * scale[0],
+    (partOffsetTuple[1] ?? 0) * scale[1],
+    (partOffsetTuple[2] ?? 0) * scale[2],
+  )
+  rigidbodyShapeQuaternionHelper.set(
+    shapeRotation[0] ?? 0,
+    shapeRotation[1] ?? 0,
+    shapeRotation[2] ?? 0,
+    shapeRotation[3] ?? 1,
+  ).normalize()
+  convexMeshPartComposedPositionHelper.copy(convexMeshPartOffsetHelper).applyQuaternion(rigidbodyShapeQuaternionHelper)
+  convexMeshPartComposedPositionHelper.x += shapeOffset[0] ?? 0
+  convexMeshPartComposedPositionHelper.y += shapeOffset[1] ?? 0
+  convexMeshPartComposedPositionHelper.z += shapeOffset[2] ?? 0
+
+  const partRotationTuple = partRotation ?? [0, 0, 0]
+  convexMeshPartRotationHelper.set(
+    partRotationTuple[0] ?? 0,
+    partRotationTuple[1] ?? 0,
+    partRotationTuple[2] ?? 0,
+    'XYZ',
+  )
+  convexMeshPartQuaternionHelper.setFromEuler(convexMeshPartRotationHelper).normalize()
+  convexMeshPartComposedQuaternionHelper
+    .copy(rigidbodyShapeQuaternionHelper)
+    .multiply(convexMeshPartQuaternionHelper)
+    .normalize()
+
+  return {
+    position: [
+      convexMeshPartComposedPositionHelper.x,
+      convexMeshPartComposedPositionHelper.y,
+      convexMeshPartComposedPositionHelper.z,
+    ],
+    rotation: [
+      convexMeshPartComposedQuaternionHelper.x,
+      convexMeshPartComposedQuaternionHelper.y,
+      convexMeshPartComposedQuaternionHelper.z,
+      convexMeshPartComposedQuaternionHelper.w,
+    ],
+  }
+}
+
 function getShapeScale(shape: RigidbodyPhysicsShape, worldScale: THREE.Vector3): PhysicsVector3 {
   if (shape.applyScale !== true) {
     return [1, 1, 1]
@@ -366,6 +424,40 @@ function buildShapeInstancesFromDefinition(
         : undefined,
     })
     return [{ shapeId, transform: { position: scaledOffset, rotation: scaledRotation } }]
+  }
+
+  if (shape.kind === 'convex-mesh') {
+    const instances: BuildShapeInstance[] = []
+    for (const part of Array.isArray(shape.parts) ? shape.parts : []) {
+      const partVertices = Array.isArray(part.vertices) ? part.vertices : []
+      const vertices = new Float32Array(partVertices.length * 3)
+      partVertices.forEach((vertex, index) => {
+        vertices[index * 3] = (vertex[0] ?? 0) * scale[0]
+        vertices[index * 3 + 1] = (vertex[1] ?? 0) * scale[1]
+        vertices[index * 3 + 2] = (vertex[2] ?? 0) * scale[2]
+      })
+      const shapeId = pushShapeDescriptor(shapes, {
+        id: nextShapeId(),
+        kind: 'convex-hull',
+        vertices,
+        faces: Array.isArray(part.faces)
+          ? part.faces
+            .filter((face): face is number[] => Array.isArray(face) && face.length >= 3)
+            .map((face) => face.map((index) => Math.trunc(index)))
+          : undefined,
+      })
+      instances.push({
+        shapeId,
+        transform: composeConvexMeshPartTransform(
+          scaledOffset,
+          scaledRotation,
+          part.offset,
+          part.rotation,
+          scale,
+        ),
+      })
+    }
+    return instances
   }
 
   if (shape.kind === 'heightfield') {

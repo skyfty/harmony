@@ -22,6 +22,7 @@ import {
   buildConservativeConvexGeometryFromObject,
   geometryStats,
 } from '@/utils/convexSimplify'
+import { buildConvexMeshShapeFromObject } from '@/utils/convexDecompose'
 import {
   resolveNodeScaleFactors,
   buildBoxShapeFromObject,
@@ -39,6 +40,9 @@ import {
   type RigidbodyComponentProps,
   type RigidbodyComponentMetadata,
   type RigidbodyConvexSimplifyConfig,
+  type RigidbodyConvexDecompositionConfig,
+  type RigidbodyConvexMeshPart,
+  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
   type RigidbodyPhysicsShape,
   type RigidbodyColliderType,
   PRELOADABLE_COMPONENT_TYPE,
@@ -811,7 +815,59 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     let shape: RigidbodyPhysicsShape | null = null
 
     let generatedConvexSimplify: RigidbodyConvexSimplifyConfig | undefined
-    const buildConvex = () => {
+    let generatedConvexDecomposition: RigidbodyConvexDecompositionConfig | undefined
+    const buildConvex = async () => {
+      const decompositionBase = DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
+      const decompositionConfig: RigidbodyConvexDecompositionConfig = {
+        ...decompositionBase,
+      }
+      const leafMeshCount = countSamplingObjectMeshLeaves(samplingObject)
+      const leafConfigBase = DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
+      const leafConfig: RigidbodyConvexSimplifyConfig = {
+        version: 1,
+        primary: { ...leafConfigBase.primary },
+        fallback: { ...leafConfigBase.fallback },
+        limits: { ...leafConfigBase.limits },
+      }
+      const leafShape = leafMeshCount >= 2 && leafMeshCount <= decompositionConfig.maxHulls
+        ? buildLeafConvexMeshShapeFromObject(
+          samplingObject,
+          leafConfig,
+          nodeScale,
+          sourceWorldTransform,
+          hostWorldTransform,
+        )
+        : null
+      const leafPartsAreSimple = Boolean(
+        leafShape
+        && leafShape.parts.length >= 2
+        && leafShape.parts.every((part) => part.vertices.length <= 24 && part.faces.length <= 48),
+      )
+      if (leafPartsAreSimple) {
+        generatedConvexDecomposition = {
+          ...decompositionConfig,
+          usedHulls: leafShape!.parts.length,
+        }
+        return leafShape
+      }
+      const decomposed = await buildConvexMeshShapeFromObject(
+        samplingObject,
+        decompositionConfig,
+        sourceWorldTransform,
+        hostWorldTransform,
+      )
+      if (decomposed) {
+        generatedConvexDecomposition = decomposed.config
+        return decomposed.shape
+      }
+      if (leafShape) {
+        generatedConvexDecomposition = {
+          ...decompositionConfig,
+          usedHulls: leafShape.parts.length,
+        }
+        return leafShape
+      }
+
       const base = DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
       const config: RigidbodyConvexSimplifyConfig = {
         version: 1,
@@ -845,24 +901,24 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       return convexShape
     }
 
-    const buildBox = () => {
+    const buildBox = async () => {
       const shapeResult = buildBoxShapeFromObject(samplingObject, nodeScale)
       return shapeResult
     }
-    const buildSphere = () => {
+    const buildSphere = async () => {
       const shapeResult = buildSphereShapeFromObject(samplingObject, nodeScale)
       return shapeResult
     }
-    const buildCylinder = () => {
+    const buildCylinder = async () => {
       const shapeResult = buildCylinderShapeFromObject(samplingObject, nodeScale)
       return shapeResult
     }
-    const buildCapsule = () => {
+    const buildCapsule = async () => {
       const shapeResult = buildCapsuleShapeFromObject(samplingObject, nodeScale)
       return shapeResult
     }
     const rigidbodyProps = clampRigidbodyComponentProps(entry.component.props)
-    const builderPriority: Record<RigidbodyColliderType, Array<() => RigidbodyPhysicsShape | null>> = {
+    const builderPriority: Record<RigidbodyColliderType, Array<() => Promise<RigidbodyPhysicsShape | null>>> = {
       convex: [buildConvex, buildBox, buildSphere, buildCylinder],
       box: [buildBox, buildConvex, buildSphere, buildCylinder],
       sphere: [buildSphere, buildConvex, buildBox, buildCylinder],
@@ -871,7 +927,7 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     }
     const builders = builderPriority[rigidbodyProps.colliderType]
     for (const builder of builders) {
-      shape = builder()
+      shape = await builder()
       if (shape) {
         break
       }
@@ -883,6 +939,7 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       entry.component.metadata,
       shape,
       shape.kind === 'convex' ? generatedConvexSimplify : undefined,
+      shape.kind === 'convex-mesh' ? generatedConvexDecomposition : undefined,
     )
   }
 }
@@ -926,12 +983,14 @@ function mergeRigidbodyMetadata(
   existing: Record<string, unknown> | undefined,
   shape: RigidbodyPhysicsShape,
   convexSimplify?: RigidbodyConvexSimplifyConfig,
+  convexDecomposition?: RigidbodyConvexDecompositionConfig,
 ): Record<string, unknown> {
   const nextMetadata: Record<string, unknown> = existing ? { ...existing } : {}
   const payload: RigidbodyComponentMetadata = {
     shape,
     generatedAt: new Date().toISOString(),
     convexSimplify,
+    convexDecomposition,
   }
   nextMetadata[RIGIDBODY_METADATA_KEY] = payload
   return nextMetadata
@@ -1196,6 +1255,86 @@ function buildConvexShapeFromOutline(
       sceneNodeConvexCenterHelper.y,
       sceneNodeConvexCenterHelper.z,
     ],
+    applyScale: true,
+  }
+}
+
+function countSamplingObjectMeshLeaves(object: THREE.Object3D): number {
+  let count = 0
+  object.traverse((child) => {
+    if (count >= 64) {
+      return
+    }
+    const mesh = child as THREE.Object3D & {
+      isMesh?: boolean
+      isInstancedMesh?: boolean
+      geometry?: THREE.BufferGeometry
+    }
+    const positionAttribute = mesh.geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+    if (
+      mesh.isMesh
+      && mesh.isInstancedMesh !== true
+      && positionAttribute
+      && positionAttribute.count >= 3
+    ) {
+      count += 1
+    }
+  })
+  return count
+}
+
+function buildLeafConvexMeshShapeFromObject(
+  object: THREE.Object3D,
+  config: RigidbodyConvexSimplifyConfig,
+  nodeScale: { x: number; y: number; z: number },
+  sourceWorldTransform: SceneNodeWorldTransform | null,
+  hostWorldTransform: SceneNodeWorldTransform | null,
+): Extract<RigidbodyPhysicsShape, { kind: 'convex-mesh' }> | null {
+  const parts: RigidbodyConvexMeshPart[] = []
+  object.traverse((child) => {
+    if (parts.length >= 64) {
+      return
+    }
+    const mesh = child as THREE.Object3D & {
+      isMesh?: boolean
+      isInstancedMesh?: boolean
+      geometry?: THREE.BufferGeometry
+    }
+    const positionAttribute = mesh.geometry?.getAttribute('position') as THREE.BufferAttribute | undefined
+    if (
+      !mesh.isMesh
+      || mesh.isInstancedMesh === true
+      || !positionAttribute
+      || positionAttribute.count < 3
+    ) {
+      return
+    }
+    const built = buildConservativeConvexGeometryFromObject(mesh, config.primary)
+    if (!built) {
+      return
+    }
+    try {
+      const convex = buildConvexShapeFromOutline(built.outline, nodeScale, sourceWorldTransform, hostWorldTransform)
+      if (convex?.kind === 'convex' && convex.vertices.length >= 4 && convex.faces.length >= 4) {
+        parts.push({
+          vertices: convex.vertices,
+          faces: convex.faces,
+          offset: convex.offset ?? [0, 0, 0],
+          rotation: [0, 0, 0],
+        })
+      }
+    } finally {
+      built.geometry.dispose()
+    }
+  })
+  if (!parts.length) {
+    return null
+  }
+  return {
+    kind: 'convex-mesh',
+    parts,
+    offset: [0, 0, 0],
+    rotation: [0, 0, 0],
     applyScale: true,
   }
 }
