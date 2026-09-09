@@ -1125,7 +1125,13 @@ class SceneGraphBuilder {
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
-    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId && !hasEnabledGeneralMeshComponent(node)) {
+    if (
+      this.lazyLoadMeshes
+      && outlineMesh
+      && node.sourceAssetId
+      && !hasEnabledGeneralMeshComponent(node)
+      && !(Array.isArray(node.materials) && node.materials.length > 0)
+    ) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
         placeholder.name = `${node.name ?? 'Group'}::LazyPlaceholder`;
@@ -1244,7 +1250,13 @@ class SceneGraphBuilder {
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
 
-    if (this.lazyLoadMeshes && outlineMesh && node.sourceAssetId && !hasEnabledGeneralMeshComponent(node)) {
+    if (
+      this.lazyLoadMeshes
+      && outlineMesh
+      && node.sourceAssetId
+      && !hasEnabledGeneralMeshComponent(node)
+      && !(Array.isArray(node.materials) && node.materials.length > 0)
+    ) {
       const placeholder = this.buildOutlinePlaceholder(node, outlineMesh);
       if (placeholder) {
         const container = new THREE.Group();

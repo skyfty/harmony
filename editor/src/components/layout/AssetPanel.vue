@@ -864,12 +864,25 @@ function isNormalSceneNode(node: SceneNode | null): boolean {
   return node.id !== GROUND_NODE_ID && node.id !== ENVIRONMENT_NODE_ID
 }
 
+function isImportedModelOverrideNode(node: SceneNode | null): boolean {
+  return Boolean(
+    node
+    && node.nodeType === 'Group'
+    && typeof node.sourceAssetId === 'string'
+    && node.sourceAssetId.trim().length > 0
+    && !node.dynamicMesh,
+  )
+}
+
 function nodeSupportsMaterials(node: SceneNode | null): boolean {
   if (!node || !isNormalSceneNode(node)) {
     return false
   }
   if (node.dynamicMesh?.type === 'Region') {
     return false
+  }
+  if (isImportedModelOverrideNode(node)) {
+    return true
   }
   const type = node.nodeType ?? 'Mesh'
   return type !== 'Light' && type !== 'Group'

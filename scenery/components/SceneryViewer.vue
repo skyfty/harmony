@@ -1029,6 +1029,7 @@ import {
 import {
   applyMaterialOverrides,
   disposeMaterialTextures,
+  resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@harmony/schema/material';
 
@@ -3397,7 +3398,6 @@ let autoTourTelemetryHasWorldPositionSample = false;
 let autoTourTelemetryLastSampleAtMs = 0;
 let autoTourTelemetryLastNodeId: string | null = null;
 const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
-const VEHICLE_HEADING_UPDATE_MIN_INTERVAL_MS = isWeChatMiniProgram ? 100 : 66;
 const CHARACTER_ACTION_AUTOMATED_SLOTS = new Set<CharacterAnimationSlot>(['idle', 'walk', 'run']);
 const CHARACTER_ACTION_HOLD_SLOTS = new Set<CharacterAnimationSlot>(['sprint', 'crouch', 'interact']);
 const CHARACTER_ACTION_BUTTON_SLOTS = CHARACTER_ANIMATION_EDITOR_SLOTS
@@ -3555,7 +3555,6 @@ function commitVehicleSpeedDisplay(speedMps: number, nowMs: number): void {
 }
 
 const vehicleHeadingDegrees = ref(0);
-let vehicleHeadingLastCommitAtMs = 0;
 
 function normalizeHeadingDegrees(value: number): number {
   if (!Number.isFinite(value)) {
@@ -3576,13 +3575,7 @@ function commitVehicleHeadingDegrees(nextHeading: number): void {
   if (isHeadingCloseDegrees(vehicleHeadingDegrees.value, normalizedHeading)) {
     return;
   }
-  const nowMs = getVehicleSpeedDisplayNowMs();
-  const hasCommittedOnce = vehicleHeadingLastCommitAtMs > 0;
-  if (hasCommittedOnce && nowMs - vehicleHeadingLastCommitAtMs < VEHICLE_HEADING_UPDATE_MIN_INTERVAL_MS) {
-    return;
-  }
   vehicleHeadingDegrees.value = normalizedHeading;
-  vehicleHeadingLastCommitAtMs = nowMs;
 }
 const vehicleCompassStyle = computed(() => ({
   '--vehicle-heading': `${vehicleHeadingDegrees.value}deg`,
@@ -4496,7 +4489,6 @@ watch(vehicleDriveActive, (active) => {
     vehicleSpeedDisplayMps.value = 0;
     vehicleSpeedDisplayLastCommitAtMs = 0;
     vehicleSpeedDisplayLowSpeedSinceAtMs = null;
-    vehicleHeadingLastCommitAtMs = 0;
   }
 });
 const isCameraCaged = ref(false);
@@ -9281,7 +9273,7 @@ function registerSceneSubtree(root: THREE.Object3D): void {
       updateBehaviorVisibility(nodeId, false);
     }
     if (nodeState) {
-      applyMaterialOverrides(object, nodeState.materials, materialOverrideOptions);
+      applyNodeMaterialOverrides(object, nodeState);
     }
     syncInstancedTransform(object);
 
@@ -11884,6 +11876,41 @@ type LazyAssetMetadata = {
   ownerNodeId?: string | null;
 } | undefined;
 
+function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolean {
+  return Boolean(
+    node
+    && node.nodeType === 'Group'
+    && typeof node.sourceAssetId === 'string'
+    && node.sourceAssetId.trim().length > 0
+    && !node.dynamicMesh,
+  );
+}
+
+function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+  const instancedAssetId = typeof targetObject.userData?.instancedAssetId === 'string'
+    ? targetObject.userData.instancedAssetId
+    : null;
+  if (instancedAssetId && isImportedModelOverrideNode(node)) {
+    const modelGroup = getCachedModelObject(instancedAssetId);
+    modelGroup?.meshes.forEach((mesh) => {
+      if (node.materials && node.materials.length) {
+        applyMaterialOverrides(mesh, node.materials, materialOverrideOptions);
+      } else {
+        resetMaterialOverrides(mesh);
+      }
+    });
+    return;
+  }
+
+  if (node.materials && node.materials.length) {
+    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions);
+  } else if (isImportedModelOverrideNode(node)) {
+    resetMaterialOverrides(targetObject);
+  } else {
+    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions);
+  }
+}
+
 function findLazyPlaceholderForNode(root: THREE.Object3D | null | undefined, nodeId: string): THREE.Object3D | null {
   if (!root) {
     return null;
@@ -12419,7 +12446,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode): void {
   } else {
     object.visible = true;
   }
-  applyMaterialOverrides(object, node.materials, materialOverrideOptions);
+  applyNodeMaterialOverrides(object, node);
   // Material overrides may replace materials; re-apply mirror fix after overrides.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror);
   updateBehaviorVisibility(node.id, object.visible);

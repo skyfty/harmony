@@ -793,6 +793,20 @@ function buildRegistryEntryFromSource(
   return null
 }
 
+function resolveProjectAssetSourceForMaterialTexture(asset: ProjectAsset): AssetSourceMetadata {
+  if (asset.source) {
+    return asset.source
+  }
+  if (typeof asset.fileKey === 'string' && asset.fileKey.trim().length > 0) {
+    return createServerAssetSource(asset.id)
+  }
+  const downloadUrl = typeof asset.downloadUrl === 'string' ? asset.downloadUrl.trim() : ''
+  if (/^https?:\/\//i.test(downloadUrl)) {
+    return { type: 'url' }
+  }
+  return { type: 'local' }
+}
+
 function filterAssetRegistryByCatalog(
   assetRegistry: Record<string, SceneAssetRegistryEntry>,
   assetCatalog: Record<string, ProjectAsset[]>,
@@ -1489,12 +1503,27 @@ async function measureAssetImageDimensions(assetId: string, asset: ProjectAsset 
   }
 }
 
+function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  return (
+    node.nodeType === 'Group'
+    && typeof node.sourceAssetId === 'string'
+    && node.sourceAssetId.trim().length > 0
+    && !node.dynamicMesh
+  )
+}
+
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
   }
   if (node.dynamicMesh?.type === 'Region') {
     return false
+  }
+  if (isImportedModelOverrideNode(node)) {
+    return true
   }
   const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   return sceneNodeTypeSupportsMaterials(type)
@@ -3524,7 +3553,10 @@ async function createTextureAssetFromTexture(texture: Texture, context: External
     extension: payload.extension ?? null,
   }
 
-  context.registerAsset(asset, { categoryId: determineAssetCategoryId(asset) })
+  context.registerAsset(asset, {
+    categoryId: determineAssetCategoryId(asset),
+    source: { type: 'local' },
+  })
   context.assetCache.touch(assetId)
 
   const ref: SceneMaterialTextureRef = {
@@ -5249,7 +5281,7 @@ function cloneNodeForDuplication(node: SceneNode): SceneNode {
 
   const nodeType = normalizeSceneNodeType(workingNode.nodeType)
   const materialsSource = workingNode.materials
-  const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(materialsSource) : undefined
+  const materials = nodeSupportsMaterials(workingNode) ? cloneNodeMaterials(materialsSource) : undefined
 
   return {
     ...workingNode,
@@ -5693,7 +5725,7 @@ function cloneNode(node: SceneNode): SceneNode {
 
   const nodeType = normalizeSceneNodeType(workingNode.nodeType)
   const materialsSource = workingNode.materials
-  const materials = sceneNodeTypeSupportsMaterials(nodeType) ? cloneNodeMaterials(materialsSource) : undefined
+  const materials = nodeSupportsMaterials(workingNode) ? cloneNodeMaterials(materialsSource) : undefined
   const children = node.children ? node.children.map(cloneNode) : undefined
 
   return {
@@ -6138,6 +6170,7 @@ export async function buildSourceAssetRegistryForExport(
       asset?.source
       ?? inferPackageSourceFromAssetId(assetId)
       ?? inferPackageSourceFromSceneProvider(assetId, context.runtimeAwareScene.resourceProviderId)
+      ?? (asset ? resolveProjectAssetSourceForMaterialTexture(asset) : undefined)
     const entry = buildSceneAssetRegistryEntry(
       assetId,
       sourceMeta,
@@ -6182,6 +6215,7 @@ export async function buildRuntimeAssetRegistryForExport(
       asset?.source
       ?? inferPackageSourceFromAssetId(assetId)
       ?? inferPackageSourceFromSceneProvider(assetId, context.runtimeAwareScene.resourceProviderId)
+      ?? (asset ? resolveProjectAssetSourceForMaterialTexture(asset) : undefined)
     const entry = buildSceneAssetRegistryEntry(
       assetId,
       sourceMeta,
@@ -11087,6 +11121,64 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return created
     },
+    async ensureNodeMaterialTextureAssetRegistered(ref: SceneMaterialTextureRef | null | undefined): Promise<void> {
+      const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
+      if (!assetId) {
+        return
+      }
+      const catalogAsset = this.getCatalogAsset(assetId)
+      if (catalogAsset) {
+        const source = resolveProjectAssetSourceForMaterialTexture(catalogAsset)
+        const registryEntry = this.assetRegistry[assetId]
+        const registryValid = registryEntry
+          && (registryEntry.sourceType === 'package'
+            ? Boolean((typeof registryEntry.inline === 'string' && registryEntry.inline.trim()) || (typeof registryEntry.zipPath === 'string' && registryEntry.zipPath.trim()))
+            : registryEntry.sourceType === 'url'
+              ? Boolean(registryEntry.url?.trim?.())
+              : Boolean(registryEntry.fileKey?.trim?.() || registryEntry.resolvedUrl?.trim?.()))
+        if (!registryValid) {
+          const nextEntry = buildRegistryEntryFromSource(catalogAsset, source)
+          if (nextEntry) {
+            this.assetRegistry = {
+              ...this.assetRegistry,
+              [assetId]: nextEntry,
+            }
+          }
+        }
+        return
+      }
+      const asset = this.getAsset(assetId)
+      if (!asset || (asset.type !== 'image' && asset.type !== 'texture' && asset.type !== 'hdri')) {
+        return
+      }
+      const source = resolveProjectAssetSourceForMaterialTexture(asset)
+      this.ensureSceneAssetRegistered(asset, {
+        source,
+        commitOptions: { updateNodes: false },
+        autoSave: false,
+      })
+    },
+    async ensureSceneMaterialTextureDependenciesRegistered(nodes?: SceneNode[] | null): Promise<void> {
+      const stack: SceneNode[] = nodes && Array.isArray(nodes) ? [...nodes] : [...this.nodes]
+      const tasks: Promise<void>[] = []
+      while (stack.length) {
+        const node = stack.pop()
+        if (!node) {
+          continue
+        }
+        if (Array.isArray(node.materials)) {
+          node.materials.forEach((material) => {
+            Object.values(material.textures ?? {}).forEach((ref) => {
+              tasks.push(this.ensureNodeMaterialTextureAssetRegistered(ref))
+            })
+          })
+        }
+        if (Array.isArray(node.children)) {
+          stack.push(...node.children)
+        }
+      }
+      await Promise.all(tasks)
+    },
     setNodePrimaryTexture(
       nodeId: string,
       ref: SceneMaterialTextureRef | null,
@@ -11139,13 +11231,17 @@ export const useSceneStore = defineStore('scene', {
         const nextMaterials = node.materials.filter((entry) => entry.id !== nodeMaterialId)
         if (nextMaterials.length !== node.materials.length) {
           if (!nextMaterials.length) {
-            const baseMaterial = findDefaultSceneMaterial(this.materials)
-            const defaultProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
-            const defaultMaterial = createNodeMaterial(defaultProps, {
-              name: baseMaterial?.name,
-              type: baseMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
-            })
-            node.materials = [defaultMaterial]
+            if (isImportedModelOverrideNode(node)) {
+              node.materials = []
+            } else {
+              const baseMaterial = findDefaultSceneMaterial(this.materials)
+              const defaultProps = baseMaterial ? createMaterialProps(baseMaterial) : createMaterialProps()
+              const defaultMaterial = createNodeMaterial(defaultProps, {
+                name: baseMaterial?.name,
+                type: baseMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+              })
+              node.materials = [defaultMaterial]
+            }
           } else {
             node.materials = nextMaterials
           }
@@ -11180,6 +11276,11 @@ export const useSceneStore = defineStore('scene', {
       const overrides = materialUpdateToProps(update)
       if (!Object.keys(overrides).length) {
         return
+      }
+      if (update.textures) {
+        Object.values(update.textures).forEach((ref) => {
+          void this.ensureNodeMaterialTextureAssetRegistered(ref)
+        })
       }
 
       let updated = false
@@ -11539,6 +11640,24 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
       const isGroundNode = targetNode.dynamicMesh?.type === 'Ground'
+      if (isImportedModelOverrideNode(targetNode)) {
+        this.captureHistorySnapshot()
+        let cleared = false
+        visitNode(this.nodes, nodeId, (node) => {
+          if (!isImportedModelOverrideNode(node) || !node.materials?.length) {
+            return
+          }
+          if (node.materials.some((entry) => entry.id === nodeMaterialId)) {
+            node.materials = []
+            cleared = true
+          }
+        })
+        if (cleared) {
+          this.queueSceneNodePatch(nodeId, ['materials'])
+          commitSceneSnapshot(this)
+        }
+        return null
+      }
 
       const defaultMaterial = findDefaultSceneMaterial(this.materials)
       const defaultProps = defaultMaterial ? createMaterialProps(defaultMaterial) : createMaterialProps()
@@ -19437,6 +19556,7 @@ export const useSceneStore = defineStore('scene', {
 
       const scenesStore = useScenesStore()
       const run = async (): Promise<StoredSceneDocument | null> => {
+        await this.ensureSceneMaterialTextureDependenciesRegistered()
         const document = buildSceneDocumentFromState(this)
 
         const existing = await scenesStore.loadSceneDocument(document.id)

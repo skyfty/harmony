@@ -106,6 +106,7 @@ import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
 import {
 	applyMaterialOverrides,
 	disposeMaterialTextures,
+	resetMaterialOverrides,
 	type MaterialTextureAssignmentOptions,
 } from '@schema/material'
 import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
@@ -12186,6 +12187,9 @@ function registerSubtree(object: THREE.Object3D, pending?: Map<string, THREE.Obj
 				updateBehaviorVisibility(nodeId, nextVisible)
 			}
 
+			if (nodeState) {
+				applyNodeMaterialOverrides(child, nodeState)
+			}
 			if (instancedAssetId) {
 				syncInstancedTransform(child)
 			}
@@ -14456,7 +14460,7 @@ function updateNodeProperties(object: THREE.Object3D, node: SceneNode) {
 	}
 	updateNodeTransfrom(object, node)
 	updateBehaviorVisibility(node.id, object.visible)
-	applyMaterialOverrides(object, node.materials, materialOverrideOptions)
+	applyNodeMaterialOverrides(object, node)
 	// Material overrides may replace materials; re-apply mirror fix after overrides.
 	syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 }
@@ -14468,6 +14472,44 @@ type LazyAssetMetadata = {
 	boundingSphere?: { center: { x: number; y: number; z: number }; radius: number } | null
 	ownerNodeId?: string | null
 } | undefined
+
+function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolean {
+	return Boolean(
+		node
+		&& node.nodeType === 'Group'
+		&& typeof node.sourceAssetId === 'string'
+		&& node.sourceAssetId.trim().length > 0
+		&& !node.dynamicMesh,
+	)
+}
+
+function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+	const instancedAssetId = typeof targetObject.userData?.instancedAssetId === 'string'
+		? targetObject.userData.instancedAssetId
+		: null
+	const overrideOptions = isImportedModelOverrideNode(node) && node.materials && node.materials.length
+		? { ...materialOverrideOptions, hideTransparentMaterials: false }
+		: materialOverrideOptions
+	if (instancedAssetId && isImportedModelOverrideNode(node)) {
+		const modelGroup = getCachedModelObject(instancedAssetId)
+		modelGroup?.meshes.forEach((mesh) => {
+			if (node.materials && node.materials.length) {
+				applyMaterialOverrides(mesh, node.materials, overrideOptions)
+			} else {
+				resetMaterialOverrides(mesh)
+			}
+		})
+		return
+	}
+
+	if (node.materials && node.materials.length) {
+		applyMaterialOverrides(targetObject, node.materials, overrideOptions)
+	} else if (isImportedModelOverrideNode(node)) {
+		resetMaterialOverrides(targetObject)
+	} else {
+		applyMaterialOverrides(targetObject, node.materials, overrideOptions)
+	}
+}
 
 function findLazyPlaceholderForNode(root: THREE.Object3D | null | undefined, nodeId: string): THREE.Object3D | null {
 	if (!root) {
@@ -15146,6 +15188,28 @@ async function updateScene(document: SceneJsonExportDocument) {
 			resourceCache,
 			environmentSettings,
 		)
+		// Non-lazy/real model nodes are removed from the built graph during initial
+		// instancing; attach the generated instanced proxies now so they are not lost.
+		if (pendingObjects.size) {
+			const pendingParentIds = new Set<string>()
+			pendingObjects.forEach((_object, nodeId) => {
+				const parentId = resolveParentNodeId(nodeId)
+				if (parentId && pendingObjects.has(parentId)) {
+					pendingParentIds.add(nodeId)
+				}
+			})
+			const proxyEntries = Array.from(pendingObjects.entries()).filter(([nodeId]) => !pendingParentIds.has(nodeId))
+			proxyEntries.forEach(([nodeId, proxy]) => {
+				const parentId = resolveParentNodeId(nodeId)
+				const parentObject = parentId ? (nodeObjectMap.get(parentId) ?? null) : rootGroup
+				const targetParent = parentObject ?? rootGroup
+				if (!targetParent) {
+					return
+				}
+				targetParent.add(proxy)
+				registerSubtree(proxy, pendingObjects)
+			})
+		}
 		scenePreviewDriveBindingsReady.value = true
 		applyPreviewNominateOverrides()
 		activatePendingDefaultSteerDriveIfNeeded()

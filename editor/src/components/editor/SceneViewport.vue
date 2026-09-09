@@ -1545,8 +1545,26 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
     refreshFloorRuntimeMaterials(node.id, targetObject)
     return
   }
+
+  const instancedAssetId = typeof targetObject.userData?.instancedAssetId === 'string'
+    ? targetObject.userData.instancedAssetId
+    : null
+  if (instancedAssetId && isImportedModelOverrideNode(node)) {
+    const modelGroup = getCachedModelObject(instancedAssetId)
+    modelGroup?.meshes.forEach((mesh) => {
+      if (node.materials && node.materials.length) {
+        applyMaterialOverrides(mesh, node.materials, materialOverrideOptions)
+      } else {
+        resetMaterialOverrides(mesh)
+      }
+    })
+    return
+  }
+
   if (node.materials && node.materials.length) {
     applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
+  } else if (isImportedModelOverrideNode(node)) {
+    resetMaterialOverrides(targetObject)
   } else {
     // resetMaterialOverrides(targetObject)
   }
@@ -20513,12 +20531,25 @@ function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | 
   return null
 }
 
+function isImportedModelOverrideNode(node: SceneNode | null): boolean {
+  return Boolean(
+    node
+    && node.nodeType === 'Group'
+    && typeof node.sourceAssetId === 'string'
+    && node.sourceAssetId.trim().length > 0
+    && !node.dynamicMesh,
+  )
+}
+
 function nodeSupportsMaterials(node: SceneNode | null): boolean {
   if (!node) {
     return false
   }
   if (node.dynamicMesh?.type === 'Region') {
     return false
+  }
+  if (isImportedModelOverrideNode(node)) {
+    return true
   }
   const type = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   return type !== 'Light' && type !== 'Group'

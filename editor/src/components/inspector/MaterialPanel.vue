@@ -29,6 +29,13 @@ const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
+const isImportedModelOverrideNode = computed(() => Boolean(
+  selectedNode.value
+  && selectedNode.value.nodeType === 'Group'
+  && typeof selectedNode.value.sourceAssetId === 'string'
+  && selectedNode.value.sourceAssetId.trim().length > 0
+  && !selectedNode.value.dynamicMesh,
+))
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
 const deleteDialogVisible = ref(false)
 const dragOverSlotId = ref<string | null>(null)
@@ -82,7 +89,11 @@ watch(
   },
 )
 
-const canAddMaterialSlot = computed(() => !!selectedNodeId.value && !props.disabled)
+const canAddMaterialSlot = computed(() =>
+  !!selectedNodeId.value
+  && !props.disabled
+  && (!isImportedModelOverrideNode.value || nodeMaterials.value.length === 0),
+)
 const canDeleteMaterialSlot = computed(() => !!selectedNodeId.value && !!internalActiveId.value && !props.disabled)
 
 watch(
@@ -165,7 +176,7 @@ const materialListEntries = computed(() =>
     return {
       id: entry.id,
       title: entry.name ?? `材质 ${index + 1}`,
-      subtitle: '材质副本',
+      subtitle: isImportedModelOverrideNode.value ? '整模型材质覆盖' : '材质副本',
       shared: false,
       color,
       thumbnail,
@@ -246,6 +257,9 @@ function clearMaterialPreviewThumbnail(slotId: string) {
 
 function handleAddMaterialSlot(type?: SceneMaterialType) {
   if (!canAddMaterialSlot.value || !selectedNodeId.value) {
+    return
+  }
+  if (isImportedModelOverrideNode.value && nodeMaterials.value.length > 0) {
     return
   }
   if (!type) {
@@ -549,15 +563,16 @@ async function handleListDrop(event: DragEvent) {
   if (!materialDefinition) {
     return
   }
-  const newSlot = sceneStore.addNodeMaterial(selectedNodeId.value) as SceneNodeMaterial | null
-  if (!newSlot) {
+  const existingSlot = isImportedModelOverrideNode.value ? (nodeMaterials.value[0] ?? null) : null
+  const targetSlot = existingSlot ?? sceneStore.addNodeMaterial(selectedNodeId.value) as SceneNodeMaterial | null
+  if (!targetSlot) {
     return
   }
-  const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, newSlot.id, asset.id)
+  const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, targetSlot.id, asset.id)
   if (assigned) {
-    setMaterialPreviewThumbnail(newSlot.id, assigned.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
-    setActiveSlot(newSlot.id)
-    emit('open-details', newSlot.id)
+    setMaterialPreviewThumbnail(targetSlot.id, assigned.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
+    setActiveSlot(targetSlot.id)
+    emit('open-details', targetSlot.id)
   }
 }
 

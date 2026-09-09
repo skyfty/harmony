@@ -143,13 +143,22 @@ const isNominateNode = computed(() =>
 )
 const isRegionNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Region')
 const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
+function isImportedModelOverrideNode(node: { nodeType?: string; sourceAssetId?: string; dynamicMesh?: unknown } | null | undefined): boolean {
+  return Boolean(
+    node
+    && node.nodeType === 'Group'
+    && typeof node.sourceAssetId === 'string'
+    && node.sourceAssetId.trim().length > 0
+    && !node.dynamicMesh,
+  )
+}
 const showMaterialPanel = computed(
   () =>
     !isLightNode.value &&
     !isMultiuserNode.value &&
     !isNominateNode.value &&
     !isRegionNode.value &&
-    (isGroundNode.value || (selectedNode.value?.materials?.length ?? 0) > 0),
+    (isGroundNode.value || (selectedNode.value?.materials?.length ?? 0) > 0 || isImportedModelOverrideNode(selectedNode.value)),
 )
 const showTransformPanel = computed(() => {
   return selectedNode.value?.id !== GROUND_NODE_ID && 
@@ -216,9 +225,10 @@ function computeDefaultExpandedPanels() {
 
   const shouldShowMaterial =
     (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
+    (!node?.nodeType || node.nodeType !== 'Light') &&
     !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE]) &&
     node?.dynamicMesh?.type !== 'Region'
-  if (shouldShowMaterial && node?.id !== GROUND_NODE_ID) {
+  if ((shouldShowMaterial || isImportedModelOverrideNode(node)) && node?.id !== GROUND_NODE_ID) {
     panels.push('material')
   }
 
@@ -450,7 +460,7 @@ watch(
     const materialVisible =
       !isLightNode.value &&
       !isRegionNode.value &&
-      (selectedNode.value?.materials?.length ?? 0) > 0
+      ((selectedNode.value?.materials?.length ?? 0) > 0 || isImportedModelOverrideNode(selectedNode.value))
     if (materialVisible) {
       defaults.add('material')
     }

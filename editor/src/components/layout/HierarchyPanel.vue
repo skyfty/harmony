@@ -944,12 +944,25 @@ function resolveAssetDropParentId(targetId: string): string | null {
   return wrapNodeIntoNewGroup(targetId)
 }
 
+function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolean {
+  return Boolean(
+    node
+    && node.nodeType === 'Group'
+    && typeof node.sourceAssetId === 'string'
+    && node.sourceAssetId.trim().length > 0
+    && !node.dynamicMesh,
+  )
+}
+
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
   if (!node) {
     return false
   }
   if (node.dynamicMesh?.type === 'Region') {
     return false
+  }
+  if (isImportedModelOverrideNode(node)) {
+    return true
   }
   const type = node.nodeType ?? 'Mesh'
   return isNormalNodeType(node) && type !== 'Light' && type !== 'Group'
@@ -958,10 +971,6 @@ function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
 function supportsMaterialDrop(targetId: string): boolean {
   if (!targetId) {
     return false
-  }
-  const item = flattenedHierarchyItems.value.find((entry: HierarchyTreeItem) => entry.id === targetId) ?? null
-  if (item?.nodeType) {
-    return item.nodeType !== 'Light' && item.nodeType !== 'Group'
   }
   const node = sceneStore.getNodeById(targetId)
   return isNormalNodeType(node) && nodeSupportsMaterials(node)
