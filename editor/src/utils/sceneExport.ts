@@ -819,7 +819,10 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     let generatedConvexDecomposition: RigidbodyConvexDecompositionConfig | undefined
     const buildConvex = async (): Promise<RigidbodyPhysicsShape | null> => {
       const decompositionLevel = clampRigidbodyComponentProps(entry.component.props).convexDecompositionLevel
-      const decompositionConfig = resolveRigidbodyConvexDecompositionConfig(decompositionLevel)
+      const decompositionConfig = resolveRigidbodyConvexDecompositionConfig(
+        decompositionLevel,
+        entry.component.props.convexDecompositionConfig,
+      )
       const leafConfigBase = DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
       const leafConfig: RigidbodyConvexSimplifyConfig = {
         version: 1,

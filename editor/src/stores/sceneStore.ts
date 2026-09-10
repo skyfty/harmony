@@ -18388,7 +18388,8 @@ export const useSceneStore = defineStore('scene', {
           Math.abs(currentProps.restitution - merged.restitution) > 1e-4 ||
           Math.abs(currentProps.friction - merged.friction) > 1e-4 ||
           currentProps.targetNodeId !== merged.targetNodeId ||
-          currentProps.convexDecompositionLevel !== merged.convexDecompositionLevel
+          currentProps.convexDecompositionLevel !== merged.convexDecompositionLevel ||
+          JSON.stringify(currentProps.convexDecompositionConfig) !== JSON.stringify(merged.convexDecompositionConfig)
 
         if (!hasChanges) {
           return false

@@ -5,7 +5,7 @@ import type { SceneNode, SceneNodeComponentState } from '../../index'
 export const RIGIDBODY_COMPONENT_TYPE = 'rigidbody'
 export type RigidbodyBodyType = 'DYNAMIC' | 'STATIC' | 'KINEMATIC'
 export type RigidbodyColliderType = 'box' | 'convex' | 'sphere' | 'cylinder' | 'capsule'
-export type RigidbodyConvexDecompositionLevel = 'default' | 'fine' | 'coarse'
+export type RigidbodyConvexDecompositionLevel = 'default' | 'fine' | 'coarse' | 'ultra' | 'custom'
 
 const VALID_RIGIDBODY_COLLIDER_TYPES: readonly RigidbodyColliderType[] = [
   'box',
@@ -19,6 +19,8 @@ const VALID_RIGIDBODY_CONVEX_DECOMPOSITION_LEVELS: readonly RigidbodyConvexDecom
   'default',
   'fine',
   'coarse',
+  'ultra',
+  'custom',
 ] as const
 
 function isRigidbodyColliderType(value: unknown): value is RigidbodyColliderType {
@@ -40,6 +42,7 @@ export interface RigidbodyComponentProps {
   friction: number
   targetNodeId: string | null
   convexDecompositionLevel: RigidbodyConvexDecompositionLevel
+  convexDecompositionConfig?: RigidbodyConvexDecompositionCustomConfig
 }
 
 export type RigidbodyVector3Tuple = [number, number, number]
@@ -73,8 +76,7 @@ export type RigidbodyConvexMeshPart = {
 
 export type RigidbodyConvexDecompositionFillMode = 'flood' | 'surface' | 'raycast'
 
-export type RigidbodyConvexDecompositionConfig = {
-  version: 1
+export type RigidbodyConvexDecompositionCustomConfig = {
   /** The maximum number of convex hulls to produce. */
   maxHulls: number
   /** The voxel resolution to use. */
@@ -91,6 +93,10 @@ export type RigidbodyConvexDecompositionConfig = {
   fillMode: RigidbodyConvexDecompositionFillMode
   /** Whether to attempt to split planes along the best location. */
   findBestPlane: boolean
+}
+
+export type RigidbodyConvexDecompositionConfig = RigidbodyConvexDecompositionCustomConfig & {
+  version: 1
   /** The actual number of hulls produced by the last run. */
   usedHulls?: number
 }
@@ -120,14 +126,60 @@ export const COARSE_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG: RigidbodyConvexDecomp
   maxRecursionDepth: 1,
 }
 
+export const ULTRA_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG: RigidbodyConvexDecompositionConfig = {
+  ...DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
+  maxHulls: 64,
+  voxelResolution: 400000,
+  minVolumePercentError: 0.5,
+  maxRecursionDepth: 6,
+}
+
+const clampInteger = (value: unknown, fallback: number, min: number, max: number): number => {
+  const numeric = typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : fallback
+  return Math.min(max, Math.max(min, numeric))
+}
+
+const clampNumber = (value: unknown, fallback: number, min: number, max: number): number => {
+  const numeric = typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  return Math.min(max, Math.max(min, numeric))
+}
+
+export function clampRigidbodyConvexDecompositionConfig(
+  config: Partial<RigidbodyConvexDecompositionCustomConfig> | null | undefined,
+): RigidbodyConvexDecompositionCustomConfig {
+  const defaults = DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
+  return {
+    maxHulls: clampInteger(config?.maxHulls, defaults.maxHulls, 1, 128),
+    voxelResolution: clampInteger(config?.voxelResolution, defaults.voxelResolution, 10000, 800000),
+    maxVerticesPerHull: clampInteger(config?.maxVerticesPerHull, defaults.maxVerticesPerHull, 4, 64),
+    minVolumePercentError: clampNumber(config?.minVolumePercentError, defaults.minVolumePercentError, 0.01, 100),
+    maxRecursionDepth: clampInteger(config?.maxRecursionDepth, defaults.maxRecursionDepth, 0, 8),
+    shrinkWrap: typeof config?.shrinkWrap === 'boolean' ? config.shrinkWrap : defaults.shrinkWrap,
+    fillMode: config?.fillMode === 'surface' || config?.fillMode === 'raycast' || config?.fillMode === 'flood'
+      ? config.fillMode
+      : defaults.fillMode,
+    findBestPlane: typeof config?.findBestPlane === 'boolean' ? config.findBestPlane : defaults.findBestPlane,
+  }
+}
+
 export function resolveRigidbodyConvexDecompositionConfig(
   level: RigidbodyConvexDecompositionLevel | null | undefined,
+  customConfig?: Partial<RigidbodyConvexDecompositionCustomConfig> | null,
 ): RigidbodyConvexDecompositionConfig {
   if (level === 'fine') {
     return FINE_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
   }
   if (level === 'coarse') {
     return COARSE_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
+  }
+  if (level === 'ultra') {
+    return ULTRA_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
+  }
+  if (level === 'custom') {
+    return {
+      version: 1,
+      ...clampRigidbodyConvexDecompositionConfig(customConfig),
+    }
   }
   return DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG
 }
@@ -216,6 +268,9 @@ export function clampRigidbodyComponentProps(
     isRigidbodyConvexDecompositionLevel(props?.convexDecompositionLevel)
       ? props!.convexDecompositionLevel
       : DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL
+  const normalizedConvexDecompositionConfig = props?.convexDecompositionConfig
+    ? clampRigidbodyConvexDecompositionConfig(props.convexDecompositionConfig)
+    : undefined
   
   const rawLinearDamping = typeof props?.linearDamping === 'number' && Number.isFinite(props.linearDamping) ? props.linearDamping : DEFAULT_LINEAR_DAMPING
   const normalizedLinearDamping = Math.max(0, Math.min(1, rawLinearDamping))
@@ -251,6 +306,7 @@ export function clampRigidbodyComponentProps(
     friction: normalizedFriction,
     targetNodeId: normalizedTargetNodeId,
     convexDecompositionLevel: normalizedConvexDecompositionLevel,
+    convexDecompositionConfig: normalizedConvexDecompositionConfig,
   }
 }
 
@@ -265,6 +321,9 @@ export function cloneRigidbodyComponentProps(props: RigidbodyComponentProps): Ri
     friction: props.friction,
     targetNodeId: props.targetNodeId ?? null,
     convexDecompositionLevel: props.convexDecompositionLevel ?? DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
+    convexDecompositionConfig: props.convexDecompositionConfig
+      ? { ...clampRigidbodyConvexDecompositionConfig(props.convexDecompositionConfig) }
+      : undefined,
   }
 }
 
