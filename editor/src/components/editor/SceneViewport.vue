@@ -151,6 +151,7 @@ import {
   findBindingIdForInstance,
   findNodeIdForInstance,
 } from '@schema/modelObjectCache'
+import { cloneObject3DShared } from '@/utils/prefabPreviewCache'
 import {
   allocateBillboardInstance,
   allocateBillboardInstanceBinding,
@@ -23461,7 +23462,27 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     object = container
     registerRuntimeObject(node.id, container)
   } else if (nodeType === 'Group') {
-    let container = getRuntimeObject(node.id)
+    // An imported model with local material overrides cannot reuse the
+    // runtime instancing proxy. That proxy only contains transform/binding
+    // state; its visible meshes live in the shared InstancedMesh cache. Clone
+    // the cached source model so the rebuilt node remains visible and can own
+    // its material overrides.
+    const hasImportedMaterialOverride = isImportedModelOverrideNode(node)
+      && Array.isArray(node.materials)
+      && node.materials.length > 0
+    let container = hasImportedMaterialOverride ? null : getRuntimeObject(node.id)
+    if (!container && hasImportedMaterialOverride && node.sourceAssetId) {
+      const cached = getCachedModelObject(node.sourceAssetId)
+      if (cached) {
+        container = cloneObject3DShared(cached.object)
+        // Do not let metadata copied from the cached source make the clone
+        // look like an instancing proxy on subsequent incremental patches.
+        delete container.userData.instanced
+        delete container.userData.instancedAssetId
+        delete container.userData.instancedBounds
+        delete container.userData.instancedRenderKind
+      }
+    }
     if (container !== null) {
       container.userData.usesRuntimeObject = true
     } else {
