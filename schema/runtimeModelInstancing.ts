@@ -34,6 +34,22 @@ export function canNodeUseRuntimeModelInstancing(node: SceneNode | null | undefi
   if (!node) {
     return false
   }
+
+  // Imported GLB model nodes share their materials through the cached
+  // InstancedMesh handles. Once a node has an explicit material override,
+  // rendering it through those handles would mutate every node using the
+  // same source asset. Keep the node on the regular Object3D path so its
+  // material state is isolated to that node.
+  const isImportedModelOverrideNode = Boolean(
+    node.nodeType === 'Group'
+      && typeof node.sourceAssetId === 'string'
+      && node.sourceAssetId.trim().length > 0
+      && !node.dynamicMesh,
+  )
+  if (isImportedModelOverrideNode && Array.isArray(node.materials) && node.materials.length > 0) {
+    return false
+  }
+
   const generalMesh = node.components?.[GENERAL_MESH_COMPONENT_TYPE]
   const hasEnabledGeneralMesh = Boolean(generalMesh && generalMesh.enabled !== false)
   return !hasEnabledAnimationComponent(node) && !hasEnabledSkinComponent(node) && !hasEnabledGeneralMesh

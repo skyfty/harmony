@@ -14491,14 +14491,10 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
 		? { ...materialOverrideOptions, hideTransparentMaterials: false }
 		: materialOverrideOptions
 	if (instancedAssetId && isImportedModelOverrideNode(node)) {
-		const modelGroup = getCachedModelObject(instancedAssetId)
-		modelGroup?.meshes.forEach((mesh) => {
-			if (node.materials && node.materials.length) {
-				applyMaterialOverrides(mesh, node.materials, overrideOptions)
-			} else {
-				resetMaterialOverrides(mesh)
-			}
-		})
+		// Imported model overrides must never mutate the shared cached
+		// InstancedMesh materials. The runtime instancing predicate keeps these
+		// nodes on the regular Object3D path; this guard protects against a
+		// stale proxy during a scene transition.
 		return
 	}
 

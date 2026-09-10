@@ -186,6 +186,7 @@ import {
 } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh } from '@schema/import'
+import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
 import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
 
 
@@ -1550,14 +1551,9 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
     ? targetObject.userData.instancedAssetId
     : null
   if (instancedAssetId && isImportedModelOverrideNode(node)) {
-    const modelGroup = getCachedModelObject(instancedAssetId)
-    modelGroup?.meshes.forEach((mesh) => {
-      if (node.materials && node.materials.length) {
-        applyMaterialOverrides(mesh, node.materials, materialOverrideOptions)
-      } else {
-        resetMaterialOverrides(mesh)
-      }
-    })
+    // Never apply a node-local imported-model override to the shared
+    // InstancedMesh cache. The node is expected to be rebuilt as a regular
+    // Object3D when it has materials; this guard covers the transition frame.
     return
   }
 
@@ -11412,7 +11408,7 @@ function applyNodePatchesFast(nodePatches: PendingNodePatch[], removedIds: Set<s
     if (!node || !object) {
       continue
     }
-    if (isMaterialOnlyNodePatch(patch)) {
+    if (isMaterialOnlyNodePatch(patch) && !shouldRecreateNode(object, node)) {
       applyNodeMaterialsOnly(object, node)
       continue
     }
@@ -11472,7 +11468,7 @@ function applyNodePatchesWithTopology(
       refreshPlacementSurfaceTargetsForNode(nodeId)
       continue
     }
-    if (!isMaterialOnlyNodePatch(patch) && shouldRecreateNode(object, node)) {
+    if (shouldRecreateNode(object, node)) {
       if (!recreateNodeSubtree(nodeId, node, parentIdMap)) {
         syncSceneGraph()
         return true
@@ -11504,7 +11500,7 @@ function applyNodePatchesIncrementally(nodePatches: PendingNodePatch[], removedI
       continue
     }
     const object = objectMap.get(nodeId) ?? null
-    if (!object || (!isMaterialOnlyNodePatch(patch) && shouldRecreateNode(object, node))) {
+    if (!object || shouldRecreateNode(object, node)) {
       needsTopology = true
       break
     }
@@ -22688,6 +22684,14 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   }
   const nextSourceAssetId = node.sourceAssetId ?? null
   if ((userData.sourceAssetId ?? null) !== nextSourceAssetId) {
+    return true
+  }
+  // A material override changes imported GLB nodes from the shared instanced
+  // representation to an isolated Object3D. Material-only patches still need
+  // to recreate the node for this representation transition; otherwise the
+  // override path intentionally skips the shared InstancedMesh and nothing is
+  // updated until the next full scene load.
+  if (Boolean(userData.instancedAssetId) && !canNodeUseRuntimeModelInstancing(node)) {
     return true
   }
   if (node.userData?.source === 'planning-conversion') {
