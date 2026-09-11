@@ -1174,6 +1174,10 @@ async function loadAssetObjectForNode(
   }
   const target = findObjectByPath(baseObject, node.importMetadata?.objectPath ?? null) ?? baseObject
   const clone = target.clone(true)
+  // Non-instanced preview objects are normalized to identity before the node
+  // transform is applied. Keep collider sampling aligned with that rendering
+  // path so the imported root offset does not leak into the convex hull.
+  clone.position.set(0, 0, 0)
   clone.updateMatrixWorld(true)
   return clone
 }
