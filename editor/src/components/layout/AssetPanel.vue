@@ -45,6 +45,7 @@ import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
 import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
+import { exportProjectAssetFile } from '@/utils/assetExport'
 
 import UploadAssetsDialog from './UploadAssetsDialog.vue'
 import AssetFilterControl from './AssetFilterControl.vue'
@@ -148,6 +149,8 @@ const saveDicePresetInProgress = ref(false)
 const saveDicePresetError = ref<string | null>(null)
 const selectedAssetIds = ref<string[]>([])
 const assetActivationPendingId = ref<string | null>(null)
+const exportingAssetIds = ref<string[]>([])
+const assetExportErrors = ref<Record<string, string>>({})
 const draggingDirectoryId = ref<string | null>(null)
 const directoryDropHoverId = ref<string | null>(null)
 const assetDropHoverId = ref<string | null>(null)
@@ -791,6 +794,48 @@ function assetDownloadError(asset: ProjectAsset) {
     return aggregate.error
   }
   return assetCacheStore.getError(resolveAssetCacheId(asset))
+}
+
+function isAssetExporting(asset: ProjectAsset): boolean {
+  return exportingAssetIds.value.includes(resolveAssetCacheId(asset))
+}
+
+function assetExportError(asset: ProjectAsset): string | null {
+  return assetExportErrors.value[resolveAssetCacheId(asset)] ?? null
+}
+
+/**
+ * Card level error text: a failed browser export takes precedence over the
+ * asset cache download error so the newest feedback stays visible.
+ */
+function assetCardError(asset: ProjectAsset): string | null {
+  return assetExportError(asset) ?? assetDownloadError(asset)
+}
+
+async function handleAssetDownload(asset: ProjectAsset): Promise<void> {
+  const prepared = prepareAssetForOperations(asset)
+  const cacheId = resolveAssetCacheId(prepared)
+  if (exportingAssetIds.value.includes(cacheId)) {
+    return
+  }
+
+  exportingAssetIds.value = [...exportingAssetIds.value, cacheId]
+  if (assetExportErrors.value[cacheId]) {
+    const nextErrors = { ...assetExportErrors.value }
+    delete nextErrors[cacheId]
+    assetExportErrors.value = nextErrors
+  }
+
+  try {
+    const result = await exportProjectAssetFile({ asset: prepared, cacheId, assetCacheStore })
+    console.info(`Downloaded asset file ${result.fileName} (${result.byteLength} bytes)`)
+  } catch (error) {
+    const message = (error as Error)?.message ?? 'Failed to download asset'
+    assetExportErrors.value = { ...assetExportErrors.value, [cacheId]: message }
+    console.error('Failed to download asset', prepared.id, error)
+  } finally {
+    exportingAssetIds.value = exportingAssetIds.value.filter((id) => id !== cacheId)
+  }
 }
 
 async function ensureAssetCached(asset: ProjectAsset) {
@@ -4315,11 +4360,21 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                   </div>
                   <div class="asset-actions">
                     <v-btn
+                      icon="mdi-download-outline"
+                      variant="text"
+                      density="compact"
+                      size="x-small"
+                      :loading="isAssetExporting(asset)"
+                      :disabled="isAssetExporting(asset)"
+                      title="Download asset"
+                      @click.stop="handleAssetDownload(asset)"
+                    />
+                    <v-btn
                       v-if="isAudioPreviewAsset(asset)"
                       :icon="isAssetPreviewPlaying(asset) ? 'mdi-stop-circle-outline' : 'mdi-play-circle-outline'"
                       variant="text"
                       density="compact"
-                      size="small"
+                      size="x-small"
                       :loading="isAssetPreviewPending(asset)"
                       :title="isAssetPreviewPlaying(asset) ? 'Stop audio preview' : 'Play audio preview'"
                       @click="handleAssetPreviewClick($event, asset)"
@@ -4329,7 +4384,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       icon="mdi-pencil-outline"
                       variant="text"
                       density="compact"
-                      size="small"
+                      size="x-small"
                       @click.stop="promptRenameAsset(asset.id)"
                     />
                     <v-btn
@@ -4337,7 +4392,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       icon="mdi-delete-outline"
                       variant="text"
                       density="compact"
-                      size="small"
+                      size="x-small"
                       @click.stop="promptDeleteAsset(asset)"
                     />
                   </div>
@@ -4357,7 +4412,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                       width="4"
                     />
                   </div>
-                  <div v-else-if="assetDownloadError(asset)" class="asset-error-indicator">
+                  <div v-else-if="assetCardError(asset)" class="asset-error-indicator">
                     <v-icon size="20" color="error">mdi-alert-circle-outline</v-icon>
                   </div>
                   <div class="asset-info-overlay">
@@ -4379,7 +4434,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                         <span class="asset-title">{{ asset.name }}</span>
                       </span>
                     </div>
-                    <span v-if="assetDownloadError(asset)" class="asset-subtitle">{{ assetDownloadError(asset) }}</span>
+                    <span v-if="assetCardError(asset)" class="asset-subtitle">{{ assetCardError(asset) }}</span>
                   </div>
                 </div>
               </v-card>
@@ -5013,10 +5068,10 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
 .asset-actions {
   position: absolute;
   top: 3px;
-  right: 3px;
+  right: 2px;
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
   background-color: rgba(0, 0, 0, 0.35);
   border-radius: 5px;
   backdrop-filter: blur(2px);
@@ -5024,6 +5079,14 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
+}
+
+.asset-actions :deep(.v-btn) {
+  border-radius: 4px;
+}
+
+.asset-actions :deep(.v-icon) {
+  font-size: 14px;
 }
 
 .resource-card:hover .asset-actions {
