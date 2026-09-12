@@ -31,6 +31,10 @@ import {
   type PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
 import { createCannonSceneRigidBody } from './sceneRigidBodyFactory'
+import {
+  ensureCannonContactMaterial,
+  type CannonContactSettings,
+} from './materials'
 
 type BodyState = PhysicsWorldBodyState<CANNON.Body>
 type VehicleState = PhysicsWorldVehicleState<CANNON.Body, CANNON.RaycastVehicle>
@@ -40,9 +44,11 @@ type CharacterState = PhysicsWorldCharacterState<CANNON.Body> & {
 }
 
 const VEHICLE_WAKE_SPEED_THRESHOLD = 0.2
+const CHARACTER_CONTACT_FRICTION = 0.12
 
 export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.RaycastVehicle, CharacterState, BodyState, VehicleState> {
   private world: CANNON.World | null = null
+  private characterContactMaterialKeys = new Set<string>()
 
   setBodyTransform(command: PhysicsBodyTransformCommand): void {
     const state = this.bodies.get(command.bodyId)
@@ -237,14 +243,31 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
   protected createCharacterState(desc: PhysicsCharacterDesc, body: CANNON.Body): CharacterState {
     const groundProbe = resolveCharacterGroundProbeGeometry(body, desc)
     const motorYaw = resolvePhysicsCharacterMotorYawFromWorldQuaternion(body.quaternion, desc.forwardAxis)
-    body.material = new CANNON.Material(`character:${desc.characterId}`)
-    body.material.friction = 0
-    body.material.restitution = 0
+    const characterMaterial = new CANNON.Material(`character:${desc.characterId}`)
+    characterMaterial.friction = CHARACTER_CONTACT_FRICTION
+    characterMaterial.restitution = 0
+    body.material = characterMaterial
     body.linearDamping = 0
     body.angularDamping = 0
     body.fixedRotation = true
     body.updateMassProperties()
     body.angularVelocity.set(0, 0, 0)
+    const world = this.world
+    if (world) {
+      const contactSettings = resolveCannonContactSettingsFromWorld(world)
+      ensureCannonContactMaterial(
+        world,
+        world.defaultMaterial,
+        characterMaterial,
+        CHARACTER_CONTACT_FRICTION,
+        0,
+        contactSettings,
+        this.characterContactMaterialKeys,
+      )
+    }
+    console.debug(
+      `[PhysicsCannon] createCharacterState characterId=${desc.characterId} bodyId=${desc.bodyId} material=${characterMaterial.name} friction=${characterMaterial.friction} restitution=${characterMaterial.restitution} contactFriction=${CHARACTER_CONTACT_FRICTION} contactPairCount=${this.characterContactMaterialKeys.size}`,
+    )
     return {
       desc,
       bodyId: desc.bodyId,
@@ -525,6 +548,16 @@ export function ensureCannonWorld(params: EnsureCannonWorldParams): CANNON.World
   world.defaultContactMaterial.frictionEquationRelaxation = params.contactSettings.frictionEquationRelaxation
   params.setWorld(world)
   return world
+}
+
+function resolveCannonContactSettingsFromWorld(world: CANNON.World): CannonContactSettings {
+  const defaultContactMaterial = world.defaultContactMaterial
+  return {
+    contactEquationStiffness: defaultContactMaterial.contactEquationStiffness,
+    contactEquationRelaxation: defaultContactMaterial.contactEquationRelaxation,
+    frictionEquationStiffness: defaultContactMaterial.frictionEquationStiffness,
+    frictionEquationRelaxation: defaultContactMaterial.frictionEquationRelaxation,
+  }
 }
 
 function resolveCharacterGroundProbeGeometry(

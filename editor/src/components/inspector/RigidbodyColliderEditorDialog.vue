@@ -89,9 +89,10 @@ const panelStyle = computed(() => {
 })
 
 const colliderKind = ref<ColliderShapeKind>('convex')
-const transformMode = ref<'translate' | 'scale'>('translate')
+const transformMode = ref<'translate' | 'rotate' | 'scale'>('translate')
 const colliderDimensions = reactive({ x: 1, y: 1, z: 1 })
 const colliderOffset = reactive({ x: 0, y: 0, z: 0 })
+const colliderRotation = reactive({ x: 0, y: 0, z: 0 })
 const isReady = ref(false)
 const loadError = ref<string | null>(null)
 const previewContainerRef = ref<HTMLDivElement | null>(null)
@@ -282,6 +283,9 @@ function updateColliderStateFromGroup() {
   colliderOffset.x = colliderGroup.position.x
   colliderOffset.y = colliderGroup.position.y
   colliderOffset.z = colliderGroup.position.z
+  colliderRotation.x = normalizeDisplayDegrees(colliderGroup.rotation.x)
+  colliderRotation.y = normalizeDisplayDegrees(colliderGroup.rotation.y)
+  colliderRotation.z = normalizeDisplayDegrees(colliderGroup.rotation.z)
   if (colliderKind.value === 'convex' && colliderMesh?.geometry?.boundingBox) {
     const size = colliderMesh.geometry.boundingBox.getSize(new THREE.Vector3())
     colliderDimensions.x = size.x * colliderGroup.scale.x
@@ -295,6 +299,11 @@ function updateColliderStateFromGroup() {
   if (colliderKind.value === 'capsule') {
     colliderDimensions.y = colliderGroup.scale.y * 2
   }
+}
+
+function normalizeDisplayDegrees(radians: number): number {
+  const degrees = THREE.MathUtils.radToDeg(radians)
+  return ((degrees + 180) % 360 + 360) % 360 - 180
 }
 
 function getColliderGroupRotationTuple(): [number, number, number] {
@@ -624,6 +633,9 @@ function applyEditableShape(shape: EditableShape) {
   }
   constrainColliderTransform()
   updateColliderStateFromGroup()
+  if (shape.kind === 'sphere' && transformMode.value === 'rotate') {
+    transformMode.value = 'translate'
+  }
   transformControls?.setMode(transformMode.value)
 }
 
@@ -1003,6 +1015,9 @@ watch(
 )
 
 watch(transformMode, (mode) => {
+  if (mode === 'rotate') {
+    transformControls?.setSpace('world')
+  }
   transformControls?.setMode(mode)
 })
 
@@ -1082,6 +1097,18 @@ onUnmounted(() => {
                   size="small"
                   icon
                   variant="tonal"
+                  :color="transformMode === 'rotate' ? 'primary' : undefined"
+                  :disabled="!isReady || colliderKind === 'sphere'"
+                  title="Rotate"
+                  aria-label="Rotate"
+                  @click="transformMode = 'rotate'"
+                >
+                  <v-icon icon="mdi-rotate-3d-variant" />
+                </v-btn>
+                <v-btn
+                  size="small"
+                  icon
+                  variant="tonal"
                   :color="transformMode === 'scale' ? 'primary' : undefined"
                   :disabled="!isReady"
                   title="Scale"
@@ -1121,6 +1148,10 @@ onUnmounted(() => {
               <div class="collider-editor__stats-row">
                 Offset
                 <span>{{ colliderOffset.x.toFixed(2) }}, {{ colliderOffset.y.toFixed(2) }}, {{ colliderOffset.z.toFixed(2) }} m</span>
+              </div>
+              <div class="collider-editor__stats-row">
+                Rotation
+                <span>{{ colliderRotation.x.toFixed(1) }}°, {{ colliderRotation.y.toFixed(1) }}°, {{ colliderRotation.z.toFixed(1) }}°</span>
               </div>
             </div>
 

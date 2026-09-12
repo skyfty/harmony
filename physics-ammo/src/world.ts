@@ -41,6 +41,7 @@ type VehicleState = PhysicsWorldVehicleState<any, any>
 type CharacterState = PhysicsWorldCharacterState<any>
 
 const BT_DISABLE_DEACTIVATION = 4
+const CHARACTER_CONTACT_FRICTION = 0.12
 
 export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState, BodyState, VehicleState> {
   private ammo: AmmoApi | null = null
@@ -324,8 +325,15 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
     const zeroVelocity = createAmmoVector3(ammo, [0, 0, 0])
     body.setAngularFactor?.(zeroFactor)
     body.setAngularVelocity?.(zeroVelocity)
+    body.setFriction?.(CHARACTER_CONTACT_FRICTION)
+    body.setRestitution?.(0)
+    body.setRollingFriction?.(0)
+    body.setSpinningFriction?.(0)
     ammo.destroy(zeroVelocity)
     ammo.destroy(zeroFactor)
+    console.debug(
+      `[PhysicsAmmo] createCharacterState characterId=${desc.characterId} bodyId=${desc.bodyId} friction=${CHARACTER_CONTACT_FRICTION} restitution=0 rollingFriction=0 spinningFriction=0`,
+    )
     return {
       desc,
       bodyId: desc.bodyId,

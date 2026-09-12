@@ -14,6 +14,8 @@ export type PhysicsCharacterMotorState = {
   verticalVelocity: number
   yaw: number
   coyoteTimeRemaining: number
+  horizontalVelocityX: number
+  horizontalVelocityZ: number
 }
 
 export type PhysicsCharacterMotorInput = {
@@ -42,6 +44,10 @@ const GROUND_PROBE_EPSILON = 0.08
 const GROUND_SNAP_DISTANCE = 0.18
 const GROUND_STICK_VELOCITY = -2
 const DEFAULT_TURN_RATE_RADIANS_PER_SECOND = Number.POSITIVE_INFINITY
+const GROUND_ACCELERATION_RATE = 4
+const GROUND_DECELERATION_RATE = 6
+const AIR_ACCELERATION_RATE = 2
+const AIR_DECELERATION_RATE = 1.5
 
 export function createPhysicsCharacterMotorState(initialYaw = Math.PI): PhysicsCharacterMotorState {
   return {
@@ -50,6 +56,8 @@ export function createPhysicsCharacterMotorState(initialYaw = Math.PI): PhysicsC
     verticalVelocity: 0,
     yaw: initialYaw,
     coyoteTimeRemaining: 0,
+    horizontalVelocityX: 0,
+    horizontalVelocityZ: 0,
   }
 }
 
@@ -150,6 +158,18 @@ export function stepPhysicsCharacterMotor(
     planarZ *= airControl
   }
 
+  const smoothedHorizontalVelocity = resolveSmoothedHorizontalVelocity(
+    [state.horizontalVelocityX, state.horizontalVelocityZ],
+    [planarX, planarZ],
+    grounded ? GROUND_ACCELERATION_RATE : AIR_ACCELERATION_RATE,
+    grounded ? GROUND_DECELERATION_RATE : AIR_DECELERATION_RATE,
+    deltaSeconds,
+  )
+  planarX = smoothedHorizontalVelocity[0]
+  planarZ = smoothedHorizontalVelocity[1]
+  state.horizontalVelocityX = planarX
+  state.horizontalVelocityZ = planarZ
+
   if (input.jump && (grounded || state.coyoteTimeRemaining > 0)) {
     state.verticalVelocity = Math.max(0, desc.jumpImpulse)
     state.coyoteTimeRemaining = 0
@@ -173,6 +193,35 @@ export function stepPhysicsCharacterMotor(
     grounded: state.grounded,
     linearVelocity: [planarX, state.verticalVelocity, planarZ],
   }
+}
+
+function resolveSmoothedHorizontalVelocity(
+  currentVelocity: [number, number],
+  targetVelocity: [number, number],
+  accelerationRate: number,
+  decelerationRate: number,
+  deltaSeconds: number,
+): [number, number] {
+  if (!(deltaSeconds > 0)) {
+    return [targetVelocity[0], targetVelocity[1]]
+  }
+  const currentSpeed = Math.hypot(currentVelocity[0], currentVelocity[1])
+  const targetSpeed = Math.hypot(targetVelocity[0], targetVelocity[1])
+  const isReversing = currentSpeed > 1e-6
+    && targetSpeed > 1e-6
+    && currentVelocity[0] * targetVelocity[0] + currentVelocity[1] * targetVelocity[1] < 0
+  const isAccelerating = targetSpeed > currentSpeed && !isReversing
+  const rate = isAccelerating ? accelerationRate : decelerationRate
+  const alpha = 1 - Math.exp(-rate * deltaSeconds)
+  const nextX = currentVelocity[0] + (targetVelocity[0] - currentVelocity[0]) * alpha
+  const nextZ = currentVelocity[1] + (targetVelocity[1] - currentVelocity[1]) * alpha
+  const nextSpeed = Math.hypot(nextX, nextZ)
+  const maxSpeed = Math.max(currentSpeed, targetSpeed)
+  if (nextSpeed > maxSpeed && nextSpeed > 1e-6) {
+    const scale = maxSpeed / nextSpeed
+    return [nextX * scale, nextZ * scale]
+  }
+  return [nextX, nextZ]
 }
 
 function resolveShortestAngleDelta(current: number, target: number): number {

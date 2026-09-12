@@ -21,6 +21,7 @@ export function createCannonSceneRigidBody(params: CannonSceneRigidBodyCreatePar
   body.quaternion.set(...params.desc.transform.rotation)
   body.linearDamping = params.desc.linearDamping ?? 0.01
   body.angularDamping = params.desc.angularDamping ?? 0.01
+  body.material = params.world.defaultMaterial
   const bindings = createCannonSceneShapeBindings(params.shapeMap, params.desc.shapeId)
   const shouldRotateBodyForHeightfield = bindings.length > 0
     && bindings.every((binding) => binding.shapeKind === 'heightfield')
