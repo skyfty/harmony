@@ -879,6 +879,17 @@
       </v-menu>
       <v-divider vertical />
       <v-btn
+        icon="mdi-cube-scan"
+        density="compact"
+        size="small"
+        :variant="colliderEditActive ? 'flat' : 'text'"
+        :color="colliderEditActive ? 'primary' : undefined"
+        class="toolbar-button"
+        :disabled="!colliderEditAvailable && !colliderEditActive"
+        :title="colliderEditActive ? 'Exit Collider Edit' : 'Edit Collider in Scene'"
+        @click="emit('toggle-collider-edit')"
+      />
+      <v-btn
         icon="mdi-camera-outline"
         density="compact"
         size="small"
@@ -1259,6 +1270,8 @@ const props = withDefaults(
   groundScatterSpacing: number
   groundScatterDensityPercent: number
   groundScatterProviderAssetId?: string | null
+  colliderEditAvailable?: boolean
+  colliderEditActive?: boolean
   }>(),
   {
     buildToolsDisabled: false,
@@ -1266,6 +1279,8 @@ const props = withDefaults(
     roadDirectModeActive: false,
     eraseCutRepairActive: false,
     wallDoorSelectModeActive: false,
+    colliderEditAvailable: false,
+    colliderEditActive: false,
   },
 )
 
@@ -1319,6 +1334,7 @@ const emit = defineEmits<{
   (event: 'ground-scatter-asset-select', payload: { category: TerrainScatterCategory; asset: ProjectAsset; providerAssetId: string }): void
   (event: 'start-viewport-placement', item: ViewportPlacementItem): void
   (event: 'cancel-viewport-placement'): void
+  (event: 'toggle-collider-edit'): void
 }>()
 
 const {
@@ -1373,6 +1389,8 @@ const {
   groundScatterSpacing,
   groundScatterDensityPercent,
   groundScatterProviderAssetId,
+  colliderEditAvailable,
+  colliderEditActive,
 } = toRefs(props)
 const sceneStore = useSceneStore()
 const {

@@ -205,7 +205,9 @@ import { isSceneAssetRegistry } from '@/utils/assetDependencySubset'
 import type { PanelPlacementState } from '@/types/panel-placement-state'
 import ViewportToolbar from './ViewportToolbar.vue'
 import TransformToolbar from './TransformToolbar.vue'
+import RigidbodyColliderSceneEditorPanel from './RigidbodyColliderSceneEditorPanel.vue'
 import PlaceholderOverlayList from './PlaceholderOverlayList.vue'
+import { useRigidbodyColliderSceneEditor } from './useRigidbodyColliderSceneEditor'
 import ViewportNorthCompass from './ViewportNorthCompass.vue'
 import FloatingPopover from '@/components/common/FloatingPopover.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
@@ -1090,6 +1092,33 @@ let gridHighlight: THREE.Group | null = null
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let latestFogSettings: EnvironmentSettings | null = null
 let resizeObserver: ResizeObserver | null = null
+let rigidbodyColliderPreviousSelectionContext: string | null = null
+
+const rigidbodyColliderEditor = useRigidbodyColliderSceneEditor({
+  getOverlayParent: () => rootGroup,
+  getTargetObject: (nodeId) => objectMap.get(nodeId) ?? getRuntimeObject(nodeId),
+  onTransformModeChange: () => syncRigidbodyColliderTransformControls(),
+})
+const {
+  active: rigidbodyColliderEditActive,
+  ready: rigidbodyColliderEditReady,
+  error: rigidbodyColliderEditError,
+  available: rigidbodyColliderEditAvailable,
+  nodeLabel: rigidbodyColliderEditNodeLabel,
+  colliderKind: rigidbodyColliderEditKind,
+  transformMode: rigidbodyColliderEditTransformMode,
+  dimensions: rigidbodyColliderEditDimensions,
+  offset: rigidbodyColliderEditOffset,
+  rotation: rigidbodyColliderEditRotation,
+  previewGroup: rigidbodyColliderEditPreviewGroup,
+  activate: activateRigidbodyColliderEditor,
+  deactivate: deactivateRigidbodyColliderEditor,
+  dispose: disposeRigidbodyColliderEditor,
+  setTransformMode: setRigidbodyColliderTransformMode,
+  handleShapeKindChange: handleRigidbodyColliderShapeKindChange,
+  handleAutoFit: handleRigidbodyColliderAutoFit,
+  handleTransformObjectChange: handleRigidbodyColliderTransformObjectChange,
+} = rigidbodyColliderEditor
 
 const normalizedPointerGuard = createNormalizedPointerGuard({
   getCanvas: () => canvasRef.value,
@@ -11234,6 +11263,17 @@ const draggingChangedHandler = (event: unknown) => {
     mapControls.enabled = !value
   }
 
+  if (rigidbodyColliderEditActive.value) {
+    transformControlsDirty = false
+    hasTransformLastWorldPosition = false
+    if (!value) {
+      syncRigidbodyColliderTransformControls()
+      updateGridHighlight(null)
+      updateSelectionHighlights()
+    }
+    return
+  }
+
   const targetObject = transformControls?.object as THREE.Object3D | null
   const isDirectionalLightTargetPivot = Boolean((targetObject?.userData as any)?.isDirectionalLightTargetPivot)
   const isPivotTarget = Boolean(
@@ -16773,6 +16813,9 @@ function tryExitActiveNodeBuildToolEditMode(event?: MouseEvent | PointerEvent): 
 }
 
 async function handlePointerDown(event: PointerEvent) {
+  if (rigidbodyColliderEditActive.value) {
+    return
+  }
   if (coordinateEditorOpen.value || uiStore.activeSelectionContext === 'coordinate-editor') {
     if (coordinateEditorOpen.value) {
       closeCoordinateEditor({ commit: true, deferRestore: true })
@@ -17433,6 +17476,9 @@ async function handlePointerDown(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  if (rigidbodyColliderEditActive.value) {
+    return
+  }
   // surface snap pointer updates removed (alignment hint disabled)
   lastPointerClientX = event.clientX
   lastPointerClientY = event.clientY
@@ -18249,6 +18295,9 @@ function handlePointerMove(event: PointerEvent) {
 }
 
 async function handlePointerUp(event: PointerEvent) {
+  if (rigidbodyColliderEditActive.value) {
+    return
+  }
   // surface snap pointer updates removed (alignment hint disabled)
   try {
     const isPointerUpOnCanvas = isStrictPointOnCanvas(event.clientX, event.clientY)
@@ -19067,6 +19116,9 @@ async function handlePointerUp(event: PointerEvent) {
 }
 
 function handlePointerCancel(event: PointerEvent) {
+  if (rigidbodyColliderEditActive.value) {
+    return
+  }
   clearWallLengthHud()
   clearFloorSizeHud()
   deactivateVOverride()
@@ -19766,6 +19818,9 @@ function handlePointerCancel(event: PointerEvent) {
 }
 
 function handleCanvasDoubleClick(event: MouseEvent) {
+  if (rigidbodyColliderEditActive.value) {
+    return
+  }
   if (!scene || !camera || !canvasRef.value) {
     return
   }
@@ -21805,6 +21860,10 @@ function computeTransformUpdatesForContext(options: {
 }
 
 function handleTransformChange() {
+  if (rigidbodyColliderEditActive.value) {
+    handleRigidbodyColliderTransformObjectChange()
+    return
+  }
   const ctx = getTransformChangeContext()
   if (!ctx) {
     return
@@ -23673,6 +23732,9 @@ function updateSelectionPivotObject(primaryId: string | null, tool: EditorTool):
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
+  if (rigidbodyColliderEditActive.value) {
+    return
+  }
   const effectiveTool = getSafeTransformTool(tool)
   const primaryId = nodeId ?? sceneStore.selectedNodeId ?? null
   const locked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
@@ -23734,6 +23796,9 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
 
 
 function updateToolMode(tool: EditorTool) {
+  if (rigidbodyColliderEditActive.value) {
+    return
+  }
   if (!transformControls) return
 
   const effectiveTool = getSafeTransformTool(tool)
@@ -23752,6 +23817,68 @@ function updateToolMode(tool: EditorTool) {
   } else {
     updateGridHighlight(null)
   }
+}
+
+function syncRigidbodyColliderTransformControls(): void {
+  if (!rigidbodyColliderEditActive.value || !transformControls) {
+    return
+  }
+  const previewGroup = rigidbodyColliderEditPreviewGroup.value
+  if (!previewGroup) {
+    transformControls.detach()
+    return
+  }
+  const mode = rigidbodyColliderEditTransformMode.value
+  transformControls.enabled = true
+  transformControls.setMode(mode)
+  transformControls.setSpace(mode === 'rotate' ? 'world' : 'local')
+  transformControls.attach(previewGroup)
+}
+
+function activateRigidbodyColliderEdit(): boolean {
+  if (props.previewActive) {
+    return false
+  }
+  if (activeBuildTool.value) {
+    handleBuildToolChange(null)
+  }
+  const activated = activateRigidbodyColliderEditor()
+  if (activated) {
+    rigidbodyColliderPreviousSelectionContext = uiStore.activeSelectionContext === 'rigidbody-collider'
+      ? null
+      : uiStore.activeSelectionContext
+    uiStore.setActiveSelectionContext('rigidbody-collider')
+    transformControls?.detach()
+    syncRigidbodyColliderTransformControls()
+    updateGridHighlight(null)
+  } else if (rigidbodyColliderEditError.value) {
+    console.warn('[SceneViewport] Unable to start collider editing:', rigidbodyColliderEditError.value)
+  }
+  return activated
+}
+
+function deactivateRigidbodyColliderEdit(options: { save?: boolean } = {}): boolean {
+  const wasActive = rigidbodyColliderEditActive.value
+  const saved = deactivateRigidbodyColliderEditor(options)
+  if (wasActive) {
+    if (uiStore.activeSelectionContext === 'rigidbody-collider') {
+      uiStore.setActiveSelectionContext(rigidbodyColliderPreviousSelectionContext)
+    }
+    rigidbodyColliderPreviousSelectionContext = null
+    updateToolMode(props.activeTool)
+    attachSelection(sceneStore.selectedNodeId ?? props.selectedNodeId, props.activeTool)
+    updateOutlineSelectionTargets()
+    updateSelectionHighlights()
+  }
+  return saved
+}
+
+function handleToggleRigidbodyColliderEdit(): void {
+  if (rigidbodyColliderEditActive.value) {
+    deactivateRigidbodyColliderEdit({ save: false })
+    return
+  }
+  activateRigidbodyColliderEdit()
 }
 
 
@@ -23812,6 +23939,22 @@ function shouldHandleViewportShortcut(event: KeyboardEvent): boolean {
 }
 
 function handleViewportShortcut(event: KeyboardEvent) {
+  if (rigidbodyColliderEditActive.value) {
+    if (event.code === 'Escape') {
+      event.preventDefault()
+      deactivateRigidbodyColliderEdit({ save: false })
+    } else if (event.code === 'KeyW') {
+      event.preventDefault()
+      setRigidbodyColliderTransformMode('translate')
+    } else if (event.code === 'KeyE') {
+      event.preventDefault()
+      setRigidbodyColliderTransformMode('rotate')
+    } else if (event.code === 'KeyR') {
+      event.preventDefault()
+      setRigidbodyColliderTransformMode('scale')
+    }
+    return
+  }
   if (!shouldHandleViewportShortcut(event)) return
   let handled = false
 
@@ -24091,6 +24234,11 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   setGroundTextureSourceResolver(null)
+  disposeRigidbodyColliderEditor()
+  if (uiStore.activeSelectionContext === 'rigidbody-collider') {
+    uiStore.setActiveSelectionContext(rigidbodyColliderPreviousSelectionContext)
+  }
+  rigidbodyColliderPreviousSelectionContext = null
   displayBoardBuildTool.dispose()
   billboardBuildTool.dispose()
   clearDisplayBoardSizeHud()
@@ -24275,6 +24423,30 @@ watch(
     updateSelectionHighlights()
     refreshEffectRuntimeTickers()
   }
+)
+
+watch(
+  () => sceneStore.selectedNodeId,
+  () => {
+    if (rigidbodyColliderEditActive.value) {
+      deactivateRigidbodyColliderEdit({ save: false })
+    }
+  }
+)
+
+watch(rigidbodyColliderEditAvailable, (available) => {
+  if (!available && rigidbodyColliderEditActive.value) {
+    deactivateRigidbodyColliderEdit({ save: false })
+  }
+})
+
+watch(
+  () => sceneStore.selectedNode?.components?.rigidbody?.props?.targetNodeId ?? null,
+  () => {
+    if (rigidbodyColliderEditActive.value) {
+      deactivateRigidbodyColliderEdit({ save: false })
+    }
+  },
 )
 
 watch(
@@ -24473,6 +24645,8 @@ watch(
 
 defineExpose({
   captureScreenshot,
+  activateRigidbodyColliderEdit,
+  deactivateRigidbodyColliderEdit,
 })
 </script>
 
@@ -24481,6 +24655,7 @@ defineExpose({
     <div ref="transformToolbarHostRef" class="transform-toolbar-host" :style="transformToolbarStyle">
       <TransformToolbar
         :active-tool="props.activeTool"
+        :disabled="rigidbodyColliderEditActive"
         @change-tool="emit('changeTool', $event)"
       />
     </div>
@@ -24538,8 +24713,10 @@ defineExpose({
         :ground-scatter-spacing="scatterSpacing"
         :ground-scatter-density-percent="scatterDensityPercent"
         :ground-scatter-provider-asset-id="scatterProviderAssetId ?? null"
-        :build-tools-disabled="buildToolsDisabled"
+        :build-tools-disabled="buildToolsDisabled || rigidbodyColliderEditActive"
         :active-build-tool="activeBuildTool"
+        :collider-edit-available="rigidbodyColliderEditAvailable"
+        :collider-edit-active="rigidbodyColliderEditActive"
         @drop-to-ground="dropSelectionToGround"
         @align-selection="handleAlignSelection"
         @rotate-selection="handleRotateSelection"
@@ -24554,6 +24731,7 @@ defineExpose({
         @toggle-wall-door-select-mode="toggleWallDoorSelectMode"
         @start-viewport-placement="handleStartViewportPlacement"
         @cancel-viewport-placement="handleCancelViewportPlacement"
+        @toggle-collider-edit="handleToggleRigidbodyColliderEdit"
           @clear-all-scatter-instances="handleClearAllScatterInstances"
           @update-scatter-erase-radius="terrainStore.setScatterEraseRadius"
           @update:viewport-placement-menu-open="handleViewportPlacementMenuOpen"
@@ -24590,6 +24768,22 @@ defineExpose({
           @select-water-build-shape="handleSelectWaterBuildShape"
       />
     </div>
+    <RigidbodyColliderSceneEditorPanel
+      :visible="rigidbodyColliderEditActive"
+      :node-label="rigidbodyColliderEditNodeLabel"
+      :collider-kind="rigidbodyColliderEditKind"
+      :transform-mode="rigidbodyColliderEditTransformMode"
+      :ready="rigidbodyColliderEditReady"
+      :error="rigidbodyColliderEditError"
+      :dimensions="rigidbodyColliderEditDimensions"
+      :offset="rigidbodyColliderEditOffset"
+      :rotation="rigidbodyColliderEditRotation"
+      @update:collider-kind="handleRigidbodyColliderShapeKindChange"
+      @update:transform-mode="setRigidbodyColliderTransformMode"
+      @auto-fit="handleRigidbodyColliderAutoFit"
+      @save="deactivateRigidbodyColliderEdit({ save: true })"
+      @cancel="deactivateRigidbodyColliderEdit({ save: false })"
+    />
     <FloatingPopover
       v-model="coordinateEditorOpen"
       :anchor="projectCoordinateEditorAnchor()"

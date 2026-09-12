@@ -7,11 +7,12 @@ import { computed } from 'vue'
 
 const props = defineProps<{
   activeTool: EditorTool
+  disabled?: boolean
 }>()
 
 const sceneStore = useSceneStore()
 const uiStore = useUiStore()
-const transformDisabled = computed(() => Boolean(uiStore.activeSelectionContext))
+const transformDisabled = computed(() => Boolean(props.disabled) || Boolean(uiStore.activeSelectionContext))
 const landformTransformLocked = computed(() => {
   const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
   return selectedIds.some((id) => sceneStore.getNodeById(id)?.dynamicMesh?.type === 'Landform')

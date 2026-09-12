@@ -114,8 +114,7 @@ const emit = defineEmits<{
   (event: 'close-vehicle-wheel-details'): void
   (event: 'open-suspension-editor'): void
   (event: 'close-suspension-editor'): void
-  (event: 'open-rigidbody-collider-editor'): void
-  (event: 'close-rigidbody-collider-editor'): void
+  (event: 'open-scene-collider-editor'): void
   (event: 'open-behavior-details', payload: BehaviorDetailsPayload): void
   (event: 'close-behavior-details'): void
 }>()
@@ -126,7 +125,6 @@ const { selectedNode, selectedNodeId, activeTool } = storeToRefs(sceneStore)
 const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
 const vehicleWheelDetailsTargetId = ref<string | null>(null)
-const colliderEditorActive = ref(false)
 const suspensionEditorActive = ref(false)
 const behaviorDetailsActive = ref(false)
 const panelCardRef = ref<HTMLElement | { $el: HTMLElement } | null>(null)
@@ -335,17 +333,8 @@ function handleVehiclePanelRequestCloseWheelDetails() {
 }
 
 
-function handleOpenRigidbodyColliderEditor() {
-  colliderEditorActive.value = true
-  emit('open-rigidbody-collider-editor')
-}
-
-function closeRigidbodyColliderEditor(options: { silent?: boolean; force?: boolean } = {}) {
-  const wasActive = colliderEditorActive.value
-  colliderEditorActive.value = false
-  if ((wasActive || options.force) && !options.silent) {
-    emit('close-rigidbody-collider-editor')
-  }
+function handleOpenSceneColliderEditor() {
+  emit('open-scene-collider-editor')
 }
 
 function handleOpenBehaviorDetails(payload: BehaviorDetailsPayload) {
@@ -388,7 +377,6 @@ watch(selectedNodeId, () => {
   closeMaterialDetails()
   closeVehicleWheelDetails()
   closeVehicleSuspensionEditor({ force: true })
-  closeRigidbodyColliderEditor({ force: true })
   closeBehaviorDetails()
 })
 
@@ -414,7 +402,6 @@ defineExpose({
   closeMaterialDetails,
   closeVehicleWheelDetails,
   closeVehicleSuspensionEditor,
-  closeRigidbodyColliderEditor,
   closeBehaviorDetails,
 })
 
@@ -679,8 +666,7 @@ watch(
               <WarpGatePanel v-else-if="component.type === WARP_GATE_COMPONENT_TYPE" />
               <RigidbodyPanel
                 v-else-if="component.type === RIGIDBODY_COMPONENT_TYPE"
-                @open-collider-editor="handleOpenRigidbodyColliderEditor"
-                @close-collider-editor="closeRigidbodyColliderEditor"
+                @open-scene-collider-editor="handleOpenSceneColliderEditor"
               />
               <VehiclePanel
                 v-else-if="component.type === VEHICLE_COMPONENT_TYPE"

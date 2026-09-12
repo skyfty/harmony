@@ -7,7 +7,6 @@ import InspectorPanel from '@/components/layout/InspectorPanel.vue'
 import MaterialDetailsPanel from '@/components/inspector/MaterialDetailsPanel.vue'
 import VehicleWheelDetailsPanel from '@/components/inspector/VehicleWheelDetailsPanel.vue'
 import VehicleSuspensionEditorDialog from '@/components/inspector/VehicleSuspensionEditorDialog.vue'
-import RigidbodyColliderEditorDialog from '@/components/inspector/RigidbodyColliderEditorDialog.vue'
 import BehaviorDetailsPanel from '@/components/inspector/BehaviorDetailsPanel.vue'
 import ProjectPanel from '@/components/layout/ProjectPanel.vue'
 import DicePresetDialog from '@/components/layout/DicePresetDialog.vue'
@@ -33,7 +32,10 @@ import type {
   SceneExportOptions,
 } from '@/types/scene-export'
 
-type SceneViewportHandle = InstanceType<typeof SceneViewport>
+type SceneViewportHandle = InstanceType<typeof SceneViewport> & {
+  activateRigidbodyColliderEdit: () => boolean
+  deactivateRigidbodyColliderEdit: (options?: { save?: boolean }) => boolean
+}
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
 import type { PresetSceneDocument } from '@/types/preset-scene'
 
@@ -383,7 +385,6 @@ type InspectorPanelPublicInstance = InstanceType<typeof InspectorPanel> & {
   closeMaterialDetails: (options?: { silent?: boolean }) => void
   closeVehicleWheelDetails: (options?: { silent?: boolean }) => void
   closeVehicleSuspensionEditor: (options?: { silent?: boolean; force?: boolean }) => void
-  closeRigidbodyColliderEditor: (options?: { silent?: boolean; force?: boolean }) => void
   closeBehaviorDetails: (options?: { silent?: boolean }) => void
 }
 
@@ -432,19 +433,6 @@ const vehicleSuspensionEditorState = reactive({
   visible: false,
   anchor: null as VehicleSuspensionEditorAnchor | null,
   source: null as VehicleSuspensionEditorSource | null,
-})
-
-type RigidbodyColliderEditorAnchor = {
-  top: number
-  left: number
-}
-
-type RigidbodyColliderEditorSource = InspectorPanelSource
-
-const rigidbodyColliderEditorState = reactive({
-  visible: false,
-  anchor: null as RigidbodyColliderEditorAnchor | null,
-  source: null as RigidbodyColliderEditorSource | null,
 })
 
 type BehaviorDetailsAnchor = {
@@ -606,9 +594,6 @@ function handleInspectorMaterialDetailsOpen(source: MaterialDetailsSource, paylo
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
   }
-  if (rigidbodyColliderEditorState.visible) {
-    handleRigidbodyColliderEditorOverlayClose()
-  }
   if (vehicleWheelDetailsState.visible) {
     handleVehicleWheelDetailsOverlayClose()
   }
@@ -672,9 +657,6 @@ function handleInspectorVehicleWheelDetailsOpen(source: VehicleWheelDetailsSourc
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
   }
-  if (rigidbodyColliderEditorState.visible) {
-    handleRigidbodyColliderEditorOverlayClose()
-  }
   if (vehicleSuspensionEditorState.visible) {
     handleVehicleSuspensionEditorOverlayClose()
   }
@@ -695,9 +677,6 @@ function handleInspectorVehicleSuspensionEditorOpen(source: VehicleSuspensionEdi
   }
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
-  }
-  if (rigidbodyColliderEditorState.visible) {
-    handleRigidbodyColliderEditorOverlayClose()
   }
   vehicleSuspensionEditorState.source = source
   vehicleSuspensionEditorState.visible = true
@@ -748,17 +727,7 @@ function handleVehicleSuspensionEditorOverlayClose() {
   }
 }
 
-function updateRigidbodyColliderEditorAnchor() {
-  if (!rigidbodyColliderEditorState.visible || !rigidbodyColliderEditorState.source) {
-    rigidbodyColliderEditorState.anchor = null
-    return
-  }
-  const inspector = getInspectorRef(rigidbodyColliderEditorState.source)
-  const rect = inspector?.getPanelRect?.() ?? null
-  rigidbodyColliderEditorState.anchor = rect ? { top: rect.top, left: rect.left } : null
-}
-
-function handleInspectorRigidbodyColliderEditorOpen(source: RigidbodyColliderEditorSource) {
+function handleInspectorSceneColliderEditorOpen() {
   if (materialDetailsState.visible) {
     handleMaterialDetailsOverlayClose()
   }
@@ -771,31 +740,7 @@ function handleInspectorRigidbodyColliderEditorOpen(source: RigidbodyColliderEdi
   if (behaviorDetailsState.visible) {
     handleBehaviorDetailsOverlayClose()
   }
-  rigidbodyColliderEditorState.source = source
-  rigidbodyColliderEditorState.visible = true
-  nextTick(() => {
-    updateRigidbodyColliderEditorAnchor()
-  })
-}
-
-function handleInspectorRigidbodyColliderEditorClose(source: RigidbodyColliderEditorSource) {
-  if (rigidbodyColliderEditorState.source !== source) {
-    return
-  }
-  rigidbodyColliderEditorState.visible = false
-  rigidbodyColliderEditorState.anchor = null
-  rigidbodyColliderEditorState.source = null
-}
-
-function handleRigidbodyColliderEditorOverlayClose() {
-  const source = rigidbodyColliderEditorState.source
-  rigidbodyColliderEditorState.visible = false
-  rigidbodyColliderEditorState.anchor = null
-  rigidbodyColliderEditorState.source = null
-  if (source) {
-    const inspector = getInspectorRef(source)
-    inspector?.closeRigidbodyColliderEditor?.({ silent: true, force: true })
-  }
+  viewportRef.value?.activateRigidbodyColliderEdit()
 }
 
 function getBehaviorComponent(): SceneNodeComponentState<BehaviorComponentProps> | null {
@@ -820,9 +765,6 @@ function updateBehaviorDetailsAnchor() {
 function handleInspectorBehaviorDetailsOpen(source: BehaviorDetailsSource, payload: BehaviorDetailsContext) {
   if (materialDetailsState.visible) {
     handleMaterialDetailsOverlayClose()
-  }
-  if (rigidbodyColliderEditorState.visible) {
-    handleRigidbodyColliderEditorOverlayClose()
   }
   if (vehicleWheelDetailsState.visible) {
     handleVehicleWheelDetailsOverlayClose()
@@ -939,10 +881,6 @@ const handleVehicleSuspensionEditorRelayout = () => {
   updateVehicleSuspensionEditorAnchor()
 }
 
-const handleRigidbodyColliderEditorRelayout = () => {
-  updateRigidbodyColliderEditorAnchor()
-}
-
 watch(
   () => materialDetailsState.visible,
   (visible) => {
@@ -996,20 +934,6 @@ watch(
     } else {
       window.removeEventListener('resize', handleVehicleSuspensionEditorRelayout)
       window.removeEventListener('scroll', handleVehicleSuspensionEditorRelayout, true)
-    }
-  },
-)
-
-watch(
-  () => rigidbodyColliderEditorState.visible,
-  (visible) => {
-    if (visible) {
-      updateRigidbodyColliderEditorAnchor()
-      window.addEventListener('resize', handleRigidbodyColliderEditorRelayout)
-      window.addEventListener('scroll', handleRigidbodyColliderEditorRelayout, true)
-    } else {
-      window.removeEventListener('resize', handleRigidbodyColliderEditorRelayout)
-      window.removeEventListener('scroll', handleRigidbodyColliderEditorRelayout, true)
     }
   },
 )
@@ -1089,32 +1013,6 @@ watch(showInspectorFloating, (visible) => {
   }
   nextTick(() => {
     updateVehicleSuspensionEditorAnchor()
-  })
-})
-
-watch(showInspectorDocked, (visible) => {
-  if (rigidbodyColliderEditorState.source !== 'docked') {
-    return
-  }
-  if (!visible) {
-    handleInspectorRigidbodyColliderEditorClose('docked')
-    return
-  }
-  nextTick(() => {
-    updateRigidbodyColliderEditorAnchor()
-  })
-})
-
-watch(showInspectorFloating, (visible) => {
-  if (rigidbodyColliderEditorState.source !== 'floating') {
-    return
-  }
-  if (!visible) {
-    handleInspectorRigidbodyColliderEditorClose('floating')
-    return
-  }
-  nextTick(() => {
-    updateRigidbodyColliderEditorAnchor()
   })
 })
 
@@ -2508,8 +2406,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', handleVehicleWheelDetailsRelayout, true)
   window.removeEventListener('resize', handleVehicleSuspensionEditorRelayout)
   window.removeEventListener('scroll', handleVehicleSuspensionEditorRelayout, true)
-  window.removeEventListener('resize', handleRigidbodyColliderEditorRelayout)
-  window.removeEventListener('scroll', handleRigidbodyColliderEditorRelayout, true)
 })
 
 
@@ -2566,8 +2462,7 @@ onBeforeUnmount(() => {
             @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('docked')"
             @open-suspension-editor="() => handleInspectorVehicleSuspensionEditorOpen('docked')"
             @close-suspension-editor="() => handleInspectorVehicleSuspensionEditorClose('docked')"
-            @open-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorOpen('docked')"
-            @close-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorClose('docked')"
+            @open-scene-collider-editor="handleInspectorSceneColliderEditorOpen"
             @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('docked', payload)"
             @close-behavior-details="() => handleInspectorBehaviorDetailsClose('docked')"
           />
@@ -2609,8 +2504,7 @@ onBeforeUnmount(() => {
               @close-vehicle-wheel-details="() => handleInspectorVehicleWheelDetailsClose('floating')"
               @open-suspension-editor="() => handleInspectorVehicleSuspensionEditorOpen('floating')"
               @close-suspension-editor="() => handleInspectorVehicleSuspensionEditorClose('floating')"
-              @open-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorOpen('floating')"
-              @close-rigidbody-collider-editor="() => handleInspectorRigidbodyColliderEditorClose('floating')"
+              @open-scene-collider-editor="handleInspectorSceneColliderEditorOpen"
               @open-behavior-details="(payload) => handleInspectorBehaviorDetailsOpen('floating', payload)"
               @close-behavior-details="() => handleInspectorBehaviorDetailsClose('floating')"
             />
@@ -2699,12 +2593,6 @@ onBeforeUnmount(() => {
         @close="handleVehicleSuspensionEditorOverlayClose"
       />
 
-      <RigidbodyColliderEditorDialog
-        v-if="rigidbodyColliderEditorState.visible && rigidbodyColliderEditorState.anchor"
-        :visible="rigidbodyColliderEditorState.visible"
-        :anchor="rigidbodyColliderEditorState.anchor"
-        @close="handleRigidbodyColliderEditorOverlayClose"
-      />
       <DicePresetDialog />
     </div>
     <SceneManagerDialog

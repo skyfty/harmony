@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
-import { useSceneStore } from '@/stores/sceneStore'
+import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   type RigidbodyComponentProps,
@@ -26,8 +26,7 @@ import {
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const emit = defineEmits<{
-  (event: 'open-collider-editor'): void
-  (event: 'close-collider-editor'): void
+  (event: 'open-scene-collider-editor'): void
 }>()
 
 const BODY_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyBodyType }> = [
@@ -84,7 +83,6 @@ const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
 const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
 const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
 const localFriction = ref(DEFAULT_RIGIDBODY_FRICTION)
-const colliderEditorActive = ref(false)
 const MASS_LOCK_EPSILON = 1e-4
 const LOCKED_BODY_TYPES = new Set<RigidbodyBodyType>(['STATIC', 'KINEMATIC'])
 const LOCKED_BODY_TYPE_MASS = 0
@@ -93,6 +91,24 @@ const isMassLocked = computed(() => LOCKED_BODY_TYPES.has(localBodyType.value))
 const colliderTypeLabel = computed(() => {
   const opt = COLLIDER_TYPE_OPTIONS.find((o) => o.value === localColliderType.value)
   return opt ? opt.label : String(localColliderType.value ?? '')
+})
+
+const canOpenSceneColliderEditor = computed(() => {
+  void sceneStore.sceneGraphStructureVersion
+  void sceneStore.sceneNodePropertyVersion
+  const component = rigidbodyComponent.value
+  if (!component?.enabled) {
+    return false
+  }
+  const targetId = component.props.targetNodeId?.trim() || selectedNodeId.value
+  if (!targetId) {
+    return false
+  }
+  const targetNode = sceneStore.getNodeById(targetId)
+  if (!targetNode) {
+    return false
+  }
+  return targetNode.nodeType === 'Group' || Boolean(getRuntimeObject(targetId))
 })
 
 watch(
@@ -281,20 +297,11 @@ function resetConvexDecompositionConfig(): void {
   updateConvexDecompositionConfig(DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG)
 }
 
-function handleOpenColliderEditor() {
-  if (!rigidbodyComponent.value?.enabled) {
+function handleOpenSceneColliderEditor() {
+  if (!canOpenSceneColliderEditor.value) {
     return
   }
-  colliderEditorActive.value = true
-  emit('open-collider-editor')
-}
-
-function requestCloseColliderEditor(options: { silent?: boolean; force?: boolean } = {}) {
-  const hadActive = colliderEditorActive.value
-  colliderEditorActive.value = false
-  if ((hadActive || options.force) && !options.silent) {
-    emit('close-collider-editor')
-  }
+  emit('open-scene-collider-editor')
 }
 
 function handleToggleComponent() {
@@ -325,25 +332,6 @@ function handleTargetNodeChange(nodeId: string | null) {
   updateComponent({ targetNodeId: next })
 }
 
-watch(
-  () => rigidbodyComponent.value?.enabled,
-  (enabled) => {
-    if (enabled === false) {
-      requestCloseColliderEditor({ force: true })
-    }
-  },
-  { immediate: true },
-)
-
-watch(rigidbodyComponent, (component) => {
-  if (!component) {
-    requestCloseColliderEditor({ force: true })
-  }
-})
-
-watch(selectedNodeId, () => {
-  requestCloseColliderEditor({ force: true })
-})
 </script>
 
 <template>
@@ -415,7 +403,7 @@ watch(selectedNodeId, () => {
             <div class="rigidbody-panel__picker-label">Collider Type</div>
             <div class="rigidbody-panel__collider-value">{{ colliderTypeLabel }}</div>
           </div>
-          <v-tooltip text="Manual collider editor" location="top">
+          <v-tooltip text="Edit collider in scene" location="top">
             <template #activator="{ props }">
               <v-btn
                 v-bind="props"
@@ -423,8 +411,8 @@ watch(selectedNodeId, () => {
                 size="small"
                 variant="tonal"
                 class="rigidbody-panel__collider-btn"
-                :disabled="!rigidbodyComponent?.enabled"
-                @click="handleOpenColliderEditor"
+                :disabled="!canOpenSceneColliderEditor"
+                @click="handleOpenSceneColliderEditor"
               >
                 <v-icon size="18">mdi-cube-scan</v-icon>
               </v-btn>
