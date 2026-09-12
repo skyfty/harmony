@@ -1107,6 +1107,7 @@ const {
   nodeLabel: rigidbodyColliderEditNodeLabel,
   colliderKind: rigidbodyColliderEditKind,
   transformMode: rigidbodyColliderEditTransformMode,
+  canTransform: rigidbodyColliderEditCanTransform,
   dimensions: rigidbodyColliderEditDimensions,
   offset: rigidbodyColliderEditOffset,
   rotation: rigidbodyColliderEditRotation,
@@ -23824,8 +23825,9 @@ function syncRigidbodyColliderTransformControls(): void {
     return
   }
   const previewGroup = rigidbodyColliderEditPreviewGroup.value
-  if (!previewGroup) {
+  if (!previewGroup || !rigidbodyColliderEditCanTransform.value) {
     transformControls.detach()
+    transformControls.enabled = false
     return
   }
   const mode = rigidbodyColliderEditTransformMode.value

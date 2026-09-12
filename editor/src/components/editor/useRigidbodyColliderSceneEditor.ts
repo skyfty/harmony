@@ -53,6 +53,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   const colliderDimensions = reactive({ x: 1, y: 1, z: 1 })
   const colliderOffset = reactive({ x: 0, y: 0, z: 0 })
   const colliderRotation = reactive({ x: 0, y: 0, z: 0 })
+  const canTransform = computed(() => ready.value && colliderKind.value !== 'convex')
 
   const selectedNode = computed(() => sceneStore.selectedNode)
   const rigidbodyComponent = computed<SceneNodeComponentState<RigidbodyComponentProps> | null>(() => {
@@ -252,6 +253,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     return buildDefaultColliderShape({
       kind,
       samplingObject,
+      scale: activeScale,
       convexGeometry: kind === 'convex' ? convexGeometry : null,
       convexSimplifyPass: config.primary,
     })
@@ -283,11 +285,11 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     }
     applyEditableColliderShape(previewGroup, shape)
     updateState()
-    if (shape.kind === 'sphere' && transformMode.value === 'rotate') {
+    if (shape.kind === 'convex' || (shape.kind === 'sphere' && transformMode.value === 'rotate')) {
       transformMode.value = 'translate'
-      options.onTransformModeChange?.(transformMode.value)
     }
     previewGroup.updateMatrixWorld(true)
+    options.onTransformModeChange?.(transformMode.value)
   }
 
   function activate(): boolean {
@@ -451,6 +453,9 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   }
 
   function setTransformMode(mode: ColliderTransformMode): void {
+    if (colliderKind.value === 'convex') {
+      return
+    }
     if (mode === 'rotate' && colliderKind.value === 'sphere') {
       return
     }
@@ -479,7 +484,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   }
 
   function handleTransformObjectChange(): void {
-    if (!previewGroup || !active.value) {
+    if (!previewGroup || !active.value || colliderKind.value === 'convex') {
       return
     }
     constrainColliderGroupTransform(previewGroup, colliderKind.value)
@@ -500,6 +505,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     nodeLabel,
     colliderKind,
     transformMode,
+    canTransform,
     dimensions: colliderDimensions,
     offset: colliderOffset,
     rotation: colliderRotation,

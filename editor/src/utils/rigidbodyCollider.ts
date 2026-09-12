@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { SceneNode } from '@schema/core'
 import type { RigidbodyPhysicsShape } from '@schema/components'
+import { computeOrientedBoxFromObject } from './orientedBox'
 
 export type ColliderScaleFactors = { x: number; y: number; z: number }
 
@@ -67,6 +68,28 @@ export function buildBoxShapeFromObject(
   object: THREE.Object3D,
   _scaleFactors: ColliderScaleFactors = DEFAULT_COLLIDER_SCALE,
 ): RigidbodyPhysicsShape | null {
+  const oriented = computeOrientedBoxFromObject(object)
+  if (oriented) {
+    return {
+      kind: 'box',
+      halfExtents: [
+        oriented.halfSize.x,
+        oriented.halfSize.y,
+        oriented.halfSize.z,
+      ],
+      offset: [
+        oriented.center.x,
+        oriented.center.y,
+        oriented.center.z,
+      ],
+      rotation: [
+        oriented.rotation.x,
+        oriented.rotation.y,
+        oriented.rotation.z,
+      ],
+      applyScale: true,
+    }
+  }
   const box = computeColliderBoundingBox(object)
   if (!box) {
     return null

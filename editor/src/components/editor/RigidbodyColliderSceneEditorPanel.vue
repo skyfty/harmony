@@ -26,9 +26,13 @@ const emit = defineEmits<{
   (event: 'cancel'): void
 }>()
 
-const canRotate = computed(() => props.colliderKind !== 'sphere')
+const canTransform = computed(() => props.colliderKind !== 'convex')
+const canRotate = computed(() => canTransform.value && props.colliderKind !== 'sphere')
 
 function selectTransformMode(mode: ColliderTransformMode): void {
+  if (!canTransform.value) {
+    return
+  }
   if (mode === 'rotate' && !canRotate.value) {
     return
   }
@@ -77,8 +81,8 @@ function selectTransformMode(mode: ColliderTransformMode): void {
             size="small"
             icon
             variant="tonal"
-            :color="transformMode === 'translate' ? 'primary' : undefined"
-            :disabled="!ready"
+            :color="canTransform && transformMode === 'translate' ? 'primary' : undefined"
+            :disabled="!ready || !canTransform"
             title="Move"
             aria-label="Move"
             @click="selectTransformMode('translate')"
@@ -89,7 +93,7 @@ function selectTransformMode(mode: ColliderTransformMode): void {
             size="small"
             icon
             variant="tonal"
-            :color="transformMode === 'rotate' ? 'primary' : undefined"
+            :color="canRotate && transformMode === 'rotate' ? 'primary' : undefined"
             :disabled="!ready || !canRotate"
             title="Rotate"
             aria-label="Rotate"
@@ -101,8 +105,8 @@ function selectTransformMode(mode: ColliderTransformMode): void {
             size="small"
             icon
             variant="tonal"
-            :color="transformMode === 'scale' ? 'primary' : undefined"
-            :disabled="!ready"
+            :color="canTransform && transformMode === 'scale' ? 'primary' : undefined"
+            :disabled="!ready || !canTransform"
             title="Scale"
             aria-label="Scale"
             @click="selectTransformMode('scale')"
@@ -201,6 +205,12 @@ function selectTransformMode(mode: ColliderTransformMode): void {
   display: flex;
   justify-content: flex-end;
   gap: 4px;
+}
+
+.rigidbody-collider-scene-editor__note {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: rgba(255, 213, 128, 0.92);
 }
 
 .rigidbody-collider-scene-editor__stats-row {

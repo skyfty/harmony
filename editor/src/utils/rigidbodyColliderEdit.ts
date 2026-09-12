@@ -15,6 +15,7 @@ import {
   type ConvexSimplifyPass,
 } from '@/utils/convexSimplify'
 import { resolveNodeScaleFactors, type ColliderScaleFactors } from '@/utils/rigidbodyCollider'
+import { computeOrientedBoxFromObject } from './orientedBox'
 
 export type ColliderShapeKind = 'box' | 'sphere' | 'capsule' | 'convex'
 
@@ -274,10 +275,11 @@ export function resolveColliderGroupRotationTuple(colliderGroup: THREE.Object3D)
 export function buildDefaultColliderShape(params: {
   kind: ColliderShapeKind
   samplingObject: THREE.Object3D
+  scale: THREE.Vector3
   convexGeometry?: THREE.BufferGeometry | null
   convexSimplifyPass?: ConvexSimplifyPass
 }): EditableColliderShape | null {
-  const { kind, samplingObject, convexGeometry, convexSimplifyPass } = params
+  const { kind, samplingObject, scale, convexGeometry, convexSimplifyPass } = params
   samplingObject.updateMatrixWorld(true)
   const bounds = new THREE.Box3().setFromObject(samplingObject)
   if (bounds.isEmpty()) {
@@ -326,6 +328,15 @@ export function buildDefaultColliderShape(params: {
   const center = bounds.getCenter(new THREE.Vector3())
 
   if (kind === 'box') {
+    const oriented = computeOrientedBoxFromObject(samplingObject)
+    if (oriented) {
+      return {
+        kind,
+        dimensions: oriented.dimensions.clone().multiply(scale),
+        offset: oriented.center.clone().multiply(scale),
+        rotation: oriented.rotation.clone(),
+      }
+    }
     return {
       kind,
       dimensions: new THREE.Vector3(
