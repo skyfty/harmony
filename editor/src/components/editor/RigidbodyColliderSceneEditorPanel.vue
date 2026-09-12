@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
+  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
+  clampRigidbodyConvexDecompositionConfig,
+  type RigidbodyConvexDecompositionCustomConfig,
+  type RigidbodyConvexDecompositionLevel,
+} from '@schema/components'
+import {
   COLLIDER_SHAPE_OPTIONS,
   type ColliderShapeKind,
 } from '@/utils/rigidbodyColliderEdit'
@@ -10,6 +16,8 @@ const props = defineProps<{
   visible: boolean
   nodeLabel: string
   colliderKind: ColliderShapeKind
+  convexDetailLevel: RigidbodyConvexDecompositionLevel
+  convexDecompositionConfig: RigidbodyConvexDecompositionCustomConfig
   transformMode: ColliderTransformMode
   ready: boolean
   error: string | null
@@ -20,14 +28,69 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update:collider-kind', kind: ColliderShapeKind | null): void
+  (event: 'update:convex-detail', level: RigidbodyConvexDecompositionLevel | null): void
+  (event: 'update:convex-decomposition-config', config: RigidbodyConvexDecompositionCustomConfig): void
   (event: 'update:transform-mode', mode: ColliderTransformMode): void
   (event: 'auto-fit'): void
   (event: 'save'): void
   (event: 'cancel'): void
 }>()
 
+const CONVEX_DETAIL_OPTIONS: Array<{ label: string; value: RigidbodyConvexDecompositionLevel }> = [
+  { label: 'Default', value: 'default' },
+  { label: 'Fine', value: 'fine' },
+  { label: 'Coarse', value: 'coarse' },
+  { label: 'Ultra', value: 'ultra' },
+  { label: 'Custom', value: 'custom' },
+]
+
+const FILL_MODE_OPTIONS = [
+  { label: 'Flood', value: 'flood' },
+  { label: 'Surface', value: 'surface' },
+  { label: 'Raycast', value: 'raycast' },
+]
+
 const canTransform = computed(() => props.colliderKind !== 'convex')
 const canRotate = computed(() => canTransform.value && props.colliderKind !== 'sphere')
+
+function updateConvexDecompositionConfig(
+  patch: Partial<RigidbodyConvexDecompositionCustomConfig>,
+): void {
+  emit('update:convex-decomposition-config', clampRigidbodyConvexDecompositionConfig({
+    ...props.convexDecompositionConfig,
+    ...patch,
+  }))
+}
+
+function handleConvexNumberInput(
+  key: 'maxHulls' | 'voxelResolution' | 'maxVerticesPerHull' | 'minVolumePercentError' | 'maxRecursionDepth',
+  value: string | number,
+): void {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return
+  }
+  updateConvexDecompositionConfig({ [key]: numeric })
+}
+
+function handleConvexBooleanChange(key: 'shrinkWrap' | 'findBestPlane', value: boolean | null): void {
+  if (value !== null) {
+    updateConvexDecompositionConfig({ [key]: value })
+  }
+}
+
+function handleConvexFillModeChange(value: 'flood' | 'surface' | 'raycast' | null): void {
+  if (value) {
+    updateConvexDecompositionConfig({ fillMode: value })
+  }
+}
+
+function resetConvexDecompositionConfig(): void {
+  emit(
+    'update:convex-decomposition-config',
+    clampRigidbodyConvexDecompositionConfig(DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG),
+  )
+}
 
 function selectTransformMode(mode: ColliderTransformMode): void {
   if (!canTransform.value) {
@@ -76,6 +139,128 @@ function selectTransformMode(mode: ColliderTransformMode): void {
           :disabled="!ready"
           @update:modelValue="(value: ColliderShapeKind | null) => emit('update:collider-kind', value)"
         />
+        <v-select
+          v-if="colliderKind === 'convex'"
+          label="Convex Detail"
+          density="compact"
+          variant="outlined"
+          hide-details
+          :items="CONVEX_DETAIL_OPTIONS"
+          item-title="label"
+          item-value="value"
+          :model-value="convexDetailLevel"
+          :disabled="!ready"
+          @update:modelValue="(value: RigidbodyConvexDecompositionLevel | null) => emit('update:convex-detail', value)"
+        />
+        <v-expansion-panels
+          v-if="colliderKind === 'convex' && convexDetailLevel === 'custom'"
+          density="compact"
+          variant="accordion"
+          class="rigidbody-collider-scene-editor__convex-custom"
+        >
+          <v-expansion-panel>
+            <v-expansion-panel-title>Custom Convex Settings</v-expansion-panel-title>
+            <v-expansion-panel-text>
+              <v-text-field
+                label="Max Hulls"
+                type="number"
+                density="compact"
+                variant="underlined"
+                min="1"
+                max="128"
+                step="1"
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.maxHulls"
+                @update:modelValue="(value) => handleConvexNumberInput('maxHulls', value)"
+              />
+              <v-text-field
+                label="Voxel Resolution"
+                type="number"
+                density="compact"
+                variant="underlined"
+                min="10000"
+                max="800000"
+                step="10000"
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.voxelResolution"
+                @update:modelValue="(value) => handleConvexNumberInput('voxelResolution', value)"
+              />
+              <v-text-field
+                label="Max Vertices per Hull"
+                type="number"
+                density="compact"
+                variant="underlined"
+                min="4"
+                max="64"
+                step="1"
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.maxVerticesPerHull"
+                @update:modelValue="(value) => handleConvexNumberInput('maxVerticesPerHull', value)"
+              />
+              <v-text-field
+                label="Min Volume Error (%)"
+                type="number"
+                density="compact"
+                variant="underlined"
+                min="0.01"
+                max="100"
+                step="0.1"
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.minVolumePercentError"
+                @update:modelValue="(value) => handleConvexNumberInput('minVolumePercentError', value)"
+              />
+              <v-text-field
+                label="Max Recursion Depth"
+                type="number"
+                density="compact"
+                variant="underlined"
+                min="0"
+                max="8"
+                step="1"
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.maxRecursionDepth"
+                @update:modelValue="(value) => handleConvexNumberInput('maxRecursionDepth', value)"
+              />
+              <v-select
+                label="Fill Mode"
+                density="compact"
+                variant="underlined"
+                :items="FILL_MODE_OPTIONS"
+                item-title="label"
+                item-value="value"
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.fillMode"
+                @update:modelValue="handleConvexFillModeChange"
+              />
+              <v-switch
+                label="Shrink Wrap"
+                density="compact"
+                color="primary"
+                hide-details
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.shrinkWrap"
+                @update:modelValue="(value) => handleConvexBooleanChange('shrinkWrap', value)"
+              />
+              <v-switch
+                label="Find Best Plane"
+                density="compact"
+                color="primary"
+                hide-details
+                :disabled="!ready"
+                :model-value="convexDecompositionConfig.findBestPlane"
+                @update:modelValue="(value) => handleConvexBooleanChange('findBestPlane', value)"
+              />
+              <v-btn
+                size="small"
+                variant="text"
+                :disabled="!ready"
+                @click="resetConvexDecompositionConfig"
+              >
+                Reset to Default
+              </v-btn>
+            </v-expansion-panel-text>
+          </v-expansion-panel>
+        </v-expansion-panels>
         <div class="rigidbody-collider-scene-editor__mode-buttons">
           <v-btn
             size="small"
@@ -193,12 +378,18 @@ function selectTransformMode(mode: ColliderTransformMode): void {
   flex-direction: column;
   gap: 8px;
   padding: 10px;
+  max-height: min(58vh, 520px);
+  overflow-y: auto;
 }
 
 .rigidbody-collider-scene-editor__controls {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.rigidbody-collider-scene-editor__convex-custom :deep(.v-expansion-panel-text__wrapper) {
+  padding: 8px 4px 4px;
 }
 
 .rigidbody-collider-scene-editor__mode-buttons {

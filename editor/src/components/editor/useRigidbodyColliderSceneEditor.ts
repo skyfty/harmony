@@ -1,28 +1,45 @@
-import { computed, reactive, ref, shallowRef } from 'vue'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import * as THREE from 'three'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { findSceneNode } from '@/components/editor/sceneUtils'
 import {
   RIGIDBODY_COMPONENT_TYPE,
   RIGIDBODY_METADATA_KEY,
+  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
+  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
+  clampRigidbodyComponentProps,
+  clampRigidbodyConvexDecompositionConfig,
   type RigidbodyComponentMetadata,
   type RigidbodyComponentProps,
+  type RigidbodyConvexDecompositionConfig,
+  type RigidbodyConvexDecompositionCustomConfig,
+  type RigidbodyConvexDecompositionLevel,
+  type RigidbodyConvexSimplifyConfig,
+  type RigidbodyPhysicsShape,
 } from '@schema/components'
 import type { SceneNode, SceneNodeComponentState } from '@schema/core'
 import {
+  buildExportConvexShape,
+  buildRigidbodySamplingObject,
+  buildSceneNodeLookup,
+  buildSceneNodeWorldTransformMap,
+  findGroundNode,
+  mergeRigidbodyMetadata,
+  resolveRigidbodySamplingNode,
+  type SceneNodeWorldTransform,
+} from '@/utils/rigidbodyShapeBuild'
+import {
   applyEditableColliderShape,
   buildColliderMetadataPayload,
-  buildConvexGeometryFromSamplingObject,
-  buildConvexGeometryWithFallback,
+  buildConvexShapeOverlay,
   buildDefaultColliderShape,
-  cloneNodeForColliderPreview,
   constrainColliderGroupTransform,
   convertColliderMetadataShape,
   createColliderGeometryForKind,
   disposeColliderGeometry,
   normalizeColliderKind,
   resolveColliderScaleFactors,
-  resolveConvexSimplifyConfig,
   updateEditableColliderStateFromGroup,
   type ColliderShapeKind,
   type ConvertedEditableColliderShape,
@@ -38,8 +55,27 @@ type RigidbodyColliderSceneEditorOptions = {
   onTransformModeChange?: (mode: ColliderTransformMode) => void
 }
 
+type ConvexShapeState = {
+  shape: RigidbodyPhysicsShape
+  convexSimplify?: RigidbodyConvexSimplifyConfig
+  convexDecomposition?: RigidbodyConvexDecompositionConfig
+}
+
 const COLLIDER_FRAME_NAME = '__HarmonyRigidbodyColliderFrame'
 const COLLIDER_PREVIEW_NAME = '__HarmonyRigidbodyColliderPreview'
+
+function normalizeScaleComponent(value: unknown): number {
+  const numeric = typeof value === 'number' && Number.isFinite(value) ? Math.abs(value) : 1
+  return Math.max(1e-4, numeric || 1)
+}
+
+function resolveTransformScale(transform: SceneNodeWorldTransform | null | undefined): THREE.Vector3 {
+  return new THREE.Vector3(
+    normalizeScaleComponent(transform?.scale.x),
+    normalizeScaleComponent(transform?.scale.y),
+    normalizeScaleComponent(transform?.scale.z),
+  )
+}
 
 export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneEditorOptions) {
   const sceneStore = useSceneStore()
@@ -49,6 +85,12 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   const error = ref<string | null>(null)
   const nodeLabel = ref('')
   const colliderKind = ref<ColliderShapeKind>('convex')
+  const convexDetailLevel = ref<RigidbodyConvexDecompositionLevel>(
+    DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
+  )
+  const convexDecompositionConfig = ref<RigidbodyConvexDecompositionCustomConfig>(
+    clampRigidbodyConvexDecompositionConfig(DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG),
+  )
   const transformMode = ref<ColliderTransformMode>('translate')
   const colliderDimensions = reactive({ x: 1, y: 1, z: 1 })
   const colliderOffset = reactive({ x: 0, y: 0, z: 0 })
@@ -90,11 +132,17 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   let previewMesh: THREE.Mesh | null = null
   let previewEdges: THREE.LineSegments | null = null
   let convexGeometry: THREE.BufferGeometry | null = null
-  let convexUsedPass: 'primary' | 'fallback' = 'primary'
+  let convexShapeState: ConvexShapeState | null = null
   let samplingObject: THREE.Object3D | null = null
+  let samplingNode: SceneNode | null = null
+  let sourceWorldTransform: SceneNodeWorldTransform | null = null
+  let hostWorldTransform: SceneNodeWorldTransform | null = null
+  let activeComponentProps: RigidbodyComponentProps | null = null
   let activeNodeId: string | null = null
   let activeComponentId: string | null = null
   let activeMetadata: RigidbodyComponentMetadata | undefined
+  let buildToken = 0
+  let convexConfigRegenerateTimer: number | null = null
   const activeScale = new THREE.Vector3(1, 1, 1)
 
   function replaceConvexGeometry(next: THREE.BufferGeometry | null): void {
@@ -105,6 +153,11 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   }
 
   function clearPreviewObjects(): void {
+    buildToken += 1
+    if (convexConfigRegenerateTimer !== null) {
+      window.clearTimeout(convexConfigRegenerateTimer)
+      convexConfigRegenerateTimer = null
+    }
     if (previewEdges) {
       previewGroup?.remove(previewEdges)
       previewEdges.geometry.dispose()
@@ -121,7 +174,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
       convexGeometry.dispose()
       convexGeometry = null
     }
-    convexUsedPass = 'primary'
+    convexShapeState = null
     if (previewGroup) {
       frame?.remove(previewGroup)
       previewGroup = null
@@ -132,6 +185,10 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
       frame = null
     }
     samplingObject = null
+    samplingNode = null
+    sourceWorldTransform = null
+    hostWorldTransform = null
+    activeComponentProps = null
     activeNodeId = null
     activeComponentId = null
     activeMetadata = undefined
@@ -175,43 +232,36 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     })
   }
 
-  function rebuildPreviewGeometry(kind: ColliderShapeKind, forceConvexRebuild = false): void {
-    if (!previewGroup) {
-      return
-    }
+  function clearPreviewGeometryObjects(): void {
     if (previewEdges) {
-      previewGroup.remove(previewEdges)
+      previewGroup?.remove(previewEdges)
       previewEdges.geometry.dispose()
       ;(previewEdges.material as THREE.Material).dispose?.()
       previewEdges = null
     }
     if (previewMesh) {
-      previewGroup.remove(previewMesh)
+      previewGroup?.remove(previewMesh)
       disposeColliderGeometry(previewMesh.geometry, convexGeometry)
       ;(previewMesh.material as THREE.Material).dispose?.()
       previewMesh = null
     }
+  }
 
-    if (kind === 'convex') {
-      if (forceConvexRebuild || !convexGeometry) {
-        const config = resolveConvexSimplifyConfig(activeMetadata)
-        convexGeometry?.dispose()
-        const built = samplingObject
-          ? buildConvexGeometryWithFallback(samplingObject, config)
-          : null
-        convexGeometry = built?.geometry ?? null
-        convexUsedPass = built?.usedPass ?? 'primary'
-      }
-      if (!convexGeometry) {
-        error.value = 'Unable to build convex collider geometry.'
-        return
-      }
+  function rebuildPreviewGeometry(kind: ColliderShapeKind): boolean {
+    if (!previewGroup) {
+      return false
+    }
+    clearPreviewGeometryObjects()
+
+    if (kind === 'convex' && !convexGeometry) {
+      error.value = 'Unable to build convex collider geometry.'
+      return false
     }
 
     const geometry = createColliderGeometryForKind(kind, convexGeometry)
     if (!geometry) {
       error.value = 'Unable to build collider geometry.'
-      return
+      return false
     }
 
     const fillMaterial = new THREE.MeshStandardMaterial({
@@ -235,61 +285,293 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     previewEdges.name = `${COLLIDER_PREVIEW_NAME}:edges`
     previewEdges.renderOrder = 501
     previewGroup.add(previewEdges)
+    return true
   }
 
-  function resolveDefaultShape(kind: ColliderShapeKind): EditableColliderShape | null {
-    if (!samplingObject) {
-      return null
-    }
-    const config = resolveConvexSimplifyConfig(activeMetadata)
-    if (kind === 'convex') {
-      const built = buildConvexGeometryWithFallback(samplingObject, config)
-      replaceConvexGeometry(built?.geometry ?? null)
-      convexUsedPass = built?.usedPass ?? 'primary'
-      if (!convexGeometry) {
-        return null
-      }
-    }
-    return buildDefaultColliderShape({
-      kind,
-      samplingObject,
-      scale: activeScale,
-      convexGeometry: kind === 'convex' ? convexGeometry : null,
-      convexSimplifyPass: config.primary,
-    })
-  }
-
-  function resolveInitialShape(kind: ColliderShapeKind): EditableColliderShape | null {
-    const metadataShape = activeMetadata?.shape
-    if (metadataShape) {
-      const converted = convertColliderMetadataShape(metadataShape, kind, activeScale) as ConvertedEditableColliderShape | null
-      if (converted) {
-        if (converted.geometry) {
-          replaceConvexGeometry(converted.geometry)
-          convexUsedPass = activeMetadata?.convexSimplify?.usedPass ?? 'primary'
-        }
-        return converted
-      }
-    }
-    return resolveDefaultShape(kind)
-  }
-
-  function applyShape(shape: EditableColliderShape, forceConvexRebuild = false): void {
+  function applyShape(shape: EditableColliderShape): void {
     if (!previewGroup) {
       return
     }
     colliderKind.value = shape.kind
-    rebuildPreviewGeometry(shape.kind, forceConvexRebuild)
+    if (!rebuildPreviewGeometry(shape.kind)) {
+      return
+    }
     if (!previewGroup) {
       return
     }
     applyEditableColliderShape(previewGroup, shape)
     updateState()
-    if (shape.kind === 'convex' || (shape.kind === 'sphere' && transformMode.value === 'rotate')) {
+    if (shape.kind === 'sphere' && transformMode.value === 'rotate') {
       transformMode.value = 'translate'
     }
     previewGroup.updateMatrixWorld(true)
     options.onTransformModeChange?.(transformMode.value)
+    ready.value = true
+  }
+
+  function applyConvexShapeState(state: ConvexShapeState): void {
+    if (!previewGroup) {
+      return
+    }
+    const overlay = buildConvexShapeOverlay({ shape: state.shape, scale: activeScale })
+    if (!overlay) {
+      error.value = 'Unable to build convex collider geometry.'
+      return
+    }
+    const previousState = convexShapeState
+    convexShapeState = state
+    replaceConvexGeometry(overlay.geometry)
+    colliderKind.value = 'convex'
+    if (!rebuildPreviewGeometry('convex')) {
+      convexShapeState = previousState
+      return
+    }
+    if (!previewGroup) {
+      return
+    }
+    previewGroup.position.copy(overlay.offset)
+    previewGroup.rotation.set(0, 0, 0)
+    previewGroup.scale.set(1, 1, 1)
+    previewGroup.updateMatrixWorld(true)
+    transformMode.value = 'translate'
+    updateState()
+    options.onTransformModeChange?.(transformMode.value)
+    ready.value = true
+  }
+
+  function readStoredConvexState(): ConvexShapeState | null {
+    const shape = activeMetadata?.shape
+    if (!shape || (shape.kind !== 'convex' && shape.kind !== 'convex-mesh')) {
+      return null
+    }
+    return {
+      shape,
+      convexSimplify: activeMetadata?.convexSimplify,
+      convexDecomposition: activeMetadata?.convexDecomposition,
+    }
+  }
+
+  async function ensureSamplingObject(): Promise<THREE.Object3D | null> {
+    if (samplingObject) {
+      return samplingObject
+    }
+    if (!samplingNode) {
+      return null
+    }
+    const assetCacheStore = useAssetCacheStore()
+    const groundNode = findGroundNode(sceneStore.nodes)
+    const built = await buildRigidbodySamplingObject(
+      samplingNode,
+      assetCacheStore,
+      groundNode,
+      sourceWorldTransform,
+    )
+    if (!built) {
+      return null
+    }
+    samplingObject = built
+    return samplingObject
+  }
+
+  async function buildConvexStateFromExportLogic(): Promise<ConvexShapeState | null> {
+    const object = await ensureSamplingObject()
+    if (!object || !samplingNode) {
+      return null
+    }
+    const props = clampRigidbodyComponentProps(readActiveComponentProps() ?? undefined)
+    const built = await buildExportConvexShape({
+      samplingObject: object,
+      samplingNode,
+      nodeScale: { x: activeScale.x, y: activeScale.y, z: activeScale.z },
+      sourceWorldTransform,
+      hostWorldTransform,
+      decompositionLevel: props.convexDecompositionLevel,
+      decompositionCustomConfig: props.convexDecompositionConfig,
+    })
+    if (!built) {
+      return null
+    }
+    return {
+      shape: built.shape,
+      convexSimplify: built.convexSimplify,
+      convexDecomposition: built.convexDecomposition,
+    }
+  }
+
+  /** Reads the live component props so level changes (this panel or the Rigidbody panel) are honored. */
+  function readActiveComponentProps(): RigidbodyComponentProps | null {
+    if (activeNodeId) {
+      const node = sceneStore.getNodeById(activeNodeId)
+      const component = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as
+        | SceneNodeComponentState<RigidbodyComponentProps>
+        | undefined
+      if (component?.props) {
+        return component.props
+      }
+    }
+    return activeComponentProps
+  }
+
+  function invalidateConvexShape(): void {
+    convexShapeState = null
+  }
+
+  function handleConvexDetailChange(level: RigidbodyConvexDecompositionLevel | null): void {
+    if (!level || level === convexDetailLevel.value) {
+      return
+    }
+    convexDetailLevel.value = level
+    if (activeNodeId && activeComponentId) {
+      sceneStore.updateNodeComponentProps(activeNodeId, activeComponentId, {
+        convexDecompositionLevel: level,
+      })
+    }
+    if (activeComponentProps) {
+      activeComponentProps = { ...activeComponentProps, convexDecompositionLevel: level }
+    }
+    if (active.value && colliderKind.value === 'convex') {
+      invalidateConvexShape()
+      void prepareShape('convex', true)
+    }
+  }
+
+  function cancelPendingConvexConfigRegeneration(): void {
+    if (convexConfigRegenerateTimer !== null) {
+      window.clearTimeout(convexConfigRegenerateTimer)
+      convexConfigRegenerateTimer = null
+    }
+  }
+
+  /** Custom decomposition inputs fire per keystroke, so regeneration is debounced. */
+  function scheduleConvexConfigRegeneration(): void {
+    cancelPendingConvexConfigRegeneration()
+    convexConfigRegenerateTimer = window.setTimeout(() => {
+      convexConfigRegenerateTimer = null
+      if (!active.value || colliderKind.value !== 'convex' || convexDetailLevel.value !== 'custom') {
+        return
+      }
+      invalidateConvexShape()
+      void prepareShape('convex', true)
+    }, 350)
+  }
+
+  function handleConvexDecompositionConfigChange(
+    config: RigidbodyConvexDecompositionCustomConfig,
+  ): void {
+    const next = clampRigidbodyConvexDecompositionConfig(config)
+    convexDecompositionConfig.value = next
+    if (activeNodeId && activeComponentId) {
+      sceneStore.updateNodeComponentProps(activeNodeId, activeComponentId, {
+        convexDecompositionConfig: next,
+      })
+    }
+    if (activeComponentProps) {
+      activeComponentProps = { ...activeComponentProps, convexDecompositionConfig: next }
+    }
+    if (active.value && colliderKind.value === 'convex' && convexDetailLevel.value === 'custom') {
+      scheduleConvexConfigRegeneration()
+    }
+  }
+
+  watch(
+    () => rigidbodyComponent.value?.props?.convexDecompositionLevel,
+    (level) => {
+      if (!level || level === convexDetailLevel.value) {
+        return
+      }
+      convexDetailLevel.value = level
+      if (active.value && colliderKind.value === 'convex') {
+        invalidateConvexShape()
+        void prepareShape('convex', true)
+      }
+    },
+  )
+
+  watch(
+    () => rigidbodyComponent.value?.props?.convexDecompositionConfig,
+    (config) => {
+      const next = clampRigidbodyConvexDecompositionConfig(config)
+      if (JSON.stringify(next) === JSON.stringify(convexDecompositionConfig.value)) {
+        return
+      }
+      convexDecompositionConfig.value = next
+      if (active.value && colliderKind.value === 'convex' && convexDetailLevel.value === 'custom') {
+        scheduleConvexConfigRegeneration()
+      }
+    },
+    { deep: true },
+  )
+
+  async function resolveEditableShapeFromSamplingObject(
+    kind: ColliderShapeKind,
+    forceRegenerate: boolean,
+  ): Promise<EditableColliderShape | null> {
+    if (!forceRegenerate) {
+      const metadataShape = activeMetadata?.shape
+      if (metadataShape) {
+        const converted = convertColliderMetadataShape(
+          metadataShape,
+          kind,
+          activeScale,
+        ) as ConvertedEditableColliderShape | null
+        if (converted) {
+          return converted
+        }
+      }
+    }
+    const object = await ensureSamplingObject()
+    if (!object) {
+      return null
+    }
+    return buildDefaultColliderShape({ kind, samplingObject: object, scale: activeScale })
+  }
+
+  async function prepareShape(kind: ColliderShapeKind, forceRegenerate = false): Promise<void> {
+    const token = buildToken + 1
+    buildToken = token
+    error.value = null
+    ready.value = false
+
+    try {
+      if (kind === 'convex') {
+        if (!forceRegenerate) {
+          const stored = convexShapeState ?? readStoredConvexState()
+          if (stored) {
+            if (token !== buildToken) {
+              return
+            }
+            applyConvexShapeState(stored)
+            return
+          }
+        }
+        const generated = await buildConvexStateFromExportLogic()
+        if (token !== buildToken || !previewGroup) {
+          return
+        }
+        if (!generated) {
+          error.value = 'Unable to build convex collider geometry.'
+          return
+        }
+        applyConvexShapeState(generated)
+        return
+      }
+
+      const shape = await resolveEditableShapeFromSamplingObject(kind, forceRegenerate)
+      if (token !== buildToken || !previewGroup) {
+        return
+      }
+      if (!shape) {
+        error.value = 'Unable to build collider geometry from the selected node.'
+        return
+      }
+      applyShape(shape)
+    } catch (buildError) {
+      if (token !== buildToken) {
+        return
+      }
+      console.warn('[SceneViewport] Failed to build collider preview geometry', buildError)
+      error.value = 'Unable to build collider geometry from the selected node.'
+    }
   }
 
   function activate(): boolean {
@@ -306,15 +588,9 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
       error.value = 'Select a node with an enabled Rigidbody component.'
       return false
     }
-    const targetId = targetNodeId.value
     const target = targetNode.value
-    if (!targetId || !target) {
+    if (!target) {
       error.value = 'No target node available for collider editing.'
-      return false
-    }
-    const object = options.getTargetObject(targetId)
-    if (!object && target.nodeType !== 'Group') {
-      error.value = 'No runtime object available for collider editing.'
       return false
     }
     const parent = options.getOverlayParent()
@@ -323,37 +599,39 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
       return false
     }
 
-    const clone = cloneNodeForColliderPreview(target, true)
-    if (!clone) {
+    const nodes = sceneStore.nodes
+    const lookup = buildSceneNodeLookup(nodes)
+    const resolvedSamplingNode = resolveRigidbodySamplingNode(node, component, lookup)
+    if (!resolvedSamplingNode) {
       error.value = 'The collider sampling model is not available.'
       return false
     }
-    clone.updateMatrixWorld(true)
-    const bounds = new THREE.Box3().setFromObject(clone)
-    if (bounds.isEmpty()) {
-      error.value = 'The selected node has no visible geometry.'
-      return false
-    }
-
-    const worldPosition = new THREE.Vector3()
-    const worldQuaternion = new THREE.Quaternion()
-    const worldScale = new THREE.Vector3(1, 1, 1)
-    if (object) {
-      object.updateMatrixWorld(true)
-      object.getWorldPosition(worldPosition)
-      object.getWorldQuaternion(worldQuaternion)
-      object.getWorldScale(worldScale)
+    const worldTransformMap = buildSceneNodeWorldTransformMap(nodes)
+    const hostTransform = worldTransformMap.get(node.id) ?? null
+    const sourceTransform = worldTransformMap.get(resolvedSamplingNode.id) ?? hostTransform
+    let scale: THREE.Vector3
+    if (hostTransform) {
+      scale = resolveTransformScale(hostTransform)
     } else {
-      worldPosition.set(target.position.x, target.position.y, target.position.z)
-      worldQuaternion.setFromEuler(new THREE.Euler(target.rotation.x, target.rotation.y, target.rotation.z, 'XYZ'))
-      const fallbackScale = resolveColliderScaleFactors(target)
-      worldScale.set(fallbackScale.x, fallbackScale.y, fallbackScale.z)
+      const fallback = resolveColliderScaleFactors(node)
+      scale = new THREE.Vector3(
+        normalizeScaleComponent(fallback.x),
+        normalizeScaleComponent(fallback.y),
+        normalizeScaleComponent(fallback.z),
+      )
     }
 
     frame = new THREE.Group()
     frame.name = COLLIDER_FRAME_NAME
-    frame.position.copy(worldPosition)
-    frame.quaternion.copy(worldQuaternion)
+    if (hostTransform) {
+      frame.position.copy(hostTransform.position)
+      frame.quaternion.copy(hostTransform.quaternion)
+    } else {
+      frame.position.set(node.position.x, node.position.y, node.position.z)
+      frame.quaternion.setFromEuler(
+        new THREE.Euler(node.rotation.x, node.rotation.y, node.rotation.z, 'XYZ'),
+      )
+    }
     frame.scale.set(1, 1, 1)
     frame.userData.editorOnly = true
     ;(frame as any).raycast = () => {}
@@ -366,33 +644,27 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     frame.add(previewGroup)
     previewGroupRef.value = previewGroup
 
-    samplingObject = clone
+    samplingNode = resolvedSamplingNode
+    sourceWorldTransform = sourceTransform
+    hostWorldTransform = hostTransform
+    activeComponentProps = component.props
     activeNodeId = node.id
     activeComponentId = component.id
     activeMetadata = component.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
-    activeScale.set(
-      Math.max(1e-4, Math.abs(worldScale.x) || 1),
-      Math.max(1e-4, Math.abs(worldScale.y) || 1),
-      Math.max(1e-4, Math.abs(worldScale.z) || 1),
+    const clampedProps = clampRigidbodyComponentProps(component.props)
+    convexDetailLevel.value = clampedProps.convexDecompositionLevel
+    convexDecompositionConfig.value = clampRigidbodyConvexDecompositionConfig(
+      clampedProps.convexDecompositionConfig,
     )
+    activeScale.copy(scale)
     nodeLabel.value = target.name ?? node.name ?? 'Current Node'
 
     const desiredKind = normalizeColliderKind(component.props.colliderType)
-    const shape = resolveInitialShape(desiredKind)
-      ?? resolveInitialShape('convex')
-      ?? {
-        kind: 'box' as const,
-        dimensions: new THREE.Vector3(1, 1, 1),
-        offset: new THREE.Vector3(),
-        rotation: new THREE.Euler(),
-      }
-    applyShape(shape)
-    if (error.value) {
-      clearPreviewObjects()
-      return false
-    }
-    ready.value = true
+    // Mark the session active before resolving the shape: the stored-shape path of
+    // `prepareShape` resolves synchronously, so it must not observe a stale inactive state.
     setActive(true)
+    ready.value = false
+    void prepareShape(desiredKind)
     return true
   }
 
@@ -400,36 +672,40 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     const shouldSave = optionsArg.save === true
     let saved = false
     if (shouldSave && active.value && previewGroup && activeNodeId && activeComponentId) {
-      const config = resolveConvexSimplifyConfig(activeMetadata)
-      const payload = buildColliderMetadataPayload({
-        kind: colliderKind.value,
-        colliderGroup: previewGroup,
-        scale: activeScale,
-        convexGeometry: colliderKind.value === 'convex' ? convexGeometry : null,
-        convexSimplifyConfig: config,
-        convexSimplifyPasses: {
-          primary: config.primary,
-          fallback: config.fallback,
-          limits: config.limits,
-        },
-        convexUsedPass,
-        buildConvexGeometry: samplingObject
-          ? (pass) => buildConvexGeometryFromSamplingObject(samplingObject as THREE.Object3D, pass)
-          : undefined,
-      })
-      if (payload) {
-        const nextMetadata: RigidbodyComponentMetadata = {
-          shape: payload.shape,
-          generatedAt: new Date().toISOString(),
-          convexSimplify: payload.convexSimplify,
+      const node = sceneStore.getNodeById(activeNodeId)
+      const currentComponent = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as
+        | SceneNodeComponentState<RigidbodyComponentProps>
+        | undefined
+      if (currentComponent) {
+        let shape: RigidbodyPhysicsShape | null = null
+        let convexSimplify: RigidbodyConvexSimplifyConfig | undefined
+        let convexDecomposition: RigidbodyConvexDecompositionConfig | undefined
+        if (colliderKind.value === 'convex') {
+          if (convexShapeState) {
+            shape = convexShapeState.shape
+            convexSimplify = convexShapeState.convexSimplify
+            convexDecomposition = convexShapeState.convexDecomposition
+          }
+        } else {
+          const payload = buildColliderMetadataPayload({
+            kind: colliderKind.value,
+            colliderGroup: previewGroup,
+            scale: activeScale,
+          })
+          shape = payload?.shape ?? null
         }
-        const node = sceneStore.getNodeById(activeNodeId)
-        const currentComponent = node?.components?.[RIGIDBODY_COMPONENT_TYPE] as
-          | SceneNodeComponentState<RigidbodyComponentProps>
-          | undefined
-        if (currentComponent) {
+        if (shape) {
+          const existingPayload = currentComponent.metadata?.[RIGIDBODY_METADATA_KEY] as
+            | RigidbodyComponentMetadata
+            | undefined
+          const merged = mergeRigidbodyMetadata(
+            { ...(existingPayload ?? {}) },
+            shape,
+            convexSimplify,
+            convexDecomposition,
+          )
           const preservedMetadata = { ...(currentComponent.metadata ?? {}) }
-          preservedMetadata[RIGIDBODY_METADATA_KEY] = nextMetadata
+          preservedMetadata[RIGIDBODY_METADATA_KEY] = merged[RIGIDBODY_METADATA_KEY]
           sceneStore.updateNodeComponentMetadata(activeNodeId, activeComponentId, preservedMetadata)
           sceneStore.updateNodeComponentProps(activeNodeId, activeComponentId, {
             colliderType: colliderKind.value,
@@ -464,23 +740,17 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   }
 
   function handleShapeKindChange(kind: ColliderShapeKind | null): void {
-    if (!kind || !ready.value || kind === colliderKind.value) {
+    if (!kind || !active.value || kind === colliderKind.value) {
       return
     }
-    const shape = resolveInitialShape(kind)
-    if (shape) {
-      applyShape(shape)
-    }
+    void prepareShape(kind)
   }
 
   function handleAutoFit(): void {
-    if (!ready.value) {
+    if (!active.value) {
       return
     }
-    const shape = resolveDefaultShape(colliderKind.value)
-    if (shape) {
-      applyShape(shape)
-    }
+    void prepareShape(colliderKind.value, true)
   }
 
   function handleTransformObjectChange(): void {
@@ -504,6 +774,8 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     available,
     nodeLabel,
     colliderKind,
+    convexDetailLevel,
+    convexDecompositionConfig,
     transformMode,
     canTransform,
     dimensions: colliderDimensions,
@@ -516,6 +788,8 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     dispose,
     setTransformMode,
     handleShapeKindChange,
+    handleConvexDetailChange,
+    handleConvexDecompositionConfigChange,
     handleAutoFit,
     handleTransformObjectChange,
     syncStateFromGroup,

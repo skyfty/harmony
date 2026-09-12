@@ -1106,6 +1106,8 @@ const {
   available: rigidbodyColliderEditAvailable,
   nodeLabel: rigidbodyColliderEditNodeLabel,
   colliderKind: rigidbodyColliderEditKind,
+  convexDetailLevel: rigidbodyColliderEditConvexDetailLevel,
+  convexDecompositionConfig: rigidbodyColliderEditConvexDecompositionConfig,
   transformMode: rigidbodyColliderEditTransformMode,
   canTransform: rigidbodyColliderEditCanTransform,
   dimensions: rigidbodyColliderEditDimensions,
@@ -1117,6 +1119,8 @@ const {
   dispose: disposeRigidbodyColliderEditor,
   setTransformMode: setRigidbodyColliderTransformMode,
   handleShapeKindChange: handleRigidbodyColliderShapeKindChange,
+  handleConvexDetailChange: handleRigidbodyColliderConvexDetailChange,
+  handleConvexDecompositionConfigChange: handleRigidbodyColliderConvexDecompositionConfigChange,
   handleAutoFit: handleRigidbodyColliderAutoFit,
   handleTransformObjectChange: handleRigidbodyColliderTransformObjectChange,
 } = rigidbodyColliderEditor
@@ -24774,6 +24778,8 @@ defineExpose({
       :visible="rigidbodyColliderEditActive"
       :node-label="rigidbodyColliderEditNodeLabel"
       :collider-kind="rigidbodyColliderEditKind"
+      :convex-detail-level="rigidbodyColliderEditConvexDetailLevel"
+      :convex-decomposition-config="rigidbodyColliderEditConvexDecompositionConfig"
       :transform-mode="rigidbodyColliderEditTransformMode"
       :ready="rigidbodyColliderEditReady"
       :error="rigidbodyColliderEditError"
@@ -24781,6 +24787,8 @@ defineExpose({
       :offset="rigidbodyColliderEditOffset"
       :rotation="rigidbodyColliderEditRotation"
       @update:collider-kind="handleRigidbodyColliderShapeKindChange"
+      @update:convex-detail="handleRigidbodyColliderConvexDetailChange"
+      @update:convex-decomposition-config="handleRigidbodyColliderConvexDecompositionConfigChange"
       @update:transform-mode="setRigidbodyColliderTransformMode"
       @auto-fit="handleRigidbodyColliderAutoFit"
       @save="deactivateRigidbodyColliderEdit({ save: true })"

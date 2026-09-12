@@ -8,13 +8,8 @@ import {
   type RigidbodyComponentProps,
   type RigidbodyColliderType,
   type RigidbodyBodyType,
-  type RigidbodyConvexDecompositionLevel,
-  type RigidbodyConvexDecompositionCustomConfig,
   clampRigidbodyComponentProps,
-  clampRigidbodyConvexDecompositionConfig,
-  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG,
   DEFAULT_RIGIDBODY_COLLIDER_TYPE,
-  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
   DEFAULT_RIGIDBODY_MASS,
   MIN_RIGIDBODY_MASS,
   MAX_RIGIDBODY_MASS,
@@ -42,20 +37,6 @@ const COLLIDER_TYPE_OPTIONS: Array<{ label: string; value: RigidbodyColliderType
   { label: 'Capsule', value: 'capsule' },
 ]
 
-const DECOMPOSITION_LEVEL_OPTIONS: Array<{ label: string; value: RigidbodyConvexDecompositionLevel }> = [
-  { label: 'Default', value: 'default' },
-  { label: 'Fine', value: 'fine' },
-  { label: 'Coarse', value: 'coarse' },
-  { label: 'Ultra', value: 'ultra' },
-  { label: 'Custom', value: 'custom' },
-]
-
-const FILL_MODE_OPTIONS = [
-  { label: 'Flood', value: 'flood' },
-  { label: 'Surface', value: 'surface' },
-  { label: 'Raycast', value: 'raycast' },
-]
-
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
@@ -73,12 +54,6 @@ const normalizedProps = computed(() => {
 const localMass = ref(DEFAULT_RIGIDBODY_MASS)
 const localBodyType = ref<RigidbodyBodyType>('DYNAMIC')
 const localColliderType = ref<RigidbodyColliderType>(DEFAULT_RIGIDBODY_COLLIDER_TYPE)
-const localConvexDecompositionLevel = ref<RigidbodyConvexDecompositionLevel>(
-  DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_LEVEL,
-)
-const localConvexDecompositionConfig = ref<RigidbodyConvexDecompositionCustomConfig>(
-  clampRigidbodyConvexDecompositionConfig(DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG),
-)
 const localLinearDamping = ref(DEFAULT_LINEAR_DAMPING)
 const localAngularDamping = ref(DEFAULT_ANGULAR_DAMPING)
 const localRestitution = ref(DEFAULT_RIGIDBODY_RESTITUTION)
@@ -121,10 +96,6 @@ watch(
       localMass.value = props.mass
     }
     localColliderType.value = props.colliderType
-    localConvexDecompositionLevel.value = props.convexDecompositionLevel
-    localConvexDecompositionConfig.value = clampRigidbodyConvexDecompositionConfig(
-      props.convexDecompositionConfig,
-    )
     localLinearDamping.value = props.linearDamping
     localAngularDamping.value = props.angularDamping
     localRestitution.value = props.restitution
@@ -246,55 +217,6 @@ function handleBodyTypeChange(value: RigidbodyBodyType | null) {
     return
   }
   updateComponent({ bodyType: value })
-}
-
-function handleConvexDecompositionLevelChange(value: RigidbodyConvexDecompositionLevel | null) {
-  if (!value || value === normalizedProps.value.convexDecompositionLevel) {
-    return
-  }
-  localConvexDecompositionLevel.value = value
-  updateComponent({ convexDecompositionLevel: value })
-}
-
-function updateConvexDecompositionConfig(
-  patch: Partial<RigidbodyConvexDecompositionCustomConfig>,
-): void {
-  const next = clampRigidbodyConvexDecompositionConfig({
-    ...localConvexDecompositionConfig.value,
-    ...patch,
-  })
-  localConvexDecompositionConfig.value = next
-  updateComponent({ convexDecompositionConfig: next })
-}
-
-function handleConvexDecompositionNumberInput(
-  key: 'maxHulls' | 'voxelResolution' | 'maxVerticesPerHull' | 'minVolumePercentError' | 'maxRecursionDepth',
-  value: string | number,
-): void {
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  updateConvexDecompositionConfig({ [key]: numeric })
-}
-
-function handleConvexDecompositionBooleanChange(
-  key: 'shrinkWrap' | 'findBestPlane',
-  value: boolean | null,
-): void {
-  if (value !== null) {
-    updateConvexDecompositionConfig({ [key]: value })
-  }
-}
-
-function handleConvexDecompositionFillModeChange(value: 'flood' | 'surface' | 'raycast' | null): void {
-  if (value) {
-    updateConvexDecompositionConfig({ fillMode: value })
-  }
-}
-
-function resetConvexDecompositionConfig(): void {
-  updateConvexDecompositionConfig(DEFAULT_RIGIDBODY_CONVEX_DECOMPOSITION_CONFIG)
 }
 
 function handleOpenSceneColliderEditor() {
@@ -419,117 +341,6 @@ function handleTargetNodeChange(nodeId: string | null) {
             </template>
           </v-tooltip>
         </div>
-        <v-select
-          v-if="localColliderType === 'convex'"
-          label="Convex Detail"
-          density="compact"
-          variant="underlined"
-          :items="DECOMPOSITION_LEVEL_OPTIONS"
-          item-title="label"
-          item-value="value"
-          :model-value="localConvexDecompositionLevel"
-          :disabled="!rigidbodyComponent?.enabled"
-          persistent-hint
-          @update:modelValue="handleConvexDecompositionLevelChange"
-        />
-        <v-expansion-panels
-          v-if="localColliderType === 'convex' && localConvexDecompositionLevel === 'custom'"
-          density="compact"
-          variant="accordion"
-          class="rigidbody-panel__convex-custom"
-        >
-          <v-expansion-panel>
-            <v-expansion-panel-title>Custom Convex Settings</v-expansion-panel-title>
-            <v-expansion-panel-text>
-              <v-text-field
-                label="Max Hulls"
-                type="number"
-                density="compact"
-                variant="underlined"
-                min="1"
-                max="128"
-                step="1"
-                :model-value="localConvexDecompositionConfig.maxHulls"
-                @update:modelValue="(value) => handleConvexDecompositionNumberInput('maxHulls', value)"
-              />
-              <v-text-field
-                label="Voxel Resolution"
-                type="number"
-                density="compact"
-                variant="underlined"
-                min="10000"
-                max="800000"
-                step="10000"
-                :model-value="localConvexDecompositionConfig.voxelResolution"
-                @update:modelValue="(value) => handleConvexDecompositionNumberInput('voxelResolution', value)"
-              />
-              <v-text-field
-                label="Max Vertices per Hull"
-                type="number"
-                density="compact"
-                variant="underlined"
-                min="4"
-                max="64"
-                step="1"
-                :model-value="localConvexDecompositionConfig.maxVerticesPerHull"
-                @update:modelValue="(value) => handleConvexDecompositionNumberInput('maxVerticesPerHull', value)"
-              />
-              <v-text-field
-                label="Min Volume Error (%)"
-                type="number"
-                density="compact"
-                variant="underlined"
-                min="0.01"
-                max="100"
-                step="0.1"
-                :model-value="localConvexDecompositionConfig.minVolumePercentError"
-                @update:modelValue="(value) => handleConvexDecompositionNumberInput('minVolumePercentError', value)"
-              />
-              <v-text-field
-                label="Max Recursion Depth"
-                type="number"
-                density="compact"
-                variant="underlined"
-                min="0"
-                max="8"
-                step="1"
-                :model-value="localConvexDecompositionConfig.maxRecursionDepth"
-                @update:modelValue="(value) => handleConvexDecompositionNumberInput('maxRecursionDepth', value)"
-              />
-              <v-select
-                label="Fill Mode"
-                density="compact"
-                variant="underlined"
-                :items="FILL_MODE_OPTIONS"
-                item-title="label"
-                item-value="value"
-                :model-value="localConvexDecompositionConfig.fillMode"
-                @update:modelValue="handleConvexDecompositionFillModeChange"
-              />
-              <v-switch
-                label="Shrink Wrap"
-                density="compact"
-                color="primary"
-                :model-value="localConvexDecompositionConfig.shrinkWrap"
-                @update:modelValue="(value) => handleConvexDecompositionBooleanChange('shrinkWrap', value)"
-              />
-              <v-switch
-                label="Find Best Plane"
-                density="compact"
-                color="primary"
-                :model-value="localConvexDecompositionConfig.findBestPlane"
-                @update:modelValue="(value) => handleConvexDecompositionBooleanChange('findBestPlane', value)"
-              />
-              <v-btn
-                size="small"
-                variant="text"
-                @click="resetConvexDecompositionConfig"
-              >
-                Reset to Default
-              </v-btn>
-            </v-expansion-panel-text>
-          </v-expansion-panel>
-        </v-expansion-panels>
         <v-text-field
           label="Mass"
           type="number"

@@ -2,19 +2,15 @@ import * as THREE from 'three'
 import type { SceneNode } from '@schema/core'
 import {
   DEFAULT_RIGIDBODY_COLLIDER_TYPE,
-  type RigidbodyComponentMetadata,
-  type RigidbodyConvexSimplifyConfig,
   type RigidbodyPhysicsShape,
+  type RigidbodyVector3Tuple,
 } from '@schema/components'
 import { getCachedModelObject } from '@schema/modelObjectCache'
-import { getRuntimeObject } from '@/stores/sceneStore'
 import {
-  DEFAULT_CONVEX_SIMPLIFY_CONFIG,
-  buildConservativeConvexGeometryFromObject,
-  geometryStats,
-  type ConvexSimplifyPass,
-} from '@/utils/convexSimplify'
-import { resolveNodeScaleFactors, type ColliderScaleFactors } from '@/utils/rigidbodyCollider'
+  computeColliderLocalBoundingBox,
+  resolveNodeScaleFactors,
+  type ColliderScaleFactors,
+} from '@/utils/rigidbodyCollider'
 import { computeOrientedBoxFromObject } from './orientedBox'
 
 export type ColliderShapeKind = 'box' | 'sphere' | 'capsule' | 'convex'
@@ -90,131 +86,127 @@ export function cloneRuntimeObjectForCollider(
   return runtimeObject.clone(true)
 }
 
-export function cloneNodeForColliderPreview(node: SceneNode, isRoot = false): THREE.Object3D | null {
-  const runtimeObject = getRuntimeObject(node.id)
-  let clone: THREE.Object3D | null = null
+/**
+ * Converts a persisted/generated convex collision shape into a viewport overlay geometry.
+ * Vertices, part offsets and the shape offset follow the runtime `applyScale` semantics so
+ * the overlay matches the physics collider exactly.
+ */
+export function buildConvexShapeOverlay(params: {
+  shape: RigidbodyPhysicsShape
+  scale: THREE.Vector3
+}): { geometry: THREE.BufferGeometry; offset: THREE.Vector3 } | null {
+  const { shape, scale } = params
+  const applyScale = shape.applyScale === true
+  const scaleX = applyScale ? scale.x : 1
+  const scaleY = applyScale ? scale.y : 1
+  const scaleZ = applyScale ? scale.z : 1
+  const shapeOffsetTuple = shape.offset ?? [0, 0, 0]
+  const offset = new THREE.Vector3(
+    (shapeOffsetTuple[0] ?? 0) * scaleX,
+    (shapeOffsetTuple[1] ?? 0) * scaleY,
+    (shapeOffsetTuple[2] ?? 0) * scaleZ,
+  )
+  const shapeRotationTuple = shape.rotation ?? [0, 0, 0]
+  const shapeQuaternion = new THREE.Quaternion()
+    .setFromEuler(new THREE.Euler(shapeRotationTuple[0] ?? 0, shapeRotationTuple[1] ?? 0, shapeRotationTuple[2] ?? 0, 'XYZ'))
+    .normalize()
 
-  if (runtimeObject) {
-    clone = cloneRuntimeObjectForCollider(runtimeObject, node, !isRoot)
-  } else if (node.nodeType === 'Group') {
-    clone = new THREE.Group()
-  }
+  const positions: number[] = []
+  const indices: number[] = []
+  const pointHelper = new THREE.Vector3()
+  const partOffsetHelper = new THREE.Vector3()
+  const partQuaternionHelper = new THREE.Quaternion()
 
-  if (!clone) {
-    return null
-  }
-
-  clone.name = node.name ?? clone.name
-  clone.userData = {
-    ...(clone.userData ?? {}),
-    nodeId: node.id,
-  }
-
-  applyNodeTransformFromState(clone, node, { applyPositionRotation: !isRoot })
-
-  if (Array.isArray(node.children) && node.children.length) {
-    node.children.forEach((child) => {
-      const childClone = cloneNodeForColliderPreview(child, false)
-      if (childClone) {
-        clone?.add(childClone)
+  const appendPart = (
+    vertices: RigidbodyVector3Tuple[],
+    faces: number[][],
+    partOffset: RigidbodyVector3Tuple | undefined,
+    partRotation: RigidbodyVector3Tuple | undefined,
+  ): boolean => {
+    const sourceVertices = Array.isArray(vertices) ? vertices : []
+    if (sourceVertices.length < 4) {
+      return false
+    }
+    const validVertices: RigidbodyVector3Tuple[] = []
+    for (const vertex of sourceVertices) {
+      if (!Array.isArray(vertex) || vertex.length < 3) {
+        return false
+      }
+      const x = Number(vertex[0])
+      const y = Number(vertex[1])
+      const z = Number(vertex[2])
+      if (![x, y, z].every((value) => Number.isFinite(value))) {
+        return false
+      }
+      validVertices.push([x, y, z])
+    }
+    const baseIndex = positions.length / 3
+    const partOffsetTuple = partOffset ?? [0, 0, 0]
+    partOffsetHelper.set(
+      (partOffsetTuple[0] ?? 0) * scaleX,
+      (partOffsetTuple[1] ?? 0) * scaleY,
+      (partOffsetTuple[2] ?? 0) * scaleZ,
+    ).applyQuaternion(shapeQuaternion)
+    const partRotationTuple = partRotation ?? [0, 0, 0]
+    partQuaternionHelper
+      .setFromEuler(new THREE.Euler(partRotationTuple[0] ?? 0, partRotationTuple[1] ?? 0, partRotationTuple[2] ?? 0, 'XYZ'))
+      .normalize()
+    validVertices.forEach((vertex) => {
+      pointHelper
+        .set(vertex[0] * scaleX, vertex[1] * scaleY, vertex[2] * scaleZ)
+        .applyQuaternion(partQuaternionHelper)
+        .applyQuaternion(shapeQuaternion)
+        .add(partOffsetHelper)
+      positions.push(pointHelper.x, pointHelper.y, pointHelper.z)
+    })
+    if (!Array.isArray(faces)) {
+      return true
+    }
+    faces.forEach((face) => {
+      if (!Array.isArray(face) || face.length < 3) {
+        return
+      }
+      const first = Math.trunc(Number(face[0]))
+      if (!Number.isInteger(first) || first < 0 || first >= validVertices.length) {
+        return
+      }
+      for (let index = 1; index + 1 < face.length; index += 1) {
+        const b = Math.trunc(Number(face[index]))
+        const c = Math.trunc(Number(face[index + 1]))
+        if (!Number.isInteger(b) || !Number.isInteger(c)) {
+          continue
+        }
+        if (b < 0 || c < 0 || b >= validVertices.length || c >= validVertices.length) {
+          continue
+        }
+        indices.push(baseIndex + first, baseIndex + b, baseIndex + c)
       }
     })
+    return true
   }
 
-  return clone
-}
+  if (shape.kind === 'convex') {
+    appendPart(shape.vertices, shape.faces, undefined, undefined)
+  } else if (shape.kind === 'convex-mesh') {
+    const parts = Array.isArray(shape.parts) ? shape.parts : []
+    parts.forEach((part) => {
+      appendPart(part.vertices, part.faces, part.offset, part.rotation)
+    })
+  } else {
+    return null
+  }
 
-export function buildConvexGeometryFromDefinition(
-  definition: Extract<RigidbodyPhysicsShape, { kind: 'convex' }>,
-  scale: THREE.Vector3,
-): THREE.BufferGeometry | null {
-  const vertices = Array.isArray(definition.vertices) ? definition.vertices : []
-  if (vertices.length < 4) {
+  if (positions.length < 12 || indices.length < 3) {
     return null
   }
-  const positions: number[] = []
-  vertices.forEach((tuple) => {
-    const vx = Number(tuple?.[0])
-    const vy = Number(tuple?.[1])
-    const vz = Number(tuple?.[2])
-    if ([vx, vy, vz].every((value) => Number.isFinite(value))) {
-      positions.push(vx * scale.x, vy * scale.y, vz * scale.z)
-    }
-  })
-  if (positions.length < 12) {
-    return null
-  }
+
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  const faces = Array.isArray(definition.faces) ? definition.faces : []
-  const index: number[] = []
-  faces.forEach((face) => {
-    if (Array.isArray(face) && face.length >= 3) {
-      for (let i = 0; i + 2 < face.length; i += 1) {
-        const a = Number(face[0])
-        const b = Number(face[i + 1])
-        const c = Number(face[i + 2])
-        if ([a, b, c].every((value) => Number.isInteger(value) && value >= 0)) {
-          index.push(a, b, c)
-        }
-      }
-    }
-  })
-  if (index.length) {
-    geometry.setIndex(index)
-  }
+  geometry.setIndex(indices)
   geometry.computeVertexNormals()
   geometry.computeBoundingBox()
   geometry.computeBoundingSphere()
-  return geometry
-}
-
-export function buildConvexGeometryFromSamplingObject(
-  samplingObject: THREE.Object3D,
-  pass: ConvexSimplifyPass,
-): THREE.BufferGeometry | null {
-  const built = buildConservativeConvexGeometryFromObject(samplingObject, pass)
-  return built?.geometry ?? null
-}
-
-export function buildConvexGeometryWithFallback(
-  samplingObject: THREE.Object3D,
-  config: RigidbodyConvexSimplifyConfig,
-): { geometry: THREE.BufferGeometry; usedPass: 'primary' | 'fallback' } | null {
-  const primaryGeometry = buildConvexGeometryFromSamplingObject(samplingObject, config.primary)
-  if (!primaryGeometry) {
-    return null
-  }
-  const primaryStats = geometryStats(primaryGeometry)
-  if (primaryStats.vertices <= config.limits.maxVertices && primaryStats.faces <= config.limits.maxFaces) {
-    return { geometry: primaryGeometry, usedPass: 'primary' }
-  }
-  const fallbackGeometry = buildConvexGeometryFromSamplingObject(samplingObject, config.fallback)
-  if (!fallbackGeometry) {
-    return { geometry: primaryGeometry, usedPass: 'primary' }
-  }
-  primaryGeometry.dispose()
-  return { geometry: fallbackGeometry, usedPass: 'fallback' }
-}
-
-export function resolveConvexSimplifyConfig(
-  metadata: RigidbodyComponentMetadata | null | undefined,
-): RigidbodyConvexSimplifyConfig {
-  const config = metadata?.convexSimplify
-  if (config && config.version === 1 && config.primary && config.fallback && config.limits) {
-    return config
-  }
-  return DEFAULT_CONVEX_SIMPLIFY_CONFIG as unknown as RigidbodyConvexSimplifyConfig
-}
-
-export function cloneConvexSimplifyConfig(config: RigidbodyConvexSimplifyConfig): RigidbodyConvexSimplifyConfig {
-  return {
-    version: 1,
-    primary: { ...config.primary },
-    fallback: { ...config.fallback },
-    limits: { ...config.limits },
-    usedPass: config.usedPass,
-  }
+  return { geometry, offset }
 }
 
 export function constrainColliderGroupTransform(
@@ -276,56 +268,21 @@ export function buildDefaultColliderShape(params: {
   kind: ColliderShapeKind
   samplingObject: THREE.Object3D
   scale: THREE.Vector3
-  convexGeometry?: THREE.BufferGeometry | null
-  convexSimplifyPass?: ConvexSimplifyPass
 }): EditableColliderShape | null {
-  const { kind, samplingObject, scale, convexGeometry, convexSimplifyPass } = params
-  samplingObject.updateMatrixWorld(true)
-  const bounds = new THREE.Box3().setFromObject(samplingObject)
-  if (bounds.isEmpty()) {
+  const { kind, samplingObject, scale } = params
+  if (kind === 'convex') {
     return null
   }
-
-  if (kind === 'convex') {
-    let geometry = convexGeometry ?? null
-    if (!geometry && convexSimplifyPass) {
-      geometry = buildConvexGeometryFromSamplingObject(samplingObject, convexSimplifyPass)
-    }
-    if (!geometry) {
-      return null
-    }
-    geometry.computeBoundingBox()
-    const box = geometry.boundingBox ?? bounds
-    const center = box.getCenter(new THREE.Vector3())
-    const positions = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
-    if (!positions) {
-      return null
-    }
-    const centered = new Float32Array(positions.array.length)
-    for (let index = 0; index < positions.count; index += 1) {
-      centered[index * 3] = (positions.getX(index) - center.x)
-      centered[index * 3 + 1] = (positions.getY(index) - center.y)
-      centered[index * 3 + 2] = (positions.getZ(index) - center.z)
-    }
-    geometry.setAttribute('position', new THREE.BufferAttribute(centered, 3))
-    geometry.computeVertexNormals()
-    geometry.computeBoundingBox()
-    geometry.computeBoundingSphere()
-    const size = box.getSize(new THREE.Vector3())
-    return {
-      kind,
-      dimensions: new THREE.Vector3(
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.x || COLLIDER_DEFAULT_MIN_SIZE),
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.y || COLLIDER_DEFAULT_MIN_SIZE),
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.z || COLLIDER_DEFAULT_MIN_SIZE),
-      ),
-      offset: center.clone(),
-      rotation: new THREE.Euler(),
-    }
+  samplingObject.updateMatrixWorld(true)
+  // The sampling object carries the node world transform on its root, mirroring the
+  // export pipeline. Shape data lives in the host-local (pre-scale) frame, so measure
+  // bounds in that frame and map them into the collider overlay's world-scaled space.
+  const localBounds = computeColliderLocalBoundingBox(samplingObject)
+  if (!localBounds || localBounds.isEmpty()) {
+    return null
   }
-
-  const size = bounds.getSize(new THREE.Vector3())
-  const center = bounds.getCenter(new THREE.Vector3())
+  const size = localBounds.getSize(new THREE.Vector3())
+  const center = localBounds.getCenter(new THREE.Vector3()).multiply(scale)
 
   if (kind === 'box') {
     const oriented = computeOrientedBoxFromObject(samplingObject)
@@ -340,16 +297,17 @@ export function buildDefaultColliderShape(params: {
     return {
       kind,
       dimensions: new THREE.Vector3(
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.x || COLLIDER_DEFAULT_MIN_SIZE),
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.y || COLLIDER_DEFAULT_MIN_SIZE),
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.z || COLLIDER_DEFAULT_MIN_SIZE),
+        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.x * scale.x || COLLIDER_DEFAULT_MIN_SIZE),
+        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.y * scale.y || COLLIDER_DEFAULT_MIN_SIZE),
+        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.z * scale.z || COLLIDER_DEFAULT_MIN_SIZE),
       ),
       offset: center,
       rotation: new THREE.Euler(),
     }
   }
   if (kind === 'sphere') {
-    const diameter = Math.max(COLLIDER_DEFAULT_MIN_SIZE, Math.max(size.x, size.y, size.z))
+    const dominant = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z)) || 1
+    const diameter = Math.max(COLLIDER_DEFAULT_MIN_SIZE, Math.max(size.x, size.y, size.z) * dominant)
     return {
       kind,
       dimensions: new THREE.Vector3(diameter, diameter, diameter),
@@ -357,8 +315,9 @@ export function buildDefaultColliderShape(params: {
       rotation: new THREE.Euler(),
     }
   }
-  const diameter = Math.max(COLLIDER_DEFAULT_MIN_SIZE, Math.max(size.x, size.z))
-  const height = Math.max(diameter, size.y || diameter)
+  const lateral = Math.max(Math.abs(scale.x), Math.abs(scale.z)) || 1
+  const diameter = Math.max(COLLIDER_DEFAULT_MIN_SIZE, Math.max(size.x, size.z) * lateral)
+  const height = Math.max(diameter, (size.y || diameter) * Math.abs(scale.y || 1))
   return {
     kind: 'capsule',
     dimensions: new THREE.Vector3(diameter, height, diameter),
@@ -417,25 +376,6 @@ export function convertColliderMetadataShape(
       rotation,
     }
   }
-  if (shape.kind === 'convex' && kind === 'convex') {
-    const geometry = buildConvexGeometryFromDefinition(shape, new THREE.Vector3(scaleX, scaleY, scaleZ))
-    if (!geometry) {
-      return null
-    }
-    geometry.computeBoundingBox()
-    const size = geometry.boundingBox?.getSize(new THREE.Vector3()) ?? new THREE.Vector3()
-    return {
-      kind: 'convex',
-      dimensions: new THREE.Vector3(
-        Math.max(COLLIDER_MIN_SIZE, size.x),
-        Math.max(COLLIDER_MIN_SIZE, size.y),
-        Math.max(COLLIDER_MIN_SIZE, size.z),
-      ),
-      offset,
-      rotation,
-      geometry,
-    }
-  }
   return null
 }
 
@@ -443,25 +383,8 @@ export function buildColliderMetadataPayload(params: {
   kind: ColliderShapeKind
   colliderGroup: THREE.Object3D
   scale: THREE.Vector3
-  convexGeometry?: THREE.BufferGeometry | null
-  convexSimplifyConfig?: RigidbodyConvexSimplifyConfig
-  convexSimplifyPasses?: {
-    primary: ConvexSimplifyPass
-    fallback: ConvexSimplifyPass
-    limits: RigidbodyConvexSimplifyConfig['limits']
-  }
-  convexUsedPass?: 'primary' | 'fallback'
-  buildConvexGeometry?: (pass: ConvexSimplifyPass) => THREE.BufferGeometry | null
-}): { shape: RigidbodyPhysicsShape; convexSimplify?: RigidbodyConvexSimplifyConfig } | null {
-  const {
-    kind,
-    colliderGroup,
-    scale,
-    convexSimplifyConfig,
-    convexSimplifyPasses,
-    convexUsedPass,
-    buildConvexGeometry,
-  } = params
+}): { shape: RigidbodyPhysicsShape } | null {
+  const { kind, colliderGroup, scale } = params
 
   if (kind === 'box') {
     return {
@@ -520,84 +443,7 @@ export function buildColliderMetadataPayload(params: {
     }
   }
 
-  let chosenGeometry = params.convexGeometry ?? null
-  let config = convexSimplifyConfig ? cloneConvexSimplifyConfig(convexSimplifyConfig) : null
-
-  if (!chosenGeometry && buildConvexGeometry && convexSimplifyPasses && config) {
-    const primaryBuilt = buildConvexGeometry(convexSimplifyPasses.primary)
-    if (!primaryBuilt) {
-      return null
-    }
-    chosenGeometry = primaryBuilt
-    const primaryStats = geometryStats(primaryBuilt)
-    if (primaryStats.vertices > convexSimplifyPasses.limits.maxVertices || primaryStats.faces > convexSimplifyPasses.limits.maxFaces) {
-      const fallbackBuilt = buildConvexGeometry(convexSimplifyPasses.fallback)
-      if (fallbackBuilt) {
-        chosenGeometry = fallbackBuilt
-        config.usedPass = 'fallback'
-      } else {
-        config.usedPass = 'primary'
-      }
-    } else {
-      config.usedPass = 'primary'
-    }
-  }
-
-  if (!chosenGeometry) {
-    return null
-  }
-  if (config && convexUsedPass) {
-    config.usedPass = convexUsedPass
-  }
-
-  const positions = chosenGeometry.getAttribute('position') as THREE.BufferAttribute | undefined
-  if (!positions) {
-    return null
-  }
-
-  const vertices: [number, number, number][] = []
-  const scratch = new THREE.Vector3()
-  for (let index = 0; index < positions.count; index += 1) {
-    scratch.fromBufferAttribute(positions, index)
-    scratch.multiply(colliderGroup.scale)
-    vertices.push([
-      scratch.x / scale.x,
-      scratch.y / scale.y,
-      scratch.z / scale.z,
-    ])
-  }
-
-  const faces: number[][] = []
-  const index = chosenGeometry.getIndex()
-  if (index && index.count >= 3) {
-    for (let i = 0; i + 2 < index.count; i += 3) {
-      faces.push([index.getX(i), index.getX(i + 1), index.getX(i + 2)])
-    }
-  } else {
-    for (let i = 0; i + 2 < positions.count; i += 3) {
-      faces.push([i, i + 1, i + 2])
-    }
-  }
-
-  if (!vertices.length || !faces.length) {
-    return null
-  }
-
-  return {
-    shape: {
-      kind: 'convex',
-      vertices,
-      faces,
-      offset: [
-        colliderGroup.position.x / scale.x,
-        colliderGroup.position.y / scale.y,
-        colliderGroup.position.z / scale.z,
-      ],
-      rotation: resolveColliderGroupRotationTuple(colliderGroup),
-      applyScale: true,
-    },
-    convexSimplify: config ?? undefined,
-  }
+  return null
 }
 
 export function applyEditableColliderShape(
