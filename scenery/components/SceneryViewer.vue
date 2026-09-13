@@ -2158,6 +2158,12 @@ const COMPILED_GROUND_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.16 : 0.1;
 const COMPILED_GROUND_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.8 : 0.4;
 const COMPILED_GROUND_MAX_STALE_MS = isWeChatMiniProgram ? 180 : 120;
 const COMPILED_GROUND_MIN_INTERVAL_MS = isWeChatMiniProgram ? 48 : 33;
+// Cap how many ground render tiles may be built per sync call. Tile data is
+// served from the already-unpacked scene package, so an unbounded batch builds
+// tens of BufferGeometry/texture uploads inside one frame and drops the frame
+// rate. Keeping the batch small spreads the upload across frames; `desired` is
+// distance-sorted, so the nearest tiles still appear first.
+const COMPILED_GROUND_MAX_NEW_TILES_PER_SYNC = isWeChatMiniProgram ? 3 : 6;
 const COMPILED_GROUND_ROT_THRESHOLD_RAD = (COMPILED_GROUND_ROT_THRESHOLD_DEG * Math.PI) / 180;
 const compiledGroundLastCameraPos = new THREE.Vector3();
 const compiledGroundLastCameraQuat = new THREE.Quaternion();
@@ -9795,6 +9801,7 @@ function syncSceneryCompiledGroundRenderTiles(camera: THREE.Camera | null | unde
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     },
     streamingMode: 'runtime-camera',
+    maxNewTilesPerSync: COMPILED_GROUND_MAX_NEW_TILES_PER_SYNC,
     groundSplatRuntimeProfile: {
       maxLayers: 4,
       enableLayerNormalMap: true,

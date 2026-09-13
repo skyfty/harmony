@@ -47,8 +47,12 @@ type SyncCompiledGroundRenderTilesParams = {
   retainRadiusTiles?: number
   streamingMode?: 'runtime-camera' | 'editor-overview'
   tileFrustumCulled?: boolean
+  /** Max tiles whose geometry may be built per sync call. Default 4. */
+  maxNewTilesPerSync?: number
   groundSplatRuntimeProfile?: GroundSplatRuntimeProfile | null
 }
+
+const DEFAULT_MAX_NEW_TILES_PER_SYNC = 4
 
 const renderRuntimeMap = new WeakMap<THREE.Object3D, CompiledGroundRenderRuntime>()
 const compiledGroundRenderTileRecordMapCache = new WeakMap<CompiledGroundManifest, Map<string, CompiledGroundRenderTileRecord>>()
@@ -641,6 +645,10 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   }
   const streamingMode = params.streamingMode === 'editor-overview' ? 'editor-overview' : 'runtime-camera'
   const tileFrustumCulled = params.tileFrustumCulled === true
+  const requestedMaxNewTiles = Math.trunc(Number(params.maxNewTilesPerSync))
+  const maxNewTilesPerSync = Number.isFinite(requestedMaxNewTiles) && requestedMaxNewTiles > 0
+    ? requestedMaxNewTiles
+    : DEFAULT_MAX_NEW_TILES_PER_SYNC
   const activeRadiusTiles = Math.max(
     1,
     Math.trunc(params.activeRadiusTiles ?? resolveDefaultCompiledGroundActiveRadiusTiles(params.groundDefinition, params.manifest)),
@@ -692,10 +700,24 @@ export function syncCompiledGroundRenderTiles(params: SyncCompiledGroundRenderTi
   })
 
   const material = resolveGroundMaterial(params.groundObject)
+  // Budget how many tiles are built per sync call.
+  //
+  // Runtime tile data comes from the already-unpacked scene package, so
+  // `loadTileData` resolves immediately and every queued tile's geometry is built
+  // inside the same microtask drain, then uploaded on the next render. Without a
+  // budget, crossing a tile boundary queues the entire desired window at once and
+  // that single frame pays for tens of BufferGeometry + texture uploads (observed
+  // 30-300ms frames). `desired` is distance-sorted, so the closest tiles are
+  // still built first and the rest are queued by later syncs.
+  let queuedThisSync = 0
   for (const record of desired) {
+    if (queuedThisSync >= maxNewTilesPerSync) {
+      break
+    }
     if (runtime.meshes.has(record.key) || runtime.pendingLoads.has(record.key)) {
       continue
     }
+    queuedThisSync += 1
     const pending = params.loadTileData(record)
       .then((buffer) => {
         const activeRuntime = renderRuntimeMap.get(params.groundObject)
