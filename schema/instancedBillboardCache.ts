@@ -14,7 +14,10 @@ import ResourceCache from './ResourceCache'
 import { loadTextureFromSourceUrl } from './textureSourceLoader'
 
 const BILLBOARD_BASE_POSITION_ATTRIBUTE = 'billboardBasePosition'
-const DEFAULT_INSTANCE_CAPACITY = 2048
+// Same reasoning as modelObjectCache: three.js InstancedMesh allocates its whole
+// instance matrix up front, so a 2048 default costs 128KB per billboard LOD asset
+// even though most handles hold a handful of instances. Grow on demand instead.
+const DEFAULT_INSTANCE_CAPACITY = 128
 
 export interface BillboardInstanceCacheConfig {
   defaultInstanceCapacity: number

@@ -16,7 +16,13 @@ import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
 import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsmReceiverPolicy'
 
-const DEFAULT_INSTANCE_CAPACITY = 2048
+// three.js InstancedMesh allocates its whole instanceMatrix up front (capacity *
+// 16 floats = 128KB at the old capacity of 2048), even for the common single-
+// instance LOD proxy. Starting small and growing through
+// expandInstancedMeshHandleCapacity keeps a scene with hundreds of LOD assets from
+// allocating tens of MB of mostly-empty matrices during load, which is a direct
+// source of GC pauses on constrained mini-program runtimes.
+const DEFAULT_INSTANCE_CAPACITY = 128
 
 export interface ModelObjectCacheConfig {
   defaultInstanceCapacity: number
@@ -222,24 +228,56 @@ export function getCachedModelObject(assetId: string): ModelInstanceGroup | null
  * compilation and buffer upload out of the interactive render loop, avoiding
  * the one-frame hitch when a node's LOD model first appears.
  */
+function precompileModelAssetEntry(renderer: WebGLRenderer, camera: Camera, entry: ModelAssetEntry): void {
+  try {
+    renderer.compile(entry.object, camera)
+  } catch (error) {
+    console.warn('[ModelObjectCache] Failed to precompile model object', entry.assetId, error)
+  }
+  for (const handle of entry.handles) {
+    try {
+      renderer.compile(handle.mesh, camera)
+    } catch (error) {
+      console.warn('[ModelObjectCache] Failed to precompile instanced mesh', entry.assetId, error)
+    }
+  }
+}
+
 export function precompileModelInstanceGroup(renderer: WebGLRenderer, camera: Camera): void {
   if (!renderer || typeof renderer.compile !== 'function') {
     return
   }
   modelObjectCache.forEach((entry) => {
-    try {
-      renderer.compile(entry.object, camera)
-    } catch (error) {
-      console.warn('[ModelObjectCache] Failed to precompile model object', entry.assetId, error)
-    }
-    for (const handle of entry.handles) {
-      try {
-        renderer.compile(handle.mesh, camera)
-      } catch (error) {
-        console.warn('[ModelObjectCache] Failed to precompile instanced mesh', entry.assetId, error)
-      }
-    }
+    precompileModelAssetEntry(renderer, camera, entry)
   })
+}
+
+/**
+ * Prewarm a single cached model group.
+ *
+ * Call this right after getOrLoadModelObject() resolves for assets that load
+ * *after* the initial scene build (LOD switches, streaming). Their materials and
+ * instance buffers have never been through the renderer, so the first frame they
+ * become visible would otherwise pay synchronous shader compilation and buffer
+ * uploads on the render main thread — the hitch players see when a node's LOD
+ * model first appears.
+ *
+ * Safe to call with a null renderer/camera (before the render context exists) and
+ * with an unknown assetId; both are no-ops.
+ */
+export function precompileModelObjectGroup(
+  renderer: WebGLRenderer | null | undefined,
+  camera: Camera | null | undefined,
+  assetId: string,
+): void {
+  if (!renderer || !camera || typeof renderer.compile !== 'function') {
+    return
+  }
+  const entry = modelObjectCache.get(assetId)
+  if (!entry) {
+    return
+  }
+  precompileModelAssetEntry(renderer, camera, entry)
 }
 
 export function getOrLoadModelObject(assetId: string, loader: LoaderFn): Promise<ModelInstanceGroup> {

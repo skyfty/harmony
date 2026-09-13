@@ -171,3 +171,73 @@ export async function createKtx2Loader(
   const loader = new KTX2Loader(options.manager)
   return loader.detectSupport(renderer)
 }
+
+// ---------------------------------------------------------------------------
+// Shared loader
+//
+// KTX2Loader.init() downloads basis_transcoder.js plus its .wasm and spawns a
+// worker pool. Building a fresh loader for every KTX2 texture re-paid all of that
+// — plus a throwaway WebGL context for detectSupport — on the render main thread
+// once per texture. One loader serves the whole session instead.
+// ---------------------------------------------------------------------------
+
+let sharedKtx2Loader: KTX2Loader | null = null
+let sharedKtx2LoaderPending: Promise<KTX2Loader> | null = null
+
+export function getSharedKtx2Loader(
+  renderer: THREE.WebGLRenderer,
+  options: Ktx2LoaderOptions = {},
+): Promise<KTX2Loader> {
+  if (sharedKtx2Loader) {
+    return Promise.resolve(sharedKtx2Loader)
+  }
+  if (!sharedKtx2LoaderPending) {
+    sharedKtx2LoaderPending = createKtx2Loader(renderer, options)
+      .then((loader) => {
+        sharedKtx2Loader = loader
+        return loader
+      })
+      .finally(() => {
+        sharedKtx2LoaderPending = null
+      })
+  }
+  return sharedKtx2LoaderPending
+}
+
+/**
+ * Load a KTX2 texture through the shared loader.
+ *
+ * A one-off support renderer is created and disposed only when the shared loader
+ * is first built: detectSupport just needs a context to read extension strings
+ * from, so keeping one alive per texture was pure waste.
+ */
+export async function loadSharedKtx2Texture(
+  url: string,
+  options: Ktx2LoaderOptions = {},
+): Promise<CompressedTexture> {
+  if (sharedKtx2Loader) {
+    return await sharedKtx2Loader.loadAsync(url)
+  }
+  const renderer = createKtx2SupportRenderer()
+  try {
+    const loader = await getSharedKtx2Loader(renderer, options)
+    return await loader.loadAsync(url)
+  } finally {
+    disposeKtx2SupportRenderer(renderer)
+  }
+}
+
+/** Drop the shared loader (scene teardown or device context loss). */
+export function resetSharedKtx2Loader(): void {
+  const loader = sharedKtx2Loader
+  sharedKtx2Loader = null
+  sharedKtx2LoaderPending = null
+  if (!loader) {
+    return
+  }
+  try {
+    loader.dispose()
+  } catch (error) {
+    console.warn('[KTX2] Failed to dispose shared loader', error)
+  }
+}

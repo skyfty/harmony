@@ -218,12 +218,34 @@ export type GltfParseWorkerFactory = () => Worker | null
 
 const gltfParseWorkerRuntimeState: { factory: GltfParseWorkerFactory | null } = { factory: null }
 
+// Set once when the configured factory turned out to be unable to hand back a
+// worker at call time (unsupported platform, missing bundle, CSP, ...). Callers
+// must consult canParseGltfWithWorker() *before* reading an asset into memory:
+// reading a whole GLB only to discover there is no worker costs a full redundant
+// main-thread file read per model.
+let gltfParseWorkerRuntimeUnavailable = false
+
 export function configureGltfParseWorkerFactory(factory: GltfParseWorkerFactory | null): void {
   gltfParseWorkerRuntimeState.factory = factory
+  gltfParseWorkerRuntimeUnavailable = false
 }
 
 export function isGltfParseWorkerConfigured(): boolean {
   return gltfParseWorkerRuntimeState.factory !== null
+}
+
+/**
+ * Cheap, side-effect-free gate for "should this call site pay to materialise the
+ * GLB bytes for a worker parse?". Returns false as soon as a factory is absent or
+ * known to be unusable, so the caller can skip the read entirely.
+ */
+export function canParseGltfWithWorker(): boolean {
+  return gltfParseWorkerRuntimeState.factory !== null && !gltfParseWorkerRuntimeUnavailable
+}
+
+/** Record that the configured factory cannot actually produce a worker. */
+export function markGltfParseWorkerUnavailable(): void {
+  gltfParseWorkerRuntimeUnavailable = true
 }
 
 let gltfParseRequestId = 1
@@ -235,11 +257,16 @@ type GltfParseWorkerMessage =
 
 export async function parseGltfWithWorker(buffer: ArrayBuffer): Promise<THREE.Object3D | null> {
   const factory = gltfParseWorkerRuntimeState.factory
-  if (!factory || buffer.byteLength <= 0) {
+  // Honour the latch as well as the factory: once a configured factory has failed
+  // to deliver, every further call would just burn another failed worker attempt.
+  if (!factory || gltfParseWorkerRuntimeUnavailable || buffer.byteLength <= 0) {
     return null
   }
   const worker = factory()
   if (!worker) {
+    // Remember this: the factory is configured but cannot deliver, so later
+    // callers can skip materialising the GLB bytes for a doomed worker attempt.
+    gltfParseWorkerRuntimeUnavailable = true
     return null
   }
 

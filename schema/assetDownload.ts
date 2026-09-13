@@ -5,6 +5,18 @@ export interface AssetBlobPayload {
   mimeType: string | null
   filename: string | null
   url: string
+  /**
+   * The raw bytes the blob was built from, when the downloader already had them
+   * in hand (which is the normal case: uni.downloadFile read-back, fetch, and
+   * uni.request all produce an ArrayBuffer first).
+   *
+   * Consumers that need bytes rather than a Blob — notably the GLB parser — can
+   * use this instead of wrapping the data in a File and reading it back through
+   * FileReader, which on mini-program runtimes costs an extra full-buffer copy on
+   * the render main thread. It is a convenience view, not ownership: the cache
+   * releases it once the parse that asked for it has finished.
+   */
+  bytes?: ArrayBuffer | null
 }
 
 export type AssetBlobDownloadResult =
@@ -22,6 +34,8 @@ export type AssetBlobDownloadResult =
       mimeType: string | null
       filename: string | null
       headers: Record<string, string>
+      /** Raw bytes behind `blob`, when already available. See AssetBlobPayload.bytes. */
+      bytes?: ArrayBuffer | null
     }
 
 export type AssetBlobDownloader = (
@@ -444,6 +458,7 @@ async function downloadAssetBlobViaFetchWithResponse(
       mimeType,
       filename,
       headers: responseHeaders,
+      bytes: buffer,
     }
   }
 
@@ -483,6 +498,7 @@ async function downloadAssetBlobViaFetchWithResponse(
     mimeType,
     filename,
     headers: responseHeaders,
+    bytes: joined.buffer,
   }
 }
 
@@ -622,6 +638,7 @@ async function downloadAssetBlobViaUniDownloadFile(
     mimeType: result.mimeType,
     filename: result.filename,
     url: result.url,
+    bytes: result.bytes ?? null,
   }
 }
 
@@ -677,6 +694,7 @@ async function downloadAssetBlobViaUniDownloadFileWithResponse(
         mimeType,
         filename,
         headers,
+        bytes: arrayBuffer,
       })
     }
 
@@ -843,6 +861,7 @@ async function downloadAssetBlobViaUniRequestWithResponse(
           mimeType,
           filename,
           headers: responseHeaders,
+          bytes: arrayBuffer,
         })
       },
       fail: (error) => reject(error),
@@ -877,6 +896,7 @@ function buildAssetBlobPayload(
     mimeType,
     filename,
     url,
+    bytes: arrayBuffer,
   }
 }
 

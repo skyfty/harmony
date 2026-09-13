@@ -144,6 +144,7 @@ class WorkerSlot {
           mimeType: message.mimeType,
           filename: message.filename,
           url: message.url,
+          bytes: message.buffer,
         });
         return;
       }

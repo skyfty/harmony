@@ -69,6 +69,28 @@ export default class ResourceCache {
     }
   }
 
+  /**
+   * Raw bytes for an already-acquired asset, when the downloader retained them.
+   *
+   * The model parser prefers these over the blob so it does not have to wrap the
+   * data in a File and read it back through FileReader on the render main thread.
+   *
+   * @see AssetCache.getBytes
+   */
+  getAssetBytes(assetId: string): ArrayBuffer | null {
+    return this.assetLoader.getCache().getBytes(assetId);
+  }
+
+  /**
+   * Drop the retained raw bytes once the parse that needed them has finished, so
+   * the cache goes back to holding a single copy per asset.
+   *
+   * @see AssetCache.releaseBytes
+   */
+  releaseAssetBytes(assetId: string): void {
+    this.assetLoader.getCache().releaseBytes(assetId);
+  }
+
   async acquireAssetSource(assetId: string): Promise<AssetSource | null> {
     const entry = await this.acquireAssetEntry(assetId);
     if (!entry) {

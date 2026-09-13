@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import type ResourceCache from './ResourceCache'
 import type { AssetCacheEntry } from './assetCache'
-import { Semaphore, withSemaphore } from './concurrency'
+import { Semaphore, withSemaphoreYielding } from './concurrency'
 import type { SceneNodeImportMetadata } from './core'
 import { getExtensionFromMimeType, getLastExtensionFromFilenameOrUrl } from './assetTypeConversion'
 
@@ -82,14 +82,33 @@ export async function loadAssetObject(resourceCache: ResourceCache, assetId: str
   if (!entry) {
     return null
   }
-  const file = createFileFromEntry(assetId, entry)
-  if (!file) {
-    return null
-  }
+  const filename = inferEntryFilename(assetId, entry)
+  const ext = filename.split('.').pop()?.toLowerCase()
+
   try {
-    const ext = file.name.split('.').pop()?.toLowerCase()
-    const { loadObjectFromFile } = await loadAssetImportModule()
-    const object = await withSemaphore(modelParseSemaphore, () => loadObjectFromFile(file, ext))
+    const { loadObjectFromBuffer, loadObjectFromFile } = await loadAssetImportModule()
+
+    // Preferred path: parse straight from the bytes the downloader produced.
+    // Wrapping them in a File and reading them back through FileReader adds a
+    // full buffered copy, which is exactly the kind of main-thread work that
+    // stalls the render loop on mini-program runtimes. The bytes are released
+    // right after the parse so the cache keeps only the blob again.
+    const bytes = resourceCache.getAssetBytes(assetId)
+    if (bytes && bytes.byteLength > 0) {
+      try {
+        return await withSemaphoreYielding(modelParseSemaphore, () =>
+          loadObjectFromBuffer(bytes, ext, { filename }),
+        )
+      } finally {
+        resourceCache.releaseAssetBytes(assetId)
+      }
+    }
+
+    const file = createFileFromEntry(assetId, entry)
+    if (!file) {
+      return null
+    }
+    const object = await withSemaphoreYielding(modelParseSemaphore, () => loadObjectFromFile(file, ext))
     return object
   } catch (error) {
     console.warn('[ModelAssetLoader] Failed to parse asset object', assetId, error)

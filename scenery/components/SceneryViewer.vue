@@ -437,7 +437,7 @@ import {
   type PhysicsTransform,
   resolvePhysicsCharacterMotorYawFromWorldQuaternion,
 } from '@harmony/physics-core';
-import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@harmony/schema/ktx2Loader'
+import { FAST_KTX2_TRANSCODER_PATH, getSharedKtx2Loader, resetSharedKtx2Loader } from '@harmony/schema/ktx2Loader'
 
 import { getStoredProjectById } from '../common/stores/projectStore';
 import { useDebugOverlay } from '../composables/useDebugOverlay';
@@ -592,6 +592,7 @@ import {
   updateModelInstanceMatrix,
   findNodeIdForInstance,
   precompileModelInstanceGroup,
+  precompileModelObjectGroup,
   type ModelInstanceGroup,
 } from '@harmony/schema/modelObjectCache';
 import {
@@ -1462,7 +1463,9 @@ async function loadKtx2TextureFromUrl(
   }
   const ktx2Loader = isWeChatMiniProgram
     ? new PlatformKTX2Loader(manager).detectSupport(renderer)
-    : await createKtx2Loader(renderer, { manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH })
+    // H5: share one loader (transcoder download + worker pool) across every KTX2
+    // texture instead of rebuilding it per texture.
+    : await getSharedKtx2Loader(renderer, { manager, transcoderPath: FAST_KTX2_TRANSCODER_PATH })
   return await ktx2Loader.loadAsync(url)
 }
 
@@ -8142,6 +8145,38 @@ function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup)
   return proxy;
 }
 
+/**
+ * Move the first-render cost of a newly loaded model out of the frame in which it
+ * becomes visible. Shader compilation and buffer uploads are one-time; paying them
+ * here (while the asset is still being streamed in) avoids the visible hitch when
+ * a node's LOD model pops in during driving or a tour fly-through.
+ */
+function precompileRuntimeModelAsset(assetId: string): void {
+  const context = renderContext;
+  if (!context) {
+    return;
+  }
+  try {
+    precompileModelObjectGroup(context.renderer, context.camera, assetId);
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to precompile runtime model asset', assetId, error);
+  }
+}
+
+/** Same idea for a plain scene-node subtree loaded by the lazy-placeholder path. */
+function precompileSceneNodeSubtree(object: THREE.Object3D): void {
+  const context = renderContext;
+  const renderer = context?.renderer;
+  if (!context || !renderer || typeof renderer.compile !== 'function') {
+    return;
+  }
+  try {
+    renderer.compile(object, context.camera);
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to precompile scene node subtree', error);
+  }
+}
+
 const pendingLodModelLoads = new Map<string, Promise<void>>();
 
 async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | null): Promise<void> {
@@ -8163,6 +8198,7 @@ async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | 
     }
     await ensureModelInstanceGroup(assetId, sampleNode, cache);
     ensureInstancedMeshesRegistered(assetId);
+    precompileRuntimeModelAsset(assetId);
   })()
     .catch((error) => {
       console.warn('[SceneViewer] Failed to preload LOD model asset', assetId, error);
@@ -8175,12 +8211,53 @@ async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | 
   await task;
 }
 
-const LOD_PREFETCH_BAND_METERS = 24;
+const LOD_PREFETCH_BASE_BAND_METERS = 24;
+const LOD_PREFETCH_MAX_BAND_METERS = 140;
+// How far ahead (in seconds of travel) a fast pass should try to warm.
+const LOD_PREFETCH_LOOKAHEAD_SECONDS = 1.5;
 const LOD_PREFETCH_MAX_ASSETS_PER_PASS = 4;
+const LOD_PREFETCH_MAX_ASSETS_PER_PASS_FAST = 8;
 const LOD_PREFETCH_MIN_INTERVAL_MS = 400;
+const LOD_PREFETCH_MIN_INTERVAL_MS_FAST = 120;
+// Above this camera speed (m/s) we assume the active drive/tour is covering LOD
+// thresholds faster than a conservative idle-time budget can warm them.
+const LOD_PREFETCH_FAST_SPEED_MPS = 6;
 
 let lodPrefetchScheduled = false;
 let lodPrefetchLastRunAt = 0;
+let lodPrefetchFastMode = false;
+let lodPrefetchHasCameraSample = false;
+let lodPrefetchLastCameraSampleAt = 0;
+const lodPrefetchLastCameraPosition = new THREE.Vector3();
+
+/**
+ * Estimate how fast the camera is moving since the previous prefetch pass.
+ *
+ * Prefetch runs every few hundred ms, so the displacement over that window is a
+ * good enough speed proxy for deciding how wide the warm band should be. A fixed
+ * 24m band loses the race as soon as the player drives or a tour fly-through
+ * starts, and the LOD switch then lands on the cold path mid-frame.
+ */
+function sampleLodPrefetchCameraSpeed(camera: THREE.Camera, nowMs: number): number {
+  let speedMps = 0;
+  if (lodPrefetchHasCameraSample) {
+    const elapsedSeconds = (nowMs - lodPrefetchLastCameraSampleAt) / 1000;
+    if (elapsedSeconds > 0.001) {
+      speedMps = camera.position.distanceTo(lodPrefetchLastCameraPosition) / elapsedSeconds;
+    }
+  }
+  lodPrefetchHasCameraSample = true;
+  lodPrefetchLastCameraSampleAt = nowMs;
+  lodPrefetchLastCameraPosition.copy(camera.position);
+  return speedMps;
+}
+
+function resetLodPrefetchSpeedSample(): void {
+  lodPrefetchHasCameraSample = false;
+  lodPrefetchLastCameraSampleAt = 0;
+  lodPrefetchFastMode = false;
+  lodPrefetchLastCameraPosition.set(0, 0, 0);
+}
 
 // Idle-time distance-band prewarm: while the camera is within a small band of
 // the next-closer LOD threshold, download + parse + build that level's asset
@@ -8193,9 +8270,21 @@ function prefetchNearbyLodTargets(): void {
     return;
   }
   const camera = context.camera;
+  const nowMs = Date.now();
+  const speedMps = sampleLodPrefetchCameraSpeed(camera, nowMs);
+  lodPrefetchFastMode = speedMps >= LOD_PREFETCH_FAST_SPEED_MPS;
+  // Look ahead roughly as far as the camera will travel in
+  // LOD_PREFETCH_LOOKAHEAD_SECONDS, so a fast pass warms thresholds *before* they
+  // are crossed instead of after.
+  const bandMeters = Math.min(
+    LOD_PREFETCH_MAX_BAND_METERS,
+    Math.max(LOD_PREFETCH_BASE_BAND_METERS, speedMps * LOD_PREFETCH_LOOKAHEAD_SECONDS),
+  );
   const entries = collectInstancedLodRuntimeEntries();
   const queuedAssetIds = new Set<string>();
-  let budget = LOD_PREFETCH_MAX_ASSETS_PER_PASS;
+  let budget = lodPrefetchFastMode
+    ? LOD_PREFETCH_MAX_ASSETS_PER_PASS_FAST
+    : LOD_PREFETCH_MAX_ASSETS_PER_PASS;
 
   for (const entry of entries) {
     if (budget <= 0) {
@@ -8225,7 +8314,7 @@ function prefetchNearbyLodTargets(): void {
     }
 
     const nextCloser = levels[chosenIndex - 1];
-    if (!nextCloser || distance - nextCloser.distance > LOD_PREFETCH_BAND_METERS) {
+    if (!nextCloser || distance - nextCloser.distance > bandMeters) {
       continue;
     }
 
@@ -8256,7 +8345,10 @@ function scheduleLodPrefetch(): void {
     return;
   }
   const now = Date.now();
-  if (now - lodPrefetchLastRunAt < LOD_PREFETCH_MIN_INTERVAL_MS) {
+  const minIntervalMs = lodPrefetchFastMode
+    ? LOD_PREFETCH_MIN_INTERVAL_MS_FAST
+    : LOD_PREFETCH_MIN_INTERVAL_MS;
+  if (now - lodPrefetchLastRunAt < minIntervalMs) {
     return;
   }
   lodPrefetchScheduled = true;
@@ -11974,10 +12066,9 @@ async function applyDeferredInstancingForNode(nodeId: string): Promise<boolean> 
     }
   });
 
-  if (renderContext?.scene) {
-    refreshAnimationControllers(renderContext.scene);
-    refreshSkinRuntime();
-  }
+  // Coalesced: this runs once per revealed node, so a full-scene sweep here would
+  // repeat once per node inside the same few frames.
+  scheduleSceneRuntimeRefresh();
 
   return instancedObjectsByNodeId.has(nodeId);
 }
@@ -12240,6 +12331,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
       updateNodeProperties(container, node);
     }
     detailed.updateWorldMatrix(false, true);
+    precompileSceneNodeSubtree(detailed);
     placeholder.parent?.remove(placeholder);
     disposeObject(placeholder);
     nodeObjectMap.delete(nodeId);
@@ -12247,8 +12339,9 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
     removeRigidbodyInstance(nodeId);
     registerSceneSubtree(detailed);
     markLoadedAndCleanup();
-    refreshAnimationControllers(context.scene);
-    refreshSkinRuntime();
+    // Coalesced: see scheduleSceneRuntimeRefresh. Revealing several placeholders
+    // in one frame must not cost several whole-scene sweeps.
+    scheduleSceneRuntimeRefresh();
   } catch (error) {
     console.warn('[SceneViewer] 延迟资源加载失败', error);
     cleanupState();
@@ -16290,6 +16383,63 @@ function refreshSkinRuntime(): void {
       });
     })();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Coalesced scene-runtime refresh
+//
+// refreshAnimationControllers() and refreshSkinRuntime() both walk the *whole*
+// nodeObjectMap and rebuild their runtimes. They used to run once per revealed
+// node, so a burst of lazy-placeholder / deferred-instancing resolutions turned
+// into O(nodes) full-scene sweeps inside the same handful of frames — the
+// dominant cause of the sustained FPS dip while scene nodes stream in.
+//
+// Reveals are instead funneled through one scheduler: at most one sweep pair per
+// animation task, and at most one per SCENE_RUNTIME_REFRESH_MIN_INTERVAL_MS while
+// a burst is draining. The trailing call always runs, so the final state is
+// applied even if the burst ends mid-interval.
+// ---------------------------------------------------------------------------
+const SCENE_RUNTIME_REFRESH_MIN_INTERVAL_MS = 120;
+
+let sceneRuntimeRefreshScheduled = false;
+let sceneRuntimeRefreshHandle: ReturnType<typeof setTimeout> | null = null;
+let sceneRuntimeRefreshLastRunAt = 0;
+
+function applySceneRuntimeRefreshNow(): void {
+  const scene = renderContext?.scene;
+  if (!scene) {
+    return;
+  }
+  try {
+    refreshAnimationControllers(scene);
+    refreshSkinRuntime();
+  } catch (error) {
+    console.warn('[SceneViewer] Scene runtime refresh failed', error);
+  }
+}
+
+function scheduleSceneRuntimeRefresh(): void {
+  if (sceneRuntimeRefreshScheduled) {
+    return;
+  }
+  sceneRuntimeRefreshScheduled = true;
+  const elapsed = Date.now() - sceneRuntimeRefreshLastRunAt;
+  const delay = Math.max(0, SCENE_RUNTIME_REFRESH_MIN_INTERVAL_MS - elapsed);
+  sceneRuntimeRefreshHandle = setTimeout(() => {
+    sceneRuntimeRefreshHandle = null;
+    sceneRuntimeRefreshScheduled = false;
+    sceneRuntimeRefreshLastRunAt = Date.now();
+    applySceneRuntimeRefreshNow();
+  }, delay);
+}
+
+function cancelSceneRuntimeRefresh(): void {
+  if (sceneRuntimeRefreshHandle !== null) {
+    clearTimeout(sceneRuntimeRefreshHandle);
+    sceneRuntimeRefreshHandle = null;
+  }
+  sceneRuntimeRefreshScheduled = false;
+  sceneRuntimeRefreshLastRunAt = 0;
 }
 
 function handleDelayEvent(event: Extract<BehaviorRuntimeEvent, { type: 'delay' }>) {
@@ -21291,6 +21441,8 @@ function teardownRenderer() {
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
   activeLazyLoadCount = 0;
+  cancelSceneRuntimeRefresh();
+  resetLodPrefetchSpeedSample();
   activeCameraWatchTween = null;
   frameDeltaMode = null;
   controls.dispose();
@@ -22195,6 +22347,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   lazyPlaceholderStates.clear();
   deferredInstancingNodeIds.clear();
   activeLazyLoadCount = 0;
+  cancelSceneRuntimeRefresh();
+  resetLodPrefetchSpeedSample();
   activeCameraWatchTween = null;
   frameDeltaMode = null;
 
@@ -22225,6 +22379,9 @@ function cleanupForUnrelatedSceneSwitch(): void {
   resetSkinRuntime();
   disposeMaterialTextureCache();
   resetAssetResolutionCaches();
+  // The shared KTX2 loader holds a worker pool and a transcoder binary; drop it
+  // with the scene so a scene switch cannot leak it.
+  resetSharedKtx2Loader();
   sceneAssetCache.evictIfNeeded();
   viewerResourceCache = null;
   overlaySyncForceNextUpdate = true;

@@ -3,7 +3,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import Loader, { type LoaderErrorPayload, type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
 import { createUvDebugMaterial } from './debugTextures'
 import { normalizeScatterMaterials } from './scatterMaterials'
-import { isGltfParseWorkerConfigured, parseGltfWithWorker } from './gltfParse'
+import { canParseGltfWithWorker, parseGltfWithWorker } from './gltfParse'
 
 const DEFAULT_OBJECT_LOAD_TIMEOUT_MS = 45000
 
@@ -128,9 +128,8 @@ function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   })
 }
 
-async function tryLoadGlbViaWorker(file: File): Promise<THREE.Object3D | null> {
+async function tryLoadGlbViaWorkerBuffer(buffer: ArrayBuffer): Promise<THREE.Object3D | null> {
   try {
-    const buffer = await readFileAsArrayBuffer(file)
     const object = await parseGltfWithWorker(buffer)
     if (!object) {
       return null
@@ -144,30 +143,25 @@ async function tryLoadGlbViaWorker(file: File): Promise<THREE.Object3D | null> {
   }
 }
 
-export async function loadObjectFromFile(
-  file: File,
-  extensionOrOptions?: string | LoadObjectOptions,
-  optionsParam: LoadObjectOptions = {},
-): Promise<THREE.Object3D> {
-  const options: LoadObjectOptions = typeof extensionOrOptions === 'object' && extensionOrOptions !== null
-    ? (extensionOrOptions as LoadObjectOptions)
-    : optionsParam
-
-  const inferredExt = typeof extensionOrOptions === 'string'
-    ? extensionOrOptions.toLowerCase()
-    : (file.name.split('.').pop() ?? '').toLowerCase()
-
-  // Offload the CPU-heavy GLB parse (JSON + accessor decode + geometry build) to
-  // a worker when configured. The serializer is conservative: anything it cannot
-  // faithfully represent returns null and we fall through to the synchronous
-  // GLTFLoader.parse path below.
-  if (inferredExt === 'glb' && isGltfParseWorkerConfigured()) {
-    const workerResult = await tryLoadGlbViaWorker(file)
-    if (workerResult) {
-      return workerResult
-    }
+async function tryLoadGlbViaWorker(file: File): Promise<THREE.Object3D | null> {
+  try {
+    const buffer = await readFileAsArrayBuffer(file)
+    return await tryLoadGlbViaWorkerBuffer(buffer)
+  } catch {
+    return null
   }
+}
 
+/**
+ * Shared synchronous-parse path. `start` kicks the load off on a freshly built
+ * Loader so the File-backed and bytes-backed entry points share the timeout and
+ * post-processing logic verbatim.
+ */
+function loadObjectViaLoader(
+  displayName: string,
+  options: LoadObjectOptions,
+  start: (loader: Loader) => void,
+): Promise<THREE.Object3D> {
   return new Promise<THREE.Object3D>((resolve, reject) => {
     const loader = new Loader()
     let settled = false
@@ -191,7 +185,7 @@ export async function loadObjectFromFile(
       }
       settled = true
       cleanup()
-      reject(createLoadTimeoutError(file.name))
+      reject(createLoadTimeoutError(displayName))
     }, DEFAULT_OBJECT_LOAD_TIMEOUT_MS)
 
     const handleLoaded = async (payload: LoaderLoadedPayload) => {
@@ -239,11 +233,78 @@ export async function loadObjectFromFile(
     }
 
     try {
-      loader.loadFile(file)
+      start(loader)
     } catch (error) {
       settled = true
       cleanup()
       reject(error)
     }
   })
+}
+
+export async function loadObjectFromFile(
+  file: File,
+  extensionOrOptions?: string | LoadObjectOptions,
+  optionsParam: LoadObjectOptions = {},
+): Promise<THREE.Object3D> {
+  const options: LoadObjectOptions = typeof extensionOrOptions === 'object' && extensionOrOptions !== null
+    ? (extensionOrOptions as LoadObjectOptions)
+    : optionsParam
+
+  const inferredExt = typeof extensionOrOptions === 'string'
+    ? extensionOrOptions.toLowerCase()
+    : (file.name.split('.').pop() ?? '').toLowerCase()
+
+  // Offload the CPU-heavy GLB parse (JSON + accessor decode + geometry build) to
+  // a worker when one is actually available. The check must happen *before* the
+  // bytes are read: on platforms without a usable worker (WeChat mini-program has
+  // no OffscreenCanvas/createImageBitmap) reading the file here would cost a full
+  // redundant read, because the synchronous path below reads it again.
+  if (inferredExt === 'glb' && canParseGltfWithWorker()) {
+    const workerResult = await tryLoadGlbViaWorker(file)
+    if (workerResult) {
+      return workerResult
+    }
+  }
+
+  return loadObjectViaLoader(file.name, options, (loader) => loader.loadFile(file))
+}
+
+export interface LoadObjectFromBufferOptions extends LoadObjectOptions {
+  /** File name (or asset id) used for extension inference and diagnostics. */
+  filename?: string | null
+}
+
+/**
+ * Parse a model from bytes that are already held in memory.
+ *
+ * Preferred over loadObjectFromFile when the asset cache still has the raw
+ * ArrayBuffer: it skips the Blob -> File -> FileReader round trip, which costs a
+ * full extra buffer copy on the render main thread.
+ */
+export async function loadObjectFromBuffer(
+  buffer: ArrayBuffer,
+  extensionOrOptions?: string | LoadObjectFromBufferOptions,
+  optionsParam: LoadObjectFromBufferOptions = {},
+): Promise<THREE.Object3D> {
+  const options: LoadObjectFromBufferOptions = typeof extensionOrOptions === 'object' && extensionOrOptions !== null
+    ? (extensionOrOptions as LoadObjectFromBufferOptions)
+    : optionsParam
+
+  const explicitExt = typeof extensionOrOptions === 'string' ? extensionOrOptions.toLowerCase() : null
+  const providedName = typeof options.filename === 'string' && options.filename.trim().length
+    ? options.filename.trim()
+    : null
+  const inferredExt = explicitExt
+    ?? (providedName ? (providedName.split('.').pop() ?? '').toLowerCase() : '')
+  const displayName = providedName ?? (inferredExt ? `asset.${inferredExt}` : 'asset')
+
+  if (inferredExt === 'glb' && canParseGltfWithWorker()) {
+    const workerResult = await tryLoadGlbViaWorkerBuffer(buffer)
+    if (workerResult) {
+      return workerResult
+    }
+  }
+
+  return loadObjectViaLoader(displayName, options, (loader) => loader.loadBuffer(buffer, displayName))
 }

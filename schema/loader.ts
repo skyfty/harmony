@@ -42,6 +42,22 @@ type DataTransferItemWithEntry = DataTransferItem & {
 
 type FilesMap = Record<string, File>;
 
+const SUPPORTED_MODEL_EXTENSIONS = new Set(['glb', 'fbx']);
+
+/**
+ * Extension of a file name or URL, lower-cased and query/hash stripped.
+ * Returns null when there is no extension at all.
+ */
+function resolveFileExtension(filename: string): string | null {
+  const raw = typeof filename === 'string' ? filename.trim() : '';
+  if (!raw) {
+    return null;
+  }
+  const withoutQuery = raw.split(/[?#]/)[0] ?? raw;
+  const match = /\.([A-Za-z0-9]+)$/.exec(withoutQuery);
+  return match ? (match[1] ?? '').toLowerCase() || null : null;
+}
+
 function toError(error: unknown, fallbackMessage: string): Error {
   if (error instanceof Error) {
     return error;
@@ -133,11 +149,10 @@ export default class Loader {
 
   public loadFile(file: File) {
     const filename = file.name;
-    const inferred = filename.split('.').pop()?.toLowerCase();
-    const ext = inferred;
+    const ext = resolveFileExtension(filename);
 
-    if (!ext) {
-      this.emit('error', new Error(`无法识别资源文件扩展名 (${filename})`));
+    if (!ext || !SUPPORTED_MODEL_EXTENSIONS.has(ext)) {
+      this.emit('error', new Error(ext ? `不支持的文件格式 (${ext})` : `无法识别资源文件扩展名 (${filename})`));
       return;
     }
 
@@ -155,16 +170,44 @@ export default class Loader {
     reader.addEventListener('abort', () => {
       this.emit('error', new Error(`读取资源文件被取消 (${filename})`));
     });
+    reader.addEventListener('load', (event: ProgressEvent<FileReader>) => {
+      const contents = event.target?.result as ArrayBuffer;
+      if (!contents) {
+        this.emit('error', new Error(`资源文件内容为空 (${filename})`));
+        return;
+      }
+      this.parseBuffer(contents, filename, ext);
+    });
+    reader.readAsArrayBuffer(file);
+  }
 
+  /**
+   * Parse a model from bytes that are already held in memory.
+   *
+   * The asset cache retains the exact ArrayBuffer its downloader produced, so
+   * handing the parser those bytes directly avoids wrapping them in a File and
+   * copying them back out through FileReader — an extra full-buffer copy that
+   * mini-program runtimes pay for on the render main thread.
+   */
+  public loadBuffer(contents: ArrayBuffer, filename: string): void {
+    const ext = resolveFileExtension(filename);
+    if (!ext || !SUPPORTED_MODEL_EXTENSIONS.has(ext)) {
+      this.emit('error', new Error(ext ? `不支持的文件格式 (${ext})` : `无法识别资源文件扩展名 (${filename})`));
+      return;
+    }
+    if (!contents || contents.byteLength === 0) {
+      this.emit('error', new Error(`资源文件内容为空 (${filename})`));
+      return;
+    }
+    this.parseBuffer(contents, filename, ext);
+  }
+
+  private parseBuffer(contents: ArrayBuffer, filename: string, ext: string): void {
     switch (ext) {
       case 'glb': {
-        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const contents = event.target?.result as ArrayBuffer;
-          if (!contents) {
-            this.emit('error', new Error(`资源文件内容为空 (${filename})`));
-            return;
-          }
-
+        // Kept as a floating async task so both the File and the in-memory-buffer
+        // entry points share one code path.
+        void (async () => {
           let loader: any = null;
           try {
             loader = await this.createGLTFLoader();
@@ -206,38 +249,28 @@ export default class Loader {
             disposeLoaderResources(loader);
             this.emit('error', toError(error, `模型加载器初始化失败 (${filename})`));
           }
-        });
-        reader.readAsArrayBuffer(file);
+        })();
         break;
       }
 
       case 'fbx': {
-        reader.addEventListener('load', async (event: ProgressEvent<FileReader>) => {
-          const contents = event.target?.result as ArrayBuffer;
-          if (!contents) {
-            this.emit('error', new Error(`资源文件内容为空 (${filename})`));
+        try {
+          const loader = new FBXLoader();
+          const scene: THREE.Object3D & { animations?: THREE.AnimationClip[] } = loader.parse(contents, '');
+          if (!scene) {
+            this.emit('error', new Error(`FBX 场景对象为空 (${filename})`));
             return;
           }
-
-          try {
-            const loader = new FBXLoader();
-            const scene: THREE.Object3D & { animations?: THREE.AnimationClip[] } = loader.parse(contents, '');
-            if (!scene) {
-              this.emit('error', new Error(`FBX 场景对象为空 (${filename})`));
-              return;
-            }
-            scene.name = filename;
-            const animations = Array.isArray(scene.animations) ? scene.animations : [];
-            if (animations.length) {
-              scene.userData = scene.userData ?? {};
-              scene.userData.__animations = animations.map((clip: THREE.AnimationClip) => clip.name);
-            }
-            this.emit('loaded', scene);
-          } catch (error) {
-            this.emit('error', toError(error, `FBX 解析失败 (${filename})`));
+          scene.name = filename;
+          const animations = Array.isArray(scene.animations) ? scene.animations : [];
+          if (animations.length) {
+            scene.userData = scene.userData ?? {};
+            scene.userData.__animations = animations.map((clip: THREE.AnimationClip) => clip.name);
           }
-        });
-        reader.readAsArrayBuffer(file);
+          this.emit('loaded', scene);
+        } catch (error) {
+          this.emit('error', toError(error, `FBX 解析失败 (${filename})`));
+        }
         break;
       }
 

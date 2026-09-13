@@ -16,7 +16,7 @@ import type ResourceCache from './ResourceCache';
 import { inferAssetTypeOrNull } from './assetTypeConversion';
 import { hashString, stableSerialize } from './stableSerialize';
 import { getDefaultUvDebugTexture } from './debugTextures';
-import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from './ktx2Loader';
+import { FAST_KTX2_TRANSCODER_PATH, loadSharedKtx2Texture } from './ktx2Loader';
 
 type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
 let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
@@ -1014,17 +1014,12 @@ export class SceneMaterialFactory {
         return texture;
       }
       if (typeof window !== 'undefined' && isKtx2LikeAsset(asset)) {
-        const renderer = createKtx2SupportRenderer();
-        try {
-          const ktx2Loader = await createKtx2Loader(renderer, {
-            manager: this.loadingManager,
-            transcoderPath: FAST_KTX2_TRANSCODER_PATH,
-          });
-          const texture = await ktx2Loader.loadAsync(downloadUrl);
-          return texture;
-        } finally {
-          disposeKtx2SupportRenderer(renderer);
-        }
+        // Shared loader: was rebuilding the Basis transcoder, worker pool and a
+        // throwaway WebGL context for every single KTX2 texture.
+        return await loadSharedKtx2Texture(downloadUrl, {
+          manager: this.loadingManager,
+          transcoderPath: FAST_KTX2_TRANSCODER_PATH,
+        });
       }
       return await new Promise<THREE.Texture>((resolve, reject) => {
         this.textureLoader.load(

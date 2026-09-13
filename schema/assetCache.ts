@@ -43,6 +43,16 @@ export interface AssetCacheEntry {
   error: string | null
   blob: Blob | null
   blobUrl: string | null
+  /**
+   * Raw bytes behind `blob`, kept only when the downloader already had them.
+   *
+   * Model parsing can consume this directly instead of wrapping the blob in a
+   * File and reading it back through FileReader (an extra full-buffer copy on the
+   * render main thread, which mini-program runtimes pay dearly for). It is
+   * released as soon as the parse that requested it finishes, so the steady-state
+   * memory profile matches a cache that only holds blobs.
+   */
+  bytes: ArrayBuffer | null
   size: number
   lastUsedAt: number
   abortController: AbortController | null
@@ -192,6 +202,7 @@ export class AssetCache {
     contentHash?: string | null
     contentHashAlgorithm?: string | null
     persistentKeys?: string[]
+    bytes?: ArrayBuffer | null
   } = {}): Promise<AssetCacheEntry> {
     const entry = this.applyBlobToEntry(assetId, blob, payload)
     await this.persistBlob(assetId, blob, entry, payload)
@@ -213,6 +224,7 @@ export class AssetCache {
     entry.error = null
     entry.blob = null
     entry.blobUrl = null
+    entry.bytes = null
     entry.size = 0
     entry.mimeType = null
     entry.filename = null
@@ -242,6 +254,24 @@ export class AssetCache {
     entry.lastUsedAt = now()
   }
 
+  /**
+   * Drop the retained raw bytes for an entry while keeping its blob cached.
+   *
+   * Call this once the consumer that needed real bytes (the GLB parser) is done,
+   * so the cache goes back to holding a single copy per asset.
+   */
+  releaseBytes(assetId: string): void {
+    const entry = this.entries.get(assetId)
+    if (entry) {
+      entry.bytes = null
+    }
+  }
+
+  /** Retained raw bytes for an entry, if the downloader handed them over. */
+  getBytes(assetId: string): ArrayBuffer | null {
+    return this.entries.get(assetId)?.bytes ?? null
+  }
+
   releaseInMemoryBlob(assetId: string): void {
     const entry = this.entries.get(assetId)
     if (!entry) {
@@ -250,6 +280,7 @@ export class AssetCache {
     revokeEntryBlobUrl(entry)
     entry.blob = null
     entry.blobUrl = null
+    entry.bytes = null
     entry.status = 'idle'
     entry.progress = 0
     entry.error = null
@@ -267,6 +298,7 @@ export class AssetCache {
       revokeEntryBlobUrl(entry)
       entry.blob = null
       entry.blobUrl = null
+      entry.bytes = null
     }
     this.entries.clear()
     this.pendingHydrations.clear()
@@ -368,6 +400,7 @@ export class AssetCache {
     }
 
     entry.blob = blob
+    entry.bytes = arrayBuffer
     entry.mimeType = payload.mimeType ?? blob?.type ?? entry.mimeType ?? null
     entry.filename = payload.filename ?? entry.filename ?? null
     entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
@@ -395,12 +428,14 @@ export class AssetCache {
       contentHash?: string | null
       contentHashAlgorithm?: string | null
       persistentKeys?: string[]
+      bytes?: ArrayBuffer | null
     },
   ): AssetCacheEntry {
     const entry = this.ensureEntry(assetId)
     revokeEntryBlobUrl(entry)
 
     entry.blob = blob
+    entry.bytes = payload.bytes ?? entry.bytes ?? null
     entry.mimeType = payload.mimeType ?? blob.type ?? entry.mimeType ?? null
     entry.filename = payload.filename ?? entry.filename ?? (blob instanceof File ? blob.name : null)
     entry.downloadUrl = payload.downloadUrl ?? entry.downloadUrl ?? null
@@ -615,7 +650,7 @@ export class AssetLoader {
     entry.error = null
     entry.lastUsedAt = now()
 
-    const { blob, mimeType, filename, url: resolvedUrl } = await withSemaphore(assetDownloadSemaphore, () =>
+    const { blob, mimeType, filename, url: resolvedUrl, bytes } = await withSemaphore(assetDownloadSemaphore, () =>
       fetchAssetBlobInternal(sourceUrl, controller, (progress) => {
         entry.progress = progress
         options.onProgress?.(progress)
@@ -630,6 +665,9 @@ export class AssetLoader {
       contentHash: options.persistence?.contentHash ?? null,
       contentHashAlgorithm: options.persistence?.contentHashAlgorithm ?? null,
       persistentKeys: options.persistence?.keys,
+      // Keep the raw bytes the downloader already materialised so the model
+      // parser does not have to read the blob back out through FileReader.
+      bytes: bytes ?? null,
     })
   }
 }
@@ -642,6 +680,7 @@ function createEmptyEntry(assetId: string): AssetCacheEntry {
     error: null,
     blob: null,
     blobUrl: null,
+    bytes: null,
     size: 0,
     lastUsedAt: now(),
     abortController: null,
