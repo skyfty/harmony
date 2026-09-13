@@ -65,6 +65,12 @@ try {
 }
 
 try {
+  require('./assetDownload.worker.js');
+} catch (error) {
+  console.warn('[harmony-shared-worker] asset download worker init failed', error);
+}
+
+try {
   require('./basis/basis_transcoder.js');
 } catch (error) {
   console.error('[harmony-shared-worker] basis transcoder init failed', error);

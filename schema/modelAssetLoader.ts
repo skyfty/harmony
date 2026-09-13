@@ -2,8 +2,14 @@ import * as THREE from 'three'
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js'
 import type ResourceCache from './ResourceCache'
 import type { AssetCacheEntry } from './assetCache'
+import { Semaphore, withSemaphore } from './concurrency'
 import type { SceneNodeImportMetadata } from './core'
 import { getExtensionFromMimeType, getLastExtensionFromFilenameOrUrl } from './assetTypeConversion'
+
+// GLB/FBX parsing (GLTFLoader.parse + geometry/material construction) is CPU
+// bound and runs on the render main thread. Serialize parses so a burst of LOD
+// switches cannot stack several synchronous parses back-to-back in one frame.
+const modelParseSemaphore = new Semaphore(1)
 
 let assetImportModulePromise: Promise<typeof import('./assetImport')> | null = null
 
@@ -83,7 +89,7 @@ export async function loadAssetObject(resourceCache: ResourceCache, assetId: str
   try {
     const ext = file.name.split('.').pop()?.toLowerCase()
     const { loadObjectFromFile } = await loadAssetImportModule()
-    const object = await loadObjectFromFile(file, ext)
+    const object = await withSemaphore(modelParseSemaphore, () => loadObjectFromFile(file, ext))
     return object
   } catch (error) {
     console.warn('[ModelAssetLoader] Failed to parse asset object', assetId, error)

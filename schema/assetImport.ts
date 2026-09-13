@@ -3,6 +3,7 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 import Loader, { type LoaderErrorPayload, type LoaderLoadedPayload, type LoaderProgressPayload } from './loader'
 import { createUvDebugMaterial } from './debugTextures'
 import { normalizeScatterMaterials } from './scatterMaterials'
+import { isGltfParseWorkerConfigured, parseGltfWithWorker } from './gltfParse'
 
 const DEFAULT_OBJECT_LOAD_TIMEOUT_MS = 45000
 
@@ -117,6 +118,32 @@ export function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
   return cloned
 }
 
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  return new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => resolve(reader.result as ArrayBuffer))
+    reader.addEventListener('error', () => reject(reader.error ?? new Error('读取资源文件失败')))
+    reader.addEventListener('abort', () => reject(new Error('读取资源文件被取消')))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+async function tryLoadGlbViaWorker(file: File): Promise<THREE.Object3D | null> {
+  try {
+    const buffer = await readFileAsArrayBuffer(file)
+    const object = await parseGltfWithWorker(buffer)
+    if (!object) {
+      return null
+    }
+    prepareImportedObject(object)
+    normalizeImportedMeshMaterials(object)
+    normalizeScatterMaterials(object)
+    return object
+  } catch {
+    return null
+  }
+}
+
 export async function loadObjectFromFile(
   file: File,
   extensionOrOptions?: string | LoadObjectOptions,
@@ -125,6 +152,21 @@ export async function loadObjectFromFile(
   const options: LoadObjectOptions = typeof extensionOrOptions === 'object' && extensionOrOptions !== null
     ? (extensionOrOptions as LoadObjectOptions)
     : optionsParam
+
+  const inferredExt = typeof extensionOrOptions === 'string'
+    ? extensionOrOptions.toLowerCase()
+    : (file.name.split('.').pop() ?? '').toLowerCase()
+
+  // Offload the CPU-heavy GLB parse (JSON + accessor decode + geometry build) to
+  // a worker when configured. The serializer is conservative: anything it cannot
+  // faithfully represent returns null and we fall through to the synchronous
+  // GLTFLoader.parse path below.
+  if (inferredExt === 'glb' && isGltfParseWorkerConfigured()) {
+    const workerResult = await tryLoadGlbViaWorker(file)
+    if (workerResult) {
+      return workerResult
+    }
+  }
 
   return new Promise<THREE.Object3D>((resolve, reject) => {
     const loader = new Loader()

@@ -397,7 +397,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import { KTX2Loader as PlatformKTX2Loader } from '@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader';
-import { installWechatWorkerShim, terminateWechatSharedWorker } from '@harmony/utils/wechat-shared-worker';
+import { installWechatWorkerShim, isWechatSharedWorkerSupported, terminateWechatSharedWorker } from '@harmony/utils/wechat-shared-worker';
 
 import PlatformCanvas from './PlatformCanvas.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
@@ -556,7 +556,9 @@ import {
 import type { ResolvedSteerBinding } from '@harmony/schema/steerBindingIndex';
 import { type NodePrefabData } from '@harmony/schema/runtimePrefab';
 import ResourceCache from '@harmony/schema/ResourceCache';
-import { AssetCache, AssetLoader, DEFAULT_ASSET_CACHE_MAX_ENTRIES, configureAssetDownloadHostMirrors, fetchAssetBlob, type AssetCacheEntry } from '@harmony/schema/assetCache';
+import { AssetCache, AssetLoader, DEFAULT_ASSET_CACHE_MAX_ENTRIES, configureAssetBlobDownloader, configureAssetDownloadHostMirrors, fetchAssetBlob, type AssetCacheEntry } from '@harmony/schema/assetCache';
+import { createWorkerAssetBlobDownloader } from '@harmony/schema/assetDownloadWorkerPool';
+import { configureGltfParseWorkerFactory } from '@harmony/schema/gltfParse';
 import { ASSET_DOWNLOAD_HOST_MIRRORS } from '@harmony/schema/assetDownloadMirrors';
 import { isGroundDynamicMesh } from '@harmony/schema/groundHeightfield';
 import { resolveDocumentGroundNode as resolveSharedDocumentGroundNode } from '@harmony/schema/groundNode';
@@ -589,12 +591,15 @@ import {
   updateModelInstanceBindingMatrix,
   updateModelInstanceMatrix,
   findNodeIdForInstance,
+  precompileModelInstanceGroup,
   type ModelInstanceGroup,
 } from '@harmony/schema/modelObjectCache';
 import {
   allocateBillboardInstance,
   allocateBillboardInstanceBinding,
+  ensureBillboardInstanceGroup,
   getBillboardInstanceBindingsForNode,
+  getCachedBillboardInstanceGroup,
   releaseBillboardInstance,
   subscribeBillboardInstancedMeshes,
   updateBillboardInstanceBindingMatrix,
@@ -651,6 +656,8 @@ import {
   createTerrainDatasetHeightSamplerFromScenePackage,
   readTerrainDatasetManifestFromScenePackage,
 } from '../common/utils/terrainDatasetPackage';
+import { createAssetDownloadWorkerFactory } from '../common/utils/assetDownloadWorkerHost';
+import { createGltfParseWorkerFactory } from '../common/utils/gltfParseWorkerHost';
 import {
   createGroundRuntimeMeshFromSidecar,
 } from '@harmony/schema/groundHeightSidecar';
@@ -853,6 +860,8 @@ import {
   LOD_COMPONENT_TYPE,
   LOD_FACE_CAMERA_FORWARD_AXIS_X,
   clampLodComponentProps,
+  getLodLevelAssetId,
+  getLodLevelKind,
   type LodComponentProps,
 } from '@harmony/schema/components/definitions/lodComponent';
 import {
@@ -1392,6 +1401,16 @@ import {
 // Configure multi-source mirrors for asset downloads (优先切源).
 // Note: asset identifiers / cache keys remain the original URLs/assetIds.
 configureAssetDownloadHostMirrors(ASSET_DOWNLOAD_HOST_MIRRORS);
+
+// Route runtime asset downloads through a worker pool (H5/browser only). On
+// WeChat the worker has no network API, so skip the downloader entirely and let
+// fetchAssetBlob use uni.downloadFile on the main thread.
+configureAssetBlobDownloader(
+  isWechatSharedWorkerSupported()
+    ? null
+    : createWorkerAssetBlobDownloader(createAssetDownloadWorkerFactory()),
+);
+configureGltfParseWorkerFactory(createGltfParseWorkerFactory());
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
 const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersistentAssetStorageSupported()
@@ -8154,6 +8173,101 @@ async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | 
 
   pendingLodModelLoads.set(assetId, task);
   await task;
+}
+
+const LOD_PREFETCH_BAND_METERS = 24;
+const LOD_PREFETCH_MAX_ASSETS_PER_PASS = 4;
+const LOD_PREFETCH_MIN_INTERVAL_MS = 400;
+
+let lodPrefetchScheduled = false;
+let lodPrefetchLastRunAt = 0;
+
+// Idle-time distance-band prewarm: while the camera is within a small band of
+// the next-closer LOD threshold, download + parse + build that level's asset
+// ahead of time, so the LOD switch is a cheap instanced-mesh allocation instead
+// of a mid-frame download+parse hitch.
+function prefetchNearbyLodTargets(): void {
+  const context = renderContext;
+  const cache = viewerResourceCache;
+  if (!context || !cache) {
+    return;
+  }
+  const camera = context.camera;
+  const entries = collectInstancedLodRuntimeEntries();
+  const queuedAssetIds = new Set<string>();
+  let budget = LOD_PREFETCH_MAX_ASSETS_PER_PASS;
+
+  for (const entry of entries) {
+    if (budget <= 0) {
+      break;
+    }
+    const levels = clampLodComponentProps(entry.componentProps).levels;
+    if (levels.length < 2) {
+      continue;
+    }
+
+    const world = entry.snapshot.worldPosition;
+    const dx = world.x - camera.position.x;
+    const dy = world.y - camera.position.y;
+    const dz = world.z - camera.position.z;
+    const distance = Math.sqrt((dx * dx) + (dy * dy) + (dz * dz));
+
+    let chosenIndex = -1;
+    for (let index = levels.length - 1; index >= 0; index -= 1) {
+      const level = levels[index];
+      if (level && distance >= level.distance) {
+        chosenIndex = index;
+        break;
+      }
+    }
+    if (chosenIndex <= 0) {
+      continue;
+    }
+
+    const nextCloser = levels[chosenIndex - 1];
+    if (!nextCloser || distance - nextCloser.distance > LOD_PREFETCH_BAND_METERS) {
+      continue;
+    }
+
+    const assetId = getLodLevelAssetId(nextCloser);
+    if (!assetId || queuedAssetIds.has(assetId)) {
+      continue;
+    }
+
+    if (getLodLevelKind(nextCloser) === 'billboard') {
+      if (getCachedBillboardInstanceGroup(assetId)) {
+        continue;
+      }
+      queuedAssetIds.add(assetId);
+      void ensureBillboardInstanceGroup(assetId, cache);
+    } else {
+      if (getCachedModelObject(assetId)) {
+        continue;
+      }
+      queuedAssetIds.add(assetId);
+      void ensureModelObjectCached(assetId, entry.node);
+    }
+    budget -= 1;
+  }
+}
+
+function scheduleLodPrefetch(): void {
+  if (lodPrefetchScheduled) {
+    return;
+  }
+  const now = Date.now();
+  if (now - lodPrefetchLastRunAt < LOD_PREFETCH_MIN_INTERVAL_MS) {
+    return;
+  }
+  lodPrefetchScheduled = true;
+  const scheduleIdle = typeof requestIdleCallback === 'function'
+    ? (callback: () => void) => requestIdleCallback(callback, { timeout: 2000 })
+    : (callback: () => void) => setTimeout(callback, 120);
+  scheduleIdle(() => {
+    lodPrefetchScheduled = false;
+    lodPrefetchLastRunAt = Date.now();
+    prefetchNearbyLodTargets();
+  });
 }
 
 
@@ -21983,6 +22097,7 @@ function startRenderLoop(
         if (shouldRunInstancedCulling(camera, instancingNow)) {
           updateInstancedCullingAndLod();
         }
+        scheduleLodPrefetch();
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
           tickInstancedBounds(deltaSeconds);
           if (gradientBackgroundDome) {
@@ -22190,7 +22305,18 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   updateCharacterFollowCamera(0, { immediate: true });
   markInstancedCullingDirty();
 
-  // Phase 6: start the render loop.
+  // Phase 6: prewarm GPU programs/buffers for cached instanced model groups
+  // before the interactive render loop starts. Shader compilation and buffer
+  // setup are one-time costs; paying them here (behind the loading state)
+  // avoids a hitch on the first visible frame after a node's LOD model loads.
+  try {
+    await yieldToMainThread();
+    precompileModelInstanceGroup(renderer, camera);
+  } catch (caughtError) {
+    console.warn('[SceneViewer] Failed to precompile model instance groups', caughtError);
+  }
+
+  // Phase 7: start the render loop.
   startRenderLoop(result, renderer, scene, camera, controls);
 }
 

@@ -42,6 +42,7 @@ export type AssetBlobDownloadOptions = {
 type AssetDownloadRuntimeState = {
   assetDownloadModuleTag: string
   assetDownloadHostMirrors: AssetDownloadHostMirrorMap | null
+  assetBlobDownloader: AssetBlobDownloader | null
 }
 
 const ASSET_DOWNLOAD_RUNTIME_STATE_KEY = '__harmony_schema_asset_download_runtime_state__'
@@ -54,6 +55,7 @@ function getAssetDownloadRuntimeState(): AssetDownloadRuntimeState {
     globalObject[ASSET_DOWNLOAD_RUNTIME_STATE_KEY] = {
       assetDownloadModuleTag: Math.random().toString(36).slice(2, 10),
       assetDownloadHostMirrors: null,
+      assetBlobDownloader: null,
     }
   }
   return globalObject[ASSET_DOWNLOAD_RUNTIME_STATE_KEY]!
@@ -72,7 +74,7 @@ export function configureAssetDownloadHostMirrors(mirrors: AssetDownloadHostMirr
 }
 
 export function configureAssetBlobDownloader(downloader: AssetBlobDownloader | null): void {
-  void downloader
+  getAssetDownloadRuntimeState().assetBlobDownloader = downloader
 }
 
 export class AssetDownloadWorkerUnavailableError extends Error {
@@ -95,6 +97,24 @@ export async function fetchAssetBlob(
   if (controller.signal.aborted) {
     throw createAbortError()
   }
+
+  // Prefer a configured downloader (e.g. a worker-backed downloader that keeps
+  // network bytes off the render main thread). On any failure other than an
+  // explicit abort we fall back to the in-thread downloader — the main-thread
+  // path (fetch / uni.downloadFile) is the safety net, so a worker bug on any
+  // platform can never strand asset loading.
+  const downloader = getAssetDownloadRuntimeState().assetBlobDownloader
+  if (downloader) {
+    try {
+      return await downloader(candidates, controller, onProgress)
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+      // fall through to the in-thread fallback below
+    }
+  }
+
   return await downloadAssetBlob(candidates, controller, onProgress, options)
 }
 

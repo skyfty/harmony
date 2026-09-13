@@ -9,6 +9,9 @@ function resolveWorkerScope(scriptPath: string): string | null {
   if (scriptPath.includes('instancedLod')) {
     return INSTANCED_LOD_WORKER_SCOPE;
   }
+  if (scriptPath.includes('assetDownload')) {
+    return 'asset-download';
+  }
   return null;
 }
 

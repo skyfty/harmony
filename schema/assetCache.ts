@@ -1,4 +1,5 @@
 import { fetchAssetBlob as fetchAssetBlobInternal } from './assetDownload'
+import { Semaphore, withSemaphore } from './concurrency'
 import {
   resolvePersistentAssetKeys,
   type PersistentAssetStorage,
@@ -17,6 +18,21 @@ const NodeBuffer: { from: (data: string, encoding: string) => { buffer: ArrayBuf
   typeof globalThis !== 'undefined' && (globalThis as any).Buffer
     ? (globalThis as any).Buffer
     : undefined
+
+const DEFAULT_ASSET_DOWNLOAD_CONCURRENCY = 3
+let assetDownloadSemaphore = new Semaphore(DEFAULT_ASSET_DOWNLOAD_CONCURRENCY)
+
+/**
+ * Bound how many remote asset downloads may be in flight at once. Runtime node
+ * loads can burst when many LOD switches happen in the same frame; without a
+ * cap they flood the main thread with concurrent fetch/uni.downloadFile work.
+ */
+export function configureAssetDownloadConcurrency(concurrency: number): void {
+  const normalized = Number.isInteger(concurrency) && concurrency > 0
+    ? concurrency
+    : DEFAULT_ASSET_DOWNLOAD_CONCURRENCY
+  assetDownloadSemaphore = new Semaphore(normalized)
+}
 
 export type AssetCacheStatus = 'idle' | 'downloading' | 'cached' | 'error'
 
@@ -590,6 +606,7 @@ export class AssetLoader {
     if (!source.url) {
       throw new Error('该资源没有可用的下载地址')
     }
+    const sourceUrl = source.url
     const entry = this.cache.ensureEntry(assetId)
     const controller = new AbortController()
     entry.abortController = controller
@@ -598,10 +615,12 @@ export class AssetLoader {
     entry.error = null
     entry.lastUsedAt = now()
 
-    const { blob, mimeType, filename, url: resolvedUrl } = await fetchAssetBlobInternal(source.url, controller, (progress) => {
-      entry.progress = progress
-      options.onProgress?.(progress)
-    }, { fileDownload: true })
+    const { blob, mimeType, filename, url: resolvedUrl } = await withSemaphore(assetDownloadSemaphore, () =>
+      fetchAssetBlobInternal(sourceUrl, controller, (progress) => {
+        entry.progress = progress
+        options.onProgress?.(progress)
+      }, { fileDownload: true }),
+    )
 
     return this.cache.storeBlob(assetId, blob, {
       mimeType: source.mimeType ?? mimeType ?? null,

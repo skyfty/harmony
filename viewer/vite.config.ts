@@ -439,6 +439,10 @@ export default defineConfig({
       sourceChunkName: 'instancedLodCulling.worker',
       fileName: 'pages/scenery/workers/instancedLodCulling.worker.js',
     }),
+    emitMpWorkerAssetPlugin({
+      sourceChunkName: 'assetDownload.worker',
+      fileName: 'pages/scenery/workers/assetDownload.worker.js',
+    }),
     emitMpWorkerBundlePlugin({
       enabled: isMp,
       entryPath: fileURLToPath(new URL('./src/pages/scenery/workers/physicsCannon.worker.ts', import.meta.url)),

@@ -8,7 +8,9 @@ import {
   Mesh,
   Object3D,
   Vector3,
+  type Camera,
   type Material,
+  type WebGLRenderer,
 } from 'three'
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
@@ -212,6 +214,32 @@ export function getOrCreateModelObjectRepeatVariant(
 export function getCachedModelObject(assetId: string): ModelInstanceGroup | null {
   const cached = modelObjectCache.get(assetId)
   return cached ? mapEntryToGroup(cached) : null
+}
+
+/**
+ * Best-effort GPU prewarm for cached model instance groups. Compiling materials
+ * and instanced meshes ahead of their first visible frame moves shader
+ * compilation and buffer upload out of the interactive render loop, avoiding
+ * the one-frame hitch when a node's LOD model first appears.
+ */
+export function precompileModelInstanceGroup(renderer: WebGLRenderer, camera: Camera): void {
+  if (!renderer || typeof renderer.compile !== 'function') {
+    return
+  }
+  modelObjectCache.forEach((entry) => {
+    try {
+      renderer.compile(entry.object, camera)
+    } catch (error) {
+      console.warn('[ModelObjectCache] Failed to precompile model object', entry.assetId, error)
+    }
+    for (const handle of entry.handles) {
+      try {
+        renderer.compile(handle.mesh, camera)
+      } catch (error) {
+        console.warn('[ModelObjectCache] Failed to precompile instanced mesh', entry.assetId, error)
+      }
+    }
+  })
 }
 
 export function getOrLoadModelObject(assetId: string, loader: LoaderFn): Promise<ModelInstanceGroup> {
