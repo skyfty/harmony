@@ -348,6 +348,7 @@ import {
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
 import {
+  componentManager,
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
@@ -763,7 +764,7 @@ const instancedHoverRestoreMaterial = new THREE.MeshBasicMaterial({
 })
 instancedHoverRestoreMaterial.toneMapped = false
 
-const { ensureInstancedPickProxy, removeInstancedPickProxy } = createPickProxyManager()
+const { ensureInstancedPickProxy, removeInstancedPickProxy, disposeInstancedPickProxy } = createPickProxyManager()
 
 // Debug bounds visualization removed
 
@@ -11573,6 +11574,8 @@ function applyPendingScenePatches(): boolean {
 
   const needsPlaceholderOverlayRefresh = shouldRefreshPlaceholderOverlaysFromPatches(patches as Array<{ type: string }>)
   if (patches.some((patch) => patch.type === 'structure')) {
+    // A structure reconcile rebuilds selection bindings anyway.
+    pendingRuntimeProxyUpgradeRefresh = false
     syncStructureDrivenSceneGraph(needsPlaceholderOverlayRefresh)
     return true
   }
@@ -11587,6 +11590,8 @@ function applyPendingScenePatches(): boolean {
   if (nodePatches.length) {
     const didFallbackToFullSync = applyNodePatchesIncrementally(nodePatches, removedIds)
     if (didFallbackToFullSync) {
+      // syncSceneGraph re-attaches selection and outlines on its own.
+      pendingRuntimeProxyUpgradeRefresh = false
       return true
     }
   }
@@ -11596,6 +11601,7 @@ function applyPendingScenePatches(): boolean {
   }
 
   updatePlaceholderOverlayPositions()
+  refreshRuntimeProxyUpgradeViewportBindings()
   return true
 }
 
@@ -22733,6 +22739,172 @@ function applyViewPointScaleConstraint(object: THREE.Object3D, node: SceneNode) 
   })
 }
 
+/** Set while a patch batch swapped an instancing proxy for a real model object. */
+let pendingRuntimeProxyUpgradeRefresh = false
+
+function markRuntimeProxyUpgrade(): void {
+  pendingRuntimeProxyUpgradeRefresh = true
+}
+
+/**
+ * Only proxies created by the runtime instancing paths carry both flags.
+ * `applyInstanceLayoutVisibilityAndAssetBinding` injects `instancedAssetId`
+ * on real objects as well, so `instanced === true` is the discriminator.
+ */
+function isInstancedRuntimeProxy(object: THREE.Object3D | null | undefined): boolean {
+  if (!object || object.userData?.instanced !== true) {
+    return false
+  }
+  const assetId = object.userData?.instancedAssetId
+  return typeof assetId === 'string' && assetId.trim().length > 0
+}
+
+/**
+ * Imported model nodes render through the shared InstancedMesh cache while
+ * `canNodeUseRuntimeModelInstancing(node)` holds; their runtime object is then
+ * only a transform/binding proxy that owns no meshes of its own. Enabling an
+ * Animation / Skin / General Mesh component flips that predicate, so the node
+ * has to fall back to a regular Object3D. The incremental patch path recreates
+ * the node exactly then (`shouldRecreateNode`); without the upgrade below it
+ * would reuse the now-invisible proxy and the model would only reappear after a
+ * full scene load.
+ */
+function shouldUpgradeInstancedProxyToModelObject(object: THREE.Object3D, node: SceneNode): boolean {
+  if (!isInstancedRuntimeProxy(object)) {
+    return false
+  }
+  if (canNodeUseRuntimeModelInstancing(node)) {
+    return false
+  }
+  // Grid instance layouts drive their own instanced rendering; keep them as is.
+  const layout = clampSceneNodeInstanceLayout(node.instanceLayout ?? null)
+  if (layout && layout.mode === 'grid' && resolveInstanceLayoutTemplateAssetId(layout, node.sourceAssetId)) {
+    return false
+  }
+  return true
+}
+
+function resolveRuntimeProxyModelAssetId(node: SceneNode, proxy: THREE.Object3D): string | null {
+  const sourceAssetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  if (sourceAssetId) {
+    return sourceAssetId
+  }
+  const proxyAssetId = proxy.userData?.instancedAssetId
+  return typeof proxyAssetId === 'string' && proxyAssetId.trim().length ? proxyAssetId.trim() : null
+}
+
+/**
+ * Releases every binding owned by an instanced proxy before the node switches
+ * to a regular model object (or when the proxy is dropped for another reason).
+ */
+function releaseInstancedProxyBindings(nodeId: string, proxy: THREE.Object3D): void {
+  clearInstanceLayoutMatrixCacheForNode(nodeId)
+  releaseModelInstance(nodeId)
+  releaseBillboardInstance(nodeId)
+  releaseInstancedOutlineEntry(nodeId, false)
+  disposeInstancedPickProxy(proxy)
+}
+
+/**
+ * Clones the cached model object the way the full scene-load path does and
+ * strips the instancing metadata so later patches keep treating the clone as a
+ * regular model object. Geometry and materials stay shared with the cache.
+ */
+function createNodeModelObjectFromCache(assetId: string, node: SceneNode): THREE.Object3D | null {
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    return null
+  }
+  const object = cloneObject3DShared(cached.object)
+  const userData = object.userData ?? (object.userData = {})
+  // Do not let metadata copied from the cached source make the clone look like
+  // an instancing proxy on subsequent incremental patches.
+  delete userData.instanced
+  delete userData.instancedAssetId
+  delete userData.instancedBounds
+  delete userData.instancedRenderKind
+  delete userData.instancedPickProxy
+  delete userData.__harmonyCulled
+  delete userData.__harmonyInstancedRadius
+  delete userData.__harmonyInstanceLayoutInjectedInstancedAssetId
+  delete userData.__harmonyInstanceLayoutPreviousInstancedAssetId
+  delete userData.__harmonyInstanceLayoutTemplateAssetId
+  delete userData.__harmonyInstanceLayoutCache
+  delete userData.__harmonyInstanceLayoutHiddenMesh
+  delete userData.__harmonyInstanceLayoutHiddenMeshWasVisible
+  object.name = node.name ?? object.name
+  object.traverse((child) => {
+    const meshChild = child as THREE.Mesh
+    if (meshChild?.isMesh) {
+      meshChild.castShadow = true
+      meshChild.receiveShadow = true
+    }
+  })
+  userData.nodeId = node.id
+  return object
+}
+
+/** Mirrors sceneStore's `registerRuntimeForNode` recipe for a rebuilt node. */
+function registerNodeModelObject(node: SceneNode, object: THREE.Object3D): void {
+  registerRuntimeObject(node.id, object)
+  componentManager.attachRuntime(node, object)
+  componentManager.syncNode(node)
+}
+
+function upgradeInstancedProxyToModelObject(node: SceneNode, proxy: THREE.Object3D): THREE.Object3D {
+  const assetId = resolveRuntimeProxyModelAssetId(node, proxy)
+  if (!assetId) {
+    return proxy
+  }
+  const object = createNodeModelObjectFromCache(assetId, node)
+  if (!object) {
+    // A node rendered through instancing should always have its model cached.
+    // If it does not, preload it and retry through a runtime patch instead of
+    // leaving the invisible proxy in place forever.
+    void ensureModelObjectCached(assetId).then(() => {
+      if (!isSceneReady.value) {
+        return
+      }
+      if (!getCachedModelObject(assetId)) {
+        // Still unavailable (missing asset, failed load): do not queue another
+        // patch, otherwise the retry would repeat on every patch batch.
+        return
+      }
+      sceneStore.queueSceneNodePatch(node.id, ['runtime'])
+    })
+    return proxy
+  }
+  releaseInstancedProxyBindings(node.id, proxy)
+  registerNodeModelObject(node, object)
+  markRuntimeProxyUpgrade()
+  return object
+}
+
+/**
+ * Store-managed runtime object for a node, upgraded from an instancing proxy to
+ * a real model object when the node can no longer use runtime instancing.
+ */
+function resolveNodeContainerObject(node: SceneNode): THREE.Object3D | null {
+  const container = getRuntimeObject(node.id)
+  if (!container || !shouldUpgradeInstancedProxyToModelObject(container, node)) {
+    return container
+  }
+  return upgradeInstancedProxyToModelObject(node, container)
+}
+
+/**
+ * An upgrade swaps the node object, so the selection outline and the transform
+ * gizmo have to be re-bound once the whole patch batch has been applied.
+ */
+function refreshRuntimeProxyUpgradeViewportBindings(): void {
+  if (!pendingRuntimeProxyUpgradeRefresh) {
+    return
+  }
+  pendingRuntimeProxyUpgradeRefresh = false
+  attachSelection(props.selectedNodeId, props.activeTool)
+  updateSelectionHighlights()
+}
+
 function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
   const userData = object.userData ?? {}
@@ -23468,7 +23640,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       container.add(regionGroup)
       ;(containerData as any).regionGroup = regionGroup
     } else {
-      const runtimeObject = getRuntimeObject(node.id)
+      const runtimeObject = resolveNodeContainerObject(node)
       if (runtimeObject) {
         runtimeObject.removeFromParent()
         runtimeObject.userData.nodeId = node.id
@@ -23534,17 +23706,17 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     const hasImportedMaterialOverride = isImportedModelOverrideNode(node)
       && Array.isArray(node.materials)
       && node.materials.length > 0
-    let container = hasImportedMaterialOverride ? null : getRuntimeObject(node.id)
-    if (!container && hasImportedMaterialOverride && node.sourceAssetId) {
-      const cached = getCachedModelObject(node.sourceAssetId)
-      if (cached) {
-        container = cloneObject3DShared(cached.object)
-        // Do not let metadata copied from the cached source make the clone
-        // look like an instancing proxy on subsequent incremental patches.
-        delete container.userData.instanced
-        delete container.userData.instancedAssetId
-        delete container.userData.instancedBounds
-        delete container.userData.instancedRenderKind
+    let container = hasImportedMaterialOverride ? null : resolveNodeContainerObject(node)
+    if (container === null && hasImportedMaterialOverride && node.sourceAssetId) {
+      const modelObject = createNodeModelObjectFromCache(node.sourceAssetId, node)
+      if (modelObject) {
+        const existingRuntime = getRuntimeObject(node.id)
+        if (existingRuntime && isInstancedRuntimeProxy(existingRuntime)) {
+          releaseInstancedProxyBindings(node.id, existingRuntime)
+        }
+        registerNodeModelObject(node, modelObject)
+        markRuntimeProxyUpgrade()
+        container = modelObject
       }
     }
     if (container !== null) {
@@ -23584,7 +23756,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       registerRuntimeObject(node.id, object)
     }
   } else {
-    let container = getRuntimeObject(node.id)
+    let container = resolveNodeContainerObject(node)
     if (container !== null) {
       container.userData.usesRuntimeObject = true
     } else {

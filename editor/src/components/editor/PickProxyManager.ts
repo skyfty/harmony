@@ -29,6 +29,7 @@ function extractInstancedBounds(node: SceneNode, object: THREE.Object3D): Instan
 export type PickProxyManager = {
   ensureInstancedPickProxy: (object: THREE.Object3D, node: SceneNode) => void
   removeInstancedPickProxy: (object: THREE.Object3D) => void
+  disposeInstancedPickProxy: (object: THREE.Object3D) => void
 }
 
 export function createPickProxyManager(): PickProxyManager {
@@ -70,6 +71,25 @@ export function createPickProxyManager(): PickProxyManager {
       return
     }
     proxy.removeFromParent()
+    delete object.userData.instancedPickProxy
+  }
+
+  /**
+   * Detaches the pick proxy and releases the GPU resources it owns. The shared
+   * unit-box geometry and the shared material must survive (other nodes reuse
+   * them), so only hull/bounds geometries created for this proxy are disposed.
+   * The proxy may already be detached from its host, which is fine.
+   */
+  function disposeInstancedPickProxy(object: THREE.Object3D) {
+    const proxy = object.userData?.instancedPickProxy as (THREE.Object3D & { geometry?: THREE.BufferGeometry }) | undefined
+    if (!proxy) {
+      return
+    }
+    proxy.removeFromParent()
+    const geometry = proxy.geometry
+    if (geometry && geometry !== instancedPickProxyGeometry) {
+      geometry.dispose()
+    }
     delete object.userData.instancedPickProxy
   }
 
@@ -543,5 +563,6 @@ export function createPickProxyManager(): PickProxyManager {
   return {
     ensureInstancedPickProxy,
     removeInstancedPickProxy,
+    disposeInstancedPickProxy,
   }
 }
