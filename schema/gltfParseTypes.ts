@@ -71,6 +71,39 @@ export type GltfParseNodeDescriptor = {
   children: GltfParseNodeDescriptor[]
 }
 
+/**
+ * One animation track: the keyframe times/values travel as transferable raw
+ * bytes plus the typed-array type they must be viewed as.
+ *
+ * `valueType` is normalized to the value type name three's own AnimationClip
+ * JSON format uses ('number' | 'vector' | 'quaternion' | 'color' | 'boolean' |
+ * 'string'); `interpolation` is the resolved THREE.Interpolate* constant
+ * (2300 discrete / 2301 linear / 2302 smooth), the same value AnimationClip
+ * JSON serialization writes.
+ */
+export type GltfParseTrackDescriptor = {
+  name: string
+  valueType: string
+  interpolation: number | null
+  timesType: string
+  times: ArrayBuffer
+  valuesType: string
+  values: ArrayBuffer
+}
+
+export type GltfParseAnimationDescriptor = {
+  name: string
+  duration: number
+  blendMode: number
+  tracks: GltfParseTrackDescriptor[]
+}
+
 export type GltfParseDescriptor = {
   root: GltfParseNodeDescriptor
+  /**
+   * Clips parsed from the GLB. They are attached to the rebuilt root exactly
+   * like the in-thread loader does, so `object.animations` consumers (the scene
+   * animation runtime, external animation assets, clone helpers) keep working.
+   */
+  animations: GltfParseAnimationDescriptor[]
 }

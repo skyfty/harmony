@@ -1,11 +1,13 @@
 import * as THREE from 'three'
 import type {
+  GltfParseAnimationDescriptor,
   GltfParseAttributeDescriptor,
   GltfParseDescriptor,
   GltfParseGeometryDescriptor,
   GltfParseMaterialDescriptor,
   GltfParseNodeDescriptor,
   GltfParseTextureDescriptor,
+  GltfParseTrackDescriptor,
 } from './gltfParseTypes'
 
 export type {
@@ -23,14 +25,57 @@ export type {
 // ---------------------------------------------------------------------------
 
 function rebuildAttribute(attr: GltfParseAttributeDescriptor): THREE.BufferAttribute {
-  const Ctor = (globalThis as unknown as Record<string, unknown>)[attr.typedArrayType] as
+  const array = rebuildTypedArray(attr.typedArrayType, attr.bytes)
+  return new THREE.BufferAttribute(array as THREE.TypedArray, attr.itemSize, attr.normalized)
+}
+
+function rebuildTypedArray(typedArrayType: string, bytes: ArrayBuffer): ArrayBufferView {
+  const Ctor = (globalThis as unknown as Record<string, unknown>)[typedArrayType] as
     | (new (buffer: ArrayBuffer) => ArrayBufferView)
     | undefined
   if (typeof Ctor !== 'function') {
-    throw new Error(`Unsupported typed array type ${attr.typedArrayType}`)
+    throw new Error(`Unsupported typed array type ${typedArrayType}`)
   }
-  const array = new Ctor(attr.bytes)
-  return new THREE.BufferAttribute(array as THREE.TypedArray, attr.itemSize, attr.normalized)
+  return new Ctor(bytes)
+}
+
+type TrackConstructor = new (
+  name: string,
+  times: THREE.TypedArray,
+  values: THREE.TypedArray,
+  interpolation?: number,
+) => THREE.KeyframeTrack
+
+/** Track value type -> concrete KeyframeTrack, mirroring AnimationClip JSON. */
+const TRACK_TYPE_BY_VALUE_TYPE: Record<string, TrackConstructor> = {
+  number: THREE.NumberKeyframeTrack as unknown as TrackConstructor,
+  vector: THREE.VectorKeyframeTrack as unknown as TrackConstructor,
+  quaternion: THREE.QuaternionKeyframeTrack as unknown as TrackConstructor,
+  color: THREE.ColorKeyframeTrack as unknown as TrackConstructor,
+  boolean: THREE.BooleanKeyframeTrack as unknown as TrackConstructor,
+  string: THREE.StringKeyframeTrack as unknown as TrackConstructor,
+}
+
+function rebuildTrack(descriptor: GltfParseTrackDescriptor): THREE.KeyframeTrack {
+  const Ctor = TRACK_TYPE_BY_VALUE_TYPE[descriptor.valueType] as TrackConstructor | undefined
+  if (!Ctor) {
+    // Throwing makes parseGltfWithWorker() resolve null, which sends the caller
+    // back to the fully faithful in-thread GLB parse.
+    throw new Error(`Unsupported keyframe track value type ${descriptor.valueType}`)
+  }
+  const times = rebuildTypedArray(descriptor.timesType, descriptor.times) as THREE.TypedArray
+  const values = rebuildTypedArray(descriptor.valuesType, descriptor.values) as THREE.TypedArray
+  return new Ctor(descriptor.name, times, values, descriptor.interpolation ?? undefined)
+}
+
+function rebuildAnimationClip(descriptor: GltfParseAnimationDescriptor): THREE.AnimationClip {
+  const tracks = (descriptor.tracks ?? []).map(rebuildTrack)
+  return new THREE.AnimationClip(
+    descriptor.name,
+    descriptor.duration,
+    tracks,
+    descriptor.blendMode as THREE.AnimationBlendMode,
+  )
 }
 
 function rebuildGeometry(geometry: GltfParseGeometryDescriptor): THREE.BufferGeometry {
@@ -206,6 +251,14 @@ async function rebuildNode(descriptor: GltfParseNodeDescriptor): Promise<THREE.O
 
 export async function rebuildGltfScene(descriptor: GltfParseDescriptor): Promise<THREE.Object3D> {
   const root = await rebuildNode(descriptor.root)
+  // Mirror the in-thread GLTF path (schema/loader.ts): clips live on the root
+  // object so collectAnimationClips() / cloneImportedObject() can find them.
+  const animations = (descriptor.animations ?? []).map(rebuildAnimationClip)
+  if (animations.length) {
+    ;(root as unknown as { animations?: THREE.AnimationClip[] }).animations = animations
+    root.userData = root.userData ?? {}
+    root.userData.__animations = animations.map((clip) => clip.name)
+  }
   root.updateMatrixWorld(true)
   return root
 }

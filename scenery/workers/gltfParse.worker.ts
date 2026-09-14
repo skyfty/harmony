@@ -27,7 +27,10 @@ scope.addEventListener('message', (event) => {
         return
       }
       gltf.scene.updateMatrixWorld(true)
-      const descriptor = await serializeParsedGltfScene(gltf.scene)
+      // Animation clips must travel with the descriptor: the main thread rebuild
+      // has no access to gltf.animations, and a rebuilt model without clips
+      // silently loses every animation (character control clips included).
+      const descriptor = await serializeParsedGltfScene(gltf.scene, gltf.animations ?? [])
       if (!descriptor) {
         scope.postMessage({ type: 'unsupported', requestId, reason: 'unsupported-model-features' })
         return

@@ -1,10 +1,12 @@
 import type {
   GltfParseAttributeDescriptor,
+  GltfParseAnimationDescriptor,
   GltfParseDescriptor,
   GltfParseGeometryDescriptor,
   GltfParseMaterialDescriptor,
   GltfParseNodeDescriptor,
   GltfParseTextureDescriptor,
+  GltfParseTrackDescriptor,
 } from './gltfParseTypes'
 
 // Worker-side serialization of an already-parsed THREE GLTF scene into the
@@ -90,7 +92,54 @@ type Object3DLike = {
   quaternion: QuatLike
   scale: Vec3Like
   visible: boolean
+  /** Clips attached to the object by GLTFLoader consumers (schema/loader.ts). */
+  animations?: unknown
 }
+
+type AnimationClipLike = {
+  name?: unknown
+  duration?: unknown
+  blendMode?: unknown
+  tracks?: unknown
+}
+
+type KeyframeTrackLike = {
+  name?: unknown
+  ValueTypeName?: unknown
+  DefaultInterpolation?: unknown
+  times?: unknown
+  values?: unknown
+  getInterpolation?: () => unknown
+}
+
+/**
+ * Track value types three can rebuild. Mirrors AnimationClip's own JSON value
+ * type names (AnimationClip.getTrackTypeForValueTypeName).
+ */
+const NORMALIZED_TRACK_VALUE_TYPES: Record<string, string> = {
+  scalar: 'number',
+  double: 'number',
+  float: 'number',
+  number: 'number',
+  vector: 'vector',
+  vector2: 'vector',
+  vector3: 'vector',
+  vector4: 'vector',
+  color: 'color',
+  quaternion: 'quaternion',
+  bool: 'boolean',
+  boolean: 'boolean',
+  string: 'string',
+}
+
+/**
+ * THREE.InterpolateDiscrete / InterpolateLinear / InterpolateSmooth.
+ *
+ * KeyframeTrack.getInterpolation() reports these numeric constants, and a track
+ * whose interpolation is anything else (e.g. GLTF CUBICSPLINE installs a custom
+ * interpolant factory) would be rebuilt with different motion.
+ */
+const SUPPORTED_TRACK_INTERPOLATIONS = new Set([2300, 2301, 2302])
 
 function toArrayBuffer(value: unknown): ArrayBuffer {
   if (value instanceof ArrayBuffer) {
@@ -325,13 +374,106 @@ async function serializeNode(object: Object3DLike): Promise<GltfParseNodeDescrip
   }
 }
 
-export async function serializeParsedGltfScene(scene: Object3DLike): Promise<GltfParseDescriptor | null> {
+function serializeTrack(track: KeyframeTrackLike): GltfParseTrackDescriptor | null {
+  const name = typeof track.name === 'string' ? track.name : ''
+  if (!name) {
+    return null
+  }
+
+  const valueTypeName = typeof track.ValueTypeName === 'string' ? track.ValueTypeName.toLowerCase() : ''
+  const valueType = NORMALIZED_TRACK_VALUE_TYPES[valueTypeName]
+  if (!valueType) {
+    return null
+  }
+
+  // A custom interpolant (e.g. GLTF CUBICSPLINE) reports no standard
+  // interpolation, and rebuilding it without the custom factory would silently
+  // change the motion. Bail so the caller uses the in-thread parse instead.
+  const interpolation = typeof track.getInterpolation === 'function'
+    ? track.getInterpolation()
+    : track.DefaultInterpolation
+  if (typeof interpolation !== 'number' || !SUPPORTED_TRACK_INTERPOLATIONS.has(interpolation)) {
+    return null
+  }
+
+  const times = track.times
+  const values = track.values
+  if (!ArrayBuffer.isView(times) || !ArrayBuffer.isView(values)) {
+    return null
+  }
+  const timesBytes = toArrayBuffer(times)
+  const valuesBytes = toArrayBuffer(values)
+  if (timesBytes.byteLength === 0 || valuesBytes.byteLength === 0) {
+    return null
+  }
+
+  return {
+    name,
+    valueType,
+    interpolation,
+    timesType: times.constructor.name,
+    times: timesBytes,
+    valuesType: values.constructor.name,
+    values: valuesBytes,
+  }
+}
+
+function serializeAnimations(animations: unknown): GltfParseAnimationDescriptor[] | null {
+  if (animations == null) {
+    return []
+  }
+  if (!Array.isArray(animations)) {
+    return null
+  }
+
+  const serialized: GltfParseAnimationDescriptor[] = []
+  for (const rawClip of animations) {
+    const clip = rawClip as AnimationClipLike | null | undefined
+    if (!clip || typeof clip !== 'object' || !Array.isArray(clip.tracks)) {
+      return null
+    }
+
+    const tracks: GltfParseTrackDescriptor[] = []
+    for (const rawTrack of clip.tracks) {
+      const track = serializeTrack(rawTrack as KeyframeTrackLike)
+      if (!track) {
+        return null
+      }
+      tracks.push(track)
+    }
+
+    if (!tracks.length) {
+      return null
+    }
+
+    const duration = typeof clip.duration === 'number' && Number.isFinite(clip.duration)
+      ? clip.duration
+      : -1
+    serialized.push({
+      name: typeof clip.name === 'string' ? clip.name : '',
+      duration,
+      blendMode: typeof clip.blendMode === 'number' ? clip.blendMode : 2500,
+      tracks,
+    })
+  }
+
+  return serialized
+}
+
+export async function serializeParsedGltfScene(
+  scene: Object3DLike,
+  animations: unknown = undefined,
+): Promise<GltfParseDescriptor | null> {
   try {
     const root = await serializeNode(scene)
     if (!root) {
       return null
     }
-    return { root }
+    const serializedAnimations = serializeAnimations(animations === undefined ? scene.animations : animations)
+    if (!serializedAnimations) {
+      return null
+    }
+    return { root, animations: serializedAnimations }
   } catch {
     return null
   }
@@ -377,5 +519,15 @@ export function collectDescriptorBuffers(descriptor: GltfParseDescriptor): Array
   }
 
   collectNode(descriptor.root)
+  ;(descriptor.animations ?? []).forEach((animation) => {
+    animation.tracks.forEach((track) => {
+      if (track.times.byteLength > 0) {
+        buffers.push(track.times)
+      }
+      if (track.values.byteLength > 0) {
+        buffers.push(track.values)
+      }
+    })
+  })
   return buffers
 }
