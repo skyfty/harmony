@@ -11,7 +11,16 @@ export interface LoadObjectOptions {
   onProgress?: (payload: LoaderProgressPayload) => void
 }
 
-function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
+/**
+ * Fills in the engine's fallback material for meshes the file left without one.
+ *
+ * The `side` of materials that *do* come from the file is deliberately left
+ * untouched: glTF `doubleSided` / FBX double-sided flags are authored intent.
+ * Overwriting them with `FrontSide` made double-sided geometry lose every
+ * back-facing triangle (text, thin plates, open meshes) even though the file
+ * renders correctly in the authoring tool.
+ */
+function ensureImportedMeshMaterials(object: THREE.Object3D): void {
   object.traverse((child: THREE.Object3D) => {
     const mesh = child as unknown as THREE.Mesh
     if (!mesh?.isMesh) {
@@ -37,9 +46,6 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
           })
         }
 
-        material.side = THREE.FrontSide
-
-        material.needsUpdate = true
         return material
       })
 
@@ -49,15 +55,6 @@ function normalizeImportedMeshMaterials(object: THREE.Object3D): void {
 
       return
     }
-
-    const material = rawMaterial
-    if (!material) {
-      return
-    }
-
-    material.side = THREE.FrontSide
-
-    material.needsUpdate = true
   })
 }
 
@@ -135,7 +132,7 @@ async function tryLoadGlbViaWorkerBuffer(buffer: ArrayBuffer): Promise<THREE.Obj
       return null
     }
     prepareImportedObject(object)
-    normalizeImportedMeshMaterials(object)
+    ensureImportedMeshMaterials(object)
     normalizeScatterMaterials(object)
     return object
   } catch {
@@ -198,7 +195,7 @@ function loadObjectViaLoader(
         }
         const object = payload as THREE.Object3D
         prepareImportedObject(object)
-        normalizeImportedMeshMaterials(object)
+        ensureImportedMeshMaterials(object)
         normalizeScatterMaterials(object)
         if (settled) {
           return

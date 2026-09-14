@@ -1575,23 +1575,14 @@ class SceneGraphBuilder {
   }
 
   private prepareImportedObject(object: THREE.Object3D): void {
+    // Only the shadow flags are applied here. `side` stays exactly as the file
+    // authored it (glTF `doubleSided` / FBX double-sided flag): forcing a side
+    // here made the runtime disagree with the editor and lose back faces.
     object.traverse((child: THREE.Object3D) => {
       const mesh = child as unknown as THREE.Mesh;
       if (mesh && (mesh as any).isMesh) {
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        if (Array.isArray(mesh.material)) {
-          mesh.material.forEach((mat: THREE.Material | null | undefined) => {
-            if (mat) {
-              mat.side = THREE.DoubleSide;
-              mat.needsUpdate = true;
-            }
-          });
-        } else if (mesh.material) {
-          const mat = mesh.material as THREE.Material;
-          (mat as any).side = THREE.DoubleSide;
-          mat.needsUpdate = true;
-        }
       }
     });
   }

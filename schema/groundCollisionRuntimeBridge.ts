@@ -14,13 +14,29 @@ type GroundCollisionRuntimeBridgeBody = PhysicsBodyLike & {
   __runtimeBodyEntry: PhysicsRuntimeBodyEntry
 }
 
+/**
+ * World-space triangle mesh collision definition.
+ *
+ * Vertices are expected to be already transformed into world space, therefore the
+ * generated rigid body keeps an identity transform.
+ */
+export type StaticMeshCollisionShapeDefinition = {
+  kind: 'static-mesh'
+  vertices: Float32Array
+  indices: Uint32Array
+}
+
+export type GroundCollisionRuntimeShapeDefinition =
+  | RigidbodyPhysicsShape
+  | StaticMeshCollisionShapeDefinition
+
 export type GroundCollisionRuntimeBridgeDeps = {
   getPhysicsWorld: () => PhysicsWorldLike | null
   ensurePhysicsWorld: () => PhysicsWorldLike
   createBody: (
     node: unknown,
     component: unknown,
-    shapeDefinition: RigidbodyPhysicsShape | null,
+    shapeDefinition: GroundCollisionRuntimeShapeDefinition | null,
     object: THREE.Object3D,
   ) => { body: PhysicsBodyLike; orientationAdjustment: null } | null
   loggerTag?: string
@@ -65,8 +81,53 @@ function flattenHeightfieldShapeHeights(shape: Extract<RigidbodyPhysicsShape, { 
   return values
 }
 
+/**
+ * Accepts either a flat numeric array or a tuple list so both the runtime chunk shape
+ * and the serialized `RigidbodyPhysicsShape` variant can feed the same runtime body.
+ */
+function flattenStaticMeshShapeVertices(vertices: unknown): Float32Array | null {
+  if (vertices instanceof Float32Array) {
+    return vertices
+  }
+  if (ArrayBuffer.isView(vertices)) {
+    return Float32Array.from(vertices as unknown as ArrayLike<number>)
+  }
+  if (!Array.isArray(vertices) || vertices.length === 0) {
+    return null
+  }
+  if (typeof vertices[0] === 'number') {
+    return Float32Array.from(vertices as number[])
+  }
+  const tupleList = vertices as unknown[]
+  const flat = new Float32Array(tupleList.length * 3)
+  tupleList.forEach((entry, index) => {
+    const tuple = Array.isArray(entry) ? entry : []
+    flat[index * 3] = Number(tuple[0] ?? 0) || 0
+    flat[index * 3 + 1] = Number(tuple[1] ?? 0) || 0
+    flat[index * 3 + 2] = Number(tuple[2] ?? 0) || 0
+  })
+  return flat
+}
+
+function flattenStaticMeshShapeIndices(indices: unknown): Uint32Array | null {
+  if (indices instanceof Uint32Array) {
+    return indices
+  }
+  if (ArrayBuffer.isView(indices)) {
+    return Uint32Array.from(indices as unknown as ArrayLike<number>)
+  }
+  if (!Array.isArray(indices) || indices.length === 0) {
+    return null
+  }
+  const values = new Uint32Array(indices.length)
+  indices.forEach((value, index) => {
+    values[index] = Math.max(0, Math.trunc(Number(value) || 0))
+  })
+  return values
+}
+
 function createRuntimeBodyEntry(
-  shapeDefinition: RigidbodyPhysicsShape,
+  shapeDefinition: GroundCollisionRuntimeShapeDefinition,
   object: THREE.Object3D,
   nextRuntimeId: () => number,
 ): PhysicsRuntimeBodyEntry | null {
@@ -79,6 +140,35 @@ function createRuntimeBodyEntry(
   const materialId = null
   let shapeDesc: PhysicsShapeDesc
   let shapeId = nextRuntimeId()
+
+  if (shapeDefinition.kind === 'static-mesh') {
+    const vertices = flattenStaticMeshShapeVertices(shapeDefinition.vertices)
+    const indices = flattenStaticMeshShapeIndices(shapeDefinition.indices)
+    if (!vertices || !indices || indices.length < 3 || vertices.length < 9) {
+      return null
+    }
+    // Triangle vertices are world space already, so no proxy transform is applied.
+    shapeDesc = {
+      id: shapeId,
+      kind: 'static-mesh',
+      vertices,
+      indices,
+    }
+    return {
+      shapes: [shapeDesc],
+      body: {
+        id: bodyId,
+        type: 'static',
+        mass: 0,
+        materialId,
+        shapeId,
+        transform: {
+          position: [0, 0, 0],
+          rotation: [0, 0, 0, 1],
+        },
+      },
+    }
+  }
 
   if (shapeDefinition.kind === 'heightfield') {
     const rows = shapeDefinition.matrix[0]?.length ?? 0
@@ -236,7 +326,7 @@ export function createGroundCollisionRuntimeBridgeDeps(
     createBody: (
       _node: unknown,
       _component: unknown,
-      shapeDefinition: RigidbodyPhysicsShape | null,
+      shapeDefinition: GroundCollisionRuntimeShapeDefinition | null,
       object: THREE.Object3D,
     ) => {
       if (!shapeDefinition) {

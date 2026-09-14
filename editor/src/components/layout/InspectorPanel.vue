@@ -16,6 +16,7 @@ import AnimationComponentPanel from '@/components/inspector/AnimationComponentPa
 import SkinComponentPanel from '@/components/inspector/SkinComponentPanel.vue'
 import CharacterControllerPanel from '@/components/inspector/CharacterControllerPanel.vue'
 import GroundAnchorPanel from '@/components/inspector/GroundAnchorPanel.vue'
+import GroundCollisionSourcePanel from '@/components/inspector/GroundCollisionSourcePanel.vue'
 import ParticleSystemPanel from '@/components/inspector/ParticleSystemPanel.vue'
 import WarpGatePanel from '@/components/inspector/WarpGatePanel.vue'
 import GroundPanel from '@/components/inspector/GroundPanel.vue'
@@ -66,6 +67,7 @@ import {
   SKIN_COMPONENT_TYPE,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
   GROUND_ANCHOR_COMPONENT_TYPE,
+  GROUND_COLLISION_SOURCE_COMPONENT_TYPE,
   PRELOADABLE_COMPONENT_TYPE,
   COUPON_COMPONENT_TYPE,
   ONLINE_COMPONENT_TYPE,
@@ -659,6 +661,9 @@ watch(
               <SkinComponentPanel v-else-if="component.type === SKIN_COMPONENT_TYPE" />
               <CharacterControllerPanel v-else-if="component.type === CHARACTER_CONTROLLER_COMPONENT_TYPE" />
               <GroundAnchorPanel v-else-if="component.type === GROUND_ANCHOR_COMPONENT_TYPE" />
+              <GroundCollisionSourcePanel
+                v-else-if="component.type === GROUND_COLLISION_SOURCE_COMPONENT_TYPE"
+              />
               <PreloadablePanel v-else-if="component.type === PRELOADABLE_COMPONENT_TYPE" />
               <CouponPanel v-else-if="component.type === COUPON_COMPONENT_TYPE" />
               <PlanningImagesPanel v-else-if="component.type === PLANNING_IMAGES_COMPONENT_TYPE" />

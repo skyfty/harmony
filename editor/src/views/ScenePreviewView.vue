@@ -151,6 +151,14 @@ import {
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
 import { collectGroundAnchorWorldPositions } from '@schema/groundAnchorRuntime'
+import { collectGroundCollisionSourceNodeIds } from '@schema/groundCollisionSourceRuntime'
+import {
+	MESH_COLLISION_ACTIVATION_RADIUS_METERS,
+	clearAllMeshCollisionRuntimeHosts,
+	clearMeshCollisionRuntimeHost,
+	syncMeshCollisionRuntimeHost,
+	type MeshCollisionRuntimeDeps,
+} from '@schema/meshCollisionRuntimeHost'
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
 import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { setGroundTextureSourceResolver } from '@schema/groundTextureSourceResolver'
@@ -247,6 +255,7 @@ import {
 	purePursuitComponentDefinition,
 	sceneStateAnchorComponentDefinition,
 	groundAnchorComponentDefinition,
+	groundCollisionSourceComponentDefinition,
 	nominateComponentDefinition,
 	SIGNBOARD_COMPONENT_TYPE,
 	applyNominateStateMapToRuntime,
@@ -1344,6 +1353,7 @@ previewComponentManager.registerDefinition(autoTourComponentDefinition)
 previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 previewComponentManager.registerDefinition(groundAnchorComponentDefinition)
+previewComponentManager.registerDefinition(groundCollisionSourceComponentDefinition)
 previewComponentManager.registerDefinition(nominateComponentDefinition)
 previewComponentManager.registerDefinition(preloadableComponentDefinition)
 previewComponentManager.registerDefinition(onlineComponentDefinition)
@@ -11358,11 +11368,16 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 				clearGroundCollisionRuntimeHost(groundObject)
 			}
 		}
+		releaseScenePreviewMeshCollisionRuntime()
 	}
 	const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
 		? shouldUpdateGroundCollisionForFrame(delta, groundCollisionReferencePositions)
 		: false
-	if (!shouldUpdateCameraSystems && !shouldUpdateGroundCollisionSystems) {
+	// Mesh collision chunks are created with a per tick budget, so a pending fill keeps
+	// running even while the probes stand still.
+	const shouldUpdateMeshCollisionSystems = hasGroundCollisionReference
+		&& (shouldUpdateGroundCollisionSystems || scenePreviewMeshCollisionWorkPending)
+	if (!shouldUpdateCameraSystems && !shouldUpdateGroundCollisionSystems && !shouldUpdateMeshCollisionSystems) {
 		return
 	}
 	if (shouldUpdateCameraSystems) {
@@ -11381,6 +11396,9 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	}
 	if (shouldUpdateGroundCollisionSystems && currentDocument) {
 		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePositions)
+	}
+	if (shouldUpdateMeshCollisionSystems && currentDocument) {
+		syncScenePreviewMeshCollisionRuntime(currentDocument, groundCollisionReferencePositions)
 	}
 }
 
@@ -11569,6 +11587,9 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	physicsBridgeContactsByNodeId.clear()
 	resetPhysicsWorld()
 	clearGroundCollisionRuntimeHost(groundCollisionHostObject)
+	releaseScenePreviewMeshCollisionRuntime()
+	scenePreviewCollisionSourceNodeIdSetDocument = null
+	scenePreviewCollisionSourceNodeIdSet = new Set()
 	if (groundCollisionHostObject) {
 		setInfiniteGroundHiddenChunkKeys(groundCollisionHostObject, [])
 		clearCompiledGroundRenderTiles(groundCollisionHostObject)
@@ -12521,6 +12542,88 @@ function resolveScenePreviewGroundCollisionRuntimeDeps(): NonNullable<
 	})
 }
 
+function resolveScenePreviewMeshCollisionRuntimeDeps(): MeshCollisionRuntimeDeps | null {
+	const bridgeDeps = createGroundCollisionRuntimeBridgeDeps({
+		enabled: physicsEnvironmentEnabled.value,
+		sceneLoaded: physicsBridgeSceneLoaded && !physicsBridgeSceneReloading,
+		getPhysicsBridge: () => physicsBridge,
+		runtimeBodyIds: previewGroundCollisionRuntimeBodyIds,
+		nextRuntimeId: nextPreviewGroundCollisionRuntimeId,
+		enqueueMutation: enqueuePreviewGroundCollisionBridgeMutation,
+		loggerTag: 'ScenePreviewMeshCollision',
+	})
+	if (!bridgeDeps) {
+		return null
+	}
+	return {
+		getPhysicsWorld: () => bridgeDeps.getPhysicsWorld(),
+		ensurePhysicsWorld: () => bridgeDeps.ensurePhysicsWorld(),
+		createBody: (shapeDefinition, object) => bridgeDeps.createBody(null, null, shapeDefinition, object),
+	}
+}
+
+const scenePreviewMeshCollisionSourceObjects = new Set<THREE.Object3D>()
+let scenePreviewMeshCollisionWorkPending = false
+
+function releaseScenePreviewMeshCollisionRuntime(): void {
+	clearAllMeshCollisionRuntimeHosts()
+	scenePreviewMeshCollisionSourceObjects.clear()
+	scenePreviewMeshCollisionWorkPending = false
+}
+
+/**
+ * Drives mesh generated collisions for every node carrying a Ground Collision Source
+ * component, using the Ground Anchor probe positions of the current frame.
+ */
+function syncScenePreviewMeshCollisionRuntime(
+	document: SceneJsonExportDocument | null,
+	referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
+): boolean {
+	const sourceNodeIds = collectGroundCollisionSourceNodeIds(document?.nodes)
+	const references = Array.isArray(referenceWorldPositions) ? referenceWorldPositions : []
+	if (sourceNodeIds.length === 0 || references.length === 0) {
+		releaseScenePreviewMeshCollisionRuntime()
+		return false
+	}
+	const runtimeDeps = resolveScenePreviewMeshCollisionRuntimeDeps()
+	if (!runtimeDeps) {
+		releaseScenePreviewMeshCollisionRuntime()
+		return false
+	}
+	const activeObjects = new Set<THREE.Object3D>()
+	let workPending = false
+	sourceNodeIds.forEach((nodeId) => {
+		const object = nodeObjectMap.get(nodeId) ?? null
+		if (!object) {
+			return
+		}
+		activeObjects.add(object)
+		const snapshot = syncMeshCollisionRuntimeHost({
+			enabled: true,
+			sourceId: nodeId,
+			sourceObject: object,
+			referenceWorldPositions: references,
+			runtimeDeps,
+			loggerTag: 'ScenePreviewMeshCollision',
+		})
+		if (snapshot.indexing || snapshot.pendingChunkCount > 0) {
+			workPending = true
+		}
+	})
+	Array.from(scenePreviewMeshCollisionSourceObjects).forEach((object) => {
+		if (activeObjects.has(object)) {
+			return
+		}
+		clearMeshCollisionRuntimeHost(object)
+		scenePreviewMeshCollisionSourceObjects.delete(object)
+	})
+	activeObjects.forEach((object) => {
+		scenePreviewMeshCollisionSourceObjects.add(object)
+	})
+	scenePreviewMeshCollisionWorkPending = workPending
+	return workPending
+}
+
 async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocument | null): Promise<void> {
 	void document
 }
@@ -12726,6 +12829,7 @@ async function loadScenePreviewPhysicsBridgeScene(
 
 	try {
 		previewGroundCollisionRuntimeBodyIds.clear()
+		releaseScenePreviewMeshCollisionRuntime()
 		const activePhysicsBridge = physicsBridge
 		if (!activePhysicsBridge) {
 			return
@@ -12742,6 +12846,9 @@ async function loadScenePreviewPhysicsBridgeScene(
 			previewGroundCollisionBridgeMutationEpoch += 1
 			clearGroundCollisionRuntimeHost(groundObject)
 			syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
+		}
+		if (hasGroundCollisionReference) {
+			syncScenePreviewMeshCollisionRuntime(document, groundCollisionReferencePositions)
 		}
 		const missingCharacterControllers: string[] = []
 		const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
@@ -14621,7 +14728,9 @@ function updateLazyPlaceholders(_delta: number): void {
 			return
 		}
 		if (!shouldLoadLazyPlaceholder(state, cameraViewFrustum)) {
-			return
+			if (!shouldLoadLazyPlaceholderForCollisionSource(state)) {
+				return
+			}
 		}
 		state.loading = true
 		activeLazyLoadCount += 1
@@ -14651,6 +14760,44 @@ function shouldLoadLazyPlaceholder(state: LazyPlaceholderState, frustum: THREE.F
 		return false
 	}
 	return frustum.intersectsSphere(worldSphere)
+}
+
+let scenePreviewCollisionSourceNodeIdSetDocument: SceneJsonExportDocument | null = null
+let scenePreviewCollisionSourceNodeIdSet = new Set<string>()
+
+function resolveScenePreviewCollisionSourceNodeIdSet(): Set<string> {
+	const document = currentDocument
+	if (document !== scenePreviewCollisionSourceNodeIdSetDocument) {
+		scenePreviewCollisionSourceNodeIdSetDocument = document
+		scenePreviewCollisionSourceNodeIdSet = new Set(collectGroundCollisionSourceNodeIds(document?.nodes))
+	}
+	return scenePreviewCollisionSourceNodeIdSet
+}
+
+/**
+ * Nodes carrying a Ground Collision Source also load on Ground Anchor proximity, so a
+ * distant preview camera cannot keep their collision meshes in the placeholder state.
+ */
+function shouldLoadLazyPlaceholderForCollisionSource(state: LazyPlaceholderState): boolean {
+	if (!resolveScenePreviewCollisionSourceNodeIdSet().has(state.nodeId)) {
+		return false
+	}
+	if (groundCollisionReferencePositions.length === 0) {
+		return false
+	}
+	const worldSphere = resolveWorldBoundingSphereForPlaceholder(state, state.placeholder)
+	if (!worldSphere) {
+		return false
+	}
+	const radius = worldSphere.radius + MESH_COLLISION_ACTIVATION_RADIUS_METERS
+	const radiusSq = radius * radius
+	const centerX = worldSphere.center.x
+	const centerZ = worldSphere.center.z
+	return groundCollisionReferencePositions.some((position) => {
+		const dx = position.x - centerX
+		const dz = position.z - centerZ
+		return dx * dx + dz * dz <= radiusSq
+	})
 }
 
 function resolveWorldBoundingSphereForPlaceholder(state: LazyPlaceholderState, object: THREE.Object3D): THREE.Sphere | null {

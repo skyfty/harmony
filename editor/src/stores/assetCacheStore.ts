@@ -325,6 +325,7 @@ function createDefaultEntry(assetId: string): AssetCacheEntry {
     error: null,
     blob: null,
     blobUrl: null,
+    bytes: null,
     size: 0,
     lastUsedAt: 0,
     abortController: null,

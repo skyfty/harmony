@@ -566,6 +566,14 @@ import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/ground
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { collectGroundAnchorWorldPositions } from '@harmony/schema/groundAnchorRuntime';
+import { collectGroundCollisionSourceNodeIds } from '@harmony/schema/groundCollisionSourceRuntime';
+import {
+  MESH_COLLISION_ACTIVATION_RADIUS_METERS,
+  clearAllMeshCollisionRuntimeHosts,
+  clearMeshCollisionRuntimeHost,
+  syncMeshCollisionRuntimeHost,
+  type MeshCollisionRuntimeDeps,
+} from '@harmony/schema/meshCollisionRuntimeHost';
 import { clearCompiledGroundRenderTiles, collectLoadedCompiledGroundChunkKeys, getCompiledGroundRenderWorkState, syncCompiledGroundRenderTiles } from '@harmony/schema/compiledGroundRuntime';
 import { prepareRuntimeGroundSceneDocument } from '@harmony/schema/groundSplatRuntimeDocument';
 import { onGroundChunkTextureReady, refreshGroundChunkMaterials, setInfiniteGroundHiddenChunkKeys } from '@harmony/schema/groundMesh';
@@ -763,6 +771,9 @@ import {
   GROUND_ANCHOR_COMPONENT_TYPE,
   groundAnchorComponentDefinition,
 } from '@harmony/schema/components/definitions/groundAnchorComponent';
+import {
+  groundCollisionSourceComponentDefinition,
+} from '@harmony/schema/components/definitions/groundCollisionSourceComponent';
 import {
   behaviorComponentDefinition,
 } from '@harmony/schema/components/definitions/behaviorComponent';
@@ -2100,6 +2111,7 @@ previewComponentManager.registerDefinition(autoTourComponentDefinition);
 previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(groundAnchorComponentDefinition);
+previewComponentManager.registerDefinition(groundCollisionSourceComponentDefinition);
 previewComponentManager.registerDefinition(nominateComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 previewComponentManager.registerDefinition(generalMeshComponentDefinition);
@@ -9659,6 +9671,88 @@ function resolveSceneryGroundCollisionRuntimeDeps(): NonNullable<
   });
 }
 
+function resolveSceneryMeshCollisionRuntimeDeps(): MeshCollisionRuntimeDeps | null {
+  const bridgeDeps = createGroundCollisionRuntimeBridgeDeps({
+    enabled: physicsEnvironmentEnabled.value,
+    sceneLoaded: physicsBridgeSceneLoaded && !physicsBridgeSceneReloading,
+    getPhysicsBridge: () => physicsBridge,
+    runtimeBodyIds: sceneryGroundCollisionRuntimeBodyIds,
+    nextRuntimeId: nextSceneryGroundCollisionRuntimeId,
+    enqueueMutation: enqueueSceneryGroundCollisionBridgeMutation,
+    loggerTag: 'SceneryMeshCollision',
+  });
+  if (!bridgeDeps) {
+    return null;
+  }
+  return {
+    getPhysicsWorld: () => bridgeDeps.getPhysicsWorld(),
+    ensurePhysicsWorld: () => bridgeDeps.ensurePhysicsWorld(),
+    createBody: (shapeDefinition, object) => bridgeDeps.createBody(null, null, shapeDefinition, object),
+  };
+}
+
+const sceneryMeshCollisionSourceObjects = new Set<THREE.Object3D>();
+let sceneryMeshCollisionWorkPending = false;
+
+function releaseSceneryMeshCollisionRuntime(): void {
+  clearAllMeshCollisionRuntimeHosts();
+  sceneryMeshCollisionSourceObjects.clear();
+  sceneryMeshCollisionWorkPending = false;
+}
+
+/**
+ * Drives mesh generated collisions for every node carrying a Ground Collision Source
+ * component. Collision chunks follow the Ground Anchor probe positions collected above.
+ */
+function syncSceneryMeshCollisionRuntime(
+  document: SceneJsonExportDocument | null,
+  referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
+): boolean {
+  const sourceNodeIds = collectGroundCollisionSourceNodeIds(document?.nodes);
+  const references = Array.isArray(referenceWorldPositions) ? referenceWorldPositions : [];
+  if (sourceNodeIds.length === 0 || references.length === 0) {
+    releaseSceneryMeshCollisionRuntime();
+    return false;
+  }
+  const runtimeDeps = resolveSceneryMeshCollisionRuntimeDeps();
+  if (!runtimeDeps) {
+    releaseSceneryMeshCollisionRuntime();
+    return false;
+  }
+  const activeObjects = new Set<THREE.Object3D>();
+  let workPending = false;
+  sourceNodeIds.forEach((nodeId) => {
+    const object = nodeObjectMap.get(nodeId) ?? resolveSceneObjectByNodeId(nodeId);
+    if (!object) {
+      return;
+    }
+    activeObjects.add(object);
+    const snapshot = syncMeshCollisionRuntimeHost({
+      enabled: true,
+      sourceId: nodeId,
+      sourceObject: object,
+      referenceWorldPositions: references,
+      runtimeDeps,
+      loggerTag: 'SceneryMeshCollision',
+    });
+    if (snapshot.indexing || snapshot.pendingChunkCount > 0) {
+      workPending = true;
+    }
+  });
+  Array.from(sceneryMeshCollisionSourceObjects).forEach((object) => {
+    if (activeObjects.has(object)) {
+      return;
+    }
+    clearMeshCollisionRuntimeHost(object);
+    sceneryMeshCollisionSourceObjects.delete(object);
+  });
+  activeObjects.forEach((object) => {
+    sceneryMeshCollisionSourceObjects.add(object);
+  });
+  sceneryMeshCollisionWorkPending = workPending;
+  return workPending;
+}
+
 function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null, camera: THREE.Camera | null | undefined): boolean {
   if (!document) {
     return false;
@@ -9952,6 +10046,7 @@ async function loadSceneryPhysicsBridgeScene(
       throw new Error('Scenery physics bridge is not ready');
     }
     sceneryGroundCollisionRuntimeBodyIds.clear();
+    releaseSceneryMeshCollisionRuntime();
     await bridge.loadScene(asset);
     if (requestId !== physicsBridgeSceneRequestId) {
       return;
@@ -10942,6 +11037,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   sceneryGroundCollisionRuntimeBodyIds.clear();
   const groundNode = resolveCurrentGroundNode();
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
+  releaseSceneryMeshCollisionRuntime();
   physicsBridgeBodyIdByNodeId.clear();
   physicsBridgeNodeIdByBodyId.clear();
   physicsBridgeVehicleIdByNodeId.clear();
@@ -11016,6 +11112,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     sceneryGroundCollisionRuntimeBodyIds.clear();
     const groundNode = resolveCurrentGroundNode();
     clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
+    releaseSceneryMeshCollisionRuntime();
     sceneryGroundCollisionReferenceInitialized = false;
     sceneryGroundCollisionReferenceElapsed = 0;
     physicsBridgeBodyIdByNodeId.clear();
@@ -12220,10 +12317,49 @@ function updateLazyPlaceholders(_delta: number): void {
     if (state.loading || state.pending) {
       return;
     }
-    if (!shouldLoadLazyPlaceholder(state, cameraViewFrustum)) {
+    if (!shouldLoadLazyPlaceholder(state, cameraViewFrustum)
+      && !shouldLoadLazyPlaceholderForCollisionSource(state)) {
       return;
     }
     scheduleLazyPlaceholderLoad(state);
+  });
+}
+
+let sceneryCollisionSourceNodeIdSetDocument: SceneJsonExportDocument | null = null;
+let sceneryCollisionSourceNodeIdSet = new Set<string>();
+
+function resolveSceneryCollisionSourceNodeIdSet(): Set<string> {
+  const document = currentDocument;
+  if (document !== sceneryCollisionSourceNodeIdSetDocument) {
+    sceneryCollisionSourceNodeIdSetDocument = document;
+    sceneryCollisionSourceNodeIdSet = new Set(collectGroundCollisionSourceNodeIds(document?.nodes));
+  }
+  return sceneryCollisionSourceNodeIdSet;
+}
+
+/**
+ * Nodes carrying a Ground Collision Source also load on Ground Anchor proximity, so a
+ * distant camera cannot keep their collision meshes in the placeholder state.
+ */
+function shouldLoadLazyPlaceholderForCollisionSource(state: LazyPlaceholderState): boolean {
+  if (!resolveSceneryCollisionSourceNodeIdSet().has(state.nodeId)) {
+    return false;
+  }
+  if (sceneryGroundCollisionReferencePositions.length === 0) {
+    return false;
+  }
+  const worldSphere = resolveWorldBoundingSphereForPlaceholder(state, state.placeholder);
+  if (!worldSphere) {
+    return false;
+  }
+  const radius = worldSphere.radius + MESH_COLLISION_ACTIVATION_RADIUS_METERS;
+  const radiusSq = radius * radius;
+  const centerX = worldSphere.center.x;
+  const centerZ = worldSphere.center.z;
+  return sceneryGroundCollisionReferencePositions.some((position) => {
+    const dx = position.x - centerX;
+    const dz = position.z - centerZ;
+    return dx * dx + dz * dz <= radiusSq;
   });
 }
 
@@ -22218,20 +22354,35 @@ function startRenderLoop(
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
         try {
-          if (cachedGround && shouldRunCompiledGroundTileSync(cameraFrameSnapshot)) {
-            syncSceneryCompiledGroundRenderTiles(camera);
+          if (shouldRunCompiledGroundTileSync(cameraFrameSnapshot)) {
+            if (cachedGround) {
+              syncSceneryCompiledGroundRenderTiles(camera);
+            }
+            // Ground Anchor probe positions drive both the ground node collision and the
+            // mesh collision sources, so they must be collected even without a ground node.
+            const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePositions);
             if (!physicsBridgeSceneReloading) {
-              const groundObject = nodeObjectMap.get(cachedGround.nodeId) ?? null;
-              if (groundObject) {
-                const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePositions);
-                if (!hasGroundCollisionReference) {
+              const groundObject = cachedGround ? (nodeObjectMap.get(cachedGround.nodeId) ?? null) : null;
+              if (!hasGroundCollisionReference) {
+                if (groundObject) {
                   clearGroundCollisionRuntimeHost(groundObject);
                 }
-                const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
-                  ? shouldUpdateSceneryGroundCollisionForFrame(deltaSeconds, sceneryGroundCollisionReferencePositions)
-                  : false;
-                if (shouldUpdateGroundCollisionSystems && physicsBridgeSceneLoaded) {
-                  syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
+                releaseSceneryMeshCollisionRuntime();
+              } else {
+                // Mesh collision chunks are created with a per tick budget, so a pending
+                // fill keeps running even while the probes stand still.
+                const shouldUpdateReferenceSystems = shouldUpdateSceneryGroundCollisionForFrame(
+                  deltaSeconds,
+                  sceneryGroundCollisionReferencePositions,
+                );
+                if (physicsBridgeSceneLoaded && (shouldUpdateReferenceSystems || sceneryMeshCollisionWorkPending)) {
+                  if (groundObject && shouldUpdateReferenceSystems) {
+                    syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
+                  }
+                  sceneryMeshCollisionWorkPending = syncSceneryMeshCollisionRuntime(
+                    currentDocument,
+                    sceneryGroundCollisionReferencePositions,
+                  );
                 }
               }
             }
@@ -22370,6 +22521,9 @@ function cleanupForUnrelatedSceneSwitch(): void {
   clearInstancedMeshes();
   const groundNode = resolveCurrentGroundNode();
   clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
+  releaseSceneryMeshCollisionRuntime();
+  sceneryCollisionSourceNodeIdSetDocument = null;
+  sceneryCollisionSourceNodeIdSet = new Set();
   sceneryGroundCollisionReferenceInitialized = false;
   sceneryGroundCollisionReferenceElapsed = 0;
 
