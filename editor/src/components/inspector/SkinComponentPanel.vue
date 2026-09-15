@@ -14,9 +14,10 @@ import {
   type SkinSlotKey,
 } from '@schema/skinRuntime'
 import { useSceneStore, getRuntimeObject } from '@/stores/sceneStore'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, draggingAssetId } = storeToRefs(sceneStore)
 
 const component = computed(() =>
   selectedNode.value?.components?.[SKIN_COMPONENT_TYPE] as
@@ -53,6 +54,129 @@ const pickerVisible = ref(false)
 const pickerSlotKey = ref<SkinSlotKey | null>(null)
 const pickerSelectedId = ref('')
 const pickerAnchor = ref<{ x: number; y: number } | null>(null)
+const dropHoverKey = ref<SkinSlotKey | null>(null)
+
+function parseAssetDragPayload(raw: string | null): string | null {
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as { assetId?: string }
+    const assetId = typeof parsed?.assetId === 'string' ? parsed.assetId.trim() : ''
+    if (assetId) {
+      return assetId
+    }
+  } catch (error) {
+    console.warn('Unable to parse asset drag payload', error)
+  }
+  return null
+}
+
+function isAssetDragEvent(event: DragEvent): boolean {
+  const types = Array.from(event.dataTransfer?.types ?? [])
+  return types.includes(ASSET_DRAG_MIME)
+}
+
+function resolveDragAssetId(event: DragEvent): string | null {
+  if (event.dataTransfer) {
+    const payload = parseAssetDragPayload(event.dataTransfer.getData(ASSET_DRAG_MIME))
+    if (payload) {
+      return payload
+    }
+  }
+  const fallback = draggingAssetId.value?.trim() ?? ''
+  return fallback.length ? fallback : null
+}
+
+function isAssignableSkinAssetId(assetId: string | null): assetId is string {
+  if (!assetId) {
+    return false
+  }
+  const asset = sceneStore.getAsset(assetId)
+  return !!asset && (asset.type === 'model' || asset.type === 'mesh')
+}
+
+function resolveSkinSlotDropAssetId(event: DragEvent): string | null {
+  const assetId = resolveDragAssetId(event)
+  return isAssignableSkinAssetId(assetId) ? assetId : null
+}
+
+function ensureSkinSlotAssetRegistered(asset: ProjectAsset): ProjectAsset {
+  try {
+    return sceneStore.ensureSceneAssetRegistered(asset, {
+      source: asset.source ?? { type: 'url' },
+      commitOptions: { updateNodes: false },
+    })
+  } catch (error) {
+    console.warn('Failed to register skin slot asset', asset.id, error)
+    return asset
+  }
+}
+
+function clearSlotDropHover(key: SkinSlotKey): void {
+  if (dropHoverKey.value === key) {
+    dropHoverKey.value = null
+  }
+}
+
+/**
+ * 判定该槽位是否接受当前拖拽：仅接受来自资产面板的 model/mesh 资产；
+ * 组件禁用、非资产拖拽、类型不符或已绑定同一资产时一律静默忽略（不高亮、不 preventDefault）。
+ */
+function acceptSlotDrag(event: DragEvent, key: SkinSlotKey): boolean {
+  if (!componentEnabled.value || !isAssetDragEvent(event)) {
+    clearSlotDropHover(key)
+    return false
+  }
+  const assetId = resolveSkinSlotDropAssetId(event)
+  if (!assetId || assetId === normalizedProps.value[key]) {
+    clearSlotDropHover(key)
+    return false
+  }
+  event.preventDefault()
+  dropHoverKey.value = key
+  return true
+}
+
+function handleSlotDragEnter(event: DragEvent, key: SkinSlotKey): void {
+  acceptSlotDrag(event, key)
+}
+
+function handleSlotDragOver(event: DragEvent, key: SkinSlotKey): void {
+  if (!acceptSlotDrag(event, key)) {
+    return
+  }
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+}
+
+function handleSlotDragLeave(event: DragEvent, key: SkinSlotKey): void {
+  const current = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (current && related && current.contains(related)) {
+    return
+  }
+  clearSlotDropHover(key)
+}
+
+function handleSlotDrop(event: DragEvent, key: SkinSlotKey): void {
+  clearSlotDropHover(key)
+  if (!componentEnabled.value || !component.value || !isAssetDragEvent(event)) {
+    return
+  }
+  const assetId = resolveSkinSlotDropAssetId(event)
+  if (!assetId || assetId === normalizedProps.value[key]) {
+    return
+  }
+  const asset = sceneStore.getAsset(assetId)
+  if (!asset) {
+    return
+  }
+  event.preventDefault()
+  const registeredAsset = ensureSkinSlotAssetRegistered(asset)
+  updateComponent({ [key]: registeredAsset.id } as Partial<SkinComponentProps>)
+}
 
 function slotAssetName(key: SkinSlotKey): string | null {
   const assetId = normalizedProps.value[key]
@@ -165,6 +289,7 @@ async function refreshResolvedAnchors(nodeId: string | null) {
 watch(
   () => selectedNode.value?.id ?? null,
   (nodeId) => {
+    dropHoverKey.value = null
     void refreshResolvedAnchors(nodeId)
   },
   { immediate: true },
@@ -213,6 +338,11 @@ watch(
           v-for="slot in slotUi"
           :key="slot.key"
           class="skin-component-panel__slot"
+          :class="{ 'is-active': dropHoverKey === slot.key }"
+          @dragenter="handleSlotDragEnter($event, slot.key)"
+          @dragover="handleSlotDragOver($event, slot.key)"
+          @dragleave="handleSlotDragLeave($event, slot.key)"
+          @drop="handleSlotDrop($event, slot.key)"
         >
           <div class="skin-component-panel__slot-icon">
             <v-icon size="20">{{ slot.icon }}</v-icon>
@@ -299,6 +429,14 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: 0.55rem;
+  border-radius: 8px;
+  transition: background-color 0.2s, outline-color 0.2s;
+}
+
+.skin-component-panel__slot.is-active {
+  background-color: rgba(110, 231, 183, 0.08);
+  outline: 1px solid rgba(110, 231, 183, 0.8);
+  outline-offset: 2px;
 }
 
 .skin-component-panel__slot-icon {
