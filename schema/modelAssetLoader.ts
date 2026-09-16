@@ -134,6 +134,82 @@ export function findObjectByPath(root: THREE.Object3D, path: number[] | null | u
   return current ?? null
 }
 
+/**
+ * Drops every child object while keeping the object's own transform.
+ *
+ * Expanded lightweight import nodes render exactly one asset node each: the
+ * asset children of that node are represented by scene child nodes, so keeping
+ * them here would render them twice.
+ */
+export function stripObjectChildren(object: THREE.Object3D): THREE.Object3D {
+  const children = object.children.slice()
+  for (const child of children) {
+    object.remove(child)
+  }
+  return object
+}
+
+export function cloneImportedObjectSelfOnly(source: THREE.Object3D): THREE.Object3D {
+  return stripObjectChildren(cloneImportedObject(source))
+}
+
+/**
+ * Clones one asset node (self only) out of an already parsed asset object.
+ * Used when the asset is parsed once and many lightweight nodes reference
+ * different nodes inside it.
+ */
+export function cloneAssetNodeSelfOnly(
+  base: THREE.Object3D,
+  path: number[] | null | undefined,
+): THREE.Object3D | null {
+  const target = findObjectByPath(base, path)
+  if (!target) {
+    return null
+  }
+  return cloneImportedObjectSelfOnly(target)
+}
+
+/**
+ * Clones one asset node together with its asset children.
+ *
+ * Used for indivisible lightweight nodes (skinned subtrees): the skinned mesh
+ * and its bones must stay in one clone, because `SkeletonUtils.clone` rebinds a
+ * skeleton by looking the bones up inside the cloned tree.
+ */
+export function cloneAssetNodeSubtree(
+  base: THREE.Object3D,
+  path: number[] | null | undefined,
+): THREE.Object3D | null {
+  const target = findObjectByPath(base, path)
+  if (!target) {
+    return null
+  }
+  return cloneImportedObject(target)
+}
+
+/**
+ * Loads a single asset node (no asset children) for a lightweight import node.
+ * Geometry and materials stay shared with the cached asset object.
+ */
+export async function loadLightweightNodeObject(
+  resourceCache: ResourceCache,
+  assetId: string,
+  metadata?: SceneNodeImportMetadata | null,
+): Promise<THREE.Object3D | null> {
+  if (!assetId) {
+    return null
+  }
+  const base = await loadAssetObject(resourceCache, assetId)
+  if (!base) {
+    return null
+  }
+  const target = findObjectByPath(base, metadata?.objectPath)
+  if (!target) {
+    return null
+  }
+  return cloneImportedObjectSelfOnly(target)
+}
+
 export async function loadNodeObject(
   resourceCache: ResourceCache,
   assetId: string,

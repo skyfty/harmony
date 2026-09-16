@@ -10,6 +10,7 @@ import type {
   Vector3Like,
 } from '@schema/core'
 import type { AssetSourceMetadata } from '@schema/core'
+import { isLightweightImportNode } from '@schema/core'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { SceneHistoryNodeLocation } from '@/types/scene-history-entry'
 import type { SceneState } from '@/types/scene-state'
@@ -504,7 +505,11 @@ function stripPrefabTransientFields(deps: PrefabActionsDeps, node: SceneNode): S
   delete (sanitized as { downloadStatus?: SceneNode['downloadStatus'] }).downloadStatus
   delete (sanitized as { downloadError?: string | null }).downloadError
   delete (sanitized as { isPlaceholder?: boolean }).isPlaceholder
-  sanitized.visible = sanitized.visible ?? true
+  // Lightweight import nodes inherit visibility from their asset node unless an
+  // override exists, so the prefab must not materialize a default `visible`.
+  if (!isLightweightImportNode(sanitized)) {
+    sanitized.visible = sanitized.visible ?? true
+  }
   if ('locked' in sanitized) {
     delete (sanitized as any).locked
   }

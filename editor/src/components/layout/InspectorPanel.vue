@@ -46,7 +46,8 @@ import GeneralMeshPanel from '@/components/inspector/GeneralMeshPanel.vue'
 import { useSceneStore, getRuntimeObject, GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { findSceneNodeById } from '@/utils/animationClipCatalog'
-import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNodeComponentState } from '@schema/core'
+import { isGeometryType, type BehaviorEventType, type SceneBehavior, type SceneNode, type SceneNodeComponentState } from '@schema/core'
+import { isLightweightImportNode } from '@schema/core'
 import type { BehaviorActionDefinition } from '@schema/behaviors/definitions'
 import { collectAnimationClipCatalog } from '@schema/runtimeAnimationCatalog'
 import { resolveCharacterControllerAnimationBindings } from '@schema/characterControllerAnimationRuntime'
@@ -143,6 +144,25 @@ const isNominateNode = computed(() =>
 )
 const isRegionNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Region')
 const isGroundNode = computed(() => selectedNode.value?.dynamicMesh?.type === 'Ground')
+// Lightweight imported model nodes mirror the source asset tree and only expose
+// material / transform / visibility editing.
+const isLightweightImportModelNode = computed(() => isLightweightImportNode(selectedNode.value))
+/**
+ * Nodes that reference a single node inside an imported model asset may always
+ * edit an inline material override, even when the lightweight marker is missing
+ * (documents saved by older builds).
+ */
+function nodeSupportsImportedMaterialEdit(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  if (isLightweightImportNode(node)) {
+    return true
+  }
+  const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  const objectPath = node.importMetadata?.objectPath
+  return Boolean(assetId) && Array.isArray(objectPath) && objectPath.length > 0
+}
 function isImportedModelOverrideNode(node: { nodeType?: string; sourceAssetId?: string; dynamicMesh?: unknown } | null | undefined): boolean {
   return Boolean(
     node
@@ -158,7 +178,12 @@ const showMaterialPanel = computed(
     !isMultiuserNode.value &&
     !isNominateNode.value &&
     !isRegionNode.value &&
-    (isGroundNode.value || (selectedNode.value?.materials?.length ?? 0) > 0 || isImportedModelOverrideNode(selectedNode.value)),
+    (
+      isGroundNode.value
+      || (selectedNode.value?.materials?.length ?? 0) > 0
+      || isImportedModelOverrideNode(selectedNode.value)
+      || nodeSupportsImportedMaterialEdit(selectedNode.value)
+    ),
 )
 const showTransformPanel = computed(() => {
   return selectedNode.value?.id !== GROUND_NODE_ID && 
@@ -169,7 +194,7 @@ const showTransformPanel = computed(() => {
 
 const showAssetModelPanel = computed(() => {
   const assetId = selectedNode.value?.sourceAssetId
-  if (!assetId) {
+  if (!assetId || isLightweightImportModelNode.value) {
     return false
   }
   const asset = sceneStore.getAsset(assetId)
@@ -177,6 +202,9 @@ const showAssetModelPanel = computed(() => {
 })
 
 const showAddComponentButton = computed(() => {
+  if (isLightweightImportModelNode.value) {
+    return false
+  }
   return selectedNode.value?.id !== ENVIRONMENT_NODE_ID &&
   selectedNode.value?.id !== MULTIUSER_NODE_ID
 })
@@ -223,12 +251,25 @@ function computeDefaultExpandedPanels() {
     panels.push('components')
   }
 
+  // Imported model nodes host the "expand / collapse lightweight children"
+  // action inside the Model Asset panel.
+  const importedModelAssetId = typeof node?.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  if (importedModelAssetId && !node?.dynamicMesh) {
+    const importedAsset = sceneStore.getAsset(importedModelAssetId)
+    if (importedAsset && (importedAsset.type === 'model' || importedAsset.type === 'mesh')) {
+      panels.push('asset-model')
+    }
+  }
+
   const shouldShowMaterial =
     (!node?.nodeType || (node?.nodeType !== 'Light' && (node?.materials?.length ?? 0) > 0)) &&
     (!node?.nodeType || node.nodeType !== 'Light') &&
     !Boolean(node?.components?.[NOMINATE_COMPONENT_TYPE]) &&
     node?.dynamicMesh?.type !== 'Region'
-  if ((shouldShowMaterial || isImportedModelOverrideNode(node)) && node?.id !== GROUND_NODE_ID) {
+  if (
+    (shouldShowMaterial || isImportedModelOverrideNode(node) || nodeSupportsImportedMaterialEdit(node))
+    && node?.id !== GROUND_NODE_ID
+  ) {
     panels.push('material')
   }
 
@@ -275,6 +316,11 @@ watch(
 
 function handleNameUpdate(value: string) {
   if (!selectedNodeId.value) return
+  if (isLightweightImportModelNode.value) {
+    // Lightweight nodes keep the name of their source asset node.
+    nodeName.value = selectedNode.value?.name ?? ''
+    return
+  }
   nodeName.value = value
   const trimmed = value.trim()
   if (!trimmed) {
@@ -449,7 +495,11 @@ watch(
     const materialVisible =
       !isLightNode.value &&
       !isRegionNode.value &&
-      ((selectedNode.value?.materials?.length ?? 0) > 0 || isImportedModelOverrideNode(selectedNode.value))
+      (
+        (selectedNode.value?.materials?.length ?? 0) > 0
+        || isImportedModelOverrideNode(selectedNode.value)
+        || nodeSupportsImportedMaterialEdit(selectedNode.value)
+      )
     if (materialVisible) {
       defaults.add('material')
     }
@@ -623,6 +673,7 @@ watch(
               variant="solo"
               density="compact"
               hide-details
+              :readonly="isLightweightImportModelNode"
               @update:modelValue="handleNameUpdate"
             />
           </div>

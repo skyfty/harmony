@@ -685,6 +685,7 @@ import type {
 } from '@harmony/schema/core';
 import {
   isRuntimeHiddenInPreview,
+  isLightweightImportNode,
   deserializeCompiledGroundManifest,
 } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
@@ -12196,6 +12197,11 @@ function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolea
 }
 
 function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNode): void {
+  if (isLightweightImportNode(node)) {
+    // Lightweight import nodes already render with their own override or the
+    // one inherited from the imported model root when the graph was built.
+    return;
+  }
   const instancedAssetId = typeof targetObject.userData?.instancedAssetId === 'string'
     ? targetObject.userData.instancedAssetId
     : null;

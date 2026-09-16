@@ -5,6 +5,7 @@ import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
 import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'
 import { findObjectByPath } from '@schema/modelAssetLoader'
+import { isIdentityNodeTransform, isLightweightImportNode } from '@schema/core'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -521,6 +522,11 @@ function shouldGenerateOutlineMeshForNode(node: SceneNode, options: SceneExportO
   if (!node.sourceAssetId || typeof node.sourceAssetId !== 'string') {
     return false
   }
+  // Expanded lightweight nodes render one asset node each; the whole-asset
+  // outline placeholder would not match their geometry.
+  if (isLightweightImportNode(node)) {
+    return false
+  }
   if (node.dynamicMesh) {
     return false
   }
@@ -568,16 +574,31 @@ function sanitizeNodeForJsonExport(
     delete sanitized.materials
   }
 
+  // Lightweight import nodes only persist what actually deviates from the
+  // asset node: an untouched node keeps no transform fields at all.
+  if (isLightweightImportNode(node)) {
+    if (isIdentityNodeTransform(node)) {
+      delete (sanitized as { position?: unknown }).position
+      delete (sanitized as { rotation?: unknown }).rotation
+      delete (sanitized as { scale?: unknown }).scale
+    }
+  }
+
   if (!options.includeExtras) {
     if ('components' in sanitized) {
       delete sanitized.components
     }
     if (!options.lazyLoadMeshes) {
-      if ('importMetadata' in sanitized) {
-        delete sanitized.importMetadata
-      }
-      if ('sourceAssetId' in sanitized) {
-        delete sanitized.sourceAssetId
+      // Expanded imported model trees are meaningless without their asset
+      // references, so they are always kept.
+      const keepAssetReference = isLightweightImportNode(node) || node.importChildrenExpanded === true
+      if (!keepAssetReference) {
+        if ('importMetadata' in sanitized) {
+          delete sanitized.importMetadata
+        }
+        if ('sourceAssetId' in sanitized) {
+          delete sanitized.sourceAssetId
+        }
       }
     }
   } else if (componentMapHasEntries(sanitized.components)) {

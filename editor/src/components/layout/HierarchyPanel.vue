@@ -15,6 +15,9 @@ import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { SceneNode } from '@schema/core'
+import { isLightweightImportNode } from '@schema/core'
+import { getCachedModelObject } from '@schema/modelObjectCache'
+import { findObjectByPath } from '@schema/modelAssetLoader'
 import { isAnySteerTargetNode } from '@schema/components'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
@@ -574,7 +577,9 @@ const visibleHierarchyRows = computed<VisibleHierarchyRow[]>(() => {
   const walk = (items: HierarchyTreeItem[], depth: number) => {
     for (const item of items) {
       const isGroup = item.nodeType === 'Group' && item.instanced !== true
-      const hasChildren = isGroup && Boolean(item.children?.length)
+      // Any node that owns child nodes can be expanded, including imported
+      // lightweight mesh nodes whose asset node has children.
+      const hasChildren = item.instanced !== true && Boolean(item.children?.length)
       const expanded = hasChildren && (isSearchActive.value ? true : openedSet.has(item.id))
       rows.push({ id: item.id, item, depth, isGroup, hasChildren, expanded })
       if (hasChildren && expanded) {
@@ -715,6 +720,9 @@ const canDelete = computed(() => {
   const node = activeSceneNode.value
   if (!node ) {
     return true
+  }
+  if (isLightweightImportNode(node)) {
+    return false
   }
   return isNormalNodeType(node)
 })
@@ -1157,14 +1165,55 @@ function isItemActive(id: string) {
 }
 
 function toggleNodeVisibility(id: string) {
+  const node = sceneStore.getNodeById(id)
+  if (node && isLightweightImportNode(node)) {
+    // Lightweight nodes may inherit visibility from the asset node, so toggle
+    // against the effective value and write an explicit override.
+    sceneStore.setNodeVisibility(id, !isNodeEffectivelyVisible(id))
+    return
+  }
   sceneStore.toggleNodeVisibility(id)
 }
 
+/**
+ * Asset node visibility for a lightweight import node, or null when the node is
+ * not lightweight / its source asset is not cached yet.
+ */
+function resolveAssetNodeVisible(id: string): boolean | null {
+  const node = sceneStore.getNodeById(id)
+  if (!node || !isLightweightImportNode(node)) {
+    return null
+  }
+  const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  if (!assetId) {
+    return null
+  }
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    return null
+  }
+  const target = findObjectByPath(cached.object, node.importMetadata?.objectPath ?? null)
+  if (!target) {
+    return null
+  }
+  return target.visible !== false
+}
+
 function isNodeEffectivelyVisible(id: string) {
-  return sceneStore.isNodeVisible(id)
+  if (!sceneStore.isNodeVisible(id)) {
+    return false
+  }
+  return resolveAssetNodeVisible(id) !== false
 }
 
 function resolveNodeVisibilityTitle(id: string) {
+  const node = sceneStore.getNodeById(id)
+  if (node && isLightweightImportNode(node)) {
+    if (resolveAssetNodeVisible(id) === false && typeof node.visible !== 'boolean') {
+      return '源模型隐藏了该节点（点击可覆盖为显示）'
+    }
+    return isNodeEffectivelyVisible(id) ? 'Hide' : 'Show'
+  }
   const localVisible = sceneStore.isNodeLocallyVisible(id)
   const effectiveVisible = sceneStore.isNodeVisible(id)
   if (!effectiveVisible && localVisible) {
@@ -1518,6 +1567,12 @@ function getNodeDropClasses(id: string) {
 
 function handleDragStart(event: DragEvent, nodeId: string) {
   materialDropTargetId.value = null
+  // Lightweight import nodes stay inside their source asset tree.
+  const draggedNode = sceneStore.getNodeById(nodeId)
+  if (draggedNode && isLightweightImportNode(draggedNode)) {
+    event.preventDefault()
+    return
+  }
   const { primaryId, sourceIds } = resolveDragSources(nodeId)
   if (!sourceIds.length) {
     dragState.value = { sourceIds: [], primaryId: null, targetId: null, position: null }
@@ -2185,7 +2240,7 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
                 :data-node-id="row.id"
                 :class="getNodeInteractionClasses(row.id)"
                 :style="{ paddingLeft: `${row.depth * 16 + 30}px` }"
-                draggable="true"
+                :draggable="!isLightweightImportNode(sceneStore.getNodeById(row.id))"
                 @dragstart="handleDragStart($event, row.id)"
                 @dragend="handleDragEnd"
                 @dragover="handleDragOver($event, row.id)"
@@ -2197,7 +2252,7 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
                 @dblclick.stop.prevent="handleNodeDoubleClick(row.id)"
               >
                 <v-btn
-                  v-if="row.isGroup"
+                  v-if="row.isGroup || row.hasChildren"
                   :icon="row.expanded ? 'mdi-chevron-down' : 'mdi-chevron-right'"
                   variant="text"
                   density="compact"
@@ -2229,7 +2284,10 @@ function handleAssetReferenceResultClick(result: AssetReferenceSearchResult) {
                     size="26"
                     class="selection-lock-btn"
                     :class="{ 'is-locked': row.item.locked }"
-                    :title="row.item.locked ? 'Enable mouse selection' : 'Disable mouse selection'"
+                    :disabled="isLightweightImportNode(sceneStore.getNodeById(row.id))"
+                    :title="isLightweightImportNode(sceneStore.getNodeById(row.id))
+                      ? '轻量子节点不支持锁定'
+                      : (row.item.locked ? 'Enable mouse selection' : 'Disable mouse selection')"
                     @click.stop="toggleNodeSelectionLock(row.id)"
                   />
                 </div>

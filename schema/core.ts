@@ -1437,10 +1437,71 @@ export interface CameraNodeProperties {
 export interface SceneNodeImportMetadata {
   assetId: string
   objectPath?: number[] | null
+  /**
+   * Marks a lightweight node derived from an imported model asset tree.
+   * Such a node renders only its own asset node content (its asset children are
+   * represented by scene child nodes) and may only carry material / transform /
+   * visibility overrides. It never registers assets into the scene library.
+   */
+  lightweight?: boolean
+  /**
+   * Only used together with `lightweight`: the node renders the whole asset
+   * subtree at `objectPath` (skin, bones and children included) instead of a
+   * single asset node. Such nodes are indivisible because splitting a skinned
+   * mesh away from its skeleton breaks the bind pose.
+   */
+  subtree?: boolean
 }
 
 export function isRuntimeHiddenInPreview(node: Pick<SceneNode, 'editorFlags'> | null | undefined): boolean {
   return node?.editorFlags?.runtimeHiddenInPreview === true
+}
+
+export function isLightweightImportNode(
+  node: Pick<SceneNode, 'importMetadata'> | null | undefined,
+): boolean {
+  const metadata = node?.importMetadata
+  if (!metadata || metadata.lightweight !== true) {
+    return false
+  }
+  return typeof metadata.assetId === 'string' && metadata.assetId.trim().length > 0
+}
+
+/**
+ * Lightweight import node that renders its whole asset subtree (for example a
+ * skinned mesh together with its bones) and therefore cannot be expanded
+ * further.
+ */
+export function isLightweightImportSubtreeNode(
+  node: Pick<SceneNode, 'importMetadata'> | null | undefined,
+): boolean {
+  return isLightweightImportNode(node) && node?.importMetadata?.subtree === true
+}
+
+export function isExpandedImportedModelRoot(
+  node: Pick<SceneNode, 'importChildrenExpanded'> | null | undefined,
+): boolean {
+  return node?.importChildrenExpanded === true
+}
+
+/**
+ * Lightweight import nodes store their transform as an override delta on top of
+ * the asset node's own local transform. Identity therefore means "untouched".
+ */
+export function isIdentityNodeTransform(
+  node: Pick<SceneNode, 'position' | 'rotation' | 'scale'> | null | undefined,
+): boolean {
+  if (!node) {
+    return true
+  }
+  const position = node.position
+  const rotation = node.rotation
+  const scale = node.scale
+  return (
+    (!position || (position.x === 0 && position.y === 0 && position.z === 0))
+    && (!rotation || (rotation.x === 0 && rotation.y === 0 && rotation.z === 0))
+    && (!scale || (scale.x === 1 && scale.y === 1 && scale.z === 1))
+  )
 }
 
 export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient' | 'Hemisphere'
@@ -1510,6 +1571,13 @@ export interface SceneNode {
   visible?: boolean;
   locked?: boolean;
   isPlaceholder?: boolean;
+  /**
+   * Set on an imported model root whose asset node tree has been expanded into
+   * lightweight scene child nodes. The root then stops rendering its own asset
+   * content and only acts as a container (its material config still acts as the
+   * default override inherited by lightweight descendants).
+   */
+  importChildrenExpanded?: boolean;
   materials?: SceneNodeMaterial[];
   children?: SceneNode[];
   components?: SceneNodeComponentMap;

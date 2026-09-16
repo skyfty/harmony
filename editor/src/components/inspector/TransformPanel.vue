@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import * as THREE from 'three'
 import InspectorVectorControls from '@/components/common/VectorControls.vue'
 import type { Direction } from '@/components/common/VectorControls.vue'
 import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
+import { isLightweightImportNode, type SceneNode } from '@schema/core'
+import { getCachedModelObject } from '@schema/modelObjectCache'
+import { findObjectByPath } from '@schema/modelAssetLoader'
 
 const sceneStore = useSceneStore()
 const { selectedNode } = storeToRefs(sceneStore)
@@ -17,6 +21,93 @@ type TransformField = 'position' | 'rotation' | 'scale'
 type NumericVector = { x: number; y: number; z: number }
 
 const MIN_SCALE = 0.01
+
+/**
+ * Lightweight imported model nodes store their transform as a delta on top of
+ * the asset node's own local transform (L). The inspector shows and edits the
+ * composed absolute local transform (A = C · L) and writes the delta back.
+ */
+const assetLocalMatrix = computed<THREE.Matrix4 | null>(() => {
+  const node = selectedNode.value
+  if (!node || !isLightweightImportNode(node)) {
+    return null
+  }
+  const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  if (!assetId) {
+    return null
+  }
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    return null
+  }
+  const target = findObjectByPath(cached.object, node.importMetadata?.objectPath ?? null)
+  if (!target) {
+    return null
+  }
+  return new THREE.Matrix4().compose(target.position, target.quaternion, target.scale)
+})
+
+function composeTransformMatrix(
+  position: NumericVector,
+  rotation: NumericVector,
+  scale: NumericVector,
+): THREE.Matrix4 {
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(position.x, position.y, position.z),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(rotation.x, rotation.y, rotation.z, 'XYZ')),
+    new THREE.Vector3(scale.x, scale.y, scale.z),
+  )
+}
+
+function decomposeTransformMatrix(matrix: THREE.Matrix4): {
+  position: NumericVector
+  rotation: NumericVector
+  scale: NumericVector
+} {
+  const position = new THREE.Vector3()
+  const quaternion = new THREE.Quaternion()
+  const scale = new THREE.Vector3()
+  matrix.decompose(position, quaternion, scale)
+  const euler = new THREE.Euler().setFromQuaternion(quaternion, 'XYZ')
+  return {
+    position: { x: position.x, y: position.y, z: position.z },
+    rotation: { x: euler.x, y: euler.y, z: euler.z },
+    scale: { x: scale.x, y: scale.y, z: scale.z },
+  }
+}
+
+function nodeDeltaTransform(node: SceneNode) {
+  return {
+    position: { x: node.position.x, y: node.position.y, z: node.position.z },
+    rotation: { x: node.rotation.x, y: node.rotation.y, z: node.rotation.z },
+    scale: { x: node.scale.x, y: node.scale.y, z: node.scale.z },
+  }
+}
+
+/** Absolute local transform shown in the inspector (delta composed onto L). */
+function resolveAbsoluteTransform(node: SceneNode) {
+  const base = assetLocalMatrix.value
+  const delta = nodeDeltaTransform(node)
+  if (!base) {
+    return delta
+  }
+  return decomposeTransformMatrix(composeTransformMatrix(delta.position, delta.rotation, delta.scale).multiply(base))
+}
+
+/** Converts an absolute local transform back into the stored delta (C = A · L⁻¹). */
+function resolveDeltaTransform(_node: SceneNode, absolute: {
+  position: NumericVector
+  rotation: NumericVector
+  scale: NumericVector
+}) {
+  const base = assetLocalMatrix.value
+  if (!base) {
+    return absolute
+  }
+  const absoluteMatrix = composeTransformMatrix(absolute.position, absolute.rotation, absolute.scale)
+  const deltaMatrix = absoluteMatrix.multiply(new THREE.Matrix4().copy(base).invert())
+  return decomposeTransformMatrix(deltaMatrix)
+}
 
 function isFieldDisabled(_field: TransformField): boolean {
   if (props.disabled) {
@@ -52,14 +143,16 @@ function ratioScale(direction: Direction) {
     return
   }
   const scaleFactor = direction === 'up' ? 1.1 : 0.9
+  const absolute = resolveAbsoluteTransform(node)
   const newScale = {
-    x: Math.max(MIN_SCALE, node.scale.x * scaleFactor),
-    y: Math.max(MIN_SCALE, node.scale.y * scaleFactor),
-    z: Math.max(MIN_SCALE, node.scale.z * scaleFactor),
+    x: Math.max(MIN_SCALE, absolute.scale.x * scaleFactor),
+    y: Math.max(MIN_SCALE, absolute.scale.y * scaleFactor),
+    z: Math.max(MIN_SCALE, absolute.scale.z * scaleFactor),
   }
+  const delta = resolveDeltaTransform(node, { ...absolute, scale: newScale })
   sceneStore.updateNodeProperties({
     id: node.id,
-    scale: newScale,
+    scale: delta.scale,
   })
 }
 
@@ -74,9 +167,18 @@ function applyTransformReset(
   if (!node) {
     return
   }
+  const absolute = resolveAbsoluteTransform(node)
+  const nextAbsolute = {
+    position: patch.position ? { ...patch.position } : { ...absolute.position },
+    rotation: patch.rotation ? { ...patch.rotation } : { ...absolute.rotation },
+    scale: patch.scale ? { ...patch.scale } : { ...absolute.scale },
+  }
+  const delta = resolveDeltaTransform(node, nextAbsolute)
   sceneStore.updateNodeProperties({
     id: node.id,
-    ...patch,
+    position: delta.position,
+    rotation: delta.rotation,
+    scale: delta.scale,
   })
 }
 
@@ -87,20 +189,21 @@ watch(
       resetTransformForm()
       return
     }
+    const absolute = resolveAbsoluteTransform(node)
     transformForm.position = {
-      x: formatNumeric(node.position.x),
-      y: formatNumeric(node.position.y),
-      z: formatNumeric(node.position.z),
+      x: formatNumeric(absolute.position.x),
+      y: formatNumeric(absolute.position.y),
+      z: formatNumeric(absolute.position.z),
     }
     transformForm.rotation = {
-      x: radToDeg(node.rotation.x),
-      y: radToDeg(node.rotation.y),
-      z: radToDeg(node.rotation.z),
+      x: radToDeg(absolute.rotation.x),
+      y: radToDeg(absolute.rotation.y),
+      z: radToDeg(absolute.rotation.z),
     }
     transformForm.scale = {
-      x: formatNumeric(node.scale.x),
-      y: formatNumeric(node.scale.y),
-      z: formatNumeric(node.scale.z),
+      x: formatNumeric(absolute.scale.x),
+      y: formatNumeric(absolute.scale.y),
+      z: formatNumeric(absolute.scale.z),
     }
   },
   { immediate: true, deep: true }
@@ -127,20 +230,34 @@ function startLiveTransformSync(nodeId: string) {
 
     const runtime = getRuntimeObject(nodeId)
     if (runtime) {
+      const base = assetLocalMatrix.value
+      const displayed = base
+        ? decomposeTransformMatrix(
+            composeTransformMatrix(
+              { x: runtime.position.x, y: runtime.position.y, z: runtime.position.z },
+              { x: runtime.rotation.x, y: runtime.rotation.y, z: runtime.rotation.z },
+              { x: runtime.scale.x, y: runtime.scale.y, z: runtime.scale.z },
+            ).multiply(base),
+          )
+        : {
+            position: { x: runtime.position.x, y: runtime.position.y, z: runtime.position.z },
+            rotation: { x: runtime.rotation.x, y: runtime.rotation.y, z: runtime.rotation.z },
+            scale: { x: runtime.scale.x, y: runtime.scale.y, z: runtime.scale.z },
+          }
       transformForm.position = {
-        x: formatNumeric(runtime.position.x),
-        y: formatNumeric(runtime.position.y),
-        z: formatNumeric(runtime.position.z),
+        x: formatNumeric(displayed.position.x),
+        y: formatNumeric(displayed.position.y),
+        z: formatNumeric(displayed.position.z),
       }
       transformForm.rotation = {
-        x: radToDeg(runtime.rotation.x),
-        y: radToDeg(runtime.rotation.y),
-        z: radToDeg(runtime.rotation.z),
+        x: radToDeg(displayed.rotation.x),
+        y: radToDeg(displayed.rotation.y),
+        z: radToDeg(displayed.rotation.z),
       }
       transformForm.scale = {
-        x: formatNumeric(runtime.scale.x),
-        y: formatNumeric(runtime.scale.y),
-        z: formatNumeric(runtime.scale.z),
+        x: formatNumeric(displayed.scale.x),
+        y: formatNumeric(displayed.scale.y),
+        z: formatNumeric(displayed.scale.z),
       }
     }
 
@@ -189,7 +306,8 @@ function handleVectorChange(field: TransformField, axis: VectorAxis, rawValue: s
   const payload: Partial<Pick<TransformUpdatePayload, TransformField>> & { id: string } = {
     id: node.id,
   }
-  const baseVector = cloneVector(field, node[field] as NumericVector | undefined)
+  const absolute = resolveAbsoluteTransform(node)
+  const baseVector = cloneVector(field, absolute[field] as NumericVector | undefined)
 
   if (field === 'rotation') {
     baseVector[axis] = degToRad(numericValue)
@@ -199,7 +317,9 @@ function handleVectorChange(field: TransformField, axis: VectorAxis, rawValue: s
     baseVector[axis] = numericValue
   }
 
-  payload[field] = baseVector
+  const nextAbsolute = { ...absolute, [field]: baseVector }
+  const delta = resolveDeltaTransform(node, nextAbsolute)
+  payload[field] = delta[field]
   sceneStore.updateNodeProperties(payload, { autoSaveMode: 'interactive' })
 }
 

@@ -2,13 +2,19 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
-import { useSceneStore } from '@/stores/sceneStore'
+import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
-import { cloneTextureSettings, createTextureSettings, type SceneNodeMaterial } from '@/types/material'
+import {
+  cloneTextureSettings,
+  createTextureSettings,
+  DEFAULT_SCENE_MATERIAL_TYPE,
+  type SceneNodeMaterial,
+} from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 import { renderMaterialThumbnailDataUrl } from '@/utils/materialAsset'
-import type { SceneMaterialType } from '@schema/core'
+import type { SceneMaterialProps, SceneMaterialType, SceneNode } from '@schema/core'
+import { isLightweightImportNode } from '@schema/core'
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
 type TextureAsset = ProjectAsset & { type: 'image' | 'texture' }
@@ -29,6 +35,32 @@ const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
+const isLightweightNode = computed(() => isLightweightImportNode(selectedNode.value))
+const inheritsMaterial = computed(() => isLightweightNode.value && nodeMaterials.value.length === 0)
+const inheritedOverrideLabel = computed(() => {
+  if (!inheritsMaterial.value || !selectedNodeId.value) {
+    return ''
+  }
+  let currentId: string | null = sceneStore.getParentNodeId(selectedNodeId.value)
+  let guard = 0
+  while (currentId && guard < 1024) {
+    guard += 1
+    const current: SceneNode | null = sceneStore.getNodeById(currentId)
+    if (!current) {
+      break
+    }
+    if (Array.isArray(current.materials) && current.materials.length) {
+      return isLightweightImportNode(current)
+        ? `父级子节点「${current.name}」的材质覆盖`
+        : `根节点「${current.name}」的默认材质覆盖`
+    }
+    if (!isLightweightImportNode(current)) {
+      break
+    }
+    currentId = sceneStore.getParentNodeId(current.id)
+  }
+  return '源模型自带材质'
+})
 const isImportedModelOverrideNode = computed(() => Boolean(
   selectedNode.value
   && selectedNode.value.nodeType === 'Group'
@@ -92,7 +124,8 @@ watch(
 const canAddMaterialSlot = computed(() =>
   !!selectedNodeId.value
   && !props.disabled
-  && (!isImportedModelOverrideNode.value || nodeMaterials.value.length === 0),
+  && (!isImportedModelOverrideNode.value || nodeMaterials.value.length === 0)
+  && (!isLightweightNode.value || nodeMaterials.value.length === 0),
 )
 const canDeleteMaterialSlot = computed(() => !!selectedNodeId.value && !!internalActiveId.value && !props.disabled)
 
@@ -255,22 +288,147 @@ function clearMaterialPreviewThumbnail(slotId: string) {
   materialPreviewThumbnails.value = next
 }
 
-function handleAddMaterialSlot(type?: SceneMaterialType) {
+function handleAddMaterialSlot(type?: SceneMaterialType, props?: Partial<SceneMaterialProps> | null) {
   if (!canAddMaterialSlot.value || !selectedNodeId.value) {
     return
   }
-  if (isImportedModelOverrideNode.value && nodeMaterials.value.length > 0) {
+  if ((isImportedModelOverrideNode.value || isLightweightNode.value) && nodeMaterials.value.length > 0) {
     return
   }
   if (!type) {
     return
   }
-  const created = sceneStore.addNodeMaterial(selectedNodeId.value, { type }) as SceneNodeMaterial | null
+  const created = sceneStore.addNodeMaterial(selectedNodeId.value, {
+    type,
+    props: props ?? null,
+  }) as SceneNodeMaterial | null
   if (!created) {
     return
   }
   setActiveSlot(created.id)
   emit('open-details', created.id)
+}
+
+/**
+ * Material type a first override should use.
+ *
+ * Imported models can be unlit (`MeshBasicMaterial` from
+ * `KHR_materials_unlit`, common for baked terrain tiles). Defaulting such a
+ * node to a lit standard material makes it render black in scenes without
+ * direct lighting, so the override starts from the type the model already uses.
+ */
+type SuggestedOverrideSeed = {
+  type: SceneMaterialType
+  props: Partial<SceneMaterialProps> | null
+}
+
+function resolveMaterialSideName(side: unknown): 'front' | 'back' | 'double' | null {
+  switch (side) {
+    case 1:
+      return 'back'
+    case 2:
+      return 'double'
+    case 0:
+      return 'front'
+    default:
+      return null
+  }
+}
+
+/**
+ * Material type and properties a first override should start from.
+ *
+ * Imported models can be unlit (`MeshBasicMaterial` from
+ * `KHR_materials_unlit`, common for baked terrain tiles). Defaulting such a
+ * node to a lit standard material makes it render black in scenes without
+ * direct lighting, so the override starts from the type and the parameters the
+ * model already renders with.
+ */
+function resolveSuggestedOverrideSeed(): SuggestedOverrideSeed {
+  const nodeId = selectedNodeId.value
+  if (!nodeId) {
+    return { type: DEFAULT_SCENE_MATERIAL_TYPE, props: null }
+  }
+  const runtimeObject = getRuntimeObject(nodeId)
+  if (!runtimeObject) {
+    return { type: DEFAULT_SCENE_MATERIAL_TYPE, props: null }
+  }
+  let detected: SceneMaterialType | null = null
+  let source: Record<string, unknown> | null = null
+  runtimeObject.traverse((child) => {
+    if (detected) {
+      return
+    }
+    const mesh = child as { isMesh?: boolean; material?: unknown }
+    if (!mesh?.isMesh) {
+      return
+    }
+    const raw = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+    if (!raw) {
+      return
+    }
+    const typed = raw as Record<string, unknown>
+    const typeName = typed.type
+    if (typeof typeName === 'string' && MATERIAL_CREATE_OPTIONS.some((option) => option.value === typeName)) {
+      detected = typeName as SceneMaterialType
+      source = typed
+    }
+  })
+  if (!detected || !source) {
+    return { type: DEFAULT_SCENE_MATERIAL_TYPE, props: null }
+  }
+
+  const material = source as {
+    color?: { getHexString?: () => string }
+    emissive?: { getHexString?: () => string }
+    metalness?: unknown
+    roughness?: unknown
+    opacity?: unknown
+    transparent?: unknown
+    side?: unknown
+    wireframe?: unknown
+    emissiveIntensity?: unknown
+  }
+  const props: Partial<SceneMaterialProps> = {}
+  const color = material.color?.getHexString?.()
+  if (typeof color === 'string') {
+    props.color = `#${color}`
+  }
+  const emissive = material.emissive?.getHexString?.()
+  if (typeof emissive === 'string') {
+    props.emissive = `#${emissive}`
+  }
+  if (typeof material.metalness === 'number') {
+    props.metalness = material.metalness
+  }
+  if (typeof material.roughness === 'number') {
+    props.roughness = material.roughness
+  }
+  if (typeof material.opacity === 'number') {
+    props.opacity = material.opacity
+  }
+  if (typeof material.transparent === 'boolean') {
+    props.transparent = material.transparent
+  }
+  if (typeof material.wireframe === 'boolean') {
+    props.wireframe = material.wireframe
+  }
+  if (typeof material.emissiveIntensity === 'number') {
+    props.emissiveIntensity = material.emissiveIntensity
+  }
+  const side = resolveMaterialSideName(material.side)
+  if (side) {
+    props.side = side
+  }
+  return {
+    type: detected,
+    props: Object.keys(props).length ? props : null,
+  }
+}
+
+function handleCreateOverride() {
+  const seed = resolveSuggestedOverrideSeed()
+  handleAddMaterialSlot(seed.type, seed.props)
 }
 
 function handleRequestDeleteSlot() {
@@ -633,6 +791,23 @@ function handleConfirmDeleteSlot() {
       />
     </v-expansion-panel-title>
     <v-expansion-panel-text>
+      <div v-if="isLightweightNode" class="material-panel__inherit">
+        <template v-if="inheritsMaterial">
+          <span class="material-panel__inherit-label">继承中：{{ inheritedOverrideLabel }}</span>
+          <v-btn
+            size="x-small"
+            variant="tonal"
+            color="primary"
+            :disabled="props.disabled"
+            @click.stop="handleCreateOverride"
+          >
+            覆盖材质
+          </v-btn>
+        </template>
+        <span v-else class="material-panel__inherit-label">
+          已覆盖（仅作用于该子节点自身的网格，不写回源模型）
+        </span>
+      </div>
       <div class="material-panel">
         <div
           class="material-panel__list"
@@ -708,6 +883,19 @@ function handleConfirmDeleteSlot() {
 .material-panel {
   display: flex;
   gap: 12px;
+}
+
+.material-panel__inherit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.material-panel__inherit-label {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: rgba(233, 236, 241, 0.72);
 }
 
 .material-panel__list {

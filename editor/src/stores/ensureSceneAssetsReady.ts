@@ -1,7 +1,9 @@
 import type { WatchStopHandle } from 'vue'
 import type { Object3D } from 'three'
+import { Group } from 'three'
 import type { SceneAssetRegistryEntry, SceneNode } from '@schema/core'
 import { cloneImportedObject } from '@schema/assetImport'
+import { isExpandedImportedModelRoot, isLightweightImportNode } from '@schema/core'
 import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
 import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
@@ -509,11 +511,30 @@ export async function updateSceneAssets(args: {
       const metadata = node.importMetadata
       let runtimeObject: Object3D | null = null
 
+      // An expanded imported model root stops rendering its own asset; its
+      // asset nodes are rendered by the lightweight child nodes instead.
+      if (isExpandedImportedModelRoot(node)) {
+        const container = new Group()
+        container.name = node.name ?? container.name
+        container.userData = { ...(container.userData ?? {}), expandedImportedModelRoot: true }
+        results.push({ node, runtimeObject: container })
+        return
+      }
+
       if (!runtimeObject && canUseInstancing && !metadata && modelGroup && canNodeUseRuntimeModelInstancing(node)) {
         runtimeObject = createInstancedRuntimeProxy(node, modelGroup) ?? null
       }
 
-      if (metadata && Array.isArray(metadata.objectPath)) {
+      if (isLightweightImportNode(node)) {
+        // Lightweight nodes render exactly one asset node; the viewport builds
+        // that object from the shared asset cache, so registering a placeholder
+        // container here avoids cloning subtrees that would be discarded.
+        const container = new Group()
+        container.name = node.name ?? container.name
+        container.userData = { ...(container.userData ?? {}), lightweightImportNode: true }
+        results.push({ node, runtimeObject: container })
+        return
+      } else if (metadata && Array.isArray(metadata.objectPath)) {
         const target = findObjectByPath(baseObjectResolved, metadata.objectPath) ?? baseObjectResolved
         runtimeObject = cloneImportedObject(target)
         const descendantKey = metadata.objectPath.join('.')

@@ -1,17 +1,24 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useSceneStore } from '@/stores/sceneStore'
+import { IMPORTED_MODEL_EXPAND_CONFIRM_THRESHOLD, useSceneStore } from '@/stores/sceneStore'
+import { isLightweightImportNode } from '@schema/core'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const sceneStore = useSceneStore()
-const { selectedNode, draggingAssetId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, draggingAssetId, sceneNodePropertyVersion } = storeToRefs(sceneStore)
 
 const dropAreaRef = ref<HTMLElement | null>(null)
 const dropActive = ref(false)
 const dropProcessing = ref(false)
 const feedbackMessage = ref<string | null>(null)
+const expandBusy = ref(false)
+const expandThresholdDialogVisible = ref(false)
+const pendingExpandNodeCount = ref(0)
+const collapseDialogVisible = ref(false)
 
+const isLightweightNode = computed(() => isLightweightImportNode(selectedNode.value))
+const isExpandedRoot = computed(() => selectedNode.value?.importChildrenExpanded === true)
 
 const currentAsset = computed(() => {
   const node = selectedNode.value
@@ -21,11 +28,109 @@ const currentAsset = computed(() => {
   return sceneStore.getAsset(node.sourceAssetId)
 })
 
+/**
+ * Expand state of an imported model root. Reading the store version keeps the
+ * panel in sync when the source model finishes parsing.
+ */
+const treeInfo = computed(() => {
+  void sceneNodePropertyVersion.value
+  const id = selectedNodeId.value
+  if (!id || isLightweightNode.value) {
+    return null
+  }
+  return sceneStore.resolveImportedModelTreeInfo(id)
+})
+
+const isBusy = computed(() => expandBusy.value)
+
+const expandDisabled = computed(() => {
+  const info = treeInfo.value
+  if (!info || isBusy.value) {
+    return true
+  }
+  return info.status === 'expanded' || info.status === 'unsupported' || info.status === 'loading'
+})
+
+const expandTitle = computed(() => {
+  const info = treeInfo.value
+  if (!info) {
+    return '展开全部子节点'
+  }
+  if (info.status === 'unsupported') {
+    return info.reason ?? '该节点不支持展开'
+  }
+  if (info.status === 'loading') {
+    return '正在加载模型…'
+  }
+  if (info.status === 'expanded') {
+    return `已展开 ${info.nodeCount} 个轻量子节点`
+  }
+  return `展开全部子节点（${info.nodeCount}）`
+})
+
+const expandNote = computed(() => treeInfo.value?.reason ?? null)
+
+const overrideCount = computed(() => {
+  const id = selectedNodeId.value
+  return id && isExpandedRoot.value ? sceneStore.countLightweightImportOverrides(id) : 0
+})
+
 watch(selectedNode, () => {
   dropActive.value = false
   dropProcessing.value = false
   feedbackMessage.value = null
+  expandThresholdDialogVisible.value = false
+  collapseDialogVisible.value = false
 })
+
+function handleExpandClick() {
+  const id = selectedNodeId.value
+  const info = treeInfo.value
+  if (!id || !info || info.status !== 'expandable') {
+    return
+  }
+  if (info.nodeCount > (info.confirmedNodeThreshold ?? IMPORTED_MODEL_EXPAND_CONFIRM_THRESHOLD)) {
+    pendingExpandNodeCount.value = info.nodeCount
+    expandThresholdDialogVisible.value = true
+    return
+  }
+  void runExpand()
+}
+
+async function runExpand() {
+  const id = selectedNodeId.value
+  if (!id || expandBusy.value) {
+    return
+  }
+  expandThresholdDialogVisible.value = false
+  expandBusy.value = true
+  try {
+    const result = await sceneStore.expandImportedModelNode(id)
+    if (!result.ok) {
+      feedbackMessage.value = result.reason ?? '展开失败'
+    }
+  } finally {
+    expandBusy.value = false
+  }
+}
+
+function handleCollapseClick() {
+  if (isExpandedRoot.value) {
+    collapseDialogVisible.value = true
+  }
+}
+
+function runCollapse() {
+  const id = selectedNodeId.value
+  if (!id) {
+    return
+  }
+  collapseDialogVisible.value = false
+  const result = sceneStore.collapseImportedModelNode(id)
+  if (!result.ok) {
+    feedbackMessage.value = result.reason ?? '收起失败'
+  }
+}
 
 function serializeAssetDragPayload(raw: string | null): string | null {
   if (!raw) {
@@ -137,23 +242,86 @@ const assetPreviewStyle = computed(() => {
         @dragleave="handleDragLeave"
         @drop="handleDrop"
       >
-        <div v-if="currentAsset" class="asset-summary">
-          <div class="asset-thumbnail" :style="assetPreviewStyle" />
-          <div class="asset-text">
-            <div class="asset-name">{{ currentAsset.name }}</div>
+        <div class="asset-model-row">
+          <div v-if="currentAsset" class="asset-summary">
+            <div class="asset-thumbnail" :style="assetPreviewStyle" />
+            <div class="asset-text">
+              <div class="asset-name">{{ currentAsset.name }}</div>
+            </div>
           </div>
-        </div>
-        <div v-else class="asset-summary empty">
-          <div class="asset-thumbnail placeholder" />
-          <div class="asset-text">
-            <div class="asset-name">No external model assigned</div>
-            <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
+          <div v-else class="asset-summary empty">
+            <div class="asset-thumbnail placeholder" />
+            <div class="asset-text">
+              <div class="asset-name">No external model assigned</div>
+              <div class="asset-subtitle">Drag a model from the Asset Panel to bind it.</div>
+            </div>
           </div>
+
+          <template v-if="treeInfo">
+            <v-spacer />
+            <v-btn
+              v-if="!isExpandedRoot"
+              size="small"
+              variant="tonal"
+              color="primary"
+              prepend-icon="mdi-file-tree"
+              :disabled="expandDisabled"
+              :loading="expandBusy"
+              :title="expandTitle"
+              @click.stop="handleExpandClick"
+            >
+              展开全部子节点
+            </v-btn>
+            <v-btn
+              v-else
+              size="small"
+              variant="tonal"
+              prepend-icon="mdi-arrow-collapse"
+              :title="expandTitle"
+              @click.stop="handleCollapseClick"
+            >
+              收起为整体模型
+            </v-btn>
+          </template>
         </div>
+        <p v-if="expandNote" class="asset-note">{{ expandNote }}</p>
+        <p v-if="isExpandedRoot" class="asset-note asset-note--subtle">
+          根节点材质作为默认覆盖向下继承，已单独覆盖的子节点不再跟随
+          <template v-if="overrideCount > 0">；当前 {{ overrideCount }} 个子节点带有覆盖，收起会丢弃</template>
+        </p>
         <p v-if="feedbackMessage" class="asset-feedback">{{ feedbackMessage }}</p>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
+
+  <v-dialog v-model="expandThresholdDialogVisible" max-width="420">
+    <v-card title="展开子节点">
+      <v-card-text>
+        源模型包含 {{ pendingExpandNodeCount }} 个节点，超过建议上限
+        {{ IMPORTED_MODEL_EXPAND_CONFIRM_THRESHOLD }} 个。展开后会生成同样数量的轻量子节点，
+        可能影响层级面板与保存体积，是否继续？
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="expandThresholdDialogVisible = false">取消</v-btn>
+        <v-btn color="primary" variant="tonal" @click="runExpand">继续展开</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="collapseDialogVisible" max-width="420">
+    <v-card title="收起为整体模型">
+      <v-card-text>
+        收起后将删除全部轻量子节点{{ overrideCount > 0 ? `，并丢弃 ${overrideCount} 个子节点的材质/变换/可见性覆盖` : '' }}。
+        是否继续？
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="collapseDialogVisible = false">取消</v-btn>
+        <v-btn color="warning" variant="tonal" @click="runCollapse">确认收起</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <style scoped>
@@ -165,6 +333,23 @@ const assetPreviewStyle = computed(() => {
   border-radius: 8px;
   padding: 0.75rem;
   transition: border-color 0.2s, background-color 0.2s;
+}
+
+.asset-model-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.asset-note {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: rgba(233, 236, 241, 0.75);
+}
+
+.asset-note--subtle {
+  color: rgba(233, 236, 241, 0.6);
 }
 
 .asset-model-panel.is-active {

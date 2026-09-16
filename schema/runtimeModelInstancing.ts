@@ -35,6 +35,18 @@ export function canNodeUseRuntimeModelInstancing(node: SceneNode | null | undefi
     return false
   }
 
+  // Expanded imported model nodes render one asset node each through the
+  // regular Object3D path. Routing them through the shared InstancedMesh cache
+  // would render the whole source model (at the wrong local transform) instead
+  // of the single asset node the scene node represents.
+  const objectPath = node.importMetadata?.objectPath
+  if (Array.isArray(objectPath) && objectPath.length > 0) {
+    return false
+  }
+  if (node.importChildrenExpanded === true) {
+    return false
+  }
+
   // Imported GLB model nodes share their materials through the cached
   // InstancedMesh handles. Once a node has an explicit material override,
   // rendering it through those handles would mutate every node using the

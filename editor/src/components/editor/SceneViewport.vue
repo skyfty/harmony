@@ -82,6 +82,11 @@ import type {
 } from '@schema/core'
 import { resolveGroundWorkingGridSize } from '@schema/core'
 import {
+  isLightweightImportNode,
+  isLightweightImportSubtreeNode,
+  isExpandedImportedModelRoot,
+} from '@schema/core'
+import {
   buildRegionDynamicMeshFromLocalVertices,
   disposeSkyCubeTexture,
   getLastExtensionFromFilenameOrUrl,
@@ -152,6 +157,7 @@ import {
   findNodeIdForInstance,
 } from '@schema/modelObjectCache'
 import { cloneObject3DShared } from '@/utils/prefabPreviewCache'
+import { findObjectByPath } from '@schema/modelAssetLoader'
 import {
   allocateBillboardInstance,
   allocateBillboardInstanceBinding,
@@ -1580,6 +1586,19 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   }
   if (node.dynamicMesh?.type === 'Floor') {
     refreshFloorRuntimeMaterials(node.id, targetObject)
+    return
+  }
+
+  // Lightweight import nodes render with their own inline material override or
+  // the one inherited from the nearest overriding ancestor (imported model
+  // root). Only their own asset node content is affected.
+  if (isLightweightImportNode(node)) {
+    const inherited = resolveInheritedLightweightImportMaterial(node)
+    if (inherited) {
+      applyMaterialOverrides(targetObject, [inherited], materialOverrideOptions)
+    } else {
+      resetMaterialOverrides(targetObject)
+    }
     return
   }
 
@@ -11075,6 +11094,24 @@ function computeTransformPivotWorld(object: THREE.Object3D, out: THREE.Vector3):
 function updateTransformControlsPivotOverride(object: THREE.Object3D): void {
   const userData = object.userData ?? (object.userData = {})
   const proxy = userData.instancedPickProxy as THREE.Object3D | undefined
+
+  // Lightweight import nodes keep the asset node's own local transform inside
+  // the node object, so the gizmo is anchored on the asset node origin.
+  const nodeId = typeof userData.nodeId === 'string' ? userData.nodeId : ''
+  const lightweightNode = nodeId ? sceneStore.getNodeById(nodeId) : null
+  if (lightweightNode && isLightweightImportNode(lightweightNode)) {
+    const assetLocalMatrix = resolveLightweightAssetLocalMatrix(lightweightNode)
+    if (assetLocalMatrix) {
+      const existingPivot = (userData as any).transformControlsPivotWorld as THREE.Vector3 | undefined
+      const pivotWorld = existingPivot && (existingPivot as any).isVector3 ? existingPivot : new THREE.Vector3()
+      object.updateMatrixWorld(true)
+      pivotWorld.setFromMatrixPosition(
+        lightweightPivotMatrixHelper.multiplyMatrices(object.matrixWorld, assetLocalMatrix),
+      )
+      ;(userData as any).transformControlsPivotWorld = pivotWorld
+      return
+    }
+  }
 
   // Only override pivot when the node has a PickProxy (instanced tiling path).
   if (!proxy) {
@@ -21742,7 +21779,7 @@ function syncInstancedTransformDuringDragIfNeeded(options: {
     // Keep instanced transforms in sync during dragging when transforming a real node.
     syncInstancedTransform(target, true)
     syncInstancedOutlineEntryTransform(nodeId)
-    if (target.userData?.instancedPickProxy) {
+    if (target.userData?.instancedPickProxy || target.userData?.lightweightImportNode) {
       updateTransformControlsPivotOverride(target)
     }
   }
@@ -22069,7 +22106,12 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   // mirrored-material side flip (Front<->Back) to avoid inside-out/backface artifacts.
   syncMirroredMeshMaterials(object, node.mirror === 'horizontal' || node.mirror === 'vertical', node.mirror)
 
-  object.visible = shouldShowLandformRuntimeObject(node)
+  // Lightweight import nodes never override the asset node's own visibility
+  // unless the scene node carries an explicit visibility override.
+  const visibilityAllowed = shouldShowLandformRuntimeObject(node)
+  object.visible = isLightweightImportNode(node)
+    ? visibilityAllowed && object.userData.assetVisible !== false
+    : visibilityAllowed
 
   if (object.userData?.instancedAssetId) {
     ensureInstancedPickProxy(object, node)
@@ -22851,6 +22893,122 @@ function registerNodeModelObject(node: SceneNode, object: THREE.Object3D): void 
   componentManager.syncNode(node)
 }
 
+/**
+ * Material override that a lightweight import node renders with: its own
+ * inline config, otherwise the nearest overriding ancestor (finally the
+ * imported model root's whole-model surface).
+ */
+function resolveInheritedLightweightImportMaterial(node: SceneNode): SceneNodeMaterial | null {
+  let current: SceneNode | null = node
+  let guard = 0
+  while (current && guard < 1024) {
+    guard += 1
+    const own = Array.isArray(current.materials) && current.materials.length
+      ? (current.materials[0] ?? null)
+      : null
+    if (own) {
+      return own
+    }
+    if (!isLightweightImportNode(current)) {
+      return null
+    }
+    const parentId = sceneStore.getParentNodeId(current.id)
+    current = parentId ? sceneStore.getNodeById(parentId) : null
+  }
+  return null
+}
+
+/**
+ * Local transform the asset node carries inside the file (L). Lightweight nodes
+ * store their own transform as a delta applied on top of it.
+ */
+function resolveLightweightAssetLocalMatrix(node: SceneNode): THREE.Matrix4 | null {
+  if (!isLightweightImportNode(node)) {
+    return null
+  }
+  const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  if (!assetId) {
+    return null
+  }
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    return null
+  }
+  const target = findObjectByPath(cached.object, node.importMetadata?.objectPath ?? null)
+  if (!target) {
+    return null
+  }
+  return new THREE.Matrix4().compose(target.position, target.quaternion, target.scale)
+}
+
+const lightweightPivotMatrixHelper = new THREE.Matrix4()
+
+/**
+ * Builds the runtime object of a single asset node for an expanded lightweight
+ * import node: the asset node's own local transform is preserved and its asset
+ * children are dropped because they are represented by scene child nodes.
+ */
+function createLightweightImportAssetObject(assetId: string, node: SceneNode): THREE.Object3D | null {
+  const cached = getCachedModelObject(assetId)
+  if (!cached) {
+    return null
+  }
+  const target = findObjectByPath(cached.object, node.importMetadata?.objectPath ?? null)
+  if (!target) {
+    return null
+  }
+  const clone = cloneObject3DShared(target)
+  // Skinned subtrees keep their children (bones): the skeleton has to rebind to
+  // bones inside the same clone.
+  if (!isLightweightImportSubtreeNode(node)) {
+    const children = clone.children.slice()
+    children.forEach((child) => clone.remove(child))
+  }
+  clone.userData = { ...(clone.userData ?? {}) }
+  delete clone.userData.instanced
+  delete clone.userData.instancedAssetId
+  clone.traverse((child) => {
+    const meshChild = child as THREE.Mesh
+    if (meshChild?.isMesh) {
+      meshChild.castShadow = true
+      meshChild.receiveShadow = true
+    }
+  })
+  return clone
+}
+
+function createLightweightImportObject(node: SceneNode): THREE.Object3D {
+  const container = new THREE.Group()
+  container.name = node.name
+  const containerData = container.userData ?? (container.userData = {})
+  containerData.nodeId = node.id
+  containerData.lightweightImportNode = true
+
+  const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+  const assetObject = assetId ? createLightweightImportAssetObject(assetId, node) : null
+  if (assetObject) {
+    containerData.assetVisible = (assetObject as THREE.Object3D).visible !== false
+    container.add(assetObject)
+    containerData.usesRuntimeObject = true
+    registerRuntimeObject(node.id, container)
+  } else {
+    containerData.usesRuntimeObject = false
+    if (assetId) {
+      // The asset may still be loading; rebuild this node once it is cached.
+      void ensureModelObjectCached(assetId).then(() => {
+        if (!isSceneReady.value) {
+          return
+        }
+        if (getCachedModelObject(assetId)) {
+          sceneStore.queueSceneNodePatch(node.id, ['runtime'])
+        }
+      })
+    }
+  }
+
+  return container
+}
+
 function upgradeInstancedProxyToModelObject(node: SceneNode, proxy: THREE.Object3D): THREE.Object3D {
   const assetId = resolveRuntimeProxyModelAssetId(node, proxy)
   if (!assetId) {
@@ -22921,6 +23079,14 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   }
   const nextSourceAssetId = node.sourceAssetId ?? null
   if ((userData.sourceAssetId ?? null) !== nextSourceAssetId) {
+    return true
+  }
+  // Expanded imported model roots and lightweight import nodes use dedicated
+  // runtime representations, so a state change on either flag forces a rebuild.
+  if (Boolean(userData.expandedImportedModelRoot) !== (node.importChildrenExpanded === true)) {
+    return true
+  }
+  if (Boolean(userData.lightweightImportNode) !== isLightweightImportNode(node)) {
     return true
   }
   // A material override changes imported GLB nodes from the shared instanced
@@ -23054,11 +23220,15 @@ function reconcileNode(node: SceneNode, parent: THREE.Object3D, encountered: Set
     if (object.parent !== parent) {
       parent.add(object)
     }
+    // Keep the viewport object index authoritative even for node kinds whose
+    // factory returns before the shared tail of `createObjectFromNode`.
+    objectMap.set(node.id, object)
     updateNodeObject(object, node)
   } else{
     if (object.parent !== parent) {
       parent.add(object)
     }
+    objectMap.set(node.id, object)
     updateNodeObject(object, node)
   }
   reconcileNodeList(node.children ?? [], object, encountered)
@@ -23540,7 +23710,27 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
   const nodeType = node.nodeType ?? (node.light ? 'Light' : 'Mesh')
 
-  if (nodeType === 'Light') {
+  // An expanded imported model root stops rendering its own asset: the asset
+  // nodes are rendered by the lightweight child nodes instead.
+  if (isExpandedImportedModelRoot(node)) {
+    const existingContainer = getRuntimeObject(node.id)
+    if (existingContainer && isInstancedRuntimeProxy(existingContainer)) {
+      releaseInstancedProxyBindings(node.id, existingContainer)
+    }
+    const container = new THREE.Group()
+    container.name = node.name
+    const containerData = container.userData ?? (container.userData = {})
+    containerData.nodeId = node.id
+    containerData.expandedImportedModelRoot = true
+    containerData.usesRuntimeObject = true
+    registerNodeModelObject(node, container)
+    object = container
+  } else if (isLightweightImportNode(node)) {
+    // Expanded lightweight import nodes render a single asset node each and
+    // only support material / transform / visibility overrides.
+    const container = createLightweightImportObject(node)
+    object = container
+  } else if (nodeType === 'Light') {
     object = createLightObject(node)
     object.name = node.name
   } else if (nodeType === 'Mesh') {

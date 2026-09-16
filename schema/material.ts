@@ -139,6 +139,13 @@ const WALL_REPEAT_U_TEXTURE_SLOTS = [
 
 const MATERIAL_CLONED_KEY = '__harmonyMaterialCloned';
 const MATERIAL_ORIGINAL_KEY = '__harmonyMaterialOriginal';
+/**
+ * Pristine material instance(s) a mesh had before an override touched it.
+ * Swapping the material type allocates a brand new material, so restoring the
+ * original look needs the original instance rather than just its property
+ * baseline.
+ */
+const MATERIAL_ORIGINAL_INSTANCE_KEY = '__harmonyMaterialOriginalInstance';
 const TEXTURE_SLOT_STATE_KEY = '__harmonyTextureSlots';
 const TEXTURE_SLOT_OVERRIDES_KEY = '__harmonyTextureOverrides';
 const MATERIAL_OVERRIDE_STATE_KEY = '__harmonyMaterialOverrideState';
@@ -1657,6 +1664,19 @@ export function applyMaterialOverrides(
     }
 
     const materials = Array.isArray(resolvedMaterial) ? resolvedMaterial : [resolvedMaterial];
+    if (!mesh.userData) {
+      mesh.userData = {};
+    }
+    // Remember the pristine instance(s) once, before the override can swap the
+    // material type or mutate properties in place.
+    if (!(MATERIAL_ORIGINAL_INSTANCE_KEY in mesh.userData)) {
+      mesh.userData[MATERIAL_ORIGINAL_INSTANCE_KEY] = Array.isArray(resolvedMaterial)
+        ? resolvedMaterial.slice()
+        : resolvedMaterial;
+    }
+    const originalInstances = Array.isArray(mesh.userData[MATERIAL_ORIGINAL_INSTANCE_KEY])
+      ? (mesh.userData[MATERIAL_ORIGINAL_INSTANCE_KEY] as THREE.Material[])
+      : [mesh.userData[MATERIAL_ORIGINAL_INSTANCE_KEY] as THREE.Material];
     const meshRepeatInfo = resolveMaterialTextureRepeatInfo(mesh.userData?.[MATERIAL_TEXTURE_REPEAT_INFO_KEY] ?? null);
     const configById = requestedSelectorId
       ? (configs.find((entry) => typeof entry?.id === 'string' && entry.id === requestedSelectorId) ?? null)
@@ -1672,7 +1692,11 @@ export function applyMaterialOverrides(
         if (didReplace) {
           materials[index] = ensured;
           replaced = true;
-          disposables.push(dispose);
+          // Never dispose the pristine instance: it is restored as soon as the
+          // override is removed again.
+          if (!originalInstances.includes(materialRef)) {
+            disposables.push(dispose);
+          }
         }
         applyMaterialTextureRepeatInfo(materials[index]!, meshRepeatInfo);
         applyMaterialConfigToMaterial(materials[index]!, config, options);
@@ -1729,6 +1753,35 @@ export function resetMaterialOverrides(target: THREE.Object3D): void {
     }
 
     const materials = Array.isArray(currentMaterial) ? currentMaterial : [currentMaterial];
+
+    // Restore the pristine material instance when the override swapped the
+    // material type; property-only overrides keep using the baseline below.
+    const originalRef = mesh.userData?.[MATERIAL_ORIGINAL_INSTANCE_KEY] as
+      | THREE.Material
+      | THREE.Material[]
+      | undefined;
+    if (originalRef) {
+      const originalMaterials = Array.isArray(originalRef) ? originalRef : [originalRef];
+      originalMaterials.forEach((material: THREE.Material) => {
+        if (material) {
+          restoreMaterialFromBaseline(material);
+        }
+      });
+      materials.forEach((material: THREE.Material) => {
+        if (!material || originalMaterials.includes(material)) {
+          return;
+        }
+        disposeMaterialOverrides(material);
+        material.dispose?.();
+      });
+      mesh.material = Array.isArray(originalRef) ? originalRef.slice() : originalRef;
+      if (mesh.userData) {
+        delete mesh.userData[MATERIAL_ORIGINAL_INSTANCE_KEY];
+        delete mesh.userData[MATERIAL_OVERRIDE_STATE_KEY];
+      }
+      return;
+    }
+
     materials.forEach((material: THREE.Material) => {
       restoreMaterialFromBaseline(material);
     });

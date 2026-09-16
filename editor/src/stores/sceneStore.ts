@@ -103,6 +103,11 @@ import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { resourceProviders } from '@/resources/projectProviders'
 import { getExtensionFromMimeType } from '@schema/core'
+import {
+  isLightweightImportNode,
+  isExpandedImportedModelRoot,
+  isIdentityNodeTransform,
+} from '@schema/core'
 import type { SceneCameraState } from '@/types/scene-camera-state'
 import type {
   SceneHistoryEntry,
@@ -518,6 +523,8 @@ let historyCaptureSuppressionDepth = 0
 // Prevents repeated viewport refreshes when creating/moving many nodes.
 let scenePatchSuppressionDepth = 0
 let pendingSceneGraphStructureVersionBump = false
+let materialPatchPropagationDepth = 0
+const importedModelExpansionLoads = new Map<string, Promise<ModelInstanceGroup | null>>()
 let pendingSceneNodePropertyVersionBump = false
 let pendingSuppressedScenePatchRequiresFullSync = false
 const activeMaterialEditHistoryKeys = new Set<string>()
@@ -1513,6 +1520,412 @@ function isImportedModelOverrideNode(node: SceneNode | null | undefined): boolea
     && node.sourceAssetId.trim().length > 0
     && !node.dynamicMesh
   )
+}
+
+/** Asset node trees with more than this many nodes ask for confirmation first. */
+export const IMPORTED_MODEL_EXPAND_CONFIRM_THRESHOLD = 2000
+
+/**
+ * Runtime-instancing bookkeeping stored on the node's userData. An expanded
+ * imported model root no longer renders through the shared InstancedMesh cache,
+ * so those keys have to be dropped — the hierarchy treats any node flagged with
+ * `instanced` as an indivisible leaf and would hide its new child nodes.
+ */
+const IMPORTED_MODEL_INSTANCING_USERDATA_KEYS = [
+  'instanced',
+  'instancedAssetId',
+  'instancedBounds',
+  'instancedRenderKind',
+  'instancedPickProxy',
+  '__harmonyCulled',
+  '__harmonyInstancedRadius',
+  '__harmonyInstanceLayoutInjectedInstancedAssetId',
+  '__harmonyInstanceLayoutPreviousInstancedAssetId',
+  '__harmonyInstanceLayoutTemplateAssetId',
+  '__harmonyInstanceLayoutCache',
+  '__harmonyInstanceLayoutHiddenMesh',
+  '__harmonyInstanceLayoutHiddenMeshWasVisible',
+]
+
+function stripImportedModelInstancingUserData(
+  userData: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | undefined {
+  if (!userData) {
+    return undefined
+  }
+  const next: Record<string, unknown> = { ...userData }
+  IMPORTED_MODEL_INSTANCING_USERDATA_KEYS.forEach((key) => {
+    delete next[key]
+  })
+  return Object.keys(next).length ? next : undefined
+}
+
+function isBoneObject3D(object: Object3D): boolean {
+  return Boolean((object as { isBone?: boolean }).isBone) || object.type === 'Bone'
+}
+
+function collectImportedModelNodeCount(object: Object3D, subtreeRoots?: Set<Object3D> | null): number {
+  let count = 0
+  object.children.forEach((child) => {
+    if (isBoneObject3D(child)) {
+      return
+    }
+    // An indivisible skinned subtree counts as the single node it becomes.
+    if (subtreeRoots?.has(child)) {
+      count += 1
+      return
+    }
+    count += 1 + collectImportedModelNodeCount(child, subtreeRoots)
+  })
+  return count
+}
+
+type SkinnedGroupInfo = {
+  /** Indivisible subtree roots: each keeps its skinned mesh and bones together. */
+  roots: Set<Object3D>
+  /** True when one skinned group spans the whole asset root and cannot be split. */
+  spansAssetRoot: boolean
+  skinnedMeshCount: number
+  skinnedMeshLabels: string[]
+}
+
+function buildAssetObjectParentMap(root: Object3D): Map<Object3D, Object3D | null> {
+  const parentMap = new Map<Object3D, Object3D | null>()
+  const visit = (node: Object3D, parent: Object3D | null) => {
+    parentMap.set(node, parent)
+    node.children.forEach((child) => visit(child, node))
+  }
+  visit(root, null)
+  return parentMap
+}
+
+function isAssetObjectAncestor(
+  ancestor: Object3D,
+  node: Object3D,
+  parentMap: Map<Object3D, Object3D | null>,
+): boolean {
+  let current = parentMap.get(node) ?? null
+  let guard = 0
+  while (current && guard < 4096) {
+    guard += 1
+    if (current === ancestor) {
+      return true
+    }
+    current = parentMap.get(current) ?? null
+  }
+  return false
+}
+
+function findLowestCommonAncestor(
+  nodes: Object3D[],
+  parentMap: Map<Object3D, Object3D | null>,
+  root: Object3D,
+): Object3D | null {
+  const candidates = nodes.filter((node) => Boolean(node) && parentMap.has(node))
+  if (!candidates.length) {
+    return null
+  }
+  let ancestor: Object3D | null = candidates[0]!
+  for (let index = 1; index < candidates.length && ancestor; index += 1) {
+    const candidate = candidates[index]!
+    while (ancestor && ancestor !== candidate && !isAssetObjectAncestor(ancestor, candidate, parentMap)) {
+      ancestor = parentMap.get(ancestor) ?? null
+    }
+  }
+  return ancestor && parentMap.has(ancestor) ? ancestor : root
+}
+
+/**
+ * Finds the indivisible units of a skinned asset: for every skinned mesh the
+ * lowest ancestor that also contains its skeleton bones. Splitting there would
+ * leave the mesh without its bones, so those subtrees are expanded as a single
+ * lightweight node that renders the whole subtree (bones included).
+ */
+function resolveSkinnedGroupInfo(object: Object3D): SkinnedGroupInfo {
+  const parentMap = buildAssetObjectParentMap(object)
+  const roots = new Set<Object3D>()
+  const labels: string[] = []
+  let spansAssetRoot = false
+
+  object.traverse((child) => {
+    const skinned = child as Object3D & {
+      isSkinnedMesh?: boolean
+      skeleton?: { bones?: Object3D[] } | null
+    }
+    if (!skinned.isSkinnedMesh) {
+      return
+    }
+    labels.push(formatObjectLabel(child, `未命名蒙皮网格 #${labels.length + 1}`))
+    const required: Object3D[] = [child]
+    ;(skinned.skeleton?.bones ?? []).forEach((bone) => {
+      if (bone) {
+        required.push(bone)
+      }
+    })
+    const ancestor = findLowestCommonAncestor(required, parentMap, object)
+    if (!ancestor || ancestor === object) {
+      spansAssetRoot = true
+      return
+    }
+    roots.add(ancestor)
+  })
+
+  const list = Array.from(roots)
+  const filtered = list.filter((candidate) => (
+    !list.some((other) => other !== candidate && isAssetObjectAncestor(other, candidate, parentMap))
+  ))
+
+  return {
+    roots: new Set(filtered),
+    spansAssetRoot,
+    skinnedMeshCount: labels.length,
+    skinnedMeshLabels: labels.slice(0, 3),
+  }
+}
+
+function formatObjectLabel(object: Object3D, fallback: string): string {
+  const name = typeof object.name === 'string' ? object.name.trim() : ''
+  return name.length ? name : fallback
+}
+
+/**
+ * Asset features that make the asset node tree unsafe to split into separate
+ * scene nodes. The reason text is user facing; `diagnostics` is logged so an
+ * unexpected block can be traced back to the offending asset node.
+ */
+function resolveImportedModelExpandBlock(
+  object: Object3D,
+  assetId: string,
+): {
+  reason: string | null
+  note: string | null
+  skinnedGroups: SkinnedGroupInfo
+  diagnostics: Record<string, unknown>
+} {
+  const skinnedGroups = resolveSkinnedGroupInfo(object)
+  if (skinnedGroups.spansAssetRoot) {
+    const suffix = skinnedGroups.skinnedMeshCount > skinnedGroups.skinnedMeshLabels.length
+      ? ` 等 ${skinnedGroups.skinnedMeshCount} 个`
+      : ''
+    return {
+      reason: `该模型的骨架与蒙皮网格跨越整个根层级（${skinnedGroups.skinnedMeshLabels.join('、')}${suffix}），无法拆分为子节点`,
+      note: null,
+      skinnedGroups,
+      diagnostics: {
+        assetId,
+        reason: 'skinned-group-spans-asset-root',
+        skinnedMeshCount: skinnedGroups.skinnedMeshCount,
+        skinnedMeshNames: skinnedGroups.skinnedMeshLabels,
+      },
+    }
+  }
+  const animations = (object as unknown as { animations?: unknown }).animations
+  if (Array.isArray(animations) && animations.length > 0) {
+    const clipNames = animations
+      .map((clip) => (clip && typeof clip === 'object' && typeof (clip as { name?: unknown }).name === 'string'
+        ? ((clip as { name: string }).name.trim() || '未命名动画')
+        : '未命名动画'))
+      .slice(0, 3)
+    const suffix = animations.length > clipNames.length ? ` 等 ${animations.length} 个` : ''
+    return {
+      reason: `该模型包含动画（${clipNames.join('、')}${suffix}），暂不支持展开为子节点`,
+      note: null,
+      skinnedGroups,
+      diagnostics: {
+        assetId,
+        clipCount: animations.length,
+        clipNames,
+      },
+    }
+  }
+  const note = skinnedGroups.skinnedMeshCount > 0
+    ? `含 ${skinnedGroups.skinnedMeshCount} 个蒙皮网格（${skinnedGroups.skinnedMeshLabels.join('、')}），将作为整体子树节点保留（含骨骼）`
+    : null
+  return {
+    reason: null,
+    note,
+    skinnedGroups,
+    diagnostics: {
+      assetId,
+      skinnedMeshCount: skinnedGroups.skinnedMeshCount,
+      subtreeGroupCount: skinnedGroups.roots.size,
+    },
+  }
+}
+
+function buildLightweightImportChildNodes(
+  object: Object3D,
+  assetId: string,
+  basePath: number[],
+  parentName: string,
+  subtreeRoots?: Set<Object3D> | null,
+): SceneNode[] {
+  const nodes: SceneNode[] = []
+  object.children.forEach((child, index) => {
+    if (isBoneObject3D(child)) {
+      return
+    }
+    const path = [...basePath, index]
+    const childName = typeof child.name === 'string' && child.name.trim().length
+      ? child.name.trim()
+      : `${parentName} #${index + 1}`
+    const isMesh = Boolean((child as { isMesh?: boolean }).isMesh)
+    // Skinned subtrees stay whole: the skinned mesh and its bones are rendered
+    // by a single lightweight node that cannot be split further.
+    const isSubtreeRoot = Boolean(subtreeRoots?.has(child))
+    const node: SceneNode = {
+      id: generateUuid(),
+      name: isSubtreeRoot ? `${childName}（整体）` : childName,
+      nodeType: isMesh ? 'Mesh' : 'Group',
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      canPrefab: false,
+      allowChildNodes: false,
+      sourceAssetId: assetId,
+      importMetadata: {
+        assetId,
+        objectPath: path,
+        lightweight: true,
+        ...(isSubtreeRoot ? { subtree: true } : {}),
+      },
+    }
+    // Expanded trees are meant to be browsed, so every lightweight node starts
+    // expanded (leaves simply have nothing to unfold).
+    node.groupExpanded = true
+    if (!isSubtreeRoot) {
+      const children = buildLightweightImportChildNodes(child, assetId, path, childName, subtreeRoots)
+      if (children.length) {
+        node.children = children
+      }
+    }
+    nodes.push(node)
+  })
+  return nodes
+}
+
+function collectNodeTreeIdsForRemoval(nodes: SceneNode[], bucket: string[]): void {
+  nodes.forEach((node) => {
+    bucket.push(node.id)
+    if (node.children?.length) {
+      collectNodeTreeIdsForRemoval(node.children, bucket)
+    }
+  })
+}
+
+/**
+ * Lightweight import nodes store nothing but their asset reference while
+ * untouched, so persisted documents may omit their transform fields.
+ */
+function hydrateLightweightImportNodeTransforms(
+  nodes: SceneNode[] | undefined,
+  insideExpandedRoot = false,
+): void {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return
+  }
+  nodes.forEach((node) => {
+    if (!node) {
+      return
+    }
+    const expandedRoot = isExpandedImportedModelRoot(node)
+    const hasAssetSubPath = typeof node.importMetadata?.assetId === 'string'
+      && node.importMetadata.assetId.trim().length > 0
+      && Array.isArray(node.importMetadata.objectPath)
+      && node.importMetadata.objectPath.length > 0
+    // Documents written before `importMetadata` extras were preserved lost the
+    // lightweight marker; restore it for children of an expanded root so their
+    // material / transform / visibility editing keeps working.
+    if (insideExpandedRoot && hasAssetSubPath && node.importMetadata!.lightweight !== true) {
+      node.importMetadata!.lightweight = true
+    }
+    if (isLightweightImportNode(node)) {
+      if (!node.position) {
+        node.position = { x: 0, y: 0, z: 0 }
+      }
+      if (!node.rotation) {
+        node.rotation = { x: 0, y: 0, z: 0 }
+      }
+      if (!node.scale) {
+        node.scale = { x: 1, y: 1, z: 1 }
+      }
+      if (!node.nodeType) {
+        node.nodeType = 'Mesh'
+      }
+    } else if (expandedRoot) {
+      // Expanded roots are plain containers: they must not keep the whole-model
+      // instancing marker, otherwise the hierarchy hides their child nodes.
+      node.nodeType = 'Group'
+      const nextUserData = stripImportedModelInstancingUserData(node.userData)
+      if (nextUserData) {
+        node.userData = nextUserData
+      } else {
+        delete (node as { userData?: unknown }).userData
+      }
+      if (node.groupExpanded === false) {
+        node.groupExpanded = true
+      }
+    }
+    if (node.children?.length) {
+      hydrateLightweightImportNodeTransforms(node.children, insideExpandedRoot || expandedRoot)
+    }
+  })
+}
+
+function collectLightweightOverrideCount(nodes: SceneNode[] | undefined): number {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return 0
+  }
+  let count = 0
+  nodes.forEach((node) => {
+    if (
+      (Array.isArray(node.materials) && node.materials.length > 0)
+      || typeof node.visible === 'boolean'
+      || !isIdentityNodeTransform(node)
+    ) {
+      count += 1
+    }
+    count += collectLightweightOverrideCount(node.children)
+  })
+  return count
+}
+
+async function ensureImportedModelAssetCached(
+  store: { getAsset: (assetId: string) => ProjectAsset | null | undefined },
+  assetId: string,
+): Promise<ModelInstanceGroup | null> {
+  if (!assetId) {
+    return null
+  }
+  const cached = getCachedModelObject(assetId)
+  if (cached) {
+    return cached
+  }
+  const pending = importedModelExpansionLoads.get(assetId)
+  if (pending) {
+    return pending
+  }
+  const task = (async (): Promise<ModelInstanceGroup | null> => {
+    const assetCache = useAssetCacheStore()
+    const asset = store.getAsset(assetId) ?? null
+    try {
+      const file = await assetCache.ensureAssetFile(assetId, { asset: asset ?? undefined })
+      if (!file) {
+        return null
+      }
+      const group = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, asset?.extension ?? undefined))
+      assetCache.releaseInMemoryBlob(assetId)
+      assetCache.touch(assetId)
+      return group
+    } catch (error) {
+      console.warn('[SceneStore] Failed to load model asset for expansion', assetId, error)
+      return null
+    }
+  })().finally(() => {
+    importedModelExpansionLoads.delete(assetId)
+  })
+  importedModelExpansionLoads.set(assetId, task)
+  return task
 }
 
 function nodeSupportsMaterials(node: SceneNode | null | undefined): boolean {
@@ -4982,6 +5395,33 @@ function isGroupNode(node: SceneNode | null | undefined): node is SceneNode {
   return !!node && node.nodeType === 'Group'
 }
 
+/**
+ * Hierarchy rows can be expanded whenever the node owns child nodes. Imported
+ * lightweight nodes mirror asset nodes, so a mesh asset node with asset
+ * children (common for terrain tiles) has to stay expandable too.
+ */
+function isHierarchyExpandableNode(node: SceneNode | null | undefined): node is SceneNode {
+  if (!node) {
+    return false
+  }
+  if (node.nodeType === 'Group') {
+    return true
+  }
+  return Array.isArray(node.children) && node.children.length > 0
+}
+
+function isHierarchyNodeExpanded(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  if (node.nodeType === 'Group') {
+    return node.groupExpanded !== false
+  }
+  // Non-group nodes only expand when the user (or the expansion action) asked
+  // for it explicitly, so legacy node trees do not flood the hierarchy.
+  return node.groupExpanded === true
+}
+
 function isGroupExpandedFlag(node: SceneNode | null | undefined): boolean {
   if (!isGroupNode(node)) {
     return false
@@ -4993,7 +5433,7 @@ function collectExpandedGroupIds(nodes: SceneNode[]): string[] {
   const result: string[] = []
   const traverse = (list: SceneNode[]) => {
     list.forEach((node) => {
-      if (isGroupNode(node) && isGroupExpandedFlag(node)) {
+      if (isHierarchyExpandableNode(node) && isHierarchyNodeExpanded(node)) {
         result.push(node.id)
       }
       if (node.children?.length) {
@@ -5301,6 +5741,10 @@ function cloneNodeForDuplication(node: SceneNode): SceneNode {
     dynamicMesh: cloneDynamicMeshDefinition(node.dynamicMesh),
     importMetadata: workingNode.importMetadata
       ? {
+          // Keep every metadata flag (lightweight / subtree): dropping them
+          // would turn expanded lightweight nodes back into plain nodes after
+          // a scene load, an undo/redo or a duplicate.
+          ...workingNode.importMetadata,
           assetId: workingNode.importMetadata.assetId,
           objectPath: Array.isArray(workingNode.importMetadata.objectPath)
             ? [...workingNode.importMetadata.objectPath]
@@ -5747,6 +6191,10 @@ function cloneNode(node: SceneNode): SceneNode {
     dynamicMesh: cloneDynamicMeshDefinition(node.dynamicMesh),
     importMetadata: workingNode.importMetadata
       ? {
+          // Keep every metadata flag (lightweight / subtree): dropping them
+          // would turn expanded lightweight nodes back into plain nodes after
+          // a scene load, an undo/redo or a duplicate.
+          ...workingNode.importMetadata,
           assetId: workingNode.importMetadata.assetId,
           objectPath: Array.isArray(workingNode.importMetadata.objectPath)
             ? [...workingNode.importMetadata.objectPath]
@@ -9535,6 +9983,18 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
+      // Material overrides inherit down an expanded imported model tree, so a
+      // material patch on a root/lightweight node also has to refresh the
+      // lightweight descendants that inherit from it.
+      if (requested.includes('materials') && materialPatchPropagationDepth === 0) {
+        materialPatchPropagationDepth += 1
+        try {
+          this.queueLightweightDescendantMaterialPatches(id)
+        } finally {
+          materialPatchPropagationDepth -= 1
+        }
+      }
+
       if (scenePatchSuppressionDepth > 0) {
         pendingSuppressedScenePatchRequiresFullSync = true
         if (bumpVersion) {
@@ -9736,6 +10196,7 @@ export const useSceneStore = defineStore('scene', {
       applySceneAssetState(this, scene)
       this.environment = resolveSceneDocumentEnvironment(scene)
       const clonedNodes = cloneSceneNodes(scene.nodes)
+      hydrateLightweightImportNodeTransforms(clonedNodes)
       const effectiveGroundSettings = resolveGroundSettingsFromNodes(clonedNodes, cloneGroundSettings(scene.groundSettings))
       const normalizedNodes = ensureEnvironmentNode(
         ensureGroundNode(clonedNodes, effectiveGroundSettings),
@@ -10468,18 +10929,18 @@ export const useSceneStore = defineStore('scene', {
     },
     isGroupExpanded(nodeId: string): boolean {
       const node = findNodeById(this.nodes, nodeId)
-      return isGroupExpandedFlag(node)
+      return isHierarchyExpandableNode(node) ? isHierarchyNodeExpanded(node) : false
     },
     getExpandedGroupIds(): string[] {
       return collectExpandedGroupIds(this.nodes)
     },
     setGroupExpanded(nodeId: string, expanded: boolean, _options: { captureHistory?: boolean; commit?: boolean } = {}) {
       const node = findNodeById(this.nodes, nodeId)
-      if (!isGroupNode(node)) {
+      if (!isHierarchyExpandableNode(node)) {
         return false
       }
       const normalized = expanded !== false
-      const current = isGroupExpandedFlag(node)
+      const current = isHierarchyNodeExpanded(node)
       if (current === normalized) {
         return false
       }
@@ -10495,9 +10956,9 @@ export const useSceneStore = defineStore('scene', {
       const assignments: Array<{ node: SceneNode; next: boolean }> = []
       const collectAssignments = (list: SceneNode[]) => {
         list.forEach((node) => {
-          if (isGroupNode(node)) {
+          if (isHierarchyExpandableNode(node)) {
             const desired = targetIds.has(node.id)
-            const current = isGroupExpandedFlag(node)
+            const current = isHierarchyNodeExpanded(node)
             if (desired !== current) {
               assignments.push({ node, next: desired })
             }
@@ -10532,10 +10993,10 @@ export const useSceneStore = defineStore('scene', {
     },
     toggleGroupExpansion(nodeId: string, options: { captureHistory?: boolean; commit?: boolean } = {}) {
       const node = findNodeById(this.nodes, nodeId)
-      if (!isGroupNode(node)) {
+      if (!isHierarchyExpandableNode(node)) {
         return false
       }
-      const next = !isGroupExpandedFlag(node)
+      const next = !isHierarchyNodeExpanded(node)
       return this.setGroupExpanded(nodeId, next, options)
     },
     findParentGroupId(nodeId: string): string | null {
@@ -11069,6 +11530,11 @@ export const useSceneStore = defineStore('scene', {
       if (!target || target.name === trimmed) {
         return
       }
+      // Lightweight imported model nodes mirror the asset node tree and are
+      // intentionally read-only apart from material / transform / visibility.
+      if (isLightweightImportNode(target)) {
+        return
+      }
       this.captureNodeBasicsHistorySnapshot([{ id, name: true }])
       visitNode(this.nodes, id, (node) => {
         node.name = trimmed
@@ -11082,6 +11548,11 @@ export const useSceneStore = defineStore('scene', {
     ) {
       const target = findNodeById(this.nodes, nodeId)
       if (!nodeSupportsMaterials(target)) {
+        return null
+      }
+      // Lightweight imported model nodes carry at most a single inline material
+      // override (they must never register material assets).
+      if (isLightweightImportNode(target) && Array.isArray(target?.materials) && target!.materials!.length > 0) {
         return null
       }
 
@@ -14911,6 +15382,13 @@ export const useSceneStore = defineStore('scene', {
       if (!movingNode) {
         return false
       }
+      // Lightweight imported model nodes must stay in their asset tree.
+      if (isLightweightImportNode(movingNode)) {
+        return false
+      }
+      if (targetId && isLightweightImportNode(findNodeById(this.nodes, targetId))) {
+        return false
+      }
 
       if (targetId && isDescendantNode(this.nodes, nodeId, targetId)) {
         return false
@@ -15462,6 +15940,11 @@ export const useSceneStore = defineStore('scene', {
       if (!node) {
         return false
       }
+      // Expanded imported model trees cannot switch assets in place; collapse
+      // first, then replace the whole-model node.
+      if (isExpandedImportedModelRoot(node) || isLightweightImportNode(node)) {
+        return false
+      }
       const asset = this.getAsset(assetId)
       if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
         return false
@@ -15823,6 +16306,274 @@ export const useSceneStore = defineStore('scene', {
 
       commitSceneSnapshot(this)
       return importedIds
+    },
+
+    /**
+     * Sync description of whether an imported model node can be expanded into
+     * lightweight child nodes. Kicks asset loading in the background when the
+     * source model is not cached yet.
+     */
+    resolveImportedModelTreeInfo(nodeId: string): {
+      status: 'expandable' | 'expanded' | 'loading' | 'unsupported'
+      reason: string | null
+      nodeCount: number
+      childCount: number
+      confirmedNodeThreshold: number
+    } {
+      const node = nodeId ? findNodeById(this.nodes, nodeId) : null
+      const threshold = IMPORTED_MODEL_EXPAND_CONFIRM_THRESHOLD
+      if (!node) {
+        return { status: 'unsupported', reason: '节点不存在', nodeCount: 0, childCount: 0, confirmedNodeThreshold: threshold }
+      }
+      const childCount = Array.isArray(node.children) ? node.children.length : 0
+      if (isLightweightImportNode(node)) {
+        return { status: 'unsupported', reason: '轻量子节点不支持再次展开', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      if (isExpandedImportedModelRoot(node)) {
+        return { status: 'expanded', reason: null, nodeCount: childCount, childCount, confirmedNodeThreshold: threshold }
+      }
+      if (node.dynamicMesh) {
+        return { status: 'unsupported', reason: '动态网格节点不支持展开', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      if (Array.isArray(node.importMetadata?.objectPath) && node.importMetadata!.objectPath!.length > 0) {
+        return { status: 'unsupported', reason: '该节点已经是资产内部的子节点', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      if (node.isPlaceholder || node.downloadStatus === 'downloading') {
+        return { status: 'unsupported', reason: '模型尚未加载完成', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+      if (!assetId) {
+        return { status: 'unsupported', reason: '该节点不是导入模型节点', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      const asset = this.getAsset(assetId)
+      if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+        return { status: 'unsupported', reason: '未找到对应的模型资产', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      const layout = (node as { instanceLayout?: { mode?: string } | null }).instanceLayout
+      if (layout && layout.mode && layout.mode !== 'single') {
+        return { status: 'unsupported', reason: '多实例布局节点不支持展开', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      if (childCount > 0) {
+        return { status: 'unsupported', reason: '该节点已有子节点，请先移出后再展开', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+
+      const cached = getCachedModelObject(assetId)
+      if (!cached) {
+        void ensureImportedModelAssetCached(this, assetId).then((group) => {
+          if (!group) {
+            return
+          }
+          // Let the inspector recompute the expand state once the model is parsed.
+          this.queueSceneNodePatch(node.id, ['runtime'])
+        })
+        return { status: 'loading', reason: '正在加载模型…', nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      const block = resolveImportedModelExpandBlock(cached.object, assetId)
+      if (block.reason) {
+        return { status: 'unsupported', reason: block.reason, nodeCount: 0, childCount, confirmedNodeThreshold: threshold }
+      }
+      return {
+        status: 'expandable',
+        reason: block.note,
+        nodeCount: collectImportedModelNodeCount(cached.object, block.skinnedGroups.roots),
+        childCount,
+        confirmedNodeThreshold: threshold,
+      }
+    },
+
+    /**
+     * Converts the asset node tree of an imported model node into lightweight
+     * scene child nodes. Nothing is written back to the source asset and no
+     * material/texture asset is registered for the derived nodes.
+     */
+    async expandImportedModelNode(nodeId: string): Promise<{
+      ok: boolean
+      reason?: string
+      nodeCount?: number
+      nodeIds?: string[]
+    }> {
+      const target = nodeId ? findNodeById(this.nodes, nodeId) : null
+      if (!target) {
+        return { ok: false, reason: '节点不存在' }
+      }
+      if (isLightweightImportNode(target)) {
+        return { ok: false, reason: '轻量子节点不支持再次展开' }
+      }
+      if (isExpandedImportedModelRoot(target)) {
+        return { ok: false, reason: '该节点已展开' }
+      }
+      if (target.dynamicMesh) {
+        return { ok: false, reason: '动态网格节点不支持展开' }
+      }
+      if (Array.isArray(target.importMetadata?.objectPath) && target.importMetadata!.objectPath!.length > 0) {
+        return { ok: false, reason: '该节点已经是资产内部的子节点' }
+      }
+      const assetId = typeof target.sourceAssetId === 'string' ? target.sourceAssetId.trim() : ''
+      if (!assetId) {
+        return { ok: false, reason: '该节点不是导入模型节点' }
+      }
+      if (Array.isArray(target.children) && target.children.length) {
+        return { ok: false, reason: '该节点已有子节点，请先移出后再展开' }
+      }
+      const asset = this.getAsset(assetId)
+      if (!asset || (asset.type !== 'model' && asset.type !== 'mesh')) {
+        return { ok: false, reason: '未找到对应的模型资产' }
+      }
+
+      const cached = await ensureImportedModelAssetCached(this, assetId)
+      if (!cached) {
+        return { ok: false, reason: '模型加载失败，无法展开' }
+      }
+      const block = resolveImportedModelExpandBlock(cached.object, assetId)
+      if (block.reason) {
+        console.info('[SceneStore] 导入模型无法展开：', block.diagnostics)
+        return { ok: false, reason: block.reason }
+      }
+      const assetObject = cached.object
+      const childNodes = buildLightweightImportChildNodes(
+        assetObject,
+        assetId,
+        [],
+        target.name ?? asset.name ?? 'Imported Model',
+        block.skinnedGroups.roots,
+      )
+      if (!childNodes.length) {
+        return { ok: false, reason: '该模型没有可展开的子节点' }
+      }
+
+      this.captureHistorySnapshot()
+      // Drop the whole-model runtime object (and its instancing binding) so the
+      // viewport rebuilds the root as a plain container.
+      unregisterRuntimeObject(target.id)
+      // The root becomes a pure container: it no longer renders through the
+      // shared InstancedMesh cache, and the hierarchy only shows children of
+      // nodes that are real groups without the instancing flag.
+      target.nodeType = 'Group'
+      target.userData = stripImportedModelInstancingUserData(target.userData)
+      target.children = childNodes
+      target.importChildrenExpanded = true
+      target.groupExpanded = true
+      const expandedIds: string[] = []
+      collectNodeTreeIdsForRemoval(childNodes, expandedIds)
+      this.queueSceneStructurePatch('expandImportedModelNode')
+      commitSceneSnapshot(this)
+      void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
+        console.warn('[SceneStore] Failed to save scene after expanding imported model', error)
+      })
+      return { ok: true, nodeCount: expandedIds.length, nodeIds: expandedIds }
+    },
+
+    /**
+     * Removes the lightweight child nodes of an expanded imported model and
+     * restores whole-model rendering. All child overrides are discarded.
+     */
+    collapseImportedModelNode(nodeId: string): {
+      ok: boolean
+      reason?: string
+      discardedOverrideCount?: number
+      removedNodeIds?: string[]
+    } {
+      const target = nodeId ? findNodeById(this.nodes, nodeId) : null
+      if (!target) {
+        return { ok: false, reason: '节点不存在' }
+      }
+      if (!isExpandedImportedModelRoot(target)) {
+        return { ok: false, reason: '该节点未展开' }
+      }
+      this.captureHistorySnapshot()
+      const removedIds: string[] = []
+      collectNodeTreeIdsForRemoval(target.children ?? [], removedIds)
+      target.children = undefined
+      delete (target as { importChildrenExpanded?: boolean }).importChildrenExpanded
+      if (!target.canPrefab) {
+        delete (target as { canPrefab?: boolean }).canPrefab
+      }
+      removedIds.forEach((id) => {
+        stopPlaceholderWatcher(id)
+        stopPrefabPlaceholderWatcher(id)
+        if (runtimeObjectRegistry.has(id)) {
+          unregisterRuntimeObject(id)
+        }
+        componentManager.removeNode(id)
+      })
+
+      // Restore the whole-model runtime object for the root so the model is
+      // visible again without waiting for a full scene reload.
+      const rootAssetId = typeof target.sourceAssetId === 'string' ? target.sourceAssetId.trim() : ''
+      const rootModelGroup = rootAssetId ? getCachedModelObject(rootAssetId) : null
+      unregisterRuntimeObject(target.id)
+      if (rootModelGroup) {
+        const restored = applyInstancedRuntimeToNode(target, rootModelGroup)
+        if (!restored) {
+          const clone = rootModelGroup.object.clone(true)
+          prepareRuntimeObjectForNode(clone)
+          tagObjectWithNodeId(clone, target.id)
+          registerRuntimeObject(target.id, clone)
+          componentManager.attachRuntime(target, clone)
+          componentManager.syncNode(target)
+        }
+        // Restore the whole-model instancing marker so the collapsed node looks
+        // and behaves exactly like a freshly imported model node.
+        if (Array.isArray(rootModelGroup.meshes) && rootModelGroup.meshes.length > 0) {
+          target.userData = {
+            ...(target.userData ?? {}),
+            instanced: true,
+            instancedAssetId: rootAssetId,
+            instancedBounds: serializeBoundingBox(rootModelGroup.boundingBox),
+          }
+        }
+      }
+
+      const remainingSelection = this.selectedNodeIds.filter((id) => !removedIds.includes(id))
+      if (remainingSelection.length !== this.selectedNodeIds.length) {
+        this.setSelection(remainingSelection.length ? remainingSelection : [target.id], {
+          primaryId: remainingSelection[0] ?? target.id,
+        })
+      }
+      this.queueSceneStructurePatch('collapseImportedModelNode')
+      commitSceneSnapshot(this)
+      void this.flushPendingSceneAutoSave({ force: true }).catch((error) => {
+        console.warn('[SceneStore] Failed to save scene after collapsing imported model', error)
+      })
+      return { ok: true, removedNodeIds: removedIds }
+    },
+
+    /** Number of lightweight descendants carrying material/transform/visibility overrides. */
+    countLightweightImportOverrides(nodeId: string): number {
+      const target = nodeId ? findNodeById(this.nodes, nodeId) : null
+      if (!target || !isExpandedImportedModelRoot(target)) {
+        return 0
+      }
+      return collectLightweightOverrideCount(target.children)
+    },
+
+    /**
+     * Lightweight descendants inherit the material override of the nearest
+     * overriding ancestor, so an edit on an imported model root (or on one
+     * lightweight node) has to refresh the affected descendant runtime objects.
+     */
+    queueLightweightDescendantMaterialPatches(nodeId: string): void {
+      const target = nodeId ? findNodeById(this.nodes, nodeId) : null
+      if (!target) {
+        return
+      }
+      if (!isExpandedImportedModelRoot(target) && !isLightweightImportNode(target)) {
+        return
+      }
+      const descendantIds: string[] = []
+      const visit = (nodes: SceneNode[] | undefined) => {
+        if (!Array.isArray(nodes) || !nodes.length) {
+          return
+        }
+        nodes.forEach((node) => {
+          if (isLightweightImportNode(node)) {
+            descendantIds.push(node.id)
+          }
+          visit(node.children)
+        })
+      }
+      visit(target.children)
+      descendantIds.forEach((id) => this.queueSceneNodePatch(id, ['materials']))
     },
 
     addSceneNode(payload: {
@@ -17689,6 +18440,10 @@ export const useSceneStore = defineStore('scene', {
       if (!target) {
         return null
       }
+      // Lightweight imported model nodes cannot host components.
+      if (isLightweightImportNode(target)) {
+        return null
+      }
       const definition = componentManager.getDefinition(type)
       if (!definition || !definition.canAttach(target)) {
         return null
@@ -18752,9 +19507,18 @@ export const useSceneStore = defineStore('scene', {
       if (!Array.isArray(ids) || ids.length === 0) {
         return
       }
-      const existingIds = ids.filter(
-        (id) => id !== ENVIRONMENT_NODE_ID && !!findNodeById(this.nodes, id),
-      )
+      const existingIds = ids.filter((id) => {
+        if (id === ENVIRONMENT_NODE_ID) {
+          return false
+        }
+        const candidate = findNodeById(this.nodes, id)
+        if (!candidate) {
+          return false
+        }
+        // Lightweight imported model nodes mirror the source asset tree and can
+        // only be removed by collapsing their imported model root.
+        return !isLightweightImportNode(candidate)
+      })
       if (!existingIds.length) {
         return
       }
@@ -18835,6 +19599,9 @@ export const useSceneStore = defineStore('scene', {
       const parentMap = buildParentMap(this.nodes)
       const validIds = selection.filter((id) => {
         if (!id || id === GROUND_NODE_ID || id === ENVIRONMENT_NODE_ID) {
+          return false
+        }
+        if (isLightweightImportNode(findNodeById(this.nodes, id))) {
           return false
         }
         if (this.isNodeSelectionLocked(id)) {
@@ -19145,7 +19912,13 @@ export const useSceneStore = defineStore('scene', {
       }
 
       const parentMap = buildParentMap(this.nodes)
-      const topLevelIds = filterTopLevelNodeIds(existingIds, parentMap)
+      // Lightweight imported model nodes mirror the asset node tree; duplicating
+      // them would detach copies from that tree.
+      const duplicableIds = existingIds.filter((id) => !isLightweightImportNode(findNodeById(this.nodes, id)))
+      if (!duplicableIds.length) {
+        return []
+      }
+      const topLevelIds = filterTopLevelNodeIds(duplicableIds, parentMap)
       if (!topLevelIds.length) {
         return []
       }

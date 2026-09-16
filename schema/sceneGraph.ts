@@ -21,7 +21,12 @@ import type {
   SceneResourceSummaryEntry,
   SceneMaterialTextureSlot,
 } from './core';
-import { isRuntimeHiddenInPreview } from './core';
+import {
+  isRuntimeHiddenInPreview,
+  isLightweightImportNode,
+  isLightweightImportSubtreeNode,
+  isExpandedImportedModelRoot,
+} from './core';
 import { createPrimitiveGeometry } from './primitiveGeometry';
 import {
   createWaterSurfaceRuntimeMesh,
@@ -41,6 +46,7 @@ import {
 } from './components/definitions/warpGateComponent';
 // NOTE: Water rendering is handled via runtime components; SceneGraph just ensures materials are applied.
 import { createFileFromEntry } from './modelAssetLoader'
+import { cloneAssetNodeSelfOnly, cloneAssetNodeSubtree } from './modelAssetLoader'
 import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 import type { RoadComponentProps } from './components/definitions/roadComponent'
@@ -114,6 +120,21 @@ async function loadAssetImportModule(): Promise<typeof import('./assetImport')> 
 function hasEnabledGeneralMeshComponent(node: Pick<SceneNode, 'components'>): boolean {
   const component = node.components?.[GENERAL_MESH_COMPONENT_TYPE]
   return Boolean(component && component.enabled !== false)
+}
+
+/**
+ * Resolves the material override surface that expanded lightweight import
+ * descendants inherit: the node's own first material config wins, otherwise the
+ * value inherited from its ancestors (finally the imported model root surface).
+ */
+function resolveInheritedImportMaterial(
+  node: Pick<SceneNode, 'materials'>,
+  inherited: SceneNodeMaterial | null,
+): SceneNodeMaterial | null {
+  const own = Array.isArray(node.materials) && node.materials.length
+    ? ((node.materials[0] as SceneNodeMaterial | undefined) ?? null)
+    : null
+  return own ?? inherited
 }
 
 class SceneGraphBuilder {
@@ -985,7 +1006,28 @@ class SceneGraphBuilder {
     }
   }
 
-  private async buildNodes(nodes: SceneNodeWithExtras[], parent: THREE.Object3D): Promise<void> {
+  /**
+   * Parsed asset object shared by every node that references a subtree of it.
+   * Parsing happens once per asset even when hundreds of lightweight nodes come
+   * from the same imported model.
+   */
+  private async getOrLoadMeshTemplate(assetId: string): Promise<MeshTemplate | null> {
+    if (!assetId) {
+      return null;
+    }
+    const cached = this.meshTemplateCache.get(assetId);
+    if (cached) {
+      return cached;
+    }
+    await this.warmMeshAsset(assetId);
+    return this.meshTemplateCache.get(assetId) ?? null;
+  }
+
+  private async buildNodes(
+    nodes: SceneNodeWithExtras[],
+    parent: THREE.Object3D,
+    inheritedImportMaterial: SceneNodeMaterial | null = null,
+  ): Promise<void> {
     if (!Array.isArray(nodes)) {
       return;
     }
@@ -993,7 +1035,11 @@ class SceneGraphBuilder {
       if (!node) {
         continue;
       }
-      const built = await this.buildSingleNode(node);
+      // The material surface of an imported model root acts as the default
+      // override for its expanded lightweight descendants; a lightweight node
+      // with its own material config overrides it for its own subtree.
+      const nextInheritedImportMaterial = resolveInheritedImportMaterial(node, inheritedImportMaterial);
+      const built = await this.buildSingleNode(node, nextInheritedImportMaterial);
       if (!built) {
         continue;
       }
@@ -1016,9 +1062,17 @@ class SceneGraphBuilder {
     return Boolean(state?.enabled)
   }
 
-  private async buildSingleNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+  private async buildSingleNode(
+    node: SceneNodeWithExtras,
+    inheritedImportMaterial: SceneNodeMaterial | null = null,
+  ): Promise<THREE.Object3D | null> {
     if (isRuntimeHiddenInPreview(node)) {
       return null;
+    }
+    // Expanded lightweight import nodes render one asset node each and only
+    // support material / transform / visibility overrides.
+    if (isLightweightImportNode(node)) {
+      return this.buildLightweightImportNode(node, inheritedImportMaterial)
     }
     // Region nodes are runtime containers even though they do not have a
     // visible mesh of their own. Build the container before falling through
@@ -1038,7 +1092,7 @@ class SceneGraphBuilder {
     const normalizedType = explicitType.toLowerCase()
 
     if (normalizedType === 'group') {
-      const result = await this.buildGroupNode(node);
+      const result = await this.buildGroupNode(node, inheritedImportMaterial);
       return result
     }
     if (normalizedType === 'light') {
@@ -1068,7 +1122,7 @@ class SceneGraphBuilder {
     }
 
     if (normalizedType === 'mesh') {
-      const result = await this.buildMeshNode(node);
+      const result = await this.buildMeshNode(node, inheritedImportMaterial);
       return result
     }
 
@@ -1117,18 +1171,25 @@ class SceneGraphBuilder {
     return placeholder;
   }
 
-  private async buildGroupNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+  private async buildGroupNode(
+    node: SceneNodeWithExtras,
+    inheritedImportMaterial: SceneNodeMaterial | null = null,
+  ): Promise<THREE.Object3D | null> {
     const group = new THREE.Group();
     group.name = node.name ?? 'Group';
     this.applyTransform(group, node);
     this.applyVisibility(group, node);
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
+    // An expanded imported model root stops rendering its own asset; its asset
+    // nodes are rendered by the lightweight child nodes instead.
+    const childrenExpanded = isExpandedImportedModelRoot(node);
 
     if (
       this.lazyLoadMeshes
       && outlineMesh
       && node.sourceAssetId
+      && !childrenExpanded
       && !hasEnabledGeneralMeshComponent(node)
       && !(Array.isArray(node.materials) && node.materials.length > 0)
     ) {
@@ -1139,7 +1200,7 @@ class SceneGraphBuilder {
         group.add(placeholder);
         this.recordMeshStatistics(placeholder);
       }
-    } else if (node.sourceAssetId) {
+    } else if (node.sourceAssetId && !childrenExpanded) {
       const asset = await this.loadNodeAssetMesh(node);
       if (asset) {
         await this.applyMaterialOverridesToImportedObject(asset, node);
@@ -1152,10 +1213,81 @@ class SceneGraphBuilder {
     }
 
     if (Array.isArray(node.children) && node.children.length) {
-      await this.buildNodes(node.children as SceneNodeWithExtras[], group);
+      await this.buildNodes(
+        node.children as SceneNodeWithExtras[],
+        group,
+        resolveInheritedImportMaterial(node, inheritedImportMaterial),
+      );
     }
 
     return group;
+  }
+
+  /**
+   * Builds the runtime object for an expanded lightweight import node.
+   *
+   * The node keeps the asset node's own local transform (L) inside a container
+   * that carries the scene node transform delta (C), so the effective local
+   * matrix is `C · L`. Asset children are not cloned: they are separate scene
+   * nodes.
+   */
+  private async buildLightweightImportNode(
+    node: SceneNodeWithExtras,
+    inheritedImportMaterial: SceneNodeMaterial | null,
+  ): Promise<THREE.Object3D> {
+    const container = new THREE.Group();
+    container.name = node.name ?? 'Imported Node';
+    this.applyTransform(container, node);
+    if (typeof node.visible === 'boolean') {
+      container.visible = node.visible;
+    }
+    container.userData = {
+      ...(container.userData ?? {}),
+      lightweightImportNode: true,
+      sourceAssetId: node.sourceAssetId ?? null,
+      objectPath: node.importMetadata?.objectPath ?? null,
+    };
+
+    const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+    // The asset is parsed once and shared by all lightweight nodes that
+    // reference nodes inside it.
+    const template = assetId ? await this.getOrLoadMeshTemplate(assetId) : null;
+    // Skinned subtrees are indivisible: they keep their children (bones) so the
+    // cloned skeleton can rebind inside the clone.
+    const asset = template
+      ? (isLightweightImportSubtreeNode(node)
+        ? cloneAssetNodeSubtree(template.scene, node.importMetadata?.objectPath ?? null)
+        : cloneAssetNodeSelfOnly(template.scene, node.importMetadata?.objectPath ?? null))
+      : null;
+
+    if (asset) {
+      const effectiveMaterial = resolveInheritedImportMaterial(node, inheritedImportMaterial);
+      if (effectiveMaterial) {
+        await this.applySingleMaterialOverrideToObject(asset, effectiveMaterial);
+      }
+      // Keep the asset node's own local transform; only the container applies
+      // the scene node delta.
+      asset.userData = {
+        ...(asset.userData ?? {}),
+        sourceAssetId: node.sourceAssetId ?? null,
+        objectPath: node.importMetadata?.objectPath ?? null,
+        lightweightImportNode: true,
+      };
+      container.add(asset);
+      this.recordMeshStatistics(asset);
+    } else {
+      this.warn(`轻量子节点资源解析失败 ${node.sourceAssetId ?? ''} ${(node.importMetadata?.objectPath ?? []).join('/')}`);
+    }
+
+    if (Array.isArray(node.children) && node.children.length) {
+      await this.buildNodes(
+        node.children as SceneNodeWithExtras[],
+        container,
+        resolveInheritedImportMaterial(node, inheritedImportMaterial),
+      );
+    }
+
+    return container;
   }
 
   private async buildWarpGateNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
@@ -1232,7 +1364,10 @@ class SceneGraphBuilder {
     return light;
   }
 
-  private async buildMeshNode(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+  private async buildMeshNode(
+    node: SceneNodeWithExtras,
+    inheritedImportMaterial: SceneNodeMaterial | null = null,
+  ): Promise<THREE.Object3D | null> {
     const compiledMeshNode = await this.buildCompiledStaticMeshNode(node);
     if (compiledMeshNode) {
       return compiledMeshNode;
@@ -1249,11 +1384,14 @@ class SceneGraphBuilder {
     }
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
+    const childrenExpanded = isExpandedImportedModelRoot(node);
+    const nodeChildrenInheritedMaterial = resolveInheritedImportMaterial(node, inheritedImportMaterial);
 
     if (
       this.lazyLoadMeshes
       && outlineMesh
       && node.sourceAssetId
+      && !childrenExpanded
       && !hasEnabledGeneralMeshComponent(node)
       && !(Array.isArray(node.materials) && node.materials.length > 0)
     ) {
@@ -1267,14 +1405,14 @@ class SceneGraphBuilder {
         this.resetImportedObjectLocalTransform(placeholder);
         container.add(placeholder);
         if (Array.isArray(node.children) && node.children.length) {
-          await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+          await this.buildNodes(node.children as SceneNodeWithExtras[], container, nodeChildrenInheritedMaterial);
         }
         this.recordMeshStatistics(placeholder);
         return container;
       }
     }
 
-    if (node.sourceAssetId) {
+    if (node.sourceAssetId && !childrenExpanded) {
       const container = new THREE.Group();
       container.name = node.name ?? 'Mesh';
       this.applyTransform(container, node);
@@ -1292,16 +1430,27 @@ class SceneGraphBuilder {
         };
         container.add(asset);
         if (hasChildNodes) {
-          await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+          await this.buildNodes(node.children as SceneNodeWithExtras[], container, nodeChildrenInheritedMaterial);
         }
         this.recordMeshStatistics(asset);
         return container;
       }
       if (hasChildNodes) {
-        await this.buildNodes(node.children as SceneNodeWithExtras[], container);
+        await this.buildNodes(node.children as SceneNodeWithExtras[], container, nodeChildrenInheritedMaterial);
         return container;
       }
       this.warn(`使用源资源失败 ${node.sourceAssetId}`);
+    }
+
+    if (childrenExpanded) {
+      const container = new THREE.Group();
+      container.name = node.name ?? 'Mesh';
+      this.applyTransform(container, node);
+      this.applyVisibility(container, node);
+      if (Array.isArray(node.children) && node.children.length) {
+        await this.buildNodes(node.children as SceneNodeWithExtras[], container, nodeChildrenInheritedMaterial);
+      }
+      return container;
     }
     return this.buildPrimitiveNode({ ...node, nodeType: node.nodeType || 'Box' });
   }
@@ -1411,6 +1560,33 @@ class SceneGraphBuilder {
     }
 
     const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
+    applyMaterialConfigAssignment(object, {
+      defaultMaterial: defaultMaterialAssignment,
+      materialByConfigId,
+    });
+  }
+
+  /**
+   * Applies one inline material config to every mesh of the object. Used by
+   * lightweight import nodes, which carry at most a single material override
+   * (their own, or the one inherited from the imported model root).
+   */
+  private async applySingleMaterialOverrideToObject(
+    object: THREE.Object3D,
+    materialConfig: SceneNodeMaterial,
+  ): Promise<void> {
+    if (!object || !materialConfig) {
+      return;
+    }
+    const resolvedMaterials = await this.materialFactory.resolveNodeMaterials([materialConfig], {
+      nodeId: materialConfig.id,
+      nodeName: materialConfig.name,
+    });
+    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
+    if (!defaultMaterialAssignment) {
+      return;
+    }
+    const materialByConfigId = buildMaterialConfigMap([materialConfig], resolvedMaterials);
     applyMaterialConfigAssignment(object, {
       defaultMaterial: defaultMaterialAssignment,
       materialByConfigId,
@@ -1712,11 +1888,48 @@ export async function buildSceneGraph(
   resourceCache: ResourceCache,
   options: SceneGraphBuildOptions = {},
 ): Promise<SceneGraphBuildResult> {
-  const builder = new SceneGraphBuilder(document, options, resourceCache);
+  const builder = new SceneGraphBuilder(hydrateLightweightImportNodes(document), options, resourceCache);
   try {
     const root = await builder.build();
     return { root, warnings: builder.getWarnings() };
   } finally {
     builder.dispose();
   }
+}
+
+/**
+ * Lightweight import nodes persist no transform fields while untouched, so the
+ * document is normalized to identity deltas before building the runtime graph.
+ */
+export function hydrateLightweightImportNodes(document: SceneJsonExportDocument): SceneJsonExportDocument {
+  const nodes = Array.isArray(document?.nodes) ? document.nodes : null
+  if (!nodes || !nodes.length) {
+    return document
+  }
+  const visit = (list: SceneNode[]) => {
+    list.forEach((node) => {
+      if (!node) {
+        return
+      }
+      if (isLightweightImportNode(node)) {
+        if (!node.position) {
+          node.position = { x: 0, y: 0, z: 0 }
+        }
+        if (!node.rotation) {
+          node.rotation = { x: 0, y: 0, z: 0 }
+        }
+        if (!node.scale) {
+          node.scale = { x: 1, y: 1, z: 1 }
+        }
+        if (!node.nodeType) {
+          node.nodeType = 'Mesh'
+        }
+      }
+      if (Array.isArray(node.children) && node.children.length) {
+        visit(node.children)
+      }
+    })
+  }
+  visit(nodes as SceneNode[])
+  return document
 }
