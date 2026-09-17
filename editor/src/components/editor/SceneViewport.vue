@@ -11056,7 +11056,118 @@ function isInstancedPickProxyBoundsPayload(value: unknown): value is InstancedPi
   return Array.isArray(payload.min) && payload.min.length === 3 && Array.isArray(payload.max) && payload.max.length === 3
 }
 
-function computeTransformPivotWorld(object: THREE.Object3D, out: THREE.Vector3): void {
+/**
+ * Nodes whose runtime object is a container for asset-derived content: expanded
+ * imported-model roots and their lightweight children.
+ *
+ * Such nodes keep an identity local transform while the asset geometry is baked
+ * far away from the node origin (that is exactly how the 3dtiles exporter writes
+ * merged terrain meshes), so anchoring the gizmo on the object origin puts it
+ * far outside the viewport and makes rotate/scale fling the mesh away.
+ */
+function isTransformPivotAnchoredNode(node: SceneNode | null | undefined): boolean {
+  if (!node) {
+    return false
+  }
+  return isLightweightImportNode(node) || isExpandedImportedModelRoot(node)
+}
+
+const CONTENT_PIVOT_LOCAL_KEY = '__harmonyContentPivotLocal'
+
+/**
+ * Viewport-local transform anchor per node, stored in the node object's local
+ * space so it follows the node while it moves. Set when the node is picked in
+ * the viewport (the raycast hit point); cleared when the selection changes from
+ * outside the viewport (hierarchy clicks use the content bounds instead).
+ */
+const transformPivotLocalByNodeId = new Map<string, THREE.Vector3>()
+const transformAttachRetryRequested = new Set<string>()
+let lastViewportSelectionSignature: string | null = null
+
+function selectionSignature(ids: readonly string[]): string {
+  return [...ids].filter(Boolean).sort().join('|')
+}
+
+function setTransformPivotFromHit(
+  nodeId: string | null | undefined,
+  object: THREE.Object3D | null | undefined,
+  hitPointWorld: THREE.Vector3 | null | undefined,
+): void {
+  if (!nodeId || !object || !hitPointWorld) {
+    return
+  }
+  if (!isTransformPivotAnchoredNode(sceneStore.getNodeById(nodeId))) {
+    return
+  }
+  object.updateMatrixWorld(true)
+  transformPivotLocalByNodeId.set(nodeId, object.worldToLocal(hitPointWorld.clone()))
+}
+
+function pruneTransformPivots(keepIds: readonly string[]): void {
+  const keep = new Set(keepIds)
+  Array.from(transformPivotLocalByNodeId.keys()).forEach((id) => {
+    if (!keep.has(id)) {
+      transformPivotLocalByNodeId.delete(id)
+    }
+  })
+}
+
+function clearTransformPivots(): void {
+  transformPivotLocalByNodeId.clear()
+  transformAttachRetryRequested.clear()
+}
+
+/**
+ * Content anchor in the object's local space, cached on the object so the drag
+ * loop can reuse it without walking the subtree every frame.
+ */
+function resolveContentPivotLocal(object: THREE.Object3D, refresh = false): THREE.Vector3 | null {
+  const userData = object.userData ?? (object.userData = {})
+  if (!refresh) {
+    const cached = userData[CONTENT_PIVOT_LOCAL_KEY] as THREE.Vector3 | undefined
+    if (cached && (cached as unknown as { isVector3?: boolean }).isVector3) {
+      return cached
+    }
+  }
+  object.updateMatrixWorld(true)
+  const bounds = new THREE.Box3().setFromObject(object)
+  if (bounds.isEmpty()) {
+    delete userData[CONTENT_PIVOT_LOCAL_KEY]
+    return null
+  }
+  const centerWorld = bounds.getCenter(new THREE.Vector3())
+  const localPivot = object.worldToLocal(centerWorld)
+  userData[CONTENT_PIVOT_LOCAL_KEY] = localPivot
+  return localPivot
+}
+
+function isTransformPivotAnchoredObject(object: THREE.Object3D): boolean {
+  const nodeId = typeof object.userData?.nodeId === 'string' ? object.userData.nodeId : ''
+  if (!nodeId) {
+    return false
+  }
+  return isTransformPivotAnchoredNode(sceneStore.getNodeById(nodeId))
+}
+
+function computeTransformPivotWorld(
+  object: THREE.Object3D,
+  out: THREE.Vector3,
+  options: { refreshContentPivot?: boolean } = {},
+): void {
+  // Expanded imported-model nodes: prefer the picked point, then the content
+  // center, so the gizmo lands on what the user is looking at.
+  if (isTransformPivotAnchoredObject(object)) {
+    const nodeId = object.userData.nodeId as string
+    object.updateMatrixWorld(true)
+    const hint = transformPivotLocalByNodeId.get(nodeId) ?? null
+    const localPivot = hint ?? resolveContentPivotLocal(object, options.refreshContentPivot === true)
+    if (localPivot) {
+      out.copy(localPivot)
+      object.localToWorld(out)
+      return
+    }
+  }
+
   const proxy = object.userData?.instancedPickProxy as THREE.Object3D | undefined
   const proxyBoundsCandidate = proxy?.userData?.instancedPickProxyBounds as unknown
 
@@ -11091,37 +11202,24 @@ function computeTransformPivotWorld(object: THREE.Object3D, out: THREE.Vector3):
   object.getWorldPosition(out)
 }
 
-function updateTransformControlsPivotOverride(object: THREE.Object3D): void {
+function updateTransformControlsPivotOverride(
+  object: THREE.Object3D,
+  options: { refreshContentPivot?: boolean } = {},
+): void {
   const userData = object.userData ?? (object.userData = {})
+  const anchored = isTransformPivotAnchoredObject(object)
   const proxy = userData.instancedPickProxy as THREE.Object3D | undefined
 
-  // Lightweight import nodes keep the asset node's own local transform inside
-  // the node object, so the gizmo is anchored on the asset node origin.
-  const nodeId = typeof userData.nodeId === 'string' ? userData.nodeId : ''
-  const lightweightNode = nodeId ? sceneStore.getNodeById(nodeId) : null
-  if (lightweightNode && isLightweightImportNode(lightweightNode)) {
-    const assetLocalMatrix = resolveLightweightAssetLocalMatrix(lightweightNode)
-    if (assetLocalMatrix) {
-      const existingPivot = (userData as any).transformControlsPivotWorld as THREE.Vector3 | undefined
-      const pivotWorld = existingPivot && (existingPivot as any).isVector3 ? existingPivot : new THREE.Vector3()
-      object.updateMatrixWorld(true)
-      pivotWorld.setFromMatrixPosition(
-        lightweightPivotMatrixHelper.multiplyMatrices(object.matrixWorld, assetLocalMatrix),
-      )
-      ;(userData as any).transformControlsPivotWorld = pivotWorld
-      return
-    }
-  }
-
-  // Only override pivot when the node has a PickProxy (instanced tiling path).
-  if (!proxy) {
+  // Only override the pivot for content-anchored nodes and the instanced tiling
+  // path; everything else keeps the gizmo on the object origin.
+  if (!anchored && !proxy) {
     delete (userData as any).transformControlsPivotWorld
     return
   }
 
   const existing = (userData as any).transformControlsPivotWorld as THREE.Vector3 | undefined
   const pivotWorld = existing && (existing as any).isVector3 ? existing : new THREE.Vector3()
-  computeTransformPivotWorld(object, pivotWorld)
+  computeTransformPivotWorld(object, pivotWorld, { refreshContentPivot: options.refreshContentPivot === true })
   ;(userData as any).transformControlsPivotWorld = pivotWorld
 }
 
@@ -11254,7 +11352,7 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
     object.updateMatrixWorld(true)
 
     const pivotWorld = new THREE.Vector3()
-    computeTransformPivotWorld(object, pivotWorld)
+    computeTransformPivotWorld(object, pivotWorld, { refreshContentPivot: true })
 
     const worldPosition = new THREE.Vector3()
     object.getWorldPosition(worldPosition)
@@ -13859,13 +13957,16 @@ function pickSceneNodeAtPointerIncludingHiddenLandform(
   return pickNodeAtPointer(event, options) ?? pickHiddenLandformNodeAtPointer(event, options)
 }
 
-function handleViewportDoubleClickNode(nodeId: string): void {
+function handleViewportDoubleClickNode(nodeId: string, hitPointWorld: THREE.Vector3 | null = null): void {
   if (sceneStore.isNodeSelectionLocked(nodeId)) {
     return
   }
   const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
   const toolForNode = resolveBuildToolForNodeId(nodeId)
 
+  // Anchor the transform gizmo on the picked point for expanded imported-model
+  // nodes; their geometry is baked far away from the node origin.
+  setTransformPivotFromHit(nodeId, objectMap.get(nodeId) ?? null, hitPointWorld)
   emitSelectionChange([nodeId])
 
   if (toolForNode === 'guideRoute') {
@@ -16194,6 +16295,10 @@ function selectionsAreEqual(a: string[], b: string[]): boolean {
 
 function emitSelectionChange(nextSelection: string[]) {
   const deduped = dedupeSelection(nextSelection)
+  // Remember that this selection came from the viewport so the selection watcher
+  // can tell it apart from hierarchy/programmatic selections.
+  lastViewportSelectionSignature = selectionSignature(deduped)
+  pruneTransformPivots(deduped)
   if (deduped.length !== 1 || deduped[0] !== wallEditNodeId.value) {
     clearWallEditMode()
   }
@@ -16253,6 +16358,9 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
     const nextSelection = hitIsCurrentlySelected
       ? currentSelection.filter((id) => id !== hitNodeId)
       : [...currentSelection, hitNodeId]
+    if (!hitIsCurrentlySelected) {
+      setTransformPivotFromHit(hitNodeId, objectMap.get(hitNodeId) ?? null, hit.point ?? null)
+    }
     emitSelectionChange(nextSelection)
     return
   }
@@ -19924,7 +20032,7 @@ function handleCanvasDoubleClick(event: MouseEvent) {
   }
 
   const hitNodeId = hit.nodeId
-  handleViewportDoubleClickNode(hitNodeId)
+  handleViewportDoubleClickNode(hitNodeId, hit.point ?? null)
   event.preventDefault()
   event.stopPropagation()
 }
@@ -21705,8 +21813,11 @@ function computeTransformUpdatesForSingleSelect(options: {
     hasTransformLastWorldPosition = true
   }
 
-  // If TransformControls is not pivot-aware, compensate so the PickProxy center stays fixed.
-  if ((mode === 'rotate' || mode === 'scale') && !hasPivotOverride) {
+  // Keep the pivot anchored while rotating/scaling: TransformControls only
+  // rotates/scales around the object origin, so offset content (baked geometry,
+  // instanced pick proxies) would otherwise drift away from the gizmo.
+  const needsPivotCompensation = !hasPivotOverride || isTransformPivotAnchoredObject(target)
+  if ((mode === 'rotate' || mode === 'scale') && needsPivotCompensation) {
     const primaryEntry = groupState?.entries.get(effectiveNodeId) ?? null
     if (primaryEntry) {
       computeTransformPivotWorld(target, instancedPivotWorldHelper)
@@ -21780,7 +21891,9 @@ function syncInstancedTransformDuringDragIfNeeded(options: {
     syncInstancedTransform(target, true)
     syncInstancedOutlineEntryTransform(nodeId)
     if (target.userData?.instancedPickProxy || target.userData?.lightweightImportNode) {
-      updateTransformControlsPivotOverride(target)
+      // Cheap path: reuse the cached content pivot instead of re-walking the
+      // subtree on every drag frame.
+      updateTransformControlsPivotOverride(target, { refreshContentPivot: false })
     }
   }
 }
@@ -22917,31 +23030,6 @@ function resolveInheritedLightweightImportMaterial(node: SceneNode): SceneNodeMa
   }
   return null
 }
-
-/**
- * Local transform the asset node carries inside the file (L). Lightweight nodes
- * store their own transform as a delta applied on top of it.
- */
-function resolveLightweightAssetLocalMatrix(node: SceneNode): THREE.Matrix4 | null {
-  if (!isLightweightImportNode(node)) {
-    return null
-  }
-  const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
-  if (!assetId) {
-    return null
-  }
-  const cached = getCachedModelObject(assetId)
-  if (!cached) {
-    return null
-  }
-  const target = findObjectByPath(cached.object, node.importMetadata?.objectPath ?? null)
-  if (!target) {
-    return null
-  }
-  return new THREE.Matrix4().compose(target.position, target.quaternion, target.scale)
-}
-
-const lightweightPivotMatrixHelper = new THREE.Matrix4()
 
 /**
  * Builds the runtime object of a single asset node for an expanded lightweight
@@ -24123,9 +24211,21 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   }
 
   if (!target) {
+    // The node exists in the store but its runtime object is still pending a
+    // rebuild (freshly expanded / just replaced). Force one reconcile so the
+    // gizmo can attach on the next sync instead of silently detaching.
+    if (
+      effectiveTool !== 'select'
+      && sceneStore.getNodeById(primaryId)
+      && !transformAttachRetryRequested.has(primaryId)
+    ) {
+      transformAttachRetryRequested.add(primaryId)
+      sceneStore.queueSceneStructurePatch('transformTargetMissing')
+    }
     transformControls.detach()
     return
   }
+  transformAttachRetryRequested.delete(primaryId)
   if (effectiveTool === 'select') {
     transformControls.detach()
     return
@@ -24157,7 +24257,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   }
 
   // Single-select: for instanced tiling nodes, place the gizmo at the PickProxy-derived pivot.
-  updateTransformControlsPivotOverride(target)
+  updateTransformControlsPivotOverride(target, { refreshContentPivot: true })
   transformControls.attach(target)
 }
 
@@ -24819,7 +24919,15 @@ watch(
 
 watch(
   () => sceneStore.selectedNodeIds.slice(),
-  () => {
+  (selectedIds) => {
+    // Selections made outside the viewport (hierarchy panel, programmatic) drop
+    // the picked-point anchor so the gizmo falls back to the content center.
+    if (lastViewportSelectionSignature !== selectionSignature(selectedIds)) {
+      lastViewportSelectionSignature = null
+      clearTransformPivots()
+    } else {
+      pruneTransformPivots(selectedIds)
+    }
     syncLandformEditorVisibility()
     if (!transformControls?.dragging) {
       attachSelection(props.selectedNodeId, props.activeTool)

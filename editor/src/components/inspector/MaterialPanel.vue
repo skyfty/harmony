@@ -193,6 +193,9 @@ watch(
 )
 
 const deleteDialogMessage = computed(() => {
+  if (isImportedModelOverrideNode.value || isLightweightNode.value) {
+    return '删除后将恢复为模型内置材质（不再使用场景材质覆盖）。确认继续删除？'
+  }
   if (!internalActiveId.value) {
     return '确认删除当前选中的材质项？此操作无法撤销。'
   }
@@ -209,7 +212,9 @@ const materialListEntries = computed(() =>
     return {
       id: entry.id,
       title: entry.name ?? `材质 ${index + 1}`,
-      subtitle: isImportedModelOverrideNode.value ? '整模型材质覆盖' : '材质副本',
+      subtitle: isLightweightNode.value
+        ? '子节点覆盖'
+        : (isImportedModelOverrideNode.value ? '整模型材质覆盖' : '材质副本'),
       shared: false,
       color,
       thumbnail,
@@ -804,9 +809,6 @@ function handleConfirmDeleteSlot() {
             覆盖材质
           </v-btn>
         </template>
-        <span v-else class="material-panel__inherit-label">
-          已覆盖（仅作用于该子节点自身的网格，不写回源模型）
-        </span>
       </div>
       <div class="material-panel">
         <div

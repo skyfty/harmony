@@ -11702,7 +11702,11 @@ export const useSceneStore = defineStore('scene', {
         const nextMaterials = node.materials.filter((entry) => entry.id !== nodeMaterialId)
         if (nextMaterials.length !== node.materials.length) {
           if (!nextMaterials.length) {
-            if (isImportedModelOverrideNode(node)) {
+            // Imported model nodes (whole-model surface or expanded lightweight
+            // child) fall back to the asset's own material when the last
+            // override slot is removed, so the override has to be dropped
+            // instead of being replaced by a scene default material.
+            if (isImportedModelOverrideNode(node) || isLightweightImportNode(node)) {
               node.materials = []
             } else {
               const baseMaterial = findDefaultSceneMaterial(this.materials)
@@ -12111,11 +12115,14 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
       const isGroundNode = targetNode.dynamicMesh?.type === 'Ground'
-      if (isImportedModelOverrideNode(targetNode)) {
+      if (isImportedModelOverrideNode(targetNode) || isLightweightImportNode(targetNode)) {
         this.captureHistorySnapshot()
         let cleared = false
         visitNode(this.nodes, nodeId, (node) => {
-          if (!isImportedModelOverrideNode(node) || !node.materials?.length) {
+          if (
+            (!isImportedModelOverrideNode(node) && !isLightweightImportNode(node))
+            || !node.materials?.length
+          ) {
             return
           }
           if (node.materials.some((entry) => entry.id === nodeMaterialId)) {
