@@ -696,6 +696,16 @@ export interface SceneNodeMaterial extends SceneMaterialProps {
   type: SceneMaterialType;
   name?: string;
   thumbnail?: string | null;
+  /**
+   * Texture slots this node material overrides explicitly.
+   *
+   * Only used for material overrides on imported model nodes: listed slots are
+   * authoritative (`textures[slot]` set = replace, `null` = remove), every other
+   * slot keeps the texture the model material already has. When the field is
+   * omitted the material behaves like a regular scene material and owns all
+   * texture slots.
+   */
+  textureOverrides?: SceneMaterialTextureSlot[];
 }
 export type AssetSourceMetadata =
   | {

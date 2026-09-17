@@ -12202,6 +12202,11 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
     // one inherited from the imported model root when the graph was built.
     return;
   }
+  // Imported model overrides are incremental: unlisted texture slots keep the
+  // model's own texture instead of being cleared.
+  const importedOverrideOptions = isImportedModelOverrideNode(node)
+    ? { ...materialOverrideOptions, inheritUnspecifiedTextures: true }
+    : materialOverrideOptions;
   const instancedAssetId = typeof targetObject.userData?.instancedAssetId === 'string'
     ? targetObject.userData.instancedAssetId
     : null;
@@ -12209,7 +12214,7 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
     const modelGroup = getCachedModelObject(instancedAssetId);
     modelGroup?.meshes.forEach((mesh) => {
       if (node.materials && node.materials.length) {
-        applyMaterialOverrides(mesh, node.materials, materialOverrideOptions);
+        applyMaterialOverrides(mesh, node.materials, importedOverrideOptions);
       } else {
         resetMaterialOverrides(mesh);
       }
@@ -12218,7 +12223,7 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   }
 
   if (node.materials && node.materials.length) {
-    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions);
+    applyMaterialOverrides(targetObject, node.materials, importedOverrideOptions);
   } else if (isImportedModelOverrideNode(node)) {
     resetMaterialOverrides(targetObject);
   } else {

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
-import { getRuntimeObject, useSceneStore } from '@/stores/sceneStore'
+import { resolveImportedModelMaterialSeed, useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import {
@@ -13,7 +13,7 @@ import {
 } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 import { renderMaterialThumbnailDataUrl } from '@/utils/materialAsset'
-import type { SceneMaterialProps, SceneMaterialType, SceneNode } from '@schema/core'
+import type { SceneMaterialProps, SceneMaterialTextureSlot, SceneMaterialType, SceneNode } from '@schema/core'
 import { isLightweightImportNode } from '@schema/core'
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
@@ -37,6 +37,23 @@ const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
 const isLightweightNode = computed(() => isLightweightImportNode(selectedNode.value))
 const inheritsMaterial = computed(() => isLightweightNode.value && nodeMaterials.value.length === 0)
+
+/**
+ * Material type the model itself renders with. Unlit tiles (`MeshBasicMaterial`
+ * from `KHR_materials_unlit`) turn dark when overridden with a lit material, so
+ * the panel surfaces the inherited type explicitly.
+ */
+const inheritedMaterialTypeLabel = computed(() => {
+  if (!inheritsMaterial.value) {
+    return ''
+  }
+  const type = resolveSuggestedOverrideSeed().type
+  if (type === 'MeshBasicMaterial') {
+    return '（模型使用无光照材质 MeshBasicMaterial，覆盖成标准材质会依赖场景光照）'
+  }
+  return `（模型材质 ${type}）`
+})
+
 const inheritedOverrideLabel = computed(() => {
   if (!inheritsMaterial.value || !selectedNodeId.value) {
     return ''
@@ -293,7 +310,11 @@ function clearMaterialPreviewThumbnail(slotId: string) {
   materialPreviewThumbnails.value = next
 }
 
-function handleAddMaterialSlot(type?: SceneMaterialType, props?: Partial<SceneMaterialProps> | null) {
+function handleAddMaterialSlot(
+  type?: SceneMaterialType,
+  props?: Partial<SceneMaterialProps> | null,
+  textureOverrides?: SceneMaterialTextureSlot[],
+) {
   if (!canAddMaterialSlot.value || !selectedNodeId.value) {
     return
   }
@@ -306,6 +327,7 @@ function handleAddMaterialSlot(type?: SceneMaterialType, props?: Partial<SceneMa
   const created = sceneStore.addNodeMaterial(selectedNodeId.value, {
     type,
     props: props ?? null,
+    textureOverrides: textureOverrides ?? resolveTextureOverrideDefault(),
   }) as SceneNodeMaterial | null
   if (!created) {
     return
@@ -327,19 +349,6 @@ type SuggestedOverrideSeed = {
   props: Partial<SceneMaterialProps> | null
 }
 
-function resolveMaterialSideName(side: unknown): 'front' | 'back' | 'double' | null {
-  switch (side) {
-    case 1:
-      return 'back'
-    case 2:
-      return 'double'
-    case 0:
-      return 'front'
-    default:
-      return null
-  }
-}
-
 /**
  * Material type and properties a first override should start from.
  *
@@ -347,93 +356,30 @@ function resolveMaterialSideName(side: unknown): 'front' | 'back' | 'double' | n
  * `KHR_materials_unlit`, common for baked terrain tiles). Defaulting such a
  * node to a lit standard material makes it render black in scenes without
  * direct lighting, so the override starts from the type and the parameters the
- * model already renders with.
+ * model already renders with (shared with the store's drag & drop path).
  */
 function resolveSuggestedOverrideSeed(): SuggestedOverrideSeed {
-  const nodeId = selectedNodeId.value
-  if (!nodeId) {
+  const seed = resolveImportedModelMaterialSeed(selectedNode.value)
+  if (!seed) {
     return { type: DEFAULT_SCENE_MATERIAL_TYPE, props: null }
   }
-  const runtimeObject = getRuntimeObject(nodeId)
-  if (!runtimeObject) {
-    return { type: DEFAULT_SCENE_MATERIAL_TYPE, props: null }
-  }
-  let detected: SceneMaterialType | null = null
-  let source: Record<string, unknown> | null = null
-  runtimeObject.traverse((child) => {
-    if (detected) {
-      return
-    }
-    const mesh = child as { isMesh?: boolean; material?: unknown }
-    if (!mesh?.isMesh) {
-      return
-    }
-    const raw = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
-    if (!raw) {
-      return
-    }
-    const typed = raw as Record<string, unknown>
-    const typeName = typed.type
-    if (typeof typeName === 'string' && MATERIAL_CREATE_OPTIONS.some((option) => option.value === typeName)) {
-      detected = typeName as SceneMaterialType
-      source = typed
-    }
-  })
-  if (!detected || !source) {
-    return { type: DEFAULT_SCENE_MATERIAL_TYPE, props: null }
-  }
-
-  const material = source as {
-    color?: { getHexString?: () => string }
-    emissive?: { getHexString?: () => string }
-    metalness?: unknown
-    roughness?: unknown
-    opacity?: unknown
-    transparent?: unknown
-    side?: unknown
-    wireframe?: unknown
-    emissiveIntensity?: unknown
-  }
-  const props: Partial<SceneMaterialProps> = {}
-  const color = material.color?.getHexString?.()
-  if (typeof color === 'string') {
-    props.color = `#${color}`
-  }
-  const emissive = material.emissive?.getHexString?.()
-  if (typeof emissive === 'string') {
-    props.emissive = `#${emissive}`
-  }
-  if (typeof material.metalness === 'number') {
-    props.metalness = material.metalness
-  }
-  if (typeof material.roughness === 'number') {
-    props.roughness = material.roughness
-  }
-  if (typeof material.opacity === 'number') {
-    props.opacity = material.opacity
-  }
-  if (typeof material.transparent === 'boolean') {
-    props.transparent = material.transparent
-  }
-  if (typeof material.wireframe === 'boolean') {
-    props.wireframe = material.wireframe
-  }
-  if (typeof material.emissiveIntensity === 'number') {
-    props.emissiveIntensity = material.emissiveIntensity
-  }
-  const side = resolveMaterialSideName(material.side)
-  if (side) {
-    props.side = side
-  }
-  return {
-    type: detected,
-    props: Object.keys(props).length ? props : null,
-  }
+  return { type: seed.type, props: seed.props }
 }
 
 function handleCreateOverride() {
   const seed = resolveSuggestedOverrideSeed()
   handleAddMaterialSlot(seed.type, seed.props)
+}
+
+/**
+ * Imported model overrides start with no texture slots claimed, so the model
+ * keeps its own albedo/normal/AO/metalness textures until the user replaces one.
+ */
+function resolveTextureOverrideDefault(): SceneMaterialTextureSlot[] | undefined {
+  if (!isLightweightNode.value && !isImportedModelOverrideNode.value) {
+    return undefined
+  }
+  return []
 }
 
 function handleRequestDeleteSlot() {
@@ -798,7 +744,9 @@ function handleConfirmDeleteSlot() {
     <v-expansion-panel-text>
       <div v-if="isLightweightNode" class="material-panel__inherit">
         <template v-if="inheritsMaterial">
-          <span class="material-panel__inherit-label">继承中：{{ inheritedOverrideLabel }}</span>
+          <span class="material-panel__inherit-label">
+            继承中：{{ inheritedOverrideLabel }}{{ inheritedMaterialTypeLabel }}
+          </span>
           <v-btn
             size="x-small"
             variant="tonal"

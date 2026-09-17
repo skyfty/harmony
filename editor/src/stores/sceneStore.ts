@@ -2121,7 +2121,13 @@ function findDefaultSceneMaterial(materials: SceneMaterial[]): SceneMaterial | n
 
 function createNodeMaterial(
   props: SceneMaterialProps,
-  options: { id?: string; name?: string; type?: SceneMaterialType; thumbnail?: string | null } = {},
+  options: {
+    id?: string
+    name?: string
+    type?: SceneMaterialType
+    thumbnail?: string | null
+    textureOverrides?: SceneMaterialTextureSlot[]
+  } = {},
 ): SceneNodeMaterial {
   return {
     id: options.id ?? generateUuid(),
@@ -2129,6 +2135,9 @@ function createNodeMaterial(
     type: options.type ?? 'MeshStandardMaterial',
     thumbnail: options.thumbnail ?? undefined,
     ...cloneMaterialProps(props),
+    // Applied last: the caller's explicit list wins over anything carried by the
+    // source props (e.g. when editing an existing node material).
+    ...(options.textureOverrides ? { textureOverrides: Array.from(new Set(options.textureOverrides)) } : {}),
   }
 }
 
@@ -2345,6 +2354,167 @@ function getPrimaryNodeMaterial(node: SceneNode | null | undefined): SceneNodeMa
     return null
   }
   return node.materials[0] ?? null
+}
+
+/**
+ * Texture slots a scene material (or preset) actually sets.
+ *
+ * Applied to imported model nodes: only these slots override the model's own
+ * textures, every other slot keeps inheriting so the model does not turn black
+ * after losing its albedo/AO/metalness maps.
+ */
+function collectTextureOverrideSlots(
+  props: Partial<SceneMaterialProps> | SceneMaterialProps | null | undefined,
+): SceneMaterialTextureSlot[] {
+  const textures = props?.textures
+  if (!textures) {
+    return []
+  }
+  return MATERIAL_TEXTURE_SLOTS.filter((slot) => Boolean(textures[slot]))
+}
+
+/** Nodes whose material overrides use the incremental (texture-inheriting) mode. */
+function isImportedModelMaterialTarget(node: SceneNode | null | undefined): boolean {
+  return Boolean(node) && (isLightweightImportNode(node) || isImportedModelOverrideNode(node))
+}
+
+/**
+ * Material type parameters an imported model node currently renders with.
+ *
+ * Used as the starting point for new overrides created by drag & drop: implicit
+ * creation must not silently switch an unlit/baked tile to a lit standard
+ * material (that turns it black) or drop its double-sided setting.
+ */
+export function resolveImportedModelMaterialSeed(
+  node: SceneNode | null | undefined,
+): {
+  type: SceneMaterialType
+  props: Partial<SceneMaterialProps> | null
+  sourceKind: 'runtime' | 'asset' | 'none'
+} | null {
+  if (!node || !isImportedModelMaterialTarget(node)) {
+    return null
+  }
+
+  let detectedType: SceneMaterialType | null = null
+  let detectedMaterial: Record<string, unknown> | null = null
+  let sourceKind: 'runtime' | 'asset' | 'none' = 'none'
+
+  const inspect = (root: { traverse?: (fn: (child: unknown) => void) => void } | null | undefined) => {
+    if (!root?.traverse || detectedType) {
+      return
+    }
+    root.traverse((child) => {
+      if (detectedType) {
+        return
+      }
+      const mesh = child as { isMesh?: boolean; material?: unknown }
+      if (!mesh?.isMesh) {
+        return
+      }
+      const raw = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
+      if (!raw) {
+        return
+      }
+      const typed = raw as Record<string, unknown>
+      if (typeof typed.type === 'string') {
+        detectedType = typed.type as SceneMaterialType
+        detectedMaterial = typed
+      }
+    })
+  }
+
+  // 1) The object that is actually rendered right now.
+  const runtimeObject = getRuntimeObject(node.id)
+  if (runtimeObject) {
+    inspect(runtimeObject)
+    if (detectedType) {
+      sourceKind = 'runtime'
+    }
+  }
+  // 2) Fallback: the parsed asset object (runtime object may be pending).
+  if (!detectedType) {
+    const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+    const cached = assetId ? getCachedModelObject(assetId) : null
+    const target = cached ? findObjectByPath(cached.object, node.importMetadata?.objectPath ?? null) : null
+    inspect(target ?? cached?.object ?? null)
+    if (detectedType) {
+      sourceKind = 'asset'
+    }
+  }
+  if (!detectedType || !detectedMaterial) {
+    return null
+  }
+
+  const material = detectedMaterial as {
+    color?: { getHexString?: () => string }
+    emissive?: { getHexString?: () => string }
+    metalness?: unknown
+    roughness?: unknown
+    opacity?: unknown
+    transparent?: unknown
+    side?: unknown
+    wireframe?: unknown
+    emissiveIntensity?: unknown
+    alphaTest?: unknown
+  }
+  const props: Partial<SceneMaterialProps> = {}
+  const color = material.color?.getHexString?.()
+  if (typeof color === 'string') {
+    props.color = `#${color}`
+  }
+  const emissive = material.emissive?.getHexString?.()
+  if (typeof emissive === 'string') {
+    props.emissive = `#${emissive}`
+  }
+  if (typeof material.metalness === 'number') {
+    props.metalness = material.metalness
+  }
+  if (typeof material.roughness === 'number') {
+    props.roughness = material.roughness
+  }
+  if (typeof material.opacity === 'number') {
+    props.opacity = material.opacity
+  }
+  if (typeof material.transparent === 'boolean') {
+    props.transparent = material.transparent
+  }
+  if (typeof material.wireframe === 'boolean') {
+    props.wireframe = material.wireframe
+  }
+  if (typeof material.emissiveIntensity === 'number') {
+    props.emissiveIntensity = material.emissiveIntensity
+  }
+  if (typeof material.alphaTest === 'number' && material.alphaTest > 0) {
+    props.alphaTest = material.alphaTest
+  }
+  if (material.side === 1) {
+    props.side = 'back'
+  } else if (material.side === 2) {
+    props.side = 'double'
+  } else if (material.side === 0) {
+    props.side = 'front'
+  }
+
+  return {
+    type: detectedType,
+    props: Object.keys(props).length ? props : null,
+    sourceKind,
+  }
+}
+
+/**
+ * Adds slots to an incremental override list. Returns `undefined` for regular
+ * (non-incremental) materials so they keep owning every texture slot.
+ */
+function mergeTextureOverrideSlots(
+  current: SceneMaterialTextureSlot[] | undefined,
+  added: readonly SceneMaterialTextureSlot[],
+): SceneMaterialTextureSlot[] | undefined {
+  if (!Array.isArray(current)) {
+    return undefined
+  }
+  return Array.from(new Set([...current, ...added]))
 }
 
 function createVector(x: number, y: number, z: number): THREE.Vector3 {
@@ -11544,7 +11714,12 @@ export const useSceneStore = defineStore('scene', {
     },
     addNodeMaterial(
       nodeId: string,
-      options: { props?: Partial<SceneMaterialProps> | null; name?: string; type?: SceneMaterialType } = {},
+      options: {
+        props?: Partial<SceneMaterialProps> | null
+        name?: string
+        type?: SceneMaterialType
+        textureOverrides?: SceneMaterialTextureSlot[]
+      } = {},
     ) {
       const target = findNodeById(this.nodes, nodeId)
       if (!nodeSupportsMaterials(target)) {
@@ -11556,7 +11731,19 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const baseProps = createMaterialPropsForType(options.type ?? DEFAULT_SCENE_MATERIAL_TYPE, options.props ?? null)
+      // Implicit creation (drag & drop of a texture or material preset onto a
+      // node that has no slot yet) must start from the material the model
+      // already renders with, otherwise an unlit tile would silently become a
+      // lit standard material.
+      const seed = !options.type && isImportedModelMaterialTarget(target)
+        ? resolveImportedModelMaterialSeed(target)
+        : null
+      const resolvedType = options.type ?? seed?.type ?? DEFAULT_SCENE_MATERIAL_TYPE
+      const baseProps = createMaterialPropsForType(resolvedType, options.props ?? seed?.props ?? null)
+      // Every creation path on an imported model node starts in incremental mode
+      // (all textures inherited) even when the caller does not pass the list.
+      const textureOverrides = options.textureOverrides
+        ?? (isImportedModelMaterialTarget(target) ? [] : undefined)
 
       let created: SceneNodeMaterial | null = null
       let requiresDynamicMeshPatch = false
@@ -11569,7 +11756,8 @@ export const useSceneStore = defineStore('scene', {
         const fallbackName = options.name?.trim() || `Material ${existingCount + 1}`
         const entry = createNodeMaterial(baseProps, {
           name: fallbackName,
-          type: options.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+          type: resolvedType,
+          textureOverrides,
         })
         node.materials = [...(node.materials ?? []), entry]
         const floorConvention = floorHelpers.ensureFloorMaterialConvention(node)
@@ -11745,11 +11933,20 @@ export const useSceneStore = defineStore('scene', {
     updateNodeMaterialProps(
       nodeId: string,
       nodeMaterialId: string,
-      update: Partial<SceneMaterialProps>,
+      update: Partial<SceneMaterialProps> & { textureOverrides?: SceneMaterialTextureSlot[] },
       options: { autoSaveMode?: SceneAutoSaveMode } = {},
     ) {
       const overrides = materialUpdateToProps(update)
-      if (!Object.keys(overrides).length) {
+      const nextTextureOverrides = Array.isArray(update.textureOverrides)
+        ? Array.from(new Set(update.textureOverrides))
+        : null
+      // Texture writes on an incremental override also claim those slots, so
+      // drag-and-drop / picker assignments are honored instead of being ignored
+      // because the slot was not listed yet.
+      const touchedTextureSlots = overrides.textures
+        ? (Object.keys(overrides.textures) as SceneMaterialTextureSlot[])
+        : []
+      if (!Object.keys(overrides).length && !nextTextureOverrides) {
         return
       }
       if (update.textures) {
@@ -11776,6 +11973,8 @@ export const useSceneStore = defineStore('scene', {
             name: entry.name,
             type: entry.type,
             thumbnail: entry.thumbnail ?? null,
+            textureOverrides: nextTextureOverrides
+              ?? mergeTextureOverrideSlots(entry.textureOverrides, touchedTextureSlots),
           })
         })
         const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
@@ -11813,6 +12012,7 @@ export const useSceneStore = defineStore('scene', {
             name: entry.name,
             type: type,
             thumbnail: entry.thumbnail ?? null,
+            textureOverrides: entry.textureOverrides,
           })
         })
         const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
@@ -11856,6 +12056,9 @@ export const useSceneStore = defineStore('scene', {
               id: entry.id,
               name: source.name,
               type: source.type,
+              textureOverrides: isImportedModelMaterialTarget(node)
+                ? collectTextureOverrideSlots(source)
+                : entry.textureOverrides,
             })
           }
           const currentProps = extractMaterialProps(entry)
@@ -11865,6 +12068,7 @@ export const useSceneStore = defineStore('scene', {
             name: fallbackName,
             type: entry.type,
             thumbnail: entry.thumbnail ?? null,
+            textureOverrides: entry.textureOverrides,
           })
         })
         const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
@@ -12052,6 +12256,9 @@ export const useSceneStore = defineStore('scene', {
             name: resolvedName,
             type: material.type ?? entry.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
             thumbnail,
+            textureOverrides: isImportedModelMaterialTarget(node)
+              ? collectTextureOverrideSlots(material)
+              : entry.textureOverrides,
           })
           appliedEntry = nextEntry
           return nextEntry
@@ -12454,6 +12661,7 @@ export const useSceneStore = defineStore('scene', {
             id: entry.id,
             name: trimmedName && trimmedName.length ? trimmedName : undefined,
             type: entry.type,
+            textureOverrides: entry.textureOverrides,
           })
         })
       })
@@ -12962,6 +13170,7 @@ export const useSceneStore = defineStore('scene', {
             id: entry.id,
             name: entry.name,
             type: entry.type,
+            textureOverrides: entry.textureOverrides,
           })
         })
       })

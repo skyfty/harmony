@@ -111,6 +111,65 @@ export const MATERIAL_TEXTURE_ASSIGNMENTS: Record<
 
 export const MATERIAL_TEXTURE_SLOTS = Object.keys(MATERIAL_TEXTURE_ASSIGNMENTS) as SceneMaterialTextureSlot[];
 
+/**
+ * Texture slots a material config controls.
+ *
+ * Imported-model overrides list their slots in `textureOverrides` (a listed slot
+ * with a `null` ref means "remove the model texture"), while configs without
+ * that list keep the historical behaviour of controlling every slot.
+ */
+export function resolveOverrideTextureSlots(
+  config: SceneMaterial | SceneNodeMaterial | null | undefined,
+): SceneMaterialTextureSlot[] {
+  const declared = (config as { textureOverrides?: unknown } | null | undefined)?.textureOverrides;
+  if (Array.isArray(declared)) {
+    return Array.from(
+      new Set(declared.filter((slot): slot is SceneMaterialTextureSlot => MATERIAL_TEXTURE_SLOTS.includes(slot as SceneMaterialTextureSlot))),
+    );
+  }
+  const textures = config?.textures ?? null;
+  if (!textures) {
+    return [];
+  }
+  return MATERIAL_TEXTURE_SLOTS.filter((slot) => Boolean(textures[slot]));
+}
+
+/**
+ * Copies the textures a material keeps inheriting onto a freshly created
+ * material, so switching material type does not drop the model's textures.
+ */
+export function copyInheritedMaterialTextures(
+  source: THREE.Material | null | undefined,
+  target: THREE.Material,
+  overrideSlots: readonly SceneMaterialTextureSlot[],
+): void {
+  if (!source || source === target) {
+    return;
+  }
+  const owned = new Set(overrideSlots);
+  const sourceTyped = source as unknown as Record<string, THREE.Texture | null | undefined>;
+  const targetTyped = target as unknown as Record<string, unknown>;
+  let changed = false;
+  MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+    if (owned.has(slot)) {
+      return;
+    }
+    const assignment = MATERIAL_TEXTURE_ASSIGNMENTS[slot];
+    if (!assignment || !(assignment.key in targetTyped)) {
+      return;
+    }
+    const texture = sourceTyped[assignment.key] ?? null;
+    if (targetTyped[assignment.key] === texture) {
+      return;
+    }
+    targetTyped[assignment.key] = texture;
+    changed = true;
+  });
+  if (changed) {
+    target.needsUpdate = true;
+  }
+}
+
 const WALL_REPEAT_U_TEXTURE_SLOTS = [
   'map',
   'alphaMap',
@@ -235,6 +294,13 @@ export interface MaterialTextureAssignmentOptions {
   warn?: (message: string) => void
   defaultTextureSettingsSignature?: string
   hideTransparentMaterials?: boolean
+  /**
+   * Imported-model overrides only apply the texture slots the material lists in
+   * `textureOverrides`; every other slot keeps the texture the target material
+   * already has (the model's own texture). Without this option a node material
+   * owns all texture slots and unset ones are cleared.
+   */
+  inheritUnspecifiedTextures?: boolean
 }
 
 export function createTextureSettings(
@@ -1448,10 +1514,19 @@ export function applyMaterialConfigToMaterial(
     needsUpdate = true;
   }
 
-  MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
-    const ref = config.textures?.[slot] ?? null;
-    assignTextureToMaterial(material, slot, ref, options);
-  });
+  if (options.inheritUnspecifiedTextures) {
+    // Imported-model override: only the slots the material claims are touched,
+    // everything else keeps the texture the model material already carries.
+    resolveOverrideTextureSlots(config).forEach((slot) => {
+      const ref = config.textures?.[slot] ?? null;
+      assignTextureToMaterial(material, slot, ref, options);
+    });
+  } else {
+    MATERIAL_TEXTURE_SLOTS.forEach((slot) => {
+      const ref = config.textures?.[slot] ?? null;
+      assignTextureToMaterial(material, slot, ref, options);
+    });
+  }
 
   if (material.userData?.[LANDFORM_FEATHER_PATCHED_FLAG] === true) {
     if (!typed.transparent) {
@@ -1688,8 +1763,20 @@ export function applyMaterialOverrides(
         ? (configs.length === 1 ? configs[0] : configs[index] ?? null)
         : null);
       if (config) {
+        const inheritedTextureSlots = options.inheritUnspecifiedTextures
+          ? resolveOverrideTextureSlots(config)
+          : null;
         const { material: ensured, replaced: didReplace, dispose } = ensureMaterialType(materialRef, config.type);
         if (didReplace) {
+          // Material type changed: copy every texture of the previous material as
+          // a fallback. Slots owned by this config are overwritten (or cleared)
+          // right below, so:
+          // - unlisted slots keep the model's own texture, and
+          // - a listed slot whose texture is still loading / failed to load keeps
+          //   the model texture instead of leaving the surface texture-less.
+          if (inheritedTextureSlots) {
+            copyInheritedMaterialTextures(materialRef, ensured, []);
+          }
           materials[index] = ensured;
           replaced = true;
           // Never dispose the pristine instance: it is restored as soon as the

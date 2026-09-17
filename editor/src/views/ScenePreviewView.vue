@@ -14601,7 +14601,7 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
 		? targetObject.userData.instancedAssetId
 		: null
 	const overrideOptions = isImportedModelOverrideNode(node) && node.materials && node.materials.length
-		? { ...materialOverrideOptions, hideTransparentMaterials: false }
+		? { ...materialOverrideOptions, hideTransparentMaterials: false, inheritUnspecifiedTextures: true }
 		: materialOverrideOptions
 	if (instancedAssetId && isImportedModelOverrideNode(node)) {
 		// Imported model overrides must never mutate the shared cached

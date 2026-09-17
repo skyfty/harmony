@@ -1430,6 +1430,16 @@ const materialOverrideOptions: MaterialTextureAssignmentOptions = {
   },
 }
 
+/**
+ * Imported model overrides are incremental: only the texture slots the material
+ * lists are replaced, everything else keeps the model's own texture (otherwise
+ * an override without textures makes the surface render black).
+ */
+const importedModelMaterialOverrideOptions: MaterialTextureAssignmentOptions = {
+  ...materialOverrideOptions,
+  inheritUnspecifiedTextures: true,
+}
+
 function resolveFloorMaterialTarget(targetObject: THREE.Object3D): THREE.Object3D {
   const floorGroup = targetObject.userData?.floorGroup as THREE.Object3D | undefined
   if (floorGroup?.isObject3D) {
@@ -1595,7 +1605,7 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   if (isLightweightImportNode(node)) {
     const inherited = resolveInheritedLightweightImportMaterial(node)
     if (inherited) {
-      applyMaterialOverrides(targetObject, [inherited], materialOverrideOptions)
+      applyMaterialOverrides(targetObject, [inherited], importedModelMaterialOverrideOptions)
     } else {
       resetMaterialOverrides(targetObject)
     }
@@ -1613,7 +1623,11 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   }
 
   if (node.materials && node.materials.length) {
-    applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
+    if (isImportedModelOverrideNode(node)) {
+      applyMaterialOverrides(targetObject, node.materials, importedModelMaterialOverrideOptions)
+    } else {
+      applyMaterialOverrides(targetObject, node.materials, materialOverrideOptions)
+    }
   } else if (isImportedModelOverrideNode(node)) {
     resetMaterialOverrides(targetObject)
   } else {

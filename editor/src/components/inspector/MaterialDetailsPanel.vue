@@ -14,11 +14,16 @@ import {
 import TexturePanel from './TexturePanel.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import type { ProjectAsset } from '@/types/project-asset'
-import {type SceneMaterialType, type SceneMaterialTextureSlot} from '@schema/core'
+import { isLightweightImportNode, type SceneMaterialType, type SceneMaterialTextureSlot } from '@schema/core'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { buildMaterialAssetFilename, parseMaterialAssetDocument } from '@/utils/materialAsset'
 
 type TextureMapState = Record<SceneMaterialTextureSlot, SceneMaterialTextureRef | null>
+
+/** Material property edit, plus the imported-model texture override slot list. */
+type MaterialPropUpdate = Partial<SceneMaterialProps> & {
+  textureOverrides?: SceneMaterialTextureSlot[]
+}
 
 interface MaterialFormState extends Omit<SceneMaterialProps, 'textures'> {
   name: string
@@ -161,6 +166,64 @@ const activeNodeMaterial = computed(() => {
   return nodeMaterials.value.find((entry) => entry.id === props.nodeMaterialId) ?? null
 })
 
+/**
+ * Imported model overrides only take over the texture slots the material lists;
+ * everything else keeps rendering with the model's own texture.
+ */
+const supportsTextureInheritance = computed(() => {
+  const node = selectedNode.value
+  if (!node) {
+    return false
+  }
+  if (isLightweightImportNode(node)) {
+    return true
+  }
+  return Boolean(
+    node.nodeType === 'Group'
+    && typeof node.sourceAssetId === 'string'
+    && node.sourceAssetId.trim().length > 0
+    && !node.dynamicMesh,
+  )
+})
+
+const textureOverrideSlots = computed<SceneMaterialTextureSlot[]>(() => {
+  const declared = activeNodeMaterial.value?.textureOverrides
+  return Array.isArray(declared) ? declared : []
+})
+
+function isTextureSlotOverridden(slot: SceneMaterialTextureSlot): boolean {
+  return supportsTextureInheritance.value && textureOverrideSlots.value.includes(slot)
+}
+
+function isTextureSlotInherited(slot: SceneMaterialTextureSlot): boolean {
+  return supportsTextureInheritance.value && !isTextureSlotOverridden(slot) && !formTextures[slot]
+}
+
+function resolveTextureSlotStateLabel(slot: SceneMaterialTextureSlot): string | null {
+  if (!supportsTextureInheritance.value) {
+    return null
+  }
+  if (isTextureSlotInherited(slot)) {
+    return '继承模型贴图'
+  }
+  if (isTextureSlotOverridden(slot) && !formTextures[slot]) {
+    return '已移除模型贴图'
+  }
+  return null
+}
+
+/** Drops this slot from the override list so the model texture shows again. */
+function restoreTextureInheritance(slot: SceneMaterialTextureSlot) {
+  if (!supportsTextureInheritance.value) {
+    return
+  }
+  formTextures[slot] = null
+  commitMaterialProps({
+    textures: { [slot]: null },
+    textureOverrides: textureOverrideSlots.value.filter((entry) => entry !== slot),
+  })
+}
+
 const baseColorMenuOpen = ref(false)
 const emissiveColorMenuOpen = ref(false)
 
@@ -215,7 +278,7 @@ const overwriteTargetFilename = ref<string | null>(null)
 const TEXTURE_ASSET_TYPE = 'texture,image,hdri' as const
 let pendingMaterialPropsCommitTimer: ReturnType<typeof setTimeout> | null = null
 let pendingMaterialPropsTarget: { nodeId: string; materialId: string } | null = null
-let pendingMaterialPropsUpdate: Partial<SceneMaterialProps> | null = null
+let pendingMaterialPropsUpdate: MaterialPropUpdate | null = null
 
 const assetDialogTitle = computed(() => {
   const slot = assetDialogSlot.value
@@ -394,10 +457,10 @@ function clearPendingMaterialPropsCommitTimer() {
 }
 
 function mergeMaterialPropUpdates(
-  current: Partial<SceneMaterialProps> | null,
-  incoming: Partial<SceneMaterialProps>,
-): Partial<SceneMaterialProps> {
-  const merged: Partial<SceneMaterialProps> = {
+  current: MaterialPropUpdate | null,
+  incoming: MaterialPropUpdate,
+): MaterialPropUpdate {
+  const merged: MaterialPropUpdate = {
     ...(current ?? {}),
     ...incoming,
   }
@@ -406,6 +469,11 @@ function mergeMaterialPropUpdates(
       ...(current?.textures ?? {}),
       ...(incoming.textures ?? {}),
     }
+  }
+  if (incoming.textureOverrides) {
+    // Callers always pass the complete intended list, so the newest one wins
+    // (needed for "restore inheritance", which removes a slot again).
+    merged.textureOverrides = Array.from(new Set(incoming.textureOverrides))
   }
   return merged
 }
@@ -536,7 +604,7 @@ function applyPropsToForm(
   }
 }
 
-function commitMaterialProps(update: Partial<SceneMaterialProps>) {
+function commitMaterialProps(update: MaterialPropUpdate) {
   if (!activeNodeMaterial.value || !selectedNodeId.value) {
     return
   }
@@ -768,7 +836,15 @@ function assignTexture(slot: SceneMaterialTextureSlot, ref: SceneMaterialTexture
   const payload = ref
     ? { assetId: ref.assetId, name: ref.name, settings: cloneTextureSettings(ref.settings) }
     : null
-  commitMaterialProps({ textures: { [slot]: payload } })
+  // Imported model overrides record the touched slot so unspecified slots keep
+  // inheriting the model's own texture.
+  const update: MaterialPropUpdate = {
+    textures: { [slot]: payload },
+  }
+  if (supportsTextureInheritance.value) {
+    update.textureOverrides = Array.from(new Set([...textureOverrideSlots.value, slot]))
+  }
+  commitMaterialProps(update)
 }
 
 function ensureTextureAssetCached(asset: ProjectAsset) {
@@ -1402,6 +1478,12 @@ async function handleImportFileChange(event: Event) {
                     <div class="texture-info">
                       <div class="texture-name">{{ resolveTextureName(slot) }}</div>
                       <div class="texture-slot-label">{{ TEXTURE_LABELS[slot] }}</div>
+                      <div
+                        v-if="resolveTextureSlotStateLabel(slot)"
+                        class="texture-slot-state"
+                      >
+                        {{ resolveTextureSlotStateLabel(slot) }}
+                      </div>
                     </div>
                     <div class="texture-actions">
                       <v-btn
@@ -1409,9 +1491,18 @@ async function handleImportFileChange(event: Event) {
                         icon="mdi-close"
                         size="x-small"
                         variant="text"
-                        :disabled="!formTextures[slot]"
-                        title="Remove texture"
+                        :disabled="!formTextures[slot] && !isTextureSlotInherited(slot)"
+                        :title="isTextureSlotInherited(slot) ? '移除模型贴图' : 'Remove texture'"
                         @click.stop="handleTextureRemove(slot)"
+                      />
+                      <v-btn
+                        v-if="isTextureSlotOverridden(slot)"
+                        class="texture-restore"
+                        icon="mdi-backspace-outline"
+                        size="x-small"
+                        variant="text"
+                        title="还原继承（使用模型自带贴图）"
+                        @click.stop="restoreTextureInheritance(slot)"
                       />
                       <v-btn
                         class="texture-toggle"
@@ -1790,6 +1881,15 @@ border-radius: 6px;
   white-space: nowrap;
 }
 
+.texture-slot-state {
+  font-size: 0.7rem;
+  line-height: 1.2;
+  color: rgba(110, 231, 183, 0.85);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .texture-remove {
   grid-column: 3;
   grid-row: 1;
@@ -1799,6 +1899,13 @@ border-radius: 6px;
 
 .texture-remove:disabled {
   color: rgba(233, 236, 241, 0.25) !important;
+}
+
+.texture-restore {
+  grid-column: 3;
+  grid-row: 2;
+  align-self: start;
+  color: rgba(110, 231, 183, 0.85);
 }
 .v-field-label {
   font-size: 0.82rem;

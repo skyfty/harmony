@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AssetCacheEntry } from './assetCache';
-import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS } from './material';
+import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
@@ -57,7 +57,6 @@ import { loadNodeObject } from './modelAssetLoader'
 
 import type { SceneNodeWithExtras } from './sceneGraph/types';
 import { applyNodeMetadata as applyNodeMetadataToObject } from './sceneGraph/nodeMetadata';
-import { applyMaterialConfigAssignment, buildMaterialConfigMap } from './sceneGraph/materialAssignment';
 import { buildGroundMesh as buildGroundDynamicMesh } from './sceneGraph/dynamicMeshes/ground';
 import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshes/wall';
 import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
@@ -1552,18 +1551,7 @@ class SceneGraphBuilder {
     if (!nodeMaterialConfigs.length) {
       return;
     }
-
-    const resolvedMaterials = await this.resolveNodeMaterials(node);
-    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
-    if (!defaultMaterialAssignment) {
-      return;
-    }
-
-    const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials);
-    applyMaterialConfigAssignment(object, {
-      defaultMaterial: defaultMaterialAssignment,
-      materialByConfigId,
-    });
+    await this.applyImportedMaterialOverrideDelta(object, nodeMaterialConfigs);
   }
 
   /**
@@ -1578,18 +1566,31 @@ class SceneGraphBuilder {
     if (!object || !materialConfig) {
       return;
     }
-    const resolvedMaterials = await this.materialFactory.resolveNodeMaterials([materialConfig], {
-      nodeId: materialConfig.id,
-      nodeName: materialConfig.name,
-    });
-    const defaultMaterialAssignment = this.pickMaterialAssignment(resolvedMaterials);
-    if (!defaultMaterialAssignment) {
+    await this.applyImportedMaterialOverrideDelta(object, [materialConfig]);
+  }
+
+  /**
+   * Applies imported-model material overrides as deltas: every mesh keeps its
+   * own (model) material and only the configured properties plus the explicitly
+   * listed texture slots change. Swapping in a factory material instead would
+   * drop the model's own textures and turn textured/metal tiles black.
+   */
+  private async applyImportedMaterialOverrideDelta(
+    object: THREE.Object3D,
+    materialConfigs: SceneNodeMaterial[],
+  ): Promise<void> {
+    if (!object || !materialConfigs.length) {
       return;
     }
-    const materialByConfigId = buildMaterialConfigMap([materialConfig], resolvedMaterials);
-    applyMaterialConfigAssignment(object, {
-      defaultMaterial: defaultMaterialAssignment,
-      materialByConfigId,
+    const textureLoader = this.materialFactory;
+    applyMaterialOverrides(object, materialConfigs, {
+      inheritUnspecifiedTextures: true,
+      resolveTexture: (ref) => textureLoader.loadTexture(ref.assetId, ref.settings ?? null),
+      warn: (message) => {
+        if (message) {
+          this.warn(message);
+        }
+      },
     });
   }
 
