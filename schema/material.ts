@@ -1135,6 +1135,67 @@ export function ensureMeshMaterialsUnique(mesh: THREE.Mesh): void {
   userData[MATERIAL_CLONED_KEY] = true;
 }
 
+/**
+ * Visits the objects a scene node owns.
+ *
+ * Children tagged with `userData.nodeId` are containers of other scene nodes:
+ * their materials belong to those nodes, which apply and restore their own
+ * overrides. Whole-subtree material operations (apply / reset) must therefore
+ * stop at those containers instead of reaching into them — otherwise a parent
+ * reset (for example on an expanded imported-model root) wipes the overrides the
+ * child nodes already applied. Asset clones inside a node carry no `nodeId`, so
+ * their meshes are visited normally.
+ */
+function forEachOwnedObject(
+  target: THREE.Object3D,
+  visitor: (object: THREE.Object3D) => void,
+): void {
+  const isNodeContainer = (object: THREE.Object3D): boolean =>
+    typeof (object.userData as { nodeId?: unknown } | undefined)?.nodeId === 'string';
+
+  const visit = (object: THREE.Object3D, isTarget: boolean): void => {
+    if (!isTarget && isNodeContainer(object)) {
+      return;
+    }
+    visitor(object);
+    const children = object.children;
+    for (let index = 0; index < children.length; index += 1) {
+      const child = children[index];
+      if (child) {
+        visit(child, false);
+      }
+    }
+  };
+
+  visit(target, true);
+}
+
+const MATERIAL_TYPES_WITHOUT_LIGHTING = new Set<string>([
+  'MeshBasicMaterial',
+  'MeshNormalMaterial',
+]);
+
+/**
+ * Unlit imports (baked terrain tiles) are frequently exported without vertex
+ * normals. Applying a lit material to such geometry makes it render black, so
+ * normals are generated once per geometry before a lit override is applied.
+ * Geometry is shared with the asset cache, which makes this a one-time repair.
+ */
+export function ensureGeometryNormalsForMaterial(mesh: THREE.Mesh, materialType?: string | null): boolean {
+  if (!mesh || !materialType || MATERIAL_TYPES_WITHOUT_LIGHTING.has(materialType)) {
+    return false;
+  }
+  const geometry = mesh.geometry as THREE.BufferGeometry | undefined;
+  if (!geometry || typeof geometry.computeVertexNormals !== 'function') {
+    return false;
+  }
+  if (typeof geometry.getAttribute === 'function' && geometry.getAttribute('normal')) {
+    return false;
+  }
+  geometry.computeVertexNormals();
+  return true;
+}
+
 export function ensureMaterialType(
   material: THREE.Material,
   type: SceneMaterialType | null | undefined,
@@ -1676,7 +1737,7 @@ export function applyMaterialOverrides(
 
   const overrideSignature = materialConfigsSignature(configs);
 
-  target.traverse((child: THREE.Object3D) => {
+  forEachOwnedObject(target, (child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;
@@ -1800,6 +1861,18 @@ export function applyMaterialOverrides(
     }
     disposables.forEach((dispose) => dispose?.());
 
+    // Imported-model overrides may switch unlit geometry to a lit material.
+    // Such geometry is often exported without normals and would render black,
+    // so generate them once (geometry is shared with the asset cache).
+    if (options.inheritUnspecifiedTextures) {
+      const appliedMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      appliedMaterials.forEach((entry) => {
+        if (entry) {
+          ensureGeometryNormalsForMaterial(mesh, entry.type);
+        }
+      });
+    }
+
     if (!mesh.userData) {
       mesh.userData = {};
     }
@@ -1812,7 +1885,7 @@ export function applyMaterialOverrides(
 }
 
 export function resetMaterialOverrides(target: THREE.Object3D): void {
-  target.traverse((child: THREE.Object3D) => {
+  forEachOwnedObject(target, (child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };
     if (!mesh?.isMesh) {
       return;

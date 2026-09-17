@@ -12275,6 +12275,16 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
+      // Preset textures must be registered in the scene asset registry,
+      // otherwise the viewport cannot resolve them and the preset would appear
+      // to apply "nothing" (or keep the model texture) for those slots.
+      const appliedEntrySnapshot = appliedEntry as SceneNodeMaterial
+      Object.values(appliedEntrySnapshot.textures ?? {}).forEach((ref) => {
+        if (ref) {
+          void this.ensureNodeMaterialTextureAssetRegistered(ref)
+        }
+      })
+
       this.queueSceneNodePatch(nodeId, ['materials'])
       if (requiresDynamicMeshPatch) {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])

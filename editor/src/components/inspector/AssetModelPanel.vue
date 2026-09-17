@@ -285,10 +285,6 @@ const assetPreviewStyle = computed(() => {
           </template>
         </div>
         <p v-if="expandNote" class="asset-note">{{ expandNote }}</p>
-        <p v-if="isExpandedRoot" class="asset-note asset-note--subtle">
-          根节点材质作为默认覆盖向下继承，已单独覆盖的子节点不再跟随
-          <template v-if="overrideCount > 0">；当前 {{ overrideCount }} 个子节点带有覆盖，收起会丢弃</template>
-        </p>
         <p v-if="feedbackMessage" class="asset-feedback">{{ feedbackMessage }}</p>
       </div>
     </v-expansion-panel-text>
