@@ -13,7 +13,7 @@ import {
 } from '@/types/material'
 import type { ProjectAsset } from '@/types/project-asset'
 import { renderMaterialThumbnailDataUrl } from '@/utils/materialAsset'
-import type { SceneMaterialProps, SceneMaterialTextureSlot, SceneMaterialType, SceneNode } from '@schema/core'
+import type { SceneMaterialType, SceneNode } from '@schema/core'
 import { isLightweightImportNode } from '@schema/core'
 
 type MaterialAsset = ProjectAsset & { type: 'material' }
@@ -34,9 +34,22 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
 
-const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
 const isLightweightNode = computed(() => isLightweightImportNode(selectedNode.value))
-const inheritsMaterial = computed(() => isLightweightNode.value && nodeMaterials.value.length === 0)
+const isImportedModelOverrideNode = computed(() => Boolean(
+  selectedNode.value
+  && selectedNode.value.nodeType === 'Group'
+  && typeof selectedNode.value.sourceAssetId === 'string'
+  && selectedNode.value.sourceAssetId.trim().length > 0
+  && !selectedNode.value.dynamicMesh,
+))
+/**
+ * Expanded lightweight child nodes and whole-model import roots share the same
+ * override rules: an empty material list means the node keeps rendering with
+ * the material the asset itself carries.
+ */
+const isImportedModelMaterialNode = computed(() => isLightweightNode.value || isImportedModelOverrideNode.value)
+const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
+const inheritsMaterial = computed(() => isImportedModelMaterialNode.value && nodeMaterials.value.length === 0)
 
 /**
  * Material type the model itself renders with. Unlit tiles (`MeshBasicMaterial`
@@ -47,7 +60,7 @@ const inheritedMaterialTypeLabel = computed(() => {
   if (!inheritsMaterial.value) {
     return ''
   }
-  const type = resolveSuggestedOverrideSeed().type
+  const type = resolveImportedModelMaterialSeed(selectedNode.value)?.type ?? DEFAULT_SCENE_MATERIAL_TYPE
   if (type === 'MeshBasicMaterial') {
     return '（模型使用无光照材质 MeshBasicMaterial，覆盖成标准材质会依赖场景光照）'
   }
@@ -78,13 +91,6 @@ const inheritedOverrideLabel = computed(() => {
   }
   return '源模型自带材质'
 })
-const isImportedModelOverrideNode = computed(() => Boolean(
-  selectedNode.value
-  && selectedNode.value.nodeType === 'Group'
-  && typeof selectedNode.value.sourceAssetId === 'string'
-  && selectedNode.value.sourceAssetId.trim().length > 0
-  && !selectedNode.value.dynamicMesh,
-))
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
 const deleteDialogVisible = ref(false)
 const dragOverSlotId = ref<string | null>(null)
@@ -141,8 +147,9 @@ watch(
 const canAddMaterialSlot = computed(() =>
   !!selectedNodeId.value
   && !props.disabled
-  && (!isImportedModelOverrideNode.value || nodeMaterials.value.length === 0)
-  && (!isLightweightNode.value || nodeMaterials.value.length === 0),
+  // Imported model nodes (expanded child or whole-model root) carry at most a
+  // single override slot; a second one is created by dropping/replacing instead.
+  && (!isImportedModelMaterialNode.value || nodeMaterials.value.length === 0),
 )
 const canDeleteMaterialSlot = computed(() => !!selectedNodeId.value && !!internalActiveId.value && !props.disabled)
 
@@ -210,7 +217,7 @@ watch(
 )
 
 const deleteDialogMessage = computed(() => {
-  if (isImportedModelOverrideNode.value || isLightweightNode.value) {
+  if (isImportedModelMaterialNode.value) {
     return '删除后将恢复为模型内置材质（不再使用场景材质覆盖）。确认继续删除？'
   }
   if (!internalActiveId.value) {
@@ -229,9 +236,9 @@ const materialListEntries = computed(() =>
     return {
       id: entry.id,
       title: entry.name ?? `材质 ${index + 1}`,
-      subtitle: isLightweightNode.value
-        ? '子节点覆盖'
-        : (isImportedModelOverrideNode.value ? '整模型材质覆盖' : '材质副本'),
+      subtitle: isImportedModelMaterialNode.value
+        ? (isLightweightNode.value ? '子节点覆盖' : '整模型材质覆盖')
+        : '材质副本',
       shared: false,
       color,
       thumbnail,
@@ -310,25 +317,20 @@ function clearMaterialPreviewThumbnail(slotId: string) {
   materialPreviewThumbnails.value = next
 }
 
-function handleAddMaterialSlot(
-  type?: SceneMaterialType,
-  props?: Partial<SceneMaterialProps> | null,
-  textureOverrides?: SceneMaterialTextureSlot[],
-) {
-  if (!canAddMaterialSlot.value || !selectedNodeId.value) {
+/**
+ * Creates the first (and only) material slot of the selected node.
+ *
+ * Picking a material type from the `+` menu is an explicit request for that
+ * type. Dropping a texture or a material preset is likewise an instruction to
+ * stop inheriting, so the slot is created lazily by `ensurePrimaryMaterialSlot`
+ * (seeded from the material the imported model currently renders with) instead
+ * of requiring a separate "覆盖材质" button.
+ */
+function handleAddMaterialSlot(type?: SceneMaterialType) {
+  if (!canAddMaterialSlot.value || !selectedNodeId.value || !type) {
     return
   }
-  if ((isImportedModelOverrideNode.value || isLightweightNode.value) && nodeMaterials.value.length > 0) {
-    return
-  }
-  if (!type) {
-    return
-  }
-  const created = sceneStore.addNodeMaterial(selectedNodeId.value, {
-    type,
-    props: props ?? null,
-    textureOverrides: textureOverrides ?? resolveTextureOverrideDefault(),
-  }) as SceneNodeMaterial | null
+  const created = sceneStore.addNodeMaterial(selectedNodeId.value, { type }) as SceneNodeMaterial | null
   if (!created) {
     return
   }
@@ -337,49 +339,23 @@ function handleAddMaterialSlot(
 }
 
 /**
- * Material type a first override should use.
+ * Primary material slot of the selected node, created on demand.
  *
- * Imported models can be unlit (`MeshBasicMaterial` from
- * `KHR_materials_unlit`, common for baked terrain tiles). Defaulting such a
- * node to a lit standard material makes it render black in scenes without
- * direct lighting, so the override starts from the type the model already uses.
+ * An empty material list means the node inherits (asset material, or the whole
+ * model override of an import root); the first edit therefore has to create the
+ * slot before writing into it. For imported model nodes the store seeds the new
+ * slot from the material the model already renders with.
  */
-type SuggestedOverrideSeed = {
-  type: SceneMaterialType
-  props: Partial<SceneMaterialProps> | null
-}
-
-/**
- * Material type and properties a first override should start from.
- *
- * Imported models can be unlit (`MeshBasicMaterial` from
- * `KHR_materials_unlit`, common for baked terrain tiles). Defaulting such a
- * node to a lit standard material makes it render black in scenes without
- * direct lighting, so the override starts from the type and the parameters the
- * model already renders with (shared with the store's drag & drop path).
- */
-function resolveSuggestedOverrideSeed(): SuggestedOverrideSeed {
-  const seed = resolveImportedModelMaterialSeed(selectedNode.value)
-  if (!seed) {
-    return { type: DEFAULT_SCENE_MATERIAL_TYPE, props: null }
+function ensurePrimaryMaterialSlot(): SceneNodeMaterial | null {
+  const nodeId = selectedNodeId.value
+  if (!nodeId) {
+    return null
   }
-  return { type: seed.type, props: seed.props }
-}
-
-function handleCreateOverride() {
-  const seed = resolveSuggestedOverrideSeed()
-  handleAddMaterialSlot(seed.type, seed.props)
-}
-
-/**
- * Imported model overrides start with no texture slots claimed, so the model
- * keeps its own albedo/normal/AO/metalness textures until the user replaces one.
- */
-function resolveTextureOverrideDefault(): SceneMaterialTextureSlot[] | undefined {
-  if (!isLightweightNode.value && !isImportedModelOverrideNode.value) {
-    return undefined
+  const existing = nodeMaterials.value[0] ?? null
+  if (existing) {
+    return existing
   }
-  return []
+  return sceneStore.addNodeMaterial(nodeId) as SceneNodeMaterial | null
 }
 
 function handleRequestDeleteSlot() {
@@ -428,11 +404,6 @@ function isMaterialAsset(asset: ProjectAsset): asset is MaterialAsset {
 
 function isTextureAsset(asset: ProjectAsset): asset is TextureAsset {
   return asset.type === 'image' || asset.type === 'texture'
-}
-
-function resolveMaterialAssetFromEvent(event: DragEvent): MaterialAsset | null {
-  const asset = resolveProjectAssetFromEvent(event)
-  return asset && isMaterialAsset(asset) ? asset : null
 }
 
 function resolveSlotAssetFromEvent(event: DragEvent): MaterialAsset | TextureAsset | null {
@@ -632,7 +603,7 @@ function handleListDragOver(event: DragEvent) {
   if (props.disabled || !selectedNodeId.value) {
     return
   }
-  const asset = resolveMaterialAssetFromEvent(event)
+  const asset = resolveSlotAssetFromEvent(event)
   if (!asset) {
     return
   }
@@ -660,7 +631,7 @@ async function handleListDrop(event: DragEvent) {
   if (props.disabled || !selectedNodeId.value) {
     return
   }
-  const asset = resolveMaterialAssetFromEvent(event)
+  const asset = resolveSlotAssetFromEvent(event)
   if (!asset) {
     return
   }
@@ -668,18 +639,26 @@ async function handleListDrop(event: DragEvent) {
   event.stopPropagation()
   dragOverSlotId.value = null
   isListDragActive.value = false
-  const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(asset.id)
-  if (!materialDefinition) {
-    return
-  }
-  const existingSlot = isImportedModelOverrideNode.value ? (nodeMaterials.value[0] ?? null) : null
-  const targetSlot = existingSlot ?? sceneStore.addNodeMaterial(selectedNodeId.value) as SceneNodeMaterial | null
+  const nodeId = selectedNodeId.value
+  const targetSlot = ensurePrimaryMaterialSlot()
   if (!targetSlot) {
     return
   }
-  const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, targetSlot.id, asset.id)
-  if (assigned) {
-    setMaterialPreviewThumbnail(targetSlot.id, assigned.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
+  if (isMaterialAsset(asset)) {
+    const materialDefinition = await sceneStore.ensureMaterialAssetDefinitionLoaded(asset.id)
+    if (!materialDefinition) {
+      return
+    }
+    const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(nodeId, targetSlot.id, asset.id)
+    if (assigned) {
+      setMaterialPreviewThumbnail(targetSlot.id, assigned.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
+      setActiveSlot(targetSlot.id)
+      emit('open-details', targetSlot.id)
+    }
+    return
+  }
+  if (applyAlbedoTexture(targetSlot.id, asset)) {
+    clearMaterialPreviewThumbnail(targetSlot.id)
     setActiveSlot(targetSlot.id)
     emit('open-details', targetSlot.id)
   }
@@ -723,6 +702,9 @@ function handleConfirmDeleteSlot() {
           />
         </template>
         <v-list density="compact" min-width="240" class="material-create-menu">
+          <v-list-subheader>
+            {{ isImportedModelMaterialNode ? '新建材质覆盖' : '新建材质槽' }}
+          </v-list-subheader>
           <v-list-item
             v-for="option in MATERIAL_CREATE_OPTIONS"
             :key="option.value"
@@ -742,22 +724,13 @@ function handleConfirmDeleteSlot() {
       />
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div v-if="isLightweightNode" class="material-panel__inherit">
-        <template v-if="inheritsMaterial">
-          <span class="material-panel__inherit-label">
-            继承中：{{ inheritedOverrideLabel }}{{ inheritedMaterialTypeLabel }}
-          </span>
-          <v-btn
-            size="x-small"
-            variant="tonal"
-            color="primary"
-            :disabled="props.disabled"
-            @click.stop="handleCreateOverride"
-          >
-            覆盖材质
-          </v-btn>
-        </template>
-      </div>
+      <!--
+        Empty material list on an imported model node = the node renders with the
+        material the asset itself carries. Setting a material (via the `+` type
+        menu, or by dropping a texture / preset here) creates the override slot
+        automatically, so no separate "覆盖材质" action is needed.
+      -->
+  
       <div class="material-panel">
         <div
           class="material-panel__list"
@@ -839,7 +812,25 @@ function handleConfirmDeleteSlot() {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 52px;
+  padding: 8px 10px;
   margin-bottom: 8px;
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  background: rgba(16, 20, 26, 0.35);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.material-panel__inherit.is-drag-over {
+  border-color: rgba(90, 148, 255, 0.55);
+  box-shadow: 0 0 0 2px rgba(90, 148, 255, 0.18);
+}
+
+.material-panel__inherit-title {
+  font-size: 0.75rem;
+  line-height: 1.35;
+  font-weight: 600;
+  color: rgba(233, 236, 241, 0.88);
 }
 
 .material-panel__inherit-label {
@@ -850,6 +841,7 @@ function handleConfirmDeleteSlot() {
 
 .material-panel__list {
   width: 100%;
+  min-height: 36px;
   display: flex;
   flex-direction: column;
   gap: 8px;
