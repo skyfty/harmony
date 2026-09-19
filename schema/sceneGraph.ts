@@ -57,6 +57,7 @@ import { loadNodeObject } from './modelAssetLoader'
 
 import type { SceneNodeWithExtras } from './sceneGraph/types';
 import { applyNodeMetadata as applyNodeMetadataToObject } from './sceneGraph/nodeMetadata';
+import { applyLightweightImportPatches } from './sceneGraph/lightweightImportPatch';
 import { buildGroundMesh as buildGroundDynamicMesh } from './sceneGraph/dynamicMeshes/ground';
 import { buildWallMesh as buildWallDynamicMesh } from './sceneGraph/dynamicMeshes/wall';
 import { buildFloorMesh as buildFloorDynamicMesh } from './sceneGraph/dynamicMeshes/floor';
@@ -134,6 +135,16 @@ function resolveInheritedImportMaterial(
     ? ((node.materials[0] as SceneNodeMaterial | undefined) ?? null)
     : null
   return own ?? inherited
+}
+
+/**
+ * Result of rendering an expanded imported model root: the lightweight scene
+ * nodes that were patched in place onto the whole-model clone, so the regular
+ * child build pass must not build them again.
+ */
+type LightweightImportPatchContext = {
+  handledNodeIds: Set<string>
+  containerByNodeId: Map<string, THREE.Object3D>
 }
 
 class SceneGraphBuilder {
@@ -1026,6 +1037,7 @@ class SceneGraphBuilder {
     nodes: SceneNodeWithExtras[],
     parent: THREE.Object3D,
     inheritedImportMaterial: SceneNodeMaterial | null = null,
+    lightweightPatchContext: LightweightImportPatchContext | null = null,
   ): Promise<void> {
     if (!Array.isArray(nodes)) {
       return;
@@ -1038,6 +1050,20 @@ class SceneGraphBuilder {
       // override for its expanded lightweight descendants; a lightweight node
       // with its own material config overrides it for its own subtree.
       const nextInheritedImportMaterial = resolveInheritedImportMaterial(node, inheritedImportMaterial);
+      // Lightweight nodes of an expanded imported model root were already
+      // patched onto the whole-model clone of that root.
+      if (lightweightPatchContext?.handledNodeIds.has(node.id)) {
+        const patchedContainer = lightweightPatchContext.containerByNodeId.get(node.id) ?? null;
+        if (patchedContainer && Array.isArray(node.children) && node.children.length) {
+          await this.buildNodes(
+            node.children as SceneNodeWithExtras[],
+            patchedContainer,
+            nextInheritedImportMaterial,
+            lightweightPatchContext,
+          );
+        }
+        continue;
+      }
       const built = await this.buildSingleNode(node, nextInheritedImportMaterial);
       if (!built) {
         continue;
@@ -1180,9 +1206,11 @@ class SceneGraphBuilder {
     this.applyVisibility(group, node);
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
-    // An expanded imported model root stops rendering its own asset; its asset
-    // nodes are rendered by the lightweight child nodes instead.
+    // An expanded imported model root renders the whole asset once and patches
+    // its exported lightweight child nodes onto it in place. The shared outline
+    // placeholder would double up with that render.
     const childrenExpanded = isExpandedImportedModelRoot(node);
+    let patchContext: LightweightImportPatchContext | null = null;
 
     if (
       this.lazyLoadMeshes
@@ -1199,15 +1227,19 @@ class SceneGraphBuilder {
         group.add(placeholder);
         this.recordMeshStatistics(placeholder);
       }
-    } else if (node.sourceAssetId && !childrenExpanded) {
-      const asset = await this.loadNodeAssetMesh(node);
-      if (asset) {
-        await this.applyMaterialOverridesToImportedObject(asset, node);
-        this.resetImportedObjectLocalTransform(asset);
-        asset.userData = asset.userData ?? {};
-        asset.userData.sourceAssetId = node.sourceAssetId;
-        asset.userData.objectPath = node.importMetadata?.objectPath ?? null;
-        group.add(asset);
+    } else if (node.sourceAssetId) {
+      if (childrenExpanded) {
+        patchContext = await this.buildExpandedImportRoot(node, group);
+      } else {
+        const asset = await this.loadNodeAssetMesh(node);
+        if (asset) {
+          await this.applyMaterialOverridesToImportedObject(asset, node);
+          this.resetImportedObjectLocalTransform(asset);
+          asset.userData = asset.userData ?? {};
+          asset.userData.sourceAssetId = node.sourceAssetId;
+          asset.userData.objectPath = node.importMetadata?.objectPath ?? null;
+          group.add(asset);
+        }
       }
     }
 
@@ -1216,10 +1248,72 @@ class SceneGraphBuilder {
         node.children as SceneNodeWithExtras[],
         group,
         resolveInheritedImportMaterial(node, inheritedImportMaterial),
+        patchContext,
       );
     }
 
     return group;
+  }
+
+  /**
+   * Renders an expanded imported model root: the whole asset is instantiated
+   * once, then every exported lightweight child node is patched in place onto
+   * the matching asset node (delta container + material / visibility override).
+   *
+   * Exports only carry the child nodes that actually deviate from the asset, so
+   * the untouched parts of the model keep rendering from this single clone
+   * instead of the runtime rebuilding a scene node (and a clone) per asset node.
+   */
+  private async buildExpandedImportRoot(
+    node: SceneNodeWithExtras,
+    container: THREE.Object3D,
+  ): Promise<LightweightImportPatchContext | null> {
+    const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
+    if (!assetId) {
+      this.warn(`展开的导入模型节点缺少资产 ${node.name ?? node.id}`);
+      return null;
+    }
+    const asset = await this.loadAssetMesh(assetId);
+    if (!asset) {
+      this.warn(`导入模型资源解析失败 ${assetId}`);
+      return null;
+    }
+
+    // The root's whole-model material config acts as the default override of
+    // the subtree; every patched node may override it for its own content.
+    await this.applyMaterialOverridesToImportedObject(asset, node);
+    this.resetImportedObjectLocalTransform(asset);
+    asset.userData = {
+      ...(asset.userData ?? {}),
+      sourceAssetId: node.sourceAssetId ?? null,
+      objectPath: null,
+    };
+
+    const result = await applyLightweightImportPatches(
+      asset,
+      Array.isArray(node.children) ? (node.children as SceneNodeWithExtras[]) : [],
+      {
+        assetId,
+        inheritedMaterial: resolveInheritedImportMaterial(node, null),
+        hooks: {
+          applyTransform: (object, target) => this.applyTransform(object, target),
+          applyMaterial: (object, material) => this.applySingleMaterialOverrideToObject(object, material),
+          applyMetadata: (object, target) => this.applyNodeMetadata(object, target),
+          warn: (message) => this.warn(message),
+        },
+      },
+    );
+
+    this.recordMeshStatistics(asset);
+    container.add(asset);
+
+    if (!result.handledNodeIds.size) {
+      return null;
+    }
+    return {
+      handledNodeIds: result.handledNodeIds,
+      containerByNodeId: result.containerByNodeId,
+    };
   }
 
   /**
@@ -1411,12 +1505,26 @@ class SceneGraphBuilder {
       }
     }
 
-    if (node.sourceAssetId && !childrenExpanded) {
+    if (node.sourceAssetId) {
       const container = new THREE.Group();
       container.name = node.name ?? 'Mesh';
       this.applyTransform(container, node);
       this.applyVisibility(container, node);
       const hasChildNodes = Array.isArray(node.children) && node.children.length > 0;
+      let patchContext: LightweightImportPatchContext | null = null;
+
+      if (childrenExpanded) {
+        patchContext = await this.buildExpandedImportRoot(node, container);
+        if (hasChildNodes) {
+          await this.buildNodes(
+            node.children as SceneNodeWithExtras[],
+            container,
+            nodeChildrenInheritedMaterial,
+            patchContext,
+          );
+        }
+        return container;
+      }
 
       const asset = await this.loadNodeAssetMesh(node);
       if (asset) {
@@ -1442,6 +1550,8 @@ class SceneGraphBuilder {
     }
 
     if (childrenExpanded) {
+      // Expanded root without a usable asset reference: keep it as a container
+      // so its lightweight children still render on their own.
       const container = new THREE.Group();
       container.name = node.name ?? 'Mesh';
       this.applyTransform(container, node);

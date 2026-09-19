@@ -95,8 +95,7 @@ interface ProceduralCityParcel {
   color: THREE.Color
 }
 
-const PROCEDURAL_CITY_FLOOR_HEIGHT = 3.6
-const PROCEDURAL_CITY_MIN_FLOORS = 3
+const PROCEDURAL_CITY_MIN_HEIGHT = 0.2
 const PROCEDURAL_CITY_FACADE_SOURCE_WIDTH = 128
 const PROCEDURAL_CITY_FACADE_SOURCE_HEIGHT = 256
 const PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MIN = 1.8
@@ -674,13 +673,8 @@ function createParcel(
 ): ProceduralCityParcel {
   const width = randomRange(random, props.minWidth, props.maxWidth) * randomRange(random, PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MIN, PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MAX)
   const depth = randomRange(random, props.minDepth, props.maxDepth) * randomRange(random, PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MIN, PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MAX)
-  const minFloors = Math.max(PROCEDURAL_CITY_MIN_FLOORS, Math.ceil(props.minHeight / PROCEDURAL_CITY_FLOOR_HEIGHT))
-  const maxFloors = Math.max(minFloors, Math.floor(props.maxHeight / PROCEDURAL_CITY_FLOOR_HEIGHT))
-  const floorMix = Math.pow(random(), 1.3)
-  const floors = minFloors + Math.floor(floorMix * (maxFloors - minFloors + 1))
-  const roofHeight = randomRange(random, 0.4, 1.8)
-  const towerBonus = random() > 0.9 ? randomRange(random, 0.8, 3.5) : 0
-  const height = Math.max(props.minHeight, floors * PROCEDURAL_CITY_FLOOR_HEIGHT + roofHeight + towerBonus)
+  const heightT = Math.pow(random(), 1.7)
+  const height = props.minHeight + (props.maxHeight - props.minHeight) * heightT
   return {
     position,
     rotationY,
@@ -1280,8 +1274,8 @@ export function clampProceduralCityComponentProps(
     0.1,
   )
   const heightRange = normalizeRange(
-    clampNumber(props?.minHeight, PROCEDURAL_CITY_DEFAULT_PROPS.minHeight, PROCEDURAL_CITY_FLOOR_HEIGHT * 2, 1000),
-    clampNumber(props?.maxHeight, PROCEDURAL_CITY_DEFAULT_PROPS.maxHeight, PROCEDURAL_CITY_FLOOR_HEIGHT * 2, 1000),
+    clampNumber(props?.minHeight, PROCEDURAL_CITY_DEFAULT_PROPS.minHeight, PROCEDURAL_CITY_MIN_HEIGHT, 1000),
+    clampNumber(props?.maxHeight, PROCEDURAL_CITY_DEFAULT_PROPS.maxHeight, PROCEDURAL_CITY_MIN_HEIGHT, 1000),
     0.1,
   )
   return {

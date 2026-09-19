@@ -5,7 +5,8 @@ import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
 import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'
 import { findObjectByPath } from '@schema/modelAssetLoader'
-import { isIdentityNodeTransform, isLightweightImportNode } from '@schema/core'
+import { isExpandedImportedModelRoot, isIdentityNodeTransform, isLightweightImportNode } from '@schema/core'
+import { collectReferencedNodeIds, pruneUntouchedImportChildNodes } from '@/utils/importChildPrune'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -423,13 +424,30 @@ async function sanitizeSceneDocumentForJsonExport(
   options: SceneExportOptions,
   reportEvent?: SceneExportEventReporter,
 ): Promise<SceneJsonExportDocument> {
+  // Runtime artifacts only carry the import children that actually deviate from
+  // their asset; untouched children are restored by the runtime from the whole
+  // model clone, which keeps the package (and the runtime scene tree) small.
+  const referencedNodeIds = collectReferencedNodeIds(document)
+  const pruned = pruneUntouchedImportChildNodes(document.nodes, referencedNodeIds)
+  if (pruned.removedCount > 0) {
+    document.nodes = pruned.nodes
+    reportEvent?.({
+      phase: 'node',
+      level: 'info',
+      status: 'completed',
+      sceneId: document.id,
+      sceneName: document.name || document.id,
+      message: `已省略 ${pruned.removedCount} 个未修改的导入子节点`,
+      detail: '未修改的导入子节点由运行时按需还原，不写入导出数据',
+    })
+  }
   const removedNodeIds = new Set<string>()
   const outlineCandidates: OutlineCandidate[] = []
   const rigidbodyCandidates: RigidbodyExportCandidate[] = []
   const nodeProgress = createNodeExportProgressTracker(document, reportEvent)
   reportNodeExportStart(nodeProgress)
   const sanitizedNodes = sanitizeNodesForJsonExport(
-    document.nodes,
+    pruned.nodes,
     options,
     removedNodeIds,
     outlineCandidates,
@@ -525,6 +543,11 @@ function shouldGenerateOutlineMeshForNode(node: SceneNode, options: SceneExportO
   // Expanded lightweight nodes render one asset node each; the whole-asset
   // outline placeholder would not match their geometry.
   if (isLightweightImportNode(node)) {
+    return false
+  }
+  // Expanded imported model roots render the real asset instead of an outline
+  // placeholder, so a whole-model outline would only bloat the package.
+  if (isExpandedImportedModelRoot(node)) {
     return false
   }
   if (node.dynamicMesh) {

@@ -102,6 +102,7 @@ import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
 import { resourceProviders } from '@/resources/projectProviders'
+import { collectImportedChildOverrides, mergeImportedChildOverrides } from '@/utils/importChildRestore'
 import { getExtensionFromMimeType } from '@schema/core'
 import {
   isLightweightImportNode,
@@ -1811,6 +1812,84 @@ function collectNodeTreeIdsForRemoval(nodes: SceneNode[], bucket: string[]): voi
       collectNodeTreeIdsForRemoval(node.children, bucket)
     }
   })
+}
+
+/**
+ * Rebuilds the untouched lightweight children of one expanded import root.
+ *
+ * Runtime artifacts (publish packages, exported scene JSON) only contain the
+ * child nodes that deviate from the asset; the rest are restored by the runtime
+ * from the whole-model clone. The editor has no such runtime shortcut, so the
+ * missing children are rebuilt from the asset here and the shipped overrides
+ * are merged back onto them by `objectPath`. Children whose asset node drifted
+ * away keep their exported node so no edit is silently dropped.
+ */
+async function restoreExpandedImportedModelRoot(
+  getAsset: (assetId: string) => ProjectAsset | null | undefined,
+  root: SceneNode,
+): Promise<boolean> {
+  const assetId = typeof root.sourceAssetId === 'string' ? root.sourceAssetId.trim() : ''
+  const exportedChildren = Array.isArray(root.children) ? root.children : []
+  if (!assetId || !exportedChildren.length) {
+    return false
+  }
+
+  const overrides = collectImportedChildOverrides(exportedChildren)
+  if (!overrides.size) {
+    return false
+  }
+
+  const cached = await ensureImportedModelAssetCached({ getAsset }, assetId)
+  if (!cached) {
+    return false
+  }
+  const block = resolveImportedModelExpandBlock(cached.object, assetId)
+  if (block.reason) {
+    return false
+  }
+  const rebuilt = buildLightweightImportChildNodes(
+    cached.object,
+    assetId,
+    [],
+    root.name ?? 'Imported Model',
+    block.skinnedGroups.roots,
+  )
+  if (!rebuilt.length) {
+    return false
+  }
+
+  return mergeImportedChildOverrides(root, rebuilt, overrides) > 0
+}
+
+/**
+ * Restores every pruned expanded import tree of an imported document so the
+ * editor keeps showing (and keeps editable) the full model.
+ */
+async function restorePrunedImportedModelChildren(
+  getAsset: (assetId: string) => ProjectAsset | null | undefined,
+  nodes: SceneNode[] | null | undefined,
+): Promise<number> {
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return 0
+  }
+  let restoredRootCount = 0
+  const stack: SceneNode[] = [...nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+    if (!isExpandedImportedModelRoot(node)) {
+      continue
+    }
+    if (await restoreExpandedImportedModelRoot(getAsset, node)) {
+      restoredRootCount += 1
+    }
+  }
+  return restoredRootCount
 }
 
 /**
@@ -21022,6 +21101,10 @@ export const useSceneStore = defineStore('scene', {
             : undefined,
         })
 
+        // Published packages only carry the imported child nodes that deviate
+        // from their asset; rebuild the untouched ones so the editor shows the
+        // full model again.
+        await restorePrunedImportedModelChildren((assetId) => this.getAsset(assetId), sceneDocument.nodes)
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
         await persistPlanningImageLayersToIndexedDB(sceneDocument.id, sceneDocument.planningData?.images ?? [])
         await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })
@@ -21134,6 +21217,10 @@ export const useSceneStore = defineStore('scene', {
             : undefined,
         })
 
+        // Published packages only carry the imported child nodes that deviate
+        // from their asset; rebuild the untouched ones so the editor shows the
+        // full model again.
+        await restorePrunedImportedModelChildren((assetId) => this.getAsset(assetId), sceneDocument.nodes)
         await hydrateSceneDocumentWithEmbeddedAssets(sceneDocument)
 
         await projectsStore.addSceneToProject(projectId, { id: sceneDocument.id, name: sceneDocument.name })

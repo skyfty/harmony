@@ -730,7 +730,24 @@ function handleConfirmDeleteSlot() {
         menu, or by dropping a texture / preset here) creates the override slot
         automatically, so no separate "覆盖材质" action is needed.
       -->
-  
+      <div
+        v-if="inheritsMaterial"
+        class="material-panel__inherit"
+        :class="{ 'is-drag-over': isListDragActive }"
+        @dragenter="handleListDragOver"
+        @dragover="handleListDragOver"
+        @dragleave="handleListDragLeave"
+        @drop="handleListDrop"
+      >
+        <div class="material-panel__inherit-title">使用模型内置材质</div>
+        <div class="material-panel__inherit-label">
+          当前渲染：{{ inheritedOverrideLabel }}{{ inheritedMaterialTypeLabel }}
+        </div>
+        <div class="material-panel__inherit-label">
+          设置专属材质后自动覆盖：用右上角 + 选择材质类型，或把贴图／材质预置拖到这里。
+        </div>
+      </div>
+
       <div class="material-panel">
         <div
           class="material-panel__list"
