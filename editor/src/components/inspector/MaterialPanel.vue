@@ -92,7 +92,6 @@ const inheritedOverrideLabel = computed(() => {
   return '源模型自带材质'
 })
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
-const deleteDialogVisible = ref(false)
 const dragOverSlotId = ref<string | null>(null)
 const isListDragActive = ref(false)
 const materialPickerVisible = ref(false)
@@ -215,19 +214,6 @@ watch(
     }
   },
 )
-
-const deleteDialogMessage = computed(() => {
-  if (isImportedModelMaterialNode.value) {
-    return '删除后将恢复为模型内置材质（不再使用场景材质覆盖）。确认继续删除？'
-  }
-  if (!internalActiveId.value) {
-    return '确认删除当前选中的材质项？此操作无法撤销。'
-  }
-  if (!nodeMaterials.value.some((item: SceneNodeMaterial) => item.id === internalActiveId.value)) {
-    return '确认删除当前选中的材质项？此操作无法撤销。'
-  }
-  return '删除后该材质项及其独立材质将被移除，操作不可撤销。确认继续删除？'
-})
 
 const materialListEntries = computed(() =>
   nodeMaterials.value.map((entry: SceneNodeMaterial, index: number) => {
@@ -362,7 +348,18 @@ function handleRequestDeleteSlot() {
   if (!canDeleteMaterialSlot.value) {
     return
   }
-  deleteDialogVisible.value = true
+  if (!selectedNodeId.value || !internalActiveId.value) {
+    return
+  }
+  const targetId = internalActiveId.value
+  const removed = sceneStore.removeNodeMaterial(selectedNodeId.value, targetId)
+  if (!removed) {
+    return
+  }
+  clearMaterialPreviewThumbnail(targetId)
+  internalActiveId.value = null
+  emit('update:active-node-material-id', null)
+  emit('close-details')
 }
 
 function parseAssetDragPayload(event: DragEvent): { assetId: string } | null {
@@ -664,26 +661,6 @@ async function handleListDrop(event: DragEvent) {
   }
 }
 
-function handleCancelDeleteSlot() {
-  deleteDialogVisible.value = false
-}
-
-function handleConfirmDeleteSlot() {
-  if (!selectedNodeId.value || !internalActiveId.value) {
-    deleteDialogVisible.value = false
-    return
-  }
-  const targetId = internalActiveId.value
-  const removed = sceneStore.removeNodeMaterial(selectedNodeId.value, targetId)
-  deleteDialogVisible.value = false
-  if (!removed) {
-    return
-  }
-  clearMaterialPreviewThumbnail(targetId)
-  internalActiveId.value = null
-  emit('update:active-node-material-id', null)
-  emit('close-details')
-}
 </script>
 
 <template>
@@ -724,29 +701,7 @@ function handleConfirmDeleteSlot() {
       />
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <!--
-        Empty material list on an imported model node = the node renders with the
-        material the asset itself carries. Setting a material (via the `+` type
-        menu, or by dropping a texture / preset here) creates the override slot
-        automatically, so no separate "覆盖材质" action is needed.
-      -->
-      <div
-        v-if="inheritsMaterial"
-        class="material-panel__inherit"
-        :class="{ 'is-drag-over': isListDragActive }"
-        @dragenter="handleListDragOver"
-        @dragover="handleListDragOver"
-        @dragleave="handleListDragLeave"
-        @drop="handleListDrop"
-      >
-        <div class="material-panel__inherit-title">使用模型内置材质</div>
-        <div class="material-panel__inherit-label">
-          当前渲染：{{ inheritedOverrideLabel }}{{ inheritedMaterialTypeLabel }}
-        </div>
-        <div class="material-panel__inherit-label">
-          设置专属材质后自动覆盖：用右上角 + 选择材质类型，或把贴图／材质预置拖到这里。
-        </div>
-      </div>
+
 
       <div class="material-panel">
         <div
@@ -793,16 +748,6 @@ function handleConfirmDeleteSlot() {
         </div>
 
       </div>
-      <v-dialog v-model="deleteDialogVisible" max-width="360">
-        <v-card>
-          <v-card-title class="text-h6">删除材质槽</v-card-title>
-          <v-card-text>{{ deleteDialogMessage }}</v-card-text>
-          <v-card-actions class="dialog-actions">
-            <v-btn variant="text" @click="handleCancelDeleteSlot">取消</v-btn>
-            <v-btn color="error" variant="tonal" @click="handleConfirmDeleteSlot">删除</v-btn>
-          </v-card-actions>
-        </v-card>
-      </v-dialog>
       <AssetPickerDialog
         v-model="materialPickerVisible"
         :asset-id="materialPickerSelectedId"

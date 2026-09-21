@@ -374,6 +374,7 @@
         <template v-if="debugMode === 'full'">
           <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}, r-tris {{ rendererDebug.renderTriangles }}</text>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
+          <text class="viewer-debug-line">Memory guard: {{ runtimeMemoryGuard.state.state }}{{ runtimeMemoryGuard.state.extreme ? ' (extreme)' : '' }}</text>
         </template>
       </view>
     </view>
@@ -388,6 +389,7 @@
 
 <script setup lang="ts">
 import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type EffectScope, type ComponentPublicInstance } from 'vue';
+import { useRuntimeMemoryGuard } from '../composables/useRuntimeMemoryGuard';
 // #ifdef MP-WEIXIN
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
@@ -1785,6 +1787,45 @@ type CameraFrameSnapshot = {
 const cameraFrameSnapshotPosition = new THREE.Vector3();
 const cameraFrameSnapshotQuaternion = new THREE.Quaternion();
 let renderContext: RenderContext | null = null;
+const runtimeMemoryGuard = useRuntimeMemoryGuard({
+  onModerate: () => {
+    const context = renderContext;
+    if (!context) {
+      return;
+    }
+    context.renderer.setPixelRatio(1);
+    context.renderer.shadowMap.enabled = false;
+    applyRendererShadowSetting();
+  },
+  onCritical: () => {
+    const context = renderContext;
+    if (!context) {
+      return;
+    }
+    context.renderer.setPixelRatio(1);
+    context.renderer.shadowMap.enabled = false;
+    applyRendererShadowSetting();
+    sceneAssetCache.evictIfNeeded();
+  },
+  onExtremeCritical: () => {
+    const context = renderContext;
+    if (!context) {
+      return;
+    }
+    context.renderer.setPixelRatio(1);
+    context.renderer.shadowMap.enabled = false;
+    applyRendererShadowSetting();
+    sceneAssetCache.evictIfNeeded();
+    resetSharedKtx2Loader();
+  },
+  onRestoreModerate: () => {
+    const context = renderContext;
+    if (!context) {
+      return;
+    }
+    context.renderer.setPixelRatio(1);
+  },
+});
 let currentDocument: SceneJsonExportDocument | null = null;
 let remoteMultiuserVisiblePeerLimit = DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS;
 let remoteMultiuserVisibilityFrame = 0;
@@ -22931,6 +22972,7 @@ function hasAnyPropInput(): boolean {
 }
 
 onMounted(() => {
+  runtimeMemoryGuard.start();
   if (!resizeListener) {
     resizeListener = handleResize;
     uni.onWindowResize(handleResize);
@@ -23014,6 +23056,7 @@ defineExpose({
 });
 
 function cleanupRuntime(): void {
+  runtimeMemoryGuard.stop();
   dismissBehaviorBubble({ type: 'continue' });
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
   teardownRenderer();

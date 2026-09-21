@@ -1,4 +1,10 @@
 
+import type {
+  RuntimeResourceBudgetProfileId,
+  RuntimeResourceBudgetReport,
+  RuntimeTargetPlatform,
+} from '@schema/core'
+
 export type SceneExportResult = {
   blob: Blob
 }
@@ -59,6 +65,7 @@ export interface SceneExportProgressSummary {
   nodes: SceneExportEntityProgress | null
   assets: SceneExportEntityProgress | null
   logs: number
+  budget?: RuntimeResourceBudgetReport
 }
 
 export type SceneExportEventReporter = (event: SceneExportProgressEvent) => void
@@ -74,6 +81,8 @@ export interface SceneExportOptions {
   lazyLoadMeshes: boolean
   /** When true, export embeds all referenced runtime assets into the ZIP for offline use. */
   embedAssets: boolean
+  budgetProfileId: RuntimeResourceBudgetProfileId
+  targetPlatform: RuntimeTargetPlatform
 }
 
 export interface GLBExportSettings {

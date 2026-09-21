@@ -114,6 +114,13 @@ import type { ScenePreviewSnapshot } from '@/utils/previewChannel'
 import { subscribeToScenePreview } from '@/utils/previewChannel'
 import type { SceneExportOptions } from '@/types/scene-export'
 import type { StoredSceneDocument } from '@/types/stored-scene-document'
+import RuntimeBudgetPanel from '@/components/common/RuntimeBudgetPanel.vue'
+import { estimateEditorSceneRuntimeBudget } from '@/utils/runtimeResourceBudget'
+import type {
+	RuntimeResourceBudgetProfileId,
+	RuntimeResourceBudgetReport,
+	RuntimeTargetPlatform,
+} from '@schema/core'
 import { prepareStoredSceneJsonExportBundle } from '@/utils/sceneExport'
 import { type SceneAssetDiagnosticsSummary } from '@/utils/sceneAssetDiagnostics'
 import { collectRuntimeModelNodesByAssetId } from '@/utils/sceneAssetCollectors'
@@ -463,6 +470,8 @@ const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
 	includeExtras: true,
 	rotateCoordinateSystem: false,
 	lazyLoadMeshes: true,
+	budgetProfileId: 'mid-high',
+	targetPlatform: 'both',
 }
 
 
@@ -600,12 +609,42 @@ const isInstancedCullingVisualizationVisible = ref(false)
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
 const isGroundChunkStatsVisible = ref(false)
+const isRuntimeBudgetPanelVisible = ref(false)
+const runtimeBudgetProfileId = ref<RuntimeResourceBudgetProfileId>('mid-high')
+const runtimeBudgetTargetPlatform = ref<RuntimeTargetPlatform>('both')
 const isDebugOverlayVisible = computed(
 	() =>
 		isRendererDebugVisible.value ||
 		isInstancingDebugVisible.value ||
 		isGroundChunkStatsVisible.value,
 )
+
+const runtimeBudgetReport = computed<RuntimeResourceBudgetReport | null>(() => {
+	const sceneStore = useSceneStore()
+	if (!sceneStore.currentSceneId) {
+		return null
+	}
+
+	const snapshot = sceneStore.createSceneDocumentSnapshot()
+	const pixelRatio = Number.isFinite(rendererDebug.pixelRatio) && rendererDebug.pixelRatio > 0
+		? rendererDebug.pixelRatio
+		: 1
+	const width = rendererDebug.width > 0 ? Math.max(1, Math.round(rendererDebug.width / pixelRatio)) : 1
+	const height = rendererDebug.height > 0 ? Math.max(1, Math.round(rendererDebug.height / pixelRatio)) : 1
+
+	return estimateEditorSceneRuntimeBudget({
+		scene: snapshot,
+		viewport: {
+			width,
+			height,
+			pixelRatio,
+			hasPostProcessing: false,
+		},
+		sceneDocumentBytes: 0,
+		profileId: runtimeBudgetProfileId.value,
+		targetPlatform: runtimeBudgetTargetPlatform.value,
+	})
+})
 
 const instancedLodVisibleCount = ref(0)
 const instancedLodTotalCount = ref(0)
@@ -15828,6 +15867,19 @@ watch(
 			</div>
 			<div ref="statsContainerRef" class="scene-preview__stats-panels"></div>
 		</div>
+		<div
+			v-if="isRuntimeBudgetPanelVisible"
+			class="scene-preview__budget-panel"
+		>
+			<RuntimeBudgetPanel
+				:report="runtimeBudgetReport"
+				:profile-id="runtimeBudgetProfileId"
+				:target-platform="runtimeBudgetTargetPlatform"
+				compact
+				@update:profile-id="runtimeBudgetProfileId = $event"
+				@update:target-platform="runtimeBudgetTargetPlatform = $event"
+			/>
+		</div>
 		<div v-if="!watchExclusiveUiActive" class="scene-preview__debug-menu">
 			<v-menu
 				v-model="isDebugMenuOpen"
@@ -15864,6 +15916,16 @@ watch(
 									class="scene-preview__debug-checkbox"
 									label="Instancing stats"
 									v-model="isInstancingDebugVisible"
+									hide-details
+									density="compact"
+									color="warning"
+								/>
+							</v-list-item>
+							<v-list-item>
+								<v-checkbox
+									class="scene-preview__debug-checkbox"
+									label="Runtime budget"
+									v-model="isRuntimeBudgetPanelVisible"
 									hide-details
 									density="compact"
 									color="warning"
@@ -16919,6 +16981,14 @@ watch(
 	display: flex;
 	flex-direction: column;
 	gap: 6px;
+}
+
+.scene-preview__budget-panel {
+	position: absolute;
+	top: 64px;
+	right: 16px;
+	z-index: 2200;
+	pointer-events: auto;
 }
 
 .scene-preview__particle-debug-card {

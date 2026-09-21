@@ -31,6 +31,7 @@ import type {
   SceneExportProgressSummary,
   SceneExportOptions,
 } from '@/types/scene-export'
+import type { RuntimeResourceBudgetReport } from '@schema/core'
 
 type SceneViewportHandle = InstanceType<typeof SceneViewport> & {
   activateRigidbodyColliderEdit: () => boolean
@@ -45,6 +46,7 @@ import {
   type SceneAssetValidationReport,
 } from '@/utils/sceneAssetDiagnostics'
 import { exportScenePackagePublishZip } from '@/utils/scenePackagePublish'
+import { estimateEditorProjectRuntimeBudget } from '@/utils/runtimeResourceBudget'
 import type { ScenePackageSourceScene } from '@/utils/scenePackageSource'
 import { broadcastScenePreviewUpdate } from '@/utils/previewChannel'
 import { generateUuid } from '@/utils/uuid'
@@ -150,6 +152,7 @@ const exportDiagnosticsReport = ref<SceneAssetValidationReport | null>(null)
 const exportDiagnosticsSceneName = ref('')
 const exportDiagnosticsSeverityFilter = ref<'all' | 'error' | 'warning'>('all')
 const exportDiagnosticsSearch = ref('')
+const exportBudgetReport = ref<RuntimeResourceBudgetReport | null>(null)
 const exportDialogFileName = ref('scene')
 const exportPreferences = ref<SceneExportOptions>({
   fileName: 'scene',
@@ -161,6 +164,8 @@ const exportPreferences = ref<SceneExportOptions>({
   rotateCoordinateSystem: true,
   lazyLoadMeshes: true,
   format: 'json',
+  budgetProfileId: 'mid-high',
+  targetPlatform: 'both',
 })
 const viewportRef = ref<SceneViewportHandle | null>(null)
 const isNewSceneDialogOpen = ref(false)
@@ -262,6 +267,7 @@ const exportProgressSummary = computed<SceneExportProgressSummary>(() => ({
   nodes: exportNodeProgress.value,
   assets: exportAssetProgress.value,
   logs: exportLogs.value.length,
+  budget: exportBudgetReport.value ?? undefined,
 }))
 
 function resetExportWorkflowFeedback(): void {
@@ -273,6 +279,7 @@ function resetExportWorkflowFeedback(): void {
   exportSceneProgress.value = null
   exportNodeProgress.value = null
   exportAssetProgress.value = null
+  exportBudgetReport.value = null
 }
 
 function normalizeExportLogLevel(event: SceneExportProgressEvent): SceneExportLogEntry['level'] {
@@ -1237,6 +1244,7 @@ async function exportProjectPackageZip(
   })
 
   const embeddedScenes: ScenePackageSourceScene[] = []
+  const budgetDocuments: StoredSceneDocument[] = []
   const totalToEmbed = orderedSceneIds.length
   for (let index = 0; index < orderedSceneIds.length; index += 1) {
     const id = orderedSceneIds[index]!
@@ -1266,6 +1274,7 @@ async function exportProjectPackageZip(
       if (!document) {
         throw new Error(`无法读取场景：${id}`)
       }
+      budgetDocuments.push(document)
 
       const exportBundle = await prepareStoredSceneJsonExportBundle(document, { ...options, format: 'json' }, reportEvent)
       if (exportBundle.diagnostics.hasBlockingIssues) {
@@ -1345,6 +1354,26 @@ async function exportProjectPackageZip(
   }
 
   updateProgress?.(85, '生成场景包…')
+  exportBudgetReport.value = estimateEditorProjectRuntimeBudget({
+    scenes: budgetDocuments,
+    viewport: {
+      width: 1280,
+      height: 720,
+      pixelRatio: 2,
+      hasPostProcessing: true,
+    },
+    profileId: options.budgetProfileId,
+    targetPlatform: options.targetPlatform,
+  })
+  if (exportBudgetReport.value.level !== 'ok') {
+    reportEvent?.({
+      phase: 'diagnostics',
+      level: 'warning',
+      status: 'completed',
+      message: `当前场景估算内存超过 ${options.budgetProfileId} 预算的 ${exportBudgetReport.value.level === 'critical' ? '90%' : '70%'} 阈值`,
+      detail: `估算 ${Math.round(exportBudgetReport.value.totalBytes / 1024 / 1024)} MB / 预算 ${Math.round(exportBudgetReport.value.totalBudgetBytes / 1024 / 1024)} MB`,
+    })
+  }
   reportEvent?.({
     phase: 'project',
     level: 'info',
@@ -1528,6 +1557,8 @@ const SCENE_PREVIEW_EXPORT_OPTIONS: SceneExportOptions = {
   includeExtras: true,
   rotateCoordinateSystem: false,
   lazyLoadMeshes: true,
+  budgetProfileId: 'mid-high',
+  targetPlatform: 'both',
 }
 
 let lastPreviewBroadcastRevision = 0

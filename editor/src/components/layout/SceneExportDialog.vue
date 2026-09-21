@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue'
 import type { SceneExportLogEntry, SceneExportOptions, SceneExportProgressSummary } from '@/types/scene-export'
+import RuntimeBudgetPanel from '@/components/common/RuntimeBudgetPanel.vue'
+import type { RuntimeResourceBudgetProfileId, RuntimeTargetPlatform } from '@schema/core'
 
 
 const props = defineProps<{
@@ -36,6 +38,18 @@ const PHASE_LABELS: Record<SceneExportLogEntry['phase'], string> = {
   diagnostics: '诊断',
 }
 
+const budgetProfileOptions: Array<{ title: string; value: RuntimeResourceBudgetProfileId }> = [
+  { title: '低端机', value: 'low' },
+  { title: '中高端机', value: 'mid-high' },
+  { title: '高端机', value: 'high' },
+]
+
+const targetPlatformOptions: Array<{ title: string; value: RuntimeTargetPlatform }> = [
+  { title: 'iOS + Android', value: 'both' },
+  { title: 'iOS', value: 'ios' },
+  { title: 'Android', value: 'android' },
+]
+
 function getInitialFormState(): SceneExportOptions {
   const sanitizedName = sanitizeInputName(props.defaultFileName || 'scene')
   return {
@@ -47,6 +61,8 @@ function getInitialFormState(): SceneExportOptions {
     rotateCoordinateSystem: !!props.initialOptions.rotateCoordinateSystem,
     lazyLoadMeshes: props.initialOptions.lazyLoadMeshes ?? true,
     embedAssets: props.initialOptions.embedAssets ?? false,
+    budgetProfileId: props.initialOptions.budgetProfileId ?? 'mid-high',
+    targetPlatform: props.initialOptions.targetPlatform ?? 'both',
     // Project export bundles are JSON-only.
     format: 'json',
   }
@@ -70,6 +86,7 @@ const progressLabel = computed(() => {
 })
 
 const hasLogs = computed(() => Array.isArray(props.logs) && props.logs.length > 0)
+const budgetReport = computed(() => props.exportSummary?.budget ?? null)
 
 const failedEntries = computed(() => props.logs.filter((entry: SceneExportLogEntry) => entry.status === 'failed' || entry.level === 'error'))
 
@@ -362,6 +379,37 @@ function handleConfirm() {
               />
             </div>
 
+            <div class="budget-options-grid">
+              <v-select
+                v-model="form.budgetProfileId"
+                :items="budgetProfileOptions"
+                item-title="title"
+                item-value="value"
+                label="预算档位"
+                density="comfortable"
+                :disabled="exporting"
+              />
+              <v-select
+                v-model="form.targetPlatform"
+                :items="targetPlatformOptions"
+                item-title="title"
+                item-value="value"
+                label="目标平台"
+                density="comfortable"
+                :disabled="exporting"
+              />
+            </div>
+
+            <div v-if="budgetReport" class="export-budget-section">
+              <div class="sidebar-section-title">内存预算</div>
+              <RuntimeBudgetPanel
+                :report="budgetReport"
+                :profile-id="form.budgetProfileId"
+                :target-platform="form.targetPlatform"
+                :show-controls="false"
+              />
+            </div>
+
             <transition name="fade">
               <div v-if="exporting || progressValue > 0 || hasLogs" class="progress-section" :class="{ 'progress-section--error': hasExportError }">
                 <div class="progress-section__header">
@@ -618,6 +666,18 @@ function handleConfirm() {
   border: 1px solid rgba(145, 181, 234, 0.12);
   background: linear-gradient(180deg, rgba(37, 48, 68, 0.54), rgba(22, 29, 40, 0.44));
   backdrop-filter: blur(12px);
+}
+
+.budget-options-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+
+.export-budget-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .summary-grid {

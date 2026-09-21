@@ -199,18 +199,6 @@ function isTextureSlotInherited(slot: SceneMaterialTextureSlot): boolean {
   return supportsTextureInheritance.value && !isTextureSlotOverridden(slot) && !formTextures[slot]
 }
 
-function resolveTextureSlotStateLabel(slot: SceneMaterialTextureSlot): string | null {
-  if (!supportsTextureInheritance.value) {
-    return null
-  }
-  if (isTextureSlotInherited(slot)) {
-    return '继承模型贴图'
-  }
-  if (isTextureSlotOverridden(slot) && !formTextures[slot]) {
-    return '已移除模型贴图'
-  }
-  return null
-}
 
 /** Drops this slot from the override list so the model texture shows again. */
 function restoreTextureInheritance(slot: SceneMaterialTextureSlot) {
@@ -1478,12 +1466,7 @@ async function handleImportFileChange(event: Event) {
                     <div class="texture-info">
                       <div class="texture-name">{{ resolveTextureName(slot) }}</div>
                       <div class="texture-slot-label">{{ TEXTURE_LABELS[slot] }}</div>
-                      <div
-                        v-if="resolveTextureSlotStateLabel(slot)"
-                        class="texture-slot-state"
-                      >
-                        {{ resolveTextureSlotStateLabel(slot) }}
-                      </div>
+
                     </div>
                     <div class="texture-actions">
                       <v-btn

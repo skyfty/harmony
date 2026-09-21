@@ -2,6 +2,7 @@
 export { decode, encode } from '@msgpack/msgpack'
 
 import * as THREE from 'three'
+export * from './runtimeResourceBudget'
 import type { SceneNodeInstanceLayout } from './instanceLayout'
 import type { TerrainScatterStoreSnapshot } from './terrain-scatter'
 import type { AssetBundleHashAlgorithm } from './asset-api'
