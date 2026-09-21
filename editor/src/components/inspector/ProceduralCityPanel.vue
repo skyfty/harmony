@@ -27,6 +27,7 @@ const styleOptions: Array<{ title: string; value: ProceduralCityStyle }> = [
   { title: 'Classic', value: 'classic' },
   { title: 'Warm', value: 'warm' },
   { title: 'Cool', value: 'cool' },
+  { title: 'Solid', value: 'solid' },
 ]
 
 function updateNumber(key: keyof ProceduralCityComponentProps, value: number | string | null): void {
@@ -52,6 +53,20 @@ function updateStyle(value: string | null): void {
     nodeId,
     component.id,
     { style: value as ProceduralCityStyle },
+    { autoSaveMode: 'interactive' },
+  )
+}
+
+function updateColor(value: string | null): void {
+  const component = proceduralCityComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId || !value) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(
+    nodeId,
+    component.id,
+    { solidColor: value },
     { autoSaveMode: 'interactive' },
   )
 }
@@ -132,6 +147,16 @@ function handleRemoveComponent(): void {
           :model-value="cityProps.style"
           :disabled="!proceduralCityComponent?.enabled"
           @update:modelValue="(value) => updateStyle(value)"
+        />
+        <v-text-field
+          v-if="cityProps.style === 'solid'"
+          label="Solid Color"
+          density="compact"
+          variant="underlined"
+          type="color"
+          :model-value="cityProps.solidColor"
+          :disabled="!proceduralCityComponent?.enabled"
+          @update:modelValue="(value) => updateColor(value)"
         />
         <v-text-field
           label="Density"

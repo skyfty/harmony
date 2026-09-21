@@ -22,7 +22,9 @@ export const PROCEDURAL_CITY_COMPONENT_TYPE = 'proceduralCity'
 export const PROCEDURAL_CITY_HOST_USER_DATA_KEY = 'proceduralCityHost'
 const PROCEDURAL_CITY_RUNTIME_GROUP_KEY = '__harmonyProceduralCityRuntimeGroup'
 
-export type ProceduralCityStyle = 'office' | 'bright' | 'classic' | 'warm' | 'cool'
+export type ProceduralCityStyle = 'office' | 'bright' | 'classic' | 'warm' | 'cool' | 'solid'
+
+export const PROCEDURAL_CITY_SOLID_DEFAULT_COLOR = '#9aa7b0'
 
 export const PROCEDURAL_CITY_DEFAULT_PROPS: ProceduralCityComponentProps = {
   seed: 1337,
@@ -38,6 +40,7 @@ export const PROCEDURAL_CITY_DEFAULT_PROPS: ProceduralCityComponentProps = {
   roadSetback: 2,
   junctionSetback: 8,
   maxBuildings: 1200,
+  solidColor: PROCEDURAL_CITY_SOLID_DEFAULT_COLOR,
   style: 'office',
 }
 
@@ -55,6 +58,7 @@ export interface ProceduralCityComponentProps {
   roadSetback: number
   junctionSetback: number
   maxBuildings: number
+  solidColor: string
   style: ProceduralCityStyle
 }
 
@@ -206,10 +210,25 @@ const PROCEDURAL_CITY_STYLE_THEMES: Record<ProceduralCityStyle, ProceduralCitySt
     bandTint: 0.03,
     windowGap: 0.2,
   },
+  solid: {
+    parcelPalette: [PROCEDURAL_CITY_SOLID_DEFAULT_COLOR],
+    wallShades: [PROCEDURAL_CITY_SOLID_DEFAULT_COLOR],
+    frameShade: PROCEDURAL_CITY_SOLID_DEFAULT_COLOR,
+    windowLit: [PROCEDURAL_CITY_SOLID_DEFAULT_COLOR],
+    windowDark: [PROCEDURAL_CITY_SOLID_DEFAULT_COLOR],
+    vertexBottomShade: 1,
+    vertexTopShade: 1,
+    floorBandAlpha: 0,
+    shadowAlpha: 0,
+    litChance: 0,
+    alternateFloorBands: false,
+    bandTint: 0,
+    windowGap: 0,
+  },
 }
 
 function resolveProceduralCityStyle(style: unknown): ProceduralCityStyle {
-  if (style === 'office' || style === 'bright' || style === 'classic' || style === 'warm' || style === 'cool') {
+  if (style === 'office' || style === 'bright' || style === 'classic' || style === 'warm' || style === 'cool' || style === 'solid') {
     return style as ProceduralCityStyle
   }
   return 'bright'
@@ -217,6 +236,16 @@ function resolveProceduralCityStyle(style: unknown): ProceduralCityStyle {
 
 function getProceduralCityStyleTheme(style: unknown): ProceduralCityStyleTheme {
   return PROCEDURAL_CITY_STYLE_THEMES[resolveProceduralCityStyle(style)]
+}
+
+function normalizeProceduralCitySolidColor(value: unknown): string {
+  const source = typeof value === 'string' ? value.trim() : ''
+  const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(source)
+  if (!match) {
+    return PROCEDURAL_CITY_SOLID_DEFAULT_COLOR
+  }
+  const hex = match[1] ?? ''
+  return `#${hex.length === 3 ? hex.split('').map((char) => `${char}${char}`).join('') : hex.toLowerCase()}`
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -645,8 +674,17 @@ function rotate2(point: THREE.Vector2, angle: number): THREE.Vector2 {
   return new THREE.Vector2(point.x * cos - point.y * sin, point.x * sin + point.y * cos)
 }
 
-function createParcelColor(random: () => number, style: ProceduralCityStyle): THREE.Color {
-  if (style === 'office') {
+function createParcelColor(random: () => number, props: ProceduralCityComponentProps): THREE.Color {
+  if (props.style === 'solid') {
+    const base = new THREE.Color(normalizeProceduralCitySolidColor(props.solidColor))
+    base.offsetHSL(
+      randomRange(random, -0.006, 0.006),
+      randomRange(random, -0.03, 0.03),
+      randomRange(random, -0.035, 0.035),
+    )
+    return base
+  }
+  if (props.style === 'office') {
     const value = 1 - random() * random()
     return new THREE.Color(
       value + random() * 0.1,
@@ -654,7 +692,7 @@ function createParcelColor(random: () => number, style: ProceduralCityStyle): TH
       value + random() * 0.1,
     )
   }
-  const theme = getProceduralCityStyleTheme(style)
+  const theme = getProceduralCityStyleTheme(props.style)
   const base = new THREE.Color(theme.parcelPalette[Math.floor(random() * theme.parcelPalette.length)]!)
   base.offsetHSL(
     randomRange(random, -0.014, 0.014),
@@ -682,7 +720,7 @@ function createParcel(
     depth,
     height,
     variantIndex: Math.floor(random() * 12),
-    color: createParcelColor(random, props.style),
+    color: createParcelColor(random, props),
   }
 }
 
@@ -1055,6 +1093,14 @@ function getWallMaterial(style: unknown): THREE.Material {
   if (cachedMaterial) {
     return cachedMaterial
   }
+  if (resolvedStyle === 'solid') {
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+    })
+    wallMaterialByStyle.set(resolvedStyle, material)
+    return material
+  }
   const material = new THREE.MeshBasicMaterial({
     map: loadFacadeTexture(resolvedStyle),
     vertexColors: true,
@@ -1292,6 +1338,7 @@ export function clampProceduralCityComponentProps(
     roadSetback: clampNumber(props?.roadSetback, PROCEDURAL_CITY_DEFAULT_PROPS.roadSetback, 0, 100),
     junctionSetback: clampNumber(props?.junctionSetback, PROCEDURAL_CITY_DEFAULT_PROPS.junctionSetback, 0, 200),
     maxBuildings: Math.trunc(clampNumber(props?.maxBuildings, PROCEDURAL_CITY_DEFAULT_PROPS.maxBuildings, 0, 20000)),
+    solidColor: normalizeProceduralCitySolidColor(props?.solidColor),
     style: resolveProceduralCityStyle(props?.style ?? PROCEDURAL_CITY_DEFAULT_PROPS.style),
   }
 }
