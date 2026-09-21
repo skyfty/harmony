@@ -396,7 +396,7 @@ import '@minisheep/three-platform-adapter/wechat';
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import type { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import type { UseCanvasResult } from '@minisheep/three-platform-adapter';
 import { KTX2Loader as PlatformKTX2Loader } from '@minisheep/three-platform-adapter/override/jsm/loaders/KTX2Loader';
 import { installWechatWorkerShim, isWechatSharedWorkerSupported, terminateWechatSharedWorker } from '@harmony/utils/wechat-shared-worker';
@@ -1440,24 +1440,24 @@ let viewerResourceCache: ResourceCache | null = null;
 let activeScenePackageAssetOverrides: SceneGraphBuildOptions['assetOverrides'] | null = null;
 let activeScenePackagePkg: ScenePackageUnzipped | null = null;
 let sceneDownloadController: AbortController | null = null;
-type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
-let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
-async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
-  if (!rgbeLoaderClassPromise) {
-    rgbeLoaderClassPromise = import('three/examples/jsm/loaders/RGBELoader.js').then(
-      (module) => module.RGBELoader as RGBELoaderClass,
+type HDRLoaderClass = new (manager?: THREE.LoadingManager) => HDRLoader;
+let hdrLoaderClassPromise: Promise<HDRLoaderClass> | null = null;
+async function createHdrLoader(manager?: THREE.LoadingManager): Promise<HDRLoader> {
+  if (!hdrLoaderClassPromise) {
+    hdrLoaderClassPromise = import('three/examples/jsm/loaders/HDRLoader.js').then(
+      (module) => module.HDRLoader as HDRLoaderClass,
     );
   }
-  const LoaderClass = await rgbeLoaderClassPromise;
+  const LoaderClass = await hdrLoaderClassPromise;
   return new LoaderClass(manager);
 }
 
 async function loadRgbETextureFromUrl(url: string, manager?: THREE.LoadingManager): Promise<THREE.DataTexture> {
-  const hdrLoader = await createRgbELoader(manager);
+  const hdrLoader = await createHdrLoader(manager);
   const buffer = await requestBinaryFromUrl(url);
   const texData = hdrLoader.parse(buffer);
   const texture = new THREE.DataTexture(texData.data as any, texData.width, texData.height);
-  texture.type = texData.type;
+  texture.type = texData.type ?? THREE.HalfFloatType;
   texture.colorSpace = THREE.LinearSRGBColorSpace;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
@@ -13580,7 +13580,7 @@ function createRemoteMultiuserNicknameRuntime(displayName: string): RemoteMultiu
     throw new Error('Unable to acquire a 2D context for remote multiuser nicknames');
   }
 
-  const texture = new THREE.CanvasTexture(canvas as CanvasImageSource);
+  const texture = new THREE.CanvasTexture(canvas as unknown as HTMLCanvasElement);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
@@ -21711,7 +21711,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   renderer.setPixelRatio(pixelRatio);
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.type = THREE.PCFShadowMap
   // Reduce the cost of the transmission buffer for scenes that use physical materials.
   ;(renderer as THREE.WebGLRenderer & { transmissionResolutionScale?: number }).transmissionResolutionScale = 0.5
 

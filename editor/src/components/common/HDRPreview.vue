@@ -6,7 +6,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js'
 import { disposeSkyCubeTexture, extractSkycubeZipFacesAsync, loadSkyCubeTexture, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
 
 const props = defineProps<{
@@ -16,7 +16,7 @@ const props = defineProps<{
 }>()
 
 const container = ref<HTMLDivElement | null>(null)
-const loader = new RGBELoader().setDataType(THREE.FloatType)
+const loader = new HDRLoader().setDataType(THREE.FloatType)
 
 let renderer: THREE.WebGLRenderer | null = null
 let scene: THREE.Scene | null = null

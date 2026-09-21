@@ -1111,6 +1111,8 @@ class TransformControlsRoot extends Object3D {
 
 	dispose() {
 
+		super.dispose();
+
 		this.traverse( function ( child ) {
 
 			if ( child.geometry ) child.geometry.dispose();

@@ -76,16 +76,16 @@
     "polygon-clipping": "^0.15.7",
     "robust-predicates": "^1.0.3",
     "splaytree": "^3.2.3",
-    "three": "^0.172.0",
+    "three": "^0.186.0",
     "three-nebula": "^10.0.3",
     "three-csm": "^4.2.1",
-    "three-mesh-bvh": "^0.9.1",
-    "three-player-controller": "0.4.9",
+    "three-mesh-bvh": "^0.9.15",
+    "three-player-controller": "0.6.2",
     "uuid": "^3.4.0"
   },
   "devDependencies": {
     "@harmony/tools": "file:../tools",
-    "@types/three": "^0.162.0",
+    "@types/three": "^0.186.0",
     "typescript": "^5.4.5"
   }
 }

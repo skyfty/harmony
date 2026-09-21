@@ -3,7 +3,7 @@ import {
   AmbientLight,
   Box3,
   BoxGeometry,
-  Clock,
+  Timer,
   Color,
   DirectionalLight,
   HemisphereLight,
@@ -124,7 +124,7 @@ let physicsBridgeGravityStrength = Number.NaN
 let physicsBridgeBodyId = 0
 let physicsBridgeVehicleId = 0
 let physicsBridgeWheelCount = 0
-let renderClock = new Clock()
+let renderClock = new Timer()
 const tempBox = new Box3()
 const tempSize = new Vector3()
 const tempQuaternion = new Quaternion()
@@ -439,7 +439,7 @@ function disposePreview() {
     cancelAnimationFrame(animationFrame)
     animationFrame = null
   }
-  renderClock = new Clock()
+  renderClock = new Timer()
 }
 
 function disposePhysics() {
@@ -1321,9 +1321,10 @@ function stepPreviewPhysics(deltaTime: number): void {
 
 function startRenderLoop() {
   if (!renderer || !previewScene || !camera) return
-  renderClock = new Clock()
+  renderClock = new Timer()
   const renderLoop = () => {
     animationFrame = requestAnimationFrame(renderLoop)
+    renderClock.update()
     stepPreviewPhysics(renderClock.getDelta())
     updateVisualsFromPhysics()
     orbitControls?.update()

@@ -6,7 +6,7 @@ export const DEFAULT_KTX2_TRANSCODER_PATH = '../examples/jsm/libs/basis/'
 
 // Kept for backward compatibility with existing call sites. The loader below
 // now prefers the bundled Basis transcoder assets instead of a CDN path.
-export const FAST_KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.172.0/examples/jsm/libs/basis/'
+export const FAST_KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.186.0/examples/jsm/libs/basis/'
 
 export interface Ktx2LoaderOptions {
   manager?: THREE.LoadingManager

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js';
+import type { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 import type {
   SceneMaterial,
   SceneMaterialProps,
@@ -18,18 +18,18 @@ import { hashString, stableSerialize } from './stableSerialize';
 import { getDefaultUvDebugTexture } from './debugTextures';
 import { FAST_KTX2_TRANSCODER_PATH, loadSharedKtx2Texture } from './ktx2Loader';
 
-type RGBELoaderClass = new (manager?: THREE.LoadingManager) => RGBELoader;
-let rgbeLoaderClassPromise: Promise<RGBELoaderClass> | null = null;
+type HDRLoaderClass = new (manager?: THREE.LoadingManager) => HDRLoader;
+let hdrLoaderClassPromise: Promise<HDRLoaderClass> | null = null;
 
-async function createRgbELoader(manager?: THREE.LoadingManager): Promise<RGBELoader> {
-  if (!rgbeLoaderClassPromise) {
+async function createHdrLoader(manager?: THREE.LoadingManager): Promise<HDRLoader> {
+  if (!hdrLoaderClassPromise) {
     // RGBE loading stays on the standard three examples module; only the
     // platform-sensitive loader entry points are overridden in the viewer build.
-    rgbeLoaderClassPromise = import('three/examples/jsm/loaders/RGBELoader.js').then(
-      (module) => module.RGBELoader as RGBELoaderClass,
+    hdrLoaderClassPromise = import('three/examples/jsm/loaders/HDRLoader.js').then(
+      (module) => module.HDRLoader as HDRLoaderClass,
     );
   }
-  const LoaderClass = await rgbeLoaderClassPromise;
+  const LoaderClass = await hdrLoaderClassPromise;
   return new LoaderClass(manager).setDataType(THREE.FloatType);
 }
 
@@ -52,7 +52,7 @@ export interface SceneMaterialFactoryOptions {
   resources: SceneResourceSummaryEntry[];
   loadingManager?: THREE.LoadingManager;
   textureLoader?: THREE.TextureLoader;
-  hdrLoader?: RGBELoader;
+  hdrLoader?: HDRLoader;
   warn?: (message: string) => void;
 }
 
@@ -649,8 +649,8 @@ export class SceneMaterialFactory {
   private readonly warn?: (message: string) => void;
   private readonly loadingManager: THREE.LoadingManager;
   private readonly textureLoader: THREE.TextureLoader;
-  private readonly hdrLoader: RGBELoader | null;
-  private hdrLoaderPromise: Promise<RGBELoader> | null = null;
+  private readonly hdrLoader: HDRLoader | null;
+  private hdrLoaderPromise: Promise<HDRLoader> | null = null;
   private readonly resourceEntrys: SceneResourceSummaryEntry[];
   constructor(options: SceneMaterialFactoryOptions) {
     if (!options?.provider) {
@@ -674,12 +674,12 @@ export class SceneMaterialFactory {
     }
   }
 
-  private getHdrLoader(): Promise<RGBELoader> {
+  private getHdrLoader(): Promise<HDRLoader> {
     if (this.hdrLoader) {
       return Promise.resolve(this.hdrLoader);
     }
     if (!this.hdrLoaderPromise) {
-      this.hdrLoaderPromise = createRgbELoader(this.loadingManager);
+      this.hdrLoaderPromise = createHdrLoader(this.loadingManager);
     }
     return this.hdrLoaderPromise;
   }

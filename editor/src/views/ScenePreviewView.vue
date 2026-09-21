@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, toRaw, watch, type ComponentPublicInstance } from 'vue'
 import * as THREE from 'three'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
 import {
 	DEFAULT_ENVIRONMENT_SETTINGS,
@@ -1726,7 +1726,7 @@ const behaviorCollisionState = new Map<string, BehaviorCollisionState>()
 const behaviorCollisionTargetBoxScratch = new THREE.Box3()
 const behaviorCollisionSubjectBoxScratch = new THREE.Box3()
 const behaviorCollisionPointScratch = new THREE.Vector3()
-const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
+const rgbeLoader = new HDRLoader().setDataType(THREE.FloatType)
 type ScenePreviewKtx2Loader = Awaited<ReturnType<typeof createKtx2Loader>>
 const materialTextureCache = new Map<string, THREE.Texture>()
 const pendingMaterialTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
@@ -2257,7 +2257,7 @@ function formatGroundCollisionDiagnosticPayload(payload: Record<string, unknown>
 	}
 }
 
-const clock = new THREE.Clock()
+const clock = new THREE.Timer()
 const instancedMeshGroup = new THREE.Group()
 instancedMeshGroup.name = 'InstancedMeshes'
 const instancedMeshes: THREE.InstancedMesh[] = []
@@ -7143,7 +7143,7 @@ function attachBehaviorSoundCompletion(
 	sound: THREE.Audio | THREE.PositionalAudio,
 	onEnded?: () => void,
 ): void {
-	const source = sound.source
+	const source = sound.source as AudioBufferSourceNode | null
 	if (!source) {
 		return
 	}
@@ -10956,7 +10956,7 @@ function initRenderer() {
 	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance' })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
 	renderer.shadowMap.enabled = true
-	renderer.shadowMap.type = THREE.PCFSoftShadowMap
+	renderer.shadowMap.type = THREE.PCFShadowMap
 	// Transmission is one of the most expensive extra passes in scenes with physical materials.
 	// Lowering this buffer keeps the preview responsive while preserving the main render target.
 	;(renderer as THREE.WebGLRenderer & { transmissionResolutionScale?: number }).transmissionResolutionScale = 0.5
@@ -11497,10 +11497,11 @@ function startAnimationLoop() {
 	if (!currentRenderer || !currentScene || !activeCamera) {
 		return
 	}
-	clock.start()
+	clock.reset()
 	const renderLoop = () => {
 		animationFrameHandle = requestAnimationFrame(renderLoop)
 		fpsStats?.begin()
+		clock.update()
 		const delta = clock.getDelta()
 		if (isInstancingDebugVisible.value) {
 			instancedMatrixUploadMeshes.clear()

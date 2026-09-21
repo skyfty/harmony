@@ -310,7 +310,7 @@ function createSignboardEntry(scene: THREE.Scene, nodeId: string, labelText: str
     throw new Error('Unable to acquire a 2D context for signboard billboards')
   }
 
-  const texture = new THREE.CanvasTexture(canvas as CanvasImageSource)
+  const texture = new THREE.CanvasTexture(canvas as unknown as HTMLCanvasElement)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.generateMipmaps = false
   texture.minFilter = THREE.LinearFilter

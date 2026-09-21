@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
 import stylesText from './styles.css?raw'
 import {
@@ -577,7 +577,7 @@ async function loadEnvironmentFile(file: File): Promise<void> {
   const url = URL.createObjectURL(file)
   try {
     const extension = resolveFileExtension(file.name)
-    const loader = extension === 'exr' ? new EXRLoader() : new RGBELoader()
+    const loader = extension === 'exr' ? new EXRLoader() : new HDRLoader()
     const texture = await loader.loadAsync(url)
     texture.mapping = THREE.EquirectangularReflectionMapping
     const previous = environmentTexture

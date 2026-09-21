@@ -134,7 +134,7 @@ function createCirclesTexture(): THREE.CanvasTexture {
 
   context.putImageData(imageData, 0, 0)
 
-  const texture = new THREE.CanvasTexture(canvas as CanvasImageSource)
+  const texture = new THREE.CanvasTexture(canvas as unknown as HTMLCanvasElement)
   texture.colorSpace = THREE.NoColorSpace
   texture.generateMipmaps = false
   texture.minFilter = THREE.LinearFilter

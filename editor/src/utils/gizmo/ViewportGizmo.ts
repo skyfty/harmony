@@ -1,6 +1,6 @@
 import {
   Camera,
-  Clock,
+  Timer,
   Matrix4,
   Mesh,
   MeshBasicMaterial,
@@ -115,7 +115,7 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
   private _domRect!: DOMRect;
   private _dragging: boolean = false;
   private _distance: number = 0;
-  private _clock: Clock = new Clock();
+  private _clock: Timer = new Timer();
   private _targetQuaternion = new Quaternion();
   private _quaternionStart = new Quaternion();
   private _quaternionEnd = new Quaternion();
@@ -454,6 +454,8 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
 
   /** Cleans up all resources including geometries, materials, textures, and event listeners. */
   dispose() {
+    super.dispose();
+
     this.detachControls();
 
     this.children.forEach((child) => {
@@ -511,6 +513,7 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
 
     if (this._controls) this._controls.enabled = false;
 
+    this._clock.update();
     const delta = this._clock.getDelta();
 
     const step = delta * GIZMO_TURN_RATE * this.speed;
@@ -591,7 +594,7 @@ export class ViewportGizmo extends Object3D<ViewportGizmoEventMap> {
     }
 
     this.animating = true;
-    this._clock.start();
+    this._clock.reset();
     this.dispatchEvent({ type: "start" });
   }
 

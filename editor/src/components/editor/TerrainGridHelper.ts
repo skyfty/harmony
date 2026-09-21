@@ -249,6 +249,8 @@ export class TerrainGridHelper extends THREE.Object3D {
   }
 
   dispose(): void {
+    super.dispose()
+
     this.currentDefinition = null
     this.disableAllMaterials()
     this.materialStates.clear()

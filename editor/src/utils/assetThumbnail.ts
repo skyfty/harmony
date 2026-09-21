@@ -1,6 +1,6 @@
 import Pica from 'pica'
 import * as THREE from 'three'
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js'
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import { createKtx2Loader, createKtx2SupportRenderer, disposeKtx2SupportRenderer, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
 import { disposeSkyCubeTexture, extractSkycubeZipFacesAsync, loadSkyCubeTexture, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
@@ -305,7 +305,7 @@ async function generateHdriThumbnail(file: File, width: number, height: number):
   const disposeStack: Array<() => void> = []
 
   try {
-    const loader = new RGBELoader().setDataType(THREE.FloatType)
+    const loader = new HDRLoader().setDataType(THREE.FloatType)
     const texture = await loader.loadAsync(url)
     texture.mapping = THREE.EquirectangularReflectionMapping
     texture.colorSpace = THREE.LinearSRGBColorSpace

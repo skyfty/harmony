@@ -1526,7 +1526,7 @@ export interface LightShadowProperties {
   bias?: number
   /** Shadow normal bias to reduce acne on low-angle surfaces. */
   normalBias?: number
-  /** Blur radius (used by PCFSoftShadowMap). */
+  /** Blur radius (used by PCFShadowMap). */
   radius?: number
   /** Shadow camera near plane. */
   cameraNear?: number

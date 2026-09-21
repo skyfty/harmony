@@ -91,6 +91,8 @@ const inheritedOverrideLabel = computed(() => {
   }
   return '源模型自带材质'
 })
+void inheritedMaterialTypeLabel
+void inheritedOverrideLabel
 const internalActiveId = ref<string | null>(props.activeNodeMaterialId ?? null)
 const dragOverSlotId = ref<string | null>(null)
 const isListDragActive = ref(false)

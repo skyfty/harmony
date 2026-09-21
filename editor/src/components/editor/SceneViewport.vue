@@ -58,7 +58,7 @@ import { extractCompiledStaticMeshMetadataFromUserData, createCompiledStaticMesh
 // @ts-ignore - local plugin has no .d.ts declaration file
 import { TransformControls } from '@/utils/transformControls.js'
 import Stats from 'three/examples/jsm/libs/stats.module.js'
-import { RGBELoader } from 'three/examples/jsm/loaders/RGBELoader.js'
+import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js'
 // RectAreaLight support removed; no import from lightsRuntime required.
 
 import type {
@@ -1338,7 +1338,7 @@ const guideRouteWaypointLabelMeshes = getGuideRouteWaypointLabelMeshes()
 
 // snap controllers disabled in SceneViewport
 
-const rgbeLoader = new RGBELoader().setDataType(THREE.FloatType)
+const rgbeLoader = new HDRLoader().setDataType(THREE.FloatType)
 const textureCache = new Map<string, THREE.Texture>()
 const pendingTextureRequests = new Map<string, Promise<THREE.Texture | null>>()
 
@@ -2002,7 +2002,7 @@ const snapController = useSnapController({
   enablePlacementSideSnap: true,
 })
 
-const renderClock = new THREE.Clock()
+const renderClock = new THREE.Timer()
 let effectRuntimeTickers: Array<(delta: number) => void> = []
 const WARP_GATE_PLACEHOLDER_KEY = '__harmonyWarpGatePlaceholder'
 type WarpGatePlaceholderHandle = { controller: WarpGateEffectInstance | null }
@@ -14476,7 +14476,7 @@ function initScene() {
   renderer.setPixelRatio(pixelRatio)
   renderer.setSize(width, height)
   renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.shadowMap.type = THREE.PCFShadowMap
   renderer.outputColorSpace = THREE.SRGBColorSpace
 
   scene = new THREE.Scene()
@@ -14609,7 +14609,7 @@ function initScene() {
   })
   resizeObserver.observe(viewportEl.value)
 
-  renderClock.start()
+  renderClock.reset()
   animate()
   applyCameraState(props.cameraState)
 }
@@ -15005,7 +15005,8 @@ function animate() {
   stats?.begin()
 
   // frameStart removed (was used only for temporary profiling)
-  const delta = renderClock.running ? renderClock.getDelta() : 0
+  renderClock.update()
+  const delta = renderClock.getDelta()
   const effectiveDelta = delta > 0 ? Math.min(delta, 0.1) : 0
   const prof: Record<string, number> = {}
 
@@ -15324,7 +15325,7 @@ function disposeScene() {
   postprocessing.dispose()
   renderer?.dispose()
   renderer = null
-  renderClock.stop()
+  renderClock.dispose()
 
   if (gridHighlight) {
     gridHighlight.removeFromParent()

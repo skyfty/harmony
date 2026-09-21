@@ -18,8 +18,8 @@ importers:
         specifier: ^5.0.0
         version: 5.0.0
       '@types/three':
-        specifier: ^0.171.0
-        version: 0.171.0
+        specifier: ^0.186.0
+        version: 0.186.0
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
@@ -69,8 +69,8 @@ importers:
         specifier: ^4.56.1
         version: 4.104.0(ws@8.19.0)(zod@3.25.76)
       three:
-        specifier: ^0.172.0
-        version: 0.172.0
+        specifier: ^0.186.0
+        version: 0.186.0
       tsx:
         specifier: ^4.15.7
         version: 4.21.0
@@ -126,6 +126,29 @@ importers:
 
 packages:
 
+  3d-tiles-renderer@0.4.28:
+    resolution: {integrity: sha512-eDFg3fTgnFeoa6kU9oyAQIci/N/CJq6JUi/ZUrmDyqLzEDH9mWd9FBs+NqS+0eO8b7y4HjIWfUVnf8o03AFtSA==}
+    peerDependencies:
+      '@babylonjs/core': '>=8.0.0'
+      '@babylonjs/loaders': '>=8.0.0'
+      '@react-three/fiber': ^8.17.9 || ^9.0.0
+      react: ^18.3.1 || ^19.0.0
+      react-dom: ^18.3.1 || ^19.0.0
+      three: '>=0.167.0'
+    peerDependenciesMeta:
+      '@babylonjs/core':
+        optional: true
+      '@babylonjs/loaders':
+        optional: true
+      '@react-three/fiber':
+        optional: true
+      react:
+        optional: true
+      react-dom:
+        optional: true
+      three:
+        optional: true
+
   '@babel/runtime@7.29.7':
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
@@ -133,6 +156,9 @@ packages:
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
     engines: {node: '>=12'}
+
+  '@dimforge/rapier3d-compat@0.12.0':
+    resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
 
   '@esbuild/aix-ppc64@0.27.3':
     resolution: {integrity: sha512-9fJMTNFTWZMh5qwrBItuziu834eOCUcEqymSH7pY+zoMVEZg3gcPuBNxH1EvfVYe9h0x/Ptw8KBzv7qxb7l8dg==}
@@ -328,6 +354,12 @@ packages:
     resolution: {integrity: sha512-x/iUDjcS90W69PryLDIMgFyV21YLTnG9zOpPXS7Bkt2b8AsY3zZsIpOLBkYr9fBcF3HbkKaER5hOBZLfpLgYNw==}
     engines: {node: '>= 14.0.0'}
 
+  '@mapbox/point-geometry@1.1.0':
+    resolution: {integrity: sha512-YGcBz1cg4ATXDCM/71L9xveh4dynfGmcLDqufR+nQQy3fKwsAZsWd/x4621/6uJaeB9mwOHE6hPeDgXz9uViUQ==}
+
+  '@mapbox/vector-tile@2.0.5':
+    resolution: {integrity: sha512-pXj8m7KTsqZt+1jsE0xIpGvqTSbblfkuEJL/NJmNePMtEwxO8V3XMDo9WMSfDeqHvCtBI9Lmt4mGcGR10zecmw==}
+
   '@mongodb-js/saslprep@1.4.6':
     resolution: {integrity: sha512-y+x3H1xBZd38n10NZF/rEBlvDOOMQ6LKUTHqr8R9VkJ+mmQOYtJFxIlkkK8fZrtOiL6VixbOBWMbZGBdal3Z1g==}
 
@@ -485,6 +517,9 @@ packages:
   '@types/fs-extra@11.0.4':
     resolution: {integrity: sha512-yTbItCNreRooED33qjunPthRcSjERP1r4MqCZc7wv0u2sUkzTFp45tgUfS5+r7FrZPdmCCNflLhVSP/o+SemsQ==}
 
+  '@types/geojson@7946.0.16':
+    resolution: {integrity: sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==}
+
   '@types/http-assert@1.5.6':
     resolution: {integrity: sha512-TTEwmtjgVbYAzZYWyeHPrrtWnfVkm8tQkP8P21uQifPgMRgjrow3XDEYqucuC8SKZJT7pUnhU/JymvjggxO9vw==}
 
@@ -548,8 +583,8 @@ packages:
   '@types/stats.js@0.17.4':
     resolution: {integrity: sha512-jIBvWWShCvlBqBNIZt0KAshWpvSjhkwkEu4ZUcASoAvhmrgAUI2t1dXrjSL4xXVLB4FznPrIsX3nKXFl/Dt4vA==}
 
-  '@types/three@0.171.0':
-    resolution: {integrity: sha512-oLuT1SAsT+CUg/wxUTFHo0K3NtJLnx9sJhZWQJp/0uXqFpzSk1hRHmvWvpaAWSfvx2db0lVKZ5/wV0I0isD2mQ==}
+  '@types/three@0.186.0':
+    resolution: {integrity: sha512-mxYSBpDC+D0pLfSP6sW4WZTcT+nrtmZcimMqnVmy36Hte3XpeYSrvgg4TRdaM1GemGog1AWzI5qL2VoIfMXbJQ==}
 
   '@types/webidl-conversions@7.0.3':
     resolution: {integrity: sha512-CiJJvcRtIgzadHCYXw7dqEnMNRjhGZlYK05Mj9OyktqV8uVT8fD2BFOB7S1uwBE3Kj2Z+4UyPmFw/Ixgw/LAlA==}
@@ -572,9 +607,6 @@ packages:
     peerDependenciesMeta:
       typescript:
         optional: true
-
-  '@webgpu/types@0.1.69':
-    resolution: {integrity: sha512-RPmm6kgRbI8e98zSD3RVACvnuktIja5+yLgDAkTmxLr90BEwdTXRQWNLF3ETTTyH/8mKhznZuN5AveXYFEsMGQ==}
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -853,6 +885,9 @@ packages:
   fflate@0.8.2:
     resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
 
+  fflate@0.8.3:
+    resolution: {integrity: sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==}
+
   fill-range@7.1.1:
     resolution: {integrity: sha512-YsGpe3WHLK8ZYi4tWDg2Jy3ebRz2rXowDxnld4bkQB00cc/1Zw9AWnC0i9ztDJitivtQvaI9KaLyKrc+hBW0yg==}
     engines: {node: '>=8'}
@@ -1119,8 +1154,8 @@ packages:
     resolution: {integrity: sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==}
     engines: {node: '>= 8'}
 
-  meshoptimizer@0.18.1:
-    resolution: {integrity: sha512-ZhoIoL7TNV4s5B6+rx5mC//fw8/POGyNxS/DZyCJeiZ12ScLfVwRE/GfsxwiTkMYYD5DmK2/JXnEVXqL4rF+Sw==}
+  meshoptimizer@1.1.1:
+    resolution: {integrity: sha512-oRFNWJRDA/WTrVj7NWvqa5HqE1t9MYDj2VaWirQCzCCrAd2GHrqR/sQezCxiWATPNlKTcRaPRHPJwIRoPBAp5g==}
 
   methods@1.1.2:
     resolution: {integrity: sha512-iclAHeNqNm68zFtnZ0e+1L2yUIdvzNoauKU4WBA3VvH/vPFieF7qfRlwUZU+DA9P9bPXIS90ulxoUoCH23sV2w==}
@@ -1261,6 +1296,10 @@ packages:
     resolution: {integrity: sha512-gDKb8aZMDeD/tZWs9P6+q0J9Mwkdl6xMV8TjnGP3qJVJ06bdMgkbBlLU8IdfOsIsFz2BW1rNVT3XuNEl8zPAvw==}
     engines: {node: '>=8'}
 
+  pbf@4.0.2:
+    resolution: {integrity: sha512-J0ajxARhZfpUEebxYs1vhMGMuLSXtBe1e+fFPDrf2uA2hgo+UshKfNUWOz92HJNz6/NFEXseQPddnHkTreWRqg==}
+    hasBin: true
+
   picocolors@1.1.1:
     resolution: {integrity: sha512-xceH2snhtb5M9liqDsmEw56le376mTZkEX/jEb/RxNFyegNul7eNslCXP9FDj/Lcu0X8KEyMceP2ntpaHrDEVA==}
 
@@ -1272,11 +1311,17 @@ packages:
     resolution: {integrity: sha512-B7+VDyb8Tl6oMJT9oSO2CW8XC/T4UcJGrwOVoNGwOQsQYhlpfajmrMj5xeejqaASq3V/EqThyOeATEOMuSEXiA==}
     engines: {node: '>=12'}
 
+  pmtiles@4.5.0:
+    resolution: {integrity: sha512-CBeD4SoUluFziGdy/8k7FOjQxQy486n+929W/tWophauvMICpkZ26vGBWhDt/6b1FZQWNaf4jFdT/5+q0Wii5w==}
+
   polygon-clipping@0.15.7:
     resolution: {integrity: sha512-nhfdr83ECBg6xtqOAJab1tbksbBAOMUltN60bU+llHVOL0e5Onm1WpAXXWXVB39L8AJFssoIhEVuy/S90MmotA==}
 
   potpack@1.0.2:
     resolution: {integrity: sha512-choctRBIV9EMT9WGAZHn3V7t0Z2pMQyl0EZE6pFc/6ml3ssw7Dlf/oAOvFwjm1HVsqfQN8GfeFyJ+d8tRzqueQ==}
+
+  protocol-buffers-schema@3.6.1:
+    resolution: {integrity: sha512-VG2K63Igkiv9p76tk1lilczEK1cT+kCjKtkdhw1dQZV3k3IXJbd3o6Ho8b9zJZaHSnT2hKe4I+ObmX9w6m5SmQ==}
 
   punycode@2.3.1:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
@@ -1311,6 +1356,9 @@ packages:
 
   resolve-pkg-maps@1.0.0:
     resolution: {integrity: sha512-seS2Tj26TBVOC2NIc2rOe2y2ZO7efxITtLZcGSOnHHNOQ7CkiUBfw0Iw2ck6xkIhPwLhKNLS8BO+hEpngQlqzw==}
+
+  resolve-protobuf-schema@2.1.0:
+    resolution: {integrity: sha512-kI5ffTiZWmJaS/huM8wZfEMer1eRd7oJQhDuxeCLe3t7N7mX3z94CN0xPxBQxFYQTSNz9T0i+v6inKqSdK8xrQ==}
 
   reusify@1.1.0:
     resolution: {integrity: sha512-g6QUff04oZpHs0eG5p83rFLhHeV00ug/Yf9nZM6fLeUrPguBTkTQOdpAWWspMh55TZfVQDPaN3NQJfbVRAxdIw==}
@@ -1412,8 +1460,8 @@ packages:
   three-csm@4.2.1:
     resolution: {integrity: sha512-yHxKNPB2XMUBgWQTIWR0pESXzGYOdID49f2LdTbz+pNJRzBIMMVEJp5JuRSeCU6c75lmL5L4+FXRHQ1tQIgWEg==}
 
-  three-mesh-bvh@0.9.8:
-    resolution: {integrity: sha512-YphYvdXEZSXdz6iNdWJo1RB6qvSCRyiXPEVSvNU6xVWbLDOdSrfEIsJOpgFOnefdmVEvZ6M+sY0cjh9gl7MvdA==}
+  three-mesh-bvh@0.9.15:
+    resolution: {integrity: sha512-9xdEDkCzFoT8VPFH9DznwFSdbaIEjMvM106Iqq7TJurrIheUKDcdW4prfJTCxryih4XS/UxWs0H3K4MLMRFyOQ==}
     peerDependencies:
       three: '>= 0.159.0'
 
@@ -1422,8 +1470,14 @@ packages:
     peerDependencies:
       three: '>=0.122.0 <1.0.0'
 
-  three@0.172.0:
-    resolution: {integrity: sha512-6HMgMlzU97MsV7D/tY8Va38b83kz8YJX+BefKjspMNAv0Vx6dxMogHOrnRl/sbMIs3BPUKijPqDqJ/+UwJbIow==}
+  three-player-controller@0.6.2:
+    resolution: {integrity: sha512-mzFKUmTZVntTdLnqZKsvNWvCi6FNN07Vg94+lOSQt1bx0t8zg9FSUbR98NuxFOtK3vR5L7ZPiORyvWKoIjZFUg==}
+    peerDependencies:
+      three: '>=0.159.0'
+      three-mesh-bvh: '>=0.7.8'
+
+  three@0.186.0:
+    resolution: {integrity: sha512-cr/fIM2ddMSVbYVgkfD4jLJv7Fh/8ZTjvo+7gQeSVGUZHxpx9FDwoL5iC7hUz/LiRA8wMbqfnb90xKfm1/HHkQ==}
 
   to-regex-range@5.0.1:
     resolution: {integrity: sha512-65P7iz6X5yEr1cwcgvQxbbIw7Uk3gOy5dIdtZ4rDveLqhrdJP+Li/Hx6tyK0NEb+2GCyneCMJiGqrADCSNk8sQ==}
@@ -1561,11 +1615,21 @@ packages:
 
 snapshots:
 
+  3d-tiles-renderer@0.4.28(three@0.186.0):
+    dependencies:
+      '@mapbox/vector-tile': 2.0.5
+      pbf: 4.0.2
+      pmtiles: 4.5.0
+    optionalDependencies:
+      three: 0.186.0
+
   '@babel/runtime@7.29.7': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
+
+  '@dimforge/rapier3d-compat@0.12.0': {}
 
   '@esbuild/aix-ppc64@0.27.3':
     optional: true
@@ -1655,9 +1719,9 @@ snapshots:
     dependencies:
       '@harmony/physics-bridge': file:../physics-bridge
       '@harmony/physics-core': file:../physics-core
-      '@vladkrutenyuk/cannon-es-debugger-pro': 0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.9.3)
+      '@vladkrutenyuk/cannon-es-debugger-pro': 0.2.4(cannon-es@0.20.0)(three@0.186.0)(typescript@5.9.3)
       cannon-es: 0.20.0
-      three: 0.172.0
+      three: 0.186.0
     transitivePeerDependencies:
       - typescript
 
@@ -1675,18 +1739,26 @@ snapshots:
       potpack: 1.0.2
       robust-predicates: 1.1.0
       splaytree: 3.2.3
-      three: 0.172.0
+      three: 0.186.0
       three-csm: 4.2.1
-      three-mesh-bvh: 0.9.8(three@0.172.0)
-      three-nebula: 10.0.3(three@0.172.0)
+      three-mesh-bvh: 0.9.15(three@0.186.0)
+      three-nebula: 10.0.3(three@0.186.0)
+      three-player-controller: 0.6.2(three-mesh-bvh@0.9.15(three@0.186.0))(three@0.186.0)
       uuid: 3.4.0
 
   '@harmony/tools@file:../tools':
     dependencies:
+      3d-tiles-renderer: 0.4.28(three@0.186.0)
       '@resvg/resvg-js': 2.6.2
       geotiff: 3.0.5
       svgo: 4.0.0
-      three: 0.172.0
+      three: 0.186.0
+    transitivePeerDependencies:
+      - '@babylonjs/core'
+      - '@babylonjs/loaders'
+      - '@react-three/fiber'
+      - react
+      - react-dom
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
@@ -1700,6 +1772,14 @@ snapshots:
   '@koa/cors@5.0.0':
     dependencies:
       vary: 1.1.2
+
+  '@mapbox/point-geometry@1.1.0': {}
+
+  '@mapbox/vector-tile@2.0.5':
+    dependencies:
+      '@mapbox/point-geometry': 1.1.0
+      '@types/geojson': 7946.0.16
+      pbf: 4.0.2
 
   '@mongodb-js/saslprep@1.4.6':
     dependencies:
@@ -1840,6 +1920,8 @@ snapshots:
       '@types/jsonfile': 6.1.4
       '@types/node': 20.19.33
 
+  '@types/geojson@7946.0.16': {}
+
   '@types/http-assert@1.5.6': {}
 
   '@types/http-errors@2.0.5': {}
@@ -1921,14 +2003,14 @@ snapshots:
 
   '@types/stats.js@0.17.4': {}
 
-  '@types/three@0.171.0':
+  '@types/three@0.186.0':
     dependencies:
+      '@dimforge/rapier3d-compat': 0.12.0
       '@tweenjs/tween.js': 23.1.3
       '@types/stats.js': 0.17.4
       '@types/webxr': 0.5.24
-      '@webgpu/types': 0.1.69
-      fflate: 0.8.2
-      meshoptimizer: 0.18.1
+      fflate: 0.8.3
+      meshoptimizer: 1.1.1
 
   '@types/webidl-conversions@7.0.3': {}
 
@@ -1943,14 +2025,12 @@ snapshots:
     dependencies:
       '@types/node': 20.19.33
 
-  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4(cannon-es@0.20.0)(three@0.172.0)(typescript@5.9.3)':
+  '@vladkrutenyuk/cannon-es-debugger-pro@0.2.4(cannon-es@0.20.0)(three@0.186.0)(typescript@5.9.3)':
     dependencies:
       cannon-es: 0.20.0
-      three: 0.172.0
+      three: 0.186.0
     optionalDependencies:
       typescript: 5.9.3
-
-  '@webgpu/types@0.1.69': {}
 
   abort-controller@3.0.0:
     dependencies:
@@ -2230,6 +2310,8 @@ snapshots:
       reusify: 1.1.0
 
   fflate@0.8.2: {}
+
+  fflate@0.8.3: {}
 
   fill-range@7.1.1:
     dependencies:
@@ -2563,7 +2645,7 @@ snapshots:
 
   merge2@1.4.1: {}
 
-  meshoptimizer@0.18.1: {}
+  meshoptimizer@1.1.1: {}
 
   methods@1.1.2: {}
 
@@ -2677,6 +2759,10 @@ snapshots:
 
   path-type@4.0.0: {}
 
+  pbf@4.0.2:
+    dependencies:
+      resolve-protobuf-schema: 2.1.0
+
   picocolors@1.1.1: {}
 
   picomatch@2.3.1: {}
@@ -2685,12 +2771,18 @@ snapshots:
     dependencies:
       queue-lit: 1.5.2
 
+  pmtiles@4.5.0:
+    dependencies:
+      fflate: 0.8.2
+
   polygon-clipping@0.15.7:
     dependencies:
       robust-predicates: 3.0.2
       splaytree: 3.2.3
 
   potpack@1.0.2: {}
+
+  protocol-buffers-schema@3.6.1: {}
 
   punycode@2.3.1: {}
 
@@ -2721,6 +2813,10 @@ snapshots:
       path-is-absolute: 1.0.1
 
   resolve-pkg-maps@1.0.0: {}
+
+  resolve-protobuf-schema@2.1.0:
+    dependencies:
+      protocol-buffers-schema: 3.6.1
 
   reusify@1.1.0: {}
 
@@ -2818,18 +2914,23 @@ snapshots:
 
   three-csm@4.2.1: {}
 
-  three-mesh-bvh@0.9.8(three@0.172.0):
+  three-mesh-bvh@0.9.15(three@0.186.0):
     dependencies:
-      three: 0.172.0
+      three: 0.186.0
 
-  three-nebula@10.0.3(three@0.172.0):
+  three-nebula@10.0.3(three@0.186.0):
     dependencies:
       lodash: 4.18.1
       potpack: 1.0.2
-      three: 0.172.0
+      three: 0.186.0
       uuid: 3.4.0
 
-  three@0.172.0: {}
+  three-player-controller@0.6.2(three-mesh-bvh@0.9.15(three@0.186.0))(three@0.186.0):
+    dependencies:
+      three: 0.186.0
+      three-mesh-bvh: 0.9.15(three@0.186.0)
+
+  three@0.186.0: {}
 
   to-regex-range@5.0.1:
     dependencies:

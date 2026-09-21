@@ -156,7 +156,7 @@ export class Stage {
   readonly controls: OrbitControls
 
   private readonly container: HTMLElement
-  private readonly clock = new THREE.Clock()
+  private readonly clock = new THREE.Timer()
   private readonly panes: Record<PipelineMode, PaneRuntime>
   private readonly frameListeners = new Set<(delta: number, elapsed: number) => void>()
   private readonly resizeObserver: ResizeObserver
@@ -179,7 +179,7 @@ export class Stage {
     })
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
     this.renderer.shadowMap.enabled = true
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    this.renderer.shadowMap.type = THREE.PCFShadowMap
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     this.renderer.domElement.classList.add('stage-canvas')
     container.appendChild(this.renderer.domElement)
@@ -251,12 +251,14 @@ export class Stage {
     if (this.animationHandle) {
       return
     }
+    this.clock.reset()
     const loop = (): void => {
       if (this.disposed) {
         return
       }
+      this.clock.update()
       const delta = this.clock.getDelta()
-      const elapsed = this.clock.elapsedTime
+      const elapsed = this.clock.getElapsed()
       this.updateFps(delta)
       for (const listener of this.frameListeners) {
         listener(delta, elapsed)

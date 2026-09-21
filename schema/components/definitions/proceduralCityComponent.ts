@@ -117,6 +117,20 @@ const PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MIN = 1.42
 const PROCEDURAL_CITY_BUILDING_DEPTH_BIAS_MAX = 1.98
 const PROCEDURAL_CITY_BUILDING_HALF_WIDTH_MAX = 3.0
 const PROCEDURAL_CITY_BUILDING_HALF_DEPTH_MAX = 2.6
+const PROCEDURAL_CITY_SOLID_SIDE_SHADE_X_POSITIVE = 0.86
+const PROCEDURAL_CITY_SOLID_SIDE_SHADE_X_NEGATIVE = 0.7
+const PROCEDURAL_CITY_SOLID_SIDE_SHADE_Z_POSITIVE = 0.8
+const PROCEDURAL_CITY_SOLID_SIDE_SHADE_Z_NEGATIVE = 0.63
+const PROCEDURAL_CITY_SOLID_BOTTOM_SHADE = 0.38
+const PROCEDURAL_CITY_SOLID_TOP_SHADE = 1
+const PROCEDURAL_CITY_SOLID_SIDE_HEIGHT_SHADE_MIN = 0.82
+const PROCEDURAL_CITY_SOLID_SIDE_HEIGHT_SHADE_MAX = 1
+const PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN = -0.045
+const PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX = 0.045
+const PROCEDURAL_CITY_SOLID_OUTLINE_COLOR = '#3a444f'
+const PROCEDURAL_CITY_SOLID_OUTLINE_OPACITY = 0.32
+const PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_XZ = 1.025
+const PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_Y = 1.004
 
 type ProceduralCityStyleTheme = {
   parcelPalette: string[]
@@ -674,13 +688,20 @@ function rotate2(point: THREE.Vector2, angle: number): THREE.Vector2 {
   return new THREE.Vector2(point.x * cos - point.y * sin, point.x * sin + point.y * cos)
 }
 
-function createParcelColor(random: () => number, props: ProceduralCityComponentProps): THREE.Color {
+function createParcelColor(
+  random: () => number,
+  props: ProceduralCityComponentProps,
+  heightT: number,
+): THREE.Color {
   if (props.style === 'solid') {
     const base = new THREE.Color(normalizeProceduralCitySolidColor(props.solidColor))
+    const normalizedHeight = Math.min(1, Math.max(0, heightT))
+    const heightLightness = PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN
+      + (PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX - PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN) * normalizedHeight
     base.offsetHSL(
       randomRange(random, -0.006, 0.006),
       randomRange(random, -0.03, 0.03),
-      randomRange(random, -0.035, 0.035),
+      randomRange(random, -0.035, 0.035) + heightLightness,
     )
     return base
   }
@@ -720,7 +741,7 @@ function createParcel(
     depth,
     height,
     variantIndex: Math.floor(random() * 12),
-    color: createParcelColor(random, props),
+    color: createParcelColor(random, props, heightT),
   }
 }
 
@@ -971,7 +992,12 @@ const PROCEDURAL_CITY_FACADE_LOW_QUALITY_WIDTH = 64
 const PROCEDURAL_CITY_FACADE_LOW_QUALITY_HEIGHT = 128
 const facadeTextureByStyle = new Map<ProceduralCityStyle, THREE.Texture>()
 const wallMaterialByStyle = new Map<ProceduralCityStyle, THREE.Material>()
-const archetypesByStyle = new Map<ProceduralCityStyle, Array<{ geometry: THREE.BufferGeometry }>>()
+type ProceduralCityArchetype = {
+  geometry: THREE.BufferGeometry
+  outlineGeometry?: THREE.BufferGeometry
+}
+const archetypesByStyle = new Map<ProceduralCityStyle, ProceduralCityArchetype[]>()
+let solidOutlineMaterial: THREE.MeshBasicMaterial | null = null
 
 function loadFacadeTexture(style: unknown): THREE.Texture {
   const resolvedStyle = resolveProceduralCityStyle(style)
@@ -1109,6 +1135,19 @@ function getWallMaterial(style: unknown): THREE.Material {
   return material
 }
 
+function getSolidOutlineMaterial(): THREE.MeshBasicMaterial {
+  if (!solidOutlineMaterial) {
+    solidOutlineMaterial = new THREE.MeshBasicMaterial({
+      color: PROCEDURAL_CITY_SOLID_OUTLINE_COLOR,
+      side: THREE.BackSide,
+      transparent: true,
+      opacity: PROCEDURAL_CITY_SOLID_OUTLINE_OPACITY,
+      depthWrite: false,
+    })
+  }
+  return solidOutlineMaterial
+}
+
 function applyProceduralCityVertexShade(geometry: THREE.BufferGeometry, bottomShade: number, topShade: number): void {
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
   if (!position) {
@@ -1128,6 +1167,45 @@ function applyProceduralCityVertexShade(geometry: THREE.BufferGeometry, bottomSh
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
 }
 
+function applyProceduralCitySolidFacetShade(geometry: THREE.BufferGeometry): void {
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
+  const normal = geometry.getAttribute('normal') as THREE.BufferAttribute | undefined
+  if (!position || !normal) {
+    return
+  }
+  geometry.computeBoundingBox()
+  const box = geometry.boundingBox
+  const minY = box?.min.y ?? 0
+  const maxY = box?.max.y ?? 1
+  const height = Math.max(1e-6, maxY - minY)
+  const colors: number[] = []
+  for (let index = 0; index < position.count; index += 1) {
+    const t = Math.min(1, Math.max(0, (position.getY(index) - minY) / height))
+    const nx = normal.getX(index)
+    const ny = normal.getY(index)
+    const nz = normal.getZ(index)
+    let shade: number
+    if (ny > 0.5) {
+      shade = PROCEDURAL_CITY_SOLID_TOP_SHADE
+    } else if (ny < -0.5) {
+      shade = PROCEDURAL_CITY_SOLID_BOTTOM_SHADE
+    } else {
+      const sideShade = nx > 0.5
+        ? PROCEDURAL_CITY_SOLID_SIDE_SHADE_X_POSITIVE
+        : nx < -0.5
+          ? PROCEDURAL_CITY_SOLID_SIDE_SHADE_X_NEGATIVE
+          : nz > 0.5
+            ? PROCEDURAL_CITY_SOLID_SIDE_SHADE_Z_POSITIVE
+            : PROCEDURAL_CITY_SOLID_SIDE_SHADE_Z_NEGATIVE
+      const heightShade = PROCEDURAL_CITY_SOLID_SIDE_HEIGHT_SHADE_MIN
+        + (PROCEDURAL_CITY_SOLID_SIDE_HEIGHT_SHADE_MAX - PROCEDURAL_CITY_SOLID_SIDE_HEIGHT_SHADE_MIN) * t
+      shade = sideShade * heightShade
+    }
+    colors.push(shade, shade, shade)
+  }
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+}
+
 function applyProceduralCityRoofColors(geometry: THREE.BufferGeometry): void {
   const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
   if (!position) {
@@ -1140,7 +1218,15 @@ function applyProceduralCityRoofColors(geometry: THREE.BufferGeometry): void {
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
 }
 
-function createTaperedBoxGeometry(topScaleX: number, topScaleZ: number, bottomShade: number, topShade: number): THREE.BoxGeometry {
+type ProceduralCityGeometryShading = 'vertical' | 'facet'
+
+function createTaperedBoxGeometry(
+  topScaleX: number,
+  topScaleZ: number,
+  bottomShade: number,
+  topShade: number,
+  shading: ProceduralCityGeometryShading = 'vertical',
+): THREE.BoxGeometry {
   const geometry = new THREE.BoxGeometry(1, 1, 1)
   const position = geometry.getAttribute('position') as THREE.BufferAttribute
   for (let index = 0; index < position.count; index += 1) {
@@ -1153,11 +1239,15 @@ function createTaperedBoxGeometry(topScaleX: number, topScaleZ: number, bottomSh
   position.needsUpdate = true
   geometry.computeVertexNormals()
   geometry.translate(0, 0.5, 0)
-  applyProceduralCityVertexShade(geometry, bottomShade, topShade)
+  if (shading === 'facet') {
+    applyProceduralCitySolidFacetShade(geometry)
+  } else {
+    applyProceduralCityVertexShade(geometry, bottomShade, topShade)
+  }
   return geometry
 }
 
-function getArchetypes(style: unknown): Array<{ geometry: THREE.BufferGeometry }> {
+function getArchetypes(style: unknown): ProceduralCityArchetype[] {
   const resolvedStyle = resolveProceduralCityStyle(style)
   const cached = archetypesByStyle.get(resolvedStyle)
   if (cached) {
@@ -1168,11 +1258,13 @@ function getArchetypes(style: unknown): Array<{ geometry: THREE.BufferGeometry }
     const taper = 1 - (index % 6) * 0.004
     const sideTaper = 1 - ((index + 3) % 4) * 0.004
     const roofHeight = 0.02 + (index % 3) * 0.01
+    const shading: ProceduralCityGeometryShading = resolvedStyle === 'solid' ? 'facet' : 'vertical'
     const wall = createTaperedBoxGeometry(
       taper,
       sideTaper,
       theme.vertexBottomShade,
       theme.vertexTopShade,
+      shading,
     )
     const roof = new THREE.BoxGeometry(
       Math.max(0.5, taper - 0.02),
@@ -1186,7 +1278,19 @@ function getArchetypes(style: unknown): Array<{ geometry: THREE.BufferGeometry }
     geometry.computeVertexNormals()
     geometry.computeBoundingBox()
     geometry.computeBoundingSphere()
-    return { geometry }
+    let outlineGeometry: THREE.BufferGeometry | undefined
+    if (resolvedStyle === 'solid') {
+      outlineGeometry = createTaperedBoxGeometry(taper, sideTaper, 1, 1)
+      outlineGeometry.scale(
+        PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_XZ,
+        PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_Y,
+        PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_XZ,
+      )
+      outlineGeometry.computeVertexNormals()
+      outlineGeometry.computeBoundingBox()
+      outlineGeometry.computeBoundingSphere()
+    }
+    return { geometry, outlineGeometry }
   })
   archetypesByStyle.set(resolvedStyle, archetypes)
   return archetypes
@@ -1272,6 +1376,17 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknow
     tileBucket.parcelsByVariant.forEach((entries, variant) => {
       const archetype = archetypeList[variant]!
       const cityMesh = createMesh(archetype.geometry, getWallMaterial(resolvedStyle), entries.length, `ProceduralCity_${tileBucket.tileX}_${tileBucket.tileZ}_${variant}`)
+      const outlineMesh = archetype.outlineGeometry
+        ? createMesh(
+            archetype.outlineGeometry,
+            getSolidOutlineMaterial(),
+            entries.length,
+            `ProceduralCity_${tileBucket.tileX}_${tileBucket.tileZ}_${variant}_outline`,
+          )
+        : null
+      if (outlineMesh) {
+        outlineMesh.renderOrder = 1
+      }
       entries.forEach((parcel, index) => {
         proceduralCityTileQuaternion.setFromAxisAngle(proceduralCityTileUpAxis, parcel.rotationY)
         proceduralCityTileScale.set(parcel.width, parcel.height, parcel.depth)
@@ -1282,6 +1397,7 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknow
         )
         cityMesh.setMatrixAt(index, proceduralCityTileMatrix)
         cityMesh.setColorAt(index, parcel.color)
+        outlineMesh?.setMatrixAt(index, proceduralCityTileMatrix)
       })
       cityMesh.count = entries.length
       cityMesh.computeBoundingSphere()
@@ -1290,6 +1406,12 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknow
         cityMesh.instanceColor.needsUpdate = true
       }
       tileGroup.add(cityMesh)
+      if (outlineMesh) {
+        outlineMesh.count = entries.length
+        outlineMesh.computeBoundingSphere()
+        outlineMesh.instanceMatrix.needsUpdate = true
+        tileGroup.add(outlineMesh)
+      }
     })
 
     group.add(tileGroup)
