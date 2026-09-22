@@ -7,6 +7,7 @@ import {
   PROCEDURAL_CITY_COMPONENT_TYPE,
   clampProceduralCityComponentProps,
   type ProceduralCityStyle,
+  type ProceduralCitySolidColorScheme,
   type ProceduralCityComponentProps,
 } from '@schema/components'
 
@@ -20,6 +21,10 @@ const proceduralCityComponent = computed(
 )
 
 const cityProps = computed(() => clampProceduralCityComponentProps(proceduralCityComponent.value?.props))
+const showSolidColorSeed = computed(
+  () => cityProps.value.style === 'solid'
+    && ['pastel', 'warm', 'cool', 'neutral', 'district'].includes(cityProps.value.solidColorScheme),
+)
 
 const styleOptions: Array<{ title: string; value: ProceduralCityStyle }> = [
   { title: 'Office', value: 'office' },
@@ -28,6 +33,16 @@ const styleOptions: Array<{ title: string; value: ProceduralCityStyle }> = [
   { title: 'Warm', value: 'warm' },
   { title: 'Cool', value: 'cool' },
   { title: 'Solid', value: 'solid' },
+]
+
+const colorSchemeOptions: Array<{ title: string; value: ProceduralCitySolidColorScheme }> = [
+  { title: 'Uniform', value: 'uniform' },
+  { title: 'Pastel', value: 'pastel' },
+  { title: 'Warm', value: 'warm' },
+  { title: 'Cool', value: 'cool' },
+  { title: 'Neutral', value: 'neutral' },
+  { title: 'District', value: 'district' },
+  { title: 'Height', value: 'height' },
 ]
 
 function updateNumber(key: keyof ProceduralCityComponentProps, value: number | string | null): void {
@@ -67,6 +82,20 @@ function updateColor(value: string | null): void {
     nodeId,
     component.id,
     { solidColor: value },
+    { autoSaveMode: 'interactive' },
+  )
+}
+
+function updateColorScheme(value: string | null): void {
+  const component = proceduralCityComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId || !value) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(
+    nodeId,
+    component.id,
+    { solidColorScheme: value as ProceduralCitySolidColorScheme },
     { autoSaveMode: 'interactive' },
   )
 }
@@ -148,15 +177,39 @@ function handleRemoveComponent(): void {
           :disabled="!proceduralCityComponent?.enabled"
           @update:modelValue="(value) => updateStyle(value)"
         />
+        <v-select
+          v-if="cityProps.style === 'solid'"
+          label="Color Scheme"
+          density="compact"
+          variant="underlined"
+          :items="colorSchemeOptions"
+          item-title="title"
+          item-value="value"
+          :model-value="cityProps.solidColorScheme"
+          :disabled="!proceduralCityComponent?.enabled"
+          @update:modelValue="(value) => updateColorScheme(value)"
+        />
         <v-text-field
           v-if="cityProps.style === 'solid'"
-          label="Solid Color"
+          label="Base Color"
           density="compact"
           variant="underlined"
           type="color"
           :model-value="cityProps.solidColor"
           :disabled="!proceduralCityComponent?.enabled"
           @update:modelValue="(value) => updateColor(value)"
+        />
+        <v-text-field
+          v-if="showSolidColorSeed"
+          label="Color Seed"
+          density="compact"
+          variant="underlined"
+          type="number"
+          min="0"
+          step="1"
+          :model-value="cityProps.solidColorSeed"
+          :disabled="!proceduralCityComponent?.enabled"
+          @update:modelValue="(value) => updateNumber('solidColorSeed', value)"
         />
         <v-text-field
           label="Density"

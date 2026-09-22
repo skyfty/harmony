@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { Object3D } from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import {
   COMPONENT_ARTIFACT_COMPONENT_ID_KEY,
@@ -23,6 +24,14 @@ export const PROCEDURAL_CITY_HOST_USER_DATA_KEY = 'proceduralCityHost'
 const PROCEDURAL_CITY_RUNTIME_GROUP_KEY = '__harmonyProceduralCityRuntimeGroup'
 
 export type ProceduralCityStyle = 'office' | 'bright' | 'classic' | 'warm' | 'cool' | 'solid'
+export type ProceduralCitySolidColorScheme =
+  | 'uniform'
+  | 'pastel'
+  | 'warm'
+  | 'cool'
+  | 'neutral'
+  | 'district'
+  | 'height'
 
 export const PROCEDURAL_CITY_SOLID_DEFAULT_COLOR = '#9aa7b0'
 
@@ -40,6 +49,8 @@ export const PROCEDURAL_CITY_DEFAULT_PROPS: ProceduralCityComponentProps = {
   roadSetback: 2,
   junctionSetback: 8,
   maxBuildings: 1200,
+  solidColorScheme: 'uniform',
+  solidColorSeed: 1337,
   solidColor: PROCEDURAL_CITY_SOLID_DEFAULT_COLOR,
   style: 'office',
 }
@@ -58,6 +69,8 @@ export interface ProceduralCityComponentProps {
   roadSetback: number
   junctionSetback: number
   maxBuildings: number
+  solidColorScheme: ProceduralCitySolidColorScheme
+  solidColorSeed: number
   solidColor: string
   style: ProceduralCityStyle
 }
@@ -128,9 +141,153 @@ const PROCEDURAL_CITY_SOLID_SIDE_HEIGHT_SHADE_MAX = 1
 const PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN = -0.045
 const PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX = 0.045
 const PROCEDURAL_CITY_SOLID_OUTLINE_COLOR = '#3a444f'
-const PROCEDURAL_CITY_SOLID_OUTLINE_OPACITY = 0.32
-const PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_XZ = 1.025
-const PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_Y = 1.004
+const PROCEDURAL_CITY_SOLID_OUTLINE_PIXELS = 1.25
+const PROCEDURAL_CITY_SOLID_OUTLINE_NEAR_OPACITY = 0.18
+const PROCEDURAL_CITY_SOLID_OUTLINE_FAR_OPACITY = 0.36
+const PROCEDURAL_CITY_SOLID_OUTLINE_NEAR_DISTANCE = 60
+const PROCEDURAL_CITY_SOLID_OUTLINE_FAR_DISTANCE = 320
+const PROCEDURAL_CITY_SOLID_ROOF_CAP_HEIGHT = 0.025
+const PROCEDURAL_CITY_SOLID_ROOF_CAP_OVERHANG = 1.03
+const PROCEDURAL_CITY_SOLID_ROOF_BOX_HEIGHT = 0.065
+const PROCEDURAL_CITY_SOLID_ROOF_BOX_SCALE = 0.45
+const PROCEDURAL_CITY_SOLID_SETBACK_LOWER_HEIGHT = 0.72
+const PROCEDURAL_CITY_SOLID_SETBACK_UPPER_Y = 0.7
+const PROCEDURAL_CITY_SOLID_SETBACK_UPPER_SCALE = 0.78
+const PROCEDURAL_CITY_SOLID_PART_OVERLAP = 0.01
+const PROCEDURAL_CITY_SOLID_PLINTH_SCALE = 1.03
+const PROCEDURAL_CITY_SOLID_PLINTH_HEIGHT = 0.02
+const PROCEDURAL_CITY_SOLID_PARAPET_HEIGHT = 0.025
+const PROCEDURAL_CITY_SOLID_PARAPET_THICKNESS = 0.03
+const PROCEDURAL_CITY_SOLID_CROWN_HEIGHT = 0.05
+const PROCEDURAL_CITY_SOLID_CROWN_SCALE = 0.32
+const PROCEDURAL_CITY_SOLID_SECONDARY_ROOF_BOX_HEIGHT = 0.035
+const PROCEDURAL_CITY_SOLID_SECONDARY_ROOF_BOX_SCALE = 0.22
+const PROCEDURAL_CITY_SOLID_SECONDARY_ROOF_BOX_OFFSET = 0.28
+const PROCEDURAL_CITY_SOLID_LOW_HEIGHT_MAX = 0.32
+const PROCEDURAL_CITY_SOLID_HIGH_HEIGHT_MIN = 0.68
+const PROCEDURAL_CITY_SOLID_WIDE_ASPECT_MIN = 1.35
+const PROCEDURAL_CITY_SOLID_NARROW_ASPECT_MAX = 0.85
+const PROCEDURAL_CITY_DISTRICT_DENSITY_MIN = 0.55
+const PROCEDURAL_CITY_DISTRICT_DENSITY_MAX = 1.25
+const PROCEDURAL_CITY_DISTRICT_HEIGHT_MIN = 0.7
+const PROCEDURAL_CITY_DISTRICT_HEIGHT_MAX = 1.3
+const PROCEDURAL_CITY_SOLID_LIGHT_DIRECTION = new THREE.Vector3(0.45, 0.82, 0.35).normalize()
+const PROCEDURAL_CITY_SOLID_LIGHT_AMBIENT = 0.7
+const PROCEDURAL_CITY_SOLID_LIGHT_DIFFUSE = 0.3
+const PROCEDURAL_CITY_SOLID_ROOF_EQUIPMENT_HEIGHT = 0.06
+const PROCEDURAL_CITY_SOLID_EQUIPMENT_SMALL_SCALE_X = 0.16
+const PROCEDURAL_CITY_SOLID_EQUIPMENT_SMALL_SCALE_Z = 0.2
+const PROCEDURAL_CITY_SOLID_EQUIPMENT_SMALL_HEIGHT = 0.03
+const PROCEDURAL_CITY_SOLID_EQUIPMENT_TINY_SCALE_X = 0.18
+const PROCEDURAL_CITY_SOLID_EQUIPMENT_TINY_SCALE_Z = 0.14
+const PROCEDURAL_CITY_SOLID_EQUIPMENT_TINY_HEIGHT = 0.025
+const PROCEDURAL_CITY_SOLID_COLOR_BLOCK_SIZE = 48
+const PROCEDURAL_CITY_SOLID_PALETTE_TINT = 0.15
+const PROCEDURAL_CITY_SOLID_PASTEL_MIN_LIGHTNESS = 0.72
+const PROCEDURAL_CITY_SOLID_PASTEL_MAX_LIGHTNESS = 0.9
+const PROCEDURAL_CITY_SOLID_PASTEL_MIN_SATURATION = 0.08
+const PROCEDURAL_CITY_SOLID_PASTEL_MAX_SATURATION = 0.32
+
+const PROCEDURAL_CITY_SOLID_PASTEL_PALETTE: readonly string[] = [
+  '#d8c7c7',
+  '#d8d2c4',
+  '#c9d6cf',
+  '#cbd2e0',
+  '#d9cde2',
+  '#e3d6c4',
+  '#c9d8dd',
+  '#d7d0c4',
+]
+const PROCEDURAL_CITY_SOLID_WARM_PALETTE: readonly string[] = [
+  '#e8d6bf',
+  '#e3cdbb',
+  '#ecd9c6',
+  '#dcc9b8',
+  '#e6d2c0',
+  '#d9cfc2',
+]
+const PROCEDURAL_CITY_SOLID_COOL_PALETTE: readonly string[] = [
+  '#d4dde6',
+  '#cdd9df',
+  '#d9dce8',
+  '#cfd9d5',
+  '#d6d4e4',
+  '#c9d6de',
+]
+const PROCEDURAL_CITY_SOLID_NEUTRAL_PALETTE: readonly string[] = [
+  '#e7e4de',
+  '#dedcd7',
+  '#e1e0dd',
+  '#d8d6d1',
+  '#e5e2dc',
+  '#d2d1cf',
+]
+const PROCEDURAL_CITY_SOLID_DISTRICT_DOWNTOWN_PALETTE: readonly string[] = [
+  '#d3dbe4',
+  '#d8dce6',
+  '#cfd8df',
+  '#d6d4e3',
+  '#d2dad6',
+]
+const PROCEDURAL_CITY_SOLID_DISTRICT_OUTER_PALETTE: readonly string[] = [
+  '#e5d8c7',
+  '#e0d2c0',
+  '#dcd4c8',
+  '#e4dccf',
+  '#d8d2c9',
+]
+
+type ProceduralCitySolidMassFamily = 'flat' | 'roofCap' | 'roofBox' | 'setback' | 'tapered'
+type ProceduralCitySolidRoofEquipment = 'none' | 'single' | 'cluster'
+
+type ProceduralCitySolidVariantSpec = {
+  family: ProceduralCitySolidMassFamily
+  plinth: boolean
+  parapet: boolean
+  crown: boolean
+  crownOffset: number
+  roofEquipment: ProceduralCitySolidRoofEquipment
+}
+
+function createProceduralCitySolidVariantSpec(
+  family: ProceduralCitySolidMassFamily,
+  overrides: Partial<Omit<ProceduralCitySolidVariantSpec, 'family'>> = {},
+): ProceduralCitySolidVariantSpec {
+  return {
+    family,
+    plinth: false,
+    parapet: false,
+    crown: false,
+    crownOffset: 0,
+    roofEquipment: 'none',
+    ...overrides,
+  }
+}
+
+const PROCEDURAL_CITY_SOLID_VARIANT_SPECS: ProceduralCitySolidVariantSpec[] = [
+  createProceduralCitySolidVariantSpec('flat'),
+  createProceduralCitySolidVariantSpec('flat', { parapet: true }),
+  createProceduralCitySolidVariantSpec('roofCap'),
+  createProceduralCitySolidVariantSpec('flat', { plinth: true }),
+  createProceduralCitySolidVariantSpec('flat', { plinth: true, parapet: true }),
+  createProceduralCitySolidVariantSpec('roofCap', { plinth: true }),
+  createProceduralCitySolidVariantSpec('roofBox', { plinth: true, roofEquipment: 'single' }),
+  createProceduralCitySolidVariantSpec('roofBox', { plinth: true, roofEquipment: 'cluster' }),
+  createProceduralCitySolidVariantSpec('setback', { plinth: true, roofEquipment: 'single' }),
+  createProceduralCitySolidVariantSpec('setback', { plinth: true, crown: true, crownOffset: 0.08 }),
+  createProceduralCitySolidVariantSpec('tapered', { plinth: true, roofEquipment: 'single' }),
+  createProceduralCitySolidVariantSpec('tapered', { plinth: true, crown: true, crownOffset: -0.08, roofEquipment: 'single' }),
+]
+
+const PROCEDURAL_CITY_SOLID_LOW_FLAT_INDICES = [0, 1]
+const PROCEDURAL_CITY_SOLID_LOW_ROOF_CAP_INDICES = [2]
+const PROCEDURAL_CITY_SOLID_MID_FLAT_INDICES = [3, 4]
+const PROCEDURAL_CITY_SOLID_MID_ROOF_CAP_INDICES = [5]
+const PROCEDURAL_CITY_SOLID_MID_ROOF_BOX_INDICES = [6, 7]
+const PROCEDURAL_CITY_SOLID_MID_SETBACK_INDICES = [8]
+const PROCEDURAL_CITY_SOLID_HIGH_SETBACK_INDICES = [8, 9]
+const PROCEDURAL_CITY_SOLID_HIGH_ROOF_BOX_INDICES = [7]
+const PROCEDURAL_CITY_SOLID_HIGH_TAPERED_INDICES = [10, 11]
 
 type ProceduralCityStyleTheme = {
   parcelPalette: string[]
@@ -246,6 +403,21 @@ function resolveProceduralCityStyle(style: unknown): ProceduralCityStyle {
     return style as ProceduralCityStyle
   }
   return 'bright'
+}
+
+function resolveProceduralCitySolidColorScheme(value: unknown): ProceduralCitySolidColorScheme {
+  if (
+    value === 'uniform'
+    || value === 'pastel'
+    || value === 'warm'
+    || value === 'cool'
+    || value === 'neutral'
+    || value === 'district'
+    || value === 'height'
+  ) {
+    return value
+  }
+  return 'uniform'
 }
 
 function getProceduralCityStyleTheme(style: unknown): ProceduralCityStyleTheme {
@@ -491,6 +663,63 @@ function hash2D(seed: number, x: number, y: number): number {
   return hashUint32(combined) / 4294967296
 }
 
+type ProceduralCityDistrict = {
+  center: THREE.Vector2
+  radius: number
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value))
+}
+
+function smoothstep01(value: number): number {
+  const t = clamp01(value)
+  return t * t * (3 - 2 * t)
+}
+
+function lerpNumber(from: number, to: number, t: number): number {
+  return from + (to - from) * t
+}
+
+function createProceduralCityDistrict(points: THREE.Vector2[]): ProceduralCityDistrict {
+  if (!points.length) {
+    return { center: new THREE.Vector2(), radius: 0 }
+  }
+  const box = new THREE.Box2().setFromPoints(points)
+  const center = box.getCenter(new THREE.Vector2())
+  let radius = 0
+  points.forEach((point) => {
+    radius = Math.max(radius, point.distanceTo(center))
+  })
+  return { center, radius }
+}
+
+function resolveProceduralCityDistrictT(
+  point: THREE.Vector2,
+  district: ProceduralCityDistrict,
+): number {
+  if (district.radius <= 1e-6) {
+    return 1
+  }
+  return clamp01(1 - point.distanceTo(district.center) / district.radius)
+}
+
+function resolveProceduralCityDistrictDensityScale(districtT: number): number {
+  return lerpNumber(
+    PROCEDURAL_CITY_DISTRICT_DENSITY_MIN,
+    PROCEDURAL_CITY_DISTRICT_DENSITY_MAX,
+    smoothstep01(districtT),
+  )
+}
+
+function resolveProceduralCityDistrictHeightScale(districtT: number): number {
+  return lerpNumber(
+    PROCEDURAL_CITY_DISTRICT_HEIGHT_MIN,
+    PROCEDURAL_CITY_DISTRICT_HEIGHT_MAX,
+    smoothstep01(districtT),
+  )
+}
+
 function polygonArea(points: THREE.Vector2[]): number {
   let area = 0
   for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
@@ -692,18 +921,46 @@ function createParcelColor(
   random: () => number,
   props: ProceduralCityComponentProps,
   heightT: number,
+  position: THREE.Vector3,
+  districtT: number,
 ): THREE.Color {
   if (props.style === 'solid') {
-    const base = new THREE.Color(normalizeProceduralCitySolidColor(props.solidColor))
+    const base = resolveProceduralCitySolidBaseColor(props, position, districtT)
     const normalizedHeight = Math.min(1, Math.max(0, heightT))
-    const heightLightness = PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN
-      + (PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX - PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN) * normalizedHeight
+    const scheme = props.solidColorScheme
+    const hueJitter = scheme === 'uniform'
+      ? 0.006
+      : scheme === 'height'
+        ? 0.004
+        : scheme === 'district'
+          ? 0.008
+          : 0.012
+    const saturationJitter = scheme === 'uniform'
+      ? 0.03
+      : scheme === 'height'
+        ? 0.02
+        : scheme === 'district'
+          ? 0.03
+          : 0.04
+    const lightnessJitter = scheme === 'uniform'
+      ? 0.035
+      : scheme === 'height'
+        ? 0.02
+        : scheme === 'district'
+          ? 0.03
+          : 0.04
+    const heightLightness = scheme === 'height'
+      ? lerpNumber(-0.08, 0.08, normalizedHeight)
+      : PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN
+        + (PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX - PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN) * normalizedHeight
     base.offsetHSL(
-      randomRange(random, -0.006, 0.006),
-      randomRange(random, -0.03, 0.03),
-      randomRange(random, -0.035, 0.035) + heightLightness,
+      randomRange(random, -hueJitter, hueJitter),
+      randomRange(random, -saturationJitter, saturationJitter),
+      randomRange(random, -lightnessJitter, lightnessJitter) + heightLightness,
     )
-    return base
+    return scheme === 'uniform' || scheme === 'height'
+      ? base
+      : clampProceduralCitySolidPastelColor(base)
   }
   if (props.style === 'office') {
     const value = 1 - random() * random()
@@ -724,24 +981,141 @@ function createParcelColor(
   return base
 }
 
+function pickProceduralCitySolidPaletteColor(palette: readonly string[], hashValue: number): THREE.Color {
+  const index = Math.min(palette.length - 1, Math.max(0, Math.floor(hashValue * palette.length)))
+  return new THREE.Color(palette[index]!)
+}
+
+function clampProceduralCitySolidPastelColor(color: THREE.Color): THREE.Color {
+  const hsl = { h: 0, s: 0, l: 0 }
+  color.getHSL(hsl)
+  color.setHSL(
+    hsl.h,
+    Math.min(PROCEDURAL_CITY_SOLID_PASTEL_MAX_SATURATION, Math.max(PROCEDURAL_CITY_SOLID_PASTEL_MIN_SATURATION, hsl.s)),
+    Math.min(PROCEDURAL_CITY_SOLID_PASTEL_MAX_LIGHTNESS, Math.max(PROCEDURAL_CITY_SOLID_PASTEL_MIN_LIGHTNESS, hsl.l)),
+  )
+  return color
+}
+
+function resolveProceduralCitySolidBaseColor(
+  props: ProceduralCityComponentProps,
+  position: THREE.Vector3,
+  districtT: number,
+): THREE.Color {
+  const solidColor = new THREE.Color(normalizeProceduralCitySolidColor(props.solidColor))
+  const scheme = props.solidColorScheme
+  if (scheme === 'uniform' || scheme === 'height') {
+    return solidColor
+  }
+  const blockX = Math.floor(position.x / PROCEDURAL_CITY_SOLID_COLOR_BLOCK_SIZE)
+  const blockZ = Math.floor(position.z / PROCEDURAL_CITY_SOLID_COLOR_BLOCK_SIZE)
+  const seed = Math.trunc(props.solidColorSeed)
+  let base: THREE.Color
+  if (scheme === 'district') {
+    const downtown = pickProceduralCitySolidPaletteColor(
+      PROCEDURAL_CITY_SOLID_DISTRICT_DOWNTOWN_PALETTE,
+      hash2D(seed ^ 0x2f6e, blockX, blockZ),
+    )
+    const outer = pickProceduralCitySolidPaletteColor(
+      PROCEDURAL_CITY_SOLID_DISTRICT_OUTER_PALETTE,
+      hash2D(seed ^ 0x71a3, blockX, blockZ),
+    )
+    base = outer.lerp(downtown, smoothstep01(districtT))
+  } else {
+    const palette = scheme === 'pastel'
+      ? PROCEDURAL_CITY_SOLID_PASTEL_PALETTE
+      : scheme === 'warm'
+        ? PROCEDURAL_CITY_SOLID_WARM_PALETTE
+        : scheme === 'cool'
+          ? PROCEDURAL_CITY_SOLID_COOL_PALETTE
+          : PROCEDURAL_CITY_SOLID_NEUTRAL_PALETTE
+    base = pickProceduralCitySolidPaletteColor(
+      palette,
+      hash2D(seed ^ 0x4f1b, blockX, blockZ),
+    )
+  }
+  base.lerp(solidColor, PROCEDURAL_CITY_SOLID_PALETTE_TINT)
+  return clampProceduralCitySolidPastelColor(base)
+}
+
+function pickProceduralCitySolidVariantIndex(indices: number[], hashValue: number): number {
+  const index = Math.min(indices.length - 1, Math.max(0, Math.floor(hashValue * indices.length)))
+  return indices[index]!
+}
+
+function resolveProceduralCitySolidVariantIndex(
+  roll: number,
+  heightT: number,
+  width: number,
+  depth: number,
+  seed: number,
+): number {
+  const aspect = width / Math.max(1e-6, depth)
+  const hashValue = hash2D(
+    Math.trunc(seed) ^ 0x4f1bbcdc,
+    Math.round(width * 100),
+    Math.round(depth * 100 + heightT * 1000),
+  )
+  const pick = (indices: number[]): number => pickProceduralCitySolidVariantIndex(indices, hashValue)
+
+  if (heightT < PROCEDURAL_CITY_SOLID_LOW_HEIGHT_MAX) {
+    return roll < 0.55
+      ? pick(PROCEDURAL_CITY_SOLID_LOW_FLAT_INDICES)
+      : pick(PROCEDURAL_CITY_SOLID_LOW_ROOF_CAP_INDICES)
+  }
+  if (heightT < PROCEDURAL_CITY_SOLID_HIGH_HEIGHT_MIN) {
+    if (aspect > PROCEDURAL_CITY_SOLID_WIDE_ASPECT_MIN) {
+      if (roll < 0.3) return pick(PROCEDURAL_CITY_SOLID_MID_FLAT_INDICES)
+      if (roll < 0.7) return pick(PROCEDURAL_CITY_SOLID_MID_ROOF_CAP_INDICES)
+      return pick(PROCEDURAL_CITY_SOLID_MID_ROOF_BOX_INDICES)
+    }
+    if (aspect < PROCEDURAL_CITY_SOLID_NARROW_ASPECT_MAX) {
+      if (roll < 0.3) return pick(PROCEDURAL_CITY_SOLID_MID_ROOF_CAP_INDICES)
+      if (roll < 0.75) return pick(PROCEDURAL_CITY_SOLID_MID_ROOF_BOX_INDICES)
+      return pick(PROCEDURAL_CITY_SOLID_MID_SETBACK_INDICES)
+    }
+    if (roll < 0.2) return pick(PROCEDURAL_CITY_SOLID_MID_FLAT_INDICES)
+    if (roll < 0.55) return pick(PROCEDURAL_CITY_SOLID_MID_ROOF_CAP_INDICES)
+    if (roll < 0.85) return pick(PROCEDURAL_CITY_SOLID_MID_ROOF_BOX_INDICES)
+    return pick(PROCEDURAL_CITY_SOLID_MID_SETBACK_INDICES)
+  }
+  if (aspect > PROCEDURAL_CITY_SOLID_WIDE_ASPECT_MIN) {
+    return roll < 0.6
+      ? pick(PROCEDURAL_CITY_SOLID_HIGH_SETBACK_INDICES)
+      : pick(PROCEDURAL_CITY_SOLID_HIGH_ROOF_BOX_INDICES)
+  }
+  if (aspect < PROCEDURAL_CITY_SOLID_NARROW_ASPECT_MAX) {
+    return roll < 0.55
+      ? pick(PROCEDURAL_CITY_SOLID_HIGH_TAPERED_INDICES)
+      : pick(PROCEDURAL_CITY_SOLID_HIGH_SETBACK_INDICES)
+  }
+  if (roll < 0.45) return pick(PROCEDURAL_CITY_SOLID_HIGH_SETBACK_INDICES)
+  if (roll < 0.8) return pick(PROCEDURAL_CITY_SOLID_HIGH_TAPERED_INDICES)
+  return pick(PROCEDURAL_CITY_SOLID_HIGH_ROOF_BOX_INDICES)
+}
+
 function createParcel(
   random: () => number,
   props: ProceduralCityComponentProps,
   position: THREE.Vector3,
   rotationY: number,
+  districtT = 1,
 ): ProceduralCityParcel {
   const width = randomRange(random, props.minWidth, props.maxWidth) * randomRange(random, PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MIN, PROCEDURAL_CITY_BUILDING_WIDTH_SCALE_MAX)
   const depth = randomRange(random, props.minDepth, props.maxDepth) * randomRange(random, PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MIN, PROCEDURAL_CITY_BUILDING_DEPTH_SCALE_MAX)
-  const heightT = Math.pow(random(), 1.7)
+  const heightT = clamp01(Math.pow(random(), 1.7) * resolveProceduralCityDistrictHeightScale(districtT))
   const height = props.minHeight + (props.maxHeight - props.minHeight) * heightT
+  const variantRoll = random()
   return {
     position,
     rotationY,
     width,
     depth,
     height,
-    variantIndex: Math.floor(random() * 12),
-    color: createParcelColor(random, props, heightT),
+    variantIndex: props.style === 'solid'
+      ? resolveProceduralCitySolidVariantIndex(variantRoll, heightT, width, depth, props.seed)
+      : Math.floor(variantRoll * 12),
+    color: createParcelColor(random, props, heightT, position, districtT),
   }
 }
 
@@ -766,6 +1140,7 @@ function generatePolygonParcels(
     max.x = Math.max(max.x, point.x)
     max.y = Math.max(max.y, point.y)
   })
+  const district = createProceduralCityDistrict(rotated)
 
   const parcels: ProceduralCityParcel[] = []
   const stepScale = PROCEDURAL_CITY_BUILDING_STEP_SCALE
@@ -783,9 +1158,11 @@ function generatePolygonParcels(
       }
       const cellX = Math.floor((x - min.x) / stepX)
       const cellZ = Math.floor((z - min.y) / stepZ)
+      const districtT = resolveProceduralCityDistrictT(new THREE.Vector2(x, z), district)
+      const districtDensityScale = resolveProceduralCityDistrictDensityScale(districtT)
       const cluster = PROCEDURAL_CITY_BUILDING_CLUSTER_SCALE + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - centerX) / coarseCellX), Math.floor((z - centerZ) / coarseCellZ)) * 0.34
       const lane = PROCEDURAL_CITY_BUILDING_LANE_SCALE + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
-      if (random() > props.density * cluster * lane) {
+      if (random() > props.density * cluster * lane * districtDensityScale) {
         continue
       }
       const jitterScale = PROCEDURAL_CITY_BUILDING_JITTER_SCALE
@@ -805,7 +1182,7 @@ function generatePolygonParcels(
       if (!isPointInsidePolygon(local, points) || !corners.every((corner) => isPointInsidePolygon(corner, points))) {
         continue
       }
-      parcels.push(createParcel(random, props, new THREE.Vector3(local.x, surfaceY, local.y), -angle))
+      parcels.push(createParcel(random, props, new THREE.Vector3(local.x, surfaceY, local.y), -angle, districtT))
     }
   }
   return parcels
@@ -842,6 +1219,7 @@ function generateRoadParcels(
 ): ProceduralCityParcel[] {
   const parcels: ProceduralCityParcel[] = []
   const endpointCounts = buildRoadEndpointCounts(road)
+  const district = createProceduralCityDistrict(road.vertices)
   const baseStep = Math.max(props.spacing, props.maxWidth + props.spacing)
   const lateralDistance = road.width * 0.5 + props.roadSetback + props.maxDepth * 0.5
   for (let segmentIndex = 0; segmentIndex < road.segments.length; segmentIndex += 1) {
@@ -870,16 +1248,20 @@ function generateRoadParcels(
         if (parcels.length >= props.maxBuildings) {
           return parcels
         }
-        if (random() > props.density) {
-          continue
-        }
         const lateralJitter = (hash2D(Math.trunc(props.seed) ^ 0x214b, segmentIndex, slotIndex * 2 + (side > 0 ? 1 : 0)) - 0.5) * props.maxDepth * 0.35
         const offset = normal.clone().multiplyScalar(lateralDistance * side + lateralJitter)
+        const candidate = new THREE.Vector2(center.x + offset.x, center.y + offset.y)
+        const districtT = resolveProceduralCityDistrictT(candidate, district)
+        const districtDensityScale = resolveProceduralCityDistrictDensityScale(districtT)
+        if (random() > props.density * districtDensityScale) {
+          continue
+        }
         parcels.push(createParcel(
           random,
           props,
-          new THREE.Vector3(center.x + offset.x, height, center.y + offset.y),
+          new THREE.Vector3(candidate.x, height, candidate.y),
           -Math.atan2(direction.y, direction.x),
+          districtT,
         ))
       }
       const stepJitter = 0.72 + hash2D(Math.trunc(props.seed) ^ 0x5c31, segmentIndex, slotIndex) * 0.75
@@ -910,6 +1292,7 @@ function generateLandformParcels(
     max.x = Math.max(max.x, point.x)
     max.y = Math.max(max.y, point.y)
   })
+  const district = createProceduralCityDistrict(rotated)
 
   const parcels: ProceduralCityParcel[] = []
   const stepScale = PROCEDURAL_CITY_BUILDING_STEP_SCALE
@@ -921,6 +1304,8 @@ function generateLandformParcels(
       if (parcels.length >= props.maxBuildings) {
         return parcels
       }
+      const districtT = resolveProceduralCityDistrictT(new THREE.Vector2(x, z), district)
+      const districtDensityScale = resolveProceduralCityDistrictDensityScale(districtT)
       if (random() > props.density) {
         continue
       }
@@ -928,7 +1313,7 @@ function generateLandformParcels(
       const cellZ = Math.floor((z - min.y) / stepZ)
       const cluster = PROCEDURAL_CITY_BUILDING_CLUSTER_SCALE + hash2D(Math.trunc(props.seed) ^ 0x51a7, Math.floor((x - (min.x + max.x) * 0.5) / Math.max(stepX * 2.1, 11)), Math.floor((z - (min.y + max.y) * 0.5) / Math.max(stepZ * 2.1, 11))) * 0.32
       const lane = PROCEDURAL_CITY_BUILDING_LANE_SCALE + hash2D(Math.trunc(props.seed) ^ 0x2d91, cellX, cellZ) * 0.12
-      if (random() > props.density * cluster * lane) {
+      if (random() > props.density * cluster * lane * districtDensityScale) {
         continue
       }
       const jitterScale = PROCEDURAL_CITY_BUILDING_JITTER_SCALE
@@ -964,6 +1349,7 @@ function generateLandformParcels(
         props,
         new THREE.Vector3(worldX, surfaceY, worldZ),
         rotationY,
+        districtT,
       ))
     }
   }
@@ -994,10 +1380,10 @@ const facadeTextureByStyle = new Map<ProceduralCityStyle, THREE.Texture>()
 const wallMaterialByStyle = new Map<ProceduralCityStyle, THREE.Material>()
 type ProceduralCityArchetype = {
   geometry: THREE.BufferGeometry
-  outlineGeometry?: THREE.BufferGeometry
 }
 const archetypesByStyle = new Map<ProceduralCityStyle, ProceduralCityArchetype[]>()
-let solidOutlineMaterial: THREE.MeshBasicMaterial | null = null
+let solidOutlineMaterial: THREE.ShaderMaterial | null = null
+const proceduralCityOutlineResolution = new THREE.Vector2()
 
 function loadFacadeTexture(style: unknown): THREE.Texture {
   const resolvedStyle = resolveProceduralCityStyle(style)
@@ -1113,6 +1499,59 @@ function loadFacadeTexture(style: unknown): THREE.Texture {
   return texture
 }
 
+function applyProceduralCitySolidLighting(material: THREE.MeshBasicMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSolidLightDirection = { value: PROCEDURAL_CITY_SOLID_LIGHT_DIRECTION.clone() }
+    shader.uniforms.uSolidLightAmbient = { value: PROCEDURAL_CITY_SOLID_LIGHT_AMBIENT }
+    shader.uniforms.uSolidLightDiffuse = { value: PROCEDURAL_CITY_SOLID_LIGHT_DIFFUSE }
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        [
+          '#include <common>',
+          'varying vec3 vSolidWorldNormal;',
+        ].join('\n'),
+      )
+      .replace(
+        '#include <begin_vertex>',
+        [
+          '#include <begin_vertex>',
+          'vec3 solidNormal = normal;',
+          '#ifdef USE_INSTANCING',
+          'mat3 solidInstanceBasis = mat3(instanceMatrix);',
+          'solidNormal /= vec3(',
+          '  dot(solidInstanceBasis[0], solidInstanceBasis[0]),',
+          '  dot(solidInstanceBasis[1], solidInstanceBasis[1]),',
+          '  dot(solidInstanceBasis[2], solidInstanceBasis[2])',
+          ');',
+          'solidNormal = solidInstanceBasis * solidNormal;',
+          '#endif',
+          'vSolidWorldNormal = normalize(mat3(modelMatrix) * solidNormal);',
+        ].join('\n'),
+      )
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        [
+          '#include <common>',
+          'varying vec3 vSolidWorldNormal;',
+          'uniform vec3 uSolidLightDirection;',
+          'uniform float uSolidLightAmbient;',
+          'uniform float uSolidLightDiffuse;',
+        ].join('\n'),
+      )
+      .replace(
+        '#include <color_fragment>',
+        [
+          '#include <color_fragment>',
+          'float solidNdotL = max(dot(normalize(vSolidWorldNormal), normalize(uSolidLightDirection)), 0.0);',
+          'diffuseColor.rgb *= uSolidLightAmbient + uSolidLightDiffuse * solidNdotL;',
+        ].join('\n'),
+      )
+  }
+  material.customProgramCacheKey = () => 'procedural-city-solid-lighting-v1'
+}
+
 function getWallMaterial(style: unknown): THREE.Material {
   const resolvedStyle = resolveProceduralCityStyle(style)
   const cachedMaterial = wallMaterialByStyle.get(resolvedStyle)
@@ -1124,6 +1563,7 @@ function getWallMaterial(style: unknown): THREE.Material {
       color: 0xffffff,
       vertexColors: true,
     })
+    applyProceduralCitySolidLighting(material)
     wallMaterialByStyle.set(resolvedStyle, material)
     return material
   }
@@ -1135,17 +1575,86 @@ function getWallMaterial(style: unknown): THREE.Material {
   return material
 }
 
-function getSolidOutlineMaterial(): THREE.MeshBasicMaterial {
+const PROCEDURAL_CITY_SOLID_OUTLINE_VERTEX_SHADER = `
+uniform vec2 uResolution;
+uniform float uOutlinePixels;
+uniform float uNearOpacity;
+uniform float uFarOpacity;
+uniform float uNearDistance;
+uniform float uFarDistance;
+varying float vOutlineOpacity;
+
+void main() {
+  mat3 instanceBasis = mat3(instanceMatrix);
+  vec3 transformedNormal = normal;
+  transformedNormal /= vec3(
+    dot(instanceBasis[0], instanceBasis[0]),
+    dot(instanceBasis[1], instanceBasis[1]),
+    dot(instanceBasis[2], instanceBasis[2])
+  );
+  transformedNormal = instanceBasis * transformedNormal;
+  vec3 viewNormal = normalize(normalMatrix * transformedNormal);
+
+  vec4 viewPosition = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+  vec4 clipPosition = projectionMatrix * viewPosition;
+  vec2 screenNormal = (projectionMatrix * vec4(viewNormal, 0.0)).xy;
+  float screenNormalLength = length(screenNormal);
+  screenNormal = screenNormalLength > 1e-5 ? screenNormal / screenNormalLength : vec2(0.0);
+  clipPosition.xy += screenNormal * (uOutlinePixels * 2.0 / uResolution) * clipPosition.w;
+
+  vec4 viewCenter = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+  float viewDistance = length(viewCenter.xyz);
+  float distanceFade = smoothstep(uNearDistance, uFarDistance, viewDistance);
+  vOutlineOpacity = mix(uNearOpacity, uFarOpacity, distanceFade);
+  gl_Position = clipPosition;
+}
+`
+
+const PROCEDURAL_CITY_SOLID_OUTLINE_FRAGMENT_SHADER = `
+uniform vec3 uOutlineColor;
+varying float vOutlineOpacity;
+
+void main() {
+  if (vOutlineOpacity <= 0.001) {
+    discard;
+  }
+  gl_FragColor = vec4(uOutlineColor, vOutlineOpacity);
+  #include <colorspace_fragment>
+}
+`
+
+function getSolidOutlineMaterial(): THREE.ShaderMaterial {
   if (!solidOutlineMaterial) {
-    solidOutlineMaterial = new THREE.MeshBasicMaterial({
-      color: PROCEDURAL_CITY_SOLID_OUTLINE_COLOR,
+    solidOutlineMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uResolution: { value: new THREE.Vector2(1, 1) },
+        uOutlinePixels: { value: PROCEDURAL_CITY_SOLID_OUTLINE_PIXELS },
+        uOutlineColor: { value: new THREE.Color(PROCEDURAL_CITY_SOLID_OUTLINE_COLOR) },
+        uNearOpacity: { value: PROCEDURAL_CITY_SOLID_OUTLINE_NEAR_OPACITY },
+        uFarOpacity: { value: PROCEDURAL_CITY_SOLID_OUTLINE_FAR_OPACITY },
+        uNearDistance: { value: PROCEDURAL_CITY_SOLID_OUTLINE_NEAR_DISTANCE },
+        uFarDistance: { value: PROCEDURAL_CITY_SOLID_OUTLINE_FAR_DISTANCE },
+      },
+      vertexShader: PROCEDURAL_CITY_SOLID_OUTLINE_VERTEX_SHADER,
+      fragmentShader: PROCEDURAL_CITY_SOLID_OUTLINE_FRAGMENT_SHADER,
       side: THREE.BackSide,
       transparent: true,
-      opacity: PROCEDURAL_CITY_SOLID_OUTLINE_OPACITY,
       depthWrite: false,
     })
   }
   return solidOutlineMaterial
+}
+
+function configureSolidOutlineMesh(mesh: THREE.InstancedMesh): void {
+  const material = mesh.material as THREE.ShaderMaterial
+  mesh.onBeforeRender = (renderer: THREE.WebGLRenderer): void => {
+    renderer.getDrawingBufferSize(proceduralCityOutlineResolution)
+    material.uniforms.uResolution!.value.set(
+      Math.max(1, proceduralCityOutlineResolution.x),
+      Math.max(1, proceduralCityOutlineResolution.y),
+    )
+    material.uniforms.uOutlinePixels!.value = PROCEDURAL_CITY_SOLID_OUTLINE_PIXELS * renderer.getPixelRatio()
+  }
 }
 
 function applyProceduralCityVertexShade(geometry: THREE.BufferGeometry, bottomShade: number, topShade: number): void {
@@ -1206,26 +1715,277 @@ function applyProceduralCitySolidFacetShade(geometry: THREE.BufferGeometry): voi
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
 }
 
-function applyProceduralCityRoofColors(geometry: THREE.BufferGeometry): void {
-  const position = geometry.getAttribute('position') as THREE.BufferAttribute | undefined
-  if (!position) {
-    return
-  }
-  const colors: number[] = []
-  for (let index = 0; index < position.count; index += 1) {
-    colors.push(1, 1, 1)
-  }
-  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+function createProceduralCitySolidPartGeometry(
+  width: number,
+  depth: number,
+  height: number,
+  y: number,
+  topScaleX = 1,
+  topScaleZ = 1,
+  x = 0,
+  z = 0,
+): THREE.BufferGeometry {
+  const geometry = createTaperedBoxGeometry(topScaleX, topScaleZ, 1, 1)
+  geometry.scale(width, height, depth)
+  geometry.translate(x, y, z)
+  geometry.computeVertexNormals()
+  return geometry
 }
 
-type ProceduralCityGeometryShading = 'vertical' | 'facet'
+function mergeProceduralCitySolidParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  if (parts.length <= 1) {
+    return parts[0]!
+  }
+  const merged = mergeGeometries(parts, false)
+  if (!merged) {
+    const fallback = parts[0]!
+    parts.slice(1).forEach((part) => part.dispose())
+    return fallback
+  }
+  parts.forEach((part) => part.dispose())
+  return merged
+}
+
+function appendProceduralCitySolidRoofEquipment(
+  parts: THREE.BufferGeometry[],
+  equipment: ProceduralCitySolidRoofEquipment,
+  baseY: number,
+  centerX: number,
+  centerZ: number,
+  height: number,
+): void {
+  if (equipment === 'none') {
+    return
+  }
+  const y = baseY - PROCEDURAL_CITY_SOLID_PART_OVERLAP
+  parts.push(createProceduralCitySolidPartGeometry(
+    PROCEDURAL_CITY_SOLID_SECONDARY_ROOF_BOX_SCALE,
+    PROCEDURAL_CITY_SOLID_SECONDARY_ROOF_BOX_SCALE,
+    height + PROCEDURAL_CITY_SOLID_PART_OVERLAP,
+    y,
+    1,
+    1,
+    centerX,
+    centerZ,
+  ))
+  if (equipment === 'cluster') {
+    parts.push(
+      createProceduralCitySolidPartGeometry(
+        PROCEDURAL_CITY_SOLID_EQUIPMENT_SMALL_SCALE_X,
+        PROCEDURAL_CITY_SOLID_EQUIPMENT_SMALL_SCALE_Z,
+        PROCEDURAL_CITY_SOLID_EQUIPMENT_SMALL_HEIGHT + PROCEDURAL_CITY_SOLID_PART_OVERLAP,
+        y,
+        1,
+        1,
+        centerX - 0.18,
+        centerZ + 0.12,
+      ),
+      createProceduralCitySolidPartGeometry(
+        PROCEDURAL_CITY_SOLID_EQUIPMENT_TINY_SCALE_X,
+        PROCEDURAL_CITY_SOLID_EQUIPMENT_TINY_SCALE_Z,
+        PROCEDURAL_CITY_SOLID_EQUIPMENT_TINY_HEIGHT + PROCEDURAL_CITY_SOLID_PART_OVERLAP,
+        y,
+        1,
+        1,
+        centerX + 0.05,
+        centerZ - 0.18,
+      ),
+    )
+  }
+}
+
+function createProceduralCitySolidVariantGeometry(index: number): THREE.BufferGeometry {
+  const spec = PROCEDURAL_CITY_SOLID_VARIANT_SPECS[index % PROCEDURAL_CITY_SOLID_VARIANT_SPECS.length]!
+  const taperStep = (index % 3) * 0.003
+  const parts: THREE.BufferGeometry[] = []
+  if (spec.plinth) {
+    parts.push(createProceduralCitySolidPartGeometry(
+      PROCEDURAL_CITY_SOLID_PLINTH_SCALE,
+      PROCEDURAL_CITY_SOLID_PLINTH_SCALE,
+      PROCEDURAL_CITY_SOLID_PLINTH_HEIGHT,
+      0,
+    ))
+  }
+  switch (spec.family) {
+    case 'roofCap': {
+      const capHeight = PROCEDURAL_CITY_SOLID_ROOF_CAP_HEIGHT + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+      const capY = 1 - capHeight
+      const bodyHeight = capY + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+      parts.push(
+        createProceduralCitySolidPartGeometry(1, 1, bodyHeight, 0, 0.995, 0.995),
+        createProceduralCitySolidPartGeometry(
+          PROCEDURAL_CITY_SOLID_ROOF_CAP_OVERHANG,
+          PROCEDURAL_CITY_SOLID_ROOF_CAP_OVERHANG,
+          capHeight,
+          capY,
+        ),
+      )
+      break
+    }
+    case 'roofBox': {
+      const roofBoxHeight = PROCEDURAL_CITY_SOLID_ROOF_BOX_HEIGHT + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+      const roofBoxY = 1 - roofBoxHeight
+      const bodyHeight = roofBoxY + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+      parts.push(
+        createProceduralCitySolidPartGeometry(
+          1,
+          1,
+          bodyHeight,
+          0,
+          0.995,
+          0.995,
+        ),
+        createProceduralCitySolidPartGeometry(
+          PROCEDURAL_CITY_SOLID_ROOF_BOX_SCALE,
+          PROCEDURAL_CITY_SOLID_ROOF_BOX_SCALE,
+          roofBoxHeight,
+          roofBoxY,
+        ),
+      )
+      appendProceduralCitySolidRoofEquipment(
+        parts,
+        spec.roofEquipment,
+        bodyHeight,
+        PROCEDURAL_CITY_SOLID_SECONDARY_ROOF_BOX_OFFSET,
+        0,
+        PROCEDURAL_CITY_SOLID_SECONDARY_ROOF_BOX_HEIGHT,
+      )
+      break
+    }
+    case 'setback': {
+      const lowerHeight = PROCEDURAL_CITY_SOLID_SETBACK_LOWER_HEIGHT
+      const upperY = PROCEDURAL_CITY_SOLID_SETBACK_UPPER_Y
+      if (spec.crown) {
+        const crownHeight = PROCEDURAL_CITY_SOLID_CROWN_HEIGHT + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+        const crownY = 1 - crownHeight
+        const upperTop = crownY + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+        parts.push(
+          createProceduralCitySolidPartGeometry(1, 1, lowerHeight, 0),
+          createProceduralCitySolidPartGeometry(
+            PROCEDURAL_CITY_SOLID_SETBACK_UPPER_SCALE,
+            PROCEDURAL_CITY_SOLID_SETBACK_UPPER_SCALE,
+            upperTop - upperY,
+            upperY,
+          ),
+          createProceduralCitySolidPartGeometry(
+            PROCEDURAL_CITY_SOLID_CROWN_SCALE,
+            PROCEDURAL_CITY_SOLID_CROWN_SCALE,
+            crownHeight,
+            crownY,
+            1,
+            1,
+            spec.crownOffset,
+            0,
+          ),
+        )
+      } else {
+        const equipmentHeight = spec.roofEquipment === 'none' ? 0 : PROCEDURAL_CITY_SOLID_ROOF_EQUIPMENT_HEIGHT
+        const upperTop = 1 - equipmentHeight
+        parts.push(
+          createProceduralCitySolidPartGeometry(1, 1, lowerHeight, 0),
+          createProceduralCitySolidPartGeometry(
+            PROCEDURAL_CITY_SOLID_SETBACK_UPPER_SCALE,
+            PROCEDURAL_CITY_SOLID_SETBACK_UPPER_SCALE,
+            upperTop - upperY,
+            upperY,
+          ),
+        )
+        if (equipmentHeight > 0) {
+          appendProceduralCitySolidRoofEquipment(
+            parts,
+            spec.roofEquipment,
+            upperTop,
+            0.1,
+            0,
+            equipmentHeight,
+          )
+        }
+      }
+      break
+    }
+    case 'tapered': {
+      const topScaleX = 0.88 + (index % 2) * 0.04
+      const topScaleZ = 0.9 + (index % 2) * 0.02
+      if (spec.crown) {
+        const crownHeight = PROCEDURAL_CITY_SOLID_CROWN_HEIGHT + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+        const crownY = 1 - crownHeight
+        const bodyHeight = crownY + PROCEDURAL_CITY_SOLID_PART_OVERLAP
+        parts.push(
+          createProceduralCitySolidPartGeometry(1, 1, bodyHeight, 0, topScaleX, topScaleZ),
+          createProceduralCitySolidPartGeometry(
+            PROCEDURAL_CITY_SOLID_CROWN_SCALE,
+            PROCEDURAL_CITY_SOLID_CROWN_SCALE,
+            crownHeight,
+            crownY,
+            1,
+            1,
+            spec.crownOffset,
+            0,
+          ),
+        )
+        appendProceduralCitySolidRoofEquipment(
+          parts,
+          spec.roofEquipment,
+          bodyHeight,
+          0.32,
+          0,
+          PROCEDURAL_CITY_SOLID_ROOF_EQUIPMENT_HEIGHT,
+        )
+      } else {
+        const equipmentHeight = spec.roofEquipment === 'none' ? 0 : PROCEDURAL_CITY_SOLID_ROOF_EQUIPMENT_HEIGHT
+        const bodyHeight = 1 - equipmentHeight
+        parts.push(createProceduralCitySolidPartGeometry(1, 1, bodyHeight, 0, topScaleX, topScaleZ))
+        if (equipmentHeight > 0) {
+          appendProceduralCitySolidRoofEquipment(
+            parts,
+            spec.roofEquipment,
+            bodyHeight,
+            0,
+            0,
+            equipmentHeight,
+          )
+        }
+      }
+      break
+    }
+    case 'flat':
+    default: {
+      const bodyHeight = spec.parapet ? 1 - PROCEDURAL_CITY_SOLID_PARAPET_HEIGHT : 1
+      parts.push(createProceduralCitySolidPartGeometry(
+        1,
+        1,
+        bodyHeight,
+        0,
+        0.996 - taperStep,
+        0.994 - taperStep,
+      ))
+      if (spec.parapet) {
+        const halfThickness = PROCEDURAL_CITY_SOLID_PARAPET_THICKNESS * 0.5
+        const edge = 0.5 - halfThickness
+        const sideDepth = 1 - PROCEDURAL_CITY_SOLID_PARAPET_THICKNESS * 2
+        parts.push(
+          createProceduralCitySolidPartGeometry(1, PROCEDURAL_CITY_SOLID_PARAPET_THICKNESS, PROCEDURAL_CITY_SOLID_PARAPET_HEIGHT, bodyHeight, 1, 1, 0, edge),
+          createProceduralCitySolidPartGeometry(1, PROCEDURAL_CITY_SOLID_PARAPET_THICKNESS, PROCEDURAL_CITY_SOLID_PARAPET_HEIGHT, bodyHeight, 1, 1, 0, -edge),
+          createProceduralCitySolidPartGeometry(PROCEDURAL_CITY_SOLID_PARAPET_THICKNESS, sideDepth, PROCEDURAL_CITY_SOLID_PARAPET_HEIGHT, bodyHeight, 1, 1, edge, 0),
+          createProceduralCitySolidPartGeometry(PROCEDURAL_CITY_SOLID_PARAPET_THICKNESS, sideDepth, PROCEDURAL_CITY_SOLID_PARAPET_HEIGHT, bodyHeight, 1, 1, -edge, 0),
+        )
+      }
+      break
+    }
+  }
+  const geometry = mergeProceduralCitySolidParts(parts)
+  geometry.computeVertexNormals()
+  applyProceduralCitySolidFacetShade(geometry)
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
 
 function createTaperedBoxGeometry(
   topScaleX: number,
   topScaleZ: number,
   bottomShade: number,
   topShade: number,
-  shading: ProceduralCityGeometryShading = 'vertical',
 ): THREE.BoxGeometry {
   const geometry = new THREE.BoxGeometry(1, 1, 1)
   const position = geometry.getAttribute('position') as THREE.BufferAttribute
@@ -1239,11 +1999,7 @@ function createTaperedBoxGeometry(
   position.needsUpdate = true
   geometry.computeVertexNormals()
   geometry.translate(0, 0.5, 0)
-  if (shading === 'facet') {
-    applyProceduralCitySolidFacetShade(geometry)
-  } else {
-    applyProceduralCityVertexShade(geometry, bottomShade, topShade)
-  }
+  applyProceduralCityVertexShade(geometry, bottomShade, topShade)
   return geometry
 }
 
@@ -1255,42 +2011,18 @@ function getArchetypes(style: unknown): ProceduralCityArchetype[] {
   }
   const theme = getProceduralCityStyleTheme(resolvedStyle)
   const archetypes = Array.from({ length: BUILDING_VARIANT_COUNT }, (_entry, index) => {
-    const taper = 1 - (index % 6) * 0.004
-    const sideTaper = 1 - ((index + 3) % 4) * 0.004
-    const roofHeight = 0.02 + (index % 3) * 0.01
-    const shading: ProceduralCityGeometryShading = resolvedStyle === 'solid' ? 'facet' : 'vertical'
-    const wall = createTaperedBoxGeometry(
-      taper,
-      sideTaper,
-      theme.vertexBottomShade,
-      theme.vertexTopShade,
-      shading,
-    )
-    const roof = new THREE.BoxGeometry(
-      Math.max(0.5, taper - 0.02),
-      roofHeight,
-      Math.max(0.5, sideTaper - 0.02),
-    )
-    roof.translate(0, roofHeight * 0.5, 0)
-    applyProceduralCityRoofColors(roof)
-    const geometry = wall
-    roof.dispose()
+    const geometry = resolvedStyle === 'solid'
+      ? createProceduralCitySolidVariantGeometry(index)
+      : createTaperedBoxGeometry(
+          1 - (index % 6) * 0.004,
+          1 - ((index + 3) % 4) * 0.004,
+          theme.vertexBottomShade,
+          theme.vertexTopShade,
+        )
     geometry.computeVertexNormals()
     geometry.computeBoundingBox()
     geometry.computeBoundingSphere()
-    let outlineGeometry: THREE.BufferGeometry | undefined
-    if (resolvedStyle === 'solid') {
-      outlineGeometry = createTaperedBoxGeometry(taper, sideTaper, 1, 1)
-      outlineGeometry.scale(
-        PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_XZ,
-        PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_Y,
-        PROCEDURAL_CITY_SOLID_OUTLINE_SCALE_XZ,
-      )
-      outlineGeometry.computeVertexNormals()
-      outlineGeometry.computeBoundingBox()
-      outlineGeometry.computeBoundingSphere()
-    }
-    return { geometry, outlineGeometry }
+    return { geometry }
   })
   archetypesByStyle.set(resolvedStyle, archetypes)
   return archetypes
@@ -1376,9 +2108,9 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknow
     tileBucket.parcelsByVariant.forEach((entries, variant) => {
       const archetype = archetypeList[variant]!
       const cityMesh = createMesh(archetype.geometry, getWallMaterial(resolvedStyle), entries.length, `ProceduralCity_${tileBucket.tileX}_${tileBucket.tileZ}_${variant}`)
-      const outlineMesh = archetype.outlineGeometry
+      const outlineMesh = resolvedStyle === 'solid'
         ? createMesh(
-            archetype.outlineGeometry,
+            archetype.geometry,
             getSolidOutlineMaterial(),
             entries.length,
             `ProceduralCity_${tileBucket.tileX}_${tileBucket.tileZ}_${variant}_outline`,
@@ -1386,6 +2118,7 @@ function buildProceduralCityGroup(parcels: ProceduralCityParcel[], style: unknow
         : null
       if (outlineMesh) {
         outlineMesh.renderOrder = 1
+        configureSolidOutlineMesh(outlineMesh)
       }
       entries.forEach((parcel, index) => {
         proceduralCityTileQuaternion.setFromAxisAngle(proceduralCityTileUpAxis, parcel.rotationY)
@@ -1460,6 +2193,8 @@ export function clampProceduralCityComponentProps(
     roadSetback: clampNumber(props?.roadSetback, PROCEDURAL_CITY_DEFAULT_PROPS.roadSetback, 0, 100),
     junctionSetback: clampNumber(props?.junctionSetback, PROCEDURAL_CITY_DEFAULT_PROPS.junctionSetback, 0, 200),
     maxBuildings: Math.trunc(clampNumber(props?.maxBuildings, PROCEDURAL_CITY_DEFAULT_PROPS.maxBuildings, 0, 20000)),
+    solidColorScheme: resolveProceduralCitySolidColorScheme(props?.solidColorScheme),
+    solidColorSeed: Math.trunc(clampNumber(props?.solidColorSeed, PROCEDURAL_CITY_DEFAULT_PROPS.solidColorSeed, 0, 2147483647)),
     solidColor: normalizeProceduralCitySolidColor(props?.solidColor),
     style: resolveProceduralCityStyle(props?.style ?? PROCEDURAL_CITY_DEFAULT_PROPS.style),
   }
