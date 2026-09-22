@@ -5,8 +5,11 @@
 
 export type CityLabMaterialMode = 'project' | 'part-debug'
 
+export type CityLabBuildingPreset = 'skyscraper' | 'solid' | 'office' | 'bright' | 'classic' | 'warm' | 'cool'
+
 export type CityLabSettings = {
 	seed: number
+	buildingPreset: CityLabBuildingPreset
 	blocksX: number
 	blocksZ: number
 	lotsX: number
@@ -37,6 +40,7 @@ export type CityLabStats = {
 /** Upstream `CityGenerator.defaults` ( 2 × 2 blocks of 3 × 2 lots = 24 towers ). */
 export const CITY_LAB_DEFAULT_SETTINGS: CityLabSettings = {
 	seed: 1,
+	buildingPreset: 'solid',
 	blocksX: 2,
 	blocksZ: 2,
 	lotsX: 3,
@@ -62,8 +66,13 @@ type UiHandle = {
 	setStatus: ( text: string ) => void
 }
 
-function formatMegas( value: number ): string {
+// the cheap presets only carry a few thousand vertices, so keep the exact count
+// until it is large enough for megas to read better
+function formatCount( value: number ): string {
+
+	if ( value < 100000 ) return Math.round( value ).toLocaleString( 'en-US' )
 	return `${( value / 1e6 ).toFixed( 2 )} M`
+
 }
 
 function element< T extends HTMLElement >( tag: string, className?: string, text?: string ): T {
@@ -152,12 +161,33 @@ export function createCityLabUi( options: UiOptions ): UiHandle {
 		seedInput.value = String( settings.seed )
 	} )
 
+	// building preset
+	const buildingRow = element( 'label', 'row' )
+	buildingRow.append( element( 'span', 'row-label', 'building' ) )
+	const buildingSelect = element< HTMLSelectElement >( 'select' )
+	for ( const value of [ 'skyscraper', 'solid', 'office', 'bright', 'classic', 'warm', 'cool' ] as const ) {
+		const option = element< HTMLOptionElement >( 'option' )
+		option.value = value
+		option.textContent = value === 'skyscraper' ? 'skyscraper (detailed)' : `${value} (instanced)`
+		buildingSelect.append( option )
+	}
+	buildingSelect.value = settings.buildingPreset
+	buildingSelect.addEventListener( 'change', () => {
+		settings.buildingPreset = buildingSelect.value as CityLabBuildingPreset
+		update( 'buildingPreset' )
+	} )
+	buildingRow.append( buildingSelect )
+	panel.append( buildingRow )
+	syncControls.push( () => {
+		buildingSelect.value = settings.buildingPreset
+	} )
+
 	addSlider( 'blocksX', 'blocks X', 1, 3, 1 )
 	addSlider( 'blocksZ', 'blocks Z', 1, 3, 1 )
 	addSlider( 'lotsX', 'lots X', 1, 3, 1 )
 	addSlider( 'lotsZ', 'lots Z', 1, 3, 1 )
-	addSlider( 'minTowerHeight', 'min height', 20, 200, 2 )
-	addSlider( 'maxTowerHeight', 'max height', 20, 260, 2 )
+	addSlider( 'minTowerHeight', 'min height', 1, 200, 1 )
+	addSlider( 'maxTowerHeight', 'max height', 1, 260, 1 )
 
 	// material mode
 	const modeRow = element( 'label', 'row' )
@@ -228,9 +258,9 @@ export function createCityLabUi( options: UiOptions ): UiHandle {
 			[ 'towers', String( stats.towers ) ],
 			[ 'streetlights', String( stats.streetlights ) ],
 			[ 'cars', String( stats.cars ) ],
-			[ 'vertices', formatMegas( stats.vertices ) ],
-			[ 'tris (geometry)', formatMegas( stats.geometryTriangles ) ],
-			[ 'tris / frame', formatMegas( stats.triangles ) ],
+			[ 'vertices', formatCount( stats.vertices ) ],
+			[ 'tris (geometry)', formatCount( stats.geometryTriangles ) ],
+			[ 'tris / frame', formatCount( stats.triangles ) ],
 			[ 'draw calls / frame', String( stats.drawCalls ) ],
 			[ 'geometry build', `${stats.buildMs.toFixed( 0 )} ms` ],
 			[ 'frame', `${stats.frameMs.toFixed( 1 )} ms` ]

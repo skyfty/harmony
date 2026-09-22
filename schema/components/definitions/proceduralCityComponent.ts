@@ -14,6 +14,7 @@ import type {
   FloorDynamicMesh,
   LandformDynamicMesh,
   RegionDynamicMesh,
+  RegionVertex2D,
   RoadDynamicMesh,
   SceneNode,
   SceneNodeComponentState,
@@ -105,13 +106,13 @@ export interface ProceduralCityComponentProps {
   style: ProceduralCityStyle
 }
 
-type ProceduralCityHostSnapshot =
+export type ProceduralCityHostSnapshot =
   | { type: 'Floor'; mesh: FloorDynamicMesh }
   | { type: 'Region'; mesh: RegionDynamicMesh }
   | { type: 'Road'; mesh: RoadDynamicMesh }
   | { type: 'Landform'; mesh: LandformDynamicMesh }
 
-type ProceduralCityPolygonFootprint = {
+export type ProceduralCityPolygonFootprint = {
   kind: 'polygon'
   points: THREE.Vector2[]
 }
@@ -130,7 +131,7 @@ type ProceduralCityLandformFootprint = {
   mesh: LandformDynamicMesh
 }
 
-type ProceduralCityFootprint = ProceduralCityPolygonFootprint | ProceduralCityRoadFootprint | ProceduralCityLandformFootprint
+export type ProceduralCityFootprint = ProceduralCityPolygonFootprint | ProceduralCityRoadFootprint | ProceduralCityLandformFootprint
 
 interface ProceduralCityParcel {
   position: THREE.Vector3
@@ -527,7 +528,67 @@ export function cloneProceduralCityHostSnapshot(dynamicMesh: unknown): Procedura
   return null
 }
 
-function resolveProceduralCityFootprint(snapshot: ProceduralCityHostSnapshot | null | undefined): ProceduralCityFootprint | null {
+const PROCEDURAL_CITY_HOST_SIGNATURE_KEY = '__harmonyProceduralCityHostSignature'
+
+function pointsSignature(points: ReadonlyArray<RegionVertex2D>): string {
+  return points.map((point) => `${point[0].toFixed(3)},${point[1].toFixed(3)}`).join(';')
+}
+
+/**
+ * A cheap content fingerprint of a host outline, so the snapshot can be refreshed
+ * on every node patch without allocating a clone for an unchanged outline.
+ */
+function computeProceduralCityHostSnapshotSignature(snapshot: ProceduralCityHostSnapshot): string {
+  if (snapshot.type === 'Road') {
+    const segments = snapshot.mesh.segments.map((segment) => `${segment.a}-${segment.b}`).join(';')
+    const heights = (snapshot.mesh.segmentHeights ?? []).map((entry) => entry.join(',')).join('|')
+    return `Road|${snapshot.mesh.width.toFixed(3)}|${pointsSignature(snapshot.mesh.vertices)}|${segments}|${heights}`
+  }
+  return `${snapshot.type}|${pointsSignature(snapshot.mesh.vertices)}`
+}
+
+/**
+ * Writes ( or clears ) the host outline snapshot every city component reads.
+ *
+ * This lives outside `syncProceduralCityRuntimeArtifact` so a host that only carries
+ * `cityGenerator` keeps its outline: the artifact helper used to delete the key for
+ * any node without an enabled `proceduralCity` component, which silently turned a
+ * region-attached grid back into the unattached free grid.
+ *
+ * Returns true only when the outline's content actually changed, so callers can use
+ * it as a rebuild trigger without re-running a build for every node patch.
+ */
+export function syncProceduralCityHostSnapshot(
+  hostObject: Object3D | null,
+  node: SceneNode | null | undefined,
+): boolean {
+  if (!hostObject || !node) {
+    return false
+  }
+  const userData = hostObject.userData ?? (hostObject.userData = {})
+  const snapshot = cloneProceduralCityHostSnapshot(node.dynamicMesh)
+  const signature = snapshot ? computeProceduralCityHostSnapshotSignature(snapshot) : ''
+  if ((userData[PROCEDURAL_CITY_HOST_SIGNATURE_KEY] ?? '') === signature) {
+    return false
+  }
+
+  if (!snapshot) {
+    const changed = userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY] !== undefined
+    delete userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY]
+    delete userData[PROCEDURAL_CITY_HOST_SIGNATURE_KEY]
+    return changed
+  }
+
+  userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY] = snapshot
+  userData[PROCEDURAL_CITY_HOST_SIGNATURE_KEY] = signature
+  return true
+}
+
+/**
+ * Reads the attachable host's outline out of its snapshot. Shared with the
+ * `cityGenerator` component, which clips its block grid to the same footprint.
+ */
+export function resolveProceduralCityFootprint(snapshot: ProceduralCityHostSnapshot | null | undefined): ProceduralCityFootprint | null {
   if (!snapshot) {
     return null
   }
@@ -651,7 +712,7 @@ function polygonArea(points: THREE.Vector2[]): number {
   return area * 0.5
 }
 
-function isPointInsidePolygon(point: THREE.Vector2, polygon: THREE.Vector2[]): boolean {
+export function isPointInsidePolygon(point: THREE.Vector2, polygon: THREE.Vector2[]): boolean {
   let inside = false
   for (let index = 0, previousIndex = polygon.length - 1; index < polygon.length; previousIndex = index++) {
     const a = polygon[index]!
@@ -665,7 +726,7 @@ function isPointInsidePolygon(point: THREE.Vector2, polygon: THREE.Vector2[]): b
   return inside
 }
 
-function resolveLongestEdgeAngle(points: THREE.Vector2[]): number {
+export function resolveLongestEdgeAngle(points: THREE.Vector2[]): number {
   let bestLengthSq = -1
   let bestAngle = 0
   for (let index = 0; index < points.length; index += 1) {
@@ -682,7 +743,7 @@ function resolveLongestEdgeAngle(points: THREE.Vector2[]): number {
   return bestAngle
 }
 
-function resolvePolygonSurfaceHeight(snapshot: ProceduralCityHostSnapshot): number {
+export function resolvePolygonSurfaceHeight(snapshot: ProceduralCityHostSnapshot): number {
   if (snapshot.type === 'Floor') {
     return Number.isFinite(snapshot.mesh.thickness) ? Math.max(0, snapshot.mesh.thickness ?? 0) : 0
   }
@@ -693,7 +754,7 @@ const proceduralCityMountPosition = new THREE.Vector3()
 const proceduralCityMountQuaternion = new THREE.Quaternion()
 const proceduralCityMountScale = new THREE.Vector3()
 
-function resolveProceduralCityMountObject(host: Object3D, snapshot: ProceduralCityHostSnapshot): Object3D {
+export function resolveProceduralCityMountObject(host: Object3D, snapshot: ProceduralCityHostSnapshot): Object3D {
   if (snapshot.type === 'Landform') {
     let current: Object3D = host
     while (current.parent) {
@@ -705,7 +766,7 @@ function resolveProceduralCityMountObject(host: Object3D, snapshot: ProceduralCi
   return parent ?? host
 }
 
-function copyWorldTransform(source: Object3D, target: Object3D): void {
+export function copyWorldTransform(source: Object3D, target: Object3D): void {
   source.updateMatrixWorld(true)
   source.matrixWorld.decompose(proceduralCityMountPosition, proceduralCityMountQuaternion, proceduralCityMountScale)
   target.position.copy(proceduralCityMountPosition)
@@ -832,7 +893,7 @@ function sampleLandformParcelSurfaceHeight(
   return surfaceY
 }
 
-function rotate2(point: THREE.Vector2, angle: number): THREE.Vector2 {
+export function rotate2(point: THREE.Vector2, angle: number): THREE.Vector2 {
   const cos = Math.cos(angle)
   const sin = Math.sin(angle)
   return new THREE.Vector2(point.x * cos - point.y * sin, point.x * sin + point.y * cos)
@@ -1042,7 +1103,7 @@ function pickProceduralCitySolidVariantIndex(indices: number[], hashValue: numbe
   return indices[index]!
 }
 
-function resolveProceduralCitySolidVariantIndex(
+export function resolveProceduralCitySolidVariantIndex(
   roll: number,
   heightT: number,
   width: number,
@@ -1371,10 +1432,10 @@ function generateProceduralCityParcels(
   return generateRoadParcels(footprint, props, random)
 }
 
-const BUILDING_VARIANT_COUNT = 12
+export const BUILDING_VARIANT_COUNT = 12
 const PROCEDURAL_CITY_TILE_SIZE = 48
 
-type ProceduralCityArchetype = {
+export type ProceduralCityArchetype = {
   geometry: THREE.BufferGeometry
 }
 const archetypesByStyle = new Map<ProceduralCityStyle, ProceduralCityArchetype[]>()
@@ -1725,7 +1786,7 @@ function createTaperedBoxGeometry(
   return geometry
 }
 
-function getArchetypes(style: unknown): ProceduralCityArchetype[] {
+export function getArchetypes(style: unknown): ProceduralCityArchetype[] {
   const resolvedStyle = resolveProceduralCityStyle(style)
   const cached = archetypesByStyle.get(resolvedStyle)
   if (cached) {
@@ -1750,7 +1811,12 @@ function getArchetypes(style: unknown): ProceduralCityArchetype[] {
   return archetypes
 }
 
-function createMesh(
+/**
+ * Builds the static instanced mesh the city's buildings are drawn with: no
+ * shadows, frustum culled and a static instance buffer — what keeps the cheap
+ * building presets affordable on a mini program.
+ */
+export function createMesh(
   geometry: THREE.BufferGeometry,
   material: THREE.Material,
   count: number,
@@ -1972,18 +2038,20 @@ export function syncProceduralCityRuntimeArtifact(
 
   if (!componentEntry || componentEntry.enabled === false) {
     clearProceduralCityRuntimeArtifact(hostObject)
-    delete userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY]
+    // The outline is not owned by the procedural city component: a node that only
+    // carries `cityGenerator` still needs it, so refresh it instead of deleting it.
+    syncProceduralCityHostSnapshot(hostObject, node)
     return
   }
 
   const snapshot = cloneProceduralCityHostSnapshot(node.dynamicMesh)
   if (!snapshot) {
     clearProceduralCityRuntimeArtifact(hostObject)
-    delete userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY]
+    syncProceduralCityHostSnapshot(hostObject, node)
     return
   }
 
-  userData[PROCEDURAL_CITY_HOST_USER_DATA_KEY] = snapshot
+  syncProceduralCityHostSnapshot(hostObject, node)
 
   const props = clampProceduralCityComponentProps(componentEntry?.props ?? PROCEDURAL_CITY_DEFAULT_PROPS)
   const surfaceY = resolvePolygonSurfaceHeight(snapshot)

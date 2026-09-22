@@ -5,8 +5,14 @@ import type { SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   CITY_GENERATOR_COMPONENT_TYPE,
+  CITY_GENERATOR_MAX_INSTANCES,
+  CITY_GENERATOR_VERTEX_BUDGET,
   clampCityGeneratorComponentProps,
-  countCityGeneratorTowers,
+  cloneProceduralCityHostSnapshot,
+  resolveCityGeneratorGridPlan,
+  resolvePolygonSurfaceHeight,
+  resolveProceduralCityFootprint,
+  type CityGeneratorBuildingPreset,
   type CityGeneratorComponentProps,
 } from '@schema/components'
 
@@ -20,12 +26,43 @@ const cityComponent = computed(
 )
 
 const props = computed(() => clampCityGeneratorComponentProps(cityComponent.value?.props))
-const towerCount = computed(() => countCityGeneratorTowers(props.value))
 const blockWidth = computed(() => props.value.lot * props.value.lotsX)
 const blockDepth = computed(() => props.value.lot * props.value.lotsZ)
+const hostOutline = computed(() => {
+  const type = selectedNode.value?.dynamicMesh?.type
+  return type === 'Region' || type === 'Floor' || type === 'Landform'
+})
+const detailedBuildings = computed(() => props.value.buildingPreset === 'skyscraper')
 
-// one r180 tower bakes ~50k vertices, so the grid is the thing worth warning about
-const heavyGrid = computed(() => towerCount.value > 40)
+// the same derivation the component builds from, run in its dry-run mode so the panel
+// can show what a region is going to cost before it is paid for
+const plan = computed(() => {
+  const snapshot = cloneProceduralCityHostSnapshot(selectedNode.value?.dynamicMesh)
+  const surfaceY = snapshot ? resolvePolygonSurfaceHeight(snapshot) : 0
+  return resolveCityGeneratorGridPlan(props.value, resolveProceduralCityFootprint(snapshot), surfaceY)
+})
+const blocksOnAuto = computed(() => props.value.blocksX === 0 || props.value.blocksZ === 0)
+
+const vertexLabel = computed(() => {
+  const value = plan.value.estimatedVertices
+  return value >= 100000 ? `${(value / 1e6).toFixed(2)} M` : Math.round(value).toLocaleString('en-US')
+})
+
+const budgetLabel = computed(() => `${(CITY_GENERATOR_VERTEX_BUDGET / 1e6).toFixed(0)} M`)
+const instanceCapLabel = computed(() => CITY_GENERATOR_MAX_INSTANCES.toLocaleString('en-US'))
+
+const buildingPresetOptions: Array<{ title: string; value: CityGeneratorBuildingPreset }> = [
+  { title: 'Skyscraper (detailed)', value: 'skyscraper' },
+  { title: 'Solid (instanced)', value: 'solid' },
+  { title: 'Office (instanced)', value: 'office' },
+  { title: 'Bright (instanced)', value: 'bright' },
+  { title: 'Classic (instanced)', value: 'classic' },
+  { title: 'Warm (instanced)', value: 'warm' },
+  { title: 'Cool (instanced)', value: 'cool' },
+]
+
+// the budget only applies to the detailed preset: one r180 tower bakes ~51k vertices
+const heavyGrid = computed(() => plan.value.overBudget)
 
 function updateNumber(key: keyof CityGeneratorComponentProps, value: number | string | null): void {
   const component = cityComponent.value
@@ -47,6 +84,20 @@ function updateToggle(key: keyof CityGeneratorComponentProps, value: boolean | n
     return
   }
   sceneStore.updateNodeComponentProps(nodeId, component.id, { [key]: value === true }, { autoSaveMode: 'interactive' })
+}
+
+function updateBuildingPreset(value: string | null): void {
+  const component = cityComponent.value
+  const nodeId = selectedNodeId.value
+  if (!component || !nodeId || !value) {
+    return
+  }
+  sceneStore.updateNodeComponentProps(
+    nodeId,
+    component.id,
+    { buildingPreset: value as CityGeneratorBuildingPreset },
+    { autoSaveMode: 'interactive' },
+  )
 }
 
 function handleToggleComponent(): void {
@@ -103,6 +154,17 @@ function handleRemoveComponent(): void {
           :disabled="!cityComponent?.enabled"
           @update:modelValue="(value) => updateNumber('seed', value)"
         />
+        <v-select
+          label="Building"
+          density="compact"
+          variant="underlined"
+          :items="buildingPresetOptions"
+          item-title="title"
+          item-value="value"
+          :model-value="props.buildingPreset"
+          :disabled="!cityComponent?.enabled"
+          @update:modelValue="(value) => updateBuildingPreset(value)"
+        />
         <v-text-field
           label="Lot Size"
           density="compact"
@@ -133,7 +195,7 @@ function handleRemoveComponent(): void {
           variant="underlined"
           type="number"
           min="1"
-          max="3"
+          max="4"
           step="1"
           :model-value="props.lotsX"
           :disabled="!cityComponent?.enabled"
@@ -145,7 +207,7 @@ function handleRemoveComponent(): void {
           variant="underlined"
           type="number"
           min="1"
-          max="3"
+          max="4"
           step="1"
           :model-value="props.lotsZ"
           :disabled="!cityComponent?.enabled"
@@ -156,9 +218,11 @@ function handleRemoveComponent(): void {
           density="compact"
           variant="underlined"
           type="number"
-          min="1"
-          max="3"
+          min="0"
+          max="24"
           step="1"
+          hint="0 = auto"
+          persistent-hint
           :model-value="props.blocksX"
           :disabled="!cityComponent?.enabled"
           @update:modelValue="(value) => updateNumber('blocksX', value)"
@@ -168,9 +232,11 @@ function handleRemoveComponent(): void {
           density="compact"
           variant="underlined"
           type="number"
-          min="1"
-          max="3"
+          min="0"
+          max="24"
           step="1"
+          hint="0 = auto"
+          persistent-hint
           :model-value="props.blocksZ"
           :disabled="!cityComponent?.enabled"
           @update:modelValue="(value) => updateNumber('blocksZ', value)"
@@ -216,8 +282,8 @@ function handleRemoveComponent(): void {
           density="compact"
           variant="underlined"
           type="number"
-          min="6"
-          step="2"
+          min="1"
+          step="1"
           suffix="m"
           :model-value="props.minTowerHeight"
           :disabled="!cityComponent?.enabled"
@@ -228,8 +294,8 @@ function handleRemoveComponent(): void {
           density="compact"
           variant="underlined"
           type="number"
-          min="6"
-          step="2"
+          min="1"
+          step="1"
           suffix="m"
           :model-value="props.maxTowerHeight"
           :disabled="!cityComponent?.enabled"
@@ -273,8 +339,26 @@ function handleRemoveComponent(): void {
         />
       </div>
       <div class="city-generator-panel__summary" :class="{ 'city-generator-panel__summary--warn': heavyGrid }">
-        <div>Block {{ blockWidth.toFixed(0) }} × {{ blockDepth.toFixed(0) }} m · City {{ (blockWidth * props.blocksX + props.streetWidth * (props.blocksX - 1)).toFixed(0) }} × {{ (blockDepth * props.blocksZ + props.streetWidth * (props.blocksZ - 1)).toFixed(0) }} m</div>
-        <div>{{ towerCount }} towers{{ heavyGrid ? ' · heavy grid, expect a slow rebuild' : '' }}</div>
+        <div>
+          Block {{ blockWidth.toFixed(0) }} × {{ blockDepth.toFixed(0) }} m ·
+          {{ plan.blocksX }} × {{ plan.blocksZ }} blocks
+          <span v-if="blocksOnAuto">(auto)</span><span v-else-if="plan.cappedByProps">(capped)</span>
+        </div>
+        <div>{{ plan.towers }} towers · {{ plan.cars }} cars · {{ plan.streetlights }} streetlights</div>
+        <div>est. {{ vertexLabel }} geometry vertices</div>
+        <div v-if="heavyGrid">
+          Over the ~{{ budgetLabel }} vertex budget — switch to an instanced preset or raise Lot Size.
+          The build still runs, but a grid this large can take a long time and exhaust video memory.
+        </div>
+        <div v-if="plan.cappedByProps">
+          Blocks are capped at {{ props.blocksX }} × {{ props.blocksZ }} but the region needs
+          {{ plan.requiredBlocksX }} × {{ plan.requiredBlocksZ }} — set either to 0 to fill the region.
+        </div>
+        <div v-if="plan.limitedByInstances">Stopped at the {{ instanceCapLabel }} instance cap.</div>
+        <div v-if="hostOutline">Clipped to the host outline — blocks outside it are dropped.</div>
+        <div v-else>No host outline — building the full grid from the block counts.</div>
+        <div v-if="!detailedBuildings">Instanced {{ props.buildingPreset }} buildings — shared archetypes, no building shadows.</div>
+        <div v-else-if="props.maxTowerHeight < 20">Skyscraper facades round up to at least three floors (~18 m); pick an instanced preset for genuinely low buildings.</div>
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>

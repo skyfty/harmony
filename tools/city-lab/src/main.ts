@@ -127,6 +127,7 @@ function rebuild(): void {
 
 	const group = buildProceduralCityBlockGroup( {
 		seed: settings.seed,
+		buildings: settings.buildingPreset,
 		blocksX: settings.blocksX,
 		blocksZ: settings.blocksZ,
 		lotsX: settings.lotsX,
@@ -143,16 +144,28 @@ function rebuild(): void {
 	const userData = group.userData as ProceduralCityBlockGroupUserData
 	const debugColors = settings.materialMode === 'part-debug'
 	let vertices = 0
+	// the instanced presets share a handful of archetype geometries across the whole
+	// city, so count each geometry once — that is the number that matters for memory
+	const countedGeometries = new Set<THREE.BufferGeometry>()
 
 	group.children.forEach( ( child ) => {
 
 		const mesh = child as THREE.Mesh< THREE.BufferGeometry, THREE.Material >
 		const tower = child.userData.tower as ProceduralCityTowerBox | undefined
-		if ( tower === undefined ) return
 
-		// the per-tower palette colour, keyed off the tower's own generator seed
-		applySkyscraperPartColors( mesh.geometry, new THREE.Color( pickBuildingColor( tower.seed ) ), debugColors ? 'debug' : 'project' )
-		vertices += mesh.geometry.getAttribute( 'position' ).count
+		if ( tower !== undefined ) {
+
+			// the per-tower palette colour, keyed off the tower's own generator seed
+			applySkyscraperPartColors( mesh.geometry, new THREE.Color( pickBuildingColor( tower.seed ) ), debugColors ? 'debug' : 'project' )
+
+		}
+
+		if ( mesh.geometry !== undefined && ! countedGeometries.has( mesh.geometry ) ) {
+
+			countedGeometries.add( mesh.geometry )
+			vertices += mesh.geometry.getAttribute( 'position' ).count
+
+		}
 
 	} )
 

@@ -10,10 +10,18 @@
  * seed lays out exactly the same city as the upstream generator.
  */
 
-import { Group, Matrix4 } from 'three'
+import { Color, Group, Matrix4, Vector3 } from 'three'
 
-import type { Material, Mesh } from 'three'
+import type { Material, Mesh, Vector2 } from 'three'
 import { SkyscraperGenerator } from './proceduralCitySkyscraper'
+import { pickBuildingColor } from './proceduralCitySkyscraper'
+import {
+	BUILDING_VARIANT_COUNT,
+	createMesh,
+	getArchetypes,
+	resolveProceduralCitySolidVariantIndex,
+} from './proceduralCityComponent'
+import { configureSolidOutlineMesh, getSolidOutlineMaterial, getWallMaterial } from './proceduralCityMaterials'
 import { createProceduralCityRoadMesh } from './proceduralCityRoad'
 import { buildProceduralCityCarGroup } from './proceduralCityCar'
 import { buildProceduralCityStreetlightGroup, type ProceduralCityStreetlightOptions } from './proceduralCityStreetlight'
@@ -23,6 +31,23 @@ import {
 	buildProceduralCitySidewalkGroup,
 	type ProceduralCitySidewalkOptions
 } from './proceduralCitySidewalk'
+
+const _placementPosition = new Vector3()
+
+/**
+ * The building geometry a block layout is drawn with:
+ *
+ * - `skyscraper` — the upstream r180 facade generator, one merged mesh per tower
+ *   (~50k vertices each). The detailed option.
+ * - every other value — the cheap instanced presets: twelve unit-sized
+ *   archetypes shared by the whole city, one `InstancedMesh` per variant with a
+ *   per-instance colour, so a building costs an instance matrix instead of
+ *   geometry. `solid` adds the screen-space outline `proceduralCity` uses.
+ *
+ * The layout is identical either way, so switching presets keeps the same
+ * skyline footprint and only changes how the towers are drawn.
+ */
+export type ProceduralCityBuildingPreset = 'skyscraper' | 'solid' | 'office' | 'bright' | 'classic' | 'warm' | 'cool'
 
 /** The fixed grid a block layout starts from ( upstream `CityGenerator.defaults` ). */
 export const SKYSCRAPER_BLOCK_DEFAULTS = {
@@ -84,6 +109,26 @@ export type ProceduralCityBlockOptions = {
 	sidewalk?: ProceduralCitySidewalkOptions
 	/** The streetlight profile ( mast height, arm reach, mast radius ). */
 	streetlight?: ProceduralCityStreetlightOptions
+	/**
+	 * Clip the grid to a city-local outline: a block whose centre fails the test is
+	 * skipped along with its towers and sidewalk slab. Used to fit a city to the
+	 * host region it is attached to.
+	 */
+	blockFilter?: ( block: { x: number; z: number; width: number; depth: number } ) => boolean
+	/** Skip a tower before it is generated — the cheap half of the same clipping. */
+	towerFilter?: ( tower: ProceduralCityTowerBox ) => boolean
+	/** Skip a streetlight or car placement ( tested at its ground position ). */
+	placementFilter?: ( position: { x: number; z: number } ) => boolean
+	/** Lay the road surface over this city-local outline instead of a rectangle. */
+	roadPolygon?: Vector2[]
+	/** The building geometry to draw the towers with. Default `'skyscraper'`. */
+	buildings?: ProceduralCityBuildingPreset
+	/**
+	 * Run the layout and the placement filters but build no geometry at all: the
+	 * returned group carries only `userData`, so a caller can predict what a set of
+	 * options would cost before paying for it.
+	 */
+	dryRun?: boolean
 }
 
 /** One tower's box, sized and placed — kept for stats and future GI proxies. */
@@ -110,6 +155,11 @@ export type ProceduralCityBlockGroupUserData = {
 	streetlights: number
 	/** How many car placements the walk produced. */
 	cars: number
+	/** The grid this build resolved to, per axis. */
+	blocksX?: number
+	blocksZ?: number
+	/** The built geometry's vertex total, counting shared archetypes once. */
+	vertices?: number
 	seed: number
 }
 
@@ -177,6 +227,9 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 	const includeSidewalks = options.includeSidewalks ?? true
 	const includeStreetlights = options.includeStreetlights ?? true
 	const includeCars = options.includeCars ?? true
+	const buildings: ProceduralCityBuildingPreset = options.buildings ?? 'skyscraper'
+	const instancedBuildings = buildings !== 'skyscraper'
+	const dryRun = options.dryRun === true
 	const curbHeight = options.sidewalk?.curbHeight ?? PROCEDURAL_CITY_SIDEWALK_DEFAULTS.curbHeight
 	// upstream stands every tower on the sidewalk; without sidewalks it stands on the road
 	const groundOffset = options.groundOffset ?? ( includeSidewalks ? curbHeight : 0 )
@@ -186,6 +239,9 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 
 	const towers: ProceduralCityTowerBox[] = []
 	const sidewalkPlacements: Matrix4[] = []
+	// the cheap presets collect this tower's placement per archetype variant and
+	// build one instanced mesh per variant once the layout is known
+	const buildingBuckets = new Map< number, InstancedBuilding[] >()
 	const random = createProceduralCityRandom( seed )
 	const sw = L.sidewalkWidth
 
@@ -196,8 +252,16 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 			const blockX = - L.cityW / 2 + bx * ( L.blockW + L.street )
 			const blockZ = - L.cityD / 2 + bz * ( L.blockD + L.street )
 
+			// a block whose centre falls outside the host outline is dropped whole:
+			// no towers, no sidewalk slab, no furniture along its kerbs
+			const blockCenterX = blockX + L.blockW / 2
+			const blockCenterZ = blockZ + L.blockD / 2
+			if ( options.blockFilter && ! options.blockFilter( { x: blockCenterX, z: blockCenterZ, width: L.blockW, depth: L.blockD } ) ) {
+				continue
+			}
+
 			// one sidewalk slab centred on each block
-			sidewalkPlacements.push( new Matrix4().makeTranslation( blockX + L.blockW / 2, 0, blockZ + L.blockD / 2 ) )
+			sidewalkPlacements.push( new Matrix4().makeTranslation( blockCenterX, 0, blockCenterZ ) )
 
 			// the lots sit in an inner zone set back from the block edge by the
 			// sidewalk width, so a real walking strip is left between the street
@@ -236,6 +300,56 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 					const setbackDepth = random() < 0.4 ? 0.8 + random() * 2 : 0 // only some towers step back at the crown; the rest rise flat
 					const stringCourseEvery = random() < 0.85 ? 3 + Math.floor( random() * 6 ) : 0
 
+					// place within the lot, fronted toward the streets it borders so its
+					// outer faces land on the building line; interior columns stay centred
+					const lotLeft = zoneX + lx * L.innerLotX, lotNear = zoneZ + lz * L.innerLotZ
+					const cx = cornerX === - 1 ? lotLeft + fw / 2 : ( cornerX === 1 ? lotLeft + L.innerLotX - fw / 2 : lotLeft + L.innerLotX / 2 )
+					const cz = cornerZ === - 1 ? lotNear + fd / 2 : ( cornerZ === 1 ? lotNear + L.innerLotZ - fd / 2 : lotNear + L.innerLotZ / 2 )
+
+					// record a plain box matching this tower for stats, the GI proxy and clipping
+					const towerBox: ProceduralCityTowerBox = {
+						x: cx,
+						y: groundOffset + totalHeight / 2,
+						z: cz,
+						width: fw,
+						height: totalHeight,
+						depth: fd,
+						seed: towerSeed,
+						chamferWidth,
+						chamferCornerX: cornerX,
+						chamferCornerZ: cornerZ
+					}
+
+					// a clipped tower is never generated — worth it, since one tower bakes
+					// ~50k vertices and this is the hot path when fitting a city to a region
+					if ( options.towerFilter && ! options.towerFilter( towerBox ) ) {
+						continue
+					}
+
+					if ( instancedBuildings ) {
+
+						// the cheap presets skip the facade generator entirely: the tower
+						// becomes one instance of a shared archetype
+						const roll = towerRoll( towerSeed )
+						const heightT = maxHeight > minHeight ? ( totalHeight - minHeight ) / ( maxHeight - minHeight ) : 0.5
+						const variant = buildings === 'solid'
+							? resolveProceduralCitySolidVariantIndex( roll, Math.min( 1, Math.max( 0, heightT ) ), fw, fd, towerSeed )
+							: Math.floor( roll * BUILDING_VARIANT_COUNT )
+						const bucket = buildingBuckets.get( variant )
+						const entry: InstancedBuilding = { tower: towerBox, color: pickBuildingColor( towerSeed ) }
+						if ( bucket === undefined ) buildingBuckets.set( variant, [ entry ] )
+						else bucket.push( entry )
+
+						towers.push( towerBox )
+						continue
+
+					}
+
+					// a dry run stops here: the tower box is placed and counted, but the
+					// facade geometry it would bake is what the caller is trying to predict
+					towers.push( towerBox )
+					if ( dryRun ) continue
+
 					const generator = new SkyscraperGenerator( {
 						seed: towerSeed,
 						totalHeight,
@@ -254,30 +368,11 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 
 					const building = generator.build()
 
-					// place within the lot, fronted toward the streets it borders so its
-					// outer faces land on the building line; interior columns stay centred
-					const lotLeft = zoneX + lx * L.innerLotX, lotNear = zoneZ + lz * L.innerLotZ
-					const cx = cornerX === - 1 ? lotLeft + fw / 2 : ( cornerX === 1 ? lotLeft + L.innerLotX - fw / 2 : lotLeft + L.innerLotX / 2 )
-					const cz = cornerZ === - 1 ? lotNear + fd / 2 : ( cornerZ === 1 ? lotNear + L.innerLotZ - fd / 2 : lotNear + L.innerLotZ / 2 )
 					building.position.set( cx, groundOffset, cz )
 					building.castShadow = building.receiveShadow = true
 
 					group.add( building )
 
-					// record a plain box matching this tower for stats and the GI proxy
-					const towerBox: ProceduralCityTowerBox = {
-						x: cx,
-						y: groundOffset + totalHeight / 2,
-						z: cz,
-						width: fw,
-						height: totalHeight,
-						depth: fd,
-						seed: towerSeed,
-						chamferWidth,
-						chamferCornerX: cornerX,
-						chamferCornerZ: cornerZ
-					}
-					towers.push( towerBox )
 					// keep the box on the mesh too, so a consumer never has to rely on
 					// the group's child order to line the two up
 					building.userData.tower = towerBox
@@ -291,8 +386,18 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 	}
 
 	// the road first, so the sidewalks and towers draw over it
-	if ( includeRoad ) group.add( createProceduralCityRoadMesh( L ) )
-	if ( includeSidewalks ) group.add( buildProceduralCitySidewalkGroup( L, sidewalkPlacements, options.sidewalk ) )
+	if ( ! dryRun ) {
+
+		if ( includeRoad ) group.add( createProceduralCityRoadMesh( L, options.roadPolygon ) )
+		if ( includeSidewalks ) group.add( buildProceduralCitySidewalkGroup( L, sidewalkPlacements, options.sidewalk ) )
+		// an empty spread would call `add()` with no argument, which three warns about —
+		// a fully clipped grid legitimately builds no instanced mesh at all
+		if ( instancedBuildings ) {
+			const buildingMeshes = buildInstancedBuildings( buildings, buildingBuckets )
+			if ( buildingMeshes.length ) group.add( ...buildingMeshes )
+		}
+
+	}
 
 	// the street furniture: the walk consumes the same PRNG stream upstream's
 	// `buildFurniture` does, right after the towers, so the kerbside comes out the same
@@ -300,14 +405,30 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 	let cars = 0
 	if ( includeStreetlights || includeCars ) {
 
-		const furniture = planProceduralCityStreetFurniture( L, random, {
+		const planned = planProceduralCityStreetFurniture( L, random, {
 			sidewalkTop: includeSidewalks ? curbHeight : 0
 		} )
+		const keepPlacement = ( matrix: Matrix4 ): boolean => {
+
+			if ( ! options.placementFilter ) return true
+
+			_placementPosition.setFromMatrixPosition( matrix )
+			return options.placementFilter( { x: _placementPosition.x, z: _placementPosition.z } )
+
+		}
+		const furniture = {
+			streetlights: planned.streetlights.filter( keepPlacement ),
+			cars: planned.cars.filter( ( car ) => keepPlacement( car.matrix ) )
+		}
 		streetlights = furniture.streetlights.length
 		cars = furniture.cars.length
 
-		if ( includeStreetlights && streetlights > 0 ) group.add( buildProceduralCityStreetlightGroup( furniture.streetlights, options.streetlight ) )
-		if ( includeCars && cars > 0 ) group.add( buildProceduralCityCarGroup( furniture.cars ) )
+		if ( ! dryRun ) {
+
+			if ( includeStreetlights && streetlights > 0 ) group.add( buildProceduralCityStreetlightGroup( furniture.streetlights, options.streetlight ) )
+			if ( includeCars && cars > 0 ) group.add( buildProceduralCityCarGroup( furniture.cars ) )
+
+		}
 
 	}
 
@@ -315,6 +436,90 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 	group.userData = { ...group.userData, ...userData }
 
 	return group
+
+}
+
+type InstancedBuilding = {
+	tower: ProceduralCityTowerBox
+	/** The tower's palette colour, written to the instance buffer. */
+	color: number
+}
+
+// a stable 0..1 roll derived from the tower's own seed — the archetype choice must
+// not consume the layout PRNG, or the city would stop matching upstream
+function towerRoll( seed: number ): number {
+
+	const h = Math.abs( Math.sin( seed * 12.9898 ) * 43758.5453 )
+	return h - Math.floor( h )
+
+}
+
+const _instancedBuildingMatrix = new Matrix4()
+const _instancedBuildingColor = new Color()
+
+/**
+ * Turns the bucketed towers into the instanced draw: one `InstancedMesh` per
+ * archetype variant, plus a matching silhouette for the `solid` style. The
+ * archetype geometries are the shared, cached ones, so they are tagged and left
+ * for the module that owns them — see {@link disposeProceduralCityBlockGroup}.
+ */
+function buildInstancedBuildings( preset: ProceduralCityBuildingPreset, buckets: Map< number, InstancedBuilding[] > ): Mesh[] {
+
+	if ( ! buckets.size ) {
+		return []
+	}
+
+	const archetypes = getArchetypes( preset )
+	const material = getWallMaterial( preset )
+	const meshes: Mesh[] = []
+
+	for ( const [ variant, entries ] of buckets ) {
+
+		const archetype = archetypes[ variant % archetypes.length ]
+		if ( archetype === undefined ) continue
+
+		const geometry = archetype.geometry
+		geometry.userData.proceduralCityShared = true
+
+		const mesh = createMesh( geometry, material, entries.length, `CityBuildings_${preset}_${variant}` )
+
+		for ( let index = 0; index < entries.length; index ++ ) {
+
+			const tower = entries[ index ]!.tower
+			_instancedBuildingMatrix.makeScale( tower.width, tower.height, tower.depth )
+			_instancedBuildingMatrix.setPosition( tower.x, tower.y - tower.height / 2, tower.z )
+			mesh.setMatrixAt( index, _instancedBuildingMatrix )
+			mesh.setColorAt( index, _instancedBuildingColor.setHex( entries[ index ]!.color ) )
+
+		}
+
+		mesh.instanceMatrix.needsUpdate = true
+		if ( mesh.instanceColor ) mesh.instanceColor.needsUpdate = true
+		mesh.computeBoundingSphere()
+		meshes.push( mesh )
+
+		if ( preset !== 'solid' ) continue
+
+		const outline = createMesh( geometry, getSolidOutlineMaterial(), entries.length, `CityBuildings_${preset}_${variant}_outline` )
+		outline.renderOrder = 1
+		configureSolidOutlineMesh( outline )
+
+		for ( let index = 0; index < entries.length; index ++ ) {
+
+			const tower = entries[ index ]!.tower
+			_instancedBuildingMatrix.makeScale( tower.width, tower.height, tower.depth )
+			_instancedBuildingMatrix.setPosition( tower.x, tower.y - tower.height / 2, tower.z )
+			outline.setMatrixAt( index, _instancedBuildingMatrix )
+
+		}
+
+		outline.instanceMatrix.needsUpdate = true
+		outline.computeBoundingSphere()
+		meshes.push( outline )
+
+	}
+
+	return meshes
 
 }
 
@@ -349,7 +554,9 @@ export function disposeProceduralCityBlockGroup( group: Group ): void {
 	group.traverse( ( object ) => {
 
 		const mesh = object as Mesh
-		mesh.geometry?.dispose()
+		// the instanced building presets draw with archetype geometries owned by the
+		// procedural city module; only geometries this build created are freed here
+		if ( mesh.geometry?.userData?.proceduralCityShared !== true ) mesh.geometry?.dispose()
 
 		const materials = Array.isArray( mesh.material ) ? mesh.material : [ mesh.material ]
 		for ( const material of materials ) {

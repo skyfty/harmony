@@ -265,7 +265,10 @@ import {
 import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
-import { syncProceduralCityRuntimeArtifact } from '@schema/components/definitions/proceduralCityComponent'
+import {
+  syncProceduralCityRuntimeArtifact,
+  syncProceduralCityHostSnapshot,
+} from '@schema/components/definitions/proceduralCityComponent'
 import { useTerrainStore, type GroundPanelTab } from '@/stores/terrainStore'
 import type { TerrainScatterBrushShape, TerrainScatterCategory } from '@schema/terrain-scatter'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
@@ -1693,6 +1696,8 @@ function refreshEffectRuntimeTickers(): void {
 
 const DYNAMIC_MESH_SIGNATURE_KEY = '__harmonyDynamicMeshSignature'
 const GROUND_SCULPT_SKIP_REFRESH_SIGNATURE_KEY = '__harmonyGroundSculptSkipRefreshSignature'
+/** The dynamic mesh a runtime object's city-outline snapshot was last built from. */
+const CITY_OUTLINE_SOURCE_KEY = '__harmonyCityOutlineSource'
 
 function resolveGroundSignatureTarget(object: THREE.Object3D): THREE.Object3D {
   return resolveGroundRuntimeObject(object) ?? object
@@ -22447,6 +22452,18 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
   }
 
+  // A dynamic-mesh patch ( region / floor / landform / road geometry ) has to refresh
+  // the host outline a city component clips against, and re-run the generator so the
+  // built city follows the edited outline. The dynamic mesh reference is the cheap
+  // gate: transform-only patches keep it, so nothing happens while dragging.
+  const outlineSource = node.dynamicMesh ?? null
+  if (userData[CITY_OUTLINE_SOURCE_KEY] !== outlineSource) {
+    userData[CITY_OUTLINE_SOURCE_KEY] = outlineSource
+    if (syncProceduralCityHostSnapshot(object, node)) {
+      componentManager.attachRuntime(node, object)
+    }
+  }
+
   if (node.dynamicMesh?.type !== 'Ground') {
     applyNodeMaterialOverrides(object, node)
   }
@@ -23323,6 +23340,11 @@ function reconcileNode(node: SceneNode, parent: THREE.Object3D, encountered: Set
     if (object.parent !== parent) {
       parent.add(object)
     }
+    // `registerRuntimeObject` detaches a node's components whenever the registry entry
+    // is replaced by this freshly built object, and a property patch never re-attaches
+    // them. Bind once the object is in the graph so a component ( City Generator,
+    // Particle System, … ) always receives the object that is actually mounted.
+    componentManager.attachRuntime(node, object)
     // Keep the viewport object index authoritative even for node kinds whose
     // factory returns before the shared tail of `createObjectFromNode`.
     objectMap.set(node.id, object)

@@ -12,6 +12,7 @@
  */
 
 import * as THREE from 'three'
+import type { Vector2 } from 'three'
 import type { ProceduralCityBlockLayout } from './proceduralCityBlock'
 import { applyCitySurfaceShader, toGlslColor, toGlslFloat } from './proceduralCityGlsl'
 
@@ -48,11 +49,12 @@ export function createProceduralCityRoadMaterial( layout: ProceduralCityBlockLay
 
 	const body = `
 	vec3 cityWorld = vCityWorldPosition;
+	vec3 cityPattern = vCityPatternPosition;
 	float cityDistance = distance( cityWorld, cameraPosition );
 	float cityDetail = smoothstep( ${toGlslFloat( ROAD_DETAIL_FAR )}, ${toGlslFloat( ROAD_DETAIL_NEAR )}, cityDistance );
 	float cityMicroFade = smoothstep( ${toGlslFloat( ROAD_MICRO_FAR )}, ${toGlslFloat( ROAD_MICRO_NEAR )}, cityDistance );
 
-	float cityBlotch = cityFbm3( cityWorld * 0.2 ) * 0.5 + 0.5;
+	float cityBlotch = cityFbm3( cityPattern * 0.2 ) * 0.5 + 0.5;
 
 	// close-range detail only resolves near the camera, so its noise is sampled
 	// ( inside the branch ) only where the fade is non-zero, and skipped across the
@@ -63,29 +65,29 @@ export function createProceduralCityRoadMaterial( layout: ProceduralCityBlockLay
 	float cityMicro = 0.0;
 
 	if ( cityDetail > 0.0001 ) {
-		cityGrit = ( cityValueNoise( cityWorld * 7.0 ) + cityValueNoise( cityWorld * 23.0 ) ) * 0.5;
-		cityStain = smoothstep( 0.5, 0.85, cityFbm3( cityWorld * 0.45 ) * 0.5 + 0.5 );
-		cityWorn = smoothstep( 0.25, 0.7, cityFbm3( cityWorld * 0.7 ) * 0.5 + 0.5 ) * 0.55 + 0.35;
+		cityGrit = ( cityValueNoise( cityPattern * 7.0 ) + cityValueNoise( cityPattern * 23.0 ) ) * 0.5;
+		cityStain = smoothstep( 0.5, 0.85, cityFbm3( cityPattern * 0.45 ) * 0.5 + 0.5 );
+		cityWorn = smoothstep( 0.25, 0.7, cityFbm3( cityPattern * 0.7 ) * 0.5 + 0.5 ) * 0.55 + 0.35;
 	}
 
 	if ( cityMicroFade > 0.0001 ) {
 		// upstream feeds this into the height-field normal; kept only so the paint
 		// and asphalt terms below read the same as the reference
-		cityMicro = cityValueNoise( cityWorld * 45.0 ) * 0.6 + cityValueNoise( cityWorld * 80.0 ) * 0.4;
+		cityMicro = cityValueNoise( cityPattern * 45.0 ) * 0.6 + cityValueNoise( cityPattern * 80.0 ) * 0.4;
 	}
 
 	vec3 cityBase = mix( ${toGlslColor( new THREE.Color( ROAD_BASE_DARK ) )}, ${toGlslColor( new THREE.Color( ROAD_BASE_LIGHT ) )}, cityBlotch );
 	vec3 cityGritty = cityBase * ( cityGrit * 0.22 * cityDetail + 1.0 );
 	vec3 cityAsphalt = mix( cityGritty, cityGritty * 0.5, cityStain * 0.5 * cityDetail );
 
-	float cityWet = smoothstep( 0.6, 0.85, cityFbm2( cityWorld * 0.14 ) * 0.5 + 0.5 );
+	float cityWet = smoothstep( 0.6, 0.85, cityFbm2( cityPattern * 0.14 ) * 0.5 + 0.5 );
 
 	// markings, aligned to the block / street grid. cityFx, cityFz are the position
 	// within one block + street period; the street is the [ blockW, period ) part
 	float cityPeriodX = ${toGlslFloat( periodX )};
 	float cityPeriodZ = ${toGlslFloat( periodZ )};
-	float cityFx = mod( cityWorld.x + ${toGlslFloat( layout.cityW / 2 )}, cityPeriodX );
-	float cityFz = mod( cityWorld.z + ${toGlslFloat( layout.cityD / 2 )}, cityPeriodZ );
+	float cityFx = mod( cityPattern.x + ${toGlslFloat( layout.cityW / 2 )}, cityPeriodX );
+	float cityFz = mod( cityPattern.z + ${toGlslFloat( layout.cityD / 2 )}, cityPeriodZ );
 	float cityInStreetX = step( ${toGlslFloat( layout.blockW )}, cityFx );
 	float cityInStreetZ = step( ${toGlslFloat( layout.blockD )}, cityFz );
 	float citySu = cityFx - ${toGlslFloat( layout.blockW )};
@@ -94,8 +96,8 @@ export function createProceduralCityRoadMaterial( layout: ProceduralCityBlockLay
 	// lane markings down each street ( not through intersections ): a solid centre
 	// line splitting the two directions, with a dashed divider in each half, so
 	// every street carries four lanes
-	float cityDashV = step( fract( cityWorld.z / ${toGlslFloat( LANE_DASH_PERIOD )} ), 0.5 );
-	float cityDashH = step( fract( cityWorld.x / ${toGlslFloat( LANE_DASH_PERIOD )} ), 0.5 );
+	float cityDashV = step( fract( cityPattern.z / ${toGlslFloat( LANE_DASH_PERIOD )} ), 0.5 );
+	float cityDashH = step( fract( cityPattern.x / ${toGlslFloat( LANE_DASH_PERIOD )} ), 0.5 );
 
 	float cityCentreV = cityLine( citySu - ${toGlslFloat( layout.street / 2 )}, ${toGlslFloat( LANE_CENTRE_HALF_WIDTH )} );
 	float cityDividerV = max( cityLine( citySu - ${toGlslFloat( layout.street / 4 )}, ${toGlslFloat( LANE_DIVIDER_HALF_WIDTH )} ), cityLine( citySu - ${toGlslFloat( layout.street * 3 / 4 )}, ${toGlslFloat( LANE_DIVIDER_HALF_WIDTH )} ) ) * cityDashV;
@@ -132,12 +134,17 @@ export function createProceduralCityRoadMaterial( layout: ProceduralCityBlockLay
  * the city grid and centred on it. Sized to the grid exactly: the layout puts
  * every street *between* blocks, so the plane covers them all and the pattern
  * stops at the city's edge instead of tiling into the surrounding terrain.
+ *
+ * Pass `polygon` ( the city-local outline of the region the city was clipped to )
+ * to lay the road surface over that outline instead of a rectangle, so the asphalt
+ * stops at the region boundary along with the blocks.
  */
-export function createProceduralCityRoadMesh( layout: ProceduralCityBlockLayout ): THREE.Mesh {
+export function createProceduralCityRoadMesh( layout: ProceduralCityBlockLayout, polygon?: Vector2[] ): THREE.Mesh {
 
 	const material = createProceduralCityRoadMaterial( layout )
-	const geometry = new THREE.PlaneGeometry( layout.cityW, layout.cityD )
-	geometry.rotateX( - Math.PI / 2 )
+	const geometry = polygon && polygon.length >= 3
+		? createProceduralCityRoadOutlineGeometry( polygon )
+		: createProceduralCityRoadPlaneGeometry( layout )
 
 	const mesh = new THREE.Mesh( geometry, material )
 	mesh.name = 'CityRoad'
@@ -145,5 +152,43 @@ export function createProceduralCityRoadMesh( layout: ProceduralCityBlockLayout 
 	mesh.userData.proceduralCityOwned = true
 
 	return mesh
+
+}
+
+function createProceduralCityRoadPlaneGeometry( layout: ProceduralCityBlockLayout ): THREE.BufferGeometry {
+
+	const geometry = new THREE.PlaneGeometry( layout.cityW, layout.cityD )
+	geometry.rotateX( - Math.PI / 2 )
+
+	return geometry
+
+}
+
+// ShapeGeometry is authored in the XY plane and rotated onto XZ afterwards, which
+// maps shape +Y onto world -Z — negating the local Z keeps the outline in the same
+// frame as the blocks the clip kept.
+function createProceduralCityRoadOutlineGeometry( polygon: Vector2[] ): THREE.BufferGeometry {
+
+	const shapePoints = polygon.map( ( point ) => new THREE.Vector2( point.x, - point.y ) )
+	if ( signedPolygonArea( shapePoints ) < 0 ) shapePoints.reverse()
+
+	const geometry = new THREE.ShapeGeometry( new THREE.Shape( shapePoints ), 4 )
+	geometry.rotateX( - Math.PI / 2 )
+	geometry.computeVertexNormals()
+
+	return geometry
+
+}
+
+function signedPolygonArea( points: Vector2[] ): number {
+
+	let area = 0
+	for ( let index = 0, previous = points.length - 1; index < points.length; previous = index ++ ) {
+		const a = points[ previous ]!
+		const b = points[ index ]!
+		area += a.x * b.y - b.x * a.y
+	}
+
+	return area * 0.5
 
 }

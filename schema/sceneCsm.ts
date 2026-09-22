@@ -262,6 +262,29 @@ export class SceneCsmShadowRuntime {
 
   private readonly registeredMaterials = new WeakSet<THREE.Material>()
 
+  /**
+   * The shader hook each registered material carried before three-csm wrapped it,
+   * plus the wrapper three-csm installed.
+   *
+   * `CSM.dispose()` deletes `material.onBeforeCompile` outright instead of putting
+   * back whatever `setupMaterial` wrapped. `onBeforeCompile` is a no-op on
+   * `THREE.Material.prototype`, so that deletion does not throw — it silently
+   * drops the injected look of every material that shades itself through the hook
+   * ( the procedural city's road, crosswalk, sidewalk, kerb, streetlight and car
+   * materials carry no map at all, so they render plain white afterwards; the
+   * ground splat and landform feather hooks are lost the same way ). Snapshotting
+   * the hook here lets {@link dispose} restore it.
+   */
+  private readonly materialShaderHooks = new Map<
+    THREE.Material,
+    {
+      /** The hook the material owned before registration, if it had its own. */
+      original: THREE.Material['onBeforeCompile'] | undefined
+      /** The wrapper `CSM.setupMaterial` installed, used to prove ownership. */
+      installed: THREE.Material['onBeforeCompile'] | undefined
+    }
+  >()
+
   private readonly lightColor = new THREE.Color()
 
 
@@ -370,7 +393,18 @@ export class SceneCsmShadowRuntime {
       return
     }
     ensureThreeCsmShaderChunkCompatibility(this.config.cascades)
+    // Capture the hook before three-csm wraps ( and later deletes ) it. A material
+    // that never overrode the hook reads the prototype no-op here — remember that
+    // it was not its own, so dispose can hand it back to the prototype instead of
+    // freezing a copy onto the instance.
+    const ownedHook = Object.prototype.hasOwnProperty.call(material, 'onBeforeCompile')
+      ? material.onBeforeCompile
+      : undefined
     this.csm.setupMaterial(material)
+    this.materialShaderHooks.set(material, {
+      original: ownedHook,
+      installed: material.onBeforeCompile,
+    })
     this.registeredMaterials.add(material)
     this.markShadowsDirty()
   }
@@ -468,6 +502,37 @@ export class SceneCsmShadowRuntime {
 
   public dispose(): void {
     this.csm?.dispose()
+    this.restoreMaterialShaderHooks()
+  }
+
+  /**
+   * Puts back the `onBeforeCompile` every registered material carried before
+   * three-csm wrapped it, undoing the `delete` buried in `CSM.dispose()`.
+   *
+   * Only hooks this runtime still owns are touched. Ownership is either the wrapper
+   * three-csm installed ( still in place — for example when the material was
+   * disposed before the runtime was ) or no own hook at all, which is exactly the
+   * state that `delete material.onBeforeCompile` leaves behind. A material sporting
+   * some other own hook belongs to a later owner and is left alone.
+   */
+  private restoreMaterialShaderHooks(): void {
+    this.materialShaderHooks.forEach((entry, material) => {
+      const hasOwnHook = Object.prototype.hasOwnProperty.call(material, 'onBeforeCompile')
+      const stillOurWrapper = material.onBeforeCompile === entry.installed
+      if (!stillOurWrapper && !(entry.installed !== undefined && hasOwnHook === false)) {
+        return
+      }
+      if (entry.original !== undefined) {
+        material.onBeforeCompile = entry.original
+      } else if (hasOwnHook) {
+        delete (material as { onBeforeCompile?: THREE.Material['onBeforeCompile'] }).onBeforeCompile
+      } else {
+        // the material never owned a hook and has none now — nothing to restore
+        return
+      }
+      material.needsUpdate = true
+    })
+    this.materialShaderHooks.clear()
   }
 }
 

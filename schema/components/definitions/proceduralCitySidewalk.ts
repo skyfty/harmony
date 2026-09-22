@@ -126,19 +126,20 @@ export function createProceduralCitySidewalkMaterial(): THREE.MeshStandardMateri
 
 	const body = `
 	vec3 cityWorld = vCityWorldPosition;
+	vec3 cityPattern = vCityPatternPosition;
 	float cityDetail = smoothstep( ${toGlslFloat( SIDEWALK_DETAIL_FAR )}, ${toGlslFloat( SIDEWALK_DETAIL_NEAR )}, distance( cityWorld, cameraPosition ) );
 
 	float cityPanel = ${toGlslFloat( CONCRETE_PANEL )};
-	float cityPanelHash = fract( sin( floor( cityWorld.x / cityPanel ) * 127.1 + floor( cityWorld.z / cityPanel ) * 311.7 ) * 43758.5453 );
-	float cityTone = cityValueNoise( cityWorld * 0.5 ) * 0.5 + 0.5;
+	float cityPanelHash = fract( sin( floor( cityPattern.x / cityPanel ) * 127.1 + floor( cityPattern.z / cityPanel ) * 311.7 ) * 43758.5453 );
+	float cityTone = cityValueNoise( cityPattern * 0.5 ) * 0.5 + 0.5;
 
 	float cityGrit = 0.0;
-	if ( cityDetail > 0.0001 ) cityGrit = cityValueNoise( cityWorld * 14.0 ) * 0.07 * cityDetail;
+	if ( cityDetail > 0.0001 ) cityGrit = cityValueNoise( cityPattern * 14.0 ) * 0.07 * cityDetail;
 
 	vec3 cityBase = mix( ${toGlslColor( new THREE.Color( SIDEWALK_CONCRETE_DARK ) )}, ${toGlslColor( new THREE.Color( SIDEWALK_CONCRETE_LIGHT ) )}, cityTone ) * ( ( cityPanelHash - 0.5 ) * 0.16 + 1.0 ); // per-flag tone
 	vec3 cityConcrete = cityBase + cityGrit;
 
-	float cityJoints = max( cityGridLine( cityWorld.x, cityPanel, ${toGlslFloat( CONCRETE_JOINT_HALF_WIDTH )} ), cityGridLine( cityWorld.z, cityPanel, ${toGlslFloat( CONCRETE_JOINT_HALF_WIDTH )} ) ) * cityDetail;
+	float cityJoints = max( cityGridLine( cityPattern.x, cityPanel, ${toGlslFloat( CONCRETE_JOINT_HALF_WIDTH )} ), cityGridLine( cityPattern.z, cityPanel, ${toGlslFloat( CONCRETE_JOINT_HALF_WIDTH )} ) ) * cityDetail;
 
 	vec3 cityColor = cityConcrete * ( 1.0 - cityJoints * 0.45 );
 	float cityRoughness = 0.92 - cityPanelHash * 0.05;
@@ -158,14 +159,15 @@ export function createProceduralCityCurbMaterial(): THREE.MeshStandardMaterial {
 
 	const body = `
 	vec3 cityWorld = vCityWorldPosition;
+	vec3 cityPattern = vCityPatternPosition;
 	float cityDetail = smoothstep( ${toGlslFloat( SIDEWALK_DETAIL_FAR )}, ${toGlslFloat( SIDEWALK_DETAIL_NEAR )}, distance( cityWorld, cameraPosition ) );
 
-	float cityTone = cityValueNoise( cityWorld * 0.6 ) * 0.5 + 0.5;
+	float cityTone = cityValueNoise( cityPattern * 0.6 ) * 0.5 + 0.5;
 	vec3 cityStone = mix( ${toGlslColor( new THREE.Color( SIDEWALK_CURB_DARK ) )}, ${toGlslColor( new THREE.Color( SIDEWALK_CURB_LIGHT ) )}, cityTone );
-	if ( cityDetail > 0.0001 ) cityStone += cityValueNoise( cityWorld * 18.0 ) * 0.05 * cityDetail;
+	if ( cityDetail > 0.0001 ) cityStone += cityValueNoise( cityPattern * 18.0 ) * 0.05 * cityDetail;
 
 	float citySegment = ${toGlslFloat( CURB_SEGMENT )};
-	float cityJoints = max( cityGridLine( cityWorld.x, citySegment, ${toGlslFloat( CURB_JOINT_HALF_WIDTH )} ), cityGridLine( cityWorld.z, citySegment, ${toGlslFloat( CURB_JOINT_HALF_WIDTH )} ) ) * cityDetail;
+	float cityJoints = max( cityGridLine( cityPattern.x, citySegment, ${toGlslFloat( CURB_JOINT_HALF_WIDTH )} ), cityGridLine( cityPattern.z, citySegment, ${toGlslFloat( CURB_JOINT_HALF_WIDTH )} ) ) * cityDetail;
 	float cityTop = smoothstep( 0.5, 0.85, vCityWorldNormal.y ); // 1 on the curb top, 0 on its walls
 
 	vec3 cityColor = mix( cityStone * 0.7, cityStone, cityTop ) * ( 1.0 - cityJoints * 0.4 ); // grimier on the road-facing face

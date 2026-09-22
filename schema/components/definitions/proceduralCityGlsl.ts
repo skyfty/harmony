@@ -10,6 +10,12 @@
  * Scope note: the upstream materials also perturb the shading normal from a
  * world-space height field ( `bumpNormal` in `CityGeneratorUtils.js` ). That term
  * is a sub-centimetre grain and is intentionally not ported here.
+ *
+ * The bodies below paint their patterns from `vCityPatternPosition` — the
+ * geometry position *after instancing but before the model matrix*, i.e. the
+ * city's own local space. That keeps road markings and sidewalk flags aligned to
+ * the grid no matter where the city is mounted or how it is rotated, while the
+ * distance fades keep using the true world position.
  */
 
 import type * as THREE from 'three'
@@ -25,6 +31,7 @@ import type * as THREE from 'three'
 export const CITY_GLSL_HELPERS = `
 varying vec3 vCityWorldPosition;
 varying vec3 vCityWorldNormal;
+varying vec3 vCityPatternPosition;
 
 float cityHash13( vec3 p ) {
 	return fract( sin( dot( p, vec3( 127.1, 311.7, 74.7 ) ) ) * 43758.5453 );
@@ -122,6 +129,7 @@ export function applyCitySurfaceShader( material: THREE.MeshStandardMaterial, op
 					'#include <common>',
 					'varying vec3 vCityWorldPosition;',
 					'varying vec3 vCityWorldNormal;',
+					'varying vec3 vCityPatternPosition;',
 					options.vertexProlog ?? ''
 				].join( '\n' )
 			)
@@ -138,6 +146,7 @@ export function applyCitySurfaceShader( material: THREE.MeshStandardMaterial, op
 					'#else',
 					'  vec4 cityLocalPosition = vec4( transformed, 1.0 );',
 					'#endif',
+					'vCityPatternPosition = cityLocalPosition.xyz;',
 					'vCityWorldPosition = ( modelMatrix * cityLocalPosition ).xyz;',
 					'vCityWorldNormal = normalize( mat3( modelMatrix ) * cityObjectNormal );',
 					options.vertexBody ?? ''
