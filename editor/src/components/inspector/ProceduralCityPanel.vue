@@ -36,6 +36,7 @@ const styleOptions: Array<{ title: string; value: ProceduralCityStyle }> = [
   { title: 'Warm', value: 'warm' },
   { title: 'Cool', value: 'cool' },
   { title: 'Solid', value: 'solid' },
+  { title: 'Grid', value: 'grid' },
 ]
 
 const colorSchemeOptions: Array<{ title: string; value: ProceduralCitySolidColorScheme }> = [
@@ -181,6 +182,102 @@ function handleRemoveComponent(): void {
           :disabled="!proceduralCityComponent?.enabled"
           @update:modelValue="(value) => updateStyle(value)"
         />
+        <template v-if="cityProps.style === 'grid'">
+          <v-text-field
+            label="Block Width"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="20"
+            step="1"
+            suffix="m"
+            :model-value="cityProps.gridBlockWidth"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridBlockWidth', value)"
+          />
+          <v-text-field
+            label="Block Depth"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="20"
+            step="1"
+            suffix="m"
+            :model-value="cityProps.gridBlockDepth"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridBlockDepth', value)"
+          />
+          <v-text-field
+            label="Street Width"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="4"
+            step="0.5"
+            suffix="m"
+            :model-value="cityProps.gridStreetWidth"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridStreetWidth', value)"
+          />
+          <v-text-field
+            label="Sidewalk Width"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="1"
+            step="0.5"
+            suffix="m"
+            :model-value="cityProps.gridSidewalkWidth"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridSidewalkWidth', value)"
+          />
+          <v-text-field
+            label="Curb Height"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="0"
+            step="0.05"
+            suffix="m"
+            :model-value="cityProps.gridCurbHeight"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridCurbHeight', value)"
+          />
+          <v-text-field
+            label="Lots X"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="1"
+            step="1"
+            :model-value="cityProps.gridLotsX"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridLotsX', value)"
+          />
+          <v-text-field
+            label="Lots Z"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="1"
+            step="1"
+            :model-value="cityProps.gridLotsZ"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridLotsZ', value)"
+          />
+          <v-text-field
+            label="Furniture Density"
+            density="compact"
+            variant="underlined"
+            type="number"
+            min="0"
+            max="1"
+            step="0.05"
+            :model-value="cityProps.gridFurnitureDensity"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('gridFurnitureDensity', value)"
+          />
+        </template>
         <v-select
           v-if="cityProps.style === 'solid'"
           label="Color Scheme"

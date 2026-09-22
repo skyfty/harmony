@@ -800,6 +800,9 @@ import {
   cloneProceduralCityHostSnapshot,
 } from '@harmony/schema/components/definitions/proceduralCityComponent';
 import {
+  cityGeneratorComponentDefinition,
+} from '@harmony/schema/components/definitions/cityGeneratorComponent';
+import {
   wallComponentDefinition,
   WALL_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/wallComponent';
@@ -2125,6 +2128,7 @@ function disposeMaterialTextureCache(): void {
 const previewComponentManager = new ComponentManager();
 previewComponentManager.registerDefinition(floorComponentDefinition);
 previewComponentManager.registerDefinition(proceduralCityComponentDefinition);
+previewComponentManager.registerDefinition(cityGeneratorComponentDefinition);
 previewComponentManager.registerDefinition(animationComponentDefinition);
 previewComponentManager.registerDefinition(skinComponentDefinition);
 previewComponentManager.registerDefinition(wallComponentDefinition);

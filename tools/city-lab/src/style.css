@@ -1,0 +1,148 @@
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #11151c;
+  color: #dfe4ea;
+  font: 13px/1.5 ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+
+#app {
+  position: relative;
+}
+
+#viewport {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.panel {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 260px;
+  padding: 14px 16px 16px;
+  border: 1px solid #222a35;
+  border-radius: 10px;
+  background: rgba(16, 20, 27, 0.92);
+  backdrop-filter: blur(6px);
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.panel-note {
+  margin: 4px 0 12px;
+  color: #7b8798;
+  font-size: 11px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.row-toggle {
+  grid-template-columns: 82px auto;
+}
+
+.row-label {
+  color: #9aa7b6;
+}
+
+.row-value {
+  justify-self: end;
+  color: #6f7c8d;
+  font-variant-numeric: tabular-nums;
+}
+
+.row input[type="range"] {
+  width: 100%;
+  margin: 0;
+}
+
+.row-slider {
+  grid-template-columns: 82px 1fr auto;
+}
+
+.row input[type="number"],
+.row select {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid #2a3340;
+  border-radius: 6px;
+  background: #0d1117;
+  color: inherit;
+  font: inherit;
+}
+
+.reset-button {
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px 0;
+  border: 1px solid #2a3340;
+  border-radius: 6px;
+  background: #141a23;
+  color: #c3ccd8;
+  font: inherit;
+  cursor: pointer;
+}
+
+.reset-button:hover {
+  background: #1a2029;
+  border-color: #3a4757;
+}
+
+.stats {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  min-width: 190px;
+  padding: 10px 12px;
+  border: 1px solid #222a35;
+  border-radius: 10px;
+  background: rgba(16, 20, 27, 0.92);
+  backdrop-filter: blur(6px);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.stat-label {
+  color: #7b8798;
+}
+
+.stat-value {
+  color: #d8e0ea;
+}
+
+.status {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(16, 20, 27, 0.86);
+  color: #8c98a8;
+  font-variant-numeric: tabular-nums;
+}

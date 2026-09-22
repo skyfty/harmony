@@ -34,6 +34,9 @@
     "dev:model-inspector": "vite --config ./model-inspector/vite.config.ts",
     "build:model-inspector": "vite build --config ./model-inspector/vite.config.ts",
     "type-check:model-inspector": "tsc -p ./model-inspector/tsconfig.json --noEmit",
+    "dev:city-lab": "vite --config ./city-lab/vite.config.ts",
+    "build:city-lab": "vite build --config ./city-lab/vite.config.ts",
+    "type-check:city-lab": "tsc -p ./city-lab/tsconfig.json --noEmit",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepare": "pnpm run build"
   },

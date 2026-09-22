@@ -240,6 +240,7 @@ import {
 	displayBoardComponentDefinition,
 	floorComponentDefinition,
 	proceduralCityComponentDefinition,
+	cityGeneratorComponentDefinition,
 	PROCEDURAL_CITY_HOST_USER_DATA_KEY,
 	cloneProceduralCityHostSnapshot,
 	wallComponentDefinition,
@@ -1367,6 +1368,7 @@ function refreshResourceAssetInfo(document: SceneJsonExportDocument | null | und
 const previewComponentManager = new ComponentManager()
 previewComponentManager.registerDefinition(floorComponentDefinition)
 previewComponentManager.registerDefinition(proceduralCityComponentDefinition)
+previewComponentManager.registerDefinition(cityGeneratorComponentDefinition)
 previewComponentManager.registerDefinition(wallComponentDefinition)
 previewComponentManager.registerDefinition(boundaryWallComponentDefinition)
 previewComponentManager.registerDefinition(roadComponentDefinition)
