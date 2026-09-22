@@ -32,6 +32,7 @@ export type ProceduralCitySolidColorScheme =
   | 'neutral'
   | 'district'
   | 'height'
+  | 'rich'
 
 export const PROCEDURAL_CITY_SOLID_DEFAULT_COLOR = '#9aa7b0'
 
@@ -51,6 +52,7 @@ export const PROCEDURAL_CITY_DEFAULT_PROPS: ProceduralCityComponentProps = {
   maxBuildings: 1200,
   solidColorScheme: 'uniform',
   solidColorSeed: 1337,
+  solidColorRichness: 0.65,
   solidColor: PROCEDURAL_CITY_SOLID_DEFAULT_COLOR,
   style: 'office',
 }
@@ -71,6 +73,7 @@ export interface ProceduralCityComponentProps {
   maxBuildings: number
   solidColorScheme: ProceduralCitySolidColorScheme
   solidColorSeed: number
+  solidColorRichness: number
   solidColor: string
   style: ProceduralCityStyle
 }
@@ -187,6 +190,16 @@ const PROCEDURAL_CITY_SOLID_PASTEL_MIN_LIGHTNESS = 0.72
 const PROCEDURAL_CITY_SOLID_PASTEL_MAX_LIGHTNESS = 0.9
 const PROCEDURAL_CITY_SOLID_PASTEL_MIN_SATURATION = 0.08
 const PROCEDURAL_CITY_SOLID_PASTEL_MAX_SATURATION = 0.32
+const PROCEDURAL_CITY_SOLID_RICH_MIN_LIGHTNESS = 0.52
+const PROCEDURAL_CITY_SOLID_RICH_MAX_LIGHTNESS = 0.86
+const PROCEDURAL_CITY_SOLID_RICH_MIN_SATURATION = 0.12
+const PROCEDURAL_CITY_SOLID_RICH_MAX_SATURATION = 0.5
+const PROCEDURAL_CITY_SOLID_RICH_TINT_MIN = 0.08
+const PROCEDURAL_CITY_SOLID_RICH_ACCENT_MAX_CHANCE = 0.15
+const PROCEDURAL_CITY_SOLID_RICH_HUE_JITTER = 0.025
+const PROCEDURAL_CITY_SOLID_RICH_SATURATION_JITTER = 0.09
+const PROCEDURAL_CITY_SOLID_RICH_LIGHTNESS_JITTER = 0.08
+const PROCEDURAL_CITY_SOLID_RICH_HEIGHT_LIGHTNESS = 0.07
 
 const PROCEDURAL_CITY_SOLID_PASTEL_PALETTE: readonly string[] = [
   '#d8c7c7',
@@ -235,6 +248,28 @@ const PROCEDURAL_CITY_SOLID_DISTRICT_OUTER_PALETTE: readonly string[] = [
   '#dcd4c8',
   '#e4dccf',
   '#d8d2c9',
+]
+const PROCEDURAL_CITY_SOLID_RICH_PALETTE: readonly string[] = [
+  '#c98f6b',
+  '#8fa98f',
+  '#7f9bb5',
+  '#d3b36a',
+  '#c08b9b',
+  '#6fa6a1',
+  '#9aa36a',
+  '#b76e58',
+  '#9d8fb5',
+  '#d6c2a3',
+  '#b98b64',
+  '#7d9a7a',
+]
+const PROCEDURAL_CITY_SOLID_RICH_ACCENT_PALETTE: readonly string[] = [
+  '#c96f5a',
+  '#6f9fb5',
+  '#b58a5a',
+  '#7f9a72',
+  '#a77f9e',
+  '#b0a04f',
 ]
 
 type ProceduralCitySolidMassFamily = 'flat' | 'roofCap' | 'roofBox' | 'setback' | 'tapered'
@@ -414,6 +449,7 @@ function resolveProceduralCitySolidColorScheme(value: unknown): ProceduralCitySo
     || value === 'neutral'
     || value === 'district'
     || value === 'height'
+    || value === 'rich'
   ) {
     return value
   }
@@ -928,31 +964,46 @@ function createParcelColor(
     const base = resolveProceduralCitySolidBaseColor(props, position, districtT)
     const normalizedHeight = Math.min(1, Math.max(0, heightT))
     const scheme = props.solidColorScheme
+    const richness = clamp01(props.solidColorRichness)
+    const isRich = scheme === 'rich'
     const hueJitter = scheme === 'uniform'
       ? 0.006
       : scheme === 'height'
         ? 0.004
         : scheme === 'district'
           ? 0.008
-          : 0.012
+          : isRich
+            ? lerpNumber(0.012, PROCEDURAL_CITY_SOLID_RICH_HUE_JITTER, richness)
+            : 0.012
     const saturationJitter = scheme === 'uniform'
       ? 0.03
       : scheme === 'height'
         ? 0.02
         : scheme === 'district'
           ? 0.03
-          : 0.04
+          : isRich
+            ? lerpNumber(0.04, PROCEDURAL_CITY_SOLID_RICH_SATURATION_JITTER, richness)
+            : 0.04
     const lightnessJitter = scheme === 'uniform'
       ? 0.035
       : scheme === 'height'
         ? 0.02
         : scheme === 'district'
           ? 0.03
-          : 0.04
+          : isRich
+            ? lerpNumber(0.04, PROCEDURAL_CITY_SOLID_RICH_LIGHTNESS_JITTER, richness)
+            : 0.04
+    const richHeightLightness = lerpNumber(
+      PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX,
+      PROCEDURAL_CITY_SOLID_RICH_HEIGHT_LIGHTNESS,
+      richness,
+    )
     const heightLightness = scheme === 'height'
       ? lerpNumber(-0.08, 0.08, normalizedHeight)
-      : PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN
-        + (PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX - PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN) * normalizedHeight
+      : isRich
+        ? lerpNumber(-richHeightLightness, richHeightLightness, normalizedHeight)
+        : PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN
+          + (PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MAX - PROCEDURAL_CITY_SOLID_HEIGHT_LIGHTNESS_MIN) * normalizedHeight
     base.offsetHSL(
       randomRange(random, -hueJitter, hueJitter),
       randomRange(random, -saturationJitter, saturationJitter),
@@ -960,7 +1011,12 @@ function createParcelColor(
     )
     return scheme === 'uniform' || scheme === 'height'
       ? base
-      : clampProceduralCitySolidPastelColor(base)
+      : clampProceduralCitySolidColor(
+          base,
+          isRich
+            ? resolveProceduralCitySolidRichColorBounds(richness)
+            : PROCEDURAL_CITY_SOLID_PASTEL_COLOR_BOUNDS,
+        )
   }
   if (props.style === 'office') {
     const value = 1 - random() * random()
@@ -986,13 +1042,40 @@ function pickProceduralCitySolidPaletteColor(palette: readonly string[], hashVal
   return new THREE.Color(palette[index]!)
 }
 
-function clampProceduralCitySolidPastelColor(color: THREE.Color): THREE.Color {
+type ProceduralCitySolidColorBounds = {
+  minLightness: number
+  maxLightness: number
+  minSaturation: number
+  maxSaturation: number
+}
+
+const PROCEDURAL_CITY_SOLID_PASTEL_COLOR_BOUNDS: ProceduralCitySolidColorBounds = {
+  minLightness: PROCEDURAL_CITY_SOLID_PASTEL_MIN_LIGHTNESS,
+  maxLightness: PROCEDURAL_CITY_SOLID_PASTEL_MAX_LIGHTNESS,
+  minSaturation: PROCEDURAL_CITY_SOLID_PASTEL_MIN_SATURATION,
+  maxSaturation: PROCEDURAL_CITY_SOLID_PASTEL_MAX_SATURATION,
+}
+
+function resolveProceduralCitySolidRichColorBounds(richness: number): ProceduralCitySolidColorBounds {
+  const t = clamp01(richness)
+  return {
+    minLightness: lerpNumber(PROCEDURAL_CITY_SOLID_PASTEL_MIN_LIGHTNESS, PROCEDURAL_CITY_SOLID_RICH_MIN_LIGHTNESS, t),
+    maxLightness: lerpNumber(PROCEDURAL_CITY_SOLID_PASTEL_MAX_LIGHTNESS, PROCEDURAL_CITY_SOLID_RICH_MAX_LIGHTNESS, t),
+    minSaturation: lerpNumber(PROCEDURAL_CITY_SOLID_PASTEL_MIN_SATURATION, PROCEDURAL_CITY_SOLID_RICH_MIN_SATURATION, t),
+    maxSaturation: lerpNumber(PROCEDURAL_CITY_SOLID_PASTEL_MAX_SATURATION, PROCEDURAL_CITY_SOLID_RICH_MAX_SATURATION, t),
+  }
+}
+
+function clampProceduralCitySolidColor(
+  color: THREE.Color,
+  bounds: ProceduralCitySolidColorBounds,
+): THREE.Color {
   const hsl = { h: 0, s: 0, l: 0 }
   color.getHSL(hsl)
   color.setHSL(
     hsl.h,
-    Math.min(PROCEDURAL_CITY_SOLID_PASTEL_MAX_SATURATION, Math.max(PROCEDURAL_CITY_SOLID_PASTEL_MIN_SATURATION, hsl.s)),
-    Math.min(PROCEDURAL_CITY_SOLID_PASTEL_MAX_LIGHTNESS, Math.max(PROCEDURAL_CITY_SOLID_PASTEL_MIN_LIGHTNESS, hsl.l)),
+    Math.min(bounds.maxSaturation, Math.max(bounds.minSaturation, hsl.s)),
+    Math.min(bounds.maxLightness, Math.max(bounds.minLightness, hsl.l)),
   )
   return color
 }
@@ -1021,7 +1104,38 @@ function resolveProceduralCitySolidBaseColor(
       hash2D(seed ^ 0x71a3, blockX, blockZ),
     )
     base = outer.lerp(downtown, smoothstep01(districtT))
-  } else {
+    base.lerp(solidColor, PROCEDURAL_CITY_SOLID_PALETTE_TINT)
+    return clampProceduralCitySolidColor(base, PROCEDURAL_CITY_SOLID_PASTEL_COLOR_BOUNDS)
+  }
+  if (scheme === 'rich') {
+    const richness = clamp01(props.solidColorRichness)
+    const pastel = pickProceduralCitySolidPaletteColor(
+      PROCEDURAL_CITY_SOLID_PASTEL_PALETTE,
+      hash2D(seed ^ 0x4f1b, blockX, blockZ),
+    )
+    const rich = pickProceduralCitySolidPaletteColor(
+      PROCEDURAL_CITY_SOLID_RICH_PALETTE,
+      hash2D(seed ^ 0x5c7d, blockX, blockZ),
+    )
+    base = pastel.lerp(rich, richness)
+    const accentChance = richness * PROCEDURAL_CITY_SOLID_RICH_ACCENT_MAX_CHANCE
+    const accentHash = hash2D(
+      seed ^ 0x6f3a,
+      Math.round(position.x * 100),
+      Math.round(position.z * 100),
+    )
+    if (accentHash < accentChance) {
+      const accent = pickProceduralCitySolidPaletteColor(
+        PROCEDURAL_CITY_SOLID_RICH_ACCENT_PALETTE,
+        hash2D(seed ^ 0x2d91, blockX, blockZ),
+      )
+      base = accent.lerp(solidColor, lerpNumber(0.12, 0.05, richness))
+    } else {
+      base.lerp(solidColor, lerpNumber(PROCEDURAL_CITY_SOLID_PALETTE_TINT, PROCEDURAL_CITY_SOLID_RICH_TINT_MIN, richness))
+    }
+    return clampProceduralCitySolidColor(base, resolveProceduralCitySolidRichColorBounds(richness))
+  }
+  {
     const palette = scheme === 'pastel'
       ? PROCEDURAL_CITY_SOLID_PASTEL_PALETTE
       : scheme === 'warm'
@@ -1033,9 +1147,9 @@ function resolveProceduralCitySolidBaseColor(
       palette,
       hash2D(seed ^ 0x4f1b, blockX, blockZ),
     )
+    base.lerp(solidColor, PROCEDURAL_CITY_SOLID_PALETTE_TINT)
+    return clampProceduralCitySolidColor(base, PROCEDURAL_CITY_SOLID_PASTEL_COLOR_BOUNDS)
   }
-  base.lerp(solidColor, PROCEDURAL_CITY_SOLID_PALETTE_TINT)
-  return clampProceduralCitySolidPastelColor(base)
 }
 
 function pickProceduralCitySolidVariantIndex(indices: number[], hashValue: number): number {
@@ -2195,6 +2309,7 @@ export function clampProceduralCityComponentProps(
     maxBuildings: Math.trunc(clampNumber(props?.maxBuildings, PROCEDURAL_CITY_DEFAULT_PROPS.maxBuildings, 0, 20000)),
     solidColorScheme: resolveProceduralCitySolidColorScheme(props?.solidColorScheme),
     solidColorSeed: Math.trunc(clampNumber(props?.solidColorSeed, PROCEDURAL_CITY_DEFAULT_PROPS.solidColorSeed, 0, 2147483647)),
+    solidColorRichness: clampNumber(props?.solidColorRichness, PROCEDURAL_CITY_DEFAULT_PROPS.solidColorRichness, 0, 1),
     solidColor: normalizeProceduralCitySolidColor(props?.solidColor),
     style: resolveProceduralCityStyle(props?.style ?? PROCEDURAL_CITY_DEFAULT_PROPS.style),
   }

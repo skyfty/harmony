@@ -23,7 +23,10 @@ const proceduralCityComponent = computed(
 const cityProps = computed(() => clampProceduralCityComponentProps(proceduralCityComponent.value?.props))
 const showSolidColorSeed = computed(
   () => cityProps.value.style === 'solid'
-    && ['pastel', 'warm', 'cool', 'neutral', 'district'].includes(cityProps.value.solidColorScheme),
+    && ['pastel', 'warm', 'cool', 'neutral', 'district', 'rich'].includes(cityProps.value.solidColorScheme),
+)
+const showSolidColorRichness = computed(
+  () => cityProps.value.style === 'solid' && cityProps.value.solidColorScheme === 'rich',
 )
 
 const styleOptions: Array<{ title: string; value: ProceduralCityStyle }> = [
@@ -43,6 +46,7 @@ const colorSchemeOptions: Array<{ title: string; value: ProceduralCitySolidColor
   { title: 'Neutral', value: 'neutral' },
   { title: 'District', value: 'district' },
   { title: 'Height', value: 'height' },
+  { title: 'Rich', value: 'rich' },
 ]
 
 function updateNumber(key: keyof ProceduralCityComponentProps, value: number | string | null): void {
@@ -211,6 +215,25 @@ function handleRemoveComponent(): void {
           :disabled="!proceduralCityComponent?.enabled"
           @update:modelValue="(value) => updateNumber('solidColorSeed', value)"
         />
+        <div
+          v-if="showSolidColorRichness"
+          class="procedural-city-panel__wide"
+        >
+          <div class="procedural-city-panel__range-label">
+            <span>Richness</span>
+            <span>{{ cityProps.solidColorRichness.toFixed(2) }}</span>
+          </div>
+          <v-slider
+            density="compact"
+            hide-details
+            :min="0"
+            :max="1"
+            :step="0.05"
+            :model-value="cityProps.solidColorRichness"
+            :disabled="!proceduralCityComponent?.enabled"
+            @update:modelValue="(value) => updateNumber('solidColorRichness', value)"
+          />
+        </div>
         <v-text-field
           label="Density"
           density="compact"
@@ -376,6 +399,18 @@ function handleRemoveComponent(): void {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.45rem 0.75rem;
+}
+
+.procedural-city-panel__wide {
+  grid-column: 1 / -1;
+}
+
+.procedural-city-panel__range-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  color: rgba(233, 236, 241, 0.82);
 }
 
 .component-menu-btn {
