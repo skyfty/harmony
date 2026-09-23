@@ -1,1 +1,1 @@
-export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale'
+export type EditorTool = 'select' | 'translate' | 'rotate' | 'scale' | 'transform'

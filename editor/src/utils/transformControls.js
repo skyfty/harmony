@@ -97,6 +97,16 @@ class TransformControls extends Controls {
 		this._plane = plane;
 		root.add( plane );
 
+		// Combined 'transform' mode state: `transformFamilies` selects which handle
+		// families are rendered and `interactionMode` tracks the family the pointer
+		// is currently interacting with (used by the drag math).
+		this.interactionMode = 'translate';
+		this.transformFamilies = [ 'translate', 'rotate', 'scale' ];
+		gizmo.interactionMode = this.interactionMode;
+		gizmo.transformFamilies = this.transformFamilies;
+		plane.interactionMode = this.interactionMode;
+		plane.transformFamilies = this.transformFamilies;
+
 		const scope = this;
 
 		// Defined getter, setter and store for a property
@@ -406,17 +416,90 @@ class TransformControls extends Controls {
 
 		if ( pointer !== null ) _raycaster.setFromCamera( pointer, this.camera );
 
-		const intersect = intersectObjectWithRay( this._gizmo.picker[ this.mode ], _raycaster );
+		const intersect = this._intersectActiveHandles( _raycaster );
 
 		if ( intersect ) {
 
+			this.setInteractionMode( intersect.family );
 			this.axis = intersect.object.name;
 
 		} else {
 
+			this.setInteractionMode( this.getFallbackInteractionMode() );
 			this.axis = null;
 
 		}
+
+	}
+
+	/**
+	 * Returns the nearest visible handle of the active picker(s). For the combined
+	 * 'transform' mode the hit handle also reports its family so the drag can reuse
+	 * the matching translate/rotate/scale math.
+	 */
+	_intersectActiveHandles( raycaster ) {
+
+		if ( this.mode === 'transform' ) {
+
+			const intersections = raycaster.intersectObject( this._gizmo.picker[ 'transform' ], true );
+
+			for ( let i = 0; i < intersections.length; i ++ ) {
+
+				const object = intersections[ i ].object;
+
+				if ( object.visible === false ) continue;
+				if ( this.transformFamilies.indexOf( object.family ) === - 1 ) continue;
+
+				return { object: object, family: object.family };
+
+			}
+
+			return null;
+
+		}
+
+		const intersections = raycaster.intersectObject( this._gizmo.picker[ this.mode ], true );
+
+		for ( let i = 0; i < intersections.length; i ++ ) {
+
+			if ( intersections[ i ].object.visible ) {
+
+				return { object: intersections[ i ].object, family: this.mode };
+
+			}
+
+		}
+
+		return null;
+
+	}
+
+	getFallbackInteractionMode() {
+
+		if ( this.mode === 'transform' ) {
+
+			return this.transformFamilies.length > 0 ? this.transformFamilies[ 0 ] : 'translate';
+
+		}
+
+		return this.mode;
+
+	}
+
+	/**
+	 * Updates the family used by the drag math without notifying listeners.
+	 */
+	setInteractionMode( family ) {
+
+		const next = ( family === 'translate' || family === 'rotate' || family === 'scale' )
+			? family
+			: this.getFallbackInteractionMode();
+
+		if ( this.interactionMode === next ) return;
+
+		this.interactionMode = next;
+		this._gizmo.interactionMode = next;
+		this._plane.interactionMode = next;
 
 	}
 
@@ -451,7 +534,7 @@ class TransformControls extends Controls {
 			}
 
 			this.dragging = true;
-			_mouseDownEvent.mode = this.mode;
+			_mouseDownEvent.mode = this.getInteractionMode();
 			this.dispatchEvent( _mouseDownEvent );
 
 		}
@@ -461,7 +544,7 @@ class TransformControls extends Controls {
 	pointerMove( pointer ) {
 
 		const axis = this.axis;
-		const mode = this.mode;
+		const mode = this.getInteractionMode();
 		const object = this.object;
 		let space = this.space;
 
@@ -733,7 +816,7 @@ class TransformControls extends Controls {
 
 		if ( this.dragging && ( this.axis !== null ) ) {
 
-			_mouseUpEvent.mode = this.mode;
+			_mouseUpEvent.mode = this.getInteractionMode();
 			this.dispatchEvent( _mouseUpEvent );
 
 		}
@@ -819,7 +902,7 @@ class TransformControls extends Controls {
 	/**
 	 * Returns the transformation mode.
 	 *
-	 * @returns {'translate'|'rotate'|'scale'} The transformation mode.
+	 * @returns {'translate'|'rotate'|'scale'|'transform'} The transformation mode.
 	 */
 	getMode() {
 
@@ -830,11 +913,82 @@ class TransformControls extends Controls {
 	/**
 	 * Sets the given transformation mode.
 	 *
-	 * @param {'translate'|'rotate'|'scale'} mode - The transformation mode to set.
+	 * @param {'translate'|'rotate'|'scale'|'transform'} mode - The transformation mode to set.
 	 */
 	setMode( mode ) {
 
 		this.mode = mode;
+
+		if ( mode === 'transform' ) {
+
+			this.setInteractionMode( this.getFallbackInteractionMode() );
+
+		}
+
+	}
+
+	/**
+	 * Returns the handle family that should drive the drag math. For the combined
+	 * 'transform' mode this is the family of the handle being dragged, otherwise the
+	 * plain transformation mode.
+	 *
+	 * @returns {'translate'|'rotate'|'scale'} The interaction family.
+	 */
+	getInteractionMode() {
+
+		if ( this.mode === 'transform' ) {
+
+			if ( this.interactionMode === 'translate'
+				|| this.interactionMode === 'rotate'
+				|| this.interactionMode === 'scale' ) {
+
+				return this.interactionMode;
+
+			}
+
+			return this.getFallbackInteractionMode();
+
+		}
+
+		return this.mode;
+
+	}
+
+	/**
+	 * Restricts which handle families the combined 'transform' mode renders.
+	 * Useful for selections that only support a subset (e.g. move only).
+	 *
+	 * @param {('translate'|'rotate'|'scale')[]} families - The families to render.
+	 */
+	setTransformFamilies( families ) {
+
+		const next = [];
+		const order = [ 'translate', 'rotate', 'scale' ];
+
+		if ( Array.isArray( families ) ) {
+
+			for ( let i = 0; i < order.length; i ++ ) {
+
+				if ( families.indexOf( order[ i ] ) !== - 1 ) next.push( order[ i ] );
+
+			}
+
+		}
+
+		if ( next.length === 0 ) next.push( 'translate', 'rotate', 'scale' );
+
+		this.transformFamilies = next;
+		this._gizmo.transformFamilies = next;
+		this._plane.transformFamilies = next;
+
+		const current = this.interactionMode;
+		if ( next.indexOf( current ) === - 1 ) {
+
+			this.interactionMode = next[ 0 ];
+			this._gizmo.interactionMode = next[ 0 ];
+			this._plane.interactionMode = next[ 0 ];
+
+		}
 
 	}
 
@@ -1046,6 +1200,46 @@ const _v1 = new Vector3();
 const _v2 = new Vector3();
 const _v3 = new Vector3();
 
+/**
+ * Combined 'transform' mode layout (Unity style Transform tool).
+ *
+ * Radii are authored directly into the handle geometry (gizmo units, before the
+ * per-frame camera scaling). The whole combined gizmo is scaled by `globalScale`
+ * so its on-screen footprint stays in line with the single-mode gizmos, and the
+ * pick bands of the three families are intentionally disjoint so every family
+ * keeps a stable hit area:
+ *
+ *   move   0.17 - 0.45   rotate 0.54 - 0.70   scale 0.81 - 0.99 (center 0 - 0.11)
+ */
+const TRANSFORM_TOOL_LAYOUT = {
+	globalScale: 0.62,
+	move: {
+		shaftLength: 0.6,
+		shaftRadius: 0.0075,
+		headBase: 0.6,
+		headRadius: 0.045,
+		headHeight: 0.1,
+		pickCenter: 0.5,
+		pickLength: 0.44,
+		pickRadius: 0.16
+	},
+	rotate: {
+		ringRadius: 1,
+		ringTube: 0.0075,
+		pickTube: 0.13,
+		// Half angle (degrees in the ring plane) that stays unpickable around every
+		// axis crossing so the move/scale handles keep the axis lines.
+		pickGapDegrees: 14
+	},
+	scale: {
+		handleOffset: 1.45,
+		handleSize: 0.1,
+		pickSize: 0.3,
+		centerSize: 0.11,
+		centerPickSize: 0.34
+	}
+};
+
 class TransformControlsRoot extends Object3D {
 
 	constructor( controls ) {
@@ -1157,6 +1351,12 @@ class TransformControlsGizmo extends Object3D {
 		const matInvisible = gizmoMaterial.clone();
 		matInvisible.opacity = 0.15;
 
+		// Combined 'transform' pickers are closed volumes (cylinders/boxes) that are
+		// approached from every direction, so they are raycast from both sides. Front
+		// side only picking would drop rays that enter through a culled cap face.
+		const matInvisibleDoubleSided = matInvisible.clone();
+		matInvisibleDoubleSided.side = DoubleSide;
+
 		const matHelper = gizmoLineMaterial.clone();
 		matHelper.opacity = 0.5;
 
@@ -1229,6 +1429,93 @@ class TransformControlsGizmo extends Object3D {
 			return geometry;
 
 		}
+
+		// reusable geometry for the combined 'transform' gizmo
+
+		const transformShaftGeometry = new CylinderGeometry(
+			TRANSFORM_TOOL_LAYOUT.move.shaftRadius,
+			TRANSFORM_TOOL_LAYOUT.move.shaftRadius,
+			TRANSFORM_TOOL_LAYOUT.move.shaftLength,
+			3
+		);
+		transformShaftGeometry.translate( 0, TRANSFORM_TOOL_LAYOUT.move.shaftLength / 2, 0 );
+
+		const transformArrowGeometry = new CylinderGeometry(
+			0,
+			TRANSFORM_TOOL_LAYOUT.move.headRadius,
+			TRANSFORM_TOOL_LAYOUT.move.headHeight,
+			12
+		);
+		transformArrowGeometry.translate( 0, TRANSFORM_TOOL_LAYOUT.move.headHeight / 2, 0 );
+
+		const transformMovePickGeometry = new CylinderGeometry(
+			TRANSFORM_TOOL_LAYOUT.move.pickRadius,
+			TRANSFORM_TOOL_LAYOUT.move.pickRadius,
+			TRANSFORM_TOOL_LAYOUT.move.pickLength,
+			4
+		);
+
+		const transformRingGeometry = new TorusGeometry(
+			TRANSFORM_TOOL_LAYOUT.rotate.ringRadius,
+			TRANSFORM_TOOL_LAYOUT.rotate.ringTube,
+			3,
+			64
+		);
+
+		// A full ring crosses the two other axes, and those crossing points sit right
+		// on the move/scale pick bands of those axes. Looking along an axis would then
+		// always grab the ring instead of the arrow at the tip. The ring *pickers* are
+		// therefore built from four arcs that leave a small gap around every crossing,
+		// while the visible ring stays a full circle.
+		const RING_PICK_GAP = Math.PI * TRANSFORM_TOOL_LAYOUT.rotate.pickGapDegrees / 180;
+		const RING_PICK_ARC = Math.PI / 2 - 2 * RING_PICK_GAP;
+
+		function createRingPickEntries( material, orientation ) {
+
+			const entries = [];
+
+			for ( let i = 0; i < 4; i ++ ) {
+
+				const geometry = new TorusGeometry(
+					TRANSFORM_TOOL_LAYOUT.rotate.ringRadius,
+					TRANSFORM_TOOL_LAYOUT.rotate.pickTube,
+					6,
+					24,
+					RING_PICK_ARC
+				);
+				geometry.rotateZ( RING_PICK_GAP + i * Math.PI / 2 );
+
+				entries.push( [ new Mesh( geometry, material ), null, orientation ] );
+
+			}
+
+			return entries;
+
+		}
+
+		const transformScaleHandleGeometry = new BoxGeometry(
+			TRANSFORM_TOOL_LAYOUT.scale.handleSize,
+			TRANSFORM_TOOL_LAYOUT.scale.handleSize,
+			TRANSFORM_TOOL_LAYOUT.scale.handleSize
+		);
+
+		const transformScalePickGeometry = new BoxGeometry(
+			TRANSFORM_TOOL_LAYOUT.scale.pickSize,
+			TRANSFORM_TOOL_LAYOUT.scale.pickSize,
+			TRANSFORM_TOOL_LAYOUT.scale.pickSize
+		);
+
+		const transformScaleCenterGeometry = new BoxGeometry(
+			TRANSFORM_TOOL_LAYOUT.scale.centerSize,
+			TRANSFORM_TOOL_LAYOUT.scale.centerSize,
+			TRANSFORM_TOOL_LAYOUT.scale.centerSize
+		);
+
+		const transformScaleCenterPickGeometry = new BoxGeometry(
+			TRANSFORM_TOOL_LAYOUT.scale.centerPickSize,
+			TRANSFORM_TOOL_LAYOUT.scale.centerPickSize,
+			TRANSFORM_TOOL_LAYOUT.scale.centerPickSize
+		);
 
 		// Special geometry for transform helper. If scaled with position vector it spans from [0,0,0] to position
 
@@ -1433,9 +1720,107 @@ class TransformControlsGizmo extends Object3D {
 			]
 		};
 
+		// Combined 'transform' mode: move arrows + rotate rings + scale handles.
+		// Unlike the single-mode gizmos the families live at different radii so they
+		// can coexist without fighting for the same ray hits.
+
+		const SCALE_HANDLE_OFFSET = TRANSFORM_TOOL_LAYOUT.scale.handleOffset;
+		const MOVE_HEAD_BASE = TRANSFORM_TOOL_LAYOUT.move.headBase;
+		const MOVE_PICK_CENTER = TRANSFORM_TOOL_LAYOUT.move.pickCenter;
+
+		const gizmoTransformMove = {
+			X: [
+				[ new Mesh( transformShaftGeometry, matRed ), null, [ 0, 0, - Math.PI / 2 ]],
+				[ new Mesh( transformShaftGeometry, matRed ), null, [ 0, 0, Math.PI / 2 ]],
+				[ new Mesh( transformArrowGeometry, matRed ), [ MOVE_HEAD_BASE, 0, 0 ], [ 0, 0, - Math.PI / 2 ]],
+				[ new Mesh( transformArrowGeometry, matRed ), [ - MOVE_HEAD_BASE, 0, 0 ], [ 0, 0, Math.PI / 2 ]]
+			],
+			Y: [
+				[ new Mesh( transformShaftGeometry, matGreen ) ],
+				[ new Mesh( transformShaftGeometry, matGreen ), null, [ 0, 0, Math.PI ]],
+				[ new Mesh( transformArrowGeometry, matGreen ), [ 0, MOVE_HEAD_BASE, 0 ]],
+				[ new Mesh( transformArrowGeometry, matGreen ), [ 0, - MOVE_HEAD_BASE, 0 ], [ Math.PI, 0, 0 ]]
+			],
+			Z: [
+				[ new Mesh( transformShaftGeometry, matBlue ), null, [ Math.PI / 2, 0, 0 ]],
+				[ new Mesh( transformShaftGeometry, matBlue ), null, [ - Math.PI / 2, 0, 0 ]],
+				[ new Mesh( transformArrowGeometry, matBlue ), [ 0, 0, MOVE_HEAD_BASE ], [ Math.PI / 2, 0, 0 ]],
+				[ new Mesh( transformArrowGeometry, matBlue ), [ 0, 0, - MOVE_HEAD_BASE ], [ - Math.PI / 2, 0, 0 ]]
+			]
+		};
+
+		const pickerTransformMove = {
+			X: [
+				[ new Mesh( transformMovePickGeometry, matInvisibleDoubleSided ), [ MOVE_PICK_CENTER, 0, 0 ], [ 0, 0, - Math.PI / 2 ]],
+				[ new Mesh( transformMovePickGeometry, matInvisibleDoubleSided ), [ - MOVE_PICK_CENTER, 0, 0 ], [ 0, 0, Math.PI / 2 ]]
+			],
+			Y: [
+				[ new Mesh( transformMovePickGeometry, matInvisibleDoubleSided ), [ 0, MOVE_PICK_CENTER, 0 ]],
+				[ new Mesh( transformMovePickGeometry, matInvisibleDoubleSided ), [ 0, - MOVE_PICK_CENTER, 0 ]]
+			],
+			Z: [
+				[ new Mesh( transformMovePickGeometry, matInvisibleDoubleSided ), [ 0, 0, MOVE_PICK_CENTER ], [ Math.PI / 2, 0, 0 ]],
+				[ new Mesh( transformMovePickGeometry, matInvisibleDoubleSided ), [ 0, 0, - MOVE_PICK_CENTER ], [ - Math.PI / 2, 0, 0 ]]
+			]
+		};
+
+		const gizmoTransformRotate = {
+			X: [
+				[ new Mesh( transformRingGeometry, matRed ), null, [ 0, - Math.PI / 2, 0 ]]
+			],
+			Y: [
+				[ new Mesh( transformRingGeometry, matGreen ), null, [ Math.PI / 2, 0, 0 ]]
+			],
+			Z: [
+				[ new Mesh( transformRingGeometry, matBlue )]
+			]
+		};
+
+		const pickerTransformRotate = {
+			X: createRingPickEntries( matInvisibleDoubleSided, [ 0, - Math.PI / 2, 0 ] ),
+			Y: createRingPickEntries( matInvisibleDoubleSided, [ Math.PI / 2, 0, 0 ] ),
+			Z: createRingPickEntries( matInvisibleDoubleSided, null )
+		};
+
+		const gizmoTransformScale = {
+			X: [
+				[ new Mesh( transformScaleHandleGeometry, matRed ), [ SCALE_HANDLE_OFFSET, 0, 0 ]],
+				[ new Mesh( transformScaleHandleGeometry, matRed ), [ - SCALE_HANDLE_OFFSET, 0, 0 ]]
+			],
+			Y: [
+				[ new Mesh( transformScaleHandleGeometry, matGreen ), [ 0, SCALE_HANDLE_OFFSET, 0 ]],
+				[ new Mesh( transformScaleHandleGeometry, matGreen ), [ 0, - SCALE_HANDLE_OFFSET, 0 ]]
+			],
+			Z: [
+				[ new Mesh( transformScaleHandleGeometry, matBlue ), [ 0, 0, SCALE_HANDLE_OFFSET ]],
+				[ new Mesh( transformScaleHandleGeometry, matBlue ), [ 0, 0, - SCALE_HANDLE_OFFSET ]]
+			],
+			XYZ: [
+				[ new Mesh( transformScaleCenterGeometry, matWhiteTransparent )]
+			]
+		};
+
+		const pickerTransformScale = {
+			X: [
+				[ new Mesh( transformScalePickGeometry, matInvisibleDoubleSided ), [ SCALE_HANDLE_OFFSET, 0, 0 ]],
+				[ new Mesh( transformScalePickGeometry, matInvisibleDoubleSided ), [ - SCALE_HANDLE_OFFSET, 0, 0 ]]
+			],
+			Y: [
+				[ new Mesh( transformScalePickGeometry, matInvisibleDoubleSided ), [ 0, SCALE_HANDLE_OFFSET, 0 ]],
+				[ new Mesh( transformScalePickGeometry, matInvisibleDoubleSided ), [ 0, - SCALE_HANDLE_OFFSET, 0 ]]
+			],
+			Z: [
+				[ new Mesh( transformScalePickGeometry, matInvisibleDoubleSided ), [ 0, 0, SCALE_HANDLE_OFFSET ]],
+				[ new Mesh( transformScalePickGeometry, matInvisibleDoubleSided ), [ 0, 0, - SCALE_HANDLE_OFFSET ]]
+			],
+			XYZ: [
+				[ new Mesh( transformScaleCenterPickGeometry, matInvisibleDoubleSided )]
+			]
+		};
+
 		// Creates an Object3D with gizmos described in custom hierarchy definition.
 
-		function setupGizmo( gizmoMap ) {
+		function setupGizmo( gizmoMap, family ) {
 
 			const gizmo = new Object3D();
 
@@ -1452,6 +1837,9 @@ class TransformControlsGizmo extends Object3D {
 					// name and tag properties are essential for picking and updating logic.
 					object.name = name;
 					object.tag = tag;
+					// `family` is only set for the combined 'transform' handles so the
+					// shared update loop can tell move/rotate/scale handles apart.
+					object.family = family;
 
 					if ( position ) {
 
@@ -1492,6 +1880,29 @@ class TransformControlsGizmo extends Object3D {
 
 		}
 
+		// Builds a flat gizmo group whose handles carry their own `family` tag, so the
+		// combined 'transform' mode can mix move/rotate/scale handles in one group.
+
+		function setupTransformGizmo( familyMaps ) {
+
+			const gizmo = new Object3D();
+
+			for ( const family in familyMaps ) {
+
+				const familyGizmo = setupGizmo( familyMaps[ family ], family );
+
+				for ( let i = familyGizmo.children.length; i --; ) {
+
+					gizmo.add( familyGizmo.children[ i ] );
+
+				}
+
+			}
+
+			return gizmo;
+
+		}
+
 		// Gizmo creation
 
 		this.gizmo = {};
@@ -1508,11 +1919,26 @@ class TransformControlsGizmo extends Object3D {
 		this.add( this.helper[ 'rotate' ] = setupGizmo( helperRotate ) );
 		this.add( this.helper[ 'scale' ] = setupGizmo( helperScale ) );
 
+		this.add( this.gizmo[ 'transform' ] = setupTransformGizmo( {
+			translate: gizmoTransformMove,
+			rotate: gizmoTransformRotate,
+			scale: gizmoTransformScale
+		} ) );
+		this.add( this.picker[ 'transform' ] = setupTransformGizmo( {
+			translate: pickerTransformMove,
+			rotate: pickerTransformRotate,
+			scale: pickerTransformScale
+		} ) );
+		this.add( this.helper[ 'transform' ] = setupTransformGizmo( {
+			translate: helperTranslate
+		} ) );
+
 		// Pickers should be hidden always
 
 		this.picker[ 'translate' ].visible = false;
 		this.picker[ 'rotate' ].visible = false;
 		this.picker[ 'scale' ].visible = false;
+		this.picker[ 'transform' ].visible = false;
 
 	}
 
@@ -1520,29 +1946,46 @@ class TransformControlsGizmo extends Object3D {
 
 	updateMatrixWorld( force ) {
 
-		const space = ( this.mode === 'scale' ) ? 'local' : this.space; // scale always oriented to local rotation
-
-		const quaternion = ( space === 'local' ) ? this.worldQuaternion : _identityQuaternion;
+		const isCombined = this.mode === 'transform';
+		const activeFamilies = isCombined ? this.transformFamilies : [ this.mode ];
+		const activeGroup = isCombined ? 'transform' : this.mode;
+		const handleScaleFactor = ( isCombined ? TRANSFORM_TOOL_LAYOUT.globalScale : 1 );
 
 		// Show only gizmos for current transform mode
 
 		this.gizmo[ 'translate' ].visible = this.mode === 'translate';
 		this.gizmo[ 'rotate' ].visible = this.mode === 'rotate';
 		this.gizmo[ 'scale' ].visible = this.mode === 'scale';
+		this.gizmo[ 'transform' ].visible = isCombined;
 
 		this.helper[ 'translate' ].visible = this.mode === 'translate';
 		this.helper[ 'rotate' ].visible = this.mode === 'rotate';
 		this.helper[ 'scale' ].visible = this.mode === 'scale';
+		this.helper[ 'transform' ].visible = isCombined;
 
 
 		let handles = [];
-		handles = handles.concat( this.picker[ this.mode ].children );
-		handles = handles.concat( this.gizmo[ this.mode ].children );
-		handles = handles.concat( this.helper[ this.mode ].children );
+		handles = handles.concat( this.picker[ activeGroup ].children );
+		handles = handles.concat( this.gizmo[ activeGroup ].children );
+		handles = handles.concat( this.helper[ activeGroup ].children );
 
 		for ( let i = 0; i < handles.length; i ++ ) {
 
 			const handle = handles[ i ];
+
+			// The combined mode mixes handle families in one group; single modes fall
+			// back to the current mode so their behavior is unchanged.
+			const family = handle.family !== undefined ? handle.family : this.mode;
+			const familySpace = ( family === 'scale' ) ? 'local' : this.space; // scale always oriented to local rotation
+			const quaternion = ( familySpace === 'local' ) ? this.worldQuaternion : _identityQuaternion;
+
+			// Hide handles of families that are currently not available for the selection.
+			if ( activeFamilies.indexOf( family ) === - 1 ) {
+
+				handle.visible = false;
+				continue;
+
+			}
 
 			// hide aligned to camera
 
@@ -1562,13 +2005,21 @@ class TransformControlsGizmo extends Object3D {
 
 			}
 
-			handle.scale.set( 1, 1, 1 ).multiplyScalar( factor * this.size / 4 );
+			handle.scale.set( 1, 1, 1 ).multiplyScalar( factor * this.size / 4 * handleScaleFactor );
 
 			// TODO: simplify helpers and consider decoupling from gizmo
 
 			if ( handle.tag === 'helper' ) {
 
 				handle.visible = false;
+
+				// Helpers describe the drag of a single family, so only show them while
+				// that family is the one being interacted with.
+				if ( isCombined && family !== this.interactionMode ) {
+
+					continue;
+
+				}
 
 				if ( handle.name === 'AXIS' ) {
 
@@ -1680,7 +2131,7 @@ class TransformControlsGizmo extends Object3D {
 
 			handle.quaternion.copy( quaternion );
 
-			if ( this.mode === 'translate' || this.mode === 'scale' ) {
+			if ( family === 'translate' || family === 'scale' ) {
 
 				// Hide translate and scale axis facing the camera
 
@@ -1753,7 +2204,7 @@ class TransformControlsGizmo extends Object3D {
 
 				}
 
-			} else if ( this.mode === 'rotate' ) {
+			} else if ( family === 'rotate' ) {
 
 				// Align handles to current local or world rotation
 
@@ -1857,7 +2308,11 @@ class TransformControlsPlane extends Mesh {
 
 		this.position.copy( this.worldPosition );
 
-		if ( this.mode === 'scale' ) space = 'local'; // scale always oriented to local rotation
+		// The combined 'transform' mode aligns the drag plane with the family that is
+		// currently being interacted with.
+		const mode = ( this.mode === 'transform' ) ? this.interactionMode : this.mode;
+
+		if ( mode === 'scale' ) space = 'local'; // scale always oriented to local rotation
 
 		_v1.copy( _unitX ).applyQuaternion( space === 'local' ? this.worldQuaternion : _identityQuaternion );
 		_v2.copy( _unitY ).applyQuaternion( space === 'local' ? this.worldQuaternion : _identityQuaternion );
@@ -1867,7 +2322,7 @@ class TransformControlsPlane extends Mesh {
 
 		_alignVector.copy( _v2 );
 
-		switch ( this.mode ) {
+		switch ( mode ) {
 
 			case 'translate':
 			case 'scale':

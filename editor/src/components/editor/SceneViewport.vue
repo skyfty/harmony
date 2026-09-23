@@ -2306,7 +2306,9 @@ function getTransformNudgeStep(event: KeyboardEvent): number {
 
 function applyTransformNudgeShortcut(event: KeyboardEvent): boolean {
   const activeTool = getSafeTransformTool(props.activeTool)
-  if (activeTool !== 'translate' && activeTool !== 'rotate' && activeTool !== 'scale') {
+  // The combined Transform tool nudges positions with the arrow keys, like Move.
+  const nudgeTool: EditorTool = activeTool === 'transform' ? 'translate' : activeTool
+  if (nudgeTool !== 'translate' && nudgeTool !== 'rotate' && nudgeTool !== 'scale') {
     return false
   }
   if (transformControls?.dragging) {
@@ -2337,7 +2339,7 @@ function applyTransformNudgeShortcut(event: KeyboardEvent): boolean {
   const nextRotation = object.rotation.clone()
   const nextScale = object.scale.clone()
 
-  switch (activeTool) {
+  switch (nudgeTool) {
     case 'translate':
       nextPosition[axis] += step
       object.position.copy(nextPosition)
@@ -13182,7 +13184,12 @@ function handleMirrorSelection(payload: { mode: 'horizontal' | 'vertical' }) {
     return
   }
   const activeTool = props.activeTool
-  if (activeTool !== 'translate' && activeTool !== 'rotate' && activeTool !== 'scale') {
+  if (
+    activeTool !== 'translate'
+    && activeTool !== 'rotate'
+    && activeTool !== 'scale'
+    && activeTool !== 'transform'
+  ) {
     return
   }
   if (transformControls.dragging || sceneStore.activeTransformNodeId) {
@@ -22011,9 +22018,10 @@ function getTransformChangeContext(): {
 
   const isDirectionalLightTargetPivot = Boolean((target.userData as any)?.isDirectionalLightTargetPivot)
   const isPivotTarget = Boolean((target.userData as any)?.isSelectionPivot || isDirectionalLightTargetPivot)
-  const mode = transformControls.getMode()
+  // Combined Transform tool: the dragged handle family decides which property is written.
+  const mode = transformControls.getInteractionMode()
   const isTranslateMode = mode === 'translate'
-  const isActiveTranslateTool = props.activeTool === 'translate'
+  const isActiveTranslateTool = props.activeTool === 'translate' || props.activeTool === 'transform'
   const shouldSnapTranslate = isTranslateMode && !isActiveTranslateTool
 
   const nodeId = (target.userData?.nodeId as string | undefined) ?? null
@@ -24217,6 +24225,31 @@ function applyTransformSpaceForSelection(tool: EditorTool, primaryId: string | n
   transformControls.setSpace(nextSpace)
 }
 
+/**
+ * Handle families the combined Transform tool should render for the current selection.
+ * Landform selections only support moving, directional lights are edited through their
+ * target pivot (move + rotate) so scale stays hidden there.
+ */
+function resolveTransformToolFamilies(primaryId: string | null): Array<'translate' | 'rotate' | 'scale'> {
+  if (selectionContainsLandform.value) {
+    return ['translate']
+  }
+  const node = primaryId ? sceneStore.getNodeById(primaryId) : null
+  if (node?.light?.type === 'Directional') {
+    return ['translate', 'rotate']
+  }
+  return ['translate', 'rotate', 'scale']
+}
+
+function syncTransformToolFamilies(tool: EditorTool, primaryId: string | null): void {
+  if (!transformControls) {
+    return
+  }
+  transformControls.setTransformFamilies(
+    tool === 'transform' ? resolveTransformToolFamilies(primaryId) : ['translate', 'rotate', 'scale'],
+  )
+}
+
 /** Gizmo orientation actually used for the current tool/selection. */
 const effectiveTransformSpace = computed<'world' | 'local'>(() => {
   const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
@@ -24244,7 +24277,7 @@ const transformSpaceButtonTitle = computed(() => {
     parts.push('自动')
   }
   parts.push(effectiveTransformSpace.value === 'world' ? '点击切换为本地坐标系' : '点击切换为世界坐标系')
-  if (props.activeTool === 'scale') {
+  if (props.activeTool === 'scale' || props.activeTool === 'transform') {
     parts.push('缩放始终使用本地轴')
   }
   parts.push('右键恢复自动')
@@ -24473,6 +24506,7 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   }
   // 根据当前工具选择合适的变换坐标系
   applyTransformSpaceForSelection(effectiveTool, primaryId)
+  syncTransformToolFamilies(effectiveTool, primaryId)
   transformControls.setMode(effectiveTool)
 
   // Multi-select: attach to centroid pivot so the gizmo axis is centered.
@@ -24488,7 +24522,10 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
 
   // DirectionalLight: edit using an editor-only pivot at the light target so the gizmo stays near the scene.
   const node = sceneStore.getNodeById(primaryId)
-  if (node?.light?.type === 'Directional' && (effectiveTool === 'translate' || effectiveTool === 'rotate')) {
+  if (
+    node?.light?.type === 'Directional'
+    && (effectiveTool === 'translate' || effectiveTool === 'rotate' || effectiveTool === 'transform')
+  ) {
     syncDirectionalLightTargetPivotFromNode(primaryId, { orientForRotate: effectiveTool === 'rotate' })
     transformControls.setSpace(effectiveTool === 'rotate' ? 'local' : 'world')
     transformControls.attach(directionalLightTargetPivotObject)
@@ -24516,7 +24553,9 @@ function updateToolMode(tool: EditorTool) {
   if (effectiveTool === 'select') {
     transformControls.detach()
   } else {
-    applyTransformSpaceForSelection(effectiveTool, sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
+    const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    applyTransformSpaceForSelection(effectiveTool, primaryId)
+    syncTransformToolFamilies(effectiveTool, primaryId)
     transformControls.setMode(effectiveTool)
   }
 
@@ -25697,7 +25736,7 @@ defineExpose({
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">工具</span>
-              <span class="camera-status-hud__hint-text">Q 选中 · W 移动 · E 旋转 · R 缩放</span>
+              <span class="camera-status-hud__hint-text">Q 选中 · W 移动 · E 旋转 · R 缩放 · Y 组合变换</span>
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">坐标</span>

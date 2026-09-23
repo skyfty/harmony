@@ -12,4 +12,5 @@ export const TRANSFORM_TOOLS: TransformToolDefinition[] = [
   { label: 'Move', icon: 'mdi-axis-arrow', value: 'translate', key: 'KeyW' },
   { label: 'Rotate', icon: 'mdi-rotate-3d-variant', value: 'rotate', key: 'KeyE' },
   { label: 'Scale', icon: 'mdi-cube-scan', value: 'scale', key: 'KeyR' },
+  { label: 'Transform', icon: 'mdi-move-resize-variant', value: 'transform', key: 'KeyY' },
 ]

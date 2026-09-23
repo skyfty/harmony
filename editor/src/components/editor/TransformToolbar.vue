@@ -42,6 +42,9 @@ function toolTitle(tool: TransformToolDefinition): string {
   if (tool.value === 'translate') {
     return `${base} — hold Shift to snap, hold V to temporarily select for placement snap`
   }
+  if (tool.value === 'transform') {
+    return `${base} — 拖动箭头移动、拖动轴端方块缩放、拖动圆环旋转、拖动中心方块等比缩放`
+  }
   if (landformTransformLocked.value && (tool.value === 'rotate' || tool.value === 'scale')) {
     return `${base} — disabled for Landform selection`
   }
