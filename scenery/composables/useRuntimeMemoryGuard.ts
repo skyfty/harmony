@@ -50,6 +50,10 @@ export interface RuntimeMemoryGuardStateRecord {
   extreme: boolean
   lastWarningAt: number
   warningCount: number
+  /** Device RAM in MB, when the host exposes it (`wx.getDeviceInfo().memorySize`). */
+  deviceMemoryMb: number
+  /** Device benchmark level, when the host exposes it (`wx.getDeviceInfo().benchmarkLevel`). */
+  deviceBenchmarkLevel: number
 }
 
 function getGlobalWx(): WxLike | null {
@@ -94,10 +98,30 @@ export function useRuntimeMemoryGuard(options: RuntimeMemoryGuardOptions = {}) {
     extreme: false,
     lastWarningAt: 0,
     warningCount: 0,
+    deviceMemoryMb: 0,
+    deviceBenchmarkLevel: 0,
   })
 
   let warningListener: ((event: MemoryWarningEvent) => void) | null = null
   let restoreTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Best-effort: only older/newer base libraries on some platforms report these fields.
+  const syncDeviceInfo = (wxLike: WxLike): void => {
+    const info = wxLike.getDeviceInfo?.()
+    const rawMemorySize = info?.memorySize
+    const memoryMb = typeof rawMemorySize === 'string'
+      ? Number.parseFloat(rawMemorySize)
+      : typeof rawMemorySize === 'number'
+        ? rawMemorySize
+        : Number.NaN
+    state.deviceMemoryMb = Number.isFinite(memoryMb) && memoryMb > 0 ? Math.round(memoryMb) : 0
+    const rawBenchmarkLevel = info?.benchmarkLevel
+    state.deviceBenchmarkLevel = typeof rawBenchmarkLevel === 'number'
+      && Number.isFinite(rawBenchmarkLevel)
+      && rawBenchmarkLevel > 0
+      ? Math.trunc(rawBenchmarkLevel)
+      : 0
+  }
 
   const applyState = (nextState: RuntimeMemoryGuardState, extreme: boolean): void => {
     if (state.state === nextState && state.extreme === extreme) {
@@ -164,6 +188,7 @@ export function useRuntimeMemoryGuard(options: RuntimeMemoryGuardOptions = {}) {
     }
     state.enabled = true
     state.platform = resolvePlatform(wxLike, uniLike)
+    syncDeviceInfo(wxLike)
     warningListener = (event) => handleWarning(event)
     wxLike.onMemoryWarning(warningListener)
   }
@@ -183,6 +208,8 @@ export function useRuntimeMemoryGuard(options: RuntimeMemoryGuardOptions = {}) {
     state.extreme = false
     state.lastWarningAt = 0
     state.warningCount = 0
+    state.deviceMemoryMb = 0
+    state.deviceBenchmarkLevel = 0
   }
 
   return {

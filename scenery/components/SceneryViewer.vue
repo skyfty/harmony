@@ -370,11 +370,27 @@
         :aria-label="debugOverlayAriaLabel"
         @tap.stop="handleDebugOverlayTap"
       >
-        <text class="viewer-debug-line">FPS: {{ debugFps }}</text>
+        <view class="viewer-debug-line">
+          <text>FPS: {{ debugFps }}</text>
+          <text> | ms: {{ debugFrameMs }}</text>
+          <text v-if="memoryDebug.heapSupported"> | heap: {{ memoryDebug.heapUsedMb }}/{{ memoryDebug.heapLimitMb }} MB</text>
+          <text v-else-if="sceneMemoryDebug.totalMb > 0"> | mem est: {{ sceneMemoryDebug.totalMb }} MB</text>
+        </view>
         <template v-if="debugMode === 'full'">
           <text class="viewer-debug-line">Renderer: {{ rendererDebug.width }}x{{ rendererDebug.height }} @PR {{ rendererDebug.pixelRatio }}, calls {{ rendererDebug.calls }}, tris {{ rendererDebug.triangles }}, r-tris {{ rendererDebug.renderTriangles }}</text>
+          <text class="viewer-debug-line">Resources: geo {{ rendererDebug.geometries }}, tex {{ rendererDebug.textures }}, prog {{ rendererDebug.programs }}</text>
+          <view class="viewer-debug-line">
+            <text>Mem est: {{ sceneMemoryDebug.totalMb }} MB (tex {{ sceneMemoryDebug.texturesMb }}, geo {{ sceneMemoryDebug.geometriesMb }}, cache {{ sceneMemoryDebug.cacheMb }})</text>
+            <text v-if="!memoryDebug.heapSupported"> | js heap: n/a</text>
+          </view>
           <text class="viewer-debug-line">Instancing: mesh {{ instancingDebug.instancedMeshActive }}/{{ instancingDebug.instancedMeshAssets }}, instances {{ instancingDebug.instancedInstanceCount }}, lod {{ instancingDebug.lodVisible }}/{{ instancingDebug.lodTotal }}, scatter {{ instancingDebug.scatterVisible }}/{{ instancingDebug.scatterTotal }}</text>
-          <text class="viewer-debug-line">Memory guard: {{ runtimeMemoryGuard.state.state }}{{ runtimeMemoryGuard.state.extreme ? ' (extreme)' : '' }}</text>
+          <view class="viewer-debug-line">
+            <text v-if="runtimeMemoryGuard.state.enabled">Memory guard: {{ runtimeMemoryGuard.state.state }}{{ runtimeMemoryGuard.state.extreme ? ' (extreme)' : '' }}</text>
+            <text v-else>Memory guard: off</text>
+            <text v-if="runtimeMemoryGuard.state.enabled && runtimeMemoryGuard.state.warningCount > 0"> | warnings {{ runtimeMemoryGuard.state.warningCount }}</text>
+            <text v-if="runtimeMemoryGuard.state.deviceMemoryMb > 0"> | RAM {{ runtimeMemoryGuard.state.deviceMemoryMb }} MB</text>
+            <text v-if="runtimeMemoryGuard.state.deviceBenchmarkLevel > 0"> | bench {{ runtimeMemoryGuard.state.deviceBenchmarkLevel }}</text>
+          </view>
         </template>
       </view>
     </view>
@@ -1493,11 +1509,15 @@ const {
   debugMode,
   debugOverlayVisible,
   debugFps,
+  debugFrameMs,
+  memoryDebug,
+  sceneMemoryDebug,
   instancingDebug,
   rendererDebug,
   updateDebugFps,
   syncInstancingDebugCounters,
   syncRendererDebug,
+  syncSceneMemoryDebug,
 } = useDebugOverlay();
 
 const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
@@ -21694,6 +21714,7 @@ async function ensureRendererContext(result: UseCanvasResult) {
   // WeChat mini-program adapter canvas is typically already in physical pixels.
   // Applying DPR again explodes the render target size and kills FPS.
   const pixelRatio = isWeChatMiniProgram ? 2 : Math.min(2, Math.max(1, devicePixelRatio));
+
   const width = canvas.width || canvas.clientWidth || 1;
   const height = canvas.height || canvas.clientHeight || 1;
 
@@ -22288,6 +22309,11 @@ function startRenderLoop(
 
         if (debugEnabled.value) {
           updateDebugFps(deltaSeconds);
+          // Throttled inside the composable. Mini programs expose no heap API, so this
+          // estimate is the only "current usage" figure the overlay can show there.
+          if (debugMode.value !== 'off') {
+            syncSceneMemoryDebug(scene, sceneAssetCache);
+          }
         }
 
         if (deltaSeconds > 0) {
@@ -23856,6 +23882,7 @@ onUnmounted(() => {
   left: 12px;
   top: calc(84px + var(--viewer-safe-area-top, 0px));
   z-index: 1900;
+  max-width: min(92vw, 560px);
   padding: 8px 10px;
   border-radius: 10px;
   background: rgba(8, 12, 26, 0.68);
@@ -23875,7 +23902,8 @@ onUnmounted(() => {
 
 .viewer-debug-line {
   display: block;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .viewer-debug-actions {

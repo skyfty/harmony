@@ -272,6 +272,27 @@ export class AssetCache {
     return this.entries.get(assetId)?.bytes ?? null
   }
 
+  /**
+   * Approximate bytes the in-memory cache currently retains: every cached blob
+   * plus the raw bytes a downloader handed over and the parser has not released
+   * yet. Mini-program runtimes expose no heap API, so the viewer's debug overlay
+   * reports this as the cache-visible part of its memory footprint.
+   */
+  getInMemoryBytes(): number {
+    let total = 0
+    for (const entry of this.entries.values()) {
+      const blobSize = entry.blob?.size ?? 0
+      if (Number.isFinite(blobSize) && blobSize > 0) {
+        total += blobSize
+      }
+      const rawSize = entry.bytes?.byteLength ?? 0
+      if (Number.isFinite(rawSize) && rawSize > 0) {
+        total += rawSize
+      }
+    }
+    return total
+  }
+
   releaseInMemoryBlob(assetId: string): void {
     const entry = this.entries.get(assetId)
     if (!entry) {
