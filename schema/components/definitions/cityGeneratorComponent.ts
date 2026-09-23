@@ -35,10 +35,12 @@ import {
 import {
 	buildProceduralCityBlockGroup,
 	disposeProceduralCityBlockGroup,
+	resolveProceduralCityReserveRect,
 	resolveProceduralCityBlockLayout,
 	type ProceduralCityBlockGroupUserData,
 	type ProceduralCityBlockLayout,
 	type ProceduralCityBuildingPreset,
+	type ProceduralCityReservePlacement,
 	type ProceduralCityTowerBox
 } from './proceduralCityBlock'
 import { pickBuildingColor } from './proceduralCitySkyscraper'
@@ -90,6 +92,33 @@ export interface CityGeneratorComponentProps {
 	includeSidewalks: boolean
 	includeStreetlights: boolean
 	includeCars: boolean
+	/**
+	 * How much of the kerbside to keep, as a percentage of the full layout. The
+	 * streetlights and the cars thin independently, so one can stay dense while the
+	 * other is cleared out. 100 keeps every placement — the layout the city had before
+	 * this existed, and so the default — while 0 keeps none at all, which is the same
+	 * as switching that generator off.
+	 *
+	 * The kept placements are an evenly spaced subset of the full layout: dropping the
+	 * count never moves a streetlight or a car that is still there, and never brings
+	 * two of them closer together. See {@link thinProceduralCityPlacements}.
+	 */
+	streetlightDensity: number
+	carDensity: number
+	/**
+	 * Keep one block of the grid free of buildings — a reserve for hand-placed scene
+	 * nodes, typically a theme building. The procedural city keeps ringing it, paving
+	 * and street furniture included.
+	 */
+	reserveEnabled: boolean
+	/** Reserved area width in metres along the grid's own X axis; 0 takes the block's own width. */
+	reserveWidth: number
+	/** Reserved area depth in metres along the grid's own Z axis; 0 takes the block's own depth. */
+	reserveDepth: number
+	/** How many blocks the reserved block moves off the centre block, along the grid's X axis. */
+	reserveBlockX: number
+	/** How many blocks the reserved block moves off the centre block, along the grid's Z axis. */
+	reserveBlockZ: number
 }
 
 // the upstream `CityGenerator.defaults` grid, which is also the city-lab default
@@ -113,7 +142,20 @@ export const CITY_GENERATOR_DEFAULT_PROPS: CityGeneratorComponentProps = {
 	includeRoad: true,
 	includeSidewalks: true,
 	includeStreetlights: true,
-	includeCars: true
+	includeCars: true,
+	// full kerbside by default, so a scene built before the density existed renders
+	// exactly as it did — the installed base of saved cities is the reason both of
+	// these start at 100 rather than at some quieter default
+	streetlightDensity: 100,
+	carDensity: 100,
+	// off by default, so a scene built before the reserve existed renders unchanged
+	reserveEnabled: false,
+	// 0 means "the reserved block's own size" — one city block, which is the natural
+	// footprint for a theme building standing where a procedural block would have been
+	reserveWidth: 0,
+	reserveDepth: 0,
+	reserveBlockX: 0,
+	reserveBlockZ: 0
 }
 
 /**
@@ -188,7 +230,14 @@ export function clampCityGeneratorComponentProps(props?: Partial<CityGeneratorCo
 		includeRoad: clampBoolean(source.includeRoad, CITY_GENERATOR_DEFAULT_PROPS.includeRoad),
 		includeSidewalks: clampBoolean(source.includeSidewalks, CITY_GENERATOR_DEFAULT_PROPS.includeSidewalks),
 		includeStreetlights: clampBoolean(source.includeStreetlights, CITY_GENERATOR_DEFAULT_PROPS.includeStreetlights),
-		includeCars: clampBoolean(source.includeCars, CITY_GENERATOR_DEFAULT_PROPS.includeCars)
+		includeCars: clampBoolean(source.includeCars, CITY_GENERATOR_DEFAULT_PROPS.includeCars),
+		streetlightDensity: clampInteger(source.streetlightDensity, CITY_GENERATOR_DEFAULT_PROPS.streetlightDensity, 0, 100),
+		carDensity: clampInteger(source.carDensity, CITY_GENERATOR_DEFAULT_PROPS.carDensity, 0, 100),
+		reserveEnabled: clampBoolean(source.reserveEnabled, CITY_GENERATOR_DEFAULT_PROPS.reserveEnabled),
+		reserveWidth: clampNumber(source.reserveWidth, CITY_GENERATOR_DEFAULT_PROPS.reserveWidth, 0, 2000),
+		reserveDepth: clampNumber(source.reserveDepth, CITY_GENERATOR_DEFAULT_PROPS.reserveDepth, 0, 2000),
+		reserveBlockX: clampInteger(source.reserveBlockX, CITY_GENERATOR_DEFAULT_PROPS.reserveBlockX, -5, 5),
+		reserveBlockZ: clampInteger(source.reserveBlockZ, CITY_GENERATOR_DEFAULT_PROPS.reserveBlockZ, -5, 5)
 	}
 }
 
@@ -200,7 +249,8 @@ export function cloneCityGeneratorComponentProps(props?: Partial<CityGeneratorCo
  * How many towers a grid of the given props holds when there is no host outline
  * to fit ( the block counts then fall back to {@link CITY_GENERATOR_FREE_GRID_BLOCKS}
  * when left on auto ). Region-attached grids are sized from the outline instead —
- * see {@link resolveCityGeneratorGridPlan}.
+ * see {@link resolveCityGeneratorGridPlan}. The reserve is not subtracted here; the
+ * plan reports the towers a reserve actually dropped.
  */
 export function countCityGeneratorTowers(props: CityGeneratorComponentProps): number {
 
@@ -292,7 +342,7 @@ class CityGeneratorComponent extends Component<CityGeneratorComponentProps> {
 		const regionFrame = grid.frame
 
 		const group = buildProceduralCityBlockGroup({
-			...buildOptionsFor( props, regionFrame ),
+			...buildOptionsFor( props, grid ),
 			blocksX: grid.blocksX,
 			blocksZ: grid.blocksZ
 		})
@@ -576,6 +626,39 @@ function resolveCityGeneratorGrid(
 
 }
 
+/**
+ * The block the grid keeps free of towers, in the built city's own frame — the space
+ * the block and tower coordinates live in — or `null` when the reserve is off.
+ *
+ * The reserve is anchored to a block, never to the grid's own origin: with an even
+ * block count the origin is the crossing between four blocks, which is street and
+ * holds no building. The default block is the one whose centre sits nearest the host
+ * region's centre — the outline's centre lands at `- frame.offset` in the grid's
+ * frame, because the grid is slid off it to fill an odd-shaped region; a host with no
+ * outline keeps the grid's origin. `reserveBlockX/Z` then walks off that block, and
+ * an over-sized reserve grows symmetrically about the block's centre.
+ */
+export function resolveCityGeneratorReserveRect(
+	props: CityGeneratorComponentProps,
+	grid: ResolvedCityGrid
+): ProceduralCityReservePlacement | null {
+
+	if ( ! props.reserveEnabled ) return null
+
+	return resolveProceduralCityReserveRect({
+		layout: grid.layout,
+		blocksX: grid.blocksX,
+		blocksZ: grid.blocksZ,
+		anchorX: grid.frame ? - grid.frame.offset.x : 0,
+		anchorZ: grid.frame ? - grid.frame.offset.y : 0,
+		blockOffsetX: props.reserveBlockX,
+		blockOffsetZ: props.reserveBlockZ,
+		width: props.reserveWidth,
+		depth: props.reserveDepth
+	})
+
+}
+
 /** Everything the panel needs to describe a grid before it is built. */
 export type CityGeneratorGridPlan = {
 	blocksX: number
@@ -589,8 +672,33 @@ export type CityGeneratorGridPlan = {
 	towers: number
 	cars: number
 	streetlights: number
+	/** How many towers the reserve dropped — always 0 when it is off. */
+	reserveTowers: number
+	/** Where the reserved area sits, or `null` when no reserve is active. */
+	reserve: CityGeneratorReservePlan | null
 	estimatedVertices: number
 	overBudget: boolean
+}
+
+/** The reserved area a plan resolved to, in the host node's own local space. */
+export type CityGeneratorReservePlan = {
+	/** Centre of the reserved area along the host's X axis. */
+	centerX: number
+	/** Centre of the reserved area along the host's Z axis. */
+	centerZ: number
+	/** The walking surface the reserved block is paved at, on the host's Y axis. */
+	padTopY: number
+	width: number
+	depth: number
+	/** The reserved block, in the grid's own 0-based block indices. */
+	blockX: number
+	blockZ: number
+	/** How many blocks the grid has, per axis — the range those indices live in. */
+	blockCountX: number
+	blockCountZ: number
+	/** The reserved block's building line: the inner zone its towers would have stood on. */
+	buildingWidth: number
+	buildingDepth: number
 }
 
 /**
@@ -609,7 +717,7 @@ export function resolveCityGeneratorGridPlan(
 	const grid = resolveCityGeneratorGrid( clamped, footprint, surfaceY )
 
 	const preview = buildProceduralCityBlockGroup( {
-		...buildOptionsFor( clamped, grid.frame ),
+		...buildOptionsFor( clamped, grid ),
 		blocksX: grid.blocksX,
 		blocksZ: grid.blocksZ,
 		dryRun: true
@@ -617,6 +725,47 @@ export function resolveCityGeneratorGridPlan(
 	const towers = preview.userData.towers.length
 	const streetlights = preview.userData.streetlights ?? 0
 	const cars = preview.userData.cars ?? 0
+	const reserveTowers = preview.userData.reservedTowers ?? 0
+
+	// the reserve is resolved in the city's frame; the panel reads it back in the
+	// host's own space, where a theme node's transform is written
+	const rect = resolveCityGeneratorReserveRect( clamped, grid )
+	const sidewalkTop = clamped.includeSidewalks ? clamped.curbHeight : 0
+	let reserve: CityGeneratorReservePlan | null = null
+	if ( rect !== null ) {
+
+		const block = {
+			blockX: rect.blockX,
+			blockZ: rect.blockZ,
+			blockCountX: grid.blocksX,
+			blockCountZ: grid.blocksZ,
+			// the lots are set back from the block edge by the sidewalk strip, so this
+			// is the footprint a theme building should stay inside
+			buildingWidth: Math.max( 0, grid.layout.blockW - 2 * grid.layout.sidewalkWidth ),
+			buildingDepth: Math.max( 0, grid.layout.blockD - 2 * grid.layout.sidewalkWidth )
+		}
+
+		if ( grid.frame === null ) {
+
+			// no outline: the city sits on the host's origin unturned, so both frames agree
+			reserve = { centerX: rect.x, centerZ: rect.z, padTopY: sidewalkTop, width: rect.width, depth: rect.depth, ...block }
+
+		} else {
+
+			const frame = grid.frame
+			const center = rotate2( new THREE.Vector2( rect.x, rect.z ), frame.angle )
+			reserve = {
+				centerX: frame.center.x + center.x,
+				centerZ: frame.center.y + center.y,
+				padTopY: frame.surfaceY + sidewalkTop,
+				width: rect.width,
+				depth: rect.depth,
+				...block
+			}
+
+		}
+
+	}
 
 	const estimatedVertices = clamped.buildingPreset === 'skyscraper'
 		? towers * CITY_GENERATOR_TOWER_VERTEX_ESTIMATE
@@ -632,6 +781,8 @@ export function resolveCityGeneratorGridPlan(
 		towers,
 		cars,
 		streetlights,
+		reserveTowers,
+		reserve,
 		estimatedVertices,
 		overBudget: clamped.buildingPreset === 'skyscraper' && estimatedVertices > CITY_GENERATOR_VERTEX_BUDGET
 	}
@@ -639,7 +790,9 @@ export function resolveCityGeneratorGridPlan(
 }
 
 // the single option set both the prediction and the real build are made from
-function buildOptionsFor( props: CityGeneratorComponentProps, frame: RegionFrame | null ) {
+function buildOptionsFor( props: CityGeneratorComponentProps, grid: ResolvedCityGrid ) {
+
+	const frame = grid.frame
 
 	return {
 		seed: props.seed,
@@ -655,6 +808,8 @@ function buildOptionsFor( props: CityGeneratorComponentProps, frame: RegionFrame
 		includeSidewalks: props.includeSidewalks,
 		includeStreetlights: props.includeStreetlights,
 		includeCars: props.includeCars,
+		streetlightDensity: props.streetlightDensity,
+		carDensity: props.carDensity,
 		sidewalk: { curbHeight: props.curbHeight, curbRadius: props.curbRadius },
 		// the engine's own city wall material: vertex colours plus its baked
 		// directional light, the same instance the procedural city uses
@@ -662,7 +817,10 @@ function buildOptionsFor( props: CityGeneratorComponentProps, frame: RegionFrame
 		blockFilter: frame ? ( block: { x: number; z: number } ) => isPointInsidePolygon( _clipPoint.set( block.x, block.z ), frame.polygon ) : undefined,
 		towerFilter: frame ? ( tower: ProceduralCityTowerBox ) => isPointInsidePolygon( _clipPoint.set( tower.x, tower.z ), frame.polygon ) : undefined,
 		placementFilter: frame ? ( position: { x: number; z: number } ) => isPointInsidePolygon( _clipPoint.set( position.x, position.z ), frame.polygon ) : undefined,
-		roadPolygon: frame?.polygon
+		roadPolygon: frame?.polygon,
+		// the reserved block: only the towers go, so the block keeps its paving, its
+		// kerbs, its streetlights and the cars parked along it
+		reserveRect: resolveCityGeneratorReserveRect( props, grid ) ?? undefined
 	}
 
 }

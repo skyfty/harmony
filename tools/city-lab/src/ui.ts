@@ -16,17 +16,30 @@ export type CityLabSettings = {
 	lotsZ: number
 	minTowerHeight: number
 	maxTowerHeight: number
+	/** Keep the middle of the grid free of towers for a hand-placed theme building. */
+	reserveEnabled: boolean
+	/** 0 = the reserved block's own size. */
+	reserveWidth: number
+	reserveDepth: number
+	/** How many blocks the reserved block moves off the nearest-to-centre block. */
+	reserveBlockX: number
+	reserveBlockZ: number
 	materialMode: CityLabMaterialMode
 	road: boolean
 	sidewalks: boolean
 	streetlights: boolean
 	cars: boolean
+	/** How much of the walk's streetlight / car layout to keep, as a percentage. */
+	streetlightDensity: number
+	carDensity: number
 	shadows: boolean
 	showStats: boolean
 }
 
 export type CityLabStats = {
 	towers: number
+	/** Towers the reserve rectangle dropped before they were generated. */
+	reservedTowers: number
 	streetlights: number
 	cars: number
 	vertices: number
@@ -47,11 +60,18 @@ export const CITY_LAB_DEFAULT_SETTINGS: CityLabSettings = {
 	lotsZ: 2,
 	minTowerHeight: 38,
 	maxTowerHeight: 152,
+	reserveEnabled: false,
+	reserveWidth: 0,
+	reserveDepth: 0,
+	reserveBlockX: 0,
+	reserveBlockZ: 0,
 	materialMode: 'project',
 	road: true,
 	sidewalks: true,
 	streetlights: true,
 	cars: true,
+	streetlightDensity: 100,
+	carDensity: 100,
 	shadows: true,
 	showStats: true
 }
@@ -106,7 +126,19 @@ export function createCityLabUi( options: UiOptions ): UiHandle {
 	const syncControls: ( () => void )[] = []
 
 	function addSlider(
-		key: 'blocksX' | 'blocksZ' | 'lotsX' | 'lotsZ' | 'minTowerHeight' | 'maxTowerHeight',
+		key:
+			| 'blocksX'
+			| 'blocksZ'
+			| 'lotsX'
+			| 'lotsZ'
+			| 'minTowerHeight'
+			| 'maxTowerHeight'
+			| 'reserveWidth'
+			| 'reserveDepth'
+			| 'reserveBlockX'
+			| 'reserveBlockZ'
+			| 'streetlightDensity'
+			| 'carDensity',
 		label: string,
 		min: number,
 		max: number,
@@ -189,6 +221,19 @@ export function createCityLabUi( options: UiOptions ): UiHandle {
 	addSlider( 'minTowerHeight', 'min height', 1, 200, 1 )
 	addSlider( 'maxTowerHeight', 'max height', 1, 260, 1 )
 
+	// the reserved block: one whole block no tower may stand in, so the city can hold a
+	// hand-placed theme building where a procedural block would have been
+	addSlider( 'reserveWidth', 'reserve width', 0, 200, 1 )
+	addSlider( 'reserveDepth', 'reserve depth', 0, 200, 1 )
+	addSlider( 'reserveBlockX', 'reserve block X', - 3, 3, 1 )
+	addSlider( 'reserveBlockZ', 'reserve block Z', - 3, 3, 1 )
+
+	// how much of the kerbside furniture survives the walk — the same thinning the
+	// city generator component's density props apply, so the lab can be dialled down
+	// to a street the editor can be dialled down to
+	addSlider( 'streetlightDensity', 'streetlight %', 0, 100, 5 )
+	addSlider( 'carDensity', 'car %', 0, 100, 5 )
+
 	// material mode
 	const modeRow = element( 'label', 'row' )
 	modeRow.append( element( 'span', 'row-label', 'material' ) )
@@ -211,8 +256,8 @@ export function createCityLabUi( options: UiOptions ): UiHandle {
 	} )
 
 	// toggles
-	const toggleLabels = { road: 'road', sidewalks: 'sidewalks', streetlights: 'streetlights', cars: 'cars', shadows: 'shadows', showStats: 'stats' } as const
-	for ( const key of [ 'road', 'sidewalks', 'streetlights', 'cars', 'shadows', 'showStats' ] as const ) {
+	const toggleLabels = { reserveEnabled: 'reserve', road: 'road', sidewalks: 'sidewalks', streetlights: 'streetlights', cars: 'cars', shadows: 'shadows', showStats: 'stats' } as const
+	for ( const key of [ 'reserveEnabled', 'road', 'sidewalks', 'streetlights', 'cars', 'shadows', 'showStats' ] as const ) {
 
 		const row = element( 'label', 'row row-toggle' )
 		row.append( element( 'span', 'row-label', toggleLabels[ key ] ) )
@@ -256,6 +301,7 @@ export function createCityLabUi( options: UiOptions ): UiHandle {
 
 		const rows: [ string, string ][] = [
 			[ 'towers', String( stats.towers ) ],
+			[ 'reserved', String( stats.reservedTowers ) ],
 			[ 'streetlights', String( stats.streetlights ) ],
 			[ 'cars', String( stats.cars ) ],
 			[ 'vertices', formatCount( stats.vertices ) ],

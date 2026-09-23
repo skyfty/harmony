@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
+import { Vector3 } from 'three'
 import type { SceneNodeComponentState } from '@schema/core'
-import { useSceneStore } from '@/stores/sceneStore'
+import { resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
 import {
   CITY_GENERATOR_COMPONENT_TYPE,
   CITY_GENERATOR_MAX_INSTANCES,
@@ -42,6 +43,32 @@ const plan = computed(() => {
   return resolveCityGeneratorGridPlan(props.value, resolveProceduralCityFootprint(snapshot), surfaceY)
 })
 const blocksOnAuto = computed(() => props.value.blocksX === 0 || props.value.blocksZ === 0)
+
+// where the reserved block ended up, in the host's own local space — the space a
+// theme node's transform is written in when it is parented to the host
+const reserve = computed(() => plan.value.reserve)
+const reserveWorld = computed(() => {
+  const zone = reserve.value
+  const nodeId = selectedNodeId.value
+  if (!zone || !nodeId) {
+    return null
+  }
+  const matrix = resolveSceneNodeWorldMatrix(sceneStore.nodes, nodeId)
+  return matrix ? new Vector3(zone.centerX, zone.padTopY, zone.centerZ).applyMatrix4(matrix) : null
+})
+// a reserve that swallowed the whole grid leaves a city of streets and pavement
+const reserveEmptiedGrid = computed(() => reserve.value !== null && plan.value.towers === 0)
+
+const reserveLocalLabel = computed(() => {
+  const zone = reserve.value
+  return zone === null
+    ? ''
+    : `${zone.centerX.toFixed(2)}, ${zone.padTopY.toFixed(2)}, ${zone.centerZ.toFixed(2)}`
+})
+const reserveSceneLabel = computed(() => {
+  const point = reserveWorld.value
+  return point === null ? '' : `${point.x.toFixed(2)}, ${point.y.toFixed(2)}, ${point.z.toFixed(2)}`
+})
 
 const vertexLabel = computed(() => {
   const value = plan.value.estimatedVertices
@@ -142,223 +169,340 @@ function handleRemoveComponent(): void {
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
-      <div class="city-generator-panel__grid">
-        <v-text-field
-          label="Seed"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="0"
-          step="1"
-          :model-value="props.seed"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('seed', value)"
-        />
-        <v-select
-          label="Building"
-          density="compact"
-          variant="underlined"
-          :items="buildingPresetOptions"
-          item-title="title"
-          item-value="value"
-          :model-value="props.buildingPreset"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateBuildingPreset(value)"
-        />
-        <v-text-field
-          label="Lot Size"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="8"
-          step="1"
-          suffix="m"
-          :model-value="props.lot"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('lot', value)"
-        />
-        <v-text-field
-          label="Street Width"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="6"
-          step="0.5"
-          suffix="m"
-          :model-value="props.streetWidth"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('streetWidth', value)"
-        />
-        <v-text-field
-          label="Lots X"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="1"
-          max="4"
-          step="1"
-          :model-value="props.lotsX"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('lotsX', value)"
-        />
-        <v-text-field
-          label="Lots Z"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="1"
-          max="4"
-          step="1"
-          :model-value="props.lotsZ"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('lotsZ', value)"
-        />
-        <v-text-field
-          label="Blocks X"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="0"
-          max="24"
-          step="1"
-          hint="0 = auto"
-          persistent-hint
-          :model-value="props.blocksX"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('blocksX', value)"
-        />
-        <v-text-field
-          label="Blocks Z"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="0"
-          max="24"
-          step="1"
-          hint="0 = auto"
-          persistent-hint
-          :model-value="props.blocksZ"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('blocksZ', value)"
-        />
-        <v-text-field
-          label="Sidewalk Width"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="1"
-          step="0.5"
-          suffix="m"
-          :model-value="props.sidewalkWidth"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('sidewalkWidth', value)"
-        />
-        <v-text-field
-          label="Curb Height"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="0"
-          step="0.05"
-          suffix="m"
-          :model-value="props.curbHeight"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('curbHeight', value)"
-        />
-        <v-text-field
-          label="Curb Radius"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="0"
-          step="0.5"
-          suffix="m"
-          :model-value="props.curbRadius"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('curbRadius', value)"
-        />
-        <v-text-field
-          label="Min Tower Height"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="1"
-          step="1"
-          suffix="m"
-          :model-value="props.minTowerHeight"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('minTowerHeight', value)"
-        />
-        <v-text-field
-          label="Max Tower Height"
-          density="compact"
-          variant="underlined"
-          type="number"
-          min="1"
-          step="1"
-          suffix="m"
-          :model-value="props.maxTowerHeight"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateNumber('maxTowerHeight', value)"
-        />
-        <v-switch
-          label="Road"
-          density="compact"
-          hide-details
-          color="primary"
-          :model-value="props.includeRoad"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateToggle('includeRoad', value)"
-        />
-        <v-switch
-          label="Sidewalks"
-          density="compact"
-          hide-details
-          color="primary"
-          :model-value="props.includeSidewalks"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateToggle('includeSidewalks', value)"
-        />
-        <v-switch
-          label="Streetlights"
-          density="compact"
-          hide-details
-          color="primary"
-          :model-value="props.includeStreetlights"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateToggle('includeStreetlights', value)"
-        />
-        <v-switch
-          label="Cars"
-          density="compact"
-          hide-details
-          color="primary"
-          :model-value="props.includeCars"
-          :disabled="!cityComponent?.enabled"
-          @update:modelValue="(value) => updateToggle('includeCars', value)"
-        />
-      </div>
-      <div class="city-generator-panel__summary" :class="{ 'city-generator-panel__summary--warn': heavyGrid }">
-        <div>
-          Block {{ blockWidth.toFixed(0) }} × {{ blockDepth.toFixed(0) }} m ·
-          {{ plan.blocksX }} × {{ plan.blocksZ }} blocks
-          <span v-if="blocksOnAuto">(auto)</span><span v-else-if="plan.cappedByProps">(capped)</span>
+      <div class="city-generator-panel__body">
+        <div class="city-generator-panel__section">
+          <div class="city-generator-panel__section-title">Buildings</div>
+          <div class="city-generator-panel__field-grid">
+            <v-text-field
+              label="Seed"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              step="1"
+              :model-value="props.seed"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('seed', value)"
+            />
+            <v-select
+              label="Building"
+              density="compact"
+              variant="underlined"
+              :items="buildingPresetOptions"
+              item-title="title"
+              item-value="value"
+              :model-value="props.buildingPreset"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateBuildingPreset(value)"
+            />
+            <v-text-field
+              label="Min Tower Height"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="1"
+              step="1"
+              suffix="m"
+              :model-value="props.minTowerHeight"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('minTowerHeight', value)"
+            />
+            <v-text-field
+              label="Max Tower Height"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="1"
+              step="1"
+              suffix="m"
+              :model-value="props.maxTowerHeight"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('maxTowerHeight', value)"
+            />
+          </div>
+          <div
+            class="city-generator-panel__section-hint"
+            :class="{ 'city-generator-panel__section-hint--warn': heavyGrid }"
+          >
+            {{ plan.towers }} towers · est. {{ vertexLabel }} geometry vertices
+          </div>
         </div>
-        <div>{{ plan.towers }} towers · {{ plan.cars }} cars · {{ plan.streetlights }} streetlights</div>
-        <div>est. {{ vertexLabel }} geometry vertices</div>
-        <div v-if="heavyGrid">
-          Over the ~{{ budgetLabel }} vertex budget — switch to an instanced preset or raise Lot Size.
-          The build still runs, but a grid this large can take a long time and exhaust video memory.
+
+        <div class="city-generator-panel__section">
+          <div class="city-generator-panel__section-title">Grid</div>
+          <div class="city-generator-panel__field-grid">
+            <v-text-field
+              label="Blocks X"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              max="24"
+              step="1"
+              persistent-hint
+              :model-value="props.blocksX"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('blocksX', value)"
+            />
+            <v-text-field
+              label="Blocks Z"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              max="24"
+              step="1"
+              persistent-hint
+              :model-value="props.blocksZ"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('blocksZ', value)"
+            />
+            <v-text-field
+              label="Lot Size"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="8"
+              step="1"
+              suffix="m"
+              :model-value="props.lot"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('lot', value)"
+            />
+            <v-text-field
+              label="Lots X"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="1"
+              max="4"
+              step="1"
+              :model-value="props.lotsX"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('lotsX', value)"
+            />
+            <v-text-field
+              label="Lots Z"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="1"
+              max="4"
+              step="1"
+              :model-value="props.lotsZ"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('lotsZ', value)"
+            />
+          </div>
+          <div class="city-generator-panel__section-hint">
+            Block {{ blockWidth.toFixed(0) }} × {{ blockDepth.toFixed(0) }} m ·
+            grid {{ plan.blocksX }} × {{ plan.blocksZ }} blocks
+            <span v-if="blocksOnAuto">(auto)</span><span v-else-if="plan.cappedByProps">(capped)</span>
+          </div>
         </div>
-        <div v-if="plan.cappedByProps">
-          Blocks are capped at {{ props.blocksX }} × {{ props.blocksZ }} but the region needs
-          {{ plan.requiredBlocksX }} × {{ plan.requiredBlocksZ }} — set either to 0 to fill the region.
+
+        <div class="city-generator-panel__section">
+          <div class="city-generator-panel__section-title">Streets and sidewalks</div>
+          <div class="city-generator-panel__field-grid">
+            <v-text-field
+              label="Street Width"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="6"
+              step="0.5"
+              suffix="m"
+              :model-value="props.streetWidth"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateNumber('streetWidth', value)"
+            />
+            <v-text-field
+              label="Sidewalk Width"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="1"
+              step="0.5"
+              suffix="m"
+              :model-value="props.sidewalkWidth"
+              :disabled="!cityComponent?.enabled || !props.includeSidewalks"
+              @update:modelValue="(value) => updateNumber('sidewalkWidth', value)"
+            />
+            <v-text-field
+              label="Curb Height"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              step="0.05"
+              suffix="m"
+              :model-value="props.curbHeight"
+              :disabled="!cityComponent?.enabled || !props.includeSidewalks"
+              @update:modelValue="(value) => updateNumber('curbHeight', value)"
+            />
+            <v-text-field
+              label="Curb Radius"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              step="0.5"
+              suffix="m"
+              :model-value="props.curbRadius"
+              :disabled="!cityComponent?.enabled || !props.includeSidewalks"
+              @update:modelValue="(value) => updateNumber('curbRadius', value)"
+            />
+          </div>
+          <div class="city-generator-panel__field-grid">
+            <v-switch
+              label="Road"
+              density="compact"
+              hide-details
+              color="primary"
+              :model-value="props.includeRoad"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateToggle('includeRoad', value)"
+            />
+            <v-switch
+              label="Sidewalks"
+              density="compact"
+              hide-details
+              color="primary"
+              :model-value="props.includeSidewalks"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateToggle('includeSidewalks', value)"
+            />
+          </div>
         </div>
-        <div v-if="plan.limitedByInstances">Stopped at the {{ instanceCapLabel }} instance cap.</div>
-        <div v-if="hostOutline">Clipped to the host outline — blocks outside it are dropped.</div>
-        <div v-else>No host outline — building the full grid from the block counts.</div>
-        <div v-if="!detailedBuildings">Instanced {{ props.buildingPreset }} buildings — shared archetypes, no building shadows.</div>
-        <div v-else-if="props.maxTowerHeight < 20">Skyscraper facades round up to at least three floors (~18 m); pick an instanced preset for genuinely low buildings.</div>
+
+        <div class="city-generator-panel__section">
+          <div class="city-generator-panel__section-title">Street furniture</div>
+          <div class="city-generator-panel__field-grid">
+            <v-switch
+              label="Streetlights"
+              density="compact"
+              hide-details
+              color="primary"
+              :model-value="props.includeStreetlights"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateToggle('includeStreetlights', value)"
+            />
+            <v-switch
+              label="Cars"
+              density="compact"
+              hide-details
+              color="primary"
+              :model-value="props.includeCars"
+              :disabled="!cityComponent?.enabled"
+              @update:modelValue="(value) => updateToggle('includeCars', value)"
+            />
+          </div>
+          <div class="city-generator-panel__field-grid">
+            <v-text-field
+              label="Streetlight Density"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              max="100"
+              step="5"
+              suffix="%"
+              persistent-hint
+              :model-value="props.streetlightDensity"
+              :disabled="!cityComponent?.enabled || !props.includeStreetlights"
+              @update:modelValue="(value) => updateNumber('streetlightDensity', value)"
+            />
+            <v-text-field
+              label="Car Density"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              max="100"
+              step="5"
+              suffix="%"
+              persistent-hint
+              :model-value="props.carDensity"
+              :disabled="!cityComponent?.enabled || !props.includeCars"
+              @update:modelValue="(value) => updateNumber('carDensity', value)"
+            />
+          </div>
+          <div class="city-generator-panel__section-hint">
+            {{ plan.streetlights }} streetlights · {{ plan.cars }} cars at these densities
+          </div>
+        </div>
+
+        <div class="city-generator-panel__section">
+          <div class="city-generator-panel__section-title">Reserved block</div>
+          <v-switch
+            label="Reserved Block"
+            density="compact"
+            hide-details
+            color="primary"
+            :model-value="props.reserveEnabled"
+            :disabled="!cityComponent?.enabled"
+            @update:modelValue="(value) => updateToggle('reserveEnabled', value)"
+          />
+          <div class="city-generator-panel__field-grid">
+            <v-text-field
+              label="Reserve Width"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              step="1"
+              suffix="m"
+              hint="0 = one block"
+              persistent-hint
+              :model-value="props.reserveWidth"
+              :disabled="!cityComponent?.enabled || !props.reserveEnabled"
+              @update:modelValue="(value) => updateNumber('reserveWidth', value)"
+            />
+            <v-text-field
+              label="Reserve Depth"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="0"
+              step="1"
+              suffix="m"
+              hint="0 = one block"
+              persistent-hint
+              :model-value="props.reserveDepth"
+              :disabled="!cityComponent?.enabled || !props.reserveEnabled"
+              @update:modelValue="(value) => updateNumber('reserveDepth', value)"
+            />
+            <v-text-field
+              label="Reserve Block X"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="-5"
+              max="5"
+              step="1"
+              hint="Blocks off the centre block"
+              persistent-hint
+              :model-value="props.reserveBlockX"
+              :disabled="!cityComponent?.enabled || !props.reserveEnabled"
+              @update:modelValue="(value) => updateNumber('reserveBlockX', value)"
+            />
+            <v-text-field
+              label="Reserve Block Z"
+              density="compact"
+              variant="underlined"
+              type="number"
+              min="-5"
+              max="5"
+              step="1"
+              hint="Blocks off the centre block"
+              persistent-hint
+              :model-value="props.reserveBlockZ"
+              :disabled="!cityComponent?.enabled || !props.reserveEnabled"
+              @update:modelValue="(value) => updateNumber('reserveBlockZ', value)"
+            />
+          </div>
+        </div>
+
       </div>
     </v-expansion-panel-text>
   </v-expansion-panel>
@@ -375,14 +519,43 @@ function handleRemoveComponent(): void {
   font-weight: 500;
 }
 
-.city-generator-panel__grid {
+.city-generator-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding-inline: 0.4rem;
+}
+
+.city-generator-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.city-generator-panel__section-title {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.7;
+}
+
+.city-generator-panel__field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   column-gap: 12px;
 }
 
+.city-generator-panel__section-hint {
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.city-generator-panel__section-hint--warn {
+  color: rgb(var(--v-theme-warning));
+}
+
 .city-generator-panel__summary {
-  margin-top: 8px;
   color: rgba(var(--v-theme-on-surface), 0.7);
   font-size: 12px;
   line-height: 1.5;

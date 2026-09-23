@@ -45,6 +45,51 @@ export type ProceduralCityStreetFurnitureOptions = {
 	sidewalkTop?: number
 }
 
+/**
+ * Thins a planned placement list down to `densityPercent` of its length: 100 hands
+ * the list back untouched, 0 returns nothing, and anything between keeps an evenly
+ * spaced subset of the placements it was given.
+ *
+ * This is a filter over the walk's own output rather than a change to its spacing,
+ * on purpose. The walk shares one PRNG stream with upstream's `buildFurniture()`
+ * ( see the module note ), so asking it for a different number of candidates would
+ * move every car and streetlight that follows the change. Thinning afterwards leaves
+ * the stream — and therefore the 100% layout — exactly where it was: every kept
+ * placement is one the full-density city already had, so dropping the count never
+ * moves a surviving streetlight or car, and never brings two of them closer together.
+ *
+ * The accumulator below is what makes the subset evenly spaced: a placement is kept
+ * whenever the running total reaches one, which is the same rule at every density and
+ * does not drift over a long kerb ( an index stride would ).
+ */
+export function thinProceduralCityPlacements<T>( items: T[], densityPercent: number ): T[] {
+
+	// options are a public entry point, so a caller's missing or nonsense percentage
+	// reads as "the full kerbside" rather than as an empty city
+	const density = Number.isFinite( densityPercent ) ? densityPercent : 100
+	if ( density >= 100 ) return items
+	if ( density <= 0 ) return []
+
+	const ratio = density / 100
+	const kept: T[] = []
+	let credit = 0
+
+	for ( const item of items ) {
+
+		credit += ratio
+		if ( credit >= 1 ) {
+
+			credit -= 1
+			kept.push( item )
+
+		}
+
+	}
+
+	return kept
+
+}
+
 // the four curb edges of a block: each carries a start corner, a unit direction
 // along the edge, the outward normal ( toward the road ) and a length
 function blockEdges( x: number, z: number, w: number, d: number ): BlockEdge[] {

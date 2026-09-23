@@ -25,7 +25,7 @@ import { configureSolidOutlineMesh, getSolidOutlineMaterial, getWallMaterial } f
 import { createProceduralCityRoadMesh } from './proceduralCityRoad'
 import { buildProceduralCityCarGroup } from './proceduralCityCar'
 import { buildProceduralCityStreetlightGroup, type ProceduralCityStreetlightOptions } from './proceduralCityStreetlight'
-import { planProceduralCityStreetFurniture } from './proceduralCityStreetFurniture'
+import { planProceduralCityStreetFurniture, thinProceduralCityPlacements } from './proceduralCityStreetFurniture'
 import {
 	PROCEDURAL_CITY_SIDEWALK_DEFAULTS,
 	buildProceduralCitySidewalkGroup,
@@ -117,8 +117,24 @@ export type ProceduralCityBlockOptions = {
 	blockFilter?: ( block: { x: number; z: number; width: number; depth: number } ) => boolean
 	/** Skip a tower before it is generated — the cheap half of the same clipping. */
 	towerFilter?: ( tower: ProceduralCityTowerBox ) => boolean
+	/**
+	 * A rectangle of the grid kept free of towers — a reserve for hand-placed scene
+	 * nodes, typically a theme building. It is expressed in the city's own frame,
+	 * the space the block and tower coordinates live in, and only the towers are
+	 * dropped: the paving, the road and the street furniture stay.
+	 */
+	reserveRect?: ProceduralCityReserveRect
 	/** Skip a streetlight or car placement ( tested at its ground position ). */
 	placementFilter?: ( position: { x: number; z: number } ) => boolean
+	/**
+	 * How much of the walk's furniture to keep, as a percentage of the full kerbside
+	 * layout: `streetlightDensity` for the streetlights, `carDensity` for the cars.
+	 * 100 ( the default ) keeps every placement, so a city built before the density
+	 * existed renders unchanged; 0 keeps none. See
+	 * {@link thinProceduralCityPlacements} for how the kept ones are chosen.
+	 */
+	streetlightDensity?: number
+	carDensity?: number
 	/** Lay the road surface over this city-local outline instead of a rectangle. */
 	roadPolygon?: Vector2[]
 	/** The building geometry to draw the towers with. Default `'skyscraper'`. */
@@ -147,13 +163,131 @@ export type ProceduralCityTowerBox = {
 	chamferCornerZ: number
 }
 
+/** An axis-aligned rectangle ( city-local, in XZ ) that no tower may stand in. */
+export type ProceduralCityReserveRect = {
+	/** Centre along the city's X axis. */
+	x: number
+	/** Centre along the city's Z axis. */
+	z: number
+	width: number
+	depth: number
+}
+
+/**
+ * True when a tower's footprint touches a reserve rectangle. Tower boxes are
+ * axis-aligned in the city's frame, so this is a plain AABB test; it is
+ * deliberately conservative ( the chamfer is ignored ), because a tower that
+ * merely clips the reserved space would still stand in it.
+ */
+export function towerOverlapsReserveRect( tower: ProceduralCityTowerBox, rect: ProceduralCityReserveRect ): boolean {
+
+	return Math.abs( tower.x - rect.x ) * 2 < tower.width + rect.width
+		&& Math.abs( tower.z - rect.z ) * 2 < tower.depth + rect.depth
+
+}
+
+/**
+ * A block's centre in the city's own frame — the same derivation the layout loop
+ * below places its blocks with, kept in one place so the reserve cannot drift off
+ * the grid it is meant to punch a hole in.
+ */
+export function resolveProceduralCityBlockCenter(
+	layout: ProceduralCityBlockLayout,
+	bx: number,
+	bz: number,
+	blocksX = layout.blocksX,
+	blocksZ = layout.blocksZ
+): { x: number; z: number } {
+
+	// the counts are passed in rather than read off the layout: the component resolves
+	// its layout before the grid is sized, so the layout's own counts are no more than
+	// the builder's defaults there, while the grid it fits to a region can be wider or
+	// deeper than that
+	const cityW = blocksX * layout.blockW + ( blocksX - 1 ) * layout.street
+	const cityD = blocksZ * layout.blockD + ( blocksZ - 1 ) * layout.street
+
+	return {
+		x: - cityW / 2 + bx * ( layout.blockW + layout.street ) + layout.blockW / 2,
+		z: - cityD / 2 + bz * ( layout.blockD + layout.street ) + layout.blockD / 2
+	}
+
+}
+
+/** What a caller passes to {@link resolveProceduralCityReserveRect}. */
+export type ProceduralCityReserveOptions = {
+	layout: ProceduralCityBlockLayout
+	blocksX: number
+	blocksZ: number
+	/**
+	 * The city-local point the default reserved block is the nearest one to —
+	 * normally the host region's centre. Defaults to the city's own origin.
+	 */
+	anchorX?: number
+	anchorZ?: number
+	/** How many blocks the reserved block moves off that nearest block, per axis. */
+	blockOffsetX?: number
+	blockOffsetZ?: number
+	/** Reserved area size in metres; 0 ( or less ) takes the block's own size. */
+	width?: number
+	depth?: number
+}
+
+/** The rectangle a reserve resolved to, with the block it landed on. */
+export type ProceduralCityReservePlacement = ProceduralCityReserveRect & {
+	/** The block's index in the grid, 0 based. */
+	blockX: number
+	blockZ: number
+}
+
+// the block whose centre sits nearest the anchor; a tie falls to the lower index, so
+// an even block count reserves a block beside the crossing instead of the crossing
+// itself, which is street and holds no building
+function resolveNearestBlockIndex( anchor: number, pitch: number, blockSize: number, citySize: number, count: number ): number {
+
+	const index = Math.ceil( ( anchor + citySize / 2 - blockSize / 2 ) / pitch - 0.5 )
+	return Math.min( count - 1, Math.max( 0, index ) )
+
+}
+
+/**
+ * Reserves one block of the grid for hand-placed scene nodes: the rectangle is
+ * centred on a block — never on the grid's origin, which for an even block count is
+ * the crossing between four blocks — defaults to that block's own size, and is only
+ * ever used to skip towers. The block keeps its paving, its kerbs, its streetlights
+ * and the cars parked along it.
+ */
+export function resolveProceduralCityReserveRect( options: ProceduralCityReserveOptions ): ProceduralCityReservePlacement {
+
+	const L = options.layout
+	const blocksX = Math.max( 1, Math.round( options.blocksX ) )
+	const blocksZ = Math.max( 1, Math.round( options.blocksZ ) )
+	const pitchX = L.blockW + L.street
+	const pitchZ = L.blockD + L.street
+	const cityW = blocksX * L.blockW + ( blocksX - 1 ) * L.street
+	const cityD = blocksZ * L.blockD + ( blocksZ - 1 ) * L.street
+
+	const nearestX = resolveNearestBlockIndex( options.anchorX ?? 0, pitchX, L.blockW, cityW, blocksX )
+	const nearestZ = resolveNearestBlockIndex( options.anchorZ ?? 0, pitchZ, L.blockD, cityD, blocksZ )
+	const blockX = Math.min( blocksX - 1, Math.max( 0, nearestX + Math.round( options.blockOffsetX ?? 0 ) ) )
+	const blockZ = Math.min( blocksZ - 1, Math.max( 0, nearestZ + Math.round( options.blockOffsetZ ?? 0 ) ) )
+
+	const center = resolveProceduralCityBlockCenter( L, blockX, blockZ, blocksX, blocksZ )
+	const width = ( options.width ?? 0 ) > 0 ? options.width! : L.blockW
+	const depth = ( options.depth ?? 0 ) > 0 ? options.depth! : L.blockD
+
+	return { blockX, blockZ, x: center.x, z: center.z, width, depth }
+
+}
+
 /** The layout a {@link buildProceduralCityBlockGroup} result carries on `userData`. */
 export type ProceduralCityBlockGroupUserData = {
 	layout: ProceduralCityBlockLayout
 	towers: ProceduralCityTowerBox[]
-	/** How many streetlight placements the walk produced. */
+	/** How many towers the reserve rectangle dropped before they were generated. */
+	reservedTowers: number
+	/** How many streetlight placements were kept — the walk's own count at full density. */
 	streetlights: number
-	/** How many car placements the walk produced. */
+	/** How many car placements were kept — the walk's own count at full density. */
 	cars: number
 	/** The grid this build resolved to, per axis. */
 	blocksX?: number
@@ -230,6 +364,11 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 	const buildings: ProceduralCityBuildingPreset = options.buildings ?? 'skyscraper'
 	const instancedBuildings = buildings !== 'skyscraper'
 	const dryRun = options.dryRun === true
+	const reserveRect = options.reserveRect ?? null
+	// how much of the kerbside walk survives: 100 is the walk's own layout, which is
+	// also the default, so a caller that never sets these builds the city it always did
+	const streetlightDensity = options.streetlightDensity ?? 100
+	const carDensity = options.carDensity ?? 100
 	const curbHeight = options.sidewalk?.curbHeight ?? PROCEDURAL_CITY_SIDEWALK_DEFAULTS.curbHeight
 	// upstream stands every tower on the sidewalk; without sidewalks it stands on the road
 	const groundOffset = options.groundOffset ?? ( includeSidewalks ? curbHeight : 0 )
@@ -238,6 +377,7 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 	group.name = 'City'
 
 	const towers: ProceduralCityTowerBox[] = []
+	let reservedTowers = 0
 	const sidewalkPlacements: Matrix4[] = []
 	// the cheap presets collect this tower's placement per archetype variant and
 	// build one instanced mesh per variant once the layout is known
@@ -254,8 +394,9 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 
 			// a block whose centre falls outside the host outline is dropped whole:
 			// no towers, no sidewalk slab, no furniture along its kerbs
-			const blockCenterX = blockX + L.blockW / 2
-			const blockCenterZ = blockZ + L.blockD / 2
+			const blockCenter = resolveProceduralCityBlockCenter( L, bx, bz )
+			const blockCenterX = blockCenter.x
+			const blockCenterZ = blockCenter.z
 			if ( options.blockFilter && ! options.blockFilter( { x: blockCenterX, z: blockCenterZ, width: L.blockW, depth: L.blockD } ) ) {
 				continue
 			}
@@ -323,6 +464,14 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 					// a clipped tower is never generated — worth it, since one tower bakes
 					// ~50k vertices and this is the hot path when fitting a city to a region
 					if ( options.towerFilter && ! options.towerFilter( towerBox ) ) {
+						continue
+					}
+
+					// the reserve is tested after the host clip, so the count is the number of
+					// towers that would otherwise have been built in the reserved space; only
+					// the towers go — the block keeps its paving, its kerbs and its furniture
+					if ( reserveRect !== null && towerOverlapsReserveRect( towerBox, reserveRect ) ) {
+						reservedTowers ++
 						continue
 					}
 
@@ -416,9 +565,12 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 			return options.placementFilter( { x: _placementPosition.x, z: _placementPosition.z } )
 
 		}
+		// the density thins what the caller is actually going to see, so it runs after
+		// the clip: a region that keeps one block keeps an evenly thinned kerbside of
+		// that block rather than whatever the rest of the grid's walk left behind
 		const furniture = {
-			streetlights: planned.streetlights.filter( keepPlacement ),
-			cars: planned.cars.filter( ( car ) => keepPlacement( car.matrix ) )
+			streetlights: thinProceduralCityPlacements( planned.streetlights.filter( keepPlacement ), streetlightDensity ),
+			cars: thinProceduralCityPlacements( planned.cars.filter( ( car ) => keepPlacement( car.matrix ) ), carDensity )
 		}
 		streetlights = furniture.streetlights.length
 		cars = furniture.cars.length
@@ -432,7 +584,7 @@ export function buildProceduralCityBlockGroup( options: ProceduralCityBlockOptio
 
 	}
 
-	const userData: ProceduralCityBlockGroupUserData = { layout: L, towers, streetlights, cars, seed }
+	const userData: ProceduralCityBlockGroupUserData = { layout: L, towers, reservedTowers, streetlights, cars, seed }
 	group.userData = { ...group.userData, ...userData }
 
 	return group

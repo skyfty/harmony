@@ -6339,6 +6339,15 @@ function computeWorldMatrixForNode(nodes: SceneNode[], targetId: string): Matrix
   return traverse(nodes, identity)
 }
 
+/**
+ * A node's world matrix, composed from the scene tree alone. Exported for the
+ * inspector panels that have to turn a node-local point — a city generator's
+ * reserved block, say — into the world space the viewport draws it in.
+ */
+export function resolveSceneNodeWorldMatrix(nodes: SceneNode[], targetId: string): Matrix4 | null {
+  return computeWorldMatrixForNode(nodes, targetId)
+}
+
 function cloneCameraState(camera: SceneCameraState): SceneCameraState {
   const position = cloneVector(camera.position)
   const target = cloneVector(camera.target)

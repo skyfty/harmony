@@ -9,6 +9,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import {
 	buildProceduralCityBlockGroup,
 	disposeProceduralCityBlockGroup,
+	resolveProceduralCityBlockLayout,
+	resolveProceduralCityReserveRect,
 	type ProceduralCityBlockGroupUserData,
 	type ProceduralCityTowerBox
 } from '@schema/components/definitions/proceduralCityBlock'
@@ -73,6 +75,7 @@ const settings: CityLabSettings = { ...CITY_LAB_DEFAULT_SETTINGS }
 let city: THREE.Group | null = null
 let buildMs = 0
 let towerCount = 0
+let reservedTowerCount = 0
 let streetlightCount = 0
 let carCount = 0
 let vertexCount = 0
@@ -112,6 +115,30 @@ function applyShadowSettings(): void {
 
 }
 
+// The lab's grid is the free-standing one — no host outline — so the reserve's
+// default block is the one nearest the grid's own centre, exactly as it is for a
+// node with no region behind it in the editor.
+function resolveLabReserveRect() {
+
+	const layout = resolveProceduralCityBlockLayout( {
+		blocksX: settings.blocksX,
+		blocksZ: settings.blocksZ,
+		lotsX: settings.lotsX,
+		lotsZ: settings.lotsZ
+	} )
+
+	return resolveProceduralCityReserveRect( {
+		layout,
+		blocksX: settings.blocksX,
+		blocksZ: settings.blocksZ,
+		blockOffsetX: settings.reserveBlockX,
+		blockOffsetZ: settings.reserveBlockZ,
+		width: settings.reserveWidth,
+		depth: settings.reserveDepth
+	} )
+
+}
+
 function rebuild(): void {
 
 	ui.setStatus( 'building…' )
@@ -134,10 +161,16 @@ function rebuild(): void {
 		lotsZ: settings.lotsZ,
 		minTowerHeight: settings.minTowerHeight,
 		maxTowerHeight: settings.maxTowerHeight,
+		// the same reserve the city generator component composes, from the same block
+		// math: towers only, so the reserved block keeps its paving, its kerbs and its
+		// street furniture
+		reserveRect: settings.reserveEnabled ? resolveLabReserveRect() : undefined,
 		includeRoad: settings.road,
 		includeSidewalks: settings.sidewalks,
 		includeStreetlights: settings.streetlights,
 		includeCars: settings.cars,
+		streetlightDensity: settings.streetlightDensity,
+		carDensity: settings.carDensity,
 		material: wallMaterial
 	} )
 
@@ -172,6 +205,7 @@ function rebuild(): void {
 	scene.add( group )
 	city = group
 	towerCount = userData.towers.length
+	reservedTowerCount = userData.reservedTowers ?? 0
 	streetlightCount = userData.streetlights
 	carCount = userData.cars
 	vertexCount = vertices
@@ -243,6 +277,7 @@ function refreshStats(): void {
 
 	ui.setStats( {
 		towers: towerCount,
+		reservedTowers: reservedTowerCount,
 		streetlights: streetlightCount,
 		cars: carCount,
 		vertices: vertexCount,
