@@ -1533,6 +1533,14 @@ export type CameraProjection = 'perspective' | 'orthographic'
  * - 'local': adjust along the node's own axes
  */
 export type TransformSpace = 'auto' | 'world' | 'local'
+/**
+ * Transform gizmo anchor for node pose editing.
+ * - 'auto': legacy behavior (pivot at the object origin, except content-anchored
+ *   import nodes / instanced tiling proxies which anchor on their content)
+ * - 'pivot': always anchor on the node's own pivot (Transform.position)
+ * - 'center': always anchor on the selection bounding-box center
+ */
+export type TransformPivotMode = 'auto' | 'pivot' | 'center'
 
 export interface LightShadowProperties {
   /** Shadow map resolution (power of two recommended). */
@@ -1655,6 +1663,8 @@ export interface SceneViewportSettings {
   cameraProjection: CameraProjection;
   cameraControlMode: CameraControlMode;
   transformSpace: TransformSpace;
+  /** Transform gizmo anchor mode. Defaults to 'auto' (legacy behavior) when omitted. */
+  transformPivotMode?: TransformPivotMode;
   [key: string]: unknown;
 }
 

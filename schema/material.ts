@@ -17,6 +17,7 @@ import { inferAssetTypeOrNull } from './assetTypeConversion';
 import { hashString, stableSerialize } from './stableSerialize';
 import { getDefaultUvDebugTexture } from './debugTextures';
 import { FAST_KTX2_TRANSCODER_PATH, loadSharedKtx2Texture } from './ktx2Loader';
+import { ensureMeshUvForTextures } from './textureUvFallback';
 
 type HDRLoaderClass = new (manager?: THREE.LoadingManager) => HDRLoader;
 let hdrLoaderClassPromise: Promise<HDRLoaderClass> | null = null;
@@ -1736,6 +1737,35 @@ export function applyMaterialOverrides(
   }
 
   const overrideSignature = materialConfigsSignature(configs);
+
+  // Imported-model overrides may claim texture slots on meshes whose geometry
+  // carries no UVs (glTF allows meshes without TEXCOORD_0). Such a surface can
+  // only ever sample one texel - the dropped texture would show up as a flat
+  // colour. Build a box projection before the override runs so the texture is
+  // actually visible; meshes that already have UVs are untouched.
+  if (options.inheritUnspecifiedTextures) {
+    const claimedTextureSlots = new Set<string>();
+    configs.forEach((config) => {
+      resolveOverrideTextureSlots(config).forEach((slot) => claimedTextureSlots.add(slot));
+    });
+    if (claimedTextureSlots.size) {
+      forEachOwnedObject(target, (child: THREE.Object3D) => {
+        const mesh = child as THREE.Mesh & { isMesh?: boolean };
+        if (!mesh?.isMesh || mesh.userData?.instancedPickProxy || mesh.userData?.overrideMaterial) {
+          return;
+        }
+        const uvState = ensureMeshUvForTextures(mesh as THREE.Mesh);
+        if (uvState === 'generated') {
+          // The generated box projection is in object-local units (meters),
+          // which is the unit the texture "tile size (meters)" control expects.
+          mesh.userData = {
+            ...(mesh.userData ?? {}),
+            [MATERIAL_TEXTURE_REPEAT_INFO_KEY]: { uvMetersPerUnit: { x: 1, y: 1 } },
+          };
+        }
+      });
+    }
+  }
 
   forEachOwnedObject(target, (child: THREE.Object3D) => {
     const mesh = child as THREE.Mesh & { isMesh?: boolean };

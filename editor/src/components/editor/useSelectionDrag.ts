@@ -31,6 +31,7 @@ export function useSelectionDrag(
     gizmoControlsUpdate: () => void
     getVertexSnapDelta?: (options: { drag: SelectionDragState; event: PointerEvent }) => THREE.Vector3 | null
     computeTransformPivotWorld?: (object: THREE.Object3D, out: THREE.Vector3) => void
+    computeSelectionGroupPivotWorld?: (ids: readonly string[], out: THREE.Vector3) => boolean
     beforeEmitTransformUpdates?: (nodeIds: string[]) => void
     onSelectionDragUpdates?: (updates: TransformUpdatePayload[]) => void
     resolveDropSurfaceHeight?: (options: {
@@ -455,27 +456,33 @@ export function useSelectionDrag(
     const axisVector = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, 0)
     const rotateDeltaQuaternion = new THREE.Quaternion().setFromAxisAngle(axisVector, delta)
 
-    // Compute centroid in world space using per-object pivot when available.
+    // Group pivot in world space: follows the viewport pivot mode when the host
+    // provides the resolver, otherwise the legacy per-object pivot centroid.
     const centroidWorld = new THREE.Vector3()
     const pivotWorld = new THREE.Vector3()
     let count = 0
-    for (const nodeId of topLevelIds) {
-      const targetObject = objectMap.get(nodeId)
-      if (!targetObject) {
-        continue
+    const resolvedGroupPivot = callbacks.computeSelectionGroupPivotWorld
+      ? callbacks.computeSelectionGroupPivotWorld(topLevelIds, centroidWorld)
+      : false
+    if (!resolvedGroupPivot) {
+      for (const nodeId of topLevelIds) {
+        const targetObject = objectMap.get(nodeId)
+        if (!targetObject) {
+          continue
+        }
+        if (callbacks.computeTransformPivotWorld) {
+          callbacks.computeTransformPivotWorld(targetObject, pivotWorld)
+        } else {
+          targetObject.getWorldPosition(pivotWorld)
+        }
+        centroidWorld.add(pivotWorld)
+        count += 1
       }
-      if (callbacks.computeTransformPivotWorld) {
-        callbacks.computeTransformPivotWorld(targetObject, pivotWorld)
-      } else {
-        targetObject.getWorldPosition(pivotWorld)
+      if (count <= 0) {
+        return
       }
-      centroidWorld.add(pivotWorld)
-      count += 1
+      centroidWorld.multiplyScalar(1 / count)
     }
-    if (count <= 0) {
-      return
-    }
-    centroidWorld.multiplyScalar(1 / count)
 
     const updates: TransformUpdatePayload[] = []
     const worldPosition = new THREE.Vector3()

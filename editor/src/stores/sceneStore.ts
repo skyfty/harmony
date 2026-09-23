@@ -122,8 +122,14 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
-import type { TransformSpace } from '@schema/core'
+import type { TransformPivotMode, TransformSpace } from '@schema/core'
 import { resolveEffectiveTransformSpace } from '@/utils/transformSpace'
+import {
+  isContentAnchoredNode,
+  resolveAutoTransformPivotMode,
+  resolveEffectiveTransformPivotMode,
+  type ResolvedTransformPivotMode,
+} from '@/utils/transformPivot'
 import { buildParentIndex, filterTopLevelSelection } from '@/components/editor/sceneUtils'
 import type {
   AssetManifest,
@@ -211,6 +217,7 @@ import {
 } from '@schema/skinRuntime'
 import { markGroundOptimizedMeshReady } from '@schema/groundMesh'
 import { generateUuid } from '@/utils/uuid'
+import { isEditorInternalMesh } from '@/utils/editorInternalMeshes'
 import {
   computeInstanceLayoutGridCenterOffsetLocal,
   resolveInstanceLayoutTemplateAssetId,
@@ -2498,8 +2505,14 @@ export function resolveImportedModelMaterialSeed(
       if (detectedType) {
         return
       }
-      const mesh = child as { isMesh?: boolean; material?: unknown }
+      const mesh = child as { isMesh?: boolean; material?: unknown; name?: unknown; userData?: unknown }
       if (!mesh?.isMesh) {
+        return
+      }
+      // Editor helpers (instanced pick proxies, outlines, ...) are non-rendered
+      // interaction objects with `opacity: 0` materials. Reading the model's
+      // material from one of them would create an invisible override slot.
+      if (isEditorInternalMesh(mesh)) {
         return
       }
       const raw = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material
@@ -2539,6 +2552,8 @@ export function resolveImportedModelMaterialSeed(
   const material = detectedMaterial as {
     color?: { getHexString?: () => string }
     emissive?: { getHexString?: () => string }
+    attenuationColor?: { getHexString?: () => string }
+    specular?: { getHexString?: () => string }
     metalness?: unknown
     roughness?: unknown
     opacity?: unknown
@@ -2547,6 +2562,18 @@ export function resolveImportedModelMaterialSeed(
     wireframe?: unknown
     emissiveIntensity?: unknown
     alphaTest?: unknown
+    // Physical-material parameters. They must be carried over as well: without
+    // them the type preset (75% transmission, 'double' side, ...) leaks into the
+    // override and makes an opaque model render like see-through glass.
+    transmission?: unknown
+    thickness?: unknown
+    ior?: unknown
+    clearcoat?: unknown
+    clearcoatRoughness?: unknown
+    attenuationDistance?: unknown
+    shininess?: unknown
+    aoMapIntensity?: unknown
+    envMapIntensity?: unknown
   }
   const props: Partial<SceneMaterialProps> = {}
   const color = material.color?.getHexString?.()
@@ -2557,6 +2584,14 @@ export function resolveImportedModelMaterialSeed(
   if (typeof emissive === 'string') {
     props.emissive = `#${emissive}`
   }
+  const attenuationColor = material.attenuationColor?.getHexString?.()
+  if (typeof attenuationColor === 'string') {
+    props.attenuationColor = `#${attenuationColor}`
+  }
+  const specular = material.specular?.getHexString?.()
+  if (typeof specular === 'string') {
+    props.specular = `#${specular}`
+  }
   if (typeof material.metalness === 'number') {
     props.metalness = material.metalness
   }
@@ -2565,6 +2600,35 @@ export function resolveImportedModelMaterialSeed(
   }
   if (typeof material.opacity === 'number') {
     props.opacity = material.opacity
+  }
+  if (typeof material.transmission === 'number' && Number.isFinite(material.transmission)) {
+    props.transmission = material.transmission
+  }
+  if (typeof material.thickness === 'number' && Number.isFinite(material.thickness)) {
+    props.thickness = material.thickness
+  }
+  if (typeof material.ior === 'number' && Number.isFinite(material.ior)) {
+    props.ior = material.ior
+  }
+  if (typeof material.clearcoat === 'number' && Number.isFinite(material.clearcoat)) {
+    props.clearcoat = material.clearcoat
+  }
+  if (typeof material.clearcoatRoughness === 'number' && Number.isFinite(material.clearcoatRoughness)) {
+    props.clearcoatRoughness = material.clearcoatRoughness
+  }
+  // three.js defaults `attenuationDistance` to Infinity, which must not end up in
+  // the scene document (it would serialize as null).
+  if (typeof material.attenuationDistance === 'number' && Number.isFinite(material.attenuationDistance)) {
+    props.attenuationDistance = material.attenuationDistance
+  }
+  if (typeof material.shininess === 'number' && Number.isFinite(material.shininess)) {
+    props.shininess = material.shininess
+  }
+  if (typeof material.aoMapIntensity === 'number' && Number.isFinite(material.aoMapIntensity)) {
+    props.aoStrength = material.aoMapIntensity
+  }
+  if (typeof material.envMapIntensity === 'number' && Number.isFinite(material.envMapIntensity)) {
+    props.envMapIntensity = material.envMapIntensity
   }
   if (typeof material.transparent === 'boolean') {
     props.transparent = material.transparent
@@ -4794,6 +4858,7 @@ const defaultViewportSettings: SceneViewportSettings = {
   cameraProjection: 'perspective',
   cameraControlMode: 'orbit',
   transformSpace: 'auto',
+  transformPivotMode: 'auto',
 
   snapMode: 'off',
   snapThresholdPx: 12,
@@ -4813,6 +4878,10 @@ function isViewportSnapMode(value: unknown): value is SceneViewportSnapMode {
 
 function isTransformSpace(value: unknown): value is TransformSpace {
   return value === 'auto' || value === 'world' || value === 'local'
+}
+
+function isTransformPivotMode(value: unknown): value is TransformPivotMode {
+  return value === 'auto' || value === 'pivot' || value === 'center'
 }
 
 function normalizeSnapThresholdPx(value: unknown): number {
@@ -4841,6 +4910,9 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
     transformSpace: isTransformSpace(settings?.transformSpace)
       ? settings!.transformSpace
       : defaultViewportSettings.transformSpace,
+    transformPivotMode: isTransformPivotMode(settings?.transformPivotMode)
+      ? settings!.transformPivotMode
+      : defaultViewportSettings.transformPivotMode,
 
     snapMode: isViewportSnapMode(settings?.snapMode)
       ? settings!.snapMode
@@ -4864,6 +4936,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.cameraProjection === b.cameraProjection &&
     a.cameraControlMode === b.cameraControlMode &&
     a.transformSpace === b.transformSpace &&
+    a.transformPivotMode === b.transformPivotMode &&
     a.snapMode === b.snapMode &&
     a.snapThresholdPx === b.snapThresholdPx
   )
@@ -7442,6 +7515,9 @@ function normalizeViewportSettingsInput(value: unknown): Partial<SceneViewportSe
   }
   if (isTransformSpace((input as any).transformSpace)) {
     normalized.transformSpace = (input as any).transformSpace
+  }
+  if (isTransformPivotMode((input as any).transformPivotMode)) {
+    normalized.transformPivotMode = (input as any).transformPivotMode
   }
   if (isViewportSnapMode((input as any).snapMode)) {
     normalized.snapMode = (input as any).snapMode
@@ -11850,6 +11926,11 @@ export const useSceneStore = defineStore('scene', {
         ? resolveImportedModelMaterialSeed(target)
         : null
       const resolvedType = options.type ?? seed?.type ?? DEFAULT_SCENE_MATERIAL_TYPE
+      // `resolveImportedModelMaterialSeed` reports every parameter the model
+      // material carries, so the type presets below stay fully shadowed for a
+      // model-derived override (otherwise the physical glass preset would turn
+      // an opaque model into 75% transmissive glass the moment a slot is
+      // created). Keep the seed complete when adding new material parameters.
       const baseProps = createMaterialPropsForType(resolvedType, options.props ?? seed?.props ?? null)
       // Every creation path on an imported model node starts in incremental mode
       // (all textures inherited) even when the caller does not pass the list.
@@ -11880,7 +11961,10 @@ export const useSceneStore = defineStore('scene', {
         created = entry
       })
 
-      if (!created) {
+      // `created` is assigned inside the visit callback, so control flow
+      // analysis cannot narrow it here - cast back to the declared union.
+      const createdMaterial = created as SceneNodeMaterial | null
+      if (!createdMaterial) {
         return null
       }
 
@@ -11889,7 +11973,7 @@ export const useSceneStore = defineStore('scene', {
         this.queueSceneNodePatch(nodeId, ['dynamicMesh'])
       }
       commitSceneSnapshot(this)
-      return created
+      return createdMaterial
     },
     async ensureNodeMaterialTextureAssetRegistered(ref: SceneMaterialTextureRef | null | undefined): Promise<void> {
       const assetId = typeof ref?.assetId === 'string' ? ref.assetId.trim() : ''
@@ -15597,6 +15681,23 @@ export const useSceneStore = defineStore('scene', {
       const isMultiSelection = filterTopLevelSelection(editableIds, parentMap).length > 1
       const effective = resolveEffectiveTransformSpace(stored, this.activeTool, isMultiSelection)
       this.setViewportTransformSpace(effective === 'world' ? 'local' : 'world')
+    },
+    setViewportTransformPivotMode(mode: TransformPivotMode) {
+      if (!isTransformPivotMode(mode)) {
+        return
+      }
+      this.setViewportSettings({ transformPivotMode: mode })
+    },
+    toggleViewportTransformPivotMode(currentEffectiveMode?: ResolvedTransformPivotMode) {
+      // The viewport can resolve instanced-proxy anchors the store cannot see,
+      // so it may pass the mode it is currently showing.
+      const primaryId = this.selectedNodeId ?? null
+      const auto = resolveAutoTransformPivotMode({
+        contentAnchored: isContentAnchoredNode(primaryId ? this.getNodeById(primaryId) : null),
+      })
+      const effective = currentEffectiveMode
+        ?? resolveEffectiveTransformPivotMode(this.viewportSettings.transformPivotMode, auto)
+      this.setViewportTransformPivotMode(effective === 'center' ? 'pivot' : 'center')
     },
     setShadowsEnabled(enabled: boolean) {
       const next = normalizeShadowsEnabledInput(enabled)

@@ -88,6 +88,12 @@ import {
 } from '@schema/core'
 import { resolveEffectiveTransformSpace } from '@/utils/transformSpace'
 import {
+  isContentAnchoredNode,
+  resolveAutoTransformPivotMode,
+  resolveEffectiveTransformPivotMode,
+  type ResolvedTransformPivotMode,
+} from '@/utils/transformPivot'
+import {
   buildRegionDynamicMeshFromLocalVertices,
   disposeSkyCubeTexture,
   getLastExtensionFromFilenameOrUrl,
@@ -10147,6 +10153,7 @@ const {
     updatePlaceholderOverlayPositions,
     gizmoControlsUpdate: () => gizmoControls?.update(),
     computeTransformPivotWorld,
+    computeSelectionGroupPivotWorld,
     beforeEmitTransformUpdates: (nodeIds: string[]) => {
       const captured: CapturedLightTargetUpdate[] = []
       nodeIds.forEach((id) => {
@@ -10385,21 +10392,11 @@ function rotateActiveSelection(nodeId: string, reverse = false) {
   )
 
   const centroidWorld = new THREE.Vector3()
-  const pivotWorld = new THREE.Vector3()
-  let count = 0
-  for (const id of topLevelIds) {
-    const object = objectMap.get(id)
-    if (!object) {
-      continue
-    }
-    computeTransformPivotWorld(object, pivotWorld)
-    centroidWorld.add(pivotWorld)
-    count += 1
-  }
-  if (count <= 0) {
+  if (!computeSelectionGroupPivotWorld(topLevelIds, centroidWorld, {
+    primaryId: sceneStore.selectedNodeId ?? nodeId,
+  })) {
     return
   }
-  centroidWorld.multiplyScalar(1 / count)
 
   const updates: TransformUpdatePayload[] = []
   const worldPosition = new THREE.Vector3()
@@ -11076,22 +11073,8 @@ function isInstancedPickProxyBoundsPayload(value: unknown): value is InstancedPi
   return Array.isArray(payload.min) && payload.min.length === 3 && Array.isArray(payload.max) && payload.max.length === 3
 }
 
-/**
- * Nodes whose runtime object is a container for asset-derived content: expanded
- * imported-model roots and their lightweight children.
- *
- * Such nodes keep an identity local transform while the asset geometry is baked
- * far away from the node origin (that is exactly how the 3dtiles exporter writes
- * merged terrain meshes), so anchoring the gizmo on the object origin puts it
- * far outside the viewport and makes rotate/scale fling the mesh away.
- */
-function isTransformPivotAnchoredNode(node: SceneNode | null | undefined): boolean {
-  if (!node) {
-    return false
-  }
-  return isLightweightImportNode(node) || isExpandedImportedModelRoot(node)
-}
-
+// Content-anchored node detection lives in @/utils/transformPivot
+// (isContentAnchoredNode), shared with the store's pivot-mode toggle.
 const CONTENT_PIVOT_LOCAL_KEY = '__harmonyContentPivotLocal'
 
 /**
@@ -11116,7 +11099,7 @@ function setTransformPivotFromHit(
   if (!nodeId || !object || !hitPointWorld) {
     return
   }
-  if (!isTransformPivotAnchoredNode(sceneStore.getNodeById(nodeId))) {
+  if (!isContentAnchoredNode(sceneStore.getNodeById(nodeId))) {
     return
   }
   object.updateMatrixWorld(true)
@@ -11166,7 +11149,25 @@ function isTransformPivotAnchoredObject(object: THREE.Object3D): boolean {
   if (!nodeId) {
     return false
   }
-  return isTransformPivotAnchoredNode(sceneStore.getNodeById(nodeId))
+  return isContentAnchoredNode(sceneStore.getNodeById(nodeId))
+}
+
+/**
+ * Effective gizmo anchor for a runtime object.
+ * `auto` keeps the legacy rules (content anchor for import nodes / instanced
+ * tiling proxies, object origin otherwise); explicit modes win over both.
+ */
+function resolveObjectTransformPivotMode(object: THREE.Object3D): ResolvedTransformPivotMode {
+  const nodeId = typeof object.userData?.nodeId === 'string' ? object.userData.nodeId : ''
+  const auto = resolveAutoTransformPivotMode({
+    contentAnchored: nodeId ? isContentAnchoredNode(sceneStore.getNodeById(nodeId)) : false,
+    hasInstanceProxy: Boolean(object.userData?.instancedPickProxy),
+  })
+  return resolveEffectiveTransformPivotMode(sceneStore.viewportSettings.transformPivotMode, auto)
+}
+
+function isFiniteVector3(value: THREE.Vector3): boolean {
+  return Number.isFinite(value.x) && Number.isFinite(value.y) && Number.isFinite(value.z)
 }
 
 function computeTransformPivotWorld(
@@ -11174,6 +11175,33 @@ function computeTransformPivotWorld(
   out: THREE.Vector3,
   options: { refreshContentPivot?: boolean } = {},
 ): void {
+  const pivotMode = sceneStore.viewportSettings.transformPivotMode
+
+  // 'pivot': always the node's own transform pivot.
+  if (pivotMode === 'pivot') {
+    object.getWorldPosition(out)
+    return
+  }
+
+  // 'center': always the object's content bounding-box center, ignoring picked
+  // points and instanced-proxy bounds (cached in local space so the drag loop
+  // can reuse it without walking the subtree).
+  if (pivotMode === 'center') {
+    object.updateMatrixWorld(true)
+    const localPivot = resolveContentPivotLocal(object, options.refreshContentPivot === true)
+    if (localPivot) {
+      out.copy(localPivot)
+      object.localToWorld(out)
+      if (isFiniteVector3(out)) {
+        return
+      }
+    }
+    object.getWorldPosition(out)
+    return
+  }
+
+  // Legacy ('auto') anchoring below: content-anchored nodes and instanced
+  // tiling proxies anchor on their content, everything else on its origin.
   // Expanded imported-model nodes: prefer the picked point, then the content
   // center, so the gizmo lands on what the user is looking at.
   if (isTransformPivotAnchoredObject(object)) {
@@ -11227,12 +11255,17 @@ function updateTransformControlsPivotOverride(
   options: { refreshContentPivot?: boolean } = {},
 ): void {
   const userData = object.userData ?? (object.userData = {})
-  const anchored = isTransformPivotAnchoredObject(object)
-  const proxy = userData.instancedPickProxy as THREE.Object3D | undefined
+  const pivotMode = sceneStore.viewportSettings.transformPivotMode
 
-  // Only override the pivot for content-anchored nodes and the instanced tiling
-  // path; everything else keeps the gizmo on the object origin.
-  if (!anchored && !proxy) {
+  // 'pivot' anchors on the object origin, so no override is needed.
+  if (pivotMode === 'pivot') {
+    delete (userData as any).transformControlsPivotWorld
+    return
+  }
+
+  // 'auto' keeps the legacy rule: only content-anchored nodes and the instanced
+  // tiling path move the gizmo away from the object origin.
+  if (pivotMode === 'auto' && !isTransformPivotAnchoredObject(object) && !userData.instancedPickProxy) {
     delete (userData as any).transformControlsPivotWorld
     return
   }
@@ -11395,10 +11428,13 @@ function buildTransformGroupState(primaryId: string | null): TransformGroupState
     return null
   }
 
-  // Group pivot: average of each entry's pivot (world).
   const initialGroupPivotWorldPosition = new THREE.Vector3()
-  entries.forEach((entry) => initialGroupPivotWorldPosition.add(entry.initialPivotWorldPosition))
-  initialGroupPivotWorldPosition.multiplyScalar(1 / entries.size)
+  // Group pivot follows the viewport pivot mode (see computeSelectionGroupPivotWorld).
+  if (!computeSelectionGroupPivotWorld(topLevelIds, initialGroupPivotWorldPosition, { primaryId })) {
+    initialGroupPivotWorldPosition.set(0, 0, 0)
+    entries.forEach((entry) => initialGroupPivotWorldPosition.add(entry.initialPivotWorldPosition))
+    initialGroupPivotWorldPosition.multiplyScalar(1 / entries.size)
+  }
 
   const attachedObject = transformControls?.object as THREE.Object3D | null
   const initialGroupPivotWorldQuaternion = new THREE.Quaternion()
@@ -21836,8 +21872,11 @@ function computeTransformUpdatesForSingleSelect(options: {
 
   // Keep the pivot anchored while rotating/scaling: TransformControls only
   // rotates/scales around the object origin, so offset content (baked geometry,
-  // instanced pick proxies) would otherwise drift away from the gizmo.
-  const needsPivotCompensation = !hasPivotOverride || isTransformPivotAnchoredObject(target)
+  // instanced pick proxies, or a content-anchored mode) would otherwise drift
+  // away from the gizmo.
+  const needsPivotCompensation = !hasPivotOverride
+    || isTransformPivotAnchoredObject(target)
+    || sceneStore.viewportSettings.transformPivotMode === 'center'
   if ((mode === 'rotate' || mode === 'scale') && needsPivotCompensation) {
     const primaryEntry = groupState?.entries.get(effectiveNodeId) ?? null
     if (primaryEntry) {
@@ -21911,7 +21950,11 @@ function syncInstancedTransformDuringDragIfNeeded(options: {
     // Keep instanced transforms in sync during dragging when transforming a real node.
     syncInstancedTransform(target, true)
     syncInstancedOutlineEntryTransform(nodeId)
-    if (target.userData?.instancedPickProxy || target.userData?.lightweightImportNode) {
+    if (
+      target.userData?.instancedPickProxy
+      || target.userData?.lightweightImportNode
+      || sceneStore.viewportSettings.transformPivotMode === 'center'
+    ) {
       // Cheap path: reuse the cached content pivot instead of re-walking the
       // subtree on every drag frame.
       updateTransformControlsPivotOverride(target, { refreshContentPivot: false })
@@ -24216,6 +24259,47 @@ function resetTransformSpaceToAuto() {
   sceneStore.setViewportTransformSpace('auto')
 }
 
+/** Gizmo anchor actually used for the current tool/selection. */
+const effectiveTransformPivotMode = computed<ResolvedTransformPivotMode>(() => {
+  const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const primaryObject = primaryId ? (objectMap.get(primaryId) ?? null) : null
+  if (primaryObject) {
+    return resolveObjectTransformPivotMode(primaryObject)
+  }
+  // No resolvable object yet: fall back to the plain legacy default.
+  return resolveEffectiveTransformPivotMode(sceneStore.viewportSettings.transformPivotMode, 'pivot')
+})
+
+const transformPivotModeLocked = computed(() => sceneStore.viewportSettings.transformPivotMode !== 'auto')
+
+const transformPivotButtonIcon = computed(() => (
+  effectiveTransformPivotMode.value === 'center' ? 'mdi-image-filter-center-focus' : 'mdi-vector-point'
+))
+
+const transformPivotButtonTitle = computed(() => {
+  const parts = [effectiveTransformPivotMode.value === 'center'
+    ? '手柄位于选中包围盒中心（旋转/缩放绕中心）'
+    : '手柄位于对象轴心（旋转/缩放绕轴心）']
+  if (transformPivotModeLocked.value) {
+    parts.push('已固定')
+  } else {
+    parts.push('自动（普通节点用轴心，导入模型用内容中心）')
+  }
+  parts.push(effectiveTransformPivotMode.value === 'center' ? '点击切换为对象轴心' : '点击切换为包围盒中心')
+  parts.push('右键恢复自动')
+  return parts.join(' · ')
+})
+
+function toggleTransformPivotMode() {
+  // Pass the mode the viewport actually shows, so instanced-proxy anchors
+  // (invisible to the store) toggle to what the tooltip promises.
+  sceneStore.toggleViewportTransformPivotMode(effectiveTransformPivotMode.value)
+}
+
+function resetTransformPivotModeToAuto() {
+  sceneStore.setViewportTransformPivotMode('auto')
+}
+
 function collectTopLevelUnlockedSelectionIds(primaryId: string | null): string[] {
   const selectedIds = sceneStore.selectedNodeIds
     .filter((id) => !!id && !sceneStore.isNodeSelectionLocked(id))
@@ -24232,32 +24316,105 @@ function collectTopLevelUnlockedSelectionIds(primaryId: string | null): string[]
   return filterTopLevelSelection(selectedIds, parentMap)
 }
 
+const selectionGroupBoundsHelper = new THREE.Box3()
+const selectionGroupPivotHelper = new THREE.Vector3()
+
+/**
+ * Shared pivot for a group transform, so the gizmo position, the drag baseline
+ * and the "rotate selection" commands all agree:
+ * - 'pivot': the primary (last selected) object's own pivot
+ * - 'center': the combined bounding-box center of the selection
+ * - 'auto': legacy average of every object's pivot
+ */
+function computeSelectionGroupPivotWorld(
+  ids: readonly string[],
+  out: THREE.Vector3,
+  options: { refreshContentPivot?: boolean; primaryId?: string | null } = {},
+): boolean {
+  const objects: THREE.Object3D[] = []
+  ids.forEach((id) => {
+    const object = objectMap.get(id)
+    if (object) {
+      objects.push(object)
+    }
+  })
+  if (!objects.length) {
+    return false
+  }
+
+  const setting = sceneStore.viewportSettings.transformPivotMode
+  const primaryId = options.primaryId ?? sceneStore.selectedNodeId ?? null
+  const primaryObject = (primaryId ? objectMap.get(primaryId) : null) ?? objects[0]!
+
+  if (setting === 'pivot') {
+    computeTransformPivotWorld(primaryObject, out, options)
+    return isFiniteVector3(out)
+  }
+
+  if (setting === 'center') {
+    const bounds = new THREE.Box3()
+    let initialized = false
+    objects.forEach((object) => {
+      object.updateMatrixWorld(true)
+      selectionGroupBoundsHelper.setFromObject(object)
+      if (selectionGroupBoundsHelper.isEmpty()) {
+        return
+      }
+      if (initialized) {
+        bounds.union(selectionGroupBoundsHelper)
+      } else {
+        bounds.copy(selectionGroupBoundsHelper)
+        initialized = true
+      }
+    })
+    if (initialized) {
+      bounds.getCenter(out)
+      if (isFiniteVector3(out)) {
+        return true
+      }
+    }
+    // Empty selection bounds (group/empty nodes): fall back to the mean origin.
+    out.set(0, 0, 0)
+    objects.forEach((object) => {
+      object.getWorldPosition(selectionGroupPivotHelper)
+      out.add(selectionGroupPivotHelper)
+    })
+    out.multiplyScalar(1 / objects.length)
+    return isFiniteVector3(out)
+  }
+
+  // Legacy ('auto'): average of every object's pivot.
+  out.set(0, 0, 0)
+  let count = 0
+  objects.forEach((object) => {
+    computeTransformPivotWorld(object, selectionGroupPivotHelper, options)
+    if (!isFiniteVector3(selectionGroupPivotHelper)) {
+      return
+    }
+    out.add(selectionGroupPivotHelper)
+    count += 1
+  })
+  if (count <= 0) {
+    return false
+  }
+  out.multiplyScalar(1 / count)
+  return true
+}
+
 function updateSelectionPivotObject(primaryId: string | null, tool: EditorTool): THREE.Vector3 | null {
   const ids = collectTopLevelUnlockedSelectionIds(primaryId)
   if (ids.length <= 1) {
     return null
   }
 
-  const centroidWorld = new THREE.Vector3()
-  let count = 0
-  const pivotWorld = new THREE.Vector3()
-  for (const id of ids) {
-    const object = objectMap.get(id)
-    if (!object) {
-      continue
-    }
-    computeTransformPivotWorld(object, pivotWorld)
-    centroidWorld.add(pivotWorld)
-    count += 1
-  }
-  if (count <= 0) {
+  const groupPivotWorld = new THREE.Vector3()
+  if (!computeSelectionGroupPivotWorld(ids, groupPivotWorld, { primaryId })) {
     return null
   }
-  centroidWorld.multiplyScalar(1 / count)
 
   // Place pivot under rootGroup.
   rootGroup.updateMatrixWorld(true)
-  selectionPivotObject.position.copy(centroidWorld)
+  selectionPivotObject.position.copy(groupPivotWorld)
   rootGroup.worldToLocal(selectionPivotObject.position)
 
   // Multi-select pivot is always world-oriented.
@@ -24267,7 +24424,7 @@ function updateSelectionPivotObject(primaryId: string | null, tool: EditorTool):
   selectionPivotObject.scale.set(1, 1, 1)
   selectionPivotObject.updateMatrixWorld(true)
 
-  return centroidWorld
+  return groupPivotWorld
 }
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
@@ -25072,6 +25229,19 @@ watch(
   }
 )
 
+watch(
+  () => sceneStore.viewportSettings.transformPivotMode,
+  () => {
+    // Re-anchor the gizmo immediately; no reselect required.
+    if (transformControls?.dragging) {
+      return
+    }
+    const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    attachSelection(selectedId, props.activeTool)
+    transformControls?.getHelper().updateMatrixWorld(true)
+  }
+)
+
 watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
   clearBuildToolVertexSnap()
@@ -25531,7 +25701,7 @@ defineExpose({
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">坐标</span>
-              <span class="camera-status-hud__hint-text">左下角按钮切换 世界 / 本地 坐标系（缩放始终使用本地轴，右键恢复自动）</span>
+              <span class="camera-status-hud__hint-text">左下角按钮切换 世界 / 本地 坐标系与 轴心 / 中心 支点（缩放始终使用本地轴；右键恢复自动）</span>
             </div>
             <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">视角</span>
@@ -25643,6 +25813,17 @@ defineExpose({
             :title="transformSpaceButtonTitle"
             @click="toggleTransformSpace"
             @contextmenu.prevent.stop="resetTransformSpaceToAuto"
+          />
+          <v-btn
+            :icon="transformPivotButtonIcon"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            :class="{ 'camera-status-hud__icon-btn--active': transformPivotModeLocked }"
+            :title="transformPivotButtonTitle"
+            @click="toggleTransformPivotMode"
+            @contextmenu.prevent.stop="resetTransformPivotModeToAuto"
           />
           </div>
           <span class="camera-status-hud__sep" aria-hidden="true" />
