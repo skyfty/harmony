@@ -1,5 +1,5 @@
 
-import type { CameraControlMode, CameraProjection } from '@schema/core'
+import type { CameraControlMode, CameraProjection, TransformSpace } from '@schema/core'
 
 export type SceneViewportSnapMode = 'off' | 'vertex'
 
@@ -8,6 +8,8 @@ export interface SceneViewportSettings {
   showAxes: boolean
   cameraProjection: CameraProjection
   cameraControlMode: CameraControlMode
+  /** Transform gizmo orientation: 'auto' keeps the legacy per-tool behavior. */
+  transformSpace: TransformSpace
 
   // Vertex snap (Blender-like vertex alignment)
   snapMode: SceneViewportSnapMode

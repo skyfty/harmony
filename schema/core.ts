@@ -698,6 +698,14 @@ export interface SceneNodeMaterial extends SceneMaterialProps {
   name?: string;
   thumbnail?: string | null;
   /**
+   * Material asset this slot was applied from.
+   *
+   * Editor bookkeeping only (runtime ignores it): deleting that material asset
+   * resets the slots whose content still matches it, and this link keeps slots
+   * that were deliberately switched to another material asset out of the reset.
+   */
+  sourceMaterialAssetId?: string | null;
+  /**
    * Texture slots this node material overrides explicitly.
    *
    * Only used for material overrides on imported model nodes: listed slots are
@@ -1518,6 +1526,13 @@ export function isIdentityNodeTransform(
 export type LightNodeType = 'Directional' | 'Point' | 'Spot' | 'Ambient' | 'Hemisphere'
 export type CameraControlMode = 'orbit' | 'map'
 export type CameraProjection = 'perspective' | 'orthographic'
+/**
+ * Transform gizmo orientation for node pose editing.
+ * - 'auto': legacy behavior (multi-select = world; rotate = world; translate/scale = local)
+ * - 'world': always adjust along world axes
+ * - 'local': adjust along the node's own axes
+ */
+export type TransformSpace = 'auto' | 'world' | 'local'
 
 export interface LightShadowProperties {
   /** Shadow map resolution (power of two recommended). */
@@ -1639,6 +1654,7 @@ export interface SceneViewportSettings {
   showAxes: boolean;
   cameraProjection: CameraProjection;
   cameraControlMode: CameraControlMode;
+  transformSpace: TransformSpace;
   [key: string]: unknown;
 }
 

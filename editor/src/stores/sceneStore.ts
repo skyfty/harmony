@@ -122,6 +122,9 @@ import type { PlanningSceneData } from '@/types/planning-scene-data'
 import { useProjectsStore } from '@/stores/projectsStore'
 import type { TransformUpdatePayload } from '@/types/transform-update-payload'
 import type { SceneViewportSettings, SceneViewportSnapMode } from '@/types/scene-viewport-settings'
+import type { TransformSpace } from '@schema/core'
+import { resolveEffectiveTransformSpace } from '@/utils/transformSpace'
+import { buildParentIndex, filterTopLevelSelection } from '@/components/editor/sceneUtils'
 import type {
   AssetManifest,
   AssetManifestAsset,
@@ -240,6 +243,11 @@ import {
   renderMaterialThumbnailDataUrl,
   serializeMaterialAsset,
 } from '@/utils/materialAsset'
+import {
+  clearDeletedMaterialAssetLink,
+  clearDeletedTextureAssetsFromNodeMaterial,
+  nodeMaterialMatchesMaterialAsset,
+} from '@/utils/nodeMaterialAssetReset'
 import {
   type LodPresetData,
 } from '@/utils/lodPreset'
@@ -2206,6 +2214,7 @@ function createNodeMaterial(
     type?: SceneMaterialType
     thumbnail?: string | null
     textureOverrides?: SceneMaterialTextureSlot[]
+    sourceMaterialAssetId?: string | null
   } = {},
 ): SceneNodeMaterial {
   return {
@@ -2217,6 +2226,7 @@ function createNodeMaterial(
     // Applied last: the caller's explicit list wins over anything carried by the
     // source props (e.g. when editing an existing node material).
     ...(options.textureOverrides ? { textureOverrides: Array.from(new Set(options.textureOverrides)) } : {}),
+    ...(options.sourceMaterialAssetId ? { sourceMaterialAssetId: options.sourceMaterialAssetId } : {}),
   }
 }
 
@@ -2306,6 +2316,7 @@ function cloneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
     name: material.name,
     type: material.type ?? 'MeshStandardMaterial',
     thumbnail: material.thumbnail ?? null,
+    sourceMaterialAssetId: material.sourceMaterialAssetId ?? null,
   })
 }
 
@@ -4782,6 +4793,7 @@ const defaultViewportSettings: SceneViewportSettings = {
   showAxes: false,
   cameraProjection: 'perspective',
   cameraControlMode: 'orbit',
+  transformSpace: 'auto',
 
   snapMode: 'off',
   snapThresholdPx: 12,
@@ -4797,6 +4809,10 @@ function isCameraControlMode(value: unknown): value is CameraControlMode {
 
 function isViewportSnapMode(value: unknown): value is SceneViewportSnapMode {
   return value === 'off' || value === 'vertex'
+}
+
+function isTransformSpace(value: unknown): value is TransformSpace {
+  return value === 'auto' || value === 'world' || value === 'local'
 }
 
 function normalizeSnapThresholdPx(value: unknown): number {
@@ -4822,6 +4838,9 @@ function cloneViewportSettings(settings?: Partial<SceneViewportSettings> | null)
     cameraControlMode: isCameraControlMode(settings?.cameraControlMode)
       ? settings!.cameraControlMode
       : defaultViewportSettings.cameraControlMode,
+    transformSpace: isTransformSpace(settings?.transformSpace)
+      ? settings!.transformSpace
+      : defaultViewportSettings.transformSpace,
 
     snapMode: isViewportSnapMode(settings?.snapMode)
       ? settings!.snapMode
@@ -4844,6 +4863,7 @@ function viewportSettingsEqual(a: SceneViewportSettings, b: SceneViewportSetting
     a.showAxes === b.showAxes &&
     a.cameraProjection === b.cameraProjection &&
     a.cameraControlMode === b.cameraControlMode &&
+    a.transformSpace === b.transformSpace &&
     a.snapMode === b.snapMode &&
     a.snapThresholdPx === b.snapThresholdPx
   )
@@ -7419,6 +7439,9 @@ function normalizeViewportSettingsInput(value: unknown): Partial<SceneViewportSe
   }
   if (isCameraControlMode(input.cameraControlMode)) {
     normalized.cameraControlMode = input.cameraControlMode
+  }
+  if (isTransformSpace((input as any).transformSpace)) {
+    normalized.transformSpace = (input as any).transformSpace
   }
   if (isViewportSnapMode((input as any).snapMode)) {
     normalized.snapMode = (input as any).snapMode
@@ -12061,6 +12084,7 @@ export const useSceneStore = defineStore('scene', {
             name: entry.name,
             type: entry.type,
             thumbnail: entry.thumbnail ?? null,
+            sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: nextTextureOverrides
               ?? mergeTextureOverrideSlots(entry.textureOverrides, touchedTextureSlots),
           })
@@ -12100,6 +12124,7 @@ export const useSceneStore = defineStore('scene', {
             name: entry.name,
             type: type,
             thumbnail: entry.thumbnail ?? null,
+            sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: entry.textureOverrides,
           })
         })
@@ -12144,6 +12169,7 @@ export const useSceneStore = defineStore('scene', {
               id: entry.id,
               name: source.name,
               type: source.type,
+              sourceMaterialAssetId: source.id,
               textureOverrides: isImportedModelMaterialTarget(node)
                 ? collectTextureOverrideSlots(source)
                 : entry.textureOverrides,
@@ -12344,6 +12370,7 @@ export const useSceneStore = defineStore('scene', {
             name: resolvedName,
             type: material.type ?? entry.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
             thumbnail,
+            sourceMaterialAssetId: normalizedAssetId,
             textureOverrides: isImportedModelMaterialTarget(node)
               ? collectTextureOverrideSlots(material)
               : entry.textureOverrides,
@@ -12759,6 +12786,7 @@ export const useSceneStore = defineStore('scene', {
             id: entry.id,
             name: trimmedName && trimmedName.length ? trimmedName : undefined,
             type: entry.type,
+            sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: entry.textureOverrides,
           })
         })
@@ -13268,6 +13296,7 @@ export const useSceneStore = defineStore('scene', {
             id: entry.id,
             name: entry.name,
             type: entry.type,
+            sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: entry.textureOverrides,
           })
         })
@@ -14010,7 +14039,9 @@ export const useSceneStore = defineStore('scene', {
       void this.flushPendingSceneAutoSave({ force: true }).catch(() => {})
       return true
     },
-    deleteAssetDirectory(projectDirectoryId: string): { removedDirectoryIds: string[]; removedAssetIds: string[] } {
+    async deleteAssetDirectory(
+      projectDirectoryId: string,
+    ): Promise<{ removedDirectoryIds: string[]; removedAssetIds: string[] }> {
       const manifest = cloneAssetManifest(this.assetManifest)
       const directoryId = resolveManifestDirectoryIdFromProjectDirectoryId(manifest, projectDirectoryId)
       if (!manifest || !directoryId || directoryId === manifest.rootDirectoryId) {
@@ -14044,8 +14075,33 @@ export const useSceneStore = defineStore('scene', {
       directoryIdsToRemove.forEach((id) => {
         delete manifest.directoriesById[id]
       })
+
+      // Read the asset types before the manifest entries disappear: node material
+      // slots referencing these assets have to be reset below.
+      const materialAssetIds: string[] = []
+      const textureAssetIds: string[] = []
+      assetIdsToRemove.forEach((assetId) => {
+        const assetType = manifest.assetsById[assetId]?.type
+        if (assetType === 'material') {
+          materialAssetIds.push(assetId)
+          return
+        }
+        if (assetType === 'texture' || assetType === 'image' || assetType === 'hdri') {
+          textureAssetIds.push(assetId)
+        }
+      })
+
       assetIdsToRemove.forEach((assetId) => {
         delete manifest.assetsById[assetId]
+      })
+
+      // Reset node material slots that reference the removed assets before the
+      // catalog entry disappears, so the scene stops rendering deleted
+      // materials / textures.
+      await this.applyAssetDeletionToNodeMaterials({ materialAssetIds, textureAssetIds })
+
+      materialAssetIds.forEach((materialId) => {
+        this.deleteMaterial(materialId)
       })
 
       const nextCatalog = buildAssetCatalogFromManifest(cleanupManifestDirectoryReferences(manifest), this.assetCatalog)
@@ -15162,6 +15218,160 @@ export const useSceneStore = defineStore('scene', {
 
       return resolved
     },
+    /**
+     * Resets node material slots that reference assets which are about to be deleted.
+     *
+     * Materials are only reset when the slot still renders exactly like the deleted
+     * material asset (`nodeMaterialMatchesMaterialAsset`), so slots the user edited
+     * afterwards are left alone. Texture references are always cleared, otherwise the
+     * node would keep rendering a texture that no longer exists. Has to run before the
+     * asset catalog / material library entries are removed.
+     */
+    async applyAssetDeletionToNodeMaterials(
+      payload: { materialAssetIds?: string[] | null; textureAssetIds?: string[] | null } = {},
+    ): Promise<string[]> {
+      const normalizeIds = (ids?: string[] | null): string[] =>
+        Array.from(
+          new Set(
+            (Array.isArray(ids) ? ids : [])
+              .map((id) => (typeof id === 'string' ? id.trim() : ''))
+              .filter((id) => id.length > 0),
+          ),
+        )
+      const materialAssetIds = normalizeIds(payload.materialAssetIds)
+      const textureAssetIds = normalizeIds(payload.textureAssetIds)
+      if (!materialAssetIds.length && !textureAssetIds.length) {
+        return []
+      }
+
+      const materialDefinitions: Array<{ id: string; type?: SceneMaterialType } & SceneMaterialProps> = []
+      for (const materialAssetId of materialAssetIds) {
+        const definition = this.materials.find((entry) => entry.id === materialAssetId)
+          ?? await this.ensureMaterialAssetDefinitionLoaded(materialAssetId)
+        if (definition) {
+          materialDefinitions.push(definition)
+        }
+      }
+
+      const materialAssetIdSet = new Set(materialAssetIds)
+      const textureAssetIdSet = new Set(textureAssetIds)
+      const defaultMaterial = findDefaultSceneMaterial(this.materials)
+      const defaultProps = defaultMaterial ? createMaterialProps(defaultMaterial) : createMaterialProps()
+      const affectedNodeIds: string[] = []
+      const affectedNodes: SceneNode[] = []
+      let historyCaptured = false
+      let changed = false
+
+      const walk = (nodes: SceneNode[]) => {
+        nodes.forEach((node) => {
+          if (nodeSupportsMaterials(node) && Array.isArray(node.materials) && node.materials.length) {
+            const isImportedModelOverride = isImportedModelMaterialTarget(node)
+            const nextMaterials: SceneNodeMaterial[] = []
+            let nodeChanged = false
+
+            node.materials.forEach((entry, index) => {
+              let nextEntry: SceneNodeMaterial | null = entry
+              const matchedDefinition = materialDefinitions.find((definition) =>
+                nodeMaterialMatchesMaterialAsset(entry, definition),
+              ) ?? null
+
+              if (matchedDefinition) {
+                if (isImportedModelOverride) {
+                  // Imported model nodes fall back to the material the asset itself
+                  // carries, so the override is dropped instead of being replaced by
+                  // a scene default material.
+                  nextEntry = null
+                } else {
+                  const fallbackName = entry.name?.trim() || `Material ${index + 1}`
+                  const defaultTemplate = resolveDefaultNodeMaterialForReset(node, index)
+                  nextEntry = defaultTemplate
+                    ? createNodeMaterial(defaultTemplate.props, {
+                        id: entry.id,
+                        name: defaultTemplate.name?.trim() || fallbackName,
+                        type: defaultTemplate.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+                      })
+                    : createNodeMaterial(defaultProps, {
+                        id: entry.id,
+                        name: defaultMaterial?.name?.trim() || fallbackName,
+                        type: defaultMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+                      })
+                }
+                nodeChanged = true
+              } else {
+                const clearedLink = clearDeletedMaterialAssetLink(entry, materialAssetIdSet)
+                if (clearedLink.changed) {
+                  nextEntry = clearedLink.entry
+                  nodeChanged = true
+                }
+              }
+
+              if (nextEntry && textureAssetIdSet.size) {
+                const clearedTextures = clearDeletedTextureAssetsFromNodeMaterial(nextEntry, textureAssetIdSet, {
+                  allowDropEntry: isImportedModelOverride,
+                })
+                if (clearedTextures.changed) {
+                  nextEntry = clearedTextures.entry
+                  nodeChanged = true
+                }
+              }
+
+              if (nextEntry) {
+                nextMaterials.push(nextEntry)
+              }
+            })
+
+            if (nodeChanged) {
+              if (!historyCaptured) {
+                // Captured before the first mutation so a single undo restores the
+                // pre-deletion node materials (and material library entries).
+                this.captureHistorySnapshot()
+                historyCaptured = true
+              }
+              changed = true
+              node.materials = nextMaterials
+              const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
+              const wallResult = wallHelpers.ensureWallMaterialConvention(node)
+              const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
+              this.queueSceneNodePatch(node.id, ['materials'])
+              if (floorResult.meshChanged || wallResult.meshChanged || landformResult.meshChanged) {
+                this.queueSceneNodePatch(node.id, ['dynamicMesh'])
+              }
+              if (node.dynamicMesh?.type === 'Landform') {
+                scheduleLandformGroundSplatBake(this, 'applyAssetDeletionToNodeMaterials')
+              }
+              affectedNodeIds.push(node.id)
+              affectedNodes.push(node)
+            }
+          }
+
+          if (node.children?.length) {
+            walk(node.children)
+          }
+        })
+      }
+
+      walk(this.nodes)
+
+      if (!changed) {
+        return []
+      }
+
+      commitSceneSnapshot(this, { updateNodes: false })
+
+      if (affectedNodes.length) {
+        try {
+          await this.ensureSceneAssetsReady({
+            nodes: affectedNodes,
+            showOverlay: false,
+            refreshViewport: true,
+          })
+        } catch (error) {
+          console.warn('Failed to refresh scene after resetting node materials for deleted assets', error)
+        }
+      }
+
+      return affectedNodeIds
+    },
     async deleteProjectAssets(assetIds: string[]): Promise<string[]> {
       const uniqueIds = Array.from(
         new Set(
@@ -15198,6 +15408,15 @@ export const useSceneStore = defineStore('scene', {
 
       const assetIdSet = new Set(deletableIds)
       const assetCache = useAssetCacheStore()
+
+      // Reset node material slots that reference the deleted assets before the
+      // material library / catalog entries disappear, otherwise the nodes would
+      // keep rendering the material and textures that no longer exist.
+      const textureAssetIds = nonMaterialAssetIds.filter((assetId) => {
+        const assetType = catalogAssets.get(assetId)?.type
+        return assetType === 'texture' || assetType === 'image' || assetType === 'hdri'
+      })
+      await this.applyAssetDeletionToNodeMaterials({ materialAssetIds, textureAssetIds })
 
       materialAssetIds.forEach((materialId) => {
         this.deleteMaterial(materialId)
@@ -15358,6 +15577,26 @@ export const useSceneStore = defineStore('scene', {
     },
     setViewportSnapThresholdPx(value: number) {
       this.setViewportSettings({ snapThresholdPx: normalizeSnapThresholdPx(value) })
+    },
+    setViewportTransformSpace(space: TransformSpace) {
+      if (!isTransformSpace(space)) {
+        return
+      }
+      this.setViewportSettings({ transformSpace: space })
+    },
+    toggleViewportTransformSpace() {
+      const stored = this.viewportSettings.transformSpace
+      const primaryId = this.selectedNodeId ?? null
+      const editableIds = (Array.isArray(this.selectedNodeIds) ? this.selectedNodeIds : [])
+        .filter((id) => !!id && !this.isNodeSelectionLocked(id))
+      if (primaryId && !this.isNodeSelectionLocked(primaryId) && !editableIds.includes(primaryId)) {
+        editableIds.push(primaryId)
+      }
+      // Mirror the viewport: a selected child of a selected parent counts as single selection.
+      const parentMap = buildParentIndex(this.nodes, null, new Map<string, string | null>())
+      const isMultiSelection = filterTopLevelSelection(editableIds, parentMap).length > 1
+      const effective = resolveEffectiveTransformSpace(stored, this.activeTool, isMultiSelection)
+      this.setViewportTransformSpace(effective === 'world' ? 'local' : 'world')
     },
     setShadowsEnabled(enabled: boolean) {
       const next = normalizeShadowsEnabledInput(enabled)

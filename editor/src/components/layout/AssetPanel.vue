@@ -855,6 +855,8 @@ async function ensureAssetCached(asset: ProjectAsset) {
 const MODEL_ASSET_TYPES = new Set<ProjectAsset['type']>(['model', 'mesh', 'lod', 'dice'])
 const MATERIAL_ASSET_TYPES = new Set<ProjectAsset['type']>(['material'])
 const TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture', 'image'])
+/** Texture-like assets whose deletion resets node material texture slots. */
+const DELETED_TEXTURE_ASSET_TYPES = new Set<ProjectAsset['type']>(['texture', 'image', 'hdri'])
 
 const selectedSceneNode = computed<SceneNode | null>(() => findSceneNodeById(sceneStore.nodes, selectedNodeId.value))
 
@@ -2111,7 +2113,7 @@ async function renameDirectoryById(directoryId: string, name: string): Promise<v
 
 async function deleteDirectoryById(directoryId: string): Promise<void> {
   if (isWritableLocalDirectoryId(directoryId)) {
-    const result = sceneStore.deleteAssetDirectory(directoryId)
+    const result = await sceneStore.deleteAssetDirectory(directoryId)
     if (result.removedAssetIds.length) {
       selectedAssetIds.value = selectedAssetIds.value.filter((id) => !result.removedAssetIds.includes(id))
     }
@@ -3513,12 +3515,18 @@ const deletionSummary = computed(() => {
     ? `Are you sure you want to delete the selected assets ${names}?`
     : `Are you sure you want to delete asset ${names}?`
   const hasMaterial = pendingDeleteAssets.value.some((asset) => asset.type === 'material')
-  const hasNonMaterial = pendingDeleteAssets.value.some((asset) => asset.type !== 'material')
+  const hasTexture = pendingDeleteAssets.value.some((asset) => DELETED_TEXTURE_ASSET_TYPES.has(asset.type))
+  const hasOtherAsset = pendingDeleteAssets.value.some(
+    (asset) => asset.type !== 'material' && !DELETED_TEXTURE_ASSET_TYPES.has(asset.type),
+  )
   const warningParts: string[] = []
   if (hasMaterial) {
     warningParts.push('reassign any objects using the material back to the default material')
   }
-  if (hasNonMaterial) {
+  if (hasTexture) {
+    warningParts.push('reset the node material texture slots that reference it in the scene')
+  }
+  if (hasOtherAsset) {
     warningParts.push('remove the asset, its placeholders, and all objects referencing it in the scene')
   }
   const warning = warningParts.length

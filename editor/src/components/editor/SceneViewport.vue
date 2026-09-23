@@ -86,6 +86,7 @@ import {
   isLightweightImportSubtreeNode,
   isExpandedImportedModelRoot,
 } from '@schema/core'
+import { resolveEffectiveTransformSpace } from '@/utils/transformSpace'
 import {
   buildRegionDynamicMeshFromLocalVertices,
   disposeSkyCubeTexture,
@@ -24165,8 +24166,54 @@ function applyTransformSpaceForSelection(tool: EditorTool, primaryId: string | n
   }
   const ids = collectTopLevelUnlockedSelectionIds(primaryId)
   const isMulti = ids.length > 1
-  const nextSpace = isMulti ? 'world' : (tool === 'rotate' ? 'world' : 'local')
+  const nextSpace = resolveEffectiveTransformSpace(
+    sceneStore.viewportSettings.transformSpace,
+    tool,
+    isMulti,
+  )
   transformControls.setSpace(nextSpace)
+}
+
+/** Gizmo orientation actually used for the current tool/selection. */
+const effectiveTransformSpace = computed<'world' | 'local'>(() => {
+  const primaryId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+  const isMulti = collectTopLevelUnlockedSelectionIds(primaryId).length > 1
+  return resolveEffectiveTransformSpace(
+    sceneStore.viewportSettings.transformSpace,
+    props.activeTool,
+    isMulti,
+  )
+})
+
+const transformSpaceLocked = computed(() => sceneStore.viewportSettings.transformSpace !== 'auto')
+
+const transformSpaceButtonIcon = computed(() => (
+  effectiveTransformSpace.value === 'world' ? 'mdi-earth' : 'mdi-cube-outline'
+))
+
+const transformSpaceButtonTitle = computed(() => {
+  const parts = [effectiveTransformSpace.value === 'world'
+    ? '世界坐标系（沿世界轴调整位姿）'
+    : '本地坐标系（沿对象自身轴调整位姿）']
+  if (transformSpaceLocked.value) {
+    parts.push('已固定')
+  } else {
+    parts.push('自动')
+  }
+  parts.push(effectiveTransformSpace.value === 'world' ? '点击切换为本地坐标系' : '点击切换为世界坐标系')
+  if (props.activeTool === 'scale') {
+    parts.push('缩放始终使用本地轴')
+  }
+  parts.push('右键恢复自动')
+  return parts.join(' · ')
+})
+
+function toggleTransformSpace() {
+  sceneStore.toggleViewportTransformSpace()
+}
+
+function resetTransformSpaceToAuto() {
+  sceneStore.setViewportTransformSpace('auto')
 }
 
 function collectTopLevelUnlockedSelectionIds(primaryId: string | null): string[] {
@@ -25012,6 +25059,19 @@ watch(
   }
 )
 
+watch(
+  () => sceneStore.viewportSettings.transformSpace,
+  () => {
+    // Re-orient the gizmo immediately; no reselect required.
+    if (!transformControls || transformControls.dragging) {
+      return
+    }
+    const selectedId = sceneStore.selectedNodeId ?? props.selectedNodeId ?? null
+    applyTransformSpaceForSelection(props.activeTool, selectedId)
+    transformControls.getHelper().updateMatrixWorld(true)
+  }
+)
+
 watch(activeBuildTool, (tool, previous) => {
   handleGroundEditorBuildToolChange(tool)
   clearBuildToolVertexSnap()
@@ -25470,6 +25530,10 @@ defineExpose({
               <span class="camera-status-hud__hint-text">Q 选中 · W 移动 · E 旋转 · R 缩放</span>
             </div>
             <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">坐标</span>
+              <span class="camera-status-hud__hint-text">左下角按钮切换 世界 / 本地 坐标系（缩放始终使用本地轴，右键恢复自动）</span>
+            </div>
+            <div class="camera-status-hud__hint-row">
               <span class="camera-status-hud__hint-label">视角</span>
               <span class="camera-status-hud__hint-text">方向键平移 · F 聚焦 · Shift+F 聚焦可见 · Alt+1..6 视角 · Alt+3 顶视图</span>
             </div>
@@ -25569,6 +25633,17 @@ defineExpose({
               </div>
             </v-list>
           </v-menu>
+          <v-btn
+            :icon="transformSpaceButtonIcon"
+            density="compact"
+            size="x-small"
+            variant="text"
+            class="camera-status-hud__icon-btn"
+            :class="{ 'camera-status-hud__icon-btn--active': transformSpaceLocked }"
+            :title="transformSpaceButtonTitle"
+            @click="toggleTransformSpace"
+            @contextmenu.prevent.stop="resetTransformSpaceToAuto"
+          />
           </div>
           <span class="camera-status-hud__sep" aria-hidden="true" />
           <span class="camera-status-hud__meta-label">缩放</span>
@@ -26122,6 +26197,14 @@ defineExpose({
   min-width: 24px !important;
   width: 24px !important;
   padding: 0 !important;
+}
+
+.camera-status-hud__icon-btn--active {
+  color: #4dd0e1 !important;
+}
+
+.camera-status-hud__icon-btn--active:hover {
+  color: #7be0ec !important;
 }
 
 .camera-status-hud__meta-label {
