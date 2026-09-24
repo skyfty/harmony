@@ -8,7 +8,8 @@
     "dev": "vite --open \"/#/editor\"",
     "bootstrap": "node ../scripts/bootstrap.mjs editor",
     "build": "pnpm run bootstrap && vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "enginewwws": {
     "pnpm": ">=10.0.0"
@@ -61,6 +62,7 @@
     "utility-types": "^3.11.0",
     "vite": "^7.1.7",
     "vite-plugin-vuetify": "^2.1.2",
+    "vitest": "^3.2.4",
     "vue-tsc": "^3.1.0"
   }
 }

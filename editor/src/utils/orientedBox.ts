@@ -12,6 +12,13 @@ export type OrientedBoxFitOptions = {
   perMeshSample?: number
   minHalfSize?: number
   eigenTolerance?: number
+  /**
+   * Extra transform applied to every sampled point after it has been expressed in the
+   * object's own local frame. Callers pass the collider frame matrix (host frame plus the
+   * host world scale) so the fit is performed in the space the collider actually lives in,
+   * which is what makes a rotated, non-uniformly scaled node produce a hugging box.
+   */
+  frameMatrix?: THREE.Matrix4 | null
 }
 
 const DEFAULT_MAX_POINTS = 4096
@@ -24,6 +31,7 @@ function collectLocalMeshPoints(
   object: THREE.Object3D,
   maxPoints: number,
   perMeshSample: number,
+  frameMatrix?: THREE.Matrix4 | null,
 ): THREE.Vector3[] {
   object.updateMatrixWorld(true)
   const inverseRoot = new THREE.Matrix4().copy(object.matrixWorld).invert()
@@ -49,6 +57,9 @@ function collectLocalMeshPoints(
     }
     const stride = Math.max(1, Math.floor(position.count / perMeshSample))
     localMatrix.copy(inverseRoot).multiply(mesh.matrixWorld)
+    if (frameMatrix) {
+      localMatrix.premultiply(frameMatrix)
+    }
     for (let index = 0; index < position.count && points.length < maxPoints; index += stride) {
       scratch.fromBufferAttribute(position, index).applyMatrix4(localMatrix)
       if (Number.isFinite(scratch.x) && Number.isFinite(scratch.y) && Number.isFinite(scratch.z)) {
@@ -191,7 +202,7 @@ export function computeOrientedBoxFromObject(
   const perMeshSample = Math.max(8, Math.trunc(options.perMeshSample ?? DEFAULT_PER_MESH_SAMPLE))
   const minHalfSize = Math.max(1e-6, options.minHalfSize ?? DEFAULT_MIN_HALF_SIZE)
   const eigenTolerance = Math.max(1e-12, options.eigenTolerance ?? DEFAULT_EIGEN_TOLERANCE)
-  const points = collectLocalMeshPoints(object, maxPoints, perMeshSample)
+  const points = collectLocalMeshPoints(object, maxPoints, perMeshSample, options.frameMatrix)
   if (points.length < 4) {
     return null
   }

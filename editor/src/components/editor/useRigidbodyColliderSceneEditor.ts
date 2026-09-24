@@ -45,6 +45,7 @@ import {
   type ConvertedEditableColliderShape,
   type EditableColliderShape,
 } from '@/utils/rigidbodyColliderEdit'
+import { composeColliderFrameMatrix } from '@/utils/rigidbodyCollider'
 
 export type ColliderTransformMode = 'translate' | 'rotate' | 'scale'
 
@@ -67,14 +68,6 @@ const COLLIDER_PREVIEW_NAME = '__HarmonyRigidbodyColliderPreview'
 function normalizeScaleComponent(value: unknown): number {
   const numeric = typeof value === 'number' && Number.isFinite(value) ? Math.abs(value) : 1
   return Math.max(1e-4, numeric || 1)
-}
-
-function resolveTransformScale(transform: SceneNodeWorldTransform | null | undefined): THREE.Vector3 {
-  return new THREE.Vector3(
-    normalizeScaleComponent(transform?.scale.x),
-    normalizeScaleComponent(transform?.scale.y),
-    normalizeScaleComponent(transform?.scale.z),
-  )
 }
 
 export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneEditorOptions) {
@@ -144,6 +137,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
   let buildToken = 0
   let convexConfigRegenerateTimer: number | null = null
   const activeScale = new THREE.Vector3(1, 1, 1)
+  const activeFrameMatrix = new THREE.Matrix4()
 
   function replaceConvexGeometry(next: THREE.BufferGeometry | null): void {
     if (convexGeometry && convexGeometry !== previewMesh?.geometry) {
@@ -193,6 +187,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     activeComponentId = null
     activeMetadata = undefined
     activeScale.set(1, 1, 1)
+    activeFrameMatrix.identity()
     ready.value = false
   }
 
@@ -523,7 +518,11 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     if (!object) {
       return null
     }
-    return buildDefaultColliderShape({ kind, samplingObject: object, scale: activeScale })
+    return buildDefaultColliderShape({
+      kind,
+      samplingObject: object,
+      frameMatrix: activeFrameMatrix,
+    })
   }
 
   async function prepareShape(kind: ColliderShapeKind, forceRegenerate = false): Promise<void> {
@@ -609,17 +608,18 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
     const worldTransformMap = buildSceneNodeWorldTransformMap(nodes)
     const hostTransform = worldTransformMap.get(node.id) ?? null
     const sourceTransform = worldTransformMap.get(resolvedSamplingNode.id) ?? hostTransform
-    let scale: THREE.Vector3
-    if (hostTransform) {
-      scale = resolveTransformScale(hostTransform)
-    } else {
-      const fallback = resolveColliderScaleFactors(node)
-      scale = new THREE.Vector3(
-        normalizeScaleComponent(fallback.x),
-        normalizeScaleComponent(fallback.y),
-        normalizeScaleComponent(fallback.z),
-      )
-    }
+    // Auto-fit measures geometry in the collider frame (host frame plus host world scale), so the
+    // box hugs the model even when a non-uniform node scale shears it via the asset's own rotations.
+    const { frameMatrix, storageScale } = composeColliderFrameMatrix({
+      hostTransform,
+      sourceTransform,
+      fallbackHostScale: resolveColliderScaleFactors(node),
+    })
+    const scale = new THREE.Vector3(
+      normalizeScaleComponent(storageScale.x),
+      normalizeScaleComponent(storageScale.y),
+      normalizeScaleComponent(storageScale.z),
+    )
 
     frame = new THREE.Group()
     frame.name = COLLIDER_FRAME_NAME
@@ -657,6 +657,7 @@ export function useRigidbodyColliderSceneEditor(options: RigidbodyColliderSceneE
       clampedProps.convexDecompositionConfig,
     )
     activeScale.copy(scale)
+    activeFrameMatrix.copy(frameMatrix)
     nodeLabel.value = target.name ?? node.name ?? 'Current Node'
 
     const desiredKind = normalizeColliderKind(component.props.colliderType)

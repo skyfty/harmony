@@ -19,6 +19,7 @@ import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
 import {
+  composeColliderFrameMatrix,
   resolveNodeScaleFactors,
   buildBoxShapeFromObject,
   buildSphereShapeFromObject,
@@ -743,13 +744,15 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
     if (!samplingObject) {
       continue
     }
-    const nodeScale = hostWorldTransform
-      ? {
-          x: Math.max(1e-4, Math.abs(hostWorldTransform.scale.x) || 1),
-          y: Math.max(1e-4, Math.abs(hostWorldTransform.scale.y) || 1),
-          z: Math.max(1e-4, Math.abs(hostWorldTransform.scale.z) || 1),
-        }
-      : resolveNodeScaleFactors(entry.node)
+    // Auto-fit and the exported metadata share this frame, so the shape generated here is exactly
+    // the shape the Collider Editor shows for the same node (rotation/scale of the node and of a
+    // `targetNodeId` source node included).
+    const { frameMatrix, storageScale } = composeColliderFrameMatrix({
+      hostTransform: hostWorldTransform,
+      sourceTransform: sourceWorldTransform,
+      fallbackHostScale: resolveNodeScaleFactors(entry.node),
+    })
+    const nodeScale = storageScale
 
     let shape: RigidbodyPhysicsShape | null = null
 
@@ -773,22 +776,10 @@ async function applyRigidbodyMetadata(nodes: SceneNode[], candidates: RigidbodyE
       return built.shape
     }
 
-    const buildBox = async () => {
-      const shapeResult = buildBoxShapeFromObject(samplingObject, nodeScale)
-      return shapeResult
-    }
-    const buildSphere = async () => {
-      const shapeResult = buildSphereShapeFromObject(samplingObject, nodeScale)
-      return shapeResult
-    }
-    const buildCylinder = async () => {
-      const shapeResult = buildCylinderShapeFromObject(samplingObject, nodeScale)
-      return shapeResult
-    }
-    const buildCapsule = async () => {
-      const shapeResult = buildCapsuleShapeFromObject(samplingObject, nodeScale)
-      return shapeResult
-    }
+    const buildBox = async () => buildBoxShapeFromObject(samplingObject, { frameMatrix, storageScale })
+    const buildSphere = async () => buildSphereShapeFromObject(samplingObject, { frameMatrix, storageScale })
+    const buildCylinder = async () => buildCylinderShapeFromObject(samplingObject, { frameMatrix, storageScale })
+    const buildCapsule = async () => buildCapsuleShapeFromObject(samplingObject, { frameMatrix, storageScale })
     const rigidbodyProps = clampRigidbodyComponentProps(entry.component.props)
     const builderPriority: Record<RigidbodyColliderType, Array<() => Promise<RigidbodyPhysicsShape | null>>> = {
       convex: [buildConvex, buildBox, buildSphere, buildCylinder],

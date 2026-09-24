@@ -7,11 +7,12 @@ import {
 } from '@schema/components'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import {
-  computeColliderLocalBoundingBox,
+  buildStoredShapeFromFrameFit,
+  fitColliderShapeInFrame,
   resolveNodeScaleFactors,
+  type ColliderFrameFitShape,
   type ColliderScaleFactors,
 } from '@/utils/rigidbodyCollider'
-import { computeOrientedBoxFromObject } from './orientedBox'
 
 export type ColliderShapeKind = 'box' | 'sphere' | 'capsule' | 'convex'
 
@@ -34,7 +35,6 @@ export const COLLIDER_SHAPE_OPTIONS: Array<{ label: string; value: ColliderShape
 ]
 
 const COLLIDER_MIN_SIZE = 0.05
-const COLLIDER_DEFAULT_MIN_SIZE = 0.25
 
 export function normalizeColliderKind(type: string | null | undefined): ColliderShapeKind {
   if (type === 'box' || type === 'sphere' || type === 'capsule' || type === 'convex') {
@@ -264,65 +264,37 @@ export function resolveColliderGroupRotationTuple(colliderGroup: THREE.Object3D)
   return [colliderGroup.rotation.x, colliderGroup.rotation.y, colliderGroup.rotation.z]
 }
 
+/**
+ * Default (auto-fit) shape for the viewport overlay.
+ *
+ * The fit happens in the collider frame: `frameMatrix` maps the sampled geometry into the host
+ * node's frame and bakes in the host world scale. That keeps the drawn box hugging a rotated,
+ * non-uniformly scaled model instead of stretching the fitted dimensions along the node's local
+ * axes (which only matches when the model is axis aligned or the scale is uniform).
+ */
 export function buildDefaultColliderShape(params: {
   kind: ColliderShapeKind
   samplingObject: THREE.Object3D
-  scale: THREE.Vector3
+  frameMatrix?: THREE.Matrix4 | null
 }): EditableColliderShape | null {
-  const { kind, samplingObject, scale } = params
+  const { kind, samplingObject } = params
   if (kind === 'convex') {
     return null
   }
   samplingObject.updateMatrixWorld(true)
-  // The sampling object carries the node world transform on its root, mirroring the
-  // export pipeline. Shape data lives in the host-local (pre-scale) frame, so measure
-  // bounds in that frame and map them into the collider overlay's world-scaled space.
-  const localBounds = computeColliderLocalBoundingBox(samplingObject)
-  if (!localBounds || localBounds.isEmpty()) {
+  const fit = fitColliderShapeInFrame({
+    kind,
+    object: samplingObject,
+    frameMatrix: params.frameMatrix ?? null,
+  })
+  if (!fit) {
     return null
   }
-  const size = localBounds.getSize(new THREE.Vector3())
-  const center = localBounds.getCenter(new THREE.Vector3()).multiply(scale)
-
-  if (kind === 'box') {
-    const oriented = computeOrientedBoxFromObject(samplingObject)
-    if (oriented) {
-      return {
-        kind,
-        dimensions: oriented.dimensions.clone().multiply(scale),
-        offset: oriented.center.clone().multiply(scale),
-        rotation: oriented.rotation.clone(),
-      }
-    }
-    return {
-      kind,
-      dimensions: new THREE.Vector3(
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.x * scale.x || COLLIDER_DEFAULT_MIN_SIZE),
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.y * scale.y || COLLIDER_DEFAULT_MIN_SIZE),
-        Math.max(COLLIDER_DEFAULT_MIN_SIZE, size.z * scale.z || COLLIDER_DEFAULT_MIN_SIZE),
-      ),
-      offset: center,
-      rotation: new THREE.Euler(),
-    }
-  }
-  if (kind === 'sphere') {
-    const dominant = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z)) || 1
-    const diameter = Math.max(COLLIDER_DEFAULT_MIN_SIZE, Math.max(size.x, size.y, size.z) * dominant)
-    return {
-      kind,
-      dimensions: new THREE.Vector3(diameter, diameter, diameter),
-      offset: center,
-      rotation: new THREE.Euler(),
-    }
-  }
-  const lateral = Math.max(Math.abs(scale.x), Math.abs(scale.z)) || 1
-  const diameter = Math.max(COLLIDER_DEFAULT_MIN_SIZE, Math.max(size.x, size.z) * lateral)
-  const height = Math.max(diameter, (size.y || diameter) * Math.abs(scale.y || 1))
   return {
-    kind: 'capsule',
-    dimensions: new THREE.Vector3(diameter, height, diameter),
-    offset: center,
-    rotation: new THREE.Euler(),
+    kind,
+    dimensions: fit.dimensions,
+    offset: fit.offset,
+    rotation: fit.rotation,
   }
 }
 
@@ -379,71 +351,43 @@ export function convertColliderMetadataShape(
   return null
 }
 
+/**
+ * Reads the edited overlay transform back as a collider-frame fit. The overlay group carries the
+ * full size in `scale` for box/sphere/capsule dimensions, except for capsules: their preview
+ * geometry is `CapsuleGeometry(0.5, 1)`, so only half of `scale.y` is the shape height.
+ */
+function readColliderGroupFitShape(
+  kind: ColliderShapeKind,
+  colliderGroup: THREE.Object3D,
+): ColliderFrameFitShape {
+  return {
+    dimensions: kind === 'capsule'
+      ? new THREE.Vector3(colliderGroup.scale.x, colliderGroup.scale.y * 2, colliderGroup.scale.z)
+      : colliderGroup.scale.clone(),
+    offset: colliderGroup.position.clone(),
+    rotation: colliderGroup.rotation.clone(),
+  }
+}
+
+/**
+ * Persists the edited overlay shape. Uses the very same converter as the export pipeline, so the
+ * shape the editor shows and the shape the exporter auto-generates stay identical.
+ */
 export function buildColliderMetadataPayload(params: {
   kind: ColliderShapeKind
   colliderGroup: THREE.Object3D
   scale: THREE.Vector3
 }): { shape: RigidbodyPhysicsShape } | null {
   const { kind, colliderGroup, scale } = params
-
-  if (kind === 'box') {
-    return {
-      shape: {
-        kind: 'box',
-        halfExtents: [
-          Math.max(1e-4, (colliderGroup.scale.x * 0.5) / scale.x),
-          Math.max(1e-4, (colliderGroup.scale.y * 0.5) / scale.y),
-          Math.max(1e-4, (colliderGroup.scale.z * 0.5) / scale.z),
-        ],
-        offset: [
-          colliderGroup.position.x / scale.x,
-          colliderGroup.position.y / scale.y,
-          colliderGroup.position.z / scale.z,
-        ],
-        rotation: resolveColliderGroupRotationTuple(colliderGroup),
-        applyScale: true,
-      },
-    }
+  if (kind === 'convex') {
+    return null
   }
-
-  if (kind === 'sphere') {
-    const radius = colliderGroup.scale.x * 0.5
-    const dominant = Math.max(scale.x, scale.y, scale.z)
-    return {
-      shape: {
-        kind: 'sphere',
-        radius: Math.max(1e-4, radius / dominant),
-        offset: [
-          colliderGroup.position.x / scale.x,
-          colliderGroup.position.y / scale.y,
-          colliderGroup.position.z / scale.z,
-        ],
-        rotation: resolveColliderGroupRotationTuple(colliderGroup),
-        applyScale: true,
-      },
-    }
-  }
-
-  if (kind === 'capsule') {
-    const radius = Math.max(colliderGroup.scale.x, colliderGroup.scale.z) * 0.5
-    const dominant = Math.max(scale.x, scale.z)
-    return {
-      shape: {
-        kind: 'capsule',
-        radius: Math.max(1e-4, radius / dominant),
-        height: Math.max(2 * radius / scale.y, (colliderGroup.scale.y * 2) / scale.y),
-        offset: [
-          colliderGroup.position.x / scale.x,
-          colliderGroup.position.y / scale.y,
-          colliderGroup.position.z / scale.z,
-        ],
-        rotation: resolveColliderGroupRotationTuple(colliderGroup),
-        applyScale: true,
-      },
-    }
-  }
-
-  return null
+  const shape = buildStoredShapeFromFrameFit({
+    kind,
+    fit: readColliderGroupFitShape(kind, colliderGroup),
+    storageScale: { x: scale.x, y: scale.y, z: scale.z } satisfies ColliderScaleFactors,
+  })
+  return shape ? { shape } : null
 }
 
 export function applyEditableColliderShape(
