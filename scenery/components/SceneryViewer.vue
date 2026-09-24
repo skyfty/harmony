@@ -286,8 +286,8 @@
             class="viewer-watch-photo-button viewer-watch-action-button"
             type="button"
             hover-class="none"
-            :disabled="watchSnapshotBusy"
-            :aria-label="watchSnapshotBusy ? '正在保存截图' : '拍照保存当前视野'"
+            :disabled="watchSnapshotActionDisabled"
+            :aria-label="watchSnapshotBusy ? '正在保存截图' : (watchTransitionBusy ? '正在切换拍摄视角' : '拍照保存当前视野')"
             data-control-skip="watch-leave"
             @tap.stop.prevent="handleWatchSnapshotTap"
           >
@@ -1761,6 +1761,13 @@ const SCENERY_FOG_HEADROOM_RATIO = 0.88;
 const SCENERY_FOG_MIN_DISTANCE = 0.001;
 const CAMERA_WATCH_DURATION = 2.0;
 const CAMERA_LEVEL_DURATION = 2.5;
+// Watch 拍照状态下允许的取景微调包络：围绕观察目标做小范围旋转与推拉。
+const WATCH_FRAMING_YAW_LIMIT = THREE.MathUtils.degToRad(35);
+const WATCH_FRAMING_PITCH_LIMIT = THREE.MathUtils.degToRad(20);
+const WATCH_FRAMING_MIN_DISTANCE_SCALE = 0.25;
+const WATCH_FRAMING_MAX_DISTANCE_SCALE = 3.25;
+// 滚轮一格的距离倍率（桌面/H5 预览用），最终仍会夹紧到上面的距离包络。
+const WATCH_FRAMING_WHEEL_DISTANCE_STEP = 1.05;
 const VEHICLE_DRIVE_INTRO_HOLD_SECONDS = 2.0;
 const VEHICLE_DRIVE_INTRO_BLEND_SECONDS = 1.2;
 const VEHICLE_DRIVE_INTRO_READY_TIMEOUT_MS = 3200;
@@ -3475,6 +3482,9 @@ const watchLeaveVisible = computed(() =>
 );
 const watchExclusiveUiActive = computed(() => watchLeaveVisible.value);
 const watchSnapshotBusy = ref(false);
+// Watch 进入/离开的过渡动画进行中，此时不允许拍照，避免保存过渡中间帧。
+const watchTransitionBusy = ref(false);
+const watchSnapshotActionDisabled = computed(() => watchSnapshotBusy.value || watchTransitionBusy.value);
 
 const vehicleDriveCameraRestoreState: VehicleDriveCameraRestoreState = {
   hasSnapshot: false,
@@ -3909,6 +3919,24 @@ function applyAutoTourCameraInputPolicy(): void {
   if (vehicleDriveActive.value) {
     return;
   }
+  const controls = renderContext?.controls ?? null;
+  if (isWatchTransitionTweenActive()) {
+    // Watch 进入/离开的过渡动画期间忽略手势，避免相机停在过渡中间位姿。
+    if (controls) {
+      controls.enabled = false;
+    }
+    return;
+  }
+  if (isWatchFramingAdjustmentActive()) {
+    // Watch 拍照状态下的取景微调：允许旋转与缩放，禁止平移，且不受 caging 完全锁死。
+    if (controls) {
+      controls.enabled = true;
+      controls.enableRotate = true;
+      controls.enablePan = false;
+      controls.enableZoom = true;
+    }
+    return;
+  }
   const anyActive = activeAutoTourNodeIds.size > 0;
   const shouldLock = anyActive && !autoTourPaused.value;
   const shouldRotateOnly = (anyActive && autoTourPaused.value) || (!anyActive && autoTourRotationOnlyHold.value);
@@ -3919,7 +3947,6 @@ function applyAutoTourCameraInputPolicy(): void {
   }
 
   setCameraCaging(false);
-  const controls = renderContext?.controls;
   if (controls) {
     controls.enabled = true;
     controls.enableRotate = true;
@@ -4740,7 +4767,10 @@ let lanternSwipeStartX: number | null = null;
 let lanternSwipeStartY: number | null = null;
 let lanternSwipeActive = false;
 
+type CameraWatchTweenPurpose = 'watch-enter' | 'watch-leave' | 'level';
+
 type CameraWatchTween = {
+  purpose: CameraWatchTweenPurpose;
   fromPosition: THREE.Vector3;
   toPosition: THREE.Vector3;
   fromQuaternion: THREE.Quaternion;
@@ -4778,6 +4808,43 @@ type CameraWatchTransitionPlan = {
 
 let activeCameraWatchTween: CameraWatchTween | null = null;
 let activeWatchTransitionPlan: CameraWatchTransitionPlan | null = null;
+
+// Watch 拍照状态的取景包络：以进入 watch 时的观察目标为轨道中心，限制旋转与距离。
+type WatchFramingEnvelope = {
+  target: THREE.Vector3;
+  /** 参考水平方向（单位向量，与相机 up 垂直），用于限制水平旋转角度。 */
+  referenceDirection: THREE.Vector3;
+  radius: number;
+  minRadius: number;
+  maxRadius: number;
+  minPhi: number;
+  maxPhi: number;
+  yawLimit: number;
+};
+
+type WatchFramingControlsConfig = {
+  enabled: boolean;
+  enableRotate: boolean;
+  enablePan: boolean;
+  enableZoom: boolean;
+  minPolarAngle: number;
+  maxPolarAngle: number;
+  minAzimuthAngle: number;
+  maxAzimuthAngle: number;
+  minDistance: number;
+  maxDistance: number;
+};
+
+let watchFramingEnvelope: WatchFramingEnvelope | null = null;
+let watchFramingControlsConfig: WatchFramingControlsConfig | null = null;
+const watchFramingOffsetScratch = new THREE.Vector3();
+const watchFramingDirectionScratch = new THREE.Vector3();
+const watchFramingHorizontalScratch = new THREE.Vector3();
+const watchFramingUpScratch = new THREE.Vector3();
+const watchFramingCrossScratch = new THREE.Vector3();
+const watchFramingQuaternionScratch = new THREE.Quaternion();
+const watchFramingEnforcedOffsetScratch = new THREE.Vector3();
+
 type FrameDeltaMode = 'seconds' | 'milliseconds';
 let frameDeltaMode: FrameDeltaMode | null = null;
 
@@ -5195,7 +5262,7 @@ async function saveWatchSnapshotToMiniProgram(filePath: string): Promise<void> {
 }
 
 async function handleWatchSnapshotTap(): Promise<void> {
-  if (watchSnapshotBusy.value) {
+  if (watchSnapshotBusy.value || watchTransitionBusy.value) {
     return;
   }
 
@@ -16051,7 +16118,12 @@ function applyCameraWatchTween(deltaSeconds: number): void {
         controls.update();
       });
     });
-    lockControlsPitchToCurrent(controls, camera);
+    if (tween.purpose === 'watch-enter' && cameraViewState.mode === 'watching') {
+      // 进入 watch 后改用有限取景包络，而不是把俯仰彻底锁死，便于微调拍摄角度。
+      buildWatchFramingEnvelope();
+    } else {
+      lockControlsPitchToCurrent(controls, camera);
+    }
     const onComplete = tween.onComplete ?? null;
     activeCameraWatchTween = null;
     onComplete?.();
@@ -17089,6 +17161,252 @@ function isWatchCameraLocked(): boolean {
   return cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null;
 }
 
+function isWatchTransitionTweenActive(): boolean {
+  const tween = activeCameraWatchTween;
+  if (!tween) {
+    return false;
+  }
+  return tween.purpose === 'watch-enter' || tween.purpose === 'watch-leave';
+}
+
+function isWatchFramingAdjustmentActive(): boolean {
+  return watchFramingEnvelope !== null
+    && cameraViewState.mode === 'watching'
+    && activeWatchRestoreSnapshot.value !== null
+    && !activeCameraWatchTween
+    && !vehicleDriveActive.value
+    && activeAutoTourNodeIds.size === 0;
+}
+
+function captureWatchFramingControlsConfig(): void {
+  const controls = renderContext?.controls ?? null;
+  if (!controls) {
+    watchFramingControlsConfig = null;
+    return;
+  }
+  watchFramingControlsConfig = {
+    enabled: controls.enabled,
+    enableRotate: controls.enableRotate,
+    enablePan: controls.enablePan,
+    enableZoom: controls.enableZoom,
+    minPolarAngle: controls.minPolarAngle,
+    maxPolarAngle: controls.maxPolarAngle,
+    minAzimuthAngle: controls.minAzimuthAngle,
+    maxAzimuthAngle: controls.maxAzimuthAngle,
+    minDistance: controls.minDistance,
+    maxDistance: controls.maxDistance,
+  };
+}
+
+/**
+ * 以当前相机位姿建立 watch 拍照状态的取景包络：观察目标为轨道中心，
+ * 水平 ±35°、俯仰 ±20°、距离 ×0.75~×1.25。
+ */
+function buildWatchFramingEnvelope(): void {
+  const context = renderContext;
+  const controls = context?.controls ?? null;
+  if (!context || !controls) {
+    watchFramingEnvelope = null;
+    return;
+  }
+  const { camera } = context;
+  watchFramingOffsetScratch.copy(camera.position).sub(controls.target);
+  const radius = watchFramingOffsetScratch.length();
+  if (!Number.isFinite(radius) || radius < 1e-4) {
+    watchFramingEnvelope = null;
+    return;
+  }
+
+  if (camera.up.lengthSq() > 1e-8) {
+    watchFramingUpScratch.copy(camera.up).normalize();
+  } else {
+    watchFramingUpScratch.set(0, 1, 0);
+  }
+  watchFramingDirectionScratch.copy(watchFramingOffsetScratch).divideScalar(radius);
+  const phi = Math.acos(THREE.MathUtils.clamp(watchFramingDirectionScratch.dot(watchFramingUpScratch), -1, 1));
+
+  watchFramingHorizontalScratch
+    .copy(watchFramingOffsetScratch)
+    .addScaledVector(watchFramingUpScratch, -watchFramingOffsetScratch.dot(watchFramingUpScratch));
+  if (watchFramingHorizontalScratch.lengthSq() < 1e-8) {
+    // 正对下方/上方观察时水平分量退化，取任意与 up 垂直的方向作为参考。
+    watchFramingHorizontalScratch.set(1, 0, 0).addScaledVector(
+      watchFramingUpScratch,
+      -watchFramingUpScratch.x,
+    );
+    if (watchFramingHorizontalScratch.lengthSq() < 1e-8) {
+      watchFramingHorizontalScratch.set(0, 0, 1);
+    }
+  }
+  watchFramingHorizontalScratch.normalize();
+
+  const envelope: WatchFramingEnvelope = {
+    target: controls.target.clone(),
+    referenceDirection: watchFramingHorizontalScratch.clone(),
+    radius,
+    minRadius: radius * WATCH_FRAMING_MIN_DISTANCE_SCALE,
+    maxRadius: radius * WATCH_FRAMING_MAX_DISTANCE_SCALE,
+    minPhi: Math.max(1e-4, phi - WATCH_FRAMING_PITCH_LIMIT),
+    maxPhi: Math.min(Math.PI - 1e-4, phi + WATCH_FRAMING_PITCH_LIMIT),
+    yawLimit: WATCH_FRAMING_YAW_LIMIT,
+  };
+  watchFramingEnvelope = envelope;
+
+  // 正常进入 watch 时配置已在过渡动画之前保存；这里兜底处理没有过渡动画的路径。
+  if (!watchFramingControlsConfig) {
+    captureWatchFramingControlsConfig();
+  }
+  controls.minPolarAngle = envelope.minPhi;
+  controls.maxPolarAngle = envelope.maxPhi;
+  controls.minDistance = envelope.minRadius;
+  controls.maxDistance = envelope.maxRadius;
+  controls.enableRotate = true;
+  controls.enableZoom = true;
+  controls.enablePan = false;
+}
+
+/** watch 状态若没有包络（例如从场景快照恢复），用当前位姿补建一次，保证手势微调始终可用。 */
+function maybeInitializeWatchFramingEnvelope(): void {
+  if (watchFramingEnvelope || activeCameraWatchTween) {
+    return;
+  }
+  if (cameraViewState.mode !== 'watching' || activeWatchRestoreSnapshot.value === null) {
+    return;
+  }
+  if (vehicleDriveActive.value || activeAutoTourNodeIds.size > 0) {
+    return;
+  }
+  buildWatchFramingEnvelope();
+}
+
+/** 清空取景微调状态并恢复进入 watch 前的 controls 配置。 */
+function restoreWatchFramingAdjustState(): void {
+  const controls = renderContext?.controls ?? null;
+  const config = watchFramingControlsConfig;
+  watchFramingEnvelope = null;
+  watchFramingControlsConfig = null;
+  watchTransitionBusy.value = false;
+  if (!controls || !config) {
+    return;
+  }
+  controls.minPolarAngle = config.minPolarAngle;
+  controls.maxPolarAngle = config.maxPolarAngle;
+  controls.minAzimuthAngle = config.minAzimuthAngle;
+  controls.maxAzimuthAngle = config.maxAzimuthAngle;
+  controls.minDistance = config.minDistance;
+  controls.maxDistance = config.maxDistance;
+  controls.enableRotate = config.enableRotate;
+  controls.enableZoom = config.enableZoom;
+  controls.enablePan = config.enablePan;
+  controls.enabled = config.enabled && !isCameraCaged.value;
+}
+
+/** 拖拽过程中若有别的代码改写了 controls 限制或相机位姿，这里把取景拉回包络内。 */
+function enforceWatchFramingEnvelope(): void {
+  const envelope = watchFramingEnvelope;
+  const context = renderContext;
+  if (!envelope || !context) {
+    return;
+  }
+  const { camera, controls } = context;
+  const targetDrifted = controls.target.distanceToSquared(envelope.target) > 1e-12;
+  if (camera.up.lengthSq() > 1e-8) {
+    watchFramingUpScratch.copy(camera.up).normalize();
+  } else {
+    watchFramingUpScratch.set(0, 1, 0);
+  }
+  watchFramingOffsetScratch.copy(camera.position).sub(envelope.target);
+  const radius = watchFramingOffsetScratch.length();
+  if (!Number.isFinite(radius) || radius < 1e-4) {
+    return;
+  }
+  watchFramingDirectionScratch.copy(watchFramingOffsetScratch).divideScalar(radius);
+
+  const clampedRadius = THREE.MathUtils.clamp(radius, envelope.minRadius, envelope.maxRadius);
+  const phi = Math.acos(THREE.MathUtils.clamp(watchFramingDirectionScratch.dot(watchFramingUpScratch), -1, 1));
+  const clampedPhi = THREE.MathUtils.clamp(phi, envelope.minPhi, envelope.maxPhi);
+
+  watchFramingHorizontalScratch
+    .copy(watchFramingDirectionScratch)
+    .addScaledVector(watchFramingUpScratch, -watchFramingDirectionScratch.dot(watchFramingUpScratch));
+  if (watchFramingHorizontalScratch.lengthSq() < 1e-8) {
+    watchFramingHorizontalScratch.copy(envelope.referenceDirection);
+  } else {
+    watchFramingHorizontalScratch.normalize();
+  }
+
+  const cosAngle = THREE.MathUtils.clamp(
+    watchFramingHorizontalScratch.dot(envelope.referenceDirection),
+    -1,
+    1,
+  );
+  const sinAngle = watchFramingCrossScratch
+    .crossVectors(envelope.referenceDirection, watchFramingHorizontalScratch)
+    .dot(watchFramingUpScratch);
+  const yawOffset = Math.atan2(sinAngle, cosAngle);
+  const clampedYawOffset = THREE.MathUtils.clamp(yawOffset, -envelope.yawLimit, envelope.yawLimit);
+  const yawDelta = clampedYawOffset - yawOffset;
+  const radiusChanged = Math.abs(clampedRadius - radius) > 1e-6;
+  const phiChanged = Math.abs(clampedPhi - phi) > 1e-6;
+
+  if (Math.abs(yawDelta) > 1e-6) {
+    watchFramingQuaternionScratch.setFromAxisAngle(watchFramingUpScratch, yawDelta);
+    watchFramingHorizontalScratch.applyQuaternion(watchFramingQuaternionScratch);
+  }
+
+  if (!radiusChanged && !phiChanged && Math.abs(yawDelta) <= 1e-6 && !targetDrifted) {
+    return;
+  }
+
+  watchFramingHorizontalScratch.normalize();
+  watchFramingEnforcedOffsetScratch
+    .copy(watchFramingUpScratch)
+    .multiplyScalar(Math.cos(clampedPhi))
+    .addScaledVector(watchFramingHorizontalScratch, Math.sin(clampedPhi))
+    .multiplyScalar(clampedRadius);
+
+  runWithProgrammaticCameraMutationAndAnchor(() => {
+    controls.target.copy(envelope.target);
+    camera.position.copy(envelope.target).add(watchFramingEnforcedOffsetScratch);
+    camera.lookAt(controls.target);
+  });
+}
+
+/** 滚轮在 watch 拍照状态下改为围绕观察目标的有限推拉。 */
+function dollyWatchFraming(direction: number): void {
+  const envelope = watchFramingEnvelope;
+  const context = renderContext;
+  if (!envelope || !context) {
+    return;
+  }
+  const { camera, controls } = context;
+  watchFramingOffsetScratch.copy(camera.position).sub(envelope.target);
+  const radius = watchFramingOffsetScratch.length();
+  if (!Number.isFinite(radius) || radius < 1e-4) {
+    return;
+  }
+  const scale = direction > 0 ? 1 / WATCH_FRAMING_WHEEL_DISTANCE_STEP : WATCH_FRAMING_WHEEL_DISTANCE_STEP;
+  const nextRadius = THREE.MathUtils.clamp(radius * scale, envelope.minRadius, envelope.maxRadius);
+  if (Math.abs(nextRadius - radius) < 1e-6) {
+    return;
+  }
+  watchFramingOffsetScratch.multiplyScalar(nextRadius / radius);
+  runWithProgrammaticCameraMutationAndAnchor(() => {
+    controls.target.copy(envelope.target);
+    camera.position.copy(envelope.target).add(watchFramingOffsetScratch);
+    camera.lookAt(controls.target);
+    controls.update();
+  });
+}
+
+/** 渲染循环里同步拍照按钮的禁用状态（仅在状态变化时写响应式引用）。 */
+function syncWatchTransitionBusyState(): void {
+  const busy = isWatchTransitionTweenActive();
+  if (watchTransitionBusy.value !== busy) {
+    watchTransitionBusy.value = busy;
+  }
+}
+
 function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
   if (activeWatchRestoreSnapshot.value && isRedundantWatchRequest(targetNodeId)) {
     return;
@@ -17097,6 +17415,9 @@ function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void 
   watchUiRestoreState.value = {
     purposeControlsVisible: purposeControlsVisible.value,
   };
+  // 必须在 watch 过渡动画之前保存，避免把过渡后的俯仰锁死值当成原始配置。
+  captureWatchFramingControlsConfig();
+  watchFramingEnvelope = null;
 }
 
 function clearActiveWatchState(): void {
@@ -17104,6 +17425,7 @@ function clearActiveWatchState(): void {
   activeWatchSource.value = null;
   watchUiRestoreState.value = null;
   activeWatchTransitionPlan = null;
+  restoreWatchFramingAdjustState();
 }
 
 function restoreWatchUiState(): void {
@@ -17134,6 +17456,7 @@ function startCameraWatchTween(params: {
   toQuaternion?: THREE.Quaternion | null;
   toTargetDistance?: number | null;
   duration: number;
+  purpose: CameraWatchTweenPurpose;
   onComplete?: (() => void) | null;
 }): void {
   const context = renderContext;
@@ -17146,6 +17469,7 @@ function startCameraWatchTween(params: {
     ? params.toQuaternion.clone()
     : resolveWatchTargetQuaternion(params.toPosition, params.toTarget, camera.quaternion);
   activeCameraWatchTween = {
+    purpose: params.purpose,
     fromPosition: camera.position.clone(),
     toPosition: params.toPosition.clone(),
     fromQuaternion: camera.quaternion.clone(),
@@ -17176,6 +17500,11 @@ function startCameraWatchTween(params: {
     toQuaternion: activeCameraWatchTween.toQuaternion.clone(),
     toTargetDistance: activeCameraWatchTween.toTargetDistance,
   };
+  if (params.purpose !== 'level') {
+    // Watch 过渡动画开始即锁住手势输入，避免拖动把相机停在过渡中间位姿。
+    controls.enabled = false;
+    watchTransitionBusy.value = true;
+  }
   markInstancedCullingDirty();
 }
 
@@ -17198,6 +17527,7 @@ function leaveActiveWatchView(): void {
         zoom: snapshot.camera.zoom,
       },
       duration: CAMERA_WATCH_DURATION,
+      purpose: 'watch-leave',
       onComplete: () => {
         applyViewControlSnapshot(snapshot);
         restoreWatchUiState();
@@ -17247,6 +17577,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
         zoom: pose.zoom,
       },
       duration: CAMERA_WATCH_DURATION,
+      purpose: 'watch-enter',
     });
     setCameraCaging(Boolean(caging));
     purposeActiveMode.value = 'watch';
@@ -17279,6 +17610,7 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
     toTarget: watchTarget,
     toProjection: captureCameraProjectionState(camera),
     duration: CAMERA_WATCH_DURATION,
+    purpose: 'watch-enter',
   });
 
   markInstancedCullingDirty();
@@ -17544,6 +17876,7 @@ function resetCameraToLevelView(): { success: boolean; message?: string } {
     toTarget: levelTarget,
     toProjection: captureCameraProjectionState(camera),
     duration: CAMERA_LEVEL_DURATION,
+    purpose: 'level',
   });
   markInstancedCullingDirty();
   return finishSuccess();
@@ -21550,14 +21883,22 @@ function handleWheelEvent(event: WheelEvent): void {
     return;
   }
   event.preventDefault?.();
-  if (isCameraCaged.value) {
-    return;
-  }
   const deltaY = event.deltaY || 0;
   if (!deltaY) {
     return;
   }
   const direction = deltaY < 0 ? 1 : -1;
+  if (isWatchFramingAdjustmentActive()) {
+    // Watch 拍照状态下滚轮改为围绕观察目标的有限推拉，避免平移把目标点带走。
+    const magnitude = Math.min(Math.abs(deltaY) / 120, 3) || 1;
+    for (let step = 0; step < magnitude; step += 1) {
+      dollyWatchFraming(direction);
+    }
+    return;
+  }
+  if (isCameraCaged.value) {
+    return;
+  }
   const magnitude = Math.min(Math.abs(deltaY) / 120, 3) || 1;
   runWithProgrammaticCameraMutationAndAnchor(() => {
     translateCamera(direction * WHEEL_MOVE_STEP * magnitude, 0);
@@ -21656,6 +21997,7 @@ function teardownRenderer() {
   cancelSceneRuntimeRefresh();
   resetLodPrefetchSpeedSample();
   activeCameraWatchTween = null;
+  restoreWatchFramingAdjustState();
   frameDeltaMode = null;
   controls.dispose();
   disposeEnvironmentResources();
@@ -21747,6 +22089,11 @@ async function ensureRendererContext(result: UseCanvasResult) {
 
   const handleControlsChange = () => {
     if (!renderContext || isProgrammaticCameraMutationActive() || suppressSelfYawRecenter) {
+      return;
+    }
+    // Watch 拍照状态的取景微调以观察目标为轨道中心：
+    // 这里不再把相机钉回原位、也不把 target 重置到前方固定距离，否则旋转与推拉都会被抵消。
+    if (isWatchFramingAdjustmentActive()) {
       return;
     }
     const { camera: contextCamera, controls: contextControls } = renderContext;
@@ -22324,11 +22671,16 @@ function startRenderLoop(
         if (activeCameraWatchTween && deltaSeconds > 0) {
           applyCameraWatchTween(deltaSeconds);
         } else {
+          maybeInitializeWatchFramingEnvelope();
           cameraRotationAnchor.copy(camera.position);
           if (!vehicleDriveActive.value) {
             controls.update();
           }
+          if (isWatchFramingAdjustmentActive()) {
+            enforceWatchFramingEnvelope();
+          }
         }
+        syncWatchTransitionBusyState();
 
         if (deltaSeconds > 0) {
           const watchCameraLocked = isWatchCameraLocked();
@@ -22583,6 +22935,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   cancelSceneRuntimeRefresh();
   resetLodPrefetchSpeedSample();
   activeCameraWatchTween = null;
+  restoreWatchFramingAdjustState();
   frameDeltaMode = null;
 
   disposeEnvironmentResources();
