@@ -20,6 +20,7 @@ import type {
   RuntimePrefabInitializationMode,
   RuntimePrefabPlacementOptions,
   WatchBehaviorParams,
+  WatchRestorePositionSource,
   ShowPurposeBehaviorButton,
   ShowPurposeBehaviorParams,
   TriggerBehaviorParams,
@@ -33,7 +34,7 @@ import type {
   RestoreControlNodeBehaviorParams,
   CouponBehaviorParams,
 } from '../core'
-import { normalizeControlNodeTransitionPreset } from '../core'
+import { normalizeControlNodeTransitionPreset, normalizeWatchRestorePositionSource } from '../core'
 import { behaviorMapToList, cloneBehaviorList, ensureBehaviorParams } from './definitions'
 
 export type BehaviorTriggerContext = {
@@ -177,6 +178,7 @@ export type BehaviorRuntimeEvent =
       behaviorId: string
       targetNodeId: string | null
       caging: boolean
+      restorePositionSource: WatchRestorePositionSource
       token: string
     }
   | {
@@ -651,6 +653,8 @@ function createMoveToEvent(state: BehaviorSequenceState, behavior: SceneBehavior
   const fallbackTarget = state.nodeId
   const candidate = typeof params?.targetNodeId === 'string' ? params.targetNodeId.trim() : ''
   const targetNodeId = candidate.length ? candidate : fallbackTarget
+  // 诊断日志：始终输出，便于和 Watch 的恢复位置流程对照排查。
+  console.log(`[WatchRestore] schema.moveToEvent behaviorId=${behavior.id} nodeId=${state.nodeId} targetNodeId=${targetNodeId} kinetics=${params?.kinetics === true}`)
   return {
     type: 'move-to',
     nodeId: state.nodeId,
@@ -776,6 +780,10 @@ function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
   })
   state.status = 'waiting'
   const params = behavior.script.params as WatchBehaviorParams
+  const targetNodeId = params.targetNodeId ?? state.nodeId
+  const restorePositionSource = normalizeWatchRestorePositionSource(params.restorePositionSource)
+  // 诊断日志：始终输出，便于确认场景里保存的 Watch 参数是否带有恢复位置选项。
+  console.log(`[WatchRestore] schema.watchEvent behaviorId=${behavior.id} nodeId=${state.nodeId} targetNodeId=${targetNodeId ?? '-'} caging=${params.caging === true} rawRestorePositionSource=${String(params.restorePositionSource)} resolvedRestorePositionSource=${restorePositionSource}`)
   return {
     type: 'watch-node',
     nodeId: state.nodeId,
@@ -783,8 +791,9 @@ function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
     sequenceId: state.id,
     behaviorSequenceId: state.behaviorSequenceId,
     behaviorId: behavior.id,
-    targetNodeId: params.targetNodeId ?? state.nodeId,
+    targetNodeId,
     caging: params.caging === true,
+    restorePositionSource,
     token,
   }
 }

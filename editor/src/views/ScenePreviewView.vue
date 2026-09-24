@@ -54,6 +54,13 @@ import {
 	resolveMoveToWorldForwardFromQuaternion,
 } from '@schema/behaviors/moveToRuntime'
 import {
+	clearWatchRestorePoseStore,
+	consumeWatchRestorePose,
+	createWatchRestorePoseStore,
+	recordWatchRestorePose,
+} from '@schema/behaviors/watchRestoreRuntime'
+import type { WatchRestorePositionSource } from '@schema/core'
+import {
 	GUIDE_ROUTE_COMPONENT_TYPE,
 	VIEW_POINT_COMPONENT_TYPE,
 	applyViewPointCameraProjection,
@@ -817,6 +824,8 @@ const cameraViewState = reactive<{ mode: CameraViewMode; watchTargetId: string |
 	watchTargetId: null,
 })
 const activeWatchRestoreSnapshot = ref<SceneViewControlSnapshot | null>(null)
+// How the controlled character pose is restored when leaving the watch state.
+const activeWatchRestorePositionSource = ref<WatchRestorePositionSource>('none')
 const watchLeaveVisible = computed(
 	() => cameraViewState.mode === 'watching' && activeWatchRestoreSnapshot.value !== null,
 )
@@ -3429,6 +3438,8 @@ const characterInputYawQuaternionScratch = new THREE.Quaternion()
 const characterControlYawForwardScratch = new THREE.Vector3()
 const characterNavigationControllerState = createCharacterNavigationControllerState(Math.PI)
 const moveToRuntimeSession = createMoveToRuntimeSession()
+// Poses captured before a Move To mutates its subject; consumed by Watch leave.
+const watchRestorePoseStore = createWatchRestorePoseStore()
 const PHYSICS_BRIDGE_CHARACTER_INPUT_EPSILON = 1e-4
 type PhysicsBridgeCharacterInputSnapshot = {
 	characterId: number
@@ -8414,7 +8425,7 @@ function resolveMoveToSubjectBridgeNodeId(subjectNodeId: string): string | null 
 
 function syncMoveToSubjectTargetToPhysicsBridge(
 	subjectNodeId: string,
-	targetPose: ReturnType<typeof buildMoveToTargetPose>,
+	targetPose: { position: THREE.Vector3; quaternion: THREE.Quaternion },
 ): void {
 	if (!physicsBridge || !physicsBridgeSceneLoaded) {
 		return
@@ -8494,46 +8505,60 @@ function applyMoveToSubjectTargetPose(
 		targetPose.quaternion,
 		subjectForwardAxis,
 	)
+	applyMoveToSubjectWorldPose(subjectNodeId, targetPose.position, characterTargetQuaternion)
+}
+
+/**
+ * Places a subject at an exact world pose without re-aligning the local forward
+ * axis. Used by paths that must restore a previously captured pose verbatim.
+ */
+function applyMoveToSubjectWorldPose(
+	subjectNodeId: string,
+	worldPosition: THREE.Vector3,
+	worldQuaternion: THREE.Quaternion,
+): void {
+	const binding = resolveMoveToSubjectBinding(subjectNodeId)
+	const bindingKind = binding?.bindingKind ?? 'none'
+	logWatchRestore(`worldPose.apply.begin nodeId=${subjectNodeId} bindingKind=${bindingKind} hasBody=${Boolean(binding?.body)} hasBindingObject=${Boolean(binding?.object)} pos=${formatWatchRestoreVec3(worldPosition)} quat=${formatWatchRestoreQuat(worldQuaternion)}`)
 	if (binding?.body) {
 		applyMoveToPhysicsBodyWorldPose({
 			body: binding.body,
-			worldPosition: targetPose.position,
-			worldQuaternion: characterTargetQuaternion,
+			worldPosition,
+			worldQuaternion,
 			orientationAdjustment: binding.orientationAdjustment,
 		})
 		if (binding.object) {
-			applyMoveToObjectWorldPose(binding.object, targetPose.position, characterTargetQuaternion)
+			applyMoveToObjectWorldPose(binding.object, worldPosition, worldQuaternion)
 		}
 		syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
-			position: targetPose.position,
-			forward: targetPose.forward,
-			up: targetPose.up,
-			quaternion: characterTargetQuaternion,
+			position: worldPosition,
+			quaternion: worldQuaternion,
 		})
 		if (bindingKind === 'character') {
-			syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion)
+			syncMoveToCharacterControllerYaw(subjectNodeId, worldQuaternion)
 		}
+		logWatchRestore(`worldPose.apply.done path=body nodeId=${subjectNodeId}`)
 		return
 	}
 	const object = resolveMoveToSubjectObject(subjectNodeId)
 	if (!object) {
+		logWatchRestore(`worldPose.apply.fail reason=no-subject-object nodeId=${subjectNodeId}`)
 		return
 	}
-	applyMoveToObjectWorldPose(object, targetPose.position, characterTargetQuaternion)
+	applyMoveToObjectWorldPose(object, worldPosition, worldQuaternion)
 	const localCharacter = nonPhysicsCharacterStates.get(subjectNodeId)
 	if (localCharacter) {
-		resetNonPhysicsCharacterState(localCharacter, targetPose.position, characterTargetQuaternion)
-		syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion)
+		resetNonPhysicsCharacterState(localCharacter, worldPosition, worldQuaternion)
+		syncMoveToCharacterControllerYaw(subjectNodeId, worldQuaternion)
 	}
 	syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
-		position: targetPose.position,
-		forward: targetPose.forward,
-		up: targetPose.up,
-		quaternion: characterTargetQuaternion,
+		position: worldPosition,
+		quaternion: worldQuaternion,
 	})
 	if (bindingKind === 'character') {
-		syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion)
+		syncMoveToCharacterControllerYaw(subjectNodeId, worldQuaternion)
 	}
+	logWatchRestore(`worldPose.apply.done path=object nodeId=${subjectNodeId}`)
 }
 
 function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
@@ -8547,6 +8572,121 @@ function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTa
 		mapControls.target.copy(placement.lookAt)
 		mapControls.update()
 	}
+}
+
+function formatWatchRestoreVec3(value: THREE.Vector3): string {
+	return `(${value.x.toFixed(3)},${value.y.toFixed(3)},${value.z.toFixed(3)})`
+}
+
+function formatWatchRestoreQuat(value: THREE.Quaternion): string {
+	return `(${value.x.toFixed(3)},${value.y.toFixed(3)},${value.z.toFixed(3)},${value.w.toFixed(3)})`
+}
+
+function formatWatchRestoreStoreKeys(): string {
+	const keys = Array.from(watchRestorePoseStore.snapshots.keys())
+	return keys.length ? keys.join('|') : '-'
+}
+
+/** Shared diagnostic logger (always on, single string for easy copying). */
+function logWatchRestore(message: string): void {
+	console.log(`[WatchRestore] ${message}`)
+}
+
+/**
+ * Captures the subject pose before a Move To mutates it. Watch can consume the
+ * snapshot when the viewer leaves the watch state.
+ */
+function captureMoveToSubjectRestorePose(
+	subjectType: ReturnType<typeof resolveMoveToSubjectType>,
+	subjectNodeId: string | null,
+): void {
+	logWatchRestore(`moveTo.capture.begin subjectType=${subjectType} subjectNodeId=${subjectNodeId ?? '-'} storeKeys=${formatWatchRestoreStoreKeys()}`)
+	if (subjectType === 'camera') {
+		const activeCamera = camera
+		if (!activeCamera) {
+			logWatchRestore('moveTo.capture.skip reason=camera-unavailable')
+			return
+		}
+		const recorded = recordWatchRestorePose(watchRestorePoseStore, {
+			subjectType,
+			subjectNodeId: null,
+			position: activeCamera.position,
+			quaternion: activeCamera.quaternion,
+		})
+		logWatchRestore(`moveTo.capture.done subjectType=camera recorded=${recorded} pos=${formatWatchRestoreVec3(activeCamera.position)} quat=${formatWatchRestoreQuat(activeCamera.quaternion)} storeKeys=${formatWatchRestoreStoreKeys()}`)
+		return
+	}
+	if (!subjectNodeId) {
+		logWatchRestore(`moveTo.capture.skip reason=no-subject-node subjectType=${subjectType}`)
+		return
+	}
+	const pose = getMoveToSubjectCurrentPose(subjectNodeId)
+	if (!pose) {
+		logWatchRestore(`moveTo.capture.skip reason=subject-pose-unavailable subjectNodeId=${subjectNodeId}`)
+		return
+	}
+	const recorded = recordWatchRestorePose(watchRestorePoseStore, {
+		subjectType,
+		subjectNodeId,
+		position: pose.position,
+		quaternion: pose.quaternion,
+	})
+	logWatchRestore(`moveTo.capture.done subjectType=${subjectType} subjectNodeId=${subjectNodeId} recorded=${recorded} pos=${formatWatchRestoreVec3(pose.position)} quat=${formatWatchRestoreQuat(pose.quaternion)} storeKeys=${formatWatchRestoreStoreKeys()}`)
+}
+
+/**
+ * Restores the controlled character pose configured by the active watch
+ * session. Only character snapshots are consumed, and the snapshot is dropped
+ * after use so a later leave cannot teleport the character again.
+ *
+ * `restorePositionSource` must be read before `clearActiveWatchState()`, which
+ * resets the recorded source back to 'none'.
+ */
+function restoreControlledSubjectPoseAfterWatch(
+	restorePositionSource: WatchRestorePositionSource,
+): void {
+	logWatchRestore(`leave.restore.begin source=${restorePositionSource} storeKeys=${formatWatchRestoreStoreKeys()}`)
+	if (restorePositionSource !== 'moveToPreviousPose') {
+		logWatchRestore(`leave.restore.skip reason=source-disabled source=${restorePositionSource}`)
+		return
+	}
+	if (vehicleDriveState.active) {
+		logWatchRestore(`leave.restore.skip reason=vehicle-drive-active vehicleNodeId=${vehicleDriveState.nodeId ?? '-'}`)
+		return
+	}
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (!controlledNodeId) {
+		logWatchRestore('leave.restore.skip reason=no-controlled-character')
+		return
+	}
+	const snapshot = consumeWatchRestorePose(watchRestorePoseStore, 'character', controlledNodeId)
+	if (!snapshot) {
+		logWatchRestore(`leave.restore.skip reason=no-snapshot controlledNodeId=${controlledNodeId} storeKeys=${formatWatchRestoreStoreKeys()}`)
+		return
+	}
+	logWatchRestore(`leave.restore.snapshot subjectType=${snapshot.subjectType} subjectNodeId=${snapshot.subjectNodeId ?? '-'} pos=${formatWatchRestoreVec3(snapshot.position)} quat=${formatWatchRestoreQuat(snapshot.quaternion)} controlledNodeId=${controlledNodeId}`)
+	const beforePose = getMoveToSubjectCurrentPose(controlledNodeId)
+	logWatchRestore(`leave.restore.pre nodeId=${controlledNodeId} pos=${beforePose ? formatWatchRestoreVec3(beforePose.position) : 'unavailable'} quat=${beforePose ? formatWatchRestoreQuat(beforePose.quaternion) : 'unavailable'}`)
+	applyMoveToSubjectWorldPose(controlledNodeId, snapshot.position, snapshot.quaternion)
+	// Land the follow camera on the restored pose in the same frame.
+	const followCameraUpdated = camera ? updateCharacterFollowCamera(0, camera, true) : false
+	const appliedPose = getMoveToSubjectCurrentPose(controlledNodeId)
+	logWatchRestore(`leave.restore.applied nodeId=${controlledNodeId} followCameraUpdated=${followCameraUpdated} cameraMode=${characterCameraMode.value} pos=${appliedPose ? formatWatchRestoreVec3(appliedPose.position) : 'unavailable'} quat=${appliedPose ? formatWatchRestoreQuat(appliedPose.quaternion) : 'unavailable'} storeKeys=${formatWatchRestoreStoreKeys()}`)
+	scheduleWatchRestorePoseVerify(controlledNodeId)
+}
+
+let watchRestoreVerifyTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Re-check the applied pose shortly after restore to catch physics pull-back. */
+function scheduleWatchRestorePoseVerify(controlledNodeId: string): void {
+	if (watchRestoreVerifyTimer !== null) {
+		window.clearTimeout(watchRestoreVerifyTimer)
+	}
+	watchRestoreVerifyTimer = window.setTimeout(() => {
+		watchRestoreVerifyTimer = null
+		const pose = getMoveToSubjectCurrentPose(controlledNodeId)
+		logWatchRestore(`leave.restore.verify nodeId=${controlledNodeId} pos=${pose ? formatWatchRestoreVec3(pose.position) : 'unavailable'} quat=${pose ? formatWatchRestoreQuat(pose.quaternion) : 'unavailable'}`)
+	}, 400)
 }
 
 function resetMoveToSubjectInputs(): void {
@@ -8705,6 +8845,8 @@ function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to
 		return
 	}
 	const resolvedSubjectNodeId = subjectNodeId ?? ''
+	// Capture the pre-move pose before any displacement is applied.
+	captureMoveToSubjectRestorePose(subjectType, subjectNodeId)
 	resetMoveToRuntimeSession(moveToRuntimeSession)
 	moveToRuntimeSession.active = true
 	moveToRuntimeSession.token = event.token
@@ -8845,9 +8987,11 @@ function resolveCameraTweenTarget(activeCamera: THREE.PerspectiveCamera): THREE.
 
 function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
 	if (activeWatchRestoreSnapshot.value && isCameraWatchRedundant(targetNodeId)) {
+		logWatchRestore(`watch.enter.redundant target=${targetNodeId ?? '-'} currentSource=${activeWatchRestorePositionSource.value}`)
 		return
 	}
 	activeWatchRestoreSnapshot.value = captureViewControlSnapshot()
+	logWatchRestore(`watch.enter.capture target=${targetNodeId ?? '-'} hasSnapshot=${activeWatchRestoreSnapshot.value !== null} prevSource=${activeWatchRestorePositionSource.value} storeKeys=${formatWatchRestoreStoreKeys()}`)
 	watchUiRestoreState.value = {
 		isDebugMenuOpen: isDebugMenuOpen.value,
 		isVolumeMenuOpen: isVolumeMenuOpen.value,
@@ -8855,7 +8999,9 @@ function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void 
 }
 
 function clearActiveWatchState(): void {
+	logWatchRestore(`watch.state.clear prevSource=${activeWatchRestorePositionSource.value} hadSnapshot=${activeWatchRestoreSnapshot.value !== null} storeKeys=${formatWatchRestoreStoreKeys()}`)
 	activeWatchRestoreSnapshot.value = null
+	activeWatchRestorePositionSource.value = 'none'
 	watchUiRestoreState.value = null
 }
 
@@ -8909,7 +9055,9 @@ function startCameraLookTween(params: {
 function leaveActiveWatchView(): void {
 	const snapshot = activeWatchRestoreSnapshot.value
 	const activeCamera = camera
+	logWatchRestore(`leave.click mode=${cameraViewState.mode} hasSnapshot=${snapshot !== null} hasCamera=${activeCamera !== null} source=${activeWatchRestorePositionSource.value} storeKeys=${formatWatchRestoreStoreKeys()}`)
 	if (!snapshot || !activeCamera) {
+		logWatchRestore(`leave.skip reason=${!snapshot ? 'no-snapshot' : 'no-camera'}`)
 		return
 	}
 	startCameraLookTween({
@@ -8925,9 +9073,13 @@ function leaveActiveWatchView(): void {
 		},
 		duration: CAMERA_WATCH_TWEEN_DURATION,
 		onComplete: () => {
+			logWatchRestore('leave.tween.complete')
+			// Read before clearActiveWatchState(): clearing resets the source to 'none'.
+			const restorePositionSource = activeWatchRestorePositionSource.value
 			applyViewControlSnapshot(snapshot)
 			restoreWatchUiState()
 			clearActiveWatchState()
+			restoreControlledSubjectPoseAfterWatch(restorePositionSource)
 			scenePreviewPerf.markInstancedCullingDirty()
 		},
 	})
@@ -8999,9 +9151,13 @@ function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watc
 	const targetId = event.targetNodeId ?? event.nodeId ?? null
 	const result = performWatchFocus(targetId, event.caging)
 	if (!result.success) {
+		logWatchRestore(`watch.event.failed target=${targetId ?? '-'} source=${event.restorePositionSource} message=${result.message ?? '-'}`)
 		resolveBehaviorToken(event.token, { type: 'fail', message: result.message })
 		return
 	}
+	// Remember the configured leave-restore source for this watch session.
+	activeWatchRestorePositionSource.value = event.restorePositionSource
+	logWatchRestore(`watch.event.ok target=${targetId ?? '-'} caging=${event.caging} source=${event.restorePositionSource} storeKeys=${formatWatchRestoreStoreKeys()}`)
 	resolveBehaviorToken(event.token, { type: 'continue' })
 }
 
@@ -11585,6 +11741,12 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
 	resetCharacterFollowCameraState()
+	clearWatchRestorePoseStore(watchRestorePoseStore)
+	logWatchRestore('store.clear reason=dispose-scene')
+	if (watchRestoreVerifyTimer !== null) {
+		window.clearTimeout(watchRestoreVerifyTimer)
+		watchRestoreVerifyTimer = null
+	}
 	characterAuthorityInput.moveX = 0
 	characterAuthorityInput.moveZ = 0
 	characterAuthorityInput.turn = 0

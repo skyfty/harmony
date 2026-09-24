@@ -447,6 +447,13 @@ import {
   resolveMoveToWorldForwardFromQuaternion,
 } from '@harmony/schema/behaviors/moveToRuntime';
 import {
+  clearWatchRestorePoseStore,
+  consumeWatchRestorePose,
+  createWatchRestorePoseStore,
+  recordWatchRestorePose,
+} from '@harmony/schema/behaviors/watchRestoreRuntime';
+import type { WatchRestorePositionSource } from '@harmony/schema/core';
+import {
   type PhysicsBackendPreference,
   type PhysicsBridge,
   type PhysicsContactEvent,
@@ -3363,6 +3370,8 @@ const purposeControlsVisible = computed(() => purposeControlEntries.value.length
 const purposeActiveMode = ref<'watch' | 'level'>('level');
 const activeWatchRestoreSnapshot = ref<SceneViewControlSnapshot | null>(null);
 const activeWatchSource = ref<'viewPoint' | 'target-look' | null>(null);
+// 离开拍照状态时用于恢复角色位姿的来源（当前仅支持 Move To 之前的位姿）。
+const activeWatchRestorePositionSource = ref<WatchRestorePositionSource>('none');
 type WatchUiRestoreState = {
   purposeControlsVisible: boolean;
 };
@@ -3569,6 +3578,8 @@ const characterKeyState = reactive({
 });
 let characterInputJumpLatch = false;
 const moveToRuntimeSession = createMoveToRuntimeSession();
+// Move To 执行前保存的主体位姿快照，供 Watch 的“恢复位置”选项消费。
+const watchRestorePoseStore = createWatchRestorePoseStore();
 let characterActionJumpReleaseTimer: ReturnType<typeof setTimeout> | null = null;
 let activeCharacterActionAnimationTimer: ReturnType<typeof setTimeout> | null = null;
 let activeCharacterActionAnimationToken: string | null = null;
@@ -16791,7 +16802,7 @@ function resolveMoveToSubjectBridgeNodeId(subjectNodeId: string): string | null 
 
 function syncMoveToSubjectTargetToPhysicsBridge(
   subjectNodeId: string,
-  targetPose: ReturnType<typeof buildMoveToTargetPose>,
+  targetPose: { position: THREE.Vector3; quaternion: THREE.Quaternion },
 ): void {
   if (!physicsBridge || !physicsBridgeSceneLoaded) {
     return;
@@ -16870,42 +16881,56 @@ function applyMoveToSubjectTargetPose(
     targetPose.quaternion,
     subjectForwardAxis,
   );
+  applyMoveToSubjectWorldPose(subjectNodeId, targetPose.position, characterTargetQuaternion);
+}
+
+/**
+ * 把主体精确放到给定的世界位姿：不做前向轴对齐，直接使用传入的四元数，
+ * 用于“恢复 Move To 之前的位姿”这类需要原样还原的路径。
+ */
+function applyMoveToSubjectWorldPose(
+  subjectNodeId: string,
+  worldPosition: THREE.Vector3,
+  worldQuaternion: THREE.Quaternion,
+): void {
+  const binding = resolveMoveToSubjectBinding(subjectNodeId);
+  const bindingKind = binding?.bindingKind ?? 'none';
+  logWatchRestore(`worldPose.apply.begin nodeId=${subjectNodeId} bindingKind=${bindingKind} hasBody=${Boolean(binding?.body)} hasBindingObject=${Boolean(binding?.object)} pos=${formatWatchRestoreVec3(worldPosition)} quat=${formatWatchRestoreQuat(worldQuaternion)}`);
   if (binding?.body) {
     applyMoveToPhysicsBodyWorldPose({
       body: binding.body,
-      worldPosition: targetPose.position,
-      worldQuaternion: characterTargetQuaternion,
+      worldPosition,
+      worldQuaternion,
       orientationAdjustment: binding.orientationAdjustment,
     });
     if (binding.object) {
-      applyMoveToObjectWorldPose(binding.object, targetPose.position, characterTargetQuaternion);
+      applyMoveToObjectWorldPose(binding.object, worldPosition, worldQuaternion);
     }
     syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
-      position: targetPose.position,
-      forward: targetPose.forward,
-      up: targetPose.up,
-      quaternion: characterTargetQuaternion,
+      position: worldPosition,
+      quaternion: worldQuaternion,
     });
     if (bindingKind === 'character') {
-      syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion);
+      syncMoveToCharacterControllerYaw(subjectNodeId, worldQuaternion);
     }
+    logWatchRestore(`worldPose.apply.done path=body nodeId=${subjectNodeId}`);
     return;
   }
   const object = resolveMoveToSubjectObject(subjectNodeId);
   if (!object) {
+    logWatchRestore(`worldPose.apply.fail reason=no-subject-object nodeId=${subjectNodeId}`);
     return;
   }
-  applyMoveToObjectWorldPose(object, targetPose.position, characterTargetQuaternion);
+  applyMoveToObjectWorldPose(object, worldPosition, worldQuaternion);
 
   syncMoveToSubjectTargetToPhysicsBridge(subjectNodeId, {
-    position: targetPose.position,
-    forward: targetPose.forward,
-    up: targetPose.up,
-    quaternion: characterTargetQuaternion,
+    position: worldPosition,
+    quaternion: worldQuaternion,
   });
   if (bindingKind === 'character') {
-    syncMoveToCharacterControllerYaw(subjectNodeId, characterTargetQuaternion);
+    syncMoveToCharacterControllerYaw(subjectNodeId, worldQuaternion);
   }
+  logWatchRestore(`worldPose.apply.done path=object nodeId=${subjectNodeId}`);
 }
 
 function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
@@ -16917,6 +16942,120 @@ function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTa
   context.camera.position.copy(placement.position);
   context.controls.target.copy(placement.lookAt);
   context.controls.update();
+}
+
+function formatWatchRestoreVec3(value: THREE.Vector3): string {
+  return `(${value.x.toFixed(3)},${value.y.toFixed(3)},${value.z.toFixed(3)})`;
+}
+
+function formatWatchRestoreQuat(value: THREE.Quaternion): string {
+  return `(${value.x.toFixed(3)},${value.y.toFixed(3)},${value.z.toFixed(3)},${value.w.toFixed(3)})`;
+}
+
+function formatWatchRestoreStoreKeys(): string {
+  const keys = Array.from(watchRestorePoseStore.snapshots.keys());
+  return keys.length ? keys.join('|') : '-';
+}
+
+/** 统一的诊断日志（始终输出，便于直接复制排查）。 */
+function logWatchRestore(message: string): void {
+  console.log(`[WatchRestore] ${message}`);
+}
+
+/**
+ * Move To 生效之前保存当前主体位姿。Watch 的“恢复位置”选项会在离开拍照
+ * 状态时读取该快照，把角色放回这里。
+ */
+function captureMoveToSubjectRestorePose(
+  subjectType: ReturnType<typeof resolveMoveToSubjectType>,
+  subjectNodeId: string | null,
+): void {
+  logWatchRestore(`moveTo.capture.begin subjectType=${subjectType} subjectNodeId=${subjectNodeId ?? '-'} storeKeys=${formatWatchRestoreStoreKeys()}`);
+  if (subjectType === 'camera') {
+    const camera = renderContext?.camera ?? null;
+    if (!camera) {
+      logWatchRestore('moveTo.capture.skip reason=camera-unavailable');
+      return;
+    }
+    const recorded = recordWatchRestorePose(watchRestorePoseStore, {
+      subjectType,
+      subjectNodeId: null,
+      position: camera.position,
+      quaternion: camera.quaternion,
+    });
+    logWatchRestore(`moveTo.capture.done subjectType=camera recorded=${recorded} pos=${formatWatchRestoreVec3(camera.position)} quat=${formatWatchRestoreQuat(camera.quaternion)} storeKeys=${formatWatchRestoreStoreKeys()}`);
+    return;
+  }
+  if (!subjectNodeId) {
+    logWatchRestore(`moveTo.capture.skip reason=no-subject-node subjectType=${subjectType}`);
+    return;
+  }
+  const pose = getMoveToSubjectCurrentPose(subjectNodeId);
+  if (!pose) {
+    logWatchRestore(`moveTo.capture.skip reason=subject-pose-unavailable subjectNodeId=${subjectNodeId}`);
+    return;
+  }
+  const recorded = recordWatchRestorePose(watchRestorePoseStore, {
+    subjectType,
+    subjectNodeId,
+    position: pose.position,
+    quaternion: pose.quaternion,
+  });
+  logWatchRestore(`moveTo.capture.done subjectType=${subjectType} subjectNodeId=${subjectNodeId} recorded=${recorded} pos=${formatWatchRestoreVec3(pose.position)} quat=${formatWatchRestoreQuat(pose.quaternion)} storeKeys=${formatWatchRestoreStoreKeys()}`);
+}
+
+/**
+ * 离开拍照状态后按 Watch 配置的来源恢复角色位姿。当前只消费角色快照，
+ * 且快照用后即清除，避免后续离开时把角色再次瞬移回旧位置。
+ *
+ * `restorePositionSource` 必须在 `clearActiveWatchState()` 之前取出，因为
+ * 清理拍照状态会把它重置为 'none'。
+ */
+function restoreControlledSubjectPoseAfterWatch(
+  restorePositionSource: WatchRestorePositionSource,
+): void {
+  logWatchRestore(`leave.restore.begin source=${restorePositionSource} storeKeys=${formatWatchRestoreStoreKeys()}`);
+  if (restorePositionSource !== 'moveToPreviousPose') {
+    logWatchRestore(`leave.restore.skip reason=source-disabled source=${restorePositionSource}`);
+    return;
+  }
+  if (vehicleDriveStateBridge.active) {
+    logWatchRestore(`leave.restore.skip reason=vehicle-drive-active vehicleNodeId=${vehicleDriveStateBridge.nodeId ?? '-'}`);
+    return;
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    logWatchRestore('leave.restore.skip reason=no-controlled-character');
+    return;
+  }
+  const snapshot = consumeWatchRestorePose(watchRestorePoseStore, 'character', controlledNodeId);
+  if (!snapshot) {
+    logWatchRestore(`leave.restore.skip reason=no-snapshot controlledNodeId=${controlledNodeId} storeKeys=${formatWatchRestoreStoreKeys()}`);
+    return;
+  }
+  logWatchRestore(`leave.restore.snapshot subjectType=${snapshot.subjectType} subjectNodeId=${snapshot.subjectNodeId ?? '-'} pos=${formatWatchRestoreVec3(snapshot.position)} quat=${formatWatchRestoreQuat(snapshot.quaternion)} controlledNodeId=${controlledNodeId}`);
+  const beforePose = getMoveToSubjectCurrentPose(controlledNodeId);
+  logWatchRestore(`leave.restore.pre nodeId=${controlledNodeId} pos=${beforePose ? formatWatchRestoreVec3(beforePose.position) : 'unavailable'} quat=${beforePose ? formatWatchRestoreQuat(beforePose.quaternion) : 'unavailable'}`);
+  applyMoveToSubjectWorldPose(controlledNodeId, snapshot.position, snapshot.quaternion);
+  // 瞬移后立即同步跟随相机，避免下一帧从旧位置插值过去。
+  const followCameraUpdated = updateCharacterFollowCamera(0, { immediate: true });
+  const appliedPose = getMoveToSubjectCurrentPose(controlledNodeId);
+  logWatchRestore(`leave.restore.applied nodeId=${controlledNodeId} followCameraUpdated=${followCameraUpdated} pos=${appliedPose ? formatWatchRestoreVec3(appliedPose.position) : 'unavailable'} quat=${appliedPose ? formatWatchRestoreQuat(appliedPose.quaternion) : 'unavailable'} storeKeys=${formatWatchRestoreStoreKeys()}`);
+  scheduleWatchRestorePoseVerify(controlledNodeId);
+}
+
+let watchRestoreVerifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 恢复后延迟复查一次实际位姿，用于确认是否被物理/跟随逻辑拉回。 */
+function scheduleWatchRestorePoseVerify(controlledNodeId: string): void {
+  if (watchRestoreVerifyTimer !== null) {
+    clearTimeout(watchRestoreVerifyTimer);
+  }
+  watchRestoreVerifyTimer = setTimeout(() => {
+    watchRestoreVerifyTimer = null;
+    const pose = getMoveToSubjectCurrentPose(controlledNodeId);
+    logWatchRestore(`leave.restore.verify nodeId=${controlledNodeId} pos=${pose ? formatWatchRestoreVec3(pose.position) : 'unavailable'} quat=${pose ? formatWatchRestoreQuat(pose.quaternion) : 'unavailable'}`);
+  }, 400);
 }
 
 function resetMoveToSubjectInputs(): void {
@@ -17061,6 +17200,8 @@ function handleMoveToEvent(event: Extract<BehaviorRuntimeEvent, { type: 'move-to
     return;
   }
   const resolvedSubjectNodeId = subjectNodeId ?? '';
+  // 位移生效前先记录当前位置，供 Watch 的“恢复位置”选项使用。
+  captureMoveToSubjectRestorePose(subjectType, subjectNodeId);
   resetMoveToRuntimeSession(moveToRuntimeSession);
   moveToRuntimeSession.active = true;
   moveToRuntimeSession.token = event.token;
@@ -17409,9 +17550,11 @@ function syncWatchTransitionBusyState(): void {
 
 function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
   if (activeWatchRestoreSnapshot.value && isRedundantWatchRequest(targetNodeId)) {
+    logWatchRestore(`watch.enter.redundant target=${targetNodeId ?? '-'} currentSource=${activeWatchRestorePositionSource.value}`);
     return;
   }
   activeWatchRestoreSnapshot.value = captureViewControlSnapshot();
+  logWatchRestore(`watch.enter.capture target=${targetNodeId ?? '-'} hasSnapshot=${activeWatchRestoreSnapshot.value !== null} prevSource=${activeWatchRestorePositionSource.value} storeKeys=${formatWatchRestoreStoreKeys()}`);
   watchUiRestoreState.value = {
     purposeControlsVisible: purposeControlsVisible.value,
   };
@@ -17421,8 +17564,10 @@ function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void 
 }
 
 function clearActiveWatchState(): void {
+  logWatchRestore(`watch.state.clear prevSource=${activeWatchRestorePositionSource.value} hadSnapshot=${activeWatchRestoreSnapshot.value !== null} storeKeys=${formatWatchRestoreStoreKeys()}`);
   activeWatchRestoreSnapshot.value = null;
   activeWatchSource.value = null;
+  activeWatchRestorePositionSource.value = 'none';
   watchUiRestoreState.value = null;
   activeWatchTransitionPlan = null;
   restoreWatchFramingAdjustState();
@@ -17510,6 +17655,7 @@ function startCameraWatchTween(params: {
 
 function leaveActiveWatchView(): void {
   const snapshot = activeWatchRestoreSnapshot.value;
+  logWatchRestore(`leave.click mode=${cameraViewState.mode} hasSnapshot=${snapshot !== null} source=${activeWatchRestorePositionSource.value} storeKeys=${formatWatchRestoreStoreKeys()}`);
   if (snapshot) {
     const transitionPlan = activeWatchTransitionPlan;
     const restorePosition = transitionPlan ? transitionPlan.fromPosition.clone() : new THREE.Vector3(...snapshot.camera.position);
@@ -17529,14 +17675,19 @@ function leaveActiveWatchView(): void {
       duration: CAMERA_WATCH_DURATION,
       purpose: 'watch-leave',
       onComplete: () => {
+        logWatchRestore('leave.tween.complete');
+        // 必须在 clearActiveWatchState() 之前读取，清理会把来源重置为 'none'。
+        const restorePositionSource = activeWatchRestorePositionSource.value;
         applyViewControlSnapshot(snapshot);
         restoreWatchUiState();
         clearActiveWatchState();
+        restoreControlledSubjectPoseAfterWatch(restorePositionSource);
         markInstancedCullingDirty();
       },
     });
     return;
   }
+  logWatchRestore('leave.fallback reason=no-snapshot');
   clearActiveWatchState();
   setCameraViewState('level');
   purposeActiveMode.value = 'level';
@@ -17619,11 +17770,16 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
 }
 
 function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
+  const watchTargetLogId = event.targetNodeId ?? event.nodeId ?? '-';
   const result = performWatchFocus(event.targetNodeId ?? event.nodeId ?? null, event.caging);
   if (!result.success) {
+    logWatchRestore(`watch.event.failed target=${watchTargetLogId} source=${event.restorePositionSource} message=${result.message ?? '-'}`);
     resolveBehaviorToken(event.token, result.message ? { type: 'fail', message: result.message } : { type: 'fail' });
     return;
   }
+  // 记录本次拍照会话配置的退出恢复来源（冗余 Watch 请求同样刷新）。
+  activeWatchRestorePositionSource.value = event.restorePositionSource;
+  logWatchRestore(`watch.event.ok target=${watchTargetLogId} caging=${event.caging} source=${event.restorePositionSource} storeKeys=${formatWatchRestoreStoreKeys()}`);
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
@@ -21973,6 +22129,12 @@ function teardownRenderer() {
   autoTourRotationOnlyHold.value = false;
   autoTourFollowNodeId.value = null;
   resetAutoTourCameraFollowState();
+  clearWatchRestorePoseStore(watchRestorePoseStore);
+  logWatchRestore('store.clear reason=teardown-renderer');
+  if (watchRestoreVerifyTimer !== null) {
+    clearTimeout(watchRestoreVerifyTimer);
+    watchRestoreVerifyTimer = null;
+  }
   nodeObjectMap.forEach((_object, nodeId) => {
     releaseModelInstance(nodeId);
   });
@@ -22922,6 +23084,12 @@ function cleanupForUnrelatedSceneSwitch(): void {
   networkSyncNodeEntries.clear();
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
+  clearWatchRestorePoseStore(watchRestorePoseStore);
+  logWatchRestore('store.clear reason=scene-switch');
+  if (watchRestoreVerifyTimer !== null) {
+    clearTimeout(watchRestoreVerifyTimer);
+    watchRestoreVerifyTimer = null;
+  }
   physicsBridgeContactsByNodeId.clear();
   behaviorCollisionCandidates.clear();
   behaviorCollisionState.clear();

@@ -51,7 +51,7 @@ import type {
   RuntimePrefabInitializationMode,
   RuntimePrefabPlacementOptions,
 } from '../core'
-import { normalizeControlNodeTransitionPreset } from '../core'
+import { normalizeControlNodeTransitionPreset, normalizeWatchRestorePositionSource } from '../core'
 
 export interface BehaviorActionDefinition {
   id: BehaviorEventType
@@ -502,6 +502,7 @@ const scriptDefinitions: BehaviorScriptDefinition[] = [
       return {
         targetNodeId: null,
         caging: false,
+        restorePositionSource: 'none',
       }
     },
   },
@@ -1169,6 +1170,7 @@ function cloneScriptBinding(binding: SceneBehaviorScriptBinding): SceneBehaviorS
         params: {
           targetNodeId: params?.targetNodeId ?? null,
           caging: params?.caging === true,
+          restorePositionSource: normalizeWatchRestorePositionSource(params?.restorePositionSource),
         },
       }
     }
@@ -1607,6 +1609,7 @@ export function ensureBehaviorParams(
           params: {
             targetNodeId: params?.targetNodeId ?? null,
             caging: params?.caging === true,
+            restorePositionSource: normalizeWatchRestorePositionSource(params?.restorePositionSource),
           },
         }
       }

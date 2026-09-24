@@ -1056,11 +1056,24 @@ export interface PlaySoundBehaviorParams {
   waitForCompletion: boolean
 }
 
+/** How the controlled subject pose is provided when leaving the watch state. */
+export type WatchRestorePositionSource = 'none' | 'moveToPreviousPose'
+
+export function normalizeWatchRestorePositionSource(value: unknown): WatchRestorePositionSource {
+  return value === 'moveToPreviousPose' ? 'moveToPreviousPose' : 'none'
+}
+
 export interface WatchBehaviorParams {
   /** Target scene node id to focus the camera on. */
   targetNodeId: string | null
   /** Lock the camera on the target while watching. Defaults to disabled. */
   caging?: boolean
+  /**
+   * How the controlled subject pose should be restored when the viewer leaves
+   * the watch (photo) state. This is the extensible source selector: future
+   * providers (fixed pose, referenced node, named property, ...) plug in here.
+   */
+  restorePositionSource: WatchRestorePositionSource
 }
 
 export interface ShowPurposeBehaviorButton {

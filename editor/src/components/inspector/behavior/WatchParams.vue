@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import type { WatchBehaviorParams } from '@schema/core'
+import type { WatchBehaviorParams, WatchRestorePositionSource } from '@schema/core'
+import { normalizeWatchRestorePositionSource } from '@schema/core'
 import NodePicker from '@/components/common/NodePicker.vue'
 
 const props = defineProps<{
@@ -15,7 +16,13 @@ const emit = defineEmits<{
 const params = computed<WatchBehaviorParams>(() => ({
   targetNodeId: props.modelValue?.targetNodeId ?? null,
   caging: props.modelValue?.caging ?? false,
+  restorePositionSource: normalizeWatchRestorePositionSource(props.modelValue?.restorePositionSource),
 }))
+
+const restorePositionOptions: Array<{ title: string; value: WatchRestorePositionSource }> = [
+  { title: 'Do not restore', value: 'none' },
+  { title: 'Move To previous pose', value: 'moveToPreviousPose' },
+]
 
 const pickerRef = ref<{ cancelPicking: () => void } | null>(null)
 
@@ -32,6 +39,10 @@ function handleTargetChange(nodeId: string | null) {
 
 function handleCagingChange(enabled: boolean) {
   emitUpdate({ caging: enabled })
+}
+
+function handleRestorePositionSourceChange(value: unknown) {
+  emitUpdate({ restorePositionSource: normalizeWatchRestorePositionSource(value) })
 }
 
 function handlePickStateChange(active: boolean) {
@@ -67,6 +78,15 @@ onBeforeUnmount(() => {
       hide-details
       label="Lock camera while watching"
       @update:model-value="handleCagingChange(Boolean($event))"
+    />
+    <v-select
+      :model-value="params.restorePositionSource"
+      :items="restorePositionOptions"
+      label="Restore position on leave"
+      density="compact"
+      variant="underlined"
+      hide-details
+      @update:model-value="handleRestorePositionSourceChange"
     />
   </div>
 </template>
