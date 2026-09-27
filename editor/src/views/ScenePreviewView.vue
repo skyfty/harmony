@@ -3425,6 +3425,7 @@ const characterCameraFollowPlacementCache = {
 	placement: null as CameraFollowPlacement | null,
 }
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05
+const CHARACTER_KEYBOARD_WALK_MAGNITUDE = 0.49
 const CHARACTER_INPUT_MAX_DELTA_SECONDS = 0.05
 const CHARACTER_RUNTIME_TURN_RATE_SCALE = 1
 const CHARACTER_CAMERA_CHASE_HEADING_SPEED_MAX = 1.8
@@ -8070,7 +8071,10 @@ function updateCharacterAuthorityInputFromKeys(): void {
 	if (hasMovement) {
 		characterDesiredInputYaw = Math.atan2(directionX, directionZ)
 		characterAuthorityInput.moveX = 0
-		characterAuthorityInput.moveZ = clampAxisScalar(length)
+		const movementMagnitude = clampAxisScalar(length)
+		characterAuthorityInput.moveZ = characterKeyState.sprint
+			? movementMagnitude
+			: Math.min(movementMagnitude, CHARACTER_KEYBOARD_WALK_MAGNITUDE)
 	} else {
 		characterDesiredInputYaw = null
 		characterAuthorityInput.moveX = 0

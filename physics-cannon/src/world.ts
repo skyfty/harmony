@@ -432,7 +432,7 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
       return []
     }
     const contacts: PhysicsContactEvent[] = []
-    this.lastContactNormalYByBodyId.clear()
+    this.lastContactNormalByBodyId.clear()
     const seenPairs = new Set<string>()
     const equations = ((this.world as CANNON.World & {
       contacts?: Array<{
@@ -459,13 +459,8 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
         equation.ni.y,
         equation.ni.z,
       ])
-      const absNormalY = Math.abs(normalTuple[1] ?? 0)
-      if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdA) ?? 0)) {
-        this.lastContactNormalYByBodyId.set(bodyIdA, absNormalY)
-      }
-      if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdB) ?? 0)) {
-        this.lastContactNormalYByBodyId.set(bodyIdB, absNormalY)
-      }
+      this.recordCharacterContactNormal(bodyIdA, normalTuple)
+      this.recordCharacterContactNormal(bodyIdB, normalTuple)
       const key = bodyIdA < bodyIdB
         ? `${bodyIdA}:${bodyIdB}`
         : `${bodyIdB}:${bodyIdA}`

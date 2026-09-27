@@ -3045,6 +3045,7 @@ const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.15;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
+const CHARACTER_KEYBOARD_WALK_MAGNITUDE = 0.49;
 const CHARACTER_INPUT_MAX_DELTA_SECONDS = 0.05;
 // The editor default is tuned for desktop control. Reduce the runtime rate for
 // the mini program so a full joystick deflection does not rotate too quickly.
@@ -18278,7 +18279,14 @@ function updateCharacterAuthorityInputFromKeys(): void {
   if (hasMovement) {
     characterDesiredInputYaw = Math.atan2(directionX, directionZ);
     characterAuthorityInput.moveX = 0;
-    characterAuthorityInput.moveZ = clampAxisScalar(length);
+    const movementMagnitude = clampAxisScalar(length);
+    const joystickMagnitude = Math.hypot(joystickInput.x, joystickInput.y);
+    const keyboardWalkOnly = (keyboardX !== 0 || keyboardY !== 0)
+      && joystickMagnitude <= CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD
+      && !characterKeyState.sprint;
+    characterAuthorityInput.moveZ = keyboardWalkOnly
+      ? Math.min(movementMagnitude, CHARACTER_KEYBOARD_WALK_MAGNITUDE)
+      : movementMagnitude;
   } else {
     characterDesiredInputYaw = null;
     characterAuthorityInput.moveX = 0;

@@ -528,7 +528,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
       return []
     }
     const contacts: PhysicsContactEvent[] = []
-    this.lastContactNormalYByBodyId.clear()
+    this.lastContactNormalByBodyId.clear()
     const manifoldCount = dispatcher.getNumManifolds?.() ?? 0
     for (let manifoldIndex = 0; manifoldIndex < manifoldCount; manifoldIndex += 1) {
       const manifold = dispatcher.getManifoldByIndexInternal?.(manifoldIndex)
@@ -559,13 +559,8 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
           normal?.y?.() ?? 1,
           normal?.z?.() ?? 0,
         ])
-        const absNormalY = Math.abs(normalTuple[1] ?? 0)
-        if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdA) ?? 0)) {
-          this.lastContactNormalYByBodyId.set(bodyIdA, absNormalY)
-        }
-        if (absNormalY > (this.lastContactNormalYByBodyId.get(bodyIdB) ?? 0)) {
-          this.lastContactNormalYByBodyId.set(bodyIdB, absNormalY)
-        }
+        this.recordCharacterContactNormal(bodyIdA, normalTuple)
+        this.recordCharacterContactNormal(bodyIdB, normalTuple)
         contacts.push({
           bodyIdA,
           bodyIdB,

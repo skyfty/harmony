@@ -31,6 +31,7 @@ export type PhysicsCharacterMotorInput = {
   gravityY: number
   probe: PhysicsCharacterMotorGroundProbe
   contactNormalY?: number | null
+  contactNormal?: [number, number, number] | null
 }
 
 export type PhysicsCharacterMotorStepResult = {
@@ -139,7 +140,7 @@ export function stepPhysicsCharacterMotor(
     planarZ /= planarLength
     if (grounded && groundNormal) {
       const projected = projectDirectionOntoGround([planarX, 0, planarZ], groundNormal)
-      const projectedLength = Math.hypot(projected[0], projected[2])
+      const projectedLength = Math.hypot(projected[0], projected[1], projected[2])
       if (projectedLength > 1e-6) {
         planarX = projected[0] / projectedLength
         planarZ = projected[2] / projectedLength
@@ -169,6 +170,12 @@ export function stepPhysicsCharacterMotor(
   planarZ = smoothedHorizontalVelocity[1]
   state.horizontalVelocityX = planarX
   state.horizontalVelocityZ = planarZ
+  const slopeVelocityY = grounded
+    && !state.jumpBuffered
+    && groundNormal
+    && Math.abs(groundNormal[1]) > 1e-4
+    ? -(groundNormal[0] * planarX + groundNormal[2] * planarZ) / groundNormal[1]
+    : 0
 
   if (input.jump && (grounded || state.coyoteTimeRemaining > 0)) {
     state.verticalVelocity = Math.max(0, desc.jumpImpulse)
@@ -191,7 +198,7 @@ export function stepPhysicsCharacterMotor(
   return {
     yaw: state.yaw,
     grounded: state.grounded,
-    linearVelocity: [planarX, state.verticalVelocity, planarZ],
+    linearVelocity: [planarX, state.verticalVelocity + slopeVelocityY, planarZ],
   }
 }
 
@@ -253,7 +260,7 @@ function resolveCharacterSpeed(
 }
 
 function resolveGroundNormal(
-  input: Pick<PhysicsCharacterMotorInput, 'probe' | 'contactNormalY'>,
+  input: Pick<PhysicsCharacterMotorInput, 'probe' | 'contactNormal'>,
 ): [number, number, number] | null {
   const probeNormal = input.probe.normal
   if (Array.isArray(probeNormal)) {
@@ -262,9 +269,11 @@ function resolveGroundNormal(
       return normalized
     }
   }
-  if (typeof input.contactNormalY === 'number' && Number.isFinite(input.contactNormalY) && input.contactNormalY > 1e-4) {
-    const horizontalScale = Math.sqrt(Math.max(0, 1 - input.contactNormalY * input.contactNormalY))
-    return normalizeVector([0, input.contactNormalY, horizontalScale])
+  if (Array.isArray(input.contactNormal)) {
+    const normalized = normalizeVector(input.contactNormal)
+    if (normalized[1] > 1e-4) {
+      return normalized
+    }
   }
   return null
 }

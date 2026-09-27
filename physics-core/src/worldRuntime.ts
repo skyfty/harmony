@@ -74,7 +74,7 @@ export abstract class PhysicsWorldBase<
   protected readonly vehicles = new Map<number, TVehicleState>()
   protected readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
   protected readonly characters = new Map<number, TCharacterState>()
-  protected readonly lastContactNormalYByBodyId = new Map<number, number>()
+  protected readonly lastContactNormalByBodyId = new Map<number, PhysicsVector3>()
 
   setWorldSettings(settings: PhysicsWorldSettings): void {
     this.worldSettings = {
@@ -122,7 +122,7 @@ export abstract class PhysicsWorldBase<
     this.frame += 1
     this.applyVehicleInputs()
     this.applyCharacterInputs(deltaMs)
-    this.lastContactNormalYByBodyId.clear()
+    this.lastContactNormalByBodyId.clear()
 
     const deltaSeconds = Math.max(0, deltaMs) / 1000
     if (deltaSeconds > 0) {
@@ -257,7 +257,7 @@ export abstract class PhysicsWorldBase<
     this.vehicles.clear()
     this.vehicleInputs.clear()
     this.characters.clear()
-    this.lastContactNormalYByBodyId.clear()
+    this.lastContactNormalByBodyId.clear()
     this.bodies.clear()
     this.shapes.clear()
     this.runtimeBodies.clear()
@@ -327,7 +327,8 @@ export abstract class PhysicsWorldBase<
         crouch: false,
         interact: false,
       }
-      const contactNormalY = this.lastContactNormalYByBodyId.get(characterState.bodyId) ?? null
+      const contactNormal = this.lastContactNormalByBodyId.get(characterState.bodyId) ?? null
+      const contactNormalY = contactNormal?.[1] ?? null
       const probe = this.resolveCharacterGroundProbe(characterState)
       const stepResult = stepPhysicsCharacterMotor(characterState.desc, characterState.motorState, {
         moveX: input.moveX,
@@ -342,9 +343,27 @@ export abstract class PhysicsWorldBase<
         gravityY: this.worldSettings.gravity[1] ?? -9.8,
         probe,
         contactNormalY,
+        contactNormal,
       })
       this.applyCharacterStep(characterState, stepResult)
     })
+  }
+
+  protected recordCharacterContactNormal(bodyId: number, normal: PhysicsVector3): void {
+    const length = Math.hypot(normal[0], normal[1], normal[2])
+    if (!(length > 1e-6)) {
+      return
+    }
+    const sign = normal[1] < 0 ? -1 : 1
+    const normalized: PhysicsVector3 = [
+      (normal[0] * sign) / length,
+      (normal[1] * sign) / length,
+      (normal[2] * sign) / length,
+    ]
+    const previous = this.lastContactNormalByBodyId.get(bodyId)
+    if (!previous || normalized[1] > previous[1]) {
+      this.lastContactNormalByBodyId.set(bodyId, normalized)
+    }
   }
 
   protected abstract ensureWorldReady(): void
