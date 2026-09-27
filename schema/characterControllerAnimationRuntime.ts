@@ -27,6 +27,8 @@ export type CharacterControllerAnimationRuntimeEntry = {
 	lastAutoClipName: string | null
 	lastAutoLoop: boolean | null
 	lastGrounded: boolean | null
+	lastGroundedAtMs: number | null
+	lastGroundNormalY: number | null
 	jumpPhase: 'start' | 'loop' | 'land' | null
 	jumpStartAtMs: number | null
 	landAtMs: number | null
@@ -50,11 +52,15 @@ export type CharacterControllerAnimationRuntimeHost = {
 	resolveNode: (nodeId: string) => SceneNode | null
 	resolveInput: (nodeId: string) => CharacterControllerAnimationInputState
 	resolveGroundContacts: (nodeId: string) => readonly PhysicsContactEvent[] | null | undefined
+	log?: (message: string) => void
 }
 
 const CHARACTER_JUMP_START_FALLBACK_MS = 180
 const CHARACTER_JUMP_LOOP_FALLBACK_MS = 500
 const CHARACTER_JUMP_LAND_FALLBACK_MS = 160
+const CHARACTER_GROUND_LOSS_MIN_GRACE_MS = 120
+const CHARACTER_GROUND_LOSS_MAX_GRACE_MS = 260
+const CHARACTER_GROUND_LOSS_SLOPE_THRESHOLD = 0.995
 const CHARACTER_ANIMATION_MATCH_SLOTS: CharacterAnimationSlot[] = CHARACTER_ANIMATION_EDITOR_SLOTS.map((slot) => slot.value)
 
 function resolveAnimationComponentForNode(node: SceneNode | null | undefined): SceneNodeComponentState<AnimationComponentProps> | null {
@@ -204,6 +210,8 @@ export class CharacterControllerAnimationRuntimeManager {
 				lastAutoClipName: previous?.lastAutoClipName ?? null,
 				lastAutoLoop: previous?.lastAutoLoop ?? null,
 				lastGrounded: previous?.lastGrounded ?? null,
+				lastGroundedAtMs: previous?.lastGroundedAtMs ?? null,
+				lastGroundNormalY: previous?.lastGroundNormalY ?? null,
 				jumpPhase: previous?.jumpPhase ?? null,
 				jumpStartAtMs: previous?.jumpStartAtMs ?? null,
 				landAtMs: previous?.landAtMs ?? null,
@@ -243,9 +251,16 @@ export class CharacterControllerAnimationRuntimeManager {
 			const turn = input.turn
 			const movementMagnitude = resolveCharacterControlMovementMagnitude(moveX, moveZ)
 			const jumpPressed = input.jump
-			const groundedState = this.resolveGroundedState(host, nodeId)
+			const contacts = host.resolveGroundContacts(nodeId) ?? null
+			const groundedState = this.resolveGroundedState(contacts)
 			const grounded = groundedState.grounded
 			const previousGrounded = entry.lastGrounded
+			const graceMs = resolveGroundLossGraceMs(entry.lastGroundNormalY)
+			const recentlyGrounded = !grounded
+				&& graceMs > 0
+				&& entry.lastGroundedAtMs != null
+				&& nowMs - entry.lastGroundedAtMs <= graceMs
+			const animationGrounded = grounded || recentlyGrounded
 
 			if (jumpPressed) {
 				entry.jumpPhase = 'start'
@@ -268,18 +283,18 @@ export class CharacterControllerAnimationRuntimeManager {
 				const elapsedMs = entry.jumpStartAtMs != null ? nowMs - entry.jumpStartAtMs : Number.POSITIVE_INFINITY
 				if (elapsedMs >= maxStartMs) {
 					entry.jumpPhase = groundedState.hasAuthority
-						? (grounded ? null : 'loop')
+						? (animationGrounded ? null : 'loop')
 						: 'loop'
 				}
 			}
 
 			if (groundedState.hasAuthority) {
-				if (entry.jumpPhase !== 'land' && previousGrounded === false && grounded) {
+				if (entry.jumpPhase !== 'land' && previousGrounded === false && animationGrounded) {
 					entry.jumpPhase = 'land'
 					entry.landAtMs = nowMs
-				} else if (!grounded && entry.jumpPhase !== 'start') {
+				} else if (!animationGrounded && entry.jumpPhase !== 'start') {
 					entry.jumpPhase = 'loop'
-				} else if (grounded && entry.jumpPhase === 'loop' && previousGrounded === true) {
+				} else if (animationGrounded && entry.jumpPhase === 'loop' && previousGrounded === true) {
 					entry.jumpPhase = null
 				}
 			} else if (entry.jumpPhase === 'loop') {
@@ -303,7 +318,7 @@ export class CharacterControllerAnimationRuntimeManager {
 				const maxLandMs = Math.max(0, Math.min(landDurationMs ?? CHARACTER_JUMP_LAND_FALLBACK_MS, CHARACTER_JUMP_LAND_FALLBACK_MS))
 				const elapsedMs = entry.landAtMs != null ? nowMs - entry.landAtMs : Number.POSITIVE_INFINITY
 				if (elapsedMs >= maxLandMs) {
-					entry.jumpPhase = grounded ? null : 'loop'
+					entry.jumpPhase = animationGrounded ? null : 'loop'
 					entry.landAtMs = null
 				}
 			}
@@ -324,7 +339,11 @@ export class CharacterControllerAnimationRuntimeManager {
 					entry.lastAutoLoop = null
 					entry.forceResync = false
 				}
-				entry.lastGrounded = grounded
+				entry.lastGrounded = animationGrounded
+				if (grounded) {
+					entry.lastGroundedAtMs = nowMs
+					entry.lastGroundNormalY = groundedState.maxContactNormalY
+				}
 				return
 			}
 
@@ -338,7 +357,11 @@ export class CharacterControllerAnimationRuntimeManager {
 				entry.lastAutoLoop = shouldLoop
 				entry.forceResync = false
 			}
-			entry.lastGrounded = grounded
+			entry.lastGrounded = animationGrounded
+			if (grounded) {
+				entry.lastGroundedAtMs = nowMs
+				entry.lastGroundNormalY = groundedState.maxContactNormalY
+			}
 		})
 	}
 
@@ -359,21 +382,52 @@ export class CharacterControllerAnimationRuntimeManager {
 	}
 
 	private resolveGroundedState(
-		host: CharacterControllerAnimationRuntimeHost,
-		nodeId: string,
-	): { hasAuthority: boolean; grounded: boolean } {
-		const contacts = host.resolveGroundContacts(nodeId)
+		contacts: readonly PhysicsContactEvent[] | null | undefined,
+	): { hasAuthority: boolean; grounded: boolean; groundedContactCount: number; maxContactNormalY: number | null; contactSamples: Array<{ bodyIdA: number; bodyIdB: number; normal: [number, number, number] }> } {
 		if (contacts) {
+			let contactCount = 0
+			let groundedContactCount = 0
+			let maxContactNormalY = Number.NEGATIVE_INFINITY
+			const contactSamples: Array<{ bodyIdA: number; bodyIdB: number; normal: [number, number, number] }> = []
+			contacts.forEach((contact) => {
+				const normal: [number, number, number] = [
+					contact.normal[0] ?? 0,
+					contact.normal[1] ?? 0,
+					contact.normal[2] ?? 0,
+				]
+				const normalY = Math.abs(normal[1] ?? 0)
+				if (normalY >= 0.5) {
+					groundedContactCount += 1
+				}
+				if (normalY > maxContactNormalY) {
+					maxContactNormalY = normalY
+				}
+				if (contactCount < 4) {
+					contactSamples.push({
+						bodyIdA: contact.bodyIdA,
+						bodyIdB: contact.bodyIdB,
+						normal,
+					})
+				}
+				contactCount += 1
+			})
 			return {
 				hasAuthority: true,
-				grounded: contacts.some((contact) => Math.abs(contact.normal[1] ?? 0) >= 0.5),
+				grounded: groundedContactCount > 0,
+				groundedContactCount,
+				maxContactNormalY: maxContactNormalY > Number.NEGATIVE_INFINITY ? maxContactNormalY : null,
+				contactSamples,
 			}
 		}
 		return {
 			hasAuthority: false,
 			grounded: false,
+			groundedContactCount: 0,
+			maxContactNormalY: null,
+			contactSamples: [],
 		}
 	}
+
 }
 
 function normalizeNodeId(value: unknown): string | null {
@@ -382,4 +436,17 @@ function normalizeNodeId(value: unknown): string | null {
 	}
 	const trimmed = value.trim()
 	return trimmed.length ? trimmed : null
+}
+function resolveGroundLossGraceMs(lastGroundNormalY: number | null): number {
+	if (lastGroundNormalY == null || !Number.isFinite(lastGroundNormalY)) {
+		return 0
+	}
+	if (lastGroundNormalY >= CHARACTER_GROUND_LOSS_SLOPE_THRESHOLD) {
+		return 0
+	}
+	const slopeFactor = Math.min(1, Math.max(0, 1 - lastGroundNormalY))
+	return Math.min(
+		CHARACTER_GROUND_LOSS_MAX_GRACE_MS,
+		Math.round(CHARACTER_GROUND_LOSS_MIN_GRACE_MS + slopeFactor * 240),
+	)
 }

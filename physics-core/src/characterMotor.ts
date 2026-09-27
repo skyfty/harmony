@@ -6,7 +6,6 @@ export type PhysicsCharacterMotorGroundProbe = {
   distance: number
   normalY: number
   normal?: [number, number, number]
-  bodyId?: number | null
 }
 
 export type PhysicsCharacterMotorState = {

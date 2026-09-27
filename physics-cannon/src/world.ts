@@ -359,7 +359,6 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
     distance: number
     normalY: number
     normal?: [number, number, number]
-    bodyId?: number | null
   } {
     const body = characterState.body
     const radius = Math.max(0.05, characterState.groundProbeRadius)
@@ -376,7 +375,6 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
     let bestHit: {
       distance: number
       normal: [number, number, number]
-      bodyId: number | null
     } | null = null
     for (const [offsetX, offsetZ] of offsets) {
       const from = new CANNON.Vec3(body.position.x + offsetX, baseY + probeRise, body.position.z + offsetZ)
@@ -397,7 +395,7 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
         result.hitNormalWorld.z,
       ])
       if (!bestHit || distance < bestHit.distance) {
-        bestHit = { distance, normal, bodyId: resolveBodyId(result.body) }
+        bestHit = { distance, normal }
       }
     }
     if (!bestHit) {
@@ -412,7 +410,6 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
       distance: bestHit.distance,
       normalY: bestHit.normal[1] ?? 0,
       normal: bestHit.normal,
-      bodyId: bestHit.bodyId,
     }
   }
 
