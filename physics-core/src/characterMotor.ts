@@ -6,6 +6,7 @@ export type PhysicsCharacterMotorGroundProbe = {
   distance: number
   normalY: number
   normal?: [number, number, number]
+  bodyId?: number | null
 }
 
 export type PhysicsCharacterMotorState = {
@@ -37,6 +38,9 @@ export type PhysicsCharacterMotorInput = {
 export type PhysicsCharacterMotorStepResult = {
   yaw: number
   grounded: boolean
+  probeGrounded: boolean
+  contactGrounded: boolean
+  groundNormal: [number, number, number] | null
   linearVelocity: [number, number, number]
 }
 
@@ -107,7 +111,7 @@ export function stepPhysicsCharacterMotor(
     ? (input.contactNormalY as number) >= minGroundNormalY
     : false
   const grounded = probeGrounded || contactGrounded
-  const groundNormal = resolveGroundNormal(input)
+  const groundNormal = resolveGroundNormal(input, probeGrounded, contactGrounded)
 
   if (typeof input.yaw === 'number' && Number.isFinite(input.yaw)) {
     const turnRate = Number.isFinite(input.turnRateRadiansPerSecond ?? NaN)
@@ -198,6 +202,9 @@ export function stepPhysicsCharacterMotor(
   return {
     yaw: state.yaw,
     grounded: state.grounded,
+    probeGrounded,
+    contactGrounded,
+    groundNormal,
     linearVelocity: [planarX, state.verticalVelocity + slopeVelocityY, planarZ],
   }
 }
@@ -261,18 +268,19 @@ function resolveCharacterSpeed(
 
 function resolveGroundNormal(
   input: Pick<PhysicsCharacterMotorInput, 'probe' | 'contactNormal'>,
+  probeGrounded: boolean,
+  contactGrounded: boolean,
 ): [number, number, number] | null {
-  const probeNormal = input.probe.normal
-  if (Array.isArray(probeNormal)) {
-    const normalized = normalizeVector(probeNormal)
-    if (normalized[1] > 1e-4) {
-      return normalized
+  if (probeGrounded && Array.isArray(input.probe.normal)) {
+    const normalizedProbeNormal = normalizeVector(input.probe.normal)
+    if (normalizedProbeNormal[1] > 1e-4) {
+      return normalizedProbeNormal
     }
   }
-  if (Array.isArray(input.contactNormal)) {
-    const normalized = normalizeVector(input.contactNormal)
-    if (normalized[1] > 1e-4) {
-      return normalized
+  if (contactGrounded && Array.isArray(input.contactNormal)) {
+    const normalizedContactNormal = normalizeVector(input.contactNormal)
+    if (normalizedContactNormal[1] > 1e-4) {
+      return normalizedContactNormal
     }
   }
   return null

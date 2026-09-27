@@ -426,6 +426,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
     distance: number
     normalY: number
     normal?: [number, number, number]
+    bodyId?: number | null
   } {
     const ammo = this.ammo
     const world = this.world
@@ -451,7 +452,11 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
     const probeDepth = Math.max(0.2, characterState.desc.stepHeight + radius + 0.12)
     const baseY = origin.y() - halfHeight + radius
     const offsets = resolveCharacterProbeOffsets(radius)
-    let bestHit: { distance: number; normal: [number, number, number] } | null = null
+    let bestHit: {
+      distance: number
+      normal: [number, number, number]
+      bodyId: number
+    } | null = null
     for (const [offsetX, offsetZ] of offsets) {
       const fromTuple: PhysicsVector3 = [origin.x() + offsetX, baseY + probeRise, origin.z() + offsetZ]
       const toTuple: PhysicsVector3 = [origin.x() + offsetX, baseY - probeDepth, origin.z() + offsetZ]
@@ -472,7 +477,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
             normal.z(),
           ])
           if (!bestHit || distance < bestHit.distance) {
-            bestHit = { distance, normal: normalTuple }
+            bestHit = { distance, normal: normalTuple, bodyId }
           }
         }
       }
@@ -492,6 +497,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
       distance: bestHit.distance,
       normalY: bestHit.normal[1] ?? 0,
       normal: bestHit.normal,
+      bodyId: bestHit.bodyId,
     }
   }
 

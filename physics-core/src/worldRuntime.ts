@@ -34,6 +34,22 @@ export const DEFAULT_PHYSICS_WORLD_SETTINGS: PhysicsWorldSettings = {
   maxSubSteps: 4,
 }
 
+const CHARACTER_MOTOR_DEBUG_INTERVAL_SECONDS = 0.25
+
+function formatCharacterMotorDebugNumber(value: number | null | undefined): string {
+  if (typeof value !== 'number') {
+    return 'none'
+  }
+  return Number.isFinite(value) ? value.toFixed(3) : String(value)
+}
+
+function formatCharacterMotorDebugVector(value: PhysicsVector3 | null | undefined): string {
+  if (!value) {
+    return 'none'
+  }
+  return `(${value.map(formatCharacterMotorDebugNumber).join(',')})`
+}
+
 export type PhysicsWorldBodyState<TBody> = {
   desc: PhysicsBodyDesc
   body: TBody
@@ -75,6 +91,7 @@ export abstract class PhysicsWorldBase<
   protected readonly vehicleInputs = new Map<number, PhysicsVehicleInputCommand>()
   protected readonly characters = new Map<number, TCharacterState>()
   protected readonly lastContactNormalByBodyId = new Map<number, PhysicsVector3>()
+  private readonly characterMotorDebugElapsedSecondsById = new Map<number, number>()
 
   setWorldSettings(settings: PhysicsWorldSettings): void {
     this.worldSettings = {
@@ -258,6 +275,7 @@ export abstract class PhysicsWorldBase<
     this.vehicleInputs.clear()
     this.characters.clear()
     this.lastContactNormalByBodyId.clear()
+    this.characterMotorDebugElapsedSecondsById.clear()
     this.bodies.clear()
     this.shapes.clear()
     this.runtimeBodies.clear()
@@ -346,7 +364,67 @@ export abstract class PhysicsWorldBase<
         contactNormal,
       })
       this.applyCharacterStep(characterState, stepResult)
+      this.logCharacterMotorDiagnostics(characterState, input, probe, contactNormal, stepResult, deltaSeconds)
     })
+  }
+
+  private logCharacterMotorDiagnostics(
+    characterState: TCharacterState,
+    input: PhysicsCharacterInputCommand,
+    probe: PhysicsCharacterMotorGroundProbe,
+    contactNormal: PhysicsVector3 | null,
+    result: PhysicsCharacterMotorStepResult,
+    deltaSeconds: number,
+  ): void {
+    if (Math.hypot(input.moveX, input.moveZ) <= 0.001) {
+      this.characterMotorDebugElapsedSecondsById.set(characterState.desc.characterId, 0)
+      return
+    }
+
+    const characterId = characterState.desc.characterId
+    const elapsedSeconds = (this.characterMotorDebugElapsedSecondsById.get(characterId) ?? 0)
+      + (Number.isFinite(deltaSeconds) ? Math.max(0, deltaSeconds) : 0)
+    if (elapsedSeconds < CHARACTER_MOTOR_DEBUG_INTERVAL_SECONDS) {
+      this.characterMotorDebugElapsedSecondsById.set(characterId, elapsedSeconds)
+      return
+    }
+    this.characterMotorDebugElapsedSecondsById.set(
+      characterId,
+      elapsedSeconds % CHARACTER_MOTOR_DEBUG_INTERVAL_SECONDS,
+    )
+
+    const position = this.readBodyTransform(characterState.body).position
+    const actualVelocity = this.readBodyLinearVelocity(characterState.body)
+    const minGroundNormalY = Math.cos(
+      (Math.max(0, Math.min(89, characterState.desc.slopeLimitDegrees)) * Math.PI) / 180,
+    )
+    const message = [
+      `[CharacterMotor]`,
+      `frame=${this.frame}`,
+      `character=${characterId}`,
+      `body=${characterState.bodyId}`,
+      `input=(${formatCharacterMotorDebugNumber(input.moveX)},${formatCharacterMotorDebugNumber(input.moveZ)})`,
+      `inputYaw=${formatCharacterMotorDebugNumber(input.yaw)}`,
+      `motorYaw=${formatCharacterMotorDebugNumber(result.yaw)}`,
+      `position=${formatCharacterMotorDebugVector(position)}`,
+      `probeHit=${probe.hit}`,
+      `probeGrounded=${result.probeGrounded}`,
+      `probeDistance=${formatCharacterMotorDebugNumber(probe.distance)}`,
+      `probeNormal=${formatCharacterMotorDebugVector(probe.normal)}`,
+      `probeNormalY=${formatCharacterMotorDebugNumber(probe.normalY)}`,
+      `probeBody=${probe.bodyId ?? 'none'}`,
+      `contactGrounded=${result.contactGrounded}`,
+      `contactNormal=${formatCharacterMotorDebugVector(contactNormal)}`,
+      `groundNormal=${formatCharacterMotorDebugVector(result.groundNormal)}`,
+      `grounded=${result.grounded}`,
+      `slopeLimitDeg=${formatCharacterMotorDebugNumber(characterState.desc.slopeLimitDegrees)}`,
+      `minGroundNormalY=${formatCharacterMotorDebugNumber(minGroundNormalY)}`,
+      `stepHeight=${formatCharacterMotorDebugNumber(characterState.desc.stepHeight)}`,
+      `airControl=${formatCharacterMotorDebugNumber(characterState.desc.airControl)}`,
+      `velocityResult=${formatCharacterMotorDebugVector(result.linearVelocity)}`,
+      `velocityApplied=${formatCharacterMotorDebugVector(actualVelocity)}`,
+    ].join(' ')
+    console.debug(message)
   }
 
   protected recordCharacterContactNormal(bodyId: number, normal: PhysicsVector3): void {
