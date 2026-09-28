@@ -31,6 +31,7 @@ import {
   type PhysicsVehicleInputCommand,
 } from '@harmony/physics-core'
 import { createCannonSceneRigidBody } from './sceneRigidBodyFactory'
+import { resolveCharacterGroundProbeClearance } from './characterGroundProbe'
 import {
   ensureCannonContactMaterial,
   type CannonContactSettings,
@@ -388,14 +389,19 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
       if (!result.hasHit || !result.body || result.body === body) {
         continue
       }
-      const distance = Math.max(0, from.distanceTo(result.hitPointWorld))
+      // The ray starts above the character's feet. Its ray length is therefore
+      // not the character-to-ground clearance. Ignore uphill-side hits above
+      // the bottom reference and measure the gap to the surface below it.
+      const clearance = resolveCharacterGroundProbeClearance(baseY, result.hitPointWorld.y)
       const normal = normalizeVector([
         result.hitNormalWorld.x,
         result.hitNormalWorld.y,
         result.hitNormalWorld.z,
       ])
-      if (!bestHit || distance < bestHit.distance) {
-        bestHit = { distance, normal }
+      if (clearance.isGroundCandidate) {
+        if (!bestHit || clearance.clearance < bestHit.distance) {
+          bestHit = { distance: clearance.clearance, normal }
+        }
       }
     }
     if (!bestHit) {
