@@ -11,6 +11,7 @@ import type {
   PhysicsRaycastHit,
   PhysicsRemoveRuntimeBodiesCommand,
   PhysicsSceneAsset,
+  PhysicsVector3,
   PhysicsVehicleInputCommand,
 } from './types'
 
@@ -25,6 +26,17 @@ export type PhysicsStepFrame = {
   bodyAngularVelocities?: Float32Array
   bodySleeping?: Uint8Array
   contacts?: PhysicsContactEvent[]
+  characterMotorStates?: PhysicsCharacterMotorFrameState[]
+}
+
+export type PhysicsCharacterMotorFrameState = {
+  characterId: number
+  bodyId: number
+  grounded: boolean
+  probeGrounded: boolean
+  contactGrounded: boolean
+  groundNormal: PhysicsVector3 | null
+  linearVelocity: PhysicsVector3
 }
 
 export type PhysicsAuthoritySnapshot = {

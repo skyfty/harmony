@@ -11,6 +11,8 @@
       "@harmony/utils/*": ["../utils/src/*"],
       "@schema": ["../schema/index.ts"],
       "@schema/*": ["../schema/*"],
+      "@harmony/physics-core": ["../physics-core/src/index.ts"],
+      "@harmony/physics-core/*": ["../physics-core/src/*"],
       "@harmony/physics-bridge": ["../physics-bridge/src/index.ts"],
       "@harmony/physics-bridge/*": ["../physics-bridge/src/*"],
       "@harmony/physics-bridge/physicsBackendBridge": ["../physics-bridge/src/physicsBackendBridge.ts"],

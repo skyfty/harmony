@@ -20,7 +20,7 @@ import type {
   PhysicsVehicleInputCommand,
   PhysicsWorldSettings,
 } from './types'
-import type { PhysicsStepFrame } from './protocol'
+import type { PhysicsCharacterMotorFrameState, PhysicsStepFrame } from './protocol'
 import {
   stepPhysicsVehicleSpeedGovernor,
   shouldWakePhysicsVehicle,
@@ -121,7 +121,7 @@ export abstract class PhysicsWorldBase<
 
     this.frame += 1
     this.applyVehicleInputs()
-    this.applyCharacterInputs(deltaMs)
+    const characterMotorStates = this.applyCharacterInputs(deltaMs)
     this.lastContactNormalByBodyId.clear()
 
     const deltaSeconds = Math.max(0, deltaMs) / 1000
@@ -200,6 +200,7 @@ export abstract class PhysicsWorldBase<
       bodyAngularVelocities,
       bodySleeping,
       contacts: contacts.length ? contacts : undefined,
+      characterMotorStates,
     }
   }
 
@@ -311,9 +312,10 @@ export abstract class PhysicsWorldBase<
     })
   }
 
-  protected applyCharacterInputs(deltaMs: number): void {
+  protected applyCharacterInputs(deltaMs: number): PhysicsCharacterMotorFrameState[] {
+    const characterMotorStates: PhysicsCharacterMotorFrameState[] = []
     if (!this.characters.size) {
-      return
+      return characterMotorStates
     }
     const deltaSeconds = Math.max(0, deltaMs) / 1000
     this.characters.forEach((characterState) => {
@@ -346,7 +348,23 @@ export abstract class PhysicsWorldBase<
         contactNormal,
       })
       this.applyCharacterStep(characterState, stepResult)
+      characterMotorStates.push({
+        characterId: characterState.desc.characterId,
+        bodyId: characterState.bodyId,
+        grounded: stepResult.grounded,
+        probeGrounded: stepResult.probeGrounded,
+        contactGrounded: stepResult.contactGrounded,
+        groundNormal: stepResult.groundNormal
+          ? [stepResult.groundNormal[0], stepResult.groundNormal[1], stepResult.groundNormal[2]]
+          : null,
+        linearVelocity: [
+          stepResult.linearVelocity[0],
+          stepResult.linearVelocity[1],
+          stepResult.linearVelocity[2],
+        ],
+      })
     })
+    return characterMotorStates
   }
 
   protected recordCharacterContactNormal(bodyId: number, normal: PhysicsVector3): void {
@@ -401,6 +419,7 @@ export function createEmptyPhysicsStepFrame(frame: number): PhysicsStepFrame {
     wheelCount: 0,
     bodyTransforms: new Float32Array(0),
     wheelTransforms: new Float32Array(0),
+    characterMotorStates: [],
   }
 }
 

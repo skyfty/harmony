@@ -102,6 +102,7 @@ import { ScenePreviewPhysicsCollisionDebugRuntime } from '@/physics/collisionDeb
 import {
 	type PhysicsBackendPreference,
 	type PhysicsBridge,
+	type PhysicsCharacterMotorFrameState,
 	type PhysicsContactEvent,
 	type PhysicsSceneAsset,
 	type PhysicsStepFrame,
@@ -305,6 +306,10 @@ import {
 	writeCharacterLocalForward,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@schema/components'
+import {
+	RIGIDBODY_METADATA_KEY,
+	type RigidbodyComponentMetadata,
+} from '@schema/components/definitions/rigidbodyComponent'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
 import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
 import {
@@ -1717,6 +1722,7 @@ const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>()
 const behaviorSoundDistanceScratch = new THREE.Vector3()
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager()
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager()
+const lastCharacterPhysicsDiagnosticSignatureByNodeId = new Map<string, string>()
 const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager()
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>()
 const behaviorProximityState = new Map<string, BehaviorProximityState>()
@@ -2634,6 +2640,7 @@ const nonPhysicsCharacterStates = new Map<string, NonPhysicsCharacterState>()
 const nonPhysicsCharacterFootIK = new Map<string, NonPhysicsCharacterFootIK>()
 const nonPhysicsCollisionWorld: CapsuleCollisionWorld = createCapsuleCollisionWorld()
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>()
+const physicsBridgeCharacterMotorStateByCharacterId = new Map<number, PhysicsCharacterMotorFrameState>()
 type PhysicsBridgeBodyFrameState = {
 	position: THREE.Vector3
 	quaternion: THREE.Quaternion
@@ -7987,6 +7994,15 @@ function refreshCharacterControllerAnimationRuntimeEntries(): void {
 	})
 }
 
+function resolveScenePreviewPhysicsBridgeCharacterMotorState(
+	nodeId: string,
+): PhysicsCharacterMotorFrameState | null {
+	const characterId = physicsBridgeCharacterIdByNodeId.get(nodeId)
+	return typeof characterId === 'number'
+		? physicsBridgeCharacterMotorStateByCharacterId.get(characterId) ?? null
+		: null
+}
+
 type CharacterCameraMoveFrame = {
 	forwardX: number
 	forwardZ: number
@@ -8165,7 +8181,245 @@ function updateCharacterControllerAnimations(delta: number): void {
 		resolveNode: (nodeId) => resolveNodeById(nodeId),
 		resolveInput: (nodeId) => resolveScenePreviewCharacterAnimationInput(nodeId),
 		resolveGroundContacts: (nodeId) => physicsBridgeContactsByNodeId.get(nodeId) ?? null,
+		resolveCharacterMotorState: resolveScenePreviewPhysicsBridgeCharacterMotorState,
 	}, getCharacterAnimationNowMs())
+	logScenePreviewCharacterPhysicsDiagnostics()
+}
+
+function logScenePreviewCharacterPhysicsDiagnostics(): void {
+	const activeNodeIds = new Set<string>()
+	const round = (value: number, digits = 3): number => Number(value.toFixed(digits))
+	const quantize = (value: number, step: number): number => Math.round(value / step) * step
+	for (const [nodeId, node] of previewNodeMap) {
+		const component = resolveCharacterControllerComponent(node)
+		if (!component) {
+			continue
+		}
+		activeNodeIds.add(nodeId)
+		const props = clampCharacterControllerComponentProps(component.props)
+		const animationNodeId = props.targetNodeId ?? nodeId
+		const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(nodeId) ?? nodeId
+		const bodyId = physicsBridgeBodyIdByNodeId.get(bodyNodeId) ?? null
+		const input = resolveScenePreviewCharacterAnimationInput(nodeId)
+		const animationContacts = physicsBridgeContactsByNodeId.get(nodeId) ?? null
+		const bodyContacts = physicsBridgeContactsByNodeId.get(bodyNodeId) ?? []
+		const motorState = resolveScenePreviewPhysicsBridgeCharacterMotorState(nodeId)
+		const animationGroundContactCount = (animationContacts ?? []).filter(
+			(contact) => Math.abs(contact.normal[1]) >= 0.5,
+		).length
+		const bodyState = physicsBridgeFrameBodiesByNodeId.get(bodyNodeId) ?? null
+		const characterObject = nodeObjectMap.get(nodeId) ?? null
+		const animationObject = nodeObjectMap.get(animationNodeId) ?? characterObject
+		characterObject?.updateWorldMatrix(true, false)
+		if (animationObject !== characterObject) {
+			animationObject?.updateWorldMatrix(true, false)
+		}
+		const characterWorldPosition = characterObject?.getWorldPosition(new THREE.Vector3()) ?? null
+		const characterWorldQuaternion = characterObject?.getWorldQuaternion(new THREE.Quaternion()) ?? null
+		const animationWorldPosition = animationObject?.getWorldPosition(new THREE.Vector3()) ?? null
+		const currentAnimation = nodeAnimationRuntime.get(animationNodeId)
+		const contactDetails = bodyContacts.slice(0, 8).map((contact) => {
+			const otherBodyId = contact.bodyIdA === bodyId ? contact.bodyIdB : contact.bodyIdA
+			const otherNodeId = physicsBridgeNodeIdByBodyId.get(otherBodyId) ?? null
+			const otherNode = otherNodeId ? resolveNodeById(otherNodeId) : null
+			const otherRigidbody = otherNode ? resolvePhysicsRigidbodyComponent(otherNode) : null
+			const otherRigidbodyState = otherNode ? resolveRigidbodyComponent(otherNode) : null
+			const shape = (
+				otherRigidbodyState?.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
+			)?.shape
+			const otherBodyState = otherNodeId
+				? physicsBridgeFrameBodiesByNodeId.get(otherNodeId) ?? null
+				: null
+			const otherObject = otherNodeId ? nodeObjectMap.get(otherNodeId) ?? null : null
+			otherObject?.updateWorldMatrix(true, false)
+			const otherWorldPosition = otherObject?.getWorldPosition(new THREE.Vector3()) ?? null
+			const otherWorldQuaternion = otherObject?.getWorldQuaternion(new THREE.Quaternion()) ?? null
+			return {
+				bodyIdA: contact.bodyIdA,
+				bodyIdB: contact.bodyIdB,
+				otherBodyId,
+				otherNodeId,
+				otherNodeName: otherNode?.name ?? null,
+				otherBodyType: otherRigidbody?.props.bodyType ?? null,
+				otherColliderType: otherRigidbody?.props.colliderType ?? null,
+				otherFriction: otherRigidbody?.props.friction ?? null,
+				otherRestitution: otherRigidbody?.props.restitution ?? null,
+				otherShape: shape
+					? {
+						kind: shape.kind,
+						offset: shape.offset ?? null,
+						rotation: shape.rotation ?? null,
+						dimensions: shape.kind === 'box'
+							? shape.halfExtents
+							: shape.kind === 'capsule' || shape.kind === 'sphere'
+								? { radius: shape.radius, height: shape.kind === 'capsule' ? shape.height : null }
+								: shape.kind === 'static-mesh'
+									? { vertices: shape.vertices.length, indices: shape.indices.length }
+									: null,
+					}
+					: null,
+				otherLocalTransform: otherNode
+					? { position: otherNode.position, rotation: otherNode.rotation, scale: otherNode.scale }
+					: null,
+				otherWorldPosition: otherWorldPosition
+					? otherWorldPosition.toArray().map((value) => round(value))
+					: null,
+				otherWorldQuaternion: otherWorldQuaternion
+					? otherWorldQuaternion.toArray().map((value) => round(value))
+					: null,
+				otherPhysicsPosition: otherBodyState
+					? otherBodyState.position.toArray().map((value) => round(value))
+					: null,
+				otherPhysicsQuaternion: otherBodyState
+					? otherBodyState.quaternion.toArray().map((value) => round(value))
+					: null,
+				normal: contact.normal.map((value) => round(value)),
+				point: contact.point.map((value) => round(value)),
+				impulse: contact.impulse ?? null,
+				impactSpeed: contact.impactSpeed ?? null,
+			}
+		})
+		const diagnostic = {
+			time: new Date().toISOString(),
+			app: 'ScenePreviewView',
+			nodeId,
+			nodeName: node.name,
+			animationNodeId,
+			bodyNodeId,
+			bodyId,
+			characterId: physicsBridgeCharacterIdByNodeId.get(nodeId) ?? null,
+			physicsBridgeLoaded: physicsBridgeSceneLoaded,
+			physicsBridgePreference: currentPhysicsBridgePreference.value ?? null,
+			input: {
+				moveX: round(input.moveX),
+				moveZ: round(input.moveZ),
+				turn: round(input.turn),
+				jump: input.jump,
+				sprint: input.sprint,
+				crouch: input.crouch,
+				interact: input.interact,
+				locallyControlled: input.locallyControlled,
+			},
+			controller: {
+				forwardAxis: props.forwardAxis,
+				walkSpeed: props.walkSpeed,
+				stepHeight: props.stepHeight,
+				slopeLimitDegrees: props.slopeLimitDegrees,
+				colliderRadius: props.colliderRadius,
+				colliderHeight: props.colliderHeight,
+				targetNodeId: props.targetNodeId,
+				animationBindings: props.animationBindings,
+			},
+			characterRigidbody: resolvePhysicsRigidbodyComponent(node)?.props ?? null,
+			characterColliderShape: (
+				resolveRigidbodyComponent(node)?.metadata?.[RIGIDBODY_METADATA_KEY] as RigidbodyComponentMetadata | undefined
+			)?.shape?.kind ?? null,
+			characterLocalTransform: {
+				position: node.position,
+				rotation: node.rotation,
+				scale: node.scale,
+			},
+			characterWorldPosition: characterWorldPosition
+				? characterWorldPosition.toArray().map((value) => round(value))
+				: null,
+			characterWorldQuaternion: characterWorldQuaternion
+				? characterWorldQuaternion.toArray().map((value) => round(value))
+				: null,
+			animationWorldPosition: animationWorldPosition
+				? animationWorldPosition.toArray().map((value) => round(value))
+				: null,
+			physicsBodyPosition: bodyState
+				? bodyState.position.toArray().map((value) => round(value))
+				: null,
+			physicsBodyQuaternion: bodyState
+				? bodyState.quaternion.toArray().map((value) => round(value))
+				: null,
+			physicsBodyVelocity: bodyState?.linearVelocity
+				? bodyState.linearVelocity.toArray().map((value) => round(value))
+				: null,
+			physicsBodyMotionState: bodyState?.motionState ?? null,
+			animationClip: currentAnimation?.activeClipName ?? null,
+			animationControllerReady: nodeAnimationRuntime.has(animationNodeId),
+			animationOverrideCount: characterControllerAnimationRuntime.getBehaviorOverrideTokens(nodeId).length,
+			animationContactCount: animationContacts?.length ?? null,
+			animationGroundContactCount,
+			animationGroundRule: motorState
+				? 'characterMotor.grounded'
+				: 'abs(contact.normal.y) >= 0.5 (fallback)',
+			animationGrounded: motorState?.grounded
+				?? (animationContacts !== null && animationGroundContactCount > 0),
+			characterMotorGrounding: motorState
+				? {
+					grounded: motorState.grounded,
+					probeGrounded: motorState.probeGrounded,
+					contactGrounded: motorState.contactGrounded,
+					groundNormal: motorState.groundNormal,
+					linearVelocity: motorState.linearVelocity,
+				}
+				: null,
+			physicsBodyContactCount: bodyContacts.length,
+			contacts: contactDetails,
+		}
+		const signature = JSON.stringify({
+			input: [
+				quantize(input.moveX, 0.05),
+				quantize(input.moveZ, 0.05),
+				quantize(input.turn, 0.05),
+				input.jump,
+				input.sprint,
+				input.crouch,
+				input.interact,
+			],
+			controller: {
+				slopeLimitDegrees: props.slopeLimitDegrees,
+				stepHeight: props.stepHeight,
+				colliderRadius: props.colliderRadius,
+				colliderHeight: props.colliderHeight,
+			},
+			animationClip: diagnostic.animationClip,
+			animationControllerReady: diagnostic.animationControllerReady,
+			animationGroundContactCount,
+			characterMotorGrounding: motorState
+				? {
+					grounded: motorState.grounded,
+					probeGrounded: motorState.probeGrounded,
+					contactGrounded: motorState.contactGrounded,
+					groundNormal: motorState.groundNormal?.map((value) => quantize(value, 0.1)) ?? null,
+					linearVelocity: motorState.linearVelocity.map((value, index) => quantize(value, index === 1 ? 0.05 : 0.25)),
+				}
+				: null,
+			animationContactCount: diagnostic.animationContactCount,
+			animationOverrideCount: diagnostic.animationOverrideCount,
+			physicsBridgeLoaded: physicsBridgeSceneLoaded,
+			physicsBridgePreference: currentPhysicsBridgePreference.value ?? null,
+			bodyPosition: bodyState
+				? bodyState.position.toArray().map((value, index) => quantize(value, index === 1 ? 0.05 : 0.5))
+				: null,
+			bodyVelocity: bodyState?.linearVelocity
+				? bodyState.linearVelocity.toArray().map((value, index) => quantize(value, index === 1 ? 0.05 : 0.25))
+				: null,
+			physicsBodyMotionState: bodyState?.motionState ?? null,
+			characterWorldPosition: characterWorldPosition
+				? characterWorldPosition.toArray().map((value, index) => quantize(value, index === 1 ? 0.05 : 0.5))
+				: null,
+			animationWorldPosition: animationWorldPosition
+				? animationWorldPosition.toArray().map((value, index) => quantize(value, index === 1 ? 0.05 : 0.5))
+				: null,
+			contacts: contactDetails.map((contact) => ({
+				otherBodyId: contact.otherBodyId,
+				normal: contact.normal.map((value) => quantize(value, 0.1)),
+			})),
+		})
+		if (lastCharacterPhysicsDiagnosticSignatureByNodeId.get(nodeId) !== signature) {
+			lastCharacterPhysicsDiagnosticSignatureByNodeId.set(nodeId, signature)
+			console.log(`[HarmonyCharacterPhysicsDiagnostic] ${JSON.stringify(diagnostic)}`)
+		}
+	}
+	for (const nodeId of lastCharacterPhysicsDiagnosticSignatureByNodeId.keys()) {
+		if (!activeNodeIds.has(nodeId)) {
+			lastCharacterPhysicsDiagnosticSignatureByNodeId.delete(nodeId)
+		}
+	}
 }
 
 function updateCharacterPathFollow(delta: number): void {
@@ -11787,6 +12041,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	followCameraControlActive = false
 	followCameraControlDirty = false
 	physicsBridgeContactsByNodeId.clear()
+	physicsBridgeCharacterMotorStateByCharacterId.clear()
 	resetPhysicsWorld()
 	clearGroundCollisionRuntimeHost(groundCollisionHostObject)
 	releaseScenePreviewMeshCollisionRuntime()
@@ -12954,6 +13209,7 @@ function updateScenePreviewPhysicsBridgeIndex(document: SceneJsonExportDocument,
 	nonPhysicsCollisionWorld.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
 	physicsBridgeContactsByNodeId.clear()
+	physicsBridgeCharacterMotorStateByCharacterId.clear()
 	behaviorCollisionState.clear()
 	asset.bodies.forEach((body) => {
 		if (!body.userDataKey) {
@@ -13117,6 +13373,10 @@ function syncScenePreviewBridgeVehicleFromFrame(nodeId: string, state: PhysicsBr
 }
 
 function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
+	physicsBridgeCharacterMotorStateByCharacterId.clear()
+	frame.characterMotorStates?.forEach((state) => {
+		physicsBridgeCharacterMotorStateByCharacterId.set(state.characterId, state)
+	})
 	const nextContactsByNodeId = new Map<string, PhysicsContactEvent[]>()
 	if (frame.bodyCount > 0 && frame.bodyMeta?.length) {
 		for (let index = 0; index < frame.bodyCount; index += 1) {
@@ -15836,6 +16096,7 @@ onBeforeUnmount(() => {
 	characterControllerAnimationRuntime.clear()
 	characterAutoTourRuntime.clear()
 	physicsBridgeContactsByNodeId.clear()
+	physicsBridgeCharacterMotorStateByCharacterId.clear()
 	behaviorCollisionCandidates.clear()
 	behaviorCollisionState.clear()
 	clearBehaviorSounds()

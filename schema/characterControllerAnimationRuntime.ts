@@ -46,12 +46,18 @@ export type CharacterControllerAnimationInputState = {
 	locallyControlled?: boolean
 }
 
+export type CharacterControllerMotorGroundState = {
+	grounded: boolean
+	groundNormal: [number, number, number] | null
+}
+
 export type CharacterControllerAnimationRuntimeHost = {
 	nodeAnimationRuntime: SceneAnimationRuntimeManager
 	iterNodes: () => Iterable<[string, SceneNode]>
 	resolveNode: (nodeId: string) => SceneNode | null
 	resolveInput: (nodeId: string) => CharacterControllerAnimationInputState
 	resolveGroundContacts: (nodeId: string) => readonly PhysicsContactEvent[] | null | undefined
+	resolveCharacterMotorState?: (nodeId: string) => CharacterControllerMotorGroundState | null | undefined
 	log?: (message: string) => void
 }
 
@@ -252,7 +258,8 @@ export class CharacterControllerAnimationRuntimeManager {
 			const movementMagnitude = resolveCharacterControlMovementMagnitude(moveX, moveZ)
 			const jumpPressed = input.jump
 			const contacts = host.resolveGroundContacts(nodeId) ?? null
-			const groundedState = this.resolveGroundedState(contacts)
+			const motorState = host.resolveCharacterMotorState?.(nodeId) ?? null
+			const groundedState = this.resolveGroundedState(contacts, motorState)
 			const grounded = groundedState.grounded
 			const previousGrounded = entry.lastGrounded
 			const graceMs = resolveGroundLossGraceMs(entry.lastGroundNormalY)
@@ -383,7 +390,31 @@ export class CharacterControllerAnimationRuntimeManager {
 
 	private resolveGroundedState(
 		contacts: readonly PhysicsContactEvent[] | null | undefined,
+		motorState: CharacterControllerMotorGroundState | null | undefined,
 	): { hasAuthority: boolean; grounded: boolean; groundedContactCount: number; maxContactNormalY: number | null; contactSamples: Array<{ bodyIdA: number; bodyIdB: number; normal: [number, number, number] }> } {
+		if (motorState) {
+			const contactSamples = (contacts ?? []).slice(0, 4).map((contact) => {
+				const normal: [number, number, number] = [
+					contact.normal[0] ?? 0,
+					contact.normal[1] ?? 0,
+					contact.normal[2] ?? 0,
+				]
+				return {
+					bodyIdA: contact.bodyIdA,
+					bodyIdB: contact.bodyIdB,
+					normal,
+				}
+			})
+			return {
+				hasAuthority: true,
+				grounded: motorState.grounded,
+				groundedContactCount: motorState.grounded ? 1 : 0,
+				maxContactNormalY: motorState.groundNormal
+					? Math.abs(motorState.groundNormal[1] ?? 0)
+					: null,
+				contactSamples,
+			}
+		}
 		if (contacts) {
 			let contactCount = 0
 			let groundedContactCount = 0
