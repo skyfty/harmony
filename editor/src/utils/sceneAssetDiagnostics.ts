@@ -14,6 +14,7 @@
 } from '@schema/core'
 import {
   BEHAVIOR_COMPONENT_TYPE,
+  DEVICE_ADAPTATION_COMPONENT_TYPE,
   ROAD_COMPONENT_TYPE,
   RIGIDBODY_COMPONENT_TYPE,
   WALL_COMPONENT_TYPE,
@@ -419,6 +420,10 @@ function collectComponentReferences(
       break
     case LOD_COMPONENT_TYPE:
     case RIGIDBODY_COMPONENT_TYPE:
+      break
+    case DEVICE_ADAPTATION_COMPONENT_TYPE:
+      // Device-adaptation profile IDs are configuration IDs, not asset IDs.
+      // Its explicit visitor below collects the rule's modelAssetId fields.
       break
     default:
       collectReferencesFromUnknown(props, bucket, record)

@@ -367,6 +367,7 @@ export async function prepareJsonSceneExportBundle(
     environment,
     nodes: snapshot.nodes,
     groundSettings: snapshot.groundSettings,
+    deviceAdaptation: snapshot.deviceAdaptation,
     assetRegistry,
     projectOverrideAssets: snapshot.projectOverrideAssets,
     sceneOverrideAssets: snapshot.sceneOverrideAssets,

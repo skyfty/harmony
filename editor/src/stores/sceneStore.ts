@@ -21,6 +21,7 @@ import {
   type Light,
 } from 'three'
 import type { EnvironmentSettings, EnvironmentSettingsPatch } from '@schema/core'
+import { DEFAULT_DEVICE_ADAPTATION_SETTINGS, normalizeDeviceAdaptationSettings } from '@schema/deviceAdaptation'
 import type { DicePresetData } from '@/utils/dicePreset'
 import {
   GROUND_NODE_ID,
@@ -7431,6 +7432,7 @@ export async function cloneSceneDocumentForExport(
     sceneOverrideAssets: scene.sceneOverrideAssets,
     resourceSummary: scene.resourceSummary,
     planningData: scene.planningData,
+    deviceAdaptation: scene.deviceAdaptation,
     viewportSettings: scene.viewportSettings,
     shadowsEnabled: scene.shadowsEnabled,
     panelVisibility: scene.panelVisibility,
@@ -9121,6 +9123,7 @@ function createSceneDocument(
     sceneOverrideAssets?: Record<string, SceneAssetOverrideEntry>
     resourceSummary?: SceneResourceSummary
     planningData?: PlanningSceneData | null
+    deviceAdaptation?: unknown
     viewportSettings?: Partial<SceneViewportSettings>
     shadowsEnabled?: boolean
     panelVisibility?: Partial<PanelVisibilityState>
@@ -9203,6 +9206,7 @@ function createSceneDocument(
     sceneOverrideAssets,
     resourceSummary,
     planningData: clonePlanningData(options.planningData),
+    deviceAdaptation: normalizeDeviceAdaptationSettings(options.deviceAdaptation),
   }
 }
 
@@ -9272,6 +9276,7 @@ function buildSceneDocumentFromState(store: SceneState): StoredSceneDocument {
     sceneOverrideAssets: store.sceneOverrideAssets ? cloneSceneAssetOverrides(store.sceneOverrideAssets) : undefined,
     resourceSummary: store.resourceSummary ? cloneSceneResourceSummary(store.resourceSummary) : undefined,
     planningData: normalizedPlanningData ?? undefined,
+    deviceAdaptation: normalizeDeviceAdaptationSettings(store.deviceAdaptation),
   }
 }
 
@@ -9537,6 +9542,7 @@ function createInitialSceneState(): SceneState {
     shadowsEnabled: normalizeShadowsEnabledInput(defaultShadowsEnabled),
     environment: initialEnvironment,
     groundSettings: cloneGroundSettings(undefined),
+    deviceAdaptation: normalizeDeviceAdaptationSettings(DEFAULT_DEVICE_ADAPTATION_SETTINGS),
     planningData: null,
     panelVisibility: { ...defaultPanelVisibility },
     panelPlacement: { ...defaultPanelPlacement },
@@ -9596,6 +9602,7 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.viewportSettings = cloneViewportSettings(initialState.viewportSettings)
   store.shadowsEnabled = normalizeShadowsEnabledInput(initialState.shadowsEnabled)
   store.groundSettings = cloneGroundSettings(initialState.groundSettings)
+  store.deviceAdaptation = normalizeDeviceAdaptationSettings(initialState.deviceAdaptation)
   store.planningData = null
   store.panelVisibility = { ...initialState.panelVisibility }
   store.panelPlacement = { ...initialState.panelPlacement }
@@ -10576,6 +10583,7 @@ export const useSceneStore = defineStore('scene', {
       this.panelVisibility = normalizePanelVisibilityState(scene.panelVisibility)
       this.panelPlacement = normalizePanelPlacementStateInput(scene.panelPlacement)
       this.groundSettings = effectiveGroundSettings
+      this.deviceAdaptation = normalizeDeviceAdaptationSettings(scene.deviceAdaptation)
       this.resourceProviderId = scene.resourceProviderId ?? 'builtin'
       this.hasUnsavedChanges = false
 
@@ -11038,6 +11046,15 @@ export const useSceneStore = defineStore('scene', {
       }
 
       commitSceneSnapshot(this)
+      return true
+    },
+    setDeviceAdaptationSettings(settings: unknown) {
+      const normalized = normalizeDeviceAdaptationSettings(settings)
+      if (stableSerialize(normalized) === stableSerialize(this.deviceAdaptation)) {
+        return false
+      }
+      this.deviceAdaptation = normalized
+      commitSceneSnapshot(this, { updateNodes: false })
       return true
     },
     setGroundInfiniteSettings(payload: {
@@ -21023,7 +21040,7 @@ export const useSceneStore = defineStore('scene', {
     },
     async createScene(
       name = 'Untitled Scene',
-      options?: GroundSettings | { groundSettings?: Partial<GroundSettings>; planningData?: PlanningSceneData | null } | null,
+      options?: GroundSettings | { groundSettings?: Partial<GroundSettings>; planningData?: PlanningSceneData | null; deviceAdaptation?: unknown } | null,
     ) {
       beginSceneLifecycleSession(this, null, 'applying-scene')
       this.sceneSwitchToken += 1
@@ -21060,6 +21077,7 @@ export const useSceneStore = defineStore('scene', {
         selectedNodeId: null,
         selectedNodeIds: [],
         groundSettings,
+        deviceAdaptation: (options as { deviceAdaptation?: unknown } | null | undefined)?.deviceAdaptation,
         assetCatalog: baseAssetCatalog,
         panelVisibility: this.panelVisibility,
         panelPlacement: this.panelPlacement,
@@ -21441,6 +21459,7 @@ export const useSceneStore = defineStore('scene', {
             : undefined,
           assetRegistry: importedAssetRegistry,
           planningData: entry.planningData ?? null,
+          deviceAdaptation: (entry as { deviceAdaptation?: unknown }).deviceAdaptation,
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
           panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),
@@ -21557,6 +21576,7 @@ export const useSceneStore = defineStore('scene', {
           planningData: isPlainObject((entry as { planningData?: unknown }).planningData)
             ? ((entry as { planningData?: PlanningSceneData | null }).planningData ?? null)
             : null,
+          deviceAdaptation: (entry as { deviceAdaptation?: unknown }).deviceAdaptation,
           viewportSettings: normalizeViewportSettingsInput(entry.viewportSettings),
           panelVisibility: normalizePanelVisibilityInput(entry.panelVisibility),
           panelPlacement: normalizePanelPlacementInput(entry.panelPlacement),

@@ -86,6 +86,7 @@ interface ScenePackagePublishSceneDocument {
   environment?: SceneJsonExportDocument['environment']
   nodes: SceneJsonExportDocument['nodes']
   groundSettings?: SceneJsonExportDocument['groundSettings']
+  deviceAdaptation?: SceneJsonExportDocument['deviceAdaptation']
   assetRegistry?: Record<string, SceneAssetRegistryEntry>
   projectOverrideAssets?: Record<string, SceneAssetRegistryEntry>
   sceneOverrideAssets?: Record<string, SceneAssetRegistryEntry>

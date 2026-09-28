@@ -7,6 +7,7 @@ import type {
   SceneAssetRegistryEntry,
   SceneResourceSummary,
 } from '@schema/core'
+import type { DeviceAdaptationSettings } from '@schema/deviceAdaptation'
 import type { SceneCameraState } from './scene-camera-state'
 import type { ProjectAsset } from './project-asset'
 import type { SceneViewportSettings } from './scene-viewport-settings'
@@ -28,6 +29,7 @@ export interface StoredSceneDocument {
   shadowsEnabled: boolean
   environment?: EnvironmentSettings
   groundSettings: GroundSettings
+  deviceAdaptation?: DeviceAdaptationSettings
   panelVisibility?: PanelVisibilityState
   panelPlacement?: PanelPlacementState
   resourceProviderId: string

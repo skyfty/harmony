@@ -671,6 +671,7 @@ import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUt
 import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
 import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@harmony/schema/skyCubeTexture';
 import { isSkyCubeArchiveExtension } from '@harmony/schema/core';
+import { resolveDeviceAdaptationPlatform, resolveDeviceAdaptationProfile, type DeviceAdaptationSystemInfo, type DeviceAdaptationProfile } from '@harmony/schema/deviceAdaptation';
 import {
   canNodeUseRuntimeModelInstancing,
   collectRuntimeModelNodesByAssetId,
@@ -727,6 +728,7 @@ import {
   type SceneCsmShadowRuntime,
 } from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
+import { DEVICE_ADAPTATION_COMPONENT_TYPE, normalizeDeviceAdaptationNodeProps } from '@harmony/schema/components';
 import { SceneAnimationRuntimeManager } from '@harmony/schema/sceneAnimationRuntime';
 import {
   collectAnimationClips,
@@ -1826,6 +1828,9 @@ type CameraFrameSnapshot = {
 const cameraFrameSnapshotPosition = new THREE.Vector3();
 const cameraFrameSnapshotQuaternion = new THREE.Quaternion();
 let renderContext: RenderContext | null = null;
+let baseRendererPixelRatio = 1;
+let baseRendererShadowsEnabled = true;
+let activeDeviceAdaptationProfile: DeviceAdaptationProfile | null = null;
 const runtimeMemoryGuard = useRuntimeMemoryGuard({
   onModerate: () => {
     const context = renderContext;
@@ -1862,7 +1867,16 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
     if (!context) {
       return;
     }
-    context.renderer.setPixelRatio(1);
+    const qualityPixelCap = activeDeviceAdaptationProfile?.quality === 'low'
+      ? 1
+      : activeDeviceAdaptationProfile?.quality === 'balanced'
+        ? 1.5
+        : baseRendererPixelRatio;
+    context.renderer.setPixelRatio(Math.min(baseRendererPixelRatio, qualityPixelCap, activeDeviceAdaptationProfile?.pixelRatioCap ?? baseRendererPixelRatio));
+    context.renderer.shadowMap.enabled = activeDeviceAdaptationProfile
+      ? activeDeviceAdaptationProfile.shadowsEnabled && activeDeviceAdaptationProfile.quality !== 'low'
+      : baseRendererShadowsEnabled;
+    applyRendererShadowSetting();
   },
 });
 let currentDocument: SceneJsonExportDocument | null = null;
@@ -5512,8 +5526,74 @@ function mergeAssetPreloadMeshInfo(
   };
 }
 
+function readDeviceAdaptationSystemInfo(): DeviceAdaptationSystemInfo {
+  const host = globalThis as typeof globalThis & {
+    wx?: { getDeviceInfo?: () => Record<string, unknown>; getSystemInfoSync?: () => Record<string, unknown> }
+    uni?: { getSystemInfoSync?: () => Record<string, unknown> }
+    navigator?: { hardwareConcurrency?: number; platform?: string }
+  }
+  let raw: Record<string, unknown> = {}
+  try {
+    raw = host.wx?.getDeviceInfo?.() ?? host.wx?.getSystemInfoSync?.() ?? host.uni?.getSystemInfoSync?.() ?? {}
+  } catch {
+    raw = {}
+  }
+  const platform = resolveDeviceAdaptationPlatform(
+    raw.platform ?? host.navigator?.platform,
+    raw.system ?? raw.systemVersion,
+    host.wx ? 'wechat-miniprogram' : typeof window !== 'undefined' ? 'h5' : 'unknown',
+  )
+  const memoryRaw = raw.memorySize ?? raw.totalMemory ?? raw.memory
+  const memoryValue = typeof memoryRaw === 'string' ? Number.parseFloat(memoryRaw) : Number(memoryRaw)
+  const memoryMb = Number.isFinite(memoryValue) && memoryValue > 0 ? memoryValue : null
+  const cpuValue = Number(host.navigator?.hardwareConcurrency ?? raw.cpuCores)
+  const cpuCores = Number.isFinite(cpuValue) && cpuValue > 0 ? Math.trunc(cpuValue) : null
+  const benchmarkValue = Number(raw.benchmarkLevel ?? raw.modelLevel)
+  const benchmarkLevel = Number.isFinite(benchmarkValue) && benchmarkValue > 0 ? benchmarkValue : null
+  const systemVersion = typeof raw.systemVersion === 'string'
+    ? raw.systemVersion
+    : typeof raw.system === 'string'
+      ? raw.system.match(/\d+(?:\.\d+)+/)?.[0] ?? null
+      : null
+  let maxTextureSize: number | null = null
+  try {
+    const gl = renderContext?.renderer.getContext()
+    const value = gl?.getParameter(gl.MAX_TEXTURE_SIZE)
+    maxTextureSize = Number.isFinite(value) && value > 0 ? value : null
+  } catch {
+    maxTextureSize = null
+  }
+  return { platform, memoryMb, cpuCores, benchmarkLevel, maxTextureSize, systemVersion }
+}
+
 function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?: SceneGraphBuildOptions['onProgress']): SceneGraphBuildOptions {
   const buildOptions: SceneGraphBuildOptions = {};
+  activeDeviceAdaptationProfile = resolveDeviceAdaptationProfile(payload.document.deviceAdaptation, readDeviceAdaptationSystemInfo());
+  const renderer = renderContext?.renderer;
+  const qualityPixelCap = activeDeviceAdaptationProfile?.quality === 'low'
+    ? 1
+    : activeDeviceAdaptationProfile?.quality === 'balanced'
+      ? 1.5
+      : baseRendererPixelRatio;
+  const resolvedPixelCap = Math.min(qualityPixelCap, activeDeviceAdaptationProfile?.pixelRatioCap ?? baseRendererPixelRatio);
+  const resolvedShadows = activeDeviceAdaptationProfile
+    ? activeDeviceAdaptationProfile.shadowsEnabled && activeDeviceAdaptationProfile.quality !== 'low'
+    : baseRendererShadowsEnabled;
+  if (renderer) {
+    renderer.setPixelRatio(Math.min(baseRendererPixelRatio, resolvedPixelCap));
+    renderer.shadowMap.enabled = resolvedShadows;
+    applyRendererShadowSetting();
+  }
+  if (activeDeviceAdaptationProfile) {
+    buildOptions.lazyLoadMeshes = activeDeviceAdaptationProfile.lazyLoadMeshes || activeDeviceAdaptationProfile.quality === 'low';
+    buildOptions.deviceProfileId = activeDeviceAdaptationProfile.id;
+    buildOptions.resolveNodeAdaptation = (node) => {
+      const component = node.components?.[DEVICE_ADAPTATION_COMPONENT_TYPE];
+      if (!component || component.enabled === false) return null;
+      const componentProps = normalizeDeviceAdaptationNodeProps(component.props);
+      return componentProps.rules.find((rule) => rule.profileId === activeDeviceAdaptationProfile?.id) ?? null;
+    };
+  }
   const mergedAssetOverrides = mergeSceneAssetOverrides(
     payload.assetOverrides,
     activeScenePackageAssetOverrides ?? undefined,
@@ -22260,8 +22340,10 @@ async function ensureRendererContext(result: UseCanvasResult) {
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(pixelRatio);
+  baseRendererPixelRatio = pixelRatio;
   renderer.setSize(width, height, false);
   renderer.shadowMap.enabled = true;
+  baseRendererShadowsEnabled = renderer.shadowMap.enabled;
   renderer.shadowMap.type = THREE.PCFShadowMap
   // Reduce the cost of the transmission buffer for scenes that use physical materials.
   ;(renderer as THREE.WebGLRenderer & { transmissionResolutionScale?: number }).transmissionResolutionScale = 0.5
@@ -22390,7 +22472,6 @@ async function buildSceneGraphWithProgress(
       ...payload,
       document: runtimeDocument,
     };
-    lazyLoadMeshesEnabled = runtimeDocument.lazyLoadMeshes !== false;
     setSceneInitState({
       stage: 'building',
       label: '姝ｅ湪鏋勫缓鍦烘櫙鍥炬牳',
@@ -22451,6 +22532,7 @@ async function buildSceneGraphWithProgress(
         resourcePreload.total > 0 && resourcePreload.totalBytes > 0 && resourcePreload.loadedBytes < resourcePreload.totalBytes;
       resourcePreload.active = stillLoadingByCount || stillLoadingByBytes;
     });
+    lazyLoadMeshesEnabled = buildOptions.lazyLoadMeshes ?? runtimeDocument.lazyLoadMeshes !== false;
 
     resourceCache = ensureResourceCache(runtimePayload.document, buildOptions);
     viewerResourceCache = resourceCache;

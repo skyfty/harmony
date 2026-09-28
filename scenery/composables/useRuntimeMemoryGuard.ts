@@ -147,6 +147,8 @@ export function useRuntimeMemoryGuard(options: RuntimeMemoryGuardOptions = {}) {
     restoreTimer = setTimeout(() => {
       if (state.state === 'critical') {
         applyState('moderate', false)
+      } else if (state.state === 'moderate') {
+        applyState('normal', false)
         options.onRestoreModerate?.()
       }
       restoreTimer = null

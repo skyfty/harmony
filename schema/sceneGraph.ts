@@ -51,6 +51,7 @@ import type { WallComponentProps } from './components/definitions/wallComponent'
 import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wallComponent'
 import type { RoadComponentProps } from './components/definitions/roadComponent'
 import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/roadComponent'
+import type { DeviceAdaptationNodeRule } from './deviceAdaptation'
 
 import { getOrLoadModelObject } from './modelObjectCache'
 import { loadNodeObject } from './modelAssetLoader'
@@ -100,6 +101,8 @@ export interface SceneGraphBuildOptions {
   >;
   onProgress?: (progress: SceneGraphResourceProgress) => void;
   lazyLoadMeshes?: boolean;
+  deviceProfileId?: string | null;
+  resolveNodeAdaptation?: (node: SceneNode) => DeviceAdaptationNodeRule | null;
   materialFactoryOptions?: Pick<SceneMaterialFactoryOptions, 'textureLoader' | 'hdrLoader'>;
 }
 
@@ -156,6 +159,7 @@ class SceneGraphBuilder {
   private readonly meshTemplateCache = new Map<string, MeshTemplate>();
   private readonly pendingMeshLoads = new Map<string, Promise<MeshTemplate | null>>();
   private readonly document: SceneJsonExportDocument;
+  private readonly options: SceneGraphBuildOptions;
   private readonly outlineMeshMap: SceneOutlineMeshMap;
   private readonly onProgress?: (progress: SceneGraphResourceProgress) => void;
   private readonly lazyLoadMeshes: boolean;
@@ -173,6 +177,7 @@ class SceneGraphBuilder {
     resourceCache: ResourceCache,
   ) {
     this.document = document;
+    this.options = options;
     this.root = new THREE.Group();
     this.root.name = document.name ?? 'Scene';
     this.resourceCache = resourceCache;
@@ -660,16 +665,44 @@ class SceneGraphBuilder {
         const essential = this.normalizeAssetIdList(meshInfo.essential);
         const layout = this.collectInstanceLayoutAssetIds(nodes);
         if (!layout.length) {
-          return essential;
+          return this.filterAdaptedMeshIds([...essential], nodes);
         }
-        return this.normalizeAssetIdList([...essential, ...layout]);
+        return this.filterAdaptedMeshIds(this.normalizeAssetIdList([...essential, ...layout]), nodes);
       }
-      return this.collectInstanceLayoutAssetIds(nodes);
+      return this.filterAdaptedMeshIds(this.collectInstanceLayoutAssetIds(nodes), nodes);
     }
     if (Array.isArray(meshInfo?.all) && meshInfo.all.length) {
-      return this.normalizeAssetIdList(meshInfo.all);
+      return this.filterAdaptedMeshIds(this.normalizeAssetIdList(meshInfo.all), nodes);
     }
-    return this.collectMeshAssetIds(nodes);
+    return this.filterAdaptedMeshIds(this.collectMeshAssetIds(nodes), nodes);
+  }
+
+  private filterAdaptedMeshIds(assetIds: string[], nodes: SceneNodeWithExtras[]): string[] {
+    const skipped = new Set<string>()
+    const active = new Set<string>()
+    const replacements = new Set<string>()
+    const stack = [...nodes]
+    while (stack.length) {
+      const node = stack.pop()
+      if (!node) continue
+      const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null
+      const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
+      if (assetId) {
+        if (adaptation?.action === 'skip-visual' || adaptation?.action === 'replace-model') {
+          skipped.add(assetId)
+          if (adaptation.action === 'replace-model' && adaptation.modelAssetId) {
+            active.add(adaptation.modelAssetId)
+            replacements.add(adaptation.modelAssetId)
+          }
+        } else {
+          active.add(assetId)
+        }
+      }
+      if (Array.isArray(node.children)) stack.push(...(node.children as SceneNodeWithExtras[]))
+    }
+    const filtered = assetIds.filter((assetId) => !skipped.has(assetId) || active.has(assetId))
+    replacements.forEach((assetId) => filtered.push(assetId))
+    return this.normalizeAssetIdList(filtered)
   }
 
   private normalizeAssetIdList(list: string[]): string[] {
@@ -800,6 +833,7 @@ class SceneGraphBuilder {
 
   private collectTextureAssetIds(nodes: SceneNodeWithExtras[]): string[] {
     const ids = new Set<string>();
+    const texturesOmittedForNodes = new Set<string>()
 
     const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : [];
     while (stack.length) {
@@ -807,7 +841,10 @@ class SceneGraphBuilder {
       if (!node) {
         continue;
       }
-      if (Array.isArray(node.materials) && node.materials.length) {
+      const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null;
+      const omitNodeTextures = adaptation?.action === 'skip-visual' || adaptation?.action === 'disable-textures'
+      if (omitNodeTextures) texturesOmittedForNodes.add(node.id)
+      if (!omitNodeTextures && Array.isArray(node.materials) && node.materials.length) {
         (node.materials as SceneNodeMaterial[]).forEach((nodeMaterial: SceneNodeMaterial) => {
           this.collectTextureRefsFromMaterial(nodeMaterial, ids);
         });
@@ -818,6 +855,7 @@ class SceneGraphBuilder {
     }
 
     for (const usage of this.document.resourceSummary?.meshTextureUsage ?? []) {
+      if (texturesOmittedForNodes.has(usage.nodeId)) continue
       for(const textureAssetId of usage.textureAssetIds) {
         ids.add(textureAssetId);
       }
@@ -1064,9 +1102,48 @@ class SceneGraphBuilder {
         }
         continue;
       }
-      const built = await this.buildSingleNode(node, nextInheritedImportMaterial);
+      const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null;
+      if (adaptation?.action === 'skip-visual') {
+        const container = new THREE.Group();
+        container.name = `${node.name ?? node.id}::visual-skipped`;
+        this.applyTransform(container, node);
+        this.applyVisibility(container, node);
+        this.applyNodeMetadata(container, node);
+        parent.add(container);
+        if (Array.isArray(node.children) && node.children.length) {
+          await this.buildNodes(node.children as SceneNodeWithExtras[], container, nextInheritedImportMaterial, lightweightPatchContext);
+        }
+        continue;
+      }
+      const effectiveNode = adaptation?.action === 'replace-model' && adaptation.modelAssetId
+        ? { ...node, sourceAssetId: adaptation.modelAssetId, importMetadata: undefined, importChildrenExpanded: false }
+        : adaptation?.action === 'disable-textures'
+          ? { ...node, materials: (node.materials ?? []).map((material) => ({ ...material, textures: {} })) }
+          : node;
+      const built = await this.buildSingleNode(effectiveNode, nextInheritedImportMaterial);
       if (!built) {
         continue;
+      }
+      if (adaptation?.action === 'disable-textures' || adaptation?.action === 'simplify-rendering') {
+        built.traverse((object) => {
+          const renderable = object as THREE.Mesh;
+          if (!renderable.isMesh) return;
+          if (adaptation.action === 'simplify-rendering') {
+            renderable.castShadow = false;
+            renderable.receiveShadow = false;
+          }
+          if (adaptation.action === 'disable-textures') {
+            const materials = Array.isArray(renderable.material) ? renderable.material : [renderable.material];
+            for (const material of materials) {
+              for (const slot of MATERIAL_TEXTURE_SLOTS) {
+                if (slot in material) {
+                  (material as unknown as Record<string, unknown>)[slot] = null;
+                }
+              }
+              material.needsUpdate = true;
+            }
+          }
+        });
       }
       this.applyNodeMetadata(built, node);
       parent.add(built);

@@ -186,6 +186,10 @@ function openPlanningDialog() {
                   <v-divider />
                   <v-list-item @click="handleMenuAction('CleanUnusedAssets')" class="menu-list-item">
                     Clean Unused Assets    </v-list-item>
+                  <v-divider />
+                  <v-list-item @click="handleMenuAction('SceneDeviceAdaptation')" class="menu-list-item">
+                    Device Adaptation Rules...
+                  </v-list-item>
               </v-list>
             </v-menu>
 

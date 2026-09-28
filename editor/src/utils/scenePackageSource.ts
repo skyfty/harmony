@@ -43,6 +43,7 @@ interface ScenePackageSourceSceneDocument {
   shadowsEnabled?: import('@/types/stored-scene-document').StoredSceneDocument['shadowsEnabled']
   environment?: import('@/types/stored-scene-document').StoredSceneDocument['environment']
   groundSettings?: import('@/types/stored-scene-document').StoredSceneDocument['groundSettings']
+  deviceAdaptation?: import('@/types/stored-scene-document').StoredSceneDocument['deviceAdaptation']
   panelVisibility?: import('@/types/stored-scene-document').StoredSceneDocument['panelVisibility']
   panelPlacement?: import('@/types/stored-scene-document').StoredSceneDocument['panelPlacement']
   resourceProviderId?: import('@/types/stored-scene-document').StoredSceneDocument['resourceProviderId']

@@ -33,6 +33,7 @@ import RigidbodyPanel from '@/components/inspector/RigidbodyPanel.vue'
 import VehiclePanel from '@/components/inspector/VehiclePanel.vue'
 import SteerPanel from '@/components/inspector/SteerPanel.vue'
 import LodPanel from '@/components/inspector/LodPanel.vue'
+import DeviceAdaptationPanel from '@/components/inspector/DeviceAdaptationPanel.vue'
 import GuideRoutePanel from '@/components/inspector/GuideRoutePanel.vue'
 import AutoTourPanel from '@/components/inspector/AutoTourPanel.vue'
 import PurePursuitPanel from '@/components/inspector/PurePursuitPanel.vue'
@@ -91,6 +92,7 @@ import {
   resolveModelCollisionComponentPropsFromNode,
   
   LOD_COMPONENT_TYPE,
+  DEVICE_ADAPTATION_COMPONENT_TYPE,
   PROCEDURAL_CITY_COMPONENT_TYPE,
   CITY_GENERATOR_COMPONENT_TYPE,
   GENERAL_MESH_COMPONENT_TYPE,
@@ -737,6 +739,7 @@ watch(
               <LandformPanel v-else-if="component.type === LANDFORM_COMPONENT_TYPE" />
               <ModelCollisionPanel v-else-if="component.type === MODEL_COLLISION_COMPONENT_TYPE" />
               <LodPanel v-else-if="component.type === LOD_COMPONENT_TYPE" />
+              <DeviceAdaptationPanel v-else-if="component.type === DEVICE_ADAPTATION_COMPONENT_TYPE" />
               <GuideRoutePanel v-else-if="component.type === GUIDE_ROUTE_COMPONENT_TYPE" />
               <AutoTourPanel v-else-if="component.type === AUTO_TOUR_COMPONENT_TYPE" />
               <PurePursuitPanel v-else-if="component.type === PURE_PURSUIT_COMPONENT_TYPE" />

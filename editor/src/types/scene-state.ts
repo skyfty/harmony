@@ -18,6 +18,7 @@ import type { SceneHistoryEntry } from './scene-history-entry'
 import type { SceneViewportSettings } from './scene-viewport-settings'
 import type { SceneMaterial } from '@/types/material'
 import type { PlanningSceneData } from '@/types/planning-scene-data'
+import type { DeviceAdaptationSettings } from '@schema/deviceAdaptation'
 
 export type SceneLifecycleStatus =
   | 'idle'
@@ -79,6 +80,7 @@ export interface SceneState {
   
   environment: EnvironmentSettings
   groundSettings: GroundSettings
+  deviceAdaptation: DeviceAdaptationSettings
   planningData: PlanningSceneData | null
   panelVisibility: PanelVisibilityState
   projectPanelTreeSize: number

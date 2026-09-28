@@ -19,6 +19,7 @@ import NewProjectDialog from '@/components/layout/NewProjectDialog.vue'
 import { type ProjectCreateParams } from '@/types/project-summary'
 import { createProjectWithDefaultScene } from '@/stores/useProjectCreation'
 import SceneExportDialog from '@/components/layout/SceneExportDialog.vue'
+import DeviceAdaptationRulesDialog from '@/components/layout/DeviceAdaptationRulesDialog.vue'
 import { PROJECT_MANAGER_OVERLAY_CLOSE_KEY } from '@/injectionKeys'
 import { useAuthStore } from '@/stores/authStore'
 import { isLocalEditEnabled } from '@/utils/localEdit'
@@ -138,6 +139,7 @@ const panelPlacement = computed<PanelPlacementState>(() => {
 
 const isSceneManagerOpen = ref(false)
 const isPublishDialogOpen = ref(false)
+const isDeviceAdaptationRulesDialogOpen = ref(false)
 const isExporting = ref(false)
 const exportProgress = ref(0)
 const exportProgressMessage = ref('')
@@ -1735,6 +1737,9 @@ async function exportCurrentScene() {
 
 async function handleAction(action: string) {
   switch (action) {
+    case 'SceneDeviceAdaptation':
+      isDeviceAdaptationRulesDialogOpen.value = true
+      break
     case 'NewProject':
       if (sceneStore.hasUnsavedChanges) {
         const proceed = typeof window !== 'undefined' ? window.confirm('当前场景有未保存的修改，仍然要新建工程吗？') : true
@@ -2676,6 +2681,7 @@ onBeforeUnmount(() => {
       @confirm="handlePublishDialogConfirm"
       @cancel="handlePublishDialogCancel"
     />
+    <DeviceAdaptationRulesDialog v-model="isDeviceAdaptationRulesDialogOpen" />
 
     <v-dialog
       v-model="isExportDiagnosticsDialogOpen"

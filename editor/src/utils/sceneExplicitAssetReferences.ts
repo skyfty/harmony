@@ -99,6 +99,18 @@ export function visitExplicitComponentAssetReferences(
     case LOD_COMPONENT_TYPE:
       visitLodAssetReferences(props as Partial<LodComponentProps> | null | undefined, visit)
       return
+    case 'deviceAdaptation':
+      if (Array.isArray(props?.rules)) {
+        props.rules.forEach((rule, index) => {
+          if (rule && typeof rule === 'object') {
+            visit({
+              assetId: (rule as { modelAssetId?: string | null }).modelAssetId,
+              path: `rules[${index}].modelAssetId`,
+            })
+          }
+        })
+      }
+      return
     case DISPLAY_BOARD_COMPONENT_TYPE:
       visitDisplayAssetReference(props as Partial<DisplayBoardComponentProps> | null | undefined, visit)
       return

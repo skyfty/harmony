@@ -1689,6 +1689,7 @@ export interface SceneJsonExportDocument {
   environment?: EnvironmentSettings;
   nodes: SceneNode[];
   groundSettings?: GroundSettings;
+  deviceAdaptation?: import('./deviceAdaptation').DeviceAdaptationSettings;
   outlineMeshMap?: SceneOutlineMeshMap;
   /** Canonical asset source registry (single source of truth). */
   assetRegistry?: Record<string, SceneAssetRegistryEntry>;
