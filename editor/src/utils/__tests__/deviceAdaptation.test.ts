@@ -72,6 +72,7 @@ describe('device adaptation profiles', () => {
     })
     const ios = normalized.profiles.find((profile) => profile.id === BUILTIN_IOS_DEVICE_PROFILE_ID)
     expect(ios?.conditions.platforms).toEqual(['ios'])
+    expect(ios?.conditions.maxMemoryMb).toBe(4096)
     expect(ios?.name).toBe('Renamed')
     expect(isBuiltinDeviceAdaptationProfileId(BUILTIN_IOS_DEVICE_PROFILE_ID)).toBe(true)
     expect(removeDeviceAdaptationProfile(normalized.profiles, BUILTIN_IOS_DEVICE_PROFILE_ID)).toEqual(normalized.profiles)

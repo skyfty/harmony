@@ -957,6 +957,9 @@ import {
 import {
   generalMeshComponentDefinition,
 } from '@harmony/schema/components/definitions/generalMeshComponent';
+import {
+  deviceAdaptationComponentDefinition,
+} from '@harmony/schema/components/definitions/deviceAdaptationComponent';
 import type {
   AutoTourRouteSnapResult,
   VehicleDriveCameraFollowState,
@@ -1083,6 +1086,7 @@ import {
 import {
   applyMaterialOverrides,
   disposeMaterialTextures,
+  resolveSceneNodeMaterialSlots,
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@harmony/schema/material';
@@ -2210,6 +2214,7 @@ previewComponentManager.registerDefinition(groundAnchorComponentDefinition);
 previewComponentManager.registerDefinition(groundCollisionSourceComponentDefinition);
 previewComponentManager.registerDefinition(nominateComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
+previewComponentManager.registerDefinition(deviceAdaptationComponentDefinition);
 previewComponentManager.registerDefinition(generalMeshComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
@@ -5563,7 +5568,8 @@ function readDeviceAdaptationSystemInfo(): DeviceAdaptationSystemInfo {
   } catch {
     maxTextureSize = null
   }
-  return { platform, memoryMb, cpuCores, benchmarkLevel, maxTextureSize, systemVersion }
+  const info = { platform, memoryMb, cpuCores, benchmarkLevel, maxTextureSize, systemVersion }
+  return info
 }
 
 function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?: SceneGraphBuildOptions['onProgress']): SceneGraphBuildOptions {
@@ -12445,14 +12451,17 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
   const importedOverrideOptions = isImportedModelOverrideNode(node)
     ? { ...materialOverrideOptions, inheritUnspecifiedTextures: true }
     : materialOverrideOptions;
+  const selectedMaterials = node.materials?.length
+    ? resolveSceneNodeMaterialSlots(node.materials, activeDeviceAdaptationProfile?.id ?? null)
+    : [];
   const instancedAssetId = typeof targetObject.userData?.instancedAssetId === 'string'
     ? targetObject.userData.instancedAssetId
     : null;
   if (instancedAssetId && isImportedModelOverrideNode(node)) {
     const modelGroup = getCachedModelObject(instancedAssetId);
     modelGroup?.meshes.forEach((mesh) => {
-      if (node.materials && node.materials.length) {
-        applyMaterialOverrides(mesh, node.materials, importedOverrideOptions);
+      if (selectedMaterials.length) {
+        applyMaterialOverrides(mesh, selectedMaterials, importedOverrideOptions);
       } else {
         resetMaterialOverrides(mesh);
       }
@@ -12460,8 +12469,8 @@ function applyNodeMaterialOverrides(targetObject: THREE.Object3D, node: SceneNod
     return;
   }
 
-  if (node.materials && node.materials.length) {
-    applyMaterialOverrides(targetObject, node.materials, importedOverrideOptions);
+  if (selectedMaterials.length) {
+    applyMaterialOverrides(targetObject, selectedMaterials, importedOverrideOptions);
   } else if (isImportedModelOverrideNode(node)) {
     resetMaterialOverrides(targetObject);
   } else {

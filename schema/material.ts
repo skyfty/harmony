@@ -651,7 +651,9 @@ export function resolveSceneNodeMaterialSlots(
   const entries = Array.isArray(materials) ? materials.filter(Boolean) : []
   if (!entries.length) return []
   const hasProfileAlternatives = entries.some((entry) => typeof entry.deviceProfileId === 'string' && entry.deviceProfileId.trim())
-  if (!hasProfileAlternatives) return [...entries]
+  if (!hasProfileAlternatives) {
+    return [...entries]
+  }
 
   const profileId = typeof deviceProfileId === 'string' ? deviceProfileId.trim() : ''
   if (profileId) {
@@ -659,10 +661,14 @@ export function resolveSceneNodeMaterialSlots(
     if (matching.length > 1) {
       warn?.(`Multiple material slots match device profile ${profileId}; using the first slot.`)
     }
-    if (matching.length) return [matching[0]!]
+    if (matching.length) {
+      return [matching[0]!]
+    }
   }
   const fallback = entries.find((entry) => !entry.deviceProfileId?.trim())
-  if (fallback) return [fallback]
+  if (fallback) {
+    return [fallback]
+  }
   warn?.('No material slot matches the active device profile and no default slot is configured; using the first slot.')
   return [entries[0]!]
 }

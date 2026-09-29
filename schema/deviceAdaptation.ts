@@ -139,13 +139,15 @@ export function normalizeDeviceAdaptationSettings(value: unknown): DeviceAdaptat
     const builtinProfile = isBuiltinIos || isBuiltinAndroid
       ? BUILTIN_DEVICE_ADAPTATION_PROFILES.find((entry) => entry.id === id)
       : undefined
+    const builtinConditions = builtinProfile?.conditions ?? {}
     normalizedProfiles.push({
       id,
       name,
       enabled: profile.enabled !== false,
       priority: Number.isFinite(Number(profile.priority)) ? Number(profile.priority) : -index,
       conditions: {
-        ...(builtinProfile ? { platforms: [...(builtinProfile.conditions.platforms ?? [])] } : platforms?.length ? { platforms } : {}),
+        ...builtinConditions,
+        ...(builtinProfile ? { platforms: [...(builtinConditions.platforms ?? [])] } : platforms?.length ? { platforms } : {}),
         ...(finitePositive(conditions.maxMemoryMb) ? { maxMemoryMb: finitePositive(conditions.maxMemoryMb)! } : {}),
         ...(finitePositive(conditions.maxCpuCores) ? { maxCpuCores: Math.trunc(finitePositive(conditions.maxCpuCores)!) } : {}),
         ...(finitePositive(conditions.maxBenchmarkLevel) ? { maxBenchmarkLevel: finitePositive(conditions.maxBenchmarkLevel)! } : {}),
