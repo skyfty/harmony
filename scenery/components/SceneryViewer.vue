@@ -6580,6 +6580,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   const anchorTransform = applyRuntimePrefabTransform(cloned.root, request);
   const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root);
   const buildOptions: SceneGraphBuildOptions = {};
+  buildOptions.deviceProfileId = activeDeviceAdaptationProfile?.id ?? null;
   if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
     buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
   }
@@ -6781,7 +6782,7 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     const request: RuntimePrefabSpawnRequest = { requestId: `control-node-switch:${Date.now().toString(36)}`, controllableIdentifier: binding.steerProps.defaultIdentifier ?? null, controllableType: targetType, assetId, assetUrl: null, targetNodeId: currentNodeId, targetNodeName: null, position: null, rotation: null, scale: null, initializationMode: 'full', placement: { alignment: 'origin', offset: null } };
     const source = await resolveRuntimePrefabSource(request, runtimePrefabSourceResolverOptions);
     if (!source) return false;
-    const instanced = await instantiateRuntimePrefabControlSwitchInstanceFromPrefab(source.prefab, { buildOptions: () => (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim() ? { serverAssetBaseUrl: props.serverAssetBaseUrl.trim() } : {}), createResourceCache: ensureResourceCache, buildSceneGraph, prepareClonedRoot: (root) => {
+    const instanced = await instantiateRuntimePrefabControlSwitchInstanceFromPrefab(source.prefab, { buildOptions: () => ({ ...(typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim() ? { serverAssetBaseUrl: props.serverAssetBaseUrl.trim() } : {}), deviceProfileId: activeDeviceAdaptationProfile?.id ?? null }), createResourceCache: ensureResourceCache, buildSceneGraph, prepareClonedRoot: (root) => {
       applyRuntimePrefabTransform(root, request);
       const sourceQuaternion = resolveControlNodeSwitchQuaternion(currentObject, resolveNodeById(currentNodeId), root);
       const euler = new THREE.Euler().setFromQuaternion(sourceQuaternion, 'XYZ');
@@ -14461,6 +14462,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     stripRemoteMultiuserPrefabRuntimeComponents(cloned.root);
     const runtimeDocument = createRuntimePrefabDocument(source.prefab, cloned.root);
     const buildOptions: SceneGraphBuildOptions = {};
+    buildOptions.deviceProfileId = activeDeviceAdaptationProfile?.id ?? null;
     if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
       buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
     }

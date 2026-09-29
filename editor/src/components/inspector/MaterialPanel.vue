@@ -148,9 +148,9 @@ watch(
 const canAddMaterialSlot = computed(() =>
   !!selectedNodeId.value
   && !props.disabled
-  // Imported model nodes (expanded child or whole-model root) carry at most a
-  // single override slot; a second one is created by dropping/replacing instead.
-  && (!isImportedModelMaterialNode.value || nodeMaterials.value.length === 0),
+  // Expanded lightweight import children remain single-override nodes; whole
+  // imported-model roots may add slots to define device-specific alternatives.
+  && (!isLightweightNode.value || nodeMaterials.value.length === 0),
 )
 const canDeleteMaterialSlot = computed(() => !!selectedNodeId.value && !!internalActiveId.value && !props.disabled)
 
@@ -306,7 +306,7 @@ function clearMaterialPreviewThumbnail(slotId: string) {
 }
 
 /**
- * Creates the first (and only) material slot of the selected node.
+ * Creates a material slot for the selected node.
  *
  * Picking a material type from the `+` menu is an explicit request for that
  * type. Dropping a texture or a material preset is likewise an instruction to
@@ -519,7 +519,11 @@ async function handleMaterialAssetPicked(asset: ProjectAsset | null) {
     return
   }
   const registeredAsset = ensureMaterialAssetRegistered(asset)
-  const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(selectedNodeId.value, slotId, registeredAsset.id)
+  const applied = await sceneStore.applyMaterialAssetToNodeMaterialSlot(
+    selectedNodeId.value,
+    slotId,
+    registeredAsset.id,
+  )
   if (!applied) {
     return
   }
@@ -648,7 +652,11 @@ async function handleListDrop(event: DragEvent) {
     if (!materialDefinition) {
       return
     }
-    const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(nodeId, targetSlot.id, asset.id)
+    const assigned = await sceneStore.applyMaterialAssetToNodeMaterialSlot(
+      nodeId,
+      targetSlot.id,
+      asset.id,
+    )
     if (assigned) {
       setMaterialPreviewThumbnail(targetSlot.id, assigned.thumbnail ?? resolveMaterialAssetThumbnail(asset.id) ?? asset.thumbnail)
       setActiveSlot(targetSlot.id)

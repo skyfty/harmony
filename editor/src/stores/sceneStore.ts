@@ -2223,6 +2223,7 @@ function createNodeMaterial(
     thumbnail?: string | null
     textureOverrides?: SceneMaterialTextureSlot[]
     sourceMaterialAssetId?: string | null
+    deviceProfileId?: string | null
   } = {},
 ): SceneNodeMaterial {
   return {
@@ -2235,6 +2236,11 @@ function createNodeMaterial(
     // source props (e.g. when editing an existing node material).
     ...(options.textureOverrides ? { textureOverrides: Array.from(new Set(options.textureOverrides)) } : {}),
     ...(options.sourceMaterialAssetId ? { sourceMaterialAssetId: options.sourceMaterialAssetId } : {}),
+    ...(options.deviceProfileId !== undefined
+      ? { deviceProfileId: options.deviceProfileId }
+      : typeof (props as SceneNodeMaterial).deviceProfileId === 'string'
+        ? { deviceProfileId: (props as SceneNodeMaterial).deviceProfileId }
+        : {}),
   }
 }
 
@@ -2325,6 +2331,7 @@ function cloneNodeMaterial(material: SceneNodeMaterial): SceneNodeMaterial {
     type: material.type ?? 'MeshStandardMaterial',
     thumbnail: material.thumbnail ?? null,
     sourceMaterialAssetId: material.sourceMaterialAssetId ?? null,
+    deviceProfileId: material.deviceProfileId,
   })
 }
 
@@ -12099,6 +12106,7 @@ export const useSceneStore = defineStore('scene', {
         if (!nodeSupportsMaterials(node) || !node.materials?.length) {
           return
         }
+        const removedEntry = node.materials.find((entry) => entry.id === nodeMaterialId) ?? null
         const nextMaterials = node.materials.filter((entry) => entry.id !== nodeMaterialId)
         if (nextMaterials.length !== node.materials.length) {
           if (!nextMaterials.length) {
@@ -12118,6 +12126,17 @@ export const useSceneStore = defineStore('scene', {
               node.materials = [defaultMaterial]
             }
           } else {
+            const hasProfileAlternatives = nextMaterials.some((entry) => Boolean(entry.deviceProfileId))
+            const hasFallback = nextMaterials.some((entry) => !entry.deviceProfileId)
+            if (hasProfileAlternatives && !hasFallback && removedEntry && !removedEntry.deviceProfileId) {
+              nextMaterials.push(createNodeMaterial(removedEntry, {
+                name: removedEntry.name ? `${removedEntry.name} (默认)` : 'Default Material',
+                type: removedEntry.type,
+                thumbnail: removedEntry.thumbnail ?? null,
+                textureOverrides: removedEntry.textureOverrides,
+                sourceMaterialAssetId: removedEntry.sourceMaterialAssetId ?? null,
+              }))
+            }
             node.materials = nextMaterials
           }
           removed = true
@@ -12188,6 +12207,7 @@ export const useSceneStore = defineStore('scene', {
             sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: nextTextureOverrides
               ?? mergeTextureOverrideSlots(entry.textureOverrides, touchedTextureSlots),
+            deviceProfileId: entry.deviceProfileId,
           })
         })
         const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
@@ -12227,6 +12247,7 @@ export const useSceneStore = defineStore('scene', {
             thumbnail: entry.thumbnail ?? null,
             sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: entry.textureOverrides,
+            deviceProfileId: entry.deviceProfileId,
           })
         })
         const landformResult = landformHelpers.ensureLandformMaterialConvention(node)
@@ -12244,6 +12265,39 @@ export const useSceneStore = defineStore('scene', {
       if (findNodeById(this.nodes, nodeId)?.dynamicMesh?.type === 'Landform') {
         scheduleLandformGroundSplatBake(this, 'updateNodeMaterialType')
       }
+      commitSceneSnapshot(this)
+      return true
+    },
+    updateNodeMaterialDeviceProfile(nodeId: string, nodeMaterialId: string, deviceProfileId: string | null) {
+      const profileId = typeof deviceProfileId === 'string' ? deviceProfileId.trim() : ''
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target?.materials?.length || !target.materials.some((entry) => entry.id === nodeMaterialId)) return false
+      const activeEntry = target.materials.find((entry) => entry.id === nodeMaterialId)!
+      if (activeEntry.deviceProfileId === (profileId || undefined)) return true
+      if (profileId && target.materials.some((entry) => entry.id !== nodeMaterialId && entry.deviceProfileId === profileId)) return false
+      if (!profileId && target.materials.some((entry) => entry.id !== nodeMaterialId && !entry.deviceProfileId)) return false
+      let updated = false
+      this.captureHistorySnapshot()
+      visitNode(this.nodes, nodeId, (node) => {
+        if (!nodeSupportsMaterials(node) || !node.materials?.length) return
+        const entries = [...node.materials]
+        const index = entries.findIndex((entry) => entry.id === nodeMaterialId)
+        const entry = entries[index]
+        if (!entry) return
+        entries[index] = createNodeMaterial(entry, {
+          id: entry.id,
+          name: entry.name,
+          type: entry.type,
+          thumbnail: entry.thumbnail ?? null,
+          sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
+          textureOverrides: entry.textureOverrides,
+          deviceProfileId: profileId || null,
+        })
+        node.materials = entries
+        updated = true
+      })
+      if (!updated) return false
+      this.queueSceneNodePatch(nodeId, ['materials'])
       commitSceneSnapshot(this)
       return true
     },
@@ -12274,6 +12328,7 @@ export const useSceneStore = defineStore('scene', {
               textureOverrides: isImportedModelMaterialTarget(node)
                 ? collectTextureOverrideSlots(source)
                 : entry.textureOverrides,
+              deviceProfileId: entry.deviceProfileId,
             })
           }
           const currentProps = extractMaterialProps(entry)
@@ -12284,6 +12339,7 @@ export const useSceneStore = defineStore('scene', {
             type: entry.type,
             thumbnail: entry.thumbnail ?? null,
             textureOverrides: entry.textureOverrides,
+            deviceProfileId: entry.deviceProfileId,
           })
         })
         const floorResult = floorHelpers.ensureFloorMaterialConvention(node)
@@ -12475,6 +12531,7 @@ export const useSceneStore = defineStore('scene', {
             textureOverrides: isImportedModelMaterialTarget(node)
               ? collectTextureOverrideSlots(material)
               : entry.textureOverrides,
+            deviceProfileId: entry.deviceProfileId,
           })
           appliedEntry = nextEntry
           return nextEntry
@@ -12542,7 +12599,10 @@ export const useSceneStore = defineStore('scene', {
       commitSceneSnapshot(this)
       return appliedEntry
     },
-    async resetNodeMaterialSlotToDefault(nodeId: string, nodeMaterialId: string): Promise<SceneNodeMaterial | null> {
+    async resetNodeMaterialSlotToDefault(
+      nodeId: string,
+      nodeMaterialId: string,
+    ): Promise<SceneNodeMaterial | null> {
       const targetNode = findNodeById(this.nodes, nodeId)
       if (!targetNode || !nodeSupportsMaterials(targetNode) || !targetNode.materials?.length) {
         return null
@@ -12595,12 +12655,14 @@ export const useSceneStore = defineStore('scene', {
                 name: defaultTemplate.name?.trim() || fallbackName,
                 type: defaultTemplate.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
                 thumbnail: undefined,
+                deviceProfileId: entry.deviceProfileId,
               })
             : createNodeMaterial(defaultProps, {
                 id: entry.id,
                 name: defaultMaterial?.name?.trim() || fallbackName,
                 type: defaultMaterial?.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
                 thumbnail: undefined,
+                deviceProfileId: entry.deviceProfileId,
               })
           resetEntry = nextEntry
           return nextEntry
@@ -12768,9 +12830,11 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('材质槽位不存在或已被移除')
       }
 
+      const effectiveMaterial = nodeMaterial
+
       const resolvedName = nodeMaterial.name?.trim() || `Material ${materialIndex + 1}`
       const fileName = buildMaterialAssetFilename(resolvedName)
-      const dependencyAssetIds = collectMaterialAssetDependencyIds(nodeMaterial)
+      const dependencyAssetIds = collectMaterialAssetDependencyIds(effectiveMaterial)
       const dependencySubset = dependencyAssetIds.length
         ? buildAssetDependencySubset({
             assetIds: dependencyAssetIds,
@@ -12778,10 +12842,10 @@ export const useSceneStore = defineStore('scene', {
           })
         : {}
       const serialized = serializeMaterialAsset({
-        ...nodeMaterial,
+        ...effectiveMaterial,
         name: resolvedName,
         description: undefined,
-        type: nodeMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+        type: effectiveMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
       }, {
         assetRegistry: dependencySubset.assetRegistry,
       })
@@ -12810,9 +12874,9 @@ export const useSceneStore = defineStore('scene', {
       try {
         thumbnailDataUrl = await renderMaterialThumbnailDataUrl({
           material: {
-            ...nodeMaterial,
+            ...effectiveMaterial,
             name: resolvedName,
-            type: nodeMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
+            type: effectiveMaterial.type ?? DEFAULT_SCENE_MATERIAL_TYPE,
           },
           resolveTexture: createMaterialAssetTextureResolver({
             assetCacheStore: assetCache,
@@ -12889,6 +12953,7 @@ export const useSceneStore = defineStore('scene', {
             type: entry.type,
             sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: entry.textureOverrides,
+            deviceProfileId: entry.deviceProfileId,
           })
         })
       })
@@ -13399,6 +13464,7 @@ export const useSceneStore = defineStore('scene', {
             type: entry.type,
             sourceMaterialAssetId: entry.sourceMaterialAssetId ?? null,
             textureOverrides: entry.textureOverrides,
+            deviceProfileId: entry.deviceProfileId,
           })
         })
       })

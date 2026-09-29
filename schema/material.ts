@@ -643,6 +643,30 @@ export const PHYSICAL_GLASS_MATERIAL_DEFAULTS: Partial<SceneMaterialProps> = {
   side: 'double',
 }
 
+export function resolveSceneNodeMaterialSlots(
+  materials: readonly SceneNodeMaterial[] | null | undefined,
+  deviceProfileId?: string | null,
+  warn?: (message: string) => void,
+): SceneNodeMaterial[] {
+  const entries = Array.isArray(materials) ? materials.filter(Boolean) : []
+  if (!entries.length) return []
+  const hasProfileAlternatives = entries.some((entry) => typeof entry.deviceProfileId === 'string' && entry.deviceProfileId.trim())
+  if (!hasProfileAlternatives) return [...entries]
+
+  const profileId = typeof deviceProfileId === 'string' ? deviceProfileId.trim() : ''
+  if (profileId) {
+    const matching = entries.filter((entry) => entry.deviceProfileId?.trim() === profileId)
+    if (matching.length > 1) {
+      warn?.(`Multiple material slots match device profile ${profileId}; using the first slot.`)
+    }
+    if (matching.length) return [matching[0]!]
+  }
+  const fallback = entries.find((entry) => !entry.deviceProfileId?.trim())
+  if (fallback) return [fallback]
+  warn?.('No material slot matches the active device profile and no default slot is configured; using the first slot.')
+  return [entries[0]!]
+}
+
 export class SceneMaterialFactory {
   private readonly textureCache = new Map<string, Promise<THREE.Texture | null>>();
   private readonly disposableUrls = new Set<string>();
@@ -687,18 +711,20 @@ export class SceneMaterialFactory {
 
   async resolveNodeMaterials(
     entries: readonly SceneNodeMaterial[] | SceneNodeMaterial[] | null | undefined,
-    context: { nodeId?: string | null; nodeName?: string | null } = {},
+    context: { nodeId?: string | null; nodeName?: string | null; deviceProfileId?: string | null } = {},
   ): Promise<THREE.Material[]> {
     if (!Array.isArray(entries) || entries.length === 0) {
       return [this.createDefaultMaterial('#ffffff')];
     }
 
+    const selectedEntries = resolveSceneNodeMaterialSlots(entries, context.deviceProfileId, this.warn)
     const resolved: THREE.Material[] = [];
-    for (let index = 0; index < entries.length; index += 1) {
-      const entry = entries[index];
-      if (!entry) {
+    for (let index = 0; index < selectedEntries.length; index += 1) {
+      const sourceEntry = selectedEntries[index];
+      if (!sourceEntry) {
         continue;
       }
+      const entry = sourceEntry;
       try {
         const material = await this.createMaterialForNode(entry);
         if (material) {

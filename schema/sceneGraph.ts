@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { AssetCacheEntry } from './assetCache';
-import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides } from './material';
+import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides, resolveSceneNodeMaterialSlots } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
@@ -133,10 +133,10 @@ function hasEnabledGeneralMeshComponent(node: Pick<SceneNode, 'components'>): bo
 function resolveInheritedImportMaterial(
   node: Pick<SceneNode, 'materials'>,
   inherited: SceneNodeMaterial | null,
+  deviceProfileId?: string | null,
+  warn?: (message: string) => void,
 ): SceneNodeMaterial | null {
-  const own = Array.isArray(node.materials) && node.materials.length
-    ? ((node.materials[0] as SceneNodeMaterial | undefined) ?? null)
-    : null
+  const own = resolveSceneNodeMaterialSlots(node.materials, deviceProfileId, warn)[0] ?? null
   return own ?? inherited
 }
 
@@ -845,9 +845,9 @@ class SceneGraphBuilder {
       const omitNodeTextures = adaptation?.action === 'skip-visual' || adaptation?.action === 'disable-textures'
       if (omitNodeTextures) texturesOmittedForNodes.add(node.id)
       if (!omitNodeTextures && Array.isArray(node.materials) && node.materials.length) {
-        (node.materials as SceneNodeMaterial[]).forEach((nodeMaterial: SceneNodeMaterial) => {
-          this.collectTextureRefsFromMaterial(nodeMaterial, ids);
-        });
+        resolveSceneNodeMaterialSlots(node.materials as SceneNodeMaterial[], this.options.deviceProfileId,
+          (message) => this.warn(message),
+        ).forEach((nodeMaterial) => this.collectTextureRefsFromMaterial(nodeMaterial, ids));
       }
       if (Array.isArray(node.children) && node.children.length) {
         stack.push(...(node.children as SceneNodeWithExtras[]));
@@ -1087,7 +1087,9 @@ class SceneGraphBuilder {
       // The material surface of an imported model root acts as the default
       // override for its expanded lightweight descendants; a lightweight node
       // with its own material config overrides it for its own subtree.
-      const nextInheritedImportMaterial = resolveInheritedImportMaterial(node, inheritedImportMaterial);
+      const nextInheritedImportMaterial = resolveInheritedImportMaterial(
+        node, inheritedImportMaterial, this.options.deviceProfileId, (message) => this.warn(message),
+      );
       // Lightweight nodes of an expanded imported model root were already
       // patched onto the whole-model clone of that root.
       if (lightweightPatchContext?.handledNodeIds.has(node.id)) {
@@ -1324,7 +1326,7 @@ class SceneGraphBuilder {
       await this.buildNodes(
         node.children as SceneNodeWithExtras[],
         group,
-        resolveInheritedImportMaterial(node, inheritedImportMaterial),
+        resolveInheritedImportMaterial(node, inheritedImportMaterial, this.options.deviceProfileId, (message) => this.warn(message)),
         patchContext,
       );
     }
@@ -1371,7 +1373,7 @@ class SceneGraphBuilder {
       Array.isArray(node.children) ? (node.children as SceneNodeWithExtras[]) : [],
       {
         assetId,
-        inheritedMaterial: resolveInheritedImportMaterial(node, null),
+        inheritedMaterial: resolveInheritedImportMaterial(node, null, this.options.deviceProfileId, (message) => this.warn(message)),
         hooks: {
           applyTransform: (object, target) => this.applyTransform(object, target),
           applyMaterial: (object, material) => this.applySingleMaterialOverrideToObject(object, material),
@@ -1431,7 +1433,9 @@ class SceneGraphBuilder {
       : null;
 
     if (asset) {
-      const effectiveMaterial = resolveInheritedImportMaterial(node, inheritedImportMaterial);
+      const effectiveMaterial = resolveInheritedImportMaterial(
+        node, inheritedImportMaterial, this.options.deviceProfileId, (message) => this.warn(message),
+      );
       if (effectiveMaterial) {
         await this.applySingleMaterialOverrideToObject(asset, effectiveMaterial);
       }
@@ -1453,7 +1457,7 @@ class SceneGraphBuilder {
       await this.buildNodes(
         node.children as SceneNodeWithExtras[],
         container,
-        resolveInheritedImportMaterial(node, inheritedImportMaterial),
+        resolveInheritedImportMaterial(node, inheritedImportMaterial, this.options.deviceProfileId, (message) => this.warn(message)),
       );
     }
 
@@ -1555,7 +1559,9 @@ class SceneGraphBuilder {
 
     const outlineMesh = this.resolveOutlineMeshForNode(node);
     const childrenExpanded = isExpandedImportedModelRoot(node);
-    const nodeChildrenInheritedMaterial = resolveInheritedImportMaterial(node, inheritedImportMaterial);
+    const nodeChildrenInheritedMaterial = resolveInheritedImportMaterial(
+      node, inheritedImportMaterial, this.options.deviceProfileId, (message) => this.warn(message),
+    );
 
     if (
       this.lazyLoadMeshes
@@ -1734,7 +1740,11 @@ class SceneGraphBuilder {
     if (!object) {
       return;
     }
-    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : [];
+    const nodeMaterialConfigs = resolveSceneNodeMaterialSlots(
+      node.materials as SceneNodeMaterial[] | null | undefined,
+      this.options.deviceProfileId,
+      (message) => this.warn(message),
+    );
     if (!nodeMaterialConfigs.length) {
       return;
     }
@@ -1753,7 +1763,9 @@ class SceneGraphBuilder {
     if (!object || !materialConfig) {
       return;
     }
-    await this.applyImportedMaterialOverrideDelta(object, [materialConfig]);
+    await this.applyImportedMaterialOverrideDelta(object, [
+      ...resolveSceneNodeMaterialSlots([materialConfig], this.options.deviceProfileId, (message) => this.warn(message)),
+    ]);
   }
 
   /**
@@ -1881,6 +1893,7 @@ class SceneGraphBuilder {
     return this.materialFactory.resolveNodeMaterials(node.materials as SceneNodeMaterial[] | null | undefined, {
       nodeId: node.id,
       nodeName: node.name,
+      deviceProfileId: this.options.deviceProfileId,
     });
   }
 

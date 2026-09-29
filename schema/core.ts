@@ -715,6 +715,8 @@ export interface SceneNodeMaterial extends SceneMaterialProps {
    * texture slots.
    */
   textureOverrides?: SceneMaterialTextureSlot[];
+  /** Device Adaptation profile that selects this slot as an alternative. */
+  deviceProfileId?: string | null;
 }
 export type AssetSourceMetadata =
   | {

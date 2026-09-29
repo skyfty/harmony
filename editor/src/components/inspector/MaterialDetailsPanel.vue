@@ -156,15 +156,36 @@ const DEFAULT_PROPS: SceneMaterialProps = {
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { selectedNode, selectedNodeId, deviceAdaptation } = storeToRefs(sceneStore)
 
 const nodeMaterials = computed(() => selectedNode.value?.materials ?? [])
-const activeNodeMaterial = computed(() => {
+const activeNodeMaterialEntry = computed(() => {
   if (!props.nodeMaterialId) {
     return null
   }
   return nodeMaterials.value.find((entry) => entry.id === props.nodeMaterialId) ?? null
 })
+const activeNodeMaterial = activeNodeMaterialEntry
+const hasOtherDefaultSlot = computed(() => nodeMaterials.value.some((entry) =>
+  entry.id !== activeNodeMaterialEntry.value?.id && !entry.deviceProfileId,
+))
+const deviceProfileOptions = computed(() => [
+  {
+    title: '默认材质（设备未匹配时使用）',
+    value: '',
+    props: { disabled: hasOtherDefaultSlot.value },
+  },
+  ...deviceAdaptation.value.profiles.map((profile) => ({
+    title: profile.name,
+    value: profile.id,
+    props: {
+      disabled: nodeMaterials.value.some((entry) =>
+        entry.id !== activeNodeMaterialEntry.value?.id && entry.deviceProfileId === profile.id,
+      ),
+    },
+  })),
+])
+const deviceProfileSelectionError = ref('')
 
 /**
  * Imported model overrides only take over the texture slots the material lists;
@@ -475,7 +496,9 @@ function flushPendingMaterialPropsCommit() {
   if (!target || !update || !Object.keys(update).length) {
     return
   }
-  sceneStore.updateNodeMaterialProps(target.nodeId, target.materialId, update, { autoSaveMode: 'interactive' })
+  sceneStore.updateNodeMaterialProps(target.nodeId, target.materialId, update, {
+    autoSaveMode: 'interactive',
+  })
 }
 
 function handleClose() {
@@ -606,7 +629,8 @@ function commitMaterialProps(update: MaterialPropUpdate) {
   }
   if (
     pendingMaterialPropsTarget
-    && (pendingMaterialPropsTarget.nodeId !== nextTarget.nodeId || pendingMaterialPropsTarget.materialId !== nextTarget.materialId)
+    && (pendingMaterialPropsTarget.nodeId !== nextTarget.nodeId
+      || pendingMaterialPropsTarget.materialId !== nextTarget.materialId)
   ) {
     flushPendingMaterialPropsCommit()
   }
@@ -1145,6 +1169,16 @@ async function handleImportFileChange(event: Event) {
   }
 }
 
+function handleDeviceProfileChange(value: string) {
+  const nodeId = selectedNodeId.value
+  const materialId = activeNodeMaterialEntry.value?.id
+  if (!nodeId || !materialId) return
+  flushPendingMaterialPropsCommit()
+  deviceProfileSelectionError.value = sceneStore.updateNodeMaterialDeviceProfile(nodeId, materialId, value || null)
+    ? ''
+    : '该设备配置已分配给此节点的另一个材质槽。'
+}
+
 </script>
 
 <template>
@@ -1185,6 +1219,18 @@ async function handleImportFileChange(event: Event) {
         <v-divider />
         <div class="panel-content">
           <div v-if="activeNodeMaterial" class="panel-content-inner">
+            <div class="material-metadata material-profile-selector">
+              <v-select
+                :model-value="activeNodeMaterial.deviceProfileId ?? ''"
+                :items="deviceProfileOptions"
+                label="匹配设备配置档"
+                variant="solo"
+                density="compact"
+                hide-details
+                :disabled="isUiDisabled"
+                @update:model-value="handleDeviceProfileChange"
+              />
+            </div>
             <div class="material-metadata">
               <v-text-field
                 label=""
@@ -1663,6 +1709,17 @@ border-radius: 6px;
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.material-profile-selector {
+  display: flex;
+  align-items: center;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.material-profile-selector :deep(.v-select) {
+  flex: 1;
+  min-width: 0;
 }
 
 .material-properties {

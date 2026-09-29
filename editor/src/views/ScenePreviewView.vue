@@ -98,6 +98,7 @@ import {
 	syncPhysicsBridgeVehicleInput,
 } from '@schema/vehicleInput'
 import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
+import { resolveDeviceAdaptationPlatform, resolveDeviceAdaptationProfile } from '@schema/deviceAdaptation'
 import { ScenePreviewPhysicsCollisionDebugRuntime } from '@/physics/collisionDebugRuntime'
 import {
 	type PhysicsBackendPreference,
@@ -1995,6 +1996,7 @@ const MAP_CONTROL_DEFAULTS = {
 }
 let animationFrameHandle = 0
 let currentDocument: SceneJsonExportDocument | null = null
+let activeScenePreviewDeviceProfileId: string | null = null
 const isCannonPhysicsDebuggerVisible = ref(false)
 void isCannonPhysicsDebuggerVisible
 const runtimePrefabPreviewRoots = new Set<THREE.Object3D>()
@@ -6518,6 +6520,7 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 	const localAssetOverrides = await buildPreviewLocalAssetOverrides(runtimeDocument)
 	const buildOptions: SceneGraphBuildOptions = {
 		serverAssetBaseUrl: readServerDownloadBaseUrl(),
+		deviceProfileId: activeScenePreviewDeviceProfileId,
 		materialFactoryOptions: {
 			hdrLoader: rgbeLoader,
 		},
@@ -6689,7 +6692,11 @@ async function switchControlNodeRuntimePrefab(
 		const instanced = await instantiateRuntimePrefabControlSwitchInstance(raw, {
 			buildOptions: async (runtimeDocument) => {
 				const localOverrides = await buildPreviewLocalAssetOverrides(runtimeDocument)
-				const options: SceneGraphBuildOptions = { serverAssetBaseUrl: readServerDownloadBaseUrl(), materialFactoryOptions: { hdrLoader: rgbeLoader } }
+				const options: SceneGraphBuildOptions = {
+					serverAssetBaseUrl: readServerDownloadBaseUrl(),
+					deviceProfileId: activeScenePreviewDeviceProfileId,
+					materialFactoryOptions: { hdrLoader: rgbeLoader },
+				}
 				const merged = mergePreviewAssetOverrides(activeScenePackageAssetOverrides, Object.keys(localOverrides).length ? localOverrides : undefined)
 				if (merged) options.assetOverrides = merged
 				return options
@@ -15405,6 +15412,36 @@ async function applyInitialDocumentGraph(
 	environmentAssetRefreshTick.value += 1
 }
 
+function resolveScenePreviewDeviceProfileId(document: SceneJsonExportDocument): string | null {
+	const nav = typeof navigator !== 'undefined' ? navigator as Navigator & { deviceMemory?: number } : null
+	const userAgent = nav?.userAgent ?? ''
+	const platform = resolveDeviceAdaptationPlatform(nav?.platform, userAgent, 'h5')
+	const memoryMb = Number.isFinite(nav?.deviceMemory) && (nav?.deviceMemory ?? 0) > 0
+		? (nav?.deviceMemory ?? 0) * 1024
+		: null
+	const cpuCores = Number.isFinite(nav?.hardwareConcurrency) && (nav?.hardwareConcurrency ?? 0) > 0
+		? nav?.hardwareConcurrency ?? null
+		: null
+	const systemVersion = userAgent.match(/(?:OS |Android )([\d._]+)/i)?.[1]?.replace(/_/g, '.') ?? null
+	let maxTextureSize: number | null = null
+	try {
+		const gl = renderer?.getContext()
+		const reportedSize = gl?.getParameter(gl.MAX_TEXTURE_SIZE)
+		maxTextureSize = Number.isFinite(reportedSize) && reportedSize > 0 ? reportedSize : null
+	} catch {
+		maxTextureSize = null
+	}
+	const profile = resolveDeviceAdaptationProfile(document.deviceAdaptation, {
+		platform,
+		memoryMb,
+		cpuCores,
+		benchmarkLevel: null,
+		maxTextureSize,
+		systemVersion,
+	})
+	return profile?.id ?? null
+}
+
 async function updateScene(document: SceneJsonExportDocument) {
 	scenePreviewDriveBindingsReady.value = false
 	resetAssetResolutionCaches()
@@ -15423,6 +15460,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		renderer.toneMappingExposure = DEFAULT_TONE_MAPPING_EXPOSURE
 	}
 	const environmentSettings = resolveDocumentEnvironment(document)
+	activeScenePreviewDeviceProfileId = resolveScenePreviewDeviceProfileId(document)
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
 	deferredInstancingNodeIds.clear()
 	if (!scene || !rootGroup) {
@@ -15453,6 +15491,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		const localAssetOverrides = await buildPreviewLocalAssetOverrides(document)
 		const buildOptions: SceneGraphBuildOptions = {
 			serverAssetBaseUrl: readServerDownloadBaseUrl(),
+			deviceProfileId: activeScenePreviewDeviceProfileId,
 			onProgress: (info) => {
 				resourceProgress.total = info.total
 				resourceProgress.loaded = info.loaded
