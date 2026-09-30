@@ -6,8 +6,10 @@ const FILL_Y_OFFSET = 0.2
 const LINE_Y_OFFSET = 0.2
 const REGION_FILL_COLOR = 0x607d8b
 const REGION_FILL_OPACITY = 0.18
-const REGION_OUTLINE_COLOR = 0x455a64
-const REGION_OUTLINE_OPACITY = 0.82
+const REGION_OUTLINE_HALO_COLOR = 0x101418
+const REGION_OUTLINE_CORE_COLOR = 0xffd54f
+const REGION_OUTLINE_HALO_RADIUS = 0.075
+const REGION_OUTLINE_CORE_RADIUS = 0.035
 
 function toXZPoints(definition: RegionDynamicMesh): Array<[number, number]> {
   return (Array.isArray(definition.vertices) ? definition.vertices : [])
@@ -46,29 +48,52 @@ export function updateRegionEditorGroup(group: THREE.Group, definition: RegionDy
   const points = toXZPoints(definition)
   const shape = buildShape(points)
 
-  const previousLine = group.userData.regionLine as THREE.LineLoop | undefined
+  const previousOutline = group.userData.regionLine as THREE.Group | undefined
   const previousFill = group.userData.regionFill as THREE.Mesh | undefined
-  previousLine?.geometry?.dispose?.()
+  previousOutline?.traverse((child) => {
+    (child as THREE.Mesh).geometry?.dispose?.()
+    const material = (child as THREE.Mesh).material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry?.dispose?.())
+    } else {
+      material?.dispose?.()
+    }
+  })
   previousFill?.geometry?.dispose?.()
 
-  previousLine?.removeFromParent()
+  previousOutline?.removeFromParent()
   previousFill?.removeFromParent()
 
   const linePoints = points.map(([x, z]) => new THREE.Vector3(x, LINE_Y_OFFSET, z))
-  const line = new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints(linePoints.length >= 2 ? linePoints : [new THREE.Vector3(), new THREE.Vector3()]),
-    new THREE.LineBasicMaterial({
-      color: REGION_OUTLINE_COLOR,
-      transparent: true,
-      opacity: REGION_OUTLINE_OPACITY,
-      depthWrite: false,
-    }),
-  )
-  line.renderOrder = 101
-  line.name = 'RegionOutline'
-  line.userData.dynamicMeshType = 'Region'
-  group.add(line)
-  group.userData.regionLine = line
+  const outline = new THREE.Group()
+  outline.name = 'RegionOutline'
+  outline.userData.dynamicMeshType = 'Region'
+  const addOutlineSegment = (start: THREE.Vector3, end: THREE.Vector3, radius: number, color: number, renderOrder: number) => {
+    const direction = end.clone().sub(start)
+    const length = direction.length()
+    if (!Number.isFinite(length) || length <= 1e-6) {
+      return
+    }
+    const segment = new THREE.Mesh(
+      new THREE.CylinderGeometry(radius, radius, length, 12),
+      new THREE.MeshBasicMaterial({ color, depthWrite: false }),
+    )
+    segment.position.copy(start).add(end).multiplyScalar(0.5)
+    segment.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize())
+    segment.renderOrder = renderOrder
+    segment.userData.dynamicMeshType = 'Region'
+    outline.add(segment)
+  }
+  if (linePoints.length >= 2) {
+    for (let index = 0; index < linePoints.length; index += 1) {
+      const start = linePoints[index]!
+      const end = linePoints[(index + 1) % linePoints.length]!
+      addOutlineSegment(start, end, REGION_OUTLINE_HALO_RADIUS, REGION_OUTLINE_HALO_COLOR, 101)
+      addOutlineSegment(start, end, REGION_OUTLINE_CORE_RADIUS, REGION_OUTLINE_CORE_COLOR, 102)
+    }
+  }
+  group.add(outline)
+  group.userData.regionLine = outline
 
   if (!shape) {
     return

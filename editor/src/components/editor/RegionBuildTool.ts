@@ -37,6 +37,11 @@ type LeftClickState = {
 const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
 const DOUBLE_CLICK_MAX_DISTANCE_PX = 8
 const PREVIEW_Y_OFFSET = 0.04
+const PREVIEW_LINE_RADIUS = 0.055
+const PREVIEW_HALO_RADIUS = 0.11
+const PREVIEW_POINT_RADIUS = 0.12
+const PREVIEW_CORE_COLOR = 0xffd54f
+const PREVIEW_HALO_COLOR = 0x101418
 
 function getNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
@@ -45,43 +50,90 @@ function getNowMs(): number {
 function createPreviewGroup(points: THREE.Vector3[]): THREE.Group {
   const group = new THREE.Group()
   group.name = '__RegionPreview'
-
-  const line = new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints(points),
-    new THREE.LineBasicMaterial({
-      color: 0xff0000,
-      transparent: false,
-      opacity: 1,
-      depthWrite: false,
-    }),
-  )
-  line.renderOrder = 101
-  group.userData.line = line
   group.userData.isRegionPreview = true
-  group.add(line)
+  updatePreviewGroup(group, points)
   return group
 }
 
-function updatePreviewGroup(group: THREE.Group, points: THREE.Vector3[]): void {
-  const line = group.userData.line as THREE.Line | undefined
-  if (!line) {
-    return
-  }
-  line.geometry?.dispose?.()
-  line.geometry = new THREE.BufferGeometry().setFromPoints(points)
-}
-
-function disposePreviewGroup(group: THREE.Group): void {
-  group.traverse((child) => {
-    const drawable = child as THREE.Line | THREE.Mesh
-    drawable.geometry?.dispose?.()
-    const material = drawable.material as THREE.Material | THREE.Material[] | undefined
+function disposePreviewChildren(group: THREE.Group): void {
+  while (group.children.length) {
+    const child = group.children.pop()
+    child?.removeFromParent()
+    const drawable = child as THREE.Line | THREE.Mesh | undefined
+    drawable?.geometry?.dispose?.()
+    const material = drawable?.material as THREE.Material | THREE.Material[] | undefined
     if (Array.isArray(material)) {
       material.forEach((entry) => entry?.dispose?.())
     } else {
       material?.dispose?.()
     }
+  }
+}
+
+function createPreviewSegment(start: THREE.Vector3, end: THREE.Vector3, radius: number, color: number, renderOrder: number): THREE.Mesh | null {
+  const direction = end.clone().sub(start)
+  const length = direction.length()
+  if (!Number.isFinite(length) || length <= 1e-6) {
+    return null
+  }
+  const segment = new THREE.Mesh(
+    new THREE.CylinderGeometry(radius, radius, length, 12),
+    new THREE.MeshBasicMaterial({ color, depthWrite: false, depthTest: false }),
+  )
+  segment.position.copy(start).add(end).multiplyScalar(0.5)
+  segment.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize())
+  segment.renderOrder = renderOrder
+  return segment
+}
+
+function addPreviewPoint(group: THREE.Group, point: THREE.Vector3): void {
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(PREVIEW_POINT_RADIUS, 12, 12),
+    new THREE.MeshBasicMaterial({ color: PREVIEW_HALO_COLOR, depthWrite: false, depthTest: false }),
+  )
+  halo.position.copy(point)
+  halo.renderOrder = 142
+  group.add(halo)
+
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(PREVIEW_POINT_RADIUS * 0.56, 12, 12),
+    new THREE.MeshBasicMaterial({ color: PREVIEW_CORE_COLOR, depthWrite: false, depthTest: false }),
+  )
+  core.position.copy(point)
+  core.renderOrder = 143
+  group.add(core)
+}
+
+function updatePreviewGroup(group: THREE.Group, points: THREE.Vector3[]): void {
+  disposePreviewChildren(group)
+  if (points.length < 2) {
+    return
+  }
+
+  for (let index = 0; index < points.length; index += 1) {
+    const start = points[index]!
+    const end = points[(index + 1) % points.length]!
+    const halo = createPreviewSegment(start, end, PREVIEW_HALO_RADIUS, PREVIEW_HALO_COLOR, 140)
+    const core = createPreviewSegment(start, end, PREVIEW_LINE_RADIUS, PREVIEW_CORE_COLOR, 141)
+    if (halo) {
+      group.add(halo)
+    }
+    if (core) {
+      group.add(core)
+    }
+  }
+
+  const uniquePoints: THREE.Vector3[] = []
+  points.forEach((point) => {
+    if (!uniquePoints.some((existing) => existing.distanceToSquared(point) <= 1e-10)) {
+      uniquePoints.push(point)
+    }
   })
+  uniquePoints.forEach((point) => addPreviewPoint(group, point))
+}
+
+function disposePreviewGroup(group: THREE.Group): void {
+  disposePreviewChildren(group)
 }
 
 export function createRegionBuildTool(options: {
