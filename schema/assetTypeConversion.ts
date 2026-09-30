@@ -54,6 +54,7 @@ const ASSET_TYPE_BY_EXTENSION: Readonly<Record<string, AssetType>> = {
   gltf: 'model',
   glb: 'model',
   fbx: 'model',
+  rad: 'model',
   obj: 'model',
   stl: 'model',
 
@@ -150,6 +151,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   gltf: 'model/gltf+json',
   glb: 'model/gltf-binary',
   fbx: 'model/fbx',
+  rad: 'application/vnd.sparkjs.rad',
 
   // misc
   json: 'application/json',
@@ -264,7 +266,7 @@ export function getAssetTypeFromMimeType(mimeType: string | null | undefined): A
   if (normalized.startsWith('model/')) {
     return 'model'
   }
-  if (normalized.includes('gltf') || normalized.includes('fbx') || normalized.includes('obj') || normalized.includes('stl')) {
+  if (normalized.includes('gltf') || normalized.includes('fbx') || normalized.includes('obj') || normalized.includes('stl') || normalized.includes('sparkjs.rad')) {
     return 'model'
   }
   if (normalized.includes('material')) {

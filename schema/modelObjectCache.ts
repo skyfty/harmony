@@ -15,6 +15,7 @@ import {
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
 import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsmReceiverPolicy'
+import { disposeSparkObject } from './sparkRuntime'
 
 // three.js InstancedMesh allocates its whole instanceMatrix up front (capacity *
 // 16 floats = 128KB at the old capacity of 2048), even for the common single-
@@ -614,6 +615,7 @@ export function clearModelObjectCache(): void {
     entry.handles.forEach((handle) => {
       handle.mesh.dispose()
     })
+    disposeSparkObject(entry.object)
   })
   modelObjectCache.clear()
   pendingLoads.clear()

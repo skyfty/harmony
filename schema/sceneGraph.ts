@@ -3,6 +3,7 @@ import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides, resolveSceneNodeMaterialSlots } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { disposeSparkObject } from './sparkRuntime';
 import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
 import ResourceCache from './ResourceCache';
 import type {
@@ -515,6 +516,7 @@ class SceneGraphBuilder {
   dispose(): void {
     this.resourceCache.setHandlers({ warn: null, reportDownloadProgress: null });
     this.materialFactory.dispose();
+    this.meshTemplateCache.forEach((template) => disposeSparkObject(template.scene));
     this.meshTemplateCache.clear();
     this.pendingMeshLoads.clear();
   }
@@ -1912,7 +1914,9 @@ class SceneGraphBuilder {
   }
 
   private instantiateCachedMesh(base: MeshTemplate): THREE.Object3D {
-    const prepared = cloneSkinned(base.scene);
+    const prepared = base.scene.userData?.__harmonySparkSplat === true
+      ? base.scene.clone(true)
+      : cloneSkinned(base.scene);
     if (base.animations?.length) {
       const animations = base.animations.map((clip) => clip.clone());
       (prepared as unknown as { animations?: THREE.AnimationClip[] }).animations = animations;

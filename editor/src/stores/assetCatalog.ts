@@ -35,7 +35,7 @@ export const ASSET_CATEGORY_CONFIG: AssetCategoryDefinition[] = [
     assetType: 'model',
     id: `${ASSETS_ROOT_DIRECTORY_ID}-models`,
     label: 'Models',
-    extensions: ['.glb', '.gltf', '.fbx'],
+    extensions: ['.glb', '.gltf', '.fbx', '.rad'],
   },
   {
     key: 'meshes',

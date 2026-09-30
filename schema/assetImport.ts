@@ -77,7 +77,7 @@ export function prepareImportedObject(object: THREE.Object3D) {
   })
   object.updateMatrixWorld(true)
 
-  const boundingBox = new THREE.Box3().setFromObject(object)
+  const boundingBox = getImportedObjectBounds(object)
   if (!boundingBox.isEmpty()) {
     const center = boundingBox.getCenter(new THREE.Vector3())
     const minY = boundingBox.min.y
@@ -88,11 +88,41 @@ export function prepareImportedObject(object: THREE.Object3D) {
   }
 }
 
+export function getImportedObjectBounds(object: THREE.Object3D): THREE.Box3 {
+  const bounds = new THREE.Box3().setFromObject(object)
+  if (!bounds.isEmpty()) {
+    return bounds
+  }
+
+  const rawBounds = object.userData?.__harmonyLocalBounds as
+    | { min?: number[]; max?: number[] }
+    | null
+    | undefined
+  if (
+    rawBounds?.min?.length === 3
+    && rawBounds.max?.length === 3
+    && [...rawBounds.min, ...rawBounds.max].every(Number.isFinite)
+  ) {
+    bounds.set(
+      new THREE.Vector3(rawBounds.min[0], rawBounds.min[1], rawBounds.min[2]),
+      new THREE.Vector3(rawBounds.max[0], rawBounds.max[1], rawBounds.max[2]),
+    )
+    object.updateMatrixWorld(true)
+    bounds.applyMatrix4(object.matrixWorld)
+  }
+  return bounds
+}
+
 function createLoadTimeoutError(fileName: string): Error {
   return new Error(`Timed out while loading asset object (${fileName})`)
 }
 
 export function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
+  if (source.userData?.__harmonySparkSplat === true) {
+    const cloned = source.clone(true)
+    cloned.userData = { ...source.userData }
+    return cloned
+  }
   const cloned = cloneSkinned(source)
   const sourceAnimations = (source as unknown as { animations?: THREE.AnimationClip[] })?.animations ?? []
 

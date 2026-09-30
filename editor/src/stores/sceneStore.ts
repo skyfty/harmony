@@ -207,7 +207,7 @@ import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
-import { loadObjectFromFile } from '@schema/assetImport'
+import { getImportedObjectBounds, loadObjectFromFile } from '@schema/assetImport'
 import { createFileFromEntry } from '@schema/modelAssetLoader'
 import {
   cleanupInactiveSkinAttachments,
@@ -6299,7 +6299,7 @@ function collectNodeBoundingInfo(nodes: SceneNode[]): Map<string, NodeBoundingIn
 
 function computeObjectMetrics(object: Object3D): ObjectMetrics {
   object.updateMatrixWorld(true)
-  const bounds = new Box3().setFromObject(object)
+  const bounds = getImportedObjectBounds(object)
   if (bounds.isEmpty()) {
     return {
       bounds,

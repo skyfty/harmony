@@ -140,6 +140,7 @@ import { useScenesStore } from '@/stores/scenesStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
+import { attachSparkRenderer, disposeSparkObject, disposeSparkScene } from '@schema/sparkRuntime'
 import {
 	instantiateRuntimePrefabControlSwitchInstance,
 } from '@schema/runtimePrefabControlSwitch'
@@ -11132,7 +11133,7 @@ function initRenderer() {
 	}
 	hidePurposeControls()
 	setupStatsPanels()
-	renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance' })
+	renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance' })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
 	renderer.shadowMap.enabled = true
 	renderer.shadowMap.type = THREE.PCFShadowMap
@@ -11143,6 +11144,7 @@ function initRenderer() {
 	host.appendChild(renderer.domElement)
 
 	scene = new THREE.Scene()
+	attachSparkRenderer(scene, renderer)
 	scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
 	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
 
@@ -12335,6 +12337,7 @@ function disposeMaterialTextureCache() {
 }
 
 function disposeObjectResources(object: THREE.Object3D) {
+	disposeSparkObject(object)
 	const skipDispose = (object.userData as Record<string, unknown> | undefined)?.__harmonySkipDispose === true
 	if (skipDispose) {
 		return
@@ -15931,6 +15934,7 @@ onBeforeUnmount(() => {
 		mapControls.dispose()
 		mapControls = null
 	}
+	disposeSparkScene(scene)
 	if (renderer) {
 		renderer.domElement.removeEventListener('click', handleCanvasClick)
 		renderer.dispose()

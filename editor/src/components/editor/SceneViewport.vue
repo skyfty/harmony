@@ -189,6 +189,7 @@ import {
 } from '@schema/continuousInstancedModel'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { attachSparkRenderer, disposeSparkScene } from '@schema/sparkRuntime'
 import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import { loadTextureFromFile } from '@/utils/textureAsset'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -14529,6 +14530,7 @@ function initScene() {
   renderer.outputColorSpace = THREE.SRGBColorSpace
 
   scene = new THREE.Scene()
+  attachSparkRenderer(scene, renderer)
   scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
   scene.fog = null
 
@@ -15372,6 +15374,7 @@ function disposeScene() {
   isGroundSelectionOrbitDisabled = false
 
   postprocessing.dispose()
+  disposeSparkScene(scene)
   renderer?.dispose()
   renderer = null
   renderClock.dispose()

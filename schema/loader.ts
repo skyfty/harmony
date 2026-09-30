@@ -4,6 +4,7 @@ import * as THREE from 'three';
 // import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
+import { createPagedRadSplat } from './sparkRuntime'
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -42,7 +43,7 @@ type DataTransferItemWithEntry = DataTransferItem & {
 
 type FilesMap = Record<string, File>;
 
-const SUPPORTED_MODEL_EXTENSIONS = new Set(['glb', 'fbx']);
+const SUPPORTED_MODEL_EXTENSIONS = new Set(['glb', 'fbx', 'rad']);
 
 /**
  * Extension of a file name or URL, lower-cased and query/hash stripped.
@@ -94,12 +95,10 @@ export default class Loader {
   public getFilesFromItemList(items: DataTransferItemList, onDone: (files: File[]) => void) {
     let itemsCount = 0;
     let itemsTotal = 0;
-
     const files: File[] = [];
 
     function onEntryHandled(): void {
       itemsCount += 1;
-
       if (itemsCount === itemsTotal) {
         onDone(files);
       }
@@ -112,7 +111,6 @@ export default class Loader {
           for (const child of entries) {
             handleEntry(child);
           }
-
           onEntryHandled();
         });
       } else if (entry.isFile) {
@@ -121,15 +119,12 @@ export default class Loader {
           onEntryHandled();
         });
       }
-
       itemsTotal += 1;
     }
 
     for (let i = 0; i < items.length; i += 1) {
       const item = items[i] as DataTransferItemWithEntry | undefined;
-
       if (!item || item.kind !== 'file') continue;
-
       const entry = item.webkitGetAsEntry?.() as unknown as WebkitFileSystemEntry | null | undefined;
       if (entry) {
         handleEntry(entry);
@@ -137,11 +132,10 @@ export default class Loader {
     }
   }
 
-  public loadFiles(files: File[]){
+  public loadFiles(files: File[]) {
     if (files.length === 0) {
       return;
     }
-
     for (const file of files) {
       this.loadFile(file);
     }
@@ -150,7 +144,6 @@ export default class Loader {
   public loadFile(file: File) {
     const filename = file.name;
     const ext = resolveFileExtension(filename);
-
     if (!ext || !SUPPORTED_MODEL_EXTENSIONS.has(ext)) {
       this.emit('error', new Error(ext ? `不支持的文件格式 (${ext})` : `无法识别资源文件扩展名 (${filename})`));
       return;
@@ -158,11 +151,7 @@ export default class Loader {
 
     const reader = new FileReader();
     reader.addEventListener('progress', (event: ProgressEvent<FileReader>) => {
-      this.emit('progress', {
-        loaded: event.loaded,
-        total: event.total,
-        filename,
-      });
+      this.emit('progress', { loaded: event.loaded, total: event.total, filename });
     });
     reader.addEventListener('error', () => {
       this.emit('error', toError(reader.error, `读取资源文件失败 (${filename})`));
@@ -271,6 +260,18 @@ export default class Loader {
         } catch (error) {
           this.emit('error', toError(error, `FBX 解析失败 (${filename})`));
         }
+        break;
+      }
+
+      case 'rad': {
+        void (async () => {
+          try {
+            const splats = await createPagedRadSplat(contents, filename);
+            this.emit('loaded', splats);
+          } catch (error) {
+            this.emit('error', toError(error, `RAD 文件解析失败 (${filename})`));
+          }
+        })();
         break;
       }
 
