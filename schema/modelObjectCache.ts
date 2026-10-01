@@ -15,7 +15,7 @@ import {
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
 import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsmReceiverPolicy'
-import { disposeSparkObject } from './sparkRuntime'
+import { disposeSparkObject, getSparkSplatBounds } from './sparkRuntime'
 
 // three.js InstancedMesh allocates its whole instanceMatrix up front (capacity *
 // 16 floats = 128KB at the old capacity of 2048), even for the common single-
@@ -627,6 +627,13 @@ export function clearModelObjectCache(): void {
 }
 
 function mapEntryToGroup(entry: ModelAssetEntry): ModelInstanceGroup {
+  if (entry.object.userData?.__harmonySparkSplat === true && entry.boundingBox.isEmpty()) {
+    const splatBounds = getSparkSplatBounds(entry.object)
+    if (splatBounds) {
+      entry.boundingBox.copy(splatBounds)
+      entry.radius = splatBounds.getSize(new Vector3()).length() * 0.5
+    }
+  }
   return {
     assetId: entry.assetId,
     object: entry.object,
@@ -638,6 +645,17 @@ function mapEntryToGroup(entry: ModelAssetEntry): ModelInstanceGroup {
 
 function buildModelAssetEntry(assetId: string, prepared: Object3D): ModelAssetEntry {
   prepared.updateMatrixWorld(true)
+  if (prepared.userData?.__harmonySparkSplat === true) {
+    const boundingBox = new Box3().makeEmpty()
+    return {
+      assetId,
+      object: prepared,
+      boundingBox,
+      radius: 0,
+      handles: [],
+      meshes: [],
+    }
+  }
   const submeshes = extractSubmeshes(prepared)
   const boundingBox = computeParsedSubmeshBounds(submeshes)
   const radius = boundingBox.getSize(new Vector3()).length() * 0.5

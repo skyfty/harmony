@@ -208,6 +208,7 @@ import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
 import { useClipboardStore } from './clipboardStore'
 import { getImportedObjectBounds, loadObjectFromFile } from '@schema/assetImport'
+import { createPagedRadSplatFromUrl } from '@schema/sparkRuntime'
 import { createFileFromEntry } from '@schema/modelAssetLoader'
 import {
   cleanupInactiveSkinAttachments,
@@ -13505,6 +13506,7 @@ export const useSceneStore = defineStore('scene', {
         getCachedModelObject,
         getOrLoadModelObject,
         loadObjectFromFile,
+        createPagedRadSplatFromUrl,
         createInstancedRuntimeProxy,
         findObjectByPath,
         pruneCloneByRelativePaths,

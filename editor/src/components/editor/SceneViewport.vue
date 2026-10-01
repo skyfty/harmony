@@ -189,7 +189,7 @@ import {
 } from '@schema/continuousInstancedModel'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { attachSparkRenderer, disposeSparkScene } from '@schema/sparkRuntime'
+import { attachSparkRenderer, createPagedRadSplatFromUrl, disposeSparkScene } from '@schema/sparkRuntime'
 import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import { loadTextureFromFile } from '@/utils/textureAsset'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -201,7 +201,7 @@ import {
 } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { createPrimitiveMesh } from '@schema/import'
-import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
+import { canNodeUseRuntimeModelInstancing, markRuntimeDirectRenderAsset } from '@schema/runtimeModelInstancing'
 import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
 
 
@@ -9796,13 +9796,28 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
     if (getCachedModelObject(asset.id)) {
       return
     }
-    const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
-    if (!file) {
-      return
+    const extension = (asset.extension ?? asset.name.split('.').pop() ?? '').toLowerCase()
+    const remoteUrl = asset.downloadUrl ?? asset.description ?? ''
+    let streamedRad: THREE.Object3D | null = null
+    if (extension === 'rad' && /^https?:\/\//i.test(remoteUrl)) {
+      try {
+        streamedRad = await createPagedRadSplatFromUrl(remoteUrl, asset.name)
+      } catch (error) {
+        console.warn('[SceneViewport] Progressive RAD loading failed; falling back to full download', asset.id, error)
+      }
     }
-    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
-    assetCacheStore.releaseInMemoryBlob(asset.id)
-    ensureInstancedMeshesRegistered(asset.id)
+    if (streamedRad) {
+      markRuntimeDirectRenderAsset(asset.id)
+      await getOrLoadModelObject(asset.id, async () => streamedRad!)
+    } else {
+      const file = await assetCacheStore.ensureAssetFile(asset.id, { asset })
+      if (!file) {
+        return
+      }
+      await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
+      assetCacheStore.releaseInMemoryBlob(asset.id)
+      ensureInstancedMeshesRegistered(asset.id)
+    }
   })()
     .catch((error) => {
       console.warn('[SceneViewport] Failed to preload model asset', assetId, error)

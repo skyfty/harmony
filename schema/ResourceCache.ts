@@ -113,6 +113,34 @@ export default class ResourceCache {
     return null;
   }
 
+  /** Resolve an eligible remote RAD URL without downloading the complete asset. */
+  async resolveRemoteRadUrl(assetId: string): Promise<string | null> {
+    if (!assetId) {
+      return null;
+    }
+    const cache = this.assetLoader.getCache();
+    const cached = await cache.getEntry(assetId);
+    if (cached?.status === 'cached') {
+      cache.touch(assetId);
+      return null;
+    }
+    const persistence = this.resolveAssetPersistence(assetId, this.collectAssetLookupIds(assetId));
+    const hydrated = await cache.hydrateFromPersistent(assetId, persistence);
+    if (hydrated?.status === 'cached') {
+      cache.touch(assetId);
+      return null;
+    }
+    const source = await this.resolveAssetSource(assetId, this.collectAssetLookupIds(assetId));
+    if (source?.kind !== 'remote-url' || !/^https?:\/\//i.test(source.url ?? '')) {
+      return null;
+    }
+    const descriptor = this.resolveEffectiveAssetDescriptor(assetId);
+    const radHint = /\.rad(?:[?#]|$)/i.test(assetId)
+      || /\.rad(?:[?#]|$)/i.test(source.url ?? '')
+      || /\.rad(?:[?#]|$)/i.test(descriptor?.name ?? '');
+    return radHint ? (source.url ?? null) : null;
+  }
+
   async acquireAssetEntry(assetId: string): Promise<AssetCacheEntry | null> {
     if (!assetId) {
       return null;

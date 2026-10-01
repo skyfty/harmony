@@ -3,7 +3,6 @@ import Koa from 'koa'
 import cors from '@koa/cors'
 import logger from 'koa-logger'
 import jsonError from 'koa-json-error'
-import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { DefaultContext, DefaultState } from 'koa'
@@ -21,6 +20,7 @@ import { koaBody } from '@/utils/bodyParser'
 import { MultiuserService, setActiveMultiuserService } from '@/services/multiuserService'
 import { ensureCouponProductCategory, ensureSkinProductCategory, ensureTransportProductCategory } from '@/services/productCategoryService'
 import { ensureDefaultSkinCategories } from '@/services/skinCategoryService'
+import { serveFileWithRange } from '@/utils/httpRange'
 
 type HarmonyKoa = Koa<DefaultState, DefaultContext>
 
@@ -51,6 +51,7 @@ async function bootstrap(): Promise<void> {
     cors({
       origin: (ctx) => ctx.get('Origin') || appConfig.editorPublicUrl,
       credentials: true,
+      exposeHeaders: ['Accept-Ranges', 'Content-Range', 'Content-Length'],
     }),
   )
   app.use(
@@ -95,6 +96,9 @@ async function bootstrap(): Promise<void> {
   const uploadsRoot = path.resolve(appConfig.assetStoragePath)
 
   app.use(async (ctx, next) => {
+    if (ctx.method !== 'GET' && ctx.method !== 'HEAD') {
+      return next()
+    }
     if (!ctx.path.startsWith(uploadsPrefix)) {
       return next()
     }
@@ -113,7 +117,8 @@ async function bootstrap(): Promise<void> {
     }
 
     const filePath = path.resolve(uploadsRoot, decodedPath)
-    if (!filePath.startsWith(uploadsRoot)) {
+    const relativeToUploads = path.relative(uploadsRoot, filePath)
+    if (relativeToUploads.startsWith('..') || path.isAbsolute(relativeToUploads)) {
       ctx.status = 403
       return
     }
@@ -125,10 +130,12 @@ async function bootstrap(): Promise<void> {
         return
       }
 
-      ctx.type = path.extname(filePath)
-      ctx.length = fileStat.size
-      ctx.set('Cache-Control', appConfig.isDevelopment ? 'no-store' : 'public, max-age=604800')
-      ctx.body = createReadStream(filePath)
+      serveFileWithRange(ctx, filePath, fileStat, {
+        contentType: path.extname(filePath).toLowerCase() === '.rad'
+          ? 'application/vnd.sparkjs.rad'
+          : path.extname(filePath),
+        cacheControl: appConfig.isDevelopment ? 'no-store' : 'public, max-age=604800',
+      })
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
         ctx.status = 404

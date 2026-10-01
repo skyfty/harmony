@@ -77,6 +77,8 @@ MONGODB_URI=mongodb://<MONGO_APP_USERNAME>:<MONGO_APP_PASSWORD>@mongo:27017/<MON
 ## 检查点（快速验证）
 - API 健康： `curl -I https://v.touchmagic.cn/api/auth/health` → 200
 - 静态资源： `curl -I https://v.touchmagic.cn/uploads/<file>` → 200/404
+- RAD 流式资源：用 `Range: bytes=0-0` 请求 `.rad` 文件，应返回 `206 Partial Content`、`Content-Range: bytes 0-0/<文件长度>` 和单字节响应体；反向代理/CDN 需保留 Range 与 CORS 响应头。
+- RAD 流式加载仅用于公开 HTTP(S) 单文件 RAD。浏览器与小程序运行时会先探测 Range；若运行时不支持 Fetch/Range、跨域未暴露响应头或服务端未返回有效 `206`，客户端回退到现有整文件缓存加载。生产环境仍需在目标 WeChat 设备验证域名白名单及 Range 行为。
 - 前端首页： `curl -I https://v.touchmagic.cn/`, `http://editor.v.touchmagic.cn/`, `http://uploader.v.touchmagic.cn/`
 
 ## 查看 Docker 日志

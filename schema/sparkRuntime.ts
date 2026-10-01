@@ -2,6 +2,10 @@ import * as THREE from 'three'
 import { PagedSplats, SparkRenderer, SplatMesh, SplatFileType } from '@sparkjsdev/spark'
 
 const SPARK_RENDERER_KEY = '__harmonySparkRenderer'
+const progressiveRadUrls = new Map<string, number>()
+let sparkRangeFetchValidationInstalled = false
+let originalGlobalFetch: typeof globalThis.fetch | null = null
+let validatedGlobalFetch: typeof globalThis.fetch | null = null
 
 type SparkScene = THREE.Scene & { [SPARK_RENDERER_KEY]?: SparkRenderer }
 type SparkSplatOwnership = { references: number; disposeSource: () => void }
@@ -36,6 +40,62 @@ export function registerSparkSplatResources(splat: SplatMesh): void {
   registerSparkSplat(splat)
 }
 
+function validateSparkRangeResponse(request: Request, response: Response): Response {
+  const rangeHeader = request.headers.get('Range')
+  const requested = /^bytes=(\d+)-(\d+)$/i.exec(rangeHeader ?? '')
+  if (!requested) {
+    return response
+  }
+  const start = Number(requested[1])
+  const requestedEnd = Number(requested[2])
+  const contentRange = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(response.headers.get('Content-Range') ?? '')
+  const actualLength = contentRange ? Number(contentRange[2]) - Number(contentRange[1]) + 1 : -1
+  const contentLength = Number(response.headers.get('Content-Length'))
+  if (
+    response.status !== 206
+    || !contentRange
+    || Number(contentRange[1]) !== start
+    || Number(contentRange[2]) > requestedEnd
+    || actualLength <= 0
+    || (Number.isFinite(contentLength) && contentLength > 0 && contentLength !== actualLength)
+  ) {
+    throw new Error(`Invalid RAD byte-range response (${response.status}, ${rangeHeader}, ${response.headers.get('Content-Range') ?? 'no Content-Range'})`)
+  }
+  return response
+}
+
+function retainProgressiveRadUrl(url: string): void {
+  progressiveRadUrls.set(url, (progressiveRadUrls.get(url) ?? 0) + 1)
+  if (sparkRangeFetchValidationInstalled || typeof globalThis.fetch !== 'function') {
+    return
+  }
+  originalGlobalFetch = globalThis.fetch
+  const originalFetch = originalGlobalFetch.bind(globalThis)
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = input instanceof Request ? new Request(input, init) : new Request(input, init)
+    const shouldValidate = progressiveRadUrls.has(request.url) && request.headers.has('Range')
+    const response = await originalFetch(request)
+    return shouldValidate ? validateSparkRangeResponse(request, response) : response
+  }
+  validatedGlobalFetch = globalThis.fetch
+  sparkRangeFetchValidationInstalled = true
+}
+
+function releaseProgressiveRadUrl(url: string): void {
+  const references = progressiveRadUrls.get(url) ?? 0
+  if (references <= 1) {
+    progressiveRadUrls.delete(url)
+  } else {
+    progressiveRadUrls.set(url, references - 1)
+  }
+  if (!progressiveRadUrls.size && validatedGlobalFetch && originalGlobalFetch && globalThis.fetch === validatedGlobalFetch) {
+    globalThis.fetch = originalGlobalFetch
+    originalGlobalFetch = null
+    validatedGlobalFetch = null
+    sparkRangeFetchValidationInstalled = false
+  }
+}
+
 /** Build a paged Spark RAD mesh; RAD LoD chunks are not exposed in numSplats until rendered. */
 export async function createPagedRadSplat(bytes: ArrayBuffer, filename: string): Promise<SplatMesh> {
   const paged = new PagedSplats({
@@ -63,6 +123,70 @@ export async function createPagedRadSplat(bytes: ArrayBuffer, filename: string):
     return splat
   } catch (error) {
     paged.dispose()
+    throw error
+  }
+}
+
+/**
+ * Build a URL-backed RAD source after verifying that the origin honors byte
+ * ranges. Spark's pager issues its own range requests after this probe.
+ */
+export async function createPagedRadSplatFromUrl(url: string, filename: string): Promise<SplatMesh | null> {
+  if (!/^https?:\/\//i.test(url) || typeof fetch !== 'function' || typeof Request !== 'function') {
+    return null
+  }
+
+  let probe: Response
+  try {
+    probe = await fetch(new Request(url, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-0' },
+      cache: 'no-store',
+    }))
+  } catch {
+    return null
+  }
+
+  const contentRange = probe.headers.get('Content-Range')
+  if (probe.status !== 206 || !/^bytes\s+0-0\/\d+$/i.test(contentRange ?? '')) {
+    await probe.body?.cancel().catch(() => undefined)
+    return null
+  }
+  const probeBytes = await probe.arrayBuffer().catch(() => new ArrayBuffer(0))
+  if (probeBytes.byteLength !== 1) {
+    return null
+  }
+
+  retainProgressiveRadUrl(url)
+  const paged = new PagedSplats({ rootUrl: url, fileType: SplatFileType.RAD })
+  try {
+    const { meta } = await paged.getRadMeta()
+    if (!Number.isSafeInteger(meta.count) || meta.count <= 0 || meta.chunks.length === 0) {
+      throw new Error(`RAD 文件元数据无效或没有 splat 数据 (${filename})`)
+    }
+    if (meta.chunks.some((chunk) => Boolean(chunk.filename))) {
+      throw new Error(`RAD 文件依赖外部 chunk 文件，不能单独导入 (${filename})；请导入整套 RAD 资源`)
+    }
+    const splat = new SplatMesh({ paged, lod: true })
+    const originalDispose = splat.dispose.bind(splat)
+    splat.dispose = () => {
+      originalDispose()
+      releaseProgressiveRadUrl(url)
+    }
+    splat.name = filename
+    splat.userData = {
+      ...splat.userData,
+      __harmonySparkSplat: true,
+      __harmonyProgressiveRad: true,
+      __harmonySplatCount: meta.count,
+      __harmonyLocalBounds: null,
+    }
+    splat.clone = (recursive = true) => cloneSparkSplat(splat, recursive)
+    registerSparkSplatResources(splat)
+    return splat
+  } catch (error) {
+    paged.dispose()
+    releaseProgressiveRadUrl(url)
     throw error
   }
 }

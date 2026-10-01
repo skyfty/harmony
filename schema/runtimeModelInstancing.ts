@@ -4,6 +4,15 @@ import { SKIN_COMPONENT_TYPE } from './components/definitions/skinComponent'
 import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
 
+const directRenderAssetIds = new Set<string>()
+
+/** RAD splats are Object3D sources and cannot be represented by InstancedMesh handles. */
+export function markRuntimeDirectRenderAsset(assetId: string): void {
+  if (assetId) {
+    directRenderAssetIds.add(assetId)
+  }
+}
+
 function isSceneNodeComponentState(value: unknown): value is SceneNodeComponentState<unknown> {
   return typeof value === 'object' && value !== null && 'enabled' in value
 }
@@ -32,6 +41,12 @@ export function hasEnabledSkinComponent(node: SceneNode | null | undefined): boo
 
 export function canNodeUseRuntimeModelInstancing(node: SceneNode | null | undefined): boolean {
   if (!node) {
+    return false
+  }
+  if (typeof node.sourceAssetId === 'string' && (
+    directRenderAssetIds.has(node.sourceAssetId.trim())
+    || /\.rad(?:[?#]|$)/i.test(node.sourceAssetId.trim())
+  )) {
     return false
   }
 

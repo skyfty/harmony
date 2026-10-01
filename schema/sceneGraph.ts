@@ -3,7 +3,8 @@ import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides, resolveSceneNodeMaterialSlots } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { disposeSparkObject } from './sparkRuntime';
+import { createPagedRadSplatFromUrl, disposeSparkObject } from './sparkRuntime';
+import { markRuntimeDirectRenderAsset } from './runtimeModelInstancing';
 import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
 import ResourceCache from './ResourceCache';
 import type {
@@ -1928,6 +1929,20 @@ class SceneGraphBuilder {
   }
 
   private async fetchAndParseMesh(assetId: string): Promise<MeshTemplate | null> {
+    try {
+      const radUrl = await this.resourceCache.resolveRemoteRadUrl(assetId);
+      if (radUrl) {
+        const filename = radUrl.split(/[?#]/, 1)[0]?.split('/').pop() || assetId;
+        const streamed = await createPagedRadSplatFromUrl(radUrl, filename);
+        if (streamed) {
+          markRuntimeDirectRenderAsset(assetId);
+          return { scene: streamed, animations: [] };
+        }
+      }
+    } catch (error) {
+      console.warn('RAD 流式加载不可用，回退到完整下载', assetId, error);
+    }
+
     const entry = await this.resourceCache.acquireAssetEntry(assetId);
     if (!entry) {
       return null;

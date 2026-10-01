@@ -57,6 +57,8 @@ import {
 } from '@/services/assetCategoryService'
 import { appConfig } from '@/config/env'
 import { rewriteConfigAssetBundleBytes } from '@/services/configAssetRewrite'
+import { stat } from 'node:fs/promises'
+import { serveFileWithRange } from '@/utils/httpRange'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
@@ -3131,10 +3133,12 @@ export async function downloadAsset(ctx: Context): Promise<void> {
   if (!(await fs.pathExists(filePath))) {
     ctx.throw(404, 'Asset file not found')
   }
-  ctx.set('Cache-Control', 'no-store')
-  ctx.type = asset.mimeType ?? path.extname(asset.url) ?? 'application/octet-stream'
-  ctx.attachment(asset.originalFilename ?? asset.name)
-  ctx.body = fs.createReadStream(filePath)
+  const fileStat = await stat(filePath)
+  serveFileWithRange(ctx, filePath, fileStat, {
+    cacheControl: 'no-store',
+    contentType: asset.mimeType ?? path.extname(asset.url) ?? 'application/octet-stream',
+    attachmentName: asset.originalFilename ?? asset.name,
+  })
 }
 
 export async function listAssetTags(ctx: Context): Promise<void> {

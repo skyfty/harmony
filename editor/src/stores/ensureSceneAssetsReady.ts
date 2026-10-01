@@ -4,7 +4,7 @@ import { Group } from 'three'
 import type { SceneAssetRegistryEntry, SceneNode } from '@schema/core'
 import { cloneImportedObject } from '@schema/assetImport'
 import { isExpandedImportedModelRoot, isLightweightImportNode } from '@schema/core'
-import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
+import { canNodeUseRuntimeModelInstancing, markRuntimeDirectRenderAsset } from '@schema/runtimeModelInstancing'
 import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import type {
@@ -96,6 +96,7 @@ export async function updateSceneAssets(args: {
   getCachedModelObject: (assetId: string) => ModelInstanceGroup | null
   getOrLoadModelObject: (assetId: string, loader: () => Promise<Object3D>) => Promise<ModelInstanceGroup>
   loadObjectFromFile: (file: File, extension?: string) => Promise<Object3D>
+  createPagedRadSplatFromUrl?: (url: string, filename: string) => Promise<Object3D | null>
 
   // runtime building helpers
   createInstancedRuntimeProxy: (node: SceneNode, group: ModelInstanceGroup, sourceAssetId?: string) => Object3D | null
@@ -120,6 +121,7 @@ export async function updateSceneAssets(args: {
     getCachedModelObject,
     getOrLoadModelObject,
     loadObjectFromFile,
+    createPagedRadSplatFromUrl,
     createInstancedRuntimeProxy,
     findObjectByPath,
     pruneCloneByRelativePaths,
@@ -184,6 +186,27 @@ export async function updateSceneAssets(args: {
     return null
   }
 
+  function resolveAssetDownloadUrlCandidate(
+    asset: ProjectAsset | null,
+    registryEntry: SceneAssetRegistryEntry | null,
+  ): string | null {
+    const directCandidate = normalizeUrl(asset?.downloadUrl)
+    if (registryEntry?.sourceType === 'url') {
+      return normalizeUrl(registryEntry.url) ?? directCandidate
+    }
+    if (registryEntry?.sourceType === 'server') {
+      return resolveServerAssetDownloadUrl({
+        assetBaseUrl: readServerDownloadBaseUrl(),
+        fileKey: typeof registryEntry.fileKey === 'string' && registryEntry.fileKey.trim().length > 0
+          ? registryEntry.fileKey
+          : asset?.fileKey ?? null,
+        resolvedUrl: registryEntry.resolvedUrl ?? null,
+        downloadUrl: directCandidate,
+      }) ?? directCandidate
+    }
+    return directCandidate
+  }
+
   const emitProgress = (payload: EnsureSceneAssetsProgress) => {
     options.onProgress?.({
       ...payload,
@@ -208,8 +231,23 @@ export async function updateSceneAssets(args: {
     return { queuedRuntimeRefreshPatches: false }
   }
 
-  const runtimeAssetNodeMap = collectRuntimeModelNodesByAssetId(targetNodes)
   const dependencyAssetIds = collectSceneNodeDependencyAssetIds(targetNodes)
+  const progressiveRadUrls = new Map<string, string>()
+  dependencyAssetIds.forEach((assetId) => {
+    const asset = getSceneAsset(assetId)
+    const registryEntry = getSceneRegistryEntry(assetId)
+    const url = resolveAssetDownloadUrlCandidate(asset, registryEntry)
+    const radHint = /\.rad(?:[?#]|$)/i.test(asset?.extension ?? '')
+      || /\.rad(?:[?#]|$)/i.test(asset?.name ?? '')
+      || /\.rad(?:[?#]|$)/i.test(url ?? '')
+      || (registryEntry?.sourceType === 'server' && /\.rad(?:[?#]|$)/i.test(registryEntry.fileKey ?? ''))
+      || (registryEntry?.sourceType === 'url' && /\.rad(?:[?#]|$)/i.test(registryEntry.url))
+    if (radHint && url && /^https?:\/\//i.test(url) && !assetCache.hasCache(assetId)) {
+      progressiveRadUrls.set(assetId, url)
+      markRuntimeDirectRenderAsset(assetId)
+    }
+  })
+  const runtimeAssetNodeMap = collectRuntimeModelNodesByAssetId(targetNodes)
   const allAssetIds = Array.from(new Set<string>([
     ...runtimeAssetNodeMap.keys(),
     ...dependencyAssetIds,
@@ -362,27 +400,6 @@ export async function updateSceneAssets(args: {
     }
   }
 
-  const resolveAssetDownloadUrlCandidate = (
-    asset: ProjectAsset | null,
-    registryEntry: SceneAssetRegistryEntry | null,
-  ): string | null => {
-    const directCandidate = normalizeUrl(asset?.downloadUrl)
-    if (registryEntry?.sourceType === 'url') {
-      return normalizeUrl(registryEntry.url) ?? directCandidate
-    }
-    if (registryEntry?.sourceType === 'server') {
-      return resolveServerAssetDownloadUrl({
-        assetBaseUrl: readServerDownloadBaseUrl(),
-        fileKey: typeof registryEntry.fileKey === 'string' && registryEntry.fileKey.trim().length > 0
-          ? registryEntry.fileKey
-          : asset?.fileKey ?? null,
-        resolvedUrl: registryEntry.resolvedUrl ?? null,
-        downloadUrl: directCandidate,
-      }) ?? directCandidate
-    }
-    return directCandidate
-  }
-
   const ensureAssetCached = async (resolveArgs: {
     assetId: string
     assetLabel: string
@@ -430,8 +447,9 @@ export async function updateSceneAssets(args: {
   const resolveAssetBaseObject = async (resolveArgs: {
     assetId: string
     shouldCacheModelObject: boolean
+    progressiveRadUrl?: string | null
   }): Promise<{ baseObjectResolved: Object3D; modelGroup: ModelInstanceGroup | null; canUseInstancing: boolean }> => {
-    const { assetId, shouldCacheModelObject } = resolveArgs
+    const { assetId, shouldCacheModelObject, progressiveRadUrl } = resolveArgs
 
     let modelGroup: ModelInstanceGroup | null = null
     let baseObject: Object3D | null = null
@@ -442,6 +460,24 @@ export async function updateSceneAssets(args: {
         modelGroup = cachedGroup
         baseObject = cachedGroup.object
         assetCache.touch(assetId)
+      }
+    }
+
+    if (!baseObject && progressiveRadUrl && createPagedRadSplatFromUrl) {
+      const filename = progressiveRadUrl.split(/[?#]/, 1)[0]?.split('/').pop() || assetId
+      let streamedObject: Object3D | null = null
+      try {
+        streamedObject = await createPagedRadSplatFromUrl(progressiveRadUrl, filename)
+      } catch (error) {
+        console.warn('[SceneAssets] Progressive RAD loading unavailable; falling back to full download', assetId, error)
+      }
+      if (streamedObject) {
+        if (shouldCacheModelObject) {
+          modelGroup = await getOrLoadModelObject(assetId, async () => streamedObject)
+          baseObject = modelGroup.object
+        } else {
+          baseObject = streamedObject
+        }
       }
     }
 
@@ -618,12 +654,15 @@ export async function updateSceneAssets(args: {
         const completedBeforeAsset = completed
         const overlayTotal = total > 0 ? total : 1
 
-        await ensureAssetCached({
-          assetId,
-          assetLabel,
-          completedBeforeAsset,
-          overlayTotal,
-        })
+        const progressiveRadUrl = progressiveRadUrls.get(assetId) ?? null
+        if (!progressiveRadUrl || !shouldBuildRuntime) {
+          await ensureAssetCached({
+            assetId,
+            assetLabel,
+            completedBeforeAsset,
+            overlayTotal,
+          })
+        }
 
         // Component/material dependencies should be prefetched but do not produce runtime objects.
         if (!shouldBuildRuntime) {
@@ -641,6 +680,7 @@ export async function updateSceneAssets(args: {
         const { baseObjectResolved, modelGroup, canUseInstancing } = await resolveAssetBaseObject({
           assetId,
           shouldCacheModelObject,
+          progressiveRadUrl,
         })
 
         const runtimeObjects = buildRuntimeObjectsForAssetNodes({

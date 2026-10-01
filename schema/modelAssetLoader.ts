@@ -5,6 +5,8 @@ import type { AssetCacheEntry } from './assetCache'
 import { Semaphore, withSemaphoreYielding } from './concurrency'
 import type { SceneNodeImportMetadata } from './core'
 import { getExtensionFromMimeType, getLastExtensionFromFilenameOrUrl } from './assetTypeConversion'
+import { createPagedRadSplatFromUrl } from './sparkRuntime'
+import { markRuntimeDirectRenderAsset } from './runtimeModelInstancing'
 
 // GLB/FBX parsing (GLTFLoader.parse + geometry/material construction) is CPU
 // bound and runs on the render main thread. Serialize parses so a burst of LOD
@@ -77,6 +79,19 @@ function inferEntryFilename(assetId: string, entry: AssetCacheEntry): string {
 export async function loadAssetObject(resourceCache: ResourceCache, assetId: string): Promise<THREE.Object3D | null> {
   if (!assetId) {
     return null
+  }
+  try {
+    const radUrl = await resourceCache.resolveRemoteRadUrl(assetId)
+    if (radUrl) {
+      const filename = radUrl.split(/[?#]/, 1)[0]?.split('/').pop() || assetId
+      const streamed = await createPagedRadSplatFromUrl(radUrl, filename)
+      if (streamed) {
+        markRuntimeDirectRenderAsset(assetId)
+        return streamed
+      }
+    }
+  } catch (error) {
+    console.warn('[ModelAssetLoader] Progressive RAD loading unavailable; falling back to full download', assetId, error)
   }
   const entry = await resourceCache.acquireAssetEntry(assetId)
   if (!entry) {
