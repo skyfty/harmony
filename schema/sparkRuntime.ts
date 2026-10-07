@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 import { PagedSplats, SparkRenderer, SplatMesh, SplatFileType } from '@sparkjsdev/spark'
+import { validateRadRangeResponse } from './radRangeResponse'
+import { attachResponseBodyStream } from './responseBodyShim'
 
 const SPARK_RENDERER_KEY = '__harmonySparkRenderer'
 const progressiveRadUrls = new Map<string, number>()
@@ -41,27 +43,40 @@ export function registerSparkSplatResources(splat: SplatMesh): void {
 }
 
 function validateSparkRangeResponse(request: Request, response: Response): Response {
-  const rangeHeader = request.headers.get('Range')
-  const requested = /^bytes=(\d+)-(\d+)$/i.exec(rangeHeader ?? '')
-  if (!requested) {
+  if (!request.headers.has('Range')) {
     return response
   }
-  const start = Number(requested[1])
-  const requestedEnd = Number(requested[2])
-  const contentRange = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(response.headers.get('Content-Range') ?? '')
-  const actualLength = contentRange ? Number(contentRange[2]) - Number(contentRange[1]) + 1 : -1
-  const contentLength = Number(response.headers.get('Content-Length'))
-  if (
-    response.status !== 206
-    || !contentRange
-    || Number(contentRange[1]) !== start
-    || Number(contentRange[2]) > requestedEnd
-    || actualLength <= 0
-    || (Number.isFinite(contentLength) && contentLength > 0 && contentLength !== actualLength)
-  ) {
-    throw new Error(`Invalid RAD byte-range response (${response.status}, ${rangeHeader}, ${response.headers.get('Content-Range') ?? 'no Content-Range'})`)
+  try {
+    validateRadRangeResponse(request.headers.get('Range'), response)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`${detail} for ${request.url}`, { cause: error })
   }
-  return response
+  // Spark only pages RAD files through ranges, so the missing `body` shim can
+  // stay scoped to those responses instead of changing every fetch response in
+  // the mini program. @see attachResponseBodyStream
+  return attachResponseBodyStream(response)
+}
+
+/**
+ * Spark reports every unusable range answer as
+ * `Failed to fetch "<url>": <status> <statusText>`, which reads like a CDN or
+ * HTTP-status problem even when the request itself succeeded. Rewrite that one
+ * message so the console points at the real suspects.
+ *
+ * @see createPagedRadSplatFromUrl
+ */
+function explainPagedRadFailure(error: unknown, url: string): unknown {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (!/^Failed to fetch "/.test(message)) {
+    return error
+  }
+  return new Error(
+    `RAD 流式加载失败：${message}；range 响应已通过 HTTP 校验（或未进入校验），`
+    + `spark 拒绝它的常见原因是运行时的 Response 缺少 body（小程序 fetch polyfill 需由 `
+    + `installMiniProgramPolyfillGuards 补 body 兼容层）。url=${url}`,
+    { cause: error },
+  )
 }
 
 function retainProgressiveRadUrl(url: string): void {
@@ -187,7 +202,7 @@ export async function createPagedRadSplatFromUrl(url: string, filename: string):
   } catch (error) {
     paged.dispose()
     releaseProgressiveRadUrl(url)
-    throw error
+    throw explainPagedRadFailure(error, url)
   }
 }
 

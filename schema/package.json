@@ -9,7 +9,8 @@
     "build": "npm run build:asset-types && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
     "build:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json",
     "type-check": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
-    "type-check:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json --noEmit"
+    "type-check:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json --noEmit",
+    "test": "node --test radRangeResponse.test.ts responseBodyShim.test.ts"
   },
   "engines": {
     "pnpm": ">=10.0.0"

@@ -20,7 +20,49 @@ export type EmitMpWorkerBundlePluginOptions = {
   aliases?: MpWorkerBundleAlias[]
 }
 
-const SHARED_WORKER_TEMPLATE = `'use strict';
+/**
+ * WeChat mini programs keep a single `worker.onMessage` listener, so every
+ * logical worker (physics / instanced LOD / asset download / Spark / basis
+ * transcoder) is require()d into one physical worker file. That shared context
+ * is also shared by the minisheep worker adapter, which replaces
+ * `WXWebAssembly.instantiate` with a wrapper that rewrites the requested path
+ * through whatever `setWASMInstantiateInputMapper(...)` mapper was installed
+ * last.
+ *
+ * The basis transcoder worker installs a mapper that ignores its input and
+ * always returns its own wasm, which is correct for that worker but wrong for
+ * every other wasm consumer in the same physical worker (Spark's splat
+ * decoder). Capture the pristine instantiate before the adapter patches it and
+ * publish it as `globalThis.__harmonyRawWasmInstantiate` so those consumers can
+ * opt out of the mapper.
+ */
+export function createSharedWorkerTemplate(): string {
+  return `'use strict';
+
+var __harmonyRawWasmInstantiate = typeof globalThis !== 'undefined'
+  && typeof globalThis.__harmonyRawWasmInstantiate === 'function'
+  ? globalThis.__harmonyRawWasmInstantiate
+  : null;
+if (!__harmonyRawWasmInstantiate) {
+  try {
+    if (
+      typeof WXWebAssembly !== 'undefined'
+      && WXWebAssembly
+      && typeof WXWebAssembly.instantiate === 'function'
+    ) {
+      var __harmonyWasmHost = WXWebAssembly;
+      var __harmonyWasmInstantiate = __harmonyWasmHost.instantiate;
+      __harmonyRawWasmInstantiate = function (path, imports) {
+        return __harmonyWasmInstantiate.call(__harmonyWasmHost, path, imports);
+      };
+      if (typeof globalThis !== 'undefined') {
+        globalThis.__harmonyRawWasmInstantiate = __harmonyRawWasmInstantiate;
+      }
+    }
+  } catch (error) {
+    console.warn('[harmony-shared-worker] failed to capture raw WXWebAssembly.instantiate', error);
+  }
+}
 
 var worker = typeof worker !== 'undefined' ? worker : (typeof globalThis !== 'undefined' ? globalThis.worker : undefined);
 if (!worker || typeof worker.onMessage !== 'function' || typeof worker.postMessage !== 'function') {
@@ -45,10 +87,25 @@ try {
   if (sharedWorkerAdapter && sharedWorkerAdapter.proxySelf) {
     sharedSelf = sharedWorkerAdapter.proxySelf;
     globalThis.__harmonyWorkerSelf = sharedSelf;
-    try {
-      globalThis.self = sharedSelf;
-    } catch (error) {
-      console.warn('[harmony-shared-worker] failed to expose proxy self', error);
+    if (globalThis.self !== sharedSelf) {
+      try {
+        Object.defineProperty(globalThis, 'self', {
+          value: sharedSelf,
+          configurable: true,
+          enumerable: false,
+          writable: true,
+        });
+      } catch (defineError) {
+        try {
+          globalThis.self = sharedSelf;
+        } catch (assignError) {
+          console.warn(
+            '[harmony-shared-worker] failed to expose proxy self globally; sub-workers bind it locally',
+            defineError,
+            assignError,
+          );
+        }
+      }
     }
   } else {
     console.warn('[harmony-shared-worker] worker adapter loaded without proxySelf');
@@ -87,6 +144,7 @@ try {
   console.error('[harmony-shared-worker] basis transcoder init failed', error);
 }
 `
+}
 
 // The minisheep worker-adapter decoder does not guard against null:
 // `typeof null === 'object'`, so deep-decoding a message that contains a null
@@ -180,7 +238,7 @@ export function emitMpWorkerBundlePlugin(options: EmitMpWorkerBundlePluginOption
             },
           },
         })
-        fs.writeFileSync(path.join(workersDir, 'index.js'), SHARED_WORKER_TEMPLATE, 'utf8')
+        fs.writeFileSync(path.join(workersDir, 'index.js'), createSharedWorkerTemplate(), 'utf8')
         patchWechatWorkerAdapter(workersDir)
         const sparkWorkerPath = path.join(workersDir, 'spark.worker.js')
         if (transformWithEsbuild && fs.existsSync(sparkWorkerPath)) {

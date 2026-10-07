@@ -158,6 +158,40 @@ function createAbortError(): Error {
   return error
 }
 
+/**
+ * Platform download APIs (notably `wx.downloadFile`) reject with plain objects
+ * such as `{ errMsg: 'downloadFile:fail ...', errCode }`. `String(error)` turns
+ * those into `[object Object]`, which hides the real cause from the console and
+ * from the scene load error surfaced to the user, so fold the useful fields
+ * into the message.
+ */
+function normalizeDownloadError(error: unknown, context: string): Error {
+  if (error instanceof Error) {
+    return error
+  }
+  if (error && typeof error === 'object') {
+    const record = error as { errMsg?: unknown; errmsg?: unknown; message?: unknown; errCode?: unknown; code?: unknown }
+    const message = String(record.errMsg ?? record.errmsg ?? record.message ?? '').trim()
+    const code = record.errCode ?? record.code
+    const codeText = code === undefined || code === null ? '' : String(code).trim()
+    const detail = [message, codeText ? `code=${codeText}` : ''].filter(Boolean).join(' ')
+    return new Error(detail ? `${context}（${detail}）` : `${context}（${describeUnknownValue(error)}）`)
+  }
+  return new Error(`${context}（${String(error)}）`)
+}
+
+function describeUnknownValue(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value)
+    if (typeof serialized === 'string' && serialized.length > 0 && serialized !== '{}') {
+      return serialized
+    }
+  } catch {
+    /* circular or non-serializable: fall through */
+  }
+  return Object.prototype.toString.call(value)
+}
+
 function createDownloadUrlCandidates(url: string): string[] {
   const normalized = typeof url === 'string' ? url.trim() : ''
   if (!normalized) {
@@ -618,7 +652,7 @@ function readFileAsArrayBufferByUniFs(fs: UniReadFileFs, filePath: string): Prom
         }
         reject(new Error('资源下载失败（临时文件读取结果不是二进制数据）'))
       },
-      fail: (error) => reject(error instanceof Error ? error : new Error(String(error))),
+      fail: (error) => reject(normalizeDownloadError(error, '资源下载失败（读取临时文件失败）')),
     })
   })
 }
@@ -674,7 +708,7 @@ async function downloadAssetBlobViaUniDownloadFileWithResponse(
       }
       settled = true
       controller.signal.removeEventListener('abort', abortListener)
-      reject(error instanceof Error ? error : new Error(String(error)))
+      reject(normalizeDownloadError(error, '资源下载失败（下载文件失败）'))
     }
 
     const settleDownloaded = (arrayBuffer: ArrayBuffer, statusCode: number, headers: Record<string, string>) => {
@@ -792,7 +826,7 @@ async function downloadAssetBlobViaUniRequest(
         onProgress(100)
         resolve(buildAssetBlobPayload(arrayBuffer, url, mimeType, filename))
       },
-      fail: (error) => reject(error),
+      fail: (error) => reject(normalizeDownloadError(error, '资源下载失败（请求失败）')),
     })
 
     const abortListener = () => {
@@ -864,7 +898,7 @@ async function downloadAssetBlobViaUniRequestWithResponse(
           bytes: arrayBuffer,
         })
       },
-      fail: (error) => reject(error),
+      fail: (error) => reject(normalizeDownloadError(error, '资源下载失败（请求失败）')),
     })
 
     const abortListener = () => {

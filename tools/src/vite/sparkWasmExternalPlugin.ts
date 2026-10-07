@@ -23,7 +23,16 @@ const VIRTUAL_ID = 'virtual:spark-wasm-loader';
 const RESOLVED_VIRTUAL_ID = `\0${VIRTUAL_ID}`;
 const DEFAULT_WASM_ASSET_FILE_NAME = 'pages/spark/spark_rs_bg.wasm';
 const DEFAULT_WORKER_ASSET_FILE_NAME = 'pages/scenery/workers/spark.worker.js';
+const SPARK_WORKER_SELF_IDENTIFIER = '__harmonySparkWorkerSelf';
 
+/**
+ * WeChat's worker global has no usable `self` (and on several base library
+ * versions the property exists but is not writable), while Spark's worker
+ * bootstrap starts with `self.addEventListener('message', ...)`. Resolve the
+ * adapter's DOM-like proxy, publish it globally on a best-effort basis, and
+ * hand it to the worker body as a local `self` binding so initialisation no
+ * longer depends on a writable global.
+ */
 const SPARK_WORKER_PREAMBLE = `/* harmony:spark-worker */
 var __harmonySparkWorkerAdapter = null;
 try {
@@ -31,8 +40,36 @@ try {
 } catch (error) {
   console.warn('[spark-worker] worker adapter unavailable', error);
 }
+var ${SPARK_WORKER_SELF_IDENTIFIER} = null;
 if (__harmonySparkWorkerAdapter && __harmonySparkWorkerAdapter.proxySelf) {
-  try { globalThis.self = __harmonySparkWorkerAdapter.proxySelf; } catch (error) {}
+  ${SPARK_WORKER_SELF_IDENTIFIER} = __harmonySparkWorkerAdapter.proxySelf;
+} else if (globalThis.__harmonyWorkerSelf) {
+  ${SPARK_WORKER_SELF_IDENTIFIER} = globalThis.__harmonyWorkerSelf;
+} else if (globalThis.self && typeof globalThis.self.addEventListener === 'function') {
+  ${SPARK_WORKER_SELF_IDENTIFIER} = globalThis.self;
+}
+if (!${SPARK_WORKER_SELF_IDENTIFIER}) {
+  throw new Error('[spark-worker] worker self unavailable: the minisheep worker adapter and globalThis.self are both missing');
+}
+if (globalThis.self !== ${SPARK_WORKER_SELF_IDENTIFIER}) {
+  try {
+    Object.defineProperty(globalThis, 'self', {
+      value: ${SPARK_WORKER_SELF_IDENTIFIER},
+      configurable: true,
+      enumerable: false,
+      writable: true,
+    });
+  } catch (defineError) {
+    try {
+      globalThis.self = ${SPARK_WORKER_SELF_IDENTIFIER};
+    } catch (assignError) {
+      console.warn(
+        '[spark-worker] could not expose self globally; the worker body still receives the local binding',
+        defineError,
+        assignError,
+      );
+    }
+  }
 }
 if (typeof globalThis.performance === 'undefined') {
   globalThis.performance = { now: function () { return Date.now(); } };
@@ -49,6 +86,13 @@ if (__HarmonyTextDecoder && __HarmonyTextDecoder.prototype && typeof __HarmonyTe
   };
 }
 `;
+
+const SPARK_WORKER_INIT_NEEDLE = 'initialize().catch(console.error);';
+const SPARK_WORKER_INIT_REPLACEMENT = `initialize().then(function () {
+\tconsole.info('[spark-worker] initialized');
+}).catch(function (error) {
+\tconsole.error('[spark-worker] initialize failed', error);
+});`;
 
 function extractJsStringLiteral(source: string, marker: string): string {
   const markerIndex = source.indexOf(marker);
@@ -81,7 +125,14 @@ function extractJsStringLiteral(source: string, marker: string): string {
   return JSON.parse(literal.replace(/\t/g, '\\t')) as string;
 }
 
-function buildSparkWorkerSource(source: string): string {
+function replaceOnce(source: string, needle: string, replacement: string): string {
+  if (!source.includes(needle)) {
+    throw new Error(`[spark-wasm-external] Spark worker needle not found: ${needle}`);
+  }
+  return source.replace(needle, replacement);
+}
+
+export function createSparkWorkerSource(source: string): string {
   let workerSource = extractJsStringLiteral(source, 'var jsContent = "');
 
   const initNeedle = 'await __wbg_init({ module_or_path: await waitForModule });';
@@ -91,8 +142,22 @@ function buildSparkWorkerSource(source: string): string {
   workerSource = workerSource.replace(
     initNeedle,
     `const __sparkWasmPath = await waitForModule;
-		if (typeof WXWebAssembly !== "undefined") {
-			const __sparkWasmResult = await WXWebAssembly.instantiate(__sparkWasmPath, __wbg_get_imports());
+		const __sparkWasmImports = __wbg_get_imports();
+		// The basis transcoder worker shares this physical mini-program worker and
+		// installs a global WXWebAssembly.instantiate input mapper that ignores the
+		// requested path, so the plain call below would compile the basis wasm with
+		// Spark's imports. The shared worker bootstrap keeps a pristine instantiate
+		// on globalThis.__harmonyRawWasmInstantiate; use it when available and fall
+		// back to the adapter-patched call for standalone workers.
+		const __sparkRawInstantiate = typeof globalThis !== "undefined"
+			&& typeof globalThis.__harmonyRawWasmInstantiate === "function"
+			? globalThis.__harmonyRawWasmInstantiate
+			: null;
+		if (__sparkRawInstantiate) {
+			const __sparkWasmResult = await __sparkRawInstantiate(__sparkWasmPath, __sparkWasmImports);
+			__wbg_finalize_init(__sparkWasmResult.instance, __sparkWasmResult.module);
+		} else if (typeof WXWebAssembly !== "undefined") {
+			const __sparkWasmResult = await WXWebAssembly.instantiate(__sparkWasmPath, __sparkWasmImports);
 			__wbg_finalize_init(__sparkWasmResult.instance, __sparkWasmResult.module);
 		} else {
 			await __wbg_init({ module_or_path: __sparkWasmPath });
@@ -118,7 +183,39 @@ function buildSparkWorkerSource(source: string): string {
 \t\t} else if (url) {`,
   );
 
-  return `${SPARK_WORKER_PREAMBLE}\n${workerSource}`;
+  if (!workerSource.includes(SPARK_WORKER_INIT_NEEDLE)) {
+    throw new Error('[spark-wasm-external] Spark worker bootstrap call not found');
+  }
+  workerSource = workerSource.replace(SPARK_WORKER_INIT_NEEDLE, SPARK_WORKER_INIT_REPLACEMENT);
+
+  // One physical mini-program worker hosts every logical worker, and the
+  // dispatcher delivers every message to every listener, so Spark's RPC handler
+  // has to ignore envelopes that belong to the other workers (physics /
+  // instanced LOD / asset download) and the repeated `init-wasm` handshake.
+  workerSource = replaceOnce(
+    workerSource,
+    'const { id, name, args } = event.data;',
+    'const __harmonyRpcData = event.data;\n'
+      + '\t\t\tif (!__harmonyRpcData || typeof __harmonyRpcData !== "object") {\n'
+      + '\t\t\t\treturn;\n'
+      + '\t\t\t}\n'
+      + '\t\t\tconst { id, name, args } = __harmonyRpcData;\n'
+      + '\t\t\tif (name === "init-wasm") {\n'
+      + '\t\t\t\treturn;\n'
+      + '\t\t\t}\n'
+      + '\t\t\tif (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(rpcHandlers, name)) {\n'
+      + '\t\t\t\treturn;\n'
+      + '\t\t\t}',
+  );
+
+  // Bind `self` for the whole worker body: Spark's worker code and its wasm
+  // glue reference the bare global, and only the adapter proxy implements the
+  // DOM-like EventTarget surface the worker expects.
+  return `${SPARK_WORKER_PREAMBLE}
+(function (self) {
+${workerSource}
+})(${SPARK_WORKER_SELF_IDENTIFIER});
+`;
 }
 
 function extractEmbeddedWasm(source: string): Uint8Array {
@@ -148,7 +245,7 @@ export function sparkWasmExternalPlugin(options: SparkWasmExternalPluginOptions)
   const workerAssetFileName = options.workerAssetFileName ?? DEFAULT_WORKER_ASSET_FILE_NAME;
   const source = readFileSync(options.sparkModulePath, 'utf8');
   const wasmBytes = extractEmbeddedWasm(source);
-  const workerSource = buildSparkWorkerSource(source);
+  const workerSource = createSparkWorkerSource(source);
 
   return {
     name: 'harmony:spark-wasm-external',

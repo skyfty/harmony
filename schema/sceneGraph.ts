@@ -1948,7 +1948,6 @@ class SceneGraphBuilder {
       return null;
     }
 
-
     this.registerAssetEntryLoad(assetId, entry);
 
     const file = createFileFromEntry(assetId, entry);

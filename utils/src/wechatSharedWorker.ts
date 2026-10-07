@@ -51,6 +51,75 @@ let globalWorkerShimInstalled = false;
 // before posting and decoded before they reach facade listeners.
 const NO_TRANSFER_MARKER = '__message_data_no_transfer';
 
+/**
+ * Raw (scope-less) workers all share one physical WeChat worker, so their
+ * replies arrive on the same channel. Spark runs two of them (sort + LOD) and
+ * keys its promises by RPC id, so "deliver to whoever posted last" silently
+ * starves one of them. Namespace every outgoing raw RPC id per client and
+ * restore it on the way back, which makes the reply routing exact.
+ */
+const RAW_ID_PREFIX = 'harmony-raw:';
+const rawRoutedIds = new Map<string, { clientId: number; id: number | string }>();
+
+/** Tag an outgoing raw RPC with its owning client so the reply can be routed. */
+function namespaceRawMessageId(message: unknown, clientId: number): unknown {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    return message;
+  }
+  const record = message as Record<string, unknown>;
+  const originalId = record.id;
+  if (typeof originalId !== 'number' && typeof originalId !== 'string') {
+    return message;
+  }
+  const namespacedId = `${RAW_ID_PREFIX}${clientId}:${String(originalId)}`;
+  rawRoutedIds.set(namespacedId, { clientId, id: originalId });
+  // A worker that never answers would otherwise grow this forever; the map is
+  // insertion ordered, so dropping the oldest entries keeps it bounded.
+  while (rawRoutedIds.size > 4096) {
+    const oldest = rawRoutedIds.keys().next();
+    if (oldest.done) {
+      break;
+    }
+    rawRoutedIds.delete(oldest.value);
+  }
+  return { ...record, id: namespacedId };
+}
+
+/** Resolve a worker reply back to the client that issued the RPC. */
+function takeRawRoutedDelivery(
+  payload: unknown,
+): { clientId: number; message: unknown } | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  const id = record.id;
+  if (typeof id !== 'string' || !id.startsWith(RAW_ID_PREFIX)) {
+    return null;
+  }
+  const entry = rawRoutedIds.get(id);
+  if (!entry) {
+    return null;
+  }
+  // Spark sends progress messages (`{id, status}`) before the terminal reply
+  // (`{id, result}` / `{id, error}`), all carrying the same RPC id. Dropping the
+  // routing entry on the first message left the terminal reply unrouted, so the
+  // caller's promise never settled (a pager fetcher stayed pending forever).
+  const terminal = 'result' in record || 'error' in record;
+  if (terminal) {
+    rawRoutedIds.delete(id);
+  }
+  return { clientId: entry.clientId, message: { ...record, id: entry.id } };
+}
+
+function forgetRawRoutedIds(clientId: number): void {
+  for (const [key, entry] of rawRoutedIds) {
+    if (entry.clientId === clientId) {
+      rawRoutedIds.delete(key);
+    }
+  }
+}
+
 function encodeWorkerValue(value: unknown): unknown {
   if (value === null || typeof value !== 'object') {
     return value;
@@ -212,6 +281,12 @@ function ensureRealWorker(state: SharedWechatWorkerState): WechatWorkerLike {
       return;
     }
 
+    const rawDelivery = takeRawRoutedDelivery(payload);
+    if (rawDelivery) {
+      deliverToClient(state, rawDelivery.clientId, { data: rawDelivery.message });
+      return;
+    }
+
     const envelope = payload as { __scope?: unknown; clientId?: unknown; message?: unknown };
     if (typeof envelope.__scope === 'string' && typeof envelope.clientId === 'number') {
       const scopedClient = state.clients.get(envelope.clientId);
@@ -267,6 +342,7 @@ function removeClient(state: SharedWechatWorkerState, clientId: number): void {
   client.alive = false;
   client.listeners.clear();
   state.clients.delete(clientId);
+  forgetRawRoutedIds(clientId);
 
   if (state.lastRawClientId === clientId) {
     state.lastRawClientId = null;
@@ -285,6 +361,12 @@ function removeClient(state: SharedWechatWorkerState, clientId: number): void {
 export type WechatWorkerFacade = WechatWorkerLike & {
   addEventListener(type: string, listener: WorkerFacadeListener): void;
   removeEventListener(type: string, listener: WorkerFacadeListener): void;
+  /**
+   * DOM-style message subscription. Libraries such as Spark's `SplatWorker`
+   * assign `worker.onmessage = handler` instead of calling `onMessage` /
+   * `addEventListener`, so the facade has to honour the property form too.
+   */
+  onmessage: ((event: { data: unknown }) => void) | null;
 };
 
 export function createWechatWorkerFacade(scriptPath: string): WechatWorkerFacade {
@@ -306,7 +388,8 @@ export function createWechatWorkerFacade(scriptPath: string): WechatWorkerFacade
   const scope = resolveWorkerScope(scriptPath);
   ensureRealWorker(state);
 
-  return {
+  let onmessageListener: WorkerFacadeListener | null = null;
+  const facade: WechatWorkerFacade = {
     postMessage(message, transferables) {
       if (!client.alive) {
         return;
@@ -321,7 +404,8 @@ export function createWechatWorkerFacade(scriptPath: string): WechatWorkerFacade
         return;
       }
       state.lastRawClientId = clientId;
-      worker.postMessage(encodeOutgoingMessage(message, Boolean(transferables)) as never);
+      const routed = namespaceRawMessageId(message, clientId);
+      worker.postMessage(encodeOutgoingMessage(routed, Boolean(transferables)) as never);
     },
     onMessage<TPayload>(listener: (event: { data: TPayload }) => void) {
       client.listeners.add(listener);
@@ -339,7 +423,23 @@ export function createWechatWorkerFacade(scriptPath: string): WechatWorkerFacade
     terminate() {
       removeClient(state, clientId);
     },
+    onmessage: null,
   };
+  Object.defineProperty(facade, 'onmessage', {
+    configurable: true,
+    enumerable: true,
+    get: () => onmessageListener,
+    set: (listener: unknown) => {
+      if (onmessageListener) {
+        client.listeners.delete(onmessageListener);
+      }
+      onmessageListener = typeof listener === 'function' ? (listener as WorkerFacadeListener) : null;
+      if (onmessageListener) {
+        client.listeners.add(onmessageListener);
+      }
+    },
+  });
+  return facade;
 }
 
 export function terminateWechatSharedWorker(): void {
