@@ -15,7 +15,7 @@ import {
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createWallRepeatScaleMaterialVariant, ensureWallMaterialRepeatWrapU } from './material'
 import { shouldUseReceiverOnlyForDenseInstancedMesh } from './sceneCsmReceiverPolicy'
-import { disposeSparkObject, getSparkSplatBounds } from './sparkRuntime'
+import { disposeSparkObject, getSparkSplatBounds } from '@harmony/schema/sparkRuntimeFacade'
 
 // three.js InstancedMesh allocates its whole instanceMatrix up front (capacity *
 // 16 floats = 128KB at the old capacity of 2048), even for the common single-

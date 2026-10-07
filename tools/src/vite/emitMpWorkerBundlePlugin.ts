@@ -45,6 +45,11 @@ try {
   if (sharedWorkerAdapter && sharedWorkerAdapter.proxySelf) {
     sharedSelf = sharedWorkerAdapter.proxySelf;
     globalThis.__harmonyWorkerSelf = sharedSelf;
+    try {
+      globalThis.self = sharedSelf;
+    } catch (error) {
+      console.warn('[harmony-shared-worker] failed to expose proxy self', error);
+    }
   } else {
     console.warn('[harmony-shared-worker] worker adapter loaded without proxySelf');
   }
@@ -68,6 +73,12 @@ try {
   require('./assetDownload.worker.js');
 } catch (error) {
   console.warn('[harmony-shared-worker] asset download worker init failed', error);
+}
+
+try {
+  require('./spark.worker.js');
+} catch (error) {
+  console.error('[harmony-shared-worker] spark worker init failed', error);
 }
 
 try {
@@ -121,11 +132,23 @@ export function emitMpWorkerBundlePlugin(options: EmitMpWorkerBundlePluginOption
       try {
         const viteModule = await import('vite') as unknown as {
           build?: (config: Record<string, unknown>) => Promise<unknown>
+          transformWithEsbuild?: (
+            code: string,
+            filename: string,
+            options?: { target?: string; loader?: string },
+          ) => Promise<{ code: string }>
           default?: {
             build?: (config: Record<string, unknown>) => Promise<unknown>
+            transformWithEsbuild?: (
+              code: string,
+              filename: string,
+              options?: { target?: string; loader?: string },
+            ) => Promise<{ code: string }>
           }
         }
         const viteBuild = viteModule.build ?? viteModule.default?.build
+        const transformWithEsbuild = viteModule.transformWithEsbuild
+          ?? viteModule.default?.transformWithEsbuild
         if (!viteBuild) {
           throw new Error('vite build API is not available')
         }
@@ -141,7 +164,8 @@ export function emitMpWorkerBundlePlugin(options: EmitMpWorkerBundlePluginOption
           build: {
             outDir: workersDir,
             emptyOutDir: false,
-            minify: false,
+            target: 'es2018',
+            minify: true,
             sourcemap: false,
             lib: {
               entry: options.entryPath,
@@ -158,6 +182,15 @@ export function emitMpWorkerBundlePlugin(options: EmitMpWorkerBundlePluginOption
         })
         fs.writeFileSync(path.join(workersDir, 'index.js'), SHARED_WORKER_TEMPLATE, 'utf8')
         patchWechatWorkerAdapter(workersDir)
+        const sparkWorkerPath = path.join(workersDir, 'spark.worker.js')
+        if (transformWithEsbuild && fs.existsSync(sparkWorkerPath)) {
+          const sparkWorkerSource = fs.readFileSync(sparkWorkerPath, 'utf8')
+          const transformed = await transformWithEsbuild(sparkWorkerSource, sparkWorkerPath, {
+            target: 'es2018',
+            loader: 'js',
+          })
+          fs.writeFileSync(sparkWorkerPath, transformed.code, 'utf8')
+        }
         console.info(`[harmony-worker] emitted ${options.outputFileName} and pages/scenery/workers/index.js`)
       } catch (error) {
         console.error('[harmony-worker] failed to build WeChat shared worker', error)

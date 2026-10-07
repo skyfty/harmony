@@ -2750,6 +2750,8 @@ function cloneGroundDynamicMesh(definition: GroundDynamicMesh): GroundDynamicMes
   result.textureName = definition.textureName ?? null
   result.textureAssetId = definition.textureAssetId ?? null
   result.generation = cloneGroundGenerationSettings(definition.generation) ?? null
+  result.renderGroundTerrain = definition.renderGroundTerrain !== false
+  result.terrainCollisionEnabled = definition.terrainCollisionEnabled !== false
   if (definition.castShadow !== undefined) {
     result.castShadow = definition.castShadow
   }

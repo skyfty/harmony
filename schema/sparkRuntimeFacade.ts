@@ -1,0 +1,70 @@
+import type * as THREE from 'three';
+import type { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+
+type SparkRuntimeModule = typeof import('@harmony/schema/sparkRuntimeMiniEntry');
+
+let sparkRuntimePromise: Promise<SparkRuntimeModule> | null = null;
+let disposeSparkObjectHook: ((object: THREE.Object3D) => void) | null = null;
+let disposeSparkSceneHook: ((scene: THREE.Scene | null | undefined) => void) | null = null;
+let getSparkSplatBoundsHook: ((object: THREE.Object3D) => THREE.Box3 | null) | null = null;
+
+function loadSparkRuntime(): Promise<SparkRuntimeModule> {
+  if (!sparkRuntimePromise) {
+    sparkRuntimePromise = import('@harmony/schema/sparkRuntimeMiniEntry').then((module) => {
+      disposeSparkObjectHook = module.disposeSparkObject;
+      disposeSparkSceneHook = module.disposeSparkScene;
+      getSparkSplatBoundsHook = module.getSparkSplatBounds;
+      return module;
+    });
+  }
+  return sparkRuntimePromise;
+}
+
+/**
+ * Mini-program lazy-loading facade for the Spark Gaussian-splat runtime.
+ *
+ * `@sparkjsdev/spark` is intentionally not imported at runtime here. The heavy
+ * implementation is loaded only when a RAD/splat path is actually used, so the
+ * Spark library can live in a dedicated WeChat subpackage instead of the main
+ * package. H5/editor builds alias this facade to the synchronous implementation.
+ */
+export async function createPagedRadSplat(bytes: ArrayBuffer, filename: string): Promise<SplatMesh> {
+  const module = await loadSparkRuntime();
+  return module.createPagedRadSplat(bytes, filename);
+}
+
+export async function createPagedRadSplatFromUrl(
+  url: string,
+  filename: string,
+): Promise<SplatMesh | null> {
+  const module = await loadSparkRuntime();
+  return module.createPagedRadSplatFromUrl(url, filename);
+}
+
+export async function attachSparkRenderer(
+  scene: THREE.Scene,
+  renderer: THREE.WebGLRenderer,
+): Promise<SparkRenderer> {
+  const module = await loadSparkRuntime();
+  return module.attachSparkRenderer(scene, renderer);
+}
+
+export function disposeSparkScene(scene: THREE.Scene | null | undefined): void {
+  if (disposeSparkSceneHook) {
+    disposeSparkSceneHook(scene);
+    return;
+  }
+
+  // Before Spark has loaded there cannot be any Spark-owned scene resources, so
+  // a no-op is safe. Do not trigger the heavyweight import from a teardown path.
+}
+
+export function getSparkSplatBounds(object: THREE.Object3D): THREE.Box3 | null {
+  return getSparkSplatBoundsHook ? getSparkSplatBoundsHook(object) : null;
+}
+
+export function disposeSparkObject(object: THREE.Object3D): void {
+  if (disposeSparkObjectHook) {
+    disposeSparkObjectHook(object);
+  }
+}

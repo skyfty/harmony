@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 import uni from '@dcloudio/vite-plugin-uni';
 import bundleOptimizer from '@uni-ku/bundle-optimizer';
 import threePlatformAdapter from '@minisheep/three-platform-adapter/plugin';
-import { emitMpWorkerAssetPlugin, emitMpWorkerBundlePlugin, toCustomChunkPlugin } from '@harmony/tools/vite';
+import { emitMpWorkerAssetPlugin, emitMpWorkerBundlePlugin, sparkWasmExternalPlugin, toCustomChunkPlugin } from '@harmony/tools/vite';
 import glsl from 'vite-plugin-glsl';
 import { visualizer } from 'rollup-plugin-visualizer';
 
@@ -37,6 +37,7 @@ const rawVueRuntimeAlias = isMp
 const repoRootPath = fileURLToPath(new URL('..', import.meta.url)).replaceAll('\\', '/');
 const scenerySourcePath = fileURLToPath(new URL('../scenery', import.meta.url)).replaceAll('\\', '/');
 const schemaSourcePath = fileURLToPath(new URL('../schema', import.meta.url)).replaceAll('\\', '/');
+const sparkModulePath = fileURLToPath(new URL('../schema/node_modules/@sparkjsdev/spark/dist/spark.module.js', import.meta.url)).replaceAll('\\', '/');
 const physicsCoreSourcePath = fileURLToPath(new URL('../physics-core/src', import.meta.url)).replaceAll('\\', '/');
 const physicsCannonSourcePath = fileURLToPath(new URL('../physics-cannon/src', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/src', import.meta.url)).replaceAll('\\', '/');
@@ -52,8 +53,9 @@ const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
 const sceneryThreeChunk = 'pages/scenery/chunks/three';
 const sceneryThreeExamplesChunk = 'pages/scenery/chunks/three-examples';
-const sceneryThreeCsmChunk = 'pages/scenery/chunks/three-csm';
+const sceneryThreeCsmChunk = 'pages/scenery-shared/chunks/three-csm';
 const sceneryThreeAdapterChunk = 'pages/scenery/chunks/three-adapter';
+const sparkRuntimeChunk = 'pages/spark/chunks/spark';
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
 try {
@@ -103,7 +105,7 @@ function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
     return sceneryThreeAdapterChunk;
   }
   if (normalizedId.includes('/src/pages/scenery/schema/')) {
-    return 'common/scenery-schema';
+    return 'pages/scenery-shared/chunks/schema';
   }
   return undefined;
 }
@@ -118,6 +120,13 @@ function resolveManualChunk(id: string): string | undefined {
   }
 
   const normalizedId = id.replaceAll('\\', '/');
+  if (
+    normalizedId.includes('@sparkjsdev/spark')
+    || normalizedId.includes('@sparkjsdev_spark')
+    || normalizedId.includes('/sparkRuntime.ts')
+  ) {
+    return sparkRuntimeChunk;
+  }
   if (normalizedId.includes('/.vite/deps/')) {
     if (
       normalizedId.includes('schema')
@@ -278,9 +287,11 @@ export default defineConfig({
     ],
     alias: [
       ...(useWorkspaceSourceForH5
-        ? [
+          ? [
             { find: /^@harmony\/scenery$/, replacement: scenerySourcePath },
             { find: /^@harmony\/scenery\/(.*)$/, replacement: `${scenerySourcePath}/$1` },
+            { find: '@harmony/schema/sparkRuntimeFacade', replacement: `${schemaSourcePath}/sparkRuntime.ts` },
+            { find: '@harmony/schema/sparkRuntimeMiniEntry', replacement: `${schemaSourcePath}/sparkRuntimeMiniEntry.ts` },
             { find: /^@harmony\/schema$/, replacement: `${schemaSourcePath}/index.ts` },
             { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaSourcePath}/$1` },
             { find: /^@harmony\/physics-core$/, replacement: `${physicsCoreSourcePath}/index.ts` },
@@ -306,6 +317,8 @@ export default defineConfig({
             { find: /^three$/, replacement: appThreeRootPath },
           ]
         : [
+            { find: '@harmony/schema/sparkRuntimeFacade', replacement: `${schemaMirrorPath}/sparkRuntimeFacade.ts` },
+            { find: '@harmony/schema/sparkRuntimeMiniEntry', replacement: fileURLToPath(new URL('./src/pages/spark/sparkRuntime.ts', import.meta.url)) },
             { find: /^@harmony\/schema$/, replacement: `${schemaMirrorPath}/index.ts` },
             { find: /^@harmony\/schema\/(.*)$/, replacement: `${schemaMirrorPath}/$1` },
             { find: /^@harmony\/physics-core$/, replacement: `${physicsCoreMirrorPath}/index.ts` },
@@ -393,12 +406,16 @@ export default defineConfig({
         'pages/scenery/chunks/three-examples': [
           '**/three/examples/jsm/**',
         ],
-        'pages/scenery/chunks/three-csm': [
+        'pages/scenery-shared/chunks/three-csm': [
           '**/three-csm/**',
         ],
         'pages/scenery/chunks/three-adapter': [
           '**/pages/scenery/three-platform-adapter/**',
           '**/@minisheep/three-platform-adapter/**',
+        ],
+        'pages/spark/chunks/spark': [
+          '**/pages/scenery/schema/sparkRuntime.ts',
+          '**/@sparkjsdev/spark/**',
         ],
         'pages/scenery-shared/chunks/schema': [
           '**/pages/scenery/schema/**',
@@ -435,6 +452,14 @@ export default defineConfig({
         wasm: 'pages/scenery/wasms',
       },
     }),
+    ...(isMp
+      ? [
+          sparkWasmExternalPlugin({
+            sparkModulePath,
+            wasmAssetFileName: 'pages/spark/spark_rs_bg.wasm',
+          }),
+        ]
+      : []),
     emitMpWorkerAssetPlugin({
       sourceChunkName: 'instancedLodCulling.worker',
       fileName: 'pages/scenery/workers/instancedLodCulling.worker.js',

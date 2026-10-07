@@ -2438,6 +2438,10 @@ export interface GroundDynamicMesh {
   planningMetadata?: GroundPlanningMetadata | null
   /** When true, ground chunk meshes will cast shadows (more expensive on large grounds). */
   castShadow?: boolean
+  /** When false, the ground node terrain is not rendered and terrain chunks are not loaded. */
+  renderGroundTerrain?: boolean
+  /** When false, the ground node terrain collision runtime is disabled. */
+  terrainCollisionEnabled?: boolean
   terrainScatterInstancesUpdatedAt: number
   textureDataUrl?: string | null
   textureName?: string | null

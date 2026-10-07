@@ -18,6 +18,7 @@
     "sync:scenery": "node ../tools/dist/cli-bin.js sync-scenery --mode subpackage-uni-modules",
     "sync:scenery:dev": "node ../tools/dist/cli-bin.js sync-scenery --mode subpackage-uni-modules --link",
     "verify:mp-weixin-main-package-source": "node ./scripts/verify-mp-weixin-main-package-source.mjs",
+    "verify:mp-weixin-package-size": "node ../scripts/verify-mp-weixin-package-size.mjs .",
     "predev:mp-weixin": "node ./scripts/clean-dev-artifacts.mjs && pnpm run verify:mp-weixin-main-package-source && pnpm run bootstrap:mp-weixin:dev",
     "dev:mp-weixin": "pnpm run predev:mp-weixin && pnpm exec cross-env DEBUG=none uni -p mp-weixin --mode mp-weixin.development",
     "prebuild:mp-weixin": "pnpm run bootstrap:mp-weixin:build",

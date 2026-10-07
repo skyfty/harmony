@@ -12697,6 +12697,12 @@ function syncScenePreviewCompiledGroundRenderTiles(activeCamera: THREE.Perspecti
 	if (!runtime) {
 		return
 	}
+	if (runtime.groundDefinition.renderGroundTerrain === false) {
+		setInfiniteGroundHiddenChunkKeys(runtime.groundObject, [])
+		clearCompiledGroundRenderTiles(runtime.groundObject)
+		lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
+		return
+	}
 	const compiledGroundPackage = resolveScenePreviewCompiledGroundPackage()
 	if (!compiledGroundPackage) {
 		setInfiniteGroundHiddenChunkKeys(runtime.groundObject, [])
@@ -12913,6 +12919,10 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 	}
 	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
 	if (!groundObject) {
+		return false
+	}
+	if (groundMesh?.terrainCollisionEnabled === false) {
+		clearGroundCollisionRuntimeHost(groundObject)
 		return false
 	}
 	if (!referenceWorldPositions?.length || !physicsEnvironmentEnabled.value) {

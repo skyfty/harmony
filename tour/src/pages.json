@@ -32,6 +32,16 @@
       ]
     },
     {
+      "root": "pages/spark",
+      "name": "spark",
+      "pages": []
+    },
+    {
+      "root": "pages/scenery-schema",
+      "name": "scenery-schema",
+      "pages": []
+    },
+    {
       "root": "pages/physics-ammo",
       "name": "physics-ammo",
       "pages": []

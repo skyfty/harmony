@@ -13,6 +13,11 @@
       ]
     },
     {
+      "root": "pages/spark",
+      "name": "spark",
+      "pages": []
+    },
+    {
       "root": "pages/physics-ammo",
       "name": "physics-ammo",
       "pages": []

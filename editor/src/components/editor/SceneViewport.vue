@@ -23263,6 +23263,12 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   if ((userData.dynamicMeshType ?? null) !== nextDynamicMeshType) {
     return true
   }
+  const nextGroundRenderEnabled = node.dynamicMesh?.type === 'Ground'
+    ? (node.dynamicMesh as GroundDynamicMesh).renderGroundTerrain !== false
+    : null
+  if ((userData.groundRenderEnabled ?? null) !== nextGroundRenderEnabled) {
+    return true
+  }
   const nextLightType = node.light?.type ?? null
   if ((userData.lightType ?? null) !== nextLightType) {
     return true
@@ -23935,9 +23941,14 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     containerData.nodeId = node.id
 
     if (node.dynamicMesh?.type === 'Ground') {
+      containerData.dynamicMeshType = 'Ground'
+      const groundDynamicMesh = node.dynamicMesh as GroundDynamicMesh
+      if (groundDynamicMesh.renderGroundTerrain === false) {
+        containerData.groundRenderEnabled = false
+        return container
+      }
       const groundDefinition = resolveGroundDynamicMeshDefinition()
       if (!groundDefinition) {
-        containerData.dynamicMeshType = 'Ground'
         return container
       }
       const groundMesh = createGroundMesh(groundDefinition)
@@ -23948,7 +23959,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       syncViewportGroundChunks(groundMesh, groundDefinition)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
-      containerData.dynamicMeshType = 'Ground'
+      containerData.groundRenderEnabled = true
     } else if (node.dynamicMesh?.type === 'Wall') {
       containerData.dynamicMeshType = 'Wall'
     } else if (node.dynamicMesh?.type === 'Road') {

@@ -3,7 +3,7 @@ import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides, resolveSceneNodeMaterialSlots } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { createPagedRadSplatFromUrl, disposeSparkObject } from './sparkRuntime';
+import { createPagedRadSplatFromUrl, disposeSparkObject } from '@harmony/schema/sparkRuntimeFacade';
 import { markRuntimeDirectRenderAsset } from './runtimeModelInstancing';
 import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
 import ResourceCache from './ResourceCache';
@@ -1994,6 +1994,17 @@ class SceneGraphBuilder {
   }
 
   private async buildGroundMesh(meshInfo: GroundDynamicMesh, node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
+    if (meshInfo.renderGroundTerrain === false) {
+      const placeholder = new THREE.Group()
+      placeholder.name = node.name ?? 'Ground'
+      this.applyTransform(placeholder, node)
+      this.applyVisibility(placeholder, node)
+      placeholder.visible = false
+      const placeholderData = placeholder.userData ?? (placeholder.userData = {})
+      placeholderData.dynamicMeshType = 'Ground'
+      placeholderData.groundRenderEnabled = false
+      return placeholder
+    }
     return buildGroundDynamicMesh(
       {
         resolveNodeMaterials: (targetNode) => this.resolveNodeMaterials(targetNode),

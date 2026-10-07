@@ -1,6 +1,11 @@
 // #ifdef MP-WEIXIN
 import '@minisheep/mini-program-polyfill-core/wechat-polyfill';
 // import '@minisheep/mini-program-polyfill-core/xml-addon'; // if the project needs DOMParser support later, import it here
+// Must run before any page/shared chunk is evaluated: the Spark splat runtime
+// calls TextDecoder#decode() without arguments while its wasm glue loads.
+import { installMiniProgramPolyfillGuards } from '@harmony/utils/miniProgramPolyfillGuards';
+
+installMiniProgramPolyfillGuards();
 // #endif
 import { createSSRApp } from 'vue';
 import App from './App.vue';

@@ -3,6 +3,7 @@ export * from './scenePackageStorage';
 export * from './testAccount';
 export * from './http';
 export * from './miniClient';
+export * from './miniProgramPolyfillGuards';
 export * from './query';
 export * from './runtimeConfig';
 export * from './hash';

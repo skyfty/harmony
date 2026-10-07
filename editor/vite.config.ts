@@ -34,6 +34,10 @@ export default defineConfig({
         replacement: resolveDir('../schema'),
       },
       {
+        find: '@harmony/schema/sparkRuntimeFacade',
+        replacement: resolveDir('../schema/sparkRuntime.ts'),
+      },
+      {
         find: /^@harmony\/utils$/,
         replacement: resolveDir('../utils/src/index.ts'),
       },

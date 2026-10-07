@@ -5,7 +5,7 @@ import type { AssetCacheEntry } from './assetCache'
 import { Semaphore, withSemaphoreYielding } from './concurrency'
 import type { SceneNodeImportMetadata } from './core'
 import { getExtensionFromMimeType, getLastExtensionFromFilenameOrUrl } from './assetTypeConversion'
-import { createPagedRadSplatFromUrl } from './sparkRuntime'
+import { createPagedRadSplatFromUrl } from '@harmony/schema/sparkRuntimeFacade'
 import { markRuntimeDirectRenderAsset } from './runtimeModelInstancing'
 
 // GLB/FBX parsing (GLTFLoader.parse + geometry/material construction) is CPU

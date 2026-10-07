@@ -4,7 +4,7 @@ import * as THREE from 'three';
 // import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
-import { createPagedRadSplat } from './sparkRuntime'
+import { createPagedRadSplat } from '@harmony/schema/sparkRuntimeFacade'
 
 export type LoaderProgressPayload = {
   loaded: number;
