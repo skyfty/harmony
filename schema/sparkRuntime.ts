@@ -1,7 +1,14 @@
 import * as THREE from 'three'
 import { PagedSplats, SparkRenderer, SplatMesh, SplatFileType } from '@sparkjsdev/spark'
+import type { SparkRendererOptions } from '@sparkjsdev/spark'
 import { validateRadRangeResponse } from './radRangeResponse'
 import { attachResponseBodyStream } from './responseBodyShim'
+
+/**
+ * Spark 渲染器参数（不含 `renderer` 本身），用于按终端档位收敛质量/性能。
+ * @see attachSparkRenderer
+ */
+export type SparkRendererTuning = Omit<SparkRendererOptions, 'renderer'>
 
 const SPARK_RENDERER_KEY = '__harmonySparkRenderer'
 const progressiveRadUrls = new Map<string, number>()
@@ -207,13 +214,17 @@ export async function createPagedRadSplatFromUrl(url: string, filename: string):
 }
 
 /** Attach Spark's renderer hook once to a Three.js scene. */
-export function attachSparkRenderer(scene: THREE.Scene, renderer: THREE.WebGLRenderer): SparkRenderer {
+export function attachSparkRenderer(
+  scene: THREE.Scene,
+  renderer: THREE.WebGLRenderer,
+  tuning?: SparkRendererTuning,
+): SparkRenderer {
   const sparkScene = scene as SparkScene
   if (sparkScene[SPARK_RENDERER_KEY]) {
     return sparkScene[SPARK_RENDERER_KEY]!
   }
 
-  const sparkRenderer = new SparkRenderer({ renderer })
+  const sparkRenderer = new SparkRenderer({ renderer, ...(tuning ?? {}) })
   sparkRenderer.name = 'HarmonySparkRenderer'
   sparkRenderer.userData.__harmonySparkRenderer = true
   sparkScene[SPARK_RENDERER_KEY] = sparkRenderer

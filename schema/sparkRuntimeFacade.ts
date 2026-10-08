@@ -1,5 +1,8 @@
 import type * as THREE from 'three';
-import type { SparkRenderer, SplatMesh } from '@sparkjsdev/spark';
+import type { SparkRenderer, SparkRendererOptions, SplatMesh } from '@sparkjsdev/spark';
+
+/** Spark 渲染器参数（不含 `renderer`），用于按终端档位收敛质量/性能。 */
+export type SparkRendererTuning = Omit<SparkRendererOptions, 'renderer'>;
 
 type SparkRuntimeModule = typeof import('@harmony/schema/sparkRuntimeMiniEntry');
 
@@ -44,9 +47,10 @@ export async function createPagedRadSplatFromUrl(
 export async function attachSparkRenderer(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
+  tuning?: SparkRendererTuning,
 ): Promise<SparkRenderer> {
   const module = await loadSparkRuntime();
-  return module.attachSparkRenderer(scene, renderer);
+  return module.attachSparkRenderer(scene, renderer, tuning);
 }
 
 export function disposeSparkScene(scene: THREE.Scene | null | undefined): void {

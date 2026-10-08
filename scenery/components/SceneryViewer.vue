@@ -674,6 +674,16 @@ import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFacesAsync,
 import { isSkyCubeArchiveExtension } from '@harmony/schema/core';
 import { resolveDeviceAdaptationPlatform, resolveDeviceAdaptationProfile, type DeviceAdaptationSystemInfo, type DeviceAdaptationProfile } from '@harmony/schema/deviceAdaptation';
 import {
+  SPLAT_TIER_START_LEVEL,
+  createSplatLevelState,
+  resolveSplatLevelDecision,
+  resolveSplatLevelTuning,
+  resolveSplatStartLevel,
+  resolveSplatTuning,
+  type SplatLevelState,
+  type SplatTierInfo,
+} from '@harmony/schema/splatQuality';
+import {
   canNodeUseRuntimeModelInstancing,
   collectRuntimeModelNodesByAssetId,
 } from '@harmony/schema/runtimeModelInstancing';
@@ -1463,6 +1473,21 @@ configureAssetBlobDownloader(
 configureGltfParseWorkerFactory(createGltfParseWorkerFactory());
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
+// 泼溅质量档位要覆盖所有小程序宿主（微信 / 头条 / QQ / 百度 / 支付宝），
+// 它们的 WebGL 都跑在同一类低功耗移动 GPU 上。H5/编辑器保持 Spark 默认质量。
+const globalMiniProgramHost = globalApp as typeof globalThis & {
+  tt?: { getSystemInfoSync?: unknown };
+  qq?: { getSystemInfoSync?: unknown };
+  swan?: { getSystemInfoSync?: unknown };
+  my?: { getSystemInfoSync?: unknown };
+};
+const isMiniProgramRuntime = Boolean(
+  isWeChatMiniProgram
+  || globalMiniProgramHost.tt?.getSystemInfoSync
+  || globalMiniProgramHost.qq?.getSystemInfoSync
+  || globalMiniProgramHost.swan?.getSystemInfoSync
+  || globalMiniProgramHost.my?.getSystemInfoSync,
+);
 const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersistentAssetStorageSupported()
   ? createWeChatFileSystemPersistentAssetStorage()
   : isIndexedDbPersistentAssetStorageSupported()
@@ -1538,6 +1563,280 @@ const {
 } = useDebugOverlay();
 
 const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
+
+// ---------------------------------------------------------------------------
+// 高斯泼溅（.rad）运行时自动配速
+//
+// 只保留升降档所需的帧率采样与状态，不输出任何诊断日志。
+// 画质阶梯与升降档规则见 `@harmony/schema/splatQuality`。
+// ---------------------------------------------------------------------------
+function splatNowMs(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
+}
+
+// 帧率采样窗口（约 1 秒）：窗口末尾做一次升降档决策。
+let splatFpsWindowStartMs = 0;
+let splatFpsWindowFrames = 0;
+
+function noteSplatFrameRendered(): void {
+  const now = splatNowMs();
+  if (splatFpsWindowStartMs === 0) {
+    splatFpsWindowStartMs = now;
+  }
+  splatFpsWindowFrames += 1;
+}
+
+type SparkRendererProbe = {
+  /** 运行时可热改：LoD 目标 splat 数与最小屏幕像素尺度。 */
+  lodSplatCount?: number | null;
+  lodRenderScale?: number;
+};
+
+/** 读取 Spark 渲染器实例：优先读场景上的私有 key，其次按对象名查找。 */
+function resolveSparkRendererProbe(scene: THREE.Scene | null | undefined): SparkRendererProbe | null {
+  if (!scene) {
+    return null;
+  }
+  const keyed = (scene as unknown as { __harmonySparkRenderer?: SparkRendererProbe }).__harmonySparkRenderer;
+  if (keyed) {
+    return keyed;
+  }
+  const found = scene.getObjectByName('HarmonySparkRenderer');
+  return (found as unknown as SparkRendererProbe) ?? null;
+}
+
+type SplatMeshStats = {
+  meshes: number;
+  live: number;
+};
+
+function collectSplatMeshStats(scene: THREE.Scene): SplatMeshStats {
+  const stats: SplatMeshStats = { meshes: 0, live: 0 };
+  scene.traverse((object) => {
+    const userData = object.userData as { __harmonySparkSplat?: boolean } | undefined;
+    if (userData?.__harmonySparkSplat !== true) {
+      return;
+    }
+    stats.meshes += 1;
+    const liveCount = (object as unknown as { numSplats?: number }).numSplats;
+    if (Number.isFinite(liveCount)) {
+      stats.live += Number(liveCount);
+    }
+  });
+  return stats;
+}
+
+/**
+ * 每帧末尾调用：累计采样窗口，并在窗口末尾按实测帧率做一次升降档决策。
+ * 只在小程序、且设备分档已就绪、场景内存在泼溅节点时生效。
+ */
+function updateSplatAutoTune(scene: THREE.Scene): void {
+  const now = splatNowMs();
+  if (splatFpsWindowStartMs === 0) {
+    splatFpsWindowStartMs = now;
+    return;
+  }
+  const elapsedMs = now - splatFpsWindowStartMs;
+  const frames = splatFpsWindowFrames;
+  if (elapsedMs < 1000 || frames <= 0) {
+    return;
+  }
+
+  if (isMiniProgramRuntime && splatAutoTuneReady) {
+    const splatStats = collectSplatMeshStats(scene);
+    if (splatStats.meshes > 0) {
+      const windowFps = (frames * 1000) / Math.max(1, elapsedMs);
+      const decision = resolveSplatLevelDecision({
+        state: splatAutoTuneState,
+        fps: windowFps,
+        frames,
+        splatLive: splatStats.live,
+        previousSplatLive: splatAutoTunePreviousSplatLive,
+        sinceLastStepMs: now - splatAutoTuneLastStepAtMs,
+      });
+      splatAutoTuneState = decision.state;
+      splatAutoTunePreviousSplatLive = splatStats.live;
+      const transition = decision.transition;
+      if (transition) {
+        const nextTuning = resolveSplatLevelTuning(transition.toLevel);
+        const liveSpark = resolveSparkRendererProbe(scene);
+        if (liveSpark) {
+          liveSpark.lodSplatCount = nextTuning.lodSplatCount;
+          liveSpark.lodRenderScale = nextTuning.lodRenderScale;
+        }
+        splatAutoTuneLastStepAtMs = now;
+      }
+    }
+  }
+
+  splatFpsWindowStartMs = now;
+  splatFpsWindowFrames = 0;
+}
+
+/**
+ * 小程序上的高斯泼溅质量档位。
+ *
+ * Spark 的默认值是"旗舰桌面/手机"档：`lodSplatCount` 在 Android 上取 1,000,000，
+ * `lodRenderScale = 1`、`maxStdDev = √8 ≈ 2.83`、`maxPixelRadius = 512`、
+ * `minSortIntervalMs = 0`、页池 `maxPagedSplats = 128 * 65536`。
+ *
+ * 真机日志（396x800 画布、RAD 共 833 万 splat）显示：主线程 JS 每帧仅 2.7~7.5ms，
+ * 但帧间隔随渲染 splat 数近似线性增长——10 万时 57fps、29 万时 47fps、
+ * 68 万时 13.7fps、90 万时 6.6fps，即每帧成本几乎全部落在 GPU 侧的实例化绘制。
+ * 用 lodRenderScale / maxPixelRadius 削掉"看不见的小 splat"和"近处巨型核"后，
+ * 18 万档在该机型稳定 55~61fps（已贴近 60Hz 上限）。
+ *
+ * 具体档位与升降档规则见 `@harmony/schema/splatQuality`；这里的常量只是
+ * "设备信息还没到手"时的起点（balanced 档），拿到 benchmark 后会按机型改写。
+ * 注意：只影响小程序；H5 与编辑器仍使用 Spark 默认值。
+ */
+const MINI_PROGRAM_SPLAT_TUNING = resolveSplatTuning(SPLAT_TIER_START_LEVEL.balanced);
+
+// ---- 运行时自动配速状态（只在小程序、且场景内存在泼溅节点时生效） ----
+let splatAutoTuneState: SplatLevelState = createSplatLevelState(SPLAT_TIER_START_LEVEL.balanced);
+/** 设备分档是否已经落地；未落地前不参与升降档判定。 */
+let splatAutoTuneReady = false;
+/** 上一次升降档的时间戳（ms），用于冷却判定。 */
+let splatAutoTuneLastStepAtMs = 0;
+/** 上一采样窗口的 splat 分页量，用于判断加载是否已稳定。 */
+let splatAutoTunePreviousSplatLive: number | null = null;
+/** 设备信息只探测一次（含异步 benchmark 接口）。 */
+let splatDeviceInfoPromise: Promise<SplatDeviceProbe> | null = null;
+
+type SplatDeviceProbe = {
+  info: SplatTierInfo
+}
+
+type SplatDeviceHost = typeof globalThis & {
+  wx?: {
+    getDeviceInfo?: () => Record<string, unknown>
+    getSystemInfoSync?: () => Record<string, unknown>
+    getDeviceBenchmarkInfo?: (options: {
+      success?: (result: { benchmarkLevel?: number; modelLevel?: number }) => void
+      fail?: (error?: unknown) => void
+      complete?: () => void
+    }) => void
+  }
+  uni?: { getSystemInfoSync?: () => Record<string, unknown> }
+}
+
+/** 设备性能分级接口取自基础库 3.4.5+，未返回时要能在 1.5s 内兜底。 */
+const SPLAT_DEVICE_BENCHMARK_TIMEOUT_MS = 1500;
+
+/** `benchmarkLevel` 的 -1/-2/0 与 `modelLevel` 的 0 都表示"未知"。 */
+function toPositiveTierValue(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function resolveMaxTextureSizeFromRenderer(renderer: THREE.WebGLRenderer | null): number | null {
+  if (!renderer) {
+    return null;
+  }
+  try {
+    const gl = renderer.getContext();
+    const value = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    return Number.isFinite(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 只在真机上有效；开发者工具/低版本基础库会走超时兜底。 */
+function requestDeviceBenchmarkInfo(host: SplatDeviceHost): Promise<{ benchmarkLevel: number | null; modelLevel: number | null }> {
+  const api = host.wx?.getDeviceBenchmarkInfo;
+  if (typeof api !== 'function') {
+    return Promise.resolve({ benchmarkLevel: null, modelLevel: null });
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (benchmarkLevel: number | null, modelLevel: number | null): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve({ benchmarkLevel, modelLevel });
+    };
+    try {
+      api({
+        success: (result) => finish(
+          toPositiveTierValue(result?.benchmarkLevel),
+          toPositiveTierValue(result?.modelLevel),
+        ),
+        fail: () => finish(null, null),
+      });
+    } catch {
+      finish(null, null);
+    }
+    setTimeout(() => finish(null, null), SPLAT_DEVICE_BENCHMARK_TIMEOUT_MS);
+  });
+}
+
+/**
+ * 读取一次设备画像（含异步性能分级），进程内缓存。
+ * 注意：这里特意不复用 `readDeviceAdaptationSystemInfo()` 的 `benchmarkLevel ?? modelLevel`
+ * 合并结果——两者语义相反（benchmarkLevel 越大越好，modelLevel 越大越差），
+ * 混用会把低档机读成高性能。设备适配 profile 的既有匹配逻辑保持原样不动。
+ */
+function readSplatDeviceProbe(renderer: THREE.WebGLRenderer | null): Promise<SplatDeviceProbe> {
+  if (!splatDeviceInfoPromise) {
+    const host = globalThis as SplatDeviceHost;
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = host.wx?.getDeviceInfo?.() ?? host.wx?.getSystemInfoSync?.() ?? host.uni?.getSystemInfoSync?.() ?? {};
+    } catch {
+      raw = {};
+    }
+    const memoryRaw = raw.memorySize ?? raw.totalMemory ?? raw.memory;
+    const memoryValue = typeof memoryRaw === 'string' ? Number.parseFloat(memoryRaw) : Number(memoryRaw);
+    const memoryMb = Number.isFinite(memoryValue) && memoryValue > 0 ? memoryValue : null;
+    const cpuValue = Number((globalThis as { navigator?: { hardwareConcurrency?: number } }).navigator?.hardwareConcurrency);
+    const cpuCores = Number.isFinite(cpuValue) && cpuValue > 0 ? Math.trunc(cpuValue) : null;
+    const platform = typeof raw.platform === 'string' ? raw.platform : null;
+
+    splatDeviceInfoPromise = requestDeviceBenchmarkInfo(host).then((benchmark) => ({
+      info: {
+        platform,
+        memoryMb,
+        cpuCores,
+        benchmarkLevel: benchmark.benchmarkLevel,
+        modelLevel: benchmark.modelLevel,
+        maxTextureSize: resolveMaxTextureSizeFromRenderer(renderer),
+      },
+    }));
+  }
+  return splatDeviceInfoPromise;
+}
+
+/**
+ * 按设备画像 + 场景设备适配档位确定起始画质档，并写入 Spark 渲染器。
+ *
+ * `lodSplatCount` / `lodRenderScale` 都是逐帧可热改字段（Spark 每次 LoD 更新都会读取），
+ * 所以异步拿到 benchmark 之后再改也是安全的；`maxPagedSplats` 是构造期参数，各档相同。
+ */
+async function applySplatDeviceTier(
+  scene: THREE.Scene,
+  renderer: THREE.WebGLRenderer,
+  sceneQuality: 'low' | 'balanced' | 'high' | null,
+): Promise<void> {
+  if (!isMiniProgramRuntime) {
+    return;
+  }
+  const probe = await readSplatDeviceProbe(renderer);
+  const startLevel = resolveSplatStartLevel(probe.info, sceneQuality);
+  const tuning = resolveSplatTuning(startLevel);
+  const spark = resolveSparkRendererProbe(scene);
+  if (spark) {
+    spark.lodSplatCount = tuning.lodSplatCount;
+    spark.lodRenderScale = tuning.lodRenderScale;
+  }
+  splatAutoTuneState = createSplatLevelState(startLevel);
+  splatAutoTuneReady = true;
+  splatAutoTuneLastStepAtMs = splatNowMs();
+  splatAutoTunePreviousSplatLive = null;
+}
 
 type InstancedTransformCacheEntry = {
   assetId: string | null;
@@ -5577,6 +5876,12 @@ function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?:
   const buildOptions: SceneGraphBuildOptions = {};
   activeDeviceAdaptationProfile = resolveDeviceAdaptationProfile(payload.document.deviceAdaptation, readDeviceAdaptationSystemInfo());
   const renderer = renderContext?.renderer;
+  // 泼溅画质分档：设备适配档位确定后把起始 level 落到 Spark 渲染器上。
+  // 放在这里是因为此时 renderer/scene 已就绪、maxTextureSize 可读，且早于 RAD 分页开始。
+  const splatScene = renderContext?.scene ?? null;
+  if (splatScene && renderer) {
+    void applySplatDeviceTier(splatScene, renderer, activeDeviceAdaptationProfile?.quality ?? null);
+  }
   const qualityPixelCap = activeDeviceAdaptationProfile?.quality === 'low'
     ? 1
     : activeDeviceAdaptationProfile?.quality === 'balanced'
@@ -22418,7 +22723,8 @@ async function ensureRendererContext(result: UseCanvasResult) {
   setupWheelControls(canvas);
 
   const scene = new THREE.Scene();
-  await attachSparkRenderer(scene, renderer);
+  // 小程序走收敛后的泼溅质量档，H5/编辑器保持 Spark 默认值。
+  await attachSparkRenderer(scene, renderer, isMiniProgramRuntime ? MINI_PROGRAM_SPLAT_TUNING : undefined);
   scene.background = new THREE.Color('#f9f9f9');
   scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
 
@@ -22941,6 +23247,7 @@ function startRenderLoop(
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
         accumulatedDelta = 0;
+        noteSplatFrameRendered();
 
         if (debugEnabled.value) {
           updateDebugFps(deltaSeconds);
@@ -23136,6 +23443,7 @@ function startRenderLoop(
         if (debugEnabled.value && debugMode.value === 'full') {
           syncRendererDebug(renderer, scene, canvasResult?.canvas ?? null);
         }
+        updateSplatAutoTune(scene);
       });
       onCleanup(() => {
         cancel();

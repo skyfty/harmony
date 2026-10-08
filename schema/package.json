@@ -10,7 +10,7 @@
     "build:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json",
     "type-check": "node ./node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
     "type-check:asset-types": "node ./node_modules/typescript/bin/tsc -p tsconfig.asset-types.json --noEmit",
-    "test": "node --test radRangeResponse.test.ts responseBodyShim.test.ts"
+    "test": "node --test radRangeResponse.test.ts responseBodyShim.test.ts splatQuality.test.ts"
   },
   "engines": {
     "pnpm": ">=10.0.0"
