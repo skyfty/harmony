@@ -18,6 +18,7 @@ export function cloneGeometryForMirroredInstance(geometry: THREE.BufferGeometry,
   return cloned
 }
 import * as THREE from 'three'
+import { repairNullMaterialColorFields } from './material'
 
 export type MirrorMode = 'horizontal' | 'vertical' | null | undefined
 
@@ -56,7 +57,15 @@ const MIRROR_MATERIAL_STATE_KEY = '__harmonyMirrorMaterialState'
 
 function cloneMaterial(material: THREE.Material | THREE.Material[]): THREE.Material | THREE.Material[] {
   if (Array.isArray(material)) {
-    return material.map((entry) => entry.clone())
+    return material.map((entry) => {
+      if (entry) {
+        repairNullMaterialColorFields(entry)
+      }
+      return entry.clone()
+    })
+  }
+  if (material) {
+    repairNullMaterialColorFields(material)
   }
   return material.clone()
 }

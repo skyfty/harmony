@@ -8,6 +8,7 @@ import { applyEmitterBudget, resolveParticleBudgetDecision } from './particleBud
 import { getParticleTextureResolver } from './particleTextureResolver'
 import { loadTextureFromSourceUrl } from '../textureSourceLoader'
 import {
+  DEFAULT_PARTICLE_EXPOSED_PARAMS,
   PARTICLE_SYSTEM_ACTIVE_FLAG,
   PARTICLE_SYSTEM_METADATA_KEY,
   PARTICLE_SYSTEM_RUNTIME_REGISTRY_KEY,
@@ -269,6 +270,10 @@ function createEmissionRate(emissionRate: number, updateHz: number): InstanceTyp
 function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemComponentProps, texture: THREE.Texture | null): any {
   const emitter = new Emitter()
   const budgeted = applyEmitterBudget(config, props.budget)
+  // three-nebula 的 ColorUtil 会在颜色为 null/undefined 时直接读取 `color.r`
+  // （小程序上表现为 "null is not an object"），这里先做一次兜底校验。
+  const colorA = sanitizeParticleColor(budgeted.color)
+  const colorB = sanitizeParticleColor(budgeted.color2)
   emitter.setRate(createEmissionRate(budgeted.emissionRate, props.budget.updateHz))
   emitter.setInitializers([
     new Body(createSpriteBody(props, texture)),
@@ -281,7 +286,7 @@ function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemCompon
   const behaviours = [
     new Alpha(budgeted.alphaStart, budgeted.alphaEnd),
     new Scale(budgeted.scaleStart, budgeted.scaleEnd),
-    new NebulaColor(budgeted.color, budgeted.color2),
+    new NebulaColor(colorA, colorB),
   ]
   const forceBehaviour = createForceBehaviour(budgeted.physics?.force)
   if (forceBehaviour) {
@@ -290,6 +295,14 @@ function buildEmitter(config: ParticleEmitterConfig, props: ParticleSystemCompon
   emitter.setBehaviours(behaviours)
   emitter.position.set(budgeted.position.x, budgeted.position.y, budgeted.position.z)
   return emitter
+}
+
+/** Colors must be parseable hex strings; three-nebula reads `.r` off the resolved value. */
+function sanitizeParticleColor(value: unknown): string {
+  if (typeof value === 'string' && /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value.trim())) {
+    return value.trim()
+  }
+  return DEFAULT_PARTICLE_EXPOSED_PARAMS.color
 }
 
 class ParticleSystemRuntimeController implements ParticleSystemRuntimeHandle {

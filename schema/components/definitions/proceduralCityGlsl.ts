@@ -182,6 +182,11 @@ export function applyCitySurfaceShader( material: THREE.MeshStandardMaterial, op
 /** Formats a three color as the linear-space `vec3(...)` literal GLSL wants. */
 export function toGlslColor( color: THREE.Color ): string {
 
+	if ( ! color || typeof color.r !== 'number' || typeof color.g !== 'number' || typeof color.b !== 'number' ) {
+		// 颜色为空时读取 `color.r` 会在小程序上抛 "null is not an object"，回退到白色。
+		return 'vec3( 1.000000, 1.000000, 1.000000 )'
+	}
+
 	return `vec3( ${color.r.toFixed( 6 )}, ${color.g.toFixed( 6 )}, ${color.b.toFixed( 6 )} )`
 
 }

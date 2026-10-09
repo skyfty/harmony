@@ -22529,8 +22529,8 @@ async function buildSceneGraphWithProgress(
     };
     setSceneInitState({
       stage: 'building',
-      label: '姝ｅ湪鏋勫缓鍦烘櫙鍥炬牳',
-      detail: '姝ｅ湪鍑嗗璧勬簮鍜屽浘褰㈡爧...',
+      label: '正在构建场景图',
+      detail: '正在准备资源和图形对象...',
       stagePercent: 0,
       currentIndex: 0,
       currentTotal: 0,

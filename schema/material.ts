@@ -1158,14 +1158,42 @@ export function ensureMeshMaterialsUnique(mesh: THREE.Mesh): void {
   }
 
   if (Array.isArray(mesh.material)) {
-    mesh.material = mesh.material.map((material: THREE.Material | null) =>
-      material ? material.clone() : new THREE.MeshBasicMaterial(),
-    );
+    mesh.material = mesh.material.map((material: THREE.Material | null) => {
+      if (!material) {
+        return new THREE.MeshBasicMaterial();
+      }
+      repairNullMaterialColorFields(material);
+      return material.clone();
+    });
   } else if (mesh.material) {
+    repairNullMaterialColorFields(mesh.material);
     mesh.material = mesh.material.clone();
   }
 
   userData[MATERIAL_CLONED_KEY] = true;
+}
+
+/**
+ * Repairs material colour fields that were left as `null`/`undefined`.
+ *
+ * `material.clone()` copies every colour through `Color.copy(source.color)`, which reads
+ * `source.color.r`. A single null field therefore threw
+ * `null is not an object (evaluating 'e.r')` inside three on the mini-program runtime and
+ * aborted scene initialization while a node was being mounted. Invalid fields fall back to
+ * white so the scene still loads.
+ */
+export function repairNullMaterialColorFields(material: THREE.Material): void {
+  const typed = material as THREE.Material & Record<string, unknown>;
+  const colourFields = ['color', 'emissive', 'specular', 'sheenColor', 'attenuationColor'] as const;
+  colourFields.forEach((field) => {
+    if (!(field in typed)) {
+      return;
+    }
+    const value = typed[field];
+    if (value === null || value === undefined) {
+      typed[field] = new THREE.Color(0xffffff);
+    }
+  });
 }
 
 /**

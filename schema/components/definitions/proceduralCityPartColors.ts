@@ -117,10 +117,13 @@ export function applySkyscraperPartColors(
 	const partId = geometry.getAttribute( 'partId' )
 	const position = geometry.getAttribute( 'position' )
 	const colors = new Float32Array( partId.count * 3 )
+	// buildingBase 为空时，resolvePartColor 内部的 `color.copy(buildingBase)`
+	// 会在小程序上抛出 "null is not an object"，这里回退到白色。
+	const baseColor = buildingBase && typeof buildingBase.r === 'number' ? buildingBase : new THREE.Color( 0xffffff )
 
 	for ( let index = 0; index < partId.count; index += 1 ) {
 
-		const color = resolvePartColor( partId.getX( index ), buildingBase, position, index, mode )
+		const color = resolvePartColor( partId.getX( index ), baseColor, position, index, mode )
 		colors[ index * 3 ] = Math.min( 1, color.r )
 		colors[ index * 3 + 1 ] = Math.min( 1, color.g )
 		colors[ index * 3 + 2 ] = Math.min( 1, color.b )
