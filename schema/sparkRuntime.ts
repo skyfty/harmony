@@ -16,6 +16,35 @@ let sparkRangeFetchValidationInstalled = false
 let originalGlobalFetch: typeof globalThis.fetch | null = null
 let validatedGlobalFetch: typeof globalThis.fetch | null = null
 
+/**
+ * 识别 wasm 初始化失败：受限运行时（如微信 iOS 的 `WXWebAssembly`）编不了某些
+ * wasm 构造时会抛 `CompileError: invalid wasm file`。识别出来后，上层可以跳过
+ * 注定失败的“整包下载”回退。
+ */
+export const SPARK_WASM_INIT_FAILED_CODE = 'SPARK_WASM_INIT_FAILED'
+
+const SPARK_WASM_FAILURE_MESSAGE_PATTERN =
+  /invalid wasm file|SparkWasmInitError|SPARK_WASM_INIT_FAILED/i
+
+export function isSparkWasmInitFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    const message = typeof error === 'string' ? error : ''
+    return SPARK_WASM_FAILURE_MESSAGE_PATTERN.test(message)
+  }
+  const candidate = error as { name?: unknown; code?: unknown; message?: unknown; __harmonySparkWasmInitFailed?: unknown }
+  if (candidate.__harmonySparkWasmInitFailed === true) {
+    return true
+  }
+  if (
+    candidate.code === SPARK_WASM_INIT_FAILED_CODE
+    || candidate.name === 'SparkWasmInitError'
+  ) {
+    return true
+  }
+  const message = typeof candidate.message === 'string' ? candidate.message : ''
+  return SPARK_WASM_FAILURE_MESSAGE_PATTERN.test(message)
+}
+
 type SparkScene = THREE.Scene & { [SPARK_RENDERER_KEY]?: SparkRenderer }
 type SparkSplatOwnership = { references: number; disposeSource: () => void }
 const sparkSplatOwnership = new WeakMap<object, SparkSplatOwnership>()
@@ -209,6 +238,10 @@ export async function createPagedRadSplatFromUrl(url: string, filename: string):
   } catch (error) {
     paged.dispose()
     releaseProgressiveRadUrl(url)
+    if (isSparkWasmInitFailure(error)) {
+      // 保留原始错误类型/标记，让上层据此跳过注定失败的“整包下载”回退。
+      throw error
+    }
     throw explainPagedRadFailure(error, url)
   }
 }

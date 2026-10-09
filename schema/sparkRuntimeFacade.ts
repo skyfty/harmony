@@ -1,6 +1,31 @@
 import type * as THREE from 'three';
 import type { SparkRenderer, SparkRendererOptions, SplatMesh } from '@sparkjsdev/spark';
 
+/** 与 `sparkRuntime.ts` 保持一致：识别 wasm 初始化失败（小程序打包路径会别名到该实现）。 */
+export const SPARK_WASM_INIT_FAILED_CODE = 'SPARK_WASM_INIT_FAILED';
+
+const SPARK_WASM_FAILURE_MESSAGE_PATTERN =
+  /invalid wasm file|SparkWasmInitError|SPARK_WASM_INIT_FAILED/i;
+
+export function isSparkWasmInitFailure(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    const message = typeof error === 'string' ? error : '';
+    return SPARK_WASM_FAILURE_MESSAGE_PATTERN.test(message);
+  }
+  const candidate = error as { name?: unknown; code?: unknown; message?: unknown; __harmonySparkWasmInitFailed?: unknown };
+  if (candidate.__harmonySparkWasmInitFailed === true) {
+    return true;
+  }
+  if (
+    candidate.code === SPARK_WASM_INIT_FAILED_CODE
+    || candidate.name === 'SparkWasmInitError'
+  ) {
+    return true;
+  }
+  const message = typeof candidate.message === 'string' ? candidate.message : '';
+  return SPARK_WASM_FAILURE_MESSAGE_PATTERN.test(message);
+}
+
 /** Spark 渲染器参数（不含 `renderer`），用于按终端档位收敛质量/性能。 */
 export type SparkRendererTuning = Omit<SparkRendererOptions, 'renderer'>;
 

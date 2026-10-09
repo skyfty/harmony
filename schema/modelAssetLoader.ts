@@ -5,7 +5,7 @@ import type { AssetCacheEntry } from './assetCache'
 import { Semaphore, withSemaphoreYielding } from './concurrency'
 import type { SceneNodeImportMetadata } from './core'
 import { getExtensionFromMimeType, getLastExtensionFromFilenameOrUrl } from './assetTypeConversion'
-import { createPagedRadSplatFromUrl } from '@harmony/schema/sparkRuntimeFacade'
+import { createPagedRadSplatFromUrl, isSparkWasmInitFailure } from '@harmony/schema/sparkRuntimeFacade'
 import { markRuntimeDirectRenderAsset } from './runtimeModelInstancing'
 
 // GLB/FBX parsing (GLTFLoader.parse + geometry/material construction) is CPU
@@ -91,7 +91,13 @@ export async function loadAssetObject(resourceCache: ResourceCache, assetId: str
       }
     }
   } catch (error) {
+    const wasmInitFailed = isSparkWasmInitFailure(error)
     console.warn('[ModelAssetLoader] Progressive RAD loading unavailable; falling back to full download', assetId, error)
+    if (wasmInitFailed) {
+      // 运行时的 wasm 编译不了时，整包下载同样要经过 Spark 解码，125MB 的 .rad
+      // 还会撞上 readFile 的本地缓冲区上限，直接跳过（上面的 warn 已说明情况）。
+      return null
+    }
   }
   const entry = await resourceCache.acquireAssetEntry(assetId)
   if (!entry) {

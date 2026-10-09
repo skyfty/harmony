@@ -90,7 +90,11 @@ for (const [key, size] of [...packageSizes.entries()].sort(([a], [b]) => a.local
 
 for (const filePath of mainJsFiles) {
   const code = readFileSync(filePath, 'utf8');
-  const hit = SPARK_IDENTIFIERS.find((identifier) => code.includes(identifier));
+  // Match whole identifiers only: `maxPagedSplats` (a plain tuning field) contains
+  // the substring `PagedSplats` but has nothing to do with the Spark library.
+  const hit = SPARK_IDENTIFIERS.find((identifier) =>
+    new RegExp(`(^|[^A-Za-z0-9_$])${identifier}([^A-Za-z0-9_$]|$)`).test(code),
+  );
   if (hit) {
     const relativePath = relative(outputRoot, filePath).replaceAll('\\', '/');
     fail(`[package-size] Spark identifier "${hit}" found in main package file: ${relativePath}`);

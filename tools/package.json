@@ -27,7 +27,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "test": "node --test src/vite/sparkWasmMapperIsolation.test.ts",
+    "test": "node --test src/vite/sparkWasmMapperIsolation.test.ts src/vite/sparkWasmPageBootstrap.test.ts",
     "dev:dem-lab": "vite --config ./dem-lab/vite.config.ts",
     "build:dem-lab": "vite build --config ./dem-lab/vite.config.ts",
     "dev:3dtiles-viewer": "vite --config ./3dtiles-viewer/vite.config.ts",

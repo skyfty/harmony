@@ -142,26 +142,26 @@ export function createSparkWorkerSource(source: string): string {
   workerSource = workerSource.replace(
     initNeedle,
     `const __sparkWasmPath = await waitForModule;
-		const __sparkWasmImports = __wbg_get_imports();
-		// The basis transcoder worker shares this physical mini-program worker and
-		// installs a global WXWebAssembly.instantiate input mapper that ignores the
-		// requested path, so the plain call below would compile the basis wasm with
-		// Spark's imports. The shared worker bootstrap keeps a pristine instantiate
-		// on globalThis.__harmonyRawWasmInstantiate; use it when available and fall
-		// back to the adapter-patched call for standalone workers.
-		const __sparkRawInstantiate = typeof globalThis !== "undefined"
-			&& typeof globalThis.__harmonyRawWasmInstantiate === "function"
-			? globalThis.__harmonyRawWasmInstantiate
-			: null;
-		if (__sparkRawInstantiate) {
-			const __sparkWasmResult = await __sparkRawInstantiate(__sparkWasmPath, __sparkWasmImports);
-			__wbg_finalize_init(__sparkWasmResult.instance, __sparkWasmResult.module);
-		} else if (typeof WXWebAssembly !== "undefined") {
-			const __sparkWasmResult = await WXWebAssembly.instantiate(__sparkWasmPath, __sparkWasmImports);
-			__wbg_finalize_init(__sparkWasmResult.instance, __sparkWasmResult.module);
-		} else {
-			await __wbg_init({ module_or_path: __sparkWasmPath });
-		}`,
+\t\tconst __sparkWasmImports = __wbg_get_imports();
+\t\t// The basis transcoder worker shares this physical mini-program worker and
+\t\t// installs a global WXWebAssembly.instantiate input mapper that ignores the
+\t\t// requested path, so the plain call below would compile the basis wasm with
+\t\t// Spark's imports. The shared worker bootstrap keeps a pristine instantiate
+\t\t// on globalThis.__harmonyRawWasmInstantiate; use it when available and fall
+\t\t// back to the adapter-patched call for standalone workers.
+\t\tconst __sparkRawInstantiate = typeof globalThis !== "undefined"
+\t\t\t&& typeof globalThis.__harmonyRawWasmInstantiate === "function"
+\t\t\t? globalThis.__harmonyRawWasmInstantiate
+\t\t\t: null;
+\t\tif (__sparkRawInstantiate) {
+\t\t\tconst __sparkWasmResult = await __sparkRawInstantiate(__sparkWasmPath, __sparkWasmImports);
+\t\t\t__wbg_finalize_init(__sparkWasmResult.instance, __sparkWasmResult.module);
+\t\t} else if (typeof WXWebAssembly !== "undefined") {
+\t\t\tconst __sparkWasmResult = await WXWebAssembly.instantiate(__sparkWasmPath, __sparkWasmImports);
+\t\t\t__wbg_finalize_init(__sparkWasmResult.instance, __sparkWasmResult.module);
+\t\t} else {
+\t\t\tawait __wbg_init({ module_or_path: __sparkWasmPath });
+\t\t}`,
   );
 
   const fileBytesNeedle = `\t\tif (fileBytes) {

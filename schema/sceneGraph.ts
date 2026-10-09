@@ -3,7 +3,7 @@ import type { AssetCacheEntry } from './assetCache';
 import { SceneMaterialFactory, MATERIAL_TEXTURE_SLOTS, applyMaterialOverrides, resolveSceneNodeMaterialSlots } from './material';
 import type { SceneMaterialFactoryOptions } from './material';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
-import { createPagedRadSplatFromUrl, disposeSparkObject } from '@harmony/schema/sparkRuntimeFacade';
+import { createPagedRadSplatFromUrl, disposeSparkObject, isSparkWasmInitFailure } from '@harmony/schema/sparkRuntimeFacade';
 import { markRuntimeDirectRenderAsset } from './runtimeModelInstancing';
 import { collectAssetRegistryEntryIds, collectAssetRegistryLookupIds } from './assetRegistryLookup';
 import ResourceCache from './ResourceCache';
@@ -1940,7 +1940,13 @@ class SceneGraphBuilder {
         }
       }
     } catch (error) {
+      const wasmInitFailed = isSparkWasmInitFailure(error);
       console.warn('RAD 流式加载不可用，回退到完整下载', assetId, error);
+      if (wasmInitFailed) {
+        // wasm 编译失败时，整包下载仍要经 Spark 解码，且大文件会撞小程序
+        // readFile 的本地缓冲区上限，这里直接放弃（上面的 warn 已说明情况）。
+        return null;
+      }
     }
 
     const entry = await this.resourceCache.acquireAssetEntry(assetId);

@@ -38,6 +38,20 @@ const repoRootPath = fileURLToPath(new URL('..', import.meta.url)).replaceAll('\
 const scenerySourcePath = fileURLToPath(new URL('../scenery', import.meta.url)).replaceAll('\\', '/');
 const schemaSourcePath = fileURLToPath(new URL('../schema', import.meta.url)).replaceAll('\\', '/');
 const sparkModulePath = fileURLToPath(new URL('../schema/node_modules/@sparkjsdev/spark/dist/spark.module.js', import.meta.url)).replaceAll('\\', '/');
+// Spark 的 wasm 只能以“代码包路径”交给微信的 WXWebAssembly 编译，而单个分包上限是
+// 2MiB、pages/spark 已用到 1912.5KiB（其中 wasm 1634KiB）。下面两项都是显式开关，
+// 默认行为完全不变：
+//  - HARMONY_SPARK_WASM_BROTLI=1：产出 .wasm.br（官方自基础库 2.14.0 起支持，约省 1.2MiB）
+//  - HARMONY_SPARK_WASM_SIZE_PROBE=1：追加一个纯 MVP 的 1.6MB 合成模块与同目录对照模块，
+//    真机失败时用来区分“引擎的体积/复杂度上限”和“某个构造不支持”
+const sparkWasmBrotli = uniPlatform === 'mp-weixin' && process.env.HARMONY_SPARK_WASM_BROTLI === '1';
+const sparkWasmSizeProbe = process.env.HARMONY_SPARK_WASM_SIZE_PROBE === '1'
+  ? {
+    // 探针会占约 1.6MB，必须放在有空间、且会被下载的分包目录里；同目录的对照模块
+    // 用来证明该分包确实已下载、路径可解析，避免把“文件读不到”误判成“体积超限”。
+    fileName: process.env.HARMONY_SPARK_WASM_SIZE_PROBE_PATH ?? 'pages/physics-cannon/probes/large-mvp.wasm',
+  }
+  : undefined;
 const physicsCoreSourcePath = fileURLToPath(new URL('../physics-core/src', import.meta.url)).replaceAll('\\', '/');
 const physicsCannonSourcePath = fileURLToPath(new URL('../physics-cannon/src', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/src', import.meta.url)).replaceAll('\\', '/');
@@ -457,6 +471,8 @@ export default defineConfig({
           sparkWasmExternalPlugin({
             sparkModulePath,
             wasmAssetFileName: 'pages/spark/spark_rs_bg.wasm',
+            wasmBrotli: sparkWasmBrotli,
+            sizeProbe: sparkWasmSizeProbe,
           }),
         ]
       : []),

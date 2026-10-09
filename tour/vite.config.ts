@@ -38,6 +38,14 @@ const repoRootPath = fileURLToPath(new URL('..', import.meta.url)).replaceAll('\
 const scenerySourcePath = fileURLToPath(new URL('../scenery', import.meta.url)).replaceAll('\\', '/');
 const schemaSourcePath = fileURLToPath(new URL('../schema', import.meta.url)).replaceAll('\\', '/');
 const sparkModulePath = fileURLToPath(new URL('../schema/node_modules/@sparkjsdev/spark/dist/spark.module.js', import.meta.url)).replaceAll('\\', '/');
+// 与 viewer 保持一致：brotli 与体积探针都是显式开关，默认行为不变，配置说明见
+// viewer/vite.config.ts 中同名常量。
+const sparkWasmBrotli = uniPlatform === 'mp-weixin' && process.env.HARMONY_SPARK_WASM_BROTLI === '1';
+const sparkWasmSizeProbe = process.env.HARMONY_SPARK_WASM_SIZE_PROBE === '1'
+  ? {
+    fileName: process.env.HARMONY_SPARK_WASM_SIZE_PROBE_PATH ?? 'pages/physics-cannon/probes/large-mvp.wasm',
+  }
+  : undefined;
 const physicsCoreSourcePath = fileURLToPath(new URL('../physics-core/src', import.meta.url)).replaceAll('\\', '/');
 const physicsCannonSourcePath = fileURLToPath(new URL('../physics-cannon/src', import.meta.url)).replaceAll('\\', '/');
 const sceneryPhysicsBridgeSourcePath = fileURLToPath(new URL('../physics-bridge/src', import.meta.url)).replaceAll('\\', '/');
@@ -442,6 +450,8 @@ export default defineConfig({
           sparkWasmExternalPlugin({
             sparkModulePath,
             wasmAssetFileName: 'pages/spark/spark_rs_bg.wasm',
+            wasmBrotli: sparkWasmBrotli,
+            sizeProbe: sparkWasmSizeProbe,
           }),
         ]
       : []),
