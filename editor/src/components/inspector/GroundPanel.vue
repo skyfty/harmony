@@ -72,6 +72,28 @@ const groundCastShadow = computed({
   },
 })
 
+const renderGroundTerrain = computed({
+  get: () => groundDefinition.value?.renderGroundTerrain !== false,
+  set: (value: boolean) => {
+    const node = selectedGroundNode.value
+    if (!node || node.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    sceneStore.updateGroundNodeDynamicMesh(node.id, { renderGroundTerrain: value })
+  },
+})
+
+const terrainCollisionEnabled = computed({
+  get: () => groundDefinition.value?.terrainCollisionEnabled !== false,
+  set: (value: boolean) => {
+    const node = selectedGroundNode.value
+    if (!node || node.dynamicMesh?.type !== 'Ground') {
+      return
+    }
+    sceneStore.updateGroundNodeDynamicMesh(node.id, { terrainCollisionEnabled: value })
+  },
+})
+
 const editorScatterDynamicStreamingEnabled = computed({
   get: () => sceneStore.groundSettings.editorScatterDynamicStreamingEnabled !== false,
   set: (value: boolean) => {
@@ -182,6 +204,22 @@ const editorScatterVisible = computed({
         hide-details
         color="primary"
         label="Enable Air Wall"
+      />
+
+      <v-switch
+        v-model="renderGroundTerrain"
+        density="compact"
+        hide-details
+        color="primary"
+        label="Render Ground Terrain"
+      />
+
+      <v-switch
+        v-model="terrainCollisionEnabled"
+        density="compact"
+        hide-details
+        color="primary"
+        label="Enable Terrain Collision"
       />
 
       <v-switch

@@ -4,7 +4,6 @@ import * as THREE from 'three';
 // import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js'
-import { createPagedRadSplat } from './sparkRuntime'
 
 export type LoaderProgressPayload = {
   loaded: number;
@@ -43,7 +42,7 @@ type DataTransferItemWithEntry = DataTransferItem & {
 
 type FilesMap = Record<string, File>;
 
-const SUPPORTED_MODEL_EXTENSIONS = new Set(['glb', 'fbx', 'rad']);
+const SUPPORTED_MODEL_EXTENSIONS = new Set(['glb', 'fbx']);
 
 /**
  * Extension of a file name or URL, lower-cased and query/hash stripped.
@@ -260,18 +259,6 @@ export default class Loader {
         } catch (error) {
           this.emit('error', toError(error, `FBX 解析失败 (${filename})`));
         }
-        break;
-      }
-
-      case 'rad': {
-        void (async () => {
-          try {
-            const splats = await createPagedRadSplat(contents, filename);
-            this.emit('loaded', splats);
-          } catch (error) {
-            this.emit('error', toError(error, `RAD 文件解析失败 (${filename})`));
-          }
-        })();
         break;
       }
 

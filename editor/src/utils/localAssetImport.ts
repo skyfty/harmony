@@ -1,6 +1,5 @@
 import * as THREE from 'three'
 import { createFbxLoader, createGltfLoader } from '@schema/loader'
-import { attachSparkRenderer, disposeSparkObject, disposeSparkScene, getSparkSplatBounds } from '@schema/sparkRuntime'
 import {
   createThumbnailFromCanvas,
   generateAssetThumbnail,
@@ -153,7 +152,7 @@ export async function renderModelFileThumbnailDataUrl(
 
 function isModelImportFile(file: File): boolean {
   const extension = extractExtension(file.name)?.toLowerCase()
-  return extension === 'glb' || extension === 'gltf' || extension === 'fbx' || extension === 'rad'
+  return extension === 'glb' || extension === 'gltf' || extension === 'fbx'
 }
 
 function isKtx2File(file: File): boolean {
@@ -214,13 +213,6 @@ async function loadModelObject(file: File, signal?: AbortSignal): Promise<THREE.
     }
   }
 
-  if (extension === 'rad') {
-    const { loadObjectFromBuffer } = await import('@schema/assetImport')
-    const buffer = await file.arrayBuffer()
-    assertNotAborted(signal)
-    return loadObjectFromBuffer(buffer, 'rad', { filename: file.name })
-  }
-
   const loader = await createGltfLoader()
 
   try {
@@ -256,11 +248,6 @@ async function loadModelObject(file: File, signal?: AbortSignal): Promise<THREE.
 function measureObjectDimensions(object: THREE.Object3D): { length: number; width: number; height: number } {
   const rawBounds = object.userData?.__harmonyLocalBounds as { min?: number[]; max?: number[] } | null | undefined
   const box = new THREE.Box3().setFromObject(object)
-  const splatBounds = getSparkSplatBounds(object)
-  if (box.isEmpty() && splatBounds) {
-    object.updateMatrixWorld(true)
-    box.copy(splatBounds).applyMatrix4(object.matrixWorld)
-  }
   if (box.isEmpty() && rawBounds?.min?.length === 3 && rawBounds.max?.length === 3) {
     box.set(
       new THREE.Vector3(rawBounds.min[0], rawBounds.min[1], rawBounds.min[2]),
@@ -283,9 +270,6 @@ function roundDimension(value: number): number {
 }
 
 function collectModelStats(object: THREE.Object3D): ProjectAssetModelStats {
-  if (object.userData?.__harmonySparkSplat === true) {
-    return { vertexCount: 0, faceCount: 0, meshCount: 0 }
-  }
   let vertexCount = 0
   let faceCount = 0
   let meshCount = 0
@@ -337,7 +321,6 @@ async function renderModelThumbnail(asset: ProjectAsset, object: THREE.Object3D,
   scene.add(directional)
   scene.add(fill)
   scene.add(object)
-  attachSparkRenderer(scene, renderer)
 
   try {
     fitCameraToObject(camera, object)
@@ -349,18 +332,12 @@ async function renderModelThumbnail(asset: ProjectAsset, object: THREE.Object3D,
     })
   } finally {
     scene.remove(object)
-    disposeSparkScene(scene)
     renderer.dispose()
   }
 }
 
 function fitCameraToObject(camera: THREE.PerspectiveCamera, object: THREE.Object3D): void {
   const box = new THREE.Box3().setFromObject(object)
-  const splatBounds = getSparkSplatBounds(object)
-  if (box.isEmpty() && splatBounds) {
-    object.updateMatrixWorld(true)
-    box.copy(splatBounds).applyMatrix4(object.matrixWorld)
-  }
   const size = box.getSize(new THREE.Vector3())
   const center = box.getCenter(new THREE.Vector3())
   const maxDim = Math.max(size.x, size.y, size.z)
@@ -376,7 +353,6 @@ function fitCameraToObject(camera: THREE.PerspectiveCamera, object: THREE.Object
 
 function disposeObject(object: THREE.Object3D): void {
   object.traverse((child) => {
-    disposeSparkObject(child)
     const mesh = child as THREE.Mesh
     if (!mesh.isMesh) {
       return

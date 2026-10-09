@@ -118,11 +118,6 @@ function createLoadTimeoutError(fileName: string): Error {
 }
 
 export function cloneImportedObject(source: THREE.Object3D): THREE.Object3D {
-  if (source.userData?.__harmonySparkSplat === true) {
-    const cloned = source.clone(true)
-    cloned.userData = { ...source.userData }
-    return cloned
-  }
   const cloned = cloneSkinned(source)
   const sourceAnimations = (source as unknown as { animations?: THREE.AnimationClip[] })?.animations ?? []
 

@@ -189,7 +189,6 @@ import {
 } from '@schema/continuousInstancedModel'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { attachSparkRenderer, disposeSparkScene } from '@schema/sparkRuntime'
 import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import { loadTextureFromFile } from '@/utils/textureAsset'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
@@ -14530,7 +14529,6 @@ function initScene() {
   renderer.outputColorSpace = THREE.SRGBColorSpace
 
   scene = new THREE.Scene()
-  attachSparkRenderer(scene, renderer)
   scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
   scene.fog = null
 
@@ -15374,7 +15372,6 @@ function disposeScene() {
   isGroundSelectionOrbitDisabled = false
 
   postprocessing.dispose()
-  disposeSparkScene(scene)
   renderer?.dispose()
   renderer = null
   renderClock.dispose()
@@ -23248,6 +23245,12 @@ function shouldRecreateNode(object: THREE.Object3D, node: SceneNode): boolean {
   if ((userData.dynamicMeshType ?? null) !== nextDynamicMeshType) {
     return true
   }
+  const nextGroundRenderEnabled = node.dynamicMesh?.type === 'Ground'
+    ? (node.dynamicMesh as GroundDynamicMesh).renderGroundTerrain !== false
+    : null
+  if ((userData.groundRenderEnabled ?? null) !== nextGroundRenderEnabled) {
+    return true
+  }
   const nextLightType = node.light?.type ?? null
   if ((userData.lightType ?? null) !== nextLightType) {
     return true
@@ -23920,9 +23923,14 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     containerData.nodeId = node.id
 
     if (node.dynamicMesh?.type === 'Ground') {
+      containerData.dynamicMeshType = 'Ground'
+      const groundDynamicMesh = node.dynamicMesh as GroundDynamicMesh
+      if (groundDynamicMesh.renderGroundTerrain === false) {
+        containerData.groundRenderEnabled = false
+        return container
+      }
       const groundDefinition = resolveGroundDynamicMeshDefinition()
       if (!groundDefinition) {
-        containerData.dynamicMeshType = 'Ground'
         return container
       }
       const groundMesh = createGroundMesh(groundDefinition)
@@ -23933,7 +23941,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       syncViewportGroundChunks(groundMesh, groundDefinition)
       container.add(groundMesh)
       containerData.groundMesh = groundMesh
-      containerData.dynamicMeshType = 'Ground'
+      containerData.groundRenderEnabled = true
     } else if (node.dynamicMesh?.type === 'Wall') {
       containerData.dynamicMeshType = 'Wall'
     } else if (node.dynamicMesh?.type === 'Road') {

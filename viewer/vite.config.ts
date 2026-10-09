@@ -13,6 +13,14 @@ const uniPlatform = process.env.UNI_PLATFORM;
 const isMp = uniPlatform?.startsWith('mp-');
 const useWorkspaceSourceForH5 = !isMp;
 const buildTarget = isMp ? 'es2018' : 'es2020';
+// mp-weixin caps preview / real-device-debug packages at 4 MB (`bigPackageSizeSupport`).
+// The scenery subpackage carries three.js plus the schema runtime, which is ~6.4 MB when
+// the development build is left unminified; the devtools upload then fails with
+// "代码包大小超过限制,subpackage /pages/scenery/ ... exceed max limit 4096KB". Minifying the
+// dev build keeps that subpackage around 3.4 MB. Set HARMONY_MP_DEV_MINIFY=0 to opt back
+// into readable (but oversized) development output.
+const minifyMpDev =
+  isMp && process.env.NODE_ENV !== 'production' && process.env.HARMONY_MP_DEV_MINIFY !== '0';
 const enableSceneryCannonDebugger = process.env.NODE_ENV !== 'production';
 const sceneOptimizerExcludes = [
   '@harmony/schema',
@@ -103,7 +111,7 @@ function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
     return sceneryThreeAdapterChunk;
   }
   if (normalizedId.includes('/src/pages/scenery/schema/')) {
-    return 'common/scenery-schema';
+    return 'pages/scenery/chunks/schema';
   }
   return undefined;
 }
@@ -142,7 +150,7 @@ function resolveManualChunk(id: string): string | undefined {
         return 'pages/physics-cannon/common/vendor';
       }
       if (normalizedId.includes('schema')) {
-        return 'pages/scenery-shared/chunks/schema';
+        return 'pages/scenery/chunks/schema';
       }
       if (
         normalizedId.includes('three/examples/jsm')
@@ -261,6 +269,7 @@ export default defineConfig({
   },
   build: {
     target: buildTarget,
+    ...(minifyMpDev ? { minify: 'esbuild' as const } : {}),
     rollupOptions: {
       output: {
         manualChunks: (id: string) => resolveManualChunk(id),
@@ -400,7 +409,10 @@ export default defineConfig({
           '**/pages/scenery/three-platform-adapter/**',
           '**/@minisheep/three-platform-adapter/**',
         ],
-        'pages/scenery-shared/chunks/schema': [
+        // The schema directory is a junction to the schema package, so this chunk
+        // has to stay inside the scenery subpackage: WeChat rejects a synchronous
+        // require that crosses a subpackage boundary.
+        'pages/scenery/chunks/schema': [
           '**/pages/scenery/schema/**',
         ],
         'pages/physics-ammo/common/vendor': [

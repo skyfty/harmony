@@ -410,7 +410,6 @@ import { useRuntimeMemoryGuard } from '../composables/useRuntimeMemoryGuard';
 import '@minisheep/three-platform-adapter/wechat';
 // #endif
 import * as THREE from 'three';
-import { attachSparkRenderer, disposeSparkScene, disposeSparkObject } from '@harmony/schema/sparkRuntime';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
@@ -22066,7 +22065,6 @@ async function startRenderIfReady() {
 
 function disposeObject(object: THREE.Object3D) {
   object.traverse((child) => {
-    disposeSparkObject(child);
     if ((child as THREE.Mesh).isMesh) {
       const mesh = child as THREE.Mesh;
       if (mesh.geometry) {
@@ -22295,7 +22293,6 @@ function teardownRenderer() {
   disposeSignboardBillboards(renderContext?.scene ?? null);
   clearInstancedMeshes();
   clearSceneryCompiledGroundRenderRuntime();
-  disposeSparkScene(renderContext?.scene);
   disposeObject(scene);
   disposeMaterialTextureCache();
   renderer.dispose();
@@ -22418,7 +22415,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   setupWheelControls(canvas);
 
   const scene = new THREE.Scene();
-  attachSparkRenderer(scene, renderer);
   scene.background = new THREE.Color('#f9f9f9');
   scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
 

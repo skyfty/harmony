@@ -140,7 +140,6 @@ import { useScenesStore } from '@/stores/scenesStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from '@/stores/groundScatterStore'
 import { buildSceneGraph, type SceneGraphBuildOptions } from '@schema/sceneGraph'
-import { attachSparkRenderer, disposeSparkObject, disposeSparkScene } from '@schema/sparkRuntime'
 import {
 	instantiateRuntimePrefabControlSwitchInstance,
 } from '@schema/runtimePrefabControlSwitch'
@@ -11144,7 +11143,6 @@ function initRenderer() {
 	host.appendChild(renderer.domElement)
 
 	scene = new THREE.Scene()
-	attachSparkRenderer(scene, renderer)
 	scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
 	scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY
 
@@ -12337,7 +12335,6 @@ function disposeMaterialTextureCache() {
 }
 
 function disposeObjectResources(object: THREE.Object3D) {
-	disposeSparkObject(object)
 	const skipDispose = (object.userData as Record<string, unknown> | undefined)?.__harmonySkipDispose === true
 	if (skipDispose) {
 		return
@@ -12697,6 +12694,12 @@ function syncScenePreviewCompiledGroundRenderTiles(activeCamera: THREE.Perspecti
 	if (!runtime) {
 		return
 	}
+	if (runtime.groundDefinition.renderGroundTerrain === false) {
+		setInfiniteGroundHiddenChunkKeys(runtime.groundObject, [])
+		clearCompiledGroundRenderTiles(runtime.groundObject)
+		lastScenePreviewCompiledGroundRenderLoadedChunkKeysVersion = -1
+		return
+	}
 	const compiledGroundPackage = resolveScenePreviewCompiledGroundPackage()
 	if (!compiledGroundPackage) {
 		setInfiniteGroundHiddenChunkKeys(runtime.groundObject, [])
@@ -12913,6 +12916,10 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 	}
 	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
 	if (!groundObject) {
+		return false
+	}
+	if (groundMesh?.terrainCollisionEnabled === false) {
+		clearGroundCollisionRuntimeHost(groundObject)
 		return false
 	}
 	if (!referenceWorldPositions?.length || !physicsEnvironmentEnabled.value) {
@@ -15934,7 +15941,6 @@ onBeforeUnmount(() => {
 		mapControls.dispose()
 		mapControls = null
 	}
-	disposeSparkScene(scene)
 	if (renderer) {
 		renderer.domElement.removeEventListener('click', handleCanvasClick)
 		renderer.dispose()
