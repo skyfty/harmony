@@ -75,7 +75,6 @@ onMounted(() => {
     additionHandler = (e: TouchEventLike) => {
       result.eventHandler(e, false)
     }
-    console.info(`[PlatformCanvas] useCanvas result`, result);
     emit('useCanvas', {
       ...result,
       componentInstance: instance?.proxy ?? null,

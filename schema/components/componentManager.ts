@@ -158,6 +158,11 @@ export class ComponentManager {
     })
   }
 
+  /** Number of scene nodes that currently own component instances. */
+  get size(): number {
+    return this.nodeBundles.size
+  }
+
   reset(): void {
     this.nodeBundles.forEach((bundle) => {
       bundle.instances.forEach((wrapper) => {

@@ -149,6 +149,11 @@ export class CharacterControllerAnimationRuntimeManager {
 		return this.entries.has(nodeId)
 	}
 
+	/** Number of character nodes with a registered controller-animation entry. */
+	get size(): number {
+		return this.entries.size
+	}
+
 	getBehaviorOverrideTokens(nodeId: string): string[] {
 		const entry = this.entries.get(nodeId)
 		return entry ? Array.from(entry.behaviorOverrideTokens) : []

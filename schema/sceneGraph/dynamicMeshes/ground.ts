@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import type { GroundDynamicMesh } from '../../index';
+import type { CompiledGroundManifest } from '../../core';
 import type { SceneNodeWithExtras } from '../types';
 import { createGroundMesh, refreshGroundChunkMaterials, setGroundMaterial, setGroundSculptedMaterial, updateGroundMesh } from '../../groundMesh';
+import { collectCompiledGroundManifestChunkKeys } from '../../compiledGroundRuntime';
 
 export async function buildGroundMesh(
   deps: {
@@ -16,13 +18,20 @@ export async function buildGroundMesh(
   meshInfo: GroundDynamicMesh,
   node: SceneNodeWithExtras,
 ): Promise<THREE.Object3D | null> {
-  const groundObject = createGroundMesh(meshInfo);
-  groundObject.name = node.name ?? (groundObject.name || 'Ground');
-
-  const userData = { ...(groundObject.userData ?? {}) } as Record<string, unknown>;
   const sourceUserData = node.userData && typeof node.userData === 'object'
     ? (node.userData as Record<string, unknown>)
     : {};
+  // Compiled tiles own these chunk keys; hiding them up front keeps the flat
+  // tiling pass from building visuals that the compiled runtime hides anyway.
+  const compiledManifest = (sourceUserData.compiledGroundManifest ?? null) as CompiledGroundManifest | null;
+  const compiledChunkKeys = collectCompiledGroundManifestChunkKeys(compiledManifest);
+  const groundObject = createGroundMesh(
+    meshInfo,
+    compiledChunkKeys.length > 0 ? { hiddenChunkKeys: compiledChunkKeys } : undefined,
+  );
+  groundObject.name = node.name ?? (groundObject.name || 'Ground');
+
+  const userData = { ...(groundObject.userData ?? {}) } as Record<string, unknown>;
   userData.dynamicMeshType = 'Ground';
   userData.groundChunked = true;
   if ('runtimeTerrainDatasetManifest' in sourceUserData) {

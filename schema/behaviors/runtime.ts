@@ -653,8 +653,6 @@ function createMoveToEvent(state: BehaviorSequenceState, behavior: SceneBehavior
   const fallbackTarget = state.nodeId
   const candidate = typeof params?.targetNodeId === 'string' ? params.targetNodeId.trim() : ''
   const targetNodeId = candidate.length ? candidate : fallbackTarget
-  // 诊断日志：始终输出，便于和 Watch 的恢复位置流程对照排查。
-  console.log(`[WatchRestore] schema.moveToEvent behaviorId=${behavior.id} nodeId=${state.nodeId} targetNodeId=${targetNodeId} kinetics=${params?.kinetics === true}`)
   return {
     type: 'move-to',
     nodeId: state.nodeId,
@@ -782,8 +780,6 @@ function createWatchEvent(state: BehaviorSequenceState, behavior: SceneBehavior)
   const params = behavior.script.params as WatchBehaviorParams
   const targetNodeId = params.targetNodeId ?? state.nodeId
   const restorePositionSource = normalizeWatchRestorePositionSource(params.restorePositionSource)
-  // 诊断日志：始终输出，便于确认场景里保存的 Watch 参数是否带有恢复位置选项。
-  console.log(`[WatchRestore] schema.watchEvent behaviorId=${behavior.id} nodeId=${state.nodeId} targetNodeId=${targetNodeId ?? '-'} caging=${params.caging === true} rawRestorePositionSource=${String(params.restorePositionSource)} resolvedRestorePositionSource=${restorePositionSource}`)
   return {
     type: 'watch-node',
     nodeId: state.nodeId,

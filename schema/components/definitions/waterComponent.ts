@@ -97,6 +97,11 @@ export function forEachWaterRuntimeHandle(visitor: (handle: WaterRuntimeHandle) 
   }
 }
 
+/** Number of live water runtime handles; lets the host skip idle water updates. */
+export function countWaterRuntimeHandles(): number {
+  return waterRuntimeHandleRegistry.size
+}
+
 export function clearWaterRuntimeHandles(): void {
   waterRuntimeHandleRegistry.clear()
 }

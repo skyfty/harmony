@@ -230,12 +230,6 @@ export async function loadNodeObject(
     ;(cloned as unknown as { animations?: THREE.AnimationClip[] }).animations = animations
     cloned.userData = cloned.userData ?? {}
     cloned.userData.__animations = animations.map((clip) => clip.name)
-    console.info('[ModelAssetLoader] Applied asset animations to node object', {
-      assetId,
-      objectPath: metadata?.objectPath ?? null,
-      targetName: target.name ?? null,
-      animationNames: animations.map((clip) => clip.name),
-    })
   }
   return cloned
 }

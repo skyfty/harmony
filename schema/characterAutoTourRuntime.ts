@@ -205,6 +205,11 @@ export class CharacterAutoTourRuntimeManager {
     return this.entries.has(nodeId)
   }
 
+  /** Number of nodes currently following an auto-tour/path-follow route. */
+  get size(): number {
+    return this.entries.size
+  }
+
   getInput(nodeId: string): CharacterAutoTourInputState | null {
     return this.entries.get(nodeId)?.lastInput ?? null
   }

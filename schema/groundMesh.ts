@@ -39,6 +39,7 @@ import type {
   GroundSculptOperation,
   SceneMaterialTextureSettings,
 } from './core'
+
 import { addMesh as markInstancedBoundsDirty } from './instancedBoundsTracker'
 import { createTextureSettings } from './material'
 import { getGroundTextureSourceResolver } from './groundTextureSourceResolver'
@@ -653,7 +654,17 @@ function resolveInfiniteFlatTilingRadiusChunks(definition: GroundDynamicMesh): n
     GROUND_FLAT_TILING_BUFFER_MIN_CHUNKS,
     Math.ceil(baseRadius * GROUND_FLAT_TILING_BUFFER_FACTOR),
   )
-  return Math.max(GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS, baseRadius + bufferChunks)
+  const resolvedRadius = Math.max(GROUND_FLAT_TILING_MIN_RADIUS_CHUNKS, baseRadius + bufferChunks)
+  // Runtime override: the host can cap the flat-tiling radius to its camera far
+  // plane. The 32-chunk floor is ~3x the visible distance on a 100m chunk grid,
+  // and every extra ring costs a full quadratically larger scan.
+  const runtimeCap = Number((definition as GroundDynamicMesh & {
+    runtimeFlatTilingRadiusChunks?: unknown
+  }).runtimeFlatTilingRadiusChunks)
+  if (Number.isFinite(runtimeCap) && runtimeCap > 0) {
+    return Math.max(1, Math.min(resolvedRadius, Math.trunc(runtimeCap)))
+  }
+  return resolvedRadius
 }
 
 function resolveInfiniteFlatTilingReleaseRadiusChunks(definition: GroundDynamicMesh): number {
@@ -8060,7 +8071,17 @@ function refreshChunkRuntimeGeometry(
   return true
 }
 
-export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D {
+export function createGroundMesh(
+  definition: GroundDynamicMesh,
+  options?: {
+    /**
+     * Chunk keys owned by a compiled ground manifest. They are hidden before the
+     * initial chunk window is built so the flat-tiling pass skips chunks whose
+     * visuals come from compiled tiles anyway.
+     */
+    hiddenChunkKeys?: Iterable<string> | null
+  },
+): THREE.Object3D {
   const runtimeDefinition = ensureGroundRuntimeDefinition(definition)
   // Prototype mesh retained for material/metadata defaults.
   if (!cachedPrototypeMesh) {
@@ -8076,12 +8097,15 @@ export function createGroundMesh(definition: GroundDynamicMesh): THREE.Object3D 
     cachedPrototypeMesh.castShadow = false
     cachedPrototypeMesh.userData.dynamicMeshType = 'Ground'
   }
-
   const group = new THREE.Group()
   group.name = 'Ground'
   group.userData.dynamicMeshType = 'Ground'
   group.userData.groundChunked = true
   ensureGroundRuntimeState(group, runtimeDefinition)
+  const seedHiddenChunkKeys = options?.hiddenChunkKeys ? Array.from(options.hiddenChunkKeys) : []
+  if (seedHiddenChunkKeys.length > 0) {
+    setInfiniteGroundHiddenChunkKeys(group, seedHiddenChunkKeys)
+  }
   const cellSize = Number.isFinite(runtimeDefinition.cellSize) && runtimeDefinition.cellSize > 0 ? runtimeDefinition.cellSize : 1
   const seedRadius = Math.max(50, resolveRuntimeChunkCells(runtimeDefinition) * cellSize * 1.5)
   updateGroundChunks(group, runtimeDefinition, null, { radius: seedRadius })

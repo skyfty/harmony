@@ -181,24 +181,6 @@ function getMultiuserCharacterPresentationSignature(presentation: MultiuserChara
   ].join('|')
 }
 
-function formatMultiuserCharacterPresentationDebug(presentation: MultiuserCharacterPresentation | null | undefined): string {
-  const animation = presentation?.animation ?? null
-  if (!animation) {
-    return 'character=none'
-  }
-  const normalizedTime = Number.isFinite(animation.normalizedTime ?? Number.NaN)
-    ? (animation.normalizedTime as number).toFixed(3)
-    : 'n/a'
-  return [
-    `characterClip=${normalizeOptionalString(animation.clipName) ?? 'none'}`,
-    `characterTime=${Number.isFinite(animation.time) ? animation.time.toFixed(3) : '0.000'}`,
-    `characterDuration=${Number.isFinite(animation.duration) ? animation.duration.toFixed(3) : '0.000'}`,
-    `characterLoop=${animation.loop ? 'true' : 'false'}`,
-    `characterTimeScale=${Number.isFinite(animation.timeScale) ? animation.timeScale.toFixed(3) : '1.000'}`,
-    `characterNormalizedTime=${normalizedTime}`,
-  ].join(' ')
-}
-
 function getMultiuserPresentationSignature(presentation: MultiuserPeerPresentationState | null | undefined): string {
   if (!presentation) {
     return ''
@@ -748,7 +730,6 @@ class OnlineComponent extends Component<OnlineComponentProps> {
         ? computeMovingSyncInterval(this.props.syncInterval)
         : computeIdleSyncInterval(this.props.syncInterval)
       if (now - this.lastPeerSyncTimestamp >= effectiveSyncInterval && (changed || shouldKeepalive)) {
-        // console.debug(`[Multiuser][peer-state] subjectType=${peerState.subjectType} nodeId=${normalizeOptionalString(peerState.subjectNodeId) ?? 'none'} action=${normalizeOptionalString(peerState.action) ?? 'none'} presentation=${getMultiuserPresentationSignature(peerState.presentation ?? null)}`)
         const message: MultiuserStateMessage = {
           type: 'state',
           state: peerState,
@@ -781,7 +762,6 @@ class OnlineComponent extends Component<OnlineComponentProps> {
           return
         }
         if (changed || now - this.lastPeerSyncTimestamp >= effectiveSyncInterval) {
-          console.debug(`[Multiuser][entity-state] nodeId=${state.nodeId} entityId=${state.entityId} ownerUserId=${normalizeOptionalString(state.ownerUserId) ?? 'self'} revision=${state.revision} updatedAt=${state.updatedAt} presentation=${formatMultiuserCharacterPresentationDebug(state.presentation?.character ?? null)}`)
           const message: MultiuserEntityStateMessage = {
             type: 'entity-state',
             entity: state,

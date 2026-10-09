@@ -894,6 +894,7 @@ import {
 } from '@harmony/schema/components/definitions/steerComponent';
 import {
   waterComponentDefinition,
+  countWaterRuntimeHandles,
 } from '@harmony/schema/components/definitions/waterComponent';
 import {
   signboardComponentDefinition,
@@ -940,7 +941,7 @@ import {
   type AutoTourComponentProps,
 } from '@harmony/schema/components/definitions/autoTourComponent';
 import {
-  purePursuitComponentDefinition
+  purePursuitComponentDefinition,
 } from '@harmony/schema/components/definitions/purePursuitComponent';
 import {
   sceneStateAnchorComponentDefinition,
@@ -1460,8 +1461,10 @@ configureAssetBlobDownloader(
     : createWorkerAssetBlobDownloader(createAssetDownloadWorkerFactory()),
 );
 configureGltfParseWorkerFactory(createGltfParseWorkerFactory());
+
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
 const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
+
 const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersistentAssetStorageSupported()
   ? createWeChatFileSystemPersistentAssetStorage()
   : isIndexedDbPersistentAssetStorageSupported()
@@ -2220,6 +2223,25 @@ previewComponentManager.registerDefinition(generalMeshComponentDefinition);
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
 const steerBindingIndex = createSteerBindingIndex();
+
+// The controlled-character lookup walks the document, and several per-frame
+// systems ask for it (character yaw, bridge input, follow camera). Cache it
+// against the document identity, the steer identifier prop and the steer index
+// revision so the walk happens once per document state instead of per caller.
+//
+// Keep both declarations above every setup-time caller: the `characterControlUi`
+// computed below is read by watchers created during setup, so declaring the cache
+// further down leaves those callers in the temporal dead zone ("Cannot access
+// 'controlledCharacterNodeIdCache' before initialization"), and the thrown getter
+// poisons the computed ref, which then hands `undefined` to the template.
+let steerBindingRevision = 0;
+let controlledCharacterNodeIdCache = {
+  document: null as SceneJsonExportDocument | null,
+  identifier: '' as string | null,
+  revision: -1,
+  value: null as string | null,
+};
+
 const hiddenVehicleDriveNodeIds = new Set<string>();
 const assetNodeIdMap = new Map<string, Set<string>>();
 const multiuserNodeIds = new Set<string>();
@@ -2572,6 +2594,9 @@ const behaviorBubbleCameraScratch = new THREE.Vector3();
 const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5;
 const browserStoredPunchedNodeIds = ref<string[]>([]);
 const previewFrameCameraWorldPosition = { x: 0, y: 0, z: 0 };
+// Reused frame-state wrapper; ComponentManager copies these values into its own
+// scratch, so the caller does not need a fresh object per frame.
+const previewFrameStateScratch = { cameraWorldPosition: previewFrameCameraWorldPosition };
 
 const normalizedInitialPunchedNodeIds = computed(() => {
   const next = new Set<string>();
@@ -2683,6 +2708,12 @@ type PhysicsBridgeCharacterInputSnapshot = {
 const physicsBridgeCharacterInputSnapshotByNodeId = new Map<string, PhysicsBridgeCharacterInputSnapshot>();
 let physicsBridgeBodySyncPromise: Promise<void> | null = null;
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState();
+// Reused per-frame vehicle control input (see `syncSceneryPhysicsBridgeVehicleInput`).
+const physicsBridgeVehicleInputScratch: PhysicsBridgeVehicleControlInput = {
+  steering: 0,
+  throttle: 0,
+  brake: 0,
+};
 let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneReloading = false;
 let physicsBridgeSceneRequestId = 0;
@@ -5574,6 +5605,8 @@ function readDeviceAdaptationSystemInfo(): DeviceAdaptationSystemInfo {
 
 function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?: SceneGraphBuildOptions['onProgress']): SceneGraphBuildOptions {
   const buildOptions: SceneGraphBuildOptions = {};
+  // Coarse phase timing for the graph builder. The host owns the clock, so the
+  // callback only reports names/details and this closure adds the deltas.
   activeDeviceAdaptationProfile = resolveDeviceAdaptationProfile(payload.document.deviceAdaptation, readDeviceAdaptationSystemInfo());
   const renderer = renderContext?.renderer;
   const qualityPixelCap = activeDeviceAdaptationProfile?.quality === 'low'
@@ -6133,6 +6166,7 @@ async function prepareRenderPayloadForSceneEntry(
   const renderPayload = buildRenderPayloadWithRuntimePrefabContext(payload, runtimePrefabPreloadContext);
   const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
   const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
+  applySceneryGroundTilingBudget(runtimeGroundPrepared.document);
   const groundNode = resolveSharedDocumentGroundNode(runtimeGroundPrepared.document);
   const compiledGroundManifest = groundNode?.userData?.compiledGroundManifest as { renderTiles?: unknown[] } | null | undefined;
   const compiledTileCount = Array.isArray(compiledGroundManifest?.renderTiles) ? compiledGroundManifest.renderTiles.length : 0;
@@ -6409,10 +6443,12 @@ function resolveDefaultCharacterSteerNodeId(
 
 function clearSteerBindingIndex(): void {
   steerBindingIndex.clear();
+  steerBindingRevision += 1;
 }
 
 function syncSteerBindingIndexForNode(node: SceneNode | null | undefined): void {
   steerBindingIndex.syncNode(node);
+  steerBindingRevision += 1;
 }
 
 function resolveSteerBindingByTargetNodeId(
@@ -7212,11 +7248,47 @@ const presentBehaviorAlert = behaviorAlert.present;
 const confirmBehaviorAlert = behaviorAlert.confirm;
 const cancelBehaviorAlert = behaviorAlert.cancel;
 
+// ---------------------------------------------------------------------------
+// Scene capability flags
+// ---------------------------------------------------------------------------
+// Each flag means "the current document contains something this subsystem can
+// act on". They are rebuilt inside `rebuildPreviewNodeMap`, which runs after every
+// node-graph change, and the frame loop uses them to skip whole per-frame calls
+// that would otherwise be no-ops. On the mini-program runtime every call costs
+// ~0.3-0.7ms, so skipping idle subsystems is the cheapest frame-time win left.
+const scenerySceneRuntimeFlags = {
+  hasCharacter: false,
+  hasVehicle: false,
+};
+
+function resetScenerySceneRuntimeFlags(): void {
+  scenerySceneRuntimeFlags.hasCharacter = false;
+  scenerySceneRuntimeFlags.hasVehicle = false;
+}
+
+function updateScenerySceneRuntimeFlagsForNode(node: SceneNode): void {
+  if (!node) {
+    return;
+  }
+  const flags = scenerySceneRuntimeFlags;
+  if (!flags.hasCharacter && resolveEnabledComponentState(node, CHARACTER_CONTROLLER_COMPONENT_TYPE)) {
+    flags.hasCharacter = true;
+  }
+  if (!flags.hasVehicle && resolveEnabledComponentState(node, VEHICLE_COMPONENT_TYPE)) {
+    flags.hasVehicle = true;
+  }
+}
+
 function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefined) {
   assetNodeIdMap.clear();
   disposeSignboardBillboards(renderContext?.scene ?? null);
   clearSteerBindingIndex();
   rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap);
+  // Scene capability flags: the frame loop skips whole subsystem calls when the
+  // document cannot use them. Rebuilt here because this is the one function that
+  // always runs after the node graph changes (scene load, runtime prefab spawn,
+  // control-node switch, nominate overrides), so the flags cannot go stale.
+  resetScenerySceneRuntimeFlags();
   signboardNodeIds.clear();
   punchNodeIds.clear();
   punchTotalCount.value = 0;
@@ -7233,6 +7305,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
 
   for (const [nodeId, node] of previewNodeMap.entries()) {
     syncSteerBindingIndexForNode(node);
+    updateScenerySceneRuntimeFlagsForNode(node);
     const signboardState = node.components?.[SIGNBOARD_COMPONENT_TYPE] as SceneNodeComponentState<SignboardComponentProps> | undefined;
     if (signboardState?.enabled) {
       signboardNodeIds.add(nodeId);
@@ -7279,7 +7352,20 @@ function resolveDefaultControlledCharacterNodeId(): string | null {
   const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
     ? props.defaultSteerIdentifier.trim() || null
     : null;
-  return resolveDefaultCharacterSteerNodeId(currentDocument, defaultSteerIdentifier);
+  const cache = controlledCharacterNodeIdCache;
+  if (
+    cache.document === currentDocument
+    && cache.identifier === defaultSteerIdentifier
+    && cache.revision === steerBindingRevision
+  ) {
+    return cache.value;
+  }
+  const resolved = resolveDefaultCharacterSteerNodeId(currentDocument, defaultSteerIdentifier);
+  cache.document = currentDocument;
+  cache.identifier = defaultSteerIdentifier;
+  cache.revision = steerBindingRevision;
+  cache.value = resolved;
+  return resolved;
 }
 
 function resolveControlledCharacterMotionNodeId(): string | null {
@@ -9815,6 +9901,15 @@ async function prepareSceneryPhysicsBridgeForDocument(document: SceneJsonExportD
   applyPhysicsEnvironmentSettings(environmentSettings);
   currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(environmentSettings);
   // void syncCannonDebugger();
+  const physicsRelevant = resolveDocumentPhysicsRelevance(document);
+  if (!physicsEnvironmentEnabled.value || !physicsRelevant) {
+    // Nothing in this scene needs simulation. Creating the bridge loads the physics
+    // backend subpackage (cannon-es) and evaluates it on the JS thread, which costs
+    // seconds on low-end devices, so keep it off the scene-entry path. Anything that
+    // later needs the bridge (for example a physics-relevant runtime prefab spawn)
+    // loads it on demand through `ensureSceneryPhysicsBridgeReady`.
+    return;
+  }
   await ensureSceneryPhysicsBridgeReady();
 }
 
@@ -10282,10 +10377,9 @@ async function loadSceneryPhysicsBridgeScene(
       await disposeSceneryPhysicsBridgeScene();
       return;
     }
-    const bridge = physicsBridge;
-    if (!bridge) {
-      throw new Error('Scenery physics bridge is not ready');
-    }
+    // The bridge is normally created while preparing the document, but scenes
+    // without physics nodes skip that step and load it on demand instead.
+    const bridge = await ensureSceneryPhysicsBridgeReady();
     sceneryGroundCollisionRuntimeBodyIds.clear();
     releaseSceneryMeshCollisionRuntime();
     await bridge.loadScene(asset);
@@ -11047,23 +11141,23 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
   const resolvedAutoTourInput = autoTourControlledNodeId
     ? resolveSceneryPhysicsBridgeVehicleControlInput(autoTourControlledNodeId)
     : null
-  const bridgeInput: PhysicsBridgeVehicleControlInput = autoTourControlledNodeId
-    ? resolvedAutoTourInput ?? {
-        steering: 0,
-        throttle: 0,
-        brake: 1,
-      }
-    : manualDriveNodeId
-      ? {
-          steering: vehicleDriveInput.steering,
-          throttle: vehicleDriveInput.throttle,
-          brake: vehicleDriveInput.brake,
-        }
-      : {
-          steering: 0,
-          throttle: 0,
-          brake: 0,
-        };
+  // Reused per-frame input container: `syncPhysicsBridgeVehicleInput` reads it
+  // synchronously, so a single scratch object avoids one allocation per frame.
+  const bridgeInput = physicsBridgeVehicleInputScratch;
+  if (autoTourControlledNodeId) {
+    const autoTourInput = resolvedAutoTourInput;
+    bridgeInput.steering = autoTourInput ? autoTourInput.steering : 0;
+    bridgeInput.throttle = autoTourInput ? autoTourInput.throttle : 0;
+    bridgeInput.brake = autoTourInput ? autoTourInput.brake : 1;
+  } else if (manualDriveNodeId) {
+    bridgeInput.steering = vehicleDriveInput.steering;
+    bridgeInput.throttle = vehicleDriveInput.throttle;
+    bridgeInput.brake = vehicleDriveInput.brake;
+  } else {
+    bridgeInput.steering = 0;
+    bridgeInput.throttle = 0;
+    bridgeInput.brake = 0;
+  }
 
 
   syncPhysicsBridgeVehicleInput({
@@ -11082,15 +11176,40 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
 
 const PHYSICS_BRIDGE_CHARACTER_INPUT_EPSILON = 1e-4;
 
+// Scratch for the per-frame controlled-character lookup. Resolving the steer
+// binding walks the document, so the frame loop fills this once and reuses it
+// instead of running the same walk three times per frame (see the yaw resolver).
+const controlledCharacterContextScratch = {
+  controlledNodeId: null as string | null,
+  motionNodeId: null as string | null,
+  props: null as CharacterControllerComponentProps | null,
+};
+
+function refreshControlledCharacterContext(controlledNodeId: string | null): typeof controlledCharacterContextScratch {
+  const context = controlledCharacterContextScratch;
+  context.controlledNodeId = controlledNodeId;
+  if (!context.controlledNodeId) {
+    context.motionNodeId = null;
+    context.props = null;
+    return context;
+  }
+  context.motionNodeId = resolveCharacterControllerBindingNodeId(context.controlledNodeId) ?? context.controlledNodeId;
+  context.props = clampCharacterControllerComponentProps(
+    resolveCharacterControllerComponent(resolveNodeById(context.controlledNodeId))?.props ?? null,
+  );
+  return context;
+}
+
 function resolveCharacterYawShortestDelta(current: number, target: number): number {
   return THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
 }
 
 function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  const motionNodeId = resolveControlledCharacterMotionNodeId();
-  const props = resolveDefaultControlledCharacterComponentProps();
-  if (!controlledNodeId || !motionNodeId || !props) {
+  const characterContext = refreshControlledCharacterContext(controlledNodeId);
+  const motionNodeId = characterContext.motionNodeId;
+  const controllerProps = characterContext.props;
+  if (!controlledNodeId || !motionNodeId || !controllerProps) {
     characterInputYawInitialized = false;
     characterInputYawNodeId = null;
     return null;
@@ -11104,7 +11223,7 @@ function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
     object.getWorldQuaternion(characterInputYawQuaternionScratch);
     characterInputYaw = resolvePhysicsCharacterMotorYawFromWorldQuaternion(
       characterInputYawQuaternionScratch,
-      props.forwardAxis,
+      controllerProps.forwardAxis,
     );
     characterInputYawInitialized = true;
     characterInputYawNodeId = controlledNodeId;
@@ -11116,7 +11235,7 @@ function resolveSceneryCharacterInputYaw(deltaSeconds: number): number | null {
     // While driving a vehicle the character is not locally controlled.
     return characterInputYaw;
   }
-  const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(props.turnRateDegreesPerSecond)
+  const turnRateRadiansPerSecond = THREE.MathUtils.degToRad(controllerProps.turnRateDegreesPerSecond)
     * CHARACTER_RUNTIME_TURN_RATE_SCALE;
   if (typeof characterDesiredInputYaw === 'number' && Number.isFinite(characterDesiredInputYaw)) {
     // Camera-relative joystick/keyboard: rotate toward the pushed direction at
@@ -14453,13 +14572,11 @@ async function attachRemotePrefabExternalAnimations(
 async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; wheelNodeIds: string[]; defaultSkinOverrides: SkinAssetOverride[] } | null> {
   const sourceRequest = resolveRemoteMultiuserPrefabSpawnRequest(state);
   if (!sourceRequest) {
-    console.log(`[Multiuser][RemotePeer][PrefabLoad] subjectType=${state.subjectType} subjectAssetId=${state.subjectAssetId ?? ''} subjectAssetUrl=${state.subjectAssetUrl ?? ''} result=no-request`);
     return null;
   }
   try {
     const source = await resolveRuntimePrefabSource(sourceRequest, runtimePrefabSourceResolverOptions);
     if (!source) {
-      console.log(`[Multiuser][RemotePeer][PrefabLoad] subjectType=${state.subjectType} assetId=${sourceRequest.assetId ?? ''} assetUrl=${sourceRequest.assetUrl ?? ''} result=no-source`);
       return null;
     }
     const cloned = cloneRuntimePrefabNode(source.prefab);
@@ -14551,10 +14668,8 @@ async function loadRemoteMultiuserObjectFromAsset(state: MultiuserPeerState): Pr
 async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promise<{ object: THREE.Object3D; ownsResources: boolean; wheelNodeIds: string[]; defaultSkinOverrides: SkinAssetOverride[] }> {
   const localSourceAssetId = getRemoteMultiuserLocalNodeSourceAssetId(state);
   const preferRemoteAsset = shouldPreferRemoteMultiuserAsset(state, localSourceAssetId);
-  console.log(`[Multiuser][RemotePeer][Create] ${formatMultiuserPeerStateForDebug(state)} localSourceAssetId=${localSourceAssetId || 'none'} preferRemoteAsset=${preferRemoteAsset}`);
 
   let result: { object: THREE.Object3D; ownsResources: boolean; wheelNodeIds: string[]; defaultSkinOverrides: SkinAssetOverride[] } | null = null;
-  let path = 'placeholder';
 
   // 1) 车辆：远端资产与本地已 spawn 的运行时 prefab 一致（或无资产引用）时，直接克隆本地实例。
   const matchedVehicleRequest = isVehicleLikeMultiuserSubjectType(state.subjectType)
@@ -14564,7 +14679,6 @@ async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promi
     const localRuntimePrefabClone = cloneRemoteMultiuserObjectFromLocalRuntimePrefab(state);
     if (localRuntimePrefabClone) {
       result = { object: localRuntimePrefabClone.object, ownsResources: false, wheelNodeIds: localRuntimePrefabClone.wheelNodeIds, defaultSkinOverrides: [] };
-      path = 'local-runtime-prefab';
     }
   }
 
@@ -14573,12 +14687,10 @@ async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promi
     const prefabObject = await loadRemoteMultiuserPrefabObject(state);
     if (prefabObject) {
       result = { object: prefabObject.object, ownsResources: true, wheelNodeIds: prefabObject.wheelNodeIds, defaultSkinOverrides: prefabObject.defaultSkinOverrides };
-      path = 'remote-prefab';
     } else {
       const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
       if (resourceObject) {
         result = { object: resourceObject, ownsResources: true, wheelNodeIds: [], defaultSkinOverrides: [] };
-        path = 'remote-asset';
       }
     }
   }
@@ -14589,7 +14701,6 @@ async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promi
     const runtimeClone = cloneRemoteMultiuserObjectFromRuntime(state.subjectNodeId);
     if (runtimeClone) {
       result = { object: runtimeClone, ownsResources: false, wheelNodeIds: [], defaultSkinOverrides: [] };
-      path = 'scene-clone';
     }
   }
 
@@ -14598,12 +14709,10 @@ async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promi
     const prefabObject = await loadRemoteMultiuserPrefabObject(state);
     if (prefabObject) {
       result = { object: prefabObject.object, ownsResources: true, wheelNodeIds: prefabObject.wheelNodeIds, defaultSkinOverrides: prefabObject.defaultSkinOverrides };
-      path = 'remote-prefab';
     } else {
       const resourceObject = await loadRemoteMultiuserObjectFromAsset(state);
       if (resourceObject) {
         result = { object: resourceObject, ownsResources: true, wheelNodeIds: [], defaultSkinOverrides: [] };
-        path = 'remote-asset';
       }
     }
   }
@@ -14611,40 +14720,13 @@ async function createRemoteMultiuserPeerObject(state: MultiuserPeerState): Promi
   // 5) 占位体兜底。
   if (!result) {
     result = { object: createRemoteMultiuserPlaceholder(state.subjectType), ownsResources: true, wheelNodeIds: [], defaultSkinOverrides: [] };
-    path = 'placeholder';
   }
 
   if (result && state.subjectType === 'character') {
     bakeRemoteMultiuserCharacterFeetAlignment(result.object);
   }
 
-  console.log(`[Multiuser][RemotePeer][CreateResult] subjectType=${state.subjectType} subjectNodeId=${state.subjectNodeId ?? ''} path=${path} ownsResources=${result.ownsResources} wheels=${result.wheelNodeIds.length}`);
   return result;
-}
-
-function formatMultiuserPeerStateForDebug(state: MultiuserPeerState | null | undefined): string {
-  if (!state) {
-    return 'state=null';
-  }
-  const skins = Array.isArray(state.skins) && state.skins.length
-    ? state.skins.map((skin) => `${skin.slotKey}=${skin.prefabUrl || skin.skinId}`).join(',')
-    : 'none';
-  const animation = state.presentation?.character?.animation ?? null;
-  const positionX = Number.isFinite(state.position.x) ? state.position.x.toFixed(2) : '?';
-  const positionY = Number.isFinite(state.position.y) ? state.position.y.toFixed(2) : '?';
-  const positionZ = Number.isFinite(state.position.z) ? state.position.z.toFixed(2) : '?';
-  return [
-    `subjectType=${state.subjectType}`,
-    `subjectNodeId=${state.subjectNodeId ?? ''}`,
-    `subjectIdentifier=${state.subjectIdentifier ?? ''}`,
-    `subjectAssetId=${state.subjectAssetId ?? ''}`,
-    `subjectAssetUrl=${state.subjectAssetUrl ?? ''}`,
-    `skins=[${skins}]`,
-    `position=(${positionX},${positionY},${positionZ})`,
-    `action=${state.action ?? ''}`,
-    `animationClip=${animation?.clipName ?? ''}`,
-    `animationTime=${animation && Number.isFinite(animation.time) ? animation.time.toFixed(3) : ''}`,
-  ].join(' ');
 }
 
 function getRemoteMultiuserReportedAssetRef(state: MultiuserPeerState): { assetId: string; assetUrl: string } {
@@ -15200,13 +15282,11 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
 
   void createRemoteMultiuserPeerObject(entry.targetState).then(({ object, ownsResources, defaultSkinOverrides }) => {
     if (remoteMultiuserPeerLoadTokens.get(userId) !== currentLoadToken) {
-      console.log(`[Multiuser][RemotePeer][DiscardObject] userId=${userId} reason=stale-token`);
       disposeRemoteMultiuserObject(object, ownsResources);
       return;
     }
     const latestEntry = remoteMultiuserPeerEntries.get(userId) ?? null;
     if (!latestEntry || latestEntry.signature !== entry.signature || !latestEntry.visible) {
-      console.log(`[Multiuser][RemotePeer][DiscardObject] userId=${userId} reason=stale-entry signatureChanged=${latestEntry ? latestEntry.signature !== entry.signature : true} visible=${latestEntry ? latestEntry.visible : false}`);
       disposeRemoteMultiuserObject(object, ownsResources);
       return;
     }
@@ -15234,13 +15314,17 @@ function ensureRemoteMultiuserPeerVisible(userId: string, entry: RemoteMultiuser
     markRemoteMultiuserPeerVisible(runtimeEntry, frameIndex);
     remoteMultiuserPeerEntries.set(userId, runtimeEntry);
     markInstancedCullingDirty();
-    console.log(`[Multiuser][RemotePeer][AttachObject] userId=${userId} placeholder=${isRemoteMultiuserPlaceholderObject(object)} ownsResources=${ownsResources}`);
   }).catch((error) => {
     console.warn('[SceneryViewer] Failed to create remote multiuser peer object', error);
   });
 }
 
 function syncRemoteMultiuserPeerVisibility(camera?: THREE.Camera | null): void {
+  // No peers at all: the whole pass would compute a frustum and two empty
+  // iterations. The visibility frame counter is only consumed by entries.
+  if (remoteMultiuserPeerEntries.size === 0) {
+    return;
+  }
   const activeCamera = camera ?? renderContext?.camera ?? null;
   if (!activeCamera) {
     return;
@@ -15774,7 +15858,6 @@ function applyRemoteMultiuserPeerSkins(entry: RemoteMultiuserPeerEntry, userId: 
   }
   const signature = getMultiuserSkinSignature(skins);
   if (signature !== entry.lastAppliedSkinSignature) {
-    console.log(`[Multiuser][RemotePeer][ApplySkins] userId=${userId} skins=[${skins.length ? skins.map((skin) => `${skin.slotKey}=${skin.prefabUrl || ''}`).join(',') : 'none'}]`);
   }
   const missingAssetIds = Array.from(new Set(
     overrides
@@ -15835,7 +15918,6 @@ function handleRemoteMultiuserPeerSnapshot(peer: MultiuserPeerSnapshot): void {
   }
   const nextEntry = existing ?? createRemoteMultiuserPeerPlaceholderEntry(peer.state);
   if (!existing) {
-    console.log(`[Multiuser][RemotePeer][FirstSnapshot] userId=${peer.userId} displayName=${displayName} ${formatMultiuserPeerStateForDebug(peer.state)}`);
   }
   nextEntry.signature = signature;
   nextEntry.displayName = displayName;
@@ -17007,7 +17089,6 @@ function applyMoveToSubjectWorldPose(
 ): void {
   const binding = resolveMoveToSubjectBinding(subjectNodeId);
   const bindingKind = binding?.bindingKind ?? 'none';
-  logWatchRestore(`worldPose.apply.begin nodeId=${subjectNodeId} bindingKind=${bindingKind} hasBody=${Boolean(binding?.body)} hasBindingObject=${Boolean(binding?.object)} pos=${formatWatchRestoreVec3(worldPosition)} quat=${formatWatchRestoreQuat(worldQuaternion)}`);
   if (binding?.body) {
     applyMoveToPhysicsBodyWorldPose({
       body: binding.body,
@@ -17025,12 +17106,10 @@ function applyMoveToSubjectWorldPose(
     if (bindingKind === 'character') {
       syncMoveToCharacterControllerYaw(subjectNodeId, worldQuaternion);
     }
-    logWatchRestore(`worldPose.apply.done path=body nodeId=${subjectNodeId}`);
     return;
   }
   const object = resolveMoveToSubjectObject(subjectNodeId);
   if (!object) {
-    logWatchRestore(`worldPose.apply.fail reason=no-subject-object nodeId=${subjectNodeId}`);
     return;
   }
   applyMoveToObjectWorldPose(object, worldPosition, worldQuaternion);
@@ -17042,7 +17121,6 @@ function applyMoveToSubjectWorldPose(
   if (bindingKind === 'character') {
     syncMoveToCharacterControllerYaw(subjectNodeId, worldQuaternion);
   }
-  logWatchRestore(`worldPose.apply.done path=object nodeId=${subjectNodeId}`);
 }
 
 function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTargetPose>): void {
@@ -17056,24 +17134,6 @@ function applyMoveToCameraTargetPose(targetPose: ReturnType<typeof buildMoveToTa
   context.controls.update();
 }
 
-function formatWatchRestoreVec3(value: THREE.Vector3): string {
-  return `(${value.x.toFixed(3)},${value.y.toFixed(3)},${value.z.toFixed(3)})`;
-}
-
-function formatWatchRestoreQuat(value: THREE.Quaternion): string {
-  return `(${value.x.toFixed(3)},${value.y.toFixed(3)},${value.z.toFixed(3)},${value.w.toFixed(3)})`;
-}
-
-function formatWatchRestoreStoreKeys(): string {
-  const keys = Array.from(watchRestorePoseStore.snapshots.keys());
-  return keys.length ? keys.join('|') : '-';
-}
-
-/** 统一的诊断日志（始终输出，便于直接复制排查）。 */
-function logWatchRestore(message: string): void {
-  console.log(`[WatchRestore] ${message}`);
-}
-
 /**
  * Move To 生效之前保存当前主体位姿。Watch 的“恢复位置”选项会在离开拍照
  * 状态时读取该快照，把角色放回这里。
@@ -17082,38 +17142,32 @@ function captureMoveToSubjectRestorePose(
   subjectType: ReturnType<typeof resolveMoveToSubjectType>,
   subjectNodeId: string | null,
 ): void {
-  logWatchRestore(`moveTo.capture.begin subjectType=${subjectType} subjectNodeId=${subjectNodeId ?? '-'} storeKeys=${formatWatchRestoreStoreKeys()}`);
   if (subjectType === 'camera') {
     const camera = renderContext?.camera ?? null;
     if (!camera) {
-      logWatchRestore('moveTo.capture.skip reason=camera-unavailable');
       return;
     }
-    const recorded = recordWatchRestorePose(watchRestorePoseStore, {
+    recordWatchRestorePose(watchRestorePoseStore, {
       subjectType,
       subjectNodeId: null,
       position: camera.position,
       quaternion: camera.quaternion,
     });
-    logWatchRestore(`moveTo.capture.done subjectType=camera recorded=${recorded} pos=${formatWatchRestoreVec3(camera.position)} quat=${formatWatchRestoreQuat(camera.quaternion)} storeKeys=${formatWatchRestoreStoreKeys()}`);
     return;
   }
   if (!subjectNodeId) {
-    logWatchRestore(`moveTo.capture.skip reason=no-subject-node subjectType=${subjectType}`);
     return;
   }
   const pose = getMoveToSubjectCurrentPose(subjectNodeId);
   if (!pose) {
-    logWatchRestore(`moveTo.capture.skip reason=subject-pose-unavailable subjectNodeId=${subjectNodeId}`);
     return;
   }
-  const recorded = recordWatchRestorePose(watchRestorePoseStore, {
+  recordWatchRestorePose(watchRestorePoseStore, {
     subjectType,
     subjectNodeId,
     position: pose.position,
     quaternion: pose.quaternion,
   });
-  logWatchRestore(`moveTo.capture.done subjectType=${subjectType} subjectNodeId=${subjectNodeId} recorded=${recorded} pos=${formatWatchRestoreVec3(pose.position)} quat=${formatWatchRestoreQuat(pose.quaternion)} storeKeys=${formatWatchRestoreStoreKeys()}`);
 }
 
 /**
@@ -17126,48 +17180,23 @@ function captureMoveToSubjectRestorePose(
 function restoreControlledSubjectPoseAfterWatch(
   restorePositionSource: WatchRestorePositionSource,
 ): void {
-  logWatchRestore(`leave.restore.begin source=${restorePositionSource} storeKeys=${formatWatchRestoreStoreKeys()}`);
   if (restorePositionSource !== 'moveToPreviousPose') {
-    logWatchRestore(`leave.restore.skip reason=source-disabled source=${restorePositionSource}`);
     return;
   }
   if (vehicleDriveStateBridge.active) {
-    logWatchRestore(`leave.restore.skip reason=vehicle-drive-active vehicleNodeId=${vehicleDriveStateBridge.nodeId ?? '-'}`);
     return;
   }
   const controlledNodeId = resolveDefaultControlledCharacterNodeId();
   if (!controlledNodeId) {
-    logWatchRestore('leave.restore.skip reason=no-controlled-character');
     return;
   }
   const snapshot = consumeWatchRestorePose(watchRestorePoseStore, 'character', controlledNodeId);
   if (!snapshot) {
-    logWatchRestore(`leave.restore.skip reason=no-snapshot controlledNodeId=${controlledNodeId} storeKeys=${formatWatchRestoreStoreKeys()}`);
     return;
   }
-  logWatchRestore(`leave.restore.snapshot subjectType=${snapshot.subjectType} subjectNodeId=${snapshot.subjectNodeId ?? '-'} pos=${formatWatchRestoreVec3(snapshot.position)} quat=${formatWatchRestoreQuat(snapshot.quaternion)} controlledNodeId=${controlledNodeId}`);
-  const beforePose = getMoveToSubjectCurrentPose(controlledNodeId);
-  logWatchRestore(`leave.restore.pre nodeId=${controlledNodeId} pos=${beforePose ? formatWatchRestoreVec3(beforePose.position) : 'unavailable'} quat=${beforePose ? formatWatchRestoreQuat(beforePose.quaternion) : 'unavailable'}`);
   applyMoveToSubjectWorldPose(controlledNodeId, snapshot.position, snapshot.quaternion);
   // 瞬移后立即同步跟随相机，避免下一帧从旧位置插值过去。
-  const followCameraUpdated = updateCharacterFollowCamera(0, { immediate: true });
-  const appliedPose = getMoveToSubjectCurrentPose(controlledNodeId);
-  logWatchRestore(`leave.restore.applied nodeId=${controlledNodeId} followCameraUpdated=${followCameraUpdated} pos=${appliedPose ? formatWatchRestoreVec3(appliedPose.position) : 'unavailable'} quat=${appliedPose ? formatWatchRestoreQuat(appliedPose.quaternion) : 'unavailable'} storeKeys=${formatWatchRestoreStoreKeys()}`);
-  scheduleWatchRestorePoseVerify(controlledNodeId);
-}
-
-let watchRestoreVerifyTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** 恢复后延迟复查一次实际位姿，用于确认是否被物理/跟随逻辑拉回。 */
-function scheduleWatchRestorePoseVerify(controlledNodeId: string): void {
-  if (watchRestoreVerifyTimer !== null) {
-    clearTimeout(watchRestoreVerifyTimer);
-  }
-  watchRestoreVerifyTimer = setTimeout(() => {
-    watchRestoreVerifyTimer = null;
-    const pose = getMoveToSubjectCurrentPose(controlledNodeId);
-    logWatchRestore(`leave.restore.verify nodeId=${controlledNodeId} pos=${pose ? formatWatchRestoreVec3(pose.position) : 'unavailable'} quat=${pose ? formatWatchRestoreQuat(pose.quaternion) : 'unavailable'}`);
-  }, 400);
+  updateCharacterFollowCamera(0, { immediate: true });
 }
 
 function resetMoveToSubjectInputs(): void {
@@ -17662,11 +17691,9 @@ function syncWatchTransitionBusyState(): void {
 
 function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void {
   if (activeWatchRestoreSnapshot.value && isRedundantWatchRequest(targetNodeId)) {
-    logWatchRestore(`watch.enter.redundant target=${targetNodeId ?? '-'} currentSource=${activeWatchRestorePositionSource.value}`);
     return;
   }
   activeWatchRestoreSnapshot.value = captureViewControlSnapshot();
-  logWatchRestore(`watch.enter.capture target=${targetNodeId ?? '-'} hasSnapshot=${activeWatchRestoreSnapshot.value !== null} prevSource=${activeWatchRestorePositionSource.value} storeKeys=${formatWatchRestoreStoreKeys()}`);
   watchUiRestoreState.value = {
     purposeControlsVisible: purposeControlsVisible.value,
   };
@@ -17676,7 +17703,6 @@ function captureWatchRestoreSnapshotIfNeeded(targetNodeId: string | null): void 
 }
 
 function clearActiveWatchState(): void {
-  logWatchRestore(`watch.state.clear prevSource=${activeWatchRestorePositionSource.value} hadSnapshot=${activeWatchRestoreSnapshot.value !== null} storeKeys=${formatWatchRestoreStoreKeys()}`);
   activeWatchRestoreSnapshot.value = null;
   activeWatchSource.value = null;
   activeWatchRestorePositionSource.value = 'none';
@@ -17767,7 +17793,6 @@ function startCameraWatchTween(params: {
 
 function leaveActiveWatchView(): void {
   const snapshot = activeWatchRestoreSnapshot.value;
-  logWatchRestore(`leave.click mode=${cameraViewState.mode} hasSnapshot=${snapshot !== null} source=${activeWatchRestorePositionSource.value} storeKeys=${formatWatchRestoreStoreKeys()}`);
   if (snapshot) {
     const transitionPlan = activeWatchTransitionPlan;
     const restorePosition = transitionPlan ? transitionPlan.fromPosition.clone() : new THREE.Vector3(...snapshot.camera.position);
@@ -17787,7 +17812,6 @@ function leaveActiveWatchView(): void {
       duration: CAMERA_WATCH_DURATION,
       purpose: 'watch-leave',
       onComplete: () => {
-        logWatchRestore('leave.tween.complete');
         // 必须在 clearActiveWatchState() 之前读取，清理会把来源重置为 'none'。
         const restorePositionSource = activeWatchRestorePositionSource.value;
         applyViewControlSnapshot(snapshot);
@@ -17799,7 +17823,6 @@ function leaveActiveWatchView(): void {
     });
     return;
   }
-  logWatchRestore('leave.fallback reason=no-snapshot');
   clearActiveWatchState();
   setCameraViewState('level');
   purposeActiveMode.value = 'level';
@@ -17882,16 +17905,13 @@ function performWatchFocus(targetNodeId: string | null, caging?: boolean): { suc
 }
 
 function handleWatchNodeEvent(event: Extract<BehaviorRuntimeEvent, { type: 'watch-node' }>) {
-  const watchTargetLogId = event.targetNodeId ?? event.nodeId ?? '-';
   const result = performWatchFocus(event.targetNodeId ?? event.nodeId ?? null, event.caging);
   if (!result.success) {
-    logWatchRestore(`watch.event.failed target=${watchTargetLogId} source=${event.restorePositionSource} message=${result.message ?? '-'}`);
     resolveBehaviorToken(event.token, result.message ? { type: 'fail', message: result.message } : { type: 'fail' });
     return;
   }
   // 记录本次拍照会话配置的退出恢复来源（冗余 Watch 请求同样刷新）。
   activeWatchRestorePositionSource.value = event.restorePositionSource;
-  logWatchRestore(`watch.event.ok target=${watchTargetLogId} caging=${event.caging} source=${event.restorePositionSource} storeKeys=${formatWatchRestoreStoreKeys()}`);
   resolveBehaviorToken(event.token, { type: 'continue' });
 }
 
@@ -18770,18 +18790,26 @@ function endCharacterPad(): void {
   updateCharacterAuthorityInputFromKeys();
 }
 
+// Reused: the viewport is consumed synchronously by both overlay updates.
+const joystickOverlayViewportScratch: JoystickOverlayViewport = {
+  cssWidth: 1,
+  cssHeight: 1,
+  pxWidth: 1,
+  pxHeight: 1,
+};
+
 function resolveJoystickOverlayViewport(): JoystickOverlayViewport {
   const canvas = canvasResult?.canvas ?? null;
   const cssWidth = canvas?.clientWidth ?? canvas?.width ?? 1;
   const cssHeight = canvas?.clientHeight ?? canvas?.height ?? 1;
   const pxWidth = canvas?.width ?? cssWidth;
   const pxHeight = canvas?.height ?? cssHeight;
-  return {
-    cssWidth: cssWidth > 0 ? cssWidth : 1,
-    cssHeight: cssHeight > 0 ? cssHeight : 1,
-    pxWidth: pxWidth > 0 ? pxWidth : cssWidth,
-    pxHeight: pxHeight > 0 ? pxHeight : cssHeight,
-  };
+  const viewport = joystickOverlayViewportScratch;
+  viewport.cssWidth = cssWidth > 0 ? cssWidth : 1;
+  viewport.cssHeight = cssHeight > 0 ? cssHeight : 1;
+  viewport.pxWidth = pxWidth > 0 ? pxWidth : cssWidth;
+  viewport.pxHeight = pxHeight > 0 ? pxHeight : cssHeight;
+  return viewport;
 }
 
 function cancelVehicleSmoothStop(): void {
@@ -21281,6 +21309,27 @@ function parseSceneDocument(payload: unknown): SceneJsonExportDocument {
   throw new Error('场景数据格式不正确');
 }
 
+/**
+ * Cap the runtime flat-tiling window to what this viewer can actually see.
+ * The ground runtime floors the flat tiling radius at 32 chunks, which is a
+ * 65x65 window (~3x the camera far plane on a 100m chunk grid) and costs
+ * seconds to scan/build on low-end devices — while the mini program never
+ * re-tiles, so the extra rings were never used.
+ */
+function applySceneryGroundTilingBudget(document: SceneJsonExportDocument): void {
+  const groundNode = resolveSharedDocumentGroundNode(document);
+  const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined;
+  if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
+    return;
+  }
+  const chunkSizeMeters = Number.isFinite(groundMesh.chunkSizeMeters) && (groundMesh.chunkSizeMeters as number) > 0
+    ? (groundMesh.chunkSizeMeters as number)
+    : 100;
+  const radiusChunks = Math.max(16, Math.ceil(DEFAULT_SCENE_CAMERA_FAR / chunkSizeMeters) + 6);
+  (groundMesh as GroundRuntimeDynamicMesh & { runtimeFlatTilingRadiusChunks?: number })
+    .runtimeFlatTilingRadiusChunks = radiusChunks;
+}
+
 function findFirstGroundNode(document: SceneJsonExportDocument): SceneNode | null {
   const stack = [...document.nodes];
   while (stack.length) {
@@ -22249,11 +22298,6 @@ function teardownRenderer() {
   autoTourFollowNodeId.value = null;
   resetAutoTourCameraFollowState();
   clearWatchRestorePoseStore(watchRestorePoseStore);
-  logWatchRestore('store.clear reason=teardown-renderer');
-  if (watchRestoreVerifyTimer !== null) {
-    clearTimeout(watchRestoreVerifyTimer);
-    watchRestoreVerifyTimer = null;
-  }
   nodeObjectMap.forEach((_object, nodeId) => {
     releaseModelInstance(nodeId);
   });
@@ -22974,20 +23018,30 @@ function startRenderLoop(
           if (vehiclePadInput.active && vehicleDriveActive.value) {
             recomputeVehicleDriveInputs(vehiclePadInput.rawX, vehiclePadInput.rawY);
           }
-          updateCharacterAuthorityInputFromKeys();
+          if (scenerySceneRuntimeFlags.hasCharacter) {
+            updateCharacterAuthorityInputFromKeys();
+          }
           updateMoveToSessionForFrame(deltaSeconds);
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
-          previewComponentManager.setFrameState({
-            cameraWorldPosition: previewFrameCameraWorldPosition,
-          });
-          previewComponentManager.update(deltaSeconds);
+          previewComponentManager.setFrameState(previewFrameStateScratch);
+          if (previewComponentManager.size > 0) {
+            previewComponentManager.update(deltaSeconds);
+          }
           flushParticleRuntimeCommands();
-          waterRuntime.update(deltaSeconds, { renderer, scene, camera });
-          updateCharacterPathFollow(deltaSeconds);
-          updateCharacterControllerAnimations(deltaSeconds);
-          nodeAnimationRuntime.update(deltaSeconds);
+          if (countWaterRuntimeHandles() > 0) {
+            waterRuntime.update(deltaSeconds, { renderer, scene, camera });
+          }
+          if (characterAutoTourRuntime.size > 0) {
+            updateCharacterPathFollow(deltaSeconds);
+          }
+          if (characterControllerAnimationRuntime.size > 0) {
+            updateCharacterControllerAnimations(deltaSeconds);
+          }
+          if (nodeAnimationRuntime.size > 0) {
+            nodeAnimationRuntime.update(deltaSeconds);
+          }
           activeBehaviorSounds.forEach((instance) => {
             if (!instance.audio || !instance.params.spatial || instance.stopped) {
               return;
@@ -23018,7 +23072,16 @@ function startRenderLoop(
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
           updateCharacterPhysicsBridgeVisuals(deltaSeconds);
-          updateVehicleSpeedFromVehicle();
+          // Also run while a non-zero speed is still displayed, so removing the last
+          // vehicle still drives the readout back to 0.
+          if (
+            scenerySceneRuntimeFlags.hasVehicle
+            || vehicleDriveActive.value
+            || activeAutoTourNodeIds.size > 0
+            || vehicleSpeedDisplayMps.value !== 0
+          ) {
+            updateVehicleSpeedFromVehicle();
+          }
           updateControlledCharacterMotionTelemetry(getVehicleSpeedDisplayNowMs());
           updateSceneCompassHeading();
           updateVehicleWheelVisuals(deltaSeconds);
@@ -23029,6 +23092,9 @@ function startRenderLoop(
           activatePendingDefaultSteerDriveIfNeeded();
         }
 
+        // NOTE: keep this call unconditional — it also discovers script-triggered
+        // auto-tours (`syncAutoTourActiveNodesFromRuntime`), so skipping it when no
+        // tour is active would break `startTour` behaviours.
         if (deltaSeconds >= 0) {
           updateAutoTourFollowCamera(deltaSeconds);
         }
@@ -23044,7 +23110,6 @@ function startRenderLoop(
             updateVehicleDriveCamera(deltaSeconds);
           }
         }
-
         updateBillboardInstanceCameraWorldPosition(camera.position);
 
         updateBehaviorProximity();
@@ -23120,10 +23185,10 @@ function startRenderLoop(
         }
         scheduleLodPrefetch();
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
-          tickInstancedBounds(deltaSeconds);
-          if (gradientBackgroundDome) {
-            gradientBackgroundDome.mesh.position.copy(camera.position);
-          }
+        tickInstancedBounds(deltaSeconds);
+        if (gradientBackgroundDome) {
+          gradientBackgroundDome.mesh.position.copy(camera.position);
+        }
           if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(cameraFrameSnapshot)) {
             sceneCsmShadowRuntime.update();
           }
@@ -23207,11 +23272,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
   clearWatchRestorePoseStore(watchRestorePoseStore);
-  logWatchRestore('store.clear reason=scene-switch');
-  if (watchRestoreVerifyTimer !== null) {
-    clearTimeout(watchRestoreVerifyTimer);
-    watchRestoreVerifyTimer = null;
-  }
   physicsBridgeContactsByNodeId.clear();
   physicsBridgeCharacterMotorStateByCharacterId.clear();
   behaviorCollisionCandidates.clear();

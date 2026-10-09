@@ -170,6 +170,11 @@ export class SceneAnimationRuntimeManager {
     return this.controllers.get(nodeId) ?? null
   }
 
+  /** Number of registered node animation controllers; lets hosts skip idle frames. */
+  get size(): number {
+    return this.controllers.size
+  }
+
   has(nodeId: string): boolean {
     return this.controllers.has(nodeId)
   }

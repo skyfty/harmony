@@ -457,6 +457,27 @@ export function clearCompiledGroundRenderTiles(groundObject: THREE.Object3D): vo
   runtime.loadedChunkKeysCache = []
 }
 
+/**
+ * Every infinite-terrain chunk key that the compiled ground manifest can cover,
+ * regardless of whether the tile mesh has been built yet. The runtime ground uses
+ * this to pre-hide the chunks that compiled tiles own, so the flat-tiling pass
+ * does not spend seconds building visuals that are about to be hidden.
+ */
+export function collectCompiledGroundManifestChunkKeys(
+  manifest: CompiledGroundManifest | null | undefined,
+): string[] {
+  if (!manifest || !Array.isArray(manifest.renderTiles) || manifest.renderTiles.length === 0) {
+    return []
+  }
+  const keys = new Set<string>()
+  resolveCompiledGroundRenderTileRecordMap(manifest).forEach((record) => {
+    for (const chunkKey of collectCompiledGroundRenderTileChunkKeys(manifest, record)) {
+      keys.add(chunkKey)
+    }
+  })
+  return Array.from(keys)
+}
+
 export function collectLoadedCompiledGroundChunkKeys(
   groundObject: THREE.Object3D,
   manifest: CompiledGroundManifest | null | undefined,
