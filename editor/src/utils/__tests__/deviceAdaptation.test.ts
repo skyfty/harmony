@@ -3,6 +3,7 @@ import {
   BUILTIN_ANDROID_DEVICE_PROFILE_ID,
   BUILTIN_IOS_DEVICE_PROFILE_ID,
   isBuiltinDeviceAdaptationProfileId,
+  normalizeDeviceAdaptationNodeProps,
   normalizeDeviceAdaptationSettings,
   removeDeviceAdaptationProfile,
   resolveDeviceAdaptationPlatform,
@@ -82,5 +83,40 @@ describe('device adaptation profiles', () => {
     expect(resolveDeviceAdaptationPlatform('devtools', 'iOS 17.2', 'wechat-miniprogram')).toBe('ios')
     expect(resolveDeviceAdaptationPlatform('android', 'Android 14', 'wechat-miniprogram')).toBe('android')
     expect(resolveDeviceAdaptationPlatform('devtools', '', 'wechat-miniprogram')).toBe('wechat-miniprogram')
+  })
+})
+
+describe('device adaptation node rules', () => {
+  it('keeps the skip-subtree action verbatim', () => {
+    const props = normalizeDeviceAdaptationNodeProps({
+      rules: [{ profileId: BUILTIN_IOS_DEVICE_PROFILE_ID, action: 'skip-subtree' }],
+    })
+    expect(props.rules).toEqual([
+      { profileId: BUILTIN_IOS_DEVICE_PROFILE_ID, action: 'skip-subtree', modelAssetId: null },
+    ])
+  })
+
+  it('keeps every supported action and coerces unknown ones', () => {
+    const actions = ['skip-visual', 'skip-subtree', 'replace-model', 'disable-textures', 'simplify-rendering']
+    const props = normalizeDeviceAdaptationNodeProps({
+      rules: [
+        ...actions.map((action, index) => ({ profileId: `profile-${index}`, action })),
+        { profileId: 'unknown', action: 'nuke-everything' },
+      ],
+    })
+    expect(props.rules.map((rule) => rule.action)).toEqual([...actions, 'simplify-rendering'])
+  })
+
+  it('deduplicates rules that target the same profile', () => {
+    const props = normalizeDeviceAdaptationNodeProps({
+      rules: [
+        { profileId: BUILTIN_IOS_DEVICE_PROFILE_ID, action: 'skip-subtree' },
+        { profileId: BUILTIN_IOS_DEVICE_PROFILE_ID, action: 'disable-textures' },
+        { profileId: '   ', action: 'skip-visual' },
+      ],
+    })
+    expect(props.rules).toEqual([
+      { profileId: BUILTIN_IOS_DEVICE_PROFILE_ID, action: 'skip-subtree', modelAssetId: null },
+    ])
   })
 })

@@ -22,6 +22,7 @@ const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const dragActiveProfileId = ref<string | null>(null)
 const actionOptions = [
   { title: '跳过该节点视觉加载（保留子节点）', value: 'skip-visual' },
+  { title: '跳过该节点及其所有子节点', value: 'skip-subtree' },
   { title: '替换为低模模型', value: 'replace-model' },
   { title: '禁用该节点贴图', value: 'disable-textures' },
   { title: '简化节点渲染', value: 'simplify-rendering' },

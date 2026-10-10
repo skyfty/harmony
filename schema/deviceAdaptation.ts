@@ -35,8 +35,38 @@ export interface DeviceAdaptationSettings {
 
 export interface DeviceAdaptationNodeRule {
   profileId: string
-  action: 'skip-visual' | 'replace-model' | 'disable-textures' | 'simplify-rendering'
+  action: 'skip-visual' | 'skip-subtree' | 'replace-model' | 'disable-textures' | 'simplify-rendering'
   modelAssetId: string | null
+}
+
+/** Every persisted node-rule action; anything else normalizes to `simplify-rendering`. */
+export const DEVICE_ADAPTATION_NODE_ACTIONS: readonly string[] = [
+  'skip-visual',
+  'skip-subtree',
+  'replace-model',
+  'disable-textures',
+  'simplify-rendering',
+]
+
+/**
+ * Actions that drop a node's own visual: `skip-visual` keeps its children,
+ * `skip-subtree` drops the whole subtree.
+ */
+export function isNodeVisualSkipAction(action: DeviceAdaptationNodeRule['action'] | null | undefined): boolean {
+  return action === 'skip-visual' || action === 'skip-subtree'
+}
+
+/** Action that removes the node's own visual *and* every descendant. */
+export function isNodeSubtreeSkipAction(action: DeviceAdaptationNodeRule['action'] | null | undefined): boolean {
+  return action === 'skip-subtree'
+}
+
+/**
+ * Actions that change which asset (if any) the node renders: the original asset
+ * must not be loaded for these nodes.
+ */
+export function isNodeAssetSkipAction(action: DeviceAdaptationNodeRule['action'] | null | undefined): boolean {
+  return action === 'skip-visual' || action === 'skip-subtree' || action === 'replace-model'
 }
 
 export interface DeviceAdaptationComponentProps {
@@ -184,7 +214,7 @@ export function normalizeDeviceAdaptationNodeProps(value: unknown): DeviceAdapta
       const profileId = typeof rule.profileId === 'string' ? rule.profileId.trim() : ''
       if (!profileId || seen.has(profileId)) return []
       seen.add(profileId)
-      const action = ['skip-visual', 'replace-model', 'disable-textures', 'simplify-rendering'].includes(String(rule.action))
+      const action = DEVICE_ADAPTATION_NODE_ACTIONS.includes(String(rule.action))
         ? rule.action as DeviceAdaptationNodeRule['action']
         : 'simplify-rendering'
       const modelAssetId = typeof rule.modelAssetId === 'string' && rule.modelAssetId.trim()

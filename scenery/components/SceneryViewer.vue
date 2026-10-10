@@ -671,7 +671,15 @@ import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUt
 import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
 import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@harmony/schema/skyCubeTexture';
 import { isSkyCubeArchiveExtension } from '@harmony/schema/core';
-import { resolveDeviceAdaptationPlatform, resolveDeviceAdaptationProfile, type DeviceAdaptationSystemInfo, type DeviceAdaptationProfile } from '@harmony/schema/deviceAdaptation';
+import {
+  isNodeAssetSkipAction,
+  isNodeSubtreeSkipAction,
+  resolveDeviceAdaptationPlatform,
+  resolveDeviceAdaptationProfile,
+  type DeviceAdaptationNodeRule,
+  type DeviceAdaptationSystemInfo,
+  type DeviceAdaptationProfile,
+} from '@harmony/schema/deviceAdaptation';
 import {
   canNodeUseRuntimeModelInstancing,
   collectRuntimeModelNodesByAssetId,
@@ -1838,6 +1846,11 @@ let renderContext: RenderContext | null = null;
 let baseRendererPixelRatio = 1;
 let baseRendererShadowsEnabled = true;
 let activeDeviceAdaptationProfile: DeviceAdaptationProfile | null = null;
+// Nodes whose device-adaptation rule changes *which* asset is rendered
+// (skip-visual / replace-model). The instanced-mesh pipeline builds its objects
+// straight from the scene document, so it must exclude these nodes: otherwise it
+// loads the original asset again and its proxy silently undoes the rule.
+const deviceAdaptationInstancingExcludedNodeIds = new Set<string>();
 const runtimeMemoryGuard = useRuntimeMemoryGuard({
   onModerate: () => {
     const context = renderContext;
@@ -5603,7 +5616,29 @@ function readDeviceAdaptationSystemInfo(): DeviceAdaptationSystemInfo {
   return info
 }
 
-function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?: SceneGraphBuildOptions['onProgress']): SceneGraphBuildOptions {
+/** Node ids of every descendant, used to keep a skipped subtree out of instancing. */
+function collectSceneNodeDescendantIds(node: SceneNode): string[] {
+  const ids: string[] = []
+  const stack: SceneNode[] = Array.isArray(node.children) ? [...node.children] : []
+  while (stack.length) {
+    const current = stack.pop()
+    if (!current) {
+      continue
+    }
+    if (typeof current.id === 'string' && current.id) {
+      ids.push(current.id)
+    }
+    if (Array.isArray(current.children) && current.children.length) {
+      stack.push(...current.children)
+    }
+  }
+  return ids
+}
+
+function createSceneGraphBuildOptions(
+  payload: ScenePreviewPayload,
+  onProgress?: SceneGraphBuildOptions['onProgress'],
+): SceneGraphBuildOptions {
   const buildOptions: SceneGraphBuildOptions = {};
   // Coarse phase timing for the graph builder. The host owns the clock, so the
   // callback only reports names/details and this closure adds the deltas.
@@ -5626,13 +5661,29 @@ function createSceneGraphBuildOptions(payload: ScenePreviewPayload, onProgress?:
   if (activeDeviceAdaptationProfile) {
     buildOptions.lazyLoadMeshes = activeDeviceAdaptationProfile.lazyLoadMeshes || activeDeviceAdaptationProfile.quality === 'low';
     buildOptions.deviceProfileId = activeDeviceAdaptationProfile.id;
-    buildOptions.resolveNodeAdaptation = (node) => {
-      const component = node.components?.[DEVICE_ADAPTATION_COMPONENT_TYPE];
-      if (!component || component.enabled === false) return null;
-      const componentProps = normalizeDeviceAdaptationNodeProps(component.props);
-      return componentProps.rules.find((rule) => rule.profileId === activeDeviceAdaptationProfile?.id) ?? null;
-    };
   }
+  buildOptions.resolveNodeAdaptation = (node): DeviceAdaptationNodeRule | null => {
+    const component = node.components?.[DEVICE_ADAPTATION_COMPONENT_TYPE];
+    if (!component) {
+      return null;
+    }
+    const componentEnabled = component.enabled !== false;
+    const componentProps = normalizeDeviceAdaptationNodeProps(component.props);
+    const matchedRule = componentEnabled && activeDeviceAdaptationProfile
+      ? componentProps.rules.find((rule) => rule.profileId === activeDeviceAdaptationProfile?.id) ?? null
+      : null;
+    const subtreeSkipped = isNodeSubtreeSkipAction(matchedRule?.action ?? null);
+    const descendantIds = subtreeSkipped ? collectSceneNodeDescendantIds(node) : [];
+    if (isNodeAssetSkipAction(matchedRule?.action ?? null)) {
+      deviceAdaptationInstancingExcludedNodeIds.add(node.id);
+      // The subtree is never traversed by the graph builder, so this resolver is
+      // the only chance to keep its descendants out of the instanced pipeline.
+      descendantIds.forEach((descendantId) => deviceAdaptationInstancingExcludedNodeIds.add(descendantId));
+    } else {
+      deviceAdaptationInstancingExcludedNodeIds.delete(node.id);
+    }
+    return matchedRule;
+  };
   const mergedAssetOverrides = mergeSceneAssetOverrides(
     payload.assetOverrides,
     activeScenePackageAssetOverrides ?? undefined,
@@ -8452,6 +8503,13 @@ async function ensureModelInstanceGroup(
 }
 
 function createInstancedPreviewProxy(node: SceneNode, group: ModelInstanceGroup): THREE.Object3D | null {
+  // A node whose visual is skipped (or replaced by another asset) must not be
+  // turned into an instanced proxy: that proxy would render the original asset
+  // and thereby undo the device-adaptation rule.
+  if (deviceAdaptationInstancingExcludedNodeIds.has(node.id)) {
+    releaseModelInstance(node.id);
+    return null;
+  }
   if (!canNodeUseRuntimeModelInstancing(node)) {
     releaseModelInstance(node.id);
     return null;
@@ -8531,6 +8589,9 @@ const pendingLodModelLoads = new Map<string, Promise<void>>();
 
 async function ensureModelObjectCached(assetId: string, sampleNode: SceneNode | null): Promise<void> {
   if (!assetId) {
+    return;
+  }
+  if (sampleNode && deviceAdaptationInstancingExcludedNodeIds.has(sampleNode.id)) {
     return;
   }
   if (getCachedModelObject(assetId)) {
@@ -8862,6 +8923,11 @@ function applyModelFaceCameraMatrix(camera: THREE.Camera | null | undefined, mat
 // Enhanced: support both model and billboard LOD targets
 function applyInstancedLodSwitch(nodeId: string, object: THREE.Object3D, target: SceneryInstancedLodTarget): void {
   if (!target) return;
+  if (deviceAdaptationInstancingExcludedNodeIds.has(nodeId)) {
+    releaseBillboardInstance(nodeId);
+    releaseModelInstance(nodeId);
+    return;
+  }
   const node = resolveNodeById(nodeId);
   if (!canNodeUseRuntimeModelInstancing(node)) {
     releaseBillboardInstance(nodeId);
@@ -9379,6 +9445,9 @@ async function prepareInstancedNodesForGraph(
   grouped.forEach((nodes, assetId) => {
     const filteredNodes = nodes.filter((node) => {
       if (!canNodeUseRuntimeModelInstancing(node)) {
+        return false;
+      }
+      if (deviceAdaptationInstancingExcludedNodeIds.has(node.id)) {
         return false;
       }
       if (includeNodeIds && !includeNodeIds.has(node.id)) {
@@ -22592,6 +22661,9 @@ async function buildSceneGraphWithProgress(
     resourceCache = ensureResourceCache(runtimePayload.document, buildOptions);
     viewerResourceCache = resourceCache;
     refreshDynamicGroundCache(runtimePayload.document);
+    // Rebuild the node-level exclusion list for this scene entry: the graph
+    // build below is what evaluates every node's adaptation rule.
+    deviceAdaptationInstancingExcludedNodeIds.clear();
     try {
       graph = await buildSceneGraph(runtimePayload.document, resourceCache, buildOptions);
     } catch (error) {
@@ -22648,6 +22720,9 @@ async function prepareInstancedNodesIfPossible(
 ): Promise<void> {
   if (skipNodeIds?.size) {
     skipNodeIds.forEach((nodeId) => {
+      if (deviceAdaptationInstancingExcludedNodeIds.has(nodeId)) {
+        return;
+      }
       if (canNodeUseRuntimeModelInstancing(resolveNodeById(nodeId))) {
         deferredInstancingNodeIds.add(nodeId);
       }

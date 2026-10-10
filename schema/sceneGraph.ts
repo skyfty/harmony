@@ -52,6 +52,11 @@ import { WALL_COMPONENT_TYPE, clampWallProps } from './components/definitions/wa
 import type { RoadComponentProps } from './components/definitions/roadComponent'
 import { ROAD_COMPONENT_TYPE, clampRoadProps } from './components/definitions/roadComponent'
 import type { DeviceAdaptationNodeRule } from './deviceAdaptation'
+import {
+  isNodeAssetSkipAction,
+  isNodeSubtreeSkipAction,
+  isNodeVisualSkipAction,
+} from './deviceAdaptation'
 
 import { getOrLoadModelObject } from './modelObjectCache'
 import { loadNodeObject } from './modelAssetLoader'
@@ -411,6 +416,13 @@ class SceneGraphBuilder {
         continue;
       }
 
+      // A subtree-skipped node is never built, so neither its own asset nor any
+      // asset below it can be part of the build-time download expectation.
+      const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null
+      if (isNodeSubtreeSkipAction(adaptation?.action ?? null)) {
+        continue;
+      }
+
       const explicitType = typeof node.nodeType === 'string' ? node.nodeType : '';
       const normalizedType = explicitType.toLowerCase();
 
@@ -681,28 +693,53 @@ class SceneGraphBuilder {
     const skipped = new Set<string>()
     const active = new Set<string>()
     const replacements = new Set<string>()
-    const stack = [...nodes]
+    const stack = nodes.map((node) => ({ node, inSkippedSubtree: false }))
     while (stack.length) {
-      const node = stack.pop()
-      if (!node) continue
+      const entry = stack.pop()
+      if (!entry) continue
+      const { node } = entry
+      const inSkippedSubtree = entry.inSkippedSubtree
       const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null
       const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
-      if (assetId) {
-        if (adaptation?.action === 'skip-visual' || adaptation?.action === 'replace-model') {
-          skipped.add(assetId)
-          if (adaptation.action === 'replace-model' && adaptation.modelAssetId) {
+      // `skip-subtree` takes the whole subtree out of the preload set: the
+      // descendants are never built, so their assets must stay inactive.
+      const nodeInsideSkippedSubtree = inSkippedSubtree || isNodeSubtreeSkipAction(adaptation?.action ?? null)
+      const wallAssetIds = this.collectAdaptedNodeWallAssetIds(node)
+      if (assetId || wallAssetIds.length) {
+        if (nodeInsideSkippedSubtree || isNodeAssetSkipAction(adaptation?.action ?? null)) {
+          if (assetId) {
+            skipped.add(assetId)
+          }
+          wallAssetIds.forEach((wallAssetId) => skipped.add(wallAssetId))
+          // A replacement asset inside a skipped subtree is never rendered either.
+          if (!nodeInsideSkippedSubtree && adaptation?.action === 'replace-model' && adaptation.modelAssetId) {
             active.add(adaptation.modelAssetId)
             replacements.add(adaptation.modelAssetId)
           }
-        } else {
+        } else if (assetId) {
           active.add(assetId)
+          wallAssetIds.forEach((wallAssetId) => active.add(wallAssetId))
         }
       }
-      if (Array.isArray(node.children)) stack.push(...(node.children as SceneNodeWithExtras[]))
+      if (Array.isArray(node.children) && node.children.length) {
+        node.children.forEach((child) => {
+          stack.push({ node: child as SceneNodeWithExtras, inSkippedSubtree: nodeInsideSkippedSubtree })
+        })
+      }
     }
     const filtered = assetIds.filter((assetId) => !skipped.has(assetId) || active.has(assetId))
     replacements.forEach((assetId) => filtered.push(assetId))
     return this.normalizeAssetIdList(filtered)
+  }
+
+  /** Wall component body/head/foot assets referenced by a single node. */
+  private collectAdaptedNodeWallAssetIds(node: SceneNodeWithExtras): string[] {
+    if (!node.components?.[WALL_COMPONENT_TYPE]) {
+      return []
+    }
+    const ids = new Set<string>()
+    this.collectWallAssetIds(node, ids)
+    return Array.from(ids)
   }
 
   private normalizeAssetIdList(list: string[]): string[] {
@@ -786,23 +823,31 @@ class SceneGraphBuilder {
 
   private collectInstanceLayoutAssetIds(nodes: SceneNodeWithExtras[]): string[] {
     const ids = new Set<string>()
-    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : []
+    const stack = Array.isArray(nodes) ? nodes.map((node) => ({ node, inSkippedSubtree: false })) : []
     while (stack.length) {
-      const node = stack.pop()
-      if (!node) {
+      const entry = stack.pop()
+      if (!entry) {
         continue
       }
+      const { node } = entry
+      const inSkippedSubtree = entry.inSkippedSubtree
       // Only preload when we need template bounds for multi-instance layout.
       const rawLayout = (node as unknown as { instanceLayout?: unknown }).instanceLayout
       const layout = rawLayout ? clampSceneNodeInstanceLayout(rawLayout) : null
-      if (layout?.mode === 'grid') {
+      const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null
+      // `skip-subtree` also covers every descendant, which is never built.
+      const nodeInsideSkippedSubtree = inSkippedSubtree || isNodeSubtreeSkipAction(adaptation?.action ?? null)
+      const nodeVisualSkipped = nodeInsideSkippedSubtree || isNodeAssetSkipAction(adaptation?.action ?? null)
+      if (!nodeVisualSkipped && layout?.mode === 'grid') {
         const assetId = resolveInstanceLayoutTemplateAssetId(layout, typeof node.sourceAssetId === 'string' ? node.sourceAssetId : null)
         if (assetId) {
           ids.add(assetId)
         }
       }
       if (Array.isArray(node.children) && node.children.length) {
-        stack.push(...(node.children as SceneNodeWithExtras[]))
+        node.children.forEach((child) => {
+          stack.push({ node: child as SceneNodeWithExtras, inSkippedSubtree: nodeInsideSkippedSubtree })
+        })
       }
     }
     return Array.from(ids)
@@ -835,14 +880,20 @@ class SceneGraphBuilder {
     const ids = new Set<string>();
     const texturesOmittedForNodes = new Set<string>()
 
-    const stack: SceneNodeWithExtras[] = Array.isArray(nodes) ? [...nodes] : [];
+    const stack = Array.isArray(nodes) ? nodes.map((node) => ({ node, inSkippedSubtree: false })) : [];
     while (stack.length) {
-      const node = stack.pop();
-      if (!node) {
+      const entry = stack.pop();
+      if (!entry) {
         continue;
       }
+      const { node } = entry;
+      const inSkippedSubtree = entry.inSkippedSubtree;
       const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null;
-      const omitNodeTextures = adaptation?.action === 'skip-visual' || adaptation?.action === 'disable-textures'
+      // `skip-subtree` removes the whole subtree, so no descendant texture is loaded.
+      const nodeInsideSkippedSubtree = inSkippedSubtree || isNodeSubtreeSkipAction(adaptation?.action ?? null);
+      const omitNodeTextures = nodeInsideSkippedSubtree
+        || isNodeVisualSkipAction(adaptation?.action ?? null)
+        || adaptation?.action === 'disable-textures'
       if (omitNodeTextures) texturesOmittedForNodes.add(node.id)
       if (!omitNodeTextures && Array.isArray(node.materials) && node.materials.length) {
         resolveSceneNodeMaterialSlots(node.materials as SceneNodeMaterial[], this.options.deviceProfileId,
@@ -850,7 +901,9 @@ class SceneGraphBuilder {
         ).forEach((nodeMaterial) => this.collectTextureRefsFromMaterial(nodeMaterial, ids));
       }
       if (Array.isArray(node.children) && node.children.length) {
-        stack.push(...(node.children as SceneNodeWithExtras[]));
+        node.children.forEach((child) => {
+          stack.push({ node: child as SceneNodeWithExtras, inSkippedSubtree: nodeInsideSkippedSubtree });
+        });
       }
     }
 
@@ -1105,14 +1158,19 @@ class SceneGraphBuilder {
         continue;
       }
       const adaptation = this.options.resolveNodeAdaptation?.(node) ?? null;
-      if (adaptation?.action === 'skip-visual') {
+      if (isNodeVisualSkipAction(adaptation?.action ?? null)) {
+        // `skip-subtree` additionally drops every descendant: the subtree is never
+        // traversed, so its lightweight import children cannot trigger asset loads.
+        const skipWholeSubtree = isNodeSubtreeSkipAction(adaptation?.action ?? null)
         const container = new THREE.Group();
-        container.name = `${node.name ?? node.id}::visual-skipped`;
+        container.name = skipWholeSubtree
+          ? `${node.name ?? node.id}::visual-skipped-subtree`
+          : `${node.name ?? node.id}::visual-skipped`;
         this.applyTransform(container, node);
         this.applyVisibility(container, node);
         this.applyNodeMetadata(container, node);
         parent.add(container);
-        if (Array.isArray(node.children) && node.children.length) {
+        if (!skipWholeSubtree && Array.isArray(node.children) && node.children.length) {
           await this.buildNodes(node.children as SceneNodeWithExtras[], container, nextInheritedImportMaterial, lightweightPatchContext);
         }
         continue;
