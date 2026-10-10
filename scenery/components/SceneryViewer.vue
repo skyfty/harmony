@@ -2705,6 +2705,8 @@ let physicsBridgeInitPromise: Promise<PhysicsBridge> | null = null;
 let physicsBridgeStepPromise: Promise<void> | null = null;
 let physicsBridgeStepPendingDeltaSeconds = 0;
 let physicsBridgeAccumulatedDeltaSeconds = 0;
+let physicsBridgeLastMovedAtMs = 0;
+let physicsBridgeLastStepIssuedAtMs = 0;
 let physicsBridgeCharacterInputSyncPending = false;
 let physicsBridgeCharacterInputSyncPromise: Promise<void> | null = null;
 type PhysicsBridgeCharacterInputSnapshot = {
@@ -3131,6 +3133,17 @@ const CHARACTER_CAMERA_CHASE_TURN_RATE_FRACTION = 0.5;
 const PHYSICS_BRIDGE_MAX_STEP_DELTA_SECONDS = 0.05;
 const PHYSICS_BRIDGE_FIXED_STEP_DELTA_SECONDS = 1 / 60;
 const PHYSICS_BRIDGE_MAX_ACCUMULATED_DELTA_SECONDS = 0.2;
+// A resting scene still pays for the full step round trip (post + msgpack reply +
+// transform application) on every frame: measured ~20ms/frame on an iPhone 6s. When
+// nothing has moved and no input is active the bridge steps at 4Hz instead; any motion
+// or input restores per-frame stepping immediately.
+const PHYSICS_BRIDGE_IDLE_STEP_INTERVAL_MS = 250;
+// The periodic full body sync walks every body and posts its transform; while idle there
+// is nothing to correct, so it is stretched out as well.
+const PHYSICS_BRIDGE_IDLE_FULL_BODY_SYNC_INTERVAL_MS = 2000;
+const PHYSICS_BRIDGE_IDLE_QUIET_MS = 250;
+// Squared metres; 1e-6 == 1mm of movement.
+const PHYSICS_BRIDGE_IDLE_MOVE_EPSILON_SQ = 1e-6;
 
 type VehicleWheelBinding = {
   nodeId: string | null;
@@ -4812,6 +4825,11 @@ const lazyPlaceholderStates = new Map<string, LazyPlaceholderState>();
 const deferredInstancingNodeIds = new Set<string>();
 let lazyLoadMeshesEnabled = true;
 let activeLazyLoadCount = 0;
+// Lazy placeholders only trigger asset loads, but the scan walks the placeholder
+// subtrees; measured ~13ms per frame on an iPhone 6s when it ran on every render frame,
+// so it now runs on its own cadence.
+const LAZY_PLACEHOLDER_SCAN_INTERVAL_MS = 120;
+let lazyPlaceholderLastScanAtMs = 0;
 const tempOutlineSphere = new THREE.Sphere();
 const tempOutlineScale = new THREE.Vector3();
 const tempCameraMatrix = new THREE.Matrix4();
@@ -9937,6 +9955,8 @@ function resetPhysicsWorld(): void {
   physicsBridgePendingBodySyncRevisionByNodeId.clear();
   physicsBridgeStepPendingDeltaSeconds = 0;
   physicsBridgeAccumulatedDeltaSeconds = 0;
+  physicsBridgeLastMovedAtMs = 0;
+  physicsBridgeLastStepIssuedAtMs = 0;
   physicsBridgeCharacterInputSyncPending = false;
   physicsBridgeCharacterInputSnapshotByNodeId.clear();
   physicsBridgeLastFullBodySyncAtMs = 0;
@@ -10457,6 +10477,9 @@ async function loadSceneryPhysicsBridgeScene(
     }
     updateSceneryPhysicsBridgeIndex(document, asset);
     physicsBridgeSceneLoaded = true;
+    // Give the freshly loaded world PHYSICS_BRIDGE_IDLE_QUIET_MS of full-rate stepping so
+    // settling bodies are simulated properly before the idle throttle may engage.
+    physicsBridgeLastMovedAtMs = Date.now();
     physicsBridgeCharacterBindingsReady.value = true;
     physicsBridgeSceneReloading = false;
     const groundNode = resolveDocumentGroundNode(document);
@@ -10577,6 +10600,14 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
 
     let existing = physicsBridgeFrameBodiesByNodeId.get(nodeId);
     if (existing) {
+      // Motion bookkeeping for the idle step throttle: any real movement (or rotation)
+      // keeps the bridge stepping every frame.
+      if (
+        existing.position.distanceToSquared(nextPosition) > PHYSICS_BRIDGE_IDLE_MOVE_EPSILON_SQ
+        || Math.abs(existing.quaternion.dot(nextQuaternion)) < 1 - PHYSICS_BRIDGE_IDLE_MOVE_EPSILON_SQ
+      ) {
+        physicsBridgeLastMovedAtMs = Date.now();
+      }
       existing.position.copy(nextPosition);
       existing.quaternion.copy(nextQuaternion);
       existing.motionState = nextMotionState;
@@ -10815,6 +10846,32 @@ function isPhysicsTransformClose(
   return normalizedDot >= VEHICLE_BRIDGE_SYNC_QUATERNION_DOT_THRESHOLD;
 }
 
+/**
+ * True when the bridge scene is at rest and nothing is asking for movement: the last
+ * step replies reported no body motion for PHYSICS_BRIDGE_IDLE_QUIET_MS and no drive,
+ * tour or character input is active. Used to drop the step rate while idle.
+ */
+function isPhysicsBridgeIdle(nowMs: number): boolean {
+  if (nowMs - physicsBridgeLastMovedAtMs < PHYSICS_BRIDGE_IDLE_QUIET_MS) {
+    return false;
+  }
+  if (vehicleDriveActive.value || vehiclePadInput.active || characterPadInput.active) {
+    return false;
+  }
+  if (activeAutoTourNodeIds.size > 0) {
+    return false;
+  }
+  return !(
+    characterAuthorityInput.moveX !== 0
+    || characterAuthorityInput.moveZ !== 0
+    || characterAuthorityInput.turn !== 0
+    || characterAuthorityInput.jump
+    || characterAuthorityInput.sprint
+    || characterAuthorityInput.crouch
+    || characterAuthorityInput.interact
+  );
+}
+
 function stepSceneryPhysicsBridge(delta: number): void {
   if (
     !physicsEnvironmentEnabled.value
@@ -10843,6 +10900,14 @@ function stepSceneryPhysicsBridge(delta: number): void {
   if (physicsBridgeBodySyncPromise && physicsBridgePendingBodySyncRevisionByNodeId.size > 0) {
     return;
   }
+  const stepNowMs = Date.now();
+  if (
+    isPhysicsBridgeIdle(stepNowMs)
+    && stepNowMs - physicsBridgeLastStepIssuedAtMs < PHYSICS_BRIDGE_IDLE_STEP_INTERVAL_MS
+  ) {
+    return;
+  }
+  physicsBridgeLastStepIssuedAtMs = stepNowMs;
   const bridge = physicsBridge;
   physicsBridgeAccumulatedDeltaSeconds -= PHYSICS_BRIDGE_FIXED_STEP_DELTA_SECONDS;
   const stepDeltaSeconds = Math.min(
@@ -10887,9 +10952,12 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
   const commands: Array<Promise<void>> = [];
   const syncedBodyRevisions = new Map<string, number>();
   const nowMs = Date.now();
+  const fullSyncIntervalMs = isPhysicsBridgeIdle(nowMs)
+    ? PHYSICS_BRIDGE_IDLE_FULL_BODY_SYNC_INTERVAL_MS
+    : PHYSICS_BRIDGE_FULL_BODY_SYNC_INTERVAL_MS;
   const shouldRunFullSync =
     physicsBridgeLastFullBodySyncAtMs <= 0
-    || nowMs - physicsBridgeLastFullBodySyncAtMs >= PHYSICS_BRIDGE_FULL_BODY_SYNC_INTERVAL_MS;
+    || nowMs - physicsBridgeLastFullBodySyncAtMs >= fullSyncIntervalMs;
   const candidateNodeIds = shouldRunFullSync
     ? Array.from(physicsBridgeBodyIdByNodeId.keys())
     : Array.from(physicsBridgeDirtyBodyNodeIds);
@@ -12693,6 +12761,7 @@ function findLazyPlaceholderForNode(root: THREE.Object3D | null | undefined, nod
 function initializeLazyPlaceholders(document: SceneJsonExportDocument | null | undefined): void {
   lazyPlaceholderStates.clear();
   activeLazyLoadCount = 0;
+  lazyPlaceholderLastScanAtMs = 0;
   if (!document || !lazyLoadMeshesEnabled) {
     return;
   }
@@ -23059,9 +23128,11 @@ function startRenderLoop(
 
         if (debugEnabled.value) {
           updateDebugFps(deltaSeconds);
-          // Throttled inside the composable. Mini programs expose no heap API, so this
-          // estimate is the only "current usage" figure the overlay can show there.
-          if (debugMode.value !== 'off') {
+          // The app-side memory estimate walks the whole scene plus every material and
+          // texture. Measured on iOS it costs 200ms+ per call and runs every 500ms, so it
+          // is only computed while the overlay is expanded ('full'); the compact 'fps'
+          // view intentionally skips it.
+          if (debugMode.value === 'full') {
             syncSceneMemoryDebug(scene, sceneAssetCache);
           }
         }
@@ -23248,7 +23319,10 @@ function startRenderLoop(
           return;
         }
 
-        updateLazyPlaceholders(deltaSeconds);
+        if (instancingNow - lazyPlaceholderLastScanAtMs >= LAZY_PLACEHOLDER_SCAN_INTERVAL_MS) {
+          lazyPlaceholderLastScanAtMs = instancingNow;
+          updateLazyPlaceholders(deltaSeconds);
+        }
         if (!vehicleDriveIntroState.active && vehicleDriveIntroPendingState.active) {
           tryStartPendingVehicleDriveIntro();
         }
