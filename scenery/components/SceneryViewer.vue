@@ -174,38 +174,6 @@
           />
           <view class="viewer-lantern-body">
             <text class="viewer-lantern-title">{{ lanternCurrentTitle }}</text>
-            <view
-              class="viewer-drive-cluster viewer-drive-cluster--joystick">
-              <view class="viewer-drive-joystick-layout">
-                <view
-                  ref="lanternJoystickRef"
-                  class="viewer-drive-joystick"
-                  :class="{ 'is-active': vehicleDriveUi.joystickActive }"
-                  role="slider"
-                  aria-label="驾驶摇杆"
-                  aria-valuemin="-100"
-                  aria-valuemax="100"
-                  :aria-valuenow="Math.round(vehicleDriveInput.throttle * 100)"
-                  @touchstart.stop.prevent="handleJoystickTouchStart"
-                  @touchmove.stop.prevent="handleJoystickTouchMove"
-                  @touchend.stop.prevent="handleJoystickTouchEnd"
-                  @touchcancel.stop.prevent="handleJoystickTouchEnd"
-                >
-                  <DriveJoystick
-                    :is-active="vehicleDriveUi.joystickActive"
-                    :knob-style="joystickKnobStyle"
-                  />
-                </view>
-                <view class="viewer-drive-hud" aria-hidden="true">
-                  <SpeedReadout :speed="vehicleSpeedKmh" />
-                  <DriveCompass
-                    :compass-style="vehicleCompassStyle"
-                    :ticks="vehicleCompassTicks"
-                    :labels="vehicleCompassLabels"
-                  />
-                </view>
-              </view>
-            </view>
             <view class="viewer-progress__stats">
               <text class="viewer-progress__percent">{{ sceneLoadPercentText }}</text>
               <text v-if="sceneLoadBytesLabel" class="viewer-progress__bytes">{{ sceneLoadBytesLabel }}</text>
@@ -419,7 +387,6 @@ import { installWechatWorkerShim, isWechatSharedWorkerSupported, terminateWechat
 
 import PlatformCanvas from './PlatformCanvas.vue';
 import LanternImageFrame from './LanternImageFrame.vue';
-import DriveJoystick from './DriveJoystick.vue';
 import DriveCompass from './DriveCompass.vue';
 import SpeedReadout from './SpeedReadout.vue';
 import SceneLoadOverlay from './SceneLoadOverlay.vue';
@@ -482,77 +449,6 @@ import { fetchAssetBlobWithResponse, type AssetBlobDownloadResult } from '@harmo
 import { type ScenePackageCacheMetadata } from '@harmony/utils';
 import { type EnvironmentBackgroundMode } from '@harmony/schema/core';
 
-type SceneryProps = {
-  projectId?: string;
-  packageUrl?: string;
-  packageCacheKey?: string;
-  physicsEngine?: PhysicsBackendPreference;
-  createPhysicsBridge?: (engine?: PhysicsBackendPreference) => Promise<PhysicsBridge> | PhysicsBridge;
-  defaultSteerIdentifier?: string;
-  defaultSteerTargetType?: SteerControllableTargetType;
-  controllableAssets?: ExternalControllableAsset[];
-  skins?: ExternalSkin[];
-  multiuserIdentity?: MultiuserIdentity | null;
-  nominateStateMap?: NominateExternalStateMap;
-  physicsInterpolation?: boolean;
-  serverAssetBaseUrl?: string;
-  initialPunchedNodeIds?: string[];
-  runtimePrefabSpawns?: RuntimePrefabSpawnRequest[];
-};
-
-type WatchSnapshotSavedPayload = {
-  fileName: string;
-  platform: 'wechat-mini-program' | 'web';
-  source: 'watch-snapshot';
-  tempFilePath?: string;
-  blob?: Blob | null;
-};
-
-const props = defineProps<SceneryProps>();
-const emit = defineEmits<{
-  loaded: [];
-  error: [message: string];
-  progress: [payload: {
-    bytesLabel: string;
-    loaded: number;
-    total: number;
-    percent: number;
-    phase: string;
-    stageLabel: string;
-    detail: string;
-  }];
-  punch: [payload: {
-    eventName: 'punch';
-    sceneId: string;
-    sceneName: string;
-    clientPunchTime: string;
-    behaviorPunchTime: string;
-    location: {
-      nodeId: string;
-      nodeName: string;
-    };
-  }];
-  coupon: [payload: {
-    eventName: 'coupon';
-    sceneId: string;
-    sceneName: string;
-    clientCouponTime: string;
-    behaviorCouponTime: string;
-    location: {
-      nodeId: string;
-      nodeName: string;
-    };
-    coupon: {
-      id: string;
-      rawJson: string;
-      type: string | null;
-      name: string | null;
-      description: string | null;
-      validUntil: string | null;
-    };
-  }];
-  'watch-snapshot-saved': [payload: WatchSnapshotSavedPayload];
-}>();
 import {
   buildSceneGraph,
   type SceneGraphBuildOptions,
@@ -873,8 +769,6 @@ import {
   rigidbodyComponentDefinition,
   clampRigidbodyComponentProps,
   RIGIDBODY_COMPONENT_TYPE,
-  RIGIDBODY_METADATA_KEY,
-  type RigidbodyComponentMetadata,
   type RigidbodyComponentProps,
 } from '@harmony/schema/components/definitions/rigidbodyComponent';
 import {
@@ -1099,6 +993,92 @@ import {
   resetMaterialOverrides,
   type MaterialTextureAssignmentOptions,
 } from '@harmony/schema/material';
+import {
+  computePlaySoundDistanceGain,
+  resolvePlaySoundSourcePoint,
+  createIndexedDbPersistentAssetStorage,
+  createNoopPersistentAssetStorage,
+  createWeChatFileSystemPersistentAssetStorage,
+  isIndexedDbPersistentAssetStorageSupported,
+  isWeChatFileSystemPersistentAssetStorageSupported,
+} from '@harmony/schema/core';
+import {
+  createPhysicsBridgeVehicleInputSyncState,
+  resetPhysicsBridgeVehicleInputSyncState,
+  syncPhysicsBridgeVehicleInput,
+} from '@harmony/schema/vehicleInput';
+
+type SceneryProps = {
+  projectId?: string;
+  packageUrl?: string;
+  packageCacheKey?: string;
+  physicsEngine?: PhysicsBackendPreference;
+  createPhysicsBridge?: (engine?: PhysicsBackendPreference) => Promise<PhysicsBridge> | PhysicsBridge;
+  defaultSteerIdentifier?: string;
+  defaultSteerTargetType?: SteerControllableTargetType;
+  controllableAssets?: ExternalControllableAsset[];
+  skins?: ExternalSkin[];
+  multiuserIdentity?: MultiuserIdentity | null;
+  nominateStateMap?: NominateExternalStateMap;
+  physicsInterpolation?: boolean;
+  serverAssetBaseUrl?: string;
+  initialPunchedNodeIds?: string[];
+  runtimePrefabSpawns?: RuntimePrefabSpawnRequest[];
+};
+
+type WatchSnapshotSavedPayload = {
+  fileName: string;
+  platform: 'wechat-mini-program' | 'web';
+  source: 'watch-snapshot';
+  tempFilePath?: string;
+  blob?: Blob | null;
+};
+
+const props = defineProps<SceneryProps>();
+const emit = defineEmits<{
+  loaded: [];
+  error: [message: string];
+  progress: [payload: {
+    bytesLabel: string;
+    loaded: number;
+    total: number;
+    percent: number;
+    phase: string;
+    stageLabel: string;
+    detail: string;
+  }];
+  punch: [payload: {
+    eventName: 'punch';
+    sceneId: string;
+    sceneName: string;
+    clientPunchTime: string;
+    behaviorPunchTime: string;
+    location: {
+      nodeId: string;
+      nodeName: string;
+    };
+  }];
+  coupon: [payload: {
+    eventName: 'coupon';
+    sceneId: string;
+    sceneName: string;
+    clientCouponTime: string;
+    behaviorCouponTime: string;
+    location: {
+      nodeId: string;
+      nodeName: string;
+    };
+    coupon: {
+      id: string;
+      rawJson: string;
+      type: string | null;
+      name: string | null;
+      description: string | null;
+      validUntil: string | null;
+    };
+  }];
+  'watch-snapshot-saved': [payload: WatchSnapshotSavedPayload];
+}>();
 
 type ResolvedAssetUrl = { url: string; mimeType?: string | null; dispose?: () => void }
 
@@ -1441,20 +1421,6 @@ function clearSceneDownloadState(): void {
   sceneDownload.currentLabel = '';
   sceneDownload.indeterminate = false;
 }
-import {
-  computePlaySoundDistanceGain,
-  resolvePlaySoundSourcePoint,
-  createIndexedDbPersistentAssetStorage,
-  createNoopPersistentAssetStorage,
-  createWeChatFileSystemPersistentAssetStorage,
-  isIndexedDbPersistentAssetStorageSupported,
-  isWeChatFileSystemPersistentAssetStorageSupported,
-} from '@harmony/schema/core';
-import {
-  createPhysicsBridgeVehicleInputSyncState,
-  resetPhysicsBridgeVehicleInputSyncState,
-  syncPhysicsBridgeVehicleInput,
-} from '@harmony/schema/vehicleInput';
 
 // Configure multi-source mirrors for asset downloads (优先切源).
 // Note: asset identifiers / cache keys remain the original URLs/assetIds.
@@ -2861,7 +2827,6 @@ const remoteMultiuserPeerRoot = new THREE.Group();
 remoteMultiuserPeerRoot.name = 'RemoteMultiuserPeers';
 const networkSyncNodeEntries = new Map<string, NetworkSyncNodeRuntimeEntry>();
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager();
-const lastCharacterPhysicsDiagnosticSignatureByNodeId = new Map<string, string>();
 const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager();
 const controlledNodeMotionRuntime = createControlledNodeMotionRuntime();
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>();
@@ -3112,7 +3077,6 @@ const characterCameraFollowPlacementCache = {
 };
 const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCameraMotionState();
 const JOYSTICK_INPUT_RADIUS = 64;
-const JOYSTICK_VISUAL_RANGE = 44;
 const JOYSTICK_DEADZONE = 0.15;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
 const CHARACTER_KEYBOARD_RUN_MAGNITUDE = 0.5;
@@ -3517,17 +3481,7 @@ const vehicleDriveIntroVisible = computed(() => (
   && vehicleDriveIntroState.phase === 'hold'
   && vehicleDriveIntroState.elapsedSeconds < vehicleDriveIntroState.holdSeconds
 ));
-const lanternJoystickRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const characterActionsBarRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
-const joystickVector = reactive({ x: 0, y: 0 });
-const joystickOffset = reactive({ x: 0, y: 0 });
-const joystickState = reactive({
-  active: false,
-  pointerId: -1,
-  centerX: 0,
-  centerY: 0,
-  ready: false,
-});
 const DRIVE_PAD_MOUSE_POINTER_ID = -2;
 let drivePadMouseTracking = false;
 let characterDrivePadMouseTracking = false;
@@ -3535,6 +3489,9 @@ const isBrowserEnvironment = typeof window !== 'undefined';
 // Plain (non-reactive) floating pad input. Touch/mouse handlers only mutate
 // these fields; the WebGL overlay visual and the drive inputs are sampled once
 // per render frame, matching the Summer Afternoon controls implementation.
+// This is the single joystick implementation for both the character and the
+// vehicle: the knob is drawn by createJoystickOverlay (a screen-space quad in
+// the Three scene), so there is no DOM joystick element to measure or sync.
 const vehiclePadInput = {
   active: false,
   pointerId: -1,
@@ -3555,12 +3512,6 @@ let vehicleJoystickOverlay: WebglJoystickOverlay | null = null;
 let characterJoystickOverlay: WebglJoystickOverlay | null = null;
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
-const joystickKnobStyle = computed(() => {
-  const scale = joystickState.active ? 0.88 : 1;
-  return {
-    transform: `translate(calc(-50% + ${joystickOffset.x}px), calc(-50% + ${joystickOffset.y}px)) scale(${scale})`,
-  };
-});
 const vehicleDriveResetBusy = ref(false);
 
 type CameraViewMode = 'level' | 'watching';
@@ -3874,7 +3825,6 @@ const vehicleDriveUi = computed(() => {
       visible: false,
       label: '',
       cameraLocked: false,
-      joystickActive: false,
       accelerating: false,
       braking: false,
     } as const;
@@ -3886,7 +3836,6 @@ const vehicleDriveUi = computed(() => {
     visible: true,
     label,
     cameraLocked: active,
-    joystickActive: active && (joystickState.active || vehiclePadInput.active),
     accelerating: active && vehicleDriveInput.throttle > 0.05,
     braking: active && vehicleDriveInputFlags.brake,
   } as const;
@@ -3908,14 +3857,12 @@ const characterControlUi = computed(() => {
     return {
       visible: false,
       label: '',
-      joystickActive: false,
     } as const;
   }
   const node = controlledNodeId ? resolveNodeById(controlledNodeId) : null;
   return {
     visible: true,
     label: node?.name?.trim() || controlledNodeId || 'Character',
-    joystickActive: characterPadInput.active,
   } as const;
 });
 const characterActionButtons = computed<CharacterActionButtonEntry[]>(() => {
@@ -4667,12 +4614,9 @@ const vehicleDriveController = new VehicleDriveController(
 watch(
   () => vehicleDriveUi.value.visible,
   (visible) => {
-    if (visible) {
-      refreshJoystickMetrics();
-    } else {
+    if (!visible) {
       detachDrivePadMouseListeners();
       endVehiclePad();
-      deactivateJoystick(true);
     }
   },
 );
@@ -8025,6 +7969,17 @@ function resolveRemoteMultiuserCharacterState(nodeId: string): RemoteMultiuserCh
   return remoteMultiuserCharacterStatesByNodeId.get(nodeId) ?? null;
 }
 
+const SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT = {
+  moveX: 0,
+  moveZ: 0,
+  turn: 0,
+  jump: false,
+  sprint: false,
+  crouch: false,
+  interact: false,
+  locallyControlled: false,
+} as const;
+
 function resolveSceneryCharacterAnimationInput(nodeId: string): {
   moveX: number;
   moveZ: number;
@@ -8071,16 +8026,7 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
   if (remotePeerState) {
     return resolveRemoteCharacterAnimationInput(nodeId, remotePeerState);
   }
-  return {
-    moveX: 0,
-    moveZ: 0,
-    turn: 0,
-    jump: false,
-    sprint: false,
-    crouch: false,
-    interact: false,
-    locallyControlled: false,
-  };
+  return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT };
 }
 
 function resolveRemoteCharacterAnimationInput(
@@ -8099,87 +8045,28 @@ function resolveRemoteCharacterAnimationInput(
 } {
   const action = remoteState.action ?? inferCharacterActionFromAnimation(remoteState.animation);
   if (!action) {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
+    return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT };
   }
   if (action === 'idle') {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
+    return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT };
   }
   if (action === 'move' || action === 'sprint') {
     return {
-      moveX: 0,
+      ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT,
       moveZ: 1,
-      turn: 0,
-      jump: false,
       sprint: action === 'sprint',
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
     };
   }
   if (action === 'jump') {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: true,
-      sprint: false,
-      crouch: false,
-      interact: false,
-      locallyControlled: false,
-    };
+    return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT, jump: true };
   }
   if (action === 'crouch') {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: true,
-      interact: false,
-      locallyControlled: false,
-    };
+    return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT, crouch: true };
   }
   if (action === 'interact') {
-    return {
-      moveX: 0,
-      moveZ: 0,
-      turn: 0,
-      jump: false,
-      sprint: false,
-      crouch: false,
-      interact: true,
-      locallyControlled: false,
-    };
+    return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT, interact: true };
   }
-  return {
-    moveX: 0,
-    moveZ: 0,
-    turn: 0,
-    jump: false,
-    sprint: false,
-    crouch: false,
-    interact: false,
-    locallyControlled: false,
-  };
+  return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT };
 }
 
 function isCharacterControllerAnimationNode(nodeId: string): boolean {
@@ -9943,7 +9830,6 @@ function clearLegacyPhysicsWorld(): void {
   vehicleDriveResetBusy.value = false;
   resetVehicleDriveInputs();
   vehicleDriveCameraFollowState.initialized = false;
-  deactivateJoystick(true);
   setVehicleDriveUiOverride('hide');
   hiddenVehicleDriveNodeIds.clear();
 }
@@ -9989,7 +9875,6 @@ async function prepareSceneryPhysicsBridgeForDocument(document: SceneJsonExportD
   const environmentSettings = resolveDocumentEnvironment(document);
   applyPhysicsEnvironmentSettings(environmentSettings);
   currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(environmentSettings);
-  // void syncCannonDebugger();
   const physicsRelevant = resolveDocumentPhysicsRelevance(document);
   if (!physicsEnvironmentEnabled.value || !physicsRelevant) {
     // Nothing in this scene needs simulation. Creating the bridge loads the physics
@@ -10442,7 +10327,6 @@ async function loadSceneryPhysicsBridgeScene(
   }
   try {
     currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(resolveDocumentEnvironment(document));
-    // void syncCannonDebugger();
     const requestId = ++physicsBridgeSceneRequestId;
     physicsBridgeSceneReloading = true;
     const asset = await buildPhysicsSceneAsset(document, {
@@ -12304,34 +12188,6 @@ function updateVehicleWheelVisuals(delta: number): void {
       binding.steeringAxis.copy(wheelAxisHelper);
       wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle);
 
-      // 构建滚动四元数：围绕轮轴旋转。
-      // 轮轴优先使用绑定时识别到的 axleAxis；如果退化，再用默认轮轴兜底。
-      // wheelAxisHelper.copy(binding.axleAxis).applyQuaternion(wheelQuaternionHelper);
-      // if (wheelObject.parent) {
-      //   wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper);
-      // }
-      // if (wheelAxisHelper.lengthSq() < 1e-10) {
-      //   wheelAxisHelper.copy(defaultWheelAxisVector);
-      //   wheelAxisHelper.applyQuaternion(wheelQuaternionHelper);
-      //   if (wheelObject.parent) {
-      //     wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper);
-      //   }
-      // }
-      // if (wheelAxisHelper.lengthSq() < 1e-10) {
-      //   wheelAxisHelper.set(1, 0, 0);
-      // } else {
-      //   wheelAxisHelper.normalize();
-      // }
-      // wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert();
-      // wheelAxisHelper.applyQuaternion(wheelBaseQuaternionInverseHelper);
-      // if (wheelAxisHelper.lengthSq() < 1e-10) {
-      //   wheelAxisHelper.set(1, 0, 0);
-      // } else {
-      //   wheelAxisHelper.normalize();
-      // }
-      // binding.spinAxis.copy(wheelAxisHelper);
-      // wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle);
-
       // 合成最终轮子朝向：
       // 1. 先回到模型的基础姿态
       // 2. 再叠加转向
@@ -12340,9 +12196,6 @@ function updateVehicleWheelVisuals(delta: number): void {
       if (steeringAngle !== 0) {
         wheelVisualQuaternionHelper.premultiply(wheelSteeringQuaternionHelper);
       }
-      // if (binding.spinAngle !== 0) {
-      //   wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
-      // }
       wheelObject.quaternion.copy(wheelVisualQuaternionHelper);
 
       if (wheelObject.parent && !updatedWheelParents.has(wheelObject.parent)) {
@@ -12379,6 +12232,118 @@ function collectInstancedTransformTargets(object: THREE.Object3D): THREE.Object3
     targets,
   });
   return targets;
+}
+
+/**
+ * 把实例布局的绑定与矩阵写入目标对象（同步 InstancedMesh 的实例矩阵与包围盒）。
+ *
+ * 该逻辑原本在 `syncInstancedTransformTarget` 与 `syncInstancedTransform` 的
+ * `handleTarget` 中各复制了一份；两处差异只有 `force` 与 onMatrix 的返回值，
+ * 因此在这里合并，由调用方通过参数决定。
+ *
+ * @returns `forEachInstanceWorldMatrix` 的 updatedCount，供调用方决定是否刷新 LOD 缓存。
+ */
+function applyInstanceLayoutBindingsToTarget(params: {
+  target: THREE.Object3D;
+  nodeId: string;
+  layout: ReturnType<typeof clampSceneNodeInstanceLayout>;
+  assetId: string | null;
+  renderKind: 'model' | 'billboard';
+  visible: boolean;
+  group: ReturnType<typeof getCachedModelObject> | null;
+  force: boolean;
+}): number {
+  const { target, nodeId, layout, assetId, renderKind, visible, group, force } = params;
+
+  if (!visible) {
+    target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+    instancedScaleHelper.setScalar(0);
+    instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
+  } else {
+    instancedMatrixHelper.copy(target.matrixWorld);
+    if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
+      applyModelFaceCameraMatrix(renderContext?.camera ?? null, instancedMatrixHelper);
+    }
+  }
+
+  // bounds should represent the whole layout
+  target.userData.instancedBounds = computeInstanceLayoutLocalBoundingBox(
+    layout,
+    renderKind === 'billboard'
+      ? new THREE.Box3(
+        new THREE.Vector3(-(Number(target.userData?.billboardWidth) || 1) * 0.5, 0, -0.01),
+        new THREE.Vector3((Number(target.userData?.billboardWidth) || 1) * 0.5, Number(target.userData?.billboardHeight) || 1, 0.01),
+      )
+      : group!.boundingBox,
+  );
+
+  const result = forEachInstanceWorldMatrix({
+    nodeId,
+    baseMatrixWorld: instancedMatrixHelper,
+    layout,
+    templateBoundingBox: renderKind === 'billboard'
+      ? new THREE.Box3(
+        new THREE.Vector3(-(Number(target.userData?.billboardWidth) || 1) * 0.5, 0, -0.01),
+        new THREE.Vector3((Number(target.userData?.billboardWidth) || 1) * 0.5, Number(target.userData?.billboardHeight) || 1, 0.01),
+      )
+      : group!.boundingBox,
+    cache: {
+      signature: (target.userData.__harmonyInstanceLayoutSignature as string | null) ?? null,
+      locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[]) ?? [],
+    },
+    matrixScratch: instanceLayoutWorldMatrixScratch,
+    onMatrix: (bindingId, worldMatrix) => {
+      const cached = instancedTransformCache.get(bindingId) ?? null;
+      const shouldUpdate =
+        force ||
+        !cached ||
+        cached.visible !== visible ||
+        cached.assetId !== assetId ||
+        !matricesAlmostEqual(cached.elements, worldMatrix.elements);
+
+      if (!shouldUpdate) {
+        return;
+      }
+
+      if (bindingId === nodeId) {
+        if (renderKind === 'billboard') {
+          updateBillboardInstanceMatrix(nodeId, worldMatrix);
+        } else {
+          updateModelInstanceMatrix(nodeId, worldMatrix);
+        }
+      } else {
+        if (renderKind === 'billboard') {
+          updateBillboardInstanceBindingMatrix(bindingId, worldMatrix);
+        } else {
+          updateModelInstanceBindingMatrix(bindingId, worldMatrix);
+        }
+      }
+
+      // Mark any associated InstancedMesh objects as dirty so their bounding spheres
+      // will be recomputed (Three.js doesn't auto-update mesh boundingSphere for instanceMatrix changes).
+      try {
+        const binding = renderKind === 'billboard' ? null : getModelInstanceBinding(bindingId);
+        if (binding) {
+          for (const slot of binding.slots) {
+            addInstancedBoundsMesh(slot.mesh);
+          }
+        }
+      } catch (_error) {
+        // ignore binding lookup errors
+      }
+
+      instancedTransformCache.set(bindingId, {
+        assetId,
+        visible,
+        elements: Array.from(worldMatrix.elements),
+      });
+      return shouldUpdate;
+    },
+  });
+
+  target.userData.__harmonyInstanceLayoutSignature = result.signature;
+  target.userData.__harmonyInstanceLayoutLocals = result.locals;
+  return result.updatedCount;
 }
 
 function syncInstancedTransformTarget(target: THREE.Object3D): void {
@@ -12442,89 +12407,16 @@ function syncInstancedTransformTarget(target: THREE.Object3D): void {
     clearInstancedTransformCacheForNode(nodeId);
   }
 
-  if (!visible) {
-    target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
-    instancedScaleHelper.setScalar(0);
-    instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
-  } else {
-    instancedMatrixHelper.copy(target.matrixWorld);
-    if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
-      applyModelFaceCameraMatrix(renderContext?.camera ?? null, instancedMatrixHelper);
-    }
-  }
-
-  target.userData.instancedBounds = computeInstanceLayoutLocalBoundingBox(
-    layout,
-    renderKind === 'billboard'
-      ? new THREE.Box3(
-        new THREE.Vector3(-(Number(target.userData?.billboardWidth) || 1) * 0.5, 0, -0.01),
-        new THREE.Vector3((Number(target.userData?.billboardWidth) || 1) * 0.5, Number(target.userData?.billboardHeight) || 1, 0.01),
-      )
-      : group!.boundingBox,
-  );
-
-  const result = forEachInstanceWorldMatrix({
+  applyInstanceLayoutBindingsToTarget({
+    target,
     nodeId,
-    baseMatrixWorld: instancedMatrixHelper,
     layout,
-    templateBoundingBox: renderKind === 'billboard'
-      ? new THREE.Box3(
-        new THREE.Vector3(-(Number(target.userData?.billboardWidth) || 1) * 0.5, 0, -0.01),
-        new THREE.Vector3((Number(target.userData?.billboardWidth) || 1) * 0.5, Number(target.userData?.billboardHeight) || 1, 0.01),
-      )
-      : group!.boundingBox,
-    cache: {
-      signature: (target.userData.__harmonyInstanceLayoutSignature as string | null) ?? null,
-      locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[]) ?? [],
-    },
-    matrixScratch: instanceLayoutWorldMatrixScratch,
-    onMatrix: (bindingId, worldMatrix) => {
-      const cached = instancedTransformCache.get(bindingId) ?? null;
-      const shouldUpdate =
-        !cached ||
-        cached.visible !== visible ||
-        cached.assetId !== assetId ||
-        !matricesAlmostEqual(cached.elements, worldMatrix.elements);
-
-      if (!shouldUpdate) {
-        return;
-      }
-
-      if (bindingId === nodeId) {
-        if (renderKind === 'billboard') {
-          updateBillboardInstanceMatrix(nodeId, worldMatrix);
-        } else {
-          updateModelInstanceMatrix(nodeId, worldMatrix);
-        }
-      } else {
-        if (renderKind === 'billboard') {
-          updateBillboardInstanceBindingMatrix(bindingId, worldMatrix);
-        } else {
-          updateModelInstanceBindingMatrix(bindingId, worldMatrix);
-        }
-      }
-
-      try {
-        const binding = renderKind === 'billboard' ? null : getModelInstanceBinding(bindingId);
-        if (binding) {
-          for (const slot of binding.slots) {
-            addInstancedBoundsMesh(slot.mesh);
-          }
-        }
-      } catch (_error) {
-        // ignore binding lookup errors
-      }
-
-      instancedTransformCache.set(bindingId, {
-        assetId,
-        visible,
-        elements: Array.from(worldMatrix.elements),
-      });
-    },
+    assetId,
+    renderKind,
+    visible,
+    group,
+    force: false,
   });
-
-  target.userData.__harmonyInstanceLayoutSignature = result.signature;
-  target.userData.__harmonyInstanceLayoutLocals = result.locals;
 }
 
 /**
@@ -13150,95 +13042,17 @@ function syncInstancedTransform(object: THREE.Object3D | null, force = false, sk
       clearInstancedTransformCacheForNode(nodeId);
     }
 
-    if (!visible) {
-      target.matrixWorld.decompose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
-      instancedScaleHelper.setScalar(0);
-      instancedMatrixHelper.compose(instancedPositionHelper, instancedQuaternionHelper, instancedScaleHelper);
-    } else {
-      instancedMatrixHelper.copy(target.matrixWorld);
-      if (renderKind === 'model' && target.userData?.__harmonyLodFaceCamera === true) {
-        applyModelFaceCameraMatrix(renderContext?.camera ?? null, instancedMatrixHelper);
-      }
-    }
-
-    // bounds should represent the whole layout
-    target.userData.instancedBounds = computeInstanceLayoutLocalBoundingBox(
-      layout,
-      renderKind === 'billboard'
-        ? new THREE.Box3(
-          new THREE.Vector3(-(Number(target.userData?.billboardWidth) || 1) * 0.5, 0, -0.01),
-          new THREE.Vector3((Number(target.userData?.billboardWidth) || 1) * 0.5, Number(target.userData?.billboardHeight) || 1, 0.01),
-        )
-        : group!.boundingBox,
-    );
-
-    const result = forEachInstanceWorldMatrix({
+    const updatedCount = applyInstanceLayoutBindingsToTarget({
+      target,
       nodeId,
-      baseMatrixWorld: instancedMatrixHelper,
       layout,
-      templateBoundingBox: renderKind === 'billboard'
-        ? new THREE.Box3(
-          new THREE.Vector3(-(Number(target.userData?.billboardWidth) || 1) * 0.5, 0, -0.01),
-          new THREE.Vector3((Number(target.userData?.billboardWidth) || 1) * 0.5, Number(target.userData?.billboardHeight) || 1, 0.01),
-        )
-        : group!.boundingBox,
-      cache: {
-        signature: (target.userData.__harmonyInstanceLayoutSignature as string | null) ?? null,
-        locals: (target.userData.__harmonyInstanceLayoutLocals as THREE.Matrix4[]) ?? [],
-      },
-      matrixScratch: instanceLayoutWorldMatrixScratch,
-      onMatrix: (bindingId, worldMatrix) => {
-        const cached = instancedTransformCache.get(bindingId) ?? null;
-        const shouldUpdate =
-          force ||
-          !cached ||
-          cached.visible !== visible ||
-          cached.assetId !== assetId ||
-          !matricesAlmostEqual(cached.elements, worldMatrix.elements);
-
-        if (!shouldUpdate) {
-          return;
-        }
-
-        if (bindingId === nodeId) {
-          if (renderKind === 'billboard') {
-            updateBillboardInstanceMatrix(nodeId, worldMatrix);
-          } else {
-            updateModelInstanceMatrix(nodeId, worldMatrix);
-          }
-        } else {
-          if (renderKind === 'billboard') {
-            updateBillboardInstanceBindingMatrix(bindingId, worldMatrix);
-          } else {
-            updateModelInstanceBindingMatrix(bindingId, worldMatrix);
-          }
-        }
-
-        // Mark any associated InstancedMesh objects as dirty so their bounding spheres
-        // will be recomputed (Three.js doesn't auto-update mesh boundingSphere for instanceMatrix changes).
-        try {
-          const binding = renderKind === 'billboard' ? null : getModelInstanceBinding(bindingId);
-          if (binding) {
-            for (const slot of binding.slots) {
-              addInstancedBoundsMesh(slot.mesh);
-            }
-          }
-        } catch (_error) {
-          // ignore binding lookup errors
-        }
-
-        instancedTransformCache.set(bindingId, {
-          assetId,
-          visible,
-          elements: Array.from(worldMatrix.elements),
-        });
-        return shouldUpdate;
-      },
+      assetId,
+      renderKind,
+      visible,
+      group,
+      force,
     });
-
-    target.userData.__harmonyInstanceLayoutSignature = result.signature;
-    target.userData.__harmonyInstanceLayoutLocals = result.locals;
-    if (result.updatedCount > 0) {
+    if (updatedCount > 0) {
       updateInstancedLodRuntimeEntryCacheForObject(target);
       markInstancedCullingDirty();
     }
@@ -18349,63 +18163,6 @@ function clampAxisScalar(value: number): number {
   return Math.max(-1, Math.min(1, value));
 }
 
-function refreshJoystickMetrics(): void {
-  nextTick(() => {
-    const resolveElement = (
-      value: ComponentPublicInstance | HTMLElement | { rootRef?: unknown } | null,
-    ): HTMLElement | null => {
-      if (!value) {
-        return null;
-      }
-      const exposedRootRef = (value as { rootRef?: unknown }).rootRef;
-      const resolvedValue = (exposedRootRef as { value?: unknown } | undefined)?.value
-        ?? exposedRootRef
-        ?? value;
-      if (typeof (resolvedValue as HTMLElement).getBoundingClientRect === 'function') {
-        return resolvedValue as HTMLElement;
-      }
-      const maybeEl = (resolvedValue as { $el?: unknown }).$el;
-      if (maybeEl && typeof (maybeEl as HTMLElement).getBoundingClientRect === 'function') {
-        return maybeEl as HTMLElement;
-      }
-      return null;
-    };
-
-    const preferredElement = resolveElement(lanternJoystickRef.value);
-
-    if (preferredElement) {
-      const rect = preferredElement.getBoundingClientRect();
-      joystickState.centerX = rect.left + rect.width / 2;
-      joystickState.centerY = rect.top + rect.height / 2;
-      joystickState.ready = rect.width > 0 && rect.height > 0;
-      return;
-    }
-
-    const query = uni.createSelectorQuery();
-    if (typeof query.in === 'function') {
-      query.in((pageInstance?.proxy as unknown) ?? null);
-    }
-
-    query
-      .select('.viewer-drive-joystick')
-      .boundingClientRect((rect: unknown) => {
-        const item = rect as UniApp.NodeInfo | null;
-        const left = item?.left ?? 0;
-        const top = item?.top ?? 0;
-        const width = item?.width ?? 0;
-        const height = item?.height ?? 0;
-        if (width > 0 && height > 0) {
-          joystickState.centerX = left + width / 2;
-          joystickState.centerY = top + height / 2;
-          joystickState.ready = true;
-          return;
-        }
-        joystickState.ready = false;
-      })
-      .exec();
-  });
-}
-
 function getTouchCoordinates(touch: Touch | null): { x: number; y: number } | null {
   if (!touch) {
     return null;
@@ -18418,32 +18175,7 @@ function getTouchCoordinates(touch: Touch | null): { x: number; y: number } | nu
   return { x: clientX, y: clientY };
 }
 
-function setJoystickVector(x: number, y: number): void {
-  let nextX = clampAxisScalar(x);
-  let nextY = clampAxisScalar(y);
-  const length = Math.hypot(nextX, nextY);
-  if (length > 1) {
-    const scale = 1 / length;
-    nextX *= scale;
-    nextY *= scale;
-  }
-  joystickVector.x = nextX;
-  joystickVector.y = nextY;
-  joystickOffset.x = joystickVector.x * JOYSTICK_VISUAL_RANGE;
-  joystickOffset.y = -joystickVector.y * JOYSTICK_VISUAL_RANGE;
-  recomputeVehicleDriveInputs();
-}
-
-function deactivateJoystick(reset: boolean): void {
-  joystickState.active = false;
-  joystickState.pointerId = -1;
-  joystickState.ready = false;
-  if (reset) {
-    setJoystickVector(0, 0);
-  }
-}
-
-function resolveJoystickDriveInput(x: number = joystickVector.x, y: number = joystickVector.y): { throttle: number; steering: number } {
+function resolveJoystickDriveInput(x: number, y: number): { throttle: number; steering: number } {
   const length = Math.hypot(x, y);
   if (length <= JOYSTICK_DEADZONE) {
     return { throttle: 0, steering: 0 };
@@ -18774,29 +18506,6 @@ function handleWindowKeyUp(event: KeyboardEvent): void {
     return;
   }
   setCharacterKeyState(event.key, false);
-}
-
-function applyJoystickFromPoint(x: number, y: number): void {
-  if (!joystickState.ready) {
-    joystickState.centerX = x;
-    joystickState.centerY = y;
-    joystickState.ready = true;
-    refreshJoystickMetrics();
-  }
-  const dx = x - joystickState.centerX;
-  const dy = y - joystickState.centerY;
-  if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-    return;
-  }
-  const normalizedX = clampAxisScalar(dx / JOYSTICK_INPUT_RADIUS);
-  const normalizedY = clampAxisScalar(-dy / JOYSTICK_INPUT_RADIUS);
-  let length = Math.hypot(normalizedX, normalizedY);
-  if (length > 1) {
-    const inv = 1 / length;
-    setJoystickVector(normalizedX * inv, normalizedY * inv);
-    return;
-  }
-  setJoystickVector(normalizedX, normalizedY);
 }
 
 function approachAxisValue(current: number, target: number, rate: number, delta: number): number {
@@ -19321,54 +19030,10 @@ function handleCharacterDrivePadMouseUp(): void {
   detachCharacterDrivePadMouseListeners();
 }
 
-function handleJoystickTouchStart(event: TouchEvent): void {
-  if (!vehicleDriveActive.value) {
-    return;
-  }
-  const touch = event.changedTouches?.[0] ?? null;
-  if (!touch) {
-    return;
-  }
-  if (!joystickState.ready) {
-    refreshJoystickMetrics();
-  }
-  const coords = getTouchCoordinates(touch);
-  if (!coords) {
-    return;
-  }
-  joystickState.pointerId = touch.identifier;
-  joystickState.active = true;
-  cancelVehicleSmoothStop();
-  applyJoystickFromPoint(coords.x, coords.y);
-}
-
-function handleJoystickTouchMove(event: TouchEvent): void {
-  if (!joystickState.active || joystickState.pointerId === -1) {
-    return;
-  }
-  const touch = extractTouchById(event, joystickState.pointerId);
-  if (!touch) {
-    return;
-  }
-  const coords = getTouchCoordinates(touch);
-  if (!coords) {
-    return;
-  }
-  applyJoystickFromPoint(coords.x, coords.y);
-}
-
-function handleJoystickTouchEnd(event: TouchEvent): void {
-  if (joystickState.pointerId === -1) {
-    return;
-  }
-  const touch = extractTouchById(event, joystickState.pointerId);
-  if (!touch && event.type !== 'touchcancel') {
-    return;
-  }
-  deactivateJoystick(true);
-}
-
-function recomputeVehicleDriveInputs(x?: number, y?: number): void {
+function recomputeVehicleDriveInputs(
+  x: number = vehiclePadInput.rawX,
+  y: number = vehiclePadInput.rawY,
+): void {
   const joystickInput = resolveJoystickDriveInput(x, y);
   const throttleFromJoystick = clampAxisScalar(joystickInput.throttle);
   const steeringFromJoystick = clampAxisScalar(joystickInput.steering);
@@ -19385,7 +19050,6 @@ function recomputeVehicleDriveInputs(x?: number, y?: number): void {
 function resetVehicleDriveInputs(): void {
   steeringKeyboardTarget.value = 0;
   endVehiclePad();
-  deactivateJoystick(true);
   vehicleDriveController.resetInputs();
 }
 
@@ -23811,7 +23475,6 @@ function applyResolvedSceneInput(input: ResolvedSceneInput): void {
     currentDocument ? resolveDocumentEnvironment(currentDocument) : activeEnvironmentSettings,
   );
   currentPhysicsBridgePreference = requestedPhysicsPreference;
-  // void syncCannonDebugger();
 
   configurePhysicsInterpolation(input.physinterp);
   error.value = null;
@@ -23981,44 +23644,6 @@ onUnmounted(() => {
 
 </script>
 
-<style scoped>
-.viewer-drive-start__group > .viewer-drive-start__btn { margin-right: 8px; }
-.viewer-drive-start__btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  height: 48px;
-  padding: 0 14px;
-  border-radius: 14px;
-  border: 1px solid rgba(255,255,255,0.06);
-  background: rgba(6,10,24,0.65);
-  color: #fff;
-  font-size: 15px;
-  line-height: 48px;
-}
-.viewer-drive-start__btn__icon {
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 10px;
-  background: rgba(255,255,255,0.04);
-  font-size: 18px;
-}
-.viewer-drive-start__btn__label { display: inline-block; vertical-align: middle; font-size: 15px; color: inherit; transition: opacity .12s ease; }
-.viewer-drive-start__btn--primary { background: linear-gradient(90deg,#28c3ff,#57a6ff); color: #012; border: none; }
-.viewer-drive-start__btn--pause { background: linear-gradient(90deg,#ffd34d,#ff9a4d); color: #111; border: none; }
-.viewer-drive-start__btn--close { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.08); }
-.viewer-drive-start__btn.is-busy .viewer-drive-start__btn__label { opacity: 0.6; }
-
-/* Small adjustments for very small screens */
-@media (max-width: 320px) {
-  .viewer-drive-start__btn { height: 44px; padding: 0 10px; border-radius: 12px; }
-  .viewer-drive-start__btn__icon { width: 32px; height: 32px; }
-}
-</style>
-
 <style lang="scss">
 :root {
   --viewer-safe-area-top: 0px;
@@ -24043,22 +23668,7 @@ onUnmounted(() => {
   background-color: #f5f5f5;
 }
 
-.viewer-header {
-  display: flex;
-  align-items: center;
-  padding: 12px 16px;
-  background-color: #ffffff;
-  gap: 12px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-  z-index: 10;
-}
-
 .back-button,
-.reload-button {
-  padding: 6px 12px;
-  border-radius: 16px;
-  border: none;
-}
 
 .viewer-overlay__content {
   display: flex;
@@ -24071,16 +23681,6 @@ onUnmounted(() => {
   line-height: 1.4;
   background-color: #1f7aec;
   color: #ffffff;
-}
-
-.reload-button[disabled] {
-  opacity: 0.5;
-}
-
-.header-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
 }
 
 .scene-name {
@@ -24325,7 +23925,6 @@ onUnmounted(() => {
   font-size: 22rpx;
   font-weight: 700;
   letter-spacing: 0.3rpx;
-  color: #ffffff;
   white-space: nowrap;
   color: #28506f;
 }
@@ -24350,46 +23949,6 @@ onUnmounted(() => {
     padding: 5rpx 12rpx;
     font-size: 20rpx;
   }
-}
-
-.viewer-signboard__name {
-  display: inline-block;
-  max-width: 360rpx;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 24rpx;
-  font-weight: 700;
-  letter-spacing: 0.4rpx;
-  white-space: nowrap;
-}
-
-.viewer-signboard__distance {
-  display: inline-block;
-  padding-left: 14rpx;
-  border-left: 1px solid rgba(107, 152, 198, 0.18);
-  font-size: 21rpx;
-  color: rgba(21, 50, 79, 0.72);
-  white-space: nowrap;
-}
-
-.viewer-signboard__punch-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28rpx;
-  height: 28rpx;
-  padding: 0 8rpx;
-  margin-left: 4rpx;
-  border-radius: 999rpx;
-  border: 1px solid rgba(115, 231, 170, 0.24);
-  background: rgba(242, 255, 248, 0.9);
-  color: #2f8f67;
-}
-
-.viewer-signboard__punch-badge-icon {
-  font-size: 18rpx;
-  font-weight: 700;
-  line-height: 1;
 }
 
 .viewer-punch-badge-layer {
@@ -24528,7 +24087,6 @@ onUnmounted(() => {
   transition: box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
-
 .viewer-info-board::after {
   content: '';
   position: absolute;
@@ -24591,16 +24149,6 @@ onUnmounted(() => {
   padding: 0;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-@keyframes viewer-info-board-float {
-  0% {
-    transform: translate3d(0, 0, 0) rotate(-0.15deg);
-  }
-
-  100% {
-    transform: translate3d(0, -2px, 0) rotate(0.15deg);
-  }
 }
 
 .viewer-info-board__loading {
@@ -24757,156 +24305,6 @@ onUnmounted(() => {
   display: block;
   white-space: normal;
   word-break: break-word;
-}
-
-.viewer-debug-actions {
-  display: flex;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-.viewer-debug-button {
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(14, 22, 42, 0.88);
-  color: rgba(245, 250, 255, 0.95);
-  font-size: 11px;
-  line-height: 1;
-}
-
-.viewer-debug-button__label {
-  display: inline-block;
-}
-
-.viewer-debug-shadow {
-  margin-top: 8px;
-}
-
-.viewer-debug-input {
-  display: inline-block;
-  width: 74px;
-  padding: 2px 6px;
-  margin: 0 4px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.18);
-  color: rgba(245, 250, 255, 0.92);
-  font-size: 12px;
-}
-
-.viewer-log-overlay {
-  position: relative;
-  width: 100%;
-  max-width: none;
-  max-height: min(56vh, 960rpx);
-  padding: 10px 12px;
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(244, 249, 255, 0.78)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(210, 232, 255, 0.08));
-  border: 1px solid rgba(153, 193, 255, 0.2);
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  pointer-events: none;
-  color: #15324f;
-  box-shadow: 0 16px 34px rgba(52, 87, 128, 0.14), 0 4px 10px rgba(83, 126, 173, 0.06);
-  backdrop-filter: blur(16px) saturate(1.06);
-}
-
-.viewer-log-floating {
-  position: fixed;
-  left: 12px;
-  right: 12px;
-  bottom: calc(12px + var(--viewer-safe-area-bottom, 0px));
-  z-index: 2300;
-  width: auto;
-}
-
-.viewer-log-overlay__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.viewer-log-overlay__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.viewer-log-overlay__action {
-  color: #28506f;
-  font-size: 11px;
-  line-height: 1;
-  padding: 4px 6px;
-  border-radius: 8px;
-  border: 1px solid rgba(144, 189, 255, 0.18);
-  background: rgba(255, 255, 255, 0.8);
-}
-
-.viewer-log-fab {
-  pointer-events: auto;
-  margin-left: auto;
-  min-width: 104rpx;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(134, 176, 255, 0.2);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(235, 244, 255, 0.88));
-  box-shadow: 0 8px 22px rgba(52, 87, 128, 0.14);
-}
-
-.viewer-log-fab__text {
-  color: #28506f;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.viewer-log-overlay__title {
-  display: block;
-  color: #12314d;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-}
-
-.viewer-log-overlay__list {
-  flex: 1;
-  height: min(40vh, 680rpx);
-  min-height: 220rpx;
-  max-height: min(40vh, 680rpx);
-  pointer-events: auto;
-}
-
-.viewer-log-overlay__empty {
-  display: block;
-  color: rgba(21, 50, 79, 0.62);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.viewer-log-overlay__item {
-  display: block;
-  color: rgba(21, 50, 79, 0.78);
-  font-size: 11px;
-  line-height: 1.42;
-  margin-bottom: 4px;
-  word-break: break-all;
-}
-
-.viewer-log-overlay__item.is-info {
-  color: #335f87;
-}
-
-.viewer-log-overlay__item.is-warn {
-  color: #8e6a18;
-}
-
-.viewer-log-overlay__item.is-error {
-  color: #b4444a;
 }
 
 .viewer-canvas {
@@ -25689,181 +25087,6 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.viewer-lantern-text {
-  max-height: 32vh;
-  padding-right: 4px;
-  flex: 1 1 auto;
-}
-
-.viewer-lantern-text text {
-  display: block;
-  font-size: 14px;
-  line-height: 1.5;
-  opacity: 0.92;
-}
-
-.viewer-lantern-indicator {
-  display: flex;
-  justify-content: center;
-  padding-top: 2px;
-}
-
-.viewer-lantern-counter {
-  font-size: 12px;
-  opacity: 0.72;
-  letter-spacing: 0.5px;
-}
-
-.viewer-drive-start {
-  position: absolute;
-  /* place start controls at bottom center and horizontal */
-  left: 50%;
-  right: auto;
-  bottom: calc(16px + var(--viewer-safe-area-bottom, 0px));
-  transform: translateX(-50%);
-  z-index: 1540;
-  transition: transform 220ms cubic-bezier(.2,.9,.2,1), left 220ms ease;
-}
-
-.viewer-drive-start__button {
-  width: 124px;
-  height: 124px;
-  border-radius: 50%;
-  border: none;
-  outline: none;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background:
-    radial-gradient(circle at 30% 28%, rgba(120, 208, 255, 0.18), transparent 34%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 249, 255, 0.76));
-  border: 1px solid rgba(153, 193, 255, 0.22);
-  box-shadow:
-    0 24px 40px rgba(52, 87, 128, 0.16),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
-  position: relative;
-  overflow: visible;
-  backdrop-filter: blur(16px) saturate(1.06);
-}
-
-.viewer-drive-start__button:disabled {
-  opacity: 0.92;
-}
-
-.viewer-drive-start__button.is-busy {
-  box-shadow:
-    0 18px 32px rgba(52, 87, 128, 0.14),
-    inset 0 0 0 1px rgba(214, 195, 255, 0.38);
-}
-
-.viewer-drive-start__glow {
-  position: absolute;
-  inset: -40%;
-  background:
-    radial-gradient(circle at 40% 40%, rgba(120, 210, 255, 0.55), transparent 70%),
-    radial-gradient(circle at 70% 70%, rgba(255, 120, 200, 0.4), transparent 80%);
-  filter: blur(18px);
-  animation: viewer-drive-icon-glow 3.2s ease-in-out infinite;
-}
-
-.viewer-drive-start__icon {
-  width: 90px;
-  height: 90px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: rgba(236, 244, 255, 0.96);
-  filter:
-    drop-shadow(0 0 12px rgba(120, 190, 255, 0.8))
-    drop-shadow(0 8px 18px rgba(0, 6, 16, 0.6));
-  animation: viewer-drive-icon-flicker 2.4s ease-in-out infinite;
-  z-index: 1;
-}
-
-.viewer-drive-start__icon-text {
-  font-size: 64px;
-  line-height: 1;
-}
-
-.viewer-drive-start__sparkline {
-  position: absolute;
-  width: 112px;
-  height: 112px;
-  border-radius: 50%;
-  background: conic-gradient(from 0deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.4), rgba(255, 255, 255, 0.05));
-  opacity: 0.6;
-  animation: viewer-drive-icon-spark 2s linear infinite;
-  filter: blur(1px);
-  z-index: 0;
-}
-
-.viewer-drive-start__busy {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: rgba(6, 10, 24, 0.45);
-}
-
-.viewer-drive-start__busy-dot {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 3px solid rgba(214, 228, 255, 0.85);
-  border-top-color: transparent;
-  animation: viewer-drive-busy-spin 0.9s linear infinite;
-}
-
-.viewer-drive-cluster {
-  position: absolute;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  pointer-events: auto;
-}
-
-.viewer-drive-cluster--joystick {
-  right: 16px;
-  left: auto;
-  bottom: 16px;
-  align-items: center;
-}
-
-.viewer-drive-joystick {
-  width: 120px;
-  height: 120px;
-  border-radius: 50%;
-  position: relative;
-  pointer-events: auto;
-  transition: transform 0.18s ease;
-}
-
-.viewer-drive-joystick.is-active {
-  transform: scale(0.97);
-}
-
-.viewer-drive-cluster--throttle {
-  right: 16px;
-  bottom: 16px;
-  left: auto;
-  align-items: flex-end;
-  gap: 14px;
-}
-
-.viewer-drive-cluster--actions {
-  right: 16px;
-  left: auto;
-  top: calc(30% + var(--viewer-safe-area-top, 0px));
-  transform: translateY(-50%);
-  align-items: flex-end;
-  flex-direction: column;
-  gap: 12px;
-}
-
 .viewer-character-console {
   position: absolute;
   inset: 0;
@@ -25952,12 +25175,6 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-.viewer-drive-icon-button--danger {
-  background: linear-gradient(180deg, rgba(255, 244, 246, 0.96), rgba(255, 232, 236, 0.88));
-  border-color: rgba(255, 143, 167, 0.25);
-  color: #9e2d49;
-}
-
 .viewer-drive-icon-button.is-busy,
 .viewer-drive-icon-button:disabled {
   opacity: 0.7;
@@ -26006,83 +25223,10 @@ onUnmounted(() => {
 }
 
 /* Text-style start buttons (drive / auto-tour) */
-.viewer-drive-start__text-button {
-  position: relative;
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(235, 244, 255, 0.84));
-  color: #28506f;
-  border: 1px solid rgba(107, 152, 198, 0.18);
-  box-shadow: 0 10px 22px rgba(72, 114, 158, 0.12);
-  backdrop-filter: blur(16px) saturate(1.06);
-  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease, background-color 160ms ease;
-}
-.viewer-drive-start__text-button:active {
-  transform: translateY(1px) scale(0.985);
-}
-.viewer-drive-start__text-button:hover::after {
-  content: attr(aria-label);
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: calc(100% + 8px);
-  background: rgba(255, 255, 255, 0.94);
-  color: #28506f;
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  white-space: nowrap;
-  box-shadow: 0 8px 20px rgba(52, 87, 128, 0.14);
-  pointer-events: none;
-}
-
-.viewer-drive-start__text-button--stop {
-  background: linear-gradient(180deg, rgba(255, 244, 246, 0.96), rgba(255, 232, 236, 0.88));
-  border-color: rgba(255, 143, 167, 0.25);
-  color: #9e2d49;
-}
 
 /* group layout: arrange start buttons horizontally and center */
-.viewer-drive-start__group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: center;
-  justify-content: center;
-  pointer-events: auto;
-}
 
 /* Prompt panel wrapper */
-.viewer-drive-start__panel {
-  padding: 10px 12px;
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(244, 249, 255, 0.78)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(210, 232, 255, 0.08));
-  border: 1px solid rgba(153, 193, 255, 0.2);
-  box-shadow: 0 16px 34px rgba(52, 87, 128, 0.14), 0 4px 10px rgba(83, 126, 173, 0.06);
-  backdrop-filter: blur(16px) saturate(1.06);
-}
-
-.viewer-drive-start__text-button--close {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(237, 245, 255, 0.7));
-  border: 1px solid rgba(107, 152, 198, 0.18);
-  color: #28506f;
-  padding: 8px 12px;
-  border-radius: 10px;
-  box-shadow: 0 8px 18px rgba(72, 114, 158, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(16px) saturate(1.06);
-}
-
-.viewer-drive-speed-floating {
-  position: absolute;
-  left: 24px;
-  bottom: 190px;
-  z-index: 1580;
-  display: flex;
-  align-items: center;
-  pointer-events: none;
-}
 
 .viewer-drive-speed-left-floating {
   position: absolute;
@@ -26104,12 +25248,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   pointer-events: none;
-}
-
-.viewer-drive-hud {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .viewer-drive-compass {
@@ -26187,7 +25325,6 @@ onUnmounted(() => {
   z-index: 2;
 }
 
-
 .viewer-drive-compass__pointer::before {
   content: '';
   position: absolute;
@@ -26200,7 +25337,6 @@ onUnmounted(() => {
   box-shadow: 0 0 16px rgba(84, 170, 255, 0.24);
   transform: translateX(-50%);
 }
-
 
 .viewer-drive-compass__pointer::after {
   content: '';
@@ -26216,35 +25352,6 @@ onUnmounted(() => {
   transform: translateX(-50%);
 }
 
-.viewer-drive-brake {
-  position: absolute;
-  right: 16px;
-  bottom: 18px;
-  z-index: 1550;
-  pointer-events: auto;
-}
-
-.viewer-drive-brake-button {
-  width: 94px;
-  height: 94px;
-  border-radius: 999px;
-  border: none;
-  outline: none;
-  background: linear-gradient(135deg, #ff6f7b, #c81e46);
-  color: #fff;
-  font-size: 16px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  box-shadow: 0 18px 36px rgba(200, 30, 70, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.viewer-drive-brake-button.is-active {
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
-}
-
 .viewer-drive-icon {
   width: 24px;
   height: 24px;
@@ -26258,129 +25365,6 @@ onUnmounted(() => {
 .viewer-drive-icon-text {
   font-size: 20px;
   line-height: 1;
-}
-
-.viewer-drive-pedal-button {
-  width: 68px;
-  height: 68px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  border-radius: 22px;
-  border: 2px solid rgba(153, 193, 255, 0.22);
-  color: #15324f;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 249, 255, 0.76)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.12), rgba(210, 232, 255, 0.08));
-  box-shadow: 0 12px 22px rgba(52, 87, 128, 0.14);
-  backdrop-filter: blur(16px) saturate(1.06);
-  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
-}
-
-.viewer-drive-pedal-button--forward {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 249, 255, 0.82)),
-    linear-gradient(135deg, rgba(94, 161, 255, 0.14), rgba(255, 255, 255, 0.06));
-  border-color: rgba(94, 161, 255, 0.24);
-}
-
-.viewer-drive-pedal-button--brake {
-  background:
-    linear-gradient(180deg, rgba(255, 244, 246, 0.96), rgba(255, 232, 236, 0.88)),
-    linear-gradient(135deg, rgba(255, 112, 130, 0.12), rgba(255, 255, 255, 0.05));
-  border-color: rgba(255, 150, 160, 0.24);
-}
-
-.viewer-drive-pedal-button.is-active {
-  transform: scale(0.92);
-  box-shadow: 0 6px 16px rgba(52, 87, 128, 0.14);
-}
-
-.viewer-drive-pedal-button--forward.is-active {
-  border-color: rgba(94, 161, 255, 0.3);
-}
-
-.viewer-drive-pedal-button--brake.is-active {
-  border-color: rgba(255, 150, 160, 0.3);
-}
-
-.viewer-drive-pedal-icon {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.92;
-  transition: transform 0.16s ease, opacity 0.16s ease;
-}
-
-.viewer-drive-pedal-icon-text {
-  font-size: 24px;
-  line-height: 1;
-  color: currentColor;
-}
-
-.viewer-drive-pedal-button.is-active .viewer-drive-pedal-icon {
-  transform: scale(1.1);
-  opacity: 1;
-}
-
-@keyframes viewer-drive-icon-glow {
-  0% {
-    opacity: 0.6;
-    transform: scale(0.92);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.06);
-  }
-  100% {
-    opacity: 0.6;
-    transform: scale(0.92);
-  }
-}
-
-@keyframes viewer-drive-icon-spark {
-  0% {
-    transform: rotate(0deg) scale(0.95);
-  }
-  50% {
-    transform: rotate(180deg) scale(1.05);
-  }
-  100% {
-    transform: rotate(360deg) scale(0.95);
-  }
-}
-
-@keyframes viewer-drive-icon-flicker {
-  0% {
-    opacity: 0.85;
-    filter:
-      drop-shadow(0 0 10px rgba(120, 190, 255, 0.55))
-      drop-shadow(0 8px 18px rgba(0, 6, 16, 0.45));
-  }
-  60% {
-    opacity: 1;
-    filter:
-      drop-shadow(0 0 18px rgba(180, 220, 255, 0.95))
-      drop-shadow(0 10px 22px rgba(0, 6, 16, 0.65));
-  }
-  100% {
-    opacity: 0.9;
-    filter:
-      drop-shadow(0 0 12px rgba(140, 200, 255, 0.7))
-      drop-shadow(0 8px 18px rgba(0, 6, 16, 0.5));
-  }
-}
-
-@keyframes viewer-drive-busy-spin {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
 }
 
 .viewer-purpose-controls {
@@ -26471,7 +25455,6 @@ onUnmounted(() => {
   width: 100%;
   padding: 0;
   margin: 0;
-  border: none;
   border-radius: 999px;
   background:
     linear-gradient(90deg, rgba(18, 23, 32, 0.82) 0%, rgba(18, 23, 32, 0.7) 50%, rgba(18, 23, 32, 0.32) 78%, rgba(18, 23, 32, 0) 100%),
@@ -26555,50 +25538,6 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.viewer-purpose-chip__subtitle {
-  font-size: 10px;
-  line-height: 1.3;
-  opacity: 0.62;
-  letter-spacing: 0.5px;
-  color: rgba(233, 240, 248, 0.68);
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__content {
-  background: transparent;
-  box-shadow: none;
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__halo {
-  background: linear-gradient(125deg, rgba(255, 255, 255, 0.14), rgba(120, 208, 255, 0.08), rgba(14, 35, 78, 0));
-  animation: viewer-purpose-watch-halo 7s linear infinite;
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__title {
-  text-shadow: none;
-}
-
-.viewer-purpose-chip--watch .viewer-purpose-chip__subtitle {
-  color: rgba(233, 240, 248, 0.7);
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__content {
-  background: transparent;
-  box-shadow: none;
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__halo {
-  background: linear-gradient(140deg, rgba(255, 255, 255, 0.14), rgba(115, 231, 170, 0.08), rgba(5, 18, 36, 0));
-  animation: viewer-purpose-level-halo 5s ease-in-out infinite;
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__title {
-  text-shadow: none;
-}
-
-.viewer-purpose-chip--level .viewer-purpose-chip__subtitle {
-  color: rgba(233, 240, 248, 0.7);
-}
-
 .viewer-purpose-chip.is-active {
   transform: none;
   opacity: 1;
@@ -26633,35 +25572,8 @@ onUnmounted(() => {
   filter: saturate(1.15);
 }
 
-.viewer-purpose-chip.is-active .viewer-purpose-chip__subtitle {
-  opacity: 0.98;
-}
-
 .viewer-purpose-chip:active {
   transform: scale(0.97);
-}
-
-@keyframes viewer-purpose-watch-halo {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  50% {
-    transform: rotate(180deg) scale(1.05);
-  }
-  100% {
-    transform: rotate(360deg) scale(1);
-  }
-}
-
-@keyframes viewer-purpose-level-halo {
-  0%, 100% {
-    opacity: 0.45;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.9;
-    transform: scale(1.08);
-  }
 }
 
 @keyframes viewer-purpose-active-glow {
@@ -26679,57 +25591,4 @@ onUnmounted(() => {
   }
 }
 
-/* Drive start buttons: make widths consistent and mobile-friendly */
-.viewer-drive-start__panel {
-  padding: 10px 16px;
-  /* Remove any background/frame coming from global styles */
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(244, 249, 255, 0.78)) !important;
-  box-shadow: 0 16px 34px rgba(52, 87, 128, 0.14) !important;
-  border: 1px solid rgba(153, 193, 255, 0.2) !important;
-  backdrop-filter: blur(16px) saturate(1.06) !important;
-}
-.viewer-drive-start__group {
-  display: flex;
-  flex-direction: row;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: nowrap; /* keep buttons on one row */
-  -webkit-overflow-scrolling: touch;
-}
-.viewer-drive-start__btn {
-  /* auto-size to content with sensible limits; wrap when needed */
-  flex: 0 1 auto;
-  min-width: 84px;
-  max-width: 320px;
-  height: 52px;
-  padding: 0 18px;
-  border-radius: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-  font-size: 16px;
-  font-weight: 600;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(235, 244, 255, 0.88));
-  color: #28506f;
-  border: 1px solid rgba(107, 152, 198, 0.18);
-  box-shadow: 0 8px 18px rgba(72, 114, 158, 0.12);
-}
-.viewer-drive-start__btn__label {
-  display: block;
-  width: 100%;
-  text-align: center;
-}
-.viewer-drive-start__btn--primary {
-  background: linear-gradient(180deg, rgba(102, 178, 255, 0.96), rgba(71, 149, 255, 0.9));
-  color: #fff;
-}
-.viewer-drive-start__btn--close {
-  background: rgba(255, 255, 255, 0.82);
-  color: #28506f;
-}
-.viewer-drive-start__btn.is-busy .viewer-drive-start__btn__label,
-.viewer-drive-start__btn.is-busy {
-  opacity: 0.84;
-}
 </style>
