@@ -11,6 +11,11 @@ import type { TreePlacement } from './chunkPlan'
  * 相机附近的树用真实网格渲染（2 物种 × 4 变体 = 8 个模型，UV 直接采样当季
  * trees_0 / trees_1 图集的对应列），远处交给树卡与 imposters。模型来自在线资产包
  * 的 `.treebin`（Float32 pos/normal/uv + Uint16/32 index），避免携带 OBJLoader。
+ *
+ * 尺寸契约：传入 placements 的 `scale` 是树木世界高度（米），与 runtime 的
+ * `TreePlacement.scale` 一致；网格几何会先按 `TREE_UNIT_SIZE`(8m) 基准归一化，
+ * 再按 `scale / TREE_UNIT_SIZE` 换算，最终世界高度 = `scale` 米（与树卡层同尺寸，
+ * 不再沿用 slowroads-lab 的“8m 倍率”输入语义）。
  */
 
 interface ParsedTreeModel {
@@ -117,6 +122,7 @@ export interface TreeMeshSeasonState {
 
 export interface TreeMeshManager {
   readonly container: THREE.Group
+  /** placements[*].scale = 树木世界高度（米）。 */
   update(cameraPosition: THREE.Vector3, placements: ReadonlyArray<TreePlacement>, radius: number, force?: boolean): void
   setSeason(state: TreeMeshSeasonState): void
   setVisible(visible: boolean): void
@@ -253,7 +259,9 @@ vPlUv = uv;
         positionHelper.set(tree.x, tree.y, tree.z)
         eulerHelper.set(0, tree.rotation, 0)
         quaternionHelper.setFromEuler(eulerHelper)
-        const scale = model.unitScale * tree.scale
+        // tree.scale 是树木世界高度（米）；unitScale 已把几何归一到 TREE_UNIT_SIZE(8m)
+        // 基准，所以先除以基准得到“慢路倍率”，世界高度 = maxY × unitScale × (scale / 8) = scale 米。
+        const scale = model.unitScale * (tree.scale / TREE_UNIT_SIZE)
         scaleHelper.set(scale, scale, scale)
         matrixHelper.compose(positionHelper, quaternionHelper, scaleHelper)
         if (options.hostInverse) {

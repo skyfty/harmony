@@ -127,7 +127,7 @@ const UV_PARS_FRAGMENT = /* glsl */ `
     }
 `
 
-/** 云层混合体（append 在注入后的 fog_fragment 之后）。 */
+/** 云层混合体（与天空雾体在同一次 `#include <fog_fragment>` 替换中拼接注入）。 */
 const CLOUDS_FRAGMENT_BODY = /* glsl */ `
     {
         float cloudFogBlend = max(((vFogPos.y - cameraPosition.y) * 2.0) / max(0.001, distance(vFogPos, cameraPosition)), 0.0) * vFogBlend;
@@ -233,11 +233,8 @@ export function createSlowroadsClouds(texture: THREE.Texture): SlowroadsCloudsHa
       .replace('#include <uv_pars_fragment>', `#include <uv_pars_fragment>\n${UV_PARS_FRAGMENT}`)
     // 云层与天空同属「雾色背景」：雾体不受 editor 雾预览开关影响，
     // 否则关雾时云层平面会以白色底铺满天空（见 fogInjection 注释）。
-    injectSlowroadsSkyFogFragment(shader)
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <fog_fragment>',
-      `#include <fog_fragment>\n${CLOUDS_FRAGMENT_BODY}`,
-    )
+    // 云体必须与雾体一次替换注入：include 被消费后再 replace 会静默失配。
+    injectSlowroadsSkyFogFragment(shader, CLOUDS_FRAGMENT_BODY)
   }
 
   const mesh = new THREE.Mesh(geometry, material)

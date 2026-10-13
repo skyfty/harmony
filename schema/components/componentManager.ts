@@ -138,6 +138,11 @@ export class ComponentManager {
   private readonly nodeBundles = new Map<string, NodeComponentBundle>()
   private readonly frameState: ComponentFrameState = { cameraWorldPosition: null }
   private readonly frameStateCameraWorldPosition = { x: 0, y: 0, z: 0 }
+  private readonly frameStateEnvironment: NonNullable<ComponentFrameState['environment']> = {
+    season: 'spring',
+    timeOfDay: 'day',
+    weather: 'clear',
+  }
 
   registerDefinition<TProps>(definition: ComponentDefinition<TProps>): void {
     this.definitions.set(definition.type, definition as AnyComponentDefinition)
@@ -177,9 +182,27 @@ export class ComponentManager {
     })
     this.nodeBundles.clear()
     this.frameState.cameraWorldPosition = null
+    this.frameState.environment = null
   }
 
+  /**
+   * 宿主每帧下发共享帧状态（相机世界坐标 + Slow Roads 环境状态）。
+   *
+   * `environment` 会被逐字段拷进内部 scratch 对象再挂到共享帧状态上，避免持有
+   * 宿主复用的临时对象；缺省时置 null（组件自行回退默认季节）。注意这里必须
+   * 与 cameraWorldPosition 一样真正写入 `this.frameState`，否则组件端
+   * `getFrameState().environment` 永远为空，季节/时间/天气不会生效。
+   */
   setFrameState(frameState: Partial<ComponentFrameState> | null | undefined): void {
+    const nextEnvironment = frameState?.environment
+    if (nextEnvironment) {
+      this.frameStateEnvironment.season = nextEnvironment.season
+      this.frameStateEnvironment.timeOfDay = nextEnvironment.timeOfDay
+      this.frameStateEnvironment.weather = nextEnvironment.weather
+      this.frameState.environment = this.frameStateEnvironment
+    } else {
+      this.frameState.environment = null
+    }
     const nextCameraWorldPosition = frameState?.cameraWorldPosition ?? null
     if (!nextCameraWorldPosition) {
       this.frameState.cameraWorldPosition = null

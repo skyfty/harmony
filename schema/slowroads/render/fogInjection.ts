@@ -260,8 +260,12 @@ export function injectSlowroadsFog(shader: PatchedShader): boolean {
  * 片元侧注入（天空/云层专用）：与 injectSlowroadsFogFragment 相同，但雾体
  * 不受 srFogEnabled 影响——天空与云层本身就是「雾色背景」，editor 视口关闭雾
  * 预览时它们仍须保持渐变，否则云层平面会以白色底铺满天空。
+ *
+ * `appendFragmentBody` 用于在同一次替换里把调用方片元体（如云层混合）拼在雾体
+ * 之后：该 include 被替换后即不存在，拆成第二次 replace 会静默失配（云层曾因此
+ * 完全不绘制）。官方同样要求调用方片元体紧跟雾体、共享 main 作用域。
  */
-export function injectSlowroadsSkyFogFragment(shader: PatchedShader): boolean {
+export function injectSlowroadsSkyFogFragment(shader: PatchedShader, appendFragmentBody = ''): boolean {
   let ok = true
   bindSlowroadsFogUniforms(shader.uniforms)
   if (shader.fragmentShader.includes('#include <fog_pars_fragment>')) {
@@ -270,7 +274,10 @@ export function injectSlowroadsSkyFogFragment(shader: PatchedShader): boolean {
     ok = false
   }
   if (shader.fragmentShader.includes('#include <fog_fragment>')) {
-    shader.fragmentShader = shader.fragmentShader.replace('#include <fog_fragment>', SLOWROADS_SKY_FOG_FRAGMENT)
+    const fragmentBody = appendFragmentBody
+      ? `${SLOWROADS_SKY_FOG_FRAGMENT}\n${appendFragmentBody}`
+      : SLOWROADS_SKY_FOG_FRAGMENT
+    shader.fragmentShader = shader.fragmentShader.replace('#include <fog_fragment>', fragmentBody)
   } else {
     ok = false
   }

@@ -15,6 +15,10 @@ export interface TreePlacement {
   z: number
   y: number
   rotation: number
+  /**
+   * 树的世界高度（米）。树卡层按 `scale / TREE_UNIT_SIZE` 换算为 8m 基准倍率，
+   * 近树网格层（treeMeshes）直接按米制渲染（世界高度 = scale），两层同尺寸。
+   */
   scale: number
   /** Deterministic 0..1 value used to pick a texture variant at render time. */
   variant: number
@@ -24,6 +28,12 @@ export interface TreePlacement {
   rank: number
 }
 
+/**
+ * 草丛/灌木放置。
+ *
+ * 注意 `scale` 语义与树不同：这里是对应精灵基准尺寸（草 1.6m / 灌木 2m）的摆放倍率
+ * （对齐 slowroads-lab），世界尺寸 = 基准 × 倍率 × 区域相对高度，不是米。
+ */
 export interface GrassPlacement extends TreePlacement {
   /** Meters to sink below the sampled terrain height (roadside grass). */
   sink: number

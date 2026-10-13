@@ -952,6 +952,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         y: placement.y,
         z: placement.z,
         rotation: placement.rotation,
+        // TreePlacement.scale 是米：换算成 8m 基准倍率交给卡层（与近树网格层同一契约）。
         scale: placement.scale / TREE_UNIT_SIZE,
         region,
         cell: Math.min(3, regionIndex % 4),
@@ -987,6 +988,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     const handle = getFoliageMaterialHandle(spec)
     const entries = kind === 'grass' ? getGrassEntries(season) : getBushEntries(season).filter((item) => item.cell <= 2)
+    // 草丛/灌木的 placement.scale 是 slowroads-lab 语义的摆放倍率（不是米）：
+    // 世界尺寸 = 基准尺寸（草 1.6m / 灌木 2m，见下方 unit）× 倍率 × 区域相对高度。
     const instances: FoliageSpriteInstance[] = placements.map((placement) => {
       const picked = pickCellEntry(entries, placement.variant)
       return {
@@ -994,7 +997,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         y: placement.y,
         z: placement.z,
         rotation: placement.rotation,
-        scale: placement.scale / (kind === 'grass' ? GRASS_UNIT_SIZE : BUSH_UNIT_SIZE),
+        scale: placement.scale,
         region: picked?.region ?? null,
         cell: picked?.cell ?? 0,
         roadProx: 0,
