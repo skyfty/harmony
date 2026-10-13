@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import { clamp } from './noise'
-import type { RoadProfile } from './roadProfile'
+import { clamp } from '../core/noise'
+import type { RoadProfile } from '../core/roadProfile'
 
 /**
  * "Drive along the road" camera: advances along the traced road polyline and

@@ -40,6 +40,9 @@
     "dev:slowroads-lab": "vite --config ./slowroads-lab/vite.config.ts",
     "build:slowroads-lab": "vite build --config ./slowroads-lab/vite.config.ts",
     "type-check:slowroads-lab": "tsc -p ./slowroads-lab/tsconfig.json --noEmit",
+    "assets:slowroads-lab": "node ./slowroads-lab/scripts/materialize-assets.mjs",
+    "assets:serve-slowroads-lab": "node ./slowroads-lab/scripts/serve-asset-bundle.mjs",
+    "regions:slowroads-lab": "py -3.10 ./slowroads-lab/scripts/measure-sprites.py",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepare": "pnpm run build"
   },

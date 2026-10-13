@@ -1,34 +1,34 @@
 import * as THREE from 'three'
-import { fbm2 } from './noise'
-import type { TreeDensityField } from './placement'
+import { SEASON_PARAMS, type SeasonParams } from '../core/seasonParams'
+import type { SeasonId } from '../core/seasonCatalog'
+import type { TreeDensityField } from '../core/placement'
+import { fbm2 } from '../core/noise'
 
 /**
- * slowroads-style terrain surface shading.
+ * slowroads 地表着色（按官方片元栈移植，季节由 uniform 驱动）。
  *
- * 两条路径共用一套几何与光照：
- *  - `uUseTextures = 0`：原始纯色路径（草地亮暗噪声、树冠色斑、碎石路肩、沥青带），
- *    只依赖运行时生成的 fade 噪声图，用于回归对照；
- *  - `uUseTextures = 1`：slowroads 素材路径——草地纤维 + 变化图、林下腐叶、灌丛地被、
- *    碎石路肩、水线沙带、陡坡岩石（凹凸扰法线）、近/远细节与三级噪声打散。
+ * 片元顺序与 slowroads 一致：草色混合（grassColA/B × peakColA/B，由
+ * noise_fine.592be1a0 的 fade 场驱动 light/dark grass 与 grassBlend）→
+ * heather 混合 → 细节贴图（detailFar 远/近混合，冬季 ×0.7）→ 树冠林下
+ * forest 混合 → 沙带（seasonIndex<3）→ 路肩碎石（<3；秋季树下提亮 1.8、
+ * 夏季近处直接铺 roadCol）→ 陡坡岩石（rock + rockBump 凹凸扰法线）。
  *
- * 采样器预算：本材质用到 16 个贴图单元（地表 13 + 运行时 fade/density + 1 张微噪声），
- * 正好压在 WebGL 常见的 16 上限；启动时会打印 `maxTextures`，若设备更低需要裁层。
+ * 采样器预算：完整路径 12 个（fade/density + 10 层地表）；兼容模式
+ * （`TERRAIN_REDUCED` define）去掉 grassVariation/rockBump/detailNear，
+ * 落到 9 个，对应微信小程序低端机的纹理单元上限。
  */
 export interface TerrainTextureSet {
-  grassFiber: THREE.Texture
-  grassVariation: THREE.Texture
+  grass: THREE.Texture
   forest: THREE.Texture
   heather: THREE.Texture
   gravel: THREE.Texture
   rock: THREE.Texture
-  rockBump: THREE.Texture
   sand: THREE.Texture
   detailNear: THREE.Texture
   detailFar: THREE.Texture
-  noiseFineA: THREE.Texture
-  noiseFineB: THREE.Texture
-  noiseFineC: THREE.Texture
-  noiseFiner: THREE.Texture
+  rockBump: THREE.Texture
+  grassVariation: THREE.Texture
+  fadeNoise: THREE.Texture
 }
 
 export interface TerrainMaterialOptions {
@@ -36,8 +36,10 @@ export interface TerrainMaterialOptions {
   worldSize: number
   waterLevel: number
   density: TreeDensityField
-  /** 为 null 时自动退回纯色路径。 */
-  textures?: TerrainTextureSet | null
+  textures: TerrainTextureSet
+  season: SeasonId
+  /** 兼容模式：缩减采样器与细节层，供小程序低配验证。 */
+  reduced?: boolean
 }
 
 export interface TerrainToggles {
@@ -51,36 +53,11 @@ export interface TerrainMaterialHandle {
   material: THREE.ShaderMaterial
   setDensity(density: TreeDensityField): void
   setToggles(toggles: TerrainToggles): void
+  setSeason(season: SeasonId, textures: TerrainTextureSet): void
   dispose(): void
 }
 
 const DENSITY_TEXTURE_SIZE = 256
-const FADE_TEXTURE_SIZE = 256
-
-function createFadeTexture(seed: number): THREE.DataTexture {
-  const size = FADE_TEXTURE_SIZE
-  const data = new Uint8Array(size * size * 4)
-  const fadeSeed = (seed ^ 0x2f6e2b1f) >>> 0
-  for (let y = 0; y < size; y += 1) {
-    for (let x = 0; x < size; x += 1) {
-      const value = fbm2(fadeSeed, (x / size) * 8, (y / size) * 8, 4, 2.1, 0.55)
-      const byte = Math.round(THREE.MathUtils.clamp(value, 0, 1) * 255)
-      const index = (y * size + x) * 4
-      data[index] = byte
-      data[index + 1] = byte
-      data[index + 2] = byte
-      data[index + 3] = 255
-    }
-  }
-  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType)
-  texture.wrapS = THREE.RepeatWrapping
-  texture.wrapT = THREE.RepeatWrapping
-  texture.minFilter = THREE.LinearFilter
-  texture.magFilter = THREE.LinearFilter
-  texture.generateMipmaps = false
-  texture.needsUpdate = true
-  return texture
-}
 
 function fillDensityTexture(
   texture: THREE.DataTexture,
@@ -105,6 +82,32 @@ function fillDensityTexture(
   texture.needsUpdate = true
 }
 
+/** 供回归对照的纯色 fade 图（不依赖外部素材的兜底）。 */
+function createFallbackFadeTexture(seed: number): THREE.DataTexture {
+  const size = 128
+  const data = new Uint8Array(size * size * 4)
+  const fadeSeed = (seed ^ 0x2f6e2b1f) >>> 0
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const value = fbm2(fadeSeed, (x / size) * 8, (y / size) * 8, 4, 2.1, 0.55)
+      const byte = Math.round(THREE.MathUtils.clamp(value, 0, 1) * 255)
+      const index = (y * size + x) * 4
+      data[index] = byte
+      data[index + 1] = byte
+      data[index + 2] = byte
+      data[index + 3] = 255
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType)
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.RepeatWrapping
+  texture.minFilter = THREE.LinearFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.generateMipmaps = false
+  texture.needsUpdate = true
+  return texture
+}
+
 const VERTEX_SHADER = `
 attribute float aRoadProx;
 varying vec3 vWorldPosition;
@@ -125,31 +128,31 @@ void main() {
 `
 
 const FRAGMENT_SHADER = `
-uniform sampler2D uFadeMap;
+uniform sampler2D uFadeNoise;
 uniform sampler2D uDensityMap;
 uniform sampler2D uGrassFiber;
-uniform sampler2D uGrassVariation;
 uniform sampler2D uForest;
 uniform sampler2D uHeather;
 uniform sampler2D uGravel;
 uniform sampler2D uRock;
-uniform sampler2D uRockBump;
 uniform sampler2D uSand;
+#ifndef TERRAIN_REDUCED
+uniform sampler2D uRockBump;
 uniform sampler2D uDetailNear;
+uniform sampler2D uGrassVariation;
+#endif
 uniform sampler2D uDetailFar;
-uniform sampler2D uNoiseFineA;
-uniform sampler2D uNoiseFineB;
-uniform sampler2D uNoiseFineC;
-uniform sampler2D uNoiseFiner;
 uniform float uUseTextures;
 uniform float uWorldSize;
 uniform float uWorldHalf;
 uniform float uWaterLevel;
-uniform vec3 uGrassColor;
-uniform vec3 uGrassLightColor;
-uniform vec3 uCanopyColor;
+uniform int uSeasonIndex;
+uniform vec3 uGrassColA;
+uniform vec3 uGrassColB;
+uniform vec3 uPeakColA;
+uniform vec3 uPeakColB;
+uniform vec3 uRoadCol;
 uniform vec3 uGravelColor;
-uniform vec3 uRoadColor;
 uniform vec3 uRockColor;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
@@ -163,98 +166,231 @@ varying float vRoadProx;
 varying float vViewDistance;
 #include <fog_pars_fragment>
 
+float saturate1(float value) { return clamp(value, 0.0, 1.0); }
+float screen(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
+
+vec4 terrainBlend(vec4 tx1, float w1, vec4 tx2, float w2, float depth) {
+  float ma = max(tx1.a + w1, tx2.a + w2) - depth;
+  float b1 = max(tx1.a + w1 - ma, 0.0);
+  float b2 = max(tx2.a + w2 - ma, 0.0);
+  return ((tx1 * b1) + (tx2 * b2)) / (b1 + b2);
+}
+
 void main() {
-  vec3 color = uGrassColor;
   vec3 surfaceNormal = normalize(vWorldNormal);
+  vec3 color = uGrassColA;
   if (uShowSurface > 0.5) {
-    vec2 worldUv = vWorldPosition.xz;
-    float heightVal = min(1.0, max(0.0, (vWorldPosition.y - uWaterLevel) / 100.0));
-    float fade0 = texture2D(uFadeMap, worldUv / 800.0).r;
-    float fade1 = texture2D(uFadeMap, worldUv / 6400.0).r;
-    fade0 = min(max(0.0, (fade0 - 0.25) * 2.0), 1.0);
-    fade1 = min(max(0.0, (fade1 - 0.25) * 2.0), 1.0);
-    float lightGrass = min(1.0, max(0.0, fade1 * heightVal * (fade0 + heightVal)));
-    float mottle = texture2D(uFadeMap, worldUv / 170.0).r;
-    color = mix(uGrassColor, uGrassLightColor, clamp(lightGrass + (mottle - 0.5) * 0.45, 0.0, 1.0));
-    color *= 0.92 + 0.16 * mottle;
+    vec2 wUv = vWorldPosition.xz / 10.0;
+    vec2 wUv100 = wUv / 10.0;
+    vec2 wUv500 = vWorldPosition.xz / 500.0;
+    vec2 wUv2000 = vWorldPosition.xz / 2000.0;
+    vec2 wUv4000 = vWorldPosition.xz / 4000.0;
+
+    float fade0 = texture2D(uFadeNoise, wUv).r;
+    float fade1 = texture2D(uFadeNoise, wUv100).r;
+    float fade2 = texture2D(uFadeNoise, wUv500).r;
+    float vFade0 = fade2;
+    float vFade1 = texture2D(uFadeNoise, wUv4000).r;
+
+    // slowroads 的海拔公式按 0..300m 量级调过参；lab 世界只有 ±40m，
+    // 先把“水面以上的高度”按 x4 折算回官方尺度，再走原公式。
+    float heightRel = vWorldPosition.y - uWaterLevel;
+    float height = heightRel * 4.0;
+    float roadProx = vRoadProx;
+    float hasRoadProx = step(0.00001, abs(roadProx));
+
+    // ---- vertex-equivalent fields (slowroads ground vert) --------------------
+    float vHeather = smoothstep(0.4, 1.0, ((height + vFade1 * 350.0) - 60.0) / 500.0);
+    vHeather *= screen(vFade1, vFade0);
+    vHeather = smoothstep(0.3, 0.6, vHeather);
+
+    float heightVal = min(1.0, max(0.0, (height - (30.0 + vFade1 * 40.0)) / 150.0));
+    float vLightGrass = min(1.0, heightVal * (vFade0 + heightVal * 0.5));
+
+    if (roadProx > 0.0 && roadProx < 0.5 + vFade0) {
+      vHeather *= roadProx / (0.5 + vFade0);
+      if (uSeasonIndex < 3) {
+        vLightGrass *= roadProx / (0.5 + vFade0);
+      }
+    }
+
+    float vDarkGrass = min(max(0.0, (vFade1 - 0.25) * 2.0), 1.0);
+
+    float steepness = clamp((0.98 - dot(surfaceNormal, vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
+    float underRoadFactor = 1.0 - step(0.000001, -roadProx);
+    steepness *= underRoadFactor;
+    vHeather *= underRoadFactor;
 
     float treeMask = 0.0;
     if (uShowCanopy > 0.5) {
-      treeMask = clamp(texture2D(uDensityMap, (worldUv + vec2(uWorldHalf)) / uWorldSize).r * 1.15, 0.0, 1.0);
-      treeMask *= 1.0 - smoothstep(2.0, 9.0, vRoadProx);
+      treeMask = clamp(texture2D(uDensityMap, (vWorldPosition.xz + uWorldHalf) / uWorldSize).r * 1.15, 0.0, 1.0);
     }
-
-    float slope = clamp(1.0 - dot(surfaceNormal, vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
-    float rockWeight = smoothstep(0.35, 0.72, slope) * 0.6;
+    float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
+    float vTreeMask = vShadow;
+    if (vTreeMask > 0.1) {
+      vTreeMask = max(0.2, vTreeMask);
+    } else {
+      vTreeMask = 0.0;
+    }
+    if (hasRoadProx > 0.5) {
+      vTreeMask *= clamp(roadProx / 2.0, 0.0, 1.0);
+    }
 
     if (uUseTextures > 0.5) {
-      // ---- 草地：tint × 纤维亮度 × 大尺度变化 -------------------------------------
-      float fiber = texture2D(uGrassFiber, worldUv / 6.0).r;
-      float variation = texture2D(uGrassVariation, worldUv / 220.0).r;
-      vec3 grass = mix(uGrassColor, uGrassLightColor, clamp((variation - 0.35) * 1.35, 0.0, 1.0));
-      grass *= 0.84 + 0.32 * fiber;
-      float micro = texture2D(uNoiseFiner, worldUv / 3.5).r;
-      grass *= 0.95 + 0.10 * micro;
-      color = grass;
+      // ---- 草地：调色板混合（slowroads ground frag） -------------------------
+      vec4 texelColor = texture2D(uGrassFiber, wUv);
 
-      // ---- 三级噪声打散平铺重复 ---------------------------------------------------
-      float breakUp = (texture2D(uNoiseFineA, worldUv / 47.0).r - 0.5) * 0.14
-        + (texture2D(uNoiseFineB, worldUv / 13.0).r - 0.5) * 0.10
-        + (texture2D(uNoiseFineC, worldUv / 3.1).r - 0.5) * 0.06;
-      float breakUpFade = 1.0 - smoothstep(150.0, 320.0, vViewDistance);
-      color *= 1.0 + breakUp * breakUpFade;
+      float blendVal = 1.0 - texture2D(uDetailFar, wUv4000).r;
+      float blendValB = 1.0 - texture2D(uDetailFar, wUv500).r;
+      float blendValC = 1.0 - texture2D(uDetailFar, wUv100).r;
+      blendValB = screen(blendValC, blendValB);
+      blendValB *= min(1.0, blendVal * 10.0);
+      if (uSeasonIndex == 3) {
+        blendValB *= 0.7;
+      }
+      blendVal *= (0.6 + 0.4 * vLightGrass);
+      blendVal *= 2.0;
+      float depthLerpFar = saturate1(vViewDistance / 800.0);
+      blendVal = blendVal * depthLerpFar + (1.0 - depthLerpFar) * blendValB;
+      blendVal *= saturate1(0.4 + 0.6 * (vViewDistance / 300.0));
+#ifndef TERRAIN_REDUCED
+      blendVal += (1.0 - texture2D(uDetailNear, wUv100).r) * (0.7 + vLightGrass * 0.3);
+#endif
 
-      // ---- 灌丛地被补丁（中尺度噪声，避开路面与树冠核心） --------------------------
-      float heatherNoise = texture2D(uNoiseFineA, worldUv / 61.0).r;
-      float heatherMask = smoothstep(0.58, 0.86, heatherNoise)
-        * (1.0 - treeMask * 0.9)
-        * (1.0 - rockWeight)
-        * smoothstep(1.5, 8.0, vRoadProx);
-      color = mix(color, texture2D(uHeather, worldUv / 12.0).rgb, heatherMask * 0.45);
+      float variationVal = 0.0;
+      float closeVariation = 0.0;
+#ifndef TERRAIN_REDUCED
+      variationVal = texture2D(uGrassVariation, wUv2000).r - 0.5;
+      closeVariation = ((1.0 - texture2D(uGrassVariation, wUv500).r) - 0.5);
+#else
+      variationVal = (fade1 - 0.5) * 0.5;
+      closeVariation = (fade0 - 0.5) * 0.5;
+#endif
+      float grassBlend = (screen(fade1, fade0) + vDarkGrass) / 2.0;
+      grassBlend = grassBlend * grassBlend;
+      grassBlend = saturate1(grassBlend + variationVal + closeVariation);
+      float lightGrassFactor = saturate1(vLightGrass + variationVal - closeVariation);
+      lightGrassFactor = saturate1(lightGrassFactor * 2.0 * texelColor.r);
+      vec3 grassCol = mix(
+        mix(uGrassColA, uGrassColB, grassBlend),
+        mix(uPeakColA, uPeakColB, grassBlend),
+        lightGrassFactor
+      );
+      texelColor.rgb *= grassCol;
 
-      // ---- 林下腐叶：与树木密度同源 -------------------------------------------------
-      if (uShowCanopy > 0.5) {
-        float forestMask = clamp(treeMask * 1.1, 0.0, 1.0);
-        color = mix(color, texture2D(uForest, worldUv / 9.0).rgb, forestMask * 0.85);
+      // ---- heather 混合 ------------------------------------------------------
+      if (vHeather > 0.0) {
+        vec4 heatherCol = texture2D(uHeather, wUv);
+        float depthLerp = 0.25 + 0.75 * min(1.0, vViewDistance / 400.0);
+        heatherCol = mix(heatherCol, texture2D(uHeather, wUv500), depthLerp);
+        heatherCol = mix(texelColor, heatherCol, min(1.0, vHeather));
+        heatherCol.a = heatherCol.r;
+        texelColor.a = texelColor.g;
+        texelColor = terrainBlend(texelColor, 1.0 - vHeather, heatherCol, vHeather, 0.1);
       }
 
-      // ---- 水线沙带 ---------------------------------------------------------------
-      float sandWeight = 1.0 - smoothstep(0.0, 2.2, vWorldPosition.y - uWaterLevel);
-      color = mix(color, texture2D(uSand, worldUv / 8.0).rgb, sandWeight * 0.85);
+      // ---- 细节叠加 ----------------------------------------------------------
+      texelColor *= 1.0 - blendVal;
 
-      // ---- 陡坡岩石：贴图 + 凹凸扰法线 ---------------------------------------------
-      float bumpCenter = texture2D(uRockBump, worldUv / 9.0).r;
-      float bumpX = texture2D(uRockBump, (worldUv + vec2(0.4, 0.0)) / 9.0).r - bumpCenter;
-      float bumpZ = texture2D(uRockBump, (worldUv + vec2(0.0, 0.4)) / 9.0).r - bumpCenter;
-      surfaceNormal = normalize(surfaceNormal + vec3(-bumpX, 0.0, -bumpZ) * 2.4 * rockWeight);
-      vec3 rock = texture2D(uRock, worldUv / 9.0).rgb * (0.82 + 0.36 * bumpCenter);
-      color = mix(color, rock, rockWeight);
+      // ---- 树冠林下 ----------------------------------------------------------
+      vec4 forestCol = texture2D(uForest, wUv);
+      forestCol.a = forestCol.r * 2.0 * fade2;
+      float fTreeMask = min(1.0, vTreeMask);
+      if (fTreeMask > 0.0) {
+        texelColor = terrainBlend(
+          texelColor,
+          1.0 - fTreeMask,
+          forestCol,
+          fTreeMask,
+          0.1 + (1.0 - fTreeMask) * fade0 * 0.9
+        );
+        texelColor.a = 1.0;
+      }
 
-      // ---- 细节叠加：近处细颗粒 / 中远距离斑驳 -------------------------------------
-      float nearDetail = (1.0 - smoothstep(6.0, 40.0, vViewDistance)) * 0.55;
-      float farDetail = smoothstep(15.0, 50.0, vViewDistance) * (1.0 - smoothstep(260.0, 420.0, vViewDistance)) * 0.45;
-      float detail = (texture2D(uDetailNear, worldUv / 1.2).r - 0.5) * nearDetail
-        + (texture2D(uDetailFar, worldUv / 30.0).r - 0.5) * farDetail;
-      color *= 1.0 + detail;
+      // ---- 水线沙带（冬季不做） ----------------------------------------------
+      // 沙带仍按“水面以上真实米数”（官方就是这么量的），不要乘 4。
+      float vHeight = heightRel + min(1.0, heightRel + 0.5) * (fade2 * 2.0 + (fade0 + fade2) * 0.5);
+      if (vHeight < 4.0 && uSeasonIndex < 3) {
+        float dark = 1.0;
+        if (vHeight < 0.0) {
+          texelColor = texture2D(uSand, wUv) * 0.75;
+        } else {
+          if (vHeight < 2.0) {
+            dark = min(dark, 1.0 - (2.0 - vHeight) / 4.0);
+          } else if (vHeight > 2.5) {
+            dark = 1.0 - (vHeight - 2.5) / 2.0;
+          }
+          float lerpVal = max(0.0, (vHeight - 1.0) / 3.0);
+          vec4 sandCol = texture2D(uSand, wUv);
+          texelColor.a = texelColor.r;
+          sandCol.a = sandCol.r;
+          sandCol.rgb *= dark;
+          texelColor = terrainBlend(texelColor, lerpVal, sandCol, 1.0 - lerpVal, 0.05);
+        }
+      }
+
+      // ---- 路肩碎石（冬季不做；秋季树下提亮；夏季近处直接铺路面色） ----------
+      if (uShowRoad > 0.5 && uSeasonIndex < 3 && hasRoadProx > 0.5) {
+        if (roadProx < -0.2 && (vViewDistance > 100.0 || uSeasonIndex == 1)) {
+          texelColor.rgb = uRoadCol;
+        } else if (roadProx + fade2 * 0.1 < 0.5 * fade0) {
+          float rp = saturate1(1.0 - (roadProx + fade2 * 0.1) / (0.5 * fade0));
+          if (uSeasonIndex != 1 && vShadow > 0.0) {
+            float gravelBrightness = uSeasonIndex == 2 ? 1.8 : 1.3;
+            texelColor = mix(
+              mix(texture2D(uGravel, wUv * 2.0), forestCol * gravelBrightness, min(1.0, vShadow * 2.0)),
+              texelColor,
+              smoothstep(0.0, rp, texelColor.g / rp)
+            );
+          } else {
+            texelColor = mix(
+              texture2D(uGravel, wUv * 2.0) * (0.75 + rp * rp * 0.75),
+              texelColor,
+              smoothstep(0.0, rp, texelColor.g / rp)
+            );
+          }
+        }
+      }
+
+      // ---- 陡坡岩石 ----------------------------------------------------------
+      if (steepness > 0.1) {
+#ifndef TERRAIN_REDUCED
+        float bumpCenter = texture2D(uRockBump, wUv).r;
+        float bumpX = texture2D(uRockBump, wUv + vec2(0.04, 0.0)).r - bumpCenter;
+        float bumpZ = texture2D(uRockBump, wUv + vec2(0.0, 0.04)).r - bumpCenter;
+        surfaceNormal = normalize(surfaceNormal + vec3(-bumpX, 0.0, -bumpZ) * 2.4 * steepness);
+#endif
+        float steepBlend = 1.0 - steepness;
+        vec4 rockTex = mix(
+          texture2D(uRock, wUv),
+          texture2D(uRock, wUv100),
+          saturate1((vViewDistance - 20.0) / 130.0)
+        );
+        rockTex.a = 0.25;
+        texelColor.a = 0.2 + fade2 * 0.2;
+        texelColor = terrainBlend(texelColor, steepBlend, rockTex, 1.0 - steepBlend, 0.08);
+        texelColor.a = 1.0;
+      }
+
+      texelColor.r = saturate1(texelColor.r);
+      texelColor.g = saturate1(texelColor.g);
+      texelColor.b = saturate1(texelColor.b);
+      color = texelColor.rgb;
     } else {
-      color = mix(color, uRockColor, rockWeight);
-    }
-
-    if (uShowRoad > 0.5) {
-      float roadWeight = 1.0 - smoothstep(-0.6, 0.6, vRoadProx);
-      float gravelWeight = (1.0 - smoothstep(0.0, 2.5, vRoadProx)) * (1.0 - roadWeight);
-      if (uUseTextures > 0.5) {
-        vec3 gravel = texture2D(uGravel, worldUv / 5.0).rgb * (0.9 + 0.2 * texture2D(uNoiseFineC, worldUv / 2.2).r);
-        color = mix(color, gravel, gravelWeight * 0.9);
-      } else {
+      // 纯色回归路径（不采样外部贴图）。
+      float mottle = fade1;
+      color = mix(uGrassColA, uGrassColB, saturate1(fade0 * (0.6 + vLightGrass)));
+      color *= 0.92 + 0.16 * mottle;
+      if (uShowCanopy > 0.5 && treeMask > 0.05) {
+        color = mix(color, uGrassColA * 0.35, clamp(treeMask * 1.2, 0.0, 1.0));
+      }
+      color = mix(color, uRockColor, smoothstep(0.35, 0.72, steepness) * 0.6);
+      if (uShowRoad > 0.5) {
+        float roadWeight = 1.0 - smoothstep(-0.6, 0.6, roadProx);
+        float gravelWeight = (1.0 - smoothstep(0.0, 2.5, roadProx)) * (1.0 - roadWeight);
         color = mix(color, uGravelColor, gravelWeight * 0.85);
+        color = mix(color, uRoadCol, roadWeight);
       }
-      float roadNoise = texture2D(uFadeMap, worldUv / 60.0).r;
-      vec3 roadColor = uRoadColor * (0.94 + roadNoise * 0.12);
-      if (uUseTextures > 0.5) {
-        roadColor *= 0.92 + 0.16 * texture2D(uNoiseFiner, worldUv / 2.4).r;
-      }
-      color = mix(color, roadColor, roadWeight);
     }
   }
 
@@ -267,8 +403,30 @@ void main() {
 }
 `
 
+function setPaletteUniforms(uniforms: Record<string, THREE.IUniform>, params: SeasonParams): void {
+  ;(uniforms.uGrassColA!.value as THREE.Color).set(params.grassColA)
+  ;(uniforms.uGrassColB!.value as THREE.Color).set(params.grassColB)
+  ;(uniforms.uPeakColA!.value as THREE.Color).set(params.peakColA)
+  ;(uniforms.uPeakColB!.value as THREE.Color).set(params.peakColB)
+  ;(uniforms.uRoadCol!.value as THREE.Color).set(params.roadCol)
+  uniforms.uSeasonIndex!.value = params.index
+}
+
+function setTextureUniforms(uniforms: Record<string, THREE.IUniform>, textures: TerrainTextureSet): void {
+  uniforms.uFadeNoise!.value = textures.fadeNoise
+  uniforms.uGrassFiber!.value = textures.grass
+  uniforms.uForest!.value = textures.forest
+  uniforms.uHeather!.value = textures.heather
+  uniforms.uGravel!.value = textures.gravel
+  uniforms.uRock!.value = textures.rock
+  uniforms.uSand!.value = textures.sand
+  uniforms.uDetailFar!.value = textures.detailFar
+  uniforms.uRockBump && (uniforms.uRockBump.value = textures.rockBump)
+  uniforms.uDetailNear && (uniforms.uDetailNear.value = textures.detailNear)
+  uniforms.uGrassVariation && (uniforms.uGrassVariation.value = textures.grassVariation)
+}
+
 export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainMaterialHandle {
-  const fadeTexture = createFadeTexture(options.seed)
   const densityTexture = new THREE.DataTexture(
     new Uint8Array(DENSITY_TEXTURE_SIZE * DENSITY_TEXTURE_SIZE * 4),
     DENSITY_TEXTURE_SIZE,
@@ -283,39 +441,31 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
   densityTexture.generateMipmaps = false
   fillDensityTexture(densityTexture, options.density, options.worldSize)
 
-  const textures = options.textures ?? null
-  const fallback = fadeTexture
-  const pick = (texture: THREE.Texture | undefined): THREE.Texture => texture ?? fallback
-
+  // Reduced mode must not sample the optional maps at all; point them at any
+  // texture so the raw ShaderMaterial has valid samplers.
+  const fallback = createFallbackFadeTexture(options.seed)
   const uniforms: Record<string, THREE.IUniform> = {
-    // A raw ShaderMaterial has to carry the fog uniforms itself; three's
-    // refreshFogUniforms writes into fogColor/fogDensity whenever fog is on.
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
-    uFadeMap: { value: fadeTexture },
+    uFadeNoise: { value: options.textures.fadeNoise },
     uDensityMap: { value: densityTexture },
-    uGrassFiber: { value: pick(textures?.grassFiber) },
-    uGrassVariation: { value: pick(textures?.grassVariation) },
-    uForest: { value: pick(textures?.forest) },
-    uHeather: { value: pick(textures?.heather) },
-    uGravel: { value: pick(textures?.gravel) },
-    uRock: { value: pick(textures?.rock) },
-    uRockBump: { value: pick(textures?.rockBump) },
-    uSand: { value: pick(textures?.sand) },
-    uDetailNear: { value: pick(textures?.detailNear) },
-    uDetailFar: { value: pick(textures?.detailFar) },
-    uNoiseFineA: { value: pick(textures?.noiseFineA) },
-    uNoiseFineB: { value: pick(textures?.noiseFineB) },
-    uNoiseFineC: { value: pick(textures?.noiseFineC) },
-    uNoiseFiner: { value: pick(textures?.noiseFiner) },
-    uUseTextures: { value: textures ? 1 : 0 },
+    uGrassFiber: { value: options.textures.grass },
+    uForest: { value: options.textures.forest },
+    uHeather: { value: options.textures.heather },
+    uGravel: { value: options.textures.gravel },
+    uRock: { value: options.textures.rock },
+    uSand: { value: options.textures.sand },
+    uDetailFar: { value: options.textures.detailFar },
+    uUseTextures: { value: 1 },
     uWorldSize: { value: options.worldSize },
     uWorldHalf: { value: options.worldSize * 0.5 },
     uWaterLevel: { value: options.waterLevel },
-    uGrassColor: { value: new THREE.Color(0x6f8f42) },
-    uGrassLightColor: { value: new THREE.Color(0x9db867) },
-    uCanopyColor: { value: new THREE.Color(0x2f4a26) },
+    uSeasonIndex: { value: 0 },
+    uGrassColA: { value: new THREE.Color() },
+    uGrassColB: { value: new THREE.Color() },
+    uPeakColA: { value: new THREE.Color() },
+    uPeakColB: { value: new THREE.Color() },
+    uRoadCol: { value: new THREE.Color() },
     uGravelColor: { value: new THREE.Color(0x8a8378) },
-    uRoadColor: { value: new THREE.Color(0x737379) },
     uRockColor: { value: new THREE.Color(0x6b6257) },
     uSunDir: { value: new THREE.Vector3(0.42, 0.72, 0.28).normalize() },
     uSunColor: { value: new THREE.Color(0.62, 0.6, 0.56) },
@@ -324,11 +474,23 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
     uShowRoad: { value: 1 },
     uShowCanopy: { value: 1 },
   }
+  if (!options.reduced) {
+    uniforms.uRockBump = { value: options.textures.rockBump }
+    uniforms.uDetailNear = { value: options.textures.detailNear }
+    uniforms.uGrassVariation = { value: options.textures.grassVariation }
+  } else {
+    // Unused in the reduced shader but kept so setTextureUniforms stays simple.
+    uniforms.uRockBump = { value: fallback }
+    uniforms.uDetailNear = { value: fallback }
+    uniforms.uGrassVariation = { value: fallback }
+  }
+  setPaletteUniforms(uniforms, SEASON_PARAMS[options.season])
 
   const material = new THREE.ShaderMaterial({
     uniforms,
     vertexShader: VERTEX_SHADER,
     fragmentShader: FRAGMENT_SHADER,
+    defines: options.reduced ? { TERRAIN_REDUCED: 1 } : {},
     fog: true,
   })
 
@@ -341,11 +503,15 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
       uniforms.uShowSurface!.value = toggles.surface ? 1 : 0
       uniforms.uShowRoad!.value = toggles.road ? 1 : 0
       uniforms.uShowCanopy!.value = toggles.canopy ? 1 : 0
-      uniforms.uUseTextures!.value = textures && toggles.textures ? 1 : 0
+      uniforms.uUseTextures!.value = toggles.textures ? 1 : 0
+    },
+    setSeason(season: SeasonId, textures: TerrainTextureSet): void {
+      setPaletteUniforms(uniforms, SEASON_PARAMS[season])
+      setTextureUniforms(uniforms, textures)
     },
     dispose(): void {
-      fadeTexture.dispose()
       densityTexture.dispose()
+      fallback.dispose()
       material.dispose()
     },
   }

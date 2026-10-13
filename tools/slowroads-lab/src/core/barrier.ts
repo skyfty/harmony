@@ -1,8 +1,17 @@
 import type { Heightfield } from './heightfield'
 import { bakeTerrainHeight, type RoadProfile } from './roadProfile'
 import { hashUnit } from './noise'
-import type { SpriteInstance } from './foliage'
 import { BARRIER_RAIL_REGIONS } from './spriteRegions'
+
+/** 平台无关的护栏段实例（lab 渲染层再换算成精灵实例）。 */
+export interface BarrierSprite {
+  x: number
+  z: number
+  y: number
+  rotation: number
+  scale: number
+  variant: number
+}
 
 /**
  * 下坡侧木护栏（slowroads 山路两侧的横木挡墙）。
@@ -38,14 +47,14 @@ export function computeBarrierSegments(
   field: Heightfield,
   profile: RoadProfile,
   settings: BarrierSettings,
-): SpriteInstance[] {
+): BarrierSprite[] {
   const seed = settings.seed >>> 0
   const spacing = settings.spacing ?? DEFAULT_SPACING
   const dropThreshold = settings.dropThreshold ?? DEFAULT_DROP
   const probeLateral = profile.halfWidth + profile.shoulderWidth + PROBE_OUT
   const placeLateral = profile.halfWidth + profile.shoulderWidth - PLACE_INSET
   const lastPlaced: Record<number, number> = { 1: -Infinity, '-1': -Infinity }
-  const out: SpriteInstance[] = []
+  const out: BarrierSprite[] = []
 
   for (let along = 0; along <= profile.length; along += ALONG_STEP) {
     const sample = profile.sampleAt(along)

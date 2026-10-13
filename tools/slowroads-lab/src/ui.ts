@@ -1,14 +1,21 @@
+import { SEASON_IDS, SEASON_LABELS, type SeasonId } from './core/seasonCatalog'
+import type { AssetSourceMode } from './lab/assetSource'
+
 export interface LabSettings {
   seed: number
+  season: SeasonId
+  /** 兼容模式：纹理按 MAX_TEXTURE_SIZE 回退 @2048 变体 + 缩减地形材质。 */
+  compatMode: boolean
+  assetSource: AssetSourceMode
+  serverBaseUrl: string
   showSurface: boolean
   showTextures: boolean
   showRoad: boolean
   showCanopy: boolean
   showGrass: boolean
   showBushes: boolean
-  showFlowers: boolean
-  showTallGrass: boolean
   showTrees: boolean
+  showNearTreeMeshes: boolean
   showWater: boolean
   showBarrier: boolean
   windEnabled: boolean
@@ -24,20 +31,24 @@ export interface LabSettings {
   roadWidth: number
   flattenBand: number
   nearDistance: number
+  nearTreeRadius: number
   cruiseSpeed: number
 }
 
 export const DEFAULT_LAB_SETTINGS: LabSettings = {
   seed: (Math.random() * 0xffffffff) >>> 0,
+  season: 'spring',
+  compatMode: false,
+  assetSource: 'local',
+  serverBaseUrl: 'http://localhost:8097',
   showSurface: true,
   showTextures: true,
   showRoad: true,
   showCanopy: true,
   showGrass: true,
   showBushes: true,
-  showFlowers: true,
-  showTallGrass: true,
   showTrees: true,
+  showNearTreeMeshes: true,
   showWater: true,
   showBarrier: true,
   windEnabled: true,
@@ -53,6 +64,7 @@ export const DEFAULT_LAB_SETTINGS: LabSettings = {
   roadWidth: 7,
   flattenBand: 10,
   nearDistance: 120,
+  nearTreeRadius: 90,
   cruiseSpeed: 14,
 }
 
@@ -60,6 +72,9 @@ export type LabChangeKind = 'uniform' | 'placements' | 'world'
 
 export interface LabUiCallbacks {
   onChange(kind: LabChangeKind, key: keyof LabSettings): void
+  onSeasonChange(season: SeasonId): void
+  onCompatModeChange(enabled: boolean): void
+  onAssetSourceChange(mode: AssetSourceMode, baseUrl: string): void
   onRandomizeSeed(): void
   onRegenerate(): void
   onToggleCruise(): void
@@ -69,6 +84,8 @@ export interface LabUiCallbacks {
 export interface LabUiHandle {
   sync(): void
   setCruiseActive(active: boolean): void
+  setSeasonActive(season: SeasonId): void
+  setSeasonLoading(season: SeasonId | null): void
 }
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
@@ -94,7 +111,63 @@ export function createLabUi(
   container.replaceChildren()
   container.append(createElement('h2', undefined, 'Slow Roads Lab'))
 
-  // ---- Layer toggles -------------------------------------------------------
+  // ---- Seasons --------------------------------------------------------------
+  container.append(createElement('h3', undefined, '季节'))
+  const seasonRow = createElement('div', 'panel__row panel__seasons')
+  const seasonButtons = new Map<SeasonId, HTMLButtonElement>()
+  for (const season of SEASON_IDS) {
+    const button = createElement('button', undefined, SEASON_LABELS[season])
+    button.addEventListener('click', () => callbacks.onSeasonChange(season))
+    seasonRow.append(button)
+    seasonButtons.set(season, button)
+  }
+  container.append(seasonRow)
+  const setSeasonActive = (season: SeasonId): void => {
+    for (const [id, button] of seasonButtons) {
+      button.classList.toggle('is-active', id === season)
+    }
+  }
+  const setSeasonLoading = (season: SeasonId | null): void => {
+    for (const [id, button] of seasonButtons) {
+      button.classList.toggle('is-loading', id === season)
+      button.disabled = season !== null
+    }
+  }
+  setSeasonActive(settings.season)
+
+  // ---- Compatibility / asset source -----------------------------------------
+  container.append(createElement('h3', undefined, '运行环境'))
+  const compatLabel = createElement('label')
+  const compatInput = createElement('input')
+  compatInput.type = 'checkbox'
+  compatInput.checked = settings.compatMode
+  compatInput.addEventListener('change', () => {
+    settings.compatMode = compatInput.checked
+    callbacks.onCompatModeChange(compatInput.checked)
+  })
+  compatLabel.append(compatInput, document.createTextNode('兼容模式（2048 贴图上限 + 缩减材质）'))
+  container.append(compatLabel)
+
+  const sourceRow = createElement('div', 'panel__row')
+  const sourceSelect = createElement('select')
+  for (const [value, label] of [['local', '本地素材'], ['server', '服务器下载']] as const) {
+    const option = createElement('option', undefined, label)
+    option.value = value
+    option.selected = settings.assetSource === value
+    sourceSelect.append(option)
+  }
+  const serverInput = createElement('input')
+  serverInput.type = 'text'
+  serverInput.value = settings.serverBaseUrl
+  const applySource = (): void => {
+    callbacks.onAssetSourceChange(sourceSelect.value as AssetSourceMode, serverInput.value.trim())
+  }
+  sourceSelect.addEventListener('change', applySource)
+  serverInput.addEventListener('change', applySource)
+  sourceRow.append(createElement('label', undefined, '素材来源'), sourceSelect, serverInput)
+  container.append(sourceRow)
+
+  // ---- Layer toggles --------------------------------------------------------
   const toggleSection = createElement('div', 'panel__toggles')
   const toggleDefs: Array<{ key: keyof LabSettings; label: string }> = [
     { key: 'showSurface', label: '地表混合' },
@@ -102,10 +175,9 @@ export function createLabUi(
     { key: 'showRoad', label: '道路' },
     { key: 'showCanopy', label: '树冠色斑' },
     { key: 'showGrass', label: '草' },
-    { key: 'showBushes', label: '灌木' },
-    { key: 'showFlowers', label: '花草' },
-    { key: 'showTallGrass', label: '高草' },
-    { key: 'showTrees', label: '树' },
+    { key: 'showBushes', label: '灌木花草' },
+    { key: 'showTrees', label: '树卡/远景树' },
+    { key: 'showNearTreeMeshes', label: '近树 3D 网格' },
     { key: 'showWater', label: '水面' },
     { key: 'showBarrier', label: '护栏' },
     { key: 'windEnabled', label: '风摆' },
@@ -132,11 +204,18 @@ export function createLabUi(
   const seedInput = createElement('input')
   seedInput.type = 'text'
   seedInput.value = String(settings.seed)
-  seedInput.addEventListener('change', () => {
+  const applySeedInput = (): void => {
     const parsed = Number.parseInt(seedInput.value, 10)
     settings.seed = Number.isFinite(parsed) ? parsed >>> 0 : settings.seed
     seedInput.value = String(settings.seed)
     callbacks.onChange('world', 'seed')
+  }
+  seedInput.addEventListener('change', applySeedInput)
+  // 回车立即生效（change 只在失焦时触发，容易造成“输入框显示新种子、场景还是旧的”）。
+  seedInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      applySeedInput()
+    }
   })
   const randomizeButton = createElement('button', undefined, '随机')
   randomizeButton.addEventListener('click', () => {
@@ -183,7 +262,8 @@ export function createLabUi(
     {
       title: '相机',
       items: [
-        { key: 'nearDistance', label: '近树距离 (m)', min: 40, max: 300, step: 5, kind: 'uniform' },
+        { key: 'nearDistance', label: '近树卡距离 (m)', min: 40, max: 300, step: 5, kind: 'uniform' },
+        { key: 'nearTreeRadius', label: '近树 3D 半径 (m)', min: 0, max: 300, step: 10, kind: 'uniform' },
         { key: 'cruiseSpeed', label: '巡航速度', min: 0, max: 30, step: 1, kind: 'uniform' },
       ],
     },
@@ -231,7 +311,9 @@ export function createLabUi(
   container.append(createElement(
     'p',
     'panel__hint',
-    '自由相机：拖拽旋转，WASD 移动，Q/E 升降，Shift 加速。草/灌木/树/花草/高草/护栏使用 slowroads 精灵图集，地表贴图来自 slowroads 素材；未开启的图层不显示。',
+    '自由相机：拖拽旋转，WASD 移动，Q/E 升降，Shift 加速。四季素材来自 slowroads.io，'
+    + '按官方逻辑渲染（地表调色板、落叶 overlay、冬季积雪/冻水、近树三级 LOD）。'
+    + '兼容模式用于小程序低配验证（@2048 贴图 + 缩减采样器）。',
   ))
 
   return {
@@ -247,9 +329,15 @@ export function createLabUi(
           sliderValues.get(def.key)!.textContent = String(value)
         }
       }
+      compatInput.checked = settings.compatMode
+      sourceSelect.value = settings.assetSource
+      serverInput.value = settings.serverBaseUrl
+      setSeasonActive(settings.season)
     },
     setCruiseActive(active: boolean): void {
       cruiseButton.classList.toggle('is-active', active)
     },
+    setSeasonActive,
+    setSeasonLoading,
   }
 }

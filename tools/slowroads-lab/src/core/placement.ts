@@ -1,13 +1,7 @@
 import type { Heightfield } from './heightfield'
 import { bakeTerrainHeight, type RoadProfile } from './roadProfile'
 import { clamp01, fbm2, hashUnit, smoothstep } from './noise'
-import {
-  FLOWER_REGIONS,
-  NEAR_BROADLEAF_REGIONS,
-  NEAR_CONIFER_REGIONS,
-  TALL_GRASS_REGIONS,
-  TREE_FAR_VARIANTS,
-} from './spriteRegions'
+import { BROADLEAF_CARD_REGIONS, TREE_FAR_VARIANTS, getConiferCardRegions } from './spriteRegions'
 
 /**
  * slowroads-style placement rules:
@@ -16,6 +10,11 @@ import {
  *  - grass lives only inside the road corridor (dense at the edge, thinning
  *    outward, sunk into the verge);
  *  - bushes form a narrow band next to the road.
+ *
+ * Sprite variants are stored as `variantUnit` (0..1). The season decides which
+ * atlas cells exist (winter drops grass cells 0/1), so the mesh builder maps
+ * the unit into the available cell list at build time instead of baking a
+ * season-specific variant index into the placement.
  */
 export interface LabPlacementSettings {
   seed: number
@@ -35,7 +34,7 @@ export interface TreePlacement {
   y: number
   rotation: number
   scale: number
-  /** 近树卡变体（打包图集区域下标）。 */
+  /** 近树卡变体（阔叶 4 列网格 / 针叶测得的 2 株侧视树）。 */
   variantNear: number
   /** 远树 imposters 变体（16×4 网格下标）。 */
   variantFar: number
@@ -49,15 +48,18 @@ export interface SpritePlacement {
   y: number
   rotation: number
   scale: number
-  variant: number
+  /** 0..1，网构建时映射到当季可用的图集格。 */
+  variantUnit: number
+  /** d - halfWidth：草地调色板贴近道路时的明度抑制（slowroads roadProx）。 */
+  roadProx: number
 }
 
 export interface LabPlacements {
   trees: TreePlacement[]
+  /** 走廊草 + 外带高草（同一套 slowroads grassSprites 图集）。 */
   grass: SpritePlacement[]
+  /** 路侧灌木 + 花草（同一套 slowroads bushes 图集）。 */
   bushes: SpritePlacement[]
-  flowers: SpritePlacement[]
-  tallGrass: SpritePlacement[]
 }
 
 export interface TreeDensityField {
@@ -65,13 +67,13 @@ export interface TreeDensityField {
   classAt(x: number, z: number): 0 | 1 | 2 | 3
 }
 
-export const BROADLEAF_VARIANTS = 3
-export const CONIFER_VARIANTS = 8
-export const GRASS_VARIANTS = 4
-export const BUSH_VARIANTS = 8
+export const BROADLEAF_VARIANTS = BROADLEAF_CARD_REGIONS.length
+export const CONIFER_VARIANTS = getConiferCardRegions('spring').length
+export const GRASS_CELLS = 4
+export const BUSH_CELLS = 4
 export const NEAR_TREE_VARIANTS: Record<0 | 1, number> = {
-  0: NEAR_BROADLEAF_REGIONS.length,
-  1: NEAR_CONIFER_REGIONS.length,
+  0: BROADLEAF_VARIANTS,
+  1: CONIFER_VARIANTS,
 }
 
 const TREE_CELL_SIZE = 10
@@ -84,8 +86,6 @@ const BUSH_STEP_ACROSS = 0.9
 const MAX_TREES = 120000
 const MAX_GRASS = 60000
 const MAX_BUSHES = 20000
-const MAX_FLOWERS = 12000
-const MAX_TALL_GRASS = 20000
 
 export function createTreeDensityField(seed: number, worldSize: number): TreeDensityField {
   const densitySeed = (seed ^ 0x51ed270b) >>> 0
@@ -121,18 +121,46 @@ function slopeFactor(slop: number): number {
   return 1 - clamp01(slop / 0.6) * 0.85
 }
 
+/** slowroads picks the heather grass variant from a noise field; same idea here. */
+function heatherMask(seed: number, x: number, z: number): number {
+  return fbm2(seed ^ 0x5ea77e2b, x / 61, z / 61, 2, 2.1, 0.55)
+}
+
+/**
+ * Map a sprite into the slowroads variant-cell space (0..1):
+ *  - cells 0/1: little grass right at the road edge;
+ *  - cell 2: tall grass in the outer corridor;
+ *  - cell 3: heather tufts on masked patches.
+ * The unit is remapped onto the season's available cells at build time.
+ */
+function grassVariantUnit(seed: number, distance: number, halfWidth: number, corridor: number, x: number, z: number, hash: number): number {
+  const unit = hash
+  if (distance < halfWidth + 1.6) {
+    return unit * 0.35
+  }
+  if (heatherMask(seed, x, z) > 0.58) {
+    return 0.78 + unit * 0.22
+  }
+  if (distance > halfWidth + corridor * 0.45) {
+    return 0.38 + unit * 0.37
+  }
+  return unit
+}
+
 export function computePlacements(
   field: Heightfield,
   profile: RoadProfile,
   density: TreeDensityField,
   settings: LabPlacementSettings,
 ): LabPlacements {
+  const corridorGrass = computeCorridorPlacements(field, profile, settings, 'grass')
+  const tallGrass = computeLayerPlacements(field, profile, settings, 'tallGrass')
+  const corridorBushes = computeCorridorPlacements(field, profile, settings, 'bush')
+  const flowers = computeLayerPlacements(field, profile, settings, 'flower')
   return {
     trees: computeTreePlacements(field, profile, density, settings),
-    grass: computeCorridorPlacements(field, profile, settings, 'grass'),
-    bushes: computeCorridorPlacements(field, profile, settings, 'bush'),
-    flowers: computeLayerPlacements(field, profile, settings, 'flower'),
-    tallGrass: computeLayerPlacements(field, profile, settings, 'tallGrass'),
+    grass: corridorGrass.concat(tallGrass),
+    bushes: corridorBushes.concat(flowers),
   }
 }
 
@@ -278,7 +306,7 @@ function computeCorridorPlacements(
           const edge = profile.halfWidth + 1.2
           sink = distance < edge ? edge - distance : distance / 20
         }
-        const variantCount = kind === 'grass' ? GRASS_VARIANTS : BUSH_VARIANTS
+        const variantHash = hashUnit(seed, along, keyB * 8 + 6)
         out.push({
           x,
           z,
@@ -287,7 +315,10 @@ function computeCorridorPlacements(
           scale: kind === 'grass'
             ? 0.7 + hashUnit(seed, along, keyB * 8 + 5) * 0.6
             : 0.7 + hashUnit(seed, along, keyB * 8 + 5) * 0.7,
-          variant: Math.min(variantCount - 1, Math.floor(hashUnit(seed, along, keyB * 8 + 6) * variantCount)),
+          variantUnit: kind === 'grass'
+            ? grassVariantUnit(seed, distance, profile.halfWidth, settings.grassCorridor, x, z, variantHash)
+            : variantHash,
+          roadProx: distance - profile.halfWidth,
         })
       }
     }
@@ -296,8 +327,8 @@ function computeCorridorPlacements(
 }
 
 /**
- * 花草层与高草层：都贴着道路走廊生长，但比路缘草带更靠外，
- * 用各自的门限 + 坡度/高度过滤控制密度。
+ * 花草层与高草层：都贴着道路走廊生长，但比路缘带更靠外。
+ * 输出并入灌木层（花草）与草丛层（高草），与 slowroads 的两套精灵图集对齐。
  */
 function computeLayerPlacements(
   field: Heightfield,
@@ -313,9 +344,8 @@ function computeLayerPlacements(
   const lateralEnd = isFlower ? 6 : Math.max(6, Math.min(20, settings.grassCorridor))
   const lateralCount = Math.max(1, Math.ceil((lateralEnd - lateralStart) / acrossStep))
   const alongCount = Math.max(1, Math.ceil(profile.length / alongStep))
-  const cap = isFlower ? MAX_FLOWERS : MAX_TALL_GRASS
+  const cap = isFlower ? MAX_BUSHES : MAX_GRASS
   const density = isFlower ? settings.flowerDensity : settings.tallGrassDensity
-  const variantCount = isFlower ? FLOWER_REGIONS.length : TALL_GRASS_REGIONS.length
   const out: SpritePlacement[] = []
 
   for (let along = 0; along < alongCount && out.length < cap; along += 1) {
@@ -355,6 +385,7 @@ function computeLayerPlacements(
         if (hashUnit(seed, along, keyB * 8 + 3) >= chance) {
           continue
         }
+        const variantHash = hashUnit(seed, along, keyB * 8 + 6)
         out.push({
           x,
           z,
@@ -363,7 +394,9 @@ function computeLayerPlacements(
           scale: isFlower
             ? 0.8 + hashUnit(seed, along, keyB * 8 + 5) * 0.5
             : 0.7 + hashUnit(seed, along, keyB * 8 + 5) * 0.6,
-          variant: Math.min(variantCount - 1, Math.floor(hashUnit(seed, along, keyB * 8 + 6) * variantCount)),
+          // 高草偏向大草格（cell 2），花草均匀分布。
+          variantUnit: isFlower ? variantHash : 0.38 + variantHash * 0.37,
+          roadProx: distance - profile.halfWidth,
         })
       }
     }

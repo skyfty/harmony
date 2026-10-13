@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import type { Heightfield } from './heightfield'
-import { bakeTerrainHeight, type RoadProfile } from './roadProfile'
+import type { Heightfield } from '../core/heightfield'
+import { bakeTerrainHeight, type RoadProfile } from '../core/roadProfile'
 
 /**
  * Builds the terrain surface with slowroads-style road flattening baked into

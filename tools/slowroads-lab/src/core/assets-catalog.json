@@ -1,0 +1,1087 @@
+{
+  "generatedAt": "2026-10-13T09:12:40.071Z",
+  "source": "D:\\Downloads\\新建文件夹",
+  "entryCount": 99,
+  "totalBytes": 101915477,
+  "files": [
+    {
+      "logicalId": "autumn_bushes.b82ca395",
+      "file": "autumn_bushes.b82ca395.png",
+      "kind": "png",
+      "bytes": 246621,
+      "hash": "sha256-803c55d6a29ed34a",
+      "width": 1024,
+      "height": 256,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "autumn_heather.d890b430",
+      "file": "autumn_heather.d890b430.png",
+      "kind": "png",
+      "bytes": 1818032,
+      "hash": "sha256-f2d4bb2cf0273d35",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_imposters_0_d.4c4b38fd",
+      "file": "autumn_imposters_0_d.4c4b38fd.png",
+      "kind": "png",
+      "bytes": 3003265,
+      "hash": "sha256-628dbd967925d405",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "autumn_imposters_0_d.4c4b38fd@2048",
+      "file": "autumn_imposters_0_d.4c4b38fd@2048.png",
+      "kind": "png",
+      "derivedFrom": "autumn_imposters_0_d.4c4b38fd",
+      "variant": "2048",
+      "bytes": 1217882,
+      "hash": "sha256-5ad25830ee6614b1",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_imposters_0_n.d10ccd46",
+      "file": "autumn_imposters_0_n.d10ccd46.png",
+      "kind": "png",
+      "bytes": 3143293,
+      "hash": "sha256-67079a179c03a896",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "autumn_imposters_0_n.d10ccd46@2048",
+      "file": "autumn_imposters_0_n.d10ccd46@2048.png",
+      "kind": "png",
+      "derivedFrom": "autumn_imposters_0_n.d10ccd46",
+      "variant": "2048",
+      "bytes": 980861,
+      "hash": "sha256-43cef90926c7f708",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_imposters_1_d.0160320a",
+      "file": "autumn_imposters_1_d.0160320a.png",
+      "kind": "png",
+      "bytes": 1303703,
+      "hash": "sha256-0db8795ac31802f4",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "autumn_imposters_1_d.0160320a@2048",
+      "file": "autumn_imposters_1_d.0160320a@2048.png",
+      "kind": "png",
+      "derivedFrom": "autumn_imposters_1_d.0160320a",
+      "variant": "2048",
+      "bytes": 781418,
+      "hash": "sha256-e21649b5f79c5f55",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_imposters_1_n.2a7e8cf6",
+      "file": "autumn_imposters_1_n.2a7e8cf6.png",
+      "kind": "png",
+      "bytes": 2078052,
+      "hash": "sha256-44ad40d842c34af0",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "autumn_imposters_1_n.2a7e8cf6@2048",
+      "file": "autumn_imposters_1_n.2a7e8cf6@2048.png",
+      "kind": "png",
+      "derivedFrom": "autumn_imposters_1_n.2a7e8cf6",
+      "variant": "2048",
+      "bytes": 761392,
+      "hash": "sha256-ff685a683657f4c0",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_trees_0.2fe560b0",
+      "file": "autumn_trees_0.2fe560b0.png",
+      "kind": "png",
+      "bytes": 1410080,
+      "hash": "sha256-5aa9e0a69609239d",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_trees_0_n.a664e3e1",
+      "file": "autumn_trees_0_n.a664e3e1.png",
+      "kind": "png",
+      "bytes": 1483710,
+      "hash": "sha256-0710705d5a24e12e",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_trees_1_a.2aa926cb",
+      "file": "autumn_trees_1_a.2aa926cb.png",
+      "kind": "png",
+      "bytes": 795557,
+      "hash": "sha256-0c07373f4a6df8e9",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_trees_1_m.2cd39e32",
+      "file": "autumn_trees_1_m.2cd39e32.png",
+      "kind": "png",
+      "bytes": 1032910,
+      "hash": "sha256-1ebda6d9e7c1afb3",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "forest_01.b82a9e7e",
+      "file": "forest_01.b82a9e7e.png",
+      "kind": "png",
+      "bytes": 2753831,
+      "hash": "sha256-1595d3a32e4a25a5",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "forest_autumn.55ca08bd",
+      "file": "forest_autumn.55ca08bd.png",
+      "kind": "png",
+      "bytes": 2544881,
+      "hash": "sha256-43030c9fbedb741f",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "forest_spring.a81cef17",
+      "file": "forest_spring.a81cef17.png",
+      "kind": "png",
+      "bytes": 2672578,
+      "hash": "sha256-930c3e3b014edfb6",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "forest_winter.0710a850",
+      "file": "forest_winter.0710a850.png",
+      "kind": "png",
+      "bytes": 2464640,
+      "hash": "sha256-0b416720b95c3695",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "grass.15f2422c",
+      "file": "grass.15f2422c.png",
+      "kind": "png",
+      "bytes": 2405674,
+      "hash": "sha256-2733be31a4aa45ca",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "grass_variation.209068de",
+      "file": "grass_variation.209068de.png",
+      "kind": "png",
+      "bytes": 143285,
+      "hash": "sha256-08a1baded6729ecf",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "gravel.0ee4475c",
+      "file": "gravel.0ee4475c.png",
+      "kind": "png",
+      "bytes": 1722186,
+      "hash": "sha256-e7504f3fbbac67c2",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "gravel_02.8367ed2c",
+      "file": "gravel_02.8367ed2c.png",
+      "kind": "png",
+      "bytes": 2152436,
+      "hash": "sha256-c5c6af388fd71b5d",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "ground_detail_far.a63b212a",
+      "file": "ground_detail_far.a63b212a.png",
+      "kind": "png",
+      "bytes": 192345,
+      "hash": "sha256-23f1050d4a07795a",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "ground_detail_far_winter.003963d8",
+      "file": "ground_detail_far_winter.003963d8.png",
+      "kind": "png",
+      "bytes": 224921,
+      "hash": "sha256-aa0bacca6de56d04",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "ground_detail_near.9099b9d5",
+      "file": "ground_detail_near.9099b9d5.png",
+      "kind": "png",
+      "bytes": 393855,
+      "hash": "sha256-c7b6bb93aa5c453f",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "noise_fine.592be1a0",
+      "file": "noise_fine.592be1a0.png",
+      "kind": "png",
+      "bytes": 189489,
+      "hash": "sha256-7a0080820eab08e9",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "noise_fine.9cdaf478",
+      "file": "noise_fine.9cdaf478.png",
+      "kind": "png",
+      "bytes": 187600,
+      "hash": "sha256-69437f6dd522e883",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "noise_fine.a3591251",
+      "file": "noise_fine.a3591251.png",
+      "kind": "png",
+      "bytes": 190558,
+      "hash": "sha256-814034fe958b7ef7",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "noise_finer.56c77b62",
+      "file": "noise_finer.56c77b62.png",
+      "kind": "png",
+      "bytes": 288158,
+      "hash": "sha256-767abfa65a420478",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "noise_finer.962cd5d7",
+      "file": "noise_finer.962cd5d7.png",
+      "kind": "png",
+      "bytes": 285969,
+      "hash": "sha256-155975378e0ffa89",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "noise_finer.98c1753c",
+      "file": "noise_finer.98c1753c.png",
+      "kind": "png",
+      "bytes": 288394,
+      "hash": "sha256-83bfbc1a1ec61f5d",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "road_single_base.d5dbc374",
+      "file": "road_single_base.d5dbc374.png",
+      "kind": "png",
+      "bytes": 1618385,
+      "hash": "sha256-b8fd32acca73d374",
+      "width": 768,
+      "height": 1536,
+      "rgbaBytes": 4718592
+    },
+    {
+      "logicalId": "road_single_base_spring.2a1a3159",
+      "file": "road_single_base_spring.2a1a3159.png",
+      "kind": "png",
+      "bytes": 1751569,
+      "hash": "sha256-ecdfc2d4d0022e53",
+      "width": 768,
+      "height": 1536,
+      "rgbaBytes": 4718592
+    },
+    {
+      "logicalId": "road_single_overlay_autumn.59ecdb8e",
+      "file": "road_single_overlay_autumn.59ecdb8e.png",
+      "kind": "png",
+      "bytes": 3225891,
+      "hash": "sha256-26afca950c5dd247",
+      "width": 768,
+      "height": 1536,
+      "rgbaBytes": 4718592
+    },
+    {
+      "logicalId": "road_single_overlay_spring.a23e0db5",
+      "file": "road_single_overlay_spring.a23e0db5.png",
+      "kind": "png",
+      "bytes": 704422,
+      "hash": "sha256-c0e4d5b68242fbee",
+      "width": 768,
+      "height": 1536,
+      "rgbaBytes": 4718592
+    },
+    {
+      "logicalId": "rock_bump.8f8c68ad",
+      "file": "rock_bump.8f8c68ad.png",
+      "kind": "png",
+      "bytes": 1365365,
+      "hash": "sha256-679369b308c6f8cb",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "sand.43e5b6fc",
+      "file": "sand.43e5b6fc.png",
+      "kind": "png",
+      "bytes": 456193,
+      "hash": "sha256-d10a44ac1cb666a2",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "sea_waves.63ff8729",
+      "file": "sea_waves.63ff8729.png",
+      "kind": "png",
+      "bytes": 388141,
+      "hash": "sha256-e55d8c33710b3c20",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "snow_spray.03bb4bca",
+      "file": "snow_spray.03bb4bca.png",
+      "kind": "png",
+      "bytes": 35379,
+      "hash": "sha256-5fe023c64f2ff950",
+      "width": 128,
+      "height": 128,
+      "rgbaBytes": 65536
+    },
+    {
+      "logicalId": "spring_bushes.2db1f4bc",
+      "file": "spring_bushes.2db1f4bc.png",
+      "kind": "png",
+      "bytes": 112945,
+      "hash": "sha256-7bef90df8b2da25a",
+      "width": 1024,
+      "height": 256,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "spring_imposters_0_d.2e67db77",
+      "file": "spring_imposters_0_d.2e67db77.png",
+      "kind": "png",
+      "bytes": 2704242,
+      "hash": "sha256-073fa9832943ebb0",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "spring_imposters_0_d.2e67db77@2048",
+      "file": "spring_imposters_0_d.2e67db77@2048.png",
+      "kind": "png",
+      "derivedFrom": "spring_imposters_0_d.2e67db77",
+      "variant": "2048",
+      "bytes": 1184651,
+      "hash": "sha256-9eb5b837aad9dc0f",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_imposters_0_n.1d5afe54",
+      "file": "spring_imposters_0_n.1d5afe54.png",
+      "kind": "png",
+      "bytes": 3053560,
+      "hash": "sha256-f459b779d40249a6",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "spring_imposters_0_n.1d5afe54@2048",
+      "file": "spring_imposters_0_n.1d5afe54@2048.png",
+      "kind": "png",
+      "derivedFrom": "spring_imposters_0_n.1d5afe54",
+      "variant": "2048",
+      "bytes": 957423,
+      "hash": "sha256-1e103468d1f808e8",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_imposters_1_d.05133c03",
+      "file": "spring_imposters_1_d.05133c03.png",
+      "kind": "png",
+      "bytes": 1598195,
+      "hash": "sha256-f6b6376d8a9c6352",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "spring_imposters_1_d.05133c03@2048",
+      "file": "spring_imposters_1_d.05133c03@2048.png",
+      "kind": "png",
+      "derivedFrom": "spring_imposters_1_d.05133c03",
+      "variant": "2048",
+      "bytes": 869923,
+      "hash": "sha256-5e2a7936868873b1",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_rock.d1f6769c",
+      "file": "spring_rock.d1f6769c.png",
+      "kind": "png",
+      "bytes": 1900581,
+      "hash": "sha256-2cf3a93473b2f875",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_trees_0.aee94219",
+      "file": "spring_trees_0.aee94219.png",
+      "kind": "png",
+      "bytes": 1358646,
+      "hash": "sha256-5d52916839b2c819",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_trees_0_n.8e3ce8fa",
+      "file": "spring_trees_0_n.8e3ce8fa.png",
+      "kind": "png",
+      "bytes": 1450806,
+      "hash": "sha256-7c0d5d9a9d561b5a",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_trees_1_a.e8f53ceb",
+      "file": "spring_trees_1_a.e8f53ceb.png",
+      "kind": "png",
+      "bytes": 812185,
+      "hash": "sha256-ffbddcb496b7246a",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_trees_1_m.29ae06f6",
+      "file": "spring_trees_1_m.29ae06f6.png",
+      "kind": "png",
+      "bytes": 1072610,
+      "hash": "sha256-cc71985aa955bc29",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_wall_barrier_wood.29edf0af",
+      "file": "spring_wall_barrier_wood.29edf0af.png",
+      "kind": "png",
+      "bytes": 393594,
+      "hash": "sha256-72d288cd380c5483",
+      "width": 1024,
+      "height": 512,
+      "rgbaBytes": 2097152
+    },
+    {
+      "logicalId": "summer_bushes.943c4258",
+      "file": "summer_bushes.943c4258.png",
+      "kind": "png",
+      "bytes": 233538,
+      "hash": "sha256-750f36d1592e4527",
+      "width": 1024,
+      "height": 256,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "summer_grasses.7ddf683f",
+      "file": "summer_grasses.7ddf683f.png",
+      "kind": "png",
+      "bytes": 80285,
+      "hash": "sha256-418e402bb37d96fa",
+      "width": 512,
+      "height": 128,
+      "rgbaBytes": 262144
+    },
+    {
+      "logicalId": "summer_heather_05.5f56558d",
+      "file": "summer_heather_05.5f56558d.png",
+      "kind": "png",
+      "bytes": 1860294,
+      "hash": "sha256-734fc002175123b6",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_imposters_0_d.6a3261f4",
+      "file": "summer_imposters_0_d.6a3261f4.png",
+      "kind": "png",
+      "bytes": 1418294,
+      "hash": "sha256-d5dc4334f9b81df1",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "summer_imposters_0_d.6a3261f4@2048",
+      "file": "summer_imposters_0_d.6a3261f4@2048.png",
+      "kind": "png",
+      "derivedFrom": "summer_imposters_0_d.6a3261f4",
+      "variant": "2048",
+      "bytes": 837173,
+      "hash": "sha256-854f8a6adc5ad69c",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_imposters_0_n.99abbc99",
+      "file": "summer_imposters_0_n.99abbc99.png",
+      "kind": "png",
+      "bytes": 3391336,
+      "hash": "sha256-79d6c2cc294b5b5b",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "summer_imposters_0_n.99abbc99@2048",
+      "file": "summer_imposters_0_n.99abbc99@2048.png",
+      "kind": "png",
+      "derivedFrom": "summer_imposters_0_n.99abbc99",
+      "variant": "2048",
+      "bytes": 1063539,
+      "hash": "sha256-5af73e0d382de369",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_imposters_1_d.a1e60bf5",
+      "file": "summer_imposters_1_d.a1e60bf5.png",
+      "kind": "png",
+      "bytes": 1224644,
+      "hash": "sha256-02d2f77a775c6041",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "summer_imposters_1_d.a1e60bf5@2048",
+      "file": "summer_imposters_1_d.a1e60bf5@2048.png",
+      "kind": "png",
+      "derivedFrom": "summer_imposters_1_d.a1e60bf5",
+      "variant": "2048",
+      "bytes": 789715,
+      "hash": "sha256-60858aa42d8d0c50",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_rock.674f8c5a",
+      "file": "summer_rock.674f8c5a.png",
+      "kind": "png",
+      "bytes": 1611015,
+      "hash": "sha256-e45c12b7601f6f1d",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_trees_0.d5cc9742",
+      "file": "summer_trees_0.d5cc9742.png",
+      "kind": "png",
+      "bytes": 1454126,
+      "hash": "sha256-9f1131af198dd5d8",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_trees_0_n.011e666e",
+      "file": "summer_trees_0_n.011e666e.png",
+      "kind": "png",
+      "bytes": 1723588,
+      "hash": "sha256-c799add10a88e7da",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_trees_1_a.c88ed1f2",
+      "file": "summer_trees_1_a.c88ed1f2.png",
+      "kind": "png",
+      "bytes": 802753,
+      "hash": "sha256-c5f81763e926df74",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "summer_trees_1_m.866c5db4",
+      "file": "summer_trees_1_m.866c5db4.png",
+      "kind": "png",
+      "bytes": 976410,
+      "hash": "sha256-49378db173212bd0",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "tree_01.49d91079",
+      "file": "tree_01.49d91079.obj",
+      "kind": "obj",
+      "bytes": 10604,
+      "hash": "sha256-33261907cf674723",
+      "obj": {
+        "vertexCount": 151,
+        "indexCount": 345,
+        "triangleCount": 115
+      }
+    },
+    {
+      "logicalId": "tree_01.49d91079.treebin",
+      "file": "tree_01.49d91079.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_01.49d91079",
+      "bytes": 5542,
+      "hash": "sha256-5631d63b7bbc8a84",
+      "obj": {
+        "vertexCount": 151,
+        "indexCount": 345,
+        "triangleCount": 115
+      }
+    },
+    {
+      "logicalId": "tree_02.52e8a31e",
+      "file": "tree_02.52e8a31e.obj",
+      "kind": "obj",
+      "bytes": 13721,
+      "hash": "sha256-e1e8721d8b73f8bd",
+      "obj": {
+        "vertexCount": 201,
+        "indexCount": 441,
+        "triangleCount": 147
+      }
+    },
+    {
+      "logicalId": "tree_02.52e8a31e.treebin",
+      "file": "tree_02.52e8a31e.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_02.52e8a31e",
+      "bytes": 7334,
+      "hash": "sha256-16ae59504096fe52",
+      "obj": {
+        "vertexCount": 201,
+        "indexCount": 441,
+        "triangleCount": 147
+      }
+    },
+    {
+      "logicalId": "tree_03.2a55062c",
+      "file": "tree_03.2a55062c.obj",
+      "kind": "obj",
+      "bytes": 12433,
+      "hash": "sha256-03341ca885ec4306",
+      "obj": {
+        "vertexCount": 200,
+        "indexCount": 390,
+        "triangleCount": 130
+      }
+    },
+    {
+      "logicalId": "tree_03.2a55062c.treebin",
+      "file": "tree_03.2a55062c.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_03.2a55062c",
+      "bytes": 7200,
+      "hash": "sha256-f261fa17bc5c1ade",
+      "obj": {
+        "vertexCount": 200,
+        "indexCount": 390,
+        "triangleCount": 130
+      }
+    },
+    {
+      "logicalId": "tree_04.53747223",
+      "file": "tree_04.53747223.obj",
+      "kind": "obj",
+      "bytes": 11857,
+      "hash": "sha256-8b1f2574e48fa7ce",
+      "obj": {
+        "vertexCount": 192,
+        "indexCount": 351,
+        "triangleCount": 117
+      }
+    },
+    {
+      "logicalId": "tree_04.53747223.treebin",
+      "file": "tree_04.53747223.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_04.53747223",
+      "bytes": 6866,
+      "hash": "sha256-2fd1ba45dd9fcc7e",
+      "obj": {
+        "vertexCount": 192,
+        "indexCount": 351,
+        "triangleCount": 117
+      }
+    },
+    {
+      "logicalId": "tree_05.d68751e5",
+      "file": "tree_05.d68751e5.obj",
+      "kind": "obj",
+      "bytes": 17644,
+      "hash": "sha256-73bba7fd222242eb",
+      "obj": {
+        "vertexCount": 232,
+        "indexCount": 513,
+        "triangleCount": 171
+      }
+    },
+    {
+      "logicalId": "tree_05.d68751e5.treebin",
+      "file": "tree_05.d68751e5.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_05.d68751e5",
+      "bytes": 8470,
+      "hash": "sha256-75805f8128209bfd",
+      "obj": {
+        "vertexCount": 232,
+        "indexCount": 513,
+        "triangleCount": 171
+      }
+    },
+    {
+      "logicalId": "tree_06.693be0d9",
+      "file": "tree_06.693be0d9.obj",
+      "kind": "obj",
+      "bytes": 19584,
+      "hash": "sha256-4c9fc2e3111f34fa",
+      "obj": {
+        "vertexCount": 538,
+        "indexCount": 546,
+        "triangleCount": 182
+      }
+    },
+    {
+      "logicalId": "tree_06.693be0d9.treebin",
+      "file": "tree_06.693be0d9.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_06.693be0d9",
+      "bytes": 18328,
+      "hash": "sha256-53873d76cf04b6d0",
+      "obj": {
+        "vertexCount": 538,
+        "indexCount": 546,
+        "triangleCount": 182
+      }
+    },
+    {
+      "logicalId": "tree_07.1fef5d95",
+      "file": "tree_07.1fef5d95.obj",
+      "kind": "obj",
+      "bytes": 18151,
+      "hash": "sha256-9239f39e386eeb92",
+      "obj": {
+        "vertexCount": 476,
+        "indexCount": 498,
+        "triangleCount": 166
+      }
+    },
+    {
+      "logicalId": "tree_07.1fef5d95.treebin",
+      "file": "tree_07.1fef5d95.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_07.1fef5d95",
+      "bytes": 16248,
+      "hash": "sha256-2b49d6675af07269",
+      "obj": {
+        "vertexCount": 476,
+        "indexCount": 498,
+        "triangleCount": 166
+      }
+    },
+    {
+      "logicalId": "tree_08.b8bd204c",
+      "file": "tree_08.b8bd204c.obj",
+      "kind": "obj",
+      "bytes": 15483,
+      "hash": "sha256-0cacb6f5dfc5c187",
+      "obj": {
+        "vertexCount": 178,
+        "indexCount": 549,
+        "triangleCount": 183
+      }
+    },
+    {
+      "logicalId": "tree_08.b8bd204c.treebin",
+      "file": "tree_08.b8bd204c.treebin",
+      "kind": "treebin",
+      "derivedFrom": "tree_08.b8bd204c",
+      "bytes": 6814,
+      "hash": "sha256-d9864952099cf6e3",
+      "obj": {
+        "vertexCount": 178,
+        "indexCount": 549,
+        "triangleCount": 183
+      }
+    },
+    {
+      "logicalId": "winter_bushes.8e9f3165",
+      "file": "winter_bushes.8e9f3165.png",
+      "kind": "png",
+      "bytes": 109798,
+      "hash": "sha256-b9d4dbfba4dbda43",
+      "width": 1024,
+      "height": 256,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "winter_grass.2126ead2",
+      "file": "winter_grass.2126ead2.png",
+      "kind": "png",
+      "bytes": 154914,
+      "hash": "sha256-8e1e5f63b2bf9c96",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_grasses.fbb53d0d",
+      "file": "winter_grasses.fbb53d0d.png",
+      "kind": "png",
+      "bytes": 23131,
+      "hash": "sha256-bf19f383f0fefed2",
+      "width": 512,
+      "height": 128,
+      "rgbaBytes": 262144
+    },
+    {
+      "logicalId": "winter_gravel.03b9e4e9",
+      "file": "winter_gravel.03b9e4e9.png",
+      "kind": "png",
+      "bytes": 330919,
+      "hash": "sha256-6be8db74c868746b",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_heather.b9aeb76f",
+      "file": "winter_heather.b9aeb76f.png",
+      "kind": "png",
+      "bytes": 2105056,
+      "hash": "sha256-fb8bb3f21f296ea8",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_imposters_0_d.ce1a9b7d",
+      "file": "winter_imposters_0_d.ce1a9b7d.png",
+      "kind": "png",
+      "bytes": 2112719,
+      "hash": "sha256-5b102d6136b9fbb6",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "winter_imposters_0_d.ce1a9b7d@2048",
+      "file": "winter_imposters_0_d.ce1a9b7d@2048.png",
+      "kind": "png",
+      "derivedFrom": "winter_imposters_0_d.ce1a9b7d",
+      "variant": "2048",
+      "bytes": 998126,
+      "hash": "sha256-df9b30e6705cdff4",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_imposters_0_n.8293f6b6",
+      "file": "winter_imposters_0_n.8293f6b6.png",
+      "kind": "png",
+      "bytes": 1914030,
+      "hash": "sha256-9bcc13962a25c5ed",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "winter_imposters_0_n.8293f6b6@2048",
+      "file": "winter_imposters_0_n.8293f6b6@2048.png",
+      "kind": "png",
+      "derivedFrom": "winter_imposters_0_n.8293f6b6",
+      "variant": "2048",
+      "bytes": 659597,
+      "hash": "sha256-85753ea7fc2cdc15",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_imposters_1_d.2882c5c9",
+      "file": "winter_imposters_1_d.2882c5c9.png",
+      "kind": "png",
+      "bytes": 1905314,
+      "hash": "sha256-2dccd167bc795b28",
+      "width": 4096,
+      "height": 1024,
+      "rgbaBytes": 16777216
+    },
+    {
+      "logicalId": "winter_imposters_1_d.2882c5c9@2048",
+      "file": "winter_imposters_1_d.2882c5c9@2048.png",
+      "kind": "png",
+      "derivedFrom": "winter_imposters_1_d.2882c5c9",
+      "variant": "2048",
+      "bytes": 833852,
+      "hash": "sha256-a58f347164bcc200",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_road_single.7e3852c1",
+      "file": "winter_road_single.7e3852c1.png",
+      "kind": "png",
+      "bytes": 1008642,
+      "hash": "sha256-5123fa79bb3162f5",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_rock.674a5de1",
+      "file": "winter_rock.674a5de1.png",
+      "kind": "png",
+      "bytes": 1713995,
+      "hash": "sha256-289c29c935f58fc3",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_trees_0.99189e5d",
+      "file": "winter_trees_0.99189e5d.png",
+      "kind": "png",
+      "bytes": 1122023,
+      "hash": "sha256-6cad675a2f4ef6ed",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_trees_0_n.24c5f705",
+      "file": "winter_trees_0_n.24c5f705.png",
+      "kind": "png",
+      "bytes": 1188257,
+      "hash": "sha256-58579fd6b4ad30cd",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_trees_1_a.142fe383",
+      "file": "winter_trees_1_a.142fe383.png",
+      "kind": "png",
+      "bytes": 705180,
+      "hash": "sha256-4a5e84e00b9acf8e",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_trees_1_m.7ee3e863",
+      "file": "winter_trees_1_m.7ee3e863.png",
+      "kind": "png",
+      "bytes": 1194653,
+      "hash": "sha256-f89d3ee606d148b4",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    }
+  ],
+  "excluded": [
+    {
+      "file": "灌木.png",
+      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
+    },
+    {
+      "file": "草.png",
+      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
+    },
+    {
+      "file": "针叶.png",
+      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
+    },
+    {
+      "file": "阔叶.png",
+      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
+    }
+  ],
+  "notes": [
+    "logicalId = source filename without extension (content hash kept in the filename).",
+    "Slot/season usage lives in src/core/seasonCatalog.ts; this catalog only records measured facts.",
+    "hash uses the server-compatible fnv1a-64-compat algorithm (sha256-<16 hex>)."
+  ]
+}

@@ -16,6 +16,8 @@ export interface WaterOptions {
 export interface WaterHandle {
   mesh: THREE.Mesh
   setTime(seconds: number): void
+  /** 冬季冻结外观（slowroads 的 frozenWater 效果）。 */
+  setFrozen(frozen: boolean): void
   dispose(): void
 }
 
@@ -38,6 +40,7 @@ uniform sampler2D uWaves;
 uniform float uTime;
 uniform vec3 uSkyColor;
 uniform vec3 uDeepColor;
+uniform float uFrozen;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
 varying vec3 vWorldPosition;
@@ -55,11 +58,14 @@ void main() {
   vec3 rippleNormal = normalize(vec3(-dx * 1.4, 1.0, -dz * 1.4));
   // 远处水面收敛回平面，避免远景闪烁的镜面噪声。
   float rippleFade = 1.0 - smoothstep(120.0, 520.0, vViewDistance);
+  rippleFade *= 1.0 - uFrozen;
   vec3 normal = normalize(mix(vec3(0.0, 1.0, 0.0), rippleNormal, rippleFade));
 
   vec3 viewDir = normalize(cameraPosition - vWorldPosition);
   float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
   vec3 color = mix(uDeepColor, uSkyColor, clamp(0.28 + 0.72 * fresnel, 0.0, 1.0));
+  // 冬季：冻结的灰白冰面，收敛波纹与高光。
+  color = mix(color, mix(vec3(0.80, 0.84, 0.87), uSkyColor, 0.35), uFrozen * 0.85);
   vec3 halfDir = normalize(uSunDir + viewDir);
   float spec = pow(max(dot(normal, halfDir), 0.0), 64.0);
   color += uSunColor * spec * 1.1 * rippleFade;
@@ -84,6 +90,7 @@ export function createWater(options: WaterOptions): WaterHandle {
       uTime: { value: 0 },
       uSkyColor: { value: new THREE.Color(options.skyColor) },
       uDeepColor: { value: new THREE.Color(0x1d3b46) },
+      uFrozen: { value: 0 },
       uSunDir: { value: options.sunDir.clone() },
       uSunColor: { value: options.sunColor.clone() },
     },
@@ -103,6 +110,9 @@ export function createWater(options: WaterOptions): WaterHandle {
     mesh,
     setTime(seconds: number): void {
       material.uniforms.uTime!.value = seconds
+    },
+    setFrozen(frozen: boolean): void {
+      material.uniforms.uFrozen!.value = frozen ? 1 : 0
     },
     dispose(): void {
       mesh.removeFromParent()

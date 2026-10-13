@@ -1,9 +1,39 @@
 import * as THREE from 'three'
 import './style.css'
-import bushUrl from './assets/bush.png'
-import grassUrl from './assets/grass.png'
-import { SLOWROADS_ASSETS, type SlowroadsAssetId } from './assets/slowroads/manifest'
-import { computeBarrierSegments } from './lab/barrier'
+import assetsCatalog from './core/assets-catalog.json'
+import { computeBarrierSegments } from './core/barrier'
+import { createHeightfield, type Heightfield } from './core/heightfield'
+import { degreesToRadians } from './core/noise'
+import {
+  computePlacements,
+  createTreeDensityField,
+  type LabPlacements,
+  type TreeDensityField,
+  type TreePlacement,
+} from './core/placement'
+import { createRoadProfile, type RoadProfile } from './core/roadProfile'
+import { resolveSeedHeadingRad, traceRoadPath } from './core/roadTrace'
+import { runSeasonCatalogChecks, runSelfChecks, type AssetsCatalogLike } from './core/selfCheck'
+import {
+  SEASON_CATALOG,
+  SHARED_TEXTURES,
+  collectSeasonTextureRefs,
+  type SeasonId,
+  type SeasonTextureRef,
+} from './core/seasonCatalog'
+import { SEASON_PARAMS } from './core/seasonParams'
+import {
+  BARRIER_RAIL_REGIONS,
+  BROADLEAF_CARD_REGIONS,
+  bushVariantEntries,
+  getConiferCardRegions,
+  getGrassEntries,
+  gridRegions,
+  type SpriteAtlasSpec,
+  type SpriteCellRegion,
+  type SpriteRegion,
+} from './core/spriteRegions'
+import { LabAssetStore, type AssetSourceMode } from './lab/assetSource'
 import { createCruiseController, createFreeFlyControls, type CruiseController, type FreeFlyControls } from './lab/cruiseCamera'
 import {
   createFoliageMesh,
@@ -12,31 +42,24 @@ import {
   setFoliageWindStrength,
   type SpriteInstance,
 } from './lab/foliage'
-import { createHeightfield, type Heightfield } from './lab/heightfield'
-import { degreesToRadians } from './lab/noise'
-import { computePlacements, createTreeDensityField, type LabPlacements, type TreeDensityField, type TreePlacement } from './lab/placement'
-import { createRoadProfile, type RoadProfile } from './lab/roadProfile'
-import { resolveSeedHeadingRad, traceRoadPath } from './lab/roadTrace'
-import { runSelfChecks } from './lab/selfCheck'
-import {
-  BARRIER_RAIL_REGIONS,
-  FLOWER_REGIONS,
-  NEAR_BROADLEAF_REGIONS,
-  NEAR_CONIFER_REGIONS,
-  TALL_GRASS_REGIONS,
-  gridRegions,
-  type SpriteAtlasSpec,
-} from './lab/spriteRegions'
+import { createRoadMesh, type RoadMeshHandle } from './lab/roadMesh'
 import { createTerrainMaterial, type TerrainMaterialHandle, type TerrainTextureSet } from './lab/terrainMaterial'
 import { createTerrainMeshBuilder, type TerrainMeshBuilder } from './lab/terrainMesh'
+import { createTreeMeshManager, type TreeMeshManager, type TreeMeshTextures } from './lab/treeMeshes'
 import { createWater, type WaterHandle } from './lab/water'
-import { createLabUi, DEFAULT_LAB_SETTINGS, type LabChangeKind, type LabSettings, type LabUiHandle } from './ui'
+import {
+  createLabUi,
+  DEFAULT_LAB_SETTINGS,
+  type LabChangeKind,
+  type LabSettings,
+  type LabUiHandle,
+} from './ui'
 
 const WORLD_SIZE = 1600
 const TERRAIN_SEGMENTS = 1024
 const SKY_COLOR = 0xc9dcee
 const ROAD_SHOULDER_WIDTH = 2.5
-const WIND_FACTOR = { grass: 0.1, bush: 0.06, tree: 0.03, flower: 0.05, tallGrass: 0.08 } as const
+const WIND_FACTOR = { grass: 0.1, bush: 0.06, tree: 0.03, barrier: 0 } as const
 
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector)
@@ -68,68 +91,191 @@ camera.lookAt(0, 0, 0)
 const settings: LabSettings = { ...DEFAULT_LAB_SETTINGS }
 const foliageUniforms = createFoliageSharedUniforms()
 
-interface Atlases {
-  grass: SpriteAtlasSpec
-  bush: SpriteAtlasSpec
-  broadleafNear: SpriteAtlasSpec
-  broadleafFar: SpriteAtlasSpec
-  coniferNear: SpriteAtlasSpec
-  coniferFar: SpriteAtlasSpec
-  flowers: SpriteAtlasSpec
-  tallGrass: SpriteAtlasSpec
-  barrier: SpriteAtlasSpec
+interface SeasonRuntimeAssets {
+  terrain: TerrainTextureSet
+  bushes: { texture: THREE.Texture; entries: SpriteCellRegion[] }
+  grassSprites: { texture: THREE.Texture; entries: SpriteCellRegion[] }
+  broadleaf: { texture: THREE.Texture; normalTexture: THREE.Texture; regions: SpriteRegion[] }
+  conifer: { texture: THREE.Texture; alphaTexture: THREE.Texture; regions: SpriteRegion[] }
+  imposterBroadleaf: { texture: THREE.Texture; normalTexture: THREE.Texture }
+  imposterConifer: { texture: THREE.Texture; normalTexture: THREE.Texture }
+  road: { base: THREE.Texture; overlay: THREE.Texture | null }
+  treeMeshes: TreeMeshTextures
 }
 
-let atlases: Atlases | null = null
-let surfaceTextures: TerrainTextureSet | null = null
-let waterWavesTexture: THREE.Texture | null = null
+interface SharedRuntimeAssets {
+  noise: THREE.Texture
+  bushNoise: THREE.Texture
+  grassVariation: THREE.Texture
+  rockBump: THREE.Texture
+  seaWaves: THREE.Texture
+  barrier: THREE.Texture
+}
+
+let assetStore: LabAssetStore | null = null
+let sharedAssets: SharedRuntimeAssets | null = null
+let seasonAssets: SeasonRuntimeAssets | null = null
+let seasonLoadToken = 0
+
 let field: Heightfield | null = null
 let profile: RoadProfile | null = null
 let densityField: TreeDensityField | null = null
 let terrainBuilder: TerrainMeshBuilder | null = null
 let terrainMesh: THREE.Mesh | null = null
 let terrainMaterialHandle: TerrainMaterialHandle | null = null
+let roadHandle: RoadMeshHandle | null = null
+let treeMeshManager: TreeMeshManager | null = null
+let water: WaterHandle | null = null
+let placements: LabPlacements | null = null
+
+let grassMesh: THREE.InstancedMesh | null = null
+let bushMesh: THREE.InstancedMesh | null = null
 let broadleafNearMesh: THREE.InstancedMesh | null = null
 let broadleafFarMesh: THREE.InstancedMesh | null = null
 let coniferNearMesh: THREE.InstancedMesh | null = null
 let coniferFarMesh: THREE.InstancedMesh | null = null
-let grassMesh: THREE.InstancedMesh | null = null
-let bushMesh: THREE.InstancedMesh | null = null
-let flowerMesh: THREE.InstancedMesh | null = null
-let tallGrassMesh: THREE.InstancedMesh | null = null
 let barrierMesh: THREE.InstancedMesh | null = null
-let water: WaterHandle | null = null
-let placements: LabPlacements | null = null
 let barrierSegmentCount = 0
+
 let cruise: CruiseController | null = null
 let freeFly: FreeFlyControls | null = null
 let ui: LabUiHandle | null = null
 let cameraInitialized = false
 let worldBuildStartedAt = 0
 let lastWorldBuildMs = 0
+let lastSeasonSwitchMs = 0
 let cruiseActive = false
+let activeSeason: SeasonId = settings.season
+
+const catalogForChecks = assetsCatalog as unknown as AssetsCatalogLike
+
+// ---------------------------------------------------------------------------
+// Asset loading
+// ---------------------------------------------------------------------------
+
+function requireStore(): LabAssetStore {
+  if (!assetStore) {
+    throw new Error('slowroads-lab: asset store not ready')
+  }
+  return assetStore
+}
+
+async function loadSharedAssets(onProgress?: (loaded: number, total: number) => void): Promise<SharedRuntimeAssets> {
+  const requests: Array<{ id: string; options: { colorSpace: 'srgb' | 'linear'; tiling: boolean } }> = [
+    { id: SHARED_TEXTURES.noise.id, options: { colorSpace: 'linear', tiling: true } },
+    { id: SHARED_TEXTURES.bushNoise.id, options: { colorSpace: 'linear', tiling: true } },
+    { id: SHARED_TEXTURES.grassVariation.id, options: { colorSpace: 'linear', tiling: true } },
+    { id: SHARED_TEXTURES.rockBump.id, options: { colorSpace: 'linear', tiling: true } },
+    { id: SHARED_TEXTURES.seaWaves.id, options: { colorSpace: 'linear', tiling: true } },
+    { id: SHARED_TEXTURES.barrier.id, options: { colorSpace: 'srgb', tiling: false } },
+  ]
+  const textures = await requireStore().textureSet(requests, onProgress)
+  return {
+    noise: textures.get(SHARED_TEXTURES.noise.id)!,
+    bushNoise: textures.get(SHARED_TEXTURES.bushNoise.id)!,
+    grassVariation: textures.get(SHARED_TEXTURES.grassVariation.id)!,
+    rockBump: textures.get(SHARED_TEXTURES.rockBump.id)!,
+    seaWaves: textures.get(SHARED_TEXTURES.seaWaves.id)!,
+    barrier: textures.get(SHARED_TEXTURES.barrier.id)!,
+  }
+}
+
+async function loadSeasonAssets(
+  season: SeasonId,
+  shared: SharedRuntimeAssets,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<SeasonRuntimeAssets> {
+  const entry = SEASON_CATALOG[season]
+  const requests: Array<{ id: string; options: { colorSpace: 'srgb' | 'linear'; tiling: boolean } }> = [
+    { id: entry.surface.grass.id, options: { colorSpace: entry.surface.grass.colorSpace, tiling: true } },
+    { id: entry.surface.forest.id, options: { colorSpace: entry.surface.forest.colorSpace, tiling: true } },
+    { id: entry.surface.heather.id, options: { colorSpace: entry.surface.heather.colorSpace, tiling: true } },
+    { id: entry.surface.gravel.id, options: { colorSpace: entry.surface.gravel.colorSpace, tiling: true } },
+    { id: entry.surface.rock.id, options: { colorSpace: entry.surface.rock.colorSpace, tiling: true } },
+    { id: entry.surface.sand.id, options: { colorSpace: entry.surface.sand.colorSpace, tiling: true } },
+    { id: entry.surface.detailNear.id, options: { colorSpace: entry.surface.detailNear.colorSpace, tiling: true } },
+    { id: entry.surface.detailFar.id, options: { colorSpace: entry.surface.detailFar.colorSpace, tiling: true } },
+    { id: entry.sprites.bushes.id, options: { colorSpace: entry.sprites.bushes.colorSpace, tiling: false } },
+    { id: entry.sprites.grassSprites.id, options: { colorSpace: entry.sprites.grassSprites.colorSpace, tiling: false } },
+    { id: entry.trees.broadleafD.id, options: { colorSpace: entry.trees.broadleafD.colorSpace, tiling: false } },
+    { id: entry.trees.broadleafN.id, options: { colorSpace: entry.trees.broadleafN.colorSpace, tiling: false } },
+    { id: entry.trees.coniferM.id, options: { colorSpace: entry.trees.coniferM.colorSpace, tiling: true } },
+    { id: entry.trees.coniferA.id, options: { colorSpace: entry.trees.coniferA.colorSpace, tiling: false } },
+    { id: entry.imposters.mapA.id, options: { colorSpace: entry.imposters.mapA.colorSpace, tiling: false } },
+    { id: entry.imposters.normA.id, options: { colorSpace: entry.imposters.normA.colorSpace, tiling: false } },
+    { id: entry.imposters.mapB.id, options: { colorSpace: entry.imposters.mapB.colorSpace, tiling: false } },
+    { id: entry.imposters.normB.id, options: { colorSpace: entry.imposters.normB.colorSpace, tiling: false } },
+    { id: entry.road.base.id, options: { colorSpace: entry.road.base.colorSpace, tiling: true } },
+  ]
+  if (entry.road.overlay) {
+    requests.push({ id: entry.road.overlay.id, options: { colorSpace: entry.road.overlay.colorSpace, tiling: true } })
+  }
+  const textures = await requireStore().textureSet(requests, onProgress)
+  const get = (ref: SeasonTextureRef): THREE.Texture => textures.get(ref.id)!
+  return {
+    terrain: {
+      grass: get(entry.surface.grass),
+      forest: get(entry.surface.forest),
+      heather: get(entry.surface.heather),
+      gravel: get(entry.surface.gravel),
+      rock: get(entry.surface.rock),
+      sand: get(entry.surface.sand),
+      detailNear: get(entry.surface.detailNear),
+      detailFar: get(entry.surface.detailFar),
+      rockBump: shared.rockBump,
+      grassVariation: shared.grassVariation,
+      fadeNoise: shared.noise,
+    },
+    bushes: { texture: get(entry.sprites.bushes), entries: bushVariantEntries(season) },
+    grassSprites: { texture: get(entry.sprites.grassSprites), entries: getGrassEntries(season) },
+    broadleaf: { texture: get(entry.trees.broadleafD), normalTexture: get(entry.trees.broadleafN), regions: BROADLEAF_CARD_REGIONS },
+    conifer: { texture: get(entry.trees.coniferM), alphaTexture: get(entry.trees.coniferA), regions: getConiferCardRegions(season) },
+    imposterBroadleaf: { texture: get(entry.imposters.mapA), normalTexture: get(entry.imposters.normA) },
+    imposterConifer: { texture: get(entry.imposters.mapB), normalTexture: get(entry.imposters.normB) },
+    road: {
+      base: get(entry.road.base),
+      overlay: entry.road.overlay ? get(entry.road.overlay) : null,
+    },
+    treeMeshes: {
+      broadleafD: get(entry.trees.broadleafD),
+      broadleafN: get(entry.trees.broadleafN),
+      coniferM: get(entry.trees.coniferM),
+      coniferA: get(entry.trees.coniferA),
+    },
+  }
+}
+
+function seasonRetainIds(season: SeasonId): Set<string> {
+  const ids = new Set<string>()
+  for (const ref of collectSeasonTextureRefs(season)) {
+    ids.add(ref.id)
+  }
+  for (const ref of Object.values(SHARED_TEXTURES)) {
+    ids.add(ref.id)
+  }
+  return ids
+}
+
+// ---------------------------------------------------------------------------
+// Foliage / world assembly
+// ---------------------------------------------------------------------------
 
 function clearFoliage(): void {
+  disposeFoliageMesh(grassMesh)
+  disposeFoliageMesh(bushMesh)
   disposeFoliageMesh(broadleafNearMesh)
   disposeFoliageMesh(broadleafFarMesh)
   disposeFoliageMesh(coniferNearMesh)
   disposeFoliageMesh(coniferFarMesh)
-  disposeFoliageMesh(grassMesh)
-  disposeFoliageMesh(bushMesh)
-  disposeFoliageMesh(flowerMesh)
-  disposeFoliageMesh(tallGrassMesh)
   disposeFoliageMesh(barrierMesh)
+  grassMesh = null
+  bushMesh = null
   broadleafNearMesh = null
   broadleafFarMesh = null
   coniferNearMesh = null
   coniferFarMesh = null
-  grassMesh = null
-  bushMesh = null
-  flowerMesh = null
-  tallGrassMesh = null
   barrierMesh = null
   barrierSegmentCount = 0
-  placements = null
 }
 
 function clearTerrain(): void {
@@ -141,8 +287,19 @@ function clearTerrain(): void {
   terrainMaterialHandle?.dispose()
   terrainMaterialHandle = null
   terrainBuilder = null
+  roadHandle?.dispose()
+  roadHandle = null
   water?.dispose()
   water = null
+}
+
+function clearWorldStructure(): void {
+  clearFoliage()
+  clearTerrain()
+  placements = null
+  field = null
+  profile = null
+  densityField = null
 }
 
 function applyToggles(): void {
@@ -152,24 +309,25 @@ function applyToggles(): void {
     canopy: settings.showCanopy,
     textures: settings.showTextures,
   })
+  if (grassMesh) grassMesh.visible = settings.showGrass
+  if (bushMesh) bushMesh.visible = settings.showBushes
   if (broadleafNearMesh) broadleafNearMesh.visible = settings.showTrees
   if (broadleafFarMesh) broadleafFarMesh.visible = settings.showTrees
   if (coniferNearMesh) coniferNearMesh.visible = settings.showTrees
   if (coniferFarMesh) coniferFarMesh.visible = settings.showTrees
-  if (grassMesh) grassMesh.visible = settings.showGrass
-  if (bushMesh) bushMesh.visible = settings.showBushes
-  if (flowerMesh) flowerMesh.visible = settings.showFlowers
-  if (tallGrassMesh) tallGrassMesh.visible = settings.showTallGrass
   if (barrierMesh) barrierMesh.visible = settings.showBarrier
+  if (roadHandle) roadHandle.mesh.visible = settings.showRoad
   if (water) water.mesh.visible = settings.showWater
+  if (treeMeshManager) {
+    treeMeshManager.setVisible(settings.showNearTreeMeshes)
+  }
+  foliageUniforms.meshRadius.value = settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
 }
 
 function applyWind(): void {
   const strength = settings.windEnabled ? settings.windStrength : 0
   if (grassMesh) setFoliageWindStrength(grassMesh, strength * WIND_FACTOR.grass)
   if (bushMesh) setFoliageWindStrength(bushMesh, strength * WIND_FACTOR.bush)
-  if (flowerMesh) setFoliageWindStrength(flowerMesh, strength * WIND_FACTOR.flower)
-  if (tallGrassMesh) setFoliageWindStrength(tallGrassMesh, strength * WIND_FACTOR.tallGrass)
   if (broadleafNearMesh) setFoliageWindStrength(broadleafNearMesh, strength * WIND_FACTOR.tree)
   if (coniferNearMesh) setFoliageWindStrength(coniferNearMesh, strength * WIND_FACTOR.tree)
   if (broadleafFarMesh) setFoliageWindStrength(broadleafFarMesh, 0)
@@ -177,12 +335,177 @@ function applyWind(): void {
   if (barrierMesh) setFoliageWindStrength(barrierMesh, 0)
 }
 
-function rebuildWorld(): void {
-  if (!atlases) {
+function toSprite(
+  instance: { x: number; z: number; y: number; rotation: number; scale: number; variantUnit: number; roadProx: number },
+  entries: SpriteCellRegion[],
+): SpriteInstance {
+  const index = Math.min(entries.length - 1, Math.max(0, Math.floor(instance.variantUnit * entries.length)))
+  const entry = entries[index]!
+  return {
+    x: instance.x,
+    z: instance.z,
+    y: instance.y,
+    rotation: instance.rotation,
+    scale: instance.scale,
+    variant: index,
+    cell: entry.cell,
+    roadProx: instance.roadProx,
+  }
+}
+
+function toTreeSprite(instance: TreePlacement, variant: number): SpriteInstance {
+  return { x: instance.x, z: instance.z, y: instance.y, rotation: instance.rotation, scale: instance.scale, variant }
+}
+
+function buildFoliageFromPlacements(): void {
+  if (!field || !profile || !placements || !seasonAssets || !sharedAssets) {
     return
   }
   clearFoliage()
-  clearTerrain()
+  const assets = seasonAssets
+  const season = activeSeason
+  const params = SEASON_PARAMS[season]
+  const grassEntries = assets.grassSprites.entries
+  const bushEntries = assets.bushes.entries
+
+  grassMesh = createFoliageMesh(
+    placements.grass.map((placement) => toSprite(placement, grassEntries)),
+    {
+      atlas: { texture: assets.grassSprites.texture, regions: grassEntries.map((entry) => entry.region) },
+      tint: 0xffffff,
+      farTintScale: 1,
+      unitSize: 1.6,
+      shared: foliageUniforms,
+      palette: {
+        mode: 'grass',
+        season,
+        noiseMap: sharedAssets.noise,
+        grassVariation: sharedAssets.grassVariation,
+        detailFar: assets.terrain.detailFar,
+      },
+    },
+  )
+  bushMesh = createFoliageMesh(
+    placements.bushes.map((placement) => toSprite(placement, bushEntries)),
+    {
+      atlas: { texture: assets.bushes.texture, regions: bushEntries.map((entry) => entry.region) },
+      tint: 0xffffff,
+      farTintScale: 1,
+      unitSize: 2,
+      shared: foliageUniforms,
+      palette: {
+        mode: 'bush',
+        season,
+        noiseMap: sharedAssets.bushNoise,
+        grassVariation: sharedAssets.grassVariation,
+        detailFar: assets.terrain.detailFar,
+      },
+    },
+  )
+
+  const broadleaf = placements.trees.filter((tree) => tree.species === 0)
+  const conifer = placements.trees.filter((tree) => tree.species === 1)
+  const treeOptions = { discolouration: params.treeDiscolouration, hasSnow: params.hasSnow }
+  broadleafNearMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
+    atlas: { texture: assets.broadleaf.texture, normalTexture: assets.broadleaf.normalTexture, regions: assets.broadleaf.regions },
+    tint: 0xffffff,
+    farTintScale: 0.72,
+    unitSize: 8,
+    shared: foliageUniforms,
+    tier: 'near',
+    tree: { ...treeOptions, species: 0 },
+  })
+  broadleafFarMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantFar)), {
+    atlas: { texture: assets.imposterBroadleaf.texture, normalTexture: assets.imposterBroadleaf.normalTexture, regions: gridRegions(16, 4, 4096, 1024) },
+    tint: 0xffffff,
+    farTintScale: 0.7,
+    unitSize: 8,
+    shared: foliageUniforms,
+    tier: 'far',
+    singlePlane: true,
+    tree: { ...treeOptions, species: 0 },
+  })
+  coniferNearMesh = createFoliageMesh(conifer.map((tree) => toTreeSprite(tree, tree.variantNear)), {
+    atlas: { texture: assets.conifer.texture, alphaTexture: assets.conifer.alphaTexture, regions: assets.conifer.regions },
+    tint: 0xffffff,
+    farTintScale: 0.72,
+    unitSize: 8,
+    shared: foliageUniforms,
+    tier: 'near',
+    tree: { ...treeOptions, species: 1 },
+  })
+  coniferFarMesh = createFoliageMesh(conifer.map((tree) => toTreeSprite(tree, tree.variantFar)), {
+    atlas: { texture: assets.imposterConifer.texture, normalTexture: assets.imposterConifer.normalTexture, regions: gridRegions(16, 4, 4096, 1024) },
+    tint: 0xffffff,
+    farTintScale: 0.7,
+    unitSize: 8,
+    shared: foliageUniforms,
+    tier: 'far',
+    singlePlane: true,
+    tree: { ...treeOptions, species: 1 },
+  })
+
+  const barrierAtlas: SpriteAtlasSpec = { texture: sharedAssets.barrier, regions: BARRIER_RAIL_REGIONS }
+  const barrierSegments = computeBarrierSegments(field, profile, {
+    seed: settings.seed >>> 0,
+    density: settings.barrierDensity,
+  })
+  barrierSegmentCount = barrierSegments.length
+  barrierMesh = createFoliageMesh(barrierSegments.map((segment) => ({
+    x: segment.x,
+    z: segment.z,
+    y: segment.y,
+    rotation: segment.rotation,
+    scale: segment.scale,
+    variant: segment.variant,
+  })), {
+    atlas: barrierAtlas,
+    tint: 0xffffff,
+    farTintScale: 1,
+    unitSize: 0.35,
+    shared: foliageUniforms,
+    singlePlane: true,
+  })
+
+  scene.add(
+    grassMesh,
+    bushMesh,
+    broadleafNearMesh,
+    broadleafFarMesh,
+    coniferNearMesh,
+    coniferFarMesh,
+    barrierMesh,
+  )
+  applyWind()
+  applyToggles()
+}
+
+function rebuildPlacements(): void {
+  if (!field || !profile || !densityField) {
+    return
+  }
+  placements = computePlacements(field, profile, densityField, {
+    seed: settings.seed >>> 0,
+    worldSize: WORLD_SIZE,
+    treeDensity: settings.treeDensity,
+    treeSize: settings.treeSize,
+    grassCorridor: settings.grassCorridor,
+    grassDensity: settings.grassDensity,
+    bushDensity: settings.bushDensity,
+    flowerDensity: settings.flowerDensity,
+    tallGrassDensity: settings.tallGrassDensity,
+  })
+  buildFoliageFromPlacements()
+  if (treeMeshManager && placements) {
+    treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value, true)
+  }
+}
+
+function rebuildWorld(): void {
+  if (!sharedAssets) {
+    return
+  }
+  clearWorldStructure()
   const seed = settings.seed >>> 0
   field = createHeightfield({ seed, worldSize: WORLD_SIZE })
   const trace = traceRoadPath(field, {
@@ -211,7 +534,7 @@ function rebuildWorld(): void {
 }
 
 function finalizeTerrain(): void {
-  if (!terrainBuilder || !terrainBuilder.geometry || !field || !densityField) {
+  if (!terrainBuilder || !terrainBuilder.geometry || !field || !densityField || !profile || !seasonAssets) {
     return
   }
   terrainMaterialHandle = createTerrainMaterial({
@@ -219,164 +542,108 @@ function finalizeTerrain(): void {
     worldSize: WORLD_SIZE,
     waterLevel: field.waterLevel,
     density: densityField,
-    textures: surfaceTextures,
+    textures: seasonAssets.terrain,
+    season: activeSeason,
+    reduced: settings.compatMode,
   })
   terrainMesh = new THREE.Mesh(terrainBuilder.geometry, terrainMaterialHandle.material)
   terrainMesh.name = 'slowroads-terrain'
   scene.add(terrainMesh)
-  {
-    const positions = terrainMesh.geometry.getAttribute('position').array as Float32Array
-    let minY = Number.POSITIVE_INFINITY
-    let maxY = Number.NEGATIVE_INFINITY
-    let nanCount = 0
-    for (let i = 1; i < positions.length; i += 3) {
-      const y = positions[i]!
-      if (!Number.isFinite(y)) {
-        nanCount += 1
-      } else if (y < minY) {
-        minY = y
-      } else if (y > maxY) {
-        maxY = y
-      }
-    }
-    const attributes = Object.keys(terrainMesh.geometry.attributes).join(',')
-    console.info(`[slowroads-lab] terrain verts=${positions.length / 3} y=[${minY.toFixed(1)},${maxY.toFixed(1)}] nan=${nanCount} attrs=${attributes}`)
-  }
+
+  roadHandle = createRoadMesh({
+    profile,
+    density: densityField,
+    sunDir: foliageUniforms.sunDir.value,
+    sunColor: foliageUniforms.sunColor.value,
+    ambient: foliageUniforms.ambient.value,
+  })
+  const params = SEASON_PARAMS[activeSeason]
+  roadHandle.setSeason({ base: seasonAssets.road.base, overlay: seasonAssets.road.overlay }, params.shadowFactor)
+  scene.add(roadHandle.mesh)
+
   terrainBuilder = null
   overlay.hidden = true
   lastWorldBuildMs = performance.now() - worldBuildStartedAt
-  if (waterWavesTexture && field) {
+  if (sharedAssets) {
     water = createWater({
       worldSize: WORLD_SIZE,
       waterLevel: field.waterLevel,
-      waves: waterWavesTexture,
+      waves: sharedAssets.seaWaves,
       skyColor: SKY_COLOR,
       sunDir: foliageUniforms.sunDir.value,
       sunColor: foliageUniforms.sunColor.value,
     })
+    water.setFrozen(params.frozenWater)
     scene.add(water.mesh)
   }
   rebuildPlacements()
-  applyToggles()
   if (!cameraInitialized) {
     resetCameraView()
   }
 }
 
-function toSprite(instance: TreePlacement, variant: number): SpriteInstance {
-  return { x: instance.x, z: instance.z, y: instance.y, rotation: instance.rotation, scale: instance.scale, variant }
-}
+// ---------------------------------------------------------------------------
+// Season switching
+// ---------------------------------------------------------------------------
 
-function rebuildPlacements(): void {
-  if (!field || !profile || !densityField || !atlases) {
+async function applySeason(season: SeasonId, options: { silent?: boolean } = {}): Promise<void> {
+  if (!assetStore || !sharedAssets) {
     return
   }
-  clearFoliage()
-  placements = computePlacements(field, profile, densityField, {
-    seed: settings.seed >>> 0,
-    worldSize: WORLD_SIZE,
-    treeDensity: settings.treeDensity,
-    treeSize: settings.treeSize,
-    grassCorridor: settings.grassCorridor,
-    grassDensity: settings.grassDensity,
-    bushDensity: settings.bushDensity,
-    flowerDensity: settings.flowerDensity,
-    tallGrassDensity: settings.tallGrassDensity,
-  })
-  const broadleaf = placements.trees.filter((tree) => tree.species === 0)
-  const conifer = placements.trees.filter((tree) => tree.species === 1)
-  broadleafNearMesh = createFoliageMesh(broadleaf.map((tree) => toSprite(tree, tree.variantNear)), {
-    atlas: atlases.broadleafNear,
-    tint: 0xffffff,
-    farTintScale: 0.72,
-    unitSize: 8,
-    shared: foliageUniforms,
-    tier: 'near',
-  })
-  broadleafFarMesh = createFoliageMesh(broadleaf.map((tree) => toSprite(tree, tree.variantFar)), {
-    atlas: atlases.broadleafFar,
-    tint: 0xffffff,
-    farTintScale: 0.7,
-    unitSize: 8,
-    shared: foliageUniforms,
-    tier: 'far',
-    singlePlane: true,
-  })
-  coniferNearMesh = createFoliageMesh(conifer.map((tree) => toSprite(tree, tree.variantNear)), {
-    atlas: atlases.coniferNear,
-    tint: 0xffffff,
-    farTintScale: 0.72,
-    unitSize: 8,
-    shared: foliageUniforms,
-    tier: 'near',
-  })
-  coniferFarMesh = createFoliageMesh(conifer.map((tree) => toSprite(tree, tree.variantFar)), {
-    atlas: atlases.coniferFar,
-    tint: 0xffffff,
-    farTintScale: 0.7,
-    unitSize: 8,
-    shared: foliageUniforms,
-    tier: 'far',
-    singlePlane: true,
-  })
-  grassMesh = createFoliageMesh(placements.grass, {
-    atlas: atlases.grass,
-    tint: 0xffffff,
-    farTintScale: 1,
-    unitSize: 1.6,
-    shared: foliageUniforms,
-  })
-  bushMesh = createFoliageMesh(placements.bushes, {
-    atlas: atlases.bush,
-    tint: 0xffffff,
-    farTintScale: 1,
-    unitSize: 2,
-    shared: foliageUniforms,
-  })
-  flowerMesh = createFoliageMesh(placements.flowers, {
-    atlas: atlases.flowers,
-    tint: 0xffffff,
-    farTintScale: 1,
-    unitSize: 1.35,
-    shared: foliageUniforms,
-  })
-  tallGrassMesh = createFoliageMesh(placements.tallGrass, {
-    atlas: atlases.tallGrass,
-    // 素材本身是浅色干草，压一层麦秆色避免看起来像白塑料。
-    tint: 0xd9c69b,
-    farTintScale: 1,
-    unitSize: 1.55,
-    shared: foliageUniforms,
-  })
-
-  const barrierSegments = computeBarrierSegments(field, profile, {
-    seed: settings.seed >>> 0,
-    density: settings.barrierDensity,
-  })
-  barrierSegmentCount = barrierSegments.length
-  barrierMesh = createFoliageMesh(barrierSegments, {
-    atlas: atlases.barrier,
-    tint: 0xffffff,
-    farTintScale: 1,
-    unitSize: 0.35,
-    shared: foliageUniforms,
-    singlePlane: true,
-  })
-
-  scene.add(
-    broadleafNearMesh,
-    broadleafFarMesh,
-    coniferNearMesh,
-    coniferFarMesh,
-    grassMesh,
-    bushMesh,
-    flowerMesh,
-    tallGrassMesh,
-    barrierMesh,
-  )
-  applyWind()
-  applyToggles()
+  const token = ++seasonLoadToken
+  activeSeason = season
+  const startedAt = performance.now()
+  ui?.setSeasonLoading(season)
+  if (!options.silent) {
+    overlay.hidden = false
+    overlayProgress.style.width = '0%'
+    overlayDetail.textContent = `正在加载 ${season} 素材…`
+  }
+  try {
+    const assets = await loadSeasonAssets(season, sharedAssets, (loaded, total) => {
+      if (token === seasonLoadToken && !options.silent) {
+        overlayProgress.style.width = `${Math.round((loaded / Math.max(1, total)) * 100)}%`
+      }
+    })
+    if (token !== seasonLoadToken) {
+      return
+    }
+    seasonAssets = assets
+    // Terrain material keeps the same geometry; swap textures + palette.
+    terrainMaterialHandle?.setSeason(season, assets.terrain)
+    roadHandle?.setSeason({ base: assets.road.base, overlay: assets.road.overlay }, SEASON_PARAMS[season].shadowFactor)
+    water?.setFrozen(SEASON_PARAMS[season].frozenWater)
+    if (placements) {
+      buildFoliageFromPlacements()
+    }
+    treeMeshManager?.setSeason({
+      textures: assets.treeMeshes,
+      discolouration: SEASON_PARAMS[season].treeDiscolouration,
+      hasSnow: SEASON_PARAMS[season].hasSnow,
+    })
+    if (treeMeshManager && placements) {
+      treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value, true)
+    }
+    assetStore.prune(seasonRetainIds(season))
+    lastSeasonSwitchMs = performance.now() - startedAt
+    settings.season = season
+    ui?.setSeasonActive(season)
+  } catch (error) {
+    console.error('[slowroads-lab] season switch failed', error)
+    overlayDetail.textContent = `季节加载失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    if (token === seasonLoadToken) {
+      ui?.setSeasonLoading(null)
+      if (!options.silent) {
+        overlay.hidden = true
+      }
+    }
+  }
 }
+
+// ---------------------------------------------------------------------------
+// Camera helpers
+// ---------------------------------------------------------------------------
 
 function resetCameraView(): void {
   if (!profile || profile.length < 1) {
@@ -398,6 +665,12 @@ function handleChange(kind: LabChangeKind, key: keyof LabSettings): void {
   }
   if (key === 'nearDistance') {
     foliageUniforms.nearDistance.value = settings.nearDistance
+  }
+  if (key === 'nearTreeRadius') {
+    foliageUniforms.meshRadius.value = settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
+    if (treeMeshManager && placements) {
+      treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value, true)
+    }
   }
   if (kind === 'uniform') {
     applyToggles()
@@ -424,32 +697,25 @@ function toggleCruise(): void {
   }
 }
 
-async function loadAtlasTexture(url: string): Promise<THREE.Texture> {
-  const loader = new THREE.TextureLoader()
-  const texture = await loader.loadAsync(url)
-  texture.colorSpace = THREE.SRGBColorSpace
-  texture.wrapS = THREE.ClampToEdgeWrapping
-  texture.wrapT = THREE.ClampToEdgeWrapping
-  texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy())
-  texture.needsUpdate = true
-  return texture
-}
-
-async function loadSlowroadsTexture(id: SlowroadsAssetId, tiling = false): Promise<THREE.Texture> {
-  const asset = SLOWROADS_ASSETS[id]
-  const loader = new THREE.TextureLoader()
-  const texture = await loader.loadAsync(asset.url)
-  texture.colorSpace = asset.colorSpace === 'srgb' ? THREE.SRGBColorSpace : THREE.NoColorSpace
-  if (tiling) {
-    texture.wrapS = THREE.RepeatWrapping
-    texture.wrapT = THREE.RepeatWrapping
-  } else {
-    texture.wrapS = THREE.ClampToEdgeWrapping
-    texture.wrapT = THREE.ClampToEdgeWrapping
-  }
-  texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy())
-  texture.needsUpdate = true
-  return texture
+async function recreateAssetStore(mode: AssetSourceMode, baseUrl: string): Promise<void> {
+  const maxAnisotropy = renderer.capabilities.getMaxAnisotropy()
+  const gl = renderer.getContext()
+  const deviceMaxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number
+  assetStore?.dispose()
+  assetStore = new LabAssetStore({
+    mode,
+    serverBaseUrl: baseUrl,
+    maxTextureSize: settings.compatMode ? Math.min(2048, deviceMaxTextureSize) : 0,
+    maxAnisotropy: Math.min(8, maxAnisotropy),
+  })
+  seasonLoadToken += 1
+  overlay.hidden = false
+  overlayDetail.textContent = '正在加载素材…'
+  sharedAssets = await loadSharedAssets((loaded, total) => {
+    overlayProgress.style.width = `${Math.round((loaded / Math.max(1, total)) * 50)}%`
+  })
+  await applySeason(settings.season, { silent: false })
+  rebuildWorld()
 }
 
 function handleResize(): void {
@@ -465,6 +731,10 @@ let fpsWindowStart = performance.now()
 let fps = 0
 let elapsedSeconds = 0
 
+function formatMb(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
+}
+
 function updateStats(): void {
   frames += 1
   const now = performance.now()
@@ -475,10 +745,15 @@ function updateStats(): void {
   }
   const info = renderer.info.render
   const treeCount = (broadleafNearMesh?.count ?? 0) + (coniferNearMesh?.count ?? 0)
+  const storeStats = assetStore?.stats()
+  const seasonBytes = assetStore
+    ? assetStore.bytesFor(collectSeasonTextureRefs(activeSeason).map((ref) => ref.id))
+    : 0
   statsElement.textContent = [
-    `FPS ${fps.toFixed(0)} · draw calls ${info.calls} · tris ${(info.triangles / 1e6).toFixed(2)}M`,
-    `树 ${treeCount} · 草 ${grassMesh?.count ?? 0} · 灌木 ${bushMesh?.count ?? 0} · 花草 ${flowerMesh?.count ?? 0} · 高草 ${tallGrassMesh?.count ?? 0}`,
-    `护栏 ${barrierSegmentCount} · 道路 ${profile ? Math.round(profile.length) : 0}m · 世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 种子 ${settings.seed >>> 0}`,
+    `FPS ${fps.toFixed(0)} · draw calls ${info.calls} · tris ${(info.triangles / 1e6).toFixed(2)}M · 季节 ${activeSeason}`,
+    `树卡 ${treeCount} · 近树3D ${treeMeshManager?.instanceCount ?? 0} · 草 ${grassMesh?.count ?? 0} · 灌木花草 ${bushMesh?.count ?? 0}`,
+    `护栏 ${barrierSegmentCount} · 道路 ${profile ? Math.round(profile.length) : 0}m · 世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 切季 ${lastSeasonSwitchMs ? `${Math.round(lastSeasonSwitchMs)}ms` : '—'}`,
+    `素材 ${storeStats?.textureCount ?? 0} 张 · 常驻≈${storeStats ? formatMb(storeStats.residentBytes) : '—'} · 本季下载 ${formatMb(seasonBytes)}${assetStore?.mode === 'server' ? ` · 已下载 ${formatMb(storeStats?.downloadedBytes ?? 0)}` : ''} · 种子 ${settings.seed >>> 0}`,
   ].join('\n')
 }
 
@@ -506,6 +781,9 @@ function animate(): void {
   } else {
     freeFly?.update(dt)
   }
+  if (treeMeshManager && placements) {
+    treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value)
+  }
   water?.setTime(elapsedSeconds)
   renderer.render(scene, camera)
   updateStats()
@@ -513,115 +791,51 @@ function animate(): void {
 
 async function init(): Promise<void> {
   runSelfChecks()
+  runSeasonCatalogChecks({ catalog: catalogForChecks })
   console.info(`[slowroads-lab] max texture units = ${renderer.capabilities.maxTextures}`)
-  const [
-    grassLegacy,
-    bushLegacy,
-    grassFiber,
-    grassVariation,
-    forest,
-    heather,
-    gravel,
-    rock,
-    rockBump,
-    sand,
-    detailNear,
-    detailFar,
-    noiseFineA,
-    noiseFineB,
-    noiseFineC,
-    noiseFiner,
-    nearBroadleaf,
-    nearBroadleafNormal,
-    nearConifer,
-    nearConiferAlpha,
-    farBroadleaf,
-    farConifer,
-    farConiferNormal,
-    flowers,
-    tallGrass,
-    barrier,
-    seaWaves,
-  ] = await Promise.all([
-    loadAtlasTexture(grassUrl),
-    loadAtlasTexture(bushUrl),
-    loadSlowroadsTexture('grass', true),
-    loadSlowroadsTexture('grassVariation', true),
-    loadSlowroadsTexture('forest', true),
-    loadSlowroadsTexture('heather', true),
-    loadSlowroadsTexture('gravel', true),
-    loadSlowroadsTexture('rock', true),
-    loadSlowroadsTexture('rockBump', true),
-    loadSlowroadsTexture('sand', true),
-    loadSlowroadsTexture('groundDetailNear', true),
-    loadSlowroadsTexture('groundDetailFar', true),
-    loadSlowroadsTexture('noiseFineA', true),
-    loadSlowroadsTexture('noiseFineB', true),
-    loadSlowroadsTexture('noiseFineC', true),
-    loadSlowroadsTexture('noiseFinerA', true),
-    loadSlowroadsTexture('nearTreesBroadleaf'),
-    loadSlowroadsTexture('nearTreesBroadleafNormal'),
-    loadSlowroadsTexture('nearTreesConifer'),
-    loadSlowroadsTexture('nearTreesConiferAlpha'),
-    loadSlowroadsTexture('farTreesBroadleaf'),
-    loadSlowroadsTexture('farTreesConifer'),
-    loadSlowroadsTexture('farTreesConiferNormal'),
-    loadSlowroadsTexture('flowers'),
-    loadSlowroadsTexture('tallGrass'),
-    loadSlowroadsTexture('barrier'),
-    loadSlowroadsTexture('seaWaves', true),
-  ])
 
-  surfaceTextures = {
-    grassFiber,
-    grassVariation,
-    forest,
-    heather,
-    gravel,
-    rock,
-    rockBump,
-    sand,
-    detailNear,
-    detailFar,
-    noiseFineA,
-    noiseFineB,
-    noiseFineC,
-    noiseFiner,
-  }
-  atlases = {
-    grass: { texture: grassLegacy, regions: gridRegions(2, 2, 256, 256), note: 'grass.png 2×2' },
-    bush: { texture: bushLegacy, regions: gridRegions(4, 2, 512, 256), note: 'bush.png 4×2' },
-    broadleafNear: {
-      texture: nearBroadleaf,
-      normalTexture: nearBroadleafNormal,
-      regions: NEAR_BROADLEAF_REGIONS,
-      note: 'spring_trees_0 四列树丛卡 + 法线',
-    },
-    broadleafFar: { texture: farBroadleaf, regions: gridRegions(16, 4, 4096, 1024), note: 'spring_imposters_0_d 16×4' },
-    coniferNear: {
-      texture: nearConifer,
-      alphaTexture: nearConiferAlpha,
-      regions: NEAR_CONIFER_REGIONS,
-      note: 'spring_trees_1_m + _a 四棵树卡',
-    },
-    coniferFar: {
-      texture: farConifer,
-      normalTexture: farConiferNormal,
-      regions: gridRegions(16, 4, 4096, 1024),
-      note: 'spring_imposters_1_d 16×4 + autumn_imposters_1_n 法线',
-    },
-    flowers: { texture: flowers, regions: FLOWER_REGIONS, note: 'spring_bushes 实测区域' },
-    tallGrass: { texture: tallGrass, regions: TALL_GRASS_REGIONS, note: 'summer_grasses 实测区域' },
-    barrier: { texture: barrier, regions: BARRIER_RAIL_REGIONS, note: 'spring_wall_barrier_wood 两条横栏' },
-  }
-  waterWavesTexture = seaWaves
+  const maxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy())
+  assetStore = new LabAssetStore({
+    mode: settings.assetSource,
+    serverBaseUrl: settings.serverBaseUrl,
+    maxTextureSize: settings.compatMode ? 2048 : 0,
+    maxAnisotropy,
+  })
+  sharedAssets = await loadSharedAssets()
+  await applySeason(settings.season, { silent: true })
 
   cruise = createCruiseController(() => profile)
   cruise.speed = settings.cruiseSpeed
   freeFly = createFreeFlyControls(camera, canvas)
   foliageUniforms.nearDistance.value = settings.nearDistance
+  foliageUniforms.meshRadius.value = settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
+
+  treeMeshManager = await createTreeMeshManager({
+    assetStore: requireStore(),
+    shared: foliageUniforms,
+  })
+  scene.add(treeMeshManager.container)
+  treeMeshManager.setSeason({
+    textures: seasonAssets!.treeMeshes,
+    discolouration: SEASON_PARAMS[activeSeason].treeDiscolouration,
+    hasSnow: SEASON_PARAMS[activeSeason].hasSnow,
+  })
+
   ui = createLabUi(panel, settings, {
     onChange: (kind, key) => handleChange(kind, key),
+    onSeasonChange: (season) => {
+      if (season !== activeSeason) {
+        void applySeason(season)
+      }
+    },
+    onCompatModeChange: () => {
+      void recreateAssetStore(settings.assetSource, settings.serverBaseUrl)
+    },
+    onAssetSourceChange: (mode, baseUrl) => {
+      settings.assetSource = mode
+      settings.serverBaseUrl = baseUrl
+      void recreateAssetStore(mode, baseUrl)
+    },
     onRandomizeSeed: () => {
       settings.seed = (Math.random() * 0xffffffff) >>> 0
       rebuildWorld()
@@ -670,7 +884,14 @@ Object.assign(globalThis, {
     get water() {
       return water?.mesh ?? null
     },
+    get activeSeason() {
+      return activeSeason
+    },
+    get treeMeshCount() {
+      return treeMeshManager?.instanceCount ?? 0
+    },
     rebuildWorld,
     rebuildPlacements,
+    applySeason: (season: SeasonId) => applySeason(season),
   },
 })

@@ -78,3 +78,7 @@ tour/src/pages/scenery/three
 tour/src/pages/scenery/three-mesh-bvh
 tour/src/pages/scenery/uni_modules/scenery
 tour/src/pages/scenery/utils
+
+# slowroads-lab materialised assets (generated from the local slowroads download folder; upload via asset bundle)
+tools/slowroads-lab/assets-src/
+tools/slowroads-lab/slowroads-atlas-bundle.zip
