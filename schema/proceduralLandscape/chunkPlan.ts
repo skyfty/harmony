@@ -72,8 +72,8 @@ export interface CameraGrassChunkParams {
 }
 
 // 与 slowroads-lab 的树/草密度对齐（lab 世界约 15.5k 树/km²、草走廊近 0.9/m²）。
-const TREE_BASE_PER_CLASS = 64
-const MAX_TREE_CANDIDATES_PER_CHUNK = 256
+const TREE_BASE_PER_CLASS = 128
+const MAX_TREE_CANDIDATES_PER_CHUNK = 512
 const GRASS_ALONG_SPACING = 1.2
 const GRASS_ACROSS_SPACING = 1.0
 const CAMERA_GRASS_CANDIDATES = 6

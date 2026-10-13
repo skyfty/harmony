@@ -136,7 +136,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     treeChunkSize: 192,
     densityMultiplier: 1,
     maxBuildTasksPerTick: 6,
-    maxTreeInstances: 40000,
+    maxTreeInstances: 60000,
     maxGrassInstances: 60000,
   },
 }
@@ -226,8 +226,9 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       minHeight: null,
       maxSlope: 0.45,
       roadClearance: 2,
-      minScale: 4,
-      maxScale: 9,
+      // 对齐 slowroads-lab：8m 基准 × 0.56~1.56 ≈ 4.5~12.5m（默认 5~12）。
+      minScale: 5,
+      maxScale: 12,
       nearDistance: null,
     },
     grass: {
