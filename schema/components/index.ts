@@ -36,6 +36,7 @@ import './definitions/proceduralCityComponent'
 import './definitions/cityGeneratorComponent'
 import './definitions/generalMeshComponent'
 import './definitions/skinComponent'
+import './definitions/proceduralLandscapeComponent'
 
 export {
 	componentManager,
@@ -89,3 +90,4 @@ export * from './definitions/proceduralCityComponent'
 export * from './definitions/cityGeneratorComponent'
 export * from './definitions/generalMeshComponent'
 export * from './definitions/skinComponent'
+export * from './definitions/proceduralLandscapeComponent'

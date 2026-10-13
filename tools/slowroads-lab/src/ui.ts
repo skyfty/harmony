@@ -1,0 +1,255 @@
+export interface LabSettings {
+  seed: number
+  showSurface: boolean
+  showTextures: boolean
+  showRoad: boolean
+  showCanopy: boolean
+  showGrass: boolean
+  showBushes: boolean
+  showFlowers: boolean
+  showTallGrass: boolean
+  showTrees: boolean
+  showWater: boolean
+  showBarrier: boolean
+  windEnabled: boolean
+  treeDensity: number
+  treeSize: number
+  grassCorridor: number
+  grassDensity: number
+  bushDensity: number
+  flowerDensity: number
+  tallGrassDensity: number
+  barrierDensity: number
+  windStrength: number
+  roadWidth: number
+  flattenBand: number
+  nearDistance: number
+  cruiseSpeed: number
+}
+
+export const DEFAULT_LAB_SETTINGS: LabSettings = {
+  seed: (Math.random() * 0xffffffff) >>> 0,
+  showSurface: true,
+  showTextures: true,
+  showRoad: true,
+  showCanopy: true,
+  showGrass: true,
+  showBushes: true,
+  showFlowers: true,
+  showTallGrass: true,
+  showTrees: true,
+  showWater: true,
+  showBarrier: true,
+  windEnabled: true,
+  treeDensity: 1,
+  treeSize: 1,
+  grassCorridor: 20,
+  grassDensity: 1,
+  bushDensity: 0.6,
+  flowerDensity: 1,
+  tallGrassDensity: 1,
+  barrierDensity: 0.65,
+  windStrength: 1,
+  roadWidth: 7,
+  flattenBand: 10,
+  nearDistance: 120,
+  cruiseSpeed: 14,
+}
+
+export type LabChangeKind = 'uniform' | 'placements' | 'world'
+
+export interface LabUiCallbacks {
+  onChange(kind: LabChangeKind, key: keyof LabSettings): void
+  onRandomizeSeed(): void
+  onRegenerate(): void
+  onToggleCruise(): void
+  onResetCamera(): void
+}
+
+export interface LabUiHandle {
+  sync(): void
+  setCruiseActive(active: boolean): void
+}
+
+function createElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  text?: string,
+): HTMLElementTagNameMap[K] {
+  const element = document.createElement(tag)
+  if (className) {
+    element.className = className
+  }
+  if (text !== undefined) {
+    element.textContent = text
+  }
+  return element
+}
+
+export function createLabUi(
+  container: HTMLElement,
+  settings: LabSettings,
+  callbacks: LabUiCallbacks,
+): LabUiHandle {
+  container.replaceChildren()
+  container.append(createElement('h2', undefined, 'Slow Roads Lab'))
+
+  // ---- Layer toggles -------------------------------------------------------
+  const toggleSection = createElement('div', 'panel__toggles')
+  const toggleDefs: Array<{ key: keyof LabSettings; label: string }> = [
+    { key: 'showSurface', label: '地表混合' },
+    { key: 'showTextures', label: '地表贴图' },
+    { key: 'showRoad', label: '道路' },
+    { key: 'showCanopy', label: '树冠色斑' },
+    { key: 'showGrass', label: '草' },
+    { key: 'showBushes', label: '灌木' },
+    { key: 'showFlowers', label: '花草' },
+    { key: 'showTallGrass', label: '高草' },
+    { key: 'showTrees', label: '树' },
+    { key: 'showWater', label: '水面' },
+    { key: 'showBarrier', label: '护栏' },
+    { key: 'windEnabled', label: '风摆' },
+  ]
+  const toggleInputs = new Map<keyof LabSettings, HTMLInputElement>()
+  for (const def of toggleDefs) {
+    const label = createElement('label')
+    const input = createElement('input')
+    input.type = 'checkbox'
+    input.checked = Boolean(settings[def.key])
+    input.addEventListener('change', () => {
+      ;(settings[def.key] as boolean) = input.checked
+      callbacks.onChange('uniform', def.key)
+    })
+    label.append(input, document.createTextNode(def.label))
+    toggleSection.append(label)
+    toggleInputs.set(def.key, input)
+  }
+  container.append(toggleSection)
+
+  // ---- World ---------------------------------------------------------------
+  container.append(createElement('h3', undefined, '世界'))
+  const seedRow = createElement('div', 'panel__row')
+  const seedInput = createElement('input')
+  seedInput.type = 'text'
+  seedInput.value = String(settings.seed)
+  seedInput.addEventListener('change', () => {
+    const parsed = Number.parseInt(seedInput.value, 10)
+    settings.seed = Number.isFinite(parsed) ? parsed >>> 0 : settings.seed
+    seedInput.value = String(settings.seed)
+    callbacks.onChange('world', 'seed')
+  })
+  const randomizeButton = createElement('button', undefined, '随机')
+  randomizeButton.addEventListener('click', () => {
+    callbacks.onRandomizeSeed()
+    seedInput.value = String(settings.seed)
+  })
+  const regenerateButton = createElement('button', undefined, '重新生成')
+  regenerateButton.addEventListener('click', () => callbacks.onRegenerate())
+  seedRow.append(createElement('label', undefined, '种子'), seedInput, randomizeButton, regenerateButton)
+  container.append(seedRow)
+
+  // ---- Sliders -------------------------------------------------------------
+  interface SliderDef {
+    key: keyof LabSettings
+    label: string
+    min: number
+    max: number
+    step: number
+    kind: LabChangeKind
+  }
+
+  const sliderDefs: Array<{ title: string; items: SliderDef[] }> = [
+    {
+      title: '植被',
+      items: [
+        { key: 'treeDensity', label: '树密度', min: 0, max: 2, step: 0.05, kind: 'placements' },
+        { key: 'treeSize', label: '树尺寸', min: 0.6, max: 1.6, step: 0.05, kind: 'placements' },
+        { key: 'grassCorridor', label: '草走廊 (m)', min: 5, max: 40, step: 1, kind: 'placements' },
+        { key: 'grassDensity', label: '草密度', min: 0, max: 2, step: 0.05, kind: 'placements' },
+        { key: 'bushDensity', label: '灌木密度', min: 0, max: 1, step: 0.05, kind: 'placements' },
+        { key: 'flowerDensity', label: '花草密度', min: 0, max: 2, step: 0.05, kind: 'placements' },
+        { key: 'tallGrassDensity', label: '高草密度', min: 0, max: 2, step: 0.05, kind: 'placements' },
+        { key: 'windStrength', label: '风强度', min: 0, max: 1, step: 0.05, kind: 'uniform' },
+      ],
+    },
+    {
+      title: '道路',
+      items: [
+        { key: 'roadWidth', label: '道路宽 (m)', min: 4, max: 12, step: 0.5, kind: 'world' },
+        { key: 'flattenBand', label: '压平带 (m)', min: 4, max: 20, step: 1, kind: 'world' },
+        { key: 'barrierDensity', label: '护栏密度', min: 0, max: 1, step: 0.05, kind: 'placements' },
+      ],
+    },
+    {
+      title: '相机',
+      items: [
+        { key: 'nearDistance', label: '近树距离 (m)', min: 40, max: 300, step: 5, kind: 'uniform' },
+        { key: 'cruiseSpeed', label: '巡航速度', min: 0, max: 30, step: 1, kind: 'uniform' },
+      ],
+    },
+  ]
+
+  const sliderInputs = new Map<keyof LabSettings, HTMLInputElement>()
+  const sliderValues = new Map<keyof LabSettings, HTMLSpanElement>()
+  for (const group of sliderDefs) {
+    container.append(createElement('h3', undefined, group.title))
+    for (const def of group.items) {
+      const row = createElement('div', 'panel__row')
+      const input = createElement('input')
+      input.type = 'range'
+      input.min = String(def.min)
+      input.max = String(def.max)
+      input.step = String(def.step)
+      input.value = String(settings[def.key])
+      const valueLabel = createElement('span', 'value', String(settings[def.key]))
+      input.addEventListener('input', () => {
+        ;(settings[def.key] as number) = Number(input.value)
+        valueLabel.textContent = input.value
+        if (def.kind !== 'world') {
+          callbacks.onChange(def.kind, def.key)
+        }
+      })
+      if (def.kind === 'world') {
+        input.addEventListener('change', () => callbacks.onChange('world', def.key))
+      }
+      row.append(createElement('label', undefined, def.label), input, valueLabel)
+      container.append(row)
+      sliderInputs.set(def.key, input)
+      sliderValues.set(def.key, valueLabel)
+    }
+  }
+
+  // ---- Camera buttons ------------------------------------------------------
+  const cameraRow = createElement('div', 'panel__row')
+  const cruiseButton = createElement('button', undefined, '巡航')
+  cruiseButton.addEventListener('click', () => callbacks.onToggleCruise())
+  const resetButton = createElement('button', undefined, '重置视角')
+  resetButton.addEventListener('click', () => callbacks.onResetCamera())
+  cameraRow.append(cruiseButton, resetButton)
+  container.append(cameraRow)
+
+  container.append(createElement(
+    'p',
+    'panel__hint',
+    '自由相机：拖拽旋转，WASD 移动，Q/E 升降，Shift 加速。草/灌木/树/花草/高草/护栏使用 slowroads 精灵图集，地表贴图来自 slowroads 素材；未开启的图层不显示。',
+  ))
+
+  return {
+    sync(): void {
+      seedInput.value = String(settings.seed)
+      for (const def of toggleDefs) {
+        toggleInputs.get(def.key)!.checked = Boolean(settings[def.key])
+      }
+      for (const group of sliderDefs) {
+        for (const def of group.items) {
+          const value = settings[def.key]
+          sliderInputs.get(def.key)!.value = String(value)
+          sliderValues.get(def.key)!.textContent = String(value)
+        }
+      }
+    },
+    setCruiseActive(active: boolean): void {
+      cruiseButton.classList.toggle('is-active', active)
+    },
+  }
+}

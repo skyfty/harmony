@@ -364,13 +364,22 @@ export class ComponentManager {
     this.nodeBundles.delete(nodeId)
   }
 
-  update(deltaTime: number): void {
+  /**
+   * Advances every enabled component instance. An optional `types` filter lets
+   * a host runtime (for example the editor viewport) drive only a subset of
+   * component types without changing the behaviour of the others.
+   */
+  update(deltaTime: number, options: { types?: ReadonlySet<string> } = {}): void {
     if (!Number.isFinite(deltaTime) || deltaTime <= 0) {
       return
     }
+    const typeFilter = options.types
     this.nodeBundles.forEach((bundle) => {
       bundle.instances.forEach((wrapper) => {
         if (!wrapper.state.enabled) {
+          return
+        }
+        if (typeFilter && !typeFilter.has(wrapper.definition.type)) {
           return
         }
         try {

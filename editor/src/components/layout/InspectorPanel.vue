@@ -45,6 +45,7 @@ import CouponPanel from '@/components/inspector/CouponPanel.vue'
 import ProceduralCityPanel from '@/components/inspector/ProceduralCityPanel.vue'
 import CityGeneratorPanel from '@/components/inspector/CityGeneratorPanel.vue'
 import GeneralMeshPanel from '@/components/inspector/GeneralMeshPanel.vue'
+import ProceduralLandscapePanel from '@/components/inspector/ProceduralLandscapePanel.vue'
 import { useSceneStore, getRuntimeObject, GROUND_NODE_ID, ENVIRONMENT_NODE_ID, MULTIUSER_NODE_ID } from '@/stores/sceneStore'
 import { getNodeIcon } from '@/types/node-icons'
 import { findSceneNodeById } from '@/utils/animationClipCatalog'
@@ -96,6 +97,7 @@ import {
   PROCEDURAL_CITY_COMPONENT_TYPE,
   CITY_GENERATOR_COMPONENT_TYPE,
   GENERAL_MESH_COMPONENT_TYPE,
+  PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
 } from '@schema/components'
 
 type BehaviorDetailsPayload = {
@@ -749,6 +751,7 @@ watch(
               <ProceduralCityPanel v-else-if="component.type === PROCEDURAL_CITY_COMPONENT_TYPE" />
               <CityGeneratorPanel v-else-if="component.type === CITY_GENERATOR_COMPONENT_TYPE" />
               <GeneralMeshPanel v-else-if="component.type === GENERAL_MESH_COMPONENT_TYPE" />
+              <ProceduralLandscapePanel v-else-if="component.type === PROCEDURAL_LANDSCAPE_COMPONENT_TYPE" />
               <BehaviorPanel
                 v-else-if="component.type === BEHAVIOR_COMPONENT_TYPE"
                 @open-details="handleOpenBehaviorDetails"

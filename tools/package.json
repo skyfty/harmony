@@ -37,6 +37,9 @@
     "dev:city-lab": "vite --config ./city-lab/vite.config.ts",
     "build:city-lab": "vite build --config ./city-lab/vite.config.ts",
     "type-check:city-lab": "tsc -p ./city-lab/tsconfig.json --noEmit",
+    "dev:slowroads-lab": "vite --config ./slowroads-lab/vite.config.ts",
+    "build:slowroads-lab": "vite build --config ./slowroads-lab/vite.config.ts",
+    "type-check:slowroads-lab": "tsc -p ./slowroads-lab/tsconfig.json --noEmit",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepare": "pnpm run build"
   },

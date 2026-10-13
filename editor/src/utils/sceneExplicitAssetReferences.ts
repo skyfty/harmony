@@ -5,9 +5,11 @@ import {
   BILLBOARD_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
+  PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   type BillboardComponentProps,
   type DisplayBoardComponentProps,
   type LodComponentProps,
+  type ProceduralLandscapeComponentProps,
 } from '@schema/components'
 
 export interface ExplicitSceneAssetReference {
@@ -90,6 +92,34 @@ function visitBehaviorAssetReferences(
   })
 }
 
+function visitProceduralLandscapeAssetReferences(
+  props: Partial<ProceduralLandscapeComponentProps> | null | undefined,
+  visit: (reference: ExplicitSceneAssetReference) => void,
+): void {
+  const assets = props?.assets
+  if (!assets) {
+    return
+  }
+  visit({ assetId: assets.surfaceGrassAssetId, path: 'assets.surfaceGrassAssetId' })
+  visit({ assetId: assets.surfaceForestAssetId, path: 'assets.surfaceForestAssetId' })
+  visit({ assetId: assets.surfaceGravelAssetId, path: 'assets.surfaceGravelAssetId' })
+  visit({ assetId: assets.surfaceRoadAssetId, path: 'assets.surfaceRoadAssetId' })
+  const lists: Array<{ key: keyof typeof assets; ids: unknown }> = [
+    { key: 'grassAssetIds', ids: assets.grassAssetIds },
+    { key: 'bushAssetIds', ids: assets.bushAssetIds },
+    { key: 'treeNearAssetIds', ids: assets.treeNearAssetIds },
+    { key: 'treeFarAssetIds', ids: assets.treeFarAssetIds },
+  ]
+  for (const list of lists) {
+    if (!Array.isArray(list.ids)) {
+      continue
+    }
+    list.ids.forEach((assetId, index) => {
+      visit({ assetId: assetId as string | null | undefined, path: `assets.${String(list.key)}[${index}]` })
+    })
+  }
+}
+
 export function visitExplicitComponentAssetReferences(
   componentType: string,
   props: Record<string, unknown> | null | undefined,
@@ -119,6 +149,9 @@ export function visitExplicitComponentAssetReferences(
       return
     case BEHAVIOR_COMPONENT_TYPE:
       visitBehaviorAssetReferences(props as Partial<BehaviorComponentProps> | null | undefined, visit)
+      return
+    case PROCEDURAL_LANDSCAPE_COMPONENT_TYPE:
+      visitProceduralLandscapeAssetReferences(props as Partial<ProceduralLandscapeComponentProps> | null | undefined, visit)
       return
     default:
       return

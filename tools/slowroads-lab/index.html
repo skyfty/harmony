@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Slow Roads Lab</title>
+    <meta
+      name="description"
+      content="slowroads-style procedural terrain, traced road and sprite foliage lab"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="viewport"></canvas>
+      <aside id="panel" class="panel"></aside>
+      <div id="stats" class="stats"></div>
+      <div id="overlay" class="overlay" hidden>
+        <div class="overlay__box">
+          <div class="overlay__title">正在生成地形…</div>
+          <div class="overlay__bar"><div id="overlay-progress" class="overlay__fill"></div></div>
+          <div id="overlay-detail" class="overlay__detail"></div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -363,8 +363,11 @@ import {
 } from './waterSurfaceEditUtils'
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
+import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/runtime'
+import { setProceduralLandscapeAssetResolver } from '@schema/proceduralLandscape/assetResolver'
 import {
   componentManager,
+  PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
   VIEW_POINT_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
   WARP_GATE_COMPONENT_TYPE,
@@ -15209,6 +15212,17 @@ function animate() {
     prof.groundStreaming = performance.now() - t_gc0
   }
 
+  if (effectiveDelta > 0) {
+    const t_pl0 = performance.now()
+    try {
+      componentManager.setFrameState({ cameraWorldPosition: camera.position })
+      componentManager.update(effectiveDelta, { types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES })
+    } catch (error) {
+      console.warn('[SceneViewport] Failed to advance procedural landscape runtime', error)
+    }
+    prof.proceduralLandscape = performance.now() - t_pl0
+  }
+
   if (instancedBoundsHasPending()) {
     flushInstancedBounds()
   }
@@ -24942,6 +24956,8 @@ function handleRectangleAxisAlignedBBlur() {
 
 onMounted(() => {
   setGroundTextureSourceResolver(resolveGroundTextureSource)
+  setProceduralLandscapeEnvironment('editor')
+  setProceduralLandscapeAssetResolver(resolveGroundTextureSource)
   initScene()
   if (canvasRef.value) {
     canvasRef.value.addEventListener('wheel', handleViewportWheel, { passive: false, capture: true })
@@ -24993,6 +25009,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   setGroundTextureSourceResolver(null)
+  setProceduralLandscapeAssetResolver(null)
   disposeRigidbodyColliderEditor()
   if (uiStore.activeSelectionContext === 'rigidbody-collider') {
     uiStore.setActiveSelectionContext(rigidbodyColliderPreviousSelectionContext)

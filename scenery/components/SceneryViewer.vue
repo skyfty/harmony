@@ -861,6 +861,11 @@ import {
   generalMeshComponentDefinition,
 } from '@harmony/schema/components/definitions/generalMeshComponent';
 import {
+  proceduralLandscapeComponentDefinition,
+} from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
+import { setProceduralLandscapeAssetResolver } from '@harmony/schema/proceduralLandscape/assetResolver';
+import { setProceduralLandscapeEnvironment } from '@harmony/schema/proceduralLandscape/runtime';
+import {
   deviceAdaptationComponentDefinition,
 } from '@harmony/schema/components/definitions/deviceAdaptationComponent';
 import type {
@@ -2198,6 +2203,7 @@ previewComponentManager.registerDefinition(nominateComponentDefinition);
 previewComponentManager.registerDefinition(preloadableComponentDefinition);
 previewComponentManager.registerDefinition(deviceAdaptationComponentDefinition);
 previewComponentManager.registerDefinition(generalMeshComponentDefinition);
+previewComponentManager.registerDefinition(proceduralLandscapeComponentDefinition);
 
 const previewNodeMap = new Map<string, SceneNode>();
 const previewParentMap = new Map<string, string | null>();
@@ -23527,6 +23533,8 @@ onMounted(() => {
     applySceneInputFromProps();
   }
   setGroundTextureSourceResolver(resolveGroundTextureSource);
+  setProceduralLandscapeEnvironment('viewer');
+  setProceduralLandscapeAssetResolver(resolveGroundTextureSource);
   setParticleTextureResolver(resolveParticleTextureAssetSource);
 });
 
@@ -23623,6 +23631,7 @@ function cleanupRuntime(): void {
   localMultiuserVehiclePresentationByNodeId.clear();
   localMultiuserCharacterPresentationByNodeId.clear();
   setGroundTextureSourceResolver(null);
+  setProceduralLandscapeAssetResolver(null);
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];
   setParticleTextureResolver(null);
 }

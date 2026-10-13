@@ -179,6 +179,8 @@ import {
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
 import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { setGroundTextureSourceResolver } from '@schema/groundTextureSourceResolver'
+import { setProceduralLandscapeAssetResolver } from '@schema/proceduralLandscape/assetResolver'
+import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/runtime'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -258,6 +260,7 @@ import {
 	animationComponentDefinition,
 	skinComponentDefinition,
 	generalMeshComponentDefinition,
+	proceduralLandscapeComponentDefinition,
 	particleSystemComponentDefinition,
 	warpGateComponentDefinition,
 	rigidbodyComponentDefinition,
@@ -1414,6 +1417,7 @@ previewComponentManager.registerDefinition(nominateComponentDefinition)
 previewComponentManager.registerDefinition(preloadableComponentDefinition)
 previewComponentManager.registerDefinition(onlineComponentDefinition)
 previewComponentManager.registerDefinition(generalMeshComponentDefinition)
+previewComponentManager.registerDefinition(proceduralLandscapeComponentDefinition)
 
 const previewNodeMap = new Map<string, SceneNode>()
 const previewParentMap = new Map<string, string | null>()
@@ -15856,6 +15860,8 @@ onMounted(() => {
 		DISPLAY_BOARD_RESOLVER_KEY
 	] = resolveDisplayBoardMediaSource
 	setGroundTextureSourceResolver(resolveGroundTextureSource)
+	setProceduralLandscapeEnvironment('preview')
+	setProceduralLandscapeAssetResolver(resolveGroundTextureSource)
 	setParticleTextureResolver(resolveParticleTextureAssetSource)
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
@@ -15957,6 +15963,7 @@ onBeforeUnmount(() => {
 	] = undefined
 	setGroundTextureSourceResolver(null)
 	setParticleTextureResolver(null)
+	setProceduralLandscapeAssetResolver(null)
 })
 
 watch(

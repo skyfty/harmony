@@ -2,6 +2,7 @@ import type { SceneNode, SceneNodeComponentState } from './core'
 import { ANIMATION_COMPONENT_TYPE } from './components/definitions/animationComponent'
 import { SKIN_COMPONENT_TYPE } from './components/definitions/skinComponent'
 import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
+import { PROCEDURAL_LANDSCAPE_COMPONENT_TYPE } from './components/definitions/proceduralLandscapeComponent'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
 
 function isSceneNodeComponentState(value: unknown): value is SceneNodeComponentState<unknown> {
@@ -24,6 +25,17 @@ export function hasEnabledSkinComponent(node: SceneNode | null | undefined): boo
     return false
   }
   const component = node.components[SKIN_COMPONENT_TYPE]
+  if (!isSceneNodeComponentState(component)) {
+    return false
+  }
+  return component.enabled !== false
+}
+
+export function hasEnabledProceduralLandscapeComponent(node: SceneNode | null | undefined): boolean {
+  if (!node?.components) {
+    return false
+  }
+  const component = node.components[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]
   if (!isSceneNodeComponentState(component)) {
     return false
   }
@@ -64,7 +76,13 @@ export function canNodeUseRuntimeModelInstancing(node: SceneNode | null | undefi
 
   const generalMesh = node.components?.[GENERAL_MESH_COMPONENT_TYPE]
   const hasEnabledGeneralMesh = Boolean(generalMesh && generalMesh.enabled !== false)
-  return !hasEnabledAnimationComponent(node) && !hasEnabledSkinComponent(node) && !hasEnabledGeneralMesh
+  // The procedural landscape samples the node's own mesh geometry and injects
+  // surface materials; both require a real Object3D instead of the shared
+  // InstancedMesh proxy (which owns no meshes and only carries a box pick proxy).
+  return !hasEnabledAnimationComponent(node)
+    && !hasEnabledSkinComponent(node)
+    && !hasEnabledGeneralMesh
+    && !hasEnabledProceduralLandscapeComponent(node)
 }
 
 export function collectRuntimeModelNodesByAssetId(
