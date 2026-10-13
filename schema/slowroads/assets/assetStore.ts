@@ -329,7 +329,10 @@ export class SlowroadsAssetStore {
   /** 下载 `.treebin`（近树模型）原始字节。 */
   async modelBytes(logicalId: string): Promise<ArrayBuffer | null> {
     await this.ensureManifest()
-    const file = this.fileByLogicalId.get(logicalId)
+    // manifest 里同时存在基础 id（指向 .obj 源文件）与 `${id}.treebin`（运行时打包格式）；
+    // 近树必须取 .treebin（运行时无 OBJLoader，且 .obj 文本不是 treebin 二进制）。
+    const file = this.fileByLogicalId.get(`${logicalId}.treebin`)
+      ?? this.fileByLogicalId.get(logicalId)
     if (!file) {
       this.warn(`missing-file:${logicalId}`)
       return null
