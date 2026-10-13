@@ -95,28 +95,15 @@ import {
 } from '@/utils/transformPivot'
 import {
   buildRegionDynamicMeshFromLocalVertices,
-  disposeSkyCubeTexture,
   getLastExtensionFromFilenameOrUrl,
   isHdriLikeExtension,
-  isKtx2LikeExtension,
-  isSkyCubeArchiveExtension,
   isVideoLikeExtension,
-  loadSkyCubeTexture,
   resolveGroundChunkCoordFromWorldPosition,
   resolveGroundWorldBounds,
 } from '@schema/core'
 import {
-  createGradientBackgroundDome,
-  disposeGradientBackgroundDome,
-  type GradientBackgroundDome,
-} from '@schema/overlay'
-import { extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
-import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
-import {
   createSceneCsmShadowRuntime,
   DEFAULT_SCENE_CSM_CONFIG,
-  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
   resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
@@ -189,7 +176,6 @@ import {
 } from '@schema/continuousInstancedModel'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
-import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import { loadTextureFromFile } from '@/utils/textureAsset'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
@@ -224,7 +210,6 @@ import { useRigidbodyColliderSceneEditor } from './useRigidbodyColliderSceneEdit
 import ViewportNorthCompass from './ViewportNorthCompass.vue'
 import FloatingPopover from '@/components/common/FloatingPopover.vue'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
-import CsmSunMenuContent from '@/components/editor/CsmSunMenuContent.vue'
 import {
   buildViewportPlacementPreview,
   getViewportPlacementKey,
@@ -368,6 +353,10 @@ import {
   createSlowroadsEnvironmentRuntime,
   type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
+import {
+  SLOWROADS_SUN_AZIMUTH_DEG,
+  SLOWROADS_SUN_ELEVATION_DEG,
+} from '@schema/slowroads/core/environment'
 import { setSlowroadsFogEnabled } from '@schema/slowroads/render/fogInjection'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
 import {
@@ -427,7 +416,7 @@ import type {
   LodComponentProps,
 
 } from '@schema/components'
-import type { EnvironmentCsmSettings, EnvironmentSettings } from '@/types/environment'
+import type { EnvironmentSettings } from '@/types/environment'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
@@ -1171,66 +1160,6 @@ const postprocessing = useViewportPostprocessing({
   getCamera: () => camera,
   getPerformanceMode: () => Boolean(environmentSettings.value.viewportPerformanceMode),
 })
-let backgroundTexture: THREE.Texture | null = null
-let backgroundTextureSourceKind: 'texture' | null = null
-let backgroundAssetId: string | null = null
-let backgroundAssetKey: string | null = null
-let skyCubeTexture: THREE.CubeTexture | null = null
-let gradientBackgroundDome: GradientBackgroundDome | null = null
-let skyCubeZipAssetId: string | null = null
-let skyCubeZipAssetKey: string | null = null
-let skyCubeZipFaceUrlCleanup: (() => void) | null = null
-let backgroundLoadToken = 0
-
-function disposeGradientBackgroundResources() {
-  disposeGradientBackgroundDome(gradientBackgroundDome)
-  gradientBackgroundDome = null
-}
-
-function buildObjectUrlsFromSkycubeZipFaces(
-  facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
-): { urls: Array<string | null>; dispose: () => void } {
-  const urls: Array<string | null> = []
-  const created: string[] = []
-  for (const face of facesInOrder) {
-    if (!face) {
-      urls.push(null)
-      continue
-    }
-    const mimeType = face.mimeType ?? 'application/octet-stream'
-    const bytes = face.bytes as unknown as Uint8Array<ArrayBuffer>
-    const blob = new Blob([bytes], { type: mimeType })
-    const url = URL.createObjectURL(blob)
-    created.push(url)
-    urls.push(url)
-  }
-  return {
-    urls,
-    dispose: () => {
-      for (const url of created) {
-        try {
-          URL.revokeObjectURL(url)
-        } catch (_error) {
-          // ignore
-        }
-      }
-    },
-  }
-}
-
-function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): string | null {
-  const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
-  if (!trimmed) {
-    return null
-  }
-  const entry = assetCacheStore.entries?.[trimmed]
-  const asset = sceneStore.getAsset(trimmed)
-  const serverUpdatedAt = entry?.serverUpdatedAt ?? null
-  const blobUrl = entry?.blobUrl ?? null
-  const downloadUrl = asset?.downloadUrl ?? null
-  return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}|${downloadUrl ?? ''}`
-}
-
 function resolveGroundTextureSource(assetId: string): string | null {
   const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
   if (!trimmed) {
@@ -1257,35 +1186,12 @@ const VIEWPORT_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
 let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 let sceneCsmRuntimeConfigKey = ''
 
-function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
-  const csm = settings.csm
-  return {
-    enabled: csm?.enabled ?? DEFAULT_SCENE_CSM_CONFIG.enabled,
-    shadowEnabled: csm?.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
-    lightColor: csm?.lightColor ?? '#ffffff',
-    lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
-    sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-    sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-    cascades: csm?.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
-    maxFar: csm?.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
-    shadowMapSize: csm?.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
-    shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
-  }
-}
-
-function resolveViewportSceneCsmConfig(settings: EnvironmentSettings): SceneCsmConfig {
-  const csm = resolveEnvironmentCsmSettings(settings)
-  return {
-    ...VIEWPORT_SCENE_CSM_BASE_CONFIG,
-    enabled: csm.enabled,
-    shadowEnabled: csm.shadowEnabled,
-    lightColor: csm.lightColor,
-    lightIntensity: csm.lightIntensity,
-    cascades: csm.cascades,
-    maxFar: csm.maxFar,
-    shadowMapSize: csm.shadowMapSize,
-    shadowBias: csm.shadowBias,
-  }
+/**
+ * 阴影质量参数固定为默认配置（不再有 CSM 用户设置）；太阳方向固定为
+ * lab 常量（见 SLOWROADS_SUN_*），颜色/强度由 Slow Roads 预设下发。
+ */
+function resolveViewportSceneCsmConfig(): SceneCsmConfig {
+  return { ...VIEWPORT_SCENE_CSM_BASE_CONFIG }
 }
 
 function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
@@ -1301,8 +1207,7 @@ function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
 }
 
 function shouldUseSceneCsmShadows(): boolean {
-  const config = resolveViewportSceneCsmConfig(environmentSettings.value)
-  return Boolean(scene && camera && shadowsActiveInViewport.value && config.enabled)
+  return Boolean(scene && camera && shadowsActiveInViewport.value)
 }
 
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
@@ -1312,7 +1217,7 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
     }
     return null
   }
-  const config = resolveViewportSceneCsmConfig(environmentSettings.value)
+  const config = resolveViewportSceneCsmConfig()
   const configKey = buildSceneCsmConfigKey(config)
   if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
     disposeSceneCsmShadowRuntime()
@@ -1323,7 +1228,7 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
     sceneCsmShadowRuntime.registerObject(rootGroup)
     sceneCsmShadowRuntime.registerObject(instancedMeshGroup)
   }
-  syncSceneCsmSunFromEnvironment(environmentSettings.value)
+  syncSceneCsmSunPosition()
   return sceneCsmShadowRuntime
 }
 
@@ -1333,13 +1238,21 @@ function disposeSceneCsmShadowRuntime(): void {
   sceneCsmRuntimeConfigKey = ''
 }
 
-function syncSceneCsmSunFromEnvironment(settings: EnvironmentSettings): void {
+/** 固定太阳方向定位（颜色/强度由 SR 预设通过 refreshLighting 下发）。 */
+function syncSceneCsmSunPosition(): void {
   if (!sceneCsmShadowRuntime) {
     return
   }
-  const csm = resolveEnvironmentCsmSettings(settings)
-  const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
-  sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor)
+  const sunPosition = resolveSceneCsmSunPositionFromAngles(
+    SLOWROADS_SUN_AZIMUTH_DEG,
+    SLOWROADS_SUN_ELEVATION_DEG,
+    1000,
+  )
+  sceneCsmShadowRuntime.syncSun(
+    sunPosition,
+    DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+    String(DEFAULT_SCENE_CSM_CONFIG.lightColor ?? '#ffffff'),
+  )
   // Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
   slowroadsEnvironment?.refreshLighting()
 }
@@ -1695,7 +1608,7 @@ function applyRendererShadowSetting() {
   if (castShadows) {
     const runtime = ensureSceneCsmShadowRuntime()
     runtime?.setActive(true)
-    syncSceneCsmSunFromEnvironment(environmentSettings.value)
+    syncSceneCsmSunPosition()
     return
   }
   sceneCsmShadowRuntime?.setActive(false)
@@ -2125,7 +2038,6 @@ const axesVisible = computed(() => sceneStore.viewportSettings.showAxes)
 const vertexSnapThresholdPx = computed(() => sceneStore.viewportSettings.snapThresholdPx)
 const shadowsEnabled = computed(() => sceneStore.shadowsEnabled)
 const environmentSettings = computed(() => sceneStore.environmentSettings)
-const isEnvironmentNodeSelected = computed(() => sceneStore.selectedNodeId === ENVIRONMENT_NODE_ID)
 const shadowsActiveInViewport = computed(() => shadowsEnabled.value)
 const canAlignSelection = computed(() => {
   const primaryId = sceneStore.selectedNodeId
@@ -2206,7 +2118,6 @@ const autoOverlayHoverIndicator = reactive({
 })
 const groundTerrainMenuOpen = ref(false)
 const groundScatterMenuOpen = ref(false)
-const csmMenuOpen = ref(false)
 const viewportPlacementMenuOpen = ref(false)
 const pendingViewportPlacement = ref<ViewportPlacementItem | null>(null)
 const viewportPlacementActive = computed(() => Boolean(pendingViewportPlacement.value))
@@ -8842,56 +8753,6 @@ function handleGroundScatterMenuOpen(value: boolean) {
   groundScatterMenuOpen.value = Boolean(value)
 }
 
-function patchEnvironmentCsmSettings(patch: Partial<EnvironmentCsmSettings>): void {
-  const current = resolveEnvironmentCsmSettings(environmentSettings.value)
-  sceneStore.patchEnvironmentSettings({
-    csm: {
-      ...current,
-      ...patch,
-    },
-  })
-}
-
-function handleCsmEnabledUpdate(value: boolean): void {
-  patchEnvironmentCsmSettings({ enabled: Boolean(value) })
-}
-
-function handleCsmShadowEnabledUpdate(value: boolean): void {
-  patchEnvironmentCsmSettings({ shadowEnabled: Boolean(value) })
-}
-
-function handleCsmLightColorUpdate(value: string): void {
-  patchEnvironmentCsmSettings({ lightColor: value })
-}
-
-function handleCsmLightIntensityUpdate(value: number): void {
-  patchEnvironmentCsmSettings({ lightIntensity: value })
-}
-
-function handleCsmSunAzimuthDegUpdate(value: number): void {
-  patchEnvironmentCsmSettings({ sunAzimuthDeg: value })
-}
-
-function handleCsmSunElevationDegUpdate(value: number): void {
-  patchEnvironmentCsmSettings({ sunElevationDeg: value })
-}
-
-function handleCsmCascadesUpdate(value: number): void {
-  patchEnvironmentCsmSettings({ cascades: value })
-}
-
-function handleCsmMaxFarUpdate(value: number): void {
-  patchEnvironmentCsmSettings({ maxFar: value })
-}
-
-function handleCsmShadowMapSizeUpdate(value: number): void {
-  patchEnvironmentCsmSettings({ shadowMapSize: value })
-}
-
-function handleCsmShadowBiasUpdate(value: number): void {
-  patchEnvironmentCsmSettings({ shadowBias: value })
-}
-
 function handleViewportPlacementMenuOpen(value: boolean) {
   viewportPlacementMenuOpen.value = Boolean(value)
 }
@@ -13352,64 +13213,16 @@ watch(axesVisible, (visible) => {
 
 const environmentSignature = computed(() => {
   const settings = environmentSettings.value
-  const background = settings.background
-
-  const backgroundAssetKey =
-    background.mode !== 'solidColor' && background.backgroundAssetId
-      ? computeEnvironmentAssetReloadKey(background.backgroundAssetId)
-      : null
-
   return JSON.stringify({
-    background: {
-      mode: background.mode,
-      solidColor: background.solidColor,
-      gradientTopColor: background.mode === 'solidColor' ? (background.gradientTopColor ?? null) : null,
-      gradientOffset: background.mode === 'solidColor' ? (background.gradientOffset ?? null) : null,
-      gradientExponent: background.mode === 'solidColor' ? (background.gradientExponent ?? null) : null,
-      backgroundAssetId: background.backgroundAssetId ?? null,
-      backgroundAssetKey,
-    },
-    orientation: {
-      preset: settings.environmentOrientationPreset ?? 'yUp',
-      rotationDegrees: settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 },
-    },
-    ambientLightColor: settings.ambientLightColor,
-    ambientLightIntensity: settings.ambientLightIntensity,
     slowroads: settings.slowroads,
     northDirection: settings.northDirection,
-    csm: resolveEnvironmentCsmSettings(settings),
   })
 })
-
-function degreesToRadians(value: number): number {
-  return (value * Math.PI) / 180
-}
-
-function applyEnvironmentTextureRotation(settings: EnvironmentSettings) {
-  if (!scene) {
-    return
-  }
-  const rot = settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 }
-  const euler = new THREE.Euler(
-    degreesToRadians(rot.x ?? 0),
-    degreesToRadians(rot.y ?? 0),
-    degreesToRadians(rot.z ?? 0),
-    'XYZ',
-  )
-  scene.backgroundRotation.copy(euler)
-  scene.environmentRotation.copy(euler)
-}
 
 watch(environmentSignature, () => {
   void applyEnvironmentSettingsToScene(environmentSettings.value)
   gizmoControls?.setNorthDirection(environmentSettings.value.northDirection)
   updateCameraNorthHeading()
-  updateFogForSelection()
-}, { immediate: true })
-
-watch(isEnvironmentNodeSelected, () => {
-  updateFogForSelection()
-  applyRendererShadowSetting()
 }, { immediate: true })
 
 watch(
@@ -14683,311 +14496,10 @@ function resolveAssetExtension(asset: ProjectAsset | null, override?: string | n
   return getLastExtensionFromFilenameOrUrl(source)
 }
 
-async function resolveEnvironmentAssetUrl(assetId: string): Promise<{ url: string; extension: string | null; asset: ProjectAsset } | null> {
-  const asset = sceneStore.getAsset(assetId)
-  if (!asset) {
-    console.warn('Environment asset not found', assetId)
-    return null
-  }
-
-  let entry: Awaited<ReturnType<typeof assetCacheStore.downloadProjectAsset>> | null = null
-  try {
-    entry = await assetCacheStore.downloadProjectAsset(asset)
-  } catch (error) {
-    console.warn('Failed to cache environment asset', assetId, error)
-  }
-
-  const url = entry?.blobUrl ?? asset.downloadUrl ?? asset.description ?? null
-  if (!url) {
-    console.warn('Environment asset has no accessible URL', assetId)
-    return null
-  }
-
-  assetCacheStore.touch(assetId)
-  const extension = resolveAssetExtension(asset, entry?.filename ?? url)
-  return { url, extension, asset }
-}
-
-async function loadEnvironmentTextureFromAsset(assetId: string): Promise<THREE.Texture | null> {
-  const resolved = await resolveEnvironmentAssetUrl(assetId)
-  if (!resolved) {
-    return null
-  }
-
-    const { url, extension } = resolved
-
-    try {
-      if (isKtx2LikeExtension(extension)) {
-        const ktx2Loader = await createKtx2Loader(renderer!, { transcoderPath: FAST_KTX2_TRANSCODER_PATH })
-        const texture = await ktx2Loader.loadAsync(url)
-        texture.mapping = THREE.CubeUVReflectionMapping
-        texture.colorSpace = THREE.SRGBColorSpace
-        texture.needsUpdate = true
-        return texture
-      }
-      if (isHdriLikeExtension(extension)) {
-        const texture = await rgbeLoader.loadAsync(url)
-        texture.mapping = THREE.EquirectangularReflectionMapping
-        texture.needsUpdate = true
-        return texture
-      }
-      // EXR not supported in all module environments; fall back to image loader.
-      const texture = await loadTextureFromSourceUrl(url)
-      texture.mapping = THREE.EquirectangularReflectionMapping
-      texture.colorSpace = THREE.SRGBColorSpace
-      texture.flipY = false
-      texture.needsUpdate = true
-      return texture
-    } catch (error) {
-    console.warn('Failed to load environment texture', assetId, error)
-    return null
-  }
-}
-
-function disposeHdriBackgroundResources() {
-  if (scene && scene.background === backgroundTexture) {
-    scene.background = null
-  }
-  if (backgroundTexture) {
-    backgroundTexture.dispose()
-    backgroundTexture = null
-  }
-  backgroundTextureSourceKind = null
-  backgroundAssetId = null
-  backgroundAssetKey = null
-}
-
-function disposeSkyCubeBackgroundResources() {
-  if (scene && scene.background === skyCubeTexture) {
-    scene.background = null
-  }
-  skyCubeZipFaceUrlCleanup?.()
-  skyCubeZipFaceUrlCleanup = null
-  disposeSkyCubeTexture(skyCubeTexture)
-  skyCubeTexture = null
-  skyCubeZipAssetId = null
-  skyCubeZipAssetKey = null
-}
-
-function disposeBackgroundResources() {
-  disposeHdriBackgroundResources()
-  disposeSkyCubeBackgroundResources()
-  disposeGradientBackgroundResources()
-}
-
-function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
-  if (!scene) {
-    return false
-  }
-  if (
-    backgroundTexture
-    && (
-      background.mode === 'hdri'
-      || background.mode === 'fastHdri'
-      || (background.mode === 'skycube' && backgroundTextureSourceKind === 'texture')
-    )
-  ) {
-    scene.environment = backgroundTexture
-  } else {
-    scene.environment = null
-  }
-  scene.environmentIntensity = 1
-  return true
-}
-
-async function applyBackgroundSettings(background: EnvironmentSettings['background']): Promise<boolean> {
-  backgroundLoadToken += 1
-  const token = backgroundLoadToken
-
-  if (!scene) {
-    return false
-  }
-
-  if (background.mode === 'solidColor') {
-    const gradientTopColor = typeof background.gradientTopColor === 'string' ? background.gradientTopColor.trim() : ''
-
-    disposeHdriBackgroundResources()
-    disposeSkyCubeBackgroundResources()
-
-    if (gradientTopColor) {
-      if (!gradientBackgroundDome) {
-        gradientBackgroundDome = createGradientBackgroundDome({
-          topColor: gradientTopColor,
-          bottomColor: background.solidColor,
-          offset: background.gradientOffset ?? 33,
-          exponent: background.gradientExponent ?? 0.6,
-        })
-        gradientBackgroundDome.mesh.userData = { ...(gradientBackgroundDome.mesh.userData ?? {}), editorOnly: true }
-        ;(gradientBackgroundDome.mesh as any).raycast = () => {}
-        scene.add(gradientBackgroundDome.mesh)
-      } else {
-        gradientBackgroundDome.uniforms.topColor.value.set(gradientTopColor)
-        gradientBackgroundDome.uniforms.bottomColor.value.set(background.solidColor)
-        if (typeof background.gradientOffset === 'number' && Number.isFinite(background.gradientOffset)) {
-          gradientBackgroundDome.uniforms.offset.value = background.gradientOffset
-        }
-        if (typeof background.gradientExponent === 'number' && Number.isFinite(background.gradientExponent)) {
-          gradientBackgroundDome.uniforms.exponent.value = background.gradientExponent
-        }
-      }
-
-      scene.background = null
-      return true
-    }
-
-    disposeGradientBackgroundResources()
-    scene.background = new THREE.Color(background.solidColor)
-    return true
-  }
-
-  if (background.mode === 'skycube') {
-    disposeGradientBackgroundResources()
-    const assetId = background.backgroundAssetId ?? null
-    if (!assetId) {
-      disposeBackgroundResources()
-      scene.background = new THREE.Color(background.solidColor)
-      return true
-    }
-
-    const resolved = await resolveEnvironmentAssetUrl(assetId)
-    const extension = resolved?.extension ?? null
-    if (!isSkyCubeArchiveExtension(extension)) {
-      const hdriKey = computeEnvironmentAssetReloadKey(assetId)
-      if (backgroundTexture && backgroundAssetId === assetId && backgroundAssetKey === hdriKey && backgroundTextureSourceKind === 'texture') {
-        scene.background = backgroundTexture
-        return true
-      }
-      const loaded = await loadEnvironmentTextureFromAsset(assetId)
-      if (!loaded || token !== backgroundLoadToken) {
-        if (loaded) {
-          loaded.dispose()
-        }
-        return false
-      }
-      disposeBackgroundResources()
-      backgroundTexture = loaded
-      backgroundTextureSourceKind = 'texture'
-      backgroundAssetId = assetId
-      backgroundAssetKey = hdriKey
-      scene.background = backgroundTexture
-      return true
-    }
-
-    const zipKey = computeEnvironmentAssetReloadKey(assetId)
-    const sameAsPrevious =
-      skyCubeTexture &&
-      (assetId ?? null) === (skyCubeZipAssetId ?? null) &&
-      (zipKey ?? null) === (skyCubeZipAssetKey ?? null)
-    if (sameAsPrevious && skyCubeTexture) {
-      scene.background = skyCubeTexture
-      return true
-    }
-
-    const zipUrl = resolved?.url ?? null
-    if (!zipUrl) {
-      console.warn('[SceneViewport] SkyCube zip URL unavailable', assetId)
-      return false
-    }
-
-    let buffer: ArrayBuffer | null = null
-    try {
-      const response = await fetch(zipUrl)
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
-      buffer = await response.arrayBuffer()
-    } catch (error) {
-      console.warn('[SceneViewport] Failed to fetch SkyCube zip', assetId, error)
-      return false
-    }
-
-    if (token !== backgroundLoadToken) {
-      return false
-    }
-
-    let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>
-    try {
-      extracted = await extractSkycubeZipFacesAsync(buffer)
-    } catch (error) {
-      console.warn('[SceneViewport] Failed to unzip SkyCube zip', assetId, error)
-      return false
-    }
-
-    if (extracted.missingFaces.length) {
-      console.warn('[SceneViewport] SkyCube zip missing faces', extracted.missingFaces)
-    }
-
-    const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
-
-    const loaded = await loadSkyCubeTexture(faceUrls)
-    if (token !== backgroundLoadToken) {
-      disposeSkyCubeTexture(loaded.texture)
-      disposeFaceUrls()
-      return false
-    }
-    if (!loaded.texture) {
-      disposeFaceUrls()
-      throw new Error(loaded.error || 'Failed to load SkyCube background from zip')
-    }
-
-    disposeBackgroundResources()
-    skyCubeTexture = loaded.texture
-    skyCubeZipAssetId = assetId
-    skyCubeZipAssetKey = zipKey
-    skyCubeZipFaceUrlCleanup = disposeFaceUrls
-    scene.background = skyCubeTexture
-    return true
-  }
-
-  if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.backgroundAssetId) {
-    disposeGradientBackgroundResources()
-    disposeBackgroundResources()
-    scene.background = new THREE.Color(background.solidColor)
-    return true
-  }
-
-  const hdriKey = computeEnvironmentAssetReloadKey(background.backgroundAssetId)
-
-  if (backgroundTexture && backgroundAssetId === background.backgroundAssetId && backgroundAssetKey === hdriKey) {
-    disposeGradientBackgroundResources()
-    scene.background = backgroundTexture
-    return true
-  }
-
-  const texture = await loadEnvironmentTextureFromAsset(background.backgroundAssetId)
-  if (!texture || token !== backgroundLoadToken) {
-    texture?.dispose()
-    return false
-  }
-
-  disposeBackgroundResources()
-  backgroundTexture = texture
-  backgroundTextureSourceKind = 'texture'
-  backgroundAssetId = background.backgroundAssetId
-  backgroundAssetKey = hdriKey
-  scene.background = texture
-  return true
-}
-
-function disableFog() {
-  if (!scene) {
-    return
-  }
-  scene.fog = null
-}
-
-/**
- * Slow Roads 三色雾是场景唯一雾系统。editor 视口沿用「仅选中 Environment
- * 节点时预览」的行为：选中时开启 SR 雾，未选中时关闭（天空/云/星/雪不受影响）。
- */
-function updateFogForSelection() {
-  disableFog()
-  setSlowroadsFogEnabled(isEnvironmentNodeSelected.value)
-}
-
 /**
  * Slow Roads 场景级环境运行时（天空/云/星空/降雪/三色雾 + 预设光照）。
  * renderer/scene/camera 就绪后惰性创建；设置变化走 setSettings，逐帧 update。
+ * 环境设置收敛后：天空是唯一背景、三色雾始终生效，不再有独立的背景/雾参数。
  */
 function ensureSlowroadsEnvironmentRuntime(): void {
   if (slowroadsEnvironment || !scene || !camera || !renderer) {
@@ -15006,7 +14518,7 @@ function ensureSlowroadsEnvironmentRuntime(): void {
     scene: activeScene,
     camera,
     assetStore,
-    fogEnabled: isEnvironmentNodeSelected.value,
+    fogEnabled: true,
     applyLighting: (state) => {
       if (!slowroadsAmbientLight) {
         slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 0.75)
@@ -15016,8 +14528,12 @@ function ensureSlowroadsEnvironmentRuntime(): void {
       slowroadsAmbientLight.color.copy(state.ambientColor)
       slowroadsAmbientLight.intensity = state.ambientIntensity
       if (sceneCsmShadowRuntime) {
-        const csm = resolveEnvironmentCsmSettings(environmentSettings.value)
-        const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
+        // 太阳方向固定（lab 常量）；颜色/强度来自 SR 预设。
+        const sunPosition = resolveSceneCsmSunPositionFromAngles(
+          SLOWROADS_SUN_AZIMUTH_DEG,
+          SLOWROADS_SUN_ELEVATION_DEG,
+          1000,
+        )
         sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`)
       }
     },
@@ -15033,21 +14549,14 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
     return
   }
 
-  const backgroundApplied = await applyBackgroundSettings(snapshot.background)
-  const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background)
-
-  applyEnvironmentTextureRotation(snapshot)
-
-  if (backgroundApplied && environmentApplied) {
-    pendingEnvironmentSettings = null
-  } else {
-    pendingEnvironmentSettings = snapshot
-  }
+  // 标准雾不参与渲染：SR 三色雾是场景唯一雾系统，且始终生效。
+  scene.fog = null
+  setSlowroadsFogEnabled(true)
   applyRendererShadowSetting()
-  syncSceneCsmSunFromEnvironment(snapshot)
-  updateFogForSelection()
+  syncSceneCsmSunPosition()
   // SR 环境最后应用：预设光照覆盖 CSM 同步结果（预设接管光色/强度）。
   slowroadsEnvironment?.setSettings(snapshot.slowroads)
+  pendingEnvironmentSettings = null
 }
 
 function disposeSkyResources() {
@@ -15188,9 +14697,6 @@ function animate() {
   updatePlacementSideSnapHintPulse(performance.now())
   updateDebugVertexPoints(performance.now())
   updatePlaceholderOverlayPositions()
-  if (gradientBackgroundDome) {
-    gradientBackgroundDome.mesh.position.copy(camera.position)
-  }
   const t_mid = performance.now()
   prof.renderPrep = t_mid - t_renderPrep
   gizmoControls?.cameraUpdate()
@@ -15349,7 +14855,6 @@ function disposeScene() {
   clearLightHelpers()
   disposeSkyResources()
   disposeSceneCsmShadowRuntime()
-  disposeBackgroundResources()
   if (viewPointCameraHelper) {
     viewPointCameraHelper.removeFromParent()
     viewPointCameraHelper.geometry?.dispose?.()
@@ -24691,8 +24196,6 @@ const VIEWPORT_OVERLAY_UI_SELECTORS = [
   '.camera-status-hud__icon-btn',
   '.camera-status-hud__help-btn',
   '.camera-status-hud__ratio',
-  '.csm-hud',
-  '.csm-hud__btn',
   '.popup-menu-card',
   '.ground-tool-menu__card',
   '.floor-shape-menu__card',
@@ -25938,60 +25441,6 @@ defineExpose({
           <div class="view-point-preview-card__header">ViewPoint Camera</div>
           <canvas ref="viewPointPreviewCanvasRef" class="view-point-preview-card__canvas" />
         </div>
-        <div class="csm-hud">
-          <v-menu
-            v-model="csmMenuOpen"
-            location="top end"
-            :offset="6"
-            :close-on-content-click="false"
-          >
-            <template #activator="{ props: menuProps }">
-              <v-btn
-                v-bind="menuProps"
-                density="compact"
-                size="large"
-                class="csm-hud__btn"
-                :color="csmMenuOpen ? 'primary' : 'white'"
-                variant="text"
-                title="CSM Sun & Shadow"
-              >
-                <v-icon icon="mdi-white-balance-sunny" size="30" />
-              </v-btn>
-            </template>
-            <v-list density="compact" class="csm-sun-menu">
-              <div
-                class="popup-menu-card csm-sun-menu__card"
-                @pointerdown.stop
-                @pointerup.stop
-                @mousedown.stop
-                @mouseup.stop
-              >
-                <CsmSunMenuContent
-                  :csm-enabled="resolveEnvironmentCsmSettings(environmentSettings).enabled"
-                  :csm-shadow-enabled="resolveEnvironmentCsmSettings(environmentSettings).shadowEnabled"
-                  :csm-light-color="resolveEnvironmentCsmSettings(environmentSettings).lightColor"
-                  :csm-light-intensity="resolveEnvironmentCsmSettings(environmentSettings).lightIntensity"
-                  :csm-sun-azimuth-deg="resolveEnvironmentCsmSettings(environmentSettings).sunAzimuthDeg"
-                  :csm-sun-elevation-deg="resolveEnvironmentCsmSettings(environmentSettings).sunElevationDeg"
-                  :csm-cascades="resolveEnvironmentCsmSettings(environmentSettings).cascades"
-                  :csm-max-far="resolveEnvironmentCsmSettings(environmentSettings).maxFar"
-                  :csm-shadow-map-size="resolveEnvironmentCsmSettings(environmentSettings).shadowMapSize"
-                  :csm-shadow-bias="resolveEnvironmentCsmSettings(environmentSettings).shadowBias"
-                  @update:csm-enabled="handleCsmEnabledUpdate"
-                  @update:csm-shadow-enabled="handleCsmShadowEnabledUpdate"
-                  @update:csm-light-color="handleCsmLightColorUpdate"
-                  @update:csm-light-intensity="handleCsmLightIntensityUpdate"
-                  @update:csm-sun-azimuth-deg="handleCsmSunAzimuthDegUpdate"
-                  @update:csm-sun-elevation-deg="handleCsmSunElevationDegUpdate"
-                  @update:csm-cascades="handleCsmCascadesUpdate"
-                  @update:csm-max-far="handleCsmMaxFarUpdate"
-                  @update:csm-shadow-map-size="handleCsmShadowMapSizeUpdate"
-                  @update:csm-shadow-bias="handleCsmShadowBiasUpdate"
-                />
-              </div>
-            </v-list>
-          </v-menu>
-        </div>
         <ViewportNorthCompass
           class="viewport-bottom-right-hud__compass"
           :heading-degrees="cameraNorthHeadingDegrees"
@@ -26345,40 +25794,6 @@ defineExpose({
 
 .viewport-bottom-right-hud__compass {
   flex: 0 0 auto;
-}
-
-.csm-hud {
-  position: static;
-  pointer-events: auto;
-}
-
-:global(.csm-sun-menu) {
-  width: 260px !important;
-  max-width: min(260px, 92vw) !important;
-}
-
-.csm-hud__btn {
-  min-width: 0 !important;
-  width: 40px !important;
-  height: 40px !important;
-  padding: 0 !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  filter: none !important;
-  backdrop-filter: none !important;
-  color: rgba(236, 241, 248, 0.95);
-  --v-btn-height: 40px;
-}
-
-.csm-hud__btn :deep(.v-btn__overlay),
-.csm-hud__btn :deep(.v-btn__underlay) {
-  display: none !important;
-}
-
-.csm-hud__btn :deep(.v-btn__content) {
-  opacity: 1 !important;
 }
 
 .camera-status-hud {

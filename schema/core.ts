@@ -50,19 +50,12 @@ export {
 } from './skyCubeTexture'
 
 export {
-  DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
-  DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
-  DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
   DEFAULT_SLOWROADS_ENVIRONMENT,
   DEFAULT_ENVIRONMENT_PHYSICS_ENABLED,
   DEFAULT_ENVIRONMENT_PHYSICS_ENGINE,
   DEFAULT_ENVIRONMENT_GRAVITY,
   DEFAULT_ENVIRONMENT_RESTITUTION,
   DEFAULT_ENVIRONMENT_FRICTION,
-  DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
-  DEFAULT_ENVIRONMENT_ROTATION_DEGREES,
-  DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
-  DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
   DEFAULT_ENVIRONMENT_SETTINGS,
   cloneEnvironmentSettings,
   extractEnvironmentSettingsFromNodes,
@@ -1760,12 +1753,14 @@ export interface SceneResourceSummary {
   meshTextureUsage?: SceneResourceMeshTextureUsage[];
 }
 
-export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'fastHdri' | 'skycube'
 /**
  * Slow Roads 环境（季节 × 时间 × 天气）设置。
  *
  * 素材固定来自在线资产包（`schema/slowroads`），这里只保存选择与开关；
- * 场景雾由 SR 三色雾接管（无标准 fogMode），天空关闭时回退 background。
+ * 场景光照/三色雾/天空/云层/星空/降雪全部由这套预设驱动：
+ * 太阳方向固定为 lab 常量（见 `slowroads/core/environment.ts` 的
+ * SLOWROADS_SUN_AZIMUTH_DEG / SLOWROADS_SUN_ELEVATION_DEG），天空是唯一背景，
+ * 雾始终生效，均不再有独立的环境（Background/Fog/阳光）参数。
  */
 export interface SlowroadsEnvironmentSettings {
   /** 季节（spring/summer/autumn/winter）。 */
@@ -1774,8 +1769,6 @@ export interface SlowroadsEnvironmentSettings {
   timeOfDay: 'morning' | 'day' | 'evening' | 'night'
   /** 天气（clear/overcast；降雪为冬季阴天专属，星空为夜晴专属）。 */
   weather: 'clear' | 'overcast'
-  /** 天空（关闭时回退 background 设置；SR 三色雾始终生效）。 */
-  showSky: boolean
   showClouds: boolean
   showStars: boolean
   showSnow: boolean
@@ -1785,48 +1778,9 @@ export interface SlowroadsEnvironmentSettings {
 export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
 export type EnvironmentPhysicsEngine = 'ammo' | 'cannon'
 
-export type EnvironmentOrientationPreset = 'yUp' | 'zUp' | 'xUp' | 'custom'
-
-export type SkyCubeBackgroundFormat = 'zip'
-
-export interface EnvironmentRotationDegrees {
-  /** Degrees */
-  x: number
-  /** Degrees */
-  y: number
-  /** Degrees */
-  z: number
-}
-
-export interface EnvironmentBackgroundSettings {
-  mode: EnvironmentBackgroundMode
-  solidColor: string
-  /**
-  * Optional gradient background top color.
-   * When provided (valid hex), background renders as a vertical gradient from solidColor (bottom) to gradientTopColor (top).
-   * When omitted/invalid, background falls back to a pure solid color.
-   */
-  gradientTopColor?: string | null
-  /** Vertical gradient offset (matches Three.js shader example semantics). Default: 33. */
-  gradientOffset?: number
-  /** Vertical gradient exponent (matches Three.js shader example semantics). Default: 0.6. */
-  gradientExponent?: number
-  backgroundAssetId: string | null
-}
-
 export interface EnvironmentSettings {
-  background: EnvironmentBackgroundSettings
   /** Which world axis should be treated as geographic north by viewers. */
   northDirection?: EnvironmentNorthDirection
-  /**
-   * Optional orientation helper for environment textures (HDRI / FastHDRI / SkyCube).
-   * Used by the editor UI to adapt cubemaps authored with different up axes.
-   */
-  environmentOrientationPreset?: EnvironmentOrientationPreset
-  /** Rotation applied to scene.background / scene.environment in degrees. */
-  environmentRotationDegrees?: EnvironmentRotationDegrees
-  ambientLightColor: string
-  ambientLightIntensity: number
   /** Slow Roads 季节/时间/天气环境（必填，读取时归一化补默认值）。 */
   slowroads: SlowroadsEnvironmentSettings
   /** When false, runtime physics remains loaded but does not advance simulation steps. */
@@ -1835,28 +1789,11 @@ export interface EnvironmentSettings {
   gravityStrength: number
   collisionRestitution: number
   collisionFriction: number
-  csm?: EnvironmentCsmSettings
   /** Prefer viewport FPS over visual quality in editor postprocessing. */
   viewportPerformanceMode?: boolean
 }
 
-export interface EnvironmentCsmSettings {
-  enabled: boolean
-  shadowEnabled: boolean
-  lightColor: string
-  lightIntensity: number
-  sunAzimuthDeg: number
-  sunElevationDeg: number
-  cascades: number
-  maxFar: number
-  shadowMapSize: number
-  shadowBias: number
-}
-
-export type EnvironmentSettingsPatch = Partial<EnvironmentSettings> & {
-  background?: Partial<EnvironmentBackgroundSettings>
-  csm?: Partial<EnvironmentCsmSettings>
-}
+export type EnvironmentSettingsPatch = Partial<EnvironmentSettings>
 export type DynamicMeshType = 'Ground' | 'Wall' | 'Road' | 'Floor' | 'Landform' | 'GuideRoute' | 'Region' | 'ModelCollision'
 
 export type GroundHeightMap = ArrayLike<number> & {

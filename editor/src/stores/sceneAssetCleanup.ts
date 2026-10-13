@@ -78,30 +78,6 @@ function findGroundNode(nodes: SceneNode[] | null | undefined): SceneNode | null
   return null
 }
 
-function sanitizeEnvironmentAssetReferences<T>(value: T): T {
-  if (!isPlainObject(value)) {
-    return value
-  }
-
-  const clone: Record<string, unknown> = { ...value }
-
-  const stripBackgroundAsset = (raw: unknown): void => {
-    if (!isPlainObject(raw)) {
-      return
-    }
-    const section: Record<string, unknown> = { ...raw }
-    const mode = typeof section.mode === 'string' ? section.mode.toLowerCase() : ''
-    if (mode === 'solidcolor') {
-      delete section.backgroundAssetId
-    }
-    clone.background = section
-  }
-
-  stripBackgroundAsset(clone.background)
-
-  return clone as T
-}
-
 function isAssetReferenceKey(key: string | null | undefined): boolean {
   if (!key) {
     return false
@@ -427,9 +403,6 @@ function collectNodeAssetDependencies(node: SceneNode | null | undefined, bucket
   if (node.userData) {
     if (node.id === ENVIRONMENT_NODE_ID && isPlainObject(node.userData)) {
       const sanitizedUserData = { ...(node.userData as Record<string, unknown>) }
-      if ('environment' in sanitizedUserData) {
-        sanitizedUserData.environment = sanitizeEnvironmentAssetReferences(sanitizedUserData.environment)
-      }
       collectAssetIdsFromUnknown(sanitizedUserData, bucket)
     } else {
       collectAssetIdsFromUnknown(node.userData, bucket)
@@ -470,7 +443,7 @@ export function collectDirectSceneAssetReferenceIds(scene: StoredSceneDocument):
   traverseNodes(scene.nodes ?? [])
   collectGroundScatterAssetDependencies(scene, bucket)
 
-  collectAssetIdsFromUnknown(sanitizeEnvironmentAssetReferences(scene.environment), bucket)
+  collectAssetIdsFromUnknown(scene.environment, bucket)
   collectAssetIdsFromUnknown(scene.groundSettings, bucket)
   collectPlanningAssetDependencies(scene.planningData, bucket)
 

@@ -128,22 +128,26 @@ lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4
 
 ## 迁移接口设计（EnvironmentPanel → proceduralLandscape，后续落地）
 
-目标形态（本次只实现 lab，editor/三端接线按此执行）：
+目标形态（三端已接线；环境设置已收敛为「只保留 Slow Roads 预设」）：
 
 1. `schema/core` 的 `EnvironmentSettings` 增加 `season: SeasonId`、
    `timeOfDay: 'morning'|'day'|'evening'|'night'`、`weather: 'clear'|'overcast'`
    （含默认值与归一化，进 `environmentSettingsUtils`）；`editor/src/types/environment.ts`
-   同步或改为 re-export。
+   改为 re-export（单一来源）。
 2. `EnvironmentPanel.vue` 新增「Slow Roads 环境」区：季节/时间/天气三个选择器，
-   直接写上述字段（不做派生值回写）。
+   直接写上述字段（不做派生值回写）；Background / 阳光(CSM) / 方向旋转等旧环境设置
+   已整体移除，旧场景里的这些字段在归一化时直接丢弃（不做兼容）。
 3. 下发通道：`schema/components/Component.ts` 的 `ComponentFrameState` 增加
    `environment?: { season, timeOfDay, weather } | null`；editor `SceneViewport`、
    `ScenePreviewView`、`SceneryViewer` 三端在现有 `setFrameState({cameraWorldPosition})`
    处一并注入。
 4. `proceduralLandscape` runtime 通过帧状态读取环境；`src/core/environment*.ts`
-   （类型 + 32 套预设）原样平移到 schema，作为共享预设表；
+   （类型 + 32 套预设）原样平移到 schema，作为共享预设表；太阳方向固定为 lab 常量
+   `(0.42,0.72,0.28)≈方位 56.3°/高度 55°`（`SLOWROADS_SUN_*`），时间/天气只改颜色与强度，
+   阴影只有一个总开关（质量参数用 `DEFAULT_SCENE_CSM_CONFIG`）。
 5. 渲染接入：`lab/fogPatch|sky|clouds|stars|snow` 的机制随 proceduralLandscape
-   迁移进 editor/preview/SceneryViewer 视口（本次未接入）。
+   迁移进 editor/preview/SceneryViewer 视口；天空是唯一背景（常显），三色雾在所有端
+   始终生效（编辑器不再有"仅选中 Environment 节点才预览雾"的分支）。
 
 ## 性能与小程序约束（实测）
 

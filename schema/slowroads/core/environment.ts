@@ -117,6 +117,16 @@ export function fogColorC(preset: EnvironmentPreset): string {
 export const ENVIRONMENT_VIEW_DISTANCE = 1000
 export const ENVIRONMENT_CLOUD_ALTITUDE = 300
 
+/**
+ * 固定太阳方向（三端共享）：取自 slowroads-lab 的常量向量
+ * `(0.42, 0.72, 0.28).normalize()` ≈ (0.4777, 0.8188, 0.3185)，
+ * 换算成 CSM 的角度约定（x=sin(az)cos(el), y=sin(el), z=cos(az)cos(el)）即
+ * 方位 ≈ 56.3°、高度 ≈ 55°。官方/ lab 的阳光只随时间/天气改变颜色与强度，
+ * 方向恒定，因此这里不再暴露方位/高度设置。
+ */
+export const SLOWROADS_SUN_AZIMUTH_DEG = 56.3
+export const SLOWROADS_SUN_ELEVATION_DEG = 55
+
 export interface ResolvedFogParams {
   near: number
   far: number

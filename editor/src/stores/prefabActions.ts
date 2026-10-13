@@ -312,30 +312,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function sanitizeEnvironmentAssetReferences<T>(value: T): T {
-  if (!isPlainObject(value)) {
-    return value
-  }
-
-  const clone: Record<string, unknown> = { ...(value as any) }
-
-  const stripBackgroundAsset = (raw: unknown): void => {
-    if (!isPlainObject(raw)) {
-      return
-    }
-    const section: Record<string, unknown> = { ...raw }
-    const mode = typeof section.mode === 'string' ? section.mode.toLowerCase() : ''
-    if (mode === 'solidcolor') {
-      delete section.backgroundAssetId
-    }
-    clone.background = section
-  }
-
-  stripBackgroundAsset(clone.background)
-
-  return clone as T
-}
-
 const ASSET_REFERENCE_SKIP_KEYS = new Set<string>(['prefabSource'])
 
 function isAssetReferenceKey(key: string | null | undefined): boolean {
@@ -441,7 +417,6 @@ function collectNodeAssetDependenciesLocal(node: SceneNode | null | undefined, b
   if ((node as any).userData) {
     if ((node as any).nodeType === 'Environment' && isPlainObject((node as any).userData)) {
       const sanitizedUserData = { ...((node as any).userData as Record<string, unknown>) }
-      if ('environment' in sanitizedUserData) sanitizedUserData.environment = sanitizeEnvironmentAssetReferences(sanitizedUserData.environment)
       collectAssetIdsFromUnknown(sanitizedUserData, bucket)
     } else {
       collectAssetIdsFromUnknown((node as any).userData, bucket)

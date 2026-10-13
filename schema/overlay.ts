@@ -1,6 +1,5 @@
 export * from './browserPunchProgress'
 export * from './cameraGuard'
-export * from './gradientBackground'
 export * from './multiuserContext'
 export * from './scenePreviewPerf'
 export * from './signboardBillboardRuntime'

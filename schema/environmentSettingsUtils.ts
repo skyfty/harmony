@@ -1,11 +1,5 @@
-export type { EnvironmentSettings, EnvironmentCsmSettings, EnvironmentNorthDirection } from './core';
-import {
-  DEFAULT_SCENE_CSM_CONFIG,
-  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-} from './sceneCsmDefaults'
+export type { EnvironmentSettings, EnvironmentNorthDirection } from './core';
 import type {
-  EnvironmentCsmSettings,
   EnvironmentNorthDirection,
   EnvironmentSettings,
   SceneJsonExportDocument,
@@ -13,63 +7,26 @@ import type {
   SlowroadsEnvironmentSettings,
 } from './core'
 
-const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
-
-export const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175'
-export const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
-export const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.75
 export const DEFAULT_ENVIRONMENT_PHYSICS_ENABLED = true
 export const DEFAULT_ENVIRONMENT_PHYSICS_ENGINE = 'cannon' as const
 export const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
 export const DEFAULT_ENVIRONMENT_RESTITUTION = 0.2
 export const DEFAULT_ENVIRONMENT_FRICTION = 0.3
 export const DEFAULT_ENVIRONMENT_NORTH_DIRECTION = '+X' as const
-export const DEFAULT_ENVIRONMENT_ORIENTATION_PRESET = 'yUp' as const
-export const DEFAULT_ENVIRONMENT_ROTATION_DEGREES = { x: 0, y: 0, z: 0 }
-
-export const DEFAULT_ENVIRONMENT_GRADIENT_OFFSET = 33
-export const DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT = 0.6
 export const DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE = false
-export const DEFAULT_ENVIRONMENT_CSM_LIGHT_COLOR = '#ffffff'
 
 export const DEFAULT_SLOWROADS_ENVIRONMENT: import('./core').SlowroadsEnvironmentSettings = {
   season: 'spring',
   timeOfDay: 'day',
   weather: 'clear',
-  showSky: true,
   showClouds: true,
   showStars: true,
   showSnow: true,
   exposureScale: 1,
 }
 
-export const DEFAULT_ENVIRONMENT_CSM_SETTINGS: EnvironmentCsmSettings = {
-  enabled: true,
-  shadowEnabled: true,
-  lightColor: DEFAULT_ENVIRONMENT_CSM_LIGHT_COLOR,
-  lightIntensity: DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
-  sunAzimuthDeg: DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-  sunElevationDeg: DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-  cascades: DEFAULT_SCENE_CSM_CONFIG.cascades,
-  maxFar: DEFAULT_SCENE_CSM_CONFIG.maxFar,
-  shadowMapSize: DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
-  shadowBias: DEFAULT_SCENE_CSM_CONFIG.shadowBias,
-}
-
 export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
-  background: {
-    mode: 'solidColor',
-    solidColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
-    gradientTopColor: null,
-    gradientOffset: DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
-    gradientExponent: DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
-    backgroundAssetId: null,
-  },
   northDirection: DEFAULT_ENVIRONMENT_NORTH_DIRECTION,
-  environmentOrientationPreset: DEFAULT_ENVIRONMENT_ORIENTATION_PRESET,
-  environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
-  ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
-  ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
   slowroads: { ...DEFAULT_SLOWROADS_ENVIRONMENT },
   physicsEnabled: DEFAULT_ENVIRONMENT_PHYSICS_ENABLED,
   physicsEngine: DEFAULT_ENVIRONMENT_PHYSICS_ENGINE,
@@ -77,31 +34,6 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   gravityStrength: DEFAULT_ENVIRONMENT_GRAVITY,
   collisionRestitution: DEFAULT_ENVIRONMENT_RESTITUTION,
   collisionFriction: DEFAULT_ENVIRONMENT_FRICTION,
-  csm: { ...DEFAULT_ENVIRONMENT_CSM_SETTINGS },
-}
-
-function normalizeHexColor(value: unknown, fallback: string): string {
-  if (typeof value === 'string') {
-    const sanitized = value.trim()
-    if (HEX_COLOR_PATTERN.test(sanitized)) {
-      return `#${sanitized.slice(1).toLowerCase()}`
-    }
-  }
-  return fallback
-}
-
-function normalizeNullableHexColor(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const sanitized = value.trim()
-  if (!sanitized.length) {
-    return null
-  }
-  if (HEX_COLOR_PATTERN.test(sanitized)) {
-    return `#${sanitized.slice(1).toLowerCase()}`
-  }
-  return null
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
@@ -116,15 +48,6 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
     return max
   }
   return numeric
-}
-
-
-function normalizeAssetId(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  const trimmed = value.trim()
-  return trimmed.length ? trimmed : null
 }
 
 function normalizeNorthDirection(value: unknown): EnvironmentNorthDirection {
@@ -146,30 +69,6 @@ function normalizeNorthDirection(value: unknown): EnvironmentNorthDirection {
   return DEFAULT_ENVIRONMENT_NORTH_DIRECTION
 }
 
-function normalizeEnvironmentCsmSettings(value: unknown): EnvironmentCsmSettings {
-  const source = isPlainRecord(value) ? value : {}
-  return {
-    enabled:
-      typeof source.enabled === 'boolean'
-        ? source.enabled
-        : DEFAULT_ENVIRONMENT_CSM_SETTINGS.enabled,
-    shadowEnabled:
-      typeof source.shadowEnabled === 'boolean'
-        ? source.shadowEnabled
-        : DEFAULT_ENVIRONMENT_CSM_SETTINGS.shadowEnabled,
-    lightColor: normalizeHexColor(source.lightColor, DEFAULT_ENVIRONMENT_CSM_SETTINGS.lightColor),
-    lightIntensity: clampNumber(source.lightIntensity, 0, 16, DEFAULT_ENVIRONMENT_CSM_SETTINGS.lightIntensity),
-    sunAzimuthDeg: clampNumber(source.sunAzimuthDeg, -180, 180, DEFAULT_ENVIRONMENT_CSM_SETTINGS.sunAzimuthDeg),
-    sunElevationDeg: clampNumber(source.sunElevationDeg, -10, 89, DEFAULT_ENVIRONMENT_CSM_SETTINGS.sunElevationDeg),
-    cascades: Math.round(clampNumber(source.cascades, 1, 6, DEFAULT_ENVIRONMENT_CSM_SETTINGS.cascades)),
-    maxFar: clampNumber(source.maxFar, 1, 10000, DEFAULT_ENVIRONMENT_CSM_SETTINGS.maxFar),
-    shadowMapSize: Math.round(
-      clampNumber(source.shadowMapSize, 256, 8192, DEFAULT_ENVIRONMENT_CSM_SETTINGS.shadowMapSize),
-    ),
-    shadowBias: clampNumber(source.shadowBias, -0.01, 0.01, DEFAULT_ENVIRONMENT_CSM_SETTINGS.shadowBias),
-  }
-}
-
 function normalizeSlowroadsEnvironment(value: unknown): SlowroadsEnvironmentSettings {
   const source = isPlainRecord(value) ? value : {}
   const season = source.season
@@ -188,8 +87,6 @@ function normalizeSlowroadsEnvironment(value: unknown): SlowroadsEnvironmentSett
       weather === 'clear' || weather === 'overcast'
         ? weather
         : DEFAULT_SLOWROADS_ENVIRONMENT.weather,
-    showSky:
-      typeof source.showSky === 'boolean' ? source.showSky : DEFAULT_SLOWROADS_ENVIRONMENT.showSky,
     showClouds:
       typeof source.showClouds === 'boolean' ? source.showClouds : DEFAULT_SLOWROADS_ENVIRONMENT.showClouds,
     showStars:
@@ -213,76 +110,8 @@ export function cloneEnvironmentSettings(
   source?: Partial<EnvironmentSettings> | EnvironmentSettings | null,
 ): EnvironmentSettings {
   const normalizedSource = source ?? DEFAULT_ENVIRONMENT_SETTINGS
-  const backgroundSource = normalizedSource.background ?? null
-
-  const normalizeOrientationPreset = (value: unknown) => {
-    if (value === 'yUp' || value === 'zUp' || value === 'xUp' || value === 'custom') {
-      return value as EnvironmentSettings['environmentOrientationPreset']
-    }
-    return DEFAULT_ENVIRONMENT_ORIENTATION_PRESET
-  }
-
-  const resolvePresetRotationDegrees = (preset: EnvironmentSettings['environmentOrientationPreset']) => {
-    if (preset === 'zUp') {
-      return { x: -90, y: 0, z: 0 }
-    }
-    if (preset === 'xUp') {
-      return { x: 0, y: 0, z: 90 }
-    }
-    return { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES }
-  }
-
-  let backgroundMode: EnvironmentSettings['background']['mode'] = 'solidColor'
-  if (backgroundSource?.mode === 'hdri') {
-    backgroundMode = 'hdri'
-  } else if (backgroundSource?.mode === 'fastHdri') {
-    backgroundMode = 'fastHdri'
-  } else if (backgroundSource?.mode === 'skycube') {
-    backgroundMode = 'skycube'
-  } else if (backgroundSource?.mode === 'solidColor') {
-    backgroundMode = 'solidColor'
-  }
-
-  const preset = normalizeOrientationPreset((normalizedSource as any)?.environmentOrientationPreset)
-  const presetRotation = resolvePresetRotationDegrees(preset)
-  const rotationSource = (normalizedSource as any)?.environmentRotationDegrees ?? null
-  const environmentRotationDegrees = {
-    x: clampNumber(rotationSource?.x, -360, 360, presetRotation.x),
-    y: clampNumber(rotationSource?.y, -360, 360, presetRotation.y),
-    z: clampNumber(rotationSource?.z, -360, 360, presetRotation.z),
-  }
-
   return {
-    background: {
-      mode: backgroundMode,
-      solidColor: normalizeHexColor(backgroundSource?.solidColor, DEFAULT_ENVIRONMENT_BACKGROUND_COLOR),
-      gradientTopColor:
-        backgroundMode === 'solidColor'
-          ? normalizeNullableHexColor((backgroundSource as any)?.gradientTopColor ?? null)
-          : null,
-      gradientOffset:
-        backgroundMode === 'solidColor'
-          ? clampNumber((backgroundSource as any)?.gradientOffset, 0, 100000, DEFAULT_ENVIRONMENT_GRADIENT_OFFSET)
-          : DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
-      gradientExponent:
-        backgroundMode === 'solidColor'
-          ? clampNumber((backgroundSource as any)?.gradientExponent, 0, 10, DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT)
-          : DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
-      backgroundAssetId:
-        backgroundMode === 'solidColor'
-          ? null
-          : normalizeAssetId((backgroundSource as any)?.backgroundAssetId ?? null),
-    },
     northDirection: normalizeNorthDirection((normalizedSource as any)?.northDirection),
-    environmentOrientationPreset: preset,
-    environmentRotationDegrees,
-    ambientLightColor: normalizeHexColor(normalizedSource.ambientLightColor, DEFAULT_ENVIRONMENT_AMBIENT_COLOR),
-    ambientLightIntensity: clampNumber(
-      normalizedSource.ambientLightIntensity,
-      0,
-      10,
-      DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-    ),
     slowroads: normalizeSlowroadsEnvironment((normalizedSource as { slowroads?: unknown })?.slowroads),
     physicsEnabled:
       typeof (normalizedSource as any)?.physicsEnabled === 'boolean'
@@ -309,7 +138,6 @@ export function cloneEnvironmentSettings(
       1,
       DEFAULT_ENVIRONMENT_FRICTION,
     ),
-    csm: normalizeEnvironmentCsmSettings((normalizedSource as any)?.csm),
   }
 }
 

@@ -22,12 +22,9 @@ import {
 	computePlaySoundDistanceGain,
 	resolvePlaySoundSourcePoint,
 	cloneRuntimePrefabNode,
-	disposeSkyCubeTexture,
 	createRuntimePrefabDocument,
 	parseRuntimePrefabData,
 	createSteerBindingIndex,
-	loadSkyCubeTexture,
-	isSkyCubeArchiveExtension,
 	isRuntimeHiddenInPreview,
 	type ShowPurposeBehaviorButton,
 	type InstancedLodTarget,
@@ -71,11 +68,9 @@ import {
 	type ViewPointComponentProps,
 } from '@schema/components'
 import { createKtx2Loader, FAST_KTX2_TRANSCODER_PATH } from '@schema/ktx2Loader'
-import { extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@schema/skyCubeTexture'
 import { buildPolylineMetricData, buildPolylineVertexArcLengths } from '@schema/polylineProgress'
 import { loadTextureFromSourceUrl } from '@schema/textureSourceLoader'
 import type {
-	EnvironmentCsmSettings,
 	EnvironmentSettings,
 	GroundDynamicMesh,
 	GroundRuntimeDynamicMesh,
@@ -188,12 +183,14 @@ import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/r
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
-	DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-	DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
 	resolveSceneCsmSunPositionFromAngles,
 	type SceneCsmConfig,
 	type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
+import {
+	SLOWROADS_SUN_AZIMUTH_DEG,
+	SLOWROADS_SUN_ELEVATION_DEG,
+} from '@schema/slowroads/core/environment'
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
 	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
@@ -1868,22 +1865,6 @@ const EDITOR_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
 	...DEFAULT_SCENE_CSM_CONFIG,
 }
 
-function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
-	const csm = settings.csm
-	return {
-		enabled: csm?.enabled ?? DEFAULT_SCENE_CSM_CONFIG.enabled,
-		shadowEnabled: csm?.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
-		lightColor: csm?.lightColor ?? '#ffffff',
-		lightIntensity: csm?.lightIntensity ?? DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
-		sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-		sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-		cascades: csm?.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
-		maxFar: csm?.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
-		shadowMapSize: csm?.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
-		shadowBias: csm?.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
-	}
-}
-
 async function ensureKtx2Loader(): Promise<ScenePreviewKtx2Loader | null> {
 	if (!renderer) {
 		return null
@@ -1896,21 +1877,8 @@ function disposeKtx2Loader() {
 }
 
 function resolvePreviewSceneCsmConfig(): SceneCsmConfig {
-	const settings = currentDocument
-		? resolveDocumentEnvironment(currentDocument)
-		: cloneEnvironmentSettings()
-	const csm = resolveEnvironmentCsmSettings(settings)
-	return {
-		...EDITOR_SCENE_CSM_BASE_CONFIG,
-		enabled: csm.enabled,
-		shadowEnabled: csm.shadowEnabled,
-		lightColor: csm.lightColor,
-		lightIntensity: csm.lightIntensity,
-		cascades: csm.cascades,
-		maxFar: csm.maxFar,
-		shadowMapSize: csm.shadowMapSize,
-		shadowBias: csm.shadowBias,
-	}
+	// 阴影质量参数固定（不再有 CSM 用户设置）。
+	return { ...EDITOR_SCENE_CSM_BASE_CONFIG }
 }
 
 function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
@@ -1926,8 +1894,7 @@ function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
 }
 
 function shouldUseSceneCsmShadows(): boolean {
-	const config = resolvePreviewSceneCsmConfig()
-	return Boolean(scene && camera && config.enabled)
+	return Boolean(scene && camera)
 }
 
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
@@ -1957,14 +1924,21 @@ function disposeSceneCsmShadowRuntime(): void {
 	sceneCsmRuntimeConfigKey = ''
 }
 
+/** 固定太阳方向（lab 常量）；颜色/强度由 SR 预设经 refreshLighting 下发。 */
 function syncSceneCsmSunFromEnvironment(): void {
 	if (!sceneCsmShadowRuntime || !currentDocument) {
 		return
 	}
-	const settings = resolveDocumentEnvironment(currentDocument)
-	const csm = resolveEnvironmentCsmSettings(settings)
-	const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
-	sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor)
+	const sunPosition = resolveSceneCsmSunPositionFromAngles(
+		SLOWROADS_SUN_AZIMUTH_DEG,
+		SLOWROADS_SUN_ELEVATION_DEG,
+		1000,
+	)
+	sceneCsmShadowRuntime.syncSun(
+		sunPosition,
+		DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+		String(DEFAULT_SCENE_CSM_CONFIG.lightColor ?? '#ffffff'),
+	)
 	// Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
 	slowroadsEnvironment?.refreshLighting()
 }
@@ -1995,8 +1969,11 @@ function ensureSlowroadsEnvironmentRuntime(): void {
 			slowroadsAmbientLight.color.copy(state.ambientColor)
 			slowroadsAmbientLight.intensity = state.ambientIntensity
 			if (sceneCsmShadowRuntime && currentDocument) {
-				const csm = resolveEnvironmentCsmSettings(resolveDocumentEnvironment(currentDocument))
-				const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
+				const sunPosition = resolveSceneCsmSunPositionFromAngles(
+					SLOWROADS_SUN_AZIMUTH_DEG,
+					SLOWROADS_SUN_ELEVATION_DEG,
+					1000,
+				)
 				sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`)
 			}
 		},
@@ -2019,16 +1996,6 @@ function applyRendererShadowSetting(): void {
 	}
 	sceneCsmShadowRuntime?.setActive(false)
 }
-let backgroundTexture: THREE.Texture | null = null
-let backgroundTextureCleanup: (() => void) | null = null
-let backgroundTextureSourceKind: 'texture' | null = null
-let backgroundAssetId: string | null = null
-let backgroundAssetKey: string | null = null
-let skyCubeTexture: THREE.CubeTexture | null = null
-let skyCubeZipAssetId: string | null = null
-let skyCubeZipAssetKey: string | null = null
-let skyCubeZipFaceUrlCleanup: (() => void) | null = null
-let backgroundLoadToken = 0
 let mapControls: MapControls | null = null
 let followCameraControlActive = false
 let followCameraControlDirty = false
@@ -2226,19 +2193,6 @@ let queuedSnapshot: ScenePreviewSnapshot | null = null
 let lastSnapshotRevision = 0
 let protagonistPoseSynced = false
 
-const environmentAssetRefreshTick = ref(0)
-
-function computeEnvironmentAssetReloadKey(assetId: string | null | undefined): string | null {
-	const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
-	if (!trimmed) {
-		return null
-	}
-	const entry = editorAssetCache.peekEntry(trimmed) ?? assetCacheStore.entries?.[trimmed] ?? null
-	const serverUpdatedAt = entry?.serverUpdatedAt ?? null
-	const blobUrl = entry?.blobUrl ?? null
-	return `${trimmed}|${serverUpdatedAt ?? ''}|${blobUrl ?? ''}`
-}
-
 function resolveGroundTextureSource(assetId: string): string | null {
 	const trimmed = typeof assetId === 'string' ? assetId.trim() : ''
 	if (!trimmed) {
@@ -2249,37 +2203,6 @@ function resolveGroundTextureSource(assetId: string): string | null {
 	}
 	const entry = editorAssetCache.peekEntry(trimmed) ?? assetCacheStore.entries?.[trimmed] ?? null
 	return entry?.blobUrl ?? entry?.downloadUrl ?? null
-}
-
-function buildObjectUrlsFromSkycubeZipFaces(
-	facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
-): { urls: Array<string | null>; dispose: () => void } {
-	const urls: Array<string | null> = []
-	const created: string[] = []
-	for (const face of facesInOrder) {
-		if (!face) {
-			urls.push(null)
-			continue
-		}
-		const mimeType = face.mimeType ?? 'application/octet-stream'
-		const bytes = face.bytes as unknown as Uint8Array<ArrayBuffer>
-		const blob = new Blob([bytes], { type: mimeType })
-		const url = URL.createObjectURL(blob)
-		created.push(url)
-		urls.push(url)
-	}
-	return {
-		urls,
-		dispose: () => {
-			for (const url of created) {
-				try {
-					URL.revokeObjectURL(url)
-				} catch (_error) {
-					// ignore
-				}
-			}
-		},
-	}
 }
 
 const CAMERA_DEPENDENT_POSITION_EPSILON = 0.02
@@ -11905,76 +11828,6 @@ function disposeSkyResources() {
 	scene.environmentIntensity = 1
 }
 
-function disposeHdriBackgroundResources() {
-	const previousTexture = backgroundTexture
-	if (previousTexture) {
-		if (scene && scene.background === previousTexture) {
-			scene.background = null
-		}
-		previousTexture.dispose()
-	}
-	backgroundTexture = null
-	backgroundTextureCleanup?.()
-	backgroundTextureCleanup = null
-	backgroundTextureSourceKind = null
-	backgroundAssetId = null
-	backgroundAssetKey = null
-}
-
-function disposeSkyCubeBackgroundResources() {
-	if (skyCubeTexture) {
-		if (scene && scene.background === skyCubeTexture) {
-			scene.background = null
-		}
-	disposeSkyCubeTexture(skyCubeTexture)
-	}
-	skyCubeZipFaceUrlCleanup?.()
-	skyCubeZipFaceUrlCleanup = null
-	skyCubeTexture = null
-	skyCubeZipAssetId = null
-	skyCubeZipAssetKey = null
-	backgroundTextureSourceKind = null
-}
-
-function disposeBackgroundResources() {
-	disposeHdriBackgroundResources()
-	disposeSkyCubeBackgroundResources()
-}
-
-async function loadEnvironmentTextureFromAsset(
-	assetId: string,
-): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
-	const trimmedAssetId = assetId.trim()
-	if (!trimmedAssetId.length) {
-		return null
-	}
-	const resolved = await resolveAssetUrlReference(trimmedAssetId)
-	if (!resolved) {
-		return null
-	}
-	const extension = inferEnvironmentAssetExtension(trimmedAssetId, resolved)
-	const mimeType = resolved.mimeType?.toLowerCase() ?? ''
-	const dispose = resolved.dispose
-	try {
-		if (extension === 'ktx2' || mimeType.includes('ktx2') || mimeType.includes('basis')) {
-			const ktx2Loader = await ensureKtx2Loader()
-			if (!ktx2Loader) {
-				return null
-			}
-			const texture = await ktx2Loader.loadAsync(resolved.url)
-			texture.mapping = THREE.CubeUVReflectionMapping
-			return { texture, dispose }
-		}
-		const texture = await rgbeLoader.loadAsync(resolved.url)
-		texture.mapping = THREE.EquirectangularReflectionMapping
-		texture.needsUpdate = true
-		return { texture, dispose }
-	} catch (error) {
-		console.warn('[ScenePreview] Failed to load environment texture', assetId, error)
-		return null
-	}
-}
-
 /**
  * Slow Roads 三色雾是场景唯一雾系统：preview 里雾始终生效（无编辑预览开关）。
  */
@@ -11997,167 +11850,7 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
 	physicsGravity.set(0, -gravity, 0)
 }
 
-async function applyBackgroundSettings(
-	background: EnvironmentSettings['background'],
-): Promise<boolean> {
-	backgroundLoadToken += 1
-	const token = backgroundLoadToken
-	if (!scene) {
-		return false
-	}
-	if (background.mode === 'solidColor') {
-		disposeHdriBackgroundResources()
-		disposeSkyCubeBackgroundResources()
-		scene.background = new THREE.Color(background.solidColor)
-		return true
-	}
-	if (background.mode === 'skycube') {
-		const assetId = background.backgroundAssetId ?? null
-		const normalizedAssetId = assetId && typeof assetId === 'string' ? assetId.trim() : ''
-		const resolved = await resolveAssetUrlReference(normalizedAssetId)
-		const extension = inferEnvironmentAssetExtension(normalizedAssetId, resolved)
-		if (!isSkyCubeArchiveExtension(extension)) {
-			const hdriKey = computeEnvironmentAssetReloadKey(normalizedAssetId)
-			if (backgroundTexture && backgroundAssetId === normalizedAssetId && backgroundAssetKey === hdriKey && backgroundTextureSourceKind === 'texture') {
-				scene.background = backgroundTexture
-				return true
-			}
-			const loaded = await loadEnvironmentTextureFromAsset(normalizedAssetId)
-			if (!loaded || token !== backgroundLoadToken) {
-				if (loaded) {
-					loaded.texture.dispose()
-					loaded.dispose?.()
-				}
-				return false
-			}
-			disposeBackgroundResources()
-			backgroundTexture = loaded.texture
-			backgroundTextureSourceKind = 'texture'
-			backgroundAssetId = normalizedAssetId
-			backgroundAssetKey = hdriKey
-			backgroundTextureCleanup = loaded.dispose ?? null
-			scene.background = backgroundTexture
-			return true
-		}
-
-		const zipKey = computeEnvironmentAssetReloadKey(normalizedAssetId)
-		if (
-			skyCubeTexture &&
-			zipKey === skyCubeZipAssetKey &&
-			normalizedAssetId === skyCubeZipAssetId
-		) {
-			scene.background = skyCubeTexture
-			return true
-		}
-		const zipUrl = resolved?.url ?? null
-		const disposeZipRef = resolved?.dispose ?? null
-		if (!zipUrl) {
-			disposeZipRef?.()
-			console.warn('[ScenePreview] SkyCube zip URL unavailable', normalizedAssetId)
-			return false
-		}
-		let buffer: ArrayBuffer | null = null
-		try {
-			const response = await fetch(zipUrl)
-			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}`)
-			}
-			buffer = await response.arrayBuffer()
-		} catch (error) {
-			disposeZipRef?.()
-			console.warn('[ScenePreview] Failed to fetch SkyCube zip', normalizedAssetId, error)
-			return false
-		} finally {
-			disposeZipRef?.()
-		}
-		if (token !== backgroundLoadToken) {
-			return false
-		}
-		let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>
-		try {
-			extracted = await extractSkycubeZipFacesAsync(buffer)
-		} catch (error) {
-			console.warn('[ScenePreview] Failed to unzip SkyCube zip', normalizedAssetId, error)
-			return false
-		}
-		if (extracted.missingFaces.length) {
-			console.warn('[ScenePreview] SkyCube zip missing faces:', extracted.missingFaces)
-		}
-		const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder)
-		const loaded = await loadSkyCubeTexture(faceUrls)
-		if (token !== backgroundLoadToken) {
-			if (loaded.texture) {
-				disposeSkyCubeTexture(loaded.texture)
-			}
-			disposeFaceUrls()
-			return false
-		}
-		if (!loaded.texture) {
-			disposeFaceUrls()
-			disposeBackgroundResources()
-			scene.background = new THREE.Color(background.solidColor)
-			return true
-		}
-		if (loaded.missingFaces.length) {
-			console.warn('[ScenePreview] SkyCube missing faces:', loaded.missingFaces)
-		}
-		disposeBackgroundResources()
-		skyCubeTexture = loaded.texture
-		skyCubeZipAssetId = normalizedAssetId
-		skyCubeZipAssetKey = zipKey
-		skyCubeZipFaceUrlCleanup = disposeFaceUrls
-		scene.background = skyCubeTexture
-		return true
-	}
-	if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.backgroundAssetId) {
-		disposeBackgroundResources()
-		scene.background = new THREE.Color(background.solidColor)
-		return true
-	}
-	const hdriKey = computeEnvironmentAssetReloadKey(background.backgroundAssetId)
-	if (backgroundTexture && backgroundAssetId === background.backgroundAssetId && backgroundAssetKey === hdriKey) {
-		scene.background = backgroundTexture
-		return true
-	}
-	const loaded = await loadEnvironmentTextureFromAsset(background.backgroundAssetId)
-	if (!loaded || token !== backgroundLoadToken) {
-		if (loaded) {
-			loaded.texture.dispose()
-			loaded.dispose?.()
-		}
-		return false
-	}
-	disposeBackgroundResources()
-	backgroundTexture = loaded.texture
-	backgroundTextureSourceKind = 'texture'
-	backgroundAssetId = background.backgroundAssetId
-	backgroundAssetKey = hdriKey
-	backgroundTextureCleanup = loaded.dispose ?? null
-	scene.background = backgroundTexture
-	return true
-}
-
-function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
-	if (!scene) {
-		return false
-	}
-	if (
-		backgroundTexture
-		&& (
-			background.mode === 'hdri'
-			|| background.mode === 'fastHdri'
-			|| (background.mode === 'skycube' && backgroundTextureSourceKind === 'texture')
-		)
-	) {
-		scene.environment = backgroundTexture
-	} else {
-		scene.environment = null
-	}
-	scene.environmentIntensity = 1
-	return true
-}
-
-async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
+function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettings(settings)
 	currentScenePreviewEnvironmentSettings = snapshot
 	if (!scene) {
@@ -12165,24 +11858,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 		return
 	}
 	applyFogSettings(snapshot)
-	const backgroundApplied = await applyBackgroundSettings(snapshot.background)
-	const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background)
-
-	const rot = snapshot.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 }
-	const euler = new THREE.Euler(
-		(rot.x * Math.PI) / 180,
-		(rot.y * Math.PI) / 180,
-		(rot.z * Math.PI) / 180,
-		'XYZ',
-	)
-	scene.backgroundRotation.copy(euler)
-	scene.environmentRotation.copy(euler)
-
-	if (backgroundApplied && environmentApplied) {
-		pendingEnvironmentSettings = null
-	} else {
-		pendingEnvironmentSettings = snapshot
-	}
 	applyRendererShadowSetting()
 	syncSceneCsmSunFromEnvironment()
 	currentSlowroadsEnvironmentState = {
@@ -12192,22 +11867,11 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	}
 	// SR 环境最后应用：预设光照覆盖 CSM 同步结果（预设接管光色/强度）。
 	slowroadsEnvironment?.setSettings(snapshot.slowroads)
+	pendingEnvironmentSettings = null
 }
 
 function disposeEnvironmentResources() {
-	disposeBackgroundResources()
 	disposeKtx2Loader()
-	backgroundLoadToken += 1
-}
-
-function inferEnvironmentAssetExtension(assetId: string, resolved: ResolvedAssetUrl | null): string {
-	const target = (resolved?.url ?? assetId) ?? ''
-	const sanitized = target.split('#')[0]?.split('?')[0] ?? ''
-	const index = sanitized.lastIndexOf('.')
-	if (index === -1) {
-		return ''
-	}
-	return sanitized.slice(index + 1).toLowerCase()
 }
 
 function resolveTextureExtension(entry: AssetCacheEntry | null, ref: SceneMaterialTextureRef): string {
@@ -15388,7 +15052,6 @@ async function applyInitialDocumentGraph(
 	syncProtagonistCameraPose({ force: true, applyToCamera: protagonistCameraActive })
 	void applyEnvironmentSettingsToScene(environmentSettings)
 	applyRendererShadowSetting()
-	environmentAssetRefreshTick.value += 1
 }
 
 function resolveScenePreviewDeviceProfileId(document: SceneJsonExportDocument): string | null {
@@ -15446,7 +15109,6 @@ async function updateScene(document: SceneJsonExportDocument) {
 		return
 	}
 
-	environmentAssetRefreshTick.value += 1
 	const previewRoot = rootGroup
 	resourceProgress.active = true
 	resourceProgress.loaded = 0

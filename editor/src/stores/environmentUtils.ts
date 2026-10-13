@@ -1,7 +1,5 @@
 import {
   cloneEnvironmentSettings,
-  DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT,
-  DEFAULT_ENVIRONMENT_GRADIENT_OFFSET,
   DEFAULT_ENVIRONMENT_SETTINGS,
   resolveDocumentEnvironment,
   type SceneNode,
@@ -95,22 +93,9 @@ export function extractEnvironmentSettings(node: SceneNode | null | undefined): 
 
 export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentSettings, epsilon = 1e-4): boolean {
   return (
-    a.background.mode === b.background.mode &&
-    a.background.solidColor === b.background.solidColor &&
-    (a.background.gradientTopColor ?? null) === (b.background.gradientTopColor ?? null) &&
-    Math.abs((a.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET) - (b.background.gradientOffset ?? DEFAULT_ENVIRONMENT_GRADIENT_OFFSET)) <= epsilon &&
-    Math.abs((a.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT) - (b.background.gradientExponent ?? DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT)) <= epsilon &&
-      a.background.backgroundAssetId === b.background.backgroundAssetId &&
-    a.environmentOrientationPreset === b.environmentOrientationPreset &&
-    Math.abs((a.environmentRotationDegrees?.x ?? 0) - (b.environmentRotationDegrees?.x ?? 0)) <= epsilon &&
-    Math.abs((a.environmentRotationDegrees?.y ?? 0) - (b.environmentRotationDegrees?.y ?? 0)) <= epsilon &&
-    Math.abs((a.environmentRotationDegrees?.z ?? 0) - (b.environmentRotationDegrees?.z ?? 0)) <= epsilon &&
-    a.ambientLightColor === b.ambientLightColor &&
-    Math.abs(a.ambientLightIntensity - b.ambientLightIntensity) <= epsilon &&
     a.slowroads.season === b.slowroads.season &&
     a.slowroads.timeOfDay === b.slowroads.timeOfDay &&
     a.slowroads.weather === b.slowroads.weather &&
-    a.slowroads.showSky === b.slowroads.showSky &&
     a.slowroads.showClouds === b.slowroads.showClouds &&
     a.slowroads.showStars === b.slowroads.showStars &&
     a.slowroads.showSnow === b.slowroads.showSnow &&
@@ -120,16 +105,6 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&
     Math.abs(a.collisionRestitution - b.collisionRestitution) <= epsilon &&
     Math.abs(a.collisionFriction - b.collisionFriction) <= epsilon &&
-    Boolean(a.csm?.enabled ?? true) === Boolean(b.csm?.enabled ?? true) &&
-    Boolean(a.csm?.shadowEnabled ?? true) === Boolean(b.csm?.shadowEnabled ?? true) &&
-    (a.csm?.lightColor ?? '#ffffff') === (b.csm?.lightColor ?? '#ffffff') &&
-    Math.abs((a.csm?.lightIntensity ?? 1) - (b.csm?.lightIntensity ?? 1)) <= epsilon &&
-    Math.abs((a.csm?.sunAzimuthDeg ?? 45) - (b.csm?.sunAzimuthDeg ?? 45)) <= epsilon &&
-    Math.abs((a.csm?.sunElevationDeg ?? 42) - (b.csm?.sunElevationDeg ?? 42)) <= epsilon &&
-    Math.abs((a.csm?.cascades ?? 4) - (b.csm?.cascades ?? 4)) <= epsilon &&
-    Math.abs((a.csm?.maxFar ?? 1200) - (b.csm?.maxFar ?? 1200)) <= epsilon &&
-    Math.abs((a.csm?.shadowMapSize ?? 2048) - (b.csm?.shadowMapSize ?? 2048)) <= epsilon &&
-    Math.abs((a.csm?.shadowBias ?? -0.00015) - (b.csm?.shadowBias ?? -0.00015)) <= epsilon &&
     Boolean(a.viewportPerformanceMode) === Boolean(b.viewportPerformanceMode) &&
     a.northDirection === b.northDirection
   )

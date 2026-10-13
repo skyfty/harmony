@@ -734,42 +734,10 @@ export function buildSceneAssetReferenceSummaryMap(
   return summaryMap
 }
 
-function buildEnvironmentIssues(scene: AssetLookupScene): SceneAssetDiagnosticIssue[] {
-  const issues: SceneAssetDiagnosticIssue[] = []
-  const environment = cloneEnvironmentSettings(scene.environment as EnvironmentSettings | null | undefined)
-  const background = environment.background
-
-  if ((background.mode === 'hdri' || background.mode === 'fastHdri') && !background.backgroundAssetId) {
-    issues.push({
-      severity: 'error',
-      code: 'environment-misconfiguration',
-      message: 'Environment background is HDRI/Fast HDRI but backgroundAssetId is missing.',
-      path: 'environment.background.backgroundAssetId',
-      category: 'environment',
-      references: [],
-    })
-  }
-
-  if (background.mode !== 'skycube') {
-    return issues
-  }
-
-  if (!background.backgroundAssetId) {
-    issues.push({
-      severity: 'error',
-      code: 'environment-misconfiguration',
-      message: 'Environment background is SkyCube but backgroundAssetId is missing.',
-      path: 'environment.background.backgroundAssetId',
-      category: 'environment',
-      references: [],
-    })
-  }
-
-  return issues
-}
-
 function buildStructuralIssues(scene: AssetLookupScene): SceneAssetDiagnosticIssue[] {
-  const issues = buildEnvironmentIssues(scene)
+  // 环境不再有背景/HDRI/SkyCube 资产引用（只保留 Slow Roads 预设），
+  // 因此环境相关的资产完整性检查不再需要。
+  const issues: SceneAssetDiagnosticIssue[] = []
   const stack: SceneNode[] = [...scene.nodes]
 
   while (stack.length) {

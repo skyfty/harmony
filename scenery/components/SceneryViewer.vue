@@ -447,8 +447,6 @@ import {
 } from '@harmony/utils/scene-package-storage';
 import { fetchAssetBlobWithResponse, type AssetBlobDownloadResult } from '@harmony/schema/assetDownload';
 import { type ScenePackageCacheMetadata } from '@harmony/utils';
-import { type EnvironmentBackgroundMode } from '@harmony/schema/core';
-
 import {
   buildSceneGraph,
   type SceneGraphBuildOptions,
@@ -549,7 +547,6 @@ import {
   resolveDocumentEnvironment,
   type EnvironmentNorthDirection,
   type EnvironmentSettings,
-  type EnvironmentCsmSettings,
 } from '@harmony/schema/environmentSettingsUtils';
 import { deserializeGroundScatterSidecar } from '@harmony/schema/groundScatterSidecar';
 import { deserializeGroundSplatSidecar } from '@harmony/schema/groundSplatSidecar';
@@ -564,9 +561,6 @@ import {
 import { createWaterRuntime } from '@harmony/schema/water';
 import { rebuildSceneNodeIndex, resolveSceneNodeById, resolveSceneParentNodeId } from '@harmony/schema/nodeIndexUtils';
 import { resolveEnabledComponentState } from '@harmony/schema/componentRuntimeUtils';
-import { createGradientBackgroundDome, disposeGradientBackgroundDome, type GradientBackgroundDome } from '@harmony/schema/gradientBackground';
-import { disposeSkyCubeTexture, loadSkyCubeTexture, extractSkycubeZipFacesAsync, type ExtractSkycubeZipFacesResult } from '@harmony/schema/skyCubeTexture';
-import { isSkyCubeArchiveExtension } from '@harmony/schema/core';
 import {
   isNodeAssetSkipAction,
   isNodeSubtreeSkipAction,
@@ -622,10 +616,12 @@ import {
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
   DEFAULT_SCENE_CSM_CONFIG,
-  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
   type SceneCsmConfig,
 } from '@harmony/schema/sceneCsmDefaults';
+import {
+  SLOWROADS_SUN_AZIMUTH_DEG,
+  SLOWROADS_SUN_ELEVATION_DEG,
+} from '@harmony/schema/slowroads/core/environment';
 import {
   createSceneCsmShadowRuntime,
   resolveSceneCsmSunPositionFromAngles,
@@ -1787,15 +1783,6 @@ function resolveSceneExposure(exposure: unknown): number {
 }
 const lanternCloseIcon = '✖️';
 
-let backgroundTexture: THREE.Texture | null = null;
-let backgroundTextureCleanup: (() => void) | null = null;
-let backgroundTextureSourceKind: 'texture' | null = null;
-let backgroundAssetId: string | null = null;
-let skyCubeTexture: THREE.CubeTexture | null = null;
-let gradientBackgroundDome: GradientBackgroundDome | null = null;
-let skyCubeZipAssetId: string | null = null;
-let skyCubeZipFaceUrlCleanup: (() => void) | null = null;
-let backgroundLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null;
@@ -1924,38 +1911,9 @@ function applyNominateOverridesForCurrentScene(): void {
   syncInstancedProxyVisibilityAfterNominate();
 }
 
-function resolveEnvironmentCsmSettings(settings: EnvironmentSettings): EnvironmentCsmSettings {
-  const csm = settings.csm;
-  return {
-    enabled: csm?.enabled ?? SCENERY_SCENE_CSM_CONFIG.enabled,
-    shadowEnabled: csm?.shadowEnabled ?? SCENERY_SCENE_CSM_CONFIG.shadowEnabled,
-    lightColor: csm?.lightColor ?? '#ffffff',
-    lightIntensity: csm?.lightIntensity ?? SCENERY_SCENE_CSM_CONFIG.lightIntensity,
-    sunAzimuthDeg: csm?.sunAzimuthDeg ?? DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-    sunElevationDeg: csm?.sunElevationDeg ?? DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-    cascades: csm?.cascades ?? SCENERY_SCENE_CSM_CONFIG.cascades,
-    maxFar: csm?.maxFar ?? SCENERY_SCENE_CSM_CONFIG.maxFar,
-    shadowMapSize: csm?.shadowMapSize ?? SCENERY_SCENE_CSM_CONFIG.shadowMapSize,
-    shadowBias: csm?.shadowBias ?? SCENERY_SCENE_CSM_CONFIG.shadowBias,
-  };
-}
-
 function resolveScenerySceneCsmConfig(): SceneCsmConfig {
-  const settings = currentDocument
-    ? resolveDocumentEnvironment(currentDocument)
-    : cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
-  const csm = resolveEnvironmentCsmSettings(settings);
-  return {
-    ...SCENERY_SCENE_CSM_CONFIG,
-    enabled: csm.enabled,
-    shadowEnabled: csm.shadowEnabled,
-    lightColor: csm.lightColor,
-    lightIntensity: csm.lightIntensity,
-    cascades: csm.cascades,
-    maxFar: csm.maxFar,
-    shadowMapSize: csm.shadowMapSize,
-    shadowBias: csm.shadowBias,
-  };
+  // 阴影质量参数固定（不再有 CSM 用户设置）。
+  return { ...SCENERY_SCENE_CSM_CONFIG };
 }
 
 function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
@@ -2029,8 +1987,11 @@ function ensureSlowroadsEnvironmentRuntime(): void {
       slowroadsAmbientLight.color.copy(state.ambientColor);
       slowroadsAmbientLight.intensity = state.ambientIntensity;
       if (sceneCsmShadowRuntime && currentDocument) {
-        const csm = resolveEnvironmentCsmSettings(resolveDocumentEnvironment(currentDocument));
-        const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000);
+        const sunPosition = resolveSceneCsmSunPositionFromAngles(
+          SLOWROADS_SUN_AZIMUTH_DEG,
+          SLOWROADS_SUN_ELEVATION_DEG,
+          1000,
+        );
         sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`);
       }
     },
@@ -2038,14 +1999,21 @@ function ensureSlowroadsEnvironmentRuntime(): void {
   slowroadsEnvironment.setSettings(activeEnvironmentSettings.slowroads);
 }
 
+/** 固定太阳方向（lab 常量）；颜色/强度由 SR 预设经 refreshLighting 下发。 */
 function syncSceneCsmSunFromEnvironment(): void {
   if (!sceneCsmShadowRuntime || !currentDocument) {
     return;
   }
-  const settings = resolveDocumentEnvironment(currentDocument);
-  const csm = resolveEnvironmentCsmSettings(settings);
-  const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000);
-  sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor);
+  const sunPosition = resolveSceneCsmSunPositionFromAngles(
+    SLOWROADS_SUN_AZIMUTH_DEG,
+    SLOWROADS_SUN_ELEVATION_DEG,
+    1000,
+  );
+  sceneCsmShadowRuntime.syncSun(
+    sunPosition,
+    DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
+    String(DEFAULT_SCENE_CSM_CONFIG.lightColor ?? '#ffffff'),
+  );
   // Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
   slowroadsEnvironment?.refreshLighting();
 }
@@ -5841,39 +5809,6 @@ async function resolveAssetUrlReference(candidate: string): Promise<ResolvedAsse
 async function requestBinaryFromUrl(url: string, signal?: AbortSignal | null): Promise<ArrayBuffer> {
   const blob = await downloadBlobFromUrl(url, { signal });
   return await blob.arrayBuffer();
-}
-
-function buildObjectUrlsFromSkycubeZipFaces(
-  facesInOrder: ReadonlyArray<ExtractSkycubeZipFacesResult['facesInOrder'][number]>,
-): { urls: Array<string | null>; dispose: () => void } {
-  const urls: Array<string | null> = [];
-  const created: string[] = [];
-  for (const face of facesInOrder) {
-    if (!face) {
-      urls.push(null);
-      continue;
-    }
-    const mimeType = face.mimeType ?? 'application/octet-stream';
-    const bytes = face.bytes as unknown as Uint8Array;
-    const blobBytes = new Uint8Array(bytes.byteLength);
-    blobBytes.set(bytes);
-    const blob = new Blob([blobBytes], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    created.push(url);
-    urls.push(url);
-  }
-  return {
-    urls,
-    dispose: () => {
-      for (const url of created) {
-        try {
-          URL.revokeObjectURL(url);
-        } catch {
-          // ignore
-        }
-      }
-    },
-  };
 }
 
 
@@ -20643,95 +20578,6 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
   canvas.addEventListener('click', handleBehaviorClick);
 }
 
-function disposeHdriBackgroundResources() {
-  const scene = renderContext?.scene ?? null;
-  const previousTexture = backgroundTexture;
-  if (previousTexture) {
-    if (scene && scene.background === previousTexture) {
-      scene.background = null;
-    }
-    previousTexture.dispose();
-  }
-  backgroundTexture = null;
-  backgroundTextureCleanup?.();
-  backgroundTextureCleanup = null;
-  backgroundTextureSourceKind = null;
-  backgroundAssetId = null;
-}
-
-function disposeSkyCubeBackgroundResources() {
-  const scene = renderContext?.scene ?? null;
-  if (skyCubeTexture) {
-    if (scene && scene.background === skyCubeTexture) {
-      scene.background = null;
-    }
-    disposeSkyCubeTexture(skyCubeTexture);
-  }
-  skyCubeZipFaceUrlCleanup?.();
-  skyCubeZipFaceUrlCleanup = null;
-  skyCubeTexture = null;
-  skyCubeZipAssetId = null;
-  backgroundTextureSourceKind = null;
-}
-
-function disposeBackgroundResources() {
-  disposeHdriBackgroundResources();
-  disposeSkyCubeBackgroundResources();
-  disposeGradientBackgroundDome(gradientBackgroundDome);
-  gradientBackgroundDome = null;
-}
-
-function inferEnvironmentAssetExtension(assetId: string, resolve: ResolvedAssetUrl | null): string {
-  const target = (resolve?.url ?? assetId) ?? '';
-  const sanitized = target.split('#')[0]?.split('?')[0] ?? '';
-  const index = sanitized.lastIndexOf('.');
-  if (index === -1) {
-    return '';
-  }
-  return sanitized.slice(index + 1).toLowerCase();
-}
-
-async function loadEnvironmentTextureFromAsset(
-  assetId: string,
-  mode: EnvironmentBackgroundMode,
-): Promise<{ texture: THREE.Texture; dispose?: () => void } | null> {
-  const trimmedAssetId = assetId.trim();
-  if (!trimmedAssetId.length) {
-    return null;
-  }
-  const resolve = await resolveAssetUrlReference(trimmedAssetId);
-  if (!resolve) {
-    return null;
-  }
-  const dispose = resolve.dispose;
-  try {
-    if (mode === 'fastHdri') {
-      const texture = await loadKtx2TextureFromUrl(resolve.url, renderContext?.renderer ?? null);
-      texture.mapping = THREE.CubeUVReflectionMapping;
-      texture.needsUpdate = true;
-      return { texture, dispose };
-    }
-    if (mode === 'hdri') {
-      const texture = await loadRgbETextureFromUrl(resolve.url);
-      texture.mapping = THREE.EquirectangularReflectionMapping;
-      texture.needsUpdate = true;
-      return { texture, dispose };
-    }
-    const texture = await loadTextureFromSourceUrl(resolve.url);
-    texture.mapping = THREE.EquirectangularReflectionMapping;
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.magFilter = THREE.NearestFilter;
-    texture.minFilter = THREE.NearestFilter;
-    texture.flipY = false;
-    texture.needsUpdate = true;
-    ensureFloatTextureFilterCompatibility(texture);
-    return { texture, dispose };
-  } catch (error) {
-    console.warn('[SceneViewer] Failed to load environment texture', assetId, error);
-    return null;
-  }
-}
-
 /**
  * Slow Roads 三色雾是场景唯一雾系统：viewer 里雾始终生效（标准 fogMode 已移除）。
  */
@@ -20751,218 +20597,6 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
   physicsGravity.set(0, -gravity, 0);
 }
 
-async function applyBackgroundSettings(
-  background: EnvironmentSettings['background'],
-): Promise<boolean> {
-  const scene = renderContext?.scene ?? null;
-  backgroundLoadToken += 1;
-  const token = backgroundLoadToken;
-  if (!scene) {
-    return false;
-  }
-  if (background.mode === 'solidColor') {
-    const gradientTopColor = typeof background.gradientTopColor === 'string'
-      ? background.gradientTopColor.trim()
-      : '';
-
-    disposeHdriBackgroundResources();
-    disposeSkyCubeBackgroundResources();
-
-    if (gradientTopColor) {
-      if (!gradientBackgroundDome) {
-        gradientBackgroundDome = createGradientBackgroundDome({
-          topColor: gradientTopColor,
-          bottomColor: background.solidColor,
-          offset: background.gradientOffset ?? 33,
-          exponent: background.gradientExponent ?? 0.6,
-        });
-        (gradientBackgroundDome.mesh as any).raycast = () => {};
-        scene.add(gradientBackgroundDome.mesh);
-      } else {
-        gradientBackgroundDome.uniforms.topColor.value.set(gradientTopColor);
-        gradientBackgroundDome.uniforms.bottomColor.value.set(background.solidColor);
-        if (typeof background.gradientOffset === 'number' && Number.isFinite(background.gradientOffset)) {
-          gradientBackgroundDome.uniforms.offset.value = background.gradientOffset;
-        }
-        if (typeof background.gradientExponent === 'number' && Number.isFinite(background.gradientExponent)) {
-          gradientBackgroundDome.uniforms.exponent.value = background.gradientExponent;
-        }
-      }
-      scene.background = null;
-      return true;
-    }
-
-    disposeGradientBackgroundDome(gradientBackgroundDome);
-    gradientBackgroundDome = null;
-    scene.background = new THREE.Color(background.solidColor);
-    return true;
-  }
-  if (background.mode === 'skycube') {
-    disposeGradientBackgroundDome(gradientBackgroundDome);
-    gradientBackgroundDome = null;
-    const assetId = background.backgroundAssetId ?? null;
-    if (assetId) {
-      const resolvedAsset = await resolveAssetUrlReference(assetId);
-      const assetExtension = inferEnvironmentAssetExtension(assetId, resolvedAsset);
-      if (!isSkyCubeArchiveExtension(assetExtension)) {
-        if (backgroundTexture && backgroundAssetId === assetId && backgroundTextureSourceKind === 'texture') {
-          scene.background = backgroundTexture;
-          return true;
-        }
-        const loadedTexture = await loadEnvironmentTextureFromAsset(assetId, background.mode);
-        if (!loadedTexture || token !== backgroundLoadToken) {
-          if (loadedTexture) {
-            loadedTexture.texture.dispose();
-            loadedTexture.dispose?.();
-          }
-          return false;
-        }
-        disposeBackgroundResources();
-        backgroundTexture = loadedTexture.texture;
-        backgroundTextureSourceKind = 'texture';
-        backgroundAssetId = assetId;
-        backgroundTextureCleanup = loadedTexture.dispose ?? null;
-        scene.background = backgroundTexture;
-        return true;
-      }
-
-      if (skyCubeTexture  && skyCubeZipAssetId === assetId) {
-        scene.background = skyCubeTexture;
-        return true;
-      }
-      const zipUrl = resolvedAsset?.url ?? null;
-      const disposeZipRef = resolvedAsset?.dispose ?? null;
-      if (!zipUrl) {
-        disposeZipRef?.();
-        console.warn('[SceneViewer] SkyCube zip URL unavailable', assetId);
-        return false;
-      }
-      let buffer: ArrayBuffer | null = null;
-      try {
-        buffer = await requestBinaryFromUrl(zipUrl);
-      } catch (error) {
-        disposeZipRef?.();
-        console.warn('[SceneViewer] Failed to download SkyCube zip', assetId, error);
-        return false;
-      } finally {
-        disposeZipRef?.();
-      }
-      if (token !== backgroundLoadToken) {
-        return false;
-      }
-      let extracted: Awaited<ReturnType<typeof extractSkycubeZipFacesAsync>>;
-      try {
-        extracted = await extractSkycubeZipFacesAsync(buffer);
-      } catch (error) {
-        console.warn('[SceneViewer] Failed to unzip SkyCube zip', assetId, error);
-        return false;
-      }
-      if (extracted.missingFaces.length) {
-        console.warn('[SceneViewer] SkyCube zip missing faces:', extracted.missingFaces);
-        try {
-          uni.showToast({
-            title: `SkyCube 缺失: ${extracted.missingFaces.join(', ')}`,
-            icon: 'none',
-            duration: 2200,
-          });
-        } catch {
-          // ignore
-        }
-      }
-      const { urls: faceUrls, dispose: disposeFaceUrls } = buildObjectUrlsFromSkycubeZipFaces(extracted.facesInOrder);
-      const loaded = await loadSkyCubeTexture(faceUrls);
-      if (token !== backgroundLoadToken) {
-        if (loaded.texture) {
-          disposeSkyCubeTexture(loaded.texture);
-        }
-        disposeFaceUrls();
-        return false;
-      }
-      if (!loaded.texture) {
-        disposeFaceUrls();
-        disposeBackgroundResources();
-        scene.background = new THREE.Color(background.solidColor);
-        return true;
-      }
-      disposeBackgroundResources();
-      skyCubeTexture = loaded.texture;
-      skyCubeZipAssetId = assetId;
-      skyCubeZipFaceUrlCleanup = disposeFaceUrls;
-      scene.background = skyCubeTexture;
-      return true;
-    }
-    return true;
-  }
-  if ((background.mode !== 'hdri' && background.mode !== 'fastHdri') || !background.backgroundAssetId) {
-    disposeGradientBackgroundDome(gradientBackgroundDome);
-    gradientBackgroundDome = null;
-    disposeBackgroundResources();
-    scene.background = new THREE.Color(background.solidColor);
-    return true;
-  }
-  if (backgroundTexture && backgroundAssetId === background.backgroundAssetId) {
-    disposeGradientBackgroundDome(gradientBackgroundDome);
-    gradientBackgroundDome = null;
-    scene.background = backgroundTexture;
-    return true;
-  }
-  const loaded = await loadEnvironmentTextureFromAsset(background.backgroundAssetId,background.mode);
-  if (!loaded || token !== backgroundLoadToken) {
-    if (loaded) {
-      loaded.texture.dispose();
-      loaded.dispose?.();
-    }
-    return false;
-  }
-  disposeBackgroundResources();
-  backgroundTexture = loaded.texture;
-  backgroundTextureSourceKind = 'texture';
-  backgroundAssetId = background.backgroundAssetId;
-  backgroundTextureCleanup = loaded.dispose ?? null;
-  scene.background = backgroundTexture;
-  return true;
-}
-
-let lastAppliedBackground: EnvironmentSettings['background'] | null = null;
-
-function applyEnvironmentReflectionFromBackground(background: EnvironmentSettings['background']): boolean {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return false;
-  }
-  lastAppliedBackground = { ...background };
-  if (
-    backgroundTexture &&
-    (background.mode === 'hdri' || background.mode === 'fastHdri' || (background.mode === 'skycube' && backgroundTextureSourceKind === 'texture'))
-  ) {
-    scene.environment = backgroundTexture;
-  } else {
-    scene.environment = null;
-  }
-  scene.environmentIntensity = 1;
-  return true;
-}
-
-function degreesToRadians(value: number): number {
-  return (value * Math.PI) / 180;
-}
-
-function applyEnvironmentTextureRotation(settings: EnvironmentSettings): void {
-  const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return;
-  }
-  const rot = settings.environmentRotationDegrees ?? { x: 0, y: 0, z: 0 };
-  const euler = new THREE.Euler(
-    degreesToRadians(rot.x ?? 0),
-    degreesToRadians(rot.y ?? 0),
-    degreesToRadians(rot.z ?? 0),
-    'XYZ',
-  );
-  scene.backgroundRotation.copy(euler);
-  scene.environmentRotation.copy(euler);
-}
-
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const scene = renderContext?.scene ?? null;
   const snapshot = cloneEnvironmentSettings(settings);
@@ -20974,10 +20608,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   }
   ensureSceneCsmShadowRuntime();
   applyFogSettings(snapshot, renderContext?.camera ?? null);
-  const backgroundApplied = await applyBackgroundSettings(snapshot.background);
-  const environmentApplied = applyEnvironmentReflectionFromBackground(snapshot.background);
-
-  applyEnvironmentTextureRotation(snapshot);
   applyRendererShadowSetting();
   syncSceneCsmSunFromEnvironment();
   currentSlowroadsEnvironmentState = {
@@ -20986,22 +20616,20 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
     weather: snapshot.slowroads.weather,
   };
   slowroadsEnvironment?.setSettings(snapshot.slowroads);
-  if (backgroundApplied && environmentApplied) {
-    pendingEnvironmentSettings = null;
-  } else {
-    pendingEnvironmentSettings = snapshot;
-  }
+  pendingEnvironmentSettings = null;
 }
 
 function disposeEnvironmentResources() {
-  disposeBackgroundResources();
-  backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 }
 
 function resetRemovedSkyState() {
-  applyEnvironmentReflectionFromBackground(lastAppliedBackground ?? DEFAULT_ENVIRONMENT_SETTINGS.background);
+  const scene = renderContext?.scene ?? null;
+  if (scene) {
+    scene.environment = null;
+    scene.environmentIntensity = 1;
+  }
   const renderer = renderContext?.renderer ?? null;
   if (renderer) {
     renderer.toneMappingExposure = resolveSceneExposure(DEFAULT_SCENE_EXPOSURE);
@@ -22933,10 +22561,7 @@ function startRenderLoop(
         scheduleLodPrefetch();
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
         tickInstancedBounds(deltaSeconds);
-        if (gradientBackgroundDome) {
-          gradientBackgroundDome.mesh.position.copy(camera.position);
-        }
-          if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(cameraFrameSnapshot)) {
+        if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(cameraFrameSnapshot)) {
             sceneCsmShadowRuntime.update();
           }
         renderer.render(scene, camera);

@@ -141,11 +141,11 @@ export function createSlowroadsEnvironmentRuntime(
   }
 
   function applyToggles(nextSettings: SlowroadsEnvironmentSettings | null): void {
-    const showSky = nextSettings?.showSky ?? true
     const showClouds = nextSettings?.showClouds ?? true
     const showStars = nextSettings?.showStars ?? true
     const showSnow = nextSettings?.showSnow ?? true
-    sky.setVisible(showSky)
+    // 天空是唯一背景（无 fallback background），始终显示。
+    sky.setVisible(true)
     clouds.setVisible(showClouds)
     stars.setConfig(showStars ? preset.stars ?? null : null)
     snow.setConfig(showSnow ? preset.snow ?? null : null)
