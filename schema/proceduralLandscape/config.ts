@@ -131,18 +131,19 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
   },
   high: {
     viewDistance: 1200,
-    treeNearDistance: 150,
+    treeNearDistance: 90,
     grassRadius: 80,
     treeChunkSize: 192,
     densityMultiplier: 1,
     maxBuildTasksPerTick: 6,
-    maxTreeInstances: 24000,
-    maxGrassInstances: 40000,
+    maxTreeInstances: 40000,
+    maxGrassInstances: 60000,
   },
 }
 
 export const PROCEDURAL_LANDSCAPE_AUTO_QUALITY: Record<ProceduralLandscapeEnvironment, ResolvedProceduralLandscapeQuality> = {
-  editor: 'low',
+  // 与 slowroads-lab 观感一致：编辑器视口默认全量植被密度。
+  editor: 'high',
   preview: 'high',
   viewer: 'medium',
 }
@@ -187,7 +188,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
     quality: 'auto',
     sampling: {
       sampleCellSize: 2,
-      maxSampleGridSize: 1024,
+      maxSampleGridSize: 2048,
     },
     surface: {
       enabled: true,
@@ -223,7 +224,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       seedOffset: 0,
       density: 1,
       minHeight: null,
-      maxSlope: 0.2,
+      maxSlope: 0.45,
       roadClearance: 2,
       minScale: 4,
       maxScale: 9,
@@ -239,7 +240,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
     },
     bushes: {
       enabled: true,
-      density: 0.25,
+      density: 0.6,
     },
     debug: {
       showRoadPath: false,
@@ -273,7 +274,7 @@ export function clampProceduralLandscapeProps(
     quality,
     sampling: {
       sampleCellSize: clampNumber(sampling?.sampleCellSize, defaults.sampling.sampleCellSize, 0.5, 16),
-      maxSampleGridSize: Math.round(clampNumber(sampling?.maxSampleGridSize, defaults.sampling.maxSampleGridSize, 128, 2048)),
+      maxSampleGridSize: Math.round(clampNumber(sampling?.maxSampleGridSize, defaults.sampling.maxSampleGridSize, 128, 4096)),
     },
     surface: {
       enabled: surface?.enabled !== false,
