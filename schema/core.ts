@@ -53,10 +53,7 @@ export {
   DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
   DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
   DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-  DEFAULT_ENVIRONMENT_FOG_COLOR,
-  DEFAULT_ENVIRONMENT_FOG_DENSITY,
-  DEFAULT_ENVIRONMENT_FOG_NEAR,
-  DEFAULT_ENVIRONMENT_FOG_FAR,
+  DEFAULT_SLOWROADS_ENVIRONMENT,
   DEFAULT_ENVIRONMENT_PHYSICS_ENABLED,
   DEFAULT_ENVIRONMENT_PHYSICS_ENGINE,
   DEFAULT_ENVIRONMENT_GRAVITY,
@@ -1764,7 +1761,27 @@ export interface SceneResourceSummary {
 }
 
 export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'fastHdri' | 'skycube'
-export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
+/**
+ * Slow Roads 环境（季节 × 时间 × 天气）设置。
+ *
+ * 素材固定来自在线资产包（`schema/slowroads`），这里只保存选择与开关；
+ * 场景雾由 SR 三色雾接管（无标准 fogMode），天空关闭时回退 background。
+ */
+export interface SlowroadsEnvironmentSettings {
+  /** 季节（spring/summer/autumn/winter）。 */
+  season: 'spring' | 'summer' | 'autumn' | 'winter'
+  /** 时间（morning/day/evening/night）。 */
+  timeOfDay: 'morning' | 'day' | 'evening' | 'night'
+  /** 天气（clear/overcast；降雪为冬季阴天专属，星空为夜晴专属）。 */
+  weather: 'clear' | 'overcast'
+  /** 天空（关闭时回退 background 设置；SR 三色雾始终生效）。 */
+  showSky: boolean
+  showClouds: boolean
+  showStars: boolean
+  showSnow: boolean
+  /** 光照曝光缩放（预设强度 × 该系数，0.2..3）。 */
+  exposureScale: number
+}
 export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
 export type EnvironmentPhysicsEngine = 'ammo' | 'cannon'
 
@@ -1810,11 +1827,8 @@ export interface EnvironmentSettings {
   environmentRotationDegrees?: EnvironmentRotationDegrees
   ambientLightColor: string
   ambientLightIntensity: number
-  fogMode: EnvironmentFogMode
-  fogColor: string
-  fogDensity: number
-  fogNear: number
-  fogFar: number
+  /** Slow Roads 季节/时间/天气环境（必填，读取时归一化补默认值）。 */
+  slowroads: SlowroadsEnvironmentSettings
   /** When false, runtime physics remains loaded but does not advance simulation steps. */
   physicsEnabled?: boolean
   physicsEngine: EnvironmentPhysicsEngine

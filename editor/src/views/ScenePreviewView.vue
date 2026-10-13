@@ -179,7 +179,11 @@ import {
 import { setInfiniteGroundHiddenChunkKeys } from '@schema/groundMesh'
 import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDocument'
 import { setGroundTextureSourceResolver } from '@schema/groundTextureSourceResolver'
-import { setProceduralLandscapeAssetResolver } from '@schema/proceduralLandscape/assetResolver'
+import {
+	createSlowroadsEnvironmentRuntime,
+	type SlowroadsEnvironmentRuntime,
+} from '@schema/slowroads/render/environmentRuntime'
+import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
 import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/runtime'
 import {
 	createSceneCsmShadowRuntime,
@@ -310,10 +314,6 @@ import {
 	writeCharacterLocalForward,
 	SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@schema/components'
-import {
-	RIGIDBODY_METADATA_KEY,
-	type RigidbodyComponentMetadata,
-} from '@schema/components/definitions/rigidbodyComponent'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
 import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
 import {
@@ -516,6 +516,9 @@ const isLiveUpdatesDisabled = computed(() => Boolean(liveUpdatesDisabledSourceUr
 
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let currentScenePreviewEnvironmentSettings: EnvironmentSettings | null = null
+let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null
+let slowroadsAmbientLight: THREE.AmbientLight | null = null
+let currentSlowroadsEnvironmentState: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null = null
 const scenePreviewMultiuserVisiblePeerLimit = ref(DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS)
 
 // LOD debug helpers removed
@@ -1810,8 +1813,6 @@ const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
 const instancedCullingBox = new THREE.Box3()
 const instancedCullingSphere = new THREE.Sphere()
-const SCENE_PREVIEW_FOG_HEADROOM_RATIO = 0.88
-const SCENE_PREVIEW_FOG_MIN_DISTANCE = 0.001
 const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
@@ -1964,6 +1965,45 @@ function syncSceneCsmSunFromEnvironment(): void {
 	const csm = resolveEnvironmentCsmSettings(settings)
 	const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
 	sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor)
+	// Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
+	slowroadsEnvironment?.refreshLighting()
+}
+
+/**
+ * Slow Roads 场景级环境运行时（天空/云/星空/降雪/三色雾 + 预设光照）。
+ * preview 里雾始终生效。
+ */
+function ensureSlowroadsEnvironmentRuntime(): void {
+	if (slowroadsEnvironment || !scene || !camera || !renderer) {
+		return
+	}
+	const activeScene = scene
+	const assetStore = getSharedSlowroadsAssetStore({
+		maxTextureSize: renderer.capabilities.maxTextureSize,
+		maxAnisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
+	})
+	slowroadsEnvironment = createSlowroadsEnvironmentRuntime({
+		scene: activeScene,
+		camera,
+		assetStore,
+		applyLighting: (state) => {
+			if (!slowroadsAmbientLight) {
+				slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 0.75)
+				slowroadsAmbientLight.name = 'slowroads-ambient-light'
+				activeScene.add(slowroadsAmbientLight)
+			}
+			slowroadsAmbientLight.color.copy(state.ambientColor)
+			slowroadsAmbientLight.intensity = state.ambientIntensity
+			if (sceneCsmShadowRuntime && currentDocument) {
+				const csm = resolveEnvironmentCsmSettings(resolveDocumentEnvironment(currentDocument))
+				const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
+				sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`)
+			}
+		},
+	})
+	if (currentScenePreviewEnvironmentSettings) {
+		slowroadsEnvironment.setSettings(currentScenePreviewEnvironmentSettings.slowroads)
+	}
 }
 
 function applyRendererShadowSetting(): void {
@@ -11400,8 +11440,11 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 			y: camera.position.y,
 			z: camera.position.z,
 		},
+		environment: currentSlowroadsEnvironmentState,
 	})
 	previewComponentManager.update(delta)
+	ensureSlowroadsEnvironmentRuntime()
+	slowroadsEnvironment?.update(delta)
 	updateCharacterPathFollow(delta)
 	flushParticleRuntimeCommands()
 	updateCharacterAuthorityInputFromKeys()
@@ -11932,99 +11975,14 @@ async function loadEnvironmentTextureFromAsset(
 	}
 }
 
-type ScenePreviewFogState =
-	| {
-			cameraFar: number
-			fogNear: number
-			fogFar: number
-			fogDensity: number
-	  }
-	| null
-
-function syncScenePreviewCameraFar(nextFar: number): void {
-	if (!camera || !scene) {
-		return
-	}
-	if (Math.abs(camera.far - nextFar) <= 1e-6) {
-		return
-	}
-	camera.far = nextFar
-	camera.updateProjectionMatrix()
-	sceneCsmShadowRuntime?.updateFrustums()
-	scenePreviewPerf.markInstancedCullingDirty()
-}
-
-function resolveScenePreviewFogState(
-	settings: EnvironmentSettings
-): ScenePreviewFogState {
-	if (settings.fogMode === 'none') {
-		return null
-	}
-	if (settings.fogMode === 'linear') {
-		const sourceNear = Math.max(0, settings.fogNear)
-		const sourceFar = Math.max(sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE, settings.fogFar)
-		const cameraFar = Math.max(
-			sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE,
-			Math.min(sourceFar, sourceFar),
-		)
-		const fogFar = Math.max(
-			sourceNear + SCENE_PREVIEW_FOG_MIN_DISTANCE,
-			cameraFar * SCENE_PREVIEW_FOG_HEADROOM_RATIO,
-		)
-		const fogNear = Math.min(
-			fogFar - SCENE_PREVIEW_FOG_MIN_DISTANCE,
-			Math.max(0, sourceNear * (fogFar / cameraFar)),
-		)
-		return {
-			cameraFar,
-			fogNear,
-			fogFar,
-			fogDensity: 0,
-		}
-	}
-	const density = Math.max(0, settings.fogDensity)
-	const baseCameraFar = DEFAULT_SCENE_CAMERA_FAR
-	const cameraFar = Math.max(
-		SCENE_PREVIEW_FOG_MIN_DISTANCE,
-		baseCameraFar,
-	)
-	const coverageScale = THREE.MathUtils.clamp(baseCameraFar / cameraFar, 0.5, 4)
-	return {
-		cameraFar,
-		fogNear: 0,
-		fogFar: 0,
-		fogDensity: density <= 0 ? 0 : (density * coverageScale) / SCENE_PREVIEW_FOG_HEADROOM_RATIO,
-	}
-}
-
-function applyFogSettings(settings: EnvironmentSettings) {
+/**
+ * Slow Roads 三色雾是场景唯一雾系统：preview 里雾始终生效（无编辑预览开关）。
+ */
+function applyFogSettings(_settings: EnvironmentSettings) {
 	if (!scene) {
 		return
 	}
-	const fogState = resolveScenePreviewFogState(settings)
-	const fogColor = new THREE.Color(settings.fogColor)
-	if (!fogState) {
-		scene.fog = null
-		syncScenePreviewCameraFar(DEFAULT_SCENE_CAMERA_FAR)
-		return
-	}
-	syncScenePreviewCameraFar(fogState.cameraFar)
-	if (settings.fogMode === 'linear') {
-		if (scene.fog instanceof THREE.Fog) {
-			scene.fog.color.copy(fogColor)
-			scene.fog.near = fogState.fogNear
-			scene.fog.far = fogState.fogFar
-		} else {
-			scene.fog = new THREE.Fog(fogColor, fogState.fogNear, fogState.fogFar)
-		}
-		return
-	}
-	if (scene.fog instanceof THREE.FogExp2) {
-		scene.fog.color.copy(fogColor)
-		scene.fog.density = fogState.fogDensity
-	} else {
-		scene.fog = new THREE.FogExp2(fogColor, fogState.fogDensity)
-	}
+	scene.fog = null
 }
 
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
@@ -12227,6 +12185,13 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	}
 	applyRendererShadowSetting()
 	syncSceneCsmSunFromEnvironment()
+	currentSlowroadsEnvironmentState = {
+		season: snapshot.slowroads.season,
+		timeOfDay: snapshot.slowroads.timeOfDay,
+		weather: snapshot.slowroads.weather,
+	}
+	// SR 环境最后应用：预设光照覆盖 CSM 同步结果（预设接管光色/强度）。
+	slowroadsEnvironment?.setSettings(snapshot.slowroads)
 }
 
 function disposeEnvironmentResources() {
@@ -15861,7 +15826,6 @@ onMounted(() => {
 	] = resolveDisplayBoardMediaSource
 	setGroundTextureSourceResolver(resolveGroundTextureSource)
 	setProceduralLandscapeEnvironment('preview')
-	setProceduralLandscapeAssetResolver(resolveGroundTextureSource)
 	setParticleTextureResolver(resolveParticleTextureAssetSource)
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
 	initRenderer()
@@ -15963,7 +15927,9 @@ onBeforeUnmount(() => {
 	] = undefined
 	setGroundTextureSourceResolver(null)
 	setParticleTextureResolver(null)
-	setProceduralLandscapeAssetResolver(null)
+	slowroadsEnvironment?.dispose()
+	slowroadsEnvironment = null
+	slowroadsAmbientLight = null
 })
 
 watch(

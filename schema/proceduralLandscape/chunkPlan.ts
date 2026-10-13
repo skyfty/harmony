@@ -18,6 +18,8 @@ export interface TreePlacement {
   scale: number
   /** Deterministic 0..1 value used to pick a texture variant at render time. */
   variant: number
+  /** 0 = broadleaf（阔叶），1 = conifer（针叶）。 */
+  species: 0 | 1
   /** Position in the deterministic candidate list; density tiers keep a prefix. */
   rank: number
 }
@@ -144,6 +146,7 @@ export function planTreeChunk(params: TreeChunkParams, deps: LandscapeChunkDeps)
       rotation: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 3) * Math.PI * 2,
       scale: lerp(params.minScale, params.maxScale, chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 4)),
       variant: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 5),
+      species: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 7) < 0.4 ? 1 : 0,
       rank: i,
     })
   }
@@ -230,6 +233,7 @@ export function planRoadBucket(
                 rotation: bucketRandom(index, 4) * Math.PI * 2,
                 scale: 0.7 + bucketRandom(index, 5) * 0.7,
                 variant: bucketRandom(index, 6),
+                species: 0,
                 rank: index,
                 sink: 0,
               })
@@ -249,6 +253,7 @@ export function planRoadBucket(
           rotation: bucketRandom(index, 8) * Math.PI * 2,
           scale: 0.7 + bucketRandom(index, 9) * 0.6,
           variant: bucketRandom(index, 10),
+          species: 0,
           rank: index,
           sink: params.sinkNearRoad * sinkFraction,
         })
@@ -303,6 +308,7 @@ export function planCameraGrassChunk(
       rotation: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 4) * Math.PI * 2,
       scale: 0.6 + chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 5) * 0.6,
       variant: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 6),
+      species: 0,
       rank: i,
       sink: 0,
     })

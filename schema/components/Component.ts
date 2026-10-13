@@ -2,6 +2,16 @@ import type { Object3D } from 'three'
 
 export interface ComponentFrameState {
   cameraWorldPosition: { x: number; y: number; z: number } | null
+  /**
+   * Slow Roads 环境状态（季节 × 时间 × 天气）。宿主每帧从
+   * EnvironmentSettings.slowroads 注入，proceduralLandscape 等组件据此
+   * 选择季节素材与调色板；缺省时组件回退到默认状态。
+   */
+  environment?: {
+    season: 'spring' | 'summer' | 'autumn' | 'winter'
+    timeOfDay: 'morning' | 'day' | 'evening' | 'night'
+    weather: 'clear' | 'overcast'
+  } | null
 }
 
 export interface ComponentRuntimeContext<TProps = Record<string, unknown>> {

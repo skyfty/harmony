@@ -20,6 +20,13 @@ export interface ProceduralLandscapeSurfaceProps {
   roadTint: string
   gravelTint: string
   rockSlopeThreshold: number
+  /**
+   * GLB 航拍基色处理：'replace' 官方季节地表全覆盖写（默认）；
+   * 'blend' 保留原贴图并按 baseMapBlend 与季节地表混合。
+   */
+  baseMapMode: 'replace' | 'blend'
+  /** baseMapMode='blend' 时的混合强度（0=季节地表，1=原始贴图）。 */
+  baseMapBlend: number
 }
 
 export interface ProceduralLandscapeRoadProps {
@@ -72,17 +79,6 @@ export interface ProceduralLandscapeBushesProps {
   density: number
 }
 
-export interface ProceduralLandscapeAssetsProps {
-  surfaceGrassAssetId: string | null
-  surfaceForestAssetId: string | null
-  surfaceGravelAssetId: string | null
-  surfaceRoadAssetId: string | null
-  grassAssetIds: string[]
-  bushAssetIds: string[]
-  treeNearAssetIds: string[]
-  treeFarAssetIds: string[]
-}
-
 export interface ProceduralLandscapeDebugProps {
   showRoadPath: boolean
   showChunks: boolean
@@ -98,7 +94,6 @@ export interface ProceduralLandscapeComponentProps {
   forest: ProceduralLandscapeForestProps
   grass: ProceduralLandscapeGrassProps
   bushes: ProceduralLandscapeBushesProps
-  assets: ProceduralLandscapeAssetsProps
   debug: ProceduralLandscapeDebugProps
 }
 
@@ -162,41 +157,6 @@ export function resolveProceduralLandscapeQuality(
   return PROCEDURAL_LANDSCAPE_AUTO_QUALITY[environment] ?? 'medium'
 }
 
-const MAX_ASSET_VARIANTS = 4
-
-export function normalizeProceduralLandscapeAssetId(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-  let trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  if (trimmed.startsWith('asset://')) {
-    trimmed = trimmed.slice('asset://'.length)
-  }
-  trimmed = trimmed.trim()
-  return trimmed.length ? trimmed : null
-}
-
-export function normalizeProceduralLandscapeAssetIdList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return []
-  }
-  const result: string[] = []
-  for (const entry of value) {
-    const assetId = normalizeProceduralLandscapeAssetId(entry)
-    if (!assetId || result.includes(assetId)) {
-      continue
-    }
-    result.push(assetId)
-    if (result.length >= MAX_ASSET_VARIANTS) {
-      break
-    }
-  }
-  return result
-}
-
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) {
@@ -238,6 +198,8 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       roadTint: '#ffffff',
       gravelTint: '#ffffff',
       rockSlopeThreshold: 0.35,
+      baseMapMode: 'replace',
+      baseMapBlend: 0.5,
     },
     road: {
       enabled: true,
@@ -279,16 +241,6 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       enabled: true,
       density: 0.25,
     },
-    assets: {
-      surfaceGrassAssetId: null,
-      surfaceForestAssetId: null,
-      surfaceGravelAssetId: null,
-      surfaceRoadAssetId: null,
-      grassAssetIds: [],
-      bushAssetIds: [],
-      treeNearAssetIds: [],
-      treeFarAssetIds: [],
-    },
     debug: {
       showRoadPath: false,
       showChunks: false,
@@ -307,7 +259,6 @@ export function clampProceduralLandscapeProps(
   const forest = props?.forest as Partial<ProceduralLandscapeForestProps> | undefined
   const grass = props?.grass as Partial<ProceduralLandscapeGrassProps> | undefined
   const bushes = props?.bushes as Partial<ProceduralLandscapeBushesProps> | undefined
-  const assets = props?.assets as Partial<ProceduralLandscapeAssetsProps> | undefined
   const debug = props?.debug as Partial<ProceduralLandscapeDebugProps> | undefined
 
   const minScale = clampNumber(forest?.minScale, defaults.forest.minScale, 0.5, 40)
@@ -333,6 +284,8 @@ export function clampProceduralLandscapeProps(
       roadTint: normalizeColor(surface?.roadTint, defaults.surface.roadTint),
       gravelTint: normalizeColor(surface?.gravelTint, defaults.surface.gravelTint),
       rockSlopeThreshold: clampNumber(surface?.rockSlopeThreshold, defaults.surface.rockSlopeThreshold, 0.05, 0.9),
+      baseMapMode: surface?.baseMapMode === 'blend' ? 'blend' : 'replace',
+      baseMapBlend: clampNumber(surface?.baseMapBlend, defaults.surface.baseMapBlend, 0, 1),
     },
     road: {
       enabled: road?.enabled !== false,
@@ -374,16 +327,6 @@ export function clampProceduralLandscapeProps(
       enabled: bushes?.enabled !== false,
       density: clampNumber(bushes?.density, defaults.bushes.density, 0, 2),
     },
-    assets: {
-      surfaceGrassAssetId: normalizeProceduralLandscapeAssetId(assets?.surfaceGrassAssetId),
-      surfaceForestAssetId: normalizeProceduralLandscapeAssetId(assets?.surfaceForestAssetId),
-      surfaceGravelAssetId: normalizeProceduralLandscapeAssetId(assets?.surfaceGravelAssetId),
-      surfaceRoadAssetId: normalizeProceduralLandscapeAssetId(assets?.surfaceRoadAssetId),
-      grassAssetIds: normalizeProceduralLandscapeAssetIdList(assets?.grassAssetIds),
-      bushAssetIds: normalizeProceduralLandscapeAssetIdList(assets?.bushAssetIds),
-      treeNearAssetIds: normalizeProceduralLandscapeAssetIdList(assets?.treeNearAssetIds),
-      treeFarAssetIds: normalizeProceduralLandscapeAssetIdList(assets?.treeFarAssetIds),
-    },
     debug: {
       showRoadPath: debug?.showRoadPath === true,
       showChunks: debug?.showChunks === true,
@@ -402,13 +345,6 @@ export function cloneProceduralLandscapeProps(
     forest: { ...props.forest },
     grass: { ...props.grass },
     bushes: { ...props.bushes },
-    assets: {
-      ...props.assets,
-      grassAssetIds: [...props.assets.grassAssetIds],
-      bushAssetIds: [...props.assets.bushAssetIds],
-      treeNearAssetIds: [...props.assets.treeNearAssetIds],
-      treeFarAssetIds: [...props.assets.treeFarAssetIds],
-    },
     debug: { ...props.debug },
   }
 }

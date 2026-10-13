@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
-import type { ProjectAsset } from '@/types/project-asset'
 import { useSceneStore } from '@/stores/sceneStore'
 import {
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
@@ -16,8 +15,6 @@ import {
   getProceduralLandscapeStats,
   type ProceduralLandscapeRuntimeStats,
 } from '@schema/proceduralLandscape/runtime'
-import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
-import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const sceneStore = useSceneStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
@@ -193,202 +190,6 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
   patchGroup('surface', { [key]: value })
 }
 
-interface AssetSlotDescriptor {
-  key: keyof ProceduralLandscapeComponentProps['assets']
-  label: string
-  multiple: boolean
-}
-
-const assetSlots: AssetSlotDescriptor[] = [
-  { key: 'surfaceGrassAssetId', label: '地表草地贴图', multiple: false },
-  { key: 'surfaceForestAssetId', label: '地表树冠贴图', multiple: false },
-  { key: 'surfaceGravelAssetId', label: '碎石/岩石贴图', multiple: false },
-  { key: 'surfaceRoadAssetId', label: '路面贴图', multiple: false },
-  { key: 'grassAssetIds', label: '草广告牌（1-4 变体）', multiple: true },
-  { key: 'bushAssetIds', label: '灌木广告牌（1-4 变体）', multiple: true },
-  { key: 'treeNearAssetIds', label: '近树广告牌（1-4 变体）', multiple: true },
-  { key: 'treeFarAssetIds', label: '远树广告牌（1-4 变体，可空）', multiple: true },
-]
-
-const assetDialogVisible = ref(false)
-const assetDialogSlot = ref<AssetSlotDescriptor | null>(null)
-const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
-const assetDialogSelectedIds = ref<string[]>([])
-const ASSET_DIALOG_TYPES = 'image,texture'
-const dragActiveSlot = ref<string | null>(null)
-
-function slotAssetIds(slot: AssetSlotDescriptor): string[] {
-  const current = propsValue.value
-  if (!current) {
-    return []
-  }
-  const value = current.assets[slot.key]
-  if (Array.isArray(value)) {
-    return value
-  }
-  return typeof value === 'string' && value.length ? [value] : []
-}
-
-function slotAssets(slot: AssetSlotDescriptor): ProjectAsset[] {
-  return slotAssetIds(slot)
-    .map((id) => sceneStore.getAsset(id))
-    .filter((asset): asset is ProjectAsset => !!asset)
-}
-
-function assetThumbnailStyle(asset: ProjectAsset): Record<string, string> {
-  if (asset.thumbnail && asset.thumbnail.trim().length) {
-    return { backgroundImage: `url(${asset.thumbnail})` }
-  }
-  if (asset.previewColor && asset.previewColor.trim().length) {
-    return { backgroundColor: asset.previewColor }
-  }
-  return {}
-}
-
-function applySlotAssetIds(slot: AssetSlotDescriptor, assetIds: string[]): void {
-  const normalized: string[] = []
-  for (const id of assetIds) {
-    const trimmed = typeof id === 'string' ? id.trim() : ''
-    if (!trimmed.length || normalized.includes(trimmed)) {
-      continue
-    }
-    normalized.push(trimmed)
-    if (slot.multiple && normalized.length >= 4) {
-      break
-    }
-  }
-  if (slot.multiple) {
-    patchGroup('assets', { [slot.key]: normalized })
-  } else {
-    patchGroup('assets', { [slot.key]: normalized[0] ?? null })
-  }
-}
-
-function handleOpenAssetDialog(slot: AssetSlotDescriptor, event: MouseEvent): void {
-  if (!componentEnabled.value) {
-    return
-  }
-  assetDialogSlot.value = slot
-  assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
-  assetDialogSelectedIds.value = slot.multiple ? slotAssetIds(slot) : []
-  assetDialogVisible.value = true
-}
-
-function handleAssetDialogUpdate(asset: ProjectAsset | null): void {
-  const slot = assetDialogSlot.value
-  if (!slot || slot.multiple) {
-    return
-  }
-  applySlotAssetIds(slot, asset ? [asset.id] : [])
-  assetDialogVisible.value = false
-}
-
-function handleAssetDialogConfirm(assets: ProjectAsset[]): void {
-  const slot = assetDialogSlot.value
-  if (!slot || !slot.multiple) {
-    return
-  }
-  applySlotAssetIds(slot, assets.map((asset) => asset.id))
-  assetDialogVisible.value = false
-}
-
-function handleAssetDialogCancel(): void {
-  assetDialogVisible.value = false
-}
-
-function handleRemoveSlotAsset(slot: AssetSlotDescriptor, assetId: string): void {
-  applySlotAssetIds(slot, slotAssetIds(slot).filter((id) => id !== assetId))
-}
-
-function isSupportedAsset(asset: ProjectAsset | null): asset is ProjectAsset {
-  return !!asset && (asset.type === 'image' || asset.type === 'texture')
-}
-
-function resolveDraggedAsset(event: DragEvent): ProjectAsset | null {
-  let assetId = ''
-  if (event.dataTransfer) {
-    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as { assetId?: unknown }
-        if (typeof parsed?.assetId === 'string') {
-          assetId = parsed.assetId
-        }
-      } catch (error) {
-        console.warn('Failed to parse asset drag payload', error)
-      }
-    }
-  }
-  if (!assetId.length) {
-    assetId = sceneStore.draggingAssetId ?? ''
-  }
-  return assetId.length ? sceneStore.getAsset(assetId) : null
-}
-
-function handleSlotDragEnter(slot: AssetSlotDescriptor, event: DragEvent): void {
-  if (!componentEnabled.value) {
-    return
-  }
-  const asset = resolveDraggedAsset(event)
-  if (!isSupportedAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  dragActiveSlot.value = String(slot.key)
-}
-
-function handleSlotDragOver(slot: AssetSlotDescriptor, event: DragEvent): void {
-  if (!componentEnabled.value) {
-    return
-  }
-  const asset = resolveDraggedAsset(event)
-  if (!isSupportedAsset(asset)) {
-    if (dragActiveSlot.value === String(slot.key)) {
-      dragActiveSlot.value = null
-    }
-    return
-  }
-  event.preventDefault()
-  if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
-  }
-  dragActiveSlot.value = String(slot.key)
-}
-
-function handleSlotDragLeave(slot: AssetSlotDescriptor): void {
-  if (dragActiveSlot.value === String(slot.key)) {
-    dragActiveSlot.value = null
-  }
-}
-
-function handleSlotDrop(slot: AssetSlotDescriptor, event: DragEvent): void {
-  if (!componentEnabled.value) {
-    return
-  }
-  dragActiveSlot.value = null
-  const asset = resolveDraggedAsset(event)
-  if (!isSupportedAsset(asset)) {
-    return
-  }
-  event.preventDefault()
-  event.stopPropagation()
-  const existing = slotAssetIds(slot)
-  const next = slot.multiple
-    ? (existing.includes(asset.id) ? existing : [...existing, asset.id]).slice(0, 4)
-    : [asset.id]
-  applySlotAssetIds(slot, next)
-}
-
-watch(assetDialogVisible, (open) => {
-  if (!open) {
-    assetDialogAnchor.value = null
-    assetDialogSlot.value = null
-  }
-})
-
 const stats = ref<ProceduralLandscapeRuntimeStats | null>(null)
 let statsTimer: ReturnType<typeof setInterval> | null = null
 
@@ -419,6 +220,10 @@ const statsRows = computed(() => {
   const memoryMb = (value.memoryBytes / (1024 * 1024)).toFixed(1)
   const rows: Array<{ label: string; value: string }> = [
     { label: '阶段', value: phaseLabel(value.phase) },
+    { label: '季节', value: `${value.season}${value.seasonAssetsReady ? '' : '（加载中）'}` },
+    { label: '素材档位', value: value.assetVariant === '2048' ? '@2048' : '完整' },
+    { label: '素材下载', value: `${(value.assetDownloadedBytes / (1024 * 1024)).toFixed(1)} MB` },
+    { label: '近树 3D', value: String(value.nearTreeInstances) },
     { label: '质量档', value: value.quality },
     { label: '树实例', value: String(value.treeInstances) },
     { label: '草实例', value: String(value.grassInstances) },
@@ -713,39 +518,38 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
         </div>
 
         <div class="pl-section">
-          <div class="pl-section__title">资产（点击选择 / 拖入）</div>
-          <div class="pl-section__hint">未选择资产的层与植被不会显示（不提供内置兜底）。</div>
-          <div
-            v-for="slot in assetSlots"
-            :key="String(slot.key)"
-            class="pl-slot"
-            :class="{ 'is-active': dragActiveSlot === String(slot.key), 'is-disabled': !componentEnabled }"
-            @dragenter="(event) => handleSlotDragEnter(slot, event)"
-            @dragover="(event) => handleSlotDragOver(slot, event)"
-            @dragleave="handleSlotDragLeave(slot)"
-            @drop="(event) => handleSlotDrop(slot, event)"
-          >
-            <div class="pl-slot__label">{{ slot.label }}</div>
-            <div class="pl-slot__assets">
-              <button
-                v-for="asset in slotAssets(slot)"
-                :key="asset.id"
-                type="button"
-                class="pl-slot__thumb"
-                :style="assetThumbnailStyle(asset)"
-                :title="`${asset.name || asset.id}（点击移除）`"
-                @click.stop="handleRemoveSlotAsset(slot, asset.id)"
-              />
-              <button
-                type="button"
-                class="pl-slot__thumb pl-slot__thumb--add"
-                :disabled="!componentEnabled"
-                @click.stop="handleOpenAssetDialog(slot, $event)"
-              >
-                <v-icon size="18">mdi-plus</v-icon>
-              </button>
-            </div>
+          <div class="pl-section__title">素材（在线资产包）</div>
+          <div class="pl-section__hint">四季素材固定来自在线资产包，由「Slow Roads 环境」的季节切换驱动；此处只保留基色参数。</div>
+          <div class="pl-toggle-row">
+            <span class="pl-toggle-row__label">基色模式</span>
+            <button
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': propsValue.surface.baseMapMode !== 'blend' }"
+              :disabled="!componentEnabled"
+              @click="patchGroup('surface', { baseMapMode: 'replace' })"
+            >官方覆盖</button>
+            <button
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': propsValue.surface.baseMapMode === 'blend' }"
+              :disabled="!componentEnabled"
+              @click="patchGroup('surface', { baseMapMode: 'blend' })"
+            >叠加航拍底图</button>
           </div>
+          <v-slider
+            v-if="propsValue.surface.baseMapMode === 'blend'"
+            :model-value="propsValue.surface.baseMapBlend"
+            :min="0"
+            :max="1"
+            :step="0.05"
+            density="compact"
+            hide-details
+            color="primary"
+            :disabled="!componentEnabled"
+            label="底图混合强度"
+            @update:model-value="(value) => patchGroup('surface', { baseMapBlend: Number(value) })"
+          />
         </div>
 
         <div class="pl-section">
@@ -784,21 +588,6 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
         </div>
       </div>
 
-      <AssetPickerDialog
-        v-model="assetDialogVisible"
-        :asset-id="assetDialogSlot ? slotAssetIds(assetDialogSlot)[0] ?? '' : ''"
-        :asset-type="ASSET_DIALOG_TYPES"
-        :multiple="assetDialogSlot?.multiple === true"
-        :selected-asset-ids="assetDialogSelectedIds"
-        :title="assetDialogSlot?.label ?? '选择贴图资产'"
-        confirm-text="确定"
-        cancel-text="取消"
-        :anchor="assetDialogAnchor"
-        @update:selected-asset-ids="(value) => (assetDialogSelectedIds = value)"
-        @update:asset="handleAssetDialogUpdate"
-        @confirm="handleAssetDialogConfirm"
-        @cancel="handleAssetDialogCancel"
-      />
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -933,6 +722,34 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
+}
+
+.pl-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.pl-toggle-row__label {
+  font-size: 0.78rem;
+  color: rgba(159, 181, 199, 0.9);
+}
+
+.pl-choice {
+  border: 1px solid rgba(126, 148, 168, 0.45);
+  background: transparent;
+  color: rgba(214, 226, 236, 0.9);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.pl-choice--active {
+  border-color: rgba(88, 160, 232, 0.9);
+  background: rgba(88, 160, 232, 0.18);
+  color: #ffffff;
 }
 
 .pl-stats__row {

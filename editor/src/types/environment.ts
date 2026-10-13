@@ -1,5 +1,4 @@
 export type EnvironmentBackgroundMode = 'solidColor' | 'hdri' | 'fastHdri' | 'skycube'
-export type EnvironmentFogMode = 'none' | 'linear' | 'exp'
 export type EnvironmentNorthDirection = '+X' | '-X' | '+Z' | '-Z'
 export type EnvironmentPhysicsEngine = 'ammo' | 'cannon'
 
@@ -32,11 +31,17 @@ export interface EnvironmentSettings {
   environmentRotationDegrees?: EnvironmentRotationDegrees
   ambientLightColor: string
   ambientLightIntensity: number
-  fogMode: EnvironmentFogMode
-  fogColor: string
-  fogDensity: number
-  fogNear: number
-  fogFar: number
+  /** Slow Roads 季节/时间/天气环境（节季素材固定来自在线资产包）。 */
+  slowroads: {
+    season: 'spring' | 'summer' | 'autumn' | 'winter'
+    timeOfDay: 'morning' | 'day' | 'evening' | 'night'
+    weather: 'clear' | 'overcast'
+    showSky: boolean
+    showClouds: boolean
+    showStars: boolean
+    showSnow: boolean
+    exposureScale: number
+  }
   physicsEnabled?: boolean
   physicsEngine?: EnvironmentPhysicsEngine
   gravityStrength: number

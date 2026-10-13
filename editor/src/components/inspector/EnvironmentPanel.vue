@@ -3,11 +3,11 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type {
   EnvironmentBackgroundMode,
-  EnvironmentFogMode,
   EnvironmentNorthDirection,
   EnvironmentOrientationPreset,
   EnvironmentPhysicsEngine,
   EnvironmentRotationDegrees,
+  EnvironmentSettings,
 } from '@/types/environment'
 import {
   isHdriLikeExtension,
@@ -50,7 +50,6 @@ const northDirectionOptions: Array<{ title: string; value: EnvironmentNorthDirec
 
 const backgroundColorMenuOpen = ref(false)
 const gradientTopColorMenuOpen = ref(false)
-const fogColorMenuOpen = ref(false)
 
 const DEFAULT_GRADIENT_OFFSET = 33
 const DEFAULT_GRADIENT_EXPONENT = 0.6
@@ -74,8 +73,6 @@ const BACKGROUND_ASSET_EXTENSIONS = [
 
 const isBackgroundDropActive = ref(false)
 
-const isExponentialFog = computed(() => environmentSettings.value.fogMode === 'exp')
-const isLinearFog = computed(() => environmentSettings.value.fogMode === 'linear')
 const isPhysicsEnabled = computed(() => environmentSettings.value.physicsEnabled !== false)
 const physicsEngine = computed<EnvironmentPhysicsEngine>(() => environmentSettings.value.physicsEngine ?? 'cannon')
 
@@ -89,98 +86,34 @@ const backgroundUiMode = computed<BackgroundUiMode>(() => (
   environmentSettings.value.background.mode === 'solidColor' ? 'solidColor' : 'sky'
 ))
 
-const fogModeOptions: Array<{ title: string; value: EnvironmentFogMode }> = [
-  { title: 'No Fog', value: 'none' },
-  { title: 'Linear Fog', value: 'linear' },
-  { title: 'Exponential Fog', value: 'exp' },
-]
-
 const physicsEngineOptions: Array<{ title: string; value: EnvironmentPhysicsEngine }> = [
   { title: 'Ammo', value: 'ammo' },
   { title: 'Cannon', value: 'cannon' },
 ]
 
-type LinearFogPreset = 'light' | 'medium' | 'heavy' | 'custom'
-type ExpFogPreset = 'light' | 'medium' | 'heavy' | 'custom'
-
-const linearFogPresetOptions: Array<{ title: string; value: LinearFogPreset }> = [
-  { title: 'Light Fog', value: 'light' },
-  { title: 'Medium Fog', value: 'medium' },
-  { title: 'Heavy Fog', value: 'heavy' },
-  { title: 'Custom', value: 'custom' },
+// ---- Slow Roads 环境（季节 × 时间 × 天气）----
+const SLOWROADS_SEASONS = [
+  { title: '春', value: 'spring' as const },
+  { title: '夏', value: 'summer' as const },
+  { title: '秋', value: 'autumn' as const },
+  { title: '冬', value: 'winter' as const },
+]
+const SLOWROADS_TIMES = [
+  { title: '早晨', value: 'morning' as const },
+  { title: '白天', value: 'day' as const },
+  { title: '傍晚', value: 'evening' as const },
+  { title: '夜晚', value: 'night' as const },
+]
+const SLOWROADS_WEATHERS = [
+  { title: '晴', value: 'clear' as const },
+  { title: '阴', value: 'overcast' as const },
 ]
 
-const expFogPresetOptions: Array<{ title: string; value: ExpFogPreset }> = [
-  { title: 'Light Fog', value: 'light' },
-  { title: 'Medium Fog', value: 'medium' },
-  { title: 'Heavy Fog', value: 'heavy' },
-  { title: 'Custom', value: 'custom' },
-]
-
-const LINEAR_FOG_PRESETS: Record<Exclude<LinearFogPreset, 'custom'>, { near: number; far: number; color: string }> = {
-  light: { near: 520, far: 1800, color: '#dfe7ef' },
-  medium: { near: 240, far: 1100, color: '#d7ddd6' },
-  heavy: { near: 100, far: 520, color: '#cbc7bc' },
+function patchSlowroadsSettings(patch: Partial<EnvironmentSettings['slowroads']>) {
+  sceneStore.patchEnvironmentSettings({
+    slowroads: { ...environmentSettings.value.slowroads, ...patch },
+  })
 }
-
-const EXP_FOG_PRESETS: Record<Exclude<ExpFogPreset, 'custom'>, { density: number }> = {
-  light: { density: 0.001 },
-  medium: { density: 0.01 },
-  heavy: { density: 0.1 },
-}
-
-const DEFAULT_LINEAR_FOG_NEAR = 1
-const DEFAULT_LINEAR_FOG_FAR = 50
-
-const selectedLinearFogPreset = computed<LinearFogPreset>(() => {
-  if (environmentSettings.value.fogMode !== 'linear') {
-    return 'custom'
-  }
-  const epsilon = 1e-6
-  const near = environmentSettings.value.fogNear
-  const far = environmentSettings.value.fogFar
-  const color = normalizeHexColor(environmentSettings.value.fogColor, '#ffffff')
-  const presets: Array<Exclude<LinearFogPreset, 'custom'>> = ['light', 'medium', 'heavy']
-  for (const preset of presets) {
-    const presetSettings = LINEAR_FOG_PRESETS[preset]
-    if (
-      Math.abs(near - presetSettings.near) <= epsilon
-      && Math.abs(far - presetSettings.far) <= epsilon
-      && color.toLowerCase() === presetSettings.color
-    ) {
-      return preset
-    }
-  }
-  return 'custom'
-})
-
-const selectedExpFogPreset = computed<ExpFogPreset>(() => {
-  if (environmentSettings.value.fogMode !== 'exp') {
-    return 'custom'
-  }
-  const epsilon = 1e-6
-  const density = environmentSettings.value.fogDensity
-  const presets: Array<Exclude<ExpFogPreset, 'custom'>> = ['light', 'medium', 'heavy']
-  for (const preset of presets) {
-    const presetSettings = EXP_FOG_PRESETS[preset]
-    if (Math.abs(density - presetSettings.density) <= epsilon) {
-      return preset
-    }
-  }
-  return 'custom'
-})
-
-const fogNearInput = ref(formatFogFieldValue(environmentSettings.value.fogNear))
-const fogFarInput = ref(formatFogFieldValue(environmentSettings.value.fogFar))
-
-watch(
-  () => [environmentSettings.value.fogNear, environmentSettings.value.fogFar],
-  ([near, far]) => {
-    fogNearInput.value = formatFogFieldValue(typeof near === 'number' ? near : 0)
-    fogFarInput.value = formatFogFieldValue(typeof far === 'number' ? far : 0)
-  },
-  { immediate: true },
-)
 
 const backgroundAsset = computed(() => {
   const background = environmentSettings.value.background
@@ -336,37 +269,26 @@ function handleRotationDegreesInput(axis: keyof EnvironmentRotationDegrees, valu
   })
 }
 
-function handleHexColorChange(target: 'background' | 'fog', value: string | null) {
+function handleHexColorChange(_target: 'background', value: string | null) {
   if (typeof value !== 'string') {
     return
   }
-  if (target === 'background') {
-    const current = environmentSettings.value.background.solidColor
-    const normalized = normalizeHexColor(value, current)
-    if (normalized === current) {
-      return
-    }
-    patchEnvironmentBackground({
-      mode: environmentSettings.value.background.mode,
-      solidColor: normalized,
-      gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
-      gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
-      gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
-      backgroundAssetId: environmentSettings.value.background.backgroundAssetId,
-    })
-    return
-  }
-  const current = environmentSettings.value.fogColor
+  const current = environmentSettings.value.background.solidColor
   const normalized = normalizeHexColor(value, current)
   if (normalized === current) {
     return
   }
-  sceneStore.patchEnvironmentSettings({
-    fogColor: normalized,
+  patchEnvironmentBackground({
+    mode: environmentSettings.value.background.mode,
+    solidColor: normalized,
+    gradientTopColor: environmentSettings.value.background.gradientTopColor ?? null,
+    gradientOffset: environmentSettings.value.background.gradientOffset ?? DEFAULT_GRADIENT_OFFSET,
+    gradientExponent: environmentSettings.value.background.gradientExponent ?? DEFAULT_GRADIENT_EXPONENT,
+    backgroundAssetId: environmentSettings.value.background.backgroundAssetId,
   })
 }
 
-function handleColorPickerInput(target: 'background' | 'fog', value: string | null) {
+function handleColorPickerInput(target: 'background', value: string | null) {
   handleHexColorChange(target, value)
 }
 
@@ -491,66 +413,6 @@ function handleViewportPerformanceModeToggle(enabled: boolean | null) {
   sceneStore.patchEnvironmentSettings({ viewportPerformanceMode: enabled })
 }
 
-function handleFogModeChange(mode: EnvironmentFogMode | null) {
-  if (!mode || mode === environmentSettings.value.fogMode) {
-    return
-  }
-  if (mode === 'none') {
-    sceneStore.patchEnvironmentSettings({ fogMode: 'none' })
-    return
-  }
-  if (mode === 'linear') {
-    const presetSettings = LINEAR_FOG_PRESETS.light
-    const near = Number.isFinite(presetSettings.near) ? presetSettings.near : DEFAULT_LINEAR_FOG_NEAR
-    const far = Number.isFinite(presetSettings.far) ? presetSettings.far : DEFAULT_LINEAR_FOG_FAR
-    sceneStore.patchEnvironmentSettings({
-      fogMode: 'linear',
-      fogColor: presetSettings.color,
-      fogNear: Math.max(0, near),
-      fogFar: Math.max(Math.max(0, near) + 0.001, far),
-    })
-    return
-  }
-  // exp
-  const expPreset = EXP_FOG_PRESETS.light
-  sceneStore.patchEnvironmentSettings({
-    fogMode: 'exp',
-    fogDensity: expPreset.density,
-  })
-}
-
-function applyLinearFogPreset(preset: unknown) {
-  if (preset === null || preset === undefined) {
-    return
-  }
-  if (preset === 'custom') {
-    if (environmentSettings.value.fogMode !== 'linear') {
-      sceneStore.patchEnvironmentSettings({ fogMode: 'linear' })
-    }
-    return
-  }
-  if (preset !== 'light' && preset !== 'medium' && preset !== 'heavy') {
-    return
-  }
-  const presetSettings = LINEAR_FOG_PRESETS[preset]
-  const nextNear = Math.max(0, presetSettings.near)
-  const nextFar = Math.max(nextNear + 0.001, presetSettings.far)
-  const nextColor = presetSettings.color
-  const shouldPatchMode = environmentSettings.value.fogMode !== 'linear'
-  const shouldPatchNear = Math.abs(environmentSettings.value.fogNear - nextNear) > 1e-6
-  const shouldPatchFar = Math.abs(environmentSettings.value.fogFar - nextFar) > 1e-6
-  const shouldPatchColor = normalizeHexColor(environmentSettings.value.fogColor, '#ffffff') !== nextColor
-  if (!shouldPatchMode && !shouldPatchNear && !shouldPatchFar && !shouldPatchColor) {
-    return
-  }
-  sceneStore.patchEnvironmentSettings({
-    fogMode: 'linear',
-    fogColor: nextColor,
-    fogNear: nextNear,
-    fogFar: nextFar,
-  })
-}
-
 function handlePhysicsEnabledToggle(enabled: boolean | null) {
   if (typeof enabled !== 'boolean') {
     return
@@ -575,104 +437,6 @@ function handlePhysicsEngineChange(nextEngine: EnvironmentPhysicsEngine | { valu
     return
   }
   sceneStore.patchEnvironmentSettings({ physicsEngine: normalizedEngine })
-}
-
-function applyExpFogPreset(preset: unknown) {
-  if (preset === null || preset === undefined) {
-    return
-  }
-  if (preset === 'custom') {
-    if (environmentSettings.value.fogMode !== 'exp') {
-      sceneStore.patchEnvironmentSettings({ fogMode: 'exp' })
-    }
-    return
-  }
-  if (preset !== 'light' && preset !== 'medium' && preset !== 'heavy') {
-    return
-  }
-  const presetSettings = EXP_FOG_PRESETS[preset]
-  const nextDensity = presetSettings.density
-  const shouldPatchMode = environmentSettings.value.fogMode !== 'exp'
-  const shouldPatchDensity = Math.abs(environmentSettings.value.fogDensity - nextDensity) > 1e-6
-  if (!shouldPatchMode && !shouldPatchDensity) {
-    return
-  }
-  sceneStore.patchEnvironmentSettings({
-    fogMode: 'exp',
-    fogDensity: nextDensity,
-  })
-}
-
-function formatFogFieldValue(value: number | undefined): string {
-  return (value ?? 0).toFixed(2)
-}
-
-function parseFogInput(value: string): number | null {
-  const trimmed = value.trim()
-  if (!trimmed.length) {
-    return null
-  }
-  const numeric = Number(trimmed)
-  if (!Number.isFinite(numeric)) {
-    return null
-  }
-  return numeric
-}
-
-function syncFogInputs() {
-  fogNearInput.value = formatFogFieldValue(environmentSettings.value.fogNear)
-  fogFarInput.value = formatFogFieldValue(environmentSettings.value.fogFar)
-}
-
-function commitFogNearInput() {
-  const numeric = parseFogInput(fogNearInput.value)
-  if (numeric === null) {
-    fogNearInput.value = formatFogFieldValue(environmentSettings.value.fogNear)
-    return
-  }
-  const clamped = Math.max(0, Math.min(100000, numeric))
-  const nextFar = Math.max(clamped + 0.001, environmentSettings.value.fogFar)
-  if (Math.abs(clamped - environmentSettings.value.fogNear) < 1e-4 && Math.abs(nextFar - environmentSettings.value.fogFar) < 1e-4) {
-    fogNearInput.value = formatFogFieldValue(environmentSettings.value.fogNear)
-    return
-  }
-  sceneStore.patchEnvironmentSettings({ fogNear: clamped, fogFar: nextFar })
-  syncFogInputs()
-}
-
-function commitFogFarInput() {
-  const numeric = parseFogInput(fogFarInput.value)
-  if (numeric === null) {
-    fogFarInput.value = formatFogFieldValue(environmentSettings.value.fogFar)
-    return
-  }
-  const minFar = environmentSettings.value.fogNear + 0.001
-  const clamped = Math.max(minFar, Math.min(100000, numeric))
-  if (Math.abs(clamped - environmentSettings.value.fogFar) < 1e-4) {
-    fogFarInput.value = formatFogFieldValue(environmentSettings.value.fogFar)
-    return
-  }
-  sceneStore.patchEnvironmentSettings({ fogFar: clamped })
-  syncFogInputs()
-}
-
-function handleFogDensityInput(value: unknown) {
-  if (value === '' || value === null || value === undefined) {
-    return
-  }
-  const numeric = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(numeric)) {
-    return
-  }
-  const clamped = Math.max(0, Math.min(1, numeric))
-  if (Math.abs(clamped - environmentSettings.value.fogDensity) < 1e-4) {
-    return
-  }
-  sceneStore.patchEnvironmentSettings({ fogDensity: clamped })
-}
-
-function formatFogDensity(): string {
-  return environmentSettings.value.fogDensity.toFixed(3)
 }
 
 function handleGravityStrengthInput(value: unknown) {
@@ -1216,129 +980,107 @@ async function handleBackgroundDrop(event: DragEvent) {
         </section>
 
         <section class="environment-section">
-          <div class="section-title">Fog</div>
-          <v-select
-            :items="fogModeOptions"
-            :model-value="environmentSettings.fogMode"
-            density="compact"
-            hide-details
-            variant="underlined"
-            class="section-select"
-            @update:model-value="(mode) => handleFogModeChange(mode as EnvironmentFogMode | null)"
-          />
-
-          <v-select
-            v-if="isLinearFog"
-            :items="linearFogPresetOptions"
-            :model-value="selectedLinearFogPreset"
-            density="compact"
-            hide-details
-            variant="underlined"
-            class="section-select"
-            @update:model-value="applyLinearFogPreset"
-          />
-
-          <v-select
-            v-if="isExponentialFog"
-            :items="expFogPresetOptions"
-            :model-value="selectedExpFogPreset"
-            density="compact"
-            hide-details
-            variant="underlined"
-            class="section-select"
-            @update:model-value="applyExpFogPreset"
-          />
-
-          <div v-if="environmentSettings.fogMode !== 'none'" class="material-color">
-            <div class="color-input">
-              <v-text-field
-                label="Fog Color"
-                class="slider-input"
-                density="compact"
-                variant="underlined"
-                hide-details
-                :model-value="environmentSettings.fogColor"
-                @update:model-value="(value) => handleHexColorChange('fog', value)"
-              />
-              <v-menu
-                v-model="fogColorMenuOpen"
-                :close-on-content-click="false"
-                transition="scale-transition"
-                location="bottom start"
-              >
-                <template #activator="{ props: menuProps }">
-                  <button
-                    class="color-swatch"
-                    type="button"
-                    v-bind="menuProps"
-                    :style="{ backgroundColor: environmentSettings.fogColor }"
-                    title="Select fog color"
-                  >
-                    <span class="sr-only">Select fog color</span>
-                  </button>
-                </template>
-                <div class="color-picker">
-                  <v-color-picker
-                    :model-value="environmentSettings.fogColor"
-                    mode="hex"
-                    :modes="['hex']"
-                    hide-inputs
-                    @update:model-value="(value) => handleColorPickerInput('fog', value)"
-                  />
-                </div>
-              </v-menu>
-            </div>
+          <div class="section-title">Slow Roads 环境</div>
+          <div class="section-hint">季节/时间/天气驱动光照、三色雾、天空、云层、星空与降雪；素材固定来自在线资产包。</div>
+          <div class="toggle-label">季节</div>
+          <div class="pl-choice-row">
+            <button
+              v-for="item in SLOWROADS_SEASONS"
+              :key="item.value"
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': environmentSettings.slowroads.season === item.value }"
+              @click="patchSlowroadsSettings({ season: item.value })"
+            >{{ item.title }}</button>
           </div>
-
-          <div v-if="isExponentialFog" class="slider-row">
-            <v-text-field
-              class="slider-input"
-              label="Density"
+          <div class="toggle-label">时间</div>
+          <div class="pl-choice-row">
+            <button
+              v-for="item in SLOWROADS_TIMES"
+              :key="item.value"
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': environmentSettings.slowroads.timeOfDay === item.value }"
+              @click="patchSlowroadsSettings({ timeOfDay: item.value })"
+            >{{ item.title }}</button>
+          </div>
+          <div class="toggle-label">天气</div>
+          <div class="pl-choice-row">
+            <button
+              v-for="item in SLOWROADS_WEATHERS"
+              :key="item.value"
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': environmentSettings.slowroads.weather === item.value }"
+              @click="patchSlowroadsSettings({ weather: item.value })"
+            >{{ item.title }}</button>
+          </div>
+          <div class="toggle-row">
+            <span class="toggle-label">天空</span>
+            <v-switch
+              :model-value="environmentSettings.slowroads.showSky"
               density="compact"
-              variant="underlined"
               hide-details
-              type="number"
-              inputmode="decimal"
-              :min="0"
-              :max="1"
-              :step="0.005"
-              :model-value="formatFogDensity()"
-              @update:model-value="handleFogDensityInput"
+              color="primary"
+              size="small"
+              @update:model-value="(v) => patchSlowroadsSettings({ showSky: Boolean(v) })"
             />
           </div>
-
-          <div v-if="isLinearFog" class="slider-row">
-            <v-text-field
-              class="slider-input"
-              label="Near"
+          <div class="toggle-row">
+            <span class="toggle-label">云层</span>
+            <v-switch
+              :model-value="environmentSettings.slowroads.showClouds"
               density="compact"
-              variant="underlined"
               hide-details
-              type="number"
-              inputmode="decimal"
-              :min="0"
-              :max="100000"
-              :step="0.01"
-              v-model="fogNearInput"
-              @blur="commitFogNearInput"
-              @keydown.enter.prevent="commitFogNearInput"
+              color="primary"
+              size="small"
+              @update:model-value="(v) => patchSlowroadsSettings({ showClouds: Boolean(v) })"
             />
           </div>
-          <div v-if="isLinearFog" class="slider-row">
+          <div class="toggle-row">
+            <span class="toggle-label">星空</span>
+            <v-switch
+              :model-value="environmentSettings.slowroads.showStars"
+              density="compact"
+              hide-details
+              color="primary"
+              size="small"
+              @update:model-value="(v) => patchSlowroadsSettings({ showStars: Boolean(v) })"
+            />
+          </div>
+          <div class="toggle-row">
+            <span class="toggle-label">降雪</span>
+            <v-switch
+              :model-value="environmentSettings.slowroads.showSnow"
+              density="compact"
+              hide-details
+              color="primary"
+              size="small"
+              @update:model-value="(v) => patchSlowroadsSettings({ showSnow: Boolean(v) })"
+            />
+          </div>
+          <div class="slider-row">
+            <v-slider
+              class="slider-control"
+              :min="0.2"
+              :max="3"
+              :step="0.05"
+              :model-value="environmentSettings.slowroads.exposureScale"
+              @update:model-value="(value) => patchSlowroadsSettings({ exposureScale: Number(value) })"
+            />
             <v-text-field
               class="slider-input"
-              label="Far"
+              label="曝光缩放"
               density="compact"
               variant="underlined"
               hide-details
               type="number"
               inputmode="decimal"
-              :min="0"
-              :max="100000"
-              :step="0.01"
-              v-model="fogFarInput"
-              @blur="commitFogFarInput"
-              @keydown.enter.prevent="commitFogFarInput"
+              :min="0.2"
+              :max="3"
+              :step="0.05"
+              :model-value="String(environmentSettings.slowroads.exposureScale)"
+              @update:model-value="(value) => patchSlowroadsSettings({ exposureScale: Number(value) })"
             />
           </div>
         </section>
@@ -1462,6 +1204,35 @@ async function handleBackgroundDrop(event: DragEvent) {
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: rgba(159, 181, 199, 0.9);
+}
+
+.section-hint {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: rgba(159, 181, 199, 0.72);
+}
+
+.pl-choice-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 2px 0 6px;
+}
+
+.pl-choice {
+  border: 1px solid rgba(126, 148, 168, 0.45);
+  background: transparent;
+  color: rgba(214, 226, 236, 0.9);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.pl-choice--active {
+  border-color: rgba(88, 160, 232, 0.9);
+  background: rgba(88, 160, 232, 0.18);
+  color: #ffffff;
 }
 
 .section-select :deep(.v-field__input) {

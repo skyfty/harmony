@@ -364,7 +364,12 @@ import {
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
 import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/runtime'
-import { setProceduralLandscapeAssetResolver } from '@schema/proceduralLandscape/assetResolver'
+import {
+  createSlowroadsEnvironmentRuntime,
+  type SlowroadsEnvironmentRuntime,
+} from '@schema/slowroads/render/environmentRuntime'
+import { setSlowroadsFogEnabled } from '@schema/slowroads/render/fogInjection'
+import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
 import {
   componentManager,
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
@@ -1110,7 +1115,8 @@ let stopInstancedMeshSubscription: (() => void) | null = null
 let stopBillboardMeshSubscription: (() => void) | null = null
 let gridHighlight: THREE.Group | null = null
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
-let latestFogSettings: EnvironmentSettings | null = null
+let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null
+let slowroadsAmbientLight: THREE.AmbientLight | null = null
 let resizeObserver: ResizeObserver | null = null
 let rigidbodyColliderPreviousSelectionContext: string | null = null
 
@@ -1334,6 +1340,8 @@ function syncSceneCsmSunFromEnvironment(settings: EnvironmentSettings): void {
   const csm = resolveEnvironmentCsmSettings(settings)
   const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
   sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor)
+  // Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
+  slowroadsEnvironment?.refreshLighting()
 }
 
 function refreshSceneCsmFrustums(): void {
@@ -13367,11 +13375,7 @@ const environmentSignature = computed(() => {
     },
     ambientLightColor: settings.ambientLightColor,
     ambientLightIntensity: settings.ambientLightIntensity,
-    fogMode: settings.fogMode,
-    fogColor: settings.fogColor,
-    fogNear: settings.fogNear,
-    fogFar: settings.fogFar,
-    fogDensity: settings.fogDensity,
+    slowroads: settings.slowroads,
     northDirection: settings.northDirection,
     csm: resolveEnvironmentCsmSettings(settings),
   })
@@ -14965,39 +14969,6 @@ async function applyBackgroundSettings(background: EnvironmentSettings['backgrou
   return true
 }
 
-function applyFogSettings(settings: EnvironmentSettings) {
-  if (!scene) {
-    return
-  }
-  if (settings.fogMode === 'none') {
-    scene.fog = null
-    return
-  }
-  const fogColor = new THREE.Color(settings.fogColor)
-
-  if (settings.fogMode === 'linear') {
-    const near = Math.max(0, settings.fogNear)
-    const far = Math.max(near + 0.001, settings.fogFar)
-    if (scene.fog instanceof THREE.Fog) {
-      scene.fog.color.copy(fogColor)
-      scene.fog.near = near
-      scene.fog.far = far
-    } else {
-      scene.fog = new THREE.Fog(fogColor, near, far)
-    }
-    return
-  }
-
-  const density = Math.max(0, settings.fogDensity)
-  if (scene.fog instanceof THREE.FogExp2) {
-    scene.fog.color.copy(fogColor)
-    scene.fog.density = density
-  } else {
-    scene.fog = new THREE.FogExp2(fogColor, density)
-  }
-}
-
-
 function disableFog() {
   if (!scene) {
     return
@@ -15005,21 +14976,53 @@ function disableFog() {
   scene.fog = null
 }
 
+/**
+ * Slow Roads 三色雾是场景唯一雾系统。editor 视口沿用「仅选中 Environment
+ * 节点时预览」的行为：选中时开启 SR 雾，未选中时关闭（天空/云/星/雪不受影响）。
+ */
 function updateFogForSelection() {
-  if (!scene) {
-    return
-  }
-  if (isEnvironmentNodeSelected.value) {
-    const settings = latestFogSettings ?? environmentSettings.value
-    applyFogSettings(settings)
-    return
-  }
   disableFog()
+  setSlowroadsFogEnabled(isEnvironmentNodeSelected.value)
+}
+
+/**
+ * Slow Roads 场景级环境运行时（天空/云/星空/降雪/三色雾 + 预设光照）。
+ * renderer/scene/camera 就绪后惰性创建；设置变化走 setSettings，逐帧 update。
+ */
+function ensureSlowroadsEnvironmentRuntime(): void {
+  if (slowroadsEnvironment || !scene || !camera || !renderer) {
+    return
+  }
+  const activeScene = scene
+  const assetStore = getSharedSlowroadsAssetStore({
+    maxTextureSize: renderer.capabilities.maxTextureSize,
+    maxAnisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
+  })
+  slowroadsEnvironment = createSlowroadsEnvironmentRuntime({
+    scene: activeScene,
+    camera,
+    assetStore,
+    fogEnabled: isEnvironmentNodeSelected.value,
+    applyLighting: (state) => {
+      if (!slowroadsAmbientLight) {
+        slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 0.75)
+        slowroadsAmbientLight.name = 'slowroads-ambient-light'
+        activeScene.add(slowroadsAmbientLight)
+      }
+      slowroadsAmbientLight.color.copy(state.ambientColor)
+      slowroadsAmbientLight.intensity = state.ambientIntensity
+      if (sceneCsmShadowRuntime) {
+        const csm = resolveEnvironmentCsmSettings(environmentSettings.value)
+        const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000)
+        sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`)
+      }
+    },
+  })
+  slowroadsEnvironment.setSettings(environmentSettings.value.slowroads)
 }
 
 async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const snapshot = cloneEnvironmentSettingsLocal(settings)
-  latestFogSettings = snapshot
 
   if (!scene) {
     pendingEnvironmentSettings = snapshot
@@ -15039,6 +15042,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   applyRendererShadowSetting()
   syncSceneCsmSunFromEnvironment(snapshot)
   updateFogForSelection()
+  // SR 环境最后应用：预设光照覆盖 CSM 同步结果（预设接管光色/强度）。
+  slowroadsEnvironment?.setSettings(snapshot.slowroads)
 }
 
 function disposeSkyResources() {
@@ -15215,12 +15220,23 @@ function animate() {
   if (effectiveDelta > 0) {
     const t_pl0 = performance.now()
     try {
-      componentManager.setFrameState({ cameraWorldPosition: camera.position })
+      const slowroadsSettings = environmentSettings.value.slowroads
+      componentManager.setFrameState({
+        cameraWorldPosition: camera.position,
+        environment: {
+          season: slowroadsSettings.season,
+          timeOfDay: slowroadsSettings.timeOfDay,
+          weather: slowroadsSettings.weather,
+        },
+      })
       componentManager.update(effectiveDelta, { types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES })
     } catch (error) {
       console.warn('[SceneViewport] Failed to advance procedural landscape runtime', error)
     }
     prof.proceduralLandscape = performance.now() - t_pl0
+
+    ensureSlowroadsEnvironmentRuntime()
+    slowroadsEnvironment?.update(effectiveDelta)
   }
 
   if (instancedBoundsHasPending()) {
@@ -24957,7 +24973,6 @@ function handleRectangleAxisAlignedBBlur() {
 onMounted(() => {
   setGroundTextureSourceResolver(resolveGroundTextureSource)
   setProceduralLandscapeEnvironment('editor')
-  setProceduralLandscapeAssetResolver(resolveGroundTextureSource)
   initScene()
   if (canvasRef.value) {
     canvasRef.value.addEventListener('wheel', handleViewportWheel, { passive: false, capture: true })
@@ -25009,7 +25024,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   setGroundTextureSourceResolver(null)
-  setProceduralLandscapeAssetResolver(null)
+  slowroadsEnvironment?.dispose()
+  slowroadsEnvironment = null
   disposeRigidbodyColliderEditor()
   if (uiStore.activeSelectionContext === 'rigidbody-collider') {
     uiStore.setActiveSelectionContext(rigidbodyColliderPreviousSelectionContext)

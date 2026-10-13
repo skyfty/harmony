@@ -38,6 +38,14 @@ class ProceduralLandscapeComponent extends Component<ProceduralLandscapeComponen
         cameraWorldPositionScratch.set(position.x, position.y, position.z)
         return cameraWorldPositionScratch
       },
+      getSeasonState: () => {
+        const frameState = this.context.getFrameState()
+        const environment = frameState.environment
+        if (!environment) {
+          return null
+        }
+        return { season: environment.season }
+      },
     })
     // The context already carries the persisted props (for example when a saved
     // scene is loaded); seed the runtime with them instead of the bare defaults.
@@ -110,7 +118,6 @@ export function createProceduralLandscapeComponentState(
     forest: { ...defaults.forest, ...(overrides?.forest ?? {}) },
     grass: { ...defaults.grass, ...(overrides?.grass ?? {}) },
     bushes: { ...defaults.bushes, ...(overrides?.bushes ?? {}) },
-    assets: { ...defaults.assets, ...(overrides?.assets ?? {}) },
     debug: { ...defaults.debug, ...(overrides?.debug ?? {}) },
   }
   return {

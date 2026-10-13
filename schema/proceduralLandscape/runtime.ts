@@ -1,31 +1,51 @@
 import * as THREE from 'three'
 import { buildForestDensityField, buildVariationField, createDensityDataTexture, type LandscapeDensityField } from './densityField'
 import {
-  collectTerrainMeshSources,
   createTerrainGridBuilder,
   type TerrainGridBuilder,
   type TerrainHeightGrid,
   type TerrainMeshSource,
+  collectTerrainMeshSources,
 } from './terrainSampler'
 import { resolveSeedHeadingRad, traceRoadPath, type RoadTraceNode, type RoadTraceResult } from './roadTrace'
 import { buildRoadFieldData, createRoadFieldTexture, type RoadFieldData } from './roadField'
 import { planCameraGrassChunk, planRoadBucket, planTreeChunk, takeDensityPrefix, type GrassPlacement, type TreePlacement } from './chunkPlan'
 import {
-  composeFoliageMatrices,
-  createCrossQuadGeometry,
+  applyFoliageMaterialSeason,
+  createFoliageLayerMesh,
   createFoliageMaterial,
   createFoliageShaderUniforms,
-  FoliageBatch,
-  FoliageBatchManager,
+  disposeFoliageLayerMesh,
+  setFoliageMaterialTextures,
+  type FoliageMaterialHandle,
+  type FoliageMaterialSpec,
   type FoliageShaderUniforms,
+  type FoliageSpriteInstance,
 } from './instancing'
 import {
   applyProceduralLandscapeSurfaceInjection,
   createProceduralLandscapeSurfaceUniforms,
   type ProceduralLandscapeSurfacePatch,
 } from './surfaceMaterial'
-import { getProceduralLandscapeAssetResolver } from './assetResolver'
-import { loadTextureFromSourceUrl } from '../textureSourceLoader'
+import { createRoadBand, type RoadBandHandle } from './roadBand'
+import { createTreeMeshManager, type TreeMeshManager } from './treeMeshes'
+import { getSharedSlowroadsAssetStore, slowroadsSharedRetainIds, type SlowroadsAssetStore } from '../slowroads/assets/assetStore'
+import {
+  collectSeasonTextureRefs,
+  SEASON_CATALOG,
+  SHARED_TEXTURES,
+  type SeasonId,
+} from '../slowroads/core/seasonCatalog'
+import { SEASON_PARAMS } from '../slowroads/core/seasonParams'
+import {
+  getBushEntries,
+  getConiferCardRegions,
+  getGrassEntries,
+  gridRegions,
+  BROADLEAF_CARD_REGIONS,
+  type SpriteCellRegion,
+  type SpriteRegion,
+} from '../slowroads/core/spriteRegions'
 import { getCachedModelObject } from '../modelObjectCache'
 import {
   COMPONENT_ARTIFACT_COMPONENT_ID_KEY,
@@ -54,15 +74,14 @@ const STREAM_MOVE_THRESHOLD = 8
 const ROAD_FIELD_RESOLUTION = 1024
 const DEBUG_ROAD_HEIGHT_OFFSET = 0.6
 const SOURCE_CHECK_INTERVAL_MS = 500
+const TREE_UNIT_SIZE = 8
+const GRASS_UNIT_SIZE = 1.6
+const BUSH_UNIT_SIZE = 2
+const IMPOSTER_REGIONS: SpriteRegion[] = gridRegions(16, 4, 4096, 1024)
 
 let sharedPlaceholderTexture: THREE.DataTexture | null = null
 
-/**
- * 1x1 fully transparent texture. It keeps every sampler bound (no null-texture
- * warnings and no shader recompiles when the real asset arrives) while the
- * placeholder itself renders nothing: surface layers are gated by their
- * `uPlHas*` flags and alpha-tested billboards discard every fragment.
- */
+/** 1x1 透明贴图：保持所有 sampler 有绑定，真实素材到达前 alphaTest 全部丢弃。 */
 function getSharedPlaceholderTexture(): THREE.DataTexture {
   if (!sharedPlaceholderTexture) {
     sharedPlaceholderTexture = new THREE.DataTexture(
@@ -107,6 +126,19 @@ export interface ProceduralLandscapeRuntimeStats {
   roadNodeCount: number
   roadComplete: boolean
   roadFailureReason: string | null
+  /** 当前季节与素材状态（面板展示）。 */
+  season: SeasonId
+  seasonAssetsReady: boolean
+  nearTreeInstances: number
+  /** 在线资产库统计（下载/常驻/档位）。 */
+  assetTextureCount: number
+  assetResidentBytes: number
+  assetDownloadedBytes: number
+  assetVariant: 'full' | '2048'
+}
+
+export interface ProceduralLandscapeSeasonState {
+  season: SeasonId
 }
 
 export interface ProceduralLandscapeRuntimeHooks {
@@ -114,6 +146,8 @@ export interface ProceduralLandscapeRuntimeHooks {
   componentId: string
   getHostObject(): THREE.Object3D | null
   getCameraWorldPosition(): THREE.Vector3 | null
+  /** 来自 ComponentFrameState.environment（EnvironmentPanel 设置）。 */
+  getSeasonState(): ProceduralLandscapeSeasonState | null
 }
 
 export interface ProceduralLandscapeRuntime {
@@ -146,7 +180,6 @@ type DirtyFlags = {
   world: boolean
   instances: boolean
   uniforms: boolean
-  assets: boolean
 }
 
 type RoadBucketEntry = {
@@ -161,16 +194,16 @@ type RoadBucketEntry = {
 
 type BatchEntry = {
   key: string
-  batch: FoliageBatch
+  group: THREE.Group
+  layers: THREE.InstancedMesh[]
   centerX: number
   centerZ: number
-  usedNearTrees: boolean
   treeInstances: number
   grassInstances: number
   bushInstances: number
+  /** 树块携带放置表，供近树 3D 网格层流式装配。 */
+  treePlacements: TreePlacement[]
 }
-
-type SurfaceTextureKey = 'grass' | 'forest' | 'gravel' | 'road'
 
 function jsonKey(value: unknown): string {
   try {
@@ -178,16 +211,6 @@ function jsonKey(value: unknown): string {
   } catch {
     return String(value)
   }
-}
-
-function colorFromHex(value: string): THREE.Color {
-  const color = new THREE.Color(1, 1, 1)
-  try {
-    color.setStyle(value)
-  } catch {
-    color.setRGB(1, 1, 1)
-  }
-  return color
 }
 
 function buildRoadBucketTable(nodes: RoadTraceNode[], bucketLength: number): RoadBucketEntry[] {
@@ -249,25 +272,18 @@ function createEmptyRoadFieldTexture(): THREE.DataTexture {
   return texture
 }
 
+function pickCellEntry(entries: ReadonlyArray<SpriteCellRegion>, variant: number): SpriteCellRegion | null {
+  if (!entries.length) {
+    return null
+  }
+  const index = Math.min(entries.length - 1, Math.floor(Math.max(0, Math.min(0.9999, variant)) * entries.length))
+  return entries[index] ?? null
+}
+
 export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRuntimeHooks): ProceduralLandscapeRuntime {
   const uniforms = createProceduralLandscapeSurfaceUniforms()
-  const surfaceHasUniformByKey: Record<SurfaceTextureKey, THREE.IUniform<number>> = {
-    grass: uniforms.uPlHasGrass,
-    forest: uniforms.uPlHasForest,
-    gravel: uniforms.uPlHasGravel,
-    road: uniforms.uPlHasRoad,
-  }
-  const foliageUniforms = createFoliageShaderUniforms()
-  // Grass reuses the shared uniform set directly; bush/tree share the time,
-  // camera and fade references but get their own wind strength.
-  const foliageUniformsByKind: Record<'grass' | 'bush' | 'tree', FoliageShaderUniforms> = {
-    grass: foliageUniforms,
-    bush: { ...foliageUniforms, windStrength: { value: 0.07 } },
-    tree: { ...foliageUniforms, windStrength: { value: 0.03 } },
-  }
-  const crossQuadGeometry = createCrossQuadGeometry()
-  const batchManager = new FoliageBatchManager(crossQuadGeometry)
-  const hostInverse = new THREE.Matrix4()
+  const foliageUniforms: FoliageShaderUniforms = createFoliageShaderUniforms()
+  const assetStore: SlowroadsAssetStore = getSharedSlowroadsAssetStore()
 
   let props = clampProceduralLandscapeProps(null, hooks.nodeId)
   let previousKeys = {
@@ -275,11 +291,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
     instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
     uniforms: jsonKey([props.surface, props.road.flattenBand, props.road.flattenStrength, props.grass.windEnabled]),
-    assets: jsonKey(props.assets),
     roadDebug: jsonKey(props.debug.showRoadPath),
     chunkDebug: jsonKey(props.debug.showChunks),
   }
-  const dirty: DirtyFlags = { grid: false, world: false, instances: false, uniforms: true, assets: false }
+  const dirty: DirtyFlags = { grid: false, world: false, instances: false, uniforms: true }
   let forceStream = true
   let enabled = true
   let disposed = false
@@ -299,13 +314,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let roadBucketTable: RoadBucketEntry[] = []
   let surfacePatch: ProceduralLandscapeSurfacePatch | null = null
   let surfaceMeshes: THREE.Mesh[] = []
+  let roadBand: RoadBandHandle | null = null
+  let treeMeshManager: TreeMeshManager | null = null
+  let treeMeshInitStarted = false
   const treeBatches = new Map<string, BatchEntry>()
   const roadBatches = new Map<string, BatchEntry>()
   const cameraGrassBatches = new Map<string, BatchEntry>()
-  const materialByKey = new Map<string, THREE.MeshStandardMaterial>()
-  const loadedTextures = new Map<string, THREE.Texture>()
-  const pendingTextureLoads = new Set<string>()
-  const surfaceAssetKeyByKind = new Map<SurfaceTextureKey, string>()
+  const foliageMaterials = new Map<string, FoliageMaterialHandle>()
   const warnings = new Set<string>()
   let treeInstances = 0
   let grassInstances = 0
@@ -317,12 +332,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let roadDebugLine: THREE.Line | null = null
   let chunkDebugLines: THREE.LineSegments | null = null
   let chunkDebugDirty = true
-  let coarseMeshWarningEmitted = false
   let surfaceWarningEmitted = false
   let roadWarningEmitted = false
   let gridFailed = false
   let currentTerrainSourceSignature = 'unresolved'
   let lastSourceCheckAt = Number.NEGATIVE_INFINITY
+
+  // ---- 季节素材状态 ----
+  let currentSeason: SeasonId = hooks.getSeasonState()?.season ?? 'spring'
+  let seasonAssets: Map<string, THREE.Texture> | null = null
+  let seasonAssetsSeason: SeasonId | null = null
+  let seasonLoadToken = 0
+  let seasonLoadInFlight = false
 
   const stats: ProceduralLandscapeRuntimeStats = {
     nodeId: hooks.nodeId,
@@ -343,6 +364,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadNodeCount: 0,
     roadComplete: false,
     roadFailureReason: null,
+    season: currentSeason,
+    seasonAssetsReady: false,
+    nearTreeInstances: 0,
+    assetTextureCount: 0,
+    assetResidentBytes: 0,
+    assetDownloadedBytes: 0,
+    assetVariant: assetStore.variant,
   }
   statsRegistry.set(hooks.nodeId, stats)
 
@@ -356,6 +384,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
   function resolveQuality(): ResolvedProceduralLandscapeQuality {
     return resolveProceduralLandscapeQuality(props.quality, currentEnvironment)
+  }
+
+  function textureFor(refId: string): THREE.Texture | null {
+    return seasonAssets?.get(refId) ?? null
   }
 
   function ensureRoots(): void {
@@ -383,7 +415,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function releaseBatch(entry: BatchEntry, target: Map<string, BatchEntry>): void {
-    entry.batch.dispose()
+    for (const layer of entry.layers) {
+      disposeFoliageLayerMesh(layer)
+    }
+    entry.group.removeFromParent()
+    entry.group.clear()
     treeInstances -= entry.treeInstances
     grassInstances -= entry.grassInstances
     bushInstances -= entry.bushInstances
@@ -404,6 +440,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     treeInstances = 0
     grassInstances = 0
     bushInstances = 0
+  }
+
+  function collectActiveTreePlacements(): TreePlacement[] {
+    const out: TreePlacement[] = []
+    for (const entry of treeBatches.values()) {
+      if (entry.treePlacements.length) {
+        out.push(...entry.treePlacements)
+      }
+    }
+    return out
   }
 
   function disposeSurfaceState(): void {
@@ -430,6 +476,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     variationTexture = null
     roadFieldTexture?.dispose()
     roadFieldTexture = createEmptyRoadFieldTexture()
+    roadBand?.dispose()
+    roadBand = null
     densityField = null
     variationField = null
     roadResult = null
@@ -442,7 +490,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     disposeWorldState()
     gridBuilder = null
     grid = null
-    coarseMeshWarningEmitted = false
   }
 
   function updateHostSnapshot(): void {
@@ -453,6 +500,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     hostMatrixSnapshot = hostObject.matrixWorld.clone()
     hostInverse.copy(hostObject.matrixWorld).invert()
   }
+
+  const hostInverse = new THREE.Matrix4()
 
   function hostMatrixChanged(): boolean {
     if (!hostObject || !hostMatrixSnapshot) {
@@ -502,15 +551,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   /**
-   * Resolves the meshes that describe the node's real terrain geometry.
-   *
-   * Imported model nodes render through the shared InstancedMesh cache in all
-   * three runtimes by default; their runtime object then owns no meshes and
-   * only carries an invisible box "pick proxy". Even though the landscape
-   * component forces the regular Object3D path (see runtimeModelInstancing),
-   * this fallback keeps the height field correct if a proxy is encountered:
-   * the shared cached model is combined with the proxy's world matrix, exactly
-   * how the instanced renderer builds its instance matrices.
+   * 解析节点真正的几何网格。导入模型节点默认走共享 InstancedMesh 缓存，
+   * 其运行时对象只带一个不可见的 pick proxy；proceduralLandscape 会强制普通
+   * Object3D 路径（见 runtimeModelInstancing），这里的回退保证即使遇到 proxy
+   * 也能用共享缓存模型 + 世界矩阵重建高度场。
    */
   function resolveTerrainMeshSources(host: THREE.Object3D): {
     sources: TerrainMeshSource[]
@@ -633,10 +677,35 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       roadFieldTexture = createEmptyRoadFieldTexture()
     }
 
+    buildRoadBand()
     applyStaticSurfaceUniforms()
     releaseAllBatches()
     dirty.instances = true
     forceStream = true
+  }
+
+  function buildRoadBand(): void {
+    roadBand?.dispose()
+    roadBand = null
+    if (!roadResult || roadResult.nodes.length < 2 || !hostObject) {
+      return
+    }
+    const season = seasonAssets ? seasonAssetsSeason ?? currentSeason : currentSeason
+    const baseTexture = textureFor(SEASON_CATALOG[season].road.base.id) ?? getSharedPlaceholderTexture()
+    const overlayRef = SEASON_CATALOG[season].road.overlay
+    const overlayTexture = overlayRef ? textureFor(overlayRef.id) : null
+    roadBand = createRoadBand({
+      nodes: roadResult.nodes,
+      halfWidth: roadHalfWidth(props),
+      stepLength: 2,
+      density: densityField,
+      textures: { base: baseTexture, overlay: overlayTexture },
+      season,
+      hostInverse: hostObject ? hostInverse : null,
+    })
+    roadBand.setVisible(props.road.enabled)
+    tagArtifact(roadBand.mesh)
+    hostObject.add(roadBand.mesh)
   }
 
   function applyStaticSurfaceUniforms(): void {
@@ -650,167 +719,155 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     )
     uniforms.uPlHeightMin.value = grid.minY
     uniforms.uPlHeightRange.value = Math.max(0.001, grid.maxY - grid.minY)
+    uniforms.uPlWaterLevel.value = grid.minY
     uniforms.uPlRoadField.value = roadFieldTexture
     uniforms.uPlForestMask.value = forestMaskTexture
-    uniforms.uPlGrassVariation.value = variationTexture
     uniforms.uPlRoadFieldRange.value = roadFieldData ? roadFieldData.range : 64
     uniforms.uPlRoadHalfWidth.value = roadHalfWidth(props)
     uniforms.uPlRoadShoulderWidth.value = props.road.shoulderWidth
+    applySeasonUniformsToSurface()
+  }
+
+  function applySeasonUniformsToSurface(): void {
+    const entry = SEASON_CATALOG[seasonAssetsSeason ?? currentSeason]
+    const params = SEASON_PARAMS[seasonAssetsSeason ?? currentSeason]
     const placeholder = getSharedPlaceholderTexture()
-    uniforms.uPlGrassTex.value = placeholder
-    uniforms.uPlForestTex.value = placeholder
-    uniforms.uPlGravelTex.value = placeholder
-    uniforms.uPlRoadTex.value = placeholder
-    ensureSurfaceTextures()
+    uniforms.uPlSeasonIndex.value = params.index
+    uniforms.uPlGrassColA.value.set(params.grassColA)
+    uniforms.uPlGrassColB.value.set(params.grassColB)
+    uniforms.uPlPeakColA.value.set(params.peakColA)
+    uniforms.uPlPeakColB.value.set(params.peakColB)
+    uniforms.uPlRoadCol.value.set(params.roadCol)
+    uniforms.uPlNoiseTex.value = textureFor(SHARED_TEXTURES.noise.id) ?? placeholder
+    uniforms.uPlGrassTex.value = textureFor(entry.surface.grass.id) ?? placeholder
+    uniforms.uPlForestTex.value = textureFor(entry.surface.forest.id) ?? placeholder
+    uniforms.uPlHeatherTex.value = textureFor(entry.surface.heather.id) ?? placeholder
+    uniforms.uPlGravelTex.value = textureFor(entry.surface.gravel.id) ?? placeholder
+    uniforms.uPlRockTex.value = textureFor(entry.surface.rock.id) ?? placeholder
+    uniforms.uPlSandTex.value = textureFor(entry.surface.sand.id) ?? placeholder
+    uniforms.uPlDetailNearTex.value = textureFor(entry.surface.detailNear.id) ?? placeholder
+    uniforms.uPlDetailFarTex.value = textureFor(entry.surface.detailFar.id) ?? placeholder
+    uniforms.uPlRockBumpTex.value = textureFor(SHARED_TEXTURES.rockBump.id) ?? placeholder
+    uniforms.uPlGrassVariation.value = textureFor(SHARED_TEXTURES.grassVariation.id) ?? placeholder
   }
 
   function applyDynamicSurfaceUniforms(): void {
     const flatten = roadFlattenParams(props)
     uniforms.uPlFlattenInner.value = flatten.innerRadius
     uniforms.uPlFlattenOuter.value = flatten.outerRadius
-    let flattenStrength = props.road.enabled ? flatten.strength : 0
-    // Without a road texture there is nothing painted on the flattened band,
-    // so keep the terrain geometry untouched in that case.
-    if (uniforms.uPlHasRoad.value <= 0.5 || !props.surface.enabled) {
-      flattenStrength = 0
-    }
-    if (grid && grid.averageEdgeLength > 2.5) {
-      flattenStrength *= clamp(2.5 / grid.averageEdgeLength, 0.25, 1)
-      if (grid.averageEdgeLength > 4 && !coarseMeshWarningEmitted) {
-        coarseMeshWarningEmitted = true
-        warn('coarse-mesh-flatten-limited')
-      }
-    }
-    uniforms.uPlFlattenStrength.value = flattenStrength
+    uniforms.uPlFlattenStrength.value = flatten.strength
     uniforms.uPlSurfaceStrength.value = props.surface.enabled ? props.surface.blendStrength : 0
+    uniforms.uPlBaseMapBlend.value = props.surface.baseMapMode === 'blend' ? props.surface.baseMapBlend : 0
     uniforms.uPlUvScale.value = props.surface.uvScale
-    uniforms.uPlGrassTint.value.copy(colorFromHex(props.surface.grassTint))
-    uniforms.uPlForestTint.value.copy(colorFromHex(props.surface.forestTint))
-    uniforms.uPlRoadTint.value.copy(colorFromHex(props.surface.roadTint))
-    uniforms.uPlGravelTint.value.copy(colorFromHex(props.surface.gravelTint))
+    uniforms.uPlGrassTint.value.set(props.surface.grassTint)
+    uniforms.uPlForestTint.value.set(props.surface.forestTint)
+    uniforms.uPlRoadTint.value.set(props.surface.roadTint)
+    uniforms.uPlGravelTint.value.set(props.surface.gravelTint)
     uniforms.uPlRockSlope.value = props.surface.rockSlopeThreshold
-    foliageUniformsByKind.bush.windStrength.value = props.grass.windEnabled ? 0.07 : 0
-    foliageUniformsByKind.tree.windStrength.value = props.grass.windEnabled ? 0.03 : 0
-    // Grass uses the shared uniform object created first in `foliageUniforms`.
-    foliageUniforms.windStrength.value = props.grass.windEnabled ? 0.12 : 0
-  }
-
-  function surfaceUniformFor(key: SurfaceTextureKey): THREE.IUniform<THREE.Texture | null> {
-    switch (key) {
-      case 'grass':
-        return uniforms.uPlGrassTex
-      case 'forest':
-        return uniforms.uPlForestTex
-      case 'gravel':
-        return uniforms.uPlGravelTex
-      case 'road':
-      default:
-        return uniforms.uPlRoadTex
+    foliageUniforms.meshRadius.value = resolveNearTreeRadius()
+    roadBand?.setVisible(props.road.enabled)
+    for (const handle of foliageMaterials.values()) {
+      handle.uniforms.uPlWindStrength.value = props.grass.windEnabled
+        ? (handle.spec.kind === 'grass' ? 0.12 : handle.spec.kind === 'bush' ? 0.07 : 0.03)
+        : 0
     }
   }
 
-  function ensureSurfaceTexture(key: SurfaceTextureKey, assetId: string | null): void {
-    const placeholder = getSharedPlaceholderTexture()
-    const hasUniform = surfaceHasUniformByKey[key]
-    if (!assetId) {
-      surfaceAssetKeyByKind.delete(key)
-      surfaceUniformFor(key).value = placeholder
-      hasUniform.value = 0
-      return
+  function resolveNearTreeRadius(): number {
+    if (resolveQuality() !== 'high') {
+      return 0
     }
-    const cacheKey = `surface:${key}:${assetId}`
-    const cached = loadedTextures.get(cacheKey)
-    if (cached) {
-      surfaceAssetKeyByKind.set(key, assetId)
-      surfaceUniformFor(key).value = cached
-      hasUniform.value = 1
-      return
-    }
-    if (surfaceAssetKeyByKind.get(key) !== assetId) {
-      surfaceAssetKeyByKind.set(key, assetId)
-      surfaceUniformFor(key).value = placeholder
-      hasUniform.value = 0
-    }
-    void loadTexture(cacheKey, assetId, true).then((texture) => {
-      if (disposed || !texture) {
-        return
-      }
-      if (surfaceAssetKeyByKind.get(key) === assetId) {
-        surfaceUniformFor(key).value = texture
-        hasUniform.value = 1
-      }
-    })
+    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS.high
+    return props.forest.nearDistance ?? tier.treeNearDistance
   }
 
-  function ensureSurfaceTextures(): void {
-    ensureSurfaceTexture('grass', props.assets.surfaceGrassAssetId)
-    ensureSurfaceTexture('forest', props.assets.surfaceForestAssetId)
-    ensureSurfaceTexture('gravel', props.assets.surfaceGravelAssetId)
-    ensureSurfaceTexture('road', props.assets.surfaceRoadAssetId)
+  function foliageMaterialKey(spec: FoliageMaterialSpec): string {
+    return spec.key
   }
 
-  async function loadTexture(cacheKey: string, assetId: string, srgb: boolean): Promise<THREE.Texture | null> {
-    const cached = loadedTextures.get(cacheKey)
-    if (cached) {
-      return cached
-    }
-    if (pendingTextureLoads.has(cacheKey)) {
-      return null
-    }
-    pendingTextureLoads.add(cacheKey)
-    try {
-      const resolver = getProceduralLandscapeAssetResolver()
-      if (!resolver) {
-        warn(`asset-resolver-missing:${assetId}`)
-        return null
-      }
-      const url = await resolver(assetId)
-      if (!url) {
-        warn(`asset-unresolved:${assetId}`)
-        return null
-      }
-      const texture = await loadTextureFromSourceUrl(url)
-      texture.wrapS = THREE.RepeatWrapping
-      texture.wrapT = THREE.RepeatWrapping
-      texture.generateMipmaps = true
-      if (srgb) {
-        texture.colorSpace = THREE.SRGBColorSpace
-      }
-      texture.needsUpdate = true
-      loadedTextures.set(cacheKey, texture)
-      return texture
-    } catch {
-      warn(`asset-load-failed:${assetId}`)
-      return null
-    } finally {
-      pendingTextureLoads.delete(cacheKey)
-    }
-  }
-
-  function foliageKey(kind: 'grass' | 'bush' | 'tree', assetId: string): string {
-    return `${kind}:${assetId}`
-  }
-
-  function getFoliageMaterial(kind: 'grass' | 'bush' | 'tree', assetId: string): THREE.MeshStandardMaterial {
-    const key = foliageKey(kind, assetId)
-    const existing = materialByKey.get(key)
+  function getFoliageMaterialHandle(spec: FoliageMaterialSpec): FoliageMaterialHandle {
+    const key = foliageMaterialKey(spec)
+    const existing = foliageMaterials.get(key)
     if (existing) {
       return existing
     }
-    // The transparent placeholder keeps the instance invisible until the real
-    // texture arrives (alpha test discards every fragment meanwhile).
-    const material = createFoliageMaterial({ map: getSharedPlaceholderTexture(), uniforms: foliageUniformsByKind[kind] })
-    materialByKey.set(key, material)
-    const cacheKey = `foliage:${kind}:${assetId}`
-    void loadTexture(cacheKey, assetId, true).then((texture) => {
-      if (disposed || !texture) {
-        return
-      }
-      material.map = texture
-      material.needsUpdate = true
-      markInstancesDirty()
+    const handle = createFoliageMaterial(spec, foliageUniforms, {
+      season: seasonAssetsSeason ?? currentSeason,
+      discolouration: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].treeDiscolouration,
+      hasSnow: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].hasSnow,
     })
-    return material
+    applyFoliageSeasonToHandle(handle)
+    foliageMaterials.set(key, handle)
+    return handle
+  }
+
+  function applyFoliageSeasonToHandle(handle: FoliageMaterialHandle): void {
+    const season = seasonAssetsSeason ?? currentSeason
+    const params = SEASON_PARAMS[season]
+    applyFoliageMaterialSeason(handle, {
+      season,
+      discolouration: params.treeDiscolouration,
+      hasSnow: params.hasSnow,
+    })
+    const store = seasonAssets
+    const entry = SEASON_CATALOG[season]
+    const placeholder = getSharedPlaceholderTexture()
+    const pick = (id: string): THREE.Texture => store?.get(id) ?? placeholder
+    switch (handle.spec.kind) {
+      case 'grass':
+        setFoliageMaterialTextures(handle, {
+          atlas: pick(entry.sprites.grassSprites.id),
+          noise: pick(SHARED_TEXTURES.noise.id),
+          grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+          detailFar: pick(entry.surface.detailFar.id),
+        })
+        break
+      case 'bush':
+        setFoliageMaterialTextures(handle, {
+          atlas: pick(entry.sprites.bushes.id),
+          noise: pick(SHARED_TEXTURES.bushNoise.id),
+          grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+          detailFar: pick(entry.surface.detailFar.id),
+        })
+        break
+      case 'tree':
+        if (handle.spec.tier === 'near') {
+          if (handle.spec.species === 0) {
+            setFoliageMaterialTextures(handle, {
+              atlas: pick(entry.trees.broadleafD.id),
+              normal: pick(entry.trees.broadleafN.id),
+              noise: pick(SHARED_TEXTURES.noise.id),
+              grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+              detailFar: pick(entry.surface.detailFar.id),
+            })
+          } else {
+            setFoliageMaterialTextures(handle, {
+              atlas: pick(entry.trees.coniferM.id),
+              alpha: pick(entry.trees.coniferA.id),
+              noise: pick(SHARED_TEXTURES.noise.id),
+              grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+              detailFar: pick(entry.surface.detailFar.id),
+            })
+          }
+        } else if (handle.spec.species === 0) {
+          setFoliageMaterialTextures(handle, {
+            atlas: pick(entry.imposters.mapA.id),
+            normal: pick(entry.imposters.normA.id),
+            noise: pick(SHARED_TEXTURES.noise.id),
+            grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+            detailFar: pick(entry.surface.detailFar.id),
+          })
+        } else {
+          setFoliageMaterialTextures(handle, {
+            atlas: pick(entry.imposters.mapB.id),
+            normal: pick(entry.imposters.normB.id),
+            noise: pick(SHARED_TEXTURES.noise.id),
+            grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+            detailFar: pick(entry.surface.detailFar.id),
+          })
+        }
+        break
+    }
   }
 
   function markInstancesDirty(): void {
@@ -821,102 +878,122 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     forceStream = true
   }
 
-  function addTreePlacements(
-    batch: FoliageBatch,
-    placements: TreePlacement[],
-    camera: THREE.Vector3,
-  ): { added: number; usedNear: boolean } {
-    if (!placements.length) {
-      return { added: 0, usedNear: false }
+  function findRegionIndex(regions: ReadonlyArray<SpriteRegion | null>, variant: number): number {
+    if (!regions.length) {
+      return 0
     }
-    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
-    const nearDistance = props.forest.nearDistance ?? tier.treeNearDistance
-    const nearList = props.assets.treeNearAssetIds
-    const farList = props.assets.treeFarAssetIds.length ? props.assets.treeFarAssetIds : nearList
-    if (!nearList.length && !farList.length) {
-      return { added: 0, usedNear: false }
-    }
-
-    const nearPlacements: TreePlacement[] = []
-    const farPlacements: TreePlacement[] = []
-    for (const placement of placements) {
-      const distance = Math.hypot(placement.x - camera.x, placement.z - camera.z)
-      if (distance <= nearDistance) {
-        nearPlacements.push(placement)
-      } else {
-        farPlacements.push(placement)
-      }
-    }
-
-    let added = 0
-    const groups: Array<{ list: string[]; items: TreePlacement[] }> = []
-    if (nearList.length && nearPlacements.length) {
-      groups.push({ list: nearList, items: nearPlacements })
-    }
-    if (farList.length && farPlacements.length) {
-      groups.push({ list: farList, items: farPlacements })
-    }
-    for (const group of groups) {
-      const buckets = new Map<number, TreePlacement[]>()
-      for (const placement of group.items) {
-        const index = Math.min(group.list.length - 1, Math.floor(placement.variant * group.list.length))
-        const list = buckets.get(index) ?? []
-        list.push(placement)
-        buckets.set(index, list)
-      }
-      for (const [index, items] of buckets) {
-        const assetId = group.list[index]
-        if (!assetId) {
-          continue
-        }
-        const material = getFoliageMaterial('tree', assetId)
-        const matrices = composeFoliageMatrices(items, hostObject ? hostInverse : null)
-        added += batch.add(foliageKey('tree', assetId), { count: items.length, matrices }, material)
-      }
-    }
-    return { added, usedNear: nearList.length > 0 && nearPlacements.length > 0 }
+    return Math.min(regions.length - 1, Math.floor(Math.max(0, Math.min(0.9999, variant)) * regions.length))
   }
 
-  function addGrassPlacements(
-    batch: FoliageBatch,
-    placements: GrassPlacement[],
+  function addTreeLayer(
+    batch: BatchEntry,
+    placements: TreePlacement[],
+    tier: 'near' | 'far',
+    species: 0 | 1,
+  ): number {
+    if (!placements.length) {
+      return 0
+    }
+    const season = seasonAssetsSeason ?? currentSeason
+    const spec: FoliageMaterialSpec = {
+      kind: 'tree',
+      tier,
+      species,
+      singlePlane: tier === 'far',
+      tint: 0xffffff,
+      farTintScale: tier === 'far' ? 0.7 : 0.72,
+      hasAlphaTexture: tier === 'near' && species === 1,
+      hasNormalTexture: species === 0 || tier === 'far' ? false : false,
+      key: `tree:${tier}:${species}`,
+    }
+    spec.hasNormalTexture = tier === 'near' ? species === 0 : true
+    const handle = getFoliageMaterialHandle(spec)
+    const regions = tier === 'near'
+      ? (species === 0 ? BROADLEAF_CARD_REGIONS : getConiferCardRegions(season))
+      : IMPOSTER_REGIONS
+    const instances: FoliageSpriteInstance[] = placements.map((placement) => {
+      const regionIndex = findRegionIndex(regions, placement.variant)
+      const region = regions[regionIndex] ?? null
+      return {
+        x: placement.x,
+        y: placement.y,
+        z: placement.z,
+        rotation: placement.rotation,
+        scale: placement.scale / TREE_UNIT_SIZE,
+        region,
+        cell: Math.min(3, regionIndex % 4),
+        roadProx: 0,
+      }
+    })
+    const mesh = createFoliageLayerMesh(instances, handle.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null)
+    tagArtifact(mesh)
+    batch.group.add(mesh)
+    batch.layers.push(mesh)
+    return instances.length
+  }
+
+  function addSpriteLayer(
+    batch: BatchEntry,
+    placements: ReadonlyArray<GrassPlacement>,
     kind: 'grass' | 'bush',
   ): number {
     if (!placements.length) {
       return 0
     }
-    const list = kind === 'grass'
-      ? props.assets.grassAssetIds
-      : props.assets.bushAssetIds
-    if (!list.length) {
-      return 0
+    const season = seasonAssetsSeason ?? currentSeason
+    const spec: FoliageMaterialSpec = {
+      kind,
+      tier: 'all',
+      species: 0,
+      singlePlane: false,
+      tint: 0xffffff,
+      farTintScale: 1,
+      hasAlphaTexture: false,
+      hasNormalTexture: false,
+      key: `${kind}:all`,
     }
-    const materialKind = kind === 'grass' ? 'grass' : 'bush'
-    const buckets = new Map<number, GrassPlacement[]>()
-    for (const placement of placements) {
-      const index = Math.min(list.length - 1, Math.floor(placement.variant * list.length))
-      const bucket = buckets.get(index) ?? []
-      bucket.push(placement)
-      buckets.set(index, bucket)
-    }
-    let added = 0
-    for (const [index, items] of buckets) {
-      const assetId = list[index]
-      if (!assetId) {
-        continue
+    const handle = getFoliageMaterialHandle(spec)
+    const entries = kind === 'grass' ? getGrassEntries(season) : getBushEntries(season).filter((item) => item.cell <= 2)
+    const instances: FoliageSpriteInstance[] = placements.map((placement) => {
+      const picked = pickCellEntry(entries, placement.variant)
+      return {
+        x: placement.x,
+        y: placement.y,
+        z: placement.z,
+        rotation: placement.rotation,
+        scale: placement.scale / (kind === 'grass' ? GRASS_UNIT_SIZE : BUSH_UNIT_SIZE),
+        region: picked?.region ?? null,
+        cell: picked?.cell ?? 0,
+        roadProx: 0,
       }
-      const material = getFoliageMaterial(materialKind, assetId)
-      const matrices = composeFoliageMatrices(items, hostObject ? hostInverse : null)
-      added += batch.add(foliageKey(materialKind, assetId), { count: items.length, matrices }, material)
+    })
+    const unit = kind === 'grass' ? GRASS_UNIT_SIZE : BUSH_UNIT_SIZE
+    const mesh = createFoliageLayerMesh(instances, handle.material, unit, hostObject ? hostInverse : null)
+    tagArtifact(mesh)
+    batch.group.add(mesh)
+    batch.layers.push(mesh)
+    return instances.length
+  }
+
+  function createBatch(key: string): BatchEntry {
+    const group = new THREE.Group()
+    group.name = `__ProceduralLandscapeBatch_${key}`
+    tagArtifact(group)
+    return {
+      key,
+      group,
+      layers: [],
+      centerX: 0,
+      centerZ: 0,
+      treeInstances: 0,
+      grassInstances: 0,
+      bushInstances: 0,
+      treePlacements: [],
     }
-    return added
   }
 
   function buildTreeChunk(chunkX: number, chunkZ: number, camera: THREE.Vector3): void {
     if (!grid || !densityField || !foliageRoot) {
-      return
-    }
-    if (!props.assets.treeNearAssetIds.length && !props.assets.treeFarAssetIds.length) {
       return
     }
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
@@ -943,27 +1020,37 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       { grid, density: densityField, roadField: roadFieldData },
     )
     const kept = takeDensityPrefix(placements, tier.densityMultiplier)
-    const key = `t:${chunkX}:${chunkZ}`
-    const batch = new FoliageBatch(batchManager)
-    const result = addTreePlacements(batch, kept, camera)
-    if (result.added <= 0) {
-      batch.dispose()
+    if (!kept.length) {
       return
     }
+    const nearDistance = props.forest.nearDistance ?? tier.treeNearDistance
+    const nearPlacements: TreePlacement[] = []
+    const farPlacements: TreePlacement[] = []
+    for (const placement of kept) {
+      const distance = Math.hypot(placement.x - camera.x, placement.z - camera.z)
+      if (distance <= nearDistance) {
+        nearPlacements.push(placement)
+      } else {
+        farPlacements.push(placement)
+      }
+    }
+    const key = `t:${chunkX}:${chunkZ}`
+    const batch = createBatch(key)
+    let added = 0
+    added += addTreeLayer(batch, nearPlacements.filter((tree) => tree.species === 0), 'near', 0)
+    added += addTreeLayer(batch, nearPlacements.filter((tree) => tree.species === 1), 'near', 1)
+    added += addTreeLayer(batch, farPlacements.filter((tree) => tree.species === 0), 'far', 0)
+    added += addTreeLayer(batch, farPlacements.filter((tree) => tree.species === 1), 'far', 1)
+    if (added <= 0) {
+      return
+    }
+    batch.centerX = (chunkX + 0.5) * chunkSize
+    batch.centerZ = (chunkZ + 0.5) * chunkSize
+    batch.treeInstances = added
+    batch.treePlacements = kept
     foliageRoot.add(batch.group)
-    const centerX = (chunkX + 0.5) * chunkSize
-    const centerZ = (chunkZ + 0.5) * chunkSize
-    treeBatches.set(key, {
-      key,
-      batch,
-      centerX,
-      centerZ,
-      usedNearTrees: result.usedNear,
-      treeInstances: result.added,
-      grassInstances: 0,
-      bushInstances: 0,
-    })
-    treeInstances += result.added
+    treeBatches.set(key, batch)
+    treeInstances += added
     chunkDebugDirty = true
   }
 
@@ -971,8 +1058,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!grid || !densityField || !foliageRoot) {
       return
     }
-    const grassEnabled = props.grass.enabled && props.assets.grassAssetIds.length > 0
-    const bushesEnabled = props.bushes.enabled && props.bushes.density > 0 && props.assets.bushAssetIds.length > 0
+    const grassEnabled = props.grass.enabled
+    const bushesEnabled = props.bushes.enabled && props.bushes.density > 0
     if (!grassEnabled && !bushesEnabled) {
       return
     }
@@ -1005,24 +1092,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     const key = `r:${entry.index}`
-    const batch = new FoliageBatch(batchManager)
-    const grassAdded = addGrassPlacements(batch, grass, 'grass')
-    const bushAdded = addGrassPlacements(batch, bushes, 'bush')
+    const batch = createBatch(key)
+    const grassAdded = addSpriteLayer(batch, grass, 'grass')
+    const bushAdded = addSpriteLayer(batch, bushes, 'bush')
     if (grassAdded + bushAdded <= 0) {
-      batch.dispose()
       return
     }
+    batch.centerX = entry.centerX
+    batch.centerZ = entry.centerZ
+    batch.grassInstances = grassAdded
+    batch.bushInstances = bushAdded
     foliageRoot.add(batch.group)
-    roadBatches.set(key, {
-      key,
-      batch,
-      centerX: entry.centerX,
-      centerZ: entry.centerZ,
-      usedNearTrees: false,
-      treeInstances: 0,
-      grassInstances: grassAdded,
-      bushInstances: bushAdded,
-    })
+    roadBatches.set(key, batch)
     grassInstances += grassAdded
     bushInstances += bushAdded
   }
@@ -1031,7 +1112,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!grid || !densityField || !foliageRoot) {
       return
     }
-    if (!props.assets.grassAssetIds.length) {
+    if (!props.grass.enabled) {
       return
     }
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
@@ -1067,23 +1148,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     const key = `g:${batchX}:${batchZ}`
-    const batch = new FoliageBatch(batchManager)
-    const added = addGrassPlacements(batch, kept, 'grass')
+    const batch = createBatch(key)
+    const added = addSpriteLayer(batch, kept, 'grass')
     if (added <= 0) {
-      batch.dispose()
       return
     }
+    batch.centerX = baseX + CAMERA_GRASS_BATCH_SIZE * 0.5
+    batch.centerZ = baseZ + CAMERA_GRASS_BATCH_SIZE * 0.5
+    batch.grassInstances = added
     foliageRoot.add(batch.group)
-    cameraGrassBatches.set(key, {
-      key,
-      batch,
-      centerX: baseX + CAMERA_GRASS_BATCH_SIZE * 0.5,
-      centerZ: baseZ + CAMERA_GRASS_BATCH_SIZE * 0.5,
-      usedNearTrees: false,
-      treeInstances: 0,
-      grassInstances: added,
-      bushInstances: 0,
-    })
+    cameraGrassBatches.set(key, batch)
     grassInstances += added
   }
 
@@ -1094,9 +1168,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
     let budget = tier.maxBuildTasksPerTick
 
-    // Trees (only when the user configured tree billboard assets).
-    const hasTreeAssets = props.assets.treeNearAssetIds.length > 0 || props.assets.treeFarAssetIds.length > 0
-    if (hasTreeAssets) {
+    // Trees.
+    {
       const treeSize = tier.treeChunkSize
       const treeRadius = tier.viewDistance
       const treeMinX = Math.floor((camera.x - treeRadius) / treeSize)
@@ -1122,18 +1195,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           releaseBatch(entry, treeBatches)
         }
       }
-      // Chunks built while the camera was far away may now sit inside the near
-      // band; release them so the next tick rebuilds them with near-tree assets.
-      const nearDistance = props.forest.nearDistance ?? tier.treeNearDistance
-      for (const entry of Array.from(treeBatches.values())) {
-        if (entry.usedNearTrees) {
-          continue
-        }
-        const centerDistance = Math.hypot(entry.centerX - camera.x, entry.centerZ - camera.z)
-        if (centerDistance <= nearDistance + treeSize * 0.5) {
-          releaseBatch(entry, treeBatches)
-        }
-      }
       pendingTrees.sort((a, b) => {
         const distanceA = Math.hypot((a.x + 0.5) * treeSize - camera.x, (a.z + 0.5) * treeSize - camera.z)
         const distanceB = Math.hypot((b.x + 0.5) * treeSize - camera.x, (b.z + 0.5) * treeSize - camera.z)
@@ -1156,10 +1217,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           releaseBatch(entry, roadBatches)
         }
       }
-      const hasGrassAssets = props.assets.grassAssetIds.length > 0
-      const hasBushAssets = props.assets.bushAssetIds.length > 0
-      const wantRoadFoliage = (props.grass.enabled && hasGrassAssets)
-        || (props.bushes.enabled && props.bushes.density > 0 && hasBushAssets)
+      const wantRoadFoliage = props.grass.enabled || (props.bushes.enabled && props.bushes.density > 0)
       if (wantRoadFoliage) {
         const pendingBuckets = roadBucketTable
           .filter((entry) => !roadBatches.has(`r:${entry.index}`))
@@ -1180,7 +1238,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
 
     // Camera-centric grass.
-    if (props.grass.enabled && props.grass.cameraRadius > 0 && props.assets.grassAssetIds.length > 0) {
+    if (props.grass.enabled && props.grass.cameraRadius > 0) {
       const grassRadius = Math.min(tier.grassRadius, props.grass.cameraRadius)
       const size = CAMERA_GRASS_BATCH_SIZE
       const minX = Math.floor((camera.x - grassRadius) / size)
@@ -1219,6 +1277,62 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         budget -= 1
       }
     }
+  }
+
+  function updateTreeMeshes(camera: THREE.Vector3): void {
+    const radius = resolveNearTreeRadius()
+    if (radius <= 0) {
+      if (treeMeshManager) {
+        treeMeshManager.setVisible(false)
+      }
+      return
+    }
+    if (!treeMeshManager && !treeMeshInitStarted && hostObject) {
+      treeMeshInitStarted = true
+      void createTreeMeshManager({ assetStore, hostInverse: hostObject ? hostInverse : null }).then((manager) => {
+        if (disposed) {
+          manager.dispose()
+          return
+        }
+        treeMeshManager = manager
+        manager.setSeason({
+          season: seasonAssetsSeason ?? currentSeason,
+          textures: null,
+          discolouration: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].treeDiscolouration,
+          hasSnow: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].hasSnow,
+        })
+        tagArtifact(manager.container)
+        hostObject?.add(manager.container)
+        applyTreeMeshSeasonTextures()
+        manager.setVisible(true)
+      }).catch(() => {
+        treeMeshInitStarted = false
+      })
+    }
+    if (treeMeshManager) {
+      treeMeshManager.setVisible(true)
+      treeMeshManager.update(camera, collectActiveTreePlacements(), radius, forceStream)
+    }
+  }
+
+  function applyTreeMeshSeasonTextures(): void {
+    if (!treeMeshManager) {
+      return
+    }
+    const season = seasonAssetsSeason ?? currentSeason
+    const entry = SEASON_CATALOG[season]
+    const placeholder = getSharedPlaceholderTexture()
+    treeMeshManager.setSeason({
+      season,
+      textures: {
+        broadleafD: textureFor(entry.trees.broadleafD.id) ?? placeholder,
+        broadleafN: textureFor(entry.trees.broadleafN.id) ?? placeholder,
+        coniferM: textureFor(entry.trees.coniferM.id) ?? placeholder,
+        coniferA: textureFor(entry.trees.coniferA.id) ?? placeholder,
+      },
+      discolouration: SEASON_PARAMS[season].treeDiscolouration,
+      hasSnow: SEASON_PARAMS[season].hasSnow,
+    })
   }
 
   function rebuildRoadDebugLine(): void {
@@ -1328,6 +1442,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadNodeCount = roadResult?.nodes.length ?? 0
     stats.roadComplete = roadResult?.complete ?? false
     stats.roadFailureReason = roadResult?.failureReason ?? null
+    stats.season = currentSeason
+    stats.seasonAssetsReady = seasonAssetsSeason === currentSeason && Boolean(seasonAssets)
+    stats.nearTreeInstances = treeMeshManager?.instanceCount ?? 0
+    const storeStats = assetStore.stats()
+    stats.assetTextureCount = storeStats.textureCount
+    stats.assetResidentBytes = storeStats.residentBytes
+    stats.assetDownloadedBytes = storeStats.downloadedBytes
+    stats.assetVariant = storeStats.variant
   }
 
   function needsStreaming(camera: THREE.Vector3, nowMs: number): boolean {
@@ -1366,6 +1488,72 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return false
   }
 
+  // ---- 季节素材加载 ----
+  async function loadSeasonAssets(season: SeasonId): Promise<void> {
+    if (seasonLoadInFlight && seasonAssetsSeason === season) {
+      return
+    }
+    const token = ++seasonLoadToken
+    seasonLoadInFlight = true
+    const refs = [...collectSeasonTextureRefs(season), ...Object.values(SHARED_TEXTURES)]
+    try {
+      const textures = await assetStore.textureSet(refs)
+      if (disposed || token !== seasonLoadToken) {
+        return
+      }
+      // 失败保持原季（lab 语义）：缺文件的键用旧贴图兜底，整季全失败则保留旧季。
+      const merged = new Map<string, THREE.Texture>(seasonAssets ?? undefined)
+      for (const [id, texture] of textures) {
+        merged.set(id, texture)
+      }
+      const required = collectSeasonTextureRefs(season)
+      const missing = required.filter((ref) => !merged.has(ref.id))
+      seasonAssets = merged
+      seasonAssetsSeason = season
+      if (missing.length) {
+        warn(`season-assets-incomplete:${season}:${missing.length}`)
+      }
+      const storeStats = assetStore.stats()
+      for (const message of storeStats.warnings.slice(0, 3)) {
+        warn(`asset:${message}`)
+      }
+      assetStore.prune(slowroadsSharedRetainIds(required))
+      applySeasonToMaterials(season)
+    } catch (error) {
+      warn(`season-load-failed:${season}:${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      if (token === seasonLoadToken) {
+        seasonLoadInFlight = false
+      }
+    }
+  }
+
+  function applySeasonToMaterials(season: SeasonId): void {
+    applySeasonUniformsToSurface()
+    for (const handle of foliageMaterials.values()) {
+      applyFoliageSeasonToHandle(handle)
+    }
+    const entry = SEASON_CATALOG[season]
+    const placeholder = getSharedPlaceholderTexture()
+    roadBand?.setSeason(season, {
+      base: textureFor(entry.road.base.id) ?? placeholder,
+      overlay: entry.road.overlay ? textureFor(entry.road.overlay.id) : null,
+    })
+    applyTreeMeshSeasonTextures()
+    // 换季复用放置：只重建植被网格层（不重算 chunkPlan、不重建地形）。
+    releaseAllBatches()
+    markInstancesDirty()
+  }
+
+  function syncSeasonFromFrameState(): void {
+    const next = hooks.getSeasonState()?.season ?? 'spring'
+    if (next === currentSeason && (seasonAssetsSeason === next || seasonLoadInFlight)) {
+      return
+    }
+    currentSeason = next
+    void loadSeasonAssets(next)
+  }
+
   function runtimeUpdate(deltaTime: number): void {
     if (disposed) {
       return
@@ -1393,6 +1581,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       lastSourceCheckAt = elapsedMs
       checkTerrainSourceChanges()
     }
+    syncSeasonFromFrameState()
 
     if (dirty.grid) {
       if (!gridBuilder) {
@@ -1412,7 +1601,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         return
       }
       dirty.grid = false
-      // stepGridBuild() already rebuilt the world (density / road / textures).
       dirty.world = false
     }
 
@@ -1420,11 +1608,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       dirty.world = false
       buildWorld()
       rebuildRoadDebugLine()
-    }
-
-    if (dirty.assets) {
-      dirty.assets = false
-      ensureSurfaceTextures()
     }
     if (dirty.uniforms) {
       dirty.uniforms = false
@@ -1444,11 +1627,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         lastStreamCamera.copy(camera)
         forceStream = false
         foliageUniforms.cameraPosition.value.copy(camera)
-        const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
-        foliageUniforms.fadeStart.value = tier.viewDistance
-        foliageUniforms.fadeEnd.value = tier.viewDistance * 1.12
         streamBatches(camera)
       }
+      updateTreeMeshes(camera)
     }
     if (chunkDebugDirty) {
       chunkDebugDirty = false
@@ -1478,10 +1659,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         debugRoot.clear()
         debugRoot = null
       }
+      if (treeMeshManager && treeMeshManager.container.parent !== host) {
+        treeMeshManager.container.removeFromParent()
+      }
       hostObject = host
       if (hostObject) {
         updateHostSnapshot()
         ensureRoots()
+        if (treeMeshManager) {
+          hostObject.add(treeMeshManager.container)
+        }
         gridFailed = false
         dirty.grid = true
       }
@@ -1496,7 +1683,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
         instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
         uniforms: jsonKey([props.surface, props.road.flattenBand, props.road.flattenStrength, props.grass.windEnabled]),
-        assets: jsonKey(props.assets),
         roadDebug: jsonKey(props.debug.showRoadPath),
         chunkDebug: jsonKey(props.debug.showChunks),
       }
@@ -1517,11 +1703,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
       if (keys.uniforms !== previousKeys.uniforms) {
         dirty.uniforms = true
-      }
-      if (keys.assets !== previousKeys.assets) {
-        dirty.assets = true
-        dirty.instances = true
-        forceStream = true
       }
       if (keys.roadDebug !== previousKeys.roadDebug) {
         dirty.uniforms = true
@@ -1557,16 +1738,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
       disposed = true
       resetAll()
-      for (const material of materialByKey.values()) {
-        material.dispose()
+      for (const handle of foliageMaterials.values()) {
+        handle.material.dispose()
       }
-      materialByKey.clear()
-      for (const texture of loadedTextures.values()) {
-        texture.dispose()
-      }
-      loadedTextures.clear()
-      batchManager.dispose()
-      crossQuadGeometry.dispose()
+      foliageMaterials.clear()
+      treeMeshManager?.dispose()
+      treeMeshManager = null
+      roadBand?.dispose()
+      roadBand = null
       roadFieldTexture?.dispose()
       roadFieldTexture = null
       forestMaskTexture?.dispose()

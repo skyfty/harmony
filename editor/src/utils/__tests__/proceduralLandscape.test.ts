@@ -472,34 +472,16 @@ describe('road field encoding', () => {
 })
 
 describe('asset references', () => {
-  it('collects every procedural landscape asset slot', () => {
+  it('no longer collects procedural landscape asset slots (assets come from the online bundle)', () => {
     const collected: Array<{ assetId: string | null | undefined; path: string }> = []
     visitExplicitComponentAssetReferences(
       PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
       {
-        assets: {
-          surfaceGrassAssetId: 'grass-surface',
-          surfaceForestAssetId: 'forest-surface',
-          surfaceGravelAssetId: 'gravel-surface',
-          surfaceRoadAssetId: 'road-surface',
-          grassAssetIds: ['grass-a', 'grass-b'],
-          bushAssetIds: ['bush-a'],
-          treeNearAssetIds: ['tree-near'],
-          treeFarAssetIds: ['tree-far'],
-        },
+        // 旧文档里可能残留的 assets 字段必须被忽略（不做旧场景兼容）。
+        assets: { surfaceGrassAssetId: 'grass-surface' },
       },
       (reference) => collected.push(reference),
     )
-    const ids = collected.map((reference) => reference.assetId)
-    expect(ids).toContain('grass-surface')
-    expect(ids).toContain('forest-surface')
-    expect(ids).toContain('gravel-surface')
-    expect(ids).toContain('road-surface')
-    expect(ids).toContain('grass-a')
-    expect(ids).toContain('grass-b')
-    expect(ids).toContain('bush-a')
-    expect(ids).toContain('tree-near')
-    expect(ids).toContain('tree-far')
-    expect(collected.find((reference) => reference.assetId === 'grass-b')?.path).toBe('assets.grassAssetIds[1]')
+    expect(collected).toHaveLength(0)
   })
 })

@@ -107,11 +107,14 @@ export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentS
     Math.abs((a.environmentRotationDegrees?.z ?? 0) - (b.environmentRotationDegrees?.z ?? 0)) <= epsilon &&
     a.ambientLightColor === b.ambientLightColor &&
     Math.abs(a.ambientLightIntensity - b.ambientLightIntensity) <= epsilon &&
-    a.fogMode === b.fogMode &&
-    a.fogColor === b.fogColor &&
-    Math.abs(a.fogDensity - b.fogDensity) <= epsilon &&
-    Math.abs(a.fogNear - b.fogNear) <= epsilon &&
-    Math.abs(a.fogFar - b.fogFar) <= epsilon &&
+    a.slowroads.season === b.slowroads.season &&
+    a.slowroads.timeOfDay === b.slowroads.timeOfDay &&
+    a.slowroads.weather === b.slowroads.weather &&
+    a.slowroads.showSky === b.slowroads.showSky &&
+    a.slowroads.showClouds === b.slowroads.showClouds &&
+    a.slowroads.showStars === b.slowroads.showStars &&
+    a.slowroads.showSnow === b.slowroads.showSnow &&
+    Math.abs(a.slowroads.exposureScale - b.slowroads.exposureScale) <= epsilon &&
     Boolean(a.physicsEnabled ?? true) === Boolean(b.physicsEnabled ?? true) &&
     (a.physicsEngine ?? 'cannon') === (b.physicsEngine ?? 'cannon') &&
     Math.abs(a.gravityStrength - b.gravityStrength) <= epsilon &&

@@ -1,22 +1,24 @@
 import * as THREE from 'three'
+import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
 
 /**
- * slowroads-style terrain surface treatment.
+ * Slow Roads 季节地表着色（官方片元栈移植，注入到 GLB 地形的
+ * MeshStandardMaterial，保留 CSM 阴影/PBR 光照）。
  *
- * The GLB terrain keeps its own geometry, but each material is cloned and gets
- * a `onBeforeCompile` injection that:
- *  - displaces vertices towards the road profile (visual flattening), and
- *  - blends grass / forest canopy / rock / gravel / asphalt over the base map
- *    using the runtime road field + forest density textures.
+ * 片元顺序与 slowroads 一致：草色混合（grassColA/B × peakColA/B，由
+ * noise_fine 的 fade 场驱动 light/dark grass 与 grassBlend）→ heather 混合 →
+ * 细节贴图（detailFar 远/近混合）→ 树冠林下 forest 混合 → 沙带（seasonIndex<3）
+ * → 路肩碎石（<3；秋季树下提亮 1.8、夏季近处直接铺 roadCol）→ 陡坡岩石
+ * （rock + rockBump 扰法线）。
+ *
+ * 与 lab 的差异：
+ *  - 顶点提供世界坐标/法线 + 道路压平位移（沿用既有注入），雾改走共享三色雾；
+ *  - 高度按真实米数（不再做 lab 的 ×4 合成世界换算），水线参考 = uPlWaterLevel；
+ *  - GLB 航拍基色由 `baseMapMode`（replace/blend）与 `uPlSurfaceStrength` 控制。
  */
 export interface ProceduralLandscapeSurfaceUniforms {
   uPlRoadField: THREE.IUniform<THREE.Texture | null>
   uPlForestMask: THREE.IUniform<THREE.Texture | null>
-  uPlGrassVariation: THREE.IUniform<THREE.Texture | null>
-  uPlGrassTex: THREE.IUniform<THREE.Texture | null>
-  uPlForestTex: THREE.IUniform<THREE.Texture | null>
-  uPlGravelTex: THREE.IUniform<THREE.Texture | null>
-  uPlRoadTex: THREE.IUniform<THREE.Texture | null>
   uPlTerrainMin: THREE.IUniform<THREE.Vector2>
   uPlTerrainSize: THREE.IUniform<THREE.Vector2>
   uPlHeightMin: THREE.IUniform<number>
@@ -34,21 +36,33 @@ export interface ProceduralLandscapeSurfaceUniforms {
   uPlFlattenInner: THREE.IUniform<number>
   uPlFlattenOuter: THREE.IUniform<number>
   uPlFlattenStrength: THREE.IUniform<number>
-  uPlHasGrass: THREE.IUniform<number>
-  uPlHasForest: THREE.IUniform<number>
-  uPlHasGravel: THREE.IUniform<number>
-  uPlHasRoad: THREE.IUniform<number>
+  uPlWaterLevel: THREE.IUniform<number>
+  uPlBaseMapBlend: THREE.IUniform<number>
+  // ---- 季节资产 ----
+  uPlNoiseTex: THREE.IUniform<THREE.Texture | null>
+  uPlGrassTex: THREE.IUniform<THREE.Texture | null>
+  uPlForestTex: THREE.IUniform<THREE.Texture | null>
+  uPlHeatherTex: THREE.IUniform<THREE.Texture | null>
+  uPlGravelTex: THREE.IUniform<THREE.Texture | null>
+  uPlRockTex: THREE.IUniform<THREE.Texture | null>
+  uPlSandTex: THREE.IUniform<THREE.Texture | null>
+  uPlDetailNearTex: THREE.IUniform<THREE.Texture | null>
+  uPlDetailFarTex: THREE.IUniform<THREE.Texture | null>
+  uPlRockBumpTex: THREE.IUniform<THREE.Texture | null>
+  uPlGrassVariation: THREE.IUniform<THREE.Texture | null>
+  // ---- 季节调色板 ----
+  uPlSeasonIndex: THREE.IUniform<number>
+  uPlGrassColA: THREE.IUniform<THREE.Color>
+  uPlGrassColB: THREE.IUniform<THREE.Color>
+  uPlPeakColA: THREE.IUniform<THREE.Color>
+  uPlPeakColB: THREE.IUniform<THREE.Color>
+  uPlRoadCol: THREE.IUniform<THREE.Color>
 }
 
 export function createProceduralLandscapeSurfaceUniforms(): ProceduralLandscapeSurfaceUniforms {
   return {
     uPlRoadField: { value: null },
     uPlForestMask: { value: null },
-    uPlGrassVariation: { value: null },
-    uPlGrassTex: { value: null },
-    uPlForestTex: { value: null },
-    uPlGravelTex: { value: null },
-    uPlRoadTex: { value: null },
     uPlTerrainMin: { value: new THREE.Vector2(0, 0) },
     uPlTerrainSize: { value: new THREE.Vector2(1, 1) },
     uPlHeightMin: { value: 0 },
@@ -66,10 +80,25 @@ export function createProceduralLandscapeSurfaceUniforms(): ProceduralLandscapeS
     uPlFlattenInner: { value: 6 },
     uPlFlattenOuter: { value: 10 },
     uPlFlattenStrength: { value: 1 },
-    uPlHasGrass: { value: 0 },
-    uPlHasForest: { value: 0 },
-    uPlHasGravel: { value: 0 },
-    uPlHasRoad: { value: 0 },
+    uPlWaterLevel: { value: 0 },
+    uPlBaseMapBlend: { value: 0.5 },
+    uPlNoiseTex: { value: null },
+    uPlGrassTex: { value: null },
+    uPlForestTex: { value: null },
+    uPlHeatherTex: { value: null },
+    uPlGravelTex: { value: null },
+    uPlRockTex: { value: null },
+    uPlSandTex: { value: null },
+    uPlDetailNearTex: { value: null },
+    uPlDetailFarTex: { value: null },
+    uPlRockBumpTex: { value: null },
+    uPlGrassVariation: { value: null },
+    uPlSeasonIndex: { value: 0 },
+    uPlGrassColA: { value: new THREE.Color('#4F9140') },
+    uPlGrassColB: { value: new THREE.Color('#94AC53') },
+    uPlPeakColA: { value: new THREE.Color('#B7C08C') },
+    uPlPeakColB: { value: new THREE.Color('#C5875E') },
+    uPlRoadCol: { value: new THREE.Color('#636260') },
   }
 }
 
@@ -84,13 +113,15 @@ uniform float uPlFlattenInner;
 uniform float uPlFlattenOuter;
 uniform float uPlFlattenStrength;
 varying vec3 vPlWorldPosition;
-varying vec3 vPlWorldNormal;`
+varying vec3 vPlWorldNormal;
+varying float vPlViewDistance;`
 
 const VERTEX_BODY = `#include <begin_vertex>
 {
   vec4 plWorld4 = modelMatrix * vec4(transformed, 1.0);
   vPlWorldPosition = plWorld4.xyz;
   vPlWorldNormal = normalize(mat3(modelMatrix) * objectNormal);
+  vPlViewDistance = distance(vPlWorldPosition, cameraPosition);
   vec2 plUv = (vPlWorldPosition.xz - uPlTerrainMin) / max(uPlTerrainSize, vec2(0.0001));
   vec4 plRoadSample = texture2D(uPlRoadField, plUv);
   float plDistance = plRoadSample.r * uPlRoadFieldRange;
@@ -105,14 +136,33 @@ const VERTEX_BODY = `#include <begin_vertex>
   }
 }`
 
+/** 官方陡坡岩石法线扰动（normal_fragment_begin 之后注入）。 */
+const NORMAL_BODY = `#include <normal_fragment_begin>
+{
+  float plSteepN = clamp((uPlRockSlope - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0))) * 1.6, 0.0, 1.0);
+  if (plSteepN > 0.1) {
+    vec2 plBumpUv = vPlWorldPosition.xz / max(uPlUvScale, 0.001);
+    float plBumpCenter = texture2D(uPlRockBumpTex, plBumpUv).r;
+    float plBumpX = texture2D(uPlRockBumpTex, plBumpUv + vec2(0.04, 0.0)).r - plBumpCenter;
+    float plBumpZ = texture2D(uPlRockBumpTex, plBumpUv + vec2(0.0, 0.04)).r - plBumpCenter;
+    normal = normalize(normal + vec3(-plBumpX, 0.0, -plBumpZ) * 2.4 * plSteepN);
+  }
+}`
+
 const FRAGMENT_HEADER = `#include <common>
 uniform sampler2D uPlRoadField;
 uniform sampler2D uPlForestMask;
-uniform sampler2D uPlGrassVariation;
+uniform sampler2D uPlNoiseTex;
 uniform sampler2D uPlGrassTex;
 uniform sampler2D uPlForestTex;
+uniform sampler2D uPlHeatherTex;
 uniform sampler2D uPlGravelTex;
-uniform sampler2D uPlRoadTex;
+uniform sampler2D uPlRockTex;
+uniform sampler2D uPlSandTex;
+uniform sampler2D uPlDetailNearTex;
+uniform sampler2D uPlDetailFarTex;
+uniform sampler2D uPlRockBumpTex;
+uniform sampler2D uPlGrassVariation;
 uniform vec2 uPlTerrainMin;
 uniform vec2 uPlTerrainSize;
 uniform float uPlRoadFieldRange;
@@ -120,62 +170,223 @@ uniform float uPlRoadHalfWidth;
 uniform float uPlRoadShoulderWidth;
 uniform float uPlSurfaceStrength;
 uniform float uPlUvScale;
+uniform float uPlWaterLevel;
+uniform float uPlBaseMapBlend;
 uniform vec3 uPlGrassTint;
 uniform vec3 uPlForestTint;
 uniform vec3 uPlRoadTint;
 uniform vec3 uPlGravelTint;
 uniform float uPlRockSlope;
-uniform float uPlHasGrass;
-uniform float uPlHasForest;
-uniform float uPlHasGravel;
-uniform float uPlHasRoad;
+uniform int uPlSeasonIndex;
+uniform vec3 uPlGrassColA;
+uniform vec3 uPlGrassColB;
+uniform vec3 uPlPeakColA;
+uniform vec3 uPlPeakColB;
+uniform vec3 uPlRoadCol;
 varying vec3 vPlWorldPosition;
-varying vec3 vPlWorldNormal;`
+varying vec3 vPlWorldNormal;
+varying float vPlViewDistance;
+
+float plSaturate(float value) { return clamp(value, 0.0, 1.0); }
+float plScreen(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
+
+vec4 plTerrainBlend(vec4 tx1, float w1, vec4 tx2, float w2, float depth) {
+  float ma = max(tx1.a + w1, tx2.a + w2) - depth;
+  float b1 = max(tx1.a + w1 - ma, 0.0);
+  float b2 = max(tx2.a + w2 - ma, 0.0);
+  return ((tx1 * b1) + (tx2 * b2)) / max(0.0001, b1 + b2);
+}`
 
 const FRAGMENT_BODY = `#include <map_fragment>
 {
-  vec2 plUv = (vPlWorldPosition.xz - uPlTerrainMin) / max(uPlTerrainSize, vec2(0.0001));
-  float plDistance = texture2D(uPlRoadField, plUv).r * uPlRoadFieldRange;
-  float plEdge = plDistance - uPlRoadHalfWidth;
-  vec2 plGrassUv = vPlWorldPosition.xz / max(uPlUvScale, 0.001);
+  vec3 plSeasonalColor = diffuseColor.rgb;
+  vec2 plWorldUv = (vPlWorldPosition.xz - uPlTerrainMin) / max(uPlTerrainSize, vec2(0.0001));
+  float plRoadProx = texture2D(uPlRoadField, plWorldUv).r * uPlRoadFieldRange - uPlRoadHalfWidth;
+  float plHasRoadProx = step(0.00001, abs(plRoadProx));
 
-  // Layers are only applied when their texture asset is configured; the
-  // terrain keeps its own material wherever no asset exists.
-  vec3 plColor = diffuseColor.rgb;
+  vec2 wUv = vPlWorldPosition.xz / max(uPlUvScale, 0.001);
+  vec2 wUv100 = wUv / 10.0;
+  vec2 wUv500 = vPlWorldPosition.xz / 500.0;
+  vec2 wUv2000 = vPlWorldPosition.xz / 2000.0;
+  vec2 wUv4000 = vPlWorldPosition.xz / 4000.0;
 
-  if (uPlHasGrass > 0.5) {
-    float plVariation = texture2D(uPlGrassVariation, plUv).r;
-    vec3 plGrass = texture2D(uPlGrassTex, plGrassUv).rgb * uPlGrassTint;
-    plGrass *= 0.82 + 0.36 * plVariation;
-    plColor = plGrass;
-  }
+  float fade0 = texture2D(uPlNoiseTex, wUv).r;
+  float fade1 = texture2D(uPlNoiseTex, wUv100).r;
+  float fade2 = texture2D(uPlNoiseTex, wUv500).r;
+  float vFade0 = fade2;
+  float vFade1 = texture2D(uPlNoiseTex, wUv4000).r;
 
-  if (uPlHasForest > 0.5) {
-    float plTreeMask = clamp(texture2D(uPlForestMask, plUv).r * 1.15, 0.0, 1.0);
-    plTreeMask *= 1.0 - smoothstep(2.0, 9.0, plDistance);
-    vec3 plCanopy = texture2D(uPlForestTex, plUv * 6.0).rgb * uPlForestTint;
-    plColor = mix(plColor, plCanopy, plTreeMask);
-  }
+  // 官方高度公式按"水面以上米数"取值（编辑器地形是真实米制）。
+  float heightRel = vPlWorldPosition.y - uPlWaterLevel;
+  float height = heightRel;
 
-  if (uPlHasGravel > 0.5) {
-    float plSlope = clamp(1.0 - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
-    float plRockWeight = smoothstep(uPlRockSlope, min(1.0, uPlRockSlope + 0.35), plSlope) * 0.8;
-    vec3 plRock = texture2D(uPlGravelTex, vPlWorldPosition.xz / max(uPlUvScale * 0.4, 0.05)).rgb;
-    plColor = mix(plColor, plRock, plRockWeight);
-  }
+  float vHeather = smoothstep(0.4, 1.0, ((height + vFade1 * 350.0) - 60.0) / 500.0);
+  vHeather *= plScreen(vFade1, vFade0);
+  vHeather = smoothstep(0.3, 0.6, vHeather);
 
-  if (uPlHasRoad > 0.5) {
-    float plRoadWeight = 1.0 - smoothstep(-0.6, 0.6, plEdge);
-    if (uPlHasGravel > 0.5) {
-      float plGravelWeight = (1.0 - smoothstep(0.0, max(0.05, uPlRoadShoulderWidth), plEdge)) * (1.0 - plRoadWeight);
-      vec3 plGravel = texture2D(uPlGravelTex, plGrassUv * 2.0).rgb * uPlGravelTint;
-      plColor = mix(plColor, plGravel, plGravelWeight * 0.85);
+  float heightVal = min(1.0, max(0.0, (height - (30.0 + vFade1 * 40.0)) / 150.0));
+  float vLightGrass = min(1.0, heightVal * (vFade0 + heightVal * 0.5));
+
+  if (plRoadProx > 0.0 && plRoadProx < 0.5 + vFade0) {
+    vHeather *= plRoadProx / (0.5 + vFade0);
+    if (uPlSeasonIndex < 3) {
+      vLightGrass *= plRoadProx / (0.5 + vFade0);
     }
-    vec3 plRoad = texture2D(uPlRoadTex, plGrassUv * 0.5).rgb * uPlRoadTint;
-    plColor = mix(plColor, plRoad, plRoadWeight);
   }
 
-  diffuseColor.rgb = mix(diffuseColor.rgb, plColor, clamp(uPlSurfaceStrength, 0.0, 1.0));
+  float vDarkGrass = min(max(0.0, (vFade1 - 0.25) * 2.0), 1.0);
+
+  float steepness = clamp((0.98 - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0))) * 1.4, 0.0, 1.0);
+  float underRoadFactor = 1.0 - step(0.000001, -plRoadProx);
+  steepness *= underRoadFactor;
+  vHeather *= underRoadFactor;
+
+  float treeMask = clamp(texture2D(uPlForestMask, plWorldUv).r * 1.15, 0.0, 1.0);
+  float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
+  float vTreeMask = vShadow;
+  if (vTreeMask > 0.1) {
+    vTreeMask = max(0.2, vTreeMask);
+  } else {
+    vTreeMask = 0.0;
+  }
+  if (plHasRoadProx > 0.5) {
+    vTreeMask *= clamp(plRoadProx / 2.0, 0.0, 1.0);
+  }
+
+  // ---- 草地：调色板混合（slowroads ground frag） ----
+  vec4 texelColor = texture2D(uPlGrassTex, wUv);
+
+  float blendVal = 1.0 - texture2D(uPlDetailFarTex, wUv4000).r;
+  float blendValB = 1.0 - texture2D(uPlDetailFarTex, wUv500).r;
+  float blendValC = 1.0 - texture2D(uPlDetailFarTex, wUv100).r;
+  blendValB = plScreen(blendValC, blendValB);
+  blendValB *= min(1.0, blendVal * 10.0);
+  if (uPlSeasonIndex == 3) {
+    blendValB *= 0.7;
+  }
+  blendVal *= (0.6 + 0.4 * vLightGrass);
+  blendVal *= 2.0;
+  blendVal *= uPlSurfaceStrength;
+  float depthLerpFar = plSaturate(vPlViewDistance / 800.0);
+  blendVal = blendVal * depthLerpFar + (1.0 - depthLerpFar) * blendValB;
+  blendVal *= plSaturate(0.4 + 0.6 * (vPlViewDistance / 300.0));
+  blendVal += (1.0 - texture2D(uPlDetailNearTex, wUv100).r) * (0.7 + vLightGrass * 0.3) * uPlSurfaceStrength;
+
+  float variationVal = texture2D(uPlGrassVariation, wUv2000).r - 0.5;
+  float closeVariation = ((1.0 - texture2D(uPlGrassVariation, wUv500).r) - 0.5);
+
+  float grassBlend = (plScreen(fade1, fade0) + vDarkGrass) / 2.0;
+  grassBlend = grassBlend * grassBlend;
+  grassBlend = plSaturate(grassBlend + variationVal + closeVariation);
+  float lightGrassFactor = plSaturate(vLightGrass + variationVal - closeVariation);
+  lightGrassFactor = plSaturate(lightGrassFactor * 2.0 * texelColor.r);
+  vec3 grassCol = mix(
+    mix(uPlGrassColA, uPlGrassColB, grassBlend),
+    mix(uPlPeakColA, uPlPeakColB, grassBlend),
+    lightGrassFactor
+  );
+  texelColor.rgb *= grassCol * uPlGrassTint;
+
+  // ---- heather 混合 ----
+  if (vHeather > 0.0) {
+    vec4 heatherCol = texture2D(uPlHeatherTex, wUv);
+    float depthLerp = 0.25 + 0.75 * min(1.0, vPlViewDistance / 400.0);
+    heatherCol = mix(heatherCol, texture2D(uPlHeatherTex, wUv500), depthLerp);
+    heatherCol = mix(texelColor, heatherCol, min(1.0, vHeather));
+    heatherCol.a = heatherCol.r;
+    texelColor.a = texelColor.g;
+    texelColor = plTerrainBlend(texelColor, 1.0 - vHeather, heatherCol, vHeather, 0.1);
+  }
+
+  // ---- 细节叠加 ----
+  texelColor *= 1.0 - blendVal;
+
+  // ---- 树冠林下 ----
+  vec4 forestCol = texture2D(uPlForestTex, wUv);
+  forestCol.rgb *= uPlForestTint;
+  forestCol.a = forestCol.r * 2.0 * fade2;
+  float fTreeMask = min(1.0, vTreeMask);
+  if (fTreeMask > 0.0) {
+    texelColor = plTerrainBlend(
+      texelColor,
+      1.0 - fTreeMask,
+      forestCol,
+      fTreeMask,
+      0.1 + (1.0 - fTreeMask) * fade0 * 0.9
+    );
+    texelColor.a = 1.0;
+  }
+
+  // ---- 水线沙带（冬季不做；按真实米数） ----
+  float vHeight = heightRel + min(1.0, heightRel + 0.5) * (fade2 * 2.0 + (fade0 + fade2) * 0.5);
+  if (vHeight < 4.0 && uPlSeasonIndex < 3) {
+    float dark = 1.0;
+    if (vHeight < 0.0) {
+      texelColor = texture2D(uPlSandTex, wUv) * 0.75;
+    } else {
+      if (vHeight < 2.0) {
+        dark = min(dark, 1.0 - (2.0 - vHeight) / 4.0);
+      } else if (vHeight > 2.5) {
+        dark = 1.0 - (vHeight - 2.5) / 2.0;
+      }
+      float lerpVal = max(0.0, (vHeight - 1.0) / 3.0);
+      vec4 sandCol = texture2D(uPlSandTex, wUv);
+      texelColor.a = texelColor.r;
+      sandCol.a = sandCol.r;
+      sandCol.rgb *= dark;
+      texelColor = plTerrainBlend(texelColor, lerpVal, sandCol, 1.0 - lerpVal, 0.05);
+    }
+  }
+
+  // ---- 路肩碎石（冬季不做；秋季树下提亮；夏季近处直接铺路面色） ----
+  if (uPlSeasonIndex < 3 && plHasRoadProx > 0.5) {
+    if (plRoadProx < -0.2 && (vPlViewDistance > 100.0 || uPlSeasonIndex == 1)) {
+      texelColor.rgb = uPlRoadCol * uPlRoadTint;
+    } else if (plRoadProx + fade2 * 0.1 < 0.5 * fade0) {
+      float rp = plSaturate(1.0 - (plRoadProx + fade2 * 0.1) / max(0.0001, 0.5 * fade0));
+      if (uPlSeasonIndex != 1 && vShadow > 0.0) {
+        float gravelBrightness = uPlSeasonIndex == 2 ? 1.8 : 1.3;
+        texelColor = mix(
+          mix(texture2D(uPlGravelTex, wUv * 2.0) * uPlGravelTint, forestCol * gravelBrightness, min(1.0, vShadow * 2.0)),
+          texelColor,
+          smoothstep(0.0, rp, texelColor.g / max(0.0001, rp))
+        );
+      } else {
+        texelColor = mix(
+          texture2D(uPlGravelTex, wUv * 2.0) * uPlGravelTint * (0.75 + rp * rp * 0.75),
+          texelColor,
+          smoothstep(0.0, rp, texelColor.g / max(0.0001, rp))
+        );
+      }
+    }
+  }
+
+  // ---- 陡坡岩石 ----
+  if (steepness > 0.1) {
+    float steepBlend = 1.0 - steepness;
+    vec4 rockTex = mix(
+      texture2D(uPlRockTex, wUv),
+      texture2D(uPlRockTex, wUv100),
+      plSaturate((vPlViewDistance - 20.0) / 130.0)
+    );
+    rockTex.a = 0.25;
+    texelColor.a = 0.2 + fade2 * 0.2;
+    texelColor = plTerrainBlend(texelColor, steepBlend, rockTex, 1.0 - steepBlend, 0.08);
+    texelColor.a = 1.0;
+  }
+
+  texelColor.r = plSaturate(texelColor.r);
+  texelColor.g = plSaturate(texelColor.g);
+  texelColor.b = plSaturate(texelColor.b);
+  plSeasonalColor = texelColor.rgb;
+
+  #ifdef USE_MAP
+    // blend 模式保留 GLB 航拍基色；replace 模式下由 uPlSurfaceStrength=1 整体覆盖。
+    vec3 plBaseColor = texture2D(map, vMapUv).rgb;
+    plSeasonalColor = mix(plSeasonalColor, plBaseColor, clamp(uPlBaseMapBlend, 0.0, 1.0));
+  #endif
+
+  diffuseColor.rgb = mix(diffuseColor.rgb, plSeasonalColor, clamp(uPlSurfaceStrength, 0.0, 1.0));
 }`
 
 type MaterialPatchRecord = {
@@ -208,14 +419,16 @@ function installMaterialInjection(
       .replace('#include <begin_vertex>', VERTEX_BODY)
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', FRAGMENT_HEADER)
+      .replace('#include <normal_fragment_begin>', NORMAL_BODY)
       .replace('#include <map_fragment>', FRAGMENT_BODY)
+    injectSlowroadsFog(shader)
     if (typeof originalOnBeforeCompile === 'function') {
       originalOnBeforeCompile.call(material, shader, renderer)
     }
   }
   material.customProgramCacheKey = () => {
     const baseKey = typeof originalProgramCacheKey === 'function' ? originalProgramCacheKey.call(material) : 'pl'
-    return `${baseKey}|pl-surface-v1`
+    return `${baseKey}|pl-seasonal-surface-v2`
   }
   material.needsUpdate = true
 }

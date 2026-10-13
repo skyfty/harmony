@@ -10,6 +10,7 @@ import type {
   EnvironmentSettings,
   SceneJsonExportDocument,
   SceneNode,
+  SlowroadsEnvironmentSettings,
 } from './core'
 
 const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
@@ -17,10 +18,6 @@ const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
 export const DEFAULT_ENVIRONMENT_BACKGROUND_COLOR = '#516175'
 export const DEFAULT_ENVIRONMENT_AMBIENT_COLOR = '#ffffff'
 export const DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY = 0.75
-export const DEFAULT_ENVIRONMENT_FOG_COLOR = '#ffffff'
-export const DEFAULT_ENVIRONMENT_FOG_DENSITY = 0.02
-export const DEFAULT_ENVIRONMENT_FOG_NEAR = 1
-export const DEFAULT_ENVIRONMENT_FOG_FAR = 50
 export const DEFAULT_ENVIRONMENT_PHYSICS_ENABLED = true
 export const DEFAULT_ENVIRONMENT_PHYSICS_ENGINE = 'cannon' as const
 export const DEFAULT_ENVIRONMENT_GRAVITY = 9.81
@@ -34,6 +31,17 @@ export const DEFAULT_ENVIRONMENT_GRADIENT_OFFSET = 33
 export const DEFAULT_ENVIRONMENT_GRADIENT_EXPONENT = 0.6
 export const DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE = false
 export const DEFAULT_ENVIRONMENT_CSM_LIGHT_COLOR = '#ffffff'
+
+export const DEFAULT_SLOWROADS_ENVIRONMENT: import('./core').SlowroadsEnvironmentSettings = {
+  season: 'spring',
+  timeOfDay: 'day',
+  weather: 'clear',
+  showSky: true,
+  showClouds: true,
+  showStars: true,
+  showSnow: true,
+  exposureScale: 1,
+}
 
 export const DEFAULT_ENVIRONMENT_CSM_SETTINGS: EnvironmentCsmSettings = {
   enabled: true,
@@ -62,11 +70,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   environmentRotationDegrees: { ...DEFAULT_ENVIRONMENT_ROTATION_DEGREES },
   ambientLightColor: DEFAULT_ENVIRONMENT_AMBIENT_COLOR,
   ambientLightIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
-  fogMode: 'none',
-  fogColor: DEFAULT_ENVIRONMENT_FOG_COLOR,
-  fogDensity: DEFAULT_ENVIRONMENT_FOG_DENSITY,
-  fogNear: DEFAULT_ENVIRONMENT_FOG_NEAR,
-  fogFar: DEFAULT_ENVIRONMENT_FOG_FAR,
+  slowroads: { ...DEFAULT_SLOWROADS_ENVIRONMENT },
   physicsEnabled: DEFAULT_ENVIRONMENT_PHYSICS_ENABLED,
   physicsEngine: DEFAULT_ENVIRONMENT_PHYSICS_ENGINE,
   viewportPerformanceMode: DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE,
@@ -166,6 +170,41 @@ function normalizeEnvironmentCsmSettings(value: unknown): EnvironmentCsmSettings
   }
 }
 
+function normalizeSlowroadsEnvironment(value: unknown): SlowroadsEnvironmentSettings {
+  const source = isPlainRecord(value) ? value : {}
+  const season = source.season
+  const timeOfDay = source.timeOfDay
+  const weather = source.weather
+  return {
+    season:
+      season === 'spring' || season === 'summer' || season === 'autumn' || season === 'winter'
+        ? season
+        : DEFAULT_SLOWROADS_ENVIRONMENT.season,
+    timeOfDay:
+      timeOfDay === 'morning' || timeOfDay === 'day' || timeOfDay === 'evening' || timeOfDay === 'night'
+        ? timeOfDay
+        : DEFAULT_SLOWROADS_ENVIRONMENT.timeOfDay,
+    weather:
+      weather === 'clear' || weather === 'overcast'
+        ? weather
+        : DEFAULT_SLOWROADS_ENVIRONMENT.weather,
+    showSky:
+      typeof source.showSky === 'boolean' ? source.showSky : DEFAULT_SLOWROADS_ENVIRONMENT.showSky,
+    showClouds:
+      typeof source.showClouds === 'boolean' ? source.showClouds : DEFAULT_SLOWROADS_ENVIRONMENT.showClouds,
+    showStars:
+      typeof source.showStars === 'boolean' ? source.showStars : DEFAULT_SLOWROADS_ENVIRONMENT.showStars,
+    showSnow:
+      typeof source.showSnow === 'boolean' ? source.showSnow : DEFAULT_SLOWROADS_ENVIRONMENT.showSnow,
+    exposureScale: clampNumber(
+      source.exposureScale,
+      0.2,
+      3,
+      DEFAULT_SLOWROADS_ENVIRONMENT.exposureScale,
+    ),
+  }
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -203,17 +242,6 @@ export function cloneEnvironmentSettings(
   } else if (backgroundSource?.mode === 'solidColor') {
     backgroundMode = 'solidColor'
   }
-
-  let fogMode: EnvironmentSettings['fogMode'] = 'none'
-  if (normalizedSource.fogMode === 'linear') {
-    fogMode = 'linear'
-  } else if (normalizedSource.fogMode === 'exp') {
-    fogMode = 'exp'
-  }
-
-  const fogNear = clampNumber(normalizedSource.fogNear, 0, 100000, DEFAULT_ENVIRONMENT_FOG_NEAR)
-  const fogFar = clampNumber(normalizedSource.fogFar, 0, 100000, DEFAULT_ENVIRONMENT_FOG_FAR)
-  const normalizedFogFar = fogFar > fogNear ? fogFar : fogNear + 0.001
 
   const preset = normalizeOrientationPreset((normalizedSource as any)?.environmentOrientationPreset)
   const presetRotation = resolvePresetRotationDegrees(preset)
@@ -255,11 +283,7 @@ export function cloneEnvironmentSettings(
       10,
       DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
     ),
-    fogMode,
-    fogColor: normalizeHexColor(normalizedSource.fogColor, DEFAULT_ENVIRONMENT_FOG_COLOR),
-    fogDensity: clampNumber(normalizedSource.fogDensity, 0, 5, DEFAULT_ENVIRONMENT_FOG_DENSITY),
-    fogNear,
-    fogFar: normalizedFogFar,
+    slowroads: normalizeSlowroadsEnvironment((normalizedSource as { slowroads?: unknown })?.slowroads),
     physicsEnabled:
       typeof (normalizedSource as any)?.physicsEnabled === 'boolean'
         ? (normalizedSource as any).physicsEnabled

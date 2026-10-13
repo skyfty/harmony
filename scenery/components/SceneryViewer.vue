@@ -863,7 +863,11 @@ import {
 import {
   proceduralLandscapeComponentDefinition,
 } from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
-import { setProceduralLandscapeAssetResolver } from '@harmony/schema/proceduralLandscape/assetResolver';
+import {
+  createSlowroadsEnvironmentRuntime,
+  type SlowroadsEnvironmentRuntime,
+} from '@harmony/schema/slowroads/render/environmentRuntime';
+import { getSharedSlowroadsAssetStore } from '@harmony/schema/slowroads/assets/assetStore';
 import { setProceduralLandscapeEnvironment } from '@harmony/schema/proceduralLandscape/runtime';
 import {
   deviceAdaptationComponentDefinition,
@@ -1755,8 +1759,6 @@ const sceneLoadPercentText = computed(() => `${sceneLoadPercent.value}%`);
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const DEFAULT_SCENE_CAMERA_FAR = 1000;
-const SCENERY_FOG_HEADROOM_RATIO = 0.88;
-const SCENERY_FOG_MIN_DISTANCE = 0.001;
 const CAMERA_WATCH_DURATION = 2.0;
 const CAMERA_LEVEL_DURATION = 2.5;
 // Watch 拍照状态下允许的取景微调包络：围绕观察目标做小范围旋转与推拉。
@@ -1796,16 +1798,9 @@ let skyCubeZipFaceUrlCleanup: (() => void) | null = null;
 let backgroundLoadToken = 0;
 let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
-type AppliedSceneryFogSnapshot = {
-  mode: EnvironmentSettings['fogMode'];
-  color: string;
-  cameraFar: number;
-  fogNear: number;
-  fogFar: number;
-  fogDensity: number;
-};
-let appliedSceneryFogSnapshot: AppliedSceneryFogSnapshot | null = null;
-const sceneryFogColorScratch = new THREE.Color();
+let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null;
+let slowroadsAmbientLight: THREE.AmbientLight | null = null;
+let currentSlowroadsEnvironmentState: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null = null;
 type CameraFrameSnapshot = {
   nowMs: number;
   position: THREE.Vector3;
@@ -2009,6 +2004,40 @@ function disposeSceneCsmShadowRuntime(): void {
   sceneCsmRuntimeConfigKey = '';
 }
 
+/**
+ * Slow Roads 场景级环境运行时（天空/云/星空/降雪/三色雾 + 预设光照）。
+ */
+function ensureSlowroadsEnvironmentRuntime(): void {
+  const context = renderContext;
+  if (slowroadsEnvironment || !context) {
+    return;
+  }
+  const assetStore = getSharedSlowroadsAssetStore({
+    maxTextureSize: context.renderer.capabilities.maxTextureSize,
+    maxAnisotropy: Math.min(8, context.renderer.capabilities.getMaxAnisotropy()),
+  });
+  slowroadsEnvironment = createSlowroadsEnvironmentRuntime({
+    scene: context.scene,
+    camera: context.camera,
+    assetStore,
+    applyLighting: (state) => {
+      if (!slowroadsAmbientLight) {
+        slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 0.75);
+        slowroadsAmbientLight.name = 'slowroads-ambient-light';
+        context.scene.add(slowroadsAmbientLight);
+      }
+      slowroadsAmbientLight.color.copy(state.ambientColor);
+      slowroadsAmbientLight.intensity = state.ambientIntensity;
+      if (sceneCsmShadowRuntime && currentDocument) {
+        const csm = resolveEnvironmentCsmSettings(resolveDocumentEnvironment(currentDocument));
+        const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000);
+        sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`);
+      }
+    },
+  });
+  slowroadsEnvironment.setSettings(activeEnvironmentSettings.slowroads);
+}
+
 function syncSceneCsmSunFromEnvironment(): void {
   if (!sceneCsmShadowRuntime || !currentDocument) {
     return;
@@ -2017,6 +2046,8 @@ function syncSceneCsmSunFromEnvironment(): void {
   const csm = resolveEnvironmentCsmSettings(settings);
   const sunPosition = resolveSceneCsmSunPositionFromAngles(csm.sunAzimuthDeg, csm.sunElevationDeg, 1000);
   sceneCsmShadowRuntime.syncSun(sunPosition, csm.lightIntensity, csm.lightColor);
+  // Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
+  slowroadsEnvironment?.refreshLighting();
 }
 
 function applyRendererShadowSetting(): void {
@@ -2581,7 +2612,10 @@ const browserStoredPunchedNodeIds = ref<string[]>([]);
 const previewFrameCameraWorldPosition = { x: 0, y: 0, z: 0 };
 // Reused frame-state wrapper; ComponentManager copies these values into its own
 // scratch, so the caller does not need a fresh object per frame.
-const previewFrameStateScratch = { cameraWorldPosition: previewFrameCameraWorldPosition };
+const previewFrameStateScratch: {
+  cameraWorldPosition: typeof previewFrameCameraWorldPosition;
+  environment: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null;
+} = { cameraWorldPosition: previewFrameCameraWorldPosition, environment: null };
 
 const normalizedInitialPunchedNodeIds = computed(() => {
   const next = new Set<string>();
@@ -20698,131 +20732,17 @@ async function loadEnvironmentTextureFromAsset(
   }
 }
 
-type SceneryFogState =
-  | {
-      cameraFar: number;
-      fogNear: number;
-      fogFar: number;
-      fogDensity: number;
-    }
-  | null;
-
-function resolveSceneryFogState(
-  settings: EnvironmentSettings
-): SceneryFogState {
-  if (settings.fogMode === 'none') {
-    return null;
-  }
-  if (settings.fogMode === 'linear') {
-    const sourceNear = Math.max(0, settings.fogNear);
-    const sourceFar = Math.max(sourceNear + SCENERY_FOG_MIN_DISTANCE, settings.fogFar);
-    const cameraFar = Math.max(
-      sourceNear + SCENERY_FOG_MIN_DISTANCE,
-      Math.min(sourceFar, sourceFar),
-    );
-    const fogFar = Math.max(
-      sourceNear + SCENERY_FOG_MIN_DISTANCE,
-      cameraFar * SCENERY_FOG_HEADROOM_RATIO,
-    );
-    const fogNear = Math.min(
-      fogFar - SCENERY_FOG_MIN_DISTANCE,
-      Math.max(0, sourceNear * (fogFar / cameraFar)),
-    );
-    return {
-      cameraFar,
-      fogNear,
-      fogFar,
-      fogDensity: 0,
-    };
-  }
-  const density = Math.max(0, settings.fogDensity);
-  const baseCameraFar = DEFAULT_SCENE_CAMERA_FAR;
-  const cameraFar = Math.max(
-    SCENERY_FOG_MIN_DISTANCE,
-    baseCameraFar,
-  );
-  const coverageScale = THREE.MathUtils.clamp(baseCameraFar / cameraFar, 0.5, 4);
-  return {
-    cameraFar,
-    fogNear: 0,
-    fogFar: 0,
-    fogDensity: density <= 0 ? 0 : (density * coverageScale) / SCENERY_FOG_HEADROOM_RATIO,
-  };
-}
-
+/**
+ * Slow Roads 三色雾是场景唯一雾系统：viewer 里雾始终生效（标准 fogMode 已移除）。
+ */
 function applyFogSettings(
-  settings: EnvironmentSettings,
-  activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null,
+  _settings: EnvironmentSettings,
+  _activeCamera: THREE.PerspectiveCamera | null = renderContext?.camera ?? null,
 ) {
   const scene = renderContext?.scene ?? null;
-  if (!scene) {
-    return;
+  if (scene && scene.fog) {
+    scene.fog = null;
   }
-  const fogState = resolveSceneryFogState(settings);
-  const syncCameraFar = (nextFar: number) => {
-    if (!activeCamera || Math.abs(activeCamera.far - nextFar) <= 1e-6) {
-      return;
-    }
-    activeCamera.far = nextFar;
-    activeCamera.updateProjectionMatrix();
-    sceneCsmShadowRuntime?.updateFrustums();
-    markInstancedCullingDirty();
-  };
-  if (!fogState) {
-    if (scene.fog) {
-      scene.fog = null;
-    }
-    syncCameraFar(DEFAULT_SCENE_CAMERA_FAR);
-    appliedSceneryFogSnapshot = {
-      mode: 'none',
-      color: '',
-      cameraFar: DEFAULT_SCENE_CAMERA_FAR,
-      fogNear: 0,
-      fogFar: 0,
-      fogDensity: 0,
-    };
-    return;
-  }
-  const nextSnapshot: AppliedSceneryFogSnapshot = {
-    mode: settings.fogMode,
-    color: settings.fogColor,
-    cameraFar: fogState.cameraFar,
-    fogNear: fogState.fogNear,
-    fogFar: fogState.fogFar,
-    fogDensity: fogState.fogDensity,
-  };
-  const previousSnapshot = appliedSceneryFogSnapshot;
-  syncCameraFar(fogState.cameraFar);
-  if (
-    previousSnapshot
-    && previousSnapshot.mode === nextSnapshot.mode
-    && previousSnapshot.color === nextSnapshot.color
-    && Math.abs(previousSnapshot.cameraFar - nextSnapshot.cameraFar) <= 1e-6
-    && Math.abs(previousSnapshot.fogNear - nextSnapshot.fogNear) <= 1e-6
-    && Math.abs(previousSnapshot.fogFar - nextSnapshot.fogFar) <= 1e-6
-    && Math.abs(previousSnapshot.fogDensity - nextSnapshot.fogDensity) <= 1e-6
-  ) {
-    return;
-  }
-  sceneryFogColorScratch.set(settings.fogColor);
-  if (settings.fogMode === 'linear') {
-    if (scene.fog instanceof THREE.Fog) {
-      scene.fog.color.copy(sceneryFogColorScratch);
-      scene.fog.near = fogState.fogNear;
-      scene.fog.far = fogState.fogFar;
-    } else {
-      scene.fog = new THREE.Fog(sceneryFogColorScratch.clone(), fogState.fogNear, fogState.fogFar);
-    }
-    appliedSceneryFogSnapshot = nextSnapshot;
-    return;
-  }
-  if (scene.fog instanceof THREE.FogExp2) {
-    scene.fog.color.copy(sceneryFogColorScratch);
-    scene.fog.density = fogState.fogDensity;
-  } else {
-    scene.fog = new THREE.FogExp2(sceneryFogColorScratch.clone(), fogState.fogDensity);
-  }
-  appliedSceneryFogSnapshot = nextSnapshot;
 }
 
 function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
@@ -21060,6 +20980,12 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   applyEnvironmentTextureRotation(snapshot);
   applyRendererShadowSetting();
   syncSceneCsmSunFromEnvironment();
+  currentSlowroadsEnvironmentState = {
+    season: snapshot.slowroads.season,
+    timeOfDay: snapshot.slowroads.timeOfDay,
+    weather: snapshot.slowroads.weather,
+  };
+  slowroadsEnvironment?.setSettings(snapshot.slowroads);
   if (backgroundApplied && environmentApplied) {
     pendingEnvironmentSettings = null;
   } else {
@@ -21072,7 +20998,6 @@ function disposeEnvironmentResources() {
   backgroundLoadToken += 1;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
-  appliedSceneryFogSnapshot = null;
 }
 
 function resetRemovedSkyState() {
@@ -22841,6 +22766,7 @@ function startRenderLoop(
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
+          previewFrameStateScratch.environment = currentSlowroadsEnvironmentState;
           previewComponentManager.setFrameState(previewFrameStateScratch);
           if (previewComponentManager.size > 0) {
             previewComponentManager.update(deltaSeconds);
@@ -22942,6 +22868,8 @@ function startRenderLoop(
           updatePurposeControlsPlacement(camera);
         }
         applyFogSettings(activeEnvironmentSettings, camera);
+        ensureSlowroadsEnvironmentRuntime();
+        slowroadsEnvironment?.update(deltaSeconds);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
@@ -23534,7 +23462,6 @@ onMounted(() => {
   }
   setGroundTextureSourceResolver(resolveGroundTextureSource);
   setProceduralLandscapeEnvironment('viewer');
-  setProceduralLandscapeAssetResolver(resolveGroundTextureSource);
   setParticleTextureResolver(resolveParticleTextureAssetSource);
 });
 
@@ -23631,7 +23558,9 @@ function cleanupRuntime(): void {
   localMultiuserVehiclePresentationByNodeId.clear();
   localMultiuserCharacterPresentationByNodeId.clear();
   setGroundTextureSourceResolver(null);
-  setProceduralLandscapeAssetResolver(null);
+  slowroadsEnvironment?.dispose();
+  slowroadsEnvironment = null;
+  slowroadsAmbientLight = null;
   delete (globalThis as typeof globalThis & Record<string, unknown>)[DISPLAY_BOARD_RESOLVER_KEY];
   setParticleTextureResolver(null);
 }
