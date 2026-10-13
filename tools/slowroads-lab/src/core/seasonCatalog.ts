@@ -264,6 +264,8 @@ export const SHARED_TEXTURES = {
   rockBump: linear('rock_bump.8f8c68ad'),
   /** water surface waves. */
   seaWaves: linear('sea_waves.63ff8729'),
+  /** cloud sheet used by the weather system (slowroads `clouds_01`). */
+  clouds: tex('clouds_01.700a3fdb'),
   /** wooden barrier rail (not part of the slowroads download folder; committed supplement). */
   barrier: tex('spring_wall_barrier_wood.29edf0af'),
 } as const satisfies Record<string, SeasonTextureRef>

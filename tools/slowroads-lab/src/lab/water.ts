@@ -18,10 +18,13 @@ export interface WaterHandle {
   setTime(seconds: number): void
   /** 冬季冻结外观（slowroads 的 frozenWater 效果）。 */
   setFrozen(frozen: boolean): void
+  /** 按环境预设更新水色与菲涅尔强度（slowroads water.body/highlight/fresnelFactor）。 */
+  setEnvironment(params: { body: string; highlight: string; fresnelFactor: number }): void
   dispose(): void
 }
 
 const VERTEX_SHADER = `
+#include <common>
 varying vec3 vWorldPosition;
 varying float vViewDistance;
 #include <fog_pars_vertex>
@@ -40,6 +43,8 @@ uniform sampler2D uWaves;
 uniform float uTime;
 uniform vec3 uSkyColor;
 uniform vec3 uDeepColor;
+uniform vec3 uHighlight;
+uniform float uFresnelScale;
 uniform float uFrozen;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
@@ -63,17 +68,17 @@ void main() {
 
   vec3 viewDir = normalize(cameraPosition - vWorldPosition);
   float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
-  vec3 color = mix(uDeepColor, uSkyColor, clamp(0.28 + 0.72 * fresnel, 0.0, 1.0));
+  vec3 color = mix(uDeepColor, uSkyColor, clamp(0.28 + 0.72 * clamp(fresnel * uFresnelScale, 0.0, 1.0), 0.0, 1.0));
   // 冬季：冻结的灰白冰面，收敛波纹与高光。
   color = mix(color, mix(vec3(0.80, 0.84, 0.87), uSkyColor, 0.35), uFrozen * 0.85);
   vec3 halfDir = normalize(uSunDir + viewDir);
   float spec = pow(max(dot(normal, halfDir), 0.0), 64.0);
-  color += uSunColor * spec * 1.1 * rippleFade;
+  color += uHighlight * spec * 1.1 * rippleFade;
   color += vec3(wave - 0.5) * 0.045 * rippleFade;
 
   gl_FragColor = vec4(color, 1.0);
-  #include <fog_fragment>
   #include <colorspace_fragment>
+  #include <fog_fragment>
 }
 `
 
@@ -90,6 +95,8 @@ export function createWater(options: WaterOptions): WaterHandle {
       uTime: { value: 0 },
       uSkyColor: { value: new THREE.Color(options.skyColor) },
       uDeepColor: { value: new THREE.Color(0x1d3b46) },
+      uHighlight: { value: options.sunColor.clone() },
+      uFresnelScale: { value: 1 },
       uFrozen: { value: 0 },
       uSunDir: { value: options.sunDir.clone() },
       uSunColor: { value: options.sunColor.clone() },
@@ -98,6 +105,7 @@ export function createWater(options: WaterOptions): WaterHandle {
     fragmentShader: FRAGMENT_SHADER,
     fog: true,
   })
+  material.name = 'slowroads-water-material'
 
   const mesh = new THREE.Mesh(geometry, material)
   mesh.rotation.x = -Math.PI / 2
@@ -113,6 +121,11 @@ export function createWater(options: WaterOptions): WaterHandle {
     },
     setFrozen(frozen: boolean): void {
       material.uniforms.uFrozen!.value = frozen ? 1 : 0
+    },
+    setEnvironment(params: { body: string; highlight: string; fresnelFactor: number }): void {
+      ;(material.uniforms.uDeepColor!.value as THREE.Color).set(params.body)
+      ;(material.uniforms.uHighlight!.value as THREE.Color).set(params.highlight)
+      material.uniforms.uFresnelScale!.value = params.fresnelFactor
     },
     dispose(): void {
       mesh.removeFromParent()

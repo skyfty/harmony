@@ -10,6 +10,7 @@ slowroads.io 风格的程序化地形 / 道路 / 精灵植被验证工程：按�
 # 1. 素材流水线（首次或素材更新后；仓库不存大图）
 pnpm --dir tools assets:slowroads-lab          # 从 D:\Downloads\新建文件夹 生成 assets-src/ + 资产包
 pnpm --dir tools regions:slowroads-lab         # 实测四季精灵区域 -> src/core/spriteRegionsData.ts
+node scripts/extract-environment-presets.mjs   # 从解包产物提取 32 套环境预设（天气/时间）
 
 # 2. 开发
 pnpm dev:slowroads-lab                         # http://localhost:8096
@@ -41,7 +42,13 @@ pnpm --dir tools assets:serve-slowroads-lab    # http://localhost:8097 提供 as
 - `scripts/measure-sprites.py`（py -3.10 + PIL）：按 alpha 连通域实测灌木/草丛/针叶
   树卡的精灵区域（含格位与相对高度），输出生成的 `src/core/spriteRegionsData.ts`。
   图集第 4 格若为云杉枝装饰卡（slowroads 灌木变体选择只用 0..2 格），运行时不会被选中。
+- `scripts/extract-environment-presets.mjs`：从 slowroads 解包产物（DevMidlineGenerator
+  分块）提取 4 季 × 4 时间段 × 2 天气 = 32 套官方环境预设（光照/三色雾/水面/云层/
+  星空/降雪），输出 `src/core/environmentPresets.generated.ts`，并断言数据不变量
+  （星空只在夜晴 ×4、降雪只在冬季 ×5）。
 - `scripts/serve-asset-bundle.mjs`：本地静态服务，模拟服务器按需下载（fetch→blob→纹理）。
+- 素材 supplement：云贴图 `clouds_01.700a3fdb.png`（天气系统用）与木护栏不在用户的
+  下载目录里，作为补充文件随仓库提交，materialize 时会一并复制进 `assets-src/` 与资产包。
 
 ## 架构分层（迁移关键）
 
@@ -89,10 +96,62 @@ pnpm --dir tools assets:serve-slowroads-lab    # http://localhost:8097 提供 as
 `src/core/seasonParams.ts`。冬季另有 hasSnow（阔叶树积雪）与 frozenWater（水面冻结）。
 lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4 折算回官方 0..300m 尺度。
 
+## 天气与时间（官方环境预设）
+
+环境状态 = **季节 × 时间（早/日/暮/夜）× 天气（晴/阴）**，32 套官方预设驱动：
+
+- **光照**：sun/ambient 颜色与强度（官方 hemisphere 折算进 ambient 项），统一曝光
+  标定系数使「白天·晴」与移植前观感一致，其余组合继承官方相对比例。
+- **三色高度雾**：直接替换 three 的 `ShaderChunk.fog_*`（`src/lab/fogPatch.ts`），
+  圆柱雾距、噪声雾顶、正负 haze 层、A/B 视线混色 + C 色去饱和；每帧按相机高度
+  复现官方 haze 插值。视距 1000m，雾距 = 视距 × 预设比例，密度 = √5/fogFar。
+- **天空**：挂在相机上的巨型平面 + 上述雾（与官方同款"雾化天空"），renderOrder -10。
+- **云层**：双 shelf 视差 + 时间滚动 + highlight/lowlight + 官方 4 种混合模式；
+  云平面跟随相机、固定世界高度 300m。
+- **星空**：夜晴专属（官方 4000 点、seeded 分布 ×2 组按 density 显隐；`glow`
+  属性 + `min(1, fogColorB+vGlow)` 上色，按 horizon* 参数用 horizonOpacity/
+  Offset/Scale 向 fogColorA 淡出）。两个官方移植要点（踩坑记录）：
+  1) 材质必须 `fog: true`：patch 注入的 color_fragment 读取 `fogColorB`，若材质
+     关雾（USE_FOG 未定义）会整体编译失败、夜晴时星空完全不渲染；
+  2) `Group.renderOrder` 会作为 children 的 `groupOrder`（three 的第一排序键）——
+     官方在星空容器上设 -2（其天空在更低 groupOrder 的容器内）；lab 的天空是独立
+     mesh（groupOrder 0），因此容器 renderOrder 归 0，让星星按 -5 排在天空(-10)/
+     云(-9) 之后绘制，否则会被不透明天空整片覆盖。
+  lab 的星星 size 用 `0.01 × 4`（官方 0.01 在 2× 截图中不可见），迁移端可恢复。
+- **降雪**：冬季阴天专属（相机前向盒内点云，mod 下落 + 噪声风偏；lab 无车灯，
+  车灯亮度项恒为 0）。
+- **水面**：官方 base/body/highlight/underwater 色与 fresnelFactor（体色给深色项、
+  highlight 给高光、fresnelFactor 缩放菲涅尔；base 项未使用，见差异说明）。
+
+切换时间/天气即时生效（纯 uniform/材质层更新，不重载季节贴图、不重建世界）；
+季节切换保留当前时间/天气。诊断开关：天空/云层/星空/降雪。
+
+## 迁移接口设计（EnvironmentPanel → proceduralLandscape，后续落地）
+
+目标形态（本次只实现 lab，editor/三端接线按此执行）：
+
+1. `schema/core` 的 `EnvironmentSettings` 增加 `season: SeasonId`、
+   `timeOfDay: 'morning'|'day'|'evening'|'night'`、`weather: 'clear'|'overcast'`
+   （含默认值与归一化，进 `environmentSettingsUtils`）；`editor/src/types/environment.ts`
+   同步或改为 re-export。
+2. `EnvironmentPanel.vue` 新增「Slow Roads 环境」区：季节/时间/天气三个选择器，
+   直接写上述字段（不做派生值回写）。
+3. 下发通道：`schema/components/Component.ts` 的 `ComponentFrameState` 增加
+   `environment?: { season, timeOfDay, weather } | null`；editor `SceneViewport`、
+   `ScenePreviewView`、`SceneryViewer` 三端在现有 `setFrameState({cameraWorldPosition})`
+   处一并注入。
+4. `proceduralLandscape` runtime 通过帧状态读取环境；`src/core/environment*.ts`
+   （类型 + 32 套预设）原样平移到 schema，作为共享预设表；
+5. 渲染接入：`lab/fogPatch|sky|clouds|stars|snow` 的机制随 proceduralLandscape
+   迁移进 editor/preview/SceneryViewer 视口（本次未接入）。
+
 ## 性能与小程序约束（实测）
 
 - 世界 1600m/1024 段，春季默认视角：draw calls 10–18，三角形 ~2.4M，FPS 100（本机）；
   世界生成 ~0.6s，季节切换（缓存命中）40–400ms，均为材质/图集更新，不重建地形。
+- 环境系统新增开销：天空/云层/星空/降雪共 ≤4 个 draw call（晴天 +2，夜晴 +1 星，
+  冬阴 +1 雪），云贴图 +293KB；时间/天气切换为纯 uniform/材质层更新（实测即时）。
+  星空 4000 点、降雪 5476/48841 点两档（密度 0.5/1 切换几何）。
 - 常驻纹理：完整模式 ~123MB 解码显存，兼容模式（@2048）~75MB；单季压缩下载量
   19–29MB（季节切换按需加载，LRU 保留当前季 + 共享集）。
 - 兼容模式 = 纹理按 `MAX_TEXTURE_SIZE` 回退 `@2048` 变体 + 地形材质缩减到 9 个采样器，
@@ -103,6 +162,7 @@ lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4
 ## 控制
 
 - 季节：春/夏/秋/冬四按钮（首次切换加载该季素材，带进度遮罩）。
+- 时间·天气：早晨/白天/傍晚/夜晚 + 晴/阴六按钮，即时生效；诊断开关见运行环境区。
 - 自由相机：拖拽旋转、WASD 移动、Q/E 升降、Shift 加速；「巡航」沿路行驶（14 m/s）。
 - 图层：地表混合/贴图、道路（贴图带+地形路面带）、树冠色斑、草、灌木花草、
   树卡/远景树、近树 3D 网格、水面、护栏、风摆；滑杆覆盖树/草/灌木/高草/花草密度、
@@ -117,11 +177,20 @@ lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4
 - 验收截图（同种子同机位）：春（绿野+路缘苔痕/花丛）、夏（深绿、路面无 overlay）、
   秋（黄褐+落叶 overlay）、冬（雪地/雪路/积雪树/冻水）；另含 3D 近树分级过渡与
   兼容模式对照。截图与日志在会话记录中，服务器模式与本地模式画面一致。
+- 天气/时间验收截图（`docs/`，种子 456268425 同机位）：`env-spring-day-clear`
+  （标定回归，对 `season-spring.png` 观感一致、云层为新增）、`env-spring-morning-clear`、
+  `env-spring-evening-clear`、`env-spring-night-clear`（星空）、`env-spring-day-overcast`、
+  `env-winter-day-overcast`（降雪）、`env-winter-night-overcast`、`env-winter-night-clear`
+  （冬季星空）、`env-compat-2048`（兼容模式，常驻 76MB）、`env-server-mode`
+  （服务器下载 25MB 已下载，云层照常加载）。
 
 ## 已知差异与后续
 
-- 未接入：宽路 `road_base`+划线 paint 体系、农田割纹（field）、时间/天气/云、
-  Driftmas 专用冬季针叶贴图；`snow_spray.png` 已入库备用（车轮雪雾）。
+- 未接入：宽路 `road_base`+划线 paint 体系、农田割纹（field）、Driftmas 专用冬季
+  针叶贴图；`snow_spray.png` 已入库备用（车轮雪雾）。水面预设的 `base` 色与树冠
+  `radiance`（依赖车灯）未使用；夜间保持官方低亮度（无车灯）。
+- 星空：lab size 放大 4×（官方 0.01，见上文坑记录）；星空容器 renderOrder 归 0
+  （官方 -2，依赖其场景天空的 groupOrder 层级，lab 天空为独立 mesh）。
 - 冬季木护栏未在素材内，四季沿用春季 `spring_wall_barrier_wood`（单文件随仓库提交，
   materialize 会把它作为 supplement 复制进 `assets-src/`）。
 - editor/preview/SceneryViewer 的正式接入与小程序真机验证为下一步；本工程交付

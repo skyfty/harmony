@@ -24,6 +24,7 @@ import {
 } from './seasonCatalog'
 import { SEASON_INDEX } from './seasonCatalog'
 import { SEASON_PARAMS } from './seasonParams'
+import { ENVIRONMENT_PRESETS, TIME_OF_DAY_ORDER, WEATHER_ORDER, resolveFogParams } from './environment'
 
 /**
  * Console self-checks for the pure generation logic (no test framework in the
@@ -316,6 +317,96 @@ export function runSeasonCatalogChecks(input: SeasonCatalogCheckInput): SelfChec
     console.warn(`[slowroads-lab] season checks failed: ${failed.map((result) => result.name).join(', ')}`)
   } else {
     console.info(`[slowroads-lab] season checks passed (${results.length})`)
+  }
+  return results
+}
+
+/**
+ * 环境（季节×时间×天气）预设校验：
+ *  - 官方 32 套预设齐全、颜色合法、数值有限；
+ *  - 数据不变量：星空只在夜晴（4 处）、降雪只在冬季（5 处，含 1 个密度 0 的占位）；
+ *  - 由视距比例推导的雾参数合理（near/far/density）。
+ */
+export function runEnvironmentChecks(): SelfCheckResult[] {
+  const results: SelfCheckResult[] = []
+  const record = (name: string, ok: boolean, detail = ''): void => {
+    results.push({ name, ok, detail })
+    console.assert(ok, `[slowroads-lab env-check] ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+
+  const hexPattern = /^#[0-9a-fA-F]{6}$/
+  let presetCount = 0
+  let starsCount = 0
+  let snowCount = 0
+  let shapesOk = true
+  let notes = ''
+  for (const season of ['spring', 'summer', 'autumn', 'winter'] as const) {
+    for (const time of TIME_OF_DAY_ORDER) {
+      for (const weather of WEATHER_ORDER) {
+        presetCount += 1
+        const preset = ENVIRONMENT_PRESETS[season][time][weather]
+        const colors = [
+          preset.lights.sun.col,
+          preset.lights.ambient.col,
+          preset.fog.colA,
+          preset.fog.colB,
+          preset.fog.colC ?? preset.fog.colB,
+          preset.water.base,
+          preset.water.body,
+          preset.water.highlight,
+          preset.water.underwater,
+          preset.clouds.highlight,
+          preset.clouds.lowlight,
+        ]
+        if (!colors.every((color) => hexPattern.test(color))) {
+          shapesOk = false
+          notes = `${season}/${time}/${weather}:color`
+        }
+        const numbers = [
+          preset.lights.sun.intensity,
+          preset.lights.ambient.intensity,
+          preset.fog.near,
+          preset.fog.far,
+          preset.clouds.shelfHeight0,
+          preset.clouds.shelfHeight1,
+          preset.clouds.skyScale0,
+          preset.clouds.skyScale1,
+        ]
+        if (!numbers.every((value) => Number.isFinite(value))) {
+          shapesOk = false
+          notes = `${season}/${time}/${weather}:number`
+        }
+        const fog = resolveFogParams(preset)
+        if (!(fog.far > 0 && fog.density > 0)) {
+          shapesOk = false
+          notes = `${season}/${time}/${weather}:fog`
+        }
+        if (preset.stars) {
+          starsCount += 1
+          if (time !== 'night' || weather !== 'clear') {
+            shapesOk = false
+            notes = `stars@${season}/${time}/${weather}`
+          }
+        }
+        if (preset.snow) {
+          snowCount += 1
+          if (season !== 'winter') {
+            shapesOk = false
+            notes = `snow@${season}/${time}/${weather}`
+          }
+        }
+      }
+    }
+  }
+  record('environment presets complete', presetCount === 32 && shapesOk, notes)
+  record('stars only night+clear', starsCount === 4, `stars=${starsCount}`)
+  record('snow only winter', snowCount === 5, `snow=${snowCount}`)
+
+  const failed = results.filter((result) => !result.ok)
+  if (failed.length) {
+    console.warn(`[slowroads-lab] environment checks failed: ${failed.map((result) => result.name).join(', ')}`)
+  } else {
+    console.info(`[slowroads-lab] environment checks passed (${results.length})`)
   }
   return results
 }

@@ -121,6 +121,7 @@ export function createCrossQuadGeometry(): THREE.BufferGeometry {
 }
 
 const VERTEX_SHADER = `
+#include <common>
 attribute float aPlane;
 attribute vec4 aUvRect;
 attribute vec2 aSize;
@@ -299,8 +300,8 @@ void main() {
   color *= uAmbient + uSunColor * ndl;
 
   gl_FragColor = vec4(color, 1.0);
-  #include <fog_fragment>
   #include <colorspace_fragment>
+  #include <fog_fragment>
 }
 `
 
@@ -379,6 +380,7 @@ export function createFoliageMesh(
     // Crossed sprite cards are viewed from both sides.
     side: THREE.DoubleSide,
   })
+  material.name = `slowroads-foliage-${options.palette?.mode ?? 'none'}-${options.tier ?? 'all'}`
 
   const mesh = new THREE.InstancedMesh(geometry, material, capacity)
   mesh.count = count

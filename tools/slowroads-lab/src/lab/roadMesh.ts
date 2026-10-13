@@ -35,6 +35,7 @@ const STEP_ALONG = 2
 const ROAD_LIFT = 0.02
 
 const VERTEX_SHADER = `
+#include <common>
 attribute float aShadow;
 uniform float uTextureStretch;
 varying vec2 vRoadUv;
@@ -78,8 +79,8 @@ void main() {
   float ndl = clamp(dot(vec3(0.0, 1.0, 0.0), uSunDir), -1.0, 1.0) * 0.5 + 0.5;
   vec3 color = texelColor.rgb * (uAmbient + uSunColor * ndl);
   gl_FragColor = vec4(color, 1.0);
-  #include <fog_fragment>
   #include <colorspace_fragment>
+  #include <fog_fragment>
 }
 `
 
@@ -161,6 +162,7 @@ export function createRoadMesh(options: RoadMeshOptions): RoadMeshHandle {
 
   const mesh = new THREE.Mesh(geometry, material)
   mesh.name = 'slowroads-road-ribbon'
+  material.name = 'slowroads-road-material'
   mesh.receiveShadow = false
   mesh.castShadow = false
   mesh.frustumCulled = false

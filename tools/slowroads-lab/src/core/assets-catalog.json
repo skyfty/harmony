@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-10-13T09:12:40.071Z",
+  "generatedAt": "2026-10-13T10:05:33.384Z",
   "source": "D:\\Downloads\\新建文件夹",
-  "entryCount": 99,
-  "totalBytes": 101915477,
+  "entryCount": 100,
+  "totalBytes": 102209215,
   "files": [
     {
       "logicalId": "autumn_bushes.b82ca395",
@@ -151,6 +151,16 @@
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "clouds_01.700a3fdb",
+      "file": "clouds_01.700a3fdb.png",
+      "kind": "png",
+      "bytes": 293738,
+      "hash": "sha256-2f9882825fd464d6",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
     },
     {
       "logicalId": "forest_01.b82a9e7e",

@@ -109,6 +109,7 @@ function createFallbackFadeTexture(seed: number): THREE.DataTexture {
 }
 
 const VERTEX_SHADER = `
+#include <common>
 attribute float aRoadProx;
 varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
@@ -398,8 +399,8 @@ void main() {
   color *= uAmbient + uSunColor * ndl;
 
   gl_FragColor = vec4(color, 1.0);
-  #include <fog_fragment>
   #include <colorspace_fragment>
+  #include <fog_fragment>
 }
 `
 
@@ -493,6 +494,7 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
     defines: options.reduced ? { TERRAIN_REDUCED: 1 } : {},
     fog: true,
   })
+  material.name = 'slowroads-terrain-material'
 
   return {
     material,

@@ -70,6 +70,7 @@ function parseTreeBin(buffer: ArrayBuffer): ParsedTreeModel {
 }
 
 const MESH_VERTEX_SHADER = `
+#include <common>
 varying vec2 vUv;
 varying vec3 vWorldNormal;
 #include <fog_pars_vertex>
@@ -194,6 +195,8 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
     fog: true,
     side: THREE.DoubleSide,
   }))
+  materials[0]!.name = 'slowroads-near-tree-broadleaf-material'
+  materials[1]!.name = 'slowroads-near-tree-conifer-material'
 
   const meshes: THREE.InstancedMesh[][] = [[], []]
   for (const species of [0, 1] as const) {

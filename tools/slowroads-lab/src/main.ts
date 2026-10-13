@@ -13,14 +13,22 @@ import {
 } from './core/placement'
 import { createRoadProfile, type RoadProfile } from './core/roadProfile'
 import { resolveSeedHeadingRad, traceRoadPath } from './core/roadTrace'
-import { runSeasonCatalogChecks, runSelfChecks, type AssetsCatalogLike } from './core/selfCheck'
+import { runEnvironmentChecks, runSeasonCatalogChecks, runSelfChecks, type AssetsCatalogLike } from './core/selfCheck'
+import { installSlowroadsFog } from './lab/fogPatch'
+import { createSky } from './lab/sky'
+import { createClouds } from './lab/clouds'
+import { createStars } from './lab/stars'
+import { createSnow } from './lab/snow'
+import { createEnvironmentController, type EnvironmentController } from './lab/environmentController'
 import {
   SEASON_CATALOG,
+  SEASON_LABELS,
   SHARED_TEXTURES,
   collectSeasonTextureRefs,
   type SeasonId,
   type SeasonTextureRef,
 } from './core/seasonCatalog'
+import { TIME_OF_DAY_LABELS, WEATHER_LABELS, resolveEnvironmentPreset, type EnvironmentState } from './core/environment'
 import { SEASON_PARAMS } from './core/seasonParams'
 import {
   BARRIER_RAIL_REGIONS,
@@ -54,6 +62,9 @@ import {
   type LabSettings,
   type LabUiHandle,
 } from './ui'
+
+// 必须在任何材质创建之前替换 three 的 fog chunk 并扩展 UniformsLib.fog。
+installSlowroadsFog()
 
 const WORLD_SIZE = 1600
 const TERRAIN_SEGMENTS = 1024
@@ -109,6 +120,7 @@ interface SharedRuntimeAssets {
   grassVariation: THREE.Texture
   rockBump: THREE.Texture
   seaWaves: THREE.Texture
+  clouds: THREE.Texture
   barrier: THREE.Texture
 }
 
@@ -126,6 +138,13 @@ let terrainMaterialHandle: TerrainMaterialHandle | null = null
 let roadHandle: RoadMeshHandle | null = null
 let treeMeshManager: TreeMeshManager | null = null
 let water: WaterHandle | null = null
+let environmentHandles: {
+  sky: ReturnType<typeof createSky>
+  clouds: ReturnType<typeof createClouds>
+  stars: ReturnType<typeof createStars>
+  snow: ReturnType<typeof createSnow>
+} | null = null
+let environmentController: EnvironmentController | null = null
 let placements: LabPlacements | null = null
 
 let grassMesh: THREE.InstancedMesh | null = null
@@ -167,6 +186,7 @@ async function loadSharedAssets(onProgress?: (loaded: number, total: number) => 
     { id: SHARED_TEXTURES.grassVariation.id, options: { colorSpace: 'linear', tiling: true } },
     { id: SHARED_TEXTURES.rockBump.id, options: { colorSpace: 'linear', tiling: true } },
     { id: SHARED_TEXTURES.seaWaves.id, options: { colorSpace: 'linear', tiling: true } },
+    { id: SHARED_TEXTURES.clouds.id, options: { colorSpace: 'srgb', tiling: true } },
     { id: SHARED_TEXTURES.barrier.id, options: { colorSpace: 'srgb', tiling: false } },
   ]
   const textures = await requireStore().textureSet(requests, onProgress)
@@ -176,6 +196,7 @@ async function loadSharedAssets(onProgress?: (loaded: number, total: number) => 
     grassVariation: textures.get(SHARED_TEXTURES.grassVariation.id)!,
     rockBump: textures.get(SHARED_TEXTURES.rockBump.id)!,
     seaWaves: textures.get(SHARED_TEXTURES.seaWaves.id)!,
+    clouds: textures.get(SHARED_TEXTURES.clouds.id)!,
     barrier: textures.get(SHARED_TEXTURES.barrier.id)!,
   }
 }
@@ -257,6 +278,48 @@ function seasonRetainIds(season: SeasonId): Set<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Environment (season x time x weather)
+// ---------------------------------------------------------------------------
+
+function currentEnvironmentState(): EnvironmentState {
+  return { season: activeSeason, timeOfDay: settings.timeOfDay, weather: settings.weather }
+}
+
+/** 创建/更新天空、云层、星空、降雪，并把环境控制器接到场景上。 */
+function ensureEnvironment(): void {
+  if (!sharedAssets) {
+    return
+  }
+  if (!environmentController) {
+    const skyHandle = createSky()
+    const clouds = createClouds(sharedAssets.clouds)
+    const stars = createStars()
+    const snow = createSnow(sharedAssets.noise)
+    scene.add(camera)
+    camera.add(skyHandle.mesh)
+    scene.add(clouds.mesh, stars.container, snow.container)
+    environmentHandles = { sky: skyHandle, clouds, stars, snow }
+    environmentController = createEnvironmentController({
+      scene,
+      camera,
+      sky: skyHandle,
+      clouds,
+      stars,
+      snow,
+      getWater: () => water,
+    })
+  } else {
+    environmentHandles?.clouds.setTexture(sharedAssets.clouds)
+    environmentHandles?.snow.setNoiseTexture(sharedAssets.noise)
+  }
+}
+
+function applyEnvironmentState(): void {
+  environmentController?.applyState(currentEnvironmentState())
+  applyToggles()
+}
+
+// ---------------------------------------------------------------------------
 // Foliage / world assembly
 // ---------------------------------------------------------------------------
 
@@ -318,6 +381,12 @@ function applyToggles(): void {
   if (barrierMesh) barrierMesh.visible = settings.showBarrier
   if (roadHandle) roadHandle.mesh.visible = settings.showRoad
   if (water) water.mesh.visible = settings.showWater
+  environmentController?.setToggles({
+    sky: settings.showSky,
+    clouds: settings.showClouds,
+    stars: settings.showStars,
+    snow: settings.showSnow,
+  })
   if (treeMeshManager) {
     treeMeshManager.setVisible(settings.showNearTreeMeshes)
   }
@@ -478,6 +547,8 @@ function buildFoliageFromPlacements(): void {
   )
   applyWind()
   applyToggles()
+  // 新材质（雾/光照 uniform 是每材质克隆的）需要重新下发环境参数。
+  environmentController?.applyState(currentEnvironmentState())
 }
 
 function rebuildPlacements(): void {
@@ -628,6 +699,8 @@ async function applySeason(season: SeasonId, options: { silent?: boolean } = {})
     lastSeasonSwitchMs = performance.now() - startedAt
     settings.season = season
     ui?.setSeasonActive(season)
+    // 季节也是环境预设的维度：光照/雾/水面/云/星/雪都随季节变化。
+    applyEnvironmentState()
   } catch (error) {
     console.error('[slowroads-lab] season switch failed', error)
     overlayDetail.textContent = `季节加载失败：${error instanceof Error ? error.message : String(error)}`
@@ -714,6 +787,7 @@ async function recreateAssetStore(mode: AssetSourceMode, baseUrl: string): Promi
   sharedAssets = await loadSharedAssets((loaded, total) => {
     overlayProgress.style.width = `${Math.round((loaded / Math.max(1, total)) * 50)}%`
   })
+  ensureEnvironment()
   await applySeason(settings.season, { silent: false })
   rebuildWorld()
 }
@@ -749,8 +823,13 @@ function updateStats(): void {
   const seasonBytes = assetStore
     ? assetStore.bytesFor(collectSeasonTextureRefs(activeSeason).map((ref) => ref.id))
     : 0
+  const preset = resolveEnvironmentPreset(currentEnvironmentState())
   statsElement.textContent = [
-    `FPS ${fps.toFixed(0)} · draw calls ${info.calls} · tris ${(info.triangles / 1e6).toFixed(2)}M · 季节 ${activeSeason}`,
+    `FPS ${fps.toFixed(0)} · draw calls ${info.calls} · tris ${(info.triangles / 1e6).toFixed(2)}M`
+      + ` · 环境 ${SEASON_LABELS[activeSeason]}·${TIME_OF_DAY_LABELS[settings.timeOfDay]}·${WEATHER_LABELS[settings.weather]}`,
+    `天空${settings.showSky ? '开' : '关'} · 云${settings.showClouds ? '开' : '关'}(${preset.clouds.mode})`
+      + ` · 星空${preset.stars ? `夜晴${settings.showStars ? '' : '·切'}` : '—'}`
+      + ` · 降雪${preset.snow && preset.snow.density > 0 ? `${preset.snow.density}${settings.showSnow ? '' : '·切'}` : '—'}`,
     `树卡 ${treeCount} · 近树3D ${treeMeshManager?.instanceCount ?? 0} · 草 ${grassMesh?.count ?? 0} · 灌木花草 ${bushMesh?.count ?? 0}`,
     `护栏 ${barrierSegmentCount} · 道路 ${profile ? Math.round(profile.length) : 0}m · 世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 切季 ${lastSeasonSwitchMs ? `${Math.round(lastSeasonSwitchMs)}ms` : '—'}`,
     `素材 ${storeStats?.textureCount ?? 0} 张 · 常驻≈${storeStats ? formatMb(storeStats.residentBytes) : '—'} · 本季下载 ${formatMb(seasonBytes)}${assetStore?.mode === 'server' ? ` · 已下载 ${formatMb(storeStats?.downloadedBytes ?? 0)}` : ''} · 种子 ${settings.seed >>> 0}`,
@@ -784,6 +863,7 @@ function animate(): void {
   if (treeMeshManager && placements) {
     treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value)
   }
+  environmentController?.update(dt)
   water?.setTime(elapsedSeconds)
   renderer.render(scene, camera)
   updateStats()
@@ -792,6 +872,7 @@ function animate(): void {
 async function init(): Promise<void> {
   runSelfChecks()
   runSeasonCatalogChecks({ catalog: catalogForChecks })
+  runEnvironmentChecks()
   console.info(`[slowroads-lab] max texture units = ${renderer.capabilities.maxTextures}`)
 
   const maxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy())
@@ -802,6 +883,7 @@ async function init(): Promise<void> {
     maxAnisotropy,
   })
   sharedAssets = await loadSharedAssets()
+  ensureEnvironment()
   await applySeason(settings.season, { silent: true })
 
   cruise = createCruiseController(() => profile)
@@ -828,6 +910,7 @@ async function init(): Promise<void> {
         void applySeason(season)
       }
     },
+    onEnvironmentChange: () => applyEnvironmentState(),
     onCompatModeChange: () => {
       void recreateAssetStore(settings.assetSource, settings.serverBaseUrl)
     },

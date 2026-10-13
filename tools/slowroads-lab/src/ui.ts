@@ -1,9 +1,19 @@
 import { SEASON_IDS, SEASON_LABELS, type SeasonId } from './core/seasonCatalog'
+import {
+  TIME_OF_DAY_LABELS,
+  TIME_OF_DAY_ORDER,
+  WEATHER_LABELS,
+  WEATHER_ORDER,
+  type TimeOfDay,
+  type Weather,
+} from './core/environment'
 import type { AssetSourceMode } from './lab/assetSource'
 
 export interface LabSettings {
   seed: number
   season: SeasonId
+  timeOfDay: TimeOfDay
+  weather: Weather
   /** 兼容模式：纹理按 MAX_TEXTURE_SIZE 回退 @2048 变体 + 缩减地形材质。 */
   compatMode: boolean
   assetSource: AssetSourceMode
@@ -18,6 +28,10 @@ export interface LabSettings {
   showNearTreeMeshes: boolean
   showWater: boolean
   showBarrier: boolean
+  showSky: boolean
+  showClouds: boolean
+  showStars: boolean
+  showSnow: boolean
   windEnabled: boolean
   treeDensity: number
   treeSize: number
@@ -38,6 +52,8 @@ export interface LabSettings {
 export const DEFAULT_LAB_SETTINGS: LabSettings = {
   seed: (Math.random() * 0xffffffff) >>> 0,
   season: 'spring',
+  timeOfDay: 'day',
+  weather: 'clear',
   compatMode: false,
   assetSource: 'local',
   serverBaseUrl: 'http://localhost:8097',
@@ -51,6 +67,10 @@ export const DEFAULT_LAB_SETTINGS: LabSettings = {
   showNearTreeMeshes: true,
   showWater: true,
   showBarrier: true,
+  showSky: true,
+  showClouds: true,
+  showStars: true,
+  showSnow: true,
   windEnabled: true,
   treeDensity: 1,
   treeSize: 1,
@@ -73,6 +93,7 @@ export type LabChangeKind = 'uniform' | 'placements' | 'world'
 export interface LabUiCallbacks {
   onChange(kind: LabChangeKind, key: keyof LabSettings): void
   onSeasonChange(season: SeasonId): void
+  onEnvironmentChange(): void
   onCompatModeChange(enabled: boolean): void
   onAssetSourceChange(mode: AssetSourceMode, baseUrl: string): void
   onRandomizeSeed(): void
@@ -85,6 +106,8 @@ export interface LabUiHandle {
   sync(): void
   setCruiseActive(active: boolean): void
   setSeasonActive(season: SeasonId): void
+  setTimeOfDayActive(timeOfDay: TimeOfDay): void
+  setWeatherActive(weather: Weather): void
   setSeasonLoading(season: SeasonId | null): void
 }
 
@@ -135,6 +158,47 @@ export function createLabUi(
   }
   setSeasonActive(settings.season)
 
+  // ---- Time of day / weather ------------------------------------------------
+  container.append(createElement('h3', undefined, '时间 · 天气'))
+  const timeRow = createElement('div', 'panel__row panel__seasons')
+  const timeButtons = new Map<TimeOfDay, HTMLButtonElement>()
+  for (const time of TIME_OF_DAY_ORDER) {
+    const button = createElement('button', undefined, TIME_OF_DAY_LABELS[time])
+    button.addEventListener('click', () => {
+      settings.timeOfDay = time
+      setTimeOfDayActive(time)
+      callbacks.onEnvironmentChange()
+    })
+    timeRow.append(button)
+    timeButtons.set(time, button)
+  }
+  container.append(timeRow)
+  const weatherRow = createElement('div', 'panel__row panel__seasons')
+  const weatherButtons = new Map<Weather, HTMLButtonElement>()
+  for (const weather of WEATHER_ORDER) {
+    const button = createElement('button', undefined, WEATHER_LABELS[weather])
+    button.addEventListener('click', () => {
+      settings.weather = weather
+      setWeatherActive(weather)
+      callbacks.onEnvironmentChange()
+    })
+    weatherRow.append(button)
+    weatherButtons.set(weather, button)
+  }
+  container.append(weatherRow)
+  const setTimeOfDayActive = (time: TimeOfDay): void => {
+    for (const [id, button] of timeButtons) {
+      button.classList.toggle('is-active', id === time)
+    }
+  }
+  const setWeatherActive = (weather: Weather): void => {
+    for (const [id, button] of weatherButtons) {
+      button.classList.toggle('is-active', id === weather)
+    }
+  }
+  setTimeOfDayActive(settings.timeOfDay)
+  setWeatherActive(settings.weather)
+
   // ---- Compatibility / asset source -----------------------------------------
   container.append(createElement('h3', undefined, '运行环境'))
   const compatLabel = createElement('label')
@@ -180,6 +244,10 @@ export function createLabUi(
     { key: 'showNearTreeMeshes', label: '近树 3D 网格' },
     { key: 'showWater', label: '水面' },
     { key: 'showBarrier', label: '护栏' },
+    { key: 'showSky', label: '天空' },
+    { key: 'showClouds', label: '云层' },
+    { key: 'showStars', label: '星空' },
+    { key: 'showSnow', label: '降雪' },
     { key: 'windEnabled', label: '风摆' },
   ]
   const toggleInputs = new Map<keyof LabSettings, HTMLInputElement>()
@@ -333,11 +401,15 @@ export function createLabUi(
       sourceSelect.value = settings.assetSource
       serverInput.value = settings.serverBaseUrl
       setSeasonActive(settings.season)
+      setTimeOfDayActive(settings.timeOfDay)
+      setWeatherActive(settings.weather)
     },
     setCruiseActive(active: boolean): void {
       cruiseButton.classList.toggle('is-active', active)
     },
     setSeasonActive,
+    setTimeOfDayActive,
+    setWeatherActive,
     setSeasonLoading,
   }
 }
