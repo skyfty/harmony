@@ -288,8 +288,13 @@ async function handleSync() {
 
   syncingWorkspace.value = true
   try {
-    syncStatusText.value = '同步项目中...'
-    await projectsStore.syncUserWorkspaceFromServer({ replace: false })
+    if (projectsStore.workspaceType === 'user') {
+      syncStatusText.value = '同步项目中...'
+      await projectsStore.syncUserWorkspaceFromServer({ replace: false })
+    } else {
+      syncStatusText.value = '刷新本地项目中...'
+      await projectsStore.refreshMetadata()
+    }
   } finally {
     syncingWorkspace.value = false
     syncStatusText.value = ''
