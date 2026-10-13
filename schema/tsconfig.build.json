@@ -29,7 +29,9 @@
     "*.ts",
     "workers/**/*.ts",
     "behaviors/**/*.ts",
-    "components/**/*.ts"
+    "components/**/*.ts",
+    "proceduralLandscape/**/*.ts",
+    "slowroads/**/*.ts"
   ],
   "exclude": [
     "node_modules",

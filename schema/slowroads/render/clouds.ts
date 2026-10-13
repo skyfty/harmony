@@ -111,7 +111,6 @@ const FOG_VERTEX_CLOUDS = /* glsl */ `
 `
 
 const UV_PARS_FRAGMENT = /* glsl */ `
-    uniform sampler2D map;
     uniform vec3 highlight;
     uniform vec3 lowlight;
     uniform float mode;

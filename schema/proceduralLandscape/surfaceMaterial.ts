@@ -139,7 +139,8 @@ const VERTEX_BODY = `#include <begin_vertex>
 /** 官方陡坡岩石法线扰动（normal_fragment_begin 之后注入）。 */
 const NORMAL_BODY = `#include <normal_fragment_begin>
 {
-  float plSteepN = clamp((uPlRockSlope - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0))) * 1.6, 0.0, 1.0);
+  float plSteepN = clamp((uPlRockSlope - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0, 0.0))) * 1.6, 0.0, 1.0);
+#ifndef PL_SURFACE_REDUCED
   if (plSteepN > 0.1) {
     vec2 plBumpUv = vPlWorldPosition.xz / max(uPlUvScale, 0.001);
     float plBumpCenter = texture2D(uPlRockBumpTex, plBumpUv).r;
@@ -147,6 +148,7 @@ const NORMAL_BODY = `#include <normal_fragment_begin>
     float plBumpZ = texture2D(uPlRockBumpTex, plBumpUv + vec2(0.0, 0.04)).r - plBumpCenter;
     normal = normalize(normal + vec3(-plBumpX, 0.0, -plBumpZ) * 2.4 * plSteepN);
   }
+#endif
 }`
 
 const FRAGMENT_HEADER = `#include <common>
@@ -159,10 +161,14 @@ uniform sampler2D uPlHeatherTex;
 uniform sampler2D uPlGravelTex;
 uniform sampler2D uPlRockTex;
 uniform sampler2D uPlSandTex;
+#ifndef PL_SURFACE_REDUCED
 uniform sampler2D uPlDetailNearTex;
+#endif
 uniform sampler2D uPlDetailFarTex;
+#ifndef PL_SURFACE_REDUCED
 uniform sampler2D uPlRockBumpTex;
 uniform sampler2D uPlGrassVariation;
+#endif
 uniform vec2 uPlTerrainMin;
 uniform vec2 uPlTerrainSize;
 uniform float uPlRoadFieldRange;
@@ -236,7 +242,7 @@ const FRAGMENT_BODY = `#include <map_fragment>
 
   float vDarkGrass = min(max(0.0, (vFade1 - 0.25) * 2.0), 1.0);
 
-  float steepness = clamp((0.98 - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0))) * 1.4, 0.0, 1.0);
+  float steepness = clamp((0.98 - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
   float underRoadFactor = 1.0 - step(0.000001, -plRoadProx);
   steepness *= underRoadFactor;
   vHeather *= underRoadFactor;
@@ -270,10 +276,18 @@ const FRAGMENT_BODY = `#include <map_fragment>
   float depthLerpFar = plSaturate(vPlViewDistance / 800.0);
   blendVal = blendVal * depthLerpFar + (1.0 - depthLerpFar) * blendValB;
   blendVal *= plSaturate(0.4 + 0.6 * (vPlViewDistance / 300.0));
+#ifndef PL_SURFACE_REDUCED
   blendVal += (1.0 - texture2D(uPlDetailNearTex, wUv100).r) * (0.7 + vLightGrass * 0.3) * uPlSurfaceStrength;
+#endif
 
+#ifndef PL_SURFACE_REDUCED
   float variationVal = texture2D(uPlGrassVariation, wUv2000).r - 0.5;
   float closeVariation = ((1.0 - texture2D(uPlGrassVariation, wUv500).r) - 0.5);
+#else
+  // 缩减路径（纹理单元受限设备）：用 fade 场近似 variation。
+  float variationVal = (fade1 - 0.5) * 0.5;
+  float closeVariation = (fade0 - 0.5) * 0.5;
+#endif
 
   float grassBlend = (plScreen(fade1, fade0) + vDarkGrass) / 2.0;
   grassBlend = grassBlend * grassBlend;
@@ -346,14 +360,18 @@ const FRAGMENT_BODY = `#include <map_fragment>
       float rp = plSaturate(1.0 - (plRoadProx + fade2 * 0.1) / max(0.0001, 0.5 * fade0));
       if (uPlSeasonIndex != 1 && vShadow > 0.0) {
         float gravelBrightness = uPlSeasonIndex == 2 ? 1.8 : 1.3;
+        vec4 plGravelTex = texture2D(uPlGravelTex, wUv * 2.0);
+        plGravelTex.rgb *= uPlGravelTint;
         texelColor = mix(
-          mix(texture2D(uPlGravelTex, wUv * 2.0) * uPlGravelTint, forestCol * gravelBrightness, min(1.0, vShadow * 2.0)),
+          mix(plGravelTex, forestCol * gravelBrightness, min(1.0, vShadow * 2.0)),
           texelColor,
           smoothstep(0.0, rp, texelColor.g / max(0.0001, rp))
         );
       } else {
+        vec4 plGravelTex = texture2D(uPlGravelTex, wUv * 2.0);
+        plGravelTex.rgb *= uPlGravelTint;
         texelColor = mix(
-          texture2D(uPlGravelTex, wUv * 2.0) * uPlGravelTint * (0.75 + rp * rp * 0.75),
+          plGravelTex * (0.75 + rp * rp * 0.75),
           texelColor,
           smoothstep(0.0, rp, texelColor.g / max(0.0001, rp))
         );
@@ -414,11 +432,14 @@ function installMaterialInjection(
     for (const [name, uniform] of uniformEntries) {
       shader.uniforms[name] = uniform
     }
+    // 纹理单元受限设备（小程序/集显 16 单元）自动走缩减路径：
+    // 去掉 grassVariation/rockBump/detailNear 三个采样器。
+    const reduced = (renderer?.capabilities?.maxTextures ?? 32) <= 16
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', VERTEX_HEADER)
       .replace('#include <begin_vertex>', VERTEX_BODY)
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', FRAGMENT_HEADER)
+      .replace('#include <common>', reduced ? '#define PL_SURFACE_REDUCED\n' + FRAGMENT_HEADER : FRAGMENT_HEADER)
       .replace('#include <normal_fragment_begin>', NORMAL_BODY)
       .replace('#include <map_fragment>', FRAGMENT_BODY)
     injectSlowroadsFog(shader)
@@ -450,12 +471,38 @@ export function applyProceduralLandscapeSurfaceInjection(
     const clones: THREE.Material[] = []
     for (const source of sources) {
       const standard = source as THREE.MeshStandardMaterial
-      if (!standard.isMeshStandardMaterial) {
-        skippedMaterialCount += 1
-        clones.push(source)
-        continue
+      let clone: THREE.Material
+      if (standard.isMeshStandardMaterial) {
+        clone = source.clone()
+      } else {
+        // 3D Tiles / unlit GLB 常用 MeshBasicMaterial（KHR_materials_unlit）。
+        // 直接替换为注入后的 MeshStandardMaterial：保留原贴图供 blend 模式，
+        // 并获得真实光照 + CSM 阴影。
+        const carrier = source as THREE.Material & {
+          map?: THREE.Texture | null
+          color?: THREE.Color
+          side?: THREE.Side
+          alphaMap?: THREE.Texture | null
+          transparent?: boolean
+          alphaTest?: number
+        }
+        const isRenderable = Boolean(carrier.map) || 'color' in carrier
+        if (!isRenderable) {
+          skippedMaterialCount += 1
+          clones.push(source)
+          continue
+        }
+        clone = new THREE.MeshStandardMaterial({
+          color: carrier.color ? carrier.color.clone() : new THREE.Color(0xffffff),
+          map: carrier.map ?? null,
+          alphaMap: carrier.alphaMap ?? null,
+          side: carrier.side ?? THREE.FrontSide,
+          transparent: carrier.transparent === true,
+          alphaTest: typeof carrier.alphaTest === 'number' ? carrier.alphaTest : 0,
+          roughness: 1,
+          metalness: 0,
+        })
       }
-      const clone = source.clone()
       installMaterialInjection(clone as THREE.MeshStandardMaterial, uniforms)
       clones.push(clone)
       patchedMaterialCount += 1

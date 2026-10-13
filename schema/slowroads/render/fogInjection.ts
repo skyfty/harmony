@@ -144,6 +144,16 @@ export const SLOWROADS_FOG_FRAGMENT = /* glsl */ `
     gl_FragColor.rgb = mix(gl_FragColor.rgb, mix(fogColorA, fogColorB, srFogBlend), srFogAmount);
 `
 
+/**
+ * 天空专用雾体：天空本身就是「雾色背景」，不受 editor 的雾预览开关
+ * （srFogEnabled）影响——关雾时场景材质不再叠加雾，但天空仍需显示渐变。
+ */
+export const SLOWROADS_SKY_FOG_FRAGMENT = /* glsl */ `
+    float srSkyBlend = max(((vFogPos.y - cameraPosition.y) * 2.0) / max(0.001, distance(vFogPos, cameraPosition)), 0.0) * vFogBlend;
+    gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColorC, clamp(vHaze, 0.0, 1.0));
+    gl_FragColor.rgb = mix(gl_FragColor.rgb, mix(fogColorA, fogColorB, srSkyBlend), clamp(vFogDepth, 0.0, 1.0));
+`
+
 export interface SlowroadsFogUniforms {
   fogColorA: THREE.IUniform<THREE.Color>
   fogColorB: THREE.IUniform<THREE.Color>

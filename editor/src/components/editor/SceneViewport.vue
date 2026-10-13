@@ -14994,6 +14994,10 @@ function ensureSlowroadsEnvironmentRuntime(): void {
     return
   }
   const activeScene = scene
+  // 天空挂在相机子节点上：相机必须在场景图里（preview/viewer 同样约定）。
+  if (!camera.parent) {
+    activeScene.add(camera)
+  }
   const assetStore = getSharedSlowroadsAssetStore({
     maxTextureSize: renderer.capabilities.maxTextureSize,
     maxAnisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),

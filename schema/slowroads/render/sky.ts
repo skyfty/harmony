@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { ENVIRONMENT_VIEW_DISTANCE } from '../core/environment'
-import { injectSlowroadsFog } from './fogInjection'
+import { bindSlowroadsFogUniforms, slowroadsFogInjectionSource, SLOWROADS_SKY_FOG_FRAGMENT } from './fogInjection'
 
 /**
  * slowroads 天空：一块挂在相机上的巨型平面，画面完全由注入的三色雾决定
@@ -23,7 +23,14 @@ export function createSlowroadsSky(): SlowroadsSkyHandle {
     wireframe: false,
   })
   material.onBeforeCompile = (shader) => {
-    injectSlowroadsFog(shader)
+    bindSlowroadsFogUniforms(shader.uniforms)
+    const fog = slowroadsFogInjectionSource()
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <fog_pars_vertex>', fog.vertexPars)
+      .replace('#include <fog_vertex>', fog.vertexBody)
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <fog_pars_fragment>', fog.fragmentPars)
+      .replace('#include <fog_fragment>', SLOWROADS_SKY_FOG_FRAGMENT)
   }
   material.name = 'slowroads-sky-material'
   const mesh = new THREE.Mesh(geometry, material)
