@@ -39,9 +39,16 @@ export interface RoadBandOptions {
   textures: RoadBandTextures
   season: SeasonId
   hostInverse: THREE.Matrix4 | null
+  /**
+   * 路面相对地形的高度抬升（米）。默认 0.02（贴合慢速公路那种高密度地形）。
+   * 导入的粗网格地形（如 3dtiles 导出 GLB，三角面平均 40m+）无法精确表达
+   * 7m 宽的路基压平，路面带会被三角面穿插成"虚线"，此时由调用方传入更大的
+   * 抬升量（见 runtime.buildRoadBand）。
+   */
+  lift?: number
 }
 
-const ROAD_LIFT = 0.02
+const DEFAULT_ROAD_LIFT = 0.02
 
 const VERTEX_PARS = /* glsl */ `
 attribute float aRoadShadow;
@@ -83,6 +90,7 @@ const FRAGMENT_BODY = /* glsl */ `
 
 export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
   const nodes = options.nodes
+  const lift = options.lift ?? DEFAULT_ROAD_LIFT
   const positions: number[] = []
   const uvs: number[] = []
   const normals: number[] = []
@@ -115,7 +123,7 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
       shadow = Math.max(leftClass, rightClass) / 3
     }
     for (const side of [-1, 1] as const) {
-      positions.push(node.x + perpX * halfW * side, node.y + ROAD_LIFT, node.z + perpZ * halfW * side)
+      positions.push(node.x + perpX * halfW * side, node.y + lift, node.z + perpZ * halfW * side)
       uvs.push(side < 0 ? 0 : 1, v)
       normals.push(0, 1, 0)
       shadows.push(shadow)
@@ -152,6 +160,9 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     side: THREE.DoubleSide,
     transparent: false,
     depthWrite: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -4,
   })
   material.name = 'slowroads-road-band-material'
   material.customProgramCacheKey = () => 'pl-road-band-v1'

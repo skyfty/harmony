@@ -52,7 +52,7 @@ import {
   COMPONENT_ARTIFACT_KEY,
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../components/componentManager'
-import { clamp, degreesToRadians } from './noise'
+import { clamp, degreesToRadians, hashUnit, lerp } from './noise'
 import {
   clampProceduralLandscapeProps,
   PROCEDURAL_LANDSCAPE_QUALITY_TIERS,
@@ -78,6 +78,13 @@ const TREE_UNIT_SIZE = 8
 const GRASS_UNIT_SIZE = 1.6
 const BUSH_UNIT_SIZE = 2
 const IMPOSTER_REGIONS: SpriteRegion[] = gridRegions(16, 4, 4096, 1024)
+/** 远景树环：相机移动超过该距离后重建（相机锚定，保证视野内始终有树）。 */
+const FAR_TREE_REANCHOR_DISTANCE = 800
+/** 远景树环外缘相对视距的倍数与内缘系数（内缘略早于分块视距，避免接缝）。 */
+const FAR_TREE_RING_INNER_FACTOR = 0.92
+const FAR_TREE_RING_OUTER_FACTOR = 2.4
+/** 远景树随距离放大的增益：远处 imposter 按比例放大，弥补透视缩小导致的"看不见森林"。 */
+const FAR_TREE_SCALE_GAIN = 0.9
 
 let sharedPlaceholderTexture: THREE.DataTexture | null = null
 
@@ -117,6 +124,10 @@ export interface ProceduralLandscapeRuntimeStats {
   grassInstances: number
   bushInstances: number
   batchCount: number
+  /** 分块分解：树 / 道路走廊（草+灌木）/ 相机周围草。 */
+  treeChunkCount: number
+  roadChunkCount: number
+  cameraGrassChunkCount: number
   gridCols: number
   gridRows: number
   gridCellSize: number
@@ -135,6 +146,8 @@ export interface ProceduralLandscapeRuntimeStats {
   assetResidentBytes: number
   assetDownloadedBytes: number
   assetVariant: 'full' | '2048'
+  /** 远景全域树层实例数（分块流式之外的静态层）。 */
+  farTreeInstances: number
 }
 
 export interface ProceduralLandscapeSeasonState {
@@ -317,6 +330,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let roadBand: RoadBandHandle | null = null
   let treeMeshManager: TreeMeshManager | null = null
   let treeMeshInitStarted = false
+  let farTreeRoot: THREE.Group | null = null
+  let farTreeLayers: THREE.InstancedMesh[] = []
+  let farTreeSignature = ''
+  let farTreeInstances = 0
+  let farTreeCenterX = Number.NaN
+  let farTreeCenterZ = Number.NaN
   const treeBatches = new Map<string, BatchEntry>()
   const roadBatches = new Map<string, BatchEntry>()
   const cameraGrassBatches = new Map<string, BatchEntry>()
@@ -355,6 +374,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     grassInstances: 0,
     bushInstances: 0,
     batchCount: 0,
+    treeChunkCount: 0,
+    roadChunkCount: 0,
+    cameraGrassChunkCount: 0,
     gridCols: 0,
     gridRows: 0,
     gridCellSize: 0,
@@ -371,6 +393,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     assetResidentBytes: 0,
     assetDownloadedBytes: 0,
     assetVariant: assetStore.variant,
+    farTreeInstances: 0,
   }
   statsRegistry.set(hooks.nodeId, stats)
 
@@ -405,6 +428,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       debugRoot.name = '__ProceduralLandscapeDebug'
       tagArtifact(debugRoot)
       hostObject.add(debugRoot)
+    }
+    if (!farTreeRoot) {
+      farTreeRoot = new THREE.Group()
+      farTreeRoot.name = '__ProceduralLandscapeFarTrees'
+      tagArtifact(farTreeRoot)
+      hostObject.add(farTreeRoot)
     }
   }
 
@@ -488,6 +517,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   function resetAll(): void {
     disposeSurfaceState()
     disposeWorldState()
+    disposeFarTreeRing()
     gridBuilder = null
     grid = null
   }
@@ -702,6 +732,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       textures: { base: baseTexture, overlay: overlayTexture },
       season,
       hostInverse: hostObject ? hostInverse : null,
+      // 粗网格地形（3dtiles 导出 GLB 平均 40m+ 三角面）无法精确表达 7m 路基
+      // 压平，路面带会被地形三角面穿插；抬升量随源三角面尺寸自适应。
+      lift: clamp(0.02 + (grid?.averageEdgeLength ?? 0) * 0.008, 0.02, 0.45),
     })
     roadBand.setVisible(props.road.enabled)
     tagArtifact(roadBand.mesh)
@@ -975,6 +1008,168 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return instances.length
   }
 
+  interface FarTreeCandidate {
+    x: number
+    z: number
+    y: number
+    rotation: number
+    scale: number
+    variant: number
+    species: 0 | 1
+  }
+
+  function disposeFarTreeRing(): void {
+    for (const layer of farTreeLayers) {
+      disposeFoliageLayerMesh(layer)
+    }
+    farTreeLayers = []
+    farTreeInstances = 0
+    farTreeSignature = ''
+    farTreeCenterX = Number.NaN
+    farTreeCenterZ = Number.NaN
+  }
+
+  /**
+   * 远景树环：以相机为中心、覆盖分块视距之外到远山（视距 × 2.6）的
+   * imposter 环带，与 slowroads-lab 的"满山森林"观感对齐。
+   *
+   * - 相机锚定：相机水平移动超过 FAR_TREE_REANCHOR_DISTANCE 后重建，
+   *   预算始终花在视野附近而不是整个 40km 场景上；
+   * - 密度：密度场 × 接受率后按哈希抽稀到预算（均匀而无条纹）；
+   * - 尺寸：随距离放大（最多 1 + FAR_TREE_SCALE_GAIN 倍），远景读起来
+   *   仍是"森林"而不是"点"；
+   * - 预算：high 32000 / medium 16000 / low 0 实例，按物种植入 2 个
+   *   InstancedMesh（共 2 个 draw call），材质与分块远树共用
+   *   （换季只换纹理，不重建实例）。
+   */
+  function rebuildFarTreeRing(centerX: number, centerZ: number): void {
+    disposeFarTreeRing()
+    farTreeCenterX = centerX
+    farTreeCenterZ = centerZ
+    if (!grid || !densityField || !farTreeRoot || !hostObject) {
+      return
+    }
+    const quality = resolveQuality()
+    const budget = quality === 'high' ? 64000 : quality === 'medium' ? 24000 : 0
+    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[quality]
+    farTreeSignature = farRingSignature(quality)
+    if (budget <= 0) {
+      return
+    }
+    const acceptance = 0.8
+    const innerRadius = tier.viewDistance * FAR_TREE_RING_INNER_FACTOR
+    const outerRadius = tier.viewDistance * FAR_TREE_RING_OUTER_FACTOR
+    const innerSq = innerRadius * innerRadius
+    const outerSq = outerRadius * outerRadius
+    const cell = 12
+    const roadClearance = roadHalfWidth(props) + props.road.shoulderWidth + 2
+    const minY = grid.minY + 2
+    const maxSlope = props.forest.maxSlope
+    const seed = props.seed >>> 0
+    const candidates: FarTreeCandidate[] = []
+    const minGX = Math.floor(Math.max(grid.minX, centerX - outerRadius) / cell)
+    const maxGX = Math.ceil(Math.min(grid.maxX, centerX + outerRadius) / cell)
+    const minGZ = Math.floor(Math.max(grid.minZ, centerZ - outerRadius) / cell)
+    const maxGZ = Math.ceil(Math.min(grid.maxZ, centerZ + outerRadius) / cell)
+    for (let gx = minGX; gx <= maxGX; gx += 1) {
+      for (let gz = minGZ; gz <= maxGZ; gz += 1) {
+        const x = (gx + hashUnit(seed ^ 0x9e3779b9, gx, gz)) * cell
+        const z = (gz + hashUnit(seed ^ 0x85ebca6b, gx, gz)) * cell
+        const dx = x - centerX
+        const dz = z - centerZ
+        const distanceSq = dx * dx + dz * dz
+        if (distanceSq < innerSq || distanceSq > outerSq) {
+          continue
+        }
+        if (!grid.contains(x, z)) {
+          continue
+        }
+        const y = grid.sampleHeight(x, z)
+        if (y == null || y < minY) {
+          continue
+        }
+        const normal = grid.sampleNormal(x, z)
+        if (!normal || 1 - normal.y > maxSlope) {
+          continue
+        }
+        if (roadFieldData && roadFieldData.distanceAt(x, z) < roadClearance) {
+          continue
+        }
+        if (hashUnit(seed ^ 0xc2b2ae35, gx, gz) >= densityField.sampleUnit(x, z) * acceptance) {
+          continue
+        }
+        const distance = Math.sqrt(distanceSq)
+        const scaleGain =
+          1 + FAR_TREE_SCALE_GAIN * clamp((distance - innerRadius) / Math.max(1, outerRadius - innerRadius), 0, 1)
+        candidates.push({
+          x,
+          z,
+          y,
+          rotation: hashUnit(seed ^ 0x27d4eb2f, gx, gz) * Math.PI * 2,
+          scale:
+            lerp(props.forest.minScale, props.forest.maxScale, hashUnit(seed ^ 0x165667b1, gx, gz)) * scaleGain,
+          variant: hashUnit(seed ^ 0xd3a2646c, gx, gz),
+          species: hashUnit(seed ^ 0xfd7046c5, gx, gz) < 0.4 ? 1 : 0,
+        })
+      }
+    }
+    if (!candidates.length) {
+      return
+    }
+    // 哈希抽稀到预算：保持随机分布（步长抽稀会在扫描线上形成规则条纹）。
+    const keepProbability = Math.min(1, budget / candidates.length)
+    const kept =
+      keepProbability >= 1
+        ? candidates
+        : candidates.filter((candidate, index) => {
+            const gx = Math.round(candidate.x / cell)
+            const gz = Math.round(candidate.z / cell)
+            return hashUnit(seed ^ 0x7feb352d, gx * 73856093 + index, gz * 19349663) < keepProbability
+          })
+    for (const species of [0, 1] as const) {
+      const list = kept.filter((candidate) => candidate.species === species)
+      if (!list.length) {
+        continue
+      }
+      const spec: FoliageMaterialSpec = {
+        kind: 'tree',
+        tier: 'far',
+        species,
+        singlePlane: true,
+        tint: 0xffffff,
+        farTintScale: 0.65,
+        hasAlphaTexture: false,
+        hasNormalTexture: true,
+        key: `tree:far:${species}`,
+      }
+      const handle = getFoliageMaterialHandle(spec)
+      const instances: FoliageSpriteInstance[] = list.map((candidate) => {
+        const regionIndex = findRegionIndex(IMPOSTER_REGIONS, candidate.variant)
+        return {
+          x: candidate.x,
+          y: candidate.y,
+          z: candidate.z,
+          rotation: candidate.rotation,
+          scale: candidate.scale / TREE_UNIT_SIZE,
+          region: IMPOSTER_REGIONS[regionIndex] ?? null,
+          cell: Math.min(3, regionIndex % 4),
+          roadProx: 0,
+        }
+      })
+      const mesh = createFoliageLayerMesh(instances, handle.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null)
+      tagArtifact(mesh)
+      farTreeRoot.add(mesh)
+      farTreeLayers.push(mesh)
+      farTreeInstances += instances.length
+    }
+    farTreeSignature = farRingSignature(quality)
+  }
+
+  function farRingSignature(quality: ResolvedProceduralLandscapeQuality): string {
+    const gridKey = grid ? `${grid.cols}x${grid.rows}` : 'none'
+    return `${quality}|${props.seed >>> 0}|${gridKey}`
+  }
+
   function createBatch(key: string): BatchEntry {
     const group = new THREE.Group()
     group.name = `__ProceduralLandscapeBatch_${key}`
@@ -997,8 +1192,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
+    const chunkKey = `t:${chunkX}:${chunkZ}`
     if (treeInstances >= tier.maxTreeInstances) {
       warn('tree-instance-budget-reached')
+      // 预算已满：把该分块记为已完成，避免流式永久重试同一个分块。
+      const empty = createBatch(chunkKey)
+      empty.centerX = (chunkX + 0.5) * tier.treeChunkSize
+      empty.centerZ = (chunkZ + 0.5) * tier.treeChunkSize
+      treeBatches.set(chunkKey, empty)
       return
     }
     const chunkSize = tier.treeChunkSize
@@ -1020,7 +1221,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       { grid, density: densityField, roadField: roadFieldData },
     )
     const kept = takeDensityPrefix(placements, tier.densityMultiplier)
+    const key = chunkKey
     if (!kept.length) {
+      // 记录空分块：否则每帧都会把邻近的空块当成待建任务重复规划，
+      // 一直吃掉流式预算，草/灌木层永远得不到构建机会。
+      const empty = createBatch(key)
+      empty.centerX = (chunkX + 0.5) * chunkSize
+      empty.centerZ = (chunkZ + 0.5) * chunkSize
+      treeBatches.set(key, empty)
       return
     }
     const nearDistance = props.forest.nearDistance ?? tier.treeNearDistance
@@ -1034,7 +1242,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         farPlacements.push(placement)
       }
     }
-    const key = `t:${chunkX}:${chunkZ}`
     const batch = createBatch(key)
     let added = 0
     added += addTreeLayer(batch, nearPlacements.filter((tree) => tree.species === 0), 'near', 0)
@@ -1084,14 +1291,19 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     )
     const grass = grassEnabled ? takeDensityPrefix(result.grass, tier.densityMultiplier) : []
     const bushes = bushesEnabled ? takeDensityPrefix(result.bushes, tier.densityMultiplier) : []
+    const key = `r:${entry.index}`
     if (!grass.length && !bushes.length) {
+      // 记录空分块，避免流式每帧重复规划（否则会一直占用预算）。
+      const empty = createBatch(key)
+      empty.centerX = entry.centerX
+      empty.centerZ = entry.centerZ
+      roadBatches.set(key, empty)
       return
     }
     if (grassInstances >= tier.maxGrassInstances) {
       warn('grass-instance-budget-reached')
       return
     }
-    const key = `r:${entry.index}`
     const batch = createBatch(key)
     const grassAdded = addSpriteLayer(batch, grass, 'grass')
     const bushAdded = addSpriteLayer(batch, bushes, 'bush')
@@ -1144,10 +1356,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
     }
     const kept = takeDensityPrefix(placements, tier.densityMultiplier)
+    const key = `g:${batchX}:${batchZ}`
     if (!kept.length) {
+      // 记录空分块（相机在网格外/全是陡坡等），避免流式每帧重试。
+      const empty = createBatch(key)
+      empty.centerX = baseX + CAMERA_GRASS_BATCH_SIZE * 0.5
+      empty.centerZ = baseZ + CAMERA_GRASS_BATCH_SIZE * 0.5
+      cameraGrassBatches.set(key, empty)
       return
     }
-    const key = `g:${batchX}:${batchZ}`
     const batch = createBatch(key)
     const added = addSpriteLayer(batch, kept, 'grass')
     if (added <= 0) {
@@ -1161,12 +1378,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     grassInstances += added
   }
 
-  function streamBatches(camera: THREE.Vector3): void {
+  /**
+   * 流式补齐相机周围的分块。返回 true 表示本轮预算用尽但仍有待建任务，
+   * 调用方应继续请求下一帧（否则相机静止时会停在半成品状态——
+   * 编辑器里会出现"只有相机附近一小块有植被"的现象）。
+   */
+  function streamBatches(camera: THREE.Vector3): boolean {
     if (!grid || !densityField) {
-      return
+      return false
     }
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
     let budget = tier.maxBuildTasksPerTick
+    let pendingLeft = false
 
     // Trees.
     {
@@ -1177,7 +1400,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       const treeMinZ = Math.floor((camera.z - treeRadius) / treeSize)
       const treeMaxZ = Math.floor((camera.z + treeRadius) / treeSize)
       const pendingTrees: Array<{ x: number; z: number }> = []
-      for (let chunkX = treeMinX; chunkX <= treeMaxX && pendingTrees.length <= budget * 4; chunkX += 1) {
+      const pendingTreeCap = budget * 4
+      for (let chunkX = treeMinX; chunkX <= treeMaxX && pendingTrees.length <= pendingTreeCap; chunkX += 1) {
         for (let chunkZ = treeMinZ; chunkZ <= treeMaxZ; chunkZ += 1) {
           const centerX = (chunkX + 0.5) * treeSize
           const centerZ = (chunkZ + 0.5) * treeSize
@@ -1202,10 +1426,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       })
       for (const task of pendingTrees) {
         if (budget <= 0) {
+          pendingLeft = true
           break
         }
         buildTreeChunk(task.x, task.z, camera)
         budget -= 1
+      }
+      if (pendingLeft === false && pendingTrees.length >= pendingTreeCap) {
+        // 待建列表被上限截断，可能还有更多分块未收集。
+        pendingLeft = true
       }
     }
 
@@ -1229,6 +1458,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           })
         for (const entry of pendingBuckets) {
           if (budget <= 0) {
+            pendingLeft = true
             break
           }
           buildRoadBucket(entry)
@@ -1271,12 +1501,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       })
       for (const task of pendingGrass) {
         if (budget <= 0) {
+          pendingLeft = true
           break
         }
         buildCameraGrassBatch(task.x, task.z)
         budget -= 1
       }
     }
+    return pendingLeft
   }
 
   function updateTreeMeshes(camera: THREE.Vector3): void {
@@ -1429,6 +1661,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.grassInstances = grassInstances
     stats.bushInstances = bushInstances
     stats.batchCount = treeBatches.size + roadBatches.size + cameraGrassBatches.size
+    stats.treeChunkCount = treeBatches.size
+    stats.roadChunkCount = roadBatches.size
+    stats.cameraGrassChunkCount = cameraGrassBatches.size
     stats.gridCols = grid?.cols ?? 0
     stats.gridRows = grid?.rows ?? 0
     stats.gridCellSize = grid?.cellSize ?? 0
@@ -1450,6 +1685,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.assetResidentBytes = storeStats.residentBytes
     stats.assetDownloadedBytes = storeStats.downloadedBytes
     stats.assetVariant = storeStats.variant
+    stats.farTreeInstances = farTreeInstances
   }
 
   function needsStreaming(camera: THREE.Vector3, nowMs: number): boolean {
@@ -1618,6 +1854,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       dirty.instances = false
       releaseAllBatches()
       forceStream = true
+      const farCamera = hooks.getCameraWorldPosition()
+      if (farCamera) {
+        if (farRingSignature(resolveQuality()) !== farTreeSignature) {
+          rebuildFarTreeRing(farCamera.x, farCamera.z)
+        }
+      } else {
+        // 相机未知时先作废签名，等下一帧拿到相机位置再重建。
+        farTreeSignature = ''
+      }
     }
 
     const camera = hooks.getCameraWorldPosition()
@@ -1627,7 +1872,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         lastStreamCamera.copy(camera)
         forceStream = false
         foliageUniforms.cameraPosition.value.copy(camera)
-        streamBatches(camera)
+        // 预算用尽但仍有余量任务时继续请求后续帧，直到视野内植被补齐。
+        forceStream = streamBatches(camera)
+      }
+      const anchorMoved =
+        !Number.isFinite(farTreeCenterX) ||
+        Math.hypot(camera.x - farTreeCenterX, camera.z - farTreeCenterZ) > FAR_TREE_REANCHOR_DISTANCE
+      if (farRingSignature(resolveQuality()) !== farTreeSignature || anchorMoved) {
+        rebuildFarTreeRing(camera.x, camera.z)
       }
       updateTreeMeshes(camera)
     }
@@ -1662,12 +1914,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (treeMeshManager && treeMeshManager.container.parent !== host) {
         treeMeshManager.container.removeFromParent()
       }
+      if (farTreeRoot && farTreeRoot.parent !== host) {
+        farTreeRoot.removeFromParent()
+      }
       hostObject = host
       if (hostObject) {
         updateHostSnapshot()
         ensureRoots()
         if (treeMeshManager) {
           hostObject.add(treeMeshManager.container)
+        }
+        if (farTreeRoot) {
+          hostObject.add(farTreeRoot)
         }
         gridFailed = false
         dirty.grid = true
@@ -1758,8 +2016,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (debugRoot && hostObject) {
         hostObject.remove(debugRoot)
       }
+      disposeFarTreeRing()
+      if (farTreeRoot && hostObject) {
+        hostObject.remove(farTreeRoot)
+      }
       foliageRoot = null
       debugRoot = null
+      farTreeRoot = null
       statsRegistry.delete(hooks.nodeId)
     },
     getStats(): ProceduralLandscapeRuntimeStats {

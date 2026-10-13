@@ -256,6 +256,27 @@ export function injectSlowroadsFog(shader: PatchedShader): boolean {
   return vertexOk && fragmentOk
 }
 
+/**
+ * 片元侧注入（天空/云层专用）：与 injectSlowroadsFogFragment 相同，但雾体
+ * 不受 srFogEnabled 影响——天空与云层本身就是「雾色背景」，editor 视口关闭雾
+ * 预览时它们仍须保持渐变，否则云层平面会以白色底铺满天空。
+ */
+export function injectSlowroadsSkyFogFragment(shader: PatchedShader): boolean {
+  let ok = true
+  bindSlowroadsFogUniforms(shader.uniforms)
+  if (shader.fragmentShader.includes('#include <fog_pars_fragment>')) {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <fog_pars_fragment>', FOG_PARS_FRAGMENT)
+  } else {
+    ok = false
+  }
+  if (shader.fragmentShader.includes('#include <fog_fragment>')) {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <fog_fragment>', SLOWROADS_SKY_FOG_FRAGMENT)
+  } else {
+    ok = false
+  }
+  return ok
+}
+
 /** 供自检/测试使用：确认当前注入文本包含关键记号。 */
 export function slowroadsFogInjectionSource(): {
   vertexPars: string

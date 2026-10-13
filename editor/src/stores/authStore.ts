@@ -8,7 +8,23 @@ import {
   type EditorLoginRequest,
   type EditorSessionStreamHandle,
 } from '@/api/editorSession'
-import router from '@/router'
+/**
+ * router 与 authStore 之间存在模块环
+ * （router/index → 视图 → scenesStore → authStore → router/index），
+ * 顶层 import 在部分入口求值顺序下会触发 TDZ：
+ * `Cannot access 'ScenePreviewView' before initialization`，导致 Preview 路由无法打开。
+ * 因此这里改为惰性加载。
+ */
+let appRouterPromise: Promise<typeof import('@/router')['default']> | null = null
+
+function getAppRouter(): Promise<typeof import('@/router')['default']> {
+  appRouterPromise ??= import('@/router').then((module) => module.default)
+  return appRouterPromise
+}
+
+function navigateHome(): void {
+  void getAppRouter().then((router) => router.replace('/'))
+}
 
 type StoredSession = {
   user: SessionUser
@@ -187,7 +203,7 @@ export const useAuthStore = defineStore('auth', () => {
     loginDialogVisible.value = false
     sessionNotice.value = message
     sessionNoticeVisible.value = true
-    void router.replace('/')
+    navigateHome()
   }
 
   function loadPreferences() {
@@ -404,7 +420,7 @@ export const useAuthStore = defineStore('auth', () => {
       clearSessionNotice()
       connectEditorSessionStream()
       hideLoginDialog()
-      await router.replace('/')
+      await getAppRouter().then((router) => router.replace('/'))
     } catch (error) {
       const rawMessage = (error as Error)?.message ?? '登录失败'
       const message =
@@ -424,13 +440,13 @@ export const useAuthStore = defineStore('auth', () => {
     if (!token.value) {
       clearSessionState()
       clearSessionNotice()
-      void router.replace('/')
+      navigateHome()
       return
     }
     const currentToken = token.value
     clearSessionState()
     clearSessionNotice()
-    void router.replace('/')
+    navigateHome()
     try {
       await logoutSession(currentToken)
     } catch (error) {

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { EnvironmentPreset } from '../core/environment'
-import { bindSlowroadsFogUniforms, injectSlowroadsFogFragment } from './fogInjection'
+import { bindSlowroadsFogUniforms, injectSlowroadsSkyFogFragment } from './fogInjection'
 
 /**
  * slowroads 云层（官方 shader 逐段移植）。
@@ -231,7 +231,9 @@ export function createSlowroadsClouds(texture: THREE.Texture): SlowroadsCloudsHa
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <uv_pars_fragment>', `#include <uv_pars_fragment>\n${UV_PARS_FRAGMENT}`)
-    injectSlowroadsFogFragment(shader)
+    // 云层与天空同属「雾色背景」：雾体不受 editor 雾预览开关影响，
+    // 否则关雾时云层平面会以白色底铺满天空（见 fogInjection 注释）。
+    injectSlowroadsSkyFogFragment(shader)
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <fog_fragment>',
       `#include <fog_fragment>\n${CLOUDS_FRAGMENT_BODY}`,
