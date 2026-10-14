@@ -3,6 +3,11 @@ import { SEASON_PARAMS, type SeasonParams } from '../core/seasonParams'
 import type { SeasonId } from '../core/seasonCatalog'
 import type { TreeDensityField } from '../core/placement'
 import { fbm2 } from '../core/noise'
+import {
+  LANDSCAPE_LIGHT_GLSL,
+  bindLandscapeLightingUniforms,
+  createLandscapeLightingUniforms,
+} from './landscapeLighting'
 
 /**
  * slowroads 地表着色（按官方片元栈移植，季节由 uniform 驱动）。
@@ -111,15 +116,30 @@ function createFallbackFadeTexture(seed: number): THREE.DataTexture {
 const VERTEX_SHADER = `
 #include <common>
 attribute float aRoadProx;
+uniform sampler2D uRockBump;
 varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
 varying float vRoadProx;
 varying float vViewDistance;
 #include <fog_pars_vertex>
 void main() {
-  vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-  vWorldPosition = worldPosition.xyz;
-  vWorldNormal = normalize(mat3(modelMatrix) * normal);
+  vec3 objectNormal = normalize(normal);
+  vec4 sourcePosition = modelMatrix * vec4(position, 1.0);
+  vec3 displaced = position;
+#ifndef TERRAIN_REDUCED
+  // 官方地形近路位移（displacement_vertex）：路肩附近沿法线加 rock_bump 微起伏，
+  // uv 取原始世界坐标的 /100；低于 16m 才生效，强度 0.8。
+  if (abs(aRoadProx) > 1e-5) {
+    float steepnessV = clamp((0.98 - dot(objectNormal, vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
+    float intensity = clamp((16.0 - aRoadProx) / 6.0, 0.0, 1.0) * 0.8;
+    displaced += objectNormal * ((texture2D(uRockBump, sourcePosition.xz / 100.0).x - 0.4)
+      * min(1.0, steepnessV * 3.0)) * intensity;
+  }
+#endif
+  vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
+  // 与官方一致：所有 UV/高度场仍取未位移的世界坐标。
+  vWorldPosition = sourcePosition.xyz;
+  vWorldNormal = normalize(mat3(modelMatrix) * objectNormal);
   vRoadProx = aRoadProx;
   vec4 mvPosition = viewMatrix * worldPosition;
   vViewDistance = -mvPosition.z;
@@ -155,9 +175,6 @@ uniform vec3 uPeakColB;
 uniform vec3 uRoadCol;
 uniform vec3 uGravelColor;
 uniform vec3 uRockColor;
-uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform vec3 uAmbient;
 uniform float uShowSurface;
 uniform float uShowRoad;
 uniform float uShowCanopy;
@@ -165,6 +182,9 @@ varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
 varying float vRoadProx;
 varying float vViewDistance;
+${LANDSCAPE_LIGHT_GLSL}
+/** 官方环境光树影调制（先乘当季 shadowFactor，再按官方 clamp 系数）。 */
+float plAmbientShadow = 1.0;
 #include <fog_pars_fragment>
 
 float saturate1(float value) { return clamp(value, 0.0, 1.0); }
@@ -180,6 +200,9 @@ vec4 terrainBlend(vec4 tx1, float w1, vec4 tx2, float w2, float depth) {
 void main() {
   vec3 surfaceNormal = normalize(vWorldNormal);
   vec3 color = uGrassColA;
+  // 官方地表掠射边缘光需要的量（在 uShowSurface / uUseTextures 分支里赋值）。
+  float plShadow = 0.0;
+  float plBlendVal = 0.0;
   if (uShowSurface > 0.5) {
     vec2 wUv = vWorldPosition.xz / 10.0;
     vec2 wUv100 = wUv / 10.0;
@@ -227,6 +250,9 @@ void main() {
       treeMask = clamp(texture2D(uDensityMap, (vWorldPosition.xz + uWorldHalf) / uWorldSize).r * 1.15, 0.0, 1.0);
     }
     float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
+    vShadow *= clamp(uShadowFactor, 0.0, 1.0);
+    plShadow = vShadow;
+    plAmbientShadow = srAmbientShadowMul(vShadow);
     float vTreeMask = vShadow;
     if (vTreeMask > 0.1) {
       vTreeMask = max(0.2, vTreeMask);
@@ -257,6 +283,8 @@ void main() {
 #ifndef TERRAIN_REDUCED
       blendVal += (1.0 - texture2D(uDetailNear, wUv100).r) * (0.7 + vLightGrass * 0.3);
 #endif
+      // 掠射边缘光使用的最终 blendVal（官方在材质的片元末尾读取同一变量）。
+      plBlendVal = blendVal;
 
       float variationVal = 0.0;
       float closeVariation = 0.0;
@@ -395,10 +423,23 @@ void main() {
     }
   }
 
+  // 官方地表掠射边缘光（mu chunk）：接近水平的视线方向上提亮，配合 darkFresnel 压暗背光。
+  float plFresnel = 1.0 - max(0.0, dot(normalize(cameraPosition - vWorldPosition), surfaceNormal));
+  float plLightFresnel = max(0.0, (plFresnel - 0.75)) * 4.0 * (1.0 - plBlendVal * 0.5);
+  plLightFresnel *= plLightFresnel;
+  plLightFresnel *= (1.0 - plShadow);
+  plLightFresnel *= uFresnelIntensity;
+  float plDarkFresnel = 1.0 - min(1.0, plFresnel * 1.3333);
+  plDarkFresnel *= uFresnelIntensity;
+  plDarkFresnel = 0.25 + min(0.25, max(0.0, plDarkFresnel - 0.25) * 0.5);
+  color *= 1.0 + plLightFresnel - plDarkFresnel;
+
+  // 官方光照与自发光合成：emissive = 季节色 × radiance（地表 radiance 全量）。
   float ndl = clamp(dot(surfaceNormal, uSunDir), -1.0, 1.0) * 0.5 + 0.5;
-  color *= uAmbient + uSunColor * ndl;
+  color = srLandscapeLight(color, ndl, plAmbientShadow, color * uRadiance);
 
   gl_FragColor = vec4(color, 1.0);
+  #include <tonemapping_fragment>
   #include <colorspace_fragment>
   #include <fog_fragment>
 }
@@ -468,13 +509,14 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
     uRoadCol: { value: new THREE.Color() },
     uGravelColor: { value: new THREE.Color(0x8a8378) },
     uRockColor: { value: new THREE.Color(0x6b6257) },
-    uSunDir: { value: new THREE.Vector3(0.42, 0.72, 0.28).normalize() },
-    uSunColor: { value: new THREE.Color(0.62, 0.6, 0.56) },
-    uAmbient: { value: new THREE.Color(0.55, 0.58, 0.62) },
     uShowSurface: { value: 1 },
     uShowRoad: { value: 1 },
     uShowCanopy: { value: 1 },
   }
+  // 官方景观光照 uniform（uSunDir/uSunColor/uAmbientColor/uHemiColor/uRadiance/
+  // uShadowFactor）：与 foliage/road/treeMeshes 同构，由 environmentController
+  // 按 preset 统一下发。之前缺这一组会让着色器里同名 uniform 恒为 0（地面过暗）。
+  bindLandscapeLightingUniforms(createLandscapeLightingUniforms(), uniforms)
   if (!options.reduced) {
     uniforms.uRockBump = { value: options.textures.rockBump }
     uniforms.uDetailNear = { value: options.textures.detailNear }

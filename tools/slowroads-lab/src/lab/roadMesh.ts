@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { TreeDensityField } from '../core/placement'
 import type { RoadProfile } from '../core/roadProfile'
+import { LANDSCAPE_LIGHT_GLSL } from './landscapeLighting'
 
 /**
  * 公路贴图带（slowroads road_single 网格移植）。
@@ -17,7 +18,6 @@ export interface RoadMeshOptions {
   density: TreeDensityField
   sunDir: THREE.Vector3
   sunColor: THREE.Color
-  ambient: THREE.Color
 }
 
 export interface RoadTextureSet {
@@ -41,12 +41,14 @@ uniform float uTextureStretch;
 varying vec2 vRoadUv;
 varying float vShadow;
 varying float vViewDistance;
+varying vec3 vWorldPosition;
 #include <fog_pars_vertex>
 void main() {
   vRoadUv = uv;
   vRoadUv.y /= uTextureStretch;
   vShadow = aShadow;
   vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+  vWorldPosition = worldPosition.xyz;
   vec4 mvPosition = viewMatrix * worldPosition;
   vViewDistance = -mvPosition.z;
   gl_Position = projectionMatrix * mvPosition;
@@ -58,13 +60,11 @@ const FRAGMENT_SHADER = `
 uniform sampler2D uMap;
 uniform sampler2D uOverlay;
 uniform float uHasOverlay;
-uniform float uShadowFactor;
-uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform vec3 uAmbient;
+${LANDSCAPE_LIGHT_GLSL}
 varying vec2 vRoadUv;
 varying float vShadow;
 varying float vViewDistance;
+varying vec3 vWorldPosition;
 #include <fog_pars_fragment>
 void main() {
   vec4 texelColor = texture2D(uMap, vRoadUv);
@@ -76,9 +76,22 @@ void main() {
     float overlayFactor = clamp(vShadow * uShadowFactor * 3.0, 0.0, 1.0);
     texelColor.rgb = mix(texelColor.rgb, overlayCol.rgb, overlayFactor * overlayCol.a);
   }
+  // 官方道路 = Lambert + 自发光（texelColor × radiance，与地表共享），
+  // 环境项按官方 vShadow 变体调制。
   float ndl = clamp(dot(vec3(0.0, 1.0, 0.0), uSunDir), -1.0, 1.0) * 0.5 + 0.5;
-  vec3 color = texelColor.rgb * (uAmbient + uSunColor * ndl);
+  // 官方路面掠射边缘光（ef chunk）：与地表同款 fresnel，但无 blendVal / uv 偏置。
+  float fresnel = 1.0 - max(0.0, dot(normalize(cameraPosition - vWorldPosition), vec3(0.0, 1.0, 0.0)));
+  float lightFresnel = max(0.0, (fresnel - 0.75)) * 4.0;
+  lightFresnel *= lightFresnel;
+  lightFresnel *= (1.0 - vShadow * uShadowFactor);
+  lightFresnel *= uFresnelIntensity;
+  float darkFresnel = 1.0 - min(1.0, fresnel * 1.3333);
+  darkFresnel *= uFresnelIntensity;
+  darkFresnel = 0.25 + min(0.25, max(0.0, darkFresnel - 0.25) * 0.5);
+  vec3 albedo = texelColor.rgb * (1.0 + lightFresnel - darkFresnel);
+  vec3 color = srLandscapeLight(albedo, ndl, srAmbientShadowMul(vShadow * uShadowFactor), texelColor.rgb * uRadiance);
   gl_FragColor = vec4(color, 1.0);
+  #include <tonemapping_fragment>
   #include <colorspace_fragment>
   #include <fog_fragment>
 }
@@ -151,9 +164,13 @@ export function createRoadMesh(options: RoadMeshOptions): RoadMeshHandle {
       uHasOverlay: { value: 0 },
       uShadowFactor: { value: 1 },
       uTextureStretch: { value: 2 },
-      uSunDir: { value: options.sunDir },
-      uSunColor: { value: options.sunColor },
-      uAmbient: { value: options.ambient },
+      // 官方光照：环境控制器按预设统一下发。
+      uSunDir: { value: options.sunDir.clone() },
+      uSunColor: { value: options.sunColor.clone() },
+      uAmbientColor: { value: new THREE.Color(0.22, 0.3, 0.12) },
+      uHemiColor: { value: new THREE.Color(1.39, 1.36, 1.18) },
+      uRadiance: { value: 2 },
+      uFresnelIntensity: { value: 1 },
     },
     vertexShader: VERTEX_SHADER,
     fragmentShader: FRAGMENT_SHADER,

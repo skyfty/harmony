@@ -17,10 +17,15 @@ import {
   getGrassEntries,
 } from './spriteRegions'
 import {
+  SEASON_CATALOG,
   SEASON_IDS,
+  SHARED_TEXTURES,
   TREE_OBJ_SPECIES_MODELS,
   collectAllTextureRefs,
   collectSeasonTextureRefs,
+  type SeasonCatalogEntry,
+  type SeasonId,
+  type SeasonTextureRef,
 } from './seasonCatalog'
 import { SEASON_INDEX } from './seasonCatalog'
 import { SEASON_PARAMS } from './seasonParams'
@@ -312,6 +317,88 @@ export function runSeasonCatalogChecks(input: SeasonCatalogCheckInput): SelfChec
   record('season params complete', paramsOk)
   record('winter flags', SEASON_PARAMS.winter.hasSnow && SEASON_PARAMS.winter.frozenWater)
 
+  // 5. Texture colour spaces mirror the official `U(url, aniso, wrap, colorSpace)`
+  //    call sites (grass conifer atlases decode sRGB; detail/noise/normal maps pass
+  //    through linearly; winter aliases grass === detailNear).
+  const colorSpaceNotes: string[] = []
+  const expectSpace = (ok: boolean, note: string): void => {
+    if (!ok) colorSpaceNotes.push(note)
+  }
+  for (const season of SEASON_IDS) {
+    const entry = SEASON_CATALOG[season]
+    expectSpace(entry.surface.grass.colorSpace === 'srgb', `${season}:grass`)
+    expectSpace(entry.surface.forest.colorSpace === 'srgb', `${season}:forest`)
+    expectSpace(entry.surface.heather.colorSpace === 'srgb', `${season}:heather`)
+    expectSpace(entry.surface.gravel.colorSpace === 'srgb', `${season}:gravel`)
+    expectSpace(entry.surface.rock.colorSpace === 'srgb', `${season}:rock`)
+    expectSpace(entry.surface.sand.colorSpace === 'srgb', `${season}:sand`)
+    expectSpace(entry.surface.detailFar.colorSpace === 'linear', `${season}:detailFar`)
+    expectSpace(entry.surface.detailNear.colorSpace === (season === 'winter' ? 'srgb' : 'linear'), `${season}:detailNear`)
+    expectSpace(entry.sprites.bushes.colorSpace === 'srgb', `${season}:bushes`)
+    expectSpace(entry.sprites.grassSprites.colorSpace === 'srgb', `${season}:grassSprites`)
+    expectSpace(entry.trees.broadleafD.colorSpace === 'srgb', `${season}:broadleafD`)
+    expectSpace(entry.trees.broadleafN.colorSpace === 'linear', `${season}:broadleafN`)
+    expectSpace(entry.trees.coniferM.colorSpace === 'srgb', `${season}:coniferM`)
+    expectSpace(entry.trees.coniferA.colorSpace === 'srgb', `${season}:coniferA`)
+    expectSpace(entry.imposters.mapA.colorSpace === 'srgb' && entry.imposters.mapB.colorSpace === 'srgb', `${season}:imposterMaps`)
+    expectSpace(entry.imposters.normA.colorSpace === 'linear' && entry.imposters.normB.colorSpace === 'linear', `${season}:imposterNormals`)
+    expectSpace(entry.road.base.colorSpace === 'srgb', `${season}:roadBase`)
+    if (entry.road.overlay) {
+      expectSpace(entry.road.overlay.colorSpace === 'srgb', `${season}:roadOverlay`)
+    }
+  }
+  record('texture color spaces match official loader', colorSpaceNotes.length === 0, colorSpaceNotes.slice(0, 6).join(', '))
+
+  // 6. One file may only declare one colour space: the official texture cache is
+  //    keyed by URL, so aliased slots (winter grass/detailNear) must agree.
+  const byLogicalId = new Map<string, { colorSpace: string; slot: string }>()
+  const aliasConflicts: string[] = []
+  const visitRef = (slot: string, ref: SeasonTextureRef): void => {
+    const previous = byLogicalId.get(ref.id)
+    if (!previous) {
+      byLogicalId.set(ref.id, { colorSpace: ref.colorSpace, slot })
+      return
+    }
+    if (previous.colorSpace !== ref.colorSpace) {
+      aliasConflicts.push(`${ref.id}: ${previous.slot}(${previous.colorSpace}) vs ${slot}(${ref.colorSpace})`)
+    }
+  }
+  const walkEntry = (entry: object, prefix: string): void => {
+    for (const [key, value] of Object.entries(entry)) {
+      if (!value || typeof value !== 'object') {
+        continue
+      }
+      const record = value as Record<string, unknown>
+      if (typeof record.id === 'string' && typeof record.colorSpace === 'string') {
+        visitRef(prefix ? `${prefix}.${key}` : key, value as SeasonTextureRef)
+        continue
+      }
+      walkEntry(value as object, prefix ? `${prefix}.${key}` : key)
+    }
+  }
+  for (const season of SEASON_IDS) {
+    walkEntry(SEASON_CATALOG[season] satisfies SeasonCatalogEntry, season)
+  }
+  walkEntry(SHARED_TEXTURES, 'shared')
+  record('texture aliases share one color space', aliasConflicts.length === 0, aliasConflicts.slice(0, 4).join(' | '))
+
+  // 7. Official foliage alpha tests (non-winter .5/.2/.6, winter .2/.3/.5).
+  const alphaExpectation: Record<SeasonId, readonly [number, number, number]> = {
+    spring: [0.5, 0.2, 0.6],
+    summer: [0.5, 0.2, 0.6],
+    autumn: [0.5, 0.2, 0.6],
+    winter: [0.2, 0.3, 0.5],
+  }
+  const alphaNotes: string[] = []
+  for (const season of SEASON_IDS) {
+    const params = SEASON_PARAMS[season]
+    const [grass, bush, imposter] = alphaExpectation[season]
+    if (params.grassAlphaTest !== grass || params.bushAlphaTest !== bush || params.imposterAlphaTest !== imposter) {
+      alphaNotes.push(season)
+    }
+  }
+  record('foliage alpha tests match official presets', alphaNotes.length === 0, alphaNotes.join(','))
+
   const failed = results.filter((result) => !result.ok)
   if (failed.length) {
     console.warn(`[slowroads-lab] season checks failed: ${failed.map((result) => result.name).join(', ')}`)
@@ -407,6 +494,72 @@ export function runEnvironmentChecks(): SelfCheckResult[] {
     console.warn(`[slowroads-lab] environment checks failed: ${failed.map((result) => result.name).join(', ')}`)
   } else {
     console.info(`[slowroads-lab] environment checks passed (${results.length})`)
+  }
+  return results
+}
+
+/** One landscape material reduced to what the uniform coverage check needs. */
+export interface MaterialUniformCheckInput {
+  name: string
+  vertexShader: string
+  fragmentShader: string
+  uniformKeys: readonly string[]
+}
+
+const UNIFORM_DECLARATION = /\buniform\s+(?:lowp\s+|mediump\s+|highp\s+)?\w+\s+(\w+)\s*(\[[^\]]*\])?\s*;/g
+
+function stripGlslComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ')
+}
+
+/** Shader 源码里声明的 uniform 名（用于对照 JS 侧 uniform 表）。 */
+export function collectUniformDeclarations(shaderSource: string): string[] {
+  const names: string[] = []
+  for (const match of stripGlslComments(shaderSource).matchAll(UNIFORM_DECLARATION)) {
+    if (match[1]) {
+      names.push(match[1])
+    }
+  }
+  return names
+}
+
+/**
+ * 材质 uniform 覆盖检查：着色器里声明的每个 uniform 都必须在 JS uniform 表里，
+ * 否则 three 不会上传它（运行时恒为 0/空）——「地面过暗」就是这类静默故障
+ * （地形着色器用了官方光照 uniform，但 JS 表里没建这几项）。
+ */
+export function runMaterialUniformCoverageChecks(materials: MaterialUniformCheckInput[]): SelfCheckResult[] {
+  const results: SelfCheckResult[] = []
+  const record = (name: string, ok: boolean, detail = ''): void => {
+    results.push({ name, ok, detail })
+    console.assert(ok, `[slowroads-lab uniform-check] ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+
+  const violations = new Set<string>()
+  for (const material of materials) {
+    const provided = new Set(material.uniformKeys)
+    const declared = new Set([
+      ...collectUniformDeclarations(material.vertexShader),
+      ...collectUniformDeclarations(material.fragmentShader),
+    ])
+    for (const name of declared) {
+      if (!provided.has(name)) {
+        violations.add(`${material.name}:${name}`)
+      }
+    }
+  }
+  const violationList = [...violations]
+  record(
+    'landscape material uniforms covered',
+    violationList.length === 0,
+    violationList.length ? `missing ${violationList.slice(0, 8).join(', ')}` : `materials=${materials.length}`,
+  )
+
+  const failed = results.filter((result) => !result.ok)
+  if (failed.length) {
+    console.warn(`[slowroads-lab] uniform checks failed: ${failed.map((result) => result.name).join(', ')}`)
+  } else {
+    console.info(`[slowroads-lab] uniform checks passed (${results.length}, materials=${materials.length})`)
   }
   return results
 }

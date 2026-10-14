@@ -3,7 +3,7 @@ import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
 
 /**
  * Slow Roads 季节地表着色（官方片元栈移植，注入到 GLB 地形的
- * MeshStandardMaterial，保留 CSM 阴影/PBR 光照）。
+ * MeshLambertMaterial —— 与官方同材质族，保留 CSM 阴影）。
  *
  * 片元顺序与 slowroads 一致：草色混合（grassColA/B × peakColA/B，由
  * noise_fine 的 fade 场驱动 light/dark grass 与 grassBlend）→ heather 混合 →
@@ -15,6 +15,11 @@ import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
  *  - 顶点提供世界坐标/法线 + 道路压平位移（沿用既有注入），雾改走共享三色雾；
  *  - 高度按真实米数（不再做 lab 的 ×4 合成世界换算），水线参考 = uPlWaterLevel；
  *  - GLB 航拍基色由 `baseMapMode`（replace/blend）与 `uPlSurfaceStrength` 控制。
+ *  - heather 与全部掩码公式与 slowroads.io 官方地形顶点着色器逐行一致
+ *    （`(height + fade1*350 - 60)/500` 的 smoothstep × screen 分布）。
+ *  - 光照/合成与官方一致：`totalEmissiveRadiance = 季节色 × radiance`，并走官方
+ *    合成补丁 `direct + indirect + direct × emissive`；环境项按官方变体乘
+ *    `1.75 - clamp(vShadow, 0.75, 1.0)`。
  */
 export interface ProceduralLandscapeSurfaceUniforms {
   uPlRoadField: THREE.IUniform<THREE.Texture | null>
@@ -33,6 +38,10 @@ export interface ProceduralLandscapeSurfaceUniforms {
   uPlRoadTint: THREE.IUniform<THREE.Color>
   uPlGravelTint: THREE.IUniform<THREE.Color>
   uPlRockSlope: THREE.IUniform<number>
+  /** 官方 lights.radiance：地表自发光强度（emissive = 季节色 × radiance）。 */
+  uPlRadiance: THREE.IUniform<number>
+  /** 官方 effects.shadowFactor：烘焙树影（vShadow）的季节系数。 */
+  uPlShadowFactor: THREE.IUniform<number>
   uPlFlattenInner: THREE.IUniform<number>
   uPlFlattenOuter: THREE.IUniform<number>
   uPlFlattenStrength: THREE.IUniform<number>
@@ -77,6 +86,8 @@ export function createProceduralLandscapeSurfaceUniforms(): ProceduralLandscapeS
     uPlRoadTint: { value: new THREE.Color(1, 1, 1) },
     uPlGravelTint: { value: new THREE.Color(1, 1, 1) },
     uPlRockSlope: { value: 0.35 },
+    uPlRadiance: { value: 2 },
+    uPlShadowFactor: { value: 1 },
     uPlFlattenInner: { value: 6 },
     uPlFlattenOuter: { value: 10 },
     uPlFlattenStrength: { value: 1 },
@@ -177,12 +188,15 @@ uniform float uPlRoadShoulderWidth;
 uniform float uPlSurfaceStrength;
 uniform float uPlUvScale;
 uniform float uPlWaterLevel;
+uniform float uPlHeightRange;
 uniform float uPlBaseMapBlend;
 uniform vec3 uPlGrassTint;
 uniform vec3 uPlForestTint;
 uniform vec3 uPlRoadTint;
 uniform vec3 uPlGravelTint;
 uniform float uPlRockSlope;
+uniform float uPlRadiance;
+uniform float uPlShadowFactor;
 uniform int uPlSeasonIndex;
 uniform vec3 uPlGrassColA;
 uniform vec3 uPlGrassColB;
@@ -195,6 +209,9 @@ varying float vPlViewDistance;
 
 float plSaturate(float value) { return clamp(value, 0.0, 1.0); }
 float plScreen(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
+
+/** 官方环境光树影调制（lights_fragment_end 后乘到 indirectDiffuse）。 */
+float plAmbientShadow = 1.0;
 
 vec4 plTerrainBlend(vec4 tx1, float w1, vec4 tx2, float w2, float depth) {
   float ma = max(tx1.a + w1, tx2.a + w2) - depth;
@@ -226,6 +243,7 @@ const FRAGMENT_BODY = `#include <map_fragment>
   float heightRel = vPlWorldPosition.y - uPlWaterLevel;
   float height = heightRel;
 
+  // ---- 官方 heather 分布（官方地形顶点着色器逐行一致）。 ----
   float vHeather = smoothstep(0.4, 1.0, ((height + vFade1 * 350.0) - 60.0) / 500.0);
   vHeather *= plScreen(vFade1, vFade0);
   vHeather = smoothstep(0.3, 0.6, vHeather);
@@ -248,7 +266,11 @@ const FRAGMENT_BODY = `#include <map_fragment>
   vHeather *= underRoadFactor;
 
   float treeMask = clamp(texture2D(uPlForestMask, plWorldUv).r * 1.15, 0.0, 1.0);
+  // 官方：vShadow = treeMask × 高度项，再乘当季 shadowFactor（顶点着色器）。
   float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
+  vShadow *= clamp(uPlShadowFactor, 0.0, 1.0);
+  // 官方环境光树影调制（官方 lights_fragment_begin_shadow 变体）。
+  plAmbientShadow = 1.75 - clamp(vShadow, 0.75, 1.0);
   float vTreeMask = vShadow;
   if (vTreeMask > 0.1) {
     vTreeMask = max(0.2, vTreeMask);
@@ -405,6 +427,9 @@ const FRAGMENT_BODY = `#include <map_fragment>
   #endif
 
   diffuseColor.rgb = mix(diffuseColor.rgb, plSeasonalColor, clamp(uPlSurfaceStrength, 0.0, 1.0));
+
+  // 官方地表自发光：季节色 × radiance（随后由官方合成补丁乘进直射项）。
+  totalEmissiveRadiance = plSeasonalColor * uPlRadiance;
 }`
 
 type MaterialPatchRecord = {
@@ -422,7 +447,7 @@ export interface ProceduralLandscapeSurfacePatch {
 }
 
 function installMaterialInjection(
-  material: THREE.MeshStandardMaterial,
+  material: THREE.MeshLambertMaterial,
   uniforms: ProceduralLandscapeSurfaceUniforms,
 ): void {
   const originalOnBeforeCompile = material.onBeforeCompile
@@ -442,6 +467,17 @@ function installMaterialInjection(
       .replace('#include <common>', reduced ? '#define PL_SURFACE_REDUCED\n' + FRAGMENT_HEADER : FRAGMENT_HEADER)
       .replace('#include <normal_fragment_begin>', NORMAL_BODY)
       .replace('#include <map_fragment>', FRAGMENT_BODY)
+      // 官方环境光树影调制（与官方 lights_fragment_begin_shadow 变体等效，
+      // 放在 lights_fragment_end 之后可保持 CSM 注入的 lights_fragment_begin 不变）。
+      .replace(
+        '#include <lights_fragment_end>',
+        '#include <lights_fragment_end>\n\treflectedLight.indirectDiffuse *= plAmbientShadow;',
+      )
+      // 官方自发光合成：emissive 乘进直射项（`direct × (1 + emissive)`）。
+      .replace(
+        'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
+        'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directDiffuse * totalEmissiveRadiance;',
+      )
     injectSlowroadsFog(shader)
     if (typeof originalOnBeforeCompile === 'function') {
       originalOnBeforeCompile.call(material, shader, renderer)
@@ -449,7 +485,7 @@ function installMaterialInjection(
   }
   material.customProgramCacheKey = () => {
     const baseKey = typeof originalProgramCacheKey === 'function' ? originalProgramCacheKey.call(material) : 'pl'
-    return `${baseKey}|pl-seasonal-surface-v2`
+    return `${baseKey}|pl-seasonal-surface-v4`
   }
   material.needsUpdate = true
 }
@@ -470,40 +506,41 @@ export function applyProceduralLandscapeSurfaceInjection(
     const sources = Array.isArray(original) ? original : [original]
     const clones: THREE.Material[] = []
     for (const source of sources) {
-      const standard = source as THREE.MeshStandardMaterial
-      let clone: THREE.Material
-      if (standard.isMeshStandardMaterial) {
-        clone = source.clone()
-      } else {
-        // 3D Tiles / unlit GLB 常用 MeshBasicMaterial（KHR_materials_unlit）。
-        // 直接替换为注入后的 MeshStandardMaterial：保留原贴图供 blend 模式，
-        // 并获得真实光照 + CSM 阴影。
-        const carrier = source as THREE.Material & {
-          map?: THREE.Texture | null
-          color?: THREE.Color
-          side?: THREE.Side
-          alphaMap?: THREE.Texture | null
-          transparent?: boolean
-          alphaTest?: number
-        }
-        const isRenderable = Boolean(carrier.map) || 'color' in carrier
-        if (!isRenderable) {
-          skippedMaterialCount += 1
-          clones.push(source)
-          continue
-        }
-        clone = new THREE.MeshStandardMaterial({
-          color: carrier.color ? carrier.color.clone() : new THREE.Color(0xffffff),
-          map: carrier.map ?? null,
-          alphaMap: carrier.alphaMap ?? null,
-          side: carrier.side ?? THREE.FrontSide,
-          transparent: carrier.transparent === true,
-          alphaTest: typeof carrier.alphaTest === 'number' ? carrier.alphaTest : 0,
-          roughness: 1,
-          metalness: 0,
-        })
+      // 官方地表材质族是 Lambert（无镜面）；无论来源是 Standard 还是 unlit 的
+      // MeshBasicMaterial（3D Tiles / KHR_materials_unlit），都重建为注入后的
+      // MeshLambertMaterial，并继承原贴图/透明等渲染参数（供 blend 基色模式）。
+      const carrier = source as THREE.Material & {
+        map?: THREE.Texture | null
+        color?: THREE.Color
+        side?: THREE.Side
+        alphaMap?: THREE.Texture | null
+        transparent?: boolean
+        alphaTest?: number
+        opacity?: number
+        vertexColors?: boolean
+        depthWrite?: boolean
+        depthTest?: boolean
       }
-      installMaterialInjection(clone as THREE.MeshStandardMaterial, uniforms)
+      const isRenderable = Boolean(carrier.map) || 'color' in source
+      if (!isRenderable) {
+        skippedMaterialCount += 1
+        clones.push(source)
+        continue
+      }
+      const clone = new THREE.MeshLambertMaterial({
+        color: carrier.color ? carrier.color.clone() : new THREE.Color(0xffffff),
+        map: carrier.map ?? null,
+        alphaMap: carrier.alphaMap ?? null,
+        side: carrier.side ?? THREE.FrontSide,
+        transparent: carrier.transparent === true,
+        alphaTest: typeof carrier.alphaTest === 'number' ? carrier.alphaTest : 0,
+        opacity: typeof carrier.opacity === 'number' ? carrier.opacity : 1,
+        vertexColors: carrier.vertexColors === true,
+        depthWrite: carrier.depthWrite !== false,
+        depthTest: carrier.depthTest !== false,
+      })
+      clone.name = source.name
+      installMaterialInjection(clone, uniforms)
       clones.push(clone)
       patchedMaterialCount += 1
     }

@@ -1,0 +1,3 @@
+
+    varying float vShadow;
+

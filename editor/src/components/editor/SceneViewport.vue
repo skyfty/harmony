@@ -104,7 +104,6 @@ import {
 import {
   createSceneCsmShadowRuntime,
   DEFAULT_SCENE_CSM_CONFIG,
-  resolveSceneCsmSunPositionFromAngles,
   type SceneCsmConfig,
   type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
@@ -353,10 +352,6 @@ import {
   createSlowroadsEnvironmentRuntime,
   type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
-import {
-  SLOWROADS_SUN_AZIMUTH_DEG,
-  SLOWROADS_SUN_ELEVATION_DEG,
-} from '@schema/slowroads/core/environment'
 import { setSlowroadsFogEnabled } from '@schema/slowroads/render/fogInjection'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
 import {
@@ -1106,6 +1101,8 @@ let gridHighlight: THREE.Group | null = null
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null
 let slowroadsAmbientLight: THREE.AmbientLight | null = null
+/** 官方三件套之一：半球光（sky = 预设 sun 色、ground = 黑、强度 = 预设 ambient 强度）。 */
+let slowroadsHemisphereLight: THREE.HemisphereLight | null = null
 let resizeObserver: ResizeObserver | null = null
 let rigidbodyColliderPreviousSelectionContext: string | null = null
 
@@ -1206,12 +1203,10 @@ function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
   })
 }
 
-function shouldUseSceneCsmShadows(): boolean {
-  return Boolean(scene && camera && shadowsActiveInViewport.value)
-}
-
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
-  if (!scene || !camera || !shouldUseSceneCsmShadows()) {
+  // CSM 运行时在三端常驻：阴影开关只控制投影，不再销毁太阳灯
+  // （与官方一致；否则关阴影档整片景观只剩环境光而发暗）。
+  if (!scene || !camera) {
     if (sceneCsmShadowRuntime) {
       disposeSceneCsmShadowRuntime()
     }
@@ -1228,6 +1223,7 @@ function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
     sceneCsmShadowRuntime.registerObject(rootGroup)
     sceneCsmShadowRuntime.registerObject(instancedMeshGroup)
   }
+  sceneCsmShadowRuntime.setActive(shadowsActiveInViewport.value)
   syncSceneCsmSunPosition()
   return sceneCsmShadowRuntime
 }
@@ -1238,16 +1234,27 @@ function disposeSceneCsmShadowRuntime(): void {
   sceneCsmRuntimeConfigKey = ''
 }
 
-/** 固定太阳方向定位（颜色/强度由 SR 预设通过 refreshLighting 下发）。 */
+/** 编辑器辅助材质不参与渲染器色调映射（Cineon 只作用于场景内容与景观）。 */
+function markHelperMaterialsUntoned(root: THREE.Object3D | null | undefined): void {
+  root?.traverse((object) => {
+    const material = (object as THREE.Mesh).material
+    if (!material) {
+      return
+    }
+    const entries = Array.isArray(material) ? material : [material]
+    for (const entry of entries) {
+      entry.toneMapped = false
+    }
+  })
+}
+
+/** 太阳定位：官方为「竖直向下 + 锚定载具」；编辑器以场景原点正上方 1000m
+ *  表示竖直方向（CSM 级联跟随相机），颜色/强度由 SR 预设下发。 */
 function syncSceneCsmSunPosition(): void {
   if (!sceneCsmShadowRuntime) {
     return
   }
-  const sunPosition = resolveSceneCsmSunPositionFromAngles(
-    SLOWROADS_SUN_AZIMUTH_DEG,
-    SLOWROADS_SUN_ELEVATION_DEG,
-    1000,
-  )
+  const sunPosition = new THREE.Vector3(0, 1000, 0)
   sceneCsmShadowRuntime.syncSun(
     sunPosition,
     DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
@@ -1605,13 +1612,10 @@ function applyRendererShadowSetting() {
   }
   const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
-  if (castShadows) {
-    const runtime = ensureSceneCsmShadowRuntime()
-    runtime?.setActive(true)
-    syncSceneCsmSunPosition()
-    return
-  }
-  sceneCsmShadowRuntime?.setActive(false)
+  // 太阳灯常驻（阴影开关只控制投影）：关阴影时仍保留官方预设光照。
+  const runtime = ensureSceneCsmShadowRuntime()
+  runtime?.setActive(castShadows)
+  syncSceneCsmSunPosition()
 }
 
 function resetEffectRuntimeTickers(): void {
@@ -10932,6 +10936,8 @@ watch(viewPointPreviewVisible, async (visible) => {
       preserveDrawingBuffer: false,
     })
     viewPointPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace
+    viewPointPreviewRenderer.toneMapping = THREE.CineonToneMapping
+    viewPointPreviewRenderer.toneMappingExposure = 1
   }
   syncViewPointPreviewRendererSize()
   viewPointPreviewDirty = true
@@ -14347,6 +14353,9 @@ function initScene() {
   renderer.shadowMap.enabled = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.type = THREE.PCFShadowMap
   renderer.outputColorSpace = THREE.SRGBColorSpace
+  // 官方 slowroads.io 使用 Cineon 色调映射（曝光 1）：地表/植被的胶片感来自它。
+  renderer.toneMapping = THREE.CineonToneMapping
+  renderer.toneMappingExposure = 1
 
   scene = new THREE.Scene()
   scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR)
@@ -14374,6 +14383,25 @@ function initScene() {
   gridHighlight = createGridHighlight()
   if (gridHighlight) {
     scene.add(gridHighlight)
+  }
+  // 编辑器辅助物（网格/坐标轴/选择轮廓/顶点提示/笔刷/预览）不参与 Cineon 色调映射，
+  // 保持 UI 颜色与亮度恒定（景观与场景物体按官方 Cineon 渲染）。
+  for (const helper of [
+    terrainGridHelper,
+    axesHelper,
+    brushMesh,
+    scatterAreaPreviewGroup,
+    terrainSculptPreviewGroup,
+    scatterPreviewGroup,
+    groundSelectionGroup,
+    dragPreviewGroup,
+    warpGatePlacementPreviewGroup,
+    instancedOutlineGroup,
+    wallDoorSelectionHighlightGroup,
+    vertexOverlayGroup,
+    gridHighlight,
+  ]) {
+    markHelperMaterialsUntoned(helper)
   }
   applyGridVisibility(gridVisible.value)
   applyAxesVisibility(axesVisible.value)
@@ -14413,6 +14441,8 @@ function initScene() {
       preserveDrawingBuffer: false,
     })
     viewPointPreviewRenderer.outputColorSpace = THREE.SRGBColorSpace
+    viewPointPreviewRenderer.toneMapping = THREE.CineonToneMapping
+    viewPointPreviewRenderer.toneMappingExposure = 1
     syncViewPointPreviewRendererSize()
   }
   ensureSceneCsmShadowRuntime()
@@ -14424,6 +14454,7 @@ function initScene() {
   transformControls.addEventListener('dragging-changed', draggingChangedHandler as any)
   transformControls.addEventListener('objectChange', handleTransformChange)
   scene.add(transformControls.getHelper())
+  markHelperMaterialsUntoned(transformControls.getHelper())
 
   postprocessing.init(width, height)
   updateOutlineSelectionTargets()
@@ -14521,19 +14552,24 @@ function ensureSlowroadsEnvironmentRuntime(): void {
     fogEnabled: true,
     applyLighting: (state) => {
       if (!slowroadsAmbientLight) {
-        slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 0.75)
+        slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 1)
         slowroadsAmbientLight.name = 'slowroads-ambient-light'
         activeScene.add(slowroadsAmbientLight)
       }
       slowroadsAmbientLight.color.copy(state.ambientColor)
       slowroadsAmbientLight.intensity = state.ambientIntensity
+      // 官方三件套的第三盏：半球光（sky = 预设 sun 色、ground = 黑）。
+      if (!slowroadsHemisphereLight) {
+        slowroadsHemisphereLight = new THREE.HemisphereLight('#ffffff', 0x000000, 1)
+        slowroadsHemisphereLight.name = 'slowroads-hemisphere-light'
+        activeScene.add(slowroadsHemisphereLight)
+      }
+      slowroadsHemisphereLight.color.copy(state.hemiColor)
+      slowroadsHemisphereLight.groundColor.setRGB(0, 0, 0)
+      slowroadsHemisphereLight.intensity = state.hemiIntensity
       if (sceneCsmShadowRuntime) {
-        // 太阳方向固定（lab 常量）；颜色/强度来自 SR 预设。
-        const sunPosition = resolveSceneCsmSunPositionFromAngles(
-          SLOWROADS_SUN_AZIMUTH_DEG,
-          SLOWROADS_SUN_ELEVATION_DEG,
-          1000,
-        )
+        // 官方太阳竖直向下（锚定载具的等价物 = 场景原点正上方）；颜色/强度取预设。
+        const sunPosition = new THREE.Vector3(0, 1000, 0)
         sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`)
       }
     },

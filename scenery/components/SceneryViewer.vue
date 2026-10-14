@@ -619,12 +619,7 @@ import {
   type SceneCsmConfig,
 } from '@harmony/schema/sceneCsmDefaults';
 import {
-  SLOWROADS_SUN_AZIMUTH_DEG,
-  SLOWROADS_SUN_ELEVATION_DEG,
-} from '@harmony/schema/slowroads/core/environment';
-import {
   createSceneCsmShadowRuntime,
-  resolveSceneCsmSunPositionFromAngles,
   type SceneCsmShadowRuntime,
 } from '@harmony/schema/sceneCsm';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
@@ -1787,6 +1782,8 @@ let pendingEnvironmentSettings: EnvironmentSettings | null = null;
 let activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
 let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null;
 let slowroadsAmbientLight: THREE.AmbientLight | null = null;
+/** 官方三件套之一：半球光（sky = 预设 sun 色、ground = 黑）。 */
+let slowroadsHemisphereLight: THREE.HemisphereLight | null = null;
 let currentSlowroadsEnvironmentState: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null = null;
 type CameraFrameSnapshot = {
   nowMs: number;
@@ -1935,6 +1932,8 @@ function shouldUseSceneCsmShadows(): boolean {
 
 function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
   const context = renderContext;
+  // CSM 运行时在小程序端也常驻：阴影档位只控制投影，不再销毁太阳灯
+  // （与官方一致；低端档 shadowsEnabled=false 时景观仍保持预设光照）。
   if (!context || !shouldUseSceneCsmShadows()) {
     if (sceneCsmShadowRuntime) {
       disposeSceneCsmShadowRuntime();
@@ -1980,18 +1979,24 @@ function ensureSlowroadsEnvironmentRuntime(): void {
     assetStore,
     applyLighting: (state) => {
       if (!slowroadsAmbientLight) {
-        slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 0.75);
+        slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 1);
         slowroadsAmbientLight.name = 'slowroads-ambient-light';
         context.scene.add(slowroadsAmbientLight);
       }
       slowroadsAmbientLight.color.copy(state.ambientColor);
       slowroadsAmbientLight.intensity = state.ambientIntensity;
+      // 官方三件套的第三盏：半球光（sky = 预设 sun 色、ground = 黑）。
+      if (!slowroadsHemisphereLight) {
+        slowroadsHemisphereLight = new THREE.HemisphereLight('#ffffff', 0x000000, 1);
+        slowroadsHemisphereLight.name = 'slowroads-hemisphere-light';
+        context.scene.add(slowroadsHemisphereLight);
+      }
+      slowroadsHemisphereLight.color.copy(state.hemiColor);
+      slowroadsHemisphereLight.groundColor.setRGB(0, 0, 0);
+      slowroadsHemisphereLight.intensity = state.hemiIntensity;
       if (sceneCsmShadowRuntime && currentDocument) {
-        const sunPosition = resolveSceneCsmSunPositionFromAngles(
-          SLOWROADS_SUN_AZIMUTH_DEG,
-          SLOWROADS_SUN_ELEVATION_DEG,
-          1000,
-        );
+        // 官方太阳竖直向下（锚定载具的等价物 = 场景原点正上方）。
+        const sunPosition = new THREE.Vector3(0, 1000, 0);
         sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`);
       }
     },
@@ -1999,16 +2004,12 @@ function ensureSlowroadsEnvironmentRuntime(): void {
   slowroadsEnvironment.setSettings(activeEnvironmentSettings.slowroads);
 }
 
-/** 固定太阳方向（lab 常量）；颜色/强度由 SR 预设经 refreshLighting 下发。 */
+/** 太阳定位：官方竖直向下；颜色/强度由 SR 预设经 refreshLighting 下发。 */
 function syncSceneCsmSunFromEnvironment(): void {
   if (!sceneCsmShadowRuntime || !currentDocument) {
     return;
   }
-  const sunPosition = resolveSceneCsmSunPositionFromAngles(
-    SLOWROADS_SUN_AZIMUTH_DEG,
-    SLOWROADS_SUN_ELEVATION_DEG,
-    1000,
-  );
+  const sunPosition = new THREE.Vector3(0, 1000, 0);
   sceneCsmShadowRuntime.syncSun(
     sunPosition,
     DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
@@ -21755,6 +21756,9 @@ async function ensureRendererContext(result: UseCanvasResult) {
     powerPreference: 'high-performance',
   });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // 官方 slowroads.io 使用 Cineon 色调映射（曝光 1）。
+  renderer.toneMapping = THREE.CineonToneMapping;
+  renderer.toneMappingExposure = 1;
   renderer.setPixelRatio(pixelRatio);
   baseRendererPixelRatio = pixelRatio;
   renderer.setSize(width, height, false);

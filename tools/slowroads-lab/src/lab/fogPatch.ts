@@ -11,6 +11,12 @@ import type { ResolvedFogParams } from '../core/environment'
  *    fogColorA/B/C、hazeHeight、hazeIntensity 字段（必须在任何材质创建前调用）；
  *  - `applyFogToMaterial()` / `applyFogToScene()` 把当前参数推给材质；
  *  - `updateHazeForCamera()` 复现官方按相机高度的 haze 层插值。
+ *
+ * 色彩空间（官方 `refreshFogUniforms` 等价物）：雾 chunk 被 three 排在
+ * `tonemapping_fragment → colorspace_fragment → fog_fragment` 之后，混色发生在
+ * **显示空间**，所以 fogColorA/B/C 必须按渲染输出色空间推入 —— 见
+ * `resolveFogUniformColorSpace()` / `writeFogUniformColors()`；直接推工作色空间
+ * （线性）分量会让雾与天空整体偏暗、偏饱和（粉/橙预设看上去"太红"）。
  */
 
 const FOG_PARS_VERTEX = /* glsl */ `
@@ -222,6 +228,38 @@ interface FogUniforms {
   fogDensity?: THREE.IUniform<number>
 }
 
+/** 一组三色雾颜色（工作色空间，对应官方 `fog.colorA/colorB/colorC`）。 */
+export interface FogColorSet {
+  colA: THREE.Color
+  colB: THREE.Color
+  colC: THREE.Color
+}
+
+/**
+ * 官方 three 构建里的 `Bs(i)`（`function Bs(i){return i.getRenderTarget()===null?i.outputColorSpace:$t}`，
+ * `$t` = ColorManagement 工作色空间）：渲染到画布时雾色按 `renderer.outputColorSpace`
+ * （默认 sRGB）推入，渲染到 render target 时才用工作色空间。lab 目前只渲染到画布，
+ * 这里仍保留官方判据，便于将来接后处理 render target。
+ */
+export function resolveFogUniformColorSpace(renderer: THREE.WebGLRenderer): THREE.ColorSpace {
+  // @types/three 把 outputColorSpace / workingColorSpace 都标成 string，这里收窄回 ColorSpace。
+  const colorSpace = renderer.getRenderTarget() === null
+    ? renderer.outputColorSpace
+    : THREE.ColorManagement.workingColorSpace
+  return colorSpace as THREE.ColorSpace
+}
+
+/**
+ * 官方 `refreshFogUniforms` 的等价物：
+ * `f.colorA.getRGB(m.fogColorA.value, Bs(i))` —— 把工作色空间的雾色换算成
+ * uniform 需要的输出色空间分量（渲染到画布时数值就等于预设 hex 的 sRGB 分量）。
+ */
+export function writeFogUniformColors(source: FogColorSet, target: FogColorSet, colorSpace: THREE.ColorSpace): void {
+  source.colA.getRGB(target.colA, colorSpace)
+  source.colB.getRGB(target.colB, colorSpace)
+  source.colC.getRGB(target.colC, colorSpace)
+}
+
 let installed = false
 
 /**
@@ -272,11 +310,14 @@ function materialFogUniforms(material: THREE.Material): FogUniforms | null {
   return uniforms as unknown as FogUniforms
 }
 
-/** Push the current fog params into one material (no-op when the material has no fog uniforms). */
+/**
+ * Push the current fog params into one material (no-op when the material has no fog uniforms).
+ * `colors` must already hold output-color-space components (see `writeFogUniformColors`).
+ */
 export function applyFogToMaterial(
   material: THREE.Material,
   params: ResolvedFogParams,
-  colors: { colA: THREE.Color; colB: THREE.Color; colC: THREE.Color },
+  colors: FogColorSet,
 ): void {
   const uniforms = materialFogUniforms(material)
   if (!uniforms) {
@@ -297,7 +338,7 @@ export function applyFogToMaterial(
 export function applyFogToScene(
   scene: THREE.Scene,
   params: ResolvedFogParams,
-  colors: { colA: THREE.Color; colB: THREE.Color; colC: THREE.Color },
+  colors: FogColorSet,
 ): void {
   scene.traverse((object) => {
     const material = (object as THREE.Mesh).material

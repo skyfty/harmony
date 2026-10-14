@@ -7,7 +7,15 @@ import {
   type EnvironmentState,
   type ResolvedFogParams,
 } from '../core/environment'
-import { applyFogToScene, slowroadsFogUniforms, updateHazeForCamera, type HazeState } from './fogPatch'
+import {
+  applyFogToScene,
+  resolveFogUniformColorSpace,
+  slowroadsFogUniforms,
+  updateHazeForCamera,
+  writeFogUniformColors,
+  type HazeState,
+} from './fogPatch'
+import { SEASON_PARAMS } from '../core/seasonParams'
 import type { CloudsHandle } from './clouds'
 import type { SkyHandle } from './sky'
 import type { SnowHandle } from './snow'
@@ -39,6 +47,8 @@ export interface EnvironmentToggles {
 export interface EnvironmentControllerOptions {
   scene: THREE.Scene
   camera: THREE.Camera
+  /** 用于解析雾色 uniform 的输出色空间（官方 `Bs(renderer)`）。 */
+  renderer: THREE.WebGLRenderer
   sky: SkyHandle
   clouds: CloudsHandle
   stars: StarsHandle
@@ -58,19 +68,31 @@ export interface EnvironmentController {
 export function createEnvironmentController(options: EnvironmentControllerOptions): EnvironmentController {
   const scene = options.scene
   const camera = options.camera
+  const renderer = options.renderer
 
   // three 只把它当 USE_FOG/FOG_EXP2 开关；颜色/密度由我们下发（官方也是自管）。
   scene.fog = new THREE.FogExp2(0x000000, 0.0013)
 
   const hazeState: HazeState = { inHaze: false }
+  /** 工作色空间（官方 `fog.colorA/B/C`）。 */
   const fogColors = {
+    colA: new THREE.Color(1, 1, 1),
+    colB: new THREE.Color(1, 1, 1),
+    colC: new THREE.Color(1, 1, 1),
+  }
+  /**
+   * 下发到 shader 的雾色：官方 `refreshFogUniforms` 用 `getRGB(..., Bs(renderer))`
+   * 换算到输出色空间，因为 fog chunk 在 tonemapping/colorspace 之后混色。
+   */
+  const fogUniformColors = {
     colA: new THREE.Color(1, 1, 1),
     colB: new THREE.Color(1, 1, 1),
     colC: new THREE.Color(1, 1, 1),
   }
   const sunOut = new THREE.Color()
   const ambientOut = new THREE.Color()
-  const ambientTerm = new THREE.Color()
+  const hemiOut = new THREE.Color()
+  const legacySun = new THREE.Color()
   let baseFog: ResolvedFogParams = resolveFogParams(resolveEnvironmentPreset({
     season: 'spring',
     timeOfDay: 'day',
@@ -85,12 +107,26 @@ export function createEnvironmentController(options: EnvironmentControllerOption
   let lastFog: ResolvedFogParams | null = null
   let elapsedSeconds = 0
 
-  const applyLights = (sunCol: string, sunIntensity: number, ambCol: string, ambIntensity: number): void => {
-    sunOut.set(sunCol).multiplyScalar(sunIntensity * LIGHT_EXPOSURE)
-    // 官方除了 ambient light 还有 hemisphere（color=sun.col, intensity=ambient.intensity,
-    // groundColor=0）；把它的上半球平均贡献折进 lab 的单一 ambient 项。
-    ambientTerm.set(ambCol).multiplyScalar(ambIntensity * LIGHT_EXPOSURE)
-    ambientOut.copy(ambientTerm).add(sunOut.clone().multiplyScalar(0.75))
+  /**
+   * 官方三件套光照（updateSky 等价物）：
+   *   sun       = preset.sun.col × preset.sun.intensity
+   *   ambient   = preset.ambient.col × preset.ambient.intensity
+   *   hemisphere = sky(preset.sun.col) × preset.ambient.intensity、ground = 黑
+   * 景观材质（带 uAmbientColor 的着色器）走官方值；水面等旧材质保留 0.21 标定。
+   */
+  const applyLights = (
+    sunCol: string,
+    sunIntensity: number,
+    ambCol: string,
+    ambIntensity: number,
+    radiance: number,
+    shadowFactor: number,
+    fresnelFactor: number,
+  ): void => {
+    sunOut.set(sunCol).multiplyScalar(sunIntensity)
+    ambientOut.set(ambCol).multiplyScalar(ambIntensity)
+    hemiOut.set(sunCol).multiplyScalar(ambIntensity)
+    legacySun.set(sunCol).multiplyScalar(sunIntensity * LIGHT_EXPOSURE)
     scene.traverse((object) => {
       const material = (object as THREE.Mesh).material
       if (!material) {
@@ -99,11 +135,31 @@ export function createEnvironmentController(options: EnvironmentControllerOption
       const entries = Array.isArray(material) ? material : [material]
       for (const entry of entries) {
         const uniforms = (entry as THREE.ShaderMaterial).uniforms as Record<string, THREE.IUniform> | undefined
-        if (!uniforms || !uniforms.uSunColor || !uniforms.uAmbient) {
+        if (!uniforms) {
           continue
         }
-        ;(uniforms.uSunColor.value as THREE.Color).copy(sunOut)
-        ;(uniforms.uAmbient.value as THREE.Color).copy(ambientOut)
+        if (uniforms.uAmbientColor && uniforms.uHemiColor) {
+          // 官方景观光照。
+          ;(uniforms.uSunDir?.value as THREE.Vector3 | undefined)?.set(0, 1, 0)
+          ;(uniforms.uSunColor.value as THREE.Color).copy(sunOut)
+          ;(uniforms.uAmbientColor.value as THREE.Color).copy(ambientOut)
+          ;(uniforms.uHemiColor.value as THREE.Color).copy(hemiOut)
+          if (uniforms.uRadiance) {
+            const scale = typeof entry.userData?.radianceScale === 'number' ? entry.userData.radianceScale : 1
+            uniforms.uRadiance.value = radiance * scale
+          }
+          if (uniforms.uShadowFactor) {
+            uniforms.uShadowFactor.value = shadowFactor
+          }
+          if (uniforms.uFresnelIntensity) {
+            uniforms.uFresnelIntensity.value = fresnelFactor
+          }
+          continue
+        }
+        if (uniforms.uSunColor && !uniforms.uAmbientColor) {
+          // 旧标定材质（水面高光等）：保持 0.21 曝光系数不变。
+          ;(uniforms.uSunColor.value as THREE.Color).copy(legacySun)
+        }
       }
     })
   }
@@ -124,6 +180,10 @@ export function createEnvironmentController(options: EnvironmentControllerOption
     } else {
       scene.fog = new THREE.FogExp2(0x000000, params.density)
     }
+    if (colorsDirty) {
+      writeFogUniformColors(fogColors, fogUniformColors, resolveFogUniformColorSpace(renderer))
+      colorsDirty = false
+    }
     // 内置材质（天空/云/星）的 uniforms 只存在于编译后的 shader 上，
     // 无法通过 material.uniforms 遍历，因此把当前值写入它们绑定的共享实例。
     slowroadsFogUniforms.fogNear.value = params.near
@@ -131,12 +191,11 @@ export function createEnvironmentController(options: EnvironmentControllerOption
     slowroadsFogUniforms.fogDensity.value = params.density
     slowroadsFogUniforms.hazeHeight.value = params.hazeHeight
     slowroadsFogUniforms.hazeIntensity.value = params.hazeIntensity
-    ;(slowroadsFogUniforms.fogColorA.value as THREE.Color).copy(fogColors.colA)
-    ;(slowroadsFogUniforms.fogColorB.value as THREE.Color).copy(fogColors.colB)
-    ;(slowroadsFogUniforms.fogColorC.value as THREE.Color).copy(fogColors.colC)
-    applyFogToScene(scene, params, fogColors)
+    ;(slowroadsFogUniforms.fogColorA.value as THREE.Color).copy(fogUniformColors.colA)
+    ;(slowroadsFogUniforms.fogColorB.value as THREE.Color).copy(fogUniformColors.colB)
+    ;(slowroadsFogUniforms.fogColorC.value as THREE.Color).copy(fogUniformColors.colC)
+    applyFogToScene(scene, params, fogUniformColors)
     lastFog = params
-    colorsDirty = false
   }
 
   return {
@@ -149,7 +208,15 @@ export function createEnvironmentController(options: EnvironmentControllerOption
     applyState(next: EnvironmentState): void {
       state = next
       const preset = resolveEnvironmentPreset(next)
-      applyLights(preset.lights.sun.col, preset.lights.sun.intensity, preset.lights.ambient.col, preset.lights.ambient.intensity)
+      applyLights(
+        preset.lights.sun.col,
+        preset.lights.sun.intensity,
+        preset.lights.ambient.col,
+        preset.lights.ambient.intensity,
+        preset.lights.radiance ?? 0,
+        SEASON_PARAMS[next.season].shadowFactor,
+        preset.lights.fresnelFactor ?? 1,
+      )
       fogColors.colA.set(preset.fog.colA)
       fogColors.colB.set(preset.fog.colB)
       fogColors.colC.set(preset.fog.colC ?? preset.fog.colB)
@@ -164,6 +231,7 @@ export function createEnvironmentController(options: EnvironmentControllerOption
       options.stars.setConfig(toggles.stars ? cachedStars : null)
       options.snow.setConfig(toggles.snow ? cachedSnow : null)
       options.getWater()?.setEnvironment({
+        base: preset.water.base,
         body: preset.water.body,
         highlight: preset.water.highlight,
         fresnelFactor: preset.lights.fresnelFactor,

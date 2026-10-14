@@ -3,6 +3,7 @@ import type { TreePlacement } from '../core/placement'
 import { TREE_OBJECT_MODELS } from '../core/seasonCatalog'
 import type { LabAssetStore } from './assetSource'
 import type { FoliageSharedUniforms } from './foliage'
+import { LANDSCAPE_LIGHT_GLSL } from './landscapeLighting'
 
 /**
  * 近树 3D 网格层（仿 slowroads NearTreeManager）。
@@ -73,6 +74,15 @@ const MESH_VERTEX_SHADER = `
 #include <common>
 varying vec2 vUv;
 varying vec3 vWorldNormal;
+/** 实例（含模型）世界基向量：对象空间法线图需要用它旋转到世界空间。 */
+varying mat3 vBasis;
+/** 官方共享近树材质（xr()）的密度压暗与视深权重。 */
+varying float vLeafBrightness;
+varying float vRadianceBlend;
+uniform sampler2D uDensityMap;
+uniform float uWorldSize;
+uniform float uWorldHalf;
+uniform float uShadowFactor;
 #include <fog_pars_vertex>
 void main() {
   #ifdef USE_INSTANCING
@@ -81,9 +91,18 @@ void main() {
     mat4 instModel = modelMatrix;
   #endif
   vec4 worldPosition = instModel * vec4(position, 1.0);
+  vBasis = mat3(instModel);
   vWorldNormal = normalize(mat3(instModel) * normal);
   vUv = uv;
   vec4 mvPosition = viewMatrix * worldPosition;
+  // 官方近树：vLeafBrightness = 1 - density × shadowFactor × saturate((10 - 模型高度m)/3)
+  // （lab 用与地形/树卡同源的树密度图近似官方 per-instance density 属性）。
+  vec3 instOrigin = instModel[3].xyz;
+  float density = clamp(texture2D(uDensityMap, (instOrigin.xz + uWorldHalf) / uWorldSize).r * 1.15, 0.0, 1.0);
+  float heightMeters = position.y * length(instModel[1].xyz);
+  vLeafBrightness = 1.0 - density * uShadowFactor * clamp((10.0 - heightMeters) / 3.0, 0.0, 1.0);
+  float viewDepth = -mvPosition.z;
+  vRadianceBlend = 1.0 - clamp((viewDepth - 50.0) / 200.0, 0.0, 1.0) * 0.33;
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
 }
@@ -95,39 +114,54 @@ uniform sampler2D uAlphaTex;
 uniform sampler2D uNormalTex;
 uniform float uHasAlphaTex;
 uniform float uHasNormalTex;
+uniform float uAlphaTest;
 uniform float uTreeDiscolouration;
 uniform float uHasSnow;
 uniform float uSpecies;
-uniform vec3 uSunDir;
-uniform vec3 uSunColor;
-uniform vec3 uAmbient;
+${LANDSCAPE_LIGHT_GLSL}
 varying vec2 vUv;
 varying vec3 vWorldNormal;
+varying mat3 vBasis;
+varying float vLeafBrightness;
+varying float vRadianceBlend;
 #include <fog_pars_fragment>
 void main() {
   vec4 texel = texture2D(uAtlas, vUv);
-  float alpha = mix(texel.a, texture2D(uAlphaTex, vUv).r, uHasAlphaTex);
-  if (alpha < 0.5) {
+  // 官方共享近树材质（xr()）：alphaMap 走绿通道，阔叶 alphaTest .5（贴图 alpha）、
+  // 针叶 alphaTest .4（alpha 图）。
+  float alpha = mix(texel.a, texture2D(uAlphaTex, vUv).g, uHasAlphaTex);
+  if (alpha < uAlphaTest) {
     discard;
   }
   vec3 color = texel.rgb;
   vec3 normal = normalize(vWorldNormal);
   if (uHasNormalTex > 0.5) {
+    // 官方近树材质 normalMapType = ObjectSpace：normal = normalize(normalMatrix * n)。
     vec3 n = texture2D(uNormalTex, vUv).xyz * 2.0 - 1.0;
-    // 树卡法线是视图空间风格的贴片法线；网格上按球面近似混入世界法线。
-    normal = normalize(normal + vec3(n.x, 0.0, n.z) * 0.5);
+    normal = normalize(vBasis * n);
   }
-  float leafEffect = step(color.b * 1.5, color.g);
-  color.rg *= 1.0 - (1.0 - uTreeDiscolouration) * leafEffect;
+  // 官方共享近树材质（lit26）：leafEffect 含 vLeafBrightness（密林下半部压暗），
+  // 阔叶按 discolouration 变色并带叶辉光；针叶只缩放绿通道（无辉光）。
+  float leafEffect = step(color.b * 1.5, color.g) * vLeafBrightness;
+  vec3 emissive = vec3(0.0);
+  if (uSpecies < 0.5) {
+    color.rg *= 1.0 - (1.0 - uTreeDiscolouration) * leafEffect;
+    emissive = vec3(color.rg * 8.0, 0.5) * uRadiance * leafEffect * vRadianceBlend;
+  } else {
+    color.g *= uTreeDiscolouration;
+  }
+  color *= vRadianceBlend;
   if (uHasSnow > 0.5 && uSpecies < 0.5) {
     float up = clamp(normal.y, 0.0, 1.0);
     color = mix(color, vec3(1.0), clamp(up * 1.4, 0.0, 1.0) * 0.8);
   }
+  // 官方近树网格与近树卡共用材质：合成走 direct×(1+emissive)+indirect。
   float ndl = clamp(dot(normal, uSunDir), -1.0, 1.0) * 0.5 + 0.5;
-  color *= uAmbient + uSunColor * ndl;
+  color = srLandscapeLight(color, ndl, 1.0, emissive);
   gl_FragColor = vec4(color, 1.0);
-  #include <fog_fragment>
+  #include <tonemapping_fragment>
   #include <colorspace_fragment>
+  #include <fog_fragment>
 }
 `
 
@@ -141,6 +175,10 @@ export interface TreeMeshTextures {
 export interface TreeMeshManagerOptions {
   assetStore: LabAssetStore
   shared: FoliageSharedUniforms
+  /** 树密度图（近似官方 per-instance density 属性，与 foliage 同源）。 */
+  densityMap: THREE.Texture
+  /** 密度图覆盖的世界尺寸（米）。 */
+  worldSize: number
 }
 
 export interface TreeMeshSeasonState {
@@ -183,12 +221,22 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
       uNormalTex: { value: null },
       uHasAlphaTex: { value: species === 1 ? 1 : 0 },
       uHasNormalTex: { value: species === 0 ? 1 : 0 },
+      // 官方 xr()：阔叶（map alpha）alphaTest .5，针叶（alpha map）alphaTest .4。
+      uAlphaTest: { value: species === 0 ? 0.5 : 0.4 },
       uTreeDiscolouration: { value: 1 },
       uHasSnow: { value: 0 },
       uSpecies: { value: species },
-      uSunDir: options.shared.sunDir,
-      uSunColor: options.shared.sunColor,
-      uAmbient: options.shared.ambient,
+      // 官方光照：环境控制器按预设统一下发（树网格无自发光）。
+      uSunDir: { value: new THREE.Vector3(0, 1, 0) },
+      uSunColor: { value: new THREE.Color(0.84, 0.82, 0.73) },
+      uAmbientColor: { value: new THREE.Color(0.22, 0.3, 0.12) },
+      uHemiColor: { value: new THREE.Color(1.39, 1.36, 1.18) },
+      uRadiance: { value: 0 },
+      uShadowFactor: { value: 1 },
+      uFresnelIntensity: { value: 1 },
+      uDensityMap: { value: options.densityMap },
+      uWorldSize: { value: options.worldSize },
+      uWorldHalf: { value: options.worldSize * 0.5 },
     },
     vertexShader: MESH_VERTEX_SHADER,
     fragmentShader: MESH_FRAGMENT_SHADER,
@@ -197,6 +245,9 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
   }))
   materials[0]!.name = 'slowroads-near-tree-broadleaf-material'
   materials[1]!.name = 'slowroads-near-tree-conifer-material'
+  // 官方近树材质 radiance = lights.radiance / 2（叶辉光与树卡同源）。
+  materials[0]!.userData.radianceScale = 0.5
+  materials[1]!.userData.radianceScale = 0.5
 
   const meshes: THREE.InstancedMesh[][] = [[], []]
   for (const species of [0, 1] as const) {

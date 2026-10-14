@@ -8,6 +8,16 @@
  * inside the id so uploaded assets can be deduplicated by the server
  * (`sourceLocalAssetId` in the asset bundle manifest).
  *
+ * Colour spaces mirror the official loader `U(url, anisotropy = 4, wrap = repeat,
+ * colorSpace = "srgb")` call sites: the grass fibre, surface colour maps, sprite
+ * atlases and tree atlases decode as sRGB, while detail/noise/normal/height maps
+ * pass through linearly ("srgb-linear"). The conifer tree set is the one wrap
+ * exception: `winter/spring/..._trees_1_m` and `_trees_1_a` load with
+ * RepeatWrapping because the near-tree OBJ tiles its V coordinate (~0..4.9).
+ * Winter aliases `grass` and `detailNear` to the same file, and the official
+ * texture cache keeps the first (grass => sRGB) request, so both slots must
+ * declare the same colour space here.
+ *
  * This module deliberately avoids DOM / three / bundler globs so it can move
  * into `schema/proceduralLandscape` unchanged; the lab resolves `logicalId` to
  * a URL through its asset source, the editor through the asset resolver.
@@ -120,7 +130,8 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
     id: 'spring',
     index: SEASON_INDEX.spring,
     surface: {
-      grass: linear('grass.15f2422c'),
+      // 官方：U(i.maps.grass, 4, void 0, void 0) → Repeat + srgb（含草纤维底色）。
+      grass: tex('grass.15f2422c'),
       forest: tex('forest_spring.a81cef17'),
       heather: tex('summer_heather_05.5f56558d'),
       gravel: tex('gravel_02.8367ed2c'),
@@ -137,7 +148,8 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       broadleafD: tex('spring_trees_0.aee94219'),
       broadleafN: tex('spring_trees_0_n.8e3ce8fa', 'normal', 'linear'),
       coniferM: tex('spring_trees_1_m.29ae06f6'),
-      coniferA: tex('spring_trees_1_a.e8f53ceb', 'alpha', 'linear'),
+      // 官方针叶 alpha：U(trees[1].n, 4, Repeat) → 默认 srgb 解码（OBJ 的 v 会绕回，必须 Repeat）。
+      coniferA: tex('spring_trees_1_a.e8f53ceb', 'alpha', 'srgb'),
     },
     imposters: {
       mapA: tex('spring_imposters_0_d.2e67db77'),
@@ -154,7 +166,7 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
     id: 'summer',
     index: SEASON_INDEX.summer,
     surface: {
-      grass: linear('grass.15f2422c'),
+      grass: tex('grass.15f2422c'),
       forest: tex('forest_01.b82a9e7e'),
       heather: tex('summer_heather_05.5f56558d'),
       gravel: tex('gravel.0ee4475c'),
@@ -171,7 +183,7 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       broadleafD: tex('summer_trees_0.d5cc9742'),
       broadleafN: tex('summer_trees_0_n.011e666e', 'normal', 'linear'),
       coniferM: tex('summer_trees_1_m.866c5db4'),
-      coniferA: tex('summer_trees_1_a.c88ed1f2', 'alpha', 'linear'),
+      coniferA: tex('summer_trees_1_a.c88ed1f2', 'alpha', 'srgb'),
     },
     imposters: {
       mapA: tex('summer_imposters_0_d.6a3261f4'),
@@ -187,7 +199,7 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
     id: 'autumn',
     index: SEASON_INDEX.autumn,
     surface: {
-      grass: linear('grass.15f2422c'),
+      grass: tex('grass.15f2422c'),
       forest: tex('forest_autumn.55ca08bd'),
       heather: tex('autumn_heather.d890b430'),
       gravel: tex('gravel.0ee4475c'),
@@ -204,7 +216,7 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       broadleafD: tex('autumn_trees_0.2fe560b0'),
       broadleafN: tex('autumn_trees_0_n.a664e3e1', 'normal', 'linear'),
       coniferM: tex('autumn_trees_1_m.2cd39e32'),
-      coniferA: tex('autumn_trees_1_a.2aa926cb', 'alpha', 'linear'),
+      coniferA: tex('autumn_trees_1_a.2aa926cb', 'alpha', 'srgb'),
     },
     imposters: {
       mapA: tex('autumn_imposters_0_d.4c4b38fd'),
@@ -221,13 +233,14 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
     id: 'winter',
     index: SEASON_INDEX.winter,
     surface: {
-      grass: linear('winter_grass.2126ead2'),
+      // 官方冬季 grass 与 detailNear 指向同一文件（先加载的 grass 请求决定解码）：srgb。
+      grass: tex('winter_grass.2126ead2'),
       forest: tex('forest_winter.0710a850'),
       heather: tex('winter_heather.b9aeb76f'),
       gravel: tex('winter_gravel.03b9e4e9'),
       rock: tex('winter_rock.674a5de1'),
       sand: tex('winter_gravel.03b9e4e9'),
-      detailNear: linear('winter_grass.2126ead2'),
+      detailNear: tex('winter_grass.2126ead2'),
       detailFar: linear('ground_detail_far_winter.003963d8'),
     },
     sprites: {
@@ -238,7 +251,7 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       broadleafD: tex('winter_trees_0.99189e5d'),
       broadleafN: tex('winter_trees_0_n.24c5f705', 'normal', 'linear'),
       coniferM: tex('winter_trees_1_m.7ee3e863'),
-      coniferA: tex('winter_trees_1_a.142fe383', 'alpha', 'linear'),
+      coniferA: tex('winter_trees_1_a.142fe383', 'alpha', 'srgb'),
     },
     imposters: {
       mapA: tex('winter_imposters_0_d.ce1a9b7d'),
@@ -264,8 +277,8 @@ export const SHARED_TEXTURES = {
   rockBump: linear('rock_bump.8f8c68ad'),
   /** water surface waves. */
   seaWaves: linear('sea_waves.63ff8729'),
-  /** cloud sheet used by the weather system (slowroads `clouds_01`). */
-  clouds: tex('clouds_01.700a3fdb'),
+  /** cloud sheet used by the weather system (official loads `clouds_01` srgb-linear). */
+  clouds: linear('clouds_01.700a3fdb'),
   /** wooden barrier rail (not part of the slowroads download folder; committed supplement). */
   barrier: tex('spring_wall_barrier_wood.29edf0af'),
 } as const satisfies Record<string, SeasonTextureRef>

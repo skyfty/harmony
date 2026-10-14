@@ -83,7 +83,8 @@ export const DEFAULT_LAB_SETTINGS: LabSettings = {
   windStrength: 1,
   roadWidth: 7,
   flattenBand: 10,
-  nearDistance: 120,
+  // 官方 graphics preset（view distance = medium）的近树卡 dissolveFar = lod1Horizon(19) × 10。
+  nearDistance: 190,
   nearTreeRadius: 90,
   cruiseSpeed: 14,
 }

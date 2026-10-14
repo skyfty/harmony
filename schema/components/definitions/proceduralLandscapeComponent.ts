@@ -44,7 +44,11 @@ class ProceduralLandscapeComponent extends Component<ProceduralLandscapeComponen
         if (!environment) {
           return null
         }
-        return { season: environment.season }
+        return {
+          season: environment.season,
+          timeOfDay: environment.timeOfDay,
+          weather: environment.weather,
+        }
       },
     })
     // The context already carries the persisted props (for example when a saved

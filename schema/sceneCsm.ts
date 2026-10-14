@@ -425,10 +425,12 @@ export class SceneCsmShadowRuntime {
     if (!this.csm) {
       return
     }
+    // 阴影开关只控制投影：官方（slowroads.io）的太阳灯始终点亮，关阴影不应
+    // 把太阳强度置 0（否则低端档/关阴影档整片景观只剩环境光而发暗）。
     this.csm.lights.forEach((light) => {
       light.castShadow = active && this.shadowEnabled
-      light.visible = active
-      light.intensity = active ? this.csm!.lightIntensity : 0
+      light.visible = true
+      light.intensity = this.csm!.lightIntensity
     })
     if (activeChanged && active) {
       this.markShadowsDirty()
@@ -445,7 +447,7 @@ export class SceneCsmShadowRuntime {
     } else {
       tempSunDirection.normalize().multiplyScalar(-1)
     }
-    const resolvedIntensity = this.active ? Math.max(0, intensity) : 0
+    const resolvedIntensity = Math.max(0, intensity)
     this.csm.lightDirection.copy(tempSunDirection)
     this.csm.lightIntensity = resolvedIntensity
     if (color !== undefined) {
@@ -456,7 +458,7 @@ export class SceneCsmShadowRuntime {
       light.color.copy(this.csm!.lightColor)
       light.intensity = this.csm!.lightIntensity
       light.castShadow = this.active && this.shadowEnabled
-      light.visible = this.active
+      light.visible = true
     })
     this.markShadowsDirty()
 

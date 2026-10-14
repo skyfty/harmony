@@ -100,8 +100,11 @@ lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4
 
 环境状态 = **季节 × 时间（早/日/暮/夜）× 天气（晴/阴）**，32 套官方预设驱动：
 
-- **光照**：sun/ambient 颜色与强度（官方 hemisphere 折算进 ambient 项），统一曝光
-  标定系数使「白天·晴」与移植前观感一致，其余组合继承官方相对比例。
+- **光照**：与官方 `updateSky()` 一致的三件套 —— `DirectionalLight`（预设 sun 色/强度，
+  竖直向下）、`AmbientLight`（预设 ambient 色/强度）、`HemisphereLight`（sky = 预设
+  sun 色、ground = 黑、强度 = 预设 ambient 强度）；材质按官方 Lambert + `radiance`
+  自发光合成（`direct×(1+emissive)+indirect`），渲染器用官方 Cineon 色调映射（曝光 1）。
+  详见 `reference/official/OFFICIAL-RENDERING.md`（官方包体反推基准）。
 - **三色高度雾**：直接替换 three 的 `ShaderChunk.fog_*`（`src/lab/fogPatch.ts`），
   圆柱雾距、噪声雾顶、正负 haze 层、A/B 视线混色 + C 色去饱和；每帧按相机高度
   复现官方 haze 插值。视距 1000m，雾距 = 视距 × 预设比例，密度 = √5/fogFar。
@@ -177,25 +180,233 @@ lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4
 ## 自检与验收
 
 - 启动时运行纯函数自检（噪声/道路确定性、放置过滤、护栏间距）+ 季节目录校验
-  （四季贴图槽位齐全、区域表格位语义、调色板与特效参数、模型文件齐备）。
-- 验收截图（同种子同机位）：春（绿野+路缘苔痕/花丛）、夏（深绿、路面无 overlay）、
-  秋（黄褐+落叶 overlay）、冬（雪地/雪路/积雪树/冻水）；另含 3D 近树分级过渡与
-  兼容模式对照。截图与日志在会话记录中，服务器模式与本地模式画面一致。
+  （四季贴图槽位齐全、区域表格位语义、调色板与特效参数、模型文件齐备、贴图色彩
+  空间表 vs 官方装载表、同文件多槽位色彩空间一致、逐季 alphaTest 表）+ 环境校验
+  （32 套预设、星空/降雪不变量）+ **景观材质 uniform 覆盖校验**（扫描地形/道路/
+  水面/植被/近树所有 `slowroads-*` ShaderMaterial，着色器里声明的 uniform 必须在
+  JS uniform 表里；这项专防「地面过暗」那类静默归零故障，见下节）+ **雾色色彩空间
+  校验**（`fogColorA/B/C` 必须是渲染输出色空间分量，见第四批）。
+- 验收截图（同种子 456268425、同机位、白天晴，`docs/`）：`season-spring.png`
+  （绿野+路缘苔痕/花丛）、`season-summer.png`、`season-autumn.png`（黄褐+落叶
+  overlay）、`season-winter.png`（雪地/雪路/积雪树/冻水）；官方同 code
+  （`#A2-3fbae343@0`，STYLE 菜单逐季）参考图在 `docs/official/season-*-day-clear.png`。
+  官方早/晚对照（同一在路机位、STYLE 逐项切换）在
+  `docs/official/season-{spring,summer,autumn}-{morning,evening}-clear.png`。
+  另含 3D 近树分级过渡与兼容模式对照。服务器模式与本地模式画面一致。
+  （2026-10 第三批修复后，全部验收图已按同一固定机位重拍，见下节验收数据。）
 - 天气/时间验收截图（`docs/`，种子 456268425 同机位）：`env-spring-day-clear`
   （标定回归，对 `season-spring.png` 观感一致、云层为新增）、`env-spring-morning-clear`、
   `env-spring-evening-clear`、`env-spring-night-clear`（星空）、`env-spring-day-overcast`、
   `env-winter-day-overcast`（降雪）、`env-winter-night-overcast`、`env-winter-night-clear`
   （冬季星空）、`env-compat-2048`（兼容模式，常驻 76MB）、`env-server-mode`
-  （服务器下载 25MB 已下载，云层照常加载）。
+  （服务器下载 25MB 已下载，云层照常加载）。`env-compat-2048` 自第三批起改用
+  标准路景机位（原为树间视角）。
+  （2026-10 第四批（雾色色彩空间）后，`env-*.png` / `season-*.png` / `preview.png`
+  已按同一固定机位全部重拍；`env-server-mode.png` 的素材 URL 显示为 8098 —— 本次
+  会话里 8097 被重复启动的 dev server 占用，素材服务另起在 8098，下载链路一致。）
+
+## 渲染对齐官方（地表 + 植被 × 四季，2026-10 修复）
+
+对照对象：slowroads.io 线上包体（`%TEMP%/sr`：U(url, aniso, wrap, colorSpace)
+装载表、`xr()` 近树材质、lit12/lit15/lit26/lit45 等着色器片段）与线上同 code 截图
+（`docs/official/season-*-day-clear.png`，code `A2-3fbae343@0`）。已修复的确定性缺陷
+（均有官方调用点证据）：
+
+1. **地面过暗（主因）**：`terrainMaterial.ts` 用了 `LANDSCAPE_LIGHT_GLSL` 的官方光照
+   uniform，但 JS uniform 表里没建 `uAmbientColor/uHemiColor/uRadiance/uShadowFactor`，
+   运行时全为 0；环境控制器又因此把地形当"旧材质"，只下发 `sunColor × 0.21`。
+   净结果：地形无环境光/半球光/自发光，实测草地 RGB≈(46,74,26)，官方≈(148,148,74)。
+   修复：地形与 foliage/road/treeMeshes 同构（`bindLandscapeLightingUniforms`），
+   走官方 `direct×(1+emissive)+indirect`；太阳方向恢复竖直向下 `(0,1,0)`。
+2. **草纤维贴图色彩空间**：官方 `U(maps.grass, 4, void 0, void 0)` = Repeat + srgb，
+   lab 原标 linear → 改正；冬季 `grass`/`detailNear` 是同一文件，均标 srgb（对应官方
+   纹理缓存单实例、"先加载者生效"）。
+3. **针叶近景贴图**：官方 `trees[1]` 的 `_m` 与 `_a` 都是 RepeatWrapping（OBJ 的 V 会
+   绕回到 ~4.9），`_a` 走默认 srgb；lab 原为 clamp + linear → 已改正。
+4. **树卡/远景树公式**：leafEffect 现为 `step(b*1.5, g) * vLeafBrightness`；补上
+   `diffuse *= vRadianceBlend`；删除自创的 `farTintScale` 与每实例随机 `vTint`；
+   裁切阈值改为官方逐层/季值（草丛 .5/冬 .2、灌木 .2/冬 .3、近树卡阔叶 .5/针叶 .4、
+   远景树 .6/冬 .5），灌木另加随视深 0.5→0.2 的 alpha。
+5. **近树 3D 网格**：针叶 alpha 图采样绿通道、alphaTest .4、Repeat + srgb；阔叶法线
+   改为官方 ObjectSpace 法线图（`normal = normalize(basis * mapN)`）。修复前实测近树
+   脚下会贴出"树形暗色图案"（图层开关定位到近树 3D 层），修复后消失。
+6. **灌木/草丛**：灌木去掉 dapple 噪声与随机 tint，自发光改为官方 `texel × radiance ×
+   vAO`（`vAO = clamp(position.y, 0, .5) * 2`）。
+7. **云贴图**：官方为 srgb-linear，lab 原传 srgb → 改正。
+
+验收数据（同机位前景草地区域均值，sRGB）：修复前 lab (46,74,26) → 修复后地面-only
+(113,145,62)、含草丛 (109,153,55)，官方同条件 (146,146,74)；明度/色相进入同一区间。
+剩余差异来自两边世界地形高程与调色板分布不同（官方取景在高地 peak 色区，lab 取景在
+河谷 grass 色区；公式与参数一致）。
+
+## 渲染对齐官方（第二批：边缘光 / LOD / 水面 / 星空）
+
+在第一批（光照接线、色彩空间、alphaTest）之上，把此前记为「未实现的官方高级特性」
+一并补齐（同样按官方 chunk 逐行移植）：
+
+1. **地表掠射边缘光**（官方 `mu` chunk）：`fresnelFactor` 随预设下发（
+   `uFresnelIntensity`），接近水平视线时提亮、背光侧 darkFresnel 压暗；`blendVal`
+   与 `vShadow`（树影）参与衰减。
+2. **近路地形位移**：路肩 16m 内按官方 `displacement_vertex` 沿法线加 `rock_bump`
+   微起伏（强度 0.8、uv = 世界坐标/100，`#ifndef TERRAIN_REDUCED` 保护兼容模式）。
+3. **草丛边缘光**（官方 `Zu`）：草尖在掠射角提亮（`clamp(uv.y*3,.7,.9)`、
+   `min(1, cameraDistSq/100)`、`(1-vShadow)`、`max(doColor,.5)`）+ darkFresnel；
+   草丛/灌木改用**每实例 groundNormal**（lab 从高度场采样）受光；per-instance shadow
+   用 lab 的树密度图近似官方世界生成器的 `shadow` 属性。
+4. **树卡三级 LOD 按官方 dissolve 交接**：`近树卡距离`（默认 190 = 官方 view
+   distance medium 的 `lod1Horizon(19)×10`）推导 `interval=0.3*far` —— 近树卡
+   [133,190] 淡出、远景树 [110,167] 淡入；近树卡新增官方动态 alphaTest 与模型高度
+   `vLeafBrightness`，用 noise 抠洞 dissolve。
+5. **远景树改官方 imposter**：朝相机广告牌 + 16 朝向图集列（按视角选列）+ 相邻列
+   角度混列（400m 内）+ 距离放大 30%/下沉 4m + 近处隐藏的 dissolve；
+   阔叶/针叶各自的叶色规则（阔叶 `rg*=disc` 且带叶辉光，针叶仅 `g*=disc`）。
+6. **修复树卡被压扁**：官方半高变体裁剪只作用于草丛层，此前 lab 把该规则套在
+   树卡/远景树/护栏上（3/4 变体被压成半高）——现已按层隔离。
+7. **水面**：改用官方 `base/body/highlight` 三色 + `seaDot` 混色模型，`fresnelFactor`
+   缩放高光；冬季冰面保留 lab 的冻结外观。
+8. **路面边缘光**：官方 `ef` chunk（与地表同款、无 blendVal/uv 偏置）。
+9. **星空**：恢复到官方 `size=0.01`（dpr=1 下与线上同观感；星空容器 renderOrder
+   归 0 是为 lab 独立天空 mesh 的场景结构所需，不改变观感）。
+10. **防回归**：`uFresnelIntensity` 缺失就是被新的 uniform 覆盖检查当场抓出来的
+    （18 个景观材质全部校验），随后补进 foliage/road/treeMeshes 的 uniform 表。
+
+## 渲染对齐官方（第三批：近景树层密度压暗，2026-10）
+
+**症状**：早晨/傍晚（暗时段）lab 近景树层（近树卡 + 近树 3D 网格）比官方亮 1.6–2.6 倍，
+暗时段反差放大即「发白」；白天因整体明亮不明显。
+
+1. **根因**：官方近树卡与近树网格**共用同一材质**（`xr()`），顶点计算
+   `vLeafBrightness = 1 - densityFactor × saturate((10 - 模型高度m)/3)`（摘录：
+   `reference/official/treecard-vertex-near.glsl`，属性声明见 `lit21_at423248.glsl`），密林下半部
+   最多压到 ×0.2；该值同时进入 `leafEffect`（变色 + 叶辉光，lit26）与 `diffuse *= vRadianceBlend`。
+   lab 近树卡此前误用远景树变体（常数 0.25、只压 uv.y 底缘），近树 3D 网格则是纯
+   Lambert、完全没有这些项。
+2. **近树卡**（`foliage.ts`）：`uDynamicAlpha` 分支改用逐实例密度（复用顶点已采样的密度图值
+   `clamp(densityMap(xz)×1.15, 0, 1)`，等价官方 per-instance `density` 属性）× shadowFactor ×
+   `saturate((10 - position.y×aSize.y×实例矩阵Y)/3)`；该值经 leafEffect 同时作用于变色与
+   叶辉光。远景树/广告牌保留官方 0.25/uv.y 变体，两套公式互不串用。
+3. **近树 3D 网格**（`treeMeshes.ts`）：补齐官方共享材质着色项 —— 顶点采样同一密度图
+   （新增 `uDensityMap/uWorldSize/uWorldHalf`）、米高 = `position.y × |实例矩阵 Y|`（模型归一化
+   到 8m×scale）；片元 `leafEffect = step(b×1.5, g) × vLeafBrightness`，阔叶
+   `rg *= 1-(1-disc)×leafEffect` 且带叶辉光 `vec3(rg×8,0.5)×radiance×leafEffect×vRadianceBlend`、
+   针叶 `g *= disc`；补 `diffuse *= vRadianceBlend`（视深 50→250m 最多 −33%）；材质
+   `userData.radianceScale = 0.5`（官方 `lights.radiance/2`）；雾的 include 顺序统一为
+   tonemapping → colorspace → fog。
+4. **接线**（`main.ts`）：近树网格材质传入与 foliage 相同的密度纹理与世界尺寸（世界重建时
+   刷新）；无新增 UI 开关。
+
+**验收数据**（种子 456268425、重置视角、同机位；亮度 = 0.2126R+0.7152G+0.0722B；
+树带 = 树冠主体区域，地面 = 同图草地，均排除道路/UI 面板）：
+
+取样区域（1688×1270 图内像素框）：lab 树带 = x[0,430]y[450,700] + x[950,1240]y[480,700]，
+草地 = x[60,400]y[980,1120] + x[900,1230]y[1000,1200]；官方同 code 树带 =
+x[1000,1550]y[330,440]，草地 = x[80,520]y[500,900]。
+
+| 条件 | lab 修复前 | lab 修复后 | 官方同 code（同口径） |
+| --- | --- | --- | --- |
+| 春·晨·晴（主验收） | 1.97 | 1.39 | 1.29 |
+| 春·昏·晴（主验收） | 3.46 | 2.01 | 2.28 |
+| 夏·晨·晴 | — | 1.45 | 1.13 |
+| 秋·晨·晴（有 haze） | — | 1.51 | 1.22 |
+| 秋·昏·晴（无 haze 对照） | — | 1.38 | 1.03 |
+| 春·昼·晴（回归） | 1.12 | 1.09 | — |
+| 春·夜·晴（回归） | 3.60 | 2.52 | — |
+
+- 树带均值（sRGB，同口径）：春晨 lab 修复前 (162,98,112) → 修复后 (128,66,70)，
+  官方同机位 (106,80,68)；春昏 (126,75,48) → (83,42,19)，官方 (42,41,29)。近树层不再
+  发白；残余差异主要来自 lab 雾/haze 色与取景构图（官方取景含车与更密树线）。
+- 回归：白天树层不更亮、不压死（比值 1.12→1.09）；夜景与官方同样受密度压暗影响
+  （近树由白亮转为深色），观感一致、无压死。
+- 官方对照（线上 slowroads.io 同 code `#A2-3fbae343@0`，同一在路机位、逐项切 STYLE）：
+  `docs/official/season-{spring,summer,autumn}-{morning,evening}-clear.png`。
+- `docs/` 验收集（`season-*.png`、`env-*.png`、`preview.png`）已按同一固定机位重拍；
+  与修复前对比：近树层明显变暗（树带/地面比值 2.0/3.5 → 1.4/2.0），地面与远景不变。
+
+## 渲染对齐官方（第四批：雾色色彩空间，2026-10）
+
+**症状**：春季早晨 / 傍晚（粉 / 橙预设）天空比官方**偏暗、偏红**（白天因整体明亮不明显）。
+同机位天空顶部取样（sRGB）：春晨 lab (135,99,157) vs 官方 (182,155,192)；春昏
+lab (69,35,26) vs 官方 (151,103,82)。
+
+**根因**：slowroads 的 fog chunk 被 three 排在 `tonemapping_fragment → colorspace_fragment
+→ fog_fragment` 之后，混色发生在**显示空间**，所以官方改过的 three 构建在
+`refreshFogUniforms` 里用输出色空间推入雾色：
+
+```js
+// 官方 three 构建（chunks__conifers.26f84295.js，摘录见 reference/official/bundle-excerpts.js）
+function Bs(i){ return i.getRenderTarget() === null ? i.outputColorSpace : ColorManagement.workingColorSpace }
+f.colorA.getRGB(m.fogColorA.value, Bs(i));  // colorB / colorC 同理
+```
+
+lab 原来直接 `fogColorA.value.copy(<工作色空间 Color>)`，等于把**线性分量当 sRGB 用** →
+雾与天空整体偏暗、偏饱和；饱和度高的预设（春晨 `#E496AD`、春昏 `#E49567`）就表现为「太红」。
+逐通道反解春晨天空的 A/B 混合系数时，线性模型 R/G/B 解出同一个 t（0.44–0.52），
+sRGB 模型三通道互相矛盾，坐实了色彩空间判断。
+
+1. **修复**（`lab/fogPatch.ts` / `lab/environmentController.ts`）：新增
+   `resolveFogUniformColorSpace(renderer)`（官方 `Bs(i)` 等价物）与
+   `writeFogUniformColors(source, target, colorSpace)`（官方 `refreshFogUniforms` 等价物）；
+   环境控制器保留工作色空间的 `fogColors`（对应官方 `fog.colorA/B/C`），另存一组
+   `fogUniformColors`，在状态变更的 dirty 分支里换算一次，再下发到共享 uniform
+   （天空 / 云 / 星空）与 `applyFogToScene` 覆盖的所有材质（地形 / 道路 / 植被 / 近树 /
+   水面），语义写进 `applyFogToMaterial` 注释。
+2. **防回归自检**（`main.ts`）：`checkFogUniformColorSpace()` 在每次世界构建后断言
+   参考预设春/晨/晴 `fogColorA ≈ (0.8941, 0.5882, 0.6784)`（= `#E496AD` 的输出色空间
+   分量）且 ≠ 线性分量 `(0.7758, 0.3050, 0.4179)`，并校验当前预设的 `fogColorA/B/C`
+   实际下发值；把换算目标色空间改回线性时该断言立即失败（本次已实测）。
+   证据归档：`reference/official/bundle-excerpts.js`、`reference/official/OFFICIAL-RENDERING.md`。
+
+**验收数据**（种子 456268425、同机位 1688×1270、天空顶部取样带 y=10..30；复现修复前
+状态的方式：临时把换算目标色空间改回 `LinearSRGBColorSpace` 再同机位截图）：
+
+| 条件（天空顶部，sRGB） | lab 修复前 | lab 修复后 | 官方同 code |
+| --- | --- | --- | --- |
+| 春·晨·晴 | (135,99,157) | (176,148,187) | (182,155,192) |
+| 春·昏·晴 | (69,35,26) | (149,86,64) | (151,103,82) |
+| 春·昼·晴 | (105,149,219) | (147,191,238) | (194,219,239) |
+| 春·夜·晴 | (7,5,9) | (22,34,52) | — |
+| 春·昼·阴 | (151,151,151) | (190,190,190) | — |
+
+- 春晨 / 春昏与官方的每通道差从 (47,56,35) / (82,68,56) 降到 (6,7,5) / (2,17,18)
+  （春昏残余来自云层与取景差异）。
+- 春昼残余 (37,22,-1) 主要来自云层尺度差（见「已知差异与后续」），不再是雾色问题；
+  春夜 / 春昼阴按官方预设模型 (22,34,52) / (190,190,190) 对得上，修复前明显过暗。
+- 作用域 A/B（同一图内取样带均值，修复前 → 修复后，春·昼·晴）：天空顶部 +42/+42/+19、
+  天空中部 +48/+46/+21、天空下部 +53/+44/+22，而远景地形 +2/+1/−3、近景草地 +1/+1/0、
+  近路面 +1/0/+1 —— 变化只落在雾 / 天空像素；近景仅受 `vHaze` 去饱和项（≈2%）影响。
+- 回归：昼 / 夜 / 阴三档方向一致（更亮、更少饱和），无过曝；启动自检（含新增雾色色彩
+  空间项）与 uniform 覆盖审计全绿；`pnpm --dir tools type-check:slowroads-lab` /
+  `build:slowroads-lab` 通过。
+- 重拍：`docs/env-*.png`（10 张）、`docs/season-*.png`（四季）、`preview.png` 全部按同一
+  固定机位重拍；`docs/official/*` 参考图未动。
 
 ## 已知差异与后续
 
-- 未接入：宽路 `road_base`+划线 paint 体系、农田割纹（field）、Driftmas 专用冬季
-  针叶贴图；`snow_spray.png` 已入库备用（车轮雪雾）。水面预设的 `base` 色与树冠
-  `radiance`（依赖车灯）未使用；夜间保持官方低亮度（无车灯）。
-- 星空：lab size 放大 4×（官方 0.01，见上文坑记录）；星空容器 renderOrder 归 0
-  （官方 -2，依赖其场景天空的 groupOrder 层级，lab 天空为独立 mesh）。
+- 依赖官方世界生成器的属性，lab 用等价近似：per-instance `shadow`/`density`（树影）
+  用树密度图采样近似（含第三批的近树 `vLeafBrightness`）；树卡 dissolve 的 per-instance
+  随机量用实例位置哈希近似；近树 3D 网格半径（90m）仍是 lab 默认值（官方是分块流式加载的
+  隐含半径）。lab 树高约 6–12m（基准 8m × 实例缩放），小于官方 ~10–12m —— 官方 10m 高度
+  阈值下 lab 的压暗包络略强，按公式一致性保留（数值仍落入官方区间）。
+- 未接入：宽路 `road_base`+划线 paint 体系（官方非 NORMAL 路型）、农田割纹（field，
+  官方 per-vertex `fieldCol` 来自其世界生成器）、Driftmas 专用冬季针叶贴图；
+  `snow_spray.png` 已入库备用（车轮雪雾）。树冠 `radiance` 的夜间车灯项为 0
+  （lab 无载具/车灯）；夜间保持官方低亮度。
+- 星空容器 renderOrder 归 0（官方 -2，依赖其场景天空的 groupOrder 层级；lab 天空为
+  独立 mesh）。这是场景结构差异，观感与官方一致；星点 size 已回到官方 0.01。
 - 冬季木护栏未在素材内，四季沿用春季 `spring_wall_barrier_wood`（单文件随仓库提交，
-  materialize 会把它作为 supplement 复制进 `assets-src/`）。
+  materialize 会把它作为 supplement 复制进 `assets-src/`）。官方侧该位置用的是
+  `wall_barrier.63193046`（不在用户素材目录）。
+- 兼容模式（`TERRAIN_REDUCED`）不做近路位移（低端机顶点纹理单元不可靠），植被层仍
+  采样密度图；其余渲染路径与完整模式一致。
+- **环境尺度**：lab 把官方 graphics preset 的 `tileSize`(1000) 当作视距，而官方 Hills 实际用
+  `n1 = tileSize * 2`(2000) 作为 fogNear/fogFar、天空平面 `sky.position.z = -n1 + 0.1`
+  与云平面尺度（`P2 = max(n1*2, cloudAltitude*12)`），云高取该档的 `cloudAltitude`(500)
+  （lab 现为视距 1000 / 云高 300）。因为 `vFogBlend` 由 `(fogNear+fogFar)/2` 推出，春晨这类
+  `near < 0` 的预设 lab 得 0.778、官方为 1.0 —— 天空上部因此比官方少一点蓝（春·昼·晴顶部
+  残余相当一部分来自这里），云纹理尺度也有 1.67× 差。本次按用户选择只修雾色色彩空间，
+  该尺度差异保留：lab 世界只有 1600m，直接套官方尺度会让晚间 800m 内完全无雾、露出世界边缘。
+- **迁移端未同步**：`schema/slowroads/render/fogInjection.ts` +
+  `schema/slowroads/core/environment.ts`（以及 editor / preview / SceneryViewer 视口）仍是
+  第四批修复前的写法（雾色按工作色空间推入），需要后续同步同一处改动。
 - editor/preview/SceneryViewer 的正式接入与小程序真机验证为下一步；本工程交付
   lab 验证 + 资产包（`assets-src/asset-bundle.json`）+ 上述映射文档。

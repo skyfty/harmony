@@ -29,6 +29,11 @@ import {
   takeDensityPrefix,
 } from '@schema/proceduralLandscape/chunkPlan'
 import { fbm2 } from '@schema/proceduralLandscape/noise'
+import { createDefaultProceduralLandscapeProps } from '@schema/proceduralLandscape/config'
+import {
+  applyProceduralLandscapeSurfaceInjection,
+  createProceduralLandscapeSurfaceUniforms,
+} from '@schema/proceduralLandscape/surfaceMaterial'
 import { PROCEDURAL_LANDSCAPE_COMPONENT_TYPE } from '@schema/components'
 import { visitExplicitComponentAssetReferences } from '@/utils/sceneExplicitAssetReferences'
 
@@ -468,6 +473,56 @@ describe('road field encoding', () => {
     expect(texture.image.width).toBe(field!.width)
     expect(texture.image.height).toBe(field!.height)
     texture.dispose()
+  })
+})
+
+describe('official surface parity (slowroads.io)', () => {
+  it('no longer exposes the custom heather parameters (official formula instead)', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'terrain' })
+    expect('heatherCoverage' in props.surface).toBe(false)
+    expect('heatherStrength' in props.surface).toBe(false)
+    expect('heatherStartRatio' in props.surface).toBe(false)
+    expect('heatherTransitionRatio' in props.surface).toBe(false)
+  })
+
+  it('exposes the official radiance/shadowFactor uniforms with matching defaults', () => {
+    const uniforms = createProceduralLandscapeSurfaceUniforms()
+    expect(uniforms.uPlRadiance.value).toBe(2)
+    expect(uniforms.uPlShadowFactor.value).toBe(1)
+  })
+
+  it('injects the official Lambert surface stack (heather formula, radiance composition, ambient shadow)', () => {
+    const original = new THREE.MeshStandardMaterial()
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), original)
+    const uniforms = createProceduralLandscapeSurfaceUniforms()
+    const patch = applyProceduralLandscapeSurfaceInjection([mesh], uniforms)
+    expect(patch.hasInjection).toBe(true)
+
+    // 官方材质族：Lambert（无镜面）。
+    const material = mesh.material as unknown as THREE.MeshLambertMaterial
+    expect((material as unknown as { isMeshLambertMaterial?: boolean }).isMeshLambertMaterial).toBe(true)
+
+    const parameters = {
+      uniforms: {} as Record<string, THREE.IUniform>,
+      vertexShader: THREE.ShaderLib.lambert.vertexShader,
+      fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
+    } as unknown as Parameters<typeof material.onBeforeCompile>[0]
+    material.onBeforeCompile(parameters, { capabilities: { maxTextures: 32 } } as never)
+
+    // 官方 heather 分布公式（与官方地形顶点着色器一致）。
+    expect(parameters.fragmentShader).toContain('vFade1 * 350.0')
+    expect(parameters.fragmentShader).toContain('plScreen(vFade1, vFade0)')
+    // 官方自发光与合成补丁。
+    expect(parameters.fragmentShader).toContain('totalEmissiveRadiance = plSeasonalColor * uPlRadiance;')
+    expect(parameters.fragmentShader).toContain('reflectedLight.directDiffuse * totalEmissiveRadiance')
+    // 官方环境光树影调制。
+    expect(parameters.fragmentShader).toContain('plAmbientShadow')
+    expect(parameters.fragmentShader).toContain('reflectedLight.indirectDiffuse *= plAmbientShadow;')
+    expect(parameters.uniforms.uPlRadiance).toBeTruthy()
+    expect(parameters.uniforms.uPlShadowFactor).toBeTruthy()
+
+    patch.restore()
+    expect(mesh.material).toBe(original)
   })
 })
 

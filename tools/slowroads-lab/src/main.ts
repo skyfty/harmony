@@ -13,8 +13,16 @@ import {
 } from './core/placement'
 import { createRoadProfile, type RoadProfile } from './core/roadProfile'
 import { resolveSeedHeadingRad, traceRoadPath } from './core/roadTrace'
-import { runEnvironmentChecks, runSeasonCatalogChecks, runSelfChecks, type AssetsCatalogLike } from './core/selfCheck'
-import { installSlowroadsFog } from './lab/fogPatch'
+import {
+  runEnvironmentChecks,
+  runMaterialUniformCoverageChecks,
+  runSeasonCatalogChecks,
+  runSelfChecks,
+  type AssetsCatalogLike,
+  type MaterialUniformCheckInput,
+  type SelfCheckResult,
+} from './core/selfCheck'
+import { installSlowroadsFog, slowroadsFogUniforms } from './lab/fogPatch'
 import { createSky } from './lab/sky'
 import { createClouds } from './lab/clouds'
 import { createStars } from './lab/stars'
@@ -90,6 +98,9 @@ const overlayDetail = requireElement<HTMLElement>('#overlay-detail')
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 renderer.setClearColor(SKY_COLOR, 1)
+// 官方 slowroads.io 使用 Cineon 色调映射（曝光 1）。
+renderer.toneMapping = THREE.CineonToneMapping
+renderer.toneMappingExposure = 1
 
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(SKY_COLOR)
@@ -181,13 +192,15 @@ function requireStore(): LabAssetStore {
 
 async function loadSharedAssets(onProgress?: (loaded: number, total: number) => void): Promise<SharedRuntimeAssets> {
   const requests: Array<{ id: string; options: { colorSpace: 'srgb' | 'linear'; tiling: boolean } }> = [
-    { id: SHARED_TEXTURES.noise.id, options: { colorSpace: 'linear', tiling: true } },
-    { id: SHARED_TEXTURES.bushNoise.id, options: { colorSpace: 'linear', tiling: true } },
-    { id: SHARED_TEXTURES.grassVariation.id, options: { colorSpace: 'linear', tiling: true } },
-    { id: SHARED_TEXTURES.rockBump.id, options: { colorSpace: 'linear', tiling: true } },
-    { id: SHARED_TEXTURES.seaWaves.id, options: { colorSpace: 'linear', tiling: true } },
-    { id: SHARED_TEXTURES.clouds.id, options: { colorSpace: 'srgb', tiling: true } },
-    { id: SHARED_TEXTURES.barrier.id, options: { colorSpace: 'srgb', tiling: false } },
+    // 色彩空间全部来自季节目录（与官方 U(url, aniso, wrap, colorSpace) 调用点一致）：
+    // noise/rockBump/grassVariation/seaWaves/clouds = srgb-linear；barrier = srgb。
+    { id: SHARED_TEXTURES.noise.id, options: { colorSpace: SHARED_TEXTURES.noise.colorSpace, tiling: true } },
+    { id: SHARED_TEXTURES.bushNoise.id, options: { colorSpace: SHARED_TEXTURES.bushNoise.colorSpace, tiling: true } },
+    { id: SHARED_TEXTURES.grassVariation.id, options: { colorSpace: SHARED_TEXTURES.grassVariation.colorSpace, tiling: true } },
+    { id: SHARED_TEXTURES.rockBump.id, options: { colorSpace: SHARED_TEXTURES.rockBump.colorSpace, tiling: true } },
+    { id: SHARED_TEXTURES.seaWaves.id, options: { colorSpace: SHARED_TEXTURES.seaWaves.colorSpace, tiling: true } },
+    { id: SHARED_TEXTURES.clouds.id, options: { colorSpace: SHARED_TEXTURES.clouds.colorSpace, tiling: true } },
+    { id: SHARED_TEXTURES.barrier.id, options: { colorSpace: SHARED_TEXTURES.barrier.colorSpace, tiling: false } },
   ]
   const textures = await requireStore().textureSet(requests, onProgress)
   return {
@@ -220,8 +233,10 @@ async function loadSeasonAssets(
     { id: entry.sprites.grassSprites.id, options: { colorSpace: entry.sprites.grassSprites.colorSpace, tiling: false } },
     { id: entry.trees.broadleafD.id, options: { colorSpace: entry.trees.broadleafD.colorSpace, tiling: false } },
     { id: entry.trees.broadleafN.id, options: { colorSpace: entry.trees.broadleafN.colorSpace, tiling: false } },
+    // 官方 trees[1]（针叶）diffuse 与 alpha 都用 RepeatWrapping：OBJ 的 V 会绕回
+    // （tree_05 v 到 ~4.9），clamp 会在 v>1 后取到错误的行。
     { id: entry.trees.coniferM.id, options: { colorSpace: entry.trees.coniferM.colorSpace, tiling: true } },
-    { id: entry.trees.coniferA.id, options: { colorSpace: entry.trees.coniferA.colorSpace, tiling: false } },
+    { id: entry.trees.coniferA.id, options: { colorSpace: entry.trees.coniferA.colorSpace, tiling: true } },
     { id: entry.imposters.mapA.id, options: { colorSpace: entry.imposters.mapA.colorSpace, tiling: false } },
     { id: entry.imposters.normA.id, options: { colorSpace: entry.imposters.normA.colorSpace, tiling: false } },
     { id: entry.imposters.mapB.id, options: { colorSpace: entry.imposters.mapB.colorSpace, tiling: false } },
@@ -302,6 +317,7 @@ function ensureEnvironment(): void {
     environmentController = createEnvironmentController({
       scene,
       camera,
+      renderer,
       sky: skyHandle,
       clouds,
       stars,
@@ -365,6 +381,155 @@ function clearWorldStructure(): void {
   densityField = null
 }
 
+/**
+ * 景观材质 uniform 覆盖审计：着色器声明的每个 uniform 都必须在 JS uniform 表里
+ * （否则 three 不上传、运行时恒为 0——「地面过暗」正是这类静默故障）。
+ * 场景里所有 `slowroads-*` 的 ShaderMaterial（地形/道路/水面/植被/近树）都检查。
+ */
+let lastUniformCheck: SelfCheckResult[] = []
+
+function auditLandscapeMaterialUniforms(): void {
+  const materials: MaterialUniformCheckInput[] = []
+  const landscapeMaterials: THREE.ShaderMaterial[] = []
+  scene.traverse((object) => {
+    const mesh = object as THREE.Mesh
+    if (!mesh.isMesh || !mesh.material) {
+      return
+    }
+    const entries = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const entry of entries) {
+      const shader = entry as THREE.ShaderMaterial
+      if (!shader.isShaderMaterial || !shader.uniforms || !shader.name.startsWith('slowroads-')) {
+        continue
+      }
+      landscapeMaterials.push(shader)
+      materials.push({
+        name: shader.name,
+        vertexShader: shader.vertexShader,
+        fragmentShader: shader.fragmentShader,
+        uniformKeys: Object.keys(shader.uniforms),
+      })
+    }
+  })
+  lastUniformCheck = runMaterialUniformCoverageChecks(materials)
+  // 值断言：凡声明 uAmbientColor 的景观材质，官方三灯/半球 uniform 必须已按预设下发
+  // （全 0 = 环境控制器没写进来——修复前地形就是这个状态）。
+  const zeroed = new Set<string>()
+  for (const shader of landscapeMaterials) {
+    const uniforms = shader.uniforms
+    if (!uniforms.uAmbientColor) {
+      continue
+    }
+    const sun = uniforms.uSunColor?.value as THREE.Color | undefined
+    const ambient = uniforms.uAmbientColor.value as THREE.Color
+    const hemi = uniforms.uHemiColor?.value as THREE.Color | undefined
+    const sum = (color: THREE.Color | undefined): number => (color ? color.r + color.g + color.b : 0)
+    if (sum(sun) <= 0 || sum(ambient) <= 0 || sum(hemi) <= 0) {
+      zeroed.add(shader.name)
+    }
+  }
+  const boundOk = zeroed.size === 0
+  if (boundOk) {
+    console.info(`[slowroads-lab] landscape lighting uniforms bound (materials=${landscapeMaterials.length})`)
+  } else {
+    console.warn(`[slowroads-lab] landscape lighting uniforms zeroed: ${[...zeroed].join(', ')}`)
+  }
+  lastUniformCheck.push({
+    name: 'landscape lighting uniforms bound',
+    ok: boundOk,
+    detail: boundOk ? `materials=${landscapeMaterials.length}` : `zeroed: ${[...zeroed].slice(0, 6).join(', ')}`,
+  })
+}
+
+/**
+ * 雾色色彩空间回归检查（官方 `refreshFogUniforms` 等价物）。
+ *
+ * slowroads 的 fog chunk 被 three 排在 `tonemapping_fragment → colorspace_fragment →
+ * fog_fragment` 之后，混色发生在显示空间，因此 `fogColorA/B/C` 必须是**输出色空间**
+ * 分量（渲染到画布 = 预设 hex 的 sRGB 分量），而不是工作色空间的线性分量。
+ * 修复前 lab 推的正是线性值 —— 春季早晨/傍晚天空因此偏暗偏红，这条断言当场就能抓到。
+ */
+const FOG_COLOR_SPACE_REFERENCE = {
+  hex: '#E496AD',
+  /** 春/晨/晴 fog.colA：输出色空间分量 = hex 原值。 */
+  srgb: [228 / 255, 150 / 255, 173 / 255] as const,
+  /** 同一颜色的线性工作空间分量 —— 正是修复前误推的那组值。 */
+  linear: [0.7758, 0.305, 0.4179] as const,
+}
+
+let lastFogColorCheck: SelfCheckResult[] = []
+
+function srgbComponentsFromHex(hex: string): [number, number, number] {
+  const value = Number.parseInt(hex.replace('#', ''), 16)
+  return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255]
+}
+
+function colorMatches(color: THREE.Color, expected: readonly [number, number, number] | readonly number[], tolerance = 1e-3): boolean {
+  return Math.abs(color.r - expected[0]) < tolerance
+    && Math.abs(color.g - expected[1]) < tolerance
+    && Math.abs(color.b - expected[2]) < tolerance
+}
+
+function colorTriplet(color: THREE.Color): string {
+  return `(${color.r.toFixed(4)}, ${color.g.toFixed(4)}, ${color.b.toFixed(4)})`
+}
+
+function checkFogUniformColorSpace(): void {
+  const results: SelfCheckResult[] = []
+  const record = (name: string, ok: boolean, detail = ''): void => {
+    results.push({ name, ok, detail })
+    console.assert(ok, `[slowroads-lab fog-color-check] ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+
+  // 1) 换算依赖：ColorManagement 开启时 getRGB(..., SRGBColorSpace) 还原成 hex 分量，
+  //    且与线性分量明显不同（关掉色彩管理 / 直接推线性值都会在这里失败）。
+  const converted = new THREE.Color().set(FOG_COLOR_SPACE_REFERENCE.hex)
+  converted.getRGB(converted, THREE.SRGBColorSpace)
+  record(
+    `fog color space: ${FOG_COLOR_SPACE_REFERENCE.hex} -> output(sRGB)`,
+    colorMatches(converted, FOG_COLOR_SPACE_REFERENCE.srgb),
+    `got ${colorTriplet(converted)} want (${FOG_COLOR_SPACE_REFERENCE.srgb.join(', ')})`,
+  )
+  const linearReference = new THREE.Color().set(FOG_COLOR_SPACE_REFERENCE.hex)
+  record(
+    'fog color space: reference linear components',
+    colorMatches(linearReference, FOG_COLOR_SPACE_REFERENCE.linear, 1e-4),
+    `linear ${colorTriplet(linearReference)}`,
+  )
+  record(
+    'fog color space: linear components differ from output space',
+    !colorMatches(linearReference, FOG_COLOR_SPACE_REFERENCE.srgb, 0.02),
+    `linear ${colorTriplet(linearReference)}`,
+  )
+
+  // 2) 实际下发值：当前环境预设的 fogColorA/B/C 必须是输出色空间分量。
+  const state = environmentController?.state
+  if (!state) {
+    record('fog uniform colors applied', false, 'environment state missing')
+  } else {
+    const preset = resolveEnvironmentPreset(state)
+    const entries: Array<[string, string]> = [
+      ['fogColorA', preset.fog.colA],
+      ['fogColorB', preset.fog.colB],
+      ['fogColorC', preset.fog.colC ?? preset.fog.colB],
+    ]
+    let ok = true
+    let detail = `${state.season}/${state.timeOfDay}/${state.weather}`
+    for (const [key, hex] of entries) {
+      const uniform = slowroadsFogUniforms[key].value as THREE.Color
+      const want = srgbComponentsFromHex(hex)
+      if (!colorMatches(uniform, want, 2e-3)) {
+        ok = false
+        detail += ` ${key}=${colorTriplet(uniform)} want ${hex}(${want.map((v) => v.toFixed(4)).join(', ')})`
+      }
+    }
+    record('fog uniform colors in output color space', ok, ok ? `${detail} (${entries.map(([key]) => key).join(', ')})` : detail)
+    console.info(`[slowroads-lab] fog uniform colors: ${entries.map(([key, hex]) => `${key}=${hex}`).join(', ')} (${detail})`)
+  }
+
+  lastFogColorCheck = results
+}
+
 function applyToggles(): void {
   terrainMaterialHandle?.setToggles({
     surface: settings.showSurface,
@@ -407,9 +572,12 @@ function applyWind(): void {
 function toSprite(
   instance: { x: number; z: number; y: number; rotation: number; scale: number; variantUnit: number; roadProx: number },
   entries: SpriteCellRegion[],
+  field: Heightfield,
 ): SpriteInstance {
   const index = Math.min(entries.length - 1, Math.max(0, Math.floor(instance.variantUnit * entries.length)))
   const entry = entries[index]!
+  // 官方草丛/灌木用 per-instance groundNormal 受光并驱动 fresnel；lab 从高度场采样。
+  const normal = field.sampleNormal(instance.x, instance.z, normalScratch)
   return {
     x: instance.x,
     z: instance.z,
@@ -419,11 +587,71 @@ function toSprite(
     variant: index,
     cell: entry.cell,
     roadProx: instance.roadProx,
+    nx: normal.x,
+    ny: normal.y,
+    nz: normal.z,
   }
 }
 
-function toTreeSprite(instance: TreePlacement, variant: number): SpriteInstance {
-  return { x: instance.x, z: instance.z, y: instance.y, rotation: instance.rotation, scale: instance.scale, variant }
+function toTreeSprite(instance: TreePlacement, variant: number, cell?: number): SpriteInstance {
+  return {
+    x: instance.x,
+    z: instance.z,
+    y: instance.y,
+    rotation: instance.rotation,
+    scale: instance.scale,
+    variant,
+    cell,
+  }
+}
+
+const normalScratch = new THREE.Vector3()
+
+/**
+ * 树密度图（256²，世界 XZ 映射）：与地形材质的密度图同源，供植被层的
+ * 官方 per-instance shadow / density 近似（uUseDensityShadow、近树材质
+ * vLeafBrightness）使用。先创建（供 init 阶段的近树材质引用）后填充。
+ */
+const FOLIAGE_DENSITY_SIZE = 256
+let foliageDensityTexture: THREE.DataTexture | null = null
+
+function getFoliageDensityTexture(): THREE.DataTexture {
+  if (!foliageDensityTexture) {
+    foliageDensityTexture = new THREE.DataTexture(
+      new Uint8Array(FOLIAGE_DENSITY_SIZE * FOLIAGE_DENSITY_SIZE * 4),
+      FOLIAGE_DENSITY_SIZE,
+      FOLIAGE_DENSITY_SIZE,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    )
+    foliageDensityTexture.minFilter = THREE.LinearFilter
+    foliageDensityTexture.magFilter = THREE.LinearFilter
+    foliageDensityTexture.wrapS = THREE.ClampToEdgeWrapping
+    foliageDensityTexture.wrapT = THREE.ClampToEdgeWrapping
+    foliageDensityTexture.generateMipmaps = false
+  }
+  return foliageDensityTexture
+}
+
+/** 按当前树密度场刷新密度图内容（世界重建时调用）。 */
+function updateFoliageDensityTexture(density: TreeDensityField): void {
+  const texture = getFoliageDensityTexture()
+  const size = FOLIAGE_DENSITY_SIZE
+  const data = texture.image.data as Uint8Array
+  const half = WORLD_SIZE * 0.5
+  for (let y = 0; y < size; y += 1) {
+    const z = -half + (y / (size - 1)) * WORLD_SIZE
+    for (let x = 0; x < size; x += 1) {
+      const px = -half + (x / (size - 1)) * WORLD_SIZE
+      const byte = Math.round((density.classAt(px, z) / 3) * 255)
+      const index = (y * size + x) * 4
+      data[index] = byte
+      data[index + 1] = byte
+      data[index + 2] = byte
+      data[index + 3] = 255
+    }
+  }
+  texture.needsUpdate = true
 }
 
 function buildFoliageFromPlacements(): void {
@@ -434,17 +662,29 @@ function buildFoliageFromPlacements(): void {
   const assets = seasonAssets
   const season = activeSeason
   const params = SEASON_PARAMS[season]
+  const heightfield = field
   const grassEntries = assets.grassSprites.entries
   const bushEntries = assets.bushes.entries
+  // 官方 LOD dissolve 区间（cf(l)：lod1Horizon = 近树卡距离/10）：
+  // 近树卡在 [near, far] 淡出，远景树在 [near2, far2] 淡入，两段有 0.6 间隔离散衔接。
+  const cardDissolveFar = Math.max(40, settings.nearDistance)
+  const cardDissolveInterval = Math.max(1, Math.floor(cardDissolveFar * 0.3))
+  const cardDissolveNear = cardDissolveFar - cardDissolveInterval
+  const imposterDissolveFar = cardDissolveNear + cardDissolveInterval * 0.6
+  const imposterDissolveNear = Math.max(1, imposterDissolveFar - cardDissolveInterval)
+  const cardNoise = sharedAssets.noise
+  const foliageDensity = densityField ? getFoliageDensityTexture() : undefined
 
   grassMesh = createFoliageMesh(
-    placements.grass.map((placement) => toSprite(placement, grassEntries)),
+    placements.grass.map((placement) => toSprite(placement, grassEntries, heightfield)),
     {
       atlas: { texture: assets.grassSprites.texture, regions: grassEntries.map((entry) => entry.region) },
       tint: 0xffffff,
-      farTintScale: 1,
+      alphaTest: params.grassAlphaTest,
       unitSize: 1.6,
       shared: foliageUniforms,
+      densityMap: foliageDensity,
+      worldSize: WORLD_SIZE,
       palette: {
         mode: 'grass',
         season,
@@ -455,13 +695,16 @@ function buildFoliageFromPlacements(): void {
     },
   )
   bushMesh = createFoliageMesh(
-    placements.bushes.map((placement) => toSprite(placement, bushEntries)),
+    placements.bushes.map((placement) => toSprite(placement, bushEntries, heightfield)),
     {
       atlas: { texture: assets.bushes.texture, regions: bushEntries.map((entry) => entry.region) },
       tint: 0xffffff,
-      farTintScale: 1,
+      alphaTest: params.bushAlphaTest,
+      distanceAlpha: true,
       unitSize: 2,
       shared: foliageUniforms,
+      densityMap: foliageDensity,
+      worldSize: WORLD_SIZE,
       palette: {
         mode: 'bush',
         season,
@@ -478,39 +721,48 @@ function buildFoliageFromPlacements(): void {
   broadleafNearMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
     atlas: { texture: assets.broadleaf.texture, normalTexture: assets.broadleaf.normalTexture, regions: assets.broadleaf.regions },
     tint: 0xffffff,
-    farTintScale: 0.72,
+    alphaTest: 0.5,
     unitSize: 8,
     shared: foliageUniforms,
-    tier: 'near',
+    card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
+    noiseMap: cardNoise,
+    densityMap: foliageDensity,
+    worldSize: WORLD_SIZE,
     tree: { ...treeOptions, species: 0 },
   })
-  broadleafFarMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantFar)), {
+  // 远景树：aCell 携带图集行（变体 % 4），朝向列在着色器里按视角选取。
+  broadleafFarMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantFar, tree.variantFar % 4)), {
     atlas: { texture: assets.imposterBroadleaf.texture, normalTexture: assets.imposterBroadleaf.normalTexture, regions: gridRegions(16, 4, 4096, 1024) },
     tint: 0xffffff,
-    farTintScale: 0.7,
+    alphaTest: params.imposterAlphaTest,
     unitSize: 8,
     shared: foliageUniforms,
-    tier: 'far',
     singlePlane: true,
+    card: { kind: 'far', dissolveNear: imposterDissolveNear, dissolveFar: imposterDissolveFar, dissolveInterval: cardDissolveInterval },
+    noiseMap: cardNoise,
     tree: { ...treeOptions, species: 0 },
   })
   coniferNearMesh = createFoliageMesh(conifer.map((tree) => toTreeSprite(tree, tree.variantNear)), {
     atlas: { texture: assets.conifer.texture, alphaTexture: assets.conifer.alphaTexture, regions: assets.conifer.regions },
     tint: 0xffffff,
-    farTintScale: 0.72,
+    alphaTest: 0.4,
     unitSize: 8,
     shared: foliageUniforms,
-    tier: 'near',
+    card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
+    noiseMap: cardNoise,
+    densityMap: foliageDensity,
+    worldSize: WORLD_SIZE,
     tree: { ...treeOptions, species: 1 },
   })
-  coniferFarMesh = createFoliageMesh(conifer.map((tree) => toTreeSprite(tree, tree.variantFar)), {
+  coniferFarMesh = createFoliageMesh(conifer.map((tree) => toTreeSprite(tree, tree.variantFar, tree.variantFar % 4)), {
     atlas: { texture: assets.imposterConifer.texture, normalTexture: assets.imposterConifer.normalTexture, regions: gridRegions(16, 4, 4096, 1024) },
     tint: 0xffffff,
-    farTintScale: 0.7,
+    alphaTest: params.imposterAlphaTest,
     unitSize: 8,
     shared: foliageUniforms,
-    tier: 'far',
     singlePlane: true,
+    card: { kind: 'far', dissolveNear: imposterDissolveNear, dissolveFar: imposterDissolveFar, dissolveInterval: cardDissolveInterval },
+    noiseMap: cardNoise,
     tree: { ...treeOptions, species: 1 },
   })
 
@@ -530,7 +782,7 @@ function buildFoliageFromPlacements(): void {
   })), {
     atlas: barrierAtlas,
     tint: 0xffffff,
-    farTintScale: 1,
+    alphaTest: 0.35,
     unitSize: 0.35,
     shared: foliageUniforms,
     singlePlane: true,
@@ -597,6 +849,8 @@ function rebuildWorld(): void {
     flattenBand: settings.flattenBand,
   })
   densityField = createTreeDensityField(seed, WORLD_SIZE)
+  // 密度图纹理在近树材质创建时就已引用，这里按新世界刷新内容。
+  updateFoliageDensityTexture(densityField)
   terrainBuilder = createTerrainMeshBuilder(field, profile, { segments: TERRAIN_SEGMENTS })
   worldBuildStartedAt = performance.now()
   overlay.hidden = false
@@ -626,7 +880,6 @@ function finalizeTerrain(): void {
     density: densityField,
     sunDir: foliageUniforms.sunDir.value,
     sunColor: foliageUniforms.sunColor.value,
-    ambient: foliageUniforms.ambient.value,
   })
   const params = SEASON_PARAMS[activeSeason]
   roadHandle.setSeason({ base: seasonAssets.road.base, overlay: seasonAssets.road.overlay }, params.shadowFactor)
@@ -651,6 +904,10 @@ function finalizeTerrain(): void {
   if (!cameraInitialized) {
     resetCameraView()
   }
+  // 世界与植被材质都已就位：跑一次 uniform 覆盖审计，防止着色器/JS 表再次脱节；
+  // 再校验雾色确实按输出色空间下发（雾 chunk 在 colorspace 之后混色）。
+  auditLandscapeMaterialUniforms()
+  checkFogUniformColorSpace()
 }
 
 // ---------------------------------------------------------------------------
@@ -895,6 +1152,8 @@ async function init(): Promise<void> {
   treeMeshManager = await createTreeMeshManager({
     assetStore: requireStore(),
     shared: foliageUniforms,
+    densityMap: getFoliageDensityTexture(),
+    worldSize: WORLD_SIZE,
   })
   scene.add(treeMeshManager.container)
   treeMeshManager.setSeason({
@@ -972,6 +1231,14 @@ Object.assign(globalThis, {
     },
     get treeMeshCount() {
       return treeMeshManager?.instanceCount ?? 0
+    },
+    auditLandscapeMaterialUniforms,
+    get uniformCheck() {
+      return lastUniformCheck
+    },
+    checkFogUniformColorSpace,
+    get fogColorCheck() {
+      return lastFogColorCheck
     },
     rebuildWorld,
     rebuildPlacements,

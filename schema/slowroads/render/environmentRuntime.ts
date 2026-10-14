@@ -24,9 +24,12 @@ import { createSlowroadsSnow, type SlowroadsSnowHandle } from './snow'
 /**
  * 场景级 Slow Roads 环境运行时（editor / preview / viewer 三端共用）。
  *
- * - 光照：预设 sun/ambient 颜色与强度 → ambient 灯 + CSM 太阳灯（方向/阴影
- *   仍由用户设置控制）；校准系数使用户默认值在「春·白天·晴」时保持不变
- *   （CSM 默认强度 3 = 预设 sun.intensity 3；ambient 默认 0.75 = 预设 × 0.75）。
+ * - 光照：与官方 `updateSky()` 一致的三件套（颜色/强度直接取预设）：
+ *   `sun = DirectionalLight(预设 sun 色, 预设 sun 强度)`、
+ *   `ambient = AmbientLight(预设 ambient 色, 预设 ambient 强度)`、
+ *   `hemisphere = HemisphereLight(sky = 预设 sun 色, ground = 黑, 强度 = 预设
+ *   ambient 强度)`；太阳方向固定竖直向下（官方锚定载具上方 10m 的等价物），
+ *   曝光缩放统一乘在三盏灯上。阴影开关只控制投影（castShadow），不再关灯。
  * - 雾：写入共享三色雾 uniform（场景唯一雾；`scene.fog` 恒为 null）；
  *   `setFogEnabled` 供 editor 视口做"仅选中 Environment 节点时预览"。
  * - 天空/云/星空/降雪：官方实现；材质来自在线资产包。
@@ -37,6 +40,9 @@ export interface SlowroadsLightingState {
   sunIntensity: number
   ambientColor: THREE.Color
   ambientIntensity: number
+  /** 半球光：官方 skyColor = 预设 sun 色、groundColor = 黑、强度 = 预设 ambient 强度。 */
+  hemiColor: THREE.Color
+  hemiIntensity: number
 }
 
 export interface SlowroadsEnvironmentRuntimeOptions {
@@ -61,9 +67,6 @@ export interface SlowroadsEnvironmentRuntime {
   readonly activePreset: EnvironmentPreset
   dispose(): void
 }
-
-const AMBIENT_CALIBRATION = 0.75
-const SUN_CALIBRATION = 1.0
 
 export function createSlowroadsEnvironmentRuntime(
   options: SlowroadsEnvironmentRuntimeOptions,
@@ -102,7 +105,9 @@ export function createSlowroadsEnvironmentRuntime(
     sunColor: new THREE.Color('#ffffff'),
     sunIntensity: 3,
     ambientColor: new THREE.Color('#ffffff'),
-    ambientIntensity: 0.75,
+    ambientIntensity: 1,
+    hemiColor: new THREE.Color('#ffffff'),
+    hemiIntensity: 1,
   }
 
   setSlowroadsFogEnabled(fogEnabled)
@@ -114,9 +119,11 @@ export function createSlowroadsEnvironmentRuntime(
     }
     const exposure = nextSettings?.exposureScale ?? 1
     lightingState.sunColor.copy(sunColorScratch.set(next.lights.sun.col))
-    lightingState.sunIntensity = next.lights.sun.intensity * SUN_CALIBRATION * exposure
+    lightingState.sunIntensity = next.lights.sun.intensity * exposure
     lightingState.ambientColor.set(next.lights.ambient.col)
-    lightingState.ambientIntensity = next.lights.ambient.intensity * AMBIENT_CALIBRATION * exposure
+    lightingState.ambientIntensity = next.lights.ambient.intensity * exposure
+    lightingState.hemiColor.copy(sunColorScratch.set(next.lights.sun.col))
+    lightingState.hemiIntensity = next.lights.ambient.intensity * exposure
     options.applyLighting(lightingState)
   }
 

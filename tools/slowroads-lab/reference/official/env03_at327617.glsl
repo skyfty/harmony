@@ -1,0 +1,5 @@
+
+
+    varying float vBrightness;
+
+

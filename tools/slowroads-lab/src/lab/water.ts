@@ -19,7 +19,7 @@ export interface WaterHandle {
   /** 冬季冻结外观（slowroads 的 frozenWater 效果）。 */
   setFrozen(frozen: boolean): void
   /** 按环境预设更新水色与菲涅尔强度（slowroads water.body/highlight/fresnelFactor）。 */
-  setEnvironment(params: { body: string; highlight: string; fresnelFactor: number }): void
+  setEnvironment(params: { base: string; body: string; highlight: string; fresnelFactor: number }): void
   dispose(): void
 }
 
@@ -42,7 +42,9 @@ const FRAGMENT_SHADER = `
 uniform sampler2D uWaves;
 uniform float uTime;
 uniform vec3 uSkyColor;
-uniform vec3 uDeepColor;
+/** 官方水面三色：base = 材料底色，body = 体色，highlight = 掠射高光。 */
+uniform vec3 uBase;
+uniform vec3 uBody;
 uniform vec3 uHighlight;
 uniform float uFresnelScale;
 uniform float uFrozen;
@@ -67,13 +69,20 @@ void main() {
   vec3 normal = normalize(mix(vec3(0.0, 1.0, 0.0), rippleNormal, rippleFade));
 
   vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+  // 官方 lit20：seaDot = 视线与水面法线的夹角项 + 波纹扰动，再混 base/body；
+  // fresnelFactor 缩放高光侧强度（lab 保留其作为整体强度系数）。
+  float seaDot = dot(viewDir, normal);
+  seaDot += (wave - 0.5) * 0.6 * rippleFade;
+  seaDot = clamp(seaDot, 0.0, 1.0);
+  float seaDotMix = 1.0 - seaDot;
+  vec3 color = mix(uBase, uBody, seaDotMix * seaDotMix);
   float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
-  vec3 color = mix(uDeepColor, uSkyColor, clamp(0.28 + 0.72 * clamp(fresnel * uFresnelScale, 0.0, 1.0), 0.0, 1.0));
+  color = mix(color, uSkyColor, clamp(fresnel * uFresnelScale * 0.35, 0.0, 0.6));
   // 冬季：冻结的灰白冰面，收敛波纹与高光。
   color = mix(color, mix(vec3(0.80, 0.84, 0.87), uSkyColor, 0.35), uFrozen * 0.85);
   vec3 halfDir = normalize(uSunDir + viewDir);
   float spec = pow(max(dot(normal, halfDir), 0.0), 64.0);
-  color += uHighlight * spec * 1.1 * rippleFade;
+  color += uHighlight * spec * 1.1 * rippleFade * uFresnelScale;
   color += vec3(wave - 0.5) * 0.045 * rippleFade;
 
   gl_FragColor = vec4(color, 1.0);
@@ -94,7 +103,8 @@ export function createWater(options: WaterOptions): WaterHandle {
       uWaves: { value: waves },
       uTime: { value: 0 },
       uSkyColor: { value: new THREE.Color(options.skyColor) },
-      uDeepColor: { value: new THREE.Color(0x1d3b46) },
+      uBase: { value: new THREE.Color(0x24292d) },
+      uBody: { value: new THREE.Color(0x607a8a) },
       uHighlight: { value: options.sunColor.clone() },
       uFresnelScale: { value: 1 },
       uFrozen: { value: 0 },
@@ -122,8 +132,9 @@ export function createWater(options: WaterOptions): WaterHandle {
     setFrozen(frozen: boolean): void {
       material.uniforms.uFrozen!.value = frozen ? 1 : 0
     },
-    setEnvironment(params: { body: string; highlight: string; fresnelFactor: number }): void {
-      ;(material.uniforms.uDeepColor!.value as THREE.Color).set(params.body)
+    setEnvironment(params: { base: string; body: string; highlight: string; fresnelFactor: number }): void {
+      ;(material.uniforms.uBase!.value as THREE.Color).set(params.base)
+      ;(material.uniforms.uBody!.value as THREE.Color).set(params.body)
       ;(material.uniforms.uHighlight!.value as THREE.Color).set(params.highlight)
       material.uniforms.uFresnelScale!.value = params.fresnelFactor
     },

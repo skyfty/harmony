@@ -6,13 +6,16 @@ import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
 
 /**
  * slowroads 风格精灵植被（交叉面片 + 每实例图集区域 + 季节调色板），
- * 注入 MeshStandardMaterial（保留真实光照/CSM 阴影），雾走共享三色雾。
+ * 注入 MeshLambertMaterial（官方同材质族；无镜面），雾走共享三色雾。
  *
  * - 每实例属性：aPlUvRect（图集区域）、aPlSize（宽高比/相对高度）、aPlCell
  *   （变体格号，冬季裁剪）、aPlRoadProx（草丛贴近道路的明度抑制）；
  * - 距离分层（near/far/all；near 层在 3D 近树网格半径内折叠让位）；
  * - 草丛按官方公式乘当季调色板；灌木保留自身颜色 + 噪声斑驳；树卡/远景树
- *   做 leafEffect 变色与冬季阔叶积雪。
+ *   做 leafEffect 变色与冬季阔叶积雪；
+ * - 光照与合成与官方一致：`totalEmissiveRadiance`（草/灌木 = 最终色 × radiance，
+ *   树卡 = 叶片辉光 `vec3(rg*8, 0.5) × radiance × vRadianceBlend × vLeafBrightness`），
+ *   并走官方合成补丁 `direct + indirect + direct × emissive`。
  */
 
 export interface FoliageShaderUniforms {
@@ -75,6 +78,7 @@ uniform float uPlMeshRadius;
 uniform float uPlTierMode;
 uniform float uPlSinglePlane;
 uniform float uPlWindStrength;
+uniform float uPlShadowFactor;
 uniform int uPlSeasonIndex;
 varying vec2 vPlUv;
 varying float vPlFar;
@@ -82,6 +86,8 @@ varying float vPlTint;
 varying float vPlCell;
 varying vec3 vPlInstancePos;
 varying float vPlRoadProx;
+varying float vPlRadianceBlend;
+varying float vPlLeafBrightness;
 `
 
 const VERTEX_BODY = /* glsl */ `
@@ -106,6 +112,11 @@ const VERTEX_BODY = /* glsl */ `
   }
   float plPhase = fract(sin(dot(plInstWorld.xz, vec2(12.9898, 78.233))) * 43758.5453);
   vPlTint = 0.88 + 0.24 * fract(plPhase * 7.13);
+
+  // 官方树冠辉光的两项权重：远距离衰减（vRadianceBlend）与密度/树干变暗
+  // （vLeafBrightness，官方远景变体按 uv.y 取）。
+  vPlRadianceBlend = 1.0 - clamp((plDist - 50.0) / 200.0, 0.0, 1.0) * 0.33;
+  vPlLeafBrightness = 1.0 - 0.25 * uPlShadowFactor * clamp((0.25 - uv.y) / 0.08, 0.0, 1.0);
 
   transformed.xz *= aPlSize.x;
   transformed.y *= aPlSize.y;
@@ -157,12 +168,16 @@ uniform float uPlFarTintScale;
 uniform float uPlTreeDiscolouration;
 uniform float uPlHasSnow;
 uniform float uPlSpecies;
+uniform float uPlRadiance;
+uniform float uPlShadowFactor;
 varying vec2 vPlUv;
 varying float vPlFar;
 varying float vPlTint;
 varying float vPlCell;
 varying vec3 vPlInstancePos;
 varying float vPlRoadProx;
+varying float vPlRadianceBlend;
+varying float vPlLeafBrightness;
 
 float plScreen2(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
 `
@@ -214,8 +229,9 @@ const FRAGMENT_BODY = /* glsl */ `
   }
 
   // 树卡 / 远景树：leafEffect 变色 + 冬季阔叶积雪。
+  float plLeafEffect = 0.0;
   if (uPlPaletteMode < 0.5) {
-    float plLeafEffect = step(plColor.b * 1.5, plColor.g);
+    plLeafEffect = step(plColor.b * 1.5, plColor.g);
     plColor.rg *= 1.0 - (1.0 - uPlTreeDiscolouration) * plLeafEffect;
   }
 
@@ -228,6 +244,14 @@ const FRAGMENT_BODY = /* glsl */ `
       plSnowUp = clamp(plN.y * 0.5 + 0.5, 0.0, 1.0);
     }
     plColor = mix(plColor, vec3(1.0), clamp(plSnowUp * 1.2, 0.0, 1.0) * 0.8);
+  }
+
+  // 官方自发光：草/灌木 = 最终色 × radiance；树卡 = 叶片辉光（官方树冠 radiance）。
+  if (uPlPaletteMode < 0.5) {
+    totalEmissiveRadiance =
+      vec3(plColor.rg * 8.0, 0.5) * uPlRadiance * vPlRadianceBlend * vPlLeafBrightness * plLeafEffect;
+  } else {
+    totalEmissiveRadiance = plColor * uPlRadiance;
   }
 
   diffuseColor = vec4(plColor, plAlpha);
@@ -254,12 +278,14 @@ export interface FoliageMaterialSeasonState {
 }
 
 export interface FoliageMaterialHandle {
-  material: THREE.MeshStandardMaterial
+  material: THREE.MeshLambertMaterial
   uniforms: FoliageMaterialUniforms
   spec: FoliageMaterialSpec
 }
 
 export interface FoliageMaterialUniforms {
+  uPlRadiance: THREE.IUniform<number>
+  uPlShadowFactor: THREE.IUniform<number>
   uPlSeasonIndex: THREE.IUniform<number>
   uPlWindStrength: THREE.IUniform<number>
   uPlPaletteA: THREE.IUniform<THREE.Color>
@@ -284,10 +310,8 @@ export function createFoliageMaterial(
   shared: FoliageShaderUniforms,
   season: FoliageMaterialSeasonState,
 ): FoliageMaterialHandle {
-  const material = new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshLambertMaterial({
     color: 0xffffff,
-    roughness: 1,
-    metalness: 0,
     alphaTest: 0.35,
     side: THREE.DoubleSide,
     transparent: false,
@@ -295,6 +319,9 @@ export function createFoliageMaterial(
   })
   material.name = `slowroads-foliage-${spec.kind}-${spec.tier}`
   const seasonUniforms: FoliageMaterialUniforms = {
+    // 树卡与远景树的官方 radiance 是地表的一半（oe.radiance = lights.radiance/2）。
+    uPlRadiance: { value: spec.kind === 'tree' ? 1 : 2 },
+    uPlShadowFactor: { value: 1 },
     uPlSeasonIndex: { value: 0 },
     uPlWindStrength: { value: 0.1 },
     uPlPaletteA: { value: new THREE.Color('#ffffff') },
@@ -325,7 +352,7 @@ export function createFoliageMaterial(
     uPlFarTintScale: { value: spec.farTintScale },
     uPlSpecies: { value: spec.species },
   }
-  material.customProgramCacheKey = () => `pl-foliage-v2-${spec.kind}-${spec.tier}-${spec.singlePlane ? 1 : 0}`
+  material.customProgramCacheKey = () => `pl-foliage-v3-${spec.kind}-${spec.tier}-${spec.singlePlane ? 1 : 0}`
   material.onBeforeCompile = (shader) => {
     for (const [name, uniform] of Object.entries(uniforms)) {
       shader.uniforms[name] = uniform as THREE.IUniform
@@ -336,6 +363,11 @@ export function createFoliageMaterial(
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${FRAGMENT_PARS}`)
       .replace('#include <map_fragment>', FRAGMENT_BODY)
+      // 官方自发光合成：emissive 乘进直射项（`direct × (1 + emissive)`）。
+      .replace(
+        'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
+        'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directDiffuse * totalEmissiveRadiance;',
+      )
     injectSlowroadsFog(shader)
   }
   const handle: FoliageMaterialHandle = { material, uniforms: seasonUniforms, spec }
@@ -358,6 +390,18 @@ export function applyFoliageMaterialSeason(
   uniforms.uPlPeakB.value.set(params.peakColB)
   uniforms.uPlTreeDiscolouration.value = season.discolouration
   uniforms.uPlHasSnow.value = season.hasSnow && spec.kind === 'tree' && spec.species === 0 ? 1 : 0
+}
+
+/**
+ * 环境光照同步（官方每季 × 时间 × 天气的 `lights.radiance` 与
+ * `effects.shadowFactor`）：树卡取 radiance/2（官方 tree 材质），草/灌木取全量。
+ */
+export function setFoliageMaterialLighting(
+  handle: FoliageMaterialHandle,
+  lighting: { radiance: number; shadowFactor: number },
+): void {
+  handle.uniforms.uPlRadiance.value = lighting.radiance * (handle.spec.kind === 'tree' ? 0.5 : 1)
+  handle.uniforms.uPlShadowFactor.value = lighting.shadowFactor
 }
 
 export function setFoliageMaterialTextures(
@@ -402,7 +446,7 @@ const scaleHelper = new THREE.Vector3()
 
 export function createFoliageLayerMesh(
   instances: ReadonlyArray<FoliageSpriteInstance>,
-  material: THREE.MeshStandardMaterial,
+  material: THREE.MeshLambertMaterial,
   unitSize: number,
   hostInverse: THREE.Matrix4 | null,
 ): THREE.InstancedMesh {

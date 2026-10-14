@@ -16,6 +16,7 @@ import {
   createFoliageMaterial,
   createFoliageShaderUniforms,
   disposeFoliageLayerMesh,
+  setFoliageMaterialLighting,
   setFoliageMaterialTextures,
   type FoliageMaterialHandle,
   type FoliageMaterialSpec,
@@ -37,6 +38,7 @@ import {
   type SeasonId,
 } from '../slowroads/core/seasonCatalog'
 import { SEASON_PARAMS } from '../slowroads/core/seasonParams'
+import { resolveEnvironmentPreset } from '../slowroads/core/environment'
 import {
   getBushEntries,
   getConiferCardRegions,
@@ -150,8 +152,10 @@ export interface ProceduralLandscapeRuntimeStats {
   farTreeInstances: number
 }
 
-export interface ProceduralLandscapeSeasonState {
+export interface ProceduralLandscapeEnvironmentState {
   season: SeasonId
+  timeOfDay: 'morning' | 'day' | 'evening' | 'night'
+  weather: 'clear' | 'overcast'
 }
 
 export interface ProceduralLandscapeRuntimeHooks {
@@ -160,7 +164,7 @@ export interface ProceduralLandscapeRuntimeHooks {
   getHostObject(): THREE.Object3D | null
   getCameraWorldPosition(): THREE.Vector3 | null
   /** 来自 ComponentFrameState.environment（EnvironmentPanel 设置）。 */
-  getSeasonState(): ProceduralLandscapeSeasonState | null
+  getSeasonState(): ProceduralLandscapeEnvironmentState | null
 }
 
 export interface ProceduralLandscapeRuntime {
@@ -359,6 +363,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
   // ---- 季节素材状态 ----
   let currentSeason: SeasonId = hooks.getSeasonState()?.season ?? 'spring'
+  let appliedLightingKey = ''
+  /** 最近一次下发的官方光照参数（新材质创建后需要补齐）。 */
+  const appliedLighting = { radiance: 2, shadowFactor: 1 }
   let seasonAssets: Map<string, THREE.Texture> | null = null
   let seasonAssetsSeason: SeasonId | null = null
   let seasonLoadToken = 0
@@ -737,6 +744,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       lift: clamp(0.02 + (grid?.averageEdgeLength ?? 0) * 0.008, 0.02, 0.45),
     })
     roadBand.setVisible(props.road.enabled)
+    roadBand.setRadiance(appliedLighting.radiance)
     tagArtifact(roadBand.mesh)
     hostObject.add(roadBand.mesh)
   }
@@ -830,6 +838,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       hasSnow: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].hasSnow,
     })
     applyFoliageSeasonToHandle(handle)
+    setFoliageMaterialLighting(handle, appliedLighting)
     foliageMaterials.set(key, handle)
     return handle
   }
@@ -1784,8 +1793,35 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     markInstancesDirty()
   }
 
+  /**
+   * 官方环境光照同步：把当前季/时间/天气预设的 `lights.radiance` 与当季
+   * `effects.shadowFactor` 下发给地表、道路与植被材质（官方 radiance 消费点：
+   * 地表/草/灌木/道路 = radiance，树卡与远景树 = radiance/2）。
+   */
+  function applyEnvironmentLighting(state: ProceduralLandscapeEnvironmentState): void {
+    const preset = resolveEnvironmentPreset(state)
+    const radiance = preset.lights.radiance ?? 0
+    const shadowFactor = SEASON_PARAMS[state.season].shadowFactor
+    appliedLighting.radiance = radiance
+    appliedLighting.shadowFactor = shadowFactor
+    uniforms.uPlRadiance.value = radiance
+    uniforms.uPlShadowFactor.value = shadowFactor
+    roadBand?.setRadiance(radiance)
+    for (const handle of foliageMaterials.values()) {
+      setFoliageMaterialLighting(handle, { radiance, shadowFactor })
+    }
+  }
+
   function syncSeasonFromFrameState(): void {
-    const next = hooks.getSeasonState()?.season ?? 'spring'
+    const environmentState = hooks.getSeasonState()
+    const next = environmentState?.season ?? 'spring'
+    const nextTimeOfDay = environmentState?.timeOfDay ?? 'day'
+    const nextWeather = environmentState?.weather ?? 'clear'
+    const lightingKey = `${next}|${nextTimeOfDay}|${nextWeather}`
+    if (lightingKey !== appliedLightingKey) {
+      appliedLightingKey = lightingKey
+      applyEnvironmentLighting({ season: next, timeOfDay: nextTimeOfDay, weather: nextWeather })
+    }
     if (next === currentSeason && (seasonAssetsSeason === next || seasonLoadInFlight)) {
       return
     }

@@ -9,6 +9,11 @@
  *   - index == 2 (autumn): roadside gravel brightens under tree shadow (1.8);
  *   - index == 3 (winter): no sand band, no roadside gravel, far detail x0.7,
  *     snow on leaf trees (normal-up mix), frozen water.
+ *
+ * The alpha-test values come from the official preset table
+ * (`foliage: { grassAlphaTest, bushAlphaTest, imposterAlphaTest }`; winter
+ * differs: .2/.3/.5). Near tree cards use fixed values instead: broadleaf .5
+ * (map alpha) and conifer .4 (alpha map), per the official shared tree material.
  */
 
 import { SEASON_INDEX, type SeasonId } from './seasonCatalog'
@@ -31,6 +36,12 @@ export interface SeasonParams {
   shadowFactor: number
   /** leaf-colour scaling for green-dominant tree pixels (leafEffect). */
   treeDiscolouration: number
+  /** official foliage.grassAlphaTest — grass sprite alpha cutout. */
+  grassAlphaTest: number
+  /** official foliage.bushAlphaTest — bush alpha cutout (floored by the distance alpha). */
+  bushAlphaTest: number
+  /** official foliage.imposterAlphaTest — far tree card alpha cutout. */
+  imposterAlphaTest: number
   /** winter: snow whitening on leaf trees + imposters. */
   hasSnow: boolean
   /** winter: flat/desaturated water surface. */
@@ -49,6 +60,9 @@ export const SEASON_PARAMS: Record<SeasonId, SeasonParams> = {
     roadCol: '#636260',
     shadowFactor: 0.8,
     treeDiscolouration: 1.5,
+    grassAlphaTest: 0.5,
+    bushAlphaTest: 0.2,
+    imposterAlphaTest: 0.6,
     hasSnow: false,
     frozenWater: false,
   },
@@ -63,6 +77,9 @@ export const SEASON_PARAMS: Record<SeasonId, SeasonParams> = {
     roadCol: '#5F5C5A',
     shadowFactor: 0.9,
     treeDiscolouration: 0.9,
+    grassAlphaTest: 0.5,
+    bushAlphaTest: 0.2,
+    imposterAlphaTest: 0.6,
     hasSnow: false,
     frozenWater: false,
   },
@@ -77,6 +94,9 @@ export const SEASON_PARAMS: Record<SeasonId, SeasonParams> = {
     roadCol: '#636260',
     shadowFactor: 0.8,
     treeDiscolouration: 1.2,
+    grassAlphaTest: 0.5,
+    bushAlphaTest: 0.2,
+    imposterAlphaTest: 0.6,
     hasSnow: false,
     frozenWater: false,
   },
@@ -91,6 +111,9 @@ export const SEASON_PARAMS: Record<SeasonId, SeasonParams> = {
     roadCol: '#959493',
     shadowFactor: 0.75,
     treeDiscolouration: 0.2,
+    grassAlphaTest: 0.2,
+    bushAlphaTest: 0.3,
+    imposterAlphaTest: 0.5,
     hasSnow: true,
     frozenWater: true,
   },

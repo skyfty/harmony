@@ -25,6 +25,8 @@ export interface RoadBandTextures {
 export interface RoadBandHandle {
   mesh: THREE.Mesh
   setSeason(season: SeasonId, textures: RoadBandTextures): void
+  /** 官方 `lights.radiance`（与地表共享）：路面自发光强度。 */
+  setRadiance(radiance: number): void
   setVisible(visible: boolean): void
   dispose(): void
 }
@@ -68,8 +70,12 @@ uniform sampler2D uRoadMap;
 uniform sampler2D uRoadOverlay;
 uniform float uRoadHasOverlay;
 uniform float uRoadShadowFactor;
+uniform float uRoadRadiance;
 varying vec2 vRoadUv;
 varying float vRoadShadow;
+
+/** 官方环境光树影调制（与地表同一变体）。 */
+float plRoadAmbientShadow = 1.0;
 `
 
 const FRAGMENT_BODY = /* glsl */ `
@@ -83,6 +89,9 @@ const FRAGMENT_BODY = /* glsl */ `
     float overlayFactor = clamp(vRoadShadow * uRoadShadowFactor * 3.0, 0.0, 1.0);
     roadTexel.rgb = mix(roadTexel.rgb, overlayCol.rgb, overlayFactor * overlayCol.a);
   }
+  // 官方路面自发光：路面色 × radiance（与地表共享预设 radiance）。
+  totalEmissiveRadiance = roadTexel.rgb * uRoadRadiance;
+  plRoadAmbientShadow = 1.75 - clamp(vRoadShadow, 0.75, 1.0);
   diffuseColor.rgb = roadTexel.rgb;
   diffuseColor.a = 1.0;
 }
@@ -151,11 +160,11 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     uRoadOverlay: { value: options.textures.overlay ?? options.textures.base },
     uRoadHasOverlay: { value: options.textures.overlay ? 1 : 0 },
     uRoadShadowFactor: { value: SEASON_PARAMS[options.season].shadowFactor },
+    uRoadRadiance: { value: 2 },
   }
-  const material = new THREE.MeshStandardMaterial({
+  // 官方路面 = Lambert（无镜面），自发光合成与地表一致。
+  const material = new THREE.MeshLambertMaterial({
     color: 0xffffff,
-    roughness: 1,
-    metalness: 0,
     alphaTest: 0.75,
     side: THREE.DoubleSide,
     transparent: false,
@@ -165,7 +174,7 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     polygonOffsetUnits: -4,
   })
   material.name = 'slowroads-road-band-material'
-  material.customProgramCacheKey = () => 'pl-road-band-v1'
+  material.customProgramCacheKey = () => 'pl-road-band-v2'
   material.onBeforeCompile = (shader) => {
     for (const [name, uniform] of Object.entries(uniforms)) {
       shader.uniforms[name] = uniform as THREE.IUniform
@@ -176,6 +185,14 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${FRAGMENT_PARS}`)
       .replace('#include <map_fragment>', FRAGMENT_BODY)
+      .replace(
+        '#include <lights_fragment_end>',
+        '#include <lights_fragment_end>\n\treflectedLight.indirectDiffuse *= plRoadAmbientShadow;',
+      )
+      .replace(
+        'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
+        'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directDiffuse * totalEmissiveRadiance;',
+      )
     injectSlowroadsFog(shader)
   }
 
@@ -193,6 +210,9 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
       uniforms.uRoadHasOverlay.value = textures.overlay ? 1 : 0
       uniforms.uRoadShadowFactor.value = SEASON_PARAMS[season].shadowFactor
       material.needsUpdate = true
+    },
+    setRadiance(radiance: number): void {
+      uniforms.uRoadRadiance.value = radiance
     },
     setVisible(visible: boolean): void {
       mesh.visible = visible

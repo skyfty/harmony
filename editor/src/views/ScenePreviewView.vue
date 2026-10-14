@@ -183,14 +183,9 @@ import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/r
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
-	resolveSceneCsmSunPositionFromAngles,
 	type SceneCsmConfig,
 	type SceneCsmShadowRuntime,
 } from '@schema/sceneCsm'
-import {
-	SLOWROADS_SUN_AZIMUTH_DEG,
-	SLOWROADS_SUN_ELEVATION_DEG,
-} from '@schema/slowroads/core/environment'
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
 	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
@@ -515,6 +510,8 @@ let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let currentScenePreviewEnvironmentSettings: EnvironmentSettings | null = null
 let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null
 let slowroadsAmbientLight: THREE.AmbientLight | null = null
+/** 官方三件套之一：半球光（sky = 预设 sun 色、ground = 黑）。 */
+let slowroadsHemisphereLight: THREE.HemisphereLight | null = null
 let currentSlowroadsEnvironmentState: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null = null
 const scenePreviewMultiuserVisiblePeerLimit = ref(DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS)
 
@@ -1924,16 +1921,12 @@ function disposeSceneCsmShadowRuntime(): void {
 	sceneCsmRuntimeConfigKey = ''
 }
 
-/** 固定太阳方向（lab 常量）；颜色/强度由 SR 预设经 refreshLighting 下发。 */
+/** 太阳定位：官方竖直向下；颜色/强度由 SR 预设经 refreshLighting 下发。 */
 function syncSceneCsmSunFromEnvironment(): void {
 	if (!sceneCsmShadowRuntime || !currentDocument) {
 		return
 	}
-	const sunPosition = resolveSceneCsmSunPositionFromAngles(
-		SLOWROADS_SUN_AZIMUTH_DEG,
-		SLOWROADS_SUN_ELEVATION_DEG,
-		1000,
-	)
+	const sunPosition = new THREE.Vector3(0, 1000, 0)
 	sceneCsmShadowRuntime.syncSun(
 		sunPosition,
 		DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
@@ -1962,18 +1955,24 @@ function ensureSlowroadsEnvironmentRuntime(): void {
 		assetStore,
 		applyLighting: (state) => {
 			if (!slowroadsAmbientLight) {
-				slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 0.75)
+				slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 1)
 				slowroadsAmbientLight.name = 'slowroads-ambient-light'
 				activeScene.add(slowroadsAmbientLight)
 			}
 			slowroadsAmbientLight.color.copy(state.ambientColor)
 			slowroadsAmbientLight.intensity = state.ambientIntensity
+			// 官方三件套的第三盏：半球光（sky = 预设 sun 色、ground = 黑）。
+			if (!slowroadsHemisphereLight) {
+				slowroadsHemisphereLight = new THREE.HemisphereLight('#ffffff', 0x000000, 1)
+				slowroadsHemisphereLight.name = 'slowroads-hemisphere-light'
+				activeScene.add(slowroadsHemisphereLight)
+			}
+			slowroadsHemisphereLight.color.copy(state.hemiColor)
+			slowroadsHemisphereLight.groundColor.setRGB(0, 0, 0)
+			slowroadsHemisphereLight.intensity = state.hemiIntensity
 			if (sceneCsmShadowRuntime && currentDocument) {
-				const sunPosition = resolveSceneCsmSunPositionFromAngles(
-					SLOWROADS_SUN_AZIMUTH_DEG,
-					SLOWROADS_SUN_ELEVATION_DEG,
-					1000,
-				)
+				// 官方太阳竖直向下（锚定载具的等价物 = 场景原点正上方）。
+				const sunPosition = new THREE.Vector3(0, 1000, 0)
 				sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`)
 			}
 		},
@@ -11101,6 +11100,9 @@ function initRenderer() {
 	setupStatsPanels()
 	renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, preserveDrawingBuffer: false,powerPreference: 'high-performance' })
 	renderer.outputColorSpace = THREE.SRGBColorSpace
+	// 官方 slowroads.io 使用 Cineon 色调映射（曝光 1）。
+	renderer.toneMapping = THREE.CineonToneMapping
+	renderer.toneMappingExposure = 1
 	renderer.shadowMap.enabled = true
 	renderer.shadowMap.type = THREE.PCFShadowMap
 	// Transmission is one of the most expensive extra passes in scenes with physical materials.

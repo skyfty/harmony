@@ -172,7 +172,6 @@ function formatFriction(): string {
       <div class="environment-panel">
         <section class="environment-section">
           <div class="section-title">Slow Roads 环境</div>
-          <div class="section-hint">季节/时间/天气驱动光照、三色雾、天空、云层、星空与降雪；素材固定来自在线资产包，太阳方向固定，无独立背景/雾参数。</div>
           <div class="toggle-label">季节</div>
           <div class="pl-choice-row">
             <button

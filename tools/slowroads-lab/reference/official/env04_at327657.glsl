@@ -1,0 +1,5 @@
+
+
+    diffuseColor.a = vBrightness;
+
+

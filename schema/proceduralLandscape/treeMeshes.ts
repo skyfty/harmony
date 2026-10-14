@@ -171,11 +171,11 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
     uTreeHasSnow: { value: 0 },
     uTreeSpecies: { value: species },
   }))
-  const materials: THREE.MeshStandardMaterial[] = [0, 1].map((species) => {
-    const material = new THREE.MeshStandardMaterial({
+  const materials: THREE.MeshLambertMaterial[] = [0, 1].map((species) => {
+    // 官方近树材质 = Lambert（无镜面）；树冠 radiance 项官方走 directSpecular
+    // （依赖车灯），白天不产生自发光，因此这里保持纯 Lambert 光照。
+    const material = new THREE.MeshLambertMaterial({
       color: 0xffffff,
-      roughness: 1,
-      metalness: 0,
       alphaTest: 0.5,
       side: THREE.DoubleSide,
       transparent: false,
@@ -183,7 +183,7 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
       // 网格 UV 直接采样树卡图集；法线来自模型 + 卡片法线混合。
     })
     material.name = `slowroads-near-tree-${species === 0 ? 'broadleaf' : 'conifer'}-material`
-    material.customProgramCacheKey = () => `pl-tree-mesh-v1-${species}`
+    material.customProgramCacheKey = () => `pl-tree-mesh-v2-${species}`
     material.onBeforeCompile = (shader) => {
       for (const [name, uniform] of Object.entries(uniformsBySpecies[species]!)) {
         shader.uniforms[name] = uniform as THREE.IUniform

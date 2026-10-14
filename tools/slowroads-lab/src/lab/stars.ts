@@ -103,11 +103,11 @@ export function createStars(): StarsHandle {
     horizonOffset: { value: 0 },
     horizonScale: { value: 4 },
   }
-  // 官方 size=0.01（约 1 物理像素）。lab 截图链路会 2× 降采样，1px 星点在
-  // 截图里不可见；这里放大 4× 仅用于 lab 可见性，迁移端可恢复 0.01。
+  // 官方 size=0.01（约 1 物理像素）；对齐官方后夜晴星空在 dpr=1 下与线上一致，
+  // 截图链路若做 2× 降采样会看不到星点（与官方同条件表现相同）。
   const material = new THREE.PointsMaterial({
     color: 0xffffff,
-    size: 0.04,
+    size: 0.01,
     forceSinglePass: true,
     depthTest: false,
     fog: true,
