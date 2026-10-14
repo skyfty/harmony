@@ -63,7 +63,12 @@ export interface FoliagePaletteOptions {
 }
 
 export interface FoliageTreeOptions {
-  /** 覆盖图集 alpha 变化：leafEffect 变色强度（官方 treeDiscolouration）。 */
+  /**
+   * 官方 `effects.treeDiscolouration`：树卡变色的**噪声幅度**，不是乘数。
+   * 着色器按官方顶点分块（un / Jg）先换算成乘数
+   * `disc = 1.0 + (noise(world.xz / 256.0) - 0.5) * factor`（冬季 0.2 → 0.9..1.1，
+   * 春 1.5 → 0.25..1.75），再按阔叶/针叶各自的通道规则施加；柏树列另有 *0.5+0.5 兜底。
+   */
   discolouration: number
   hasSnow: boolean
   /** 0 = broadleaf（冬季积雪），1 = conifer（不落雪）。 */
@@ -186,6 +191,10 @@ uniform float uUseDensityShadow;
 uniform sampler2D uDensityMap;
 uniform float uWorldSize;
 uniform float uWorldHalf;
+/** 官方 effects.treeDiscolouration：噪声变色幅度（不是乘数）。 */
+uniform float uTreeDiscolourationFactor;
+/** 官方树卡变色噪声（与 dissolve 共用 noiseMap；uv = 实例世界坐标 / 256）。 */
+uniform sampler2D uTreeDiscolourationNoise;
 varying vec2 vUv;
 varying vec2 vUvOffset;
 varying vec2 vUvBlend;
@@ -201,6 +210,7 @@ varying float vShadow;
 varying float vDissolve;
 varying vec3 vGroundNormal;
 varying vec2 vCardUv;
+varying float vTreeDiscolouration;
 #include <fog_pars_vertex>
 
 const float SR_PI = 3.141592653589793;
@@ -312,6 +322,21 @@ void main() {
     transformed *= 1.0 - step(0.999, vDissolve);
   }
 
+  // 官方树卡变色（顶点分块 un / Jg）：
+  //   discolouration = 1.0 + (texture2D(noiseMap, wPos.xz / 256.0).r - 0.5) * discolourationFactor;
+  //   if(vMapUv.x > 0.76) discolouration = discolouration * 0.5 + 0.5;   // 柏树兜底
+  // preset.effects.treeDiscolouration 是**幅度**而非乘数：冬季 0.2 只让乘数在 0.9..1.1 之间
+  // 抖动（此前误当乘数 → 绿通道被砍到 20%，只剩蓝通道 ⇒ 冬季树卡发紫）。
+  vTreeDiscolouration = 1.0;
+  if (uDynamicAlpha > 0.5 || uBillboard > 0.5) {
+    vTreeDiscolouration = 1.0
+      + (texture2D(uTreeDiscolourationNoise, instWorld.xz / 256.0).r - 0.5) * uTreeDiscolourationFactor;
+    // 柏树列兜底只存在于近树（树卡/近树网格）路径，imposter 图集的 x 是朝向列，不做该处理。
+    if (uBillboard < 0.5 && (atlasUv.x + vUvOffset.x) > 0.76) {
+      vTreeDiscolouration = vTreeDiscolouration * 0.5 + 0.5;
+    }
+  }
+
   vUv = atlasUv;
   vCell = aCell;
   vRoadProx = aRoadProx;
@@ -382,7 +407,8 @@ uniform vec3 uPeakA;
 uniform vec3 uPeakB;
 uniform vec3 uTint;
 uniform float uAlphaTest;
-uniform float uTreeDiscolouration;
+/** 官方树卡变色乘数（顶点按噪声幅度算好：≈1±factor/2）。 */
+varying float vTreeDiscolouration;
 uniform float uHasSnow;
 uniform float uSpecies;
 uniform float uHasNormalMap;
@@ -484,17 +510,17 @@ void main() {
   if (uPaletteMode < 0.5 && uBillboard > 0.5) {
     // 官方 imposter 叶色：阔叶用 discolouration 直接缩放 rg 并走叶辉光；针叶只压绿。
     if (uSpecies < 0.5) {
-      color.rg *= uTreeDiscolouration;
+      color.rg *= vTreeDiscolouration;
       emissive = vec3(color.rg * 8.0, 0.5) * uRadiance * vRadianceBlend * vLeafBrightness;
     } else {
-      color.g *= uTreeDiscolouration;
+      color.g *= vTreeDiscolouration;
     }
     color *= vRadianceBlend;
   } else if (uPaletteMode < 0.5) {
     // 官方 lit26（近树卡）：leafEffect 含 vLeafBrightness；emissive 先按未压暗的反照率计算，
     // 之后 diffuse 再整体乘 vRadianceBlend。
     leafEffect = step(color.b * 1.5, color.g) * vLeafBrightness;
-    color.rg *= 1.0 - (1.0 - uTreeDiscolouration) * leafEffect;
+    color.rg *= 1.0 - (1.0 - vTreeDiscolouration) * leafEffect;
     emissive = vec3(color.rg * 8.0, 0.5) * uRadiance * leafEffect * vRadianceBlend;
     color *= vRadianceBlend;
   }
@@ -615,7 +641,10 @@ export function createFoliageMesh(
       uPaletteB: { value: new THREE.Color(seasonParams ? seasonParams.grassColB : '#ffffff') },
       uPeakA: { value: new THREE.Color(seasonParams ? seasonParams.peakColA : '#ffffff') },
       uPeakB: { value: new THREE.Color(seasonParams ? seasonParams.peakColB : '#ffffff') },
-      uTreeDiscolouration: { value: options.tree ? options.tree.discolouration : 1 },
+      // 官方预设的 treeDiscolouration 是噪声幅度（顶点按 1±factor/2 换算成变色乘数）。
+      uTreeDiscolourationFactor: { value: options.tree ? options.tree.discolouration : 0 },
+      // 变色噪声与 dissolve 共用同一张 noiseMap（官方 Ui）；非树层因子为 0，取样被跳过。
+      uTreeDiscolourationNoise: { value: options.noiseMap ?? atlasTexture },
       uHasSnow: { value: options.tree?.hasSnow ? 1 : 0 },
       uSpecies: { value: options.tree ? options.tree.species : 0 },
       uTint: { value: new THREE.Color(options.tint) },

@@ -18,6 +18,7 @@ import {
   runMaterialUniformCoverageChecks,
   runSeasonCatalogChecks,
   runSelfChecks,
+  runTreeDiscolourationShaderChecks,
   type AssetsCatalogLike,
   type MaterialUniformCheckInput,
   type SelfCheckResult,
@@ -426,6 +427,9 @@ function auditLandscapeMaterialUniforms(): void {
     }
   })
   lastUniformCheck = runMaterialUniformCoverageChecks(materials)
+  // 树卡变色语义（官方 effects.treeDiscolouration 是噪声幅度）：因子只允许出现在顶点噪声
+  // 公式里，片元消费 varying —— 把因子直接当乘数就是冬季树冠发紫那个缺陷。
+  lastUniformCheck.push(...runTreeDiscolourationShaderChecks(materials))
   // 值断言：凡声明 uAmbientColor 的景观材质，官方三灯/半球 uniform 必须已按预设下发
   // （全 0 = 环境控制器没写进来——修复前地形就是这个状态）。
   const zeroed = new Set<string>()
@@ -836,6 +840,7 @@ function buildFoliageFromPlacements(): void {
 
   const broadleaf = placements.trees.filter((tree) => tree.species === 0)
   const conifer = placements.trees.filter((tree) => tree.species === 1)
+  // 官方 effects.treeDiscolouration 是变色噪声的**幅度**（着色器换算成 ≈1±factor/2 的乘数）。
   const treeOptions = { discolouration: params.treeDiscolouration, hasSnow: params.hasSnow }
   broadleafNearMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
     atlas: { texture: assets.broadleaf.texture, normalTexture: assets.broadleaf.normalTexture, regions: assets.broadleaf.regions },
@@ -1067,6 +1072,7 @@ async function applySeason(season: SeasonId, options: { silent?: boolean } = {})
     }
     treeMeshManager?.setSeason({
       textures: assets.treeMeshes,
+      // 官方 effects.treeDiscolouration = 变色噪声幅度（不是乘数）。
       discolouration: SEASON_PARAMS[season].treeDiscolouration,
       hasSnow: SEASON_PARAMS[season].hasSnow,
     })
@@ -1274,11 +1280,14 @@ async function init(): Promise<void> {
     assetStore: requireStore(),
     shared: foliageUniforms,
     densityMap: getFoliageDensityTexture(),
+    // 官方树卡变色噪声（Ui）：与树卡 dissolve 共用同一张 noiseMap，uv = 世界坐标 / 256。
+    noiseMap: sharedAssets.noise,
     worldSize: WORLD_SIZE,
   })
   scene.add(treeMeshManager.container)
   treeMeshManager.setSeason({
     textures: seasonAssets!.treeMeshes,
+    // 官方 effects.treeDiscolouration = 变色噪声幅度（顶点按 1±factor/2 换算成乘数）。
     discolouration: SEASON_PARAMS[activeSeason].treeDiscolouration,
     hasSnow: SEASON_PARAMS[activeSeason].hasSnow,
   })

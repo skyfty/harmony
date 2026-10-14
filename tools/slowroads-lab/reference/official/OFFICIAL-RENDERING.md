@@ -62,6 +62,30 @@ lab 侧对应实现：`lab/fogPatch.ts` 的 `resolveFogUniformColorSpace()` /
 | 树卡 / 远景树 | `vec3(diffuseColor.rg * 8.0, 0.5) * radiance * vRadianceBlend * vLeafBrightness * leafEffect` | `preset.lights.radiance / 2` |
 | 近树网格 | 走 `reflectedLight.directSpecular * totalEmissiveRadiance`（Lambert 无镜面 ⇒ 白天无自发光；夜间车灯高光即"树冠 radiance"） | `preset.lights.radiance / 2` |
 
+## 树卡变色 `treeDiscolouration` 的语义（2026-10 修正）
+
+`preset.effects.treeDiscolouration`（春 1.5 / 夏 .9 / 秋 1.2 / 冬 .2）是**噪声变色项的幅度**，
+不是通道乘数。官方顶点先把它换算成 ≈1 的乘数（块 `un` / `Jg`）：
+
+```glsl
+discolouration = 1.0 + (texture2D(noiseMap, wPos.xz / 256.0).r - 0.5) * discolourationFactor;
+if(vMapUv.x > 0.76) discolouration = discolouration * 0.5 + 0.5;   // 柏树列兜底（仅近树）
+```
+
+乘数区间：冬 0.2 → 0.9..1.1、春 1.5 → 0.25..1.75、夏 0.9 → 0.55..1.45、秋 1.2 → 0.4..1.6；
+imposter 顶点同样计算该值但**没有**柏树兜底。随后按层施加：
+
+| 层 | 通道规则 | 出处 |
+| --- | --- | --- |
+| 近树卡 / 近树网格（阔叶） | `leafEffect = step(b*1.5, g) * vLeafBrightness`；`rg *= 1 - (1 - disc) * leafEffect` | `lit26`（块 `Lu`） |
+| 近树卡 / 近树网格（针叶） | `g *= disc`（锥体路径另有 `vMapUv.x > 0.125` 树干列保护） | 块 `Qg` / `x0` |
+| 远景树（阔叶） | `rg *= disc` + 叶辉光 | 块 `Tu` |
+| 远景树（针叶） | `g *= disc` | 块 `Tu` 针叶分支 / `x0` |
+
+把因子直接当乘数时，冬季（0.2）r/g 只剩 20%，只剩蓝通道 ⇒ 雪地树冠发紫（lab 2026-10 修复）。
+分块原文归档：`tree-discolouration-vertex.glsl`、`tree-discolouration-channels.glsl`；
+未移植的圆锥假暗化（`M0` / `S0`）见 `tree-cone-fshadow.glsl`。
+
 - `vRadianceBlend = 1 - saturate((viewDepth - 50)/200) * 0.33`；
   `vLeafBrightness = 1 - 0.25 * shadowFactor * saturate((0.25 - uv.y)/0.08)`（远景树变体）；
   **近树变体**（近树卡与近树网格共享，`xr()` 材质）：`vLeafBrightness = 1 - densityFactor *

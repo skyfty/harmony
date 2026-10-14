@@ -14,6 +14,11 @@
  * (`foliage: { grassAlphaTest, bushAlphaTest, imposterAlphaTest }`; winter
  * differs: .2/.3/.5). Near tree cards use fixed values instead: broadleaf .5
  * (map alpha) and conifer .4 (alpha map), per the official shared tree material.
+ *
+ * `effects.treeDiscolouration` 是树卡变色噪声的**幅度**，不是通道乘数：官方顶点先用
+ * `1.0 + (noise(world.xz / 256.0) - 0.5) * factor` 换算成 ≈1 的乘数（冬季 0.2 →
+ * 0.9..1.1），柏树列再走 `* 0.5 + 0.5`。把因子直接当乘数会让冬季绿通道只剩 20%，
+ * 树冠因此发紫（2026-10 修复，见 lab/foliage.ts 与 lab/treeMeshes.ts 顶点注释）。
  */
 
 import { SEASON_INDEX, type SeasonId } from './seasonCatalog'
@@ -34,7 +39,13 @@ export interface SeasonParams {
   roadCol: string
   /** tree-shadow strength multiplier feeding the road overlay. */
   shadowFactor: number
-  /** leaf-colour scaling for green-dominant tree pixels (leafEffect). */
+  /**
+   * 官方 `effects.treeDiscolouration`：树卡/近树/远景树变色**噪声的幅度**，不是乘数。
+   * 官方顶点分块（un / Jg）先换算成乘数
+   * `disc = 1.0 + (noise(world.xz / 256.0) - 0.5) * factor`（冬 0.2 → 0.9..1.1、
+   * 春 1.5 → 0.25..1.75），柏树列再走 `disc * 0.5 + 0.5`；随后阔叶 `rg *= disc`
+   * （近树卡/近树网格为 `rg *= 1 - (1 - disc) * leafEffect`）、针叶 `g *= disc`。
+   */
   treeDiscolouration: number
   /** official foliage.grassAlphaTest — grass sprite alpha cutout. */
   grassAlphaTest: number

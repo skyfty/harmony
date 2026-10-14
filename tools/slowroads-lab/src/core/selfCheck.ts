@@ -408,6 +408,36 @@ export function runSeasonCatalogChecks(input: SeasonCatalogCheckInput): SelfChec
   }
   record('foliage alpha tests match official presets', alphaNotes.length === 0, alphaNotes.join(','))
 
+  // 12b. 树卡变色语义：官方 `effects.treeDiscolouration` 是噪声**幅度**，不是通道乘数。
+  //      顶点分块 un / Jg：`disc = 1 + (noise - 0.5) * factor`（柏树列再 *0.5+0.5）。
+  //      把因子直接当乘数时冬季（0.2）绿通道只剩 20% ⇒ 树冠洋红（2026-10 修复）。
+  const discolourationNotes: string[] = []
+  let winterDiscolourationOk = true
+  for (const season of SEASON_IDS) {
+    const factor = SEASON_PARAMS[season].treeDiscolouration
+    const range = scanTreeDiscolourationRange(factor)
+    // 乘数区间必须等于 [1 - factor/2, 1 + factor/2]（= 官方公式），而不是 {factor}。
+    const expectedMin = 1 - factor / 2
+    const expectedMax = 1 + factor / 2
+    if (Math.abs(range.min - expectedMin) > 1e-6 || Math.abs(range.max - expectedMax) > 1e-6) {
+      discolourationNotes.push(`${season}:range(${range.min.toFixed(3)}..${range.max.toFixed(3)})`)
+    }
+    if (season === 'winter' && (range.min < 0.9 - 1e-6 || range.max > 1.1 + 1e-6)) {
+      winterDiscolourationOk = false
+    }
+  }
+  record(
+    'tree discolouration = noise amplitude (1 ± factor/2)',
+    discolourationNotes.length === 0,
+    discolourationNotes.join(' '),
+  )
+  record(
+    'winter tree discolouration stays within 0.9..1.1 (no channel crush)',
+    winterDiscolourationOk,
+    `winter factor=${SEASON_PARAMS.winter.treeDiscolouration} → 乘数落在 0.9..1.1；`
+      + '把因子当乘数（旧缺陷）会得到 0.2 并让树冠发紫',
+  )
+
   const failed = results.filter((result) => !result.ok)
   if (failed.length) {
     console.warn(`[slowroads-lab] season checks failed: ${failed.map((result) => result.name).join(', ')}`)
@@ -576,6 +606,104 @@ export interface MaterialUniformCheckInput {
   vertexShader: string
   fragmentShader: string
   uniformKeys: readonly string[]
+}
+
+/* ------------------------- 树卡变色（treeDiscolouration） ------------------------- */
+
+/**
+ * 官方树卡变色乘数的纯函数镜像（顶点分块 un / Jg）：
+ *   `disc = 1.0 + (noise - 0.5) * factor;  if (柏树列) disc = disc * 0.5 + 0.5;`
+ * `factor` = 官方 `effects.treeDiscolouration`（幅度：春 1.5 / 夏 .9 / 秋 1.2 / 冬 .2），
+ * 不是通道乘数——直接乘通道会让冬季绿通道只剩 20%，树冠发紫。
+ */
+export function resolveTreeDiscolouration(
+  noise: number,
+  factor: number,
+  options?: { cypress?: boolean },
+): number {
+  const jittered = 1 + (noise - 0.5) * factor
+  return options?.cypress ? jittered * 0.5 + 0.5 : jittered
+}
+
+/** 噪声 0..1 扫描出的乘数区间（自检用：应等于 `[1 - factor/2, 1 + factor/2]`）。 */
+export function scanTreeDiscolourationRange(factor: number, steps = 64): { min: number; max: number } {
+  let min = Number.POSITIVE_INFINITY
+  let max = Number.NEGATIVE_INFINITY
+  for (let index = 0; index <= steps; index += 1) {
+    const value = resolveTreeDiscolouration(index / steps, factor)
+    min = Math.min(min, value)
+    max = Math.max(max, value)
+  }
+  return { min, max }
+}
+
+/** 变色着色器的源码断言输入（与 uniform 覆盖检查同源）。 */
+export interface TreeDiscolourationShaderInput {
+  name: string
+  vertexShader: string
+  fragmentShader: string
+}
+
+const TREE_SHADER_NAME = /^slowroads-(foliage|near-tree)-/
+const TREE_DISCOLOURATION_FORMULA = /-\s*0\.5\)\s*\*\s*uTreeDiscolourationFactor/
+const UNIFORM_DECLARATION_LINE = /^\s*uniform\b/
+
+/**
+ * 树卡变色着色器断言（防回归）：因子只能出现在顶点噪声公式里一次，片元必须消费
+ * `vTreeDiscolouration` varying。直接拿因子乘通道 = 冬季发紫那个缺陷，这里当场失败。
+ */
+export function runTreeDiscolourationShaderChecks(
+  materials: TreeDiscolourationShaderInput[],
+): SelfCheckResult[] {
+  const results: SelfCheckResult[] = []
+  const record = (name: string, ok: boolean, detail = ''): void => {
+    results.push({ name, ok, detail })
+    console.assert(ok, `[slowroads-lab tree-discolouration-check] ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+
+  const violations = new Set<string>()
+  const scoped = materials.filter((material) => TREE_SHADER_NAME.test(material.name))
+  for (const material of scoped) {
+    const vertex = stripGlslComments(material.vertexShader)
+    const fragment = stripGlslComments(material.fragmentShader)
+    const factorLines = vertex
+      .split('\n')
+      .filter((line) => line.includes('uTreeDiscolourationFactor') && !UNIFORM_DECLARATION_LINE.test(line))
+    if (factorLines.length !== 1) {
+      violations.add(`${material.name}:factor-lines=${factorLines.length}`)
+      continue
+    }
+    const formulaLine = factorLines[0]!
+    if (!TREE_DISCOLOURATION_FORMULA.test(formulaLine)) {
+      violations.add(`${material.name}:factor-not-in-noise-formula`)
+    }
+    if (!formulaLine.includes('texture2D(uTreeDiscolourationNoise')) {
+      violations.add(`${material.name}:no-noise-sample`)
+    }
+    if (!formulaLine.includes('256.0')) {
+      violations.add(`${material.name}:noise-scale-mismatch`)
+    }
+    if (!/varying\s+float\s+vTreeDiscolouration\s*;/.test(fragment)) {
+      violations.add(`${material.name}:fragment-missing-varying`)
+    }
+    if (fragment.includes('uTreeDiscolourationFactor')) {
+      violations.add(`${material.name}:fragment-uses-factor`)
+    }
+  }
+  const violationList = [...violations]
+  record(
+    'tree discolouration: factor only inside vertex noise formula',
+    violationList.length === 0,
+    violationList.length ? violationList.slice(0, 6).join(', ') : `tree materials=${scoped.length}`,
+  )
+
+  const failed = results.filter((result) => !result.ok)
+  if (failed.length) {
+    console.warn(`[slowroads-lab] tree discolouration checks failed: ${failed.map((result) => result.name).join(', ')}`)
+  } else {
+    console.info(`[slowroads-lab] tree discolouration checks passed (${results.length}, tree materials=${scoped.length})`)
+  }
+  return results
 }
 
 const UNIFORM_DECLARATION = /\buniform\s+(?:lowp\s+|mediump\s+|highp\s+)?\w+\s+(\w+)\s*(\[[^\]]*\])?\s*;/g

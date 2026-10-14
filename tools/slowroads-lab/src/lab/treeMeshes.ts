@@ -79,7 +79,15 @@ varying mat3 vBasis;
 /** 官方共享近树材质（xr()）的密度压暗与视深权重。 */
 varying float vLeafBrightness;
 varying float vRadianceBlend;
+/** 官方树卡变色乘数（顶点按噪声幅度换算：≈1±factor/2）。 */
+varying float vTreeDiscolouration;
+/** 官方 vCameraUp：世界空间的相机上方向（无 roll 时即 (0,1,0)）。 */
+varying vec3 vCameraUp;
 uniform sampler2D uDensityMap;
+/** 官方树卡变色噪声（与树卡共用 noiseMap；uv = 实例世界坐标 / 256）。 */
+uniform sampler2D uTreeDiscolourationNoise;
+/** 官方 effects.treeDiscolouration：噪声变色幅度（不是乘数）。 */
+uniform float uTreeDiscolourationFactor;
 uniform float uWorldSize;
 uniform float uWorldHalf;
 uniform float uShadowFactor;
@@ -103,6 +111,20 @@ void main() {
   vLeafBrightness = 1.0 - density * uShadowFactor * clamp((10.0 - heightMeters) / 3.0, 0.0, 1.0);
   float viewDepth = -mvPosition.z;
   vRadianceBlend = 1.0 - clamp((viewDepth - 50.0) / 200.0, 0.0, 1.0) * 0.33;
+  // 官方树卡变色（顶点分块 un / Jg）：
+  //   discolouration = 1.0 + (noise(wPos.xz / 256.0).r - 0.5) * discolourationFactor;
+  //   if(vMapUv.x > 0.76) discolouration = discolouration * 0.5 + 0.5;   // 柏树列兜底
+  // 这里的 factor 是幅度，乘数恒在 1 附近（冬季 0.2 → 0.9..1.1）。
+  vTreeDiscolouration = 1.0
+    + (texture2D(uTreeDiscolourationNoise, instOrigin.xz / 256.0).r - 0.5) * uTreeDiscolourationFactor;
+  // 近树图集 u 由 OBJ 给出并按 RepeatWrapping 绕回（官方 trees[r].d = Repeat）。
+  float atlasX = vUv.x - floor(vUv.x);
+  if (atlasX > 0.76) {
+    vTreeDiscolouration = vTreeDiscolouration * 0.5 + 0.5;
+  }
+  // 官方 vCameraUp = normalMatrix * vec3(0,1,0)（视空间相机上方向）；本着色器法线为世界空间，
+  // 因此取视矩阵第二行（相机 up 在世界空间的表示）。无 roll 时即 (0,1,0)。
+  vCameraUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
   gl_Position = projectionMatrix * mvPosition;
   #include <fog_vertex>
 }
@@ -115,7 +137,9 @@ uniform sampler2D uNormalTex;
 uniform float uHasAlphaTex;
 uniform float uHasNormalTex;
 uniform float uAlphaTest;
-uniform float uTreeDiscolouration;
+/** 官方树卡变色乘数（顶点按噪声幅度算好：≈1±factor/2）。 */
+varying float vTreeDiscolouration;
+varying vec3 vCameraUp;
 uniform float uHasSnow;
 uniform float uSpecies;
 ${LANDSCAPE_LIGHT_GLSL}
@@ -140,20 +164,23 @@ void main() {
     vec3 n = texture2D(uNormalTex, vUv).xyz * 2.0 - 1.0;
     normal = normalize(vBasis * n);
   }
-  // 官方共享近树材质（lit26）：leafEffect 含 vLeafBrightness（密林下半部压暗），
-  // 阔叶按 discolouration 变色并带叶辉光；针叶只缩放绿通道（无辉光）。
+  // 官方共享近树材质（lit26 / lh）：leafEffect 含 vLeafBrightness（密林下半部压暗），
+  // 阔叶按 discolouration 乘数变色并带叶辉光；针叶只缩放绿通道（无辉光）。
   float leafEffect = step(color.b * 1.5, color.g) * vLeafBrightness;
   vec3 emissive = vec3(0.0);
   if (uSpecies < 0.5) {
-    color.rg *= 1.0 - (1.0 - uTreeDiscolouration) * leafEffect;
+    color.rg *= 1.0 - (1.0 - vTreeDiscolouration) * leafEffect;
     emissive = vec3(color.rg * 8.0, 0.5) * uRadiance * leafEffect * vRadianceBlend;
   } else {
-    color.g *= uTreeDiscolouration;
+    color.g *= vTreeDiscolouration;
   }
   color *= vRadianceBlend;
+  // 官方近树阔叶积雪（Cu 分块）：dotUp 超过 0.1 才按朝上程度混白。
   if (uHasSnow > 0.5 && uSpecies < 0.5) {
-    float up = clamp(normal.y, 0.0, 1.0);
-    color = mix(color, vec3(1.0), clamp(up * 1.4, 0.0, 1.0) * 0.8);
+    float dotUp = dot(normal, vCameraUp);
+    if (dotUp > 0.1) {
+      color = mix(color, vec3(min(1.0, 0.5 + dotUp)), min(1.0, (dotUp - 0.1) * 8.0));
+    }
   }
   // 官方近树网格与近树卡共用材质：合成走 direct×(1+emissive)+indirect。
   float ndl = clamp(dot(normal, uSunDir), -1.0, 1.0) * 0.5 + 0.5;
@@ -177,12 +204,19 @@ export interface TreeMeshManagerOptions {
   shared: FoliageSharedUniforms
   /** 树密度图（近似官方 per-instance density 属性，与 foliage 同源）。 */
   densityMap: THREE.Texture
+  /** 官方树卡变色噪声（Ui：与树卡 dissolve 同一张 noiseMap）。 */
+  noiseMap: THREE.Texture
   /** 密度图覆盖的世界尺寸（米）。 */
   worldSize: number
 }
 
 export interface TreeMeshSeasonState {
   textures: TreeMeshTextures
+  /**
+   * 官方 `effects.treeDiscolouration`：噪声变色**幅度**（不是乘数）。
+   * 顶点按官方公式换算成乘数 `1 + (noise(world.xz/256) - 0.5) * factor`
+   * （冬季 0.2 → 0.9..1.1），柏树列再走 `*0.5+0.5` 兜底。
+   */
   discolouration: number
   hasSnow: boolean
 }
@@ -223,7 +257,9 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
       uHasNormalTex: { value: species === 0 ? 1 : 0 },
       // 官方 xr()：阔叶（map alpha）alphaTest .5，针叶（alpha map）alphaTest .4。
       uAlphaTest: { value: species === 0 ? 0.5 : 0.4 },
-      uTreeDiscolouration: { value: 1 },
+      // 官方预设的 treeDiscolouration 是噪声幅度（顶点按 1±factor/2 换算成乘数）。
+      uTreeDiscolourationFactor: { value: 0 },
+      uTreeDiscolourationNoise: { value: options.noiseMap },
       uHasSnow: { value: 0 },
       uSpecies: { value: species },
       // 官方光照：环境控制器按预设统一下发（树网格无自发光）。
@@ -325,11 +361,11 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
     setSeason(state: TreeMeshSeasonState): void {
       materials[0]!.uniforms.uAtlas!.value = state.textures.broadleafD
       materials[0]!.uniforms.uNormalTex!.value = state.textures.broadleafN
-      materials[0]!.uniforms.uTreeDiscolouration!.value = state.discolouration
+      materials[0]!.uniforms.uTreeDiscolourationFactor!.value = state.discolouration
       materials[0]!.uniforms.uHasSnow!.value = state.hasSnow ? 1 : 0
       materials[1]!.uniforms.uAtlas!.value = state.textures.coniferM
       materials[1]!.uniforms.uAlphaTex!.value = state.textures.coniferA
-      materials[1]!.uniforms.uTreeDiscolouration!.value = state.discolouration
+      materials[1]!.uniforms.uTreeDiscolourationFactor!.value = state.discolouration
       materials[1]!.uniforms.uHasSnow!.value = 0
     },
     setVisible(visible: boolean): void {

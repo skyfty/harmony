@@ -442,8 +442,97 @@ sRGB 模型三通道互相矛盾，坐实了色彩空间判断。
 用 `node scripts/serve-asset-bundle.mjs --port 8098`（本机 8097 被 dev server 占用）复现按需
 下载链路，面板里 URL 文案被截断，统计行显示「已下载 30.4MB」。
 
+## 渲染对齐官方（第六批：树卡变色语义，2026-10）
+
+**症状**：冬季（雪地）里针叶树冠呈**洋红/紫色**，与官方同 code 同季节明显不一致
+（`docs/season-winter.png` 的提交态即可复现）；春/秋/夏只是亮度略偏（不明显）。
+
+**根因**：官方 `effects.treeDiscolouration`（春 1.5 / 夏 .9 / 秋 1.2 / **冬 .2**）是变色**噪声的
+幅度**，不是通道乘数。官方顶点分块（`chunks__DevMidlineGenerator.7013ef99.js:1403`、
+`chunks__conifers.26f84295.js:3723`、`nodes__3.da2ad8c8.js:865/1361`）先把它换算成 ≈1 的乘数：
+
+```glsl
+discolouration = 1.0 + (texture2D(noiseMap, wPos.xz / 256.0).r - 0.5) * discolourationFactor;
+if(vMapUv.x > 0.76) discolouration = discolouration * 0.5 + 0.5;   // 柏树列兜底（仅近树）
+```
+
+lab 此前把因子本身当乘数（`foliage.ts:487/490/497`、`treeMeshes.ts:148/151`）：冬季
+`g *= 0.2`（针叶）/ `rg *= 0.2`（阔叶/近树卡），绿通道被压掉 80% 只剩蓝通道 ⇒ 洋红。
+图集实测吻合：冬季针叶近树图集 `winter_trees_1_m` 均值 (74,87,71) → ×0.2 得 (74,17,71)；
+远景树图集 `winter_imposters_1_d` (79,81,78) → (79,16,78)。夏季 0.9 仅轻微压暗、春秋 >1 偏亮，
+所以只有冬季暴露成"紫色"。三层树（近树卡 / 近树 3D 网格 / 远景树）都受影响——官方 imposter
+同样用 `rg *= disc` / `g *= disc`（块 `Tu`），不是不用。
+
+**修复**（`src/lab/foliage.ts`、`src/lab/treeMeshes.ts`、`src/core/seasonParams.ts` 注释、
+`src/main.ts` 接线）：
+
+1. uniform 更名 `uTreeDiscolouration` → `uTreeDiscolourationFactor`（值仍是预设因子），新增
+   varying `vTreeDiscolouration`：在顶点按官方公式用 `noise(world.xz / 256)` 换算成乘数，
+   近树层（`uDynamicAlpha` / 近树网格）再套柏树列 `*0.5+0.5`，imposter 不套（官方 imposter 无此项）。
+   噪声贴图与树卡 dissolve 共用同一张（官方 `Ui` = `noise_fine.592be1a0`）。
+2. 片元改消费 varying：imposter 阔叶 `rg *= disc` + 叶辉光、imposter 针叶 `g *= disc`、
+   近树卡/近树网格阔叶 `rg *= 1-(1-disc)*leafEffect`、近树网格针叶 `g *= disc`。
+3. 顺带对齐（同一批官方分块）：近树 3D 网格阔叶的**积雪公式**改为官方 `Cu`
+   （`dotUp = dot(normal, vCameraUp)`，`dotUp > 0.1` 才混 `vec3(min(1, 0.5+dotUp))`，
+   系数 `min(1, (dotUp-0.1)*8)`），替换此前 lab 自创的 `clamp(up*1.4)*0.8`；顶点补世界空间相机
+   上方向 `vCameraUp`（等价官方 `normalMatrix * vec3(0,1,0)`，lab 网格法线是世界空间）。
+4. 防回归自检：`core/selfCheck.ts` 新增纯函数 `resolveTreeDiscolouration(noise, factor)`
+   （含柏树兜底）+ 季节检查断言「乘数区间 = 1 ± factor/2」「冬季乘数落在 0.9..1.1」，
+   以及着色器源码断言 `runTreeDiscolourationShaderChecks`：因子只允许出现在顶点噪声公式里
+   一次，片元必须消费 `vTreeDiscolouration`（把"拿因子直接乘通道"这个缺陷钉死）。
+
+**验收数据**（种子 456268425、重置视角、1688×1270、同机位；洋红像素 = `r-g>25 且 b-g>25 且
+min(r,b)>70`；树带 = 画面两侧针叶树带）：
+
+| 指标 | 修复前 | 修复后 | 官方参考图 |
+| --- | --- | --- | --- |
+| 冬季·昼·晴 洋红像素占比 | 4.55% | **0%** | 0%（`docs/official/season-winter-day-clear.png`） |
+| 冬季·昼·晴 树带右侧均值 | (179,162,189) g<r,b | (179,188,190) g≥r,b | — |
+| 冬季·昼·晴 树带左侧均值 | (162,150,167) g<r,b | (162,167,167) g≥r,b | — |
+| 冬季·昼·晴 雪地均值（作用域对照） | (141,144,145) | (141,144,145) | — |
+
+- 作用域：仅树层变化，雪地/道路/天空逐通道不变；启动自检
+  `season checks passed (10)`（新增 2 条）、`tree discolouration checks passed (1, tree materials=15)`、
+  `uniform checks passed (1, materials=18)` 全绿；`type-check` / `build` 通过。
+- 数值扫描（`resolveTreeDiscolouration` 的纯函数镜像，噪声 0..1 步进 1000，含柏树兜底）：
+
+  | 季节 | factor | 乘数区间 | 柏树列区间 | 旧缺陷（因子当乘数） |
+  | --- | --- | --- | --- | --- |
+  | 春 | 1.5 | 0.250..1.750 | 0.625..1.375 | 1.5（恒偏亮） |
+  | 夏 | 0.9 | 0.550..1.450 | 0.775..1.225 | 0.9（恒偏暗） |
+  | 秋 | 1.2 | 0.400..1.600 | 0.700..1.300 | 1.2（恒偏亮） |
+  | 冬 | 0.2 | **0.900..1.100** | 0.950..1.050 | **0.2（绿通道砍到 20% → 洋红）** |
+
+- 其它季节抽查（同机位、树带/地面亮度比）：春·昼·晴 1.209 → 1.073、秋·昼·晴 1.128 → 1.068
+  （此前对阔叶/针叶一律 ×1.5 / ×1.2，偏亮；现在按官方噪声乘数落在 1 附近），
+  冬季 1.20（雪地树带）；无"发白/压死"回归。跨图绝对值仍受取景/地形差异限制
+  （官方参考图相机在山坡草地、lab 在河谷，README 前几批已记录）。
+- 逐层抽查（冬季·昼·晴，同机位，洋红像素占比）：只留近树 3D 网格（关「树卡/远景树」）
+  0%、只留树卡/远景树（关「近树 3D 网格」）0% —— 两层都已修复，不是被另一层遮住。
+
+**重拍**：`docs/env-*.png`（10 张，含 `env-compat-2048`，`env-server-mode` 用
+`node scripts/serve-asset-bundle.mjs --port 8098` 复现，统计行显示「已下载 30.4MB」）、
+`docs/season-*.png`（4 张）、`preview.png` 全部按同一固定机位（种子 456268425、重置视角）
+重拍；`docs/official/*` 参考图未动。修复前后同机位对照留在
+`.tmp-winter-before.png`（洋红树冠）与 `.tmp-winter-after.png`（修复后）。
+
+**证据归档**：`reference/official/tree-discolouration-vertex.glsl`（幅度 → 乘数公式 + 柏树兜底）、
+`tree-discolouration-channels.glsl`（逐层通道规则 + 近树积雪 `Cu`）、
+`tree-cone-fshadow.glsl`（未移植的圆锥假暗化，含原因）、`OFFICIAL-RENDERING.md` 新增语义小节。
+
 ## 已知差异与后续
 
+- **近树卡圆锥假暗化未移植**（第六批顺带核对）：官方近树卡是**圆锥网格**，其 `fShadow =
+  sqrt(saturate(vShadow)) * 0.65; rgb *= 1 - fShadow`（块 `M0`）依赖锥面径向位置
+  （`centerDist`、`position.y / 12` 米高、larch/cypress 半径修正）；lab 近树卡是十字面片精灵，
+  几何上没有对应量，强行套用只会恒 0 或错误压暗，故维持「密度图近似 per-instance shadow」。
+  原文见 `reference/official/tree-cone-fshadow.glsl`。
+- **针叶树干列保护 `if(vMapUv.x > 0.125) g *= discolouration`** 只出现在官方 cone-card 路径
+  （块 `Qg` / `M0`）；lab 近树卡单元格（u ≈ 0.465..0.759）与近树网格 OBJ uv 恒大于 0.125，
+  该保护等价于不启用，因此未加代码（结论已记录，若将来改图集布局需一并启用）。
+- **远景树 `S0` 假暗化待查**：`chunks__conifers` 的 `S0`（注释称 imposters 变体，
+  `rgb *= 1 - sqrt(saturate(vShadow))`）需要 `vShadow` varying，而官方远景树顶点
+  （`_u`/`Pu`/`Nu`）并未声明它——真实消费者未定位到 lab 对应的远景树层，本轮不实现。
 - 依赖官方世界生成器的属性，lab 用等价近似：per-instance `shadow`/`density`（树影）
   用树密度图采样近似（含第三批的近树 `vLeafBrightness`）；树卡 dissolve 的 per-instance
   随机量用实例位置哈希近似；近树 3D 网格半径（90m）仍是 lab 默认值（官方是分块流式加载的
