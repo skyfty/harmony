@@ -1,14 +1,17 @@
 import * as THREE from 'three'
 import {
   ENVIRONMENT_CLOUD_ALTITUDE,
+  ENVIRONMENT_SKY_DISTANCE,
   ENVIRONMENT_VIEW_DISTANCE,
   resolveEnvironmentPreset,
   resolveFogParams,
+  resolveSkyFogParams,
   type EnvironmentState,
   type ResolvedFogParams,
 } from '../core/environment'
 import {
   applyFogToScene,
+  applySkyFogParams,
   resolveFogUniformColorSpace,
   slowroadsFogUniforms,
   updateHazeForCamera,
@@ -28,6 +31,14 @@ import type { WaterHandle } from './water'
  *  - 雾：三色 + haze（每帧按相机高度插值）；
  *  - 水面颜色与菲涅尔、天空距离、云层、星空、降雪；
  *  - 季节切换只换资产集，环境参数始终由本控制器统一下发（季节也是预设维度）。
+ *
+ * 雾尺度（第五批）：官方 `updateSky()` 用 `n1 = tileSize × 2`(=ENVIRONMENT_SKY_DISTANCE)
+ * 推 fogNear/fogFar 与天空平面位置，而 lab 的地形/植被用 1000 尺度以免露出 1600m
+ * 世界的边缘。因此这里维护两套参数：
+ *   - `baseFog`（场景）：地形 / 植被 / 道路 / 水面 / 降雪，经 `applyFogToScene` 下发；
+ *   - `skyBaseFog`（天空）：天空平面 / 云层 / 星空，写进共享天空组实例。
+ * 两套各自按相机高度跑一次官方 haze 插值；`preset.fog.near < 0` 的预设因此不再把
+ * 天空 vFogBlend 压到 0.722（官方 1.0）。
  *
  * 曝光标定：lab 的材质在无 tone mapping 下用 `color *= ambient + sun*ndl` 手工
  * 光照，官方则用 three 灯光管线（sun 强度最高 4、ambient/hemi 1.x）。为了让
@@ -61,7 +72,10 @@ export interface EnvironmentController {
   update(deltaSeconds: number): void
   setToggles(toggles: EnvironmentToggles): void
   readonly state: EnvironmentState | null
+  /** 场景雾尺度（地形/植被/道路/水面/降雪）。 */
   readonly activeFog: ResolvedFogParams
+  /** 天空雾尺度（官方 n1 = tileSize × 2，天空/云层/星空）。 */
+  readonly skyFog: ResolvedFogParams
   dispose(): void
 }
 
@@ -98,6 +112,11 @@ export function createEnvironmentController(options: EnvironmentControllerOption
     timeOfDay: 'day',
     weather: 'clear',
   }))
+  let skyBaseFog: ResolvedFogParams = resolveSkyFogParams(resolveEnvironmentPreset({
+    season: 'spring',
+    timeOfDay: 'day',
+    weather: 'clear',
+  }))
   let state: EnvironmentState | null = null
   let toggles: EnvironmentToggles = { sky: true, clouds: true, stars: true, snow: true }
   const forwardScratch = new THREE.Vector3()
@@ -105,6 +124,7 @@ export function createEnvironmentController(options: EnvironmentControllerOption
   let cachedSnow: ReturnType<typeof resolveEnvironmentPreset>['snow'] | null = null
   let colorsDirty = true
   let lastFog: ResolvedFogParams | null = null
+  let lastSkyFog: ResolvedFogParams | null = null
   let elapsedSeconds = 0
 
   /**
@@ -198,12 +218,38 @@ export function createEnvironmentController(options: EnvironmentControllerOption
     lastFog = params
   }
 
+  /**
+   * 天空侧下发：写共享天空组实例（内置材质无法通过 material.uniforms 遍历）。
+   * 颜色与场景组同源（同一预设），只有 near/far/density/haze 是天空尺度。
+   */
+  const applySkyFog = (params: ResolvedFogParams): void => {
+    const unchanged = !colorsDirty
+      && lastSkyFog !== null
+      && lastSkyFog.near === params.near
+      && lastSkyFog.far === params.far
+      && lastSkyFog.density === params.density
+      && lastSkyFog.hazeHeight === params.hazeHeight
+      && lastSkyFog.hazeIntensity === params.hazeIntensity
+    if (unchanged) {
+      return
+    }
+    if (colorsDirty) {
+      // 与 applyFog 共用同一次换算结果（同一预设的 fogColorA/B/C）。
+      writeFogUniformColors(fogColors, fogUniformColors, resolveFogUniformColorSpace(renderer))
+    }
+    applySkyFogParams(params, fogUniformColors)
+    lastSkyFog = params
+  }
+
   return {
     get state() {
       return state
     },
     get activeFog() {
       return baseFog
+    },
+    get skyFog() {
+      return skyBaseFog
     },
     applyState(next: EnvironmentState): void {
       state = next
@@ -222,9 +268,13 @@ export function createEnvironmentController(options: EnvironmentControllerOption
       fogColors.colC.set(preset.fog.colC ?? preset.fog.colB)
       colorsDirty = true
       baseFog = resolveFogParams(preset)
+      skyBaseFog = resolveSkyFogParams(preset)
       hazeState.inHaze = false
       applyFog(baseFog)
-      options.sky.setViewDistance(ENVIRONMENT_VIEW_DISTANCE)
+      applySkyFog(skyBaseFog)
+      // 天空平面挂在官方 n1 距离（= 天空尺度 fogFar），云层几何保持 300m/1000 尺度
+      // （云穹与纹理平铺对该组合是尺度不变量，见 clouds.ts）。
+      options.sky.setViewDistance(ENVIRONMENT_SKY_DISTANCE)
       options.clouds.setState(preset.clouds, ENVIRONMENT_CLOUD_ALTITUDE, ENVIRONMENT_VIEW_DISTANCE)
       cachedStars = preset.stars ?? null
       cachedSnow = preset.snow ?? null
@@ -241,7 +291,9 @@ export function createEnvironmentController(options: EnvironmentControllerOption
     },
     update(deltaSeconds: number): void {
       const effective = updateHazeForCamera(baseFog, camera.position.y, hazeState)
+      const effectiveSky = updateHazeForCamera(skyBaseFog, camera.position.y, hazeState)
       applyFog(effective)
+      applySkyFog(effectiveSky)
       elapsedSeconds += deltaSeconds
       options.clouds.update(deltaSeconds, camera.position)
       options.stars.update(camera.position)

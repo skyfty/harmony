@@ -107,8 +107,12 @@ lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4
   详见 `reference/official/OFFICIAL-RENDERING.md`（官方包体反推基准）。
 - **三色高度雾**：直接替换 three 的 `ShaderChunk.fog_*`（`src/lab/fogPatch.ts`），
   圆柱雾距、噪声雾顶、正负 haze 层、A/B 视线混色 + C 色去饱和；每帧按相机高度
-  复现官方 haze 插值。视距 1000m，雾距 = 视距 × 预设比例，密度 = √5/fogFar。
+  复现官方 haze 插值。雾尺度和官方一样分两档（第五批）：
+  地形/植被/道路/水面/降雪用 `ENVIRONMENT_VIEW_DISTANCE`(1000)，天空/云层/星空用官方
+  `n1 = tileSize × 2`(`ENVIRONMENT_SKY_DISTANCE` = 2000)；两者都是「雾距 = 尺度 × 预设比例、
+  密度 = √5/fogFar」。
 - **天空**：挂在相机上的巨型平面 + 上述雾（与官方同款"雾化天空"），renderOrder -10。
+  平面挂在官方 `n1`(2000) 距离、绑天空组雾 uniform，因此 A/B 渐变与官方一致。
 - **云层**：双 shelf 视差 + 时间滚动 + highlight/lowlight + 官方 4 种混合模式；
   云平面跟随相机、固定世界高度 300m。
 - **星空**：夜晴专属（官方 4000 点、seeded 分布 ×2 组按 density 显隐；`glow`
@@ -380,6 +384,64 @@ sRGB 模型三通道互相矛盾，坐实了色彩空间判断。
 - 重拍：`docs/env-*.png`（10 张）、`docs/season-*.png`（四季）、`preview.png` 全部按同一
   固定机位重拍；`docs/official/*` 参考图未动。
 
+## 渲染对齐官方（第五批：天空/云层雾尺度，2026-10）
+
+**症状**：春季早晨（以及春季傍晚等暗时段）lab 天空比官方「更糊」——下部过饱和发粉/发橙、
+上部缺蓝，云层结构弱。对照官方同 code 同时间：春·晨·晴 官方天空是「地平线粉 → 上部薰衣草
+蓝」的渐变，lab 则是覆盖到画面顶部的均匀粉。
+
+**根因**：lab 把 `ENVIRONMENT_VIEW_DISTANCE`(1000) 同时当作雾尺度（fogNear/fogFar、天空平面
+距离、云层覆盖权重），而官方 `updateSky()` 用的是 `n1 = graphicsPreset.tileSize * 2`(2000)
+（`reference/official/bundle-excerpts.js:156`）。由于 `vFogBlend` 由 `(fogNear + fogFar)/2`
+推出：`preset.fog.near < 0` 的 8 套预设（春·晨·晴 / 春·晨·阴 / 春·夜·阴 / 夏·晨·阴 /
+夏·昏·阴 / 冬·昼·阴 / 冬·昏·晴 / 冬·夜·阴）在 1000 尺度下 `fogAvg = 400 < 500` → 0.778
+（经相机 haze 插值约 0.72），官方 800 → 1.0；天空 A/B 每仰角少混 0.116，云层覆盖权重
+`min(1, fogBlend)` 同时被压到 ~72%。
+
+**修复**：把「天空 + 云层 + 星空」的雾参数改用官方 `n1 = 2000` 尺度，与地形/植被的 1000 尺度
+拆成两组共享 uniform（`fogPatch.ts` 的 `slowroadsFogUniforms` / `slowroadsSkyFogUniforms`）；
+天空平面挂到 `z = -(2000 - 0.1)`；`environmentController` 每帧对两套参数各跑一次官方 haze 插值。
+地形 / 植被 / 道路 / 水面 / 降雪保持 1000 尺度（1600m 世界边缘遮挡与性能不变），云层几何
+（云高 300 / 平面 3600）不变（对 (云高, 视距) 是尺度不变量）。
+
+1. `core/environment.ts`：新增 `ENVIRONMENT_SKY_DISTANCE`（= 2 × `ENVIRONMENT_VIEW_DISTANCE`）、
+   `resolveSkyFogParams()`、`resolveFogDepthBlend()`（官方 `vFogBlend` 纯函数）。
+2. `lab/fogPatch.ts`：新增天空组共享 uniform + `bindSlowroadsSkyFogUniforms()` /
+   `applySkyFogParams()`；天空/云/星材质改绑天空组。注意 three 的 `refreshFogUniforms` 对
+   `FogExp2` 只写 `fogDensity`，会把场景密度写进天空组 —— 对天空无影响（天空平面位于天空尺度
+   fogFar，`vFogDepth` 已饱和），因此**不要**为了让密度一致去改 `scene.fog.density`。
+3. 自检：`core/selfCheck.ts` 增加天空尺度断言（`sky = 2 × view`、参考预设天空 vFogBlend = 1 /
+   场景 = 0.7778、32 套预设「天空 blend ≥ 场景 blend」且「二者不等恰好落在场景 fogAvg < 500
+   的预设上」）；`main.ts` 新增运行时 `checkSkyFogScale()`（天空组 uniform = 天空尺度参数的
+   haze 插值结果、天空 far = 2 × 场景 far、天空平面 z、两组雾色一致），挂在 world 重建末尾。
+
+**验收数据**（种子 456268425、同固定机位、1688×1270）：
+
+- 硬性断言（启动日志）：`sky fog scale: sky vFogBlend=1.0000 scene vFogBlend=0.7778
+  (spring/morning/clear, skyFar=2000.0, sceneFar=1000.0)`；`environment checks passed (8)`、
+  uniform 覆盖审计全绿。
+- 平面证据（关掉「云层」开关，隔离天空平面）：春·晨·晴 天空剖面对上模型
+  `mix(colA, colB, 2·sinθ·vFogBlend)` —— 9° 实测 (193,164,201)，天空尺度模型 (203,160,194)，
+  场景尺度模型 (209,158,189)；12° 实测 (186,167,209) vs (195,164,201) vs (202,161,195)。
+  实测落在天空尺度一侧（偏蓝于模型，来自取样行对应的真实仰角更高），修复前后一致证明天空组
+  参数确实进了 shader。
+- 对照官方参考图（`docs/official/season-spring-morning-clear.png`，按各自地平线同仰角取样）：
+  春·晨·晴 逐通道差 修复前 (+8,−6,−6)@12° → 修复后 (+11,−1,−3)@12°（B/G 收敛、R 未收敛）；
+  0.4–11° 整带均值：修复前 (210,152,180) → 修复后 (210,152,179)，官方 (205,154,184)。
+  春·昏·晴（该档天空 vFogBlend 本就是 1.0，改动只落在云层绑定）：修复前/后与官方参考图
+  `docs/official/season-spring-evening-clear.png` 的差分别在 ±3（1.5–9°）与 ±8（12°）以内，
+  修复前后逐段变化 ≤4 —— 即傍晚天空平面本就与官方一致，本批不改变也不劣化它。
+- **结论（如实记录）**：天空平面与云层覆盖权重已按官方尺度下发（可证），但本机位下「带云层」
+  的整幅天空观感几乎不变 —— 平面变蓝（+0.116 混合）与云层覆盖变强（×1.39，晨云为粉/灰）
+  正好互相抵消。修复后与官方参考图残余的 +5R/−5B（整带）主要来自参考图取景差异（官方图
+  相机俯仰与地平线判定不同、FOV 未知）与云层图案随世界坐标的相位差（两侧世界不同），
+  不是雾尺度问题。
+
+**重拍**：`docs/env-*.png`（10 张）、`docs/season-*.png`（4 张）、`preview.png` 按同一固定
+机位（种子 456268425、重置视角）重拍；`docs/official/*` 参考图未动。`env-server-mode.png`
+用 `node scripts/serve-asset-bundle.mjs --port 8098`（本机 8097 被 dev server 占用）复现按需
+下载链路，面板里 URL 文案被截断，统计行显示「已下载 30.4MB」。
+
 ## 已知差异与后续
 
 - 依赖官方世界生成器的属性，lab 用等价近似：per-instance `shadow`/`density`（树影）
@@ -401,12 +463,20 @@ sRGB 模型三通道互相矛盾，坐实了色彩空间判断。
 - **环境尺度**：lab 把官方 graphics preset 的 `tileSize`(1000) 当作视距，而官方 Hills 实际用
   `n1 = tileSize * 2`(2000) 作为 fogNear/fogFar、天空平面 `sky.position.z = -n1 + 0.1`
   与云平面尺度（`P2 = max(n1*2, cloudAltitude*12)`），云高取该档的 `cloudAltitude`(500)
-  （lab 现为视距 1000 / 云高 300）。因为 `vFogBlend` 由 `(fogNear+fogFar)/2` 推出，春晨这类
-  `near < 0` 的预设 lab 得 0.778、官方为 1.0 —— 天空上部因此比官方少一点蓝（春·昼·晴顶部
-  残余相当一部分来自这里），云纹理尺度也有 1.67× 差。本次按用户选择只修雾色色彩空间，
-  该尺度差异保留：lab 世界只有 1600m，直接套官方尺度会让晚间 800m 内完全无雾、露出世界边缘。
+  （lab 云层几何仍为云高 300 / 云平面 3600）。**第五批已把天空 / 云层 / 星空的雾参数改用官方
+  `n1`(2000) 尺度**（见上文第五批），因为 `vFogBlend` 由 `(fogNear+fogFar)/2` 推出，春晨这类
+  `near < 0` 的预设此前 lab 得 0.778、官方为 1.0，天空 A/B 混色与云层覆盖权重
+  `min(1,fogBlend)` 都被压低。
+  **地形 / 植被 / 道路 / 水面 / 降雪仍是 1000 尺度**：lab 世界只有 1600m，直接套官方尺度会让
+  晚间 1200m 内完全无雾、露出世界边缘。因此地平线附近的远景雾浓度仍比官方高（同一距离约
+  2× 雾量），要整套对齐需把世界扩到约 4000m 或给地形加分层次 LOD，另开一批。
+  云穹的投影与纹理平铺对 (云高, 视距) 是尺度不变量（半宽 = max(2×视距, 12×云高)、纹理单元 =
+  `skyScale × 云高`，两者同比例），所以云高 300 与官方的 500 在屏幕上等价，不存在
+  「云纹理尺度 1.67× 差」（原文该说法有误，已更正）。唯一残差来自相机高度：lab 相机（~13–45m）
+  远高于官方（~2m），云纹理在天空中的采样相对位置仍有约 6–11% 差异。
 - **迁移端未同步**：`schema/slowroads/render/fogInjection.ts` +
   `schema/slowroads/core/environment.ts`（以及 editor / preview / SceneryViewer 视口）仍是
-  第四批修复前的写法（雾色按工作色空间推入），需要后续同步同一处改动。
+  第四批修复前的写法（雾色按工作色空间推入），且没有第五批的天空/云层雾尺度拆分，需要后续
+  同步这两处改动。
 - editor/preview/SceneryViewer 的正式接入与小程序真机验证为下一步；本工程交付
   lab 验证 + 资产包（`assets-src/asset-bundle.json`）+ 上述映射文档。

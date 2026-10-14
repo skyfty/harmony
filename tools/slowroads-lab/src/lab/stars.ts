@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { EnvironmentPreset } from '../core/environment'
-import { bindSlowroadsFogUniforms } from './fogPatch'
+import { bindSlowroadsSkyFogUniforms } from './fogPatch'
 
 /**
  * slowroads 星空（官方实现逐段移植）。
@@ -117,7 +117,8 @@ export function createStars(): StarsHandle {
   material.onBeforeCompile = (shader) => {
     // 注意：官方 patch 的 color_fragment 会读取 fogColorB，因此材质必须 fog:true
     // 且场景必须挂雾（USE_FOG），否则片元编译失败（fogColorB 未声明）。
-    bindSlowroadsFogUniforms(shader.uniforms)
+    // 第五批起星空绑「天空组」：星空只消费 fogColorA/B，两组颜色一致，观感不变。
+    bindSlowroadsSkyFogUniforms(shader.uniforms)
     shader.uniforms.horizonOpacity = uniforms.horizonOpacity
     shader.uniforms.horizonOffset = uniforms.horizonOffset
     shader.uniforms.horizonScale = uniforms.horizonScale

@@ -29,7 +29,16 @@ import {
 } from './seasonCatalog'
 import { SEASON_INDEX } from './seasonCatalog'
 import { SEASON_PARAMS } from './seasonParams'
-import { ENVIRONMENT_PRESETS, TIME_OF_DAY_ORDER, WEATHER_ORDER, resolveFogParams } from './environment'
+import {
+  ENVIRONMENT_PRESETS,
+  ENVIRONMENT_SKY_DISTANCE,
+  ENVIRONMENT_VIEW_DISTANCE,
+  TIME_OF_DAY_ORDER,
+  WEATHER_ORDER,
+  resolveFogDepthBlend,
+  resolveFogParams,
+  resolveSkyFogParams,
+} from './environment'
 
 /**
  * Console self-checks for the pure generation logic (no test framework in the
@@ -412,7 +421,8 @@ export function runSeasonCatalogChecks(input: SeasonCatalogCheckInput): SelfChec
  * 环境（季节×时间×天气）预设校验：
  *  - 官方 32 套预设齐全、颜色合法、数值有限；
  *  - 数据不变量：星空只在夜晴（4 处）、降雪只在冬季（5 处，含 1 个密度 0 的占位）；
- *  - 由视距比例推导的雾参数合理（near/far/density）。
+ *  - 由视距比例推导的雾参数合理（near/far/density）；
+ *  - 天空/云层雾尺度（第五批）：天空用官方 n1 = tileSize × 2，场景用 1000 尺度。
  */
 export function runEnvironmentChecks(): SelfCheckResult[] {
   const results: SelfCheckResult[] = []
@@ -488,6 +498,68 @@ export function runEnvironmentChecks(): SelfCheckResult[] {
   record('environment presets complete', presetCount === 32 && shapesOk, notes)
   record('stars only night+clear', starsCount === 4, `stars=${starsCount}`)
   record('snow only winter', snowCount === 5, `snow=${snowCount}`)
+
+  // 天空/云层雾尺度（第五批）：官方 updateSky() 用 n1 = tileSize × 2 推 fogNear/fogFar，
+  // 而 vFogBlend 由 (far + near)/2 推出 —— preset.fog.near < 0 的预设（春·晨·晴 等）
+  // 在 1000 尺度下只有 0.722，官方是 1.0，天空 A/B 混色与云层覆盖权重都被压低。
+  const skyScaleOk = ENVIRONMENT_SKY_DISTANCE === ENVIRONMENT_VIEW_DISTANCE * 2
+  record(
+    'sky fog distance = 2 x view distance (official n1)',
+    skyScaleOk,
+    `sky=${ENVIRONMENT_SKY_DISTANCE} view=${ENVIRONMENT_VIEW_DISTANCE}`,
+  )
+
+  const referencePreset = ENVIRONMENT_PRESETS.spring.morning.clear
+  const referenceScene = resolveFogParams(referencePreset)
+  const referenceSky = resolveSkyFogParams(referencePreset)
+  const referenceSceneBlend = resolveFogDepthBlend(referenceScene.near, referenceScene.far)
+  const referenceSkyBlend = resolveFogDepthBlend(referenceSky.near, referenceSky.far)
+  record(
+    'sky vFogBlend matches official (spring/morning/clear = 1)',
+    Math.abs(referenceSkyBlend - 1) < 1e-6,
+    `sky near=${referenceSky.near} far=${referenceSky.far} blend=${referenceSkyBlend.toFixed(4)}`,
+  )
+  record(
+    'scene vFogBlend keeps lab scale (spring/morning/clear = 0.7778)',
+    Math.abs(referenceSceneBlend - 7.7778e-1) < 5e-4,
+    `scene near=${referenceScene.near} far=${referenceScene.far} blend=${referenceSceneBlend.toFixed(4)}`,
+  )
+
+  // 单调性不变量：天空尺度恒 ≥ 场景尺度（尺度放大只会让 fogAvg 变大 → vFogBlend 不减）。
+  let blendInvariantOk = true
+  let blendDetail = 'ok'
+  let differCount = 0
+  let sceneSubUnitCount = 0
+  for (const season of ['spring', 'summer', 'autumn', 'winter'] as const) {
+    for (const time of TIME_OF_DAY_ORDER) {
+      for (const weather of WEATHER_ORDER) {
+        const preset = ENVIRONMENT_PRESETS[season][time][weather]
+        const scene = resolveFogParams(preset)
+        const sky = resolveSkyFogParams(preset)
+        const sceneBlend = resolveFogDepthBlend(scene.near, scene.far)
+        const skyBlend = resolveFogDepthBlend(sky.near, sky.far)
+        if (skyBlend < sceneBlend - 1e-9) {
+          blendInvariantOk = false
+          blendDetail = `${season}/${time}/${weather}: sky=${skyBlend.toFixed(4)} < scene=${sceneBlend.toFixed(4)}`
+        }
+        if (Math.abs(skyBlend - sceneBlend) > 1e-9) {
+          differCount += 1
+        }
+        if (sceneBlend < 1 - 1e-9) {
+          sceneSubUnitCount += 1
+        }
+      }
+    }
+  }
+  record('sky vFogBlend >= scene vFogBlend for all 32 presets', blendInvariantOk, blendDetail)
+  // 只有「场景 fogAvg < 500」（= far + near < 1，含 near < 0 与 far < 1 两类）的预设
+  // 会因尺度不同而改变 vFogBlend；这条把改动影响面钉死，以后若有人把天空尺度也用在
+  // 场景上（或反过来）会当场失败。
+  record(
+    'sky/scene vFogBlend differ exactly on scene fogAvg < 500 presets',
+    differCount === sceneSubUnitCount,
+    `differ=${differCount} sceneAvg<500=${sceneSubUnitCount}`,
+  )
 
   const failed = results.filter((result) => !result.ok)
   if (failed.length) {

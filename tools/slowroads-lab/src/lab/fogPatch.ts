@@ -266,6 +266,9 @@ let installed = false
  * 共享的雾 uniform 实例：three 的内置材质（MeshBasic/Points）在模块加载时就把
  * ShaderLib.fog 快照走了，之后再扩展 UniformsLib.fog 不会出现在它们身上，
  * 因此内置材质必须在 onBeforeCompile 里绑定这一组共享实例。
+ *
+ * 这是「场景组」：地形 / 植被 / 道路 / 水面 / 降雪用 1000 尺度（见 environment.ts）。
+ * 天空 / 云层 / 星空绑「天空组」`slowroadsSkyFogUniforms`（官方 n1 = 2000 尺度）。
  */
 export const slowroadsFogUniforms = {
   fogColorA: { value: new THREE.Color(1, 1, 1) },
@@ -278,8 +281,38 @@ export const slowroadsFogUniforms = {
   hazeIntensity: { value: 0 },
 } satisfies Record<string, THREE.IUniform> as Record<string, THREE.IUniform>
 
+/**
+ * 天空组共享雾 uniform：天空平面 / 云层 / 星空使用官方 `n1 = tileSize × 2`(=2000) 尺度
+ * 的参数（`resolveSkyFogParams`），与地形/植被的「场景组」互不影响。拆开的原因：
+ * 官方 `updateSky()` 就是按 n1 推 fogNear/fogFar，而 `vFogBlend` 由 `(far + near)/2`
+ * 推出 —— `preset.fog.near < 0` 的预设（春·晨·晴 等 8 套）在 1000 尺度下只有 0.722，
+ * 官方是 1.0，天空 A/B 混色每仰角少 0.116、云层覆盖权重被压到 72%。
+ *
+ * 注意（勿改）：three 的 `refreshFogUniforms` 对 `FogExp2` 只写 `fogDensity`，会把
+ * `scene.fog.density`（场景尺度）写进本组。对天空无影响 —— 天空平面位于天空尺度
+ * 的 fogFar 处，`vFogDepth` 无论如何都已饱和（实测残差 ≤ 1/255），因此不要为了让
+ * 密度一致去改 `scene.fog.density`（那会连带影响地形雾）。
+ */
+export const slowroadsSkyFogUniforms = {
+  fogColorA: { value: new THREE.Color(1, 1, 1) },
+  fogColorB: { value: new THREE.Color(1, 1, 1) },
+  fogColorC: { value: new THREE.Color(1, 1, 1) },
+  fogNear: { value: 0 },
+  fogFar: { value: 2000 },
+  fogDensity: { value: 0.001 },
+  hazeHeight: { value: 0 },
+  hazeIntensity: { value: 0 },
+} satisfies Record<string, THREE.IUniform> as Record<string, THREE.IUniform>
+
 export function bindSlowroadsFogUniforms(uniforms: Record<string, THREE.IUniform>): void {
   for (const [key, uniform] of Object.entries(slowroadsFogUniforms)) {
+    uniforms[key] = uniform
+  }
+}
+
+/** 天空/云层/星空的内置材质在 onBeforeCompile 里绑定天空组。 */
+export function bindSlowroadsSkyFogUniforms(uniforms: Record<string, THREE.IUniform>): void {
+  for (const [key, uniform] of Object.entries(slowroadsSkyFogUniforms)) {
     uniforms[key] = uniform
   }
 }
@@ -293,6 +326,8 @@ export function installSlowroadsFog(): void {
   THREE.ShaderChunk.fog_vertex = FOG_VERTEX
   THREE.ShaderChunk.fog_pars_fragment = FOG_PARS_FRAGMENT
   THREE.ShaderChunk.fog_fragment = FOG_FRAGMENT
+  // 只并入「场景组」：景观材质在创建时 `UniformsUtils.clone(UniformsLib.fog)`，
+  // 拿到的是各自独立的克隆（applyFogToMaterial 每次更新都会重写），天空组不进这里。
   Object.assign(THREE.UniformsLib.fog, {
     fogColorA: slowroadsFogUniforms.fogColorA,
     fogColorB: slowroadsFogUniforms.fogColorB,
@@ -310,6 +345,34 @@ function materialFogUniforms(material: THREE.Material): FogUniforms | null {
   return uniforms as unknown as FogUniforms
 }
 
+/** 把一组雾参数写进某个（已确认带雾 uniform 的）uniform 表。 */
+function writeFogParams(
+  uniforms: Record<string, THREE.IUniform>,
+  params: ResolvedFogParams,
+  colors: FogColorSet,
+): void {
+  uniforms.fogNear.value = params.near
+  uniforms.fogFar.value = params.far
+  const density = uniforms.fogDensity as THREE.IUniform<number> | undefined
+  if (density) {
+    density.value = params.density
+  }
+  uniforms.hazeHeight.value = params.hazeHeight
+  uniforms.hazeIntensity.value = params.hazeIntensity
+  ;(uniforms.fogColorA.value as THREE.Color).copy(colors.colA)
+  ;(uniforms.fogColorB.value as THREE.Color).copy(colors.colB)
+  ;(uniforms.fogColorC.value as THREE.Color).copy(colors.colC)
+}
+
+/**
+ * Push the sky-scale fog params (official `n1 = tileSize × 2`) into the shared sky
+ * uniform group consumed by the sky plane, the cloud layer and the stars.
+ * `colors` must already hold output-color-space components (see `writeFogUniformColors`).
+ */
+export function applySkyFogParams(params: ResolvedFogParams, colors: FogColorSet): void {
+  writeFogParams(slowroadsSkyFogUniforms, params, colors)
+}
+
 /**
  * Push the current fog params into one material (no-op when the material has no fog uniforms).
  * `colors` must already hold output-color-space components (see `writeFogUniformColors`).
@@ -323,16 +386,7 @@ export function applyFogToMaterial(
   if (!uniforms) {
     return
   }
-  uniforms.fogNear.value = params.near
-  uniforms.fogFar.value = params.far
-  if (uniforms.fogDensity) {
-    uniforms.fogDensity.value = params.density
-  }
-  uniforms.hazeHeight.value = params.hazeHeight
-  uniforms.hazeIntensity.value = params.hazeIntensity
-  uniforms.fogColorA.value.copy(colors.colA)
-  uniforms.fogColorB.value.copy(colors.colB)
-  uniforms.fogColorC.value.copy(colors.colC)
+  writeFogParams(uniforms as unknown as Record<string, THREE.IUniform>, params, colors)
 }
 
 export function applyFogToScene(

@@ -22,7 +22,12 @@ import {
   type MaterialUniformCheckInput,
   type SelfCheckResult,
 } from './core/selfCheck'
-import { installSlowroadsFog, slowroadsFogUniforms } from './lab/fogPatch'
+import {
+  installSlowroadsFog,
+  slowroadsFogUniforms,
+  slowroadsSkyFogUniforms,
+  updateHazeForCamera,
+} from './lab/fogPatch'
 import { createSky } from './lab/sky'
 import { createClouds } from './lab/clouds'
 import { createStars } from './lab/stars'
@@ -36,7 +41,16 @@ import {
   type SeasonId,
   type SeasonTextureRef,
 } from './core/seasonCatalog'
-import { TIME_OF_DAY_LABELS, WEATHER_LABELS, resolveEnvironmentPreset, type EnvironmentState } from './core/environment'
+import {
+  ENVIRONMENT_SKY_DISTANCE,
+  ENVIRONMENT_VIEW_DISTANCE,
+  TIME_OF_DAY_LABELS,
+  WEATHER_LABELS,
+  resolveEnvironmentPreset,
+  resolveFogDepthBlend,
+  resolveSkyFogParams,
+  type EnvironmentState,
+} from './core/environment'
 import { SEASON_PARAMS } from './core/seasonParams'
 import {
   BARRIER_RAIL_REGIONS,
@@ -530,6 +544,111 @@ function checkFogUniformColorSpace(): void {
   lastFogColorCheck = results
 }
 
+let lastSkyFogCheck: SelfCheckResult[] = []
+
+/**
+ * 天空/云层雾尺度回归检查（第五批）。
+ *
+ * 官方 `updateSky()` 用 `n1 = tileSize × 2`(= `ENVIRONMENT_SKY_DISTANCE`) 推
+ * fogNear/fogFar 与天空平面 `z = -n1 + 0.1`；lab 的地形雾仍用 1000 尺度（避免露出
+ * 1600m 世界边缘）。这条断言把三件事钉死：
+ *   1) 天空组 uniform（天空/云层/星空共享）确实按**天空尺度**参数的 haze 插值结果下发；
+ *   2) 由它推出的 `vFogBlend` 等于官方值（春·晨·晴 = 1，而场景尺度只有 0.722）；
+ *   3) 天空平面挂在 n1 距离、天空组与场景组雾色一致。
+ * 把天空误绑回场景组、或把尺度改回 1000，都会在这里当场失败（README「第五批」）。
+ */
+function checkSkyFogScale(): void {
+  const results: SelfCheckResult[] = []
+  const record = (name: string, ok: boolean, detail = ''): void => {
+    results.push({ name, ok, detail })
+    console.assert(ok, `[slowroads-lab sky-fog-check] ${name}${detail ? ` — ${detail}` : ''}`)
+  }
+
+  record(
+    'sky fog distance = 2 x view distance (official n1)',
+    ENVIRONMENT_SKY_DISTANCE === ENVIRONMENT_VIEW_DISTANCE * 2,
+    `sky=${ENVIRONMENT_SKY_DISTANCE} view=${ENVIRONMENT_VIEW_DISTANCE}`,
+  )
+
+  const state = environmentController?.state
+  const skyMesh = environmentHandles?.sky.mesh
+  if (!state || !skyMesh) {
+    record('sky fog scale applied', false, 'environment state or sky mesh missing')
+    lastSkyFogCheck = results
+    return
+  }
+
+  const preset = resolveEnvironmentPreset(state)
+  // applyState 写基准参数、每帧 update() 写 haze 插值后的参数；本检查在 world 重建末尾
+  // 运行，两者都可能是在最后一次写入，因此接受「基准」或「当前相机高度的 haze 插值」两种取值。
+  const skyBase = resolveSkyFogParams(preset)
+  const skyAdjusted = updateHazeForCamera(skyBase, camera.position.y, { inHaze: false })
+  const matches = (got: number, want: number): boolean => Math.abs(got - want) < 1e-6
+  const numbers: Array<[string, number, number, number]> = [
+    ['fogNear', slowroadsSkyFogUniforms.fogNear.value as number, skyBase.near, skyAdjusted.near],
+    ['fogFar', slowroadsSkyFogUniforms.fogFar.value as number, skyBase.far, skyAdjusted.far],
+    ['hazeHeight', slowroadsSkyFogUniforms.hazeHeight.value as number, skyBase.hazeHeight, skyAdjusted.hazeHeight],
+    ['hazeIntensity', slowroadsSkyFogUniforms.hazeIntensity.value as number, skyBase.hazeIntensity, skyAdjusted.hazeIntensity],
+  ]
+  let paramsOk = true
+  let detail = `${state.season}/${state.timeOfDay}/${state.weather} camY=${camera.position.y.toFixed(1)}`
+  for (const [key, got, wantBase, wantAdjusted] of numbers) {
+    if (!matches(got, wantBase) && !matches(got, wantAdjusted)) {
+      paramsOk = false
+      detail += ` ${key}=${got.toFixed(4)} want ${wantBase.toFixed(4)}|${wantAdjusted.toFixed(4)}`
+    }
+  }
+  record('sky fog uniforms use official sky scale (haze-adjusted)', paramsOk, detail)
+
+  const blend = resolveFogDepthBlend(
+    slowroadsSkyFogUniforms.fogNear.value as number,
+    slowroadsSkyFogUniforms.fogFar.value as number,
+  )
+  // 尺度不变式：天空 far 恒为场景 far 的 2 倍（基准与 haze 插值后都成立），
+  // 因此「天空误绑回场景组」或「尺度被改回 1000」都会在这里失败。
+  const sceneFar = slowroadsFogUniforms.fogFar.value as number
+  const skyFar = slowroadsSkyFogUniforms.fogFar.value as number
+  record(
+    'sky fog far = 2 x scene fog far',
+    Math.abs(skyFar - sceneFar * 2) < 1e-3,
+    `sky=${skyFar.toFixed(4)} scene=${sceneFar.toFixed(4)}`,
+  )
+  const wantBlend = resolveFogDepthBlend(skyBase.near, skyBase.far)
+  record(
+    'sky vFogBlend matches official sky scale',
+    Math.abs(blend - wantBlend) < 1e-6,
+    `vFogBlend=${blend.toFixed(4)} want ${wantBlend.toFixed(4)}`,
+  )
+
+  const sceneBlend = resolveFogDepthBlend(slowroadsFogUniforms.fogNear.value as number, sceneFar)
+  console.info(
+    `[slowroads-lab] sky fog scale: sky vFogBlend=${blend.toFixed(4)} scene vFogBlend=${sceneBlend.toFixed(4)} ` +
+    `(${state.season}/${state.timeOfDay}/${state.weather}, skyFar=${skyFar.toFixed(1)}, sceneFar=${sceneFar.toFixed(1)}, camY=${camera.position.y.toFixed(1)})`,
+  )
+
+  const skyZ = skyMesh.position.z
+  const wantSkyZ = -(ENVIRONMENT_SKY_DISTANCE - 0.1)
+  record(
+    'sky plane hangs at official n1 distance',
+    Math.abs(skyZ - wantSkyZ) < 1e-3,
+    `z=${skyZ} want ${wantSkyZ}`,
+  )
+
+  let colorsOk = true
+  let colorsDetail = 'ok'
+  for (const key of ['fogColorA', 'fogColorB', 'fogColorC'] as const) {
+    const skyColor = slowroadsSkyFogUniforms[key].value as THREE.Color
+    const sceneColor = slowroadsFogUniforms[key].value as THREE.Color
+    if (!colorMatches(skyColor, [sceneColor.r, sceneColor.g, sceneColor.b])) {
+      colorsOk = false
+      colorsDetail = `${key} sky=${colorTriplet(skyColor)} scene=${colorTriplet(sceneColor)}`
+    }
+  }
+  record('sky fog colors equal scene fog colors (same preset)', colorsOk, colorsDetail)
+
+  lastSkyFogCheck = results
+}
+
 function applyToggles(): void {
   terrainMaterialHandle?.setToggles({
     surface: settings.showSurface,
@@ -905,9 +1024,11 @@ function finalizeTerrain(): void {
     resetCameraView()
   }
   // 世界与植被材质都已就位：跑一次 uniform 覆盖审计，防止着色器/JS 表再次脱节；
-  // 再校验雾色确实按输出色空间下发（雾 chunk 在 colorspace 之后混色）。
+  // 再校验雾色确实按输出色空间下发（雾 chunk 在 colorspace 之后混色）；
+  // 最后校验天空/云层用的是官方 n1 尺度而不是场景的 1000 尺度。
   auditLandscapeMaterialUniforms()
   checkFogUniformColorSpace()
+  checkSkyFogScale()
 }
 
 // ---------------------------------------------------------------------------
@@ -1239,6 +1360,10 @@ Object.assign(globalThis, {
     checkFogUniformColorSpace,
     get fogColorCheck() {
       return lastFogColorCheck
+    },
+    checkSkyFogScale,
+    get skyFogCheck() {
+      return lastSkyFogCheck
     },
     rebuildWorld,
     rebuildPlacements,

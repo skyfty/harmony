@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { EnvironmentPreset } from '../core/environment'
-import { bindSlowroadsFogUniforms } from './fogPatch'
+import { bindSlowroadsSkyFogUniforms } from './fogPatch'
 
 /**
  * slowroads 云层（官方 shader 逐段移植）。
@@ -11,6 +11,11 @@ import { bindSlowroadsFogUniforms } from './fogPatch'
  * 选择混合规则（0/1/2/3 有实现，4/5 官方为空实现 = 不绘制），颜色在
  * highlight/lowlight 之间过渡。雾由官方 3 色 fog chunk 提供；片元里复用了
  * fog chunk 的局部变量 `fogBlend`（与官方结构一致）。
+ *
+ * 第五批起云层绑「天空组」雾 uniform（官方 n1 = 2000 尺度）：片元里的
+ * `min(1, fogBlend)` 覆盖权重因此回到官方强度（`preset.fog.near < 0` 的预设不再被压到 72%）。
+ * 云穹几何与纹理平铺对 (云高, 视距) 是尺度不变量（半宽 = max(2×视距, 12×云高)、
+ * 纹理单元 = skyScale × 云高，两者同比例），所以本批不改 `ENVIRONMENT_CLOUD_ALTITUDE`。
  */
 
 const UV_PARS_VERTEX = /* glsl */ `
@@ -272,7 +277,7 @@ export function createClouds(texture: THREE.Texture): CloudsHandle {
   material.customProgramCacheKey = () => 'clouds'
   material.name = 'slowroads-clouds-material'
   material.onBeforeCompile = (shader) => {
-    bindSlowroadsFogUniforms(shader.uniforms)
+    bindSlowroadsSkyFogUniforms(shader.uniforms)
     shader.uniforms.highlight = uniforms.highlight
     shader.uniforms.lowlight = uniforms.lowlight
     shader.uniforms.hasClouds = uniforms.hasClouds
