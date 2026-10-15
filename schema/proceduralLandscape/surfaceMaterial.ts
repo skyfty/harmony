@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
+import { recordSlowroadsShaderAudit } from './shaderAudit'
 
 /**
  * Slow Roads 季节地表着色（官方片元栈移植，注入到 GLB 地形的
@@ -13,10 +14,16 @@ import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
  *
  * 与 lab 的差异：
  *  - 顶点提供世界坐标/法线 + 道路压平位移（沿用既有注入），雾改走共享三色雾；
- *  - 高度按真实米数（不再做 lab 的 ×4 合成世界换算），水线参考 = uPlWaterLevel；
+ *  - 高度项按 `uPlHeightScale` 折算（lab 世界起伏 ±40m 时恒为 4，编辑器大地形
+ *    按实测起伏归一化，见 config.resolveSurfaceHeightScale）；水线参考 = uPlWaterLevel；
  *  - GLB 航拍基色由 `baseMapMode`（replace/blend）与 `uPlSurfaceStrength` 控制。
  *  - heather 与全部掩码公式与 slowroads.io 官方地形顶点着色器逐行一致
  *    （`(height + fade1*350 - 60)/500` 的 smoothstep × screen 分布）。
+ *  - 官方近路位移（displacement_vertex）：路肩 16m 内沿法线加 rock_bump 微起伏
+ *    （强度 0.8、uv = 世界坐标/100，`#ifndef PL_SURFACE_REDUCED` 保护兼容模式）。
+ *  - 官方地表掠射边缘光（mu chunk）：接近水平视线时提亮、背光侧 darkFresnel 压暗。
+ *  - 树冠色斑由 `uPlShowCanopy` 门控（关 = 不采样密度图、无林下/树影）；
+ *    地表贴图由 `uPlShowTextures` 门控（关 = lab 的纯色调色板回归路径）。
  *  - 光照/合成与官方一致：`totalEmissiveRadiance = 季节色 × radiance`，并走官方
  *    合成补丁 `direct + indirect + direct × emissive`；环境项按官方变体乘
  *    `1.75 - clamp(vShadow, 0.75, 1.0)`。
@@ -38,6 +45,14 @@ export interface ProceduralLandscapeSurfaceUniforms {
   uPlRoadTint: THREE.IUniform<THREE.Color>
   uPlGravelTint: THREE.IUniform<THREE.Color>
   uPlRockSlope: THREE.IUniform<number>
+  /** 1 = 树冠色斑（树密度图 → 林下/树影）；0 = 不采样密度图。 */
+  uPlShowCanopy: THREE.IUniform<number>
+  /** 1 = 采样季节地表贴图；0 = lab 的纯色调色板回归路径。 */
+  uPlShowTextures: THREE.IUniform<number>
+  /** 高度带归一化系数（lab 常量 ×4；编辑器按地形起伏夹在 [0.25, 4]）。 */
+  uPlHeightScale: THREE.IUniform<number>
+  /** 官方 lights.fresnelFactor：地表掠射边缘光强度。 */
+  uPlFresnelIntensity: THREE.IUniform<number>
   /** 官方 lights.radiance：地表自发光强度（emissive = 季节色 × radiance）。 */
   uPlRadiance: THREE.IUniform<number>
   /** 官方 effects.shadowFactor：烘焙树影（vShadow）的季节系数。 */
@@ -86,6 +101,10 @@ export function createProceduralLandscapeSurfaceUniforms(): ProceduralLandscapeS
     uPlRoadTint: { value: new THREE.Color(1, 1, 1) },
     uPlGravelTint: { value: new THREE.Color(1, 1, 1) },
     uPlRockSlope: { value: 0.35 },
+    uPlShowCanopy: { value: 1 },
+    uPlShowTextures: { value: 1 },
+    uPlHeightScale: { value: 4 },
+    uPlFresnelIntensity: { value: 1 },
     uPlRadiance: { value: 2 },
     uPlShadowFactor: { value: 1 },
     uPlFlattenInner: { value: 6 },
@@ -115,11 +134,13 @@ export function createProceduralLandscapeSurfaceUniforms(): ProceduralLandscapeS
 
 const VERTEX_HEADER = `#include <common>
 uniform sampler2D uPlRoadField;
+uniform sampler2D uPlRockBumpTex;
 uniform vec2 uPlTerrainMin;
 uniform vec2 uPlTerrainSize;
 uniform float uPlHeightMin;
 uniform float uPlHeightRange;
 uniform float uPlRoadFieldRange;
+uniform float uPlRoadHalfWidth;
 uniform float uPlFlattenInner;
 uniform float uPlFlattenOuter;
 uniform float uPlFlattenStrength;
@@ -145,6 +166,19 @@ const VERTEX_BODY = `#include <begin_vertex>
     transformed.y += plDelta / plScaleY;
     vPlWorldPosition.y += plDelta;
   }
+  // 官方近路位移（displacement_vertex）：路肩 16m 内沿法线加 rock_bump 微起伏，
+  // uv 取原始世界坐标的 /100；强度 0.8，坡面越平越弱。兼容模式（PL_SURFACE_REDUCED）
+  // 不做（低端机顶点纹理单元不可靠）。
+#ifndef PL_SURFACE_REDUCED
+  float plPlacementProx = plDistance - uPlRoadHalfWidth;
+  if (abs(plPlacementProx) > 1e-5) {
+    float plSteepV = clamp((0.98 - dot(normalize(objectNormal), vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
+    float plIntensity = clamp((16.0 - plPlacementProx) / 6.0, 0.0, 1.0) * 0.8;
+    float plScaleYv = max(0.0001, length(vec3(modelMatrix[0][1], modelMatrix[1][1], modelMatrix[2][1])));
+    transformed += normalize(objectNormal) * ((texture2D(uPlRockBumpTex, plWorld4.xz / 100.0).x - 0.4)
+      * min(1.0, plSteepV * 3.0)) * plIntensity / plScaleYv;
+  }
+#endif
 }`
 
 /** 官方陡坡岩石法线扰动（normal_fragment_begin 之后注入）。 */
@@ -189,14 +223,18 @@ uniform float uPlSurfaceStrength;
 uniform float uPlUvScale;
 uniform float uPlWaterLevel;
 uniform float uPlHeightRange;
+uniform float uPlHeightScale;
 uniform float uPlBaseMapBlend;
 uniform vec3 uPlGrassTint;
 uniform vec3 uPlForestTint;
 uniform vec3 uPlRoadTint;
 uniform vec3 uPlGravelTint;
 uniform float uPlRockSlope;
+uniform float uPlShowCanopy;
+uniform float uPlShowTextures;
 uniform float uPlRadiance;
 uniform float uPlShadowFactor;
+uniform float uPlFresnelIntensity;
 uniform int uPlSeasonIndex;
 uniform vec3 uPlGrassColA;
 uniform vec3 uPlGrassColB;
@@ -212,6 +250,10 @@ float plScreen(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
 
 /** 官方环境光树影调制（lights_fragment_end 后乘到 indirectDiffuse）。 */
 float plAmbientShadow = 1.0;
+/** map_fragment 里算好的季节色（normal 就绪后再应用掠射边缘光）。 */
+vec3 plSeasonalColor = vec3(1.0);
+float plFresnelBlendVal = 0.0;
+float plShadowTerm = 0.0;
 
 vec4 plTerrainBlend(vec4 tx1, float w1, vec4 tx2, float w2, float depth) {
   float ma = max(tx1.a + w1, tx2.a + w2) - depth;
@@ -222,7 +264,7 @@ vec4 plTerrainBlend(vec4 tx1, float w1, vec4 tx2, float w2, float depth) {
 
 const FRAGMENT_BODY = `#include <map_fragment>
 {
-  vec3 plSeasonalColor = diffuseColor.rgb;
+  plSeasonalColor = diffuseColor.rgb;
   vec2 plWorldUv = (vPlWorldPosition.xz - uPlTerrainMin) / max(uPlTerrainSize, vec2(0.0001));
   float plRoadProx = texture2D(uPlRoadField, plWorldUv).r * uPlRoadFieldRange - uPlRoadHalfWidth;
   float plHasRoadProx = step(0.00001, abs(plRoadProx));
@@ -238,10 +280,12 @@ const FRAGMENT_BODY = `#include <map_fragment>
   float fade2 = texture2D(uPlNoiseTex, wUv500).r;
   float vFade0 = fade2;
   float vFade1 = texture2D(uPlNoiseTex, wUv4000).r;
+  plFresnelBlendVal = 0.0;
 
-  // 官方高度公式按"水面以上米数"取值（编辑器地形是真实米制）。
+  // 官方高度公式按「水面以上 0..300m」调参；lab 世界起伏 ±40m 时乘 ×4 折算，
+  // 编辑器真实地形按实测起伏归一化（见 config.resolveSurfaceHeightScale）。
   float heightRel = vPlWorldPosition.y - uPlWaterLevel;
-  float height = heightRel;
+  float height = heightRel * uPlHeightScale;
 
   // ---- 官方 heather 分布（官方地形顶点着色器逐行一致）。 ----
   float vHeather = smoothstep(0.4, 1.0, ((height + vFade1 * 350.0) - 60.0) / 500.0);
@@ -265,10 +309,16 @@ const FRAGMENT_BODY = `#include <map_fragment>
   steepness *= underRoadFactor;
   vHeather *= underRoadFactor;
 
-  float treeMask = clamp(texture2D(uPlForestMask, plWorldUv).r * 1.15, 0.0, 1.0);
+  // 树冠色斑（lab showCanopy）：关闭时完全不采样密度图 —— 没有林下混合/树影，
+  // 环境光也不再按树影调制。
+  float treeMask = 0.0;
+  if (uPlShowCanopy > 0.5) {
+    treeMask = clamp(texture2D(uPlForestMask, plWorldUv).r * 1.15, 0.0, 1.0);
+  }
   // 官方：vShadow = treeMask × 高度项，再乘当季 shadowFactor（顶点着色器）。
   float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
   vShadow *= clamp(uPlShadowFactor, 0.0, 1.0);
+  plShadowTerm = vShadow;
   // 官方环境光树影调制（官方 lights_fragment_begin_shadow 变体）。
   plAmbientShadow = 1.75 - clamp(vShadow, 0.75, 1.0);
   float vTreeMask = vShadow;
@@ -301,6 +351,7 @@ const FRAGMENT_BODY = `#include <map_fragment>
 #ifndef PL_SURFACE_REDUCED
   blendVal += (1.0 - texture2D(uPlDetailNearTex, wUv100).r) * (0.7 + vLightGrass * 0.3) * uPlSurfaceStrength;
 #endif
+  plFresnelBlendVal = plSaturate(blendVal);
 
 #ifndef PL_SURFACE_REDUCED
   float variationVal = texture2D(uPlGrassVariation, wUv2000).r - 0.5;
@@ -420,6 +471,24 @@ const FRAGMENT_BODY = `#include <map_fragment>
   texelColor.b = plSaturate(texelColor.b);
   plSeasonalColor = texelColor.rgb;
 
+  // lab 的纯色回归路径（地表贴图关闭）：不采样季节贴图，用调色板近似。
+  // 岩石 / 碎石用 lab 常量色（0x6b6257 / 0x8a8378），路面带用当季 roadCol。
+  if (uPlShowTextures < 0.5) {
+    vec3 plFlatColor = mix(uPlGrassColA, uPlGrassColB, plSaturate(fade0 * (0.6 + vLightGrass)));
+    plFlatColor *= 0.92 + 0.16 * fade1;
+    if (uPlShowCanopy > 0.5 && treeMask > 0.05) {
+      plFlatColor = mix(plFlatColor, uPlGrassColA * 0.35, clamp(treeMask * 1.2, 0.0, 1.0));
+    }
+    plFlatColor = mix(plFlatColor, vec3(0.4196, 0.3843, 0.3412), smoothstep(0.35, 0.72, steepness) * 0.6);
+    if (plHasRoadProx > 0.5) {
+      float plRoadWeight = 1.0 - smoothstep(-0.6, 0.6, plRoadProx);
+      float plGravelWeight = (1.0 - smoothstep(0.0, 2.5, plRoadProx)) * (1.0 - plRoadWeight);
+      plFlatColor = mix(plFlatColor, vec3(0.5412, 0.5137, 0.4706), plGravelWeight * 0.85);
+      plFlatColor = mix(plFlatColor, uPlRoadCol * uPlRoadTint, plRoadWeight);
+    }
+    plSeasonalColor = plFlatColor;
+  }
+
   #ifdef USE_MAP
     // blend 模式保留 GLB 航拍基色；replace 模式下由 uPlSurfaceStrength=1 整体覆盖。
     vec3 plBaseColor = texture2D(map, vMapUv).rgb;
@@ -427,7 +496,25 @@ const FRAGMENT_BODY = `#include <map_fragment>
   #endif
 
   diffuseColor.rgb = mix(diffuseColor.rgb, plSeasonalColor, clamp(uPlSurfaceStrength, 0.0, 1.0));
+}`
 
+/**
+ * 官方地表掠射边缘光（mu chunk）：接近水平视线时提亮、背光侧 darkFresnel 压暗。
+ * 必须放在 `normal_fragment_begin/maps` 之后（`normal` 在那里才声明），并在 lights
+ * 之前改掉 emissive（官方：先 fresnel 再取「色 × radiance」；GLB 基色混合同样乘该系数）。
+ */
+const FRESNEL_BODY = `{
+  float plFresnel = 1.0 - max(0.0, dot(normalize(cameraPosition - vPlWorldPosition), normal));
+  float plLightFresnel = max(0.0, (plFresnel - 0.75)) * 4.0 * (1.0 - plFresnelBlendVal * 0.5);
+  plLightFresnel *= plLightFresnel;
+  plLightFresnel *= (1.0 - plShadowTerm);
+  plLightFresnel *= uPlFresnelIntensity;
+  float plDarkFresnel = 1.0 - min(1.0, plFresnel * 1.3333);
+  plDarkFresnel *= uPlFresnelIntensity;
+  plDarkFresnel = 0.25 + min(0.25, max(0.0, plDarkFresnel - 0.25) * 0.5);
+  float plFresnelFactor = 1.0 + plLightFresnel - plDarkFresnel;
+  diffuseColor.rgb *= plFresnelFactor;
+  plSeasonalColor *= plFresnelFactor;
   // 官方地表自发光：季节色 × radiance（随后由官方合成补丁乘进直射项）。
   totalEmissiveRadiance = plSeasonalColor * uPlRadiance;
 }`
@@ -461,11 +548,12 @@ function installMaterialInjection(
     // 去掉 grassVariation/rockBump/detailNear 三个采样器。
     const reduced = (renderer?.capabilities?.maxTextures ?? 32) <= 16
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', VERTEX_HEADER)
+      .replace('#include <common>', reduced ? '#define PL_SURFACE_REDUCED\n' + VERTEX_HEADER : VERTEX_HEADER)
       .replace('#include <begin_vertex>', VERTEX_BODY)
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', reduced ? '#define PL_SURFACE_REDUCED\n' + FRAGMENT_HEADER : FRAGMENT_HEADER)
       .replace('#include <normal_fragment_begin>', NORMAL_BODY)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRESNEL_BODY}`)
       .replace('#include <map_fragment>', FRAGMENT_BODY)
       // 官方环境光树影调制（与官方 lights_fragment_begin_shadow 变体等效，
       // 放在 lights_fragment_end 之后可保持 CSM 注入的 lights_fragment_begin 不变）。
@@ -478,7 +566,8 @@ function installMaterialInjection(
         'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
         'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directDiffuse * totalEmissiveRadiance;',
       )
-    injectSlowroadsFog(shader)
+    injectSlowroadsFog(shader, { material })
+    recordSlowroadsShaderAudit(material, shader)
     if (typeof originalOnBeforeCompile === 'function') {
       originalOnBeforeCompile.call(material, shader, renderer)
     }

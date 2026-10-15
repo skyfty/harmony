@@ -7,16 +7,7 @@ import {
   resolveDocumentEnvironment,
 } from '@schema/core'
 import { resolveSceneCsmSunPositionFromAngles } from '@schema/sceneCsm'
-import {
-  SLOWROADS_SUN_AZIMUTH_DEG,
-  SLOWROADS_SUN_ELEVATION_DEG,
-} from '@schema/slowroads/core/environment'
-
-/** slowroads-lab 的固定太阳向量 (0.42, 0.72, 0.28).normalize()。 */
-const LAB_SUN_DIRECTION = (() => {
-  const length = Math.hypot(0.42, 0.72, 0.28)
-  return { x: 0.42 / length, y: 0.72 / length, z: 0.28 / length }
-})()
+import * as THREE from 'three'
 
 describe('environment settings (Slow Roads only)', () => {
   it('defaults contain no background/csm/ambient/orientation fields', () => {
@@ -101,14 +92,14 @@ describe('environment settings (Slow Roads only)', () => {
 })
 
 describe('slowroads fixed sun direction', () => {
-  it('matches the lab constant vector', () => {
-    const position = resolveSceneCsmSunPositionFromAngles(
-      SLOWROADS_SUN_AZIMUTH_DEG,
-      SLOWROADS_SUN_ELEVATION_DEG,
-      1,
-    )
-    expect(position.x).toBeCloseTo(LAB_SUN_DIRECTION.x, 3)
-    expect(position.y).toBeCloseTo(LAB_SUN_DIRECTION.y, 3)
-    expect(position.z).toBeCloseTo(LAB_SUN_DIRECTION.z, 3)
+  it('points straight down (official (0,1,0), no azimuth/elevation settings)', () => {
+    // 三端 CSM 统一 syncSun(new THREE.Vector3(0, 1000, 0))：与官方 (0,1,0) 同向。
+    const sun = new THREE.Vector3(0, 1000, 0).normalize()
+    expect(sun.x).toBe(0)
+    expect(sun.y).toBe(1)
+    expect(sun.z).toBe(0)
+    // 角度辅助函数把高度夹在 89°（用户不再有方位/高度设置）。
+    const clamped = resolveSceneCsmSunPositionFromAngles(0, 90, 1)
+    expect(clamped.y).toBeGreaterThan(0.99)
   })
 })

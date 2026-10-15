@@ -31,7 +31,7 @@ import {
 } from './lab/fogPatch'
 import { createSky } from './lab/sky'
 import { createClouds } from './lab/clouds'
-import { createStars } from './lab/stars'
+import { createStars, resolveStarSize } from './lab/stars'
 import { createSnow } from './lab/snow'
 import { createEnvironmentController, type EnvironmentController } from './lab/environmentController'
 import {
@@ -1248,9 +1248,29 @@ function animate(): void {
     treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value)
   }
   environmentController?.update(dt)
+  syncStarSize()
   water?.setTime(elapsedSeconds)
   renderer.render(scene, camera)
   updateStats()
+}
+
+/**
+ * 星点尺寸按视口（绘制缓冲）高度换算：官方世界尺寸 0.01 在 dpr=1、高度 800 上下
+ * 的画布上只有约 0.4 物理像素（看不清），这里换算到约 1.8 物理像素，与迁移端
+ * `schema/slowroads/render/stars.ts` 的 `resolveStarSize` 一致。
+ */
+let lastStarSize = Number.NaN
+const starSizeScratch = new THREE.Vector2()
+function syncStarSize(): void {
+  if (!environmentHandles) {
+    return
+  }
+  renderer.getDrawingBufferSize(starSizeScratch)
+  const size = resolveStarSize(starSizeScratch.y, renderer.getPixelRatio())
+  if (size !== lastStarSize) {
+    lastStarSize = size
+    environmentHandles.stars.setSize(size)
+  }
 }
 
 async function init(): Promise<void> {

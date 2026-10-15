@@ -12,7 +12,10 @@ export interface ProceduralLandscapeSamplingProps {
 }
 
 export interface ProceduralLandscapeSurfaceProps {
+  /** 地表混合（lab showSurface）：false = proceduralLandscape 完全不接管 GLB 材质。 */
   enabled: boolean
+  /** 地表贴图（lab showTextures）：false = 只保留调色板/树影，不采样季节贴图。 */
+  textures: boolean
   blendStrength: number
   uvScale: number
   grassTint: string
@@ -27,6 +30,12 @@ export interface ProceduralLandscapeSurfaceProps {
   baseMapMode: 'replace' | 'blend'
   /** baseMapMode='blend' 时的混合强度（0=季节地表，1=原始贴图）。 */
   baseMapBlend: number
+  /**
+   * 雾/视距尺度倍率：null = 按地形水平尺寸自动（`resolveSurfaceViewDistanceScale`）。
+   * 官方雾尺度按 1000m 世界调参；编辑器地形可达数十公里，需要按地形放大视距，
+   * 否则 1km 外整片地形变成雾色。
+   */
+  viewDistanceScale: number | null
 }
 
 export interface ProceduralLandscapeRoadProps {
@@ -63,6 +72,8 @@ export interface ProceduralLandscapeForestProps {
   maxScale: number
   /** Null uses the quality-tier default. */
   nearDistance: number | null
+  /** 近树 3D 网格半径（米；0 = 关闭近树 3D 层）。 */
+  nearTreeRadius: number
 }
 
 export interface ProceduralLandscapeGrassProps {
@@ -71,12 +82,43 @@ export interface ProceduralLandscapeGrassProps {
   cameraRadius: number
   density: number
   sinkNearRoad: number
-  windEnabled: boolean
+  /** 花草密度倍率（花走灌木层，lab flowerDensity）。 */
+  flowerDensity: number
+  /** 高草密度倍率（高草走草层 cell 2/3，lab tallGrassDensity）。 */
+  tallGrassDensity: number
 }
 
 export interface ProceduralLandscapeBushesProps {
   enabled: boolean
   density: number
+}
+
+/** 树冠色斑（lab showCanopy）：地表按树密度图压暗/染色。 */
+export interface ProceduralLandscapeCanopyProps {
+  enabled: boolean
+}
+
+/** 水面（lab showWater）：水线 = 地形最低点 + levelOffset。 */
+export interface ProceduralLandscapeWaterProps {
+  enabled: boolean
+  levelOffset: number
+}
+
+/** 下坡侧木护栏（lab showBarrier / barrierDensity）。 */
+export interface ProceduralLandscapeBarrierProps {
+  enabled: boolean
+  /** 0..1 门限通过率。 */
+  density: number
+  /** 同一侧最小间隔（米）。 */
+  spacing: number
+  /** 参考落差（米）。 */
+  dropThreshold: number
+}
+
+/** 风摆（lab windEnabled / windStrength，逐层系数见 runtime WIND_FACTOR）。 */
+export interface ProceduralLandscapeWindProps {
+  enabled: boolean
+  strength: number
 }
 
 export interface ProceduralLandscapeDebugProps {
@@ -94,6 +136,10 @@ export interface ProceduralLandscapeComponentProps {
   forest: ProceduralLandscapeForestProps
   grass: ProceduralLandscapeGrassProps
   bushes: ProceduralLandscapeBushesProps
+  canopy: ProceduralLandscapeCanopyProps
+  water: ProceduralLandscapeWaterProps
+  barrier: ProceduralLandscapeBarrierProps
+  wind: ProceduralLandscapeWindProps
   debug: ProceduralLandscapeDebugProps
 }
 
@@ -131,7 +177,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
   },
   high: {
     viewDistance: 1200,
-    treeNearDistance: 90,
+    treeNearDistance: 190,
     grassRadius: 80,
     treeChunkSize: 192,
     densityMultiplier: 1,
@@ -192,6 +238,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
     },
     surface: {
       enabled: true,
+      textures: true,
       blendStrength: 1,
       uvScale: 10,
       grassTint: '#ffffff',
@@ -201,6 +248,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       rockSlopeThreshold: 0.35,
       baseMapMode: 'replace',
       baseMapBlend: 0.5,
+      viewDistanceScale: null,
     },
     road: {
       enabled: true,
@@ -229,7 +277,9 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       // 对齐 slowroads-lab：8m 基准 × 0.56~1.56 ≈ 4.5~12.5m（默认 5~12）。
       minScale: 5,
       maxScale: 12,
-      nearDistance: null,
+      // lab DEFAULT_LAB_SETTINGS：近树卡 190m、近树 3D 半径 90m。
+      nearDistance: 190,
+      nearTreeRadius: 90,
     },
     grass: {
       enabled: true,
@@ -237,11 +287,29 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       cameraRadius: 60,
       density: 1,
       sinkNearRoad: 1.2,
-      windEnabled: true,
+      flowerDensity: 1,
+      tallGrassDensity: 1,
     },
     bushes: {
       enabled: true,
       density: 0.6,
+    },
+    canopy: {
+      enabled: true,
+    },
+    water: {
+      enabled: true,
+      levelOffset: 0,
+    },
+    barrier: {
+      enabled: true,
+      density: 0.65,
+      spacing: 8,
+      dropThreshold: 1.2,
+    },
+    wind: {
+      enabled: true,
+      strength: 1,
     },
     debug: {
       showRoadPath: false,
@@ -261,6 +329,10 @@ export function clampProceduralLandscapeProps(
   const forest = props?.forest as Partial<ProceduralLandscapeForestProps> | undefined
   const grass = props?.grass as Partial<ProceduralLandscapeGrassProps> | undefined
   const bushes = props?.bushes as Partial<ProceduralLandscapeBushesProps> | undefined
+  const canopy = props?.canopy as Partial<ProceduralLandscapeCanopyProps> | undefined
+  const water = props?.water as Partial<ProceduralLandscapeWaterProps> | undefined
+  const barrier = props?.barrier as Partial<ProceduralLandscapeBarrierProps> | undefined
+  const wind = props?.wind as Partial<ProceduralLandscapeWindProps> | undefined
   const debug = props?.debug as Partial<ProceduralLandscapeDebugProps> | undefined
 
   const minScale = clampNumber(forest?.minScale, defaults.forest.minScale, 0.5, 40)
@@ -279,6 +351,7 @@ export function clampProceduralLandscapeProps(
     },
     surface: {
       enabled: surface?.enabled !== false,
+      textures: surface?.textures !== false,
       blendStrength: clampNumber(surface?.blendStrength, defaults.surface.blendStrength, 0, 1),
       uvScale: clampNumber(surface?.uvScale, defaults.surface.uvScale, 1, 200),
       grassTint: normalizeColor(surface?.grassTint, defaults.surface.grassTint),
@@ -288,6 +361,7 @@ export function clampProceduralLandscapeProps(
       rockSlopeThreshold: clampNumber(surface?.rockSlopeThreshold, defaults.surface.rockSlopeThreshold, 0.05, 0.9),
       baseMapMode: surface?.baseMapMode === 'blend' ? 'blend' : 'replace',
       baseMapBlend: clampNumber(surface?.baseMapBlend, defaults.surface.baseMapBlend, 0, 1),
+      viewDistanceScale: clampNullableNumber(surface?.viewDistanceScale, defaults.surface.viewDistanceScale, 1, 12),
     },
     road: {
       enabled: road?.enabled !== false,
@@ -316,6 +390,7 @@ export function clampProceduralLandscapeProps(
       minScale,
       maxScale,
       nearDistance: clampNullableNumber(forest?.nearDistance, defaults.forest.nearDistance, 16, 600),
+      nearTreeRadius: clampNumber(forest?.nearTreeRadius, defaults.forest.nearTreeRadius, 0, 300),
     },
     grass: {
       enabled: grass?.enabled !== false,
@@ -323,11 +398,29 @@ export function clampProceduralLandscapeProps(
       cameraRadius: clampNumber(grass?.cameraRadius, defaults.grass.cameraRadius, 0, 400),
       density: clampNumber(grass?.density, defaults.grass.density, 0, 4),
       sinkNearRoad: clampNumber(grass?.sinkNearRoad, defaults.grass.sinkNearRoad, 0, 5),
-      windEnabled: grass?.windEnabled !== false,
+      flowerDensity: clampNumber(grass?.flowerDensity, defaults.grass.flowerDensity, 0, 4),
+      tallGrassDensity: clampNumber(grass?.tallGrassDensity, defaults.grass.tallGrassDensity, 0, 4),
     },
     bushes: {
       enabled: bushes?.enabled !== false,
       density: clampNumber(bushes?.density, defaults.bushes.density, 0, 2),
+    },
+    canopy: {
+      enabled: canopy?.enabled !== false,
+    },
+    water: {
+      enabled: water?.enabled !== false,
+      levelOffset: clampNumber(water?.levelOffset, defaults.water.levelOffset, -50, 50),
+    },
+    barrier: {
+      enabled: barrier?.enabled !== false,
+      density: clampNumber(barrier?.density, defaults.barrier.density, 0, 1),
+      spacing: clampNumber(barrier?.spacing, defaults.barrier.spacing, 2, 64),
+      dropThreshold: clampNumber(barrier?.dropThreshold, defaults.barrier.dropThreshold, 0.1, 20),
+    },
+    wind: {
+      enabled: wind?.enabled !== false,
+      strength: clampNumber(wind?.strength, defaults.wind.strength, 0, 3),
     },
     debug: {
       showRoadPath: debug?.showRoadPath === true,
@@ -347,8 +440,52 @@ export function cloneProceduralLandscapeProps(
     forest: { ...props.forest },
     grass: { ...props.grass },
     bushes: { ...props.bushes },
+    canopy: { ...props.canopy },
+    water: { ...props.water },
+    barrier: { ...props.barrier },
+    wind: { ...props.wind },
     debug: { ...props.debug },
   }
+}
+
+/** 逐层风摆系数（lab `WIND_FACTOR`；护栏固定 0）。 */
+export const PROCEDURAL_LANDSCAPE_WIND_FACTOR = {
+  grass: 0.1,
+  bush: 0.06,
+  tree: 0.03,
+  barrier: 0,
+} as const
+
+/**
+ * 雾/视距尺度倍率：官方雾尺度按 1000m 世界调参（lab 1600m 世界刚好被包住）；
+ * 编辑器地形可达数十公里，直接套官方尺度会让 1km 以外整片地形变成雾色。
+ * 自动档按地形水平尺寸给出 `clamp(max(sizeX,sizeZ)/4000, 1, 12)` × 官方 1000m
+ * —— 地形 ≤4km 时恒为 1×，与官方/lab 逐字一致。显式给出 `surface.viewDistanceScale`
+ * 时按它夹紧。
+ */
+export function resolveSurfaceViewDistanceScale(
+  props: ProceduralLandscapeComponentProps,
+  horizontalSizeMeters: number,
+): number {
+  if (props.surface.viewDistanceScale != null) {
+    return clamp(props.surface.viewDistanceScale, 1, 12)
+  }
+  return clamp(Math.max(1, horizontalSizeMeters) / 4000, 1, 12)
+}
+
+/**
+ * 地表高度带归一化（迁移端新增）：官方地表公式按「水面以上 0..300m」调参；
+ * lab 世界起伏仅 ±40m 故把高度 ×4（lab 常量，逐字一致）。编辑器真实地形起伏可达
+ * 数百米，直接代入真实米数会让 heather / light grass 等高度项在大片区域饱和
+ * （地表整片发灰发白）。这里按实测起伏归一化：起伏 ≤60m 时系数为 4（与 lab 相同），
+ * 更大时按比例压缩并夹在 [0.25, 4]，使整带落在官方 300m 内。
+ * 仅 height 项参与缩放；沙带 / 树影（heightRel/4）等仍按真实米数。
+ */
+export function resolveSurfaceHeightScale(reliefMeters: number): number {
+  if (!(reliefMeters > 0)) {
+    return 4
+  }
+  return clamp(Math.min(4, 300 / reliefMeters), 0.25, 4)
 }
 
 export function roadHalfWidth(props: ProceduralLandscapeComponentProps): number {

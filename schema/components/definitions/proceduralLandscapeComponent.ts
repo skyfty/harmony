@@ -122,6 +122,10 @@ export function createProceduralLandscapeComponentState(
     forest: { ...defaults.forest, ...(overrides?.forest ?? {}) },
     grass: { ...defaults.grass, ...(overrides?.grass ?? {}) },
     bushes: { ...defaults.bushes, ...(overrides?.bushes ?? {}) },
+    canopy: { ...defaults.canopy, ...(overrides?.canopy ?? {}) },
+    water: { ...defaults.water, ...(overrides?.water ?? {}) },
+    barrier: { ...defaults.barrier, ...(overrides?.barrier ?? {}) },
+    wind: { ...defaults.wind, ...(overrides?.wind ?? {}) },
     debug: { ...defaults.debug, ...(overrides?.debug ?? {}) },
   }
   return {

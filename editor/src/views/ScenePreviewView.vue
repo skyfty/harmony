@@ -1952,7 +1952,9 @@ function ensureSlowroadsEnvironmentRuntime(): void {
 	slowroadsEnvironment = createSlowroadsEnvironmentRuntime({
 		scene: activeScene,
 		camera,
+		renderer,
 		assetStore,
+		// preview 直出画布（无后处理）：雾色按输出色空间下发，与 lab 一致。
 		applyLighting: (state) => {
 			if (!slowroadsAmbientLight) {
 				slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 1)

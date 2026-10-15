@@ -111,21 +111,25 @@ export function fogColorC(preset: EnvironmentPreset): string {
 }
 
 /**
- * 官方视距常数（Hills 场景默认 graphics preset：tileSize 1000 → 视距 1000m，
- * 云高 300m；雾距离 = 视距 × 预设比例，雾密度 = sqrt(5)/fogFar）。
+ * 官方尺度常数（Hills 场景默认 graphics preset：tileSize 1000、云高 300m）。
+ *
+ * 地形 / 植被 / 道路 / 水面 / 降雪用 `ENVIRONMENT_VIEW_DISTANCE`(1000) 作为雾尺度：
+ * 官方雾距离 = 尺度 × 预设比例，雾密度 = sqrt(5)/fogFar。
+ *
+ * 天空 / 云层 / 星空用 `ENVIRONMENT_SKY_DISTANCE`(= tileSize × 2 = 2000)：官方
+ * `updateSky()` 用 `n1 = graphicsPreset.tileSize * 2` 推 fogNear/fogFar、天空平面
+ * `sky.position.z = -n1 + 0.1` 与云层尺度（见 `reference/official/bundle-excerpts.js`）。
+ * `preset.fog.near < 0` 的预设（春·晨·晴 等 8 套）在 1000 尺度下 fogAvg=(far+near)/2
+ * 会掉到 500 以下 → vFogBlend = 0.722（官方 1.0），天空 A/B 混合与云层覆盖权重
+ * `min(1,fogBlend)` 都被压低，因此两套尺度必须拆开。
  */
 export const ENVIRONMENT_VIEW_DISTANCE = 1000
 export const ENVIRONMENT_CLOUD_ALTITUDE = 300
+/** 官方 `n1 = tileSize * 2`：天空平面距离与天空/云层/星空的雾参数尺度。 */
+export const ENVIRONMENT_SKY_DISTANCE = ENVIRONMENT_VIEW_DISTANCE * 2
 
-/**
- * 固定太阳方向（三端共享）：取自 slowroads-lab 的常量向量
- * `(0.42, 0.72, 0.28).normalize()` ≈ (0.4777, 0.8188, 0.3185)，
- * 换算成 CSM 的角度约定（x=sin(az)cos(el), y=sin(el), z=cos(az)cos(el)）即
- * 方位 ≈ 56.3°、高度 ≈ 55°。官方/ lab 的阳光只随时间/天气改变颜色与强度，
- * 方向恒定，因此这里不再暴露方位/高度设置。
- */
-export const SLOWROADS_SUN_AZIMUTH_DEG = 56.3
-export const SLOWROADS_SUN_ELEVATION_DEG = 55
+/** 固定晴空底色（lab `SKY_COLOR`）：渲染器 clear color / 水面 uSkyColor 共用。 */
+export const SLOWROADS_SKY_COLOR = 0xc9dcee
 
 export interface ResolvedFogParams {
   near: number
@@ -145,4 +149,30 @@ export function resolveFogParams(preset: EnvironmentPreset, viewDistance = ENVIR
     hazeHeight: preset.fog.hazeHeight,
     hazeIntensity: preset.fog.hazeIntensity,
   }
+}
+
+/**
+ * 天空 / 云层 / 星空用的雾参数：与 `resolveFogParams` 同一套公式，但尺度取官方
+ * `n1 = tileSize × 2`（= `ENVIRONMENT_SKY_DISTANCE`）。天空平面距离由同一常数给出，
+ * 因此 `vHaze = fogDepth / fogFar`、噪声雾顶分支（`fogDepth < 1000`）也与官方一致。
+ */
+export function resolveSkyFogParams(preset: EnvironmentPreset): ResolvedFogParams {
+  return resolveFogParams(preset, ENVIRONMENT_SKY_DISTANCE)
+}
+
+/**
+ * 官方 fog chunk 的 `vFogBlend`（顶点/片元共用同一公式）：
+ *   `fogAvg = (fogFar + fogNear) / 2`；≥ 500 → 1，< 50 → 0，否则 `(fogAvg - 50) / 450`。
+ * 天空的 A/B 混色比例与云层覆盖权重 `min(1, fogBlend)` 都由它决定，因此自检用它断言
+ * 「天空尺度给出官方 vFogBlend、场景尺度仍是迁移端值」。
+ */
+export function resolveFogDepthBlend(near: number, far: number): number {
+  const fogAvg = (far + near) / 2
+  if (fogAvg >= 500) {
+    return 1
+  }
+  if (fogAvg < 50) {
+    return 0
+  }
+  return (fogAvg - 50) / 450
 }

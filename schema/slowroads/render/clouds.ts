@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { EnvironmentPreset } from '../core/environment'
-import { bindSlowroadsFogUniforms, injectSlowroadsSkyFogFragment } from './fogInjection'
+import { injectSlowroadsSkyFogFragment } from './fogInjection'
 
 /**
  * slowroads 云层（官方 shader 逐段移植）。
@@ -179,6 +179,8 @@ export interface SlowroadsCloudsHandle {
   setState(clouds: EnvironmentPreset['clouds'], altitude: number, viewDistance: number): void
   /** 资产热切换（赛季资产加载完成 / 来源切换）。 */
   setTexture(texture: THREE.Texture): void
+  /** 相机远裁剪面：云平面尺寸按其收缩，避免远端被裁出硬边。 */
+  setCameraFar(far: number): void
   update(deltaSeconds: number, cameraWorldPosition: THREE.Vector3): void
   setVisible(visible: boolean): void
   dispose(): void
@@ -224,17 +226,16 @@ export function createSlowroadsClouds(texture: THREE.Texture): SlowroadsCloudsHa
       .replace('#include <uv_pars_vertex>', `#include <uv_pars_vertex>\n${UV_PARS_VERTEX}`)
       .replace('#include <uv_vertex>', `#include <uv_vertex>\n${UV_VERTEX}`)
       .replace('#include <project_vertex>', PROJECT_VERTEX)
-    bindSlowroadsFogUniforms(shader.uniforms)
     shader.vertexShader = shader.vertexShader
       .replace('#include <fog_pars_vertex>', FOG_PARS_VERTEX_CLOUDS)
       .replace('#include <fog_vertex>', FOG_VERTEX_CLOUDS)
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <uv_pars_fragment>', `#include <uv_pars_fragment>\n${UV_PARS_FRAGMENT}`)
-    // 云层与天空同属「雾色背景」：雾体不受 editor 雾预览开关影响，
-    // 否则关雾时云层平面会以白色底铺满天空（见 fogInjection 注释）。
+    // 云层与天空同属「天空组」：雾 uniform 绑 slowroadsSkyFogUniforms（官方 n1 = 2000
+    // 尺度），雾体替换时同时完成绑定（injectSlowroadsSkyFogFragment 内部处理）。
     // 云体必须与雾体一次替换注入：include 被消费后再 replace 会静默失配。
-    injectSlowroadsSkyFogFragment(shader, CLOUDS_FRAGMENT_BODY)
+    injectSlowroadsSkyFogFragment(shader, CLOUDS_FRAGMENT_BODY, material)
   }
 
   const mesh = new THREE.Mesh(geometry, material)
@@ -247,9 +248,16 @@ export function createSlowroadsClouds(texture: THREE.Texture): SlowroadsCloudsHa
   let hasClouds = true
   let viewDistance = 1000
   let cloudAltitude = 300
+  let cameraFar = Number.POSITIVE_INFINITY
 
   const applyScale = (): void => {
-    const scale = Math.max(viewDistance * 2, cloudAltitude * 12)
+    let scale = Math.max(viewDistance * 2, cloudAltitude * 12)
+    // 云平面是穹顶（几何边缘处 dist→0 淡出）：边缘必须落在相机远裁剪面之内，
+    // 否则远端会被裁出一条硬边（地平线附近出现"灰带"）。雾尺度自适应把云平面
+    // 放大到远超远裁剪面时按 far 收缩（纹理按世界坐标平铺，与平面尺寸无关）。
+    if (Number.isFinite(cameraFar) && cameraFar > 1) {
+      scale = Math.min(scale, cameraFar * 1.9)
+    }
     mesh.scale.set(scale, scale, 1)
   }
   applyScale()
@@ -276,6 +284,11 @@ export function createSlowroadsClouds(texture: THREE.Texture): SlowroadsCloudsHa
       next.wrapT = THREE.RepeatWrapping
       material.map = next
       material.needsUpdate = true
+    },
+    /** 相机远裁剪面（云平面尺寸的硬约束，见 applyScale）。 */
+    setCameraFar(far: number): void {
+      cameraFar = Number.isFinite(far) && far > 1 ? far : Number.POSITIVE_INFINITY
+      applyScale()
     },
     update(deltaSeconds: number, cameraWorldPosition: THREE.Vector3): void {
       mesh.position.set(cameraWorldPosition.x, cloudAltitude, cameraWorldPosition.z)

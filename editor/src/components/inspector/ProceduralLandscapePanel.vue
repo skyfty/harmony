@@ -128,7 +128,8 @@ const forestFields: NumericField[] = [
   { key: 'roadClearance', label: '距路净空 (m)', step: 0.5 },
   { key: 'minScale', label: '树木最小高度 (m)', step: 0.5 },
   { key: 'maxScale', label: '树木最大高度 (m)', step: 0.5 },
-  { key: 'nearDistance', label: '近树距离 (m，空=按档位)', step: 10, nullable: true },
+  { key: 'nearDistance', label: '近树卡距离 (m，空=按档位)', step: 10, nullable: true },
+  { key: 'nearTreeRadius', label: '近树 3D 半径 (m，0=关)', step: 5 },
   { key: 'minHeight', label: '最低高度 (m，空=不限)', step: 1, nullable: true },
 ]
 
@@ -137,6 +138,8 @@ const grassFields: NumericField[] = [
   { key: 'cameraRadius', label: '摄像机补足半径 (m)', step: 4 },
   { key: 'density', label: '草密度倍率', step: 0.05 },
   { key: 'sinkNearRoad', label: '靠路下沉 (m)', step: 0.1 },
+  { key: 'flowerDensity', label: '花草密度倍率', step: 0.05 },
+  { key: 'tallGrassDensity', label: '高草密度倍率', step: 0.05 },
 ]
 
 const bushFields: NumericField[] = [
@@ -147,6 +150,21 @@ const surfaceFields: NumericField[] = [
   { key: 'blendStrength', label: '混合强度', step: 0.05 },
   { key: 'uvScale', label: '世界 UV 尺度 (m)', step: 1 },
   { key: 'rockSlopeThreshold', label: '岩石坡度阈值', step: 0.02 },
+  { key: 'viewDistanceScale', label: '雾尺度倍率（空=按地形自动）', step: 0.5, nullable: true },
+]
+
+const barrierFields: NumericField[] = [
+  { key: 'density', label: '护栏密度', step: 0.05 },
+  { key: 'spacing', label: '同侧间隔 (m)', step: 1 },
+  { key: 'dropThreshold', label: '落差阈值 (m)', step: 0.1 },
+]
+
+const waterFields: NumericField[] = [
+  { key: 'levelOffset', label: '水线偏移 (m，相对地形最低点)', step: 0.5 },
+]
+
+const windFields: NumericField[] = [
+  { key: 'strength', label: '风强度', step: 0.1 },
 ]
 
 const qualityOptions = [
@@ -224,7 +242,9 @@ const statsRows = computed(() => {
     { label: '素材档位', value: value.assetVariant === '2048' ? '@2048' : '完整' },
     { label: '素材下载', value: `${(value.assetDownloadedBytes / (1024 * 1024)).toFixed(1)} MB` },
     { label: '近树 3D', value: String(value.nearTreeInstances) },
-    { label: '远景树', value: String(value.farTreeInstances) },
+    { label: '护栏', value: String(value.barrierInstances) },
+    { label: '水面', value: value.waterEnabled ? '开' : '关' },
+    { label: '雾尺度倍率', value: `${value.viewDistanceScale.toFixed(2)}x` },
     { label: '质量档', value: value.quality },
     { label: '树实例', value: String(value.treeInstances) },
     { label: '草实例', value: String(value.grassInstances) },
@@ -398,15 +418,6 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               :disabled="!componentEnabled"
               @update:model-value="(value) => patchGroup('grass', { enabled: value !== false })"
             />
-            <v-switch
-              :model-value="propsValue.grass.windEnabled"
-              label="风"
-              density="compact"
-              hide-details
-              color="primary"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => patchGroup('grass', { windEnabled: value !== false })"
-            />
           </div>
           <div class="pl-grid">
             <v-text-field
@@ -456,6 +467,108 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
 
         <div class="pl-section">
           <div class="pl-section__title">
+            树冠色斑
+            <v-switch
+              :model-value="propsValue.canopy.enabled"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('canopy', { enabled: value !== false })"
+            />
+          </div>
+          <div class="pl-section__hint">关 = 地表完全不采样树密度图（无林下混合/树影/环境光调制）。</div>
+        </div>
+
+        <div class="pl-section">
+          <div class="pl-section__title">
+            水面
+            <v-switch
+              :model-value="propsValue.water.enabled"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('water', { enabled: value !== false })"
+            />
+          </div>
+          <div class="pl-grid">
+            <v-text-field
+              v-for="field in waterFields"
+              :key="field.key"
+              :model-value="fieldValue('water', field.key)"
+              :label="field.label"
+              density="compact"
+              variant="underlined"
+              type="number"
+              hide-details
+              :step="field.step"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => handleNumberInput('water', field, value)"
+            />
+          </div>
+        </div>
+
+        <div class="pl-section">
+          <div class="pl-section__title">
+            护栏
+            <v-switch
+              :model-value="propsValue.barrier.enabled"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('barrier', { enabled: value !== false })"
+            />
+          </div>
+          <div class="pl-grid">
+            <v-text-field
+              v-for="field in barrierFields"
+              :key="field.key"
+              :model-value="fieldValue('barrier', field.key)"
+              :label="field.label"
+              density="compact"
+              variant="underlined"
+              type="number"
+              hide-details
+              :step="field.step"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => handleNumberInput('barrier', field, value)"
+            />
+          </div>
+        </div>
+
+        <div class="pl-section">
+          <div class="pl-section__title">
+            风摆
+            <v-switch
+              :model-value="propsValue.wind.enabled"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('wind', { enabled: value !== false })"
+            />
+          </div>
+          <div class="pl-grid">
+            <v-text-field
+              v-for="field in windFields"
+              :key="field.key"
+              :model-value="fieldValue('wind', field.key)"
+              :label="field.label"
+              density="compact"
+              variant="underlined"
+              type="number"
+              hide-details
+              :step="field.step"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => handleNumberInput('wind', field, value)"
+            />
+          </div>
+        </div>
+
+        <div class="pl-section">
+          <div class="pl-section__title">
             地表混合
             <v-switch
               :model-value="propsValue.surface.enabled"
@@ -464,6 +577,15 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               color="primary"
               :disabled="!componentEnabled"
               @update:model-value="(value) => patchGroup('surface', { enabled: value !== false })"
+            />
+            <v-switch
+              :model-value="propsValue.surface.textures"
+              label="地表贴图"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('surface', { textures: value !== false })"
             />
           </div>
           <div class="pl-grid">

@@ -352,7 +352,6 @@ import {
   createSlowroadsEnvironmentRuntime,
   type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
-import { setSlowroadsFogEnabled } from '@schema/slowroads/render/fogInjection'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
 import {
   componentManager,
@@ -1184,11 +1183,21 @@ let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
 let sceneCsmRuntimeConfigKey = ''
 
 /**
- * 阴影质量参数固定为默认配置（不再有 CSM 用户设置）；太阳方向固定为
- * lab 常量（见 SLOWROADS_SUN_*），颜色/强度由 Slow Roads 预设下发。
+ * 阴影质量参数固定为默认配置（不再有 CSM 用户设置）；太阳方向固定为官方
+ * 竖直向下（场景原点正上方 1000m），颜色/强度由 Slow Roads 预设下发。
  */
 function resolveViewportSceneCsmConfig(): SceneCsmConfig {
   return { ...VIEWPORT_SCENE_CSM_BASE_CONFIG }
+}
+
+/**
+ * 星点目标屏幕直径（物理像素）：编辑器视口默认开 FXAA，官方级别的亚像素星点
+ * （世界尺寸 0.01 ≈ 0.4 物理像素）会被 FXAA 抹平，因此开 FXAA 时只留一点点余量
+ * （1.6）；性能模式（FXAA 关闭）用 1.0 = 官方"约 1 物理像素"的原始意图。
+ * 用户实测：2.2 仍偏大，所以这里贴着官方量级取值。
+ */
+function resolveSlowroadsStarTargetPixels(): number {
+  return environmentSettings.value.viewportPerformanceMode ? 1.0 : 1.6
 }
 
 function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
@@ -14548,8 +14557,14 @@ function ensureSlowroadsEnvironmentRuntime(): void {
   slowroadsEnvironment = createSlowroadsEnvironmentRuntime({
     scene: activeScene,
     camera,
+    renderer,
     assetStore,
-    fogEnabled: true,
+    // 编辑器经 EffectComposer（Cineon/sRGB 延后到 OutputPass）出图：雾色按反
+    // Cineon 预补偿，最终画面才与 lab/官方一致（见 fogInjection 注释）。
+    deferredToneMapping: true,
+    // 星点补偿：视口开了 FXAA（非性能模式）时，官方级别的亚像素亮点会被 FXAA
+    // 抹平，按更大的目标屏幕直径下发；性能模式（无 FXAA）回到接近官方的 1.8px。
+    starSizeTargetPixels: resolveSlowroadsStarTargetPixels(),
     applyLighting: (state) => {
       if (!slowroadsAmbientLight) {
         slowroadsAmbientLight = new THREE.AmbientLight('#ffffff', 1)
@@ -14587,7 +14602,6 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 
   // 标准雾不参与渲染：SR 三色雾是场景唯一雾系统，且始终生效。
   scene.fog = null
-  setSlowroadsFogEnabled(true)
   applyRendererShadowSetting()
   syncSceneCsmSunPosition()
   // SR 环境最后应用：预设光照覆盖 CSM 同步结果（预设接管光色/强度）。
@@ -24745,6 +24759,7 @@ watch(
     }
     renderer.setSize(w, h)
     postprocessing.setPerformanceMode(Boolean(environmentSettings.value.viewportPerformanceMode))
+    slowroadsEnvironment?.setStarSizeTargetPixels(resolveSlowroadsStarTargetPixels())
     postprocessing.setSize(w, h)
   },
 )

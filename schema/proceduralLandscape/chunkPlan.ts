@@ -37,6 +37,8 @@ export interface TreePlacement {
 export interface GrassPlacement extends TreePlacement {
   /** Meters to sink below the sampled terrain height (roadside grass). */
   sink: number
+  /** 官方 roadProx = 距路缘距离 - halfWidth（草丛调色板贴近道路时的明度抑制）。 */
+  roadProx?: number
 }
 
 export interface TreeChunkParams {
@@ -68,6 +70,12 @@ export interface RoadBucketParams {
   sinkNearRoad: number
   bushesEnabled: boolean
   bushesDensity: number
+  /** 水线（世界 Y）；水线以下 0.5m 内不生草。 */
+  waterLevel: number
+  /** 花草密度倍率（花走灌木层，lab flowerDensity）。 */
+  flowerDensity: number
+  /** 高草密度倍率（高草走草层 cell 2/3，lab tallGrassDensity）。 */
+  tallGrassDensity: number
 }
 
 export interface CameraGrassChunkParams {
@@ -92,6 +100,15 @@ const CAMERA_GRASS_CANDIDATES = 6
 function resolveSlopeFactor(normalY: number): number {
   const slope = clamp01(1 - normalY)
   return 1 - clamp01(slope / 0.6) * 0.8
+}
+
+/** lab `heightFactor`：水线以上 2m 内线性淡出。 */
+function resolveHeightFactor(height: number, waterLevel: number): number {
+  const aboveWater = height - waterLevel
+  if (aboveWater <= 0) {
+    return 0
+  }
+  return aboveWater >= 2 ? 1 : clamp01(aboveWater / 2)
 }
 
 export function planTreeChunk(params: TreeChunkParams, deps: LandscapeChunkDeps): TreePlacement[] {
@@ -232,11 +249,15 @@ export function planRoadBucket(
           distance,
         )
         const slopeFactor = resolveSlopeFactor(normal.y)
+        const heightFactor = resolveHeightFactor(y, params.waterLevel)
+        if (heightFactor <= 0) {
+          continue
+        }
 
         if (params.bushesEnabled) {
           const nearRoad = distance >= params.halfWidth + 0.4 && distance <= params.halfWidth + 4
           if (nearRoad) {
-            const bushChance = params.bushesDensity * 0.05 * corridorFalloff
+            const bushChance = params.bushesDensity * 0.05 * corridorFalloff * heightFactor
             if (bucketRandom(index, 3) < bushChance) {
               bushes.push({
                 x,
@@ -248,12 +269,13 @@ export function planRoadBucket(
                 species: 0,
                 rank: index,
                 sink: 0,
+                roadProx: distance - params.halfWidth,
               })
             }
           }
         }
 
-        const grassChance = corridorFalloff * slopeFactor * params.grassDensity * 0.85
+        const grassChance = corridorFalloff * slopeFactor * heightFactor * params.grassDensity * 0.85
         if (bucketRandom(index, 7) >= grassChance) {
           continue
         }
@@ -268,10 +290,102 @@ export function planRoadBucket(
           species: 0,
           rank: index,
           sink: params.sinkNearRoad * sinkFraction,
+          roadProx: distance - params.halfWidth,
         })
       }
     }
   }
+
+  // ---- 花草层（→ 灌木层）与高草层（→ 草层）：比路缘带更靠外（lab
+  // computeLayerPlacements）。花草横向 0.5..6m、高草 1m..min(20, 走廊宽)。
+  const layerRandom = (along: number, keyB: number, salt: number): number =>
+    chunkRandom(params.seed, params.bucketIndex, 741, along * 8192 + keyB, salt)
+  const emitOuterLayer = (kind: 'flower' | 'tallGrass'): void => {
+    const isFlower = kind === 'flower'
+    const density = isFlower ? params.flowerDensity : params.tallGrassDensity
+    if (density <= 0) {
+      return
+    }
+    const alongStep = isFlower ? 1.5 : 1.2
+    const acrossStep = isFlower ? 0.9 : 1.3
+    const lateralStart = isFlower ? 0.5 : 1.0
+    const lateralEnd = isFlower ? 6 : Math.max(6, Math.min(20, params.corridorWidth))
+    const alongCount = Math.max(1, Math.ceil(segmentLength / alongStep))
+    const lateralCount = Math.max(1, Math.ceil((lateralEnd - lateralStart) / acrossStep))
+    for (let along = 0; along < alongCount; along += 1) {
+      const t = alongCount === 1 ? 0.5 : along / (alongCount - 1)
+      const sampleX = params.fromX + dx * t
+      const sampleZ = params.fromZ + dz * t
+      for (let lateralIndex = 0; lateralIndex < lateralCount; lateralIndex += 1) {
+        const baseLateral = params.halfWidth + lateralStart + lateralIndex * acrossStep
+        for (const side of [1, -1] as const) {
+          const keyB = (side > 0 ? 1 : 0) * 4096 + lateralIndex
+          const jitterAlong = (layerRandom(along, keyB, 1) - 0.5) * alongStep
+          const jitterLateral = (layerRandom(along, keyB, 2) - 0.5) * acrossStep * 0.8
+          const lateral = baseLateral + jitterLateral
+          const x = sampleX + dirX * jitterAlong + perpX * side * lateral
+          const z = sampleZ + dirZ * jitterAlong + perpZ * side * lateral
+          if (!grid.contains(x, z)) {
+            continue
+          }
+          const distance = roadField ? roadField.distanceAt(x, z) : lateral
+          if (distance < params.halfWidth + lateralStart - 0.2 || distance > params.halfWidth + lateralEnd + 0.6) {
+            continue
+          }
+          const y = grid.sampleHeight(x, z)
+          if (y == null) {
+            continue
+          }
+          const heightFactor = resolveHeightFactor(y, params.waterLevel)
+          if (heightFactor <= 0) {
+            continue
+          }
+          const normal = grid.sampleNormal(x, z)
+          if (!normal) {
+            continue
+          }
+          const slope = clamp01(1 - normal.y)
+          if (slope > 0.7) {
+            continue
+          }
+          const falloff = isFlower
+            ? 1 - smoothstep(params.halfWidth + 3.0, params.halfWidth + lateralEnd, distance)
+            : 1 - smoothstep(params.halfWidth + lateralEnd * 0.55, params.halfWidth + lateralEnd, distance)
+          const chance = falloff * resolveSlopeFactor(normal.y) * heightFactor * density * (isFlower ? 0.5 : 0.55)
+          if (layerRandom(along, keyB, 3) >= chance) {
+            continue
+          }
+          const variantHash = layerRandom(along, keyB, 6)
+          const placement: GrassPlacement = {
+            x,
+            z,
+            // lab：花草层贴地 -0.12；高草贴地。
+            y: isFlower ? y - 0.12 : y,
+            rotation: layerRandom(along, keyB, 4) * Math.PI * 2,
+            scale: isFlower
+              ? 0.8 + layerRandom(along, keyB, 5) * 0.5
+              : 0.7 + layerRandom(along, keyB, 5) * 0.6,
+            // 高草偏向大草格（cell 2）；花草均匀分布。
+            variant: isFlower ? variantHash : 0.38 + variantHash * 0.37,
+            species: 0,
+            rank: lateralIndex,
+            sink: isFlower ? 0.12 : 0,
+            roadProx: distance - params.halfWidth,
+          }
+          if (isFlower) {
+            if (params.bushesEnabled) {
+              bushes.push(placement)
+            }
+          } else {
+            grass.push(placement)
+          }
+        }
+      }
+    }
+  }
+  emitOuterLayer('flower')
+  emitOuterLayer('tallGrass')
+
   return { grass, bushes }
 }
 
@@ -323,6 +437,7 @@ export function planCameraGrassChunk(
       species: 0,
       rank: i,
       sink: 0,
+          roadProx: roadField ? Math.max(0, roadField.distanceAt(x, z) - params.roadHalfWidth) : 0,
     })
   }
   return placements

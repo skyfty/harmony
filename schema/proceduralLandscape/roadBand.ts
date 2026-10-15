@@ -4,6 +4,7 @@ import { SEASON_PARAMS } from '../slowroads/core/seasonParams'
 import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
 import { forestDensityClassAt, type LandscapeDensityField } from './densityField'
 import type { RoadTraceNode } from './roadTrace'
+import { recordSlowroadsShaderAudit } from './shaderAudit'
 
 /**
  * 公路贴图带（slowroads road_single 网格移植）。
@@ -13,6 +14,7 @@ import type { RoadTraceNode } from './roadTrace'
  *   textureStretch=2 → 每 2 倍路宽重复一次贴图）；
  * - 春/秋 overlay（苔痕 / 落叶）强度 = saturate(道路两侧树影 × shadowFactor × 3)，
  *   树影由森林密度场在道路两缘采样烘焙；
+ * - 官方路面掠射边缘光（ef chunk）：与地表同款 fresnel，但无 blendVal / uv 偏置；
  * - alphaTest 0.75（官方参数），粗糙边缘由底图 alpha 裁切；材质用
  *   MeshStandardMaterial（真实光照/CSM 阴影）+ 共享三色雾。
  */
@@ -27,6 +29,8 @@ export interface RoadBandHandle {
   setSeason(season: SeasonId, textures: RoadBandTextures): void
   /** 官方 `lights.radiance`（与地表共享）：路面自发光强度。 */
   setRadiance(radiance: number): void
+  /** 官方 `lights.fresnelFactor`：路面掠射边缘光强度。 */
+  setFresnel(fresnel: number): void
   setVisible(visible: boolean): void
   dispose(): void
 }
@@ -56,6 +60,7 @@ const VERTEX_PARS = /* glsl */ `
 attribute float aRoadShadow;
 varying vec2 vRoadUv;
 varying float vRoadShadow;
+varying vec3 vRoadWorldPosition;
 `
 
 const VERTEX_BODY = /* glsl */ `
@@ -63,6 +68,7 @@ const VERTEX_BODY = /* glsl */ `
 vRoadUv = uv;
 vRoadUv.y /= 2.0;
 vRoadShadow = aRoadShadow;
+vRoadWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
 `
 
 const FRAGMENT_PARS = /* glsl */ `
@@ -71,8 +77,10 @@ uniform sampler2D uRoadOverlay;
 uniform float uRoadHasOverlay;
 uniform float uRoadShadowFactor;
 uniform float uRoadRadiance;
+uniform float uRoadFresnelIntensity;
 varying vec2 vRoadUv;
 varying float vRoadShadow;
+varying vec3 vRoadWorldPosition;
 
 /** 官方环境光树影调制（与地表同一变体）。 */
 float plRoadAmbientShadow = 1.0;
@@ -89,6 +97,16 @@ const FRAGMENT_BODY = /* glsl */ `
     float overlayFactor = clamp(vRoadShadow * uRoadShadowFactor * 3.0, 0.0, 1.0);
     roadTexel.rgb = mix(roadTexel.rgb, overlayCol.rgb, overlayFactor * overlayCol.a);
   }
+  // 官方路面掠射边缘光（ef chunk）：与地表同款 fresnel，无 blendVal / uv 偏置。
+  float roadFresnel = 1.0 - max(0.0, dot(normalize(cameraPosition - vRoadWorldPosition), vec3(0.0, 1.0, 0.0)));
+  float roadLightFresnel = max(0.0, (roadFresnel - 0.75)) * 4.0;
+  roadLightFresnel *= roadLightFresnel;
+  roadLightFresnel *= (1.0 - vRoadShadow * uRoadShadowFactor);
+  roadLightFresnel *= uRoadFresnelIntensity;
+  float roadDarkFresnel = 1.0 - min(1.0, roadFresnel * 1.3333);
+  roadDarkFresnel *= uRoadFresnelIntensity;
+  roadDarkFresnel = 0.25 + min(0.25, max(0.0, roadDarkFresnel - 0.25) * 0.5);
+  roadTexel.rgb *= 1.0 + roadLightFresnel - roadDarkFresnel;
   // 官方路面自发光：路面色 × radiance（与地表共享预设 radiance）。
   totalEmissiveRadiance = roadTexel.rgb * uRoadRadiance;
   plRoadAmbientShadow = 1.75 - clamp(vRoadShadow, 0.75, 1.0);
@@ -161,6 +179,7 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     uRoadHasOverlay: { value: options.textures.overlay ? 1 : 0 },
     uRoadShadowFactor: { value: SEASON_PARAMS[options.season].shadowFactor },
     uRoadRadiance: { value: 2 },
+    uRoadFresnelIntensity: { value: 1 },
   }
   // 官方路面 = Lambert（无镜面），自发光合成与地表一致。
   const material = new THREE.MeshLambertMaterial({
@@ -193,7 +212,8 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
         'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
         'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directDiffuse * totalEmissiveRadiance;',
       )
-    injectSlowroadsFog(shader)
+    injectSlowroadsFog(shader, { material })
+    recordSlowroadsShaderAudit(material, shader)
   }
 
   const mesh = new THREE.Mesh(geometry, material)
@@ -213,6 +233,9 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     },
     setRadiance(radiance: number): void {
       uniforms.uRoadRadiance.value = radiance
+    },
+    setFresnel(fresnel: number): void {
+      uniforms.uRoadFresnelIntensity.value = fresnel
     },
     setVisible(visible: boolean): void {
       mesh.visible = visible

@@ -16,6 +16,7 @@ import {
   createFoliageMaterial,
   createFoliageShaderUniforms,
   disposeFoliageLayerMesh,
+  setFoliageMaterialCardRange,
   setFoliageMaterialLighting,
   setFoliageMaterialTextures,
   type FoliageMaterialHandle,
@@ -30,6 +31,8 @@ import {
 } from './surfaceMaterial'
 import { createRoadBand, type RoadBandHandle } from './roadBand'
 import { createTreeMeshManager, type TreeMeshManager } from './treeMeshes'
+import { computeBarrierSegments } from './barrier'
+import { createWaterPlane, type WaterPlaneHandle } from './waterPlane'
 import { getSharedSlowroadsAssetStore, slowroadsSharedRetainIds, type SlowroadsAssetStore } from '../slowroads/assets/assetStore'
 import {
   collectSeasonTextureRefs,
@@ -40,6 +43,14 @@ import {
 import { SEASON_PARAMS } from '../slowroads/core/seasonParams'
 import { resolveEnvironmentPreset } from '../slowroads/core/environment'
 import {
+  reportSlowroadsSelfChecks,
+  runMaterialUniformCoverageChecks,
+  runSlowroadsSeasonChecks,
+  runTreeDiscolourationShaderChecks,
+} from '../slowroads/render/selfCheck'
+import { collectSlowroadsShaderAudits } from './shaderAudit'
+import {
+  BARRIER_RAIL_REGIONS,
   getBushEntries,
   getConiferCardRegions,
   getGrassEntries,
@@ -54,10 +65,13 @@ import {
   COMPONENT_ARTIFACT_KEY,
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../components/componentManager'
-import { clamp, degreesToRadians, hashUnit, lerp } from './noise'
+import { clamp, degreesToRadians } from './noise'
 import {
   clampProceduralLandscapeProps,
+  PROCEDURAL_LANDSCAPE_WIND_FACTOR,
   PROCEDURAL_LANDSCAPE_QUALITY_TIERS,
+  resolveSurfaceHeightScale,
+  resolveSurfaceViewDistanceScale,
   resolveProceduralLandscapeQuality,
   roadFlattenParams,
   roadFeelAngleRad,
@@ -66,6 +80,7 @@ import {
   type ProceduralLandscapeEnvironment,
   type ResolvedProceduralLandscapeQuality,
 } from './config'
+import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
 
 const TREE_BATCH_RELEASE_PADDING = 48
 const ROAD_BUCKET_LENGTH = 16
@@ -80,13 +95,10 @@ const TREE_UNIT_SIZE = 8
 const GRASS_UNIT_SIZE = 1.6
 const BUSH_UNIT_SIZE = 2
 const IMPOSTER_REGIONS: SpriteRegion[] = gridRegions(16, 4, 4096, 1024)
-/** 远景树环：相机移动超过该距离后重建（相机锚定，保证视野内始终有树）。 */
-const FAR_TREE_REANCHOR_DISTANCE = 800
-/** 远景树环外缘相对视距的倍数与内缘系数（内缘略早于分块视距，避免接缝）。 */
-const FAR_TREE_RING_INNER_FACTOR = 0.92
-const FAR_TREE_RING_OUTER_FACTOR = 2.4
-/** 远景树随距离放大的增益：远处 imposter 按比例放大，弥补透视缩小导致的"看不见森林"。 */
-const FAR_TREE_SCALE_GAIN = 0.9
+/** 近树卡 LOD dissolve 区间推导（lab main.ts：lod1Horizon = nearDistance / 10）。 */
+const CARD_DISSOLVE_INTERVAL_FACTOR = 0.3
+/** 木护栏段的世界尺寸（lab：单片面 unitSize 0.35m、alphaTest 0.35）。 */
+const BARRIER_UNIT_SIZE = 0.35
 
 let sharedPlaceholderTexture: THREE.DataTexture | null = null
 
@@ -148,8 +160,12 @@ export interface ProceduralLandscapeRuntimeStats {
   assetResidentBytes: number
   assetDownloadedBytes: number
   assetVariant: 'full' | '2048'
-  /** 远景全域树层实例数（分块流式之外的静态层）。 */
-  farTreeInstances: number
+  /** 木护栏段实例数。 */
+  barrierInstances: number
+  /** 水面是否启用（水线 = 地形最低点 + water.levelOffset）。 */
+  waterEnabled: boolean
+  /** 当前生效的雾/视距尺度倍率（1 = 与官方/lab 逐字一致）。 */
+  viewDistanceScale: number
 }
 
 export interface ProceduralLandscapeEnvironmentState {
@@ -230,6 +246,48 @@ function jsonKey(value: unknown): string {
   }
 }
 
+/**
+ * 网格自身**或任一祖先**带 artifact 标记时视为 proceduralLandscape 自建物件。
+ *
+ * 近树 3D 网格、植被批次等只标了容器/组（`treeMeshManager.container`、
+ * `foliageRoot` 下的批组），网格自身没有标记；若只检查自身，重新注入地表材质时
+ * 会把它们当成 GLB 地形网格接管（表现为「树被地表贴图渲染」——官方地表片元按
+ * 世界坐标采样季节贴图，贴到树上就是地形纹理）。
+ */
+export function isProceduralLandscapeArtifact(object: THREE.Object3D): boolean {
+  let node: THREE.Object3D | null = object
+  while (node) {
+    if ((node.userData as Record<string, unknown> | undefined)?.[COMPONENT_ARTIFACT_KEY] === true) {
+      return true
+    }
+    node = node.parent
+  }
+  return false
+}
+
+/**
+ * 收集宿主节点下「真正的地形网格」（地表材质注入的目标）。
+ * 自建物件（护栏 / 水面 / 植被层 / 近树 3D 网格等，见上）与其整个子树都跳过。
+ */
+export function collectProceduralLandscapeSurfaceMeshes(hostObject: THREE.Object3D | null): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = []
+  if (!hostObject) {
+    return meshes
+  }
+  hostObject.updateMatrixWorld(true)
+  hostObject.traverse((child) => {
+    const mesh = child as THREE.Mesh & { isMesh?: boolean }
+    if (!mesh.isMesh || !mesh.geometry || !mesh.material) {
+      return
+    }
+    if (isProceduralLandscapeArtifact(mesh)) {
+      return
+    }
+    meshes.push(mesh)
+  })
+  return meshes
+}
+
 function buildRoadBucketTable(nodes: RoadTraceNode[], bucketLength: number): RoadBucketEntry[] {
   if (nodes.length < 2) {
     return []
@@ -307,7 +365,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     grid: jsonKey(props.sampling),
     world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
     instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
-    uniforms: jsonKey([props.surface, props.road.flattenBand, props.road.flattenStrength, props.grass.windEnabled]),
+    uniforms: jsonKey([props.surface, props.canopy, props.wind, props.road.flattenBand, props.road.flattenStrength]),
     roadDebug: jsonKey(props.debug.showRoadPath),
     chunkDebug: jsonKey(props.debug.showChunks),
   }
@@ -334,12 +392,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let roadBand: RoadBandHandle | null = null
   let treeMeshManager: TreeMeshManager | null = null
   let treeMeshInitStarted = false
-  let farTreeRoot: THREE.Group | null = null
-  let farTreeLayers: THREE.InstancedMesh[] = []
-  let farTreeSignature = ''
-  let farTreeInstances = 0
-  let farTreeCenterX = Number.NaN
-  let farTreeCenterZ = Number.NaN
+  let waterPlane: WaterPlaneHandle | null = null
+  let barrierLayer: THREE.InstancedMesh | null = null
+  let barrierInstances = 0
+  /** 水面挂在场景根（世界空间水平面）；从宿主节点向上解析。 */
+  let sceneRoot: THREE.Object3D | null = null
+  let appliedViewDistanceScale = 1
   const treeBatches = new Map<string, BatchEntry>()
   const roadBatches = new Map<string, BatchEntry>()
   const cameraGrassBatches = new Map<string, BatchEntry>()
@@ -358,6 +416,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let surfaceWarningEmitted = false
   let roadWarningEmitted = false
   let gridFailed = false
+  /** 护栏/水面层签名（参数变化时只重建这两层）。 */
+  let barrierSignature = ''
+  let selfChecksDone = false
+  let lastAuditSignature = ''
+  let lastSelfCheckAt = Number.NEGATIVE_INFINITY
+  let seasonChecksRun = false
   let currentTerrainSourceSignature = 'unresolved'
   let lastSourceCheckAt = Number.NEGATIVE_INFINITY
 
@@ -365,7 +429,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let currentSeason: SeasonId = hooks.getSeasonState()?.season ?? 'spring'
   let appliedLightingKey = ''
   /** 最近一次下发的官方光照参数（新材质创建后需要补齐）。 */
-  const appliedLighting = { radiance: 2, shadowFactor: 1 }
+  const appliedLighting = { radiance: 2, shadowFactor: 1, fresnel: 1 }
   let seasonAssets: Map<string, THREE.Texture> | null = null
   let seasonAssetsSeason: SeasonId | null = null
   let seasonLoadToken = 0
@@ -400,7 +464,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     assetResidentBytes: 0,
     assetDownloadedBytes: 0,
     assetVariant: assetStore.variant,
-    farTreeInstances: 0,
+    barrierInstances: 0,
+    waterEnabled: false,
+    viewDistanceScale: 1,
   }
   statsRegistry.set(hooks.nodeId, stats)
 
@@ -436,11 +502,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       tagArtifact(debugRoot)
       hostObject.add(debugRoot)
     }
-    if (!farTreeRoot) {
-      farTreeRoot = new THREE.Group()
-      farTreeRoot.name = '__ProceduralLandscapeFarTrees'
-      tagArtifact(farTreeRoot)
-      hostObject.add(farTreeRoot)
+    if (!sceneRoot) {
+      // 水面是世界空间水平面（宿主的旋转会让它倾斜），挂到场景根。
+      let node: THREE.Object3D | null = hostObject
+      while (node.parent) {
+        node = node.parent
+      }
+      sceneRoot = node
     }
   }
 
@@ -521,10 +589,28 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadBucketTable = []
   }
 
+  function disposeWaterAndBarrier(): void {
+    waterPlane?.dispose()
+    waterPlane = null
+    if (barrierLayer) {
+      disposeFoliageLayerMesh(barrierLayer)
+      barrierLayer = null
+    }
+    barrierInstances = 0
+  }
+
+  /** 水线 = 地形最低点 + water.levelOffset（lab：高度场的固定水位）。 */
+  function resolveWaterLevel(): number {
+    if (!grid) {
+      return 0
+    }
+    return grid.minY + props.water.levelOffset
+  }
+
   function resetAll(): void {
     disposeSurfaceState()
     disposeWorldState()
-    disposeFarTreeRing()
+    disposeWaterAndBarrier()
     gridBuilder = null
     grid = null
   }
@@ -555,21 +641,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function collectSurfaceMeshes(): THREE.Mesh[] {
-    const meshes: THREE.Mesh[] = []
-    if (!hostObject) {
-      return meshes
-    }
-    hostObject.updateMatrixWorld(true)
-    hostObject.traverse((child) => {
-      const mesh = child as THREE.Mesh & { isMesh?: boolean }
-      if (!mesh.isMesh || !mesh.geometry || !mesh.material) {
-        return
-      }
-      if (!(mesh.userData as Record<string, unknown>)[COMPONENT_ARTIFACT_KEY]) {
-        meshes.push(mesh)
-      }
-    })
-    return meshes
+    return collectProceduralLandscapeSurfaceMeshes(hostObject)
   }
 
   function buildTerrainSourceSignature(
@@ -715,10 +787,188 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
 
     buildRoadBand()
+    applySceneViewDistanceScale()
     applyStaticSurfaceUniforms()
+    barrierSignature = resolveBarrierSignature()
+    buildBarrier()
+    buildWater()
     releaseAllBatches()
     dirty.instances = true
     forceStream = true
+  }
+
+  /**
+   * 雾/视距尺度自适应（迁移端）：官方雾尺度按 1000m 世界调参，编辑器地形可达
+   * 数十公里；`surface.viewDistanceScale` 留空时按地形水平尺寸给出倍率，
+   * 环境运行时据此重推场景组 / 天空组（2 × 视距）/ 云层。
+   */
+  function applySceneViewDistanceScale(): void {
+    if (!grid) {
+      return
+    }
+    const horizontalSize = Math.max(grid.maxX - grid.minX, grid.maxZ - grid.minZ)
+    appliedViewDistanceScale = resolveSurfaceViewDistanceScale(props, horizontalSize)
+    setSlowroadsSceneViewDistanceScale(appliedViewDistanceScale)
+  }
+
+  /** 护栏/水面层签名：这些参数变化时只需重建这两层（护栏放置依赖道路形状与水位）。 */
+  function resolveBarrierSignature(): string {
+    return jsonKey([
+      props.barrier,
+      props.water,
+      props.road.enabled,
+      props.road.width,
+      props.road.shoulderWidth,
+      props.seed,
+    ])
+  }
+
+  /**
+   * 启动自检（世界构建 + 材质编译完成后跑一次）：
+   *  - 季节目录（贴图槽位/色彩空间/别名一致性/alphaTest 表/树卡变色幅度语义）；
+   *  - 景观材质 uniform 覆盖审计（着色器声明的 uniform 必须在 JS 表里）；
+   *  - 树卡变色着色器源码断言（因子只出现在顶点噪声公式一次、片元消费 varying）。
+   * 失败写入面板 warnings。
+   */
+  function runLandscapeSelfChecks(): void {
+    if (selfChecksDone) {
+      return
+    }
+    if (elapsedMs - lastSelfCheckAt < 1000) {
+      return
+    }
+    const audits = collectSlowroadsShaderAudits(sceneRoot ?? hostObject)
+    if (!audits.length) {
+      // 材质还没编译（onBeforeCompile 未触发）：下一帧再试。
+      return
+    }
+    // 材质是随渲染逐步编译的：签名不变时才算「收敛」，跑完停用；签名变化时重跑审计
+    // （面板 warnings 会在每次失败时补齐）。
+    const signature = audits.map((audit) => audit.name).sort().join('|')
+    console.info(`[slowroads] shader audits (${audits.length}): ${signature}`)
+    if (signature === lastAuditSignature && audits.length > 1) {
+      selfChecksDone = true
+    } else {
+      lastAuditSignature = signature
+    }
+    lastSelfCheckAt = elapsedMs
+    const seasonResults = seasonChecksRun ? [] : runSlowroadsSeasonChecks()
+    if (!seasonChecksRun) {
+      seasonChecksRun = true
+      reportSlowroadsSelfChecks('season', seasonResults)
+    }
+    const uniformResults = runMaterialUniformCoverageChecks(
+      audits.map((audit) => ({
+        name: audit.name,
+        vertexShader: audit.vertexShader,
+        fragmentShader: audit.fragmentShader,
+        uniformKeys: audit.uniformKeys,
+      })),
+    )
+    reportSlowroadsSelfChecks('uniform', uniformResults)
+    const treeResults = runTreeDiscolourationShaderChecks(
+      audits.map((audit) => ({
+        name: audit.name,
+        vertexShader: audit.vertexShader,
+        fragmentShader: audit.fragmentShader,
+      })),
+    )
+    reportSlowroadsSelfChecks('tree-discolouration', treeResults)
+    for (const result of [...seasonResults, ...uniformResults, ...treeResults]) {
+      if (!result.ok) {
+        warn(`self-check:${result.name}`)
+      }
+    }
+  }
+
+  /** 木护栏层（lab：BARRIER_RAIL_REGIONS 走植被层渲染，单片面 0.35m / alphaTest 0.35 / 风摆 0）。 */
+  function buildBarrier(): void {
+    if (barrierLayer) {
+      disposeFoliageLayerMesh(barrierLayer)
+      barrierLayer = null
+    }
+    barrierInstances = 0
+    if (
+      !grid
+      || !roadResult
+      || roadResult.nodes.length < 2
+      || !foliageRoot
+      || !props.barrier.enabled
+      || props.barrier.density <= 0
+    ) {
+      return
+    }
+    const segments = computeBarrierSegments(grid, roadResult.nodes, {
+      seed: props.seed,
+      density: props.barrier.density,
+      spacing: props.barrier.spacing,
+      dropThreshold: props.barrier.dropThreshold,
+      halfWidth: roadHalfWidth(props),
+      shoulderWidth: props.road.shoulderWidth,
+    })
+    if (!segments.length) {
+      return
+    }
+    const spec: FoliageMaterialSpec = {
+      kind: 'barrier',
+      tier: 'all',
+      species: 0,
+      singlePlane: true,
+      tint: 0xffffff,
+      farTintScale: 1,
+      hasAlphaTexture: false,
+      hasNormalTexture: false,
+      card: null,
+      distanceAlpha: false,
+      useDensityShadow: false,
+      key: 'barrier:all',
+    }
+    const handle = getFoliageMaterialHandle(spec)
+    const instances: FoliageSpriteInstance[] = segments.map((segment) => ({
+      x: segment.x,
+      y: segment.y,
+      z: segment.z,
+      rotation: segment.rotation,
+      scale: segment.scale,
+      region: BARRIER_RAIL_REGIONS[segment.variant] ?? BARRIER_RAIL_REGIONS[0] ?? null,
+      cell: segment.variant,
+      roadProx: 0,
+    }))
+    const mesh = createFoliageLayerMesh(
+      instances,
+      handle.material,
+      BARRIER_UNIT_SIZE,
+      hostObject ? hostInverse : null,
+      { billboard: false },
+    )
+    tagArtifact(mesh)
+    foliageRoot.add(mesh)
+    barrierLayer = mesh
+    barrierInstances = instances.length
+  }
+
+  /** 水面（lab water.ts）：世界空间水平面，水线 = 地形最低点 + water.levelOffset。 */
+  function buildWater(): void {
+    waterPlane?.dispose()
+    waterPlane = null
+    if (!grid || !props.water.enabled || !sceneRoot) {
+      return
+    }
+    const waves = textureFor(SHARED_TEXTURES.seaWaves.id)
+    if (!waves) {
+      return
+    }
+    const size = Math.max(grid.maxX - grid.minX, grid.maxZ - grid.minZ) * 1.5
+    waterPlane = createWaterPlane({
+      worldSize: Math.max(1, size),
+      waterLevel: resolveWaterLevel(),
+      waves,
+    })
+    waterPlane.mesh.position.x = (grid.minX + grid.maxX) * 0.5
+    waterPlane.mesh.position.z = (grid.minZ + grid.maxZ) * 0.5
+    tagArtifact(waterPlane.mesh)
+    sceneRoot.add(waterPlane.mesh)
+    waterPlane.setVisible(true)
   }
 
   function buildRoadBand(): void {
@@ -761,6 +1011,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlHeightMin.value = grid.minY
     uniforms.uPlHeightRange.value = Math.max(0.001, grid.maxY - grid.minY)
     uniforms.uPlWaterLevel.value = grid.minY
+    // 地表高度带归一化：lab 世界起伏 ±40m 时恒为 4（逐字一致）；编辑器真实地形
+    // 按实测起伏压缩到 [0.25, 4]，避免 heather / light grass 高度项整片饱和。
+    uniforms.uPlHeightScale.value = resolveSurfaceHeightScale(grid.maxY - grid.minY)
     uniforms.uPlRoadField.value = roadFieldTexture
     uniforms.uPlForestMask.value = forestMaskTexture
     uniforms.uPlRoadFieldRange.value = roadFieldData ? roadFieldData.range : 64
@@ -805,12 +1058,30 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlRoadTint.value.set(props.surface.roadTint)
     uniforms.uPlGravelTint.value.set(props.surface.gravelTint)
     uniforms.uPlRockSlope.value = props.surface.rockSlopeThreshold
+    uniforms.uPlShowCanopy.value = props.canopy.enabled ? 1 : 0
+    uniforms.uPlShowTextures.value = props.surface.textures ? 1 : 0
+    uniforms.uPlFresnelIntensity.value = appliedLighting.fresnel
     foliageUniforms.meshRadius.value = resolveNearTreeRadius()
+    // 近树卡/远景树的切分层级距离与 dissolve 区间同源（lab：lod1Horizon 由近树卡距离推出）。
+    foliageUniforms.nearDistance.value = props.forest.nearDistance
+      ?? PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()].treeNearDistance
+    if (waterPlane) {
+      waterPlane.setWaterLevel(resolveWaterLevel())
+      waterPlane.setVisible(props.water.enabled)
+    }
+    if (barrierLayer) {
+      barrierLayer.visible = props.barrier.enabled
+    }
     roadBand?.setVisible(props.road.enabled)
     for (const handle of foliageMaterials.values()) {
-      handle.uniforms.uPlWindStrength.value = props.grass.windEnabled
-        ? (handle.spec.kind === 'grass' ? 0.12 : handle.spec.kind === 'bush' ? 0.07 : 0.03)
-        : 0
+      const factor = handle.spec.kind === 'barrier'
+        ? PROCEDURAL_LANDSCAPE_WIND_FACTOR.barrier
+        : handle.spec.kind === 'grass'
+          ? PROCEDURAL_LANDSCAPE_WIND_FACTOR.grass
+          : handle.spec.kind === 'bush'
+            ? PROCEDURAL_LANDSCAPE_WIND_FACTOR.bush
+            : PROCEDURAL_LANDSCAPE_WIND_FACTOR.tree
+      handle.uniforms.uPlWindStrength.value = props.wind.enabled ? factor * props.wind.strength : 0
     }
   }
 
@@ -818,8 +1089,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (resolveQuality() !== 'high') {
       return 0
     }
-    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS.high
-    return props.forest.nearDistance ?? tier.treeNearDistance
+    return props.forest.nearTreeRadius
   }
 
   function foliageMaterialKey(spec: FoliageMaterialSpec): string {
@@ -855,6 +1125,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const entry = SEASON_CATALOG[season]
     const placeholder = getSharedPlaceholderTexture()
     const pick = (id: string): THREE.Texture => store?.get(id) ?? placeholder
+    // 树密度图（per-instance 树影 + 变色噪声）与官方树卡噪声（noise_fine）。
+    const densityMap = forestMaskTexture
+    const densityMin = grid ? new THREE.Vector2(grid.minX, grid.minZ) : null
+    const densitySize = grid
+      ? new THREE.Vector2(Math.max(0.001, grid.maxX - grid.minX), Math.max(0.001, grid.maxZ - grid.minZ))
+      : null
+    const cardNoise = pick(SHARED_TEXTURES.noise.id)
     switch (handle.spec.kind) {
       case 'grass':
         setFoliageMaterialTextures(handle, {
@@ -862,6 +1139,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           noise: pick(SHARED_TEXTURES.noise.id),
           grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
           detailFar: pick(entry.surface.detailFar.id),
+          cardNoise,
+          densityMap,
+          densityMin,
+          densitySize,
         })
         break
       case 'bush':
@@ -870,6 +1151,22 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           noise: pick(SHARED_TEXTURES.bushNoise.id),
           grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
           detailFar: pick(entry.surface.detailFar.id),
+          cardNoise,
+          densityMap,
+          densityMin,
+          densitySize,
+        })
+        break
+      case 'barrier':
+        setFoliageMaterialTextures(handle, {
+          atlas: pick(SHARED_TEXTURES.barrier.id),
+          noise: pick(SHARED_TEXTURES.noise.id),
+          grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+          detailFar: pick(entry.surface.detailFar.id),
+          cardNoise,
+          densityMap: null,
+          densityMin,
+          densitySize,
         })
         break
       case 'tree':
@@ -881,6 +1178,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               noise: pick(SHARED_TEXTURES.noise.id),
               grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
               detailFar: pick(entry.surface.detailFar.id),
+              cardNoise,
+              densityMap,
+              densityMin,
+              densitySize,
             })
           } else {
             setFoliageMaterialTextures(handle, {
@@ -889,6 +1190,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               noise: pick(SHARED_TEXTURES.noise.id),
               grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
               detailFar: pick(entry.surface.detailFar.id),
+              cardNoise,
+              densityMap,
+              densityMin,
+              densitySize,
             })
           }
         } else if (handle.spec.species === 0) {
@@ -898,6 +1203,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             noise: pick(SHARED_TEXTURES.noise.id),
             grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
             detailFar: pick(entry.surface.detailFar.id),
+            cardNoise,
+            densityMap: null,
+            densityMin,
+            densitySize,
           })
         } else {
           setFoliageMaterialTextures(handle, {
@@ -906,6 +1215,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             noise: pick(SHARED_TEXTURES.noise.id),
             grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
             detailFar: pick(entry.surface.detailFar.id),
+            cardNoise,
+            densityMap: null,
+            densityMin,
+            densitySize,
           })
         }
         break
@@ -927,6 +1240,33 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return Math.min(regions.length - 1, Math.floor(Math.max(0, Math.min(0.9999, variant)) * regions.length))
   }
 
+  /**
+   * 近树卡 / 远景树的 dissolve 区间（lab main.ts：lod1Horizon = 近树卡距离/10，
+   * 近树卡 dissolveFar = max(40, nearDistance)、区间 = 30%；imposter 略早登场）。
+   */
+  function applyCardDissolveRange(handle: FoliageMaterialHandle): void {
+    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
+    const nearDistance = props.forest.nearDistance ?? tier.treeNearDistance
+    const cardDissolveFar = Math.max(40, nearDistance)
+    const cardDissolveInterval = Math.max(1, Math.floor(cardDissolveFar * CARD_DISSOLVE_INTERVAL_FACTOR))
+    const cardDissolveNear = cardDissolveFar - cardDissolveInterval
+    if (handle.spec.card === 'near') {
+      setFoliageMaterialCardRange(handle, {
+        near: cardDissolveNear,
+        far: cardDissolveFar,
+        interval: cardDissolveInterval,
+      })
+    } else if (handle.spec.card === 'far') {
+      const imposterDissolveFar = cardDissolveNear + cardDissolveInterval * 0.6
+      const imposterDissolveNear = Math.max(1, imposterDissolveFar - cardDissolveInterval)
+      setFoliageMaterialCardRange(handle, {
+        near: imposterDissolveNear,
+        far: imposterDissolveFar,
+        interval: cardDissolveInterval,
+      })
+    }
+  }
+
   function addTreeLayer(
     batch: BatchEntry,
     placements: TreePlacement[],
@@ -943,13 +1283,19 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       species,
       singlePlane: tier === 'far',
       tint: 0xffffff,
-      farTintScale: tier === 'far' ? 0.7 : 0.72,
+      farTintScale: 1,
       hasAlphaTexture: tier === 'near' && species === 1,
-      hasNormalTexture: species === 0 || tier === 'far' ? false : false,
+      hasNormalTexture: tier === 'near' ? species === 0 : true,
+      // 近树卡 = 动态 alpha + 距离 dissolve（由 forest.nearDistance 推出）；
+      // 远景树 = 朝相机广告牌（16 朝向列 + 角度混列）。
+      card: tier === 'near' ? 'near' : 'far',
+      distanceAlpha: false,
+      // 近树卡用密度树影近似官方 per-instance shadow；远景树不采样密度图。
+      useDensityShadow: tier === 'near',
       key: `tree:${tier}:${species}`,
     }
-    spec.hasNormalTexture = tier === 'near' ? species === 0 : true
     const handle = getFoliageMaterialHandle(spec)
+    applyCardDissolveRange(handle)
     const regions = tier === 'near'
       ? (species === 0 ? BROADLEAF_CARD_REGIONS : getConiferCardRegions(season))
       : IMPOSTER_REGIONS
@@ -993,6 +1339,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       farTintScale: 1,
       hasAlphaTexture: false,
       hasNormalTexture: false,
+      card: null,
+      distanceAlpha: kind === 'bush',
+      useDensityShadow: true,
       key: `${kind}:all`,
     }
     const handle = getFoliageMaterialHandle(spec)
@@ -1001,6 +1350,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     // 世界尺寸 = 基准尺寸（草 1.6m / 灌木 2m，见下方 unit）× 倍率 × 区域相对高度。
     const instances: FoliageSpriteInstance[] = placements.map((placement) => {
       const picked = pickCellEntry(entries, placement.variant)
+      // 官方 per-instance groundNormal：草丛/灌木受光与掠射 fresnel 都由它驱动。
+      const normal = grid?.sampleNormal(placement.x, placement.z) ?? null
       return {
         x: placement.x,
         y: placement.y,
@@ -1009,7 +1360,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         scale: placement.scale,
         region: picked?.region ?? null,
         cell: picked?.cell ?? 0,
-        roadProx: 0,
+        // 官方 roadProx = 距路缘距离 - halfWidth：草丛调色板贴近道路时的明度抑制。
+        roadProx: placement.roadProx ?? 0,
+        groundNormal: normal ? { x: normal.x, y: normal.y, z: normal.z } : null,
       }
     })
     const unit = kind === 'grass' ? GRASS_UNIT_SIZE : BUSH_UNIT_SIZE
@@ -1018,168 +1371,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     batch.group.add(mesh)
     batch.layers.push(mesh)
     return instances.length
-  }
-
-  interface FarTreeCandidate {
-    x: number
-    z: number
-    y: number
-    rotation: number
-    scale: number
-    variant: number
-    species: 0 | 1
-  }
-
-  function disposeFarTreeRing(): void {
-    for (const layer of farTreeLayers) {
-      disposeFoliageLayerMesh(layer)
-    }
-    farTreeLayers = []
-    farTreeInstances = 0
-    farTreeSignature = ''
-    farTreeCenterX = Number.NaN
-    farTreeCenterZ = Number.NaN
-  }
-
-  /**
-   * 远景树环：以相机为中心、覆盖分块视距之外到远山（视距 × 2.6）的
-   * imposter 环带，与 slowroads-lab 的"满山森林"观感对齐。
-   *
-   * - 相机锚定：相机水平移动超过 FAR_TREE_REANCHOR_DISTANCE 后重建，
-   *   预算始终花在视野附近而不是整个 40km 场景上；
-   * - 密度：密度场 × 接受率后按哈希抽稀到预算（均匀而无条纹）；
-   * - 尺寸：随距离放大（最多 1 + FAR_TREE_SCALE_GAIN 倍），远景读起来
-   *   仍是"森林"而不是"点"；
-   * - 预算：high 32000 / medium 16000 / low 0 实例，按物种植入 2 个
-   *   InstancedMesh（共 2 个 draw call），材质与分块远树共用
-   *   （换季只换纹理，不重建实例）。
-   */
-  function rebuildFarTreeRing(centerX: number, centerZ: number): void {
-    disposeFarTreeRing()
-    farTreeCenterX = centerX
-    farTreeCenterZ = centerZ
-    if (!grid || !densityField || !farTreeRoot || !hostObject) {
-      return
-    }
-    const quality = resolveQuality()
-    const budget = quality === 'high' ? 64000 : quality === 'medium' ? 24000 : 0
-    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[quality]
-    farTreeSignature = farRingSignature(quality)
-    if (budget <= 0) {
-      return
-    }
-    const acceptance = 0.8
-    const innerRadius = tier.viewDistance * FAR_TREE_RING_INNER_FACTOR
-    const outerRadius = tier.viewDistance * FAR_TREE_RING_OUTER_FACTOR
-    const innerSq = innerRadius * innerRadius
-    const outerSq = outerRadius * outerRadius
-    const cell = 12
-    const roadClearance = roadHalfWidth(props) + props.road.shoulderWidth + 2
-    const minY = grid.minY + 2
-    const maxSlope = props.forest.maxSlope
-    const seed = props.seed >>> 0
-    const candidates: FarTreeCandidate[] = []
-    const minGX = Math.floor(Math.max(grid.minX, centerX - outerRadius) / cell)
-    const maxGX = Math.ceil(Math.min(grid.maxX, centerX + outerRadius) / cell)
-    const minGZ = Math.floor(Math.max(grid.minZ, centerZ - outerRadius) / cell)
-    const maxGZ = Math.ceil(Math.min(grid.maxZ, centerZ + outerRadius) / cell)
-    for (let gx = minGX; gx <= maxGX; gx += 1) {
-      for (let gz = minGZ; gz <= maxGZ; gz += 1) {
-        const x = (gx + hashUnit(seed ^ 0x9e3779b9, gx, gz)) * cell
-        const z = (gz + hashUnit(seed ^ 0x85ebca6b, gx, gz)) * cell
-        const dx = x - centerX
-        const dz = z - centerZ
-        const distanceSq = dx * dx + dz * dz
-        if (distanceSq < innerSq || distanceSq > outerSq) {
-          continue
-        }
-        if (!grid.contains(x, z)) {
-          continue
-        }
-        const y = grid.sampleHeight(x, z)
-        if (y == null || y < minY) {
-          continue
-        }
-        const normal = grid.sampleNormal(x, z)
-        if (!normal || 1 - normal.y > maxSlope) {
-          continue
-        }
-        if (roadFieldData && roadFieldData.distanceAt(x, z) < roadClearance) {
-          continue
-        }
-        if (hashUnit(seed ^ 0xc2b2ae35, gx, gz) >= densityField.sampleUnit(x, z) * acceptance) {
-          continue
-        }
-        const distance = Math.sqrt(distanceSq)
-        const scaleGain =
-          1 + FAR_TREE_SCALE_GAIN * clamp((distance - innerRadius) / Math.max(1, outerRadius - innerRadius), 0, 1)
-        candidates.push({
-          x,
-          z,
-          y,
-          rotation: hashUnit(seed ^ 0x27d4eb2f, gx, gz) * Math.PI * 2,
-          scale:
-            lerp(props.forest.minScale, props.forest.maxScale, hashUnit(seed ^ 0x165667b1, gx, gz)) * scaleGain,
-          variant: hashUnit(seed ^ 0xd3a2646c, gx, gz),
-          species: hashUnit(seed ^ 0xfd7046c5, gx, gz) < 0.4 ? 1 : 0,
-        })
-      }
-    }
-    if (!candidates.length) {
-      return
-    }
-    // 哈希抽稀到预算：保持随机分布（步长抽稀会在扫描线上形成规则条纹）。
-    const keepProbability = Math.min(1, budget / candidates.length)
-    const kept =
-      keepProbability >= 1
-        ? candidates
-        : candidates.filter((candidate, index) => {
-            const gx = Math.round(candidate.x / cell)
-            const gz = Math.round(candidate.z / cell)
-            return hashUnit(seed ^ 0x7feb352d, gx * 73856093 + index, gz * 19349663) < keepProbability
-          })
-    for (const species of [0, 1] as const) {
-      const list = kept.filter((candidate) => candidate.species === species)
-      if (!list.length) {
-        continue
-      }
-      const spec: FoliageMaterialSpec = {
-        kind: 'tree',
-        tier: 'far',
-        species,
-        singlePlane: true,
-        tint: 0xffffff,
-        farTintScale: 0.65,
-        hasAlphaTexture: false,
-        hasNormalTexture: true,
-        key: `tree:far:${species}`,
-      }
-      const handle = getFoliageMaterialHandle(spec)
-      const instances: FoliageSpriteInstance[] = list.map((candidate) => {
-        const regionIndex = findRegionIndex(IMPOSTER_REGIONS, candidate.variant)
-        return {
-          x: candidate.x,
-          y: candidate.y,
-          z: candidate.z,
-          rotation: candidate.rotation,
-          scale: candidate.scale / TREE_UNIT_SIZE,
-          region: IMPOSTER_REGIONS[regionIndex] ?? null,
-          cell: Math.min(3, regionIndex % 4),
-          roadProx: 0,
-        }
-      })
-      const mesh = createFoliageLayerMesh(instances, handle.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null)
-      tagArtifact(mesh)
-      farTreeRoot.add(mesh)
-      farTreeLayers.push(mesh)
-      farTreeInstances += instances.length
-    }
-    farTreeSignature = farRingSignature(quality)
-  }
-
-  function farRingSignature(quality: ResolvedProceduralLandscapeQuality): string {
-    const gridKey = grid ? `${grid.cols}x${grid.rows}` : 'none'
-    return `${quality}|${props.seed >>> 0}|${gridKey}`
   }
 
   function createBatch(key: string): BatchEntry {
@@ -1298,6 +1489,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         sinkNearRoad: props.grass.sinkNearRoad,
         bushesEnabled,
         bushesDensity: props.bushes.density,
+        waterLevel: resolveWaterLevel(),
+        flowerDensity: props.grass.flowerDensity,
+        tallGrassDensity: props.grass.tallGrassDensity,
       },
       { grid, density: densityField, roadField: roadFieldData },
     )
@@ -1545,6 +1739,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           discolouration: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].treeDiscolouration,
           hasSnow: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].hasSnow,
         })
+        manager.setLighting({ radiance: appliedLighting.radiance, shadowFactor: appliedLighting.shadowFactor })
+        if (grid) {
+          manager.setDensity(
+            forestMaskTexture,
+            new THREE.Vector2(grid.minX, grid.minZ),
+            new THREE.Vector2(Math.max(0.001, grid.maxX - grid.minX), Math.max(0.001, grid.maxZ - grid.minZ)),
+          )
+        }
+        manager.setDiscolourationNoise(textureFor(SHARED_TEXTURES.noise.id))
         tagArtifact(manager.container)
         hostObject?.add(manager.container)
         applyTreeMeshSeasonTextures()
@@ -1577,6 +1780,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       discolouration: SEASON_PARAMS[season].treeDiscolouration,
       hasSnow: SEASON_PARAMS[season].hasSnow,
     })
+    treeMeshManager.setLighting({ radiance: appliedLighting.radiance, shadowFactor: appliedLighting.shadowFactor })
+    treeMeshManager.setDiscolourationNoise(textureFor(SHARED_TEXTURES.noise.id))
   }
 
   function rebuildRoadDebugLine(): void {
@@ -1697,7 +1902,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.assetResidentBytes = storeStats.residentBytes
     stats.assetDownloadedBytes = storeStats.downloadedBytes
     stats.assetVariant = storeStats.variant
-    stats.farTreeInstances = farTreeInstances
+    stats.barrierInstances = barrierInstances
+    stats.waterEnabled = Boolean(waterPlane && waterPlane.mesh.visible)
+    stats.viewDistanceScale = appliedViewDistanceScale
   }
 
   function needsStreaming(camera: THREE.Vector3, nowMs: number): boolean {
@@ -1802,13 +2009,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const preset = resolveEnvironmentPreset(state)
     const radiance = preset.lights.radiance ?? 0
     const shadowFactor = SEASON_PARAMS[state.season].shadowFactor
+    const fresnel = preset.lights.fresnelFactor ?? 1
     appliedLighting.radiance = radiance
     appliedLighting.shadowFactor = shadowFactor
+    appliedLighting.fresnel = fresnel
     uniforms.uPlRadiance.value = radiance
     uniforms.uPlShadowFactor.value = shadowFactor
+    uniforms.uPlFresnelIntensity.value = fresnel
     roadBand?.setRadiance(radiance)
+    roadBand?.setFresnel(fresnel)
+    treeMeshManager?.setLighting({ radiance, shadowFactor })
     for (const handle of foliageMaterials.values()) {
-      setFoliageMaterialLighting(handle, { radiance, shadowFactor })
+      setFoliageMaterialLighting(handle, { radiance, shadowFactor, fresnel })
     }
   }
 
@@ -1888,20 +2100,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       dirty.uniforms = false
       applyDynamicSurfaceUniforms()
       rebuildRoadDebugLine()
+      // 护栏 / 水面参数（尺寸、密度、水位）变化：只重建这两层，不动世界。
+      const nextBarrierSignature = resolveBarrierSignature()
+      if (nextBarrierSignature !== barrierSignature) {
+        barrierSignature = nextBarrierSignature
+        buildBarrier()
+        buildWater()
+      }
     }
     if (dirty.instances) {
       dirty.instances = false
       releaseAllBatches()
       forceStream = true
-      const farCamera = hooks.getCameraWorldPosition()
-      if (farCamera) {
-        if (farRingSignature(resolveQuality()) !== farTreeSignature) {
-          rebuildFarTreeRing(farCamera.x, farCamera.z)
-        }
-      } else {
-        // 相机未知时先作废签名，等下一帧拿到相机位置再重建。
-        farTreeSignature = ''
-      }
     }
 
     const camera = hooks.getCameraWorldPosition()
@@ -1914,18 +2124,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         // 预算用尽但仍有余量任务时继续请求后续帧，直到视野内植被补齐。
         forceStream = streamBatches(camera)
       }
-      const anchorMoved =
-        !Number.isFinite(farTreeCenterX) ||
-        Math.hypot(camera.x - farTreeCenterX, camera.z - farTreeCenterZ) > FAR_TREE_REANCHOR_DISTANCE
-      if (farRingSignature(resolveQuality()) !== farTreeSignature || anchorMoved) {
-        rebuildFarTreeRing(camera.x, camera.z)
-      }
       updateTreeMeshes(camera)
     }
+    waterPlane?.update()
     if (chunkDebugDirty) {
       chunkDebugDirty = false
       rebuildChunkDebugLines()
     }
+    runLandscapeSelfChecks()
     updateStats()
   }
 
@@ -1953,18 +2159,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (treeMeshManager && treeMeshManager.container.parent !== host) {
         treeMeshManager.container.removeFromParent()
       }
-      if (farTreeRoot && farTreeRoot.parent !== host) {
-        farTreeRoot.removeFromParent()
-      }
       hostObject = host
       if (hostObject) {
         updateHostSnapshot()
         ensureRoots()
         if (treeMeshManager) {
           hostObject.add(treeMeshManager.container)
-        }
-        if (farTreeRoot) {
-          hostObject.add(farTreeRoot)
         }
         gridFailed = false
         dirty.grid = true
@@ -1979,7 +2179,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         grid: jsonKey(props.sampling),
         world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
         instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
-        uniforms: jsonKey([props.surface, props.road.flattenBand, props.road.flattenStrength, props.grass.windEnabled]),
+        uniforms: jsonKey([
+          props.surface,
+          props.canopy,
+          props.wind,
+          props.barrier,
+          props.water,
+          props.road.enabled,
+          props.road.width,
+          props.road.shoulderWidth,
+          props.road.flattenBand,
+          props.road.flattenStrength,
+        ]),
         roadDebug: jsonKey(props.debug.showRoadPath),
         chunkDebug: jsonKey(props.debug.showChunks),
       }
@@ -2055,13 +2266,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (debugRoot && hostObject) {
         hostObject.remove(debugRoot)
       }
-      disposeFarTreeRing()
-      if (farTreeRoot && hostObject) {
-        hostObject.remove(farTreeRoot)
-      }
+      disposeWaterAndBarrier()
       foliageRoot = null
       debugRoot = null
-      farTreeRoot = null
+      sceneRoot = null
       statsRegistry.delete(hooks.nodeId)
     },
     getStats(): ProceduralLandscapeRuntimeStats {

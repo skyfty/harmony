@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { TREE_OBJECT_MODELS } from '../slowroads/core/seasonCatalog'
 import type { SeasonId } from '../slowroads/core/seasonCatalog'
 import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
+import { recordSlowroadsShaderAudit } from './shaderAudit'
 import type { SlowroadsAssetStore } from '../slowroads/assets/assetStore'
 import type { TreePlacement } from './chunkPlan'
 
@@ -79,29 +80,55 @@ uniform sampler2D uTreeAlphaTex;
 uniform sampler2D uTreeNormalTex;
 uniform float uTreeHasAlphaTex;
 uniform float uTreeHasNormalTex;
-uniform float uTreeDiscolouration;
+uniform float uTreeAlphaTest;
+uniform float uTreeRadiance;
 uniform float uTreeHasSnow;
 uniform float uTreeSpecies;
 varying vec2 vPlUv;
 varying vec3 vPlWorldNormal;
+varying mat3 vPlBasis;
+varying float vPlLeafBrightness;
+varying float vPlRadianceBlend;
+varying float vPlTreeDiscolouration;
+varying vec3 vPlCameraUp;
 `
 
 const FRAGMENT_BODY = /* glsl */ `
 {
   vec4 treeTexel = texture2D(uTreeAtlas, vPlUv);
-  float treeAlpha = mix(treeTexel.a, texture2D(uTreeAlphaTex, vPlUv).r, uTreeHasAlphaTex);
-  vec3 treeColor = treeTexel.rgb;
-  float treeLeafEffect = step(treeColor.b * 1.5, treeColor.g);
-  treeColor.rg *= 1.0 - (1.0 - uTreeDiscolouration) * treeLeafEffect;
-  if (uTreeHasSnow > 0.5 && uTreeSpecies < 0.5) {
-    vec3 treeNormal = normalize(vPlWorldNormal);
-    if (uTreeHasNormalTex > 0.5) {
-      vec3 n = texture2D(uTreeNormalTex, vPlUv).xyz * 2.0 - 1.0;
-      treeNormal = normalize(treeNormal + vec3(n.x, 0.0, n.z) * 0.5);
-    }
-    float up = clamp(treeNormal.y, 0.0, 1.0);
-    treeColor = mix(treeColor, vec3(1.0), clamp(up * 1.4, 0.0, 1.0) * 0.8);
+  // 官方共享近树材质（xr()）：alphaMap 走绿通道，阔叶 alphaTest .5（贴图 alpha）、
+  // 针叶 alphaTest .4（alpha 图）。
+  // 官方 alphaMap 走绿通道（three 语义）。
+  float treeAlpha = mix(treeTexel.a, texture2D(uTreeAlphaTex, vPlUv).g, uTreeHasAlphaTex);
+  if (treeAlpha < uTreeAlphaTest) {
+    discard;
   }
+  vec3 treeColor = treeTexel.rgb;
+  vec3 treeNormal = normalize(vPlWorldNormal);
+  if (uTreeHasNormalTex > 0.5) {
+    // 官方近树材质 normalMapType = ObjectSpace：normal = normalize(basis * n)。
+    vec3 treeN = texture2D(uTreeNormalTex, vPlUv).xyz * 2.0 - 1.0;
+    treeNormal = normalize(vPlBasis * treeN);
+  }
+  // 官方共享近树材质（lit26 / lh）：leafEffect 含 vLeafBrightness（密林下半部压暗），
+  // 阔叶按 discolouration 乘数变色并带叶辉光；针叶只缩放绿通道（无辉光）。
+  float treeLeafEffect = step(treeColor.b * 1.5, treeColor.g) * vPlLeafBrightness;
+  vec3 treeEmissive = vec3(0.0);
+  if (uTreeSpecies < 0.5) {
+    treeColor.rg *= 1.0 - (1.0 - vPlTreeDiscolouration) * treeLeafEffect;
+    treeEmissive = vec3(treeColor.rg * 8.0, 0.5) * uTreeRadiance * treeLeafEffect * vPlRadianceBlend;
+  } else {
+    treeColor.g *= vPlTreeDiscolouration;
+  }
+  treeColor *= vPlRadianceBlend;
+  // 官方近树阔叶积雪（Cu 分块）：dotUp 超过 0.1 才按朝上程度混白。
+  if (uTreeHasSnow > 0.5 && uTreeSpecies < 0.5) {
+    float dotUp = dot(treeNormal, vPlCameraUp);
+    if (dotUp > 0.1) {
+      treeColor = mix(treeColor, vec3(min(1.0, 0.5 + dotUp)), min(1.0, (dotUp - 0.1) * 8.0));
+    }
+  }
+  totalEmissiveRadiance = treeEmissive;
   diffuseColor = vec4(treeColor, treeAlpha);
 }
 `
@@ -125,6 +152,12 @@ export interface TreeMeshManager {
   /** placements[*].scale = 树木世界高度（米）。 */
   update(cameraPosition: THREE.Vector3, placements: ReadonlyArray<TreePlacement>, radius: number, force?: boolean): void
   setSeason(state: TreeMeshSeasonState): void
+  /** 环境预设光照（radiance 取全量；shadowFactor 驱动密度压暗）。 */
+  setLighting(state: { radiance: number; shadowFactor: number }): void
+  /** 与地形/树卡同源的树密度图（per-instance 密度压暗 + 变色噪声共用）。 */
+  setDensity(texture: THREE.Texture | null, min: THREE.Vector2 | null, size: THREE.Vector2 | null): void
+  /** 官方树卡变色噪声（noise_fine）；缺省回落到密度图/图集。 */
+  setDiscolourationNoise(texture: THREE.Texture | null): void
   setVisible(visible: boolean): void
   readonly instanceCount: number
   readonly ready: boolean
@@ -167,43 +200,111 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
     uTreeNormalTex: { value: null },
     uTreeHasAlphaTex: { value: species === 1 ? 1 : 0 },
     uTreeHasNormalTex: { value: species === 0 ? 1 : 0 },
-    uTreeDiscolouration: { value: 1 },
+    // 官方共享近树材质：阔叶 alphaTest .5（贴图 alpha）、针叶 .4（alpha 图）。
+    uTreeAlphaTest: { value: species === 1 ? 0.4 : 0.5 },
+    uTreeRadiance: { value: 2 },
     uTreeHasSnow: { value: 0 },
     uTreeSpecies: { value: species },
+    /** 官方 effects.treeDiscolouration：噪声变色幅度（不是乘数）。 */
+    uTreeDiscolourationFactor: { value: 0 },
+    uTreeDiscolourationNoise: { value: null as THREE.Texture | null },
+    /** 与地形/树卡同源的树密度图（官方 per-instance density 的近似）。 */
+    uTreeDensityMap: { value: null as THREE.Texture | null },
+    uTreeDensityMin: { value: new THREE.Vector2() },
+    uTreeDensitySize: { value: new THREE.Vector2(1, 1) },
+    uTreeShadowFactor: { value: 1 },
   }))
   const materials: THREE.MeshLambertMaterial[] = [0, 1].map((species) => {
     // 官方近树材质 = Lambert（无镜面）；树冠 radiance 项官方走 directSpecular
     // （依赖车灯），白天不产生自发光，因此这里保持纯 Lambert 光照。
     const material = new THREE.MeshLambertMaterial({
       color: 0xffffff,
-      alphaTest: 0.5,
+      // 逐种 alpha 裁切在片元体里按 uTreeAlphaTest 处理（阔叶 .5 / 针叶 .4）。
+      alphaTest: 0,
       side: THREE.DoubleSide,
       transparent: false,
       depthWrite: true,
-      // 网格 UV 直接采样树卡图集；法线来自模型 + 卡片法线混合。
     })
     material.name = `slowroads-near-tree-${species === 0 ? 'broadleaf' : 'conifer'}-material`
-    material.customProgramCacheKey = () => `pl-tree-mesh-v2-${species}`
+    material.customProgramCacheKey = () => `pl-tree-mesh-v3-${species}`
     material.onBeforeCompile = (shader) => {
       for (const [name, uniform] of Object.entries(uniformsBySpecies[species]!)) {
         shader.uniforms[name] = uniform as THREE.IUniform
       }
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', `#include <common>\nvarying vec2 vPlUv;\nvarying vec3 vPlWorldNormal;`)
+        .replace(
+          '#include <common>',
+          `#include <common>
+varying vec2 vPlUv;
+varying vec3 vPlWorldNormal;
+/** 实例（含模型）世界基向量：对象空间法线图需要用它旋转到世界空间。 */
+varying mat3 vPlBasis;
+varying float vPlLeafBrightness;
+varying float vPlRadianceBlend;
+varying float vPlTreeDiscolouration;
+/** 官方 vCameraUp：世界空间的相机上方向（无 roll 时即 (0,1,0)）。 */
+varying vec3 vPlCameraUp;
+uniform sampler2D uTreeDensityMap;
+uniform vec2 uTreeDensityMin;
+uniform vec2 uTreeDensitySize;
+uniform float uTreeShadowFactor;
+uniform sampler2D uTreeDiscolourationNoise;
+uniform float uTreeDiscolourationFactor;`,
+        )
         .replace(
           '#include <begin_vertex>',
-          `#include <begin_vertex>
-vPlUv = uv;
+          `{
 #ifdef USE_INSTANCING
-  vPlWorldNormal = normalize(mat3(modelMatrix * instanceMatrix) * normal);
+  mat4 treeInstModel = modelMatrix * instanceMatrix;
 #else
-  vPlWorldNormal = normalize(mat3(modelMatrix) * normal);
-#endif`,
+  mat4 treeInstModel = modelMatrix;
+#endif
+  vec4 treeWorldPosition = treeInstModel * vec4(position, 1.0);
+  vPlBasis = mat3(treeInstModel);
+  vPlWorldNormal = normalize(mat3(treeInstModel) * normal);
+vPlUv = uv;
+  vec4 treeMvPosition = viewMatrix * treeWorldPosition;
+  // 官方近树：vLeafBrightness = 1 - density × shadowFactor × saturate((10 - 模型高度m)/3)
+  // （与地形/树卡同源的树密度图近似官方 per-instance density 属性）。
+  vec3 treeOrigin = treeInstModel[3].xyz;
+  vec2 treeDensityUv = (treeOrigin.xz - uTreeDensityMin) / max(uTreeDensitySize, vec2(0.0001));
+  float treeDensity = clamp(texture2D(uTreeDensityMap, treeDensityUv).r * 1.15, 0.0, 1.0);
+  float treeHeightMeters = position.y * length(treeInstModel[1].xyz);
+  vPlLeafBrightness = 1.0 - treeDensity * uTreeShadowFactor * clamp((10.0 - treeHeightMeters) / 3.0, 0.0, 1.0);
+  float treeViewDepth = -treeMvPosition.z;
+  vPlRadianceBlend = 1.0 - clamp((treeViewDepth - 50.0) / 200.0, 0.0, 1.0) * 0.33;
+  // 官方树卡变色（顶点分块）：factor 是幅度，乘数恒在 1 附近（冬季 0.2 → 0.9..1.1）。
+  vPlTreeDiscolouration = 1.0
+    + (texture2D(uTreeDiscolourationNoise, treeOrigin.xz / 256.0).r - 0.5) * uTreeDiscolourationFactor;
+  // 近树图集 u 由 OBJ 给出并按 RepeatWrapping 绕回（官方 trees[r].d = Repeat）。
+  float treeAtlasX = vPlUv.x - floor(vPlUv.x);
+  if (treeAtlasX > 0.76) {
+    vPlTreeDiscolouration = vPlTreeDiscolouration * 0.5 + 0.5;
+  }
+  // 官方 vCameraUp = normalMatrix * vec3(0,1,0)（视空间相机上方向）；法线为世界空间，
+  // 因此取视矩阵第二行（相机 up 在世界空间的表示）。无 roll 时即 (0,1,0)。
+  vPlCameraUp = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+}
+#include <begin_vertex>`,
         )
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `#include <common>\n${FRAGMENT_PARS}`)
+        // 双面叶卡：背面**不翻转**着色法线（官方/lab 同款）。three 默认会把背面
+        // normal 取反 → `dot(N, sun) < 0` → direct = 0 → 朝相机的背面区域发黑。
+        .replace(
+          '#include <normal_fragment_begin>',
+          `float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;
+vec3 normal = normalize(vNormal);
+vec3 nonPerturbedNormal = normal;`,
+        )
         .replace('#include <map_fragment>', FRAGMENT_BODY)
-      injectSlowroadsFog(shader)
+        // 官方自发光合成：emissive 乘进直射项（`direct × (1 + emissive)`）。
+        .replace(
+          'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + totalEmissiveRadiance;',
+          'vec3 outgoingLight = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse + reflectedLight.directDiffuse * totalEmissiveRadiance;',
+        )
+      injectSlowroadsFog(shader, { material })
+      recordSlowroadsShaderAudit(material, shader)
     }
     return material
   })
@@ -295,10 +396,40 @@ vPlUv = uv;
         uniformsBySpecies[1]!.uTreeAtlas!.value = state.textures.coniferM
         uniformsBySpecies[1]!.uTreeAlphaTex!.value = state.textures.coniferA
       }
-      uniformsBySpecies[0]!.uTreeDiscolouration!.value = state.discolouration
-      uniformsBySpecies[1]!.uTreeDiscolouration!.value = state.discolouration
+      uniformsBySpecies[0]!.uTreeDiscolourationFactor!.value = state.discolouration
+      uniformsBySpecies[1]!.uTreeDiscolourationFactor!.value = state.discolouration
       uniformsBySpecies[0]!.uTreeHasSnow!.value = state.hasSnow ? 1 : 0
       uniformsBySpecies[1]!.uTreeHasSnow!.value = 0
+    },
+    setLighting(state: { radiance: number; shadowFactor: number }): void {
+      // 官方树类材质 `oe.radiance = lights.radiance / 2`（lab 记在
+      // material.userData.radianceScale）：近树 3D 网格的叶辉光取半量，
+      // 否则 `vec3(color.rg * 8, 0.5) × radiance` 会把阔叶烤成白黄。
+      const treeRadiance = state.radiance * 0.5
+      for (const species of [0, 1] as const) {
+        uniformsBySpecies[species]!.uTreeRadiance!.value = treeRadiance
+        uniformsBySpecies[species]!.uTreeShadowFactor!.value = state.shadowFactor
+      }
+    },
+    setDensity(texture: THREE.Texture | null, min: THREE.Vector2 | null, size: THREE.Vector2 | null): void {
+      for (const species of [0, 1] as const) {
+        const uniforms = uniformsBySpecies[species]!
+        uniforms.uTreeDensityMap!.value = texture
+        if (min) {
+          ;(uniforms.uTreeDensityMin!.value as THREE.Vector2).copy(min)
+        }
+        if (size) {
+          ;(uniforms.uTreeDensitySize!.value as THREE.Vector2).copy(size)
+        }
+        if (uniforms.uTreeDiscolourationNoise!.value == null) {
+          uniforms.uTreeDiscolourationNoise!.value = texture
+        }
+      }
+    },
+    setDiscolourationNoise(texture: THREE.Texture | null): void {
+      for (const species of [0, 1] as const) {
+        uniformsBySpecies[species]!.uTreeDiscolourationNoise!.value = texture
+      }
     },
     setVisible(visible: boolean): void {
       container.visible = visible

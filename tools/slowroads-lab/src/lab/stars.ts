@@ -36,6 +36,12 @@ const FRAGMENT_PARS = /* glsl */ `
 
 const COLOR_FRAGMENT = /* glsl */ `
 
+// 官方星点是方形点精灵（size<1px 时看不出来）；尺寸提到 1~2 物理像素后方形边角会显脏，
+// 这里按点坐标裁成圆点，观感更接近真实星点（与迁移端 schema 一致）。
+if (length(gl_PointCoord - vec2(0.5)) > 0.5) {
+    discard;
+}
+
 // Apply fog according to angle but only far fog?
 diffuseColor.rgb = vec3(
     min(1.0, fogColorB.r + vGlow),
@@ -73,6 +79,8 @@ export interface StarsHandle {
   container: THREE.Group
   /** null = 隐藏（白天/阴天）。 */
   setConfig(config: EnvironmentPreset['stars'] | null): void
+  /** 星点世界尺寸（用 `resolveStarSize(viewportHeightPx, pixelRatio)` 计算）。 */
+  setSize(size: number): void
   update(cameraWorldPosition: THREE.Vector3): void
   dispose(): void
 }
@@ -80,6 +88,25 @@ export interface StarsHandle {
 const STAR_COUNT = 4000
 const STAR_DENSITIES = 2
 const STAR_RADIUS = 10
+
+/**
+ * 官方 `size = 0.01` 是世界尺寸：three 在 `sizeAttenuation` 下按
+ * `gl_PointSize = size · pixelRatio · (drawingBufferHeight / 2) / depth` 换算，
+ * 4K 画布上约 1 物理像素，而 dpr=1、高度 800 上下的画布只有 ~0.4 物理像素
+ * （星点看不清）。这里按视口高度反解到约 `STAR_TARGET_PIXELS` 物理像素（1.0 =
+ * 官方注释里"约 1 物理像素"的原始意图），与迁移端保持一致。
+ */
+const STAR_TARGET_PIXELS = 1.0
+const STAR_SIZE_FALLBACK = 0.01
+
+export function resolveStarSize(viewportHeightPx: number, pixelRatio = 1): number {
+  if (!Number.isFinite(viewportHeightPx) || viewportHeightPx <= 0) {
+    return STAR_SIZE_FALLBACK
+  }
+  const ratio = Number.isFinite(pixelRatio) && pixelRatio > 0 ? pixelRatio : 1
+  const size = (STAR_TARGET_PIXELS * STAR_RADIUS) / ((viewportHeightPx / 2) * ratio)
+  return Math.min(Math.max(size, 0.005), 0.12)
+}
 
 function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0
@@ -176,6 +203,12 @@ export function createStars(): StarsHandle {
         uniforms.horizonScale.value = config.horizonScale
       }
       container.visible = enabled
+    },
+    setSize(size: number): void {
+      const next = Number.isFinite(size) && size > 0 ? size : STAR_SIZE_FALLBACK
+      if (material.size !== next) {
+        material.size = next
+      }
     },
     update(cameraWorldPosition: THREE.Vector3): void {
       container.position.copy(cameraWorldPosition)

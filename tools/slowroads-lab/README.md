@@ -563,9 +563,13 @@ min(r,b)>70`；树带 = 画面两侧针叶树带）：
   `skyScale × 云高`，两者同比例），所以云高 300 与官方的 500 在屏幕上等价，不存在
   「云纹理尺度 1.67× 差」（原文该说法有误，已更正）。唯一残差来自相机高度：lab 相机（~13–45m）
   远高于官方（~2m），云纹理在天空中的采样相对位置仍有约 6–11% 差异。
-- **迁移端未同步**：`schema/slowroads/render/fogInjection.ts` +
-  `schema/slowroads/core/environment.ts`（以及 editor / preview / SceneryViewer 视口）仍是
-  第四批修复前的写法（雾色按工作色空间推入），且没有第五批的天空/云层雾尺度拆分，需要后续
-  同步这两处改动。
+- **迁移端已同步（2026-10，完全重构）**：editor / preview / SceneryViewer 消费的
+  `schema/slowroads/*` 与 `schema/proceduralLandscape/*` 已按本 README 的第一~六批全部对齐
+  （雾色输出色空间、天空/云层/星空 2000 尺度、树卡变色幅度→乘数、近树积雪 Cu、草丛掠射
+  边缘光、逐层/季 alphaTest、每实例 groundNormal、imposter billboard 等），并按本工程口径
+  补齐水面 / 木护栏 / 花草高草层 / 树冠色斑 / 风摆与启动自检；旧 props 与旧代码路径
+  （`fogEnabled`、`srFogEnabled`、`SLOWROADS_SUN_*`、`grass.windEnabled`、远景树环）已删除。
+  迁移端与 lab 的接口差异（编辑器地形来自导入 GLB、世界尺度/高程不同、雾尺度自适应、
+  高度带归一化、编辑器反 Cineon 雾色预补偿）见 `docs/slowroads-lab-parity.md`。
 - editor/preview/SceneryViewer 的正式接入与小程序真机验证为下一步；本工程交付
   lab 验证 + 资产包（`assets-src/asset-bundle.json`）+ 上述映射文档。

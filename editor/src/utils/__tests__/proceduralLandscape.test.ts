@@ -403,6 +403,9 @@ describe('chunk planning', () => {
         sinkNearRoad: 1.2,
         bushesEnabled: true,
         bushesDensity: 0.5,
+        waterLevel: -1e5,
+        flowerDensity: 1,
+        tallGrassDensity: 1,
       },
       deps,
     )
@@ -412,9 +415,10 @@ describe('chunk planning', () => {
       expect(distance).toBeGreaterThan(3.5)
       expect(distance).toBeLessThan(3.5 + 20 + 1)
     }
+    // 灌木层 = 路缘灌木（≤ halfWidth+4）∪ 花草层（lab：横向 0.5..6m）。
     for (const bush of result.bushes) {
       const distance = deps.roadField!.distanceAt(bush.x, bush.z)
-      expect(distance).toBeLessThanOrEqual(3.5 + 4 + 0.5)
+      expect(distance).toBeLessThanOrEqual(3.5 + 6 + 0.6)
     }
   })
 

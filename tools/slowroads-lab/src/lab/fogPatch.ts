@@ -427,6 +427,12 @@ export function updateHazeForCamera(
   if (hazeHeight > 0 && cameraY < hazeHeight) {
     let e = 1 - cameraY / hazeHeight
     e *= e
+    // 与负 hazeHeight 分支一致夹到 1：官方未夹紧，相机降到雾层基准面以下
+    // （cameraY < 0）时 e > 1 会让 far 反号（官方 three 的
+    // `max(0.001, fogFar - fogNear)` 随后把 vFogDepth 压成 0），天空整片变红。
+    if (e > 1) {
+      e = 1
+    }
     state.inHaze = true
     const near = base.near * (1 - e * hazeIntensity)
     const far = base.far * (1 - e * Math.min(0.9, hazeIntensity))
