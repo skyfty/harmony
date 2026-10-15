@@ -67,6 +67,7 @@ import {
 } from '../components/componentManager'
 import { clamp, degreesToRadians } from './noise'
 import {
+  activeRoadWaypoints,
   clampProceduralLandscapeProps,
   PROCEDURAL_LANDSCAPE_WIND_FACTOR,
   PROCEDURAL_LANDSCAPE_QUALITY_TIERS,
@@ -80,6 +81,7 @@ import {
   type ProceduralLandscapeEnvironment,
   type ResolvedProceduralLandscapeQuality,
 } from './config'
+import { transformRoadWaypointsToWorld, type RoadWaypoint } from './roadWaypoints'
 import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
 
 const TREE_BATCH_RELEASE_PADDING = 48
@@ -190,6 +192,11 @@ export interface ProceduralLandscapeRuntime {
   update(deltaTime: number): void
   dispose(): void
   getStats(): ProceduralLandscapeRuntimeStats
+  /**
+   * Runtime height-field sampling in world XZ (null when the grid is not
+   * ready yet or the point lies outside the rasterized coverage).
+   */
+  sampleTerrainHeight(worldX: number, worldZ: number): number | null
 }
 
 let currentEnvironment: ProceduralLandscapeEnvironment = 'preview'
@@ -206,6 +213,24 @@ const statsRegistry = new Map<string, ProceduralLandscapeRuntimeStats>()
 
 export function getProceduralLandscapeStats(nodeId: string): ProceduralLandscapeRuntimeStats | null {
   return statsRegistry.get(nodeId) ?? null
+}
+
+const runtimeRegistry = new Map<string, ProceduralLandscapeRuntime>()
+
+/**
+ * 运行期高度场采样（世界 XZ）：编辑器绘制手绘公路路径时用它把路径点贴到
+ * 地形表面。网格未构建完成、组件未启用或点在地形范围外时返回 null。
+ */
+export function sampleProceduralLandscapeTerrainHeight(
+  nodeId: string,
+  worldX: number,
+  worldZ: number,
+): number | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  if (!runtime) {
+    return null
+  }
+  return runtime.sampleTerrainHeight(worldX, worldZ)
 }
 
 type DirtyFlags = {
@@ -644,6 +669,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return collectProceduralLandscapeSurfaceMeshes(hostObject)
   }
 
+  /**
+   * Hand-drawn guide path for the road trace: node-local XZ waypoints are
+   * transformed into world XZ (the height grid lives in world space).
+   * Fewer than two points = no guide path (legacy start/heading logic).
+   */
+  function resolveRoadWaypointsWorld(): RoadWaypoint[] {
+    const waypoints = activeRoadWaypoints(props)
+    if (waypoints.length < 2 || !hostObject) {
+      return []
+    }
+    hostObject.updateMatrixWorld(true)
+    return transformRoadWaypointsToWorld(hostObject.matrixWorld, waypoints)
+  }
+
   function buildTerrainSourceSignature(
     mode: 'direct' | 'cached' | 'empty',
     assetId: string | null,
@@ -739,8 +778,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadBucketTable = []
 
     if (props.road.enabled) {
-      const startX = props.road.startX ?? (grid.minX + grid.maxX) * 0.5
-      const startZ = props.road.startZ ?? (grid.minZ + grid.maxZ) * 0.5
+      const waypointWorld = resolveRoadWaypointsWorld()
+      const waypointMode = waypointWorld.length >= 2
+      // Guide mode overrides start/heading entirely: the road starts at the
+      // first drawn point and ends at the last one.
+      const startX = waypointMode ? waypointWorld[0]!.x : (props.road.startX ?? (grid.minX + grid.maxX) * 0.5)
+      const startZ = waypointMode ? waypointWorld[0]!.z : (props.road.startZ ?? (grid.minZ + grid.maxZ) * 0.5)
       const headingRad = props.road.headingDeg != null
         ? degreesToRadians(props.road.headingDeg)
         : resolveSeedHeadingRad(props.seed)
@@ -748,6 +791,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         startX,
         startZ,
         headingRad,
+        waypoints: waypointMode ? waypointWorld : null,
+        waypointTolerance: props.road.waypointTolerance,
         stepLength: props.road.stepLength,
         feelDistance: props.road.feelDistance,
         feelAngleRad: roadFeelAngleRad(props),
@@ -2135,7 +2180,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     updateStats()
   }
 
-  return {
+  const runtime: ProceduralLandscapeRuntime = {
     attach(host: THREE.Object3D | null): void {
       if (disposed || hostObject === host) {
         if (host && hostMatrixChanged()) {
@@ -2271,9 +2316,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       debugRoot = null
       sceneRoot = null
       statsRegistry.delete(hooks.nodeId)
+      runtimeRegistry.delete(hooks.nodeId)
     },
     getStats(): ProceduralLandscapeRuntimeStats {
       return stats
     },
+    sampleTerrainHeight(worldX: number, worldZ: number): number | null {
+      if (!grid) {
+        return null
+      }
+      return grid.sampleHeight(worldX, worldZ)
+    },
   }
+  runtimeRegistry.set(hooks.nodeId, runtime)
+  return runtime
 }

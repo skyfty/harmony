@@ -422,11 +422,14 @@ import {
   NOMINATE_COMPONENT_TYPE,
   clampNominateComponentProps,
   cloneNominateComponentProps,
+  PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
 } from '@schema/components'
 import {
   LOD_COMPONENT_TYPE,
   type LodComponentProps,
 } from '@schema/components'
+import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
+import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
 
 export {
   ASSETS_ROOT_DIRECTORY_ID,
@@ -18777,6 +18780,33 @@ export const useSceneStore = defineStore('scene', {
       } finally {
         this.endHistoryCaptureSuppression()
       }
+    },
+
+    /**
+     * Hand-drawn road guide path for proceduralLandscape (node-local XZ
+     * waypoints). The component runtime converts them to world space on the
+     * next world rebuild, so every commit re-traces the road, its flatten
+     * band, vegetation clearance and barriers.
+     */
+    updateProceduralLandscapeRoadWaypoints(
+      nodeId: string,
+      waypoints: Array<{ x: number; z: number }> | null | undefined,
+    ): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return false
+      }
+      const component = target.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+        | undefined
+      if (!component?.id) {
+        return false
+      }
+      const currentProps = component.props as Partial<ProceduralLandscapeComponentProps> | undefined
+      const currentRoad = (currentProps?.road ?? {}) as Record<string, unknown>
+      return this.updateNodeComponentProps(nodeId, component.id, {
+        road: { ...currentRoad, waypoints: clampRoadWaypoints(waypoints) },
+      })
     },
 
     createRegionNode(payload: {

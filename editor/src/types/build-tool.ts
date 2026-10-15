@@ -1,6 +1,7 @@
-export type BuildTool = 'terrain' | 'paint' | 'scatter' | 'wall' | 'floor' | 'landform' | 'region' | 'guideRoute' | 'road' | 'water' | 'boundaryWall' | 'modelCollision' | 'displayBoard' | 'billboard' | 'warpGate'
+export type BuildTool = 'terrain' | 'paint' | 'scatter' | 'wall' | 'floor' | 'landform' | 'region' | 'guideRoute' | 'road' | 'landscapeRoad' | 'water' | 'boundaryWall' | 'modelCollision' | 'displayBoard' | 'billboard' | 'warpGate'
 
 export const BUILD_TOOL_LABELS: Record<BuildTool, string> = {
+  landscapeRoad: '公路路径工具',
   terrain: '鍦板舰宸ュ叿',
   paint: '鍦板舰缁樺埗宸ュ叿',
   scatter: '鍦板舰鏁ｅ竷宸ュ叿',

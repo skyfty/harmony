@@ -1,5 +1,6 @@
 import type { TerrainHeightGrid } from './terrainSampler'
 import { clamp, hashUnit, wrapAngle } from './noise'
+import type { RoadWaypoint } from './roadWaypoints'
 
 export interface RoadTraceOptions {
   startX: number
@@ -12,6 +13,15 @@ export interface RoadTraceOptions {
   maxTurnRad: number
   maxLength: number | null
   margin: number
+  /**
+   * Hand-drawn guide waypoints in world XZ (proceduralLandscape road path).
+   * Two or more points switch the tracer into guide mode: the road starts at
+   * the first point, heads toward the second one and then pursues every
+   * following point in order within `waypointTolerance`.
+   */
+  waypoints?: ReadonlyArray<RoadWaypoint> | null
+  /** Guide tolerance in meters (default 12). */
+  waypointTolerance?: number
 }
 
 export interface RoadTraceNode {
@@ -32,6 +42,11 @@ export interface RoadTraceResult {
 const MAX_STEPS = 4096
 const TURN_FRACTIONS = [0, -0.35, 0.35, -0.7, 0.7, -1, 1]
 const RESCUE_LEVELS = 12
+const WAYPOINT_TOLERANCE_DEFAULT = 12
+/** In guide mode the tracer may turn up to 45° per step to pursue a waypoint. */
+const WAYPOINT_TURN_LIMIT_RAD = Math.PI / 4
+/** Weight of the heading-to-waypoint error inside the candidate cost. */
+const WAYPOINT_ANGLE_COST_WEIGHT = 2
 
 type Candidate = {
   valid: boolean
@@ -42,6 +57,46 @@ type Candidate = {
   y: number
 }
 
+function sanitizeTraceWaypoints(
+  value: RoadTraceOptions['waypoints'],
+): Array<RoadWaypoint> {
+  if (!Array.isArray(value)) {
+    return []
+  }
+  const out: Array<RoadWaypoint> = []
+  for (const entry of value) {
+    const x = Number(entry?.x)
+    const z = Number(entry?.z)
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      continue
+    }
+    out.push({ x, z })
+  }
+  return out
+}
+
+/**
+ * Guide-mode heading: aim at the second waypoint from the resolved start.
+ * Falls back to the caller supplied heading when both points coincide.
+ */
+function resolveWaypointHeadingRad(
+  waypoints: ReadonlyArray<RoadWaypoint>,
+  startX: number,
+  startZ: number,
+  fallbackHeadingRad: number,
+): number {
+  const second = waypoints[1]
+  if (!second) {
+    return wrapAngle(fallbackHeadingRad)
+  }
+  const dx = second.x - startX
+  const dz = second.z - startZ
+  if (dx * dx + dz * dz < 1e-8) {
+    return wrapAngle(fallbackHeadingRad)
+  }
+  return wrapAngle(Math.atan2(dz, dx))
+}
+
 function evaluateCandidate(
   grid: TerrainHeightGrid,
   options: RoadTraceOptions,
@@ -50,6 +105,7 @@ function evaluateCandidate(
   currentY: number,
   heading: number,
   deltaAngle: number,
+  guidanceHeadingRad: number | null = null,
 ): Candidate {
   const nextHeading = heading + deltaAngle
   const x = currentX + Math.cos(nextHeading) * options.stepLength
@@ -81,6 +137,12 @@ function evaluateCandidate(
   }
   // Prefer keeping the wheel straight when costs are close.
   cost += 0.004 * (options.maxTurnRad > 0 ? Math.abs(deltaAngle) / options.maxTurnRad : 0)
+  if (guidanceHeadingRad != null) {
+    // Guide mode: steer toward the current waypoint. The weight dominates the
+    // slope/feel terms so the road bends only because the terrain forces it.
+    const error = Math.abs(wrapAngle(guidanceHeadingRad - nextHeading))
+    cost += WAYPOINT_ANGLE_COST_WEIGHT * (error / Math.PI)
+  }
 
   return { valid: true, cost, deltaAngle, x, z, y }
 }
@@ -119,7 +181,16 @@ export function traceRoadPath(
   grid: TerrainHeightGrid,
   options: RoadTraceOptions,
 ): RoadTraceResult {
-  const start = resolveRoadStart(grid, options.startX, options.startZ)
+  const waypoints = sanitizeTraceWaypoints(options.waypoints)
+  const waypointMode = waypoints.length >= 2
+  const waypointTolerance = Number.isFinite(options.waypointTolerance)
+    ? Math.max(1, options.waypointTolerance as number)
+    : WAYPOINT_TOLERANCE_DEFAULT
+  const start = resolveRoadStart(
+    grid,
+    waypointMode ? waypoints[0]!.x : options.startX,
+    waypointMode ? waypoints[0]!.z : options.startZ,
+  )
   if (!start) {
     return { nodes: [], length: 0, complete: false, failureReason: 'start-outside-terrain', rescueTurns: 0 }
   }
@@ -127,7 +198,11 @@ export function traceRoadPath(
   let x = start.x
   let z = start.z
   let y = start.y
-  let heading = wrapAngle(options.headingRad)
+  let heading = waypointMode
+    ? resolveWaypointHeadingRad(waypoints, start.x, start.z, options.headingRad)
+    : wrapAngle(options.headingRad)
+  // Index of the waypoint currently pursued (0 is the start itself).
+  let targetIndex = waypointMode ? 1 : -1
 
   const nodes: RoadTraceNode[] = [{ x, z, y, heading }]
   let length = 0
@@ -149,8 +224,27 @@ export function traceRoadPath(
       break
     }
 
+    const tracking = waypointMode && targetIndex >= 1 && targetIndex < waypoints.length
+    const target = tracking ? waypoints[targetIndex]! : null
+    const headingToTarget = target ? Math.atan2(target.z - z, target.x - x) : null
+    const guidanceHeadingRad = headingToTarget
+
     let best: Candidate | null = null
+    const deltas: number[] = []
     for (const fraction of TURN_FRACTIONS) {
+      deltas.push(fraction * options.maxTurnRad)
+    }
+    if (guidanceHeadingRad != null) {
+      // Guide mode adds a direct pursuit pair so the road can actually take
+      // the drawn corners instead of only nudging within maxTurnRad.
+      const pursuit = clamp(
+        wrapAngle(guidanceHeadingRad - heading),
+        -WAYPOINT_TURN_LIMIT_RAD,
+        WAYPOINT_TURN_LIMIT_RAD,
+      )
+      deltas.push(pursuit, -pursuit)
+    }
+    for (const delta of deltas) {
       const candidate = evaluateCandidate(
         grid,
         options,
@@ -158,7 +252,8 @@ export function traceRoadPath(
         z,
         y,
         heading,
-        fraction * options.maxTurnRad,
+        delta,
+        guidanceHeadingRad,
       )
       if (candidate.valid && (!best || candidate.cost < best.cost)) {
         best = candidate
@@ -169,8 +264,14 @@ export function traceRoadPath(
       // Rescue scan: slowroads also allows larger corrections when a normal
       // step has no admissible direction. Widening the search keeps the road
       // moving instead of dead-stopping at a single steep patch.
+      const rescueLevels = guidanceHeadingRad != null
+        ? Math.max(RESCUE_LEVELS, Math.ceil(WAYPOINT_TURN_LIMIT_RAD / Math.max(options.maxTurnRad, 1e-6)))
+        : RESCUE_LEVELS
       let rescue: Candidate | null = null
-      for (let level = 2; level <= RESCUE_LEVELS; level += 1) {
+      for (let level = 2; level <= rescueLevels; level += 1) {
+        const magnitude = guidanceHeadingRad != null
+          ? Math.min(level * options.maxTurnRad, WAYPOINT_TURN_LIMIT_RAD)
+          : level * options.maxTurnRad
         for (const sign of [-1, 1]) {
           const candidate = evaluateCandidate(
             grid,
@@ -179,7 +280,8 @@ export function traceRoadPath(
             z,
             y,
             heading,
-            sign * level * options.maxTurnRad,
+            sign * magnitude,
+            guidanceHeadingRad,
           )
           if (candidate.valid && (!rescue || candidate.cost < rescue.cost)) {
             rescue = candidate
@@ -207,6 +309,25 @@ export function traceRoadPath(
     y = best.y
     length += options.stepLength
     nodes.push({ x, z, y, heading })
+
+    if (waypointMode && targetIndex >= 1) {
+      // Advance through every waypoint already within the guide tolerance
+      // (one step may satisfy several tightly spaced points).
+      while (targetIndex < waypoints.length) {
+        const waypoint = waypoints[targetIndex]!
+        if (Math.hypot(waypoint.x - x, waypoint.z - z) <= waypointTolerance) {
+          targetIndex += 1
+        } else {
+          break
+        }
+      }
+      if (targetIndex >= waypoints.length) {
+        // Guide mode ends at the last hand-drawn point: no free tail.
+        complete = true
+        failureReason = 'reached-waypoint-end'
+        break
+      }
+    }
 
     if (options.maxLength != null && length >= options.maxLength) {
       complete = true

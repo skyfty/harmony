@@ -31,6 +31,15 @@ import {
 import { fbm2 } from '@schema/proceduralLandscape/noise'
 import { createDefaultProceduralLandscapeProps } from '@schema/proceduralLandscape/config'
 import {
+  activeRoadWaypoints,
+  clampProceduralLandscapeProps,
+} from '@schema/proceduralLandscape/config'
+import {
+  clampRoadWaypoints,
+  transformRoadWaypointsToWorld,
+  ROAD_WAYPOINT_LIMIT,
+} from '@schema/proceduralLandscape/roadWaypoints'
+import {
   applyProceduralLandscapeSurfaceInjection,
   createProceduralLandscapeSurfaceUniforms,
 } from '@schema/proceduralLandscape/surfaceMaterial'
@@ -255,6 +264,240 @@ describe('road tracing', () => {
     expect(second.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
       first.nodes.map((node) => [node.x, node.z, node.y]),
     )
+  })
+})
+
+describe('road waypoint guide mode', () => {
+  const baseOptions = {
+    startX: 200,
+    startZ: 200,
+    headingRad: 0,
+    stepLength: 8,
+    feelDistance: 24,
+    feelAngleRad: (32 * Math.PI) / 180,
+    maxSlope: 0.55,
+    maxTurnRad: (4 * Math.PI) / 180,
+    maxLength: null,
+    margin: 12,
+  }
+
+  function flatGrid(size = 400): ReturnType<typeof buildTerrainHeightGrid> {
+    const mesh = makeGridMesh({
+      sizeX: size,
+      sizeZ: size,
+      segmentsX: size / 10,
+      segmentsZ: size / 10,
+      height: () => 0,
+    })
+    return buildTerrainHeightGrid(mesh, { cellSize: 4, maxGridSize: 512 })
+  }
+
+  it('starts at the first waypoint and ends at the last one in order', () => {
+    const grid = flatGrid()!
+    const waypoints = [
+      { x: 100, z: 100 },
+      { x: 110, z: 100 },
+      { x: 110, z: 200 },
+      { x: 300, z: 200 },
+    ]
+    const result = traceRoadPath(grid, { ...baseOptions, waypoints, waypointTolerance: 12 })
+    expect(result.nodes.length).toBeGreaterThan(2)
+    expect(result.complete).toBe(true)
+    expect(result.failureReason).toBe('reached-waypoint-end')
+
+    const first = result.nodes[0]!
+    expect(first.x).toBeCloseTo(100, 1)
+    expect(first.z).toBeCloseTo(100, 1)
+    // Initial heading = first -> second waypoint (+X here).
+    expect(first.heading).toBeCloseTo(0, 3)
+
+    for (const waypoint of waypoints) {
+      const closest = Math.min(
+        ...result.nodes.map((node) => Math.hypot(node.x - waypoint.x, node.z - waypoint.z)),
+      )
+      expect(closest).toBeLessThanOrEqual(12.5)
+    }
+
+    const last = result.nodes[result.nodes.length - 1]!
+    expect(Math.hypot(last.x - 300, last.z - 200)).toBeLessThanOrEqual(12.5)
+  })
+
+  it('aims the initial heading at the second waypoint', () => {
+    const grid = flatGrid()!
+    const result = traceRoadPath(grid, {
+      ...baseOptions,
+      waypoints: [{ x: 100, z: 100 }, { x: 100, z: 300 }],
+      waypointTolerance: 12,
+    })
+    const first = result.nodes[0]!
+    expect(first.heading).toBeCloseTo(Math.PI / 2, 3)
+    const second = result.nodes[1]!
+    expect(second.z).toBeGreaterThan(first.z)
+  })
+
+  it('is deterministic for identical waypoint inputs', () => {
+    const grid = flatGrid()!
+    const options = {
+      ...baseOptions,
+      waypoints: [{ x: 60, z: 60 }, { x: 120, z: 320 }, { x: 340, z: 120 }],
+      waypointTolerance: 12,
+    }
+    const first = traceRoadPath(grid, options)
+    const second = traceRoadPath(grid, options)
+    expect(second.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
+      first.nodes.map((node) => [node.x, node.z, node.y]),
+    )
+  })
+
+  it('stops at the terrain boundary when a waypoint lies outside the grid', () => {
+    const grid = flatGrid()!
+    const result = traceRoadPath(grid, {
+      ...baseOptions,
+      waypoints: [{ x: 50, z: 50 }, { x: 1200, z: 1200 }],
+      waypointTolerance: 12,
+    })
+    expect(result.complete).toBe(true)
+    expect(result.failureReason).toBe('reached-terrain-boundary')
+    const last = result.nodes[result.nodes.length - 1]!
+    expect(last.x).toBeLessThanOrEqual(grid!.maxX)
+    expect(last.z).toBeLessThanOrEqual(grid!.maxZ)
+  })
+
+  it('keeps the partial path and reports blocked when a slope wall is unreachable', () => {
+    const mesh = makeGridMesh({
+      sizeX: 400,
+      sizeZ: 400,
+      segmentsX: 40,
+      segmentsZ: 40,
+      height: (x) => x * 1.5,
+    })
+    const grid = buildTerrainHeightGrid(mesh, { cellSize: 4, maxGridSize: 512 })!
+    const result = traceRoadPath(grid, {
+      ...baseOptions,
+      waypoints: [{ x: 100, z: 100 }, { x: 300, z: 100 }],
+      waypointTolerance: 12,
+    })
+    expect(result.complete).toBe(false)
+    expect(result.failureReason).toBe('blocked')
+    expect(result.nodes.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('still honours the maxLength safety cap in guide mode', () => {
+    const grid = flatGrid()!
+    const result = traceRoadPath(grid, {
+      ...baseOptions,
+      waypoints: [{ x: 40, z: 40 }, { x: 360, z: 360 }],
+      waypointTolerance: 12,
+      maxLength: 50,
+    })
+    expect(result.complete).toBe(true)
+    expect(result.failureReason).toBe('reached-length-limit')
+    expect(result.length).toBeLessThanOrEqual(50 + baseOptions.stepLength)
+  })
+
+  it('behaves exactly like the legacy trace without an effective waypoint list', () => {
+    const mesh = makeGridMesh({
+      sizeX: 300,
+      sizeZ: 300,
+      segmentsX: 30,
+      segmentsZ: 30,
+      height: (x, z) => Math.sin(x * 0.02) * 4 + Math.cos(z * 0.03) * 2,
+    })
+    const grid = buildTerrainHeightGrid(mesh, { cellSize: 4, maxGridSize: 512 })!
+    const legacy = traceRoadPath(grid, baseOptions)
+    const empty = traceRoadPath(grid, { ...baseOptions, waypoints: [], waypointTolerance: 12 })
+    const single = traceRoadPath(grid, {
+      ...baseOptions,
+      waypoints: [{ x: 10, z: 10 }],
+      waypointTolerance: 12,
+    })
+    const serialize = (result: typeof legacy) =>
+      result.nodes.map((node) => [node.x, node.z, node.y, node.heading])
+    expect(serialize(empty)).toEqual(serialize(legacy))
+    expect(serialize(single)).toEqual(serialize(legacy))
+    expect(empty.failureReason).toBe(legacy.failureReason)
+    expect(single.failureReason).toBe(legacy.failureReason)
+  })
+})
+
+describe('road waypoint props', () => {
+  it('sanitizes waypoint arrays (non-finite, duplicates, cap)', () => {
+    const cleaned = clampRoadWaypoints([
+      { x: 0, z: 0 },
+      { x: 0.1, z: 0.1 },
+      { x: 5, z: 5 },
+      { x: Number.NaN, z: 1 },
+      { x: 7, z: Number.POSITIVE_INFINITY },
+      { x: '9', z: '9' },
+    ])
+    expect(cleaned).toEqual([
+      { x: 0, z: 0 },
+      { x: 5, z: 5 },
+      { x: 9, z: 9 },
+    ])
+    expect(clampRoadWaypoints('nope')).toEqual([])
+
+    const many = Array.from({ length: ROAD_WAYPOINT_LIMIT + 40 }, (_, index) => ({
+      x: index * 2,
+      z: 0,
+    }))
+    expect(clampRoadWaypoints(many)).toHaveLength(ROAD_WAYPOINT_LIMIT)
+  })
+
+  it('clamps waypoint fields through the component props', () => {
+    const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
+    expect(defaults.road.waypoints).toEqual([])
+    expect(defaults.road.waypointTolerance).toBe(12)
+
+    const clamped = clampProceduralLandscapeProps({
+      road: {
+        ...defaults.road,
+        waypoints: [{ x: 1, z: 2 }, { x: 3, z: 4 }],
+        waypointTolerance: 400,
+      },
+    }, 'node-a')
+    expect(clamped.road.waypoints).toEqual([{ x: 1, z: 2 }, { x: 3, z: 4 }])
+    expect(clamped.road.waypointTolerance).toBe(100)
+
+    const lower = clampProceduralLandscapeProps({
+      road: { ...defaults.road, waypointTolerance: 0 },
+    }, 'node-a')
+    expect(lower.road.waypointTolerance).toBe(4)
+  })
+
+  it('transforms node-local waypoints into world XZ (translate/rotate/scale)', () => {
+    const translation = new THREE.Matrix4().makeTranslation(10, 0, 20)
+    expect(transformRoadWaypointsToWorld(translation, [{ x: 1, z: 2 }])).toEqual([{ x: 11, z: 22 }])
+
+    const rotation = new THREE.Matrix4().makeRotationY(Math.PI / 2)
+    const rotated = transformRoadWaypointsToWorld(rotation, [{ x: 1, z: 0 }])[0]!
+    expect(rotated.x).toBeCloseTo(0, 6)
+    expect(rotated.z).toBeCloseTo(-1, 6)
+
+    const scale = new THREE.Matrix4().makeScale(2, 1, 3)
+    expect(transformRoadWaypointsToWorld(scale, [{ x: 1, z: 1 }])).toEqual([{ x: 2, z: 3 }])
+
+    const combined = new THREE.Matrix4().makeRotationY(Math.PI / 2).setPosition(5, 0, 7)
+    const combinedResult = transformRoadWaypointsToWorld(combined, [{ x: 1, z: 0 }])[0]!
+    expect(combinedResult.x).toBeCloseTo(5, 6)
+    expect(combinedResult.z).toBeCloseTo(6, 6)
+  })
+
+  it('only activates the guide path for two or more clamped waypoints', () => {
+    const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
+    const twoPoints = clampProceduralLandscapeProps({
+      road: { ...defaults.road, waypoints: [{ x: 1, z: 1 }, { x: 4, z: 6 }] },
+    }, 'node-a')
+    expect(activeRoadWaypoints(twoPoints)).toHaveLength(2)
+
+    const onePoint = clampProceduralLandscapeProps({
+      road: { ...defaults.road, waypoints: [{ x: 1, z: 1 }] },
+    }, 'node-a')
+    expect(activeRoadWaypoints(onePoint)).toHaveLength(0)
+
+    const matrix = new THREE.Matrix4().makeTranslation(100, 0, 200)
+    const world = transformRoadWaypointsToWorld(matrix, activeRoadWaypoints(twoPoints))
+    expect(world).toEqual([{ x: 101, z: 201 }, { x: 104, z: 206 }])
   })
 })
 

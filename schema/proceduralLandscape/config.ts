@@ -1,4 +1,5 @@
 import { clamp, degreesToRadians, hashStringToSeed } from './noise'
+import { clampRoadWaypoints, type RoadWaypoint } from './roadWaypoints'
 
 export type ProceduralLandscapeEnvironment = 'editor' | 'preview' | 'viewer'
 export type ProceduralLandscapeQuality = 'auto' | 'low' | 'medium' | 'high'
@@ -48,6 +49,13 @@ export interface ProceduralLandscapeRoadProps {
   startZ: number | null
   /** Null keeps the seeded default heading. */
   headingDeg: number | null
+  /**
+   * Hand-drawn guide path (host node local XZ). Two or more points take over
+   * as ordered must-pass waypoints and `startX/startZ/headingDeg` are ignored.
+   */
+  waypoints: RoadWaypoint[]
+  /** Guide tolerance in meters: step advances to the next waypoint within it. */
+  waypointTolerance: number
   /** Null traces until the terrain boundary. */
   maxLength: number | null
   stepLength: number
@@ -257,6 +265,8 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       startX: null,
       startZ: null,
       headingDeg: null,
+      waypoints: [],
+      waypointTolerance: 12,
       maxLength: null,
       stepLength: 8,
       feelDistance: 24,
@@ -370,6 +380,8 @@ export function clampProceduralLandscapeProps(
       startX: clampNullableNumber(road?.startX, defaults.road.startX, -1e7, 1e7),
       startZ: clampNullableNumber(road?.startZ, defaults.road.startZ, -1e7, 1e7),
       headingDeg: clampNullableNumber(road?.headingDeg, defaults.road.headingDeg, -360, 360),
+      waypoints: clampRoadWaypoints(road?.waypoints),
+      waypointTolerance: clampNumber(road?.waypointTolerance, defaults.road.waypointTolerance, 4, 100),
       maxLength: clampNullableNumber(road?.maxLength, defaults.road.maxLength, 16, 100000),
       stepLength: clampNumber(road?.stepLength, defaults.road.stepLength, 2, 32),
       feelDistance: clampNumber(road?.feelDistance, defaults.road.feelDistance, 4, 80),
@@ -436,7 +448,10 @@ export function cloneProceduralLandscapeProps(
     ...props,
     sampling: { ...props.sampling },
     surface: { ...props.surface },
-    road: { ...props.road },
+    road: {
+      ...props.road,
+      waypoints: props.road.waypoints.map((waypoint) => ({ x: waypoint.x, z: waypoint.z })),
+    },
     forest: { ...props.forest },
     grass: { ...props.grass },
     bushes: { ...props.bushes },
@@ -490,6 +505,14 @@ export function resolveSurfaceHeightScale(reliefMeters: number): number {
 
 export function roadHalfWidth(props: ProceduralLandscapeComponentProps): number {
   return Math.max(0.5, props.road.width * 0.5)
+}
+
+/**
+ * 生效的手绘路径：≥2 个点才接管追踪起点/朝向；否则返回空数组，
+ * 追踪回退到 `startX/startZ/headingDeg`（与迁移前行为一致）。
+ */
+export function activeRoadWaypoints(props: ProceduralLandscapeComponentProps): RoadWaypoint[] {
+  return props.road.waypoints.length >= 2 ? props.road.waypoints : []
 }
 
 export function roadFlattenParams(props: ProceduralLandscapeComponentProps): {

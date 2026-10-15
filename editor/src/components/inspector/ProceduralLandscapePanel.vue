@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import {
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   createProceduralLandscapeComponentState,
@@ -17,7 +18,9 @@ import {
 } from '@schema/proceduralLandscape/runtime'
 
 const sceneStore = useSceneStore()
+const buildToolsStore = useBuildToolsStore()
 const { selectedNode, selectedNodeId } = storeToRefs(sceneStore)
+const { activeBuildTool } = storeToRefs(buildToolsStore)
 
 const landscapeComponent = computed(
   () => selectedNode.value?.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
@@ -91,6 +94,38 @@ function handleRegenerate(): void {
   patch({ generationRevision: (current.generationRevision ?? 0) + 1 })
 }
 
+const roadWaypoints = computed(() => propsValue.value?.road.waypoints ?? [])
+const roadPathEditing = computed(
+  () => componentEnabled.value && activeBuildTool.value === 'landscapeRoad' && Boolean(landscapeComponent.value),
+)
+
+function handleToggleRoadPathEditing(): void {
+  if (!componentEnabled.value || !landscapeComponent.value) {
+    return
+  }
+  buildToolsStore.setActiveBuildTool(roadPathEditing.value ? null : 'landscapeRoad')
+}
+
+function handleRemoveRoadWaypoint(index: number): void {
+  const nodeId = selectedNodeId.value
+  const current = propsValue.value?.road.waypoints ?? []
+  if (!nodeId || index < 0 || index >= current.length) {
+    return
+  }
+  sceneStore.updateProceduralLandscapeRoadWaypoints(
+    nodeId,
+    current.filter((_, entryIndex) => entryIndex !== index),
+  )
+}
+
+function handleClearRoadPath(): void {
+  const nodeId = selectedNodeId.value
+  if (!nodeId) {
+    return
+  }
+  sceneStore.updateProceduralLandscapeRoadWaypoints(nodeId, [])
+}
+
 interface NumericField {
   key: string
   label: string
@@ -117,6 +152,7 @@ const roadFields: NumericField[] = [
   { key: 'startX', label: '起点 X（空=居中）', step: 1, nullable: true },
   { key: 'startZ', label: '起点 Z（空=居中）', step: 1, nullable: true },
   { key: 'headingDeg', label: '初始朝向 (°，空=按种子)', step: 5, nullable: true },
+  { key: 'waypointTolerance', label: '途经容差 (m)', step: 2 },
 ]
 
 const forestFields: NumericField[] = [
@@ -371,6 +407,43 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               @update:model-value="(value) => patchGroup('road', { enabled: value !== false })"
             />
           </div>
+          <div class="pl-road-path">
+            <div class="pl-road-path__actions">
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': roadPathEditing }"
+                :disabled="!componentEnabled"
+                @click="handleToggleRoadPathEditing"
+              >{{ roadPathEditing ? '结束绘制' : '绘制路径' }}</button>
+              <button
+                type="button"
+                class="pl-choice"
+                :disabled="!componentEnabled || !roadWaypoints.length"
+                @click="handleClearRoadPath"
+              >清除路径</button>
+              <span class="pl-road-path__count">路径点 {{ roadWaypoints.length }}</span>
+            </div>
+            <div v-if="roadWaypoints.length" class="pl-road-path__list">
+              <div
+                v-for="(waypoint, index) in roadWaypoints"
+                :key="`${selectedNode?.id ?? 'road'}:${index}`"
+                class="pl-road-path__item"
+              >
+                <span class="pl-road-path__index">P{{ index + 1 }}</span>
+                <span class="pl-road-path__coords">{{ waypoint.x.toFixed(1) }}, {{ waypoint.z.toFixed(1) }}</span>
+                <v-btn
+                  icon
+                  variant="text"
+                  density="compact"
+                  :disabled="!componentEnabled"
+                  @click="handleRemoveRoadWaypoint(index)"
+                >
+                  <v-icon size="16">mdi-delete</v-icon>
+                </v-btn>
+              </div>
+            </div>
+          </div>
           <div class="pl-grid">
             <v-text-field
               v-for="field in roadFields"
@@ -477,7 +550,6 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               @update:model-value="(value) => patchGroup('canopy', { enabled: value !== false })"
             />
           </div>
-          <div class="pl-section__hint">关 = 地表完全不采样树密度图（无林下混合/树影/环境光调制）。</div>
         </div>
 
         <div class="pl-section">
@@ -645,7 +717,6 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
 
         <div class="pl-section">
           <div class="pl-section__title">素材（在线资产包）</div>
-          <div class="pl-section__hint">四季素材固定来自在线资产包，由「Slow Roads 环境」的季节切换驱动；此处只保留基色参数。</div>
           <div class="pl-toggle-row">
             <span class="pl-toggle-row__label">基色模式</span>
             <button
@@ -700,18 +771,6 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
           />
         </div>
 
-        <div class="pl-section">
-          <div class="pl-section__title">状态</div>
-          <div class="pl-stats">
-            <div v-for="row in statsRows" :key="row.label" class="pl-stats__row">
-              <span class="pl-stats__label">{{ row.label }}</span>
-              <span class="pl-stats__value">{{ row.value }}</span>
-            </div>
-          </div>
-          <div v-if="stats?.warnings.length" class="pl-warnings">
-            <div v-for="warning in stats.warnings" :key="warning" class="pl-warnings__item">{{ warning }}</div>
-          </div>
-        </div>
       </div>
 
     </v-expansion-panel-text>
@@ -876,6 +935,52 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
   border-color: rgba(88, 160, 232, 0.9);
   background: rgba(88, 160, 232, 0.18);
   color: #ffffff;
+}
+
+.pl-road-path {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.35rem;
+}
+
+.pl-road-path__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pl-road-path__count {
+  font-size: 0.76rem;
+  color: rgba(233, 236, 241, 0.75);
+}
+
+.pl-road-path__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.pl-road-path__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.1rem;
+  border-radius: 4px;
+}
+
+.pl-road-path__index {
+  font-size: 0.72rem;
+  color: rgba(255, 179, 0, 0.95);
+  min-width: 24px;
+}
+
+.pl-road-path__coords {
+  flex: 1;
+  font-size: 0.72rem;
+  color: rgba(233, 236, 241, 0.7);
 }
 
 .pl-stats__row {

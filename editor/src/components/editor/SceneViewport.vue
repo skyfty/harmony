@@ -322,6 +322,10 @@ import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX
 import { createLandformVertexRenderer, type LandformVertexHandlePickResult } from './LandformVertexRenderer'
 import { createRegionVertexRenderer, type RegionVertexHandlePickResult } from './RegionVertexRenderer'
 import { createGuideRouteVertexRenderer, type GuideRouteVertexHandlePickResult } from './GuideRouteVertexRenderer'
+import {
+  createLandscapeRoadPathVertexRenderer,
+  type LandscapeRoadPathVertexHandlePickResult,
+} from './LandscapeRoadPathVertexRenderer'
 import { createBoundaryWallLoopRenderer } from './BoundaryWallLoopRenderer'
 import { createModelCollisionFaceOverlayRenderer } from './ModelCollisionFaceOverlayRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
@@ -347,7 +351,13 @@ import {
 } from './waterSurfaceEditUtils'
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
-import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/runtime'
+import {
+  sampleProceduralLandscapeTerrainHeight,
+  setProceduralLandscapeEnvironment,
+} from '@schema/proceduralLandscape/runtime'
+import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
+import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
+import { collectTerrainMeshSources } from '@schema/proceduralLandscape/terrainSampler'
 import {
   createSlowroadsEnvironmentRuntime,
   type SlowroadsEnvironmentRuntime,
@@ -394,6 +404,7 @@ import {
   resolveModelCollisionComponentPropsFromNode,
   resolveViewPointComponentProps,
   resolveViewPointWorldCameraPose,
+  PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
 } from '@schema/components'
 
 import type {
@@ -2163,6 +2174,9 @@ const buildToolCursorClass = computed(() => {
   if (activeBuildTool.value === 'guideRoute') {
     return 'cursor-floor'
   }
+  if (activeBuildTool.value === 'landscapeRoad') {
+    return 'cursor-floor'
+  }
   if (activeBuildTool.value === 'water') {
     return 'cursor-water'
   }
@@ -2191,6 +2205,7 @@ const floorEditNodeId = ref<string | null>(null)
 const landformEditNodeId = ref<string | null>(null)
 const regionEditNodeId = ref<string | null>(null)
 const guideRouteEditNodeId = ref<string | null>(null)
+const landscapeRoadEditNodeId = ref<string | null>(null)
 const waterEditNodeId = ref<string | null>(null)
 const selectedModelCollisionFaceId = ref<string | null>(null)
 const vertexSnapModeEnabled = computed(() => sceneStore.viewportSettings.snapMode === 'vertex')
@@ -2482,6 +2497,24 @@ function resolveEditableGuideRouteNode(nodeId: string | null | undefined): Scene
   return node
 }
 
+function resolveEditableLandscapeRoadNode(nodeId: string | null | undefined): SceneNode | null {
+  if (!nodeId) {
+    return null
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node) {
+    return null
+  }
+  const component = node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]
+  if (!component) {
+    return null
+  }
+  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
+    return null
+  }
+  return objectMap.has(nodeId) ? node : null
+}
+
 function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode | null {
   if (!nodeId) {
     return null
@@ -2553,6 +2586,17 @@ function setGuideRouteEditNodeId(nodeId: string | null): void {
   refreshSelectionHighlightsForEditModeChange()
 }
 
+function setLandscapeRoadEditNodeId(nodeId: string | null): void {
+  if (landscapeRoadEditNodeId.value === nodeId) {
+    return
+  }
+  landscapeRoadEditNodeId.value = nodeId
+  if (nodeId) {
+    landscapeRoadPathSelectedIndex = null
+  }
+  refreshSelectionHighlightsForEditModeChange()
+}
+
 function setWaterEditNodeId(nodeId: string | null): void {
   if (waterEditNodeId.value === nodeId) {
     return
@@ -2585,6 +2629,14 @@ function clearGuideRouteEditMode(): void {
   setGuideRouteEditNodeId(null)
 }
 
+function clearLandscapeRoadEditMode(): void {
+  setLandscapeRoadEditNodeId(null)
+  landscapeRoadPathDragState = null
+  landscapeRoadPathSelectedIndex = null
+  landscapeRoadPathVertexRenderer.clearHover()
+  landscapeRoadPathVertexRenderer.clear()
+}
+
 function clearWaterEditMode(): void {
   setWaterEditNodeId(null)
 }
@@ -2594,6 +2646,7 @@ function enterWallEditMode(nodeId: string | null | undefined): void {
   clearFloorEditMode()
   clearLandformEditMode()
   clearRegionEditMode()
+  clearLandscapeRoadEditMode()
   clearWaterEditMode()
   setWallEditNodeId(resolveEditableWallNode(nodeId)?.id ?? null)
 }
@@ -2603,6 +2656,7 @@ function enterRoadEditMode(nodeId: string | null | undefined): void {
   clearFloorEditMode()
   clearLandformEditMode()
   clearRegionEditMode()
+  clearLandscapeRoadEditMode()
   clearWaterEditMode()
   setRoadEditNodeId(resolveEditableRoadNode(nodeId)?.id ?? null)
 }
@@ -2612,6 +2666,7 @@ function enterFloorEditMode(nodeId: string | null | undefined): void {
   clearRoadEditMode()
   clearLandformEditMode()
   clearRegionEditMode()
+  clearLandscapeRoadEditMode()
   clearWaterEditMode()
   setFloorEditNodeId(resolveEditableFloorNode(nodeId)?.id ?? null)
 }
@@ -2621,6 +2676,7 @@ function enterLandformEditMode(nodeId: string | null | undefined): void {
   clearRoadEditMode()
   clearFloorEditMode()
   clearRegionEditMode()
+  clearLandscapeRoadEditMode()
   clearWaterEditMode()
   setLandformEditNodeId(resolveEditableLandformNode(nodeId)?.id ?? null)
 }
@@ -2631,6 +2687,7 @@ function enterRegionEditMode(nodeId: string | null | undefined): void {
   clearFloorEditMode()
   clearLandformEditMode()
   clearGuideRouteEditMode()
+  clearLandscapeRoadEditMode()
   clearWaterEditMode()
   setRegionEditNodeId(resolveEditableRegionNode(nodeId)?.id ?? null)
 }
@@ -2641,9 +2698,22 @@ function enterGuideRouteEditMode(nodeId: string | null | undefined): void {
   clearFloorEditMode()
   clearLandformEditMode()
   clearRegionEditMode()
+  clearLandscapeRoadEditMode()
   clearWaterEditMode()
   const editableNodeId = resolveEditableGuideRouteNode(nodeId)?.id ?? null
   setGuideRouteEditNodeId(editableNodeId)
+}
+
+function enterLandscapeRoadEditMode(nodeId: string | null | undefined): void {
+  clearWallEditMode()
+  clearRoadEditMode()
+  clearFloorEditMode()
+  clearLandformEditMode()
+  clearRegionEditMode()
+  clearGuideRouteEditMode()
+  clearWaterEditMode()
+  const editableNodeId = resolveEditableLandscapeRoadNode(nodeId)?.id ?? null
+  setLandscapeRoadEditNodeId(editableNodeId)
 }
 
 function enterWaterEditMode(nodeId: string | null | undefined): void {
@@ -2653,6 +2723,7 @@ function enterWaterEditMode(nodeId: string | null | undefined): void {
   clearLandformEditMode()
   clearRegionEditMode()
   clearGuideRouteEditMode()
+  clearLandscapeRoadEditMode()
   setWaterEditNodeId(resolveEditableWaterNode(nodeId)?.id ?? null)
 }
 
@@ -2776,6 +2847,34 @@ function getActiveGuideRouteEditNodeId(): string | null {
 
 function isSelectedGuideRouteEditMode(): boolean {
   return Boolean(getActiveGuideRouteEditNodeId())
+}
+
+function getActiveLandscapeRoadEditNodeId(): string | null {
+  const editNodeId = landscapeRoadEditNodeId.value
+  if (!editNodeId || !resolveEditableLandscapeRoadNode(editNodeId)) {
+    return null
+  }
+
+  const primarySelectedId = getPrimarySelectedNodeId()
+  if (primarySelectedId === editNodeId) {
+    return editNodeId
+  }
+
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length === 1 && selectedIds[0] === editNodeId) {
+    return editNodeId
+  }
+
+  const selectedNodeId = sceneStore.selectedNode?.id ?? null
+  if (selectedNodeId === editNodeId) {
+    return editNodeId
+  }
+
+  return null
+}
+
+function isSelectedLandscapeRoadEditMode(): boolean {
+  return Boolean(getActiveLandscapeRoadEditNodeId())
 }
 
 function isSelectedWaterEditMode(): boolean {
@@ -2978,6 +3077,9 @@ watch(
     if (tool !== 'guideRoute') {
       clearGuideRouteEditMode()
     }
+    if (tool !== 'landscapeRoad') {
+      clearLandscapeRoadEditMode()
+    }
     if (tool !== 'floor') {
       clearFloorEditMode()
     }
@@ -2987,6 +3089,12 @@ watch(
     if (tool !== 'wall') {
       clearWallDoorRectangleSelectionState()
       clearWallDoorSelectionPayload()
+    }
+    if (tool === 'landscapeRoad') {
+      const selectedId = getPrimarySelectedNodeId()
+      if (selectedId) {
+        enterLandscapeRoadEditMode(selectedId)
+      }
     }
   },
 )
@@ -3036,11 +3144,19 @@ watch(
     if (selectedIds.length !== 1 || selectedIds[0] !== guideRouteEditNodeId.value) {
       clearGuideRouteEditMode()
     }
+    if (selectedIds.length !== 1 || selectedIds[0] !== landscapeRoadEditNodeId.value) {
+      clearLandscapeRoadEditMode()
+    }
     if (selectedIds.length !== 1 || selectedIds[0] !== floorEditNodeId.value) {
       clearFloorEditMode()
     }
     if (selectedIds.length !== 1 || selectedIds[0] !== waterEditNodeId.value) {
       clearWaterEditMode()
+    }
+    if (activeBuildTool.value === 'landscapeRoad' && selectedIds.length === 1 && selectedIds[0]) {
+      // The hand-drawn road path tool follows the selection: selecting a
+      // proceduralLandscape terrain node enters its path edit mode.
+      enterLandscapeRoadEditMode(selectedIds[0])
     }
     syncSelectedGuideRouteVertexHandle()
   },
@@ -5638,6 +5754,19 @@ type GuideRouteVertexDragState = {
   workingPoints: Vector3Like[]
 }
 
+type LandscapeRoadPathDragState = {
+  pointerId: number
+  nodeId: string
+  vertexIndex: number
+  startX: number
+  startY: number
+  moved: boolean
+  dragPlane: THREE.Plane
+  runtimeObject: THREE.Object3D
+  baseWaypoints: Array<{ x: number; z: number }>
+  workingWaypoints: Array<{ x: number; z: number }>
+}
+
 type WaterCircleCenterDragState = {
   pointerId: number
   nodeId: string
@@ -5726,6 +5855,8 @@ let landformCircleRadiusDragState: LandformCircleRadiusDragState | null = null
 let regionContourVertexDragState: RegionContourVertexDragState | null = null
 let boundaryWallContourVertexDragState: BoundaryWallContourVertexDragState | null = null
 let guideRouteVertexDragState: GuideRouteVertexDragState | null = null
+let landscapeRoadPathDragState: LandscapeRoadPathDragState | null = null
+let landscapeRoadPathSelectedIndex: number | null = null
 let waterCircleCenterDragState: WaterCircleCenterDragState | null = null
 let waterCircleRadiusDragState: WaterCircleRadiusDragState | null = null
 let waterEdgeDragState: WaterEdgeDragState | null = null
@@ -5740,6 +5871,7 @@ const boundaryWallLoopRenderer = createBoundaryWallLoopRenderer()
 const modelCollisionFaceOverlayRenderer = createModelCollisionFaceOverlayRenderer()
 const modelCollisionFaceVertexRenderer = createModelCollisionFaceVertexRenderer()
 const guideRouteVertexRenderer = createGuideRouteVertexRenderer()
+const landscapeRoadPathVertexRenderer = createLandscapeRoadPathVertexRenderer()
 const floorCircleHandleRenderer = createFloorCircleHandleRenderer()
 const displayBoardCornerHandleRenderer = createDisplayBoardCornerHandleRenderer()
 const waterVertexRenderer = createWaterVertexRenderer()
@@ -7341,6 +7473,326 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
 
   setActiveGuideRouteVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
   pointerInteraction.capture(event.pointerId)
+  return true
+}
+
+// --- proceduralLandscape hand-drawn road path (guide waypoints) ---
+
+/** Click distance (meters, node local XZ) below which a point is inserted into a segment. */
+const LANDSCAPE_ROAD_WAYPOINT_INSERT_DISTANCE = 8
+/** Height-field ray march fallback: growth-limited step and far distance. */
+const LANDSCAPE_ROAD_SURFACE_MARCH_MAX_STEP = 64
+const LANDSCAPE_ROAD_SURFACE_MARCH_FAR_DEFAULT = 20000
+
+function cloneLandscapeRoadLocalWaypoints(
+  node: SceneNode | null | undefined,
+): Array<{ x: number; z: number }> {
+  const component = node?.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+    | undefined
+  const raw = (component?.props as { road?: { waypoints?: unknown } } | undefined)?.road?.waypoints
+  return clampRoadWaypoints(raw)
+}
+
+/**
+ * Display points for the path overlay: node-local coordinates with Y sampled
+ * from the runtime height field so handles sit on the terrain surface.
+ * `override` replaces one point with a world-space drag position.
+ */
+function buildLandscapeRoadDisplayPoints(
+  nodeId: string,
+  waypoints: ReadonlyArray<{ x: number; z: number }>,
+  override?: { index: number; worldX: number; worldZ: number; worldY: number } | null,
+): Array<{ x: number; y: number; z: number }> {
+  const runtimeObject = objectMap.get(nodeId) ?? null
+  if (!runtimeObject) {
+    return []
+  }
+  runtimeObject.updateMatrixWorld(true)
+  const worldPoints: Array<{ x: number; y: number; z: number }> = []
+  waypoints.forEach((waypoint, index) => {
+    if (override && override.index === index) {
+      const sampled = sampleProceduralLandscapeTerrainHeight(nodeId, override.worldX, override.worldZ)
+      worldPoints.push({ x: override.worldX, y: sampled ?? override.worldY, z: override.worldZ })
+      return
+    }
+    const world = runtimeObject.localToWorld(new THREE.Vector3(waypoint.x, 0, waypoint.z))
+    const sampled = sampleProceduralLandscapeTerrainHeight(nodeId, world.x, world.z)
+    worldPoints.push({ x: world.x, y: sampled ?? world.y, z: world.z })
+  })
+  return worldPoints.map((world) => {
+    const local = runtimeObject.worldToLocal(new THREE.Vector3(world.x, world.y, world.z))
+    return { x: local.x, y: local.y, z: local.z }
+  })
+}
+
+function ensureLandscapeRoadVertexHandlesForSelectedNode(options?: {
+  force?: boolean
+  displayPoints?: Array<{ x: number; y: number; z: number }> | null
+}): void {
+  const selectedId = getActiveLandscapeRoadEditNodeId()
+  const active = activeBuildTool.value === 'landscapeRoad' && !!selectedId
+  const node = selectedId ? findSceneNode(sceneStore.nodes, selectedId) : null
+  const runtimeObject = selectedId ? objectMap.get(selectedId) ?? null : null
+  const points = options?.displayPoints
+    ?? (selectedId && node ? buildLandscapeRoadDisplayPoints(selectedId, cloneLandscapeRoadLocalWaypoints(node)) : [])
+  const common = {
+    active,
+    nodeId: selectedId,
+    runtimeObject,
+    points,
+  }
+  if (options?.force) {
+    landscapeRoadPathVertexRenderer.forceRebuild(common)
+  } else {
+    landscapeRoadPathVertexRenderer.ensure(common)
+  }
+  syncSelectedLandscapeRoadVertexHandle()
+}
+
+function syncSelectedLandscapeRoadVertexHandle(): void {
+  const nodeId = getActiveLandscapeRoadEditNodeId()
+  if (!nodeId || landscapeRoadPathSelectedIndex == null) {
+    landscapeRoadPathVertexRenderer.setSelectedHandle(null)
+    return
+  }
+  landscapeRoadPathVertexRenderer.setSelectedHandle({
+    nodeId,
+    vertexIndex: landscapeRoadPathSelectedIndex,
+  })
+}
+
+function pickLandscapeRoadVertexHandleAtPointer(
+  event: PointerEvent,
+): LandscapeRoadPathVertexHandlePickResult | null {
+  if (!setViewportRayFromClientPoint(event)) {
+    return null
+  }
+  return landscapeRoadPathVertexRenderer.pick({
+    camera,
+    canvas: canvasRef.value,
+    event,
+    pointer,
+    raycaster,
+  })
+}
+
+/**
+ * Terrain surface point under the pointer for the host node: first raycast the
+ * node's real terrain meshes (artifacts/helpers filtered out), then fall back
+ * to marching the runtime height field along the ray.
+ */
+function resolveLandscapeRoadTerrainSurfacePoint(
+  nodeId: string,
+  event: PointerEvent,
+  out: THREE.Vector3,
+): boolean {
+  const runtimeObject = objectMap.get(nodeId) ?? null
+  if (!runtimeObject || !setViewportRayFromClientPoint(event)) {
+    return false
+  }
+  const sources = collectTerrainMeshSources(runtimeObject)
+  if (sources.length) {
+    const hits = raycaster.intersectObjects(sources.map((source) => source.mesh), false)
+    for (const hit of hits) {
+      if (isEditorOnlyObject(hit.object as THREE.Object3D)) {
+        continue
+      }
+      if (!hit.point || !Number.isFinite(hit.point.x) || !Number.isFinite(hit.point.z)) {
+        continue
+      }
+      out.copy(hit.point)
+      return true
+    }
+  }
+  return sampleLandscapeRoadTerrainSurfaceAlongRay(nodeId, out)
+}
+
+function sampleLandscapeRoadTerrainSurfaceAlongRay(nodeId: string, out: THREE.Vector3): boolean {
+  const ray = raycaster.ray
+  const far = camera && Number.isFinite(camera.far)
+    ? Math.min(camera.far, 100000)
+    : LANDSCAPE_ROAD_SURFACE_MARCH_FAR_DEFAULT
+  let step = 2
+  let tPrevious = 0
+  let t = 0
+  const probe = new THREE.Vector3()
+  for (let iteration = 0; iteration < 4096 && t < far; iteration += 1) {
+    step = Math.min(step * 1.25, LANDSCAPE_ROAD_SURFACE_MARCH_MAX_STEP)
+    t = Math.min(t + step, far)
+    probe.copy(ray.origin).addScaledVector(ray.direction, t)
+    const height = sampleProceduralLandscapeTerrainHeight(nodeId, probe.x, probe.z)
+    if (height != null && probe.y <= height) {
+      let low = tPrevious
+      let high = t
+      for (let bisect = 0; bisect < 16; bisect += 1) {
+        const mid = (low + high) * 0.5
+        probe.copy(ray.origin).addScaledVector(ray.direction, mid)
+        const midHeight = sampleProceduralLandscapeTerrainHeight(nodeId, probe.x, probe.z)
+        if (midHeight != null && probe.y > midHeight) {
+          low = mid
+        } else {
+          high = mid
+        }
+      }
+      probe.copy(ray.origin).addScaledVector(ray.direction, (low + high) * 0.5)
+      out.copy(probe)
+      return true
+    }
+    tPrevious = t
+  }
+  return false
+}
+
+/**
+ * Index the new point should be inserted at: near the drawn polyline the
+ * point is spliced into the closest segment, otherwise appended at the end.
+ */
+function findLandscapeRoadInsertionIndex(
+  localX: number,
+  localZ: number,
+  waypoints: ReadonlyArray<{ x: number; z: number }>,
+): number | null {
+  if (waypoints.length < 2) {
+    return null
+  }
+  let bestIndex: number | null = null
+  let bestDistance = LANDSCAPE_ROAD_WAYPOINT_INSERT_DISTANCE
+  for (let index = 0; index < waypoints.length - 1; index += 1) {
+    const start = waypoints[index]!
+    const end = waypoints[index + 1]!
+    const dx = end.x - start.x
+    const dz = end.z - start.z
+    const lengthSq = dx * dx + dz * dz
+    const factor = lengthSq > 1e-10
+      ? Math.max(0, Math.min(1, ((localX - start.x) * dx + (localZ - start.z) * dz) / lengthSq))
+      : 0
+    const closestX = start.x + dx * factor
+    const closestZ = start.z + dz * factor
+    const distance = Math.hypot(localX - closestX, localZ - closestZ)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index + 1
+    }
+  }
+  return bestIndex
+}
+
+function tryAppendLandscapeRoadWaypoint(event: PointerEvent): boolean {
+  if (landscapeRoadPathDragState) {
+    return false
+  }
+  const nodeId = getActiveLandscapeRoadEditNodeId()
+  if (!nodeId) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  const runtimeObject = objectMap.get(nodeId) ?? null
+  if (!node || !runtimeObject) {
+    return false
+  }
+  const surfaceWorld = new THREE.Vector3()
+  if (!resolveLandscapeRoadTerrainSurfacePoint(nodeId, event, surfaceWorld)) {
+    return false
+  }
+  runtimeObject.updateMatrixWorld(true)
+  const local = runtimeObject.worldToLocal(surfaceWorld.clone())
+  const base = cloneLandscapeRoadLocalWaypoints(node)
+  const insertIndex = findLandscapeRoadInsertionIndex(local.x, local.z, base) ?? base.length
+  const next = base.slice()
+  next.splice(insertIndex, 0, { x: local.x, z: local.z })
+  if (!sceneStore.updateProceduralLandscapeRoadWaypoints(nodeId, next)) {
+    return false
+  }
+  landscapeRoadPathSelectedIndex = insertIndex
+  ensureLandscapeRoadVertexHandlesForSelectedNode({ force: true })
+  void nextTick(() => ensureLandscapeRoadVertexHandlesForSelectedNode({ force: true }))
+  return true
+}
+
+function tryBeginLandscapeRoadVertexDrag(event: PointerEvent): boolean {
+  if (landscapeRoadPathDragState) {
+    return false
+  }
+  const nodeId = getActiveLandscapeRoadEditNodeId()
+  if (!nodeId) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  const runtimeObject = objectMap.get(nodeId) ?? null
+  if (!node || !runtimeObject) {
+    return false
+  }
+  ensureLandscapeRoadVertexHandlesForSelectedNode()
+  const hit = pickLandscapeRoadVertexHandleAtPointer(event)
+  if (!hit || hit.nodeId !== nodeId) {
+    return false
+  }
+
+  landscapeRoadPathSelectedIndex = hit.vertexIndex
+  syncSelectedLandscapeRoadVertexHandle()
+
+  const baseWaypoints = cloneLandscapeRoadLocalWaypoints(node)
+  const start = baseWaypoints[hit.vertexIndex]
+  if (!start) {
+    return false
+  }
+  runtimeObject.updateMatrixWorld(true)
+  const startWorld = runtimeObject.localToWorld(new THREE.Vector3(start.x, 0, start.z))
+  const anchorY = sampleProceduralLandscapeTerrainHeight(nodeId, startWorld.x, startWorld.z) ?? startWorld.y
+  landscapeRoadPathDragState = {
+    pointerId: event.pointerId,
+    nodeId,
+    vertexIndex: hit.vertexIndex,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+    dragPlane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -anchorY),
+    runtimeObject,
+    baseWaypoints,
+    workingWaypoints: baseWaypoints.map((entry) => ({ x: entry.x, z: entry.z })),
+  }
+  landscapeRoadPathVertexRenderer.setActiveHandle({
+    nodeId,
+    vertexIndex: hit.vertexIndex,
+    gizmoPart: hit.gizmoPart,
+  })
+  pointerInteraction.capture(event.pointerId)
+  return true
+}
+
+function commitLandscapeRoadPathDrag(state: LandscapeRoadPathDragState): void {
+  if (state.moved) {
+    sceneStore.updateProceduralLandscapeRoadWaypoints(state.nodeId, state.workingWaypoints)
+  }
+  landscapeRoadPathVertexRenderer.setActiveHandle(null)
+  ensureLandscapeRoadVertexHandlesForSelectedNode({ force: true })
+  void nextTick(() => ensureLandscapeRoadVertexHandlesForSelectedNode({ force: true }))
+}
+
+function removeSelectedLandscapeRoadWaypoint(): boolean {
+  const nodeId = getActiveLandscapeRoadEditNodeId()
+  const index = landscapeRoadPathSelectedIndex
+  if (!nodeId || index == null) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  if (!node) {
+    return false
+  }
+  const base = cloneLandscapeRoadLocalWaypoints(node)
+  if (index < 0 || index >= base.length) {
+    landscapeRoadPathSelectedIndex = null
+    syncSelectedLandscapeRoadVertexHandle()
+    return false
+  }
+  const next = base.filter((_, entryIndex) => entryIndex !== index)
+  if (!sceneStore.updateProceduralLandscapeRoadWaypoints(nodeId, next)) {
+    return false
+  }
+  landscapeRoadPathSelectedIndex = next.length ? Math.min(index, next.length - 1) : null
+  ensureLandscapeRoadVertexHandlesForSelectedNode({ force: true })
+  void nextTick(() => ensureLandscapeRoadVertexHandlesForSelectedNode({ force: true }))
   return true
 }
 
@@ -14718,6 +15170,7 @@ function animate() {
   ensureBoundaryWallLoopForSelectedNode()
   ensureBoundaryWallVertexHandlesForSelectedNode()
   ensureDisplayBoardCornerHandlesForSelectedNode()
+  ensureLandscapeRoadVertexHandlesForSelectedNode()
   // Endpoint gizmos: enlarge hit area to make dragging easier in edit modes.
   roadVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 46 })
   wallEndpointRenderer.updateScreenSize({
@@ -14732,6 +15185,7 @@ function animate() {
   modelCollisionFaceVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 34 })
   boundaryWallVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   guideRouteVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
+  landscapeRoadPathVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 46 })
   floorCircleHandleRenderer.updateScreenSize({
     camera,
     canvas: canvasRef.value,
@@ -15017,6 +15471,9 @@ function disposeScene() {
   regionBuildTool.dispose()
   boundaryWallBuildTool.dispose()
   guideRouteBuildTool.dispose()
+  landscapeRoadPathVertexRenderer.clear()
+  landscapeRoadPathDragState = null
+  landscapeRoadPathSelectedIndex = null
   buildStartIndicatorRenderer?.dispose()
   buildStartIndicatorRenderer = null
   waterBuildTool.dispose()
@@ -15247,6 +15704,10 @@ function shouldSuppressNodeHighlightDuringBuildOrEdit(nodeId: string | null | un
 
   if (meshType === 'GuideRoute') {
     return activeBuildTool.value === 'guideRoute' || guideRouteEditNodeId.value === nodeId
+  }
+
+  if (landscapeRoadEditNodeId.value === nodeId) {
+    return true
   }
 
   return false
@@ -15961,6 +16422,9 @@ function emitSelectionChange(nextSelection: string[]) {
   if (deduped.length !== 1 || deduped[0] !== guideRouteEditNodeId.value) {
     clearGuideRouteEditMode()
   }
+  if (deduped.length !== 1 || deduped[0] !== landscapeRoadEditNodeId.value) {
+    clearLandscapeRoadEditMode()
+  }
   if (deduped.length !== 1 || deduped[0] !== floorEditNodeId.value) {
     clearFloorEditMode()
   }
@@ -16447,6 +16911,7 @@ function commitBoundaryWallLoop(targetNodeId: string, points: THREE.Vector3[]): 
 
 function resolveBuildToolForNode(node: any): BuildTool | null {
   const dynamicMeshType = node?.dynamicMesh?.type as string | undefined
+  const hasProceduralLandscape = Boolean(node?.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE])
   return isWaterSurfaceNode(node)
     ? 'water'
     : isDisplayBoardNode(node)
@@ -16465,6 +16930,8 @@ function resolveBuildToolForNode(node: any): BuildTool | null {
     ? 'guideRoute'
     : dynamicMeshType === 'Road'
     ? 'road'
+    : hasProceduralLandscape
+    ? 'landscapeRoad'
     : null
 }
 
@@ -16498,6 +16965,8 @@ function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | 
     selectedModelCollisionFaceId.value = null
   } else if (toolForNode === 'guideRoute') {
     enterGuideRouteEditMode(nodeId)
+  } else if (toolForNode === 'landscapeRoad') {
+    enterLandscapeRoadEditMode(nodeId)
   } else if (toolForNode === 'water') {
     enterWaterEditMode(nodeId)
   }
@@ -16595,6 +17064,15 @@ function tryExitActiveNodeBuildToolEditMode(event?: MouseEvent | PointerEvent): 
     setActiveGuideRouteVertexHandle(null)
     guideRouteVertexRenderer.clearHover()
     guideRouteVertexRenderer.clear()
+    refreshBuildStartIndicatorAfterEditExit(event)
+    return true
+  }
+  if (activeBuildTool.value === 'landscapeRoad' && isSelectedLandscapeRoadEditMode()) {
+    landscapeRoadPathVertexRenderer.clearHover()
+    clearLandscapeRoadEditMode()
+    // Unlike the geometry brushes there is nothing to create on empty clicks,
+    // so finishing the session also leaves the tool.
+    handleBuildToolChange(null)
     refreshBuildStartIndicatorAfterEditExit(event)
     return true
   }
@@ -17031,6 +17509,33 @@ async function handlePointerDown(event: PointerEvent) {
     }
   }
 
+  if (activeBuildTool.value === 'landscapeRoad') {
+    const landscapeRoadEditLocked = !!getActiveLandscapeRoadEditNodeId()
+    if (event.button === 0 && !isTemporaryNavigationOverrideActive() && landscapeRoadEditLocked) {
+      if (event.detail >= 2) {
+        // Double click finishes the drawing session (the first click already
+        // placed the last point).
+        handleBuildToolChange(null)
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+      ensureLandscapeRoadVertexHandlesForSelectedNode()
+      if (tryBeginLandscapeRoadVertexDrag(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+      tryAppendLandscapeRoadWaypoint(event)
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
+
   if (activeBuildTool.value === 'guideRoute') {
     if (event.button === 0 && !isTemporaryNavigationOverrideActive()) {
       if (guideRouteEditModeLocked) {
@@ -17385,6 +17890,7 @@ function handlePointerMove(event: PointerEvent) {
     !regionContourVertexDragState &&
     !boundaryWallContourVertexDragState &&
     !guideRouteVertexDragState &&
+    !landscapeRoadPathDragState &&
     !landformContourVertexDragState &&
     !landformCircleRadiusDragState &&
     !displayBoardCornerDragState &&
@@ -17424,6 +17930,8 @@ function handlePointerMove(event: PointerEvent) {
     regionVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     boundaryWallVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     guideRouteVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
+    ensureLandscapeRoadVertexHandlesForSelectedNode()
+    landscapeRoadPathVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     floorCircleHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     displayBoardCornerHandleRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
     waterVertexRenderer.updateHover({ camera, canvas: canvasRef.value, event, pointer, raycaster })
@@ -17437,6 +17945,7 @@ function handlePointerMove(event: PointerEvent) {
     regionVertexRenderer.clearHover()
     boundaryWallVertexRenderer.clearHover()
     guideRouteVertexRenderer.clearHover()
+    landscapeRoadPathVertexRenderer.clearHover()
     floorCircleHandleRenderer.clearHover()
     displayBoardCornerHandleRenderer.clearHover()
     waterVertexRenderer.clearHover()
@@ -17656,6 +18165,44 @@ function handlePointerMove(event: PointerEvent) {
     if (buildBoundaryWallPreviewFromLocalPoints(state.nodeId, nextPoints)) {
       ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: nextPoints })
     }
+    return
+  }
+
+  if (landscapeRoadPathDragState && event.pointerId === landscapeRoadPathDragState.pointerId) {
+    const state = landscapeRoadPathDragState
+    const dx = event.clientX - state.startX
+    const dy = event.clientY - state.startY
+    if (!state.moved && Math.hypot(dx, dy) < CLICK_DRAG_THRESHOLD_PX) {
+      return
+    }
+    state.moved = true
+
+    if ((event.buttons & 1) === 0) {
+      return
+    }
+    if (!camera || !setViewportRayFromClientPoint(event)) {
+      return
+    }
+    if (!raycaster.ray.intersectPlane(state.dragPlane, waterDragIntersectionHelper)) {
+      return
+    }
+
+    const worldX = waterDragIntersectionHelper.x
+    const worldY = waterDragIntersectionHelper.y
+    const worldZ = waterDragIntersectionHelper.z
+    const local = state.runtimeObject.worldToLocal(new THREE.Vector3(worldX, worldY, worldZ))
+    const nextWaypoints = state.workingWaypoints.map((entry) => ({ x: entry.x, z: entry.z }))
+    nextWaypoints[state.vertexIndex] = { x: local.x, z: local.z }
+    state.workingWaypoints = nextWaypoints
+    ensureLandscapeRoadVertexHandlesForSelectedNode({
+      force: true,
+      displayPoints: buildLandscapeRoadDisplayPoints(state.nodeId, nextWaypoints, {
+        index: state.vertexIndex,
+        worldX,
+        worldY,
+        worldZ,
+      }),
+    })
     return
   }
 
@@ -18469,6 +19016,18 @@ async function handlePointerUp(event: PointerEvent) {
           ensureBoundaryWallLoopForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
           ensureBoundaryWallVertexHandlesForSelectedNode({ force: true, nodeId: state.nodeId, previewPoints: state.basePoints })
         }
+
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+
+      if (landscapeRoadPathDragState && event.pointerId === landscapeRoadPathDragState.pointerId && event.button === 0) {
+        const state = landscapeRoadPathDragState
+        landscapeRoadPathDragState = null
+        pointerInteraction.releaseIfCaptured(event.pointerId)
+        commitLandscapeRoadPathDrag(state)
 
         event.preventDefault()
         event.stopPropagation()
@@ -19403,6 +19962,21 @@ function handlePointerCancel(event: PointerEvent) {
     hideNodePickerHighlight()
   }
 
+  if (landscapeRoadPathDragState && event.pointerId === landscapeRoadPathDragState.pointerId) {
+    landscapeRoadPathDragState = null
+    pointerInteraction.releaseIfCaptured(event.pointerId)
+    try {
+      ensureLandscapeRoadVertexHandlesForSelectedNode({ force: true })
+    } catch {
+      /* noop */
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
   if (handleGroundEditorPointerCancel(event)) {
     return
   }
@@ -19830,6 +20404,10 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       break
     case 'guideRoute':
       guideRouteBuildTool.cancel()
+      handleBuildToolChange(null)
+      handled = true
+      break
+    case 'landscapeRoad':
       handleBuildToolChange(null)
       handled = true
       break
@@ -24351,6 +24929,9 @@ function handleViewportShortcut(event: KeyboardEvent) {
         }
         if (!handled && activeBuildTool.value === 'modelCollision' && selectedModelCollisionFaceId.value) {
           handled = removeSelectedModelCollisionFace()
+        }
+        if (!handled && activeBuildTool.value === 'landscapeRoad' && landscapeRoadPathSelectedIndex != null) {
+          handled = removeSelectedLandscapeRoadWaypoint()
         }
         break
       }
