@@ -127,7 +127,12 @@ async function bootstrap(): Promise<void> {
 
       ctx.type = path.extname(filePath)
       ctx.length = fileStat.size
-      ctx.set('Cache-Control', appConfig.isDevelopment ? 'no-store' : 'public, max-age=604800')
+      const cacheControl = relativePath === 'asset-manifest.json'
+        ? 'no-store'
+        : appConfig.isDevelopment
+          ? 'no-store'
+          : 'public, max-age=604800'
+      ctx.set('Cache-Control', cacheControl)
       ctx.body = createReadStream(filePath)
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {

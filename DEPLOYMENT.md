@@ -77,6 +77,7 @@ MONGODB_URI=mongodb://<MONGO_APP_USERNAME>:<MONGO_APP_PASSWORD>@mongo:27017/<MON
 ## 检查点（快速验证）
 - API 健康： `curl -I https://v.touchmagic.cn/api/auth/health` → 200
 - 静态资源： `curl -I https://v.touchmagic.cn/uploads/<file>` → 200/404
+- AssetPanel manifest：`curl -I https://v.touchmagic.cn/uploads/asset-manifest.json` → 200，且 `Cache-Control: no-store`。Nginx/CDN 不应覆盖该文件的缓存头；普通上传资源仍可使用长缓存。
 - 前端首页： `curl -I https://v.touchmagic.cn/`, `http://editor.v.touchmagic.cn/`, `http://uploader.v.touchmagic.cn/`
 
 ## 查看 Docker 日志

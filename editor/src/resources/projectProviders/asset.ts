@@ -7,18 +7,11 @@ import type {
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
 import type { ProjectAsset } from '@/types/project-asset'
 import type { ProjectDirectory } from '@/types/project-directory'
-import { buildServerApiUrl } from '@/api/serverApiConfig'
+import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import { mapServerAssetToProjectAsset, normalizeServerAssetType } from '@/api/serverAssetTypes'
-import { useAuthStore } from '@/stores/authStore'
 import { useSceneStore } from '@/stores/sceneStore'
 import { SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import type { ResourceProvider } from './types'
-
-interface ApiEnvelope<T> {
-  code: number
-  data: T
-  message: string
-}
 
 type AssetManifestLoader = () => Promise<AssetManifest>
 
@@ -38,51 +31,56 @@ const TYPE_LABELS: Record<string, string> = {
 }
 
 function buildManifestUrl(): string {
-  return buildServerApiUrl('/resources/assets/manifest')
+  const baseUrl = readServerDownloadBaseUrl().replace(/\/+$/, '')
+  return `${baseUrl}/asset-manifest.json`
 }
 
 async function fetchManifest(): Promise<AssetManifest> {
   const url = buildManifestUrl()
-  const authStore = useAuthStore()
   const headers = new Headers({ Accept: 'application/json' })
-  const authorization = authStore.authorizationHeader
-  if (authorization) {
-    headers.set('Authorization', authorization)
-  }
   const response = await fetch(url, {
     method: 'GET',
     headers,
-    credentials: 'include',
-    cache: 'no-cache',
+    credentials: 'omit',
+    cache: 'no-store',
   })
   if (!response.ok) {
     throw new Error(`资产清单请求失败 (${response.status})`)
   }
 
-  const payload = (await response.json()) as ApiEnvelope<AssetManifest | LegacyAssetManifest>
-  const manifest = payload?.data
-  if (!manifest) {
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
     throw new Error('资产清单格式不正确')
   }
-  return normalizeManifest(manifest)
+  return normalizeManifest(payload as AssetManifest | LegacyAssetManifest)
 }
 
 let manifestCache: AssetManifest | null = null
 let manifestPromise: Promise<AssetManifest> | null = null
+let manifestCacheVersion = 0
 
 async function ensureManifest(loader: AssetManifestLoader = fetchManifest): Promise<AssetManifest> {
   if (manifestCache) {
-  return manifestCache
+    return manifestCache
   }
   if (!manifestPromise) {
-    manifestPromise = loader()
+    const requestVersion = manifestCacheVersion
+    let request: Promise<AssetManifest>
+    request = loader()
       .then((payload) => {
-        manifestCache = payload
+        if (requestVersion === manifestCacheVersion) {
+          manifestCache = payload
+        }
         return payload
       })
       .finally(() => {
-        manifestPromise = null
+        if (manifestPromise === request) {
+          manifestPromise = null
+        }
       })
+    manifestPromise = request
   }
   return manifestPromise
 }
@@ -370,7 +368,9 @@ export const terrainScatterPresets: Record<TerrainScatterCategory, TerrainScatte
 }
 
 export function invalidateAssetManifestCache(): void {
+  manifestCacheVersion += 1
   manifestCache = null
+  manifestPromise = null
 }
 
 function loadSceneScatterAssets(category: TerrainScatterCategory): ScatterAssetOption[] {
