@@ -124,7 +124,12 @@ export function createProceduralLandscapeComponentState(
     bushes: { ...defaults.bushes, ...(overrides?.bushes ?? {}) },
     canopy: { ...defaults.canopy, ...(overrides?.canopy ?? {}) },
     water: { ...defaults.water, ...(overrides?.water ?? {}) },
-    barrier: { ...defaults.barrier, ...(overrides?.barrier ?? {}) },
+    walls: {
+      drystone: { ...defaults.walls.drystone, ...(overrides?.walls?.drystone ?? {}) },
+      fence: { ...defaults.walls.fence, ...(overrides?.walls?.fence ?? {}) },
+      barrier: { ...defaults.walls.barrier, ...(overrides?.walls?.barrier ?? {}) },
+      seaWall: { ...defaults.walls.seaWall, ...(overrides?.walls?.seaWall ?? {}) },
+    },
     wind: { ...defaults.wind, ...(overrides?.wind ?? {}) },
     debug: { ...defaults.debug, ...(overrides?.debug ?? {}) },
   }

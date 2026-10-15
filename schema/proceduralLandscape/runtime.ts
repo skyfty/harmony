@@ -1,5 +1,11 @@
 import * as THREE from 'three'
-import { buildForestDensityField, buildVariationField, createDensityDataTexture, type LandscapeDensityField } from './densityField'
+import {
+  buildForestDensityField,
+  buildVariationField,
+  createDensityDataTexture,
+  forestDensityClassAt,
+  type LandscapeDensityField,
+} from './densityField'
 import {
   createTerrainGridBuilder,
   type TerrainGridBuilder,
@@ -29,9 +35,12 @@ import {
   createProceduralLandscapeSurfaceUniforms,
   type ProceduralLandscapeSurfacePatch,
 } from './surfaceMaterial'
-import { createRoadBand, type RoadBandHandle } from './roadBand'
+import { createRoadBand, type RoadBandHandle, type RoadBandTextures } from './roadBand'
 import { createTreeMeshManager, type TreeMeshManager } from './treeMeshes'
-import { computeBarrierSegments } from './barrier'
+import { computeRoadMarkings, type RoadMarkingWeights } from './roadMarkings'
+import { DEFAULT_ROAD_STYLE, ROAD_STYLE_PROFILES, isSingleTrackRoad } from './roadStyle'
+import { computeWallSegments, type WallSegment } from './walls'
+import { createWallLayers, wallFenceSpriteSamples, type WallLayerHandle } from './wallLayer'
 import { createWaterPlane, type WaterPlaneHandle } from './waterPlane'
 import { getSharedSlowroadsAssetStore, slowroadsSharedRetainIds, type SlowroadsAssetStore } from '../slowroads/assets/assetStore'
 import {
@@ -65,7 +74,7 @@ import {
   COMPONENT_ARTIFACT_KEY,
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../components/componentManager'
-import { clamp, degreesToRadians } from './noise'
+import { clamp, degreesToRadians, smoothstep } from './noise'
 import {
   activeRoadWaypoints,
   clampProceduralLandscapeProps,
@@ -162,8 +171,10 @@ export interface ProceduralLandscapeRuntimeStats {
   assetResidentBytes: number
   assetDownloadedBytes: number
   assetVariant: 'full' | '2048'
-  /** 木护栏段实例数。 */
+  /** 木栏（官方 Fence）横栏精灵实例数。 */
   barrierInstances: number
+  /** 路侧墙体段数（Drystone / Barrier / Fence / SeaWall 合计）。 */
+  wallSegmentCount: number
   /** 水面是否启用（水线 = 地形最低点 + water.levelOffset）。 */
   waterEnabled: boolean
   /** 当前生效的雾/视距尺度倍率（1 = 与官方/lab 逐字一致）。 */
@@ -420,6 +431,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let waterPlane: WaterPlaneHandle | null = null
   let barrierLayer: THREE.InstancedMesh | null = null
   let barrierInstances = 0
+  /** 官方墙体网格层（Drystone / Barrier / SeaWall）与最近一次放置结果。 */
+  let wallLayer: WallLayerHandle | null = null
+  let wallSegments: WallSegment[] = []
+  let roadMarkings: RoadMarkingWeights[] | null = null
   /** 水面挂在场景根（世界空间水平面）；从宿主节点向上解析。 */
   let sceneRoot: THREE.Object3D | null = null
   let appliedViewDistanceScale = 1
@@ -441,7 +456,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let surfaceWarningEmitted = false
   let roadWarningEmitted = false
   let gridFailed = false
-  /** 护栏/水面层签名（参数变化时只重建这两层）。 */
+  /** 墙体/水面层签名（参数变化时只重建这两层）。 */
   let barrierSignature = ''
   let selfChecksDone = false
   let lastAuditSignature = ''
@@ -490,6 +505,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     assetDownloadedBytes: 0,
     assetVariant: assetStore.variant,
     barrierInstances: 0,
+    wallSegmentCount: 0,
     waterEnabled: false,
     viewDistanceScale: 1,
   }
@@ -607,6 +623,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadFieldTexture = createEmptyRoadFieldTexture()
     roadBand?.dispose()
     roadBand = null
+    roadMarkings = null
     densityField = null
     variationField = null
     roadResult = null
@@ -622,6 +639,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       barrierLayer = null
     }
     barrierInstances = 0
+    wallLayer?.dispose()
+    wallLayer = null
+    wallSegments = []
   }
 
   /** 水线 = 地形最低点 + water.levelOffset（lab：高度场的固定水位）。 */
@@ -672,7 +692,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   /**
    * Hand-drawn guide path for the road trace: node-local XZ waypoints are
    * transformed into world XZ (the height grid lives in world space).
-   * Fewer than two points = no guide path (legacy start/heading logic).
+   * Fewer than two points = no guide path, and the road is skipped entirely.
    */
   function resolveRoadWaypointsWorld(): RoadWaypoint[] {
     const waypoints = activeRoadWaypoints(props)
@@ -777,21 +797,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadFieldData = null
     roadBucketTable = []
 
-    if (props.road.enabled) {
-      const waypointWorld = resolveRoadWaypointsWorld()
-      const waypointMode = waypointWorld.length >= 2
-      // Guide mode overrides start/heading entirely: the road starts at the
-      // first drawn point and ends at the last one.
-      const startX = waypointMode ? waypointWorld[0]!.x : (props.road.startX ?? (grid.minX + grid.maxX) * 0.5)
-      const startZ = waypointMode ? waypointWorld[0]!.z : (props.road.startZ ?? (grid.minZ + grid.maxZ) * 0.5)
-      const headingRad = props.road.headingDeg != null
-        ? degreesToRadians(props.road.headingDeg)
-        : resolveSeedHeadingRad(props.seed)
+    // 道路完全由手绘路径生成：不足 2 个路径点时不建路，初始化与清空路径后
+    // 都保持无道路状态（等价于关闭公路开关）。追踪器自身的无路径回退分支
+    //（startX/startZ/headingRad）由此不再被组件触发。
+    const waypointWorld = resolveRoadWaypointsWorld()
+    if (props.road.enabled && waypointWorld.length >= 2) {
+      // 起点取自路径首点，初始朝向取自首点到次点的走向；首两点重合时
+      // traceRoadPath 回退到下面传入的种子朝向。
       roadResult = traceRoadPath(grid, {
-        startX,
-        startZ,
-        headingRad,
-        waypoints: waypointMode ? waypointWorld : null,
+        startX: waypointWorld[0]!.x,
+        startZ: waypointWorld[0]!.z,
+        headingRad: resolveSeedHeadingRad(props.seed),
+        waypoints: waypointWorld,
         waypointTolerance: props.road.waypointTolerance,
         stepLength: props.road.stepLength,
         feelDistance: props.road.feelDistance,
@@ -835,7 +852,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     applySceneViewDistanceScale()
     applyStaticSurfaceUniforms()
     barrierSignature = resolveBarrierSignature()
-    buildBarrier()
+    buildWalls()
     buildWater()
     releaseAllBatches()
     dirty.instances = true
@@ -856,14 +873,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     setSlowroadsSceneViewDistanceScale(appliedViewDistanceScale)
   }
 
-  /** 护栏/水面层签名：这些参数变化时只需重建这两层（护栏放置依赖道路形状与水位）。 */
+  /** 墙体/水面层签名：这些参数变化时只需重建这两层（墙体放置依赖道路形状与水位）。 */
   function resolveBarrierSignature(): string {
     return jsonKey([
-      props.barrier,
+      props.walls,
       props.water,
       props.road.enabled,
       props.road.width,
       props.road.shoulderWidth,
+      props.road.flattenBand,
+      props.road.flattenStrength,
       props.seed,
     ])
   }
@@ -926,70 +945,180 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
   }
 
-  /** 木护栏层（lab：BARRIER_RAIL_REGIONS 走植被层渲染，单片面 0.35m / alphaTest 0.35 / 风摆 0）。 */
-  function buildBarrier(): void {
+  /** 沿路里程采样器（官方 `nodeSpacing` 网格用）。 */
+  function createRoadAlongSampler(
+    nodes: ReadonlyArray<RoadTraceNode>,
+  ): (along: number) => { x: number; z: number; y: number; heading: number } {
+    const cumulative = new Float64Array(nodes.length)
+    for (let i = 1; i < nodes.length; i += 1) {
+      const previous = nodes[i - 1]!
+      const current = nodes[i]!
+      cumulative[i] = cumulative[i - 1]! + Math.hypot(current.x - previous.x, current.z - previous.z)
+    }
+    const total = cumulative[nodes.length - 1] ?? 0
+    return (along: number) => {
+      const clamped = Math.max(0, Math.min(total, along))
+      let low = 0
+      let high = nodes.length - 1
+      while (low < high - 1) {
+        const mid = (low + high) >> 1
+        if (cumulative[mid]! <= clamped) {
+          low = mid
+        } else {
+          high = mid
+        }
+      }
+      const from = nodes[low]!
+      const to = nodes[Math.min(nodes.length - 1, low + 1)]!
+      const span = Math.max(1e-6, cumulative[Math.min(nodes.length - 1, low + 1)]! - cumulative[low]!)
+      const t = (clamped - cumulative[low]!) / span
+      return {
+        x: from.x + (to.x - from.x) * t,
+        z: from.z + (to.z - from.z) * t,
+        y: from.y + (to.y - from.y) * t,
+        heading: from.heading,
+      }
+    }
+  }
+
+  /**
+   * 官方路侧墙体层（Drystone / Barrier / Fence / SeaWall）：
+   *  - 放置由 `computeWallSegments` 按官方判定与段长规则给出；
+   *  - 木栏沿用植被精灵层（BARRIER_RAIL_REGIONS），其余三类走 `createWallLayers` 网格；
+   *  - 与 lab 的差异只在取样入口：这里地形来自导入网格，压平后的可见地表按
+   *    地表顶点着色器的同一公式（`plWeight = 1 - smoothstep(inner, outer, distance)`，
+   *    `delta = (roadHeight - terrainY) * weight * strength`）在 JS 侧复算。
+   */
+  function buildWalls(): void {
     if (barrierLayer) {
       disposeFoliageLayerMesh(barrierLayer)
       barrierLayer = null
     }
     barrierInstances = 0
+    wallLayer?.dispose()
+    wallLayer = null
+    wallSegments = []
     if (
       !grid
       || !roadResult
       || roadResult.nodes.length < 2
       || !foliageRoot
-      || !props.barrier.enabled
-      || props.barrier.density <= 0
+      || !hostObject
     ) {
       return
     }
-    const segments = computeBarrierSegments(grid, roadResult.nodes, {
-      seed: props.seed,
-      density: props.barrier.density,
-      spacing: props.barrier.spacing,
-      dropThreshold: props.barrier.dropThreshold,
+    const flatten = roadFlattenParams(props)
+    const roadField = roadFieldData
+    const waterLevel = resolveWaterLevel()
+    const activeGrid = grid
+    const sampleRoad = createRoadAlongSampler(roadResult.nodes)
+    const wallProbe = {
+      length: roadResult.length,
       halfWidth: roadHalfWidth(props),
-      shoulderWidth: props.road.shoulderWidth,
+      waterLevel,
+      terrainHeightAt: (x: number, z: number): number => activeGrid.sampleHeight(x, z) ?? waterLevel,
+      surfaceHeightAt: (x: number, z: number): number => {
+        const terrainY = activeGrid.sampleHeight(x, z)
+        if (terrainY == null || !roadField || flatten.strength <= 0) {
+          return terrainY ?? waterLevel
+        }
+        const distance = roadField.distanceAt(x, z)
+        const weight = 1 - smoothstep(flatten.innerRadius, flatten.outerRadius, distance)
+        if (weight <= 0.001) {
+          return terrainY
+        }
+        const roadHeight = roadField.heightAt(x, z)
+        if (roadHeight == null) {
+          return terrainY
+        }
+        return terrainY + (roadHeight - terrainY) * weight * flatten.strength
+      },
+      sampleRoad,
+      shadowAt: (x: number, z: number): number => {
+        if (!densityField) {
+          return 0
+        }
+        return forestDensityClassAt(densityField, x, z) / 3
+      },
+    }
+    wallSegments = computeWallSegments(wallProbe, roadResult.nodes, {
+      seed: props.seed,
+      roadWidth: roadHalfWidth(props) * 2,
+      density: props.walls.drystone.density,
+      detail: 3,
+      style: ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE],
     })
-    if (!segments.length) {
+    stats.wallSegmentCount = wallSegments.length
+    if (!wallSegments.length) {
       return
     }
-    const spec: FoliageMaterialSpec = {
-      kind: 'barrier',
-      tier: 'all',
-      species: 0,
-      singlePlane: true,
-      tint: 0xffffff,
-      farTintScale: 1,
-      hasAlphaTexture: false,
-      hasNormalTexture: false,
-      card: null,
-      distanceAlpha: false,
-      useDensityShadow: false,
-      key: 'barrier:all',
+
+    // ---- 木栏（官方 Fence）：沿用植被精灵层的双横栏区域 ----
+    if (props.walls.fence.enabled) {
+      const fenceSamples = wallFenceSpriteSamples(wallSegments)
+      if (fenceSamples.length) {
+        const spec: FoliageMaterialSpec = {
+          kind: 'barrier',
+          tier: 'all',
+          species: 0,
+          singlePlane: true,
+          tint: 0xffffff,
+          farTintScale: 1,
+          hasAlphaTexture: false,
+          hasNormalTexture: false,
+          card: null,
+          distanceAlpha: false,
+          useDensityShadow: false,
+          key: 'barrier:all',
+        }
+        const handle = getFoliageMaterialHandle(spec)
+        const instances: FoliageSpriteInstance[] = fenceSamples.map((sample) => ({
+          x: sample.x,
+          y: sample.y,
+          z: sample.z,
+          rotation: sample.rotation,
+          scale: 1,
+          region: BARRIER_RAIL_REGIONS[sample.variant] ?? BARRIER_RAIL_REGIONS[0] ?? null,
+          cell: sample.variant,
+          roadProx: 0,
+        }))
+        const mesh = createFoliageLayerMesh(
+          instances,
+          handle.material,
+          BARRIER_UNIT_SIZE,
+          hostInverse,
+          { billboard: false },
+        )
+        tagArtifact(mesh)
+        foliageRoot.add(mesh)
+        barrierLayer = mesh
+        barrierInstances = instances.length
+      }
     }
-    const handle = getFoliageMaterialHandle(spec)
-    const instances: FoliageSpriteInstance[] = segments.map((segment) => ({
-      x: segment.x,
-      y: segment.y,
-      z: segment.z,
-      rotation: segment.rotation,
-      scale: segment.scale,
-      region: BARRIER_RAIL_REGIONS[segment.variant] ?? BARRIER_RAIL_REGIONS[0] ?? null,
-      cell: segment.variant,
-      roadProx: 0,
-    }))
-    const mesh = createFoliageLayerMesh(
-      instances,
-      handle.material,
-      BARRIER_UNIT_SIZE,
-      hostObject ? hostInverse : null,
-      { billboard: false },
-    )
-    tagArtifact(mesh)
-    foliageRoot.add(mesh)
-    barrierLayer = mesh
-    barrierInstances = instances.length
+
+    // ---- 石墙 / 硬护栏 / 海墙：网格层 ----
+    const entry = SEASON_CATALOG[seasonAssetsSeason ?? currentSeason]
+    const placeholder = getSharedPlaceholderTexture()
+    wallLayer = createWallLayers({
+      segments: wallSegments,
+      textures: {
+        drystone: textureFor(entry.walls.drystone.id) ?? placeholder,
+        barrier: textureFor(entry.walls.barrier.id) ?? placeholder,
+        seaWall: textureFor(entry.walls.seaWall.id) ?? placeholder,
+      },
+      shadowFactor: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].shadowFactor,
+      radiance: appliedLighting.radiance,
+      hostInverse,
+    })
+    wallLayer.setVisibility({
+      drystone: props.walls.drystone.enabled,
+      barrier: props.walls.barrier.enabled,
+      seaWall: props.walls.seaWall.enabled,
+    })
+    for (const child of wallLayer.group.children) {
+      tagArtifact(child)
+    }
+    hostObject.add(wallLayer.group)
   }
 
   /** 水面（lab water.ts）：世界空间水平面，水线 = 地形最低点 + water.levelOffset。 */
@@ -1023,16 +1152,29 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     const season = seasonAssets ? seasonAssetsSeason ?? currentSeason : currentSeason
-    const baseTexture = textureFor(SEASON_CATALOG[season].road.base.id) ?? getSharedPlaceholderTexture()
-    const overlayRef = SEASON_CATALOG[season].road.overlay
-    const overlayTexture = overlayRef ? textureFor(overlayRef.id) : null
+    const halfWidth = roadHalfWidth(props)
+    const singleTrack = isSingleTrackRoad(halfWidth * 2)
+    // 官方划线权重（宽路才启用）：树影取路缘森林密度，海拔门限以水位为零点。
+    roadMarkings = singleTrack
+      ? null
+      : computeRoadMarkings(roadResult.nodes, {
+          style: ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE],
+          nodeSpacing: props.road.stepLength,
+          shadowAt: (x: number, z: number) => (
+            densityField ? forestDensityClassAt(densityField, x, z) / 3 : 0
+          ),
+          edgeOffset: halfWidth,
+          waterLevel: resolveWaterLevel(),
+        })
     roadBand = createRoadBand({
       nodes: roadResult.nodes,
-      halfWidth: roadHalfWidth(props),
+      halfWidth,
       stepLength: 2,
       density: densityField,
-      textures: { base: baseTexture, overlay: overlayTexture },
+      textures: roadBandTexturesFor(season),
       season,
+      markings: roadMarkings,
+      nodeSpacing: props.road.stepLength,
       hostInverse: hostObject ? hostInverse : null,
       // 粗网格地形（3dtiles 导出 GLB 平均 40m+ 三角面）无法精确表达 7m 路基
       // 压平，路面带会被地形三角面穿插；抬升量随源三角面尺寸自适应。
@@ -1042,6 +1184,36 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadBand.setRadiance(appliedLighting.radiance)
     tagArtifact(roadBand.mesh)
     hostObject.add(roadBand.mesh)
+  }
+
+  /** 当前季节 + 路宽对应的官方路面贴图集（单车道 `roadSingle` / 宽路 `road` + 划线）。 */
+  function roadBandTexturesFor(season: SeasonId): RoadBandTextures {
+    const entry = SEASON_CATALOG[season]
+    const placeholder = getSharedPlaceholderTexture()
+    if (isSingleTrackRoad(roadHalfWidth(props) * 2)) {
+      return {
+        base: textureFor(entry.road.single.base.id) ?? placeholder,
+        overlay: entry.road.single.overlay ? textureFor(entry.road.single.overlay.id) : null,
+        paint: null,
+        textureStretch: entry.road.single.stretch ?? 2,
+      }
+    }
+    const paint = entry.road.wide.paint
+    return {
+      base: textureFor(entry.road.wide.base.id) ?? placeholder,
+      overlay: entry.road.wide.overlay ? textureFor(entry.road.wide.overlay.id) : null,
+      paint: paint
+        ? {
+            dashed: textureFor(paint.dashed.id) ?? placeholder,
+            solid: textureFor(paint.solid.id) ?? placeholder,
+            solidLeft: textureFor(paint.solidLeft.id) ?? placeholder,
+            solidRight: textureFor(paint.solidRight.id) ?? placeholder,
+            mergeLeft: textureFor(paint.mergeLeft.id) ?? placeholder,
+            mergeRight: textureFor(paint.mergeRight.id) ?? placeholder,
+          }
+        : null,
+      textureStretch: entry.road.wide.stretch ?? 1,
+    }
   }
 
   function applyStaticSurfaceUniforms(): void {
@@ -1115,7 +1287,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       waterPlane.setVisible(props.water.enabled)
     }
     if (barrierLayer) {
-      barrierLayer.visible = props.barrier.enabled
+      barrierLayer.visible = props.walls.fence.enabled
     }
     roadBand?.setVisible(props.road.enabled)
     for (const handle of foliageMaterials.values()) {
@@ -1203,8 +1375,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         })
         break
       case 'barrier':
+        // 木栏贴图来自当前季节的 `walls.fence` 槽（官方 spring_wall_barrier_wood）。
         setFoliageMaterialTextures(handle, {
-          atlas: pick(SHARED_TEXTURES.barrier.id),
+          atlas: pick(SEASON_CATALOG[seasonAssetsSeason ?? currentSeason].walls.fence.id),
           noise: pick(SHARED_TEXTURES.noise.id),
           grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
           detailFar: pick(entry.surface.detailFar.id),
@@ -1948,6 +2121,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.assetDownloadedBytes = storeStats.downloadedBytes
     stats.assetVariant = storeStats.variant
     stats.barrierInstances = barrierInstances
+    stats.wallSegmentCount = wallSegments.length
     stats.waterEnabled = Boolean(waterPlane && waterPlane.mesh.visible)
     stats.viewDistanceScale = appliedViewDistanceScale
   }
@@ -2034,11 +2208,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       applyFoliageSeasonToHandle(handle)
     }
     const entry = SEASON_CATALOG[season]
-    const placeholder = getSharedPlaceholderTexture()
-    roadBand?.setSeason(season, {
-      base: textureFor(entry.road.base.id) ?? placeholder,
-      overlay: entry.road.overlay ? textureFor(entry.road.overlay.id) : null,
-    })
+    roadBand?.setSeason(season, roadBandTexturesFor(season))
+    if (wallLayer) {
+      wallLayer.setTextures(
+        {
+          drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
+          barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
+          seaWall: textureFor(entry.walls.seaWall.id) ?? getSharedPlaceholderTexture(),
+        },
+        SEASON_PARAMS[season].shadowFactor,
+        appliedLighting.radiance,
+      )
+    }
     applyTreeMeshSeasonTextures()
     // 换季复用放置：只重建植被网格层（不重算 chunkPlan、不重建地形）。
     releaseAllBatches()
@@ -2063,6 +2244,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlFresnelIntensity.value = fresnel
     roadBand?.setRadiance(radiance)
     roadBand?.setFresnel(fresnel)
+    if (wallLayer) {
+      const entry = SEASON_CATALOG[seasonAssetsSeason ?? currentSeason]
+      wallLayer.setTextures(
+        {
+          drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
+          barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
+          seaWall: textureFor(entry.walls.seaWall.id) ?? getSharedPlaceholderTexture(),
+        },
+        shadowFactor,
+        radiance,
+      )
+    }
     treeMeshManager?.setLighting({ radiance, shadowFactor })
     for (const handle of foliageMaterials.values()) {
       setFoliageMaterialLighting(handle, { radiance, shadowFactor, fresnel })
@@ -2149,7 +2342,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       const nextBarrierSignature = resolveBarrierSignature()
       if (nextBarrierSignature !== barrierSignature) {
         barrierSignature = nextBarrierSignature
-        buildBarrier()
+        buildWalls()
         buildWater()
       }
     }
@@ -2228,7 +2421,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           props.surface,
           props.canopy,
           props.wind,
-          props.barrier,
+          props.walls,
           props.water,
           props.road.enabled,
           props.road.width,

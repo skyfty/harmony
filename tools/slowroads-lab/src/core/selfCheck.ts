@@ -8,7 +8,17 @@ import {
 } from './placement'
 import { createRoadProfile } from './roadProfile'
 import { traceRoadPath, type RoadTraceOptions } from './roadTrace'
-import { computeBarrierSegments } from './barrier'
+import { computeRoadMarkings } from './roadMarkings'
+import {
+  BARRIER_TUNING,
+  DEFAULT_ROAD_STYLE,
+  DRYSTONE,
+  ROAD_STYLE_PROFILES,
+  SEAWALL,
+  WALL_NODE_SPACING,
+  WALL_SEGMENT_RULES,
+} from './roadStyle'
+import { computeWallSegments } from './walls'
 import {
   TREE_FAR_VARIANTS,
   bushVariantEntries,
@@ -183,12 +193,64 @@ export function runSelfChecks(): SelfCheckResult[] {
   }
   record('sprite variantUnit in range', variantUnitOk)
 
-  const barrier = computeBarrierSegments(field, profile, { seed, density: 1 })
-  const barrierClearance = profile.halfWidth + profile.shoulderWidth - 0.31
+  // 官方墙体（Barrier/Fence/Drystone/SeaWall）：段长、离路净空与确定性。
+  const wallSettings = {
+    seed,
+    roadWidth: profile.halfWidth * 2,
+    density: 1,
+    detail: 3,
+    waterLevel: field.waterLevel,
+    style: ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE],
+    shadowAt: () => 0,
+  }
+  const walls = computeWallSegments(field, profile, profile.nodes, wallSettings)
+  const wallsRepeat = computeWallSegments(field, profile, profile.nodes, wallSettings)
   record(
-    'barrier clear of road',
-    barrier.every((segment) => profile.distanceTo(segment.x, segment.z) >= barrierClearance),
-    `segments=${barrier.length}`,
+    'wall generation deterministic',
+    JSON.stringify(walls.map((segment) => [segment.type, segment.side, segment.startAlong, segment.endAlong]))
+      === JSON.stringify(wallsRepeat.map((segment) => [segment.type, segment.side, segment.startAlong, segment.endAlong])),
+    `segments=${walls.length}`,
+  )
+  // 官方段长：最长 MAX_WALL_LENGTH(30 节点)，Barrier/Fence 最短 MIN_WALL_LENGTH(3 节点)，
+  // 其余类型至少 1 个节点跨度（lab 采样下限 2 个点 = 10m）。
+  const wallLengthOk = (segment: (typeof walls)[number]): boolean => {
+    const nodes = (segment.endAlong - segment.startAlong) / WALL_NODE_SPACING
+    const minNodes = segment.type === 'barrier' || segment.type === 'fence'
+      ? WALL_SEGMENT_RULES.minRunNodes
+      : 1
+    return nodes <= WALL_SEGMENT_RULES.maxRunNodes + 1e-6 && nodes >= minNodes - 1e-6
+  }
+  record(
+    'wall segments within official length rules',
+    walls.every(wallLengthOk),
+    walls
+      .filter((segment) => !wallLengthOk(segment))
+      .map((segment) => `${segment.type}@${Math.round(segment.startAlong)}-${Math.round(segment.endAlong)}`)
+      .slice(0, 4)
+      .join(','),
+  )
+  record(
+    'wall clear of road',
+    walls.every((segment) => {
+      const clearance = segment.type === 'drystone'
+        ? profile.halfWidth + DRYSTONE.margin - 1e-6
+        : profile.halfWidth + (segment.type === 'seaWall' ? SEAWALL.distance : BARRIER_TUNING.wide.distance) - 1e-6
+      return Math.abs(segment.distance) + 1e-6 >= clearance
+    }),
+  )
+  // 划线：直路段只有虚线（实线权重必须落空）。
+  const markings = computeRoadMarkings(profile.nodes, {
+    style: ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE],
+    nodeSpacing: 8,
+    shadowAt: () => 0,
+    edgeOffset: profile.halfWidth,
+    waterLevel: field.waterLevel,
+  })
+  record(
+    'markings weights in {0,1}',
+    markings.every((weight) => [weight.solid, weight.solidLeft, weight.solidRight, weight.mergeLeft, weight.mergeRight]
+      .every((flag) => typeof flag === 'boolean')),
+    `nodes=${markings.length}`,
   )
 
   const failed = results.filter((result) => !result.ok)
@@ -351,9 +413,29 @@ export function runSeasonCatalogChecks(input: SeasonCatalogCheckInput): SelfChec
     expectSpace(entry.trees.coniferA.colorSpace === 'srgb', `${season}:coniferA`)
     expectSpace(entry.imposters.mapA.colorSpace === 'srgb' && entry.imposters.mapB.colorSpace === 'srgb', `${season}:imposterMaps`)
     expectSpace(entry.imposters.normA.colorSpace === 'linear' && entry.imposters.normB.colorSpace === 'linear', `${season}:imposterNormals`)
-    expectSpace(entry.road.base.colorSpace === 'srgb', `${season}:roadBase`)
-    if (entry.road.overlay) {
-      expectSpace(entry.road.overlay.colorSpace === 'srgb', `${season}:roadOverlay`)
+    expectSpace(entry.road.single.base.colorSpace === 'srgb', `${season}:roadSingleBase`)
+    expectSpace(entry.road.wide.base.colorSpace === 'srgb', `${season}:roadWideBase`)
+    if (entry.road.single.overlay) {
+      expectSpace(entry.road.single.overlay.colorSpace === 'srgb', `${season}:roadSingleOverlay`)
+    }
+    if (entry.road.wide.overlay) {
+      expectSpace(entry.road.wide.overlay.colorSpace === 'srgb', `${season}:roadWideOverlay`)
+    }
+    // 划线贴图与墙体贴图都按 srgb 解码（官方 U(url) 默认 srgb）。
+    if (entry.road.wide.paint) {
+      for (const ref of [
+        entry.road.wide.paint.dashed,
+        entry.road.wide.paint.solid,
+        entry.road.wide.paint.solidLeft,
+        entry.road.wide.paint.solidRight,
+        entry.road.wide.paint.mergeLeft,
+        entry.road.wide.paint.mergeRight,
+      ]) {
+        expectSpace(ref.colorSpace === 'srgb', `${season}:roadPaint`)
+      }
+    }
+    for (const ref of [entry.walls.barrier, entry.walls.seaWall, entry.walls.fence, entry.walls.drystone]) {
+      expectSpace(ref.colorSpace === 'srgb', `${season}:wall`)
     }
   }
   record('texture color spaces match official loader', colorSpaceNotes.length === 0, colorSpaceNotes.slice(0, 6).join(', '))

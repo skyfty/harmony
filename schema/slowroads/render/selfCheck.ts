@@ -634,9 +634,29 @@ export function runSlowroadsSeasonChecks(): SlowroadsSelfCheckResult[] {
     expectSpace(entry.trees.coniferA.colorSpace === 'srgb', `${season}:coniferA`)
     expectSpace(entry.imposters.mapA.colorSpace === 'srgb' && entry.imposters.mapB.colorSpace === 'srgb', `${season}:imposterMaps`)
     expectSpace(entry.imposters.normA.colorSpace === 'linear' && entry.imposters.normB.colorSpace === 'linear', `${season}:imposterNormals`)
-    expectSpace(entry.road.base.colorSpace === 'srgb', `${season}:roadBase`)
-    if (entry.road.overlay) {
-      expectSpace(entry.road.overlay.colorSpace === 'srgb', `${season}:roadOverlay`)
+    expectSpace(entry.road.single.base.colorSpace === 'srgb', `${season}:roadSingleBase`)
+    expectSpace(entry.road.wide.base.colorSpace === 'srgb', `${season}:roadWideBase`)
+    if (entry.road.single.overlay) {
+      expectSpace(entry.road.single.overlay.colorSpace === 'srgb', `${season}:roadSingleOverlay`)
+    }
+    if (entry.road.wide.overlay) {
+      expectSpace(entry.road.wide.overlay.colorSpace === 'srgb', `${season}:roadWideOverlay`)
+    }
+    // 划线贴图与墙体贴图都按 srgb 解码（官方 U(url) 默认 srgb）。
+    if (entry.road.wide.paint) {
+      for (const ref of [
+        entry.road.wide.paint.dashed,
+        entry.road.wide.paint.solid,
+        entry.road.wide.paint.solidLeft,
+        entry.road.wide.paint.solidRight,
+        entry.road.wide.paint.mergeLeft,
+        entry.road.wide.paint.mergeRight,
+      ]) {
+        expectSpace(ref.colorSpace === 'srgb', `${season}:roadPaint`)
+      }
+    }
+    for (const ref of [entry.walls.barrier, entry.walls.seaWall, entry.walls.fence, entry.walls.drystone]) {
+      expectSpace(ref.colorSpace === 'srgb', `${season}:wall`)
     }
   }
   record('texture color spaces match official loader', colorSpaceNotes.length === 0, colorSpaceNotes.slice(0, 6).join(', '))

@@ -1,7 +1,9 @@
 # slowroads.io 官方渲染基准（反推归档）
 
 来源：官方线上包体解包产物（`%TEMP%/sr`，chunk 名带内容哈希；摘录见同目录
-`bundle-excerpts.js` 与 `*.glsl`）。本目录是 lab / schema 对齐官方观感的规范。
+`bundle-excerpts.js`、`*.glsl` 与第七批新增的
+`road-markings.js` / `road-paint.js` / `wall-controller.js` / `walls.js` /
+`world-constants.js` / `season-walls-and-roads.js`）。本目录是 lab / schema 对齐官方观感的规范。
 
 ## 渲染器
 
@@ -110,3 +112,34 @@ imposter 顶点同样计算该值但**没有**柏树兜底。随后按层施加�
 - schema：`slowroads/render/environmentRuntime.ts`（三灯状态）、`proceduralLandscape/surfaceMaterial.ts`
   （Lambert + heather 官方公式 + radiance 合成 + 环境光树影调制）、`instancing.ts`（草/灌木/树卡自发光）、
   `roadBand.ts`（Lambert + radiance）、`treeMeshes.ts`（纯 Lambert）。
+
+## 道路划线（第七批，2026-10）
+
+- 路型选择：`roadWidth < 2.25` 用 `maps.roadSingle`（`textureStretch = 2`），否则用
+  `maps.road`（`road_base` + 划线，`stretch = 1`）；宽路片元在**未拉伸**的 uv 上采样
+  `paintDashed`，按 per-vertex 权重（`smoothstep(0.49, 0.51)`）叠加 `solid` /
+  `solidLeft` / `solidRight`，`mergeLeft` / `mergeRight` 被实线
+  `1 - ceil(max(wSolidLeft, wSolidRight))` 抑制，最后以 `paintCol.a` 与底图混色
+  （摘录 `road-paint.js`）。
+- 权重算法：`chunks__SettingsManager.a31845d6.js` class `Mr`（摘录 `road-markings.js`）
+  在 `markingsMargin` 个节点的窗口上累加 `da` / `g` / 路缘树影，与 `solidLineThreshold`
+  和 `solidLineCrestThreshold` 三项加权比较，逐节点写 0/1；实线起点回填
+  `We = margin / 2` 个节点并在起点前打 merge；`L7 = 9` 节点内接续上一段。
+  四种路型的阈值见 `ROAD_STYLE_PROFILES`（STRAIGHT/CASUAL/NORMAL/WINDING）。
+- 落点：lab `core/roadMarkings.ts` + `lab/roadMesh.ts`；迁移端
+  `proceduralLandscape/roadMarkings.ts` + `roadBand.ts`。
+
+## 路侧墙体（第七批，2026-10）
+
+- 官方 `WallController`（摘录 `wall-controller.js`）从节点标记
+  `dswl/dswr`（干砌石墙）、`lWallDist/rWallDist + wallSide`（护栏/海墙/桥墙）取段，
+  按 `MAX_WALL_LENGTH(30 节点)` / `MIN_WALL_LENGTH(3)` / `MIN_WALL_GAP(4)` 规则合并切分，
+  生成每类墙的网格段（摘录 `walls.js`）。
+- 常量（摘录 `world-constants.js`，NORMAL/REGULAR 档）：
+  `DRYSTONE_DIST = roadWidth + 2`、`DRYSTONE_WIDTH 0.32 / WIDTH_BOTTOM 0.38 / HEIGHT 1.1 /
+  SINK 0.2 / UV_HEIGHT 0.475 / UV_SCALE 5`、`"wall"` 噪声 `(seed 31, 0.2, 0.1)`；
+  `BARRIER_DIST 0.4`（窄路 0.8）、`SEAWALL_DIST 0.8`、`SEAWALL_ELEV 4`；
+  护栏面板高 `0.78`，横档比例 `.55/.68/.88`；海墙截面 `0.25 × 1.0`（外扩 0.15、下沉 0.2）。
+- 判定门限按路宽二选一（宽路档 2 / 1.5 / 0.4 / 0.2 / 0.4，窄路档 4 / 2.5 / 1 / 0.5 / 0.8），
+  lab 侧再按起伏尺度 ÷4 折算（`LAB_RELIEF_SCALE`，同地表高度带 ×4 口径）。
+- 季节贴图绑定见 `season-walls-and-roads.js`；lab/迁移端回退表见 README「已知差异」。

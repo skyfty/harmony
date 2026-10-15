@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 import './style.css'
 import assetsCatalog from './core/assets-catalog.json'
-import { computeBarrierSegments } from './core/barrier'
 import { createHeightfield, type Heightfield } from './core/heightfield'
 import { degreesToRadians } from './core/noise'
 import {
@@ -13,6 +12,13 @@ import {
 } from './core/placement'
 import { createRoadProfile, type RoadProfile } from './core/roadProfile'
 import { resolveSeedHeadingRad, traceRoadPath } from './core/roadTrace'
+import { computeRoadMarkings, type RoadMarkingWeights } from './core/roadMarkings'
+import {
+  DEFAULT_ROAD_STYLE,
+  ROAD_STYLE_PROFILES,
+  isSingleTrackRoad,
+} from './core/roadStyle'
+import { computeWallSegments, type WallSegment } from './core/walls'
 import {
   runEnvironmentChecks,
   runMaterialUniformCoverageChecks,
@@ -73,7 +79,8 @@ import {
   setFoliageWindStrength,
   type SpriteInstance,
 } from './lab/foliage'
-import { createRoadMesh, type RoadMeshHandle } from './lab/roadMesh'
+import { createRoadMesh, type RoadMeshHandle, type RoadPaintTextures, type RoadTextureSet } from './lab/roadMesh'
+import { createWallMeshes, fenceRailSprites, type WallMeshHandle } from './lab/wallMesh'
 import { createTerrainMaterial, type TerrainMaterialHandle, type TerrainTextureSet } from './lab/terrainMaterial'
 import { createTerrainMeshBuilder, type TerrainMeshBuilder } from './lab/terrainMesh'
 import { createTreeMeshManager, type TreeMeshManager, type TreeMeshTextures } from './lab/treeMeshes'
@@ -93,6 +100,10 @@ const WORLD_SIZE = 1600
 const TERRAIN_SEGMENTS = 1024
 const SKY_COLOR = 0xc9dcee
 const ROAD_SHOULDER_WIDTH = 2.5
+/** 官方 `midline.nodeSpacing` 的 lab 等价步长（追踪节点间距，米）。 */
+const ROAD_TRACE_STEP = 8
+/** 官方 `X.detail`：lab 固定 high 档（≥2 ⇒ Barrier / Fence 交替生成）。 */
+const LAB_DETAIL = 3
 const WIND_FACTOR = { grass: 0.1, bush: 0.06, tree: 0.03, barrier: 0 } as const
 
 function requireElement<T extends Element>(selector: string): T {
@@ -136,7 +147,20 @@ interface SeasonRuntimeAssets {
   conifer: { texture: THREE.Texture; alphaTexture: THREE.Texture; regions: SpriteRegion[] }
   imposterBroadleaf: { texture: THREE.Texture; normalTexture: THREE.Texture }
   imposterConifer: { texture: THREE.Texture; normalTexture: THREE.Texture }
-  road: { base: THREE.Texture; overlay: THREE.Texture | null }
+  road: {
+    single: { base: THREE.Texture; overlay: THREE.Texture | null }
+    wide: {
+      base: THREE.Texture
+      overlay: THREE.Texture | null
+      paint: RoadPaintTextures | null
+    }
+  }
+  walls: {
+    barrier: THREE.Texture
+    seaWall: THREE.Texture
+    fence: THREE.Texture
+    drystone: THREE.Texture
+  }
   treeMeshes: TreeMeshTextures
 }
 
@@ -147,7 +171,6 @@ interface SharedRuntimeAssets {
   rockBump: THREE.Texture
   seaWaves: THREE.Texture
   clouds: THREE.Texture
-  barrier: THREE.Texture
 }
 
 let assetStore: LabAssetStore | null = null
@@ -162,6 +185,9 @@ let terrainBuilder: TerrainMeshBuilder | null = null
 let terrainMesh: THREE.Mesh | null = null
 let terrainMaterialHandle: TerrainMaterialHandle | null = null
 let roadHandle: RoadMeshHandle | null = null
+let roadMarkings: RoadMarkingWeights[] | null = null
+let wallHandle: WallMeshHandle | null = null
+let wallSegments: WallSegment[] = []
 let treeMeshManager: TreeMeshManager | null = null
 let water: WaterHandle | null = null
 let environmentHandles: {
@@ -208,14 +234,13 @@ function requireStore(): LabAssetStore {
 async function loadSharedAssets(onProgress?: (loaded: number, total: number) => void): Promise<SharedRuntimeAssets> {
   const requests: Array<{ id: string; options: { colorSpace: 'srgb' | 'linear'; tiling: boolean } }> = [
     // 色彩空间全部来自季节目录（与官方 U(url, aniso, wrap, colorSpace) 调用点一致）：
-    // noise/rockBump/grassVariation/seaWaves/clouds = srgb-linear；barrier = srgb。
+    // noise/rockBump/grassVariation/seaWaves/clouds = srgb-linear。
     { id: SHARED_TEXTURES.noise.id, options: { colorSpace: SHARED_TEXTURES.noise.colorSpace, tiling: true } },
     { id: SHARED_TEXTURES.bushNoise.id, options: { colorSpace: SHARED_TEXTURES.bushNoise.colorSpace, tiling: true } },
     { id: SHARED_TEXTURES.grassVariation.id, options: { colorSpace: SHARED_TEXTURES.grassVariation.colorSpace, tiling: true } },
     { id: SHARED_TEXTURES.rockBump.id, options: { colorSpace: SHARED_TEXTURES.rockBump.colorSpace, tiling: true } },
     { id: SHARED_TEXTURES.seaWaves.id, options: { colorSpace: SHARED_TEXTURES.seaWaves.colorSpace, tiling: true } },
     { id: SHARED_TEXTURES.clouds.id, options: { colorSpace: SHARED_TEXTURES.clouds.colorSpace, tiling: true } },
-    { id: SHARED_TEXTURES.barrier.id, options: { colorSpace: SHARED_TEXTURES.barrier.colorSpace, tiling: false } },
   ]
   const textures = await requireStore().textureSet(requests, onProgress)
   return {
@@ -225,7 +250,6 @@ async function loadSharedAssets(onProgress?: (loaded: number, total: number) => 
     rockBump: textures.get(SHARED_TEXTURES.rockBump.id)!,
     seaWaves: textures.get(SHARED_TEXTURES.seaWaves.id)!,
     clouds: textures.get(SHARED_TEXTURES.clouds.id)!,
-    barrier: textures.get(SHARED_TEXTURES.barrier.id)!,
   }
 }
 
@@ -256,10 +280,32 @@ async function loadSeasonAssets(
     { id: entry.imposters.normA.id, options: { colorSpace: entry.imposters.normA.colorSpace, tiling: false } },
     { id: entry.imposters.mapB.id, options: { colorSpace: entry.imposters.mapB.colorSpace, tiling: false } },
     { id: entry.imposters.normB.id, options: { colorSpace: entry.imposters.normB.colorSpace, tiling: false } },
-    { id: entry.road.base.id, options: { colorSpace: entry.road.base.colorSpace, tiling: true } },
+    { id: entry.road.single.base.id, options: { colorSpace: entry.road.single.base.colorSpace, tiling: true } },
+    { id: entry.road.wide.base.id, options: { colorSpace: entry.road.wide.base.colorSpace, tiling: true } },
+    // 官方墙体贴图（barrier = srgb + 透明像素；concrete/drystone 不透明白底）。
+    // 三类墙体网格的 u 沿墙推进（石墙每 5m 一个循环、护栏每 1.67m）⇒ 必须 Repeat，
+    // 否则 u>1 会被 ClampToEdge 拉成条纹（“材质花”）；v 始终在 0..1 内不受影响。
+    { id: entry.walls.barrier.id, options: { colorSpace: entry.walls.barrier.colorSpace, tiling: true } },
+    { id: entry.walls.seaWall.id, options: { colorSpace: entry.walls.seaWall.colorSpace, tiling: true } },
+    { id: entry.walls.fence.id, options: { colorSpace: entry.walls.fence.colorSpace, tiling: false } },
+    { id: entry.walls.drystone.id, options: { colorSpace: entry.walls.drystone.colorSpace, tiling: true } },
   ]
-  if (entry.road.overlay) {
-    requests.push({ id: entry.road.overlay.id, options: { colorSpace: entry.road.overlay.colorSpace, tiling: true } })
+  for (const roadSet of [entry.road.single, entry.road.wide]) {
+    if (roadSet.overlay) {
+      requests.push({ id: roadSet.overlay.id, options: { colorSpace: roadSet.overlay.colorSpace, tiling: true } })
+    }
+    if (roadSet.paint) {
+      for (const ref of [
+        roadSet.paint.dashed,
+        roadSet.paint.solid,
+        roadSet.paint.solidLeft,
+        roadSet.paint.solidRight,
+        roadSet.paint.mergeLeft,
+        roadSet.paint.mergeRight,
+      ]) {
+        requests.push({ id: ref.id, options: { colorSpace: ref.colorSpace, tiling: true } })
+      }
+    }
   }
   const textures = await requireStore().textureSet(requests, onProgress)
   const get = (ref: SeasonTextureRef): THREE.Texture => textures.get(ref.id)!
@@ -284,8 +330,30 @@ async function loadSeasonAssets(
     imposterBroadleaf: { texture: get(entry.imposters.mapA), normalTexture: get(entry.imposters.normA) },
     imposterConifer: { texture: get(entry.imposters.mapB), normalTexture: get(entry.imposters.normB) },
     road: {
-      base: get(entry.road.base),
-      overlay: entry.road.overlay ? get(entry.road.overlay) : null,
+      single: {
+        base: get(entry.road.single.base),
+        overlay: entry.road.single.overlay ? get(entry.road.single.overlay) : null,
+      },
+      wide: {
+        base: get(entry.road.wide.base),
+        overlay: entry.road.wide.overlay ? get(entry.road.wide.overlay) : null,
+        paint: entry.road.wide.paint
+          ? {
+              dashed: get(entry.road.wide.paint.dashed),
+              solid: get(entry.road.wide.paint.solid),
+              solidLeft: get(entry.road.wide.paint.solidLeft),
+              solidRight: get(entry.road.wide.paint.solidRight),
+              mergeLeft: get(entry.road.wide.paint.mergeLeft),
+              mergeRight: get(entry.road.wide.paint.mergeRight),
+            }
+          : null,
+      },
+    },
+    walls: {
+      barrier: get(entry.walls.barrier),
+      seaWall: get(entry.walls.seaWall),
+      fence: get(entry.walls.fence),
+      drystone: get(entry.walls.drystone),
     },
     treeMeshes: {
       broadleafD: get(entry.trees.broadleafD),
@@ -383,6 +451,10 @@ function clearTerrain(): void {
   terrainBuilder = null
   roadHandle?.dispose()
   roadHandle = null
+  roadMarkings = null
+  wallHandle?.dispose()
+  wallHandle = null
+  wallSegments = []
   water?.dispose()
   water = null
 }
@@ -666,7 +738,12 @@ function applyToggles(): void {
   if (broadleafFarMesh) broadleafFarMesh.visible = settings.showTrees
   if (coniferNearMesh) coniferNearMesh.visible = settings.showTrees
   if (coniferFarMesh) coniferFarMesh.visible = settings.showTrees
-  if (barrierMesh) barrierMesh.visible = settings.showBarrier
+  if (barrierMesh) barrierMesh.visible = settings.showWalls && settings.showFence
+  wallHandle?.setVisibility({
+    drystone: settings.showWalls && settings.showDrystone,
+    barrier: settings.showWalls && settings.showBarrier,
+    seaWall: settings.showWalls && settings.showSeaWall,
+  })
   if (roadHandle) roadHandle.mesh.visible = settings.showRoad
   if (water) water.mesh.visible = settings.showWater
   environmentController?.setToggles({
@@ -890,21 +967,13 @@ function buildFoliageFromPlacements(): void {
     tree: { ...treeOptions, species: 1 },
   })
 
-  const barrierAtlas: SpriteAtlasSpec = { texture: sharedAssets.barrier, regions: BARRIER_RAIL_REGIONS }
-  const barrierSegments = computeBarrierSegments(field, profile, {
-    seed: settings.seed >>> 0,
-    density: settings.barrierDensity,
-  })
-  barrierSegmentCount = barrierSegments.length
-  barrierMesh = createFoliageMesh(barrierSegments.map((segment) => ({
-    x: segment.x,
-    z: segment.z,
-    y: segment.y,
-    rotation: segment.rotation,
-    scale: segment.scale,
-    variant: segment.variant,
-  })), {
-    atlas: barrierAtlas,
+  // 木栏（官方 Fence）沿用实测精灵区域：横栏来自 spring_wall_barrier_wood，
+  // 摆放位置来自官方 Barrier/Fence 生成器（见 core/walls.ts）。
+  const fenceAtlas: SpriteAtlasSpec = { texture: assets.walls.fence, regions: BARRIER_RAIL_REGIONS }
+  const fenceSegments = fenceRailSprites(wallSegments)
+  barrierSegmentCount = fenceSegments.length
+  barrierMesh = createFoliageMesh(fenceSegments, {
+    atlas: fenceAtlas,
     tint: 0xffffff,
     alphaTest: 0.35,
     unitSize: 0.35,
@@ -942,10 +1011,72 @@ function rebuildPlacements(): void {
     flowerDensity: settings.flowerDensity,
     tallGrassDensity: settings.tallGrassDensity,
   })
+  // 墙体先算：木栏精灵由官方 Barrier/Fence 生成器产出的段决定。
+  buildWalls()
   buildFoliageFromPlacements()
   if (treeMeshManager && placements) {
     treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value, true)
   }
+}
+
+/** 按当前路宽选官方路型贴图集：路宽 < 2.25m 用 `roadSingle`，否则用宽路 + 划线。 */
+function roadTextureSet(): RoadTextureSet | null {
+  if (!seasonAssets) {
+    return null
+  }
+  const singleTrack = isSingleTrackRoad(settings.roadWidth)
+  if (singleTrack) {
+    return {
+      base: seasonAssets.road.single.base,
+      overlay: seasonAssets.road.single.overlay,
+      paint: null,
+      textureStretch: SEASON_CATALOG[activeSeason].road.single.stretch ?? 2,
+    }
+  }
+  return {
+    base: seasonAssets.road.wide.base,
+    overlay: seasonAssets.road.wide.overlay,
+    paint: seasonAssets.road.wide.paint,
+    textureStretch: SEASON_CATALOG[activeSeason].road.wide.stretch ?? 1,
+  }
+}
+
+/**
+ * 官方路侧墙体（干砌石墙 / 硬护栏+木栏 / 混凝土海墙）。
+ *
+ * 放置规则见 `core/walls.ts`；这里只负责用当前季节贴图建网格并接管可见性开关。
+ */
+function buildWalls(): void {
+  wallHandle?.dispose()
+  wallHandle = null
+  wallSegments = []
+  if (!field || !profile || !densityField || !seasonAssets) {
+    return
+  }
+  const style = ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE]
+  const density = densityField
+  const shadowAt = (x: number, z: number): number =>
+    Math.min(1, density.sampleUnit(x, z) * 1.3)
+  wallSegments = computeWallSegments(field, profile, profile.nodes, {
+    seed: settings.seed >>> 0,
+    roadWidth: settings.roadWidth,
+    density: settings.wallDensity,
+    detail: LAB_DETAIL,
+    waterLevel: field.waterLevel,
+    style,
+    shadowAt,
+  })
+  wallHandle = createWallMeshes({
+    segments: wallSegments,
+    textures: {
+      drystone: seasonAssets.walls.drystone,
+      barrier: seasonAssets.walls.barrier,
+      seaWall: seasonAssets.walls.seaWall,
+    },
+    shadowFactor: SEASON_PARAMS[activeSeason].shadowFactor,
+  })
+  scene.add(wallHandle.group)
+  applyToggles()
 }
 
 function rebuildWorld(): void {
@@ -999,14 +1130,29 @@ function finalizeTerrain(): void {
   terrainMesh.name = 'slowroads-terrain'
   scene.add(terrainMesh)
 
+  // 官方划线权重（只在宽路生效）：树影按路缘采样，海拔门限以水面为零点。
+  const style = ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE]
+  const densityForShadow = densityField
+  roadMarkings = computeRoadMarkings(profile.nodes, {
+    style,
+    nodeSpacing: ROAD_TRACE_STEP,
+    shadowAt: (x, z) => Math.min(1, densityForShadow.sampleUnit(x, z) * 1.3),
+    edgeOffset: profile.halfWidth,
+    waterLevel: field.waterLevel,
+  })
   roadHandle = createRoadMesh({
     profile,
     density: densityField,
     sunDir: foliageUniforms.sunDir.value,
     sunColor: foliageUniforms.sunColor.value,
+    markings: isSingleTrackRoad(settings.roadWidth) ? null : roadMarkings,
+    nodeSpacing: ROAD_TRACE_STEP,
   })
   const params = SEASON_PARAMS[activeSeason]
-  roadHandle.setSeason({ base: seasonAssets.road.base, overlay: seasonAssets.road.overlay }, params.shadowFactor)
+  const roadTextures = roadTextureSet()
+  if (roadTextures) {
+    roadHandle.setSeason(roadTextures, params.shadowFactor)
+  }
   scene.add(roadHandle.mesh)
 
   terrainBuilder = null
@@ -1065,7 +1211,14 @@ async function applySeason(season: SeasonId, options: { silent?: boolean } = {})
     seasonAssets = assets
     // Terrain material keeps the same geometry; swap textures + palette.
     terrainMaterialHandle?.setSeason(season, assets.terrain)
-    roadHandle?.setSeason({ base: assets.road.base, overlay: assets.road.overlay }, SEASON_PARAMS[season].shadowFactor)
+    const roadTextures = roadTextureSet()
+    if (roadTextures) {
+      roadHandle?.setSeason(roadTextures, SEASON_PARAMS[season].shadowFactor)
+    }
+    wallHandle?.setTextures(
+      { drystone: assets.walls.drystone, barrier: assets.walls.barrier, seaWall: assets.walls.seaWall },
+      SEASON_PARAMS[season].shadowFactor,
+    )
     water?.setFrozen(SEASON_PARAMS[season].frozenWater)
     if (placements) {
       buildFoliageFromPlacements()
@@ -1215,7 +1368,11 @@ function updateStats(): void {
       + ` · 星空${preset.stars ? `夜晴${settings.showStars ? '' : '·切'}` : '—'}`
       + ` · 降雪${preset.snow && preset.snow.density > 0 ? `${preset.snow.density}${settings.showSnow ? '' : '·切'}` : '—'}`,
     `树卡 ${treeCount} · 近树3D ${treeMeshManager?.instanceCount ?? 0} · 草 ${grassMesh?.count ?? 0} · 灌木花草 ${bushMesh?.count ?? 0}`,
-    `护栏 ${barrierSegmentCount} · 道路 ${profile ? Math.round(profile.length) : 0}m · 世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 切季 ${lastSeasonSwitchMs ? `${Math.round(lastSeasonSwitchMs)}ms` : '—'}`,
+    `墙体 ${wallSegments.length}（石墙 ${wallSegments.filter((segment) => segment.type === 'drystone').length}`
+      + ` · 木栏 ${wallSegments.filter((segment) => segment.type === 'fence').length}/${barrierSegmentCount}栏`
+      + ` · 护栏 ${wallSegments.filter((segment) => segment.type === 'barrier').length}`
+      + ` · 海墙 ${wallSegments.filter((segment) => segment.type === 'seaWall').length}）`
+      + ` · 道路 ${profile ? Math.round(profile.length) : 0}m · 世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 切季 ${lastSeasonSwitchMs ? `${Math.round(lastSeasonSwitchMs)}ms` : '—'}`,
     `素材 ${storeStats?.textureCount ?? 0} 张 · 常驻≈${storeStats ? formatMb(storeStats.residentBytes) : '—'} · 本季下载 ${formatMb(seasonBytes)}${assetStore?.mode === 'server' ? ` · 已下载 ${formatMb(storeStats?.downloadedBytes ?? 0)}` : ''} · 种子 ${settings.seed >>> 0}`,
   ].join('\n')
 }

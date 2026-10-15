@@ -28,6 +28,20 @@ export interface RoadNode {
   z: number
   y: number
   heading: number
+  /**
+   * 官方 midline 节点字段（墙体 / 划线判定用，见 `roadStyle.ts`）：
+   *  - `index`：节点序号 `i`（起点 = 0）；
+   *  - `lateral`：侧向梯度 `g = (feelL - feelR) / feelDist / maxGrad`（1.0 = 坡度上限）；
+   *  - `longitudinal`：纵向梯度 `gf = (feelAvg - feelAhead) / feelDist / maxGrad`；
+   *  - `turn`：转向需求 `t = bT`（-1..1），官方用它算 `da`；
+   *  - `headingDelta`：本节点实际转角 `da`（弧度）。
+   * 官方在“上一个节点位置”做探针后把结果挂到新节点上，起点节点四项均为 0。
+   */
+  index: number
+  lateral: number
+  longitudinal: number
+  turn: number
+  headingDelta: number
 }
 
 export interface RoadTraceResult {
@@ -81,7 +95,17 @@ export function traceRoadPath(
   let y = start.y
   let heading = wrapAngle(options.headingRad)
 
-  const nodes: RoadNode[] = [{ x, z, y, heading }]
+  const nodes: RoadNode[] = [{
+    x,
+    z,
+    y,
+    heading,
+    index: 0,
+    lateral: 0,
+    longitudinal: 0,
+    turn: 0,
+    headingDelta: 0,
+  }]
   let length = 0
   let complete = false
   let failureReason: string | null = null
@@ -198,6 +222,7 @@ export function traceRoadPath(
       break
     }
 
+    const headingDelta = wrapAngle(chosenHeading - heading)
     heading = chosenHeading
     x = step.x
     z = step.z
@@ -207,7 +232,18 @@ export function traceRoadPath(
       rescueTurns += 1
     }
     length += options.stepLength
-    nodes.push({ x, z, y, heading })
+    // 官方节点字段取自“上一个节点位置”的探针（见文件头注释）。
+    nodes.push({
+      x,
+      z,
+      y,
+      heading,
+      index: nodes.length,
+      lateral: gLat,
+      longitudinal: gLon,
+      turn: t,
+      headingDelta,
+    })
 
     if (options.maxLength != null && length >= options.maxLength) {
       complete = true

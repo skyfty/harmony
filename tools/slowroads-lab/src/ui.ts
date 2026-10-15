@@ -27,7 +27,12 @@ export interface LabSettings {
   showTrees: boolean
   showNearTreeMeshes: boolean
   showWater: boolean
+  /** 墙体总开关（官方 WallController，含下面四类）。 */
+  showWalls: boolean
+  showDrystone: boolean
+  showFence: boolean
   showBarrier: boolean
+  showSeaWall: boolean
   showSky: boolean
   showClouds: boolean
   showStars: boolean
@@ -40,9 +45,12 @@ export interface LabSettings {
   bushDensity: number
   flowerDensity: number
   tallGrassDensity: number
-  barrierDensity: number
+  /** 0..1：官方墙体生成门限的缩放（1 = 官方原值）。 */
+  wallDensity: number
   windStrength: number
   roadWidth: number
+  /** 官方路型档位（`ROAD_WIDTH_PRESETS`）或自定义。 */
+  roadWidthPreset: 'narrow' | 'regular' | 'wide' | 'custom'
   flattenBand: number
   nearDistance: number
   nearTreeRadius: number
@@ -66,7 +74,11 @@ export const DEFAULT_LAB_SETTINGS: LabSettings = {
   showTrees: true,
   showNearTreeMeshes: true,
   showWater: true,
+  showWalls: true,
+  showDrystone: true,
+  showFence: true,
   showBarrier: true,
+  showSeaWall: true,
   showSky: true,
   showClouds: true,
   showStars: true,
@@ -79,9 +91,10 @@ export const DEFAULT_LAB_SETTINGS: LabSettings = {
   bushDensity: 0.6,
   flowerDensity: 1,
   tallGrassDensity: 1,
-  barrierDensity: 0.65,
+  wallDensity: 1,
   windStrength: 1,
   roadWidth: 7,
+  roadWidthPreset: 'custom',
   flattenBand: 10,
   // 官方 graphics preset（view distance = medium）的近树卡 dissolveFar = lod1Horizon(19) × 10。
   nearDistance: 190,
@@ -244,7 +257,11 @@ export function createLabUi(
     { key: 'showTrees', label: '树卡/远景树' },
     { key: 'showNearTreeMeshes', label: '近树 3D 网格' },
     { key: 'showWater', label: '水面' },
-    { key: 'showBarrier', label: '护栏' },
+    { key: 'showWalls', label: '墙体（总）' },
+    { key: 'showDrystone', label: '干砌石墙' },
+    { key: 'showFence', label: '木栏' },
+    { key: 'showBarrier', label: '硬护栏' },
+    { key: 'showSeaWall', label: '混凝土海墙' },
     { key: 'showSky', label: '天空' },
     { key: 'showClouds', label: '云层' },
     { key: 'showStars', label: '星空' },
@@ -296,6 +313,44 @@ export function createLabUi(
   seedRow.append(createElement('label', undefined, '种子'), seedInput, randomizeButton, regenerateButton)
   container.append(seedRow)
 
+  // ---- Official road width presets -----------------------------------------
+  // 官方 `roadStyle[]` 的四个档位路宽（`ROAD_WIDTH_PRESETS`）；路上材质按
+  // `roadWidth < 2.25m → road_single，否则 road_base + 划线` 自动选择。
+  let refreshRoadMaterialHint: () => void = () => {}
+  const presetRow = createElement('div', 'panel__row')
+  const presetSelect = createElement('select')
+  const presetOptions: Array<{ value: LabSettings['roadWidthPreset']; label: string }> = [
+    { value: 'custom', label: '自定义' },
+    { value: 'narrow', label: 'NARROW 1.8m（单车道）' },
+    { value: 'regular', label: 'REGULAR 3.2m（NORMAL 档）' },
+    { value: 'wide', label: 'WIDE 4.0m（CASUAL 档）' },
+  ]
+  for (const option of presetOptions) {
+    const element = createElement('option', undefined, option.label)
+    element.value = option.value
+    element.selected = settings.roadWidthPreset === option.value
+    presetSelect.append(element)
+  }
+  const roadMaterialHint = createElement('span', 'value')
+  refreshRoadMaterialHint = (): void => {
+    roadMaterialHint.textContent = settings.roadWidth < 2.25 ? '单车道材质' : '宽路材质 + 划线'
+  }
+  presetSelect.addEventListener('change', () => {
+    const value = presetSelect.value as LabSettings['roadWidthPreset']
+    settings.roadWidthPreset = value
+    if (value !== 'custom') {
+      const width = value === 'narrow' ? 1.8 : value === 'regular' ? 3.2 : 4
+      settings.roadWidth = width
+      sliderInputs.get('roadWidth')!.value = String(width)
+      sliderValues.get('roadWidth')!.textContent = String(width)
+    }
+    refreshRoadMaterialHint()
+    callbacks.onChange('world', 'roadWidth')
+  })
+  presetRow.append(createElement('label', undefined, '官方路型'), presetSelect, roadMaterialHint)
+  container.append(presetRow)
+  refreshRoadMaterialHint()
+
   // ---- Sliders -------------------------------------------------------------
   interface SliderDef {
     key: keyof LabSettings
@@ -323,9 +378,11 @@ export function createLabUi(
     {
       title: '道路',
       items: [
-        { key: 'roadWidth', label: '道路宽 (m)', min: 4, max: 12, step: 0.5, kind: 'world' },
+        // 官方路宽表为 1.8 / 3.2 / 4.0（米）：阈值 2.25m 以下自动改用单车道贴图带，
+        // 所以滑块下限放到官方 NARROW 档，两种路型都能验证。
+        { key: 'roadWidth', label: '道路宽 (m)', min: 1.8, max: 12, step: 0.1, kind: 'world' },
         { key: 'flattenBand', label: '压平带 (m)', min: 4, max: 20, step: 1, kind: 'world' },
-        { key: 'barrierDensity', label: '护栏密度', min: 0, max: 1, step: 0.05, kind: 'placements' },
+        { key: 'wallDensity', label: '墙体密度', min: 0, max: 1, step: 0.05, kind: 'placements' },
       ],
     },
     {
@@ -354,6 +411,11 @@ export function createLabUi(
       input.addEventListener('input', () => {
         ;(settings[def.key] as number) = Number(input.value)
         valueLabel.textContent = input.value
+        if (def.key === 'roadWidth') {
+          settings.roadWidthPreset = 'custom'
+          presetSelect.value = 'custom'
+          refreshRoadMaterialHint()
+        }
         if (def.kind !== 'world') {
           callbacks.onChange(def.kind, def.key)
         }
@@ -401,6 +463,8 @@ export function createLabUi(
       compatInput.checked = settings.compatMode
       sourceSelect.value = settings.assetSource
       serverInput.value = settings.serverBaseUrl
+      presetSelect.value = settings.roadWidthPreset
+      refreshRoadMaterialHint()
       setSeasonActive(settings.season)
       setTimeOfDayActive(settings.timeOfDay)
       setWeatherActive(settings.weather)

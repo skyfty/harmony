@@ -14,7 +14,9 @@
   编辑器视口 `EffectComposer`（FXAA + 选中描边）造成的抗锯齿差异；地形尺度带来的雾距放大
   （见「雾尺度自适应」）。
 - **不保留兼容**：`fogEnabled/setSlowroadsFogEnabled`、`srFogEnabled`、`SLOWROADS_SUN_*`、
-  `grass.windEnabled`、相机锚定远景树环（`farTreeInstances`）全部删除。
+  `grass.windEnabled`、相机锚定远景树环（`farTreeInstances`）全部删除；旧 `barrier` 组
+  （下坡落差近似）废弃后仅做**读入映射**（`enabled` → `walls.{fence,barrier,seaWall}`，
+  `density` → `walls.drystone.density`，`spacing` / `dropThreshold` 丢弃）。
 
 ## 已落地的对齐项（对应 lab 批次 / 模块）
 
@@ -28,7 +30,7 @@
 | 第五批（天空/云层/星空 2000 尺度） | `core/environment`（`ENVIRONMENT_SKY_DISTANCE`、`resolveSkyFogParams`、`resolveFogDepthBlend`）、`fogInjection`（`slowroadsSkyFogUniforms` + `applySkyFogParams`）、`sky`（平面 z = -(2000-0.1)）、`clouds`/`stars` 绑天空组 |
 | 第六批（树卡变色幅度→乘数、近树积雪 Cu） | `instancing`（顶点按 `noise(world.xz/256)` 换算乘数 + 柏树列兜底、片元消费 varying）、`treeMeshes`（阔叶积雪 `dot(normal, vCameraUp)`、`vLeafBrightness` 10m 高度压暗） |
 | `lab/water.ts` | `proceduralLandscape/waterPlane.ts`（sea_waves 双滚波纹 + 菲涅尔天空色 + 太阳高光 + 冬季冻结；尺寸随地形包围盒、水线 = 地形最低点 + `water.levelOffset`，网格挂场景根保持世界水平） |
-| `core/barrier.ts` | `proceduralLandscape/barrier.ts`（沿路 2m 采样、肩外 12m 落差判定、同侧 8m 间隔、密度门限），用 `BARRIER_RAIL_REGIONS` 走植被层渲染（单片面 0.35m / alphaTest 0.35 / 风摆 0） |
+| 第七批（宽路 + 划线 + 路侧墙体，2026-10） | `roadStyle.ts`（官方路型表/墙体常量，lab 同源拷贝）、`roadMarkings.ts`（划线权重，lab 同源拷贝）、`roadTrace.ts`（节点新增 `index/lateral/longitudinal/turn/headingDelta` + 完成后的探针标注）、`walls.ts`（官方 Barrier/Fence/SeaWall 判定 + 干砌石墙地块等价规则）、`wallLayer.ts`（石墙/护栏/海墙网格 + 木栏精灵）、`roadBand.ts`（宽路贴图 + 划线属性与混色）、`config.walls` 组（旧 `barrier` 组读入映射）、`runtime.buildWalls()/roadBandTexturesFor()`、`stats.wallSegmentCount` |
 | `core/placement.ts` 花草/高草层 | `chunkPlan.planRoadBucket` 的 `emitOuterLayer`（花草 → 灌木层、高草 → 草层；横向带、falloff、heightFactor 与 lab 逐行一致） |
 | `core/selfCheck.ts` | `schema/slowroads/render/selfCheck.ts`（环境预设 / 雾色空间 / 雾 uniform / 季节表 / 树卡变色着色器断言 / uniform 覆盖审计）+ `proceduralLandscape/shaderAudit.ts`（注入材质记录最终 shader 源码与 uniform 键，供审计） |
 | 相机锚定远景树环（lab 无此机制） | **删除**：远景树回到分块内的 imposter 层（官方 2000 尺度雾 + 场景雾距覆盖）。`stats` 增加 `barrierInstances / waterEnabled / viewDistanceScale` |
@@ -231,7 +233,7 @@
 - **preview 实时会话**：见上；需要从编辑器「Preview」入口建立会话后复验渲染。
 - **小程序真机**：SceneryViewer 与 `viewer` / `tour` 共用同一 schema 实现（uni_modules junction），
   真机表现需按小程序验证流程单独取证。
-- lab 侧同样未实现的项保持一致：近树卡圆锥假暗化、imposter `S0` 假暗化、宽路 paint 体系、
-  农田割纹；夜间车灯项恒 0。
+- lab 侧同样未实现的项保持一致：近树卡圆锥假暗化、imposter `S0` 假暗化、农田割纹、
+  BridgeWall（与桥系统一起）；夜间车灯项恒 0。
 - 编辑器视口 `EffectComposer` 的 FXAA/OutlinePass 与 lab 直出存在抗锯齿差异（逐像素对比
   需关闭 FXAA）。

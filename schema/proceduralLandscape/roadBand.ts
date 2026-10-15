@@ -3,15 +3,21 @@ import type { SeasonId } from '../slowroads/core/seasonCatalog'
 import { SEASON_PARAMS } from '../slowroads/core/seasonParams'
 import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
 import { forestDensityClassAt, type LandscapeDensityField } from './densityField'
+import type { RoadMarkingWeights } from './roadMarkings'
+import { isSingleTrackRoad } from './roadStyle'
 import type { RoadTraceNode } from './roadTrace'
 import { recordSlowroadsShaderAudit } from './shaderAudit'
 
 /**
- * 公路贴图带（slowroads road_single 网格移植）。
+ * 公路贴图带（官方 `road` / `roadSingle` 两套路型网格移植）。
  *
  * - 沿道路追踪节点生成贴合压平地形的带状网格（左右边缘 = ±半宽，高出地形
- *   ~2cm），u = 0..1 横跨整个路宽，v = 里程 / (2×路宽)（road_single 的
- *   textureStretch=2 → 每 2 倍路宽重复一次贴图）；
+ *   ~2cm），u = 0..1 横跨整个路宽，v = 里程 / (2×半宽) / textureStretch
+ *   （单车道 stretch = 2、宽路 stretch = 1，与官方一致）；
+ * - 宽路（路宽 ≥ 2.25m）额外挂 6 张划线贴图：官方片元在**未拉伸**的 uv 上采样
+ *   `dashed`，按 per-vertex 权重把 solid / solidLeft / solidRight / mergeLeft /
+ *   mergeRight 依次混入（`smoothstep(0.49, 0.51)` 起判，merge 被实线抑制），
+ *   最后以 `paintCol.a` 与原路面混色；
  * - 春/秋 overlay（苔痕 / 落叶）强度 = saturate(道路两侧树影 × shadowFactor × 3)，
  *   树影由森林密度场在道路两缘采样烘焙；
  * - 官方路面掠射边缘光（ef chunk）：与地表同款 fresnel，但无 blendVal / uv 偏置；
@@ -22,6 +28,19 @@ import { recordSlowroadsShaderAudit } from './shaderAudit'
 export interface RoadBandTextures {
   base: THREE.Texture
   overlay: THREE.Texture | null
+  /** 宽路划线贴图（冬季宽路官方无划线 ⇒ null）。 */
+  paint?: RoadPaintTextures | null
+  /** 官方 `stretch`（单车道 2 / 宽路 1）。 */
+  textureStretch?: number
+}
+
+export interface RoadPaintTextures {
+  dashed: THREE.Texture
+  solid: THREE.Texture
+  solidLeft: THREE.Texture
+  solidRight: THREE.Texture
+  mergeLeft: THREE.Texture
+  mergeRight: THREE.Texture
 }
 
 export interface RoadBandHandle {
@@ -38,6 +57,10 @@ export interface RoadBandHandle {
 export interface RoadBandOptions {
   nodes: ReadonlyArray<RoadTraceNode>
   halfWidth: number
+  /** 划线权重（每追踪节点一个）；为空或单车道时不启用划线。 */
+  markings?: readonly RoadMarkingWeights[] | null
+  /** 追踪节点间距（米），用于把节点权重映射到采样点。 */
+  nodeSpacing?: number
   /** 沿路步长（米）。 */
   stepLength?: number
   /** 树影烘焙（密度场 0..3 → 0..1）。 */
@@ -58,16 +81,34 @@ const DEFAULT_ROAD_LIFT = 0.02
 
 const VERTEX_PARS = /* glsl */ `
 attribute float aRoadShadow;
+attribute float aRoadPaintSolid;
+attribute float aRoadPaintSolidLeft;
+attribute float aRoadPaintSolidRight;
+attribute float aRoadPaintMergeLeft;
+attribute float aRoadPaintMergeRight;
+uniform float uRoadTextureStretch;
 varying vec2 vRoadUv;
+varying vec2 vRoadPaintUv;
 varying float vRoadShadow;
+varying float vRoadSolid;
+varying float vRoadSolidLeft;
+varying float vRoadSolidRight;
+varying float vRoadMergeLeft;
+varying float vRoadMergeRight;
 varying vec3 vRoadWorldPosition;
 `
 
 const VERTEX_BODY = /* glsl */ `
 #include <uv_vertex>
 vRoadUv = uv;
-vRoadUv.y /= 2.0;
+vRoadUv.y /= uRoadTextureStretch;
+vRoadPaintUv = uv;
 vRoadShadow = aRoadShadow;
+vRoadSolid = aRoadPaintSolid;
+vRoadSolidLeft = aRoadPaintSolidLeft;
+vRoadSolidRight = aRoadPaintSolidRight;
+vRoadMergeLeft = aRoadPaintMergeLeft;
+vRoadMergeRight = aRoadPaintMergeRight;
 vRoadWorldPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;
 `
 
@@ -75,11 +116,24 @@ const FRAGMENT_PARS = /* glsl */ `
 uniform sampler2D uRoadMap;
 uniform sampler2D uRoadOverlay;
 uniform float uRoadHasOverlay;
+uniform float uRoadHasPaint;
+uniform sampler2D uRoadPaintDashed;
+uniform sampler2D uRoadPaintSolid;
+uniform sampler2D uRoadPaintSolidLeft;
+uniform sampler2D uRoadPaintSolidRight;
+uniform sampler2D uRoadPaintMergeLeft;
+uniform sampler2D uRoadPaintMergeRight;
 uniform float uRoadShadowFactor;
 uniform float uRoadRadiance;
 uniform float uRoadFresnelIntensity;
 varying vec2 vRoadUv;
+varying vec2 vRoadPaintUv;
 varying float vRoadShadow;
+varying float vRoadSolid;
+varying float vRoadSolidLeft;
+varying float vRoadSolidRight;
+varying float vRoadMergeLeft;
+varying float vRoadMergeRight;
 varying vec3 vRoadWorldPosition;
 
 /** 官方环境光树影调制（与地表同一变体）。 */
@@ -96,6 +150,26 @@ const FRAGMENT_BODY = /* glsl */ `
     vec4 overlayCol = texture2D(uRoadOverlay, vRoadUv);
     float overlayFactor = clamp(vRoadShadow * uRoadShadowFactor * 3.0, 0.0, 1.0);
     roadTexel.rgb = mix(roadTexel.rgb, overlayCol.rgb, overlayFactor * overlayCol.a);
+  }
+  // 官方划线：虚线采样用未拉伸 uv，实线/渐变按 per-vertex 权重叠加。
+  if (uRoadHasPaint > 0.5) {
+    vec4 paintCol = texture2D(uRoadPaintDashed, vRoadPaintUv);
+    float wSolid = smoothstep(0.49, 0.51, vRoadSolid);
+    float wSolidLeft = smoothstep(0.49, 0.51, vRoadSolidLeft);
+    float wSolidRight = smoothstep(0.49, 0.51, vRoadSolidRight);
+    float solidAny = ceil(max(wSolidLeft, wSolidRight));
+    float wMergeLeft = smoothstep(0.49, 0.51, vRoadMergeLeft) * (1.0 - solidAny);
+    float wMergeRight = smoothstep(0.49, 0.51, vRoadMergeRight) * (1.0 - solidAny);
+    if (wMergeLeft + wMergeRight > 0.0) {
+      paintCol = mix(paintCol, texture2D(uRoadPaintMergeLeft, vRoadPaintUv), wMergeLeft);
+      paintCol = mix(paintCol, texture2D(uRoadPaintMergeRight, vRoadPaintUv), wMergeRight);
+    }
+    if (wSolidRight + wSolidLeft > 0.0) {
+      paintCol = mix(paintCol, texture2D(uRoadPaintSolidRight, vRoadPaintUv), wSolidRight);
+      paintCol = mix(paintCol, texture2D(uRoadPaintSolidLeft, vRoadPaintUv), wSolidLeft);
+      paintCol = mix(paintCol, texture2D(uRoadPaintSolid, vRoadPaintUv), wSolid);
+    }
+    roadTexel.rgb = mix(roadTexel.rgb, paintCol.rgb, paintCol.a);
   }
   // 官方路面掠射边缘光（ef chunk）：与地表同款 fresnel，无 blendVal / uv 偏置。
   float roadFresnel = 1.0 - max(0.0, dot(normalize(cameraPosition - vRoadWorldPosition), vec3(0.0, 1.0, 0.0)));
@@ -122,7 +196,13 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
   const uvs: number[] = []
   const normals: number[] = []
   const shadows: number[] = []
+  const paintSolid: number[] = []
+  const paintSolidLeft: number[] = []
+  const paintSolidRight: number[] = []
+  const paintMergeLeft: number[] = []
+  const paintMergeRight: number[] = []
   const indices: number[] = []
+  const markings = options.markings ?? null
 
   let cumulative = 0
   let vertexCursor = 0
@@ -149,11 +229,17 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
       const rightClass = forestDensityClassAt(options.density, node.x - perpX * halfW, node.z - perpZ * halfW)
       shadow = Math.max(leftClass, rightClass) / 3
     }
+    const marking = markings ? markings[Math.min(markings.length - 1, i)] ?? null : null
     for (const side of [-1, 1] as const) {
       positions.push(node.x + perpX * halfW * side, node.y + lift, node.z + perpZ * halfW * side)
       uvs.push(side < 0 ? 0 : 1, v)
       normals.push(0, 1, 0)
       shadows.push(shadow)
+      paintSolid.push(marking?.solid ? 1 : 0)
+      paintSolidLeft.push(marking?.solidLeft ? 1 : 0)
+      paintSolidRight.push(marking?.solidRight ? 1 : 0)
+      paintMergeLeft.push(marking?.mergeLeft ? 1 : 0)
+      paintMergeRight.push(marking?.mergeRight ? 1 : 0)
     }
     if (i > 0) {
       const base = vertexCursor - 2
@@ -167,6 +253,11 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
   geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
   geometry.setAttribute('aRoadShadow', new THREE.Float32BufferAttribute(shadows, 1))
+  geometry.setAttribute('aRoadPaintSolid', new THREE.Float32BufferAttribute(paintSolid, 1))
+  geometry.setAttribute('aRoadPaintSolidLeft', new THREE.Float32BufferAttribute(paintSolidLeft, 1))
+  geometry.setAttribute('aRoadPaintSolidRight', new THREE.Float32BufferAttribute(paintSolidRight, 1))
+  geometry.setAttribute('aRoadPaintMergeLeft', new THREE.Float32BufferAttribute(paintMergeLeft, 1))
+  geometry.setAttribute('aRoadPaintMergeRight', new THREE.Float32BufferAttribute(paintMergeRight, 1))
   geometry.setIndex(indices)
   if (options.hostInverse) {
     geometry.applyMatrix4(options.hostInverse)
@@ -177,6 +268,14 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     uRoadMap: { value: options.textures.base },
     uRoadOverlay: { value: options.textures.overlay ?? options.textures.base },
     uRoadHasOverlay: { value: options.textures.overlay ? 1 : 0 },
+    uRoadHasPaint: { value: 0 },
+    uRoadPaintDashed: { value: options.textures.base },
+    uRoadPaintSolid: { value: options.textures.base },
+    uRoadPaintSolidLeft: { value: options.textures.base },
+    uRoadPaintSolidRight: { value: options.textures.base },
+    uRoadPaintMergeLeft: { value: options.textures.base },
+    uRoadPaintMergeRight: { value: options.textures.base },
+    uRoadTextureStretch: { value: 1 },
     uRoadShadowFactor: { value: SEASON_PARAMS[options.season].shadowFactor },
     uRoadRadiance: { value: 2 },
     uRoadFresnelIntensity: { value: 1 },
@@ -228,6 +327,16 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
       uniforms.uRoadMap.value = textures.base
       uniforms.uRoadOverlay.value = textures.overlay ?? textures.base
       uniforms.uRoadHasOverlay.value = textures.overlay ? 1 : 0
+      const paint = textures.paint ?? null
+      uniforms.uRoadHasPaint.value = paint ? 1 : 0
+      uniforms.uRoadPaintDashed.value = paint?.dashed ?? textures.base
+      uniforms.uRoadPaintSolid.value = paint?.solid ?? textures.base
+      uniforms.uRoadPaintSolidLeft.value = paint?.solidLeft ?? textures.base
+      uniforms.uRoadPaintSolidRight.value = paint?.solidRight ?? textures.base
+      uniforms.uRoadPaintMergeLeft.value = paint?.mergeLeft ?? textures.base
+      uniforms.uRoadPaintMergeRight.value = paint?.mergeRight ?? textures.base
+      uniforms.uRoadTextureStretch.value = textures.textureStretch
+        ?? (paint || !isSingleTrackRoad(options.halfWidth * 2) ? 1 : 2)
       uniforms.uRoadShadowFactor.value = SEASON_PARAMS[season].shadowFactor
       material.needsUpdate = true
     },

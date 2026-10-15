@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -12,10 +12,6 @@ import {
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
 } from '@schema/proceduralLandscape/config'
-import {
-  getProceduralLandscapeStats,
-  type ProceduralLandscapeRuntimeStats,
-} from '@schema/proceduralLandscape/runtime'
 
 const sceneStore = useSceneStore()
 const buildToolsStore = useBuildToolsStore()
@@ -38,6 +34,8 @@ const propsValue = computed<ProceduralLandscapeComponentProps | null>(() => {
   return clampProceduralLandscapeProps(component.props, selectedNodeId.value ?? '')
 })
 
+type LandscapeGroup = keyof ProceduralLandscapeComponentProps
+
 function patch(patchValue: Partial<Record<string, unknown>>): void {
   const component = landscapeComponent.value
   const nodeId = selectedNodeId.value
@@ -47,7 +45,7 @@ function patch(patchValue: Partial<Record<string, unknown>>): void {
   sceneStore.updateNodeComponentProps(nodeId, component.id, patchValue)
 }
 
-function patchGroup(group: keyof ProceduralLandscapeComponentProps, values: Record<string, unknown>): void {
+function patchGroup(group: LandscapeGroup, values: Record<string, unknown>): void {
   const current = propsValue.value
   if (!current) {
     return
@@ -95,6 +93,8 @@ function handleRegenerate(): void {
 }
 
 const roadWaypoints = computed(() => propsValue.value?.road.waypoints ?? [])
+/** ≥2 个路径点才会生成道路，道路起点即路径首点。 */
+const roadWaypointMode = computed(() => roadWaypoints.value.length >= 2)
 const roadPathEditing = computed(
   () => componentEnabled.value && activeBuildTool.value === 'landscapeRoad' && Boolean(landscapeComponent.value),
 )
@@ -126,82 +126,37 @@ function handleClearRoadPath(): void {
   sceneStore.updateProceduralLandscapeRoadWaypoints(nodeId, [])
 }
 
+/**
+ * 单个数值输入控件。标签只保留参数名，单位走 suffix，
+ * 「空=xxx」这类语义走 placeholder（仅在该字段为空时显示）。
+ */
 interface NumericField {
   key: string
   label: string
   step?: number
   nullable?: boolean
+  suffix?: string
+  placeholder?: string
 }
 
-const samplingFields: NumericField[] = [
-  { key: 'sampleCellSize', label: '采样格网 (m)', step: 0.5 },
-  { key: 'maxSampleGridSize', label: '最大采样数/轴', step: 128 },
-]
+/** 一行 1～2 个字段；只有 1 个字段时占满整行，避免半空行。 */
+type FieldRow = ReadonlyArray<NumericField>
 
-const roadFields: NumericField[] = [
-  { key: 'width', label: '路面宽度 (m)', step: 0.5 },
-  { key: 'shoulderWidth', label: '路肩宽度 (m)', step: 0.1 },
-  { key: 'stepLength', label: '追踪步长 (m)', step: 1 },
-  { key: 'feelDistance', label: '探测距离 (m)', step: 1 },
-  { key: 'feelAngleDeg', label: '探测角度 (°)', step: 1 },
-  { key: 'maxSlope', label: '最大坡度', step: 0.05 },
-  { key: 'maxTurnDeg', label: '每步最大转角 (°)', step: 0.5 },
-  { key: 'maxLength', label: '最大长度 (m，空=到边界)', step: 16, nullable: true },
-  { key: 'flattenBand', label: '视觉压平带宽 (m)', step: 0.5 },
-  { key: 'flattenStrength', label: '视觉压平强度', step: 0.05 },
-  { key: 'startX', label: '起点 X（空=居中）', step: 1, nullable: true },
-  { key: 'startZ', label: '起点 Z（空=居中）', step: 1, nullable: true },
-  { key: 'headingDeg', label: '初始朝向 (°，空=按种子)', step: 5, nullable: true },
-  { key: 'waypointTolerance', label: '途经容差 (m)', step: 2 },
-]
+/** 字段分组：可选子标题 + 若干行。 */
+interface FieldBlock {
+  title?: string
+  /** 子标题下方的一行说明。 */
+  hint?: string
+  rows: FieldRow[]
+}
 
-const forestFields: NumericField[] = [
-  { key: 'coverage', label: '森林覆盖率', step: 0.05 },
-  { key: 'scale', label: '密度噪声尺度 (m)', step: 20 },
-  { key: 'seedOffset', label: '种子偏移', step: 1 },
-  { key: 'density', label: '树木密度倍率', step: 0.05 },
-  { key: 'maxSlope', label: '最大坡度阈值', step: 0.02 },
-  { key: 'roadClearance', label: '距路净空 (m)', step: 0.5 },
-  { key: 'minScale', label: '树木最小高度 (m)', step: 0.5 },
-  { key: 'maxScale', label: '树木最大高度 (m)', step: 0.5 },
-  { key: 'nearDistance', label: '近树卡距离 (m，空=按档位)', step: 10, nullable: true },
-  { key: 'nearTreeRadius', label: '近树 3D 半径 (m，0=关)', step: 5 },
-  { key: 'minHeight', label: '最低高度 (m，空=不限)', step: 1, nullable: true },
-]
-
-const grassFields: NumericField[] = [
-  { key: 'corridorWidth', label: '道路走廊宽度 (m)', step: 1 },
-  { key: 'cameraRadius', label: '摄像机补足半径 (m)', step: 4 },
-  { key: 'density', label: '草密度倍率', step: 0.05 },
-  { key: 'sinkNearRoad', label: '靠路下沉 (m)', step: 0.1 },
-  { key: 'flowerDensity', label: '花草密度倍率', step: 0.05 },
-  { key: 'tallGrassDensity', label: '高草密度倍率', step: 0.05 },
-]
-
-const bushFields: NumericField[] = [
-  { key: 'density', label: '灌木密度倍率', step: 0.05 },
-]
-
-const surfaceFields: NumericField[] = [
-  { key: 'blendStrength', label: '混合强度', step: 0.05 },
-  { key: 'uvScale', label: '世界 UV 尺度 (m)', step: 1 },
-  { key: 'rockSlopeThreshold', label: '岩石坡度阈值', step: 0.02 },
-  { key: 'viewDistanceScale', label: '雾尺度倍率（空=按地形自动）', step: 0.5, nullable: true },
-]
-
-const barrierFields: NumericField[] = [
-  { key: 'density', label: '护栏密度', step: 0.05 },
-  { key: 'spacing', label: '同侧间隔 (m)', step: 1 },
-  { key: 'dropThreshold', label: '落差阈值 (m)', step: 0.1 },
-]
-
-const waterFields: NumericField[] = [
-  { key: 'levelOffset', label: '水线偏移 (m，相对地形最低点)', step: 0.5 },
-]
-
-const windFields: NumericField[] = [
-  { key: 'strength', label: '风强度', step: 0.1 },
-]
+/** 数据驱动区块：标题 + 可选启用开关 + 字段分组。 */
+interface FieldSection {
+  group: LandscapeGroup
+  title: string
+  withSwitch?: boolean
+  blocks: FieldBlock[]
+}
 
 const qualityOptions = [
   { label: '自动（按运行端）', value: 'auto' },
@@ -210,7 +165,203 @@ const qualityOptions = [
   { label: '高', value: 'high' },
 ]
 
-function fieldValue(group: keyof ProceduralLandscapeComponentProps, key: string): number | null {
+// 生成区块：种子行与质量档是手写标记，采样参数走下面的分组数据。
+const samplingBlocks: FieldBlock[] = [
+  {
+    rows: [
+      [
+        { key: 'sampleCellSize', label: '采样格网', suffix: 'm', step: 0.5 },
+        { key: 'maxSampleGridSize', label: '每轴最大采样', step: 128 },
+      ],
+    ],
+  },
+]
+
+// 公路区块的「路径」工具与路径点列表是手写标记，会插在这些分组之前。
+// 道路起点与朝向完全由手绘路径决定，这里只保留跟随参数。
+const roadPathBlock = computed<FieldBlock>(() => ({
+  title: '路径',
+  hint: roadWaypointMode.value ? undefined : '至少 2 个路径点才会生成道路',
+  rows: [[{ key: 'waypointTolerance', label: '途经容差', suffix: 'm', step: 2 }]],
+}))
+
+const roadGeometryBlocks: FieldBlock[] = [
+  {
+    title: '几何',
+    rows: [
+      [
+        { key: 'width', label: '路面宽度', suffix: 'm', step: 0.5 },
+        { key: 'shoulderWidth', label: '路肩宽度', suffix: 'm', step: 0.1 },
+      ],
+    ],
+  },
+  {
+    title: '追踪',
+    rows: [
+      [
+        { key: 'stepLength', label: '追踪步长', suffix: 'm', step: 1 },
+        { key: 'feelDistance', label: '探测距离', suffix: 'm', step: 1 },
+      ],
+      [
+        { key: 'feelAngleDeg', label: '探测角度', suffix: '°', step: 1 },
+        { key: 'maxTurnDeg', label: '最大转角', suffix: '°', step: 0.5 },
+      ],
+      [
+        { key: 'maxSlope', label: '最大坡度', step: 0.05 },
+        { key: 'maxLength', label: '最大长度', suffix: 'm', placeholder: '到边界', step: 16, nullable: true },
+      ],
+    ],
+  },
+  {
+    title: '贴合',
+    rows: [
+      [
+        { key: 'flattenBand', label: '压平带宽', suffix: 'm', step: 0.5 },
+        { key: 'flattenStrength', label: '压平强度', step: 0.05 },
+      ],
+    ],
+  },
+]
+
+const roadBlocks = computed<FieldBlock[]>(() => [roadPathBlock.value, ...roadGeometryBlocks])
+
+// 地表区块：颜色与基色模式是手写标记，混合参数走下面的分组数据。
+const surfaceBlocks: FieldBlock[] = [
+  {
+    title: '混合',
+    rows: [
+      [
+        { key: 'blendStrength', label: '混合强度', step: 0.05 },
+        { key: 'uvScale', label: 'UV 尺度', suffix: 'm', step: 1 },
+      ],
+      [
+        { key: 'rockSlopeThreshold', label: '岩石坡度', step: 0.02 },
+        { key: 'viewDistanceScale', label: '雾尺度', suffix: '×', placeholder: '自动', step: 0.5, nullable: true },
+      ],
+    ],
+  },
+]
+
+/**
+ * 路侧墙体（官方 WallController）四个分项：干砌石墙 / 木栏 / 硬护栏 / 混凝土海墙。
+ * 旧版「护栏」组（下坡落差近似）已废弃，其 enabled / density 在 config 里映射到
+ * 本组（`walls.drystone.density` 等）。
+ */
+const wallKinds = [
+  { key: 'drystone', label: '干砌石墙' },
+  { key: 'fence', label: '木栏' },
+  { key: 'barrier', label: '硬护栏' },
+  { key: 'seaWall', label: '混凝土海墙' },
+] as const
+
+type WallKind = (typeof wallKinds)[number]['key']
+
+/** 「地表」之后的区块，全部由描述数据渲染。 */
+const featureSections: FieldSection[] = [
+  {
+    group: 'forest',
+    title: '森林 / 树木',
+    blocks: [
+      {
+        title: '分布',
+        rows: [
+          [
+            { key: 'coverage', label: '森林覆盖率', step: 0.05 },
+            { key: 'scale', label: '噪声尺度', suffix: 'm', step: 20 },
+          ],
+          [
+            { key: 'density', label: '树木密度', suffix: '×', step: 0.05 },
+            { key: 'seedOffset', label: '种子偏移', step: 1 },
+          ],
+          [
+            { key: 'maxSlope', label: '最大坡度', step: 0.02 },
+            { key: 'roadClearance', label: '距路净空', suffix: 'm', step: 0.5 },
+          ],
+          [{ key: 'minHeight', label: '最低高度', suffix: 'm', placeholder: '不限', step: 1, nullable: true }],
+        ],
+      },
+      {
+        title: '树木尺度',
+        rows: [
+          [
+            { key: 'minScale', label: '最小高度', suffix: 'm', step: 0.5 },
+            { key: 'maxScale', label: '最大高度', suffix: 'm', step: 0.5 },
+          ],
+        ],
+      },
+      {
+        title: '近景',
+        rows: [
+          [
+            { key: 'nearDistance', label: '近树卡距离', suffix: 'm', placeholder: '按档位', step: 10, nullable: true },
+            { key: 'nearTreeRadius', label: '近树 3D 半径', suffix: 'm', placeholder: '0 = 关闭', step: 5 },
+          ],
+        ],
+      },
+    ],
+  },
+  {
+    group: 'grass',
+    title: '草',
+    withSwitch: true,
+    blocks: [
+      {
+        rows: [
+          [
+            { key: 'corridorWidth', label: '走廊宽度', suffix: 'm', step: 1 },
+            { key: 'cameraRadius', label: '相机补足半径', suffix: 'm', step: 4 },
+          ],
+          [
+            { key: 'density', label: '草密度', suffix: '×', step: 0.05 },
+            { key: 'sinkNearRoad', label: '靠路下沉', suffix: 'm', step: 0.1 },
+          ],
+          [
+            { key: 'flowerDensity', label: '花草密度', suffix: '×', step: 0.05 },
+            { key: 'tallGrassDensity', label: '高草密度', suffix: '×', step: 0.05 },
+          ],
+        ],
+      },
+    ],
+  },
+  {
+    group: 'bushes',
+    title: '灌木',
+    withSwitch: true,
+    blocks: [
+      {
+        rows: [[{ key: 'density', label: '灌木密度', suffix: '×', step: 0.05 }]],
+      },
+    ],
+  },
+  {
+    group: 'canopy',
+    title: '树冠色斑',
+    withSwitch: true,
+    blocks: [],
+  },
+  {
+    group: 'water',
+    title: '水面',
+    withSwitch: true,
+    blocks: [
+      {
+        rows: [[{ key: 'levelOffset', label: '水线偏移', suffix: 'm', placeholder: '相对地形最低点', step: 0.5 }]],
+      },
+    ],
+  },
+  {
+    group: 'wind',
+    title: '风摆',
+    withSwitch: true,
+    blocks: [
+      {
+        rows: [[{ key: 'strength', label: '风强度', step: 0.1 }]],
+      },
+    ],
+  },
+]
+
+function fieldValue(group: LandscapeGroup, key: string): number | null {
   const current = propsValue.value
   if (!current) {
     return null
@@ -219,7 +370,43 @@ function fieldValue(group: keyof ProceduralLandscapeComponentProps, key: string)
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function handleNumberInput(group: keyof ProceduralLandscapeComponentProps, field: NumericField, raw: string | number | null): void {
+function sectionEnabled(group: LandscapeGroup): boolean {
+  const current = propsValue.value
+  if (!current) {
+    return false
+  }
+  const value = (current[group] as unknown as Record<string, unknown>).enabled
+  return value !== false
+}
+
+/** 墙体分项开关与密度的读写（`props.walls[kind]` 是嵌套对象）。 */
+function wallEnabled(kind: WallKind): boolean {
+  const current = propsValue.value
+  if (!current) {
+    return false
+  }
+  const entry = (current.walls as unknown as Record<string, { enabled?: boolean }>)[kind]
+  return entry?.enabled !== false
+}
+
+function patchWall(kind: WallKind, values: Record<string, unknown>): void {
+  const current = propsValue.value
+  if (!current) {
+    return
+  }
+  const walls = current.walls as unknown as Record<string, Record<string, unknown>>
+  patch({ walls: { ...walls, [kind]: { ...walls[kind], ...values } } })
+}
+
+function wallDensity(): number | null {
+  const current = propsValue.value
+  if (!current) {
+    return null
+  }
+  return current.walls.drystone.density
+}
+
+function handleNumberInput(group: LandscapeGroup, field: NumericField, raw: string | number | null): void {
   const text = typeof raw === 'string' ? raw.trim() : raw == null ? '' : String(raw)
   if (!text.length) {
     if (field.nullable) {
@@ -242,80 +429,6 @@ function handleQualityChange(value: string | null): void {
 
 function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravelTint', value: string): void {
   patchGroup('surface', { [key]: value })
-}
-
-const stats = ref<ProceduralLandscapeRuntimeStats | null>(null)
-let statsTimer: ReturnType<typeof setInterval> | null = null
-
-function refreshStats(): void {
-  const nodeId = selectedNodeId.value
-  stats.value = nodeId ? getProceduralLandscapeStats(nodeId) : null
-}
-
-onMounted(() => {
-  refreshStats()
-  statsTimer = setInterval(refreshStats, 500)
-})
-
-onBeforeUnmount(() => {
-  if (statsTimer != null) {
-    clearInterval(statsTimer)
-    statsTimer = null
-  }
-})
-
-watch(selectedNodeId, refreshStats)
-
-const statsRows = computed(() => {
-  const value = stats.value
-  if (!value) {
-    return []
-  }
-  const memoryMb = (value.memoryBytes / (1024 * 1024)).toFixed(1)
-  const rows: Array<{ label: string; value: string }> = [
-    { label: '阶段', value: phaseLabel(value.phase) },
-    { label: '季节', value: `${value.season}${value.seasonAssetsReady ? '' : '（加载中）'}` },
-    { label: '素材档位', value: value.assetVariant === '2048' ? '@2048' : '完整' },
-    { label: '素材下载', value: `${(value.assetDownloadedBytes / (1024 * 1024)).toFixed(1)} MB` },
-    { label: '近树 3D', value: String(value.nearTreeInstances) },
-    { label: '护栏', value: String(value.barrierInstances) },
-    { label: '水面', value: value.waterEnabled ? '开' : '关' },
-    { label: '雾尺度倍率', value: `${value.viewDistanceScale.toFixed(2)}x` },
-    { label: '质量档', value: value.quality },
-    { label: '树实例', value: String(value.treeInstances) },
-    { label: '草实例', value: String(value.grassInstances) },
-    { label: '灌木实例', value: String(value.bushInstances) },
-    {
-      label: '分块数',
-      value: `${value.batchCount}（树 ${value.treeChunkCount} / 路 ${value.roadChunkCount} / 相机草 ${value.cameraGrassChunkCount}）`,
-    },
-    { label: '采样网格', value: value.gridCols ? `${value.gridCols} x ${value.gridRows} @ ${value.gridCellSize.toFixed(2)}m` : '-' },
-    { label: '平均边长', value: value.averageEdgeLength ? `${value.averageEdgeLength.toFixed(2)}m` : '-' },
-    { label: '内存估算', value: `${memoryMb} MB` },
-    { label: '道路长度', value: value.roadLength ? `${Math.round(value.roadLength)}m（${value.roadNodeCount} 节点）` : '未生成' },
-    { label: '道路状态', value: value.roadFailureReason ? value.roadFailureReason : value.roadComplete ? '完成' : '-' },
-  ]
-  if (value.phase === 'sampling') {
-    rows.unshift({ label: '采样进度', value: `${Math.round(value.progress * 100)}%` })
-  }
-  return rows
-})
-
-function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
-  switch (phase) {
-    case 'sampling':
-      return '采样地形'
-    case 'generating':
-      return '生成中'
-    case 'streaming':
-      return '流式生成'
-    case 'error':
-      return '错误'
-    case 'disabled':
-      return '已禁用'
-    default:
-      return '空闲'
-  }
 }
 </script>
 
@@ -348,10 +461,15 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
     </v-expansion-panel-title>
     <v-expansion-panel-text>
       <div v-if="propsValue" class="pl-panel">
+
+        <!-- 生成 -->
         <div class="pl-section">
-          <div class="pl-section__title">生成</div>
+          <div class="pl-section__title">
+            <span class="pl-section__name">生成</span>
+          </div>
           <div class="pl-row">
             <v-text-field
+              class="pl-seed"
               :model-value="propsValue.seed"
               label="种子"
               density="compact"
@@ -364,41 +482,51 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
             <v-btn size="small" variant="text" :disabled="!componentEnabled" @click="handleRandomizeSeed">随机</v-btn>
             <v-btn size="small" variant="tonal" :disabled="!componentEnabled" @click="handleRegenerate">重新生成</v-btn>
           </div>
-          <div class="pl-row">
-            <v-select
-              :model-value="propsValue.quality"
-              label="质量档"
-              density="compact"
-              variant="underlined"
-              hide-details
-              :items="qualityOptions"
-              item-title="label"
-              item-value="value"
-              :disabled="!componentEnabled"
-              @update:model-value="handleQualityChange"
-            />
-          </div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in samplingFields"
-              :key="field.key"
-              :model-value="fieldValue('sampling', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('sampling', field, value)"
-            />
-          </div>
+          <v-select
+            :model-value="propsValue.quality"
+            label="质量档"
+            density="compact"
+            variant="underlined"
+            hide-details
+            :items="qualityOptions"
+            item-title="label"
+            item-value="value"
+            :disabled="!componentEnabled"
+            @update:model-value="handleQualityChange"
+          />
+          <template v-for="(block, blockIndex) in samplingBlocks" :key="`sampling-${blockIndex}`">
+            <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>
+            <div
+              v-for="(row, rowIndex) in block.rows"
+              :key="`sampling-${blockIndex}-${rowIndex}`"
+              class="pl-field-row"
+              :class="{ 'pl-field-row--single': row.length === 1 }"
+            >
+              <v-text-field
+                v-for="field in row"
+                :key="field.key"
+                :model-value="fieldValue('sampling', field.key)"
+                :label="field.label"
+                :suffix="field.suffix"
+                :placeholder="field.placeholder"
+                density="compact"
+                variant="underlined"
+                type="number"
+                hide-details
+                :step="field.step"
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => handleNumberInput('sampling', field, value)"
+              />
+            </div>
+          </template>
         </div>
 
+        <!-- 公路 -->
         <div class="pl-section">
           <div class="pl-section__title">
-            公路
+            <span class="pl-section__name">公路</span>
             <v-switch
+              class="pl-compact-switch"
               :model-value="propsValue.road.enabled"
               density="compact"
               hide-details
@@ -444,205 +572,72 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               </div>
             </div>
           </div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in roadFields"
-              :key="field.key"
-              :model-value="fieldValue('road', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('road', field, value)"
-            />
-          </div>
+          <template v-for="(block, blockIndex) in roadBlocks" :key="`road-${blockIndex}`">
+            <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>
+            <div v-if="block.hint" class="pl-hint">{{ block.hint }}</div>
+            <div
+              v-for="(row, rowIndex) in block.rows"
+              :key="`road-${blockIndex}-${rowIndex}`"
+              class="pl-field-row"
+              :class="{ 'pl-field-row--single': row.length === 1 }"
+            >
+              <v-text-field
+                v-for="field in row"
+                :key="field.key"
+                :model-value="fieldValue('road', field.key)"
+                :label="field.label"
+                :suffix="field.suffix"
+                :placeholder="field.placeholder"
+                density="compact"
+                variant="underlined"
+                type="number"
+                hide-details
+                :step="field.step"
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => handleNumberInput('road', field, value)"
+              />
+            </div>
+          </template>
         </div>
 
-        <div class="pl-section">
-          <div class="pl-section__title">森林 / 树木</div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in forestFields"
-              :key="field.key"
-              :model-value="fieldValue('forest', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('forest', field, value)"
-            />
-          </div>
-        </div>
-
+        <!-- 紧邻道路的区块（路侧墙体，官方 WallController 四类） -->
         <div class="pl-section">
           <div class="pl-section__title">
-            草
+            <span class="pl-section__name">墙体</span>
+          </div>
+          <div v-for="kind in wallKinds" :key="kind.key" class="pl-toggle-row">
+            <span class="pl-toggle-row__label">{{ kind.label }}</span>
             <v-switch
-              :model-value="propsValue.grass.enabled"
+              class="pl-compact-switch"
+              :model-value="wallEnabled(kind.key)"
               density="compact"
               hide-details
               color="primary"
               :disabled="!componentEnabled"
-              @update:model-value="(value) => patchGroup('grass', { enabled: value !== false })"
+              @update:model-value="(value) => patchWall(kind.key, { enabled: value !== false })"
             />
           </div>
-          <div class="pl-grid">
+          <div class="pl-field-row pl-field-row--single">
             <v-text-field
-              v-for="field in grassFields"
-              :key="field.key"
-              :model-value="fieldValue('grass', field.key)"
-              :label="field.label"
+              :model-value="wallDensity()"
+              label="石墙密度"
               density="compact"
               variant="underlined"
               type="number"
               hide-details
-              :step="field.step"
+              :step="0.05"
               :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('grass', field, value)"
+              @update:model-value="(value) => patchWall('drystone', { density: Math.min(1, Math.max(0, Number(value) || 0)) })"
             />
           </div>
         </div>
 
+        <!-- 地表（含原「素材」区块） -->
         <div class="pl-section">
           <div class="pl-section__title">
-            灌木
+            <span class="pl-section__name">地表</span>
             <v-switch
-              :model-value="propsValue.bushes.enabled"
-              density="compact"
-              hide-details
-              color="primary"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => patchGroup('bushes', { enabled: value !== false })"
-            />
-          </div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in bushFields"
-              :key="field.key"
-              :model-value="fieldValue('bushes', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('bushes', field, value)"
-            />
-          </div>
-        </div>
-
-        <div class="pl-section">
-          <div class="pl-section__title">
-            树冠色斑
-            <v-switch
-              :model-value="propsValue.canopy.enabled"
-              density="compact"
-              hide-details
-              color="primary"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => patchGroup('canopy', { enabled: value !== false })"
-            />
-          </div>
-        </div>
-
-        <div class="pl-section">
-          <div class="pl-section__title">
-            水面
-            <v-switch
-              :model-value="propsValue.water.enabled"
-              density="compact"
-              hide-details
-              color="primary"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => patchGroup('water', { enabled: value !== false })"
-            />
-          </div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in waterFields"
-              :key="field.key"
-              :model-value="fieldValue('water', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('water', field, value)"
-            />
-          </div>
-        </div>
-
-        <div class="pl-section">
-          <div class="pl-section__title">
-            护栏
-            <v-switch
-              :model-value="propsValue.barrier.enabled"
-              density="compact"
-              hide-details
-              color="primary"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => patchGroup('barrier', { enabled: value !== false })"
-            />
-          </div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in barrierFields"
-              :key="field.key"
-              :model-value="fieldValue('barrier', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('barrier', field, value)"
-            />
-          </div>
-        </div>
-
-        <div class="pl-section">
-          <div class="pl-section__title">
-            风摆
-            <v-switch
-              :model-value="propsValue.wind.enabled"
-              density="compact"
-              hide-details
-              color="primary"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => patchGroup('wind', { enabled: value !== false })"
-            />
-          </div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in windFields"
-              :key="field.key"
-              :model-value="fieldValue('wind', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('wind', field, value)"
-            />
-          </div>
-        </div>
-
-        <div class="pl-section">
-          <div class="pl-section__title">
-            地表混合
-            <v-switch
+              class="pl-compact-switch"
               :model-value="propsValue.surface.enabled"
               density="compact"
               hide-details
@@ -650,9 +645,12 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               :disabled="!componentEnabled"
               @update:model-value="(value) => patchGroup('surface', { enabled: value !== false })"
             />
+          </div>
+          <div class="pl-toggle-row">
+            <span class="pl-toggle-row__label">地表贴图</span>
             <v-switch
+              class="pl-compact-switch"
               :model-value="propsValue.surface.textures"
-              label="地表贴图"
               density="compact"
               hide-details
               color="primary"
@@ -660,22 +658,33 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               @update:model-value="(value) => patchGroup('surface', { textures: value !== false })"
             />
           </div>
-          <div class="pl-grid">
-            <v-text-field
-              v-for="field in surfaceFields"
-              :key="field.key"
-              :model-value="fieldValue('surface', field.key)"
-              :label="field.label"
-              density="compact"
-              variant="underlined"
-              type="number"
-              hide-details
-              :step="field.step"
-              :disabled="!componentEnabled"
-              @update:model-value="(value) => handleNumberInput('surface', field, value)"
-            />
-          </div>
-          <div class="pl-row pl-row--colors">
+          <template v-for="(block, blockIndex) in surfaceBlocks" :key="`surface-${blockIndex}`">
+            <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>
+            <div
+              v-for="(row, rowIndex) in block.rows"
+              :key="`surface-${blockIndex}-${rowIndex}`"
+              class="pl-field-row"
+              :class="{ 'pl-field-row--single': row.length === 1 }"
+            >
+              <v-text-field
+                v-for="field in row"
+                :key="field.key"
+                :model-value="fieldValue('surface', field.key)"
+                :label="field.label"
+                :suffix="field.suffix"
+                :placeholder="field.placeholder"
+                density="compact"
+                variant="underlined"
+                type="number"
+                hide-details
+                :step="field.step"
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => handleNumberInput('surface', field, value)"
+              />
+            </div>
+          </template>
+          <div class="pl-subtitle">颜色</div>
+          <div class="pl-color-grid">
             <label class="pl-color">
               <span>草地色</span>
               <input
@@ -713,12 +722,8 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
               />
             </label>
           </div>
-        </div>
-
-        <div class="pl-section">
-          <div class="pl-section__title">素材（在线资产包）</div>
-          <div class="pl-toggle-row">
-            <span class="pl-toggle-row__label">基色模式</span>
+          <div class="pl-subtitle">基色模式</div>
+          <div class="pl-choice-row">
             <button
               type="button"
               class="pl-choice"
@@ -749,26 +754,77 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
           />
         </div>
 
+        <!-- 植被与其他要素 -->
+        <div v-for="section in featureSections" :key="section.group" class="pl-section">
+          <div class="pl-section__title">
+            <span class="pl-section__name">{{ section.title }}</span>
+            <v-switch
+              v-if="section.withSwitch"
+              class="pl-compact-switch"
+              :model-value="sectionEnabled(section.group)"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup(section.group, { enabled: value !== false })"
+            />
+          </div>
+          <template v-for="(block, blockIndex) in section.blocks" :key="`${section.group}-${blockIndex}`">
+            <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>
+            <div
+              v-for="(row, rowIndex) in block.rows"
+              :key="`${section.group}-row-${rowIndex}`"
+              class="pl-field-row"
+              :class="{ 'pl-field-row--single': row.length === 1 }"
+            >
+              <v-text-field
+                v-for="field in row"
+                :key="field.key"
+                :model-value="fieldValue(section.group, field.key)"
+                :label="field.label"
+                :suffix="field.suffix"
+                :placeholder="field.placeholder"
+                density="compact"
+                variant="underlined"
+                type="number"
+                hide-details
+                :step="field.step"
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => handleNumberInput(section.group, field, value)"
+              />
+            </div>
+          </template>
+        </div>
+
+        <!-- 调试 -->
         <div class="pl-section">
-          <div class="pl-section__title">调试</div>
-          <v-switch
-            :model-value="propsValue.debug.showRoadPath"
-            label="显示道路路径"
-            density="compact"
-            hide-details
-            color="primary"
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => patchGroup('debug', { showRoadPath: value === true })"
-          />
-          <v-switch
-            :model-value="propsValue.debug.showChunks"
-            label="显示分块范围"
-            density="compact"
-            hide-details
-            color="primary"
-            :disabled="!componentEnabled"
-            @update:model-value="(value) => patchGroup('debug', { showChunks: value === true })"
-          />
+          <div class="pl-section__title">
+            <span class="pl-section__name">调试</span>
+          </div>
+          <div class="pl-toggle-row">
+            <span class="pl-toggle-row__label">显示道路路径</span>
+            <v-switch
+              class="pl-compact-switch"
+              :model-value="propsValue.debug.showRoadPath"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('debug', { showRoadPath: value === true })"
+            />
+          </div>
+          <div class="pl-toggle-row">
+            <span class="pl-toggle-row__label">显示分块范围</span>
+            <v-switch
+              class="pl-compact-switch"
+              :model-value="propsValue.debug.showChunks"
+              density="compact"
+              hide-details
+              color="primary"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('debug', { showChunks: value === true })"
+            />
+          </div>
         </div>
 
       </div>
@@ -793,46 +849,110 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
 .pl-panel {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
+/* 区块：细分隔线 + 统一标题行（标题左、开关右） */
 .pl-section {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
+}
+
+.pl-section + .pl-section {
+  margin-top: 0.3rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .pl-section__title {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  font-size: 0.82rem;
+  gap: 0.4rem;
+  min-height: 24px;
+  font-size: 0.8rem;
   font-weight: 600;
+  letter-spacing: 0.02em;
   color: rgba(233, 236, 241, 0.88);
 }
 
-.pl-section__hint {
-  font-size: 0.72rem;
-  color: rgba(233, 236, 241, 0.6);
+.pl-section__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pl-subtitle {
+  margin-top: 0.35rem;
+  margin-bottom: -0.1rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  color: rgba(233, 236, 241, 0.55);
+}
+
+.pl-hint {
+  font-size: 0.7rem;
+  line-height: 1.35;
+  color: rgba(233, 236, 241, 0.62);
+}
+
+/* 标题行/开关行里的紧凑开关：压掉 v-switch 默认 40px 控件高度与右侧留白 */
+.pl-compact-switch {
+  --v-input-control-height: 24px;
+  flex: none;
+  margin-inline-end: 4px;
+}
+
+.pl-field-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 0.5rem 0.6rem;
+}
+
+.pl-field-row--single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .pl-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-}
-
-.pl-row :deep(.v-text-field) {
-  flex: 1;
-}
-
-.pl-row--colors {
+  gap: 0.4rem;
   flex-wrap: wrap;
+}
+
+.pl-seed {
+  flex: 1 1 96px;
+  min-width: 0;
+}
+
+.pl-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 24px;
+}
+
+.pl-toggle-row__label {
+  font-size: 0.78rem;
+  color: rgba(193, 206, 218, 0.85);
+}
+
+.pl-toggle-row .pl-compact-switch {
+  margin-inline-start: auto;
+}
+
+.pl-color-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 0.6rem;
 }
 
 .pl-color {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.3rem;
   font-size: 0.76rem;
   color: rgba(233, 236, 241, 0.75);
@@ -847,78 +967,16 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
   cursor: pointer;
 }
 
-.pl-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.2rem 0.6rem;
+.pl-color input[type='color']:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.pl-slot {
+.pl-choice-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.3rem 0.4rem;
-  border: 1px dashed rgba(148, 163, 184, 0.35);
-  border-radius: 6px;
-}
-
-.pl-slot.is-active {
-  border-color: rgba(96, 165, 250, 0.9);
-  background: rgba(59, 130, 246, 0.12);
-}
-
-.pl-slot.is-disabled {
-  opacity: 0.55;
-}
-
-.pl-slot__label {
-  font-size: 0.76rem;
-  color: rgba(233, 236, 241, 0.8);
-}
-
-.pl-slot__assets {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-.pl-slot__thumb {
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: 1px solid rgba(148, 163, 184, 0.4);
-  border-radius: 4px;
-  background-color: rgba(69, 90, 100, 0.9);
-  background-size: cover;
-  background-position: center;
-  cursor: pointer;
-}
-
-.pl-slot__thumb--add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background-color: rgba(30, 41, 59, 0.6);
-  color: rgba(233, 236, 241, 0.8);
-}
-
-.pl-stats {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-
-.pl-toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 4px 0;
-}
-
-.pl-toggle-row__label {
-  font-size: 0.78rem;
-  color: rgba(159, 181, 199, 0.9);
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
 .pl-choice {
@@ -929,12 +987,19 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
   padding: 3px 10px;
   font-size: 0.76rem;
   cursor: pointer;
+  white-space: nowrap;
+  flex: none;
 }
 
 .pl-choice--active {
   border-color: rgba(88, 160, 232, 0.9);
   background: rgba(88, 160, 232, 0.18);
   color: #ffffff;
+}
+
+.pl-choice:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .pl-road-path {
@@ -947,6 +1012,7 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
 .pl-road-path__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.4rem;
 }
 
@@ -981,33 +1047,5 @@ function phaseLabel(phase: ProceduralLandscapeRuntimeStats['phase']): string {
   flex: 1;
   font-size: 0.72rem;
   color: rgba(233, 236, 241, 0.7);
-}
-
-.pl-stats__row {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 0.76rem;
-}
-
-.pl-stats__label {
-  color: rgba(233, 236, 241, 0.65);
-}
-
-.pl-stats__value {
-  color: rgba(233, 236, 241, 0.92);
-  text-align: right;
-}
-
-.pl-warnings {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  margin-top: 0.3rem;
-}
-
-.pl-warnings__item {
-  font-size: 0.72rem;
-  color: rgb(251, 191, 36);
 }
 </style>

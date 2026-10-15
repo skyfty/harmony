@@ -29,6 +29,19 @@ export interface RoadTraceNode {
   z: number
   y: number
   heading: number
+  /**
+   * 官方 midline 节点字段（墙体 / 划线判定用，语义与 lab `core/roadTrace.ts` 一致）：
+   *  - `index`：节点序号 `i`（起点 = 0）；
+   *  - `lateral`：侧向梯度 `g = (feelL - feelR) / feelDist / maxSlope`（1.0 = 坡度上限）；
+   *  - `longitudinal`：纵向梯度 `gf = (feelAvg - feelAhead) / feelDist / maxSlope`；
+   *  - `turn`：转向需求 `t`（-1..1）；
+   *  - `headingDelta`：本节点实际转角 `da`（弧度）。
+   */
+  index: number
+  lateral: number
+  longitudinal: number
+  turn: number
+  headingDelta: number
 }
 
 export interface RoadTraceResult {
@@ -204,7 +217,17 @@ export function traceRoadPath(
   // Index of the waypoint currently pursued (0 is the start itself).
   let targetIndex = waypointMode ? 1 : -1
 
-  const nodes: RoadTraceNode[] = [{ x, z, y, heading }]
+  const nodes: RoadTraceNode[] = [{
+    x,
+    z,
+    y,
+    heading,
+    index: 0,
+    lateral: 0,
+    longitudinal: 0,
+    turn: 0,
+    headingDelta: 0,
+  }]
   let length = 0
   let complete = false
   let failureReason: string | null = null
@@ -303,12 +326,23 @@ export function traceRoadPath(
       break
     }
 
+    const previousHeading = heading
     heading = wrapAngle(heading + best.deltaAngle)
     x = best.x
     z = best.z
     y = best.y
     length += options.stepLength
-    nodes.push({ x, z, y, heading })
+    nodes.push({
+      x,
+      z,
+      y,
+      heading,
+      index: nodes.length,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: wrapAngle(heading - previousHeading),
+    })
 
     if (waypointMode && targetIndex >= 1) {
       // Advance through every waypoint already within the guide tolerance
@@ -351,5 +385,43 @@ export function traceRoadPath(
     }
   }
 
+  annotateRoadNodes(grid, options, nodes)
+
   return { nodes, length, complete, failureReason, rescueTurns }
+}
+
+/**
+ * 官方 `A.gradLat / A.gradLon / A.bT` 的等价探针（在**轨迹完成后**逐节点计算）：
+ * 墙体与划线判定都吃这三个量，它们必须和 lab 一样挂在节点上而不是临时算。
+ * 梯度按 `feelDistance × maxSlope` 归一化（1.0 = 该路段坡度上限），与官方
+ * `gradLat /= maxGrad` 同口径。
+ */
+function annotateRoadNodes(
+  grid: TerrainHeightGrid,
+  options: RoadTraceOptions,
+  nodes: RoadTraceNode[],
+): void {
+  const feel = Math.max(1e-3, options.feelDistance)
+  const angle = options.feelAngleRad
+  const scale = feel * Math.max(1e-3, options.maxSlope)
+  for (let index = 1; index < nodes.length; index += 1) {
+    const node = nodes[index]!
+    const ahead = node.y
+    const leftY = grid.sampleHeight(
+      node.x + Math.cos(node.heading - angle) * feel,
+      node.z + Math.sin(node.heading - angle) * feel,
+    )
+    const rightY = grid.sampleHeight(
+      node.x + Math.cos(node.heading + angle) * feel,
+      node.z + Math.sin(node.heading + angle) * feel,
+    )
+    if (leftY == null || rightY == null) {
+      continue
+    }
+    const average = (leftY + rightY) / 2
+    const difference = (rightY - leftY) / 2
+    node.lateral = (leftY - rightY) / scale
+    node.longitudinal = (average - ahead) / scale
+    node.turn = difference !== 0 ? clamp((average - ahead) / difference, -1, 1) : 0
+  }
 }

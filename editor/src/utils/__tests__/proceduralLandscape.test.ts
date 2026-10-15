@@ -45,6 +45,14 @@ import {
 } from '@schema/proceduralLandscape/surfaceMaterial'
 import { PROCEDURAL_LANDSCAPE_COMPONENT_TYPE } from '@schema/components'
 import { visitExplicitComponentAssetReferences } from '@/utils/sceneExplicitAssetReferences'
+import { computeRoadMarkings } from '@schema/proceduralLandscape/roadMarkings'
+import {
+  DEFAULT_ROAD_STYLE,
+  ROAD_STYLE_PROFILES,
+  WALL_NODE_SPACING,
+  WALL_SEGMENT_RULES,
+} from '@schema/proceduralLandscape/roadStyle'
+import { computeWallSegments, type WallTerrainSampling } from '@schema/proceduralLandscape/walls'
 
 function makeGridMesh(
   options: {
@@ -499,6 +507,26 @@ describe('road waypoint props', () => {
     const world = transformRoadWaypointsToWorld(matrix, activeRoadWaypoints(twoPoints))
     expect(world).toEqual([{ x: 101, z: 201 }, { x: 104, z: 206 }])
   })
+
+  /**
+   * 产品规则：道路只由手绘路径生成。运行时（runtime.ts 的 road 门禁）以
+   * `activeRoadWaypoints` 是否为空作为唯一判据，所以默认 props（0 个路径点）
+   * 与只有 1 个路径点时都不建路——组件初始状态因此没有那条随机公路。
+   */
+  it('builds no road until at least two waypoints are drawn', () => {
+    expect(activeRoadWaypoints(createDefaultProceduralLandscapeProps({ id: 'node-a' }))).toHaveLength(0)
+
+    const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
+    const onePoint = clampProceduralLandscapeProps({
+      road: { ...defaults.road, waypoints: [{ x: 12, z: -8 }] },
+    }, 'node-a')
+    expect(activeRoadWaypoints(onePoint)).toHaveLength(0)
+
+    const twoPoints = clampProceduralLandscapeProps({
+      road: { ...defaults.road, waypoints: [{ x: 12, z: -8 }, { x: 40, z: 22 }] },
+    }, 'node-a')
+    expect(activeRoadWaypoints(twoPoints)).toHaveLength(2)
+  })
 })
 
 describe('noise and density field', () => {
@@ -556,8 +584,8 @@ describe('chunk planning', () => {
     })
     const roadPath = roadEnabled
       ? [
-          { x: 0, z: 256, y: 0, heading: 0 },
-          { x: 512, z: 256, y: 0, heading: 0 },
+          { x: 0, z: 256, y: 0, heading: 0, index: 0, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
+          { x: 512, z: 256, y: 0, heading: 0, index: 1, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
         ]
       : []
     const roadField = roadEnabled
@@ -697,8 +725,8 @@ describe('road field encoding', () => {
 
   it('builds a road field and texture for a straight path', () => {
     const path = [
-      { x: 0, z: 50, y: 10, heading: 0 },
-      { x: 100, z: 50, y: 12, heading: 0 },
+      { x: 0, z: 50, y: 10, heading: 0, index: 0, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
+      { x: 100, z: 50, y: 12, heading: 0, index: 1, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
     ]
     const field = buildRoadFieldData(path, {
       minX: 0,
@@ -770,6 +798,96 @@ describe('official surface parity (slowroads.io)', () => {
 
     patch.restore()
     expect(mesh.material).toBe(original)
+  })
+})
+
+describe('roadside walls + road markings (official equivalent rules)', () => {
+  const style = ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE]
+
+  /** 造一条笔直道路 + 缓坡地形的采样器（等价 lab 的 heightfield/roadProfile 组合）。 */
+  function makeWallSampling(roadWidth: number): {
+    sampling: WallTerrainSampling
+    nodes: Array<{ index: number; headingDelta: number }>
+  } {
+    const length = 600
+    const terrainAt = (x: number, z: number): number => 20 + Math.sin(z / 40) * 8 + x * 0.02
+    const roadY = (along: number): number => terrainAt(0, along)
+    const nodes = Array.from({ length: Math.floor(length / 8) + 1 }, (_, index) => ({
+      index,
+      headingDelta: 0.01,
+    }))
+    const sampling: WallTerrainSampling = {
+      length,
+      halfWidth: roadWidth * 0.5,
+      waterLevel: 0,
+      terrainHeightAt: terrainAt,
+      surfaceHeightAt: (x, z) => terrainAt(x, z),
+      sampleRoad: (along) => ({ x: 0, z: along, y: roadY(along), heading: 0 }),
+      shadowAt: () => 0,
+    }
+    return { sampling, nodes }
+  }
+
+  it('places walls at the official distances and honours segment length rules', () => {
+    const { sampling, nodes } = makeWallSampling(7)
+    const segments = computeWallSegments(sampling, nodes as never, {
+      seed: 7,
+      roadWidth: 7,
+      density: 1,
+      detail: 3,
+      style,
+    })
+    expect(segments.length).toBeGreaterThan(0)
+    for (const segment of segments) {
+      const nodes = (segment.endAlong - segment.startAlong) / WALL_NODE_SPACING
+      const minNodes = segment.type === 'barrier' || segment.type === 'fence'
+        ? WALL_SEGMENT_RULES.minRunNodes
+        : 1
+      expect(nodes).toBeLessThanOrEqual(WALL_SEGMENT_RULES.maxRunNodes + 1e-6)
+      expect(nodes).toBeGreaterThanOrEqual(minNodes - 1e-6)
+      const expected = segment.type === 'drystone'
+        ? 7 + 2
+        : sampling.halfWidth + (segment.type === 'seaWall' ? 0.8 : 0.4)
+      expect(Math.abs(segment.distance)).toBeCloseTo(expected, 6)
+      expect(segment.points.length).toBeGreaterThanOrEqual(2)
+    }
+  })
+
+  it('is deterministic for the same seed and reacts to density', () => {
+    const { sampling, nodes } = makeWallSampling(7)
+    const settings = { seed: 42, roadWidth: 7, density: 1, detail: 3, style }
+    const first = computeWallSegments(sampling, nodes as never, settings)
+    const second = computeWallSegments(sampling, nodes as never, settings)
+    expect(first.map((s) => [s.type, s.side, s.startAlong, s.endAlong]))
+      .toEqual(second.map((s) => [s.type, s.side, s.startAlong, s.endAlong]))
+    const sparse = computeWallSegments(sampling, nodes as never, { ...settings, density: 0.2 })
+    expect(sparse.length).toBeLessThanOrEqual(first.length)
+  })
+
+  it('marks solid lines only after enough look-ahead and keeps the tail dashed', () => {
+    const nodes = Array.from({ length: 80 }, (_, index) => ({
+      x: index * 8,
+      z: Math.sin(index / 6) * 24,
+      y: 0,
+      heading: Math.cos(index / 6) * 0.3,
+      index,
+      lateral: Math.sin(index / 5) * 1.4,
+      longitudinal: Math.cos(index / 4) * 0.4,
+      turn: Math.sin(index / 6) * 0.3,
+      headingDelta: Math.cos(index / 6) * 0.06,
+    }))
+    const weights = computeRoadMarkings(nodes as never, {
+      style,
+      nodeSpacing: 8,
+      shadowAt: () => 0.1,
+      edgeOffset: 3.5,
+      waterLevel: 0,
+    })
+    expect(weights).toHaveLength(nodes.length)
+    expect(weights.every((w) => typeof w.solid === 'boolean')).toBe(true)
+    // 官方没有足够前瞻时不判定：尾部 markingsMargin-1 个节点不允许实线。
+    const tail = weights.slice(-(style.markingsMargin - 1))
+    expect(tail.every((w) => !w.solidLeft && !w.solidRight)).toBe(true)
   })
 })
 

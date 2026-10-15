@@ -49,6 +49,13 @@ pnpm --dir tools assets:serve-slowroads-lab    # http://localhost:8097 提供 as
 - `scripts/serve-asset-bundle.mjs`：本地静态服务，模拟服务器按需下载（fetch→blob→纹理）。
 - 素材 supplement：云贴图 `clouds_01.700a3fdb.png`（天气系统用）与木护栏不在用户的
   下载目录里，作为补充文件随仓库提交，materialize 时会一并复制进 `assets-src/` 与资产包。
+  2026-10 起用户素材目录补齐了宽路与墙体（`road_base` / `road_overlay_spring` /
+  `road_paint_*` / `wall_barrier` / `spring_wall_drystone` / `wall_concrete`），
+  随后又补齐了秋季 overlay、冬季宽路与冬季墙体（`road_overlay_autumn` / `winter_road` /
+  `winter_wall_*`），资产包 100 → 118 个文件。仍缺的只有夏/秋共用的 `wall_drystone` 与
+  `wall_barrier_wood`（回退 spring 贴图，见「已知差异」）；官方虽加载但 shipped 着色器里
+  被注释掉的 `road_paint_dashed_long` 不需要，`bridge`（桥面）随桥系统一起未接入，
+  作为备用素材入库。
 
 ## 架构分层（迁移关键）
 
@@ -90,6 +97,12 @@ pnpm --dir tools assets:serve-slowroads-lab    # http://localhost:8097 提供 as
 | 灌木/花草 | spring_bushes | summer_bushes | autumn_bushes | winter_bushes |
 | 草丛精灵 | summer_grasses | summer_grasses | summer_grasses | winter_grasses |
 | 公路 | base_spring+overlay_spring | road_single_base | road_single_base+overlay_autumn | winter_road_single |
+
+> 公路槽位自 2026-10 起按官方双路型拆分：`road.single`（上表，路宽 < 2.25m）与
+> `road.wide`（`road_base` + 6 张划线，路宽 ≥ 2.25m，冬季官方无划线）。墙体槽位
+> `walls.{barrier,fence,seaWall,drystone}`：官方 `wall_barrier` 属 Barrier、
+> `spring_wall_barrier_wood` 属 Fence、`wall_concrete` 属 SeaWall、
+> `spring_wall_drystone` 属 Drystone（四季回退表见「已知差异」）。
 
 调色板（shader uniform）：春 #4F9140/#94AC53、夏 #699159/#AFAD64、秋 #4A7D4D/#BEAF79、
 冬 #FFFFFF/#DBDDE1（grassColA/B）；peakColA/B、fieldDiscolouration、roadCol 见
@@ -522,6 +535,37 @@ min(r,b)>70`；树带 = 画面两侧针叶树带）：
 
 ## 已知差异与后续
 
+- **宽路 + 划线（第七批）**：官方按 `roadWidth < 2.25m` 在 `roadSingle` 与宽路
+  （`road_base` + 6 张划线）之间切换；lab 已按同一阈值自动选择，并移植官方划线权重算法
+  （`core/roadMarkings.ts`：窗口内的转角/侧向梯度/山脊差三项加权、实线渐变回填、
+  merge 过渡贴图）。两处已知残差：
+  1. lab 默认路宽 7m（官方四种路型是 1.8 / 3.2 / 4.0m），划线贴图按整幅路宽铺满，
+     因此线宽与沥青颗粒尺度约为官方 NORMAL（3.2m）的 2.2 倍；面板的「官方路型」
+     下拉可直接切到 1.8 / 3.2 / 4.0m 复现官方观感。
+  2. 官方划线权重在**细节点**（2m）累加、**粗节点**（10m）判定；lab 追踪步长 8m，
+     窗口按节点数同口径（`markingsMargin`），`da` 已折算到 10m。
+- **路侧墙体（第七批）**：官方 `WallController` 五类墙里，lab 移植了沿路生成的
+  **Drystone / Barrier / Fence / SeaWall**（BridgeWall 与桥系统一起，未移植）：
+  - 尺寸/UV/抖动/下沉全部取官方常量（石墙 1.1m 高 × 顶 0.32 / 底 0.38 / 下沉 0.2、
+    `"wall"` 噪声 ±0.2m 位置 / ±0.1m 高度、每 5m 一个贴图循环）；
+    两个已踩过的坑（都已修）：
+    ① **墙体贴图必须 Repeat 寻址**——石墙/护栏/海墙的 u 沿墙推进（石墙每 5m、
+    护栏每 1.67m），用 ClampToEdge 会把 u>1 拉成条纹（“材质花了”）；木栏是图集区域，
+    仍用 Clamp。② 官方 `f0("wall", …)` 是**相干噪声**，抖动要在 10m 粗节点上取值、
+    2m 细节点之间插值；逐点白噪声会让墙顶与墙身呈锯齿状。
+  - 官方**护栏与木栏共用同一生成器**：`detail > 1` 时按节点序数交替出 Barrier / Fence，
+    因此路边会同时出现木栏与混凝土护栏（lab `LAB_DETAIL = 3`）；
+  - 官方梯度门限按 **lab 起伏尺度 ÷4** 折算（同地表高度带 ×4 的口径，`LAB_RELIEF_SCALE`）：
+    官方宽路档 2.0 → lab 0.5，否则 lab 地形永远达不到官方阈值，护栏/海墙会完全不出现；
+  - **干砌石墙的放置来源是等价的**：官方来自农田地块边界，lab 用官方 field 门限
+    （20m 网格 + 海拔 15..220m × 4 折算 + 坡度 ≤0.7 + 概率 0.5）生成地块掩膜，
+    紧贴公路的地块边界在 `roadWidth + 2m` 处成墙，段长规则用官方 30 / 3 / 4 节点；
+  - 官方节点字段 `h`（路面抬升量）在 Hills 恒为 0，lab 按 0 处理（`h < 0.6` / `h < -1`
+    两个门限因此恒真/恒假，与官方 shipped 行为一致）；
+  - 季节贴图：春/秋/冬的宽路 overlay 与墙体贴图已按官方表接入（冬季四张 `winter_wall_*`
+    与 `winter_road`、秋季 `road_overlay_autumn` 均已入库）；仍缺的只有夏/秋共用槽位
+    （官方 `wall_drystone` / `wall_barrier_wood` 不在素材目录）→ 回退 `spring_wall_drystone`
+    与 `spring_wall_barrier_wood`。
 - **近树卡圆锥假暗化未移植**（第六批顺带核对）：官方近树卡是**圆锥网格**，其 `fShadow =
   sqrt(saturate(vShadow)) * 0.65; rgb *= 1 - fShadow`（块 `M0`）依赖锥面径向位置
   （`centerDist`、`position.y / 12` 米高、larch/cypress 半径修正）；lab 近树卡是十字面片精灵，

@@ -241,9 +241,12 @@ describe('procedural landscape props (full refactor)', () => {
     expect(props.road.flattenBand).toBe(10)
     expect(props.grass.corridorWidth).toBe(20)
     expect(props.bushes.density).toBe(0.6)
-    expect(props.barrier.enabled).toBe(true)
-    expect(props.barrier.density).toBe(0.65)
-    expect(props.barrier.spacing).toBe(8)
+    // 路侧墙体（官方 WallController 四类）默认全开，石墙密度 = 官方地块概率（1.0）。
+    expect(props.walls.drystone.enabled).toBe(true)
+    expect(props.walls.drystone.density).toBe(1)
+    expect(props.walls.fence.enabled).toBe(true)
+    expect(props.walls.barrier.enabled).toBe(true)
+    expect(props.walls.seaWall.enabled).toBe(true)
     expect(props.wind.enabled).toBe(true)
     expect(props.wind.strength).toBe(1)
     expect(props.canopy.enabled).toBe(true)
@@ -261,7 +264,9 @@ describe('procedural landscape props (full refactor)', () => {
     const legacy = {
       grass: { windEnabled: false, flowerDensity: 99, tallGrassDensity: -3 },
       wind: { enabled: 'nope', strength: 12 },
-      barrier: { density: 5, spacing: 0, dropThreshold: 100 },
+      // 旧版 barrier 组（下坡落差近似）已废弃：enabled 映射到 fence/barrier/seaWall，
+      // density 映射到 drystone.density，spacing/dropThreshold 一并忽略。
+      barrier: { density: 0.4, spacing: 0, dropThreshold: 100 },
       water: { levelOffset: -999 },
       forest: { nearTreeRadius: 1000 },
       surface: { viewDistanceScale: 0.1 },
@@ -272,9 +277,10 @@ describe('procedural landscape props (full refactor)', () => {
     expect(props.grass.tallGrassDensity).toBe(0)
     expect(props.wind.enabled).toBe(true)
     expect(props.wind.strength).toBe(3)
-    expect(props.barrier.density).toBe(1)
-    expect(props.barrier.spacing).toBe(2)
-    expect(props.barrier.dropThreshold).toBe(20)
+    expect(props.walls.drystone.density).toBeCloseTo(0.4, 6)
+    expect(props.walls.fence.enabled).toBe(true)
+    expect('spacing' in props.walls.drystone).toBe(false)
+    expect('dropThreshold' in props.walls.drystone).toBe(false)
     expect(props.water.levelOffset).toBe(-50)
     expect(props.forest.nearTreeRadius).toBe(300)
     expect(props.surface.viewDistanceScale).toBe(1)

@@ -105,11 +105,56 @@ export interface SeasonImposterSet {
   normB: SeasonTextureRef
 }
 
-export interface SeasonRoadSet {
-  /** single-track road surface; vertical UV repeat every 2x road width. */
+/** 官方宽路里的划线贴图（`maps.road.paint*`，只在宽路材质绑定）。 */
+export interface SeasonRoadPaintSet {
+  /** 虚线（常驻中线）。 */
+  dashed: SeasonTextureRef
+  /** 两侧实线共用的中线实线贴图。 */
+  solid: SeasonTextureRef
+  solidLeft: SeasonTextureRef
+  solidRight: SeasonTextureRef
+  /** 实线起点的渐变贴图（官方 merge 槽位）。 */
+  mergeLeft: SeasonTextureRef
+  mergeRight: SeasonTextureRef
+}
+
+/** 一套路面贴图（官方 `maps.road` 或 `maps.roadSingle`）。 */
+export interface SeasonRoadStyleSet {
   base: SeasonTextureRef
   /** seasonal overlay (spring moss / autumn leaves); driven by tree shadow. */
   overlay?: SeasonTextureRef
+  /** 官方 `stretch`：单车道 2（每 2 倍路宽重复），宽路缺省 1。 */
+  stretch?: number
+  /** 官方宽路才绑定的划线贴图（冬季无划线）。 */
+  paint?: SeasonRoadPaintSet
+}
+
+export interface SeasonRoadSet {
+  /** 单车道路面（官方 `roadSingle`，路宽 < 2.25m）。 */
+  single: SeasonRoadStyleSet
+  /** 宽路路面（官方 `road`，路宽 ≥ 2.25m，含划线）。 */
+  wide: SeasonRoadStyleSet
+}
+
+/**
+ * 官方路侧墙体贴图（`maps.walls`）。
+ *
+ * 官方槽位与文件名对照（解包产物 @357963-380950，摘录见
+ * `reference/official/season-walls-and-roads.js`）：`wall_barrier` 属 **Barrier**、
+ * `spring_wall_barrier_wood` 属 **Fence**、`wall_concrete` 属 **SeaWall**、
+ * `*_wall_drystone` 属 **Drystone**。官方季节专属的 `wall_drystone`（夏/秋）、
+ * `winter_wall_*`（冬）与 `road_overlay_autumn`、`winter_road`、`paint_dashed_long`
+ * 不在下载素材目录内，按“同名季节优先、缺失回退 spring/中性档”的规则处理。
+ */
+export interface SeasonWallSet {
+  /** 硬护栏（混凝土/金属面板）。 */
+  barrier: SeasonTextureRef
+  /** 混凝土海墙。 */
+  seaWall: SeasonTextureRef
+  /** 木栏（立柱 + 横栏，lab 用实测精灵区域渲染）。 */
+  fence: SeasonTextureRef
+  /** 干砌石墙。 */
+  drystone: SeasonTextureRef
 }
 
 export interface SeasonCatalogEntry {
@@ -121,6 +166,7 @@ export interface SeasonCatalogEntry {
   trees: SeasonTreeSet
   imposters: SeasonImposterSet
   road: SeasonRoadSet
+  walls: SeasonWallSet
 }
 
 const AUTUMN_CONIFER_IMPOSTER_NORMAL = tex('autumn_imposters_1_n.2a7e8cf6', 'normal', 'linear')
@@ -158,8 +204,30 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       normB: AUTUMN_CONIFER_IMPOSTER_NORMAL,
     },
     road: {
-      base: tex('road_single_base_spring.2a1a3159'),
-      overlay: tex('road_single_overlay_spring.a23e0db5'),
+      single: {
+        base: tex('road_single_base_spring.2a1a3159'),
+        overlay: tex('road_single_overlay_spring.a23e0db5'),
+        stretch: 2,
+      },
+      wide: {
+        // 官方 spring：`maps.road = {base: road_base, paint*, overlay: road_overlay_spring}`。
+        base: tex('road_base.40d53c3c'),
+        overlay: tex('road_overlay_spring.10938687'),
+        paint: {
+          dashed: tex('road_paint_dashed.246907ab'),
+          solid: tex('road_paint_solid.5d853556'),
+          solidLeft: tex('road_paint_solid_left.68b665c9'),
+          solidRight: tex('road_paint_solid_right.3f96bedd'),
+          mergeLeft: tex('road_paint_merge_left.27a677e8'),
+          mergeRight: tex('road_paint_merge_right.5c821b1d'),
+        },
+      },
+    },
+    walls: {
+      barrier: tex('wall_barrier.63193046'),
+      seaWall: tex('wall_concrete.d56426dc'),
+      fence: tex('spring_wall_barrier_wood.29edf0af'),
+      drystone: tex('spring_wall_drystone.6c714f68'),
     },
   },
   summer: {
@@ -192,7 +260,29 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       normB: AUTUMN_CONIFER_IMPOSTER_NORMAL,
     },
     road: {
-      base: tex('road_single_base.d5dbc374'),
+      single: {
+        base: tex('road_single_base.d5dbc374'),
+        stretch: 2,
+      },
+      wide: {
+        // 官方 summer：同 spring 的宽路集，无 overlay。
+        base: tex('road_base.40d53c3c'),
+        paint: {
+          dashed: tex('road_paint_dashed.246907ab'),
+          solid: tex('road_paint_solid.5d853556'),
+          solidLeft: tex('road_paint_solid_left.68b665c9'),
+          solidRight: tex('road_paint_solid_right.3f96bedd'),
+          mergeLeft: tex('road_paint_merge_left.27a677e8'),
+          mergeRight: tex('road_paint_merge_right.5c821b1d'),
+        },
+      },
+    },
+    // 官方夏季 drystone 用 `wall_drystone`（不在素材目录）⇒ 回退 spring 贴图。
+    walls: {
+      barrier: tex('wall_barrier.63193046'),
+      seaWall: tex('wall_concrete.d56426dc'),
+      fence: tex('spring_wall_barrier_wood.29edf0af'),
+      drystone: tex('spring_wall_drystone.6c714f68'),
     },
   },
   autumn: {
@@ -225,8 +315,30 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       normB: AUTUMN_CONIFER_IMPOSTER_NORMAL,
     },
     road: {
-      base: tex('road_single_base.d5dbc374'),
-      overlay: tex('road_single_overlay_autumn.59ecdb8e'),
+      single: {
+        base: tex('road_single_base.d5dbc374'),
+        overlay: tex('road_single_overlay_autumn.59ecdb8e'),
+        stretch: 2,
+      },
+      wide: {
+        // 官方 autumn 宽路：road_base + road_overlay_autumn + 划线。
+        base: tex('road_base.40d53c3c'),
+        overlay: tex('road_overlay_autumn.68f523cb'),
+        paint: {
+          dashed: tex('road_paint_dashed.246907ab'),
+          solid: tex('road_paint_solid.5d853556'),
+          solidLeft: tex('road_paint_solid_left.68b665c9'),
+          solidRight: tex('road_paint_solid_right.3f96bedd'),
+          mergeLeft: tex('road_paint_merge_left.27a677e8'),
+          mergeRight: tex('road_paint_merge_right.5c821b1d'),
+        },
+      },
+    },
+    walls: {
+      barrier: tex('wall_barrier.63193046'),
+      seaWall: tex('wall_concrete.d56426dc'),
+      fence: tex('spring_wall_barrier_wood.29edf0af'),
+      drystone: tex('spring_wall_drystone.6c714f68'),
     },
   },
   winter: {
@@ -260,7 +372,21 @@ export const SEASON_CATALOG: Record<SeasonId, SeasonCatalogEntry> = {
       normB: AUTUMN_CONIFER_IMPOSTER_NORMAL,
     },
     road: {
-      base: tex('winter_road_single.7e3852c1'),
+      single: {
+        base: tex('winter_road_single.7e3852c1'),
+        stretch: 2,
+      },
+      wide: {
+        // 官方冬季宽路是 `winter_road`，且冬季**没有划线**（road 集里没有 paint* 槽位）。
+        base: tex('winter_road.e19b36b8'),
+      },
+    },
+    walls: {
+      // 官方冬季四张 `winter_wall_*` 贴图（已入素材目录）。
+      barrier: tex('winter_wall_barrier.2f3faaf6'),
+      seaWall: tex('winter_wall_concrete.edcd548c'),
+      fence: tex('winter_wall_barrier_wood.058b9fbc'),
+      drystone: tex('winter_wall_drystone.ef024453'),
     },
   },
 }
@@ -279,8 +405,6 @@ export const SHARED_TEXTURES = {
   seaWaves: linear('sea_waves.63ff8729'),
   /** cloud sheet used by the weather system (official loads `clouds_01` srgb-linear). */
   clouds: linear('clouds_01.700a3fdb'),
-  /** wooden barrier rail (not part of the slowroads download folder; committed supplement). */
-  barrier: tex('spring_wall_barrier_wood.29edf0af'),
 } as const satisfies Record<string, SeasonTextureRef>
 
 /** 8 near-tree meshes: 2 species x 4 variants (variant = atlas column). */
@@ -326,10 +450,27 @@ export function collectSeasonTextureRefs(season: SeasonId): SeasonTextureRef[] {
     entry.imposters.normA,
     entry.imposters.mapB,
     entry.imposters.normB,
-    entry.road.base,
+    entry.road.single.base,
+    entry.road.wide.base,
+    entry.walls.barrier,
+    entry.walls.seaWall,
+    entry.walls.fence,
+    entry.walls.drystone,
   ]
-  if (entry.road.overlay) {
-    refs.push(entry.road.overlay)
+  for (const road of [entry.road.single, entry.road.wide]) {
+    if (road.overlay) {
+      refs.push(road.overlay)
+    }
+    if (road.paint) {
+      refs.push(
+        road.paint.dashed,
+        road.paint.solid,
+        road.paint.solidLeft,
+        road.paint.solidRight,
+        road.paint.mergeLeft,
+        road.paint.mergeRight,
+      )
+    }
   }
   const seen = new Set<string>()
   return refs.filter((ref) => {

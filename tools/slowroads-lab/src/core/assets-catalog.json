@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-10-13T10:05:33.384Z",
+  "generatedAt": "2026-10-15T10:05:58.428Z",
   "source": "D:\\Downloads\\新建文件夹",
-  "entryCount": 100,
-  "totalBytes": 102209215,
+  "entryCount": 118,
+  "totalBytes": 112789364,
   "files": [
     {
       "logicalId": "autumn_bushes.b82ca395",
@@ -151,6 +151,16 @@
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "bridge.7eaed52d",
+      "file": "bridge.7eaed52d.png",
+      "kind": "png",
+      "bytes": 342076,
+      "hash": "sha256-b2269fc0598ea364",
+      "width": 512,
+      "height": 512,
+      "rgbaBytes": 1048576
     },
     {
       "logicalId": "clouds_01.700a3fdb",
@@ -331,6 +341,96 @@
       "width": 512,
       "height": 512,
       "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "road_base.40d53c3c",
+      "file": "road_base.40d53c3c.png",
+      "kind": "png",
+      "bytes": 1447280,
+      "hash": "sha256-99c51342eb0f72e6",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_overlay_autumn.68f523cb",
+      "file": "road_overlay_autumn.68f523cb.png",
+      "kind": "png",
+      "bytes": 1759664,
+      "hash": "sha256-f4776df0353730f8",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_overlay_spring.10938687",
+      "file": "road_overlay_spring.10938687.png",
+      "kind": "png",
+      "bytes": 653930,
+      "hash": "sha256-fe7f23a812863efa",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_paint_dashed.246907ab",
+      "file": "road_paint_dashed.246907ab.png",
+      "kind": "png",
+      "bytes": 364701,
+      "hash": "sha256-1a0485e2e01dd613",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_paint_merge_left.27a677e8",
+      "file": "road_paint_merge_left.27a677e8.png",
+      "kind": "png",
+      "bytes": 387476,
+      "hash": "sha256-a1c13ec2d5a97a87",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_paint_merge_right.5c821b1d",
+      "file": "road_paint_merge_right.5c821b1d.png",
+      "kind": "png",
+      "bytes": 388144,
+      "hash": "sha256-be00d9da9b3895e6",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_paint_solid.5d853556",
+      "file": "road_paint_solid.5d853556.png",
+      "kind": "png",
+      "bytes": 411400,
+      "hash": "sha256-837569237ed71cdd",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_paint_solid_left.68b665c9",
+      "file": "road_paint_solid_left.68b665c9.png",
+      "kind": "png",
+      "bytes": 388790,
+      "hash": "sha256-1af4759df51848c6",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "road_paint_solid_right.3f96bedd",
+      "file": "road_paint_solid_right.3f96bedd.png",
+      "kind": "png",
+      "bytes": 388682,
+      "hash": "sha256-bfdd81d78a5c21d7",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
     },
     {
       "logicalId": "road_single_base.d5dbc374",
@@ -544,6 +644,16 @@
       "kind": "png",
       "bytes": 393594,
       "hash": "sha256-72d288cd380c5483",
+      "width": 1024,
+      "height": 512,
+      "rgbaBytes": 2097152
+    },
+    {
+      "logicalId": "spring_wall_drystone.6c714f68",
+      "file": "spring_wall_drystone.6c714f68.png",
+      "kind": "png",
+      "bytes": 852652,
+      "hash": "sha256-3443cd61da800bf6",
       "width": 1024,
       "height": 512,
       "rgbaBytes": 2097152
@@ -895,6 +1005,26 @@
       }
     },
     {
+      "logicalId": "wall_barrier.63193046",
+      "file": "wall_barrier.63193046.png",
+      "kind": "png",
+      "bytes": 25755,
+      "hash": "sha256-dd82fb01d9fb3118",
+      "width": 512,
+      "height": 256,
+      "rgbaBytes": 524288
+    },
+    {
+      "logicalId": "wall_concrete.d56426dc",
+      "file": "wall_concrete.d56426dc.png",
+      "kind": "png",
+      "bytes": 258156,
+      "hash": "sha256-456b4a966ad4b03b",
+      "width": 1024,
+      "height": 256,
+      "rgbaBytes": 1048576
+    },
+    {
       "logicalId": "winter_bushes.8e9f3165",
       "file": "winter_bushes.8e9f3165.png",
       "kind": "png",
@@ -1011,6 +1141,16 @@
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "winter_road.e19b36b8",
+      "file": "winter_road.e19b36b8.png",
+      "kind": "png",
+      "bytes": 1359320,
+      "hash": "sha256-32964f76a42365d3",
+      "width": 1024,
+      "height": 1024,
+      "rgbaBytes": 4194304
+    },
+    {
       "logicalId": "winter_road_single.7e3852c1",
       "file": "winter_road_single.7e3852c1.png",
       "kind": "png",
@@ -1069,6 +1209,46 @@
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_wall_barrier.2f3faaf6",
+      "file": "winter_wall_barrier.2f3faaf6.png",
+      "kind": "png",
+      "bytes": 70909,
+      "hash": "sha256-779e6e72d1731b0f",
+      "width": 512,
+      "height": 256,
+      "rgbaBytes": 524288
+    },
+    {
+      "logicalId": "winter_wall_barrier_wood.058b9fbc",
+      "file": "winter_wall_barrier_wood.058b9fbc.png",
+      "kind": "png",
+      "bytes": 346315,
+      "hash": "sha256-b0e800c0fb39ac38",
+      "width": 1024,
+      "height": 512,
+      "rgbaBytes": 2097152
+    },
+    {
+      "logicalId": "winter_wall_concrete.edcd548c",
+      "file": "winter_wall_concrete.edcd548c.png",
+      "kind": "png",
+      "bytes": 292239,
+      "hash": "sha256-dfaa32b40c45f699",
+      "width": 1024,
+      "height": 256,
+      "rgbaBytes": 1048576
+    },
+    {
+      "logicalId": "winter_wall_drystone.ef024453",
+      "file": "winter_wall_drystone.ef024453.png",
+      "kind": "png",
+      "bytes": 842660,
+      "hash": "sha256-f2a8c278369f0226",
+      "width": 1024,
+      "height": 512,
+      "rgbaBytes": 2097152
     }
   ],
   "excluded": [

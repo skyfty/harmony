@@ -44,14 +44,11 @@ export interface ProceduralLandscapeRoadProps {
   /** Full road width in meters (both lanes). */
   width: number
   shoulderWidth: number
-  /** Null keeps the seeded default start (terrain center search). */
-  startX: number | null
-  startZ: number | null
-  /** Null keeps the seeded default heading. */
-  headingDeg: number | null
   /**
-   * Hand-drawn guide path (host node local XZ). Two or more points take over
-   * as ordered must-pass waypoints and `startX/startZ/headingDeg` are ignored.
+   * Hand-drawn guide path (host node local XZ). Two or more points are used as
+   * ordered must-pass waypoints: the road starts at the first point and its
+   * initial heading comes from the first -> second direction. Fewer than two
+   * points fall back to the terrain centre and the seeded heading.
    */
   waypoints: RoadWaypoint[]
   /** Guide tolerance in meters: step advances to the next waypoint within it. */
@@ -112,15 +109,23 @@ export interface ProceduralLandscapeWaterProps {
   levelOffset: number
 }
 
-/** 下坡侧木护栏（lab showBarrier / barrierDensity）。 */
-export interface ProceduralLandscapeBarrierProps {
-  enabled: boolean
-  /** 0..1 门限通过率。 */
-  density: number
-  /** 同一侧最小间隔（米）。 */
-  spacing: number
-  /** 参考落差（米）。 */
-  dropThreshold: number
+/**
+ * 官方路侧墙体（lab showWalls / showDrystone / showFence / showBarrier / showSeaWall /
+ * wallDensity）。放置规则见 `walls.ts`（官方 Barrier/Fence/SeaWall 判定 + 干砌石墙
+ * 的地块等价规则）。
+ *
+ * 旧版 `barrier` 组（下坡落差近似护栏）已废弃：读取时把 `enabled` 映射到
+ * `fence` 与 `barrier`，`density` 映射到 `drystone.density`，其余字段一并忽略。
+ */
+export interface ProceduralLandscapeWallsProps {
+  /** 干砌石墙（官方 Drystone）。 */
+  drystone: { enabled: boolean; density: number }
+  /** 木栏（官方 Fence）。 */
+  fence: { enabled: boolean }
+  /** 硬护栏（官方 Barrier）。 */
+  barrier: { enabled: boolean }
+  /** 混凝土海墙（官方 SeaWall）。 */
+  seaWall: { enabled: boolean }
 }
 
 /** 风摆（lab windEnabled / windStrength，逐层系数见 runtime WIND_FACTOR）。 */
@@ -146,7 +151,7 @@ export interface ProceduralLandscapeComponentProps {
   bushes: ProceduralLandscapeBushesProps
   canopy: ProceduralLandscapeCanopyProps
   water: ProceduralLandscapeWaterProps
-  barrier: ProceduralLandscapeBarrierProps
+  walls: ProceduralLandscapeWallsProps
   wind: ProceduralLandscapeWindProps
   debug: ProceduralLandscapeDebugProps
 }
@@ -262,9 +267,6 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       enabled: true,
       width: 7,
       shoulderWidth: 2.5,
-      startX: null,
-      startZ: null,
-      headingDeg: null,
       waypoints: [],
       waypointTolerance: 12,
       maxLength: null,
@@ -311,11 +313,11 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       enabled: true,
       levelOffset: 0,
     },
-    barrier: {
-      enabled: true,
-      density: 0.65,
-      spacing: 8,
-      dropThreshold: 1.2,
+    walls: {
+      drystone: { enabled: true, density: 1 },
+      fence: { enabled: true },
+      barrier: { enabled: true },
+      seaWall: { enabled: true },
     },
     wind: {
       enabled: true,
@@ -341,7 +343,17 @@ export function clampProceduralLandscapeProps(
   const bushes = props?.bushes as Partial<ProceduralLandscapeBushesProps> | undefined
   const canopy = props?.canopy as Partial<ProceduralLandscapeCanopyProps> | undefined
   const water = props?.water as Partial<ProceduralLandscapeWaterProps> | undefined
-  const barrier = props?.barrier as Partial<ProceduralLandscapeBarrierProps> | undefined
+  const walls = props?.walls as Partial<ProceduralLandscapeWallsProps> | undefined
+  // 旧版 `barrier` 组（下坡落差近似）废弃后的读入映射。
+  const legacyBarrier = (props as { barrier?: Record<string, unknown> } | null | undefined)?.barrier
+  const legacyBarrierEnabled = legacyBarrier ? legacyBarrier.enabled !== false : true
+  const legacyBarrierDensity = typeof legacyBarrier?.density === 'number'
+    ? legacyBarrier.density as number
+    : null
+  const wallGroupEnabled = (
+    value: { enabled?: unknown } | undefined,
+    fallback: boolean,
+  ): boolean => (value ? value.enabled !== false : fallback)
   const wind = props?.wind as Partial<ProceduralLandscapeWindProps> | undefined
   const debug = props?.debug as Partial<ProceduralLandscapeDebugProps> | undefined
 
@@ -377,9 +389,6 @@ export function clampProceduralLandscapeProps(
       enabled: road?.enabled !== false,
       width: clampNumber(road?.width, defaults.road.width, 3, 24),
       shoulderWidth: clampNumber(road?.shoulderWidth, defaults.road.shoulderWidth, 0, 10),
-      startX: clampNullableNumber(road?.startX, defaults.road.startX, -1e7, 1e7),
-      startZ: clampNullableNumber(road?.startZ, defaults.road.startZ, -1e7, 1e7),
-      headingDeg: clampNullableNumber(road?.headingDeg, defaults.road.headingDeg, -360, 360),
       waypoints: clampRoadWaypoints(road?.waypoints),
       waypointTolerance: clampNumber(road?.waypointTolerance, defaults.road.waypointTolerance, 4, 100),
       maxLength: clampNullableNumber(road?.maxLength, defaults.road.maxLength, 16, 100000),
@@ -424,11 +433,19 @@ export function clampProceduralLandscapeProps(
       enabled: water?.enabled !== false,
       levelOffset: clampNumber(water?.levelOffset, defaults.water.levelOffset, -50, 50),
     },
-    barrier: {
-      enabled: barrier?.enabled !== false,
-      density: clampNumber(barrier?.density, defaults.barrier.density, 0, 1),
-      spacing: clampNumber(barrier?.spacing, defaults.barrier.spacing, 2, 64),
-      dropThreshold: clampNumber(barrier?.dropThreshold, defaults.barrier.dropThreshold, 0.1, 20),
+    walls: {
+      drystone: {
+        enabled: wallGroupEnabled(walls?.drystone, legacyBarrierEnabled),
+        density: clampNumber(
+          walls?.drystone?.density,
+          legacyBarrierDensity ?? defaults.walls.drystone.density,
+          0,
+          1,
+        ),
+      },
+      fence: { enabled: wallGroupEnabled(walls?.fence, legacyBarrierEnabled) },
+      barrier: { enabled: wallGroupEnabled(walls?.barrier, legacyBarrierEnabled) },
+      seaWall: { enabled: wallGroupEnabled(walls?.seaWall, legacyBarrierEnabled) },
     },
     wind: {
       enabled: wind?.enabled !== false,
@@ -457,7 +474,12 @@ export function cloneProceduralLandscapeProps(
     bushes: { ...props.bushes },
     canopy: { ...props.canopy },
     water: { ...props.water },
-    barrier: { ...props.barrier },
+    walls: {
+      drystone: { ...props.walls.drystone },
+      fence: { ...props.walls.fence },
+      barrier: { ...props.walls.barrier },
+      seaWall: { ...props.walls.seaWall },
+    },
     wind: { ...props.wind },
     debug: { ...props.debug },
   }
@@ -509,7 +531,7 @@ export function roadHalfWidth(props: ProceduralLandscapeComponentProps): number 
 
 /**
  * 生效的手绘路径：≥2 个点才接管追踪起点/朝向；否则返回空数组，
- * 追踪回退到 `startX/startZ/headingDeg`（与迁移前行为一致）。
+ * 追踪回退到地形中心 + 种子朝向。
  */
 export function activeRoadWaypoints(props: ProceduralLandscapeComponentProps): RoadWaypoint[] {
   return props.road.waypoints.length >= 2 ? props.road.waypoints : []
