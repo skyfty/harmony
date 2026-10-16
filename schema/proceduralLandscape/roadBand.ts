@@ -264,10 +264,12 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
   }
   geometry.computeBoundingSphere()
 
+  // 初值全部指向 base 贴图；真正的路型（划线 6 张 / 单车道 stretch）由下面的
+  // applyTextures(textures) 在创建时立即写入，换季走同一条路径。
   const uniforms = {
     uRoadMap: { value: options.textures.base },
-    uRoadOverlay: { value: options.textures.overlay ?? options.textures.base },
-    uRoadHasOverlay: { value: options.textures.overlay ? 1 : 0 },
+    uRoadOverlay: { value: options.textures.base },
+    uRoadHasOverlay: { value: 0 },
     uRoadHasPaint: { value: 0 },
     uRoadPaintDashed: { value: options.textures.base },
     uRoadPaintSolid: { value: options.textures.base },
@@ -315,6 +317,35 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
     recordSlowroadsShaderAudit(material, shader)
   }
 
+  /**
+   * 写入一套官方路面贴图（base / overlay / 划线 6 张 / `stretch`）。
+   *
+   * 创建与换季共用同一条路径：`createRoadBand()` 建出来就是正确路型。
+   * 这一点必须成立——runtime 每次重建公路（改路宽、重画路径、重新生成）都会
+   * 重新 `createRoadBand()`，若只在换季时套用贴图，重建后 `uRoadHasPaint`
+   * 会退回 0、`uRoadTextureStretch` 退回 1，宽路的划线（宽路 + 划线档）与窄路
+   * （< 2.25m 单车道档）的贴图拉伸就都丢了。lab 建完 mesh 立刻调
+   * `setSeason`（`tools/slowroads-lab/src/main.ts`），所以 lab 表现正确。
+   */
+  function applyTextures(textures: RoadBandTextures): void {
+    const paint = textures.paint ?? null
+    uniforms.uRoadMap.value = textures.base
+    uniforms.uRoadOverlay.value = textures.overlay ?? textures.base
+    uniforms.uRoadHasOverlay.value = textures.overlay ? 1 : 0
+    uniforms.uRoadHasPaint.value = paint ? 1 : 0
+    uniforms.uRoadPaintDashed.value = paint?.dashed ?? textures.base
+    uniforms.uRoadPaintSolid.value = paint?.solid ?? textures.base
+    uniforms.uRoadPaintSolidLeft.value = paint?.solidLeft ?? textures.base
+    uniforms.uRoadPaintSolidRight.value = paint?.solidRight ?? textures.base
+    uniforms.uRoadPaintMergeLeft.value = paint?.mergeLeft ?? textures.base
+    uniforms.uRoadPaintMergeRight.value = paint?.mergeRight ?? textures.base
+    uniforms.uRoadTextureStretch.value = textures.textureStretch
+      ?? (paint || !isSingleTrackRoad(options.halfWidth * 2) ? 1 : 2)
+    material.needsUpdate = true
+  }
+
+  applyTextures(options.textures)
+
   const mesh = new THREE.Mesh(geometry, material)
   mesh.name = 'slowroads-road-band'
   mesh.receiveShadow = true
@@ -324,21 +355,8 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
   return {
     mesh,
     setSeason(season: SeasonId, textures: RoadBandTextures): void {
-      uniforms.uRoadMap.value = textures.base
-      uniforms.uRoadOverlay.value = textures.overlay ?? textures.base
-      uniforms.uRoadHasOverlay.value = textures.overlay ? 1 : 0
-      const paint = textures.paint ?? null
-      uniforms.uRoadHasPaint.value = paint ? 1 : 0
-      uniforms.uRoadPaintDashed.value = paint?.dashed ?? textures.base
-      uniforms.uRoadPaintSolid.value = paint?.solid ?? textures.base
-      uniforms.uRoadPaintSolidLeft.value = paint?.solidLeft ?? textures.base
-      uniforms.uRoadPaintSolidRight.value = paint?.solidRight ?? textures.base
-      uniforms.uRoadPaintMergeLeft.value = paint?.mergeLeft ?? textures.base
-      uniforms.uRoadPaintMergeRight.value = paint?.mergeRight ?? textures.base
-      uniforms.uRoadTextureStretch.value = textures.textureStretch
-        ?? (paint || !isSingleTrackRoad(options.halfWidth * 2) ? 1 : 2)
+      applyTextures(textures)
       uniforms.uRoadShadowFactor.value = SEASON_PARAMS[season].shadowFactor
-      material.needsUpdate = true
     },
     setRadiance(radiance: number): void {
       uniforms.uRoadRadiance.value = radiance

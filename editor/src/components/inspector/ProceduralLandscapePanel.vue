@@ -16,6 +16,11 @@ import {
   getProceduralLandscapeStats,
   type ProceduralLandscapeRuntimeStats,
 } from '@schema/proceduralLandscape/runtime'
+import {
+  ROAD_SINGLE_TRACK_THRESHOLD,
+  ROAD_WIDTH_PRESETS,
+  isSingleTrackRoad,
+} from '@schema/proceduralLandscape/roadStyle'
 import { WATER_FLOOD_VISIBLE_FRACTION } from '@schema/proceduralLandscape/waterStats'
 
 const sceneStore = useSceneStore()
@@ -221,6 +226,34 @@ const roadPathBlock = computed<FieldBlock>(() => ({
   hint: roadWaypointMode.value ? undefined : '至少 2 个路径点才会生成道路',
   rows: [[{ key: 'waypointTolerance', label: '途经容差', suffix: 'm', step: 2 }]],
 }))
+
+// 官方路型预设（`roadStyle.ROAD_WIDTH_PRESETS`）。路型由路宽自动决定：
+// < 2.25m 走单车道贴图（`roadSingle`，无划线），否则走宽路贴图 + 划线。
+const roadWidthPresets = [
+  { label: '单车道 1.8m', width: ROAD_WIDTH_PRESETS.narrow },
+  { label: '常规 3.2m', width: ROAD_WIDTH_PRESETS.regular },
+  { label: '宽路 4.0m', width: ROAD_WIDTH_PRESETS.wide },
+] as const
+
+const roadSingleTrack = computed(() => {
+  const width = propsValue.value?.road.width
+  return typeof width === 'number' && isSingleTrackRoad(width)
+})
+
+const roadStyleHint = computed(() => (
+  roadSingleTrack.value
+    ? `单车道材质（无划线，路宽 < ${ROAD_SINGLE_TRACK_THRESHOLD}m）`
+    : '宽路材质 + 划线'
+))
+
+function isRoadWidthPresetActive(width: number): boolean {
+  const current = propsValue.value?.road.width
+  return typeof current === 'number' && Math.abs(current - width) < 1e-6
+}
+
+function handleRoadWidthPreset(width: number): void {
+  patchGroup('road', { width })
+}
 
 const roadGeometryBlocks: FieldBlock[] = [
   {
@@ -610,6 +643,21 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
                 </v-btn>
               </div>
             </div>
+          </div>
+          <div class="pl-road-style">
+            <div class="pl-subtitle">路型</div>
+            <div class="pl-choice-row">
+              <button
+                v-for="preset in roadWidthPresets"
+                :key="preset.label"
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': isRoadWidthPresetActive(preset.width) }"
+                :disabled="!componentEnabled"
+                @click="handleRoadWidthPreset(preset.width)"
+              >{{ preset.label }}</button>
+            </div>
+            <div class="pl-hint">{{ roadStyleHint }}</div>
           </div>
           <template v-for="(block, blockIndex) in roadBlocks" :key="`road-${blockIndex}`">
             <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>

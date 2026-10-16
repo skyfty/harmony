@@ -1,4 +1,5 @@
 import { clamp, degreesToRadians, hashStringToSeed } from './noise'
+import { ROAD_WIDTH_PRESETS } from './roadStyle'
 import { clampRoadWaypoints, type RoadWaypoint } from './roadWaypoints'
 
 export type ProceduralLandscapeEnvironment = 'editor' | 'preview' | 'viewer'
@@ -399,7 +400,8 @@ export function clampProceduralLandscapeProps(
     },
     road: {
       enabled: road?.enabled !== false,
-      width: clampNumber(road?.width, defaults.road.width, 3, 24),
+      // 下限取官方 NARROW 档：< 2.25m 才会切到单车道贴图（`isSingleTrackRoad`）。
+      width: clampNumber(road?.width, defaults.road.width, ROAD_WIDTH_PRESETS.narrow, 24),
       shoulderWidth: clampNumber(road?.shoulderWidth, defaults.road.shoulderWidth, 0, 10),
       waypoints: clampRoadWaypoints(road?.waypoints),
       waypointTolerance: clampNumber(road?.waypointTolerance, defaults.road.waypointTolerance, 4, 100),

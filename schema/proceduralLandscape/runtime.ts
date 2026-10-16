@@ -1493,6 +1493,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     const season = seasonAssets ? seasonAssetsSeason ?? currentSeason : currentSeason
+    // 建带子时就把季节贴图集写进去（createRoadBand 内部会立即套用划线/拉伸），
+    // 不要等换季的 applySeasonToMaterials —— 重建后不套用会让划线消失。
+    const textures = roadBandTexturesFor(season)
     const halfWidth = roadHalfWidth(props)
     const singleTrack = isSingleTrackRoad(halfWidth * 2)
     // 官方划线权重（宽路才启用）：树影取路缘森林密度，海拔门限以水位为零点。
@@ -1512,7 +1515,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       halfWidth,
       stepLength: 2,
       density: densityField,
-      textures: roadBandTexturesFor(season),
+      textures,
       season,
       markings: roadMarkings,
       nodeSpacing: props.road.stepLength,
@@ -1523,6 +1526,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     })
     roadBand.setVisible(props.road.enabled)
     roadBand.setRadiance(appliedLighting.radiance)
+    // 重建会复用 createRoadBand 的初始 fresnel，环境光照值要一起补上。
+    roadBand.setFresnel(appliedLighting.fresnel)
     tagArtifact(roadBand.mesh)
     hostObject.add(roadBand.mesh)
   }
