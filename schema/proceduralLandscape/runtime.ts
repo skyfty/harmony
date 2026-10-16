@@ -15,6 +15,11 @@ import {
 } from './terrainSampler'
 import { resolveSeedHeadingRad, traceRoadPath, type RoadTraceNode, type RoadTraceResult } from './roadTrace'
 import { buildRoadFieldData, createRoadFieldTexture, type RoadFieldData } from './roadField'
+import {
+  buildRoadProximityIndex,
+  verifyRoadProximityIndex,
+  type RoadProximityIndex,
+} from './roadProximity'
 import { planCameraGrassChunk, planRoadBucket, planTreeChunk, takeDensityPrefix, type GrassPlacement, type TreePlacement } from './chunkPlan'
 import {
   applyFoliageMaterialSeason,
@@ -463,6 +468,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let variationTexture: THREE.DataTexture | null = null
   let roadResult: RoadTraceResult | null = null
   let roadFieldData: RoadFieldData | null = null
+  /**
+   * 精确道路距离索引（段空间哈希）：放置过滤与 per-instance `roadProx` 的唯一
+   * 距离来源。光栅场在数十公里地形上格边长 40m+，会把路面上的候选误判为
+   * 「离路足够远」；该索引精度不受地形尺度影响（slowroads-lab `roadProfile` 移植）。
+   */
+  let roadProximity: RoadProximityIndex | null = null
   let roadFieldTexture: THREE.DataTexture | null = createEmptyRoadFieldTexture()
   let roadBucketTable: RoadBucketEntry[] = []
   let surfacePatch: ProceduralLandscapeSurfacePatch | null = null
@@ -704,6 +715,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     variationField = null
     roadResult = null
     roadFieldData = null
+    roadProximity = null
     roadBucketTable = []
   }
 
@@ -945,7 +957,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (farForestScan && grid && densityField) {
       const done = stepFarForestScan(
         farForestScan,
-        { grid, density: densityField, roadField: roadFieldData },
+        { grid, density: densityField, roadField: roadProximity },
         FAR_FOREST_SCAN_SAMPLES_PER_FRAME,
       )
       if (done) {
@@ -1098,6 +1110,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadFieldTexture = null
     roadResult = null
     roadFieldData = null
+    roadProximity = null
     roadBucketTable = []
 
     // 道路完全由手绘路径生成：不足 2 个路径点时不建路，初始化与清空路径后
@@ -1136,6 +1149,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         if (roadFieldData) {
           roadFieldTexture = createRoadFieldTexture(roadFieldData)
           roadBucketTable = buildRoadBucketTable(roadResult.nodes, ROAD_BUCKET_LENGTH)
+        }
+        // 放置过滤改走精确距离索引：光栅场只在数十公里地形上格边长 40m+，
+        // 植被净空（默认 ~10m）完全被量化误差淹没（见 roadProximity.ts）。
+        roadProximity = buildRoadProximityIndex(roadResult.nodes, { maxDistance: influence })
+        if (roadProximity && !verifyRoadProximityIndex(roadProximity, roadResult.nodes)) {
+          warn('road-proximity-index-mismatch')
+        } else {
+          unwarn('road-proximity-index-mismatch')
         }
       }
       if (roadResult.nodes.length <= 1 || !roadFieldData) {
@@ -1987,7 +2008,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         maxScale: props.forest.maxScale,
         minHeight: props.forest.minHeight,
       },
-      { grid, density: densityField, roadField: roadFieldData },
+      { grid, density: densityField, roadField: roadProximity },
     )
     const kept = takeDensityPrefix(placements, tier.densityMultiplier)
     const key = chunkKey
@@ -2059,7 +2080,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         flowerDensity: props.grass.flowerDensity,
         tallGrassDensity: props.grass.tallGrassDensity,
       },
-      { grid, density: densityField, roadField: roadFieldData },
+      { grid, density: densityField, roadField: roadProximity },
     )
     const grass = grassEnabled ? takeDensityPrefix(result.grass, tier.densityMultiplier) : []
     const bushes = bushesEnabled ? takeDensityPrefix(result.bushes, tier.densityMultiplier) : []
@@ -2123,7 +2144,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             roadHalfWidth: roadHalfWidth(props),
             roadShoulderWidth: props.road.shoulderWidth,
           },
-          { grid, density: densityField, roadField: roadFieldData },
+          { grid, density: densityField, roadField: roadProximity },
         ))
       }
     }
@@ -2472,6 +2493,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       + (variationField?.memoryBytes ?? 0)
       + (roadFieldData?.memoryBytes ?? 0)
       + (roadFieldData ? roadFieldData.width * roadFieldData.height * 4 : 0)
+      + (roadProximity?.memoryBytes ?? 0)
     stats.roadLength = roadResult?.length ?? 0
     stats.roadNodeCount = roadResult?.nodes.length ?? 0
     stats.roadComplete = roadResult?.complete ?? false

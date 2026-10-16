@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { RoadTraceNode } from './roadTrace'
+import type { RoadDistanceSource } from './roadProximity'
 import { clamp, clamp01 } from './noise'
 
 /**
@@ -14,7 +15,7 @@ import { clamp, clamp01 } from './noise'
  *   G,B = 16 bit normalized road surface height
  *   A   = reserved
  */
-export interface RoadFieldData {
+export interface RoadFieldData extends RoadDistanceSource {
   width: number
   height: number
   minX: number

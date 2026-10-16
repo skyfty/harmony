@@ -32,6 +32,7 @@
 | `lab/water.ts` | `proceduralLandscape/waterPlane.ts`（sea_waves 双滚波纹 + 菲涅尔天空色 + 太阳高光 + 冬季冻结；尺寸随地形包围盒、水线 = 地形最低点 + `water.levelOffset`，网格挂场景根保持世界水平） |
 | 第七批（宽路 + 划线 + 路侧墙体，2026-10） | `roadStyle.ts`（官方路型表/墙体常量，lab 同源拷贝）、`roadMarkings.ts`（划线权重，lab 同源拷贝）、`roadTrace.ts`（节点新增 `index/lateral/longitudinal/turn/headingDelta` + 完成后的探针标注）、`walls.ts`（官方 Barrier/Fence/SeaWall 判定 + 干砌石墙地块等价规则）、`wallLayer.ts`（石墙/护栏/海墙网格 + 木栏精灵）、`roadBand.ts`（宽路贴图 + 划线属性与混色）、`config.walls` 组（旧 `barrier` 组读入映射）、`runtime.buildWalls()/roadBandTexturesFor()`、`stats.wallSegmentCount` |
 | `core/placement.ts` 花草/高草层 | `chunkPlan.planRoadBucket` 的 `emitOuterLayer`（花草 → 灌木层、高草 → 草层；横向带、falloff、heightFactor 与 lab 逐行一致） |
+| 第八批（植被避让道路：精确距离索引，2026-10） | `roadProximity.ts`（lab `core/roadProfile.ts` 段空间哈希移植：`buildRoadProximityIndex` / `RoadDistanceSource` / `verifyRoadProximityIndex`）、`runtime.ts`（建路时构建索引，作为放置过滤唯一距离源：分块树 / 远景林 / 相机草 / 走廊草灌木；光栅场仅剩着色器 uniform 与墙体探针）、`chunkPlan.ts` / `farForest.ts` 的 deps `roadField` 改型 `RoadDistanceSource`、`stats.memoryBytes` 计入索引内存 |
 | `core/selfCheck.ts` | `schema/slowroads/render/selfCheck.ts`（环境预设 / 雾色空间 / 雾 uniform / 季节表 / 树卡变色着色器断言 / uniform 覆盖审计）+ `proceduralLandscape/shaderAudit.ts`（注入材质记录最终 shader 源码与 uniform 键，供审计） |
 | 相机锚定远景树环（lab 无此机制） | **删除**：远景树回到分块内的 imposter 层（官方 2000 尺度雾 + 场景雾距覆盖）。`stats` 增加 `barrierInstances / waterEnabled / viewDistanceScale` |
 
@@ -57,6 +58,13 @@
   `clampProceduralLandscapeProps` 全量归一化（缺省补默认、越界夹紧，旧字段直接丢弃）。
 - `ProceduralLandscapeRuntimeStats`：新增 `barrierInstances / waterEnabled / viewDistanceScale`，
   删除 `farTreeInstances`。
+- `proceduralLandscape/roadProximity.ts`：新增 `RoadDistanceSource`
+  （`range / distanceAt(x,z) / heightAt(x,z): number|null`）、
+  `buildRoadProximityIndex(nodes, { maxDistance })`（精确点-线段距离，32m 段空间哈希，
+  超限返回上限；节点 <2 或全退化返回 null）、`verifyRoadProximityIndex`（与暴力距离抽样
+  比对，运行时启动自检与单测共用）。`LandscapeChunkDeps.roadField` /
+  `FarForestPlanDeps.roadField` 类型改为 `RoadDistanceSource | null`（属性名不变）；
+  `RoadFieldData`（光栅）现在 extends `RoadDistanceSource`。
 
 ## 启动自检（console + 面板 warnings）
 
@@ -76,6 +84,8 @@
   （1 ± factor/2，冬季 0.9..1.1）。
 - `runTreeDiscolourationShaderChecks` + `runMaterialUniformCoverageChecks`：材质编译后按
   注入源码断言（因子只出现在顶点噪声公式一次、片元消费 varying）+ uniform 覆盖审计。
+- `road-proximity-index-mismatch`（运行时，每次世界重建后一次）：道路距离索引与暴力
+  点-线段距离在抽样点（每段中点 + 侧向 7/23/51m）上逐点比对，不一致写入面板 warnings。
 
 ## 迁移端新增的自适应（编辑器真实地形所需）
 
@@ -83,6 +93,18 @@
   官方雾尺度按 1000m 世界调参；编辑器地形可达数十公里，自动档取
   `clamp(max(sizeX,sizeZ)/4000, 1, 12) × 1000`（≤4km 地形恒为 1×，与官方/lab 逐字一致），
   环境运行时据此重推场景组 / 天空组（2 × 视距）/ 云层 / 天空平面距离。
+- **植被避让道路 = 精确点-线段距离索引**（`roadProximity.ts`，lab `core/roadProfile.ts` 移植）：
+  原实现把「避让公路」的判定交给覆盖整个地形 AABB、固定 1024 格的光栅距离场
+  （`roadField.distanceAt` 取最近格）。40km 级地形格边长 ≈ 42m，远大于 8.5m 路宽与
+  树木净空（半宽 + 路肩 + `forest.roadClearance` ≈ 10.8m）：路中心线上 >50% 的抽样点
+  被误报「离路足够远」，树木 / 草丛因此长到沥青上（用户实测：顶视图可见灌木与草丛
+  压在路面）。放置过滤（`planTreeChunk` / `planCameraGrassChunk` / `planRoadBucket` /
+  远景林扫描）改走段哈希精确距离（32m 单元、查询上限 = `influence`，超限按上限返回，
+  语义与光栅一致）；光栅贴图保留给地表着色器的道路混合与地形压平（纯视觉近似，
+  40km 地形不可能与路面同精度），墙体 `surfaceHeightAt` 继续跟随光栅以与可见压平一致。
+  顺带：per-instance `roadProx`（草丛调色板贴近道路的明暗）随之为精确值。回归测试：
+  `roadProximity.test.ts` + `proceduralLandscape.test.ts` 的 40km「large-terrain
+  regression」（含记录光栅场误报率的防回退断言）。
 - **地表高度带归一化**（`config.resolveSurfaceHeightScale`）：官方地表公式按「水面以上
   0..300m」调参；起伏 ≤60m 时系数为 4（与 lab 相同），更大按 `min(4, 300/起伏)` 压缩并夹
   在 [0.25, 4]，避免 heather / light grass 高度项整片饱和。仅 `height` 项参与缩放。
@@ -123,6 +145,15 @@
   32 组预设 × `blend ∈ {0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2}` 全部 ≤1/255。
 - **冬季回归**：切到冬季后视口采样洋红像素占比 0%（`r-g>25 且 b-g>25 且 min(r,b)>70`），
   与 lab 的第六批修复一致（不再发紫）。
+- **植被避让道路（2026-10，真实场景离线复算）**：用用户场景的地形 pack GLB（39.2km ×
+  42.6km、网格 1882×2048 / 格 20.83m）与面板实测参数（路宽 8.5、路肩 2.5、距路净空 2、
+  走廊 20、7 路径点 → 追踪出 872m 道路 / 110 节点、光栅格边长 41.68m）分别跑旧过滤
+  （1024 光栅场）与新过滤（精确索引）：
+  分块树 34 棵落在沥青上 / 67 棵进入净空（最近 0.05m）→ 新过滤 0 / 0（最近 8.76m）；
+  相机草 202 处落在沥青（最近 0.02m）→ 0（最近 4.58m）；
+  走廊草/灌木 39 处落在沥青 → 0，且缘带数量回升（草 10210 → 14623、灌木 557 → 1610：
+  旧光栅的假阴性曾把合格路缘点误杀成缺口）；远景林 1/3 → 0/0。
+  编辑器视口顶视复查：沥青表面不再出现树木/灌木/草丛，仅保留 lab 同款的贴边草丛。
 - **preview（ScenePreviewView）**：运行时自检全绿（`fog-color checks passed (5)` 走直出
   画布分支）、无着色器/JS 错误；**独立标签页**打开时场景同步未完成（`Syncing scene data...`，
   Renderer stats 显示 8 draw calls / 0 chunks），未复现景观内容——需从编辑器发起的实时

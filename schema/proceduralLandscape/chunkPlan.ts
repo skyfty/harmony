@@ -1,13 +1,17 @@
 import type { LandscapeDensityField } from './densityField'
 import { chunkRandom } from './densityField'
-import type { RoadFieldData } from './roadField'
+import type { RoadDistanceSource } from './roadProximity'
 import type { TerrainHeightGrid } from './terrainSampler'
 import { clamp, clamp01, lerp, smoothstep } from './noise'
 
 export interface LandscapeChunkDeps {
   grid: TerrainHeightGrid
   density: LandscapeDensityField
-  roadField: RoadFieldData | null
+  /**
+   * 距离来源：生产路径传精确道路距离索引（`roadProximity.ts`），
+   * 光栅距离场（`roadField.ts`）只服务着色器与地形压平。
+   */
+  roadField: RoadDistanceSource | null
 }
 
 export interface TreePlacement {

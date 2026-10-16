@@ -1,6 +1,6 @@
 import type { TreePlacement } from './chunkPlan'
 import type { LandscapeDensityField } from './densityField'
-import type { RoadFieldData } from './roadField'
+import type { RoadDistanceSource } from './roadProximity'
 import type { TerrainHeightGrid } from './terrainSampler'
 import { clamp, hashUnit, lerp } from './noise'
 
@@ -117,7 +117,8 @@ export interface FarForestPlanParams {
 export interface FarForestPlanDeps {
   grid: TerrainHeightGrid
   density: LandscapeDensityField
-  roadField: RoadFieldData | null
+  /** 与近景分块一致：精确道路距离索引（见 `roadProximity.ts`）。 */
+  roadField: RoadDistanceSource | null
 }
 
 export interface FarForestCandidate {

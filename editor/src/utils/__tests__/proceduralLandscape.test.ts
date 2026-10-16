@@ -23,6 +23,10 @@ import {
   encodeRoadDistance,
 } from '@schema/proceduralLandscape/roadField'
 import {
+  buildRoadProximityIndex,
+  verifyRoadProximityIndex,
+} from '@schema/proceduralLandscape/roadProximity'
+import {
   planCameraGrassChunk,
   planRoadBucket,
   planTreeChunk,
@@ -764,6 +768,353 @@ describe('road field encoding', () => {
     expect(texture.image.height).toBe(field!.height)
     texture.dispose()
   })
+})
+
+describe('exact road proximity placement (large-terrain regression)', () => {
+  /**
+   * 用户场景尺度回归：约 39km × 43km 的 GIS 地形 pack。
+   *
+   * 旧实现把所有「避让公路」的过滤交给覆盖整个 AABB、固定 1024 格的光栅距离场：
+   * 格边长 ≈ 42m，远大于 8.5m 路宽与 ~11m 树木净空，路中心线上超过一半的抽样点
+   * 被误报为「离路足够远」，树木/草丛因此长到沥青上（用户实测）。
+   *
+   * 放置过滤现改走精确点-线段距离索引（`roadProximity.ts`，lab `roadProfile`
+   * 移植）。本测试同时锁定两条性质：
+   *  1) 放置结果对**精确**中心线满足各自净空（树木 ≥ 半宽+路肩+净空，草丛 ≥ 半宽+边距）；
+   *  2) 光栅场在该尺度下不再可用于放置（记录缺陷来源，防止回退）。
+   */
+  const HALF_WIDTH = 4.25
+  const SHOULDER = 2.5
+  const ROAD_CLEARANCE = 4
+  const TREE_CLEARANCE = HALF_WIDTH + SHOULDER + ROAD_CLEARANCE
+  const CORRIDOR_WIDTH = 40
+
+  function exactDistanceToNodes(
+    nodes: ReadonlyArray<{ x: number; z: number }>,
+    x: number,
+    z: number,
+  ): number {
+    let best = Number.POSITIVE_INFINITY
+    for (let i = 0; i < nodes.length - 1; i += 1) {
+      const from = nodes[i]!
+      const to = nodes[i + 1]!
+      const segX = to.x - from.x
+      const segZ = to.z - from.z
+      const segLengthSq = segX * segX + segZ * segZ
+      if (segLengthSq <= 1e-9) {
+        continue
+      }
+      const t = Math.max(0, Math.min(1, ((x - from.x) * segX + (z - from.z) * segZ) / segLengthSq))
+      const dx = x - (from.x + segX * t)
+      const dz = z - (from.z + segZ * t)
+      best = Math.min(best, Math.sqrt(dx * dx + dz * dz))
+    }
+    return best
+  }
+
+  function makeLargeTerrain(): {
+    grid: NonNullable<ReturnType<typeof buildTerrainHeightGrid>>
+    density: ReturnType<typeof buildForestDensityField>
+    roadNodes: ReturnType<typeof traceRoadPath>['nodes']
+  } {
+    const mesh = makeGridMesh({
+      minX: -20000,
+      minZ: -22000,
+      sizeX: 40000,
+      sizeZ: 43000,
+      segmentsX: 100,
+      segmentsZ: 108,
+      height: (x, z) => 120 + Math.sin(x / 900) * 40 + Math.cos(z / 1100) * 30,
+    })
+    const grid = buildTerrainHeightGrid(mesh, { cellSize: 64, maxGridSize: 512 })!
+    const density = buildForestDensityField({
+      minX: grid.minX,
+      minZ: grid.minZ,
+      sizeX: grid.maxX - grid.minX,
+      sizeZ: grid.maxZ - grid.minZ,
+      seed: 2026,
+      scale: 4000,
+      coverage: 1,
+      resolution: 96,
+    })
+    const waypoints = [
+      { x: -12000, z: 9000 },
+      { x: -4000, z: 2000 },
+      { x: 5000, z: -6000 },
+      { x: 13000, z: -13000 },
+    ]
+    const road = traceRoadPath(grid, {
+      startX: waypoints[0]!.x,
+      startZ: waypoints[0]!.z,
+      headingRad: 0,
+      waypoints,
+      waypointTolerance: 24,
+      stepLength: 16,
+      feelDistance: 48,
+      feelAngleRad: (64 * Math.PI) / 180,
+      maxSlope: 0.6,
+      maxTurnRad: (8 * Math.PI) / 180,
+      maxLength: null,
+      margin: Math.max(grid.cellSize * 2, HALF_WIDTH + SHOULDER + 2),
+    })
+    return { grid, density, roadNodes: road.nodes }
+  }
+
+  const INFLUENCE = Math.max(48, 20 + 8, HALF_WIDTH + SHOULDER + CORRIDOR_WIDTH + 8)
+
+  interface LargeTerrainContext {
+    grid: NonNullable<ReturnType<typeof buildTerrainHeightGrid>>
+    roadNodes: ReturnType<typeof traceRoadPath>['nodes']
+    index: NonNullable<ReturnType<typeof buildRoadProximityIndex>>
+    deps: {
+      grid: NonNullable<ReturnType<typeof buildTerrainHeightGrid>>
+      density: ReturnType<typeof buildForestDensityField>
+      roadField: NonNullable<ReturnType<typeof buildRoadProximityIndex>>
+    }
+    exactDistance: (x: number, z: number) => number
+  }
+
+  let cachedContext: LargeTerrainContext | null = null
+
+  /** 40km 场景构建较重：同文件内各用例共享一次（vitest 顺序执行）。 */
+  function getContext(): LargeTerrainContext {
+    if (!cachedContext) {
+      const { grid, density, roadNodes } = makeLargeTerrain()
+      const index = buildRoadProximityIndex(roadNodes, { maxDistance: INFLUENCE })
+      expect(index).not.toBeNull()
+      cachedContext = {
+        grid,
+        roadNodes,
+        index: index!,
+        deps: { grid, density, roadField: index! },
+        exactDistance: (x, z) => exactDistanceToNodes(roadNodes, x, z),
+      }
+    }
+    return cachedContext
+  }
+
+  /**
+   * 确定性抽样（每 8 个查一个）：逐点全查在 40km 场景上是 O(实例数 × 段数)，
+   * 会把用例拖到分钟级；而系统性回归（例如把过滤接回光栅场）会在抽样中大量出现。
+   */
+  function isSampled(counter: number): boolean {
+    return counter % 8 === 0
+  }
+
+  it('reports exact centerline distances while the 1024-texel raster misreports them', () => {
+    const { grid, roadNodes, index } = getContext()
+    expect(roadNodes.length).toBeGreaterThan(50)
+    expect(verifyRoadProximityIndex(index, roadNodes)).toBe(true)
+
+    // 光栅场（1024 上限）：40km 地形上格边长 ≈ 42m。记录缺陷来源——
+    // 抽样节点里超过 5% 被误报为「离路 ≥ 树木净空」。
+    const raster = buildRoadFieldData(roadNodes, {
+      minX: grid.minX,
+      minZ: grid.minZ,
+      sizeX: grid.maxX - grid.minX,
+      sizeZ: grid.maxZ - grid.minZ,
+      minY: grid.minY,
+      maxY: grid.maxY,
+      maxInfluence: INFLUENCE,
+      maxResolution: 1024,
+    })
+    expect(raster).not.toBeNull()
+    const rasterSamples = roadNodes.filter((_, sampleIndex) => sampleIndex % 16 === 0)
+    expect(rasterSamples.length).toBeGreaterThan(20)
+    const falseAccepts = rasterSamples.filter(
+      (node) => raster!.distanceAt(node.x, node.z) >= TREE_CLEARANCE,
+    ).length
+    expect(falseAccepts / rasterSamples.length).toBeGreaterThan(0.05)
+
+    // 精确索引在中心线上恒为 0（放置净空的判据）。
+    for (const node of rasterSamples) {
+      expect(index.distanceAt(node.x, node.z)).toBeLessThanOrEqual(1e-6)
+    }
+  }, 10_000)
+
+  it('keeps tree chunks clear of the road', () => {
+    const { roadNodes, deps, exactDistance } = getContext()
+
+    // ---- 分块树木：净空 = 半宽 + 路肩 + forest.roadClearance ----
+    const chunkSize = 192
+    const chunkKeys = new Set<string>()
+    // 节点按 3 抽样（48m 间距）+ 邻块扩展 192m：覆盖完整，扫描量 1/3。
+    for (let nodeIndex = 0; nodeIndex < roadNodes.length; nodeIndex += 3) {
+      const node = roadNodes[nodeIndex]!
+      const chunkX = Math.floor(node.x / chunkSize)
+      const chunkZ = Math.floor(node.z / chunkSize)
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        for (let offsetZ = -1; offsetZ <= 1; offsetZ += 1) {
+          chunkKeys.add(`${chunkX + offsetX}:${chunkZ + offsetZ}`)
+        }
+      }
+    }
+    let treeCount = 0
+    let treeChecked = 0
+    for (const key of chunkKeys) {
+      const [chunkX, chunkZ] = key.split(':')
+      const placements = planTreeChunk(
+        {
+          seed: 99,
+          chunkX: Number(chunkX),
+          chunkZ: Number(chunkZ),
+          chunkSize,
+          densityMultiplier: 1,
+          maxSlope: 0.6,
+          roadClearance: ROAD_CLEARANCE,
+          roadHalfWidth: HALF_WIDTH,
+          roadShoulderWidth: SHOULDER,
+          minScale: 10,
+          maxScale: 24,
+          minHeight: null,
+        },
+        deps,
+      )
+      for (const placement of placements) {
+        treeCount += 1
+        if (!isSampled(treeCount)) {
+          continue
+        }
+        treeChecked += 1
+        expect(exactDistance(placement.x, placement.z)).toBeGreaterThanOrEqual(TREE_CLEARANCE - 1e-6)
+      }
+    }
+    expect(treeCount).toBeGreaterThan(0)
+    expect(treeChecked).toBeGreaterThan(0)
+  }, 20_000)
+
+  it('keeps camera grass clear of the road', () => {
+    const { roadNodes, deps, exactDistance } = getContext()
+
+    // ---- 相机草：距中心线 ≥ 半宽 + 0.3 ----
+    const grassCellSize = 8
+    const grassCellKeys = new Set<string>()
+    // 每 2 个节点（32m）+ 邻格扩展 24m：沿路覆盖连续。
+    for (let nodeIndex = 0; nodeIndex < roadNodes.length; nodeIndex += 2) {
+      const node = roadNodes[nodeIndex]!
+      const cellX = Math.floor(node.x / grassCellSize)
+      const cellZ = Math.floor(node.z / grassCellSize)
+      for (let offsetX = -3; offsetX <= 3; offsetX += 1) {
+        for (let offsetZ = -3; offsetZ <= 3; offsetZ += 1) {
+          grassCellKeys.add(`${cellX + offsetX}:${cellZ + offsetZ}`)
+        }
+      }
+    }
+    let cameraGrassCount = 0
+    let cameraGrassChecked = 0
+    for (const key of grassCellKeys) {
+      const [cellX, cellZ] = key.split(':')
+      const placements = planCameraGrassChunk(
+        {
+          seed: 11,
+          chunkX: Number(cellX),
+          chunkZ: Number(cellZ),
+          chunkSize: grassCellSize,
+          density: 1,
+          maxSlope: 0.7,
+          roadHalfWidth: HALF_WIDTH,
+          roadShoulderWidth: SHOULDER,
+        },
+        deps,
+      )
+      for (const placement of placements) {
+        cameraGrassCount += 1
+        if (!isSampled(cameraGrassCount)) {
+          continue
+        }
+        cameraGrassChecked += 1
+        expect(exactDistance(placement.x, placement.z)).toBeGreaterThanOrEqual(HALF_WIDTH + 0.3 - 1e-6)
+      }
+    }
+    expect(cameraGrassCount).toBeGreaterThan(0)
+    expect(cameraGrassChecked).toBeGreaterThan(0)
+  }, 20_000)
+
+  it('keeps the roadside corridor band clear of the road', () => {
+    const { roadNodes, deps, exactDistance } = getContext()
+
+    // ---- 路边走廊草/灌木：位于 [半宽 + 0.3, 半宽 + 走廊宽] ----
+    // 下限来自花草层（lab：lateralStart 0.5、容许 0.2 内差），走廊草带自身是 0.35。
+    let corridorGrass = 0
+    let corridorBushes = 0
+    let corridorGrassChecked = 0
+    let corridorBushesChecked = 0
+    // 每 8 段（128m）取一个走廊桶：桶内规则与里程无关，沿路均匀覆盖即可。
+    for (let i = 0; i + 1 < roadNodes.length; i += 8) {
+      const from = roadNodes[i]!
+      const to = roadNodes[i + 1]!
+      const result = planRoadBucket(
+        {
+          seed: 5,
+          bucketIndex: i,
+          fromX: from.x,
+          fromZ: from.z,
+          toX: to.x,
+          toZ: to.z,
+          halfWidth: HALF_WIDTH,
+          shoulderWidth: SHOULDER,
+          corridorWidth: CORRIDOR_WIDTH,
+          grassDensity: 1,
+          sinkNearRoad: 1.2,
+          bushesEnabled: true,
+          bushesDensity: 0.6,
+          waterLevel: -1e5,
+          flowerDensity: 1,
+          tallGrassDensity: 1,
+        },
+        deps,
+      )
+      for (const placement of result.grass) {
+        corridorGrass += 1
+        if (!isSampled(corridorGrass)) {
+          continue
+        }
+        corridorGrassChecked += 1
+        const distance = exactDistance(placement.x, placement.z)
+        expect(distance).toBeGreaterThanOrEqual(HALF_WIDTH + 0.3 - 1e-6)
+        expect(distance).toBeLessThanOrEqual(HALF_WIDTH + CORRIDOR_WIDTH + 1e-6)
+      }
+      for (const placement of result.bushes) {
+        corridorBushes += 1
+        corridorBushesChecked += 1
+        const distance = exactDistance(placement.x, placement.z)
+        expect(distance).toBeGreaterThanOrEqual(HALF_WIDTH + 0.3 - 1e-6)
+        expect(distance).toBeLessThanOrEqual(HALF_WIDTH + CORRIDOR_WIDTH + 1e-6)
+      }
+    }
+    expect(corridorGrass).toBeGreaterThan(0)
+    expect(corridorBushes).toBeGreaterThan(0)
+    expect(corridorGrassChecked).toBeGreaterThan(0)
+    expect(corridorBushesChecked).toBeGreaterThan(0)
+  }, 30_000)
+
+  it('keeps far forest imposters clear of the road', () => {
+    const { roadNodes, deps, exactDistance } = getContext()
+
+    // ---- 远景林 imposter：净空与近景树木一致 ----
+    const middle = roadNodes[Math.floor(roadNodes.length / 2)]!
+    const farForest = planFarForestRings(
+      {
+        seed: 1234,
+        centerX: middle.x,
+        centerZ: middle.z,
+        innerRadius: 400,
+        outerRadius: 2400,
+        budget: 6000,
+        maxSlope: 0.6,
+        roadClearance: TREE_CLEARANCE,
+        waterLevel: -1e5,
+        minScale: 10,
+        maxScale: 24,
+        densityMultiplier: 1,
+      },
+      deps,
+    )
+    expect(farForest.placements.length).toBeGreaterThan(0)
+    for (const placement of farForest.placements) {
+      expect(exactDistance(placement.x, placement.z)).toBeGreaterThanOrEqual(TREE_CLEARANCE - 1e-6)
+    }
+  }, 20_000)
 })
 
 describe('official surface parity (slowroads.io)', () => {
