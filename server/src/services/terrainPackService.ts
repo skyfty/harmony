@@ -12,10 +12,9 @@ import {
   detectTerrainPackKind,
   normalizeTerrainPackPath,
   parseTerrainTextureManifest,
+  resolveTerrainPackStoredPath,
   summarizeTerrainPack,
   type TerrainPackAssetMetadata,
-  type TerrainPackDependencyMetadata,
-  type TerrainPackDependencyRole,
   type TerrainPackKind,
   type TerrainPackSummary,
 } from '@harmony/schema/terrainPack'
@@ -163,42 +162,6 @@ export function resolveTerrainPackPrimaryAssetType(kind: TerrainPackKind): Asset
   return kind === 'geometry' ? 'model' : 'file'
 }
 
-export function resolveTerrainPackDependencyRole(
-  archive: ParsedTerrainPackArchive,
-  path: string,
-): { role: TerrainPackDependencyRole; textureId?: string } {
-  const lower = path.toLowerCase()
-  const base = lower.split('/').pop() ?? lower
-  if (archive.kind === 'dem') {
-    if (base === TERRAIN_DEM_PACKAGE_FILES.sidecar.toLowerCase()) {
-      return { role: 'sidecar' }
-    }
-    if (base === TERRAIN_DEM_PACKAGE_FILES.dem.toLowerCase() || base === TERRAIN_DEM_PACKAGE_FILES.ortho.toLowerCase()) {
-      return { role: 'raster' }
-    }
-    return { role: 'config' }
-  }
-  if (base === TERRAIN_GEOMETRY_PACK_MANIFEST.toLowerCase()) {
-    return { role: 'config' }
-  }
-  const texture = archive.summary.textures.find((entry) => {
-    return entry.file.toLowerCase() === lower || entry.ktx2File?.toLowerCase() === lower
-  })
-  if (texture) {
-    return base.endsWith('.ktx2')
-      ? { role: 'ktx2', textureId: texture.id }
-      : { role: 'texture', textureId: texture.id }
-  }
-  return { role: 'config' }
-}
-
-export function resolveTerrainPackDependencyAssetType(path: string, role: TerrainPackDependencyRole): AssetType {
-  if (role === 'texture' || role === 'ktx2') {
-    return path.toLowerCase().endsWith('.ktx2') ? 'texture' : 'image'
-  }
-  return 'file'
-}
-
 export function buildTerrainPackAssetMetadata(input: {
   archive: ParsedTerrainPackArchive
   packKey: string
@@ -239,18 +202,79 @@ export function buildTerrainPackAssetMetadata(input: {
   return metadata
 }
 
-export function buildTerrainPackDependencyMetadata(input: {
-  relativePath: string
-  role: TerrainPackDependencyRole
-  textureId?: string
-}): TerrainPackDependencyMetadata {
-  const metadata: TerrainPackDependencyMetadata = {
-    version: TERRAIN_PACK_METADATA_VERSION,
-    relativePath: input.relativePath,
-    role: input.role,
+export interface TerrainPackStorageEntry {
+  /** Relative path inside the archive. */
+  sourcePath: string
+  /** Canonical path inside the pack folder (`<packKey>/…`). */
+  storedPath: string
+  bytes: Uint8Array
+}
+
+export interface TerrainPackStoragePlan {
+  kind: TerrainPackKind
+  /** Canonical path of the primary file, relative to the pack folder. */
+  primaryStoredPath: string
+  /** Path of the primary file inside the archive (null when the primary is the zip itself). */
+  primarySourcePath: string | null
+  /** Everything that gets written besides the primary file. */
+  entries: TerrainPackStorageEntry[]
+  warnings: string[]
+}
+
+function withSuffix(path: string, suffix: number): string {
+  const dot = path.lastIndexOf('.')
+  if (dot <= 0) {
+    return `${path}-${suffix}`
   }
-  if (input.textureId) {
-    metadata.textureId = input.textureId
+  return `${path.slice(0, dot)}-${suffix}${path.slice(dot)}`
+}
+
+/**
+ * Canonical storage plan of a pack: geometry packs always end up as
+ * `scene.glb` + `textures/*` (+ `textures.json`) so the runtime texture stream
+ * can resolve `textures/*` relative to the GLB URL; DEM packs are stored as the
+ * original zip only. Name clashes created by flattening get a numeric suffix.
+ */
+export function planTerrainPackStorage(archive: ParsedTerrainPackArchive): TerrainPackStoragePlan {
+  const warnings: string[] = []
+  if (archive.kind === 'dem') {
+    return {
+      kind: 'dem',
+      primaryStoredPath: sanitizeTerrainPackZipName(archive.sourceZipName, 'terrain-dem.zip'),
+      primarySourcePath: null,
+      entries: [],
+      warnings,
+    }
   }
-  return metadata
+
+  const glbFile = archive.summary.glbFile
+  const primaryStoredPath = resolveTerrainPackStoredPath('geometry', glbFile ?? 'scene.glb', glbFile) ?? 'scene.glb'
+  const entries: TerrainPackStorageEntry[] = []
+  const taken = new Set<string>([primaryStoredPath.toLowerCase()])
+
+  for (const entry of archive.entries) {
+    if (glbFile && entry.path.toLowerCase() === glbFile.toLowerCase()) {
+      continue
+    }
+    const preferred = resolveTerrainPackStoredPath('geometry', entry.path, glbFile) ?? entry.path
+    let storedPath = preferred
+    if (taken.has(storedPath.toLowerCase())) {
+      let suffix = 2
+      while (taken.has(withSuffix(preferred, suffix).toLowerCase())) {
+        suffix += 1
+      }
+      storedPath = withSuffix(preferred, suffix)
+      warnings.push(`归位后文件重名：${entry.path} 已重命名为 ${storedPath}`)
+    }
+    taken.add(storedPath.toLowerCase())
+    entries.push({ sourcePath: entry.path, storedPath, bytes: entry.bytes })
+  }
+
+  return {
+    kind: 'geometry',
+    primaryStoredPath,
+    primarySourcePath: glbFile,
+    entries,
+    warnings,
+  }
 }

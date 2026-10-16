@@ -59,12 +59,9 @@ import { appConfig } from '@/config/env'
 import { rewriteConfigAssetBundleBytes } from '@/services/configAssetRewrite'
 import {
   buildTerrainPackAssetMetadata,
-  buildTerrainPackDependencyMetadata,
   parseTerrainPackArchive,
-  resolveTerrainPackDependencyAssetType,
-  resolveTerrainPackDependencyRole,
+  planTerrainPackStorage,
   resolveTerrainPackPrimaryAssetType,
-  sanitizeTerrainPackZipName,
   type ParsedTerrainPackArchive,
 } from '@/services/terrainPackService'
 import { readTerrainPackAssetMetadata } from '@harmony/schema/terrainPack'
@@ -2539,17 +2536,36 @@ function buildTerrainPackResponsePack(archive: ParsedTerrainPackArchive): Record
   }
 }
 
+const TERRAIN_PACK_ROOT_CATEGORY_NAME = '地形'
+const TERRAIN_PACK_NAME_MAX_LENGTH = 64
+
+/** Category name input: trimmed, shell/path hostile characters removed, capped. */
+function sanitizeTerrainPackCategoryName(raw: unknown): string | null {
+  const trimmed = sanitizeString(raw)
+  if (!trimmed) {
+    return null
+  }
+  const normalized = trimmed
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[.\s]+|[.\s]+$/g, '')
+    .trim()
+  if (!normalized) {
+    return null
+  }
+  return normalized.slice(0, TERRAIN_PACK_NAME_MAX_LENGTH)
+}
+
 /**
- * Accepts a 3dtiles-viewer terrain resource pack (geometry + external textures,
- * or DEM rasters) and registers it in the resource library:
+ * Accepts a 3dtiles-viewer terrain resource pack and registers it in the fixed
+ * 「地形 / <名称>」 category:
  *
- * - files are stored under `<packKey>/…` with their relative layout preserved so
- *   `textures/*` stays next to `scene.glb` (runtime texture streaming resolves
- *   them relative to the asset download URL);
- * - the primary asset is the `model` (`scene.glb`) or, for DEM packs, the
- *   original zip that the editor planning importer consumes;
- * - every other pack file becomes a hidden dependant asset linked to the primary;
- * - re-uploading the same zip (same sha256) reuses the existing assets.
+ * - files land under `<packKey>/` in the canonical layout (`scene.glb` +
+ *   `textures/*` + `textures.json`, or the DEM zip alone) so the runtime texture
+ *   stream resolves `textures/*` relative to the GLB download URL;
+ * - only the primary asset is registered - pack-internal files stay plain files
+ *   (nothing in asset-manifest.json, nothing in the asset panels);
+ * - re-uploading the same zip (same sha256) reuses the existing asset.
  */
 export async function uploadTerrainPack(ctx: Context): Promise<void> {
   const files = ctx.request.files as Record<string, unknown> | undefined
@@ -2579,42 +2595,35 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
   const parsedArchive = archive!
 
   const rawBody = (ctx.request.body ?? {}) as Record<string, unknown>
-  const requestedName = sanitizeString(rawBody.name)
-  const createCategoryName = sanitizeString(rawBody.createCategoryName)
-  const categoryIdInput = sanitizeString(rawBody.categoryId) ?? sanitizeString(rawBody.directoryId)
+  const requestedName = sanitizeTerrainPackCategoryName(rawBody.name)
+  if (!requestedName) {
+    ctx.throw(400, '资源包名称不能为空')
+  }
+  const packageName = requestedName!
   const description = sanitizeString(rawBody.description)
   const tagIds = ensureArrayString(rawBody.tagIds ?? rawBody.tags)
   const tagObjectIds = await resolveTagObjectIdsOrThrow(tagIds)
 
   await ensureDefaultCategories()
-  if (categoryIdInput && isInvalidCategoryId(categoryIdInput)) {
-    ctx.throw(400, 'Invalid category identifier')
-  }
 
   let resolvedCategory: AssetCategoryDocument | null = null
-  if (createCategoryName) {
-    try {
-      resolvedCategory = await ensureCategoryPath([createCategoryName], { parentId: categoryIdInput || null })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : ''
-      if (message.includes('Invalid parent category id')) {
-        ctx.throw(400, 'Invalid parent category id')
-      }
-      if (message.includes('Parent category not found')) {
-        ctx.throw(404, 'Parent category not found')
-      }
-      if (message.includes('cannot be empty')) {
-        ctx.throw(400, 'Category name is required')
-      }
-      throw error
+  try {
+    const terrainRoot = await ensureCategoryPath([TERRAIN_PACK_ROOT_CATEGORY_NAME], { parentId: null })
+    resolvedCategory = await ensureCategoryPath([packageName], {
+      parentId: terrainRoot._id as Types.ObjectId,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    if (message.includes('Invalid parent category id')) {
+      ctx.throw(400, 'Invalid parent category id')
     }
-  } else if (categoryIdInput) {
-    resolvedCategory = await AssetCategoryModel.findById(categoryIdInput).exec()
-    if (!resolvedCategory) {
-      ctx.throw(404, 'Category not found')
+    if (message.includes('Parent category not found')) {
+      ctx.throw(404, 'Parent category not found')
     }
-  } else {
-    resolvedCategory = (await getRootCategory()) ?? (await ensureRootCategory())
+    if (message.includes('cannot be empty')) {
+      ctx.throw(400, '资源包名称不能为空')
+    }
+    throw error
   }
   const category = resolvedCategory!
 
@@ -2631,20 +2640,15 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     .exec() as LeanAsset | null
 
   if (existingMaster) {
-    const existingDependencies = await AssetModel.find({ bundlePrimaryAssetId: existingMaster._id, isDeleted: false })
-      .populate('tags')
-      .populate('seriesId')
-      .lean()
-      .exec() as LeanAsset[]
     const existingMetadata = readTerrainPackAssetMetadata(
       (existingMaster.metadata as Record<string, unknown> | undefined)?.terrainPack,
     )
+    const existingCategory = await AssetCategoryModel.findById(existingMaster.categoryId).exec()
     await refreshManifest()
     ctx.body = {
       reused: true,
-      category: mapCategoryTreeNode(categoryDocumentToTreeNode(category)),
+      category: mapCategoryTreeNode(categoryDocumentToTreeNode(existingCategory ?? category)),
       asset: await mapAssetDocumentWithLookup(existingMaster),
-      dependencies: await Promise.all(existingDependencies.map((dependency) => mapAssetDocumentWithLookup(dependency))),
       pack: {
         kind: existingMetadata?.kind ?? parsedArchive.kind,
         sourceZipName: existingMetadata?.sourceZipName ?? parsedArchive.sourceZipName,
@@ -2660,19 +2664,16 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
 
   const packKey = `terrain-${nanoid(16)}`
   const writtenFileKeys: string[] = []
-  const dependencyIds: Types.ObjectId[] = []
   let primaryAssetId: Types.ObjectId | null = null
 
   try {
-    const primaryRelativePath = parsedArchive.kind === 'geometry'
-      ? parsedArchive.summary.glbFile!
-      : sanitizeTerrainPackZipName(parsedArchive.sourceZipName, 'terrain-dem.zip')
-    const primaryFileKey = `${packKey}/${primaryRelativePath}`
+    const plan = planTerrainPackStorage(parsedArchive)
+    const primaryFileKey = `${packKey}/${plan.primaryStoredPath}`
     const primaryBytes = parsedArchive.kind === 'geometry'
-      ? parsedArchive.entryByPath.get(primaryRelativePath.toLowerCase())!
+      ? (plan.primarySourcePath ? parsedArchive.entryByPath.get(plan.primarySourcePath.toLowerCase()) : null) ?? null
       : new Uint8Array(buffer)
     if (!primaryBytes) {
-      ctx.throw(400, `资源包缺少主文件 ${primaryRelativePath}。`)
+      ctx.throw(400, `资源包缺少主文件 ${parsedArchive.summary.glbFile ?? plan.primaryStoredPath}。`)
     }
     const storedPrimary = await storeBufferAtExactKey(primaryBytes, {
       fileKey: primaryFileKey,
@@ -2680,16 +2681,26 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     })
     writtenFileKeys.push(storedPrimary.fileKey)
 
+    // Pack-internal files are plain files: no asset records, so they never show
+    // up in asset-manifest.json or any asset panel. The runtime downloads them
+    // on demand relative to the GLB URL.
+    for (const entry of plan.entries) {
+      const stored = await storeBufferAtExactKey(entry.bytes, {
+        fileKey: `${packKey}/${entry.storedPath}`,
+        mimeType: resolveTerrainPackMimeType(entry.storedPath),
+      })
+      writtenFileKeys.push(stored.fileKey)
+    }
+
     const primaryType = resolveTerrainPackPrimaryAssetType(parsedArchive.kind)
-    const packageName = requestedName
-      ?? (parsedArchive.sourceZipName ? parsedArchive.sourceZipName.replace(/\.zip$/i, '') : null)
-      ?? 'terrain-pack'
+    const packWarnings = [...parsedArchive.summary.warnings, ...plan.warnings]
+    const primaryMetadata = buildTerrainPackAssetMetadata({ archive: parsedArchive, packKey })
+    primaryMetadata.warnings = packWarnings
     const primaryAsset = await AssetModel.create({
       name: packageName,
       categoryId: category._id,
       type: primaryType,
       assetRole: 'master',
-      bundleRole: 'primary',
       tags: tagObjectIds,
       size: storedPrimary.size,
       color: ASSET_COLORS[primaryType] ?? null,
@@ -2704,67 +2715,14 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       previewUrl: null,
       thumbnailUrl: null,
       description: description ?? null,
-      originalFilename: primaryRelativePath.split('/').pop() ?? primaryRelativePath,
+      originalFilename: plan.primaryStoredPath,
       mimeType: storedPrimary.mimeType,
-      metadata: {
-        terrainPack: buildTerrainPackAssetMetadata({ archive: parsedArchive, packKey }),
-      },
+      metadata: { terrainPack: primaryMetadata },
       contentHash: computeFnv1a64CompatHash(primaryBytes),
       contentHashAlgorithm: ASSET_BUNDLE_HASH_ALGORITHM,
       terrainScatterPreset: null,
-      bundlePrimaryAssetId: null,
     })
     primaryAssetId = primaryAsset._id as Types.ObjectId
-
-    for (const entry of parsedArchive.entries) {
-      if (parsedArchive.kind === 'geometry' && entry.path === parsedArchive.summary.glbFile) {
-        continue
-      }
-      const { role, textureId } = resolveTerrainPackDependencyRole(parsedArchive, entry.path)
-      const dependencyType = resolveTerrainPackDependencyAssetType(entry.path, role)
-      const fileName = entry.path.split('/').pop() ?? entry.path
-      const stored = await storeBufferAtExactKey(entry.bytes, {
-        fileKey: `${packKey}/${entry.path}`,
-        mimeType: resolveTerrainPackMimeType(entry.path),
-      })
-      writtenFileKeys.push(stored.fileKey)
-      const dependency = await AssetModel.create({
-        name: textureId ?? (path.parse(fileName).name || fileName),
-        categoryId: category._id,
-        type: dependencyType,
-        assetRole: 'dependant',
-        bundleRole: 'dependency',
-        tags: [],
-        size: stored.size,
-        color: ASSET_COLORS[dependencyType] ?? null,
-        dimensionLength: null,
-        dimensionWidth: null,
-        dimensionHeight: null,
-        sizeCategory: null,
-        imageWidth: null,
-        imageHeight: null,
-        url: stored.url,
-        fileKey: stored.fileKey,
-        previewUrl: dependencyType === 'image' ? stored.url : null,
-        thumbnailUrl: dependencyType === 'image' ? stored.url : null,
-        description: entry.path,
-        originalFilename: fileName,
-        mimeType: stored.mimeType,
-        metadata: {
-          terrainPackFile: buildTerrainPackDependencyMetadata({
-            relativePath: entry.path,
-            role,
-            textureId,
-          }),
-        },
-        contentHash: computeFnv1a64CompatHash(entry.bytes),
-        contentHashAlgorithm: ASSET_BUNDLE_HASH_ALGORITHM,
-        terrainScatterPreset: null,
-        bundlePrimaryAssetId: primaryAsset._id,
-        sourceLocalAssetId: entry.path,
-      })
-      dependencyIds.push(dependency._id as Types.ObjectId)
-    }
 
     await refreshManifest()
     const populatedPrimary = await AssetModel.findById(primaryAssetId)
@@ -2775,30 +2733,20 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     if (!populatedPrimary) {
       ctx.throw(500, 'Failed to resolve terrain pack asset')
     }
-    const dependencyAssets = await AssetModel.find({ _id: { $in: dependencyIds } })
-      .populate('tags')
-      .populate('seriesId')
-      .lean()
-      .exec() as LeanAsset[]
 
     ctx.status = 201
     ctx.body = {
       reused: false,
       category: mapCategoryTreeNode(categoryDocumentToTreeNode(category)),
       asset: await mapAssetDocumentWithLookup(populatedPrimary!),
-      dependencies: await Promise.all(dependencyAssets.map((dependency) => mapAssetDocumentWithLookup(dependency))),
-      pack: buildTerrainPackResponsePack(parsedArchive),
+      pack: { ...buildTerrainPackResponsePack(parsedArchive), warnings: packWarnings },
     }
   } catch (error) {
     for (const fileKey of writtenFileKeys) {
       await deleteStoredFile(fileKey).catch(() => undefined)
     }
-    if (dependencyIds.length) {
-      await AssetModel.deleteMany({ _id: { $in: dependencyIds } }).catch(() => undefined)
-    }
     if (primaryAssetId) {
       await AssetModel.findByIdAndDelete(primaryAssetId).catch(() => undefined)
-      await deleteStoredFile(`${packKey}/`).catch(() => undefined)
       await fs.remove(path.join(appConfig.assetStoragePath, packKey)).catch(() => undefined)
     }
     throw error
@@ -3420,14 +3368,11 @@ export async function deleteAsset(ctx: Context): Promise<void> {
   }
   const asset = await AssetModel.findById(id).lean().exec()
   if (asset) {
-    // Terrain packs own a folder plus a set of dependant assets; keep them in
-    // sync with the primary asset in both the soft-delete and hard-delete paths.
+    // Terrain packs own a whole storage folder (GLB + textures + manifest, or
+    // the DEM zip); the folder goes away with the hard-deleted primary asset.
     const packMetadata = readTerrainPackAssetMetadata(
       (asset.metadata as Record<string, unknown> | undefined)?.terrainPack,
     )
-    const packDependencies = packMetadata
-      ? await AssetModel.find({ bundlePrimaryAssetId: asset._id }).lean().exec()
-      : []
     if (asset.deletedAt) {
       const fileKey = resolveAssetFileKey(asset)
       const thumbnailKey = resolveThumbnailFileKey(asset)
@@ -3436,13 +3381,6 @@ export async function deleteAsset(ctx: Context): Promise<void> {
       if (thumbnailKey && thumbnailKey !== fileKey) {
         await deleteStoredFile(thumbnailKey)
       }
-      for (const dependency of packDependencies) {
-        const dependencyFileKey = resolveAssetFileKey(dependency)
-        await AssetModel.findByIdAndDelete(dependency._id).exec()
-        if (dependencyFileKey) {
-          await deleteStoredFile(dependencyFileKey)
-        }
-      }
       if (packMetadata?.packKey) {
         const packRoot = path.resolve(appConfig.assetStoragePath, packMetadata.packKey)
         if (packRoot.startsWith(path.resolve(appConfig.assetStoragePath))) {
@@ -3450,14 +3388,7 @@ export async function deleteAsset(ctx: Context): Promise<void> {
         }
       }
     } else {
-      const deletedAt = new Date()
-      await AssetModel.findByIdAndUpdate(id, { $set: { deletedAt, isDeleted: true } }).exec()
-      if (packMetadata) {
-        await AssetModel.updateMany(
-          { bundlePrimaryAssetId: asset._id },
-          { $set: { deletedAt, isDeleted: true } },
-        ).exec()
-      }
+      await AssetModel.findByIdAndUpdate(id, { $set: { deletedAt: new Date(), isDeleted: true } }).exec()
     }
     await refreshManifest()
   }
@@ -3470,18 +3401,6 @@ export async function restoreAsset(ctx: Context): Promise<void> {
   const { id } = ctx.params
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid asset id')
-  }
-  const pendingRestore = await AssetModel.findById(id).lean().exec()
-  if (pendingRestore) {
-    const packMetadata = readTerrainPackAssetMetadata(
-      (pendingRestore.metadata as Record<string, unknown> | undefined)?.terrainPack,
-    )
-    if (packMetadata) {
-      await AssetModel.updateMany(
-        { bundlePrimaryAssetId: pendingRestore._id },
-        { $set: { deletedAt: null, isDeleted: false } },
-      ).exec()
-    }
   }
   const asset = await AssetModel.findByIdAndUpdate(
     id,

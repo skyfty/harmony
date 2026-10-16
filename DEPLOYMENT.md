@@ -36,6 +36,7 @@ docker compose -f docker-compose.prod.yml up -d mongo
 docker compose -f docker-compose.prod.yml build admin server
 docker compose -f docker-compose.prod.yml up -d admin server
 docker compose -f docker-compose.prod.yml logs -f server
+docker compose -f docker-compose.prod.yml logs -f admin
 
 	docker system prune -a -f
 docker builder prune

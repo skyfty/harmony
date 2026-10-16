@@ -80,9 +80,6 @@ interface DirectoryTreeListItem {
 }
 
 interface PackFormModel {
-  categoryId: string;
-  createCategory: boolean;
-  createCategoryName: string;
   description: string;
   name: string;
   tagIds: string[];
@@ -155,9 +152,6 @@ const packFileList = ref<UploadFile[]>([]);
 const packError = ref<null | string>(null);
 const packResult = ref<null | ResourcePackUploadResult>(null);
 const packFormModel = reactive<PackFormModel>({
-  categoryId: '',
-  createCategory: true,
-  createCategoryName: '',
   description: '',
   name: '',
   tagIds: [],
@@ -630,9 +624,6 @@ function openPackModal() {
   packError.value = null;
   packResult.value = null;
   packProgress.value = 0;
-  packFormModel.categoryId = currentDirectoryId.value;
-  packFormModel.createCategory = true;
-  packFormModel.createCategoryName = '';
   packFormModel.name = '';
   packFormModel.description = '';
   packFormModel.tagIds = [];
@@ -642,14 +633,8 @@ function openPackModal() {
 function handlePackFileChange(info: UploadChangeParam<UploadFile<any>>) {
   packFileList.value = info.fileList.slice(-1);
   const derived = derivePackName(packFileList.value[0]?.name ?? '');
-  if (!derived) {
-    return;
-  }
-  if (!packFormModel.name.trim()) {
+  if (derived && !packFormModel.name.trim()) {
     packFormModel.name = derived;
-  }
-  if (!packFormModel.createCategoryName.trim()) {
-    packFormModel.createCategoryName = derived;
   }
 }
 
@@ -659,8 +644,8 @@ async function submitPackUpload() {
     packError.value = '请选择资源包 zip 文件';
     return;
   }
-  if (packFormModel.createCategory && !packFormModel.createCategoryName.trim()) {
-    packError.value = '请填写新建子目录名称';
+  if (!packFormModel.name.trim()) {
+    packError.value = '请填写资源包名称';
     return;
   }
   packSubmitting.value = true;
@@ -669,15 +654,7 @@ async function submitPackUpload() {
   try {
     const payload = new FormData();
     payload.append('pack', file);
-    if (packFormModel.name.trim()) {
-      payload.append('name', packFormModel.name.trim());
-    }
-    if (packFormModel.categoryId) {
-      payload.append('categoryId', packFormModel.categoryId);
-    }
-    if (packFormModel.createCategory) {
-      payload.append('createCategoryName', packFormModel.createCategoryName.trim());
-    }
+    payload.append('name', packFormModel.name.trim());
     if (packFormModel.description.trim()) {
       payload.append('description', packFormModel.description.trim());
     }
@@ -689,7 +666,6 @@ async function submitPackUpload() {
       },
     });
     packResult.value = result;
-    packFormModel.categoryId = result?.category?.id || packFormModel.categoryId;
     await refreshDirectoryContext();
     const targetDirectoryId = result?.category?.id;
     if (targetDirectoryId && targetDirectoryId !== currentDirectoryId.value) {
@@ -1582,7 +1558,7 @@ onMounted(async () => {
     >
       <div style="margin-bottom: 12px; color: #666; line-height: 1.6">
         支持 3dtiles-viewer 导出的「几何+贴图包」（scene.glb + textures/ + textures.json）与「DEM 包」（dem.tif + ortho.tif + dem.json）。
-        包内相对目录会原样保留，贴图与配置文件会注册为隐藏依赖资产，供 editor / preview / SceneryViewer 按需下载。
+        包内文件会归位到固定布局（贴图放在 textures/ 下），只登记一个主资产；贴图与配置文件作为附属文件不进入资源清单，运行时按需下载。
       </div>
       <Form :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
         <Form.Item label="资源包" required>
@@ -1590,29 +1566,11 @@ onMounted(async () => {
             <Button><UploadOutlined /> 选择 zip 文件</Button>
           </Upload>
         </Form.Item>
-        <Form.Item label="名称">
+        <Form.Item label="名称" required>
           <Input v-model:value="packFormModel.name" placeholder="默认取 zip 文件名" />
         </Form.Item>
-        <Form.Item label="父分类">
-          <Select
-            v-model:value="packFormModel.categoryId"
-            allow-clear
-            option-filter-prop="label"
-            :options="categoryOptions"
-            placeholder="默认使用当前所选目录"
-            show-search
-          />
-        </Form.Item>
-        <Form.Item label="分类处理">
-          <Space>
-            <Checkbox v-model:checked="packFormModel.createCategory">新建子目录</Checkbox>
-            <Input
-              v-model:value="packFormModel.createCategoryName"
-              :disabled="!packFormModel.createCategory"
-              placeholder="子目录名称（默认取包名）"
-              style="width: 300px"
-            />
-          </Space>
+        <Form.Item label="目标目录">
+          <Input :value="`地形 / ${packFormModel.name.trim() || '（名称）'}`" disabled />
         </Form.Item>
         <Form.Item label="标签">
           <Select
@@ -1642,13 +1600,12 @@ onMounted(async () => {
           {{ packResult.reused ? '已存在相同内容的资源包，已直接复用' : '资源包已入库' }}
         </div>
         <div>类型：{{ packResult.pack.kind === 'geometry' ? '几何+贴图包' : 'DEM 包' }}</div>
-        <div>分类：{{ packResult.category?.name }}</div>
+        <div>分类：地形 / {{ packResult.category?.name }}</div>
         <div>主资产：{{ packResult.asset?.name }} · {{ packResult.asset?.type }} · {{ formatFileSize(packResult.asset?.size || 0) }}</div>
         <div>
           贴图 {{ packResult.pack.textureCount }} 张（KTX2 {{ packResult.pack.ktx2Count || 0 }}） · 包内文件 {{ packResult.pack.fileCount }} 个 · 共
           {{ formatFileSize(packResult.pack.totalBytes || 0) }}
         </div>
-        <div v-if="packResult.dependencies?.length">依赖资产 {{ packResult.dependencies.length }} 个（编辑器素材选择器中隐藏）</div>
         <div v-for="warning in packResult.pack.warnings || []" :key="warning" style="color: #d46b08">
           提示：{{ warning }}
         </div>

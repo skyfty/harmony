@@ -65,8 +65,6 @@ export function parseTerrainTextureManifest(json: unknown): TerrainTextureManife
   return json as TerrainTextureManifest
 }
 
-export type TerrainPackDependencyRole = 'texture' | 'ktx2' | 'config' | 'raster' | 'sidecar'
-
 export interface TerrainPackEntry {
   /** Relative path inside the archive, using forward slashes. */
   path: string
@@ -127,13 +125,6 @@ export interface TerrainPackAssetMetadata {
   crs?: { epsg: number; zone: number; hemisphere: 'north' | 'south' } | null
 }
 
-export interface TerrainPackDependencyMetadata {
-  version: typeof TERRAIN_PACK_METADATA_VERSION
-  relativePath: string
-  role: TerrainPackDependencyRole
-  textureId?: string
-}
-
 export function normalizeTerrainPackPath(raw: unknown): string | null {
   if (typeof raw !== 'string') {
     return null
@@ -189,6 +180,70 @@ export function detectTerrainPackKind(entryNames: readonly string[]): TerrainPac
     return 'dem'
   }
   return null
+}
+
+const TERRAIN_PACK_TEXTURE_EXTENSIONS = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'webp',
+  'bmp',
+  'gif',
+  'ktx',
+  'ktx2',
+  'dds',
+  'tga',
+])
+
+function extensionOf(path: string): string {
+  const base = path.split('/').pop() ?? path
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot + 1).toLowerCase() : ''
+}
+
+function isTextureLikePath(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/').toLowerCase()
+  const directories = normalized.split('/').slice(0, -1)
+  if (directories.includes(TERRAIN_GEOMETRY_PACK_TEXTURE_DIR.toLowerCase())) {
+    return true
+  }
+  return TERRAIN_PACK_TEXTURE_EXTENSIONS.has(extensionOf(normalized))
+}
+
+/**
+ * Canonical storage layout of a terrain pack inside the asset storage root.
+ *
+ * The runtime texture stream resolves `textures/<file>` relative to the GLB's
+ * download URL, so whatever directory structure the archive used is flattened
+ * to: `scene.glb` + `textures/<file>` (+ `textures.json`) for geometry packs.
+ * DEM packs are stored as the original zip only, so entry paths return null.
+ */
+export function resolveTerrainPackStoredPath(
+  kind: TerrainPackKind,
+  entryPath: string,
+  glbFile: string | null = null,
+): string | null {
+  const path = normalizeTerrainPackPath(entryPath)
+  if (!path) {
+    return null
+  }
+  if (kind === 'dem') {
+    return null
+  }
+  const base = baseName(path)
+  if (base === TERRAIN_GEOMETRY_PACK_GLB) {
+    return TERRAIN_GEOMETRY_PACK_GLB
+  }
+  if (base === TERRAIN_GEOMETRY_PACK_MANIFEST) {
+    return TERRAIN_GEOMETRY_PACK_MANIFEST
+  }
+  if (glbFile && path === normalizeTerrainPackPath(glbFile)) {
+    return TERRAIN_GEOMETRY_PACK_GLB
+  }
+  const fileName = path.split('/').pop() ?? path
+  return isTextureLikePath(path)
+    ? `${TERRAIN_GEOMETRY_PACK_TEXTURE_DIR}/${fileName}`
+    : fileName
 }
 
 export type TerrainPackSummarizeOptions = {
@@ -377,23 +432,6 @@ export function readTerrainPackAssetMetadata(value: unknown): TerrainPackAssetMe
     return null
   }
   return value as unknown as TerrainPackAssetMetadata
-}
-
-export function readTerrainPackDependencyMetadata(value: unknown): TerrainPackDependencyMetadata | null {
-  if (!isRecord(value)) {
-    return null
-  }
-  if (value.version !== TERRAIN_PACK_METADATA_VERSION) {
-    return null
-  }
-  if (typeof value.relativePath !== 'string' || !value.relativePath.trim()) {
-    return null
-  }
-  const role = value.role
-  if (role !== 'texture' && role !== 'ktx2' && role !== 'config' && role !== 'raster' && role !== 'sidecar') {
-    return null
-  }
-  return value as unknown as TerrainPackDependencyMetadata
 }
 
 export function isTerrainGeometryPackAssetMetadata(value: unknown): boolean {

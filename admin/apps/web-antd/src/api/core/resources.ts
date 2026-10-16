@@ -212,7 +212,6 @@ export interface ResourcePackSummary {
 export interface ResourcePackUploadResult {
   asset: ResourceAssetItem;
   category: ResourceCategoryItem;
-  dependencies: ResourceAssetItem[];
   pack: ResourcePackSummary;
   reused: boolean;
 }

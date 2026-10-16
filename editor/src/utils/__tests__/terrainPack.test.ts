@@ -9,7 +9,7 @@ import {
   detectTerrainPackKind,
   parseTerrainTextureManifest,
   readTerrainPackAssetMetadata,
-  readTerrainPackDependencyMetadata,
+  resolveTerrainPackStoredPath,
   summarizeTerrainPack,
   type TerrainPackEntry,
 } from '@schema/terrainPack'
@@ -164,7 +164,31 @@ describe('terrain pack metadata readers', () => {
     expect(readTerrainPackAssetMetadata(null)).toBeNull()
     expect(readTerrainPackAssetMetadata({ kind: 'geometry' })).toBeNull()
     expect(readTerrainPackAssetMetadata({ version: 1, kind: 'other', packKey: 'x' })).toBeNull()
-    expect(readTerrainPackDependencyMetadata({ version: 1, relativePath: 'textures/a.jpg', role: 'texture' })?.role).toBe('texture')
-    expect(readTerrainPackDependencyMetadata({ version: 1, relativePath: 'x', role: 'nope' })).toBeNull()
+  })
+})
+
+describe('resolveTerrainPackStoredPath', () => {
+  it('keeps the canonical geometry layout', () => {
+    expect(resolveTerrainPackStoredPath('geometry', 'scene.glb')).toBe('scene.glb')
+    expect(resolveTerrainPackStoredPath('geometry', 'textures/tex-1.jpg')).toBe('textures/tex-1.jpg')
+    expect(resolveTerrainPackStoredPath('geometry', 'textures/tex-2.ktx2')).toBe('textures/tex-2.ktx2')
+    expect(resolveTerrainPackStoredPath('geometry', 'textures.json')).toBe('textures.json')
+  })
+
+  it('moves flat textures into textures/ and keeps stray files at the pack root', () => {
+    expect(resolveTerrainPackStoredPath('geometry', 'tex-3.jpg')).toBe('textures/tex-3.jpg')
+    expect(resolveTerrainPackStoredPath('geometry', 'tex-4.KTX2')).toBe('textures/tex-4.KTX2')
+    expect(resolveTerrainPackStoredPath('geometry', 'readme.txt')).toBe('readme.txt')
+  })
+
+  it('normalizes nested archives to the same canonical layout', () => {
+    expect(resolveTerrainPackStoredPath('geometry', 'terrain-x/scene.glb', 'terrain-x/scene.glb')).toBe('scene.glb')
+    expect(resolveTerrainPackStoredPath('geometry', 'terrain-x/textures/tex-5.jpg', 'terrain-x/scene.glb')).toBe('textures/tex-5.jpg')
+    expect(resolveTerrainPackStoredPath('geometry', 'terrain-x/textures.json', 'terrain-x/scene.glb')).toBe('textures.json')
+  })
+
+  it('stores nothing per entry for DEM packs', () => {
+    expect(resolveTerrainPackStoredPath('dem', 'dem.tif')).toBeNull()
+    expect(resolveTerrainPackStoredPath('dem', 'dem.json')).toBeNull()
   })
 })
