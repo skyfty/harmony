@@ -22,14 +22,27 @@ import {
   createFoliageMaterial,
   createFoliageShaderUniforms,
   disposeFoliageLayerMesh,
+  getFoliageLayerCapacity,
   setFoliageMaterialCardRange,
   setFoliageMaterialLighting,
   setFoliageMaterialTextures,
+  updateFoliageLayerMesh,
   type FoliageMaterialHandle,
   type FoliageMaterialSpec,
   type FoliageShaderUniforms,
   type FoliageSpriteInstance,
 } from './instancing'
+import {
+  collectFarForestPlacements,
+  createFarForestScan,
+  stepFarForestScan,
+  type FarForestScan,
+} from './farForest'
+import {
+  computeWaterFloodStats,
+  WATER_FLOOD_VISIBLE_FRACTION,
+  type WaterFloodStats,
+} from './waterStats'
 import {
   applyProceduralLandscapeSurfaceInjection,
   createProceduralLandscapeSurfaceUniforms,
@@ -111,6 +124,23 @@ const IMPOSTER_REGIONS: SpriteRegion[] = gridRegions(16, 4, 4096, 1024)
 const CARD_DISSOLVE_INTERVAL_FACTOR = 0.3
 /** 木护栏段的世界尺寸（lab：单片面 unitSize 0.35m、alphaTest 0.35）。 */
 const BARRIER_UNIT_SIZE = 0.35
+/**
+ * 远景林（相机锚定多环环带，覆盖近景流式半径 → 雾距之间的可见地形）：
+ *  - 重锚阈值：相机水平位移超过它才重建，避免连续重建把扫描摊薄成常态开销；
+ *  - 扫描预算：每帧最多处理的候选格数量（分帧摊薄，避免一次重锚卡帧）；
+ *  - 外半径：最多覆盖到场景雾远端的 75%（再远已被雾吃掉，实例纯浪费）。
+ */
+const FAR_FOREST_REANCHOR_DISTANCE = 800
+const FAR_FOREST_SCAN_SAMPLES_PER_FRAME = 25_000
+const FAR_FOREST_RADIUS_FOG_FACTOR = 0.75
+/** 远景环最小可用带宽：雾距小于「近景半径 + 它」时不建环（没有可见空间）。 */
+const FAR_FOREST_MIN_BAND_WIDTH = 64
+/**
+ * 远景环每个物种层的缓冲容量预留比例（预算 × 系数）。
+ * 物种按哈希 40/60 分布，0.8× 预算的容量足以覆盖抽样波动，
+ * 避免每次重锚重新分配 6 万级实例的几何与属性缓冲。
+ */
+const FAR_FOREST_SPECIES_CAPACITY_FACTOR = 0.8
 
 let sharedPlaceholderTexture: THREE.DataTexture | null = null
 
@@ -176,8 +206,19 @@ export interface ProceduralLandscapeRuntimeStats {
   barrierInstances: number
   /** 路侧墙体段数（Drystone / Barrier / Fence / SeaWall 合计）。 */
   wallSegmentCount: number
+  /** 远景林（相机锚定多环环带：近景流式半径 → 雾距）实例数。 */
+  farTreeInstances: number
+  /** 远景林当前外半径（米；0 = 关闭/尚未建立）。 */
+  farForestRadius: number
   /** 水面是否启用（水线 = 地形最低点 + water.levelOffset）。 */
   waterEnabled: boolean
+  /** 当前水线（世界 Y；= 地形最低点 + water.levelOffset）。 */
+  waterLevel: number
+  /**
+   * 水线以下地形面积占比（0..1，采样统计）。
+   * ≈0 表示水面与地形最低点相切、被地形整体遮住（看不到任何水面）。
+   */
+  waterFloodedFraction: number
   /** 当前生效的雾/视距尺度倍率（1 = 与官方/lab 逐字一致）。 */
   viewDistanceScale: number
 }
@@ -432,6 +473,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let waterPlane: WaterPlaneHandle | null = null
   let barrierLayer: THREE.InstancedMesh | null = null
   let barrierInstances = 0
+  /** 远景林根节点（相机锚定多环环带；与分块植被层互不干扰）。 */
+  let farForestRoot: THREE.Group | null = null
+  /** 远景林两个物种层（复用缓冲，重锚只重写实例属性）。 */
+  let farForestLayers: { broadleaf: THREE.InstancedMesh; conifer: THREE.InstancedMesh } | null = null
+  let farForestInstances = 0
+  let farForestRadius = 0
+  /** 当前远景环的锚点（相机世界 XZ；NaN = 尚未建立）。 */
+  let farForestAnchorX = Number.NaN
+  let farForestAnchorZ = Number.NaN
+  /** 远景环参数签名（质量档/种子/网格/雾尺度变化时重建）。 */
+  let farForestSignature = ''
+  /** 分帧推进中的远景环扫描（null = 空闲）。 */
+  let farForestScan: FarForestScan | null = null
+  /** 水线诊断（世界构建时按地形直方图统计一次，水位变化时刷新淹没比例）。 */
+  let waterFloodStats: WaterFloodStats | null = null
   /** 官方墙体网格层（Drystone / Barrier / SeaWall）与最近一次放置结果。 */
   let wallLayer: WallLayerHandle | null = null
   let wallSegments: WallSegment[] = []
@@ -507,7 +563,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     assetVariant: assetStore.variant,
     barrierInstances: 0,
     wallSegmentCount: 0,
+    farTreeInstances: 0,
+    farForestRadius: 0,
     waterEnabled: false,
+    waterLevel: 0,
+    waterFloodedFraction: 0,
     viewDistanceScale: 1,
   }
   statsRegistry.set(hooks.nodeId, stats)
@@ -517,6 +577,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     warnings.add(message)
+    stats.warnings = Array.from(warnings)
+  }
+
+  /** 撤回一条可自我解除的告警（例如水位调高后「水面被遮住」不再成立）。 */
+  function unwarn(message: string): void {
+    if (!warnings.delete(message)) {
+      return
+    }
     stats.warnings = Array.from(warnings)
   }
 
@@ -543,6 +611,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       debugRoot.name = '__ProceduralLandscapeDebug'
       tagArtifact(debugRoot)
       hostObject.add(debugRoot)
+    }
+    if (!farForestRoot) {
+      // 远景林（相机锚定环带）：与分块植被层分开挂，便于整环释放/重锚。
+      farForestRoot = new THREE.Group()
+      farForestRoot.name = '__ProceduralLandscapeFarForest'
+      tagArtifact(farForestRoot)
+      hostObject.add(farForestRoot)
     }
     if (!sceneRoot) {
       // 水面是世界空间水平面（宿主的旋转会让它倾斜），挂到场景根。
@@ -653,10 +728,237 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return grid.minY + props.water.levelOffset
   }
 
+  // ---- 远景林（相机锚定多环 LOD）----
+
+  /**
+   * 远景环档位：外半径取 `min(档位半径, 雾远端 × 0.75)`，返回 null 表示不建环
+   * （low 档关闭 / 预算为 0 / 雾距还没把近景半径之外的可见空间留出来）。
+   */
+  function resolveFarForestTier(): { radius: number; budget: number } | null {
+    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
+    const far = tier.farForest
+    if (!far || far.budget <= 0 || far.radius <= 0) {
+      return null
+    }
+    const fogFar = Math.max(1, appliedViewDistanceScale) * 1000
+    const radius = Math.min(far.radius, fogFar * FAR_FOREST_RADIUS_FOG_FACTOR)
+    if (radius <= tier.viewDistance + FAR_FOREST_MIN_BAND_WIDTH) {
+      return null
+    }
+    return { radius, budget: Math.floor(far.budget) }
+  }
+
+  /** 远景环参数签名：任一影响放置的输入变化都要重扫。 */
+  function resolveFarForestSignature(): string {
+    if (!grid) {
+      return ''
+    }
+    return jsonKey([
+      resolveQuality(),
+      props.seed,
+      props.forest.minScale,
+      props.forest.maxScale,
+      props.forest.maxSlope,
+      props.forest.roadClearance,
+      props.water.levelOffset,
+      grid.cols,
+      grid.rows,
+      Math.round(grid.minY * 100) / 100,
+      appliedViewDistanceScale,
+    ])
+  }
+
+  function disposeFarForestRing(): void {
+    if (farForestLayers) {
+      disposeFoliageLayerMesh(farForestLayers.broadleaf)
+      disposeFoliageLayerMesh(farForestLayers.conifer)
+      farForestLayers = null
+    }
+    farForestInstances = 0
+    farForestRadius = 0
+    farForestAnchorX = Number.NaN
+    farForestAnchorZ = Number.NaN
+    farForestScan = null
+  }
+
+  /** 确保两个物种层的网格存在且容量够用（不够才重建；足够时原地复用）。 */
+  function ensureFarForestLayers(broadleafCount: number, coniferCount: number, budget: number): void {
+    const capacity = Math.max(64, Math.ceil(budget * FAR_FOREST_SPECIES_CAPACITY_FACTOR))
+    const broadleafCapacity = Math.max(broadleafCount, capacity)
+    const coniferCapacity = Math.max(coniferCount, capacity)
+    const existing = farForestLayers
+    if (
+      existing
+      && getFoliageLayerCapacity(existing.broadleaf) >= broadleafCapacity
+      && getFoliageLayerCapacity(existing.conifer) >= coniferCapacity
+    ) {
+      return
+    }
+    if (existing) {
+      disposeFoliageLayerMesh(existing.broadleaf)
+      disposeFoliageLayerMesh(existing.conifer)
+    }
+    if (!farForestRoot) {
+      farForestLayers = null
+      return
+    }
+    const handleConifer = getFoliageMaterialHandle(farForestMaterialSpec(1))
+    const handleBroadleaf = getFoliageMaterialHandle(farForestMaterialSpec(0))
+    farForestLayers = {
+      broadleaf: createFoliageLayerMesh([], handleBroadleaf.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null, {
+        billboard: true,
+        capacity: broadleafCapacity,
+      }),
+      conifer: createFoliageLayerMesh([], handleConifer.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null, {
+        billboard: true,
+        capacity: coniferCapacity,
+      }),
+    }
+    farForestRoot.add(farForestLayers.broadleaf)
+    farForestRoot.add(farForestLayers.conifer)
+  }
+
+  /** 远景树材质：与分块远景 imposter 层共用同一 key（同材质/同雾/同换季通道）。 */
+  function farForestMaterialSpec(species: 0 | 1): FoliageMaterialSpec {
+    return {
+      kind: 'tree',
+      tier: 'far',
+      species,
+      singlePlane: true,
+      tint: 0xffffff,
+      farTintScale: 1,
+      hasAlphaTexture: false,
+      hasNormalTexture: true,
+      card: 'far',
+      distanceAlpha: false,
+      useDensityShadow: false,
+      key: `tree:far:${species}`,
+    }
+  }
+
+  function toFarForestInstance(placement: TreePlacement): FoliageSpriteInstance {
+    const regionIndex = findRegionIndex(IMPOSTER_REGIONS, placement.variant)
+    const region = IMPOSTER_REGIONS[regionIndex] ?? null
+    return {
+      x: placement.x,
+      y: placement.y,
+      z: placement.z,
+      rotation: placement.rotation,
+      // TreePlacement.scale 是米：换算成 8m 基准倍率（与近/远景卡层同一契约）。
+      scale: placement.scale / TREE_UNIT_SIZE,
+      region,
+      cell: Math.min(3, regionIndex % 4),
+      roadProx: 0,
+    }
+  }
+
+  /** 扫描完成：按预算产出实例并就地重写两个物种层。 */
+  function applyFarForestScanResult(): void {
+    const scan = farForestScan
+    farForestScan = null
+    if (!scan || !farForestRoot) {
+      return
+    }
+    const result = collectFarForestPlacements(scan)
+    const broadleaf: FoliageSpriteInstance[] = []
+    const conifer: FoliageSpriteInstance[] = []
+    for (const placement of result.placements) {
+      const target = placement.species === 1 ? conifer : broadleaf
+      target.push(toFarForestInstance(placement))
+    }
+    ensureFarForestLayers(broadleaf.length, conifer.length, result.budget)
+    const layers = farForestLayers
+    if (!layers) {
+      farForestInstances = 0
+      farForestRadius = 0
+      return
+    }
+    const broadleafWritten = updateFoliageLayerMesh(
+      layers.broadleaf,
+      broadleaf,
+      TREE_UNIT_SIZE,
+      hostObject ? hostInverse : null,
+      { billboard: true },
+    )
+    const coniferWritten = updateFoliageLayerMesh(
+      layers.conifer,
+      conifer,
+      TREE_UNIT_SIZE,
+      hostObject ? hostInverse : null,
+      { billboard: true },
+    )
+    farForestInstances = broadleafWritten + coniferWritten
+    farForestRadius = scan.params.outerRadius
+  }
+
+  function startFarForestScan(tier: { radius: number; budget: number }, camera: THREE.Vector3): void {
+    if (!grid || !densityField) {
+      return
+    }
+    const qualityTier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
+    // dissolve 区间与近树卡距离同源：换档/改近树卡距离后远景 imposter 的
+    // 淡入淡出必须跟着走（与分块远景层共用同一材质句柄）。
+    applyCardDissolveRange(getFoliageMaterialHandle(farForestMaterialSpec(0)))
+    applyCardDissolveRange(getFoliageMaterialHandle(farForestMaterialSpec(1)))
+    farForestAnchorX = camera.x
+    farForestAnchorZ = camera.z
+    farForestScan = createFarForestScan({
+      seed: props.seed,
+      centerX: camera.x,
+      centerZ: camera.z,
+      innerRadius: qualityTier.viewDistance,
+      outerRadius: tier.radius,
+      budget: tier.budget,
+      maxSlope: props.forest.maxSlope,
+      roadClearance: roadHalfWidth(props) + props.road.shoulderWidth + props.forest.roadClearance,
+      waterLevel: resolveWaterLevel(),
+      minScale: props.forest.minScale,
+      maxScale: props.forest.maxScale,
+      densityMultiplier: qualityTier.densityMultiplier,
+    })
+  }
+
+  /**
+   * 每帧推进远景林：档位/签名变化或相机离开锚点（> 800m）时重扫，
+   * 扫描按采样预算摊薄到多帧；扫完前旧的环保持可见（双缓冲，不闪烁）。
+   */
+  function updateFarForest(camera: THREE.Vector3): void {
+    const tier = resolveFarForestTier()
+    if (!tier) {
+      if (farForestLayers || farForestScan) {
+        disposeFarForestRing()
+      }
+      farForestSignature = ''
+      return
+    }
+    ensureRoots()
+    if (!farForestRoot) {
+      return
+    }
+    const signature = resolveFarForestSignature()
+    const anchorMoved = !Number.isFinite(farForestAnchorX)
+      || Math.hypot(camera.x - farForestAnchorX, camera.z - farForestAnchorZ) > FAR_FOREST_REANCHOR_DISTANCE
+    if (signature !== farForestSignature || (anchorMoved && !farForestScan)) {
+      farForestSignature = signature
+      startFarForestScan(tier, camera)
+    }
+    if (farForestScan && grid && densityField) {
+      const done = stepFarForestScan(
+        farForestScan,
+        { grid, density: densityField, roadField: roadFieldData },
+        FAR_FOREST_SCAN_SAMPLES_PER_FRAME,
+      )
+      if (done) {
+        applyFarForestScanResult()
+      }
+    }
+  }
+
   function resetAll(): void {
     disposeSurfaceState()
     disposeWorldState()
     disposeWaterAndBarrier()
+    disposeFarForestRing()
     gridBuilder = null
     grid = null
   }
@@ -1122,28 +1424,66 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     hostObject.add(wallLayer.group)
   }
 
-  /** 水面（lab water.ts）：世界空间水平面，水线 = 地形最低点 + water.levelOffset。 */
+  /**
+   * 水面（lab water.ts）：世界空间水平面，水线 = 地形最低点 + water.levelOffset。
+   *
+   * 幂等：季节素材（sea_waves）尚未加载完成时**不**动已有水面（素材到达后由
+   * `applySeasonToMaterials` 再调一次补建/换贴图），避免「世界构建早于素材加载 →
+   * 水面永不创建」的竞态；尺寸没变时原地更新贴图/水位，不做重建。
+   */
   function buildWater(): void {
-    waterPlane?.dispose()
-    waterPlane = null
     if (!grid || !props.water.enabled || !sceneRoot) {
+      waterPlane?.dispose()
+      waterPlane = null
+      waterFloodStats = null
+      unwarn('water-buried-by-terrain')
       return
     }
+    // 水线诊断与季节素材无关：先算淹没比例（面板提示用），再决定能否建面。
+    refreshWaterFloodStats()
     const waves = textureFor(SHARED_TEXTURES.seaWaves.id)
     if (!waves) {
       return
     }
-    const size = Math.max(grid.maxX - grid.minX, grid.maxZ - grid.minZ) * 1.5
-    waterPlane = createWaterPlane({
-      worldSize: Math.max(1, size),
-      waterLevel: resolveWaterLevel(),
-      waves,
-    })
-    waterPlane.mesh.position.x = (grid.minX + grid.maxX) * 0.5
-    waterPlane.mesh.position.z = (grid.minZ + grid.maxZ) * 0.5
+    const size = Math.max(1, Math.max(grid.maxX - grid.minX, grid.maxZ - grid.minZ) * 1.5)
+    const centerX = (grid.minX + grid.maxX) * 0.5
+    const centerZ = (grid.minZ + grid.maxZ) * 0.5
+    const waterLevel = resolveWaterLevel()
+    if (waterPlane && Math.abs(waterPlane.worldSize - size) <= 1e-3) {
+      waterPlane.setWavesTexture(waves)
+      waterPlane.setWaterLevel(waterLevel)
+      waterPlane.mesh.position.x = centerX
+      waterPlane.mesh.position.z = centerZ
+      waterPlane.setVisible(true)
+      return
+    }
+    waterPlane?.dispose()
+    waterPlane = createWaterPlane({ worldSize: size, waterLevel, waves })
+    waterPlane.mesh.position.x = centerX
+    waterPlane.mesh.position.z = centerZ
     tagArtifact(waterPlane.mesh)
     sceneRoot.add(waterPlane.mesh)
     waterPlane.setVisible(true)
+  }
+
+  /**
+   * 水线诊断：统计水线以下的地形面积占比。
+   * 偏移为 0 时水线 = 地形最低点 → 水面只与最低点相切、被地形整体遮住
+   * （用户实测「看不到任何水面」），占比 ≈0 时面板给出提高水线偏移的提示。
+   */
+  function refreshWaterFloodStats(): void {
+    if (!grid) {
+      waterFloodStats = null
+      return
+    }
+    waterFloodStats = computeWaterFloodStats(grid, resolveWaterLevel())
+    if (props.water.enabled && waterFloodStats.floodedFraction < WATER_FLOOD_VISIBLE_FRACTION) {
+      // 水线 = 地形最低点 + 偏移：偏移 0 时水面只与最低点相切、被地形整体遮住。
+      warn('water-buried-by-terrain')
+    } else {
+      // 调高水线偏移（或关掉水面）后这条告警不再成立，别留在面板里误导。
+      unwarn('water-buried-by-terrain')
+    }
   }
 
   function buildRoadBand(): void {
@@ -2141,7 +2481,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.assetVariant = storeStats.variant
     stats.barrierInstances = barrierInstances
     stats.wallSegmentCount = wallSegments.length
+    stats.farTreeInstances = farForestInstances
+    stats.farForestRadius = farForestRadius
     stats.waterEnabled = Boolean(waterPlane && waterPlane.mesh.visible)
+    stats.waterLevel = grid ? resolveWaterLevel() : 0
+    stats.waterFloodedFraction = waterFloodStats?.floodedFraction ?? 0
     stats.viewDistanceScale = appliedViewDistanceScale
   }
 
@@ -2240,6 +2584,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       )
     }
     applyTreeMeshSeasonTextures()
+    // 水面：素材（sea_waves）到达后补建，换季换水波贴图（世界构建早于素材加载时
+    // buildWater() 会因为拿不到贴图而跳过，这里保证最终一定会建出来）。
+    buildWater()
     // 换季复用放置：只重建植被网格层（不重算 chunkPlan、不重建地形）。
     releaseAllBatches()
     markInstancesDirty()
@@ -2383,6 +2730,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
       updateTreeMeshes(camera)
     }
+    if (camera && grid) {
+      updateFarForest(camera)
+    }
     waterPlane?.update()
     if (chunkDebugDirty) {
       chunkDebugDirty = false
@@ -2412,6 +2762,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         debugRoot.removeFromParent()
         debugRoot.clear()
         debugRoot = null
+      }
+      if (farForestRoot && farForestRoot.parent !== host) {
+        farForestRoot.removeFromParent()
+        farForestRoot.clear()
+        farForestRoot = null
       }
       if (treeMeshManager && treeMeshManager.container.parent !== host) {
         treeMeshManager.container.removeFromParent()
@@ -2529,9 +2884,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (debugRoot && hostObject) {
         hostObject.remove(debugRoot)
       }
+      if (farForestRoot && hostObject) {
+        hostObject.remove(farForestRoot)
+      }
       disposeWaterAndBarrier()
       foliageRoot = null
       debugRoot = null
+      farForestRoot = null
+      waterFloodStats = null
       sceneRoot = null
       statsRegistry.delete(hooks.nodeId)
       runtimeRegistry.delete(hooks.nodeId)

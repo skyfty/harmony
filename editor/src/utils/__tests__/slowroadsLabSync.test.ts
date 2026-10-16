@@ -18,6 +18,7 @@ import {
 } from '@schema/slowroads/render/selfCheck'
 import {
   ENVIRONMENT_PRESETS,
+  resolveCameraFarForFogDistance,
   resolveFogDepthBlend,
   resolveFogParams,
   resolveSkyFogParams,
@@ -281,7 +282,9 @@ describe('procedural landscape props (full refactor)', () => {
     expect(props.walls.fence.enabled).toBe(true)
     expect('spacing' in props.walls.drystone).toBe(false)
     expect('dropThreshold' in props.walls.drystone).toBe(false)
-    expect(props.water.levelOffset).toBe(-50)
+    // 水线偏移夹紧放宽到 ±1000m：编辑器地形起伏可达 2000m+，
+    // 旧 ±50m 无法把低地调到水面以上（水面永远被地形遮住）。
+    expect(props.water.levelOffset).toBe(-999)
     expect(props.forest.nearTreeRadius).toBe(300)
     expect(props.surface.viewDistanceScale).toBe(1)
   })
@@ -305,6 +308,29 @@ describe('procedural landscape props (full refactor)', () => {
       't',
     )
     expect(resolveSurfaceViewDistanceScale(manual, 200000)).toBe(4)
+  })
+
+  it('camera far follows the scene fog distance so fog saturates before clipping', () => {
+    const base = { fallbackFar: 2000, maxFar: 30000 }
+    // 环境运行时未生效（雾距 0）/无效值：退回兜底 far，小场景观感不变。
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 0 })).toBe(2000)
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: Number.NaN })).toBe(2000)
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: -100 })).toBe(2000)
+    // 本场景：雾尺度 ×10.66 → 雾远端 10660m，远裁剪面 13325m（雾先收满再裁切）。
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 10660 })).toBeCloseTo(13325, 6)
+    // 远裁剪面必须严格大于雾远端，否则又会出现硬裁切边。
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 10660 })).toBeGreaterThan(10660)
+    // margin = 1 时退化为雾远端本身（仍不小于兜底 far）。
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 10660, marginFactor: 1 })).toBe(10660)
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 500, marginFactor: 1 })).toBe(2000)
+    // 雾尺度上限 12×（雾远端 24km）仍在上限余量内；超限夹紧。
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 24000 })).toBe(30000)
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 40000 })).toBe(30000)
+    // 小程序端兜底 1000m：无地形场景 far 仍是 1250m（≈ 现状），只有大地形才放大。
+    const viewerBase = { fallbackFar: 1000, maxFar: 30000 }
+    expect(resolveCameraFarForFogDistance({ ...viewerBase, fogFar: 0 })).toBe(1000)
+    expect(resolveCameraFarForFogDistance({ ...viewerBase, fogFar: 1000 })).toBe(1250)
+    expect(resolveCameraFarForFogDistance({ ...viewerBase, fogFar: 10660 })).toBeCloseTo(13325, 6)
   })
 })
 

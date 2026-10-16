@@ -176,3 +176,45 @@ export function resolveFogDepthBlend(near: number, far: number): number {
   }
   return (fogAvg - 50) / 450
 }
+
+export interface ResolveCameraFarForFogDistanceOptions {
+  /**
+   * 当前生效的场景雾远端（米；`slowroadsFogUniforms.fogFar`，已含地形视距倍率与
+   * haze 插值）。0/NaN 表示环境运行时尚未生效。
+   */
+  fogFar: number
+  /** 没有雾尺度（小场景）时使用的兜底远裁剪面（米）。 */
+  fallbackFar: number
+  /** 远裁剪面上限（米）。 */
+  maxFar: number
+  /** 远裁剪面相对雾远端的余量：雾必须先收满，再轮到裁切。 */
+  marginFactor?: number
+}
+
+/**
+ * 相机远裁剪面必须落在「雾已经收满」之外，否则远端地形会被硬裁出一条生硬的边
+ * （ScenePreviewView 实测：固定 far=2000m、场景雾远端 10.66km 时，只看到 2km 内
+ * 的 16% 雾，地形轮廓直接切在天穹平面上）。
+ *
+ * 规则：`clamp(fogFar × marginFactor, fallbackFar, maxFar)`；
+ * `fogFar` 无效（未生效/非有限/≤0）时退回 `fallbackFar`。
+ */
+export function resolveCameraFarForFogDistance(
+  options: ResolveCameraFarForFogDistanceOptions,
+): number {
+  const fallbackFar = Number.isFinite(options.fallbackFar) && options.fallbackFar > 0
+    ? options.fallbackFar
+    : 1
+  const maxFar = Number.isFinite(options.maxFar) && options.maxFar >= fallbackFar
+    ? options.maxFar
+    : fallbackFar
+  const marginFactor = Number.isFinite(options.marginFactor) && (options.marginFactor as number) > 0
+    ? (options.marginFactor as number)
+    : 1.25
+  const fogFar = options.fogFar
+  if (!Number.isFinite(fogFar) || fogFar <= 0) {
+    return fallbackFar
+  }
+  const target = Math.max(fallbackFar, fogFar * marginFactor)
+  return Math.min(maxFar, target)
+}

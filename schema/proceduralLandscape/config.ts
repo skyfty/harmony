@@ -165,6 +165,15 @@ export interface ProceduralLandscapeQualityTier {
   maxBuildTasksPerTick: number
   maxTreeInstances: number
   maxGrassInstances: number
+  /**
+   * 远景林环带（近景流式半径之外的相机锚定 imposter 林）：
+   * `radius` 是外半径上限（米），`budget` 是实例预算（0 = 关闭）。
+   * 实际外半径 = min(radius, 0.75 × 场景雾远端)，见 runtime `resolveFarForestTier`。
+   */
+  farForest: {
+    radius: number
+    budget: number
+  }
 }
 
 export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandscapeQuality, ProceduralLandscapeQualityTier> = {
@@ -177,6 +186,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     maxBuildTasksPerTick: 2,
     maxTreeInstances: 6000,
     maxGrassInstances: 12000,
+    farForest: { radius: 0, budget: 0 },
   },
   medium: {
     viewDistance: 640,
@@ -187,6 +197,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     maxBuildTasksPerTick: 4,
     maxTreeInstances: 12000,
     maxGrassInstances: 24000,
+    farForest: { radius: 5000, budget: 28000 },
   },
   high: {
     viewDistance: 1200,
@@ -197,6 +208,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     maxBuildTasksPerTick: 6,
     maxTreeInstances: 60000,
     maxGrassInstances: 60000,
+    farForest: { radius: 8000, budget: 64000 },
   },
 }
 
@@ -431,7 +443,9 @@ export function clampProceduralLandscapeProps(
     },
     water: {
       enabled: water?.enabled !== false,
-      levelOffset: clampNumber(water?.levelOffset, defaults.water.levelOffset, -50, 50),
+      // 水线语义 = 地形最低点 + 偏移。偏移范围按真实地形放宽到 ±1000m：
+      // 编辑器地形起伏可达 2000m+，旧 ±50m 无法把低地调到水面以上（看不到任何水面）。
+      levelOffset: clampNumber(water?.levelOffset, defaults.water.levelOffset, -1000, 1000),
     },
     walls: {
       drystone: {

@@ -24,8 +24,12 @@ export interface WaterPlaneOptions {
 
 export interface WaterPlaneHandle {
   mesh: THREE.Mesh
+  /** 平面世界尺寸（米）——尺寸变化需要重建；贴图/水位变化可原地更新。 */
+  readonly worldSize: number
   /** 水线（世界 Y）。 */
   setWaterLevel(level: number): void
+  /** 换季换水波贴图（幂等；同一贴图重复下发无副作用）。 */
+  setWavesTexture(texture: THREE.Texture): void
   /** 每帧调用：同步环境快照（水色 / 冻水 / 时间 / 太阳高光）。 */
   update(): void
   setVisible(visible: boolean): void
@@ -138,8 +142,20 @@ export function createWaterPlane(options: WaterPlaneOptions): WaterPlaneHandle {
 
   return {
     mesh,
+    get worldSize(): number {
+      return options.worldSize
+    },
     setWaterLevel(level: number): void {
       mesh.position.y = level
+    },
+    setWavesTexture(texture: THREE.Texture): void {
+      if (material.uniforms.uWaves!.value === texture) {
+        return
+      }
+      texture.wrapS = THREE.RepeatWrapping
+      texture.wrapT = THREE.RepeatWrapping
+      material.uniforms.uWaves!.value = texture
+      material.needsUpdate = true
     },
     update(): void {
       const state = getSlowroadsWaterEnvironment()

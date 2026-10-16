@@ -176,8 +176,10 @@ import { prepareRuntimeGroundSceneDocument } from '@schema/groundSplatRuntimeDoc
 import { setGroundTextureSourceResolver } from '@schema/groundTextureSourceResolver'
 import {
 	createSlowroadsEnvironmentRuntime,
+	getSlowroadsSceneFogFar,
 	type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
+import { resolveCameraFarForFogDistance } from '@schema/slowroads/core/environment'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
 import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/runtime'
 import {
@@ -1794,6 +1796,17 @@ const tempOutlineScale = new THREE.Vector3()
 
 const CAMERA_HEIGHT = 1.7
 const DEFAULT_SCENE_CAMERA_FAR = 2000
+/**
+ * 远裁剪面上限（米）：覆盖雾尺度上限 12×（雾远端 24km）仍有余量。
+ * 远裁剪面只做「雾收满之后的兜底」，正常观测距离由雾决定。
+ */
+const SCENE_CAMERA_FAR_MAX = 30000
+/**
+ * 远裁剪面相对雾远端的余量：雾必须先收满、再轮到裁切，否则远端地形会被硬裁出
+ * 一条生硬的边（本场景雾尺度 ×10.66 → 雾远端 10.66km，固定 far=2000m 时只看到
+ * 2km 内的 16% 雾，地形轮廓直接切在天穹平面上）。
+ */
+const SCENE_CAMERA_FAR_FOG_MARGIN = 1.25
 const tempDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
 const tempQuaternion = new THREE.Quaternion()
@@ -11646,6 +11659,29 @@ function syncInstancedMatrixUploadEstimateForFrame(): void {
 	instancingDebug.instanceMatrixUploadKb = Math.max(0, Math.round(bytes / 1024))
 }
 
+/**
+ * 相机远裁剪面跟随场景雾距（每帧一次，只在变化时更新投影）。
+ *
+ * 预览相机原本是固定 far = 2000m，而雾尺度按地形放大（本场景 ×10.66 → 雾远端
+ * 10.66km、2km 处仅 16% 雾）：远端地形被远裁剪面直接切断，既看不到雾的渐变、
+ * 又是一条生硬的边。改为 `far = clamp(雾远端 × 1.25, 2000, 30000)` 后，雾在
+ * 10.66km 处已收满 99.3%，裁切面落在全雾区，硬边消失；天穹平面/云层会自动跟随
+ * （环境运行时按 `min(官方距离, cameraFar × 0.95)` + 深度等效换算重推）。
+ */
+function syncCameraFarToSceneFog(activeCamera: THREE.PerspectiveCamera): void {
+	const far = resolveCameraFarForFogDistance({
+		fogFar: getSlowroadsSceneFogFar(),
+		fallbackFar: DEFAULT_SCENE_CAMERA_FAR,
+		maxFar: SCENE_CAMERA_FAR_MAX,
+		marginFactor: SCENE_CAMERA_FAR_FOG_MARGIN,
+	})
+	if (activeCamera.far === far) {
+		return
+	}
+	activeCamera.far = far
+	activeCamera.updateProjectionMatrix()
+}
+
 function startAnimationLoop() {
 	if (animationFrameHandle) {
 		return
@@ -11706,6 +11742,7 @@ function startAnimationLoop() {
 			updateCharacterFollowCamera(delta, activeCamera, false)
 		}
 		updateCameraDependentSystemsForFrame(activeCamera, delta)
+		syncCameraFarToSceneFog(activeCamera)
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
 		updatePunchBadgeOverlayEntries(activeCamera, delta)
 		syncSceneSignboards(currentScene, activeCamera)

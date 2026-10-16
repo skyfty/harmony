@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -12,6 +12,11 @@ import {
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
 } from '@schema/proceduralLandscape/config'
+import {
+  getProceduralLandscapeStats,
+  type ProceduralLandscapeRuntimeStats,
+} from '@schema/proceduralLandscape/runtime'
+import { WATER_FLOOD_VISIBLE_FRACTION } from '@schema/proceduralLandscape/waterStats'
 
 const sceneStore = useSceneStore()
 const buildToolsStore = useBuildToolsStore()
@@ -25,6 +30,38 @@ const landscapeComponent = computed(
 )
 
 const componentEnabled = computed(() => landscapeComponent.value?.enabled !== false)
+
+/**
+ * 运行统计（只读）：远景林实例/半径、水面水位与淹没比例、雾尺度倍率。
+ * 远景林覆盖近景流式半径之外的可见地形，水位诊断用来判断水面是否被地形完全遮住。
+ */
+const runtimeStats = ref<ProceduralLandscapeRuntimeStats | null>(null)
+let runtimeStatsTimer: number | null = null
+
+function refreshRuntimeStats(): void {
+  const nodeId = selectedNodeId.value
+  runtimeStats.value = nodeId ? getProceduralLandscapeStats(nodeId) : null
+}
+
+onMounted(() => {
+  refreshRuntimeStats()
+  runtimeStatsTimer = window.setInterval(refreshRuntimeStats, 500)
+})
+
+onBeforeUnmount(() => {
+  if (runtimeStatsTimer != null) {
+    window.clearInterval(runtimeStatsTimer)
+    runtimeStatsTimer = null
+  }
+})
+
+const waterBuriedHint = computed(() => {
+  const stats = runtimeStats.value
+  if (!stats || !stats.waterEnabled || stats.waterFloodedFraction >= WATER_FLOOD_VISIBLE_FRACTION) {
+    return ''
+  }
+  return '水面被地形完全遮挡（水线 = 地形最低点 + 水线偏移）：把「水线偏移」提高到低地水位才能看到湖面。'
+})
 
 const propsValue = computed<ProceduralLandscapeComponentProps | null>(() => {
   const component = landscapeComponent.value
@@ -462,6 +499,8 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
     <v-expansion-panel-text>
       <div v-if="propsValue" class="pl-panel">
 
+   
+
         <!-- 生成 -->
         <div class="pl-section">
           <div class="pl-section__title">
@@ -896,6 +935,21 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
   font-size: 0.7rem;
   line-height: 1.35;
   color: rgba(233, 236, 241, 0.62);
+}
+
+/* 运行统计（只读）：紧凑多行键值，不做成输入控件 */
+.pl-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: rgba(233, 236, 241, 0.72);
+}
+
+.pl-stats__phase {
+  font-size: 0.7rem;
+  color: rgba(126, 200, 255, 0.9);
 }
 
 /* 标题行/开关行里的紧凑开关：压掉 v-switch 默认 40px 控件高度与右侧留白 */

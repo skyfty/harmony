@@ -35,6 +35,21 @@ import {
   clampProceduralLandscapeProps,
 } from '@schema/proceduralLandscape/config'
 import {
+  collectFarForestPlacements,
+  createFarForestScan,
+  FAR_FOREST_NEAR_DENSITY_PER_CLASS,
+  FAR_FOREST_RINGS,
+  planFarForestRings,
+  stepFarForestScan,
+  type FarForestPlanParams,
+  type FarForestRingSpec,
+} from '@schema/proceduralLandscape/farForest'
+import {
+  computeWaterFloodStats,
+  resolveWaterLevelForFloodFraction,
+  WATER_FLOOD_VISIBLE_FRACTION,
+} from '@schema/proceduralLandscape/waterStats'
+import {
   clampRoadWaypoints,
   transformRoadWaypointsToWorld,
   ROAD_WAYPOINT_LIMIT,
@@ -903,5 +918,240 @@ describe('asset references', () => {
       (reference) => collected.push(reference),
     )
     expect(collected).toHaveLength(0)
+  })
+})
+
+describe('far forest rings', () => {
+  function createFarForestDeps(height?: (x: number, z: number) => number) {
+    const mesh = makeGridMesh({
+      sizeX: 4000,
+      sizeZ: 4000,
+      segmentsX: 80,
+      segmentsZ: 80,
+      height: height ?? ((x, z) => 40 + Math.sin(x / 260) * 18 + Math.cos(z / 310) * 12),
+    })
+    const grid = buildTerrainHeightGrid(mesh, { cellSize: 20, maxGridSize: 512 })!
+    const density = buildForestDensityField({
+      minX: grid.minX,
+      minZ: grid.minZ,
+      sizeX: grid.maxX - grid.minX,
+      sizeZ: grid.maxZ - grid.minZ,
+      seed: 42,
+      scale: 400,
+      coverage: 1,
+      resolution: 64,
+    })
+    return { grid, density, roadField: null }
+  }
+
+  function makeFarForestParams(overrides: Partial<FarForestPlanParams> = {}): FarForestPlanParams {
+    return {
+      seed: 1234,
+      centerX: 2000,
+      centerZ: 2000,
+      innerRadius: 400,
+      outerRadius: 1800,
+      budget: 6000,
+      maxSlope: 0.45,
+      roadClearance: 6,
+      // 水线远低于地形：不参与过滤（默认地形高度 ≈ 20..70m）。
+      waterLevel: -1000,
+      minScale: 5,
+      maxScale: 12,
+      densityMultiplier: 1,
+      ...overrides,
+    }
+  }
+
+  it('plans deterministically and never exceeds the budget', () => {
+    const deps = createFarForestDeps()
+    const params = makeFarForestParams({ budget: 500 })
+    const first = planFarForestRings(params, deps)
+    const second = planFarForestRings(params, deps)
+    expect(first.placements.length).toBe(second.placements.length)
+    expect(first.placements.map((p) => [p.x, p.z, p.scale, p.species]))
+      .toEqual(second.placements.map((p) => [p.x, p.z, p.scale, p.species]))
+    expect(first.placements.length).toBeGreaterThan(0)
+    expect(first.placements.length).toBeLessThanOrEqual(params.budget)
+  })
+
+  it('keeps every instance inside the ring band and inside the terrain', () => {
+    const deps = createFarForestDeps()
+    const params = makeFarForestParams({ budget: 4000 })
+    const result = planFarForestRings(params, deps)
+    const span = params.outerRadius - params.innerRadius
+    expect(result.placements.length).toBeGreaterThan(0)
+    for (const placement of result.placements) {
+      const distance = Math.hypot(placement.x - params.centerX, placement.z - params.centerZ)
+      // 候选点由格内抖动生成，最远可能越过环带半个格（环3 格 64m）。
+      expect(distance).toBeGreaterThanOrEqual(params.innerRadius - 32)
+      expect(distance).toBeLessThanOrEqual(params.outerRadius + 32)
+      expect(span).toBeGreaterThan(0)
+      expect(deps.grid.contains(placement.x, placement.z)).toBe(true)
+    }
+  })
+
+  it('prioritises the near ring when the budget is tight', () => {
+    const deps = createFarForestDeps()
+    const rings: FarForestRingSpec[] = [
+      { startFraction: 0, endFraction: 0.5, cellSize: 12, densityScale: 1, scaleGainStart: 1, scaleGainEnd: 1, budgetShare: 0.5 },
+      { startFraction: 0.5, endFraction: 1, cellSize: 12, densityScale: 1, scaleGainStart: 1, scaleGainEnd: 1, budgetShare: 0.5 },
+    ]
+    const budget = 120
+    const result = planFarForestRings(makeFarForestParams({ budget, rings }), deps)
+    expect(result.placements.length).toBeLessThanOrEqual(budget)
+    expect(result.ringCounts[0]).toBeGreaterThan(0)
+    expect(result.ringCounts[0]).toBeLessThanOrEqual(Math.floor(budget * 0.5))
+    expect(result.ringCounts[1]).toBeLessThanOrEqual(Math.floor(budget * 0.5))
+  })
+
+  it('scales instances up with distance and yields nothing without budget', () => {
+    const deps = createFarForestDeps()
+    const params = makeFarForestParams({ budget: 6000, rings: FAR_FOREST_RINGS })
+    const result = planFarForestRings(params, deps)
+    expect(result.placements.length).toBeGreaterThan(0)
+    const span = params.outerRadius - params.innerRadius
+    const firstBand = result.placements.filter(
+      (p) => Math.hypot(p.x - params.centerX, p.z - params.centerZ) <= params.innerRadius + span * 0.26,
+    )
+    const outerBand = result.placements.filter(
+      (p) => Math.hypot(p.x - params.centerX, p.z - params.centerZ) >= params.innerRadius + span * 0.61,
+    )
+    expect(firstBand.length).toBeGreaterThan(0)
+    expect(outerBand.length).toBeGreaterThan(0)
+    const maxNear = Math.max(...firstBand.map((p) => p.scale))
+    const maxFar = Math.max(...outerBand.map((p) => p.scale))
+    expect(maxFar).toBeGreaterThan(maxNear * 1.5)
+
+    const empty = planFarForestRings(makeFarForestParams({ budget: 0 }), deps)
+    expect(empty.placements).toHaveLength(0)
+    expect(empty.ringCounts.every((count) => count === 0)).toBe(true)
+  })
+
+  it('applies the slope / waterline / road-clearance filters', () => {
+    const deps = createFarForestDeps((x, z) => 40 + Math.sin(x / 260) * 18 + Math.cos(z / 310) * 12)
+    const params = makeFarForestParams({ budget: 2000 })
+    const baseline = planFarForestRings(params, deps)
+    expect(baseline.placements.length).toBeGreaterThan(0)
+
+    // 水线抬到地形之上：全部被过滤。
+    const flooded = planFarForestRings({ ...params, waterLevel: 500 }, deps)
+    expect(flooded.placements).toHaveLength(0)
+
+    // 起伏地形上 maxSlope = 0：全部被过滤（法线必然偏离竖直）。
+    const steep = planFarForestRings({ ...params, maxSlope: 0 }, deps)
+    expect(steep.placements).toHaveLength(0)
+
+    // 道路净空大到盖住整个环带：全部被过滤。
+    const road = planFarForestRings(
+      { ...params, roadClearance: 10_000 },
+      {
+        ...deps,
+        roadField: {
+          width: 2,
+          height: 2,
+          memoryBytes: 0,
+          distanceAt: () => 0,
+        } as never,
+      },
+    )
+    expect(road.placements).toHaveLength(0)
+  })
+
+  it('amortizes the lattice scan across steps without changing the result', () => {
+    const deps = createFarForestDeps()
+    const params = makeFarForestParams({ budget: 2000 })
+    const sync = planFarForestRings(params, deps)
+    const scan = createFarForestScan(params)
+    let guard = 0
+    while (!scan.complete && guard < 10_000) {
+      stepFarForestScan(scan, deps, 500)
+      guard += 1
+    }
+    expect(scan.complete).toBe(true)
+    const stepped = collectFarForestPlacements(scan)
+    expect(stepped.placements.map((p) => [p.x, p.z, p.scale, p.species]))
+      .toEqual(sync.placements.map((p) => [p.x, p.z, p.scale, p.species]))
+  })
+
+  it('maps the near-field tree density onto the ring lattice', () => {
+    // 平坦地形 + 恒定最高密度等级（sampleUnit = 1 → 等级 3）+ 足够预算：
+    // 期望实例数 = 格网密度 × 环带面积 × 接受概率
+    //   accept = densityScale × 近景基准(6070/等级) × 等级3 / 格网密度
+    const mesh = makeGridMesh({
+      sizeX: 4000,
+      sizeZ: 4000,
+      segmentsX: 20,
+      segmentsZ: 20,
+      height: () => 0,
+    })
+    const grid = buildTerrainHeightGrid(mesh, { cellSize: 20, maxGridSize: 512 })!
+    const density = {
+      width: 1,
+      height: 1,
+      data: new Uint8Array([255]),
+      minX: grid.minX,
+      minZ: grid.minZ,
+      sizeX: grid.maxX - grid.minX,
+      sizeZ: grid.maxZ - grid.minZ,
+      sampleUnit: () => 1,
+      memoryBytes: 1,
+    }
+    const innerRadius = 400
+    const outerRadius = 1000
+    const rings: FarForestRingSpec[] = [
+      { startFraction: 0, endFraction: 1, cellSize: 16, densityScale: 0.12, scaleGainStart: 1, scaleGainEnd: 1, budgetShare: 1 },
+    ]
+    const result = planFarForestRings(
+      makeFarForestParams({ innerRadius, outerRadius, budget: 100_000, rings }),
+      { grid, density, roadField: null },
+    )
+    const areaKm2 = (Math.PI * (outerRadius * outerRadius - innerRadius * innerRadius)) / 1_000_000
+    const latticeDensity = 1_000_000 / (16 * 16)
+    const acceptance = (0.12 * FAR_FOREST_NEAR_DENSITY_PER_CLASS * 3) / latticeDensity
+    const expected = areaKm2 * latticeDensity * Math.min(1, acceptance)
+    expect(result.placements.length).toBeGreaterThan(expected * 0.8)
+    expect(result.placements.length).toBeLessThan(expected * 1.2)
+  })
+})
+
+describe('water flood stats', () => {
+  function createSlopedGrid() {
+    const mesh = makeGridMesh({
+      sizeX: 1000,
+      sizeZ: 1000,
+      segmentsX: 40,
+      segmentsZ: 40,
+      // 高度 0..100m 的斜坡：最低点在 minX/minZ 角。
+      height: (x, z) => (x + z) * 0.05,
+    })
+    return buildTerrainHeightGrid(mesh, { cellSize: 20, maxGridSize: 256 })!
+  }
+
+  it('reports ~0 flooded area when the waterline sits at the terrain minimum', () => {
+    const grid = createSlopedGrid()
+    const stats = computeWaterFloodStats(grid, grid.minY)
+    expect(stats.sampledCells).toBeGreaterThan(0)
+    expect(stats.floodedFraction).toBeLessThan(WATER_FLOOD_VISIBLE_FRACTION)
+  })
+
+  it('resolves a level that floods the requested area fraction', () => {
+    const grid = createSlopedGrid()
+    const level = resolveWaterLevelForFloodFraction(grid, 0.05)
+    expect(level).not.toBeNull()
+    const stats = computeWaterFloodStats(grid, level!)
+    expect(stats.floodedFraction).toBeGreaterThan(0.03)
+    expect(stats.floodedFraction).toBeLessThan(0.08)
+    const higher = resolveWaterLevelForFloodFraction(grid, 0.5)!
+    expect(higher).toBeGreaterThan(level!)
+  })
+
+  it('widens the waterline offset range for real terrains', () => {
+    const wide = clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: 250 } })
+    expect(wide.water.levelOffset).toBe(250)
+    expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: 5000 } }).water.levelOffset).toBe(1000)
+    expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: -5000 } }).water.levelOffset).toBe(-1000)
+    // 旧文档里的 ±50m 夹紧会把大地形的水线偏移吃掉（水位永远贴近最低点）。
+    expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: 120 } }).water.levelOffset).toBe(120)
   })
 })

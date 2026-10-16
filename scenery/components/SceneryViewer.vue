@@ -857,8 +857,10 @@ import {
 } from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
 import {
   createSlowroadsEnvironmentRuntime,
+  getSlowroadsSceneFogFar,
   type SlowroadsEnvironmentRuntime,
 } from '@harmony/schema/slowroads/render/environmentRuntime';
+import { resolveCameraFarForFogDistance } from '@harmony/schema/slowroads/core/environment';
 import { getSharedSlowroadsAssetStore } from '@harmony/schema/slowroads/assets/assetStore';
 import { setProceduralLandscapeEnvironment } from '@harmony/schema/proceduralLandscape/runtime';
 import {
@@ -1751,6 +1753,21 @@ const sceneLoadPercentText = computed(() => `${sceneLoadPercent.value}%`);
 const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const DEFAULT_SCENE_CAMERA_FAR = 1000;
+/**
+ * 远裁剪面上限（米）：覆盖雾尺度上限 12×（雾远端 24km）仍有余量。
+ * 远裁剪面只做「雾收满之后的兜底」，正常观测距离由雾决定。
+ */
+const SCENE_CAMERA_FAR_MAX = 30000;
+/**
+ * 远裁剪面相对雾远端的余量：雾必须先收满、再轮到裁切，否则大地形场景的远端
+ * 地形会被远裁剪面硬切成一条生硬的边（同 ScenePreviewView 的现象）。
+ */
+const SCENE_CAMERA_FAR_FOG_MARGIN = 1.25;
+/**
+ * 地面平铺半径上限（chunk）：地面运行时自身的地板值是 32 chunk（65×65 窗口），
+ * 再大属于新成本档，低端机可能数秒级构建，因此地面永远不超过它。
+ */
+const GROUND_TILING_RADIUS_CAP_CHUNKS = 32;
 const CAMERA_WATCH_DURATION = 2.0;
 const CAMERA_LEVEL_DURATION = 2.5;
 // Watch 拍照状态下允许的取景微调包络：围绕观察目标做小范围旋转与推拉。
@@ -20738,12 +20755,55 @@ function applySceneryGroundTilingBudget(document: SceneJsonExportDocument): void
   if (!groundNode || !isGroundDynamicMesh(groundMesh)) {
     return;
   }
+  applyGroundTilingRadiusCap(groundMesh, resolveSceneryCameraFar());
+}
+
+/**
+ * 生效的相机远裁剪面：跟随场景雾距（大地形按水平尺寸放大雾尺度，本场景 ×10.66
+ * → 雾远端 10.66km），无雾尺度时退回 DEFAULT_SCENE_CAMERA_FAR。
+ * 远裁剪面必须落在雾收满之外，否则远端地形会被硬切成一条生硬的边。
+ */
+function resolveSceneryCameraFar(): number {
+  return resolveCameraFarForFogDistance({
+    fogFar: getSlowroadsSceneFogFar(),
+    fallbackFar: DEFAULT_SCENE_CAMERA_FAR,
+    maxFar: SCENE_CAMERA_FAR_MAX,
+    marginFactor: SCENE_CAMERA_FAR_FOG_MARGIN,
+  });
+}
+
+/** 地面平铺半径：跟随远裁剪面，但永远不高于地面运行时自身的地板值上限。 */
+function resolveGroundTilingRadiusChunks(farMeters: number, chunkSizeMeters: number): number {
+  const chunkSize = Number.isFinite(chunkSizeMeters) && chunkSizeMeters > 0 ? chunkSizeMeters : 100;
+  return Math.min(GROUND_TILING_RADIUS_CAP_CHUNKS, Math.max(16, Math.ceil(farMeters / chunkSize) + 6));
+}
+
+function applyGroundTilingRadiusCap(groundMesh: GroundRuntimeDynamicMesh, farMeters: number): void {
   const chunkSizeMeters = Number.isFinite(groundMesh.chunkSizeMeters) && (groundMesh.chunkSizeMeters as number) > 0
     ? (groundMesh.chunkSizeMeters as number)
     : 100;
-  const radiusChunks = Math.max(16, Math.ceil(DEFAULT_SCENE_CAMERA_FAR / chunkSizeMeters) + 6);
-  (groundMesh as GroundRuntimeDynamicMesh & { runtimeFlatTilingRadiusChunks?: number })
-    .runtimeFlatTilingRadiusChunks = radiusChunks;
+  const radiusChunks = resolveGroundTilingRadiusChunks(farMeters, chunkSizeMeters);
+  const target = groundMesh as GroundRuntimeDynamicMesh & { runtimeFlatTilingRadiusChunks?: number };
+  if (target.runtimeFlatTilingRadiusChunks === radiusChunks) {
+    return;
+  }
+  target.runtimeFlatTilingRadiusChunks = radiusChunks;
+}
+
+/**
+ * 每帧同步：远裁剪面跟随场景雾距；地面平铺窗口同步跟随远裁剪面（封顶在运行时地板）。
+ * 小程序在加载期构建一次地面，因此地面窗口的跟随主要作用于 H5/后建地面的场景。
+ */
+function syncSceneryCameraFarForFog(activeCamera: THREE.PerspectiveCamera): void {
+  const far = resolveSceneryCameraFar();
+  if (activeCamera.far !== far) {
+    activeCamera.far = far;
+    activeCamera.updateProjectionMatrix();
+  }
+  const groundMesh = dynamicGroundCache?.dynamicMesh ?? null;
+  if (groundMesh) {
+    applyGroundTilingRadiusCap(groundMesh, far);
+  }
 }
 
 function findFirstGroundNode(document: SceneJsonExportDocument): SceneNode | null {
@@ -22556,6 +22616,7 @@ function startRenderLoop(
         applyFogSettings(activeEnvironmentSettings, camera);
         ensureSlowroadsEnvironmentRuntime();
         slowroadsEnvironment?.update(deltaSeconds);
+        syncSceneryCameraFarForFog(camera);
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;

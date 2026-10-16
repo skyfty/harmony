@@ -110,6 +110,23 @@ export function getSlowroadsSceneViewDistanceScale(): number {
   return sceneViewDistanceScale
 }
 
+/** 环境运行时是否已经向材质下发过雾参数（未下发时 `slowroadsFogUniforms` 还是默认值）。 */
+let sceneFogApplied = false
+
+/**
+ * 当前生效的场景雾远端（米）：材质侧共享 uniform 的实时值，已含地形视距倍率
+ * （`sceneViewDistanceScale`）与相机 haze 插值，因此是「相机远裁剪面该看多远」的
+ * 唯一真值（见 `core/environment.resolveCameraFarForFogDistance`）。
+ * 环境运行时尚未生效时返回 0，宿主应退回自己的兜底 far（小场景保持原观感）。
+ */
+export function getSlowroadsSceneFogFar(): number {
+  if (!sceneFogApplied) {
+    return 0
+  }
+  const far = slowroadsFogUniforms.fogFar.value
+  return Number.isFinite(far) && far > 0 ? far : 0
+}
+
 export interface SlowroadsEnvironmentRuntimeOptions {
   scene: THREE.Scene
   camera: THREE.Camera
@@ -327,6 +344,7 @@ export function createSlowroadsEnvironmentRuntime(
     refreshFogUniformColors()
     setSlowroadsFogParams(params, fogUniformColors)
     lastFog = params
+    sceneFogApplied = true
   }
 
   function applySkyFog(params: ResolvedFogParams): void {
@@ -620,6 +638,8 @@ export function createSlowroadsEnvironmentRuntime(
       if (waterEnvironment === waterState) {
         waterEnvironment = null
       }
+      // 下一个世界（新场景/新页面）还没下发雾参数前，宿主应退回自己的兜底 far。
+      sceneFogApplied = false
       // 还原宿主背景（编辑器默认 0x516175 等）。
       scene.background = previousBackground
       setSlowroadsFogDisplaySpaceMode(false)

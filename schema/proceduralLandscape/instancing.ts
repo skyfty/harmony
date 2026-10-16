@@ -784,10 +784,11 @@ export function createFoliageLayerMesh(
   material: THREE.MeshLambertMaterial,
   unitSize: number,
   hostInverse: THREE.Matrix4 | null,
-  options: { billboard?: boolean } = {},
+  options: { billboard?: boolean; capacity?: number } = {},
 ): THREE.InstancedMesh {
   const count = instances.length
-  const capacity = Math.max(1, count)
+  const requestedCapacity = Number.isFinite(options.capacity) ? Math.floor(options.capacity as number) : 0
+  const capacity = Math.max(1, count, requestedCapacity)
   const geometry = createCrossQuadGeometry()
   const uvRectAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4)
   const sizeAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 2), 2)
@@ -804,10 +805,52 @@ export function createFoliageLayerMesh(
 
   const mesh = new THREE.InstancedMesh(geometry, material, capacity)
   mesh.name = 'slowroads-foliage-layer'
-  mesh.count = count
   mesh.castShadow = false
   mesh.receiveShadow = false
   mesh.frustumCulled = false
+  writeFoliageLayerInstances(mesh, instances, unitSize, hostInverse, options.billboard === true)
+  return mesh
+}
+
+/** 实例缓冲容量（= 创建时申请的 `capacity`）。 */
+export function getFoliageLayerCapacity(mesh: THREE.InstancedMesh): number {
+  const attribute = mesh.geometry.getAttribute('aPlUvRect') as THREE.InstancedBufferAttribute | undefined
+  return attribute ? attribute.count : 0
+}
+
+/**
+ * 就地重写实例（缓冲容量够用时不再重新分配几何/属性）——远景环每次重锚复用同一对
+ * InstancedMesh，避免 6 万级实例的反复分配造成卡顿。超出容量的实例会被丢弃
+ * （调用方负责按需扩容：`getFoliageLayerCapacity`）。
+ */
+export function updateFoliageLayerMesh(
+  mesh: THREE.InstancedMesh | null | undefined,
+  instances: ReadonlyArray<FoliageSpriteInstance>,
+  unitSize: number,
+  hostInverse: THREE.Matrix4 | null,
+  options: { billboard?: boolean } = {},
+): number {
+  if (!mesh) {
+    return 0
+  }
+  return writeFoliageLayerInstances(mesh, instances, unitSize, hostInverse, options.billboard === true)
+}
+
+function writeFoliageLayerInstances(
+  mesh: THREE.InstancedMesh,
+  instances: ReadonlyArray<FoliageSpriteInstance>,
+  unitSize: number,
+  hostInverse: THREE.Matrix4 | null,
+  billboard: boolean,
+): number {
+  const uvRectAttribute = mesh.geometry.getAttribute('aPlUvRect') as THREE.InstancedBufferAttribute
+  const sizeAttribute = mesh.geometry.getAttribute('aPlSize') as THREE.InstancedBufferAttribute
+  const cellAttribute = mesh.geometry.getAttribute('aPlCell') as THREE.InstancedBufferAttribute
+  const roadProxAttribute = mesh.geometry.getAttribute('aPlRoadProx') as THREE.InstancedBufferAttribute
+  const groundNormalAttribute = mesh.geometry.getAttribute('aPlGroundNormal') as THREE.InstancedBufferAttribute
+  const orientationAttribute = mesh.geometry.getAttribute('aPlOrientation') as THREE.InstancedBufferAttribute
+  const count = Math.min(instances.length, uvRectAttribute.count)
+  mesh.count = count
 
   for (let i = 0; i < count; i += 1) {
     const instance = instances[i]!
@@ -829,7 +872,7 @@ export function createFoliageLayerMesh(
     }
     positionHelper.set(instance.x, instance.y, instance.z)
     // 远景树使用朝相机广告牌：实例旋转作为图集朝向基准角，矩阵本身不带旋转。
-    eulerHelper.set(0, options.billboard ? 0 : instance.rotation, 0)
+    eulerHelper.set(0, billboard ? 0 : instance.rotation, 0)
     quaternionHelper.setFromEuler(eulerHelper)
     const scale = unitSize * instance.scale
     scaleHelper.set(scale, scale, scale)
@@ -854,7 +897,7 @@ export function createFoliageLayerMesh(
   roadProxAttribute.needsUpdate = true
   groundNormalAttribute.needsUpdate = true
   orientationAttribute.needsUpdate = true
-  return mesh
+  return count
 }
 
 export function disposeFoliageLayerMesh(mesh: THREE.InstancedMesh | null | undefined): void {
