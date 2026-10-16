@@ -70,11 +70,16 @@ export interface RoadBandOptions {
   hostInverse: THREE.Matrix4 | null
   /**
    * 路面相对地形的高度抬升（米）。默认 0.02（贴合慢速公路那种高密度地形）。
-   * 导入的粗网格地形（如 3dtiles 导出 GLB，三角面平均 40m+）无法精确表达
-   * 7m 宽的路基压平，路面带会被三角面穿插成"虚线"，此时由调用方传入更大的
-   * 抬升量（见 runtime.buildRoadBand）。
+   * 当提供 `columnHeights`（贴合模式）时，每列顶点在自己的地形高度上加本
+   * 抬升量；此时路面跟随地形横坡与起伏，抬升只需小常量（见 runtime.buildRoadBand）。
    */
   lift?: number
+  /**
+   * 与 `nodes` 对齐的横向剖面高度（每节点 N 列，从左缘到右缘，N ≥ 2）。提供时
+   * 路面带按列贴合地形（列高 + lift），顶点法线按局部截面计算；不提供时保持
+   * 现有水平两点带行为（slowroads-lab 与既有用例不受影响）。
+   */
+  columnHeights?: readonly (readonly number[])[] | null
 }
 
 const DEFAULT_ROAD_LIFT = 0.02
@@ -203,6 +208,7 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
   const paintMergeRight: number[] = []
   const indices: number[] = []
   const markings = options.markings ?? null
+  const columnCount = Math.max(2, options.columnHeights?.[0]?.length ?? 2)
 
   let cumulative = 0
   let vertexCursor = 0
@@ -230,10 +236,58 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
       shadow = Math.max(leftClass, rightClass) / 3
     }
     const marking = markings ? markings[Math.min(markings.length - 1, i)] ?? null : null
-    for (const side of [-1, 1] as const) {
-      positions.push(node.x + perpX * halfW * side, node.y + lift, node.z + perpZ * halfW * side)
-      uvs.push(side < 0 ? 0 : 1, v)
-      normals.push(0, 1, 0)
+    const nodeColumns = options.columnHeights?.[i] ?? null
+    const heights: number[] = []
+    if (nodeColumns && nodeColumns.length >= 2) {
+      if (nodeColumns.length === columnCount) {
+        for (let c = 0; c < columnCount; c += 1) {
+          heights.push(nodeColumns[c]! + lift)
+        }
+      } else {
+        // 防御：列数与首节点不一致时按比例线性重采样。
+        for (let c = 0; c < columnCount; c += 1) {
+          const scaled = (c / (columnCount - 1)) * (nodeColumns.length - 1)
+          const low = Math.floor(scaled)
+          const high = Math.min(nodeColumns.length - 1, low + 1)
+          const fraction = scaled - low
+          heights.push(nodeColumns[low]! + (nodeColumns[high]! - nodeColumns[low]!) * fraction + lift)
+        }
+      }
+    } else {
+      for (let c = 0; c < columnCount; c += 1) {
+        heights.push(node.y + lift)
+      }
+    }
+    const columnX: number[] = []
+    const columnZ: number[] = []
+    for (let c = 0; c < columnCount; c += 1) {
+      const side = (c / (columnCount - 1)) * 2 - 1
+      columnX.push(node.x + perpX * halfW * side)
+      columnZ.push(node.z + perpZ * halfW * side)
+    }
+    for (let c = 0; c < columnCount; c += 1) {
+      // 局部截面法线：跨相邻列的切向量 × 前进方向（水平时退化为 (0, 1, 0)）。
+      const previousColumn = Math.max(0, c - 1)
+      const nextColumn = Math.min(columnCount - 1, c + 1)
+      const crossX = columnX[nextColumn]! - columnX[previousColumn]!
+      const crossY = heights[nextColumn]! - heights[previousColumn]!
+      const crossZ = columnZ[nextColumn]! - columnZ[previousColumn]!
+      let normalX = crossY * dirZ
+      let normalY = crossZ * dirX - crossX * dirZ
+      let normalZ = -crossY * dirX
+      const normalLength = Math.hypot(normalX, normalY, normalZ)
+      if (normalLength > 1e-9) {
+        normalX /= normalLength
+        normalY /= normalLength
+        normalZ /= normalLength
+      } else {
+        normalX = 0
+        normalY = 1
+        normalZ = 0
+      }
+      positions.push(columnX[c]!, heights[c]!, columnZ[c]!)
+      uvs.push(columnCount === 1 ? 0.5 : c / (columnCount - 1), v)
+      normals.push(normalX, normalY, normalZ)
       shadows.push(shadow)
       paintSolid.push(marking?.solid ? 1 : 0)
       paintSolidLeft.push(marking?.solidLeft ? 1 : 0)
@@ -242,10 +296,20 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
       paintMergeRight.push(marking?.mergeRight ? 1 : 0)
     }
     if (i > 0) {
-      const base = vertexCursor - 2
-      indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2)
+      const previousBase = vertexCursor - columnCount
+      const currentBase = vertexCursor
+      for (let c = 0; c < columnCount - 1; c += 1) {
+        indices.push(
+          previousBase + c,
+          previousBase + c + 1,
+          currentBase + c,
+          previousBase + c + 1,
+          currentBase + c + 1,
+          currentBase + c,
+        )
+      }
     }
-    vertexCursor += 2
+    vertexCursor += columnCount
   }
 
   const geometry = new THREE.BufferGeometry()

@@ -18,10 +18,14 @@ import {
 } from '@schema/proceduralLandscape/densityField'
 import {
   buildRoadFieldData,
+  computeRoadEdgeHeights,
   createRoadFieldTexture,
   decodeRoadDistance,
   encodeRoadDistance,
 } from '@schema/proceduralLandscape/roadField'
+import { createRoadBand } from '@schema/proceduralLandscape/roadBand'
+import { buildTerrainSurfaceSampler } from '@schema/proceduralLandscape/terrainSurfaceSampler'
+import { densifyRoadRows, sampleRoadRowColumns } from '@schema/proceduralLandscape/roadBandRows'
 import {
   buildRoadProximityIndex,
   verifyRoadProximityIndex,
@@ -1504,5 +1508,277 @@ describe('water flood stats', () => {
     expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: -5000 } }).water.levelOffset).toBe(-1000)
     // 旧文档里的 ±50m 夹紧会把大地形的水线偏移吃掉（水位永远贴近最低点）。
     expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: 120 } }).water.levelOffset).toBe(120)
+  })
+})
+
+describe('road cross-slope drape (贴合横坡)', () => {
+  const makeNode = (x: number, z: number, y: number, heading = 0) => ({
+    x,
+    z,
+    y,
+    heading,
+    index: 0,
+    lateral: 0,
+    longitudinal: 0,
+    turn: 0,
+    headingDelta: 0,
+  })
+
+  it('samples edge heights with midline fallback and drop clamping', () => {
+    const nodes = [makeNode(0, 0, 10), makeNode(4, 0, 11)]
+    // heading=0 → left = 中心 − (0, hW)（z=−hW），right = z=+hW。
+    const terrain = (x: number, z: number): number | null => (
+      z === -3 ? 8.5 + 0.25 * x : z === 3 ? 11.5 + 0.25 * x : null
+    )
+
+    const heights = computeRoadEdgeHeights(nodes, terrain, 3, Number.POSITIVE_INFINITY)
+    expect(heights[0]).toEqual({ left: 8.5, right: 11.5 })
+    expect(heights[1]).toEqual({ left: 9.5, right: 12.5 })
+
+    const clamped = computeRoadEdgeHeights(nodes, terrain, 3, 1)
+    expect(clamped[0]!.right).toBe(11)
+    expect(clamped[1]!.left).toBe(10)
+
+    const missing = computeRoadEdgeHeights(nodes, () => null, 3, Number.POSITIVE_INFINITY)
+    expect(missing[0]).toEqual({ left: 10, right: 10 })
+    expect(missing[1]).toEqual({ left: 11, right: 11 })
+  })
+
+  it('drapes band vertices onto edge terrain and tilts cross-section normals', () => {
+    const handle = createRoadBand({
+      nodes: [makeNode(0, 0, 10), makeNode(10, 0, 10)],
+      halfWidth: 3,
+      density: null,
+      textures: { base: new THREE.Texture(), overlay: null },
+      season: 'summer',
+      hostInverse: null,
+      lift: 0.05,
+      columnHeights: [
+        [9, 11],
+        [9, 11],
+      ],
+    })
+    const position = handle.mesh.geometry.getAttribute('position')
+    // side −1（left，z=−3）与 side +1（right，z=+3）。
+    expect(position.getZ(0)).toBeCloseTo(-3)
+    expect(position.getY(0)).toBeCloseTo(9.05)
+    expect(position.getZ(1)).toBeCloseTo(3)
+    expect(position.getY(1)).toBeCloseTo(11.05)
+    const normal = handle.mesh.geometry.getAttribute('normal')
+    // drop=2、heading=0 → normal = normalize(0, 2×3, −2)。
+    const length = Math.sqrt(36 + 4)
+    expect(normal.getX(0)).toBeCloseTo(0)
+    expect(normal.getY(0)).toBeCloseTo(6 / length)
+    expect(normal.getZ(0)).toBeCloseTo(-2 / length)
+    handle.dispose()
+  })
+
+  it('keeps the flat horizontal band when columnHeights is omitted', () => {
+    const handle = createRoadBand({
+      nodes: [makeNode(0, 0, 10), makeNode(10, 0, 10)],
+      halfWidth: 3,
+      density: null,
+      textures: { base: new THREE.Texture(), overlay: null },
+      season: 'summer',
+      hostInverse: null,
+      lift: 0.05,
+    })
+    const position = handle.mesh.geometry.getAttribute('position')
+    expect(position.getY(0)).toBeCloseTo(10.05)
+    expect(position.getY(1)).toBeCloseTo(10.05)
+    const normal = handle.mesh.geometry.getAttribute('normal')
+    expect(normal.getX(0)).toBeCloseTo(0, 10)
+    expect(normal.getY(0)).toBeCloseTo(1, 10)
+    expect(normal.getZ(0)).toBeCloseTo(0, 10)
+    handle.dispose()
+  })
+
+  it('follows a multi-column cross-section (crease inside the road)', () => {
+    const columnHeights = [
+      [10, 9.6, 9.2, 8.9, 8.75, 8.7, 8.8],
+      [10, 9.6, 9.2, 8.9, 8.75, 8.7, 8.8],
+    ]
+    const handle = createRoadBand({
+      nodes: [makeNode(0, 0, 10), makeNode(10, 0, 10)],
+      halfWidth: 3,
+      density: null,
+      textures: { base: new THREE.Texture(), overlay: null },
+      season: 'summer',
+      hostInverse: null,
+      lift: 0.05,
+      columnHeights,
+    })
+    const position = handle.mesh.geometry.getAttribute('position')
+    // 7 列 × 2 节点：第 0 节点列为 0..6，第 1 节点列为 7..13。
+    expect(position.count).toBe(14)
+    expect(position.getX(0)).toBeCloseTo(0)
+    expect(position.getZ(0)).toBeCloseTo(-3)
+    expect(position.getY(0)).toBeCloseTo(10.05)
+    expect(position.getZ(3)).toBeCloseTo(0)
+    expect(position.getY(3)).toBeCloseTo(8.9 + 0.05)
+    expect(position.getZ(6)).toBeCloseTo(3)
+    expect(position.getY(6)).toBeCloseTo(8.8 + 0.05)
+    const uv = handle.mesh.geometry.getAttribute('uv')
+    expect(uv.getX(0)).toBeCloseTo(0)
+    expect(uv.getX(3)).toBeCloseTo(0.5)
+    expect(uv.getX(6)).toBeCloseTo(1)
+    // 折坡处法线应倾斜（非 (0,1,0)）。
+    const normal = handle.mesh.geometry.getAttribute('normal')
+    const tilt = Math.hypot(normal.getX(2), normal.getZ(2))
+    expect(tilt).toBeGreaterThan(0.02)
+    handle.dispose()
+  })
+
+  it('bakes draped heights into the road field (center, edge and outer platform)', () => {
+    const field = buildRoadFieldData(
+      [makeNode(0, 50, 10), makeNode(100, 50, 12)],
+      {
+        minX: 0,
+        minZ: 0,
+        sizeX: 100,
+        sizeZ: 100,
+        minY: 0,
+        maxY: 20,
+        maxInfluence: 48,
+        maxResolution: 101,
+        edgeHeights: [
+          { left: 8, right: 13 },
+          { left: 10, right: 15 },
+        ],
+        halfWidth: 5,
+      },
+    )
+    expect(field).not.toBeNull()
+    expect(field!.heightAt(50, 50)).toBeCloseTo(11, 5)
+    expect(field!.heightAt(50, 45)).toBeCloseTo(9, 5)
+    expect(field!.heightAt(50, 60)).toBeCloseTo(14, 5)
+  })
+
+  it('computes edge heights from a terrain sampler inside the field builder', () => {
+    const field = buildRoadFieldData(
+      [makeNode(0, 50, 10), makeNode(100, 50, 12)],
+      {
+        minX: 0,
+        minZ: 0,
+        sizeX: 100,
+        sizeZ: 100,
+        minY: 0,
+        maxY: 20,
+        maxInfluence: 48,
+        maxResolution: 101,
+        terrainHeightAt: (x, z) => 10 + (z - 50) * 0.4 + (x >= 100 ? 2 : 0),
+        halfWidth: 5,
+      },
+    )
+    expect(field).not.toBeNull()
+    expect(field!.heightAt(50, 50)).toBeCloseTo(11, 5)
+    expect(field!.heightAt(50, 45)).toBeCloseTo(9, 5)
+    expect(field!.heightAt(50, 60)).toBeCloseTo(13, 5)
+  })
+
+  it('prefers mesh-sampled center heights when baking the draped profile', () => {
+    const field = buildRoadFieldData(
+      [makeNode(0, 50, 10), makeNode(100, 50, 12)],
+      {
+        minX: 0,
+        minZ: 0,
+        sizeX: 100,
+        sizeZ: 100,
+        minY: 0,
+        maxY: 20,
+        maxInfluence: 48,
+        maxResolution: 101,
+        edgeHeights: [
+          { left: 8, right: 13 },
+          { left: 10, right: 15 },
+        ],
+        centerHeights: [12, 14],
+        halfWidth: 5,
+      },
+    )
+    expect(field).not.toBeNull()
+    // 中线高度来自 centerHeights（12/14 → 13），而不是追踪节点（10/12 → 11）。
+    expect(field!.heightAt(50, 50)).toBeCloseTo(13, 5)
+  })
+
+  it('densifies trace rows with shortest-arc headings and source mapping', () => {
+    const rows = densifyRoadRows([
+      makeNode(0, 0, 10, 0),
+      makeNode(10, 0, 12, Math.PI / 2),
+    ], 2)
+    // 10m 段按 2m 加密 → 4 行插值 + 首尾节点 = 6 行。
+    expect(rows.length).toBe(6)
+    expect(rows.map((row) => Number(row.x.toFixed(3)))).toEqual([0, 2, 4, 6, 8, 10])
+    expect(rows[3]!.y).toBeCloseTo(11.2, 5)
+    expect(rows[3]!.heading).toBeCloseTo((Math.PI / 2) * 0.6, 5)
+    expect(rows.slice(0, 5).every((row) => row.sourceIndex === 0)).toBe(true)
+    expect(rows[5]!.sourceIndex).toBe(1)
+  })
+
+  it('samples the conservative column envelope and clamps the lateral drop', () => {
+    const row = { x: 0, z: 0, y: 10, heading: 0 }
+    // 沿 z 的横坡：h = 10 + z/10；邻域包络沿 +z 侧抬升 0.25/10。
+    const surface = (_x: number, z: number): number => 10 + z / 10
+    const columns = sampleRoadRowColumns(row, surface, 5, 3, Number.POSITIVE_INFINITY)
+    expect(columns[0]).toBeCloseTo(10 - 0.5 + 0.025, 5)
+    expect(columns[1]).toBeCloseTo(10.025, 5)
+    expect(columns[2]).toBeCloseTo(10 + 0.5 + 0.025, 5)
+
+    const clamped = sampleRoadRowColumns(row, surface, 5, 3, 0.4)
+    expect(clamped[0]).toBeCloseTo(9.6, 5)
+    expect(clamped[2]).toBeCloseTo(10.4, 5)
+
+    const fallback = sampleRoadRowColumns(row, () => null, 5, 3, 0.4)
+    expect(fallback).toEqual([10, 10, 10])
+  })
+})
+
+describe('terrain surface sampler (真实三角面采样)', () => {
+  function makeSource(positions: number[], index: number[]): { mesh: THREE.Mesh; matrix: THREE.Matrix4 } {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+    geometry.setIndex(index)
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial())
+    return { mesh, matrix: new THREE.Matrix4() }
+  }
+
+  it('interpolates exact triangle planes and keeps the top surface on overlap', () => {
+    // 折脊：T1 → y = 0.2x + 0.2z；T2 → y = −0.2x + 0.6z（沿对角线相接）。
+    const ridge = makeSource(
+      [0, 0, 0, 10, 2, 0, 10, 4, 10, 0, 6, 10],
+      [0, 1, 2, 0, 2, 3],
+    )
+    // 下方的整片平板（不应被选中）与局部上方的平板（应被选中）。
+    const below = makeSource(
+      [0, -5, 0, 10, -5, 0, 10, -5, 10, 0, -5, 10],
+      [0, 1, 2, 0, 2, 3],
+    )
+    const above = makeSource(
+      [5, 5, 0, 10, 5, 0, 10, 5, 5],
+      [0, 1, 2],
+    )
+    const sampler = buildTerrainSurfaceSampler([ridge, below, above], { minX: 0, minZ: 0, maxX: 10, maxZ: 10 })
+    expect(sampler).not.toBeNull()
+    expect(sampler!.triangleCount).toBe(5)
+    expect(sampler!.heightAt(1, 1)).toBeCloseTo(0.4, 5)
+    expect(sampler!.heightAt(2, 5)).toBeCloseTo(2.6, 5)
+    expect(sampler!.heightAt(8, 2)).toBeCloseTo(5, 5)
+    expect(sampler!.heightAt(20, 20)).toBeNull()
+  })
+
+  it('skips degenerate 2D triangles (chunk skirts) and returns null without coverage', () => {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0,
+      0, -50, 0,
+      0, -50, 10,
+    ], 3))
+    geometry.setIndex([0, 1, 2])
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial())
+    const sampler = buildTerrainSurfaceSampler(
+      [{ mesh, matrix: new THREE.Matrix4() }],
+      { minX: -5, minZ: -5, maxX: 5, maxZ: 15 },
+    )
+    expect(sampler).toBeNull()
   })
 })

@@ -13,8 +13,19 @@ import {
   type TerrainMeshSource,
   collectTerrainMeshSources,
 } from './terrainSampler'
+import {
+  buildTerrainSurfaceSampler,
+  type TerrainSurfaceBounds,
+  type TerrainSurfaceSampler,
+} from './terrainSurfaceSampler'
 import { resolveSeedHeadingRad, traceRoadPath, type RoadTraceNode, type RoadTraceResult } from './roadTrace'
-import { buildRoadFieldData, createRoadFieldTexture, type RoadFieldData } from './roadField'
+import {
+  buildRoadFieldData,
+  computeRoadEdgeHeights,
+  createRoadFieldTexture,
+  type RoadEdgeHeights,
+  type RoadFieldData,
+} from './roadField'
 import {
   buildRoadProximityIndex,
   verifyRoadProximityIndex,
@@ -95,6 +106,11 @@ import {
 import { findTerrainTextureStreamFrom } from '../terrainTextureStream'
 import { clamp, degreesToRadians, smoothstep } from './noise'
 import {
+  densifyRoadRows,
+  sampleRoadRowColumns,
+  type RoadBandRow,
+} from './roadBandRows'
+import {
   activeRoadWaypoints,
   clampProceduralLandscapeProps,
   PROCEDURAL_LANDSCAPE_WIND_FACTOR,
@@ -119,6 +135,12 @@ const CAMERA_GRASS_CELL_SIZE = 8
 const STREAM_INTERVAL_MS = 200
 const STREAM_MOVE_THRESHOLD = 8
 const ROAD_FIELD_RESOLUTION = 1024
+/** 横坡贴合模式下路面带相对地形的固定抬升（米）。 */
+const ROAD_BAND_LIFT = 0.05
+/** 贴合模式下路面带的横向采样列数（从左缘到右缘）。 */
+const ROAD_BAND_COLUMN_COUNT = 9
+/** 贴合模式下路面带的沿路采样间距（米）：追踪节点 8m 之间加密，接住横向折坡。 */
+const ROAD_BAND_ROW_SPACING = 2
 const DEBUG_ROAD_HEIGHT_OFFSET = 0.6
 const SOURCE_CHECK_INTERVAL_MS = 500
 const TREE_UNIT_SIZE = 8
@@ -421,6 +443,30 @@ function buildRoadBucketTable(nodes: RoadTraceNode[], bucketLength: number): Roa
   return buckets
 }
 
+/** 公路走廊 AABB（用于真实地形面采样器的索引范围）。 */
+function resolveRoadCorridorBounds(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  margin: number,
+): TerrainSurfaceBounds {
+  let minX = Number.POSITIVE_INFINITY
+  let minZ = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxZ = Number.NEGATIVE_INFINITY
+  for (const node of nodes) {
+    if (node.x < minX) minX = node.x
+    if (node.x > maxX) maxX = node.x
+    if (node.z < minZ) minZ = node.z
+    if (node.z > maxZ) maxZ = node.z
+  }
+  return {
+    minX: minX - margin,
+    minZ: minZ - margin,
+    maxX: maxX + margin,
+    maxZ: maxZ + margin,
+  }
+}
+
+
 function createEmptyRoadFieldTexture(): THREE.DataTexture {
   const texture = new THREE.DataTexture(new Uint8Array([255, 0, 0, 255]), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType)
   texture.minFilter = THREE.LinearFilter
@@ -468,6 +514,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let variationTexture: THREE.DataTexture | null = null
   let roadResult: RoadTraceResult | null = null
   let roadFieldData: RoadFieldData | null = null
+  /** 贴合：与 roadResult.nodes 对齐的左右缘地形高度（压平场用）。 */
+  let roadEdgeHeights: RoadEdgeHeights[] | null = null
+  /** 贴合：与 roadResult.nodes 对齐的中线真实面高度（压平场用）。 */
+  let roadCenterHeights: number[] | null = null
+  /** 贴合：路面带行采样（追踪节点按 2m 加密）与逐行横向剖面。 */
+  let roadBandRows: RoadBandRow[] | null = null
+  let roadBandColumns: number[][] | null = null
+  /** 公路走廊的真实三角面采样器（带面/压平场的共同高度来源）。 */
+  let roadSurfaceSampler: TerrainSurfaceSampler | null = null
   /**
    * 精确道路距离索引（段空间哈希）：放置过滤与 per-instance `roadProx` 的唯一
    * 距离来源。光栅场在数十公里地形上格边长 40m+，会把路面上的候选误判为
@@ -715,6 +770,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     variationField = null
     roadResult = null
     roadFieldData = null
+    roadEdgeHeights = null
+    roadCenterHeights = null
+    roadBandRows = null
+    roadBandColumns = null
+    roadSurfaceSampler = null
     roadProximity = null
     roadBucketTable = []
   }
@@ -1092,6 +1152,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!grid) {
       return
     }
+    const activeGrid = grid
     const bounds = { minX: grid.minX, minZ: grid.minZ, sizeX: grid.maxX - grid.minX, sizeZ: grid.maxZ - grid.minZ }
     densityField = buildForestDensityField({
       ...bounds,
@@ -1110,6 +1171,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadFieldTexture = null
     roadResult = null
     roadFieldData = null
+    roadEdgeHeights = null
+    roadCenterHeights = null
+    roadBandRows = null
+    roadBandColumns = null
+    roadSurfaceSampler = null
     roadProximity = null
     roadBucketTable = []
 
@@ -1135,6 +1201,35 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         margin: Math.max(grid.cellSize * 2, roadHalfWidth(props) + props.road.shoulderWidth + 2),
       })
       if (roadResult.nodes.length > 1) {
+        const halfWidth = roadHalfWidth(props)
+        // 贴合地形：高度场（数十公里地形上格距 22m）对折坡/山脊是低通近似，
+        // 与可见三角面能差出米级——路面必须采样**真实渲染面**（三角面精确
+        // 定位 + 重心插值），否则会被地形压住或悬空。走廊很小，索引代价可忽略。
+        const maxLateralDrop = halfWidth * Math.max(1, props.road.maxSlope)
+        const meshSources = hostObject ? resolveTerrainMeshSources(hostObject).sources : []
+        const corridorMargin = halfWidth + 16
+        roadSurfaceSampler = meshSources.length
+          ? buildTerrainSurfaceSampler(
+              meshSources,
+              resolveRoadCorridorBounds(roadResult.nodes, corridorMargin),
+            )
+          : null
+        const sampledSurfaceHeightAt = (x: number, z: number): number | null => (
+          roadSurfaceSampler?.heightAt(x, z) ?? activeGrid.sampleHeight(x, z)
+        )
+        roadEdgeHeights = computeRoadEdgeHeights(
+          roadResult.nodes,
+          sampledSurfaceHeightAt,
+          halfWidth,
+          maxLateralDrop,
+        )
+        roadCenterHeights = roadResult.nodes.map((node) => (
+          sampleRoadRowColumns(node, sampledSurfaceHeightAt, halfWidth, 1, maxLateralDrop)[0]!
+        ))
+        roadBandRows = densifyRoadRows(roadResult.nodes, ROAD_BAND_ROW_SPACING)
+        roadBandColumns = roadBandRows.map((row) => (
+          sampleRoadRowColumns(row, sampledSurfaceHeightAt, halfWidth, ROAD_BAND_COLUMN_COUNT, maxLateralDrop)
+        ))
         const influence = Math.max(48, props.road.flattenBand + 8, roadHalfWidth(props) + props.road.shoulderWidth + props.grass.corridorWidth + 8)
         roadFieldData = buildRoadFieldData(roadResult.nodes, {
           minX: grid.minX,
@@ -1145,6 +1240,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           maxY: grid.maxY,
           maxInfluence: influence,
           maxResolution: ROAD_FIELD_RESOLUTION,
+          edgeHeights: roadEdgeHeights,
+          halfWidth,
+          centerHeights: roadCenterHeights,
         })
         if (roadFieldData) {
           roadFieldTexture = createRoadFieldTexture(roadFieldData)
@@ -1531,19 +1629,27 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           edgeOffset: halfWidth,
           waterLevel: resolveWaterLevel(),
         })
+    // 带子按加密行铺设（2m 一档），划线权重按来源节点映射到行。
+    const bandRows = roadBandRows ?? roadResult.nodes
+    const markingsForRows = roadMarkings && roadMarkings.length ? roadMarkings : null
+    const bandMarkings = markingsForRows
+      ? (roadBandRows
+          ? roadBandRows.map((row) => markingsForRows[Math.min(markingsForRows.length - 1, row.sourceIndex)]!)
+          : markingsForRows)
+      : null
     roadBand = createRoadBand({
-      nodes: roadResult.nodes,
+      nodes: bandRows,
       halfWidth,
       stepLength: 2,
       density: densityField,
       textures,
       season,
-      markings: roadMarkings,
+      markings: bandMarkings,
       nodeSpacing: props.road.stepLength,
       hostInverse: hostObject ? hostInverse : null,
-      // 粗网格地形（3dtiles 导出 GLB 平均 40m+ 三角面）无法精确表达 7m 路基
-      // 压平，路面带会被地形三角面穿插；抬升量随源三角面尺寸自适应。
-      lift: clamp(0.02 + (grid?.averageEdgeLength ?? 0) * 0.008, 0.02, 0.45),
+      // 贴合地形：每列取真实三角面高度，抬升只需固定小常量防止 z-fighting。
+      lift: ROAD_BAND_LIFT,
+      columnHeights: roadBandColumns,
     })
     roadBand.setVisible(props.road.enabled)
     roadBand.setRadiance(appliedLighting.radiance)

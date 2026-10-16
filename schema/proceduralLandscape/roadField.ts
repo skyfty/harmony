@@ -33,6 +33,41 @@ export interface RoadFieldData extends RoadDistanceSource {
   heightAt(x: number, z: number): number | null
 }
 
+/** 单个追踪节点的左右缘地形高度（横坡贴合模式）。 */
+export interface RoadEdgeHeights {
+  left: number
+  right: number
+}
+
+/**
+ * 计算每个追踪节点的左右缘地形高度（横坡贴合用，纯函数）。
+ *
+ * 左右方向与 `createRoadBand` 的顶点排布一致：left = 中心 − perp × halfWidth，
+ * right = 中心 + perp × halfWidth，其中 perp = (−sin(heading), cos(heading))。
+ * 采样失败回退中线高度；单侧与中线的偏差不超过 `maxLateralDrop`（传
+ * Infinity 表示不限制），防止粗网格地形上的局部坑洼造成夸张倾角。
+ */
+export function computeRoadEdgeHeights(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  terrainHeightAt: (x: number, z: number) => number | null,
+  halfWidth: number,
+  maxLateralDrop: number,
+): RoadEdgeHeights[] {
+  const limit = Number.isFinite(maxLateralDrop) ? Math.max(0, maxLateralDrop) : Number.POSITIVE_INFINITY
+  const out: RoadEdgeHeights[] = []
+  for (const node of nodes) {
+    const perpX = -Math.sin(node.heading)
+    const perpZ = Math.cos(node.heading)
+    const left = terrainHeightAt(node.x - perpX * halfWidth, node.z - perpZ * halfWidth)
+    const right = terrainHeightAt(node.x + perpX * halfWidth, node.z + perpZ * halfWidth)
+    const clampSide = (value: number | null): number => (
+      value == null ? node.y : clamp(value, node.y - limit, node.y + limit)
+    )
+    out.push({ left: clampSide(left), right: clampSide(right) })
+  }
+  return out
+}
+
 export interface BuildRoadFieldOptions {
   minX: number
   minZ: number
@@ -42,6 +77,21 @@ export interface BuildRoadFieldOptions {
   maxY: number
   maxInfluence: number
   maxResolution?: number
+  /**
+   * 与 `path` 对齐的左右缘地形高度。提供时烘焙的 roadHeight 为“贴合高度”：
+   * 路内（|横向偏移| ≤ halfWidth）在中线到对应边缘之间线性插值，路外取最近
+   * 一侧边缘高度作为平台延展（回落由着色器 inner→outer 权重完成）。不提供时
+   * 保持现有中线高度行为。
+   */
+  edgeHeights?: readonly RoadEdgeHeights[] | null
+  /** 未提供 edgeHeights 时，可用本回调 + halfWidth 现场计算边缘高度。 */
+  terrainHeightAt?: ((x: number, z: number) => number | null) | null
+  /** 与 `path` 对齐的中线贴合高度（真实渲染面采样）；缺省回退追踪节点高度。 */
+  centerHeights?: readonly number[] | null
+  /** 路面半宽（米），贴合高度模式的横向插值基准。 */
+  halfWidth?: number | null
+  /** 现场计算边缘高度时单侧允许的最大高差（米）；缺省不限制。 */
+  maxLateralDrop?: number | null
 }
 
 export function encodeRoadDistance(distance: number, range: number): number {
@@ -82,6 +132,21 @@ export function buildRoadFieldData(
   const cellX = sizeX / (width - 1)
   const cellZ = sizeZ / (height - 1)
   const influence = Math.max(1, options.maxInfluence)
+  const sampledHalfWidth = Number.isFinite(options.halfWidth) ? (options.halfWidth ?? 0) : 0
+  const edgeHeights = options.edgeHeights ?? (
+    typeof options.terrainHeightAt === 'function' && sampledHalfWidth > 0
+      ? computeRoadEdgeHeights(
+          path,
+          options.terrainHeightAt,
+          sampledHalfWidth,
+          Number.isFinite(options.maxLateralDrop) ? (options.maxLateralDrop ?? 0) : Number.POSITIVE_INFINITY,
+        )
+      : null
+  )
+  const draped = edgeHeights !== null && edgeHeights.length >= path.length && sampledHalfWidth > 0
+  const centerHeights = draped && options.centerHeights && options.centerHeights.length >= path.length
+    ? options.centerHeights
+    : null
 
   const distance = new Float32Array(width * height)
   distance.fill(Number.POSITIVE_INFINITY)
@@ -103,6 +168,12 @@ export function buildRoadFieldData(
     if (segLengthSq <= 1e-9) {
       continue
     }
+    const segLength = Math.sqrt(segLengthSq)
+    // leftDir = (−perp) = (segZ, −segX) / |seg|：正号表示在 left（uv 0）一侧。
+    const leftDirX = segZ / segLength
+    const leftDirZ = -segX / segLength
+    const drapedFrom = draped ? edgeHeights[i]! : null
+    const drapedTo = draped ? edgeHeights[i + 1]! : null
     const minSegX = Math.min(ax, bx) - influence
     const maxSegX = Math.max(ax, bx) + influence
     const minSegZ = Math.min(az, bz) - influence
@@ -123,8 +194,20 @@ export function buildRoadFieldData(
         const d = Math.sqrt(dx * dx + dz * dz)
         const index = row * width + col
         if (d <= influence && d < distance[index]!) {
+          const centerY = centerHeights
+            ? centerHeights[i]! + (centerHeights[i + 1]! - centerHeights[i]!) * t
+            : ay + (by - ay) * t
+          let targetHeight = centerY
+          if (drapedFrom && drapedTo) {
+            const leftY = drapedFrom.left + (drapedTo.left - drapedFrom.left) * t
+            const rightY = drapedFrom.right + (drapedTo.right - drapedFrom.right) * t
+            const signed = (px - ax) * leftDirX + (pz - az) * leftDirZ
+            const edgeY = signed >= 0 ? leftY : rightY
+            const fraction = Math.min(1, Math.abs(signed) / sampledHalfWidth)
+            targetHeight = centerY + (edgeY - centerY) * fraction
+          }
           distance[index] = d
-          roadHeight[index] = ay + (by - ay) * t
+          roadHeight[index] = targetHeight
         }
       }
     }
