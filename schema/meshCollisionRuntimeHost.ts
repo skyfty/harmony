@@ -18,6 +18,14 @@ import {
 // Scene nodes tagged with the `groundCollisionSource` component reuse the Ground Anchor
 // probe points: triangles near a probe become static triangle mesh bodies and are
 // destroyed again once every probe moved away.
+//
+// The indexed mesh set is not frozen: components may add or rebuild their meshes long
+// after the first sync (the procedural landscape only creates its road band / walls once
+// the terrain grid finished rasterizing). Every sync therefore compares a lightweight
+// per-mesh signature of the source subtree and applies the difference incrementally:
+// meshes that appeared get new chunks, meshes that disappeared / were hidden / swapped
+// their geometry lose theirs, and unchanged meshes keep their resident bodies untouched
+// (no collision gap while re-indexing).
 
 /** Probe distance at which a collision chunk is created. */
 export const MESH_COLLISION_ACTIVATION_RADIUS_METERS = GROUND_COLLISION_RADIUS_METERS
@@ -27,6 +35,12 @@ export const MESH_COLLISION_RETENTION_RADIUS_METERS = GROUND_COLLISION_RADIUS_ME
 export const MESH_COLLISION_MAX_RESIDENT_CHUNKS = 64
 /** Maximum number of collision chunks created per sync call. */
 export const MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC = 2
+/**
+ * Raised per-sync chunk budget while re-indexing after the collision mesh set changed
+ * (a late added road band / rebuilt wall layer must become solid within a sync or two).
+ * Falls back to `MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC` once nothing is pending.
+ */
+export const MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC_AFTER_CHANGE = 8
 /** Grid cell size used when a sub mesh is too large to become a single chunk. */
 export const MESH_COLLISION_CELL_SIZE_METERS = 128
 /** Sub mesh triangle count above which the mesh gets spatially subdivided. */
@@ -37,6 +51,10 @@ export const MESH_COLLISION_SUBDIVIDE_EXTENT_METERS = 256
 export const MESH_COLLISION_MIN_CELL_SIZE_METERS = 16
 /** Indexing work budget (triangles) consumed per sync call. */
 export const MESH_COLLISION_INDEX_TRIANGLES_PER_TICK = 200000
+/** `userData` key: lazily assigned stable serial identifying a collision mesh. */
+const MESH_COLLISION_MESH_SERIAL_KEY = '__meshCollisionSerial'
+/** `userData` key (BufferGeometry): lazily assigned stable serial per geometry. */
+const MESH_COLLISION_GEOMETRY_SERIAL_KEY = '__meshCollisionGeometrySerial'
 
 export type MeshCollisionChunkShape = StaticMeshCollisionShapeDefinition
 
@@ -93,17 +111,34 @@ type MeshCollisionChunk = MeshCollisionChunkBounds & {
   triangleCount: number
 }
 
+type MeshCollisionMeshEntry = {
+  /** `${meshSerial}:${geometrySerial}` — stable while mesh object and geometry stay the same. */
+  signature: string
+  /** Index into `sources`; `null` when the mesh cannot produce a collision source. */
+  sourceIndex: number | null
+}
+
+type MeshCollisionMeshEntryCandidate = {
+  signature: string
+  object: THREE.Object3D
+}
+
 type MeshCollisionHostState = {
   sourceId: string
   phase: 'collect' | 'subdivide' | 'ready'
   traversalStack: THREE.Object3D[]
-  sources: MeshCollisionMeshSource[]
+  /** Collision sources by index; `null` marks a retired mesh (index never reused). */
+  sources: Array<MeshCollisionMeshSource | null>
   chunks: MeshCollisionChunk[]
+  /** Ordered signatures of the indexed collision meshes (traversal order). */
+  meshEntries: MeshCollisionMeshEntry[]
   sourceIndex: number
   triangleCursor: number
   buckets: Map<string, number[]> | null
   instances: Map<string, RigidbodyInstance>
   oversizeWarned: boolean
+  /** Raised chunk-creation budget active while re-indexing a changed mesh set. */
+  burst: boolean
   lastDeps: MeshCollisionRuntimeDeps | null
 }
 
@@ -126,23 +161,183 @@ const EMPTY_MESH_COLLISION_SNAPSHOT: MeshCollisionRuntimeHostSnapshot = {
   pendingChunkCount: 0,
 }
 
-function resolveMeshSource(object: THREE.Object3D): MeshCollisionMeshSource | null {
+let meshCollisionMeshSerialCounter = 0
+let meshCollisionGeometrySerialCounter = 0
+
+function resolveCollisionMeshSerial(mesh: THREE.Object3D): number {
+  const stored = mesh.userData[MESH_COLLISION_MESH_SERIAL_KEY]
+  if (typeof stored === 'number' && Number.isFinite(stored)) {
+    return stored
+  }
+  meshCollisionMeshSerialCounter += 1
+  mesh.userData[MESH_COLLISION_MESH_SERIAL_KEY] = meshCollisionMeshSerialCounter
+  return meshCollisionMeshSerialCounter
+}
+
+function resolveCollisionGeometrySerial(geometry: THREE.BufferGeometry): number {
+  const stored = geometry.userData[MESH_COLLISION_GEOMETRY_SERIAL_KEY]
+  if (typeof stored === 'number' && Number.isFinite(stored)) {
+    return stored
+  }
+  meshCollisionGeometrySerialCounter += 1
+  geometry.userData[MESH_COLLISION_GEOMETRY_SERIAL_KEY] = meshCollisionGeometrySerialCounter
+  return meshCollisionGeometrySerialCounter
+}
+
+function resolveCollisionMeshSignature(mesh: THREE.Object3D, geometry: THREE.BufferGeometry): string {
+  return `${resolveCollisionMeshSerial(mesh)}:${resolveCollisionGeometrySerial(geometry)}`
+}
+
+/**
+ * Cheap eligibility check shared by the budgeted collection and the per-sync change
+ * detection; both must agree so a signature never skips a mesh the collector accepts.
+ * Instanced meshes (grass / bushes / tree cards) stay out of collision on purpose.
+ */
+function isCollisionEligibleMesh(object: THREE.Object3D): boolean {
   const mesh = object as THREE.Mesh & {
     isMesh?: boolean
     isInstancedMesh?: boolean
   }
   if (mesh.isMesh !== true || mesh.isInstancedMesh === true) {
-    return null
+    return false
   }
   const geometry = mesh.geometry as THREE.BufferGeometry | undefined
   if (!geometry) {
+    return false
+  }
+  const position = geometry.getAttribute('position')
+  if (!position || position.itemSize < 3 || position.count < 3) {
+    return false
+  }
+  const index = geometry.getIndex()
+  const triangleCount = index ? Math.floor(index.count / 3) : Math.floor(position.count / 3)
+  return triangleCount > 0
+}
+
+/**
+ * Walks the source subtree (visibility aware, same order as the budgeted collection)
+ * and returns every collision-eligible mesh together with its signature.
+ */
+function collectCollisionMeshEntryCandidates(
+  sourceObject: THREE.Object3D,
+): MeshCollisionMeshEntryCandidate[] {
+  const entries: MeshCollisionMeshEntryCandidate[] = []
+  const stack: THREE.Object3D[] = [sourceObject]
+  while (stack.length > 0) {
+    const current = stack.pop()
+    if (!current || current.visible === false) {
+      continue
+    }
+    if (isCollisionEligibleMesh(current)) {
+      const geometry = (current as THREE.Mesh).geometry as THREE.BufferGeometry
+      entries.push({
+        signature: resolveCollisionMeshSignature(current, geometry),
+        object: current,
+      })
+    }
+    if (current.children.length > 0) {
+      stack.push(...current.children)
+    }
+  }
+  return entries
+}
+
+function hasCollisionMeshSetChanged(
+  entries: readonly MeshCollisionMeshEntryCandidate[],
+  state: MeshCollisionHostState,
+): boolean {
+  if (entries.length !== state.meshEntries.length) {
+    return true
+  }
+  for (let index = 0; index < entries.length; index += 1) {
+    if (entries[index]!.signature !== state.meshEntries[index]!.signature) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Incremental re-index: unchanged meshes keep their sources, chunks and resident bodies
+ * untouched; vanished / hidden / geometry-swapped meshes are retired (chunks dropped,
+ * bodies released); meshes that appeared after the initial collection are appended and
+ * fed through the budgeted subdivision + chunk creation path.
+ */
+function applyCollisionMeshSetChanges(
+  state: MeshCollisionHostState,
+  entries: readonly MeshCollisionMeshEntryCandidate[],
+  deps: MeshCollisionRuntimeDeps | null,
+): void {
+  const presentSignatures = new Set(entries.map((entry) => entry.signature))
+  const retiredSourceIndexes = new Set<number>()
+  state.meshEntries.forEach((entry) => {
+    if (entry.sourceIndex == null || presentSignatures.has(entry.signature)) {
+      return
+    }
+    retiredSourceIndexes.add(entry.sourceIndex)
+  })
+
+  if (retiredSourceIndexes.size > 0) {
+    state.chunks = state.chunks.filter((chunk) => {
+      if (!retiredSourceIndexes.has(chunk.meshIndex)) {
+        return true
+      }
+      const instance = state.instances.get(chunk.key)
+      if (instance) {
+        removeChunkInstance(deps, instance)
+        state.instances.delete(chunk.key)
+      }
+      return false
+    })
+    retiredSourceIndexes.forEach((index) => {
+      state.sources[index] = null
+    })
+  }
+
+  const keptSourceIndexes = new Map<string, number>()
+  state.meshEntries.forEach((entry) => {
+    if (entry.sourceIndex != null && presentSignatures.has(entry.signature)) {
+      keptSourceIndexes.set(entry.signature, entry.sourceIndex)
+    }
+  })
+
+  let appendedSources = false
+  state.meshEntries = entries.map((entry) => {
+    const kept = keptSourceIndexes.get(entry.signature)
+    if (kept != null) {
+      return { signature: entry.signature, sourceIndex: kept }
+    }
+    const source = resolveMeshSource(entry.object)
+    if (!source) {
+      return { signature: entry.signature, sourceIndex: null }
+    }
+    state.sources.push(source)
+    appendedSources = true
+    return { signature: entry.signature, sourceIndex: state.sources.length - 1 }
+  })
+
+  if (appendedSources) {
+    // Every older source is fully processed before the state turns `ready`, so the
+    // cursor already sits on the first appended source.
+    state.sourceIndex = Math.min(state.sourceIndex, state.sources.length)
+    state.phase = 'subdivide'
+    state.triangleCursor = 0
+    state.buckets = null
+    state.burst = true
+  }
+}
+
+function resolveMeshSource(object: THREE.Object3D): MeshCollisionMeshSource | null {
+  if (!isCollisionEligibleMesh(object)) {
     return null
   }
+  const mesh = object as THREE.Mesh
+  const geometry = mesh.geometry as THREE.BufferGeometry
   const position = geometry.getAttribute('position') as
     | THREE.BufferAttribute
     | THREE.InterleavedBufferAttribute
     | undefined
-  if (!position || position.itemSize < 3 || position.count < 3) {
+  if (!position) {
     return null
   }
   const indexAttribute = geometry.getIndex() as
@@ -260,11 +455,13 @@ function createHostState(sourceId: string, sourceObject: THREE.Object3D): MeshCo
     traversalStack: [sourceObject],
     sources: [],
     chunks: [],
+    meshEntries: [],
     sourceIndex: 0,
     triangleCursor: 0,
     buckets: null,
     instances: new Map(),
     oversizeWarned: false,
+    burst: false,
     lastDeps: null,
   }
 }
@@ -287,9 +484,26 @@ function advanceCollection(state: MeshCollisionHostState, budget: number): numbe
     if (!current) {
       continue
     }
-    const source = resolveMeshSource(current)
+    // Collision follows visibility: a hidden mesh (and its subtree) contributes nothing,
+    // matching what the player can see.
+    if (current.visible === false) {
+      remaining -= 1
+      continue
+    }
+    let source: MeshCollisionMeshSource | null = null
+    if (isCollisionEligibleMesh(current)) {
+      const geometry = (current as THREE.Mesh).geometry as THREE.BufferGeometry
+      state.meshEntries.push({
+        signature: resolveCollisionMeshSignature(current, geometry),
+        sourceIndex: null,
+      })
+      source = resolveMeshSource(current)
+      if (source) {
+        state.sources.push(source)
+        state.meshEntries[state.meshEntries.length - 1]!.sourceIndex = state.sources.length - 1
+      }
+    }
     if (source) {
-      state.sources.push(source)
       remaining -= Math.max(1, Math.ceil(source.vertexCount / 3))
     } else {
       remaining -= 1
@@ -453,7 +667,11 @@ function advanceSubdivision(state: MeshCollisionHostState, budget: number): numb
   while (remaining > 0 && state.sourceIndex < state.sources.length) {
     const source = state.sources[state.sourceIndex]
     if (!source) {
-      break
+      // Retired source (mesh removed / hidden / geometry swapped): skip its slot.
+      state.sourceIndex += 1
+      state.triangleCursor = 0
+      state.buckets = null
+      continue
     }
     if (!source.needsSubdivision) {
       state.chunks.push(createWholeMeshChunk(source, state.sourceIndex))
@@ -618,6 +836,16 @@ export function syncMeshCollisionRuntimeHost(
   state.sourceId = params.sourceId
   state.lastDeps = deps
 
+  // Components may keep adding / rebuilding their meshes after the initial collection
+  // (the procedural landscape's road band is created once the terrain grid finished).
+  // Detect those changes and re-index the delta instead of freezing the first snapshot.
+  if (state.phase === 'ready') {
+    const entries = collectCollisionMeshEntryCandidates(sourceObject)
+    if (hasCollisionMeshSetChanged(entries, state)) {
+      applyCollisionMeshSetChanges(state, entries, deps)
+    }
+  }
+
   if (state.phase !== 'ready') {
     let budget: number = MESH_COLLISION_INDEX_TRIANGLES_PER_TICK
     if (state.phase === 'collect') {
@@ -672,6 +900,9 @@ export function syncMeshCollisionRuntimeHost(
     state.instances.delete(key)
   })
 
+  const createLimit = state.burst
+    ? MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC_AFTER_CHANGE
+    : MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC
   let created = 0
   let pendingChunkCount = 0
   for (let index = 0; index < pendingCandidates.length; index += 1) {
@@ -679,7 +910,7 @@ export function syncMeshCollisionRuntimeHost(
     if (!candidate || !residentKeys.has(candidate.chunk.key)) {
       continue
     }
-    if (created >= MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC) {
+    if (created >= createLimit) {
       pendingChunkCount += 1
       continue
     }
@@ -693,6 +924,9 @@ export function syncMeshCollisionRuntimeHost(
     }
     state.instances.set(candidate.chunk.key, instance)
     created += 1
+  }
+  if (pendingChunkCount === 0) {
+    state.burst = false
   }
 
   return {

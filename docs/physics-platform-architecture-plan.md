@@ -283,6 +283,27 @@ The following logic should stay engine-specific:
 - engine vehicle setup
 - engine-native debug inspection
 
+## Ground Anchor Mesh Collision (implemented semantics)
+
+Nodes carrying the `groundCollisionSource` component stream their subtree meshes into
+static triangle collision while a Ground Anchor probe is nearby
+(`schema/meshCollisionRuntimeHost.ts`, shared by `ScenePreviewView`, `SceneryViewer`,
+`tour` and the mini-app viewer).
+
+- Only non-instanced meshes participate; grass / bushes / tree cards / near-tree 3D /
+  far-forest imposters stay non-colliding on purpose.
+- Collision follows visibility: a hidden mesh (and its subtree) contributes nothing.
+- The indexed mesh set is **not frozen at the first sync**. Components may add or
+  rebuild meshes later — the procedural landscape only creates its road band / walls
+  after the terrain grid finished rasterizing — so every sync compares a lightweight
+  per-mesh signature (`meshSerial:geometrySerial`) and re-indexes the delta:
+  late meshes get new chunks, vanished / hidden / geometry-swapped meshes lose theirs,
+  unchanged meshes keep their resident bodies untouched (no collision gap while a road
+  band or wall layer becomes solid again).
+- Right after such a change the per-sync chunk-creation budget is raised
+  (`MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC_AFTER_CHANGE`) until nothing is pending, so
+  a freshly created road band turns solid within a sync or two.
+
 ## Scenery Integration
 
 `SceneryViewer.vue` should depend on a physics host, not on Cannon.
