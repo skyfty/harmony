@@ -55,6 +55,7 @@ import {
   searchCategories,
   updateCategoryInfo,
 } from '@/services/assetCategoryService'
+import { ASSET_CATEGORY_PRESET_ROOT } from '@/services/assetCategoryPresets'
 import { appConfig } from '@/config/env'
 import { rewriteConfigAssetBundleBytes } from '@/services/configAssetRewrite'
 import {
@@ -2536,8 +2537,10 @@ function buildTerrainPackResponsePack(archive: ParsedTerrainPackArchive): Record
   }
 }
 
-const TERRAIN_PACK_ROOT_CATEGORY_NAME = '地形'
+const TERRAIN_PACK_CATEGORY_PATH: readonly string[] = [ASSET_CATEGORY_PRESET_ROOT, '地形']
 const TERRAIN_PACK_NAME_MAX_LENGTH = 64
+/** Zip-extracted pack files live in their own folder so `uploads/` stays flat. */
+const TERRAIN_PACK_STORAGE_ROOT = 'terrain-packs'
 
 /** Category name input: trimmed, shell/path hostile characters removed, capped. */
 function sanitizeTerrainPackCategoryName(raw: unknown): string | null {
@@ -2558,11 +2561,13 @@ function sanitizeTerrainPackCategoryName(raw: unknown): string | null {
 
 /**
  * Accepts a 3dtiles-viewer terrain resource pack and registers it in the fixed
- * 「地形 / <名称>」 category:
+ * 「资产库 / 地形 / <名称>」 category:
  *
- * - files land under `<packKey>/` in the canonical layout (`scene.glb` +
- *   `textures/*` + `textures.json`, or the DEM zip alone) so the runtime texture
- *   stream resolves `textures/*` relative to the GLB download URL;
+ * - files land in their own folder under `uploads/terrain-packs/<packKey>/` in
+ *   the canonical layout (`scene.glb` + `textures/*` + `textures.json`, or the
+ *   DEM zip alone) so the runtime texture stream resolves `textures/*` relative
+ *   to the GLB download URL while `uploads/` keeps its flat one-file-per-asset
+ *   layout for everything else;
  * - only the primary asset is registered - pack-internal files stay plain files
  *   (nothing in asset-manifest.json, nothing in the asset panels);
  * - re-uploading the same zip (same sha256) reuses the existing asset.
@@ -2608,7 +2613,7 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
 
   let resolvedCategory: AssetCategoryDocument | null = null
   try {
-    const terrainRoot = await ensureCategoryPath([TERRAIN_PACK_ROOT_CATEGORY_NAME], { parentId: null })
+    const terrainRoot = await ensureCategoryPath([...TERRAIN_PACK_CATEGORY_PATH])
     resolvedCategory = await ensureCategoryPath([packageName], {
       parentId: terrainRoot._id as Types.ObjectId,
     })
@@ -2662,7 +2667,7 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     return
   }
 
-  const packKey = `terrain-${nanoid(16)}`
+  const packKey = `${TERRAIN_PACK_STORAGE_ROOT}/terrain-${nanoid(16)}`
   const writtenFileKeys: string[] = []
   let primaryAssetId: Types.ObjectId | null = null
 
@@ -2748,6 +2753,8 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     if (primaryAssetId) {
       await AssetModel.findByIdAndDelete(primaryAssetId).catch(() => undefined)
       await fs.remove(path.join(appConfig.assetStoragePath, packKey)).catch(() => undefined)
+      // Best-effort: drop the now-empty pack root so uploads/ does not keep it.
+      await fs.rmdir(path.join(appConfig.assetStoragePath, TERRAIN_PACK_STORAGE_ROOT)).catch(() => undefined)
     }
     throw error
   }
@@ -3385,6 +3392,8 @@ export async function deleteAsset(ctx: Context): Promise<void> {
         const packRoot = path.resolve(appConfig.assetStoragePath, packMetadata.packKey)
         if (packRoot.startsWith(path.resolve(appConfig.assetStoragePath))) {
           await fs.remove(packRoot).catch(() => undefined)
+          // Best-effort: drop the now-empty pack root so uploads/ does not keep it.
+          await fs.rmdir(path.join(appConfig.assetStoragePath, TERRAIN_PACK_STORAGE_ROOT)).catch(() => undefined)
         }
       }
     } else {

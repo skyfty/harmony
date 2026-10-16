@@ -1570,7 +1570,7 @@ onMounted(async () => {
           <Input v-model:value="packFormModel.name" placeholder="默认取 zip 文件名" />
         </Form.Item>
         <Form.Item label="目标目录">
-          <Input :value="`地形 / ${packFormModel.name.trim() || '（名称）'}`" disabled />
+          <Input :value="`资产库 / 地形 / ${packFormModel.name.trim() || '（名称）'}`" disabled />
         </Form.Item>
         <Form.Item label="标签">
           <Select
@@ -1600,7 +1600,7 @@ onMounted(async () => {
           {{ packResult.reused ? '已存在相同内容的资源包，已直接复用' : '资源包已入库' }}
         </div>
         <div>类型：{{ packResult.pack.kind === 'geometry' ? '几何+贴图包' : 'DEM 包' }}</div>
-        <div>分类：地形 / {{ packResult.category?.name }}</div>
+        <div>分类：{{ (packResult.category?.path || []).map((item) => item.name).join(' / ') || packResult.category?.name }}</div>
         <div>主资产：{{ packResult.asset?.name }} · {{ packResult.asset?.type }} · {{ formatFileSize(packResult.asset?.size || 0) }}</div>
         <div>
           贴图 {{ packResult.pack.textureCount }} 张（KTX2 {{ packResult.pack.ktx2Count || 0 }}） · 包内文件 {{ packResult.pack.fileCount }} 个 · 共
