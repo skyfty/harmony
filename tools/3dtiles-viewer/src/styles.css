@@ -106,6 +106,8 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .glb-panel > .panel-header button { pointer-events: auto; }
 .glb-panel > .panel-header .glb-export-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
   pointer-events: auto;
 }

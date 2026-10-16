@@ -1,5 +1,6 @@
 import type { WaterPresetId } from '@schema/components'
 import type { TerrainScatterCategory } from '@schema/terrain-scatter'
+import type { TerrainDemPackageSidecar } from '@schema/terrainDemPackage'
 
 export interface PlanningPoint {
   /** Optional stable vertex id; used to reconstruct shared vertices across polylines. */
@@ -238,6 +239,8 @@ export interface PlanningTerrainDemData {
   previewHash?: string | null
   previewSize?: { width: number; height: number } | null
   orthophoto?: PlanningTerrainOrthophotoData | null
+  /** Present when the DEM came from a 3dtiles-viewer terrain package (zip). */
+  sourcePackage?: TerrainDemPackageSidecar | null
 }
 
 export interface PlanningTerrainData {

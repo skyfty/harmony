@@ -192,6 +192,7 @@ import {
   updateAsset,
   updateAssetCategory,
   uploadAsset,
+  uploadTerrainPack,
   restoreAsset,
 } from '@/controllers/resourceController'
 import { deleteFileUpload, getFileUpload, listFileUploads, uploadFile } from '@/controllers/fileUploadController'
@@ -469,6 +470,12 @@ adminRouter.put(
 )
 adminRouter.delete('/resources/assets/:id', requireAnyPermission(['resource:write']), deleteAsset)
 adminRouter.post('/resources/assets/:id/restore', requireAnyPermission(['resource:write']), restoreAsset)
+adminRouter.post(
+  '/resources/terrain-packs',
+  requireAnyPermission(['resource:write']),
+  koaBody({ multipart: true, urlencoded: true, formidable: { keepExtensions: true, maxFileSize: 512 * 1024 * 1024 } }),
+  uploadTerrainPack,
+)
 adminRouter.post('/resources/assets/bulk-move-category', requireAnyPermission(['resource:write']), bulkMoveAssetsCategory)
 adminRouter.post('/resources/assets/bulk-update', requireAnyPermission(['resource:write']), bulkUpdateAssets)
 

@@ -1,5 +1,15 @@
 import * as THREE from 'three'
 import { loadTextureFromSourceUrl } from './textureSourceLoader'
+import type { TerrainTextureManifest, TerrainTextureManifestEntry } from './terrainPack'
+
+// The manifest contract lives in the three-free `terrainPack` module so the
+// server and the admin upload can validate packs without pulling in three.
+export { parseTerrainTextureManifest } from './terrainPack'
+export type {
+  TerrainTextureManifest,
+  TerrainTextureManifestEntry,
+  TerrainTextureManifestSlot,
+} from './terrainPack'
 
 /**
  * Lazy, visibility-driven texture streaming for terrain GLBs exported by the
@@ -21,30 +31,6 @@ export interface TerrainTextureBinding {
   materialIndices?: number[]
   image?: string
   ktx2?: string
-}
-
-export interface TerrainTextureManifestSlot {
-  mesh?: string
-  materialIndex?: number
-  slot?: string
-}
-
-export interface TerrainTextureManifestEntry {
-  id?: string
-  image?: string
-  ktx2?: string
-  ktx2Bytes?: number
-  width?: number
-  height?: number
-  bytes?: number
-  mimeType?: string
-  slots?: TerrainTextureManifestSlot[]
-}
-
-export interface TerrainTextureManifest {
-  version?: number
-  glb?: string
-  textures?: TerrainTextureManifestEntry[]
 }
 
 export interface TerrainTextureRequest {
@@ -146,17 +132,6 @@ function estimateTextureBytes(request: TerrainTextureRequest): number {
     return Math.round(request.bytes * 4)
   }
   return 4 * 1024 * 1024
-}
-
-export function parseTerrainTextureManifest(json: unknown): TerrainTextureManifest {
-  if (typeof json !== 'object' || json === null) {
-    throw new Error('Terrain texture manifest must be a JSON object')
-  }
-  const record = json as Record<string, unknown>
-  if (record.textures !== undefined && !Array.isArray(record.textures)) {
-    throw new Error('Terrain texture manifest "textures" must be an array')
-  }
-  return json as TerrainTextureManifest
 }
 
 interface PendingRequest {

@@ -1944,6 +1944,12 @@ export function canTreatGroundChunkAsFlatPlane(
   if (chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec)) {
     return false
   }
+  // DEM-converted terrain stores its heights in the planning height field, not
+  // in local edit tiles, so chunks that overlap the imported DEM coverage must
+  // be built from real height samples instead of the flat-plane fast path.
+  if (groundChunkIntersectsPlanningDemCoverage(definition, spec)) {
+    return false
+  }
 
   const sharedChunkKey = resolveGroundSurfaceSharedKeyFromChunkMeta(normalizedChunkRow, normalizedChunkColumn)
   if (!options.allowBakedSurfaceTexture && hasGroundChunkSurfaceTextureData(definition, sharedChunkKey)) {
@@ -1951,6 +1957,33 @@ export function canTreatGroundChunkAsFlatPlane(
   }
 
   return true
+}
+
+/**
+ * True when the chunk overlaps the world bounds of the imported planning DEM.
+ * Those chunks carry sampled terrain heights (planning height field / terrain
+ * dataset sampler) and must not be rendered as flat base-height planes.
+ */
+function groundChunkIntersectsPlanningDemCoverage(
+  definition: GroundDynamicMesh,
+  spec: GroundChunkSpec,
+): boolean {
+  const worldBounds = (definition.planningMetadata as GroundPlanningMetadata | null | undefined)?.demSource?.worldBounds ?? null
+  if (!worldBounds) {
+    return false
+  }
+  const minX = Math.min(Number(worldBounds.minX), Number(worldBounds.maxX))
+  const maxX = Math.max(Number(worldBounds.minX), Number(worldBounds.maxX))
+  const minZ = Math.min(Number(worldBounds.minY), Number(worldBounds.maxY))
+  const maxZ = Math.max(Number(worldBounds.minY), Number(worldBounds.maxY))
+  if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minZ) || !Number.isFinite(maxZ)) {
+    return false
+  }
+  const chunkBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
+  return chunkBounds.maxX > minX
+    && chunkBounds.minX < maxX
+    && chunkBounds.maxZ > minZ
+    && chunkBounds.minZ < maxZ
 }
 
   function resolveImportedLocalEditCellSize(definition: GroundRuntimeDynamicMesh): number | null {
@@ -8350,7 +8383,10 @@ export function updateGroundChunks(
           resolveSharedGroundChunkKeyFromRuntimeKey(key),
         )
         const hasLocalEditCoverage = chunkIntersectsGroundLocalEditTileFromRuntime(runtimeDefinition, spec, localEditTiles)
-        const requiresDenseChunkMesh = forceDenseChunkMeshes || hasBakedSurfaceChunk || hasLocalEditCoverage
+        // Chunks covered by the imported planning DEM carry real terrain heights
+        // and must be meshed, not approximated by flat instanced planes.
+        const hasPlanningDemCoverage = groundChunkIntersectsPlanningDemCoverage(definition, spec)
+        const requiresDenseChunkMesh = forceDenseChunkMeshes || hasBakedSurfaceChunk || hasLocalEditCoverage || hasPlanningDemCoverage
         // 先算出这个 chunk 的中心点位置，再与相机位置比较，用于创建优先级排序。
         const chunkWorldBounds = resolveGroundChunkWorldBoundsFromSpec(definition, spec)
         const centerX = (chunkWorldBounds.minX + chunkWorldBounds.maxX) * 0.5

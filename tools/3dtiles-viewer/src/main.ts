@@ -10,6 +10,18 @@ import {
   type TerrainMergeSource,
   type TerrainMergeStats,
 } from './terrainMerge'
+import {
+  buildTerrainDemSidecar,
+  copyRenderTargetTileToOrtho,
+  encodeDemGeoTiff,
+  encodeOrthoGeoTiff,
+  fillRgbHoles,
+  planDemGrid,
+  resolveDemGeoReference,
+  sampleDemHeights,
+  type DemExportFrame,
+  type DemGridPlan,
+} from './demExport'
 import { buildZipArchive } from './zipArchive'
 import { TilesRenderer } from '3d-tiles-renderer'
 import { CAMERA_FRAME } from '3d-tiles-renderer/src/three/renderer/math/Ellipsoid'
@@ -83,6 +95,7 @@ app.innerHTML = `
             <div class="glb-export-actions">
               <button class="secondary" id="export-current-glb" disabled>导出完整 GLB</button>
               <button class="secondary" id="export-terrain-package" disabled>导出几何+贴图包</button>
+              <button class="secondary" id="export-terrain-dem" disabled>导出 DEM 包</button>
             </div>
           </div>
           <div class="glb-export-options" id="glb-export-options">
@@ -91,6 +104,8 @@ app.innerHTML = `
             <label class="option"><input type="checkbox" id="opt-strip-skirts" checked /> 去裙边</label>
             <label class="option">贴图 ≤ <select id="opt-texture-max"><option>1024</option><option selected>2048</option><option>4096</option></select></label>
             <label class="option">质量 <input type="number" id="opt-texture-quality" value="0.8" step="0.05" min="0.3" max="0.95" /></label>
+            <label class="option">DEM 分辨率 <select id="opt-dem-cell"><option value="auto" selected>自动</option><option value="1">1 m</option><option value="2">2 m</option><option value="5">5 m</option><option value="10">10 m</option></select></label>
+            <label class="option"><input type="checkbox" id="opt-dem-ortho" checked /> 正射影像</label>
           </div>
           <div class="glb-preview-viewport" id="glb-preview-viewport">
             <div class="placeholder" id="glb-preview-placeholder">等待首次锚点捕获</div>
@@ -129,6 +144,9 @@ const progressLabel = $('#progress-label')
 const configHelp = $('#config-help')
 const exportCurrentGlbButton = $('#export-current-glb') as HTMLButtonElement
 const exportTerrainPackageButton = $('#export-terrain-package') as HTMLButtonElement
+const exportTerrainDemButton = $('#export-terrain-dem') as HTMLButtonElement
+const demCellSizeSelect = $('#opt-dem-cell') as HTMLSelectElement
+const demOrthoInput = $('#opt-dem-ortho') as HTMLInputElement
 const weldEnabledInput = $('#opt-weld') as HTMLInputElement
 const weldEpsilonInput = $('#opt-weld-epsilon') as HTMLInputElement
 const stripSkirtsInput = $('#opt-strip-skirts') as HTMLInputElement
@@ -622,6 +640,7 @@ function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
   }
   exportCurrentGlbButton.disabled = true
   exportTerrainPackageButton.disabled = true
+  exportTerrainDemButton.disabled = true
   setGlbPreviewStatus(message, 'idle', '', 1200)
   setGlbPlaceholder(message)
   renderAnchorList()
@@ -1468,6 +1487,7 @@ function setCaptureButtonState(): void {
       : '请先加载 3D Tiles 数据源'
   exportCurrentGlbButton.disabled = capturedTileNodes.size === 0
   exportTerrainPackageButton.disabled = capturedTileNodes.size === 0
+  exportTerrainDemButton.disabled = capturedTileNodes.size === 0
 }
 
 function hasVisibleDescendant(tile: CapturableTile, visibleTiles: Set<CapturableTile>): boolean {
@@ -1571,6 +1591,7 @@ function captureVisibleTiles(): number {
     hideGlbPlaceholder()
     exportCurrentGlbButton.disabled = false
     exportTerrainPackageButton.disabled = false
+    exportTerrainDemButton.disabled = false
     if (!glbCameraFramed) {
       syncGlbCameraToMainView()
       glbCameraFramed = true
@@ -1916,6 +1937,261 @@ async function exportTerrainPackage(): Promise<void> {
   }
 }
 
+const ORTHO_TILE_SIZE = 2048
+
+function readDemCellSizeOption(): number | 'auto' {
+  const value = demCellSizeSelect.value
+  if (value === 'auto') {
+    return 'auto'
+  }
+  const numeric = Number(value)
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 'auto'
+}
+
+function yieldToBrowser(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 0)
+  })
+}
+
+/**
+ * Flat, unlit copies of the merged mesh materials used for the ortho pass so
+ * the imagery is albedo-like (no tone mapping, no scene lighting).
+ */
+function buildOrthoMaterials(source: THREE.Material | THREE.Material[]): THREE.Material[] {
+  const materials = Array.isArray(source) ? source : [source]
+  return materials.map((material) => {
+    const record = material as THREE.Material & {
+      map?: THREE.Texture | null
+      color?: THREE.Color
+      transparent?: boolean
+      alphaTest?: number
+    }
+    return new THREE.MeshBasicMaterial({
+      map: record.map ?? null,
+      color: record.color instanceof THREE.Color ? record.color.clone() : new THREE.Color(0xffffff),
+      transparent: record.transparent === true,
+      alphaTest: typeof record.alphaTest === 'number' ? record.alphaTest : 0,
+      side: THREE.DoubleSide,
+    })
+  })
+}
+
+/**
+ * Renders the merged terrain top-down with an orthographic camera into the
+ * same raster layout as the DEM (row 0 = north, col 0 = west).
+ */
+async function renderOrthoRaster(
+  renderRoot: THREE.Object3D,
+  mesh: THREE.Mesh,
+  plan: DemGridPlan,
+  onTile: (label: string) => void,
+): Promise<Uint8Array> {
+  if (!mesh.geometry.boundingBox) {
+    mesh.geometry.computeBoundingBox()
+  }
+  const box = mesh.geometry.boundingBox
+  if (!box || box.isEmpty()) {
+    throw new Error('正射渲染失败：地形网格包围盒为空。')
+  }
+
+  const originalMaterial = mesh.material
+  const orthoMaterials = buildOrthoMaterials(originalMaterial)
+  mesh.material = orthoMaterials
+
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false })
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.NoToneMapping
+  renderer.setClearColor(0x000000, 1)
+  renderer.setSize(ORTHO_TILE_SIZE, ORTHO_TILE_SIZE, false)
+
+  const scene = new THREE.Scene()
+  scene.add(renderRoot)
+
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10)
+  camera.up.set(1, 0, 0)
+
+  const renderTopY = box.max.y + Math.max(1, (box.max.y - box.min.y) * 0.05)
+  const renderBottomY = box.min.y - Math.max(1, (box.max.y - box.min.y) * 0.05)
+
+  const rgb = new Uint8Array(plan.rows * plan.cols * 3)
+  const tileCols = Math.ceil(plan.cols / ORTHO_TILE_SIZE)
+  const tileRows = Math.ceil(plan.rows / ORTHO_TILE_SIZE)
+  const totalTiles = tileCols * tileRows
+
+  try {
+    let tileIndex = 0
+    for (let tileRow = 0; tileRow < tileRows; tileRow += 1) {
+      for (let tileCol = 0; tileCol < tileCols; tileCol += 1) {
+        const colStart = tileCol * ORTHO_TILE_SIZE
+        const rowStart = tileRow * ORTHO_TILE_SIZE
+        const tileWidth = Math.min(ORTHO_TILE_SIZE, plan.cols - colStart)
+        const tileHeight = Math.min(ORTHO_TILE_SIZE, plan.rows - rowStart)
+        if (tileWidth <= 0 || tileHeight <= 0) {
+          continue
+        }
+
+        const zWest = plan.zMin + colStart * plan.cellSizeMeters
+        const zEast = plan.zMin + (colStart + tileWidth) * plan.cellSizeMeters
+        const xNorth = plan.xMax - rowStart * plan.cellSizeMeters
+        const xSouth = plan.xMax - (rowStart + tileHeight) * plan.cellSizeMeters
+        const xCenter = (xNorth + xSouth) / 2
+        const zCenter = (zWest + zEast) / 2
+
+        camera.left = zWest
+        camera.right = zEast
+        camera.top = xNorth
+        camera.bottom = xSouth
+        camera.near = 0.1
+        camera.far = renderTopY - renderBottomY
+        camera.position.set(xCenter, renderTopY, zCenter)
+        camera.updateProjectionMatrix()
+        camera.lookAt(xCenter, renderBottomY, zCenter)
+        camera.updateMatrixWorld(true)
+
+        const target = new THREE.WebGLRenderTarget(tileWidth, tileHeight, { depthBuffer: true })
+        target.texture.colorSpace = THREE.SRGBColorSpace
+        renderer.setRenderTarget(target)
+        renderer.render(scene, camera)
+        const rgba = new Uint8Array(tileWidth * tileHeight * 4)
+        renderer.readRenderTargetPixels(target, 0, 0, tileWidth, tileHeight, rgba)
+        renderer.setRenderTarget(null)
+        target.dispose()
+
+        copyRenderTargetTileToOrtho({
+          rgba,
+          tileWidth,
+          tileHeight,
+          rasterRowStart: rowStart,
+          rasterColStart: colStart,
+          rasterRows: plan.rows,
+          rasterCols: plan.cols,
+          rgb,
+        })
+
+        tileIndex += 1
+        onTile(`渲染正射影像 ${tileIndex}/${totalTiles}`)
+        await yieldToBrowser()
+      }
+    }
+  } finally {
+    scene.remove(renderRoot)
+    mesh.material = originalMaterial
+    for (const material of orthoMaterials) {
+      material.dispose()
+    }
+    renderer.dispose()
+    renderer.forceContextLoss()
+  }
+
+  return rgb
+}
+
+async function exportTerrainDemPackage(): Promise<void> {
+  if (exporting) return
+  if (capturedTileNodes.size === 0) {
+    setGlbPreviewStatus('没有可导出的锚点内容', 'error', '请先添加一个锚点', 2200)
+    return
+  }
+  exporting = true
+  exportTerrainDemButton.disabled = true
+  exportCurrentGlbButton.disabled = true
+  exportTerrainPackageButton.disabled = true
+  try {
+    setGlbPreviewStatus('正在生成 DEM…', 'loading', '焊接地形网格')
+    const exportRoot = buildMergedCaptureRoot()
+    try {
+      const mergedMesh = exportRoot.getObjectByName('merged-terrain') as THREE.Mesh | undefined
+      if (!mergedMesh || !mergedMesh.isMesh || !mergedMesh.geometry) {
+        throw new Error('当前锚点没有可导出的合并地形网格。')
+      }
+
+      const { plan, warnings } = planDemGrid(mergedMesh.geometry, {
+        cellSize: readDemCellSizeOption(),
+      })
+      const frame: DemExportFrame = {
+        latitudeDegrees: settings.lat,
+        longitudeDegrees: settings.lon,
+        groundElevationMeters: settings.groundElevation,
+      }
+      const geo = resolveDemGeoReference(plan, frame)
+
+      setGlbPreviewStatus(
+        '正在采样 DEM…',
+        'loading',
+        `网格 ${plan.cols}×${plan.rows} · 间距 ${plan.cellSizeMeters}m`,
+      )
+      const sample = await sampleDemHeights(mergedMesh.geometry, plan, frame, {
+        onProgress: (progress) => {
+          const percent = progress.total > 0 ? Math.round((progress.loaded / progress.total) * 100) : 100
+          setGlbPreviewStatus('正在采样 DEM…', 'loading', `${progress.label} · ${percent}%`)
+        },
+      })
+      if (sample.hitCount === 0) {
+        throw new Error('DEM 采样失败：射线没有命中地形网格。')
+      }
+      if (sample.filledRatio > 0.05) {
+        warnings.push(`采样空洞占比 ${(sample.filledRatio * 100).toFixed(1)}%，已用最近有效值填充。`)
+      }
+
+      const demBuffer = encodeDemGeoTiff(sample.heights, plan, geo)
+
+      let orthoBuffer: ArrayBuffer | null = null
+      if (demOrthoInput.checked) {
+        setGlbPreviewStatus('正在渲染正射影像…', 'loading', `${plan.cols}×${plan.rows} 像素`)
+        const rgb = await renderOrthoRaster(exportRoot, mergedMesh, plan, (label) => {
+          setGlbPreviewStatus('正在渲染正射影像…', 'loading', label)
+        })
+        fillRgbHoles(rgb, sample.wasHole, plan.rows, plan.cols)
+        orthoBuffer = encodeOrthoGeoTiff(rgb, plan, geo)
+      }
+
+      const sidecar = buildTerrainDemSidecar({
+        frame,
+        plan,
+        geo,
+        heights: sample.heights,
+        sample,
+        sourceTriangleCount: lastTerrainMergeStats?.outputTriangleCount ?? 0,
+        hasOrtho: orthoBuffer !== null,
+        warnings,
+      })
+
+      const zipEntries = [
+        { name: 'dem.tif', bytes: new Uint8Array(demBuffer) },
+        ...(orthoBuffer ? [{ name: 'ortho.tif', bytes: new Uint8Array(orthoBuffer) }] : []),
+        { name: 'dem.json', bytes: new TextEncoder().encode(JSON.stringify(sidecar, null, 2)) },
+      ]
+      const zipBytes = buildZipArchive(zipEntries)
+      const blob = new Blob([zipBytes], { type: 'application/zip' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `terrain-dem-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.zip`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+
+      setGlbPreviewStatus(
+        'DEM 包导出完成',
+        'ok',
+        `${plan.cols}×${plan.rows} · ${plan.cellSizeMeters}m 间距${orthoBuffer ? ' · 含正射影像' : ''}`,
+        3200,
+      )
+    } finally {
+      disposeObject3DResources(exportRoot)
+    }
+  } catch (error) {
+    setGlbPreviewStatus(
+      'DEM 包导出失败',
+      'error',
+      error instanceof Error ? error.message : '请稍后重试',
+      3600,
+    )
+  } finally {
+    exporting = false
+    setCaptureButtonState()
+  }
+}
+
 function resizeMain(): void {
   const width = Math.max(1, viewport.clientWidth)
   const height = Math.max(1, viewport.clientHeight)
@@ -2091,6 +2367,7 @@ $('#apply-location').addEventListener('click', applyLocation)
 addAnchorButton.addEventListener('click', handleAddAnchor)
 exportCurrentGlbButton.addEventListener('click', () => void exportCurrentGlb())
 exportTerrainPackageButton.addEventListener('click', () => void exportTerrainPackage())
+exportTerrainDemButton.addEventListener('click', () => void exportTerrainDemPackage())
 anchorList.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof HTMLElement)) return

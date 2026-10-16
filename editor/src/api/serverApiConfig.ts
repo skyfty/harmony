@@ -15,6 +15,9 @@ type RuntimeConfig = {
 } | undefined
 
 function readRuntimeConfig(): RuntimeConfig {
+  if (typeof window === 'undefined') {
+    return undefined
+  }
   return (window as any)?.__HARMONY_RUNTIME_CONFIG__ as RuntimeConfig
 }
 

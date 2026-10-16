@@ -199,6 +199,51 @@ export async function createResourceAssetApi(payload: FormData) {
   });
 }
 
+export interface ResourcePackSummary {
+  fileCount: number;
+  kind: 'dem' | 'geometry';
+  ktx2Count?: number;
+  sourceZipName: null | string;
+  textureCount: number;
+  totalBytes: number;
+  warnings: string[];
+}
+
+export interface ResourcePackUploadResult {
+  asset: ResourceAssetItem;
+  category: ResourceCategoryItem;
+  dependencies: ResourceAssetItem[];
+  pack: ResourcePackSummary;
+  reused: boolean;
+}
+
+/**
+ * Uploads a 3dtiles-viewer terrain resource pack (zip). The server keeps the
+ * archive layout (textures/ next to scene.glb) and registers the primary asset
+ * plus its hidden dependency assets.
+ */
+export async function uploadResourcePackApi(
+  payload: FormData,
+  options: { onUploadProgress?: (percent: number) => void } = {},
+) {
+  return requestClient.post<ResourcePackUploadResult>('/admin/resources/terrain-packs', payload, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+    onUploadProgress: (event) => {
+      if (!options.onUploadProgress) {
+        return;
+      }
+      const total = Number(event.total ?? 0);
+      const loaded = Number(event.loaded ?? 0);
+      if (!total || !Number.isFinite(total) || total <= 0) {
+        return;
+      }
+      options.onUploadProgress(Math.min(100, Math.round((loaded / total) * 100)));
+    },
+  });
+}
+
 export async function updateResourceAssetApi(id: string, payload: FormData) {
   return requestClient.put<ResourceAssetItem>(`/admin/resources/assets/${id}`, payload, {
     headers: {

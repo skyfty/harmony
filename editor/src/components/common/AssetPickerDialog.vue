@@ -15,6 +15,8 @@ const props = withDefaults(
     selectedAssetIds?: string[]
     /** Optional list of allowed filename extensions (without dot), e.g. ['wall', 'glb']. */
     extensions?: string[]
+    /** Optional extra predicate applied after the built-in filters. */
+    filter?: (asset: ProjectAsset) => boolean
     assets?: ProjectAsset[]
     anchor?: { x: number; y: number } | null
     title?: string
@@ -277,6 +279,7 @@ watch(
             :multiple="multiple"
             v-model:selected-asset-ids="selectedAssetIds"
             :extensions="extensions"
+            :asset-filter="filter"
             :assets="allAssets"
             :show-search="showSearch"
             :show-clear-selection="showClearSelection"

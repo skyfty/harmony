@@ -39,6 +39,16 @@ import {
   savePlanningDemToIndexedDB as savePlanningDemToStorage,
   storePlanningDemBlobByHash,
 } from '@/utils/planningDemStorage'
+import {
+  isTerrainDemPackageZip,
+  parseTerrainDemPackageZip,
+  verifyTerrainDemPackageImport,
+} from '@/utils/terrainDemPackageZip'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import type { ProjectAsset } from '@/types/project-asset'
+import { isTerrainDemPackAsset, loadTerrainDemPackFileFromAsset } from '@/utils/terrainPackLibrary'
+import { sha256Hex as computeSha256Hex } from '@harmony/utils/hash'
 import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema/core'
 import {
   createStrictQgis16BitHeightmapEncoding,
@@ -2107,6 +2117,48 @@ const currentDemUsesHeightmapImage = computed<boolean>(() => {
     return false
   }
   return isPlanningDemHeightmapImageSource(dem.filename ?? '', dem.mimeType ?? null)
+})
+
+const demPackPickerOpen = ref(false)
+const demPackImporting = ref(false)
+const assetCacheStore = useAssetCacheStore()
+
+function openDemPackPicker() {
+  demPackPickerOpen.value = true
+}
+
+async function handleDemPackAssetSelected(asset: ProjectAsset | null) {
+  if (!asset) {
+    return
+  }
+  demImportError.value = null
+  demPackImporting.value = true
+  try {
+    const file = await loadTerrainDemPackFileFromAsset({
+      asset,
+      ensureAssetFile: (assetId, options) => assetCacheStore.ensureAssetFile(assetId, options),
+    })
+    await loadPlanningTerrainDemPackage(file)
+  } catch (error) {
+    demImportError.value = error instanceof Error ? error.message : '从资源库导入 DEM 资源包失败。'
+  } finally {
+    demPackImporting.value = false
+    demPackPickerOpen.value = false
+  }
+}
+
+const currentDemLayerMeta = computed<string>(() => {
+  const dem = planningTerrain.value.dem
+  if (!dem) {
+    return ''
+  }
+  const base = currentDemUsesHeightmapImage.value ? 'Image heightmap source' : 'GeoTIFF elevation source'
+  const crs = dem.sourcePackage?.crs
+  if (!crs) {
+    return base
+  }
+  const hemisphere = crs.hemisphere === 'south' ? 'S' : 'N'
+  return `${base} · 3dtiles 包 UTM ${crs.zone}${hemisphere}`
 })
 
 const selectedDemUsesHeightmapImage = computed<boolean>(() => {
@@ -5368,6 +5420,10 @@ function clearPlanningDemImport() {
 async function loadPlanningDemFile(file: File) {
   demImportError.value = null
   try {
+    if (isTerrainDemPackageZip(file.name, file.type || null)) {
+      await loadPlanningTerrainDemPackage(file)
+      return
+    }
     const validation = validatePlanningDemImport(file)
     const result = await parsePlanningDemFile(file, buildPlanningDemParseOptions(planningTerrain.value.dem, validation))
     await storePlanningDemBlobByHash(result.sourceFileHash, file)
@@ -5382,6 +5438,53 @@ async function loadPlanningDemFile(file: File) {
   } catch (error) {
     demImportError.value = error instanceof Error ? error.message : 'Failed to import DEM file.'
   }
+}
+
+/**
+ * Imports a 3dtiles-viewer terrain package (zip with dem.tif + dem.json and an
+ * optional ortho.tif). The DEM raster goes through the regular GeoTIFF import;
+ * the ortho raster is persisted in the DEM blob store and referenced from the
+ * terrain's `orthophoto` metadata.
+ */
+async function loadPlanningTerrainDemPackage(file: File) {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const contents = parseTerrainDemPackageZip(bytes)
+
+  const demFile = new File([contents.dem.blob], contents.dem.filename, { type: contents.dem.mimeType })
+  const validation = validatePlanningDemImport(demFile)
+  const result = await parsePlanningDemFile(demFile, buildPlanningDemParseOptions(planningTerrain.value.dem, validation))
+  verifyTerrainDemPackageImport(contents.sidecar, result)
+  await storePlanningDemBlobByHash(result.sourceFileHash, contents.dem.blob)
+
+  const nextDem = demImportResultToTerrainData(result)
+  nextDem.sourcePackage = contents.sidecar
+
+  if (contents.ortho) {
+    const orthoBuffer = await contents.ortho.blob.arrayBuffer()
+    const orthoHash = await computeSha256Hex(orthoBuffer)
+    await storePlanningDemBlobByHash(orthoHash, contents.ortho.blob)
+    nextDem.orthophoto = {
+      version: 1,
+      sourceFileHash: orthoHash,
+      filename: contents.ortho.filename,
+      mimeType: contents.ortho.mimeType,
+      source: 'manual-upload',
+      width: contents.sidecar.ortho?.width,
+      height: contents.sidecar.ortho?.height,
+      previewHash: null,
+      previewSize: null,
+      opacity: 1,
+      visible: true,
+    }
+  }
+
+  planningTerrain.value = {
+    ...planningTerrain.value,
+    dem: nextDem,
+  }
+  activeListItem.value = { type: 'dem', id: 'terrain-dem' }
+  planningDemPreviewUrl.value = result.preview?.dataUrl ?? null
+  markPlanningDirty()
 }
 
 function loadImageFromFile(file: File): Promise<HTMLImageElement> {
@@ -6107,6 +6210,17 @@ onBeforeUnmount(() => {
                     size="small"
                     variant="text"
                     color="primary"
+                    title="从资源库选择 DEM 资源包"
+                    :loading="demPackImporting"
+                    @click="openDemPackPicker"
+                  >
+                    <v-icon>mdi-database-arrow-down-outline</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon
+                    size="small"
+                    variant="text"
+                    color="primary"
                     title="Import DEM"
                     @click="handleDemUploadClick"
                   >
@@ -6131,7 +6245,7 @@ onBeforeUnmount(() => {
               <input
                 ref="demFileInputRef"
                 type="file"
-                accept=".tif,.tiff,.png"
+                accept=".tif,.tiff,.png,.zip"
                 class="sr-only"
                 @change="handleDemFileChange"
               >
@@ -6144,7 +6258,7 @@ onBeforeUnmount(() => {
                 >
                   <div class="layer-content">
                     <div class="layer-name">DEM / Heightmap Layer</div>
-                    <div class="layer-meta">{{ currentDemUsesHeightmapImage ? 'Image heightmap source' : 'GeoTIFF elevation source' }}</div>
+                    <div class="layer-meta">{{ currentDemLayerMeta }}</div>
                   </div>
                 </v-list-item>
                 <v-list-item v-else class="dem-import-panel__empty">
@@ -6651,6 +6765,15 @@ onBeforeUnmount(() => {
           </v-card-actions>
         </v-card>
       </v-dialog>
+
+      <AssetPickerDialog
+        v-model="demPackPickerOpen"
+        :filter="isTerrainDemPackAsset"
+        title="从资源库选择 DEM 资源包"
+        confirm-text="导入"
+        cancel-text="取消"
+        @update:asset="handleDemPackAssetSelected"
+      />
     </v-card>
   </v-dialog>
 </template>

@@ -37,6 +37,7 @@ import { generateUuid } from '@/utils/uuid'
 import { buildPlanningDemGroundRegionData, type PlanningDemBuildProgress, type PlanningDemHeightRegion, type PlanningDemRegionConversionResult } from '@/utils/planningDemToGround'
 import { buildPlanningDemTerrainConversionInWorker } from '@/utils/planningDemTerrainDataset'
 import { createScenesStoreTerrainDatasetHeightSampler } from '@/utils/terrainDatasetRuntime'
+import { resolveGroundWorkingCellSizeForBounds } from '@/utils/planningGroundCellSize'
 import { sha1Bytes } from '@harmony/utils/hash'
 export type PlanningConversionProgress = {
   step: string
@@ -136,6 +137,14 @@ function groundBoundsChanged(
     || Math.abs(currentBounds.maxZ - nextBounds.maxZ) > 1e-6
 }
 
+/**
+ * The runtime ground stores its whole working grid as two float64 layers inside
+ * the scene height sidecar (16 bytes per vertex), so the grid implied by
+ * `worldBounds / cellSize` must stay inside a vertex budget. DEM conversions
+ * can expand the ground bounds far beyond the default working area (tens of
+ * kilometres); coarsen the working cell size so the sidecar stays allocatable
+ * instead of trying to build multi-gigabyte buffers.
+ */
 function stripTransientGroundFieldFromDynamicMesh<T extends GroundRuntimeDynamicMesh>(dynamicMesh: T): Omit<T, 'terrainScatter'> {
   const { terrainScatter: _ignoredTerrainField, ...nextDynamicMesh } = dynamicMesh as T & { terrainScatter?: unknown }
   return nextDynamicMesh as Omit<T, 'terrainScatter'>
@@ -1822,9 +1831,15 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
       const nextGroundBounds = hadGroundNodeBeforeConversion
         ? mergeGroundBounds(currentGroundBounds, demGroundBounds)
         : demGroundBounds
+      const nextGroundCellSize = resolveGroundWorkingCellSizeForBounds(
+        currentGroundDefinition.cellSize,
+        nextGroundBounds,
+        currentGroundDefinition.chunkSizeMeters,
+      )
 
       const needsResolutionUpdate = Number(currentGroundDefinition.editTileResolution) !== nextEditTileResolution
         || Number(currentGroundDefinition.editTileSizeMeters) !== GROUND_TERRAIN_CHUNK_SIZE_METERS
+        || Math.abs(Number(currentGroundDefinition.cellSize) - nextGroundCellSize) > 1e-6
 
       if (groundBoundsChanged(currentGroundBounds, nextGroundBounds) || needsResolutionUpdate) {
         sceneStore.updateGroundNodeDynamicMesh(
@@ -1832,6 +1847,7 @@ export async function convertPlanningTo3DScene(options: ConvertPlanningToSceneOp
           stripTransientGroundFieldFromDynamicMesh({
             ...currentGroundDefinition,
             worldBounds: nextGroundBounds,
+            cellSize: nextGroundCellSize,
             editTileSizeMeters: GROUND_TERRAIN_CHUNK_SIZE_METERS,
             editTileResolution: nextEditTileResolution,
           } as GroundRuntimeDynamicMesh),

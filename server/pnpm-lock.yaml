@@ -1465,6 +1465,11 @@ packages:
     peerDependencies:
       three: '>= 0.159.0'
 
+  three-mesh-bvh@0.9.16:
+    resolution: {integrity: sha512-2RK+5MJOaiHJhopURn2CUkOHiF3tFloD0uZBfhebV0CKB7mgVLpWUWaDpOyhNJRDkKKe7x4rRfTHZ32GwpXdkw==}
+    peerDependencies:
+      three: '>= 0.159.0'
+
   three-nebula@10.0.3:
     resolution: {integrity: sha512-cX0UVkCGKx1r36z/yo26HAjsMGa3NcSvGZlODTLo6lfNikpK7oYXgq5r4yVrjaGjhpeKnFalNTI8LsHiZ8KlYw==}
     peerDependencies:
@@ -1753,6 +1758,7 @@ snapshots:
       geotiff: 3.0.5
       svgo: 4.0.0
       three: 0.186.0
+      three-mesh-bvh: 0.9.16(three@0.186.0)
     transitivePeerDependencies:
       - '@babylonjs/core'
       - '@babylonjs/loaders'
@@ -2915,6 +2921,10 @@ snapshots:
   three-csm@4.2.1: {}
 
   three-mesh-bvh@0.9.15(three@0.186.0):
+    dependencies:
+      three: 0.186.0
+
+  three-mesh-bvh@0.9.16(three@0.186.0):
     dependencies:
       three: 0.186.0
 

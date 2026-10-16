@@ -63,3 +63,27 @@ node tools/dist/cli-bin.js process-terrain-textures --manifest <解压目录>/te
 - proceduralLandscape `baseMapMode='replace'`（默认）：只下载纯几何 GLB，零贴图请求；
 - `blend` 模式与普通渲染：按可见性与距离懒加载贴图（KTX2 优先、JPEG 兜底，64MB LRU 预算）；
 - 需要在微信公众平台配置贴图所在域名为 `downloadFile` 合法域名。
+
+## DEM + 正射影像导出（编辑器地形流程）
+
+「导出 DEM 包」把当前捕获的合并地形栅格化为高度场，下载 `terrain-dem-<lat>-<lon>.zip`：
+
+- `dem.tif` —— float32 单波段 GeoTIFF 高程（WGS84 椭球高），投影为锚点所在 UTM 带（EPSG 326xx/327xx；导出范围跨越分带时直接报错，请调整锚点）；
+- `ortho.tif`（可选）—— 与 DEM 同一网格、同一朝向（行=北→南、列=西→东）的 RGB 正射影像，由合并网格用正交相机俯视渲染；
+- `dem.json` —— 侧车清单：锚点（经纬度/地面海拔）、CRS、geotransform、光栅尺寸与间距、高程范围、空洞填充统计与警告。
+
+选项：
+
+- **DEM 分辨率**：默认「自动」，按网格三角形中位边长取整到 0.5/1/2/5m 档；也可手动 1/2/5/10m。网格恒不超过 4096×4096，超限会自动放宽间距并把警告写入侧车；
+- **正射影像**：取消勾选则只导出高程；
+- 采样空洞（网格未覆盖处）用最近有效值填充，填充率超过 5% 时记录警告。
+
+高程基准为 WGS84 椭球高，与 SRTM/QGIS 使用的大地水准面高存在系统差；该差值记录在侧车的锚点信息中，可在编辑器按需平移校正。
+
+编辑器导入：`PlanningDialog → DEM / Heightmap` 上传按钮同时接受 `.zip`。选择该包后：
+
+1. `dem.tif` 走既有 GeoTIFF DEM 导入校验（投影坐标系、方形像素、NoData 限制），自动带出世界范围，无需手工覆盖；
+2. `ortho.tif` 存入 planning 资源库，并写入地形 `orthophoto` 元数据（`source: 'manual-upload'`）；
+3. 侧车写入 `PlanningTerrainDemData.sourcePackage`，用于展示来源（UTM 带）与后续偏移校正。
+
+导入后地形由 `planningDemToGround` 分块生成，proceduralLandscape 直接作用于该地形；`replace` 模式下不会请求任何 GLB 贴图。

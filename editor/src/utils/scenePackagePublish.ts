@@ -47,6 +47,10 @@ import {
 } from '@/utils/assetRegistryIdNormalization'
 import { resolveProjectAssetExtension, shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
 import {
+  applyTerrainPackExternalRegistryEntries,
+  shouldSkipTerrainPackEmbedding,
+} from '@/utils/terrainPackPublish'
+import {
   calculateRuntimeSceneResourceSummary,
   cloneSceneDocumentWithRuntimeGroundSidecars,
   buildRuntimeAssetRegistryForExport,
@@ -627,7 +631,7 @@ function stripEditorOnlySceneFields(
   delete document.resourceSummary
 }
 
-async function collectPublishEmbedAssetsFromScenes(
+export async function collectPublishEmbedAssetsFromScenes(
   scenes: ScenePackagePublishScene[],
 ): Promise<Map<string, ResolvedEmbedAsset>> {
   const out = new Map<string, ResolvedEmbedAsset>()
@@ -647,6 +651,10 @@ async function collectPublishEmbedAssetsFromScenes(
       if (!assetId) continue
       const canonicalAssetId = assetAliases.get(assetId) ?? assetId
       if (shouldSkipRuntimeExportAsset(doc, canonicalAssetId, retainedConfigAssetIds, assetAliases)) continue
+      // Geometry terrain packs keep their server URL so texture streaming can
+      // resolve `textures/*` next to `scene.glb`; embedding would relocate the
+      // GLB and orphan the external textures.
+      if (shouldSkipTerrainPackEmbedding(getAssetFromCatalog(doc.assetCatalog, canonicalAssetId, assetAliases))) continue
       const downloadUrl = typeof item?.downloadUrl === 'string' ? item.downloadUrl.trim() : ''
       if (!downloadUrl || entryHasLocalSource(canonicalAssetId)) continue
       const asset = getAssetFromCatalog(doc.assetCatalog, canonicalAssetId, assetAliases)
@@ -668,6 +676,9 @@ async function collectPublishEmbedAssetsFromScenes(
       }
       const canonicalAssetId = assetAliases.get(normalized) ?? normalized
       if (out.has(canonicalAssetId) || shouldSkipRuntimeExportAsset(doc, canonicalAssetId, retainedConfigAssetIds, assetAliases)) {
+        continue
+      }
+      if (shouldSkipTerrainPackEmbedding(getAssetFromCatalog(doc.assetCatalog, canonicalAssetId, assetAliases))) {
         continue
       }
       if (entryHasLocalSource(canonicalAssetId)) {
@@ -1597,6 +1608,7 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
       sharedAssetPathById,
       resources,
     })
+    applyTerrainPackExternalRegistryEntries(preparedDocument)
 
     const groundHeightSidecar = await scenesStore.loadGroundHeightSidecar(scene.id)
     if (groundHeightSidecar) {

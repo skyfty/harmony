@@ -26,6 +26,8 @@ const props = withDefaults(
     extensions?: string[]
     thumbnailSize?: number
     assets?: ProjectAsset[]
+    /** Optional extra predicate applied after the built-in filters. */
+    assetFilter?: (asset: ProjectAsset) => boolean
     showSearch?: boolean
     showClearSelection?: boolean;
   }>(),
@@ -221,6 +223,9 @@ const filteredAssets = computed(() => {
       return false
     }
     if (!matchesRequestedExtension(asset)) {
+      return false
+    }
+    if (props.assetFilter && !props.assetFilter(asset)) {
       return false
     }
     if (seriesFilter) {

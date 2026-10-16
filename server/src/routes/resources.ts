@@ -34,6 +34,7 @@ import {
   updateAssetTag,
   uploadAsset,
   uploadAssetBundle,
+  uploadTerrainPack,
   listResourceCategoryEntries,
 } from '@/controllers/resourceController'
 import { koaBody } from '@/utils/bodyParser'
@@ -73,6 +74,16 @@ resourceRouter.post(
     formidable: { keepExtensions: true },
   }),
   uploadAssetBundle,
+)
+resourceRouter.post(
+  '/terrain-packs',
+  requireAnyPermission(['resource:write']),
+  koaBody({
+    multipart: true,
+    urlencoded: true,
+    formidable: { keepExtensions: true, maxFileSize: 512 * 1024 * 1024 },
+  }),
+  uploadTerrainPack,
 )
 resourceRouter.post(
   '/assets',

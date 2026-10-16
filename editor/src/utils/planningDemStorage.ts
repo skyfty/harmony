@@ -1,4 +1,5 @@
 import type { PlanningTerrainDemData, PlanningTerrainOrthophotoData } from '@/types/planning-scene-data'
+import type { TerrainDemPackageSidecar } from '@schema/terrainDemPackage'
 
 export interface PlanningDemBlobRecord {
   hash: string
@@ -138,6 +139,22 @@ function clonePlanningTerrainDemData(data: PlanningTerrainDemData | null | undef
     previewHash: data.previewHash ?? null,
     previewSize: data.previewSize ? { width: data.previewSize.width, height: data.previewSize.height } : null,
     orthophoto: clonePlanningTerrainOrthophotoData(data.orthophoto ?? null),
+    sourcePackage: cloneTerrainDemPackageSidecar(data.sourcePackage ?? null),
+  }
+}
+
+function cloneTerrainDemPackageSidecar(data: TerrainDemPackageSidecar | null | undefined): TerrainDemPackageSidecar | null {
+  if (!data) {
+    return null
+  }
+  return {
+    ...data,
+    anchor: { ...data.anchor },
+    crs: { ...data.crs },
+    geoTransform: [...data.geoTransform] as TerrainDemPackageSidecar['geoTransform'],
+    dem: { ...data.dem },
+    ortho: data.ortho ? { ...data.ortho } : null,
+    stats: { ...data.stats, warnings: [...data.stats.warnings] },
   }
 }
 

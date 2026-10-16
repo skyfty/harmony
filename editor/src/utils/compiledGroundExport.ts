@@ -80,7 +80,7 @@ type CompiledGroundBuildContext = {
   collisionTiles: CompiledGroundCollisionTileRecord[]
 }
 
-type BuildCompiledGroundAsyncOptions = {
+export type BuildCompiledGroundAsyncOptions = {
   yieldEveryTiles?: number
   onProgress?: (progress: CompiledGroundBuildProgress) => void
   onRenderTileBuilt?: (payload: {
@@ -97,6 +97,12 @@ type BuildCompiledGroundAsyncOptions = {
   workerBatchSize?: number
   renderChunksPerTile?: number
   collisionChunksPerTile?: number
+  /**
+   * Collision tiles are disabled by default: runtime collision is generated
+   * dynamically by the infinite ground chunk colliders. Set to `true` only for
+   * diagnostics or when a consumer explicitly requires prebuilt collision tiles.
+   */
+  includeCollisionTiles?: boolean
   renderSampleStepMultiplier?: number
   minRenderSampleStepMeters?: number
   collisionSampleStepMultiplier?: number
@@ -104,11 +110,111 @@ type BuildCompiledGroundAsyncOptions = {
   workspaceId?: string | null
 }
 
-const DEFAULT_RENDER_CHUNKS_PER_TILE = 4
 const DEFAULT_COLLISION_CHUNKS_PER_TILE = 1
 const DEFAULT_COLLISION_SAMPLE_STEP_METERS = 2
-const DEFAULT_COMPILED_GROUND_WORKER_BATCH_SIZE = 1
+const DEFAULT_COMPILED_GROUND_WORKER_BATCH_SIZE = 256
 const MAX_COMPILED_GROUND_WORKERS = 8
+const MAX_COMPILED_GROUND_RENDER_TILES = 10000
+const MAX_COMPILED_GROUND_TILE_SAMPLES_PER_AXIS = 256
+const ADAPTIVE_RENDER_CHUNK_STEPS = [1, 2, 4, 8] as const
+
+/**
+ * Chooses how many 100m chunks one compiled render tile spans so that large
+ * terrain extents do not explode into tens of thousands of tiny tiles. Small
+ * scenes keep 100m tiles; huge DEM conversions widen the tile (200/400/800m)
+ * until the whole coverage fits inside the tile budget. A per-tile vertex
+ * budget (`tileSize <= 256 * cellSize`) caps the widening for fine grids.
+ */
+export function resolveAdaptiveRenderChunksPerTile(params: {
+  coverageSpanX: number
+  coverageSpanZ: number
+  chunkSizeMeters: number
+  cellSizeMeters: number
+}): number {
+  const chunkSizeMeters = Number.isFinite(params.chunkSizeMeters) && params.chunkSizeMeters > 0
+    ? params.chunkSizeMeters
+    : 100
+  const cellSizeMeters = Number.isFinite(params.cellSizeMeters) && params.cellSizeMeters > 0
+    ? params.cellSizeMeters
+    : 1
+  const maxByResolution = Math.max(
+    1,
+    Math.floor((MAX_COMPILED_GROUND_TILE_SAMPLES_PER_AXIS * cellSizeMeters) / chunkSizeMeters),
+  )
+  const allowedSteps = ADAPTIVE_RENDER_CHUNK_STEPS.filter((step) => step <= maxByResolution)
+  const resolutionCap = (allowedSteps.length > 0 ? allowedSteps[allowedSteps.length - 1] : 1) ?? 1
+
+  const spanX = Number.isFinite(params.coverageSpanX) ? Math.max(0, params.coverageSpanX) : 0
+  const spanZ = Number.isFinite(params.coverageSpanZ) ? Math.max(0, params.coverageSpanZ) : 0
+  if (!(spanX > 0) || !(spanZ > 0)) {
+    return Math.min(resolutionCap, ADAPTIVE_RENDER_CHUNK_STEPS[0] ?? 1)
+  }
+
+  let chosen: number = ADAPTIVE_RENDER_CHUNK_STEPS[ADAPTIVE_RENDER_CHUNK_STEPS.length - 1] ?? 8
+  for (const step of ADAPTIVE_RENDER_CHUNK_STEPS) {
+    const tileSize = chunkSizeMeters * step
+    const tiles = Math.ceil(spanX / tileSize) * Math.ceil(spanZ / tileSize)
+    if (tiles <= MAX_COMPILED_GROUND_RENDER_TILES) {
+      chosen = step
+      break
+    }
+  }
+  return Math.max(1, Math.min(chosen, resolutionCap))
+}
+
+/**
+ * Resolves the chunk-aligned coverage and render tile geometry for a ground
+ * definition. Shared by the build context and the compiled ground cache key so
+ * both derive the exact same (adaptive) tile layout.
+ */
+export function resolveCompiledGroundTileLayout(
+  definition: GroundDynamicMesh,
+  options: Pick<BuildCompiledGroundAsyncOptions, 'renderChunksPerTile'> = {},
+): {
+  chunkSizeMeters: number
+  coveredChunkBounds: ReturnType<typeof resolveGroundChunkBounds>
+  coverageBounds: { minX: number; minZ: number; maxX: number; maxZ: number }
+  renderChunksPerTile: number
+  renderTileSizeMeters: number
+} {
+  const coveredChunkBounds = resolveGroundChunkBounds(definition)
+  const chunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && (definition.chunkSizeMeters ?? 0) > 0
+    ? Number(definition.chunkSizeMeters)
+    : 100
+  const cellSize = Number.isFinite(definition.cellSize) && (definition.cellSize ?? 0) > 0
+    ? Number(definition.cellSize)
+    : 1
+  const coveredChunkOrigin = resolveGroundChunkOrigin({
+    chunkX: coveredChunkBounds.minChunkX,
+    chunkZ: coveredChunkBounds.minChunkZ,
+  }, chunkSizeMeters)
+  const coveredChunkMaxOrigin = resolveGroundChunkOrigin({
+    chunkX: coveredChunkBounds.maxChunkX,
+    chunkZ: coveredChunkBounds.maxChunkZ,
+  }, chunkSizeMeters)
+  const coverageBounds = {
+    minX: coveredChunkOrigin.x,
+    minZ: coveredChunkOrigin.z,
+    maxX: coveredChunkMaxOrigin.x + chunkSizeMeters,
+    maxZ: coveredChunkMaxOrigin.z + chunkSizeMeters,
+  }
+  const explicitChunks = Number.isFinite(options.renderChunksPerTile) && (options.renderChunksPerTile ?? 0) > 0
+    ? Math.max(1, Math.trunc(options.renderChunksPerTile as number))
+    : null
+  const renderChunksPerTile = explicitChunks ?? resolveAdaptiveRenderChunksPerTile({
+    coverageSpanX: coverageBounds.maxX - coverageBounds.minX,
+    coverageSpanZ: coverageBounds.maxZ - coverageBounds.minZ,
+    chunkSizeMeters,
+    cellSizeMeters: cellSize,
+  })
+  return {
+    chunkSizeMeters,
+    coveredChunkBounds,
+    coverageBounds,
+    renderChunksPerTile,
+    renderTileSizeMeters: chunkSizeMeters * renderChunksPerTile,
+  }
+}
 
 function resolveIncludedTileKeySet(options: BuildCompiledGroundAsyncOptions): Set<string> | null {
   if (!Array.isArray(options.includedTileKeys) || options.includedTileKeys.length === 0) {
@@ -326,13 +432,11 @@ function prepareCompiledGroundBuildContext(
   const renderRootPath = `${sceneRoot}/render`
   const collisionRootPath = `${sceneRoot}/collision`
   const worldBounds = resolveGroundWorldBounds(definition)
-  const coveredChunkBounds = resolveGroundChunkBounds(definition)
-  const chunkSizeMeters = Number.isFinite(definition.chunkSizeMeters) && definition.chunkSizeMeters! > 0
-    ? Number(definition.chunkSizeMeters)
-    : 100
-  const renderChunksPerTile = Number.isFinite(options.renderChunksPerTile) && (options.renderChunksPerTile ?? 0) > 0
-    ? Math.max(1, Math.trunc(options.renderChunksPerTile as number))
-    : DEFAULT_RENDER_CHUNKS_PER_TILE
+  const tileLayout = resolveCompiledGroundTileLayout(definition, options)
+  const coveredChunkBounds = tileLayout.coveredChunkBounds
+  const chunkSizeMeters = tileLayout.chunkSizeMeters
+  const coverageBounds = tileLayout.coverageBounds
+  const renderTileSizeMeters = tileLayout.renderTileSizeMeters
   const collisionChunksPerTile = Number.isFinite(options.collisionChunksPerTile) && (options.collisionChunksPerTile ?? 0) > 0
     ? Math.max(1, Math.trunc(options.collisionChunksPerTile as number))
     : DEFAULT_COLLISION_CHUNKS_PER_TILE
@@ -349,21 +453,6 @@ function prepareCompiledGroundBuildContext(
   const minCollisionSampleStepMeters = Number.isFinite(options.minCollisionSampleStepMeters) && (options.minCollisionSampleStepMeters ?? 0) > 0
     ? Math.max(1e-6, Number(options.minCollisionSampleStepMeters))
     : DEFAULT_COLLISION_SAMPLE_STEP_METERS
-  const coveredChunkOrigin = resolveGroundChunkOrigin({
-    chunkX: coveredChunkBounds.minChunkX,
-    chunkZ: coveredChunkBounds.minChunkZ,
-  }, chunkSizeMeters)
-  const coveredChunkMaxOrigin = resolveGroundChunkOrigin({
-    chunkX: coveredChunkBounds.maxChunkX,
-    chunkZ: coveredChunkBounds.maxChunkZ,
-  }, chunkSizeMeters)
-  const coverageBounds = {
-    minX: coveredChunkOrigin.x,
-    minZ: coveredChunkOrigin.z,
-    maxX: coveredChunkMaxOrigin.x + chunkSizeMeters,
-    maxZ: coveredChunkMaxOrigin.z + chunkSizeMeters,
-  }
-  const renderTileSizeMeters = chunkSizeMeters * renderChunksPerTile
   const collisionTileSizeMeters = chunkSizeMeters * collisionChunksPerTile
   const renderSampleStepMeters = Math.max(
     cellSize * renderSampleStepMultiplier,
@@ -699,7 +788,9 @@ async function buildCompiledGroundPackageFilesWithWorkersAsync(
 
   try {
     await buildCompiledGroundPhaseWithWorkers(context, 'render', options, workers)
-    await buildCompiledGroundPhaseWithWorkers(context, 'collision', options, workers)
+    if (options.includeCollisionTiles === true) {
+      await buildCompiledGroundPhaseWithWorkers(context, 'collision', options, workers)
+    }
   } finally {
     for (const worker of workers) {
       closeCompiledGroundBuildWorkerRuntime(worker)
@@ -750,8 +841,11 @@ function finalizeCompiledGroundBuild(context: CompiledGroundBuildContext): Compi
   }
 }
 
-export function buildCompiledGroundPackageFiles(document: SceneJsonExportDocument): CompiledGroundExportResult | null {
-  const context = prepareCompiledGroundBuildContext(document)
+export function buildCompiledGroundPackageFiles(
+  document: SceneJsonExportDocument,
+  options: BuildCompiledGroundAsyncOptions = {},
+): CompiledGroundExportResult | null {
+  const context = prepareCompiledGroundBuildContext(document, options)
   if (!context) {
     return null
   }
@@ -760,9 +854,11 @@ export function buildCompiledGroundPackageFiles(document: SceneJsonExportDocumen
       appendRenderTile(context, row, column)
     }
   }
-  for (let row = 0; row < context.collisionRows; row += 1) {
-    for (let column = 0; column < context.collisionColumns; column += 1) {
-      appendCollisionTile(context, row, column)
+  if (options.includeCollisionTiles === true) {
+    for (let row = 0; row < context.collisionRows; row += 1) {
+      for (let column = 0; column < context.collisionColumns; column += 1) {
+        appendCollisionTile(context, row, column)
+      }
     }
   }
   return finalizeCompiledGroundBuild(context)
@@ -830,24 +926,26 @@ export async function buildCompiledGroundPackageFilesAsync(
     }
   }
 
-  for (let row = 0; row < context.collisionRows; row += 1) {
-    for (let column = 0; column < context.collisionColumns; column += 1) {
-      const tileKey = formatCompiledGroundTileKey(row, column)
-      if (includedTileKeys && !includedTileKeys.has(tileKey)) {
-        continue
-      }
-      appendCollisionTile(context, row, column)
-      collisionCompleted += 1
-      completedSinceYield += 1
-      options.onProgress?.({
-        phase: 'collision',
-        completed: collisionCompleted,
-        total: collisionTotal,
-        tileKey,
-      })
-      if (completedSinceYield >= yieldEveryTiles) {
-        completedSinceYield = 0
-        await yieldControl()
+  if (options.includeCollisionTiles === true) {
+    for (let row = 0; row < context.collisionRows; row += 1) {
+      for (let column = 0; column < context.collisionColumns; column += 1) {
+        const tileKey = formatCompiledGroundTileKey(row, column)
+        if (includedTileKeys && !includedTileKeys.has(tileKey)) {
+          continue
+        }
+        appendCollisionTile(context, row, column)
+        collisionCompleted += 1
+        completedSinceYield += 1
+        options.onProgress?.({
+          phase: 'collision',
+          completed: collisionCompleted,
+          total: collisionTotal,
+          tileKey,
+        })
+        if (completedSinceYield >= yieldEveryTiles) {
+          completedSinceYield = 0
+          await yieldControl()
+        }
       }
     }
   }

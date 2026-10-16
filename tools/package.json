@@ -57,7 +57,8 @@
     "@resvg/resvg-js": "^2.6.2",
     "geotiff": "^3.0.5",
     "svgo": "^4.0.0",
-    "three": "^0.186.0"
+    "three": "^0.186.0",
+    "three-mesh-bvh": "^0.9.16"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

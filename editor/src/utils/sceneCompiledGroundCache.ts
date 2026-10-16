@@ -13,6 +13,7 @@ import { hashString, stableSerialize } from '@schema/stableSerialize'
 import {
   buildCompiledGroundPackageFilesAsync,
   resolvePreferredCompiledGroundWorkerCount,
+  resolveCompiledGroundTileLayout,
   type CompiledGroundBuildProgress,
 } from './compiledGroundExport'
 
@@ -114,10 +115,12 @@ export type SceneCompiledGroundEnsureStatus = {
   phase: 'cache' | 'build-render' | 'build-collision' | 'persist' | 'ready'
 }
 
-export const SCENE_COMPILED_GROUND_PROFILE_VERSION = 2
+export const SCENE_COMPILED_GROUND_PROFILE_VERSION = 3
 export const SCENE_COMPILED_GROUND_BUILD_OPTIONS = Object.freeze({
-  renderChunksPerTile: 1,
   collisionChunksPerTile: 1,
+  // Runtime collision is generated dynamically by the infinite ground chunk
+  // colliders; prebuilt collision tiles are no longer produced.
+  includeCollisionTiles: false,
   renderSampleStepMultiplier: 1,
   minRenderSampleStepMeters: 1,
   collisionSampleStepMultiplier: 1,
@@ -423,12 +426,17 @@ export function computeSceneCompiledGroundBuildKey(
   if (!dynamicGround) {
     return `${sceneId}|no-ground`
   }
+  // The build call sites pass SCENE_COMPILED_GROUND_BUILD_OPTIONS without an
+  // explicit renderChunksPerTile, so the layout resolves the adaptive value.
+  const tileLayout = resolveCompiledGroundTileLayout(dynamicGround)
   return [
     sceneId,
     dynamicGround.terrainMode ?? 'finite',
     terrainDatasetId ?? '',
     `scene-profile:${SCENE_COMPILED_GROUND_PROFILE_VERSION}`,
-    SCENE_COMPILED_GROUND_BUILD_OPTIONS.renderChunksPerTile,
+    `renderChunks:${tileLayout.renderChunksPerTile}`,
+    `chunk:${tileLayout.chunkSizeMeters}`,
+    `cell:${Number(dynamicGround.cellSize) || 1}`,
     SCENE_COMPILED_GROUND_BUILD_OPTIONS.collisionChunksPerTile,
     SCENE_COMPILED_GROUND_BUILD_OPTIONS.renderSampleStepMultiplier,
     SCENE_COMPILED_GROUND_BUILD_OPTIONS.minRenderSampleStepMeters,
@@ -744,6 +752,33 @@ function toSceneCompiledGroundPackage(
   }
 }
 
+const COMPILED_GROUND_PROGRESS_INTERVAL_MS = 150
+
+/**
+ * Tile progress is reported once per tile by the builder; forwarding every
+ * event to the UI costs a reactive store update per tile (tens of thousands
+ * for large terrain). Emit at most every ~150ms, but always emit phase
+ * completion so the final counts stay exact.
+ */
+function createThrottledCompiledGroundProgressReporter(
+  reporter: ((progress: CompiledGroundBuildProgress) => void) | undefined,
+): ((progress: CompiledGroundBuildProgress) => void) | undefined {
+  if (typeof reporter !== 'function') {
+    return undefined
+  }
+  let lastEmittedAt = Number.NEGATIVE_INFINITY
+  return (progress) => {
+    const total = Number.isFinite(progress.total) ? progress.total : 0
+    const completed = Number.isFinite(progress.completed) ? progress.completed : 0
+    const isPhaseComplete = total > 0 && completed >= total
+    const now = Date.now()
+    if (isPhaseComplete || now - lastEmittedAt >= COMPILED_GROUND_PROGRESS_INTERVAL_MS) {
+      lastEmittedAt = now
+      reporter(progress)
+    }
+  }
+}
+
 async function buildSceneCompiledGroundPackage(
   document: SceneJsonExportDocument,
   options: {
@@ -753,12 +788,12 @@ async function buildSceneCompiledGroundPackage(
   } = {},
 ): Promise<SceneCompiledGroundPackage | null> {
   const built = await buildCompiledGroundPackageFilesAsync(document, {
-    yieldEveryTiles: 2,
+    yieldEveryTiles: 256,
     workerCount: resolvePreferredCompiledGroundWorkerCount(),
     workspaceId: options.workspaceId ?? null,
     ...SCENE_COMPILED_GROUND_BUILD_OPTIONS,
     includedTileKeys: options.includedTileKeys,
-    onProgress: options.onProgress,
+    onProgress: createThrottledCompiledGroundProgressReporter(options.onProgress),
   })
   return toSceneCompiledGroundPackage(built)
 }

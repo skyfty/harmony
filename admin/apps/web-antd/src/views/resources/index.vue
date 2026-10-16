@@ -24,17 +24,19 @@ import {
   restoreResourceAssetApi,
   updateResourceAssetApi,
   updateResourceCategoryTreeItemApi,
+  uploadResourcePackApi,
   type ResourceAssetItem,
   type ResourceCategoryItem,
   type ResourceCategoryEntry,
   type ResourceCategoryEntryDirectory,
   type ResourceCategoryTreeItem,
+  type ResourcePackUploadResult,
   type ResourceSeriesItem,
   type ResourceTagItem,
 } from '#/api';
 import { formatAssetRole, formatFileSize } from '#/utils/format';
 
-import { Button, Form, Image, Input, InputNumber, message, Modal, Select, Space, Table, Upload, Tooltip, Tag } from 'ant-design-vue';
+import { Alert, Button, Form, Image, Input, InputNumber, message, Modal, Progress, Select, Space, Table, Upload, Tooltip, Tag } from 'ant-design-vue';
 import {
   DeleteOutlined,
   DownloadOutlined,
@@ -46,6 +48,7 @@ import {
   DownOutlined,
   ReloadOutlined,
   RightOutlined,
+  UploadOutlined,
 } from '@ant-design/icons-vue';
 import { Checkbox } from 'ant-design-vue';
 
@@ -74,6 +77,15 @@ interface DirectoryTreeListItem {
   name: string;
   parentId: null | string;
   pathLabel: string;
+}
+
+interface PackFormModel {
+  categoryId: string;
+  createCategory: boolean;
+  createCategoryName: string;
+  description: string;
+  name: string;
+  tagIds: string[];
 }
 
 const { TextArea } = Input;
@@ -136,6 +148,20 @@ const refreshingManifest = ref(false);
 const batchDeleteSubmitting = ref(false);
 const assetSortField = ref<'categoryPathString' | 'name' | 'size' | 'type' | 'updatedAt'>('name');
 const assetSortOrder = ref<'ascend' | 'descend'>('ascend');
+const packModalOpen = ref(false);
+const packSubmitting = ref(false);
+const packProgress = ref(0);
+const packFileList = ref<UploadFile[]>([]);
+const packError = ref<null | string>(null);
+const packResult = ref<null | ResourcePackUploadResult>(null);
+const packFormModel = reactive<PackFormModel>({
+  categoryId: '',
+  createCategory: true,
+  createCategoryName: '',
+  description: '',
+  name: '',
+  tagIds: [],
+});
 
 const categoryOptions = computed(() => {
   const output: Array<{ label: string; value: string }> = [];
@@ -575,6 +601,106 @@ function selectDirectory(directoryId: string) {
   currentDirectoryId.value = directoryId;
   expandDirectoryAncestors(directoryId);
   loadCurrentDirectoryEntries();
+}
+
+const packUploadProps: UploadProps = {
+  accept: '.zip',
+  beforeUpload: () => false,
+  maxCount: 1,
+};
+
+function resolveUploadErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  const responseMessage = (error as { response?: { data?: { message?: string } } } | null)?.response?.data?.message;
+  return responseMessage || '资源包上传失败，请稍后重试';
+}
+
+function derivePackName(fileName: string): string {
+  return fileName.replace(/\.zip$/i, '').trim();
+}
+
+function openPackModal() {
+  if (showDeletedOnly.value) {
+    message.warning('回收站中不能上传资源包，请先退出回收站');
+    return;
+  }
+  packFileList.value = [];
+  packError.value = null;
+  packResult.value = null;
+  packProgress.value = 0;
+  packFormModel.categoryId = currentDirectoryId.value;
+  packFormModel.createCategory = true;
+  packFormModel.createCategoryName = '';
+  packFormModel.name = '';
+  packFormModel.description = '';
+  packFormModel.tagIds = [];
+  packModalOpen.value = true;
+}
+
+function handlePackFileChange(info: UploadChangeParam<UploadFile<any>>) {
+  packFileList.value = info.fileList.slice(-1);
+  const derived = derivePackName(packFileList.value[0]?.name ?? '');
+  if (!derived) {
+    return;
+  }
+  if (!packFormModel.name.trim()) {
+    packFormModel.name = derived;
+  }
+  if (!packFormModel.createCategoryName.trim()) {
+    packFormModel.createCategoryName = derived;
+  }
+}
+
+async function submitPackUpload() {
+  const file = packFileList.value[0]?.originFileObj as File | undefined;
+  if (!file) {
+    packError.value = '请选择资源包 zip 文件';
+    return;
+  }
+  if (packFormModel.createCategory && !packFormModel.createCategoryName.trim()) {
+    packError.value = '请填写新建子目录名称';
+    return;
+  }
+  packSubmitting.value = true;
+  packError.value = null;
+  packProgress.value = 0;
+  try {
+    const payload = new FormData();
+    payload.append('pack', file);
+    if (packFormModel.name.trim()) {
+      payload.append('name', packFormModel.name.trim());
+    }
+    if (packFormModel.categoryId) {
+      payload.append('categoryId', packFormModel.categoryId);
+    }
+    if (packFormModel.createCategory) {
+      payload.append('createCategoryName', packFormModel.createCategoryName.trim());
+    }
+    if (packFormModel.description.trim()) {
+      payload.append('description', packFormModel.description.trim());
+    }
+    payload.append('tagIds', JSON.stringify(packFormModel.tagIds || []));
+
+    const result = await uploadResourcePackApi(payload, {
+      onUploadProgress: (percent) => {
+        packProgress.value = percent;
+      },
+    });
+    packResult.value = result;
+    packFormModel.categoryId = result?.category?.id || packFormModel.categoryId;
+    await refreshDirectoryContext();
+    const targetDirectoryId = result?.category?.id;
+    if (targetDirectoryId && targetDirectoryId !== currentDirectoryId.value) {
+      selectDirectory(targetDirectoryId);
+    }
+  } catch (error) {
+    packError.value = resolveUploadErrorMessage(error);
+  } finally {
+    packSubmitting.value = false;
+    packProgress.value = 0;
+  }
 }
 
 function openDirectoryCreateModal() {
@@ -1178,6 +1304,10 @@ onMounted(async () => {
               <PlusOutlined />
               新增资产
             </Button>
+            <Button v-access:code="'resource:write'" @click="openPackModal" :disabled="showDeletedOnly">
+              <UploadOutlined />
+              上传资源包
+            </Button>
             <Button v-access:code="'resource:write'" :loading="refreshingManifest" @click="handleRefreshManifest">
               <ReloadOutlined />
               刷新缓存
@@ -1439,6 +1569,90 @@ onMounted(async () => {
           <Input v-model:value="directoryName" placeholder="请输入分类名" />
         </Form.Item>
       </Form>
+    </Modal>
+
+    <Modal
+      :open="packModalOpen"
+      :confirm-loading="packSubmitting"
+      :ok-text="packResult ? '完成' : '上传并解析'"
+      :width="680"
+      title="上传资源包（ZIP）"
+      @ok="packResult ? (packModalOpen = false) : submitPackUpload()"
+      @cancel="packModalOpen = false"
+    >
+      <div style="margin-bottom: 12px; color: #666; line-height: 1.6">
+        支持 3dtiles-viewer 导出的「几何+贴图包」（scene.glb + textures/ + textures.json）与「DEM 包」（dem.tif + ortho.tif + dem.json）。
+        包内相对目录会原样保留，贴图与配置文件会注册为隐藏依赖资产，供 editor / preview / SceneryViewer 按需下载。
+      </div>
+      <Form :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
+        <Form.Item label="资源包" required>
+          <Upload v-model:file-list="packFileList" v-bind="packUploadProps" @change="handlePackFileChange">
+            <Button><UploadOutlined /> 选择 zip 文件</Button>
+          </Upload>
+        </Form.Item>
+        <Form.Item label="名称">
+          <Input v-model:value="packFormModel.name" placeholder="默认取 zip 文件名" />
+        </Form.Item>
+        <Form.Item label="父分类">
+          <Select
+            v-model:value="packFormModel.categoryId"
+            allow-clear
+            option-filter-prop="label"
+            :options="categoryOptions"
+            placeholder="默认使用当前所选目录"
+            show-search
+          />
+        </Form.Item>
+        <Form.Item label="分类处理">
+          <Space>
+            <Checkbox v-model:checked="packFormModel.createCategory">新建子目录</Checkbox>
+            <Input
+              v-model:value="packFormModel.createCategoryName"
+              :disabled="!packFormModel.createCategory"
+              placeholder="子目录名称（默认取包名）"
+              style="width: 300px"
+            />
+          </Space>
+        </Form.Item>
+        <Form.Item label="标签">
+          <Select
+            v-model:value="packFormModel.tagIds"
+            allow-clear
+            mode="tags"
+            option-filter-prop="label"
+            :options="tagOptions"
+            placeholder="选择或输入标签"
+            show-search
+          />
+        </Form.Item>
+        <Form.Item label="描述">
+          <TextArea v-model:value="packFormModel.description" :rows="2" placeholder="可选" />
+        </Form.Item>
+      </Form>
+      <div v-if="packSubmitting" style="margin-top: 4px">
+        <Progress :percent="packProgress" size="small" />
+        <div style="color: #999; font-size: 12px; margin-top: 4px">上传中，服务器随后会解析资源包并创建资产…</div>
+      </div>
+      <Alert v-if="packError" type="error" :message="packError" show-icon style="margin-top: 12px" />
+      <div
+        v-if="packResult"
+        style="margin-top: 12px; padding: 12px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; line-height: 1.8"
+      >
+        <div style="font-weight: 600; margin-bottom: 4px">
+          {{ packResult.reused ? '已存在相同内容的资源包，已直接复用' : '资源包已入库' }}
+        </div>
+        <div>类型：{{ packResult.pack.kind === 'geometry' ? '几何+贴图包' : 'DEM 包' }}</div>
+        <div>分类：{{ packResult.category?.name }}</div>
+        <div>主资产：{{ packResult.asset?.name }} · {{ packResult.asset?.type }} · {{ formatFileSize(packResult.asset?.size || 0) }}</div>
+        <div>
+          贴图 {{ packResult.pack.textureCount }} 张（KTX2 {{ packResult.pack.ktx2Count || 0 }}） · 包内文件 {{ packResult.pack.fileCount }} 个 · 共
+          {{ formatFileSize(packResult.pack.totalBytes || 0) }}
+        </div>
+        <div v-if="packResult.dependencies?.length">依赖资产 {{ packResult.dependencies.length }} 个（编辑器素材选择器中隐藏）</div>
+        <div v-for="warning in packResult.pack.warnings || []" :key="warning" style="color: #d46b08">
+          提示：{{ warning }}
+        </div>
+      </div>
     </Modal>
 
     <Modal
