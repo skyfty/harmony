@@ -462,6 +462,7 @@ export function createSlowroadsEnvironmentRuntime(
       runSlowroadsFogUniformChecks({
         preset,
         cameraY: camera.position.y,
+        viewDistanceScale: sceneViewDistanceScale,
         sceneUniforms: {
           near: slowroadsFogUniforms.fogNear.value,
           far: slowroadsFogUniforms.fogFar.value,

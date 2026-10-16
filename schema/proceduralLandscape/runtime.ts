@@ -1304,7 +1304,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function resolveNearTreeRadius(): number {
-    if (resolveQuality() !== 'high') {
+    // 近树 3D 网格是 lab/官方观感的一部分（编辑器 / 预览 / 查看器三端一致）；
+    // 只有最低画质档（最弱设备）关闭，其余档位使用场景里配置的半径。
+    if (resolveQuality() === 'low') {
       return 0
     }
     return props.forest.nearTreeRadius

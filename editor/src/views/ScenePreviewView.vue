@@ -2599,6 +2599,11 @@ let physicsBridgeBodySyncPromise: Promise<void> | null = null
 const physicsBridgeVehicleInputSyncState = createPhysicsBridgeVehicleInputSyncState()
 let physicsBridgeSceneLoaded = false
 let physicsBridgeSceneReloading = false
+// Dynamic bodies must not step while the mesh collision chunks covering the current
+// ground anchors are still being indexed/created. A character would otherwise start
+// falling during that window and tunnel through a thin terrain shell before the first
+// collision chunks reach the physics world.
+let physicsBridgeCollisionBootstrapPending = false
 let physicsBridgeSceneRequestId = 0
 const currentPhysicsBridgePreference = ref<PhysicsBackendPreference | undefined>()
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
@@ -12496,6 +12501,39 @@ function syncScenePreviewMeshCollisionRuntime(
 	return workPending
 }
 
+async function flushScenePreviewGroundCollisionBridgeMutations(): Promise<void> {
+	await previewGroundCollisionBridgeMutationChain.catch(() => {
+		// Failures are already reported by the enqueue helper.
+	})
+}
+
+/**
+ * Runs the budgeted mesh collision streamer to completion for the current Ground Anchor
+ * positions. Physics stepping is suspended while this runs, so dynamic bodies start their
+ * first step with the collision chunks covering the anchors already registered.
+ */
+async function bootstrapScenePreviewMeshCollisionRuntime(
+	document: SceneJsonExportDocument | null,
+	referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
+	shouldAbort: () => boolean,
+): Promise<void> {
+	const maxIterations = 256
+	for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+		if (shouldAbort()) {
+			return
+		}
+		const workPending = syncScenePreviewMeshCollisionRuntime(document, referenceWorldPositions)
+		if (!workPending) {
+			break
+		}
+		// Yield so scene loading UI keeps painting while the streamer drains its budget.
+		await new Promise<void>((resolve) => {
+			window.setTimeout(resolve, 0)
+		})
+	}
+	await flushScenePreviewGroundCollisionBridgeMutations()
+}
+
 async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocument | null): Promise<void> {
 	void document
 }
@@ -12712,6 +12750,7 @@ async function loadScenePreviewPhysicsBridgeScene(
 			return
 		}
 		physicsCollisionDebugRuntime.setSceneAsset(asset)
+		physicsBridgeCollisionBootstrapPending = true
 		await activePhysicsBridge.loadScene(asset)
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
@@ -12725,7 +12764,11 @@ async function loadScenePreviewPhysicsBridgeScene(
 			syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
 		}
 		if (hasGroundCollisionReference) {
-			syncScenePreviewMeshCollisionRuntime(document, groundCollisionReferencePositions)
+			await bootstrapScenePreviewMeshCollisionRuntime(
+				document,
+				groundCollisionReferencePositions,
+				() => requestId !== physicsBridgeSceneRequestId,
+			)
 		}
 		const missingCharacterControllers: string[] = []
 		const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
@@ -12753,6 +12796,7 @@ async function loadScenePreviewPhysicsBridgeScene(
 		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
 	} finally {
 		physicsBridgeSceneReloading = false
+		physicsBridgeCollisionBootstrapPending = false
 	}
 }
 
@@ -13110,6 +13154,7 @@ function stepScenePreviewPhysicsBridge(delta: number): void {
 		|| !physicsEnvironmentEnabled.value
 		|| !physicsBridge
 		|| !physicsBridgeSceneLoaded
+		|| physicsBridgeCollisionBootstrapPending
 		|| physicsBridgeStepPromise
 	) {
 		return

@@ -398,6 +398,12 @@ export function runSlowroadsFogColorSpaceChecks(input: FogColorSpaceCheckInput):
 export interface FogUniformCheckInput {
   preset: EnvironmentPreset
   cameraY: number
+  /**
+   * 场景视距倍率（proceduralLandscape 世界重建后下发；1 = 官方未缩放尺度）。
+   * 运行时把两套雾距离都乘以该倍率，自检的期望值必须同样缩放，否则大尺度场景
+   * 会误报 “sky fog uniforms use official sky scale”。
+   */
+  viewDistanceScale?: number
   sceneUniforms: { near: number; far: number; hazeHeight: number; hazeIntensity: number }
   skyUniforms: { near: number; far: number; hazeHeight: number; hazeIntensity: number }
   sceneColors: SlowroadsFogColorSet
@@ -432,7 +438,14 @@ export interface FogUniformCheckInput {
 export function runSlowroadsFogUniformChecks(input: FogUniformCheckInput): SlowroadsSelfCheckResult[] {
   const { results, record } = createRecorder('fog-uniform')
   const matches = (got: number, want: number): boolean => Math.abs(got - want) < 1e-6
-  const skyBase = resolveSkyFogParams(input.preset)
+  const viewDistanceScale = typeof input.viewDistanceScale === 'number'
+    && Number.isFinite(input.viewDistanceScale)
+    && input.viewDistanceScale > 0
+    ? Math.min(12, Math.max(1, input.viewDistanceScale))
+    : 1
+  // 与运行时一致：天空组雾距离 = 官方 n1 × 场景视距倍率。
+  const officialSkyDistance = ENVIRONMENT_SKY_DISTANCE * viewDistanceScale
+  const skyBase = resolveFogParams(input.preset, officialSkyDistance)
   const skyAdjusted = resolveHazeForCamera(skyBase, input.cameraY, { inHaze: false })
   // 与 lab 相同：接受基准或当前相机高度的 haze 插值（相机在层内时 far 会缩短）。
   const numbers: Array<[string, number, number, number]> = [
@@ -484,7 +497,7 @@ export function runSlowroadsFogUniformChecks(input: FogUniformCheckInput): Slowr
     record(
       'sky depth correction restores the official n1 distance',
       input.skyDepthCorrection >= 1
-        && Math.abs(effectiveOfficial - ENVIRONMENT_SKY_DISTANCE) < 1,
+        && Math.abs(effectiveOfficial - officialSkyDistance) < 1,
       `resolved=${resolvedDistance.toFixed(2)} correction=${input.skyDepthCorrection.toFixed(4)} official=${effectiveOfficial.toFixed(2)}`,
     )
   }

@@ -257,14 +257,23 @@ function handleWorkerMessage(event: unknown): void {
   if (!rawData || typeof rawData !== 'object') {
     return;
   }
-  const envelope = rawData as InstancedLodEnvelope;
-  if (envelope.__scope !== INSTANCED_LOD_WORKER_SCOPE) {
-    return;
+
+  let message: unknown;
+  if (isH5WorkerScope) {
+    // H5 dedicated worker: the posted message is the raw request (no envelope).
+    message = rawData;
+  } else {
+    const envelope = rawData as InstancedLodEnvelope;
+    if (envelope.__scope !== INSTANCED_LOD_WORKER_SCOPE) {
+      return;
+    }
+    if (typeof envelope.clientId === 'number') {
+      currentClientId = envelope.clientId;
+    }
+    message = envelope.message;
   }
-  if (typeof envelope.clientId === 'number') {
-    currentClientId = envelope.clientId;
-  }
-  handleInstancedLodCullingMessage(envelope.message, (response) => {
+
+  handleInstancedLodCullingMessage(message, (response) => {
     postInstancedLodResponse(response, collectResponseTransferables(response));
   });
 }

@@ -2709,6 +2709,11 @@ const physicsBridgeVehicleInputScratch: PhysicsBridgeVehicleControlInput = {
 };
 let physicsBridgeSceneLoaded = false;
 let physicsBridgeSceneReloading = false;
+// Dynamic bodies must not step while the mesh collision chunks covering the current
+// ground anchors are still being indexed/created. A character would otherwise start
+// falling during that window and tunnel through a thin terrain shell before the first
+// collision chunks reach the physics world.
+let physicsBridgeCollisionBootstrapPending = false;
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
@@ -10041,6 +10046,39 @@ function syncSceneryMeshCollisionRuntime(
   return workPending;
 }
 
+async function flushSceneryGroundCollisionBridgeMutations(): Promise<void> {
+  await sceneryGroundCollisionBridgeMutationChain.catch(() => {
+    // Failures are already reported by the enqueue helper.
+  });
+}
+
+/**
+ * Runs the budgeted mesh collision streamer to completion for the current Ground Anchor
+ * positions. Physics stepping is suspended while this runs, so dynamic bodies start their
+ * first step with the collision chunks covering the anchors already registered.
+ */
+async function bootstrapSceneryMeshCollisionRuntime(
+  document: SceneJsonExportDocument | null,
+  referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
+  shouldAbort: () => boolean,
+): Promise<void> {
+  const maxIterations = 256;
+  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
+    if (shouldAbort()) {
+      return;
+    }
+    const workPending = syncSceneryMeshCollisionRuntime(document, referenceWorldPositions);
+    if (!workPending) {
+      break;
+    }
+    // Yield so scene loading UI keeps painting while the streamer drains its budget.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+  await flushSceneryGroundCollisionBridgeMutations();
+}
+
 function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null, camera: THREE.Camera | null | undefined): boolean {
   if (!document) {
     return false;
@@ -10334,6 +10372,7 @@ async function loadSceneryPhysicsBridgeScene(
     const bridge = await ensureSceneryPhysicsBridgeReady();
     sceneryGroundCollisionRuntimeBodyIds.clear();
     releaseSceneryMeshCollisionRuntime();
+    physicsBridgeCollisionBootstrapPending = true;
     await bridge.loadScene(asset);
     if (requestId !== physicsBridgeSceneRequestId) {
       return;
@@ -10352,10 +10391,21 @@ async function loadSceneryPhysicsBridgeScene(
       clearGroundCollisionRuntimeHost(groundObject);
       syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
     }
+    const referenceWorldPositions = sceneryGroundCollisionReferencePositions;
+    if (resolveSceneryGroundCollisionReferenceWorld(renderContext?.camera ?? null, referenceWorldPositions)) {
+      await bootstrapSceneryMeshCollisionRuntime(
+        document,
+        referenceWorldPositions,
+        () => requestId !== physicsBridgeSceneRequestId,
+      );
+      // Stepping resumes only now, so restart the full-rate settle window from here.
+      physicsBridgeLastMovedAtMs = Date.now();
+    }
   } catch (error) {
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);
   } finally {
     physicsBridgeSceneReloading = false;
+    physicsBridgeCollisionBootstrapPending = false;
   }
 }
 
@@ -10740,6 +10790,7 @@ function stepSceneryPhysicsBridge(delta: number): void {
     !physicsEnvironmentEnabled.value
     || !physicsBridge
     || !physicsBridgeSceneLoaded
+    || physicsBridgeCollisionBootstrapPending
   ) {
     return;
   }

@@ -15,7 +15,11 @@ import {
 } from '@harmony/utils/wechat-shared-worker'
 
 const INSTANCED_LOD_CULLING_WORKER_TIMEOUT_MS = 1000
+/** 新 worker 首次响应前给模块图加载/冷启动留出的宽限（开发态 worker 启动可超过 1s）。 */
+const INSTANCED_LOD_CULLING_WORKER_BOOT_TIMEOUT_MS = 5000
 const INSTANCED_LOD_CULLING_WORKER_RETRY_MS = 2000
+/** 超时降级日志的最小间隔：超时不再回杀 worker，避免整轮重建与告警刷屏。 */
+const INSTANCED_LOD_CULLING_WORKER_TIMEOUT_LOG_INTERVAL_MS = 10000
 
 type InstancedLodRuntimeEntryLike = {
   nodeId: string
@@ -56,6 +60,7 @@ let instancedLodCullingSettledProjectionMatrix: Float32Array | null = null
 let instancedLodCullingSettledMatrixWorldInverse: Float32Array | null = null
 let instancedLodCullingEverSettled = false
 let instancedLodCullingLastFailureAt = -1
+let instancedLodCullingLastTimeoutLogAt = -1
 const instancedLodCullingStaticCandidateCache: InstancedLodStaticCandidateSnapshot[] = []
 
 function buildStaticCandidateSnapshots(
@@ -128,15 +133,38 @@ function startInstancedLodCullingPendingWatchdog(worker: InstancedLodCullingWork
   if (typeof setTimeout !== 'function') {
     return
   }
+  const timeoutMs = instancedLodCullingEverSettled
+    ? INSTANCED_LOD_CULLING_WORKER_TIMEOUT_MS
+    : INSTANCED_LOD_CULLING_WORKER_BOOT_TIMEOUT_MS
   instancedLodCullingPendingWatchdog = setTimeout(() => {
     instancedLodCullingPendingWatchdog = null
     if (instancedLodCullingPendingRequestId !== null && instancedLodCullingWorker === worker) {
-      handleInstancedLodCullingWorkerFailure(
-        worker,
-        new Error('Instanced LOD culling worker response timed out'),
-      )
+      handleInstancedLodCullingWorkerTimeout(worker)
     }
-  }, INSTANCED_LOD_CULLING_WORKER_TIMEOUT_MS)
+  }, timeoutMs)
+}
+
+/**
+ * 超时只是「这一轮结果来晚了」：清掉待处理请求并回落到主线程剔除，但**不**终止 worker。
+ * 终止会连带丢掉 worker 已排队的回包并触发重建，长任务/冷启动下会形成
+ * “重建 → 超时 → 再重建”的循环；保留 worker 时迟到的回包会因 requestId 不再匹配被丢弃，
+ * 下一次请求即可正常往返。
+ */
+function handleInstancedLodCullingWorkerTimeout(worker: InstancedLodCullingWorkerLike): void {
+  if (instancedLodCullingWorker !== worker) {
+    return
+  }
+  instancedLodCullingPendingRequestId = null
+  instancedLodCullingPendingProjectionMatrix = null
+  instancedLodCullingPendingMatrixWorldInverse = null
+  instancedLodCullingLatestResult = null
+  instancedLodCullingEverSettled = false
+  const now = Date.now()
+  if (now - instancedLodCullingLastTimeoutLogAt < INSTANCED_LOD_CULLING_WORKER_TIMEOUT_LOG_INTERVAL_MS) {
+    return
+  }
+  instancedLodCullingLastTimeoutLogAt = now
+  console.warn('[Scenery][InstancedLodCulling] Worker response timed out, falling back to main-thread culling')
 }
 
 function handleInstancedLodCullingWorkerFailure(
