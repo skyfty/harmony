@@ -7,15 +7,16 @@ import { SHARED_TEXTURES, type SeasonTextureRef } from '../core/seasonCatalog'
 /**
  * Slow Roads 在线素材源（默认走线上资产包，无本地模式、无组件级配置）。
  *
- * - manifest：`https://v.touchmagic.cn/uploads/asset-bundle.json`（admin 资产包
- *   流程产物，101 个文件；每个文件的 URL = 同目录 + `path`）；
+ * - manifest：`https://v.touchmagic.cn/uploads/slowroads/asset-bundle.json`（admin 资产包
+ *   流程产物，119 个文件；每个文件的 URL = 同目录 + `path`；旧的平铺 `uploads/`
+ *   目录已不再对外提供文件，服务端返回 403，因此 baseUrl 必须带 `slowroads/`）；
  * - 下载走既有 `fetchAssetBlob`（CDN 镜像候选、worker、uni.downloadFile 兜底、
  *   进度回调），纹理经 `loadTextureFromSourceUrl` 加载；
  * - 设备纹理上限 < 4096 时自动改用 `@2048` 变体（manifest 中带 `@2048` 后缀）；
  * - LRU：只保留当前季 + 共享贴图 + 近树模型的字节/纹理解码，其余在换季时释放。
  */
 
-export const SLOWROADS_ASSET_BASE_URL = 'https://v.touchmagic.cn/uploads/'
+export const SLOWROADS_ASSET_BASE_URL = 'https://v.touchmagic.cn/uploads/slowroads/'
 export const SLOWROADS_ASSET_MANIFEST_FILE = 'asset-bundle.json'
 export const SLOWROADS_TEXTURE_2048_THRESHOLD = 4096
 

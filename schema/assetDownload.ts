@@ -244,7 +244,9 @@ async function downloadAssetBlob(
     try {
       return await downloadAssetBlobFromCandidate(candidate, controller, onProgress, options)
     } catch (error) {
-      if (isRetryableDownloadError(error) && candidate !== urlCandidates[0]) {
+      // 候选按顺序回退（CDN 镜像 → 源站）：任一候选失败都继续下一个；
+      // 仅显式取消（AbortError）立即中断，不消耗剩余候选。
+      if (isRetryableDownloadError(error)) {
         lastNetworkError = error
         continue
       }
@@ -272,7 +274,7 @@ async function downloadAssetBlobWithResponse(
     try {
       return await downloadAssetBlobFromCandidateWithResponse(candidate, controller, onProgress, requestHeaders, options)
     } catch (error) {
-      if (isRetryableDownloadError(error) && candidate !== urlCandidates[0]) {
+      if (isRetryableDownloadError(error)) {
         lastNetworkError = error
         continue
       }
@@ -1009,7 +1011,17 @@ function toArrayBuffer(data: unknown): ArrayBuffer {
 }
 
 function isRetryableDownloadError(error: unknown): boolean {
+  if (isAbortErrorLike(error)) {
+    return false
+  }
   return error instanceof TypeError || error instanceof Error
+}
+
+/** 取消错误（DOMException 名称为 AbortError）不参与候选回退。 */
+function isAbortErrorLike(error: unknown): boolean {
+  return Boolean(
+    error && typeof error === 'object' && (error as { name?: unknown }).name === 'AbortError',
+  )
 }
 
 function normalizeHostKey(value: string): string {

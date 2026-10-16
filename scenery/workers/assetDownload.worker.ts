@@ -303,6 +303,14 @@ function resolveWxRequestApi(): WxRequestApi | null {
   return wxApi && typeof wxApi.request === 'function' ? wxApi : null
 }
 
+/** 候选回退：网络错误与 HTTP 错误都继续下一个候选（CDN 镜像 → 源站）；取消立即中断。 */
+function isRetryableCandidateError(error: unknown): boolean {
+  if (error && typeof error === 'object' && (error as { name?: unknown }).name === 'AbortError') {
+    return false
+  }
+  return error instanceof TypeError || error instanceof Error
+}
+
 async function downloadViaFetch(
   urlCandidates: string[],
   controller: AbortControllerLike,
@@ -358,7 +366,7 @@ async function downloadViaFetch(
       onProgress(100)
       return { url: requestUrl, mimeType, filename, buffer: joined.buffer }
     } catch (error) {
-      if (error instanceof TypeError && candidate !== urlCandidates[0]) {
+      if (isRetryableCandidateError(error)) {
         lastNetworkError = error
         continue
       }

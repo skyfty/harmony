@@ -83,6 +83,13 @@ function extractFilenameFromHeaders(headers: Headers, url: string): string | nul
   }
 }
 
+function isRetryableCandidateError(error: unknown): boolean {
+  if (error && typeof error === 'object' && (error as { name?: unknown }).name === 'AbortError') {
+    return false
+  }
+  return error instanceof TypeError || error instanceof Error
+}
+
 async function downloadViaFetch(
   urlCandidates: string[],
   controller: AbortController,
@@ -143,7 +150,9 @@ async function downloadViaFetch(
       onProgress(100)
       return { url: requestUrl, mimeType, filename, buffer: joined.buffer }
     } catch (error) {
-      if (error instanceof TypeError && candidate !== urlCandidates[0]) {
+      // 候选按顺序回退（CDN 镜像 → 源站）：网络错误与 HTTP 错误都继续下一个候选；
+      // 仅取消（AbortError）立即中断。
+      if (isRetryableCandidateError(error)) {
         lastNetworkError = error
         continue
       }
