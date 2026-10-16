@@ -5,6 +5,7 @@ import type { AssetCacheEntry } from './assetCache'
 import { Semaphore, withSemaphoreYielding } from './concurrency'
 import type { SceneNodeImportMetadata } from './core'
 import { getExtensionFromMimeType, getLastExtensionFromFilenameOrUrl } from './assetTypeConversion'
+import { attachTerrainTextureStreamFromUrl } from './terrainTextureStream'
 
 // GLB/FBX parsing (GLTFLoader.parse + geometry/material construction) is CPU
 // bound and runs on the render main thread. Serialize parses so a burst of LOD
@@ -96,9 +97,11 @@ export async function loadAssetObject(resourceCache: ResourceCache, assetId: str
     const bytes = resourceCache.getAssetBytes(assetId)
     if (bytes && bytes.byteLength > 0) {
       try {
-        return await withSemaphoreYielding(modelParseSemaphore, () =>
+        const object = await withSemaphoreYielding(modelParseSemaphore, () =>
           loadObjectFromBuffer(bytes, ext, { filename }),
         )
+        attachTerrainTextureStreamFromUrl(object, entry.downloadUrl)
+        return object
       } finally {
         resourceCache.releaseAssetBytes(assetId)
       }
@@ -109,6 +112,7 @@ export async function loadAssetObject(resourceCache: ResourceCache, assetId: str
       return null
     }
     const object = await withSemaphoreYielding(modelParseSemaphore, () => loadObjectFromFile(file, ext))
+    attachTerrainTextureStreamFromUrl(object, entry.downloadUrl)
     return object
   } catch (error) {
     console.warn('[ModelAssetLoader] Failed to parse asset object', assetId, error)

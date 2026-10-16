@@ -192,6 +192,7 @@ import {
 	syncBodyFromObject as syncSharedBodyFromObject,
 } from '@schema/physicsBodySync'
 import { loadAssetObject, loadNodeObject } from '@schema/modelAssetLoader'
+import { updateAttachedTerrainTextureStreams } from '@schema/terrainTextureStream'
 import {
 	getCachedModelObject,
 	getOrLoadModelObject,
@@ -11710,6 +11711,7 @@ function startAnimationLoop() {
 
 		// 4) Render + stats
 		sceneCsmShadowRuntime?.update()
+		updateAttachedTerrainTextureStreams(currentScene, activeCamera)
 		currentRenderer.render(currentScene, activeCamera)
 		syncRendererDebugForFrame(currentRenderer, currentScene)
 		syncInstancedMatrixUploadEstimateForFrame()

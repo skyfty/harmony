@@ -504,6 +504,7 @@ import {
   syncBodyFromObject as syncSharedBodyFromObject,
 } from '@harmony/schema/physicsBodySync';
 import { loadAssetObject, loadNodeObject } from '@harmony/schema/modelAssetLoader';
+import { updateAttachedTerrainTextureStreams } from '@harmony/schema/terrainTextureStream';
 
 import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
 import {
@@ -22570,6 +22571,7 @@ function startRenderLoop(
         if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(cameraFrameSnapshot)) {
             sceneCsmShadowRuntime.update();
           }
+        updateAttachedTerrainTextureStreams(scene, camera);
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {

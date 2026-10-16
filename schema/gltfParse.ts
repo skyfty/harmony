@@ -242,6 +242,13 @@ async function rebuildNode(descriptor: GltfParseNodeDescriptor): Promise<THREE.O
   object.quaternion.set(descriptor.quaternion[0], descriptor.quaternion[1], descriptor.quaternion[2], descriptor.quaternion[3])
   object.scale.set(descriptor.scale[0], descriptor.scale[1], descriptor.scale[2])
   object.visible = descriptor.visible
+  if (typeof descriptor.userData === 'string' && descriptor.userData) {
+    try {
+      object.userData = JSON.parse(descriptor.userData) as Record<string, unknown>
+    } catch {
+      object.userData = {}
+    }
+  }
 
   for (const child of descriptor.children) {
     object.add(await rebuildNode(child))

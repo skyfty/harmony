@@ -175,6 +175,7 @@ import {
 } from '@schema/continuousInstancedModel'
 import { flush as flushInstancedBounds, hasPending as instancedBoundsHasPending } from '@schema/instancedBoundsTracker'
 import { loadObjectFromFile } from '@schema/assetImport'
+import { attachTerrainTextureStreamFromUrl, updateAttachedTerrainTextureStreams } from '@schema/terrainTextureStream'
 import { loadTextureFromFile } from '@/utils/textureAsset'
 import { createInstancedBvhFrustumCuller } from '@schema/instancedBvhFrustumCuller'
 import { createUvDebugMaterial } from '@schema/debugTextures'
@@ -10136,7 +10137,8 @@ async function ensureModelObjectCached(assetId: string): Promise<void> {
     if (!file) {
       return
     }
-    await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
+    const loaded = await getOrLoadModelObject(asset.id, () => loadObjectFromFile(file, asset.extension ?? undefined))
+    attachTerrainTextureStreamFromUrl(loaded.object, asset.downloadUrl)
     assetCacheStore.releaseInMemoryBlob(asset.id)
     ensureInstancedMeshesRegistered(asset.id)
   })()
@@ -12958,6 +12960,7 @@ function renderViewportFrame() {
   if (!renderer || !scene || !camera) {
     return
   }
+  updateAttachedTerrainTextureStreams(scene, camera)
   postprocessing.render()
 }
 

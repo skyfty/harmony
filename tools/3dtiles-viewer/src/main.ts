@@ -4,8 +4,15 @@ import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MapControls } from 'three/examples/jsm/controls/MapControls.js'
 import { EXRLoader } from 'three/examples/jsm/loaders/EXRLoader.js'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { TilesRenderer, CAMERA_FRAME } from '3d-tiles-renderer'
+import {
+  mergeTerrainGeometries,
+  type TerrainMergeOptions,
+  type TerrainMergeSource,
+  type TerrainMergeStats,
+} from './terrainMerge'
+import { buildZipArchive } from './zipArchive'
+import { TilesRenderer } from '3d-tiles-renderer'
+import { CAMERA_FRAME } from '3d-tiles-renderer/src/three/renderer/math/Ellipsoid'
 import type { Tile } from '3d-tiles-renderer/core'
 import { CesiumIonAuthPlugin } from '3d-tiles-renderer/core/plugins'
 import { GLTFExtensionsPlugin, TilesFadePlugin, UpdateOnChangePlugin } from '3d-tiles-renderer/three/plugins'
@@ -71,7 +78,20 @@ app.innerHTML = `
         </section>
 
         <section class="panel glb-panel">
-          <div class="panel-header"><h2>GLB 预览</h2><button class="secondary" id="export-current-glb" disabled>导出 GLB</button></div>
+          <div class="panel-header">
+            <h2>GLB 预览</h2>
+            <div class="glb-export-actions">
+              <button class="secondary" id="export-current-glb" disabled>导出完整 GLB</button>
+              <button class="secondary" id="export-terrain-package" disabled>导出几何+贴图包</button>
+            </div>
+          </div>
+          <div class="glb-export-options" id="glb-export-options">
+            <label class="option"><input type="checkbox" id="opt-weld" checked /> 焊接顶点</label>
+            <label class="option">ε <input type="number" id="opt-weld-epsilon" value="0.05" step="0.01" min="0.001" /></label>
+            <label class="option"><input type="checkbox" id="opt-strip-skirts" checked /> 去裙边</label>
+            <label class="option">贴图 ≤ <select id="opt-texture-max"><option>1024</option><option selected>2048</option><option>4096</option></select></label>
+            <label class="option">质量 <input type="number" id="opt-texture-quality" value="0.8" step="0.05" min="0.3" max="0.95" /></label>
+          </div>
           <div class="glb-preview-viewport" id="glb-preview-viewport">
             <div class="placeholder" id="glb-preview-placeholder">等待首次锚点捕获</div>
             <div class="glb-preview-progress" id="glb-preview-progress" hidden aria-live="polite">
@@ -108,6 +128,12 @@ const progressBar = $('#progress-bar')
 const progressLabel = $('#progress-label')
 const configHelp = $('#config-help')
 const exportCurrentGlbButton = $('#export-current-glb') as HTMLButtonElement
+const exportTerrainPackageButton = $('#export-terrain-package') as HTMLButtonElement
+const weldEnabledInput = $('#opt-weld') as HTMLInputElement
+const weldEpsilonInput = $('#opt-weld-epsilon') as HTMLInputElement
+const stripSkirtsInput = $('#opt-strip-skirts') as HTMLInputElement
+const textureMaxSizeSelect = $('#opt-texture-max') as HTMLSelectElement
+const textureQualityInput = $('#opt-texture-quality') as HTMLInputElement
 const glbPreviewViewport = $('#glb-preview-viewport')
 const glbPreviewPlaceholder = $('#glb-preview-placeholder')
 const glbPreviewProgress = $('#glb-preview-progress')
@@ -255,6 +281,7 @@ const tmpFlyVector = new THREE.Vector3()
 const tmpFlyVector2 = new THREE.Vector3()
 const tmpFlyVector3 = new THREE.Vector3()
 const tmpFlyVector4 = new THREE.Vector3()
+const tmpFlyVectorNdc = new THREE.Vector2()
 const tmpFlyPlane = new THREE.Plane()
 const tmpFlyRaycaster = new THREE.Raycaster()
 
@@ -337,8 +364,8 @@ function resolvePointerPlaneTarget(
   const height = Math.max(1, rect.height)
   const ndcX = ((event.clientX - rect.left) / width) * 2 - 1
   const ndcY = -(((event.clientY - rect.top) / height) * 2 - 1)
-  tmpFlyVector.set(ndcX, ndcY, 0)
-  tmpFlyRaycaster.setFromCamera(tmpFlyVector, camera)
+  tmpFlyVectorNdc.set(ndcX, ndcY)
+  tmpFlyRaycaster.setFromCamera(tmpFlyVectorNdc, camera)
   tmpFlyPlane.setFromNormalAndCoplanarPoint(planeNormal, planePoint)
   return tmpFlyRaycaster.ray.intersectPlane(tmpFlyPlane, tmpFlyVector4)
 }
@@ -416,8 +443,8 @@ function createCtrlClickFlyController(
     const height = Math.max(1, rect.height)
     const ndcX = ((event.clientX - rect.left) / width) * 2 - 1
     const ndcY = -(((event.clientY - rect.top) / height) * 2 - 1)
-    tmpFlyVector.set(ndcX, ndcY, 0)
-    tmpFlyRaycaster.setFromCamera(tmpFlyVector, camera)
+    tmpFlyVectorNdc.set(ndcX, ndcY)
+    tmpFlyRaycaster.setFromCamera(tmpFlyVectorNdc, camera)
     return tmpFlyRaycaster.ray.intersectPlane(tmpFlyPlane, tmpFlyVector3)
   }
 
@@ -522,14 +549,20 @@ function updateStats(): void {
 
 function isTilesReady(): boolean {
   if (!tiles) return false
+  const stats = readTilesStats()
   const queued = Math.max(
     0,
-    (Number((tiles.stats as Record<string, number>).queued) || 0)
-      + (Number((tiles.stats as Record<string, number>).downloading) || 0)
-      + (Number((tiles.stats as Record<string, number>).parsing) || 0)
-      + (Number((tiles.stats as Record<string, number>).processing) || 0),
+    (Number(stats.queued) || 0)
+      + (Number(stats.downloading) || 0)
+      + (Number(stats.parsing) || 0)
+      + (Number(stats.processing) || 0),
   )
   return tiles.loadProgress >= 1 && queued === 0
+}
+
+function readTilesStats(): Record<string, number> {
+  if (!tiles) return {}
+  return (tiles as unknown as { stats?: Record<string, number> }).stats ?? {}
 }
 
 function updateProgressUI(): void {
@@ -540,13 +573,14 @@ function updateProgressUI(): void {
   }
   progress.hidden = false
   progressBar.style.width = `${Math.max(0, Math.min(1, tiles.loadProgress)) * 100}%`
-  const loaded = Math.max(0, Number((tiles.stats as Record<string, number>).loaded) || 0)
+  const stats = readTilesStats()
+  const loaded = Math.max(0, Number(stats.loaded) || 0)
   const queued = Math.max(
     0,
-    (Number((tiles.stats as Record<string, number>).queued) || 0)
-      + (Number((tiles.stats as Record<string, number>).downloading) || 0)
-      + (Number((tiles.stats as Record<string, number>).parsing) || 0)
-      + (Number((tiles.stats as Record<string, number>).processing) || 0),
+    (Number(stats.queued) || 0)
+      + (Number(stats.downloading) || 0)
+      + (Number(stats.parsing) || 0)
+      + (Number(stats.processing) || 0),
   )
   progressLabel.textContent = `已加载 ${loaded} · 队列 ${queued} · 锚点 ${anchors.length} · 捕获叶节点 ${capturedTileNodes.size} · 过滤 ${glbSkippedLargeLeafCount}`
   setCaptureButtonState()
@@ -587,6 +621,7 @@ function resetGlbCaptureScene(message = '等待首次锚点捕获'): void {
     glbPreviewModel = null
   }
   exportCurrentGlbButton.disabled = true
+  exportTerrainPackageButton.disabled = true
   setGlbPreviewStatus(message, 'idle', '', 1200)
   setGlbPlaceholder(message)
   renderAnchorList()
@@ -697,55 +732,46 @@ function getTextureCaptureKey(texture: THREE.Texture | null | undefined): string
   ].join(':')
 }
 
-function getMaterialCaptureKey(material: THREE.Material): string {
-  const record = material as THREE.Material & Record<string, unknown>
-  const textureKeys = [
-    'map',
-    'alphaMap',
-    'aoMap',
-    'bumpMap',
-    'displacementMap',
-    'emissiveMap',
-    'envMap',
-    'lightMap',
-    'metalnessMap',
-    'normalMap',
-    'roughnessMap',
-    'specularMap',
-  ].map((key) => getTextureCaptureKey(record[key] as THREE.Texture | null | undefined))
+const TERRAIN_TEXTURE_SLOTS = [
+  'map',
+  'alphaMap',
+  'aoMap',
+  'bumpMap',
+  'displacementMap',
+  'emissiveMap',
+  'lightMap',
+  'metalnessMap',
+  'normalMap',
+  'roughnessMap',
+] as const
 
-  return [
-    material.type,
-    material.name || '-',
-    material.blending,
-    material.side,
-    material.transparent ? 1 : 0,
-    material.opacity,
-    material.depthTest ? 1 : 0,
-    material.depthWrite ? 1 : 0,
-    material.visible ? 1 : 0,
-    material.alphaTest,
-    (record.color instanceof THREE.Color) ? record.color.getHexString() : '-',
-    (record.emissive instanceof THREE.Color) ? record.emissive.getHexString() : '-',
-    record.roughness ?? '-',
-    record.metalness ?? '-',
-    record.vertexColors ? 1 : 0,
-    record.flatShading ? 1 : 0,
-    textureKeys.join('|'),
-  ].join('|')
+type TerrainTextureSlot = (typeof TERRAIN_TEXTURE_SLOTS)[number]
+
+interface TerrainTextureBinding {
+  slot: TerrainTextureSlot
+  textureId: string
+  materialIndices?: number[]
+  image?: string
+  ktx2?: string
 }
 
-function getGeometryLayoutKey(geometry: THREE.BufferGeometry): string {
-  const attributeNames = Object.keys(geometry.attributes).sort()
-  const attributes = attributeNames.map((name) => {
-    const attribute = geometry.getAttribute(name)
-    return `${name}:${attribute.itemSize}:${attribute.normalized ? 1 : 0}:${attribute.array.constructor.name}`
-  }).join(',')
-  return [
-    geometry.index ? 1 : 0,
-    attributes,
-    geometry.groups.length,
-  ].join('|')
+interface EncodedTerrainTexture {
+  id: string
+  extension: 'jpg' | 'png'
+  mimeType: string
+  bytes: Uint8Array
+  width: number
+  height: number
+}
+
+let lastTerrainMergeStats: TerrainMergeStats | null = null
+
+function readTerrainMergeOptions(): TerrainMergeOptions {
+  return {
+    weldEpsilon: Number(weldEpsilonInput.value) || 0.05,
+    stripSkirts: stripSkirtsInput.checked,
+    smoothNormals: weldEnabledInput.checked,
+  }
 }
 
 function cloneLeafNodeForExport(source: CapturableObject): THREE.Object3D {
@@ -767,6 +793,188 @@ function cloneLeafNodeForExport(source: CapturableObject): THREE.Object3D {
   return clone
 }
 
+function extractGeometryGroup(
+  geometry: THREE.BufferGeometry,
+  group: { start: number; count: number; materialIndex: number },
+): THREE.BufferGeometry | null {
+  const position = geometry.getAttribute('position')
+  const indexAttribute = geometry.getIndex()
+  const totalTriangles = indexAttribute
+    ? Math.floor(indexAttribute.count / 3)
+    : Math.floor(position.count / 3)
+  const start = Math.max(0, group.start)
+  const count = Math.min(group.count, totalTriangles - start)
+  if (count <= 0) {
+    return null
+  }
+  const firstIndex = start * 3
+  const indexCount = count * 3
+
+  const sub = new THREE.BufferGeometry()
+  for (const name of ['position', 'normal', 'uv'] as const) {
+    const attribute = geometry.getAttribute(name)
+    if (attribute) {
+      sub.setAttribute(name, attribute.clone())
+    }
+  }
+  if (indexAttribute) {
+    const slice = (indexAttribute.array as THREE.TypedArray).slice(firstIndex, firstIndex + indexCount)
+    sub.setIndex(new THREE.BufferAttribute(slice, 1))
+  } else {
+    const indices = new Uint32Array(indexCount)
+    for (let i = 0; i < indexCount; i += 1) {
+      indices[i] = firstIndex + i
+    }
+    sub.setIndex(new THREE.BufferAttribute(indices, 1))
+  }
+  return sub
+}
+
+function collectTerrainMergeSources(root: THREE.Object3D): {
+  sources: TerrainMergeSource[]
+  materials: THREE.Material[]
+  looseNodes: CapturableObject[]
+  rawLeafNodes: CapturableObject[]
+} {
+  const sources: TerrainMergeSource[] = []
+  const materials: THREE.Material[] = []
+  const looseNodes: CapturableObject[] = []
+  const rawLeafNodes: CapturableObject[] = []
+  const materialIndexByUuid = new Map<string, number>()
+
+  const registerMaterial = (material: THREE.Material): number => {
+    const existing = materialIndexByUuid.get(material.uuid)
+    if (existing !== undefined) {
+      return existing
+    }
+    const index = materials.length
+    materials.push(cloneMaterialDeep(material))
+    materialIndexByUuid.set(material.uuid, index)
+    return index
+  }
+
+  root.traverse((node) => {
+    const renderable = node as CapturableObject & {
+      isSprite?: boolean
+      isSkinnedMesh?: boolean
+      isInstancedMesh?: boolean
+      isPoints?: boolean
+      isLine?: boolean
+    }
+    if (!renderable.geometry && !renderable.isSprite) return
+    if (isRenderableLeaf(node)) {
+      rawLeafNodes.push(renderable)
+    }
+    if (
+      renderable.isSprite
+      || renderable.isSkinnedMesh
+      || renderable.isInstancedMesh
+      || renderable.isPoints
+      || renderable.isLine
+      || !renderable.geometry
+      || !renderable.material
+    ) {
+      looseNodes.push(renderable)
+      return
+    }
+    const geometry = cloneGeometryForExport(renderable)
+    const hasMorphTargets = geometry?.morphAttributes
+      ? Object.keys(geometry.morphAttributes).length > 0
+      : false
+    if (!geometry || hasMorphTargets) {
+      looseNodes.push(renderable)
+      return
+    }
+    const materialList = Array.isArray(renderable.material) ? renderable.material : [renderable.material]
+    const groups = geometry.groups.length > 0
+      ? geometry.groups
+      : [{ start: 0, count: Infinity, materialIndex: 0 }]
+    for (const group of groups) {
+      const material = materialList[group.materialIndex ?? 0] ?? materialList[0]
+      if (!material) {
+        continue
+      }
+      const subGeometry = extractGeometryGroup(geometry, {
+        start: group.start,
+        count: group.count,
+        materialIndex: group.materialIndex ?? 0,
+      })
+      if (!subGeometry) {
+        continue
+      }
+      sources.push({
+        geometry: subGeometry,
+        materialIndex: registerMaterial(material),
+      })
+    }
+  })
+
+  return { sources, materials, looseNodes, rawLeafNodes }
+}
+
+function assignTerrainTextureIds(materials: THREE.Material[]): Map<THREE.Texture, string> {
+  const idsByTexture = new Map<THREE.Texture, string>()
+  const idsByKey = new Map<string, string>()
+  let counter = 0
+  for (const material of materials) {
+    for (const slot of TERRAIN_TEXTURE_SLOTS) {
+      const texture = (material as unknown as Record<string, unknown>)[slot]
+      if (!(texture instanceof THREE.Texture)) {
+        continue
+      }
+      const key = getTextureCaptureKey(texture)
+      const existing = idsByKey.get(key)
+      if (existing) {
+        idsByTexture.set(texture, existing)
+        continue
+      }
+      counter += 1
+      const id = `tex-${String(counter).padStart(4, '0')}`
+      idsByKey.set(key, id)
+      idsByTexture.set(texture, id)
+    }
+  }
+  return idsByTexture
+}
+
+function buildMeshTextureBindings(
+  meshName: string,
+  materials: THREE.Material[],
+  textureIds: Map<THREE.Texture, string>,
+): {
+  bindings: TerrainTextureBinding[]
+  slotsByTextureId: Map<string, Array<{ mesh: string; materialIndex: number; slot: TerrainTextureSlot }>>
+} {
+  const bindings: TerrainTextureBinding[] = []
+  const slotsByTextureId = new Map<string, Array<{ mesh: string; materialIndex: number; slot: TerrainTextureSlot }>>()
+  for (let materialIndex = 0; materialIndex < materials.length; materialIndex += 1) {
+    const material = materials[materialIndex]
+    for (const slot of TERRAIN_TEXTURE_SLOTS) {
+      const texture = (material as unknown as Record<string, unknown>)[slot]
+      if (!(texture instanceof THREE.Texture)) {
+        continue
+      }
+      const textureId = textureIds.get(texture)
+      if (!textureId) {
+        continue
+      }
+      const existing = bindings.find((binding) => binding.textureId === textureId && binding.slot === slot)
+      if (existing) {
+        const indices = existing.materialIndices ?? []
+        if (!indices.includes(materialIndex)) {
+          indices.push(materialIndex)
+        }
+      } else {
+        bindings.push({ slot, textureId, materialIndices: [materialIndex] })
+      }
+      const slots = slotsByTextureId.get(textureId) ?? []
+      slots.push({ mesh: meshName, materialIndex, slot })
+      slotsByTextureId.set(textureId, slots)
+    }
+  }
+  return { bindings, slotsByTextureId }
+}
+
 function buildMergedCaptureRoot(): THREE.Group {
   glbCaptureRoot.updateMatrixWorld(true)
   const exportRoot = new THREE.Group()
@@ -777,52 +985,17 @@ function buildMergedCaptureRoot(): THREE.Group {
   exportRoot.quaternion.identity()
   exportRoot.scale.set(1, 1, 1)
 
-  type MergeBucket = {
-    material: THREE.Material
-    sourceNodes: CapturableObject[]
-  }
+  const { sources, materials, looseNodes, rawLeafNodes } = collectTerrainMergeSources(glbCaptureRoot)
+  const merged = mergeTerrainGeometries(sources, readTerrainMergeOptions())
+  lastTerrainMergeStats = merged?.stats ?? null
 
-  const buckets = new Map<string, MergeBucket>()
-  const looseNodes: CapturableObject[] = []
-
-  glbCaptureRoot.traverse((node) => {
-    const renderable = node as CapturableObject & { isSprite?: boolean }
-    if (!renderable.geometry && !renderable.isSprite) return
-
-    if (renderable.isSprite || !renderable.geometry || !renderable.material || Array.isArray(renderable.material) || renderable.geometry.groups.length > 0) {
-      looseNodes.push(renderable)
-      return
-    }
-
-    const materialKey = getMaterialCaptureKey(renderable.material)
-    const geometryKey = getGeometryLayoutKey(renderable.geometry)
-    const bucketKey = `${materialKey}||${geometryKey}`
-    const bucket = buckets.get(bucketKey) ?? {
-      material: cloneMaterialDeep(renderable.material),
-      sourceNodes: [],
-    }
-    bucket.sourceNodes.push(renderable)
-    buckets.set(bucketKey, bucket)
-  })
-
-  for (const bucket of buckets.values()) {
-    if (bucket.sourceNodes.length === 1) {
-      exportRoot.add(cloneLeafNodeForExport(bucket.sourceNodes[0]))
-      continue
-    }
-
-    const geometries = bucket.sourceNodes
-      .map((node) => cloneGeometryForExport(node))
-      .filter((geometry): geometry is THREE.BufferGeometry => Boolean(geometry))
-
-    const mergedGeometry = mergeGeometries(geometries, false)
-    if (!mergedGeometry) {
-      for (const node of bucket.sourceNodes) exportRoot.add(cloneLeafNodeForExport(node))
-      continue
-    }
-
-    const mergedMesh = new THREE.Mesh(mergedGeometry, cloneMaterialDeep(bucket.material))
-    mergedMesh.name = 'merged-mesh'
+  if (merged && materials.length > 0) {
+    const textureIds = assignTerrainTextureIds(materials)
+    const mergedMesh = new THREE.Mesh(
+      merged.geometry,
+      materials.length === 1 ? materials[0] : materials,
+    )
+    mergedMesh.name = 'merged-terrain'
     mergedMesh.matrixAutoUpdate = false
     mergedMesh.matrix.identity()
     mergedMesh.position.set(0, 0, 0)
@@ -830,7 +1003,17 @@ function buildMergedCaptureRoot(): THREE.Group {
     mergedMesh.scale.set(1, 1, 1)
     mergedMesh.updateMatrix()
     mergedMesh.updateMatrixWorld(true)
+    const { bindings } = buildMeshTextureBindings(mergedMesh.name, materials, textureIds)
+    mergedMesh.userData.plTextureBindings = bindings
     exportRoot.add(mergedMesh)
+  } else {
+    const looseIdentity = new Set<CapturableObject>(looseNodes)
+    for (const node of rawLeafNodes) {
+      if (looseIdentity.has(node)) {
+        continue
+      }
+      exportRoot.add(cloneLeafNodeForExport(node))
+    }
   }
 
   for (const node of looseNodes) {
@@ -849,7 +1032,7 @@ function isRenderableLeaf(node: THREE.Object3D): boolean {
   for (const child of node.children) {
     if (isRenderableLeaf(child)) return false
   }
-  return hasMaterial || renderable.isSprite
+  return hasMaterial || renderable.isSprite === true
 }
 
 function cloneRenderableLeafForCapture(source: CapturableObject): CapturableObject | null {
@@ -947,7 +1130,7 @@ function loadGlbPreviewFromBuffer(buffer: ArrayBuffer, revision: number): Promis
         setGlbPreviewStatus(
           'GLB 预览已同步',
           'ok',
-          `当前捕获 ${capturedTileNodes.size} 个高精度叶节点`,
+          `捕获 ${capturedTileNodes.size} 叶节点 · 合并 ${lastTerrainMergeStats?.outputTriangleCount ?? '-'} 三角形 · 焊接 ${lastTerrainMergeStats?.weldedVertexCount ?? 0} 顶点`,
           1600,
         )
         resolve()
@@ -1056,7 +1239,7 @@ function disposeCameraMarkers(): void {
     if (!material) return
     const materials = Array.isArray(material) ? material : [material]
     for (const item of materials) {
-      item.map?.dispose()
+      ;(item as THREE.Material & { map?: THREE.Texture | null }).map?.dispose()
       item.dispose()
     }
   })
@@ -1256,6 +1439,7 @@ function syncGlbPreviewAfterCaptureMutation(messageIfEmpty = '当前视图没有
     glbPreviewRefreshRequested = false
     glbCameraFramed = false
     exportCurrentGlbButton.disabled = true
+    exportTerrainPackageButton.disabled = true
     setGlbPlaceholder(messageIfEmpty, 'idle')
     setGlbPreviewStatus(messageIfEmpty, 'idle', '右侧预览已清空', 1800)
     return
@@ -1283,6 +1467,7 @@ function setCaptureButtonState(): void {
       ? '瓦片仍在加载中，完成后才能添加锚点'
       : '请先加载 3D Tiles 数据源'
   exportCurrentGlbButton.disabled = capturedTileNodes.size === 0
+  exportTerrainPackageButton.disabled = capturedTileNodes.size === 0
 }
 
 function hasVisibleDescendant(tile: CapturableTile, visibleTiles: Set<CapturableTile>): boolean {
@@ -1385,6 +1570,7 @@ function captureVisibleTiles(): number {
     glbPreviewRevision += 1
     hideGlbPlaceholder()
     exportCurrentGlbButton.disabled = false
+    exportTerrainPackageButton.disabled = false
     if (!glbCameraFramed) {
       syncGlbCameraToMainView()
       glbCameraFramed = true
@@ -1465,6 +1651,261 @@ async function exportCurrentGlb(): Promise<void> {
   } catch (error) {
     setGlbPreviewStatus(
       'GLB 导出失败',
+      'error',
+      error instanceof Error ? error.message : '请稍后重试',
+      2400,
+    )
+  } finally {
+    exporting = false
+    setCaptureButtonState()
+  }
+}
+
+function nextPowerOfTwoDown(value: number): number {
+  if (value <= 1) return 1
+  return 2 ** Math.floor(Math.log2(value))
+}
+
+async function encodeTextureToPackageFile(
+  texture: THREE.Texture,
+  maxSize: number,
+  quality: number,
+): Promise<EncodedTerrainTexture> {
+  const image = texture.image
+  let sourceCanvas: HTMLCanvasElement | null = null
+  if (typeof HTMLCanvasElement !== 'undefined' && image instanceof HTMLCanvasElement) {
+    sourceCanvas = image
+  } else if (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) {
+    sourceCanvas = document.createElement('canvas')
+    sourceCanvas.width = image.width
+    sourceCanvas.height = image.height
+    sourceCanvas.getContext('2d')?.drawImage(image, 0, 0)
+  } else if (typeof HTMLImageElement !== 'undefined' && image instanceof HTMLImageElement) {
+    sourceCanvas = document.createElement('canvas')
+    sourceCanvas.width = image.naturalWidth || image.width
+    sourceCanvas.height = image.naturalHeight || image.height
+    sourceCanvas.getContext('2d')?.drawImage(image, 0, 0)
+  } else {
+    sourceCanvas = document.createElement('canvas')
+    sourceCanvas.width = 2
+    sourceCanvas.height = 2
+  }
+  if (!sourceCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) {
+    throw new Error('贴图无法光栅化。')
+  }
+
+  const sourceWidth = sourceCanvas.width
+  const sourceHeight = sourceCanvas.height
+  const largest = Math.max(sourceWidth, sourceHeight)
+  const target = Math.min(maxSize, largest)
+  let width = nextPowerOfTwoDown(Math.max(1, Math.round(sourceWidth * (target / largest))))
+  let height = nextPowerOfTwoDown(Math.max(1, Math.round(sourceHeight * (target / largest))))
+  width = Math.min(width, maxSize)
+  height = Math.min(height, maxSize)
+
+  let canvas = sourceCanvas
+  if (width !== sourceWidth || height !== sourceHeight) {
+    canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d')
+    if (!context) {
+      throw new Error('无法创建贴图编码上下文。')
+    }
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.drawImage(sourceCanvas, 0, 0, width, height)
+  }
+
+  let hasAlpha = false
+  const probe = document.createElement('canvas')
+  probe.width = 64
+  probe.height = 64
+  const probeContext = probe.getContext('2d')
+  if (probeContext) {
+    probeContext.drawImage(canvas, 0, 0, 64, 64)
+    const data = probeContext.getImageData(0, 0, 64, 64).data
+    for (let i = 3; i < data.length; i += 4) {
+      if (data[i] < 250) {
+        hasAlpha = true
+        break
+      }
+    }
+  }
+
+  const extension = hasAlpha ? 'png' : 'jpg'
+  const mimeType = hasAlpha ? 'image/png' : 'image/jpeg'
+  const dataUrl = canvas.toDataURL(mimeType, hasAlpha ? undefined : Math.max(0.3, Math.min(0.95, quality)))
+  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return {
+    id: '',
+    extension: extension as 'jpg' | 'png',
+    mimeType,
+    bytes,
+    width,
+    height,
+  }
+}
+
+async function encodeTerrainPackageTextures(
+  root: THREE.Object3D,
+  textureIds: Map<THREE.Texture, string>,
+): Promise<Map<string, EncodedTerrainTexture>> {
+  const uniqueTextures = new Map<string, THREE.Texture>()
+  root.traverse((node) => {
+    const mesh = node as THREE.Mesh
+    if (!mesh.isMesh || !mesh.material) {
+      return
+    }
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const material of materials) {
+      for (const slot of TERRAIN_TEXTURE_SLOTS) {
+        const texture = (material as unknown as Record<string, unknown>)[slot]
+        if (!(texture instanceof THREE.Texture)) {
+          continue
+        }
+        const id = textureIds.get(texture)
+        if (id && !uniqueTextures.has(id)) {
+          uniqueTextures.set(id, texture)
+        }
+      }
+    }
+  })
+
+  const maxSize = Number(textureMaxSizeSelect.value) || 2048
+  const quality = Number(textureQualityInput.value) || 0.8
+  const encoded = new Map<string, EncodedTerrainTexture>()
+  for (const [id, texture] of uniqueTextures) {
+    const file = await encodeTextureToPackageFile(texture, maxSize, quality)
+    file.id = id
+    encoded.set(id, file)
+  }
+  return encoded
+}
+
+function texturelessMaterialFor(source: THREE.Material): THREE.MeshStandardMaterial {
+  const record = source as THREE.Material & {
+    color?: THREE.Color
+    opacity?: number
+    transparent?: boolean
+    alphaTest?: number
+    side?: THREE.Side
+  }
+  return new THREE.MeshStandardMaterial({
+    color: record.color instanceof THREE.Color ? record.color.clone() : new THREE.Color(0xffffff),
+    name: source.name,
+    opacity: typeof record.opacity === 'number' ? record.opacity : 1,
+    transparent: record.transparent === true,
+    alphaTest: typeof record.alphaTest === 'number' ? record.alphaTest : 0,
+    side: record.side ?? THREE.FrontSide,
+  })
+}
+
+function cloneRootWithoutTextures(source: THREE.Object3D): THREE.Object3D {
+  const clone = source.clone(false)
+  const mesh = source as THREE.Mesh
+  if (mesh.isMesh && mesh.material) {
+    const cloneMesh = clone as THREE.Mesh
+    cloneMesh.geometry = mesh.geometry.clone()
+    cloneMesh.material = Array.isArray(mesh.material)
+      ? mesh.material.map((item) => texturelessMaterialFor(item))
+      : texturelessMaterialFor(mesh.material)
+  }
+  for (const child of source.children) {
+    clone.add(cloneRootWithoutTextures(child))
+  }
+  return clone
+}
+
+async function exportTerrainPackage(): Promise<void> {
+  if (exporting) return
+  if (capturedTileNodes.size === 0) {
+    setGlbPreviewStatus('没有可导出的锚点内容', 'error', '请先添加一个锚点', 2200)
+    return
+  }
+  exporting = true
+  exportTerrainPackageButton.disabled = true
+  exportCurrentGlbButton.disabled = true
+  try {
+    setGlbPreviewStatus('正在生成地形包…', 'loading', '焊接网格并编码贴图')
+    const exportRoot = buildMergedCaptureRoot()
+    try {
+      recenterObject3D(exportRoot)
+
+      const mergedMesh = exportRoot.getObjectByName('merged-terrain') as THREE.Mesh | undefined
+      const textureIds = new Map<THREE.Texture, string>()
+      if (mergedMesh?.isMesh && mergedMesh.material) {
+        const materials = Array.isArray(mergedMesh.material) ? mergedMesh.material : [mergedMesh.material]
+        for (const [texture, id] of assignTerrainTextureIds(materials)) {
+          textureIds.set(texture, id)
+        }
+      }
+
+      const encoded = await encodeTerrainPackageTextures(exportRoot, textureIds)
+
+      if (mergedMesh?.isMesh && mergedMesh.material) {
+        const materials = Array.isArray(mergedMesh.material) ? mergedMesh.material : [mergedMesh.material]
+        const { bindings } = buildMeshTextureBindings(mergedMesh.name, materials, textureIds)
+        for (const binding of bindings) {
+          const file = encoded.get(binding.textureId)
+          if (file) {
+            binding.image = `textures/${binding.textureId}.${file.extension}`
+          }
+        }
+        mergedMesh.userData.plTextureBindings = bindings
+      }
+
+      const textureless = cloneRootWithoutTextures(exportRoot)
+      const glbBuffer = await exportObject3D(textureless)
+      disposeObject3DResources(textureless)
+
+      const textures = [...encoded.values()].map((file) => ({
+        id: file.id,
+        image: `textures/${file.id}.${file.extension}`,
+        width: file.width,
+        height: file.height,
+        bytes: file.bytes.length,
+        mimeType: file.mimeType,
+      }))
+      const manifest = {
+        version: 1,
+        glb: 'scene.glb',
+        textures,
+      }
+      const zipEntries = [
+        { name: 'scene.glb', bytes: new Uint8Array(glbBuffer) },
+        ...[...encoded.values()].map((file) => ({
+          name: `textures/${file.id}.${file.extension}`,
+          bytes: file.bytes,
+        })),
+        { name: 'textures.json', bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) },
+      ]
+      const zipBytes = buildZipArchive(zipEntries)
+      const blob = new Blob([zipBytes], { type: 'application/zip' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `terrain-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.zip`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+
+      const stats = lastTerrainMergeStats
+      setGlbPreviewStatus(
+        '地形包导出完成',
+        'ok',
+        `${encoded.size} 张贴图已外置 · 焊接 ${stats?.weldedVertexCount ?? 0} 顶点`,
+        2400,
+      )
+    } finally {
+      disposeObject3DResources(exportRoot)
+    }
+  } catch (error) {
+    setGlbPreviewStatus(
+      '地形包导出失败',
       'error',
       error instanceof Error ? error.message : '请稍后重试',
       2400,
@@ -1649,6 +2090,7 @@ function handleShortcut(event: KeyboardEvent): void {
 $('#apply-location').addEventListener('click', applyLocation)
 addAnchorButton.addEventListener('click', handleAddAnchor)
 exportCurrentGlbButton.addEventListener('click', () => void exportCurrentGlb())
+exportTerrainPackageButton.addEventListener('click', () => void exportTerrainPackage())
 anchorList.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof HTMLElement)) return

@@ -74,6 +74,7 @@ import {
   COMPONENT_ARTIFACT_KEY,
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../components/componentManager'
+import { findTerrainTextureStreamFrom } from '../terrainTextureStream'
 import { clamp, degreesToRadians, smoothstep } from './noise'
 import {
   activeRoadWaypoints,
@@ -2080,6 +2081,22 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
   }
 
+  function syncTerrainTextureStreamGate(): void {
+    if (!hostObject) {
+      return
+    }
+    const stream = findTerrainTextureStreamFrom(hostObject)
+    if (!stream) {
+      return
+    }
+    // The GLB aerial base map is only sampled in blend mode; the default
+    // replace mode (and a disabled surface) fully takes over the shading, so
+    // the external imagery pack can be skipped entirely in those modes.
+    stream.setBaseMapStreamingEnabled(
+      enabled && props.surface.enabled && props.surface.baseMapMode === 'blend',
+    )
+  }
+
   function updateStats(): void {
     stats.phase = !enabled
       ? 'disabled'
@@ -2407,6 +2424,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         gridFailed = false
         dirty.grid = true
       }
+      syncTerrainTextureStreamGate()
     },
     setProps(next: ProceduralLandscapeComponentProps): void {
       if (disposed) {
@@ -2458,6 +2476,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         dirty.uniforms = true
       }
       previousKeys = keys
+      syncTerrainTextureStreamGate()
     },
     setEnabled(value: boolean): void {
       if (disposed || enabled === value) {
@@ -2469,6 +2488,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       } else {
         forceStream = true
       }
+      syncTerrainTextureStreamGate()
     },
     update(deltaTime: number): void {
       try {
@@ -2481,6 +2501,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     dispose(): void {
       if (disposed) {
         return
+      }
+      if (hostObject) {
+        findTerrainTextureStreamFrom(hostObject)?.setBaseMapStreamingEnabled(true)
       }
       disposed = true
       resetAll()

@@ -44,6 +44,12 @@ export async function main(argv: string[]): Promise<void> {
         await cmdSyncSceneryMirrors(rest);
         return;
       }
+    case "process-terrain-textures":
+      {
+        const { cmdProcessTerrainTextures } = await import("./commands/processTerrainTextures.js");
+        await cmdProcessTerrainTextures(rest);
+        return;
+      }
     case "--help":
     case "-h":
     case undefined:
@@ -68,5 +74,6 @@ Commands:
   sync-physics [--repoRoot <path>] [--viewerRoot <path>]
   sync-schema [--repoRoot <path>] [--viewerRoot <path>]
   sync-scenery-mirrors [--repoRoot <path>] [--viewerRoot <path>]
+  process-terrain-textures [--manifest <path>] [--textureDir <dir>] [--verbose]
 `);
 }

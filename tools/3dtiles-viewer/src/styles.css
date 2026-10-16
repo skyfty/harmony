@@ -104,6 +104,45 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 }
 .glb-panel > .panel-header h2 { display: none; }
 .glb-panel > .panel-header button { pointer-events: auto; }
+.glb-panel > .panel-header .glb-export-actions {
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+.glb-panel .glb-export-options {
+  position: absolute;
+  top: 52px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: .45rem .68rem;
+  border: 1px solid rgba(145, 190, 230, .18);
+  border-radius: 10px;
+  background: rgba(7, 17, 30, .82);
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+.glb-panel .glb-export-options .option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: .78rem;
+}
+.glb-panel .glb-export-options input[type="checkbox"] { width: auto; }
+.glb-panel .glb-export-options input[type="number"] {
+  width: 64px;
+  padding: .26rem .38rem;
+  font-size: .8rem;
+}
+.glb-panel .glb-export-options select {
+  width: auto;
+  padding: .28rem .38rem;
+  font-size: .8rem;
+}
 .panel-header {
   display: flex;
   justify-content: space-between;

@@ -68,6 +68,7 @@ export type GltfParseNodeDescriptor = {
   isMesh: boolean
   geometry: GltfParseGeometryDescriptor | null
   material: GltfParseMaterialDescriptor | null
+  userData: string | null
   children: GltfParseNodeDescriptor[]
 }
 

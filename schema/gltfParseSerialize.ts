@@ -92,6 +92,7 @@ type Object3DLike = {
   quaternion: QuatLike
   scale: Vec3Like
   visible: boolean
+  userData?: Record<string, unknown>
   /** Clips attached to the object by GLTFLoader consumers (schema/loader.ts). */
   animations?: unknown
 }
@@ -361,6 +362,16 @@ async function serializeNode(object: Object3DLike): Promise<GltfParseNodeDescrip
     children.push(serializedChild)
   }
 
+  let userData: string | null = null
+  const rawUserData = object.userData
+  if (rawUserData && Object.keys(rawUserData).length > 0) {
+    try {
+      userData = JSON.stringify(rawUserData)
+    } catch {
+      userData = null
+    }
+  }
+
   return {
     name: object.name ?? '',
     position: [object.position.x, object.position.y, object.position.z],
@@ -370,6 +381,7 @@ async function serializeNode(object: Object3DLike): Promise<GltfParseNodeDescrip
     isMesh,
     geometry,
     material,
+    userData,
     children,
   }
 }
