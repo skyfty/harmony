@@ -60,6 +60,10 @@ export interface ProceduralLandscapeSurfaceUniforms {
   uPlFlattenInner: THREE.IUniform<number>
   uPlFlattenOuter: THREE.IUniform<number>
   uPlFlattenStrength: THREE.IUniform<number>
+  uPlRoadbedCutProx: THREE.IUniform<number>
+  uPlUseBaseSurface: THREE.IUniform<number>
+  uPlRoadDisplacement: THREE.IUniform<number>
+  uPlRoadbedBrightness: THREE.IUniform<number>
   uPlWaterLevel: THREE.IUniform<number>
   uPlBaseMapBlend: THREE.IUniform<number>
   // ---- 季节资产 ----
@@ -110,6 +114,10 @@ export function createProceduralLandscapeSurfaceUniforms(): ProceduralLandscapeS
     uPlFlattenInner: { value: 6 },
     uPlFlattenOuter: { value: 10 },
     uPlFlattenStrength: { value: 1 },
+    uPlRoadbedCutProx: { value: 0 },
+    uPlUseBaseSurface: { value: 0 },
+    uPlRoadDisplacement: { value: 1 },
+    uPlRoadbedBrightness: { value: 1 },
     uPlWaterLevel: { value: 0 },
     uPlBaseMapBlend: { value: 0.5 },
     uPlNoiseTex: { value: null },
@@ -144,8 +152,14 @@ uniform float uPlRoadHalfWidth;
 uniform float uPlFlattenInner;
 uniform float uPlFlattenOuter;
 uniform float uPlFlattenStrength;
+uniform float uPlUseBaseSurface;
+uniform float uPlRoadDisplacement;
+attribute float aBaseHeight;
+attribute vec3 aBaseNormal;
 varying vec3 vPlWorldPosition;
 varying vec3 vPlWorldNormal;
+varying float vPlBaseHeight;
+varying vec3 vPlBaseNormal;
 varying float vPlViewDistance;`
 
 const VERTEX_BODY = `#include <begin_vertex>
@@ -153,6 +167,16 @@ const VERTEX_BODY = `#include <begin_vertex>
   vec4 plWorld4 = modelMatrix * vec4(transformed, 1.0);
   vPlWorldPosition = plWorld4.xyz;
   vPlWorldNormal = normalize(mat3(modelMatrix) * objectNormal);
+  vPlBaseHeight = aBaseHeight;
+  vPlBaseNormal = length(aBaseNormal) > 1e-5
+    ? normalize(mat3(modelMatrix) * aBaseNormal)
+    : vPlWorldNormal;
+  // The roadbed slope is a graded approximation of the raw surface. Light and
+  // palette it with the underlying terrain normal so its verge does not turn
+  // into a dark band compared with the adjacent DEM.
+  if (uPlUseBaseSurface > 0.5) {
+    vPlWorldNormal = vPlBaseNormal;
+  }
   vPlViewDistance = distance(vPlWorldPosition, cameraPosition);
   vec2 plUv = (vPlWorldPosition.xz - uPlTerrainMin) / max(uPlTerrainSize, vec2(0.0001));
   vec4 plRoadSample = texture2D(uPlRoadField, plUv);
@@ -173,7 +197,7 @@ const VERTEX_BODY = `#include <begin_vertex>
   float plPlacementProx = plDistance - uPlRoadHalfWidth;
   if (abs(plPlacementProx) > 1e-5) {
     float plSteepV = clamp((0.98 - dot(normalize(objectNormal), vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
-    float plIntensity = clamp((16.0 - plPlacementProx) / 6.0, 0.0, 1.0) * 0.8;
+    float plIntensity = clamp((16.0 - plPlacementProx) / 6.0, 0.0, 1.0) * 0.8 * uPlRoadDisplacement;
     float plScaleYv = max(0.0001, length(vec3(modelMatrix[0][1], modelMatrix[1][1], modelMatrix[2][1])));
     transformed += normalize(objectNormal) * ((texture2D(uPlRockBumpTex, plWorld4.xz / 100.0).x - 0.4)
       * min(1.0, plSteepV * 3.0)) * plIntensity / plScaleYv;
@@ -225,6 +249,9 @@ uniform float uPlWaterLevel;
 uniform float uPlHeightRange;
 uniform float uPlHeightScale;
 uniform float uPlBaseMapBlend;
+uniform float uPlRoadbedCutProx;
+uniform float uPlUseBaseSurface;
+uniform float uPlRoadbedBrightness;
 uniform vec3 uPlGrassTint;
 uniform vec3 uPlForestTint;
 uniform vec3 uPlRoadTint;
@@ -243,6 +270,8 @@ uniform vec3 uPlPeakColB;
 uniform vec3 uPlRoadCol;
 varying vec3 vPlWorldPosition;
 varying vec3 vPlWorldNormal;
+varying float vPlBaseHeight;
+varying vec3 vPlBaseNormal;
 varying float vPlViewDistance;
 
 float plSaturate(float value) { return clamp(value, 0.0, 1.0); }
@@ -267,6 +296,9 @@ const FRAGMENT_BODY = `#include <map_fragment>
   plSeasonalColor = diffuseColor.rgb;
   vec2 plWorldUv = (vPlWorldPosition.xz - uPlTerrainMin) / max(uPlTerrainSize, vec2(0.0001));
   float plRoadProx = texture2D(uPlRoadField, plWorldUv).r * uPlRoadFieldRange - uPlRoadHalfWidth;
+  if (uPlRoadbedCutProx > 0.0 && plRoadProx < uPlRoadbedCutProx) {
+    discard;
+  }
   float plHasRoadProx = step(0.00001, abs(plRoadProx));
 
   vec2 wUv = vPlWorldPosition.xz / max(uPlUvScale, 0.001);
@@ -274,6 +306,7 @@ const FRAGMENT_BODY = `#include <map_fragment>
   vec2 wUv500 = vPlWorldPosition.xz / 500.0;
   vec2 wUv2000 = vPlWorldPosition.xz / 2000.0;
   vec2 wUv4000 = vPlWorldPosition.xz / 4000.0;
+  vec3 plNormalForPalette = normalize(mix(vPlWorldNormal, vPlBaseNormal, uPlUseBaseSurface));
 
   float fade0 = texture2D(uPlNoiseTex, wUv).r;
   float fade1 = texture2D(uPlNoiseTex, wUv100).r;
@@ -284,7 +317,8 @@ const FRAGMENT_BODY = `#include <map_fragment>
 
   // 官方高度公式按「水面以上 0..300m」调参；lab 世界起伏 ±40m 时乘 ×4 折算，
   // 编辑器真实地形按实测起伏归一化（见 config.resolveSurfaceHeightScale）。
-  float heightRel = vPlWorldPosition.y - uPlWaterLevel;
+  float plPaletteY = mix(vPlWorldPosition.y, vPlBaseHeight, uPlUseBaseSurface);
+  float heightRel = plPaletteY - uPlWaterLevel;
   float height = heightRel * uPlHeightScale;
 
   // ---- 官方 heather 分布（官方地形顶点着色器逐行一致）。 ----
@@ -304,7 +338,7 @@ const FRAGMENT_BODY = `#include <map_fragment>
 
   float vDarkGrass = min(max(0.0, (vFade1 - 0.25) * 2.0), 1.0);
 
-  float steepness = clamp((0.98 - dot(normalize(vPlWorldNormal), vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
+  float steepness = clamp((0.98 - dot(plNormalForPalette, vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
   float underRoadFactor = 1.0 - step(0.000001, -plRoadProx);
   steepness *= underRoadFactor;
   vHeather *= underRoadFactor;
@@ -318,6 +352,12 @@ const FRAGMENT_BODY = `#include <map_fragment>
   // 官方：vShadow = treeMask × 高度项，再乘当季 shadowFactor（顶点着色器）。
   float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
   vShadow *= clamp(uPlShadowFactor, 0.0, 1.0);
+  // The road corridor is cleared of canopy. Fade the baked forest-floor
+  // shadow across the verge as well; otherwise the open shoulder reads as a
+  // dark strip next to grass lit by the same sun.
+  if (plHasRoadProx > 0.5) {
+    vShadow *= smoothstep(0.0, 20.0, plRoadProx);
+  }
   plShadowTerm = vShadow;
   // 官方环境光树影调制（官方 lights_fragment_begin_shadow 变体）。
   plAmbientShadow = 1.75 - clamp(vShadow, 0.75, 1.0);
@@ -326,9 +366,6 @@ const FRAGMENT_BODY = `#include <map_fragment>
     vTreeMask = max(0.2, vTreeMask);
   } else {
     vTreeMask = 0.0;
-  }
-  if (plHasRoadProx > 0.5) {
-    vTreeMask *= clamp(plRoadProx / 2.0, 0.0, 1.0);
   }
 
   // ---- 草地：调色板混合（slowroads ground frag） ----
@@ -495,6 +532,7 @@ const FRAGMENT_BODY = `#include <map_fragment>
     plSeasonalColor = mix(plSeasonalColor, plBaseColor, clamp(uPlBaseMapBlend, 0.0, 1.0));
   #endif
 
+  plSeasonalColor *= uPlRoadbedBrightness;
   diffuseColor.rgb = mix(diffuseColor.rgb, plSeasonalColor, clamp(uPlSurfaceStrength, 0.0, 1.0));
 }`
 
@@ -533,13 +571,29 @@ export interface ProceduralLandscapeSurfacePatch {
   restore(): void
 }
 
+export interface ProceduralLandscapeSurfaceOverrides {
+  uPlRoadbedCutProx?: number
+  uPlUseBaseSurface?: number
+  uPlRoadDisplacement?: number
+  uPlShowCanopy?: number
+  uPlRoadbedBrightness?: number
+}
+
+export interface ProceduralLandscapeSurfaceInjectionOptions {
+  overridesForMesh?: (mesh: THREE.Mesh) => ProceduralLandscapeSurfaceOverrides | null
+}
+
 function installMaterialInjection(
   material: THREE.MeshLambertMaterial,
   uniforms: ProceduralLandscapeSurfaceUniforms,
+  overrides: ProceduralLandscapeSurfaceOverrides | null,
 ): void {
   const originalOnBeforeCompile = material.onBeforeCompile
   const originalProgramCacheKey = material.customProgramCacheKey
-  const uniformEntries = Object.entries(uniforms) as Array<[string, THREE.IUniform]>
+  const uniformEntries = Object.entries(uniforms).map(([name, uniform]) => {
+    const override = overrides ? overrides[name as keyof ProceduralLandscapeSurfaceOverrides] : undefined
+    return [name, override === undefined ? uniform : { value: override }] as [string, THREE.IUniform]
+  })
   material.onBeforeCompile = (shader, renderer) => {
     for (const [name, uniform] of uniformEntries) {
       shader.uniforms[name] = uniform
@@ -549,6 +603,13 @@ function installMaterialInjection(
     const reduced = (renderer?.capabilities?.maxTextures ?? 32) <= 16
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', reduced ? '#define PL_SURFACE_REDUCED\n' + VERTEX_HEADER : VERTEX_HEADER)
+      // Roadbed lighting must use the raw DEM normal as well as its palette.
+      // Keeping the graded cut/fill normal here turns the verge into a dark
+      // band whenever the side slope faces away from the sun.
+      .replace(
+        '#include <beginnormal_vertex>',
+        '#include <beginnormal_vertex>\nif (uPlUseBaseSurface > 0.5) { objectNormal = normalize(aBaseNormal); }',
+      )
       .replace('#include <begin_vertex>', VERTEX_BODY)
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', reduced ? '#define PL_SURFACE_REDUCED\n' + FRAGMENT_HEADER : FRAGMENT_HEADER)
@@ -582,6 +643,7 @@ function installMaterialInjection(
 export function applyProceduralLandscapeSurfaceInjection(
   meshes: THREE.Mesh[],
   uniforms: ProceduralLandscapeSurfaceUniforms,
+  options: ProceduralLandscapeSurfaceInjectionOptions = {},
 ): ProceduralLandscapeSurfacePatch {
   const records: MaterialPatchRecord[] = []
   let patchedMaterialCount = 0
@@ -629,7 +691,7 @@ export function applyProceduralLandscapeSurfaceInjection(
         depthTest: carrier.depthTest !== false,
       })
       clone.name = source.name
-      installMaterialInjection(clone, uniforms)
+      installMaterialInjection(clone, uniforms, options.overridesForMesh?.(mesh) ?? null)
       clones.push(clone)
       patchedMaterialCount += 1
     }

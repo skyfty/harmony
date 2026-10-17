@@ -600,6 +600,23 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           <div v-if="runtimeStats?.demTransformWarning" class="pl-hint pl-hint--error">
             {{ runtimeStats.demTransformWarning }}
           </div>
+          <div v-if="runtimeStats" class="pl-stats">
+            <div>全图森林 {{ runtimeStats.worldForestInstances.toLocaleString() }} 棵 · 生成 {{ runtimeStats.worldForestBuildMs.toFixed(0) }}ms</div>
+            <div>近树 3D {{ runtimeStats.nearTreeInstances.toLocaleString() }} 棵</div>
+          </div>
+          <div v-if="runtimeStats && runtimeStats.roadbedHalfWidth > 0" class="pl-stats">
+            <div>
+              路基半宽 {{ runtimeStats.roadbedHalfWidth.toFixed(1) }}m · 边坡 {{ runtimeStats.roadbedSideWidth.toFixed(1) }}m
+              · {{ runtimeStats.roadbedTriangleCount.toLocaleString() }} 三角形
+            </div>
+            <div>
+              最大横坡 {{ runtimeStats.roadbedCrossSlopeMax.toFixed(2) }} ·
+              最大挖填 {{ runtimeStats.roadbedMaxCutFill.toFixed(1) }}m ·
+              外缘误差 {{ runtimeStats.roadbedOuterError.toFixed(2) }}m ·
+              粗地形遮挡 {{ runtimeStats.roadbedOcclusionCount }}/{{ runtimeStats.roadbedAuditSamples }}
+            </div>
+          </div>
+          <div v-if="waterBuriedHint" class="pl-hint">{{ waterBuriedHint }}</div>
         </div>
 
         <!-- 生成 -->

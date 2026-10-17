@@ -205,6 +205,15 @@ export interface ProceduralLandscapeQualityTier {
     radius: number
     budget: number
   }
+  /**
+   * World-anchored forest covering the complete terrain. It replaces the old
+   * camera-anchored far ring; density changes by tier while coverage remains
+   * world-wide.
+   */
+  worldForest: {
+    cellSize: number
+    budget: number
+  }
 }
 
 export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandscapeQuality, ProceduralLandscapeQualityTier> = {
@@ -218,6 +227,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     maxTreeInstances: 6000,
     maxGrassInstances: 12000,
     farForest: { radius: 0, budget: 0 },
+    worldForest: { cellSize: 96, budget: 150_000 },
   },
   medium: {
     viewDistance: 640,
@@ -229,6 +239,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     maxTreeInstances: 12000,
     maxGrassInstances: 24000,
     farForest: { radius: 5000, budget: 28000 },
+    worldForest: { cellSize: 64, budget: 450_000 },
   },
   high: {
     viewDistance: 1200,
@@ -240,6 +251,10 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     maxTreeInstances: 60000,
     maxGrassInstances: 60000,
     farForest: { radius: 8000, budget: 64000 },
+    // Measured editor budget: 1.16M cards held ~67 FPS and 751k held 93-100
+    // FPS in the 1920×1080 viewport. 650k keeps world-wide coverage while
+    // restoring the 100 FPS desktop target; medium/low scale down from here.
+    worldForest: { cellSize: 40, budget: 650_000 },
   },
 }
 

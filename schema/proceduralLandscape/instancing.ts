@@ -72,6 +72,33 @@ export function createCrossQuadGeometry(): THREE.BufferGeometry {
   return geometry
 }
 
+/** One camera-facing quad (4 vertices / 2 triangles) for world-wide tree cards. */
+export function createSingleQuadGeometry(): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    -0.5, 0, 0,
+    0.5, 0, 0,
+    0.5, 1, 0,
+    -0.5, 1, 0,
+  ], 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
+    0, 0,
+    1, 0,
+    1, 1,
+    0, 1,
+  ], 2))
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute([
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+  ], 3))
+  geometry.setAttribute('aPlPlane', new THREE.Float32BufferAttribute([0, 0, 0, 0], 1))
+  geometry.setIndex([0, 1, 2, 0, 2, 3])
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.5, 0), Math.SQRT2)
+  return geometry
+}
+
 const VERTEX_PARS = /* glsl */ `
 attribute float aPlPlane;
 attribute vec4 aPlUvRect;
@@ -95,6 +122,9 @@ uniform float uPlPaletteMode;
 uniform float uPlDynamicAlpha;
 /** 1 = 远景树：官方 imposter（朝相机广告牌 + 16 朝向列 + 角度混列 + 距离放大/下沉）。 */
 uniform float uPlBillboard;
+uniform float uPlStaticBillboard;
+/** 0 = none, 1 = near-card handoff, 2 = far-card handoff. */
+uniform float uPlLodFadeMode;
 uniform int uPlSeasonIndex;
 uniform float uPlShadowFactor;
 uniform float uPlSpecies;
@@ -127,6 +157,8 @@ varying float vPlDissolve;
 varying vec3 vPlGroundNormal;
 varying vec2 vPlCardUv;
 varying float vPlTreeDiscolouration;
+varying float vPlLodHidden;
+varying float vPlCardSeed;
 `
 
 const VERTEX_BODY = /* glsl */ `
@@ -137,9 +169,9 @@ const VERTEX_BODY = /* glsl */ `
   #else
     vec4 plInstWorld = modelMatrix * vec4(0.0, 0.0, 0.0, 1.0);
   #endif
-  float plDist = distance(plInstWorld.xyz, uPlCameraPos);
-  float plIsNear = step(plDist, uPlNearDistance);
-  float plInsideMeshRadius = step(plDist, uPlMeshRadius);
+  float plDistXZ = distance(plInstWorld.xz, uPlCameraPos.xz);
+  float plIsNear = step(plDistXZ, uPlNearDistance);
+  float plInsideMeshRadius = step(plDistXZ, uPlMeshRadius);
   float plFar = 1.0 - plIsNear;
   float plCollapse = 0.0;
   if (uPlTierMode > 0.5) {
@@ -150,15 +182,32 @@ const VERTEX_BODY = /* glsl */ `
   }
   // 官方树卡/远景树用距离 dissolve 接管 LOD 交接，不再做硬性分层折叠；
   // 近树卡仍在 3D 网格半径内让位。
-  if (uPlDynamicAlpha > 0.5) {
-    plCollapse = plInsideMeshRadius;
-  } else if (uPlBillboard > 0.5) {
+  if (uPlBillboard > 0.5) {
     plCollapse = 0.0;
   }
+  float plCardHide = smoothstep(uPlDissolveNear, uPlDissolveFar, plDistXZ);
+  float plMeshHide = uPlMeshRadius > 0.001
+    ? 1.0 - smoothstep(uPlMeshRadius * 0.66, uPlMeshRadius, plDistXZ)
+    : 0.0;
+  vPlLodHidden = 0.0;
+  if (uPlLodFadeMode > 1.5) {
+    vPlLodHidden = 1.0 - plCardHide;
+  } else if (uPlLodFadeMode > 0.5) {
+    vPlLodHidden = max(plMeshHide, plCardHide);
+  }
+  vPlCardSeed = fract(sin(dot(plInstWorld.zx, vec2(12.9898, 78.233))) * 43758.5453);
   float plPhase = fract(sin(dot(plInstWorld.xz, vec2(12.9898, 78.233))) * 43758.5453);
 
   transformed.xz *= aPlSize.x;
   transformed.y *= aPlSize.y;
+  if (uPlStaticBillboard > 0.5) {
+    float plBillboardAngle = atan(plInstWorld.x - uPlCameraPos.x, plInstWorld.z - uPlCameraPos.z);
+    vec2 plRotated = vec2(
+      cos(plBillboardAngle) * transformed.x + sin(plBillboardAngle) * transformed.z,
+      cos(plBillboardAngle) * transformed.z - sin(plBillboardAngle) * transformed.x
+    );
+    transformed.xz = plRotated;
+  }
 
   // slowroads 草丛变体裁剪：非冬季 0/1/3 号半高、2 号全高；冬季 2/3 号半高。
   // （官方只对草丛层做这条裁剪，树卡/远景树/护栏用整幅贴图。）
@@ -338,6 +387,8 @@ varying float vPlDissolve;
 varying vec3 vPlGroundNormal;
 varying vec2 vPlCardUv;
 varying float vPlTreeDiscolouration;
+varying float vPlLodHidden;
+varying float vPlCardSeed;
 
 float plScreen2(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
 
@@ -388,6 +439,10 @@ const FRAGMENT_BODY = /* glsl */ `
   // 官方 alphaMap 走绿通道（three 语义）。
   float plAlpha = mix(plTexel.a, texture2D(uPlAlphaTex, vPlUv).g, uPlHasAlphaTex);
   if (plAlpha < plCutAlpha) discard;
+  if (vPlLodHidden > 0.001) {
+    float plLodDither = fract(sin(dot(vPlCardSeed + vPlCardUv * 17.0, vec2(12.9898, 78.233))) * 43758.5453);
+    if (vPlLodHidden > 0.999 || plLodDither < vPlLodHidden) discard;
+  }
   vec3 plColor = plTexel.rgb * uPlFoliageTint;
 
   // ---- slowroads 草丛调色板 -------------------------------------------------
@@ -516,6 +571,12 @@ export interface FoliageMaterialSpec {
   hasNormalTexture: boolean
   /** 近树卡 = 'near'（动态 alpha + dissolve）；远景树 = 'far'（广告牌）；其它 null。 */
   card: 'near' | 'far' | null
+  /** Tree-only dither handoff between 3D meshes, near cards and far cards. */
+  lodFade: 'near-card' | 'far-card' | null
+  /** Rotate a single card toward the camera without the imposter UV path. */
+  staticBillboard: boolean
+  /** Per-spec alpha cut for world far cards (lab uses .15 broadleaf / .12 conifer). */
+  alphaTestOverride?: number
   /** 灌木：随视深的距离 alpha（0.5 → 0.2）。 */
   distanceAlpha: boolean
   /** 用树密度图近似官方 per-instance shadow（草/灌木/近树卡）。 */
@@ -572,6 +633,9 @@ const PALETTE_MODE: Record<'grass' | 'bush' | 'tree' | 'barrier', number> = { gr
 
 /** 官方逐层/季 alphaTest（近树卡固定：阔叶 .5 map alpha / 针叶 .4 alpha map）。 */
 export function resolveFoliageAlphaTest(spec: FoliageMaterialSpec, season: SeasonId): number {
+  if (spec.alphaTestOverride != null) {
+    return spec.alphaTestOverride
+  }
   const params = SEASON_PARAMS[season]
   if (spec.kind === 'grass') {
     return params.grassAlphaTest
@@ -644,6 +708,10 @@ export function createFoliageMaterial(
     uPlDistanceAlpha: { value: spec.distanceAlpha ? 1 : 0 },
     uPlDynamicAlpha: { value: spec.card === 'near' ? 1 : 0 },
     uPlBillboard: { value: spec.card === 'far' ? 1 : 0 },
+    uPlStaticBillboard: { value: spec.staticBillboard ? 1 : 0 },
+    uPlLodFadeMode: {
+      value: spec.lodFade === 'near-card' ? 1 : spec.lodFade === 'far-card' ? 2 : 0,
+    },
     uPlDissolveNear: cardUniforms.uPlDissolveNear,
     uPlDissolveFar: cardUniforms.uPlDissolveFar,
     uPlDissolveInterval: cardUniforms.uPlDissolveInterval,
@@ -656,7 +724,7 @@ export function createFoliageMaterial(
     uPlUseDensityShadow: { value: spec.useDensityShadow ? 1 : 0 },
   }
   material.customProgramCacheKey = () =>
-    `pl-foliage-v4-${spec.kind}-${spec.tier}-${spec.singlePlane ? 1 : 0}-${spec.card ?? 'none'}`
+    `pl-foliage-v5-${spec.kind}-${spec.tier}-${spec.singlePlane ? 1 : 0}-${spec.card ?? 'none'}-${spec.lodFade ?? 'none'}-${spec.staticBillboard ? 1 : 0}`
   material.onBeforeCompile = (shader) => {
     for (const [name, uniform] of Object.entries(uniforms)) {
       shader.uniforms[name] = uniform as THREE.IUniform
@@ -784,12 +852,12 @@ export function createFoliageLayerMesh(
   material: THREE.MeshLambertMaterial,
   unitSize: number,
   hostInverse: THREE.Matrix4 | null,
-  options: { billboard?: boolean; capacity?: number } = {},
+  options: { billboard?: boolean; staticBillboard?: boolean; singlePlane?: boolean; capacity?: number } = {},
 ): THREE.InstancedMesh {
   const count = instances.length
   const requestedCapacity = Number.isFinite(options.capacity) ? Math.floor(options.capacity as number) : 0
   const capacity = Math.max(1, count, requestedCapacity)
-  const geometry = createCrossQuadGeometry()
+  const geometry = options.singlePlane ? createSingleQuadGeometry() : createCrossQuadGeometry()
   const uvRectAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4)
   const sizeAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 2), 2)
   const cellAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1)
@@ -808,7 +876,14 @@ export function createFoliageLayerMesh(
   mesh.castShadow = false
   mesh.receiveShadow = false
   mesh.frustumCulled = false
-  writeFoliageLayerInstances(mesh, instances, unitSize, hostInverse, options.billboard === true)
+  writeFoliageLayerInstances(
+    mesh,
+    instances,
+    unitSize,
+    hostInverse,
+    options.billboard === true,
+    options.staticBillboard === true,
+  )
   return mesh
 }
 
@@ -828,12 +903,19 @@ export function updateFoliageLayerMesh(
   instances: ReadonlyArray<FoliageSpriteInstance>,
   unitSize: number,
   hostInverse: THREE.Matrix4 | null,
-  options: { billboard?: boolean } = {},
+  options: { billboard?: boolean; staticBillboard?: boolean } = {},
 ): number {
   if (!mesh) {
     return 0
   }
-  return writeFoliageLayerInstances(mesh, instances, unitSize, hostInverse, options.billboard === true)
+  return writeFoliageLayerInstances(
+    mesh,
+    instances,
+    unitSize,
+    hostInverse,
+    options.billboard === true,
+    options.staticBillboard === true,
+  )
 }
 
 function writeFoliageLayerInstances(
@@ -842,6 +924,7 @@ function writeFoliageLayerInstances(
   unitSize: number,
   hostInverse: THREE.Matrix4 | null,
   billboard: boolean,
+  staticBillboard: boolean,
 ): number {
   const uvRectAttribute = mesh.geometry.getAttribute('aPlUvRect') as THREE.InstancedBufferAttribute
   const sizeAttribute = mesh.geometry.getAttribute('aPlSize') as THREE.InstancedBufferAttribute
@@ -872,7 +955,7 @@ function writeFoliageLayerInstances(
     }
     positionHelper.set(instance.x, instance.y, instance.z)
     // 远景树使用朝相机广告牌：实例旋转作为图集朝向基准角，矩阵本身不带旋转。
-    eulerHelper.set(0, billboard ? 0 : instance.rotation, 0)
+    eulerHelper.set(0, billboard || staticBillboard ? 0 : instance.rotation, 0)
     quaternionHelper.setFromEuler(eulerHelper)
     const scale = unitSize * instance.scale
     scaleHelper.set(scale, scale, scale)

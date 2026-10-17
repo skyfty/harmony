@@ -29,7 +29,7 @@ describe('surface injection compilability', () => {
     const uniforms = createProceduralLandscapeSurfaceUniforms()
     const patch = applyProceduralLandscapeSurfaceInjection([mesh], uniforms)
     expect(patch.hasInjection).toBe(true)
-    const material = mesh.material as THREE.MeshLambertMaterial
+    const material = mesh.material as unknown as THREE.MeshLambertMaterial
     const { vertex, fragment } = compileSources(material)
 
     // 顶点：begin_vertex 只允许出现一次（重复声明 transformed）。
@@ -116,6 +116,8 @@ describe('double-sided foliage lighting normal (背面不翻转)', () => {
         hasAlphaTexture: false,
         hasNormalTexture: false,
         card: null,
+        lodFade: null,
+        staticBillboard: false,
         distanceAlpha: false,
         useDensityShadow: true,
         key: 'test:grass',

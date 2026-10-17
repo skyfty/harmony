@@ -486,7 +486,11 @@ import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/ground
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
 import { collectGroundAnchorWorldPositions } from '@harmony/schema/groundAnchorRuntime';
-import { collectGroundCollisionSourceNodeIds } from '@harmony/schema/groundCollisionSourceRuntime';
+import {
+  DEM_GROUND_COLLISION_READY_TIMEOUT_MS,
+  collectGroundCollisionSourceNodeIds,
+  waitForGroundCollisionSourceTerrainReady,
+} from '@harmony/schema/groundCollisionSourceRuntime';
 import {
   MESH_COLLISION_ACTIVATION_RADIUS_METERS,
   clearAllMeshCollisionRuntimeHosts,
@@ -10079,12 +10083,10 @@ async function bootstrapSceneryMeshCollisionRuntime(
   referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
   shouldAbort: () => boolean,
 ): Promise<void> {
-  const maxIterations = 256;
-  for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-    if (shouldAbort()) {
-      return;
-    }
-    const workPending = syncSceneryMeshCollisionRuntime(document, referenceWorldPositions);
+  const deadline = Date.now() + DEM_GROUND_COLLISION_READY_TIMEOUT_MS;
+  let workPending = false;
+  while (!shouldAbort() && Date.now() < deadline) {
+    workPending = syncSceneryMeshCollisionRuntime(document, referenceWorldPositions);
     if (!workPending) {
       break;
     }
@@ -10092,6 +10094,12 @@ async function bootstrapSceneryMeshCollisionRuntime(
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
     });
+  }
+  if (!shouldAbort() && workPending) {
+    const message = `地形碰撞索引等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s），物理可能先于完整碰撞启动。`;
+    if (!warnings.value.includes(message)) {
+      warnings.value = [...warnings.value, message];
+    }
   }
   await flushSceneryGroundCollisionBridgeMutations();
 }
@@ -10410,13 +10418,41 @@ async function loadSceneryPhysicsBridgeScene(
     }
     const referenceWorldPositions = sceneryGroundCollisionReferencePositions;
     if (resolveSceneryGroundCollisionReferenceWorld(renderContext?.camera ?? null, referenceWorldPositions)) {
-      await bootstrapSceneryMeshCollisionRuntime(
-        document,
-        referenceWorldPositions,
-        () => requestId !== physicsBridgeSceneRequestId,
-      );
-      // Stepping resumes only now, so restart the full-rate settle window from here.
-      physicsBridgeLastMovedAtMs = Date.now();
+      // DEM terrain meshes are built asynchronously after the scene graph is attached.
+      // Keep the bridge's bootstrap gate closed until the source mesh can be indexed.
+      const terrainReadiness = await waitForGroundCollisionSourceTerrainReady({
+        nodes: document.nodes,
+        resolveSourceObject: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+        shouldAbort: () => requestId !== physicsBridgeSceneRequestId,
+        onPending: (pendingNodeIds) => {
+          onProgress?.({
+            phase: 'syncingPhysics',
+            percent: 85,
+            detail: '等待 DEM 地形碰撞…',
+            currentIndex: 0,
+            currentTotal: pendingNodeIds.length,
+            currentLabel: pendingNodeIds.join(', '),
+          });
+        },
+      });
+      if (terrainReadiness.status === 'timeout') {
+        const details = terrainReadiness.pendingNodeIds
+          .map((nodeId) => `${nodeId} (${terrainReadiness.statuses[nodeId] ?? 'missing'})`)
+          .join(', ');
+        const message = `DEM 地形碰撞等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s）：${details || 'unknown node'}`;
+        if (!warnings.value.includes(message)) {
+          warnings.value = [...warnings.value, message];
+        }
+      }
+      if (terrainReadiness.status !== 'aborted') {
+        await bootstrapSceneryMeshCollisionRuntime(
+          document,
+          referenceWorldPositions,
+          () => requestId !== physicsBridgeSceneRequestId,
+        );
+        // Stepping resumes only now, so restart the full-rate settle window from here.
+        physicsBridgeLastMovedAtMs = Date.now();
+      }
     }
   } catch (error) {
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);

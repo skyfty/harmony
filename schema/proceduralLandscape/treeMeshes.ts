@@ -25,7 +25,7 @@ interface ParsedTreeModel {
 }
 
 const TREE_UNIT_SIZE = 8
-const UPDATE_DISTANCE = 24
+const UPDATE_DISTANCE = 4
 const MAX_INSTANCES_PER_MESH = 4000
 
 export function parseTreeBin(buffer: ArrayBuffer): ParsedTreeModel {
@@ -90,6 +90,8 @@ varying mat3 vPlBasis;
 varying float vPlLeafBrightness;
 varying float vPlRadianceBlend;
 varying float vPlTreeDiscolouration;
+varying float vPlMeshLodHidden;
+varying vec2 vPlMeshFadeSeed;
 varying vec3 vPlCameraUp;
 `
 
@@ -102,6 +104,12 @@ const FRAGMENT_BODY = /* glsl */ `
   float treeAlpha = mix(treeTexel.a, texture2D(uTreeAlphaTex, vPlUv).g, uTreeHasAlphaTex);
   if (treeAlpha < uTreeAlphaTest) {
     discard;
+  }
+  if (vPlMeshLodHidden > 0.001) {
+    float treeLodDither = fract(sin(dot(vPlMeshFadeSeed + vPlUv * 17.0, vec2(12.9898, 78.233))) * 43758.5453);
+    if (vPlMeshLodHidden > 0.999 || treeLodDither < vPlMeshLodHidden) {
+      discard;
+    }
   }
   vec3 treeColor = treeTexel.rgb;
   vec3 treeNormal = normalize(vPlWorldNormal);
@@ -151,6 +159,7 @@ export interface TreeMeshManager {
   readonly container: THREE.Group
   /** placements[*].scale = 树木世界高度（米）。 */
   update(cameraPosition: THREE.Vector3, placements: ReadonlyArray<TreePlacement>, radius: number, force?: boolean): void
+  setLodBand(near: number, far: number): void
   setSeason(state: TreeMeshSeasonState): void
   /** 环境预设光照（radiance 取全量；shadowFactor 驱动密度压暗）。 */
   setLighting(state: { radiance: number; shadowFactor: number }): void
@@ -213,6 +222,9 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
     uTreeDensityMin: { value: new THREE.Vector2() },
     uTreeDensitySize: { value: new THREE.Vector2(1, 1) },
     uTreeShadowFactor: { value: 1 },
+    uTreeCameraPos: { value: new THREE.Vector3() },
+    uTreeFadeNear: { value: 0 },
+    uTreeFadeFar: { value: 0 },
   }))
   const materials: THREE.MeshLambertMaterial[] = [0, 1].map((species) => {
     // 官方近树材质 = Lambert（无镜面）；树冠 radiance 项官方走 directSpecular
@@ -242,12 +254,17 @@ varying mat3 vPlBasis;
 varying float vPlLeafBrightness;
 varying float vPlRadianceBlend;
 varying float vPlTreeDiscolouration;
+varying float vPlMeshLodHidden;
+varying vec2 vPlMeshFadeSeed;
 /** 官方 vCameraUp：世界空间的相机上方向（无 roll 时即 (0,1,0)）。 */
 varying vec3 vPlCameraUp;
 uniform sampler2D uTreeDensityMap;
 uniform vec2 uTreeDensityMin;
 uniform vec2 uTreeDensitySize;
 uniform float uTreeShadowFactor;
+uniform vec3 uTreeCameraPos;
+uniform float uTreeFadeNear;
+uniform float uTreeFadeFar;
 uniform sampler2D uTreeDiscolourationNoise;
 uniform float uTreeDiscolourationFactor;`,
         )
@@ -269,6 +286,11 @@ vPlUv = uv;
   vec3 treeOrigin = treeInstModel[3].xyz;
   vec2 treeDensityUv = (treeOrigin.xz - uTreeDensityMin) / max(uTreeDensitySize, vec2(0.0001));
   float treeDensity = clamp(texture2D(uTreeDensityMap, treeDensityUv).r * 1.15, 0.0, 1.0);
+  vPlMeshFadeSeed = treeOrigin.xz;
+  float treeDistXZ = distance(treeOrigin.xz, uTreeCameraPos.xz);
+  vPlMeshLodHidden = uTreeFadeFar > uTreeFadeNear
+    ? smoothstep(uTreeFadeNear, uTreeFadeFar, treeDistXZ)
+    : 0.0;
   float treeHeightMeters = position.y * length(treeInstModel[1].xyz);
   vPlLeafBrightness = 1.0 - treeDensity * uTreeShadowFactor * clamp((10.0 - treeHeightMeters) / 3.0, 0.0, 1.0);
   float treeViewDepth = -treeMvPosition.z;
@@ -334,6 +356,9 @@ vec3 nonPerturbedNormal = normal;`,
   let instanceCount = 0
 
   function update(cameraPosition: THREE.Vector3, placements: ReadonlyArray<TreePlacement>, radius: number, force = false): void {
+    for (const species of [0, 1] as const) {
+      ;(uniformsBySpecies[species]!.uTreeCameraPos!.value as THREE.Vector3).copy(cameraPosition)
+    }
     if (!force && radius > 0 && lastCamera.distanceToSquared(cameraPosition) < UPDATE_DISTANCE * UPDATE_DISTANCE) {
       return
     }
@@ -389,6 +414,12 @@ vec3 nonPerturbedNormal = normal;`,
   return {
     container,
     update,
+    setLodBand(near: number, far: number): void {
+      for (const species of [0, 1] as const) {
+        uniformsBySpecies[species]!.uTreeFadeNear!.value = near
+        uniformsBySpecies[species]!.uTreeFadeFar!.value = far
+      }
+    },
     setSeason(state: TreeMeshSeasonState): void {
       if (state.textures) {
         uniformsBySpecies[0]!.uTreeAtlas!.value = state.textures.broadleafD

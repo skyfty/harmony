@@ -1,6 +1,99 @@
 import * as THREE from 'three'
 import type { RoadBandRow } from './roadBandRows'
+import type { RoadProximityIndex } from './roadProximity'
 import { smoothstep } from './noise'
+
+export interface DemRoadbedTargetOptions {
+  roadField: RoadProximityIndex
+  rawHeightAt(x: number, z: number): number | null
+  halfWidth: number
+  shoulderWidth: number
+  demCellSize: number
+  sideWidth?: number
+  coverageWidth?: number
+  roadDrop?: number
+  coarseClearance?: number
+}
+
+/**
+ * DEM cut/fill design surface. The carriageway and shoulder share one
+ * centerline height per row; the outer slope returns to the raw DEM surface.
+ */
+export interface DemRoadbedTarget {
+  readonly halfWidth: number
+  readonly shoulderWidth: number
+  readonly sideWidth: number
+  readonly outerHalfWidth: number
+  readonly meshHalfWidth: number
+  readonly influenceHalfWidth: number
+  readonly coarseClearance: number
+  distanceAt(x: number, z: number): number
+  roadProximityAt(x: number, z: number): number
+  heightAt(x: number, z: number): number
+  coarseHeightAt(x: number, z: number): number
+  rawHeightAt(x: number, z: number): number
+  rawNormalAt(x: number, z: number): { x: number; y: number; z: number }
+}
+
+export function createDemRoadbedTarget(options: DemRoadbedTargetOptions): DemRoadbedTarget {
+  const halfWidth = Math.max(0.5, options.halfWidth)
+  const shoulderWidth = Math.max(0, options.shoulderWidth)
+  const innerHalfWidth = halfWidth + shoulderWidth
+  const sideWidth = Math.max(1, options.sideWidth ?? Math.max(30, options.demCellSize * 1.5))
+  const coverageWidth = Math.max(0, options.coverageWidth ?? options.demCellSize * 0.5)
+  const outerHalfWidth = innerHalfWidth + sideWidth
+  const meshHalfWidth = outerHalfWidth + coverageWidth
+  const roadDrop = Math.max(0, options.roadDrop ?? 0.05)
+  const coarseClearance = Math.max(0, options.coarseClearance ?? 0.1)
+  const rawAt = (x: number, z: number): number => options.rawHeightAt(x, z) ?? 0
+
+  const heightAt = (x: number, z: number): number => {
+    const terrainY = rawAt(x, z)
+    const distance = options.roadField.distanceAt(x, z)
+    const designY = options.roadField.heightAt(x, z)
+    if (designY == null || distance > meshHalfWidth) {
+      return terrainY
+    }
+    if (distance <= innerHalfWidth) {
+      return designY - roadDrop
+    }
+    if (distance >= outerHalfWidth) {
+      return terrainY
+    }
+    const t = smoothstep(innerHalfWidth, outerHalfWidth, distance)
+    return (designY - roadDrop) + (terrainY - (designY - roadDrop)) * t
+  }
+
+  return {
+    halfWidth,
+    shoulderWidth,
+    sideWidth,
+    outerHalfWidth,
+    meshHalfWidth,
+    influenceHalfWidth: meshHalfWidth,
+    coarseClearance,
+    distanceAt: (x, z) => options.roadField.distanceAt(x, z),
+    roadProximityAt: (x, z) => options.roadField.distanceAt(x, z) - halfWidth,
+    heightAt,
+    coarseHeightAt(x: number, z: number): number {
+      const distance = options.roadField.distanceAt(x, z)
+      const target = heightAt(x, z)
+      if (distance >= meshHalfWidth) {
+        return rawAt(x, z)
+      }
+      const fade = 1 - smoothstep(outerHalfWidth, meshHalfWidth, distance)
+      return target - coarseClearance * fade
+    },
+    rawHeightAt: rawAt,
+    rawNormalAt(x: number, z: number): { x: number; y: number; z: number } {
+      const step = Math.max(0.75, options.demCellSize * 0.05)
+      const dx = (rawAt(x + step, z) - rawAt(x - step, z)) / (2 * step)
+      const dz = (rawAt(x, z + step) - rawAt(x, z - step)) / (2 * step)
+      const inverseLength = 1 / Math.hypot(dx, 1, dz)
+      return { x: -dx * inverseLength, y: inverseLength, z: -dz * inverseLength }
+    },
+  }
+}
 
 export interface DemRoadbedGeometryOptions {
   rows: ReadonlyArray<RoadBandRow>
@@ -26,6 +119,130 @@ export interface DemRoadbedGeometryResult {
   meshHalfWidth: number
   vertexCount: number
   triangleCount: number
+}
+
+export interface DemRoadbedTargetGeometryResult extends DemRoadbedGeometryResult {
+  maxCutFill: number
+  outerError: number
+}
+
+/**
+ * High-resolution DEM roadbed whose outer edge is exactly the raw terrain.
+ * The extra attributes let the shared surface shader keep the gravel/rock
+ * palette continuous with the adjacent coarse terrain.
+ */
+export function createDemRoadbedTargetGeometry(
+  rows: ReadonlyArray<RoadBandRow>,
+  target: DemRoadbedTarget,
+  options: {
+    lateralStep?: number
+    lift?: number
+    hostInverse: THREE.Matrix4
+  },
+): DemRoadbedTargetGeometryResult | null {
+  if (rows.length < 2) {
+    return null
+  }
+  const lateralStep = Math.max(1, options.lateralStep ?? 3)
+  const lift = options.lift ?? 0.01
+  const halfWidth = target.meshHalfWidth
+  const columns = Math.max(3, Math.ceil((halfWidth * 2) / lateralStep) + 1)
+  const vertexCount = rows.length * columns
+  const triangleCount = (rows.length - 1) * (columns - 1) * 2
+  const positions = new Float32Array(vertexCount * 3)
+  const normals = new Float32Array(vertexCount * 3)
+  const baseHeights = new Float32Array(vertexCount)
+  const baseNormals = new Float32Array(vertexCount * 3)
+  const indices = new Uint32Array(triangleCount * 3)
+  const point = new THREE.Vector3()
+  let maxCutFill = 0
+  let outerError = 0
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex]!
+    const normalX = -Math.sin(row.heading)
+    const normalZ = Math.cos(row.heading)
+    for (let column = 0; column < columns; column += 1) {
+      const t = column / (columns - 1)
+      const lateral = -halfWidth + t * halfWidth * 2
+      const x = row.x + normalX * lateral
+      const z = row.z + normalZ * lateral
+      const index = rowIndex * columns + column
+      const rawY = target.rawHeightAt(x, z)
+      const y = Math.abs(lateral) >= halfWidth - 1e-4
+        ? rawY
+        : target.heightAt(x, z)
+      maxCutFill = Math.max(maxCutFill, Math.abs(y - rawY))
+      baseHeights[index] = rawY
+      if (column === 0 || column === columns - 1) {
+        outerError = Math.max(outerError, Math.abs(y - rawY))
+      }
+      const baseNormal = target.rawNormalAt(x, z)
+      baseNormals[index * 3] = baseNormal.x
+      baseNormals[index * 3 + 1] = baseNormal.y
+      baseNormals[index * 3 + 2] = baseNormal.z
+      point.set(x, y + lift, z).applyMatrix4(options.hostInverse)
+      positions[index * 3] = point.x
+      positions[index * 3 + 1] = point.y
+      positions[index * 3 + 2] = point.z
+    }
+  }
+
+  const crossSpacing = (halfWidth * 2) / (columns - 1)
+  const rowSpacing = Math.max(0.5, Math.hypot(
+    rows[1]!.x - rows[0]!.x,
+    rows[1]!.z - rows[0]!.z,
+  ))
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const index = rowIndex * columns + column
+      const left = positions[(rowIndex * columns + Math.max(0, column - 1)) * 3 + 1]!
+      const right = positions[(rowIndex * columns + Math.min(columns - 1, column + 1)) * 3 + 1]!
+      const up = positions[(Math.max(0, rowIndex - 1) * columns + column) * 3 + 1]!
+      const down = positions[(Math.min(rows.length - 1, rowIndex + 1) * columns + column) * 3 + 1]!
+      const dx = (right - left) / Math.max(1e-4, crossSpacing * 2)
+      const dz = (down - up) / Math.max(1e-4, rowSpacing * 2)
+      const inverseLength = 1 / Math.hypot(dx, 1, dz)
+      normals[index * 3] = -dx * inverseLength
+      normals[index * 3 + 1] = inverseLength
+      normals[index * 3 + 2] = -dz * inverseLength
+    }
+  }
+
+  let cursor = 0
+  for (let rowIndex = 0; rowIndex < rows.length - 1; rowIndex += 1) {
+    for (let column = 0; column < columns - 1; column += 1) {
+      const a = rowIndex * columns + column
+      const b = a + 1
+      const c = a + columns
+      const d = c + 1
+      indices[cursor++] = a
+      indices[cursor++] = d
+      indices[cursor++] = c
+      indices[cursor++] = a
+      indices[cursor++] = b
+      indices[cursor++] = d
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+  geometry.setAttribute('aBaseHeight', new THREE.BufferAttribute(baseHeights, 1))
+  geometry.setAttribute('aBaseNormal', new THREE.BufferAttribute(baseNormals, 3))
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1))
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return {
+    geometry,
+    innerHalfWidth: target.halfWidth + target.shoulderWidth,
+    outerHalfWidth: target.outerHalfWidth,
+    meshHalfWidth: target.meshHalfWidth,
+    vertexCount,
+    triangleCount,
+    maxCutFill,
+    outerError,
+  }
 }
 
 /**

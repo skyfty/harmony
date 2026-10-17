@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import {
   buildForestDensityField,
+  buildDemForestDensityField,
   buildVariationField,
   createDensityDataTexture,
   forestDensityClassAt,
@@ -45,22 +46,22 @@ import {
   createFoliageMaterial,
   createFoliageShaderUniforms,
   disposeFoliageLayerMesh,
-  getFoliageLayerCapacity,
   setFoliageMaterialCardRange,
   setFoliageMaterialLighting,
   setFoliageMaterialTextures,
-  updateFoliageLayerMesh,
   type FoliageMaterialHandle,
   type FoliageMaterialSpec,
   type FoliageShaderUniforms,
   type FoliageSpriteInstance,
 } from './instancing'
 import {
-  collectFarForestPlacements,
-  createFarForestScan,
-  stepFarForestScan,
-  type FarForestScan,
-} from './farForest'
+  createWorldForestPlacementIndex,
+  createWorldForestScan,
+  planWorldForestCorridor,
+  stepWorldForestScan,
+  type WorldForestPlacementIndex,
+  type WorldForestScan,
+} from './worldForest'
 import {
   computeWaterFloodStats,
   WATER_FLOOD_VISIBLE_FRACTION,
@@ -117,7 +118,12 @@ import {
   sampleRoadRowColumns,
   type RoadBandRow,
 } from './roadBandRows'
-import { createDemRoadbedGeometry } from './demRoadbed'
+import {
+  createDemRoadbedTarget,
+  createDemRoadbedTargetGeometry,
+  type DemRoadbedTarget,
+} from './demRoadbed'
+import { resolveTreeLodBands } from './treeLod'
 import {
   activeRoadWaypoints,
   clampProceduralLandscapeProps,
@@ -156,28 +162,8 @@ const TREE_UNIT_SIZE = 8
 const GRASS_UNIT_SIZE = 1.6
 const BUSH_UNIT_SIZE = 2
 const IMPOSTER_REGIONS: SpriteRegion[] = gridRegions(16, 4, 4096, 1024)
-/** 近树卡 LOD dissolve 区间推导（lab main.ts：lod1Horizon = nearDistance / 10）。 */
-const CARD_DISSOLVE_INTERVAL_FACTOR = 0.3
 /** 木护栏段的世界尺寸（lab：单片面 unitSize 0.35m、alphaTest 0.35）。 */
 const BARRIER_UNIT_SIZE = 0.35
-/**
- * 远景林（相机锚定多环环带，覆盖近景流式半径 → 雾距之间的可见地形）：
- *  - 重锚阈值：相机水平位移超过它才重建，避免连续重建把扫描摊薄成常态开销；
- *  - 扫描预算：每帧最多处理的候选格数量（分帧摊薄，避免一次重锚卡帧）；
- *  - 外半径：最多覆盖到场景雾远端的 75%（再远已被雾吃掉，实例纯浪费）。
- */
-const FAR_FOREST_REANCHOR_DISTANCE = 800
-const FAR_FOREST_SCAN_SAMPLES_PER_FRAME = 25_000
-const FAR_FOREST_RADIUS_FOG_FACTOR = 0.75
-/** 远景环最小可用带宽：雾距小于「近景半径 + 它」时不建环（没有可见空间）。 */
-const FAR_FOREST_MIN_BAND_WIDTH = 64
-/**
- * 远景环每个物种层的缓冲容量预留比例（预算 × 系数）。
- * 物种按哈希 40/60 分布，0.8× 预算的容量足以覆盖抽样波动，
- * 避免每次重锚重新分配 6 万级实例的几何与属性缓冲。
- */
-const FAR_FOREST_SPECIES_CAPACITY_FACTOR = 0.8
-
 let sharedPlaceholderTexture: THREE.DataTexture | null = null
 let sharedRoadFallbackTexture: THREE.DataTexture | null = null
 
@@ -269,6 +255,17 @@ export interface ProceduralLandscapeRuntimeStats {
   farTreeInstances: number
   /** 远景林当前外半径（米；0 = 关闭/尚未建立）。 */
   farForestRadius: number
+  worldForestInstances: number
+  worldForestBuildMs: number
+  roadbedHalfWidth: number
+  roadbedSideWidth: number
+  roadbedCutProx: number
+  roadbedMaxCutFill: number
+  roadbedCrossSlopeMax: number
+  roadbedOuterError: number
+  roadbedOcclusionCount: number
+  roadbedAuditSamples: number
+  roadbedTriangleCount: number
   /** 水面是否启用（水线 = 地形最低点 + water.levelOffset）。 */
   waterEnabled: boolean
   /** 当前水线（世界 Y；= 地形最低点 + water.levelOffset）。 */
@@ -536,7 +533,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     grid: jsonKey(props.sampling),
     dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
     world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
-    instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
+    forest: jsonKey([
+      props.seed,
+      props.forest.coverage,
+      props.forest.scale,
+      props.forest.seedOffset,
+      props.forest.density,
+      props.forest.maxSlope,
+      props.forest.minHeight,
+      props.forest.minScale,
+      props.forest.maxScale,
+      props.quality,
+    ]),
+    instances: jsonKey([props.grass, props.bushes, props.quality]),
+    lod: jsonKey([props.forest.nearDistance, props.forest.nearTreeRadius, props.quality]),
     uniforms: jsonKey([props.surface, props.canopy, props.wind, props.road.flattenBand, props.road.flattenStrength]),
     roadDebug: jsonKey(props.debug.showRoadPath),
     chunkDebug: jsonKey(props.debug.showChunks),
@@ -556,6 +566,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demGridData: TerrainDemRuntimeGridData | null = null
   let demMeshBuilder: DemTerrainMeshBuilder | null = null
   let demMesh: THREE.Mesh | null = null
+  let demWorldBuilt = false
   let demLoadPromise: Promise<void> | null = null
   let demLoadToken = 0
   let demSourceKey = ''
@@ -596,19 +607,28 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let waterPlane: WaterPlaneHandle | null = null
   let barrierLayer: THREE.InstancedMesh | null = null
   let barrierInstances = 0
-  /** 远景林根节点（相机锚定多环环带；与分块植被层互不干扰）。 */
+  /** World-anchored full-terrain forest. */
   let farForestRoot: THREE.Group | null = null
-  /** 远景林两个物种层（复用缓冲，重锚只重写实例属性）。 */
+  /** Two static far-card layers containing every world forest placement. */
   let farForestLayers: { broadleaf: THREE.InstancedMesh; conifer: THREE.InstancedMesh } | null = null
   let farForestInstances = 0
   let farForestRadius = 0
-  /** 当前远景环的锚点（相机世界 XZ；NaN = 尚未建立）。 */
-  let farForestAnchorX = Number.NaN
-  let farForestAnchorZ = Number.NaN
-  /** 远景环参数签名（质量档/种子/网格/雾尺度变化时重建）。 */
-  let farForestSignature = ''
-  /** 分帧推进中的远景环扫描（null = 空闲）。 */
-  let farForestScan: FarForestScan | null = null
+  let worldForestScan: WorldForestScan | null = null
+  let worldForestIndex: WorldForestPlacementIndex | null = null
+  let worldForestPlacements: TreePlacement[] = []
+  let worldForestCorridor: TreePlacement[] = []
+  let worldForestBuildMs = 0
+  let worldForestBuildStartedAt = 0
+  let demRoadbedTarget: DemRoadbedTarget | null = null
+  let demRoadbedSideWidth = 0
+  let demRoadbedCutProx = 0
+  let demRoadbedMaxCutFill = 0
+  let demRoadbedOcclusionCount = 0
+  let demRoadbedAuditSamples = 0
+  let demRoadbedTriangleCount = 0
+  let nearCardLayers: { broadleaf: THREE.InstancedMesh; conifer: THREE.InstancedMesh } | null = null
+  const nearCardCamera = new THREE.Vector2(Number.NaN, Number.NaN)
+  const nearMeshCamera = new THREE.Vector2(Number.NaN, Number.NaN)
   /** 水线诊断（世界构建时按地形直方图统计一次，水位变化时刷新淹没比例）。 */
   let waterFloodStats: WaterFloodStats | null = null
   /** 官方墙体网格层（Drystone / Barrier / SeaWall）与最近一次放置结果。 */
@@ -688,6 +708,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     wallSegmentCount: 0,
     farTreeInstances: 0,
     farForestRadius: 0,
+    worldForestInstances: 0,
+    worldForestBuildMs: 0,
+    roadbedHalfWidth: 0,
+    roadbedSideWidth: 0,
+    roadbedCutProx: 0,
+    roadbedMaxCutFill: 0,
+    roadbedCrossSlopeMax: 0,
+    roadbedOuterError: 0,
+    roadbedOcclusionCount: 0,
+    roadbedAuditSamples: 0,
+    roadbedTriangleCount: 0,
     waterEnabled: false,
     waterLevel: 0,
     waterFloodedFraction: 0,
@@ -793,14 +824,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     bushInstances = 0
   }
 
-  function collectActiveTreePlacements(): TreePlacement[] {
-    const out: TreePlacement[] = []
-    for (const entry of treeBatches.values()) {
-      if (entry.treePlacements.length) {
-        out.push(...entry.treePlacements)
-      }
+  function collectActiveTreePlacements(camera: THREE.Vector3, radius: number): TreePlacement[] {
+    if (!worldForestIndex || radius <= 0) {
+      return []
     }
-    return out
+    return worldForestIndex.queryCircle(camera.x, camera.z, radius + 32)
   }
 
   function usesDemTerrain(): boolean {
@@ -867,6 +895,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demGridData = null
     disposeDemRoadbed()
     disposeDemMesh()
+    demWorldBuilt = false
     demSourceKey = ''
     demBuildMs = 0
     stats.demMeshBytes = 0
@@ -895,7 +924,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           return
         }
         demGridData = data
-        demMeshBuilder = createDemTerrainMeshBuilder(data, resolveDemSampleStep())
         stats.demSourceBytes = data.heights.byteLength
         stats.demStatus = 'building'
         demBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -922,8 +950,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       startDemLoad()
       return false
     }
+    if (!demWorldBuilt) {
+      const hostWorld = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
+      grid = createDemTerrainHeightGrid(demGridData, hostWorld.x, hostWorld.z, hostWorld.y)
+      currentTerrainSourceSignature = `dem-raw:${demSourceKey}`
+      gridFailed = false
+      buildWorld()
+      dirty.world = false
+      dirty.instances = false
+      demWorldBuilt = true
+      return false
+    }
     if (!demMeshBuilder) {
-      demMeshBuilder = createDemTerrainMeshBuilder(demGridData, resolveDemSampleStep())
+      demMeshBuilder = createDemTerrainMeshBuilder(demGridData, resolveDemSampleStep(), {
+        roadbed: demRoadbedTarget,
+      })
       demBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       stats.demStatus = 'building'
     }
@@ -954,14 +995,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     mesh.userData.proceduralLandscapeDemTerrain = true
     hostObject.add(mesh)
     demMesh = mesh
-    const hostWorld = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
-    grid = createDemTerrainHeightGrid(demGridData, hostWorld.x, hostWorld.z, hostWorld.y)
     currentTerrainSourceSignature = `dem:${demSourceKey}`
-    gridFailed = false
     stats.demStatus = 'ready'
     dirty.grid = false
     dirty.world = false
-    buildWorld()
     installSurfaceInjection()
     return true
   }
@@ -984,6 +1021,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
   function disposeWorldState(): void {
     releaseAllBatches()
+    disposeWorldForest()
     disposeDemRoadbed()
     forestMaskTexture?.dispose()
     forestMaskTexture = null
@@ -1004,6 +1042,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadBandColumns = null
     roadSurfaceSampler = null
     roadProximity = null
+    demRoadbedTarget = null
+    demRoadbedSideWidth = 0
+    demRoadbedCutProx = 0
+    demRoadbedMaxCutFill = 0
+    demRoadbedOcclusionCount = 0
+    demRoadbedAuditSamples = 0
+    demRoadbedTriangleCount = 0
+    stats.roadbedOuterError = 0
     roadBucketTable = []
   }
 
@@ -1028,237 +1074,250 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return grid.minY + props.water.levelOffset
   }
 
-  // ---- 远景林（相机锚定多环 LOD）----
+  // ---- World-anchored full forest ----
 
-  /**
-   * 远景环档位：外半径取 `min(档位半径, 雾远端 × 0.75)`，返回 null 表示不建环
-   * （low 档关闭 / 预算为 0 / 雾距还没把近景半径之外的可见空间留出来）。
-   */
-  function resolveFarForestTier(): { radius: number; budget: number } | null {
-    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
-    const far = tier.farForest
-    if (!far || far.budget <= 0 || far.radius <= 0) {
-      return null
+  function visibleForestHeightAt(x: number, z: number): number | null {
+    if (demRoadbedTarget && demRoadbedTarget.distanceAt(x, z) <= demRoadbedTarget.meshHalfWidth) {
+      return demRoadbedTarget.heightAt(x, z) + 0.01
     }
-    const fogFar = Math.max(1, appliedViewDistanceScale) * 1000
-    const radius = Math.min(far.radius, fogFar * FAR_FOREST_RADIUS_FOG_FACTOR)
-    if (radius <= tier.viewDistance + FAR_FOREST_MIN_BAND_WIDTH) {
-      return null
-    }
-    return { radius, budget: Math.floor(far.budget) }
+    return grid?.sampleHeight(x, z) ?? null
   }
 
-  /** 远景环参数签名：任一影响放置的输入变化都要重扫。 */
-  function resolveFarForestSignature(): string {
-    if (!grid) {
-      return ''
+  function disposeNearCardLayers(): void {
+    if (nearCardLayers) {
+      disposeFoliageLayerMesh(nearCardLayers.broadleaf)
+      disposeFoliageLayerMesh(nearCardLayers.conifer)
+      nearCardLayers = null
     }
-    return jsonKey([
-      resolveQuality(),
-      props.seed,
-      props.forest.minScale,
-      props.forest.maxScale,
-      props.forest.maxSlope,
-      resolveForestRoadClearance(),
-      props.water.levelOffset,
-      grid.cols,
-      grid.rows,
-      Math.round(grid.minY * 100) / 100,
-      appliedViewDistanceScale,
-    ])
+    nearCardCamera.set(Number.NaN, Number.NaN)
   }
 
-  function disposeFarForestRing(): void {
+  function disposeWorldForest(): void {
     if (farForestLayers) {
       disposeFoliageLayerMesh(farForestLayers.broadleaf)
       disposeFoliageLayerMesh(farForestLayers.conifer)
       farForestLayers = null
     }
+    for (const entry of Array.from(treeBatches.values())) {
+      releaseBatch(entry, treeBatches)
+    }
+    disposeNearCardLayers()
     farForestInstances = 0
     farForestRadius = 0
-    farForestAnchorX = Number.NaN
-    farForestAnchorZ = Number.NaN
-    farForestScan = null
-  }
-
-  /** 确保两个物种层的网格存在且容量够用（不够才重建；足够时原地复用）。 */
-  function ensureFarForestLayers(broadleafCount: number, coniferCount: number, budget: number): void {
-    const capacity = Math.max(64, Math.ceil(budget * FAR_FOREST_SPECIES_CAPACITY_FACTOR))
-    const broadleafCapacity = Math.max(broadleafCount, capacity)
-    const coniferCapacity = Math.max(coniferCount, capacity)
-    const existing = farForestLayers
-    if (
-      existing
-      && getFoliageLayerCapacity(existing.broadleaf) >= broadleafCapacity
-      && getFoliageLayerCapacity(existing.conifer) >= coniferCapacity
-    ) {
-      return
-    }
-    if (existing) {
-      disposeFoliageLayerMesh(existing.broadleaf)
-      disposeFoliageLayerMesh(existing.conifer)
-    }
-    if (!farForestRoot) {
-      farForestLayers = null
-      return
-    }
-    const handleConifer = getFoliageMaterialHandle(farForestMaterialSpec(1))
-    const handleBroadleaf = getFoliageMaterialHandle(farForestMaterialSpec(0))
-    farForestLayers = {
-      broadleaf: createFoliageLayerMesh([], handleBroadleaf.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null, {
-        billboard: true,
-        capacity: broadleafCapacity,
-      }),
-      conifer: createFoliageLayerMesh([], handleConifer.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null, {
-        billboard: true,
-        capacity: coniferCapacity,
-      }),
-    }
-    farForestRoot.add(farForestLayers.broadleaf)
-    farForestRoot.add(farForestLayers.conifer)
+    worldForestScan = null
+    worldForestIndex = null
+    worldForestPlacements = []
+    worldForestCorridor = []
+    worldForestBuildMs = 0
+    nearMeshCamera.set(Number.NaN, Number.NaN)
   }
 
   /** 远景树材质：与分块远景 imposter 层共用同一 key（同材质/同雾/同换季通道）。 */
   function farForestMaterialSpec(species: 0 | 1): FoliageMaterialSpec {
     return {
       kind: 'tree',
-      tier: 'far',
+      tier: 'all',
       species,
       singlePlane: true,
+      staticBillboard: true,
+      alphaTestOverride: species === 1 ? 0.12 : 0.15,
       tint: 0xffffff,
       farTintScale: 1,
       hasAlphaTexture: false,
-      hasNormalTexture: true,
-      card: 'far',
+      hasNormalTexture: species === 0,
+      card: null,
+      lodFade: 'far-card',
       distanceAlpha: false,
-      useDensityShadow: false,
-      key: `tree:far:${species}`,
+      useDensityShadow: true,
+      key: `tree:world:${species}`,
     }
   }
 
-  function toFarForestInstance(placement: TreePlacement): FoliageSpriteInstance {
-    const regionIndex = findRegionIndex(IMPOSTER_REGIONS, placement.variant)
-    const region = IMPOSTER_REGIONS[regionIndex] ?? null
+  function nearCardMaterialSpec(species: 0 | 1): FoliageMaterialSpec {
+    return {
+      kind: 'tree',
+      tier: 'all',
+      species,
+      singlePlane: false,
+      staticBillboard: false,
+      tint: 0xffffff,
+      farTintScale: 1,
+      hasAlphaTexture: species === 1,
+      hasNormalTexture: species === 0,
+      card: 'near',
+      lodFade: 'near-card',
+      distanceAlpha: false,
+      useDensityShadow: true,
+      key: `tree:near-cards:${species}`,
+    }
+  }
+
+  function treeSpriteForPlacement(placement: TreePlacement, season: SeasonId): FoliageSpriteInstance {
+    const regions = placement.species === 1
+      ? getConiferCardRegions(season)
+      : BROADLEAF_CARD_REGIONS
+    const regionIndex = findRegionIndex(regions, placement.variant)
     return {
       x: placement.x,
       y: placement.y,
       z: placement.z,
       rotation: placement.rotation,
-      // TreePlacement.scale 是米：换算成 8m 基准倍率（与近/远景卡层同一契约）。
       scale: placement.scale / TREE_UNIT_SIZE,
-      region,
+      region: regions[regionIndex] ?? null,
       cell: Math.min(3, regionIndex % 4),
       roadProx: 0,
     }
   }
 
-  /** 扫描完成：按预算产出实例并就地重写两个物种层。 */
-  function applyFarForestScanResult(): void {
-    const scan = farForestScan
-    farForestScan = null
-    if (!scan || !farForestRoot) {
-      return
-    }
-    const result = collectFarForestPlacements(scan)
-    const broadleaf: FoliageSpriteInstance[] = []
-    const conifer: FoliageSpriteInstance[] = []
-    for (const placement of result.placements) {
-      const target = placement.species === 1 ? conifer : broadleaf
-      target.push(toFarForestInstance(placement))
-    }
-    ensureFarForestLayers(broadleaf.length, conifer.length, result.budget)
-    const layers = farForestLayers
-    if (!layers) {
-      farForestInstances = 0
-      farForestRadius = 0
-      return
-    }
-    const broadleafWritten = updateFoliageLayerMesh(
-      layers.broadleaf,
-      broadleaf,
-      TREE_UNIT_SIZE,
-      hostObject ? hostInverse : null,
-      { billboard: true },
-    )
-    const coniferWritten = updateFoliageLayerMesh(
-      layers.conifer,
-      conifer,
-      TREE_UNIT_SIZE,
-      hostObject ? hostInverse : null,
-      { billboard: true },
-    )
-    farForestInstances = broadleafWritten + coniferWritten
-    farForestRadius = scan.params.outerRadius
-  }
-
-  function startFarForestScan(tier: { radius: number; budget: number }, camera: THREE.Vector3): void {
-    if (!grid || !densityField) {
-      return
-    }
-    const qualityTier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
-    // dissolve 区间与近树卡距离同源：换档/改近树卡距离后远景 imposter 的
-    // 淡入淡出必须跟着走（与分块远景层共用同一材质句柄）。
-    applyCardDissolveRange(getFoliageMaterialHandle(farForestMaterialSpec(0)))
-    applyCardDissolveRange(getFoliageMaterialHandle(farForestMaterialSpec(1)))
-    farForestAnchorX = camera.x
-    farForestAnchorZ = camera.z
-    farForestScan = createFarForestScan({
-      seed: props.seed,
-      centerX: camera.x,
-      centerZ: camera.z,
-      innerRadius: qualityTier.viewDistance,
-      outerRadius: tier.radius,
-      budget: tier.budget,
-      maxSlope: props.forest.maxSlope,
-      roadClearance: roadHalfWidth(props) + props.road.shoulderWidth + resolveForestRoadClearance(),
-      waterLevel: resolveWaterLevel(),
-      minScale: props.forest.minScale,
-      maxScale: props.forest.maxScale,
-      densityMultiplier: qualityTier.densityMultiplier,
-    })
-  }
-
-  /**
-   * 每帧推进远景林：档位/签名变化或相机离开锚点（> 800m）时重扫，
-   * 扫描按采样预算摊薄到多帧；扫完前旧的环保持可见（双缓冲，不闪烁）。
-   */
-  function updateFarForest(camera: THREE.Vector3): void {
-    const tier = resolveFarForestTier()
-    if (!tier) {
-      if (farForestLayers || farForestScan) {
-        disposeFarForestRing()
-      }
-      farForestSignature = ''
-      return
-    }
-    ensureRoots()
+  function buildWorldForestLayers(placements: ReadonlyArray<TreePlacement>): void {
     if (!farForestRoot) {
       return
     }
-    const signature = resolveFarForestSignature()
-    const anchorMoved = !Number.isFinite(farForestAnchorX)
-      || Math.hypot(camera.x - farForestAnchorX, camera.z - farForestAnchorZ) > FAR_FOREST_REANCHOR_DISTANCE
-    if (signature !== farForestSignature || (anchorMoved && !farForestScan)) {
-      farForestSignature = signature
-      startFarForestScan(tier, camera)
+    if (farForestLayers) {
+      disposeFoliageLayerMesh(farForestLayers.broadleaf)
+      disposeFoliageLayerMesh(farForestLayers.conifer)
+      farForestLayers = null
     }
-    if (farForestScan && grid && densityField) {
-      const done = stepFarForestScan(
-        farForestScan,
-        { grid, density: densityField, roadField: roadProximity },
-        FAR_FOREST_SCAN_SAMPLES_PER_FRAME,
-      )
-      if (done) {
-        applyFarForestScanResult()
-      }
+    worldForestPlacements = placements.slice()
+    worldForestIndex = createWorldForestPlacementIndex(worldForestPlacements)
+    const season = seasonAssetsSeason ?? currentSeason
+    const broadleaf: FoliageSpriteInstance[] = []
+    const conifer: FoliageSpriteInstance[] = []
+    for (const placement of worldForestPlacements) {
+      ;(placement.species === 1 ? conifer : broadleaf).push(treeSpriteForPlacement(placement, season))
     }
+    const handleConifer = getFoliageMaterialHandle(farForestMaterialSpec(1))
+    const handleBroadleaf = getFoliageMaterialHandle(farForestMaterialSpec(0))
+    farForestLayers = {
+      broadleaf: createFoliageLayerMesh(
+        broadleaf,
+        handleBroadleaf.material,
+        TREE_UNIT_SIZE,
+        hostObject ? hostInverse : null,
+        { singlePlane: true, staticBillboard: true },
+      ),
+      conifer: createFoliageLayerMesh(
+        conifer,
+        handleConifer.material,
+        TREE_UNIT_SIZE,
+        hostObject ? hostInverse : null,
+        { singlePlane: true, staticBillboard: true },
+      ),
+    }
+    farForestRoot.add(farForestLayers.broadleaf, farForestLayers.conifer)
+    farForestInstances = worldForestPlacements.length
+    farForestRadius = grid
+      ? Math.max(grid.maxX - grid.minX, grid.maxZ - grid.minZ) * 0.5
+      : 0
+    worldForestBuildMs = worldForestBuildStartedAt > 0
+      ? (typeof performance !== 'undefined' ? performance.now() : Date.now()) - worldForestBuildStartedAt
+      : 0
+    applyTreeLodBands()
+  }
+
+  function startWorldForest(): void {
+    disposeWorldForest()
+    if (!grid || !densityField) {
+      return
+    }
+    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
+    const roadClearance = roadHalfWidth(props) + props.road.shoulderWidth + resolveForestRoadClearance()
+    const params = {
+      seed: props.seed,
+      cellSize: tier.worldForest.cellSize,
+      maxTrees: tier.worldForest.budget,
+      maxSlope: props.forest.maxSlope,
+      roadClearance,
+      waterLevel: resolveWaterLevel(),
+      minHeight: props.forest.minHeight,
+      minScale: props.forest.minScale,
+      maxScale: props.forest.maxScale,
+      densityMultiplier: tier.densityMultiplier,
+    }
+    const deps = {
+      grid,
+      density: densityField,
+      roadField: roadProximity,
+      heightAt: visibleForestHeightAt,
+    }
+    worldForestCorridor = roadResult
+      ? planWorldForestCorridor(params, deps, roadResult.nodes)
+      : []
+    worldForestScan = createWorldForestScan(params, deps)
+    worldForestBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+  }
+
+  function updateWorldForest(): void {
+    if (!worldForestScan || !grid || !densityField) {
+      return
+    }
+    const done = stepWorldForestScan(
+      worldForestScan,
+      {
+        grid,
+        density: densityField,
+        roadField: roadProximity,
+        heightAt: visibleForestHeightAt,
+      },
+      25_000,
+    )
+    if (done) {
+      const placements = worldForestCorridor.concat(worldForestScan.placements)
+      worldForestScan = null
+      buildWorldForestLayers(placements)
+    }
+  }
+
+  function updateNearTreeLayers(camera: THREE.Vector3): void {
+    if (!worldForestIndex || !farForestRoot || !hostObject) {
+      return
+    }
+    const bands = resolveTreeLodBands(
+      props.forest.nearDistance ?? PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()].treeNearDistance,
+      resolveNearTreeRadius(),
+    )
+    const radius = bands.cardFar + 32
+    if (
+      nearCardLayers
+      && Math.hypot(camera.x - nearCardCamera.x, camera.z - nearCardCamera.y) < 16
+    ) {
+      return
+    }
+    const nearCards = worldForestIndex.queryCircle(camera.x, camera.z, radius)
+    disposeNearCardLayers()
+    const season = seasonAssetsSeason ?? currentSeason
+    const broadleaf: FoliageSpriteInstance[] = []
+    const conifer: FoliageSpriteInstance[] = []
+    for (const placement of nearCards) {
+      ;(placement.species === 1 ? conifer : broadleaf).push(treeSpriteForPlacement(placement, season))
+    }
+    const handleConifer = getFoliageMaterialHandle(nearCardMaterialSpec(1))
+    const handleBroadleaf = getFoliageMaterialHandle(nearCardMaterialSpec(0))
+    applyCardDissolveRange(handleBroadleaf)
+    applyCardDissolveRange(handleConifer)
+    nearCardLayers = {
+      broadleaf: createFoliageLayerMesh(
+        broadleaf,
+        handleBroadleaf.material,
+        TREE_UNIT_SIZE,
+        hostInverse,
+      ),
+      conifer: createFoliageLayerMesh(
+        conifer,
+        handleConifer.material,
+        TREE_UNIT_SIZE,
+        hostInverse,
+      ),
+    }
+    farForestRoot.add(nearCardLayers.broadleaf, nearCardLayers.conifer)
+    nearCardCamera.set(camera.x, camera.z)
   }
 
   function resetAll(): void {
     disposeSurfaceState()
     disposeWorldState()
     disposeWaterAndBarrier()
-    disposeFarForestRing()
+    disposeWorldForest()
     disposeDemMesh()
     gridBuilder = null
     grid = null
@@ -1439,13 +1498,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     disposeDemRoadbed()
     const activeGrid = grid
     const bounds = { minX: grid.minX, minZ: grid.minZ, sizeX: grid.maxX - grid.minX, sizeZ: grid.maxZ - grid.minZ }
-    densityField = buildForestDensityField({
-      ...bounds,
-      seed: props.seed,
-      seedOffset: props.forest.seedOffset,
-      scale: props.forest.scale,
-      coverage: props.forest.coverage,
-    })
+    densityField = usesDemTerrain()
+      ? buildDemForestDensityField({
+          ...bounds,
+          seed: props.seed,
+          seedOffset: props.forest.seedOffset,
+          scale: props.forest.scale,
+        })
+      : buildForestDensityField({
+          ...bounds,
+          seed: props.seed,
+          seedOffset: props.forest.seedOffset,
+          scale: props.forest.scale,
+          coverage: props.forest.coverage,
+        })
     variationField = buildVariationField({ ...bounds, seed: props.seed, scale: props.forest.scale })
     forestMaskTexture?.dispose()
     forestMaskTexture = createDensityDataTexture(densityField)
@@ -1545,7 +1611,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             ? new Array<number>(ROAD_BAND_COLUMN_COUNT).fill(row.y)
             : sampleRoadRowColumns(row, sampledSurfaceHeightAt, halfWidth, ROAD_BAND_COLUMN_COUNT, maxLateralDrop)
         ))
-        const influence = Math.max(48, props.road.flattenBand + 8, roadHalfWidth(props) + props.road.shoulderWidth + props.grass.corridorWidth + 8)
+        const demRoadbedSpan = usesDemTerrain()
+          ? roadHalfWidth(props) + props.road.shoulderWidth
+            + Math.max(30, activeGrid.cellSize * 1.5)
+            + activeGrid.cellSize * 0.5 + 8
+          : 0
+        const influence = Math.max(
+          48,
+          props.road.flattenBand + 8,
+          roadHalfWidth(props) + props.road.shoulderWidth + props.grass.corridorWidth + 8,
+          demRoadbedSpan,
+        )
         roadFieldData = buildRoadFieldData(roadResult.nodes, {
           minX: grid.minX,
           minZ: grid.minZ,
@@ -1571,31 +1647,58 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         } else {
           unwarn('road-proximity-index-mismatch')
         }
-        if (usesDemTerrain() && hostObject && roadBandRows) {
-          const sideWidth = Math.max(12, activeGrid.cellSize * 0.75)
-          const coverageWidth = Math.max(4, activeGrid.cellSize * 0.25)
-          const roadbed = createDemRoadbedGeometry({
-            rows: roadBandRows,
+        if (usesDemTerrain() && hostObject && roadBandRows && roadProximity) {
+          demRoadbedTarget = createDemRoadbedTarget({
+            roadField: roadProximity,
+            rawHeightAt: sampledSurfaceHeightAt,
             halfWidth,
             shoulderWidth: props.road.shoulderWidth,
-            sideWidth,
-            coverageWidth,
-            lateralStep: Math.max(2, Math.min(6, activeGrid.cellSize * 0.1)),
-            roadDrop: 0.02,
-            edgeDrop: 0.06,
-            rawHeightAt: sampledSurfaceHeightAt,
+            demCellSize: activeGrid.cellSize,
+          })
+          demRoadbedSideWidth = demRoadbedTarget.sideWidth
+          demRoadbedHalfWidth = demRoadbedTarget.meshHalfWidth
+          demRoadbedCutProx = Math.max(0, demRoadbedTarget.meshHalfWidth - 8 - halfWidth)
+          const roadbed = createDemRoadbedTargetGeometry(roadBandRows, demRoadbedTarget, {
+            lateralStep: 3,
+            lift: 0.01,
             hostInverse,
           })
           if (roadbed) {
             const mesh = new THREE.Mesh(
               roadbed.geometry,
-              new THREE.MeshLambertMaterial({ color: 0xffffff }),
+              new THREE.MeshLambertMaterial({
+                color: 0xffffff,
+                side: THREE.DoubleSide,
+              }),
             )
             mesh.name = `slowroads-dem-roadbed-${hooks.nodeId}`
             mesh.userData.proceduralLandscapeDemRoadbed = true
             hostObject.add(mesh)
             demRoadbedMesh = mesh
-            demRoadbedHalfWidth = roadbed.meshHalfWidth
+            demRoadbedMaxCutFill = roadbed.maxCutFill
+            demRoadbedTriangleCount = roadbed.triangleCount
+            stats.roadbedOuterError = roadbed.outerError
+            const auditStride = Math.max(1, Math.floor(roadBandRows.length / 4096))
+            for (let rowIndex = 0; rowIndex < roadBandRows.length; rowIndex += auditStride) {
+              const row = roadBandRows[rowIndex]!
+              const normalX = -Math.sin(row.heading)
+              const normalZ = Math.cos(row.heading)
+              for (let sample = 0; sample < 17; sample += 1) {
+                const lateral = -demRoadbedTarget.meshHalfWidth
+                  + (sample / 16) * demRoadbedTarget.meshHalfWidth * 2
+                const x = row.x + normalX * lateral
+                const z = row.z + normalZ * lateral
+                const targetY = demRoadbedTarget.heightAt(x, z)
+                const coarseY = demRoadbedTarget.coarseHeightAt(x, z)
+                const rawY = demRoadbedTarget.rawHeightAt(x, z)
+                demRoadbedMaxCutFill = Math.max(demRoadbedMaxCutFill, Math.abs(targetY - rawY))
+                demRoadbedAuditSamples += 1
+                const cut = demRoadbedTarget.distanceAt(x, z) < demRoadbedCutProx
+                if (!cut && coarseY > targetY + 1e-3) {
+                  demRoadbedOcclusionCount += 1
+                }
+              }
+            }
           }
         }
       }
@@ -1619,6 +1722,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     buildWalls()
     buildWater()
     releaseAllBatches()
+    startWorldForest()
     dirty.instances = true
     forceStream = true
   }
@@ -1831,6 +1935,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           hasAlphaTexture: false,
           hasNormalTexture: false,
           card: null,
+          lodFade: null,
+          staticBillboard: false,
           distanceAlpha: false,
           useDensityShadow: false,
           key: 'barrier:all',
@@ -2100,10 +2206,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     // transparent placeholder would render the terrain black while loading.
     uniforms.uPlShowTextures.value = props.surface.textures && seasonAssets ? 1 : 0
     uniforms.uPlFresnelIntensity.value = appliedLighting.fresnel
-    foliageUniforms.meshRadius.value = resolveNearTreeRadius()
-    // 近树卡/远景树的切分层级距离与 dissolve 区间同源（lab：lod1Horizon 由近树卡距离推出）。
-    foliageUniforms.nearDistance.value = props.forest.nearDistance
-      ?? PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()].treeNearDistance
+    applyTreeLodBands()
     if (waterPlane) {
       waterPlane.setWaterLevel(resolveWaterLevel())
       waterPlane.setVisible(props.water.enabled)
@@ -2212,7 +2315,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         })
         break
       case 'tree':
-        if (handle.spec.tier === 'near') {
+        if (handle.spec.tier === 'near' || handle.spec.card !== null || handle.spec.lodFade !== null) {
           if (handle.spec.species === 0) {
             setFoliageMaterialTextures(handle, {
               atlas: pick(entry.trees.broadleafD.id),
@@ -2289,24 +2392,28 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   function applyCardDissolveRange(handle: FoliageMaterialHandle): void {
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
     const nearDistance = props.forest.nearDistance ?? tier.treeNearDistance
-    const cardDissolveFar = Math.max(40, nearDistance)
-    const cardDissolveInterval = Math.max(1, Math.floor(cardDissolveFar * CARD_DISSOLVE_INTERVAL_FACTOR))
-    const cardDissolveNear = cardDissolveFar - cardDissolveInterval
-    if (handle.spec.card === 'near') {
-      setFoliageMaterialCardRange(handle, {
-        near: cardDissolveNear,
-        far: cardDissolveFar,
-        interval: cardDissolveInterval,
-      })
-    } else if (handle.spec.card === 'far') {
-      const imposterDissolveFar = cardDissolveNear + cardDissolveInterval * 0.6
-      const imposterDissolveNear = Math.max(1, imposterDissolveFar - cardDissolveInterval)
-      setFoliageMaterialCardRange(handle, {
-        near: imposterDissolveNear,
-        far: imposterDissolveFar,
-        interval: cardDissolveInterval,
-      })
+    const bands = resolveTreeLodBands(nearDistance, resolveNearTreeRadius())
+    setFoliageMaterialCardRange(handle, {
+      near: bands.cardNear,
+      far: bands.cardFar,
+      interval: Math.max(1, bands.cardFar - bands.cardNear),
+    })
+  }
+
+  function applyTreeLodBands(): void {
+    const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
+    const bands = resolveTreeLodBands(
+      props.forest.nearDistance ?? tier.treeNearDistance,
+      resolveNearTreeRadius(),
+    )
+    foliageUniforms.meshRadius.value = resolveNearTreeRadius()
+    foliageUniforms.nearDistance.value = props.forest.nearDistance ?? tier.treeNearDistance
+    for (const handle of foliageMaterials.values()) {
+      if (handle.spec.kind === 'tree') {
+        applyCardDissolveRange(handle)
+      }
     }
+    treeMeshManager?.setLodBand(bands.meshNear, bands.meshFar)
   }
 
   function addTreeLayer(
@@ -2324,6 +2431,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       tier,
       species,
       singlePlane: tier === 'far',
+      staticBillboard: false,
       tint: 0xffffff,
       farTintScale: 1,
       hasAlphaTexture: tier === 'near' && species === 1,
@@ -2331,6 +2439,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // 近树卡 = 动态 alpha + 距离 dissolve（由 forest.nearDistance 推出）；
       // 远景树 = 朝相机广告牌（16 朝向列 + 角度混列）。
       card: tier === 'near' ? 'near' : 'far',
+      lodFade: tier === 'near' ? 'near-card' : 'far-card',
       distanceAlpha: false,
       // 近树卡用密度树影近似官方 per-instance shadow；远景树不采样密度图。
       useDensityShadow: tier === 'near',
@@ -2382,6 +2491,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       hasAlphaTexture: false,
       hasNormalTexture: false,
       card: null,
+      lodFade: null,
+      staticBillboard: false,
       distanceAlpha: kind === 'bush',
       useDensityShadow: true,
       key: `${kind}:all`,
@@ -2639,8 +2750,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     let budget = tier.maxBuildTasksPerTick
     let pendingLeft = false
 
-    // Trees.
-    {
+    // Trees are supplied by the world-anchored placement index. The old chunk
+    // planner remains as a fallback only while no world scan/index exists.
+    if (!worldForestScan && !worldForestIndex) {
       const treeSize = tier.treeChunkSize
       const treeRadius = tier.viewDistance
       const treeMinX = Math.floor((camera.x - treeRadius) / treeSize)
@@ -2782,6 +2894,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           hasSnow: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].hasSnow,
         })
         manager.setLighting({ radiance: appliedLighting.radiance, shadowFactor: appliedLighting.shadowFactor })
+        const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
+        const bands = resolveTreeLodBands(
+          props.forest.nearDistance ?? tier.treeNearDistance,
+          resolveNearTreeRadius(),
+        )
+        manager.setLodBand(bands.meshNear, bands.meshFar)
         if (grid) {
           manager.setDensity(
             forestMaskTexture,
@@ -2800,7 +2918,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     if (treeMeshManager) {
       treeMeshManager.setVisible(true)
-      treeMeshManager.update(camera, collectActiveTreePlacements(), radius, forceStream)
+      const moved = !Number.isFinite(nearMeshCamera.x)
+        || Math.hypot(camera.x - nearMeshCamera.x, camera.z - nearMeshCamera.y) >= 4
+      const placements = moved || forceStream
+        ? collectActiveTreePlacements(camera, radius)
+        : []
+      if (moved || forceStream) {
+        nearMeshCamera.set(camera.x, camera.z)
+      }
+      treeMeshManager.update(camera, placements, radius, forceStream)
     }
   }
 
@@ -2899,7 +3025,30 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     surfacePatch?.restore()
     surfacePatch = null
     surfaceMeshes = collectSurfaceMeshes()
-    surfacePatch = applyProceduralLandscapeSurfaceInjection(surfaceMeshes, uniforms)
+    surfacePatch = applyProceduralLandscapeSurfaceInjection(surfaceMeshes, uniforms, {
+      overridesForMesh: (mesh) => {
+        if (!usesDemTerrain()) {
+          return null
+        }
+        if (mesh === demMesh) {
+          return {
+            uPlRoadbedCutProx: demRoadbedCutProx,
+            uPlUseBaseSurface: 0,
+            uPlRoadDisplacement: 0,
+          }
+        }
+        if (mesh === demRoadbedMesh) {
+          return {
+            uPlRoadbedCutProx: 0,
+            uPlUseBaseSurface: 1,
+            uPlRoadDisplacement: 0,
+            uPlShowCanopy: 0,
+            uPlRoadbedBrightness: 1.1,
+          }
+        }
+        return null
+      },
+    })
     if (!surfacePatch.hasInjection && !surfaceWarningEmitted) {
       surfaceWarningEmitted = true
       warn('surface-injection-unavailable')
@@ -2983,6 +3132,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       + (roadFieldData?.memoryBytes ?? 0)
       + (roadFieldData ? roadFieldData.width * roadFieldData.height * 4 : 0)
       + (roadProximity?.memoryBytes ?? 0)
+      + (worldForestIndex?.memoryBytes ?? 0)
     stats.roadLength = roadResult?.length ?? 0
     stats.roadNodeCount = roadResult?.nodes.length ?? 0
     stats.roadComplete = roadResult?.complete ?? false
@@ -2999,6 +3149,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.wallSegmentCount = wallSegments.length
     stats.farTreeInstances = farForestInstances
     stats.farForestRadius = farForestRadius
+    stats.worldForestInstances = farForestInstances
+    stats.worldForestBuildMs = worldForestBuildMs
+    stats.roadbedHalfWidth = demRoadbedHalfWidth
+    stats.roadbedSideWidth = demRoadbedSideWidth
+    stats.roadbedCutProx = demRoadbedCutProx
+    stats.roadbedMaxCutFill = demRoadbedMaxCutFill
+    stats.roadbedCrossSlopeMax = 0
+    stats.roadbedOcclusionCount = demRoadbedOcclusionCount
+    stats.roadbedAuditSamples = demRoadbedAuditSamples
+    stats.roadbedTriangleCount = demRoadbedTriangleCount
     stats.waterEnabled = Boolean(waterPlane && waterPlane.mesh.visible)
     stats.waterLevel = grid ? resolveWaterLevel() : 0
     stats.waterFloodedFraction = waterFloodStats?.floodedFraction ?? 0
@@ -3254,18 +3414,19 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
     const camera = hooks.getCameraWorldPosition()
     if (camera && grid) {
+      // LOD dissolve must follow the camera every frame, not only when the
+      // 200ms streaming tick runs (2.8m at 14m/s is visible on steep slopes).
+      foliageUniforms.cameraPosition.value.copy(camera)
       if (needsStreaming(camera, elapsedMs)) {
         lastStreamAt = elapsedMs
         lastStreamCamera.copy(camera)
         forceStream = false
-        foliageUniforms.cameraPosition.value.copy(camera)
         // 预算用尽但仍有余量任务时继续请求后续帧，直到视野内植被补齐。
         forceStream = streamBatches(camera)
       }
+      updateWorldForest()
+      updateNearTreeLayers(camera)
       updateTreeMeshes(camera)
-    }
-    if (camera && grid) {
-      updateFarForest(camera)
     }
     waterPlane?.update()
     if (chunkDebugDirty) {
@@ -3324,7 +3485,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         grid: jsonKey(props.sampling),
         dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
         world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
-        instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
+        forest: jsonKey([
+          props.seed,
+          props.forest.coverage,
+          props.forest.scale,
+          props.forest.seedOffset,
+          props.forest.density,
+          props.forest.maxSlope,
+          props.forest.minHeight,
+          props.forest.minScale,
+          props.forest.maxScale,
+          props.quality,
+        ]),
+        instances: jsonKey([props.grass, props.bushes, props.quality]),
+        lod: jsonKey([props.forest.nearDistance, props.forest.nearTreeRadius, props.quality]),
         uniforms: jsonKey([
           props.surface,
           props.canopy,
@@ -3357,6 +3531,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (dirty.grid || dirty.world || keys.instances !== previousKeys.instances) {
         dirty.instances = true
         forceStream = true
+      }
+      if (keys.forest !== previousKeys.forest && grid && densityField) {
+        startWorldForest()
+      }
+      if (keys.lod !== previousKeys.lod) {
+        applyTreeLodBands()
       }
       if (keys.uniforms !== previousKeys.uniforms) {
         dirty.uniforms = true

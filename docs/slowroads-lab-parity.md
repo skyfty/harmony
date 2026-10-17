@@ -167,6 +167,18 @@
 
 ## 已知残差与后续
 
+## 第九批（树木连续 LOD、全图森林、DEM 路基压平，2026-10）
+
+- `proceduralLandscape/treeLod.ts`：三端共用水平 XZ LOD 距离，近树 3D →
+  近树卡 → 远景卡的 dither 区间互补；近树 3D 更新距离 4m，滑杆变化只更新
+  uniform/实例集合。
+- `proceduralLandscape/worldForest.ts`：世界锚定全图森林取代相机远景环；
+  high/medium/low 分别使用 40m/64m/96m 格与 650k/450k/150k 上限；走廊树与
+  全图树合并为同一远景变换集合。editor 实测 651k 棵、顶视约 100 FPS。
+- `demRoadbed.ts` + `demTerrain.ts`：DEM 粗网格在生成前按路基设计面挖填，
+  shader 仅裁切粗地形；高分辨率路基为双面季节材质，带 raw height/normal
+  属性，外缘接回原始 DEM。编辑器当前场景审计粗地形遮挡 0/17680。
+
 ### 本轮修复（用户实测反馈：秋·早晨低机位整片变红；夜晚看不到星空）
 
 - **haze 插值 far 反号 → 天空整片红**：`resolveHazeForCamera` 的官方公式在「正 hazeHeight +

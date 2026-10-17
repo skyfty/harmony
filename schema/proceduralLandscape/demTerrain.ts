@@ -5,6 +5,7 @@ import {
   type TerrainDemRuntimeGridData,
 } from '../terrainDemRuntimeGrid'
 import type { TerrainHeightGrid } from './terrainSampler'
+import type { DemRoadbedTarget } from './demRoadbed'
 
 const demGridLoads = new Map<string, Promise<TerrainDemRuntimeGridData>>()
 const demCoverageCache = new WeakMap<TerrainDemRuntimeGridData, Uint8Array>()
@@ -136,6 +137,7 @@ export interface DemTerrainMeshBuilder {
 export function createDemTerrainMeshBuilder(
   data: TerrainDemRuntimeGridData,
   requestedStep: number,
+  options: { roadbed?: DemRoadbedTarget | null } = {},
 ): DemTerrainMeshBuilder {
   const sampleStep = Math.max(1, Math.min(8, Math.round(requestedStep)))
   const cols = Math.max(2, Math.floor((data.width - 1) / sampleStep) + 1)
@@ -159,20 +161,27 @@ export function createDemTerrainMeshBuilder(
     return data.heights[sourceRow * data.width + sourceCol]!
   }
 
+  const sampleVisibleHeight = (x: number, z: number, col: number, row: number): number => {
+    if (options.roadbed && options.roadbed.distanceAt(x, z) <= options.roadbed.influenceHalfWidth) {
+      return options.roadbed.coarseHeightAt(x, z)
+    }
+    return sampleGridHeight(col, row)
+  }
+
   const buildPositions = (row: number): void => {
     const z = data.minZ + row * cellSizeZ
     for (let col = 0; col < cols; col += 1) {
       const x = data.minX + col * cellSizeX
       const index = row * cols + col
-      const height = sampleGridHeight(col, row)
+      const height = sampleVisibleHeight(x, z, col, row)
       heights[index] = height
       positions[index * 3] = x
       positions[index * 3 + 1] = height
       positions[index * 3 + 2] = z
-      const left = sampleGridHeight(Math.max(0, col - 1), row)
-      const right = sampleGridHeight(Math.min(cols - 1, col + 1), row)
-      const up = sampleGridHeight(col, Math.max(0, row - 1))
-      const down = sampleGridHeight(col, Math.min(rows - 1, row + 1))
+      const left = heights[row * cols + Math.max(0, col - 1)]!
+      const right = heights[row * cols + Math.min(cols - 1, col + 1)]!
+      const up = heights[Math.max(0, row - 1) * cols + col]!
+      const down = heights[Math.min(rows - 1, row + 1) * cols + col]!
       const dx = (right - left) / Math.max(1e-4, cellSizeX * 2)
       const dz = (down - up) / Math.max(1e-4, cellSizeZ * 2)
       const inverseLength = 1 / Math.hypot(dx, 1, dz)

@@ -163,7 +163,11 @@ import {
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
 import { collectGroundAnchorWorldPositions } from '@schema/groundAnchorRuntime'
-import { collectGroundCollisionSourceNodeIds } from '@schema/groundCollisionSourceRuntime'
+import {
+	DEM_GROUND_COLLISION_READY_TIMEOUT_MS,
+	collectGroundCollisionSourceNodeIds,
+	waitForGroundCollisionSourceTerrainReady,
+} from '@schema/groundCollisionSourceRuntime'
 import {
 	MESH_COLLISION_ACTIVATION_RADIUS_METERS,
 	clearAllMeshCollisionRuntimeHosts,
@@ -12554,12 +12558,10 @@ async function bootstrapScenePreviewMeshCollisionRuntime(
 	referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
 	shouldAbort: () => boolean,
 ): Promise<void> {
-	const maxIterations = 256
-	for (let iteration = 0; iteration < maxIterations; iteration += 1) {
-		if (shouldAbort()) {
-			return
-		}
-		const workPending = syncScenePreviewMeshCollisionRuntime(document, referenceWorldPositions)
+	const deadline = Date.now() + DEM_GROUND_COLLISION_READY_TIMEOUT_MS
+	let workPending = false
+	while (!shouldAbort() && Date.now() < deadline) {
+		workPending = syncScenePreviewMeshCollisionRuntime(document, referenceWorldPositions)
 		if (!workPending) {
 			break
 		}
@@ -12567,6 +12569,11 @@ async function bootstrapScenePreviewMeshCollisionRuntime(
 		await new Promise<void>((resolve) => {
 			window.setTimeout(resolve, 0)
 		})
+	}
+	if (!shouldAbort() && workPending) {
+		appendWarningMessage(
+			`地形碰撞索引等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s），物理可能先于完整碰撞启动。`,
+		)
 	}
 	await flushScenePreviewGroundCollisionBridgeMutations()
 }
@@ -12801,11 +12808,38 @@ async function loadScenePreviewPhysicsBridgeScene(
 			syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
 		}
 		if (hasGroundCollisionReference) {
-			await bootstrapScenePreviewMeshCollisionRuntime(
-				document,
-				groundCollisionReferencePositions,
-				() => requestId !== physicsBridgeSceneRequestId,
-			)
+			// DEM terrain meshes are built asynchronously after the scene graph is attached.
+			// Keep the bridge's bootstrap gate closed until the source mesh can be indexed.
+			const terrainReadiness = await waitForGroundCollisionSourceTerrainReady({
+				nodes: document.nodes,
+				resolveSourceObject: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+				shouldAbort: () => requestId !== physicsBridgeSceneRequestId,
+				onPending: (pendingNodeIds) => {
+					onProgress?.({
+						phase: 'syncingPhysics',
+						percent: 85,
+						detail: '等待 DEM 地形碰撞…',
+						currentIndex: 0,
+						currentTotal: pendingNodeIds.length,
+						currentLabel: pendingNodeIds.join(', '),
+					})
+				},
+			})
+			if (terrainReadiness.status === 'timeout') {
+				const details = terrainReadiness.pendingNodeIds
+					.map((nodeId) => `${nodeId} (${terrainReadiness.statuses[nodeId] ?? 'missing'})`)
+					.join(', ')
+				appendWarningMessage(
+					`DEM 地形碰撞等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s）：${details || 'unknown node'}`,
+				)
+			}
+			if (terrainReadiness.status !== 'aborted') {
+				await bootstrapScenePreviewMeshCollisionRuntime(
+					document,
+					groundCollisionReferencePositions,
+					() => requestId !== physicsBridgeSceneRequestId,
+				)
+			}
 		}
 		const missingCharacterControllers: string[] = []
 		const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
