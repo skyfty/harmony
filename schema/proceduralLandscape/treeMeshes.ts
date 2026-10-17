@@ -118,6 +118,12 @@ const FRAGMENT_BODY = /* glsl */ `
     vec3 treeN = texture2D(uTreeNormalTex, vPlUv).xyz * 2.0 - 1.0;
     treeNormal = normalize(vPlBasis * treeN);
   }
+  // Same hue-preserving grade as the tree-card shader: deeper, richer foliage
+  // without changing the LOD handoff colour.
+  float treeLuma = dot(treeColor, vec3(0.299, 0.587, 0.114));
+  treeColor = mix(vec3(treeLuma), treeColor, 1.28) * 0.58;
+  float treeLeafTintMask = step(treeColor.b * 1.06, treeColor.g);
+  treeColor = mix(treeColor, treeColor * vec3(0.48, 0.78, 0.42), treeLeafTintMask);
   // 官方共享近树材质（lit26 / lh）：leafEffect 含 vLeafBrightness（密林下半部压暗），
   // 阔叶按 discolouration 乘数变色并带叶辉光；针叶只缩放绿通道（无辉光）。
   float treeLeafEffect = step(treeColor.b * 1.5, treeColor.g) * vPlLeafBrightness;
@@ -238,7 +244,7 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
       depthWrite: true,
     })
     material.name = `slowroads-near-tree-${species === 0 ? 'broadleaf' : 'conifer'}-material`
-    material.customProgramCacheKey = () => `pl-tree-mesh-v3-${species}`
+    material.customProgramCacheKey = () => `pl-tree-mesh-v4-${species}`
     material.onBeforeCompile = (shader) => {
       for (const [name, uniform] of Object.entries(uniformsBySpecies[species]!)) {
         shader.uniforms[name] = uniform as THREE.IUniform
@@ -316,7 +322,11 @@ vPlUv = uv;
         .replace(
           '#include <normal_fragment_begin>',
           `float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;
-vec3 normal = normalize(vNormal);
+// Match the tree-card lighting direction near the mesh/card handoff. Real
+// leaf normals make a 3D crown much darker than the flat billboard card that
+// precedes it, which reads as a different tree rather than a closer LOD.
+vec3 treeUpView = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+vec3 normal = normalize(mix(normalize(vNormal), treeUpView, 0.58));
 vec3 nonPerturbedNormal = normal;`,
         )
         .replace('#include <map_fragment>', FRAGMENT_BODY)

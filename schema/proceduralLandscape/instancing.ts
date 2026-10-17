@@ -370,6 +370,8 @@ uniform float uPlDynamicAlpha;
 uniform float uPlBillboard;
 uniform float uPlHasSnow;
 uniform float uPlSpecies;
+/** 1 = tree layer: darker, more saturated leaves to match slowroads.io. */
+uniform float uPlTreeColourGrade;
 uniform float uPlRadiance;
 uniform float uPlFresnelIntensity;
 varying vec2 vPlUv;
@@ -445,6 +447,15 @@ const FRAGMENT_BODY = /* glsl */ `
     if (vPlLodHidden > 0.999 || plLodDither < vPlLodHidden) discard;
   }
   vec3 plColor = plTexel.rgb * uPlFoliageTint;
+  if (uPlTreeColourGrade > 0.5) {
+    // Preserve the seasonal hue (spring green / autumn orange / winter brown)
+    // while moving the palette toward slowroads' deeper tree colour.
+    float plTreeLuma = dot(plColor, vec3(0.299, 0.587, 0.114));
+    plColor = mix(vec3(plTreeLuma), plColor, 1.28) * 0.58;
+    // Pull yellow-green sunlit foliage toward the reference's deep green.
+    float plLeafTintMask = step(plColor.b * 1.06, plColor.g);
+    plColor = mix(plColor, plColor * vec3(0.48, 0.78, 0.42), plLeafTintMask);
+  }
 
   // ---- slowroads 草丛调色板 -------------------------------------------------
   if (uPlPaletteMode > 1.5) {
@@ -616,6 +627,7 @@ export interface FoliageMaterialUniforms {
   uPlPeakA: THREE.IUniform<THREE.Color>
   uPlPeakB: THREE.IUniform<THREE.Color>
   uPlTreeDiscolourationFactor: THREE.IUniform<number>
+  uPlTreeColourGrade: THREE.IUniform<number>
   uPlHasSnow: THREE.IUniform<number>
   uPlAtlas: THREE.IUniform<THREE.Texture | null>
   uPlAlphaTex: THREE.IUniform<THREE.Texture | null>
@@ -681,6 +693,7 @@ export function createFoliageMaterial(
     uPlPeakA: { value: new THREE.Color('#ffffff') },
     uPlPeakB: { value: new THREE.Color('#ffffff') },
     uPlTreeDiscolourationFactor: { value: season.discolouration },
+    uPlTreeColourGrade: { value: spec.kind === 'tree' ? 1 : 0 },
     uPlHasSnow: { value: 0 },
     uPlAtlas: { value: null },
     uPlAlphaTex: { value: null },
@@ -725,7 +738,7 @@ export function createFoliageMaterial(
     uPlUseDensityShadow: { value: spec.useDensityShadow ? 1 : 0 },
   }
   material.customProgramCacheKey = () =>
-    `pl-foliage-v5-${spec.kind}-${spec.tier}-${spec.singlePlane ? 1 : 0}-${spec.card ?? 'none'}-${spec.lodFade ?? 'none'}-${spec.staticBillboard ? 1 : 0}`
+    `pl-foliage-v6-${spec.kind}-${spec.tier}-${spec.singlePlane ? 1 : 0}-${spec.card ?? 'none'}-${spec.lodFade ?? 'none'}-${spec.staticBillboard ? 1 : 0}`
   material.onBeforeCompile = (shader) => {
     for (const [name, uniform] of Object.entries(uniforms)) {
       shader.uniforms[name] = uniform as THREE.IUniform
