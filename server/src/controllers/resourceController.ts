@@ -2610,35 +2610,15 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
   const tagIds = ensureArrayString(rawBody.tagIds ?? rawBody.tags)
   const tagObjectIds = await resolveTagObjectIdsOrThrow(tagIds)
 
-  await ensureDefaultCategories()
-
-  let resolvedCategory: AssetCategoryDocument | null = null
-  try {
-    const terrainRoot = await ensureCategoryPath([...TERRAIN_PACK_CATEGORY_PATH])
-    resolvedCategory = await ensureCategoryPath([packageName], {
-      parentId: terrainRoot._id as Types.ObjectId,
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    if (message.includes('Invalid parent category id')) {
-      ctx.throw(400, 'Invalid parent category id')
-    }
-    if (message.includes('Parent category not found')) {
-      ctx.throw(404, 'Parent category not found')
-    }
-    if (message.includes('cannot be empty')) {
-      ctx.throw(400, '资源包名称不能为空')
-    }
-    throw error
-  }
-  const category = resolvedCategory!
-
-  // Idempotent re-upload: the same zip bytes never occupy storage twice.
+  // Resolve content reuse before creating the target category. Otherwise a
+  // re-upload of the same zip under a different name leaves an empty category
+  // behind while the response correctly points at the existing asset.
   const existingMaster = await AssetModel.findOne({
     'metadata.terrainPack.sourceZipHash': parsedArchive.sourceZipHash,
     'metadata.terrainPack.sourceZipHashAlgorithm': parsedArchive.sourceZipHashAlgorithm,
     assetRole: 'master',
-    isDeleted: false,
+    isDeleted: { $ne: true },
+    deletedAt: null,
   })
     .populate('tags')
     .populate('seriesId')
@@ -2656,11 +2636,36 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       ctx.throw(409, '该 DEM 资源包是旧版本，缺少 runtime grid；请删除旧资产后重新上传。')
     }
     const existingCategory = await AssetCategoryModel.findById(existingMaster.categoryId).exec()
+    let reusableAsset = existingMaster
+    let reusableCategory: AssetCategoryDocument
+    if (existingCategory) {
+      reusableCategory = existingCategory
+    } else {
+      // The asset survived, but its category did not. Reattach it to the
+      // requested terrain category so the existing bytes become visible again.
+      await ensureDefaultCategories()
+      const terrainRoot = await ensureCategoryPath([...TERRAIN_PACK_CATEGORY_PATH])
+      reusableCategory = await ensureCategoryPath([packageName], {
+        parentId: terrainRoot._id as Types.ObjectId,
+      })
+      await AssetModel.findByIdAndUpdate(existingMaster._id as Types.ObjectId, {
+        $set: { categoryId: reusableCategory._id },
+      }).exec()
+      const repairedAsset = await AssetModel.findById(existingMaster._id)
+        .populate('tags')
+        .populate('seriesId')
+        .lean()
+        .exec() as LeanAsset | null
+      if (!repairedAsset) {
+        ctx.throw(500, '已存在资源包的分类修复失败，请稍后重试。')
+      }
+      reusableAsset = repairedAsset
+    }
     await refreshManifest()
     ctx.body = {
       reused: true,
-      category: mapCategoryTreeNode(categoryDocumentToTreeNode(existingCategory ?? category)),
-      asset: await mapAssetDocumentWithLookup(existingMaster),
+      category: mapCategoryTreeNode(categoryDocumentToTreeNode(reusableCategory)),
+      asset: await mapAssetDocumentWithLookup(reusableAsset),
       pack: {
         kind: existingMetadata?.kind ?? parsedArchive.kind,
         sourceZipName: existingMetadata?.sourceZipName ?? parsedArchive.sourceZipName,
@@ -2752,6 +2757,32 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       }
       runtimeWarnings = runtimeGrid.warnings
     }
+
+    // Create the visible category only after the potentially long unpack,
+    // storage and runtime-grid work. Otherwise another admin can delete the
+    // still-empty category while this request is running and leave the created
+    // asset pointing at a category that no longer exists.
+    await ensureDefaultCategories()
+    let resolvedCategory: AssetCategoryDocument | null = null
+    try {
+      const terrainRoot = await ensureCategoryPath([...TERRAIN_PACK_CATEGORY_PATH])
+      resolvedCategory = await ensureCategoryPath([packageName], {
+        parentId: terrainRoot._id as Types.ObjectId,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : ''
+      if (message.includes('Invalid parent category id')) {
+        ctx.throw(400, 'Invalid parent category id')
+      }
+      if (message.includes('Parent category not found')) {
+        ctx.throw(404, 'Parent category not found')
+      }
+      if (message.includes('cannot be empty')) {
+        ctx.throw(400, '资源包名称不能为空')
+      }
+      throw error
+    }
+    const category = resolvedCategory!
 
     const primaryType = resolveTerrainPackPrimaryAssetType(parsedArchive.kind)
     const packWarnings = [...parsedArchive.summary.warnings, ...plan.warnings, ...runtimeWarnings]

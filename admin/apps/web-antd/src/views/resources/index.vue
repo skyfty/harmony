@@ -1601,7 +1601,7 @@ onMounted(async () => {
         style="margin-top: 12px; padding: 12px; background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; line-height: 1.8"
       >
         <div style="font-weight: 600; margin-bottom: 4px">
-          {{ packResult.reused ? '已存在相同内容的资源包，已直接复用' : '资源包已入库' }}
+          {{ packResult.reused ? '已存在相同内容的资源包，已复用原文件并归位到下方分类' : '资源包已入库' }}
         </div>
         <div>类型：{{ packResult.pack.kind === 'geometry' ? '几何+贴图包' : 'DEM 包' }}</div>
         <div>分类：{{ (packResult.category?.path || []).map((item) => item.name).join(' / ') || packResult.category?.name }}</div>
