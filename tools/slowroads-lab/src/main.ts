@@ -1,16 +1,37 @@
 import * as THREE from 'three'
 import './style.css'
 import assetsCatalog from './core/assets-catalog.json'
+import {
+  createDemHeightfield,
+  type DemSidecar,
+  type DemTerrainBuildResult,
+  type DemTerrainGrid,
+  type DemTerrainWorkerRequest,
+  type DemTerrainWorkerResponse,
+} from './core/demTerrain'
+import { runDemTerrainChecks } from './core/demSelfCheck'
 import { createHeightfield, type Heightfield } from './core/heightfield'
-import { degreesToRadians } from './core/noise'
+import { clamp, degreesToRadians } from './core/noise'
 import {
   computePlacements,
+  computeForestTreePlacements,
+  computeRoadCorridorPlacements,
+  computeRoadsideTreePlacements,
+  createDemForestDensityField,
   createTreeDensityField,
   type LabPlacements,
   type TreeDensityField,
   type TreePlacement,
 } from './core/placement'
 import { createRoadProfile, type RoadProfile } from './core/roadProfile'
+import {
+  createFlatRoadBandColumns,
+  createRoadbedPlacementSurface,
+  createRoadbedTarget,
+  type PlacementSurface,
+  type RoadbedTarget,
+} from './core/roadbed'
+import { createTerrainGridSurface, type TerrainSurfaceHeightSource } from './core/terrainSurface'
 import { resolveSeedHeadingRad, traceRoadPath } from './core/roadTrace'
 import { computeRoadMarkings, type RoadMarkingWeights } from './core/roadMarkings'
 import {
@@ -60,13 +81,10 @@ import {
 } from './core/environment'
 import { SEASON_PARAMS } from './core/seasonParams'
 import {
-  BARRIER_RAIL_REGIONS,
   BROADLEAF_CARD_REGIONS,
   bushVariantEntries,
   getConiferCardRegions,
   getGrassEntries,
-  gridRegions,
-  type SpriteAtlasSpec,
   type SpriteCellRegion,
   type SpriteRegion,
 } from './core/spriteRegions'
@@ -80,17 +98,24 @@ import {
   type SpriteInstance,
 } from './lab/foliage'
 import { createRoadMesh, type RoadMeshHandle, type RoadPaintTextures, type RoadTextureSet } from './lab/roadMesh'
-import { createWallMeshes, fenceRailSprites, type WallMeshHandle } from './lab/wallMesh'
+import { createWallMeshes, type WallMeshHandle } from './lab/wallMesh'
 import { createTerrainMaterial, type TerrainMaterialHandle, type TerrainTextureSet } from './lab/terrainMaterial'
+import {
+  createRoadbedGeometry,
+  createTerrainGridMeshBuilder,
+  type TerrainGridMeshBuilder,
+} from './lab/terrainGridMesh'
 import { createTerrainMeshBuilder, type TerrainMeshBuilder } from './lab/terrainMesh'
 import { createTreeMeshManager, type TreeMeshManager, type TreeMeshTextures } from './lab/treeMeshes'
 import { createWater, type WaterHandle } from './lab/water'
 import {
   createLabUi,
   DEFAULT_LAB_SETTINGS,
+  type DemBenchmarkMetrics,
   type LabChangeKind,
   type LabSettings,
   type LabUiHandle,
+  type TerrainSource,
 } from './ui'
 
 // 必须在任何材质创建之前替换 three 的 fog chunk 并扩展 UniformsLib.fog。
@@ -181,9 +206,12 @@ let seasonLoadToken = 0
 let field: Heightfield | null = null
 let profile: RoadProfile | null = null
 let densityField: TreeDensityField | null = null
-let terrainBuilder: TerrainMeshBuilder | null = null
+type AnyTerrainBuilder = TerrainMeshBuilder | TerrainGridMeshBuilder
+let terrainBuilder: AnyTerrainBuilder | null = null
 let terrainMesh: THREE.Mesh | null = null
+let roadCorridorMesh: THREE.Mesh | null = null
 let terrainMaterialHandle: TerrainMaterialHandle | null = null
+let roadbedMaterialHandle: TerrainMaterialHandle | null = null
 let roadHandle: RoadMeshHandle | null = null
 let roadMarkings: RoadMarkingWeights[] | null = null
 let wallHandle: WallMeshHandle | null = null
@@ -198,6 +226,40 @@ let environmentHandles: {
 } | null = null
 let environmentController: EnvironmentController | null = null
 let placements: LabPlacements | null = null
+let forestTrees: TreePlacement[] = []
+let demGrid: DemTerrainGrid | null = null
+let demBuildResult: DemTerrainBuildResult | null = null
+let lastDemFiles: { demFile: File; jsonFile: File } | null = null
+let demLoadToken = 0
+let demLoadStartedAt = 0
+let demMeshStartedAt = 0
+let demMeshMs = 0
+let demUploadMs = 0
+let demMeshVertexCount = 0
+let demMeshTriangleCount = 0
+let demRoadColumnCount = 0
+let demRoadCrossSlopeMax = 0
+let demRoadbedSideWidth = 0
+let demRoadbedHalfWidth = 0
+let demRoadbedOuterError = 0
+let demRoadbedMaxCutFill = 0
+let demRoadbedOcclusionCount = 0
+let demRoadbedAuditSamples = 0
+let demRoadbedCutProx = 0
+let demForestPlacementMs = 0
+let demFoliageBuildMs = 0
+let demWallBuildMs = 0
+let demRawSurface: TerrainSurfaceHeightSource | null = null
+let demRoadbedTarget: RoadbedTarget | null = null
+let placementSurface: PlacementSurface | null = null
+let demFirstFramePending = false
+let demTotalBuildMs = 0
+let activeViewDistanceScale = 1
+let demBenchmarkRun: {
+  sampleStartedAt: number
+  frames: number
+  status: 'warmup' | 'sample'
+} | null = null
 
 let grassMesh: THREE.InstancedMesh | null = null
 let bushMesh: THREE.InstancedMesh | null = null
@@ -205,8 +267,6 @@ let broadleafNearMesh: THREE.InstancedMesh | null = null
 let broadleafFarMesh: THREE.InstancedMesh | null = null
 let coniferNearMesh: THREE.InstancedMesh | null = null
 let coniferFarMesh: THREE.InstancedMesh | null = null
-let barrierMesh: THREE.InstancedMesh | null = null
-let barrierSegmentCount = 0
 
 let cruise: CruiseController | null = null
 let freeFly: FreeFlyControls | null = null
@@ -429,15 +489,12 @@ function clearFoliage(): void {
   disposeFoliageMesh(broadleafFarMesh)
   disposeFoliageMesh(coniferNearMesh)
   disposeFoliageMesh(coniferFarMesh)
-  disposeFoliageMesh(barrierMesh)
   grassMesh = null
   bushMesh = null
   broadleafNearMesh = null
   broadleafFarMesh = null
   coniferNearMesh = null
   coniferFarMesh = null
-  barrierMesh = null
-  barrierSegmentCount = 0
 }
 
 function clearTerrain(): void {
@@ -446,8 +503,15 @@ function clearTerrain(): void {
     terrainMesh.geometry.dispose()
     terrainMesh = null
   }
+  if (roadCorridorMesh) {
+    scene.remove(roadCorridorMesh)
+    roadCorridorMesh.geometry.dispose()
+    roadCorridorMesh = null
+  }
   terrainMaterialHandle?.dispose()
   terrainMaterialHandle = null
+  roadbedMaterialHandle?.dispose()
+  roadbedMaterialHandle = null
   terrainBuilder = null
   roadHandle?.dispose()
   roadHandle = null
@@ -461,11 +525,15 @@ function clearTerrain(): void {
 
 function clearWorldStructure(): void {
   clearFoliage()
+  treeMeshManager?.update(camera.position, [], 0, true)
   clearTerrain()
   placements = null
+  forestTrees = []
   field = null
   profile = null
   densityField = null
+  placementSurface = null
+  demFirstFramePending = false
 }
 
 /**
@@ -657,7 +725,7 @@ function checkSkyFogScale(): void {
   const preset = resolveEnvironmentPreset(state)
   // applyState 写基准参数、每帧 update() 写 haze 插值后的参数；本检查在 world 重建末尾
   // 运行，两者都可能是在最后一次写入，因此接受「基准」或「当前相机高度的 haze 插值」两种取值。
-  const skyBase = resolveSkyFogParams(preset)
+  const skyBase = resolveSkyFogParams(preset, activeViewDistanceScale)
   const skyAdjusted = updateHazeForCamera(skyBase, camera.position.y, { inHaze: false })
   const matches = (got: number, want: number): boolean => Math.abs(got - want) < 1e-6
   const numbers: Array<[string, number, number, number]> = [
@@ -703,7 +771,7 @@ function checkSkyFogScale(): void {
   )
 
   const skyZ = skyMesh.position.z
-  const wantSkyZ = -(ENVIRONMENT_SKY_DISTANCE - 0.1)
+  const wantSkyZ = -(ENVIRONMENT_SKY_DISTANCE * activeViewDistanceScale - 0.1)
   record(
     'sky plane hangs at official n1 distance',
     Math.abs(skyZ - wantSkyZ) < 1e-3,
@@ -726,10 +794,18 @@ function checkSkyFogScale(): void {
 }
 
 function applyToggles(): void {
-  terrainMaterialHandle?.setToggles({
+  const terrainOnly = settings.terrainSource === 'dem' && settings.terrainOnly
+  const terrainToggles = {
     surface: settings.showSurface,
-    road: settings.showRoad,
-    canopy: settings.showCanopy,
+    road: !terrainOnly && settings.showRoad,
+    canopy: !terrainOnly && settings.showCanopy,
+    textures: settings.showTextures,
+  }
+  terrainMaterialHandle?.setToggles(terrainToggles)
+  roadbedMaterialHandle?.setToggles({
+    surface: settings.showSurface,
+    road: false,
+    canopy: false,
     textures: settings.showTextures,
   })
   if (grassMesh) grassMesh.visible = settings.showGrass
@@ -738,24 +814,24 @@ function applyToggles(): void {
   if (broadleafFarMesh) broadleafFarMesh.visible = settings.showTrees
   if (coniferNearMesh) coniferNearMesh.visible = settings.showTrees
   if (coniferFarMesh) coniferFarMesh.visible = settings.showTrees
-  if (barrierMesh) barrierMesh.visible = settings.showWalls && settings.showFence
   wallHandle?.setVisibility({
     drystone: settings.showWalls && settings.showDrystone,
     barrier: settings.showWalls && settings.showBarrier,
     seaWall: settings.showWalls && settings.showSeaWall,
+    fence: settings.showWalls && settings.showFence,
   })
   if (roadHandle) roadHandle.mesh.visible = settings.showRoad
   if (water) water.mesh.visible = settings.showWater
   environmentController?.setToggles({
-    sky: settings.showSky,
-    clouds: settings.showClouds,
-    stars: settings.showStars,
-    snow: settings.showSnow,
+    sky: !terrainOnly && settings.showSky,
+    clouds: !terrainOnly && settings.showClouds,
+    stars: !terrainOnly && settings.showStars,
+    snow: !terrainOnly && settings.showSnow,
   })
   if (treeMeshManager) {
-    treeMeshManager.setVisible(settings.showNearTreeMeshes)
+    treeMeshManager.setVisible(!terrainOnly && settings.showNearTreeMeshes)
   }
-  foliageUniforms.meshRadius.value = settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
+  foliageUniforms.meshRadius.value = !terrainOnly && settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
 }
 
 function applyWind(): void {
@@ -766,18 +842,20 @@ function applyWind(): void {
   if (coniferNearMesh) setFoliageWindStrength(coniferNearMesh, strength * WIND_FACTOR.tree)
   if (broadleafFarMesh) setFoliageWindStrength(broadleafFarMesh, 0)
   if (coniferFarMesh) setFoliageWindStrength(coniferFarMesh, 0)
-  if (barrierMesh) setFoliageWindStrength(barrierMesh, 0)
 }
 
 function toSprite(
   instance: { x: number; z: number; y: number; rotation: number; scale: number; variantUnit: number; roadProx: number },
   entries: SpriteCellRegion[],
   field: Heightfield,
+  surface?: PlacementSurface | null,
 ): SpriteInstance {
   const index = Math.min(entries.length - 1, Math.max(0, Math.floor(instance.variantUnit * entries.length)))
   const entry = entries[index]!
   // 官方草丛/灌木用 per-instance groundNormal 受光并驱动 fresnel；lab 从高度场采样。
-  const normal = field.sampleNormal(instance.x, instance.z, normalScratch)
+  const normal = surface
+    ? surface.normalAt(instance.x, instance.z)
+    : field.sampleNormal(instance.x, instance.z, normalScratch)
   return {
     x: instance.x,
     z: instance.z,
@@ -834,15 +912,15 @@ function getFoliageDensityTexture(): THREE.DataTexture {
 }
 
 /** 按当前树密度场刷新密度图内容（世界重建时调用）。 */
-function updateFoliageDensityTexture(density: TreeDensityField): void {
+function updateFoliageDensityTexture(density: TreeDensityField, worldSize = WORLD_SIZE): void {
   const texture = getFoliageDensityTexture()
   const size = FOLIAGE_DENSITY_SIZE
   const data = texture.image.data as Uint8Array
-  const half = WORLD_SIZE * 0.5
+  const half = worldSize * 0.5
   for (let y = 0; y < size; y += 1) {
-    const z = -half + (y / (size - 1)) * WORLD_SIZE
+    const z = -half + (y / (size - 1)) * worldSize
     for (let x = 0; x < size; x += 1) {
-      const px = -half + (x / (size - 1)) * WORLD_SIZE
+      const px = -half + (x / (size - 1)) * worldSize
       const byte = Math.round((density.classAt(px, z) / 3) * 255)
       const index = (y * size + x) * 4
       data[index] = byte
@@ -863,6 +941,7 @@ function buildFoliageFromPlacements(): void {
   const season = activeSeason
   const params = SEASON_PARAMS[season]
   const heightfield = field
+  const worldSize = field.worldSize
   const grassEntries = assets.grassSprites.entries
   const bushEntries = assets.bushes.entries
   // 官方 LOD dissolve 区间（cf(l)：lod1Horizon = 近树卡距离/10）：
@@ -870,13 +949,11 @@ function buildFoliageFromPlacements(): void {
   const cardDissolveFar = Math.max(40, settings.nearDistance)
   const cardDissolveInterval = Math.max(1, Math.floor(cardDissolveFar * 0.3))
   const cardDissolveNear = cardDissolveFar - cardDissolveInterval
-  const imposterDissolveFar = cardDissolveNear + cardDissolveInterval * 0.6
-  const imposterDissolveNear = Math.max(1, imposterDissolveFar - cardDissolveInterval)
   const cardNoise = sharedAssets.noise
   const foliageDensity = densityField ? getFoliageDensityTexture() : undefined
 
   grassMesh = createFoliageMesh(
-    placements.grass.map((placement) => toSprite(placement, grassEntries, heightfield)),
+    placements.grass.map((placement) => toSprite(placement, grassEntries, heightfield, placementSurface)),
     {
       atlas: { texture: assets.grassSprites.texture, regions: grassEntries.map((entry) => entry.region) },
       tint: 0xffffff,
@@ -884,7 +961,7 @@ function buildFoliageFromPlacements(): void {
       unitSize: 1.6,
       shared: foliageUniforms,
       densityMap: foliageDensity,
-      worldSize: WORLD_SIZE,
+      worldSize,
       palette: {
         mode: 'grass',
         season,
@@ -895,7 +972,7 @@ function buildFoliageFromPlacements(): void {
     },
   )
   bushMesh = createFoliageMesh(
-    placements.bushes.map((placement) => toSprite(placement, bushEntries, heightfield)),
+    placements.bushes.map((placement) => toSprite(placement, bushEntries, heightfield, placementSurface)),
     {
       atlas: { texture: assets.bushes.texture, regions: bushEntries.map((entry) => entry.region) },
       tint: 0xffffff,
@@ -904,7 +981,7 @@ function buildFoliageFromPlacements(): void {
       unitSize: 2,
       shared: foliageUniforms,
       densityMap: foliageDensity,
-      worldSize: WORLD_SIZE,
+      worldSize,
       palette: {
         mode: 'bush',
         season,
@@ -915,11 +992,18 @@ function buildFoliageFromPlacements(): void {
     },
   )
 
-  const broadleaf = placements.trees.filter((tree) => tree.species === 0)
-  const conifer = placements.trees.filter((tree) => tree.species === 1)
+  const nearBroadleaf = placements.trees.filter((tree) => tree.species === 0)
+  const nearConifer = placements.trees.filter((tree) => tree.species === 1)
+  // DEM worlds place the near LOD along the road and a coarse full-terrain
+  // forest in `forestTrees`. The global layer uses static cross cards so the
+  // hills stay wooded at multi-kilometre range; near cards/3D trees remain
+  // bounded to the road corridor.
+  const farTrees = forestTrees.length ? forestTrees : placements.trees
+  const farBroadleaf = farTrees.filter((tree) => tree.species === 0)
+  const farConifer = farTrees.filter((tree) => tree.species === 1)
   // 官方 effects.treeDiscolouration 是变色噪声的**幅度**（着色器换算成 ≈1±factor/2 的乘数）。
   const treeOptions = { discolouration: params.treeDiscolouration, hasSnow: params.hasSnow }
-  broadleafNearMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
+  broadleafNearMesh = createFoliageMesh(nearBroadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
     atlas: { texture: assets.broadleaf.texture, normalTexture: assets.broadleaf.normalTexture, regions: assets.broadleaf.regions },
     tint: 0xffffff,
     alphaTest: 0.5,
@@ -928,22 +1012,26 @@ function buildFoliageFromPlacements(): void {
     card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
     noiseMap: cardNoise,
     densityMap: foliageDensity,
-    worldSize: WORLD_SIZE,
+    worldSize,
     tree: { ...treeOptions, species: 0 },
   })
-  // 远景树：aCell 携带图集行（变体 % 4），朝向列在着色器里按视角选取。
-  broadleafFarMesh = createFoliageMesh(broadleaf.map((tree) => toTreeSprite(tree, tree.variantFar, tree.variantFar % 4)), {
-    atlas: { texture: assets.imposterBroadleaf.texture, normalTexture: assets.imposterBroadleaf.normalTexture, regions: gridRegions(16, 4, 4096, 1024) },
+  // 全图森林：静态十字面片 + 近树图集。远距离 mip 下仍能保持树冠 alpha，
+  // 不受 imposter 图集透明边距影响。
+  broadleafFarMesh = createFoliageMesh(farBroadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
+    atlas: { texture: assets.broadleaf.texture, normalTexture: assets.broadleaf.normalTexture, regions: assets.broadleaf.regions },
     tint: 0xffffff,
-    alphaTest: params.imposterAlphaTest,
+    alphaTest: 0.15,
     unitSize: 8,
     shared: foliageUniforms,
+    distantOnly: true,
     singlePlane: true,
-    card: { kind: 'far', dissolveNear: imposterDissolveNear, dissolveFar: imposterDissolveFar, dissolveInterval: cardDissolveInterval },
+    staticBillboard: true,
     noiseMap: cardNoise,
+    densityMap: foliageDensity,
+    worldSize,
     tree: { ...treeOptions, species: 0 },
   })
-  coniferNearMesh = createFoliageMesh(conifer.map((tree) => toTreeSprite(tree, tree.variantNear)), {
+  coniferNearMesh = createFoliageMesh(nearConifer.map((tree) => toTreeSprite(tree, tree.variantNear)), {
     atlas: { texture: assets.conifer.texture, alphaTexture: assets.conifer.alphaTexture, regions: assets.conifer.regions },
     tint: 0xffffff,
     alphaTest: 0.4,
@@ -952,35 +1040,23 @@ function buildFoliageFromPlacements(): void {
     card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
     noiseMap: cardNoise,
     densityMap: foliageDensity,
-    worldSize: WORLD_SIZE,
+    worldSize,
     tree: { ...treeOptions, species: 1 },
   })
-  coniferFarMesh = createFoliageMesh(conifer.map((tree) => toTreeSprite(tree, tree.variantFar, tree.variantFar % 4)), {
-    atlas: { texture: assets.imposterConifer.texture, normalTexture: assets.imposterConifer.normalTexture, regions: gridRegions(16, 4, 4096, 1024) },
+  coniferFarMesh = createFoliageMesh(farConifer.map((tree) => toTreeSprite(tree, tree.variantNear)), {
+    atlas: { texture: assets.conifer.texture, alphaTexture: assets.conifer.alphaTexture, regions: assets.conifer.regions },
     tint: 0xffffff,
-    alphaTest: params.imposterAlphaTest,
+    alphaTest: 0.12,
     unitSize: 8,
     shared: foliageUniforms,
+    distantOnly: true,
     singlePlane: true,
-    card: { kind: 'far', dissolveNear: imposterDissolveNear, dissolveFar: imposterDissolveFar, dissolveInterval: cardDissolveInterval },
+    staticBillboard: true,
     noiseMap: cardNoise,
+    densityMap: foliageDensity,
+    worldSize,
     tree: { ...treeOptions, species: 1 },
   })
-
-  // 木栏（官方 Fence）沿用实测精灵区域：横栏来自 spring_wall_barrier_wood，
-  // 摆放位置来自官方 Barrier/Fence 生成器（见 core/walls.ts）。
-  const fenceAtlas: SpriteAtlasSpec = { texture: assets.walls.fence, regions: BARRIER_RAIL_REGIONS }
-  const fenceSegments = fenceRailSprites(wallSegments)
-  barrierSegmentCount = fenceSegments.length
-  barrierMesh = createFoliageMesh(fenceSegments, {
-    atlas: fenceAtlas,
-    tint: 0xffffff,
-    alphaTest: 0.35,
-    unitSize: 0.35,
-    shared: foliageUniforms,
-    singlePlane: true,
-  })
-
   scene.add(
     grassMesh,
     bushMesh,
@@ -988,7 +1064,6 @@ function buildFoliageFromPlacements(): void {
     broadleafFarMesh,
     coniferNearMesh,
     coniferFarMesh,
-    barrierMesh,
   )
   applyWind()
   applyToggles()
@@ -997,6 +1072,77 @@ function buildFoliageFromPlacements(): void {
 }
 
 function rebuildPlacements(): void {
+  if (settings.terrainSource === 'dem') {
+    if (settings.terrainOnly || !field || !profile || !densityField) {
+      return
+    }
+    const roadside = computeRoadCorridorPlacements(field, profile, {
+      seed: settings.seed >>> 0,
+      worldSize: field.worldSize,
+      treeDensity: settings.treeDensity,
+      treeSize: settings.treeSize,
+      grassCorridor: settings.grassCorridor,
+      grassDensity: settings.grassDensity,
+      bushDensity: settings.bushDensity,
+      flowerDensity: settings.flowerDensity,
+      tallGrassDensity: settings.tallGrassDensity,
+    }, placementSurface ?? undefined)
+    const corridorTrees = computeRoadsideTreePlacements(field, profile, densityField, {
+      seed: settings.seed >>> 0,
+      worldSize: field.worldSize,
+      treeDensity: settings.treeDensity,
+      treeSize: settings.treeSize,
+      grassCorridor: settings.grassCorridor,
+      grassDensity: settings.grassDensity,
+      bushDensity: settings.bushDensity,
+      flowerDensity: settings.flowerDensity,
+      tallGrassDensity: settings.tallGrassDensity,
+    }, {
+      surface: placementSurface ?? undefined,
+      maxTrees: 30000,
+      maxDistance: 150,
+      alongStep: 6,
+      lateralStep: 10,
+      slopeLimit: 0.6,
+    })
+    const forestStartedAt = performance.now()
+    forestTrees = computeForestTreePlacements(field, densityField, {
+      seed: settings.seed >>> 0,
+      worldSize: field.worldSize,
+      treeDensity: settings.treeDensity,
+      treeSize: settings.treeSize,
+      grassCorridor: settings.grassCorridor,
+      grassDensity: settings.grassDensity,
+      bushDensity: settings.bushDensity,
+      flowerDensity: settings.flowerDensity,
+      tallGrassDensity: settings.tallGrassDensity,
+    }, {
+      cellSize: 40,
+      maxTrees: 1300000,
+      slopeLimit: 0.6,
+      surface: placementSurface ?? undefined,
+      profile,
+      roadClearance: 14,
+    })
+    demForestPlacementMs = performance.now() - forestStartedAt
+    placements = {
+      trees: corridorTrees,
+      grass: roadside.grass,
+      bushes: roadside.bushes,
+    }
+    // Walls are generated from the same profile; on this DEM the height gates
+    // may legitimately produce zero segments.
+    const wallsStartedAt = performance.now()
+    buildWalls()
+    demWallBuildMs = performance.now() - wallsStartedAt
+    const foliageStartedAt = performance.now()
+    buildFoliageFromPlacements()
+    demFoliageBuildMs = performance.now() - foliageStartedAt
+    if (treeMeshManager && placements) {
+      treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value, true)
+    }
+    return
+  }
   if (!field || !profile || !densityField) {
     return
   }
@@ -1047,6 +1193,9 @@ function roadTextureSet(): RoadTextureSet | null {
  * 放置规则见 `core/walls.ts`；这里只负责用当前季节贴图建网格并接管可见性开关。
  */
 function buildWalls(): void {
+  if (settings.terrainSource === 'dem' && settings.terrainOnly) {
+    return
+  }
   wallHandle?.dispose()
   wallHandle = null
   wallSegments = []
@@ -1072,6 +1221,7 @@ function buildWalls(): void {
       drystone: seasonAssets.walls.drystone,
       barrier: seasonAssets.walls.barrier,
       seaWall: seasonAssets.walls.seaWall,
+      fence: seasonAssets.walls.fence,
     },
     shadowFactor: SEASON_PARAMS[activeSeason].shadowFactor,
   })
@@ -1083,7 +1233,12 @@ function rebuildWorld(): void {
   if (!sharedAssets) {
     return
   }
+  if (settings.terrainSource === 'dem') {
+    rebuildDemWorld()
+    return
+  }
   clearWorldStructure()
+  cameraInitialized = false
   const seed = settings.seed >>> 0
   field = createHeightfield({ seed, worldSize: WORLD_SIZE })
   const trace = traceRoadPath(field, {
@@ -1107,13 +1262,321 @@ function rebuildWorld(): void {
   // 密度图纹理在近树材质创建时就已引用，这里按新世界刷新内容。
   updateFoliageDensityTexture(densityField)
   terrainBuilder = createTerrainMeshBuilder(field, profile, { segments: TERRAIN_SEGMENTS })
+  applyTerrainViewScale()
   worldBuildStartedAt = performance.now()
   overlay.hidden = false
   overlayProgress.style.width = '0%'
   overlayDetail.textContent = `种子 ${seed} · 道路 ${Math.round(profile.length)}m · 顶点 ${(terrainBuilder.vertexCount / 1e6).toFixed(2)}M`
 }
 
+function rebuildDemWorld(): void {
+  if (!demGrid) {
+    ui?.setDemStatus('DEM 尚未加载。请选择 dem.tif 与 dem.json。')
+    return
+  }
+  clearWorldStructure()
+  field = createDemHeightfield(demGrid)
+  profile = null
+  densityField = null
+  placements = null
+  demRoadbedTarget = null
+  demRawSurface = createTerrainGridSurface({
+    cols: demGrid.cols,
+    rows: demGrid.rows,
+    minX: demGrid.bounds.minX,
+    minZ: demGrid.bounds.minZ,
+    cellSizeX: demGrid.cellSizeX,
+    cellSizeZ: demGrid.cellSizeZ,
+    heights: demGrid.heights,
+  })
+  demRoadColumnCount = 0
+  demRoadCrossSlopeMax = 0
+  demRoadbedSideWidth = 0
+  demRoadbedHalfWidth = 0
+  demRoadbedOuterError = 0
+  demRoadbedMaxCutFill = 0
+  demRoadbedOcclusionCount = 0
+  demRoadbedAuditSamples = 0
+  demRoadbedCutProx = 0
+  demForestPlacementMs = 0
+  demFoliageBuildMs = 0
+  demWallBuildMs = 0
+  if (!settings.terrainOnly && settings.demSampleStep !== 1) {
+    settings.demSampleStep = 1
+    ui?.sync()
+    ui?.setDemStatus('DEM 场景固定使用全分辨率 30m；半/四分之一仅用于 terrain-only 性能诊断。')
+  }
+  const seed = settings.seed >>> 0
+  if (!settings.terrainOnly) {
+    const trace = traceRoadPath(field, {
+      startX: 0,
+      startZ: 0,
+      headingRad: resolveSeedHeadingRad(seed),
+      stepLength: 8,
+      feelDistance: 24,
+      feelAngleRad: degreesToRadians(32),
+      slopeLimit: 0.55,
+      maxTurnRad: degreesToRadians(4),
+      maxLength: null,
+      margin: 24,
+    })
+    if (trace.nodes.length > 1) {
+      profile = createRoadProfile(trace.nodes, {
+        halfWidth: settings.roadWidth * 0.5,
+        shoulderWidth: ROAD_SHOULDER_WIDTH,
+        flattenBand: settings.flattenBand,
+      })
+      densityField = createDemForestDensityField(seed, field.worldSize)
+      updateFoliageDensityTexture(densityField, field.worldSize)
+      const terrainCellSize = Math.max(demGrid.cellSizeX, demGrid.cellSizeZ)
+      const sideWidth = Math.max(30, terrainCellSize * 1.5)
+      const coverageWidth = terrainCellSize * 0.5
+      demRoadbedTarget = createRoadbedTarget(profile, demRawSurface, {
+        sideWidth,
+        coverageWidth,
+        roadDrop: 0.05,
+        coarseClearance: 4,
+      })
+      demRoadbedSideWidth = demRoadbedTarget.sideWidth
+      demRoadbedHalfWidth = demRoadbedTarget.meshHalfWidth
+      demRoadbedCutProx = Math.max(
+        0,
+        demRoadbedTarget.meshHalfWidth - 8 - profile.halfWidth,
+      )
+      placementSurface = createRoadbedPlacementSurface(demRoadbedTarget, demRawSurface)
+    } else {
+      ui?.setDemStatus(`DEM 道路追踪失败：${trace.failureReason ?? 'unknown'}`)
+    }
+  }
+  const builder = createTerrainGridMeshBuilder(demGrid, {
+    sampleStep: settings.terrainOnly ? settings.demSampleStep : 1,
+    roadbed: demRoadbedTarget,
+  })
+  terrainBuilder = builder
+  demMeshStartedAt = performance.now()
+  const baseBuildMs = (demBuildResult?.decodeMs ?? 0) + (demBuildResult?.hybridMs ?? 0)
+  demLoadStartedAt = performance.now() - baseBuildMs
+  cameraInitialized = false
+  applyTerrainViewScale()
+  ui?.setTerrainOnlyMode(settings.terrainOnly)
+  worldBuildStartedAt = performance.now()
+  overlay.hidden = false
+  overlayProgress.style.width = '0%'
+  overlayDetail.textContent =
+    `DEM ${demGrid.sourceWidth}×${demGrid.sourceHeight} · ` +
+    `网格 ${builder.cols}×${builder.rows} · ` +
+    `顶点 ${(builder.vertexCount / 1e6).toFixed(2)}M · ` +
+    `${settings.terrainOnly ? 'terrain-only' : '路基压平 + 高分辨率路基'}`
+  ui?.setDemStatus(
+    `已载入 ${demGrid.sourceWidth}×${demGrid.sourceHeight} DEM；` +
+    `世界 ${(demGrid.bounds.sizeX / 1000).toFixed(2)}×${(demGrid.bounds.sizeZ / 1000).toFixed(2)}km，` +
+    `高程 ${demGrid.minHeight.toFixed(1)}–${demGrid.maxHeight.toFixed(1)}m` +
+    `${profile ? `；道路 ${Math.round(profile.length)}m` : '；terrain-only'}。`,
+  )
+  resetCameraView()
+}
+
+function updateDemMetrics(fps = 0, drawCalls = 0): void {
+  if (!demGrid) {
+    ui?.setDemMetrics(null)
+    return
+  }
+  const heap = (performance as Performance & { memory?: { usedJSHeapSize?: number } }).memory
+  const metrics: DemBenchmarkMetrics = {
+    source: `dem ${demGrid.sourceWidth}×${demGrid.sourceHeight} @ ${demGrid.sourceCellSize}m`,
+    width: demGrid.sourceWidth,
+    height: demGrid.sourceHeight,
+    sampleStep: settings.demSampleStep,
+    detailEnabled: demGrid.detailEnabled,
+    decodeMs: demBuildResult?.decodeMs ?? 0,
+    hybridMs: demBuildResult?.hybridMs ?? 0,
+    meshMs: demMeshMs,
+    uploadMs: demUploadMs,
+    totalBuildMs: demTotalBuildMs,
+    forestPlacementMs: demForestPlacementMs,
+    foliageBuildMs: demFoliageBuildMs,
+    wallBuildMs: demWallBuildMs,
+    forestCount: forestTrees.length,
+    nearTreeCards: (broadleafNearMesh?.count ?? 0) + (coniferNearMesh?.count ?? 0),
+    grassSprites: grassMesh?.count ?? 0,
+    bushSprites: bushMesh?.count ?? 0,
+    vertices: demMeshVertexCount,
+    triangles: renderer.info.render.triangles,
+    drawCalls,
+    fps,
+    jsHeapMb: heap?.usedJSHeapSize ? heap.usedJSHeapSize / (1024 * 1024) : null,
+    roadbedSideWidth: demRoadbedSideWidth,
+    roadbedHalfWidth: demRoadbedHalfWidth,
+    roadbedCutProx: demRoadbedCutProx,
+    roadColumns: demRoadColumnCount,
+    roadCrossSlopeMax: demRoadCrossSlopeMax,
+    roadbedOuterError: demRoadbedOuterError,
+    roadbedMaxCutFill: demRoadbedMaxCutFill,
+    roadbedOcclusionCount: demRoadbedOcclusionCount,
+    roadbedAuditSamples: demRoadbedAuditSamples,
+    warnings: demGrid.warnings,
+  }
+  ui?.setDemMetrics(metrics)
+}
+
+function finalizeDemTerrain(): void {
+  if (!terrainBuilder || !terrainBuilder.geometry || !field || !seasonAssets || !demGrid) {
+    return
+  }
+  const geometry = terrainBuilder.geometry
+  demMeshMs = performance.now() - demMeshStartedAt
+  demMeshVertexCount = terrainBuilder.vertexCount
+  demMeshTriangleCount = terrainBuilder.triangleCount
+  const heightScale = 300 / Math.max(1, field.maxHeight - field.waterLevel)
+  terrainMaterialHandle = createTerrainMaterial({
+    seed: settings.seed >>> 0,
+    worldSize: field.worldSize,
+    waterLevel: field.waterLevel,
+    textures: seasonAssets.terrain,
+    season: activeSeason,
+    heightScale,
+    density: settings.terrainOnly ? undefined : densityField ?? undefined,
+    densityBounds: field.bounds,
+    roadDisplacement: false,
+    roadbedCutProx: demRoadbedCutProx,
+    reduced: settings.compatMode,
+  })
+  roadbedMaterialHandle = createTerrainMaterial({
+    seed: settings.seed >>> 0,
+    worldSize: field.worldSize,
+    waterLevel: field.waterLevel,
+    textures: seasonAssets.terrain,
+    season: activeSeason,
+    heightScale,
+    roadDisplacement: false,
+    roadbedCutProx: 0,
+    useBaseSurface: true,
+    reduced: settings.compatMode,
+  })
+  // The roadbed is a strip whose winding depends on the arbitrary road
+  // direction; render both sides so it always fills the coarse shader cut.
+  roadbedMaterialHandle.material.side = THREE.DoubleSide
+  terrainMesh = new THREE.Mesh(geometry, terrainMaterialHandle.material)
+  terrainMesh.name = 'slowroads-dem-terrain'
+  scene.add(terrainMesh)
+  if (profile && densityField && !settings.terrainOnly) {
+    const gridBuilder = terrainBuilder as TerrainGridMeshBuilder
+    const gradedSurface = gridBuilder.surface
+    if (!gradedSurface || !demRawSurface || !demRoadbedTarget) {
+      ui?.setDemStatus('DEM 路基生成失败：地表采样器或路基目标不可用。')
+      terrainBuilder = null
+      overlay.hidden = true
+      return
+    }
+    const roadbed = demRoadbedTarget
+    const flatColumns = createFlatRoadBandColumns(profile, { step: 2, columnCount: 9 })
+    demRoadColumnCount = flatColumns.columnCount
+    demRoadCrossSlopeMax = 0
+    demRoadbedAuditSamples = 0
+    demRoadbedOcclusionCount = 0
+    demRoadbedOuterError = 0
+    demRoadbedMaxCutFill = 0
+    const auditRows = Math.min(flatColumns.columns.length, 4096)
+    for (let i = 0; i < auditRows; i += 1) {
+      const row = profile.sampleAt(Math.min(profile.length, i * flatColumns.step))
+      const perpX = -Math.sin(row.heading)
+      const perpZ = Math.cos(row.heading)
+      for (let sample = 0; sample < 17; sample += 1) {
+        const u = sample / 16
+        const lateral = -roadbed.outerHalfWidth + u * roadbed.outerHalfWidth * 2
+        const x = row.x + perpX * lateral
+        const z = row.z + perpZ * lateral
+        const targetY = roadbed.heightAt(x, z)
+        const rawY = demRawSurface.heightAt(x, z)
+        const coarseY = gradedSurface.heightAt(x, z)
+        demRoadbedMaxCutFill = Math.max(demRoadbedMaxCutFill, Math.abs(targetY - rawY))
+        demRoadbedAuditSamples += 1
+        const cut = roadbed.roadProximityAt(x, z) < demRoadbedCutProx
+        if (!cut && coarseY > targetY + 1e-3) {
+          demRoadbedOcclusionCount += 1
+        }
+        if (sample === 0 || sample === 16) {
+          const outerY = roadbed.rawHeightAt(x, z)
+          demRoadbedOuterError = Math.max(demRoadbedOuterError, Math.abs(outerY - rawY))
+        }
+      }
+    }
+
+    const roadbedGeometry = createRoadbedGeometry(profile, roadbed, {
+      // Shoulder/side-slope geometry does not need asphalt-level density;
+      // 4m x 3m keeps the cut/fill silhouette while cutting ~4x triangles.
+      alongStep: 4,
+      crossStep: 3,
+      lift: 0.01,
+    })
+    roadCorridorMesh = new THREE.Mesh(roadbedGeometry, roadbedMaterialHandle.material)
+    roadCorridorMesh.name = 'slowroads-dem-roadbed'
+    scene.add(roadCorridorMesh)
+
+    const style = ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE]
+    const densityForShadow = densityField
+    roadMarkings = computeRoadMarkings(profile.nodes, {
+      style,
+      nodeSpacing: ROAD_TRACE_STEP,
+      shadowAt: (x, z) => Math.min(1, densityForShadow.sampleUnit(x, z) * 1.3),
+      edgeOffset: profile.halfWidth,
+      waterLevel: field.waterLevel,
+    })
+    roadHandle = createRoadMesh({
+      profile,
+      density: densityField,
+      sunDir: foliageUniforms.sunDir.value,
+      sunColor: foliageUniforms.sunColor.value,
+      markings: isSingleTrackRoad(settings.roadWidth) ? null : roadMarkings,
+      nodeSpacing: ROAD_TRACE_STEP,
+      columnHeights: flatColumns.columns,
+      clearance: 0.05,
+    })
+    const params = SEASON_PARAMS[activeSeason]
+    const roadTextures = roadTextureSet()
+    if (roadTextures) {
+      roadHandle.setSeason(roadTextures, params.shadowFactor)
+    }
+    scene.add(roadHandle.mesh)
+  }
+  terrainBuilder = null
+  overlay.hidden = true
+  lastWorldBuildMs = performance.now() - worldBuildStartedAt
+  const uploadStart = performance.now()
+  renderer.compile(scene, camera)
+  demUploadMs = performance.now() - uploadStart
+  demFirstFramePending = true
+  applyToggles()
+  applyEnvironmentState()
+  if (!settings.terrainOnly && profile) {
+    rebuildPlacements()
+  }
+  checkSkyFogScale()
+  ui?.setDemStatus(
+    `DEM 地形网格就绪：${demMeshVertexCount.toLocaleString()} 顶点 / ` +
+    `${demMeshTriangleCount.toLocaleString()} 三角形；等待首帧后汇总构建时间。`,
+  )
+  if (!settings.terrainOnly && profile) {
+    if (demRoadbedOcclusionCount > 0) {
+      console.warn(
+        `[slowroads-lab] DEM roadbed coarse overlap at ${demRoadbedOcclusionCount}/` +
+        `${demRoadbedAuditSamples} audit samples`,
+      )
+    }
+    ui?.setDemStatus(
+      `路基压平：边坡宽 ${demRoadbedSideWidth.toFixed(1)}m，` +
+      `半宽 ${demRoadbedHalfWidth.toFixed(1)}m；外侧误差 ${demRoadbedOuterError.toFixed(2)}m，` +
+      `最大挖填 ${demRoadbedMaxCutFill.toFixed(1)}m，` +
+      `粗网格重叠 ${demRoadbedOcclusionCount}/${demRoadbedAuditSamples}。`,
+    )
+  }
+}
+
 function finalizeTerrain(): void {
+  if (settings.terrainSource === 'dem') {
+    finalizeDemTerrain()
+    return
+  }
   if (!terrainBuilder || !terrainBuilder.geometry || !field || !densityField || !profile || !seasonAssets) {
     return
   }
@@ -1122,6 +1585,7 @@ function finalizeTerrain(): void {
     worldSize: WORLD_SIZE,
     waterLevel: field.waterLevel,
     density: densityField,
+    densityBounds: field.bounds,
     textures: seasonAssets.terrain,
     season: activeSeason,
     reduced: settings.compatMode,
@@ -1211,12 +1675,18 @@ async function applySeason(season: SeasonId, options: { silent?: boolean } = {})
     seasonAssets = assets
     // Terrain material keeps the same geometry; swap textures + palette.
     terrainMaterialHandle?.setSeason(season, assets.terrain)
+    roadbedMaterialHandle?.setSeason(season, assets.terrain)
     const roadTextures = roadTextureSet()
     if (roadTextures) {
       roadHandle?.setSeason(roadTextures, SEASON_PARAMS[season].shadowFactor)
     }
     wallHandle?.setTextures(
-      { drystone: assets.walls.drystone, barrier: assets.walls.barrier, seaWall: assets.walls.seaWall },
+      {
+        drystone: assets.walls.drystone,
+        barrier: assets.walls.barrier,
+        seaWall: assets.walls.seaWall,
+        fence: assets.walls.fence,
+      },
       SEASON_PARAMS[season].shadowFactor,
     )
     water?.setFrozen(SEASON_PARAMS[season].frozenWater)
@@ -1255,7 +1725,39 @@ async function applySeason(season: SeasonId, options: { silent?: boolean } = {})
 // Camera helpers
 // ---------------------------------------------------------------------------
 
+function applyTerrainViewScale(): void {
+  const extent = field ? Math.max(field.bounds.sizeX, field.bounds.sizeZ) : WORLD_SIZE
+  activeViewDistanceScale = settings.terrainSource === 'dem'
+    ? clamp(extent / 3000, 1, 16)
+    : 1
+  environmentController?.setViewDistanceScale(activeViewDistanceScale)
+  camera.near = settings.terrainSource === 'dem' ? 1 : 0.1
+  camera.far = settings.terrainSource === 'dem' ? 70000 : 3000
+  camera.updateProjectionMatrix()
+  const speedScale = settings.terrainSource === 'dem' ? activeViewDistanceScale : 1
+  freeFly?.setSpeed(24 * speedScale, 72 * speedScale)
+}
+
 function resetCameraView(): void {
+  if (settings.terrainSource === 'dem' && field && demGrid) {
+    if (!settings.terrainOnly && profile && profile.length > 1) {
+      const start = profile.sampleAt(Math.min(20, profile.length))
+      const ahead = profile.sampleAt(Math.min(90, profile.length))
+      const backX = Math.cos(start.heading + Math.PI) * 10
+      const backZ = Math.sin(start.heading + Math.PI) * 10
+      camera.position.set(start.x + backX, start.y + 5.5, start.z + backZ)
+      camera.lookAt(ahead.x, ahead.y + 1.6, ahead.z)
+      freeFly?.syncFromCamera()
+      cameraInitialized = true
+      return
+    }
+    const eyeY = demGrid.maxHeight + 800
+    camera.position.set(0, eyeY, 0)
+    camera.lookAt(demGrid.peakX, demGrid.maxHeight * 0.35, demGrid.peakZ)
+    freeFly?.syncFromCamera()
+    cameraInitialized = true
+    return
+  }
   if (!profile || profile.length < 1) {
     return
   }
@@ -1267,6 +1769,130 @@ function resetCameraView(): void {
   camera.lookAt(ahead.x, ahead.y + 1.6, ahead.z)
   freeFly?.syncFromCamera()
   cameraInitialized = true
+}
+
+async function loadDemFiles(demFile: File, jsonFile: File): Promise<void> {
+  cancelDemBenchmark()
+  const token = ++demLoadToken
+  lastDemFiles = { demFile, jsonFile }
+  demLoadStartedAt = performance.now()
+  demMeshStartedAt = 0
+  demMeshMs = 0
+  demUploadMs = 0
+  demTotalBuildMs = 0
+  demFirstFramePending = false
+  ui?.setDemStatus('读取 dem.json…')
+  try {
+    const sidecar = JSON.parse(await jsonFile.text()) as DemSidecar
+    const demBuffer = await demFile.arrayBuffer()
+    ui?.setDemStatus('Worker 解码 DEM 与生成混合高度场…')
+    const worker = new Worker(new URL('./lab/demTerrain.worker.ts', import.meta.url), { type: 'module' })
+    const response = await new Promise<DemTerrainWorkerResponse>((resolve, reject) => {
+      worker.onmessage = (event: MessageEvent<DemTerrainWorkerResponse>) => resolve(event.data)
+      worker.onerror = (event) => reject(new Error(event.message || 'DEM worker failed'))
+      const request: DemTerrainWorkerRequest = {
+        demBuffer,
+        sidecar,
+        options: {
+          detailEnabled: settings.demDetailEnabled,
+          detailSeed: settings.seed >>> 0,
+        },
+      }
+      worker.postMessage(request, [demBuffer])
+    })
+    worker.terminate()
+    if (token !== demLoadToken) {
+      return
+    }
+    if (!response.ok) {
+      throw new Error(response.error)
+    }
+    demGrid = response.result.grid
+    demBuildResult = response.result
+    settings.terrainSource = 'dem'
+    settings.terrainOnly = false
+    settings.showWater = false
+    ui?.sync()
+    ui?.setTerrainOnlyMode(false)
+    rebuildDemWorld()
+  } catch (error) {
+    if (token !== demLoadToken) {
+      return
+    }
+    ui?.setDemStatus(`DEM 加载失败：${error instanceof Error ? error.message : String(error)}`)
+    ui?.setDemMetrics(null)
+  }
+}
+
+function handleTerrainSourceChange(source: TerrainSource): void {
+  cancelDemBenchmark()
+  settings.terrainSource = source
+  if (source === 'dem' && !demGrid) {
+    if (lastDemFiles) {
+      void loadDemFiles(lastDemFiles.demFile, lastDemFiles.jsonFile)
+    } else {
+      ui?.setDemStatus('请先选择 dem.tif 与 dem.json，然后点击“加载 DEM”。')
+    }
+    return
+  }
+  if (source === 'procedural') {
+    settings.terrainOnly = false
+    ui?.setTerrainOnlyMode(false)
+    ui?.setDemMetrics(null)
+    ui?.setDemStatus('程序化 1600m 世界已启用；DEM 数据仍保留，可切回。')
+    ui?.sync()
+  }
+  rebuildWorld()
+}
+
+function handleDemOptionsChange(): void {
+  cancelDemBenchmark()
+  if (settings.terrainSource !== 'dem' || !demGrid) {
+    return
+  }
+  if (demGrid.detailEnabled !== settings.demDetailEnabled && lastDemFiles) {
+    void loadDemFiles(lastDemFiles.demFile, lastDemFiles.jsonFile)
+    return
+  }
+  if (demGrid.detailEnabled === settings.demDetailEnabled) {
+    rebuildDemWorld()
+  }
+}
+
+function runDemBenchmark(): void {
+  if (!demGrid || !terrainMesh || !terrainMaterialHandle) {
+    ui?.setDemStatus('DEM 地形尚未就绪，无法运行基准。')
+    return
+  }
+  if (cruiseActive) {
+    toggleCruise()
+  }
+  resetCameraView()
+  renderer.setPixelRatio(1)
+  renderer.setSize(1920, 1080, false)
+  camera.aspect = 16 / 9
+  camera.updateProjectionMatrix()
+  if (freeFly) {
+    freeFly.enabled = false
+  }
+  demBenchmarkRun = {
+    sampleStartedAt: performance.now() + 2000,
+    frames: 0,
+    status: 'warmup',
+  }
+  ui?.setDemStatus('基准运行中：预热 2s，随后在 1920×1080、pixel ratio 1 下采样 5s。')
+}
+
+function cancelDemBenchmark(): void {
+  if (!demBenchmarkRun) {
+    return
+  }
+  demBenchmarkRun = null
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+  handleResize()
+  if (freeFly) {
+    freeFly.enabled = true
+  }
 }
 
 function handleChange(kind: LabChangeKind, key: keyof LabSettings): void {
@@ -1361,18 +1987,33 @@ function updateStats(): void {
     ? assetStore.bytesFor(collectSeasonTextureRefs(activeSeason).map((ref) => ref.id))
     : 0
   const preset = resolveEnvironmentPreset(currentEnvironmentState())
+  const terrainOnly = settings.terrainSource === 'dem' && settings.terrainOnly
   statsElement.textContent = [
     `FPS ${fps.toFixed(0)} · draw calls ${info.calls} · tris ${(info.triangles / 1e6).toFixed(2)}M`
-      + ` · 环境 ${SEASON_LABELS[activeSeason]}·${TIME_OF_DAY_LABELS[settings.timeOfDay]}·${WEATHER_LABELS[settings.weather]}`,
-    `天空${settings.showSky ? '开' : '关'} · 云${settings.showClouds ? '开' : '关'}(${preset.clouds.mode})`
-      + ` · 星空${preset.stars ? `夜晴${settings.showStars ? '' : '·切'}` : '—'}`
-      + ` · 降雪${preset.snow && preset.snow.density > 0 ? `${preset.snow.density}${settings.showSnow ? '' : '·切'}` : '—'}`,
-    `树卡 ${treeCount} · 近树3D ${treeMeshManager?.instanceCount ?? 0} · 草 ${grassMesh?.count ?? 0} · 灌木花草 ${bushMesh?.count ?? 0}`,
-    `墙体 ${wallSegments.length}（石墙 ${wallSegments.filter((segment) => segment.type === 'drystone').length}`
-      + ` · 木栏 ${wallSegments.filter((segment) => segment.type === 'fence').length}/${barrierSegmentCount}栏`
-      + ` · 护栏 ${wallSegments.filter((segment) => segment.type === 'barrier').length}`
-      + ` · 海墙 ${wallSegments.filter((segment) => segment.type === 'seaWall').length}）`
-      + ` · 道路 ${profile ? Math.round(profile.length) : 0}m · 世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 切季 ${lastSeasonSwitchMs ? `${Math.round(lastSeasonSwitchMs)}ms` : '—'}`,
+      + ` · 环境 ${SEASON_LABELS[activeSeason]}·${TIME_OF_DAY_LABELS[settings.timeOfDay]}·${WEATHER_LABELS[settings.weather]}`
+      + (terrainOnly ? ' · terrain-only' : ''),
+    terrainOnly
+      ? '天空/云/星空/降雪/水面/道路/植被/墙体：terrain-only 停用'
+      : `天空${settings.showSky ? '开' : '关'} · 云${settings.showClouds ? '开' : '关'}(${preset.clouds.mode})`
+        + ` · 星空${preset.stars ? `夜晴${settings.showStars ? '' : '·切'}` : '—'}`
+        + ` · 降雪${preset.snow && preset.snow.density > 0 ? `${preset.snow.density}${settings.showSnow ? '' : '·切'}` : '—'}`,
+    terrainOnly
+      ? `DEM ${demGrid?.sourceWidth ?? 0}×${demGrid?.sourceHeight ?? 0} · 三角 ${demMeshTriangleCount.toLocaleString()}`
+      : `树卡 ${treeCount} · 全图森林 ${forestTrees.length}`
+        + ` · 远景实例 ${(broadleafFarMesh?.count ?? 0) + (coniferFarMesh?.count ?? 0)}`
+        + ` · 近树3D ${treeMeshManager?.instanceCount ?? 0}`
+        + ` · 草 ${grassMesh?.count ?? 0} · 灌木花草 ${bushMesh?.count ?? 0}`,
+    terrainOnly
+      ? `世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 切季 ${lastSeasonSwitchMs ? `${Math.round(lastSeasonSwitchMs)}ms` : '—'}`
+      : `墙体 ${wallSegments.length}（石墙 ${wallSegments.filter((segment) => segment.type === 'drystone').length}`
+        + ` · 木栏 ${wallSegments.filter((segment) => segment.type === 'fence').length} 段`
+        + ` · 护栏 ${wallSegments.filter((segment) => segment.type === 'barrier').length}`
+        + ` · 海墙 ${wallSegments.filter((segment) => segment.type === 'seaWall').length}）`
+        + ` · 道路 ${profile ? Math.round(profile.length) : 0}m · 世界生成 ${lastWorldBuildMs ? `${Math.round(lastWorldBuildMs)}ms` : '—'} · 切季 ${lastSeasonSwitchMs ? `${Math.round(lastSeasonSwitchMs)}ms` : '—'}`
+        + (settings.terrainSource === 'dem'
+          ? ` · 森林 ${Math.round(demForestPlacementMs)}ms · 植被 ${Math.round(demFoliageBuildMs)}ms`
+            + ` · 墙体 ${Math.round(demWallBuildMs)}ms`
+          : ''),
     `素材 ${storeStats?.textureCount ?? 0} 张 · 常驻≈${storeStats ? formatMb(storeStats.residentBytes) : '—'} · 本季下载 ${formatMb(seasonBytes)}${assetStore?.mode === 'server' ? ` · 已下载 ${formatMb(storeStats?.downloadedBytes ?? 0)}` : ''} · 种子 ${settings.seed >>> 0}`,
   ].join('\n')
 }
@@ -1408,6 +2049,39 @@ function animate(): void {
   syncStarSize()
   water?.setTime(elapsedSeconds)
   renderer.render(scene, camera)
+  const frameNow = performance.now()
+  if (demFirstFramePending) {
+    demFirstFramePending = false
+    demTotalBuildMs = demLoadStartedAt ? frameNow - demLoadStartedAt : 0
+    updateDemMetrics(0, renderer.info.render.calls)
+    ui?.setDemStatus(
+      `DEM 首帧完成：总构建 ${demTotalBuildMs.toFixed(0)}ms；` +
+      `解码 ${demBuildResult?.decodeMs.toFixed(0) ?? '—'}ms，混合 ${demBuildResult?.hybridMs.toFixed(0) ?? '—'}ms，` +
+      `网格 ${demMeshMs.toFixed(0)}ms，上传 ${demUploadMs.toFixed(0)}ms。`,
+    )
+  }
+  if (demBenchmarkRun) {
+    if (frameNow < demBenchmarkRun.sampleStartedAt) {
+      demBenchmarkRun.status = 'warmup'
+    } else {
+      demBenchmarkRun.status = 'sample'
+      demBenchmarkRun.frames += 1
+      if (frameNow - demBenchmarkRun.sampleStartedAt >= 5000) {
+        const fps = demBenchmarkRun.frames / ((frameNow - demBenchmarkRun.sampleStartedAt) / 1000)
+        updateDemMetrics(fps, renderer.info.render.calls)
+        ui?.setDemStatus(
+          `基准完成：${fps.toFixed(1)} FPS，draw calls ${renderer.info.render.calls}，` +
+          `三角形 ${renderer.info.render.triangles.toLocaleString()}。`,
+        )
+        demBenchmarkRun = null
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+        handleResize()
+        if (freeFly) {
+          freeFly.enabled = true
+        }
+      }
+    }
+  }
   updateStats()
 }
 
@@ -1432,6 +2106,7 @@ function syncStarSize(): void {
 
 async function init(): Promise<void> {
   runSelfChecks()
+  runDemTerrainChecks()
   runSeasonCatalogChecks({ catalog: catalogForChecks })
   runEnvironmentChecks()
   console.info(`[slowroads-lab] max texture units = ${renderer.capabilities.maxTextures}`)
@@ -1497,6 +2172,12 @@ async function init(): Promise<void> {
       }
       resetCameraView()
     },
+    onTerrainSourceChange: (source) => handleTerrainSourceChange(source),
+    onLoadDem: (demFile, jsonFile) => {
+      void loadDemFiles(demFile, jsonFile)
+    },
+    onDemOptionsChange: () => handleDemOptionsChange(),
+    onRunDemBenchmark: () => runDemBenchmark(),
   })
   window.addEventListener('resize', handleResize)
   handleResize()

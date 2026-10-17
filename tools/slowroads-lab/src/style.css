@@ -159,6 +159,26 @@ body {
   color: #7d90a4;
 }
 
+.panel__metrics {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(8, 13, 20, 0.86);
+  border: 1px solid rgba(120, 144, 168, 0.2);
+  color: #b8cde2;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.panel__row input[type='file'] {
+  min-width: 0;
+  width: 96px;
+  font-size: 10px;
+}
+
 .stats {
   position: absolute;
   left: 12px;

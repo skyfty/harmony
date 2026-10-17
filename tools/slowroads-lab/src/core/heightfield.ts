@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { fbm2 } from './noise'
+import { createTerrainBounds, type TerrainBounds } from './terrainBounds'
 
 /**
  * The lab's slowroads-style heightmap: seeded fbm noise sampled analytically
@@ -19,12 +20,16 @@ export interface HeightfieldOptions {
 }
 
 export interface Heightfield {
+  /** Authoritative rectangular extent. The square aliases below only describe
+   * the procedural fallback world. */
+  bounds: TerrainBounds
   worldSize: number
   halfSize: number
   waterLevel: number
   minHeight: number
   maxHeight: number
   inBounds(x: number, z: number, margin?: number): boolean
+  contains(x: number, z: number, margin?: number): boolean
   sampleHeight(x: number, z: number): number
   sampleNormal(x: number, z: number, target?: THREE.Vector3): THREE.Vector3
   /** 0 = flat, 1 = vertical. */
@@ -37,6 +42,7 @@ export function createHeightfield(options: HeightfieldOptions): Heightfield {
   const seed = options.seed >>> 0
   const worldSize = options.worldSize
   const halfSize = worldSize * 0.5
+  const bounds = createTerrainBounds(-halfSize, -halfSize, halfSize, halfSize)
   const baseAmplitude = options.baseAmplitude ?? 30
   const detailAmplitude = options.detailAmplitude ?? 10
   const baseWavelength = options.baseWavelength ?? 520
@@ -66,14 +72,18 @@ export function createHeightfield(options: HeightfieldOptions): Heightfield {
   }
 
   return {
+    bounds,
     worldSize,
     halfSize,
     waterLevel,
     minHeight,
     maxHeight,
     inBounds(x: number, z: number, margin = 0): boolean {
-      return x >= -halfSize + margin && x <= halfSize - margin
-        && z >= -halfSize + margin && z <= halfSize - margin
+      return this.contains(x, z, margin)
+    },
+    contains(x: number, z: number, margin = 0): boolean {
+      return x >= bounds.minX + margin && x <= bounds.maxX - margin
+        && z >= bounds.minZ + margin && z <= bounds.maxZ - margin
     },
     sampleHeight,
     sampleNormal(x: number, z: number, target?: THREE.Vector3): THREE.Vector3 {

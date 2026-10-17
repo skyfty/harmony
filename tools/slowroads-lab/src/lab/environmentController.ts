@@ -65,6 +65,8 @@ export interface EnvironmentControllerOptions {
   stars: StarsHandle
   snow: SnowHandle
   getWater: () => WaterHandle | null
+  /** Multiplier for fog, sky and cloud distances in large DEM worlds. */
+  viewDistanceScale?: number
 }
 
 export interface EnvironmentController {
@@ -76,6 +78,8 @@ export interface EnvironmentController {
   readonly activeFog: ResolvedFogParams
   /** 天空雾尺度（官方 n1 = tileSize × 2，天空/云层/星空）。 */
   readonly skyFog: ResolvedFogParams
+  readonly viewDistanceScale: number
+  setViewDistanceScale(scale: number): void
   dispose(): void
 }
 
@@ -83,6 +87,7 @@ export function createEnvironmentController(options: EnvironmentControllerOption
   const scene = options.scene
   const camera = options.camera
   const renderer = options.renderer
+  let viewDistanceScale = Math.max(0.001, options.viewDistanceScale ?? 1)
 
   // three 只把它当 USE_FOG/FOG_EXP2 开关；颜色/密度由我们下发（官方也是自管）。
   scene.fog = new THREE.FogExp2(0x000000, 0.0013)
@@ -251,6 +256,19 @@ export function createEnvironmentController(options: EnvironmentControllerOption
     get skyFog() {
       return skyBaseFog
     },
+    get viewDistanceScale() {
+      return viewDistanceScale
+    },
+    setViewDistanceScale(scale: number): void {
+      const next = Math.max(0.001, scale)
+      if (Math.abs(next - viewDistanceScale) < 1e-9) {
+        return
+      }
+      viewDistanceScale = next
+      if (state) {
+        this.applyState(state)
+      }
+    },
     applyState(next: EnvironmentState): void {
       state = next
       const preset = resolveEnvironmentPreset(next)
@@ -267,15 +285,19 @@ export function createEnvironmentController(options: EnvironmentControllerOption
       fogColors.colB.set(preset.fog.colB)
       fogColors.colC.set(preset.fog.colC ?? preset.fog.colB)
       colorsDirty = true
-      baseFog = resolveFogParams(preset)
-      skyBaseFog = resolveSkyFogParams(preset)
+      baseFog = resolveFogParams(preset, ENVIRONMENT_VIEW_DISTANCE * viewDistanceScale)
+      skyBaseFog = resolveSkyFogParams(preset, viewDistanceScale)
       hazeState.inHaze = false
       applyFog(baseFog)
       applySkyFog(skyBaseFog)
       // 天空平面挂在官方 n1 距离（= 天空尺度 fogFar），云层几何保持 300m/1000 尺度
       // （云穹与纹理平铺对该组合是尺度不变量，见 clouds.ts）。
-      options.sky.setViewDistance(ENVIRONMENT_SKY_DISTANCE)
-      options.clouds.setState(preset.clouds, ENVIRONMENT_CLOUD_ALTITUDE, ENVIRONMENT_VIEW_DISTANCE)
+      options.sky.setViewDistance(ENVIRONMENT_SKY_DISTANCE * viewDistanceScale)
+      options.clouds.setState(
+        preset.clouds,
+        ENVIRONMENT_CLOUD_ALTITUDE,
+        ENVIRONMENT_VIEW_DISTANCE * viewDistanceScale,
+      )
       cachedStars = preset.stars ?? null
       cachedSnow = preset.snow ?? null
       options.stars.setConfig(toggles.stars ? cachedStars : null)

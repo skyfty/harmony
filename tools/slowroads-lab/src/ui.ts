@@ -9,8 +9,14 @@ import {
 } from './core/environment'
 import type { AssetSourceMode } from './lab/assetSource'
 
+export type TerrainSource = 'procedural' | 'dem'
+
 export interface LabSettings {
   seed: number
+  terrainSource: TerrainSource
+  terrainOnly: boolean
+  demSampleStep: 1 | 2 | 4
+  demDetailEnabled: boolean
   season: SeasonId
   timeOfDay: TimeOfDay
   weather: Weather
@@ -59,6 +65,10 @@ export interface LabSettings {
 
 export const DEFAULT_LAB_SETTINGS: LabSettings = {
   seed: (Math.random() * 0xffffffff) >>> 0,
+  terrainSource: 'procedural',
+  terrainOnly: false,
+  demSampleStep: 1,
+  demDetailEnabled: true,
   season: 'spring',
   timeOfDay: 'day',
   weather: 'clear',
@@ -114,6 +124,45 @@ export interface LabUiCallbacks {
   onRegenerate(): void
   onToggleCruise(): void
   onResetCamera(): void
+  onTerrainSourceChange(source: TerrainSource): void
+  onLoadDem(demFile: File, jsonFile: File): void
+  onDemOptionsChange(): void
+  onRunDemBenchmark(): void
+}
+
+export interface DemBenchmarkMetrics {
+  source: string
+  width: number
+  height: number
+  sampleStep: number
+  detailEnabled: boolean
+  decodeMs: number
+  hybridMs: number
+  meshMs: number
+  uploadMs: number
+  totalBuildMs: number
+  forestPlacementMs: number
+  foliageBuildMs: number
+  wallBuildMs: number
+  forestCount: number
+  nearTreeCards: number
+  grassSprites: number
+  bushSprites: number
+  vertices: number
+  triangles: number
+  drawCalls: number
+  fps: number
+  jsHeapMb: number | null
+  roadbedSideWidth: number
+  roadbedHalfWidth: number
+  roadbedCutProx: number
+  roadColumns: number
+  roadCrossSlopeMax: number
+  roadbedOuterError: number
+  roadbedMaxCutFill: number
+  roadbedOcclusionCount: number
+  roadbedAuditSamples: number
+  warnings: string[]
 }
 
 export interface LabUiHandle {
@@ -123,6 +172,9 @@ export interface LabUiHandle {
   setTimeOfDayActive(timeOfDay: TimeOfDay): void
   setWeatherActive(weather: Weather): void
   setSeasonLoading(season: SeasonId | null): void
+  setTerrainOnlyMode(active: boolean): void
+  setDemStatus(text: string): void
+  setDemMetrics(metrics: DemBenchmarkMetrics | null): void
 }
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
@@ -244,6 +296,125 @@ export function createLabUi(
   serverInput.addEventListener('change', applySource)
   sourceRow.append(createElement('label', undefined, '素材来源'), sourceSelect, serverInput)
   container.append(sourceRow)
+
+  // ---- DEM large-world validation ------------------------------------------
+  container.append(createElement('h3', undefined, 'DEM 大世界'))
+  const terrainSourceRow = createElement('div', 'panel__row')
+  const terrainSourceSelect = createElement('select')
+  for (const [value, label] of [
+    ['procedural', '程序化 1600m'],
+    ['dem', 'DEM 全幅'],
+  ] as const) {
+    const option = createElement('option', undefined, label)
+    option.value = value
+    option.selected = settings.terrainSource === value
+    terrainSourceSelect.append(option)
+  }
+  terrainSourceSelect.addEventListener('change', () => {
+    const source = terrainSourceSelect.value as TerrainSource
+    settings.terrainSource = source
+    callbacks.onTerrainSourceChange(source)
+  })
+  terrainSourceRow.append(createElement('label', undefined, '地形数据'), terrainSourceSelect)
+  container.append(terrainSourceRow)
+
+  const demTifRow = createElement('div', 'panel__row')
+  const demFileInput = createElement('input')
+  demFileInput.type = 'file'
+  demFileInput.accept = '.tif,.tiff,image/tiff'
+  demTifRow.append(createElement('label', undefined, 'dem.tif'), demFileInput)
+  container.append(demTifRow)
+  const demJsonRow = createElement('div', 'panel__row')
+  const demJsonInput = createElement('input')
+  demJsonInput.type = 'file'
+  demJsonInput.accept = '.json,application/json'
+  demJsonRow.append(createElement('label', undefined, 'dem.json'), demJsonInput)
+  container.append(demJsonRow)
+  const demLoadRow = createElement('div', 'panel__row')
+  const loadDemButton = createElement('button', undefined, '加载 DEM')
+  const refreshDemLoadButton = (): void => {
+    loadDemButton.disabled = !(demFileInput.files?.length && demJsonInput.files?.length)
+  }
+  demFileInput.addEventListener('change', refreshDemLoadButton)
+  demJsonInput.addEventListener('change', refreshDemLoadButton)
+  loadDemButton.addEventListener('click', () => {
+    const demFile = demFileInput.files?.[0]
+    const jsonFile = demJsonInput.files?.[0]
+    if (demFile && jsonFile) {
+      callbacks.onLoadDem(demFile, jsonFile)
+    }
+  })
+  demLoadRow.append(loadDemButton)
+  container.append(demLoadRow)
+  refreshDemLoadButton()
+
+  const demOptionRow = createElement('div', 'panel__row')
+  const demStepSelect = createElement('select')
+  for (const [value, label] of [
+    [1, '全分辨率 30m'],
+    [2, '半分辨率 60m'],
+    [4, '四分之一 120m'],
+  ] as const) {
+    const option = createElement('option', undefined, label)
+    option.value = String(value)
+    option.selected = settings.demSampleStep === value
+    demStepSelect.append(option)
+  }
+  demStepSelect.addEventListener('change', () => {
+    settings.demSampleStep = Number(demStepSelect.value) as LabSettings['demSampleStep']
+    callbacks.onDemOptionsChange()
+  })
+  const detailLabel = createElement('label')
+  const detailInput = createElement('input')
+  detailInput.type = 'checkbox'
+  detailInput.checked = settings.demDetailEnabled
+  detailInput.addEventListener('change', () => {
+    settings.demDetailEnabled = detailInput.checked
+    callbacks.onDemOptionsChange()
+  })
+  detailLabel.append(detailInput, document.createTextNode('细节噪声'))
+  const terrainOnlyLabel = createElement('label')
+  const terrainOnlyInput = createElement('input')
+  terrainOnlyInput.type = 'checkbox'
+  terrainOnlyInput.checked = settings.terrainOnly
+  terrainOnlyInput.addEventListener('change', () => {
+    settings.terrainOnly = terrainOnlyInput.checked
+    callbacks.onDemOptionsChange()
+  })
+  terrainOnlyLabel.append(terrainOnlyInput, document.createTextNode('仅地形'))
+  demOptionRow.append(
+    createElement('label', undefined, '网格'),
+    demStepSelect,
+    detailLabel,
+    terrainOnlyLabel,
+  )
+  container.append(demOptionRow)
+
+  const demActionRow = createElement('div', 'panel__row')
+  const benchmarkButton = createElement('button', undefined, '运行基准')
+  benchmarkButton.addEventListener('click', () => callbacks.onRunDemBenchmark())
+  const downloadButton = createElement('button', undefined, '下载基准 JSON')
+  downloadButton.disabled = true
+  demActionRow.append(benchmarkButton, downloadButton)
+  container.append(demActionRow)
+  const demStatus = createElement('p', 'panel__hint', '尚未加载 DEM。')
+  container.append(demStatus)
+  const demMetrics = createElement('pre', 'panel__metrics')
+  demMetrics.hidden = true
+  container.append(demMetrics)
+  let latestDemMetrics: DemBenchmarkMetrics | null = null
+  downloadButton.addEventListener('click', () => {
+    if (!latestDemMetrics) {
+      return
+    }
+    const blob = new Blob([JSON.stringify(latestDemMetrics, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'slowroads-lab-dem-benchmark.json'
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  })
 
   // ---- Layer toggles --------------------------------------------------------
   const toggleSection = createElement('div', 'panel__toggles')
@@ -464,6 +635,10 @@ export function createLabUi(
       sourceSelect.value = settings.assetSource
       serverInput.value = settings.serverBaseUrl
       presetSelect.value = settings.roadWidthPreset
+      terrainSourceSelect.value = settings.terrainSource
+      demStepSelect.value = String(settings.demSampleStep)
+      detailInput.checked = settings.demDetailEnabled
+      terrainOnlyInput.checked = settings.terrainOnly
       refreshRoadMaterialHint()
       setSeasonActive(settings.season)
       setTimeOfDayActive(settings.timeOfDay)
@@ -476,5 +651,55 @@ export function createLabUi(
     setTimeOfDayActive,
     setWeatherActive,
     setSeasonLoading,
+    setTerrainOnlyMode(active: boolean): void {
+      for (const [key, input] of toggleInputs) {
+        if (key === 'showSurface' || key === 'showTextures') {
+          continue
+        }
+        input.disabled = active
+      }
+    },
+    setDemStatus(text: string): void {
+      demStatus.textContent = text
+    },
+    setDemMetrics(metrics: DemBenchmarkMetrics | null): void {
+      latestDemMetrics = metrics
+      downloadButton.disabled = metrics === null
+      if (!metrics) {
+        demMetrics.hidden = true
+        demMetrics.textContent = ''
+        return
+      }
+      demMetrics.hidden = false
+      demMetrics.textContent = [
+        `source: ${metrics.source}`,
+        `grid: ${metrics.width}x${metrics.height}, step=${metrics.sampleStep}, detail=${metrics.detailEnabled ? 'on' : 'off'}`,
+        `decode: ${metrics.decodeMs.toFixed(1)}ms`,
+        `hybrid: ${metrics.hybridMs.toFixed(1)}ms`,
+        `mesh: ${metrics.meshMs.toFixed(1)}ms`,
+        `upload: ${metrics.uploadMs.toFixed(1)}ms`,
+        `total build: ${metrics.totalBuildMs.toFixed(1)}ms`,
+        `forest placement: ${metrics.forestPlacementMs.toFixed(1)}ms`,
+        `foliage build: ${metrics.foliageBuildMs.toFixed(1)}ms`,
+        `walls: ${metrics.wallBuildMs.toFixed(1)}ms`,
+        `forest trees: ${metrics.forestCount.toLocaleString()}`,
+        `near tree cards: ${metrics.nearTreeCards.toLocaleString()}`,
+        `grass/bush sprites: ${metrics.grassSprites.toLocaleString()}/${metrics.bushSprites.toLocaleString()}`,
+        `vertices: ${metrics.vertices.toLocaleString()}`,
+        `triangles: ${metrics.triangles.toLocaleString()}`,
+        `draw calls: ${metrics.drawCalls}`,
+        `FPS: ${metrics.fps.toFixed(1)}`,
+        `JS heap: ${metrics.jsHeapMb == null ? 'n/a' : `${metrics.jsHeapMb.toFixed(1)}MB`}`,
+        `roadbed side width: ${metrics.roadbedSideWidth.toFixed(1)}m`,
+        `roadbed half-width: ${metrics.roadbedHalfWidth.toFixed(1)}m`,
+        `roadbed shader cut prox: ${metrics.roadbedCutProx.toFixed(1)}m`,
+        `road columns: ${metrics.roadColumns}`,
+        `road cross-slope max: ${metrics.roadCrossSlopeMax.toFixed(3)}`,
+        `roadbed outer error: ${metrics.roadbedOuterError.toFixed(2)}m`,
+        `roadbed max cut/fill: ${metrics.roadbedMaxCutFill.toFixed(1)}m`,
+        `roadbed coarse overlap: ${metrics.roadbedOcclusionCount}/${metrics.roadbedAuditSamples}`,
+        ...(metrics.warnings.length ? ['warnings:', ...metrics.warnings.map((warning) => `- ${warning}`)] : []),
+      ].join('\n')
+    },
   }
 }

@@ -153,8 +153,11 @@ export function resolveFogParams(preset: EnvironmentPreset, viewDistance = ENVIR
  * `n1 = tileSize × 2`（= `ENVIRONMENT_SKY_DISTANCE`）。天空平面距离由同一常数给出，
  * 因此 `vHaze = fogDepth / fogFar`、噪声雾顶分支（`fogDepth < 1000`）也与官方一致。
  */
-export function resolveSkyFogParams(preset: EnvironmentPreset): ResolvedFogParams {
-  return resolveFogParams(preset, ENVIRONMENT_SKY_DISTANCE)
+export function resolveSkyFogParams(
+  preset: EnvironmentPreset,
+  viewDistanceScale = 1,
+): ResolvedFogParams {
+  return resolveFogParams(preset, ENVIRONMENT_SKY_DISTANCE * Math.max(0.001, viewDistanceScale))
 }
 
 /**

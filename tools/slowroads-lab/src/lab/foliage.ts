@@ -90,6 +90,10 @@ export interface FoliageMeshOptions {
   shared: FoliageSharedUniforms
   /** 距离分层：near 只显示近处、far 只显示远处、all 始终显示。 */
   tier?: FoliageTier
+  /** Static global-forest cards: hide inside the near-card radius. */
+  distantOnly?: boolean
+  /** Rotate the single card toward the camera without the imposter UV path. */
+  staticBillboard?: boolean
   /** 只用单片面（护栏等薄片物体）。 */
   singlePlane?: boolean
   /** 草丛调色板（slowroads grass sprite 公式）。 */
@@ -155,6 +159,32 @@ export function createCrossQuadGeometry(): THREE.BufferGeometry {
   return geometry
 }
 
+/** One camera-facing quad: 4 vertices / 2 triangles (global forest cards). */
+export function createSingleQuadGeometry(): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    -0.5, 0, 0,
+    0.5, 0, 0,
+    0.5, 1, 0,
+    -0.5, 1, 0,
+  ], 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute([
+    0, 0,
+    1, 0,
+    1, 1,
+    0, 1,
+  ], 2))
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute([
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+    0, 1, 0,
+  ], 3))
+  geometry.setAttribute('aPlane', new THREE.Float32BufferAttribute([0, 0, 0, 0], 1))
+  geometry.setIndex([0, 1, 2, 0, 2, 3])
+  return geometry
+}
+
 const VERTEX_SHADER = `
 #include <common>
 attribute float aPlane;
@@ -172,6 +202,8 @@ uniform float uNearDistance;
 uniform float uMeshRadius;
 uniform float uTierMode;
 uniform float uSinglePlane;
+uniform float uDistantOnly;
+uniform float uStaticBillboard;
 uniform float uWindStrength;
 uniform float uDistanceAlpha;
 uniform float uPaletteMode;
@@ -248,11 +280,18 @@ void main() {
   } else if (uBillboard > 0.5) {
     collapse = 0.0;
   }
+  if (uDistantOnly > 0.5 && dist < uNearDistance) {
+    collapse = 1.0;
+  }
   float phase = srInstanceNoise(instWorld.xz);
 
   vec3 transformed = position;
   transformed.xz *= aSize.x;
   transformed.y *= aSize.y;
+  if (uStaticBillboard > 0.5) {
+    float billboardAngle = atan(instWorld.x - uCameraPos.x, instWorld.z - uCameraPos.z);
+    transformed.xz = srRotate2d(transformed.xz, billboardAngle);
+  }
 
   // slowroads 草丛变体裁剪：非冬季 0/1/3 号半高、2 号全高；冬季 2/3 号半高。
   // （官方只对草丛层做这条裁剪，树卡/远景树/护栏用整幅贴图。）
@@ -300,20 +339,12 @@ void main() {
     float cropX = 0.8 - uSpecies * 0.1;
     cropX *= 1.0 - step(0.5, uSpecies) * uv.y * 4.0 * 0.6;
     transformed.xz *= cropX;
-    // 官方 imposter 几何是"单格 UV"（x ∈ [0,1/16]、y ∈ [0,1/4]）；lab 的十字面片是整幅
-    // UV，所以这里换算成单格 UV 后再套官方公式。
-    vec2 cellUv = vec2(uv.x / 16.0, uv.y * 0.25);
-    atlasUv = vec2(((cellUv.x * 16.0 * cropX) + ((1.0 - cropX) * 0.5)) / 16.0, cellUv.y);
-    vUvBlend = vec2(cellUv.x * 21.32, cellUv.y * 4.0);
-    float oriented = angleToCamera - aOrientation;
-    if (oriented > SR_PI) {
-      oriented -= SR_PI * 2.0;
-    } else if (oriented < -SR_PI) {
-      oriented += SR_PI * 2.0;
-    }
-    float tileIndex = (oriented + SR_PI) / (SR_PI * 2.0 / 16.0);
-    vUvOffset = vec2((1.0 / 16.0) * floor(tileIndex), aCell / 4.0);
-    vAngleBlend = (tileIndex - floor(tileIndex)) * step(viewDepthOrigin, 400.0);
+    // aUvRect already selects the exact 16x4 atlas cell and accounts for
+    // texture flipY. Keep that UV instead of reconstructing a second cell
+    // offset: the latter sampled transparent atlas rows for distant trees.
+    vUvOffset = vec2(0.0);
+    vUvBlend = vec2(0.0);
+    vAngleBlend = 0.0;
     float imposterCamDist = clamp((viewDepthOrigin - 200.0) / 800.0, 0.0, 1.0);
     transformed *= 1.0 + imposterCamDist * 0.3;
     transformed.y -= imposterCamDist * 4.0;
@@ -598,7 +629,7 @@ export function createFoliageMesh(
   options: FoliageMeshOptions,
 ): THREE.InstancedMesh {
   const count = instances.length
-  const geometry = createCrossQuadGeometry()
+  const geometry = options.singlePlane ? createSingleQuadGeometry() : createCrossQuadGeometry()
   const capacity = Math.max(1, count)
   const uvRectAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4)
   const sizeAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 2), 2)
@@ -656,6 +687,8 @@ export function createFoliageMesh(
       uMeshRadius: options.shared.meshRadius,
       uTierMode: { value: TIER_MODE[options.tier ?? 'all'] },
       uSinglePlane: { value: options.singlePlane ? 1 : 0 },
+      uDistantOnly: { value: options.distantOnly ? 1 : 0 },
+      uStaticBillboard: { value: options.staticBillboard ? 1 : 0 },
       uDistanceAlpha: { value: options.distanceAlpha ? 1 : 0 },
       // 官方树卡/远景树 LOD：近树卡 = 动态 alpha + 距离 dissolve，远景树 = 朝相机广告牌。
       uDynamicAlpha: { value: options.card?.kind === 'near' ? 1 : 0 },
@@ -691,6 +724,9 @@ export function createFoliageMesh(
   mesh.count = count
   mesh.castShadow = false
   mesh.receiveShadow = false
+  // Full-terrain imposter forests span tens of kilometres and their instance
+  // bounds are rebuilt on placement changes; keep them out of the frustum test.
+  mesh.frustumCulled = !options.singlePlane
 
   const baseScale = options.unitSize
   for (let i = 0; i < count; i += 1) {

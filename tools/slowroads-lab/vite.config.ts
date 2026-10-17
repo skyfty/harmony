@@ -27,6 +27,11 @@ export default defineConfig({
       allow: [repoRoot],
     },
   },
+  // geotiff pulls in dynamically imported decoders; an IIFE worker cannot
+  // code-split those chunks.
+  worker: {
+    format: 'es',
+  },
   build: {
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),
     emptyOutDir: true,

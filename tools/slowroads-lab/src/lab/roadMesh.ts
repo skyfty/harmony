@@ -29,6 +29,10 @@ export interface RoadMeshOptions {
   markings?: readonly RoadMarkingWeights[] | null
   /** 追踪节点间距（米），用于把 2m 采样映射到节点权重。 */
   nodeSpacing?: number
+  /** 与 2m 路面行对齐的横向列高度（不含 clearance）。 */
+  columnHeights?: readonly (readonly number[])[] | null
+  /** 道路带相对表面包络的额外抬升。 */
+  clearance?: number
 }
 
 export interface RoadPaintTextures {
@@ -175,19 +179,23 @@ export function createRoadMesh(options: RoadMeshOptions): RoadMeshHandle {
   const { profile } = options
   const step = STEP_ALONG
   const sampleCount = Math.max(2, Math.floor(profile.length / step) + 1)
-  const vertexCount = sampleCount * 2
+  const columnCount = Math.max(2, options.columnHeights?.[0]?.length ?? 2)
+  const vertexCount = sampleCount * columnCount
   const positions = new Float32Array(vertexCount * 3)
   const uvs = new Float32Array(vertexCount * 2)
   const normals = new Float32Array(vertexCount * 3)
+  const roadHeights = new Float32Array(vertexCount)
   const shadows = new Float32Array(vertexCount)
   const paintSolid = new Float32Array(vertexCount)
   const paintSolidLeft = new Float32Array(vertexCount)
   const paintSolidRight = new Float32Array(vertexCount)
   const paintMergeLeft = new Float32Array(vertexCount)
   const paintMergeRight = new Float32Array(vertexCount)
-  const indices = new Uint32Array((sampleCount - 1) * 6)
+  const indices = new Uint32Array((sampleCount - 1) * (columnCount - 1) * 6)
 
   const shadowLateral = profile.halfWidth + profile.shoulderWidth
+  const columnSpacing = (profile.halfWidth * 2) / (columnCount - 1)
+  const clearance = options.clearance ?? (options.columnHeights ? 0.05 : ROAD_LIFT)
   // Official mapping: v advances 1/(2*halfWidth) per metre, then the shader
   // divides by `textureStretch` (2 for the single-track set) => one texture
   // repeat every 2x road width (4x half width).
@@ -202,6 +210,18 @@ export function createRoadMesh(options: RoadMeshOptions): RoadMeshHandle {
     return markings[index] ?? null
   }
 
+  const columnHeightAt = (row: number, column: number): number => {
+    const nodeColumns = options.columnHeights?.[row]
+    if (!nodeColumns || nodeColumns.length < 2) {
+      return profile.sampleAt(Math.min(profile.length, row * step)).y
+    }
+    const scaled = (column / (columnCount - 1)) * (nodeColumns.length - 1)
+    const low = Math.floor(scaled)
+    const high = Math.min(nodeColumns.length - 1, low + 1)
+    const fraction = scaled - low
+    return nodeColumns[low]! + (nodeColumns[high]! - nodeColumns[low]!) * fraction
+  }
+
   for (let i = 0; i < sampleCount; i += 1) {
     const distance = Math.min(profile.length, i * step)
     const sample = profile.sampleAt(distance)
@@ -209,17 +229,20 @@ export function createRoadMesh(options: RoadMeshOptions): RoadMeshHandle {
     const perpZ = Math.cos(sample.heading)
     const v = distance / repeatLength
     const marking = markingAt(distance)
-    for (const side of [0, 1] as const) {
-      const sign = side === 0 ? 1 : -1
-      const vertexIndex = i * 2 + side
-      positions[vertexIndex * 3] = sample.x + perpX * sign * profile.halfWidth
-      positions[vertexIndex * 3 + 1] = sample.y + ROAD_LIFT
-      positions[vertexIndex * 3 + 2] = sample.z + perpZ * sign * profile.halfWidth
-      normals[vertexIndex * 3 + 1] = 1
-      uvs[vertexIndex * 2] = side === 0 ? 0 : 1
+    for (let column = 0; column < columnCount; column += 1) {
+      const u = column / (columnCount - 1)
+      const lateral = -profile.halfWidth + u * profile.halfWidth * 2
+      const vertexIndex = i * columnCount + column
+      const height = columnHeightAt(i, column)
+      roadHeights[vertexIndex] = height
+      positions[vertexIndex * 3] = sample.x + perpX * lateral
+      positions[vertexIndex * 3 + 1] = height + clearance
+      positions[vertexIndex * 3 + 2] = sample.z + perpZ * lateral
+      uvs[vertexIndex * 2] = u
       uvs[vertexIndex * 2 + 1] = v
-      const probeX = sample.x + perpX * sign * shadowLateral
-      const probeZ = sample.z + perpZ * sign * shadowLateral
+      const probeSide = column < columnCount / 2 ? -1 : 1
+      const probeX = sample.x + perpX * probeSide * shadowLateral
+      const probeZ = sample.z + perpZ * probeSide * shadowLateral
       shadows[vertexIndex] = Math.min(1, options.density.sampleUnit(probeX, probeZ) * 1.3)
       paintSolid[vertexIndex] = marking?.solid ? 1 : 0
       paintSolidLeft[vertexIndex] = marking?.solidLeft ? 1 : 0
@@ -228,18 +251,37 @@ export function createRoadMesh(options: RoadMeshOptions): RoadMeshHandle {
       paintMergeRight[vertexIndex] = marking?.mergeRight ? 1 : 0
     }
   }
+
+  for (let i = 0; i < sampleCount; i += 1) {
+    for (let column = 0; column < columnCount; column += 1) {
+      const vertexIndex = i * columnCount + column
+      const left = roadHeights[i * columnCount + Math.max(0, column - 1)]!
+      const right = roadHeights[i * columnCount + Math.min(columnCount - 1, column + 1)]!
+      const up = roadHeights[Math.max(0, i - 1) * columnCount + column]!
+      const down = roadHeights[Math.min(sampleCount - 1, i + 1) * columnCount + column]!
+      const dx = (right - left) / Math.max(1e-4, columnSpacing * 2)
+      const dz = (down - up) / Math.max(1e-4, step * 2)
+      const inverseLength = 1 / Math.hypot(dx, 1, dz)
+      normals[vertexIndex * 3] = -dx * inverseLength
+      normals[vertexIndex * 3 + 1] = inverseLength
+      normals[vertexIndex * 3 + 2] = -dz * inverseLength
+    }
+  }
+
   for (let i = 0; i < sampleCount - 1; i += 1) {
-    const a = i * 2
-    const b = a + 1
-    const c = a + 2
-    const d = a + 3
-    const cursor = i * 6
-    indices[cursor] = a
-    indices[cursor + 1] = c
-    indices[cursor + 2] = d
-    indices[cursor + 3] = a
-    indices[cursor + 4] = d
-    indices[cursor + 5] = b
+    for (let column = 0; column < columnCount - 1; column += 1) {
+      const a = i * columnCount + column
+      const b = a + 1
+      const c = a + columnCount
+      const d = c + 1
+      const cursor = (i * (columnCount - 1) + column) * 6
+      indices[cursor] = a
+      indices[cursor + 1] = c
+      indices[cursor + 2] = d
+      indices[cursor + 3] = a
+      indices[cursor + 4] = d
+      indices[cursor + 5] = b
+    }
   }
 
   const geometry = new THREE.BufferGeometry()
@@ -281,6 +323,7 @@ export function createRoadMesh(options: RoadMeshOptions): RoadMeshHandle {
     vertexShader: VERTEX_SHADER,
     fragmentShader: FRAGMENT_SHADER,
     fog: true,
+    side: THREE.DoubleSide,
   })
 
   const mesh = new THREE.Mesh(geometry, material)

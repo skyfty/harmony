@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { BARRIER_TUNING, DRYSTONE, SEAWALL } from '../core/roadStyle'
-import { WALL_FINE_STEP, type WallSegment } from '../core/walls'
+import type { WallSegment } from '../core/walls'
 import { LANDSCAPE_LIGHT_GLSL } from './landscapeLighting'
 
 /**
@@ -26,12 +26,13 @@ export interface WallTextureSet {
   drystone: THREE.Texture | null
   barrier: THREE.Texture | null
   seaWall: THREE.Texture | null
+  fence: THREE.Texture | null
 }
 
 export interface WallMeshHandle {
   group: THREE.Group
   setTextures(textures: WallTextureSet, shadowFactor: number): void
-  setVisibility(visible: { drystone: boolean; barrier: boolean; seaWall: boolean }): void
+  setVisibility(visible: { drystone: boolean; barrier: boolean; seaWall: boolean; fence: boolean }): void
   dispose(): void
 }
 
@@ -322,6 +323,141 @@ function seaWallGeometry(segments: readonly WallSegment[]): THREE.BufferGeometry
   return builder.positions.length ? builder.build() : null
 }
 
+interface FenceUvRegion {
+  u0: number
+  v0: number
+  u1: number
+  v1: number
+}
+
+const FENCE_POST_UV: FenceUvRegion = { u0: 0.02, v0: 0.45, u1: 0.10, v1: 0.95 }
+/**
+ * 官方木栏是一整片“折带”栅栏（`walls.js` 的 `Gr`），不是两根独立盒状横杆：
+ * 纹理 v 只取底部 0..0.4 的两条木栏区域，中间的空白由 alphaTest 镂空。
+ * 6 个横截面顶点在 0.56m / 0.8m 处向内折 8cm，形成木栏的厚度感。
+ */
+const FENCE_PANEL_HEIGHTS = [0, 0.56, 0.56, 0.8, 1, 1] as const
+const FENCE_PANEL_V = [0, 0.208, 0.224, 0.32, 0.3824, 0.4] as const
+const FENCE_PANEL_FOLD = 0.08
+const FENCE_POST_SPACING = 5
+
+/**
+ * Official-style wooden fence: one 1m-tall alpha-cutout ribbon plus square
+ * posts every 5m. The old lab version stacked two wide rail sprites at full
+ * height, which read as a continuous wooden wall rather than a fence.
+ */
+function fenceGeometry(segments: readonly WallSegment[]): THREE.BufferGeometry | null {
+  const builder = new GeometryBuilder()
+
+  const pushBox = (
+    centerX: number,
+    centerZ: number,
+    tangentX: number,
+    tangentZ: number,
+    normalX: number,
+    normalZ: number,
+    alongHalf: number,
+    lateralHalf: number,
+    baseY: number,
+    height: number,
+    region: FenceUvRegion,
+    shadow: number,
+  ): void => {
+    const point = (along: number, lateral: number, y: number, u: number, v: number): Vertex => ({
+      x: centerX + tangentX * along + normalX * lateral,
+      y,
+      z: centerZ + tangentZ * along + normalZ * lateral,
+      u,
+      v,
+      shadow,
+    })
+    const top = baseY + height
+    const a0 = point(-alongHalf, -lateralHalf, baseY, region.u0, region.v0)
+    const a1 = point(-alongHalf, -lateralHalf, top, region.u0, region.v1)
+    const a2 = point(alongHalf, -lateralHalf, top, region.u1, region.v1)
+    const a3 = point(alongHalf, -lateralHalf, baseY, region.u1, region.v0)
+    const b0 = point(-alongHalf, lateralHalf, baseY, region.u0, region.v0)
+    const b1 = point(-alongHalf, lateralHalf, top, region.u0, region.v1)
+    const b2 = point(alongHalf, lateralHalf, top, region.u1, region.v1)
+    const b3 = point(alongHalf, lateralHalf, baseY, region.u1, region.v0)
+
+    builder.pushQuad(a0, a1, a2, a3)
+    builder.pushQuad(b3, b2, b1, b0)
+    builder.pushQuad(a0, b0, b1, a1)
+    builder.pushQuad(a2, b2, b3, a3)
+    builder.pushQuad(a1, b1, b2, a2)
+  }
+
+  for (const segment of segments) {
+    const distances = new Float64Array(segment.points.length)
+    for (let i = 1; i < segment.points.length; i += 1) {
+      const previous = segment.points[i - 1]!
+      const point = segment.points[i]!
+      distances[i] = distances[i - 1]! + Math.hypot(point.x - previous.x, point.z - previous.z)
+    }
+    const columnAt = (index: number): Vertex[] => {
+      const point = segment.points[index]!
+      const shadow = Math.sqrt(Math.max(0, point.shadow)) * 1.5
+      const inwardX = point.x - point.nx * FENCE_PANEL_FOLD
+      const inwardZ = point.z - point.nz * FENCE_PANEL_FOLD
+      const baseY = point.roadY - 0.02
+      const u = (segment.startAlong + distances[index]!) / 5
+      const xs = [point.x, point.x, inwardX, point.x, point.x, inwardX]
+      const zs = [point.z, point.z, inwardZ, point.z, point.z, inwardZ]
+      return FENCE_PANEL_HEIGHTS.map((height, row) => ({
+        x: xs[row]!,
+        y: baseY + height,
+        z: zs[row]!,
+        u,
+        v: FENCE_PANEL_V[row]!,
+        shadow,
+      }))
+    }
+
+    let lastPostDistance = -Infinity
+    for (let i = 0; i < segment.points.length; i += 1) {
+      const point = segment.points[i]!
+      const shadow = Math.sqrt(Math.max(0, point.shadow)) * 1.5
+      const isLast = i === segment.points.length - 1
+      const sinceLastPost = distances[i]! - lastPostDistance
+      if (i === 0 || sinceLastPost >= FENCE_POST_SPACING || (isLast && sinceLastPost > 0.6)) {
+        // Square posts with a small wood grain strip from the atlas.
+        pushBox(
+          point.x,
+          point.z,
+          -point.nz,
+          point.nx,
+          point.nx,
+          point.nz,
+          0.065,
+          0.065,
+          point.roadY - 0.02,
+          1.03,
+          FENCE_POST_UV,
+          shadow,
+        )
+        lastPostDistance = distances[i]!
+      }
+
+      const next = segment.points[i + 1]
+      if (!next) {
+        continue
+      }
+      const currentColumn = columnAt(i)
+      const nextColumn = columnAt(i + 1)
+      for (let row = 0; row < currentColumn.length - 1; row += 1) {
+        builder.pushQuad(
+          currentColumn[row]!,
+          currentColumn[row + 1]!,
+          nextColumn[row + 1]!,
+          nextColumn[row]!,
+        )
+      }
+    }
+  }
+  return builder.positions.length ? builder.build() : null
+}
+
 export interface WallMeshOptions {
   segments: readonly WallSegment[]
   textures: WallTextureSet
@@ -334,19 +470,28 @@ export function createWallMeshes(options: WallMeshOptions): WallMeshHandle {
   const drystone = drystoneGeometry(options.segments.filter((segment) => segment.type === 'drystone'))
   const barrier = barrierGeometry(options.segments.filter((segment) => segment.type === 'barrier'))
   const seaWall = seaWallGeometry(options.segments.filter((segment) => segment.type === 'seaWall'))
+  const fence = fenceGeometry(options.segments.filter((segment) => segment.type === 'fence'))
 
   const drystoneMaterial = createWallMaterial(0)
   const barrierMaterial = createWallMaterial(0.5)
   const seaWallMaterial = createWallMaterial(0)
+  const fenceMaterial = createWallMaterial(0.35)
   drystoneMaterial.name = 'slowroads-wall-drystone'
   barrierMaterial.name = 'slowroads-wall-barrier'
   seaWallMaterial.name = 'slowroads-wall-seawall'
+  fenceMaterial.name = 'slowroads-wall-fence'
 
   const meshes: THREE.Mesh[] = []
-  const byType: { drystone: THREE.Mesh | null; barrier: THREE.Mesh | null; seaWall: THREE.Mesh | null } = {
+  const byType: {
+    drystone: THREE.Mesh | null
+    barrier: THREE.Mesh | null
+    seaWall: THREE.Mesh | null
+    fence: THREE.Mesh | null
+  } = {
     drystone: null,
     barrier: null,
     seaWall: null,
+    fence: null,
   }
   const attach = (
     geometry: THREE.BufferGeometry | null,
@@ -367,14 +512,22 @@ export function createWallMeshes(options: WallMeshOptions): WallMeshHandle {
   attach(drystone, drystoneMaterial, 'slowroads-wall-drystone-mesh', 'drystone')
   attach(barrier, barrierMaterial, 'slowroads-wall-barrier-mesh', 'barrier')
   attach(seaWall, seaWallMaterial, 'slowroads-wall-seawall-mesh', 'seaWall')
+  attach(fence, fenceMaterial, 'slowroads-wall-fence-mesh', 'fence')
 
   const applyTextures = (textures: WallTextureSet, shadowFactor: number): void => {
     drystoneMaterial.uniforms.uMap!.value = textures.drystone
     barrierMaterial.uniforms.uMap!.value = textures.barrier
     seaWallMaterial.uniforms.uMap!.value = textures.seaWall
+    fenceMaterial.uniforms.uMap!.value = textures.fence
+    // Fence UV runs one atlas tile per 5m; repeat along the rail direction.
+    if (textures.fence) {
+      textures.fence.wrapS = THREE.RepeatWrapping
+      textures.fence.needsUpdate = true
+    }
     drystoneMaterial.uniforms.uShadowFactor!.value = shadowFactor
     barrierMaterial.uniforms.uShadowFactor!.value = shadowFactor
     seaWallMaterial.uniforms.uShadowFactor!.value = shadowFactor
+    fenceMaterial.uniforms.uShadowFactor!.value = shadowFactor
   }
   applyTextures(options.textures, options.shadowFactor)
 
@@ -387,7 +540,8 @@ export function createWallMeshes(options: WallMeshOptions): WallMeshHandle {
       if (byType.drystone) byType.drystone.visible = visible.drystone
       if (byType.barrier) byType.barrier.visible = visible.barrier
       if (byType.seaWall) byType.seaWall.visible = visible.seaWall
-      group.visible = visible.drystone || visible.barrier || visible.seaWall
+      if (byType.fence) byType.fence.visible = visible.fence
+      group.visible = visible.drystone || visible.barrier || visible.seaWall || visible.fence
     },
     dispose(): void {
       for (const mesh of meshes) {
@@ -396,34 +550,9 @@ export function createWallMeshes(options: WallMeshOptions): WallMeshHandle {
       drystoneMaterial.dispose()
       barrierMaterial.dispose()
       seaWallMaterial.dispose()
+      fenceMaterial.dispose()
       group.removeFromParent()
     },
   }
 }
 
-/** 木栏（官方 Fence）精灵：官方是“立柱 + 两道横栏”的网格，lab 沿用实测精灵区域。 */
-export function fenceRailSprites(
-  segments: readonly WallSegment[],
-  step = WALL_FINE_STEP,
-): Array<{ x: number; z: number; y: number; rotation: number; scale: number; variant: number }> {
-  const out: Array<{ x: number; z: number; y: number; rotation: number; scale: number; variant: number }> = []
-  for (const segment of segments) {
-    if (segment.type !== 'fence') {
-      continue
-    }
-    const span = Math.max(1e-3, segment.endAlong - segment.startAlong)
-    const count = Math.max(1, Math.round(span / step))
-    for (let i = 0; i < count; i += 1) {
-      const point = segment.points[Math.min(segment.points.length - 1, Math.round((i * (segment.points.length - 1)) / Math.max(1, count - 1)))]!
-      out.push({
-        x: point.x,
-        z: point.z,
-        y: point.roadY - 0.02,
-        rotation: point.rotation,
-        scale: 1,
-        variant: i % 2,
-      })
-    }
-  }
-  return out
-}

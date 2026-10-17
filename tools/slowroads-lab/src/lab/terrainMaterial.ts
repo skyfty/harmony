@@ -40,9 +40,20 @@ export interface TerrainMaterialOptions {
   seed: number
   worldSize: number
   waterLevel: number
-  density: TreeDensityField
+  density?: TreeDensityField
+  /** Actual XZ extent used by the density map (DEM bounds are not always centered). */
+  densityBounds?: { minX: number; minZ: number; sizeX: number; sizeZ: number }
   textures: TerrainTextureSet
   season: SeasonId
+  /** Multiplier applied to water-relative height before palette blending. */
+  heightScale?: number
+  /** Official near-road rock-bump vertex displacement. Disabled for DEM scenes
+   * so the coarse surface cannot be lifted above the road band. */
+  roadDisplacement?: boolean
+  /** Discard coarse-terrain fragments inside the roadbed footprint. */
+  roadbedCutProx?: number
+  /** Use baked raw-terrain height/normal for texture palette matching. */
+  useBaseSurface?: boolean
   /** 兼容模式：缩减采样器与细节层，供小程序低配验证。 */
   reduced?: boolean
 }
@@ -62,20 +73,17 @@ export interface TerrainMaterialHandle {
   dispose(): void
 }
 
-const DENSITY_TEXTURE_SIZE = 256
-
 function fillDensityTexture(
   texture: THREE.DataTexture,
   density: TreeDensityField,
-  worldSize: number,
+  bounds: { minX: number; minZ: number; sizeX: number; sizeZ: number },
 ): void {
-  const size = DENSITY_TEXTURE_SIZE
+  const size = Number(texture.image.width)
   const data = texture.image.data as Uint8Array
-  const half = worldSize * 0.5
   for (let y = 0; y < size; y += 1) {
-    const z = -half + (y / (size - 1)) * worldSize
+    const z = bounds.minZ + (y / (size - 1)) * bounds.sizeZ
     for (let x = 0; x < size; x += 1) {
-      const px = -half + (x / (size - 1)) * worldSize
+      const px = bounds.minX + (x / (size - 1)) * bounds.sizeX
       const byte = Math.round((density.classAt(px, z) / 3) * 255)
       const index = (y * size + x) * 4
       data[index] = byte
@@ -116,10 +124,15 @@ function createFallbackFadeTexture(seed: number): THREE.DataTexture {
 const VERTEX_SHADER = `
 #include <common>
 attribute float aRoadProx;
+attribute float aBaseHeight;
+attribute vec3 aBaseNormal;
 uniform sampler2D uRockBump;
+uniform float uRoadDisplacement;
 varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
 varying float vRoadProx;
+varying float vBaseHeight;
+varying vec3 vBaseNormal;
 varying float vViewDistance;
 #include <fog_pars_vertex>
 void main() {
@@ -131,7 +144,7 @@ void main() {
   // uv 取原始世界坐标的 /100；低于 16m 才生效，强度 0.8。
   if (abs(aRoadProx) > 1e-5) {
     float steepnessV = clamp((0.98 - dot(objectNormal, vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
-    float intensity = clamp((16.0 - aRoadProx) / 6.0, 0.0, 1.0) * 0.8;
+    float intensity = clamp((16.0 - aRoadProx) / 6.0, 0.0, 1.0) * 0.8 * uRoadDisplacement;
     displaced += objectNormal * ((texture2D(uRockBump, sourcePosition.xz / 100.0).x - 0.4)
       * min(1.0, steepnessV * 3.0)) * intensity;
   }
@@ -140,6 +153,10 @@ void main() {
   // 与官方一致：所有 UV/高度场仍取未位移的世界坐标。
   vWorldPosition = sourcePosition.xyz;
   vWorldNormal = normalize(mat3(modelMatrix) * objectNormal);
+  vBaseHeight = aBaseHeight;
+  vBaseNormal = length(aBaseNormal) > 1e-5
+    ? normalize(mat3(modelMatrix) * aBaseNormal)
+    : vWorldNormal;
   vRoadProx = aRoadProx;
   vec4 mvPosition = viewMatrix * worldPosition;
   vViewDistance = -mvPosition.z;
@@ -151,6 +168,8 @@ void main() {
 const FRAGMENT_SHADER = `
 uniform sampler2D uFadeNoise;
 uniform sampler2D uDensityMap;
+uniform vec2 uDensityMin;
+uniform vec2 uDensitySize;
 uniform sampler2D uGrassFiber;
 uniform sampler2D uForest;
 uniform sampler2D uHeather;
@@ -167,6 +186,9 @@ uniform float uUseTextures;
 uniform float uWorldSize;
 uniform float uWorldHalf;
 uniform float uWaterLevel;
+uniform float uHeightScale;
+uniform float uRoadbedCutProx;
+uniform float uUseBaseSurface;
 uniform int uSeasonIndex;
 uniform vec3 uGrassColA;
 uniform vec3 uGrassColB;
@@ -181,6 +203,8 @@ uniform float uShowCanopy;
 varying vec3 vWorldPosition;
 varying vec3 vWorldNormal;
 varying float vRoadProx;
+varying float vBaseHeight;
+varying vec3 vBaseNormal;
 varying float vViewDistance;
 ${LANDSCAPE_LIGHT_GLSL}
 /** 官方环境光树影调制（先乘当季 shadowFactor，再按官方 clamp 系数）。 */
@@ -198,7 +222,11 @@ vec4 terrainBlend(vec4 tx1, float w1, vec4 tx2, float w2, float depth) {
 }
 
 void main() {
+  if (uRoadbedCutProx > 0.0 && vRoadProx < uRoadbedCutProx) {
+    discard;
+  }
   vec3 surfaceNormal = normalize(vWorldNormal);
+  vec3 colorNormal = normalize(mix(surfaceNormal, vBaseNormal, uUseBaseSurface));
   vec3 color = uGrassColA;
   // 官方地表掠射边缘光需要的量（在 uShowSurface / uUseTextures 分支里赋值）。
   float plShadow = 0.0;
@@ -218,8 +246,9 @@ void main() {
 
     // slowroads 的海拔公式按 0..300m 量级调过参；lab 世界只有 ±40m，
     // 先把“水面以上的高度”按 x4 折算回官方尺度，再走原公式。
-    float heightRel = vWorldPosition.y - uWaterLevel;
-    float height = heightRel * 4.0;
+    float referenceY = mix(vWorldPosition.y, vBaseHeight, uUseBaseSurface);
+    float heightRel = referenceY - uWaterLevel;
+    float height = heightRel * uHeightScale;
     float roadProx = vRoadProx;
     float hasRoadProx = step(0.00001, abs(roadProx));
 
@@ -240,14 +269,15 @@ void main() {
 
     float vDarkGrass = min(max(0.0, (vFade1 - 0.25) * 2.0), 1.0);
 
-    float steepness = clamp((0.98 - dot(surfaceNormal, vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
+    float steepness = clamp((0.98 - dot(colorNormal, vec3(0.0, 1.0, 0.0))) * 1.4, 0.0, 1.0);
     float underRoadFactor = 1.0 - step(0.000001, -roadProx);
     steepness *= underRoadFactor;
     vHeather *= underRoadFactor;
 
     float treeMask = 0.0;
     if (uShowCanopy > 0.5) {
-      treeMask = clamp(texture2D(uDensityMap, (vWorldPosition.xz + uWorldHalf) / uWorldSize).r * 1.15, 0.0, 1.0);
+      vec2 densityUv = (vWorldPosition.xz - uDensityMin) / uDensitySize;
+      treeMask = clamp(texture2D(uDensityMap, densityUv).r * 1.15, 0.0, 1.0);
     }
     float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
     vShadow *= clamp(uShadowFactor, 0.0, 1.0);
@@ -470,9 +500,9 @@ function setTextureUniforms(uniforms: Record<string, THREE.IUniform>, textures: 
 
 export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainMaterialHandle {
   const densityTexture = new THREE.DataTexture(
-    new Uint8Array(DENSITY_TEXTURE_SIZE * DENSITY_TEXTURE_SIZE * 4),
-    DENSITY_TEXTURE_SIZE,
-    DENSITY_TEXTURE_SIZE,
+    new Uint8Array(options.density ? 256 * 256 * 4 : 4),
+    options.density ? 256 : 1,
+    options.density ? 256 : 1,
     THREE.RGBAFormat,
     THREE.UnsignedByteType,
   )
@@ -481,7 +511,21 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
   densityTexture.wrapS = THREE.ClampToEdgeWrapping
   densityTexture.wrapT = THREE.ClampToEdgeWrapping
   densityTexture.generateMipmaps = false
-  fillDensityTexture(densityTexture, options.density, options.worldSize)
+  const densityBounds = options.densityBounds ?? {
+    minX: -options.worldSize * 0.5,
+    minZ: -options.worldSize * 0.5,
+    sizeX: options.worldSize,
+    sizeZ: options.worldSize,
+  }
+  if (options.density) {
+    fillDensityTexture(densityTexture, options.density, densityBounds)
+  } else {
+    // Terrain-only mode still needs a valid sampler; a black 1x1 texture keeps
+    // canopy/density work disabled without allocating a 256x256 map.
+    const data = densityTexture.image.data as Uint8Array
+    data[3] = 255
+    densityTexture.needsUpdate = true
+  }
 
   // Reduced mode must not sample the optional maps at all; point them at any
   // texture so the raw ShaderMaterial has valid samplers.
@@ -490,6 +534,8 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
     ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
     uFadeNoise: { value: options.textures.fadeNoise },
     uDensityMap: { value: densityTexture },
+    uDensityMin: { value: new THREE.Vector2(densityBounds.minX, densityBounds.minZ) },
+    uDensitySize: { value: new THREE.Vector2(densityBounds.sizeX, densityBounds.sizeZ) },
     uGrassFiber: { value: options.textures.grass },
     uForest: { value: options.textures.forest },
     uHeather: { value: options.textures.heather },
@@ -501,6 +547,10 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
     uWorldSize: { value: options.worldSize },
     uWorldHalf: { value: options.worldSize * 0.5 },
     uWaterLevel: { value: options.waterLevel },
+    uHeightScale: { value: options.heightScale ?? 4 },
+    uRoadDisplacement: { value: options.roadDisplacement === false ? 0 : 1 },
+    uRoadbedCutProx: { value: options.roadbedCutProx ?? 0 },
+    uUseBaseSurface: { value: options.useBaseSurface ? 1 : 0 },
     uSeasonIndex: { value: 0 },
     uGrassColA: { value: new THREE.Color() },
     uGrassColB: { value: new THREE.Color() },
@@ -541,7 +591,10 @@ export function createTerrainMaterial(options: TerrainMaterialOptions): TerrainM
   return {
     material,
     setDensity(density: TreeDensityField): void {
-      fillDensityTexture(densityTexture, density, options.worldSize)
+      if (!options.density) {
+        return
+      }
+      fillDensityTexture(densityTexture, density, densityBounds)
     },
     setToggles(toggles: TerrainToggles): void {
       uniforms.uShowSurface!.value = toggles.surface ? 1 : 0

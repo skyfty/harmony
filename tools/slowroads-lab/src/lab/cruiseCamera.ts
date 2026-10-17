@@ -50,6 +50,7 @@ export function createCruiseController(getProfile: () => RoadProfile | null): Cr
 export interface FreeFlyControls {
   enabled: boolean
   update(dt: number): void
+  setSpeed(moveSpeed: number, sprintSpeed: number): void
   /** Re-derives yaw/pitch from the camera's current orientation. */
   syncFromCamera(): void
   dispose(): void
@@ -62,6 +63,7 @@ export interface FreeFlyControls {
 export function createFreeFlyControls(
   camera: THREE.PerspectiveCamera,
   element: HTMLElement,
+  options: { moveSpeed?: number; sprintSpeed?: number } = {},
 ): FreeFlyControls {
   const euler = new THREE.Euler(0, 0, 0, 'YXZ')
   let yaw = 0
@@ -74,6 +76,8 @@ export function createFreeFlyControls(
   const right = new THREE.Vector3()
   const move = new THREE.Vector3()
   const up = new THREE.Vector3(0, 1, 0)
+  let moveSpeed = options.moveSpeed ?? 24
+  let sprintSpeed = options.sprintSpeed ?? 72
 
   const applyRotation = (): void => {
     euler.set(pitch, yaw, 0)
@@ -146,10 +150,14 @@ export function createFreeFlyControls(
       if (move.lengthSq() <= 0) {
         return
       }
-      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 72 : 24
+      const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? sprintSpeed : moveSpeed
       move.normalize().multiplyScalar(speed * dt)
       camera.position.add(move)
       applyRotation()
+    },
+    setSpeed(nextMoveSpeed: number, nextSprintSpeed: number): void {
+      moveSpeed = Math.max(0.1, nextMoveSpeed)
+      sprintSpeed = Math.max(moveSpeed, nextSprintSpeed)
     },
     syncFromCamera,
     dispose(): void {

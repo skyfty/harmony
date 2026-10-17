@@ -1,5 +1,6 @@
 import type { Heightfield } from './heightfield'
 import { bakeTerrainHeight, type RoadProfile } from './roadProfile'
+import type { PlacementSurface } from './roadbed'
 import { clamp01, fbm2, hashUnit, smoothstep } from './noise'
 import { BROADLEAF_CARD_REGIONS, TREE_FAR_VARIANTS, getConiferCardRegions } from './spriteRegions'
 
@@ -106,6 +107,30 @@ export function createTreeDensityField(seed: number, worldSize: number): TreeDen
   }
 }
 
+/**
+ * DEM-wide forest mask. Unlike the 1600m procedural field this intentionally
+ * stays at a human-readable patch scale: broad forest blocks with clearings,
+ * shared by terrain canopy shading and the far-tree placement pass.
+ */
+export function createDemForestDensityField(seed: number, _worldSize: number): TreeDensityField {
+  const largeSeed = (seed ^ 0x7f4a7c15) >>> 0
+  const mediumSeed = (seed ^ 0x2c9277b5) >>> 0
+  const sampleUnit = (x: number, z: number): number => clamp01(
+    fbm2(largeSeed, x / 900, z / 900, 4, 2.02, 0.52) * 0.75
+      + fbm2(mediumSeed, x / 210, z / 210, 2, 2.1, 0.5) * 0.25,
+  )
+  return {
+    sampleUnit,
+    classAt(x: number, z: number): 0 | 1 | 2 | 3 {
+      const value = sampleUnit(x, z)
+      if (value >= 0.58) return 3
+      if (value >= 0.46) return 2
+      if (value >= 0.34) return 1
+      return 0
+    },
+  }
+}
+
 function heightFactor(height: number, waterLevel: number): number {
   const aboveWater = height - waterLevel
   if (aboveWater <= 0) {
@@ -162,6 +187,226 @@ export function computePlacements(
     grass: corridorGrass.concat(tallGrass),
     bushes: corridorBushes.concat(flowers),
   }
+}
+
+/**
+ * Large DEM worlds cannot afford the original full-grid tree scan. The next
+ * stage keeps the playable corridor populated: grass/bushes along the road and
+ * a deterministic tree band on both sides of it.
+ */
+export function computeRoadCorridorPlacements(
+  field: Heightfield,
+  profile: RoadProfile,
+  settings: LabPlacementSettings,
+  surface?: PlacementSurface,
+): { grass: SpritePlacement[]; bushes: SpritePlacement[] } {
+  return {
+    grass: computeCorridorPlacements(field, profile, settings, 'grass', surface)
+      .concat(computeLayerPlacements(field, profile, settings, 'tallGrass', surface)),
+    bushes: computeCorridorPlacements(field, profile, settings, 'bush', surface)
+      .concat(computeLayerPlacements(field, profile, settings, 'flower', surface)),
+  }
+}
+
+export interface RoadsideTreeOptions {
+  maxTrees?: number
+  maxDistance?: number
+  alongStep?: number
+  lateralStep?: number
+  slopeLimit?: number
+  surface?: PlacementSurface
+}
+
+export interface ForestTreeOptions {
+  cellSize?: number
+  maxTrees?: number
+  slopeLimit?: number
+  surface?: PlacementSurface
+  profile?: RoadProfile | null
+  roadClearance?: number
+}
+
+/**
+ * Full-terrain forest used by DEM scenes. The road-corridor version above is
+ * intentionally bounded so 1600m worlds stay cheap; a 42km DEM needs a
+ * deterministic coarse grid instead of a 10m full scan. Far-tree imposters
+ * carry most of the coverage, while corridor trees keep the near LOD.
+ */
+export function computeForestTreePlacements(
+  field: Heightfield,
+  density: TreeDensityField,
+  settings: LabPlacementSettings,
+  options: ForestTreeOptions = {},
+): TreePlacement[] {
+  const seed = settings.seed >>> 0
+  const cellSize = Math.max(16, options.cellSize ?? 40)
+  const maxTrees = Math.max(0, Math.round(options.maxTrees ?? 900000))
+  const slopeLimit = options.slopeLimit ?? 0.6
+  const densityScale = 0.75 + clamp01(settings.treeDensity / 2) * 0.5
+  const minX = field.bounds.minX
+  const minZ = field.bounds.minZ
+  const cols = Math.ceil(field.bounds.sizeX / cellSize)
+  const rows = Math.ceil(field.bounds.sizeZ / cellSize)
+  const heightRange = Math.max(1, field.maxHeight - field.minHeight)
+  const trees: TreePlacement[] = []
+
+  for (let row = 0; row < rows && trees.length < maxTrees; row += 1) {
+    for (let col = 0; col < cols && trees.length < maxTrees; col += 1) {
+      const cellKey = (col + 32768) * 65536 + (row + 32768)
+      const x = minX + (col + 0.08 + hashUnit(seed, cellKey, 1) * 0.84) * cellSize
+      const z = minZ + (row + 0.08 + hashUnit(seed, cellKey, 2) * 0.84) * cellSize
+      if (!field.inBounds(x, z, 4)) {
+        continue
+      }
+      const height = options.surface
+        ? options.surface.heightAt(x, z)
+        : field.sampleHeight(x, z)
+      if (height < field.waterLevel + 1) {
+        continue
+      }
+      const slope = field.sampleSlope(x, z)
+      if (slope > slopeLimit) {
+        continue
+      }
+      const roadClearance = options.roadClearance ?? 0
+      if (options.profile && roadClearance > 0) {
+        const closest = options.profile.closestPoint(x, z)
+        if (closest && closest.distance < roadClearance) {
+          continue
+        }
+      }
+      // The DEM density field is already the shared large+medium forest mask;
+      // procedural callers still get a deterministic local fallback.
+      const forestValue = density.sampleUnit(x, z)
+      const slopePenalty = 1 - smoothstep(0.24, slopeLimit, slope) * 0.55
+      // Sharper mask: dense forest patches with readable clearings instead of
+      // a uniform scatter of isolated trees.
+      const forestMask = smoothstep(0.38, 0.5, forestValue)
+      const chance = (0.16 + forestMask * 0.84) * slopePenalty * densityScale
+      const clusterCount = forestMask > 0.45 && hashUnit(seed, cellKey, 3) < 0.65 ? 2 : 1
+      for (let item = 0; item < clusterCount && trees.length < maxTrees; item += 1) {
+        if (item === 0 && hashUnit(seed, cellKey, 4) >= chance) {
+          continue
+        }
+        const treeX = item === 0
+          ? x
+          : minX + (col + 0.08 + hashUnit(seed, cellKey, 5) * 0.84) * cellSize
+        const treeZ = item === 0
+          ? z
+          : minZ + (row + 0.08 + hashUnit(seed, cellKey, 6) * 0.84) * cellSize
+        if (!field.inBounds(treeX, treeZ, 4)) {
+          continue
+        }
+        const treeY = options.surface
+          ? options.surface.heightAt(treeX, treeZ)
+          : field.sampleHeight(treeX, treeZ)
+        if (treeY < field.waterLevel + 1) {
+          continue
+        }
+        const normalizedHeight = clamp01((treeY - field.minHeight) / heightRange)
+        const coniferScore = normalizedHeight * 0.62
+          + slope * 0.9
+          + hashUnit(seed, cellKey, 7 + item) * 0.22
+        const species: 0 | 1 = coniferScore > 0.55 ? 1 : 0
+        const nearVariants = NEAR_TREE_VARIANTS[species]
+        // Distant cards need to read as canopy masses at multi-kilometre range;
+        // 16–29m crowns give the global forest meaningful areal coverage.
+        const scaleJitter = 2.0 + hashUnit(seed, cellKey, 9 + item) * 1.6
+        trees.push({
+          x: treeX,
+          z: treeZ,
+          y: treeY,
+          rotation: hashUnit(seed, cellKey, 11 + item) * Math.PI * 2,
+          scale: scaleJitter * settings.treeSize * (species === 1 ? 1.08 : 1),
+          variantNear: Math.min(
+            nearVariants - 1,
+            Math.floor(hashUnit(seed, cellKey, 13 + item) * nearVariants),
+          ),
+          variantFar: Math.min(
+            TREE_FAR_VARIANTS - 1,
+            Math.floor(hashUnit(seed, cellKey, 15 + item) * TREE_FAR_VARIANTS),
+          ),
+          species,
+        })
+      }
+    }
+  }
+  return trees
+}
+
+export function computeRoadsideTreePlacements(
+  field: Heightfield,
+  profile: RoadProfile,
+  density: TreeDensityField,
+  settings: LabPlacementSettings,
+  options: RoadsideTreeOptions = {},
+): TreePlacement[] {
+  const seed = settings.seed >>> 0
+  const maxTrees = Math.max(0, Math.round(options.maxTrees ?? 30000))
+  const maxDistance = Math.max(profile.halfWidth + 8, options.maxDistance ?? 96)
+  const alongStep = Math.max(2, options.alongStep ?? 8)
+  const lateralStep = Math.max(2, options.lateralStep ?? 12)
+  const slopeLimit = options.slopeLimit ?? 0.45
+  const clearance = profile.halfWidth + profile.shoulderWidth + TREE_ROAD_CLEARANCE
+  const alongCount = Math.max(1, Math.ceil(profile.length / alongStep))
+  const trees: TreePlacement[] = []
+  const lateralBands = Math.max(1, Math.ceil((maxDistance - clearance) / lateralStep))
+
+  for (let along = 0; along < alongCount && trees.length < maxTrees; along += 1) {
+    const sample = profile.sampleAt(along * alongStep)
+    const dirX = Math.cos(sample.heading)
+    const dirZ = Math.sin(sample.heading)
+    const perpX = -dirZ
+    const perpZ = dirX
+    for (const side of [1, -1] as const) {
+      for (let band = 0; band < lateralBands && trees.length < maxTrees; band += 1) {
+        const lateral = clearance + band * lateralStep
+          + (hashUnit(seed, along, band * 16 + (side > 0 ? 1 : 2)) - 0.5) * lateralStep * 0.8
+        const alongJitter = (hashUnit(seed, along, band * 16 + (side > 0 ? 3 : 4)) - 0.5) * alongStep
+        const x = sample.x + dirX * alongJitter + perpX * side * lateral
+        const z = sample.z + dirZ * alongJitter + perpZ * side * lateral
+        if (!field.inBounds(x, z, 8)) {
+          continue
+        }
+        if (profile.distanceTo(x, z) < clearance) {
+          continue
+        }
+        const densityClass = density.classAt(x, z)
+        if (densityClass === 0) {
+          continue
+        }
+        const chance = (densityClass / 3) * 0.34 * settings.treeDensity
+        if (hashUnit(seed, along, band * 16 + (side > 0 ? 5 : 6)) >= chance) {
+          continue
+        }
+        const y = options.surface
+          ? options.surface.heightAt(x, z)
+          : bakeTerrainHeight(field, profile, x, z).height
+        const slope = options.surface ? options.surface.slopeAt(x, z) : field.sampleSlope(x, z)
+        if (y < field.waterLevel + 2 || slope > slopeLimit) {
+          continue
+        }
+        const scaleJitter = 1 + (hashUnit(seed, along, band * 16 + (side > 0 ? 7 : 8)) - 0.5) * 0.5
+        const species: 0 | 1 = hashUnit(seed, along, band * 16 + (side > 0 ? 9 : 10)) < 0.5 ? 0 : 1
+        const nearVariants = NEAR_TREE_VARIANTS[species]
+        trees.push({
+          x,
+          z,
+          y,
+          rotation: hashUnit(seed, along, band * 16 + (side > 0 ? 11 : 12)) * Math.PI * 2,
+          scale: (0.8 + densityClass * 0.12) * scaleJitter * settings.treeSize,
+          variantNear: Math.min(nearVariants - 1, Math.floor(
+            hashUnit(seed, along, band * 16 + (side > 0 ? 13 : 14)) * nearVariants,
+          )),
+          variantFar: Math.min(TREE_FAR_VARIANTS - 1, Math.floor(
+            hashUnit(seed, along, band * 16 + (side > 0 ? 15 : 16)) * TREE_FAR_VARIANTS,
+          )),
+          species,
+        })
+      }
+    }
+  }
+  return trees
 }
 
 function computeTreePlacements(
@@ -233,6 +478,7 @@ function computeCorridorPlacements(
   profile: RoadProfile,
   settings: LabPlacementSettings,
   kind: 'grass' | 'bush',
+  surface?: PlacementSurface,
 ): SpritePlacement[] {
   const seed = (settings.seed ^ (kind === 'grass' ? 0x9a13 : 0x44c1)) >>> 0
   const out: SpritePlacement[] = []
@@ -274,11 +520,13 @@ function computeCorridorPlacements(
         if (kind === 'bush' && (distance < profile.halfWidth + 0.4 || distance > profile.halfWidth + 4)) {
           continue
         }
-        const y = bakeTerrainHeight(field, profile, x, z).height
+        const y = surface
+          ? surface.heightAt(x, z)
+          : bakeTerrainHeight(field, profile, x, z).height
         if (y < field.waterLevel + 0.5) {
           continue
         }
-        const slope = field.sampleSlope(x, z)
+        const slope = surface ? surface.slopeAt(x, z) : field.sampleSlope(x, z)
         if (slope > 0.75) {
           continue
         }
@@ -335,6 +583,7 @@ function computeLayerPlacements(
   profile: RoadProfile,
   settings: LabPlacementSettings,
   kind: 'flower' | 'tallGrass',
+  surface?: PlacementSurface,
 ): SpritePlacement[] {
   const isFlower = kind === 'flower'
   const seed = (settings.seed ^ (isFlower ? 0x4d2b : 0x7a51)) >>> 0
@@ -370,11 +619,13 @@ function computeLayerPlacements(
         if (distance < profile.halfWidth + lateralStart - 0.2 || distance > profile.halfWidth + lateralEnd + 0.6) {
           continue
         }
-        const y = bakeTerrainHeight(field, profile, x, z).height
+        const y = surface
+          ? surface.heightAt(x, z)
+          : bakeTerrainHeight(field, profile, x, z).height
         if (y < field.waterLevel + 0.5) {
           continue
         }
-        const slope = field.sampleSlope(x, z)
+        const slope = surface ? surface.slopeAt(x, z) : field.sampleSlope(x, z)
         if (slope > 0.7) {
           continue
         }
