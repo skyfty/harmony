@@ -23,6 +23,7 @@ import {
   type TreeDensityField,
   type TreePlacement,
 } from './core/placement'
+import { resolveTreeLodBands } from './core/treeLod'
 import { createRoadProfile, type RoadProfile } from './core/roadProfile'
 import {
   createFlatRoadBandColumns,
@@ -832,6 +833,7 @@ function applyToggles(): void {
     treeMeshManager.setVisible(!terrainOnly && settings.showNearTreeMeshes)
   }
   foliageUniforms.meshRadius.value = !terrainOnly && settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
+  applyTreeLodBands()
 }
 
 function applyWind(): void {
@@ -944,11 +946,13 @@ function buildFoliageFromPlacements(): void {
   const worldSize = field.worldSize
   const grassEntries = assets.grassSprites.entries
   const bushEntries = assets.bushes.entries
-  // 官方 LOD dissolve 区间（cf(l)：lod1Horizon = 近树卡距离/10）：
-  // 近树卡在 [near, far] 淡出，远景树在 [near2, far2] 淡入，两段有 0.6 间隔离散衔接。
-  const cardDissolveFar = Math.max(40, settings.nearDistance)
-  const cardDissolveInterval = Math.max(1, Math.floor(cardDissolveFar * 0.3))
-  const cardDissolveNear = cardDissolveFar - cardDissolveInterval
+  const lodBands = resolveTreeLodBands(
+    settings.nearDistance,
+    settings.showNearTreeMeshes ? settings.nearTreeRadius : 0,
+  )
+  const cardDissolveFar = lodBands.cardFar
+  const cardDissolveNear = lodBands.cardNear
+  const cardDissolveInterval = Math.max(1, cardDissolveFar - cardDissolveNear)
   const cardNoise = sharedAssets.noise
   const foliageDensity = densityField ? getFoliageDensityTexture() : undefined
 
@@ -998,7 +1002,7 @@ function buildFoliageFromPlacements(): void {
   // forest in `forestTrees`. The global layer uses static cross cards so the
   // hills stay wooded at multi-kilometre range; near cards/3D trees remain
   // bounded to the road corridor.
-  const farTrees = forestTrees.length ? forestTrees : placements.trees
+  const farTrees = forestTrees.length ? placements.trees.concat(forestTrees) : placements.trees
   const farBroadleaf = farTrees.filter((tree) => tree.species === 0)
   const farConifer = farTrees.filter((tree) => tree.species === 1)
   // 官方 effects.treeDiscolouration 是变色噪声的**幅度**（着色器换算成 ≈1±factor/2 的乘数）。
@@ -1010,6 +1014,7 @@ function buildFoliageFromPlacements(): void {
     unitSize: 8,
     shared: foliageUniforms,
     card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
+    lodFade: { mode: 'near-card', near: cardDissolveNear, far: cardDissolveFar },
     noiseMap: cardNoise,
     densityMap: foliageDensity,
     worldSize,
@@ -1023,7 +1028,7 @@ function buildFoliageFromPlacements(): void {
     alphaTest: 0.15,
     unitSize: 8,
     shared: foliageUniforms,
-    distantOnly: true,
+    lodFade: { mode: 'far-card', near: cardDissolveNear, far: cardDissolveFar },
     singlePlane: true,
     staticBillboard: true,
     noiseMap: cardNoise,
@@ -1038,6 +1043,7 @@ function buildFoliageFromPlacements(): void {
     unitSize: 8,
     shared: foliageUniforms,
     card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
+    lodFade: { mode: 'near-card', near: cardDissolveNear, far: cardDissolveFar },
     noiseMap: cardNoise,
     densityMap: foliageDensity,
     worldSize,
@@ -1049,7 +1055,7 @@ function buildFoliageFromPlacements(): void {
     alphaTest: 0.12,
     unitSize: 8,
     shared: foliageUniforms,
-    distantOnly: true,
+    lodFade: { mode: 'far-card', near: cardDissolveNear, far: cardDissolveFar },
     singlePlane: true,
     staticBillboard: true,
     noiseMap: cardNoise,
@@ -1067,8 +1073,28 @@ function buildFoliageFromPlacements(): void {
   )
   applyWind()
   applyToggles()
+  applyTreeLodBands()
   // 新材质（雾/光照 uniform 是每材质克隆的）需要重新下发环境参数。
   environmentController?.applyState(currentEnvironmentState())
+}
+
+/** Update tree LOD uniforms without rebuilding the 1.2M far-tree instances. */
+function applyTreeLodBands(): void {
+  const terrainOnly = settings.terrainSource === 'dem' && settings.terrainOnly
+  const meshRadius = !terrainOnly && settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
+  foliageUniforms.meshRadius.value = meshRadius
+  const bands = resolveTreeLodBands(settings.nearDistance, meshRadius)
+  const interval = Math.max(1, bands.cardFar - bands.cardNear)
+  for (const mesh of [broadleafNearMesh, broadleafFarMesh, coniferNearMesh, coniferFarMesh]) {
+    if (!mesh) {
+      continue
+    }
+    const material = mesh.material as THREE.ShaderMaterial
+    material.uniforms.uDissolveNear!.value = bands.cardNear
+    material.uniforms.uDissolveFar!.value = bands.cardFar
+    material.uniforms.uDissolveInterval!.value = interval
+  }
+  treeMeshManager?.setLodBand(bands.meshNear, bands.meshFar)
 }
 
 function rebuildPlacements(): void {
@@ -1901,9 +1927,10 @@ function handleChange(kind: LabChangeKind, key: keyof LabSettings): void {
   }
   if (key === 'nearDistance') {
     foliageUniforms.nearDistance.value = settings.nearDistance
+    applyTreeLodBands()
   }
   if (key === 'nearTreeRadius') {
-    foliageUniforms.meshRadius.value = settings.showNearTreeMeshes ? settings.nearTreeRadius : 0
+    applyTreeLodBands()
     if (treeMeshManager && placements) {
       treeMeshManager.update(camera.position, placements.trees, foliageUniforms.meshRadius.value, true)
     }

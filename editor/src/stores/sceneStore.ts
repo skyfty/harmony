@@ -423,6 +423,7 @@ import {
   clampNominateComponentProps,
   cloneNominateComponentProps,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+  createProceduralLandscapeComponentState,
 } from '@schema/components'
 import {
   LOD_COMPONENT_TYPE,
@@ -430,6 +431,7 @@ import {
 } from '@schema/components'
 import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
 import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
+import { readTerrainPackAssetMetadata } from '@schema/terrainPack'
 
 export {
   ASSETS_ROOT_DIRECTORY_ID,
@@ -13683,6 +13685,67 @@ export const useSceneStore = defineStore('scene', {
       }
 
       return result
+    },
+
+    async spawnDemTerrainAtWorldTransform(
+      assetId: string,
+      options: {
+        position: THREE.Vector3
+        parentId?: string | null
+      },
+    ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
+      const asset = findAssetInTree(this.projectTree, assetId)
+      if (!asset) {
+        throw new Error('Unable to find the requested DEM asset')
+      }
+      const metadata = readTerrainPackAssetMetadata(asset.metadata?.terrainPack)
+      if (metadata?.kind !== 'dem' || !metadata.runtimeGridUrl) {
+        throw new Error('该 DEM 资源包缺少 runtime grid，请重新上传后再拖入场景。')
+      }
+      const placementAsset = this.ensureSceneAssetRegistered(asset, {
+        source: asset.source ?? undefined,
+      })
+      const nodeId = generateUuid()
+      const group = new THREE.Group()
+      group.name = asset.name || 'DEM Terrain'
+      const temporaryNode = {
+        id: nodeId,
+        name: asset.name || 'DEM Terrain',
+        nodeType: 'Group',
+      } as SceneNode
+      const demProps = {
+        assetId: placementAsset.id,
+        runtimeGridUrl: metadata.runtimeGridUrl,
+        runtimeGridBytes: metadata.runtimeGridBytes ?? null,
+        sampleStep: 'auto' as const,
+        sourceZipName: metadata.sourceZipName ?? null,
+        width: metadata.demWidth ?? null,
+        height: metadata.demHeight ?? null,
+        cellSizeMeters: metadata.demCellSizeMeters ?? null,
+        minElevation: metadata.demMinElevation ?? null,
+        maxElevation: metadata.demMaxElevation ?? null,
+        anchor: metadata.anchor ?? null,
+        crs: metadata.crs ?? null,
+      }
+      const component = createProceduralLandscapeComponentState(temporaryNode, { dem: demProps })
+      const node = this.addSceneNode({
+        nodeId,
+        nodeType: 'Group',
+        object: group,
+        name: group.name,
+        // DEM elevations are local to their own datum; the host base starts at
+        // world Y=0 so road/vegetation sampling and the rendered mesh agree.
+        position: { x: options.position.x, y: 0, z: options.position.z },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        sourceAssetId: placementAsset.id,
+        userData: { proceduralLandscapeDem: true },
+        parentId: options.parentId ?? null,
+        components: {
+          [PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]: component,
+        },
+      })
+      return { asset: placementAsset, node }
     },
 
     async spawnAssetAtWorldTransform(

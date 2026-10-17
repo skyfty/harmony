@@ -110,7 +110,7 @@ describe('terrain pack publish rules', () => {
     })
     expect(shouldSkipTerrainPackEmbedding(geometryAsset)).toBe(true)
     expect(shouldSkipTerrainPackEmbedding(ordinaryAsset)).toBe(false)
-    expect(shouldSkipTerrainPackEmbedding(createDemAsset())).toBe(false)
+    expect(shouldSkipTerrainPackEmbedding(createDemAsset())).toBe(true)
 
     const document = {
       assetCatalog: { 'cat-1': [geometryAsset, ordinaryAsset] },

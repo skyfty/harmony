@@ -117,12 +117,24 @@ export interface TerrainPackAssetMetadata {
   sidecarFile?: string | null
   demFile?: string | null
   orthoFile?: string | null
+  demWidth?: number | null
+  demHeight?: number | null
+  demCellSizeMeters?: number | null
+  demMinElevation?: number | null
+  demMaxElevation?: number | null
   textures?: TerrainPackTextureSummary[]
   files?: TerrainPackFileSummary[]
   totalBytes?: number
   warnings?: string[]
   anchor?: { latitudeDegrees: number; longitudeDegrees: number; groundElevationMeters: number } | null
   crs?: { epsg: number; zone: number; hemisphere: 'north' | 'south' } | null
+  /** DEM packs: compact, client-ready height grid generated during upload. */
+  runtimeGridFile?: string | null
+  runtimeGridUrl?: string | null
+  runtimeGridBytes?: number | null
+  runtimeGridFormat?: 'hdem-v1' | null
+  runtimeGridCompression?: 'deflate' | null
+  runtimeGridFilledRatio?: number | null
 }
 
 export function normalizeTerrainPackPath(raw: unknown): string | null {
@@ -371,6 +383,18 @@ function summarizeDemPack(
   }
   if (!sidecar.ortho && orthoFile) {
     warnings.push(`包内存在 ${TERRAIN_DEM_PACKAGE_FILES.ortho}，但 dem.json 未记录正射影像。`)
+  }
+  const sourceFilledRatio = Number(sidecar.stats?.filledRatio)
+  if (Number.isFinite(sourceFilledRatio) && sourceFilledRatio > 0) {
+    warnings.push(
+      `DEM 原始栅格有 ${(sourceFilledRatio * 100).toFixed(1)}% 采样空洞（已在上游用最近有效值填充）。`,
+    )
+  }
+  for (const warning of sidecar.stats?.warnings ?? []) {
+    const text = typeof warning === 'string' ? warning.trim() : ''
+    if (text && !warnings.includes(text)) {
+      warnings.push(text)
+    }
   }
   const knownFiles = new Set(
     [sidecarFile, demFile, orthoFile].filter((value): value is string => Boolean(value)).map((value) => value.toLowerCase()),

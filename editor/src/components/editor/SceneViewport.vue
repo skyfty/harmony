@@ -130,6 +130,7 @@ import type { SceneCameraState } from '@/types/scene-camera-state'
 import type { EditorTool } from '@/types/editor-tool'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useUiStore } from '@/stores/uiStore'
+import { isTerrainDemPackAsset } from '@/utils/terrainPackLibrary'
 import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { createWarpGateNode } from '@/stores/warpGateNodeUtils'
 
@@ -21277,6 +21278,19 @@ function handleViewportDragOver(event: DragEvent) {
   if (!isAssetDrag(event)) return
   const info = resolveDragAsset(event)
   const asset = info?.asset ?? null
+  if (asset && isTerrainDemPackAsset(asset)) {
+    event.preventDefault()
+    isDragHovering.value = true
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = 'copy'
+    }
+    const placement = computeDropPlacement(event)
+    const point = computePreviewPointForPlacement(placement)
+    updateGridHighlight(point)
+    clearAssetPlacementPreviewSnapshot()
+    dragPreview.dispose()
+    return
+  }
   if (asset?.type === 'material') {
     event.preventDefault()
     isDragHovering.value = true
@@ -21463,6 +21477,27 @@ async function handleViewportDrop(event: DragEvent) {
   const asset = info.asset ?? sceneStore.getAsset(assetId) ?? null
   const assetType = asset?.type ?? null
   const isTexture = assetType === 'texture' || assetType === 'image'
+
+  if (asset && isTerrainDemPackAsset(asset)) {
+    const placement = computeDropPlacement(event)
+    const position = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
+    try {
+      await sceneStore.spawnDemTerrainAtWorldTransform(assetId, {
+        position,
+        parentId: null,
+      })
+    } catch (error) {
+      console.error('Failed to spawn DEM terrain', error)
+    } finally {
+      clearAssetPlacementPreviewSnapshot()
+      dragPreview.dispose()
+      sceneStore.setDraggingAssetObject(null)
+      updateGridHighlight(null)
+      restoreGridHighlightForSelection()
+      snapController.resetPlacementSideSnap()
+    }
+    return
+  }
 
   if (asset && isBuildToolPresetAsset(asset)) {
     activateDroppedBuildPresetAsset(asset)
@@ -23220,6 +23255,9 @@ function releaseInstancedProxyBindings(nodeId: string, proxy: THREE.Object3D): v
  * regular model object. Geometry and materials stay shared with the cache.
  */
 function createNodeModelObjectFromCache(assetId: string, node: SceneNode): THREE.Object3D | null {
+  if ((node.userData as Record<string, unknown> | undefined)?.proceduralLandscapeDem === true) {
+    return null
+  }
   const cached = getCachedModelObject(assetId)
   if (!cached) {
     return null

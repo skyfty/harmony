@@ -82,7 +82,7 @@ const proceduralLandscapeComponentDefinition: ComponentDefinition<ProceduralLand
   label: 'Procedural Landscape',
   icon: 'mdi-forest',
   order: 93,
-  description: 'Runtime generated grass, forest and a slowroads-style road on an imported terrain mesh.',
+  description: 'Runtime generated grass, forest and a slowroads-style road on an imported mesh or DEM terrain.',
   canAttach(node: SceneNode) {
     const nodeType = node.nodeType
     if (nodeType !== 'Mesh' && nodeType !== 'Group') {
@@ -117,6 +117,12 @@ export function createProceduralLandscapeComponentState(
     ...defaults,
     ...overrides,
     sampling: { ...defaults.sampling, ...(overrides?.sampling ?? {}) },
+    dem: {
+      ...defaults.dem,
+      ...(overrides?.dem ?? {}),
+      anchor: overrides?.dem?.anchor ?? defaults.dem.anchor,
+      crs: overrides?.dem?.crs ?? defaults.dem.crs,
+    },
     surface: { ...defaults.surface, ...(overrides?.surface ?? {}) },
     road: { ...defaults.road, ...(overrides?.road ?? {}) },
     forest: { ...defaults.forest, ...(overrides?.forest ?? {}) },

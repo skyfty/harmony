@@ -765,6 +765,12 @@ class SceneGraphBuilder {
       if (!node) {
         continue;
       }
+      if ((node.userData as Record<string, unknown> | undefined)?.proceduralLandscapeDem === true) {
+        if (Array.isArray(node.children) && node.children.length) {
+          stack.push(...(node.children as SceneNodeWithExtras[]));
+        }
+        continue;
+      }
       if (typeof node.sourceAssetId === 'string' && node.sourceAssetId) {
         ids.add(node.sourceAssetId);
       }
@@ -950,6 +956,10 @@ class SceneGraphBuilder {
   private async loadNodeAssetMesh(node: SceneNodeWithExtras): Promise<THREE.Object3D | null> {
     const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : '';
     if (!assetId) {
+      return null;
+    }
+    if ((node.userData as Record<string, unknown> | undefined)?.proceduralLandscapeDem === true) {
+      // DEM terrain assets are rendered by proceduralLandscape; the ZIP is not a mesh.
       return null;
     }
 

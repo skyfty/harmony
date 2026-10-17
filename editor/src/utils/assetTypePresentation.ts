@@ -1,5 +1,6 @@
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { ProjectAsset } from '@/types/project-asset'
+import { readTerrainPackAssetMetadata } from '@schema/terrainPack'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { isDicePresetFilename } from '@/utils/dicePreset'
 import { isLandformPresetFilename } from '@/utils/landformPreset'
@@ -15,7 +16,7 @@ export interface AssetTypePresentation {
 }
 
 type AssetTypePresentationSource = Pick<ProjectAsset, 'type'>
-  & Partial<Pick<ProjectAsset, 'name' | 'downloadUrl' | 'id' | 'extension'>>
+  & Partial<Pick<ProjectAsset, 'name' | 'downloadUrl' | 'id' | 'extension' | 'metadata'>>
 
 export type PresetAssetKind = 'wall' | 'floor' | 'road' | 'landform' | 'lod' | 'dice'
 
@@ -146,6 +147,17 @@ const SKYCUBE_PRESENTATION: AssetTypePresentation = {
   color: '#26A69A',
 }
 
+const DEM_TERRAIN_PRESENTATION: AssetTypePresentation = {
+  label: 'DEM Terrain',
+  shortLabel: 'DEM',
+  icon: 'mdi-terrain',
+  color: '#8D6E63',
+}
+
+export function isDemTerrainPresentationAsset(asset: AssetTypePresentationSource): boolean {
+  return readTerrainPackAssetMetadata(asset?.metadata?.terrainPack)?.kind === 'dem'
+}
+
 function isSkycubeFileAsset(asset: AssetTypePresentationSource): boolean {
   if (asset.type !== 'file') {
     return false
@@ -194,6 +206,9 @@ function resolvePresetPresentation(asset: AssetTypePresentationSource): AssetTyp
 }
 
 export function getAssetTypePresentation(asset: AssetTypePresentationSource): AssetTypePresentation {
+  if (isDemTerrainPresentationAsset(asset)) {
+    return DEM_TERRAIN_PRESENTATION
+  }
   const presetPresentation = resolvePresetPresentation(asset)
   if (presetPresentation) {
     return presetPresentation

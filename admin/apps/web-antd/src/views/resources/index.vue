@@ -1606,6 +1606,10 @@ onMounted(async () => {
           贴图 {{ packResult.pack.textureCount }} 张（KTX2 {{ packResult.pack.ktx2Count || 0 }}） · 包内文件 {{ packResult.pack.fileCount }} 个 · 共
           {{ formatFileSize(packResult.pack.totalBytes || 0) }}
         </div>
+        <div v-if="packResult.pack.runtimeGrid">
+          运行时地形网格：{{ packResult.pack.runtimeGrid.format }} ·
+          {{ formatFileSize(packResult.pack.runtimeGrid.bytes || 0) }}
+        </div>
         <div v-for="warning in packResult.pack.warnings || []" :key="warning" style="color: #d46b08">
           提示：{{ warning }}
         </div>

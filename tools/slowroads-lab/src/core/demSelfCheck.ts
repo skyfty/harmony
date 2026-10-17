@@ -4,6 +4,7 @@ import { createTerrainBounds } from './terrainBounds'
 import { createTerrainGridSurface, sampleRoadCrossSection } from './terrainSurface'
 import { createTerrainGridMeshBuilder } from '../lab/terrainGridMesh'
 import type { SelfCheckResult } from './selfCheck'
+import { resolveTreeLodBands } from './treeLod'
 
 function makeSyntheticGrid(): DemTerrainGrid {
   return {
@@ -103,6 +104,26 @@ export function runDemTerrainChecks(): SelfCheckResult[] {
     builder.geometry?.getAttribute('position').count === 9
       && builder.geometry?.getIndex()?.count === 24,
   )
+
+  for (const [nearDistance, meshRadius] of [
+    [190, 90],
+    [40, 90],
+    [300, 300],
+    [190, 0],
+  ] as const) {
+    const bands = resolveTreeLodBands(nearDistance, meshRadius)
+    const monotonic = bands.cardNear > 0
+      && bands.cardNear < bands.cardFar
+      && (meshRadius === 0
+        ? bands.meshNear === 0 && bands.meshFar === 0
+        : bands.meshNear >= 0 && bands.meshNear < bands.meshFar && bands.meshFar < bands.cardNear)
+    record(
+      `tree LOD bands ${nearDistance}/${meshRadius}`,
+      monotonic,
+      `${bands.meshNear.toFixed(1)}<${bands.meshFar.toFixed(1)}`
+        + `<${bands.cardNear.toFixed(1)}<${bands.cardFar.toFixed(1)}`,
+    )
+  }
 
   return results
 }

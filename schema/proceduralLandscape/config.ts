@@ -13,6 +13,33 @@ export interface ProceduralLandscapeSamplingProps {
   maxSampleGridSize: number
 }
 
+export type ProceduralLandscapeDemSampleStep = 'auto' | 1 | 2 | 4
+
+export interface ProceduralLandscapeDemProps {
+  /** Server DEM pack asset id; null keeps the legacy GLB terrain path. */
+  assetId: string | null
+  /** Preprocessed, deflate-compressed runtime grid URL. */
+  runtimeGridUrl: string | null
+  runtimeGridBytes: number | null
+  sampleStep: ProceduralLandscapeDemSampleStep
+  sourceZipName: string | null
+  width: number | null
+  height: number | null
+  cellSizeMeters: number | null
+  minElevation: number | null
+  maxElevation: number | null
+  anchor: {
+    latitudeDegrees: number
+    longitudeDegrees: number
+    groundElevationMeters: number
+  } | null
+  crs: {
+    epsg: number
+    zone: number
+    hemisphere: 'north' | 'south'
+  } | null
+}
+
 export interface ProceduralLandscapeSurfaceProps {
   /** 地表混合（lab showSurface）：false = proceduralLandscape 完全不接管 GLB 材质。 */
   enabled: boolean
@@ -54,6 +81,8 @@ export interface ProceduralLandscapeRoadProps {
   waypoints: RoadWaypoint[]
   /** Guide tolerance in meters: step advances to the next waypoint within it. */
   waypointTolerance: number
+  /** Maximum lateral deviation from the straight chord for a two-point path. */
+  pathDeviation: number
   /** Null traces until the terrain boundary. */
   maxLength: number | null
   stepLength: number
@@ -145,6 +174,7 @@ export interface ProceduralLandscapeComponentProps {
   generationRevision: number
   quality: ProceduralLandscapeQuality
   sampling: ProceduralLandscapeSamplingProps
+  dem: ProceduralLandscapeDemProps
   surface: ProceduralLandscapeSurfaceProps
   road: ProceduralLandscapeRoadProps
   forest: ProceduralLandscapeForestProps
@@ -262,6 +292,20 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       sampleCellSize: 2,
       maxSampleGridSize: 2048,
     },
+    dem: {
+      assetId: null,
+      runtimeGridUrl: null,
+      runtimeGridBytes: null,
+      sampleStep: 'auto',
+      sourceZipName: null,
+      width: null,
+      height: null,
+      cellSizeMeters: null,
+      minElevation: null,
+      maxElevation: null,
+      anchor: null,
+      crs: null,
+    },
     surface: {
       enabled: true,
       textures: true,
@@ -282,6 +326,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       shoulderWidth: 2.5,
       waypoints: [],
       waypointTolerance: 12,
+      pathDeviation: 60,
       maxLength: null,
       stepLength: 8,
       feelDistance: 24,
@@ -349,6 +394,7 @@ export function clampProceduralLandscapeProps(
 ): ProceduralLandscapeComponentProps {
   const defaults = createDefaultProceduralLandscapeProps({ id: fallbackNodeId })
   const sampling = props?.sampling as Partial<ProceduralLandscapeSamplingProps> | undefined
+  const dem = props?.dem as Partial<ProceduralLandscapeDemProps> | undefined
   const surface = props?.surface as Partial<ProceduralLandscapeSurfaceProps> | undefined
   const road = props?.road as Partial<ProceduralLandscapeRoadProps> | undefined
   const forest = props?.forest as Partial<ProceduralLandscapeForestProps> | undefined
@@ -375,6 +421,25 @@ export function clampProceduralLandscapeProps(
   const quality = props?.quality === 'low' || props?.quality === 'medium' || props?.quality === 'high' || props?.quality === 'auto'
     ? props.quality
     : defaults.quality
+  const demSampleStep: ProceduralLandscapeDemSampleStep = dem?.sampleStep === 1 || dem?.sampleStep === 2 || dem?.sampleStep === 4
+    ? dem.sampleStep
+    : 'auto'
+  const demAnchor = dem?.anchor && Number.isFinite(dem.anchor.latitudeDegrees)
+    && Number.isFinite(dem.anchor.longitudeDegrees)
+    && Number.isFinite(dem.anchor.groundElevationMeters)
+    ? {
+        latitudeDegrees: dem.anchor.latitudeDegrees,
+        longitudeDegrees: dem.anchor.longitudeDegrees,
+        groundElevationMeters: dem.anchor.groundElevationMeters,
+      }
+    : null
+  const demCrs = dem?.crs && Number.isFinite(dem.crs.epsg) && Number.isFinite(dem.crs.zone)
+    ? {
+        epsg: Math.round(dem.crs.epsg),
+        zone: Math.round(dem.crs.zone),
+        hemisphere: dem.crs.hemisphere === 'south' ? 'south' as const : 'north' as const,
+      }
+    : null
 
   return {
     seed: Math.round(clampNumber(props?.seed, defaults.seed, 0, 0xffffffff)) >>> 0,
@@ -383,6 +448,24 @@ export function clampProceduralLandscapeProps(
     sampling: {
       sampleCellSize: clampNumber(sampling?.sampleCellSize, defaults.sampling.sampleCellSize, 0.5, 16),
       maxSampleGridSize: Math.round(clampNumber(sampling?.maxSampleGridSize, defaults.sampling.maxSampleGridSize, 128, 4096)),
+    },
+    dem: {
+      assetId: typeof dem?.assetId === 'string' && dem.assetId.trim().length ? dem.assetId.trim() : null,
+      runtimeGridUrl: typeof dem?.runtimeGridUrl === 'string' && dem.runtimeGridUrl.trim().length
+        ? dem.runtimeGridUrl.trim()
+        : null,
+      runtimeGridBytes: clampNullableNumber(dem?.runtimeGridBytes, null, 0, Number.MAX_SAFE_INTEGER),
+      sampleStep: demSampleStep,
+      sourceZipName: typeof dem?.sourceZipName === 'string' && dem.sourceZipName.trim().length
+        ? dem.sourceZipName.trim()
+        : null,
+      width: clampNullableNumber(dem?.width, null, 2, 100000),
+      height: clampNullableNumber(dem?.height, null, 2, 100000),
+      cellSizeMeters: clampNullableNumber(dem?.cellSizeMeters, null, 0.01, 100000),
+      minElevation: clampNullableNumber(dem?.minElevation, null, -1e6, 1e6),
+      maxElevation: clampNullableNumber(dem?.maxElevation, null, -1e6, 1e6),
+      anchor: demAnchor,
+      crs: demCrs,
     },
     surface: {
       enabled: surface?.enabled !== false,
@@ -405,6 +488,7 @@ export function clampProceduralLandscapeProps(
       shoulderWidth: clampNumber(road?.shoulderWidth, defaults.road.shoulderWidth, 0, 10),
       waypoints: clampRoadWaypoints(road?.waypoints),
       waypointTolerance: clampNumber(road?.waypointTolerance, defaults.road.waypointTolerance, 4, 100),
+      pathDeviation: clampNumber(road?.pathDeviation, defaults.road.pathDeviation, 10, 200),
       maxLength: clampNullableNumber(road?.maxLength, defaults.road.maxLength, 16, 100000),
       stepLength: clampNumber(road?.stepLength, defaults.road.stepLength, 2, 32),
       feelDistance: clampNumber(road?.feelDistance, defaults.road.feelDistance, 4, 80),
@@ -480,6 +564,11 @@ export function cloneProceduralLandscapeProps(
   return {
     ...props,
     sampling: { ...props.sampling },
+    dem: {
+      ...props.dem,
+      anchor: props.dem.anchor ? { ...props.dem.anchor } : null,
+      crs: props.dem.crs ? { ...props.dem.crs } : null,
+    },
     surface: { ...props.surface },
     road: {
       ...props.road,

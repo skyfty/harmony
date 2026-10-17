@@ -207,6 +207,12 @@ export interface ResourcePackSummary {
   textureCount: number;
   totalBytes: number;
   warnings: string[];
+  runtimeGrid?: {
+    url: string;
+    bytes: number | null;
+    format: string | null;
+    compression: string | null;
+  } | null;
 }
 
 export interface ResourcePackUploadResult {

@@ -14,6 +14,13 @@ import {
   collectTerrainMeshSources,
 } from './terrainSampler'
 import {
+  createDemTerrainHeightGrid,
+  createDemTerrainMeshBuilder,
+  loadTerrainDemRuntimeGrid,
+  type DemTerrainMeshBuilder,
+} from './demTerrain'
+import type { TerrainDemRuntimeGridData } from '../terrainDemRuntimeGrid'
+import {
   buildTerrainSurfaceSampler,
   type TerrainSurfaceBounds,
   type TerrainSurfaceSampler,
@@ -110,6 +117,7 @@ import {
   sampleRoadRowColumns,
   type RoadBandRow,
 } from './roadBandRows'
+import { createDemRoadbedGeometry } from './demRoadbed'
 import {
   activeRoadWaypoints,
   clampProceduralLandscapeProps,
@@ -126,6 +134,7 @@ import {
   type ResolvedProceduralLandscapeQuality,
 } from './config'
 import { transformRoadWaypointsToWorld, type RoadWaypoint } from './roadWaypoints'
+import { planEndpointRoadGuide } from './endpointPath'
 import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
 
 const TREE_BATCH_RELEASE_PADDING = 48
@@ -170,6 +179,7 @@ const FAR_FOREST_MIN_BAND_WIDTH = 64
 const FAR_FOREST_SPECIES_CAPACITY_FACTOR = 0.8
 
 let sharedPlaceholderTexture: THREE.DataTexture | null = null
+let sharedRoadFallbackTexture: THREE.DataTexture | null = null
 
 /** 1x1 透明贴图：保持所有 sampler 有绑定，真实素材到达前 alphaTest 全部丢弃。 */
 function getSharedPlaceholderTexture(): THREE.DataTexture {
@@ -187,6 +197,28 @@ function getSharedPlaceholderTexture(): THREE.DataTexture {
     sharedPlaceholderTexture.needsUpdate = true
   }
   return sharedPlaceholderTexture
+}
+
+/**
+ * Opaque asphalt fallback used until the seasonal road textures finish
+ * downloading. The transparent 1x1 placeholder would make the road shader
+ * discard every fragment, so the road would vanish for the whole load.
+ */
+function getSharedRoadFallbackTexture(): THREE.DataTexture {
+  if (!sharedRoadFallbackTexture) {
+    sharedRoadFallbackTexture = new THREE.DataTexture(
+      new Uint8Array([62, 60, 58, 255]),
+      1,
+      1,
+      THREE.RGBAFormat,
+      THREE.UnsignedByteType,
+    )
+    sharedRoadFallbackTexture.minFilter = THREE.NearestFilter
+    sharedRoadFallbackTexture.magFilter = THREE.NearestFilter
+    sharedRoadFallbackTexture.generateMipmaps = false
+    sharedRoadFallbackTexture.needsUpdate = true
+  }
+  return sharedRoadFallbackTexture
 }
 
 export type ProceduralLandscapeStatsPhase =
@@ -248,6 +280,16 @@ export interface ProceduralLandscapeRuntimeStats {
   waterFloodedFraction: number
   /** 当前生效的雾/视距尺度倍率（1 = 与官方/lab 逐字一致）。 */
   viewDistanceScale: number
+  /** DEM runtime source status (null asset keeps the GLB terrain path). */
+  demStatus: 'inactive' | 'idle' | 'loading' | 'building' | 'ready' | 'error'
+  demSourceBytes: number | null
+  demSampleStep: number
+  demBuildMs: number
+  demError: string | null
+  /** DEM nodes are translation-only; non-identity rotation/scale is reported here. */
+  demTransformWarning: string | null
+  /** GPU-bound position/normal/index bytes of the generated DEM mesh. */
+  demMeshBytes: number
 }
 
 export interface ProceduralLandscapeEnvironmentState {
@@ -492,6 +534,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let props = clampProceduralLandscapeProps(null, hooks.nodeId)
   let previousKeys = {
     grid: jsonKey(props.sampling),
+    dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
     world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
     instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
     uniforms: jsonKey([props.surface, props.canopy, props.wind, props.road.flattenBand, props.road.flattenStrength]),
@@ -504,10 +547,24 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let disposed = false
   let hostObject: THREE.Object3D | null = null
   let hostMatrixSnapshot: THREE.Matrix4 | null = null
+  const hostRotationSnapshot = new THREE.Quaternion()
+  const hostScaleSnapshot = new THREE.Vector3(1, 1, 1)
   let foliageRoot: THREE.Group | null = null
   let debugRoot: THREE.Group | null = null
   let gridBuilder: TerrainGridBuilder | null = null
   let grid: TerrainHeightGrid | null = null
+  let demGridData: TerrainDemRuntimeGridData | null = null
+  let demMeshBuilder: DemTerrainMeshBuilder | null = null
+  let demMesh: THREE.Mesh | null = null
+  let demLoadPromise: Promise<void> | null = null
+  let demLoadToken = 0
+  let demSourceKey = ''
+  let demBuildStartedAt = 0
+  let demBuildMs = 0
+  let demTransformWarning: string | null = null
+  let demTransformWarningActive = false
+  let demRoadbedMesh: THREE.Mesh | null = null
+  let demRoadbedHalfWidth = 0
   let densityField: LandscapeDensityField | null = null
   let variationField: LandscapeDensityField | null = null
   let forestMaskTexture: THREE.DataTexture | null = null
@@ -635,6 +692,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     waterLevel: 0,
     waterFloodedFraction: 0,
     viewDistanceScale: 1,
+    demStatus: 'inactive',
+    demSourceBytes: null,
+    demSampleStep: 1,
+    demBuildMs: 0,
+    demError: null,
+    demTransformWarning: null,
+    demMeshBytes: 0,
   }
   statsRegistry.set(hooks.nodeId, stats)
 
@@ -739,6 +803,169 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return out
   }
 
+  function usesDemTerrain(): boolean {
+    return Boolean(props.dem.assetId && props.dem.runtimeGridUrl)
+  }
+
+  function resolveDemSampleStep(): number {
+    if (props.dem.sampleStep === 1 || props.dem.sampleStep === 2 || props.dem.sampleStep === 4) {
+      return props.dem.sampleStep
+    }
+    // Large DEM grids are for authoring in the editor; preview and the
+    // mini-program viewer use coarser runtime grids by default.
+    if (currentEnvironment === 'preview') {
+      return 2
+    }
+    if (currentEnvironment === 'viewer') {
+      return 4
+    }
+    const quality = resolveQuality()
+    return quality === 'low' ? 4 : quality === 'medium' ? 2 : 1
+  }
+
+  /** Keep vegetation off the DEM cut/fill roadbed, not just off the asphalt. */
+  function resolveForestRoadClearance(): number {
+    const base = props.forest.roadClearance
+    return demRoadbedHalfWidth > 0 ? Math.max(base, demRoadbedHalfWidth) : base
+  }
+
+  function disposeDemMesh(): void {
+    if (demMesh) {
+      demMesh.removeFromParent()
+      demMesh.geometry.dispose()
+      const material = demMesh.material
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry.dispose())
+      } else {
+        material.dispose()
+      }
+      demMesh = null
+    }
+    demMeshBuilder = null
+  }
+
+  function disposeDemRoadbed(): void {
+    if (!demRoadbedMesh) {
+      demRoadbedHalfWidth = 0
+      return
+    }
+    demRoadbedMesh.removeFromParent()
+    demRoadbedMesh.geometry.dispose()
+    const material = demRoadbedMesh.material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry.dispose())
+    } else {
+      material.dispose()
+    }
+    demRoadbedMesh = null
+    demRoadbedHalfWidth = 0
+  }
+
+  function disposeDemSource(): void {
+    demLoadToken += 1
+    demLoadPromise = null
+    demGridData = null
+    disposeDemRoadbed()
+    disposeDemMesh()
+    demSourceKey = ''
+    demBuildMs = 0
+    stats.demMeshBytes = 0
+    stats.demStatus = usesDemTerrain() ? 'idle' : 'inactive'
+    stats.demSourceBytes = null
+    stats.demError = null
+  }
+
+  function startDemLoad(): void {
+    if (!usesDemTerrain() || demLoadPromise) {
+      return
+    }
+    const key = `${props.dem.assetId}|${props.dem.runtimeGridUrl}|${resolveDemSampleStep()}`
+    demSourceKey = key
+    const token = ++demLoadToken
+    stats.demStatus = 'loading'
+    stats.demError = null
+    stats.demSourceBytes = props.dem.runtimeGridBytes
+    demLoadPromise = loadTerrainDemRuntimeGrid(props.dem.runtimeGridUrl!, (value) => {
+      if (token === demLoadToken) {
+        stats.progress = Math.max(stats.progress, value * 0.35)
+      }
+    })
+      .then((data) => {
+        if (token !== demLoadToken) {
+          return
+        }
+        demGridData = data
+        demMeshBuilder = createDemTerrainMeshBuilder(data, resolveDemSampleStep())
+        stats.demSourceBytes = data.heights.byteLength
+        stats.demStatus = 'building'
+        demBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+        dirty.grid = true
+      })
+      .catch((error) => {
+        if (token !== demLoadToken) {
+          return
+        }
+        demLoadPromise = null
+        stats.demStatus = 'error'
+        stats.demError = error instanceof Error ? error.message : String(error)
+        gridFailed = true
+        dirty.grid = false
+        warn(`dem-load-failed:${stats.demError}`)
+      })
+  }
+
+  function stepDemBuild(): boolean {
+    if (!hostObject) {
+      return false
+    }
+    if (!demGridData) {
+      startDemLoad()
+      return false
+    }
+    if (!demMeshBuilder) {
+      demMeshBuilder = createDemTerrainMeshBuilder(demGridData, resolveDemSampleStep())
+      demBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+      stats.demStatus = 'building'
+    }
+    const ready = demMeshBuilder.step(8)
+    demBuildMs = demMeshBuilder.done
+      ? (typeof performance !== 'undefined' ? performance.now() : Date.now()) - demBuildStartedAt
+      : 0
+    stats.demBuildMs = demBuildMs
+    stats.progress = 0.35 + demMeshBuilder.progress * 0.65
+    if (!ready) {
+      return false
+    }
+    const demGeometry = demMeshBuilder.geometry
+    if (!demGeometry) {
+      stats.demStatus = 'error'
+      stats.demError = 'DEM terrain mesh generation failed'
+      gridFailed = true
+      return false
+    }
+    disposeDemMesh()
+    const positionBytes = demGeometry.getAttribute('position')?.array?.byteLength ?? 0
+    const normalBytes = demGeometry.getAttribute('normal')?.array?.byteLength ?? 0
+    const indexBytes = demGeometry.getIndex()?.array?.byteLength ?? 0
+    stats.demMeshBytes = positionBytes + normalBytes + indexBytes
+    const material = new THREE.MeshLambertMaterial({ color: 0xffffff })
+    const mesh = new THREE.Mesh(demGeometry, material)
+    mesh.name = `slowroads-dem-terrain-${hooks.nodeId}`
+    mesh.userData.proceduralLandscapeDemTerrain = true
+    hostObject.add(mesh)
+    demMesh = mesh
+    const hostWorld = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
+    grid = createDemTerrainHeightGrid(demGridData, hostWorld.x, hostWorld.z, hostWorld.y)
+    currentTerrainSourceSignature = `dem:${demSourceKey}`
+    gridFailed = false
+    stats.demStatus = 'ready'
+    dirty.grid = false
+    dirty.world = false
+    buildWorld()
+    installSurfaceInjection()
+    return true
+  }
+
   function disposeSurfaceState(): void {
     surfacePatch?.restore()
     surfacePatch = null
@@ -757,6 +984,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
   function disposeWorldState(): void {
     releaseAllBatches()
+    disposeDemRoadbed()
     forestMaskTexture?.dispose()
     forestMaskTexture = null
     variationTexture?.dispose()
@@ -831,7 +1059,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       props.forest.minScale,
       props.forest.maxScale,
       props.forest.maxSlope,
-      props.forest.roadClearance,
+      resolveForestRoadClearance(),
       props.water.levelOffset,
       grid.cols,
       grid.rows,
@@ -982,7 +1210,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       outerRadius: tier.radius,
       budget: tier.budget,
       maxSlope: props.forest.maxSlope,
-      roadClearance: roadHalfWidth(props) + props.road.shoulderWidth + props.forest.roadClearance,
+      roadClearance: roadHalfWidth(props) + props.road.shoulderWidth + resolveForestRoadClearance(),
       waterLevel: resolveWaterLevel(),
       minScale: props.forest.minScale,
       maxScale: props.forest.maxScale,
@@ -1031,6 +1259,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     disposeWorldState()
     disposeWaterAndBarrier()
     disposeFarForestRing()
+    disposeDemMesh()
     gridBuilder = null
     grid = null
   }
@@ -1041,23 +1270,73 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     hostObject.updateMatrixWorld(true)
     hostMatrixSnapshot = hostObject.matrixWorld.clone()
+    hostObject.matrixWorld.decompose(new THREE.Vector3(), hostRotationSnapshot, hostScaleSnapshot)
     hostInverse.copy(hostObject.matrixWorld).invert()
   }
 
   const hostInverse = new THREE.Matrix4()
 
-  function hostMatrixChanged(): boolean {
+  /**
+   * Classify host changes so a DEM node can be translated without rebuilding
+   * its 1.8M-vertex mesh. Rotation and scale remain unsupported for DEM.
+   */
+  function resolveHostTransformChange(): 'none' | 'translation' | 'other' {
     if (!hostObject || !hostMatrixSnapshot) {
-      return false
+      return 'none'
     }
     hostObject.updateMatrixWorld(true)
     const matrix = hostObject.matrixWorld
+    let changed = false
     for (let i = 0; i < 16; i += 1) {
       if (Math.abs(matrix.elements[i]! - hostMatrixSnapshot.elements[i]!) > 1e-6) {
-        return true
+        changed = true
+        break
       }
     }
-    return false
+    if (!changed) {
+      return 'none'
+    }
+    const position = new THREE.Vector3()
+    const rotation = new THREE.Quaternion()
+    const scale = new THREE.Vector3()
+    matrix.decompose(position, rotation, scale)
+    const rotationDot = Math.abs(
+      rotation.x * hostRotationSnapshot.x
+      + rotation.y * hostRotationSnapshot.y
+      + rotation.z * hostRotationSnapshot.z
+      + rotation.w * hostRotationSnapshot.w,
+    )
+    const rotationDelta = 2 * Math.acos(Math.min(1, rotationDot))
+    const scaleDelta = Math.max(
+      Math.abs(scale.x - hostScaleSnapshot.x),
+      Math.abs(scale.y - hostScaleSnapshot.y),
+      Math.abs(scale.z - hostScaleSnapshot.z),
+    )
+    return rotationDelta > 1e-5 || scaleDelta > 1e-5 ? 'other' : 'translation'
+  }
+
+  function applyHostTransformChange(kind: 'none' | 'translation' | 'other'): void {
+    if (kind === 'none' || !hostObject) {
+      return
+    }
+    updateHostSnapshot()
+    if (
+      kind === 'translation'
+      && usesDemTerrain()
+      && demGridData
+      && stats.demStatus === 'ready'
+    ) {
+      // The DEM mesh is a child of the host and already moved with it. Refresh
+      // only the world-space height grid so roads/vegetation follow the node.
+      const world = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
+      grid = createDemTerrainHeightGrid(demGridData, world.x, world.z, world.y)
+      dirty.world = true
+      dirty.instances = true
+      forceStream = true
+      return
+    }
+    resetAll()
+    dirty.grid = true
   }
 
   function collectSurfaceMeshes(): THREE.Mesh[] {
@@ -1134,6 +1413,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!hostObject) {
       return
     }
+    if (usesDemTerrain()) {
+      return
+    }
     const { signature } = resolveTerrainMeshSources(hostObject)
     if (signature === currentTerrainSourceSignature) {
       return
@@ -1152,6 +1434,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!grid) {
       return
     }
+    // The previous roadbed is a surface mesh under the host; remove it before
+    // resolving terrain triangles so it cannot be mistaken for raw DEM.
+    disposeDemRoadbed()
     const activeGrid = grid
     const bounds = { minX: grid.minX, minZ: grid.minZ, sizeX: grid.maxX - grid.minX, sizeZ: grid.maxZ - grid.minZ }
     densityField = buildForestDensityField({
@@ -1184,14 +1469,28 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     //（startX/startZ/headingRad）由此不再被组件触发。
     const waypointWorld = resolveRoadWaypointsWorld()
     if (props.road.enabled && waypointWorld.length >= 2) {
+      let traceWaypoints = waypointWorld
+      if (waypointWorld.length === 2) {
+        const planned = planEndpointRoadGuide(grid, waypointWorld[0]!, waypointWorld[1]!, {
+          maxDeviation: props.road.pathDeviation,
+          roadHalfWidth: roadHalfWidth(props),
+          shoulderWidth: props.road.shoulderWidth,
+          maxSlope: props.road.maxSlope,
+          seed: props.seed,
+        })
+        if (planned.warning) {
+          warn(planned.warning)
+        }
+        traceWaypoints = planned.guide
+      }
       // 起点取自路径首点，初始朝向取自首点到次点的走向；首两点重合时
       // traceRoadPath 回退到下面传入的种子朝向。
       roadResult = traceRoadPath(grid, {
         startX: waypointWorld[0]!.x,
         startZ: waypointWorld[0]!.z,
         headingRad: resolveSeedHeadingRad(props.seed),
-        waypoints: waypointWorld,
-        waypointTolerance: props.road.waypointTolerance,
+        waypoints: traceWaypoints,
+        waypointTolerance: waypointWorld.length === 2 ? 4 : props.road.waypointTolerance,
         stepLength: props.road.stepLength,
         feelDistance: props.road.feelDistance,
         feelAngleRad: roadFeelAngleRad(props),
@@ -1200,6 +1499,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         maxLength: props.road.maxLength,
         margin: Math.max(grid.cellSize * 2, roadHalfWidth(props) + props.road.shoulderWidth + 2),
       })
+      if (waypointWorld.length === 2 && roadResult.nodes.length > 1) {
+        const end = waypointWorld[1]!
+        const last = roadResult.nodes[roadResult.nodes.length - 1]!
+        const endY = grid.sampleHeight(end.x, end.z)
+        if (endY != null) {
+          const previous = roadResult.nodes[roadResult.nodes.length - 2]!
+          last.x = end.x
+          last.z = end.z
+          last.y = endY
+          last.heading = Math.atan2(end.z - previous.z, end.x - previous.x)
+        }
+      }
       if (roadResult.nodes.length > 1) {
         const halfWidth = roadHalfWidth(props)
         // 贴合地形：高度场（数十公里地形上格距 22m）对折坡/山脊是低通近似，
@@ -1227,8 +1538,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           sampleRoadRowColumns(node, sampledSurfaceHeightAt, halfWidth, 1, maxLateralDrop)[0]!
         ))
         roadBandRows = densifyRoadRows(roadResult.nodes, ROAD_BAND_ROW_SPACING)
+        // DEM roads use one design height per row (no lateral bank). The
+        // roadbed below provides the cut/fill transition to the raw terrain.
         roadBandColumns = roadBandRows.map((row) => (
-          sampleRoadRowColumns(row, sampledSurfaceHeightAt, halfWidth, ROAD_BAND_COLUMN_COUNT, maxLateralDrop)
+          usesDemTerrain()
+            ? new Array<number>(ROAD_BAND_COLUMN_COUNT).fill(row.y)
+            : sampleRoadRowColumns(row, sampledSurfaceHeightAt, halfWidth, ROAD_BAND_COLUMN_COUNT, maxLateralDrop)
         ))
         const influence = Math.max(48, props.road.flattenBand + 8, roadHalfWidth(props) + props.road.shoulderWidth + props.grass.corridorWidth + 8)
         roadFieldData = buildRoadFieldData(roadResult.nodes, {
@@ -1255,6 +1570,33 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           warn('road-proximity-index-mismatch')
         } else {
           unwarn('road-proximity-index-mismatch')
+        }
+        if (usesDemTerrain() && hostObject && roadBandRows) {
+          const sideWidth = Math.max(12, activeGrid.cellSize * 0.75)
+          const coverageWidth = Math.max(4, activeGrid.cellSize * 0.25)
+          const roadbed = createDemRoadbedGeometry({
+            rows: roadBandRows,
+            halfWidth,
+            shoulderWidth: props.road.shoulderWidth,
+            sideWidth,
+            coverageWidth,
+            lateralStep: Math.max(2, Math.min(6, activeGrid.cellSize * 0.1)),
+            roadDrop: 0.02,
+            edgeDrop: 0.06,
+            rawHeightAt: sampledSurfaceHeightAt,
+            hostInverse,
+          })
+          if (roadbed) {
+            const mesh = new THREE.Mesh(
+              roadbed.geometry,
+              new THREE.MeshLambertMaterial({ color: 0xffffff }),
+            )
+            mesh.name = `slowroads-dem-roadbed-${hooks.nodeId}`
+            mesh.userData.proceduralLandscapeDemRoadbed = true
+            hostObject.add(mesh)
+            demRoadbedMesh = mesh
+            demRoadbedHalfWidth = roadbed.meshHalfWidth
+          }
         }
       }
       if (roadResult.nodes.length <= 1 || !roadFieldData) {
@@ -1662,27 +2004,31 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   /** 当前季节 + 路宽对应的官方路面贴图集（单车道 `roadSingle` / 宽路 `road` + 划线）。 */
   function roadBandTexturesFor(season: SeasonId): RoadBandTextures {
     const entry = SEASON_CATALOG[season]
-    const placeholder = getSharedPlaceholderTexture()
+    const roadFallback = getSharedRoadFallbackTexture()
     if (isSingleTrackRoad(roadHalfWidth(props) * 2)) {
       return {
-        base: textureFor(entry.road.single.base.id) ?? placeholder,
-        overlay: entry.road.single.overlay ? textureFor(entry.road.single.overlay.id) : null,
+        base: textureFor(entry.road.single.base.id) ?? roadFallback,
+        overlay: entry.road.single.overlay
+          ? textureFor(entry.road.single.overlay.id) ?? roadFallback
+          : null,
         paint: null,
         textureStretch: entry.road.single.stretch ?? 2,
       }
     }
     const paint = entry.road.wide.paint
     return {
-      base: textureFor(entry.road.wide.base.id) ?? placeholder,
-      overlay: entry.road.wide.overlay ? textureFor(entry.road.wide.overlay.id) : null,
+      base: textureFor(entry.road.wide.base.id) ?? roadFallback,
+      overlay: entry.road.wide.overlay
+        ? textureFor(entry.road.wide.overlay.id) ?? roadFallback
+        : null,
       paint: paint
         ? {
-            dashed: textureFor(paint.dashed.id) ?? placeholder,
-            solid: textureFor(paint.solid.id) ?? placeholder,
-            solidLeft: textureFor(paint.solidLeft.id) ?? placeholder,
-            solidRight: textureFor(paint.solidRight.id) ?? placeholder,
-            mergeLeft: textureFor(paint.mergeLeft.id) ?? placeholder,
-            mergeRight: textureFor(paint.mergeRight.id) ?? placeholder,
+            dashed: textureFor(paint.dashed.id) ?? roadFallback,
+            solid: textureFor(paint.solid.id) ?? roadFallback,
+            solidLeft: textureFor(paint.solidLeft.id) ?? roadFallback,
+            solidRight: textureFor(paint.solidRight.id) ?? roadFallback,
+            mergeLeft: textureFor(paint.mergeLeft.id) ?? roadFallback,
+            mergeRight: textureFor(paint.mergeRight.id) ?? roadFallback,
           }
         : null,
       textureStretch: entry.road.wide.stretch ?? 1,
@@ -1716,6 +2062,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const entry = SEASON_CATALOG[seasonAssetsSeason ?? currentSeason]
     const params = SEASON_PARAMS[seasonAssetsSeason ?? currentSeason]
     const placeholder = getSharedPlaceholderTexture()
+    uniforms.uPlShowTextures.value = props.surface.textures && seasonAssets ? 1 : 0
     uniforms.uPlSeasonIndex.value = params.index
     uniforms.uPlGrassColA.value.set(params.grassColA)
     uniforms.uPlGrassColB.value.set(params.grassColB)
@@ -1749,7 +2096,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlGravelTint.value.set(props.surface.gravelTint)
     uniforms.uPlRockSlope.value = props.surface.rockSlopeThreshold
     uniforms.uPlShowCanopy.value = props.canopy.enabled ? 1 : 0
-    uniforms.uPlShowTextures.value = props.surface.textures ? 1 : 0
+    // Keep the palette path until the seasonal set is complete; otherwise the
+    // transparent placeholder would render the terrain black while loading.
+    uniforms.uPlShowTextures.value = props.surface.textures && seasonAssets ? 1 : 0
     uniforms.uPlFresnelIntensity.value = appliedLighting.fresnel
     foliageUniforms.meshRadius.value = resolveNearTreeRadius()
     // 近树卡/远景树的切分层级距离与 dissolve 区间同源（lab：lod1Horizon 由近树卡距离推出）。
@@ -2107,7 +2456,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         chunkSize,
         densityMultiplier: props.forest.density,
         maxSlope: props.forest.maxSlope,
-        roadClearance: props.forest.roadClearance,
+        roadClearance: resolveForestRoadClearance(),
         roadHalfWidth: roadHalfWidth(props),
         roadShoulderWidth: props.road.shoulderWidth,
         minScale: props.forest.minScale,
@@ -2547,6 +2896,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!hostObject) {
       return
     }
+    surfacePatch?.restore()
+    surfacePatch = null
     surfaceMeshes = collectSurfaceMeshes()
     surfacePatch = applyProceduralLandscapeSurfaceInjection(surfaceMeshes, uniforms)
     if (!surfacePatch.hasInjection && !surfaceWarningEmitted) {
@@ -2576,13 +2927,44 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       ? 'disabled'
       : gridFailed
         ? 'error'
-        : gridBuilder
+        : gridBuilder || (usesDemTerrain() && stats.demStatus !== 'ready')
           ? 'sampling'
           : dirty.world || dirty.instances
             ? 'generating'
             : 'streaming'
-    stats.progress = gridBuilder ? gridBuilder.progress : grid ? 1 : 0
+    stats.progress = gridBuilder
+      ? gridBuilder.progress
+      : usesDemTerrain() && demMeshBuilder
+        ? 0.35 + demMeshBuilder.progress * 0.65
+        : grid ? 1 : 0
     stats.quality = resolveQuality()
+    if (!usesDemTerrain()) {
+      stats.demStatus = 'inactive'
+      stats.demSourceBytes = null
+      stats.demError = null
+      demTransformWarning = null
+    } else {
+      stats.demSampleStep = resolveDemSampleStep()
+      stats.demBuildMs = demBuildMs
+      const rotationAngle = 2 * Math.acos(Math.min(1, Math.abs(hostRotationSnapshot.w)))
+      const scaleDelta = Math.max(
+        Math.abs(hostScaleSnapshot.x - 1),
+        Math.abs(hostScaleSnapshot.y - 1),
+        Math.abs(hostScaleSnapshot.z - 1),
+      )
+      demTransformWarning = rotationAngle > 0.01 || scaleDelta > 1e-4
+        ? 'DEM 地形仅支持平移：旋转或缩放会让道路、植被与高程采样错位。'
+        : null
+      if (demTransformWarning) {
+        if (!demTransformWarningActive) {
+          warn('dem-transform-unsupported')
+        }
+        demTransformWarningActive = true
+      } else {
+        demTransformWarningActive = false
+      }
+    }
+    stats.demTransformWarning = demTransformWarning
     stats.treeInstances = treeInstances
     stats.grassInstances = grassInstances
     stats.bushInstances = bushInstances
@@ -2595,6 +2977,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.gridCellSize = grid?.cellSize ?? 0
     stats.averageEdgeLength = grid?.averageEdgeLength ?? 0
     stats.memoryBytes = (grid?.memoryBytes ?? 0)
+      + stats.demMeshBytes
       + (densityField?.memoryBytes ?? 0)
       + (variationField?.memoryBytes ?? 0)
       + (roadFieldData?.memoryBytes ?? 0)
@@ -2796,19 +3179,31 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     ensureRoots()
-    if (hostMatrixChanged()) {
-      resetAll()
-      updateHostSnapshot()
-      dirty.grid = true
-    }
+    applyHostTransformChange(resolveHostTransformChange())
     if (elapsedMs - lastSourceCheckAt >= SOURCE_CHECK_INTERVAL_MS) {
       lastSourceCheckAt = elapsedMs
       checkTerrainSourceChanges()
     }
     syncSeasonFromFrameState()
 
+    if (props.dem.assetId && !props.dem.runtimeGridUrl) {
+      stats.demStatus = 'error'
+      stats.demError = 'DEM 资源包缺少 runtime grid，请重新上传。'
+      gridFailed = true
+      updateStats()
+      return
+    }
+
     if (dirty.grid) {
-      if (!gridBuilder) {
+      if (usesDemTerrain()) {
+        const ready = stepDemBuild()
+        if (!ready) {
+          updateStats()
+          return
+        }
+        dirty.grid = false
+        dirty.world = false
+      } else if (!gridBuilder) {
         if (!props.sampling || !hostObject) {
           return
         }
@@ -2818,20 +3213,26 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           cellSize: props.sampling.sampleCellSize,
           maxGridSize: props.sampling.maxSampleGridSize,
         })
+      } else {
+        const ready = stepGridBuild()
+        if (!ready || !grid) {
+          updateStats()
+          return
+        }
+        dirty.grid = false
+        dirty.world = false
       }
-      const ready = stepGridBuild()
-      if (!ready || !grid) {
-        updateStats()
-        return
-      }
-      dirty.grid = false
-      dirty.world = false
     }
 
     if (dirty.world) {
       dirty.world = false
       buildWorld()
       rebuildRoadDebugLine()
+      // DEM world rebuilds (road edits, host translation) create a fresh
+      // roadbed mesh; re-inject the seasonal surface so it is not left white.
+      if (usesDemTerrain()) {
+        installSurfaceInjection()
+      }
     }
     if (dirty.uniforms) {
       dirty.uniforms = false
@@ -2878,10 +3279,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   const runtime: ProceduralLandscapeRuntime = {
     attach(host: THREE.Object3D | null): void {
       if (disposed || hostObject === host) {
-        if (host && hostMatrixChanged()) {
-          resetAll()
-          updateHostSnapshot()
-          dirty.grid = true
+        if (host) {
+          applyHostTransformChange(resolveHostTransformChange())
         }
         return
       }
@@ -2923,6 +3322,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       props = clampProceduralLandscapeProps(next, hooks.nodeId)
       const keys = {
         grid: jsonKey(props.sampling),
+        dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
         world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
         instances: jsonKey([props.forest, props.grass, props.bushes, props.quality]),
         uniforms: jsonKey([
@@ -2940,7 +3340,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         roadDebug: jsonKey(props.debug.showRoadPath),
         chunkDebug: jsonKey(props.debug.showChunks),
       }
-      if (keys.grid !== previousKeys.grid) {
+      if (keys.dem !== previousKeys.dem) {
+        disposeDemSource()
+      }
+      if (keys.grid !== previousKeys.grid || keys.dem !== previousKeys.dem) {
         dirty.grid = true
         gridBuilder = null
         grid = null
@@ -2997,6 +3400,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
       disposed = true
       resetAll()
+      disposeDemSource()
       for (const handle of foliageMaterials.values()) {
         handle.material.dispose()
       }

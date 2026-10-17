@@ -45,7 +45,10 @@ let runtimeStatsTimer: number | null = null
 
 function refreshRuntimeStats(): void {
   const nodeId = selectedNodeId.value
-  runtimeStats.value = nodeId ? getProceduralLandscapeStats(nodeId) : null
+  const next = nodeId ? getProceduralLandscapeStats(nodeId) : null
+  // The runtime updates its stats object in place. Reassigning that same
+  // reference is a no-op for Vue's ref setter, so copy it to force a render.
+  runtimeStats.value = next ? { ...next, warnings: [...next.warnings] } : null
 }
 
 onMounted(() => {
@@ -135,6 +138,25 @@ function handleRegenerate(): void {
 }
 
 const roadWaypoints = computed(() => propsValue.value?.road.waypoints ?? [])
+const demSource = computed(() => propsValue.value?.dem ?? null)
+const demSampleStepOptions = [
+  { title: '自动（按质量档）', value: 'auto' },
+  { title: '30m', value: 1 },
+  { title: '60m', value: 2 },
+  { title: '120m', value: 4 },
+]
+const demStatusLabel = computed(() => {
+  const status = runtimeStats.value?.demStatus
+  if (status === 'ready') return '已加载'
+  if (status === 'loading') return '下载中'
+  if (status === 'building') return '构建中'
+  if (status === 'error') return '错误'
+  return '待加载'
+})
+function handleDemSampleStepChange(value: string | number): void {
+  const sampleStep = value === 'auto' ? 'auto' : Number(value) === 2 ? 2 : Number(value) === 4 ? 4 : 1
+  patchGroup('dem', { sampleStep })
+}
 /** ≥2 个路径点才会生成道路，道路起点即路径首点。 */
 const roadWaypointMode = computed(() => roadWaypoints.value.length >= 2)
 const roadPathEditing = computed(
@@ -223,8 +245,15 @@ const samplingBlocks: FieldBlock[] = [
 // 道路起点与朝向完全由手绘路径决定，这里只保留跟随参数。
 const roadPathBlock = computed<FieldBlock>(() => ({
   title: '路径',
-  hint: roadWaypointMode.value ? undefined : '至少 2 个路径点才会生成道路',
-  rows: [[{ key: 'waypointTolerance', label: '途经容差', suffix: 'm', step: 2 }]],
+  hint: roadWaypointMode.value
+    ? (roadWaypoints.value.length === 2
+      ? '两个端点会自动在偏差范围内寻找平滑路线'
+      : '按绘制顺序经过所有路径点')
+    : '至少 2 个路径点才会生成道路',
+  rows: [[
+    { key: 'waypointTolerance', label: '途经容差', suffix: 'm', step: 2 },
+    { key: 'pathDeviation', label: '端点偏差上限', suffix: 'm', step: 5 },
+  ]],
 }))
 
 // 官方路型预设（`roadStyle.ROAD_WIDTH_PRESETS`）。路型由路宽自动决定：
@@ -532,7 +561,46 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
     <v-expansion-panel-text>
       <div v-if="propsValue" class="pl-panel">
 
-   
+        <!-- DEM 地形数据源 -->
+        <div v-if="demSource?.assetId" class="pl-section pl-dem-section">
+          <div class="pl-section__title">
+            <span class="pl-section__name">DEM 地形</span>
+            <span class="pl-dem-status" :class="`is-${runtimeStats?.demStatus ?? 'idle'}`">{{ demStatusLabel }}</span>
+          </div>
+          <div class="pl-hint">
+            {{ demSource.sourceZipName || demSource.assetId }}
+            <template v-if="demSource.width && demSource.height">
+              · {{ demSource.width }}×{{ demSource.height }}
+            </template>
+            <template v-if="demSource.cellSizeMeters"> · {{ demSource.cellSizeMeters.toFixed(1) }}m</template>
+          </div>
+          <div v-if="demSource.minElevation != null && demSource.maxElevation != null" class="pl-hint">
+            高程 {{ demSource.minElevation.toFixed(1) }}–{{ demSource.maxElevation.toFixed(1) }}m
+            <template v-if="demSource.crs"> · EPSG:{{ demSource.crs.epsg }}</template>
+          </div>
+          <v-select
+            :model-value="demSource.sampleStep"
+            label="地形网格"
+            density="compact"
+            variant="underlined"
+            hide-details
+            :items="demSampleStepOptions"
+            item-title="title"
+            item-value="value"
+            :disabled="!componentEnabled"
+            @update:model-value="handleDemSampleStepChange"
+          />
+          <div v-if="runtimeStats?.demError" class="pl-hint pl-hint--error">{{ runtimeStats.demError }}</div>
+          <div v-else-if="runtimeStats?.demStatus === 'ready'" class="pl-hint">
+            网格构建 {{ runtimeStats.demBuildMs.toFixed(0) }}ms · 采样步长 {{ runtimeStats.demSampleStep }}×
+            <template v-if="runtimeStats.demMeshBytes > 0">
+              · 几何 {{ (runtimeStats.demMeshBytes / 1048576).toFixed(0) }}MB
+            </template>
+          </div>
+          <div v-if="runtimeStats?.demTransformWarning" class="pl-hint pl-hint--error">
+            {{ runtimeStats.demTransformWarning }}
+          </div>
+        </div>
 
         <!-- 生成 -->
         <div class="pl-section">
@@ -983,6 +1051,21 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
   font-size: 0.7rem;
   line-height: 1.35;
   color: rgba(233, 236, 241, 0.62);
+}
+
+.pl-hint--error {
+  color: #ff8a80;
+}
+
+.pl-dem-status {
+  flex: none;
+  font-size: 0.68rem;
+  font-weight: 500;
+  color: rgba(126, 200, 255, 0.9);
+}
+
+.pl-dem-status.is-error {
+  color: #ff8a80;
 }
 
 /* 运行统计（只读）：紧凑多行键值，不做成输入控件 */

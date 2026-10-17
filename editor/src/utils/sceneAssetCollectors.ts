@@ -108,6 +108,12 @@ export function collectRuntimeModelNodesByAssetId(
     if (!node) {
       continue
     }
+    if ((node.userData as Record<string, unknown> | undefined)?.proceduralLandscapeDem === true) {
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...node.children)
+      }
+      continue
+    }
 
     const rawLayout = (node as { instanceLayout?: unknown }).instanceLayout
     const layout = rawLayout
@@ -143,6 +149,15 @@ export function collectSceneNodeDependencyAssetIds(
   while (stack.length) {
     const node = stack.pop()
     if (!node) {
+      continue
+    }
+    const isDemTerrainNode = (node.userData as Record<string, unknown> | undefined)?.proceduralLandscapeDem === true
+    if (isDemTerrainNode) {
+      // The DEM ZIP never becomes a runtime model; proceduralLandscape loads
+      // the compact runtime grid from its own URL instead.
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...node.children)
+      }
       continue
     }
 

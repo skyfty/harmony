@@ -996,6 +996,14 @@ function collectSourceAssetIds(nodes: SceneNode[]): Set<string> {
     if (!node) {
       continue
     }
+    if ((node.userData as Record<string, unknown> | undefined)?.proceduralLandscapeDem === true) {
+      // DEM terrain is rendered from the compact runtime grid; the ZIP is not
+      // a model asset and must stay out of the mesh preload set.
+      if (Array.isArray(node.children) && node.children.length) {
+        stack.push(...node.children)
+      }
+      continue
+    }
     const assetId = typeof node.sourceAssetId === 'string' ? node.sourceAssetId.trim() : ''
     if (assetId) {
       ids.add(assetId)

@@ -65,6 +65,7 @@ import {
   resolveTerrainPackPrimaryAssetType,
   type ParsedTerrainPackArchive,
 } from '@/services/terrainPackService'
+import { buildTerrainDemRuntimeGrid } from '@/services/terrainDemRuntimeGridService'
 import { readTerrainPackAssetMetadata } from '@harmony/schema/terrainPack'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
@@ -2648,6 +2649,12 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     const existingMetadata = readTerrainPackAssetMetadata(
       (existingMaster.metadata as Record<string, unknown> | undefined)?.terrainPack,
     )
+    if (
+      (existingMetadata?.kind ?? parsedArchive.kind) === 'dem'
+      && !existingMetadata?.runtimeGridUrl
+    ) {
+      ctx.throw(409, '该 DEM 资源包是旧版本，缺少 runtime grid；请删除旧资产后重新上传。')
+    }
     const existingCategory = await AssetCategoryModel.findById(existingMaster.categoryId).exec()
     await refreshManifest()
     ctx.body = {
@@ -2662,6 +2669,14 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
         ktx2Count: (existingMetadata?.textures ?? []).filter((entry) => entry.ktx2File).length,
         totalBytes: existingMetadata?.totalBytes ?? parsedArchive.summary.totalBytes,
         warnings: existingMetadata?.warnings ?? [],
+        runtimeGrid: existingMetadata?.runtimeGridUrl
+          ? {
+              url: existingMetadata.runtimeGridUrl,
+              bytes: existingMetadata.runtimeGridBytes ?? null,
+              format: existingMetadata.runtimeGridFormat ?? null,
+              compression: existingMetadata.runtimeGridCompression ?? null,
+            }
+          : null,
       },
     }
     return
@@ -2697,9 +2712,54 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       writtenFileKeys.push(stored.fileKey)
     }
 
+    let runtimeGridMetadata: {
+      file: string
+      url: string
+      bytes: number
+      format: 'hdem-v1'
+      compression: 'deflate'
+      filledRatio: number
+    } | null = null
+    let runtimeWarnings: string[] = []
+    if (parsedArchive.kind === 'dem' && parsedArchive.sidecar) {
+      const demFile = parsedArchive.summary.demFile
+      const demBytes = demFile ? parsedArchive.entryByPath.get(demFile.toLowerCase()) : null
+      if (!demBytes) {
+        ctx.throw(400, 'DEM 资源包缺少 dem.tif。')
+      }
+      let runtimeGrid: Awaited<ReturnType<typeof buildTerrainDemRuntimeGrid>>
+      try {
+        runtimeGrid = await buildTerrainDemRuntimeGrid({
+          demBytes: demBytes!,
+          sidecar: parsedArchive.sidecar,
+        })
+      } catch (error) {
+        ctx.throw(400, error instanceof Error ? error.message : 'DEM runtime grid generation failed')
+      }
+      const runtimeGridFile = 'runtime/dem-grid.bin'
+      const storedRuntimeGrid = await storeBufferAtExactKey(runtimeGrid.bytes, {
+        fileKey: `${packKey}/${runtimeGridFile}`,
+        mimeType: 'application/octet-stream',
+      })
+      writtenFileKeys.push(storedRuntimeGrid.fileKey)
+      runtimeGridMetadata = {
+        file: runtimeGridFile,
+        url: storedRuntimeGrid.url,
+        bytes: runtimeGrid.bytes.byteLength,
+        format: 'hdem-v1',
+        compression: 'deflate',
+        filledRatio: runtimeGrid.grid.filledRatio,
+      }
+      runtimeWarnings = runtimeGrid.warnings
+    }
+
     const primaryType = resolveTerrainPackPrimaryAssetType(parsedArchive.kind)
-    const packWarnings = [...parsedArchive.summary.warnings, ...plan.warnings]
-    const primaryMetadata = buildTerrainPackAssetMetadata({ archive: parsedArchive, packKey })
+    const packWarnings = [...parsedArchive.summary.warnings, ...plan.warnings, ...runtimeWarnings]
+    const primaryMetadata = buildTerrainPackAssetMetadata({
+      archive: parsedArchive,
+      packKey,
+      runtimeGrid: runtimeGridMetadata,
+    })
     primaryMetadata.warnings = packWarnings
     const primaryAsset = await AssetModel.create({
       name: packageName,
@@ -2744,7 +2804,13 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       reused: false,
       category: mapCategoryTreeNode(categoryDocumentToTreeNode(category)),
       asset: await mapAssetDocumentWithLookup(populatedPrimary!),
-      pack: { ...buildTerrainPackResponsePack(parsedArchive), warnings: packWarnings },
+      pack: {
+        ...buildTerrainPackResponsePack(parsedArchive),
+        warnings: packWarnings,
+        runtimeGrid: runtimeGridMetadata
+          ? { ...runtimeGridMetadata }
+          : null,
+      },
     }
   } catch (error) {
     for (const fileKey of writtenFileKeys) {

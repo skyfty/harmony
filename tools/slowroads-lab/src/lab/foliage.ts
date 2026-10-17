@@ -90,8 +90,15 @@ export interface FoliageMeshOptions {
   shared: FoliageSharedUniforms
   /** 距离分层：near 只显示近处、far 只显示远处、all 始终显示。 */
   tier?: FoliageTier
-  /** Static global-forest cards: hide inside the near-card radius. */
-  distantOnly?: boolean
+  /**
+   * Tree LOD crossfade. `near-card` hides cards inside the 3D radius and fades
+   * them out toward far cards; `far-card` fades in from the near-card band.
+   */
+  lodFade?: {
+    mode: 'near-card' | 'far-card'
+    near: number
+    far: number
+  }
   /** Rotate the single card toward the camera without the imposter UV path. */
   staticBillboard?: boolean
   /** 只用单片面（护栏等薄片物体）。 */
@@ -202,8 +209,9 @@ uniform float uNearDistance;
 uniform float uMeshRadius;
 uniform float uTierMode;
 uniform float uSinglePlane;
-uniform float uDistantOnly;
 uniform float uStaticBillboard;
+/** 0 = none, 1 = near-card handoff, 2 = far-card handoff. */
+uniform float uLodFadeMode;
 uniform float uWindStrength;
 uniform float uDistanceAlpha;
 uniform float uPaletteMode;
@@ -240,6 +248,7 @@ varying float vAlphaTest;
 varying float vAO;
 varying float vShadow;
 varying float vDissolve;
+varying float vLodHidden;
 varying vec3 vGroundNormal;
 varying vec2 vCardUv;
 varying float vTreeDiscolouration;
@@ -262,6 +271,7 @@ void main() {
     vec4 instWorld = modelMatrix * vec4(0.0, 0.0, 0.0, 1.0);
   #endif
   float dist = distance(instWorld.xyz, uCameraPos);
+  float distXZ = distance(instWorld.xz, uCameraPos.xz);
   float isNear = step(dist, uNearDistance);
   float insideMeshRadius = step(dist, uMeshRadius);
   float far = 1.0 - isNear;
@@ -273,15 +283,21 @@ void main() {
     // 3D 近树网格接管：近层实例在网格半径内让位。
     collapse = max(collapse, insideMeshRadius);
   }
-  // 官方树卡/远景树用距离 dissolve 接管 LOD 交接，不再做硬性分层折叠；
-  // 近树卡仍在 3D 网格半径内让位。
-  if (uDynamicAlpha > 0.5) {
-    collapse = insideMeshRadius;
-  } else if (uBillboard > 0.5) {
+  if (uBillboard > 0.5) {
     collapse = 0.0;
   }
-  if (uDistantOnly > 0.5 && dist < uNearDistance) {
-    collapse = 1.0;
+  // All tree LOD boundaries use the same horizontal metric. Near cards hand
+  // off from the 3D meshes, then dissolve into the far cards; the two dither
+  // thresholds are complementary so there is no hard visibility edge.
+  float cardHide = smoothstep(uDissolveNear, uDissolveFar, distXZ);
+  vLodHidden = 0.0;
+  if (uLodFadeMode > 1.5) {
+    vLodHidden = 1.0 - cardHide;
+  } else if (uLodFadeMode > 0.5) {
+    float meshHide = uMeshRadius > 0.001
+      ? 1.0 - smoothstep(uMeshRadius * 0.66, uMeshRadius, distXZ)
+      : 0.0;
+    vLodHidden = max(meshHide, cardHide);
   }
   float phase = srInstanceNoise(instWorld.xz);
 
@@ -458,11 +474,16 @@ varying float vAlphaTest;
 varying float vAO;
 varying float vShadow;
 varying float vDissolve;
+varying float vLodHidden;
 varying vec3 vGroundNormal;
 varying vec2 vCardUv;
 #include <fog_pars_fragment>
 
 float screen(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
+
+float srLodDither(vec2 world, vec2 uv) {
+  return fract(sin(dot(world + uv * 17.0, vec2(12.9898, 78.233))) * 43758.5453);
+}
 
 /** 官方 grass 顶点里的 cameraDist：实例到相机的水平距离平方。 */
 float srCameraDistSq(vec3 worldPos) {
@@ -474,8 +495,7 @@ void main() {
   vec4 texel = texture2D(uAtlas, vUv + vUvOffset);
   float cutAlpha = max(uAlphaTest, vAlphaTest);
   if (uDynamicAlpha > 0.5) {
-    // 官方近树卡（Lu）：noise dissolve 抠洞，随后用动态 alphaTest 裁切。
-    if (vDissolve > 0.999 || texture2D(uNoiseMap, vCardUv).r < vDissolve) discard;
+    // 近树卡的 LOD 交接现在统一由 vLodHidden 处理，这里只保留动态 alpha。
     cutAlpha = vAlphaTest;
   } else if (uBillboard > 0.5) {
     // 官方 imposter（Bu）：先按视角在相邻朝向列之间混合，再按 dissolve 抠洞。
@@ -494,6 +514,11 @@ void main() {
   // 官方 alphaMap 走绿通道（three 语义）。
   float alpha = mix(texel.a, texture2D(uAlphaTex, vUv).g, uHasAlphaTex);
   if (alpha < cutAlpha) discard;
+  if (vLodHidden > 0.001) {
+    if (vLodHidden > 0.999 || srLodDither(vInstancePos.xz, vCardUv) < vLodHidden) {
+      discard;
+    }
+  }
   vec3 color = texel.rgb * uTint;
 
   // ---- slowroads 草丛调色板 -------------------------------------------------
@@ -687,14 +712,14 @@ export function createFoliageMesh(
       uMeshRadius: options.shared.meshRadius,
       uTierMode: { value: TIER_MODE[options.tier ?? 'all'] },
       uSinglePlane: { value: options.singlePlane ? 1 : 0 },
-      uDistantOnly: { value: options.distantOnly ? 1 : 0 },
       uStaticBillboard: { value: options.staticBillboard ? 1 : 0 },
+      uLodFadeMode: { value: options.lodFade?.mode === 'near-card' ? 1 : options.lodFade?.mode === 'far-card' ? 2 : 0 },
       uDistanceAlpha: { value: options.distanceAlpha ? 1 : 0 },
       // 官方树卡/远景树 LOD：近树卡 = 动态 alpha + 距离 dissolve，远景树 = 朝相机广告牌。
       uDynamicAlpha: { value: options.card?.kind === 'near' ? 1 : 0 },
       uBillboard: { value: options.card?.kind === 'far' ? 1 : 0 },
-      uDissolveNear: { value: options.card?.dissolveNear ?? 100 },
-      uDissolveFar: { value: options.card?.dissolveFar ?? 200 },
+      uDissolveNear: { value: options.lodFade?.near ?? options.card?.dissolveNear ?? 100 },
+      uDissolveFar: { value: options.lodFade?.far ?? options.card?.dissolveFar ?? 200 },
       uDissolveInterval: { value: Math.max(1e-3, options.card?.dissolveInterval ?? 100) },
       uUseDensityShadow: { value: options.densityMap ? 1 : 0 },
       uDensityMap: { value: options.densityMap ?? atlasTexture },

@@ -22,14 +22,16 @@
   },
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
-    "@harmony/schema": "file:../schema",
     "@harmony/physics-cannon": "file:../physics-cannon",
+    "@harmony/schema": "file:../schema",
     "@koa/cors": "^5.0.0",
     "@types/three": "^0.186.0",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "fflate": "^0.8.2",
     "fs-extra": "^11.2.0",
+    "generator-function": "^2.0.1",
+    "geotiff": "^3.0.5",
     "jsonwebtoken": "^9.0.2",
     "koa": "^2.15.3",
     "koa-body": "^6.0.1",
@@ -43,12 +45,11 @@
     "openai": "^4.56.1",
     "three": "^0.186.0",
     "tsx": "^4.15.7",
-    "ws": "^8.18.3",
-    "generator-function": "^2.0.1"
+    "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@harmony/tools": "file:../tools",
     "@harmony/schema": "file:../schema",
+    "@harmony/tools": "file:../tools",
     "@types/bcryptjs": "^2.4.6",
     "@types/fs-extra": "^11.0.4",
     "@types/jsonwebtoken": "^9.0.6",

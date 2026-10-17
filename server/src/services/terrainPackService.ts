@@ -165,6 +165,14 @@ export function resolveTerrainPackPrimaryAssetType(kind: TerrainPackKind): Asset
 export function buildTerrainPackAssetMetadata(input: {
   archive: ParsedTerrainPackArchive
   packKey: string
+  runtimeGrid?: {
+    file: string
+    url: string
+    bytes: number
+    format: 'hdem-v1'
+    compression: 'deflate'
+    filledRatio: number
+  } | null
 }): TerrainPackAssetMetadata {
   const { archive, packKey } = input
   const metadata: TerrainPackAssetMetadata = {
@@ -186,6 +194,11 @@ export function buildTerrainPackAssetMetadata(input: {
     metadata.sidecarFile = archive.summary.sidecarFile
     metadata.demFile = archive.summary.demFile
     metadata.orthoFile = archive.summary.orthoFile
+    metadata.demWidth = archive.sidecar?.dem.width ?? null
+    metadata.demHeight = archive.sidecar?.dem.height ?? null
+    metadata.demCellSizeMeters = archive.sidecar?.dem.cellSizeMeters ?? null
+    metadata.demMinElevation = archive.sidecar?.dem.minElevationMeters ?? null
+    metadata.demMaxElevation = archive.sidecar?.dem.maxElevationMeters ?? null
     if (archive.sidecar) {
       metadata.anchor = {
         latitudeDegrees: archive.sidecar.anchor.latitudeDegrees,
@@ -196,6 +209,14 @@ export function buildTerrainPackAssetMetadata(input: {
         epsg: archive.sidecar.crs.epsg,
         zone: archive.sidecar.crs.zone,
         hemisphere: archive.sidecar.crs.hemisphere,
+      }
+      if (input.runtimeGrid) {
+        metadata.runtimeGridFile = input.runtimeGrid.file
+        metadata.runtimeGridUrl = input.runtimeGrid.url
+        metadata.runtimeGridBytes = input.runtimeGrid.bytes
+        metadata.runtimeGridFormat = input.runtimeGrid.format
+        metadata.runtimeGridCompression = input.runtimeGrid.compression
+        metadata.runtimeGridFilledRatio = input.runtimeGrid.filledRatio
       }
     }
   }

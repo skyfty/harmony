@@ -21,7 +21,7 @@ interface ParsedTreeModel {
 }
 
 const TREE_UNIT_SIZE = 8
-const UPDATE_DISTANCE = 24
+const UPDATE_DISTANCE = 4
 const MAX_INSTANCES_PER_MESH = 4000
 
 function parseTreeBin(buffer: ArrayBuffer): ParsedTreeModel {
@@ -81,6 +81,8 @@ varying float vLeafBrightness;
 varying float vRadianceBlend;
 /** 官方树卡变色乘数（顶点按噪声幅度换算：≈1±factor/2）。 */
 varying float vTreeDiscolouration;
+varying float vLodHidden;
+varying vec2 vFadeSeed;
 /** 官方 vCameraUp：世界空间的相机上方向（无 roll 时即 (0,1,0)）。 */
 varying vec3 vCameraUp;
 uniform sampler2D uDensityMap;
@@ -91,6 +93,9 @@ uniform float uTreeDiscolourationFactor;
 uniform float uWorldSize;
 uniform float uWorldHalf;
 uniform float uShadowFactor;
+uniform vec3 uCameraPos;
+uniform float uFadeNear;
+uniform float uFadeFar;
 #include <fog_pars_vertex>
 void main() {
   #ifdef USE_INSTANCING
@@ -106,6 +111,11 @@ void main() {
   // 官方近树：vLeafBrightness = 1 - density × shadowFactor × saturate((10 - 模型高度m)/3)
   // （lab 用与地形/树卡同源的树密度图近似官方 per-instance density 属性）。
   vec3 instOrigin = instModel[3].xyz;
+  vFadeSeed = instOrigin.xz;
+  float distXZ = distance(instOrigin.xz, uCameraPos.xz);
+  vLodHidden = uFadeFar > uFadeNear
+    ? smoothstep(uFadeNear, uFadeFar, distXZ)
+    : 0.0;
   float density = clamp(texture2D(uDensityMap, (instOrigin.xz + uWorldHalf) / uWorldSize).r * 1.15, 0.0, 1.0);
   float heightMeters = position.y * length(instModel[1].xyz);
   vLeafBrightness = 1.0 - density * uShadowFactor * clamp((10.0 - heightMeters) / 3.0, 0.0, 1.0);
@@ -148,7 +158,12 @@ varying vec3 vWorldNormal;
 varying mat3 vBasis;
 varying float vLeafBrightness;
 varying float vRadianceBlend;
+varying float vLodHidden;
+varying vec2 vFadeSeed;
 #include <fog_pars_fragment>
+float srMeshLodDither(vec2 world, vec2 uv) {
+  return fract(sin(dot(world + uv * 17.0, vec2(12.9898, 78.233))) * 43758.5453);
+}
 void main() {
   vec4 texel = texture2D(uAtlas, vUv);
   // 官方共享近树材质（xr()）：alphaMap 走绿通道，阔叶 alphaTest .5（贴图 alpha）、
@@ -156,6 +171,11 @@ void main() {
   float alpha = mix(texel.a, texture2D(uAlphaTex, vUv).g, uHasAlphaTex);
   if (alpha < uAlphaTest) {
     discard;
+  }
+  if (vLodHidden > 0.001) {
+    if (vLodHidden > 0.999 || srMeshLodDither(vFadeSeed, vUv) < vLodHidden) {
+      discard;
+    }
   }
   vec3 color = texel.rgb;
   vec3 normal = normalize(vWorldNormal);
@@ -225,6 +245,7 @@ export interface TreeMeshManager {
   readonly container: THREE.Group
   /** 重新流式装配近处实例（相机移动超过阈值或世界/季节重建时调用）。 */
   update(cameraPosition: THREE.Vector3, placements: TreePlacement[], radius: number, force?: boolean): void
+  setLodBand(near: number, far: number): void
   setSeason(state: TreeMeshSeasonState): void
   setVisible(visible: boolean): void
   readonly instanceCount: number
@@ -273,6 +294,9 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
       uDensityMap: { value: options.densityMap },
       uWorldSize: { value: options.worldSize },
       uWorldHalf: { value: options.worldSize * 0.5 },
+      uCameraPos: options.shared.cameraPosition,
+      uFadeNear: { value: 0 },
+      uFadeFar: { value: 0 },
     },
     vertexShader: MESH_VERTEX_SHADER,
     fragmentShader: MESH_FRAGMENT_SHADER,
@@ -358,6 +382,12 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
   return {
     container,
     update,
+    setLodBand(near: number, far: number): void {
+      for (const material of materials) {
+        material.uniforms.uFadeNear!.value = near
+        material.uniforms.uFadeFar!.value = far
+      }
+    },
     setSeason(state: TreeMeshSeasonState): void {
       materials[0]!.uniforms.uAtlas!.value = state.textures.broadleafD
       materials[0]!.uniforms.uNormalTex!.value = state.textures.broadleafN

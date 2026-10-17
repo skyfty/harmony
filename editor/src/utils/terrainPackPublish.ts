@@ -18,7 +18,8 @@ export function isTerrainGeometryPackAsset(asset: ProjectAsset | null | undefine
 
 /** Geometry packs stay server-sourced, so they must never be embedded. */
 export function shouldSkipTerrainPackEmbedding(asset: ProjectAsset | null | undefined): boolean {
-  return isTerrainGeometryPackAsset(asset)
+  const kind = readTerrainPackAssetMetadata(asset?.metadata?.terrainPack)?.kind
+  return kind === 'geometry' || kind === 'dem'
 }
 
 export function resolveTerrainPackExternalAssetUrl(asset: ProjectAsset | null | undefined): string | null {

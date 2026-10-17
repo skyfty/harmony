@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
+import * as THREE from 'three'
 import { storeToRefs } from 'pinia'
 import { Splitpanes, Pane } from 'splitpanes'
 import 'splitpanes/dist/splitpanes.css'
@@ -43,6 +44,8 @@ import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
+import { isTerrainDemPackAsset } from '@/utils/terrainPackLibrary'
+import { readTerrainPackAssetMetadata } from '@schema/terrainPack'
 import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
 import { exportProjectAssetFile } from '@/utils/assetExport'
@@ -809,6 +812,9 @@ function assetExportError(asset: ProjectAsset): string | null {
  * asset cache download error so the newest feedback stays visible.
  */
 function assetCardError(asset: ProjectAsset): string | null {
+  if (isTerrainDemPackAsset(asset) && !readTerrainPackAssetMetadata(asset.metadata?.terrainPack)?.runtimeGridUrl) {
+    return 'DEM 资源包缺少 runtime grid，请重新上传'
+  }
   return assetExportError(asset) ?? assetDownloadError(asset)
 }
 
@@ -1034,6 +1040,14 @@ async function handleAddAsset(asset: ProjectAsset) {
       : sceneStore.ensureSceneAssetRegistered(preparedAsset)
     assetCacheStore.setError(sceneAsset.id, null)
 
+    if (isTerrainDemPackAsset(sceneAsset)) {
+      const selectedCenter = currentNode?.id ? sceneStore.getNodeWorldCenter(currentNode.id) : null
+      await sceneStore.spawnDemTerrainAtWorldTransform(sceneAsset.id, {
+        position: selectedCenter ?? new THREE.Vector3(0, 0, 0),
+      })
+      return
+    }
+
     if (sceneAsset.type === 'prefab') {
       await sceneStore.preparePrefabAsset(sceneAsset.id, {
         prefabAssetIdForDownloadProgress: sceneAsset.id,
@@ -1120,6 +1134,12 @@ function refreshGallery() {
 
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   const preparedAsset = prepareAssetForOperations(asset)
+  if (isTerrainDemPackAsset(preparedAsset)) {
+    sceneStore.ensureSceneAssetRegistered(preparedAsset, {
+      providerId: providerIdForAsset(preparedAsset) ?? undefined,
+      packagePathSegments: assetPackagePathMap.value.get(preparedAsset.id) ?? [],
+    })
+  }
   if (preparedAsset.type === 'prefab') {
     primePrefabAsset(preparedAsset)
   }
@@ -3672,6 +3692,9 @@ function assetPreviewStyle(asset: ProjectAsset): { backgroundColor?: string } | 
 }
 
 async function ensureAssetPreview(asset: ProjectAsset) {
+  if (isTerrainDemPackAsset(asset)) {
+    return
+  }
   const cacheId = resolveAssetCacheId(asset)
   if (assetCacheStore.hasCache(cacheId) || assetCacheStore.isDownloading(cacheId)) {
     return
