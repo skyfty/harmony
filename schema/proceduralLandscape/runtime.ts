@@ -98,10 +98,8 @@ import { collectSlowroadsShaderAudits } from './shaderAudit'
 import {
   BARRIER_RAIL_REGIONS,
   getBushEntries,
-  getConiferCardRegions,
   getGrassEntries,
   gridRegions,
-  BROADLEAF_CARD_REGIONS,
   type SpriteCellRegion,
   type SpriteRegion,
 } from '../slowroads/core/spriteRegions'
@@ -162,6 +160,15 @@ const TREE_UNIT_SIZE = 8
 const GRASS_UNIT_SIZE = 1.6
 const BUSH_UNIT_SIZE = 2
 const IMPOSTER_REGIONS: SpriteRegion[] = gridRegions(16, 4, 4096, 1024)
+/**
+ * One front-facing imposter per row. The tree-card atlases pack detached
+ * canopies and fallen branches into the same four columns as the upright
+ * trees; using a whole column makes those fragments hover beside every tree.
+ * The imposter atlas contains only complete, upright trees.
+ */
+const STATIC_IMPOSTER_REGIONS: SpriteRegion[] = [0, 1, 2, 3].map(
+  (row) => IMPOSTER_REGIONS[row * 16 + 8]!,
+)
 /** 木护栏段的世界尺寸（lab：单片面 unitSize 0.35m、alphaTest 0.35）。 */
 const BARRIER_UNIT_SIZE = 0.35
 let sharedPlaceholderTexture: THREE.DataTexture | null = null
@@ -564,6 +571,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let gridBuilder: TerrainGridBuilder | null = null
   let grid: TerrainHeightGrid | null = null
   let demGridData: TerrainDemRuntimeGridData | null = null
+  let demGridSampleStep = 1
   let demMeshBuilder: DemTerrainMeshBuilder | null = null
   let demMesh: THREE.Mesh | null = null
   let demWorldBuilt = false
@@ -952,7 +960,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     if (!demWorldBuilt) {
       const hostWorld = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
-      grid = createDemTerrainHeightGrid(demGridData, hostWorld.x, hostWorld.z, hostWorld.y)
+      demGridSampleStep = resolveDemSampleStep()
+      grid = createDemTerrainHeightGrid(
+        demGridData,
+        hostWorld.x,
+        hostWorld.z,
+        hostWorld.y,
+        demGridSampleStep,
+      )
       currentTerrainSourceSignature = `dem-raw:${demSourceKey}`
       gridFailed = false
       buildWorld()
@@ -962,7 +977,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return false
     }
     if (!demMeshBuilder) {
-      demMeshBuilder = createDemTerrainMeshBuilder(demGridData, resolveDemSampleStep(), {
+      demMeshBuilder = createDemTerrainMeshBuilder(demGridData, demGridSampleStep, {
         roadbed: demRoadbedTarget,
       })
       demBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -1131,16 +1146,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       tier: 'all',
       species,
       singlePlane: true,
-      staticBillboard: true,
+      staticBillboard: false,
       alphaTestOverride: species === 1 ? 0.12 : 0.15,
       tint: 0xffffff,
       farTintScale: 1,
       hasAlphaTexture: false,
-      hasNormalTexture: species === 0,
-      card: null,
+      hasNormalTexture: true,
+      card: 'far',
       lodFade: 'far-card',
       distanceAlpha: false,
-      useDensityShadow: true,
+      useDensityShadow: false,
       key: `tree:world:${species}`,
     }
   }
@@ -1150,12 +1165,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       kind: 'tree',
       tier: 'all',
       species,
-      singlePlane: false,
-      staticBillboard: false,
+      singlePlane: true,
+      staticBillboard: true,
       tint: 0xffffff,
       farTintScale: 1,
-      hasAlphaTexture: species === 1,
-      hasNormalTexture: species === 0,
+      hasAlphaTexture: false,
+      hasNormalTexture: true,
       card: 'near',
       lodFade: 'near-card',
       distanceAlpha: false,
@@ -1164,19 +1179,27 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
   }
 
-  function treeSpriteForPlacement(placement: TreePlacement, season: SeasonId): FoliageSpriteInstance {
-    const regions = placement.species === 1
-      ? getConiferCardRegions(season)
-      : BROADLEAF_CARD_REGIONS
-    const regionIndex = findRegionIndex(regions, placement.variant)
+  /**
+   * Both near cards and world/far cards use the imposter atlas. The four-column
+   * tree-card atlases contain detached canopies and fallen branches, which read
+   * as floating vegetation and dark strips in the sky when mapped to one card.
+   */
+  function imposterSpriteForPlacement(
+    placement: TreePlacement,
+    staticView: boolean,
+  ): FoliageSpriteInstance {
+    const row = Math.min(3, Math.floor(Math.max(0, Math.min(0.9999, placement.variant)) * 4))
+    const region = staticView
+      ? STATIC_IMPOSTER_REGIONS[row]!
+      : IMPOSTER_REGIONS[row * 16]!
     return {
       x: placement.x,
       y: placement.y,
       z: placement.z,
       rotation: placement.rotation,
       scale: placement.scale / TREE_UNIT_SIZE,
-      region: regions[regionIndex] ?? null,
-      cell: Math.min(3, regionIndex % 4),
+      region,
+      cell: row,
       roadProx: 0,
     }
   }
@@ -1192,11 +1215,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     worldForestPlacements = placements.slice()
     worldForestIndex = createWorldForestPlacementIndex(worldForestPlacements)
-    const season = seasonAssetsSeason ?? currentSeason
     const broadleaf: FoliageSpriteInstance[] = []
     const conifer: FoliageSpriteInstance[] = []
     for (const placement of worldForestPlacements) {
-      ;(placement.species === 1 ? conifer : broadleaf).push(treeSpriteForPlacement(placement, season))
+      ;(placement.species === 1 ? conifer : broadleaf).push(
+        imposterSpriteForPlacement(placement, false),
+      )
     }
     const handleConifer = getFoliageMaterialHandle(farForestMaterialSpec(1))
     const handleBroadleaf = getFoliageMaterialHandle(farForestMaterialSpec(0))
@@ -1206,14 +1230,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         handleBroadleaf.material,
         TREE_UNIT_SIZE,
         hostObject ? hostInverse : null,
-        { singlePlane: true, staticBillboard: true },
+        { singlePlane: true, billboard: true },
       ),
       conifer: createFoliageLayerMesh(
         conifer,
         handleConifer.material,
         TREE_UNIT_SIZE,
         hostObject ? hostInverse : null,
-        { singlePlane: true, staticBillboard: true },
+        { singlePlane: true, billboard: true },
       ),
     }
     farForestRoot.add(farForestLayers.broadleaf, farForestLayers.conifer)
@@ -1297,11 +1321,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     const nearCards = worldForestIndex.queryCircle(camera.x, camera.z, radius)
     disposeNearCardLayers()
-    const season = seasonAssetsSeason ?? currentSeason
     const broadleaf: FoliageSpriteInstance[] = []
     const conifer: FoliageSpriteInstance[] = []
     for (const placement of nearCards) {
-      ;(placement.species === 1 ? conifer : broadleaf).push(treeSpriteForPlacement(placement, season))
+      ;(placement.species === 1 ? conifer : broadleaf).push(
+        imposterSpriteForPlacement(placement, true),
+      )
     }
     const handleConifer = getFoliageMaterialHandle(nearCardMaterialSpec(1))
     const handleBroadleaf = getFoliageMaterialHandle(nearCardMaterialSpec(0))
@@ -1313,12 +1338,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         handleBroadleaf.material,
         TREE_UNIT_SIZE,
         hostInverse,
+        { singlePlane: true, staticBillboard: true },
       ),
       conifer: createFoliageLayerMesh(
         conifer,
         handleConifer.material,
         TREE_UNIT_SIZE,
         hostInverse,
+        { singlePlane: true, staticBillboard: true },
       ),
     }
     farForestRoot.add(nearCardLayers.broadleaf, nearCardLayers.conifer)
@@ -1400,7 +1427,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // The DEM mesh is a child of the host and already moved with it. Refresh
       // only the world-space height grid so roads/vegetation follow the node.
       const world = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
-      grid = createDemTerrainHeightGrid(demGridData, world.x, world.z, world.y)
+      grid = createDemTerrainHeightGrid(demGridData, world.x, world.z, world.y, demGridSampleStep)
       dirty.world = true
       dirty.instances = true
       forceStream = true
@@ -2324,57 +2351,25 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         })
         break
       case 'tree':
-        if (handle.spec.tier === 'near' || handle.spec.card !== null || handle.spec.lodFade !== null) {
-          if (handle.spec.species === 0) {
-            setFoliageMaterialTextures(handle, {
-              atlas: pick(entry.trees.broadleafD.id),
-              normal: pick(entry.trees.broadleafN.id),
-              noise: pick(SHARED_TEXTURES.noise.id),
-              grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
-              detailFar: pick(entry.surface.detailFar.id),
-              cardNoise,
-              densityMap,
-              densityMin,
-              densitySize,
-            })
-          } else {
-            setFoliageMaterialTextures(handle, {
-              atlas: pick(entry.trees.coniferM.id),
-              alpha: pick(entry.trees.coniferA.id),
-              noise: pick(SHARED_TEXTURES.noise.id),
-              grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
-              detailFar: pick(entry.surface.detailFar.id),
-              cardNoise,
-              densityMap,
-              densityMin,
-              densitySize,
-            })
-          }
-        } else if (handle.spec.species === 0) {
-          setFoliageMaterialTextures(handle, {
-            atlas: pick(entry.imposters.mapA.id),
-            normal: pick(entry.imposters.normA.id),
-            noise: pick(SHARED_TEXTURES.noise.id),
-            grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
-            detailFar: pick(entry.surface.detailFar.id),
-            cardNoise,
-            densityMap: null,
-            densityMin,
-            densitySize,
-          })
-        } else {
-          setFoliageMaterialTextures(handle, {
-            atlas: pick(entry.imposters.mapB.id),
-            normal: pick(entry.imposters.normB.id),
-            noise: pick(SHARED_TEXTURES.noise.id),
-            grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
-            detailFar: pick(entry.surface.detailFar.id),
-            cardNoise,
-            densityMap: null,
-            densityMin,
-            densitySize,
-          })
-        }
+        // All procedural-landscape tree cards use the clean imposter atlas.
+        // The tree-card atlas columns contain detached canopies and fallen
+        // branches, which appear as floating trees/dark strips when mapped to
+        // one quad.
+        setFoliageMaterialTextures(handle, {
+          atlas: pick(handle.spec.species === 0
+            ? entry.imposters.mapA.id
+            : entry.imposters.mapB.id),
+          normal: pick(handle.spec.species === 0
+            ? entry.imposters.normA.id
+            : entry.imposters.normB.id),
+          noise: pick(SHARED_TEXTURES.noise.id),
+          grassVariation: pick(SHARED_TEXTURES.grassVariation.id),
+          detailFar: pick(entry.surface.detailFar.id),
+          cardNoise,
+          densityMap: handle.spec.tier === 'near' ? densityMap : null,
+          densityMin,
+          densitySize,
+        })
         break
     }
   }
@@ -2434,17 +2429,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!placements.length) {
       return 0
     }
-    const season = seasonAssetsSeason ?? currentSeason
     const spec: FoliageMaterialSpec = {
       kind: 'tree',
       tier,
       species,
-      singlePlane: tier === 'far',
-      staticBillboard: false,
+      singlePlane: true,
+      staticBillboard: tier === 'near',
       tint: 0xffffff,
       farTintScale: 1,
-      hasAlphaTexture: tier === 'near' && species === 1,
-      hasNormalTexture: tier === 'near' ? species === 0 : true,
+      hasAlphaTexture: false,
+      hasNormalTexture: true,
       // 近树卡 = 动态 alpha + 距离 dissolve（由 forest.nearDistance 推出）；
       // 远景树 = 朝相机广告牌（16 朝向列 + 角度混列）。
       card: tier === 'near' ? 'near' : 'far',
@@ -2456,9 +2450,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     const handle = getFoliageMaterialHandle(spec)
     applyCardDissolveRange(handle)
-    const regions = tier === 'near'
-      ? (species === 0 ? BROADLEAF_CARD_REGIONS : getConiferCardRegions(season))
-      : IMPOSTER_REGIONS
+    const regions = tier === 'near' ? STATIC_IMPOSTER_REGIONS : IMPOSTER_REGIONS
     const instances: FoliageSpriteInstance[] = placements.map((placement) => {
       const regionIndex = findRegionIndex(regions, placement.variant)
       const region = regions[regionIndex] ?? null
@@ -2470,11 +2462,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         // TreePlacement.scale 是米：换算成 8m 基准倍率交给卡层（与近树网格层同一契约）。
         scale: placement.scale / TREE_UNIT_SIZE,
         region,
-        cell: Math.min(3, regionIndex % 4),
+        cell: tier === 'near' ? regionIndex : Math.min(3, regionIndex % 4),
         roadProx: 0,
       }
     })
-    const mesh = createFoliageLayerMesh(instances, handle.material, TREE_UNIT_SIZE, hostObject ? hostInverse : null)
+    const mesh = createFoliageLayerMesh(
+      instances,
+      handle.material,
+      TREE_UNIT_SIZE,
+      hostObject ? hostInverse : null,
+      { singlePlane: true, billboard: tier === 'far', staticBillboard: tier === 'near' },
+    )
     tagArtifact(mesh)
     batch.group.add(mesh)
     batch.layers.push(mesh)

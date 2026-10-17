@@ -46,30 +46,50 @@ export function createDemTerrainHeightGrid(
   worldOffsetX = 0,
   worldOffsetZ = 0,
   worldOffsetY = 0,
+  sampleStep = 1,
 ): TerrainHeightGrid {
   const minX = data.minX + worldOffsetX
   const minZ = data.minZ + worldOffsetZ
   const maxX = data.maxX + worldOffsetX
   const maxZ = data.maxZ + worldOffsetZ
-  // The decoded grid is immutable, so every translated view can share it.
-  const heights = data.heights
+  const step = Math.max(1, Math.min(8, Math.round(sampleStep)))
+  const cols = Math.max(2, Math.floor((data.width - 1) / step) + 1)
+  const rows = Math.max(2, Math.floor((data.height - 1) / step) + 1)
+  const cellSizeX = (data.maxX - data.minX) / (cols - 1)
+  const cellSizeZ = (data.maxZ - data.minZ) / (rows - 1)
+  // Vegetation must sample the same decimated vertices as the rendered DEM
+  // mesh. Sampling the full-resolution raster here makes trees hover over or
+  // sink into the coarse triangles on ridges and steep slopes.
+  const heights = new Float32Array(cols * rows)
+  let minHeight = Number.POSITIVE_INFINITY
+  let maxHeight = Number.NEGATIVE_INFINITY
+  for (let row = 0; row < rows; row += 1) {
+    const sourceRow = Math.min(data.height - 1, row * step)
+    for (let col = 0; col < cols; col += 1) {
+      const sourceCol = Math.min(data.width - 1, col * step)
+      const height = data.heights[sourceRow * data.width + sourceCol]!
+      heights[row * cols + col] = height
+      if (height < minHeight) minHeight = height
+      if (height > maxHeight) maxHeight = height
+    }
+  }
   let coverage = demCoverageCache.get(data)
-  if (!coverage) {
+  if (!coverage || coverage.length !== heights.length) {
     coverage = new Uint8Array(heights.length)
     coverage.fill(1)
     demCoverageCache.set(data, coverage)
   }
-  const cellSize = Math.max(data.cellSizeX, data.cellSizeZ)
+  const cellSize = Math.max(cellSizeX, cellSizeZ)
   const grid: TerrainHeightGrid = {
     minX,
     minZ,
     maxX,
     maxZ,
     cellSize,
-    cols: data.width,
-    rows: data.height,
-    minY: worldOffsetY,
-    maxY: worldOffsetY + Math.max(0, data.maxElevation - data.minElevation),
+    cols,
+    rows,
+    minY: worldOffsetY + (Number.isFinite(minHeight) ? minHeight : 0),
+    maxY: worldOffsetY + (Number.isFinite(maxHeight) ? maxHeight : 0),
     averageEdgeLength: cellSize,
     heights,
     coverage,
@@ -79,42 +99,40 @@ export function createDemTerrainHeightGrid(
         && z >= minZ - cellSize * 0.5 && z <= maxZ + cellSize * 0.5
     },
     sampleHeight(x: number, z: number): number | null {
-      const gx = (x - minX) / data.cellSizeX
-      const gz = (z - minZ) / data.cellSizeZ
+      const gx = (x - minX) / cellSizeX
+      const gz = (z - minZ) / cellSizeZ
       if (!Number.isFinite(gx) || !Number.isFinite(gz)) {
         return null
       }
-      const col = Math.floor(gx)
-      const row = Math.floor(gz)
-      if (col < 0 || col >= data.width - 1 || row < 0 || row >= data.height - 1) {
-        if (col < 0 || col >= data.width || row < 0 || row >= data.height) {
-          return null
-        }
+      if (gx < 0 || gx > cols - 1 || gz < 0 || gz > rows - 1) {
+        return null
       }
-      const tx = gx - col
-      const tz = gz - row
-      const x0 = Math.max(0, Math.min(data.width - 1, col))
-      const x1 = Math.max(0, Math.min(data.width - 1, col + 1))
-      const z0 = Math.max(0, Math.min(data.height - 1, row))
-      const z1 = Math.max(0, Math.min(data.height - 1, row + 1))
-      const h00 = heights[z0 * data.width + x0]!
-      const h10 = heights[z0 * data.width + x1]!
-      const h01 = heights[z1 * data.width + x0]!
-      const h11 = heights[z1 * data.width + x1]!
+      const col = Math.max(0, Math.min(cols - 2, Math.floor(gx)))
+      const row = Math.max(0, Math.min(rows - 2, Math.floor(gz)))
+      const tx = Math.max(0, Math.min(1, gx - col))
+      const tz = Math.max(0, Math.min(1, gz - row))
+      const h00 = heights[row * cols + col]!
+      const h10 = heights[row * cols + col + 1]!
+      const h01 = heights[(row + 1) * cols + col]!
+      const h11 = heights[(row + 1) * cols + col + 1]!
+      // Match the DEM mesh's two triangles exactly (a-c-d then a-d-b); a
+      // bilinear sample still differs from the rendered surface on ridges.
+      const surfaceHeight = tz >= tx
+        ? h00 + (h01 - h00) * tz + (h11 - h01) * tx
+        : h00 + (h10 - h00) * tx + (h11 - h10) * tz
       return worldOffsetY
-        + (h00 * (1 - tx) + h10 * tx) * (1 - tz)
-        + (h01 * (1 - tx) + h11 * tx) * tz
+        + surfaceHeight
     },
     sampleNormal(x: number, z: number, target?: THREE.Vector3): THREE.Vector3 | null {
-      const hx0 = grid.sampleHeight(x - data.cellSizeX, z)
-      const hx1 = grid.sampleHeight(x + data.cellSizeX, z)
-      const hz0 = grid.sampleHeight(x, z - data.cellSizeZ)
-      const hz1 = grid.sampleHeight(x, z + data.cellSizeZ)
+      const hx0 = grid.sampleHeight(x - cellSizeX, z)
+      const hx1 = grid.sampleHeight(x + cellSizeX, z)
+      const hz0 = grid.sampleHeight(x, z - cellSizeZ)
+      const hz1 = grid.sampleHeight(x, z + cellSizeZ)
       if (hx0 == null || hx1 == null || hz0 == null || hz1 == null) {
         return null
       }
-      const dx = (hx1 - hx0) / (2 * data.cellSizeX)
-      const dz = (hz1 - hz0) / (2 * data.cellSizeZ)
+      const dx = (hx1 - hx0) / (2 * cellSizeX)
+      const dz = (hz1 - hz0) / (2 * cellSizeZ)
       const out = target ?? new THREE.Vector3()
       return out.set(-dx, 1, -dz).normalize()
     },
