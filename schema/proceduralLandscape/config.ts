@@ -254,7 +254,7 @@ export const PROCEDURAL_LANDSCAPE_QUALITY_TIERS: Record<ResolvedProceduralLandsc
     // Measured editor budget: 1.16M cards held ~67 FPS and 751k held 93-100
     // FPS in the 1920×1080 viewport. 650k keeps world-wide coverage while
     // restoring the 100 FPS desktop target; medium/low scale down from here.
-    worldForest: { cellSize: 40, budget: 650_000 },
+    worldForest: { cellSize: 40, budget: 1_300_000 },
   },
 }
 
@@ -262,7 +262,10 @@ export const PROCEDURAL_LANDSCAPE_AUTO_QUALITY: Record<ProceduralLandscapeEnviro
   // 与 slowroads-lab 观感一致：编辑器视口默认全量植被密度。
   editor: 'high',
   preview: 'high',
-  viewer: 'medium',
+  // Match the slowroads-lab full-terrain forest in the viewer: 40m placement
+  // cells and the complete DEM-wide tree pass. Medium remains available as an
+  // explicit low-power choice.
+  viewer: 'high',
 }
 
 export function resolveProceduralLandscapeQuality(
