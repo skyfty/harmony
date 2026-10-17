@@ -441,7 +441,7 @@ export function runSlowroadsFogUniformChecks(input: FogUniformCheckInput): Slowr
   const viewDistanceScale = typeof input.viewDistanceScale === 'number'
     && Number.isFinite(input.viewDistanceScale)
     && input.viewDistanceScale > 0
-    ? Math.min(12, Math.max(1, input.viewDistanceScale))
+    ? Math.min(16, Math.max(1, input.viewDistanceScale))
     : 1
   // 与运行时一致：天空组雾距离 = 官方 n1 × 场景视距倍率。
   const officialSkyDistance = ENVIRONMENT_SKY_DISTANCE * viewDistanceScale
@@ -504,7 +504,7 @@ export function runSlowroadsFogUniformChecks(input: FogUniformCheckInput): Slowr
 
   if (typeof input.skyPlaneScale === 'number' && typeof input.expectedSkyPlaneScale === 'number') {
     // 覆盖角 = atan(5e4 · scale / resolvedDistance)：几何必须随天空尺度放大，
-    // 否则 7.5× 场景只能覆盖到 ~73°、12× 到 ~64°，天顶露出背景色（lab 无此问题）。
+    // 否则倍率越大覆盖角越小，天顶会露出背景色（lab 无此问题）。
     const officialCoverage = Math.atan(5e4 / ENVIRONMENT_SKY_DISTANCE)
     const resolvedDistance = input.skyPlaneZ === null ? ENVIRONMENT_SKY_DISTANCE : Math.abs(input.skyPlaneZ + 0.1)
     const scale = Math.max(1e-6, input.skyPlaneScale)

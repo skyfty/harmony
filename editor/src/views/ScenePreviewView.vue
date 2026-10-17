@@ -1801,14 +1801,14 @@ const tempOutlineScale = new THREE.Vector3()
 const CAMERA_HEIGHT = 1.7
 const DEFAULT_SCENE_CAMERA_FAR = 2000
 /**
- * 远裁剪面上限（米）：覆盖雾尺度上限 12×（雾远端 24km）仍有余量。
+ * 远裁剪面上限（米）：覆盖雾尺度上限 16×（场景雾 16km，天空 32km）仍有余量。
  * 远裁剪面只做「雾收满之后的兜底」，正常观测距离由雾决定。
  */
 const SCENE_CAMERA_FAR_MAX = 30000
 /**
  * 远裁剪面相对雾远端的余量：雾必须先收满、再轮到裁切，否则远端地形会被硬裁出
- * 一条生硬的边（本场景雾尺度 ×10.66 → 雾远端 10.66km，固定 far=2000m 时只看到
- * 2km 内的 16% 雾，地形轮廓直接切在天穹平面上）。
+ * 一条生硬的边（42.7km DEM 对齐 lab 后雾尺度 ×14.22 → 雾远端 14.22km；
+ * 固定 far=2000m 时只看到 2km 内的雾，地形轮廓直接切在天穹平面上）。
  */
 const SCENE_CAMERA_FAR_FOG_MARGIN = 1.25
 const tempDirection = new THREE.Vector3()

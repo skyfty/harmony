@@ -19,7 +19,7 @@ export interface SlowroadsSkyHandle {
    *
    * `coverageDistance` 用于保持官方视场覆盖角：官方平面半高 5e4 挂在 n1=2000 处，
    * 覆盖到 atan(5e4/2000)≈87.7°；编辑器雾尺度自适应把 n1 放大到 2000×倍率后，
-   * 若几何不变，天顶会出现约 16.8°（7.5×）～25.6°（12×）的空洞并露出背景色。
+   * 若几何不变，天顶会随倍率增大出现空洞并露出背景色。
    * 因此几何按 `coverageDistance / ENVIRONMENT_SKY_DISTANCE` 等比放大（默认取
    * `viewDistance`，即不裁剪时与 lab 逐字一致）。
    */

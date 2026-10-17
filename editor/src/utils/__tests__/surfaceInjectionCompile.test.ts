@@ -146,3 +146,59 @@ describe('double-sided foliage lighting normal (背面不翻转)', () => {
     manager.dispose()
   })
 })
+
+describe('camera-yaw independent foliage LOD', () => {
+  it('uses horizontal distance for tree-card dissolve and bush alpha', () => {
+    const season = { season: 'spring' as const, discolouration: 1.5, hasSnow: false }
+    const nearCard = createFoliageMaterial(
+      {
+        kind: 'tree',
+        tier: 'all',
+        species: 0,
+        singlePlane: false,
+        tint: 0xffffff,
+        farTintScale: 1,
+        hasAlphaTexture: false,
+        hasNormalTexture: true,
+        card: 'near',
+        lodFade: 'near-card',
+        staticBillboard: false,
+        distanceAlpha: false,
+        useDensityShadow: true,
+        key: 'test:near-card',
+      },
+      createFoliageShaderUniforms(),
+      season,
+    )
+    const bush = createFoliageMaterial(
+      {
+        kind: 'bush',
+        tier: 'all',
+        species: 0,
+        singlePlane: false,
+        tint: 0xffffff,
+        farTintScale: 1,
+        hasAlphaTexture: false,
+        hasNormalTexture: false,
+        card: null,
+        lodFade: null,
+        staticBillboard: false,
+        distanceAlpha: true,
+        useDensityShadow: true,
+        key: 'test:bush',
+      },
+      createFoliageShaderUniforms(),
+      season,
+    )
+
+    const nearCardVertex = compileSources(nearCard.material).vertex
+    const bushVertex = compileSources(bush.material).vertex
+
+    // 相机原地水平旋转时视深会剧烈变化；LOD/alpha 必须只看水平距离。
+    expect(nearCardVertex).toContain('clamp((plDistXZ - uPlDissolveNear) / uPlDissolveInterval')
+    expect(nearCardVertex).not.toContain('clamp((plViewDepth - uPlDissolveNear)')
+    expect(nearCardVertex).not.toContain('plViewDepth < uPlDissolveFar')
+    expect(bushVertex).toContain('plDistXZ < 10.0')
+    expect(bushVertex).not.toContain('plViewDepth < 10.0')
+  })
+})

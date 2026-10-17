@@ -1758,7 +1758,7 @@ const SKY_ENVIRONMENT_INTENSITY = 0.6;
 const CAMERA_FORWARD_OFFSET = 1.5;
 const DEFAULT_SCENE_CAMERA_FAR = 1000;
 /**
- * 远裁剪面上限（米）：覆盖雾尺度上限 12×（雾远端 24km）仍有余量。
+ * 远裁剪面上限（米）：覆盖雾尺度上限 16×（场景雾 16km，天空 32km）仍有余量。
  * 远裁剪面只做「雾收满之后的兜底」，正常观测距离由雾决定。
  */
 const SCENE_CAMERA_FAR_MAX = 30000;

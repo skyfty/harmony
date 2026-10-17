@@ -494,7 +494,7 @@ export function clampProceduralLandscapeProps(
       rockSlopeThreshold: clampNumber(surface?.rockSlopeThreshold, defaults.surface.rockSlopeThreshold, 0.05, 0.9),
       baseMapMode: surface?.baseMapMode === 'blend' ? 'blend' : 'replace',
       baseMapBlend: clampNumber(surface?.baseMapBlend, defaults.surface.baseMapBlend, 0, 1),
-      viewDistanceScale: clampNullableNumber(surface?.viewDistanceScale, defaults.surface.viewDistanceScale, 1, 12),
+      viewDistanceScale: clampNullableNumber(surface?.viewDistanceScale, defaults.surface.viewDistanceScale, 1, 16),
     },
     road: {
       enabled: road?.enabled !== false,
@@ -616,8 +616,8 @@ export const PROCEDURAL_LANDSCAPE_WIND_FACTOR = {
 /**
  * 雾/视距尺度倍率：官方雾尺度按 1000m 世界调参（lab 1600m 世界刚好被包住）；
  * 编辑器地形可达数十公里，直接套官方尺度会让 1km 以外整片地形变成雾色。
- * 自动档按地形水平尺寸给出 `clamp(max(sizeX,sizeZ)/4000, 1, 12)` × 官方 1000m
- * —— 地形 ≤4km 时恒为 1×，与官方/lab 逐字一致。显式给出 `surface.viewDistanceScale`
+ * 自动档按地形水平尺寸给出 `clamp(max(sizeX,sizeZ)/3000, 1, 16)` × 官方 1000m
+ * —— 地形 ≤3km 时恒为 1×，与 lab DEM 大世界的取景规则一致。显式给出 `surface.viewDistanceScale`
  * 时按它夹紧。
  */
 export function resolveSurfaceViewDistanceScale(
@@ -625,9 +625,9 @@ export function resolveSurfaceViewDistanceScale(
   horizontalSizeMeters: number,
 ): number {
   if (props.surface.viewDistanceScale != null) {
-    return clamp(props.surface.viewDistanceScale, 1, 12)
+    return clamp(props.surface.viewDistanceScale, 1, 16)
   }
-  return clamp(Math.max(1, horizontalSizeMeters) / 4000, 1, 12)
+  return clamp(Math.max(1, horizontalSizeMeters) / 3000, 1, 16)
 }
 
 /**

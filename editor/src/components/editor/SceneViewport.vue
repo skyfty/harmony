@@ -362,9 +362,11 @@ import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandsc
 import { collectTerrainMeshSources } from '@schema/proceduralLandscape/terrainSampler'
 import {
   createSlowroadsEnvironmentRuntime,
+  getSlowroadsSceneFogFar,
   type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
+import { resolveViewportCameraFar } from './viewportCameraFar'
 import {
   componentManager,
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
@@ -2032,6 +2034,7 @@ type DirectionalLightPivotEditState = {
 let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let lastCameraFocusRadius: number | null = null
+let lastViewportCameraBaseFar = 5000
 const CAMERA_MAX_DISTANCE_ABS_CAP = 60000
 const CAMERA_MAX_DISTANCE_MAP_RADIUS_MULTIPLIER = 60
 const CAMERA_MAX_DISTANCE_ORBIT_RADIUS_MULTIPLIER = 40
@@ -13944,7 +13947,9 @@ function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: numb
 
   // Keep near/far in a reasonable ratio for depth precision across tiny assets and huge scenes.
   const near = Math.max(0.005, Math.min(radiusUsed * 0.5, distance / 50))
-  const far = Math.max(200, distance + radiusUsed * 50, radiusUsed * 2000)
+  const baseFar = Math.max(200, distance + radiusUsed * 50, radiusUsed * 2000)
+  const far = resolveViewportCameraFar(baseFar, getSlowroadsSceneFogFar())
+  lastViewportCameraBaseFar = baseFar
 
   if (camera instanceof THREE.PerspectiveCamera) {
     if (camera.near !== near || camera.far !== far) {
@@ -13954,6 +13959,23 @@ function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: numb
       refreshSceneCsmFrustums()
     }
   }
+}
+
+/**
+ * 地形异步加载完成后雾尺度会变大，但相机可能没有移动。每帧只做一次纯计算，
+ * 仅在远裁剪面需要变化时更新投影，确保默认视口也能看到雾区内的远山。
+ */
+function syncCameraFarToSceneFog(): void {
+  if (!(camera instanceof THREE.PerspectiveCamera)) {
+    return
+  }
+  const far = resolveViewportCameraFar(lastViewportCameraBaseFar, getSlowroadsSceneFogFar())
+  if (camera.far === far) {
+    return
+  }
+  camera.far = far
+  camera.updateProjectionMatrix()
+  refreshSceneCsmFrustums()
 }
 
 function syncControlsConstraintsAndSpeeds() {
@@ -15256,6 +15278,7 @@ function animate() {
     ensureSlowroadsEnvironmentRuntime()
     slowroadsEnvironment?.update(effectiveDelta)
   }
+  syncCameraFarToSceneFog()
 
   if (instancedBoundsHasPending()) {
     flushInstancedBounds()

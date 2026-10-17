@@ -297,17 +297,24 @@ describe('procedural landscape props (full refactor)', () => {
     expect(resolveSurfaceHeightScale(0)).toBe(4)
   })
 
-  it('view-distance scale: ≤4km auto stays 1x, larger terrain scales up (clamped 12x)', () => {
+  it('view-distance scale matches lab: extent / 3000, clamped 1..16x', () => {
     const props = createDefaultProceduralLandscapeProps({ id: 't' })
     expect(resolveSurfaceViewDistanceScale(props, 1600)).toBe(1)
-    expect(resolveSurfaceViewDistanceScale(props, 4000)).toBe(1)
-    expect(resolveSurfaceViewDistanceScale(props, 12000)).toBe(3)
-    expect(resolveSurfaceViewDistanceScale(props, 200000)).toBe(12)
+    expect(resolveSurfaceViewDistanceScale(props, 3000)).toBe(1)
+    expect(resolveSurfaceViewDistanceScale(props, 4000)).toBeCloseTo(4 / 3, 6)
+    expect(resolveSurfaceViewDistanceScale(props, 12000)).toBe(4)
+    expect(resolveSurfaceViewDistanceScale(props, 42660)).toBeCloseTo(14.22, 6)
+    expect(resolveSurfaceViewDistanceScale(props, 200000)).toBe(16)
     const manual = clampProceduralLandscapeProps(
       { surface: { ...props.surface, viewDistanceScale: 4 } } as never,
       't',
     )
     expect(resolveSurfaceViewDistanceScale(manual, 200000)).toBe(4)
+    const manuallyCapped = clampProceduralLandscapeProps(
+      { surface: { ...props.surface, viewDistanceScale: 20 } } as never,
+      't',
+    )
+    expect(manuallyCapped.surface.viewDistanceScale).toBe(16)
   })
 
   it('camera far follows the scene fog distance so fog saturates before clipping', () => {
@@ -316,8 +323,10 @@ describe('procedural landscape props (full refactor)', () => {
     expect(resolveCameraFarForFogDistance({ ...base, fogFar: 0 })).toBe(2000)
     expect(resolveCameraFarForFogDistance({ ...base, fogFar: Number.NaN })).toBe(2000)
     expect(resolveCameraFarForFogDistance({ ...base, fogFar: -100 })).toBe(2000)
-    // 本场景：雾尺度 ×10.66 → 雾远端 10660m，远裁剪面 13325m（雾先收满再裁切）。
+    // 大地形示例：雾尺度 ×10.66 → 雾远端 10660m，远裁剪面 13325m（雾先收满再裁切）。
     expect(resolveCameraFarForFogDistance({ ...base, fogFar: 10660 })).toBeCloseTo(13325, 6)
+    // 42.7km DEM 对齐 lab 后：场景雾远端 14220m，远裁剪面 17775m。
+    expect(resolveCameraFarForFogDistance({ ...base, fogFar: 14220 })).toBeCloseTo(17775, 6)
     // 远裁剪面必须严格大于雾远端，否则又会出现硬裁切边。
     expect(resolveCameraFarForFogDistance({ ...base, fogFar: 10660 })).toBeGreaterThan(10660)
     // margin = 1 时退化为雾远端本身（仍不小于兜底 far）。

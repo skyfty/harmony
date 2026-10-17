@@ -103,7 +103,7 @@ let sceneViewDistanceScale = 1
  * 天空组 / 云层 / 天空平面距离同步乘该倍率（保持 sky = 2 × scene 的官方不变量）。
  */
 export function setSlowroadsSceneViewDistanceScale(scale: number): void {
-  sceneViewDistanceScale = Number.isFinite(scale) ? Math.min(12, Math.max(1, scale)) : 1
+  sceneViewDistanceScale = Number.isFinite(scale) ? Math.min(16, Math.max(1, scale)) : 1
 }
 
 export function getSlowroadsSceneViewDistanceScale(): number {
@@ -399,7 +399,7 @@ export function createSlowroadsEnvironmentRuntime(
     // 1 = 未裁剪（与官方/lab 逐字一致）；>1 = 按官方距离做雾深等效。
     setSlowroadsSkyDepthCorrection(official / resolved)
     // 覆盖距离传「官方 n1」：几何按比例放大，保证 87.7° 覆盖角不随雾尺度倍率缩水
-    // （否则 7.5× 场景天顶会露出约 16.8°、12× 约 25.6° 的空洞并显示背景色）。
+    // （否则大倍率场景天顶会露出空洞并显示背景色）。
     sky.setViewDistance(resolved, official)
     appliedSkyPlaneDistance = resolved
     appliedSkyCoverageDistance = official

@@ -241,7 +241,6 @@ const VERTEX_BODY = /* glsl */ `
 
   vec2 plAtlasUv = mix(aPlUvRect.xy, aPlUvRect.zw, uv);
   float plDissolveRandom = 0.5 + 0.5 * fract(sin(dot(plInstWorld.zx, vec2(12.9898, 78.233))) * 43758.5453);
-  float plViewDepthOrigin = -(viewMatrix * plInstWorld).z;
   vPlUvOffset = vec2(0.0);
   vPlUvBlend = vec2(0.0);
   vPlAngleBlend = 0.0;
@@ -272,11 +271,13 @@ const VERTEX_BODY = /* glsl */ `
     }
     float plTileIndex = (plOriented + 3.141592653589793) / (3.141592653589793 * 2.0 / 16.0);
     vPlUvOffset = vec2((1.0 / 16.0) * floor(plTileIndex), aPlCell / 4.0);
-    vPlAngleBlend = (plTileIndex - floor(plTileIndex)) * step(plViewDepthOrigin, 400.0);
-    float plImposterCamDist = clamp((plViewDepthOrigin - 200.0) / 800.0, 0.0, 1.0);
+    // 所有可见性 LOD 都使用水平距离：视空间深度会随相机旋转改变，导致同一棵树
+    // 在转到相机侧面时突然被 dissolve/alpha 裁掉，再转过某个角度又整片出现。
+    vPlAngleBlend = (plTileIndex - floor(plTileIndex)) * step(plDistXZ, 400.0);
+    float plImposterCamDist = clamp((plDistXZ - 200.0) / 800.0, 0.0, 1.0);
     transformed *= 1.0 + plImposterCamDist * 0.3;
     transformed.y -= plImposterCamDist * 4.0;
-    vPlDissolve = 1.0 - clamp((plViewDepthOrigin - uPlDissolveNear) / uPlDissolveInterval, 0.0, 1.0);
+    vPlDissolve = 1.0 - clamp((plDistXZ - uPlDissolveNear) / uPlDissolveInterval, 0.0, 1.0);
     vPlDissolve *= plDissolveRandom;
     transformed *= 1.0 - step(0.999, vPlDissolve);
   }
@@ -319,22 +320,22 @@ const VERTEX_BODY = /* glsl */ `
     // 官方 imposter：辉光权重再乘 max(0.5, leafBrightness)。
     vPlRadianceBlend *= max(0.5, vPlLeafBrightness);
   }
-  // 官方灌木顶点规则：近处 0.5，随视深衰减到 0.2（仅灌木层生效）。
+  // 官方灌木顶点规则：近处 0.5，随水平距离衰减到 0.2（仅灌木层生效）。
   if (uPlDistanceAlpha > 0.5) {
-    vPlAlphaTest = plViewDepth < 10.0 ? 0.5 : max(0.2, 0.5 - (plViewDepth - 10.0) / 110.0);
+    vPlAlphaTest = plDistXZ < 10.0 ? 0.5 : max(0.2, 0.5 - (plDistXZ - 10.0) / 110.0);
   }
   if (uPlDynamicAlpha > 0.5) {
     // 官方近树卡：dissolve 由近及远 0→1；alphaTest 随距离放宽（放到 0.3/原值下限）；
     // vLeafBrightness = 1 - density × shadowFactor × saturate((10 - 模型高度m)/3)。
-    vPlDissolve = clamp((plViewDepth - uPlDissolveNear) / uPlDissolveInterval, 0.0, 1.0);
+    vPlDissolve = clamp((plDistXZ - uPlDissolveNear) / uPlDissolveInterval, 0.0, 1.0);
     vPlDissolve *= plDissolveRandom;
     vPlAlphaTest = uPlAlphaTest;
     if (uPlDissolveFar > 200.0) {
-      if (plViewDepth < uPlDissolveFar) {
-        vPlAlphaTest = max(0.3, uPlAlphaTest * (1.0 - plViewDepth / (uPlDissolveFar + uPlDissolveInterval)));
+      if (plDistXZ < uPlDissolveFar) {
+        vPlAlphaTest = max(0.3, uPlAlphaTest * (1.0 - plDistXZ / (uPlDissolveFar + uPlDissolveInterval)));
       }
-    } else if (plViewDepth < 200.0) {
-      vPlAlphaTest = max(0.3, uPlAlphaTest * (1.0 - plViewDepth / 300.0));
+    } else if (plDistXZ < 200.0) {
+      vPlAlphaTest = max(0.3, uPlAlphaTest * (1.0 - plDistXZ / 300.0));
     }
     float plHeightScale = 1.0;
     #ifdef USE_INSTANCING

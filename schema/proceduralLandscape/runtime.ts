@@ -112,7 +112,7 @@ import {
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../components/componentManager'
 import { findTerrainTextureStreamFrom } from '../terrainTextureStream'
-import { clamp, degreesToRadians, smoothstep } from './noise'
+import { clamp, degreesToRadians } from './noise'
 import {
   densifyRoadRows,
   sampleRoadRowColumns,
@@ -1083,6 +1083,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return grid?.sampleHeight(x, z) ?? null
   }
 
+  function visibleForestNormalAt(x: number, z: number): { x: number; y: number; z: number } | null {
+    if (!demRoadbedTarget || demRoadbedTarget.distanceAt(x, z) > demRoadbedTarget.meshHalfWidth) {
+      const normal = grid?.sampleNormal(x, z)
+      return normal ? { x: normal.x, y: normal.y, z: normal.z } : null
+    }
+    const step = Math.max(0.75, (grid?.cellSize ?? 30) * 0.05)
+    const dx = (demRoadbedTarget.heightAt(x + step, z) - demRoadbedTarget.heightAt(x - step, z)) / (2 * step)
+    const dz = (demRoadbedTarget.heightAt(x, z + step) - demRoadbedTarget.heightAt(x, z - step)) / (2 * step)
+    const inverseLength = 1 / Math.hypot(dx, 1, dz)
+    return { x: -dx * inverseLength, y: inverseLength, z: -dz * inverseLength }
+  }
+
   function disposeNearCardLayers(): void {
     if (nearCardLayers) {
       disposeFoliageLayerMesh(nearCardLayers.broadleaf)
@@ -1654,10 +1666,25 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             halfWidth,
             shoulderWidth: props.road.shoulderWidth,
             demCellSize: activeGrid.cellSize,
+            // A 45m swept side slope self-overlaps on the editor's tight
+            // hairpins and produces large faceted aprons. Keep the cut/fill
+            // transition local to the road and let the untouched DEM resume
+            // beyond it.
+            sideWidth: Math.max(15, activeGrid.cellSize * 0.8),
+            coverageWidth: Math.max(4, activeGrid.cellSize * 0.35),
+            // The 30m coarse triangles interpolate across the roadbed design
+            // surface; a 2m safety drop keeps them below the 3m-sampled
+            // high-resolution roadbed on steep, curved sections.
+            coarseClearance: 2,
           })
           demRoadbedSideWidth = demRoadbedTarget.sideWidth
           demRoadbedHalfWidth = demRoadbedTarget.meshHalfWidth
-          demRoadbedCutProx = Math.max(0, demRoadbedTarget.meshHalfWidth - 8 - halfWidth)
+          // Keep the shader cut limited to the actual asphalt + shoulder.
+          // A 60m distance-field cut is a circular tube, while the high-res
+          // roadbed is a swept ribbon; on hairpins the two disagree and leave
+          // terrain holes. Coarse side-slope triangles are already graded
+          // below the high-res roadbed, so they must not be cut by distance.
+          demRoadbedCutProx = Math.max(0, props.road.shoulderWidth + 0.25)
           const roadbed = createDemRoadbedTargetGeometry(roadBandRows, demRoadbedTarget, {
             lateralStep: 3,
             lift: 0.01,
@@ -1875,32 +1902,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     ) {
       return
     }
-    const flatten = roadFlattenParams(props)
-    const roadField = roadFieldData
     const waterLevel = resolveWaterLevel()
-    const activeGrid = grid
     const sampleRoad = createRoadAlongSampler(roadResult.nodes)
     const wallProbe = {
       length: roadResult.length,
       halfWidth: roadHalfWidth(props),
       waterLevel,
-      terrainHeightAt: (x: number, z: number): number => activeGrid.sampleHeight(x, z) ?? waterLevel,
-      surfaceHeightAt: (x: number, z: number): number => {
-        const terrainY = activeGrid.sampleHeight(x, z)
-        if (terrainY == null || !roadField || flatten.strength <= 0) {
-          return terrainY ?? waterLevel
-        }
-        const distance = roadField.distanceAt(x, z)
-        const weight = 1 - smoothstep(flatten.innerRadius, flatten.outerRadius, distance)
-        if (weight <= 0.001) {
-          return terrainY
-        }
-        const roadHeight = roadField.heightAt(x, z)
-        if (roadHeight == null) {
-          return terrainY
-        }
-        return terrainY + (roadHeight - terrainY) * weight * flatten.strength
-      },
+      terrainHeightAt: (x: number, z: number): number => visibleForestHeightAt(x, z) ?? waterLevel,
+      surfaceHeightAt: (x: number, z: number): number => visibleForestHeightAt(x, z) ?? waterLevel,
       sampleRoad,
       shadowAt: (x: number, z: number): number => {
         if (!densityField) {
@@ -2504,7 +2513,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const instances: FoliageSpriteInstance[] = placements.map((placement) => {
       const picked = pickCellEntry(entries, placement.variant)
       // 官方 per-instance groundNormal：草丛/灌木受光与掠射 fresnel 都由它驱动。
-      const normal = grid?.sampleNormal(placement.x, placement.z) ?? null
+      const normal = visibleForestNormalAt(placement.x, placement.z)
       return {
         x: placement.x,
         y: placement.y,
@@ -2574,7 +2583,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         maxScale: props.forest.maxScale,
         minHeight: props.forest.minHeight,
       },
-      { grid, density: densityField, roadField: roadProximity },
+      {
+        grid,
+        density: densityField,
+        roadField: roadProximity,
+        surfaceHeightAt: visibleForestHeightAt,
+        surfaceNormalAt: visibleForestNormalAt,
+      },
     )
     const kept = takeDensityPrefix(placements, tier.densityMultiplier)
     const key = chunkKey
@@ -2646,7 +2661,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         flowerDensity: props.grass.flowerDensity,
         tallGrassDensity: props.grass.tallGrassDensity,
       },
-      { grid, density: densityField, roadField: roadProximity },
+      {
+        grid,
+        density: densityField,
+        roadField: roadProximity,
+        surfaceHeightAt: visibleForestHeightAt,
+        surfaceNormalAt: visibleForestNormalAt,
+      },
     )
     const grass = grassEnabled ? takeDensityPrefix(result.grass, tier.densityMultiplier) : []
     const bushes = bushesEnabled ? takeDensityPrefix(result.bushes, tier.densityMultiplier) : []
@@ -2710,7 +2731,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             roadHalfWidth: roadHalfWidth(props),
             roadShoulderWidth: props.road.shoulderWidth,
           },
-          { grid, density: densityField, roadField: roadProximity },
+          {
+            grid,
+            density: densityField,
+            roadField: roadProximity,
+            surfaceHeightAt: visibleForestHeightAt,
+            surfaceNormalAt: visibleForestNormalAt,
+          },
         ))
       }
     }

@@ -12,6 +12,10 @@ export interface LandscapeChunkDeps {
    * 光栅距离场（`roadField.ts`）只服务着色器与地形压平。
    */
   roadField: RoadDistanceSource | null
+  /** Final visible surface (roadbed included). Defaults to the raw grid. */
+  surfaceHeightAt?: (x: number, z: number) => number | null
+  /** Normal of the final visible surface. Defaults to the raw grid. */
+  surfaceNormalAt?: (x: number, z: number) => { x: number; y: number; z: number } | null
 }
 
 export interface TreePlacement {
@@ -117,6 +121,8 @@ function resolveHeightFactor(height: number, waterLevel: number): number {
 
 export function planTreeChunk(params: TreeChunkParams, deps: LandscapeChunkDeps): TreePlacement[] {
   const { grid, density, roadField } = deps
+  const heightAt = deps.surfaceHeightAt ?? ((x: number, z: number) => grid.sampleHeight(x, z))
+  const normalAt = deps.surfaceNormalAt ?? ((x: number, z: number) => grid.sampleNormal(x, z))
   const baseX = params.chunkX * params.chunkSize
   const baseZ = params.chunkZ * params.chunkSize
   const half = params.chunkSize * 0.5
@@ -151,11 +157,11 @@ export function planTreeChunk(params: TreeChunkParams, deps: LandscapeChunkDeps)
     if (!grid.contains(x, z)) {
       continue
     }
-    const y = grid.sampleHeight(x, z)
+    const y = heightAt(x, z)
     if (y == null) {
       continue
     }
-    const normal = grid.sampleNormal(x, z)
+    const normal = normalAt(x, z)
     if (!normal) {
       continue
     }
@@ -191,6 +197,8 @@ export function planRoadBucket(
   deps: LandscapeChunkDeps,
 ): { grass: GrassPlacement[]; bushes: GrassPlacement[] } {
   const { grid, roadField } = deps
+  const heightAt = deps.surfaceHeightAt ?? ((x: number, z: number) => grid.sampleHeight(x, z))
+  const normalAt = deps.surfaceNormalAt ?? ((x: number, z: number) => grid.sampleNormal(x, z))
   const dx = params.toX - params.fromX
   const dz = params.toZ - params.fromZ
   const segmentLength = Math.hypot(dx, dz)
@@ -234,11 +242,11 @@ export function planRoadBucket(
         if (distance > lateralMax) {
           continue
         }
-        const y = grid.sampleHeight(x, z)
+        const y = heightAt(x, z)
         if (y == null) {
           continue
         }
-        const normal = grid.sampleNormal(x, z)
+        const normal = normalAt(x, z)
         if (!normal) {
           continue
         }
@@ -336,7 +344,7 @@ export function planRoadBucket(
           if (distance < params.halfWidth + lateralStart - 0.2 || distance > params.halfWidth + lateralEnd + 0.6) {
             continue
           }
-          const y = grid.sampleHeight(x, z)
+          const y = heightAt(x, z)
           if (y == null) {
             continue
           }
@@ -344,7 +352,7 @@ export function planRoadBucket(
           if (heightFactor <= 0) {
             continue
           }
-          const normal = grid.sampleNormal(x, z)
+          const normal = normalAt(x, z)
           if (!normal) {
             continue
           }
@@ -398,6 +406,8 @@ export function planCameraGrassChunk(
   deps: LandscapeChunkDeps,
 ): GrassPlacement[] {
   const { grid, density, roadField } = deps
+  const heightAt = deps.surfaceHeightAt ?? ((x: number, z: number) => grid.sampleHeight(x, z))
+  const normalAt = deps.surfaceNormalAt ?? ((x: number, z: number) => grid.sampleNormal(x, z))
   const baseX = params.chunkX * params.chunkSize
   const baseZ = params.chunkZ * params.chunkSize
   const placements: GrassPlacement[] = []
@@ -407,11 +417,11 @@ export function planCameraGrassChunk(
     if (!grid.contains(x, z)) {
       continue
     }
-    const y = grid.sampleHeight(x, z)
+    const y = heightAt(x, z)
     if (y == null) {
       continue
     }
-    const normal = grid.sampleNormal(x, z)
+    const normal = normalAt(x, z)
     if (!normal) {
       continue
     }

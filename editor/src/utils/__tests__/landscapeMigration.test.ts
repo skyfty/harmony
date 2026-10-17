@@ -4,6 +4,7 @@ import {
   createWorldForestPlacementIndex,
   planWorldForest,
 } from '@schema/proceduralLandscape/worldForest'
+import { planRoadBucket } from '@schema/proceduralLandscape/chunkPlan'
 import { resolveTreeLodBands } from '@schema/proceduralLandscape/treeLod'
 import {
   createDemRoadbedTargetGeometry,
@@ -188,5 +189,48 @@ describe('DEM roadbed target', () => {
     const c = new THREE.Vector3().fromBufferAttribute(position, index.getX(2))
     const normal = b.sub(a).cross(c.sub(a)).normalize()
     expect(normal.y).toBeGreaterThan(0.9)
+  })
+})
+
+describe('vegetation surface sampling', () => {
+  it('places corridor grass on the final roadbed surface instead of the raw DEM', () => {
+    const nodes = [
+      { x: 0, z: 100, y: 10, heading: 0, index: 0, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
+      { x: 120, z: 100, y: 10, heading: 0, index: 1, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },
+    ]
+    const roadField = buildRoadProximityIndex(nodes, { maxDistance: 80 })
+    expect(roadField).not.toBeNull()
+    if (!roadField) return
+    const result = planRoadBucket(
+      {
+        seed: 1,
+        bucketIndex: 0,
+        fromX: 0,
+        fromZ: 100,
+        toX: 120,
+        toZ: 100,
+        halfWidth: 3.5,
+        shoulderWidth: 2.5,
+        corridorWidth: 12,
+        grassDensity: 1,
+        sinkNearRoad: 0,
+        bushesEnabled: false,
+        bushesDensity: 0,
+        waterLevel: 0,
+        flowerDensity: 0,
+        tallGrassDensity: 0,
+      },
+      {
+        grid: makeGrid(),
+        density: makeDensity(),
+        roadField,
+        surfaceHeightAt: () => 20,
+        surfaceNormalAt: () => ({ x: 0, y: 1, z: 0 }),
+      },
+    )
+    expect(result.grass.length).toBeGreaterThan(0)
+    for (const placement of result.grass) {
+      expect(placement.y).toBeGreaterThanOrEqual(19.5)
+    }
   })
 })
