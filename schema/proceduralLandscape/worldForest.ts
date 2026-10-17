@@ -3,7 +3,7 @@ import type { RoadProximityIndex } from './roadProximity'
 import type { RoadTraceNode } from './roadTrace'
 import type { TerrainHeightGrid } from './terrainSampler'
 import type { TreePlacement } from './chunkPlan'
-import { clamp, clamp01, hashUnit, lerp, smoothstep } from './noise'
+import { clamp, clamp01, fbm2, hashUnit, lerp, smoothstep } from './noise'
 
 export interface WorldForestPlanParams {
   seed: number
@@ -136,9 +136,28 @@ export function stepWorldForestScan(
     const x = deps.grid.minX + (cellX + 0.08 + hashUnit(seed, key, 1) * 0.84) * cellSize
     const z = deps.grid.minZ + (cellZ + 0.08 + hashUnit(seed, key, 2) * 0.84) * cellSize
     const value = deps.density.sampleUnit(x, z)
-    const forestMask = smoothstep(0.38, 0.5, value)
+    // Low-density noise must produce actual clearings, not a uniform sprinkle
+    // of isolated trees. The squared mask keeps forest interiors dense while
+    // opening the meadow between woodland blocks.
+    const forestMask = smoothstep(0.40, 0.56, value)
     const slope = slopeAt(deps.grid, x, z)
     const y = deps.heightAt(x, z)
+    const normalizedHeight = y == null
+      ? 0
+      : clamp01((y - deps.grid.minY) / Math.max(1, deps.grid.maxY - deps.grid.minY))
+    // Lose trees gradually toward the tree line instead of ending at a hard
+    // altitude. Plains remain eligible, but their coverage is controlled by
+    // the large-scale forest mask above.
+    const elevationFactor = 1 - 0.92 * smoothstep(0.30, 0.84, normalizedHeight)
+    // A 240m field breaks the broad mask into actual groves and meadows.
+    // Without this, every high-density cell receives one/two trees and reads as
+    // an evenly sprinkled carpet instead of woodland blocks.
+    const groveSeed = (seed ^ 0x6d2b79f5) >>> 0
+    const grove = smoothstep(
+      0.40,
+      0.64,
+      fbm2(groveSeed, x / 240, z / 240, 2, 2.1, 0.5),
+    )
     const roadBlocked = deps.roadField != null
       && deps.roadField.distanceAt(x, z) < params.roadClearance
     if (
@@ -151,8 +170,13 @@ export function stepWorldForestScan(
       && deps.grid.contains(x, z)
     ) {
       const slopePenalty = 1 - smoothstep(0.24, params.maxSlope, slope) * 0.55
-      const chance = clamp01((0.16 + forestMask * 0.84) * slopePenalty * params.densityMultiplier)
-      const clusterCount = forestMask > 0.45 && hashUnit(seed, key, 3) < 0.65 ? 2 : 1
+      const patchDensity = forestMask * lerp(0.03, 1, grove)
+      const chance = clamp01(
+        patchDensity * slopePenalty * elevationFactor * params.densityMultiplier,
+      )
+      const clusterCount = forestMask > 0.55 && grove > 0.55
+        ? (grove > 0.72 && hashUnit(seed, key, 3) < 0.65 ? 3 : 2)
+        : 1
       for (let item = 0; item < clusterCount && scan.placements.length < params.maxTrees; item += 1) {
         if (item === 0 && hashUnit(seed, key, 4) >= chance) {
           continue

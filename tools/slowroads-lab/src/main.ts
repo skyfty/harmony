@@ -86,6 +86,7 @@ import {
   bushVariantEntries,
   getConiferCardRegions,
   getGrassEntries,
+  gridRegions,
   type SpriteCellRegion,
   type SpriteRegion,
 } from './core/spriteRegions'
@@ -124,6 +125,15 @@ installSlowroadsFog()
 
 const WORLD_SIZE = 1600
 const TERRAIN_SEGMENTS = 1024
+const IMPOSTER_REGIONS: SpriteRegion[] = gridRegions(16, 4, 4096, 1024)
+/**
+ * Clean front-facing imposter cells. The four-column tree-card sheets also
+ * contain detached canopy clumps and fallen branches; mapping a whole column
+ * to one card makes those fragments appear to float around every tree.
+ */
+const STATIC_IMPOSTER_REGIONS: SpriteRegion[] = [0, 1, 2, 3].map(
+  (row) => IMPOSTER_REGIONS[row * 16 + 8]!,
+)
 const SKY_COLOR = 0xc9dcee
 const ROAD_SHOULDER_WIDTH = 2.5
 /** 官方 `midline.nodeSpacing` 的 lab 等价步长（追踪节点间距，米）。 */
@@ -1008,22 +1018,24 @@ function buildFoliageFromPlacements(): void {
   // 官方 effects.treeDiscolouration 是变色噪声的**幅度**（着色器换算成 ≈1±factor/2 的乘数）。
   const treeOptions = { discolouration: params.treeDiscolouration, hasSnow: params.hasSnow }
   broadleafNearMesh = createFoliageMesh(nearBroadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
-    atlas: { texture: assets.broadleaf.texture, normalTexture: assets.broadleaf.normalTexture, regions: assets.broadleaf.regions },
+    atlas: { texture: assets.imposterBroadleaf.texture, normalTexture: assets.imposterBroadleaf.normalTexture, regions: STATIC_IMPOSTER_REGIONS },
     tint: 0xffffff,
     alphaTest: 0.5,
     unitSize: 8,
     shared: foliageUniforms,
     card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
     lodFade: { mode: 'near-card', near: cardDissolveNear, far: cardDissolveFar },
+    singlePlane: true,
+    staticBillboard: true,
     noiseMap: cardNoise,
     densityMap: foliageDensity,
     worldSize,
     tree: { ...treeOptions, species: 0 },
   })
-  // 全图森林：静态十字面片 + 近树图集。远距离 mip 下仍能保持树冠 alpha，
-  // 不受 imposter 图集透明边距影响。
+  // 全图森林使用干净的静态 imposter 正面树卡，避免树卡图集里的分离树冠和
+  // 横向倒木被当成整棵树绘制。
   broadleafFarMesh = createFoliageMesh(farBroadleaf.map((tree) => toTreeSprite(tree, tree.variantNear)), {
-    atlas: { texture: assets.broadleaf.texture, normalTexture: assets.broadleaf.normalTexture, regions: assets.broadleaf.regions },
+    atlas: { texture: assets.imposterBroadleaf.texture, normalTexture: assets.imposterBroadleaf.normalTexture, regions: STATIC_IMPOSTER_REGIONS },
     tint: 0xffffff,
     alphaTest: 0.15,
     unitSize: 8,
@@ -1037,20 +1049,22 @@ function buildFoliageFromPlacements(): void {
     tree: { ...treeOptions, species: 0 },
   })
   coniferNearMesh = createFoliageMesh(nearConifer.map((tree) => toTreeSprite(tree, tree.variantNear)), {
-    atlas: { texture: assets.conifer.texture, alphaTexture: assets.conifer.alphaTexture, regions: assets.conifer.regions },
+    atlas: { texture: assets.imposterConifer.texture, normalTexture: assets.imposterConifer.normalTexture, regions: STATIC_IMPOSTER_REGIONS },
     tint: 0xffffff,
     alphaTest: 0.4,
     unitSize: 8,
     shared: foliageUniforms,
     card: { kind: 'near', dissolveNear: cardDissolveNear, dissolveFar: cardDissolveFar, dissolveInterval: cardDissolveInterval },
     lodFade: { mode: 'near-card', near: cardDissolveNear, far: cardDissolveFar },
+    singlePlane: true,
+    staticBillboard: true,
     noiseMap: cardNoise,
     densityMap: foliageDensity,
     worldSize,
     tree: { ...treeOptions, species: 1 },
   })
   coniferFarMesh = createFoliageMesh(farConifer.map((tree) => toTreeSprite(tree, tree.variantNear)), {
-    atlas: { texture: assets.conifer.texture, alphaTexture: assets.conifer.alphaTexture, regions: assets.conifer.regions },
+    atlas: { texture: assets.imposterConifer.texture, normalTexture: assets.imposterConifer.normalTexture, regions: STATIC_IMPOSTER_REGIONS },
     tint: 0xffffff,
     alphaTest: 0.12,
     unitSize: 8,

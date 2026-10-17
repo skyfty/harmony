@@ -278,12 +278,19 @@ export function computeForestTreePlacements(
       // The DEM density field is already the shared large+medium forest mask;
       // procedural callers still get a deterministic local fallback.
       const forestValue = density.sampleUnit(x, z)
+      const normalizedHeight = clamp01((height - field.minHeight) / heightRange)
+      const elevationFactor = 1 - 0.92 * smoothstep(0.30, 0.84, normalizedHeight)
+      const groveSeed = (seed ^ 0x6d2b79f5) >>> 0
+      const grove = smoothstep(0.40, 0.64, fbm2(groveSeed, x / 240, z / 240, 2, 2.1, 0.5))
       const slopePenalty = 1 - smoothstep(0.24, slopeLimit, slope) * 0.55
       // Sharper mask: dense forest patches with readable clearings instead of
       // a uniform scatter of isolated trees.
-      const forestMask = smoothstep(0.38, 0.5, forestValue)
-      const chance = (0.16 + forestMask * 0.84) * slopePenalty * densityScale
-      const clusterCount = forestMask > 0.45 && hashUnit(seed, cellKey, 3) < 0.65 ? 2 : 1
+      const forestMask = smoothstep(0.40, 0.56, forestValue)
+      const patchDensity = forestMask * (0.03 + (1 - 0.03) * grove)
+      const chance = patchDensity * slopePenalty * elevationFactor * densityScale
+      const clusterCount = forestMask > 0.55 && grove > 0.55
+        ? (grove > 0.72 && hashUnit(seed, cellKey, 3) < 0.65 ? 3 : 2)
+        : 1
       for (let item = 0; item < clusterCount && trees.length < maxTrees; item += 1) {
         if (item === 0 && hashUnit(seed, cellKey, 4) >= chance) {
           continue

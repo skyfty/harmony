@@ -458,6 +458,7 @@ uniform float uAlphaTest;
 varying float vTreeDiscolouration;
 uniform float uHasSnow;
 uniform float uSpecies;
+uniform float uTreeColourGrade;
 uniform float uHasNormalMap;
 uniform float uDynamicAlpha;
 uniform float uBillboard;
@@ -520,6 +521,13 @@ void main() {
     }
   }
   vec3 color = texel.rgb * uTint;
+  if (uTreeColourGrade > 0.5) {
+    // Hue-preserving deep-green grade shared by tree cards and 3D meshes.
+    float treeLuma = dot(color, vec3(0.299, 0.587, 0.114));
+    color = mix(vec3(treeLuma), color, 1.28) * 0.58;
+    float leafTintMask = step(color.b * 1.06, color.g);
+    color = mix(color, color * vec3(0.48, 0.78, 0.42), leafTintMask);
+  }
 
   // ---- slowroads 草丛调色板 -------------------------------------------------
   if (uPaletteMode > 1.5) {
@@ -703,6 +711,7 @@ export function createFoliageMesh(
       uTreeDiscolourationNoise: { value: options.noiseMap ?? atlasTexture },
       uHasSnow: { value: options.tree?.hasSnow ? 1 : 0 },
       uSpecies: { value: options.tree ? options.tree.species : 0 },
+      uTreeColourGrade: { value: options.tree ? 1 : 0 },
       uTint: { value: new THREE.Color(options.tint) },
       // 官方逐层/季 alphaTest；灌木另有随视深的距离 alpha（顶点规则）。
       uAlphaTest: { value: options.alphaTest },

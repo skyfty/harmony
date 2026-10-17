@@ -184,6 +184,11 @@ void main() {
     vec3 n = texture2D(uNormalTex, vUv).xyz * 2.0 - 1.0;
     normal = normalize(vBasis * n);
   }
+  // Match the card shader's deeper foliage palette and handoff lighting.
+  float treeLuma = dot(color, vec3(0.299, 0.587, 0.114));
+  color = mix(vec3(treeLuma), color, 1.28) * 0.58;
+  float treeLeafTintMask = step(color.b * 1.06, color.g);
+  color = mix(color, color * vec3(0.48, 0.78, 0.42), treeLeafTintMask);
   // 官方共享近树材质（lit26 / lh）：leafEffect 含 vLeafBrightness（密林下半部压暗），
   // 阔叶按 discolouration 乘数变色并带叶辉光；针叶只缩放绿通道（无辉光）。
   float leafEffect = step(color.b * 1.5, color.g) * vLeafBrightness;
@@ -203,7 +208,8 @@ void main() {
     }
   }
   // 官方近树网格与近树卡共用材质：合成走 direct×(1+emissive)+indirect。
-  float ndl = clamp(dot(normal, uSunDir), -1.0, 1.0) * 0.5 + 0.5;
+  vec3 lightNormal = normalize(mix(normal, vec3(0.0, 1.0, 0.0), 0.58));
+  float ndl = clamp(dot(lightNormal, uSunDir), -1.0, 1.0) * 0.5 + 0.5;
   color = srLandscapeLight(color, ndl, 1.0, emissive);
   gl_FragColor = vec4(color, 1.0);
   #include <tonemapping_fragment>
