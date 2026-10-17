@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AssetManifest } from '@schema/core'
 
 const { readServerDownloadBaseUrl } = vi.hoisted(() => ({
   readServerDownloadBaseUrl: vi.fn<() => string>(),
@@ -14,7 +15,7 @@ vi.mock('@/utils/serverAssetSource', () => ({ SERVER_ASSET_PROVIDER_ID: 'server-
 
 import { assetProvider, invalidateAssetManifestCache } from '../asset'
 
-function createManifest() {
+function createManifest(): AssetManifest {
   return {
     format: 'harmony-asset-manifest',
     version: 2,
@@ -81,6 +82,60 @@ describe('asset manifest provider', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(assetProvider.load?.()).resolves.toEqual([])
+  })
+
+  it('preserves terrain DEM metadata from the manifest', async () => {
+    const manifest = createManifest()
+    const terrainPack = {
+      version: 1,
+      kind: 'dem',
+      packKey: 'terrain-packs/terrain-dem',
+      sourceZipName: 'terrain-dem-29.64396-91.11584.zip',
+      runtimeGridUrl: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/runtime/dem-grid.bin',
+      runtimeGridBytes: 4404019,
+      demWidth: 251,
+      demHeight: 251,
+      demCellSizeMeters: 2,
+      anchor: { latitudeDegrees: 29.64396, longitudeDegrees: 91.11584, groundElevationMeters: 3651.5 },
+      crs: { epsg: 32646, zone: 46, hemisphere: 'north' },
+    }
+    const rootDirectory = manifest.directoriesById['asset-root']
+    if (!rootDirectory) {
+      throw new Error('Test manifest is missing its root directory')
+    }
+    rootDirectory.directoryIds = ['terrain']
+    manifest.directoriesById.terrain = {
+      id: 'terrain',
+      name: '地形',
+      parentId: 'asset-root',
+      directoryIds: [],
+      assetIds: ['dem-asset'],
+    }
+    manifest.assetsById['dem-asset'] = {
+      id: 'dem-asset',
+      name: '青龙山地形',
+      type: 'file',
+      downloadUrl: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/terrain-dem.zip',
+      resource: {
+        kind: 'remote',
+        url: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/terrain-dem.zip',
+      },
+      thumbnailUrl: null,
+      tags: [],
+      tagIds: [],
+      description: null,
+      metadata: { terrainPack },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      size: 13023191,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(manifest))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const directories = await assetProvider.load?.()
+    const demAsset = directories?.[0]?.assets?.[0]
+
+    expect(demAsset?.metadata?.terrainPack).toEqual(terrainPack)
   })
 
   it('reports HTTP and invalid manifest responses as errors', async () => {

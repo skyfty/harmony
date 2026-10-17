@@ -184,6 +184,7 @@ type AssetManifestAssetDto = {
   thumbnailUrl: string | null
   resource?: AssetManifestResourceDto | null
   thumbnail?: AssetManifestResourceDto | null
+  metadata?: Record<string, unknown>
   description: string | null
   createdAt: string
   updatedAt: string
@@ -1444,6 +1445,7 @@ function mapManifestAsset(
         }
       : null,
     description: response.description ?? null,
+    metadata: response.metadata,
     createdAt: response.createdAt,
     updatedAt: response.updatedAt,
     size: response.size,
