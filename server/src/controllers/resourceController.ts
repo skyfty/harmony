@@ -66,7 +66,10 @@ import {
   type ParsedTerrainPackArchive,
 } from '@/services/terrainPackService'
 import { buildTerrainDemRuntimeGrid } from '@/services/terrainDemRuntimeGridService'
-import { readTerrainPackAssetMetadata } from '@harmony/schema/terrainPack'
+import {
+  TERRAIN_DEM_STORAGE_LAYOUT,
+  readTerrainPackAssetMetadata,
+} from '@harmony/schema/terrainPack'
 const MANIFEST_FILENAME = 'asset-manifest.json'
 const MANIFEST_ROOT_DIRECTORY_ID = 'asset-root'
 const THUMBNAIL_PREFIX = 'thumb-'
@@ -2567,10 +2570,9 @@ function sanitizeTerrainPackCategoryName(raw: unknown): string | null {
  * 「资产库 / 地形 / <名称>」 category:
  *
  * - files land in their own folder under `uploads/terrain-packs/<packKey>/` in
- *   the canonical layout (`scene.glb` + `textures/*` + `textures.json`, or the
- *   DEM zip alone) so the runtime texture stream resolves `textures/*` relative
- *   to the GLB download URL while `uploads/` keeps its flat one-file-per-asset
- *   layout for everything else;
+ *   the canonical layout (`scene.glb` + `textures/*` + `textures.json`, or
+ *   `dem.json` + private `dem.tif`/`ortho.tif`) so runtime files resolve
+ *   relative to the registered primary asset;
  * - only the primary asset is registered - pack-internal files stay plain files
  *   (nothing in asset-manifest.json, nothing in the asset panels);
  * - re-uploading the same zip (same sha256) reuses the existing asset.
@@ -2631,6 +2633,15 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     const existingMetadata = readTerrainPackAssetMetadata(
       (existingMaster.metadata as Record<string, unknown> | undefined)?.terrainPack,
     )
+    if (
+      parsedArchive.kind === 'dem'
+      && (
+        existingMetadata?.kind !== 'dem'
+        || existingMetadata.storageLayout !== TERRAIN_DEM_STORAGE_LAYOUT
+      )
+    ) {
+      ctx.throw(409, '检测到旧版 DEM ZIP 主资产；旧格式不再支持，请先删除旧资产后重新上传。')
+    }
     if (
       (existingMetadata?.kind ?? parsedArchive.kind) === 'dem'
       && !existingMetadata?.runtimeGridUrl
@@ -2696,9 +2707,9 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
   try {
     const plan = planTerrainPackStorage(parsedArchive)
     const primaryFileKey = `${packKey}/${plan.primaryStoredPath}`
-    const primaryBytes = parsedArchive.kind === 'geometry'
-      ? (plan.primarySourcePath ? parsedArchive.entryByPath.get(plan.primarySourcePath.toLowerCase()) : null) ?? null
-      : new Uint8Array(buffer)
+    const primaryBytes = plan.primarySourcePath
+      ? parsedArchive.entryByPath.get(plan.primarySourcePath.toLowerCase()) ?? null
+      : null
     if (!primaryBytes) {
       ctx.throw(400, `资源包缺少主文件 ${parsedArchive.summary.glbFile ?? plan.primaryStoredPath}。`)
     }
@@ -3475,7 +3486,7 @@ export async function deleteAsset(ctx: Context): Promise<void> {
   const asset = await AssetModel.findById(id).lean().exec()
   if (asset) {
     // Terrain packs own a whole storage folder (GLB + textures + manifest, or
-    // the DEM zip); the folder goes away with the hard-deleted primary asset.
+    // dem.json + private TIFs + runtime grid); it goes away with the hard delete.
     const packMetadata = readTerrainPackAssetMetadata(
       (asset.metadata as Record<string, unknown> | undefined)?.terrainPack,
     )

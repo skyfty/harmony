@@ -40,14 +40,16 @@ import {
   storePlanningDemBlobByHash,
 } from '@/utils/planningDemStorage'
 import {
-  isTerrainDemPackageZip,
-  parseTerrainDemPackageZip,
   verifyTerrainDemPackageImport,
-} from '@/utils/terrainDemPackageZip'
+} from '@/utils/terrainDemPackage'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { ProjectAsset } from '@/types/project-asset'
-import { isTerrainDemPackAsset, loadTerrainDemPackFileFromAsset } from '@/utils/terrainPackLibrary'
+import {
+  isTerrainDemPackAsset,
+  loadTerrainDemAssetContents,
+  type TerrainDemAssetContents,
+} from '@/utils/terrainPackLibrary'
 import { sha256Hex as computeSha256Hex } from '@harmony/utils/hash'
 import { GROUND_TERRAIN_CHUNK_SIZE_METERS, resolveGroundWorldBounds } from '@schema/core'
 import {
@@ -2134,11 +2136,15 @@ async function handleDemPackAssetSelected(asset: ProjectAsset | null) {
   demImportError.value = null
   demPackImporting.value = true
   try {
-    const file = await loadTerrainDemPackFileFromAsset({
+    const contents = await loadTerrainDemAssetContents({
       asset,
       ensureAssetFile: (assetId, options) => assetCacheStore.ensureAssetFile(assetId, options),
+      ensureCachedFile: (cacheId, downloadUrl, name) => assetCacheStore.ensureAssetFile(cacheId, {
+        downloadUrl,
+        name,
+      }),
     })
-    await loadPlanningTerrainDemPackage(file)
+    await loadPlanningTerrainDemAsset(contents)
   } catch (error) {
     demImportError.value = error instanceof Error ? error.message : '从资源库导入 DEM 资源包失败。'
   } finally {
@@ -5420,10 +5426,6 @@ function clearPlanningDemImport() {
 async function loadPlanningDemFile(file: File) {
   demImportError.value = null
   try {
-    if (isTerrainDemPackageZip(file.name, file.type || null)) {
-      await loadPlanningTerrainDemPackage(file)
-      return
-    }
     const validation = validatePlanningDemImport(file)
     const result = await parsePlanningDemFile(file, buildPlanningDemParseOptions(planningTerrain.value.dem, validation))
     await storePlanningDemBlobByHash(result.sourceFileHash, file)
@@ -5441,28 +5443,24 @@ async function loadPlanningDemFile(file: File) {
 }
 
 /**
- * Imports a 3dtiles-viewer terrain package (zip with dem.tif + dem.json and an
- * optional ortho.tif). The DEM raster goes through the regular GeoTIFF import;
- * the ortho raster is persisted in the DEM blob store and referenced from the
- * terrain's `orthophoto` metadata.
+ * Imports a DEM metadata asset: dem.json is parsed first, then its referenced
+ * private TIF files are downloaded through the asset cache.
  */
-async function loadPlanningTerrainDemPackage(file: File) {
-  const bytes = new Uint8Array(await file.arrayBuffer())
-  const contents = parseTerrainDemPackageZip(bytes)
-
-  const demFile = new File([contents.dem.blob], contents.dem.filename, { type: contents.dem.mimeType })
+async function loadPlanningTerrainDemAsset(contents: TerrainDemAssetContents) {
+  const demFile = new File([contents.dem.file], contents.dem.filename, { type: contents.dem.mimeType })
   const validation = validatePlanningDemImport(demFile)
   const result = await parsePlanningDemFile(demFile, buildPlanningDemParseOptions(planningTerrain.value.dem, validation))
   verifyTerrainDemPackageImport(contents.sidecar, result)
-  await storePlanningDemBlobByHash(result.sourceFileHash, contents.dem.blob)
+  await storePlanningDemBlobByHash(result.sourceFileHash, demFile)
 
   const nextDem = demImportResultToTerrainData(result)
   nextDem.sourcePackage = contents.sidecar
 
   if (contents.ortho) {
-    const orthoBuffer = await contents.ortho.blob.arrayBuffer()
+    const orthoFile = new File([contents.ortho.file], contents.ortho.filename, { type: contents.ortho.mimeType })
+    const orthoBuffer = await orthoFile.arrayBuffer()
     const orthoHash = await computeSha256Hex(orthoBuffer)
-    await storePlanningDemBlobByHash(orthoHash, contents.ortho.blob)
+    await storePlanningDemBlobByHash(orthoHash, orthoFile)
     nextDem.orthophoto = {
       version: 1,
       sourceFileHash: orthoHash,
@@ -6245,7 +6243,7 @@ onBeforeUnmount(() => {
               <input
                 ref="demFileInputRef"
                 type="file"
-                accept=".tif,.tiff,.png,.zip"
+                accept=".tif,.tiff,.png"
                 class="sr-only"
                 @change="handleDemFileChange"
               >

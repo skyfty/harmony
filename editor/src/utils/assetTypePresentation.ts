@@ -1,6 +1,9 @@
 import { getLastExtensionFromFilenameOrUrl, isSkyCubeArchiveExtension } from '@schema/assetTypeConversion'
 import type { ProjectAsset } from '@/types/project-asset'
-import { readTerrainPackAssetMetadata } from '@schema/terrainPack'
+import {
+  TERRAIN_DEM_STORAGE_LAYOUT,
+  readTerrainPackAssetMetadata,
+} from '@schema/terrainPack'
 import { isFloorPresetFilename } from '@/utils/floorPreset'
 import { isDicePresetFilename } from '@/utils/dicePreset'
 import { isLandformPresetFilename } from '@/utils/landformPreset'
@@ -155,7 +158,8 @@ const DEM_TERRAIN_PRESENTATION: AssetTypePresentation = {
 }
 
 export function isDemTerrainPresentationAsset(asset: AssetTypePresentationSource): boolean {
-  return readTerrainPackAssetMetadata(asset?.metadata?.terrainPack)?.kind === 'dem'
+  const metadata = readTerrainPackAssetMetadata(asset?.metadata?.terrainPack)
+  return metadata?.kind === 'dem' && metadata.storageLayout === TERRAIN_DEM_STORAGE_LAYOUT
 }
 
 function isSkycubeFileAsset(asset: AssetTypePresentationSource): boolean {

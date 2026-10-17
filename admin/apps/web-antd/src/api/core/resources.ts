@@ -228,8 +228,8 @@ const TERRAIN_PACK_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
 
 /**
  * Uploads a 3dtiles-viewer terrain resource pack (zip). The server keeps the
- * archive layout (textures/ next to scene.glb) and registers the primary asset
- * plus its hidden dependency assets.
+ * archive only as an import envelope: geometry packs register scene.glb, while
+ * DEM packs extract dem.json as the metadata asset and keep TIFs private.
  */
 export async function uploadResourcePackApi(
   payload: FormData,

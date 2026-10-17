@@ -44,7 +44,7 @@ import { isDragPreviewReady } from '@/utils/dragPreviewRegistry'
 import { isAudioAsset, useAudioAssetPreview } from '@/utils/audioAssetPreview'
 import { getAssetTypePresentation } from '@/utils/assetTypePresentation'
 import { getAssetSourcePresentation } from '@/utils/assetSourcePresentation'
-import { isTerrainDemPackAsset } from '@/utils/terrainPackLibrary'
+import { isLegacyTerrainDemPackAsset, isTerrainDemPackAsset } from '@/utils/terrainPackLibrary'
 import { readTerrainPackAssetMetadata } from '@schema/terrainPack'
 import { normalizeAssetIdWithRegistry } from '@/utils/assetRegistryIdNormalization'
 import { isServerBackedProviderId, SERVER_ASSET_PROVIDER_ID } from '@/utils/serverAssetSource'
@@ -812,6 +812,9 @@ function assetExportError(asset: ProjectAsset): string | null {
  * asset cache download error so the newest feedback stays visible.
  */
 function assetCardError(asset: ProjectAsset): string | null {
+  if (isLegacyTerrainDemPackAsset(asset)) {
+    return '旧版 ZIP DEM 资产不再支持，请删除后重新上传'
+  }
   if (isTerrainDemPackAsset(asset) && !readTerrainPackAssetMetadata(asset.metadata?.terrainPack)?.runtimeGridUrl) {
     return 'DEM 资源包缺少 runtime grid，请重新上传'
   }
@@ -993,6 +996,9 @@ function canAddAsset(asset: ProjectAsset): boolean {
   if (isAssetDownloading(asset)) {
     return false
   }
+  if (isLegacyTerrainDemPackAsset(asset)) {
+    return false
+  }
 
   if (asset.type === 'prefab' || MODEL_ASSET_TYPES.has(asset.type)) {
     return isAssetReadyForMouseAction(asset)
@@ -1134,6 +1140,10 @@ function refreshGallery() {
 
 function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
   const preparedAsset = prepareAssetForOperations(asset)
+  if (isLegacyTerrainDemPackAsset(preparedAsset)) {
+    event.preventDefault()
+    return
+  }
   if (isTerrainDemPackAsset(preparedAsset)) {
     sceneStore.ensureSceneAssetRegistered(preparedAsset, {
       providerId: providerIdForAsset(preparedAsset) ?? undefined,

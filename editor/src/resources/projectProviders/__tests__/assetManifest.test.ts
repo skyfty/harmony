@@ -89,6 +89,7 @@ describe('asset manifest provider', () => {
     const terrainPack = {
       version: 1,
       kind: 'dem',
+      storageLayout: 'extracted-v2',
       packKey: 'terrain-packs/terrain-dem',
       sourceZipName: 'terrain-dem-29.64396-91.11584.zip',
       runtimeGridUrl: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/runtime/dem-grid.bin',
@@ -115,10 +116,10 @@ describe('asset manifest provider', () => {
       id: 'dem-asset',
       name: '青龙山地形',
       type: 'file',
-      downloadUrl: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/terrain-dem.zip',
+      downloadUrl: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/dem.json',
       resource: {
         kind: 'remote',
-        url: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/terrain-dem.zip',
+        url: 'https://v.touchmagic.cn/uploads/terrain-packs/terrain-dem/dem.json',
       },
       thumbnailUrl: null,
       tags: [],

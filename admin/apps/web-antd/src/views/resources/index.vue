@@ -1562,7 +1562,7 @@ onMounted(async () => {
     >
       <div style="margin-bottom: 12px; color: #666; line-height: 1.6">
         支持 3dtiles-viewer 导出的「几何+贴图包」（scene.glb + textures/ + textures.json）与「DEM 包」（dem.tif + ortho.tif + dem.json）。
-        包内文件会归位到固定布局（贴图放在 textures/ 下），只登记一个主资产；贴图与配置文件作为附属文件不进入资源清单，运行时按需下载。
+        ZIP 仅作为导入容器：几何包只登记主模型；DEM 包解压后只登记 dem.json，原始 TIF 作为私有文件按需下载，ZIP 不会入库。
       </div>
       <Form :label-col="{ span: 5 }" :wrapper-col="{ span: 18 }">
         <Form.Item label="资源包" required>
@@ -1606,6 +1606,7 @@ onMounted(async () => {
         <div>类型：{{ packResult.pack.kind === 'geometry' ? '几何+贴图包' : 'DEM 包' }}</div>
         <div>分类：{{ (packResult.category?.path || []).map((item) => item.name).join(' / ') || packResult.category?.name }}</div>
         <div>主资产：{{ packResult.asset?.name }} · {{ packResult.asset?.type }} · {{ formatFileSize(packResult.asset?.size || 0) }}</div>
+        <div v-if="packResult.pack.kind === 'dem'">DEM 元数据：dem.json 已入库；TIF 为私有文件，按需下载</div>
         <div>
           贴图 {{ packResult.pack.textureCount }} 张（KTX2 {{ packResult.pack.ktx2Count || 0 }}） · 包内文件 {{ packResult.pack.fileCount }} 个 · 共
           {{ formatFileSize(packResult.pack.totalBytes || 0) }}

@@ -13,7 +13,8 @@ import {
  *   textures/<id>.<ext>  one file per texture (jpg/png, optional .ktx2 variant)
  *   textures.json        manifest listing id/file/resolution/bytes (+ optional ktx2)
  *
- * DEM pack (zip): see ./terrainDemPackage.ts
+ * DEM upload envelope (zip): see ./terrainDemPackage.ts. The admin extracts it
+ * and registers dem.json while keeping rasters as private on-demand files.
  *
  * This module stays free of three/fflate so the Node server, the editor and the
  * runtime can all share the same validation.
@@ -24,6 +25,7 @@ export const TERRAIN_GEOMETRY_PACK_TEXTURE_DIR = 'textures' as const
 export const TERRAIN_GEOMETRY_PACK_MANIFEST = 'textures.json' as const
 
 export const TERRAIN_PACK_METADATA_VERSION = 1 as const
+export const TERRAIN_DEM_STORAGE_LAYOUT = 'extracted-v2' as const
 
 export type TerrainPackKind = 'geometry' | 'dem'
 
@@ -107,6 +109,8 @@ export interface TerrainPackSummary {
 export interface TerrainPackAssetMetadata {
   version: typeof TERRAIN_PACK_METADATA_VERSION
   kind: TerrainPackKind
+  /** DEM packs v2 register dem.json and keep rasters as private sibling files. */
+  storageLayout?: typeof TERRAIN_DEM_STORAGE_LAYOUT
   /** Storage folder of the extracted pack (`<packKey>/...`). */
   packKey: string
   sourceZipName: string | null
@@ -228,7 +232,8 @@ function isTextureLikePath(path: string): boolean {
  * The runtime texture stream resolves `textures/<file>` relative to the GLB's
  * download URL, so whatever directory structure the archive used is flattened
  * to: `scene.glb` + `textures/<file>` (+ `textures.json`) for geometry packs.
- * DEM packs are stored as the original zip only, so entry paths return null.
+ * DEM v2 packs register `dem.json` directly and keep raster files as private
+ * siblings, so this geometry-oriented mapper returns null for them.
  */
 export function resolveTerrainPackStoredPath(
   kind: TerrainPackKind,

@@ -7,7 +7,7 @@ function createFileAsset(metadata?: ProjectAsset['metadata']): ProjectAsset {
     id: 'terrain-dem',
     name: '青龙山地形',
     type: 'file',
-    downloadUrl: 'https://assets.example.com/terrain-packs/terrain-dem/terrain-dem.zip',
+    downloadUrl: 'https://assets.example.com/terrain-packs/terrain-dem/dem.json',
     previewColor: '#546E7A',
     gleaned: false,
     metadata,
@@ -20,6 +20,7 @@ describe('getAssetTypePresentation', () => {
       terrainPack: {
         version: 1,
         kind: 'dem',
+        storageLayout: 'extracted-v2',
         packKey: 'terrain-packs/terrain-dem',
         sourceZipName: 'terrain-dem-29.64396-91.11584.zip',
         runtimeGridUrl: 'https://assets.example.com/terrain-packs/terrain-dem/runtime/dem-grid.bin',

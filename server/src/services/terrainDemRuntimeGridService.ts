@@ -56,7 +56,8 @@ function fillNearest(
 
 /**
  * Decode the DEM once during admin upload and write the compact runtime grid
- * consumed by editor/preview/SceneryViewer. The source zip remains untouched.
+ * consumed by editor/preview/SceneryViewer. ZIP bytes are decoded in memory
+ * and are never retained as an asset.
  */
 export async function buildTerrainDemRuntimeGrid(input: {
   demBytes: Uint8Array

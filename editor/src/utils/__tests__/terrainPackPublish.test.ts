@@ -13,8 +13,9 @@ import {
   shouldSkipTerrainPackEmbedding,
 } from '@/utils/terrainPackPublish'
 import {
+  isLegacyTerrainDemPackAsset,
   isTerrainDemPackAsset,
-  loadTerrainDemPackFileFromAsset,
+  loadTerrainDemAssetContents,
   readTerrainDemPackSummary,
 } from '@/utils/terrainPackLibrary'
 
@@ -59,12 +60,13 @@ function createDemAsset(): ProjectAsset {
     id: 'asset-dem',
     name: 'terrain-dem-29.64396-91.11584',
     type: 'file',
-    downloadUrl: `${SERVER_BASE}terrain-def/terrain-dem.zip`,
-    fileKey: 'terrain-def/terrain-dem.zip',
+    downloadUrl: `${SERVER_BASE}terrain-def/dem.json`,
+    fileKey: 'terrain-def/dem.json',
     metadata: {
       terrainPack: {
         version: 1,
         kind: 'dem',
+        storageLayout: 'extracted-v2',
         packKey: 'terrain-def',
         sourceZipName: 'terrain-dem-29.64396-91.11584.zip',
         sourceZipHash: 'cafebabe',
@@ -74,6 +76,44 @@ function createDemAsset(): ProjectAsset {
       },
     },
   })
+}
+
+function createDemSidecar() {
+  return {
+    version: 1,
+    generator: '3dtiles-viewer',
+    createdAt: '2026-10-17T00:00:00.000Z',
+    anchor: {
+      latitudeDegrees: 29.64396,
+      longitudeDegrees: 91.11584,
+      groundElevationMeters: 3651.5,
+    },
+    crs: { type: 'utm', epsg: 32646, zone: 46, hemisphere: 'north', geographicEpsg: 4326 },
+    geoTransform: [500000, 2, 0, 3280000, 0, -2],
+    elevationDatum: 'wgs84-ellipsoid',
+    dem: {
+      file: 'dem.tif',
+      width: 251,
+      height: 251,
+      cellSizeMeters: 2,
+      minElevationMeters: 3640,
+      maxElevationMeters: 3700,
+    },
+    ortho: {
+      file: 'ortho.tif',
+      width: 251,
+      height: 251,
+      cellSizeMeters: 2,
+      photometric: 'rgb',
+    },
+    stats: {
+      sourceTriangleCount: 1000,
+      sampledCellCount: 63001,
+      filledCellCount: 12,
+      filledRatio: 0.0002,
+      warnings: [],
+    },
+  }
 }
 
 describe('terrain pack publish rules', () => {
@@ -152,24 +192,70 @@ describe('DEM pack library helpers', () => {
     const asset = createDemAsset()
     expect(isTerrainDemPackAsset(asset)).toBe(true)
     expect(isTerrainDemPackAsset(createAsset())).toBe(false)
+    expect(isLegacyTerrainDemPackAsset(asset)).toBe(false)
     expect(readTerrainDemPackSummary(asset).crsLabel).toBe('EPSG:32646 · UTM 46N')
   })
 
-  it('downloads the pack through the asset cache and rejects foreign assets', async () => {
-    const file = new File([new Uint8Array([1, 2, 3])], 'terrain-dem.zip', { type: 'application/zip' })
-    const ensureAssetFile = vi.fn(async () => file)
-    const loaded = await loadTerrainDemPackFileFromAsset({ asset: createDemAsset(), ensureAssetFile })
-    expect(loaded).toBe(file)
-    expect(ensureAssetFile).toHaveBeenCalledWith('asset-dem', { asset: expect.objectContaining({ id: 'asset-dem' }) })
+  it('rejects legacy zip-era DEM metadata without extracted-v2 storage', () => {
+    const legacy = createDemAsset()
+    legacy.metadata = {
+      terrainPack: {
+        ...(legacy.metadata?.terrainPack as Record<string, unknown>),
+        storageLayout: undefined,
+      },
+    }
 
-    await expect(loadTerrainDemPackFileFromAsset({ asset: createAsset(), ensureAssetFile }))
-      .rejects.toThrow(/不是 DEM 地形资源包/)
+    expect(isTerrainDemPackAsset(legacy)).toBe(false)
+    expect(isLegacyTerrainDemPackAsset(legacy)).toBe(true)
   })
 
-  it('reports a readable error when the download yields nothing', async () => {
-    await expect(loadTerrainDemPackFileFromAsset({
+  it('loads dem.json first and resolves private TIF files from its relative paths', async () => {
+    const asset = createDemAsset()
+    const sidecarFile = new File([JSON.stringify(createDemSidecar())], 'dem.json', { type: 'application/json' })
+    const demFile = new File([new Uint8Array([1, 2, 3])], 'dem.tif', { type: 'image/tiff' })
+    const orthoFile = new File([new Uint8Array([4, 5, 6])], 'ortho.tif', { type: 'image/tiff' })
+    const ensureAssetFile = vi.fn(async () => sidecarFile)
+    const ensureCachedFile = vi.fn(async (_cacheId: string, url: string, name: string) => {
+      return url.endsWith('/dem.tif') ? demFile : name === 'ortho.tif' ? orthoFile : null
+    })
+
+    const loaded = await loadTerrainDemAssetContents({ asset, ensureAssetFile, ensureCachedFile })
+
+    expect(loaded.sidecar.dem.file).toBe('dem.tif')
+    expect(loaded.dem.file).toBe(demFile)
+    expect(loaded.ortho?.file).toBe(orthoFile)
+    expect(ensureAssetFile).toHaveBeenCalledWith('asset-dem', { asset: expect.objectContaining({ id: 'asset-dem' }) })
+    expect(ensureCachedFile).toHaveBeenNthCalledWith(
+      1,
+      'terrain-dem:asset-dem:dem',
+      `${SERVER_BASE}terrain-def/dem.tif`,
+      'dem.tif',
+    )
+    expect(ensureCachedFile).toHaveBeenNthCalledWith(
+      2,
+      'terrain-dem:asset-dem:ortho',
+      `${SERVER_BASE}terrain-def/ortho.tif`,
+      'ortho.tif',
+    )
+
+    await expect(loadTerrainDemAssetContents({
+      asset: createAsset(),
+      ensureAssetFile,
+      ensureCachedFile,
+    })).rejects.toThrow(/不是 DEM 地形资源包/)
+  })
+
+  it('reports a readable error when dem.json or a referenced raster is unavailable', async () => {
+    await expect(loadTerrainDemAssetContents({
       asset: createDemAsset(),
       ensureAssetFile: async () => null,
-    })).rejects.toThrow(/无法下载/)
+      ensureCachedFile: async () => null,
+    })).rejects.toThrow(/dem\.json/)
+
+    await expect(loadTerrainDemAssetContents({
+      asset: createDemAsset(),
+      ensureAssetFile: async () => new File([JSON.stringify(createDemSidecar())], 'dem.json'),
+      ensureCachedFile: async () => null,
+    })).rejects.toThrow(/DEM 栅格/)
   })
 })

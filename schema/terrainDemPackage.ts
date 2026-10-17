@@ -2,7 +2,7 @@
  * Terrain DEM package format shared between the `3dtiles-viewer` tool (writer)
  * and the editor planning terrain import (reader).
  *
- * A package is a zip archive with the following layout:
+ * The admin upload envelope is a zip archive with the following layout:
  *   dem.tif    float32 single band UTM GeoTIFF with WGS84 ellipsoid heights
  *   ortho.tif  optional RGB uint8 UTM GeoTIFF rendered top-down from the same terrain
  *   dem.json   this sidecar document describing the rasters and their georeferencing
@@ -11,6 +11,9 @@
  * pixels, north-up). The sidecar is descriptive: it records the capture anchor,
  * the elevation datum and sampling statistics so downstream tools can reason
  * about the data without re-reading the rasters.
+ *
+ * The zip itself is not registered or retained. The asset library registers
+ * dem.json; the rasters remain private sibling files downloaded on demand.
  */
 
 export const TERRAIN_DEM_PACKAGE_VERSION = 1
@@ -127,6 +130,8 @@ export function parseTerrainDemPackageSidecar(value: unknown): TerrainDemPackage
   const dem = record.dem as Record<string, unknown> | undefined
   if (
     !dem
+    || typeof dem.file !== 'string'
+    || dem.file.trim().length === 0
     || !isFiniteNumber(dem.width)
     || !isFiniteNumber(dem.height)
     || dem.width < 2
@@ -135,6 +140,19 @@ export function parseTerrainDemPackageSidecar(value: unknown): TerrainDemPackage
     || dem.cellSizeMeters <= 0
   ) {
     throw new Error('地形包 dem.json 的 DEM 光栅描述无效。')
+  }
+  if (record.ortho !== null) {
+    const ortho = record.ortho as Record<string, unknown> | undefined
+    if (
+      !ortho
+      || typeof ortho.file !== 'string'
+      || ortho.file.trim().length === 0
+      || !isFiniteNumber(ortho.width)
+      || !isFiniteNumber(ortho.height)
+      || !isFiniteNumber(ortho.cellSizeMeters)
+    ) {
+      throw new Error('地形包 dem.json 的正射光栅描述无效。')
+    }
   }
   return value as TerrainDemPackageSidecar
 }

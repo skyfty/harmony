@@ -80,10 +80,13 @@ node tools/dist/cli-bin.js process-terrain-textures --manifest <解压目录>/te
 
 高程基准为 WGS84 椭球高，与 SRTM/QGIS 使用的大地水准面高存在系统差；该差值记录在侧车的锚点信息中，可在编辑器按需平移校正。
 
-编辑器导入：`PlanningDialog → DEM / Heightmap` 上传按钮同时接受 `.zip`。选择该包后：
+资源库流程：在 admin 资源页上传该 `.zip`。ZIP 只作为服务端导入容器，不会注册或保存；服务端解压后登记 `dem.json`，并将 TIF 保留为同目录私有文件。编辑器资源库只看到 `dem.json` 元数据资产，`PlanningDialog → DEM / Heightmap` 选择该资产后按需下载 TIF：
 
-1. `dem.tif` 走既有 GeoTIFF DEM 导入校验（投影坐标系、方形像素、NoData 限制），自动带出世界范围，无需手工覆盖；
-2. `ortho.tif` 存入 planning 资源库，并写入地形 `orthophoto` 元数据（`source: 'manual-upload'`）；
-3. 侧车写入 `PlanningTerrainDemData.sourcePackage`，用于展示来源（UTM 带）与后续偏移校正。
+1. 先下载并解析 `dem.json`，再按其中的 `dem.file` / `ortho.file` 相对路径下载 TIF；
+2. `dem.tif` 走既有 GeoTIFF DEM 导入校验（投影坐标系、方形像素、NoData 限制），自动带出世界范围，无需手工覆盖；
+3. `ortho.tif` 存入 planning 资源库，并写入地形 `orthophoto` 元数据（`source: 'manual-upload'`）；
+4. 侧车写入 `PlanningTerrainDemData.sourcePackage`，用于展示来源（UTM 带）与后续偏移校正。
+
+编辑器不再接受 ZIP 文件导入，也不再下载整个 ZIP 作为可拖放资产。
 
 导入后地形由 `planningDemToGround` 分块生成，proceduralLandscape 直接作用于该地形；`replace` 模式下不会请求任何 GLB 贴图。

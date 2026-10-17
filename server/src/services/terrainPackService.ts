@@ -8,6 +8,7 @@ import {
 } from '@harmony/schema/terrainDemPackage'
 import {
   TERRAIN_GEOMETRY_PACK_MANIFEST,
+  TERRAIN_DEM_STORAGE_LAYOUT,
   TERRAIN_PACK_METADATA_VERSION,
   detectTerrainPackKind,
   normalizeTerrainPackPath,
@@ -56,6 +57,26 @@ function findEntryPath(entries: ReadonlyArray<{ path: string }>, targetName: str
     }
   }
   return null
+}
+
+function normalizeDemRasterReference(value: string, label: string): string {
+  const normalized = value.trim().replace(/\\/g, '/')
+  if (
+    !normalized
+    || normalized.startsWith('/')
+    || /^[A-Za-z]:/.test(normalized)
+    || normalized.split('/').some((segment) => segment === '' || segment === '..' || segment === '.')
+  ) {
+    throw new Error(`dem.json 的 ${label} 必须是资源包内的相对路径。`)
+  }
+  return normalized
+}
+
+function resolveDemRasterArchivePath(sidecarPath: string, rasterPath: string): string {
+  const directory = sidecarPath.includes('/')
+    ? sidecarPath.slice(0, sidecarPath.lastIndexOf('/') + 1)
+    : ''
+  return normalizeTerrainPackPath(`${directory}${rasterPath}`) ?? ''
 }
 
 export function parseTerrainPackArchive(
@@ -123,10 +144,26 @@ export function parseTerrainPackArchive(
       throw new Error(`${TERRAIN_DEM_PACKAGE_FILES.sidecar} 不是有效的 JSON。`)
     }
     sidecar = parseTerrainDemPackageSidecar(sidecarJson)
+    const demReference = normalizeDemRasterReference(sidecar.dem.file, 'dem.file')
+    const expectedDemPath = resolveDemRasterArchivePath(sidecarPath, demReference)
+    if (!expectedDemPath || !entryByPath.has(expectedDemPath.toLowerCase())) {
+      throw new Error(`dem.json 引用的 DEM 栅格不存在：${sidecar.dem.file}。`)
+    }
+    const expectedOrthoPath = sidecar.ortho
+      ? resolveDemRasterArchivePath(
+          sidecarPath,
+          normalizeDemRasterReference(sidecar.ortho.file, 'ortho.file'),
+        )
+      : null
+    if (expectedOrthoPath && !entryByPath.has(expectedOrthoPath.toLowerCase())) {
+      throw new Error(`dem.json 引用的正射栅格不存在：${sidecar.ortho!.file}。`)
+    }
     summary = summarizeTerrainPack(
       entries.map((entry) => ({ path: entry.path, bytes: entry.bytes.byteLength })),
       { sidecar: sidecarJson },
     )
+    summary.demFile = expectedDemPath
+    summary.orthoFile = expectedOrthoPath
   }
 
   return {
@@ -141,21 +178,6 @@ export function parseTerrainPackArchive(
     sourceZipHash: sha256Hex(bytes),
     sourceZipHashAlgorithm: 'sha256',
   }
-}
-
-/** Sanitizes the uploaded zip filename for use as a stored file name. */
-export function sanitizeTerrainPackZipName(rawName: string | null | undefined, fallback: string): string {
-  const trimmed = typeof rawName === 'string' ? rawName.trim() : ''
-  const base = trimmed.split(/[\\/]/).pop() ?? ''
-  const normalized = base
-    .replace(/[\\/:*?"<>|]+/g, '-')
-    .replace(/\s+/g, ' ')
-    .replace(/\.\.+/g, '.')
-    .trim()
-  if (!normalized) {
-    return fallback
-  }
-  return normalized.toLowerCase().endsWith('.zip') ? normalized : `${normalized}.zip`
 }
 
 export function resolveTerrainPackPrimaryAssetType(kind: TerrainPackKind): AssetType {
@@ -191,9 +213,10 @@ export function buildTerrainPackAssetMetadata(input: {
     metadata.manifestFile = archive.summary.manifestFile
     metadata.textures = archive.summary.textures
   } else {
-    metadata.sidecarFile = archive.summary.sidecarFile
-    metadata.demFile = archive.summary.demFile
-    metadata.orthoFile = archive.summary.orthoFile
+    metadata.storageLayout = TERRAIN_DEM_STORAGE_LAYOUT
+    metadata.sidecarFile = TERRAIN_DEM_PACKAGE_FILES.sidecar
+    metadata.demFile = archive.sidecar?.dem.file ?? null
+    metadata.orthoFile = archive.sidecar?.ortho?.file ?? null
     metadata.demWidth = archive.sidecar?.dem.width ?? null
     metadata.demHeight = archive.sidecar?.dem.height ?? null
     metadata.demCellSizeMeters = archive.sidecar?.dem.cellSizeMeters ?? null
@@ -235,7 +258,7 @@ export interface TerrainPackStoragePlan {
   kind: TerrainPackKind
   /** Canonical path of the primary file, relative to the pack folder. */
   primaryStoredPath: string
-  /** Path of the primary file inside the archive (null when the primary is the zip itself). */
+  /** Path of the registered primary file inside the archive. */
   primarySourcePath: string | null
   /** Everything that gets written besides the primary file. */
   entries: TerrainPackStorageEntry[]
@@ -253,17 +276,53 @@ function withSuffix(path: string, suffix: number): string {
 /**
  * Canonical storage plan of a pack: geometry packs always end up as
  * `scene.glb` + `textures/*` (+ `textures.json`) so the runtime texture stream
- * can resolve `textures/*` relative to the GLB URL; DEM packs are stored as the
- * original zip only. Name clashes created by flattening get a numeric suffix.
+ * can resolve `textures/*` relative to the GLB URL; DEM packs register dem.json
+ * and keep referenced rasters as private sibling files. Name clashes created
+ * by flattening get a numeric suffix.
  */
 export function planTerrainPackStorage(archive: ParsedTerrainPackArchive): TerrainPackStoragePlan {
   const warnings: string[] = []
   if (archive.kind === 'dem') {
+    const sidecar = archive.sidecar
+    const sidecarPath = archive.summary.sidecarFile
+    const demPath = archive.summary.demFile
+    if (!sidecar || !sidecarPath || !demPath) {
+      throw new Error('DEM 资源包缺少 dem.json 或 dem.tif，无法生成存储计划。')
+    }
+    const demBytes = archive.entryByPath.get(demPath.toLowerCase())
+    if (!demBytes) {
+      throw new Error(`资源包缺少主栅格 ${demPath}。`)
+    }
+    const entries: TerrainPackStorageEntry[] = [{
+      sourcePath: demPath,
+      storedPath: normalizeDemRasterReference(sidecar.dem.file, 'dem.file'),
+      bytes: demBytes,
+    }]
+    if (sidecar.ortho) {
+      const orthoPath = archive.summary.orthoFile
+      const orthoBytes = orthoPath ? archive.entryByPath.get(orthoPath.toLowerCase()) : null
+      if (!orthoPath || !orthoBytes) {
+        throw new Error(`资源包缺少正射栅格 ${sidecar.ortho.file}。`)
+      }
+      entries.push({
+        sourcePath: orthoPath,
+        storedPath: normalizeDemRasterReference(sidecar.ortho.file, 'ortho.file'),
+        bytes: orthoBytes,
+      })
+    }
+    const storedPaths = new Set([TERRAIN_DEM_PACKAGE_FILES.sidecar.toLowerCase()])
+    for (const entry of entries) {
+      const key = entry.storedPath.toLowerCase()
+      if (storedPaths.has(key)) {
+        throw new Error(`dem.json 引用了重复的栅格路径：${entry.storedPath}。`)
+      }
+      storedPaths.add(key)
+    }
     return {
       kind: 'dem',
-      primaryStoredPath: sanitizeTerrainPackZipName(archive.sourceZipName, 'terrain-dem.zip'),
-      primarySourcePath: null,
-      entries: [],
+      primaryStoredPath: TERRAIN_DEM_PACKAGE_FILES.sidecar,
+      primarySourcePath: sidecarPath,
+      entries,
       warnings,
     }
   }

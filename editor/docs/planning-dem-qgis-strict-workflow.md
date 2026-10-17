@@ -17,7 +17,7 @@ Harmony 当前对图片 DEM 的默认导入规则如下：
 
 只要违反以上任一条规则，Harmony 导入时就应该直接报错，不做自动修复。
 
-> 替代数据源：由 `tools/3dtiles-viewer`「导出 DEM 包」生成的 `terrain-dem-*.zip` 不经过本规范，编辑器会直接把其中的 `dem.tif` 当作投影坐标系 GeoTIFF 校验（要求米制投影、方形像素），并自动带出世界范围；`ortho.tif` 会入库为地形正射影像。本 QGIS 流程仍是手工制作图片高度图时的唯一标准。
+> 替代数据源：由 `tools/3dtiles-viewer`「导出 DEM 包」生成的 `terrain-dem-*.zip` 不经过本规范。ZIP 仅在 admin 上传时作为导入容器，服务端登记 `dem.json` 元数据资产并保留私有 TIF；编辑器解析 sidecar 后按需下载 `dem.tif` 和 `ortho.tif`。`dem.tif` 必须是米制投影 GeoTIFF（方形像素、北向上），并自动带出世界范围。本 QGIS 流程仍是手工制作图片高度图时的唯一标准。
 
 ## 固定尺寸规则
 

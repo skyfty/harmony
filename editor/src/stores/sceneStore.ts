@@ -431,7 +431,10 @@ import {
 } from '@schema/components'
 import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
 import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
-import { readTerrainPackAssetMetadata } from '@schema/terrainPack'
+import {
+  TERRAIN_DEM_STORAGE_LAYOUT,
+  readTerrainPackAssetMetadata,
+} from '@schema/terrainPack'
 
 export {
   ASSETS_ROOT_DIRECTORY_ID,
@@ -13701,7 +13704,11 @@ export const useSceneStore = defineStore('scene', {
         throw new Error('Unable to find the requested DEM asset')
       }
       const metadata = readTerrainPackAssetMetadata(asset.metadata?.terrainPack)
-      if (metadata?.kind !== 'dem' || !metadata.runtimeGridUrl) {
+      if (
+        metadata?.kind !== 'dem'
+        || metadata.storageLayout !== TERRAIN_DEM_STORAGE_LAYOUT
+        || !metadata.runtimeGridUrl
+      ) {
         throw new Error('该 DEM 资源包缺少 runtime grid，请重新上传后再拖入场景。')
       }
       const placementAsset = this.ensureSceneAssetRegistered(asset, {
