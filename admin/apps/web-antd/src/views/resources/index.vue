@@ -604,8 +604,12 @@ const packUploadProps: UploadProps = {
 };
 
 function resolveUploadErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
+  const message = error instanceof Error ? error.message : '';
+  if (/timeout of \d+ms exceeded/i.test(message)) {
+    return '资源包上传或解析超时，请检查网络后重试，或改用体积更小的 DEM 包。';
+  }
+  if (message) {
+    return message;
   }
   const responseMessage = (error as { response?: { data?: { message?: string } } } | null)?.response?.data?.message;
   return responseMessage || '资源包上传失败，请稍后重试';

@@ -7,6 +7,7 @@ import type { RoadMarkingWeights } from './roadMarkings'
 import { isSingleTrackRoad } from './roadStyle'
 import type { RoadTraceNode } from './roadTrace'
 import { recordSlowroadsShaderAudit } from './shaderAudit'
+import { markProceduralLandscapeRoadSurface } from './collisionMetadata'
 
 /**
  * 公路贴图带（官方 `road` / `roadSingle` 两套路型网格移植）。
@@ -412,6 +413,7 @@ export function createRoadBand(options: RoadBandOptions): RoadBandHandle {
 
   const mesh = new THREE.Mesh(geometry, material)
   mesh.name = 'slowroads-road-band'
+  markProceduralLandscapeRoadSurface(mesh)
   mesh.receiveShadow = true
   mesh.castShadow = false
   mesh.frustumCulled = true

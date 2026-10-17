@@ -13694,7 +13694,9 @@ export const useSceneStore = defineStore('scene', {
         parentId?: string | null
       },
     ): Promise<{ asset: ProjectAsset; node: SceneNode }> {
-      const asset = findAssetInTree(this.projectTree, assetId)
+      // Server DEM packs may already live in the scene catalog without a
+      // project-tree entry; resolve both sources before spawning.
+      const asset = this.getAsset(assetId)
       if (!asset) {
         throw new Error('Unable to find the requested DEM asset')
       }

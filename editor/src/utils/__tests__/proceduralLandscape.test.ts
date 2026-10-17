@@ -24,6 +24,7 @@ import {
   encodeRoadDistance,
 } from '@schema/proceduralLandscape/roadField'
 import { createRoadBand } from '@schema/proceduralLandscape/roadBand'
+import { isProceduralLandscapeRoadSurface } from '@schema/proceduralLandscape/collisionMetadata'
 import { buildTerrainSurfaceSampler } from '@schema/proceduralLandscape/terrainSurfaceSampler'
 import { densifyRoadRows, sampleRoadRowColumns } from '@schema/proceduralLandscape/roadBandRows'
 import {
@@ -1522,6 +1523,20 @@ describe('road cross-slope drape (贴合横坡)', () => {
     longitudinal: 0,
     turn: 0,
     headingDelta: 0,
+  })
+
+  it('marks the road surface as collision-excluded', () => {
+    const handle = createRoadBand({
+      nodes: [makeNode(0, 0, 10), makeNode(10, 0, 10)],
+      halfWidth: 3,
+      density: null,
+      textures: { base: new THREE.Texture(), overlay: null },
+      season: 'summer',
+      hostInverse: null,
+      lift: 0.05,
+    })
+    expect(isProceduralLandscapeRoadSurface(handle.mesh)).toBe(true)
+    handle.dispose()
   })
 
   it('samples edge heights with midline fallback and drop clamping', () => {

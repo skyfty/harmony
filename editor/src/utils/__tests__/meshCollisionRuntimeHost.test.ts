@@ -2,12 +2,12 @@
  * Unit tests for the Ground-Anchor driven mesh collision streamer.
  *
  * The host used to index the source subtree exactly once. The procedural landscape
- * creates its road band / walls asynchronously (after the terrain grid finished
- * rasterizing) and rebuilds them on road edits, so those meshes never became
- * collidable and characters sank through the visible road. These tests lock the
- * incremental re-index: late meshes appear, unchanged meshes keep their bodies
- * (no churn / no collision gap) and hidden / removed / geometry-swapped meshes
- * lose theirs.
+ * creates its walls asynchronously (after the terrain grid finished rasterizing) and
+ * rebuilds them on road edits. These tests lock the incremental re-index: late
+ * obstacle meshes appear, unchanged meshes keep their bodies (no churn / no collision
+ * gap) and hidden / removed / geometry-swapped meshes lose theirs. The road surface
+ * itself is excluded because the ground / terrain underneath already provides
+ * collision for the same area.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
@@ -22,6 +22,7 @@ import {
 } from '@schema/meshCollisionRuntimeHost'
 import { createRoadBand } from '@schema/proceduralLandscape/roadBand'
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
+import { isProceduralLandscapeRoadSurface } from '@schema/proceduralLandscape/collisionMetadata'
 
 interface CreatedBodyRecord {
   shape: MeshCollisionChunkShape
@@ -111,8 +112,8 @@ function shapeMaxY(shape: MeshCollisionChunkShape): number {
   return maxY
 }
 
-/** Chunk shapes whose vertices sit above the terrain plane (y > 2.5) are the "band". */
-function isBandRecord(record: CreatedBodyRecord): boolean {
+/** Chunk shapes whose vertices sit above the terrain plane (y > 2.5) are obstacles. */
+function isElevatedRecord(record: CreatedBodyRecord): boolean {
   return shapeMaxY(record.shape) > 2.5
 }
 
@@ -153,27 +154,29 @@ afterEach(() => {
 })
 
 describe('mesh collision runtime host incremental re-index', () => {
-  it('indexes a road band that appears after the initial collection', () => {
+  it('indexes a late obstacle mesh that appears after the initial collection', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
     const probes = [new THREE.Vector3(0, 0, 0)]
     const harness = createHarness()
 
     drain(harness, host, 'terrain-node', probes)
-    const terrainBodies = harness.created.filter((record) => !isBandRecord(record))
+    const terrainBodies = harness.created.filter((record) => !isElevatedRecord(record))
     expect(terrainBodies.length).toBeGreaterThan(0)
-    expect(harness.created.filter(isBandRecord)).toHaveLength(0)
+    expect(harness.created.filter(isElevatedRecord)).toHaveLength(0)
 
-    // The procedural landscape creates its road band only once the terrain grid
-    // finished rasterizing — long after the initial collision index was built.
-    host.add(new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial()))
+    // Walls are created only once the terrain grid finished rasterizing — long after
+    // the initial collision index was built.
+    const wall = new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial())
+    wall.name = 'slowroads-wall-drystone-mesh'
+    host.add(wall)
     drain(harness, host, 'terrain-node', probes)
 
-    const bandBodies = harness.created.filter(isBandRecord)
-    expect(bandBodies.length).toBeGreaterThan(0)
-    expect(shapeMaxY(bandBodies[0]!.shape)).toBeCloseTo(5, 5)
+    const obstacleBodies = harness.created.filter(isElevatedRecord)
+    expect(obstacleBodies.length).toBeGreaterThan(0)
+    expect(shapeMaxY(obstacleBodies[0]!.shape)).toBeCloseTo(5, 5)
     // Unchanged terrain meshes must not be rebuilt while re-indexing.
-    expect(harness.created.filter((record) => !isBandRecord(record))).toHaveLength(terrainBodies.length)
+    expect(harness.created.filter((record) => !isElevatedRecord(record))).toHaveLength(terrainBodies.length)
     expect(harness.removed).toHaveLength(0)
   })
 
@@ -195,22 +198,22 @@ describe('mesh collision runtime host incremental re-index', () => {
   it('drops colliders of hidden meshes and restores them when shown again', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
-    const band = new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial())
-    host.add(band)
+    const obstacle = new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial())
+    host.add(obstacle)
     const probes = [new THREE.Vector3(0, 0, 0)]
     const harness = createHarness()
     drain(harness, host, 'terrain-node', probes)
 
-    const bandBodies = harness.created.filter(isBandRecord).map((record) => record.body)
-    expect(bandBodies.length).toBeGreaterThan(0)
-    band.visible = false
+    const obstacleBodies = harness.created.filter(isElevatedRecord).map((record) => record.body)
+    expect(obstacleBodies.length).toBeGreaterThan(0)
+    obstacle.visible = false
     drain(harness, host, 'terrain-node', probes)
-    for (const body of bandBodies) {
+    for (const body of obstacleBodies) {
       expect(harness.removed).toContain(body)
     }
 
     const createdWhileHidden = harness.created.length
-    band.visible = true
+    obstacle.visible = true
     drain(harness, host, 'terrain-node', probes)
     expect(harness.created.length).toBeGreaterThan(createdWhileHidden)
     expect(shapeMaxY(harness.created[harness.created.length - 1]!.shape)).toBeCloseTo(5, 5)
@@ -219,44 +222,44 @@ describe('mesh collision runtime host incremental re-index', () => {
   it('retires the chunks of a removed mesh only', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
-    const band = new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial())
-    host.add(band)
+    const obstacle = new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial())
+    host.add(obstacle)
     const probes = [new THREE.Vector3(0, 0, 0)]
     const harness = createHarness()
     drain(harness, host, 'terrain-node', probes)
 
-    const terrainCreates = harness.created.filter((record) => !isBandRecord(record)).length
-    const bandBodies = harness.created.filter(isBandRecord).map((record) => record.body)
-    host.remove(band)
+    const terrainCreates = harness.created.filter((record) => !isElevatedRecord(record)).length
+    const obstacleBodies = harness.created.filter(isElevatedRecord).map((record) => record.body)
+    host.remove(obstacle)
     drain(harness, host, 'terrain-node', probes)
 
-    for (const body of bandBodies) {
+    for (const body of obstacleBodies) {
       expect(harness.removed).toContain(body)
     }
-    expect(harness.created.filter((record) => !isBandRecord(record))).toHaveLength(terrainCreates)
+    expect(harness.created.filter((record) => !isElevatedRecord(record))).toHaveLength(terrainCreates)
   })
 
   it('rebuilds only the mesh whose geometry was swapped in place', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
-    const band = new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial())
-    host.add(band)
+    const obstacle = new THREE.Mesh(makeRibbonGeometry(40, 8, 5, 4), new THREE.MeshBasicMaterial())
+    host.add(obstacle)
     const probes = [new THREE.Vector3(0, 0, 0)]
     const harness = createHarness()
     drain(harness, host, 'terrain-node', probes)
 
-    const terrainCreates = harness.created.filter((record) => !isBandRecord(record)).length
-    const oldBandBodies = harness.created.filter(isBandRecord).map((record) => record.body)
-    band.geometry = makeRibbonGeometry(40, 8, 9, 4)
+    const terrainCreates = harness.created.filter((record) => !isElevatedRecord(record)).length
+    const oldObstacleBodies = harness.created.filter(isElevatedRecord).map((record) => record.body)
+    obstacle.geometry = makeRibbonGeometry(40, 8, 9, 4)
     drain(harness, host, 'terrain-node', probes)
 
-    for (const body of oldBandBodies) {
+    for (const body of oldObstacleBodies) {
       expect(harness.removed).toContain(body)
     }
-    const newBandBodies = harness.created.filter(isBandRecord)
-    expect(newBandBodies.length).toBeGreaterThan(0)
-    expect(shapeMaxY(newBandBodies[newBandBodies.length - 1]!.shape)).toBeCloseTo(9, 5)
-    expect(harness.created.filter((record) => !isBandRecord(record))).toHaveLength(terrainCreates)
+    const newObstacleBodies = harness.created.filter(isElevatedRecord)
+    expect(newObstacleBodies.length).toBeGreaterThan(0)
+    expect(shapeMaxY(newObstacleBodies[newObstacleBodies.length - 1]!.shape)).toBeCloseTo(9, 5)
+    expect(harness.created.filter((record) => !isElevatedRecord(record))).toHaveLength(terrainCreates)
   })
 
   it('never re-indexes on instanced mesh churn (vegetation streaming)', () => {
@@ -293,17 +296,19 @@ describe('mesh collision runtime host incremental re-index', () => {
     drain(harness, host, 'terrain-node', probes)
 
     const createdBefore = harness.created.length
-    host.add(new THREE.Mesh(makeRibbonGeometry(600, 8, 5, 24), new THREE.MeshBasicMaterial()))
+    const obstacle = new THREE.Mesh(makeRibbonGeometry(600, 8, 5, 24), new THREE.MeshBasicMaterial())
+    obstacle.name = 'slowroads-wall-drystone-mesh'
+    host.add(obstacle)
     const snapshot = syncOnce(harness, host, 'terrain-node', probes)
 
-    const bandBodies = harness.created.slice(createdBefore).filter(isBandRecord)
+    const obstacleBodies = harness.created.slice(createdBefore).filter(isElevatedRecord)
     expect(snapshot.indexing).toBe(false)
-    // The band subdivides into more chunks than the regular per-sync budget would
+    // The obstacle subdivides into more chunks than the regular per-sync budget would
     // create; the raised budget must drain most of them in the first sync.
-    expect(bandBodies.length).toBeGreaterThan(MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC)
-    expect(bandBodies.length).toBeLessThanOrEqual(MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC_AFTER_CHANGE)
+    expect(obstacleBodies.length).toBeGreaterThan(MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC)
+    expect(obstacleBodies.length).toBeLessThanOrEqual(MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC_AFTER_CHANGE)
     drain(harness, host, 'terrain-node', probes)
-    expect(harness.created.filter(isBandRecord).length).toBeGreaterThanOrEqual(12)
+    expect(harness.created.filter(isElevatedRecord).length).toBeGreaterThanOrEqual(12)
   })
 
   it('keeps the normal per-sync creation budget for the initial index', () => {
@@ -349,7 +354,7 @@ describe('mesh collision runtime host incremental re-index', () => {
     expect(harness.created.length).toBeGreaterThan(0)
   })
 
-  it('picks up a real procedural-landscape road band created after the terrain mesh', () => {
+  it('excludes a real procedural-landscape road surface from collision', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
     const probes = [new THREE.Vector3(0, 0, 0)]
@@ -380,13 +385,57 @@ describe('mesh collision runtime host incremental re-index', () => {
       hostInverse: null,
       lift: 0.3,
     })
+    expect(isProceduralLandscapeRoadSurface(roadBand.mesh)).toBe(true)
     host.add(roadBand.mesh)
     drain(harness, host, 'terrain-node', probes)
 
-    const bandBodies = harness.created.slice(terrainCreates).filter(isBandRecord)
-    expect(bandBodies.length).toBeGreaterThan(0)
-    expect(shapeMaxY(bandBodies[0]!.shape)).toBeCloseTo(5.3, 4)
+    expect(harness.created).toHaveLength(terrainCreates)
     expect(harness.removed).toHaveLength(0)
+    roadBand.dispose()
+  })
+
+  it('keeps walls collidable alongside an excluded road surface', () => {
+    const host = new THREE.Group()
+    host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
+    const probes = [new THREE.Vector3(0, 0, 0)]
+    const harness = createHarness()
+    drain(harness, host, 'terrain-node', probes)
+    const terrainCreates = harness.created.length
+
+    const nodes: RoadTraceNode[] = []
+    for (let index = 0; index < 12; index += 1) {
+      nodes.push({
+        x: -60 + index * 10,
+        z: 0,
+        y: 5,
+        heading: 0,
+        index,
+        lateral: 0,
+        longitudinal: 0,
+        turn: 0,
+        headingDelta: 0,
+      })
+    }
+    const roadBand = createRoadBand({
+      nodes,
+      halfWidth: 4,
+      density: null,
+      textures: { base: makeDummyTexture(), overlay: null },
+      season: 'spring',
+      hostInverse: null,
+      lift: 0.3,
+    })
+    const wall = new THREE.Mesh(makeRibbonGeometry(40, 4, 6, 4), new THREE.MeshBasicMaterial())
+    wall.name = 'slowroads-wall-drystone-mesh'
+    host.add(roadBand.mesh)
+    host.add(wall)
+    drain(harness, host, 'terrain-node', probes)
+
+    const obstacleBodies = harness.created.slice(terrainCreates)
+    expect(obstacleBodies.length).toBeGreaterThan(0)
+    for (const record of obstacleBodies) {
+      expect(shapeMaxY(record.shape)).toBeCloseTo(6, 5)
+    }
     roadBand.dispose()
   })
 })

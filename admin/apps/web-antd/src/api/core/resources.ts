@@ -222,6 +222,10 @@ export interface ResourcePackUploadResult {
   reused: boolean;
 }
 
+// Terrain packs are uploaded, unpacked, converted and registered in one
+// request. The global 10s request timeout is far too short for large DEM zips.
+const TERRAIN_PACK_UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+
 /**
  * Uploads a 3dtiles-viewer terrain resource pack (zip). The server keeps the
  * archive layout (textures/ next to scene.glb) and registers the primary asset
@@ -235,6 +239,7 @@ export async function uploadResourcePackApi(
     headers: {
       'Content-Type': 'multipart/form-data',
     },
+    timeout: TERRAIN_PACK_UPLOAD_TIMEOUT_MS,
     onUploadProgress: (event) => {
       if (!options.onUploadProgress) {
         return;
