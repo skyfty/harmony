@@ -5,10 +5,14 @@ import type { TerrainScatterStoreSnapshot } from '@schema/terrain-scatter'
 import type { SceneExportEventReporter, SceneExportOptions } from '@/types/scene-export'
 import type { SceneAssetValidationReport } from '@/utils/sceneAssetDiagnostics'
 import { findObjectByPath } from '@schema/modelAssetLoader'
-import { isExpandedImportedModelRoot, isIdentityNodeTransform, isLightweightImportNode } from '@schema/core'
+import { isIdentityNodeTransform, isLightweightImportNode } from '@schema/core'
 import { collectReferencedNodeIds, pruneUntouchedImportChildNodes } from '@/utils/importChildPrune'
 import { getCachedModelObject, getOrLoadModelObject } from '@schema/modelObjectCache'
 import { loadObjectFromFile } from '@schema/assetImport'
+import {
+  shouldAttemptOutlineAssetLoad,
+  shouldGenerateOutlineMeshForNode,
+} from '@/utils/sceneOutlinePolicy'
 import { useSceneStore } from '@/stores/sceneStore'
 import { buildSourceAssetRegistryForExport } from '@/stores/sceneStore'
 import { calculateSourceSceneResourceSummary, cloneSceneDocumentForExport } from '@/stores/sceneStore'
@@ -535,32 +539,6 @@ function getNodeJsonExportExclusionReason(node: SceneNode, options: SceneExportO
   return null
 }
 
-function shouldGenerateOutlineMeshForNode(node: SceneNode, options: SceneExportOptions): boolean {
-  if (!options.lazyLoadMeshes) {
-    return false
-  }
-  if (!node.sourceAssetId || typeof node.sourceAssetId !== 'string') {
-    return false
-  }
-  // Expanded lightweight nodes render one asset node each; the whole-asset
-  // outline placeholder would not match their geometry.
-  if (isLightweightImportNode(node)) {
-    return false
-  }
-  // Expanded imported model roots render the real asset instead of an outline
-  // placeholder, so a whole-model outline would only bloat the package.
-  if (isExpandedImportedModelRoot(node)) {
-    return false
-  }
-  if (node.dynamicMesh) {
-    return false
-  }
-  if (node.editorFlags?.editorOnly) {
-    return false
-  }
-  return true
-}
-
 function sanitizeNodeForJsonExport(
   node: SceneNode,
   options: SceneExportOptions,
@@ -665,45 +643,69 @@ async function generateOutlineMeshesForCandidates(
     return outlineMeshMap
   }
   const assetCacheStore = useAssetCacheStore()
+  const sceneStore = useSceneStore()
+  const failedAssetIds = new Set<string>()
 
   for (const entry of candidates) {
     const assetId = entry.sourceNode.sourceAssetId
     if (!assetId) {
       continue
     }
+    if (failedAssetIds.has(assetId)) {
+      continue
+    }
 
-    if (!outlineMeshMap[assetId]) {
-      let baseGroup = getCachedModelObject(assetId)
-      if (!baseGroup) {
-        const asset = useSceneStore().getAsset(assetId)
-        const file = await assetCacheStore.ensureAssetFile(assetId, { asset })
-        if (file) {
-          const ext = asset?.extension ?? undefined
-          baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
+    try {
+      const asset = sceneStore.getAsset(assetId)
+      if (!shouldAttemptOutlineAssetLoad(asset)) {
+        continue
+      }
+
+      if (!entry.sanitizedNode.sourceAssetId) {
+        entry.sanitizedNode.sourceAssetId = entry.sourceNode.sourceAssetId
+      }
+      if (!entry.sanitizedNode.importMetadata && entry.sourceNode.importMetadata) {
+        entry.sanitizedNode.importMetadata = { ...entry.sourceNode.importMetadata }
+      }
+
+      if (!outlineMeshMap[assetId]) {
+        let baseGroup = getCachedModelObject(assetId)
+        if (!baseGroup) {
+          const file = await assetCacheStore.ensureAssetFile(assetId, { asset })
+          if (file) {
+            const ext = asset?.extension ?? undefined
+            baseGroup = await getOrLoadModelObject(assetId, () => loadObjectFromFile(file, ext))
+          }
         }
-      }
-      if (!baseGroup) {
-        continue
-      }
-      const baseObject = baseGroup.object
-      baseObject.updateMatrixWorld(true)
-      const targetSource = findObjectByPath(baseObject, entry.sourceNode.importMetadata?.objectPath ?? null) ?? baseObject
-      const targetClone = targetSource.clone(true)
-      targetClone.updateMatrixWorld(true)
+        if (!baseGroup) {
+          failedAssetIds.add(assetId)
+          continue
+        }
+        const baseObject = baseGroup.object
+        baseObject.updateMatrixWorld(true)
+        const targetSource = findObjectByPath(baseObject, entry.sourceNode.importMetadata?.objectPath ?? null) ?? baseObject
+        const targetClone = targetSource.clone(true)
+        targetClone.updateMatrixWorld(true)
 
-      const outline = buildOutlineMeshFromObject(targetClone)
-      if (!outline) {
-        continue
+        const outline = buildOutlineMeshFromObject(targetClone)
+        if (!outline) {
+          failedAssetIds.add(assetId)
+          continue
+        }
+
+        outlineMeshMap[assetId] = outline
       }
-
-      outlineMeshMap[assetId] = outline
-    }
-
-    if (!entry.sanitizedNode.sourceAssetId) {
-      entry.sanitizedNode.sourceAssetId = entry.sourceNode.sourceAssetId
-    }
-    if (!entry.sanitizedNode.importMetadata && entry.sourceNode.importMetadata) {
-      entry.sanitizedNode.importMetadata = { ...entry.sourceNode.importMetadata }
+    } catch (error) {
+      failedAssetIds.add(assetId)
+      console.warn(
+        '[SceneExport] Failed to generate outline mesh; continuing without it',
+        {
+          assetId,
+          nodeId: entry.sourceNode.id,
+          nodeName: entry.sourceNode.name,
+        },
+        error,
+      )
     }
   }
 
