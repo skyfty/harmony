@@ -428,36 +428,84 @@ export const TREE_OBJ_SPECIES_MODELS: Record<0 | 1, readonly string[]> = {
   1: TREE_OBJECT_MODELS.conifer,
 }
 
-/** Every texture a season needs, deduplicated, for preloading / accounting. */
-export function collectSeasonTextureRefs(season: SeasonId): SeasonTextureRef[] {
-  const entry = SEASON_CATALOG[season]
-  const refs: SeasonTextureRef[] = [
-    entry.surface.grass,
-    entry.surface.forest,
-    entry.surface.heather,
-    entry.surface.gravel,
-    entry.surface.rock,
-    entry.surface.sand,
-    entry.surface.detailNear,
-    entry.surface.detailFar,
-    entry.sprites.bushes,
-    entry.sprites.grassSprites,
-    entry.trees.broadleafD,
-    entry.trees.broadleafN,
-    entry.trees.coniferM,
-    entry.trees.coniferA,
-    entry.imposters.mapA,
-    entry.imposters.normA,
-    entry.imposters.mapB,
-    entry.imposters.normB,
-    entry.road.single.base,
-    entry.road.wide.base,
-    entry.walls.barrier,
-    entry.walls.seaWall,
-    entry.walls.fence,
-    entry.walls.drystone,
+export interface SeasonTextureRefFilter {
+  surface?: boolean
+  forest?: boolean
+  grass?: boolean
+  bushes?: boolean
+  roadSingle?: boolean
+  roadWide?: boolean
+  walls?: boolean
+}
+
+export interface LandscapeSharedTextureFilter {
+  surface?: boolean
+  forest?: boolean
+  grass?: boolean
+  bushes?: boolean
+  water?: boolean
+}
+
+export function collectSurfaceTextureRefs(season: SeasonId): SeasonTextureRef[] {
+  const surface = SEASON_CATALOG[season].surface
+  return [
+    surface.grass,
+    surface.forest,
+    surface.heather,
+    surface.gravel,
+    surface.rock,
+    surface.sand,
+    surface.detailNear,
+    surface.detailFar,
   ]
-  for (const road of [entry.road.single, entry.road.wide]) {
+}
+
+/** Every texture a season needs, deduplicated, for preloading / accounting. */
+export function collectSeasonTextureRefs(
+  season: SeasonId,
+  filter: SeasonTextureRefFilter = {},
+): SeasonTextureRef[] {
+  const entry = SEASON_CATALOG[season]
+  const refs: SeasonTextureRef[] = []
+  const includeSurface = filter.surface !== false
+  const includeForest = filter.forest !== false
+  const includeGrass = filter.grass !== false
+  const includeBushes = filter.bushes !== false
+  const includeRoadSingle = filter.roadSingle !== false
+  const includeRoadWide = filter.roadWide !== false
+  const includeWalls = filter.walls !== false
+
+  if (includeSurface) {
+    refs.push(...collectSurfaceTextureRefs(season))
+  } else if (includeForest || includeGrass || includeBushes) {
+    // Foliage cards sample the shared detail-far map even when the terrain
+    // surface itself is not textured.
+    refs.push(entry.surface.detailFar)
+  }
+  if (includeForest) {
+    refs.push(
+      entry.trees.broadleafD,
+      entry.trees.broadleafN,
+      entry.trees.coniferM,
+      entry.trees.coniferA,
+      entry.imposters.mapA,
+      entry.imposters.normA,
+      entry.imposters.mapB,
+      entry.imposters.normB,
+    )
+  }
+  if (includeGrass) {
+    refs.push(entry.sprites.grassSprites)
+  }
+  if (includeBushes) {
+    refs.push(entry.sprites.bushes)
+  }
+  const roadStyles = [
+    ...(includeRoadSingle ? [entry.road.single] : []),
+    ...(includeRoadWide ? [entry.road.wide] : []),
+  ]
+  for (const road of roadStyles) {
+    refs.push(road.base)
     if (road.overlay) {
       refs.push(road.overlay)
     }
@@ -471,6 +519,45 @@ export function collectSeasonTextureRefs(season: SeasonId): SeasonTextureRef[] {
         road.paint.mergeRight,
       )
     }
+  }
+  if (includeWalls) {
+    refs.push(
+      entry.walls.barrier,
+      entry.walls.seaWall,
+      entry.walls.fence,
+      entry.walls.drystone,
+    )
+  }
+  const seen = new Set<string>()
+  return refs.filter((ref) => {
+    if (seen.has(ref.id)) {
+      return false
+    }
+    seen.add(ref.id)
+    return true
+  })
+}
+
+/** Shared maps required by the landscape shaders for the enabled layers. */
+export function collectLandscapeSharedTextureRefs(
+  filter: LandscapeSharedTextureFilter = {},
+): SeasonTextureRef[] {
+  const refs: SeasonTextureRef[] = []
+  const anySurfaceOrFoliage = filter.surface !== false
+    || filter.forest !== false
+    || filter.grass !== false
+    || filter.bushes !== false
+  if (anySurfaceOrFoliage) {
+    refs.push(SHARED_TEXTURES.noise, SHARED_TEXTURES.grassVariation)
+  }
+  if (filter.surface !== false) {
+    refs.push(SHARED_TEXTURES.rockBump)
+  }
+  if (filter.bushes !== false) {
+    refs.push(SHARED_TEXTURES.bushNoise)
+  }
+  if (filter.water === true) {
+    refs.push(SHARED_TEXTURES.seaWaves)
   }
   const seen = new Set<string>()
   return refs.filter((ref) => {

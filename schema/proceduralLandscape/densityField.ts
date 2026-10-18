@@ -118,19 +118,24 @@ export function buildForestDensityField(
  * surface canopy texture, so tree placement and shaded forest floor agree.
  */
 export function buildDemForestDensityField(
-  options: LandscapeDensityFieldOptions,
+  options: LandscapeDensityFieldOptions & { coverage?: number },
 ): LandscapeDensityField {
   const largeSeed = (options.seed ^ 0x7f4a7c15) >>> 0
   const mediumSeed = (options.seed ^ 0x2c9277b5) >>> 0
+  const coverage = clamp01(options.coverage ?? 1)
   return createField(options, (x, z) => {
     const value = clamp01(
       fbm2(largeSeed, x / 900, z / 900, 4, 2.02, 0.52) * 0.75
       + fbm2(mediumSeed, x / 210, z / 210, 2, 2.1, 0.5) * 0.25,
     )
-    if (value >= 0.58) return 1
-    if (value >= 0.46) return 2 / 3
-    if (value >= 0.34) return 1 / 3
-    return 0
+    const classValue = value >= 0.58
+      ? 1
+      : value >= 0.46
+        ? 2 / 3
+        : value >= 0.34
+          ? 1 / 3
+          : 0
+    return classValue * coverage
   })
 }
 

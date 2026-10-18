@@ -858,6 +858,7 @@ import {
 } from '@harmony/schema/components/definitions/generalMeshComponent';
 import {
   proceduralLandscapeComponentDefinition,
+  PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
 } from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
 import {
   createSlowroadsEnvironmentRuntime,
@@ -865,8 +866,20 @@ import {
   type SlowroadsEnvironmentRuntime,
 } from '@harmony/schema/slowroads/render/environmentRuntime';
 import { resolveCameraFarForFogDistance } from '@harmony/schema/slowroads/core/environment';
-import { getSharedSlowroadsAssetStore } from '@harmony/schema/slowroads/assets/assetStore';
-import { setProceduralLandscapeEnvironment } from '@harmony/schema/proceduralLandscape/runtime';
+import {
+  getSharedSlowroadsAssetStore,
+  peekSharedSlowroadsAssetStore,
+} from '@harmony/schema/slowroads/assets/assetStore';
+import {
+  getProceduralLandscapeStats,
+  setProceduralLandscapeDeviceProfile,
+  setProceduralLandscapeEnvironment,
+  setProceduralLandscapeMemoryPressure,
+} from '@harmony/schema/proceduralLandscape/runtime';
+import {
+  createLandscapeDiagnosticsLogger,
+  type LandscapeDiagnosticsLogger,
+} from '../common/utils/landscapeDiagnostics';
 import {
   deviceAdaptationComponentDefinition,
 } from '@harmony/schema/components/definitions/deviceAdaptationComponent';
@@ -1815,7 +1828,9 @@ type CameraFrameSnapshot = {
 const cameraFrameSnapshotPosition = new THREE.Vector3();
 const cameraFrameSnapshotQuaternion = new THREE.Quaternion();
 let renderContext: RenderContext | null = null;
+let landscapeDiagnostics: LandscapeDiagnosticsLogger | null = null;
 let baseRendererPixelRatio = 1;
+let landscapePixelRatioCap: number | null = null;
 let baseRendererShadowsEnabled = true;
 let activeDeviceAdaptationProfile: DeviceAdaptationProfile | null = null;
 // Nodes whose device-adaptation rule changes *which* asset is rendered
@@ -1829,6 +1844,7 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
     if (!context) {
       return;
     }
+    setProceduralLandscapeMemoryPressure(false);
     context.renderer.setPixelRatio(1);
     context.renderer.shadowMap.enabled = false;
     applyRendererShadowSetting();
@@ -1838,6 +1854,7 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
     if (!context) {
       return;
     }
+    setProceduralLandscapeMemoryPressure(true);
     context.renderer.setPixelRatio(1);
     context.renderer.shadowMap.enabled = false;
     applyRendererShadowSetting();
@@ -1848,6 +1865,7 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
     if (!context) {
       return;
     }
+    setProceduralLandscapeMemoryPressure(true);
     context.renderer.setPixelRatio(1);
     context.renderer.shadowMap.enabled = false;
     applyRendererShadowSetting();
@@ -1859,12 +1877,18 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
     if (!context) {
       return;
     }
+    setProceduralLandscapeMemoryPressure(false);
     const qualityPixelCap = activeDeviceAdaptationProfile?.quality === 'low'
       ? 1
       : activeDeviceAdaptationProfile?.quality === 'balanced'
         ? 1.5
         : baseRendererPixelRatio;
-    context.renderer.setPixelRatio(Math.min(baseRendererPixelRatio, qualityPixelCap, activeDeviceAdaptationProfile?.pixelRatioCap ?? baseRendererPixelRatio));
+    context.renderer.setPixelRatio(Math.min(
+      baseRendererPixelRatio,
+      qualityPixelCap,
+      activeDeviceAdaptationProfile?.pixelRatioCap ?? baseRendererPixelRatio,
+      landscapePixelRatioCap ?? baseRendererPixelRatio,
+    ));
     context.renderer.shadowMap.enabled = activeDeviceAdaptationProfile
       ? activeDeviceAdaptationProfile.shadowsEnabled && activeDeviceAdaptationProfile.quality !== 'low'
       : baseRendererShadowsEnabled;
@@ -1994,6 +2018,7 @@ function ensureSlowroadsEnvironmentRuntime(): void {
   const assetStore = getSharedSlowroadsAssetStore({
     maxTextureSize: context.renderer.capabilities.maxTextureSize,
     maxAnisotropy: Math.min(8, context.renderer.capabilities.getMaxAnisotropy()),
+    preferredVariant: isWeChatMiniProgram ? '2048' : 'full',
   });
   slowroadsEnvironment = createSlowroadsEnvironmentRuntime({
     scene: context.scene,
@@ -5635,6 +5660,38 @@ function collectSceneNodeDescendantIds(node: SceneNode): string[] {
   return ids
 }
 
+/**
+ * A dense forest scene is fill-rate limited on mid-range mini-program GPUs.
+ * Keep the 2x ratio for light scenes (for example the texture-only diagnostic)
+ * and cap only documents that actually place a forest.
+ */
+function resolveLandscapePixelRatioCap(document: SceneJsonExportDocument | null): number | null {
+  if (!isWeChatMiniProgram || !document) {
+    return null
+  }
+  const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    const component = node.components?.['proceduralLandscape'] as {
+      props?: { forest?: { coverage?: unknown; density?: unknown } }
+    } | undefined
+    if (component?.props?.forest) {
+      const coverage = Number(component.props.forest.coverage ?? 1)
+      const density = Number(component.props.forest.density ?? 1)
+      if (coverage > 0 && density > 0) {
+        return 1.5
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return null
+}
+
 function createSceneGraphBuildOptions(
   payload: ScenePreviewPayload,
   onProgress?: SceneGraphBuildOptions['onProgress'],
@@ -5649,7 +5706,12 @@ function createSceneGraphBuildOptions(
     : activeDeviceAdaptationProfile?.quality === 'balanced'
       ? 1.5
       : baseRendererPixelRatio;
-  const resolvedPixelCap = Math.min(qualityPixelCap, activeDeviceAdaptationProfile?.pixelRatioCap ?? baseRendererPixelRatio);
+  const performancePixelCap = landscapePixelRatioCap ?? baseRendererPixelRatio;
+  const resolvedPixelCap = Math.min(
+    qualityPixelCap,
+    activeDeviceAdaptationProfile?.pixelRatioCap ?? baseRendererPixelRatio,
+    performancePixelCap,
+  );
   const resolvedShadows = activeDeviceAdaptationProfile
     ? activeDeviceAdaptationProfile.shadowsEnabled && activeDeviceAdaptationProfile.quality !== 'low'
     : baseRendererShadowsEnabled;
@@ -22343,44 +22405,55 @@ async function mountGraphAndSyncSubsystems(
   ensureBehaviorTapHandler(canvas, camera);
   await yieldToMainThread();
 
-  setSceneInitState({
-    stage: 'syncingPhysics',
-    label: '正在同步物理系统',
-    detail: '正在准备物理桥接...',
-    stagePercent: 0,
-    currentIndex: 0,
-    currentTotal: 3,
-    currentLabel: 'prepareSceneryPhysicsBridgeForDocument',
-    active: true,
-  });
-  await prepareSceneryPhysicsBridgeForDocument(payload.document);
-  initializeLazyPlaceholders(payload.document);
-  await yieldToMainThread();
-
-  setSceneInitState({
-    stage: 'syncingPhysics',
-    label: '正在同步物理系统',
-    detail: '正在构建物理体...',
-    stagePercent: 34,
-    currentIndex: 1,
-    currentTotal: 3,
-    currentLabel: 'syncPhysicsBodiesForDocument',
-    active: true,
-  });
-  // Bootstrap physics before the render loop so vehicle drive and ground collision never race initialization.
-  await syncPhysicsBodiesForDocument(payload.document, (progress) => {
+  // The physics bridge waits for the DEM collision mesh, but the landscape
+  // component is normally advanced by the render loop, which starts after this
+  // wait. Pump only the landscape component so the DEM build can progress
+  // instead of idling for the full 30s collision timeout.
+  const landscapeBuildPump = setInterval(() => {
+    previewComponentManager.update(1 / 60, { types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES });
+  }, 16);
+  try {
     setSceneInitState({
       stage: 'syncingPhysics',
       label: '正在同步物理系统',
-      detail: progress.detail || '正在构建物理体...',
-      stagePercent: progress.percent,
-      currentIndex: progress.currentIndex ?? 0,
-      currentTotal: progress.currentTotal ?? 0,
-      currentLabel: progress.currentLabel ?? 'syncPhysicsBodiesForDocument',
+      detail: '正在准备物理桥接...',
+      stagePercent: 0,
+      currentIndex: 0,
+      currentTotal: 3,
+      currentLabel: 'prepareSceneryPhysicsBridgeForDocument',
       active: true,
     });
-  });
-  await yieldToMainThread();
+    await prepareSceneryPhysicsBridgeForDocument(payload.document);
+    initializeLazyPlaceholders(payload.document);
+    await yieldToMainThread();
+
+    setSceneInitState({
+      stage: 'syncingPhysics',
+      label: '正在同步物理系统',
+      detail: '正在构建物理体...',
+      stagePercent: 34,
+      currentIndex: 1,
+      currentTotal: 3,
+      currentLabel: 'syncPhysicsBodiesForDocument',
+      active: true,
+    });
+    // Bootstrap physics before the render loop so vehicle drive and ground collision never race initialization.
+    await syncPhysicsBodiesForDocument(payload.document, (progress) => {
+      setSceneInitState({
+        stage: 'syncingPhysics',
+        label: '正在同步物理系统',
+        detail: progress.detail || '正在构建物理体...',
+        stagePercent: progress.percent,
+        currentIndex: progress.currentIndex ?? 0,
+        currentTotal: progress.currentTotal ?? 0,
+        currentLabel: progress.currentLabel ?? 'syncPhysicsBodiesForDocument',
+        active: true,
+      });
+    });
+    await yieldToMainThread();
+  } finally {
+    clearInterval(landscapeBuildPump);
+  }
 
   setSceneInitState({
     stage: 'syncingScatter',
@@ -22493,6 +22566,26 @@ function startRenderLoop(
     renderScope = effectScope();
   }
 
+  landscapeDiagnostics?.dispose();
+  landscapeDiagnostics = createLandscapeDiagnosticsLogger({
+    getDocument: () => currentDocument,
+    getRenderer: () => renderContext?.renderer ?? null,
+    getCanvasSize: () => {
+      const canvas = canvasResult?.canvas as { width?: number; height?: number } | null;
+      return canvas
+        ? { width: canvas.width ?? 0, height: canvas.height ?? 0 }
+        : null;
+    },
+    getWarnings: () => warnings.value,
+    getMemoryGuard: () => runtimeMemoryGuard.state,
+    getAssetCacheBytes: () => sceneAssetCache.getInMemoryBytes(),
+    getEnvironment: () => currentSlowroadsEnvironmentState,
+    getCameraPosition: () => renderContext?.camera.position ?? null,
+    getLandscapeStats: (nodeId) => getProceduralLandscapeStats(nodeId),
+    getAssetStore: () => peekSharedSlowroadsAssetStore(),
+  });
+  landscapeDiagnostics.start();
+
   let accumulatedDelta = 0;
   renderScope.run(() => {
     watchEffect((onCleanup) => {
@@ -22502,6 +22595,8 @@ function startRenderLoop(
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
         accumulatedDelta = 0;
+
+        landscapeDiagnostics?.tick(deltaSeconds);
 
         if (debugEnabled.value) {
           updateDebugFps(deltaSeconds);
@@ -22728,6 +22823,8 @@ function startRenderLoop(
       });
       onCleanup(() => {
         cancel();
+        landscapeDiagnostics?.dispose();
+        landscapeDiagnostics = null;
       });
     });
   });
@@ -22743,6 +22840,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   // Stop the old frame loop to avoid stacking multiple useFrame() tickers.
   renderScope?.stop();
   renderScope = null;
+  landscapeDiagnostics?.dispose();
+  landscapeDiagnostics = null;
 
   resetProtagonistPoseState();
   resetSceneryCharacterInputYawState();
@@ -22878,6 +22977,34 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
+  landscapePixelRatioCap = resolveLandscapePixelRatioCap(payload.document);
+  setProceduralLandscapeMemoryPressure(false);
+  if (isWeChatMiniProgram) {
+    const deviceInfo = readDeviceAdaptationSystemInfo();
+    setProceduralLandscapeDeviceProfile({
+      platform: deviceInfo.platform,
+      benchmarkLevel: deviceInfo.benchmarkLevel
+        ?? (runtimeMemoryGuard.state.deviceBenchmarkLevel || null),
+      memoryMb: deviceInfo.memoryMb
+        ?? (runtimeMemoryGuard.state.deviceMemoryMb || null),
+      cpuCores: deviceInfo.cpuCores,
+      maxTextureSize: deviceInfo.maxTextureSize,
+    });
+  } else {
+    setProceduralLandscapeDeviceProfile(null);
+  }
+  const assetRenderer = renderContext.renderer;
+  let maxAssetAnisotropy = 1;
+  try {
+    maxAssetAnisotropy = Math.min(8, assetRenderer.capabilities.getMaxAnisotropy());
+  } catch {
+    maxAssetAnisotropy = 1;
+  }
+  getSharedSlowroadsAssetStore({
+    maxTextureSize: assetRenderer.capabilities.maxTextureSize,
+    maxAnisotropy: maxAssetAnisotropy,
+    preferredVariant: isWeChatMiniProgram ? '2048' : 'full',
+  });
   latestControlNodeRestoreSnapshot = null;
   refreshDynamicGroundCache(currentDocument);
   setActiveMultiuserRuntimeBridge(multiuserRuntimeBridge);
@@ -23311,6 +23438,8 @@ defineExpose({
 });
 
 function cleanupRuntime(): void {
+  landscapeDiagnostics?.dispose();
+  landscapeDiagnostics = null;
   runtimeMemoryGuard.stop();
   dismissBehaviorBubble({ type: 'continue' });
   removeBehaviorRuntimeListener(behaviorRuntimeListener);

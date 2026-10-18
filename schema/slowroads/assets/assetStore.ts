@@ -20,6 +20,13 @@ export const SLOWROADS_ASSET_BASE_URL = 'https://v.touchmagic.cn/uploads/slowroa
 export const SLOWROADS_ASSET_MANIFEST_FILE = 'asset-bundle.json'
 export const SLOWROADS_TEXTURE_2048_THRESHOLD = 4096
 
+export function resolveSlowroadsLogicalId(
+  variant: 'full' | '2048',
+  logicalId: string,
+): string {
+  return variant === '2048' ? `${logicalId}@2048` : logicalId
+}
+
 interface SlowroadsAssetRuntimeConfig {
   baseUrl: string
   manifestUrl: string
@@ -27,9 +34,27 @@ interface SlowroadsAssetRuntimeConfig {
   resolveTextureSource?: (file: SlowroadsBundleFile | null, blobUrl: string | null) => string | null
 }
 
+/**
+ * Join an absolute asset base URL with a relative bundle path without relying
+ * on the DOM `URL` constructor. WeChat mini-program subpackages can evaluate
+ * this module before the three-platform adapter installs its URL polyfill, so
+ * `new URL(...)` at module scope crashes the whole scenery subpackage.
+ */
+function resolveAssetUrl(baseUrl: string, path: string): string {
+  const normalizedPath = typeof path === 'string' ? path.trim() : ''
+  if (/^(?:https?:|data:|blob:|wxfile:)/i.test(normalizedPath)) {
+    return normalizedPath
+  }
+  const normalizedBase = typeof baseUrl === 'string' ? baseUrl.trim() : ''
+  if (!normalizedBase) {
+    return normalizedPath
+  }
+  return `${normalizedBase.replace(/\/+$/, '')}/${normalizedPath.replace(/^\/+/, '')}`
+}
+
 let assetRuntimeConfig: SlowroadsAssetRuntimeConfig = {
   baseUrl: SLOWROADS_ASSET_BASE_URL,
-  manifestUrl: new URL(SLOWROADS_ASSET_MANIFEST_FILE, SLOWROADS_ASSET_BASE_URL).toString(),
+  manifestUrl: resolveAssetUrl(SLOWROADS_ASSET_BASE_URL, SLOWROADS_ASSET_MANIFEST_FILE),
 }
 
 export function configureSlowroadsAssetBaseUrl(baseUrl: string, manifestFileName = SLOWROADS_ASSET_MANIFEST_FILE): void {
@@ -37,7 +62,7 @@ export function configureSlowroadsAssetBaseUrl(baseUrl: string, manifestFileName
   assetRuntimeConfig = {
     ...assetRuntimeConfig,
     baseUrl: normalized,
-    manifestUrl: new URL(manifestFileName, normalized).toString(),
+    manifestUrl: resolveAssetUrl(normalized, manifestFileName),
   }
   sharedSlowroadsAssetStore?.reset()
 }
@@ -68,10 +93,24 @@ export interface SlowroadsAssetStoreStats {
   warnings: string[]
 }
 
+export interface SlowroadsTextureDiagnostic {
+  id: string
+  width: number
+  height: number
+  estimatedBytes: number
+  anisotropy: number
+  generateMipmaps: boolean
+}
+
 export interface SlowroadsAssetStoreOptions {
   /** 设备纹理上限（renderer.capabilities.maxTextureSize）；< 4096 用 @2048 变体。 */
   maxTextureSize?: number
   maxAnisotropy?: number
+  /**
+   * Explicit variant policy. Mini programs use the existing @2048 imposter
+   * atlases even when the GPU reports a larger texture limit.
+   */
+  preferredVariant?: 'full' | '2048'
 }
 
 interface TextureEntry {
@@ -90,6 +129,7 @@ const placeholderWarnings = new Set<string>()
 
 export class SlowroadsAssetStore {
   private readonly options: Required<Pick<SlowroadsAssetStoreOptions, 'maxTextureSize' | 'maxAnisotropy'>>
+    & { preferredVariant: 'full' | '2048' | null }
   private manifest: AssetBundleManifest | null = null
   private manifestPromise: Promise<AssetBundleManifest | null> | null = null
   private manifestFailed = false
@@ -105,10 +145,45 @@ export class SlowroadsAssetStore {
     this.options = {
       maxTextureSize: options.maxTextureSize && options.maxTextureSize > 0 ? options.maxTextureSize : 8192,
       maxAnisotropy: options.maxAnisotropy ?? 1,
+      preferredVariant: options.preferredVariant === 'full' || options.preferredVariant === '2048'
+        ? options.preferredVariant
+        : null,
+    }
+  }
+
+  /**
+   * Update device-derived limits after the shared store already exists. The
+   * landscape runtime can construct the singleton before the viewer has a
+   * renderer, so without this pass every texture keeps the default anisotropy
+   * of 1 even on devices that support 8/16.
+   */
+  configure(options: SlowroadsAssetStoreOptions): void {
+    const nextMaxTextureSize = options.maxTextureSize != null
+      && Number.isFinite(options.maxTextureSize)
+      && options.maxTextureSize > 0
+      ? options.maxTextureSize
+      : this.options.maxTextureSize
+    const nextMaxAnisotropy = options.maxAnisotropy != null
+      && Number.isFinite(options.maxAnisotropy)
+      && options.maxAnisotropy > 0
+      ? options.maxAnisotropy
+      : this.options.maxAnisotropy
+    this.options.maxTextureSize = nextMaxTextureSize
+    this.options.maxAnisotropy = nextMaxAnisotropy
+    if (options.preferredVariant === 'full' || options.preferredVariant === '2048') {
+      this.options.preferredVariant = options.preferredVariant
+    }
+    const anisotropy = Math.max(1, Math.min(8, nextMaxAnisotropy))
+    for (const entry of this.textures.values()) {
+      entry.texture.anisotropy = anisotropy
+      entry.texture.needsUpdate = true
     }
   }
 
   get variant(): 'full' | '2048' {
+    if (this.options.preferredVariant) {
+      return this.options.preferredVariant
+    }
     return this.options.maxTextureSize < SLOWROADS_TEXTURE_2048_THRESHOLD ? '2048' : 'full'
   }
 
@@ -140,13 +215,36 @@ export class SlowroadsAssetStore {
     }
   }
 
+  /**
+   * Read-only texture inventory for runtime diagnostics. The scene viewer uses
+   * this to explain mobile-only quality differences (full vs @2048 atlases,
+   * anisotropy and mipmap state) without traversing materials per frame.
+   */
+  textureDiagnostics(): SlowroadsTextureDiagnostic[] {
+    const diagnostics: SlowroadsTextureDiagnostic[] = []
+    for (const entry of this.textures.values()) {
+      const image = entry.texture.image as { width?: number; height?: number } | null
+      const width = Number(image?.width)
+      const height = Number(image?.height)
+      diagnostics.push({
+        id: entry.logicalId,
+        width: Number.isFinite(width) && width > 0 ? width : 0,
+        height: Number.isFinite(height) && height > 0 ? height : 0,
+        estimatedBytes: entry.estimatedBytes,
+        anisotropy: entry.texture.anisotropy,
+        generateMipmaps: entry.texture.generateMipmaps === true,
+      })
+    }
+    return diagnostics.sort((left, right) => left.id.localeCompare(right.id))
+  }
+
   private warn(code: string): void {
     this.warnings.add(code)
     placeholderWarnings.add(code)
   }
 
   private fileUrl(file: SlowroadsBundleFile): string {
-    return new URL(file.path, assetRuntimeConfig.baseUrl).toString()
+    return resolveAssetUrl(assetRuntimeConfig.baseUrl, file.path)
   }
 
   /** 按设备上限选择档位：`@2048` 变体存在时优先（低配设备）。 */
@@ -154,8 +252,9 @@ export class SlowroadsAssetStore {
     if (this.variant === 'full') {
       return logicalId
     }
-    const variantId = `${logicalId}@2048`
-    return this.fileByLogicalId.has(variantId) ? variantId : logicalId
+    // Resolve optimistically. Manifest loading is asynchronous and the first
+    // texture request would otherwise miss @2048 and permanently cache full.
+    return resolveSlowroadsLogicalId(this.variant, logicalId)
   }
 
   async ensureManifest(): Promise<AssetBundleManifest | null> {
@@ -213,7 +312,11 @@ export class SlowroadsAssetStore {
 
   /** 已驻留（或正在加载）的纹理数量。 */
   hasTexture(logicalId: string): boolean {
-    return this.textures.has(this.resolveLogicalId(logicalId)) || this.pending.has(this.resolveLogicalId(logicalId))
+    const resolvedId = this.resolveLogicalId(logicalId)
+    return this.textures.has(resolvedId)
+      || this.textures.has(logicalId)
+      || this.pending.has(resolvedId)
+      || this.pending.has(logicalId)
   }
 
   /**
@@ -224,6 +327,7 @@ export class SlowroadsAssetStore {
     refs: ReadonlyArray<SeasonTextureRef>,
     onProgress?: (loaded: number, total: number) => void,
   ): Promise<Map<string, THREE.Texture>> {
+    await this.ensureManifest()
     const result = new Map<string, THREE.Texture>()
     const unique: SeasonTextureRef[] = []
     const seen = new Set<string>()
@@ -247,13 +351,15 @@ export class SlowroadsAssetStore {
   }
 
   async texture(ref: SeasonTextureRef): Promise<THREE.Texture | null> {
+    await this.ensureManifest()
     const resolvedId = this.resolveLogicalId(ref.id)
-    const entry = this.textures.get(resolvedId)
+    const entry = this.textures.get(resolvedId) ?? this.textures.get(ref.id)
     if (entry) {
       entry.lastUsedAt = Date.now()
       return entry.texture
     }
     const pending = this.pending.get(resolvedId)
+      ?? this.pending.get(ref.id)
     if (pending) {
       return await pending.promise
     }
@@ -268,7 +374,7 @@ export class SlowroadsAssetStore {
 
   private async loadTexture(ref: SeasonTextureRef, resolvedId: string): Promise<THREE.Texture | null> {
     await this.ensureManifest()
-    const file = this.fileByLogicalId.get(resolvedId)
+    const file = this.fileByLogicalId.get(resolvedId) ?? this.fileByLogicalId.get(ref.id)
     if (!file) {
       this.warn(`missing-file:${resolvedId}`)
       return null
@@ -305,10 +411,10 @@ export class SlowroadsAssetStore {
       const width = image?.width ?? 0
       const height = image?.height ?? 0
       const estimatedBytes = Math.round(width * height * 4 * 1.34) || file.size * 4
-      this.textures.set(resolvedId, {
+      this.textures.set(file.logicalId, {
         texture,
         objectUrl,
-        logicalId: resolvedId,
+        logicalId: file.logicalId,
         estimatedBytes,
         lastUsedAt: Date.now(),
       })
@@ -412,7 +518,18 @@ let sharedSlowroadsAssetStore: SlowroadsAssetStore | null = null
 export function getSharedSlowroadsAssetStore(options: SlowroadsAssetStoreOptions = {}): SlowroadsAssetStore {
   if (!sharedSlowroadsAssetStore) {
     sharedSlowroadsAssetStore = new SlowroadsAssetStore(options)
+  } else if (
+    options.maxTextureSize != null
+    || options.maxAnisotropy != null
+    || options.preferredVariant != null
+  ) {
+    sharedSlowroadsAssetStore.configure(options)
   }
+  return sharedSlowroadsAssetStore
+}
+
+/** Read-only access that must not create or reconfigure the shared store. */
+export function peekSharedSlowroadsAssetStore(): SlowroadsAssetStore | null {
   return sharedSlowroadsAssetStore
 }
 

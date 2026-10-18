@@ -81,13 +81,23 @@ import { createWallLayers, wallFenceSpriteSamples, type WallLayerHandle } from '
 import { createWaterPlane, type WaterPlaneHandle } from './waterPlane'
 import { getSharedSlowroadsAssetStore, slowroadsSharedRetainIds, type SlowroadsAssetStore } from '../slowroads/assets/assetStore'
 import {
+  collectLandscapeSharedTextureRefs,
   collectSeasonTextureRefs,
+  collectSurfaceTextureRefs,
   SEASON_CATALOG,
   SHARED_TEXTURES,
   type SeasonId,
+  type SeasonTextureRefFilter,
 } from '../slowroads/core/seasonCatalog'
 import { SEASON_PARAMS } from '../slowroads/core/seasonParams'
 import { resolveEnvironmentPreset } from '../slowroads/core/environment'
+import {
+  resolveAdaptiveCalibrationDecision,
+  resolveAdaptiveLandscapeProfile,
+  type LandscapeAdaptiveCalibrationState,
+  type ProceduralLandscapeAdaptiveProfile,
+  type ProceduralLandscapeDeviceProfile,
+} from './adaptive'
 import {
   reportSlowroadsSelfChecks,
   runMaterialUniformCoverageChecks,
@@ -251,6 +261,21 @@ export interface ProceduralLandscapeRuntimeStats {
   season: SeasonId
   seasonAssetsReady: boolean
   nearTreeInstances: number
+  nearCardInstances: number
+  nearTreeReady: boolean
+  adaptive: {
+    deviceTier: 'low' | 'mid' | 'high' | null
+    sceneAreaKm2: number | null
+    targetCoverage: number | null
+    targetDensity: number | null
+    effectiveCoverage: number
+    effectiveDensity: number
+    targetFps: number | null
+    targetTreeCount: number | null
+    measuredFps: number | null
+    calibrationState: LandscapeAdaptiveCalibrationState
+    calibrationAttempts: number
+  }
   /** 在线资产库统计（下载/常驻/档位）。 */
   assetTextureCount: number
   assetResidentBytes: number
@@ -328,6 +353,8 @@ export interface ProceduralLandscapeRuntime {
 }
 
 let currentEnvironment: ProceduralLandscapeEnvironment = 'preview'
+let currentDeviceProfile: ProceduralLandscapeDeviceProfile | null = null
+let currentMemoryPressure = false
 
 export function setProceduralLandscapeEnvironment(environment: ProceduralLandscapeEnvironment): void {
   currentEnvironment = environment
@@ -335,6 +362,16 @@ export function setProceduralLandscapeEnvironment(environment: ProceduralLandsca
 
 export function getProceduralLandscapeEnvironment(): ProceduralLandscapeEnvironment {
   return currentEnvironment
+}
+
+export function setProceduralLandscapeDeviceProfile(
+  profile: ProceduralLandscapeDeviceProfile | null,
+): void {
+  currentDeviceProfile = profile
+}
+
+export function setProceduralLandscapeMemoryPressure(value: boolean): void {
+  currentMemoryPressure = value === true
 }
 
 const statsRegistry = new Map<string, ProceduralLandscapeRuntimeStats>()
@@ -557,6 +594,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     instances: jsonKey([props.grass, props.bushes, props.quality]),
     lod: jsonKey([props.forest.nearDistance, props.forest.nearTreeRadius, props.quality]),
     uniforms: jsonKey([props.surface, props.canopy, props.wind, props.road.flattenBand, props.road.flattenStrength]),
+    textureNeeds: jsonKey([
+      props.surface.enabled,
+      props.surface.textures,
+      props.forest.coverage,
+      props.forest.density,
+      props.grass.enabled,
+      props.bushes.enabled,
+      props.road.enabled,
+      props.road.width,
+      props.walls.drystone.enabled,
+      props.walls.fence.enabled,
+      props.walls.barrier.enabled,
+      props.walls.seaWall.enabled,
+      props.water.enabled,
+    ]),
     roadDebug: jsonKey(props.debug.showRoadPath),
     chunkDebug: jsonKey(props.debug.showChunks),
   }
@@ -686,6 +738,22 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let seasonAssetsSeason: SeasonId | null = null
   let seasonLoadToken = 0
   let seasonLoadInFlight = false
+  let surfaceTexturesReady = false
+  let lastLoadedTextureNeedsKey = ''
+  let roadTexturesRequested = false
+  let wallTexturesRequested = false
+  let waterTextureRequested = false
+  let effectiveForestCoverage = props.forest.coverage
+  let effectiveForestDensity = props.forest.density
+  let adaptiveProfile: ProceduralLandscapeAdaptiveProfile | null = null
+  let adaptiveState: LandscapeAdaptiveCalibrationState = 'disabled'
+  let adaptiveAttempts = 0
+  let adaptiveMeasuredFps: number | null = null
+  let adaptiveSettledAt = 0
+  let adaptiveMeasureStartedAt = 0
+  let adaptiveMeasureFrames = 0
+  let adaptiveMeasureSeconds = 0
+  let adaptiveSceneKey = ''
 
   const stats: ProceduralLandscapeRuntimeStats = {
     nodeId: hooks.nodeId,
@@ -712,6 +780,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     season: currentSeason,
     seasonAssetsReady: false,
     nearTreeInstances: 0,
+    nearCardInstances: 0,
+    nearTreeReady: false,
+    adaptive: {
+      deviceTier: null,
+      sceneAreaKm2: null,
+      targetCoverage: null,
+      targetDensity: null,
+      effectiveCoverage: props.forest.coverage,
+      effectiveDensity: props.forest.density,
+      targetFps: null,
+      targetTreeCount: null,
+      measuredFps: null,
+      calibrationState: 'disabled',
+      calibrationAttempts: 0,
+    },
     assetTextureCount: 0,
     assetResidentBytes: 0,
     assetDownloadedBytes: 0,
@@ -762,6 +845,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function resolveQuality(): ResolvedProceduralLandscapeQuality {
+    if (props.quality === 'auto' && currentEnvironment !== 'editor') {
+      // Keep the mobile world-forest budget at the low tier; the adaptive
+      // target coverage/density below is the density control.
+      return 'low'
+    }
     return resolveProceduralLandscapeQuality(props.quality, currentEnvironment)
   }
 
@@ -1278,7 +1366,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       minHeight: props.forest.minHeight,
       minScale: props.forest.minScale,
       maxScale: props.forest.maxScale,
-      densityMultiplier: tier.densityMultiplier,
+      densityMultiplier: tier.densityMultiplier * effectiveForestDensity,
     }
     const deps = {
       grid,
@@ -1539,6 +1627,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     dirty.grid = true
   }
 
+  function resetAdaptiveState(): void {
+    adaptiveProfile = null
+    adaptiveState = 'disabled'
+    adaptiveAttempts = 0
+    adaptiveMeasuredFps = null
+    adaptiveSettledAt = 0
+    adaptiveMeasureStartedAt = 0
+    adaptiveMeasureFrames = 0
+    adaptiveMeasureSeconds = 0
+    adaptiveSceneKey = ''
+    effectiveForestCoverage = props.forest.coverage
+    effectiveForestDensity = props.forest.density
+  }
+
   function buildWorld(): void {
     if (!grid) {
       return
@@ -1548,19 +1650,55 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     disposeDemRoadbed()
     const activeGrid = grid
     const bounds = { minX: grid.minX, minZ: grid.minZ, sizeX: grid.maxX - grid.minX, sizeZ: grid.maxZ - grid.minZ }
+    const sceneAreaKm2 = Math.max(0.001, (bounds.sizeX * bounds.sizeZ) / 1_000_000)
+    const adaptiveSceneSignature = jsonKey([
+      props.seed,
+      props.quality,
+      props.forest.coverage,
+      props.forest.density,
+      bounds.sizeX,
+      bounds.sizeZ,
+      currentDeviceProfile,
+    ])
+    const nextAdaptiveProfile = resolveAdaptiveLandscapeProfile({
+      device: currentDeviceProfile,
+      sceneAreaKm2,
+      environment: currentEnvironment,
+      quality: props.quality,
+    })
+    if (adaptiveSceneSignature !== adaptiveSceneKey || (!nextAdaptiveProfile && adaptiveProfile)) {
+      adaptiveSceneKey = adaptiveSceneSignature
+      adaptiveProfile = nextAdaptiveProfile
+      adaptiveAttempts = 0
+      adaptiveMeasuredFps = null
+      adaptiveSettledAt = 0
+      adaptiveMeasureStartedAt = 0
+      adaptiveMeasureFrames = 0
+      adaptiveMeasureSeconds = 0
+      if (nextAdaptiveProfile) {
+        effectiveForestCoverage = nextAdaptiveProfile.targetCoverage
+        effectiveForestDensity = nextAdaptiveProfile.targetDensity
+        adaptiveState = 'waiting'
+      } else {
+        effectiveForestCoverage = props.forest.coverage
+        effectiveForestDensity = props.forest.density
+        adaptiveState = 'disabled'
+      }
+    }
     densityField = usesDemTerrain()
       ? buildDemForestDensityField({
           ...bounds,
           seed: props.seed,
           seedOffset: props.forest.seedOffset,
           scale: props.forest.scale,
+          coverage: effectiveForestCoverage,
         })
       : buildForestDensityField({
           ...bounds,
           seed: props.seed,
           seedOffset: props.forest.seedOffset,
           scale: props.forest.scale,
-          coverage: props.forest.coverage,
+          coverage: effectiveForestCoverage,
         })
     variationField = buildVariationField({ ...bounds, seed: props.seed, scale: props.forest.scale })
     forestMaskTexture?.dispose()
@@ -1776,6 +1914,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         warn('road-blocked-before-boundary')
       }
     }
+    if (roadResult && roadResult.nodes.length >= 2) {
+      if (!roadTexturesRequested) {
+        roadTexturesRequested = true
+        void loadSeasonAssets(currentSeason, { force: true })
+      }
+    } else if (roadTexturesRequested) {
+      roadTexturesRequested = false
+      seasonAssetsSeason = null
+      void loadSeasonAssets(currentSeason, { force: true })
+    }
     if (!roadFieldTexture) {
       roadFieldTexture = createEmptyRoadFieldTexture()
     }
@@ -1965,7 +2113,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     })
     stats.wallSegmentCount = wallSegments.length
     if (!wallSegments.length) {
+      if (wallTexturesRequested) {
+        wallTexturesRequested = false
+        seasonAssetsSeason = null
+        void loadSeasonAssets(currentSeason, { force: true })
+      }
       return
+    }
+    if (!wallTexturesRequested) {
+      wallTexturesRequested = true
+      void loadSeasonAssets(currentSeason, { force: true })
     }
 
     // ---- 木栏（官方 Fence）：沿用植被精灵层的双横栏区域 ----
@@ -2057,8 +2214,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     refreshWaterFloodStats()
     const waves = textureFor(SHARED_TEXTURES.seaWaves.id)
     if (!waves) {
+      if (
+        props.water.enabled
+        && waterFloodStats
+        && waterFloodStats.floodedFraction >= WATER_FLOOD_VISIBLE_FRACTION
+        && !waterTextureRequested
+      ) {
+        waterTextureRequested = true
+        void loadSeasonAssets(currentSeason, { force: true })
+      }
       return
     }
+    waterTextureRequested = false
     const size = Math.max(1, Math.max(grid.maxX - grid.minX, grid.maxZ - grid.minZ) * 1.5)
     const centerX = (grid.minX + grid.maxX) * 0.5
     const centerZ = (grid.minZ + grid.maxZ) * 0.5
@@ -2215,7 +2382,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const entry = SEASON_CATALOG[seasonAssetsSeason ?? currentSeason]
     const params = SEASON_PARAMS[seasonAssetsSeason ?? currentSeason]
     const placeholder = getSharedPlaceholderTexture()
-    uniforms.uPlShowTextures.value = props.surface.textures && seasonAssets ? 1 : 0
+    uniforms.uPlShowTextures.value = props.surface.textures && surfaceTexturesReady ? 1 : 0
     uniforms.uPlSeasonIndex.value = params.index
     uniforms.uPlGrassColA.value.set(params.grassColA)
     uniforms.uPlGrassColB.value.set(params.grassColB)
@@ -2251,7 +2418,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlShowCanopy.value = props.canopy.enabled ? 1 : 0
     // Keep the palette path until the seasonal set is complete; otherwise the
     // transparent placeholder would render the terrain black while loading.
-    uniforms.uPlShowTextures.value = props.surface.textures && seasonAssets ? 1 : 0
+    uniforms.uPlShowTextures.value = props.surface.textures && surfaceTexturesReady ? 1 : 0
     uniforms.uPlFresnelIntensity.value = appliedLighting.fresnel
     applyTreeLodBands()
     if (waterPlane) {
@@ -2275,10 +2442,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function resolveNearTreeRadius(): number {
-    // 近树 3D 网格是 lab/官方观感的一部分（编辑器 / 预览 / 查看器三端一致）；
-    // 只有最低画质档（最弱设备）关闭，其余档位使用场景里配置的半径。
+    // Keep a short 3D layer even on the low tier so nearby trees keep their
+    // modeled detail without paying medium/high's full-terrain forest budget.
+    // Weak devices still get a smaller radius and the low world-forest cap.
     if (resolveQuality() === 'low') {
-      return 0
+      return Math.min(props.forest.nearTreeRadius, 60)
     }
     return props.forest.nearTreeRadius
   }
@@ -2586,7 +2754,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         chunkX,
         chunkZ,
         chunkSize,
-        densityMultiplier: props.forest.density,
+        densityMultiplier: effectiveForestDensity,
         maxSlope: props.forest.maxSlope,
         roadClearance: resolveForestRoadClearance(),
         roadHalfWidth: roadHalfWidth(props),
@@ -3189,6 +3357,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.season = currentSeason
     stats.seasonAssetsReady = seasonAssetsSeason === currentSeason && Boolean(seasonAssets)
     stats.nearTreeInstances = treeMeshManager?.instanceCount ?? 0
+    stats.nearCardInstances = (nearCardLayers?.broadleaf.count ?? 0) + (nearCardLayers?.conifer.count ?? 0)
+    stats.nearTreeReady = treeMeshManager?.ready === true
+    stats.adaptive = {
+      deviceTier: adaptiveProfile?.deviceTier ?? null,
+      sceneAreaKm2: adaptiveProfile?.sceneAreaKm2 ?? null,
+      targetCoverage: adaptiveProfile?.targetCoverage ?? null,
+      targetDensity: adaptiveProfile?.targetDensity ?? null,
+      effectiveCoverage: effectiveForestCoverage,
+      effectiveDensity: effectiveForestDensity,
+      targetFps: adaptiveProfile?.targetFps ?? null,
+      targetTreeCount: adaptiveProfile?.targetTreeCount ?? null,
+      measuredFps: adaptiveMeasuredFps,
+      calibrationState: adaptiveState,
+      calibrationAttempts: adaptiveAttempts,
+    }
     const storeStats = assetStore.stats()
     stats.assetTextureCount = storeStats.textureCount
     stats.assetResidentBytes = storeStats.residentBytes
@@ -3251,13 +3434,61 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   // ---- 季节素材加载 ----
-  async function loadSeasonAssets(season: SeasonId): Promise<void> {
-    if (seasonLoadInFlight && seasonAssetsSeason === season) {
+  type LandscapeTextureNeeds = SeasonTextureRefFilter & { water: boolean }
+
+  function resolveSeasonTextureNeeds(): LandscapeTextureNeeds {
+    const roadWidth = roadHalfWidth(props) * 2
+    const singleTrack = isSingleTrackRoad(roadWidth)
+    const roadReady = Boolean(roadResult && roadResult.nodes.length >= 2)
+    return {
+      surface: props.surface.enabled && props.surface.textures,
+      forest: effectiveForestCoverage > 0 && effectiveForestDensity > 0,
+      grass: props.grass.enabled,
+      bushes: props.bushes.enabled,
+      // Road textures are loaded only after the trace produced a usable path.
+      roadSingle: props.road.enabled && roadReady && singleTrack,
+      roadWide: props.road.enabled && roadReady && !singleTrack,
+      // Wall textures are loaded only after wall placement produced segments.
+      walls: wallSegments.length > 0,
+      // sea_waves is loaded only when the water line is actually visible.
+      water: Boolean(
+        props.water.enabled
+        && waterFloodStats
+        && waterFloodStats.floodedFraction >= WATER_FLOOD_VISIBLE_FRACTION,
+      ),
+    }
+  }
+
+  async function loadSeasonAssets(season: SeasonId, options: { force?: boolean } = {}): Promise<void> {
+    const needs = resolveSeasonTextureNeeds()
+    const needsKey = jsonKey(needs)
+    if (
+      !options.force
+      && seasonAssetsSeason === season
+      && lastLoadedTextureNeedsKey === needsKey
+      && seasonAssets
+    ) {
+      return
+    }
+    if (
+      !options.force
+      && seasonLoadInFlight
+      && seasonAssetsSeason === season
+      && lastLoadedTextureNeedsKey === needsKey
+    ) {
       return
     }
     const token = ++seasonLoadToken
     seasonLoadInFlight = true
-    const refs = [...collectSeasonTextureRefs(season), ...Object.values(SHARED_TEXTURES)]
+    const required = collectSeasonTextureRefs(season, needs)
+    const shared = collectLandscapeSharedTextureRefs({
+      surface: needs.surface,
+      forest: needs.forest,
+      grass: needs.grass,
+      bushes: needs.bushes,
+      water: needs.water,
+    })
+    const refs = [...required, ...shared]
     try {
       const textures = await assetStore.textureSet(refs)
       if (disposed || token !== seasonLoadToken) {
@@ -3268,10 +3499,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       for (const [id, texture] of textures) {
         merged.set(id, texture)
       }
-      const required = collectSeasonTextureRefs(season)
       const missing = required.filter((ref) => !merged.has(ref.id))
       seasonAssets = merged
       seasonAssetsSeason = season
+      surfaceTexturesReady = needs.surface === true
+        && collectSurfaceTextureRefs(season).every((ref) => merged.has(ref.id))
+      lastLoadedTextureNeedsKey = needsKey
+      if (merged.has(SHARED_TEXTURES.seaWaves.id)) {
+        waterTextureRequested = false
+      }
       if (missing.length) {
         warn(`season-assets-incomplete:${season}:${missing.length}`)
       }
@@ -3366,8 +3602,67 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (next === currentSeason && (seasonAssetsSeason === next || seasonLoadInFlight)) {
       return
     }
+    if (next !== currentSeason) {
+      roadTexturesRequested = false
+      wallTexturesRequested = false
+      waterTextureRequested = false
+    }
     currentSeason = next
     void loadSeasonAssets(next)
+  }
+
+  function updateAdaptiveCalibration(deltaTime: number): void {
+    if (!adaptiveProfile || adaptiveState === 'disabled' || adaptiveState === 'done') {
+      return
+    }
+    if (adaptiveState === 'waiting') {
+      const storeStats = assetStore.stats()
+      if (worldForestBuildMs > 0
+        && farForestInstances > 0
+        && !worldForestScan
+        && storeStats.pendingDownloads === 0
+        && stats.phase === 'streaming') {
+        adaptiveState = 'settling'
+        adaptiveSettledAt = elapsedMs + 5000
+      }
+      return
+    }
+    if (adaptiveState === 'settling') {
+      if (elapsedMs >= adaptiveSettledAt) {
+        adaptiveState = 'measuring'
+        adaptiveMeasureStartedAt = elapsedMs
+        adaptiveMeasureFrames = 0
+        adaptiveMeasureSeconds = 0
+      }
+      return
+    }
+    if (deltaTime > 0) {
+      adaptiveMeasureFrames += 1
+      adaptiveMeasureSeconds += deltaTime
+    }
+    if (elapsedMs - adaptiveMeasureStartedAt < 5000) {
+      return
+    }
+    const fps = adaptiveMeasureSeconds > 0
+      ? adaptiveMeasureFrames / adaptiveMeasureSeconds
+      : 0
+    adaptiveMeasuredFps = Number.isFinite(fps) ? fps : null
+    const decision = resolveAdaptiveCalibrationDecision({
+      fps,
+      treeCount: farForestInstances,
+      memoryPressure: currentMemoryPressure,
+      profile: adaptiveProfile,
+      attempts: adaptiveAttempts,
+    })
+    if (decision.action !== 'keep' && adaptiveAttempts < 1) {
+      adaptiveAttempts = 1
+      effectiveForestCoverage = decision.coverage
+      effectiveForestDensity = decision.density
+      adaptiveState = 'done'
+      buildWorld()
+    } else {
+      adaptiveState = 'done'
+    }
   }
 
   function runtimeUpdate(deltaTime: number): void {
@@ -3484,6 +3779,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     runLandscapeSelfChecks()
     updateStats()
+    updateAdaptiveCalibration(deltaTime)
   }
 
   const runtime: ProceduralLandscapeRuntime = {
@@ -3560,8 +3856,36 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           props.road.flattenBand,
           props.road.flattenStrength,
         ]),
+        textureNeeds: jsonKey([
+          props.surface.enabled,
+          props.surface.textures,
+          props.forest.coverage,
+          props.forest.density,
+          props.grass.enabled,
+          props.bushes.enabled,
+          props.road.enabled,
+          props.road.width,
+          props.walls.drystone.enabled,
+          props.walls.fence.enabled,
+          props.walls.barrier.enabled,
+          props.walls.seaWall.enabled,
+          props.water.enabled,
+        ]),
         roadDebug: jsonKey(props.debug.showRoadPath),
         chunkDebug: jsonKey(props.debug.showChunks),
+      }
+      const forestControlsChanged = keys.forest !== previousKeys.forest
+      if (forestControlsChanged) {
+        resetAdaptiveState()
+      }
+      if (keys.textureNeeds !== previousKeys.textureNeeds) {
+        seasonLoadToken += 1
+        seasonLoadInFlight = false
+        seasonAssetsSeason = null
+        lastLoadedTextureNeedsKey = ''
+        roadTexturesRequested = false
+        wallTexturesRequested = false
+        waterTextureRequested = false
       }
       if (keys.dem !== previousKeys.dem) {
         disposeDemSource()
@@ -3573,7 +3897,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         gridFailed = false
         disposeWorldState()
       }
-      if (dirty.grid || keys.world !== previousKeys.world) {
+      if (dirty.grid || keys.world !== previousKeys.world || forestControlsChanged) {
         dirty.world = true
         roadWarningEmitted = false
       }
@@ -3581,7 +3905,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         dirty.instances = true
         forceStream = true
       }
-      if (keys.forest !== previousKeys.forest && grid && densityField) {
+      if (forestControlsChanged && grid && densityField && !dirty.world) {
         startWorldForest()
       }
       if (keys.lod !== previousKeys.lod) {
