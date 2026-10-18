@@ -12,26 +12,21 @@ export interface RoadWaypoint {
   z: number
 }
 
-/** Maximum number of hand-drawn waypoints kept in the component props. */
-export const ROAD_WAYPOINT_LIMIT = 512
-
 /** Consecutive duplicate points closer than this are merged (meters). */
 export const ROAD_WAYPOINT_DEDUPE_DISTANCE = 0.5
 
 /**
  * Sanitizes raw waypoint data coming from component props: drops non-finite
- * entries, merges consecutive duplicates and truncates the list at `limit`.
+ * entries and merges consecutive duplicates. Route planning has its own
+ * computational budgets; user waypoint storage has no fixed count limit.
  * Always returns a fresh array.
  */
-export function clampRoadWaypoints(value: unknown, limit = ROAD_WAYPOINT_LIMIT): RoadWaypoint[] {
+export function clampRoadWaypoints(value: unknown): RoadWaypoint[] {
   if (!Array.isArray(value)) {
     return []
   }
   const out: RoadWaypoint[] = []
   for (const entry of value) {
-    if (out.length >= limit) {
-      break
-    }
     const raw = entry as { x?: unknown; z?: unknown } | null | undefined
     const x = typeof raw?.x === 'number' ? raw.x : Number(raw?.x)
     const z = typeof raw?.z === 'number' ? raw.z : Number(raw?.z)

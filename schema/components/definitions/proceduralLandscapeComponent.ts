@@ -124,7 +124,15 @@ export function createProceduralLandscapeComponentState(
       crs: overrides?.dem?.crs ?? defaults.dem.crs,
     },
     surface: { ...defaults.surface, ...(overrides?.surface ?? {}) },
-    road: { ...defaults.road, ...(overrides?.road ?? {}) },
+    road: {
+      ...defaults.road,
+      ...(overrides?.road ?? {}),
+      routing: {
+        ...defaults.road.routing,
+        ...(overrides?.road?.routing ?? {}),
+      },
+      generatedRoute: overrides?.road?.generatedRoute ?? defaults.road.generatedRoute,
+    },
     forest: { ...defaults.forest, ...(overrides?.forest ?? {}) },
     grass: { ...defaults.grass, ...(overrides?.grass ?? {}) },
     bushes: { ...defaults.bushes, ...(overrides?.bushes ?? {}) },

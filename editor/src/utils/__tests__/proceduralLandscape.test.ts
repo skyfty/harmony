@@ -61,7 +61,6 @@ import {
 import {
   clampRoadWaypoints,
   transformRoadWaypointsToWorld,
-  ROAD_WAYPOINT_LIMIT,
 } from '@schema/proceduralLandscape/roadWaypoints'
 import {
   applyProceduralLandscapeSurfaceInjection,
@@ -469,17 +468,17 @@ describe('road waypoint props', () => {
     ])
     expect(clampRoadWaypoints('nope')).toEqual([])
 
-    const many = Array.from({ length: ROAD_WAYPOINT_LIMIT + 40 }, (_, index) => ({
+    const many = Array.from({ length: 1000 }, (_, index) => ({
       x: index * 2,
       z: 0,
     }))
-    expect(clampRoadWaypoints(many)).toHaveLength(ROAD_WAYPOINT_LIMIT)
+    expect(clampRoadWaypoints(many)).toHaveLength(1000)
   })
 
   it('clamps waypoint fields through the component props', () => {
     const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
     expect(defaults.road.waypoints).toEqual([])
-    expect(defaults.road.waypointTolerance).toBe(12)
+    expect(defaults.road.waypointTolerance).toBe(4)
 
     const clamped = clampProceduralLandscapeProps({
       road: {
@@ -489,12 +488,12 @@ describe('road waypoint props', () => {
       },
     }, 'node-a')
     expect(clamped.road.waypoints).toEqual([{ x: 1, z: 2 }, { x: 3, z: 4 }])
-    expect(clamped.road.waypointTolerance).toBe(100)
+    expect(clamped.road.waypointTolerance).toBe(64)
 
     const lower = clampProceduralLandscapeProps({
       road: { ...defaults.road, waypointTolerance: 0 },
     }, 'node-a')
-    expect(lower.road.waypointTolerance).toBe(4)
+    expect(lower.road.waypointTolerance).toBe(1)
   })
 
   it('transforms node-local waypoints into world XZ (translate/rotate/scale)', () => {
@@ -515,7 +514,7 @@ describe('road waypoint props', () => {
     expect(combinedResult.z).toBeCloseTo(6, 6)
   })
 
-  it('only activates the guide path for two or more clamped waypoints', () => {
+  it('returns every clamped waypoint including a single-point draft', () => {
     const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
     const twoPoints = clampProceduralLandscapeProps({
       road: { ...defaults.road, waypoints: [{ x: 1, z: 1 }, { x: 4, z: 6 }] },
@@ -525,26 +524,21 @@ describe('road waypoint props', () => {
     const onePoint = clampProceduralLandscapeProps({
       road: { ...defaults.road, waypoints: [{ x: 1, z: 1 }] },
     }, 'node-a')
-    expect(activeRoadWaypoints(onePoint)).toHaveLength(0)
+    expect(activeRoadWaypoints(onePoint)).toHaveLength(1)
 
     const matrix = new THREE.Matrix4().makeTranslation(100, 0, 200)
     const world = transformRoadWaypointsToWorld(matrix, activeRoadWaypoints(twoPoints))
     expect(world).toEqual([{ x: 101, z: 201 }, { x: 104, z: 206 }])
   })
 
-  /**
-   * 产品规则：道路只由手绘路径生成。运行时（runtime.ts 的 road 门禁）以
-   * `activeRoadWaypoints` 是否为空作为唯一判据，所以默认 props（0 个路径点）
-   * 与只有 1 个路径点时都不建路——组件初始状态因此没有那条随机公路。
-   */
-  it('builds no road until at least two waypoints are drawn', () => {
+  it('keeps a single waypoint available for seeded loops', () => {
     expect(activeRoadWaypoints(createDefaultProceduralLandscapeProps({ id: 'node-a' }))).toHaveLength(0)
 
     const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
     const onePoint = clampProceduralLandscapeProps({
       road: { ...defaults.road, waypoints: [{ x: 12, z: -8 }] },
     }, 'node-a')
-    expect(activeRoadWaypoints(onePoint)).toHaveLength(0)
+    expect(activeRoadWaypoints(onePoint)).toHaveLength(1)
 
     const twoPoints = clampProceduralLandscapeProps({
       road: { ...defaults.road, waypoints: [{ x: 12, z: -8 }, { x: 40, z: 22 }] },

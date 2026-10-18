@@ -1,0 +1,1345 @@
+import { clamp, hashUnit, wrapAngle } from './noise'
+import {
+  resolveSeedHeadingRad,
+  traceRoadPath,
+  type RoadTraceNode,
+  type RoadTraceResult,
+} from './roadTrace'
+import type { RoadWaypoint } from './roadWaypoints'
+import type { TerrainHeightGrid } from './terrainSampler'
+import { traceOfficialScenicRoad } from './officialScenicRoad'
+
+export interface WaypointRoadPlanOptions {
+  waypoints: RoadWaypoint[]
+  strategy: 'seeded' | 'shortest'
+  termination: 'loop' | 'boundary'
+  /** Stored route algorithm version; 2 selects the official Hills tracer. */
+  algorithmVersion?: number
+  seed: number
+  waypointTolerance: number
+  pathDeviation: number
+  stepLength: number
+  feelDistance: number
+  feelAngleRad: number
+  maxSlope: number
+  maxTurnRad: number
+  margin: number
+}
+
+export interface WaypointRoadPlanResult extends RoadTraceResult {
+  closed: boolean
+  waypointCount: number
+  waypointsPassed: number
+  maxWaypointError: number
+  closureHeadingErrorRad: number
+  shortestExpandedStates: number
+  /** Official Hills midline guard diagnostics (seeded strategy only). */
+  officialReverts?: number
+  antiTargetTriggers?: number
+  turnOverflows?: number
+  averageElevationPercentile?: number
+  maxElevationPercentile?: number
+  maxForwardGrade?: number
+  maxCrossSlope?: number
+  lowlandCoverageFraction?: number
+  steepReplacementSteps?: number
+}
+
+type Vec2 = { x: number; z: number }
+type GuideSegmentScore = { cost: number; points: Vec2[] }
+
+const MAX_SHORTEST_EXPANSIONS = 250_000
+const MAX_PLANNING_CELLS_PER_AXIS = 768
+const DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
+  [1, 0],
+  [1, 1],
+  [0, 1],
+  [-1, 1],
+  [-1, 0],
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+]
+
+function distance(a: Vec2, b: Vec2): number {
+  return Math.hypot(b.x - a.x, b.z - a.z)
+}
+
+function normalizeVector(x: number, z: number): Vec2 {
+  const length = Math.hypot(x, z)
+  return length > 1e-9 ? { x: x / length, z: z / length } : { x: 1, z: 0 }
+}
+
+function cubicPoint(
+  p0: Vec2,
+  c1: Vec2,
+  c2: Vec2,
+  p1: Vec2,
+  t: number,
+): Vec2 {
+  const u = 1 - t
+  const a = u * u * u
+  const b = 3 * u * u * t
+  const c = 3 * u * t * t
+  const d = t * t * t
+  return {
+    x: a * p0.x + b * c1.x + c * c2.x + d * p1.x,
+    z: a * p0.z + b * c1.z + c * c2.z + d * p1.z,
+  }
+}
+
+function routeTangents(points: ReadonlyArray<Vec2>, closed: boolean): Vec2[] {
+  const count = points.length
+  return points.map((point, index) => {
+    const previous = index > 0
+      ? points[index - 1]!
+      : closed
+        ? points[count - 1]!
+        : points[index]!
+    const next = index + 1 < count
+      ? points[index + 1]!
+      : closed
+        ? points[0]!
+        : points[index]!
+    if (distance(previous, next) < 1e-6) {
+      const fallback = points[(index + 1) % count] ?? point
+      return normalizeVector(fallback.x - point.x, fallback.z - point.z)
+    }
+    return normalizeVector(next.x - previous.x, next.z - previous.z)
+  })
+}
+
+function scoreSeededSegment(
+  grid: TerrainHeightGrid,
+  points: Vec2[],
+  maxSlope: number,
+): GuideSegmentScore | null {
+  if (points.length < 2) {
+    return null
+  }
+  let cost = 0
+  let previousY: number | null = null
+  let previousHeading: number | null = null
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index]!
+    if (!grid.contains(point.x, point.z)) {
+      return null
+    }
+    const y = grid.sampleHeight(point.x, point.z)
+    if (y == null) {
+      return null
+    }
+    if (index > 0 && previousY != null) {
+      const previous = points[index - 1]!
+      const segmentLength = Math.max(1e-6, distance(previous, point))
+      const slope = Math.abs(y - previousY) / segmentLength
+      if (slope > maxSlope * 1.08) {
+        return null
+      }
+      const heading = Math.atan2(point.z - previous.z, point.x - previous.x)
+      const lateralX = -Math.sin(heading)
+      const lateralZ = Math.cos(heading)
+      const leftY = grid.sampleHeight(
+        point.x + lateralX * 8,
+        point.z + lateralZ * 8,
+      )
+      const rightY = grid.sampleHeight(
+        point.x - lateralX * 8,
+        point.z - lateralZ * 8,
+      )
+      cost += segmentLength + slope * 35
+      if (leftY != null && rightY != null) {
+        cost += Math.abs(leftY - rightY) * 1.1
+      }
+      if (previousHeading != null) {
+        const delta = Math.abs(wrapAngle(heading - previousHeading))
+        cost += delta * 22
+      }
+      previousHeading = heading
+    }
+    previousY = y
+  }
+  return { cost, points }
+}
+
+function buildSeededGuide(
+  grid: TerrainHeightGrid,
+  anchors: ReadonlyArray<Vec2>,
+  closed: boolean,
+  options: WaypointRoadPlanOptions,
+): Vec2[] {
+  if (anchors.length < 2) {
+    return anchors.map((point) => ({ ...point }))
+  }
+  const tangents = routeTangents(anchors, closed)
+  const segmentCount = closed ? anchors.length : anchors.length - 1
+  const guide: Vec2[] = [{ ...anchors[0]! }]
+  for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
+    const start = anchors[segmentIndex]!
+    const end = anchors[(segmentIndex + 1) % anchors.length]!
+    const chord = distance(start, end)
+    if (chord < 1e-6) {
+      continue
+    }
+    const tangent0 = tangents[segmentIndex]!
+    const tangent1 = tangents[(segmentIndex + 1) % anchors.length]!
+    const normal = normalizeVector(-(end.z - start.z), end.x - start.x)
+    const cap = Math.min(options.pathDeviation, chord * 0.2)
+    const seedValue = (options.seed + Math.imul(segmentIndex + 1, 0x9e3779b1)) >>> 0
+    const sign = hashUnit(seedValue, 7, 19) < 0.5 ? -1 : 1
+    const magnitude = 0.35 + hashUnit(seedValue, 11, 31) * 0.5
+    const preferredA = sign * cap * magnitude
+    const preferredB = -sign * cap * magnitude * (0.2 + hashUnit(seedValue, 13, 17) * 0.35)
+    const candidates: Array<readonly [number, number]> = [
+      [preferredA, preferredB],
+      [preferredA, -preferredB * 0.6],
+      [-preferredA * 0.7, preferredB],
+      [preferredA * 0.45, preferredA * 0.45],
+      [0, 0],
+    ]
+    let best: GuideSegmentScore | null = null
+    let preferredResult: GuideSegmentScore | null = null
+    for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
+      const [offsetA, offsetB] = candidates[candidateIndex]!
+      const control1 = {
+        x: start.x + tangent0.x * chord / 3 + normal.x * offsetA,
+        z: start.z + tangent0.z * chord / 3 + normal.z * offsetA,
+      }
+      const control2 = {
+        x: end.x - tangent1.x * chord / 3 + normal.x * offsetB,
+        z: end.z - tangent1.z * chord / 3 + normal.z * offsetB,
+      }
+      const sampleCount = Math.max(2, Math.ceil(chord / 10))
+      const sampled: Vec2[] = []
+      for (let sampleIndex = 0; sampleIndex <= sampleCount; sampleIndex += 1) {
+        const t = sampleIndex / sampleCount
+        sampled.push(t <= 0
+          ? { ...start }
+          : t >= 1
+            ? { ...end }
+            : cubicPoint(start, control1, control2, end, t))
+      }
+      const result = scoreSeededSegment(grid, sampled, options.maxSlope)
+      if (!result) {
+        continue
+      }
+      if (candidateIndex === 0) {
+        preferredResult = result
+      }
+      if (!best || result.cost < best.cost) {
+        best = result
+      }
+    }
+    const chosen = preferredResult && best && preferredResult.cost <= best.cost * 1.25
+      ? preferredResult
+      : best
+    let fallback = chosen?.points
+    if (!fallback) {
+      fallback = []
+      const fallbackCount = Math.max(2, Math.ceil(chord / 10))
+      for (let sampleIndex = 0; sampleIndex <= fallbackCount; sampleIndex += 1) {
+        const t = sampleIndex / fallbackCount
+        fallback.push({
+          x: start.x + (end.x - start.x) * t,
+          z: start.z + (end.z - start.z) * t,
+        })
+      }
+    }
+    for (const point of fallback) {
+      const previous = guide[guide.length - 1]
+      if (!previous || distance(previous, point) > 1e-5) {
+        guide.push({ ...point })
+      }
+    }
+  }
+  if (closed && guide.length) {
+    guide[guide.length - 1] = { ...anchors[0]! }
+  }
+  return guide
+}
+
+function singlePointLoopAnchors(
+  grid: TerrainHeightGrid,
+  origin: Vec2,
+  seed: number,
+  stepLength: number,
+  maxSlope = 0.55,
+): Vec2[] | null {
+  const spanX = grid.maxX - grid.minX
+  const spanZ = grid.maxZ - grid.minZ
+  const diagonal = Math.hypot(spanX, spanZ)
+  if (!(diagonal > 1)) {
+    return null
+  }
+  const targetDiameter = diagonal * (0.08 + hashUnit(seed, 23, 41) * 0.12)
+  let radius = Math.max(100, targetDiameter * 0.5)
+  const heading = resolveSeedHeadingRad(seed)
+  const centerNormal = { x: -Math.sin(heading), z: Math.cos(heading) }
+  const count = 6 + Math.floor(hashUnit(seed, 29, 43) * 3)
+  const margin = Math.max(stepLength * 8, 80)
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const center = {
+      x: origin.x + centerNormal.x * radius,
+      z: origin.z + centerNormal.z * radius,
+    }
+    const anchors: Vec2[] = [{ ...origin }]
+    let valid = true
+    for (let index = 1; index < count; index += 1) {
+      const angle = heading - Math.PI / 2 + (index / count) * Math.PI * 2
+      const jitter = 0.85 + hashUnit(seed, 31 + index * 7, 47) * 0.3
+      const point = {
+        x: center.x + Math.cos(angle) * radius * jitter,
+        z: center.z + Math.sin(angle) * radius * jitter,
+      }
+      if (
+        point.x < grid.minX + margin
+        || point.x > grid.maxX - margin
+        || point.z < grid.minZ + margin
+        || point.z > grid.maxZ - margin
+        || grid.sampleHeight(point.x, point.z) == null
+      ) {
+        valid = false
+        break
+      }
+      const previous = anchors[anchors.length - 1]!
+      const segmentLength = Math.max(1e-6, distance(previous, point))
+      const previousY = grid.sampleHeight(previous.x, previous.z)
+      let routeY = previousY
+      for (let sample = 1; sample <= 6; sample += 1) {
+        const t = sample / 6
+        const x = previous.x + (point.x - previous.x) * t
+        const z = previous.z + (point.z - previous.z) * t
+        const y = grid.sampleHeight(x, z)
+        if (y == null || (routeY != null && Math.abs(y - routeY) / (segmentLength / 6) > maxSlope)) {
+          valid = false
+          break
+        }
+        routeY = y
+      }
+      if (!valid) {
+        break
+      }
+      anchors.push(point)
+    }
+    if (valid) {
+      return anchors
+    }
+    radius *= 0.8
+    if (radius < Math.max(100, diagonal * 0.02)) {
+      break
+    }
+  }
+  return null
+}
+
+/** Retained for the deferred closed-loop mode; the editor does not call it yet. */
+export function planSinglePointScenicLoop(
+  grid: TerrainHeightGrid,
+  origin: RoadWaypoint,
+  options: WaypointRoadPlanOptions,
+): WaypointRoadPlanResult {
+  const diagonal = Math.hypot(grid.maxX - grid.minX, grid.maxZ - grid.minZ)
+  const outboundLength = diagonal * (0.12 + hashUnit(options.seed, 43, 61) * 0.1)
+  const outbound = traceRoadPath(grid, {
+    startX: origin.x,
+    startZ: origin.z,
+    headingRad: resolveSeedHeadingRad(options.seed),
+    stepLength: options.stepLength,
+    feelDistance: options.feelDistance,
+    feelAngleRad: options.feelAngleRad,
+    maxSlope: options.maxSlope,
+    maxTurnRad: options.maxTurnRad,
+    maxLength: outboundLength,
+    maxSteps: Math.max(
+      4096,
+      Math.ceil(((grid.maxX - grid.minX + grid.maxZ - grid.minZ) * 1.5) / options.stepLength),
+    ),
+    margin: options.margin,
+  })
+  if (outbound.nodes.length < 6) {
+    return {
+      ...outbound,
+      closed: false,
+      waypointCount: 1,
+      waypointsPassed: waypointPassStats(
+        outbound.nodes,
+        [{ x: origin.x, z: origin.z }],
+        options.waypointTolerance,
+      ).passed,
+      maxWaypointError: waypointPassStats(
+        outbound.nodes,
+        [{ x: origin.x, z: origin.z }],
+        options.waypointTolerance,
+      ).maxError,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates: 0,
+    }
+  }
+  const end = outbound.nodes[outbound.nodes.length - 1]!
+  const chordX = origin.x - end.x
+  const chordZ = origin.z - end.z
+  const chordLength = Math.hypot(chordX, chordZ)
+  const normal = normalizeVector(-chordZ, chordX)
+  const cap = Math.min(chordLength * 0.32, Math.max(options.pathDeviation, chordLength * 0.14))
+  const sign = hashUnit(options.seed, 37, 59) < 0.5 ? -1 : 1
+  const returnAnchors: Vec2[] = [{ x: end.x, z: end.z }]
+  for (let index = 1; index <= 3; index += 1) {
+    const t = index / 4
+    const offset = cap * sign * Math.sin(t * Math.PI) * (index % 2 === 0 ? -1 : 1)
+    let point = {
+      x: end.x + chordX * t + normal.x * offset,
+      z: end.z + chordZ * t + normal.z * offset,
+    }
+    if (!grid.contains(point.x, point.z)) {
+      point = {
+        x: end.x + chordX * t,
+        z: end.z + chordZ * t,
+      }
+    }
+    returnAnchors.push(point)
+  }
+  returnAnchors.push({ x: origin.x, z: origin.z })
+  let returnGuide = buildSeededGuide(grid, returnAnchors, false, options)
+  let returnTrace = traceGuide(
+    grid,
+    returnGuide,
+    [{ x: origin.x, z: origin.z }],
+    options,
+  )
+  if (!returnTrace.reachedGuideEnd) {
+    const fallback = planShortestGuide(
+      grid,
+      [{ x: end.x, z: end.z }, { x: origin.x, z: origin.z }],
+      false,
+      options,
+    )
+    if (!fallback.error && fallback.guide.length) {
+      returnGuide = fallback.guide
+      returnTrace = traceGuide(
+        grid,
+        returnGuide,
+        [{ x: origin.x, z: origin.z }],
+        options,
+      )
+    }
+  }
+  if (!returnTrace.reachedGuideEnd) {
+    return {
+      ...returnTrace.result,
+      closed: false,
+      waypointCount: 1,
+      waypointsPassed: waypointPassStats(
+        returnTrace.result.nodes,
+        [{ x: origin.x, z: origin.z }],
+        options.waypointTolerance,
+      ).passed,
+      maxWaypointError: waypointPassStats(
+        returnTrace.result.nodes,
+        [{ x: origin.x, z: origin.z }],
+        options.waypointTolerance,
+      ).maxError,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates: 0,
+    }
+  }
+  const nodes = [...outbound.nodes, ...returnTrace.result.nodes.slice(1)]
+  const first = nodes[0]!
+  const last = nodes[nodes.length - 1]!
+  last.x = origin.x
+  last.z = origin.z
+  last.y = grid.sampleHeight(origin.x, origin.z) ?? last.y
+  last.heading = first.heading
+  let length = 0
+  for (let index = 0; index < nodes.length; index += 1) {
+    nodes[index]!.index = index
+    if (index > 0) {
+      length += distance(nodes[index - 1]!, nodes[index]!)
+    }
+  }
+  const stats = waypointPassStats(
+    nodes,
+    [{ x: origin.x, z: origin.z }],
+    options.waypointTolerance,
+  )
+  return {
+    nodes,
+    length,
+    complete: stats.passed === 1,
+    failureReason: stats.passed === 1 ? 'reached-guide-end' : 'waypoint-missed',
+    rescueTurns: outbound.rescueTurns + returnTrace.result.rescueTurns,
+    closed: true,
+    waypointCount: 1,
+    waypointsPassed: stats.passed,
+    maxWaypointError: stats.maxError,
+    closureHeadingErrorRad: 0,
+    shortestExpandedStates: 0,
+  }
+}
+
+class MinHeap {
+  private readonly priorities: number[] = []
+  private readonly states: number[] = []
+
+  get size(): number {
+    return this.states.length
+  }
+
+  push(state: number, priority: number): void {
+    let index = this.states.length
+    this.states.push(state)
+    this.priorities.push(priority)
+    while (index > 0) {
+      const parent = (index - 1) >> 1
+      if (this.priorities[parent]! <= priority) {
+        break
+      }
+      this.states[index] = this.states[parent]!
+      this.priorities[index] = this.priorities[parent]!
+      index = parent
+    }
+    this.states[index] = state
+    this.priorities[index] = priority
+  }
+
+  pop(): { state: number; priority: number } | null {
+    if (!this.states.length) {
+      return null
+    }
+    const state = this.states[0]!
+    const priority = this.priorities[0]!
+    const lastState = this.states.pop()!
+    const lastPriority = this.priorities.pop()!
+    if (this.states.length) {
+      let index = 0
+      while (true) {
+        const left = index * 2 + 1
+        const right = left + 1
+        if (left >= this.states.length) {
+          break
+        }
+        const child = right < this.states.length
+          && this.priorities[right]! < this.priorities[left]!
+          ? right
+          : left
+        if (this.priorities[child]! >= lastPriority) {
+          break
+        }
+        this.states[index] = this.states[child]!
+        this.priorities[index] = this.priorities[child]!
+        index = child
+      }
+      this.states[index] = lastState
+      this.priorities[index] = lastPriority
+    }
+    return { state, priority }
+  }
+}
+
+function planShortestLeg(
+  grid: TerrainHeightGrid,
+  start: Vec2,
+  end: Vec2,
+  options: WaypointRoadPlanOptions,
+): { points: Vec2[] | null; expanded: number } {
+  const spanX = grid.maxX - grid.minX
+  const spanZ = grid.maxZ - grid.minZ
+  const cellSize = Math.max(
+    grid.cellSize,
+    Math.ceil(Math.max(spanX, spanZ) / MAX_PLANNING_CELLS_PER_AXIS),
+  )
+  const cols = Math.max(2, Math.ceil(spanX / cellSize) + 1)
+  const rows = Math.max(2, Math.ceil(spanZ / cellSize) + 1)
+  const heights = new Float32Array(cols * rows)
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < cols; col += 1) {
+      const x = grid.minX + col * cellSize
+      const z = grid.minZ + row * cellSize
+      heights[row * cols + col] = grid.sampleHeight(x, z) ?? Number.NaN
+    }
+  }
+  const cellOf = (point: Vec2): { col: number; row: number } => ({
+    col: clamp(Math.round((point.x - grid.minX) / cellSize), 0, cols - 1),
+    row: clamp(Math.round((point.z - grid.minZ) / cellSize), 0, rows - 1),
+  })
+  const startCell = cellOf(start)
+  const endCell = cellOf(end)
+  const startIndex = startCell.row * cols + startCell.col
+  const endIndex = endCell.row * cols + endCell.col
+  const distances = new Map<number, number>()
+  const parents = new Map<number, number>()
+  const closedStates = new Set<number>()
+  const heap = new MinHeap()
+  for (let direction = 0; direction < 8; direction += 1) {
+    const state = startIndex * 8 + direction
+    distances.set(state, 0)
+    heap.push(state, 0)
+  }
+  let resultState: number | null = null
+  let expanded = 0
+  while (heap.size && expanded < MAX_SHORTEST_EXPANSIONS) {
+    const top = heap.pop()
+    if (!top) {
+      break
+    }
+    const currentState = top.state
+    if (closedStates.has(currentState)) {
+      continue
+    }
+    closedStates.add(currentState)
+    const currentDistance = distances.get(currentState)
+    if (currentDistance == null) {
+      continue
+    }
+    const cellIndex = Math.floor(currentState / 8)
+    const direction = currentState % 8
+    if (cellIndex === endIndex) {
+      resultState = currentState
+      break
+    }
+    expanded += 1
+    const col = cellIndex % cols
+    const row = Math.floor(cellIndex / cols)
+    const currentHeight = heights[cellIndex]!
+    if (!Number.isFinite(currentHeight)) {
+      continue
+    }
+    for (let nextDirection = 0; nextDirection < 8; nextDirection += 1) {
+      const [dx, dz] = DIRECTIONS[nextDirection]!
+      const nextCol = col + dx
+      const nextRow = row + dz
+      if (nextCol < 0 || nextCol >= cols || nextRow < 0 || nextRow >= rows) {
+        continue
+      }
+      const nextIndex = nextRow * cols + nextCol
+      const nextHeight = heights[nextIndex]!
+      if (!Number.isFinite(nextHeight)) {
+        continue
+      }
+      const segmentLength = Math.hypot(dx, dz) * cellSize
+      const slope = Math.abs(nextHeight - currentHeight) / segmentLength
+      if (slope > options.maxSlope * 1.05) {
+        continue
+      }
+      const turnUnits = Math.min(
+        Math.abs(nextDirection - direction),
+        8 - Math.abs(nextDirection - direction),
+      )
+      const turnCost = (turnUnits / 4) * cellSize
+      const slopeNorm = slope / Math.max(1e-4, options.maxSlope)
+      const leftCol = nextCol - dz
+      const leftRow = nextRow + dx
+      const rightCol = nextCol + dz
+      const rightRow = nextRow - dx
+      const leftHeight = leftCol >= 0 && leftCol < cols && leftRow >= 0 && leftRow < rows
+        ? heights[leftRow * cols + leftCol]!
+        : nextHeight
+      const rightHeight = rightCol >= 0 && rightCol < cols && rightRow >= 0 && rightRow < rows
+        ? heights[rightRow * cols + rightCol]!
+        : nextHeight
+      const crossSlope = Number.isFinite(leftHeight) && Number.isFinite(rightHeight)
+        ? Math.abs(leftHeight - rightHeight) / (2 * cellSize)
+        : 0
+      const crossNorm = crossSlope / Math.max(1e-4, options.maxSlope)
+      const nextState = nextIndex * 8 + nextDirection
+      const nextDistance = currentDistance
+        + segmentLength * (1 + slopeNorm * slopeNorm * 2.2 + crossNorm * crossNorm * 0.75)
+        + turnCost * 0.9
+      if (nextDistance >= (distances.get(nextState) ?? Number.POSITIVE_INFINITY)) {
+        continue
+      }
+      distances.set(nextState, nextDistance)
+      parents.set(nextState, currentState)
+      const goalX = grid.minX + endCell.col * cellSize
+      const goalZ = grid.minZ + endCell.row * cellSize
+      const nextX = grid.minX + nextCol * cellSize
+      const nextZ = grid.minZ + nextRow * cellSize
+      heap.push(nextState, nextDistance + Math.hypot(goalX - nextX, goalZ - nextZ))
+    }
+  }
+  if (resultState == null) {
+    return { points: null, expanded }
+  }
+  const cells: number[] = []
+  let cursor: number | undefined = resultState
+  while (cursor != null) {
+    cells.push(Math.floor(cursor / 8))
+    cursor = parents.get(cursor)
+  }
+  cells.reverse()
+  const points: Vec2[] = [{ ...start }]
+  for (const index of cells) {
+    const point = {
+      x: grid.minX + (index % cols) * cellSize,
+      z: grid.minZ + Math.floor(index / cols) * cellSize,
+    }
+    if (distance(points[points.length - 1]!, point) > cellSize * 0.2) {
+      points.push(point)
+    }
+  }
+  points.push({ ...end })
+  return { points, expanded }
+}
+
+function smoothPolyline(
+  points: ReadonlyArray<Vec2>,
+  spacing: number,
+  mandatoryPoints: ReadonlyArray<Vec2> = [],
+  closed = false,
+): Vec2[] {
+  if (points.length < 3) {
+    return points.map((point) => ({ ...point }))
+  }
+  const source = closed
+    && points.length > 1
+    && distance(points[0]!, points[points.length - 1]!) <= 0.01
+    ? points.slice(0, -1)
+    : points.slice()
+  const control: Vec2[] = []
+  let accumulated = spacing * 2
+  for (let index = 0; index < source.length; index += 1) {
+    const point = source[index]!
+    const mandatory = mandatoryPoints.some((target) => distance(target, point) <= 0.01)
+    if (index === 0 || (!closed && index === source.length - 1) || mandatory) {
+      control.push(point)
+      accumulated = spacing * 2
+      continue
+    }
+    accumulated += distance(source[index - 1]!, point)
+    if (accumulated >= spacing * 3) {
+      control.push(point)
+      accumulated = 0
+    }
+  }
+  if (!closed && control[control.length - 1] !== source[source.length - 1]) {
+    control.push(source[source.length - 1]!)
+  }
+  if (closed && control.length < 3) {
+    return source.map((point) => ({ ...point }))
+  }
+  const output: Vec2[] = []
+  const segmentCount = closed ? control.length : control.length - 1
+  for (let index = 0; index < segmentCount; index += 1) {
+    const p0 = control[closed ? (index - 1 + control.length) % control.length : Math.max(0, index - 1)]!
+    const p1 = control[index]!
+    const p2 = control[(index + 1) % control.length]!
+    const p3 = control[closed ? (index + 2) % control.length : Math.min(control.length - 1, index + 2)]!
+    const segmentLength = distance(p1, p2)
+    const count = Math.max(1, Math.ceil(segmentLength / spacing))
+    for (let step = 0; step <= count; step += 1) {
+      if (index > 0 && step === 0) {
+        continue
+      }
+      if (closed && step === count) {
+        continue
+      }
+      const t = step / count
+      const t2 = t * t
+      const t3 = t2 * t
+      output.push({
+        x: 0.5 * (
+          2 * p1.x
+          + (-p0.x + p2.x) * t
+          + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2
+          + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+        ),
+        z: 0.5 * (
+          2 * p1.z
+          + (-p0.z + p2.z) * t
+          + (2 * p0.z - 5 * p1.z + 4 * p2.z - p3.z) * t2
+          + (-p0.z + 3 * p1.z - 3 * p2.z + p3.z) * t3
+        ),
+      })
+    }
+  }
+  output[0] = { ...source[0]! }
+  if (closed) {
+    output.push({ ...source[0]! })
+  } else {
+    output[output.length - 1] = { ...source[source.length - 1]! }
+  }
+  return output
+}
+
+function samplePolylineLinear(
+  grid: TerrainHeightGrid,
+  points: ReadonlyArray<Vec2>,
+  spacing: number,
+  closed: boolean,
+): Vec2[] {
+  if (points.length < 2) {
+    return points.map((point) => ({ ...point }))
+  }
+  const source = closed
+    && distance(points[0]!, points[points.length - 1]!) <= 0.01
+    ? points.slice(0, -1)
+    : points.slice()
+  const output: Vec2[] = []
+  const segmentCount = closed ? source.length : source.length - 1
+  for (let index = 0; index < segmentCount; index += 1) {
+    const start = source[index]!
+    const end = source[(index + 1) % source.length]!
+    const segmentLength = distance(start, end)
+    const count = Math.max(1, Math.ceil(segmentLength / spacing))
+    for (let step = 0; step < count; step += 1) {
+      if (index > 0 && step === 0) {
+        continue
+      }
+      const t = step / count
+      const point = {
+        x: start.x + (end.x - start.x) * t,
+        z: start.z + (end.z - start.z) * t,
+      }
+      const y = grid.sampleHeight(point.x, point.z)
+      if (y != null) {
+        output.push(point)
+      }
+    }
+  }
+  output.push(closed ? { ...source[0]! } : { ...source[source.length - 1]! })
+  return output
+}
+
+function planShortestGuide(
+  grid: TerrainHeightGrid,
+  anchors: ReadonlyArray<Vec2>,
+  closed: boolean,
+  options: WaypointRoadPlanOptions,
+): { guide: Vec2[]; expanded: number; error: string | null } {
+  const routeAnchors = closed ? [...anchors, anchors[0]!] : [...anchors]
+  const route: Vec2[] = []
+  let expanded = 0
+  for (let index = 0; index < routeAnchors.length - 1; index += 1) {
+    const leg = planShortestLeg(
+      grid,
+      routeAnchors[index]!,
+      routeAnchors[index + 1]!,
+      options,
+    )
+    expanded += leg.expanded
+    if (!leg.points) {
+      return {
+        guide: [],
+        expanded,
+        error: expanded >= MAX_SHORTEST_EXPANSIONS
+          ? 'shortest-route-budget-exceeded'
+          : 'shortest-route-not-found',
+      }
+    }
+    for (const point of leg.points) {
+      if (!route.length || distance(route[route.length - 1]!, point) > 1e-5) {
+        route.push(point)
+      }
+    }
+  }
+  const spacing = Math.max(8, Math.min(16, options.stepLength))
+  const smoothed = smoothPolyline(route, spacing, anchors, closed)
+  const guide = scoreSeededSegment(grid, smoothed, options.maxSlope * 0.8)
+    ? smoothed
+    : samplePolylineLinear(grid, route, spacing, closed)
+  return {
+    guide,
+    expanded,
+    error: null,
+  }
+}
+
+function makeNode(
+  point: Vec2,
+  y: number,
+  heading: number,
+  index: number,
+  headingDelta = 0,
+): RoadTraceNode {
+  return {
+    x: point.x,
+    z: point.z,
+    y,
+    heading,
+    index,
+    lateral: 0,
+    longitudinal: 0,
+    turn: 0,
+    headingDelta,
+  }
+}
+
+function traceGuide(
+  grid: TerrainHeightGrid,
+  guide: ReadonlyArray<Vec2>,
+  requiredWaypoints: ReadonlyArray<Vec2>,
+  options: WaypointRoadPlanOptions,
+): { result: RoadTraceResult; reachedGuideEnd: boolean } {
+  if (guide.length < 2) {
+    return {
+      result: {
+        nodes: [],
+        length: 0,
+        complete: false,
+        failureReason: 'guide-empty',
+        rescueTurns: 0,
+      },
+      reachedGuideEnd: false,
+    }
+  }
+  const cumulative: number[] = [0]
+  for (let index = 1; index < guide.length; index += 1) {
+    cumulative.push(cumulative[index - 1]! + distance(guide[index - 1]!, guide[index]!))
+  }
+  const totalLength = cumulative[cumulative.length - 1]!
+  if (!(totalLength > 1e-6)) {
+    return {
+      result: {
+        nodes: [],
+        length: 0,
+        complete: false,
+        failureReason: 'guide-empty',
+        rescueTurns: 0,
+      },
+      reachedGuideEnd: false,
+    }
+  }
+  const mandatoryDistances: Array<{ distance: number; point: Vec2 }> = []
+  for (const waypoint of requiredWaypoints) {
+    let bestDistance = Number.POSITIVE_INFINITY
+    let bestGuideDistance = 0
+    for (let index = 0; index < guide.length - 1; index += 1) {
+      const start = guide[index]!
+      const end = guide[index + 1]!
+      const dx = end.x - start.x
+      const dz = end.z - start.z
+      const lengthSq = dx * dx + dz * dz
+      const t = lengthSq > 1e-9
+        ? clamp(((waypoint.x - start.x) * dx + (waypoint.z - start.z) * dz) / lengthSq, 0, 1)
+        : 0
+      const projected = { x: start.x + dx * t, z: start.z + dz * t }
+      const projectedDistance = distance(projected, waypoint)
+      if (projectedDistance < bestDistance) {
+        bestDistance = projectedDistance
+        bestGuideDistance = cumulative[index]! + Math.sqrt(lengthSq) * t
+      }
+    }
+    if (Number.isFinite(bestDistance) && bestDistance <= options.waypointTolerance) {
+      mandatoryDistances.push({
+        distance: bestGuideDistance,
+        point: { ...waypoint },
+      })
+    }
+  }
+  const mandatoryByDistance = new Map(
+    mandatoryDistances.map((entry) => [entry.distance, entry.point]),
+  )
+  const distances = new Set<number>([0, totalLength])
+  for (let sample = options.stepLength; sample < totalLength; sample += options.stepLength) {
+    distances.add(sample)
+  }
+  for (const mandatory of mandatoryDistances) {
+    distances.add(clamp(mandatory.distance, 0, totalLength))
+  }
+  const sortedDistances = Array.from(distances).sort((a, b) => a - b)
+  const sampledPoints: Vec2[] = []
+  let segmentIndex = 1
+  for (const targetDistance of sortedDistances) {
+    while (
+      segmentIndex < cumulative.length - 1
+      && cumulative[segmentIndex]! < targetDistance
+    ) {
+      segmentIndex += 1
+    }
+    const start = guide[segmentIndex - 1]!
+    const end = guide[segmentIndex]!
+    const startDistance = cumulative[segmentIndex - 1]!
+    const segmentLength = Math.max(1e-9, cumulative[segmentIndex]! - startDistance)
+    const t = clamp((targetDistance - startDistance) / segmentLength, 0, 1)
+    const mandatory = mandatoryByDistance.get(targetDistance)
+    sampledPoints.push(mandatory
+      ? { ...mandatory }
+      : {
+          x: start.x + (end.x - start.x) * t,
+          z: start.z + (end.z - start.z) * t,
+        })
+  }
+  sampledPoints[0] = { ...guide[0]! }
+  sampledPoints[sampledPoints.length - 1] = { ...guide[guide.length - 1]! }
+
+  const nodes: RoadTraceNode[] = []
+  let failureReason: string | null = null
+  for (let index = 0; index < sampledPoints.length; index += 1) {
+    const point = sampledPoints[index]!
+    if (!grid.contains(point.x, point.z)) {
+      failureReason = 'reached-terrain-boundary'
+      break
+    }
+    const y = grid.sampleHeight(point.x, point.z)
+    if (y == null) {
+      failureReason = 'blocked'
+      break
+    }
+    const previous = sampledPoints[index - 1] ?? point
+    const next = sampledPoints[index + 1] ?? point
+    const heading = distance(previous, next) > 1e-6
+      ? Math.atan2(next.z - previous.z, next.x - previous.x)
+      : 0
+    const node = makeNode(point, y, heading, index)
+    if (nodes.length) {
+      const prior = nodes[nodes.length - 1]!
+      const segmentLength = Math.max(1e-6, distance(prior, node))
+      const slope = Math.abs(node.y - prior.y) / segmentLength
+      if (slope > options.maxSlope * 1.06) {
+        failureReason = 'blocked'
+        break
+      }
+      node.headingDelta = wrapAngle(node.heading - prior.heading)
+    }
+    nodes.push(node)
+  }
+  if (nodes.length > 2) {
+    const original = nodes.map((node) => node.y)
+    for (let index = 1; index < nodes.length - 1; index += 1) {
+      const smoothed = (original[index - 1]! + original[index]! * 2 + original[index + 1]!) / 4
+      nodes[index]!.y = clamp(smoothed, original[index]! - 0.75, original[index]! + 0.75)
+    }
+  }
+  const feelScale = Math.max(1e-4, options.feelDistance * options.maxSlope)
+  for (let index = 1; index < nodes.length; index += 1) {
+    const node = nodes[index]!
+    const leftY = grid.sampleHeight(
+      node.x + Math.cos(node.heading - options.feelAngleRad) * options.feelDistance,
+      node.z + Math.sin(node.heading - options.feelAngleRad) * options.feelDistance,
+    )
+    const rightY = grid.sampleHeight(
+      node.x + Math.cos(node.heading + options.feelAngleRad) * options.feelDistance,
+      node.z + Math.sin(node.heading + options.feelAngleRad) * options.feelDistance,
+    )
+    if (leftY == null || rightY == null) {
+      continue
+    }
+    const average = (leftY + rightY) * 0.5
+    const difference = (rightY - leftY) * 0.5
+    node.lateral = (leftY - rightY) / feelScale
+    node.longitudinal = (average - node.y) / feelScale
+    node.turn = difference !== 0 ? clamp((average - node.y) / difference, -1, 1) : 0
+  }
+  let length = 0
+  for (let index = 1; index < nodes.length; index += 1) {
+    length += distance(nodes[index - 1]!, nodes[index]!)
+  }
+  const complete = failureReason == null
+  return {
+    result: {
+      nodes,
+      length,
+      complete,
+      failureReason: failureReason ?? 'reached-guide-end',
+      rescueTurns: 0,
+    },
+    reachedGuideEnd: complete,
+  }
+}
+
+function appendBoundaryTail(
+  grid: TerrainHeightGrid,
+  route: RoadTraceResult,
+  options: WaypointRoadPlanOptions,
+): RoadTraceResult {
+  const last = route.nodes[route.nodes.length - 1]
+  if (!last) {
+    return route
+  }
+  const previous = route.nodes[route.nodes.length - 2]
+  const heading = previous
+    ? Math.atan2(last.z - previous.z, last.x - previous.x)
+    : last.heading
+  const tail = traceRoadPath(grid, {
+    startX: last.x,
+    startZ: last.z,
+    headingRad: heading,
+    stepLength: options.stepLength,
+    feelDistance: options.feelDistance,
+    feelAngleRad: options.feelAngleRad,
+    maxSlope: options.maxSlope,
+    maxTurnRad: options.maxTurnRad,
+    maxLength: null,
+    maxSteps: Math.max(
+      4096,
+      Math.ceil(((grid.maxX - grid.minX + grid.maxZ - grid.minZ) * 1.5) / options.stepLength),
+    ),
+    margin: options.margin,
+  })
+  const nodes = [...route.nodes, ...tail.nodes.slice(1)]
+  for (let index = 0; index < nodes.length; index += 1) {
+    nodes[index]!.index = index
+  }
+  let length = 0
+  for (let index = 1; index < nodes.length; index += 1) {
+    const from = nodes[index - 1]!
+    const to = nodes[index]!
+    length += Math.hypot(to.x - from.x, to.z - from.z)
+  }
+  return {
+    nodes,
+    length,
+    complete: tail.complete,
+    failureReason: tail.failureReason,
+    rescueTurns: route.rescueTurns + tail.rescueTurns,
+  }
+}
+
+function waypointPassStats(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  required: ReadonlyArray<Vec2>,
+  tolerance: number,
+): { passed: number; maxError: number } {
+  let passed = 0
+  let maxError = 0
+  let searchStart = 0
+  for (const waypoint of required) {
+    let nearest = Number.POSITIVE_INFINITY
+    let nearestIndex = -1
+    for (let index = searchStart; index < nodes.length; index += 1) {
+      const node = nodes[index]!
+      const error = Math.hypot(node.x - waypoint.x, node.z - waypoint.z)
+      if (error < nearest) {
+        nearest = error
+        nearestIndex = index
+      }
+    }
+    maxError = Math.max(maxError, nearest)
+    if (nearestIndex >= 0 && nearest <= tolerance) {
+      passed += 1
+      searchStart = nearestIndex
+    }
+  }
+  return { passed, maxError }
+}
+
+/**
+ * Unified waypoint road planner. Both strategies pass the same ordered
+ * waypoint anchors, use Slow Roads terrain feel constraints for the final
+ * centerline, and share loop closure and boundary tail handling.
+ */
+export function planWaypointRoadRoute(
+  grid: TerrainHeightGrid,
+  options: WaypointRoadPlanOptions,
+): WaypointRoadPlanResult {
+  const waypoints = options.waypoints.map((point) => ({ x: point.x, z: point.z }))
+  if (!waypoints.length) {
+    return {
+      nodes: [],
+      length: 0,
+      complete: false,
+      failureReason: 'no-waypoints',
+      rescueTurns: 0,
+      closed: false,
+      waypointCount: 0,
+      waypointsPassed: 0,
+      maxWaypointError: 0,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates: 0,
+    }
+  }
+  if (options.strategy === 'seeded' && (options.algorithmVersion ?? 1) >= 2) {
+    const origin = waypoints[0]!
+    const traced = traceOfficialScenicRoad(
+      grid,
+      origin,
+      options.seed,
+      options.margin,
+      { algorithmVersion: options.algorithmVersion },
+    )
+    const stats = waypointPassStats(
+      traced.nodes,
+      [origin],
+      options.waypointTolerance,
+    )
+    return {
+      ...traced,
+      closed: false,
+      waypointCount: 1,
+      waypointsPassed: stats.passed,
+      maxWaypointError: stats.maxError,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates: 0,
+    }
+  }
+  const closed = options.termination === 'loop'
+  if (closed && waypoints.length === 1) {
+    let lastResult: WaypointRoadPlanResult | null = null
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const attemptSeed = (
+        options.seed + Math.imul(attempt, 0x9e3779b1)
+      ) >>> 0
+      const loopAnchors = singlePointLoopAnchors(
+        grid,
+        waypoints[0]!,
+        attemptSeed,
+        options.stepLength,
+        options.maxSlope,
+      )
+      if (!loopAnchors) {
+        continue
+      }
+      const nested = planWaypointRoadRoute(grid, {
+        ...options,
+        seed: attemptSeed,
+        waypoints: loopAnchors,
+      })
+      const pass = waypointPassStats(
+        nested.nodes,
+        waypoints,
+        options.waypointTolerance,
+      )
+      const adapted: WaypointRoadPlanResult = {
+        ...nested,
+        waypointCount: 1,
+        waypointsPassed: pass.passed,
+        maxWaypointError: pass.maxError,
+      }
+      lastResult = adapted
+      if (nested.complete && nested.closed) {
+        return adapted
+      }
+    }
+    return lastResult ?? {
+      nodes: [],
+      length: 0,
+      complete: false,
+      failureReason: 'single-point-loop-too-small',
+      rescueTurns: 0,
+      closed: false,
+      waypointCount: 1,
+      waypointsPassed: 0,
+      maxWaypointError: 0,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates: 0,
+    }
+  }
+  const anchors: Vec2[] = waypoints.map((point) => ({ ...point }))
+
+  if (anchors.length === 1) {
+    const tail = traceRoadPath(grid, {
+      startX: anchors[0]!.x,
+      startZ: anchors[0]!.z,
+      headingRad: resolveSeedHeadingRad(options.seed),
+      stepLength: options.stepLength,
+      feelDistance: options.feelDistance,
+      feelAngleRad: options.feelAngleRad,
+      maxSlope: options.maxSlope,
+      maxTurnRad: options.maxTurnRad,
+      maxLength: null,
+      maxSteps: Math.max(
+        4096,
+        Math.ceil(((grid.maxX - grid.minX + grid.maxZ - grid.minZ) * 1.5) / options.stepLength),
+      ),
+      margin: options.margin,
+    })
+    const stats = waypointPassStats(tail.nodes, waypoints, options.waypointTolerance)
+    return {
+      ...tail,
+      closed: false,
+      waypointCount: waypoints.length,
+      waypointsPassed: stats.passed,
+      maxWaypointError: stats.maxError,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates: 0,
+    }
+  }
+
+  let guide: Vec2[]
+  let shortestExpandedStates = 0
+  if (options.strategy === 'shortest') {
+    const shortest = planShortestGuide(grid, anchors, closed, options)
+    shortestExpandedStates = shortest.expanded
+    if (shortest.error || !shortest.guide.length) {
+      return {
+        nodes: [],
+        length: 0,
+        complete: false,
+        failureReason: shortest.error ?? 'shortest-route-not-found',
+        rescueTurns: 0,
+        closed: false,
+        waypointCount: waypoints.length,
+        waypointsPassed: 0,
+        maxWaypointError: 0,
+        closureHeadingErrorRad: 0,
+        shortestExpandedStates,
+      }
+    }
+    guide = shortest.guide
+  } else {
+    guide = buildSeededGuide(grid, anchors, closed, options)
+  }
+
+  const traced = traceGuide(grid, guide, waypoints, options)
+  let result = traced.result
+  if (!traced.reachedGuideEnd) {
+    return {
+      ...result,
+      closed: false,
+      waypointCount: waypoints.length,
+      waypointsPassed: waypointPassStats(result.nodes, waypoints, options.waypointTolerance).passed,
+      maxWaypointError: waypointPassStats(result.nodes, waypoints, options.waypointTolerance).maxError,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates,
+    }
+  }
+  if (closed && result.nodes.length > 1) {
+    const first = result.nodes[0]!
+    const last = result.nodes[result.nodes.length - 1]!
+    const closeY = grid.sampleHeight(first.x, first.z)
+    if (closeY != null) {
+      const previous = result.nodes[result.nodes.length - 2]!
+      last.x = first.x
+      last.z = first.z
+      last.y = closeY
+      last.heading = first.heading
+      last.headingDelta = wrapAngle(last.heading - previous.heading)
+    }
+  } else if (!closed) {
+    result = appendBoundaryTail(grid, result, options)
+  }
+  const stats = waypointPassStats(result.nodes, waypoints, options.waypointTolerance)
+  const closedError = closed && result.nodes.length > 1
+    ? Math.hypot(
+        result.nodes[0]!.x - result.nodes[result.nodes.length - 1]!.x,
+        result.nodes[0]!.z - result.nodes[result.nodes.length - 1]!.z,
+      )
+    : 0
+  const closureHeadingErrorRad = closed && result.nodes.length > 1
+    ? Math.abs(wrapAngle(result.nodes[result.nodes.length - 1]!.heading - result.nodes[0]!.heading))
+    : 0
+  let complete = result.complete && stats.maxError <= options.waypointTolerance
+  let failureReason = result.failureReason
+  if (stats.maxError > options.waypointTolerance) {
+    complete = false
+    failureReason = 'waypoint-missed'
+  } else if (closed && closedError > 0.5) {
+    complete = false
+    failureReason = 'loop-not-closed'
+  }
+  return {
+    ...result,
+    complete,
+    failureReason,
+    closed: closed && closedError <= 0.5,
+    waypointCount: waypoints.length,
+    waypointsPassed: stats.passed,
+    maxWaypointError: stats.maxError,
+    closureHeadingErrorRad,
+    shortestExpandedStates,
+  }
+}
+
+export function buildSinglePointSeededLoop(
+  grid: TerrainHeightGrid,
+  origin: RoadWaypoint,
+  seed: number,
+  stepLength = 8,
+): RoadWaypoint[] | null {
+  const anchors = singlePointLoopAnchors(
+    grid,
+    { x: origin.x, z: origin.z },
+    seed,
+    stepLength,
+  )
+  return anchors?.map((point) => ({ x: point.x, z: point.z })) ?? null
+}

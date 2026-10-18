@@ -1,14 +1,19 @@
 import * as THREE from 'three'
 import type { Vector3Like } from '@schema/core'
 import { hashString, stableSerialize } from '@schema/stableSerialize'
-import { createEndpointGizmoObject, getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
+import { getEndpointGizmoPartInfoFromObject, type EndpointGizmoPart } from './EndpointGizmo'
 import { computeWorldUnitsPerPixel } from './handleScreenScaleUtils'
+import {
+  createLandscapeRoadWaypointMarker,
+  LANDSCAPE_ROAD_MARKER_LABEL_LIMIT,
+  type LandscapeRoadMarkerState,
+  type LandscapeRoadWaypointMarker,
+} from './LandscapeRoadWaypointMarker'
 
 /**
- * Editor overlay for hand-drawn proceduralLandscape road waypoints: one
- * endpoint handle per point plus a polyline through them. Everything lives in
- * the host node's local space and is tagged `editorOnly` so the runtime
- * terrain height-field rasterizer never mistakes it for real terrain.
+ * Editor overlay for proceduralLandscape road waypoints. Waypoints use
+ * screen-sized 3D map pins with always-facing index badges; the path itself is
+ * still a simple editor-only polyline.
  */
 
 export type LandscapeRoadPathVertexHandlePickResult = {
@@ -54,18 +59,17 @@ export type LandscapeRoadPathVertexRenderer = {
   updateScreenSize(options: {
     camera: THREE.Camera | null
     canvas: HTMLCanvasElement | null
-    diameterPx?: number
+    heightPx?: number
   }): void
 }
 
 const LANDSCAPE_ROAD_VERTEX_HANDLE_GROUP_NAME = '__LandscapeRoadPathVertexHandles'
 const LANDSCAPE_ROAD_VERTEX_HANDLE_RENDER_ORDER = 1002
-const LANDSCAPE_ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX = 46
+const LANDSCAPE_ROAD_VERTEX_HANDLE_SCREEN_HEIGHT_PX = 56
 const LANDSCAPE_ROAD_VERTEX_HANDLE_Y_OFFSET = 0.04
-const LANDSCAPE_ROAD_VERTEX_HANDLE_COLOR = 0xffb300
 const LANDSCAPE_ROAD_PATH_LINE_COLOR = 0xffca28
 const NEAR_SCALE_DISTANCE = 2.5
-const NEAR_SCALE_MAX_MULT = 2.0
+const NEAR_SCALE_MAX_MULT = 1.35
 
 type EnsureOptions = {
   active: boolean
@@ -96,25 +100,41 @@ function computePointsSignature(points: THREE.Vector3[]): string {
   return hashString(stableSerialize(points.map((point) => [point.x, point.y, point.z])))
 }
 
-function disposeGroup(group: THREE.Group): void {
-  group.traverse((child) => {
-    const drawable = child as THREE.Line | THREE.Mesh
-    drawable.geometry?.dispose?.()
-    const material = drawable.material as THREE.Material | THREE.Material[] | undefined
-    if (Array.isArray(material)) {
-      material.forEach((entry) => entry?.dispose?.())
-    } else {
-      material?.dispose?.()
+function isVisibleHitObject(object: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = object
+  while (current) {
+    if (!current.visible) {
+      return false
     }
-  })
-  for (const child of group.children) {
-    const gizmo = child?.userData?.endpointGizmo as { dispose?: () => void } | undefined
-    gizmo?.dispose?.()
+    current = current.parent
   }
+  return true
+}
+
+function markerStateFor(
+  key: string,
+  active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null,
+  selected: { handleKey: string; gizmoPart: EndpointGizmoPart } | null,
+  hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null,
+): LandscapeRoadMarkerState {
+  if (active?.handleKey === key || selected?.handleKey === key) {
+    return 'active'
+  }
+  if (hovered?.handleKey === key) {
+    return 'hover'
+  }
+  return 'normal'
 }
 
 export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertexRenderer {
-  let state: { nodeId: string; group: THREE.Group; signature: string } | null = null
+  let state: {
+    nodeId: string
+    group: THREE.Group
+    signature: string
+    labelsAlwaysVisible: boolean
+    line: THREE.Line | null
+    markers: Map<string, LandscapeRoadWaypointMarker>
+  } | null = null
   let hovered: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let active: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
   let selected: { handleKey: string; gizmoPart: EndpointGizmoPart } | null = null
@@ -130,7 +150,15 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
     const existing = state
     state = null
     existing.group.removeFromParent()
-    disposeGroup(existing.group)
+    if (existing.line) {
+      existing.line.geometry.dispose()
+      const material = existing.line.material as THREE.Material
+      material.dispose()
+    }
+    for (const marker of existing.markers.values()) {
+      marker.dispose()
+    }
+    existing.markers.clear()
     hovered = null
     active = null
     selected = null
@@ -140,22 +168,10 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
     if (!state) {
       return
     }
-    for (const handle of state.group.children) {
-      const gizmo = handle?.userData?.endpointGizmo as
-        | { clearStates?: () => void; setState?: (part: EndpointGizmoPart, state: 'hover' | 'active') => void }
-        | undefined
-      if (!gizmo?.clearStates || !gizmo?.setState) {
-        continue
-      }
-      gizmo.clearStates()
-      const key = typeof handle.userData?.handleKey === 'string' ? handle.userData.handleKey : ''
-      if (active && key === active.handleKey) {
-        gizmo.setState(active.gizmoPart, 'active')
-      } else if (selected && key === selected.handleKey) {
-        gizmo.setState(selected.gizmoPart, 'active')
-      } else if (hovered && key === hovered.handleKey) {
-        gizmo.setState(hovered.gizmoPart, 'hover')
-      }
+    for (const [key, marker] of state.markers) {
+      const markerState = markerStateFor(key, active, selected, hovered)
+      marker.setState(markerState)
+      marker.setLabelVisible(state.labelsAlwaysVisible || markerState !== 'normal')
     }
   }
 
@@ -168,36 +184,19 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
   }
 
   function setActiveHandle(next: { nodeId: string; vertexIndex: number; gizmoPart: EndpointGizmoPart } | null): void {
-    if (!state) {
-      active = null
-      return
-    }
-    if (!next) {
-      active = null
-      refreshHighlight()
-      return
-    }
-    active = {
-      handleKey: `${next.nodeId}:${next.vertexIndex}`,
-      gizmoPart: next.gizmoPart,
-    }
+    active = next
+      ? { handleKey: `${next.nodeId}:${next.vertexIndex}`, gizmoPart: next.gizmoPart }
+      : null
     refreshHighlight()
   }
 
   function setSelectedHandle(next: { nodeId: string; vertexIndex: number; gizmoPart?: EndpointGizmoPart } | null): void {
-    if (!state) {
-      selected = null
-      return
-    }
-    if (!next) {
-      selected = null
-      refreshHighlight()
-      return
-    }
-    selected = {
-      handleKey: `${next.nodeId}:${next.vertexIndex}`,
-      gizmoPart: next.gizmoPart ?? 'center',
-    }
+    selected = next
+      ? {
+          handleKey: `${next.nodeId}:${next.vertexIndex}`,
+          gizmoPart: next.gizmoPart ?? 'center',
+        }
+      : null
     refreshHighlight()
   }
 
@@ -229,9 +228,14 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
     group.userData.isLandscapeRoadPathHandles = true
     group.userData.editorOnly = true
 
+    let line: THREE.Line | null = null
     if (points.length >= 2) {
       const lineGeometry = new THREE.BufferGeometry().setFromPoints(
-        points.map((point) => new THREE.Vector3(point.x, point.y + LANDSCAPE_ROAD_VERTEX_HANDLE_Y_OFFSET, point.z)),
+        points.map((point) => new THREE.Vector3(
+          point.x,
+          point.y + LANDSCAPE_ROAD_VERTEX_HANDLE_Y_OFFSET,
+          point.z,
+        )),
       )
       const lineMaterial = new THREE.LineBasicMaterial({
         color: LANDSCAPE_ROAD_PATH_LINE_COLOR,
@@ -240,7 +244,7 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
         depthTest: false,
         depthWrite: false,
       })
-      const line = new THREE.Line(lineGeometry, lineMaterial)
+      line = new THREE.Line(lineGeometry, lineMaterial)
       line.name = 'LandscapeRoadPathLine'
       line.renderOrder = LANDSCAPE_ROAD_VERTEX_HANDLE_RENDER_ORDER
       line.layers.enableAll()
@@ -248,45 +252,52 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
       group.add(line)
     }
 
+    const labelsAlwaysVisible = points.length <= LANDSCAPE_ROAD_MARKER_LABEL_LIMIT
+    const markers = new Map<string, LandscapeRoadWaypointMarker>()
     points.forEach((point, index) => {
-      const gizmo = createEndpointGizmoObject({
-        axes: { x: false, y: false, z: false },
+      const marker = createLandscapeRoadWaypointMarker({
+        label: `P${index + 1}`,
+        kind: 'waypoint',
+        showLabel: labelsAlwaysVisible,
         renderOrder: LANDSCAPE_ROAD_VERTEX_HANDLE_RENDER_ORDER,
-        depthTest: false,
-        depthWrite: false,
-        opacity: 0.9,
-        centerColor: LANDSCAPE_ROAD_VERTEX_HANDLE_COLOR,
       })
-
-      const handle = gizmo.root
-      handle.name = `LandscapeRoadPathHandle_${index + 1}`
-      handle.position.set(point.x, point.y + LANDSCAPE_ROAD_VERTEX_HANDLE_Y_OFFSET, point.z)
-      handle.layers.enableAll()
+      const handle = marker.root
+      const handleKey = `${nodeId}:${index}`
+      handle.position.set(
+        point.x,
+        point.y + LANDSCAPE_ROAD_VERTEX_HANDLE_Y_OFFSET,
+        point.z,
+      )
       handle.userData.isLandscapeRoadPathHandle = true
       handle.userData.editorOnly = true
       handle.userData.nodeId = nodeId
       handle.userData.landscapeRoadPathVertexIndex = index
-      handle.userData.baseDiameter = gizmo.baseDiameter
-      handle.userData.endpointGizmo = gizmo
-      handle.userData.handleKey = `${nodeId}:${index}`
+      handle.userData.handleKey = handleKey
       handle.userData.yOffset = LANDSCAPE_ROAD_VERTEX_HANDLE_Y_OFFSET
-
       handle.traverse((child) => {
+        child.layers.enableAll()
         child.userData.editorOnly = true
-        const mesh = child as THREE.Mesh
-        if (!mesh?.isMesh) {
-          return
+        child.userData.isLandscapeRoadPathHandle = true
+        child.userData.nodeId = nodeId
+        child.userData.landscapeRoadPathVertexIndex = index
+        child.userData.handleKey = handleKey
+        if (child.userData.endpointGizmoPart == null) {
+          child.userData.endpointGizmoPart = 'center'
         }
-        mesh.userData.isLandscapeRoadPathHandle = true
-        mesh.userData.nodeId = nodeId
-        mesh.userData.landscapeRoadPathVertexIndex = index
       })
-
       group.add(handle)
+      markers.set(handleKey, marker)
     })
 
     runtimeObject.add(group)
-    state = { nodeId, group, signature }
+    state = {
+      nodeId,
+      group,
+      signature,
+      labelsAlwaysVisible,
+      line,
+      markers,
+    }
     hovered = null
     active = null
     selected = null
@@ -305,13 +316,13 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
     options.raycaster.setFromCamera(options.pointer, options.camera)
     const hits = options.raycaster.intersectObjects(state.group.children, true)
     for (const hit of hits) {
-      const owner = hit.object?.parent?.userData?.isLandscapeRoadPathHandle
-        ? hit.object.parent
-        : hit.object
-      const vertexIndex = Number(owner?.userData?.landscapeRoadPathVertexIndex)
-      const nodeId = owner?.userData?.nodeId
+      if (!isVisibleHitObject(hit.object)) {
+        continue
+      }
+      const vertexIndex = Number(hit.object?.userData?.landscapeRoadPathVertexIndex)
+      const nodeId = hit.object?.userData?.nodeId
       const gizmoPart = (hit.object?.userData?.endpointGizmoPart as EndpointGizmoPart | undefined) ?? null
-      if (!Number.isInteger(vertexIndex) || typeof nodeId !== 'string' || !nodeId.length) {
+      if (!Number.isInteger(vertexIndex) || vertexIndex < 0 || typeof nodeId !== 'string' || !nodeId.length) {
         continue
       }
       const partInfo = getEndpointGizmoPartInfoFromObject(hit.object)
@@ -352,18 +363,15 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
   function updateScreenSize(options: {
     camera: THREE.Camera | null
     canvas: HTMLCanvasElement | null
-    diameterPx?: number
+    heightPx?: number
   }): void {
     if (!state?.group || !options.camera || !options.canvas) {
       return
     }
-    const diameterPx = options.diameterPx ?? LANDSCAPE_ROAD_VERTEX_HANDLE_SCREEN_DIAMETER_PX
+    const heightPx = options.heightPx ?? LANDSCAPE_ROAD_VERTEX_HANDLE_SCREEN_HEIGHT_PX
     state.group.updateMatrixWorld(true)
-    for (const child of state.group.children) {
-      const gizmo = child.userData?.endpointGizmo as { setBaseDiameter?: (diameter: number) => void } | undefined
-      if (!gizmo?.setBaseDiameter) {
-        continue
-      }
+    for (const marker of state.markers.values()) {
+      const child = marker.root
       child.getWorldPosition(tmpWorldPos)
       options.camera.getWorldPosition(tmpCameraWorldPos)
       const distance = tmpWorldPos.distanceTo(tmpCameraWorldPos)
@@ -375,12 +383,11 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
       const nearScaleMultiplier = distance < NEAR_SCALE_DISTANCE
         ? 1 + ((NEAR_SCALE_DISTANCE - distance) / NEAR_SCALE_DISTANCE) * (NEAR_SCALE_MAX_MULT - 1)
         : 1
-      const parent = child.parent
-      parent?.getWorldScale(tmpParentWorldScale)
+      child.parent?.getWorldScale(tmpParentWorldScale)
       const parentScale = Math.max(1e-6, tmpParentWorldScale.x, tmpParentWorldScale.y, tmpParentWorldScale.z)
-      const targetDiameter = Math.max(1e-4, worldUnitsPerPixel * diameterPx * nearScaleMultiplier)
-      gizmo.setBaseDiameter(targetDiameter / parentScale)
+      marker.setScreenHeight(worldUnitsPerPixel * heightPx * nearScaleMultiplier, parentScale)
     }
+    refreshHighlight()
   }
 
   return {

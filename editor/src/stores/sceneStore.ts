@@ -430,7 +430,15 @@ import {
   type LodComponentProps,
 } from '@schema/components'
 import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
-import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
+import {
+  getProceduralLandscapeScenicStartLocal,
+  validateProceduralLandscapeGeneratedRoute,
+} from '@schema/proceduralLandscape/runtime'
+import {
+  PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION,
+  clampProceduralLandscapeProps,
+  type ProceduralLandscapeComponentProps,
+} from '@schema/proceduralLandscape/config'
 import {
   TERRAIN_DEM_STORAGE_LAYOUT,
   readTerrainPackAssetMetadata,
@@ -18854,12 +18862,7 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
-    /**
-     * Hand-drawn road guide path for proceduralLandscape (node-local XZ
-     * waypoints). The component runtime converts them to world space on the
-     * next world rebuild, so every commit re-traces the road, its flatten
-     * band, vegetation clearance and barriers.
-     */
+    /** Updates the editable waypoint draft without regenerating the road. */
     updateProceduralLandscapeRoadWaypoints(
       nodeId: string,
       waypoints: Array<{ x: number; z: number }> | null | undefined,
@@ -18877,7 +18880,114 @@ export const useSceneStore = defineStore('scene', {
       const currentProps = component.props as Partial<ProceduralLandscapeComponentProps> | undefined
       const currentRoad = (currentProps?.road ?? {}) as Record<string, unknown>
       return this.updateNodeComponentProps(nodeId, component.id, {
-        road: { ...currentRoad, waypoints: clampRoadWaypoints(waypoints) },
+        road: {
+          ...currentRoad,
+          waypoints: clampRoadWaypoints(waypoints),
+        },
+      })
+    },
+
+    /** Validates the live draft before replacing the last successful road. */
+    generateProceduralLandscapeRoad(
+      nodeId: string,
+    ): { accepted: boolean; failureReason: string | null } {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return { accepted: false, failureReason: 'node-not-found' }
+      }
+      const component = target.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+        | undefined
+      if (!component?.id) {
+        return { accepted: false, failureReason: 'component-not-found' }
+      }
+      const currentProps = component.props as Partial<ProceduralLandscapeComponentProps> | undefined
+      const currentRoad = (currentProps?.road ?? {}) as Record<string, unknown>
+      let waypoints = clampRoadWaypoints(currentRoad.waypoints)
+      let routing = (currentRoad.routing ?? {}) as Record<string, unknown>
+      const strategy = routing.strategy === 'shortest' ? 'shortest' : 'seeded'
+      routing = {
+        ...routing,
+        strategy,
+        termination: 'boundary',
+      }
+      if (strategy === 'seeded') {
+        // The official Hills generator only uses a required start pose. Extra
+        // editor anchors remain available to the separate shortest strategy.
+        waypoints = waypoints.slice(0, 1)
+      }
+      if (!waypoints.length) {
+        const center = getProceduralLandscapeScenicStartLocal(nodeId)
+        if (!center) {
+          return { accepted: false, failureReason: 'terrain-grid-not-ready' }
+        }
+        waypoints = [center]
+      }
+      const previousGenerated = currentRoad.generatedRoute as
+        | { revision?: unknown }
+        | null
+        | undefined
+      const revision = Math.max(
+        0,
+        Math.round(Number(previousGenerated?.revision) || 0),
+      ) + 1
+      const normalized = clampProceduralLandscapeProps(currentProps, nodeId)
+      const generatedRoute = {
+        waypoints,
+        strategy,
+        termination: 'boundary' as const,
+        algorithmVersion: PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION,
+        seed: normalized.seed,
+        waypointTolerance: normalized.road.waypointTolerance,
+        pathDeviation: normalized.road.pathDeviation,
+        revision,
+      }
+      const validation = validateProceduralLandscapeGeneratedRoute(
+        nodeId,
+        generatedRoute,
+        normalized.road,
+      )
+      if (!validation || !validation.ok) {
+        return {
+          accepted: false,
+          failureReason: validation?.failureReason ?? 'terrain-grid-not-ready',
+        }
+      }
+      const accepted = this.updateNodeComponentProps(nodeId, component.id, {
+        generationRevision: Math.max(0, Math.round(Number(currentProps?.generationRevision) || 0)) + 1,
+        road: {
+          ...currentRoad,
+          enabled: true,
+          routing,
+          waypoints,
+          generatedRoute,
+        },
+      })
+      return {
+        accepted,
+        failureReason: accepted ? null : 'scene-update-failed',
+      }
+    },
+
+    clearProceduralLandscapeRoad(nodeId: string): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target) {
+        return false
+      }
+      const component = target.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+        | undefined
+      if (!component?.id) {
+        return false
+      }
+      const currentProps = component.props as Partial<ProceduralLandscapeComponentProps> | undefined
+      const currentRoad = (currentProps?.road ?? {}) as Record<string, unknown>
+      return this.updateNodeComponentProps(nodeId, component.id, {
+        road: {
+          ...currentRoad,
+          waypoints: [],
+          generatedRoute: null,
+        },
       })
     },
 

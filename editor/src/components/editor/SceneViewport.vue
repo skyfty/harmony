@@ -15211,7 +15211,7 @@ function animate() {
   modelCollisionFaceVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 34 })
   boundaryWallVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
   guideRouteVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 48 })
-  landscapeRoadPathVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, diameterPx: 46 })
+  landscapeRoadPathVertexRenderer.updateScreenSize({ camera, canvas: canvasRef.value, heightPx: 56 })
   floorCircleHandleRenderer.updateScreenSize({
     camera,
     canvas: canvasRef.value,

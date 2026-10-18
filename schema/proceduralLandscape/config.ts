@@ -67,8 +67,37 @@ export interface ProceduralLandscapeSurfaceProps {
   viewDistanceScale: number | null
 }
 
+export type ProceduralLandscapeRoadTermination = 'boundary' | 'loop'
+export type ProceduralLandscapeRoadStrategy = 'seeded' | 'shortest'
+
+/** Version 3 = official Hills tracing with relative lowland/grade constraints. */
+export const PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION = 3
+
+export interface ProceduralLandscapeRoadRoutingProps {
+  strategy: ProceduralLandscapeRoadStrategy
+  termination: ProceduralLandscapeRoadTermination
+}
+
+/** Immutable snapshot used by the runtime until the user regenerates the road. */
+export interface ProceduralLandscapeGeneratedRouteProps {
+  waypoints: RoadWaypoint[]
+  strategy: ProceduralLandscapeRoadStrategy
+  termination: ProceduralLandscapeRoadTermination
+  algorithmVersion: number
+  seed: number
+  waypointTolerance: number
+  pathDeviation: number
+  revision: number
+}
+
 export interface ProceduralLandscapeRoadProps {
   enabled: boolean
+  routing: ProceduralLandscapeRoadRoutingProps
+  /**
+   * The runtime only builds this committed snapshot. Live waypoint edits stay
+   * editable and are marked stale until the user presses Generate.
+   */
+  generatedRoute: ProceduralLandscapeGeneratedRouteProps | null
   /** Full road width in meters (both lanes). */
   width: number
   shoulderWidth: number
@@ -79,9 +108,9 @@ export interface ProceduralLandscapeRoadProps {
    * points fall back to the terrain centre and the seeded heading.
    */
   waypoints: RoadWaypoint[]
-  /** Guide tolerance in meters: step advances to the next waypoint within it. */
+  /** Maximum centerline distance to every required waypoint (meters). */
   waypointTolerance: number
-  /** Maximum lateral deviation from the straight chord for a two-point path. */
+  /** Maximum seeded scenic detour between consecutive waypoints (meters). */
   pathDeviation: number
   /** Null traces until the terrain boundary. */
   maxLength: number | null
@@ -301,6 +330,48 @@ function normalizeColor(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length ? value.trim() : fallback
 }
 
+function clampRoadWaypoint(value: unknown): RoadWaypoint | null {
+  const raw = value as { x?: unknown; z?: unknown } | null | undefined
+  const x = typeof raw?.x === 'number' ? raw.x : Number(raw?.x)
+  const z = typeof raw?.z === 'number' ? raw.z : Number(raw?.z)
+  if (!Number.isFinite(x) || !Number.isFinite(z)) {
+    return null
+  }
+  return { x, z }
+}
+
+function clampGeneratedRoute(
+  value: unknown,
+  fallbackSeed: number,
+  fallbackPathDeviation: number,
+): ProceduralLandscapeGeneratedRouteProps | null {
+  const raw = value as Partial<ProceduralLandscapeGeneratedRouteProps> | null | undefined
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
+  const waypoints = clampRoadWaypoints(raw.waypoints)
+  if (!waypoints.length) {
+    return null
+  }
+  const algorithmVersion = Math.round(
+    clampNumber(raw.algorithmVersion, 1, 1, 0x7fffffff),
+  )
+  return {
+    waypoints,
+    strategy: raw.strategy === 'shortest' ? 'shortest' : 'seeded',
+    termination: algorithmVersion >= 2
+      ? 'boundary'
+      : raw.termination === 'boundary'
+        ? 'boundary'
+        : 'loop',
+    algorithmVersion,
+    seed: Math.round(clampNumber(raw.seed, fallbackSeed, 0, 0xffffffff)) >>> 0,
+    waypointTolerance: clampNumber(raw.waypointTolerance, 4, 1, 64),
+    pathDeviation: clampNumber(raw.pathDeviation, fallbackPathDeviation, 10, 200),
+    revision: Math.round(clampNumber(raw.revision, 0, 0, 0x7fffffff)),
+  }
+}
+
 export function createDefaultProceduralLandscapeProps(node: { id: string }): ProceduralLandscapeComponentProps {
   return {
     seed: hashStringToSeed(node.id || 'procedural-landscape'),
@@ -340,10 +411,15 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
     },
     road: {
       enabled: true,
+      routing: {
+        strategy: 'seeded',
+        termination: 'boundary',
+      },
+      generatedRoute: null,
       width: 7,
       shoulderWidth: 2.5,
       waypoints: [],
-      waypointTolerance: 12,
+      waypointTolerance: 4,
       pathDeviation: 60,
       maxLength: null,
       stepLength: 8,
@@ -458,9 +534,66 @@ export function clampProceduralLandscapeProps(
         hemisphere: dem.crs.hemisphere === 'south' ? 'south' as const : 'north' as const,
       }
     : null
+  const seedValue = Math.round(clampNumber(props?.seed, defaults.seed, 0, 0xffffffff)) >>> 0
+  const waypointTolerance = clampNumber(
+    road?.waypointTolerance,
+    defaults.road.waypointTolerance,
+    1,
+    64,
+  )
+  const pathDeviation = clampNumber(
+    road?.pathDeviation,
+    defaults.road.pathDeviation,
+    10,
+    200,
+  )
+  const waypoints = clampRoadWaypoints(road?.waypoints)
+  const hasGeneratedRouteField = Boolean(
+    road && Object.prototype.hasOwnProperty.call(road, 'generatedRoute'),
+  )
+  let generatedRoute = hasGeneratedRouteField
+    ? clampGeneratedRoute(road?.generatedRoute, seedValue, pathDeviation)
+    : null
+  const legacyRoad = road as Partial<ProceduralLandscapeRoadProps> & {
+    mode?: string
+    procedural?: {
+      origin?: unknown
+      termination?: unknown
+    }
+  }
+  if (
+    !generatedRoute
+    && waypoints.length
+    && (legacyRoad.mode != null || legacyRoad.procedural != null)
+  ) {
+    const legacyOrigin = legacyRoad.mode === 'procedural'
+      ? clampRoadWaypoint(legacyRoad.procedural?.origin)
+      : null
+    const migratedWaypoints = legacyOrigin
+      ? [
+          legacyOrigin,
+          ...waypoints.filter((point) => (
+            Math.hypot(point.x - legacyOrigin.x, point.z - legacyOrigin.z) > 0.5
+          )),
+        ]
+      : waypoints
+    generatedRoute = migratedWaypoints.length
+      ? {
+          waypoints: migratedWaypoints,
+          strategy: 'seeded',
+          termination: 'boundary',
+          algorithmVersion: 1,
+          seed: seedValue,
+          waypointTolerance,
+          pathDeviation,
+          revision: 0,
+        }
+      : null
+  }
+  const routing = road?.routing
 
   return {
-    seed: Math.round(clampNumber(props?.seed, defaults.seed, 0, 0xffffffff)) >>> 0,
+    seed: seedValue,
     generationRevision: Math.round(clampNumber(props?.generationRevision, 0, 0, 0x7fffffff)),
     quality,
     sampling: {
@@ -501,12 +634,17 @@ export function clampProceduralLandscapeProps(
     },
     road: {
       enabled: road?.enabled !== false,
+      routing: {
+        strategy: routing?.strategy === 'shortest' ? 'shortest' : 'seeded',
+        termination: 'boundary',
+      },
+      generatedRoute,
       // 下限取官方 NARROW 档：< 2.25m 才会切到单车道贴图（`isSingleTrackRoad`）。
       width: clampNumber(road?.width, defaults.road.width, ROAD_WIDTH_PRESETS.narrow, 24),
       shoulderWidth: clampNumber(road?.shoulderWidth, defaults.road.shoulderWidth, 0, 10),
-      waypoints: clampRoadWaypoints(road?.waypoints),
-      waypointTolerance: clampNumber(road?.waypointTolerance, defaults.road.waypointTolerance, 4, 100),
-      pathDeviation: clampNumber(road?.pathDeviation, defaults.road.pathDeviation, 10, 200),
+      waypoints,
+      waypointTolerance,
+      pathDeviation,
       maxLength: clampNullableNumber(road?.maxLength, defaults.road.maxLength, 16, 100000),
       stepLength: clampNumber(road?.stepLength, defaults.road.stepLength, 2, 32),
       feelDistance: clampNumber(road?.feelDistance, defaults.road.feelDistance, 4, 80),
@@ -590,6 +728,13 @@ export function cloneProceduralLandscapeProps(
     surface: { ...props.surface },
     road: {
       ...props.road,
+      routing: { ...props.road.routing },
+      generatedRoute: props.road.generatedRoute
+        ? {
+            ...props.road.generatedRoute,
+            waypoints: props.road.generatedRoute.waypoints.map((point) => ({ ...point })),
+          }
+        : null,
       waypoints: props.road.waypoints.map((waypoint) => ({ x: waypoint.x, z: waypoint.z })),
     },
     forest: { ...props.forest },
@@ -652,12 +797,9 @@ export function roadHalfWidth(props: ProceduralLandscapeComponentProps): number 
   return Math.max(0.5, props.road.width * 0.5)
 }
 
-/**
- * 生效的手绘路径：≥2 个点才接管追踪起点/朝向；否则返回空数组，
- * 追踪回退到地形中心 + 种子朝向。
- */
+/** Current editable waypoint draft (one point is valid for seeded/boundary routes). */
 export function activeRoadWaypoints(props: ProceduralLandscapeComponentProps): RoadWaypoint[] {
-  return props.road.waypoints.length >= 2 ? props.road.waypoints : []
+  return props.road.waypoints.length ? props.road.waypoints : []
 }
 
 export function roadFlattenParams(props: ProceduralLandscapeComponentProps): {

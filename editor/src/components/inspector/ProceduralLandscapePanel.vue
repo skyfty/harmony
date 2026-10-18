@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
@@ -9,8 +9,10 @@ import {
   createProceduralLandscapeComponentState,
 } from '@schema/components'
 import {
+  PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION,
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
+  type ProceduralLandscapeRoadStrategy,
 } from '@schema/proceduralLandscape/config'
 import {
   getProceduralLandscapeStats,
@@ -138,6 +140,100 @@ function handleRegenerate(): void {
 }
 
 const roadWaypoints = computed(() => propsValue.value?.road.waypoints ?? [])
+const roadActionMessage = ref('')
+const routeStrategy = computed(() => propsValue.value?.road.routing.strategy ?? 'seeded')
+const routeTermination = computed(() => propsValue.value?.road.routing.termination ?? 'boundary')
+const roadPathEditing = computed(
+  () => componentEnabled.value && activeBuildTool.value === 'landscapeRoad' && Boolean(landscapeComponent.value),
+)
+const roadHasGeneratedResult = computed(() => (runtimeStats.value?.roadNodeCount ?? 0) >= 2)
+const roadStale = computed(() => {
+  const generated = propsValue.value?.road.generatedRoute
+  const current = propsValue.value?.road
+  if (!current) {
+    return false
+  }
+  if (!generated) {
+    return current.waypoints.length > 0
+  }
+  if (
+    generated.strategy !== current.routing.strategy
+    || generated.termination !== current.routing.termination
+    || (
+      generated.strategy === 'seeded'
+      && generated.algorithmVersion !== PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION
+    )
+    || generated.seed !== propsValue.value?.seed
+    || generated.waypointTolerance !== current.waypointTolerance
+    || generated.pathDeviation !== current.pathDeviation
+    || generated.waypoints.length !== current.waypoints.length
+  ) {
+    return true
+  }
+  return generated.waypoints.some((point, index) => {
+    const live = current.waypoints[index]
+    return !live || Math.abs(point.x - live.x) > 1e-6 || Math.abs(point.z - live.z) > 1e-6
+  })
+})
+const roadStatusText = computed(() => {
+  const stats = runtimeStats.value
+  if (!stats || stats.roadNodeCount < 2 || stats.roadLength <= 0) {
+    return ''
+  }
+  const strategy = stats.roadStrategy === 'shortest' ? '最短路径' : '低地 Hills 选线'
+  const termination = propsValue.value?.road.generatedRoute?.termination === 'boundary' ? '到边界' : '闭环'
+  const state = stats.roadClosed && stats.roadComplete
+    ? '闭环完成'
+    : stats.roadComplete
+      ? '已完成'
+      : '未完成'
+  const official = stats.roadStrategy === 'seeded'
+    ? ` · 海拔均值 P${Math.round(stats.roadAverageElevationPercentile * 100)} / 最高 P${Math.round(stats.roadMaxElevationPercentile * 100)} · 低地 ${Math.round(stats.roadLowlandCoverageFraction * 100)}% · 纵坡 ${Math.round(stats.roadMaxForwardGrade * 100)}% · 横坡 ${Math.round(stats.roadMaxCrossSlope * 100)}% · 陡坡改线 ${stats.roadSteepReplacementSteps} · 曲率 ${stats.roadTurnDegreesPerKm.toFixed(1)}°/km`
+    : ''
+  return `${strategy} · ${termination} · ${Math.round(stats.roadLength).toLocaleString()}m · ${stats.roadNodeCount.toLocaleString()} 节点 · 途径点 ${stats.roadWaypointsPassed}/${stats.roadWaypointCount} · 最大偏差 ${stats.roadMaxWaypointError.toFixed(1)}m${official} · ${state}`
+})
+const roadFailureText = computed(() => {
+  const reason = runtimeStats.value?.roadFailureReason
+  if (
+    !reason
+    || reason === 'reached-guide-end'
+    || (
+      reason === 'reached-terrain-boundary'
+      && propsValue.value?.road.generatedRoute?.termination === 'boundary'
+      && runtimeStats.value?.roadComplete
+    )
+  ) {
+    return ''
+  }
+  const labels: Record<string, string> = {
+    blocked: '坡度或地形条件阻止了道路继续追踪',
+    'reached-step-limit': '道路达到追踪节点安全上限，未延伸到预期终点',
+    'reached-terrain-boundary': '道路未能按官方规则延伸到地形边界，请移动 P1 后重试',
+    'start-outside-terrain': '起点不在地形范围内',
+    'single-point-loop-too-small': '起点附近没有足够空间生成自然闭环，请移动途径点',
+    'shortest-route-budget-exceeded': '最短路径搜索超预算，请减少范围或切换到自然观光',
+    'shortest-route-not-found': '找不到满足坡度与边界条件的最短路径',
+    'waypoint-missed': '生成中心线未能以规定容差经过全部途径点',
+    'loop-not-closed': '闭环终点未能回到 P1',
+    'loop-heading-discontinuity': '闭环处切线不连续，请调整途径点或切换选线策略',
+    'no-waypoints': '请先添加至少一个途径点',
+    'start-too-close-to-boundary': '起点距离地形边界过近，无法按官方规则向外延伸',
+    'official-generator-restart': '官方选线连续触发回退，无法从当前 P1 稳定生成道路',
+    'road-forward-grade-limit': '路线未满足 22% 纵坡上限',
+    'road-cross-slope-limit': '路线未满足 35% 局部横坡上限',
+    'blocked-by-forward-grade': '道路前方没有满足 22% 纵坡上限的方向',
+    'blocked-by-cross-slope': '道路前方没有满足 35% 局部横坡上限的方向',
+  }
+  return labels[reason] ?? `道路生成失败：${reason}`
+})
+
+watch(
+  () => selectedNodeId.value,
+  () => {
+    roadActionMessage.value = ''
+  },
+)
+
 const demSource = computed(() => propsValue.value?.dem ?? null)
 const demSampleStepOptions = [
   { title: '自动（按质量档）', value: 'auto' },
@@ -157,17 +253,47 @@ function handleDemSampleStepChange(value: string | number): void {
   const sampleStep = value === 'auto' ? 'auto' : Number(value) === 2 ? 2 : Number(value) === 4 ? 4 : 1
   patchGroup('dem', { sampleStep })
 }
-/** ≥2 个路径点才会生成道路，道路起点即路径首点。 */
-const roadWaypointMode = computed(() => roadWaypoints.value.length >= 2)
-const roadPathEditing = computed(
-  () => componentEnabled.value && activeBuildTool.value === 'landscapeRoad' && Boolean(landscapeComponent.value),
-)
-
 function handleToggleRoadPathEditing(): void {
   if (!componentEnabled.value || !landscapeComponent.value) {
     return
   }
   buildToolsStore.setActiveBuildTool(roadPathEditing.value ? null : 'landscapeRoad')
+}
+
+function handleRoadStrategy(value: ProceduralLandscapeRoadStrategy): void {
+  patchGroup('road', {
+    routing: {
+      ...(propsValue.value?.road.routing ?? {}),
+      strategy: value,
+    },
+  })
+}
+
+function handleGenerateRoad(): void {
+  const nodeId = selectedNodeId.value
+  if (!nodeId || !componentEnabled.value) {
+    return
+  }
+  const result = sceneStore.generateProceduralLandscapeRoad(nodeId)
+  if (!result.accepted) {
+    const labels: Record<string, string> = {
+      'terrain-grid-not-ready': '地形网格尚未加载完成，请稍后重试。',
+      blocked: '新路线被坡度或地形阻断，已保留上一版公路。',
+      'start-outside-terrain': 'P1 不在地形范围内，已保留上一版公路。',
+      'start-too-close-to-boundary': 'P1 距地形边界过近，已保留上一版公路。',
+      'official-generator-restart': '官方选线连续回退，无法稳定生成；已保留上一版公路。',
+      'road-forward-grade-limit': '新路线超过 22% 纵坡上限，已保留上一版公路。',
+      'road-cross-slope-limit': '新路线经过过陡的横向坡面，已保留上一版公路。',
+      'blocked-by-forward-grade': '周边地形均超过 22% 纵坡上限，已保留上一版公路。',
+      'blocked-by-cross-slope': '周边地形均超过 35% 局部横坡上限，已保留上一版公路。',
+    }
+    roadActionMessage.value = labels[result.failureReason ?? '']
+      ?? `公路生成失败（${result.failureReason ?? 'unknown'}），已保留上一版公路。`
+    return
+  }
+  roadActionMessage.value = routeStrategy.value === 'seeded'
+    ? '已提交 P1，正在按低地优先的 Hills 逻辑生成公路。'
+    : '已提交途径点快照，正在生成公路。'
 }
 
 function handleRemoveRoadWaypoint(index: number): void {
@@ -187,7 +313,8 @@ function handleClearRoadPath(): void {
   if (!nodeId) {
     return
   }
-  sceneStore.updateProceduralLandscapeRoadWaypoints(nodeId, [])
+  sceneStore.clearProceduralLandscapeRoad(nodeId)
+  roadActionMessage.value = ''
 }
 
 /**
@@ -241,18 +368,17 @@ const samplingBlocks: FieldBlock[] = [
   },
 ]
 
-// 公路区块的「路径」工具与路径点列表是手写标记，会插在这些分组之前。
-// 道路起点与朝向完全由手绘路径决定，这里只保留跟随参数。
+// 统一途径点约束：自然观光可在相邻点之间绕行，最短路径按地形代价连通。
 const roadPathBlock = computed<FieldBlock>(() => ({
-  title: '路径',
-  hint: roadWaypointMode.value
-    ? (roadWaypoints.value.length === 2
-      ? '两个端点会自动在偏差范围内寻找平滑路线'
-      : '按绘制顺序经过所有路径点')
-    : '至少 2 个路径点才会生成道路',
+  title: '途径约束',
+  hint: routeTermination.value === 'loop'
+    ? '按顺序经过全部途径点，并自动回到 P1；单点闭环由种子生成自然路线。'
+    : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界。',
   rows: [[
-    { key: 'waypointTolerance', label: '途经容差', suffix: 'm', step: 2 },
-    { key: 'pathDeviation', label: '端点偏差上限', suffix: 'm', step: 5 },
+    { key: 'waypointTolerance', label: '途径容差', suffix: 'm', step: 1 },
+    ...(routeStrategy.value === 'seeded'
+      ? [{ key: 'pathDeviation', label: '自然绕行幅度', suffix: 'm', step: 5 }]
+      : []),
   ]],
 }))
 
@@ -307,7 +433,6 @@ const roadGeometryBlocks: FieldBlock[] = [
       ],
       [
         { key: 'maxSlope', label: '最大坡度', step: 0.05 },
-        { key: 'maxLength', label: '最大长度', suffix: 'm', placeholder: '到边界', step: 16, nullable: true },
       ],
     ],
   },
@@ -322,7 +447,12 @@ const roadGeometryBlocks: FieldBlock[] = [
   },
 ]
 
-const roadBlocks = computed<FieldBlock[]>(() => [roadPathBlock.value, ...roadGeometryBlocks])
+const roadBlocks = computed<FieldBlock[]>(() => {
+  if (routeStrategy.value === 'seeded') {
+    return roadGeometryBlocks.filter((block) => block.title !== '追踪')
+  }
+  return [roadPathBlock.value, ...roadGeometryBlocks]
+})
 
 // 地表区块：颜色与基色模式是手写标记，混合参数走下面的分组数据。
 const surfaceBlocks: FieldBlock[] = [
@@ -692,42 +822,101 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               @update:model-value="(value) => patchGroup('road', { enabled: value !== false })"
             />
           </div>
-          <div class="pl-road-path">
-            <div class="pl-road-path__actions">
-              <button
-                type="button"
-                class="pl-choice"
-                :class="{ 'pl-choice--active': roadPathEditing }"
-                :disabled="!componentEnabled"
-                @click="handleToggleRoadPathEditing"
-              >{{ roadPathEditing ? '结束绘制' : '绘制路径' }}</button>
-              <button
-                type="button"
-                class="pl-choice"
-                :disabled="!componentEnabled || !roadWaypoints.length"
-                @click="handleClearRoadPath"
-              >清除路径</button>
-              <span class="pl-road-path__count">路径点 {{ roadWaypoints.length }}</span>
+          <div class="pl-road-path__actions">
+            <button
+              v-if="routeStrategy === 'shortest'"
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': roadPathEditing }"
+              :disabled="!componentEnabled"
+              @click="handleToggleRoadPathEditing"
+            >{{ roadPathEditing ? '结束编辑' : '编辑途径点' }}</button>
+            <span v-if="routeStrategy === 'shortest'" class="pl-road-path__count">{{ roadWaypoints.length }} 个途径点</span>
+            <span v-else class="pl-road-path__count">起点 P1 · 低地 Hills</span>
+            <v-btn
+              size="small"
+              color="primary"
+              variant="flat"
+              prepend-icon="mdi-road-variant-plus"
+              :disabled="!componentEnabled"
+              @click="handleGenerateRoad"
+            >{{ roadHasGeneratedResult ? '重新生成公路' : '生成公路' }}</v-btn>
+            <button
+              type="button"
+              class="pl-choice"
+              :disabled="!componentEnabled || !roadWaypoints.length"
+              @click="handleClearRoadPath"
+            >清除公路</button>
+          </div>
+
+          <div class="pl-subtitle">选线策略</div>
+          <div class="pl-choice-row">
+            <button
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': routeStrategy === 'seeded' }"
+              :disabled="!componentEnabled"
+              @click="handleRoadStrategy('seeded')"
+            >自然观光</button>
+            <button
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': routeStrategy === 'shortest' }"
+              :disabled="!componentEnabled"
+              @click="handleRoadStrategy('shortest')"
+            >最短路径</button>
+          </div>
+          <div class="pl-hint">
+            {{ routeStrategy === 'seeded'
+              ? '保留官方 Hills 弯道，同时低地优先、避开陡坡：16% 缓坡目标，22% 纵坡上限。'
+              : '按坡度、横向起伏、转弯和距离寻找地形代价最低路线。' }}
+          </div>
+          <div class="pl-hint">
+            {{ routeTermination === 'loop'
+              ? '旧闭环快照已过期；重新生成后会切换为开放式到边界。'
+              : '本期固定为开放式道路，生成后一直延伸到地形边界。' }}
+          </div>
+          <div v-if="routeStrategy === 'shortest' && roadWaypoints.length > 64" class="pl-hint">
+            控制点较多，编号仅在悬停或选中时显示。
+          </div>
+          <div v-if="routeStrategy === 'shortest' && roadWaypoints.length" class="pl-road-path">
+            <v-virtual-scroll
+              :items="roadWaypoints"
+              :item-height="34"
+              max-height="180"
+              class="pl-road-path__list"
+            >
+              <template #default="{ item, index }">
+                <div class="pl-road-path__item">
+                  <span class="pl-road-path__index">P{{ index + 1 }}</span>
+                  <span class="pl-road-path__coords">{{ item.x.toFixed(1) }}, {{ item.z.toFixed(1) }}</span>
+                  <v-btn
+                    icon
+                    variant="text"
+                    density="compact"
+                    :disabled="!componentEnabled"
+                    @click="handleRemoveRoadWaypoint(index)"
+                  >
+                    <v-icon size="16">mdi-delete</v-icon>
+                  </v-btn>
+                </div>
+              </template>
+            </v-virtual-scroll>
+          </div>
+          <div v-else-if="routeStrategy === 'seeded' && roadWaypoints.length" class="pl-road-path">
+            <div class="pl-road-path__item">
+              <span class="pl-road-path__index">P1</span>
+              <span class="pl-road-path__coords">{{ roadWaypoints[0]!.x.toFixed(1) }}, {{ roadWaypoints[0]!.z.toFixed(1) }}</span>
             </div>
-            <div v-if="roadWaypoints.length" class="pl-road-path__list">
-              <div
-                v-for="(waypoint, index) in roadWaypoints"
-                :key="`${selectedNode?.id ?? 'road'}:${index}`"
-                class="pl-road-path__item"
-              >
-                <span class="pl-road-path__index">P{{ index + 1 }}</span>
-                <span class="pl-road-path__coords">{{ waypoint.x.toFixed(1) }}, {{ waypoint.z.toFixed(1) }}</span>
-                <v-btn
-                  icon
-                  variant="text"
-                  density="compact"
-                  :disabled="!componentEnabled"
-                  @click="handleRemoveRoadWaypoint(index)"
-                >
-                  <v-icon size="16">mdi-delete</v-icon>
-                </v-btn>
-              </div>
-            </div>
+          </div>
+          <div v-if="roadStale" class="pl-hint pl-hint--stale">
+            {{ roadHasGeneratedResult ? '选线版本、起点或参数已变化，点击“生成公路”应用低地 Hills 逻辑。' : '尚未生成公路，点击“生成公路”开始。' }}
+          </div>
+          <div v-if="roadStatusText" class="pl-hint">{{ roadStatusText }}</div>
+          <div v-if="roadFailureText" class="pl-hint pl-hint--error">{{ roadFailureText }}</div>
+          <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
+          <div v-if="!roadWaypoints.length" class="pl-hint">
+            可直接生成：系统会在地形中心自动添加 P1，并按低地优先的 Hills 逻辑延伸到边界。
           </div>
           <div class="pl-road-style">
             <div class="pl-subtitle">路型</div>
@@ -1074,6 +1263,10 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
   color: #ff8a80;
 }
 
+.pl-hint--stale {
+  color: #ffd166;
+}
+
 .pl-dem-status {
   flex: none;
   font-size: 0.68rem;
@@ -1216,6 +1409,13 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
   align-items: center;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.pl-road-origin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .pl-road-path__count {

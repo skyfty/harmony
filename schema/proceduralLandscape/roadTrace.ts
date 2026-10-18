@@ -6,12 +6,20 @@ export interface RoadTraceOptions {
   startX: number
   startZ: number
   headingRad: number
+  /**
+   * Optional explicit starting heading. Manual guide mode normally derives it
+   * from the first two waypoints; procedural loops use this to preserve the
+   * seed-defined tangent while still following a generated guide ring.
+   */
+  initialHeadingRad?: number | null
   stepLength: number
   feelDistance: number
   feelAngleRad: number
   maxSlope: number
   maxTurnRad: number
   maxLength: number | null
+  /** Safety cap for generated nodes; defaults to MAX_STEPS. */
+  maxSteps?: number
   margin: number
   /**
    * Hand-drawn guide waypoints in world XZ (proceduralLandscape road path).
@@ -194,6 +202,9 @@ export function traceRoadPath(
   grid: TerrainHeightGrid,
   options: RoadTraceOptions,
 ): RoadTraceResult {
+  const maxSteps = Number.isFinite(options.maxSteps)
+    ? Math.max(1, Math.min(32768, Math.floor(options.maxSteps as number)))
+    : MAX_STEPS
   const waypoints = sanitizeTraceWaypoints(options.waypoints)
   const waypointMode = waypoints.length >= 2
   const waypointTolerance = Number.isFinite(options.waypointTolerance)
@@ -211,9 +222,11 @@ export function traceRoadPath(
   let x = start.x
   let z = start.z
   let y = start.y
-  let heading = waypointMode
-    ? resolveWaypointHeadingRad(waypoints, start.x, start.z, options.headingRad)
-    : wrapAngle(options.headingRad)
+  let heading = Number.isFinite(options.initialHeadingRad)
+    ? wrapAngle(options.initialHeadingRad as number)
+    : waypointMode
+      ? resolveWaypointHeadingRad(waypoints, start.x, start.z, options.headingRad)
+      : wrapAngle(options.headingRad)
   // Index of the waypoint currently pursued (0 is the start itself).
   let targetIndex = waypointMode ? 1 : -1
 
@@ -233,7 +246,7 @@ export function traceRoadPath(
   let failureReason: string | null = null
   let rescueTurns = 0
 
-  for (let stepIndex = 0; stepIndex < MAX_STEPS; stepIndex += 1) {
+  for (let stepIndex = 0; stepIndex < maxSteps; stepIndex += 1) {
     const straightX = x + Math.cos(heading) * options.stepLength
     const straightZ = z + Math.sin(heading) * options.stepLength
     if (
@@ -370,7 +383,7 @@ export function traceRoadPath(
     }
   }
 
-  if (nodes.length >= MAX_STEPS) {
+  if (nodes.length >= maxSteps) {
     complete = true
     failureReason = 'reached-step-limit'
   }

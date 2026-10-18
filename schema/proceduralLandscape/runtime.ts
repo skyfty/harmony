@@ -26,7 +26,7 @@ import {
   type TerrainSurfaceBounds,
   type TerrainSurfaceSampler,
 } from './terrainSurfaceSampler'
-import { resolveSeedHeadingRad, traceRoadPath, type RoadTraceNode, type RoadTraceResult } from './roadTrace'
+import type { RoadTraceNode } from './roadTrace'
 import {
   buildRoadFieldData,
   computeRoadEdgeHeights,
@@ -133,7 +133,6 @@ import {
 } from './demRoadbed'
 import { resolveTreeLodBands } from './treeLod'
 import {
-  activeRoadWaypoints,
   clampProceduralLandscapeProps,
   PROCEDURAL_LANDSCAPE_WIND_FACTOR,
   PROCEDURAL_LANDSCAPE_QUALITY_TIERS,
@@ -141,14 +140,22 @@ import {
   resolveSurfaceViewDistanceScale,
   resolveProceduralLandscapeQuality,
   roadFlattenParams,
-  roadFeelAngleRad,
   roadHalfWidth,
   type ProceduralLandscapeComponentProps,
   type ProceduralLandscapeEnvironment,
+  type ProceduralLandscapeGeneratedRouteProps,
+  type ProceduralLandscapeRoadProps,
   type ResolvedProceduralLandscapeQuality,
 } from './config'
 import { transformRoadWaypointsToWorld, type RoadWaypoint } from './roadWaypoints'
-import { planEndpointRoadGuide } from './endpointPath'
+import {
+  planWaypointRoadRoute,
+  type WaypointRoadPlanResult,
+} from './proceduralRoad'
+import {
+  resolveLowlandScenicStart,
+  SLOWROADS_LOWLAND_ROAD_CONSTRAINTS,
+} from './officialScenicRoad'
 import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
 
 const TREE_BATCH_RELEASE_PADDING = 48
@@ -257,6 +264,23 @@ export interface ProceduralLandscapeRuntimeStats {
   roadNodeCount: number
   roadComplete: boolean
   roadFailureReason: string | null
+  roadStrategy: 'seeded' | 'shortest' | null
+  roadWaypointCount: number
+  roadWaypointsPassed: number
+  roadMaxWaypointError: number
+  roadClosed: boolean
+  shortestExpandedStates: number
+  roadOfficialReverts: number
+  roadAntiTargetTriggers: number
+  roadTurnOverflows: number
+  roadTurnDegreesPerKm: number
+  roadMaxStraightRunMeters: number
+  roadAverageElevationPercentile: number
+  roadMaxElevationPercentile: number
+  roadMaxForwardGrade: number
+  roadMaxCrossSlope: number
+  roadLowlandCoverageFraction: number
+  roadSteepReplacementSteps: number
   /** 当前季节与素材状态（面板展示）。 */
   season: SeasonId
   seasonAssetsReady: boolean
@@ -345,11 +369,27 @@ export interface ProceduralLandscapeRuntime {
   update(deltaTime: number): void
   dispose(): void
   getStats(): ProceduralLandscapeRuntimeStats
+  /** Dry-run a generated route before the editor replaces its current road. */
+  validateGeneratedRoad(
+    route: ProceduralLandscapeGeneratedRouteProps,
+    road: ProceduralLandscapeRoadProps,
+  ): ProceduralLandscapeRoadValidation
+  /** Terrain XZ center in host-node local coordinates, when the grid is ready. */
+  getTerrainCenterLocal(): RoadWaypoint | null
+  /** Low, gentle automatic start near the terrain centre, in local XZ. */
+  getScenicStartLocal(): RoadWaypoint | null
   /**
    * Runtime height-field sampling in world XZ (null when the grid is not
    * ready yet or the point lies outside the rasterized coverage).
    */
   sampleTerrainHeight(worldX: number, worldZ: number): number | null
+}
+
+export interface ProceduralLandscapeRoadValidation {
+  ok: boolean
+  failureReason: string | null
+  nodeCount: number
+  length: number
 }
 
 let currentEnvironment: ProceduralLandscapeEnvironment = 'preview'
@@ -396,6 +436,29 @@ export function sampleProceduralLandscapeTerrainHeight(
     return null
   }
   return runtime.sampleTerrainHeight(worldX, worldZ)
+}
+
+export function getProceduralLandscapeTerrainCenterLocal(
+  nodeId: string,
+): RoadWaypoint | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.getTerrainCenterLocal() ?? null
+}
+
+export function getProceduralLandscapeScenicStartLocal(
+  nodeId: string,
+): RoadWaypoint | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.getScenicStartLocal() ?? null
+}
+
+export function validateProceduralLandscapeGeneratedRoute(
+  nodeId: string,
+  route: ProceduralLandscapeGeneratedRouteProps,
+  road: ProceduralLandscapeRoadProps,
+): ProceduralLandscapeRoadValidation | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.validateGeneratedRoad(route, road) ?? null
 }
 
 type DirtyFlags = {
@@ -578,7 +641,24 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let previousKeys = {
     grid: jsonKey(props.sampling),
     dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
-    world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
+    world: jsonKey([
+      props.seed,
+      props.generationRevision,
+      props.road.generatedRoute,
+      props.road.enabled,
+      props.road.width,
+      props.road.shoulderWidth,
+      props.road.stepLength,
+      props.road.feelDistance,
+      props.road.feelAngleDeg,
+      props.road.maxSlope,
+      props.road.maxTurnDeg,
+      props.road.flattenBand,
+      props.road.flattenStrength,
+      props.forest.coverage,
+      props.forest.scale,
+      props.forest.seedOffset,
+    ]),
     forest: jsonKey([
       props.seed,
       props.forest.coverage,
@@ -642,7 +722,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let variationField: LandscapeDensityField | null = null
   let forestMaskTexture: THREE.DataTexture | null = null
   let variationTexture: THREE.DataTexture | null = null
-  let roadResult: RoadTraceResult | null = null
+  let roadResult: WaypointRoadPlanResult | null = null
   let roadFieldData: RoadFieldData | null = null
   /** 贴合：与 roadResult.nodes 对齐的左右缘地形高度（压平场用）。 */
   let roadEdgeHeights: RoadEdgeHeights[] | null = null
@@ -777,6 +857,23 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadNodeCount: 0,
     roadComplete: false,
     roadFailureReason: null,
+    roadStrategy: null,
+    roadWaypointCount: 0,
+    roadWaypointsPassed: 0,
+    roadMaxWaypointError: 0,
+    roadClosed: false,
+    shortestExpandedStates: 0,
+    roadOfficialReverts: 0,
+    roadAntiTargetTriggers: 0,
+    roadTurnOverflows: 0,
+    roadTurnDegreesPerKm: 0,
+    roadMaxStraightRunMeters: 0,
+    roadAverageElevationPercentile: 0,
+    roadMaxElevationPercentile: 0,
+    roadMaxForwardGrade: 0,
+    roadMaxCrossSlope: 0,
+    roadLowlandCoverageFraction: 0,
+    roadSteepReplacementSteps: 0,
     season: currentSeason,
     seasonAssetsReady: false,
     nearTreeInstances: 0,
@@ -1540,18 +1637,39 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return collectProceduralLandscapeSurfaceMeshes(hostObject)
   }
 
-  /**
-   * Hand-drawn guide path for the road trace: node-local XZ waypoints are
-   * transformed into world XZ (the height grid lives in world space).
-   * Fewer than two points = no guide path, and the road is skipped entirely.
-   */
-  function resolveRoadWaypointsWorld(): RoadWaypoint[] {
-    const waypoints = activeRoadWaypoints(props)
-    if (waypoints.length < 2 || !hostObject) {
-      return []
+  function planGeneratedRoad(
+    activeGrid: TerrainHeightGrid,
+    host: THREE.Object3D,
+    route: ProceduralLandscapeGeneratedRouteProps,
+    road: ProceduralLandscapeRoadProps,
+  ): WaypointRoadPlanResult | null {
+    if (!route.waypoints.length) {
+      return null
     }
-    hostObject.updateMatrixWorld(true)
-    return transformRoadWaypointsToWorld(hostObject.matrixWorld, waypoints)
+    host.updateMatrixWorld(true)
+    const waypointsWorld = transformRoadWaypointsToWorld(host.matrixWorld, route.waypoints)
+    if (!waypointsWorld.length) {
+      return null
+    }
+    const traceMargin = Math.max(
+      activeGrid.cellSize * 2,
+      Math.max(0.5, road.width * 0.5) + road.shoulderWidth + 2,
+    )
+    return planWaypointRoadRoute(activeGrid, {
+      waypoints: waypointsWorld,
+      strategy: route.strategy,
+      termination: route.termination,
+      algorithmVersion: route.algorithmVersion,
+      seed: route.seed,
+      waypointTolerance: route.waypointTolerance,
+      pathDeviation: route.pathDeviation,
+      stepLength: road.stepLength,
+      feelDistance: road.feelDistance,
+      feelAngleRad: degreesToRadians(road.feelAngleDeg),
+      maxSlope: road.maxSlope,
+      maxTurnRad: degreesToRadians(road.maxTurnDeg),
+      margin: traceMargin,
+    })
   }
 
   function buildTerrainSourceSignature(
@@ -1718,54 +1836,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadProximity = null
     roadBucketTable = []
 
-    // 道路完全由手绘路径生成：不足 2 个路径点时不建路，初始化与清空路径后
-    // 都保持无道路状态（等价于关闭公路开关）。追踪器自身的无路径回退分支
-    //（startX/startZ/headingRad）由此不再被组件触发。
-    const waypointWorld = resolveRoadWaypointsWorld()
-    if (props.road.enabled && waypointWorld.length >= 2) {
-      let traceWaypoints = waypointWorld
-      if (waypointWorld.length === 2) {
-        const planned = planEndpointRoadGuide(grid, waypointWorld[0]!, waypointWorld[1]!, {
-          maxDeviation: props.road.pathDeviation,
-          roadHalfWidth: roadHalfWidth(props),
-          shoulderWidth: props.road.shoulderWidth,
-          maxSlope: props.road.maxSlope,
-          seed: props.seed,
-        })
-        if (planned.warning) {
-          warn(planned.warning)
-        }
-        traceWaypoints = planned.guide
-      }
-      // 起点取自路径首点，初始朝向取自首点到次点的走向；首两点重合时
-      // traceRoadPath 回退到下面传入的种子朝向。
-      roadResult = traceRoadPath(grid, {
-        startX: waypointWorld[0]!.x,
-        startZ: waypointWorld[0]!.z,
-        headingRad: resolveSeedHeadingRad(props.seed),
-        waypoints: traceWaypoints,
-        waypointTolerance: waypointWorld.length === 2 ? 4 : props.road.waypointTolerance,
-        stepLength: props.road.stepLength,
-        feelDistance: props.road.feelDistance,
-        feelAngleRad: roadFeelAngleRad(props),
-        maxSlope: props.road.maxSlope,
-        maxTurnRad: degreesToRadians(props.road.maxTurnDeg),
-        maxLength: props.road.maxLength,
-        margin: Math.max(grid.cellSize * 2, roadHalfWidth(props) + props.road.shoulderWidth + 2),
-      })
-      if (waypointWorld.length === 2 && roadResult.nodes.length > 1) {
-        const end = waypointWorld[1]!
-        const last = roadResult.nodes[roadResult.nodes.length - 1]!
-        const endY = grid.sampleHeight(end.x, end.z)
-        if (endY != null) {
-          const previous = roadResult.nodes[roadResult.nodes.length - 2]!
-          last.x = end.x
-          last.z = end.z
-          last.y = endY
-          last.heading = Math.atan2(end.z - previous.z, end.x - previous.x)
-        }
-      }
-      if (roadResult.nodes.length > 1) {
+    const generatedRoute = props.road.generatedRoute
+    if (
+      props.road.enabled
+      && generatedRoute
+      && hostObject
+    ) {
+      roadResult = planGeneratedRoad(
+        grid,
+        hostObject,
+        generatedRoute,
+        props.road,
+      )
+    }
+    if (roadResult && roadResult.nodes.length > 1) {
         const halfWidth = roadHalfWidth(props)
         // 贴合地形：高度场（数十公里地形上格距 22m）对折坡/山脊是低通近似，
         // 与可见三角面能差出米级——路面必须采样**真实渲染面**（三角面精确
@@ -1904,15 +1988,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             }
           }
         }
+    }
+    if (roadResult && (roadResult.nodes.length <= 1 || !roadFieldData)) {
+      if (!roadWarningEmitted) {
+        roadWarningEmitted = true
+        warn(`road-trace-failed:${roadResult.failureReason ?? 'unknown'}`)
       }
-      if (roadResult.nodes.length <= 1 || !roadFieldData) {
-        if (!roadWarningEmitted) {
-          roadWarningEmitted = true
-          warn(`road-trace-failed:${roadResult.failureReason ?? 'unknown'}`)
-        }
-      } else if (!roadResult.complete && roadResult.failureReason === 'blocked') {
-        warn('road-blocked-before-boundary')
-      }
+    } else if (roadResult && !roadResult.complete && roadResult.failureReason) {
+      warn(`road-route-${roadResult.failureReason}`)
     }
     if (roadResult && roadResult.nodes.length >= 2) {
       if (!roadTexturesRequested) {
@@ -3354,6 +3437,43 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadNodeCount = roadResult?.nodes.length ?? 0
     stats.roadComplete = roadResult?.complete ?? false
     stats.roadFailureReason = roadResult?.failureReason ?? null
+    stats.roadStrategy = props.road.generatedRoute?.strategy ?? null
+    stats.roadWaypointCount = roadResult?.waypointCount ?? props.road.generatedRoute?.waypoints.length ?? 0
+    stats.roadWaypointsPassed = roadResult?.waypointsPassed ?? 0
+    stats.roadMaxWaypointError = roadResult?.maxWaypointError ?? 0
+    stats.roadClosed = roadResult?.closed ?? false
+    stats.shortestExpandedStates = roadResult?.shortestExpandedStates ?? 0
+    stats.roadOfficialReverts = roadResult?.officialReverts ?? 0
+    stats.roadAntiTargetTriggers = roadResult?.antiTargetTriggers ?? 0
+    stats.roadTurnOverflows = roadResult?.turnOverflows ?? 0
+    stats.roadAverageElevationPercentile = roadResult?.averageElevationPercentile ?? 0
+    stats.roadMaxElevationPercentile = roadResult?.maxElevationPercentile ?? 0
+    stats.roadMaxForwardGrade = roadResult?.maxForwardGrade ?? 0
+    stats.roadMaxCrossSlope = roadResult?.maxCrossSlope ?? 0
+    stats.roadLowlandCoverageFraction = roadResult?.lowlandCoverageFraction ?? 0
+    stats.roadSteepReplacementSteps = roadResult?.steepReplacementSteps ?? 0
+    if (roadResult && roadResult.nodes.length > 1 && roadResult.length > 0) {
+      let totalTurnRadians = 0
+      let maxStraightRun = 0
+      let straightRun = 0
+      for (let index = 1; index < roadResult.nodes.length; index += 1) {
+        const node = roadResult.nodes[index]!
+        const previous = roadResult.nodes[index - 1]!
+        totalTurnRadians += Math.abs(node.headingDelta)
+        const segmentLength = Math.hypot(node.x - previous.x, node.z - previous.z)
+        if (Math.abs(node.headingDelta) < (0.2 * Math.PI) / 180) {
+          straightRun += segmentLength
+          maxStraightRun = Math.max(maxStraightRun, straightRun)
+        } else {
+          straightRun = 0
+        }
+      }
+      stats.roadTurnDegreesPerKm = totalTurnRadians * 180 / Math.PI / (roadResult.length / 1000)
+      stats.roadMaxStraightRunMeters = maxStraightRun
+    } else {
+      stats.roadTurnDegreesPerKm = 0
+      stats.roadMaxStraightRunMeters = 0
+    }
     stats.season = currentSeason
     stats.seasonAssetsReady = seasonAssetsSeason === currentSeason && Boolean(seasonAssets)
     stats.nearTreeInstances = treeMeshManager?.instanceCount ?? 0
@@ -3829,7 +3949,24 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       const keys = {
         grid: jsonKey(props.sampling),
         dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
-        world: jsonKey([props.seed, props.generationRevision, props.road, props.forest.coverage, props.forest.scale, props.forest.seedOffset]),
+        world: jsonKey([
+          props.seed,
+          props.generationRevision,
+          props.road.generatedRoute,
+          props.road.enabled,
+          props.road.width,
+          props.road.shoulderWidth,
+          props.road.stepLength,
+          props.road.feelDistance,
+          props.road.feelAngleDeg,
+          props.road.maxSlope,
+          props.road.maxTurnDeg,
+          props.road.flattenBand,
+          props.road.flattenStrength,
+          props.forest.coverage,
+          props.forest.scale,
+          props.forest.seedOffset,
+        ]),
         forest: jsonKey([
           props.seed,
           props.forest.coverage,
@@ -3988,6 +4125,88 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     },
     getStats(): ProceduralLandscapeRuntimeStats {
       return stats
+    },
+    validateGeneratedRoad(route, road): ProceduralLandscapeRoadValidation {
+      if (!grid || !hostObject) {
+        return {
+          ok: false,
+          failureReason: 'terrain-grid-not-ready',
+          nodeCount: 0,
+          length: 0,
+        }
+      }
+      const result = planGeneratedRoad(grid, hostObject, route, road)
+      if (!result || result.nodes.length < 2) {
+        return {
+          ok: false,
+          failureReason: result?.failureReason ?? 'no-waypoints',
+          nodeCount: result?.nodes.length ?? 0,
+          length: result?.length ?? 0,
+        }
+      }
+      if (route.algorithmVersion >= 3) {
+        if (
+          (result.maxForwardGrade ?? 0)
+          > SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade + 1e-4
+        ) {
+          return {
+            ok: false,
+            failureReason: 'road-forward-grade-limit',
+            nodeCount: result.nodes.length,
+            length: result.length,
+          }
+        }
+        if (
+          (result.maxCrossSlope ?? 0)
+          > SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4
+        ) {
+          return {
+            ok: false,
+            failureReason: 'road-cross-slope-limit',
+            nodeCount: result.nodes.length,
+            length: result.length,
+          }
+        }
+      }
+      return {
+        ok: result.complete,
+        failureReason: result.complete
+          ? null
+          : (result.failureReason ?? 'road-route-incomplete'),
+        nodeCount: result.nodes.length,
+        length: result.length,
+      }
+    },
+    getTerrainCenterLocal(): RoadWaypoint | null {
+      if (!grid || !hostObject) {
+        return null
+      }
+      hostObject.updateMatrixWorld(true)
+      const world = new THREE.Vector3(
+        (grid.minX + grid.maxX) * 0.5,
+        0,
+        (grid.minZ + grid.maxZ) * 0.5,
+      )
+      const local = hostObject.worldToLocal(world)
+      return Number.isFinite(local.x) && Number.isFinite(local.z)
+        ? { x: local.x, z: local.z }
+        : null
+    },
+    getScenicStartLocal(): RoadWaypoint | null {
+      if (!grid || !hostObject) {
+        return null
+      }
+      const centerX = (grid.minX + grid.maxX) * 0.5
+      const centerZ = (grid.minZ + grid.maxZ) * 0.5
+      const start = resolveLowlandScenicStart(grid, centerX, centerZ)
+      if (!start) {
+        return null
+      }
+      hostObject.updateMatrixWorld(true)
+      const local = hostObject.worldToLocal(new THREE.Vector3(start.x, 0, start.z))
+      return Number.isFinite(local.x) && Number.isFinite(local.z)
+        ? { x: local.x, z: local.z }
+        : null
     },
     sampleTerrainHeight(worldX: number, worldZ: number): number | null {
       if (!grid) {
