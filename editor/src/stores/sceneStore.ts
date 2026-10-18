@@ -435,7 +435,6 @@ import {
   validateProceduralLandscapeGeneratedRoute,
 } from '@schema/proceduralLandscape/runtime'
 import {
-  PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION,
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
 } from '@schema/proceduralLandscape/config'
@@ -18910,10 +18909,15 @@ export const useSceneStore = defineStore('scene', {
       let waypoints = clampRoadWaypoints(currentRoad.waypoints)
       let routing = (currentRoad.routing ?? {}) as Record<string, unknown>
       const strategy = routing.strategy === 'shortest' ? 'shortest' : 'seeded'
+      const termination = routing.termination === 'loop'
+        ? 'loop'
+        : routing.termination === 'dead-end'
+          ? 'dead-end'
+          : 'boundary'
       routing = {
         ...routing,
         strategy,
-        termination: 'boundary',
+        termination,
       }
       if (!waypoints.length) {
         const center = getProceduralLandscapeScenicStartLocal(nodeId)
@@ -18934,8 +18938,7 @@ export const useSceneStore = defineStore('scene', {
       const generatedRoute = {
         waypoints,
         strategy,
-        termination: 'boundary' as const,
-        algorithmVersion: PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION,
+        termination,
         seed: normalized.seed,
         waypointTolerance: normalized.road.waypointTolerance,
         pathDeviation: normalized.road.pathDeviation,

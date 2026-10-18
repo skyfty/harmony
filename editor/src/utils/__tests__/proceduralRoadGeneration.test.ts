@@ -11,9 +11,7 @@ import {
   resolveLowlandScenicStart,
   resolveLowlandScenicWaypoint,
   resolveOfficialScenicStartHeading,
-  SLOWROADS_HILLS_ROAD_PROFILE,
-  SLOWROADS_LOWLAND_ROAD_CONSTRAINTS,
-  traceOfficialScenicRoad,
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
 } from '@schema/proceduralLandscape/officialScenicRoad'
 import {
   planWaypointRoadRoute,
@@ -57,7 +55,6 @@ function makeGrid(height: (x: number, z: number) => number = () => 0): TerrainHe
 const baseOptions: Omit<WaypointRoadPlanOptions, 'waypoints'> = {
   strategy: 'seeded',
   termination: 'boundary',
-  algorithmVersion: 4,
   seed: 912347,
   waypointTolerance: 4,
   pathDeviation: 60,
@@ -164,7 +161,7 @@ describe('official Slow Roads Hills midline', () => {
     ).toBeNull()
   })
 
-  it('traces deterministically with the fixed Hills profile', () => {
+  it('traces deterministically with the global guided planner', () => {
     const grid = makeSyntheticGrid(
       30_000,
       100,
@@ -174,31 +171,16 @@ describe('official Slow Roads Hills midline', () => {
         + Math.sin((x + z) / 230) * 24,
     )
     const origin = { x: -1_800, z: -900 }
-    const first = traceOfficialScenicRoad(grid, origin, 912347)
-    const second = traceOfficialScenicRoad(grid, origin, 912347)
-    const straightRun = (() => {
-      let longest = 0
-      let current = 0
-      for (const node of first.nodes) {
-        if (Math.abs(node.headingDelta) < (0.2 * Math.PI) / 180) {
-          current += SLOWROADS_HILLS_ROAD_PROFILE.stepLength
-          longest = Math.max(longest, current)
-        } else {
-          current = 0
-        }
-      }
-      return longest
-    })()
-    const totalTurnDegrees = first.nodes.reduce(
-      (sum, node) => sum + Math.abs(node.headingDelta) * 180 / Math.PI,
-      0,
-    )
+    const first = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      waypoints: [origin],
+    })
+    const second = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      waypoints: [origin],
+    })
     expect(first.nodes.length).toBeGreaterThan(50)
     expect(first.failureReason).toBe('reached-terrain-boundary')
-    expect(straightRun).toBeLessThan(3_500)
-    expect(totalTurnDegrees / (first.length / 1000)).toBeGreaterThan(10)
-    expect(first.officialReverts).toBeGreaterThan(0)
-    expect(first.antiTargetTriggers).toBeGreaterThan(0)
     expect(first.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
       second.nodes.map((node) => [node.x, node.z, node.y]),
     )
@@ -216,67 +198,6 @@ describe('official Slow Roads Hills midline', () => {
     expect(profile.lowlandCoverageHeight).toBeLessThan(profile.preferenceCeilingHeight)
     expect(profile.percentileAtHeight(profile.lowlandHeight)).toBeCloseTo(0.4, 1)
     expect(profile.percentileAtHeight(profile.preferenceCeilingHeight)).toBeCloseTo(0.7, 1)
-  })
-
-  it('prefers the lowland corridor in version 3', () => {
-    const grid = makeSyntheticGrid(
-      30_000,
-      100,
-      (x, z) => 1_000
-        + Math.min(1_200, Math.max(0, Math.abs(x) - 900) * 0.32)
-        + Math.sin(z / 900) * 18,
-    )
-    const origin = { x: 0, z: -8_000 }
-    const lowland = traceOfficialScenicRoad(grid, origin, 912347, 24, {
-      algorithmVersion: 3,
-    })
-    expect(lowland.failureReason).toBe('reached-terrain-boundary')
-    expect(lowland.averageElevationPercentile).toBeLessThan(0.55)
-    expect(lowland.lowlandCoverageFraction).toBeGreaterThanOrEqual(0.75)
-    expect(lowland.maxForwardGrade).toBeLessThanOrEqual(
-      SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade + 1e-4,
-    )
-    expect(lowland.maxCrossSlope).toBeLessThanOrEqual(
-      SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4,
-    )
-  })
-
-  it('rejects terrain where every direction exceeds the cross-slope limit', () => {
-    const grid = makeSyntheticGrid(
-      4_000,
-      20,
-      (x) => 1_000 + x * 0.5,
-    )
-    const origin = { x: 0, z: 0 }
-    const pure = traceOfficialScenicRoad(grid, origin, 123, 24, {
-      algorithmVersion: 2,
-    })
-    const constrained = traceOfficialScenicRoad(grid, origin, 123, 24, {
-      algorithmVersion: 3,
-    })
-    expect(pure.failureReason).toBe('reached-terrain-boundary')
-    expect(constrained.failureReason).toBe('blocked-by-forward-grade')
-    expect(constrained.nodes.length).toBeLessThanOrEqual(1)
-  })
-
-  it('keeps a high P1 as the start and ramps into lowland preference', () => {
-    const grid = makeSyntheticGrid(
-      30_000,
-      100,
-      (x, z) => 1_000
-        + Math.min(1_200, Math.max(0, Math.abs(x) - 900) * 0.32)
-        + Math.sin(z / 900) * 18,
-    )
-    const result = traceOfficialScenicRoad(grid, { x: 3_000, z: -8_000 }, 90210, 24, {
-      algorithmVersion: 3,
-    })
-    expect(result.failureReason).toBe('reached-terrain-boundary')
-    expect(result.nodes.length).toBeGreaterThan(20)
-    expect(result.nodes[0]!.x).toBeCloseTo(3_000, 6)
-    expect(result.maxForwardGrade).toBeLessThanOrEqual(
-      SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade + 1e-4,
-    )
-    expect(result.averageElevationPercentile).toBeLessThan(0.65)
   })
 
   it('chooses a low gentle automatic start near a steep preferred centre', () => {
@@ -323,32 +244,28 @@ describe('official Slow Roads Hills midline', () => {
     expect(resolveLowlandScenicWaypoint(grid, 0, 0, 50)).toBeNull()
   })
 
-  it('skips an unreachable extra waypoint and still reaches the boundary', () => {
+  it('uses the current relaxed cross-slope limit for waypoint placement', () => {
     const grid = makeSyntheticGrid(
-      30_000,
-      100,
-      (x, z) => 1_000
-        + Math.min(1_200, Math.max(0, Math.abs(x) - 900) * 0.32)
-        + Math.sin(z / 900) * 18,
+      4_000,
+      20,
+      (x) => 1_000 + x * 0.4,
     )
-    const origin = { x: 0, z: -8_000 }
-    const result = traceOfficialScenicRoad(grid, origin, 4401, 24, {
-      algorithmVersion: 4,
-      requiredWaypoints: [
-        origin,
-        { x: 3_000, z: -8_000 },
-        { x: 0, z: -5_000 },
-      ],
-      waypointTolerance: 4,
-      waypointNoProgressDistance: 200,
-      waypointAttemptDistance: 500,
-    })
-    expect(result.failureReason).toBe('reached-terrain-boundary')
-    expect(result.waypointsAttempted).toBeGreaterThanOrEqual(2)
-    expect(result.skippedWaypointIndices).toContain(1)
+    expect(resolveLowlandScenicWaypoint(
+      grid,
+      0,
+      0,
+      500,
+      { maxCrossSlope: 0.35 },
+    )).toBeNull()
+    const relaxed = resolveLowlandScenicWaypoint(grid, 0, 0, 500)
+    expect(relaxed).not.toBeNull()
+    expect(relaxed!.distanceFromClick).toBeCloseTo(0, 6)
+    expect(relaxed!.gradient).toBeLessThanOrEqual(
+      SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4,
+    )
   })
 
-  it('v5 follows every mandatory waypoint around a hill and reaches the boundary', () => {
+  it('follows every mandatory waypoint around a hill and reaches the boundary', () => {
     const grid = makeSyntheticGrid(
       30_000,
       100,
@@ -363,7 +280,6 @@ describe('official Slow Roads Hills midline', () => {
     ]
     const options = {
       ...baseOptions,
-      algorithmVersion: 5,
       waypoints,
     }
     const first = planWaypointRoadRoute(grid, options)
@@ -380,10 +296,10 @@ describe('official Slow Roads Hills midline', () => {
       options.waypointTolerance + 1e-4,
     )
     expect(first.maxForwardGrade).toBeLessThanOrEqual(
-      SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade + 1e-4,
+      SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4,
     )
     expect(first.maxCrossSlope).toBeLessThanOrEqual(
-      SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4,
+      SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4,
     )
     expect(first.plannerMode).toBe('guided-global')
     expect(first.guideExpandedStates).toBeGreaterThan(0)
@@ -392,7 +308,7 @@ describe('official Slow Roads Hills midline', () => {
     )
   })
 
-  it('v5 fails instead of skipping a waypoint isolated by a cliff', () => {
+  it('fails instead of skipping a waypoint isolated by a cliff', () => {
     const grid = makeSyntheticGrid(
       12_000,
       100,
@@ -400,7 +316,6 @@ describe('official Slow Roads Hills midline', () => {
     )
     const result = planWaypointRoadRoute(grid, {
       ...baseOptions,
-      algorithmVersion: 5,
       waypoints: [
         { x: -3_000, z: 0 },
         { x: 3_000, z: 0 },
@@ -414,25 +329,111 @@ describe('official Slow Roads Hills midline', () => {
     expect(result.nodes).toHaveLength(0)
   })
 
-  it('keeps version 3 single-point behavior when extra points are supplied', () => {
+  it('accepts a 25% grade corridor with the current hard limit', () => {
     const grid = makeSyntheticGrid(
       20_000,
       100,
-      (x, z) => 1_000 + Math.sin(x / 500) * 40 + Math.cos(z / 700) * 30,
+      (x) => 1_000 + x * 0.25,
     )
-    const origin = { x: 0, z: -5_000 }
-    const base = traceOfficialScenicRoad(grid, origin, 991, 24, {
-      algorithmVersion: 3,
+    const waypoints = [
+      { x: -3_000, z: 0 },
+      { x: 3_000, z: 0 },
+    ]
+    const relaxed = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      waypoints,
     })
-    const withIgnoredPoints = traceOfficialScenicRoad(grid, origin, 991, 24, {
-      algorithmVersion: 3,
-      requiredWaypoints: [origin, { x: 2_000, z: 0 }],
-    })
-    expect(withIgnoredPoints.skippedWaypointIndices).toEqual([])
-    expect(withIgnoredPoints.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
-      base.nodes.map((node) => [node.x, node.z, node.y]),
+    expect(relaxed.complete).toBe(true)
+    expect(relaxed.waypointsPassed).toBe(2)
+    expect(relaxed.maxForwardGrade).toBeLessThanOrEqual(
+      SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4,
     )
   })
+
+  it('dead-end routing stops exactly at the last waypoint', () => {
+    const grid = makeGrid()
+    const waypoints = [
+      { x: 150, z: 300 },
+      { x: 450, z: 420 },
+      { x: 750, z: 300 },
+    ]
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'dead-end',
+      waypoints,
+    })
+    const last = result.nodes[result.nodes.length - 1]!
+    expect(
+      result.complete,
+      `${result.failureReason} nodes ${result.nodes.length} closed ${result.closed} passed ${result.waypointsPassed}/${result.waypointCount} closure ${result.closureHeadingErrorRad}`,
+    ).toBe(true)
+    expect(result.closed).toBe(false)
+    expect(result.failureReason).toBe('reached-route-end')
+    expect(result.waypointsPassed).toBe(3)
+    expect(Math.hypot(
+      last.x - waypoints[2]!.x,
+      last.z - waypoints[2]!.z,
+    )).toBeLessThanOrEqual(1e-3)
+  })
+
+  it('multi-waypoint loop closes back onto P1', () => {
+    const grid = makeGrid()
+    const waypoints = [
+      { x: 150, z: 300 },
+      { x: 450, z: 320 },
+      { x: 720, z: 520 },
+    ]
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'loop',
+      waypoints,
+    })
+    const first = result.nodes[0]!
+    const last = result.nodes[result.nodes.length - 1]!
+    expect(
+      result.complete,
+      `${result.failureReason} nodes ${result.nodes.length} closed ${result.closed} passed ${result.waypointsPassed}/${result.waypointCount} closure ${result.closureHeadingErrorRad}`,
+    ).toBe(true)
+    expect(result.closed).toBe(true)
+    expect(result.failureReason).toBe('reached-route-start')
+    expect(result.waypointsPassed).toBe(3)
+    expect(last.x).toBeCloseTo(first.x, 6)
+    expect(last.z).toBeCloseTo(first.z, 6)
+    expect(result.closureHeadingErrorRad).toBeLessThanOrEqual(Math.PI / 4)
+  })
+
+  it('creates a single-point loop and rejects a single dead end', () => {
+    const grid = makeGrid()
+    const origin = { x: 450, z: 450 }
+    const loop = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'loop',
+      waypoints: [origin],
+    })
+    expect(
+      loop.complete,
+      `${loop.failureReason} nodes ${loop.nodes.length} closed ${loop.closed} passed ${loop.waypointsPassed}/${loop.waypointCount} closure ${loop.closureHeadingErrorRad}`,
+    ).toBe(true)
+    expect(loop.closed).toBe(true)
+    expect(loop.waypointsPassed).toBe(1)
+    expect(loop.nodes[0]!.x).toBeCloseTo(
+      loop.nodes[loop.nodes.length - 1]!.x,
+      6,
+    )
+    expect(loop.nodes[0]!.z).toBeCloseTo(
+      loop.nodes[loop.nodes.length - 1]!.z,
+      6,
+    )
+
+    const deadEnd = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'dead-end',
+      waypoints: [origin],
+    })
+    expect(deadEnd.complete).toBe(false)
+    expect(deadEnd.failureReason).toBe('route-too-short')
+  })
+
 })
 
 describe('unified waypoint road configuration', () => {
@@ -446,7 +447,7 @@ describe('unified waypoint road configuration', () => {
     expect(defaults.road.waypointTolerance).toBe(4)
   })
 
-  it('keeps arbitrary waypoint counts and migrates legacy procedural origins', () => {
+  it('keeps arbitrary waypoint counts', () => {
     const defaults = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
     const many = Array.from({ length: 900 }, (_, index) => ({ x: index * 2, z: 0 }))
     const clamped = clampProceduralLandscapeProps({
@@ -456,23 +457,6 @@ describe('unified waypoint road configuration', () => {
       },
     })
     expect(clamped.road.waypoints).toHaveLength(900)
-
-    const migrated = clampProceduralLandscapeProps({
-      seed: 77,
-      road: {
-        ...defaults.road,
-        waypoints: [{ x: 40, z: 20 }],
-        mode: 'procedural',
-        procedural: {
-          origin: { x: 10, z: 20 },
-          termination: 'boundary',
-        },
-      } as any,
-    })
-    expect(migrated.road.generatedRoute?.waypoints[0]).toEqual({ x: 10, z: 20 })
-    expect(migrated.road.generatedRoute?.waypoints[1]).toEqual({ x: 40, z: 20 })
-    expect(migrated.road.generatedRoute?.termination).toBe('boundary')
-    expect(migrated.road.generatedRoute?.algorithmVersion).toBe(1)
   })
 
   it('deep-clones generated route waypoints', () => {
@@ -481,7 +465,6 @@ describe('unified waypoint road configuration', () => {
       waypoints: [{ x: 1, z: 2 }],
       strategy: 'seeded',
       termination: 'boundary',
-      algorithmVersion: 2,
       seed: 1,
       waypointTolerance: 4,
       pathDeviation: 60,
@@ -494,41 +477,27 @@ describe('unified waypoint road configuration', () => {
     )
   })
 
-  it('preserves legacy loop snapshots and forces version-2 routes open', () => {
+  it('preserves all termination modes in live routing and snapshots', () => {
     const defaults = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
-    const legacy = clampProceduralLandscapeProps({
-      road: {
-        ...defaults.road,
-        generatedRoute: {
-          waypoints: [{ x: 10, z: 20 }],
-          strategy: 'seeded',
-          termination: 'loop',
-          seed: 1,
-          waypointTolerance: 4,
-          pathDeviation: 60,
-          revision: 1,
-        } as any,
-      },
-    })
-    expect(legacy.road.generatedRoute?.algorithmVersion).toBe(1)
-    expect(legacy.road.generatedRoute?.termination).toBe('loop')
-
-    const current = clampProceduralLandscapeProps({
-      road: {
-        ...defaults.road,
-        generatedRoute: {
-          waypoints: [{ x: 10, z: 20 }],
-          strategy: 'seeded',
-          termination: 'loop',
-          algorithmVersion: 2,
-          seed: 1,
-          waypointTolerance: 4,
-          pathDeviation: 60,
-          revision: 1,
+    for (const termination of ['loop', 'boundary', 'dead-end'] as const) {
+      const props = clampProceduralLandscapeProps({
+        road: {
+          ...defaults.road,
+          routing: { strategy: 'seeded', termination },
+          generatedRoute: {
+            waypoints: [{ x: 10, z: 20 }],
+            strategy: 'seeded',
+            termination,
+            seed: 1,
+            waypointTolerance: 4,
+            pathDeviation: 60,
+            revision: 1,
+          },
         },
-      },
-    })
-    expect(current.road.generatedRoute?.termination).toBe('boundary')
+      })
+      expect(props.road.routing.termination).toBe(termination)
+      expect(props.road.generatedRoute?.termination).toBe(termination)
+    }
   })
 })
 
@@ -601,19 +570,30 @@ describe('unified waypoint road planning', () => {
     ).toBe(true)
   })
 
-  it('keeps version-1 snapshots on the legacy planner', () => {
+  it('shortest routing supports dead ends without a boundary tail', () => {
     const grid = makeGrid()
+    const waypoints = [
+      { x: 250, z: 450 },
+      { x: 450, z: 350 },
+      { x: 680, z: 450 },
+    ]
     const result = planWaypointRoadRoute(grid, {
       ...baseOptions,
-      algorithmVersion: 1,
-      termination: 'loop',
-      waypoints: [{ x: 450, z: 450 }],
+      strategy: 'shortest',
+      termination: 'dead-end',
+      waypoints,
     })
-    expect(result.closed).toBe(true)
-    expect(result.failureReason).toBe('reached-guide-end')
+    const last = result.nodes[result.nodes.length - 1]!
+    expect(result.complete).toBe(true)
+    expect(result.failureReason).toBe('reached-route-end')
+    expect(result.waypointsPassed).toBe(3)
+    expect(Math.hypot(
+      last.x - waypoints[2]!.x,
+      last.z - waypoints[2]!.z,
+    )).toBeLessThanOrEqual(1e-3)
   })
 
-  it('creates an official open route from one waypoint', () => {
+  it('creates an open route from one waypoint', () => {
     const grid = makeGrid()
     const origin = { x: 450, z: 450 }
     const result = planWaypointRoadRoute(grid, {

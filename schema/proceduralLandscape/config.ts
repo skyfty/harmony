@@ -67,11 +67,18 @@ export interface ProceduralLandscapeSurfaceProps {
   viewDistanceScale: number | null
 }
 
-export type ProceduralLandscapeRoadTermination = 'boundary' | 'loop'
+export type ProceduralLandscapeRoadTermination = 'boundary' | 'loop' | 'dead-end'
 export type ProceduralLandscapeRoadStrategy = 'seeded' | 'shortest'
 
-/** Version 5 = guided global slope routing with mandatory waypoints. */
-export const PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION = 5
+function normalizeRoadTermination(value: unknown): ProceduralLandscapeRoadTermination {
+  if (value === 'loop') {
+    return 'loop'
+  }
+  if (value === 'dead-end') {
+    return 'dead-end'
+  }
+  return 'boundary'
+}
 
 export interface ProceduralLandscapeRoadRoutingProps {
   strategy: ProceduralLandscapeRoadStrategy
@@ -83,7 +90,6 @@ export interface ProceduralLandscapeGeneratedRouteProps {
   waypoints: RoadWaypoint[]
   strategy: ProceduralLandscapeRoadStrategy
   termination: ProceduralLandscapeRoadTermination
-  algorithmVersion: number
   seed: number
   waypointTolerance: number
   pathDeviation: number
@@ -330,16 +336,6 @@ function normalizeColor(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length ? value.trim() : fallback
 }
 
-function clampRoadWaypoint(value: unknown): RoadWaypoint | null {
-  const raw = value as { x?: unknown; z?: unknown } | null | undefined
-  const x = typeof raw?.x === 'number' ? raw.x : Number(raw?.x)
-  const z = typeof raw?.z === 'number' ? raw.z : Number(raw?.z)
-  if (!Number.isFinite(x) || !Number.isFinite(z)) {
-    return null
-  }
-  return { x, z }
-}
-
 function clampGeneratedRoute(
   value: unknown,
   fallbackSeed: number,
@@ -353,18 +349,10 @@ function clampGeneratedRoute(
   if (!waypoints.length) {
     return null
   }
-  const algorithmVersion = Math.round(
-    clampNumber(raw.algorithmVersion, 1, 1, 0x7fffffff),
-  )
   return {
     waypoints,
     strategy: raw.strategy === 'shortest' ? 'shortest' : 'seeded',
-    termination: algorithmVersion >= 2
-      ? 'boundary'
-      : raw.termination === 'boundary'
-        ? 'boundary'
-        : 'loop',
-    algorithmVersion,
+    termination: normalizeRoadTermination(raw.termination),
     seed: Math.round(clampNumber(raw.seed, fallbackSeed, 0, 0xffffffff)) >>> 0,
     waypointTolerance: clampNumber(raw.waypointTolerance, 4, 1, 64),
     pathDeviation: clampNumber(raw.pathDeviation, fallbackPathDeviation, 10, 200),
@@ -554,42 +542,6 @@ export function clampProceduralLandscapeProps(
   let generatedRoute = hasGeneratedRouteField
     ? clampGeneratedRoute(road?.generatedRoute, seedValue, pathDeviation)
     : null
-  const legacyRoad = road as Partial<ProceduralLandscapeRoadProps> & {
-    mode?: string
-    procedural?: {
-      origin?: unknown
-      termination?: unknown
-    }
-  }
-  if (
-    !generatedRoute
-    && waypoints.length
-    && (legacyRoad.mode != null || legacyRoad.procedural != null)
-  ) {
-    const legacyOrigin = legacyRoad.mode === 'procedural'
-      ? clampRoadWaypoint(legacyRoad.procedural?.origin)
-      : null
-    const migratedWaypoints = legacyOrigin
-      ? [
-          legacyOrigin,
-          ...waypoints.filter((point) => (
-            Math.hypot(point.x - legacyOrigin.x, point.z - legacyOrigin.z) > 0.5
-          )),
-        ]
-      : waypoints
-    generatedRoute = migratedWaypoints.length
-      ? {
-          waypoints: migratedWaypoints,
-          strategy: 'seeded',
-          termination: 'boundary',
-          algorithmVersion: 1,
-          seed: seedValue,
-          waypointTolerance,
-          pathDeviation,
-          revision: 0,
-        }
-      : null
-  }
   const routing = road?.routing
 
   return {
@@ -636,7 +588,7 @@ export function clampProceduralLandscapeProps(
       enabled: road?.enabled !== false,
       routing: {
         strategy: routing?.strategy === 'shortest' ? 'shortest' : 'seeded',
-        termination: 'boundary',
+        termination: normalizeRoadTermination(routing?.termination),
       },
       generatedRoute,
       // 下限取官方 NARROW 档：< 2.25m 才会切到单车道贴图（`isSingleTrackRoad`）。

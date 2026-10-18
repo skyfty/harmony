@@ -155,7 +155,7 @@ import {
 import {
   resolveLowlandScenicStart,
   resolveLowlandScenicWaypoint,
-  SLOWROADS_LOWLAND_ROAD_CONSTRAINTS,
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
   type ScenicWaypointPlacement,
 } from './officialScenicRoad'
 import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
@@ -1697,7 +1697,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       waypoints: waypointsWorld,
       strategy: route.strategy,
       termination: route.termination,
-      algorithmVersion: route.algorithmVersion,
       seed: route.seed,
       waypointTolerance: route.waypointTolerance,
       pathDeviation: route.pathDeviation,
@@ -4191,10 +4190,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           unreachableWaypointIndex: result?.unreachableWaypointIndex ?? null,
         }
       }
-      if (route.algorithmVersion >= 3) {
+      {
         if (
           (result.maxForwardGrade ?? 0)
-          > SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade + 1e-4
+          > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4
         ) {
           return {
             ok: false,
@@ -4206,7 +4205,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         }
         if (
           (result.maxCrossSlope ?? 0)
-          > SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4
+          > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4
         ) {
           return {
             ok: false,
@@ -4271,6 +4270,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         worldX,
         worldZ,
         maxRadius,
+        {
+          maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+        },
       )
       if (!resolved) {
         return null

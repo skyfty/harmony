@@ -1,7 +1,7 @@
 import { clamp, smoothstep } from './noise'
 import {
   buildScenicTerrainElevationProfile,
-  SLOWROADS_LOWLAND_ROAD_CONSTRAINTS,
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
 } from './officialScenicRoad'
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
@@ -29,8 +29,11 @@ export interface GlobalScenicGuideOptions {
   stepLength: number
   pathDeviation: number
   margin: number
+  termination?: 'loop' | 'boundary' | 'dead-end'
+  preferredGrade?: number
   maxGrade?: number
   maxCrossSlope?: number
+  crossSlopeWeight?: number
   maxExpandedStates?: number
 }
 
@@ -300,16 +303,18 @@ function searchGuideLeg(
   end: Vec2 | null,
   options: GlobalScenicGuideOptions,
   remainingBudget: number,
+  avoidMask: Uint8Array | null = null,
 ): {
   points: Vec2[] | null
   expanded: number
   budgetExceeded: boolean
   unreachable: boolean
 } {
-  const maxGrade = options.maxGrade ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade
+  const maxGrade = options.maxGrade ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade
   const maxCrossSlope = options.maxCrossSlope
-    ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope
-  const preferredGrade = SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.preferredGrade
+    ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope
+  const preferredGrade = options.preferredGrade
+    ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade
   const startCell = resolveAnchorCell(planning, start, maxGrade)
   const endCell = end
     ? resolveAnchorCell(planning, end, maxGrade)
@@ -430,16 +435,18 @@ function searchGuideLeg(
       const preferredNorm = grade / Math.max(1e-5, preferredGrade)
       const elevationPercentile = profile.percentileAtHeight(nextHeight)
       const lowlandPenalty = smoothstep(
-        SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandStartPercentile,
-        SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
+        SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandStartPercentile,
+        SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
         elevationPercentile,
       )
+      const overlapPenalty = avoidMask?.[nextIndex] ? 2.5 : 0
       const stepCost = length * (
         1
         + gradeNorm * gradeNorm * 8
         + Math.max(0, preferredNorm - 1) ** 2 * 2
-        + crossNorm * crossNorm * 2.5
+        + crossNorm * crossNorm * (options.crossSlopeWeight ?? 2.5)
         + lowlandPenalty * 0.45
+        + overlapPenalty
       )
       const nextDistance = distances[state]! + stepCost
       if (nextDistance >= distances[nextIndex]!) {
@@ -477,6 +484,55 @@ function appendUnique(points: Vec2[], point: Vec2): void {
   if (!points.length || distance(points[points.length - 1]!, point) > 1e-4) {
     points.push({ ...point })
   }
+}
+
+function buildGuideCorridorMask(
+  planning: PlanningGrid,
+  legs: ReadonlyArray<ReadonlyArray<Vec2>>,
+  radiusMeters: number,
+): Uint8Array {
+  const mask = new Uint8Array(planning.cols * planning.rows)
+  const radiusCells = Math.max(
+    1,
+    Math.ceil(radiusMeters / planning.cellSize),
+  )
+  const mark = (x: number, z: number): void => {
+    const centerCol = Math.round((x - planning.minX) / planning.cellSize)
+    const centerRow = Math.round((z - planning.minZ) / planning.cellSize)
+    for (let rowOffset = -radiusCells; rowOffset <= radiusCells; rowOffset += 1) {
+      for (let colOffset = -radiusCells; colOffset <= radiusCells; colOffset += 1) {
+        if (colOffset * colOffset + rowOffset * rowOffset > radiusCells * radiusCells) {
+          continue
+        }
+        const col = centerCol + colOffset
+        const row = centerRow + rowOffset
+        if (
+          col >= 0
+          && row >= 0
+          && col < planning.cols
+          && row < planning.rows
+        ) {
+          mask[row * planning.cols + col] = 1
+        }
+      }
+    }
+  }
+  for (const leg of legs) {
+    for (let index = 1; index < leg.length; index += 1) {
+      const start = leg[index - 1]!
+      const end = leg[index]!
+      const length = distance(start, end)
+      const count = Math.max(1, Math.ceil(length / (planning.cellSize * 0.5)))
+      for (let step = 0; step <= count; step += 1) {
+        const t = step / count
+        mark(
+          start.x + (end.x - start.x) * t,
+          start.z + (end.z - start.z) * t,
+        )
+      }
+    }
+  }
+  return mask
 }
 
 function chaikin(points: ReadonlyArray<Vec2>, iterations: number): Vec2[] {
@@ -592,9 +648,9 @@ function prepareGuide(
   rawLegs: ReadonlyArray<ReadonlyArray<Vec2>>,
   options: GlobalScenicGuideOptions,
 ): Vec2[] | null {
-  const maxGrade = options.maxGrade ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade
+  const maxGrade = options.maxGrade ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade
   const maxCrossSlope = options.maxCrossSlope
-    ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope
+    ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope
   const spacing = Math.max(4, Math.min(16, options.stepLength))
   for (const iterations of [4, 3, 2, 1, 0]) {
     const points: Vec2[] = []
@@ -633,12 +689,31 @@ export function buildGlobalScenicGuide(
   options: GlobalScenicGuideOptions,
 ): GlobalScenicGuideResult {
   const corridorWidth = Math.max(20, options.pathDeviation)
-  if (waypoints.length < 2) {
+  const termination = options.termination ?? 'boundary'
+  if (!waypoints.length) {
     return {
-      points: waypoints.map((point) => ({ x: point.x, z: point.z })),
+      points: [],
       expandedStates: 0,
       corridorWidth,
-      failureReason: null,
+      failureReason: 'no-waypoints',
+      unreachableWaypointIndex: null,
+    }
+  }
+  if (waypoints.length === 1 && termination === 'dead-end') {
+    return {
+      points: [],
+      expandedStates: 0,
+      corridorWidth,
+      failureReason: 'route-too-short',
+      unreachableWaypointIndex: null,
+    }
+  }
+  if (waypoints.length === 1 && termination === 'loop') {
+    return {
+      points: [],
+      expandedStates: 0,
+      corridorWidth,
+      failureReason: 'single-point-loop-too-small',
       unreachableWaypointIndex: null,
     }
   }
@@ -676,27 +751,87 @@ export function buildGlobalScenicGuide(
     legs.push(leg.points)
   }
   const last = waypoints[waypoints.length - 1]!
-  const boundary = searchGuideLeg(
-    planning,
-    profile,
-    { x: last.x, z: last.z },
-    null,
-    options,
-    maxExpandedStates - expandedStates,
-  )
-  expandedStates += boundary.expanded
-  if (!boundary.points) {
-    return {
-      points: [],
-      expandedStates,
-      corridorWidth,
-      failureReason: boundary.budgetExceeded
-        ? 'global-guide-budget-exceeded'
-        : 'boundary-unreachable',
-      unreachableWaypointIndex: null,
+  if (termination === 'loop') {
+    const origin = { x: waypoints[0]!.x, z: waypoints[0]!.z }
+    let returnEnd = origin
+    const firstLeg = legs[0]
+    if (firstLeg && firstLeg.length >= 2) {
+      const first = firstLeg[0]!
+      const next = firstLeg.find((point) => distance(first, point) > 1) ?? null
+      if (next) {
+        const heading = Math.atan2(next.z - first.z, next.x - first.x)
+        const closureLength = Math.max(60, options.stepLength * 6)
+        const approach = {
+          x: origin.x - Math.cos(heading) * closureLength,
+          z: origin.z - Math.sin(heading) * closureLength,
+        }
+        const approachHeight = grid.sampleHeight(approach.x, approach.z)
+        const originHeight = grid.sampleHeight(origin.x, origin.z)
+        if (
+          approachHeight != null
+          && originHeight != null
+          && Math.abs(originHeight - approachHeight) / closureLength
+            <= (options.maxGrade ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade)
+        ) {
+          returnEnd = approach
+        }
+      }
     }
+    const corridorRadius = Math.max(
+      30,
+      Math.min(60, corridorWidth * 0.5),
+    )
+    const avoidMask = buildGuideCorridorMask(
+      planning,
+      legs,
+      corridorRadius,
+    )
+    const returnLeg = searchGuideLeg(
+      planning,
+      profile,
+      { x: last.x, z: last.z },
+      returnEnd,
+      options,
+      maxExpandedStates - expandedStates,
+      avoidMask,
+    )
+    expandedStates += returnLeg.expanded
+    if (!returnLeg.points) {
+      return {
+        points: [],
+        expandedStates,
+        corridorWidth,
+        failureReason: returnLeg.budgetExceeded
+          ? 'global-guide-budget-exceeded'
+          : 'loop-not-closed',
+        unreachableWaypointIndex: null,
+      }
+    }
+    appendUnique(returnLeg.points, origin)
+    legs.push(returnLeg.points)
+  } else if (termination === 'boundary') {
+    const boundary = searchGuideLeg(
+      planning,
+      profile,
+      { x: last.x, z: last.z },
+      null,
+      options,
+      maxExpandedStates - expandedStates,
+    )
+    expandedStates += boundary.expanded
+    if (!boundary.points) {
+      return {
+        points: [],
+        expandedStates,
+        corridorWidth,
+        failureReason: boundary.budgetExceeded
+          ? 'global-guide-budget-exceeded'
+          : 'boundary-unreachable',
+        unreachableWaypointIndex: null,
+      }
+    }
+    legs.push(boundary.points)
   }
-  legs.push(boundary.points)
   const points = prepareGuide(grid, legs, options)
   if (!points) {
     return {

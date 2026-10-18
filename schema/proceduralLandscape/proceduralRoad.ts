@@ -8,17 +8,16 @@ import {
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
 import {
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
+  summarizeScenicRoadTerrain,
   traceOfficialScenicGuidedRoad,
-  traceOfficialScenicRoad,
 } from './officialScenicRoad'
 import { buildGlobalScenicGuide } from './globalScenicGuide'
 
 export interface WaypointRoadPlanOptions {
   waypoints: RoadWaypoint[]
   strategy: 'seeded' | 'shortest'
-  termination: 'loop' | 'boundary'
-  /** Stored route version; 2–4 keep the legacy Hills tracer, 5 adds the global guide. */
-  algorithmVersion?: number
+  termination: 'loop' | 'boundary' | 'dead-end'
   seed: number
   waypointTolerance: number
   pathDeviation: number
@@ -57,7 +56,6 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
 }
 
 type Vec2 = { x: number; z: number }
-type GuideSegmentScore = { cost: number; points: Vec2[] }
 
 const MAX_SHORTEST_EXPANSIONS = 250_000
 const MAX_PLANNING_CELLS_PER_AXIS = 768
@@ -76,55 +74,11 @@ function distance(a: Vec2, b: Vec2): number {
   return Math.hypot(b.x - a.x, b.z - a.z)
 }
 
-function normalizeVector(x: number, z: number): Vec2 {
-  const length = Math.hypot(x, z)
-  return length > 1e-9 ? { x: x / length, z: z / length } : { x: 1, z: 0 }
-}
-
-function cubicPoint(
-  p0: Vec2,
-  c1: Vec2,
-  c2: Vec2,
-  p1: Vec2,
-  t: number,
-): Vec2 {
-  const u = 1 - t
-  const a = u * u * u
-  const b = 3 * u * u * t
-  const c = 3 * u * t * t
-  const d = t * t * t
-  return {
-    x: a * p0.x + b * c1.x + c * c2.x + d * p1.x,
-    z: a * p0.z + b * c1.z + c * c2.z + d * p1.z,
-  }
-}
-
-function routeTangents(points: ReadonlyArray<Vec2>, closed: boolean): Vec2[] {
-  const count = points.length
-  return points.map((point, index) => {
-    const previous = index > 0
-      ? points[index - 1]!
-      : closed
-        ? points[count - 1]!
-        : points[index]!
-    const next = index + 1 < count
-      ? points[index + 1]!
-      : closed
-        ? points[0]!
-        : points[index]!
-    if (distance(previous, next) < 1e-6) {
-      const fallback = points[(index + 1) % count] ?? point
-      return normalizeVector(fallback.x - point.x, fallback.z - point.z)
-    }
-    return normalizeVector(next.x - previous.x, next.z - previous.z)
-  })
-}
-
 function scoreSeededSegment(
   grid: TerrainHeightGrid,
   points: Vec2[],
   maxSlope: number,
-): GuideSegmentScore | null {
+): { cost: number; points: Vec2[] } | null {
   if (points.length < 2) {
     return null
   }
@@ -163,110 +117,13 @@ function scoreSeededSegment(
         cost += Math.abs(leftY - rightY) * 1.1
       }
       if (previousHeading != null) {
-        const delta = Math.abs(wrapAngle(heading - previousHeading))
-        cost += delta * 22
+        cost += Math.abs(wrapAngle(heading - previousHeading)) * 22
       }
       previousHeading = heading
     }
     previousY = y
   }
   return { cost, points }
-}
-
-function buildSeededGuide(
-  grid: TerrainHeightGrid,
-  anchors: ReadonlyArray<Vec2>,
-  closed: boolean,
-  options: WaypointRoadPlanOptions,
-): Vec2[] {
-  if (anchors.length < 2) {
-    return anchors.map((point) => ({ ...point }))
-  }
-  const tangents = routeTangents(anchors, closed)
-  const segmentCount = closed ? anchors.length : anchors.length - 1
-  const guide: Vec2[] = [{ ...anchors[0]! }]
-  for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
-    const start = anchors[segmentIndex]!
-    const end = anchors[(segmentIndex + 1) % anchors.length]!
-    const chord = distance(start, end)
-    if (chord < 1e-6) {
-      continue
-    }
-    const tangent0 = tangents[segmentIndex]!
-    const tangent1 = tangents[(segmentIndex + 1) % anchors.length]!
-    const normal = normalizeVector(-(end.z - start.z), end.x - start.x)
-    const cap = Math.min(options.pathDeviation, chord * 0.2)
-    const seedValue = (options.seed + Math.imul(segmentIndex + 1, 0x9e3779b1)) >>> 0
-    const sign = hashUnit(seedValue, 7, 19) < 0.5 ? -1 : 1
-    const magnitude = 0.35 + hashUnit(seedValue, 11, 31) * 0.5
-    const preferredA = sign * cap * magnitude
-    const preferredB = -sign * cap * magnitude * (0.2 + hashUnit(seedValue, 13, 17) * 0.35)
-    const candidates: Array<readonly [number, number]> = [
-      [preferredA, preferredB],
-      [preferredA, -preferredB * 0.6],
-      [-preferredA * 0.7, preferredB],
-      [preferredA * 0.45, preferredA * 0.45],
-      [0, 0],
-    ]
-    let best: GuideSegmentScore | null = null
-    let preferredResult: GuideSegmentScore | null = null
-    for (let candidateIndex = 0; candidateIndex < candidates.length; candidateIndex += 1) {
-      const [offsetA, offsetB] = candidates[candidateIndex]!
-      const control1 = {
-        x: start.x + tangent0.x * chord / 3 + normal.x * offsetA,
-        z: start.z + tangent0.z * chord / 3 + normal.z * offsetA,
-      }
-      const control2 = {
-        x: end.x - tangent1.x * chord / 3 + normal.x * offsetB,
-        z: end.z - tangent1.z * chord / 3 + normal.z * offsetB,
-      }
-      const sampleCount = Math.max(2, Math.ceil(chord / 10))
-      const sampled: Vec2[] = []
-      for (let sampleIndex = 0; sampleIndex <= sampleCount; sampleIndex += 1) {
-        const t = sampleIndex / sampleCount
-        sampled.push(t <= 0
-          ? { ...start }
-          : t >= 1
-            ? { ...end }
-            : cubicPoint(start, control1, control2, end, t))
-      }
-      const result = scoreSeededSegment(grid, sampled, options.maxSlope)
-      if (!result) {
-        continue
-      }
-      if (candidateIndex === 0) {
-        preferredResult = result
-      }
-      if (!best || result.cost < best.cost) {
-        best = result
-      }
-    }
-    const chosen = preferredResult && best && preferredResult.cost <= best.cost * 1.25
-      ? preferredResult
-      : best
-    let fallback = chosen?.points
-    if (!fallback) {
-      fallback = []
-      const fallbackCount = Math.max(2, Math.ceil(chord / 10))
-      for (let sampleIndex = 0; sampleIndex <= fallbackCount; sampleIndex += 1) {
-        const t = sampleIndex / fallbackCount
-        fallback.push({
-          x: start.x + (end.x - start.x) * t,
-          z: start.z + (end.z - start.z) * t,
-        })
-      }
-    }
-    for (const point of fallback) {
-      const previous = guide[guide.length - 1]
-      if (!previous || distance(previous, point) > 1e-5) {
-        guide.push({ ...point })
-      }
-    }
-  }
-  if (closed && guide.length) {
-    guide[guide.length - 1] = { ...anchors[0]! }
-  }
-  return guide
 }
 
 function singlePointLoopAnchors(
@@ -341,150 +198,6 @@ function singlePointLoopAnchors(
     }
   }
   return null
-}
-
-/** Retained for the deferred closed-loop mode; the editor does not call it yet. */
-export function planSinglePointScenicLoop(
-  grid: TerrainHeightGrid,
-  origin: RoadWaypoint,
-  options: WaypointRoadPlanOptions,
-): WaypointRoadPlanResult {
-  const diagonal = Math.hypot(grid.maxX - grid.minX, grid.maxZ - grid.minZ)
-  const outboundLength = diagonal * (0.12 + hashUnit(options.seed, 43, 61) * 0.1)
-  const outbound = traceRoadPath(grid, {
-    startX: origin.x,
-    startZ: origin.z,
-    headingRad: resolveSeedHeadingRad(options.seed),
-    stepLength: options.stepLength,
-    feelDistance: options.feelDistance,
-    feelAngleRad: options.feelAngleRad,
-    maxSlope: options.maxSlope,
-    maxTurnRad: options.maxTurnRad,
-    maxLength: outboundLength,
-    maxSteps: Math.max(
-      4096,
-      Math.ceil(((grid.maxX - grid.minX + grid.maxZ - grid.minZ) * 1.5) / options.stepLength),
-    ),
-    margin: options.margin,
-  })
-  if (outbound.nodes.length < 6) {
-    return {
-      ...outbound,
-      closed: false,
-      waypointCount: 1,
-      waypointsPassed: waypointPassStats(
-        outbound.nodes,
-        [{ x: origin.x, z: origin.z }],
-        options.waypointTolerance,
-      ).passed,
-      maxWaypointError: waypointPassStats(
-        outbound.nodes,
-        [{ x: origin.x, z: origin.z }],
-        options.waypointTolerance,
-      ).maxError,
-      closureHeadingErrorRad: 0,
-      shortestExpandedStates: 0,
-    }
-  }
-  const end = outbound.nodes[outbound.nodes.length - 1]!
-  const chordX = origin.x - end.x
-  const chordZ = origin.z - end.z
-  const chordLength = Math.hypot(chordX, chordZ)
-  const normal = normalizeVector(-chordZ, chordX)
-  const cap = Math.min(chordLength * 0.32, Math.max(options.pathDeviation, chordLength * 0.14))
-  const sign = hashUnit(options.seed, 37, 59) < 0.5 ? -1 : 1
-  const returnAnchors: Vec2[] = [{ x: end.x, z: end.z }]
-  for (let index = 1; index <= 3; index += 1) {
-    const t = index / 4
-    const offset = cap * sign * Math.sin(t * Math.PI) * (index % 2 === 0 ? -1 : 1)
-    let point = {
-      x: end.x + chordX * t + normal.x * offset,
-      z: end.z + chordZ * t + normal.z * offset,
-    }
-    if (!grid.contains(point.x, point.z)) {
-      point = {
-        x: end.x + chordX * t,
-        z: end.z + chordZ * t,
-      }
-    }
-    returnAnchors.push(point)
-  }
-  returnAnchors.push({ x: origin.x, z: origin.z })
-  let returnGuide = buildSeededGuide(grid, returnAnchors, false, options)
-  let returnTrace = traceGuide(
-    grid,
-    returnGuide,
-    [{ x: origin.x, z: origin.z }],
-    options,
-  )
-  if (!returnTrace.reachedGuideEnd) {
-    const fallback = planShortestGuide(
-      grid,
-      [{ x: end.x, z: end.z }, { x: origin.x, z: origin.z }],
-      false,
-      options,
-    )
-    if (!fallback.error && fallback.guide.length) {
-      returnGuide = fallback.guide
-      returnTrace = traceGuide(
-        grid,
-        returnGuide,
-        [{ x: origin.x, z: origin.z }],
-        options,
-      )
-    }
-  }
-  if (!returnTrace.reachedGuideEnd) {
-    return {
-      ...returnTrace.result,
-      closed: false,
-      waypointCount: 1,
-      waypointsPassed: waypointPassStats(
-        returnTrace.result.nodes,
-        [{ x: origin.x, z: origin.z }],
-        options.waypointTolerance,
-      ).passed,
-      maxWaypointError: waypointPassStats(
-        returnTrace.result.nodes,
-        [{ x: origin.x, z: origin.z }],
-        options.waypointTolerance,
-      ).maxError,
-      closureHeadingErrorRad: 0,
-      shortestExpandedStates: 0,
-    }
-  }
-  const nodes = [...outbound.nodes, ...returnTrace.result.nodes.slice(1)]
-  const first = nodes[0]!
-  const last = nodes[nodes.length - 1]!
-  last.x = origin.x
-  last.z = origin.z
-  last.y = grid.sampleHeight(origin.x, origin.z) ?? last.y
-  last.heading = first.heading
-  let length = 0
-  for (let index = 0; index < nodes.length; index += 1) {
-    nodes[index]!.index = index
-    if (index > 0) {
-      length += distance(nodes[index - 1]!, nodes[index]!)
-    }
-  }
-  const stats = waypointPassStats(
-    nodes,
-    [{ x: origin.x, z: origin.z }],
-    options.waypointTolerance,
-  )
-  return {
-    nodes,
-    length,
-    complete: stats.passed === 1,
-    failureReason: stats.passed === 1 ? 'reached-guide-end' : 'waypoint-missed',
-    rescueTurns: outbound.rescueTurns + returnTrace.result.rescueTurns,
-    closed: true,
-    waypointCount: 1,
-    waypointsPassed: stats.passed,
-    maxWaypointError: stats.maxError,
-    closureHeadingErrorRad: 0,
-    shortestExpandedStates: 0,
-  }
 }
 
 class MinHeap {
@@ -1095,6 +808,178 @@ function appendBoundaryTail(
   }
 }
 
+function finalizeRouteTermination(
+  grid: TerrainHeightGrid,
+  route: RoadTraceResult,
+  target: Vec2,
+  maxGrade: number,
+  termination: 'loop' | 'dead-end',
+  terminalTolerance: number,
+): {
+  result: RoadTraceResult
+  closed: boolean
+  closureHeadingErrorRad: number
+  failureReason: string | null
+} {
+  if (route.nodes.length < 2) {
+    return {
+      result: route,
+      closed: false,
+      closureHeadingErrorRad: 0,
+      failureReason: 'route-too-short',
+    }
+  }
+  const nodes = route.nodes.map((node) => ({ ...node }))
+  const first = nodes[0]!
+  const last = nodes[nodes.length - 1]!
+  const terminalDistance = Math.hypot(target.x - last.x, target.z - last.z)
+  if (terminalDistance > Math.max(20, terminalTolerance)) {
+    return {
+      result: route,
+      closed: false,
+      closureHeadingErrorRad: 0,
+      failureReason: termination === 'loop'
+        ? 'loop-termination-distance'
+        : 'waypoint-missed',
+    }
+  }
+  const terminalHeight = grid.sampleHeight(target.x, target.z)
+  if (terminalHeight == null) {
+    return {
+      result: route,
+      closed: false,
+      closureHeadingErrorRad: 0,
+      failureReason: 'blocked',
+    }
+  }
+  if (terminalDistance > 1e-3) {
+    const grade = Math.abs(terminalHeight - last.y) / terminalDistance
+    if (grade > maxGrade + 1e-6) {
+      return {
+        result: route,
+        closed: false,
+        closureHeadingErrorRad: 0,
+        failureReason: termination === 'loop'
+          ? 'loop-termination-grade'
+          : 'blocked',
+      }
+    }
+    const previous = nodes[Math.max(0, nodes.length - 2)]!
+    nodes.push({
+      x: target.x,
+      z: target.z,
+      y: terminalHeight,
+      heading: Math.atan2(target.z - previous.z, target.x - previous.x),
+      index: nodes.length,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: wrapAngle(
+        Math.atan2(target.z - previous.z, target.x - previous.x)
+          - previous.heading,
+      ),
+    })
+  }
+  if (termination === 'loop' && nodes.length >= 2) {
+    const previousIndex = nodes.length - 2
+    const previous = nodes[previousIndex]!
+    const approachDistance = clamp(
+      Math.hypot(first.x - previous.x, first.z - previous.z),
+      5,
+      20,
+    )
+    const approachX = first.x - Math.cos(first.heading) * approachDistance
+    const approachZ = first.z - Math.sin(first.heading) * approachDistance
+    const approachHeight = grid.sampleHeight(approachX, approachZ)
+    const prior = nodes[Math.max(0, previousIndex - 1)]!
+    const priorHeight = grid.sampleHeight(prior.x, prior.z)
+    if (
+      approachHeight != null
+      && priorHeight != null
+      && Math.abs(approachHeight - priorHeight)
+        / Math.max(1e-6, Math.hypot(approachX - prior.x, approachZ - prior.z))
+        <= maxGrade + 1e-6
+      && Math.abs(first.y - approachHeight) / approachDistance
+        <= maxGrade + 1e-6
+    ) {
+      previous.x = approachX
+      previous.z = approachZ
+      previous.y = approachHeight
+    }
+  }
+  const approachPrevious = nodes[Math.max(0, nodes.length - 2)]!
+  const approachHeading = Math.atan2(
+    first.z - approachPrevious.z,
+    first.x - approachPrevious.x,
+  )
+  const closureHeadingErrorRad = termination === 'loop'
+    ? Math.abs(wrapAngle(approachHeading - first.heading))
+    : 0
+  if (termination === 'loop') {
+    const close = nodes[nodes.length - 1]!
+    close.x = first.x
+    close.z = first.z
+    close.y = first.y
+    close.heading = first.heading
+  }
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]!
+    node.index = index
+    const previous = nodes[Math.max(0, index - 1)]!
+    const next = nodes[Math.min(nodes.length - 1, index + 1)]!
+    if (index === 0) {
+      node.heading = first.heading
+      node.headingDelta = 0
+    } else if (termination === 'loop' && index === nodes.length - 1) {
+      node.heading = first.heading
+      node.headingDelta = wrapAngle(node.heading - previous.heading)
+    } else {
+      node.heading = Math.atan2(next.z - previous.z, next.x - previous.x)
+      node.headingDelta = wrapAngle(node.heading - previous.heading)
+    }
+  }
+  let length = 0
+  for (let index = 1; index < nodes.length; index += 1) {
+    length += Math.hypot(
+      nodes[index]!.x - nodes[index - 1]!.x,
+      nodes[index]!.z - nodes[index - 1]!.z,
+    )
+  }
+  const closedError = termination === 'loop'
+    ? Math.hypot(
+        nodes[0]!.x - nodes[nodes.length - 1]!.x,
+        nodes[0]!.z - nodes[nodes.length - 1]!.z,
+      )
+    : 0
+  if (termination === 'loop' && (
+    closedError > 0.5
+    || closureHeadingErrorRad > Math.PI / 4
+  )) {
+    return {
+      result: route,
+      closed: false,
+      closureHeadingErrorRad,
+      failureReason: closureHeadingErrorRad > Math.PI / 4
+        ? 'loop-heading-discontinuity'
+        : 'loop-not-closed',
+    }
+  }
+  return {
+    result: {
+      ...route,
+      nodes,
+      length,
+      complete: true,
+      failureReason: termination === 'loop'
+        ? 'reached-route-start'
+        : 'reached-route-end',
+    },
+    closed: termination === 'loop',
+    closureHeadingErrorRad,
+    failureReason: null,
+  }
+}
+
 function waypointPassStats(
   nodes: ReadonlyArray<RoadTraceNode>,
   required: ReadonlyArray<Vec2>,
@@ -1123,6 +1008,94 @@ function waypointPassStats(
   return { passed, maxError }
 }
 
+function maxDistanceToGuide(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  guide: ReadonlyArray<Vec2>,
+): number {
+  if (!nodes.length || guide.length < 2) {
+    return 0
+  }
+  let maximum = 0
+  for (const node of nodes) {
+    let nearest = Number.POSITIVE_INFINITY
+    for (let index = 1; index < guide.length; index += 1) {
+      const start = guide[index - 1]!
+      const end = guide[index]!
+      const dx = end.x - start.x
+      const dz = end.z - start.z
+      const lengthSq = dx * dx + dz * dz
+      const factor = lengthSq > 1e-9
+        ? clamp(
+            ((node.x - start.x) * dx + (node.z - start.z) * dz) / lengthSq,
+            0,
+            1,
+          )
+        : 0
+      nearest = Math.min(
+        nearest,
+        Math.hypot(
+          node.x - (start.x + dx * factor),
+          node.z - (start.z + dz * factor),
+        ),
+      )
+    }
+    maximum = Math.max(maximum, nearest)
+  }
+  return maximum
+}
+
+function createGuideFallbackRoute(
+  grid: TerrainHeightGrid,
+  guide: ReadonlyArray<Vec2>,
+): RoadTraceResult {
+  const nodes: RoadTraceNode[] = []
+  for (let index = 0; index < guide.length; index += 1) {
+    const point = guide[index]!
+    const y = grid.sampleHeight(point.x, point.z)
+    if (y == null) {
+      return {
+        nodes,
+        length: 0,
+        complete: false,
+        failureReason: 'blocked',
+        rescueTurns: 0,
+      }
+    }
+    const previous = guide[Math.max(0, index - 1)]!
+    const next = guide[Math.min(guide.length - 1, index + 1)]!
+    const heading = index === 0
+      ? Math.atan2(next.z - point.z, next.x - point.x)
+      : Math.atan2(point.z - previous.z, point.x - previous.x)
+    nodes.push({
+      x: point.x,
+      z: point.z,
+      y,
+      heading,
+      index: nodes.length,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: nodes.length
+        ? wrapAngle(heading - nodes[nodes.length - 1]!.heading)
+        : 0,
+    })
+  }
+  let length = 0
+  for (let index = 1; index < nodes.length; index += 1) {
+    length += Math.hypot(
+      nodes[index]!.x - nodes[index - 1]!.x,
+      nodes[index]!.z - nodes[index - 1]!.z,
+    )
+  }
+  return {
+    nodes,
+    length,
+    complete: nodes.length >= 2,
+    failureReason: nodes.length >= 2 ? 'reached-guide-end' : 'guide-empty',
+    rescueTurns: 0,
+  }
+}
+
 /**
  * Unified waypoint road planner. Both strategies pass the same ordered
  * waypoint anchors, use Slow Roads terrain feel constraints for the final
@@ -1148,14 +1121,74 @@ export function planWaypointRoadRoute(
       shortestExpandedStates: 0,
     }
   }
-  const algorithmVersion = options.algorithmVersion ?? 1
-  if (options.strategy === 'seeded' && algorithmVersion >= 5) {
+  if (options.strategy === 'seeded') {
     const origin = waypoints[0]!
-    const guide = buildGlobalScenicGuide(grid, waypoints, {
+    const termination = options.termination
+    if (termination === 'dead-end' && waypoints.length === 1) {
+      return {
+        nodes: [],
+        length: 0,
+        complete: false,
+        failureReason: 'route-too-short',
+        rescueTurns: 0,
+        closed: false,
+        waypointCount: 1,
+        waypointsPassed: 0,
+        maxWaypointError: 0,
+        closureHeadingErrorRad: 0,
+        shortestExpandedStates: 0,
+        waypointsSkipped: 0,
+        skippedWaypointIndices: [],
+        waypointsAttempted: 0,
+        plannerMode: 'guided-global',
+        guideExpandedStates: 0,
+        maxGuideDeviation: 0,
+        unreachableWaypointIndex: null,
+      }
+    }
+    let guideWaypoints = waypoints
+    if (termination === 'loop' && waypoints.length === 1) {
+      const anchors = singlePointLoopAnchors(
+        grid,
+        origin,
+        options.seed,
+        options.stepLength,
+        SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+      )
+      if (!anchors) {
+        return {
+          nodes: [],
+          length: 0,
+          complete: false,
+          failureReason: 'single-point-loop-too-small',
+          rescueTurns: 0,
+          closed: false,
+          waypointCount: 1,
+          waypointsPassed: 0,
+          maxWaypointError: 0,
+          closureHeadingErrorRad: 0,
+          shortestExpandedStates: 0,
+          waypointsSkipped: 0,
+          skippedWaypointIndices: [],
+          waypointsAttempted: 0,
+          plannerMode: 'guided-global',
+          guideExpandedStates: 0,
+          maxGuideDeviation: 0,
+          unreachableWaypointIndex: null,
+        }
+      }
+      guideWaypoints = anchors
+    }
+    const guide = buildGlobalScenicGuide(grid, guideWaypoints, {
       seed: options.seed,
       stepLength: options.stepLength,
       pathDeviation: options.pathDeviation,
       margin: options.margin,
+      termination,
+      preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+      maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+      maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 0.9,
+      crossSlopeWeight: 18,
     })
     if (guide.failureReason || guide.points.length < 2) {
       return {
@@ -1179,73 +1212,112 @@ export function planWaypointRoadRoute(
         unreachableWaypointIndex: guide.unreachableWaypointIndex,
       }
     }
-    const traced = traceOfficialScenicGuidedRoad(
+    let traced = traceOfficialScenicGuidedRoad(
       grid,
       origin,
       options.seed,
       options.margin,
       {
-        algorithmVersion: 5,
-        requiredWaypoints: waypoints,
+        preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+        maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+        maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+        requiredWaypoints: guideWaypoints,
         waypointTolerance: options.waypointTolerance,
         guidePoints: guide.points,
         guideCorridorWidth: guide.corridorWidth,
+        guideTermination: termination,
       },
     )
+    if (!traced.complete) {
+      const fallbackTrace = createGuideFallbackRoute(grid, guide.points)
+      if (fallbackTrace.complete && fallbackTrace.nodes.length >= 2) {
+        const terrain = summarizeScenicRoadTerrain(
+          grid,
+          fallbackTrace.nodes,
+          {
+            preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+            maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+            maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+          },
+        )
+        traced = {
+          ...fallbackTrace,
+          officialReverts: 0,
+          antiTargetTriggers: 0,
+          turnOverflows: 0,
+          ...terrain,
+          steepReplacementSteps: 0,
+          waypointsSkipped: 0,
+          skippedWaypointIndices: [],
+          waypointsAttempted: Math.max(0, guideWaypoints.length - 1),
+          maxGuideDeviation: maxDistanceToGuide(
+            fallbackTrace.nodes,
+            guide.points,
+          ),
+        }
+      }
+    }
+    let terminationResult: {
+      result: RoadTraceResult
+      closed: boolean
+      closureHeadingErrorRad: number
+      failureReason: string | null
+    } | null = null
+    if (traced.complete && termination === 'loop') {
+      terminationResult = finalizeRouteTermination(
+        grid,
+        traced,
+        origin,
+        SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+        'loop',
+        options.waypointTolerance,
+      )
+    } else if (traced.complete && termination === 'dead-end') {
+      terminationResult = finalizeRouteTermination(
+        grid,
+        traced,
+        waypoints[waypoints.length - 1]!,
+        SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+        'dead-end',
+        options.waypointTolerance,
+      )
+    }
+    const result = terminationResult?.result ?? traced
+    const terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
+      preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+      maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+      maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+    })
     const stats = waypointPassStats(
-      traced.nodes,
+      result.nodes,
       waypoints,
       options.waypointTolerance,
     )
+    const failureReason = terminationResult?.failureReason
+      ?? result.failureReason
+    const complete = result.complete && !terminationResult?.failureReason
     return {
-      ...traced,
-      closed: false,
+      ...result,
+      ...terrain,
+      complete,
+      failureReason,
+      closed: terminationResult?.closed ?? false,
       waypointCount: waypoints.length,
       waypointsPassed: stats.passed,
       maxWaypointError: stats.maxError,
-      closureHeadingErrorRad: 0,
+      closureHeadingErrorRad: terminationResult?.closureHeadingErrorRad ?? 0,
       shortestExpandedStates: 0,
       waypointsSkipped: 0,
       skippedWaypointIndices: [],
       waypointsAttempted: Math.max(0, waypoints.length - 1),
       plannerMode: 'guided-global',
       guideExpandedStates: guide.expandedStates,
-      maxGuideDeviation: traced.maxGuideDeviation ?? 0,
-      unreachableWaypointIndex: traced.complete
+      maxGuideDeviation: maxDistanceToGuide(result.nodes, guide.points),
+      unreachableWaypointIndex: complete
         ? null
-        : (traced.skippedWaypointIndices?.[0] ?? null),
-    }
-  }
-  if (options.strategy === 'seeded' && algorithmVersion >= 2) {
-    const origin = waypoints[0]!
-    const routeWaypoints = algorithmVersion >= 4
-      ? waypoints
-      : [origin]
-    const traced = traceOfficialScenicRoad(
-      grid,
-      origin,
-      options.seed,
-      options.margin,
-      {
-        algorithmVersion: options.algorithmVersion,
-        requiredWaypoints: routeWaypoints,
-        waypointTolerance: options.waypointTolerance,
-      },
-    )
-    const stats = waypointPassStats(
-      traced.nodes,
-      routeWaypoints,
-      options.waypointTolerance,
-    )
-    return {
-      ...traced,
-      closed: false,
-      waypointCount: routeWaypoints.length,
-      waypointsPassed: stats.passed,
-      maxWaypointError: stats.maxError,
-      closureHeadingErrorRad: 0,
-      shortestExpandedStates: 0,
-      plannerMode: 'official',
+        : (stats.passed < waypoints.length
+            ? Math.min(waypoints.length - 1, stats.passed + 1)
+            : null),
     }
   }
   const closed = options.termination === 'loop'
@@ -1303,6 +1375,21 @@ export function planWaypointRoadRoute(
   const anchors: Vec2[] = waypoints.map((point) => ({ ...point }))
 
   if (anchors.length === 1) {
+    if (options.termination === 'dead-end') {
+      return {
+        nodes: [],
+        length: 0,
+        complete: false,
+        failureReason: 'route-too-short',
+        rescueTurns: 0,
+        closed: false,
+        waypointCount: 1,
+        waypointsPassed: 0,
+        maxWaypointError: 0,
+        closureHeadingErrorRad: 0,
+        shortestExpandedStates: 0,
+      }
+    }
     const tail = traceRoadPath(grid, {
       startX: anchors[0]!.x,
       startZ: anchors[0]!.z,
@@ -1331,30 +1418,24 @@ export function planWaypointRoadRoute(
     }
   }
 
-  let guide: Vec2[]
-  let shortestExpandedStates = 0
-  if (options.strategy === 'shortest') {
-    const shortest = planShortestGuide(grid, anchors, closed, options)
-    shortestExpandedStates = shortest.expanded
-    if (shortest.error || !shortest.guide.length) {
-      return {
-        nodes: [],
-        length: 0,
-        complete: false,
-        failureReason: shortest.error ?? 'shortest-route-not-found',
-        rescueTurns: 0,
-        closed: false,
-        waypointCount: waypoints.length,
-        waypointsPassed: 0,
-        maxWaypointError: 0,
-        closureHeadingErrorRad: 0,
-        shortestExpandedStates,
-      }
+  const shortest = planShortestGuide(grid, anchors, closed, options)
+  const shortestExpandedStates = shortest.expanded
+  if (shortest.error || !shortest.guide.length) {
+    return {
+      nodes: [],
+      length: 0,
+      complete: false,
+      failureReason: shortest.error ?? 'shortest-route-not-found',
+      rescueTurns: 0,
+      closed: false,
+      waypointCount: waypoints.length,
+      waypointsPassed: 0,
+      maxWaypointError: 0,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates,
     }
-    guide = shortest.guide
-  } else {
-    guide = buildSeededGuide(grid, anchors, closed, options)
   }
+  const guide = shortest.guide
 
   const traced = traceGuide(grid, guide, waypoints, options)
   let result = traced.result
@@ -1381,7 +1462,7 @@ export function planWaypointRoadRoute(
       last.heading = first.heading
       last.headingDelta = wrapAngle(last.heading - previous.heading)
     }
-  } else if (!closed) {
+  } else if (options.termination === 'boundary') {
     result = appendBoundaryTail(grid, result, options)
   }
   const stats = waypointPassStats(result.nodes, waypoints, options.waypointTolerance)
@@ -1402,6 +1483,10 @@ export function planWaypointRoadRoute(
   } else if (closed && closedError > 0.5) {
     complete = false
     failureReason = 'loop-not-closed'
+  } else if (complete && closed) {
+    failureReason = 'reached-route-start'
+  } else if (complete && options.termination === 'dead-end') {
+    failureReason = 'reached-route-end'
   }
   return {
     ...result,
@@ -1416,17 +1501,3 @@ export function planWaypointRoadRoute(
   }
 }
 
-export function buildSinglePointSeededLoop(
-  grid: TerrainHeightGrid,
-  origin: RoadWaypoint,
-  seed: number,
-  stepLength = 8,
-): RoadWaypoint[] | null {
-  const anchors = singlePointLoopAnchors(
-    grid,
-    { x: origin.x, z: origin.z },
-    seed,
-    stepLength,
-  )
-  return anchors?.map((point) => ({ x: point.x, z: point.z })) ?? null
-}

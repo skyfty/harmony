@@ -28,13 +28,13 @@ export const SLOWROADS_HILLS_ROAD_PROFILE = Object.freeze({
   maxSteps: 32_768,
 })
 
-export const SLOWROADS_LOWLAND_ROAD_CONSTRAINTS = Object.freeze({
+export const SLOWROADS_SCENIC_ROAD_CONSTRAINTS = Object.freeze({
   lowlandStartPercentile: 0.4,
   lowlandPreferenceCeiling: 0.7,
   lowlandCoveragePercentile: 0.65,
   preferredGrade: 0.16,
-  maxGrade: 0.22,
-  maxCrossSlope: 0.35,
+  maxGrade: 0.28,
+  maxCrossSlope: 0.45,
   startGraceDistance: 500,
 })
 
@@ -49,7 +49,6 @@ export interface ScenicWaypointPlacement {
 }
 
 export interface OfficialScenicRoadOptions {
-  algorithmVersion?: number
   lowlandStartPercentile?: number
   lowlandPreferenceCeiling?: number
   lowlandCoveragePercentile?: number
@@ -65,6 +64,7 @@ export interface OfficialScenicRoadOptions {
   guidePoints?: ReadonlyArray<RoadWaypoint>
   guideCorridorWidth?: number
   wiggleScale?: number
+  guideTermination?: 'loop' | 'boundary' | 'dead-end'
 }
 
 export interface ScenicTerrainElevationProfile {
@@ -121,7 +121,6 @@ const TURN_TRACKERS: ReadonlyArray<TurnTracker> = [
 ]
 
 const TRACKER_TOLERANCE_FACTOR = 1
-const MAX_RESTART_ATTEMPTS = 4
 
 function resolveTerrainConstraints(
   options: OfficialScenicRoadOptions,
@@ -129,37 +128,37 @@ function resolveTerrainConstraints(
   return {
     lowlandStartPercentile: clamp(
       options.lowlandStartPercentile
-        ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandStartPercentile,
+        ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandStartPercentile,
       0,
       0.95,
     ),
     lowlandPreferenceCeiling: clamp(
       options.lowlandPreferenceCeiling
-        ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
+        ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
       0.05,
       1,
     ),
     lowlandCoveragePercentile: clamp(
       options.lowlandCoveragePercentile
-        ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandCoveragePercentile,
+        ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandCoveragePercentile,
       0.05,
       1,
     ),
     preferredGrade: Math.max(
       0.01,
-      options.preferredGrade ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.preferredGrade,
+      options.preferredGrade ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
     ),
     maxGrade: Math.max(
       0.01,
-      options.maxGrade ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade,
+      options.maxGrade ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
     ),
     maxCrossSlope: Math.max(
       0.01,
-      options.maxCrossSlope ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope,
+      options.maxCrossSlope ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
     ),
     startGraceDistance: Math.max(
       0,
-      options.startGraceDistance ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.startGraceDistance,
+      options.startGraceDistance ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.startGraceDistance,
     ),
   }
 }
@@ -410,13 +409,13 @@ export function buildScenicTerrainElevationProfile(
   const constraints = {
     lowlandStartPercentile:
       options.lowlandStartPercentile
-      ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandStartPercentile,
+      ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandStartPercentile,
     lowlandPreferenceCeiling:
       options.lowlandPreferenceCeiling
-      ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
+      ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
     lowlandCoveragePercentile:
       options.lowlandCoveragePercentile
-      ?? SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.lowlandCoveragePercentile,
+      ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandCoveragePercentile,
   }
   const sampleCount = grid.cols * grid.rows
   const histogram = new Uint32Array(512)
@@ -490,6 +489,26 @@ export function buildScenicTerrainElevationProfile(
     preferenceCeilingHeight: percentileHeight(constraints.lowlandPreferenceCeiling),
     percentileAtHeight,
   }
+}
+
+export function summarizeScenicRoadTerrain(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+  options: OfficialScenicRoadOptions = {},
+): Pick<
+  OfficialScenicRoadResult,
+  | 'averageElevationPercentile'
+  | 'maxElevationPercentile'
+  | 'maxForwardGrade'
+  | 'maxCrossSlope'
+  | 'lowlandCoverageFraction'
+> {
+  return summarizeScenicRoute(
+    grid,
+    nodes.map((node) => ({ ...node })),
+    buildScenicTerrainElevationProfile(grid, options),
+    resolveTerrainConstraints(options),
+  )
 }
 
 /**
@@ -992,7 +1011,6 @@ function traceOnce(
   centerZ: number,
   seed: number,
   margin: number,
-  algorithmVersion: number,
   terrainProfile: ScenicTerrainElevationProfile,
   constraints: ResolvedTerrainConstraints,
   requiredWaypoints: ReadonlyArray<Vec2>,
@@ -1002,6 +1020,7 @@ function traceOnce(
   guide: GuideData | null = null,
   wiggleScale = 1,
   requireAllWaypoints = false,
+  guideTermination: 'loop' | 'boundary' | 'dead-end' = 'boundary',
 ): TraceOnceResult {
   const startY = grid.sampleHeight(origin.x, origin.z)
   if (startY == null) {
@@ -1017,6 +1036,15 @@ function traceOnce(
   }
 
   const profile = SLOWROADS_HILLS_ROAD_PROFILE
+  const effectiveMaxSteps = guide
+    ? Math.min(
+        profile.maxSteps,
+        Math.max(
+          512,
+          Math.ceil(guide.totalLength / profile.stepLength * 1.5) + 256,
+        ),
+      )
+    : profile.maxSteps
   let x = origin.x
   let z = origin.z
   let y = startY - profile.roadSink
@@ -1086,7 +1114,7 @@ function traceOnce(
     }
   }
 
-  for (let stepIndex = 0; stepIndex < profile.maxSteps; stepIndex += 1) {
+  for (let stepIndex = 0; stepIndex < effectiveMaxSteps; stepIndex += 1) {
     const tail = nodes[nodes.length - 1]!
     while (
       waypointIndex >= 1
@@ -1120,7 +1148,11 @@ function traceOnce(
       ) <= Math.max(profile.stepLength * 2, waypointTolerance)
     ) {
       complete = true
-      failureReason = 'reached-terrain-boundary'
+      failureReason = guideTermination === 'loop'
+        ? 'reached-route-start'
+        : guideTermination === 'dead-end'
+          ? 'reached-route-end'
+          : 'reached-terrain-boundary'
       break
     }
     const straightX = x + Math.cos(heading) * profile.stepLength
@@ -1138,7 +1170,7 @@ function traceOnce(
 
     targetDirection = updateTargetDirection(tail, heading, centerX, centerZ)
     let lowlandWeight = 0
-    if (algorithmVersion >= 3) {
+    {
       const boundaryWeight = 0.35 + 0.5 * smoothstep(5_000, 15_000, length)
       targetDirection = normalize(
         targetDirection.x * (1 - boundaryWeight) + outwardDirection.x * boundaryWeight,
@@ -1459,7 +1491,7 @@ function traceOnce(
     let nextZ = z + Math.sin(chosenHeading) * profile.stepLength
     let nextY = grid.sampleHeight(nextX, nextZ)
     let chosenBT = smoothedB
-    if (algorithmVersion >= 3) {
+    {
       const candidateMaxGrade = guide
         ? constraints.maxGrade
         : Math.min(constraints.maxGrade, constraints.preferredGrade)
@@ -1705,15 +1737,15 @@ function traceOnce(
     }
   }
 
-  if (!failureReason && nodes.length >= profile.maxSteps) {
-    complete = algorithmVersion < 3
+  if (!failureReason && nodes.length >= effectiveMaxSteps) {
+    complete = false
     failureReason = 'reached-step-limit'
   }
   compensateProfile(
     nodes,
     profile,
     grid,
-    algorithmVersion >= 3 ? constraints : null,
+    constraints,
   )
   length = 0
   for (let index = 0; index < nodes.length; index += 1) {
@@ -1763,109 +1795,7 @@ function traceOnce(
 }
 
 /**
- * Trace the official Hills midline from a required start point. The terrain
- * center acts as the generator's world origin/target ring. Version 2 is the
- * pure official trace; version 3 adds the relative lowland and grade limits.
- */
-export function traceOfficialScenicRoad(
-  grid: TerrainHeightGrid,
-  origin: Vec2,
-  seed: number,
-  margin: number = SLOWROADS_HILLS_ROAD_PROFILE.boundaryMargin,
-  options: OfficialScenicRoadOptions = {},
-): OfficialScenicRoadResult {
-  const centerX = (grid.minX + grid.maxX) * 0.5
-  const centerZ = (grid.minZ + grid.maxZ) * 0.5
-  const algorithmVersion = Math.max(2, Math.round(options.algorithmVersion ?? 2))
-  const profile = buildScenicTerrainElevationProfile(grid, options)
-  const constraints = resolveTerrainConstraints(options)
-  const requiredWaypoints: Vec2[] = algorithmVersion >= 4
-    ? (options.requiredWaypoints ?? [origin]).map((point) => ({ x: point.x, z: point.z }))
-    : [{ x: origin.x, z: origin.z }]
-  if (!requiredWaypoints.length) {
-    requiredWaypoints.push({ x: origin.x, z: origin.z })
-  }
-  const diagonal = Math.hypot(grid.maxX - grid.minX, grid.maxZ - grid.minZ)
-  const waypointTolerance = Math.max(1, options.waypointTolerance ?? 4)
-  const waypointNoProgressDistance = Math.max(
-    250,
-    options.waypointNoProgressDistance ?? Math.max(2_500, diagonal * 0.05),
-  )
-  const waypointAttemptDistance = Math.max(
-    waypointNoProgressDistance,
-    options.waypointAttemptDistance ?? Math.max(8_000, diagonal * 0.2),
-  )
-  let last: OfficialScenicRoadResult = emptyResult('official-generator-restart')
-  for (let attempt = 0; attempt < MAX_RESTART_ATTEMPTS; attempt += 1) {
-    const attemptSeed = (
-      seed
-      + Math.imul(attempt + 1, 0x9e3779b1)
-      + Math.floor(hashUnit(seed, attempt, 73) * 0xffff)
-    ) >>> 0
-    const traced = traceOnce(
-      grid,
-      origin,
-      centerX,
-      centerZ,
-      attemptSeed,
-      margin,
-      algorithmVersion,
-      profile,
-      constraints,
-      requiredWaypoints,
-      waypointTolerance,
-      waypointNoProgressDistance,
-      waypointAttemptDistance,
-    )
-    last = traced.result
-    if (!traced.restart) {
-      if (
-        algorithmVersion >= 4
-        && requiredWaypoints.length > 1
-        && !last.complete
-      ) {
-        const fallback = traceOfficialScenicRoad(
-          grid,
-          origin,
-          seed,
-          margin,
-          {
-            ...options,
-            algorithmVersion: 3,
-            requiredWaypoints: [{ x: origin.x, z: origin.z }],
-          },
-        )
-        if (fallback.complete) {
-          const passed = resolveWaypointPassIndices(
-            fallback.nodes,
-            requiredWaypoints,
-            waypointTolerance,
-          )
-          const skippedWaypointIndices: number[] = []
-          for (let index = 1; index < requiredWaypoints.length; index += 1) {
-            if (!passed.has(index)) {
-              skippedWaypointIndices.push(index)
-            }
-          }
-          return {
-            ...fallback,
-            skippedWaypointIndices,
-            waypointsSkipped: skippedWaypointIndices.length,
-            waypointsAttempted: Math.max(
-              last.waypointsAttempted,
-              Math.max(0, requiredWaypoints.length - 1),
-            ),
-          }
-        }
-      }
-      return last
-    }
-  }
-  return last
-}
-
-/**
- * Version-5 guided tracer. A slope-feasible global guide supplies the route
+ * Guided scenic tracer. A slope-feasible global guide supplies the route
  * topology, while the Hills probe/turn model still produces the final nodes.
  * Every waypoint is mandatory and the wiggle amplitude is reduced only when
  * the full-strength curve cannot satisfy the hard terrain limits.
@@ -1913,7 +1843,6 @@ export function traceOfficialScenicGuidedRoad(
       centerZ,
       seed,
       margin,
-      5,
       profile,
       constraints,
       requiredWaypoints,
@@ -1923,6 +1852,7 @@ export function traceOfficialScenicGuidedRoad(
       guide,
       wiggleScale,
       true,
+      options.guideTermination ?? 'boundary',
     )
     last = traced.result
     if (

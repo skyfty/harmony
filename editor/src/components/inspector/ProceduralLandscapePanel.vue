@@ -9,11 +9,11 @@ import {
   createProceduralLandscapeComponentState,
 } from '@schema/components'
 import {
-  PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION,
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
   type ProceduralLandscapeRoadStrategy,
 } from '@schema/proceduralLandscape/config'
+import { SLOWROADS_SCENIC_ROAD_CONSTRAINTS } from '@schema/proceduralLandscape/officialScenicRoad'
 import {
   getProceduralLandscapeStats,
   type ProceduralLandscapeRuntimeStats,
@@ -143,6 +143,15 @@ const roadWaypoints = computed(() => propsValue.value?.road.waypoints ?? [])
 const roadActionMessage = ref('')
 const routeStrategy = computed(() => propsValue.value?.road.routing.strategy ?? 'seeded')
 const routeTermination = computed(() => propsValue.value?.road.routing.termination ?? 'boundary')
+const scenicPreferredPercent = Math.round(
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade * 100,
+)
+const scenicMaxGradePercent = Math.round(
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade * 100,
+)
+const scenicMaxCrossPercent = Math.round(
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 100,
+)
 const roadPathEditing = computed(
   () => componentEnabled.value && activeBuildTool.value === 'landscapeRoad' && Boolean(landscapeComponent.value),
 )
@@ -159,10 +168,6 @@ const roadStale = computed(() => {
   if (
     generated.strategy !== current.routing.strategy
     || generated.termination !== current.routing.termination
-    || (
-      generated.strategy === 'seeded'
-      && generated.algorithmVersion !== PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION
-    )
     || generated.seed !== propsValue.value?.seed
     || generated.waypointTolerance !== current.waypointTolerance
     || generated.pathDeviation !== current.pathDeviation
@@ -191,11 +196,20 @@ const roadStatusText = computed(() => {
     : stats.roadPlannerMode === 'guided-global'
       ? '官方 Hills · 全局坡限引导'
       : '低地 Hills 选线'
-  const termination = propsValue.value?.road.generatedRoute?.termination === 'boundary' ? '到边界' : '闭环'
+  const generatedTermination = propsValue.value?.road.generatedRoute?.termination
+  const termination = generatedTermination === 'loop'
+    ? '首尾相接'
+    : generatedTermination === 'dead-end'
+      ? '单路'
+      : '到边界'
   const state = stats.roadClosed && stats.roadComplete
     ? '闭环完成'
-    : stats.roadComplete
-      ? '已完成'
+    : stats.roadComplete && generatedTermination === 'dead-end'
+      ? '单路完成'
+      : stats.roadComplete && generatedTermination === 'boundary'
+        ? '已完成到边界'
+        : stats.roadComplete
+          ? '已完成'
       : '未完成'
   const official = stats.roadStrategy === 'seeded'
     ? ` · 海拔均值 P${Math.round(stats.roadAverageElevationPercentile * 100)} / 最高 P${Math.round(stats.roadMaxElevationPercentile * 100)} · 低地 ${Math.round(stats.roadLowlandCoverageFraction * 100)}% · 纵坡 ${Math.round(stats.roadMaxForwardGrade * 100)}% · 横坡 ${Math.round(stats.roadMaxCrossSlope * 100)}%${stats.roadPlannerMode === 'guided-global' ? '' : ` · 陡坡改线 ${stats.roadSteepReplacementSteps}`} · 曲率 ${stats.roadTurnDegreesPerKm.toFixed(1)}°/km`
@@ -218,6 +232,16 @@ const roadFailureText = computed(() => {
       && propsValue.value?.road.generatedRoute?.termination === 'boundary'
       && runtimeStats.value?.roadComplete
     )
+    || (
+      reason === 'reached-route-end'
+      && propsValue.value?.road.generatedRoute?.termination === 'dead-end'
+      && runtimeStats.value?.roadComplete
+    )
+    || (
+      reason === 'reached-route-start'
+      && propsValue.value?.road.generatedRoute?.termination === 'loop'
+      && runtimeStats.value?.roadComplete
+    )
   ) {
     return ''
   }
@@ -232,20 +256,23 @@ const roadFailureText = computed(() => {
     'waypoint-missed': '生成中心线未能以规定容差经过全部途径点',
     'loop-not-closed': '闭环终点未能回到 P1',
     'loop-heading-discontinuity': '闭环处切线不连续，请调整途径点或切换选线策略',
+    'loop-termination-distance': '闭环回程未到达 P1 容差范围',
+    'loop-termination-grade': '闭环最后连接段超过纵坡限制',
     'no-waypoints': '请先添加至少一个途径点',
     'start-too-close-to-boundary': '起点距离地形边界过近，无法按官方规则向外延伸',
     'official-generator-restart': '官方选线连续触发回退，无法从当前 P1 稳定生成道路',
-    'road-forward-grade-limit': '路线未满足 22% 纵坡上限',
-    'road-cross-slope-limit': '路线未满足 35% 局部横坡上限',
-    'blocked-by-forward-grade': '道路前方没有满足 22% 纵坡上限的方向',
-    'blocked-by-cross-slope': '道路前方没有满足 35% 局部横坡上限的方向',
+    'road-forward-grade-limit': `路线未满足 ${scenicMaxGradePercent}% 纵坡上限`,
+    'road-cross-slope-limit': `路线未满足 ${scenicMaxCrossPercent}% 局部横坡上限`,
+    'blocked-by-forward-grade': `道路前方没有满足 ${scenicMaxGradePercent}% 纵坡上限的方向`,
+    'blocked-by-cross-slope': `道路前方没有满足 ${scenicMaxCrossPercent}% 局部横坡上限的方向`,
     'blocked-by-guide-corridor': '道路无法在自然弯曲范围内继续跟随可行骨架',
-    'waypoint-unreachable': '存在无法在 22% 坡度限制内到达的途径点',
+    'waypoint-unreachable': `存在无法在 ${scenicMaxGradePercent}% 坡度限制内到达的途径点`,
     'boundary-unreachable': '最后一个途径点之后无法在坡度限制内到达地形边界',
     'global-guide-budget-exceeded': '全局坡限搜索超过状态预算',
     'guided-guide-prepare-failed': '全局可行骨架无法平滑成连续道路',
     'guided-official-blocked': '官方 Hills 曲线无法在骨架走廊内满足坡度限制',
     'guide-empty': '全局选线骨架为空',
+    'route-too-short': '单路模式至少需要一个终点途径点',
   }
   return labels[reason] ?? `道路生成失败：${reason}`
 })
@@ -292,12 +319,32 @@ function handleRoadStrategy(value: ProceduralLandscapeRoadStrategy): void {
   })
 }
 
+function handleRoadTermination(
+  value: 'loop' | 'boundary' | 'dead-end',
+): void {
+  patchGroup('road', {
+    routing: {
+      ...(propsValue.value?.road.routing ?? {}),
+      termination: value,
+    },
+  })
+}
+
 function handleGenerateRoad(): void {
   const nodeId = selectedNodeId.value
   if (!nodeId || !componentEnabled.value) {
     return
   }
-  const result = sceneStore.generateProceduralLandscapeRoad(nodeId)
+  let result: ReturnType<typeof sceneStore.generateProceduralLandscapeRoad>
+  try {
+    result = sceneStore.generateProceduralLandscapeRoad(nodeId)
+  } catch (error) {
+    console.error('Failed to generate procedural landscape road', error)
+    roadActionMessage.value = `公路生成异常：${
+      error instanceof Error ? error.message : String(error)
+    }`
+    return
+  }
   if (!result.accepted) {
     const unreachablePoint = result.unreachableWaypointIndex == null
       ? null
@@ -308,17 +355,22 @@ function handleGenerateRoad(): void {
       'start-outside-terrain': 'P1 不在地形范围内，已保留上一版公路。',
       'start-too-close-to-boundary': 'P1 距地形边界过近，已保留上一版公路。',
       'official-generator-restart': '官方选线连续回退，无法稳定生成；已保留上一版公路。',
-      'road-forward-grade-limit': '新路线超过 22% 纵坡上限，已保留上一版公路。',
-      'road-cross-slope-limit': '新路线经过过陡的横向坡面，已保留上一版公路。',
-      'blocked-by-forward-grade': '周边地形均超过 22% 纵坡上限，已保留上一版公路。',
-      'blocked-by-cross-slope': '周边地形均超过 35% 局部横坡上限，已保留上一版公路。',
+      'road-forward-grade-limit': `新路线超过 ${scenicMaxGradePercent}% 纵坡上限，已保留上一版公路。`,
+      'road-cross-slope-limit': `新路线超过 ${scenicMaxCrossPercent}% 局部横坡上限，已保留上一版公路。`,
+      'blocked-by-forward-grade': `周边地形均超过 ${scenicMaxGradePercent}% 纵坡上限，已保留上一版公路。`,
+      'blocked-by-cross-slope': `周边地形均超过 ${scenicMaxCrossPercent}% 局部横坡上限，已保留上一版公路。`,
       'waypoint-unreachable': unreachablePoint
-        ? `${unreachablePoint} 无法在 22% 坡度限制内到达，已保留上一版公路。`
-        : '有途径点无法在 22% 坡度限制内到达，已保留上一版公路。',
+        ? `${unreachablePoint} 无法在 ${scenicMaxGradePercent}% 坡度限制内到达，已保留上一版公路。`
+        : `有途径点无法在 ${scenicMaxGradePercent}% 坡度限制内到达，已保留上一版公路。`,
       'boundary-unreachable': '最后途径点之后无法在坡度限制内到达边界，已保留上一版公路。',
       'global-guide-budget-exceeded': '全局坡限搜索超过预算，已保留上一版公路。',
       'guided-guide-prepare-failed': '全局骨架无法平滑成连续道路，已保留上一版公路。',
       'guided-official-blocked': '官方 Hills 曲线无法在可行骨架内满足坡度限制，已保留上一版公路。',
+      'loop-not-closed': '闭环回程无法在坡度限制内连接 P1，已保留上一版公路。',
+      'loop-heading-discontinuity': '闭环处转角过大，已保留上一版公路。',
+      'loop-termination-distance': '闭环回程未到达 P1，已保留上一版公路。',
+      'loop-termination-grade': '闭环最后连接段坡度过陡，已保留上一版公路。',
+      'route-too-short': '单路模式至少需要一个终点途径点。',
     }
     roadActionMessage.value = labels[result.failureReason ?? '']
       ?? `公路生成失败（${result.failureReason ?? 'unknown'}），已保留上一版公路。`
@@ -406,6 +458,8 @@ const roadPathBlock = computed<FieldBlock>(() => ({
   title: '途径约束',
   hint: routeTermination.value === 'loop'
     ? '按顺序经过全部途径点，并自动回到 P1；单点闭环由种子生成自然路线。'
+    : routeTermination.value === 'dead-end'
+      ? '按顺序经过全部途径点，并在最后一个途径点结束，不追加边界段。'
     : routeStrategy.value === 'seeded'
       ? 'P1 是起点，P2…Pn 全部按顺序经过；点击不满足低地/缓坡条件时会在 500m 内自动吸附，无法安全到达时生成失败并保留旧路。'
       : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界。',
@@ -871,6 +925,30 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               @click="handleRoadStrategy('shortest')"
             >最短路径</button>
           </div>
+          <div class="pl-subtitle">结束方式</div>
+          <div class="pl-choice-row">
+            <button
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': routeTermination === 'loop' }"
+              :disabled="!componentEnabled"
+              @click="handleRoadTermination('loop')"
+            >首尾相接</button>
+            <button
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': routeTermination === 'boundary' }"
+              :disabled="!componentEnabled"
+              @click="handleRoadTermination('boundary')"
+            >延伸到边界</button>
+            <button
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': routeTermination === 'dead-end' }"
+              :disabled="!componentEnabled"
+              @click="handleRoadTermination('dead-end')"
+            >单路</button>
+          </div>
           <div v-if="roadWaypoints.length" class="pl-road-path">
             <v-virtual-scroll
               :items="roadWaypoints"
@@ -898,9 +976,6 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
                 </div>
               </template>
             </v-virtual-scroll>
-          </div>
-          <div v-if="roadStale" class="pl-hint pl-hint--stale">
-            {{ roadHasGeneratedResult ? '选线版本、起点或参数已变化，点击“生成公路”应用低地 Hills 逻辑。' : '尚未生成公路，点击“生成公路”开始。' }}
           </div>
           <div v-if="roadFailureText" class="pl-hint pl-hint--error">{{ roadFailureText }}</div>
 
