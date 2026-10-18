@@ -755,33 +755,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             :disabled="!componentEnabled"
             @update:model-value="handleDemSampleStepChange"
           />
-          <div v-if="runtimeStats?.demError" class="pl-hint pl-hint--error">{{ runtimeStats.demError }}</div>
-          <div v-else-if="runtimeStats?.demStatus === 'ready'" class="pl-hint">
-            网格构建 {{ runtimeStats.demBuildMs.toFixed(0) }}ms · 采样步长 {{ runtimeStats.demSampleStep }}×
-            <template v-if="runtimeStats.demMeshBytes > 0">
-              · 几何 {{ (runtimeStats.demMeshBytes / 1048576).toFixed(0) }}MB
-            </template>
-          </div>
-          <div v-if="runtimeStats?.demTransformWarning" class="pl-hint pl-hint--error">
-            {{ runtimeStats.demTransformWarning }}
-          </div>
-          <div v-if="runtimeStats" class="pl-stats">
-            <div>全图森林 {{ runtimeStats.worldForestInstances.toLocaleString() }} 棵 · 生成 {{ runtimeStats.worldForestBuildMs.toFixed(0) }}ms</div>
-            <div>近树 3D {{ runtimeStats.nearTreeInstances.toLocaleString() }} 棵</div>
-          </div>
-          <div v-if="runtimeStats && runtimeStats.roadbedHalfWidth > 0" class="pl-stats">
-            <div>
-              路基半宽 {{ runtimeStats.roadbedHalfWidth.toFixed(1) }}m · 边坡 {{ runtimeStats.roadbedSideWidth.toFixed(1) }}m
-              · {{ runtimeStats.roadbedTriangleCount.toLocaleString() }} 三角形
-            </div>
-            <div>
-              最大横坡 {{ runtimeStats.roadbedCrossSlopeMax.toFixed(2) }} ·
-              最大挖填 {{ runtimeStats.roadbedMaxCutFill.toFixed(1) }}m ·
-              外缘误差 {{ runtimeStats.roadbedOuterError.toFixed(2) }}m ·
-              粗地形遮挡 {{ runtimeStats.roadbedOcclusionCount }}/{{ runtimeStats.roadbedAuditSamples }}
-            </div>
-          </div>
-          <div v-if="waterBuriedHint" class="pl-hint">{{ waterBuriedHint }}</div>
+
         </div>
 
         <!-- 生成 -->
@@ -864,13 +838,11 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               :class="{ 'pl-choice--active': roadPathEditing }"
               :disabled="!componentEnabled"
               @click="handleToggleRoadPathEditing"
-            >{{ roadPathEditing ? '结束编辑' : '编辑途径点' }}</button>
-            <span class="pl-road-path__count">{{ roadWaypoints.length }} 个途径点</span>
+            >{{ roadPathEditing ? '结束编辑' : '编辑' }}</button>
             <v-btn
               size="small"
               color="primary"
               variant="flat"
-              prepend-icon="mdi-road-variant-plus"
               :disabled="!componentEnabled"
               @click="handleGenerateRoad"
             >{{ roadHasGeneratedResult ? '重新生成公路' : '生成公路' }}</v-btn>
@@ -898,19 +870,6 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               :disabled="!componentEnabled"
               @click="handleRoadStrategy('shortest')"
             >最短路径</button>
-          </div>
-          <div class="pl-hint">
-            {{ routeStrategy === 'seeded'
-              ? '保留官方 Hills 弯道，同时低地优先、避开陡坡：16% 缓坡目标，22% 纵坡上限。'
-              : '按坡度、横向起伏、转弯和距离寻找地形代价最低路线。' }}
-          </div>
-          <div class="pl-hint">
-            {{ routeTermination === 'loop'
-              ? '旧闭环快照已过期；重新生成后会切换为开放式到边界。'
-              : '本期固定为开放式道路，生成后一直延伸到地形边界。' }}
-          </div>
-          <div v-if="roadWaypoints.length > 64" class="pl-hint">
-            控制点较多，编号仅在悬停或选中时显示。
           </div>
           <div v-if="roadWaypoints.length" class="pl-road-path">
             <v-virtual-scroll
@@ -943,12 +902,8 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           <div v-if="roadStale" class="pl-hint pl-hint--stale">
             {{ roadHasGeneratedResult ? '选线版本、起点或参数已变化，点击“生成公路”应用低地 Hills 逻辑。' : '尚未生成公路，点击“生成公路”开始。' }}
           </div>
-          <div v-if="roadStatusText" class="pl-hint">{{ roadStatusText }}</div>
           <div v-if="roadFailureText" class="pl-hint pl-hint--error">{{ roadFailureText }}</div>
-          <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
-          <div v-if="!roadWaypoints.length" class="pl-hint">
-            可直接生成：系统会在地形中心附近自动选择低缓 P1；之后可继续添加 P2…Pn 作为顺序途径点。
-          </div>
+
           <div class="pl-road-style">
             <div class="pl-subtitle">路型</div>
             <div class="pl-choice-row">
@@ -962,7 +917,6 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
                 @click="handleRoadWidthPreset(preset.width)"
               >{{ preset.label }}</button>
             </div>
-            <div class="pl-hint">{{ roadStyleHint }}</div>
           </div>
           <template v-for="(block, blockIndex) in roadBlocks" :key="`road-${blockIndex}`">
             <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>
