@@ -175,12 +175,22 @@ const roadStale = computed(() => {
     return !live || Math.abs(point.x - live.x) > 1e-6 || Math.abs(point.z - live.z) > 1e-6
   })
 })
+const roadSkippedWaypointIndices = computed(
+  () => new Set(runtimeStats.value?.roadSkippedWaypointIndices ?? []),
+)
+function isRoadWaypointSkipped(index: number): boolean {
+  return index > 0 && roadSkippedWaypointIndices.value.has(index)
+}
 const roadStatusText = computed(() => {
   const stats = runtimeStats.value
   if (!stats || stats.roadNodeCount < 2 || stats.roadLength <= 0) {
     return ''
   }
-  const strategy = stats.roadStrategy === 'shortest' ? '最短路径' : '低地 Hills 选线'
+  const strategy = stats.roadStrategy === 'shortest'
+    ? '最短路径'
+    : stats.roadPlannerMode === 'guided-global'
+      ? '官方 Hills · 全局坡限引导'
+      : '低地 Hills 选线'
   const termination = propsValue.value?.road.generatedRoute?.termination === 'boundary' ? '到边界' : '闭环'
   const state = stats.roadClosed && stats.roadComplete
     ? '闭环完成'
@@ -188,9 +198,15 @@ const roadStatusText = computed(() => {
       ? '已完成'
       : '未完成'
   const official = stats.roadStrategy === 'seeded'
-    ? ` · 海拔均值 P${Math.round(stats.roadAverageElevationPercentile * 100)} / 最高 P${Math.round(stats.roadMaxElevationPercentile * 100)} · 低地 ${Math.round(stats.roadLowlandCoverageFraction * 100)}% · 纵坡 ${Math.round(stats.roadMaxForwardGrade * 100)}% · 横坡 ${Math.round(stats.roadMaxCrossSlope * 100)}% · 陡坡改线 ${stats.roadSteepReplacementSteps} · 曲率 ${stats.roadTurnDegreesPerKm.toFixed(1)}°/km`
+    ? ` · 海拔均值 P${Math.round(stats.roadAverageElevationPercentile * 100)} / 最高 P${Math.round(stats.roadMaxElevationPercentile * 100)} · 低地 ${Math.round(stats.roadLowlandCoverageFraction * 100)}% · 纵坡 ${Math.round(stats.roadMaxForwardGrade * 100)}% · 横坡 ${Math.round(stats.roadMaxCrossSlope * 100)}%${stats.roadPlannerMode === 'guided-global' ? '' : ` · 陡坡改线 ${stats.roadSteepReplacementSteps}`} · 曲率 ${stats.roadTurnDegreesPerKm.toFixed(1)}°/km`
     : ''
-  return `${strategy} · ${termination} · ${Math.round(stats.roadLength).toLocaleString()}m · ${stats.roadNodeCount.toLocaleString()} 节点 · 途径点 ${stats.roadWaypointsPassed}/${stats.roadWaypointCount} · 最大偏差 ${stats.roadMaxWaypointError.toFixed(1)}m${official} · ${state}`
+  const skipped = stats.roadWaypointsSkipped > 0
+    ? ` · 跳过 ${stats.roadSkippedWaypointIndices.map((index) => `P${index + 1}`).join(', ')}`
+    : ''
+  const guide = stats.roadPlannerMode === 'guided-global'
+    ? ` · 全局搜索 ${stats.roadGuideExpandedStates.toLocaleString()} 状态 · 骨架偏差 ${stats.roadMaxGuideDeviation.toFixed(1)}m`
+    : ''
+  return `${strategy} · ${termination} · ${Math.round(stats.roadLength).toLocaleString()}m · ${stats.roadNodeCount.toLocaleString()} 节点 · 途径点 ${stats.roadWaypointsPassed}/${stats.roadWaypointCount}${skipped} · 最大偏差 ${stats.roadMaxWaypointError.toFixed(1)}m${official}${guide} · ${state}`
 })
 const roadFailureText = computed(() => {
   const reason = runtimeStats.value?.roadFailureReason
@@ -223,6 +239,13 @@ const roadFailureText = computed(() => {
     'road-cross-slope-limit': '路线未满足 35% 局部横坡上限',
     'blocked-by-forward-grade': '道路前方没有满足 22% 纵坡上限的方向',
     'blocked-by-cross-slope': '道路前方没有满足 35% 局部横坡上限的方向',
+    'blocked-by-guide-corridor': '道路无法在自然弯曲范围内继续跟随可行骨架',
+    'waypoint-unreachable': '存在无法在 22% 坡度限制内到达的途径点',
+    'boundary-unreachable': '最后一个途径点之后无法在坡度限制内到达地形边界',
+    'global-guide-budget-exceeded': '全局坡限搜索超过状态预算',
+    'guided-guide-prepare-failed': '全局可行骨架无法平滑成连续道路',
+    'guided-official-blocked': '官方 Hills 曲线无法在骨架走廊内满足坡度限制',
+    'guide-empty': '全局选线骨架为空',
   }
   return labels[reason] ?? `道路生成失败：${reason}`
 })
@@ -276,6 +299,9 @@ function handleGenerateRoad(): void {
   }
   const result = sceneStore.generateProceduralLandscapeRoad(nodeId)
   if (!result.accepted) {
+    const unreachablePoint = result.unreachableWaypointIndex == null
+      ? null
+      : `P${result.unreachableWaypointIndex + 1}`
     const labels: Record<string, string> = {
       'terrain-grid-not-ready': '地形网格尚未加载完成，请稍后重试。',
       blocked: '新路线被坡度或地形阻断，已保留上一版公路。',
@@ -286,13 +312,20 @@ function handleGenerateRoad(): void {
       'road-cross-slope-limit': '新路线经过过陡的横向坡面，已保留上一版公路。',
       'blocked-by-forward-grade': '周边地形均超过 22% 纵坡上限，已保留上一版公路。',
       'blocked-by-cross-slope': '周边地形均超过 35% 局部横坡上限，已保留上一版公路。',
+      'waypoint-unreachable': unreachablePoint
+        ? `${unreachablePoint} 无法在 22% 坡度限制内到达，已保留上一版公路。`
+        : '有途径点无法在 22% 坡度限制内到达，已保留上一版公路。',
+      'boundary-unreachable': '最后途径点之后无法在坡度限制内到达边界，已保留上一版公路。',
+      'global-guide-budget-exceeded': '全局坡限搜索超过预算，已保留上一版公路。',
+      'guided-guide-prepare-failed': '全局骨架无法平滑成连续道路，已保留上一版公路。',
+      'guided-official-blocked': '官方 Hills 曲线无法在可行骨架内满足坡度限制，已保留上一版公路。',
     }
     roadActionMessage.value = labels[result.failureReason ?? '']
       ?? `公路生成失败（${result.failureReason ?? 'unknown'}），已保留上一版公路。`
     return
   }
   roadActionMessage.value = routeStrategy.value === 'seeded'
-    ? '已提交 P1，正在按低地优先的 Hills 逻辑生成公路。'
+    ? '已提交途径点，正在按官方 Hills 曲线跟随全局坡度可行骨架生成公路。'
     : '已提交途径点快照，正在生成公路。'
 }
 
@@ -373,12 +406,11 @@ const roadPathBlock = computed<FieldBlock>(() => ({
   title: '途径约束',
   hint: routeTermination.value === 'loop'
     ? '按顺序经过全部途径点，并自动回到 P1；单点闭环由种子生成自然路线。'
-    : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界。',
+    : routeStrategy.value === 'seeded'
+      ? 'P1 是起点，P2…Pn 全部按顺序经过；点击不满足低地/缓坡条件时会在 500m 内自动吸附，无法安全到达时生成失败并保留旧路。'
+      : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界。',
   rows: [[
     { key: 'waypointTolerance', label: '途径容差', suffix: 'm', step: 1 },
-    ...(routeStrategy.value === 'seeded'
-      ? [{ key: 'pathDeviation', label: '自然绕行幅度', suffix: 'm', step: 5 }]
-      : []),
   ]],
 }))
 
@@ -449,7 +481,10 @@ const roadGeometryBlocks: FieldBlock[] = [
 
 const roadBlocks = computed<FieldBlock[]>(() => {
   if (routeStrategy.value === 'seeded') {
-    return roadGeometryBlocks.filter((block) => block.title !== '追踪')
+    return [
+      roadPathBlock.value,
+      ...roadGeometryBlocks.filter((block) => block.title !== '追踪'),
+    ]
   }
   return [roadPathBlock.value, ...roadGeometryBlocks]
 })
@@ -824,15 +859,13 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           </div>
           <div class="pl-road-path__actions">
             <button
-              v-if="routeStrategy === 'shortest'"
               type="button"
               class="pl-choice"
               :class="{ 'pl-choice--active': roadPathEditing }"
               :disabled="!componentEnabled"
               @click="handleToggleRoadPathEditing"
             >{{ roadPathEditing ? '结束编辑' : '编辑途径点' }}</button>
-            <span v-if="routeStrategy === 'shortest'" class="pl-road-path__count">{{ roadWaypoints.length }} 个途径点</span>
-            <span v-else class="pl-road-path__count">起点 P1 · 低地 Hills</span>
+            <span class="pl-road-path__count">{{ roadWaypoints.length }} 个途径点</span>
             <v-btn
               size="small"
               color="primary"
@@ -876,10 +909,10 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               ? '旧闭环快照已过期；重新生成后会切换为开放式到边界。'
               : '本期固定为开放式道路，生成后一直延伸到地形边界。' }}
           </div>
-          <div v-if="routeStrategy === 'shortest' && roadWaypoints.length > 64" class="pl-hint">
+          <div v-if="roadWaypoints.length > 64" class="pl-hint">
             控制点较多，编号仅在悬停或选中时显示。
           </div>
-          <div v-if="routeStrategy === 'shortest' && roadWaypoints.length" class="pl-road-path">
+          <div v-if="roadWaypoints.length" class="pl-road-path">
             <v-virtual-scroll
               :items="roadWaypoints"
               :item-height="34"
@@ -887,9 +920,13 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               class="pl-road-path__list"
             >
               <template #default="{ item, index }">
-                <div class="pl-road-path__item">
+                <div
+                  class="pl-road-path__item"
+                  :class="{ 'pl-road-path__item--skipped': isRoadWaypointSkipped(index) }"
+                >
                   <span class="pl-road-path__index">P{{ index + 1 }}</span>
                   <span class="pl-road-path__coords">{{ item.x.toFixed(1) }}, {{ item.z.toFixed(1) }}</span>
+                  <span v-if="isRoadWaypointSkipped(index)" class="pl-road-path__skipped">跳过</span>
                   <v-btn
                     icon
                     variant="text"
@@ -903,12 +940,6 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               </template>
             </v-virtual-scroll>
           </div>
-          <div v-else-if="routeStrategy === 'seeded' && roadWaypoints.length" class="pl-road-path">
-            <div class="pl-road-path__item">
-              <span class="pl-road-path__index">P1</span>
-              <span class="pl-road-path__coords">{{ roadWaypoints[0]!.x.toFixed(1) }}, {{ roadWaypoints[0]!.z.toFixed(1) }}</span>
-            </div>
-          </div>
           <div v-if="roadStale" class="pl-hint pl-hint--stale">
             {{ roadHasGeneratedResult ? '选线版本、起点或参数已变化，点击“生成公路”应用低地 Hills 逻辑。' : '尚未生成公路，点击“生成公路”开始。' }}
           </div>
@@ -916,7 +947,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           <div v-if="roadFailureText" class="pl-hint pl-hint--error">{{ roadFailureText }}</div>
           <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
           <div v-if="!roadWaypoints.length" class="pl-hint">
-            可直接生成：系统会在地形中心自动添加 P1，并按低地优先的 Hills 逻辑延伸到边界。
+            可直接生成：系统会在地形中心附近自动选择低缓 P1；之后可继续添加 P2…Pn 作为顺序途径点。
           </div>
           <div class="pl-road-style">
             <div class="pl-subtitle">路型</div>
@@ -1439,6 +1470,10 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
   border-radius: 4px;
 }
 
+.pl-road-path__item--skipped {
+  background: rgba(255, 138, 128, 0.1);
+}
+
 .pl-road-path__index {
   font-size: 0.72rem;
   color: rgba(255, 179, 0, 0.95);
@@ -1449,5 +1484,11 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
   flex: 1;
   font-size: 0.72rem;
   color: rgba(233, 236, 241, 0.7);
+}
+
+.pl-road-path__skipped {
+  flex: none;
+  font-size: 0.68rem;
+  color: #ff8a80;
 }
 </style>

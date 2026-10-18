@@ -354,6 +354,7 @@ import {
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
 import {
+  resolveProceduralLandscapeScenicWaypointLocal,
   sampleProceduralLandscapeTerrainHeight,
   setProceduralLandscapeEnvironment,
 } from '@schema/proceduralLandscape/runtime'
@@ -7700,8 +7701,15 @@ function tryAppendLandscapeRoadWaypoint(event: PointerEvent): boolean {
   if (!resolveLandscapeRoadTerrainSurfacePoint(nodeId, event, surfaceWorld)) {
     return false
   }
-  runtimeObject.updateMatrixWorld(true)
-  const local = runtimeObject.worldToLocal(surfaceWorld.clone())
+  const resolved = resolveProceduralLandscapeScenicWaypointLocal(
+    nodeId,
+    surfaceWorld.x,
+    surfaceWorld.z,
+  )
+  if (!resolved) {
+    return false
+  }
+  const local = { x: resolved.localX, z: resolved.localZ }
   const base = cloneLandscapeRoadLocalWaypoints(node)
   const insertIndex = findLandscapeRoadInsertionIndex(local.x, local.z, base) ?? base.length
   const next = base.slice()

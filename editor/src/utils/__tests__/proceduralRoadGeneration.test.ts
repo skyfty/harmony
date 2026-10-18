@@ -7,7 +7,9 @@ import {
 } from '@schema/proceduralLandscape/config'
 import {
   buildScenicTerrainElevationProfile,
+  projectWaypointCapture,
   resolveLowlandScenicStart,
+  resolveLowlandScenicWaypoint,
   resolveOfficialScenicStartHeading,
   SLOWROADS_HILLS_ROAD_PROFILE,
   SLOWROADS_LOWLAND_ROAD_CONSTRAINTS,
@@ -55,7 +57,7 @@ function makeGrid(height: (x: number, z: number) => number = () => 0): TerrainHe
 const baseOptions: Omit<WaypointRoadPlanOptions, 'waypoints'> = {
   strategy: 'seeded',
   termination: 'boundary',
-  algorithmVersion: 3,
+  algorithmVersion: 4,
   seed: 912347,
   waypointTolerance: 4,
   pathDeviation: 60,
@@ -139,6 +141,27 @@ describe('official Slow Roads Hills midline', () => {
     expect(Number.isFinite(heading)).toBe(true)
     expect(Math.abs(heading)).toBeGreaterThan(0.1)
     expect(Math.abs(heading)).toBeLessThan(Math.PI - 0.1)
+  })
+
+  it('projects a crossing segment into the waypoint tolerance disc', () => {
+    const capture = projectWaypointCapture(
+      { x: 0, z: 0 },
+      { x: 10, z: 0 },
+      { x: 5, z: 2.5 },
+      3,
+    )
+    expect(capture).not.toBeNull()
+    expect(capture!.x).toBeCloseTo(5, 6)
+    expect(capture!.z).toBeCloseTo(0, 6)
+    expect(capture!.distance).toBeCloseTo(2.5, 6)
+    expect(
+      projectWaypointCapture(
+        { x: 0, z: 0 },
+        { x: 10, z: 0 },
+        { x: 5, z: 2.5 },
+        2,
+      ),
+    ).toBeNull()
   })
 
   it('traces deterministically with the fixed Hills profile', () => {
@@ -272,6 +295,144 @@ describe('official Slow Roads Hills midline', () => {
     expect(startHeight).toBeLessThan(preferredHeight)
     expect(Math.abs(start!.x)).toBeLessThan(2_500)
   })
+
+  it('snaps an invalid clicked waypoint to a nearby suitable position', () => {
+    const grid = makeSyntheticGrid(
+      4_000,
+      100,
+      (x) => 1_000 + (x > 0 && x < 300 ? 300 : 0),
+    )
+    const valid = resolveLowlandScenicWaypoint(grid, -500, 0)
+    expect(valid).not.toBeNull()
+    expect(valid!.distanceFromClick).toBeCloseTo(0, 6)
+
+    const snapped = resolveLowlandScenicWaypoint(grid, 150, 0)
+    expect(snapped).not.toBeNull()
+    expect(snapped!.distanceFromClick).toBeGreaterThan(0)
+    expect(snapped!.distanceFromClick).toBeLessThanOrEqual(500)
+    expect(snapped!.elevationPercentile).toBeLessThanOrEqual(0.7)
+    expect(snapped!.gradient).toBeLessThanOrEqual(0.35)
+  })
+
+  it('returns no snapped waypoint when the search radius has no valid terrain', () => {
+    const grid = makeSyntheticGrid(
+      4_000,
+      20,
+      (x) => 1_000 + x * 0.5,
+    )
+    expect(resolveLowlandScenicWaypoint(grid, 0, 0, 50)).toBeNull()
+  })
+
+  it('skips an unreachable extra waypoint and still reaches the boundary', () => {
+    const grid = makeSyntheticGrid(
+      30_000,
+      100,
+      (x, z) => 1_000
+        + Math.min(1_200, Math.max(0, Math.abs(x) - 900) * 0.32)
+        + Math.sin(z / 900) * 18,
+    )
+    const origin = { x: 0, z: -8_000 }
+    const result = traceOfficialScenicRoad(grid, origin, 4401, 24, {
+      algorithmVersion: 4,
+      requiredWaypoints: [
+        origin,
+        { x: 3_000, z: -8_000 },
+        { x: 0, z: -5_000 },
+      ],
+      waypointTolerance: 4,
+      waypointNoProgressDistance: 200,
+      waypointAttemptDistance: 500,
+    })
+    expect(result.failureReason).toBe('reached-terrain-boundary')
+    expect(result.waypointsAttempted).toBeGreaterThanOrEqual(2)
+    expect(result.skippedWaypointIndices).toContain(1)
+  })
+
+  it('v5 follows every mandatory waypoint around a hill and reaches the boundary', () => {
+    const grid = makeSyntheticGrid(
+      30_000,
+      100,
+      (x, z) => 1_000 + Math.exp(
+        -((x / 700) ** 2 + (z / 700) ** 2),
+      ) * 1_200,
+    )
+    const waypoints = [
+      { x: -2_400, z: -700 },
+      { x: 2_400, z: -600 },
+      { x: 2_400, z: 600 },
+    ]
+    const options = {
+      ...baseOptions,
+      algorithmVersion: 5,
+      waypoints,
+    }
+    const first = planWaypointRoadRoute(grid, options)
+    const second = planWaypointRoadRoute(grid, options)
+    expect(
+      first.complete,
+      `${first.failureReason} / passed ${first.waypointsPassed} / skipped ${JSON.stringify(first.skippedWaypointIndices)} / error ${first.maxWaypointError}`,
+    ).toBe(true)
+    expect(first.failureReason).toBe('reached-terrain-boundary')
+    expect(first.waypointsPassed).toBe(waypoints.length)
+    expect(first.waypointsSkipped).toBe(0)
+    expect(first.skippedWaypointIndices).toEqual([])
+    expect(first.maxWaypointError).toBeLessThanOrEqual(
+      options.waypointTolerance + 1e-4,
+    )
+    expect(first.maxForwardGrade).toBeLessThanOrEqual(
+      SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxGrade + 1e-4,
+    )
+    expect(first.maxCrossSlope).toBeLessThanOrEqual(
+      SLOWROADS_LOWLAND_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4,
+    )
+    expect(first.plannerMode).toBe('guided-global')
+    expect(first.guideExpandedStates).toBeGreaterThan(0)
+    expect(second.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
+      first.nodes.map((node) => [node.x, node.z, node.y]),
+    )
+  })
+
+  it('v5 fails instead of skipping a waypoint isolated by a cliff', () => {
+    const grid = makeSyntheticGrid(
+      12_000,
+      100,
+      (x, z) => Math.hypot(x - 3_000, z) < 160 ? 2_000 : 1_000,
+    )
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      algorithmVersion: 5,
+      waypoints: [
+        { x: -3_000, z: 0 },
+        { x: 3_000, z: 0 },
+      ],
+    })
+    expect(result.complete).toBe(false)
+    expect(result.failureReason).toBe('waypoint-unreachable')
+    expect(result.unreachableWaypointIndex).toBe(1)
+    expect(result.waypointsSkipped).toBe(0)
+    expect(result.skippedWaypointIndices).toEqual([])
+    expect(result.nodes).toHaveLength(0)
+  })
+
+  it('keeps version 3 single-point behavior when extra points are supplied', () => {
+    const grid = makeSyntheticGrid(
+      20_000,
+      100,
+      (x, z) => 1_000 + Math.sin(x / 500) * 40 + Math.cos(z / 700) * 30,
+    )
+    const origin = { x: 0, z: -5_000 }
+    const base = traceOfficialScenicRoad(grid, origin, 991, 24, {
+      algorithmVersion: 3,
+    })
+    const withIgnoredPoints = traceOfficialScenicRoad(grid, origin, 991, 24, {
+      algorithmVersion: 3,
+      requiredWaypoints: [origin, { x: 2_000, z: 0 }],
+    })
+    expect(withIgnoredPoints.skippedWaypointIndices).toEqual([])
+    expect(withIgnoredPoints.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
+      base.nodes.map((node) => [node.x, node.z, node.y]),
+    )
+  })
 })
 
 describe('unified waypoint road configuration', () => {
@@ -372,13 +533,20 @@ describe('unified waypoint road configuration', () => {
 })
 
 describe('unified waypoint road planning', () => {
-  it('uses only P1 for natural scenic routing and stays open', () => {
-    const grid = makeGrid((x, z) => Math.sin(x * 0.01) * 3 + Math.cos(z * 0.013) * 2)
+  it('passes ordered waypoints and continues to the boundary', () => {
+    const grid = makeSyntheticGrid(
+      30_000,
+      100,
+      (x, z) => 1_200
+        + Math.sin(x / 1_400) * 12
+        + Math.cos(z / 1_700) * 9,
+    )
+    const origin = { x: -1_800, z: -900 }
     const waypoints = [
-      { x: 250, z: 300 },
-      { x: 480, z: 260 },
-      { x: 650, z: 470 },
-      { x: 360, z: 650 },
+      origin,
+      { x: -300, z: 1_200 },
+      { x: 1_200, z: 2_800 },
+      { x: 2_200, z: 4_200 },
     ]
     const first = planWaypointRoadRoute(grid, {
       ...baseOptions,
@@ -390,7 +558,11 @@ describe('unified waypoint road planning', () => {
     })
     expect(first.failureReason).toBe('reached-terrain-boundary')
     expect(first.closed).toBe(false)
-    expect(first.waypointsPassed).toBe(1)
+    expect(
+      first.waypointsPassed,
+      `${first.failureReason} skipped ${JSON.stringify(first.skippedWaypointIndices)} attempted ${first.waypointsAttempted} nodes ${first.nodes.length} closest ${waypoints.map((point) => Math.min(...first.nodes.map((node) => Math.hypot(node.x - point.x, node.z - point.z))).toFixed(1)).join(',')}`,
+    ).toBe(waypoints.length)
+    expect(first.waypointsSkipped).toBe(0)
     expect(first.maxWaypointError).toBeLessThanOrEqual(baseOptions.waypointTolerance)
     expect(second.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
       first.nodes.map((node) => [node.x, node.z, node.y]),

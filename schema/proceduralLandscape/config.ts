@@ -70,8 +70,8 @@ export interface ProceduralLandscapeSurfaceProps {
 export type ProceduralLandscapeRoadTermination = 'boundary' | 'loop'
 export type ProceduralLandscapeRoadStrategy = 'seeded' | 'shortest'
 
-/** Version 3 = official Hills tracing with relative lowland/grade constraints. */
-export const PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION = 3
+/** Version 5 = guided global slope routing with mandatory waypoints. */
+export const PROCEDURAL_LANDSCAPE_SCENIC_ROAD_ALGORITHM_VERSION = 5
 
 export interface ProceduralLandscapeRoadRoutingProps {
   strategy: ProceduralLandscapeRoadStrategy

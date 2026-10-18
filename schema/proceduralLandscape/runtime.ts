@@ -154,7 +154,9 @@ import {
 } from './proceduralRoad'
 import {
   resolveLowlandScenicStart,
+  resolveLowlandScenicWaypoint,
   SLOWROADS_LOWLAND_ROAD_CONSTRAINTS,
+  type ScenicWaypointPlacement,
 } from './officialScenicRoad'
 import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
 
@@ -265,8 +267,15 @@ export interface ProceduralLandscapeRuntimeStats {
   roadComplete: boolean
   roadFailureReason: string | null
   roadStrategy: 'seeded' | 'shortest' | null
+  roadPlannerMode: 'official' | 'guided-global' | null
+  roadGuideExpandedStates: number
+  roadMaxGuideDeviation: number
+  roadUnreachableWaypointIndex: number | null
   roadWaypointCount: number
   roadWaypointsPassed: number
+  roadWaypointsSkipped: number
+  roadSkippedWaypointIndices: number[]
+  roadWaypointsAttempted: number
   roadMaxWaypointError: number
   roadClosed: boolean
   shortestExpandedStates: number
@@ -378,6 +387,12 @@ export interface ProceduralLandscapeRuntime {
   getTerrainCenterLocal(): RoadWaypoint | null
   /** Low, gentle automatic start near the terrain centre, in local XZ. */
   getScenicStartLocal(): RoadWaypoint | null
+  /** Snap a clicked world-space point to a nearby suitable waypoint. */
+  resolveScenicWaypointLocal(
+    worldX: number,
+    worldZ: number,
+    maxRadius?: number,
+  ): ProceduralLandscapeScenicWaypointResolution | null
   /**
    * Runtime height-field sampling in world XZ (null when the grid is not
    * ready yet or the point lies outside the rasterized coverage).
@@ -390,6 +405,12 @@ export interface ProceduralLandscapeRoadValidation {
   failureReason: string | null
   nodeCount: number
   length: number
+  unreachableWaypointIndex?: number | null
+}
+
+export interface ProceduralLandscapeScenicWaypointResolution extends ScenicWaypointPlacement {
+  localX: number
+  localZ: number
 }
 
 let currentEnvironment: ProceduralLandscapeEnvironment = 'preview'
@@ -450,6 +471,16 @@ export function getProceduralLandscapeScenicStartLocal(
 ): RoadWaypoint | null {
   const runtime = runtimeRegistry.get(nodeId)
   return runtime?.getScenicStartLocal() ?? null
+}
+
+export function resolveProceduralLandscapeScenicWaypointLocal(
+  nodeId: string,
+  worldX: number,
+  worldZ: number,
+  maxRadius?: number,
+): ProceduralLandscapeScenicWaypointResolution | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.resolveScenicWaypointLocal(worldX, worldZ, maxRadius) ?? null
 }
 
 export function validateProceduralLandscapeGeneratedRoute(
@@ -858,8 +889,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadComplete: false,
     roadFailureReason: null,
     roadStrategy: null,
+    roadPlannerMode: null,
+    roadGuideExpandedStates: 0,
+    roadMaxGuideDeviation: 0,
+    roadUnreachableWaypointIndex: null,
     roadWaypointCount: 0,
     roadWaypointsPassed: 0,
+    roadWaypointsSkipped: 0,
+    roadSkippedWaypointIndices: [],
+    roadWaypointsAttempted: 0,
     roadMaxWaypointError: 0,
     roadClosed: false,
     shortestExpandedStates: 0,
@@ -3438,8 +3476,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadComplete = roadResult?.complete ?? false
     stats.roadFailureReason = roadResult?.failureReason ?? null
     stats.roadStrategy = props.road.generatedRoute?.strategy ?? null
+    stats.roadPlannerMode = roadResult?.plannerMode ?? null
+    stats.roadGuideExpandedStates = roadResult?.guideExpandedStates ?? 0
+    stats.roadMaxGuideDeviation = roadResult?.maxGuideDeviation ?? 0
+    stats.roadUnreachableWaypointIndex = roadResult?.unreachableWaypointIndex ?? null
     stats.roadWaypointCount = roadResult?.waypointCount ?? props.road.generatedRoute?.waypoints.length ?? 0
     stats.roadWaypointsPassed = roadResult?.waypointsPassed ?? 0
+    stats.roadWaypointsSkipped = roadResult?.waypointsSkipped ?? 0
+    stats.roadSkippedWaypointIndices = [...(roadResult?.skippedWaypointIndices ?? [])]
+    stats.roadWaypointsAttempted = roadResult?.waypointsAttempted ?? 0
     stats.roadMaxWaypointError = roadResult?.maxWaypointError ?? 0
     stats.roadClosed = roadResult?.closed ?? false
     stats.shortestExpandedStates = roadResult?.shortestExpandedStates ?? 0
@@ -4133,6 +4178,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           failureReason: 'terrain-grid-not-ready',
           nodeCount: 0,
           length: 0,
+          unreachableWaypointIndex: null,
         }
       }
       const result = planGeneratedRoad(grid, hostObject, route, road)
@@ -4142,6 +4188,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           failureReason: result?.failureReason ?? 'no-waypoints',
           nodeCount: result?.nodes.length ?? 0,
           length: result?.length ?? 0,
+          unreachableWaypointIndex: result?.unreachableWaypointIndex ?? null,
         }
       }
       if (route.algorithmVersion >= 3) {
@@ -4154,6 +4201,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             failureReason: 'road-forward-grade-limit',
             nodeCount: result.nodes.length,
             length: result.length,
+            unreachableWaypointIndex: result.unreachableWaypointIndex ?? null,
           }
         }
         if (
@@ -4165,6 +4213,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             failureReason: 'road-cross-slope-limit',
             nodeCount: result.nodes.length,
             length: result.length,
+            unreachableWaypointIndex: result.unreachableWaypointIndex ?? null,
           }
         }
       }
@@ -4175,6 +4224,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           : (result.failureReason ?? 'road-route-incomplete'),
         nodeCount: result.nodes.length,
         length: result.length,
+        unreachableWaypointIndex: result.unreachableWaypointIndex ?? null,
       }
     },
     getTerrainCenterLocal(): RoadWaypoint | null {
@@ -4207,6 +4257,36 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return Number.isFinite(local.x) && Number.isFinite(local.z)
         ? { x: local.x, z: local.z }
         : null
+    },
+    resolveScenicWaypointLocal(
+      worldX: number,
+      worldZ: number,
+      maxRadius?: number,
+    ): ProceduralLandscapeScenicWaypointResolution | null {
+      if (!grid || !hostObject) {
+        return null
+      }
+      const resolved = resolveLowlandScenicWaypoint(
+        grid,
+        worldX,
+        worldZ,
+        maxRadius,
+      )
+      if (!resolved) {
+        return null
+      }
+      hostObject.updateMatrixWorld(true)
+      const local = hostObject.worldToLocal(
+        new THREE.Vector3(resolved.x, 0, resolved.z),
+      )
+      if (!Number.isFinite(local.x) || !Number.isFinite(local.z)) {
+        return null
+      }
+      return {
+        ...resolved,
+        localX: local.x,
+        localZ: local.z,
+      }
     },
     sampleTerrainHeight(worldX: number, worldZ: number): number | null {
       if (!grid) {

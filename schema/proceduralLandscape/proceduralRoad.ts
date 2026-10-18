@@ -7,13 +7,17 @@ import {
 } from './roadTrace'
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
-import { traceOfficialScenicRoad } from './officialScenicRoad'
+import {
+  traceOfficialScenicGuidedRoad,
+  traceOfficialScenicRoad,
+} from './officialScenicRoad'
+import { buildGlobalScenicGuide } from './globalScenicGuide'
 
 export interface WaypointRoadPlanOptions {
   waypoints: RoadWaypoint[]
   strategy: 'seeded' | 'shortest'
   termination: 'loop' | 'boundary'
-  /** Stored route algorithm version; 2 selects the official Hills tracer. */
+  /** Stored route version; 2–4 keep the legacy Hills tracer, 5 adds the global guide. */
   algorithmVersion?: number
   seed: number
   waypointTolerance: number
@@ -43,6 +47,13 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
   maxCrossSlope?: number
   lowlandCoverageFraction?: number
   steepReplacementSteps?: number
+  waypointsSkipped?: number
+  skippedWaypointIndices?: number[]
+  waypointsAttempted?: number
+  plannerMode?: 'official' | 'guided-global'
+  guideExpandedStates?: number
+  maxGuideDeviation?: number
+  unreachableWaypointIndex?: number | null
 }
 
 type Vec2 = { x: number; z: number }
@@ -1137,28 +1148,104 @@ export function planWaypointRoadRoute(
       shortestExpandedStates: 0,
     }
   }
-  if (options.strategy === 'seeded' && (options.algorithmVersion ?? 1) >= 2) {
+  const algorithmVersion = options.algorithmVersion ?? 1
+  if (options.strategy === 'seeded' && algorithmVersion >= 5) {
     const origin = waypoints[0]!
-    const traced = traceOfficialScenicRoad(
+    const guide = buildGlobalScenicGuide(grid, waypoints, {
+      seed: options.seed,
+      stepLength: options.stepLength,
+      pathDeviation: options.pathDeviation,
+      margin: options.margin,
+    })
+    if (guide.failureReason || guide.points.length < 2) {
+      return {
+        nodes: [],
+        length: 0,
+        complete: false,
+        failureReason: guide.failureReason ?? 'guided-guide-prepare-failed',
+        rescueTurns: 0,
+        closed: false,
+        waypointCount: waypoints.length,
+        waypointsPassed: 0,
+        maxWaypointError: 0,
+        closureHeadingErrorRad: 0,
+        shortestExpandedStates: 0,
+        waypointsSkipped: 0,
+        skippedWaypointIndices: [],
+        waypointsAttempted: guide.unreachableWaypointIndex ?? 0,
+        plannerMode: 'guided-global',
+        guideExpandedStates: guide.expandedStates,
+        maxGuideDeviation: 0,
+        unreachableWaypointIndex: guide.unreachableWaypointIndex,
+      }
+    }
+    const traced = traceOfficialScenicGuidedRoad(
       grid,
       origin,
       options.seed,
       options.margin,
-      { algorithmVersion: options.algorithmVersion },
+      {
+        algorithmVersion: 5,
+        requiredWaypoints: waypoints,
+        waypointTolerance: options.waypointTolerance,
+        guidePoints: guide.points,
+        guideCorridorWidth: guide.corridorWidth,
+      },
     )
     const stats = waypointPassStats(
       traced.nodes,
-      [origin],
+      waypoints,
       options.waypointTolerance,
     )
     return {
       ...traced,
       closed: false,
-      waypointCount: 1,
+      waypointCount: waypoints.length,
       waypointsPassed: stats.passed,
       maxWaypointError: stats.maxError,
       closureHeadingErrorRad: 0,
       shortestExpandedStates: 0,
+      waypointsSkipped: 0,
+      skippedWaypointIndices: [],
+      waypointsAttempted: Math.max(0, waypoints.length - 1),
+      plannerMode: 'guided-global',
+      guideExpandedStates: guide.expandedStates,
+      maxGuideDeviation: traced.maxGuideDeviation ?? 0,
+      unreachableWaypointIndex: traced.complete
+        ? null
+        : (traced.skippedWaypointIndices?.[0] ?? null),
+    }
+  }
+  if (options.strategy === 'seeded' && algorithmVersion >= 2) {
+    const origin = waypoints[0]!
+    const routeWaypoints = algorithmVersion >= 4
+      ? waypoints
+      : [origin]
+    const traced = traceOfficialScenicRoad(
+      grid,
+      origin,
+      options.seed,
+      options.margin,
+      {
+        algorithmVersion: options.algorithmVersion,
+        requiredWaypoints: routeWaypoints,
+        waypointTolerance: options.waypointTolerance,
+      },
+    )
+    const stats = waypointPassStats(
+      traced.nodes,
+      routeWaypoints,
+      options.waypointTolerance,
+    )
+    return {
+      ...traced,
+      closed: false,
+      waypointCount: routeWaypoints.length,
+      waypointsPassed: stats.passed,
+      maxWaypointError: stats.maxError,
+      closureHeadingErrorRad: 0,
+      shortestExpandedStates: 0,
+      plannerMode: 'official',
     }
   }
   const closed = options.termination === 'loop'

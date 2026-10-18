@@ -1,5 +1,6 @@
 import { clamp, hashUnit, smoothstep, wrapAngle } from './noise'
 import type { RoadTraceNode, RoadTraceResult } from './roadTrace'
+import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
 
 /**
@@ -37,6 +38,16 @@ export const SLOWROADS_LOWLAND_ROAD_CONSTRAINTS = Object.freeze({
   startGraceDistance: 500,
 })
 
+export const SCENIC_WAYPOINT_SNAP_RADIUS = 500
+
+export interface ScenicWaypointPlacement {
+  x: number
+  z: number
+  distanceFromClick: number
+  elevationPercentile: number
+  gradient: number
+}
+
 export interface OfficialScenicRoadOptions {
   algorithmVersion?: number
   lowlandStartPercentile?: number
@@ -46,6 +57,14 @@ export interface OfficialScenicRoadOptions {
   maxGrade?: number
   maxCrossSlope?: number
   startGraceDistance?: number
+  requiredWaypoints?: ReadonlyArray<RoadWaypoint>
+  waypointTolerance?: number
+  waypointNoProgressDistance?: number
+  waypointAttemptDistance?: number
+  /** Optional global slope-feasible guide. Runtime-only; never persisted. */
+  guidePoints?: ReadonlyArray<RoadWaypoint>
+  guideCorridorWidth?: number
+  wiggleScale?: number
 }
 
 export interface ScenicTerrainElevationProfile {
@@ -70,6 +89,10 @@ export interface OfficialScenicRoadResult extends RoadTraceResult {
   maxCrossSlope: number
   lowlandCoverageFraction: number
   steepReplacementSteps: number
+  waypointsSkipped: number
+  skippedWaypointIndices: number[]
+  waypointsAttempted: number
+  maxGuideDeviation?: number
 }
 
 type Vec2 = { x: number; z: number }
@@ -287,8 +310,62 @@ function summarizeScenicRoute(
   }
 }
 
+function resolveWaypointPassIndices(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  waypoints: ReadonlyArray<Vec2>,
+  tolerance: number,
+): Set<number> {
+  const passed = new Set<number>()
+  for (let waypointIndex = 1; waypointIndex < waypoints.length; waypointIndex += 1) {
+    const waypoint = waypoints[waypointIndex]!
+    for (let nodeIndex = 1; nodeIndex < nodes.length; nodeIndex += 1) {
+      const previous = nodes[nodeIndex - 1]!
+      const node = nodes[nodeIndex]!
+      const capture = projectWaypointCapture(previous, node, waypoint, tolerance)
+      if (
+        capture
+        || distance(previous, waypoint) <= tolerance
+        || distance(node, waypoint) <= tolerance
+      ) {
+        passed.add(waypointIndex)
+        break
+      }
+    }
+  }
+  return passed
+}
+
 function distance(a: Vec2, b: Vec2): number {
   return Math.hypot(b.x - a.x, b.z - a.z)
+}
+
+/**
+ * Closest projection of a waypoint onto one road segment. Used to insert a
+ * centreline node when a 10m trace step crosses the waypoint tolerance disc.
+ */
+export function projectWaypointCapture(
+  start: Vec2,
+  end: Vec2,
+  waypoint: Vec2,
+  tolerance: number,
+): { x: number; z: number; distance: number; t: number } | null {
+  const dx = end.x - start.x
+  const dz = end.z - start.z
+  const lengthSq = dx * dx + dz * dz
+  if (lengthSq <= 1e-9) {
+    return null
+  }
+  const t = clamp(
+    ((waypoint.x - start.x) * dx + (waypoint.z - start.z) * dz) / lengthSq,
+    0,
+    1,
+  )
+  const x = start.x + dx * t
+  const z = start.z + dz * t
+  const projectedDistance = Math.hypot(x - waypoint.x, z - waypoint.z)
+  return projectedDistance <= tolerance + 1e-6
+    ? { x, z, distance: projectedDistance, t }
+    : null
 }
 
 function normalize(x: number, z: number): Vec2 {
@@ -315,6 +392,9 @@ function emptyResult(
     maxCrossSlope: 0,
     lowlandCoverageFraction: 0,
     steepReplacementSteps: 0,
+    waypointsSkipped: 0,
+    skippedWaypointIndices: [],
+    waypointsAttempted: 0,
   }
 }
 
@@ -469,6 +549,88 @@ export function resolveLowlandScenicStart(
     }
   }
   return best
+}
+
+/**
+ * Keep a clicked waypoint when it already satisfies the scenic route terrain
+ * conditions. Otherwise search outward in rings and return the nearest
+ * elevation/grade-suitable point within the requested radius.
+ */
+export function resolveLowlandScenicWaypoint(
+  grid: TerrainHeightGrid,
+  preferredX: number,
+  preferredZ: number,
+  maxRadius = SCENIC_WAYPOINT_SNAP_RADIUS,
+  options: OfficialScenicRoadOptions = {},
+): ScenicWaypointPlacement | null {
+  const profile = buildScenicTerrainElevationProfile(grid, options)
+  const constraints = resolveTerrainConstraints(options)
+  const margin = Math.max(
+    SLOWROADS_HILLS_ROAD_PROFILE.boundaryMargin,
+    grid.cellSize * 2,
+  )
+  const evaluate = (x: number, z: number): ScenicWaypointPlacement | null => {
+    if (
+      x < grid.minX + margin
+      || x > grid.maxX - margin
+      || z < grid.minZ + margin
+      || z > grid.maxZ - margin
+    ) {
+      return null
+    }
+    const height = grid.sampleHeight(x, z)
+    const gradient = sampleTerrainGradient(grid, x, z)
+    if (height == null || !gradient) {
+      return null
+    }
+    const elevationPercentile = profile.percentileAtHeight(height)
+    if (
+      elevationPercentile > constraints.lowlandPreferenceCeiling + 1e-6
+      || gradient.magnitude > constraints.maxCrossSlope + 1e-6
+    ) {
+      return null
+    }
+    return {
+      x,
+      z,
+      distanceFromClick: distance({ x: preferredX, z: preferredZ }, { x, z }),
+      elevationPercentile,
+      gradient: gradient.magnitude,
+    }
+  }
+  const direct = evaluate(preferredX, preferredZ)
+  if (direct) {
+    return direct
+  }
+  const radiusLimit = Math.max(1, maxRadius)
+  const radialStep = Math.max(30, grid.cellSize)
+  const rings = Math.ceil(radiusLimit / radialStep)
+  for (let ring = 1; ring <= rings; ring += 1) {
+    const radius = Math.min(radiusLimit, ring * radialStep)
+    let best: ScenicWaypointPlacement | null = null
+    let bestScore = Number.POSITIVE_INFINITY
+    for (let index = 0; index < 24; index += 1) {
+      const angle = (index / 24) * Math.PI * 2
+      const candidate = evaluate(
+        preferredX + Math.cos(angle) * radius,
+        preferredZ + Math.sin(angle) * radius,
+      )
+      if (!candidate) {
+        continue
+      }
+      const score =
+        candidate.elevationPercentile * 0.6
+        + candidate.gradient * 0.4
+      if (score < bestScore) {
+        best = candidate
+        bestScore = score
+      }
+    }
+    if (best) {
+      return best
+    }
+  }
+  return null
 }
 
 /**
@@ -641,6 +803,183 @@ function compensateProfile(
   }
 }
 
+type GuideData = {
+  points: Vec2[]
+  cumulative: number[]
+  totalLength: number
+  corridorWidth: number
+}
+
+type GuideProjection = {
+  index: number
+  distanceAlong: number
+  crossTrack: number
+  target: Vec2
+  heading: number
+}
+
+function buildGuideData(
+  points: ReadonlyArray<Vec2>,
+  corridorWidth: number,
+): GuideData | null {
+  if (points.length < 2) {
+    return null
+  }
+  const cleaned: Vec2[] = []
+  for (const point of points) {
+    if (
+      !cleaned.length
+      || distance(cleaned[cleaned.length - 1]!, point) > 1e-5
+    ) {
+      cleaned.push({ x: point.x, z: point.z })
+    }
+  }
+  if (cleaned.length < 2) {
+    return null
+  }
+  const cumulative: number[] = [0]
+  for (let index = 1; index < cleaned.length; index += 1) {
+    cumulative.push(
+      cumulative[index - 1]! + distance(cleaned[index - 1]!, cleaned[index]!),
+    )
+  }
+  return {
+    points: cleaned,
+    cumulative,
+    totalLength: cumulative[cumulative.length - 1]!,
+    corridorWidth: Math.max(20, corridorWidth),
+  }
+}
+
+function sampleGuideAtDistance(
+  guide: GuideData,
+  targetDistance: number,
+): Vec2 {
+  const distanceAlong = clamp(targetDistance, 0, guide.totalLength)
+  let low = 1
+  let high = guide.cumulative.length - 1
+  while (low < high) {
+    const mid = (low + high) >> 1
+    if (guide.cumulative[mid]! < distanceAlong) {
+      low = mid + 1
+    } else {
+      high = mid
+    }
+  }
+  const index = Math.max(1, low)
+  const start = guide.points[index - 1]!
+  const end = guide.points[index]!
+  const startDistance = guide.cumulative[index - 1]!
+  const segmentLength = Math.max(
+    1e-6,
+    guide.cumulative[index]! - startDistance,
+  )
+  const factor = clamp((distanceAlong - startDistance) / segmentLength, 0, 1)
+  return {
+    x: start.x + (end.x - start.x) * factor,
+    z: start.z + (end.z - start.z) * factor,
+  }
+}
+
+function locateOnGuide(
+  guide: GuideData,
+  x: number,
+  z: number,
+  previousIndex: number,
+  lookahead: number,
+): GuideProjection {
+  const startIndex = Math.max(0, previousIndex - 4)
+  const endIndex = Math.min(guide.points.length - 2, previousIndex + 96)
+  let bestIndex = startIndex
+  let bestDistance = Number.POSITIVE_INFINITY
+  let bestFactor = 0
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const start = guide.points[index]!
+    const end = guide.points[index + 1]!
+    const dx = end.x - start.x
+    const dz = end.z - start.z
+    const lengthSq = dx * dx + dz * dz
+    const factor = lengthSq > 1e-9
+      ? clamp(
+          ((x - start.x) * dx + (z - start.z) * dz) / lengthSq,
+          0,
+          1,
+        )
+      : 0
+    const projectedX = start.x + dx * factor
+    const projectedZ = start.z + dz * factor
+    const projectedDistance = Math.hypot(x - projectedX, z - projectedZ)
+    if (projectedDistance < bestDistance) {
+      bestDistance = projectedDistance
+      bestIndex = index
+      bestFactor = factor
+    }
+  }
+  const start = guide.points[bestIndex]!
+  const end = guide.points[bestIndex + 1]!
+  const segmentLength = Math.max(1e-6, distance(start, end))
+  const directionX = (end.x - start.x) / segmentLength
+  const directionZ = (end.z - start.z) / segmentLength
+  const crossTrack = (
+    (x - (start.x + (end.x - start.x) * bestFactor)) * -directionZ
+    + (z - (start.z + (end.z - start.z) * bestFactor)) * directionX
+  )
+  const distanceAlong = (
+    guide.cumulative[bestIndex]!
+    + segmentLength * bestFactor
+  )
+  const target = sampleGuideAtDistance(
+    guide,
+    Math.min(guide.totalLength, distanceAlong + lookahead),
+  )
+  return {
+    index: bestIndex,
+    distanceAlong,
+    crossTrack,
+    target,
+    heading: Math.atan2(target.z - z, target.x - x),
+  }
+}
+
+function distanceToGuide(
+  guide: GuideData,
+  x: number,
+  z: number,
+  previousIndex: number,
+): number {
+  const startIndex = Math.max(
+    0,
+    previousIndex - 8,
+  )
+  const endIndex = Math.min(
+    guide.points.length - 2,
+    previousIndex + 48,
+  )
+  let best = Number.POSITIVE_INFINITY
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const start = guide.points[index]!
+    const end = guide.points[index + 1]!
+    const dx = end.x - start.x
+    const dz = end.z - start.z
+    const lengthSq = dx * dx + dz * dz
+    const factor = lengthSq > 1e-9
+      ? clamp(
+          ((x - start.x) * dx + (z - start.z) * dz) / lengthSq,
+          0,
+          1,
+        )
+      : 0
+    best = Math.min(
+      best,
+      Math.hypot(
+        x - (start.x + dx * factor),
+        z - (start.z + dz * factor),
+      ),
+    )
+  }
+  return best
+}
+
 type TraceOnceResult = {
   result: OfficialScenicRoadResult
   restart: boolean
@@ -656,6 +995,13 @@ function traceOnce(
   algorithmVersion: number,
   terrainProfile: ScenicTerrainElevationProfile,
   constraints: ResolvedTerrainConstraints,
+  requiredWaypoints: ReadonlyArray<Vec2>,
+  waypointTolerance: number,
+  waypointNoProgressDistance: number,
+  waypointAttemptDistance: number,
+  guide: GuideData | null = null,
+  wiggleScale = 1,
+  requireAllWaypoints = false,
 ): TraceOnceResult {
   const startY = grid.sampleHeight(origin.x, origin.z)
   if (startY == null) {
@@ -706,11 +1052,77 @@ function traceOnce(
   let antiTargetTriggers = 0
   let turnOverflows = 0
   let steepReplacementSteps = 0
+  let waypointIndex = requiredWaypoints.length > 1 ? 1 : -1
+  let bestWaypointDistance = waypointIndex > 0
+    ? distance({ x, z }, requiredWaypoints[waypointIndex]!)
+    : Number.POSITIVE_INFINITY
+  let waypointAttemptTravelled = 0
+  let waypointProgressTravelled = 0
+  let waypointsAttempted = waypointIndex > 0 ? 1 : 0
+  let guideIndex = 0
+  let maxGuideDeviation = 0
   let failureReason: string | null = null
   let complete = false
 
+  const advanceWaypointTarget = (): void => {
+    waypointIndex += 1
+    waypointAttemptTravelled = 0
+    waypointProgressTravelled = 0
+    prevT = 0
+    targetOverflow = 0
+    accumulatedOverflow = 0
+    antiTarget = null
+    antiTargetRange = 0
+    antiTargetTriggerCount = 0
+    if (waypointIndex < requiredWaypoints.length) {
+      bestWaypointDistance = distance(
+        { x, z },
+        requiredWaypoints[waypointIndex]!,
+      )
+      waypointsAttempted = Math.max(waypointsAttempted, waypointIndex)
+    } else {
+      waypointIndex = -1
+      bestWaypointDistance = Number.POSITIVE_INFINITY
+    }
+  }
+
   for (let stepIndex = 0; stepIndex < profile.maxSteps; stepIndex += 1) {
     const tail = nodes[nodes.length - 1]!
+    while (
+      waypointIndex >= 1
+      && waypointIndex < requiredWaypoints.length
+      && distance({ x, z }, requiredWaypoints[waypointIndex]!) <= waypointTolerance
+    ) {
+      advanceWaypointTarget()
+    }
+    const guideProjection = guide
+      ? locateOnGuide(
+          guide,
+          x,
+          z,
+          guideIndex,
+          SLOWROADS_HILLS_ROAD_PROFILE.feelDistance * 3,
+        )
+      : null
+    if (guideProjection) {
+      guideIndex = guideProjection.index
+      maxGuideDeviation = Math.max(
+        maxGuideDeviation,
+        Math.abs(guideProjection.crossTrack),
+      )
+    }
+    if (
+      guide
+      && guideIndex >= guide.points.length - 2
+      && distance(
+        { x, z },
+        guide.points[guide.points.length - 1]!,
+      ) <= Math.max(profile.stepLength * 2, waypointTolerance)
+    ) {
+      complete = true
+      failureReason = 'reached-terrain-boundary'
+      break
+    }
     const straightX = x + Math.cos(heading) * profile.stepLength
     const straightZ = z + Math.sin(heading) * profile.stepLength
     if (
@@ -755,6 +1167,35 @@ function traceOnce(
           }
         }
       }
+    }
+    if (waypointIndex >= 1 && waypointIndex < requiredWaypoints.length) {
+      const waypoint = requiredWaypoints[waypointIndex]!
+      const toWaypoint = normalize(waypoint.x - x, waypoint.z - z)
+      const waypointDistance = distance({ x, z }, waypoint)
+      const waypointWeight = 0.92
+        + 0.07 * (1 - smoothstep(500, 3_000, waypointDistance))
+      targetDirection = normalize(
+        targetDirection.x * (1 - waypointWeight) + toWaypoint.x * waypointWeight,
+        targetDirection.z * (1 - waypointWeight) + toWaypoint.z * waypointWeight,
+      )
+    }
+    if (guideProjection && guide) {
+      const guideDirection = normalize(
+        guideProjection.target.x - x,
+        guideProjection.target.z - z,
+      )
+      const corridorCorrection = clamp(
+        Math.abs(guideProjection.crossTrack) / guide.corridorWidth,
+        0,
+        1,
+      )
+      const guideWeight = 0.82 + corridorCorrection * 0.16
+      targetDirection = normalize(
+        targetDirection.x * (1 - guideWeight)
+          + guideDirection.x * guideWeight,
+        targetDirection.z * (1 - guideWeight)
+          + guideDirection.z * guideWeight,
+      )
     }
     const feelLX = x + Math.cos(heading - profile.feelAngleRad) * profile.feelDistance
     const feelLZ = z + Math.sin(heading - profile.feelAngleRad) * profile.feelDistance
@@ -916,26 +1357,32 @@ function traceOnce(
     )
     bT = targetAdjust * targetRedirect + (1 - targetAdjust) * bT
 
-    const violatedOverflow = accumulatedOverflow > 150 || targetOverflow > 3
+    const waypointNavigationActive =
+      waypointIndex >= 1 && waypointIndex < requiredWaypoints.length
+    const violatedOverflow = !guide
+      && !waypointNavigationActive
+      && (accumulatedOverflow > 150 || targetOverflow > 3)
     let violatedTracker: TurnTracker | null = null
-    for (const tracker of TURN_TRACKERS) {
-      const startIndex = Math.max(0, nodes.length - 1 - tracker.window)
-      let accumulatedTurn = 0
-      for (let index = startIndex + 1; index < nodes.length; index += 1) {
-        accumulatedTurn += nodes[index]!.headingDelta
-      }
-      if (Math.abs(accumulatedTurn) <= tracker.limit) {
-        continue
-      }
-      const start = nodes[startIndex]!
-      const trackerDir = normalize(x - start.x, z - start.z)
-      const trackerDot = trackerDir.x * targetDirection.x + trackerDir.z * targetDirection.z
-      const tolerance = (trackerDot + targetDot) / 2
-      const threshold = tracker.limit
-        + Math.max(0, tolerance) * Math.max(0, tolerance) * TRACKER_TOLERANCE_FACTOR
-      if (Math.abs(accumulatedTurn) > threshold) {
-        violatedTracker = tracker
-        break
+    if (!guide && !waypointNavigationActive) {
+      for (const tracker of TURN_TRACKERS) {
+        const startIndex = Math.max(0, nodes.length - 1 - tracker.window)
+        let accumulatedTurn = 0
+        for (let index = startIndex + 1; index < nodes.length; index += 1) {
+          accumulatedTurn += nodes[index]!.headingDelta
+        }
+        if (Math.abs(accumulatedTurn) <= tracker.limit) {
+          continue
+        }
+        const start = nodes[startIndex]!
+        const trackerDir = normalize(x - start.x, z - start.z)
+        const trackerDot = trackerDir.x * targetDirection.x + trackerDir.z * targetDirection.z
+        const tolerance = (trackerDot + targetDot) / 2
+        const threshold = tracker.limit
+          + Math.max(0, tolerance) * Math.max(0, tolerance) * TRACKER_TOLERANCE_FACTOR
+        if (Math.abs(accumulatedTurn) > threshold) {
+          violatedTracker = tracker
+          break
+        }
       }
     }
 
@@ -955,6 +1402,16 @@ function traceOnce(
       }
       const resetIndex = Math.max(0, nodes.length - 1 - revertDistance)
       if (resetIndex < 2) {
+        if (waypointIndex >= 1 && waypointIndex < requiredWaypoints.length) {
+          advanceWaypointTarget()
+          prevT = 0
+          targetOverflow = 0
+          accumulatedOverflow = 0
+          antiTarget = null
+          antiTargetRange = 0
+          antiTargetTriggerCount = 0
+          continue
+        }
         return {
           result: {
             ...emptyResult('official-generator-restart', {
@@ -995,7 +1452,7 @@ function traceOnce(
       continue
     }
 
-    const smoothedB = bT * profile.smoothFactor
+    const smoothedB = bT * profile.smoothFactor * wiggleScale
     const officialHeading = wrapAngle(heading - smoothedB * profile.feelAngleRad)
     let chosenHeading = officialHeading
     let nextX = x + Math.cos(chosenHeading) * profile.stepLength
@@ -1003,18 +1460,20 @@ function traceOnce(
     let nextY = grid.sampleHeight(nextX, nextZ)
     let chosenBT = smoothedB
     if (algorithmVersion >= 3) {
-      const candidateMaxGrade = Math.min(
-        constraints.maxGrade,
-        constraints.preferredGrade,
-      )
+      const candidateMaxGrade = guide
+        ? constraints.maxGrade
+        : Math.min(constraints.maxGrade, constraints.preferredGrade)
       const candidateMaxCrossSlope = constraints.maxCrossSlope * 0.85
-      const evaluateHeading = (candidateHeading: number): {
+      const evaluateHeading = (
+        candidateHeading: number,
+        referenceHeading: number,
+      ): {
         heading: number
         x: number
         z: number
         y: number
         valid: boolean
-        invalidReason: 'forward-grade' | 'cross-slope' | null
+        invalidReason: 'forward-grade' | 'cross-slope' | 'guide-corridor' | null
         score: number
       } | null => {
         const candidateX = x + Math.cos(candidateHeading) * profile.stepLength
@@ -1030,18 +1489,45 @@ function traceOnce(
         const forwardGrade = gradeY == null
           ? Math.abs(candidateY - feelCurrent) / profile.stepLength
           : Math.abs(gradeY - feelCurrent) / gradeLookahead
+        const stepGrade = Math.abs(candidateY - feelCurrent) / profile.stepLength
         const candidateGradient = sampleTerrainGradient(grid, candidateX, candidateZ)
         const crossSlope = crossSlopeForHeading(candidateGradient, candidateHeading)
         const forwardValid = forwardGrade <= candidateMaxGrade + 1e-6
+          && (!guide || stepGrade <= candidateMaxGrade + 1e-6)
         const crossValid = crossSlope <= candidateMaxCrossSlope + 1e-6
-        const valid = forwardValid && crossValid
-        const headingError = Math.abs(wrapAngle(candidateHeading - officialHeading))
+        const guideDeviation = guide && guideProjection
+          ? distanceToGuide(guide, candidateX, candidateZ, guideProjection.index)
+          : 0
+        const guideValid = !guide || guideDeviation <= guide.corridorWidth + 1e-6
+        const valid = forwardValid && crossValid && guideValid
+        const headingError = Math.abs(wrapAngle(candidateHeading - referenceHeading))
         const turnScore = headingError / profile.feelAngleRad
         const crossExcess = Math.max(
           0,
           (crossSlope - constraints.preferredGrade)
             / Math.max(1e-4, constraints.maxCrossSlope - constraints.preferredGrade),
         )
+        const gradeExcess = guide
+          ? Math.max(
+              0,
+              (forwardGrade - constraints.preferredGrade)
+                / Math.max(1e-4, constraints.maxGrade - constraints.preferredGrade),
+            )
+          : 0
+        const stepGradeExcess = guide
+          ? Math.max(
+              0,
+              (stepGrade - constraints.preferredGrade)
+                / Math.max(1e-4, constraints.maxGrade - constraints.preferredGrade),
+            )
+          : 0
+        const guideExcess = guide
+          ? Math.max(
+              0,
+              (guideDeviation - guide.corridorWidth * 0.65)
+                / Math.max(1e-4, guide.corridorWidth * 0.35),
+            )
+          : 0
         const elevationPercentile = terrainProfile.percentileAtHeight(candidateY)
         const elevationScore = smoothstep(
           constraints.lowlandStartPercentile,
@@ -1058,27 +1544,49 @@ function traceOnce(
             ? null
             : !forwardValid
               ? 'forward-grade'
-              : 'cross-slope',
+              : !crossValid
+                ? 'cross-slope'
+                : 'guide-corridor',
           score:
             turnScore * 1.5
-            + (forwardGrade / Math.max(1e-4, candidateMaxGrade)) ** 2 * 1.5
+            + (forwardGrade / Math.max(1e-4, constraints.preferredGrade)) ** 2 * 1.5
+            + gradeExcess * gradeExcess * 3
+            + stepGradeExcess * stepGradeExcess * 3
             + crossExcess * crossExcess * 2
+            + guideExcess * guideExcess * 5
             + elevationScore * lowlandWeight * 2,
         }
       }
-      let chosen = evaluateHeading(officialHeading)
+      const dockTarget = waypointIndex >= 1 && waypointIndex < requiredWaypoints.length
+        ? requiredWaypoints[waypointIndex]!
+        : null
+      const dockDistance = dockTarget ? distance({ x, z }, dockTarget) : Number.POSITIVE_INFINITY
+      const docking = dockTarget != null
+        && dockDistance <= Math.max(600, profile.stepLength * 20)
+      const referenceHeading = docking && dockTarget
+        ? Math.atan2(dockTarget.z - z, dockTarget.x - x)
+        : guideProjection
+          ? guideProjection.heading
+          : officialHeading
+      let chosen = evaluateHeading(referenceHeading, referenceHeading)
       let sawForwardGradeFailure = chosen?.invalidReason === 'forward-grade'
       let sawCrossSlopeFailure = chosen?.invalidReason === 'cross-slope'
+      let sawGuideFailure = chosen?.invalidReason === 'guide-corridor'
       if (!chosen?.valid) {
         let rescued: ReturnType<typeof evaluateHeading> = null
         for (let level = 1; level <= 36; level += 1) {
           const offset = (level * 5 * Math.PI) / 180
           for (const sign of [-1, 1]) {
-            const candidate = evaluateHeading(wrapAngle(officialHeading + sign * offset))
+            const candidate = evaluateHeading(
+              wrapAngle(referenceHeading + sign * offset),
+              referenceHeading,
+            )
             if (candidate?.invalidReason === 'forward-grade') {
               sawForwardGradeFailure = true
             } else if (candidate?.invalidReason === 'cross-slope') {
               sawCrossSlopeFailure = true
+            } else if (candidate?.invalidReason === 'guide-corridor') {
+              sawGuideFailure = true
             }
             if (candidate?.valid && (!rescued || candidate.score < rescued.score)) {
               rescued = candidate
@@ -1088,11 +1596,21 @@ function traceOnce(
         chosen = rescued
       }
       if (!chosen?.valid) {
+        if (waypointIndex >= 1 && waypointIndex < requiredWaypoints.length) {
+          if (requireAllWaypoints) {
+            failureReason = 'waypoint-unreachable'
+            break
+          }
+          advanceWaypointTarget()
+          continue
+        }
         failureReason = sawForwardGradeFailure
           ? 'blocked-by-forward-grade'
           : sawCrossSlopeFailure
             ? 'blocked-by-cross-slope'
-            : 'blocked-by-grade'
+            : sawGuideFailure
+              ? 'blocked-by-guide-corridor'
+              : 'blocked-by-grade'
         break
       }
       if (Math.abs(wrapAngle(chosen.heading - officialHeading)) > 1e-6) {
@@ -1109,16 +1627,46 @@ function traceOnce(
       )
     }
     if (nextY == null) {
+      if (waypointIndex >= 1 && waypointIndex < requiredWaypoints.length) {
+        if (requireAllWaypoints) {
+          failureReason = 'waypoint-unreachable'
+          break
+        }
+        advanceWaypointTarget()
+        continue
+      }
       failureReason = 'blocked'
       break
     }
+    if (waypointIndex >= 1 && waypointIndex < requiredWaypoints.length) {
+      const waypoint = requiredWaypoints[waypointIndex]!
+      const currentDistance = distance({ x, z }, waypoint)
+      const nextDistance = distance({ x: nextX, z: nextZ }, waypoint)
+      if (currentDistance > waypointTolerance && nextDistance > waypointTolerance) {
+        const capture = projectWaypointCapture(
+          { x, z },
+          { x: nextX, z: nextZ },
+          waypoint,
+          waypointTolerance,
+        )
+        if (capture && capture.t > 1e-6 && capture.t < 1 - 1e-6) {
+          const captureY = grid.sampleHeight(capture.x, capture.z)
+          if (captureY != null) {
+            nextX = capture.x
+            nextZ = capture.z
+            nextY = captureY
+          }
+        }
+      }
+    }
     prevT = chosenBT
     const headingDelta = wrapAngle(chosenHeading - heading)
+    const segmentLength = Math.hypot(nextX - x, nextZ - z)
     heading = chosenHeading
     x = nextX
     z = nextZ
     y = nextY - profile.roadSink
-    length += profile.stepLength
+    length += segmentLength
     nodes.push({
       x,
       z,
@@ -1130,6 +1678,31 @@ function traceOnce(
       turn: chosenBT,
       headingDelta,
     })
+    if (waypointIndex >= 1 && waypointIndex < requiredWaypoints.length) {
+      const waypoint = requiredWaypoints[waypointIndex]!
+      const currentDistance = distance({ x, z }, waypoint)
+      waypointAttemptTravelled += segmentLength
+      if (currentDistance <= waypointTolerance) {
+        advanceWaypointTarget()
+      } else {
+        if (currentDistance < bestWaypointDistance - 2) {
+          bestWaypointDistance = currentDistance
+          waypointProgressTravelled = 0
+        } else {
+          waypointProgressTravelled += segmentLength
+        }
+        if (
+          waypointProgressTravelled >= waypointNoProgressDistance
+          || waypointAttemptTravelled >= waypointAttemptDistance
+        ) {
+          if (requireAllWaypoints) {
+            failureReason = 'waypoint-unreachable'
+            break
+          }
+          advanceWaypointTarget()
+        }
+      }
+    }
   }
 
   if (!failureReason && nodes.length >= profile.maxSteps) {
@@ -1150,6 +1723,21 @@ function traceOnce(
     }
   }
   const elevationStats = summarizeScenicRoute(grid, nodes, terrainProfile, constraints)
+  const passedWaypointIndices = resolveWaypointPassIndices(
+    nodes,
+    requiredWaypoints,
+    waypointTolerance,
+  )
+  const skippedWaypointIndices: number[] = []
+  for (let index = 1; index < requiredWaypoints.length; index += 1) {
+    if (!passedWaypointIndices.has(index)) {
+      skippedWaypointIndices.push(index)
+    }
+  }
+  if (requireAllWaypoints && skippedWaypointIndices.length > 0) {
+    complete = false
+    failureReason = failureReason ?? 'waypoint-unreachable'
+  }
   return {
     result: {
       nodes,
@@ -1162,6 +1750,13 @@ function traceOnce(
       turnOverflows,
       ...elevationStats,
       steepReplacementSteps,
+      waypointsSkipped: skippedWaypointIndices.length,
+      skippedWaypointIndices,
+      waypointsAttempted: Math.min(
+        Math.max(0, requiredWaypoints.length - 1),
+        waypointsAttempted,
+      ),
+      maxGuideDeviation: guide ? maxGuideDeviation : undefined,
     },
     restart: false,
   }
@@ -1184,6 +1779,22 @@ export function traceOfficialScenicRoad(
   const algorithmVersion = Math.max(2, Math.round(options.algorithmVersion ?? 2))
   const profile = buildScenicTerrainElevationProfile(grid, options)
   const constraints = resolveTerrainConstraints(options)
+  const requiredWaypoints: Vec2[] = algorithmVersion >= 4
+    ? (options.requiredWaypoints ?? [origin]).map((point) => ({ x: point.x, z: point.z }))
+    : [{ x: origin.x, z: origin.z }]
+  if (!requiredWaypoints.length) {
+    requiredWaypoints.push({ x: origin.x, z: origin.z })
+  }
+  const diagonal = Math.hypot(grid.maxX - grid.minX, grid.maxZ - grid.minZ)
+  const waypointTolerance = Math.max(1, options.waypointTolerance ?? 4)
+  const waypointNoProgressDistance = Math.max(
+    250,
+    options.waypointNoProgressDistance ?? Math.max(2_500, diagonal * 0.05),
+  )
+  const waypointAttemptDistance = Math.max(
+    waypointNoProgressDistance,
+    options.waypointAttemptDistance ?? Math.max(8_000, diagonal * 0.2),
+  )
   let last: OfficialScenicRoadResult = emptyResult('official-generator-restart')
   for (let attempt = 0; attempt < MAX_RESTART_ATTEMPTS; attempt += 1) {
     const attemptSeed = (
@@ -1201,11 +1812,131 @@ export function traceOfficialScenicRoad(
       algorithmVersion,
       profile,
       constraints,
+      requiredWaypoints,
+      waypointTolerance,
+      waypointNoProgressDistance,
+      waypointAttemptDistance,
     )
     last = traced.result
     if (!traced.restart) {
+      if (
+        algorithmVersion >= 4
+        && requiredWaypoints.length > 1
+        && !last.complete
+      ) {
+        const fallback = traceOfficialScenicRoad(
+          grid,
+          origin,
+          seed,
+          margin,
+          {
+            ...options,
+            algorithmVersion: 3,
+            requiredWaypoints: [{ x: origin.x, z: origin.z }],
+          },
+        )
+        if (fallback.complete) {
+          const passed = resolveWaypointPassIndices(
+            fallback.nodes,
+            requiredWaypoints,
+            waypointTolerance,
+          )
+          const skippedWaypointIndices: number[] = []
+          for (let index = 1; index < requiredWaypoints.length; index += 1) {
+            if (!passed.has(index)) {
+              skippedWaypointIndices.push(index)
+            }
+          }
+          return {
+            ...fallback,
+            skippedWaypointIndices,
+            waypointsSkipped: skippedWaypointIndices.length,
+            waypointsAttempted: Math.max(
+              last.waypointsAttempted,
+              Math.max(0, requiredWaypoints.length - 1),
+            ),
+          }
+        }
+      }
       return last
     }
   }
   return last
+}
+
+/**
+ * Version-5 guided tracer. A slope-feasible global guide supplies the route
+ * topology, while the Hills probe/turn model still produces the final nodes.
+ * Every waypoint is mandatory and the wiggle amplitude is reduced only when
+ * the full-strength curve cannot satisfy the hard terrain limits.
+ */
+export function traceOfficialScenicGuidedRoad(
+  grid: TerrainHeightGrid,
+  origin: Vec2,
+  seed: number,
+  margin: number,
+  options: OfficialScenicRoadOptions = {},
+): OfficialScenicRoadResult {
+  const guide = buildGuideData(
+    options.guidePoints ?? [],
+    options.guideCorridorWidth ?? 60,
+  )
+  if (!guide) {
+    return emptyResult('guide-empty')
+  }
+  const centerX = (grid.minX + grid.maxX) * 0.5
+  const centerZ = (grid.minZ + grid.maxZ) * 0.5
+  const profile = buildScenicTerrainElevationProfile(grid, options)
+  const constraints = resolveTerrainConstraints(options)
+  const requiredWaypoints = (options.requiredWaypoints ?? [origin])
+    .map((point) => ({ x: point.x, z: point.z }))
+  if (!requiredWaypoints.length) {
+    requiredWaypoints.push({ x: origin.x, z: origin.z })
+  }
+  const waypointTolerance = Math.max(1, options.waypointTolerance ?? 4)
+  const requestedScale = clamp(
+    options.wiggleScale ?? 1,
+    0,
+    1,
+  )
+  const scales = [requestedScale, 0.7, 0.4, 0]
+    .filter((value, index, values) => (
+      values.findIndex((candidate) => Math.abs(candidate - value) < 1e-6)
+      === index
+    ))
+  let last: OfficialScenicRoadResult = emptyResult('guided-official-blocked')
+  for (const wiggleScale of scales) {
+    const traced = traceOnce(
+      grid,
+      origin,
+      centerX,
+      centerZ,
+      seed,
+      margin,
+      5,
+      profile,
+      constraints,
+      requiredWaypoints,
+      waypointTolerance,
+      Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+      guide,
+      wiggleScale,
+      true,
+    )
+    last = traced.result
+    if (
+      last.complete
+      && last.waypointsSkipped === 0
+      && last.maxForwardGrade <= constraints.maxGrade + 1e-4
+      && last.maxCrossSlope <= constraints.maxCrossSlope + 1e-4
+    ) {
+      return last
+    }
+  }
+  return {
+    ...last,
+    complete: false,
+    failureReason: last.failureReason ?? 'guided-official-blocked',
+  }
 }

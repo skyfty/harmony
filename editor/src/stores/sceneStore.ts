@@ -18890,7 +18890,11 @@ export const useSceneStore = defineStore('scene', {
     /** Validates the live draft before replacing the last successful road. */
     generateProceduralLandscapeRoad(
       nodeId: string,
-    ): { accepted: boolean; failureReason: string | null } {
+    ): {
+      accepted: boolean
+      failureReason: string | null
+      unreachableWaypointIndex?: number | null
+    } {
       const target = findNodeById(this.nodes, nodeId)
       if (!target) {
         return { accepted: false, failureReason: 'node-not-found' }
@@ -18910,11 +18914,6 @@ export const useSceneStore = defineStore('scene', {
         ...routing,
         strategy,
         termination: 'boundary',
-      }
-      if (strategy === 'seeded') {
-        // The official Hills generator only uses a required start pose. Extra
-        // editor anchors remain available to the separate shortest strategy.
-        waypoints = waypoints.slice(0, 1)
       }
       if (!waypoints.length) {
         const center = getProceduralLandscapeScenicStartLocal(nodeId)
@@ -18951,6 +18950,7 @@ export const useSceneStore = defineStore('scene', {
         return {
           accepted: false,
           failureReason: validation?.failureReason ?? 'terrain-grid-not-ready',
+          unreachableWaypointIndex: validation?.unreachableWaypointIndex ?? null,
         }
       }
       const accepted = this.updateNodeComponentProps(nodeId, component.id, {
