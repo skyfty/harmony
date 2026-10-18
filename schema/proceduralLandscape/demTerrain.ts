@@ -151,11 +151,24 @@ export interface DemTerrainMeshBuilder {
   readonly error: string | null
 }
 
+export interface DemTerrainMeshBuilderOptions {
+  roadbed?: DemRoadbedTarget | null
+  /**
+   * World-space translation of the host node. DEM positions and heights stay
+   * local, while the roadbed target is defined in world space.
+   */
+  worldOffset?: {
+    x: number
+    y: number
+    z: number
+  } | null
+}
+
 /** Time-sliced rectangular DEM mesh. Positions stay local; the host node owns XZ placement. */
 export function createDemTerrainMeshBuilder(
   data: TerrainDemRuntimeGridData,
   requestedStep: number,
-  options: { roadbed?: DemRoadbedTarget | null } = {},
+  options: DemTerrainMeshBuilderOptions = {},
 ): DemTerrainMeshBuilder {
   const sampleStep = Math.max(1, Math.min(8, Math.round(requestedStep)))
   const cols = Math.max(2, Math.floor((data.width - 1) / sampleStep) + 1)
@@ -180,8 +193,10 @@ export function createDemTerrainMeshBuilder(
   }
 
   const sampleVisibleHeight = (x: number, z: number, col: number, row: number): number => {
-    if (options.roadbed && options.roadbed.distanceAt(x, z) <= options.roadbed.influenceHalfWidth) {
-      return options.roadbed.coarseHeightAt(x, z)
+    const worldX = x + (options.worldOffset?.x ?? 0)
+    const worldZ = z + (options.worldOffset?.z ?? 0)
+    if (options.roadbed && options.roadbed.distanceAt(worldX, worldZ) <= options.roadbed.influenceHalfWidth) {
+      return options.roadbed.coarseHeightAt(worldX, worldZ) - (options.worldOffset?.y ?? 0)
     }
     return sampleGridHeight(col, row)
   }

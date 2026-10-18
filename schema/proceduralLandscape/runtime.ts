@@ -71,6 +71,7 @@ import {
   applyProceduralLandscapeSurfaceInjection,
   createProceduralLandscapeSurfaceUniforms,
   type ProceduralLandscapeSurfacePatch,
+  type ProceduralLandscapeSurfaceOverrides,
 } from './surfaceMaterial'
 import { createRoadBand, type RoadBandHandle, type RoadBandTextures } from './roadBand'
 import { createTreeMeshManager, type TreeMeshManager } from './treeMeshes'
@@ -495,6 +496,7 @@ export function validateProceduralLandscapeGeneratedRoute(
 type DirtyFlags = {
   grid: boolean
   world: boolean
+  demMesh: boolean
   instances: boolean
   uniforms: boolean
 }
@@ -527,6 +529,77 @@ function jsonKey(value: unknown): string {
     return JSON.stringify(value)
   } catch {
     return String(value)
+  }
+}
+
+export interface DemRoadbedSignatureOptions {
+  cellSize: number
+  sampleStep: number
+  target: DemRoadbedTarget | null
+  routeNodeCount: number
+  routeLength: number
+}
+
+/**
+ * Signature for the DEM coarse mesh's baked cut/fill surface.
+ *
+ * Live waypoint edits are intentionally excluded: only a committed
+ * `generatedRoute` can change the roadbed geometry.
+ */
+export function resolveDemRoadbedSignature(
+  props: ProceduralLandscapeComponentProps,
+  options: DemRoadbedSignatureOptions,
+): string {
+  const target = options.target
+  return jsonKey([
+    props.dem.assetId,
+    props.dem.runtimeGridUrl,
+    options.sampleStep,
+    options.cellSize,
+    props.generationRevision,
+    props.seed,
+    props.road.enabled,
+    props.road.width,
+    props.road.shoulderWidth,
+    props.road.flattenBand,
+    props.road.flattenStrength,
+    props.road.maxSlope,
+    props.road.generatedRoute,
+    options.routeNodeCount,
+    Number(options.routeLength.toFixed(3)),
+    target
+      ? [
+          target.halfWidth,
+          target.shoulderWidth,
+          target.sideWidth,
+          target.meshHalfWidth,
+          target.coarseClearance,
+        ]
+      : null,
+  ])
+}
+
+export function resolveDemSurfaceOverrides(
+  role: 'terrain' | 'roadbed',
+  cutProx: number,
+): ProceduralLandscapeSurfaceOverrides {
+  if (role === 'terrain') {
+    return {
+      uPlRoadbedCutProx: cutProx,
+      uPlUseBaseSurface: 0,
+      uPlRoadDisplacement: 0,
+      // DEM cut/fill is already baked into the generated geometry. Applying
+      // the low-resolution road raster again here can lift it above the road.
+      uPlFlattenStrength: 0,
+    }
+  }
+  return {
+    uPlRoadbedCutProx: 0,
+    uPlUseBaseSurface: 1,
+    uPlRoadDisplacement: 0,
+    uPlFlattenStrength: 0,
+    uPlShowCanopy: 0,
+    uPlRoadbedBrightness: 1.1,
   }
 }
 
@@ -723,7 +796,13 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadDebug: jsonKey(props.debug.showRoadPath),
     chunkDebug: jsonKey(props.debug.showChunks),
   }
-  const dirty: DirtyFlags = { grid: false, world: false, instances: false, uniforms: true }
+  const dirty: DirtyFlags = {
+    grid: false,
+    world: false,
+    demMesh: false,
+    instances: false,
+    uniforms: true,
+  }
   let forceStream = true
   let enabled = true
   let disposed = false
@@ -739,6 +818,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demGridSampleStep = 1
   let demMeshBuilder: DemTerrainMeshBuilder | null = null
   let demMesh: THREE.Mesh | null = null
+  let demRoadbedSignature = ''
+  let demMeshRoadbedSignature = ''
+  let demMeshBuildRoadbedSignature = ''
   let demWorldBuilt = false
   let demLoadPromise: Promise<void> | null = null
   let demLoadToken = 0
@@ -1130,6 +1212,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demGridData = null
     disposeDemRoadbed()
     disposeDemMesh()
+    demRoadbedSignature = ''
+    demMeshRoadbedSignature = ''
+    demMeshBuildRoadbedSignature = ''
+    dirty.demMesh = false
     demWorldBuilt = false
     demSourceKey = ''
     demBuildMs = 0
@@ -1204,8 +1290,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return false
     }
     if (!demMeshBuilder) {
+      const hostWorld = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
+      demMeshBuildRoadbedSignature = demRoadbedSignature
       demMeshBuilder = createDemTerrainMeshBuilder(demGridData, demGridSampleStep, {
         roadbed: demRoadbedTarget,
+        worldOffset: {
+          x: hostWorld.x,
+          y: hostWorld.y,
+          z: hostWorld.z,
+        },
       })
       demBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
       stats.demStatus = 'building'
@@ -1224,9 +1317,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       stats.demStatus = 'error'
       stats.demError = 'DEM terrain mesh generation failed'
       gridFailed = true
+      dirty.demMesh = false
       return false
     }
+    const completedRoadbedSignature = demMeshBuildRoadbedSignature
     disposeDemMesh()
+    demMeshBuildRoadbedSignature = ''
     const positionBytes = demGeometry.getAttribute('position')?.array?.byteLength ?? 0
     const normalBytes = demGeometry.getAttribute('normal')?.array?.byteLength ?? 0
     const indexBytes = demGeometry.getIndex()?.array?.byteLength ?? 0
@@ -1237,10 +1333,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     mesh.userData.proceduralLandscapeDemTerrain = true
     hostObject.add(mesh)
     demMesh = mesh
+    demMeshRoadbedSignature = completedRoadbedSignature
     currentTerrainSourceSignature = `dem:${demSourceKey}`
     stats.demStatus = 'ready'
     dirty.grid = false
     dirty.world = false
+    dirty.demMesh = false
     installSurfaceInjection()
     return true
   }
@@ -1592,6 +1690,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     disposeWaterAndBarrier()
     disposeWorldForest()
     disposeDemMesh()
+    demRoadbedSignature = ''
+    demMeshRoadbedSignature = ''
+    demMeshBuildRoadbedSignature = ''
+    dirty.demMesh = false
     gridBuilder = null
     grid = null
   }
@@ -1803,6 +1905,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     // The previous roadbed is a surface mesh under the host; remove it before
     // resolving terrain triangles so it cannot be mistaken for raw DEM.
     disposeDemRoadbed()
+    demRoadbedTarget = null
+    demRoadbedSideWidth = 0
+    demRoadbedCutProx = 0
+    demRoadbedMaxCutFill = 0
+    demRoadbedOcclusionCount = 0
+    demRoadbedAuditSamples = 0
+    demRoadbedTriangleCount = 0
+    stats.roadbedOuterError = 0
     const activeGrid = grid
     const bounds = { minX: grid.minX, minZ: grid.minZ, sizeX: grid.maxX - grid.minX, sizeZ: grid.maxZ - grid.minZ }
     const sceneAreaKm2 = Math.max(0.001, (bounds.sizeX * bounds.sizeZ) / 1_000_000)
@@ -2025,6 +2135,22 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             }
           }
         }
+    }
+    demRoadbedSignature = resolveDemRoadbedSignature(props, {
+      cellSize: activeGrid.cellSize,
+      sampleStep: demGridSampleStep,
+      target: demRoadbedTarget,
+      routeNodeCount: roadResult?.nodes.length ?? 0,
+      routeLength: roadResult?.length ?? 0,
+    })
+    if (demMeshBuilder && demMeshBuildRoadbedSignature !== demRoadbedSignature) {
+      // A newer roadbed was committed while the previous mesh was still being
+      // generated. Restart from the new target; keep any completed mesh visible.
+      demMeshBuilder = null
+      demMeshBuildRoadbedSignature = ''
+    }
+    if (demMesh && demMeshRoadbedSignature !== demRoadbedSignature) {
+      dirty.demMesh = true
     }
     if (roadResult && (roadResult.nodes.length <= 1 || !roadFieldData)) {
       if (!roadWarningEmitted) {
@@ -3368,20 +3494,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           return null
         }
         if (mesh === demMesh) {
-          return {
-            uPlRoadbedCutProx: demRoadbedCutProx,
-            uPlUseBaseSurface: 0,
-            uPlRoadDisplacement: 0,
-          }
+          return resolveDemSurfaceOverrides('terrain', demRoadbedCutProx)
         }
         if (mesh === demRoadbedMesh) {
-          return {
-            uPlRoadbedCutProx: 0,
-            uPlUseBaseSurface: 1,
-            uPlRoadDisplacement: 0,
-            uPlShowCanopy: 0,
-            uPlRoadbedBrightness: 1.1,
-          }
+          return resolveDemSurfaceOverrides('roadbed', 0)
         }
         return null
       },
@@ -3900,6 +4016,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // roadbed mesh; re-inject the seasonal surface so it is not left white.
       if (usesDemTerrain()) {
         installSurfaceInjection()
+      }
+    }
+    if (dirty.demMesh) {
+      if (!usesDemTerrain() || !demGridData) {
+        dirty.demMesh = false
+      } else {
+        const ready = stepDemBuild()
+        if (!ready) {
+          updateStats()
+          return
+        }
       }
     }
     if (dirty.uniforms) {

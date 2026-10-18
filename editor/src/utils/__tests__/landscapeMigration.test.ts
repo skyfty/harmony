@@ -10,11 +10,18 @@ import {
   createDemRoadbedTargetGeometry,
   createDemRoadbedTarget,
 } from '@schema/proceduralLandscape/demRoadbed'
+import { createDemTerrainMeshBuilder } from '@schema/proceduralLandscape/demTerrain'
+import { createDefaultProceduralLandscapeProps } from '@schema/proceduralLandscape/config'
+import {
+  resolveDemRoadbedSignature,
+  resolveDemSurfaceOverrides,
+} from '@schema/proceduralLandscape/runtime'
 import { densifyRoadRows } from '@schema/proceduralLandscape/roadBandRows'
 import { buildRoadProximityIndex } from '@schema/proceduralLandscape/roadProximity'
 import type { LandscapeDensityField } from '@schema/proceduralLandscape/densityField'
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
 import type { TerrainHeightGrid } from '@schema/proceduralLandscape/terrainSampler'
+import type { TerrainDemRuntimeGridData } from '@schema/terrainDemRuntimeGrid'
 
 function makeGrid(size = 200, heightAt: (x: number, z: number) => number = () => 10): TerrainHeightGrid {
   const cellSize = 10
@@ -66,6 +73,92 @@ function makeDensity(): LandscapeDensityField {
     sampleUnit: () => 1,
     memoryBytes: data.byteLength,
   }
+}
+
+function makeDemRuntimeGrid(size = 7, cellSize = 30): TerrainDemRuntimeGridData {
+  const width = size
+  const height = size
+  const heights = new Float32Array(width * height)
+  let maxElevation = 0
+  for (let row = 0; row < height; row += 1) {
+    for (let col = 0; col < width; col += 1) {
+      const value = row * cellSize * 0.4 + col * cellSize * 0.05
+      heights[row * width + col] = value
+      maxElevation = Math.max(maxElevation, value)
+    }
+  }
+  return {
+    width,
+    height,
+    cellSizeX: cellSize,
+    cellSizeZ: cellSize,
+    minX: 0,
+    minZ: 0,
+    maxX: (width - 1) * cellSize,
+    maxZ: (height - 1) * cellSize,
+    minElevation: 0,
+    maxElevation,
+    sourceMinElevation: 0,
+    sourceMaxElevation: maxElevation,
+    anchor: {
+      latitudeDegrees: 0,
+      longitudeDegrees: 0,
+      groundElevationMeters: 0,
+    },
+    crs: {
+      epsg: 32646,
+      zone: 46,
+      hemisphere: 'north',
+    },
+    filledRatio: 1,
+    heights,
+  }
+}
+
+function sampleDemHeight(data: TerrainDemRuntimeGridData, x: number, z: number): number {
+  const fx = Math.max(0, Math.min(data.width - 1, x / data.cellSizeX))
+  const fz = Math.max(0, Math.min(data.height - 1, z / data.cellSizeZ))
+  const col = Math.min(data.width - 2, Math.floor(fx))
+  const row = Math.min(data.height - 2, Math.floor(fz))
+  const tx = fx - col
+  const tz = fz - row
+  const h00 = data.heights[row * data.width + col]!
+  const h10 = data.heights[row * data.width + col + 1]!
+  const h01 = data.heights[(row + 1) * data.width + col]!
+  const h11 = data.heights[(row + 1) * data.width + col + 1]!
+  return (h00 * (1 - tx) + h10 * tx) * (1 - tz)
+    + (h01 * (1 - tx) + h11 * tx) * tz
+}
+
+function buildDemGeometry(
+  data: TerrainDemRuntimeGridData,
+  roadbed: ReturnType<typeof createDemRoadbedTarget> | null,
+  worldOffset: { x: number; y: number; z: number } | null = null,
+): THREE.BufferGeometry {
+  const builder = createDemTerrainMeshBuilder(data, 1, { roadbed, worldOffset })
+  while (!builder.step(250)) {
+    // Tiny fixture: this normally finishes on the first step.
+  }
+  expect(builder.error).toBeNull()
+  expect(builder.geometry).not.toBeNull()
+  return builder.geometry!
+}
+
+function geometryHeightAt(
+  geometry: THREE.BufferGeometry,
+  x: number,
+  z: number,
+): number | null {
+  const position = geometry.getAttribute('position')
+  for (let index = 0; index < position.count; index += 1) {
+    if (
+      Math.abs(position.getX(index) - x) <= 1e-4
+      && Math.abs(position.getZ(index) - z) <= 1e-4
+    ) {
+      return position.getY(index)
+    }
+  }
+  return null
 }
 
 describe('tree LOD bands', () => {
@@ -189,6 +282,158 @@ describe('DEM roadbed target', () => {
     const c = new THREE.Vector3().fromBufferAttribute(position, index.getX(2))
     const normal = b.sub(a).cross(c.sub(a)).normalize()
     expect(normal.y).toBeGreaterThan(0.9)
+  })
+
+  it('rebuilds the coarse DEM from the latest committed roadbed target', () => {
+    const data = makeDemRuntimeGrid()
+    const worldOffset = { x: 500, y: 20, z: -300 }
+    const rawAt = (x: number, z: number): number => (
+      sampleDemHeight(data, x - worldOffset.x, z - worldOffset.z) + worldOffset.y
+    )
+    const roadNode = (index: number, x: number, z: number): RoadTraceNode => ({
+      ...node(index, x, rawAt(x, z)),
+      z,
+    })
+    const roadAt = (z: number): ReturnType<typeof buildRoadProximityIndex> => (
+      buildRoadProximityIndex([
+        roadNode(0, worldOffset.x, worldOffset.z + z),
+        roadNode(1, worldOffset.x + 180, worldOffset.z + z),
+      ], { maxDistance: 80 })
+    )
+    const firstRoad = roadAt(90)
+    const secondRoad = roadAt(150)
+    expect(firstRoad).not.toBeNull()
+    expect(secondRoad).not.toBeNull()
+    if (!firstRoad || !secondRoad) return
+
+    const makeTarget = (roadField: NonNullable<ReturnType<typeof roadAt>>) => createDemRoadbedTarget({
+      roadField,
+      rawHeightAt: rawAt,
+      halfWidth: 2,
+      shoulderWidth: 2.5,
+      demCellSize: 30,
+      sideWidth: 15,
+      coverageWidth: 4,
+      coarseClearance: 2,
+    })
+    const firstTarget = makeTarget(firstRoad)
+    const secondTarget = makeTarget(secondRoad)
+    const rawMesh = buildDemGeometry(data, null)
+    const firstMesh = buildDemGeometry(data, firstTarget, worldOffset)
+    const secondMesh = buildDemGeometry(data, secondTarget, worldOffset)
+
+    const rawAtFirst = geometryHeightAt(rawMesh, 90, 90)!
+    const rawAtSecond = geometryHeightAt(rawMesh, 90, 150)!
+    expect(geometryHeightAt(firstMesh, 90, 90)!).toBeLessThan(rawAtFirst - 1)
+    expect(geometryHeightAt(firstMesh, 90, 150)!).toBeCloseTo(rawAtSecond, 4)
+    expect(geometryHeightAt(secondMesh, 90, 150)!).toBeLessThan(rawAtSecond - 1)
+
+    // Simulate the generated high-resolution roadbed and ensure neither the
+    // coarse mesh nor the roadbed rises above the asphalt surface.
+    const rows = densifyRoadRows([
+      roadNode(0, worldOffset.x, worldOffset.z + 90),
+      roadNode(1, worldOffset.x + 180, worldOffset.z + 90),
+    ], 4)
+    const roadbed = createDemRoadbedTargetGeometry(rows, firstTarget, {
+      lateralStep: 3,
+      lift: 0.01,
+      hostInverse: new THREE.Matrix4(),
+    })
+    expect(roadbed).not.toBeNull()
+    if (!roadbed) return
+
+    const auditAsphalt = (geometry: THREE.BufferGeometry): void => {
+      const position = geometry.getAttribute('position')
+      for (let index = 0; index < position.count; index += 1) {
+        const x = position.getX(index)
+        const z = position.getZ(index)
+        if (firstRoad.distanceAt(x, z) > firstTarget.halfWidth) {
+          continue
+        }
+        const designY = firstRoad.heightAt(x, z)
+        expect(designY).not.toBeNull()
+        expect(position.getY(index)).toBeLessThan(designY! + 0.05 - 1e-4)
+      }
+    }
+    auditAsphalt(firstMesh)
+    auditAsphalt(roadbed.geometry)
+
+    const roadbedPosition = roadbed.geometry.getAttribute('position')
+    const roadbedIndex = roadbed.geometry.getIndex()
+    expect(roadbedIndex).not.toBeNull()
+    for (let triangle = 0; triangle < roadbedIndex!.count; triangle += 3) {
+      const a = roadbedIndex!.getX(triangle)
+      const b = roadbedIndex!.getX(triangle + 1)
+      const c = roadbedIndex!.getX(triangle + 2)
+      const centerX = (roadbedPosition.getX(a) + roadbedPosition.getX(b) + roadbedPosition.getX(c)) / 3
+      const centerZ = (roadbedPosition.getZ(a) + roadbedPosition.getZ(b) + roadbedPosition.getZ(c)) / 3
+      expect(firstRoad.distanceAt(centerX, centerZ)).toBeGreaterThanOrEqual(firstTarget.halfWidth - 1e-4)
+    }
+  })
+
+  it('changes the DEM signature only for committed road geometry or grading settings', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'dem-roadbed-signature' })
+    const options = {
+      cellSize: 30,
+      sampleStep: 1,
+      target: null,
+      routeNodeCount: 0,
+      routeLength: 0,
+    }
+    const initial = resolveDemRoadbedSignature(props, options)
+    const draftOnly = {
+      ...props,
+      road: {
+        ...props.road,
+        waypoints: [{ x: 10, z: 20 }],
+      },
+    }
+    expect(resolveDemRoadbedSignature(draftOnly, options)).toBe(initial)
+
+    const committed = {
+      ...props,
+      generationRevision: 1,
+      road: {
+        ...props.road,
+        enabled: true,
+        generatedRoute: {
+          waypoints: [{ x: 10, z: 20 }],
+          strategy: 'seeded' as const,
+          termination: 'boundary' as const,
+          seed: 1,
+          waypointTolerance: 12,
+          pathDeviation: 160,
+          revision: 1,
+        },
+      },
+    }
+    const committedSignature = resolveDemRoadbedSignature(committed, {
+      ...options,
+      routeNodeCount: 50,
+      routeLength: 800,
+    })
+    expect(committedSignature).not.toBe(initial)
+    expect(resolveDemRoadbedSignature({
+      ...committed,
+      road: { ...committed.road, generatedRoute: null },
+    }, options)).not.toBe(committedSignature)
+    expect(resolveDemRoadbedSignature({
+      ...committed,
+      road: { ...committed.road, width: 6 },
+    }, options)).not.toBe(committedSignature)
+  })
+
+  it('disables raster vertex flattening for both already-graded DEM surfaces', () => {
+    expect(resolveDemSurfaceOverrides('terrain', 2.75)).toMatchObject({
+      uPlRoadbedCutProx: 2.75,
+      uPlFlattenStrength: 0,
+      uPlRoadDisplacement: 0,
+    })
+    expect(resolveDemSurfaceOverrides('roadbed', 0)).toMatchObject({
+      uPlRoadbedCutProx: 0,
+      uPlFlattenStrength: 0,
+      uPlRoadDisplacement: 0,
+    })
   })
 })
 

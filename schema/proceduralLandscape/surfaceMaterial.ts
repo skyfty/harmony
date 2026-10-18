@@ -575,6 +575,7 @@ export interface ProceduralLandscapeSurfaceOverrides {
   uPlRoadbedCutProx?: number
   uPlUseBaseSurface?: number
   uPlRoadDisplacement?: number
+  uPlFlattenStrength?: number
   uPlShowCanopy?: number
   uPlRoadbedBrightness?: number
 }

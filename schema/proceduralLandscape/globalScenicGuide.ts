@@ -10,6 +10,8 @@ const MAX_PLANNING_CELLS_PER_AXIS = 2048
 const MIN_PLANNING_CELL_SIZE = 10
 const MAX_PLANNING_CELL_SIZE = 30
 const DEFAULT_MAX_EXPANDED_STATES = 6_000_000
+const GUIDE_CORNER_MIN_TURN_RAD = (10 * Math.PI) / 180
+const GUIDE_CORNER_MAX_CUT_METERS = 40
 
 const DIRECTIONS: ReadonlyArray<readonly [number, number]> = [
   [1, 0],
@@ -35,6 +37,7 @@ export interface GlobalScenicGuideOptions {
   maxCrossSlope?: number
   crossSlopeWeight?: number
   maxExpandedStates?: number
+  waypointTolerance?: number
 }
 
 export interface GlobalScenicGuideResult {
@@ -643,6 +646,151 @@ function guideValid(
   return true
 }
 
+function sampleQuadraticBezier(
+  start: Vec2,
+  control: Vec2,
+  end: Vec2,
+  spacing: number,
+): Vec2[] {
+  const approximateLength = distance(start, control) + distance(control, end)
+  const count = Math.max(8, Math.ceil(approximateLength / Math.max(2, spacing)))
+  const points: Vec2[] = []
+  for (let step = 0; step <= count; step += 1) {
+    const t = step / count
+    const oneMinusT = 1 - t
+    points.push({
+      x: oneMinusT * oneMinusT * start.x
+        + 2 * oneMinusT * t * control.x
+        + t * t * end.x,
+      z: oneMinusT * oneMinusT * start.z
+        + 2 * oneMinusT * t * control.z
+        + t * t * end.z,
+    })
+  }
+  return points
+}
+
+function sliceGuideAtDistance(
+  points: ReadonlyArray<Vec2>,
+  jointIndex: number,
+  requestedDistance: number,
+  direction: -1 | 1,
+): { index: number; point: Vec2; available: number } {
+  let remaining = requestedDistance
+  let available = 0
+  let cursor = jointIndex
+  while (direction < 0 ? cursor > 0 : cursor < points.length - 1) {
+    const current = points[cursor]!
+    const nextIndex = cursor + direction
+    const next = points[nextIndex]!
+    const segmentLength = distance(current, next)
+    available += segmentLength
+    if (segmentLength > 1e-6 && remaining <= segmentLength) {
+      const t = remaining / segmentLength
+      return {
+        index: direction < 0 ? nextIndex : cursor,
+        point: {
+          x: current.x + (next.x - current.x) * t,
+          z: current.z + (next.z - current.z) * t,
+        },
+        available,
+      }
+    }
+    remaining -= segmentLength
+    cursor = nextIndex
+  }
+  return {
+    index: cursor,
+    point: { ...points[cursor]! },
+    available,
+  }
+}
+
+/**
+ * Round only the joins between independently planned guide legs. Chaikin keeps
+ * the path inside each leg, but does not share control points across waypoint
+ * joints; a 90-degree clicked waypoint therefore remains a hard corner.
+ */
+export function roundGuideJoints(
+  grid: TerrainHeightGrid,
+  points: ReadonlyArray<Vec2>,
+  jointIndices: ReadonlyArray<number>,
+  spacing: number,
+  waypointTolerance: number,
+  cutScale: number,
+): Vec2[] {
+  if (!jointIndices.length || cutScale <= 0) {
+    return points.map((point) => ({ ...point }))
+  }
+  const requestedCut = Math.min(
+    GUIDE_CORNER_MAX_CUT_METERS,
+    Math.max(8, waypointTolerance * 1.25),
+  ) * clamp(cutScale, 0, 1)
+  const output: Vec2[] = []
+  let cursor = 0
+  for (let jointNumber = 0; jointNumber < jointIndices.length; jointNumber += 1) {
+    const jointIndex = jointIndices[jointNumber]!
+    if (jointIndex <= cursor || jointIndex >= points.length - 1) {
+      continue
+    }
+    const previousJointIndex = jointNumber > 0 ? jointIndices[jointNumber - 1]! : 0
+    const nextJointIndex = jointNumber + 1 < jointIndices.length
+      ? jointIndices[jointNumber + 1]!
+      : points.length - 1
+    let availableBefore = 0
+    for (let index = jointIndex; index > Math.max(cursor, previousJointIndex); index -= 1) {
+      availableBefore += distance(points[index - 1]!, points[index]!)
+    }
+    let availableAfter = 0
+    for (let index = jointIndex; index < Math.min(points.length - 1, nextJointIndex); index += 1) {
+      availableAfter += distance(points[index]!, points[index + 1]!)
+    }
+    const cut = Math.min(requestedCut, availableBefore * 0.42, availableAfter * 0.42)
+    if (cut < 6) {
+      continue
+    }
+    const entry = sliceGuideAtDistance(points, jointIndex, cut, -1)
+    const exit = sliceGuideAtDistance(points, jointIndex, cut, 1)
+    const incomingLength = distance(entry.point, points[jointIndex]!)
+    const outgoingLength = distance(points[jointIndex]!, exit.point)
+    if (incomingLength <= 1e-6 || outgoingLength <= 1e-6) {
+      continue
+    }
+    const incoming = {
+      x: (points[jointIndex]!.x - entry.point.x) / incomingLength,
+      z: (points[jointIndex]!.z - entry.point.z) / incomingLength,
+    }
+    const outgoing = {
+      x: (exit.point.x - points[jointIndex]!.x) / outgoingLength,
+      z: (exit.point.z - points[jointIndex]!.z) / outgoingLength,
+    }
+    if (incoming.x * outgoing.x + incoming.z * outgoing.z >= Math.cos(GUIDE_CORNER_MIN_TURN_RAD)) {
+      continue
+    }
+    for (let index = cursor; index <= entry.index; index += 1) {
+      appendUnique(output, points[index]!)
+    }
+    appendUnique(output, entry.point)
+    const curve = sampleQuadraticBezier(
+      entry.point,
+      points[jointIndex]!,
+      exit.point,
+      spacing,
+    )
+    for (let index = 1; index < curve.length - 1; index += 1) {
+      if (grid.sampleHeight(curve[index]!.x, curve[index]!.z) != null) {
+        appendUnique(output, curve[index]!)
+      }
+    }
+    appendUnique(output, exit.point)
+    cursor = exit.index + 1
+  }
+  for (let index = cursor; index < points.length; index += 1) {
+    appendUnique(output, points[index]!)
+  }
+  return output
+}
+
 function prepareGuide(
   grid: TerrainHeightGrid,
   rawLegs: ReadonlyArray<ReadonlyArray<Vec2>>,
@@ -652,13 +800,49 @@ function prepareGuide(
   const maxCrossSlope = options.maxCrossSlope
     ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope
   const spacing = Math.max(4, Math.min(16, options.stepLength))
+  const waypointTolerance = Math.max(4, options.waypointTolerance ?? 12)
   for (const iterations of [4, 3, 2, 1, 0]) {
     const points: Vec2[] = []
+    const jointIndices: number[] = []
     for (const leg of rawLegs) {
       const smoothed = resampleGuide(grid, chaikin(leg, iterations), spacing)
-      for (const point of smoothed) {
-        appendUnique(points, point)
+      if (!smoothed.length) {
+        continue
       }
+      if (points.length) {
+        appendUnique(points, smoothed[0]!)
+        jointIndices.push(points.length - 1)
+      }
+      for (let index = points.length ? 1 : 0; index < smoothed.length; index += 1) {
+        appendUnique(points, smoothed[index]!)
+      }
+    }
+    if (!jointIndices.length) {
+      if (guideValid(
+        grid,
+        points,
+        maxGrade * 1.08,
+        maxCrossSlope * 1.08,
+      )) {
+        return points
+      }
+      continue
+    }
+    const rounded = roundGuideJoints(
+      grid,
+      points,
+      jointIndices,
+      spacing,
+      waypointTolerance,
+      1,
+    )
+    if (guideValid(
+      grid,
+      rounded,
+      maxGrade * 1.08,
+      maxCrossSlope * 1.08,
+    )) {
+      return rounded
     }
     if (guideValid(
       grid,

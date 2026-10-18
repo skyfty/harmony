@@ -127,9 +127,11 @@ export interface DemRoadbedTargetGeometryResult extends DemRoadbedGeometryResult
 }
 
 /**
- * High-resolution DEM roadbed whose outer edge is exactly the raw terrain.
- * The extra attributes let the shared surface shader keep the gravel/rock
- * palette continuous with the adjacent coarse terrain.
+ * High-resolution DEM roadbed side ribbons whose outer edge is exactly the raw
+ * terrain. The asphalt width is intentionally left open: the road band owns
+ * that surface, so a cut/fill apron can never be rendered above the asphalt.
+ * The extra attributes keep the gravel/rock palette continuous with the
+ * adjacent coarse terrain.
  */
 export function createDemRoadbedTargetGeometry(
   rows: ReadonlyArray<RoadBandRow>,
@@ -146,9 +148,13 @@ export function createDemRoadbedTargetGeometry(
   const lateralStep = Math.max(1, options.lateralStep ?? 3)
   const lift = options.lift ?? 0.01
   const halfWidth = target.meshHalfWidth
-  const columns = Math.max(3, Math.ceil((halfWidth * 2) / lateralStep) + 1)
-  const vertexCount = rows.length * columns
-  const triangleCount = (rows.length - 1) * (columns - 1) * 2
+  const asphaltHalfWidth = Math.min(halfWidth, target.halfWidth)
+  const sideSpan = Math.max(0.001, halfWidth - asphaltHalfWidth)
+  const columns = Math.max(2, Math.ceil(sideSpan / lateralStep) + 1)
+  const stripCount = 2
+  const verticesPerStrip = rows.length * columns
+  const vertexCount = verticesPerStrip * stripCount
+  const triangleCount = (rows.length - 1) * (columns - 1) * 2 * stripCount
   const positions = new Float32Array(vertexCount * 3)
   const normals = new Float32Array(vertexCount * 3)
   const baseHeights = new Float32Array(vertexCount)
@@ -158,70 +164,87 @@ export function createDemRoadbedTargetGeometry(
   let maxCutFill = 0
   let outerError = 0
 
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex]!
-    const normalX = -Math.sin(row.heading)
-    const normalZ = Math.cos(row.heading)
-    for (let column = 0; column < columns; column += 1) {
-      const t = column / (columns - 1)
-      const lateral = -halfWidth + t * halfWidth * 2
-      const x = row.x + normalX * lateral
-      const z = row.z + normalZ * lateral
-      const index = rowIndex * columns + column
-      const rawY = target.rawHeightAt(x, z)
-      const y = Math.abs(lateral) >= halfWidth - 1e-4
-        ? rawY
-        : target.heightAt(x, z)
-      maxCutFill = Math.max(maxCutFill, Math.abs(y - rawY))
-      baseHeights[index] = rawY
-      if (column === 0 || column === columns - 1) {
-        outerError = Math.max(outerError, Math.abs(y - rawY))
-      }
-      const baseNormal = target.rawNormalAt(x, z)
-      baseNormals[index * 3] = baseNormal.x
-      baseNormals[index * 3 + 1] = baseNormal.y
-      baseNormals[index * 3 + 2] = baseNormal.z
-      point.set(x, y + lift, z).applyMatrix4(options.hostInverse)
-      positions[index * 3] = point.x
-      positions[index * 3 + 1] = point.y
-      positions[index * 3 + 2] = point.z
-    }
-  }
-
-  const crossSpacing = (halfWidth * 2) / (columns - 1)
+  const crossSpacing = sideSpan / (columns - 1)
   const rowSpacing = Math.max(0.5, Math.hypot(
     rows[1]!.x - rows[0]!.x,
     rows[1]!.z - rows[0]!.z,
   ))
-  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      const index = rowIndex * columns + column
-      const left = positions[(rowIndex * columns + Math.max(0, column - 1)) * 3 + 1]!
-      const right = positions[(rowIndex * columns + Math.min(columns - 1, column + 1)) * 3 + 1]!
-      const up = positions[(Math.max(0, rowIndex - 1) * columns + column) * 3 + 1]!
-      const down = positions[(Math.min(rows.length - 1, rowIndex + 1) * columns + column) * 3 + 1]!
-      const dx = (right - left) / Math.max(1e-4, crossSpacing * 2)
-      const dz = (down - up) / Math.max(1e-4, rowSpacing * 2)
-      const inverseLength = 1 / Math.hypot(dx, 1, dz)
-      normals[index * 3] = -dx * inverseLength
-      normals[index * 3 + 1] = inverseLength
-      normals[index * 3 + 2] = -dz * inverseLength
-    }
-  }
-
   let cursor = 0
-  for (let rowIndex = 0; rowIndex < rows.length - 1; rowIndex += 1) {
-    for (let column = 0; column < columns - 1; column += 1) {
-      const a = rowIndex * columns + column
-      const b = a + 1
-      const c = a + columns
-      const d = c + 1
-      indices[cursor++] = a
-      indices[cursor++] = d
-      indices[cursor++] = c
-      indices[cursor++] = a
-      indices[cursor++] = b
-      indices[cursor++] = d
+
+  for (let strip = 0; strip < stripCount; strip += 1) {
+    const side = strip === 0 ? -1 : 1
+    const vertexBase = strip * verticesPerStrip
+
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      const row = rows[rowIndex]!
+      const normalX = -Math.sin(row.heading)
+      const normalZ = Math.cos(row.heading)
+      for (let column = 0; column < columns; column += 1) {
+        const t = column / (columns - 1)
+        const lateral = side * (asphaltHalfWidth + t * sideSpan)
+        const x = row.x + normalX * lateral
+        const z = row.z + normalZ * lateral
+        const index = vertexBase + rowIndex * columns + column
+        const rawY = target.rawHeightAt(x, z)
+        const y = column === columns - 1
+          ? rawY
+          : target.heightAt(x, z)
+        maxCutFill = Math.max(maxCutFill, Math.abs(y - rawY))
+        baseHeights[index] = rawY
+        if (column === columns - 1) {
+          outerError = Math.max(outerError, Math.abs(y - rawY))
+        }
+        const baseNormal = target.rawNormalAt(x, z)
+        baseNormals[index * 3] = baseNormal.x
+        baseNormals[index * 3 + 1] = baseNormal.y
+        baseNormals[index * 3 + 2] = baseNormal.z
+        point.set(x, y + lift, z).applyMatrix4(options.hostInverse)
+        positions[index * 3] = point.x
+        positions[index * 3 + 1] = point.y
+        positions[index * 3 + 2] = point.z
+      }
+    }
+
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+      for (let column = 0; column < columns; column += 1) {
+        const index = vertexBase + rowIndex * columns + column
+        const leftIndex = vertexBase + rowIndex * columns + Math.max(0, column - 1)
+        const rightIndex = vertexBase + rowIndex * columns + Math.min(columns - 1, column + 1)
+        const upIndex = vertexBase + Math.max(0, rowIndex - 1) * columns + column
+        const downIndex = vertexBase + Math.min(rows.length - 1, rowIndex + 1) * columns + column
+        const dx = (positions[rightIndex * 3 + 1]! - positions[leftIndex * 3 + 1]!)
+          / Math.max(1e-4, crossSpacing * 2)
+        const dz = (positions[downIndex * 3 + 1]! - positions[upIndex * 3 + 1]!)
+          / Math.max(1e-4, rowSpacing * 2)
+        const inverseLength = 1 / Math.hypot(dx, 1, dz)
+        normals[index * 3] = -dx * inverseLength
+        normals[index * 3 + 1] = inverseLength
+        normals[index * 3 + 2] = -dz * inverseLength
+      }
+    }
+
+    for (let rowIndex = 0; rowIndex < rows.length - 1; rowIndex += 1) {
+      for (let column = 0; column < columns - 1; column += 1) {
+        const a = vertexBase + rowIndex * columns + column
+        const b = a + 1
+        const c = a + columns
+        const d = c + 1
+        if (side < 0) {
+          indices[cursor++] = a
+          indices[cursor++] = c
+          indices[cursor++] = d
+          indices[cursor++] = a
+          indices[cursor++] = d
+          indices[cursor++] = b
+        } else {
+          indices[cursor++] = a
+          indices[cursor++] = d
+          indices[cursor++] = c
+          indices[cursor++] = a
+          indices[cursor++] = b
+          indices[cursor++] = d
+        }
+      }
     }
   }
 

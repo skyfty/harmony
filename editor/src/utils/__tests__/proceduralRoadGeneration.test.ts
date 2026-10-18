@@ -18,6 +18,10 @@ import {
   type WaypointRoadPlanOptions,
 } from '@schema/proceduralLandscape/proceduralRoad'
 import {
+  buildGlobalScenicGuide,
+  roundGuideJoints,
+} from '@schema/proceduralLandscape/globalScenicGuide'
+import {
   buildTerrainHeightGrid,
   type TerrainHeightGrid,
 } from '@schema/proceduralLandscape/terrainSampler'
@@ -502,6 +506,119 @@ describe('unified waypoint road configuration', () => {
 })
 
 describe('unified waypoint road planning', () => {
+  it('rounds a right-angle guide joint with a Bezier arc near the waypoint', () => {
+    const grid = makeGrid()
+    const points: Array<{ x: number; z: number }> = []
+    for (let x = 300; x <= 450; x += 8) {
+      points.push({ x, z: 450 })
+    }
+    const jointIndex = points.length - 1
+    for (let z = 458; z <= 600; z += 8) {
+      points.push({ x: 450, z })
+    }
+    const rounded = roundGuideJoints(
+      grid,
+      points,
+      [jointIndex],
+      8,
+      12,
+      1,
+    )
+    expect(rounded).not.toEqual(points)
+    expect(rounded[0]).toEqual(points[0])
+    expect(rounded[rounded.length - 1]).toEqual(points[points.length - 1])
+    expect(Math.min(...rounded.map((point) => Math.hypot(
+      point.x - 450,
+      point.z - 450,
+    )))).toBeLessThanOrEqual(12)
+
+    let maxTurn = 0
+    for (let index = 2; index < rounded.length; index += 1) {
+      const a = rounded[index - 2]!
+      const b = rounded[index - 1]!
+      const c = rounded[index]!
+      const headingA = Math.atan2(b.z - a.z, b.x - a.x)
+      const headingB = Math.atan2(c.z - b.z, c.x - b.x)
+      maxTurn = Math.max(maxTurn, Math.abs(Math.atan2(
+        Math.sin(headingB - headingA),
+        Math.cos(headingB - headingA),
+      )))
+    }
+    expect(maxTurn).toBeLessThan((35 * Math.PI) / 180)
+  })
+
+  it('does not leave a 90-degree turn on the rendered centerline', () => {
+    const grid = makeGrid()
+    const waypoint = { x: 450, z: 450 }
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'boundary',
+      waypoints: [
+        { x: 250, z: 450 },
+        waypoint,
+        { x: 450, z: 650 },
+      ],
+    })
+    expect(result.complete).toBe(true)
+    expect(result.waypointsPassed).toBe(3)
+    const nearby = result.nodes.filter((node) => Math.hypot(
+      node.x - waypoint.x,
+      node.z - waypoint.z,
+    ) <= 180)
+    let maxTurn = 0
+    let maxTurnNode = -1
+    for (let index = 1; index < nearby.length; index += 1) {
+      const turn = Math.abs(nearby[index]!.headingDelta)
+      if (turn > maxTurn) {
+        maxTurn = turn
+        maxTurnNode = index
+      }
+    }
+    expect(
+      maxTurn,
+      `maxTurn at ${maxTurnNode}: ${JSON.stringify(nearby[maxTurnNode - 1])} -> ${JSON.stringify(nearby[maxTurnNode])} -> ${JSON.stringify(nearby[maxTurnNode + 1])}`,
+    ).toBeLessThan((35 * Math.PI) / 180)
+  })
+
+  it('rounds guide joins before the official tracer consumes them', () => {
+    const grid = makeGrid()
+    const waypoint = { x: 450, z: 450 }
+    const guide = buildGlobalScenicGuide(grid, [
+      { x: 250, z: 450 },
+      waypoint,
+      { x: 450, z: 650 },
+    ], {
+      seed: baseOptions.seed,
+      stepLength: baseOptions.stepLength,
+      pathDeviation: baseOptions.pathDeviation,
+      margin: baseOptions.margin,
+      termination: 'boundary',
+      preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+      maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+      maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 0.9,
+      crossSlopeWeight: 18,
+      waypointTolerance: baseOptions.waypointTolerance,
+    })
+    expect(guide.failureReason).toBeNull()
+    const nearby = guide.points.filter((point) => Math.hypot(
+      point.x - waypoint.x,
+      point.z - waypoint.z,
+    ) <= 60)
+    let maxTurn = 0
+    for (let index = 2; index < nearby.length; index += 1) {
+      const a = nearby[index - 2]!
+      const b = nearby[index - 1]!
+      const c = nearby[index]!
+      const headingA = Math.atan2(b.z - a.z, b.x - a.x)
+      const headingB = Math.atan2(c.z - b.z, c.x - b.x)
+      maxTurn = Math.max(maxTurn, Math.abs(Math.atan2(
+        Math.sin(headingB - headingA),
+        Math.cos(headingB - headingA),
+      )))
+    }
+    expect(maxTurn).toBeLessThan((35 * Math.PI) / 180)
+  })
+
   it('passes ordered waypoints and continues to the boundary', () => {
     const grid = makeSyntheticGrid(
       30_000,
