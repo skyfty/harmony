@@ -326,6 +326,15 @@ async function downloadViaFetch(
       }
 
       const mimeType = response.headers.get('content-type')
+      const normalizedContentType = mimeType?.toLowerCase() ?? ''
+      if (normalizedContentType.includes('text/html') || normalizedContentType.includes('application/xhtml+xml')) {
+        const body = await response.text().catch(() => '')
+        const snippet = body.trimStart().slice(0, 80)
+        const htmlHint = /^<!doctype\s+html/i.test(snippet) || /^<html[\s>]/i.test(snippet)
+          ? 'HTML 页面'
+          : '网页内容'
+        throw new Error(`资源下载失败：${response.url || candidate} 返回了${htmlHint}`)
+      }
       const filename = extractFilenameFromHeaders(response.headers, response.url || candidate)
       const requestUrl = response.url || candidate
       const total = Number.parseInt(response.headers.get('content-length') ?? '0', 10)

@@ -20,11 +20,39 @@ export const SLOWROADS_ASSET_BASE_URL = 'https://v.touchmagic.cn/uploads/slowroa
 export const SLOWROADS_ASSET_MANIFEST_FILE = 'asset-bundle.json'
 export const SLOWROADS_TEXTURE_2048_THRESHOLD = 4096
 
+const SLOWROADS_TEXTURE_LOAD_CONCURRENCY = 2
+const SLOWROADS_TEXTURE_LOAD_ATTEMPTS = 2
+const SLOWROADS_TEXTURE_RETRY_DELAY_MS = 150
+
 export function resolveSlowroadsLogicalId(
   variant: 'full' | '2048',
   logicalId: string,
 ): string {
   return variant === '2048' ? `${logicalId}@2048` : logicalId
+}
+
+/**
+ * Resolve the ordered texture candidates for one logical asset.
+ *
+ * The preferred device variant stays first. If it is absent or fails at
+ * runtime, the alternate manifest variant is used before reporting the texture
+ * as missing.
+ */
+export function resolveSlowroadsTextureCandidateIds(
+  logicalId: string,
+  primaryId: string,
+  hasFile: (candidateId: string) => boolean,
+): string[] {
+  const candidates: string[] = []
+  const push = (candidateId: string): void => {
+    if (candidateId && hasFile(candidateId) && !candidates.includes(candidateId)) {
+      candidates.push(candidateId)
+    }
+  }
+
+  push(primaryId)
+  push(primaryId.endsWith('@2048') ? logicalId : `${logicalId}@2048`)
+  return candidates
 }
 
 interface SlowroadsAssetRuntimeConfig {
@@ -116,6 +144,7 @@ export interface SlowroadsAssetStoreOptions {
 interface TextureEntry {
   texture: THREE.Texture
   objectUrl: string | null
+  requestedLogicalId: string
   logicalId: string
   estimatedBytes: number
   lastUsedAt: number
@@ -123,6 +152,11 @@ interface TextureEntry {
 
 interface PendingLoad {
   promise: Promise<THREE.Texture | null>
+}
+
+interface TextureLoadAttempt {
+  texture: THREE.Texture | null
+  error: string
 }
 
 const placeholderWarnings = new Set<string>()
@@ -239,6 +273,9 @@ export class SlowroadsAssetStore {
   }
 
   private warn(code: string): void {
+    if (!this.warnings.has(code)) {
+      console.warn(`[SlowroadsAssetStore] ${code}`)
+    }
     this.warnings.add(code)
     placeholderWarnings.add(code)
   }
@@ -313,10 +350,25 @@ export class SlowroadsAssetStore {
   /** 已驻留（或正在加载）的纹理数量。 */
   hasTexture(logicalId: string): boolean {
     const resolvedId = this.resolveLogicalId(logicalId)
-    return this.textures.has(resolvedId)
-      || this.textures.has(logicalId)
+    return this.findResidentTexture(logicalId, resolvedId) !== null
       || this.pending.has(resolvedId)
       || this.pending.has(logicalId)
+  }
+
+  private findResidentTexture(
+    requestedLogicalId: string,
+    resolvedId: string,
+  ): TextureEntry | null {
+    const direct = this.textures.get(resolvedId) ?? this.textures.get(requestedLogicalId)
+    if (direct) {
+      return direct
+    }
+    for (const entry of this.textures.values()) {
+      if (entry.requestedLogicalId === requestedLogicalId) {
+        return entry
+      }
+    }
+    return null
   }
 
   /**
@@ -339,21 +391,28 @@ export class SlowroadsAssetStore {
       unique.push(ref)
     }
     let loaded = 0
-    await Promise.all(unique.map(async (ref) => {
-      const texture = await this.texture(ref)
-      if (texture) {
-        result.set(ref.id, texture)
+    let nextIndex = 0
+    const workerCount = Math.min(SLOWROADS_TEXTURE_LOAD_CONCURRENCY, unique.length)
+    const loadNext = async (): Promise<void> => {
+      while (nextIndex < unique.length) {
+        const ref = unique[nextIndex]
+        nextIndex += 1
+        const texture = await this.texture(ref)
+        if (texture) {
+          result.set(ref.id, texture)
+        }
+        loaded += 1
+        onProgress?.(loaded, unique.length)
       }
-      loaded += 1
-      onProgress?.(loaded, unique.length)
-    }))
+    }
+    await Promise.all(Array.from({ length: workerCount }, () => loadNext()))
     return result
   }
 
   async texture(ref: SeasonTextureRef): Promise<THREE.Texture | null> {
     await this.ensureManifest()
     const resolvedId = this.resolveLogicalId(ref.id)
-    const entry = this.textures.get(resolvedId) ?? this.textures.get(ref.id)
+    const entry = this.findResidentTexture(ref.id, resolvedId)
     if (entry) {
       entry.lastUsedAt = Date.now()
       return entry.texture
@@ -363,7 +422,7 @@ export class SlowroadsAssetStore {
     if (pending) {
       return await pending.promise
     }
-    const promise = this.loadTexture(ref, resolvedId)
+    const promise = this.loadTextureWithFallback(ref, resolvedId)
     this.pending.set(resolvedId, { promise })
     try {
       return await promise
@@ -372,12 +431,49 @@ export class SlowroadsAssetStore {
     }
   }
 
-  private async loadTexture(ref: SeasonTextureRef, resolvedId: string): Promise<THREE.Texture | null> {
-    await this.ensureManifest()
-    const file = this.fileByLogicalId.get(resolvedId) ?? this.fileByLogicalId.get(ref.id)
-    if (!file) {
-      this.warn(`missing-file:${resolvedId}`)
+  private async loadTextureWithFallback(
+    ref: SeasonTextureRef,
+    resolvedId: string,
+  ): Promise<THREE.Texture | null> {
+    const candidates = resolveSlowroadsTextureCandidateIds(
+      ref.id,
+      resolvedId,
+      (candidateId) => this.fileByLogicalId.has(candidateId),
+    )
+    if (!candidates.length) {
+      this.warn(`missing-file:${ref.id}`)
       return null
+    }
+
+    let lastError = ''
+    for (const candidateId of candidates) {
+      for (let attempt = 1; attempt <= SLOWROADS_TEXTURE_LOAD_ATTEMPTS; attempt += 1) {
+        const result = await this.loadTextureCandidate(ref, candidateId)
+        if (result.texture) {
+          if (candidateId !== resolvedId) {
+            this.warn(`variant-fallback:${ref.id}->${candidateId}`)
+          }
+          return result.texture
+        }
+        lastError = result.error || lastError
+        if (attempt < SLOWROADS_TEXTURE_LOAD_ATTEMPTS) {
+          await delay(SLOWROADS_TEXTURE_RETRY_DELAY_MS * attempt)
+        }
+      }
+    }
+
+    this.warn(`file-failed:${ref.id}:${lastError || 'unknown'}`)
+    return null
+  }
+
+  private async loadTextureCandidate(
+    ref: SeasonTextureRef,
+    logicalId: string,
+  ): Promise<TextureLoadAttempt> {
+    await this.ensureManifest()
+    const file = this.fileByLogicalId.get(logicalId)
+    if (!file) {
+      return { texture: null, error: `missing-file:${logicalId}` }
     }
     let objectUrl: string | null = null
     let textureSource: string | null = null
@@ -414,20 +510,20 @@ export class SlowroadsAssetStore {
       this.textures.set(file.logicalId, {
         texture,
         objectUrl,
+        requestedLogicalId: ref.id,
         logicalId: file.logicalId,
         estimatedBytes,
         lastUsedAt: Date.now(),
       })
-      if (resolvedId !== ref.id) {
-        // 档位变体：同时以原始 id 命中（texture() 已做 resolve，这里仅兜底）。
-      }
-      return texture
+      return { texture, error: '' }
     } catch (error) {
       if (objectUrl) {
         revokeObjectUrl(objectUrl)
       }
-      this.warn(`file-failed:${resolvedId}:${error instanceof Error ? error.message : String(error)}`)
-      return null
+      return {
+        texture: null,
+        error: error instanceof Error ? error.message : String(error),
+      }
     } finally {
       this.pendingDownloads -= 1
     }
@@ -469,7 +565,11 @@ export class SlowroadsAssetStore {
       resolvedKeep.add(this.resolveLogicalId(id))
     }
     for (const [key, entry] of this.textures) {
-      if (resolvedKeep.has(key) || resolvedKeep.has(entry.logicalId)) {
+      if (
+        resolvedKeep.has(key)
+        || resolvedKeep.has(entry.logicalId)
+        || resolvedKeep.has(entry.requestedLogicalId)
+      ) {
         continue
       }
       this.disposeEntry(entry)
@@ -499,6 +599,10 @@ export class SlowroadsAssetStore {
     this.disposeAllTextures()
     this.warnings.clear()
   }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)))
 }
 
 function revokeObjectUrl(url: string): void {

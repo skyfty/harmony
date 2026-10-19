@@ -508,6 +508,7 @@ import {
   syncBodyFromObject as syncSharedBodyFromObject,
 } from '@harmony/schema/physicsBodySync';
 import { loadAssetObject, loadNodeObject } from '@harmony/schema/modelAssetLoader';
+import { mergeRuntimePrefabAssetRegistry } from '@harmony/schema/runtimePrefabAssetRegistry';
 import { updateAttachedTerrainTextureStreams } from '@harmony/schema/terrainTextureStream';
 
 import { inferAssetTypeOrNull, inferMimeTypeFromAssetId } from '@harmony/schema/assetTypeConversion'
@@ -6221,17 +6222,6 @@ function resolveRuntimePrefabSurfaceY(
   return hit?.point.y ?? null;
 }
 
-function mergeRuntimePrefabAssetRegistry(document: SceneJsonExportDocument, runtimeDocument: SceneJsonExportDocument): void {
-  const incoming = runtimeDocument.assetRegistry;
-  if (!incoming || !Object.keys(incoming).length) {
-    return;
-  }
-  document.assetRegistry = {
-    ...(document.assetRegistry ?? {}),
-    ...incoming,
-  };
-}
-
 const runtimePrefabSourceCache = new Map<string, Promise<RuntimePrefabSource | null>>();
 
 const runtimePrefabSourceResolverOptions = {
@@ -6694,6 +6684,7 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
       throw new Error(`资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 不包含 targetType="${binding.steerProps.targetType}" 的可控节点`);
     }
     if (replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
+      mergeRuntimePrefabAssetRegistry(nextDocument, source.prefab);
       transferAutoTourComponentProps(targetNode, cloned.root);
       steerHostComponent.props = clampSteerComponentProps({
         ...(steerHostComponent.props ?? {}),

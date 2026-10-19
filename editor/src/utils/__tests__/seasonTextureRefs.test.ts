@@ -7,6 +7,7 @@ import {
 } from '@schema/slowroads/core/seasonCatalog'
 import {
   resolveSlowroadsLogicalId,
+  resolveSlowroadsTextureCandidateIds,
   SlowroadsAssetStore,
 } from '@schema/slowroads/assets/assetStore'
 
@@ -125,5 +126,41 @@ describe('slowroads texture variant', () => {
     expect(resolveSlowroadsLogicalId(store.variant, 'spring_imposters_0_d.2e67db77'))
       .toBe('spring_imposters_0_d.2e67db77')
     store.dispose()
+  })
+
+  it('falls back to the available alternate variant', () => {
+    const available = new Set([
+      'autumn_imposters_0_d.4c4b38fd@2048',
+      'autumn_imposters_0_n.d10ccd46',
+    ])
+    const hasFile = (id: string): boolean => available.has(id)
+
+    expect(
+      resolveSlowroadsTextureCandidateIds(
+        'autumn_imposters_0_d.4c4b38fd',
+        'autumn_imposters_0_d.4c4b38fd',
+        hasFile,
+      ),
+    ).toEqual(['autumn_imposters_0_d.4c4b38fd@2048'])
+
+    expect(
+      resolveSlowroadsTextureCandidateIds(
+        'autumn_imposters_0_n.d10ccd46',
+        'autumn_imposters_0_n.d10ccd46',
+        hasFile,
+      ),
+    ).toEqual(['autumn_imposters_0_n.d10ccd46'])
+  })
+
+  it('tries the full variant second when the preferred 2048 file is unavailable', () => {
+    const available = new Set(['autumn_imposters_0_n.d10ccd46'])
+
+    expect(
+      resolveSlowroadsTextureCandidateIds(
+        'autumn_imposters_0_n.d10ccd46',
+        'autumn_imposters_0_n.d10ccd46@2048',
+        (id) => available.has(id),
+      ),
+    ).toEqual(['autumn_imposters_0_n.d10ccd46'])
   })
 })
