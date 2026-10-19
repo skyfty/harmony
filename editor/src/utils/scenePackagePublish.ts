@@ -45,6 +45,7 @@ import {
   buildAssetRegistryAliasMap,
   normalizeAssetIdWithRegistry,
 } from '@/utils/assetRegistryIdNormalization'
+import { ensureProceduralLandscapeTexturePreload } from '@/utils/proceduralLandscapePreload'
 import { resolveProjectAssetExtension, shouldExcludeAssetFromRuntimeExport } from '@/utils/assetDependencySubset'
 import {
   applyTerrainPackExternalRegistryEntries,
@@ -1649,6 +1650,10 @@ export async function prepareScenePackagePublishZipFiles(payload: ScenePackagePu
     Object.assign(files, roadCollisionPackage.files)
     roadCollision = roadCollisionPackage.roadCollision
 
+    // Local scenes normally arrive with preload hints from sceneExport, while
+    // directly embedded external scenes do not. Recompute here so every ZIP
+    // gets the same landscape texture contract.
+    ensureProceduralLandscapeTexturePreload(preparedDocument as SceneJsonExportDocument)
     stripPublishSceneDocument(preparedDocument)
 
     files[scenePath] = encodeScenePackageSceneDocument(preparedDocument as SceneJsonExportDocument)

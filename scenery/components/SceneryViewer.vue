@@ -611,6 +611,7 @@ import type {
   LanternSlideDefinition,
   SceneResourceSummary,
   SceneResourceSummaryEntry,
+  SceneSlowroadsTexturePreload,
   Vector3Like,
 } from '@harmony/schema/core';
 import {
@@ -861,6 +862,14 @@ import {
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
 } from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
 import {
+  collectActiveProceduralLandscapeNodeIds as collectActiveProceduralLandscapeNodeIdsFromNodes,
+  collectProceduralLandscapeTexturePreloadForNodes,
+} from '@harmony/schema/proceduralLandscape/preload';
+import {
+  PROCEDURAL_LANDSCAPE_SCENE_READY_TIMEOUT_MS,
+  waitForProceduralLandscapeSceneReady,
+} from '@harmony/schema/proceduralLandscape/readiness';
+import {
   createSlowroadsEnvironmentRuntime,
   getSlowroadsSceneFogFar,
   type SlowroadsEnvironmentRuntime,
@@ -870,6 +879,7 @@ import {
   getSharedSlowroadsAssetStore,
   peekSharedSlowroadsAssetStore,
 } from '@harmony/schema/slowroads/assets/assetStore';
+import { resolveSeasonTextureRefsByIds } from '@harmony/schema/slowroads/core/seasonCatalog';
 import {
   getProceduralLandscapeStats,
   setProceduralLandscapeDeviceProfile,
@@ -1235,9 +1245,11 @@ const sceneDownload = reactive({
 type SceneInitStage =
   | 'idle'
   | 'preparing'
+  | 'preloadingTextures'
   | 'building'
   | 'mounting'
   | 'syncingPreviewIndex'
+  | 'initializingLandscape'
   | 'syncingPhysics'
   | 'syncingScatter'
   | 'finalizing'
@@ -1246,12 +1258,14 @@ type SceneInitStage =
   | 'error';
 
 const sceneInitStageWeights: Record<Exclude<SceneInitStage, 'idle' | 'ready' | 'cancelled' | 'error'>, { start: number; span: number }> = {
-  preparing: { start: 0, span: 6 },
-  building: { start: 6, span: 42 },
-  mounting: { start: 48, span: 10 },
-  syncingPreviewIndex: { start: 58, span: 12 },
-  syncingPhysics: { start: 70, span: 13 },
-  syncingScatter: { start: 83, span: 12 },
+  preparing: { start: 0, span: 4 },
+  preloadingTextures: { start: 4, span: 8 },
+  building: { start: 12, span: 42 },
+  mounting: { start: 54, span: 8 },
+  syncingPreviewIndex: { start: 62, span: 6 },
+  initializingLandscape: { start: 68, span: 10 },
+  syncingPhysics: { start: 78, span: 10 },
+  syncingScatter: { start: 88, span: 7 },
   finalizing: { start: 95, span: 5 },
 };
 
@@ -5574,6 +5588,35 @@ function shouldSpawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): bo
   return binding?.steerProps.targetType === 'vehicle';
 }
 
+const SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS = 30_000;
+
+function resolveSceneSlowroadsTexturePreload(
+  document: SceneJsonExportDocument,
+): SceneSlowroadsTexturePreload | null {
+  const season = resolveDocumentEnvironment(document).slowroads.season;
+  const textureIds = new Set<string>();
+  const stored = document.assetPreload?.slowroadsTextures;
+  if (stored?.season === season) {
+    stored.textureIds.forEach((id) => {
+      const normalized = typeof id === 'string' ? id.trim() : '';
+      if (normalized) {
+        textureIds.add(normalized);
+      }
+    });
+  }
+
+  const derived = collectProceduralLandscapeTexturePreloadForNodes(document.nodes, season);
+  derived?.textureIds.forEach((id) => textureIds.add(id));
+
+  if (!textureIds.size) {
+    return null;
+  }
+  return {
+    season,
+    textureIds: [...textureIds].sort(),
+  };
+}
+
 function mergeAssetPreloadMeshInfo(
   assetPreload: SceneJsonExportDocument['assetPreload'] | undefined,
   assetIds: string[],
@@ -5593,6 +5636,7 @@ function mergeAssetPreloadMeshInfo(
   }
 
   return {
+    ...(assetPreload ?? {}),
     mesh: {
       all: Array.from(mergedAll).sort(),
       essential: Array.from(mergedEssential).sort(),
@@ -22082,7 +22126,130 @@ function resetResourcePreloadState(): void {
   resourcePreload.label = '准备加载资源...';
 }
 
-/**
+function appendSceneInitWarning(message: string): void {
+  if (!message || warnings.value.includes(message)) {
+    return;
+  }
+  warnings.value = [...warnings.value, message];
+}
+
+async function preloadSceneSlowroadsTextures(
+  document: SceneJsonExportDocument,
+  token: number,
+): Promise<void> {
+  const preload = resolveSceneSlowroadsTexturePreload(document);
+  if (!preload || !preload.textureIds.length) {
+    return;
+  }
+  const { refs, unknownIds } = resolveSeasonTextureRefsByIds(preload.textureIds);
+  if (unknownIds.length) {
+    appendSceneInitWarning(
+      `景观纹理预载清单包含未知 ID：${unknownIds.slice(0, 5).join(', ')}${unknownIds.length > 5 ? '…' : ''}`,
+    );
+  }
+  if (!refs.length) {
+    return;
+  }
+
+  const total = refs.length;
+  resourcePreload.active = true;
+  resourcePreload.loaded = 0;
+  resourcePreload.total = total;
+  resourcePreload.loadedBytes = 0;
+  resourcePreload.totalBytes = 0;
+  resourcePreload.label = '正在预下载景观材质纹理...';
+  setSceneInitState({
+    stage: 'preloadingTextures',
+    label: '正在预下载景观材质纹理',
+    detail: `正在下载 0 / ${total} 张纹理`,
+    stagePercent: 0,
+    currentIndex: 0,
+    currentTotal: total,
+    currentLabel: preload.season,
+    active: true,
+  });
+
+  const assetStore = getSharedSlowroadsAssetStore();
+  let timedOut = false;
+  let preloadSettled = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timeoutHandle = setTimeout(() => {
+      timedOut = true;
+      resolve(null);
+    }, SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS);
+  });
+
+  let textures: Map<string, THREE.Texture> | null = null;
+  let preloadError: unknown = null;
+  try {
+    textures = await Promise.race([
+      assetStore.textureSet(refs, (loaded, count) => {
+        if (timedOut || preloadSettled || token !== initializeToken) {
+          return;
+        }
+        resourcePreload.loaded = loaded;
+        resourcePreload.total = count;
+        resourcePreload.label = `景观纹理 ${loaded} / ${count}`;
+        setSceneInitState({
+          stage: 'preloadingTextures',
+          label: '正在预下载景观材质纹理',
+          detail: `正在下载 ${loaded} / ${count} 张纹理`,
+          stagePercent: count > 0 ? (loaded / count) * 100 : 100,
+          currentIndex: loaded,
+          currentTotal: count,
+          currentLabel: preload.season,
+          active: true,
+        });
+      }),
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    preloadError = error;
+  } finally {
+    preloadSettled = true;
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = null;
+    }
+  }
+
+  if (token !== initializeToken) {
+    return;
+  }
+  if (timedOut) {
+    appendSceneInitWarning(
+      `景观纹理预载超时（${Math.round(SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS / 1000)}s），将在进入场景后继续加载`,
+    );
+  } else if (preloadError || !textures) {
+    const detail = preloadError instanceof Error ? preloadError.message : String(preloadError ?? 'unknown');
+    appendSceneInitWarning(`景观纹理预载失败：${detail}`);
+  } else {
+    const missingIds = refs
+      .filter((ref) => !textures?.has(ref.id))
+      .map((ref) => ref.id);
+    resourcePreload.loaded = total;
+    resourcePreload.total = total;
+    if (missingIds.length) {
+      appendSceneInitWarning(
+        `以下景观纹理未能预载：${missingIds.slice(0, 5).join(', ')}${missingIds.length > 5 ? '…' : ''}`,
+      );
+    }
+    setSceneInitState({
+      stage: 'preloadingTextures',
+      label: '景观材质纹理已缓存',
+      detail: `${total} 张纹理已准备完成`,
+      stagePercent: 100,
+      currentIndex: total,
+      currentTotal: total,
+      currentLabel: preload.season,
+      active: true,
+    });
+  }
+  resourcePreload.active = false;
+  resourcePreload.label = '';
+}
+
 /**
  * Build the SceneGraph (three.js object tree) and keep `resourcePreload` in sync.
  * Returns null when build fails.
@@ -22341,6 +22508,7 @@ async function mountGraphAndSyncSubsystems(
   resourceCache: ResourceCache | null,
   canvas: HTMLCanvasElement,
   camera: THREE.PerspectiveCamera,
+  token: number,
 ): Promise<void> {
   sceneGraphRoot = root;
   renderContext?.scene?.add(root);
@@ -22367,6 +22535,16 @@ async function mountGraphAndSyncSubsystems(
     currentTotal: 6,
     currentLabel: 'previewComponentManager.syncScene',
     active: true,
+  });
+  const environment = resolveDocumentEnvironment(payload.document).slowroads;
+  currentSlowroadsEnvironmentState = {
+    season: environment.season,
+    timeOfDay: environment.timeOfDay,
+    weather: environment.weather,
+  };
+  previewComponentManager.setFrameState({
+    cameraWorldPosition: null,
+    environment: currentSlowroadsEnvironmentState,
   });
   previewComponentManager.syncScene(payload.document.nodes ?? []);
   await yieldToMainThread();
@@ -22405,14 +22583,89 @@ async function mountGraphAndSyncSubsystems(
   ensureBehaviorTapHandler(canvas, camera);
   await yieldToMainThread();
 
-  // The physics bridge waits for the DEM collision mesh, but the landscape
-  // component is normally advanced by the render loop, which starts after this
-  // wait. Pump only the landscape component so the DEM build can progress
-  // instead of idling for the full 30s collision timeout.
+  // Landscape components are normally advanced by the render loop, which
+  // starts after scene entry. Pump only their updates so DEM, the base world
+  // and seasonal materials can settle before physics/scatter initialization.
   const landscapeBuildPump = setInterval(() => {
-    previewComponentManager.update(1 / 60, { types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES });
+    if (token === initializeToken) {
+      previewComponentManager.update(1 / 60, { types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES });
+    }
   }, 16);
   try {
+    const landscapeNodeIds = collectActiveProceduralLandscapeNodeIdsFromNodes(payload.document.nodes);
+    if (landscapeNodeIds.length) {
+      setSceneInitState({
+        stage: 'initializingLandscape',
+        label: '正在初始化程序化地形',
+        detail: '正在构建 DEM 地形与基础世界...',
+        stagePercent: 0,
+        currentIndex: 0,
+        currentTotal: landscapeNodeIds.length,
+        currentLabel: landscapeNodeIds.join(', '),
+        active: true,
+      });
+      const readiness = await waitForProceduralLandscapeSceneReady({
+        nodeIds: landscapeNodeIds,
+        getStats: getProceduralLandscapeStats,
+        shouldAbort: () => token !== initializeToken,
+        onPending: (pendingNodeIds, statuses) => {
+          const progressValues = landscapeNodeIds.map(
+            (nodeId) => getProceduralLandscapeStats(nodeId)?.progress ?? 0,
+          );
+          const averageProgress = progressValues.length
+            ? progressValues.reduce((sum, value) => sum + value, 0) / progressValues.length
+            : 0;
+          const pendingLabels = [...new Set(
+            pendingNodeIds.map((nodeId) => statuses[nodeId] ?? 'pending'),
+          )].join(', ');
+          setSceneInitState({
+            stage: 'initializingLandscape',
+            label: '正在初始化程序化地形',
+            detail: pendingLabels
+              ? `等待 DEM/基础世界/季节材质：${pendingLabels}`
+              : '正在构建 DEM 地形与基础世界...',
+            stagePercent: Math.max(0, Math.min(100, averageProgress * 100)),
+            currentIndex: Math.max(0, landscapeNodeIds.length - pendingNodeIds.length),
+            currentTotal: landscapeNodeIds.length,
+            currentLabel: pendingNodeIds.join(', '),
+            active: true,
+          });
+        },
+      });
+      if (readiness.status === 'aborted') {
+        return;
+      }
+      if (readiness.failedNodeIds.length) {
+        const details = readiness.failedNodeIds
+          .map((nodeId) => `${nodeId} (${readiness.statuses[nodeId] ?? 'error'})`)
+          .join(', ');
+        appendSceneInitWarning(`程序化地形初始化失败：${details}`);
+      }
+      if (readiness.status === 'timeout') {
+        const details = readiness.pendingNodeIds
+          .map((nodeId) => `${nodeId} (${readiness.statuses[nodeId] ?? 'pending'})`)
+          .join(', ');
+        appendSceneInitWarning(
+          `程序化地形基础世界等待超时（${Math.round(PROCEDURAL_LANDSCAPE_SCENE_READY_TIMEOUT_MS / 1000)}s）：${details || 'unknown node'}`,
+        );
+      } else {
+        setSceneInitState({
+          stage: 'initializingLandscape',
+          label: '程序化地形已就绪',
+          detail: 'DEM、基础世界与当前季节材质已准备完成',
+          stagePercent: 100,
+          currentIndex: landscapeNodeIds.length,
+          currentTotal: landscapeNodeIds.length,
+          currentLabel: '',
+          active: true,
+        });
+      }
+      await yieldToMainThread();
+      if (token !== initializeToken) {
+        return;
+      }
+    }
+
     setSceneInitState({
       stage: 'syncingPhysics',
       label: '正在同步物理系统',
@@ -23018,6 +23271,21 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     });
   }
 
+  const sceneEnvironment = resolveDocumentEnvironment(currentDocument);
+  currentSlowroadsEnvironmentState = {
+    season: sceneEnvironment.slowroads.season,
+    timeOfDay: sceneEnvironment.slowroads.timeOfDay,
+    weather: sceneEnvironment.slowroads.weather,
+  };
+
+  // Phase 1.5: warm the exact seasonal texture set before the scene graph and
+  // landscape component start constructing materials.
+  resetResourcePreloadState();
+  await preloadSceneSlowroadsTextures(currentDocument, token);
+  if (token !== initializeToken) {
+    return;
+  }
+
   // Phase 2: build the scene graph (loads assets) with UI progress updates.
   resetResourcePreloadState();
   const buildResult = await buildSceneGraphWithProgress(payload);
@@ -23032,7 +23300,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
   const { graph, resourceCache } = buildResult;
   if (graph.warnings.length) {
-    warnings.value = graph.warnings;
+    graph.warnings.forEach((message) => appendSceneInitWarning(message));
   }
 
   const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
@@ -23043,7 +23311,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
 
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
-  await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera);
+  await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera, token);
   applyNominateOverridesForCurrentScene();
   await flushPendingRuntimePrefabSpawnRequests();
 

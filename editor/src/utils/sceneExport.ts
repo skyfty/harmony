@@ -19,6 +19,7 @@ import { calculateSourceSceneResourceSummary, cloneSceneDocumentForExport } from
 import { validateSceneAssetReferences } from '@/utils/sceneAssetDiagnostics'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
+import { buildProceduralLandscapeTexturePreload } from '@/utils/proceduralLandscapePreload'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
@@ -473,7 +474,7 @@ async function sanitizeSceneDocumentForJsonExport(
     nodes: sanitizedNodes,
   }
   sanitizedDocument.loadProgressHints = countSceneLoadProgressHints(sanitizedNodes)
-  const assetPreload = buildSceneAssetPreloadInfo(sanitizedNodes, options)
+  const assetPreload = buildSceneAssetPreloadInfo(sanitizedDocument, options)
   if (assetPreload) {
     sanitizedDocument.assetPreload = assetPreload
   }
@@ -919,10 +920,12 @@ function collectEssentialAssetIdsFromNodeIds(
 }
 
 function buildSceneAssetPreloadInfo(
-  nodes: SceneNode[] | null | undefined,
+  document: SceneJsonExportDocument,
   options: SceneExportOptions,
 ): SceneAssetPreloadInfo | undefined {
+  const nodes = document.nodes
   const nodeList: SceneNode[] = Array.isArray(nodes) ? [...nodes] : []
+  const slowroadsTextures = buildProceduralLandscapeTexturePreload(document)
 
   const nodeLookup = new Map<string, SceneNode>()
   const preloadableRootNodeIds = new Set<string>()
@@ -966,7 +969,7 @@ function buildSceneAssetPreloadInfo(
   const essentialAssetIds = collectEssentialAssetIdsFromNodeIds(essentialNodeIds, nodeLookup)
   essentialAssetIds.forEach((assetId) => meshAssetIds.add(assetId))
 
-  if (!meshAssetIds.size) {
+  if (!meshAssetIds.size && !slowroadsTextures) {
     return undefined
   }
   const lazyLoad = options.lazyLoadMeshes ?? true
@@ -987,7 +990,9 @@ function buildSceneAssetPreloadInfo(
     meshInfo.essential = Array.from(essentialSet).sort()
   }
 
-  return { mesh: meshInfo }
+  return slowroadsTextures
+    ? { mesh: meshInfo, slowroadsTextures }
+    : { mesh: meshInfo }
 }
 
 function collectSourceAssetIds(nodes: SceneNode[]): Set<string> {

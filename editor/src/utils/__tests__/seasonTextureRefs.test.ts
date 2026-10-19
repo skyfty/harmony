@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   collectLandscapeSharedTextureRefs,
   collectSeasonTextureRefs,
+  resolveSeasonTextureRefsByIds,
   SHARED_TEXTURES,
 } from '@schema/slowroads/core/seasonCatalog'
 import {
@@ -94,6 +95,18 @@ describe('season texture refs', () => {
     expect(wet).toContain(SHARED_TEXTURES.rockBump.id)
     expect(wet).toContain(SHARED_TEXTURES.bushNoise.id)
     expect(wet).toContain(SHARED_TEXTURES.seaWaves.id)
+  })
+
+  it('resolves serialized IDs, deduplicates them and reports unknown entries', () => {
+    const resolved = resolveSeasonTextureRefsByIds([
+      ' grass.15f2422c ',
+      'grass.15f2422c',
+      'missing.texture',
+      '',
+    ])
+    expect(resolved.refs.map((ref) => ref.id)).toEqual(['grass.15f2422c'])
+    expect(resolved.refs[0]?.kind).toBe('albedo')
+    expect(resolved.unknownIds).toEqual(['missing.texture'])
   })
 })
 

@@ -1708,8 +1708,19 @@ export interface SceneAssetPreloadMeshInfo {
   essential?: string[];
 }
 
+export interface SceneSlowroadsTexturePreload {
+  season: 'spring' | 'summer' | 'autumn' | 'winter';
+  textureIds: string[];
+}
+
 export interface SceneAssetPreloadInfo {
   mesh: SceneAssetPreloadMeshInfo;
+  /**
+   * Slow Roads seasonal textures consumed by procedural landscape components.
+   * These IDs resolve through the shared SlowroadsAssetStore (CDN), not through
+   * the scene asset registry.
+   */
+  slowroadsTextures?: SceneSlowroadsTexturePreload;
 }
 
 export interface SceneLoadProgressHints {

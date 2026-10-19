@@ -80,9 +80,11 @@ type SceneDownloadState = {
 type SceneInitStage =
   | 'idle'
   | 'preparing'
+  | 'preloadingTextures'
   | 'building'
   | 'mounting'
   | 'syncingPreviewIndex'
+  | 'initializingLandscape'
   | 'syncingPhysics'
   | 'syncingScatter'
   | 'finalizing'
@@ -162,12 +164,16 @@ function resolveSceneInitTitle(stage: SceneInitStage): string {
   switch (stage) {
     case 'preparing':
       return '正在预热运行时资源';
+    case 'preloadingTextures':
+      return '正在预下载景观纹理';
     case 'building':
       return '正在构建场景';
     case 'mounting':
       return '正在挂载场景';
     case 'syncingPreviewIndex':
       return '正在重建预览索引';
+    case 'initializingLandscape':
+      return '正在初始化程序化地形';
     case 'syncingPhysics':
       return '正在同步物理系统';
     case 'syncingScatter':

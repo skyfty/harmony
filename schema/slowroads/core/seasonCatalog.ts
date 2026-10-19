@@ -582,3 +582,35 @@ export function collectAllTextureRefs(): SeasonTextureRef[] {
   }
   return [...refs.values()]
 }
+
+/**
+ * Resolve serialized texture IDs back to the catalog refs used by the asset
+ * store. Unknown IDs are returned separately so hosts can report a useful
+ * warning instead of silently losing a preload entry.
+ */
+export function resolveSeasonTextureRefsByIds(
+  textureIds: ReadonlyArray<string>,
+): { refs: SeasonTextureRef[]; unknownIds: string[] } {
+  const refsById = new Map<string, SeasonTextureRef>()
+  for (const ref of collectAllTextureRefs()) {
+    refsById.set(ref.id, ref)
+  }
+
+  const refs: SeasonTextureRef[] = []
+  const unknownIds: string[] = []
+  const seen = new Set<string>()
+  for (const value of textureIds) {
+    const id = typeof value === 'string' ? value.trim() : ''
+    if (!id || seen.has(id)) {
+      continue
+    }
+    seen.add(id)
+    const ref = refsById.get(id)
+    if (ref) {
+      refs.push(ref)
+    } else {
+      unknownIds.push(id)
+    }
+  }
+  return { refs, unknownIds }
+}

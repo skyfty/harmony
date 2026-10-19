@@ -2595,6 +2595,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         })
     // 带子按加密行铺设（2m 一档），划线权重按来源节点映射到行。
     const bandRows = roadBandRows ?? roadResult.nodes
+    const collisionRows = roadBandRows
+      ?? bandRows.map((row, sourceIndex) => ({ ...row, sourceIndex }))
     const markingsForRows = roadMarkings && roadMarkings.length ? roadMarkings : null
     const bandMarkings = markingsForRows
       ? (roadBandRows
@@ -2622,7 +2624,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     tagArtifact(roadBand.mesh)
     hostObject.add(roadBand.mesh)
     const collisionGeometry = createRoadCollisionGeometry({
-      rows: bandRows,
+      rows: collisionRows,
       columnHeights: roadBandColumns,
       halfWidth,
       rowSpacing: ROAD_COLLISION_ROW_SPACING,
@@ -3716,7 +3718,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       stats.roadMaxStraightRunMeters = 0
     }
     stats.season = currentSeason
-    stats.seasonAssetsReady = seasonAssetsSeason === currentSeason && Boolean(seasonAssets)
+    stats.seasonAssetsReady = seasonAssetsSeason === currentSeason
+      && Boolean(seasonAssets)
+      && !seasonLoadInFlight
     stats.nearTreeInstances = treeMeshManager?.instanceCount ?? 0
     stats.nearCardInstances = (nearCardLayers?.broadleaf.count ?? 0) + (nearCardLayers?.conifer.count ?? 0)
     stats.nearTreeReady = treeMeshManager?.ready === true
@@ -3876,7 +3880,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       for (const message of storeStats.warnings.slice(0, 3)) {
         warn(`asset:${message}`)
       }
-      assetStore.prune(slowroadsSharedRetainIds(required))
+      // Scene-entry preloading intentionally warms the full current-season set,
+      // including road/wall textures that only become active after the world is
+      // built. Keep that whole season resident until the next season is loaded;
+      // pruning to the immediate `required` subset would evict and re-download.
+      assetStore.prune(slowroadsSharedRetainIds(collectSeasonTextureRefs(season)))
       applySeasonToMaterials(season)
     } catch (error) {
       warn(`season-load-failed:${season}:${error instanceof Error ? error.message : String(error)}`)
