@@ -9,6 +9,8 @@
       "@/*": ["./src/*"],
       "@harmony/utils": ["../utils/src/index.ts"],
       "@harmony/utils/*": ["../utils/src/*"],
+      "@harmony/schema": ["../schema/index.ts"],
+      "@harmony/schema/*": ["../schema/*"],
       "@schema": ["../schema/index.ts"],
       "@schema/*": ["../schema/*"],
       "@harmony/physics-core": ["../physics-core/src/index.ts"],

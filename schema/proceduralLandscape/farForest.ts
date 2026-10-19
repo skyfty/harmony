@@ -3,6 +3,11 @@ import type { LandscapeDensityField } from './densityField'
 import type { RoadDistanceSource } from './roadProximity'
 import type { TerrainHeightGrid } from './terrainSampler'
 import { clamp, hashUnit, lerp } from './noise'
+import {
+  slowroadsTreeLineBounds,
+  slowroadsTreeLineFactor,
+  slowroadsTreeSpeciesAt,
+} from './treeSpecies'
 
 /**
  * 远景林多环 LOD 规划器（相机锚定 + 世界锚定候选格）。
@@ -90,7 +95,6 @@ const DENSITY_ACCEPT_SALT = 0xc2b2ae35
 const ROTATION_SALT = 0x27d4eb2f
 const SCALE_SALT = 0x165667b1
 const VARIANT_SALT = 0xd3a2646c
-const SPECIES_SALT = 0xfd7046c5
 
 export interface FarForestPlanParams {
   seed: number
@@ -245,6 +249,7 @@ function evaluateFarForestCell(
     return null
   }
   const { grid, density, roadField } = deps
+  const treeLine = slowroadsTreeLineBounds(grid.minY, grid.maxY)
   if (!grid.contains(x, z)) {
     return null
   }
@@ -269,7 +274,7 @@ function evaluateFarForestCell(
     (ring.densityScale * params.densityMultiplier * FAR_FOREST_NEAR_DENSITY_PER_CLASS * classValue) / latticeDensity,
     0,
     1,
-  )
+  ) * slowroadsTreeLineFactor(y, treeLine)
   if (acceptance <= 0 || hashUnit(seed ^ DENSITY_ACCEPT_SALT, gx, gz) >= acceptance) {
     return null
   }
@@ -290,7 +295,7 @@ function evaluateFarForestCell(
     rotation: hashUnit(seed ^ ROTATION_SALT, gx, gz) * Math.PI * 2,
     scale: lerp(params.minScale, params.maxScale, hashUnit(seed ^ SCALE_SALT, gx, gz)) * gain,
     variant: hashUnit(seed ^ VARIANT_SALT, gx, gz),
-    species: hashUnit(seed ^ SPECIES_SALT, gx, gz) < 0.4 ? 1 : 0,
+    species: slowroadsTreeSpeciesAt(seed, x, z),
   }
 }
 

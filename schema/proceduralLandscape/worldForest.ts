@@ -4,6 +4,12 @@ import type { RoadTraceNode } from './roadTrace'
 import type { TerrainHeightGrid } from './terrainSampler'
 import type { TreePlacement } from './chunkPlan'
 import { clamp, clamp01, fbm2, hashUnit, lerp, smoothstep } from './noise'
+import {
+  slowroadsTreeLineBounds,
+  slowroadsTreeLineFactor,
+  slowroadsTreeSpeciesAt,
+  type TreeLineBounds,
+} from './treeSpecies'
 
 export interface WorldForestPlanParams {
   seed: number
@@ -26,6 +32,8 @@ export interface WorldForestPlanDeps {
   roadField: RoadProximityIndex | null
   /** Visible surface after the DEM roadbed has been graded. */
   heightAt(x: number, z: number): number | null
+  /** Optional baked spatial species field; falls back to direct sampling. */
+  speciesAt?(x: number, z: number): 0 | 1
 }
 
 export interface WorldForestScan {
@@ -66,7 +74,6 @@ function makeTree(
   x: number,
   z: number,
   y: number,
-  slope: number,
   cellKeyValue: number,
   salt: number,
   rank: number,
@@ -74,11 +81,9 @@ function makeTree(
 ): TreePlacement {
   const seed = params.seed >>> 0
   const densityValue = clamp01(deps.density.sampleUnit(x, z))
-  const normalizedHeight = clamp01((y - deps.grid.minY) / Math.max(1, deps.grid.maxY - deps.grid.minY))
-  const coniferScore = normalizedHeight * 0.62
-    + slope * 0.9
-    + hashUnit(seed, cellKeyValue, 7 + salt) * 0.22
-  const species: 0 | 1 = coniferScore > 0.55 ? 1 : 0
+  const species: 0 | 1 = deps.speciesAt
+    ? deps.speciesAt(x, z)
+    : slowroadsTreeSpeciesAt(seed, x, z)
   const baseScale = lerp(params.minScale, params.maxScale, hashUnit(seed, cellKeyValue, 9 + salt))
   const scale = corridor
     ? baseScale * (0.82 + densityValue * 0.36)
@@ -123,6 +128,7 @@ export function stepWorldForestScan(
   }
   const params = scan.params
   const seed = params.seed >>> 0
+  const treeLine = slowroadsTreeLineBounds(deps.grid.minY, deps.grid.maxY)
   let budget = Math.max(1, Math.floor(maxCells))
   while (budget > 0 && !scan.complete) {
     if (scan.row >= scan.rows) {
@@ -142,13 +148,9 @@ export function stepWorldForestScan(
     const forestMask = smoothstep(0.40, 0.56, value)
     const slope = slopeAt(deps.grid, x, z)
     const y = deps.heightAt(x, z)
-    const normalizedHeight = y == null
-      ? 0
-      : clamp01((y - deps.grid.minY) / Math.max(1, deps.grid.maxY - deps.grid.minY))
-    // Lose trees gradually toward the tree line instead of ending at a hard
-    // altitude. Plains remain eligible, but their coverage is controlled by
-    // the large-scale forest mask above.
-    const elevationFactor = 1 - 0.92 * smoothstep(0.30, 0.84, normalizedHeight)
+    // slowroads' 150m -> 300m density band, remapped to this DEM's relative
+    // height. Keep the existing forest mask / grove field as the patch mask.
+    const elevationFactor = y == null ? 0 : slowroadsTreeLineFactor(y, treeLine)
     // A 240m field breaks the broad mask into actual groves and meadows.
     // Without this, every high-density cell receives one/two trees and reads as
     // an evenly sprinkled carpet instead of woodland blocks.
@@ -191,13 +193,21 @@ export function stepWorldForestScan(
         if (treeY == null || treeY < params.waterLevel + 2) {
           continue
         }
+        if (item > 0) {
+          const itemTreeLineFactor = slowroadsTreeLineFactor(treeY, treeLine)
+          if (
+            itemTreeLineFactor <= 0
+            || hashUnit(seed, key, 8 + item) >= itemTreeLineFactor
+          ) {
+            continue
+          }
+        }
         scan.placements.push(makeTree(
           params,
           deps,
           treeX,
           treeZ,
           treeY,
-          slope,
           key,
           item,
           scan.placements.length,
@@ -251,6 +261,7 @@ export function planWorldForestCorridor(
     return []
   }
   const seed = params.seed >>> 0
+  const treeLine: TreeLineBounds = slowroadsTreeLineBounds(deps.grid.minY, deps.grid.maxY)
   const maxTrees = Math.max(0, Math.floor(options.maxTrees ?? 30_000))
   const maxDistance = Math.max(params.roadClearance + 8, options.maxDistance ?? 150)
   const alongStep = Math.max(2, options.alongStep ?? 6)
@@ -313,6 +324,14 @@ export function planWorldForestCorridor(
         if (params.minHeight != null && y < params.minHeight) {
           continue
         }
+        const treeLineFactor = slowroadsTreeLineFactor(y, treeLine)
+        if (
+          treeLineFactor <= 0
+          || hashUnit(seed, along, band * 16 + (side > 0 ? 7 : 8))
+            >= treeLineFactor
+        ) {
+          continue
+        }
         const key = (along + 32768) * 65536 + (band + 32768)
         placements.push(makeTree(
           params,
@@ -320,7 +339,6 @@ export function planWorldForestCorridor(
           x,
           z,
           y,
-          slope,
           key,
           seenSalt(side, band),
           placements.length,

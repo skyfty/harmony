@@ -80,6 +80,8 @@ export const NEAR_TREE_VARIANTS: Record<0 | 1, number> = {
 const TREE_CELL_SIZE = 10
 const TREE_SLOPE_LIMIT = 0.2
 const TREE_ROAD_CLEARANCE = 2
+const TREE_TYPE_FEATURE_METERS = 3000 / 11
+const TREE_TYPE_SEED_SALT = 0x9e3779b9
 const GRASS_STEP_ALONG = 1.0
 const GRASS_STEP_ACROSS = 1.0
 const BUSH_STEP_ALONG = 2.0
@@ -87,6 +89,31 @@ const BUSH_STEP_ACROSS = 0.9
 const MAX_TREES = 120000
 const MAX_GRASS = 60000
 const MAX_BUSHES = 20000
+
+/**
+ * Official main-forest species comes from a low-frequency type map, not a
+ * per-tree random roll. The map's 3000m / 11-resolution / 4-octave setup is
+ * equivalent to a ~273m base feature with a 0.5 threshold.
+ */
+function treeSpeciesAt(seed: number, x: number, z: number): 0 | 1 {
+  return fbm2(
+    (seed ^ TREE_TYPE_SEED_SALT) >>> 0,
+    x / TREE_TYPE_FEATURE_METERS,
+    z / TREE_TYPE_FEATURE_METERS,
+    4,
+    2,
+    0.5,
+  ) >= 0.5 ? 1 : 0
+}
+
+function treeLineFactor(height: number, minHeight: number, maxHeight: number): number {
+  const span = maxHeight - minHeight
+  if (!(span > 1e-3)) {
+    return 1
+  }
+  const mid = minHeight + span * 0.5
+  return clamp01((maxHeight - height) / Math.max(1e-3, maxHeight - mid))
+}
 
 export function createTreeDensityField(seed: number, worldSize: number): TreeDensityField {
   const densitySeed = (seed ^ 0x51ed270b) >>> 0
@@ -247,7 +274,6 @@ export function computeForestTreePlacements(
   const minZ = field.bounds.minZ
   const cols = Math.ceil(field.bounds.sizeX / cellSize)
   const rows = Math.ceil(field.bounds.sizeZ / cellSize)
-  const heightRange = Math.max(1, field.maxHeight - field.minHeight)
   const trees: TreePlacement[] = []
 
   for (let row = 0; row < rows && trees.length < maxTrees; row += 1) {
@@ -278,8 +304,7 @@ export function computeForestTreePlacements(
       // The DEM density field is already the shared large+medium forest mask;
       // procedural callers still get a deterministic local fallback.
       const forestValue = density.sampleUnit(x, z)
-      const normalizedHeight = clamp01((height - field.minHeight) / heightRange)
-      const elevationFactor = 1 - 0.92 * smoothstep(0.30, 0.84, normalizedHeight)
+      const elevationFactor = treeLineFactor(height, field.minHeight, field.maxHeight)
       const groveSeed = (seed ^ 0x6d2b79f5) >>> 0
       const grove = smoothstep(0.40, 0.64, fbm2(groveSeed, x / 240, z / 240, 2, 2.1, 0.5))
       const slopePenalty = 1 - smoothstep(0.24, slopeLimit, slope) * 0.55
@@ -310,11 +335,7 @@ export function computeForestTreePlacements(
         if (treeY < field.waterLevel + 1) {
           continue
         }
-        const normalizedHeight = clamp01((treeY - field.minHeight) / heightRange)
-        const coniferScore = normalizedHeight * 0.62
-          + slope * 0.9
-          + hashUnit(seed, cellKey, 7 + item) * 0.22
-        const species: 0 | 1 = coniferScore > 0.55 ? 1 : 0
+        const species = treeSpeciesAt(seed, treeX, treeZ)
         const nearVariants = NEAR_TREE_VARIANTS[species]
         // Distant cards need to read as canopy masses at multi-kilometre range;
         // 16–29m crowns give the global forest meaningful areal coverage.
@@ -394,7 +415,7 @@ export function computeRoadsideTreePlacements(
           continue
         }
         const scaleJitter = 1 + (hashUnit(seed, along, band * 16 + (side > 0 ? 7 : 8)) - 0.5) * 0.5
-        const species: 0 | 1 = hashUnit(seed, along, band * 16 + (side > 0 ? 9 : 10)) < 0.5 ? 0 : 1
+        const species: 0 | 1 = hashUnit(seed, along, band * 16 + (side > 0 ? 9 : 10)) < 0.25 ? 1 : 0
         const nearVariants = NEAR_TREE_VARIANTS[species]
         trees.push({
           x,
@@ -462,7 +483,7 @@ function computeTreePlacements(
         }
         const baseScale = 1 + 0.15 * (3 * unitDensity - 1)
         const scaleJitter = 1 + (hashUnit(seed, cellKey, i * 8 + 3) - 0.5) * 0.4
-        const species: 0 | 1 = hashUnit(seed, cellKey, i * 8 + 4) < 0.5 ? 0 : 1
+        const species = treeSpeciesAt(seed, x, z)
         const nearVariants = NEAR_TREE_VARIANTS[species]
         trees.push({
           x,

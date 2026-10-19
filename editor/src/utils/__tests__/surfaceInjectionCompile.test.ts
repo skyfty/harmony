@@ -46,6 +46,9 @@ describe('surface injection compilability', () => {
     const emissiveIndex = fragment.indexOf('totalEmissiveRadiance = plSeasonalColor * uPlRadiance;')
     expect(fresnelIndex).toBeGreaterThanOrEqual(0)
     expect(emissiveIndex).toBeGreaterThan(fresnelIndex)
+    expect(fragment).toContain('uPlTreeLineMidY')
+    expect(fragment).toContain('uPlTreeLineTopY')
+    expect(fragment).toContain('treeMask *= plTreeLine')
 
     patch.restore()
   })
@@ -140,7 +143,7 @@ describe('double-sided foliage lighting normal (背面不翻转)', () => {
     const mesh = manager.container.children[0] as THREE.InstancedMesh
     expect(mesh).toBeTruthy()
     const { fragment } = compileSources(mesh.material as THREE.MeshLambertMaterial)
-    expect(fragment).toContain('vec3 normal = normalize(vNormal);')
+    expect(fragment).toContain('normalize(mix(normalize(vNormal), treeUpView, 0.58))')
     expect(fragment).not.toContain('normal *= faceDirection')
     expect(fragment).not.toContain('#include <normal_fragment_begin>')
     manager.dispose()

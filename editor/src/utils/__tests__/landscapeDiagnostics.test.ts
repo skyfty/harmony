@@ -143,6 +143,11 @@ describe('landscape diagnostics', () => {
       farForestRadius: 0,
       worldForestInstances: 150000,
       worldForestBuildMs: 900,
+      broadleafTreeInstances: 112500,
+      coniferTreeInstances: 37500,
+      coniferTreeFraction: 0.25,
+      treeLineMidY: 1200,
+      treeLineTopY: 2400,
       roadbedHalfWidth: 0,
       roadbedSideWidth: 0,
       roadbedCutProx: 0,
@@ -264,6 +269,11 @@ describe('landscape diagnostics', () => {
     expect(core.assets.variant).toBe('full')
     expect(core.assets.pendingDownloads).toBe(0)
     expect(core.landscape[0].stats.worldForestInstances).toBe(150000)
+    expect(core.landscape[0].stats.broadleafTreeInstances).toBe(112500)
+    expect(core.landscape[0].stats.coniferTreeInstances).toBe(37500)
+    expect(core.landscape[0].stats.coniferTreeFraction).toBe(0.25)
+    expect(core.landscape[0].stats.treeLineMidY).toBe(1200)
+    expect(core.landscape[0].stats.treeLineTopY).toBe(2400)
     expect(core.landscape[0].stats.demStatus).toBe('ready')
     expect(core.landscape[0].stats.seasonAssetsReady).toBe(true)
     expect(core.warnings).toEqual(['warn-a', 'warn-b', 'tree-instance-budget-reached', 'asset:file-failed'])
@@ -281,7 +291,7 @@ describe('landscape diagnostics', () => {
     const beforeDump = lines.length
     logger.dump()
     expect(lines.length).toBe(beforeDump + 2)
-    expect(parseLine(lines[beforeDump]).reason).toBe('manual')
+    expect(parseLine(lines[beforeDump]!).reason).toBe('manual')
 
     extraWarning = 'warn-c'
     logger.tick(1 / 60)

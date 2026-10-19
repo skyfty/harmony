@@ -287,3 +287,22 @@
   BridgeWall（与桥系统一起）；夜间车灯项恒 0。
 - 编辑器视口 `EffectComposer` 的 FXAA/OutlinePass 与 lab 直出存在抗锯齿差异（逐像素对比
   需关闭 FXAA）。
+
+## 第十批（主森林树种空间分布与相对林线，2026-10）
+
+- **官方主森林不是 75/25 随机**：`getTreesAt()` 先由 `treeMap` 得到 0..3 棵/10m 格，
+  再通过 `getTypeAt()` 读取 `typeMap`（`tileSize=3000`、`resolution=11`、`depth=4`、
+  `upscale=2`、`scale=1`、`offset=.45`）并按 0.5 取整。等价于约 `3000/11≈273m`
+  的阔叶/针叶成片区域。`getTreeType()` 的 25% 随机只用于墙体/农田额外补种。
+- **树密度海拔带**：官方 `getTreeDensity()` 在 150m 以下给 0.5..1、150–300m 线性
+  衰减、300m 以上为 0。编辑器 DEM 海拔可能整体在 3–5km，不能直接套绝对海拔；
+  `treeSpecies.ts` 将最低点映射到 0m、中点映射到 150m、最高点映射到 300m，保留
+  官方“低于一半密、向最高点线性消失”的形状。
+- **迁移实现**：`buildTreeSpeciesField()` 在每次地形构建时烘焙 512 级确定性 fbm
+  树种场（基础特征 273m、4 层倍频、阈值 0.5）；全图森林、道路走廊、分块与远景环
+  统一使用同一世界 XZ 采样，近景 3D / 近树卡 / 远景 imposter 对同一棵树给同一物种。
+- **地表同步**：`uPlTreeLineMidY/uPlTreeLineTopY` 让树冠阴影与林线一起淡出，避免
+  高林线以上“地表仍是林下、空中没有树”。
+- **验收**：当前场景 DEM 3565.8–5508.8m 对应林线中点 4537.3m、顶部 5508.8m；
+  `ProceduralLandscapeRuntimeStats` 新增阔叶/针叶实例数与针叶占比，诊断日志可直接
+  核对近远 LOD 是否一致。

@@ -3,6 +3,11 @@ import { chunkRandom } from './densityField'
 import type { RoadDistanceSource } from './roadProximity'
 import type { TerrainHeightGrid } from './terrainSampler'
 import { clamp, clamp01, lerp, smoothstep } from './noise'
+import {
+  slowroadsTreeLineBounds,
+  slowroadsTreeLineFactor,
+  slowroadsTreeSpeciesAt,
+} from './treeSpecies'
 
 export interface LandscapeChunkDeps {
   grid: TerrainHeightGrid
@@ -123,6 +128,7 @@ export function planTreeChunk(params: TreeChunkParams, deps: LandscapeChunkDeps)
   const { grid, density, roadField } = deps
   const heightAt = deps.surfaceHeightAt ?? ((x: number, z: number) => grid.sampleHeight(x, z))
   const normalAt = deps.surfaceNormalAt ?? ((x: number, z: number) => grid.sampleNormal(x, z))
+  const treeLine = slowroadsTreeLineBounds(grid.minY, grid.maxY)
   const baseX = params.chunkX * params.chunkSize
   const baseZ = params.chunkZ * params.chunkSize
   const half = params.chunkSize * 0.5
@@ -172,6 +178,16 @@ export function planTreeChunk(params: TreeChunkParams, deps: LandscapeChunkDeps)
     if (params.minHeight != null && y < params.minHeight) {
       continue
     }
+    const treeLineFactor = slowroadsTreeLineFactor(y, treeLine)
+    if (treeLineFactor <= 0) {
+      continue
+    }
+    if (
+      treeLineFactor < 1
+      && chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 8) >= treeLineFactor
+    ) {
+      continue
+    }
     if (roadField) {
       const distance = roadField.distanceAt(x, z)
       if (distance < params.roadHalfWidth + params.roadShoulderWidth + params.roadClearance) {
@@ -185,7 +201,7 @@ export function planTreeChunk(params: TreeChunkParams, deps: LandscapeChunkDeps)
       rotation: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 3) * Math.PI * 2,
       scale: lerp(params.minScale, params.maxScale, chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 4)),
       variant: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 5),
-      species: chunkRandom(params.seed, params.chunkX, params.chunkZ, i, 7) < 0.4 ? 1 : 0,
+      species: slowroadsTreeSpeciesAt(params.seed, x, z),
       rank: i,
     })
   }

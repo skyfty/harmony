@@ -82,6 +82,11 @@ import {
   markProceduralLandscapeRoadCollision,
 } from './collisionMetadata'
 import { createTreeMeshManager, type TreeMeshManager } from './treeMeshes'
+import {
+  buildTreeSpeciesField,
+  slowroadsTreeLineBounds,
+  type TreeSpeciesField,
+} from './treeSpecies'
 import { computeRoadMarkings, type RoadMarkingWeights } from './roadMarkings'
 import { DEFAULT_ROAD_STYLE, ROAD_STYLE_PROFILES, isSingleTrackRoad } from './roadStyle'
 import { computeWallSegments, type WallSegment } from './walls'
@@ -350,6 +355,11 @@ export interface ProceduralLandscapeRuntimeStats {
   farForestRadius: number
   worldForestInstances: number
   worldForestBuildMs: number
+  broadleafTreeInstances: number
+  coniferTreeInstances: number
+  coniferTreeFraction: number
+  treeLineMidY: number
+  treeLineTopY: number
   roadbedHalfWidth: number
   roadbedSideWidth: number
   roadbedCutProx: number
@@ -892,6 +902,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demRoadbedCollisionMesh: THREE.Mesh | null = null
   let demRoadbedHalfWidth = 0
   let densityField: LandscapeDensityField | null = null
+  let treeSpeciesField: TreeSpeciesField | null = null
   let variationField: LandscapeDensityField | null = null
   let forestMaskTexture: THREE.DataTexture | null = null
   let variationTexture: THREE.DataTexture | null = null
@@ -932,6 +943,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let farForestLayers: { broadleaf: THREE.InstancedMesh; conifer: THREE.InstancedMesh } | null = null
   let farForestInstances = 0
   let farForestRadius = 0
+  let worldForestBroadleafInstances = 0
+  let worldForestConiferInstances = 0
   let worldForestScan: WorldForestScan | null = null
   let worldForestIndex: WorldForestPlacementIndex | null = null
   let worldForestRevision = 0
@@ -1097,6 +1110,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     farForestRadius: 0,
     worldForestInstances: 0,
     worldForestBuildMs: 0,
+    broadleafTreeInstances: 0,
+    coniferTreeInstances: 0,
+    coniferTreeFraction: 0,
+    treeLineMidY: 0,
+    treeLineTopY: 0,
     roadbedHalfWidth: 0,
     roadbedSideWidth: 0,
     roadbedCutProx: 0,
@@ -1579,6 +1597,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     disposeRoadCollisionMesh()
     roadMarkings = null
     densityField = null
+    treeSpeciesField = null
     variationField = null
     roadResult = null
     roadPlanFailureReason = null
@@ -1670,6 +1689,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     worldForestPlacements = []
     worldForestCorridor = []
     worldForestBuildMs = 0
+    worldForestBroadleafInstances = 0
+    worldForestConiferInstances = 0
     nearMeshCamera.set(Number.NaN, Number.NaN)
     nearMeshForestRevision = -1
   }
@@ -1757,6 +1778,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         imposterSpriteForPlacement(placement),
       )
     }
+    worldForestBroadleafInstances = broadleaf.length
+    worldForestConiferInstances = conifer.length
     const handleConifer = getFoliageMaterialHandle(farForestMaterialSpec(1))
     const handleBroadleaf = getFoliageMaterialHandle(farForestMaterialSpec(0))
     farForestLayers = {
@@ -1815,6 +1838,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       density: densityField,
       roadField: roadProximity,
       heightAt: visibleForestHeightAt,
+      speciesAt: treeSpeciesField
+        ? (x: number, z: number) => treeSpeciesField!.sampleSpecies(x, z)
+        : undefined,
     }
     worldForestCorridor = roadResult
       ? planWorldForestCorridor(params, deps, roadResult.nodes)
@@ -1834,6 +1860,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         density: densityField,
         roadField: roadProximity,
         heightAt: visibleForestHeightAt,
+        speciesAt: treeSpeciesField
+          ? (x: number, z: number) => treeSpeciesField!.sampleSpecies(x, z)
+          : undefined,
       },
       25_000,
     )
@@ -2180,6 +2209,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           scale: props.forest.scale,
           coverage: effectiveForestCoverage,
         })
+    treeSpeciesField = buildTreeSpeciesField({
+      ...bounds,
+      seed: props.seed,
+    })
     variationField = buildVariationField({ ...bounds, seed: props.seed, scale: props.forest.scale })
     forestMaskTexture?.dispose()
     forestMaskTexture = createDensityDataTexture(densityField)
@@ -2884,6 +2917,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlHeightMin.value = grid.minY
     uniforms.uPlHeightRange.value = Math.max(0.001, grid.maxY - grid.minY)
     uniforms.uPlWaterLevel.value = grid.minY
+    const treeLine = slowroadsTreeLineBounds(grid.minY, grid.maxY)
+    uniforms.uPlTreeLineMidY.value = treeLine.midY
+    uniforms.uPlTreeLineTopY.value = treeLine.topY
+    stats.treeLineMidY = treeLine.midY
+    stats.treeLineTopY = treeLine.topY
     // 地表高度带归一化：lab 世界起伏 ±40m 时恒为 4（逐字一致）；编辑器真实地形
     // 按实测起伏压缩到 [0.25, 4]，避免 heather / light grass 高度项整片饱和。
     uniforms.uPlHeightScale.value = resolveSurfaceHeightScale(grid.maxY - grid.minY)
@@ -3957,6 +3995,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.farForestRadius = farForestRadius
     stats.worldForestInstances = farForestInstances
     stats.worldForestBuildMs = worldForestBuildMs
+    stats.broadleafTreeInstances = worldForestBroadleafInstances
+    stats.coniferTreeInstances = worldForestConiferInstances
+    stats.coniferTreeFraction = farForestInstances > 0
+      ? worldForestConiferInstances / farForestInstances
+      : 0
     stats.roadbedHalfWidth = demRoadbedHalfWidth
     stats.roadbedSideWidth = demRoadbedSideWidth
     stats.roadbedCutProx = demRoadbedCutProx

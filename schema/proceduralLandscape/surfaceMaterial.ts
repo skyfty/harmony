@@ -65,6 +65,10 @@ export interface ProceduralLandscapeSurfaceUniforms {
   uPlRoadDisplacement: THREE.IUniform<number>
   uPlRoadbedBrightness: THREE.IUniform<number>
   uPlWaterLevel: THREE.IUniform<number>
+  /** slowroads' 150m tree-density band, remapped to this DEM's relative height. */
+  uPlTreeLineMidY: THREE.IUniform<number>
+  /** slowroads' 300m tree line, remapped to this DEM's highest point. */
+  uPlTreeLineTopY: THREE.IUniform<number>
   uPlBaseMapBlend: THREE.IUniform<number>
   // ---- 季节资产 ----
   uPlNoiseTex: THREE.IUniform<THREE.Texture | null>
@@ -119,6 +123,8 @@ export function createProceduralLandscapeSurfaceUniforms(): ProceduralLandscapeS
     uPlRoadDisplacement: { value: 1 },
     uPlRoadbedBrightness: { value: 1 },
     uPlWaterLevel: { value: 0 },
+    uPlTreeLineMidY: { value: 0 },
+    uPlTreeLineTopY: { value: 1e9 },
     uPlBaseMapBlend: { value: 0.5 },
     uPlNoiseTex: { value: null },
     uPlGrassTex: { value: null },
@@ -246,6 +252,8 @@ uniform float uPlRoadShoulderWidth;
 uniform float uPlSurfaceStrength;
 uniform float uPlUvScale;
 uniform float uPlWaterLevel;
+uniform float uPlTreeLineMidY;
+uniform float uPlTreeLineTopY;
 uniform float uPlHeightRange;
 uniform float uPlHeightScale;
 uniform float uPlBaseMapBlend;
@@ -348,6 +356,14 @@ const FRAGMENT_BODY = `#include <map_fragment>
   float treeMask = 0.0;
   if (uPlShowCanopy > 0.5) {
     treeMask = clamp(texture2D(uPlForestMask, plWorldUv).r * 1.15, 0.0, 1.0);
+    // Match the CPU placement tree line: full density below the middle of the
+    // DEM elevation range, linear falloff to zero at the highest point.
+    float plTreeLine = clamp(
+      (uPlTreeLineTopY - vPlWorldPosition.y) / max(1e-3, uPlTreeLineTopY - uPlTreeLineMidY),
+      0.0,
+      1.0
+    );
+    treeMask *= plTreeLine;
   }
   // 官方：vShadow = treeMask × 高度项，再乘当季 shadowFactor（顶点着色器）。
   float vShadow = min(1.0, treeMask * min(1.0, max(0.0, heightRel / 4.0)));
