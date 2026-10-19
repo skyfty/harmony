@@ -1,7 +1,6 @@
 import * as THREE from 'three'
 
 import type { StaticMeshCollisionShapeDefinition } from './groundCollisionRuntimeBridge'
-import { GROUND_COLLISION_RADIUS_METERS } from './groundCollisionRuntimeConstants'
 import type {
   PhysicsBodyBindingEntry as RigidbodyInstance,
   PhysicsBodyLike,
@@ -32,12 +31,16 @@ import {
 // gap while re-indexing). The dense rendered road/roadbed ribbons stay excluded;
 // the procedural landscape adds decimated collision-only ribbons for both.
 
-/** Probe distance at which a collision chunk is created. */
-export const MESH_COLLISION_ACTIVATION_RADIUS_METERS = GROUND_COLLISION_RADIUS_METERS
+/**
+ * Mesh collision is intentionally tighter than terrain/tile streaming. The
+ * player only needs nearby triangles; keeping the full 150m ground window for
+ * terrain, road, roadbed and walls multiplies the resident body count.
+ */
+export const MESH_COLLISION_ACTIVATION_RADIUS_METERS = 100
 /** Probe distance at which a resident collision chunk is kept (hysteresis band). */
-export const MESH_COLLISION_RETENTION_RADIUS_METERS = GROUND_COLLISION_RADIUS_METERS + 50
+export const MESH_COLLISION_RETENTION_RADIUS_METERS = 150
 /** Maximum number of resident collision chunks per source node. */
-export const MESH_COLLISION_MAX_RESIDENT_CHUNKS = 64
+export const MESH_COLLISION_MAX_RESIDENT_CHUNKS = 32
 /** Maximum number of collision chunks created per sync call. */
 export const MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC = 2
 /**

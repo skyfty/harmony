@@ -11,14 +11,18 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
+  MESH_COLLISION_ACTIVATION_RADIUS_METERS,
+  MESH_COLLISION_MAX_RESIDENT_CHUNKS,
   MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC,
   MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC_AFTER_CHANGE,
+  MESH_COLLISION_RETENTION_RADIUS_METERS,
   clearAllMeshCollisionRuntimeHosts,
   syncMeshCollisionRuntimeHost,
   type MeshCollisionChunkShape,
   type MeshCollisionRuntimeDeps,
   type MeshCollisionRuntimeHostSnapshot,
 } from '@schema/meshCollisionRuntimeHost'
+import { GROUND_COLLISION_RADIUS_METERS } from '@schema/groundCollisionRuntimeConstants'
 import { createRoadBand } from '@schema/proceduralLandscape/roadBand'
 import { createRoadCollisionGeometry } from '@schema/proceduralLandscape/roadCollision'
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
@@ -103,6 +107,16 @@ function makeDummyTexture(): THREE.DataTexture {
   )
   texture.needsUpdate = true
   return texture
+}
+
+function addSmallObstacle(host: THREE.Group, x: number, z = 0): THREE.Mesh {
+  const mesh = new THREE.Mesh(
+    makeRibbonGeometry(2, 2, 5, 1),
+    new THREE.MeshBasicMaterial(),
+  )
+  mesh.position.set(x, 0, z)
+  host.add(mesh)
+  return mesh
 }
 
 function shapeMaxY(shape: MeshCollisionChunkShape): number {
@@ -515,5 +529,63 @@ describe('mesh collision runtime host incremental re-index', () => {
     const roadbedBodies = harness.created.slice(terrainCreates).filter(isElevatedRecord)
     expect(roadbedBodies.length).toBeGreaterThan(0)
     expect(shapeMaxY(roadbedBodies[0]!.shape)).toBeCloseTo(5, 5)
+  })
+
+  it('uses a tighter mesh collision window than ground tile streaming', () => {
+    expect(GROUND_COLLISION_RADIUS_METERS).toBe(150)
+    expect(MESH_COLLISION_ACTIVATION_RADIUS_METERS).toBe(100)
+    expect(MESH_COLLISION_RETENTION_RADIUS_METERS).toBe(150)
+    expect(MESH_COLLISION_MAX_RESIDENT_CHUNKS).toBe(32)
+  })
+
+  it('activates a chunk whose AABB is just inside 100m', () => {
+    const host = new THREE.Group()
+    addSmallObstacle(host, 100)
+    const harness = createHarness()
+
+    drain(harness, host, 'boundary-node', [new THREE.Vector3(0, 0, 0)])
+
+    expect(harness.created).toHaveLength(1)
+  })
+
+  it('does not activate a chunk whose AABB is just outside 100m', () => {
+    const host = new THREE.Group()
+    addSmallObstacle(host, 102)
+    const harness = createHarness()
+
+    drain(harness, host, 'boundary-node', [new THREE.Vector3(0, 0, 0)])
+
+    expect(harness.created).toHaveLength(0)
+  })
+
+  it('retains a resident chunk at 149m and removes it at 151m', () => {
+    const host = new THREE.Group()
+    addSmallObstacle(host, 0)
+    const harness = createHarness()
+    drain(harness, host, 'retention-node', [new THREE.Vector3(0, 0, 0)])
+    expect(harness.created).toHaveLength(1)
+    const body = harness.created[0]!.body
+
+    syncOnce(harness, host, 'retention-node', [new THREE.Vector3(150, 0, 0)])
+    expect(harness.removed).not.toContain(body)
+
+    syncOnce(harness, host, 'retention-node', [new THREE.Vector3(152, 0, 0)])
+    expect(harness.removed).toContain(body)
+  })
+
+  it('keeps only the nearest 32 resident chunks', () => {
+    const host = new THREE.Group()
+    for (let index = 0; index < 40; index += 1) {
+      addSmallObstacle(
+        host,
+        (index % 8) * 6 - 21,
+        Math.floor(index / 8) * 6 - 12,
+      )
+    }
+    const harness = createHarness()
+    const snapshot = drain(harness, host, 'cap-node', [new THREE.Vector3(0, 0, 0)])
+
+    expect(snapshot.chunkCount).toBe(32)
+    expect(harness.created).toHaveLength(32)
   })
 })
