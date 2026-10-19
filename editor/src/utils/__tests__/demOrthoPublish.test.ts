@@ -4,7 +4,7 @@ import { stripInactiveDemOrthoReferences } from '@/utils/demOrthoPublish'
 
 function makeDocument(options: {
   enabled: boolean
-  baseMapMode: 'replace' | 'blend'
+  baseMapMode: 'replace' | 'aerial' | 'blend'
 }) {
   return {
     nodes: [
@@ -56,5 +56,13 @@ describe('DEM orthophoto publish filtering', () => {
     expect(dem.runtimeOrthoUrl).toBe('https://example.test/runtime/ortho-rgb.bin')
     expect(dem.runtimeOrthoBytes).toBe(1234)
     expect(document.files).toBeUndefined()
+  })
+
+  it('keeps the URL for an active aerial mode', () => {
+    const document = makeDocument({ enabled: true, baseMapMode: 'aerial' })
+    stripInactiveDemOrthoReferences(document)
+    const dem = document.nodes[0].components[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE].props.dem
+    expect(dem.runtimeOrthoUrl).toBe('https://example.test/runtime/ortho-rgb.bin')
+    expect(dem.runtimeOrthoBytes).toBe(1234)
   })
 })

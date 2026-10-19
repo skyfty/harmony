@@ -10,8 +10,9 @@ type RuntimeDocument = {
 }
 
 /**
- * Runtime exports must not retain an orthophoto URL when official-cover
- * shading is active. The original editor document is never modified.
+ * Runtime exports must retain the orthophoto URL for aerial and blended
+ * terrain, but not for procedural-only shading. The original editor document
+ * is never modified.
  */
 export function stripInactiveDemOrthoReferences(
   document: RuntimeDocument,
@@ -38,7 +39,10 @@ export function stripInactiveDemOrthoReferences(
     const surface = component?.props?.surface
     if (
       dem?.assetId
-      && (surface?.enabled === false || surface?.baseMapMode !== 'blend')
+      && (
+        surface?.enabled === false
+        || (surface?.baseMapMode !== 'blend' && surface?.baseMapMode !== 'aerial')
+      )
     ) {
       dem.runtimeOrthoUrl = null
       dem.runtimeOrthoBytes = null

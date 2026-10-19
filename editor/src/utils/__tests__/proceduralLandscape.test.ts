@@ -206,6 +206,27 @@ describe('terrain height grid', () => {
     outline.name = 'InstancedOutline'
     root.add(outline)
 
+    // Runtime-generated DEM and roadbed meshes already contain a previous
+    // cut/fill pass and must never feed back into terrain sampling.
+    const generatedDem = makeGridMesh({
+      sizeX: 100,
+      sizeZ: 100,
+      segmentsX: 2,
+      segmentsZ: 2,
+      height: () => -50,
+    })
+    generatedDem.userData.proceduralLandscapeDemTerrain = true
+    root.add(generatedDem)
+    const generatedRoadbed = makeGridMesh({
+      sizeX: 20,
+      sizeZ: 20,
+      segmentsX: 2,
+      segmentsZ: 2,
+      height: () => -80,
+    })
+    generatedRoadbed.userData.proceduralLandscapeRoadbedSurface = true
+    root.add(generatedRoadbed)
+
     root.updateMatrixWorld(true)
     const sources = collectTerrainMeshSources(root)
     expect(sources).toHaveLength(1)
@@ -1125,6 +1146,23 @@ describe('official surface parity (slowroads.io)', () => {
     expect('heatherTransitionRatio' in props.surface).toBe(false)
   })
 
+  it('preserves all three base-map source modes during normalization', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'terrain' })
+    for (const baseMapMode of ['replace', 'aerial', 'blend'] as const) {
+      const normalized = clampProceduralLandscapeProps({
+        ...props,
+        surface: { ...props.surface, baseMapMode },
+      }, 'terrain')
+      expect(normalized.surface.baseMapMode).toBe(baseMapMode)
+    }
+
+    const unknown = clampProceduralLandscapeProps({
+      ...props,
+      surface: { ...props.surface, baseMapMode: 'unknown' as never },
+    }, 'terrain')
+    expect(unknown.surface.baseMapMode).toBe('replace')
+  })
+
   it('exposes the official radiance/shadowFactor uniforms with matching defaults', () => {
     const uniforms = createProceduralLandscapeSurfaceUniforms()
     expect(uniforms.uPlRadiance.value).toBe(2)
@@ -1158,6 +1196,9 @@ describe('official surface parity (slowroads.io)', () => {
     // 官方环境光树影调制。
     expect(parameters.fragmentShader).toContain('plAmbientShadow')
     expect(parameters.fragmentShader).toContain('reflectedLight.indirectDiffuse *= plAmbientShadow;')
+    // 完整航拍权重只替换季节纹理颜色，继续沿用同一套地形光照；无航拍像素回退程序地表。
+    expect(parameters.fragmentShader).toContain('float plBaseCoverage = step(')
+    expect(parameters.fragmentShader).toContain('clamp(uPlBaseMapBlend, 0.0, 1.0) * plBaseCoverage')
     expect(parameters.uniforms.uPlRadiance).toBeTruthy()
     expect(parameters.uniforms.uPlShadowFactor).toBeTruthy()
 

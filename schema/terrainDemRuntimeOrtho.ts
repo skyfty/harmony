@@ -103,3 +103,26 @@ export function terrainDemRuntimeOrthoToRgba(
   }
   return rgba
 }
+
+/**
+ * The upload pipeline preserves missing orthophoto pixels as RGB 0. Return
+ * their fraction so the editor can warn about incomplete aerial coverage.
+ */
+export function terrainDemRuntimeOrthoCoverage(
+  data: TerrainDemRuntimeOrthoData,
+): number {
+  const pixelCount = data.width * data.height
+  if (data.rgb.length !== pixelCount * CHANNELS) {
+    throw new Error('DEM runtime ortho RGB byte count does not match dimensions')
+  }
+  if (pixelCount === 0) {
+    return 0
+  }
+  let covered = 0
+  for (let offset = 0; offset < data.rgb.length; offset += CHANNELS) {
+    if (data.rgb[offset]! !== 0 || data.rgb[offset + 1]! !== 0 || data.rgb[offset + 2]! !== 0) {
+      covered += 1
+    }
+  }
+  return covered / pixelCount
+}

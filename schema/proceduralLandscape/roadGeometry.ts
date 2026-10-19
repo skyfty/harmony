@@ -18,6 +18,8 @@ export function validateRoadCenterlineGeometry(
     clearance: number
     minimumTurnRadius: number
     maximumHeadingChangeRad?: number
+    /** Treat the repeated last node as the closure of a ring, not a hairpin. */
+    closed?: boolean
   },
 ): RoadGeometryValidation {
   if (nodes.length < 5) {
@@ -28,14 +30,26 @@ export function validateRoadCenterlineGeometry(
       maxHeadingChangeRad: 0,
     }
   }
-  const cumulative = new Float64Array(nodes.length)
-  for (let index = 1; index < nodes.length; index += 1) {
+  const closed = options.closed === true
+    && nodes.length > 3
+    && Math.hypot(
+      nodes[0]!.x - nodes[nodes.length - 1]!.x,
+      nodes[0]!.z - nodes[nodes.length - 1]!.z,
+    ) <= 0.5
+  const samples = closed ? nodes.slice(0, -1) : nodes
+  const cumulative = new Float64Array(samples.length)
+  for (let index = 1; index < samples.length; index += 1) {
     cumulative[index] = cumulative[index - 1]!
       + Math.hypot(
-        nodes[index]!.x - nodes[index - 1]!.x,
-        nodes[index]!.z - nodes[index - 1]!.z,
+        samples[index]!.x - samples[index - 1]!.x,
+        samples[index]!.z - samples[index - 1]!.z,
       )
   }
+  const totalLength = cumulative[samples.length - 1]!
+    + Math.hypot(
+      samples[0]!.x - samples[samples.length - 1]!.x,
+      samples[0]!.z - samples[samples.length - 1]!.z,
+    )
   const minimumPathSeparation = Math.max(
     options.clearance * 2,
     options.minimumTurnRadius * 2,
@@ -43,8 +57,8 @@ export function validateRoadCenterlineGeometry(
   let minCenterlineClearance = Number.POSITIVE_INFINITY
   const bucketSize = Math.max(32, options.clearance * 2)
   const buckets = new Map<string, number[]>()
-  for (let index = 0; index < nodes.length; index += 1) {
-    const node = nodes[index]!
+  for (let index = 0; index < samples.length; index += 1) {
+    const node = samples[index]!
     const key = `${Math.floor(node.x / bucketSize)}:${Math.floor(node.z / bucketSize)}`
     const bucket = buckets.get(key)
     if (bucket) {
@@ -53,8 +67,8 @@ export function validateRoadCenterlineGeometry(
       buckets.set(key, [index])
     }
   }
-  for (let index = 0; index < nodes.length; index += 1) {
-    const first = nodes[index]!
+  for (let index = 0; index < samples.length; index += 1) {
+    const first = samples[index]!
     const bucketX = Math.floor(first.x / bucketSize)
     const bucketZ = Math.floor(first.z / bucketSize)
     search: for (let dx = -1; dx <= 1; dx += 1) {
@@ -67,10 +81,14 @@ export function validateRoadCenterlineGeometry(
           if (other <= index + 3) {
             continue
           }
-          if (cumulative[other]! - cumulative[index]! < minimumPathSeparation) {
+          const linearSeparation = cumulative[other]! - cumulative[index]!
+          const pathSeparation = closed
+            ? Math.min(linearSeparation, totalLength - linearSeparation)
+            : linearSeparation
+          if (pathSeparation < minimumPathSeparation) {
             continue
           }
-          const second = nodes[other]!
+          const second = samples[other]!
           minCenterlineClearance = Math.min(
             minCenterlineClearance,
             Math.hypot(first.x - second.x, first.z - second.z),
@@ -88,10 +106,13 @@ export function validateRoadCenterlineGeometry(
 
   let minTurnRadius = Number.POSITIVE_INFINITY
   let maxHeadingChangeRad = 0
-  for (let index = 1; index + 1 < nodes.length; index += 1) {
-    const previous = nodes[index - 1]!
-    const current = nodes[index]!
-    const next = nodes[index + 1]!
+  for (let index = 0; index < samples.length; index += 1) {
+    if (!closed && (index === 0 || index + 1 >= samples.length)) {
+      continue
+    }
+    const previous = samples[(index - 1 + samples.length) % samples.length]!
+    const current = samples[index]!
+    const next = samples[(index + 1) % samples.length]!
     const a = Math.hypot(current.x - previous.x, current.z - previous.z)
     const b = Math.hypot(next.x - current.x, next.z - current.z)
     const c = Math.hypot(next.x - previous.x, next.z - previous.z)

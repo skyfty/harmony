@@ -170,6 +170,7 @@ describe('landscape diagnostics', () => {
       demOrthoBytes: 3 * 1024 * 1024,
       demOrthoWidth: 1024,
       demOrthoHeight: 1024,
+      demOrthoCoverage: 1,
       demOrthoError: null,
       demTransformWarning: null,
       demMeshBytes: 10 * 1024 * 1024,

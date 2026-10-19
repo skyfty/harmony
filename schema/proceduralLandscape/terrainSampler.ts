@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import { clamp } from './noise'
 import { COMPONENT_ARTIFACT_KEY } from '../components/componentManager'
+import {
+  PROCEDURAL_LANDSCAPE_ROADBED_SURFACE_USER_DATA_KEY,
+  PROCEDURAL_LANDSCAPE_ROAD_COLLISION_USER_DATA_KEY,
+  PROCEDURAL_LANDSCAPE_ROAD_SURFACE_USER_DATA_KEY,
+} from './collisionMetadata'
 
 /**
  * Runtime height field rasterized from a real terrain mesh (for example a GLB
@@ -67,6 +72,18 @@ const scratchC = new THREE.Vector3()
 /** Viewport helper meshes never describe real terrain geometry. */
 const TERRAIN_MESH_SKIP_NAME_PATTERN = /pick\s*proxy|instanced\s*outline|lod\s*helper/i
 
+/**
+ * Runtime-generated landscape meshes are not terrain inputs. In particular the
+ * rebuilt DEM mesh already contains the previous cut/fill pass; feeding it back
+ * into the sampler makes successive width edits dig progressively deeper.
+ */
+const TERRAIN_MESH_SKIP_USER_DATA_FLAGS = [
+  'proceduralLandscapeDemTerrain',
+  PROCEDURAL_LANDSCAPE_ROADBED_SURFACE_USER_DATA_KEY,
+  PROCEDURAL_LANDSCAPE_ROAD_COLLISION_USER_DATA_KEY,
+  PROCEDURAL_LANDSCAPE_ROAD_SURFACE_USER_DATA_KEY,
+] as const
+
 export function isTerrainSourceMesh(mesh: THREE.Mesh): boolean {
   const typed = mesh as THREE.Mesh & {
     isMesh?: boolean
@@ -93,6 +110,9 @@ export function isTerrainSourceMesh(mesh: THREE.Mesh): boolean {
       return false
     }
     if (userData[COMPONENT_ARTIFACT_KEY] === true) {
+      return false
+    }
+    if (TERRAIN_MESH_SKIP_USER_DATA_FLAGS.some((flag) => userData[flag] === true)) {
       return false
     }
   }

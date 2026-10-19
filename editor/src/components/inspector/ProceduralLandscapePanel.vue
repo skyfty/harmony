@@ -10,6 +10,7 @@ import {
 } from '@schema/components'
 import {
   clampProceduralLandscapeProps,
+  resolveProceduralLandscapeBaseMapMode,
   type ProceduralLandscapeComponentProps,
   type ProceduralLandscapeRoadStrategy,
 } from '@schema/proceduralLandscape/config'
@@ -91,6 +92,10 @@ const aerialBaseMapAvailable = computed(() => {
   return !dem.assetId || Boolean(dem.runtimeOrthoUrl)
 })
 
+const effectiveBaseMapMode = computed(() => (
+  propsValue.value ? resolveProceduralLandscapeBaseMapMode(propsValue.value) : 'replace'
+))
+
 const demOrthoStatusText = computed(() => {
   const stats = runtimeStats.value
   if (!stats || !propsValue.value?.dem.assetId) {
@@ -100,7 +105,11 @@ const demOrthoStatusText = computed(() => {
     return '航拍底图加载中…'
   }
   if (stats.demOrthoStatus === 'ready') {
-    return `航拍底图已加载${stats.demOrthoWidth > 0 ? ` · ${stats.demOrthoWidth}×${stats.demOrthoHeight}` : ''}`
+    const coverage = Math.max(0, Math.min(1, stats.demOrthoCoverage))
+    const coverageHint = coverage < 0.999
+      ? ` · 覆盖 ${Math.round(coverage * 100)}%（缺失区使用程序化地表）`
+      : ''
+    return `航拍底图已加载${stats.demOrthoWidth > 0 ? ` · ${stats.demOrthoWidth}×${stats.demOrthoHeight}` : ''}${coverageHint}`
   }
   if (stats.demOrthoStatus === 'error') {
     return `航拍底图加载失败：${stats.demOrthoError ?? '未知错误'}`
@@ -452,6 +461,9 @@ function handleGenerateRoad(): void {
       'global-guide-budget-exceeded': '全局坡限搜索超过预算，已保留上一版公路。',
       'guided-guide-prepare-failed': '全局骨架无法平滑成连续道路，已保留上一版公路。',
       'guided-official-blocked': '官方 Hills 曲线无法在可行骨架内满足坡度限制，已保留上一版公路。',
+      'waypoint-missed': unreachablePoint
+        ? `${unreachablePoint} 未被生成中心线经过，已保留上一版公路；请调整该点或增大途径容差。`
+        : '有途径点未被生成中心线经过，已保留上一版公路。',
       'loop-not-closed': '闭环回程无法在坡度限制内连接 P1，已保留上一版公路。',
       'loop-heading-discontinuity': '闭环处转角过大，已保留上一版公路。',
       'loop-termination-distance': '闭环回程未到达 P1，已保留上一版公路。',
@@ -1256,21 +1268,29 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             <button
               type="button"
               class="pl-choice"
-              :class="{ 'pl-choice--active': !aerialBaseMapAvailable || propsValue.surface.baseMapMode !== 'blend' }"
+              :class="{ 'pl-choice--active': effectiveBaseMapMode === 'replace' }"
               :disabled="!componentEnabled"
               @click="patchGroup('surface', { baseMapMode: 'replace' })"
-            >官方覆盖</button>
+            >仅程序化</button>
             <button
               v-if="aerialBaseMapAvailable"
               type="button"
               class="pl-choice"
-              :class="{ 'pl-choice--active': propsValue.surface.baseMapMode === 'blend' }"
+              :class="{ 'pl-choice--active': effectiveBaseMapMode === 'aerial' }"
+              :disabled="!componentEnabled"
+              @click="patchGroup('surface', { baseMapMode: 'aerial' })"
+            >仅航拍</button>
+            <button
+              v-if="aerialBaseMapAvailable"
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': effectiveBaseMapMode === 'blend' }"
               :disabled="!componentEnabled"
               @click="patchGroup('surface', { baseMapMode: 'blend' })"
-            >叠加航拍底图</button>
+            >混合</button>
           </div>
           <v-slider
-            v-if="aerialBaseMapAvailable && propsValue.surface.baseMapMode === 'blend'"
+            v-if="aerialBaseMapAvailable && effectiveBaseMapMode === 'blend'"
             :model-value="propsValue.surface.baseMapBlend"
             :min="0"
             :max="1"
@@ -1285,7 +1305,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           <div v-if="!aerialBaseMapAvailable" class="pl-hint">
             当前 DEM 资源包没有运行时正射影像；如需航拍底图，请重新上传资源包并重建地形节点。
           </div>
-          <div v-else-if="propsValue.surface.baseMapMode === 'blend' && demOrthoStatusText" class="pl-hint">
+          <div v-else-if="effectiveBaseMapMode !== 'replace' && demOrthoStatusText" class="pl-hint">
             {{ demOrthoStatusText }}
           </div>
         </div>

@@ -524,7 +524,7 @@ describe('official Slow Roads Hills midline', () => {
     })
     expect(
       loop.complete,
-      `${loop.failureReason} nodes ${loop.nodes.length} closed ${loop.closed} passed ${loop.waypointsPassed}/${loop.waypointCount} closure ${loop.closureHeadingErrorRad}`,
+      `${loop.failureReason} nodes ${loop.nodes.length} closed ${loop.closed} passed ${loop.waypointsPassed}/${loop.waypointCount} closure ${loop.closureHeadingErrorRad} clearance ${loop.minCenterlineClearance} turn ${loop.minTurnRadius} heading ${loop.maxHeadingChangeRad}`,
     ).toBe(true)
     expect(loop.closed).toBe(true)
     expect(loop.waypointsPassed).toBe(1)
@@ -723,6 +723,69 @@ describe('unified waypoint road planning', () => {
     expect(result.length).toBeGreaterThan(3_000)
     expect(result.minCenterlineClearance ?? 0).toBeGreaterThanOrEqual(7)
     expect(result.minTurnRadius ?? 0).toBeGreaterThanOrEqual(20)
+  }, 30_000)
+
+  it('builds a runtime-valid single-point loop on an 8km DEM', () => {
+    const grid = makeSyntheticGrid(8_000, 50, (x, z) => (
+      1_100 + Math.sin(x / 750) * 28 + Math.cos(z / 880) * 22
+    ))
+    const loop = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'loop',
+      waypoints: [{ x: 0, z: 0 }],
+      routeClearance: 7,
+      minimumTurnRadius: 20,
+      maximumHeadingChangeRad: (10 * Math.PI) / 180,
+    })
+    expect(
+      loop.complete,
+      `${loop.failureReason} nodes ${loop.nodes.length} clearance ${loop.minCenterlineClearance} turn ${loop.minTurnRadius} heading ${loop.maxHeadingChangeRad}`,
+    ).toBe(true)
+    expect(loop.closed).toBe(true)
+    expect(loop.minCenterlineClearance ?? 0).toBeGreaterThanOrEqual(7)
+    expect(loop.minTurnRadius ?? 0).toBeGreaterThanOrEqual(20 - 0.05)
+    expect(loop.maxHeadingChangeRad ?? Math.PI)
+      .toBeLessThanOrEqual((10 * Math.PI) / 180)
+  }, 30_000)
+
+  it('keeps all 13 ordered waypoints when the boundary guide needs fallback', () => {
+    const grid = makeSyntheticGrid(8_000, 50, (x, z) => (
+      1_050 + Math.sin(x / 620) * 32 + Math.cos(z / 740) * 24
+    ))
+    const waypoints = [
+      { x: 2_000, z: 1_000 },
+      { x: 350, z: 2_300 },
+      { x: -2_100, z: 2_300 },
+      { x: -2_150, z: 3_350 },
+      { x: -1_950, z: 3_000 },
+      { x: -3_050, z: 2_550 },
+      { x: -2_650, z: 1_450 },
+      { x: -1_500, z: 500 },
+      { x: -100, z: -500 },
+      { x: 1_000, z: -420 },
+      { x: 2_000, z: -720 },
+      { x: 2_900, z: -430 },
+      { x: 3_050, z: 520 },
+    ]
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'boundary',
+      waypoints,
+      routeClearance: 7,
+      minimumTurnRadius: 20,
+      maximumHeadingChangeRad: (10 * Math.PI) / 180,
+    })
+    expect(
+      result.waypointsPassed,
+      `${result.failureReason} passed ${result.waypointsPassed}/${result.waypointCount} error ${result.maxWaypointError}`,
+    ).toBe(waypoints.length)
+    expect(result.maxWaypointError).toBeLessThanOrEqual(
+      baseOptions.waypointTolerance + 1e-4,
+    )
+    expect(
+      result.complete,
+      `${result.failureReason} grade ${result.maxForwardGrade} cross ${result.maxCrossSlope} nodes ${result.nodes.length}`,
+    ).toBe(true)
   }, 30_000)
 
   it('rounds a right-angle guide joint with a Bezier arc near the waypoint', () => {

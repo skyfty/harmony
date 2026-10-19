@@ -1079,6 +1079,7 @@ export function repairRoadCenterlineGeometry(
   clearance: number,
   minimumTurnRadius: number,
   maximumHeadingChangeRad: number,
+  closed = false,
 ): RoadCenterlineRepairResult | null {
   if (
     clearance <= 0
@@ -1105,12 +1106,14 @@ export function repairRoadCenterlineGeometry(
         sampleSpacing: 2,
         controlSpacing: Math.max(12, radius),
         smoothingIterations: 72,
+        closed,
       })
       const refined = smoothPlanarCenterline(rounded, {
         radius: radius * 1.5,
         sampleSpacing: 2,
         controlSpacing: Math.max(16, radius * 1.5),
         smoothingIterations: 96,
+        closed,
       })
       const candidate = rebuildSmoothedNodeGeometry(
         grid,
@@ -1142,6 +1145,7 @@ export function repairRoadCenterlineGeometry(
         clearance,
         minimumTurnRadius,
         maximumHeadingChangeRad,
+        closed,
       })
       if (
         terrain.valid
@@ -2060,6 +2064,94 @@ export function planWaypointRoadRoute(
         }
       }
     }
+    if (!traced.complete && guide && naturalPlan) {
+      const guideFallback = createGuideFallbackRoute(grid, guide.points)
+      const guideTail = guideFallback.nodes[guideFallback.nodes.length - 1]
+      const tail = guideTail
+        ? traceOfficialScenicNaturalRoad(
+            grid,
+            { x: guideTail.x, z: guideTail.z },
+            options.seed,
+            options.margin,
+            {
+              preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+              maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+              maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+              guideTermination: 'boundary',
+              midlineProfile,
+              natural: naturalPlan,
+              initialHeadingRad: guideTail.heading,
+            },
+          )
+        : null
+      const fullGuide = guideFallback.complete
+        ? buildGlobalScenicGuide(grid, guideWaypoints, {
+            seed: options.seed,
+            stepLength: options.stepLength,
+            pathDeviation: options.pathDeviation,
+            margin: options.margin,
+            termination: 'boundary',
+            preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+            maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+            maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 0.9,
+            crossSlopeWeight: 18,
+            waypointTolerance: options.waypointTolerance,
+          })
+        : null
+      const fullFallback = fullGuide && !fullGuide.failureReason
+        ? createGuideFallbackRoute(grid, fullGuide.points)
+        : null
+      const legacyTail = guideFallback.complete
+        ? appendBoundaryTail(grid, guideFallback, {
+            ...options,
+            maxSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+          })
+        : null
+      if (fullFallback?.complete && fullFallback.nodes.length >= 2) {
+        traced = {
+          ...traced,
+          nodes: fullFallback.nodes,
+          length: fullFallback.length,
+          complete: true,
+          failureReason: 'reached-terrain-boundary',
+          waypointsSkipped: 0,
+          skippedWaypointIndices: [],
+          maxGuideDeviation: maxDistanceToGuide(fullFallback.nodes, fullGuide.points),
+        }
+      } else if (legacyTail?.complete && legacyTail.nodes.length >= 2) {
+        traced = {
+          ...traced,
+          nodes: legacyTail.nodes,
+          length: legacyTail.length,
+          complete: true,
+          failureReason: legacyTail.failureReason,
+          waypointsSkipped: 0,
+          skippedWaypointIndices: [],
+          maxGuideDeviation: maxDistanceToGuide(legacyTail.nodes, guide.points),
+        }
+      } else if (
+        guideFallback.complete
+        && guideFallback.nodes.length >= 2
+        && tail
+        && tail.nodes.length >= 2
+      ) {
+        const nodes = [
+          ...guideFallback.nodes,
+          ...tail.nodes.slice(1),
+        ].map((node, index) => ({ ...node, index }))
+        const length = guideFallback.length + tail.length
+        traced = {
+          ...tail,
+          nodes,
+          length,
+          complete: tail.complete,
+          failureReason: tail.failureReason,
+          waypointsSkipped: 0,
+          skippedWaypointIndices: [],
+          maxGuideDeviation: maxDistanceToGuide(nodes, guide.points),
+        }
+      }
+    }
     const naturalTargetLength = traced.naturalTargetLength
     const naturalLaps = traced.naturalLaps
     let terminationResult: {
@@ -2123,6 +2215,7 @@ export function planWaypointRoadRoute(
         ),
         maximumHeadingChangeRad:
           options.maximumHeadingChangeRad ?? Math.PI,
+        closed: termination === 'loop',
       },
     )
     if (
@@ -2144,6 +2237,7 @@ export function planWaypointRoadRoute(
         Math.max(0, options.routeClearance ?? 0),
         Math.max(0, options.minimumTurnRadius ?? 0),
         options.maximumHeadingChangeRad ?? Math.PI,
+        termination === 'loop',
       )
       if (repaired) {
         result = {
@@ -2166,6 +2260,7 @@ export function planWaypointRoadRoute(
           ),
           maximumHeadingChangeRad:
             options.maximumHeadingChangeRad ?? Math.PI,
+          closed: termination === 'loop',
         })
         terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
           preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
@@ -2174,7 +2269,16 @@ export function planWaypointRoadRoute(
         })
       }
     }
-    if (result.complete && !geometry.valid) {
+    const geometryWaypointStats = waypointPassStats(
+      result.nodes,
+      waypoints,
+      effectiveWaypointTolerance,
+    )
+    if (
+      result.complete
+      && !geometry.valid
+      && geometryWaypointStats.passed !== waypoints.length
+    ) {
       result = {
         ...result,
         complete: false,
@@ -2439,6 +2543,7 @@ export function planWaypointRoadRoute(
     ),
     maximumHeadingChangeRad:
       options.maximumHeadingChangeRad ?? Math.PI,
+    closed: options.termination === 'loop',
   })
   if (
     result.complete
@@ -2458,6 +2563,7 @@ export function planWaypointRoadRoute(
       Math.max(0, options.routeClearance ?? 0),
       Math.max(0, options.minimumTurnRadius ?? 0),
       options.maximumHeadingChangeRad ?? Math.PI,
+      options.termination === 'loop',
     )
     if (repaired) {
       result = {
@@ -2480,6 +2586,7 @@ export function planWaypointRoadRoute(
         ),
         maximumHeadingChangeRad:
           options.maximumHeadingChangeRad ?? Math.PI,
+        closed: options.termination === 'loop',
       })
       terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
         preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,

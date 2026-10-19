@@ -61,11 +61,11 @@ export interface ProceduralLandscapeSurfaceProps {
   gravelTint: string
   rockSlopeThreshold: number
   /**
-   * GLB 航拍基色处理：'replace' 官方季节地表全覆盖写（默认）；
-   * 'blend' 保留原贴图并按 baseMapBlend 与季节地表混合。
+   * 地表基色来源：'replace' 程序化季节地表全覆盖写（默认）；
+   * 'aerial' 只显示航拍底图；'blend' 按 baseMapBlend 与季节地表混合。
    */
-  baseMapMode: 'replace' | 'blend'
-  /** baseMapMode='blend' 时的混合强度（0=季节地表，1=原始贴图）。 */
+  baseMapMode: ProceduralLandscapeBaseMapMode
+  /** baseMapMode='blend' 时的混合强度（0=季节地表，1=航拍底图）。 */
   baseMapBlend: number
   /**
    * 雾/视距尺度倍率：null = 按地形水平尺寸自动（`resolveSurfaceViewDistanceScale`）。
@@ -77,6 +77,7 @@ export interface ProceduralLandscapeSurfaceProps {
 
 export type ProceduralLandscapeRoadTermination = 'boundary' | 'loop' | 'dead-end'
 export type ProceduralLandscapeRoadStrategy = 'seeded' | 'shortest'
+export type ProceduralLandscapeBaseMapMode = 'replace' | 'aerial' | 'blend'
 
 function normalizeRoadTermination(value: unknown): ProceduralLandscapeRoadTermination {
   if (value === 'loop') {
@@ -243,8 +244,39 @@ export function shouldLoadProceduralLandscapeOrtho(
   return Boolean(
     props.dem.runtimeOrthoUrl
     && props.surface.enabled
-    && props.surface.baseMapMode === 'blend',
+    && resolveProceduralLandscapeBaseMapMode(props) !== 'replace',
   )
+}
+
+/**
+ * Resolve the base-map source that can actually render. DEM nodes without a
+ * runtime orthophoto fall back to procedural shading; GLB terrain keeps its
+ * original material map and therefore supports aerial mode without a URL.
+ */
+export function resolveProceduralLandscapeBaseMapMode(
+  props: Pick<ProceduralLandscapeComponentProps, 'dem' | 'surface'>,
+): ProceduralLandscapeBaseMapMode {
+  if (!props.surface.enabled) {
+    return 'replace'
+  }
+  if (props.dem.assetId && !props.dem.runtimeOrthoUrl) {
+    return 'replace'
+  }
+  return props.surface.baseMapMode
+}
+
+/** Effective shader weight: procedural = 0, aerial = 1, blend = slider value. */
+export function resolveProceduralLandscapeBaseMapBlend(
+  props: Pick<ProceduralLandscapeComponentProps, 'dem' | 'surface'>,
+): number {
+  const mode = resolveProceduralLandscapeBaseMapMode(props)
+  if (mode === 'aerial') {
+    return 1
+  }
+  if (mode === 'blend') {
+    return clampNumber(props.surface.baseMapBlend, 0.5, 0, 1)
+  }
+  return 0
 }
 
 export interface ProceduralLandscapeQualityTier {
@@ -613,7 +645,11 @@ export function clampProceduralLandscapeProps(
       roadTint: normalizeColor(surface?.roadTint, defaults.surface.roadTint),
       gravelTint: normalizeColor(surface?.gravelTint, defaults.surface.gravelTint),
       rockSlopeThreshold: clampNumber(surface?.rockSlopeThreshold, defaults.surface.rockSlopeThreshold, 0.05, 0.9),
-      baseMapMode: surface?.baseMapMode === 'blend' ? 'blend' : 'replace',
+      baseMapMode: surface?.baseMapMode === 'aerial'
+        ? 'aerial'
+        : surface?.baseMapMode === 'blend'
+          ? 'blend'
+          : 'replace',
       baseMapBlend: clampNumber(surface?.baseMapBlend, defaults.surface.baseMapBlend, 0, 1),
       viewDistanceScale: clampNullableNumber(surface?.viewDistanceScale, defaults.surface.viewDistanceScale, 1, 16),
     },

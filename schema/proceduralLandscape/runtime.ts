@@ -23,6 +23,7 @@ import {
   type DemTerrainMeshBuilder,
 } from './demTerrain'
 import type { TerrainDemRuntimeGridData } from '../terrainDemRuntimeGrid'
+import { terrainDemRuntimeOrthoCoverage } from '../terrainDemRuntimeOrtho'
 import {
   buildTerrainSurfaceSampler,
   type TerrainSurfaceBounds,
@@ -157,6 +158,8 @@ import {
   resolveSurfaceHeightScale,
   resolveSurfaceViewDistanceScale,
   resolveProceduralLandscapeQuality,
+  resolveProceduralLandscapeBaseMapBlend,
+  resolveProceduralLandscapeBaseMapMode,
   roadFlattenParams,
   roadHalfWidth,
   shouldLoadProceduralLandscapeOrtho,
@@ -398,6 +401,8 @@ export interface ProceduralLandscapeRuntimeStats {
   demOrthoBytes: number | null
   demOrthoWidth: number
   demOrthoHeight: number
+  /** Fraction of orthophoto pixels with RGB data (0..1; missing pixels are black). */
+  demOrthoCoverage: number
   demOrthoError: string | null
   /** DEM nodes are translation-only; non-identity rotation/scale is reported here. */
   demTransformWarning: string | null
@@ -1148,6 +1153,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demOrthoBytes: null,
     demOrthoWidth: 0,
     demOrthoHeight: 0,
+    demOrthoCoverage: 0,
     demOrthoError: null,
     demTransformWarning: null,
     demMeshBytes: 0,
@@ -1308,6 +1314,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.demOrthoBytes = props.dem.runtimeOrthoBytes ?? null
     stats.demOrthoWidth = 0
     stats.demOrthoHeight = 0
+    stats.demOrthoCoverage = 0
     stats.demOrthoError = null
   }
 
@@ -1318,7 +1325,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const shouldBind = Boolean(
       enabled
       && props.surface.enabled
-      && props.surface.baseMapMode === 'blend'
+      && resolveProceduralLandscapeBaseMapMode(props) !== 'replace'
       && demOrthoTexture,
     )
     const materials = Array.isArray(demMesh.material)
@@ -1376,6 +1383,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         stats.demOrthoBytes = data.width * data.height * 4
         stats.demOrthoWidth = data.width
         stats.demOrthoHeight = data.height
+        stats.demOrthoCoverage = terrainDemRuntimeOrthoCoverage(data)
         stats.demOrthoError = null
         syncDemOrthoTextureBinding()
       })
@@ -2975,7 +2983,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlFlattenOuter.value = flatten.outerRadius
     uniforms.uPlFlattenStrength.value = flatten.strength
     uniforms.uPlSurfaceStrength.value = props.surface.enabled ? props.surface.blendStrength : 0
-    uniforms.uPlBaseMapBlend.value = props.surface.baseMapMode === 'blend' ? props.surface.baseMapBlend : 0
+    uniforms.uPlBaseMapBlend.value = resolveProceduralLandscapeBaseMapBlend(props)
     ensureDemOrthoTexture()
     uniforms.uPlUvScale.value = props.surface.uvScale
     uniforms.uPlGrassTint.value.set(props.surface.grassTint)
@@ -3841,11 +3849,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!stream) {
       return
     }
-    // The GLB aerial base map is only sampled in blend mode; the default
-    // replace mode (and a disabled surface) fully takes over the shading, so
-    // the external imagery pack can be skipped entirely in those modes.
+    // The GLB aerial base map is sampled in aerial and blend modes. In
+    // procedural mode (or with the surface disabled) it can be skipped.
     stream.setBaseMapStreamingEnabled(
-      enabled && props.surface.enabled && props.surface.baseMapMode === 'blend',
+      enabled && resolveProceduralLandscapeBaseMapMode(props) !== 'replace',
     )
   }
 

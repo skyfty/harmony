@@ -1523,9 +1523,20 @@ function traceOnce(
       || straightZ < grid.minZ + margin
       || straightZ > grid.maxZ - margin
     ) {
-      complete = true
-      failureReason = 'reached-terrain-boundary'
-      break
+      const guidancePoint = waypointIndex >= 1
+        && waypointIndex < requiredWaypoints.length
+        ? requiredWaypoints[waypointIndex]!
+        : guideProjection?.target ?? null
+      const guidanceInside = guidancePoint != null
+        && guidancePoint.x >= grid.minX + margin
+        && guidancePoint.x <= grid.maxX - margin
+        && guidancePoint.z >= grid.minZ + margin
+        && guidancePoint.z <= grid.maxZ - margin
+      if (!guidanceInside || naturalActive) {
+        complete = true
+        failureReason = 'reached-terrain-boundary'
+        break
+      }
     }
 
     if (naturalActive && natural) {
@@ -1585,12 +1596,19 @@ function traceOnce(
         }
       }
     }
-    if (waypointIndex >= 1 && waypointIndex < requiredWaypoints.length) {
-      const waypoint = requiredWaypoints[waypointIndex]!
+    const activeWaypoint = waypointIndex >= 1 && waypointIndex < requiredWaypoints.length
+      ? requiredWaypoints[waypointIndex]!
+      : null
+    const activeWaypointDistance = activeWaypoint
+      ? distance({ x, z }, activeWaypoint)
+      : Number.POSITIVE_INFINITY
+    const dockingToWaypoint = activeWaypoint != null
+      && activeWaypointDistance <= Math.max(600, profile.stepLength * 20)
+    if (activeWaypoint) {
+      const waypoint = activeWaypoint
       const toWaypoint = normalize(waypoint.x - x, waypoint.z - z)
-      const waypointDistance = distance({ x, z }, waypoint)
       const waypointWeight = 0.92
-        + 0.07 * (1 - smoothstep(500, 3_000, waypointDistance))
+        + 0.07 * (1 - smoothstep(500, 3_000, activeWaypointDistance))
       targetDirection = normalize(
         targetDirection.x * (1 - waypointWeight) + toWaypoint.x * waypointWeight,
         targetDirection.z * (1 - waypointWeight) + toWaypoint.z * waypointWeight,
@@ -1606,7 +1624,9 @@ function traceOnce(
         0,
         1,
       )
-      const guideWeight = 0.82 + corridorCorrection * 0.16
+      const guideWeight = dockingToWaypoint
+        ? 0
+        : 0.82 + corridorCorrection * 0.16
       targetDirection = normalize(
         targetDirection.x * (1 - guideWeight)
           + guideDirection.x * guideWeight,
@@ -1915,7 +1935,9 @@ function traceOnce(
         const guideDeviation = guide && guideProjection
           ? distanceToGuide(guide, candidateX, candidateZ, guideProjection.index)
           : 0
-        const guideValid = !guide || guideDeviation <= guide.corridorWidth + 1e-6
+        const guideValid = !guide
+          || dockingToWaypoint
+          || guideDeviation <= guide.corridorWidth + 1e-6
         const valid = forwardValid && crossValid && guideValid
         const headingError = Math.abs(wrapAngle(candidateHeading - referenceHeading))
         const turnScore = headingError / profile.feelAngleRad
@@ -1938,7 +1960,7 @@ function traceOnce(
                 / Math.max(1e-4, constraints.maxGrade - constraints.preferredGrade),
             )
           : 0
-        const guideExcess = guide
+        const guideExcess = guide && !dockingToWaypoint
           ? Math.max(
               0,
               (guideDeviation - guide.corridorWidth * 0.65)
@@ -1974,12 +1996,8 @@ function traceOnce(
             + elevationScore * lowlandWeight * 2,
         }
       }
-      const dockTarget = waypointIndex >= 1 && waypointIndex < requiredWaypoints.length
-        ? requiredWaypoints[waypointIndex]!
-        : null
-      const dockDistance = dockTarget ? distance({ x, z }, dockTarget) : Number.POSITIVE_INFINITY
-      const docking = dockTarget != null
-        && dockDistance <= Math.max(600, profile.stepLength * 20)
+      const dockTarget = activeWaypoint
+      const docking = dockingToWaypoint
       const referenceHeading = docking && dockTarget
         ? Math.atan2(dockTarget.z - z, dockTarget.x - x)
         : guideProjection

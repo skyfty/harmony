@@ -16,7 +16,8 @@ import { recordSlowroadsShaderAudit } from './shaderAudit'
  *  - 顶点提供世界坐标/法线 + 道路压平位移（沿用既有注入），雾改走共享三色雾；
  *  - 高度项按 `uPlHeightScale` 折算（lab 世界起伏 ±40m 时恒为 4，编辑器大地形
  *    按实测起伏归一化，见 config.resolveSurfaceHeightScale）；水线参考 = uPlWaterLevel；
- *  - GLB 航拍基色由 `baseMapMode`（replace/blend）与 `uPlSurfaceStrength` 控制。
+ *  - 航拍基色由 `baseMapMode`（replace/aerial/blend）与 `uPlSurfaceStrength` 控制；
+ *    完整航拍模式只替换反照率，保留 Lambert 光照与雾。
  *  - heather 与全部掩码公式与 slowroads.io 官方地形顶点着色器逐行一致
  *    （`(height + fade1*350 - 60)/500` 的 smoothstep × screen 分布）。
  *  - 官方近路位移（displacement_vertex）：路肩 16m 内沿法线加 rock_bump 微起伏
@@ -543,9 +544,16 @@ const FRAGMENT_BODY = `#include <map_fragment>
   }
 
   #ifdef USE_MAP
-    // blend 模式保留 GLB 航拍基色；replace 模式下由 uPlSurfaceStrength=1 整体覆盖。
+    // 1 = 完整使用航拍颜色；光照仍走下方同一套 Lambert/Fresnel/radiance 管线。
+    // Runtime orthophotos store uncovered pixels as RGB 0. Keep the procedural
+    // surface there instead of rendering a black hole.
     vec3 plBaseColor = texture2D(map, vMapUv).rgb;
-    plSeasonalColor = mix(plSeasonalColor, plBaseColor, clamp(uPlBaseMapBlend, 0.0, 1.0));
+    float plBaseCoverage = step(0.0001, max(max(plBaseColor.r, plBaseColor.g), plBaseColor.b));
+    plSeasonalColor = mix(
+      plSeasonalColor,
+      plBaseColor,
+      clamp(uPlBaseMapBlend, 0.0, 1.0) * plBaseCoverage
+    );
   #endif
 
   plSeasonalColor *= uPlRoadbedBrightness;
