@@ -400,6 +400,7 @@ describe('DEM roadbed target', () => {
           waypoints: [{ x: 10, z: 20 }],
           strategy: 'seeded' as const,
           termination: 'boundary' as const,
+          style: 'normal' as const,
           seed: 1,
           waypointTolerance: 12,
           pathDeviation: 160,

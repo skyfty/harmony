@@ -2,25 +2,23 @@ import { clamp, hashUnit, smoothstep, wrapAngle } from './noise'
 import type { RoadTraceNode, RoadTraceResult } from './roadTrace'
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
+import {
+  resolveSlowroadsMidlineProfile,
+  type RoadStyleId,
+  type SlowroadsMidlineProfile,
+} from './roadStyle'
 
 /**
- * Slow Roads "Hills" midline profile.
+ * Slow Roads "Hills" legacy guided profile.
  *
- * Values come from the shipped `DevMidlineGenerator` road-style table. The
- * editor keeps this profile fixed for the natural scenic strategy so the road
- * follows the same steering model as the reference scene instead of inheriting
- * the legacy lab candidate search.
+ * Values come from the shipped `DevMidlineGenerator` road-style table. Unguided
+ * `seeded` routes pass their selected style explicitly (NORMAL by default);
+ * this constant remains CASUAL so existing `shortest` routing keeps its shape.
  */
+const SLOWROADS_HILLS_MIDLINE = resolveSlowroadsMidlineProfile('casual')
+
 export const SLOWROADS_HILLS_ROAD_PROFILE = Object.freeze({
-  stepLength: 10,
-  feelDistance: 30,
-  feelAngleRad: 0.463,
-  maxGrad: 0.16,
-  maxTurnDelta: 0.1,
-  smoothFactor: 0.5,
-  smoothWindow: 9,
-  curvatureHeightFactor: 3,
-  roadSink: 0.2,
+  ...SLOWROADS_HILLS_MIDLINE,
   targetRadius: 9_000,
   targetRadiusMin: 5_000,
   targetRadiusMax: 13_000,
@@ -94,6 +92,33 @@ export interface OfficialScenicRoadOptions {
   guideCorridorWidth?: number
   wiggleScale?: number
   guideTermination?: 'loop' | 'boundary' | 'dead-end'
+  /** Official road curve profile (defaults to the legacy Hills profile). */
+  midlineProfile?: SlowroadsMidlineProfile
+  /** Natural spiral/boundary-extension policy. Omit for legacy guided tracing. */
+  natural?: NaturalRoadExtensionConfig
+  /** Optional starting tangent; defaults to the official contour tangent. */
+  initialHeadingRad?: number | null
+}
+
+export interface NaturalRoadExtensionConfig {
+  style: RoadStyleId
+  center: Vec2
+  targetRadius: number
+  targetRadiusMin: number
+  targetRadiusMax: number
+  /** Minimum radial separation added after each completed orbit. */
+  lapSpacing: number
+  /** Desired total centerline length before the boundary exit ramp. */
+  targetLength: number
+  /** Distance over which target direction blends toward the nearest boundary. */
+  boundaryExitRamp: number
+  /** Hard cap for the drifting orbit radius. */
+  maxOrbitRadius: number
+}
+
+export interface NaturalRoadPlan extends NaturalRoadExtensionConfig {
+  diagonal: number
+  orbitalHullRadius: number
 }
 
 export interface ScenicTerrainElevationProfile {
@@ -122,6 +147,8 @@ export interface OfficialScenicRoadResult extends RoadTraceResult {
   skippedWaypointIndices: number[]
   waypointsAttempted: number
   maxGuideDeviation?: number
+  naturalTargetLength?: number
+  naturalLaps?: number
 }
 
 type Vec2 = { x: number; z: number }
@@ -805,11 +832,57 @@ export function resolveOfficialScenicStartHeading(
   return Math.atan2(0.01, 0.99)
 }
 
+/**
+ * Map the official infinite-world orbit to a finite terrain extent. The
+ * 0.55 inradius centre and 5/9..13/9 band preserve the shipped 9km / 5km /
+ * 13km proportions while leaving room for a full boundary exit ramp.
+ */
+export function resolveNaturalRoadPlan(
+  grid: TerrainHeightGrid,
+  style: RoadStyleId,
+  seed: number,
+  roadWidth: number,
+  routeClearance: number,
+): NaturalRoadPlan {
+  const spanX = Math.max(1, grid.maxX - grid.minX)
+  const spanZ = Math.max(1, grid.maxZ - grid.minZ)
+  const diagonal = Math.hypot(spanX, spanZ)
+  const inradius = Math.max(1, Math.min(spanX, spanZ) * 0.5)
+  const targetRadius = Math.max(120, inradius * 0.55)
+  const targetMargin = targetRadius * (4 / 9)
+  const profile = resolveSlowroadsMidlineProfile(style)
+  const lapSpacing = Math.max(
+    80,
+    (roadWidth + routeClearance) * 4,
+  )
+  const randomLength = 2 + hashUnit(seed >>> 0, 73, 79) * 2
+  const nodeBudgetLength = profile.stepLength * 32_768 * 0.9
+  return {
+    style,
+    center: {
+      x: (grid.minX + grid.maxX) * 0.5,
+      z: (grid.minZ + grid.maxZ) * 0.5,
+    },
+    targetRadius,
+    targetRadiusMin: Math.max(80, targetRadius - targetMargin),
+    targetRadiusMax: targetRadius + targetMargin,
+    lapSpacing,
+    targetLength: Math.min(diagonal * randomLength, nodeBudgetLength),
+    boundaryExitRamp: clamp(diagonal * 0.25, 2_000, 12_000),
+    maxOrbitRadius: Math.max(targetRadius + targetMargin, inradius * 0.92),
+    diagonal,
+    orbitalHullRadius: Math.max(targetRadius + targetMargin, inradius * 0.92),
+  }
+}
+
 function updateTargetDirection(
   target: Vec2,
   heading: number,
   centerX: number,
   centerZ: number,
+  targetRadius: number = SLOWROADS_HILLS_ROAD_PROFILE.targetRadius,
+  targetRadiusMin: number = SLOWROADS_HILLS_ROAD_PROFILE.targetRadiusMin,
+  targetRadiusMax: number = SLOWROADS_HILLS_ROAD_PROFILE.targetRadiusMax,
 ): Vec2 {
   const dx = target.x - centerX
   const dz = target.z - centerZ
@@ -821,13 +894,12 @@ function updateTargetDirection(
   const inward = { x: -outward.x, z: -outward.z }
   const tangent = { x: -inward.z, z: inward.x }
   let factor = 0
-  if (radius < SLOWROADS_HILLS_ROAD_PROFILE.targetRadius) {
-    if (radius < SLOWROADS_HILLS_ROAD_PROFILE.targetRadiusMin) {
+  if (radius < targetRadius) {
+    if (radius < targetRadiusMin) {
       factor = 1
     } else {
-      const margin = SLOWROADS_HILLS_ROAD_PROFILE.targetRadius
-        - SLOWROADS_HILLS_ROAD_PROFILE.targetRadiusMin
-      factor = 1 - (radius - SLOWROADS_HILLS_ROAD_PROFILE.targetRadiusMin) / margin
+      const margin = targetRadius - targetRadiusMin
+      factor = 1 - (radius - targetRadiusMin) / margin
     }
     factor *= factor
     const direction = normalize(
@@ -836,12 +908,11 @@ function updateTargetDirection(
     )
     return direction
   }
-  if (radius > SLOWROADS_HILLS_ROAD_PROFILE.targetRadiusMax) {
+  if (radius > targetRadiusMax) {
     factor = 1
   } else {
-    const margin = SLOWROADS_HILLS_ROAD_PROFILE.targetRadiusMax
-      - SLOWROADS_HILLS_ROAD_PROFILE.targetRadius
-    factor = (radius - SLOWROADS_HILLS_ROAD_PROFILE.targetRadius) / margin
+    const margin = targetRadiusMax - targetRadius
+    factor = (radius - targetRadius) / margin
   }
   factor *= factor
   return normalize(
@@ -850,9 +921,117 @@ function updateTargetDirection(
   )
 }
 
+function nearestBoundaryDirection(
+  grid: TerrainHeightGrid,
+  x: number,
+  z: number,
+): Vec2 {
+  const distances = [
+    { distance: x - grid.minX, x: -1, z: 0 },
+    { distance: grid.maxX - x, x: 1, z: 0 },
+    { distance: z - grid.minZ, x: 0, z: -1 },
+    { distance: grid.maxZ - z, x: 0, z: 1 },
+  ]
+  distances.sort((a, b) => a.distance - b.distance)
+  return { x: distances[0]!.x, z: distances[0]!.z }
+}
+
+function naturalTargetDirection(
+  grid: TerrainHeightGrid,
+  position: Vec2,
+  heading: number,
+  length: number,
+  laps: number,
+  config: NaturalRoadExtensionConfig,
+  profile: SlowroadsMidlineProfile,
+): Vec2 {
+  if (!profile.spiralise) {
+    return { x: Math.cos(heading), z: Math.sin(heading) }
+  }
+  const radiusDrift = Math.min(
+    laps * config.lapSpacing,
+    Math.max(0, config.maxOrbitRadius - config.targetRadiusMax),
+  )
+  const targetRadius = config.targetRadius + radiusDrift
+  const targetRadiusMin = config.targetRadiusMin + radiusDrift
+  const targetRadiusMax = config.targetRadiusMax + radiusDrift
+  const radius = Math.hypot(
+    position.x - config.center.x,
+    position.z - config.center.z,
+  )
+  let direction: Vec2
+  if (radius > 1e-6 && radius < targetRadiusMin) {
+    const outward = normalize(
+      position.x - config.center.x,
+      position.z - config.center.z,
+    )
+    const tangent = { x: -outward.z, z: outward.x }
+    const outwardWeight = 0.65
+      + 0.35 * clamp(1 - radius / Math.max(1, targetRadiusMin), 0, 1)
+    direction = normalize(
+      tangent.x + outward.x * outwardWeight,
+      tangent.z + outward.z * outwardWeight,
+    )
+  } else if (radius <= targetRadiusMax) {
+    if (radius > 1e-6) {
+      const outward = normalize(
+        position.x - config.center.x,
+        position.z - config.center.z,
+      )
+      direction = { x: -outward.z, z: outward.x }
+    } else {
+      direction = { x: Math.cos(heading), z: Math.sin(heading) }
+    }
+  } else {
+    const outward = normalize(
+      position.x - config.center.x,
+      position.z - config.center.z,
+    )
+    const tangent = { x: -outward.z, z: outward.x }
+    const inwardWeight = clamp(
+      (radius - targetRadiusMax) / Math.max(1, targetRadiusMax),
+      0,
+      1,
+    )
+    direction = normalize(
+      tangent.x - outward.x * inwardWeight,
+      tangent.z - outward.z * inwardWeight,
+    )
+  }
+
+  const exitWeight = smoothstep(
+    config.targetLength - config.boundaryExitRamp,
+    config.targetLength,
+    length,
+  )
+  const edgeMargin = Math.min(
+    grid.maxX - grid.minX,
+    grid.maxZ - grid.minZ,
+  ) * 0.05
+  const nearBoundary = position.x <= grid.minX + edgeMargin
+    || position.x >= grid.maxX - edgeMargin
+    || position.z <= grid.minZ + edgeMargin
+    || position.z >= grid.maxZ - edgeMargin
+  const lengthProgress = config.targetLength > 1e-6
+    ? length / config.targetLength
+    : 1
+  const nearBoundaryWeight = nearBoundary
+    ? smoothstep(0.35, 0.55, lengthProgress)
+    : 0
+  const boundaryWeight = Math.max(exitWeight, nearBoundaryWeight)
+  if (boundaryWeight > 0) {
+    const boundary = nearestBoundaryDirection(grid, position.x, position.z)
+    direction = normalize(
+      direction.x * (1 - boundaryWeight) + boundary.x * boundaryWeight,
+      direction.z * (1 - boundaryWeight) + boundary.z * boundaryWeight,
+    )
+  }
+  return direction
+}
+
 function compensateProfile(
   nodes: RoadTraceNode[],
-  profile: typeof SLOWROADS_HILLS_ROAD_PROFILE,
+  profile: Pick<SlowroadsMidlineProfile, 'smoothWindow' | 'smoothFactor'>,
   grid: TerrainHeightGrid,
   constraints: ResolvedTerrainConstraints | null,
 ): void {
@@ -1138,6 +1317,9 @@ function traceOnce(
   wiggleScale = 1,
   requireAllWaypoints = false,
   guideTermination: 'loop' | 'boundary' | 'dead-end' = 'boundary',
+  natural: NaturalRoadExtensionConfig | null = null,
+  midlineProfile: SlowroadsMidlineProfile = SLOWROADS_HILLS_ROAD_PROFILE,
+  initialHeadingRad: number | null = null,
 ): TraceOnceResult {
   const startY = grid.sampleHeight(origin.x, origin.z)
   if (startY == null) {
@@ -1152,21 +1334,57 @@ function traceOnce(
     return { result: emptyResult('start-too-close-to-boundary'), restart: false }
   }
 
-  const profile = SLOWROADS_HILLS_ROAD_PROFILE
+  const profile = {
+    ...SLOWROADS_HILLS_ROAD_PROFILE,
+    ...midlineProfile,
+  }
   const effectiveMaxSteps = guide
     ? Math.min(
         profile.maxSteps,
         Math.max(
           512,
-          Math.ceil(guide.totalLength / profile.stepLength * 1.5) + 256,
+          Math.ceil(
+            (guide.totalLength + (natural?.targetLength ?? 0))
+              / profile.stepLength * 1.35,
+          ) + 512,
         ),
       )
-    : profile.maxSteps
+    : natural
+      ? Math.min(
+          profile.maxSteps,
+          Math.max(
+            512,
+            Math.ceil(natural.targetLength / profile.stepLength * 1.35) + 512,
+          ),
+        )
+      : profile.maxSteps
   let x = origin.x
   let z = origin.z
   let y = startY - profile.roadSink
-  let heading = resolveOfficialScenicStartHeading(grid, x, z)
-  let targetDirection = updateTargetDirection({ x, z }, heading, centerX, centerZ)
+  let heading = initialHeadingRad ?? resolveOfficialScenicStartHeading(grid, x, z)
+  let targetDirection = natural
+    ? naturalTargetDirection(
+        grid,
+        { x, z },
+        heading,
+        0,
+        0,
+        natural,
+        profile,
+      )
+    : updateTargetDirection({ x, z }, heading, centerX, centerZ)
+  if (natural && initialHeadingRad == null) {
+    heading = Math.atan2(targetDirection.z, targetDirection.x)
+    targetDirection = naturalTargetDirection(
+      grid,
+      { x, z },
+      heading,
+      0,
+      0,
+      natural,
+      profile,
+    )
+  }
   const outwardDirection = Math.hypot(origin.x - centerX, origin.z - centerZ) > 1e-3
     ? normalize(origin.x - centerX, origin.z - centerZ)
     : { x: Math.cos(heading), z: Math.sin(heading) }
@@ -1208,6 +1426,14 @@ function traceOnce(
   let maxGuideDeviation = 0
   let failureReason: string | null = null
   let complete = false
+  let naturalActive = Boolean(natural && !guide)
+  let lastOrbitAngle = natural
+    ? Math.atan2(z - natural.center.z, x - natural.center.x)
+    : 0
+  let orbitProgress = 0
+  let naturalLaps = 0
+  let naturalStartLength = 0
+  const hadGuide = Boolean(guide)
 
   const advanceWaypointTarget = (): void => {
     waypointIndex += 1
@@ -1246,7 +1472,7 @@ function traceOnce(
           x,
           z,
           guideIndex,
-          SLOWROADS_HILLS_ROAD_PROFILE.feelDistance * 3,
+          profile.feelDistance * 3,
         )
       : null
     if (guideProjection) {
@@ -1264,13 +1490,30 @@ function traceOnce(
         guide.points[guide.points.length - 1]!,
       ) <= Math.max(profile.stepLength * 2, waypointTolerance)
     ) {
-      complete = true
-      failureReason = guideTermination === 'loop'
-        ? 'reached-route-start'
-        : guideTermination === 'dead-end'
-          ? 'reached-route-end'
-          : 'reached-terrain-boundary'
-      break
+      if (natural && guideTermination === 'boundary') {
+        guide = null
+        naturalActive = true
+        prevT = 0
+        targetOverflow = 0
+        accumulatedOverflow = 0
+        antiTarget = null
+        antiTargetRange = 0
+        antiTargetTriggerCount = 0
+        lastOrbitAngle = Math.atan2(
+          z - natural.center.z,
+          x - natural.center.x,
+        )
+        orbitProgress = 0
+        naturalStartLength = length
+      } else {
+        complete = true
+        failureReason = guideTermination === 'loop'
+          ? 'reached-route-start'
+          : guideTermination === 'dead-end'
+            ? 'reached-route-end'
+            : 'reached-terrain-boundary'
+        break
+      }
     }
     const straightX = x + Math.cos(heading) * profile.stepLength
     const straightZ = z + Math.sin(heading) * profile.stepLength
@@ -1285,9 +1528,34 @@ function traceOnce(
       break
     }
 
-    targetDirection = updateTargetDirection(tail, heading, centerX, centerZ)
+    if (naturalActive && natural) {
+      const radius = Math.hypot(
+        x - natural.center.x,
+        z - natural.center.z,
+      )
+      if (radius > 1e-6) {
+        const orbitAngle = Math.atan2(
+          z - natural.center.z,
+          x - natural.center.x,
+        )
+        orbitProgress += wrapAngle(orbitAngle - lastOrbitAngle)
+        lastOrbitAngle = orbitAngle
+        naturalLaps = Math.abs(orbitProgress) / (Math.PI * 2)
+      }
+    }
+    targetDirection = naturalActive && natural
+      ? naturalTargetDirection(
+          grid,
+          tail,
+          heading,
+          length - naturalStartLength,
+          naturalLaps,
+          natural,
+          profile,
+        )
+      : updateTargetDirection(tail, heading, centerX, centerZ)
     let lowlandWeight = 0
-    {
+    if (!naturalActive) {
       const boundaryWeight = 0.35 + 0.5 * smoothstep(5_000, 15_000, length)
       targetDirection = normalize(
         targetDirection.x * (1 - boundaryWeight) + outwardDirection.x * boundaryWeight,
@@ -1905,7 +2173,9 @@ function traceOnce(
         Math.max(0, requiredWaypoints.length - 1),
         waypointsAttempted,
       ),
-      maxGuideDeviation: guide ? maxGuideDeviation : undefined,
+      maxGuideDeviation: hadGuide ? maxGuideDeviation : undefined,
+      naturalTargetLength: natural?.targetLength,
+      naturalLaps,
     },
     restart: false,
   }
@@ -1970,6 +2240,9 @@ export function traceOfficialScenicGuidedRoad(
       wiggleScale,
       true,
       options.guideTermination ?? 'boundary',
+      options.natural ?? null,
+      options.midlineProfile ?? SLOWROADS_HILLS_ROAD_PROFILE,
+      options.initialHeadingRad ?? null,
     )
     last = traced.result
     if (
@@ -1986,4 +2259,46 @@ export function traceOfficialScenicGuidedRoad(
     complete: false,
     failureReason: last.failureReason ?? 'guided-official-blocked',
   }
+}
+
+/**
+ * Natural (unguided) official tracer. This is the shipped slowroads behaviour
+ * for `spiralise` styles: terrain probes shape the curve while a tangential
+ * virtual orbit supplies the long-range extension.
+ */
+export function traceOfficialScenicNaturalRoad(
+  grid: TerrainHeightGrid,
+  origin: Vec2,
+  seed: number,
+  margin: number,
+  options: OfficialScenicRoadOptions = {},
+): OfficialScenicRoadResult {
+  const natural = options.natural
+  if (!natural) {
+    return emptyResult('natural-config-missing')
+  }
+  const profile = buildScenicTerrainElevationProfile(grid, options)
+  const constraints = resolveTerrainConstraints(options)
+  const traced = traceOnce(
+    grid,
+    origin,
+    natural.center.x,
+    natural.center.z,
+    seed,
+    margin,
+    profile,
+    constraints,
+    [{ x: origin.x, z: origin.z }],
+    Math.max(1, options.waypointTolerance ?? 4),
+    Number.POSITIVE_INFINITY,
+    Number.POSITIVE_INFINITY,
+    null,
+    1,
+    false,
+    'boundary',
+    natural,
+    options.midlineProfile ?? SLOWROADS_HILLS_ROAD_PROFILE,
+    options.initialHeadingRad ?? null,
+  )
+  return traced.result
 }

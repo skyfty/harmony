@@ -8,12 +8,16 @@ import {
 import {
   buildScenicTerrainElevationProfile,
   projectWaypointCapture,
+  resolveNaturalRoadPlan,
   resolveLowlandScenicStart,
   resolveLowlandScenicWaypoint,
   resolveOfficialScenicStartHeading,
   resolveRoadWaypointPlacement,
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
 } from '@schema/proceduralLandscape/officialScenicRoad'
+import {
+  resolveSlowroadsMidlineProfile,
+} from '@schema/proceduralLandscape/roadStyle'
 import {
   planWaypointRoadRoute,
   type WaypointRoadPlanOptions,
@@ -147,6 +151,31 @@ describe('official Slow Roads Hills midline', () => {
     expect(Number.isFinite(heading)).toBe(true)
     expect(Math.abs(heading)).toBeGreaterThan(0.1)
     expect(Math.abs(heading)).toBeLessThan(Math.PI - 0.1)
+  })
+
+  it('matches the official A2 NORMAL curve profile', () => {
+    expect(resolveSlowroadsMidlineProfile('normal')).toMatchObject({
+      style: 'normal',
+      stepLength: 10,
+      feelDistance: 10,
+      maxTurnDelta: 0.25,
+      maxGrad: 0.14,
+      smoothFactor: 0.7,
+      smoothWindow: 7,
+      spiralise: true,
+    })
+    expect(resolveSlowroadsMidlineProfile('straight').spiralise).toBe(false)
+  })
+
+  it('scales the natural orbit to the DEM and keeps the official ratios', () => {
+    const grid = makeSyntheticGrid(39_000, 100, () => 1_200)
+    const plan = resolveNaturalRoadPlan(grid, 'normal', 912347, 7, 7)
+    expect(plan.targetRadius).toBeCloseTo((39_000 * 0.5) * 0.55, 3)
+    expect(plan.targetRadiusMin / plan.targetRadius).toBeCloseTo(5 / 9, 6)
+    expect(plan.targetRadiusMax / plan.targetRadius).toBeCloseTo(13 / 9, 6)
+    expect(plan.targetLength).toBeGreaterThanOrEqual(plan.diagonal * 2 - 1e-6)
+    expect(plan.targetLength).toBeLessThanOrEqual(plan.diagonal * 4 + 1e-6)
+    expect(plan.lapSpacing).toBeGreaterThanOrEqual(80)
   })
 
   it('projects a crossing segment into the waypoint tolerance disc', () => {
@@ -527,7 +556,30 @@ describe('unified waypoint road configuration', () => {
       termination: 'boundary',
     })
     expect(defaults.road.generatedRoute).toBeNull()
+    expect(defaults.road.style).toBe('normal')
     expect(defaults.road.waypointTolerance).toBe(4)
+  })
+
+  it('migrates old generated routes without a style to NORMAL', () => {
+    const defaults = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
+    const legacyRoute = {
+      waypoints: [{ x: 1, z: 2 }],
+      strategy: 'seeded',
+      termination: 'boundary',
+      seed: 7,
+      waypointTolerance: 4,
+      pathDeviation: 60,
+      revision: 2,
+    }
+    const clamped = clampProceduralLandscapeProps({
+      road: {
+        ...defaults.road,
+        generatedRoute: legacyRoute as unknown as
+          NonNullable<typeof defaults.road.generatedRoute>,
+      },
+    })
+    expect(clamped.road.style).toBe('normal')
+    expect(clamped.road.generatedRoute?.style).toBe('normal')
   })
 
   it('keeps arbitrary waypoint counts', () => {
@@ -548,6 +600,7 @@ describe('unified waypoint road configuration', () => {
       waypoints: [{ x: 1, z: 2 }],
       strategy: 'seeded',
       termination: 'boundary',
+      style: 'normal',
       seed: 1,
       waypointTolerance: 4,
       pathDeviation: 60,
@@ -571,6 +624,7 @@ describe('unified waypoint road configuration', () => {
             waypoints: [{ x: 10, z: 20 }],
             strategy: 'seeded',
             termination,
+            style: 'normal',
             seed: 1,
             waypointTolerance: 4,
             pathDeviation: 60,
@@ -585,6 +639,92 @@ describe('unified waypoint road configuration', () => {
 })
 
 describe('unified waypoint road planning', () => {
+  it('fills a 30km DEM with one deterministic natural spiral', () => {
+    const grid = makeSyntheticGrid(
+      30_000,
+      100,
+      (x, z) => 1_100
+        + Math.sin(x / 950) * 45
+        + Math.cos(z / 1_180) * 35,
+    )
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      waypoints: [{ x: -1_800, z: -900 }],
+    })
+    const diagonal = Math.hypot(
+      grid.maxX - grid.minX,
+      grid.maxZ - grid.minZ,
+    )
+    expect(
+      result.complete,
+      `${result.failureReason} nodes ${result.nodes.length} length ${result.length}`,
+    ).toBe(true)
+    expect(result.failureReason).toBe('reached-terrain-boundary')
+    expect(result.length).toBeGreaterThanOrEqual(diagonal)
+    expect(result.length).toBeLessThanOrEqual(diagonal * 4.2)
+    expect(result.naturalTargetLength).toBeGreaterThanOrEqual(diagonal * 2 - 1)
+    expect(result.naturalLaps ?? 0).toBeGreaterThan(0.5)
+    const naturalPlan = resolveNaturalRoadPlan(grid, 'normal', baseOptions.seed, 7, 7)
+    const radii = result.nodes.map((node) => Math.hypot(
+      node.x - naturalPlan.center.x,
+      node.z - naturalPlan.center.z,
+    ))
+    expect(Math.max(...radii) - Math.min(...radii))
+      .toBeGreaterThan(naturalPlan.targetRadiusMax - naturalPlan.targetRadiusMin)
+    expect(result.nodes.filter((node) => Math.abs(node.headingDelta) > 0.01).length)
+      .toBeGreaterThan(100)
+    expect(result.maxForwardGrade ?? 0)
+      .toBeLessThanOrEqual(SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4)
+    expect(result.maxCrossSlope ?? 0)
+      .toBeLessThanOrEqual(SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4)
+  }, 30_000)
+
+  it('keeps STRAIGHT unorbited while the default NORMAL winds', () => {
+    const grid = makeSyntheticGrid(8_000, 50, (x, z) => (
+      900 + Math.sin(x / 600) * 25 + Math.cos(z / 700) * 18
+    ))
+    const natural = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      style: 'normal',
+      waypoints: [{ x: -400, z: -300 }],
+    })
+    const straight = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      style: 'straight',
+      waypoints: [{ x: -400, z: -300 }],
+    })
+    expect(natural.complete).toBe(true)
+    expect(straight.complete).toBe(true)
+    expect(natural.naturalLaps ?? 0).toBeGreaterThan(0.25)
+    expect(natural.length).toBeGreaterThan(straight.length * 2)
+  }, 30_000)
+
+  it('recovers when P1 starts outside the natural orbit band', () => {
+    const grid = makeSyntheticGrid(8_000, 50, (x, z) => (
+      1_000 + Math.sin(x / 850) * 30 + Math.cos(z / 620) * 20
+    ))
+    const plan = resolveNaturalRoadPlan(grid, 'normal', baseOptions.seed, 7, 7)
+    const start = {
+      x: Math.min(grid.maxX - 100, plan.targetRadiusMax + 600),
+      z: 0,
+    }
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      routeClearance: 7,
+      minimumTurnRadius: 20,
+      maximumHeadingChangeRad: (10 * Math.PI) / 180,
+      waypoints: [start],
+    })
+    expect(
+      result.complete,
+      `${result.failureReason} nodes ${result.nodes.length} length ${result.length}`,
+    ).toBe(true)
+    expect(result.failureReason).toBe('reached-terrain-boundary')
+    expect(result.length).toBeGreaterThan(3_000)
+    expect(result.minCenterlineClearance ?? 0).toBeGreaterThanOrEqual(7)
+    expect(result.minTurnRadius ?? 0).toBeGreaterThanOrEqual(20)
+  }, 30_000)
+
   it('rounds a right-angle guide joint with a Bezier arc near the waypoint', () => {
     const grid = makeGrid()
     const points: Array<{ x: number; z: number }> = []
@@ -761,6 +901,29 @@ describe('unified waypoint road planning', () => {
     ).toBe(waypoints.length)
     expect(first.waypointsSkipped).toBe(0)
     expect(first.maxWaypointError).toBeLessThanOrEqual(baseOptions.waypointTolerance)
+    const lastWaypointIndex = first.nodes.reduce(
+      (best, node, index) => {
+        const candidate = Math.hypot(
+          node.x - waypoints[waypoints.length - 1]!.x,
+          node.z - waypoints[waypoints.length - 1]!.z,
+        )
+        return candidate < best.distance ? { index, distance: candidate } : best
+      },
+      { index: 0, distance: Number.POSITIVE_INFINITY },
+    ).index
+    const tail = first.nodes.slice(lastWaypointIndex)
+    let tailLength = 0
+    let tailTurn = 0
+    for (let index = 1; index < tail.length; index += 1) {
+      const previous = tail[index - 1]!
+      const current = tail[index]!
+      tailLength += Math.hypot(current.x - previous.x, current.z - previous.z)
+      tailTurn += Math.abs(current.headingDelta)
+    }
+    expect(first.naturalTargetLength ?? 0).toBeGreaterThan(0)
+    expect(tailLength).toBeGreaterThan(10_000)
+    expect(tailLength).toBeGreaterThan((first.naturalTargetLength ?? 0) * 0.25)
+    expect(tailTurn).toBeGreaterThan(1)
     expect(second.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
       first.nodes.map((node) => [node.x, node.z, node.y]),
     )

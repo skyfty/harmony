@@ -41,19 +41,44 @@ export function validateRoadCenterlineGeometry(
     options.minimumTurnRadius * 2,
   )
   let minCenterlineClearance = Number.POSITIVE_INFINITY
+  const bucketSize = Math.max(32, options.clearance * 2)
+  const buckets = new Map<string, number[]>()
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]!
+    const key = `${Math.floor(node.x / bucketSize)}:${Math.floor(node.z / bucketSize)}`
+    const bucket = buckets.get(key)
+    if (bucket) {
+      bucket.push(index)
+    } else {
+      buckets.set(key, [index])
+    }
+  }
   for (let index = 0; index < nodes.length; index += 1) {
     const first = nodes[index]!
-    for (let other = index + 4; other < nodes.length; other += 1) {
-      if (cumulative[other]! - cumulative[index]! < minimumPathSeparation) {
-        continue
-      }
-      const second = nodes[other]!
-      minCenterlineClearance = Math.min(
-        minCenterlineClearance,
-        Math.hypot(first.x - second.x, first.z - second.z),
-      )
-      if (minCenterlineClearance < options.clearance) {
-        break
+    const bucketX = Math.floor(first.x / bucketSize)
+    const bucketZ = Math.floor(first.z / bucketSize)
+    search: for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) {
+        const bucket = buckets.get(`${bucketX + dx}:${bucketZ + dz}`)
+        if (!bucket) {
+          continue
+        }
+        for (const other of bucket) {
+          if (other <= index + 3) {
+            continue
+          }
+          if (cumulative[other]! - cumulative[index]! < minimumPathSeparation) {
+            continue
+          }
+          const second = nodes[other]!
+          minCenterlineClearance = Math.min(
+            minCenterlineClearance,
+            Math.hypot(first.x - second.x, first.z - second.z),
+          )
+          if (minCenterlineClearance < options.clearance) {
+            break search
+          }
+        }
       }
     }
     if (minCenterlineClearance < options.clearance) {

@@ -39,6 +39,8 @@ export interface GlobalScenicGuideOptions {
   crossSlopeWeight?: number
   maxExpandedStates?: number
   waypointTolerance?: number
+  /** When false, a boundary termination stops at the final required waypoint. */
+  extendToBoundary?: boolean
 }
 
 export interface GlobalScenicGuideResult {
@@ -1178,7 +1180,7 @@ export function buildGlobalScenicGuide(
     }
     appendUnique(returnLeg.points, origin)
     legs.push(returnLeg.points)
-  } else if (termination === 'boundary') {
+  } else if (termination === 'boundary' && options.extendToBoundary !== false) {
     const boundary = searchGuideLeg(
       planning,
       profile,

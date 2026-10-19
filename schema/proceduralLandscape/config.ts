@@ -1,5 +1,10 @@
 import { clamp, degreesToRadians, hashStringToSeed } from './noise'
-import { ROAD_WIDTH_PRESETS } from './roadStyle'
+import {
+  DEFAULT_ROAD_STYLE,
+  normalizeRoadStyleId,
+  ROAD_WIDTH_PRESETS,
+  type RoadStyleId,
+} from './roadStyle'
 import { clampRoadWaypoints, type RoadWaypoint } from './roadWaypoints'
 
 export type ProceduralLandscapeEnvironment = 'editor' | 'preview' | 'viewer'
@@ -93,6 +98,7 @@ export interface ProceduralLandscapeGeneratedRouteProps {
   waypoints: RoadWaypoint[]
   strategy: ProceduralLandscapeRoadStrategy
   termination: ProceduralLandscapeRoadTermination
+  style: RoadStyleId
   seed: number
   waypointTolerance: number
   pathDeviation: number
@@ -102,6 +108,8 @@ export interface ProceduralLandscapeGeneratedRouteProps {
 export interface ProceduralLandscapeRoadProps {
   enabled: boolean
   routing: ProceduralLandscapeRoadRoutingProps
+  /** Official Slow Roads curve style. Width remains independently configurable. */
+  style: RoadStyleId
   /**
    * The runtime only builds this committed snapshot. Live waypoint edits stay
    * editable and are marked stale until the user presses Generate.
@@ -370,6 +378,7 @@ function clampGeneratedRoute(
     waypoints,
     strategy: raw.strategy === 'shortest' ? 'shortest' : 'seeded',
     termination: normalizeRoadTermination(raw.termination),
+    style: normalizeRoadStyleId(raw.style),
     seed: Math.round(clampNumber(raw.seed, fallbackSeed, 0, 0xffffffff)) >>> 0,
     waypointTolerance: clampNumber(raw.waypointTolerance, 4, 1, 64),
     pathDeviation: clampNumber(raw.pathDeviation, fallbackPathDeviation, 10, 500),
@@ -423,6 +432,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
         termination: 'boundary',
       },
       generatedRoute: null,
+      style: DEFAULT_ROAD_STYLE,
       width: 7,
       shoulderWidth: 2.5,
       waypoints: [],
@@ -614,6 +624,7 @@ export function clampProceduralLandscapeProps(
         termination: normalizeRoadTermination(routing?.termination),
       },
       generatedRoute,
+      style: normalizeRoadStyleId(road?.style),
       // 下限取官方 NARROW 档：< 2.25m 才会切到单车道贴图（`isSingleTrackRoad`）。
       width: clampNumber(road?.width, defaults.road.width, ROAD_WIDTH_PRESETS.narrow, 24),
       shoulderWidth: clampNumber(road?.shoulderWidth, defaults.road.shoulderWidth, 0, 10),

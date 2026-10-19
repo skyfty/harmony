@@ -20,8 +20,10 @@ import {
 } from '@schema/proceduralLandscape/runtime'
 import {
   ROAD_SINGLE_TRACK_THRESHOLD,
+  ROAD_STYLE_PROFILES,
   ROAD_WIDTH_PRESETS,
   isSingleTrackRoad,
+  type RoadStyleId,
 } from '@schema/proceduralLandscape/roadStyle'
 import { WATER_FLOOD_VISIBLE_FRACTION } from '@schema/proceduralLandscape/waterStats'
 
@@ -168,6 +170,13 @@ const roadWaypoints = computed(() => propsValue.value?.road.waypoints ?? [])
 const roadActionMessage = ref('')
 const routeStrategy = computed(() => propsValue.value?.road.routing.strategy ?? 'seeded')
 const routeTermination = computed(() => propsValue.value?.road.routing.termination ?? 'boundary')
+const roadStyle = computed<RoadStyleId>(() => propsValue.value?.road.style ?? 'normal')
+const roadCurveStyleOptions: RoadStyleId[] = [
+  'straight',
+  'casual',
+  'normal',
+  'winding',
+]
 const scenicPreferredPercent = Math.round(
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade * 100,
 )
@@ -193,6 +202,7 @@ const roadStale = computed(() => {
   if (
     generated.strategy !== current.routing.strategy
     || generated.termination !== current.routing.termination
+    || generated.style !== current.style
     || generated.seed !== propsValue.value?.seed
     || generated.waypointTolerance !== current.waypointTolerance
     || generated.pathDeviation !== current.pathDeviation
@@ -218,9 +228,14 @@ const roadStatusText = computed(() => {
   }
   const strategy = stats.roadStrategy === 'shortest'
     ? '最短路径'
+    : stats.roadPlannerMode === 'official-natural'
+      ? '官方自然螺旋'
     : stats.roadPlannerMode === 'guided-global'
-      ? '官方 Hills · 全局坡限引导'
+      ? '官方 Hills · 坡限引导'
       : '低地 Hills 选线'
+  const curveStyle = stats.roadStyle
+    ? ROAD_STYLE_PROFILES[stats.roadStyle].label
+    : ROAD_STYLE_PROFILES[roadStyle.value].label
   const generatedTermination = propsValue.value?.road.generatedRoute?.termination
   const termination = generatedTermination === 'loop'
     ? '首尾相接'
@@ -245,7 +260,10 @@ const roadStatusText = computed(() => {
   const guide = stats.roadPlannerMode === 'guided-global'
     ? ` · 全局搜索 ${stats.roadGuideExpandedStates.toLocaleString()} 状态 · 骨架偏差 ${stats.roadMaxGuideDeviation.toFixed(1)}m`
     : ''
-  return `${strategy} · ${termination} · ${Math.round(stats.roadLength).toLocaleString()}m · ${stats.roadNodeCount.toLocaleString()} 节点 · 途径点 ${stats.roadWaypointsPassed}/${stats.roadWaypointCount}${skipped} · 最大偏差 ${stats.roadMaxWaypointError.toFixed(1)}m${official}${guide} · ${state}`
+  const natural = stats.roadNaturalTargetLength > 0
+    ? ` · 自然目标 ${Math.round(stats.roadNaturalTargetLength).toLocaleString()}m · ${stats.roadNaturalLaps.toFixed(1)} 圈`
+    : ''
+  return `${strategy} · ${curveStyle} · ${termination} · ${Math.round(stats.roadLength).toLocaleString()}m · ${stats.roadNodeCount.toLocaleString()} 节点 · 途径点 ${stats.roadWaypointsPassed}/${stats.roadWaypointCount}${skipped} · 最大偏差 ${stats.roadMaxWaypointError.toFixed(1)}m${natural}${official}${guide} · ${state}`
 })
 const roadFailureText = computed(() => {
   const reason = runtimeStats.value?.roadFailureReason
@@ -303,6 +321,7 @@ const roadFailureText = computed(() => {
     'guided-guide-prepare-failed': '全局可行骨架无法平滑成连续道路',
     'guided-official-blocked': '官方 Hills 曲线无法在骨架走廊内满足坡度限制',
     'guide-empty': '全局选线骨架为空',
+    'natural-config-missing': '自然延伸参数缺失，无法生成公路',
     'route-too-short': '单路模式至少需要一个终点途径点',
     'road-geometry-self-overlap': '路线存在自重叠或过急弯道，请增大绕行半径或调整途经点',
   }
@@ -380,6 +399,10 @@ function handleRoadStrategy(value: ProceduralLandscapeRoadStrategy): void {
       strategy: value,
     },
   })
+}
+
+function handleRoadStyle(value: RoadStyleId): void {
+  patchGroup('road', { style: value })
 }
 
 function handleRoadTermination(
@@ -525,7 +548,7 @@ const roadPathBlock = computed<FieldBlock>(() => ({
     : routeTermination.value === 'dead-end'
       ? '按顺序经过全部途径点，并在最后一个途径点结束；绕行半径用于相邻点地形搜索，点击吸附仍为 50m。'
     : routeStrategy.value === 'seeded'
-      ? 'P1 是起点，P2…Pn 全部按顺序经过；绕行半径是软约束，低地偏好只影响自然观光选线。点击吸附仍为 50m。'
+      ? 'P1 是起点；无 P2 时按官方切线目标自然螺旋，有 P2…Pn 时先按顺序经过全部点，再沿用当前航向自然延伸并以 2–4 倍对角线为目标转到边界。点击吸附仍为 50m。'
       : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界；绕行半径是软约束，点击吸附仍为 50m。',
   rows: [[
     { key: 'waypointTolerance', label: '途径容差', suffix: 'm', step: 1 },
@@ -973,6 +996,9 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             >清除公路</button>
           </div>
           <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
+          <div v-if="roadStale" class="pl-hint pl-hint--stale">
+            途经点或公路曲线已修改，点击“重新生成公路”应用。
+          </div>
   
           <div class="pl-subtitle">选线策略</div>
           <div class="pl-choice-row">
@@ -991,6 +1017,20 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               @click="handleRoadStrategy('shortest')"
             >最短路径</button>
           </div>
+          <template v-if="routeStrategy === 'seeded'">
+            <div class="pl-subtitle">公路曲线</div>
+            <div class="pl-choice-row">
+              <button
+                v-for="style in roadCurveStyleOptions"
+                :key="style"
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': roadStyle === style }"
+                :disabled="!componentEnabled"
+                @click="handleRoadStyle(style)"
+              >{{ ROAD_STYLE_PROFILES[style].label }}</button>
+            </div>
+          </template>
           <div class="pl-subtitle">结束方式</div>
           <div class="pl-choice-row">
             <button

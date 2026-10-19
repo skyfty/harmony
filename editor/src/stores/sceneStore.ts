@@ -437,6 +437,7 @@ import {
 import {
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
+  type ProceduralLandscapeGeneratedRouteProps,
 } from '@schema/proceduralLandscape/config'
 import {
   TERRAIN_DEM_STORAGE_LAYOUT,
@@ -18948,10 +18949,11 @@ export const useSceneStore = defineStore('scene', {
         Math.round(Number(previousGenerated?.revision) || 0),
       ) + 1
       const normalized = clampProceduralLandscapeProps(currentProps, nodeId)
-      const generatedRoute = {
+      const generatedRoute: ProceduralLandscapeGeneratedRouteProps = {
         waypoints,
         strategy,
         termination,
+        style: normalized.road.style,
         seed: normalized.seed,
         waypointTolerance: normalized.road.waypointTolerance,
         pathDeviation: normalized.road.pathDeviation,

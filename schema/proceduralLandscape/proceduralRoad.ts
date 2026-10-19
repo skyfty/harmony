@@ -8,11 +8,18 @@ import {
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
 import {
+  resolveNaturalRoadPlan,
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
   summarizeScenicRoadTerrain,
   traceOfficialScenicGuidedRoad,
+  traceOfficialScenicNaturalRoad,
 } from './officialScenicRoad'
 import { buildGlobalScenicGuide } from './globalScenicGuide'
+import {
+  DEFAULT_ROAD_STYLE,
+  resolveSlowroadsMidlineProfile,
+  type RoadStyleId,
+} from './roadStyle'
 import {
   validateRoadCenterlineGeometry,
   type RoadGeometryValidation,
@@ -37,6 +44,7 @@ export interface WaypointRoadPlanOptions {
   routeClearance?: number
   minimumTurnRadius?: number
   maximumHeadingChangeRad?: number
+  style?: RoadStyleId
 }
 
 export interface WaypointRoadPlanResult extends RoadTraceResult {
@@ -59,7 +67,7 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
   waypointsSkipped?: number
   skippedWaypointIndices?: number[]
   waypointsAttempted?: number
-  plannerMode?: 'official' | 'guided-global'
+  plannerMode?: 'official' | 'guided-global' | 'official-natural'
   guideExpandedStates?: number
   maxGuideDeviation?: number
   unreachableWaypointIndex?: number | null
@@ -75,6 +83,8 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
   autoRepairRoundedCorners?: number
   maxAutoRepairWaypointOffset?: number
   effectiveWaypointTolerance?: number
+  naturalTargetLength?: number
+  naturalLaps?: number
 }
 
 type Vec2 = { x: number; z: number }
@@ -1877,6 +1887,17 @@ export function planWaypointRoadRoute(
   if (options.strategy === 'seeded') {
     const origin = waypoints[0]!
     const termination = options.termination
+    const style = options.style ?? DEFAULT_ROAD_STYLE
+    const midlineProfile = resolveSlowroadsMidlineProfile(style)
+    const naturalPlan = termination === 'boundary'
+      ? resolveNaturalRoadPlan(
+          grid,
+          style,
+          options.seed,
+          Math.max(7, options.routeClearance ?? 0),
+          Math.max(0, options.routeClearance ?? 0),
+        )
+      : null
     let smoothingFallback = false
     let smoothingFailureReason: string | null = null
     let geometryAutoRepaired = false
@@ -1938,19 +1959,22 @@ export function planWaypointRoadRoute(
       }
       guideWaypoints = anchors
     }
-    const guide = buildGlobalScenicGuide(grid, guideWaypoints, {
-      seed: options.seed,
-      stepLength: options.stepLength,
-      pathDeviation: options.pathDeviation,
-      margin: options.margin,
-      termination,
-      preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
-      maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
-      maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 0.9,
-      crossSlopeWeight: 18,
-      waypointTolerance: options.waypointTolerance,
-    })
-    if (guide.failureReason || guide.points.length < 2) {
+    const guide = naturalPlan && guideWaypoints.length === 1
+      ? null
+      : buildGlobalScenicGuide(grid, guideWaypoints, {
+          seed: options.seed,
+          stepLength: options.stepLength,
+          pathDeviation: options.pathDeviation,
+          margin: options.margin,
+          termination,
+          preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+          maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+          maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 0.9,
+          crossSlopeWeight: 18,
+          waypointTolerance: options.waypointTolerance,
+          extendToBoundary: naturalPlan == null,
+        })
+    if (guide && (guide.failureReason || guide.points.length < 2)) {
       return {
         nodes: [],
         length: 0,
@@ -1972,23 +1996,42 @@ export function planWaypointRoadRoute(
         unreachableWaypointIndex: guide.unreachableWaypointIndex,
       }
     }
-    let traced = traceOfficialScenicGuidedRoad(
-      grid,
-      origin,
-      options.seed,
-      options.margin,
-      {
-        preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
-        maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
-        maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
-        requiredWaypoints: guideWaypoints,
-        waypointTolerance: options.waypointTolerance,
-        guidePoints: guide.points,
-        guideCorridorWidth: guide.corridorWidth,
-        guideTermination: termination,
-      },
-    )
-    if (!traced.complete) {
+    let traced = guide
+      ? traceOfficialScenicGuidedRoad(
+          grid,
+          origin,
+          options.seed,
+          options.margin,
+          {
+            preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+            maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+            maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+            requiredWaypoints: guideWaypoints,
+            waypointTolerance: options.waypointTolerance,
+            guidePoints: guide.points,
+            guideCorridorWidth: guide.corridorWidth,
+            guideTermination: termination,
+            midlineProfile,
+            natural: naturalPlan ?? undefined,
+          },
+        )
+      : traceOfficialScenicNaturalRoad(
+          grid,
+          origin,
+          options.seed,
+          options.margin,
+          {
+            preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+            maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+            maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+            requiredWaypoints: guideWaypoints,
+            waypointTolerance: options.waypointTolerance,
+            guideTermination: 'boundary',
+            midlineProfile,
+            natural: naturalPlan ?? undefined,
+          },
+        )
+    if (!traced.complete && guide && !naturalPlan) {
       const fallbackTrace = createGuideFallbackRoute(grid, guide.points)
       if (fallbackTrace.complete && fallbackTrace.nodes.length >= 2) {
         const terrain = summarizeScenicRoadTerrain(
@@ -2017,6 +2060,8 @@ export function planWaypointRoadRoute(
         }
       }
     }
+    const naturalTargetLength = traced.naturalTargetLength
+    const naturalLaps = traced.naturalLaps
     let terminationResult: {
       result: RoadTraceResult
       closed: boolean
@@ -2043,7 +2088,11 @@ export function planWaypointRoadRoute(
       )
     }
     let result = terminationResult?.result ?? traced
-    if (result.complete && result.nodes.length >= 3) {
+    if (
+      result.complete
+      && result.nodes.length >= 3
+      && (!naturalPlan || result.nodes.length <= 6_000)
+    ) {
       const smoothing = smoothRoadCenterline(
         grid,
         result.nodes,
@@ -2078,6 +2127,7 @@ export function planWaypointRoadRoute(
     )
     if (
       result.complete
+      && (!naturalPlan || result.nodes.length <= 6_000)
       && (
         !geometry.valid
         || terrain.maxForwardGrade
@@ -2181,14 +2231,18 @@ export function planWaypointRoadRoute(
       waypointsSkipped: 0,
       skippedWaypointIndices: [],
       waypointsAttempted: Math.max(0, waypoints.length - 1),
-      plannerMode: 'guided-global',
-      guideExpandedStates: guide.expandedStates,
-      maxGuideDeviation: maxDistanceToGuide(result.nodes, guide.points),
+      plannerMode: naturalPlan
+        ? (guide ? 'guided-global' : 'official-natural')
+        : 'guided-global',
+      guideExpandedStates: guide?.expandedStates ?? 0,
+      maxGuideDeviation: guide
+        ? maxDistanceToGuide(result.nodes, guide.points)
+        : 0,
       smoothingFallback,
       smoothingFallbackReason: smoothingFailureReason,
-      detourRadius: guide.corridorWidth,
-      maxDetourDistance: guide.maxDetourDistance,
-      detourRadiusExpanded: guide.detourRadiusExpanded,
+      detourRadius: guide?.corridorWidth ?? options.pathDeviation,
+      maxDetourDistance: guide?.maxDetourDistance ?? 0,
+      detourRadiusExpanded: guide?.detourRadiusExpanded ?? false,
       minCenterlineClearance: geometry.minCenterlineClearance,
       minTurnRadius: geometry.minTurnRadius,
       maxHeadingChangeRad: geometry.maxHeadingChangeRad,
@@ -2196,6 +2250,8 @@ export function planWaypointRoadRoute(
       autoRepairRoundedCorners,
       maxAutoRepairWaypointOffset,
       effectiveWaypointTolerance,
+      naturalTargetLength,
+      naturalLaps,
       unreachableWaypointIndex: complete
         ? null
         : (stats.passed < waypoints.length

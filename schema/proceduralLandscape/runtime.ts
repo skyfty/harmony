@@ -88,7 +88,12 @@ import {
   type TreeSpeciesField,
 } from './treeSpecies'
 import { computeRoadMarkings, type RoadMarkingWeights } from './roadMarkings'
-import { DEFAULT_ROAD_STYLE, ROAD_STYLE_PROFILES, isSingleTrackRoad } from './roadStyle'
+import {
+  DEFAULT_ROAD_STYLE,
+  ROAD_STYLE_PROFILES,
+  isSingleTrackRoad,
+  type RoadStyleId,
+} from './roadStyle'
 import { computeWallSegments, type WallSegment } from './walls'
 import { createWallLayers, wallFenceSpriteSamples, type WallLayerHandle } from './wallLayer'
 import { createWaterPlane, type WaterPlaneHandle } from './waterPlane'
@@ -287,7 +292,10 @@ export interface ProceduralLandscapeRuntimeStats {
   roadComplete: boolean
   roadFailureReason: string | null
   roadStrategy: 'seeded' | 'shortest' | null
-  roadPlannerMode: 'official' | 'guided-global' | null
+  roadPlannerMode: 'official' | 'guided-global' | 'official-natural' | null
+  roadStyle: RoadStyleId | null
+  roadNaturalTargetLength: number
+  roadNaturalLaps: number
   roadGuideExpandedStates: number
   roadMaxGuideDeviation: number
   roadUnreachableWaypointIndex: number | null
@@ -1049,6 +1057,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadFailureReason: null,
     roadStrategy: null,
     roadPlannerMode: null,
+    roadStyle: null,
+    roadNaturalTargetLength: 0,
+    roadNaturalLaps: 0,
     roadGuideExpandedStates: 0,
     roadMaxGuideDeviation: 0,
     roadUnreachableWaypointIndex: null,
@@ -2037,6 +2048,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       waypoints: waypointsWorld,
       strategy: route.strategy,
       termination: route.termination,
+      style: route.style,
       seed: route.seed,
       waypointTolerance: route.waypointTolerance,
       pathDeviation: route.pathDeviation,
@@ -3905,6 +3917,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadFailureReason = roadResult?.failureReason ?? roadPlanFailureReason
     stats.roadStrategy = props.road.generatedRoute?.strategy ?? null
     stats.roadPlannerMode = roadResult?.plannerMode ?? null
+    stats.roadStyle = props.road.generatedRoute?.style ?? null
+    stats.roadNaturalTargetLength = roadResult?.naturalTargetLength ?? 0
+    stats.roadNaturalLaps = roadResult?.naturalLaps ?? 0
     stats.roadGuideExpandedStates = roadResult?.guideExpandedStates ?? 0
     stats.roadMaxGuideDeviation = roadResult?.maxGuideDeviation ?? 0
     stats.roadUnreachableWaypointIndex = roadResult?.unreachableWaypointIndex ?? null

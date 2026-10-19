@@ -27,8 +27,22 @@ export interface RoadStyleProfile {
   width: number
   /** 官方 `midline.feelDist`（米）：梯度探针距离。 */
   feelDist: number
+  /** 官方默认 `midline.feelAng`（弧度）。 */
+  feelAngleRad: number
   /** 官方 `midline.maxGrad`：梯度归一化基准（1.0 = 坡度上限）。 */
   maxGrad: number
+  /** 官方单个 10m 节点的最大转向需求增量。 */
+  maxTurnDelta: number
+  /** 官方 `midline.smoothFactor`。 */
+  smoothFactor: number
+  /** 官方 `midline.smoothWindow`（节点数）。 */
+  smoothWindow: number
+  /** 官方 `midline.roadSink`（米）。 */
+  roadSink: number
+  /** 官方 `midline.curvatureHeightFactor`。 */
+  curvatureHeightFactor: number
+  /** `STRAIGHT` 档不启用螺旋目标。 */
+  spiralise: boolean
   /** 官方 `midline.solidLineThreshold`：实线起判门限。 */
   solidLineThreshold: number
   /** 官方 `midline.solidLineCrestThreshold`：山脊（纵向梯度符号翻转）项门限。 */
@@ -44,7 +58,14 @@ export const ROAD_STYLE_PROFILES: Record<RoadStyleId, RoadStyleProfile> = {
     label: 'STRAIGHT',
     width: 1.8,
     feelDist: 10,
+    feelAngleRad: 0.463,
     maxGrad: 0.2,
+    maxTurnDelta: 0.7,
+    smoothFactor: 1,
+    smoothWindow: 9,
+    roadSink: 0.2,
+    curvatureHeightFactor: 50,
+    spiralise: false,
     solidLineThreshold: 0.1,
     solidLineCrestThreshold: -0.02,
     markingsMargin: 12,
@@ -54,7 +75,14 @@ export const ROAD_STYLE_PROFILES: Record<RoadStyleId, RoadStyleProfile> = {
     label: 'CASUAL',
     width: 4,
     feelDist: 30,
+    feelAngleRad: 0.463,
     maxGrad: 0.16,
+    maxTurnDelta: 0.1,
+    smoothFactor: 0.5,
+    smoothWindow: 9,
+    roadSink: 0.2,
+    curvatureHeightFactor: 3,
+    spiralise: true,
     solidLineThreshold: 0.08,
     solidLineCrestThreshold: -0.3,
     markingsMargin: 8,
@@ -64,7 +92,14 @@ export const ROAD_STYLE_PROFILES: Record<RoadStyleId, RoadStyleProfile> = {
     label: 'NORMAL',
     width: 3.2,
     feelDist: 10,
+    feelAngleRad: 0.463,
     maxGrad: 0.14,
+    maxTurnDelta: 0.25,
+    smoothFactor: 0.7,
+    smoothWindow: 7,
+    roadSink: 0.2,
+    curvatureHeightFactor: 3,
+    spiralise: true,
     solidLineThreshold: 0.08,
     solidLineCrestThreshold: -0.5,
     markingsMargin: 6,
@@ -74,7 +109,14 @@ export const ROAD_STYLE_PROFILES: Record<RoadStyleId, RoadStyleProfile> = {
     label: 'WINDING',
     width: 1.8,
     feelDist: 10,
+    feelAngleRad: 0.463,
     maxGrad: 0.12,
+    maxTurnDelta: 0.2,
+    smoothFactor: 0.75,
+    smoothWindow: 7,
+    roadSink: 0.4,
+    curvatureHeightFactor: 3,
+    spiralise: true,
     solidLineThreshold: 0.18,
     solidLineCrestThreshold: -0.5,
     markingsMargin: 5,
@@ -83,6 +125,52 @@ export const ROAD_STYLE_PROFILES: Record<RoadStyleId, RoadStyleProfile> = {
 
 /** lab 默认对齐参考链接 `#A2-…`（NORMAL 档）。 */
 export const DEFAULT_ROAD_STYLE: RoadStyleId = 'normal'
+
+export interface SlowroadsMidlineProfile {
+  style: RoadStyleId
+  stepLength: number
+  feelDistance: number
+  feelAngleRad: number
+  maxGrad: number
+  maxTurnDelta: number
+  smoothFactor: number
+  smoothWindow: number
+  roadSink: number
+  curvatureHeightFactor: number
+  spiralise: boolean
+}
+
+/**
+ * Official `DevMidlineGenerator` only overrides a subset of `_a` per road
+ * style; everything else keeps the shipped defaults.
+ */
+export function resolveSlowroadsMidlineProfile(
+  style: RoadStyleId,
+): SlowroadsMidlineProfile {
+  const resolved = ROAD_STYLE_PROFILES[style] ?? ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE]
+  return {
+    style: resolved.id,
+    stepLength: 10,
+    feelDistance: resolved.feelDist,
+    feelAngleRad: resolved.feelAngleRad,
+    maxGrad: resolved.maxGrad,
+    maxTurnDelta: resolved.maxTurnDelta,
+    smoothFactor: resolved.smoothFactor,
+    smoothWindow: resolved.smoothWindow,
+    roadSink: resolved.roadSink,
+    curvatureHeightFactor: resolved.curvatureHeightFactor,
+    spiralise: resolved.spiralise,
+  }
+}
+
+export function normalizeRoadStyleId(value: unknown): RoadStyleId {
+  return value === 'straight'
+    || value === 'casual'
+    || value === 'normal'
+    || value === 'winding'
+    ? value
+    : DEFAULT_ROAD_STYLE
+}
 
 /** 官方路宽枚举 `_i = [AUTO 3.2, NARROW 1.8, REGULAR 3.2, WIDE 4]`。 */
 export const ROAD_WIDTH_PRESETS = {
