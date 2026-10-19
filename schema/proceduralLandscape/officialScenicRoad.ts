@@ -952,7 +952,6 @@ function naturalTargetDirection(
     laps * config.lapSpacing,
     Math.max(0, config.maxOrbitRadius - config.targetRadiusMax),
   )
-  const targetRadius = config.targetRadius + radiusDrift
   const targetRadiusMin = config.targetRadiusMin + radiusDrift
   const targetRadiusMax = config.targetRadiusMax + radiusDrift
   const radius = Math.hypot(

@@ -2107,7 +2107,11 @@ export function planWaypointRoadRoute(
             maxSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
           })
         : null
-      if (fullFallback?.complete && fullFallback.nodes.length >= 2) {
+      if (
+        fullGuide
+        && fullFallback?.complete
+        && fullFallback.nodes.length >= 2
+      ) {
         traced = {
           ...traced,
           nodes: fullFallback.nodes,

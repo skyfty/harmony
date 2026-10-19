@@ -47,15 +47,16 @@ pnpm --dir tools assets:serve-slowroads-lab    # http://localhost:8097 提供 as
   星空/降雪），输出 `src/core/environmentPresets.generated.ts`，并断言数据不变量
   （星空只在夜晴 ×4、降雪只在冬季 ×5）。
 - `scripts/serve-asset-bundle.mjs`：本地静态服务，模拟服务器按需下载（fetch→blob→纹理）。
-- 素材 supplement：云贴图 `clouds_01.700a3fdb.png`（天气系统用）与木护栏不在用户的
-  下载目录里，作为补充文件随仓库提交，materialize 时会一并复制进 `assets-src/` 与资产包。
+- 素材 supplement：云贴图 `clouds_01.700a3fdb.png`（天气系统用）与木护栏若不在用户的
+  下载目录里，会从 `src/assets/slowroads/` 去重补入；当前下载目录已包含这两项。
   2026-10 起用户素材目录补齐了宽路与墙体（`road_base` / `road_overlay_spring` /
   `road_paint_*` / `wall_barrier` / `spring_wall_drystone` / `wall_concrete`），
   随后又补齐了秋季 overlay、冬季宽路与冬季墙体（`road_overlay_autumn` / `winter_road` /
-  `winter_wall_*`），资产包 100 → 118 个文件。仍缺的只有夏/秋共用的 `wall_drystone` 与
-  `wall_barrier_wood`（回退 spring 贴图，见「已知差异」）；官方虽加载但 shipped 着色器里
-  被注释掉的 `road_paint_dashed_long` 不需要，`bridge`（桥面）随桥系统一起未接入，
-  作为备用素材入库。
+  `winter_wall_*`）。当前资产包共 140 个资产条目：110 张源 PNG、14 张 `@2048` 兼容图、
+  8 个 OBJ 与 8 个 treebin；源目录中的 21 张 `*_metool` 衍生图也按原样保留。仍缺的只有
+  夏/秋共用的 `wall_drystone` 与 `wall_barrier_wood`（回退 spring 贴图，见「已知差异」）；
+  官方虽加载但 shipped 着色器里被注释掉的 `road_paint_dashed_long` 不需要，`bridge`
+  （桥面）随桥系统一起未接入，作为备用素材入库。
 
 ## 架构分层（迁移关键）
 
@@ -588,9 +589,9 @@ min(r,b)>70`；树带 = 画面两侧针叶树带）：
   （lab 无载具/车灯）；夜间保持官方低亮度。
 - 星空容器 renderOrder 归 0（官方 -2，依赖其场景天空的 groupOrder 层级；lab 天空为
   独立 mesh）。这是场景结构差异，观感与官方一致；星点 size 已回到官方 0.01。
-- 冬季木护栏未在素材内，四季沿用春季 `spring_wall_barrier_wood`（单文件随仓库提交，
-  materialize 会把它作为 supplement 复制进 `assets-src/`）。官方侧该位置用的是
-  `wall_barrier.63193046`（不在用户素材目录）。
+- 冬季木护栏使用 `winter_wall_barrier_wood.058b9fbc`；春/夏/秋沿用
+  `spring_wall_barrier_wood.29edf0af`。硬护栏槽位 `barrier` 使用
+  `wall_barrier.63193046`。
 - 兼容模式（`TERRAIN_REDUCED`）不做近路位移（低端机顶点纹理单元不可靠），植被层仍
   采样密度图；其余渲染路径与完整模式一致。
 - **环境尺度**：lab 把官方 graphics preset 的 `tileSize`(1000) 当作视距，而官方 Hills 实际用

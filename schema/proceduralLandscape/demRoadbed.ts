@@ -140,6 +140,8 @@ export function createDemRoadbedTargetGeometry(
     lateralStep?: number
     rowSpacing?: number
     lift?: number
+    /** Extend the apron inward under the asphalt to seal the edge seam. */
+    asphaltOverlap?: number
     hostInverse: THREE.Matrix4
   },
 ): DemRoadbedTargetGeometryResult | null {
@@ -163,7 +165,11 @@ export function createDemRoadbedTargetGeometry(
     selectedRows.push(rows[rows.length - 1]!)
   }
   const halfWidth = target.meshHalfWidth
-  const asphaltHalfWidth = Math.min(halfWidth, target.halfWidth)
+  const asphaltOverlap = Math.max(0, options.asphaltOverlap ?? 0.5)
+  const asphaltHalfWidth = Math.max(
+    0,
+    Math.min(halfWidth, target.halfWidth - asphaltOverlap),
+  )
   const sideSpan = Math.max(0.001, halfWidth - asphaltHalfWidth)
   const columns = Math.max(2, Math.ceil(sideSpan / lateralStep) + 1)
   const stripCount = 2

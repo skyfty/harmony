@@ -2377,6 +2377,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           const roadbed = createDemRoadbedTargetGeometry(roadBandRows, demRoadbedTarget, {
             lateralStep: 3,
             lift: 0.01,
+            asphaltOverlap: 0.5,
             hostInverse,
           })
           if (roadbed) {
@@ -2396,6 +2397,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               lateralStep: 8,
               rowSpacing: 8,
               lift: 0.01,
+              asphaltOverlap: 0.5,
               hostInverse,
             })
             if (collisionRoadbed) {

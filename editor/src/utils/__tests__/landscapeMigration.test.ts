@@ -337,10 +337,28 @@ describe('DEM roadbed target', () => {
     const roadbed = createDemRoadbedTargetGeometry(rows, firstTarget, {
       lateralStep: 3,
       lift: 0.01,
+      asphaltOverlap: 0.5,
       hostInverse: new THREE.Matrix4(),
     })
     expect(roadbed).not.toBeNull()
     if (!roadbed) return
+
+    const overlapPosition = roadbed.geometry.getAttribute('position')
+    let minimumRoadDistance = Number.POSITIVE_INFINITY
+    for (let index = 0; index < overlapPosition.count; index += 1) {
+      const x = overlapPosition.getX(index)
+      const y = overlapPosition.getY(index)
+      const z = overlapPosition.getZ(index)
+      const distance = firstRoad.distanceAt(x, z)
+      minimumRoadDistance = Math.min(
+        minimumRoadDistance,
+        distance,
+      )
+      if (distance < firstTarget.halfWidth) {
+        expect(y).toBeLessThanOrEqual(firstRoad.heightAt(x, z)! - 0.03)
+      }
+    }
+    expect(minimumRoadDistance).toBeLessThanOrEqual(firstTarget.halfWidth - 0.45)
 
     const auditAsphalt = (geometry: THREE.BufferGeometry): void => {
       const position = geometry.getAttribute('position')
@@ -367,7 +385,9 @@ describe('DEM roadbed target', () => {
       const c = roadbedIndex!.getX(triangle + 2)
       const centerX = (roadbedPosition.getX(a) + roadbedPosition.getX(b) + roadbedPosition.getX(c)) / 3
       const centerZ = (roadbedPosition.getZ(a) + roadbedPosition.getZ(b) + roadbedPosition.getZ(c)) / 3
-      expect(firstRoad.distanceAt(centerX, centerZ)).toBeGreaterThanOrEqual(firstTarget.halfWidth - 1e-4)
+      expect(firstRoad.distanceAt(centerX, centerZ)).toBeGreaterThanOrEqual(
+        firstTarget.halfWidth - 0.5 - 1e-4,
+      )
     }
   })
 

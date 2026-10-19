@@ -1,8 +1,8 @@
 {
-  "generatedAt": "2026-10-15T10:05:58.428Z",
+  "generatedAt": "2026-10-19T14:59:08.683Z",
   "source": "D:\\Downloads\\新建文件夹",
-  "entryCount": 118,
-  "totalBytes": 112789364,
+  "entryCount": 140,
+  "totalBytes": 60223799,
   "files": [
     {
       "logicalId": "autumn_bushes.b82ca395",
@@ -18,8 +18,8 @@
       "logicalId": "autumn_heather.d890b430",
       "file": "autumn_heather.d890b430.png",
       "kind": "png",
-      "bytes": 1818032,
-      "hash": "sha256-f2d4bb2cf0273d35",
+      "bytes": 252074,
+      "hash": "sha256-a56b67e22f998287",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -28,8 +28,8 @@
       "logicalId": "autumn_imposters_0_d.4c4b38fd",
       "file": "autumn_imposters_0_d.4c4b38fd.png",
       "kind": "png",
-      "bytes": 3003265,
-      "hash": "sha256-628dbd967925d405",
+      "bytes": 677021,
+      "hash": "sha256-495ca1395aca4807",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -40,18 +40,28 @@
       "kind": "png",
       "derivedFrom": "autumn_imposters_0_d.4c4b38fd",
       "variant": "2048",
-      "bytes": 1217882,
-      "hash": "sha256-5ad25830ee6614b1",
+      "bytes": 413257,
+      "hash": "sha256-b5c7cb85e1d56276",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "autumn_imposters_0_d.4c4b38fd@2048_metool",
+      "file": "autumn_imposters_0_d.4c4b38fd@2048_metool.png",
+      "kind": "png",
+      "bytes": 611506,
+      "hash": "sha256-a75b11e0cafae0bf",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "autumn_imposters_0_n.d10ccd46",
       "file": "autumn_imposters_0_n.d10ccd46.png",
       "kind": "png",
-      "bytes": 3143293,
-      "hash": "sha256-67079a179c03a896",
+      "bytes": 1162899,
+      "hash": "sha256-12f10884cc69e1a7",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -62,8 +72,8 @@
       "kind": "png",
       "derivedFrom": "autumn_imposters_0_n.d10ccd46",
       "variant": "2048",
-      "bytes": 980861,
-      "hash": "sha256-43cef90926c7f708",
+      "bytes": 449825,
+      "hash": "sha256-fc1006954dca7f1a",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -72,8 +82,8 @@
       "logicalId": "autumn_imposters_1_d.0160320a",
       "file": "autumn_imposters_1_d.0160320a.png",
       "kind": "png",
-      "bytes": 1303703,
-      "hash": "sha256-0db8795ac31802f4",
+      "bytes": 283474,
+      "hash": "sha256-7eb99d8978de6088",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -84,8 +94,8 @@
       "kind": "png",
       "derivedFrom": "autumn_imposters_1_d.0160320a",
       "variant": "2048",
-      "bytes": 781418,
-      "hash": "sha256-e21649b5f79c5f55",
+      "bytes": 374924,
+      "hash": "sha256-29653d73eab555a7",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -94,8 +104,8 @@
       "logicalId": "autumn_imposters_1_n.2a7e8cf6",
       "file": "autumn_imposters_1_n.2a7e8cf6.png",
       "kind": "png",
-      "bytes": 2078052,
-      "hash": "sha256-44ad40d842c34af0",
+      "bytes": 860961,
+      "hash": "sha256-8aa78d3b71cfec11",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -106,8 +116,8 @@
       "kind": "png",
       "derivedFrom": "autumn_imposters_1_n.2a7e8cf6",
       "variant": "2048",
-      "bytes": 761392,
-      "hash": "sha256-ff685a683657f4c0",
+      "bytes": 441026,
+      "hash": "sha256-b4b6f2891dee0889",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -116,21 +126,41 @@
       "logicalId": "autumn_trees_0.2fe560b0",
       "file": "autumn_trees_0.2fe560b0.png",
       "kind": "png",
-      "bytes": 1410080,
-      "hash": "sha256-5aa9e0a69609239d",
+      "bytes": 306745,
+      "hash": "sha256-b358aa9c2f72c12a",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "autumn_trees_0.2fe560b0_metool",
+      "file": "autumn_trees_0.2fe560b0_metool.png",
+      "kind": "png",
+      "bytes": 805904,
+      "hash": "sha256-d8fe096fdf972890",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "autumn_trees_0_n.a664e3e1",
       "file": "autumn_trees_0_n.a664e3e1.png",
       "kind": "png",
-      "bytes": 1483710,
-      "hash": "sha256-0710705d5a24e12e",
+      "bytes": 378998,
+      "hash": "sha256-ce97be7477d0a7e5",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_trees_0_n.a664e3e1_metool",
+      "file": "autumn_trees_0_n.a664e3e1_metool.png",
+      "kind": "png",
+      "bytes": 795366,
+      "hash": "sha256-93f2a1ade548a94e",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "autumn_trees_1_a.2aa926cb",
@@ -146,11 +176,21 @@
       "logicalId": "autumn_trees_1_m.2cd39e32",
       "file": "autumn_trees_1_m.2cd39e32.png",
       "kind": "png",
-      "bytes": 1032910,
-      "hash": "sha256-1ebda6d9e7c1afb3",
+      "bytes": 142665,
+      "hash": "sha256-a50dc59e314b3707",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "autumn_trees_1_m.2cd39e32_metool",
+      "file": "autumn_trees_1_m.2cd39e32_metool.png",
+      "kind": "png",
+      "bytes": 682325,
+      "hash": "sha256-977d58336b48bf48",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "bridge.7eaed52d",
@@ -176,8 +216,8 @@
       "logicalId": "forest_01.b82a9e7e",
       "file": "forest_01.b82a9e7e.png",
       "kind": "png",
-      "bytes": 2753831,
-      "hash": "sha256-1595d3a32e4a25a5",
+      "bytes": 361197,
+      "hash": "sha256-57d08b262f2fbbda",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -186,8 +226,8 @@
       "logicalId": "forest_autumn.55ca08bd",
       "file": "forest_autumn.55ca08bd.png",
       "kind": "png",
-      "bytes": 2544881,
-      "hash": "sha256-43030c9fbedb741f",
+      "bytes": 587918,
+      "hash": "sha256-d2fe61d5374ee71e",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -196,8 +236,8 @@
       "logicalId": "forest_spring.a81cef17",
       "file": "forest_spring.a81cef17.png",
       "kind": "png",
-      "bytes": 2672578,
-      "hash": "sha256-930c3e3b014edfb6",
+      "bytes": 455470,
+      "hash": "sha256-b6580686c6c05660",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -206,8 +246,8 @@
       "logicalId": "forest_winter.0710a850",
       "file": "forest_winter.0710a850.png",
       "kind": "png",
-      "bytes": 2464640,
-      "hash": "sha256-0b416720b95c3695",
+      "bytes": 394905,
+      "hash": "sha256-5a41646292022ea4",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -216,8 +256,8 @@
       "logicalId": "grass.15f2422c",
       "file": "grass.15f2422c.png",
       "kind": "png",
-      "bytes": 2405674,
-      "hash": "sha256-2733be31a4aa45ca",
+      "bytes": 432070,
+      "hash": "sha256-11219c70a559daff",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -236,18 +276,28 @@
       "logicalId": "gravel.0ee4475c",
       "file": "gravel.0ee4475c.png",
       "kind": "png",
-      "bytes": 1722186,
-      "hash": "sha256-e7504f3fbbac67c2",
+      "bytes": 301232,
+      "hash": "sha256-b372901a55451857",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "gravel.0ee4475c_metool",
+      "file": "gravel.0ee4475c_metool.png",
+      "kind": "png",
+      "bytes": 1062567,
+      "hash": "sha256-4a71de675955f9a6",
+      "width": 724,
+      "height": 724,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "gravel_02.8367ed2c",
       "file": "gravel_02.8367ed2c.png",
       "kind": "png",
-      "bytes": 2152436,
-      "hash": "sha256-c5c6af388fd71b5d",
+      "bytes": 381629,
+      "hash": "sha256-d9482b6bc8c1ed7c",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -346,18 +396,28 @@
       "logicalId": "road_base.40d53c3c",
       "file": "road_base.40d53c3c.png",
       "kind": "png",
-      "bytes": 1447280,
-      "hash": "sha256-99c51342eb0f72e6",
+      "bytes": 350168,
+      "hash": "sha256-4f0ea63840dfc567",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "road_base.40d53c3c_metool",
+      "file": "road_base.40d53c3c_metool.png",
+      "kind": "png",
+      "bytes": 971787,
+      "hash": "sha256-6f2dec3704f0ed8f",
+      "width": 724,
+      "height": 724,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "road_overlay_autumn.68f523cb",
       "file": "road_overlay_autumn.68f523cb.png",
       "kind": "png",
-      "bytes": 1759664,
-      "hash": "sha256-f4776df0353730f8",
+      "bytes": 294397,
+      "hash": "sha256-9a1e513e6f9207d9",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -436,18 +496,28 @@
       "logicalId": "road_single_base.d5dbc374",
       "file": "road_single_base.d5dbc374.png",
       "kind": "png",
-      "bytes": 1618385,
-      "hash": "sha256-b8fd32acca73d374",
+      "bytes": 310185,
+      "hash": "sha256-0befdffe9f7f5213",
       "width": 768,
       "height": 1536,
       "rgbaBytes": 4718592
     },
     {
+      "logicalId": "road_single_base.d5dbc374_metool",
+      "file": "road_single_base.d5dbc374_metool.png",
+      "kind": "png",
+      "bytes": 1102150,
+      "hash": "sha256-1fa49b2f34c19b6f",
+      "width": 543,
+      "height": 1086,
+      "rgbaBytes": 2358792
+    },
+    {
       "logicalId": "road_single_base_spring.2a1a3159",
       "file": "road_single_base_spring.2a1a3159.png",
       "kind": "png",
-      "bytes": 1751569,
-      "hash": "sha256-ecdfc2d4d0022e53",
+      "bytes": 255362,
+      "hash": "sha256-ffbf8e3c25ab51f5",
       "width": 768,
       "height": 1536,
       "rgbaBytes": 4718592
@@ -456,8 +526,8 @@
       "logicalId": "road_single_overlay_autumn.59ecdb8e",
       "file": "road_single_overlay_autumn.59ecdb8e.png",
       "kind": "png",
-      "bytes": 3225891,
-      "hash": "sha256-26afca950c5dd247",
+      "bytes": 779368,
+      "hash": "sha256-45688cb8685f7778",
       "width": 768,
       "height": 1536,
       "rgbaBytes": 4718592
@@ -476,11 +546,21 @@
       "logicalId": "rock_bump.8f8c68ad",
       "file": "rock_bump.8f8c68ad.png",
       "kind": "png",
-      "bytes": 1365365,
-      "hash": "sha256-679369b308c6f8cb",
+      "bytes": 408209,
+      "hash": "sha256-ccc23b82ccc15b80",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "rock_bump.8f8c68ad_metool",
+      "file": "rock_bump.8f8c68ad_metool.png",
+      "kind": "png",
+      "bytes": 776842,
+      "hash": "sha256-a3140f4ee16e5fc9",
+      "width": 724,
+      "height": 724,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "sand.43e5b6fc",
@@ -526,8 +606,8 @@
       "logicalId": "spring_imposters_0_d.2e67db77",
       "file": "spring_imposters_0_d.2e67db77.png",
       "kind": "png",
-      "bytes": 2704242,
-      "hash": "sha256-073fa9832943ebb0",
+      "bytes": 551515,
+      "hash": "sha256-62b68dda843ec8fb",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -538,18 +618,28 @@
       "kind": "png",
       "derivedFrom": "spring_imposters_0_d.2e67db77",
       "variant": "2048",
-      "bytes": 1184651,
-      "hash": "sha256-9eb5b837aad9dc0f",
+      "bytes": 387473,
+      "hash": "sha256-830a900fa47bacdd",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "spring_imposters_0_d.2e67db77@2048_metool",
+      "file": "spring_imposters_0_d.2e67db77@2048_metool.png",
+      "kind": "png",
+      "bytes": 604661,
+      "hash": "sha256-698df44b81bedfb5",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "spring_imposters_0_n.1d5afe54",
       "file": "spring_imposters_0_n.1d5afe54.png",
       "kind": "png",
-      "bytes": 3053560,
-      "hash": "sha256-f459b779d40249a6",
+      "bytes": 1043820,
+      "hash": "sha256-929686efc8e2afef",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -560,8 +650,8 @@
       "kind": "png",
       "derivedFrom": "spring_imposters_0_n.1d5afe54",
       "variant": "2048",
-      "bytes": 957423,
-      "hash": "sha256-1e103468d1f808e8",
+      "bytes": 478251,
+      "hash": "sha256-71f810e06151e515",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -570,8 +660,8 @@
       "logicalId": "spring_imposters_1_d.05133c03",
       "file": "spring_imposters_1_d.05133c03.png",
       "kind": "png",
-      "bytes": 1598195,
-      "hash": "sha256-f6b6376d8a9c6352",
+      "bytes": 327755,
+      "hash": "sha256-2522aff0739a6715",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -582,8 +672,30 @@
       "kind": "png",
       "derivedFrom": "spring_imposters_1_d.05133c03",
       "variant": "2048",
-      "bytes": 869923,
-      "hash": "sha256-5e2a7936868873b1",
+      "bytes": 377394,
+      "hash": "sha256-1f0df9a433916784",
+      "width": 2048,
+      "height": 512,
+      "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_imposters_1_d.05133c03_metool",
+      "file": "spring_imposters_1_d.05133c03_metool.png",
+      "kind": "png",
+      "bytes": 1421934,
+      "hash": "sha256-0b5003c0f9d50ea7",
+      "width": 2896,
+      "height": 724,
+      "rgbaBytes": 8386816
+    },
+    {
+      "logicalId": "spring_imposters_1_d.05133c03_metool@2048",
+      "file": "spring_imposters_1_d.05133c03_metool@2048.png",
+      "kind": "png",
+      "derivedFrom": "spring_imposters_1_d.05133c03_metool",
+      "variant": "2048",
+      "bytes": 801005,
+      "hash": "sha256-312542ce89a08abf",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -592,8 +704,8 @@
       "logicalId": "spring_rock.d1f6769c",
       "file": "spring_rock.d1f6769c.png",
       "kind": "png",
-      "bytes": 1900581,
-      "hash": "sha256-2cf3a93473b2f875",
+      "bytes": 309580,
+      "hash": "sha256-9caccfecf930823c",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -602,21 +714,41 @@
       "logicalId": "spring_trees_0.aee94219",
       "file": "spring_trees_0.aee94219.png",
       "kind": "png",
-      "bytes": 1358646,
-      "hash": "sha256-5d52916839b2c819",
+      "bytes": 269776,
+      "hash": "sha256-92fccb7f6fe650e9",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "spring_trees_0.aee94219_metool",
+      "file": "spring_trees_0.aee94219_metool.png",
+      "kind": "png",
+      "bytes": 775145,
+      "hash": "sha256-1b42ee7631c19a00",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "spring_trees_0_n.8e3ce8fa",
       "file": "spring_trees_0_n.8e3ce8fa.png",
       "kind": "png",
-      "bytes": 1450806,
-      "hash": "sha256-7c0d5d9a9d561b5a",
+      "bytes": 359358,
+      "hash": "sha256-12a650620f84aada",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_trees_0_n.8e3ce8fa_metool",
+      "file": "spring_trees_0_n.8e3ce8fa_metool.png",
+      "kind": "png",
+      "bytes": 763157,
+      "hash": "sha256-a30ed8f44940c202",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "spring_trees_1_a.e8f53ceb",
@@ -632,11 +764,21 @@
       "logicalId": "spring_trees_1_m.29ae06f6",
       "file": "spring_trees_1_m.29ae06f6.png",
       "kind": "png",
-      "bytes": 1072610,
-      "hash": "sha256-cc71985aa955bc29",
+      "bytes": 165325,
+      "hash": "sha256-791896f65057ea8a",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "spring_trees_1_m.29ae06f6_metool",
+      "file": "spring_trees_1_m.29ae06f6_metool.png",
+      "kind": "png",
+      "bytes": 704364,
+      "hash": "sha256-c7e80bcb1cd177bb",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "spring_wall_barrier_wood.29edf0af",
@@ -682,8 +824,8 @@
       "logicalId": "summer_heather_05.5f56558d",
       "file": "summer_heather_05.5f56558d.png",
       "kind": "png",
-      "bytes": 1860294,
-      "hash": "sha256-734fc002175123b6",
+      "bytes": 252815,
+      "hash": "sha256-b12d7962ed7b0424",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -692,8 +834,8 @@
       "logicalId": "summer_imposters_0_d.6a3261f4",
       "file": "summer_imposters_0_d.6a3261f4.png",
       "kind": "png",
-      "bytes": 1418294,
-      "hash": "sha256-d5dc4334f9b81df1",
+      "bytes": 379361,
+      "hash": "sha256-8734288eba7814e8",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -704,8 +846,8 @@
       "kind": "png",
       "derivedFrom": "summer_imposters_0_d.6a3261f4",
       "variant": "2048",
-      "bytes": 837173,
-      "hash": "sha256-854f8a6adc5ad69c",
+      "bytes": 359159,
+      "hash": "sha256-cc41dcf7487c2c7d",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -714,8 +856,8 @@
       "logicalId": "summer_imposters_0_n.99abbc99",
       "file": "summer_imposters_0_n.99abbc99.png",
       "kind": "png",
-      "bytes": 3391336,
-      "hash": "sha256-79d6c2cc294b5b5b",
+      "bytes": 1246164,
+      "hash": "sha256-9774ef4160240de1",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -726,18 +868,28 @@
       "kind": "png",
       "derivedFrom": "summer_imposters_0_n.99abbc99",
       "variant": "2048",
-      "bytes": 1063539,
-      "hash": "sha256-5af73e0d382de369",
+      "bytes": 502605,
+      "hash": "sha256-40e3c528a1e0a03e",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "summer_imposters_0_n.99abbc99@2048_metool",
+      "file": "summer_imposters_0_n.99abbc99@2048_metool.png",
+      "kind": "png",
+      "bytes": 672815,
+      "hash": "sha256-cc7aef3a375253b0",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "summer_imposters_1_d.a1e60bf5",
       "file": "summer_imposters_1_d.a1e60bf5.png",
       "kind": "png",
-      "bytes": 1224644,
-      "hash": "sha256-02d2f77a775c6041",
+      "bytes": 301771,
+      "hash": "sha256-02a1ffd5b511ec96",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -748,8 +900,8 @@
       "kind": "png",
       "derivedFrom": "summer_imposters_1_d.a1e60bf5",
       "variant": "2048",
-      "bytes": 789715,
-      "hash": "sha256-60858aa42d8d0c50",
+      "bytes": 373064,
+      "hash": "sha256-8ae7721890e80b2e",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -758,28 +910,48 @@
       "logicalId": "summer_rock.674f8c5a",
       "file": "summer_rock.674f8c5a.png",
       "kind": "png",
-      "bytes": 1611015,
-      "hash": "sha256-e45c12b7601f6f1d",
+      "bytes": 306448,
+      "hash": "sha256-bcc894658690f074",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "summer_rock.674f8c5a_metool",
+      "file": "summer_rock.674f8c5a_metool.png",
+      "kind": "png",
+      "bytes": 1139441,
+      "hash": "sha256-512fd4c47c7df430",
+      "width": 724,
+      "height": 724,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "summer_trees_0.d5cc9742",
       "file": "summer_trees_0.d5cc9742.png",
       "kind": "png",
-      "bytes": 1454126,
-      "hash": "sha256-9f1131af198dd5d8",
+      "bytes": 257802,
+      "hash": "sha256-9b11a193c7e5feac",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "summer_trees_0.d5cc9742_metool",
+      "file": "summer_trees_0.d5cc9742_metool.png",
+      "kind": "png",
+      "bytes": 885933,
+      "hash": "sha256-6b940a0a266316ec",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "summer_trees_0_n.011e666e",
       "file": "summer_trees_0_n.011e666e.png",
       "kind": "png",
-      "bytes": 1723588,
-      "hash": "sha256-c799add10a88e7da",
+      "bytes": 500773,
+      "hash": "sha256-1c54a2fcdd1621d8",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -1068,8 +1240,8 @@
       "logicalId": "winter_heather.b9aeb76f",
       "file": "winter_heather.b9aeb76f.png",
       "kind": "png",
-      "bytes": 2105056,
-      "hash": "sha256-fb8bb3f21f296ea8",
+      "bytes": 411178,
+      "hash": "sha256-f46a3016a1d2a252",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
@@ -1078,8 +1250,8 @@
       "logicalId": "winter_imposters_0_d.ce1a9b7d",
       "file": "winter_imposters_0_d.ce1a9b7d.png",
       "kind": "png",
-      "bytes": 2112719,
-      "hash": "sha256-5b102d6136b9fbb6",
+      "bytes": 508771,
+      "hash": "sha256-e9981bfb4b79b281",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -1090,8 +1262,8 @@
       "kind": "png",
       "derivedFrom": "winter_imposters_0_d.ce1a9b7d",
       "variant": "2048",
-      "bytes": 998126,
-      "hash": "sha256-df9b30e6705cdff4",
+      "bytes": 381570,
+      "hash": "sha256-c1488ff31634d2d0",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -1100,8 +1272,8 @@
       "logicalId": "winter_imposters_0_n.8293f6b6",
       "file": "winter_imposters_0_n.8293f6b6.png",
       "kind": "png",
-      "bytes": 1914030,
-      "hash": "sha256-9bcc13962a25c5ed",
+      "bytes": 596080,
+      "hash": "sha256-583bed3a6e06c574",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -1112,8 +1284,8 @@
       "kind": "png",
       "derivedFrom": "winter_imposters_0_n.8293f6b6",
       "variant": "2048",
-      "bytes": 659597,
-      "hash": "sha256-85753ea7fc2cdc15",
+      "bytes": 415610,
+      "hash": "sha256-07b42b78656554bf",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -1122,8 +1294,8 @@
       "logicalId": "winter_imposters_1_d.2882c5c9",
       "file": "winter_imposters_1_d.2882c5c9.png",
       "kind": "png",
-      "bytes": 1905314,
-      "hash": "sha256-2dccd167bc795b28",
+      "bytes": 397358,
+      "hash": "sha256-23f65a526c858007",
       "width": 4096,
       "height": 1024,
       "rgbaBytes": 16777216
@@ -1134,8 +1306,8 @@
       "kind": "png",
       "derivedFrom": "winter_imposters_1_d.2882c5c9",
       "variant": "2048",
-      "bytes": 833852,
-      "hash": "sha256-a58f347164bcc200",
+      "bytes": 379170,
+      "hash": "sha256-9645e92e2215da56",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
@@ -1144,11 +1316,21 @@
       "logicalId": "winter_road.e19b36b8",
       "file": "winter_road.e19b36b8.png",
       "kind": "png",
-      "bytes": 1359320,
-      "hash": "sha256-32964f76a42365d3",
+      "bytes": 317122,
+      "hash": "sha256-8a472cb9c8edec90",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_road.e19b36b8_metool",
+      "file": "winter_road.e19b36b8_metool.png",
+      "kind": "png",
+      "bytes": 922191,
+      "hash": "sha256-57282997f3be645d",
+      "width": 724,
+      "height": 724,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "winter_road_single.7e3852c1",
@@ -1164,31 +1346,61 @@
       "logicalId": "winter_rock.674a5de1",
       "file": "winter_rock.674a5de1.png",
       "kind": "png",
-      "bytes": 1713995,
-      "hash": "sha256-289c29c935f58fc3",
+      "bytes": 358083,
+      "hash": "sha256-4d587a66b5597f5d",
       "width": 1024,
       "height": 1024,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "winter_rock.674a5de1_metool",
+      "file": "winter_rock.674a5de1_metool.png",
+      "kind": "png",
+      "bytes": 1226293,
+      "hash": "sha256-b9a390db370db803",
+      "width": 724,
+      "height": 724,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "winter_trees_0.99189e5d",
       "file": "winter_trees_0.99189e5d.png",
       "kind": "png",
-      "bytes": 1122023,
-      "hash": "sha256-6cad675a2f4ef6ed",
+      "bytes": 208709,
+      "hash": "sha256-ef47fc1194e60b2a",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
     },
     {
+      "logicalId": "winter_trees_0.99189e5d_metool",
+      "file": "winter_trees_0.99189e5d_metool.png",
+      "kind": "png",
+      "bytes": 635063,
+      "hash": "sha256-dd37a047a82656df",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
+    },
+    {
       "logicalId": "winter_trees_0_n.24c5f705",
       "file": "winter_trees_0_n.24c5f705.png",
       "kind": "png",
-      "bytes": 1188257,
-      "hash": "sha256-58579fd6b4ad30cd",
+      "bytes": 263433,
+      "hash": "sha256-73787d6c07dd7c4c",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_trees_0_n.24c5f705_metool",
+      "file": "winter_trees_0_n.24c5f705_metool.png",
+      "kind": "png",
+      "bytes": 614055,
+      "hash": "sha256-629aec6b23d5d405",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "winter_trees_1_a.142fe383",
@@ -1204,11 +1416,21 @@
       "logicalId": "winter_trees_1_m.7ee3e863",
       "file": "winter_trees_1_m.7ee3e863.png",
       "kind": "png",
-      "bytes": 1194653,
-      "hash": "sha256-f89d3ee606d148b4",
+      "bytes": 200790,
+      "hash": "sha256-99bad33933a62397",
       "width": 2048,
       "height": 512,
       "rgbaBytes": 4194304
+    },
+    {
+      "logicalId": "winter_trees_1_m.7ee3e863_metool",
+      "file": "winter_trees_1_m.7ee3e863_metool.png",
+      "kind": "png",
+      "bytes": 746150,
+      "hash": "sha256-4ecbb5b0b445b1eb",
+      "width": 1448,
+      "height": 362,
+      "rgbaBytes": 2096704
     },
     {
       "logicalId": "winter_wall_barrier.2f3faaf6",
@@ -1251,24 +1473,7 @@
       "rgbaBytes": 2097152
     }
   ],
-  "excluded": [
-    {
-      "file": "灌木.png",
-      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
-    },
-    {
-      "file": "草.png",
-      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
-    },
-    {
-      "file": "针叶.png",
-      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
-    },
-    {
-      "file": "阔叶.png",
-      "reason": "legacy duplicate atlas (superseded by seasonal slowroads sets)"
-    }
-  ],
+  "excluded": [],
   "notes": [
     "logicalId = source filename without extension (content hash kept in the filename).",
     "Slot/season usage lives in src/core/seasonCatalog.ts; this catalog only records measured facts.",
