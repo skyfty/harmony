@@ -4,10 +4,16 @@ import {
   decodeTerrainDemRuntimeGridFile,
   type TerrainDemRuntimeGridData,
 } from '../terrainDemRuntimeGrid'
+import {
+  decodeTerrainDemRuntimeOrthoFile,
+  terrainDemRuntimeOrthoToRgba,
+  type TerrainDemRuntimeOrthoData,
+} from '../terrainDemRuntimeOrtho'
 import type { TerrainHeightGrid } from './terrainSampler'
 import type { DemRoadbedTarget } from './demRoadbed'
 
 const demGridLoads = new Map<string, Promise<TerrainDemRuntimeGridData>>()
+const demOrthoLoads = new Map<string, Promise<TerrainDemRuntimeOrthoData>>()
 const demCoverageCache = new WeakMap<TerrainDemRuntimeGridData, Uint8Array>()
 
 export function loadTerrainDemRuntimeGrid(
@@ -140,6 +146,60 @@ export function createDemTerrainHeightGrid(
   return grid
 }
 
+export function loadTerrainDemRuntimeOrtho(
+  url: string,
+  onProgress?: (value: number) => void,
+): Promise<TerrainDemRuntimeOrthoData> {
+  const normalized = url.trim()
+  if (!normalized) {
+    return Promise.reject(new Error('DEM runtime ortho URL is empty'))
+  }
+  const cached = demOrthoLoads.get(normalized)
+  if (cached) {
+    return cached
+  }
+  const controller = new AbortController()
+  const pending = fetchAssetBlob(normalized, controller, (value) => onProgress?.(value))
+    .then((payload) => {
+      const bytes = payload.bytes
+        ? new Uint8Array(payload.bytes)
+        : null
+      if (!bytes) {
+        throw new Error('DEM runtime ortho download returned no bytes')
+      }
+      return decodeTerrainDemRuntimeOrthoFile(bytes)
+    })
+    .catch((error) => {
+      demOrthoLoads.delete(normalized)
+      throw error
+    })
+  demOrthoLoads.set(normalized, pending)
+  return pending
+}
+
+export function createTerrainDemRuntimeOrthoTexture(
+  data: TerrainDemRuntimeOrthoData,
+  name = 'dem-runtime-ortho',
+): THREE.DataTexture {
+  const texture = new THREE.DataTexture(
+    terrainDemRuntimeOrthoToRgba(data),
+    data.width,
+    data.height,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType,
+  )
+  texture.name = name
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapT = THREE.ClampToEdgeWrapping
+  texture.magFilter = THREE.LinearFilter
+  texture.minFilter = THREE.LinearFilter
+  texture.generateMipmaps = false
+  texture.flipY = false
+  texture.needsUpdate = true
+  return texture
+}
+
 export interface DemTerrainMeshBuilder {
   step(budgetMs?: number): boolean
   readonly done: boolean
@@ -179,6 +239,7 @@ export function createDemTerrainMeshBuilder(
   const triangleCount = (cols - 1) * (rows - 1) * 2
   const positions = new Float32Array(vertexCount * 3)
   const normals = new Float32Array(vertexCount * 3)
+  const uvs = new Float32Array(vertexCount * 2)
   const indices = new Uint32Array(triangleCount * 3)
   const heights = new Float32Array(vertexCount)
   let phase: 'heights' | 'positions' | 'indices' | 'done' | 'error' = 'heights'
@@ -211,6 +272,8 @@ export function createDemTerrainMeshBuilder(
       positions[index * 3] = x
       positions[index * 3 + 1] = height
       positions[index * 3 + 2] = z
+      uvs[index * 2] = col / Math.max(1, cols - 1)
+      uvs[index * 2 + 1] = row / Math.max(1, rows - 1)
       const left = heights[row * cols + Math.max(0, col - 1)]!
       const right = heights[row * cols + Math.min(cols - 1, col + 1)]!
       const up = heights[Math.max(0, row - 1) * cols + col]!
@@ -276,6 +339,7 @@ export function createDemTerrainMeshBuilder(
             geometry = new THREE.BufferGeometry()
             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
             geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+            geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
             geometry.setIndex(new THREE.BufferAttribute(indices, 1))
             geometry.computeBoundingSphere()
             geometry.computeBoundingBox()

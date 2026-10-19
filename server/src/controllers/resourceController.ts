@@ -66,6 +66,7 @@ import {
   type ParsedTerrainPackArchive,
 } from '@/services/terrainPackService'
 import { buildTerrainDemRuntimeGrid } from '@/services/terrainDemRuntimeGridService'
+import { buildTerrainDemRuntimeOrtho } from '@/services/terrainDemRuntimeOrthoService'
 import {
   TERRAIN_DEM_STORAGE_LAYOUT,
   readTerrainPackAssetMetadata,
@@ -2633,6 +2634,7 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
     const existingMetadata = readTerrainPackAssetMetadata(
       (existingMaster.metadata as Record<string, unknown> | undefined)?.terrainPack,
     )
+    let runtimeOrthoMetadataUpdated = false
     if (
       parsedArchive.kind === 'dem'
       && (
@@ -2647,6 +2649,61 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       && !existingMetadata?.runtimeGridUrl
     ) {
       ctx.throw(409, '该 DEM 资源包是旧版本，缺少 runtime grid；请删除旧资产后重新上传。')
+    }
+    if (
+      parsedArchive.kind === 'dem'
+      && parsedArchive.sidecar?.ortho
+      && existingMetadata?.packKey
+      && !existingMetadata.runtimeOrthoUrl
+    ) {
+      const orthoFile = parsedArchive.summary.orthoFile
+      const orthoBytes = orthoFile
+        ? parsedArchive.entryByPath.get(orthoFile.toLowerCase())
+        : null
+      if (!orthoFile || !orthoBytes) {
+        ctx.throw(400, `DEM 资源包缺少正射影像 ${parsedArchive.sidecar.ortho.file}。`)
+      }
+      let runtimeOrtho: Awaited<ReturnType<typeof buildTerrainDemRuntimeOrtho>>
+      try {
+        runtimeOrtho = await buildTerrainDemRuntimeOrtho({
+          orthoBytes: orthoBytes!,
+          sidecar: parsedArchive.sidecar,
+        })
+      } catch (error) {
+        ctx.throw(
+          400,
+          error instanceof Error ? error.message : 'DEM runtime orthophoto generation failed',
+        )
+      }
+      const runtimeOrthoFile = 'runtime/ortho-rgb.bin'
+      const storedRuntimeOrtho = await storeBufferAtExactKey(runtimeOrtho.bytes, {
+        fileKey: `${existingMetadata.packKey}/${runtimeOrthoFile}`,
+        mimeType: 'application/octet-stream',
+      })
+      existingMetadata.runtimeOrthoFile = runtimeOrthoFile
+      existingMetadata.runtimeOrthoUrl = storedRuntimeOrtho.url
+      existingMetadata.runtimeOrthoBytes = runtimeOrtho.bytes.byteLength
+      existingMetadata.runtimeOrthoFormat = 'hort-v1'
+      existingMetadata.runtimeOrthoCompression = 'deflate'
+      existingMetadata.runtimeOrthoWidth = runtimeOrtho.ortho.width
+      existingMetadata.runtimeOrthoHeight = runtimeOrtho.ortho.height
+      existingMetadata.warnings = [
+        ...(existingMetadata.warnings ?? []),
+        ...runtimeOrtho.warnings,
+      ]
+      await AssetModel.findByIdAndUpdate(existingMaster._id as Types.ObjectId, {
+        $set: {
+          'metadata.terrainPack.runtimeOrthoFile': existingMetadata.runtimeOrthoFile,
+          'metadata.terrainPack.runtimeOrthoUrl': existingMetadata.runtimeOrthoUrl,
+          'metadata.terrainPack.runtimeOrthoBytes': existingMetadata.runtimeOrthoBytes,
+          'metadata.terrainPack.runtimeOrthoFormat': existingMetadata.runtimeOrthoFormat,
+          'metadata.terrainPack.runtimeOrthoCompression': existingMetadata.runtimeOrthoCompression,
+          'metadata.terrainPack.runtimeOrthoWidth': existingMetadata.runtimeOrthoWidth,
+          'metadata.terrainPack.runtimeOrthoHeight': existingMetadata.runtimeOrthoHeight,
+          'metadata.terrainPack.warnings': existingMetadata.warnings,
+        },
+      }).exec()
+      runtimeOrthoMetadataUpdated = true
     }
     const existingCategory = await AssetCategoryModel.findById(existingMaster.categoryId).exec()
     let reusableAsset = existingMaster
@@ -2674,6 +2731,16 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       }
       reusableAsset = repairedAsset
     }
+    if (runtimeOrthoMetadataUpdated) {
+      const refreshedAsset = await AssetModel.findById(existingMaster._id)
+        .populate('tags')
+        .populate('seriesId')
+        .lean()
+        .exec() as LeanAsset | null
+      if (refreshedAsset) {
+        reusableAsset = refreshedAsset
+      }
+    }
     await refreshManifest()
     ctx.body = {
       reused: true,
@@ -2693,6 +2760,16 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
               bytes: existingMetadata.runtimeGridBytes ?? null,
               format: existingMetadata.runtimeGridFormat ?? null,
               compression: existingMetadata.runtimeGridCompression ?? null,
+            }
+          : null,
+        runtimeOrtho: existingMetadata?.runtimeOrthoUrl
+          ? {
+              url: existingMetadata.runtimeOrthoUrl,
+              bytes: existingMetadata.runtimeOrthoBytes ?? null,
+              format: existingMetadata.runtimeOrthoFormat ?? null,
+              compression: existingMetadata.runtimeOrthoCompression ?? null,
+              width: existingMetadata.runtimeOrthoWidth ?? null,
+              height: existingMetadata.runtimeOrthoHeight ?? null,
             }
           : null,
       },
@@ -2738,6 +2815,15 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       compression: 'deflate'
       filledRatio: number
     } | null = null
+    let runtimeOrthoMetadata: {
+      file: string
+      url: string
+      bytes: number
+      format: 'hort-v1'
+      compression: 'deflate'
+      width: number
+      height: number
+    } | null = null
     let runtimeWarnings: string[] = []
     if (parsedArchive.kind === 'dem' && parsedArchive.sidecar) {
       const demFile = parsedArchive.summary.demFile
@@ -2769,6 +2855,44 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
         filledRatio: runtimeGrid.grid.filledRatio,
       }
       runtimeWarnings = runtimeGrid.warnings
+
+      if (parsedArchive.sidecar.ortho) {
+        const orthoFile = parsedArchive.summary.orthoFile
+        const orthoBytes = orthoFile
+          ? parsedArchive.entryByPath.get(orthoFile.toLowerCase())
+          : null
+        if (!orthoFile || !orthoBytes) {
+          ctx.throw(400, `DEM 资源包缺少正射影像 ${parsedArchive.sidecar.ortho.file}。`)
+        }
+        let runtimeOrtho: Awaited<ReturnType<typeof buildTerrainDemRuntimeOrtho>>
+        try {
+          runtimeOrtho = await buildTerrainDemRuntimeOrtho({
+            orthoBytes: orthoBytes!,
+            sidecar: parsedArchive.sidecar,
+          })
+        } catch (error) {
+          ctx.throw(
+            400,
+            error instanceof Error ? error.message : 'DEM runtime orthophoto generation failed',
+          )
+        }
+        const runtimeOrthoFile = 'runtime/ortho-rgb.bin'
+        const storedRuntimeOrtho = await storeBufferAtExactKey(runtimeOrtho.bytes, {
+          fileKey: `${packKey}/${runtimeOrthoFile}`,
+          mimeType: 'application/octet-stream',
+        })
+        writtenFileKeys.push(storedRuntimeOrtho.fileKey)
+        runtimeOrthoMetadata = {
+          file: runtimeOrthoFile,
+          url: storedRuntimeOrtho.url,
+          bytes: runtimeOrtho.bytes.byteLength,
+          format: 'hort-v1',
+          compression: 'deflate',
+          width: runtimeOrtho.ortho.width,
+          height: runtimeOrtho.ortho.height,
+        }
+        runtimeWarnings.push(...runtimeOrtho.warnings)
+      }
     }
 
     // Create the visible category only after the potentially long unpack,
@@ -2803,6 +2927,7 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
       archive: parsedArchive,
       packKey,
       runtimeGrid: runtimeGridMetadata,
+      runtimeOrtho: runtimeOrthoMetadata,
     })
     primaryMetadata.warnings = packWarnings
     const primaryAsset = await AssetModel.create({
@@ -2853,6 +2978,9 @@ export async function uploadTerrainPack(ctx: Context): Promise<void> {
         warnings: packWarnings,
         runtimeGrid: runtimeGridMetadata
           ? { ...runtimeGridMetadata }
+          : null,
+        runtimeOrtho: runtimeOrthoMetadata
+          ? { ...runtimeOrthoMetadata }
           : null,
       },
     }

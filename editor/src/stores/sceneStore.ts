@@ -13258,7 +13258,11 @@ export const useSceneStore = defineStore('scene', {
       const node = findNodeById(this.nodes, id)
       return node?.locked ?? false
     },
-    setNodeSelectionLock(id: string, locked: boolean) {
+    setNodeSelectionLock(
+      id: string,
+      locked: boolean,
+      options: { preserveSelection?: boolean } = {},
+    ) {
       if ((id === GROUND_NODE_ID || id === ENVIRONMENT_NODE_ID) && !locked) {
         return
       }
@@ -13276,19 +13280,26 @@ export const useSceneStore = defineStore('scene', {
       if (!updated) {
         return
       }
-      if (locked && this.selectedNodeIds.includes(id)) {
+      if (
+        locked
+        && !options.preserveSelection
+        && this.selectedNodeIds.includes(id)
+      ) {
         const nextSelection = this.selectedNodeIds.filter((selectedId) => selectedId !== id)
         this.setSelection(nextSelection)
       }
       this.queueSceneNodePatch(id, ['lock'])
       commitSceneSnapshot(this)
     },
-    toggleNodeSelectionLock(id: string) {
+    toggleNodeSelectionLock(
+      id: string,
+      options: { preserveSelection?: boolean } = {},
+    ) {
       if (id === GROUND_NODE_ID || id === ENVIRONMENT_NODE_ID) {
         return
       }
       const next = !this.isNodeSelectionLocked(id)
-      this.setNodeSelectionLock(id, next)
+      this.setNodeSelectionLock(id, next, options)
     },
     setAllNodesSelectionLock(
       locked: boolean,
@@ -13733,6 +13744,8 @@ export const useSceneStore = defineStore('scene', {
         assetId: placementAsset.id,
         runtimeGridUrl: metadata.runtimeGridUrl,
         runtimeGridBytes: metadata.runtimeGridBytes ?? null,
+        runtimeOrthoUrl: metadata.runtimeOrthoUrl ?? null,
+        runtimeOrthoBytes: metadata.runtimeOrthoBytes ?? null,
         sampleStep: 'auto' as const,
         sourceZipName: metadata.sourceZipName ?? null,
         width: metadata.demWidth ?? null,

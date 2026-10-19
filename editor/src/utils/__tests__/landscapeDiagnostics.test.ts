@@ -161,6 +161,11 @@ describe('landscape diagnostics', () => {
       demSampleStep: 4,
       demBuildMs: 120,
       demError: null,
+      demOrthoStatus: 'ready',
+      demOrthoBytes: 3 * 1024 * 1024,
+      demOrthoWidth: 1024,
+      demOrthoHeight: 1024,
+      demOrthoError: null,
       demTransformWarning: null,
       demMeshBytes: 10 * 1024 * 1024,
     }

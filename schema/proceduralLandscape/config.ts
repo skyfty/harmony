@@ -21,6 +21,9 @@ export interface ProceduralLandscapeDemProps {
   /** Preprocessed, deflate-compressed runtime grid URL. */
   runtimeGridUrl: string | null
   runtimeGridBytes: number | null
+  /** Upload-time generated orthophoto texture (`hort-v1`). */
+  runtimeOrthoUrl: string | null
+  runtimeOrthoBytes: number | null
   sampleStep: ProceduralLandscapeDemSampleStep
   sourceZipName: string | null
   width: number | null
@@ -222,6 +225,16 @@ export interface ProceduralLandscapeComponentProps {
   debug: ProceduralLandscapeDebugProps
 }
 
+export function shouldLoadProceduralLandscapeOrtho(
+  props: Pick<ProceduralLandscapeComponentProps, 'dem' | 'surface'>,
+): boolean {
+  return Boolean(
+    props.dem.runtimeOrthoUrl
+    && props.surface.enabled
+    && props.surface.baseMapMode === 'blend',
+  )
+}
+
 export interface ProceduralLandscapeQualityTier {
   viewDistance: number
   treeNearDistance: number
@@ -373,6 +386,8 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       assetId: null,
       runtimeGridUrl: null,
       runtimeGridBytes: null,
+      runtimeOrthoUrl: null,
+      runtimeOrthoBytes: null,
       sampleStep: 'auto',
       sourceZipName: null,
       width: null,
@@ -558,6 +573,10 @@ export function clampProceduralLandscapeProps(
         ? dem.runtimeGridUrl.trim()
         : null,
       runtimeGridBytes: clampNullableNumber(dem?.runtimeGridBytes, null, 0, Number.MAX_SAFE_INTEGER),
+      runtimeOrthoUrl: typeof dem?.runtimeOrthoUrl === 'string' && dem.runtimeOrthoUrl.trim().length
+        ? dem.runtimeOrthoUrl.trim()
+        : null,
+      runtimeOrthoBytes: clampNullableNumber(dem?.runtimeOrthoBytes, null, 0, Number.MAX_SAFE_INTEGER),
       sampleStep: demSampleStep,
       sourceZipName: typeof dem?.sourceZipName === 'string' && dem.sourceZipName.trim().length
         ? dem.sourceZipName.trim()

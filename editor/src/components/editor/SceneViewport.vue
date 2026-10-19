@@ -328,6 +328,7 @@ import {
   createLandscapeRoadPathVertexRenderer,
   type LandscapeRoadPathVertexHandlePickResult,
 } from './LandscapeRoadPathVertexRenderer'
+import { canEditLandscapeRoadWaypoints } from './landscapeRoadEditPolicy'
 import { createBoundaryWallLoopRenderer } from './BoundaryWallLoopRenderer'
 import { createModelCollisionFaceOverlayRenderer } from './ModelCollisionFaceOverlayRenderer'
 import { createDisplayBoardCornerHandleRenderer, type DisplayBoardCornerHandlePickResult } from './DisplayBoardCornerHandleRenderer'
@@ -358,6 +359,10 @@ import {
   sampleProceduralLandscapeTerrainHeight,
   setProceduralLandscapeEnvironment,
 } from '@schema/proceduralLandscape/runtime'
+import {
+  ROAD_WAYPOINT_SNAP_RADIUS,
+  SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
+} from '@schema/proceduralLandscape/officialScenicRoad'
 import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
 import type { ProceduralLandscapeComponentProps } from '@schema/proceduralLandscape/config'
 import { collectTerrainMeshSources } from '@schema/proceduralLandscape/terrainSampler'
@@ -2508,17 +2513,12 @@ function resolveEditableLandscapeRoadNode(nodeId: string | null | undefined): Sc
     return null
   }
   const node = findSceneNode(sceneStore.nodes, nodeId)
-  if (!node) {
+  if (!canEditLandscapeRoadWaypoints(node, {
+    hasRuntimeObject: objectMap.has(nodeId),
+  })) {
     return null
   }
-  const component = node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]
-  if (!component) {
-    return null
-  }
-  if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
-    return null
-  }
-  return objectMap.has(nodeId) ? node : null
+  return node
 }
 
 function resolveEditableWaterNode(nodeId: string | null | undefined): SceneNode | null {
@@ -2641,6 +2641,7 @@ function clearLandscapeRoadEditMode(): void {
   landscapeRoadPathSelectedIndex = null
   landscapeRoadPathVertexRenderer.clearHover()
   landscapeRoadPathVertexRenderer.clear()
+  clearLandscapeRoadPlacementNotice()
 }
 
 function clearWaterEditMode(): void {
@@ -7489,6 +7490,35 @@ const LANDSCAPE_ROAD_WAYPOINT_INSERT_DISTANCE = 8
 /** Height-field ray march fallback: growth-limited step and far distance. */
 const LANDSCAPE_ROAD_SURFACE_MARCH_MAX_STEP = 64
 const LANDSCAPE_ROAD_SURFACE_MARCH_FAR_DEFAULT = 20000
+const LANDSCAPE_ROAD_PLACEMENT_NOTICE_DURATION_MS = 2500
+
+const landscapeRoadPlacementNotice = ref<{
+  text: string
+  tone: 'info' | 'error'
+} | null>(null)
+let landscapeRoadPlacementNoticeTimer: number | null = null
+
+function clearLandscapeRoadPlacementNotice(): void {
+  if (landscapeRoadPlacementNoticeTimer != null) {
+    window.clearTimeout(landscapeRoadPlacementNoticeTimer)
+    landscapeRoadPlacementNoticeTimer = null
+  }
+  landscapeRoadPlacementNotice.value = null
+}
+
+function showLandscapeRoadPlacementNotice(
+  text: string,
+  tone: 'info' | 'error' = 'info',
+): void {
+  if (landscapeRoadPlacementNoticeTimer != null) {
+    window.clearTimeout(landscapeRoadPlacementNoticeTimer)
+  }
+  landscapeRoadPlacementNotice.value = { text, tone }
+  landscapeRoadPlacementNoticeTimer = window.setTimeout(() => {
+    landscapeRoadPlacementNotice.value = null
+    landscapeRoadPlacementNoticeTimer = null
+  }, LANDSCAPE_ROAD_PLACEMENT_NOTICE_DURATION_MS)
+}
 
 function cloneLandscapeRoadLocalWaypoints(
   node: SceneNode | null | undefined,
@@ -7706,10 +7736,35 @@ function tryAppendLandscapeRoadWaypoint(event: PointerEvent): boolean {
     surfaceWorld.x,
     surfaceWorld.z,
   )
-  if (!resolved) {
+  if (!resolved.ok) {
+    const maxSlopePercent = Math.round(
+      SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 100,
+    )
+    const messages = {
+      'terrain-grid-not-ready': '地形网格尚未加载完成，请稍后重试。',
+      'outside-terrain': '点击位置不在地形可编辑范围内。',
+      'too-steep': `此处局部坡度超过 ${maxSlopePercent}%，附近 ${ROAD_WAYPOINT_SNAP_RADIUS}m 内没有可铺设点。`,
+      'no-snapped-candidate': `附近 ${ROAD_WAYPOINT_SNAP_RADIUS}m 内没有可铺设的地形。`,
+      'coordinate-conversion-failed': '无法解析该位置，请重新点击。',
+    } satisfies Record<typeof resolved.failureReason, string>
+    showLandscapeRoadPlacementNotice(
+      messages[resolved.failureReason],
+      'error',
+    )
     return false
   }
-  const local = { x: resolved.localX, z: resolved.localZ }
+  if (resolved.snapped) {
+    showLandscapeRoadPlacementNotice(
+      `已吸附到附近 ${Math.max(1, Math.round(resolved.placement.distanceFromClick))}m 的可行位置。`,
+      'info',
+    )
+  } else {
+    clearLandscapeRoadPlacementNotice()
+  }
+  const local = {
+    x: resolved.placement.localX,
+    z: resolved.placement.localZ,
+  }
   const base = cloneLandscapeRoadLocalWaypoints(node)
   const insertIndex = findLandscapeRoadInsertionIndex(local.x, local.z, base) ?? base.length
   const next = base.slice()
@@ -14342,11 +14397,11 @@ function pickSceneNodeAtPointerIncludingHiddenLandform(
 }
 
 function handleViewportDoubleClickNode(nodeId: string, hitPointWorld: THREE.Vector3 | null = null): void {
-  if (sceneStore.isNodeSelectionLocked(nodeId)) {
+  const toolForNode = resolveBuildToolForNodeId(nodeId)
+  if (sceneStore.isNodeSelectionLocked(nodeId) && toolForNode !== 'landscapeRoad') {
     return
   }
   const wasAlreadySingleSelected = sceneStore.selectedNodeIds.length === 1 && sceneStore.selectedNodeIds[0] === nodeId
-  const toolForNode = resolveBuildToolForNodeId(nodeId)
 
   // Anchor the transform gizmo on the picked point for expanded imported-model
   // nodes; their geometry is baked far away from the node origin.
@@ -16980,7 +17035,7 @@ function tryEnterNodeBuildToolEditMode(nodeId: string, toolForNode: BuildTool | 
   }
   const hitNode: any = resolveSceneNodeById(nodeId)
   const nodeLocked = Boolean(hitNode?.locked) || sceneStore.isNodeSelectionLocked(nodeId)
-  if (nodeLocked) {
+  if (nodeLocked && toolForNode !== 'landscapeRoad') {
     return false
   }
 
@@ -25233,6 +25288,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearLandscapeRoadPlacementNotice()
   setGroundTextureSourceResolver(null)
   slowroadsEnvironment?.dispose()
   slowroadsEnvironment = null
@@ -25968,6 +26024,19 @@ defineExpose({
       </div>
       <div class="camera-status-hud">
         <Transition name="camera-hints-slide">
+          <div
+            v-if="landscapeRoadPlacementNotice"
+            class="camera-status-hud__hints camera-status-hud__hints--road-notice"
+            :class="{ 'camera-status-hud__hints--road-notice-error': landscapeRoadPlacementNotice.tone === 'error' }"
+            role="status"
+          >
+            <div class="camera-status-hud__hint-row">
+              <span class="camera-status-hud__hint-label">公路</span>
+              <span class="camera-status-hud__hint-text">{{ landscapeRoadPlacementNotice.text }}</span>
+            </div>
+          </div>
+        </Transition>
+        <Transition name="camera-hints-slide">
           <div v-if="showCameraHintsOpen && activeToolUsageHints" class="camera-status-hud__hints camera-status-hud__hints--tool-usage">
             <div class="camera-status-hud__hint-row camera-status-hud__hint-row--title">
               <span class="camera-status-hud__hint-label">当前</span>
@@ -26535,6 +26604,17 @@ defineExpose({
 .camera-status-hud__hints--tool-usage {
   border-color: rgba(134, 218, 255, 0.22);
   background: rgba(10, 18, 25, 0.34);
+}
+
+.camera-status-hud__hints--road-notice {
+  min-width: 0;
+  border-color: rgba(129, 212, 160, 0.42);
+  background: rgba(12, 30, 21, 0.72);
+}
+
+.camera-status-hud__hints--road-notice-error {
+  border-color: rgba(255, 138, 128, 0.52);
+  background: rgba(42, 16, 16, 0.78);
 }
 
 .camera-hints-slide-enter-active,

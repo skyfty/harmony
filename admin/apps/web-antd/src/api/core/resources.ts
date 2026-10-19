@@ -213,6 +213,14 @@ export interface ResourcePackSummary {
     format: string | null;
     compression: string | null;
   } | null;
+  runtimeOrtho?: {
+    url: string;
+    bytes: number | null;
+    format: string | null;
+    compression: string | null;
+    width: number | null;
+    height: number | null;
+  } | null;
 }
 
 export interface ResourcePackUploadResult {

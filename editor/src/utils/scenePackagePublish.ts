@@ -72,6 +72,7 @@ import {
 } from '@/utils/sceneCompiledGroundCache'
 import type { SceneAssetReferenceSummary } from './sceneAssetDiagnostics'
 import { buildSceneAssetReferenceSummaryMap } from './sceneAssetDiagnostics'
+import { stripInactiveDemOrthoReferences } from './demOrthoPublish'
 
 interface ScenePackagePublishProjectConfig {
   id: string
@@ -1436,6 +1437,7 @@ function stripPublishSceneDocument(
   preparedDocument: ScenePackagePublishSceneDocument,
 ): void {
   stripGroundRuntimeUserData(resolveDocumentGroundNode(preparedDocument))
+  stripInactiveDemOrthoReferences(preparedDocument)
   stripEditorOnlySceneFields(preparedDocument, collectRuntimeRetainedConfigAssetIds(preparedDocument))
 }
 

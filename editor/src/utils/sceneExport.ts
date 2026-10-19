@@ -20,6 +20,7 @@ import { validateSceneAssetReferences } from '@/utils/sceneAssetDiagnostics'
 import { fetchResourceAsset } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset } from '@/api/serverAssetTypes'
 import { buildProceduralLandscapeTexturePreload } from '@/utils/proceduralLandscapePreload'
+import { stripInactiveDemOrthoReferences } from '@/utils/demOrthoPublish'
 
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { buildOutlineMeshFromObject } from '@/utils/outlineMesh'
@@ -473,6 +474,7 @@ async function sanitizeSceneDocumentForJsonExport(
     ...document,
     nodes: sanitizedNodes,
   }
+  stripInactiveDemOrthoReferences(sanitizedDocument)
   sanitizedDocument.loadProgressHints = countSceneLoadProgressHints(sanitizedNodes)
   const assetPreload = buildSceneAssetPreloadInfo(sanitizedDocument, options)
   if (assetPreload) {

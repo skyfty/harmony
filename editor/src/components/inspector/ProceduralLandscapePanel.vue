@@ -81,6 +81,31 @@ const propsValue = computed<ProceduralLandscapeComponentProps | null>(() => {
   return clampProceduralLandscapeProps(component.props, selectedNodeId.value ?? '')
 })
 
+const aerialBaseMapAvailable = computed(() => {
+  const dem = propsValue.value?.dem
+  if (!dem) {
+    return false
+  }
+  return !dem.assetId || Boolean(dem.runtimeOrthoUrl)
+})
+
+const demOrthoStatusText = computed(() => {
+  const stats = runtimeStats.value
+  if (!stats || !propsValue.value?.dem.assetId) {
+    return ''
+  }
+  if (stats.demOrthoStatus === 'loading') {
+    return '航拍底图加载中…'
+  }
+  if (stats.demOrthoStatus === 'ready') {
+    return `航拍底图已加载${stats.demOrthoWidth > 0 ? ` · ${stats.demOrthoWidth}×${stats.demOrthoHeight}` : ''}`
+  }
+  if (stats.demOrthoStatus === 'error') {
+    return `航拍底图加载失败：${stats.demOrthoError ?? '未知错误'}`
+  }
+  return ''
+})
+
 type LandscapeGroup = keyof ProceduralLandscapeComponentProps
 
 function patch(patchValue: Partial<Record<string, unknown>>): void {
@@ -457,12 +482,12 @@ const samplingBlocks: FieldBlock[] = [
 const roadPathBlock = computed<FieldBlock>(() => ({
   title: '途径约束',
   hint: routeTermination.value === 'loop'
-    ? '按顺序经过全部途径点，并自动回到 P1；单点闭环由种子生成自然路线。'
+    ? '按顺序经过全部途径点，并自动回到 P1；点击按地形边界与局部坡度校验，不可用位置在 50m 内吸附。'
     : routeTermination.value === 'dead-end'
-      ? '按顺序经过全部途径点，并在最后一个途径点结束，不追加边界段。'
+      ? '按顺序经过全部途径点，并在最后一个途径点结束；点击按地形边界与局部坡度校验，不可用位置在 50m 内吸附。'
     : routeStrategy.value === 'seeded'
-      ? 'P1 是起点，P2…Pn 全部按顺序经过；点击不满足低地/缓坡条件时会在 500m 内自动吸附，无法安全到达时生成失败并保留旧路。'
-      : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界。',
+      ? 'P1 是起点，P2…Pn 全部按顺序经过；低地偏好只影响自然观光选线，不限制途经点高程。不可用位置在 50m 内吸附。'
+      : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界；点击按地形边界与局部坡度校验，不可用位置在 50m 内吸附。',
   rows: [[
     { key: 'waypointTolerance', label: '途径容差', suffix: 'm', step: 1 },
   ]],
@@ -908,6 +933,9 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             >清除公路</button>
           </div>
           <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
+          <div v-if="selectedNode?.locked" class="pl-hint">
+            节点已锁定：节点变换与普通视口选择受限，公路途经点仍可编辑。
+          </div>
 
           <div class="pl-subtitle">选线策略</div>
           <div class="pl-choice-row">
@@ -1150,11 +1178,12 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             <button
               type="button"
               class="pl-choice"
-              :class="{ 'pl-choice--active': propsValue.surface.baseMapMode !== 'blend' }"
+              :class="{ 'pl-choice--active': !aerialBaseMapAvailable || propsValue.surface.baseMapMode !== 'blend' }"
               :disabled="!componentEnabled"
               @click="patchGroup('surface', { baseMapMode: 'replace' })"
             >官方覆盖</button>
             <button
+              v-if="aerialBaseMapAvailable"
               type="button"
               class="pl-choice"
               :class="{ 'pl-choice--active': propsValue.surface.baseMapMode === 'blend' }"
@@ -1163,7 +1192,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             >叠加航拍底图</button>
           </div>
           <v-slider
-            v-if="propsValue.surface.baseMapMode === 'blend'"
+            v-if="aerialBaseMapAvailable && propsValue.surface.baseMapMode === 'blend'"
             :model-value="propsValue.surface.baseMapBlend"
             :min="0"
             :max="1"
@@ -1175,6 +1204,12 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             label="底图混合强度"
             @update:model-value="(value) => patchGroup('surface', { baseMapBlend: Number(value) })"
           />
+          <div v-if="!aerialBaseMapAvailable" class="pl-hint">
+            当前 DEM 资源包没有运行时正射影像；如需航拍底图，请重新上传资源包并重建地形节点。
+          </div>
+          <div v-else-if="propsValue.surface.baseMapMode === 'blend' && demOrthoStatusText" class="pl-hint">
+            {{ demOrthoStatusText }}
+          </div>
         </div>
 
         <!-- 植被与其他要素 -->

@@ -17,7 +17,9 @@ import {
 import {
   createDemTerrainHeightGrid,
   createDemTerrainMeshBuilder,
+  createTerrainDemRuntimeOrthoTexture,
   loadTerrainDemRuntimeGrid,
+  loadTerrainDemRuntimeOrtho,
   type DemTerrainMeshBuilder,
 } from './demTerrain'
 import type { TerrainDemRuntimeGridData } from '../terrainDemRuntimeGrid'
@@ -147,6 +149,7 @@ import {
   resolveProceduralLandscapeQuality,
   roadFlattenParams,
   roadHalfWidth,
+  shouldLoadProceduralLandscapeOrtho,
   type ProceduralLandscapeComponentProps,
   type ProceduralLandscapeEnvironment,
   type ProceduralLandscapeGeneratedRouteProps,
@@ -159,9 +162,11 @@ import {
   type WaypointRoadPlanResult,
 } from './proceduralRoad'
 import {
+  resolveRoadWaypointPlacement,
   resolveLowlandScenicStart,
-  resolveLowlandScenicWaypoint,
+  ROAD_WAYPOINT_SNAP_RADIUS,
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
+  type RoadWaypointPlacementFailureReason,
   type ScenicWaypointPlacement,
 } from './officialScenicRoad'
 import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
@@ -360,6 +365,11 @@ export interface ProceduralLandscapeRuntimeStats {
   demSampleStep: number
   demBuildMs: number
   demError: string | null
+  demOrthoStatus: 'unavailable' | 'idle' | 'loading' | 'ready' | 'error'
+  demOrthoBytes: number | null
+  demOrthoWidth: number
+  demOrthoHeight: number
+  demOrthoError: string | null
   /** DEM nodes are translation-only; non-identity rotation/scale is reported here. */
   demTransformWarning: string | null
   /** GPU-bound position/normal/index bytes of the generated DEM mesh. */
@@ -402,7 +412,7 @@ export interface ProceduralLandscapeRuntime {
     worldX: number,
     worldZ: number,
     maxRadius?: number,
-  ): ProceduralLandscapeScenicWaypointResolution | null
+  ): ProceduralLandscapeWaypointResolutionResult
   /**
    * Runtime height-field sampling in world XZ (null when the grid is not
    * ready yet or the point lies outside the rasterized coverage).
@@ -422,6 +432,22 @@ export interface ProceduralLandscapeScenicWaypointResolution extends ScenicWaypo
   localX: number
   localZ: number
 }
+
+export type ProceduralLandscapeWaypointResolutionFailureReason =
+  | RoadWaypointPlacementFailureReason
+  | 'terrain-grid-not-ready'
+  | 'coordinate-conversion-failed'
+
+export type ProceduralLandscapeWaypointResolutionResult =
+  | {
+      ok: true
+      placement: ProceduralLandscapeScenicWaypointResolution
+      snapped: boolean
+    }
+  | {
+      ok: false
+      failureReason: ProceduralLandscapeWaypointResolutionFailureReason
+    }
 
 let currentEnvironment: ProceduralLandscapeEnvironment = 'preview'
 let currentDeviceProfile: ProceduralLandscapeDeviceProfile | null = null
@@ -488,9 +514,12 @@ export function resolveProceduralLandscapeScenicWaypointLocal(
   worldX: number,
   worldZ: number,
   maxRadius?: number,
-): ProceduralLandscapeScenicWaypointResolution | null {
+): ProceduralLandscapeWaypointResolutionResult {
   const runtime = runtimeRegistry.get(nodeId)
-  return runtime?.resolveScenicWaypointLocal(worldX, worldZ, maxRadius) ?? null
+  if (!runtime) {
+    return { ok: false, failureReason: 'terrain-grid-not-ready' }
+  }
+  return runtime.resolveScenicWaypointLocal(worldX, worldZ, maxRadius)
 }
 
 export function validateProceduralLandscapeGeneratedRoute(
@@ -563,6 +592,7 @@ export function resolveDemRoadbedSignature(
   return jsonKey([
     props.dem.assetId,
     props.dem.runtimeGridUrl,
+    props.dem.runtimeOrthoUrl,
     options.sampleStep,
     options.cellSize,
     props.generationRevision,
@@ -753,7 +783,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let props = clampProceduralLandscapeProps(null, hooks.nodeId)
   let previousKeys = {
     grid: jsonKey(props.sampling),
-    dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
+    dem: jsonKey([
+      props.dem.assetId,
+      props.dem.runtimeGridUrl,
+      props.dem.runtimeOrthoUrl,
+      props.dem.sampleStep,
+    ]),
     world: jsonKey([
       props.seed,
       props.generationRevision,
@@ -834,6 +869,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demLoadPromise: Promise<void> | null = null
   let demLoadToken = 0
   let demSourceKey = ''
+  let demOrthoTexture: THREE.DataTexture | null = null
+  let demOrthoLoadPromise: Promise<void> | null = null
+  let demOrthoLoadToken = 0
+  let demOrthoSourceKey = ''
   let demBuildStartedAt = 0
   let demBuildMs = 0
   let demTransformWarning: string | null = null
@@ -1051,6 +1090,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demSampleStep: 1,
     demBuildMs: 0,
     demError: null,
+    demOrthoStatus: 'unavailable',
+    demOrthoBytes: null,
+    demOrthoWidth: 0,
+    demOrthoHeight: 0,
+    demOrthoError: null,
     demTransformWarning: null,
     demMeshBytes: 0,
   }
@@ -1200,6 +1244,102 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demMeshBuilder = null
   }
 
+  function disposeDemOrthoTexture(): void {
+    demOrthoLoadToken += 1
+    demOrthoLoadPromise = null
+    demOrthoTexture?.dispose()
+    demOrthoTexture = null
+    demOrthoSourceKey = ''
+    stats.demOrthoStatus = props.dem.runtimeOrthoUrl ? 'idle' : 'unavailable'
+    stats.demOrthoBytes = props.dem.runtimeOrthoBytes ?? null
+    stats.demOrthoWidth = 0
+    stats.demOrthoHeight = 0
+    stats.demOrthoError = null
+  }
+
+  function syncDemOrthoTextureBinding(): void {
+    if (!demMesh) {
+      return
+    }
+    const shouldBind = Boolean(
+      enabled
+      && props.surface.enabled
+      && props.surface.baseMapMode === 'blend'
+      && demOrthoTexture,
+    )
+    const materials = Array.isArray(demMesh.material)
+      ? demMesh.material
+      : [demMesh.material]
+    for (const material of materials) {
+      const mapped = material as THREE.MeshLambertMaterial
+      const nextMap = shouldBind ? demOrthoTexture : null
+      if (mapped.map === nextMap) {
+        continue
+      }
+      mapped.map = nextMap
+      mapped.needsUpdate = true
+    }
+  }
+
+  function ensureDemOrthoTexture(): void {
+    if (!enabled || !shouldLoadProceduralLandscapeOrtho(props)) {
+      syncDemOrthoTextureBinding()
+      if (!props.dem.runtimeOrthoUrl) {
+        stats.demOrthoStatus = 'unavailable'
+      }
+      return
+    }
+    const url = props.dem.runtimeOrthoUrl
+    if (!url) {
+      stats.demOrthoStatus = 'unavailable'
+      syncDemOrthoTextureBinding()
+      return
+    }
+    if (demOrthoTexture) {
+      stats.demOrthoStatus = 'ready'
+      syncDemOrthoTextureBinding()
+      return
+    }
+    if (demOrthoLoadPromise && demOrthoSourceKey === url) {
+      return
+    }
+    const token = ++demOrthoLoadToken
+    const key = url
+    demOrthoSourceKey = key
+    stats.demOrthoStatus = 'loading'
+    stats.demOrthoError = null
+    demOrthoLoadPromise = loadTerrainDemRuntimeOrtho(url)
+      .then((data) => {
+        if (disposed || token !== demOrthoLoadToken || key !== props.dem.runtimeOrthoUrl) {
+          return
+        }
+        const texture = createTerrainDemRuntimeOrthoTexture(
+          data,
+          `dem-ortho-${hooks.nodeId}`,
+        )
+        demOrthoTexture = texture
+        stats.demOrthoStatus = 'ready'
+        stats.demOrthoBytes = data.width * data.height * 4
+        stats.demOrthoWidth = data.width
+        stats.demOrthoHeight = data.height
+        stats.demOrthoError = null
+        syncDemOrthoTextureBinding()
+      })
+      .catch((error) => {
+        if (disposed || token !== demOrthoLoadToken) {
+          return
+        }
+        stats.demOrthoStatus = 'error'
+        stats.demOrthoError = error instanceof Error ? error.message : String(error)
+        warn(`dem-ortho-load-failed:${stats.demOrthoError}`)
+      })
+      .finally(() => {
+        if (token === demOrthoLoadToken) {
+          demOrthoLoadPromise = null
+        }
+      })
+  }
+
   function disposeDemRoadbed(): void {
     if (demRoadbedCollisionMesh) {
       demRoadbedCollisionMesh.removeFromParent()
@@ -1232,6 +1372,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demLoadToken += 1
     demLoadPromise = null
     demGridData = null
+    disposeDemOrthoTexture()
     disposeDemRoadbed()
     disposeDemMesh()
     demRoadbedSignature = ''
@@ -1251,7 +1392,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!usesDemTerrain() || demLoadPromise) {
       return
     }
-    const key = `${props.dem.assetId}|${props.dem.runtimeGridUrl}|${resolveDemSampleStep()}`
+    const key = `${props.dem.assetId}|${props.dem.runtimeGridUrl}|${props.dem.runtimeOrthoUrl}|${resolveDemSampleStep()}`
     demSourceKey = key
     const token = ++demLoadToken
     stats.demStatus = 'loading'
@@ -1362,6 +1503,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     dirty.world = false
     dirty.demMesh = false
     installSurfaceInjection()
+    syncDemOrthoTextureBinding()
+    ensureDemOrthoTexture()
     return true
   }
 
@@ -2735,6 +2878,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     uniforms.uPlFlattenStrength.value = flatten.strength
     uniforms.uPlSurfaceStrength.value = props.surface.enabled ? props.surface.blendStrength : 0
     uniforms.uPlBaseMapBlend.value = props.surface.baseMapMode === 'blend' ? props.surface.baseMapBlend : 0
+    ensureDemOrthoTexture()
     uniforms.uPlUvScale.value = props.surface.uvScale
     uniforms.uPlGrassTint.value.set(props.surface.grassTint)
     uniforms.uPlForestTint.value.set(props.surface.forestTint)
@@ -4208,7 +4352,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       props = clampProceduralLandscapeProps(next, hooks.nodeId)
       const keys = {
         grid: jsonKey(props.sampling),
-        dem: jsonKey([props.dem.assetId, props.dem.runtimeGridUrl, props.dem.sampleStep]),
+        dem: jsonKey([
+          props.dem.assetId,
+          props.dem.runtimeGridUrl,
+          props.dem.runtimeOrthoUrl,
+          props.dem.sampleStep,
+        ]),
         world: jsonKey([
           props.seed,
           props.generationRevision,
@@ -4332,6 +4481,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         forceStream = true
       }
       syncTerrainTextureStreamGate()
+      syncDemOrthoTextureBinding()
+      if (enabled) {
+        ensureDemOrthoTexture()
+      }
     },
     update(deltaTime: number): void {
       try {
@@ -4477,12 +4630,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     resolveScenicWaypointLocal(
       worldX: number,
       worldZ: number,
-      maxRadius?: number,
-    ): ProceduralLandscapeScenicWaypointResolution | null {
+      maxRadius = ROAD_WAYPOINT_SNAP_RADIUS,
+    ): ProceduralLandscapeWaypointResolutionResult {
       if (!grid || !hostObject) {
-        return null
+        return { ok: false, failureReason: 'terrain-grid-not-ready' }
       }
-      const resolved = resolveLowlandScenicWaypoint(
+      const resolved = resolveRoadWaypointPlacement(
         grid,
         worldX,
         worldZ,
@@ -4491,20 +4644,24 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
         },
       )
-      if (!resolved) {
-        return null
+      if (!resolved.ok) {
+        return resolved
       }
       hostObject.updateMatrixWorld(true)
       const local = hostObject.worldToLocal(
-        new THREE.Vector3(resolved.x, 0, resolved.z),
+        new THREE.Vector3(resolved.placement.x, 0, resolved.placement.z),
       )
       if (!Number.isFinite(local.x) || !Number.isFinite(local.z)) {
-        return null
+        return { ok: false, failureReason: 'coordinate-conversion-failed' }
       }
       return {
-        ...resolved,
-        localX: local.x,
-        localZ: local.z,
+        ok: true,
+        snapped: resolved.snapped,
+        placement: {
+          ...resolved.placement,
+          localX: local.x,
+          localZ: local.z,
+        },
       }
     },
     sampleTerrainHeight(worldX: number, worldZ: number): number | null {

@@ -11,6 +11,7 @@ import {
 import { useNodePickerStore } from '@/stores/nodePickerStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { useUiStore } from '@/stores/uiStore'
+import { useBuildToolsStore } from '@/stores/buildToolsStore'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import type { HierarchyTreeItem } from '@/types/hierarchy-tree-item'
 import type { ProjectAsset } from '@/types/project-asset'
@@ -19,6 +20,7 @@ import { isLightweightImportNode } from '@schema/core'
 import { getCachedModelObject } from '@schema/modelObjectCache'
 import { findObjectByPath } from '@schema/modelAssetLoader'
 import { isAnySteerTargetNode } from '@schema/components'
+import { shouldPreserveLandscapeRoadSelectionOnLock } from '@/components/editor/landscapeRoadEditPolicy'
 import { getNodeIcon } from '@/types/node-icons'
 import AddNodeMenu from '../common/AddNodeMenu.vue'
 import AssetReferenceSearchDialog from './AssetReferenceSearchDialog.vue'
@@ -39,7 +41,9 @@ const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
 const nodePickerStore = useNodePickerStore()
 const uiStore = useUiStore()
+const buildToolsStore = useBuildToolsStore()
 const { hierarchyItems, selectedNodeId, selectedNodeIds, draggingAssetId } = storeToRefs(sceneStore)
+const { activeBuildTool } = storeToRefs(buildToolsStore)
 
 const NODE_DRAG_LIST_MIME = 'application/x-harmony-node-list'
 const HIERARCHY_ROW_HEIGHT = 30
@@ -1223,7 +1227,16 @@ function resolveNodeVisibilityTitle(id: string) {
 }
 
 function toggleNodeSelectionLock(id: string) {
-  sceneStore.toggleNodeSelectionLock(id)
+  const node = sceneStore.getNodeById(id)
+  const willLock = !sceneStore.isNodeSelectionLocked(id)
+  const preserveSelection = shouldPreserveLandscapeRoadSelectionOnLock({
+    willLock,
+    activeBuildTool: activeBuildTool.value,
+    selectedNodeIds: selectedNodeIds.value,
+    nodeId: id,
+    node,
+  })
+  sceneStore.toggleNodeSelectionLock(id, { preserveSelection })
 }
 
 function isNodeSelectionLocked(id: string) {

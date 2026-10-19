@@ -39,6 +39,9 @@ export const SLOWROADS_SCENIC_ROAD_CONSTRAINTS = Object.freeze({
 })
 
 export const SCENIC_WAYPOINT_SNAP_RADIUS = 500
+export const ROAD_WAYPOINT_SNAP_RADIUS = 50
+const ROAD_WAYPOINT_SNAP_STEP = 10
+const ROAD_WAYPOINT_SNAP_DIRECTIONS = 24
 
 export interface ScenicWaypointPlacement {
   x: number
@@ -47,6 +50,32 @@ export interface ScenicWaypointPlacement {
   elevationPercentile: number
   gradient: number
 }
+
+export type RoadWaypointPlacementFailureReason =
+  | 'outside-terrain'
+  | 'too-steep'
+  | 'no-snapped-candidate'
+
+export interface RoadWaypointPlacementOptions {
+  /**
+   * The lowland preference is a scenic-routing score, not a hard restriction
+   * for user-authored waypoints. Lowland-specific callers can opt in here.
+   */
+  enforceLowlandPreference?: boolean
+  lowlandPreferenceCeiling?: number
+  maxCrossSlope?: number
+}
+
+export type RoadWaypointPlacementResult =
+  | {
+      ok: true
+      placement: ScenicWaypointPlacement
+      snapped: boolean
+    }
+  | {
+      ok: false
+      failureReason: RoadWaypointPlacementFailureReason
+    }
 
 export interface OfficialScenicRoadOptions {
   lowlandStartPercentile?: number
@@ -570,10 +599,154 @@ export function resolveLowlandScenicStart(
   return best
 }
 
+type WaypointCandidateEvaluation =
+  | {
+      ok: true
+      placement: ScenicWaypointPlacement
+    }
+  | {
+      ok: false
+      failureReason: RoadWaypointPlacementFailureReason | 'elevation-preference'
+    }
+
 /**
- * Keep a clicked waypoint when it already satisfies the scenic route terrain
- * conditions. Otherwise search outward in rings and return the nearest
- * elevation/grade-suitable point within the requested radius.
+ * Resolve a user-authored waypoint against physical terrain constraints.
+ *
+ * Elevation percentile is intentionally not a hard requirement here: a
+ * gentle hillside remains buildable even when it is above the scenic lowland
+ * preference ceiling. If the clicked point is invalid, search a small local
+ * ring for the nearest feasible point.
+ */
+export function resolveRoadWaypointPlacement(
+  grid: TerrainHeightGrid,
+  preferredX: number,
+  preferredZ: number,
+  maxRadius = ROAD_WAYPOINT_SNAP_RADIUS,
+  options: RoadWaypointPlacementOptions = {},
+): RoadWaypointPlacementResult {
+  const lowlandProfile = options.enforceLowlandPreference
+    ? buildScenicTerrainElevationProfile(grid)
+    : null
+  const lowlandCeiling = clamp(
+    options.lowlandPreferenceCeiling
+      ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
+    0,
+    1,
+  )
+  const maxCrossSlope = Math.max(
+    0.01,
+    options.maxCrossSlope ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+  )
+  const margin = Math.max(
+    SLOWROADS_HILLS_ROAD_PROFILE.boundaryMargin,
+    grid.cellSize * 2,
+  )
+  const evaluate = (x: number, z: number): WaypointCandidateEvaluation => {
+    if (
+      x < grid.minX + margin
+      || x > grid.maxX - margin
+      || z < grid.minZ + margin
+      || z > grid.maxZ - margin
+    ) {
+      return { ok: false, failureReason: 'outside-terrain' }
+    }
+    const height = grid.sampleHeight(x, z)
+    const gradient = sampleTerrainGradient(grid, x, z)
+    if (height == null || !gradient) {
+      return { ok: false, failureReason: 'outside-terrain' }
+    }
+    if (gradient.magnitude > maxCrossSlope + 1e-6) {
+      return { ok: false, failureReason: 'too-steep' }
+    }
+    const elevationPercentile = lowlandProfile
+      ? lowlandProfile.percentileAtHeight(height)
+      : 0
+    if (
+      lowlandProfile
+      && elevationPercentile > lowlandCeiling + 1e-6
+    ) {
+      return { ok: false, failureReason: 'elevation-preference' }
+    }
+    return {
+      ok: true,
+      placement: {
+        x,
+        z,
+        distanceFromClick: distance({ x: preferredX, z: preferredZ }, { x, z }),
+        elevationPercentile,
+        gradient: gradient.magnitude,
+      },
+    }
+  }
+  const direct = evaluate(preferredX, preferredZ)
+  if (direct.ok) {
+    return {
+      ok: true,
+      placement: direct.placement,
+      snapped: false,
+    }
+  }
+  const radiusLimit = Math.max(0, maxRadius)
+  const radialStep = lowlandProfile
+    ? Math.max(30, grid.cellSize)
+    : ROAD_WAYPOINT_SNAP_STEP
+  const rings = Math.ceil(radiusLimit / radialStep)
+  for (let ring = 1; ring <= rings; ring += 1) {
+    const radius = Math.min(radiusLimit, ring * radialStep)
+    let best: ScenicWaypointPlacement | null = null
+    let bestLowlandScore = Number.POSITIVE_INFINITY
+    for (let index = 0; index < ROAD_WAYPOINT_SNAP_DIRECTIONS; index += 1) {
+      const angle = (index / ROAD_WAYPOINT_SNAP_DIRECTIONS) * Math.PI * 2
+      const candidate = evaluate(
+        preferredX + Math.cos(angle) * radius,
+        preferredZ + Math.sin(angle) * radius,
+      )
+      if (!candidate.ok) {
+        continue
+      }
+      if (lowlandProfile) {
+        const lowlandScore =
+          candidate.placement.elevationPercentile * 0.6
+          + candidate.placement.gradient * 0.4
+        if (lowlandScore < bestLowlandScore) {
+          best = candidate.placement
+          bestLowlandScore = lowlandScore
+        }
+        continue
+      }
+      if (
+        !best
+        || candidate.placement.distanceFromClick < best.distanceFromClick
+        || (
+          candidate.placement.distanceFromClick === best.distanceFromClick
+          && candidate.placement.gradient < best.gradient
+        )
+      ) {
+        best = candidate.placement
+      }
+    }
+    if (best) {
+      return {
+        ok: true,
+        placement: best,
+        snapped: best.distanceFromClick > 1e-6,
+      }
+    }
+  }
+  return {
+    ok: false,
+    failureReason:
+      direct.failureReason === 'outside-terrain'
+        ? 'outside-terrain'
+        : direct.failureReason === 'too-steep'
+          ? 'too-steep'
+          : 'no-snapped-candidate',
+  }
+}
+
+/**
+ * Compatibility entry point for scenic lowland callers. Explicit road
+ * waypoint placement should use `resolveRoadWaypointPlacement` instead.
  */
 export function resolveLowlandScenicWaypoint(
   grid: TerrainHeightGrid,
@@ -582,74 +755,18 @@ export function resolveLowlandScenicWaypoint(
   maxRadius = SCENIC_WAYPOINT_SNAP_RADIUS,
   options: OfficialScenicRoadOptions = {},
 ): ScenicWaypointPlacement | null {
-  const profile = buildScenicTerrainElevationProfile(grid, options)
-  const constraints = resolveTerrainConstraints(options)
-  const margin = Math.max(
-    SLOWROADS_HILLS_ROAD_PROFILE.boundaryMargin,
-    grid.cellSize * 2,
+  const result = resolveRoadWaypointPlacement(
+    grid,
+    preferredX,
+    preferredZ,
+    maxRadius,
+    {
+      enforceLowlandPreference: true,
+      lowlandPreferenceCeiling: options.lowlandPreferenceCeiling,
+      maxCrossSlope: options.maxCrossSlope,
+    },
   )
-  const evaluate = (x: number, z: number): ScenicWaypointPlacement | null => {
-    if (
-      x < grid.minX + margin
-      || x > grid.maxX - margin
-      || z < grid.minZ + margin
-      || z > grid.maxZ - margin
-    ) {
-      return null
-    }
-    const height = grid.sampleHeight(x, z)
-    const gradient = sampleTerrainGradient(grid, x, z)
-    if (height == null || !gradient) {
-      return null
-    }
-    const elevationPercentile = profile.percentileAtHeight(height)
-    if (
-      elevationPercentile > constraints.lowlandPreferenceCeiling + 1e-6
-      || gradient.magnitude > constraints.maxCrossSlope + 1e-6
-    ) {
-      return null
-    }
-    return {
-      x,
-      z,
-      distanceFromClick: distance({ x: preferredX, z: preferredZ }, { x, z }),
-      elevationPercentile,
-      gradient: gradient.magnitude,
-    }
-  }
-  const direct = evaluate(preferredX, preferredZ)
-  if (direct) {
-    return direct
-  }
-  const radiusLimit = Math.max(1, maxRadius)
-  const radialStep = Math.max(30, grid.cellSize)
-  const rings = Math.ceil(radiusLimit / radialStep)
-  for (let ring = 1; ring <= rings; ring += 1) {
-    const radius = Math.min(radiusLimit, ring * radialStep)
-    let best: ScenicWaypointPlacement | null = null
-    let bestScore = Number.POSITIVE_INFINITY
-    for (let index = 0; index < 24; index += 1) {
-      const angle = (index / 24) * Math.PI * 2
-      const candidate = evaluate(
-        preferredX + Math.cos(angle) * radius,
-        preferredZ + Math.sin(angle) * radius,
-      )
-      if (!candidate) {
-        continue
-      }
-      const score =
-        candidate.elevationPercentile * 0.6
-        + candidate.gradient * 0.4
-      if (score < bestScore) {
-        best = candidate
-        bestScore = score
-      }
-    }
-    if (best) {
-      return best
-    }
-  }
-  return null
+  return result.ok ? result.placement : null
 }
 
 /**

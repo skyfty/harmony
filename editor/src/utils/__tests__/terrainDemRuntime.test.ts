@@ -10,6 +10,7 @@ import { planEndpointRoadGuide } from '@schema/proceduralLandscape/endpointPath'
 import {
   createDemTerrainHeightGrid,
   createDemTerrainMeshBuilder,
+  createTerrainDemRuntimeOrthoTexture,
 } from '@schema/proceduralLandscape/demTerrain'
 import { createDemRoadbedGeometry } from '@schema/proceduralLandscape/demRoadbed'
 import { densifyRoadRows } from '@schema/proceduralLandscape/roadBandRows'
@@ -120,6 +121,26 @@ describe('terrain DEM runtime grid', () => {
     expect(builder.vertexCount).toBe(9)
     expect(builder.triangleCount).toBe(8)
     expect(builder.geometry?.getAttribute('position').count).toBe(9)
+    const uv = builder.geometry?.getAttribute('uv')
+    expect(uv?.count).toBe(9)
+    expect([uv?.getX(0), uv?.getY(0)]).toEqual([0, 0])
+    expect([uv?.getX(8), uv?.getY(8)]).toEqual([1, 1])
+  })
+
+  it('creates an sRGB clamped DEM orthophoto texture', () => {
+    const texture = createTerrainDemRuntimeOrthoTexture({
+      width: 1,
+      height: 1,
+      rgb: new Uint8Array([20, 40, 60]),
+    }, 'test-ortho')
+    expect(texture.image.width).toBe(1)
+    expect(texture.image.height).toBe(1)
+    expect(texture.name).toBe('test-ortho')
+    expect(texture.colorSpace).toBe(THREE.SRGBColorSpace)
+    expect(texture.flipY).toBe(false)
+    expect(texture.wrapS).toBe(THREE.ClampToEdgeWrapping)
+    expect(texture.wrapT).toBe(THREE.ClampToEdgeWrapping)
+    texture.dispose()
   })
 
   it('decimates the runtime mesh by 2x and 4x without changing the bounds', () => {

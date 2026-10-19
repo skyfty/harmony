@@ -139,6 +139,14 @@ export interface TerrainPackAssetMetadata {
   runtimeGridFormat?: 'hdem-v1' | null
   runtimeGridCompression?: 'deflate' | null
   runtimeGridFilledRatio?: number | null
+  /** DEM packs: GPU-ready RGB orthophoto generated during upload. */
+  runtimeOrthoFile?: string | null
+  runtimeOrthoUrl?: string | null
+  runtimeOrthoBytes?: number | null
+  runtimeOrthoFormat?: 'hort-v1' | null
+  runtimeOrthoCompression?: 'deflate' | null
+  runtimeOrthoWidth?: number | null
+  runtimeOrthoHeight?: number | null
 }
 
 export function normalizeTerrainPackPath(raw: unknown): string | null {

@@ -70,6 +70,22 @@ test('DEM packs store dem.json plus private raster siblings', () => {
   assert.equal(metadata.sidecarFile, 'dem.json')
   assert.equal(metadata.demFile, 'dem.tif')
   assert.equal(metadata.orthoFile, 'ortho.tif')
+  const withRuntimeOrtho = buildTerrainPackAssetMetadata({
+    archive,
+    packKey: 'terrain-packs/test',
+    runtimeOrtho: {
+      file: 'runtime/ortho-rgb.bin',
+      url: 'https://example.test/runtime/ortho-rgb.bin',
+      bytes: 1234,
+      format: 'hort-v1',
+      compression: 'deflate',
+      width: 251,
+      height: 251,
+    },
+  })
+  assert.equal(withRuntimeOrtho.runtimeOrthoUrl, 'https://example.test/runtime/ortho-rgb.bin')
+  assert.equal(withRuntimeOrtho.runtimeOrthoFormat, 'hort-v1')
+  assert.equal(withRuntimeOrtho.runtimeOrthoWidth, 251)
 })
 
 test('DEM sidecar raster paths cannot escape the pack directory', () => {

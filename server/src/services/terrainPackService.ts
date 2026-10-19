@@ -195,6 +195,15 @@ export function buildTerrainPackAssetMetadata(input: {
     compression: 'deflate'
     filledRatio: number
   } | null
+  runtimeOrtho?: {
+    file: string
+    url: string
+    bytes: number
+    format: 'hort-v1'
+    compression: 'deflate'
+    width: number
+    height: number
+  } | null
 }): TerrainPackAssetMetadata {
   const { archive, packKey } = input
   const metadata: TerrainPackAssetMetadata = {
@@ -240,6 +249,15 @@ export function buildTerrainPackAssetMetadata(input: {
         metadata.runtimeGridFormat = input.runtimeGrid.format
         metadata.runtimeGridCompression = input.runtimeGrid.compression
         metadata.runtimeGridFilledRatio = input.runtimeGrid.filledRatio
+      }
+      if (input.runtimeOrtho) {
+        metadata.runtimeOrthoFile = input.runtimeOrtho.file
+        metadata.runtimeOrthoUrl = input.runtimeOrtho.url
+        metadata.runtimeOrthoBytes = input.runtimeOrtho.bytes
+        metadata.runtimeOrthoFormat = input.runtimeOrtho.format
+        metadata.runtimeOrthoCompression = input.runtimeOrtho.compression
+        metadata.runtimeOrthoWidth = input.runtimeOrtho.width
+        metadata.runtimeOrthoHeight = input.runtimeOrtho.height
       }
     }
   }

@@ -11,6 +11,7 @@ import {
   resolveLowlandScenicStart,
   resolveLowlandScenicWaypoint,
   resolveOfficialScenicStartHeading,
+  resolveRoadWaypointPlacement,
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
 } from '@schema/proceduralLandscape/officialScenicRoad'
 import {
@@ -271,6 +272,80 @@ describe('official Slow Roads Hills midline', () => {
     expect(relaxed!.gradient).toBeLessThanOrEqual(
       SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4,
     )
+  })
+
+  it('accepts a high gentle waypoint without the scenic lowland ceiling', () => {
+    const grid = makeSyntheticGrid(
+      4_000,
+      20,
+      (x, z) => 1_000 + (Math.hypot(x, z) < 400 ? 2_000 : 0),
+    )
+
+    expect(resolveLowlandScenicWaypoint(grid, 0, 0, 50)).toBeNull()
+
+    const placement = resolveRoadWaypointPlacement(grid, 0, 0, 50)
+    expect(placement.ok).toBe(true)
+    if (!placement.ok) {
+      return
+    }
+    expect(placement.snapped).toBe(false)
+    expect(placement.placement.distanceFromClick).toBe(0)
+    expect(placement.placement.gradient).toBeLessThanOrEqual(
+      SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+    )
+  })
+
+  it('rejects a steep waypoint when no nearby point is buildable', () => {
+    const grid = makeSyntheticGrid(
+      4_000,
+      20,
+      (x) => 1_000 + x * 0.8,
+    )
+    const placement = resolveRoadWaypointPlacement(grid, 0, 0, 50)
+    expect(placement).toEqual({
+      ok: false,
+      failureReason: 'too-steep',
+    })
+  })
+
+  it('snaps only within the explicit 50m road-waypoint radius', () => {
+    const plateauStartingAt = (startX: number) => (x: number) => (
+      x >= startX && x <= startX + 80
+        ? 1_000 + startX * 2
+        : 1_000 + x * 2
+    )
+    const nearGrid = makeSyntheticGrid(4_000, 20, plateauStartingAt(20))
+    const near = resolveRoadWaypointPlacement(nearGrid, 0, 0, 40)
+    expect(near.ok).toBe(true)
+    if (near.ok) {
+      expect(near.snapped).toBe(true)
+      expect(near.placement.distanceFromClick).toBeCloseTo(40, 6)
+    }
+    expect(resolveRoadWaypointPlacement(nearGrid, 0, 0, 30)).toMatchObject({
+      ok: false,
+      failureReason: 'too-steep',
+    })
+
+    const farGrid = makeSyntheticGrid(4_000, 20, plateauStartingAt(40))
+    expect(resolveRoadWaypointPlacement(farGrid, 0, 0, 50)).toMatchObject({
+      ok: false,
+      failureReason: 'too-steep',
+    })
+    const farther = resolveRoadWaypointPlacement(farGrid, 0, 0, 80)
+    expect(farther.ok).toBe(true)
+    if (farther.ok) {
+      expect(farther.placement.distanceFromClick).toBeCloseTo(60, 6)
+    }
+  })
+
+  it('reports outside-terrain placement failures', () => {
+    const grid = makeSyntheticGrid(4_000, 20)
+    expect(
+      resolveRoadWaypointPlacement(grid, grid.maxX + 100, 0, 0),
+    ).toEqual({
+      ok: false,
+      failureReason: 'outside-terrain',
+    })
   })
 
   it('follows every mandatory waypoint around a hill and reaches the boundary', () => {

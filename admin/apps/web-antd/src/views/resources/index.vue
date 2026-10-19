@@ -1615,6 +1615,11 @@ onMounted(async () => {
           运行时地形网格：{{ packResult.pack.runtimeGrid.format }} ·
           {{ formatFileSize(packResult.pack.runtimeGrid.bytes || 0) }}
         </div>
+        <div v-if="packResult.pack.runtimeOrtho">
+          运行时正射影像：{{ packResult.pack.runtimeOrtho.format }} ·
+          {{ packResult.pack.runtimeOrtho.width }}×{{ packResult.pack.runtimeOrtho.height }} ·
+          {{ formatFileSize(packResult.pack.runtimeOrtho.bytes || 0) }}
+        </div>
         <div v-for="warning in packResult.pack.warnings || []" :key="warning" style="color: #d46b08">
           提示：{{ warning }}
         </div>
