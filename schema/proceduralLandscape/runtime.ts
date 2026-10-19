@@ -305,6 +305,17 @@ export interface ProceduralLandscapeRuntimeStats {
   roadMaxCrossSlope: number
   roadLowlandCoverageFraction: number
   roadSteepReplacementSteps: number
+  roadSmoothingFallback: boolean
+  roadSmoothingFallbackReason: string | null
+  roadDetourRadius: number
+  roadMaxDetourDistance: number
+  roadDetourRadiusExpanded: boolean
+  roadMinCenterlineClearance: number
+  roadMinTurnRadius: number
+  roadGeometryAutoRepaired: boolean
+  roadAutoRepairRoundedCorners: number
+  roadMaxAutoRepairWaypointOffset: number
+  roadEffectiveWaypointTolerance: number
   /** 当前季节与素材状态（面板展示）。 */
   season: SeasonId
   seasonAssetsReady: boolean
@@ -885,6 +896,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let forestMaskTexture: THREE.DataTexture | null = null
   let variationTexture: THREE.DataTexture | null = null
   let roadResult: WaypointRoadPlanResult | null = null
+  let roadPlanFailureReason: string | null = null
+  let invalidRoadGeometryClearance = 0
+  let invalidRoadGeometryTurnRadius = 0
   let roadFieldData: RoadFieldData | null = null
   /** 贴合：与 roadResult.nodes 对齐的左右缘地形高度（压平场用）。 */
   let roadEdgeHeights: RoadEdgeHeights[] | null = null
@@ -1044,6 +1058,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadMaxCrossSlope: 0,
     roadLowlandCoverageFraction: 0,
     roadSteepReplacementSteps: 0,
+    roadSmoothingFallback: false,
+    roadSmoothingFallbackReason: null,
+    roadDetourRadius: props.road.pathDeviation,
+    roadMaxDetourDistance: 0,
+    roadDetourRadiusExpanded: false,
+    roadMinCenterlineClearance: 0,
+    roadMinTurnRadius: 0,
+    roadGeometryAutoRepaired: false,
+    roadAutoRepairRoundedCorners: 0,
+    roadMaxAutoRepairWaypointOffset: 0,
+    roadEffectiveWaypointTolerance: props.road.waypointTolerance,
     season: currentSeason,
     seasonAssetsReady: false,
     nearTreeInstances: 0,
@@ -1556,6 +1581,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     densityField = null
     variationField = null
     roadResult = null
+    roadPlanFailureReason = null
+    invalidRoadGeometryClearance = 0
+    invalidRoadGeometryTurnRadius = 0
     roadFieldData = null
     roadEdgeHeights = null
     roadCenterHeights = null
@@ -1989,6 +2017,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       maxSlope: road.maxSlope,
       maxTurnRad: degreesToRadians(road.maxTurnDeg),
       margin: traceMargin,
+      routeClearance: Math.max(
+        7,
+        road.width,
+      ),
+      minimumTurnRadius: 20,
+      maximumHeadingChangeRad: (10 * Math.PI) / 180,
     })
   }
 
@@ -2155,6 +2189,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadFieldTexture?.dispose()
     roadFieldTexture = null
     roadResult = null
+    roadPlanFailureReason = null
+    invalidRoadGeometryClearance = 0
+    invalidRoadGeometryTurnRadius = 0
     roadFieldData = null
     roadEdgeHeights = null
     roadCenterHeights = null
@@ -2170,12 +2207,23 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       && generatedRoute
       && hostObject
     ) {
-      roadResult = planGeneratedRoad(
+      const plannedRoad = planGeneratedRoad(
         grid,
         hostObject,
         generatedRoute,
         props.road,
       )
+      if (plannedRoad?.failureReason === 'road-geometry-self-overlap') {
+        // Never render a self-overlapping centerline: its road band folds
+        // back over itself and produces large overlapping triangle fans.
+        roadPlanFailureReason = plannedRoad.failureReason
+        invalidRoadGeometryClearance =
+          plannedRoad.minCenterlineClearance ?? 0
+        invalidRoadGeometryTurnRadius = plannedRoad.minTurnRadius ?? 0
+        roadResult = null
+      } else {
+        roadResult = plannedRoad
+      }
     }
     if (roadResult && roadResult.nodes.length > 1) {
         const halfWidth = roadHalfWidth(props)
@@ -3816,7 +3864,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadLength = roadResult?.length ?? 0
     stats.roadNodeCount = roadResult?.nodes.length ?? 0
     stats.roadComplete = roadResult?.complete ?? false
-    stats.roadFailureReason = roadResult?.failureReason ?? null
+    stats.roadFailureReason = roadResult?.failureReason ?? roadPlanFailureReason
     stats.roadStrategy = props.road.generatedRoute?.strategy ?? null
     stats.roadPlannerMode = roadResult?.plannerMode ?? null
     stats.roadGuideExpandedStates = roadResult?.guideExpandedStates ?? 0
@@ -3839,6 +3887,23 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadMaxCrossSlope = roadResult?.maxCrossSlope ?? 0
     stats.roadLowlandCoverageFraction = roadResult?.lowlandCoverageFraction ?? 0
     stats.roadSteepReplacementSteps = roadResult?.steepReplacementSteps ?? 0
+    stats.roadSmoothingFallback = roadResult?.smoothingFallback ?? false
+    stats.roadSmoothingFallbackReason = roadResult?.smoothingFallbackReason ?? null
+    stats.roadDetourRadius = roadResult?.detourRadius ?? props.road.generatedRoute?.pathDeviation ?? props.road.pathDeviation
+    stats.roadMaxDetourDistance = roadResult?.maxDetourDistance ?? 0
+    stats.roadDetourRadiusExpanded = roadResult?.detourRadiusExpanded ?? false
+    stats.roadMinCenterlineClearance =
+      roadResult?.minCenterlineClearance ?? invalidRoadGeometryClearance
+    stats.roadMinTurnRadius =
+      roadResult?.minTurnRadius ?? invalidRoadGeometryTurnRadius
+    stats.roadGeometryAutoRepaired =
+      roadResult?.geometryAutoRepaired ?? false
+    stats.roadAutoRepairRoundedCorners =
+      roadResult?.autoRepairRoundedCorners ?? 0
+    stats.roadMaxAutoRepairWaypointOffset =
+      roadResult?.maxAutoRepairWaypointOffset ?? 0
+    stats.roadEffectiveWaypointTolerance =
+      roadResult?.effectiveWaypointTolerance ?? props.road.waypointTolerance
     if (roadResult && roadResult.nodes.length > 1 && roadResult.length > 0) {
       let totalTurnRadians = 0
       let maxStraightRun = 0

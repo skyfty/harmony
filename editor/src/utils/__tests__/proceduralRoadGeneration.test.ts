@@ -768,7 +768,7 @@ describe('unified waypoint road planning', () => {
 
   it('uses terrain-cost shortest routing and extends naturally to the boundary', () => {
     const grid = makeGrid((x, z) => (
-      Math.exp(-((x - 470) ** 2 + (z - 450) ** 2) / 9000) * 70
+      Math.exp(-((x - 470) ** 2 + (z - 450) ** 2) / 9000) * 40
     ))
     const waypoints = [
       { x: 250, z: 450 },
@@ -787,6 +787,8 @@ describe('unified waypoint road planning', () => {
     ).toBe(true)
     expect(result.waypointsPassed).toBe(3)
     expect(result.maxWaypointError).toBeLessThanOrEqual(4)
+    expect(result.maxForwardGrade).toBeLessThanOrEqual(0.28 + 1e-4)
+    expect(result.maxCrossSlope).toBeLessThanOrEqual(0.45 + 1e-4)
     expect(result.failureReason).toBe('reached-terrain-boundary')
     const last = result.nodes[result.nodes.length - 1]!
     expect(
@@ -848,6 +850,43 @@ describe('unified waypoint road planning', () => {
     expect(result.waypointsPassed).toBe(1)
     expect(result.maxWaypointError).toBeLessThanOrEqual(4)
   })
+
+  it('uses a soft waypoint detour radius before expanding the search', () => {
+    const grid = makeSyntheticGrid(
+      4_000,
+      20,
+      (x, z) => (
+        Math.abs(x) < 120 && Math.abs(z) < 260
+          ? 2_000
+          : 1_000
+      ),
+    )
+    const waypoints = [
+      { x: -600, z: 0 },
+      { x: 600, z: 0 },
+    ]
+    const constrained = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      waypoints,
+      pathDeviation: 500,
+      termination: 'dead-end',
+    })
+    expect(constrained.complete).toBe(true)
+    expect(constrained.waypointsPassed).toBe(2)
+    expect(constrained.detourRadiusExpanded).toBe(false)
+    expect(constrained.maxDetourDistance).toBeLessThanOrEqual(500)
+
+    const expanded = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      waypoints,
+      pathDeviation: 100,
+      termination: 'dead-end',
+    })
+    expect(expanded.complete).toBe(true)
+    expect(expanded.waypointsPassed).toBe(2)
+    expect(expanded.detourRadiusExpanded).toBe(true)
+    expect(expanded.maxDetourDistance).toBeGreaterThan(100)
+  }, 30_000)
 
   it('does not create a road without waypoints', () => {
     const result = planWaypointRoadRoute(makeGrid(), {

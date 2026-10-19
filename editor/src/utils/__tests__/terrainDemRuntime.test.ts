@@ -184,7 +184,7 @@ describe('terrain DEM runtime grid', () => {
       road: { pathDeviation: 500 },
     } as never, 'dem')
     expect(clamped.dem.sampleStep).toBe(4)
-    expect(clamped.road.pathDeviation).toBe(200)
+    expect(clamped.road.pathDeviation).toBe(500)
   })
 })
 

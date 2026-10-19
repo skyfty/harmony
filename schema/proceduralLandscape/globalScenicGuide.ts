@@ -1,4 +1,4 @@
-import { clamp, smoothstep } from './noise'
+import { clamp, hashUnit, smoothstep } from './noise'
 import {
   buildScenicTerrainElevationProfile,
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
@@ -45,6 +45,8 @@ export interface GlobalScenicGuideResult {
   points: Vec2[]
   expandedStates: number
   corridorWidth: number
+  maxDetourDistance: number
+  detourRadiusExpanded: boolean
   failureReason: string | null
   unreachableWaypointIndex: number | null
 }
@@ -300,7 +302,35 @@ function reconstructPath(
   ))
 }
 
-function searchGuideLeg(
+function maxDetourDistanceToChord(
+  points: ReadonlyArray<Vec2>,
+  start: Vec2,
+  end: Vec2,
+): number {
+  const dx = end.x - start.x
+  const dz = end.z - start.z
+  const lengthSq = dx * dx + dz * dz
+  let maximum = 0
+  for (const point of points) {
+    const factor = lengthSq > 1e-9
+      ? clamp(
+          ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSq,
+          0,
+          1,
+        )
+      : 0
+    maximum = Math.max(
+      maximum,
+      Math.hypot(
+        point.x - (start.x + dx * factor),
+        point.z - (start.z + dz * factor),
+      ),
+    )
+  }
+  return maximum
+}
+
+function runGuideLegSearch(
   planning: PlanningGrid,
   profile: GuideProfile,
   start: Vec2,
@@ -308,11 +338,14 @@ function searchGuideLeg(
   options: GlobalScenicGuideOptions,
   remainingBudget: number,
   avoidMask: Uint8Array | null = null,
+  maxLateralDistance: number | null = null,
 ): {
   points: Vec2[] | null
   expanded: number
   budgetExceeded: boolean
   unreachable: boolean
+  maxDetourDistance: number
+  detourRadiusExpanded: boolean
 } {
   const maxGrade = options.maxGrade ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade
   const maxCrossSlope = options.maxCrossSlope
@@ -329,6 +362,8 @@ function searchGuideLeg(
       expanded: 0,
       budgetExceeded: false,
       unreachable: true,
+      maxDetourDistance: 0,
+      detourRadiusExpanded: false,
     }
   }
   const total = planning.cols * planning.rows
@@ -378,6 +413,8 @@ function searchGuideLeg(
         expanded,
         budgetExceeded: true,
         unreachable: false,
+        maxDetourDistance: 0,
+        detourRadiusExpanded: false,
       }
     }
     const top = heap.pop()
@@ -416,6 +453,28 @@ function searchGuideLeg(
       if (closed[nextIndex]) {
         continue
       }
+      if (end && maxLateralDistance != null) {
+        const nextX = planning.minX + nextCol * planning.cellSize
+        const nextZ = planning.minZ + nextRow * planning.cellSize
+        const chordX = end.x - start.x
+        const chordZ = end.z - start.z
+        const chordLengthSq = chordX * chordX + chordZ * chordZ
+        const factor = chordLengthSq > 1e-9
+          ? clamp(
+              ((nextX - start.x) * chordX + (nextZ - start.z) * chordZ)
+                / chordLengthSq,
+              0,
+              1,
+            )
+          : 0
+        const lateralDistance = Math.hypot(
+          nextX - (start.x + chordX * factor),
+          nextZ - (start.z + chordZ * factor),
+        )
+        if (lateralDistance > maxLateralDistance + planning.cellSize * 0.75) {
+          continue
+        }
+      }
       const nextHeight = planning.heights[nextIndex]!
       if (!Number.isFinite(nextHeight)) {
         continue
@@ -443,6 +502,26 @@ function searchGuideLeg(
         SLOWROADS_SCENIC_ROAD_CONSTRAINTS.lowlandPreferenceCeiling,
         elevationPercentile,
       )
+      const parentIndex = parents[state]!
+      const grandparentIndex = parentIndex >= 0 ? parents[parentIndex]! : -1
+      let turnPenalty = 0
+      if (grandparentIndex >= 0) {
+        const grandparentCol = grandparentIndex % planning.cols
+        const grandparentRow = Math.floor(grandparentIndex / planning.cols)
+        const incomingX = col - grandparentCol
+        const incomingZ = row - grandparentRow
+        const incomingLength = Math.hypot(incomingX, incomingZ)
+        const outgoingLength = Math.hypot(dx, dz)
+        if (incomingLength > 1e-6 && outgoingLength > 1e-6) {
+          const alignment = (
+            incomingX * dx + incomingZ * dz
+          ) / (incomingLength * outgoingLength)
+          turnPenalty = (1 - alignment) * 0.12
+        }
+      }
+      const seededVariation = (
+        hashUnit(options.seed, nextCol, nextRow) - 0.5
+      ) * 0.03
       const overlapPenalty = avoidMask?.[nextIndex] ? 2.5 : 0
       const stepCost = length * (
         1
@@ -450,6 +529,8 @@ function searchGuideLeg(
         + Math.max(0, preferredNorm - 1) ** 2 * 2
         + crossNorm * crossNorm * (options.crossSlopeWeight ?? 2.5)
         + lowlandPenalty * 0.45
+        + turnPenalty
+        + seededVariation
         + overlapPenalty
       )
       const nextDistance = distances[state]! + stepCost
@@ -470,17 +551,80 @@ function searchGuideLeg(
       expanded,
       budgetExceeded: false,
       unreachable: true,
+      maxDetourDistance: 0,
+      detourRadiusExpanded: false,
     }
   }
   const points = [{ ...start }, ...reconstructPath(parents, resultIndex, planning)]
   if (end) {
     points.push({ ...end })
   }
+  const maxDetourDistance = end
+    ? maxDetourDistanceToChord(points, start, end)
+    : 0
   return {
     points,
     expanded,
     budgetExceeded: false,
     unreachable: false,
+    maxDetourDistance,
+    detourRadiusExpanded: false,
+  }
+}
+
+function searchGuideLeg(
+  planning: PlanningGrid,
+  profile: GuideProfile,
+  start: Vec2,
+  end: Vec2 | null,
+  options: GlobalScenicGuideOptions,
+  remainingBudget: number,
+  avoidMask: Uint8Array | null = null,
+): {
+  points: Vec2[] | null
+  expanded: number
+  budgetExceeded: boolean
+  unreachable: boolean
+  maxDetourDistance: number
+  detourRadiusExpanded: boolean
+} {
+  const detourRadius = end
+    ? Math.max(10, options.pathDeviation)
+    : null
+  const constrained = runGuideLegSearch(
+    planning,
+    profile,
+    start,
+    end,
+    options,
+    remainingBudget,
+    avoidMask,
+    detourRadius,
+  )
+  if (
+    constrained.points
+    || !end
+    || constrained.budgetExceeded
+  ) {
+    return constrained
+  }
+  const unrestricted = runGuideLegSearch(
+    planning,
+    profile,
+    start,
+    end,
+    options,
+    remainingBudget,
+    avoidMask,
+    null,
+  )
+  if (!unrestricted.points) {
+    return unrestricted
+  }
+  return {
+    ...unrestricted,
+    detourRadiusExpanded:
+      unrestricted.maxDetourDistance > (detourRadius ?? 0) + 1e-6,
   }
 }
 
@@ -897,13 +1041,15 @@ export function buildGlobalScenicGuide(
   waypoints: ReadonlyArray<RoadWaypoint>,
   options: GlobalScenicGuideOptions,
 ): GlobalScenicGuideResult {
-  const corridorWidth = Math.max(20, options.pathDeviation)
+  const corridorWidth = Math.max(10, options.pathDeviation)
   const termination = options.termination ?? 'boundary'
   if (!waypoints.length) {
     return {
       points: [],
       expandedStates: 0,
       corridorWidth,
+      maxDetourDistance: 0,
+      detourRadiusExpanded: false,
       failureReason: 'no-waypoints',
       unreachableWaypointIndex: null,
     }
@@ -913,6 +1059,8 @@ export function buildGlobalScenicGuide(
       points: [],
       expandedStates: 0,
       corridorWidth,
+      maxDetourDistance: 0,
+      detourRadiusExpanded: false,
       failureReason: 'route-too-short',
       unreachableWaypointIndex: null,
     }
@@ -922,6 +1070,8 @@ export function buildGlobalScenicGuide(
       points: [],
       expandedStates: 0,
       corridorWidth,
+      maxDetourDistance: 0,
+      detourRadiusExpanded: false,
       failureReason: 'single-point-loop-too-small',
       unreachableWaypointIndex: null,
     }
@@ -935,6 +1085,8 @@ export function buildGlobalScenicGuide(
     ),
   )
   let expandedStates = 0
+  let maxDetourDistance = 0
+  let detourRadiusExpanded = false
   const legs: Vec2[][] = []
   for (let index = 1; index < waypoints.length; index += 1) {
     const leg = searchGuideLeg(
@@ -946,11 +1098,15 @@ export function buildGlobalScenicGuide(
       maxExpandedStates - expandedStates,
     )
     expandedStates += leg.expanded
+    maxDetourDistance = Math.max(maxDetourDistance, leg.maxDetourDistance)
+    detourRadiusExpanded = detourRadiusExpanded || leg.detourRadiusExpanded
     if (!leg.points) {
       return {
         points: [],
         expandedStates,
         corridorWidth,
+        maxDetourDistance,
+        detourRadiusExpanded,
         failureReason: leg.budgetExceeded
           ? 'global-guide-budget-exceeded'
           : 'waypoint-unreachable',
@@ -1005,11 +1161,15 @@ export function buildGlobalScenicGuide(
       avoidMask,
     )
     expandedStates += returnLeg.expanded
+    maxDetourDistance = Math.max(maxDetourDistance, returnLeg.maxDetourDistance)
+    detourRadiusExpanded = detourRadiusExpanded || returnLeg.detourRadiusExpanded
     if (!returnLeg.points) {
       return {
         points: [],
         expandedStates,
         corridorWidth,
+        maxDetourDistance,
+        detourRadiusExpanded,
         failureReason: returnLeg.budgetExceeded
           ? 'global-guide-budget-exceeded'
           : 'loop-not-closed',
@@ -1028,11 +1188,15 @@ export function buildGlobalScenicGuide(
       maxExpandedStates - expandedStates,
     )
     expandedStates += boundary.expanded
+    maxDetourDistance = Math.max(maxDetourDistance, boundary.maxDetourDistance)
+    detourRadiusExpanded = detourRadiusExpanded || boundary.detourRadiusExpanded
     if (!boundary.points) {
       return {
         points: [],
         expandedStates,
         corridorWidth,
+        maxDetourDistance,
+        detourRadiusExpanded,
         failureReason: boundary.budgetExceeded
           ? 'global-guide-budget-exceeded'
           : 'boundary-unreachable',
@@ -1047,6 +1211,8 @@ export function buildGlobalScenicGuide(
       points: [],
       expandedStates,
       corridorWidth,
+      maxDetourDistance,
+      detourRadiusExpanded,
       failureReason: 'guided-guide-prepare-failed',
       unreachableWaypointIndex: null,
     }
@@ -1055,6 +1221,8 @@ export function buildGlobalScenicGuide(
     points,
     expandedStates,
     corridorWidth,
+    maxDetourDistance,
+    detourRadiusExpanded,
     failureReason: null,
     unreachableWaypointIndex: null,
   }

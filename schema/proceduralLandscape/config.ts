@@ -119,7 +119,11 @@ export interface ProceduralLandscapeRoadProps {
   waypoints: RoadWaypoint[]
   /** Maximum centerline distance to every required waypoint (meters). */
   waypointTolerance: number
-  /** Maximum seeded scenic detour between consecutive waypoints (meters). */
+  /**
+   * Soft detour radius for each consecutive waypoint pair and the final
+   * tracer corridor around the global guide (meters). A radius miss falls
+   * back to unrestricted terrain search and is reported to the editor.
+   */
   pathDeviation: number
   /** Null traces until the terrain boundary. */
   maxLength: number | null
@@ -368,7 +372,7 @@ function clampGeneratedRoute(
     termination: normalizeRoadTermination(raw.termination),
     seed: Math.round(clampNumber(raw.seed, fallbackSeed, 0, 0xffffffff)) >>> 0,
     waypointTolerance: clampNumber(raw.waypointTolerance, 4, 1, 64),
-    pathDeviation: clampNumber(raw.pathDeviation, fallbackPathDeviation, 10, 200),
+    pathDeviation: clampNumber(raw.pathDeviation, fallbackPathDeviation, 10, 500),
     revision: Math.round(clampNumber(raw.revision, 0, 0, 0x7fffffff)),
   }
 }
@@ -548,7 +552,7 @@ export function clampProceduralLandscapeProps(
     road?.pathDeviation,
     defaults.road.pathDeviation,
     10,
-    200,
+    500,
   )
   const waypoints = clampRoadWaypoints(road?.waypoints)
   const hasGeneratedRouteField = Boolean(

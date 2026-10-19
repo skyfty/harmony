@@ -14,6 +14,10 @@ import {
 } from './officialScenicRoad'
 import { buildGlobalScenicGuide } from './globalScenicGuide'
 import {
+  validateRoadCenterlineGeometry,
+  type RoadGeometryValidation,
+} from './roadGeometry'
+import {
   smoothPlanarCenterline,
 } from './centerlineBezier'
 
@@ -30,6 +34,9 @@ export interface WaypointRoadPlanOptions {
   maxSlope: number
   maxTurnRad: number
   margin: number
+  routeClearance?: number
+  minimumTurnRadius?: number
+  maximumHeadingChangeRad?: number
 }
 
 export interface WaypointRoadPlanResult extends RoadTraceResult {
@@ -56,9 +63,23 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
   guideExpandedStates?: number
   maxGuideDeviation?: number
   unreachableWaypointIndex?: number | null
+  smoothingFallback?: boolean
+  smoothingFallbackReason?: string | null
+  detourRadius?: number
+  maxDetourDistance?: number
+  detourRadiusExpanded?: boolean
+  minCenterlineClearance?: number
+  minTurnRadius?: number
+  maxHeadingChangeRad?: number
+  geometryAutoRepaired?: boolean
+  autoRepairRoundedCorners?: number
+  maxAutoRepairWaypointOffset?: number
+  effectiveWaypointTolerance?: number
 }
 
 type Vec2 = { x: number; z: number }
+
+const AUTO_REPAIR_WAYPOINT_TOLERANCE = 30
 
 const MAX_SHORTEST_EXPANSIONS = 250_000
 const MAX_PLANNING_CELLS_PER_AXIS = 768
@@ -619,21 +640,56 @@ function applyWaypointTerrainOffsets(
   })
 }
 
-/**
- * Smooth the complete centerline through the mandatory waypoint corridor.
- * The route is fitted with curvature-limited cubic Bezier segments so A*
- * grid stair-steps cannot survive inside an individual route leg.
- */
-function smoothRoadCenterline(
+type CenterlineSmoothingAttempt = {
+  nodes: RoadTraceNode[] | null
+  failureReason: string | null
+}
+
+type CenterlineSmoothingResult = {
+  nodes: RoadTraceNode[]
+  smoothingFallback: boolean
+  failureReason: string | null
+}
+
+function rebuildSmoothedNodeGeometry(
+  grid: TerrainHeightGrid,
+  points: ReadonlyArray<Vec2>,
+  yOffset: number,
+): RoadTraceNode[] | null {
+  const nodes: RoadTraceNode[] = []
+  for (const point of points) {
+    const surfaceY = grid.sampleHeight(point.x, point.z)
+    if (surfaceY == null) {
+      return null
+    }
+    nodes.push(makeNode(point, surfaceY + yOffset, 0, nodes.length))
+  }
+  if (nodes.length < 3) {
+    return nodes
+  }
+  for (let index = 0; index < nodes.length; index += 1) {
+    const previous = nodes[Math.max(0, index - 1)]!
+    const current = nodes[index]!
+    const following = nodes[Math.min(nodes.length - 1, index + 1)]!
+    current.index = index
+    current.heading = Math.atan2(
+      following.z - previous.z,
+      following.x - previous.x,
+    )
+    current.headingDelta = index === 0
+      ? 0
+      : wrapAngle(current.heading - previous.heading)
+  }
+  return nodes
+}
+
+function attemptSmoothRoadCenterline(
   grid: TerrainHeightGrid,
   nodes: ReadonlyArray<RoadTraceNode>,
   waypoints: ReadonlyArray<Vec2>,
   waypointTolerance: number,
   termination: WaypointRoadPlanOptions['termination'],
-): RoadTraceNode[] | null {
-  if (nodes.length < 3) {
-    return nodes.map((node) => ({ ...node }))
-  }
+): CenterlineSmoothingAttempt {
   const anchorIndices: number[] = []
   const waypointAnchors: Array<{
     waypointIndex: number
@@ -675,6 +731,7 @@ function smoothRoadCenterline(
     waypointTolerance,
     waypointAnchors,
   )
+  let failureReason: string | null = null
   for (const radius of [30, 24, 18, 12]) {
     const sourcePoints = applyWaypointTerrainOffsets(
       nodes,
@@ -691,31 +748,14 @@ function smoothRoadCenterline(
         anchorIndices,
       },
     )
-    const next: RoadTraceNode[] = []
-    let valid = true
-    for (const point of rounded) {
-      const surfaceY = grid.sampleHeight(point.x, point.z)
-      if (surfaceY == null) {
-        valid = false
-        break
-      }
-      next.push(makeNode(point, surfaceY + yOffset, 0, next.length))
-    }
-    if (!valid || next.length < 3) {
+    const next = rebuildSmoothedNodeGeometry(grid, rounded, yOffset)
+    if (!next) {
+      failureReason = 'smoothing-outside-terrain'
       continue
     }
-    for (let index = 0; index < next.length; index += 1) {
-      const previous = next[Math.max(0, index - 1)]!
-      const current = next[index]!
-      const following = next[Math.min(next.length - 1, index + 1)]!
-      current.index = index
-      current.heading = Math.atan2(
-        following.z - previous.z,
-        following.x - previous.x,
-      )
-      current.headingDelta = index === 0
-        ? 0
-        : wrapAngle(current.heading - previous.heading)
+    if (next.length < 3) {
+      failureReason = 'smoothing-route-too-short'
+      continue
     }
     const closedError = termination === 'loop'
       ? distance(next[0]!, next[next.length - 1]!)
@@ -727,7 +767,384 @@ function smoothRoadCenterline(
       && closedError <= 0.5
       && waypointError <= waypointTolerance + 1e-4
     ) {
+      return { nodes: next, failureReason: null }
+    }
+    failureReason = waypointError > waypointTolerance + 1e-4
+      ? 'smoothing-waypoint-tolerance'
+      : closedError > 0.5
+        ? 'smoothing-loop-closure'
+        : terrain.failureReason
+  }
+  return { nodes: null, failureReason }
+}
+
+function attemptSmoothRoadLeg(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+  yOffset: number,
+): RoadTraceNode[] | null {
+  if (nodes.length < 3) {
+    return nodes.map((node) => ({ ...node }))
+  }
+  for (const radius of [30, 24, 18, 12]) {
+    const rounded = smoothPlanarCenterline(nodes, {
+      radius,
+      sampleSpacing: 2,
+      controlSpacing: Math.max(10, radius * 1.1),
+    })
+    const next = rebuildSmoothedNodeGeometry(grid, rounded, yOffset)
+    if (!next || next.length < 3) {
+      continue
+    }
+    if (evaluateRouteTerrain(grid, next).valid) {
       return next
+    }
+  }
+  return null
+}
+
+function resolveRoadWaypointBoundaries(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  waypoints: ReadonlyArray<Vec2>,
+  waypointTolerance: number,
+): number[] | null {
+  const boundaries = [0]
+  let searchStart = 1
+  for (let waypointIndex = 1; waypointIndex < waypoints.length; waypointIndex += 1) {
+    const waypoint = waypoints[waypointIndex]!
+    let bestIndex = -1
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (let index = searchStart; index < nodes.length; index += 1) {
+      const candidate = distance(nodes[index]!, waypoint)
+      if (candidate < bestDistance) {
+        bestDistance = candidate
+        bestIndex = index
+      }
+    }
+    if (bestIndex < 0 || bestDistance > waypointTolerance + 1e-4) {
+      return null
+    }
+    if (boundaries[boundaries.length - 1] !== bestIndex) {
+      boundaries.push(bestIndex)
+    }
+    searchStart = bestIndex + 1
+  }
+  if (boundaries[boundaries.length - 1] !== nodes.length - 1) {
+    boundaries.push(nodes.length - 1)
+  }
+  return boundaries
+}
+
+function attemptSmoothRoadCenterlineByLegs(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+  waypoints: ReadonlyArray<Vec2>,
+  waypointTolerance: number,
+): CenterlineSmoothingAttempt {
+  const boundaries = resolveRoadWaypointBoundaries(
+    nodes,
+    waypoints,
+    waypointTolerance,
+  )
+  if (!boundaries) {
+    return { nodes: null, failureReason: 'smoothing-waypoint-tolerance' }
+  }
+  const firstSurface = grid.sampleHeight(nodes[0]!.x, nodes[0]!.z)
+  const yOffset = firstSurface == null ? 0 : nodes[0]!.y - firstSurface
+  const merged: RoadTraceNode[] = []
+  let failedLegs = 0
+  for (let legIndex = 0; legIndex < boundaries.length - 1; legIndex += 1) {
+    const startIndex = boundaries[legIndex]!
+    const endIndex = boundaries[legIndex + 1]!
+    const slice = nodes.slice(startIndex, endIndex + 1)
+    const smoothed = attemptSmoothRoadLeg(grid, slice, yOffset)
+    if (!smoothed) {
+      failedLegs += 1
+    }
+    const chosen = smoothed ?? slice
+    for (
+      let index = merged.length ? 1 : 0;
+      index < chosen.length;
+      index += 1
+    ) {
+      merged.push({ ...chosen[index]!, index: merged.length })
+    }
+  }
+  if (merged.length < 3) {
+    return { nodes: null, failureReason: 'smoothing-route-too-short' }
+  }
+  const terrain = evaluateRouteTerrain(grid, merged)
+  const waypointError = waypointPassStats(
+    merged,
+    waypoints,
+    waypointTolerance,
+  ).maxError
+  if (!terrain.valid || waypointError > waypointTolerance + 1e-4) {
+    return {
+      nodes: null,
+      failureReason: waypointError > waypointTolerance + 1e-4
+        ? 'smoothing-waypoint-tolerance'
+        : terrain.failureReason,
+    }
+  }
+  return {
+    nodes: merged,
+    failureReason: failedLegs > 0 ? 'smoothing-partial-fallback' : null,
+  }
+}
+
+/**
+ * Smooth the centerline without allowing cosmetic post-processing to reject a
+ * terrain-valid road. Global smoothing is attempted first; if any section is
+ * too steep, legs are smoothed independently and failed legs keep their
+ * original traced nodes.
+ */
+function smoothRoadCenterline(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+  waypoints: ReadonlyArray<Vec2>,
+  waypointTolerance: number,
+  termination: WaypointRoadPlanOptions['termination'],
+): CenterlineSmoothingResult {
+  if (nodes.length < 3) {
+    return {
+      nodes: nodes.map((node) => ({ ...node })),
+      smoothingFallback: false,
+      failureReason: null,
+    }
+  }
+  const globalAttempt = attemptSmoothRoadCenterline(
+    grid,
+    nodes,
+    waypoints,
+    waypointTolerance,
+    termination,
+  )
+  if (globalAttempt.nodes) {
+    return {
+      nodes: globalAttempt.nodes,
+      smoothingFallback: false,
+      failureReason: null,
+    }
+  }
+  if (termination !== 'loop') {
+    const legAttempt = attemptSmoothRoadCenterlineByLegs(
+      grid,
+      nodes,
+      waypoints,
+      waypointTolerance,
+    )
+    if (legAttempt.nodes) {
+      return {
+        nodes: legAttempt.nodes,
+        smoothingFallback: true,
+        failureReason:
+          legAttempt.failureReason ?? globalAttempt.failureReason,
+      }
+    }
+  }
+  return {
+    nodes: nodes.map((node) => ({ ...node })),
+    smoothingFallback: true,
+    failureReason: globalAttempt.failureReason,
+  }
+}
+
+function simplifyRoadPoints(
+  points: ReadonlyArray<Vec2>,
+  epsilon: number,
+): Vec2[] {
+  if (points.length < 3) {
+    return points.map((point) => ({ ...point }))
+  }
+  const first = points[0]!
+  const last = points[points.length - 1]!
+  const dx = last.x - first.x
+  const dz = last.z - first.z
+  const lengthSq = dx * dx + dz * dz
+  let maximumDistance = -1
+  let splitIndex = 0
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const point = points[index]!
+    const factor = lengthSq > 1e-9
+      ? clamp(
+          ((point.x - first.x) * dx + (point.z - first.z) * dz) / lengthSq,
+          0,
+          1,
+        )
+      : 0
+    const perpendicularDistance = Math.hypot(
+      point.x - (first.x + dx * factor),
+      point.z - (first.z + dz * factor),
+    )
+    if (perpendicularDistance > maximumDistance) {
+      maximumDistance = perpendicularDistance
+      splitIndex = index
+    }
+  }
+  if (maximumDistance <= epsilon) {
+    return [{ ...first }, { ...last }]
+  }
+  return [
+    ...simplifyRoadPoints(points.slice(0, splitIndex + 1), epsilon).slice(0, -1),
+    ...simplifyRoadPoints(points.slice(splitIndex), epsilon),
+  ]
+}
+
+function limitRepairedRoadGrade(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+): RoadTraceNode[] | null {
+  if (nodes.length < 2) {
+    return nodes.map((node) => ({ ...node }))
+  }
+  const gradeLimit = SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade
+  const limited = nodes.map((node) => ({ ...node }))
+  let converged = false
+  for (let iteration = 0; iteration < 32; iteration += 1) {
+    for (let index = 1; index < limited.length; index += 1) {
+      const previous = limited[index - 1]!
+      const current = limited[index]!
+      const maxDelta = gradeLimit * Math.max(
+        1e-6,
+        Math.hypot(current.x - previous.x, current.z - previous.z),
+      )
+      current.y = clamp(current.y, previous.y - maxDelta, previous.y + maxDelta)
+    }
+    for (let index = limited.length - 2; index >= 0; index -= 1) {
+      const current = limited[index]!
+      const next = limited[index + 1]!
+      const maxDelta = gradeLimit * Math.max(
+        1e-6,
+        Math.hypot(next.x - current.x, next.z - current.z),
+      )
+      current.y = clamp(current.y, next.y - maxDelta, next.y + maxDelta)
+    }
+    let maximumViolation = 0
+    for (let index = 1; index < limited.length; index += 1) {
+      const previous = limited[index - 1]!
+      const current = limited[index]!
+      const segmentLength = Math.max(
+        1e-6,
+        Math.hypot(current.x - previous.x, current.z - previous.z),
+      )
+      maximumViolation = Math.max(
+        maximumViolation,
+        Math.abs(current.y - previous.y) / segmentLength - gradeLimit,
+      )
+    }
+    if (maximumViolation <= 1e-5) {
+      converged = true
+      break
+    }
+  }
+  if (!converged) {
+    return null
+  }
+  let maximumTerrainOffset = 0
+  for (const node of limited) {
+    const terrainY = grid.sampleHeight(node.x, node.z)
+    if (terrainY == null) {
+      return null
+    }
+    maximumTerrainOffset = Math.max(
+      maximumTerrainOffset,
+      Math.abs(node.y - terrainY),
+    )
+  }
+  return maximumTerrainOffset <= 12 ? limited : null
+}
+
+export interface RoadCenterlineRepairResult {
+  nodes: RoadTraceNode[]
+  maxWaypointOffset: number
+  roundedCorners: number
+}
+
+export function repairRoadCenterlineGeometry(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+  waypoints: ReadonlyArray<Vec2>,
+  waypointTolerance: number,
+  clearance: number,
+  minimumTurnRadius: number,
+  maximumHeadingChangeRad: number,
+): RoadCenterlineRepairResult | null {
+  if (
+    clearance <= 0
+    || minimumTurnRadius <= 0
+    || nodes.length < 5
+  ) {
+    return null
+  }
+  const firstSurface = grid.sampleHeight(nodes[0]!.x, nodes[0]!.z)
+  const yOffset = firstSurface == null ? 0 : nodes[0]!.y - firstSurface
+  const source = nodes.map((node) => ({ x: node.x, z: node.z }))
+  for (const epsilon of [1.5, 2, 3, 4, 6, 8, 10, 12, 14, 16, 20, 24]) {
+    const simplified = simplifyRoadPoints(source, epsilon)
+    if (simplified.length < 2) {
+      continue
+    }
+    for (const radius of [
+      minimumTurnRadius,
+      minimumTurnRadius * 1.25,
+      minimumTurnRadius * 1.5,
+    ]) {
+      const rounded = smoothPlanarCenterline(simplified, {
+        radius,
+        sampleSpacing: 2,
+        controlSpacing: Math.max(12, radius),
+        smoothingIterations: 72,
+      })
+      const refined = smoothPlanarCenterline(rounded, {
+        radius: radius * 1.5,
+        sampleSpacing: 2,
+        controlSpacing: Math.max(16, radius * 1.5),
+        smoothingIterations: 96,
+      })
+      const candidate = rebuildSmoothedNodeGeometry(
+        grid,
+        refined,
+        yOffset,
+      )
+      if (!candidate || candidate.length < 3) {
+        continue
+      }
+      const gradeLimited = limitRepairedRoadGrade(grid, candidate)
+      if (!gradeLimited) {
+        continue
+      }
+      const terrain = evaluateRouteTerrain(
+        grid,
+        gradeLimited,
+        {
+          gradeLimit: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+          crossLimit: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+        },
+      )
+      const waypointStats = waypointPassStats(
+        gradeLimited,
+        waypoints,
+        waypointTolerance,
+      )
+      const waypointError = waypointStats.maxError
+      const geometry = validateRoadCenterlineGeometry(gradeLimited, {
+        clearance,
+        minimumTurnRadius,
+        maximumHeadingChangeRad,
+      })
+      if (
+        terrain.valid
+        && geometry.valid
+        && waypointStats.passed === waypoints.length
+        && waypointError <= waypointTolerance + 1e-4
+      ) {
+        return {
+          nodes: gradeLimited,
+          maxWaypointOffset: waypointError,
+          roundedCorners: Math.max(0, simplified.length - 2),
+        }
+      }
     }
   }
   return null
@@ -736,9 +1153,24 @@ function smoothRoadCenterline(
 function evaluateRouteTerrain(
   grid: TerrainHeightGrid,
   nodes: ReadonlyArray<RoadTraceNode>,
-): { valid: boolean; maxForwardGrade: number; maxCrossSlope: number } {
-  const gradeLimit = SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade * 1.08
-  const crossLimit = SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 1.08
+  limits: {
+    gradeLimit?: number
+    crossLimit?: number
+  } = {},
+): {
+  valid: boolean
+  maxForwardGrade: number
+  maxCrossSlope: number
+  failureReason:
+    | 'smoothing-outside-terrain'
+    | 'smoothing-forward-grade-limit'
+    | 'smoothing-cross-slope-limit'
+    | null
+} {
+  const gradeLimit = limits.gradeLimit
+    ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade * 1.08
+  const crossLimit = limits.crossLimit
+    ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 1.08
   const lateralSample = Math.max(8, grid.cellSize)
   let maxForwardGrade = 0
   let maxCrossSlope = 0
@@ -750,7 +1182,12 @@ function evaluateRouteTerrain(
       continue
     }
     if (grid.sampleHeight(current.x, current.z) == null) {
-      return { valid: false, maxForwardGrade, maxCrossSlope }
+      return {
+        valid: false,
+        maxForwardGrade,
+        maxCrossSlope,
+        failureReason: 'smoothing-outside-terrain',
+      }
     }
     maxForwardGrade = Math.max(
       maxForwardGrade,
@@ -781,6 +1218,11 @@ function evaluateRouteTerrain(
       && maxCrossSlope <= crossLimit + 1e-4,
     maxForwardGrade,
     maxCrossSlope,
+    failureReason: maxForwardGrade > gradeLimit + 1e-4
+      ? 'smoothing-forward-grade-limit'
+      : maxCrossSlope > crossLimit + 1e-4
+        ? 'smoothing-cross-slope-limit'
+        : null,
   }
 }
 
@@ -1435,6 +1877,12 @@ export function planWaypointRoadRoute(
   if (options.strategy === 'seeded') {
     const origin = waypoints[0]!
     const termination = options.termination
+    let smoothingFallback = false
+    let smoothingFailureReason: string | null = null
+    let geometryAutoRepaired = false
+    let autoRepairRoundedCorners = 0
+    let maxAutoRepairWaypointOffset = 0
+    let effectiveWaypointTolerance = options.waypointTolerance
     if (termination === 'dead-end' && waypoints.length === 1) {
       return {
         nodes: [],
@@ -1596,38 +2044,129 @@ export function planWaypointRoadRoute(
     }
     let result = terminationResult?.result ?? traced
     if (result.complete && result.nodes.length >= 3) {
-      const roundedNodes = smoothRoadCenterline(
+      const smoothing = smoothRoadCenterline(
         grid,
         result.nodes,
         waypoints,
         options.waypointTolerance,
         termination,
       )
-      result = roundedNodes
-        ? {
-            ...result,
-            nodes: roundedNodes,
-            length: roadNodesLength(roundedNodes),
-          }
-        : {
-            ...result,
-            complete: false,
-            failureReason: 'blocked',
-          }
+      smoothingFallback = smoothing.smoothingFallback
+      smoothingFailureReason = smoothing.failureReason
+      result = {
+        ...result,
+        nodes: smoothing.nodes,
+        length: roadNodesLength(smoothing.nodes),
+      }
     }
-    const terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
+    let terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
       preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
       maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
       maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
     })
+    let geometry: RoadGeometryValidation = validateRoadCenterlineGeometry(
+      result.nodes,
+      {
+        clearance: Math.max(0, options.routeClearance ?? 0),
+        minimumTurnRadius: Math.max(
+          0,
+          options.minimumTurnRadius ?? 0,
+        ),
+        maximumHeadingChangeRad:
+          options.maximumHeadingChangeRad ?? Math.PI,
+      },
+    )
+    if (
+      result.complete
+      && (
+        !geometry.valid
+        || terrain.maxForwardGrade
+          > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4
+        || terrain.maxCrossSlope
+          > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4
+      )
+    ) {
+      const repaired = repairRoadCenterlineGeometry(
+        grid,
+        result.nodes,
+        waypoints,
+        AUTO_REPAIR_WAYPOINT_TOLERANCE,
+        Math.max(0, options.routeClearance ?? 0),
+        Math.max(0, options.minimumTurnRadius ?? 0),
+        options.maximumHeadingChangeRad ?? Math.PI,
+      )
+      if (repaired) {
+        result = {
+          ...result,
+          nodes: repaired.nodes,
+          length: roadNodesLength(repaired.nodes),
+        }
+        geometryAutoRepaired = true
+        autoRepairRoundedCorners = repaired.roundedCorners
+        maxAutoRepairWaypointOffset = repaired.maxWaypointOffset
+        effectiveWaypointTolerance = Math.max(
+          effectiveWaypointTolerance,
+          AUTO_REPAIR_WAYPOINT_TOLERANCE,
+        )
+        geometry = validateRoadCenterlineGeometry(repaired.nodes, {
+          clearance: Math.max(0, options.routeClearance ?? 0),
+          minimumTurnRadius: Math.max(
+            0,
+            options.minimumTurnRadius ?? 0,
+          ),
+          maximumHeadingChangeRad:
+            options.maximumHeadingChangeRad ?? Math.PI,
+        })
+        terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
+          preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+          maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+          maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+        })
+      }
+    }
+    if (result.complete && !geometry.valid) {
+      result = {
+        ...result,
+        complete: false,
+        failureReason: 'road-geometry-self-overlap',
+      }
+    } else if (
+      result.complete
+      && terrain.maxForwardGrade
+        > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4
+    ) {
+      result = {
+        ...result,
+        complete: false,
+        failureReason: 'road-forward-grade-limit',
+      }
+    } else if (
+      result.complete
+      && terrain.maxCrossSlope
+        > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4
+    ) {
+      result = {
+        ...result,
+        complete: false,
+        failureReason: 'road-cross-slope-limit',
+      }
+    }
     const stats = waypointPassStats(
       result.nodes,
       waypoints,
-      options.waypointTolerance,
+      effectiveWaypointTolerance,
     )
     const failureReason = terminationResult?.failureReason
-      ?? result.failureReason
-    const complete = result.complete && !terminationResult?.failureReason
+      ?? (
+        stats.passed !== waypoints.length
+        || stats.maxError > effectiveWaypointTolerance + 1e-4
+          ? 'waypoint-missed'
+          : result.failureReason
+      )
+    const complete = result.complete
+      && !terminationResult?.failureReason
+      && stats.passed === waypoints.length
+      && stats.maxError <= effectiveWaypointTolerance + 1e-4
     return {
       ...result,
       ...terrain,
@@ -1645,6 +2184,18 @@ export function planWaypointRoadRoute(
       plannerMode: 'guided-global',
       guideExpandedStates: guide.expandedStates,
       maxGuideDeviation: maxDistanceToGuide(result.nodes, guide.points),
+      smoothingFallback,
+      smoothingFallbackReason: smoothingFailureReason,
+      detourRadius: guide.corridorWidth,
+      maxDetourDistance: guide.maxDetourDistance,
+      detourRadiusExpanded: guide.detourRadiusExpanded,
+      minCenterlineClearance: geometry.minCenterlineClearance,
+      minTurnRadius: geometry.minTurnRadius,
+      maxHeadingChangeRad: geometry.maxHeadingChangeRad,
+      geometryAutoRepaired,
+      autoRepairRoundedCorners,
+      maxAutoRepairWaypointOffset,
+      effectiveWaypointTolerance,
       unreachableWaypointIndex: complete
         ? null
         : (stats.passed < waypoints.length
@@ -1653,6 +2204,12 @@ export function planWaypointRoadRoute(
     }
   }
   const closed = options.termination === 'loop'
+  let smoothingFallback = false
+  let smoothingFailureReason: string | null = null
+  let geometryAutoRepaired = false
+  let autoRepairRoundedCorners = 0
+  let maxAutoRepairWaypointOffset = 0
+  let effectiveWaypointTolerance = options.waypointTolerance
   if (closed && waypoints.length === 1) {
     let lastResult: WaypointRoadPlanResult | null = null
     for (let attempt = 0; attempt < 6; attempt += 1) {
@@ -1798,26 +2355,115 @@ export function planWaypointRoadRoute(
     result = appendBoundaryTail(grid, result, options)
   }
   if (result.complete && result.nodes.length >= 3) {
-    const roundedNodes = smoothRoadCenterline(
+    const smoothing = smoothRoadCenterline(
       grid,
       result.nodes,
       waypoints,
       options.waypointTolerance,
       options.termination,
     )
-    result = roundedNodes
-      ? {
-          ...result,
-          nodes: roundedNodes,
-          length: roadNodesLength(roundedNodes),
-        }
-      : {
-          ...result,
-          complete: false,
-          failureReason: 'blocked',
-        }
+    smoothingFallback = smoothing.smoothingFallback
+    smoothingFailureReason = smoothing.failureReason
+    result = {
+      ...result,
+      nodes: smoothing.nodes,
+      length: roadNodesLength(smoothing.nodes),
+    }
   }
-  const stats = waypointPassStats(result.nodes, waypoints, options.waypointTolerance)
+  let terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
+    preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+    maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+    maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+  })
+  let geometry = validateRoadCenterlineGeometry(result.nodes, {
+    clearance: Math.max(0, options.routeClearance ?? 0),
+    minimumTurnRadius: Math.max(
+      0,
+      options.minimumTurnRadius ?? 0,
+    ),
+    maximumHeadingChangeRad:
+      options.maximumHeadingChangeRad ?? Math.PI,
+  })
+  if (
+    result.complete
+    && (
+      !geometry.valid
+      || terrain.maxForwardGrade
+        > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4
+      || terrain.maxCrossSlope
+        > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4
+    )
+  ) {
+    const repaired = repairRoadCenterlineGeometry(
+      grid,
+      result.nodes,
+      waypoints,
+      AUTO_REPAIR_WAYPOINT_TOLERANCE,
+      Math.max(0, options.routeClearance ?? 0),
+      Math.max(0, options.minimumTurnRadius ?? 0),
+      options.maximumHeadingChangeRad ?? Math.PI,
+    )
+    if (repaired) {
+      result = {
+        ...result,
+        nodes: repaired.nodes,
+        length: roadNodesLength(repaired.nodes),
+      }
+      geometryAutoRepaired = true
+      autoRepairRoundedCorners = repaired.roundedCorners
+      maxAutoRepairWaypointOffset = repaired.maxWaypointOffset
+      effectiveWaypointTolerance = Math.max(
+        effectiveWaypointTolerance,
+        AUTO_REPAIR_WAYPOINT_TOLERANCE,
+      )
+      geometry = validateRoadCenterlineGeometry(repaired.nodes, {
+        clearance: Math.max(0, options.routeClearance ?? 0),
+        minimumTurnRadius: Math.max(
+          0,
+          options.minimumTurnRadius ?? 0,
+        ),
+        maximumHeadingChangeRad:
+          options.maximumHeadingChangeRad ?? Math.PI,
+      })
+      terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
+        preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+        maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+        maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+      })
+    }
+  }
+  if (result.complete && !geometry.valid) {
+    result = {
+      ...result,
+      complete: false,
+      failureReason: 'road-geometry-self-overlap',
+    }
+  } else if (
+    result.complete
+    && terrain.maxForwardGrade
+      > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4
+  ) {
+    result = {
+      ...result,
+      complete: false,
+      failureReason: 'road-forward-grade-limit',
+    }
+  } else if (
+    result.complete
+    && terrain.maxCrossSlope
+      > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope + 1e-4
+  ) {
+    result = {
+      ...result,
+      complete: false,
+      failureReason: 'road-cross-slope-limit',
+    }
+  }
+  const stats = waypointPassStats(
+    result.nodes,
+    waypoints,
+    effectiveWaypointTolerance,
+  )
   const closedError = closed && result.nodes.length > 1
     ? Math.hypot(
         result.nodes[0]!.x - result.nodes[result.nodes.length - 1]!.x,
@@ -1827,9 +2473,14 @@ export function planWaypointRoadRoute(
   const closureHeadingErrorRad = closed && result.nodes.length > 1
     ? Math.abs(wrapAngle(result.nodes[result.nodes.length - 1]!.heading - result.nodes[0]!.heading))
     : 0
-  let complete = result.complete && stats.maxError <= options.waypointTolerance
+  let complete = result.complete
+    && stats.passed === waypoints.length
+    && stats.maxError <= effectiveWaypointTolerance
   let failureReason = result.failureReason
-  if (stats.maxError > options.waypointTolerance) {
+  if (
+    stats.passed !== waypoints.length
+    || stats.maxError > effectiveWaypointTolerance
+  ) {
     complete = false
     failureReason = 'waypoint-missed'
   } else if (closed && closedError > 0.5) {
@@ -1842,6 +2493,7 @@ export function planWaypointRoadRoute(
   }
   return {
     ...result,
+    ...terrain,
     complete,
     failureReason,
     closed: closed && closedError <= 0.5,
@@ -1850,6 +2502,18 @@ export function planWaypointRoadRoute(
     maxWaypointError: stats.maxError,
     closureHeadingErrorRad,
     shortestExpandedStates,
+    smoothingFallback,
+    smoothingFallbackReason: smoothingFailureReason,
+    detourRadius: options.pathDeviation,
+    maxDetourDistance: 0,
+    detourRadiusExpanded: false,
+    minCenterlineClearance: geometry.minCenterlineClearance,
+    minTurnRadius: geometry.minTurnRadius,
+    maxHeadingChangeRad: geometry.maxHeadingChangeRad,
+    geometryAutoRepaired,
+    autoRepairRoundedCorners,
+    maxAutoRepairWaypointOffset,
+    effectiveWaypointTolerance,
   }
 }
 

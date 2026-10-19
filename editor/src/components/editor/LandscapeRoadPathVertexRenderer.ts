@@ -12,8 +12,8 @@ import {
 
 /**
  * Editor overlay for proceduralLandscape road waypoints. Waypoints use
- * screen-sized 3D map pins with always-facing index badges; the path itself is
- * still a simple editor-only polyline.
+ * screen-sized 3D map pins with always-facing index badges. The connecting
+ * path is a dashed editor-only waypoint guide, not the generated centerline.
  */
 
 export type LandscapeRoadPathVertexHandlePickResult = {
@@ -237,14 +237,17 @@ export function createLandscapeRoadPathVertexRenderer(): LandscapeRoadPathVertex
           point.z,
         )),
       )
-      const lineMaterial = new THREE.LineBasicMaterial({
+      const lineMaterial = new THREE.LineDashedMaterial({
         color: LANDSCAPE_ROAD_PATH_LINE_COLOR,
         transparent: true,
-        opacity: 0.95,
+        opacity: 0.65,
+        dashSize: 5,
+        gapSize: 4,
         depthTest: false,
         depthWrite: false,
       })
       line = new THREE.Line(lineGeometry, lineMaterial)
+      line.computeLineDistances()
       line.name = 'LandscapeRoadPathLine'
       line.renderOrder = LANDSCAPE_ROAD_VERTEX_HANDLE_RENDER_ORDER
       line.layers.enableAll()

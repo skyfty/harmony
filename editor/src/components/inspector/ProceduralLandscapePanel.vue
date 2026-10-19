@@ -249,6 +249,12 @@ const roadStatusText = computed(() => {
 })
 const roadFailureText = computed(() => {
   const reason = runtimeStats.value?.roadFailureReason
+  if (reason === 'road-geometry-self-overlap' && runtimeStats.value) {
+    const width = propsValue.value?.road.width ?? 0
+    const requiredClearance = Math.max(7, width)
+    const requiredTurnRadius = 20
+    return `路线存在自重叠或过急弯道，该路线未提交。当前中心线间距 ${runtimeStats.value.roadMinCenterlineClearance.toFixed(1)}m（需 ≥ ${requiredClearance.toFixed(1)}m），最小转弯半径 ${runtimeStats.value.roadMinTurnRadius.toFixed(1)}m（需 ≥ ${requiredTurnRadius.toFixed(1)}m）。请增大绕行半径或调整途经点。`
+  }
   if (
     !reason
     || reason === 'reached-guide-end'
@@ -298,8 +304,40 @@ const roadFailureText = computed(() => {
     'guided-official-blocked': '官方 Hills 曲线无法在骨架走廊内满足坡度限制',
     'guide-empty': '全局选线骨架为空',
     'route-too-short': '单路模式至少需要一个终点途径点',
+    'road-geometry-self-overlap': '路线存在自重叠或过急弯道，请增大绕行半径或调整途经点',
   }
   return labels[reason] ?? `道路生成失败：${reason}`
+})
+const roadBuildNoticeText = computed(() => {
+  const stats = runtimeStats.value
+  if (!stats) {
+    return ''
+  }
+  const notices: string[] = []
+  if (stats.roadSmoothingFallback) {
+    const smoothingReasonLabels: Record<string, string> = {
+      'smoothing-forward-grade-limit': '平滑段超出纵坡限制',
+      'smoothing-cross-slope-limit': '平滑段超出横坡限制',
+      'smoothing-waypoint-tolerance': '平滑段偏离途经点',
+      'smoothing-outside-terrain': '平滑段超出地形范围',
+      'smoothing-partial-fallback': '部分路段保留原始追踪线',
+    }
+    const detail = stats.roadSmoothingFallbackReason
+      ? smoothingReasonLabels[stats.roadSmoothingFallbackReason]
+      : null
+    notices.push(`曲线平滑已降级，已保留地形可行路线${detail ? `（${detail}）` : ''}。`)
+  }
+  if (stats.roadDetourRadiusExpanded) {
+    notices.push(
+      `绕行半径 ${Math.round(stats.roadDetourRadius)}m 内没有可行路线，已使用约 ${Math.round(stats.roadMaxDetourDistance)}m 的绕行距离。`,
+    )
+  }
+  if (stats.roadGeometryAutoRepaired) {
+    notices.push(
+      `已自动圆滑 ${stats.roadAutoRepairRoundedCorners} 个弯道，最大途经点偏移 ${stats.roadMaxAutoRepairWaypointOffset.toFixed(1)}m。`,
+    )
+  }
+  return notices.join(' ')
 })
 
 watch(
@@ -396,6 +434,7 @@ function handleGenerateRoad(): void {
       'loop-termination-distance': '闭环回程未到达 P1，已保留上一版公路。',
       'loop-termination-grade': '闭环最后连接段坡度过陡，已保留上一版公路。',
       'route-too-short': '单路模式至少需要一个终点途径点。',
+      'road-geometry-self-overlap': '路线存在自重叠或过急弯道，已保留上一版公路；请增大绕行半径或调整途经点。',
     }
     roadActionMessage.value = labels[result.failureReason ?? '']
       ?? `公路生成失败（${result.failureReason ?? 'unknown'}），已保留上一版公路。`
@@ -482,14 +521,15 @@ const samplingBlocks: FieldBlock[] = [
 const roadPathBlock = computed<FieldBlock>(() => ({
   title: '途径约束',
   hint: routeTermination.value === 'loop'
-    ? '按顺序经过全部途径点，并自动回到 P1；点击按地形边界与局部坡度校验，不可用位置在 50m 内吸附。'
+    ? '按顺序经过全部途径点，并自动回到 P1；绕行半径用于相邻点之间的地形搜索，点击吸附仍为 50m。'
     : routeTermination.value === 'dead-end'
-      ? '按顺序经过全部途径点，并在最后一个途径点结束；点击按地形边界与局部坡度校验，不可用位置在 50m 内吸附。'
+      ? '按顺序经过全部途径点，并在最后一个途径点结束；绕行半径用于相邻点地形搜索，点击吸附仍为 50m。'
     : routeStrategy.value === 'seeded'
-      ? 'P1 是起点，P2…Pn 全部按顺序经过；低地偏好只影响自然观光选线，不限制途经点高程。不可用位置在 50m 内吸附。'
-      : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界；点击按地形边界与局部坡度校验，不可用位置在 50m 内吸附。',
+      ? 'P1 是起点，P2…Pn 全部按顺序经过；绕行半径是软约束，低地偏好只影响自然观光选线。点击吸附仍为 50m。'
+      : '按顺序经过全部途径点，最后按 Slow Roads 规则延伸到地形边界；绕行半径是软约束，点击吸附仍为 50m。',
   rows: [[
     { key: 'waypointTolerance', label: '途径容差', suffix: 'm', step: 1 },
+    { key: 'pathDeviation', label: '相邻点绕行半径', suffix: 'm', step: 10 },
   ]],
 }))
 
@@ -933,10 +973,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             >清除公路</button>
           </div>
           <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
-          <div v-if="selectedNode?.locked" class="pl-hint">
-            节点已锁定：节点变换与普通视口选择受限，公路途经点仍可编辑。
-          </div>
-
+  
           <div class="pl-subtitle">选线策略</div>
           <div class="pl-choice-row">
             <button
@@ -1007,6 +1044,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             </v-virtual-scroll>
           </div>
           <div v-if="roadStatusText" class="pl-hint">{{ roadStatusText }}</div>
+          <div v-if="roadBuildNoticeText" class="pl-hint pl-hint--stale">{{ roadBuildNoticeText }}</div>
           <div v-if="roadFailureText" class="pl-hint pl-hint--error">{{ roadFailureText }}</div>
 
           <div class="pl-road-style">

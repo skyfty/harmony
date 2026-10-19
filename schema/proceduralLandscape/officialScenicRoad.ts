@@ -271,7 +271,6 @@ function summarizeScenicRoute(
       lowlandCoverageFraction: 0,
     }
   }
-  const heights: number[] = []
   const percentiles: number[] = []
   let totalLength = 0
   let weightedPercentile = 0
@@ -285,7 +284,6 @@ function summarizeScenicRoute(
     if (height == null) {
       continue
     }
-    heights[index] = height
     const percentile = profile.percentileAtHeight(height)
     percentiles[index] = percentile
     maxElevationPercentile = Math.max(maxElevationPercentile, percentile)
@@ -313,6 +311,8 @@ function summarizeScenicRoute(
     }
   }
   const gradeLookahead = 50
+  // Grade belongs to the drivable design centerline. Raw terrain can be
+  // steeper where the repair has already applied a valid cut/fill profile.
   for (let index = 0; index < nodes.length - 1; index += 1) {
     let cursor = index + 1
     let span = 0
@@ -320,8 +320,8 @@ function summarizeScenicRoute(
       span += Math.max(1e-3, distance(nodes[cursor - 1]!, nodes[cursor]!))
       cursor += 1
     }
-    const startHeight = heights[index]
-    const endHeight = heights[Math.max(index, cursor - 1)]
+    const startHeight = nodes[index]?.y
+    const endHeight = nodes[Math.max(index, cursor - 1)]?.y
     if (startHeight != null && endHeight != null && span > 1e-3) {
       maxForwardGrade = Math.max(
         maxForwardGrade,
