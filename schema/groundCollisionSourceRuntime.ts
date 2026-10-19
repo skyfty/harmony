@@ -10,7 +10,11 @@ import {
   type SceneNode,
   type SceneNodeComponentState,
 } from './core'
-import { isProceduralLandscapeRoadSurface } from './proceduralLandscape/collisionMetadata'
+import {
+  isProceduralLandscapeRoadCollision,
+  isProceduralLandscapeRoadbedSurface,
+  isProceduralLandscapeRoadSurface,
+} from './proceduralLandscape/collisionMetadata'
 import type { ProceduralLandscapeComponentProps } from './proceduralLandscape/config'
 import {
   getProceduralLandscapeStats,
@@ -159,6 +163,8 @@ export function hasGroundCollisionMesh(sourceObject: Object3D | null | undefined
       mesh.isMesh === true
       && mesh.isInstancedMesh !== true
       && !isProceduralLandscapeRoadSurface(object)
+      && !isProceduralLandscapeRoadbedSurface(object)
+      && !isProceduralLandscapeRoadCollision(object)
     ) {
       const position = mesh.geometry?.getAttribute('position')
       if (position && position.itemSize >= 3 && position.count >= 3) {

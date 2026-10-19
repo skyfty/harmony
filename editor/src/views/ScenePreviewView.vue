@@ -94,7 +94,10 @@ import {
 } from '@schema/vehicleInput'
 import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
 import { resolveDeviceAdaptationPlatform, resolveDeviceAdaptationProfile } from '@schema/deviceAdaptation'
-import { ScenePreviewPhysicsCollisionDebugRuntime } from '@/physics/collisionDebugRuntime'
+import {
+	DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE,
+	ScenePreviewPhysicsCollisionDebugRuntime,
+} from '@/physics/collisionDebugRuntime'
 import {
 	type PhysicsBackendPreference,
 	type PhysicsBridge,
@@ -624,7 +627,7 @@ const sceneStateById = new Map<string, SceneViewControlSnapshot>()
 const previousSceneById = new Map<string, string>()
 const physicsCollisionDebugRuntime = new ScenePreviewPhysicsCollisionDebugRuntime()
 
-const isPhysicsCollisionDebugVisible = ref(true)
+const isPhysicsCollisionDebugVisible = ref(DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE)
 const isInstancedCullingVisualizationVisible = ref(false)
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
@@ -15955,6 +15958,9 @@ watch(
 								@update:model-value="togglePhysicsCollisionDebug"
 							/>
 						</v-list-item>
+						<div class="scene-preview__debug-hint">
+							开启后会绘制大量地形和公路碰撞网格，可能明显降低帧率。
+						</div>
 					</v-list>
 				</v-card>
 			</v-menu>
@@ -17756,6 +17762,14 @@ watch(
 
 .scene-preview__debug-checkbox {
 	margin: 0;
+}
+
+.scene-preview__debug-hint {
+	padding: 0 16px 10px;
+	max-width: 240px;
+	color: rgba(245, 247, 255, 0.62);
+	font-size: 11px;
+	line-height: 1.45;
 }
 
 .scene-preview__controls {

@@ -1519,7 +1519,7 @@ describe('road cross-slope drape (贴合横坡)', () => {
     headingDelta: 0,
   })
 
-  it('marks the road surface as collision-excluded', () => {
+  it('marks the procedural road surface for collision tooling', () => {
     const handle = createRoadBand({
       nodes: [makeNode(0, 0, 10), makeNode(10, 0, 10)],
       halfWidth: 3,

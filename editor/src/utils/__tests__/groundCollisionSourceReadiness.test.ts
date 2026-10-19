@@ -11,6 +11,10 @@ import {
   hasGroundCollisionMesh,
   waitForGroundCollisionSourceTerrainReady,
 } from '@schema/groundCollisionSourceRuntime'
+import {
+  markProceduralLandscapeRoadbedSurface,
+  markProceduralLandscapeRoadCollision,
+} from '@schema/proceduralLandscape/collisionMetadata'
 
 type NodeOptions = {
   groundCollisionEnabled?: boolean
@@ -237,5 +241,23 @@ describe('hasGroundCollisionMesh', () => {
     const emptyGeometry = new THREE.Group()
     emptyGeometry.add(new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial()))
     expect(hasGroundCollisionMesh(emptyGeometry)).toBe(false)
+
+    const roadCollision = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeRoadCollision(roadCollision)
+    const roadCollisionGroup = new THREE.Group()
+    roadCollisionGroup.add(roadCollision)
+    expect(hasGroundCollisionMesh(roadCollisionGroup)).toBe(false)
+
+    const roadbed = new THREE.Mesh(
+      new THREE.PlaneGeometry(10, 10),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeRoadbedSurface(roadbed)
+    const roadbedGroup = new THREE.Group()
+    roadbedGroup.add(roadbed)
+    expect(hasGroundCollisionMesh(roadbedGroup)).toBe(false)
   })
 })

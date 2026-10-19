@@ -5,9 +5,8 @@
  * creates its walls asynchronously (after the terrain grid finished rasterizing) and
  * rebuilds them on road edits. These tests lock the incremental re-index: late
  * obstacle meshes appear, unchanged meshes keep their bodies (no churn / no collision
- * gap) and hidden / removed / geometry-swapped meshes lose theirs. The road surface
- * itself is excluded because the ground / terrain underneath already provides
- * collision for the same area.
+ * gap) and hidden / removed / geometry-swapped meshes lose theirs. The rendered
+ * road band stays excluded; the runtime supplies a decimated collision ribbon.
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import * as THREE from 'three'
@@ -21,8 +20,13 @@ import {
   type MeshCollisionRuntimeHostSnapshot,
 } from '@schema/meshCollisionRuntimeHost'
 import { createRoadBand } from '@schema/proceduralLandscape/roadBand'
+import { createRoadCollisionGeometry } from '@schema/proceduralLandscape/roadCollision'
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
-import { isProceduralLandscapeRoadSurface } from '@schema/proceduralLandscape/collisionMetadata'
+import {
+  isProceduralLandscapeRoadSurface,
+  markProceduralLandscapeRoadbedSurface,
+  markProceduralLandscapeRoadCollision,
+} from '@schema/proceduralLandscape/collisionMetadata'
 
 interface CreatedBodyRecord {
   shape: MeshCollisionChunkShape
@@ -354,7 +358,7 @@ describe('mesh collision runtime host incremental re-index', () => {
     expect(harness.created.length).toBeGreaterThan(0)
   })
 
-  it('excludes a real procedural-landscape road surface from collision', () => {
+  it('excludes the dense rendered road band from collision', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
     const probes = [new THREE.Vector3(0, 0, 0)]
@@ -394,7 +398,7 @@ describe('mesh collision runtime host incremental re-index', () => {
     roadBand.dispose()
   })
 
-  it('keeps walls collidable alongside an excluded road surface', () => {
+  it('keeps walls collidable alongside an excluded road band', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
     const probes = [new THREE.Vector3(0, 0, 0)]
@@ -437,5 +441,79 @@ describe('mesh collision runtime host incremental re-index', () => {
       expect(shapeMaxY(record.shape)).toBeCloseTo(6, 5)
     }
     roadBand.dispose()
+  })
+
+  it('indexes the decimated procedural road collision ribbon', () => {
+    const host = new THREE.Group()
+    host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
+    const probes = [new THREE.Vector3(0, 0, 0)]
+    const harness = createHarness()
+    drain(harness, host, 'terrain-node', probes)
+    const terrainCreates = harness.created.length
+
+    const rows = Array.from({ length: 61 }, (_, index) => ({
+      x: -30 + index,
+      z: 0,
+      y: 5,
+      heading: 0,
+      index,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: 0,
+      sourceIndex: index,
+    }))
+    const collision = createRoadCollisionGeometry({
+      rows,
+      halfWidth: 2,
+      rowSpacing: 6,
+      columnCount: 5,
+      lift: 0.05,
+    })
+    expect(collision).not.toBeNull()
+    const mesh = new THREE.Mesh(collision!.geometry, new THREE.MeshBasicMaterial())
+    host.add(mesh)
+    drain(harness, host, 'terrain-node', probes)
+
+    const roadBodies = harness.created.slice(terrainCreates).filter(isElevatedRecord)
+    expect(roadBodies.length).toBeGreaterThan(0)
+    expect(shapeMaxY(roadBodies[0]!.shape)).toBeCloseTo(5.05, 5)
+  })
+
+  it('excludes the dense rendered DEM roadbed from collision', () => {
+    const host = new THREE.Group()
+    host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
+    const probes = [new THREE.Vector3(0, 0, 0)]
+    const harness = createHarness()
+    drain(harness, host, 'terrain-node', probes)
+    const terrainCreates = harness.created.length
+
+    const roadbed = new THREE.Mesh(makeRibbonGeometry(40, 30, 5, 4), new THREE.MeshBasicMaterial())
+    markProceduralLandscapeRoadbedSurface(roadbed)
+    host.add(roadbed)
+    drain(harness, host, 'terrain-node', probes)
+
+    expect(harness.created).toHaveLength(terrainCreates)
+  })
+
+  it('indexes the decimated DEM roadbed collision ribbon', () => {
+    const host = new THREE.Group()
+    host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))
+    const probes = [new THREE.Vector3(0, 0, 0)]
+    const harness = createHarness()
+    drain(harness, host, 'terrain-node', probes)
+    const terrainCreates = harness.created.length
+
+    const roadbedCollision = new THREE.Mesh(
+      makeRibbonGeometry(40, 30, 5, 4),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeRoadCollision(roadbedCollision)
+    host.add(roadbedCollision)
+    drain(harness, host, 'terrain-node', probes)
+
+    const roadbedBodies = harness.created.slice(terrainCreates).filter(isElevatedRecord)
+    expect(roadbedBodies.length).toBeGreaterThan(0)
+    expect(shapeMaxY(roadbedBodies[0]!.shape)).toBeCloseTo(5, 5)
   })
 })

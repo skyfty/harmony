@@ -12,7 +12,10 @@ import {
   addPhysicsBodyToWorld,
   removePhysicsBodyBindingBodies,
 } from './physicsRuntimeBridge'
-import { isProceduralLandscapeRoadSurface } from './proceduralLandscape/collisionMetadata'
+import {
+  isProceduralLandscapeRoadbedSurface,
+  isProceduralLandscapeRoadSurface,
+} from './proceduralLandscape/collisionMetadata'
 
 // Mesh driven collision runtime.
 //
@@ -26,8 +29,8 @@ import { isProceduralLandscapeRoadSurface } from './proceduralLandscape/collisio
 // signature of the source subtree and applies the difference incrementally: meshes that
 // appeared get new chunks, meshes that disappeared / were hidden / swapped their geometry
 // lose theirs, and unchanged meshes keep their resident bodies untouched (no collision
-// gap while re-indexing). The procedural road surface is deliberately excluded because
-// the ground / terrain underneath already provides collision for the same area.
+// gap while re-indexing). The dense rendered road/roadbed ribbons stay excluded;
+// the procedural landscape adds decimated collision-only ribbons for both.
 
 /** Probe distance at which a collision chunk is created. */
 export const MESH_COLLISION_ACTIVATION_RADIUS_METERS = GROUND_COLLISION_RADIUS_METERS
@@ -194,7 +197,8 @@ function resolveCollisionMeshSignature(mesh: THREE.Object3D, geometry: THREE.Buf
  * Cheap eligibility check shared by the budgeted collection and the per-sync change
  * detection; both must agree so a signature never skips a mesh the collector accepts.
  * Instanced meshes (grass / bushes / tree cards) stay out of collision on purpose.
- * The procedural road band stays out too: it is draped onto already-collidable ground.
+ * The rendered road band and DEM roadbed also stay out; the procedural landscape
+ * supplies cheaper collision-only ribbons at the same design heights.
  */
 function isCollisionEligibleMesh(object: THREE.Object3D): boolean {
   const mesh = object as THREE.Mesh & {
@@ -205,6 +209,7 @@ function isCollisionEligibleMesh(object: THREE.Object3D): boolean {
     mesh.isMesh !== true
     || mesh.isInstancedMesh === true
     || isProceduralLandscapeRoadSurface(object)
+    || isProceduralLandscapeRoadbedSurface(object)
   ) {
     return false
   }

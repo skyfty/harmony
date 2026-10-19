@@ -3,6 +3,12 @@ import type { PhysicsBackendPreference, PhysicsBodyDesc, PhysicsSceneAsset, Phys
 
 export type PhysicsCollisionDebugEngine = Extract<PhysicsBackendPreference, 'ammo' | 'cannon'>
 
+/**
+ * Collision debug draws every terrain, roadbed and road collision shape.
+ * Large procedural scenes are unplayable with it enabled, so it stays opt-in.
+ */
+export const DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE = false
+
 type CannonDebuggerLike = {
   update?: () => void
   clear?: () => void
@@ -263,11 +269,11 @@ export class ScenePreviewPhysicsCollisionDebugRuntime {
   private ammoBodies = new Map<number, AmmoBodyEntry>()
   private cannonWorld: unknown | null = null
   private cannonDebugger: CannonDebuggerLike | null = null
-  private visible = true
+  private visible = DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE
 
   constructor() {
     this.root.name = 'PhysicsCollisionDebugRoot'
-    this.root.visible = true
+    this.root.visible = this.visible
   }
 
   attachScene(scene: THREE.Scene | null): void {

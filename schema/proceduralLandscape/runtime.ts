@@ -74,6 +74,11 @@ import {
   type ProceduralLandscapeSurfaceOverrides,
 } from './surfaceMaterial'
 import { createRoadBand, type RoadBandHandle, type RoadBandTextures } from './roadBand'
+import { createRoadCollisionGeometry } from './roadCollision'
+import {
+  markProceduralLandscapeRoadbedSurface,
+  markProceduralLandscapeRoadCollision,
+} from './collisionMetadata'
 import { createTreeMeshManager, type TreeMeshManager } from './treeMeshes'
 import { computeRoadMarkings, type RoadMarkingWeights } from './roadMarkings'
 import { DEFAULT_ROAD_STYLE, ROAD_STYLE_PROFILES, isSingleTrackRoad } from './roadStyle'
@@ -176,6 +181,10 @@ const ROAD_BAND_LIFT = 0.05
 const ROAD_BAND_COLUMN_COUNT = 9
 /** 贴合模式下路面带的沿路采样间距（米）：追踪节点 8m 之间加密，接住横向折坡。 */
 const ROAD_BAND_ROW_SPACING = 2
+/** 碰撞路面沿路间距：只保留可行走形状，避免 2m 密集三角面造成接触抖动。 */
+const ROAD_COLLISION_ROW_SPACING = 4
+const ROAD_COLLISION_COLUMN_COUNT_DEM = 3
+const ROAD_COLLISION_COLUMN_COUNT_GENERIC = 5
 const DEBUG_ROAD_HEIGHT_OFFSET = 0.6
 const SOURCE_CHECK_INTERVAL_MS = 500
 const TREE_UNIT_SIZE = 8
@@ -830,6 +839,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demTransformWarning: string | null = null
   let demTransformWarningActive = false
   let demRoadbedMesh: THREE.Mesh | null = null
+  let demRoadbedCollisionMesh: THREE.Mesh | null = null
   let demRoadbedHalfWidth = 0
   let densityField: LandscapeDensityField | null = null
   let variationField: LandscapeDensityField | null = null
@@ -857,6 +867,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let surfacePatch: ProceduralLandscapeSurfacePatch | null = null
   let surfaceMeshes: THREE.Mesh[] = []
   let roadBand: RoadBandHandle | null = null
+  let roadCollisionMesh: THREE.Mesh | null = null
   let treeMeshManager: TreeMeshManager | null = null
   let treeMeshInitStarted = false
   let waterPlane: WaterPlaneHandle | null = null
@@ -1190,6 +1201,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function disposeDemRoadbed(): void {
+    if (demRoadbedCollisionMesh) {
+      demRoadbedCollisionMesh.removeFromParent()
+      demRoadbedCollisionMesh.geometry.dispose()
+      const collisionMaterial = demRoadbedCollisionMesh.material
+      if (Array.isArray(collisionMaterial)) {
+        collisionMaterial.forEach((entry) => entry.dispose())
+      } else {
+        collisionMaterial.dispose()
+      }
+      demRoadbedCollisionMesh = null
+    }
     if (!demRoadbedMesh) {
       demRoadbedHalfWidth = 0
       return
@@ -1343,6 +1365,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return true
   }
 
+  function disposeRoadCollisionMesh(): void {
+    if (!roadCollisionMesh) {
+      return
+    }
+    roadCollisionMesh.removeFromParent()
+    roadCollisionMesh.geometry.dispose()
+    const material = roadCollisionMesh.material
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry.dispose())
+    } else {
+      material.dispose()
+    }
+    roadCollisionMesh = null
+  }
+
   function disposeSurfaceState(): void {
     surfacePatch?.restore()
     surfacePatch = null
@@ -1371,6 +1408,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadFieldTexture = createEmptyRoadFieldTexture()
     roadBand?.dispose()
     roadBand = null
+    disposeRoadCollisionMesh()
     roadMarkings = null
     densityField = null
     variationField = null
@@ -2107,8 +2145,25 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             )
             mesh.name = `slowroads-dem-roadbed-${hooks.nodeId}`
             mesh.userData.proceduralLandscapeDemRoadbed = true
+            markProceduralLandscapeRoadbedSurface(mesh)
             hostObject.add(mesh)
             demRoadbedMesh = mesh
+            const collisionRoadbed = createDemRoadbedTargetGeometry(roadBandRows, demRoadbedTarget, {
+              lateralStep: 8,
+              rowSpacing: 8,
+              lift: 0.01,
+              hostInverse,
+            })
+            if (collisionRoadbed) {
+              const collisionMaterial = new THREE.MeshBasicMaterial()
+              collisionMaterial.visible = false
+              const collisionMesh = new THREE.Mesh(collisionRoadbed.geometry, collisionMaterial)
+              collisionMesh.name = `slowroads-dem-roadbed-collision-${hooks.nodeId}`
+              markProceduralLandscapeRoadCollision(collisionMesh)
+              tagArtifact(collisionMesh)
+              hostObject.add(collisionMesh)
+              demRoadbedCollisionMesh = collisionMesh
+            }
             demRoadbedMaxCutFill = roadbed.maxCutFill
             demRoadbedTriangleCount = roadbed.triangleCount
             stats.roadbedOuterError = roadbed.outerError
@@ -2516,6 +2571,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   function buildRoadBand(): void {
     roadBand?.dispose()
     roadBand = null
+    disposeRoadCollisionMesh()
     if (!roadResult || roadResult.nodes.length < 2 || !hostObject) {
       return
     }
@@ -2565,6 +2621,28 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadBand.setFresnel(appliedLighting.fresnel)
     tagArtifact(roadBand.mesh)
     hostObject.add(roadBand.mesh)
+    const collisionGeometry = createRoadCollisionGeometry({
+      rows: bandRows,
+      columnHeights: roadBandColumns,
+      halfWidth,
+      rowSpacing: ROAD_COLLISION_ROW_SPACING,
+      columnCount: usesDemTerrain()
+        ? ROAD_COLLISION_COLUMN_COUNT_DEM
+        : ROAD_COLLISION_COLUMN_COUNT_GENERIC,
+      lift: ROAD_BAND_LIFT,
+      hostInverse,
+    })
+    if (collisionGeometry) {
+      const collisionMaterial = new THREE.MeshBasicMaterial()
+      collisionMaterial.visible = false
+      const collisionMesh = new THREE.Mesh(collisionGeometry.geometry, collisionMaterial)
+      collisionMesh.name = `slowroads-road-collision-${hooks.nodeId}`
+      collisionMesh.visible = props.road.enabled
+      markProceduralLandscapeRoadCollision(collisionMesh)
+      tagArtifact(collisionMesh)
+      hostObject.add(collisionMesh)
+      roadCollisionMesh = collisionMesh
+    }
   }
 
   /** 当前季节 + 路宽对应的官方路面贴图集（单车道 `roadSingle` / 宽路 `road` + 划线）。 */
@@ -2675,6 +2753,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       barrierLayer.visible = props.walls.fence.enabled
     }
     roadBand?.setVisible(props.road.enabled)
+    if (roadCollisionMesh) {
+      roadCollisionMesh.visible = props.road.enabled
+    }
     for (const handle of foliageMaterials.values()) {
       const factor = handle.spec.kind === 'barrier'
         ? PROCEDURAL_LANDSCAPE_WIND_FACTOR.barrier
@@ -4270,6 +4351,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       treeMeshManager = null
       roadBand?.dispose()
       roadBand = null
+      disposeRoadCollisionMesh()
       roadFieldTexture?.dispose()
       roadFieldTexture = null
       forestMaskTexture?.dispose()
