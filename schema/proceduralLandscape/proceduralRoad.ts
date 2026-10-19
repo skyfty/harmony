@@ -12,10 +12,10 @@ import {
   summarizeScenicRoadTerrain,
   traceOfficialScenicGuidedRoad,
 } from './officialScenicRoad'
+import { buildGlobalScenicGuide } from './globalScenicGuide'
 import {
-  buildGlobalScenicGuide,
-  roundGuideJoints,
-} from './globalScenicGuide'
+  smoothPlanarCenterline,
+} from './centerlineBezier'
 
 export interface WaypointRoadPlanOptions {
   waypoints: RoadWaypoint[]
@@ -487,32 +487,168 @@ function smoothPolyline(
   return output
 }
 
+type WaypointTerrainOffset = {
+  waypointX: number
+  waypointZ: number
+  offsetX: number
+  offsetZ: number
+}
+
 /**
- * Apply a quadratic Bezier fillet to rendered centerline corners around
- * mandatory waypoints. The exact waypoint remains the Bezier control point,
- * while the carriageway passes inside its tolerance disc instead of making a
- * 90-degree turn at the node.
+ * Mandatory waypoints may sit on a steep sidehill. A smooth line through the
+ * exact point would have to cross the fall line, so allow the alignment to
+ * settle slightly downhill inside the existing waypoint tolerance disc.
  */
-function roundRoadWaypointCorners(
+function resolveWaypointTerrainOffsets(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+  waypoints: ReadonlyArray<Vec2>,
+  waypointTolerance: number,
+  anchors: ReadonlyArray<{ waypointIndex: number; nodeIndex: number; distance: number }>,
+): WaypointTerrainOffset[] {
+  const offsets: WaypointTerrainOffset[] = []
+  const crossLimit = SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 1.08
+  const spacing = Math.max(1, grid.cellSize)
+  for (const anchor of anchors) {
+    const { waypointIndex, nodeIndex, distance: nodeDistance } = anchor
+    const waypoint = waypoints[waypointIndex]!
+    const node = nodes[nodeIndex]!
+    const previous = nodes[nodeIndex - 1]!
+    const next = nodes[Math.min(nodes.length - 1, nodeIndex + 1)]!
+    const heading = Math.atan2(next.z - previous.z, next.x - previous.x)
+    const sampleGradient = (x: number, z: number): { x: number; z: number } | null => {
+      const west = grid.sampleHeight(x - spacing, z)
+      const east = grid.sampleHeight(x + spacing, z)
+      const north = grid.sampleHeight(x, z - spacing)
+      const south = grid.sampleHeight(x, z + spacing)
+      return west == null || east == null || north == null || south == null
+        ? null
+        : {
+            x: (east - west) / (spacing * 2),
+            z: (south - north) / (spacing * 2),
+          }
+    }
+    const crossSlopeAt = (x: number, z: number): number => {
+      const gradient = sampleGradient(x, z)
+      return gradient
+        ? Math.abs(
+            -Math.sin(heading) * gradient.x
+            + Math.cos(heading) * gradient.z,
+          )
+        : Number.POSITIVE_INFINITY
+    }
+    const currentCrossSlope = crossSlopeAt(node.x, node.z)
+    if (currentCrossSlope <= crossLimit) {
+      continue
+    }
+    const gradient = sampleGradient(node.x, node.z)
+    if (!gradient) {
+      continue
+    }
+    const normalX = -Math.sin(heading)
+    const normalZ = Math.cos(heading)
+    const lateralSlope = normalX * gradient.x + normalZ * gradient.z
+    if (Math.abs(lateralSlope) <= 1e-6) {
+      continue
+    }
+    const direction = lateralSlope > 0 ? -1 : 1
+    const directionX = normalX * direction
+    const directionZ = normalZ * direction
+    const maxOffset = Math.max(
+      0,
+      waypointTolerance - nodeDistance - 0.01,
+    )
+    if (maxOffset <= 0) {
+      continue
+    }
+    const step = Math.max(0.5, waypointTolerance / 10)
+    let bestOffset = 0
+    let bestCrossSlope = currentCrossSlope
+    const sampleOffsets: number[] = []
+    for (let offset = Math.min(step, maxOffset); offset < maxOffset - 1e-6; offset += step) {
+      sampleOffsets.push(offset)
+    }
+    sampleOffsets.push(maxOffset)
+    for (const offset of sampleOffsets) {
+      const candidate = crossSlopeAt(
+        node.x + directionX * offset,
+        node.z + directionZ * offset,
+      )
+      if (candidate < bestCrossSlope) {
+        bestCrossSlope = candidate
+        bestOffset = offset
+      }
+    }
+    if (bestOffset > 0) {
+      offsets.push({
+        waypointX: waypoint.x,
+        waypointZ: waypoint.z,
+        offsetX: directionX * bestOffset,
+        offsetZ: directionZ * bestOffset,
+      })
+    }
+  }
+  return offsets
+}
+
+function applyWaypointTerrainOffsets(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  offsets: ReadonlyArray<WaypointTerrainOffset>,
+  innerRadius: number,
+): Vec2[] {
+  const outerRadius = innerRadius * 1.75
+  return nodes.map((node) => {
+    let x = node.x
+    let z = node.z
+    for (const offset of offsets) {
+      const distanceToWaypoint = Math.hypot(
+        node.x - offset.waypointX,
+        node.z - offset.waypointZ,
+      )
+      if (distanceToWaypoint >= outerRadius) {
+        continue
+      }
+      const weight = distanceToWaypoint <= innerRadius
+        ? 1
+        : 1 - (distanceToWaypoint - innerRadius)
+          / (outerRadius - innerRadius)
+      x += offset.offsetX * weight
+      z += offset.offsetZ * weight
+    }
+    return { x, z }
+  })
+}
+
+/**
+ * Smooth the complete centerline through the mandatory waypoint corridor.
+ * The route is fitted with curvature-limited cubic Bezier segments so A*
+ * grid stair-steps cannot survive inside an individual route leg.
+ */
+function smoothRoadCenterline(
   grid: TerrainHeightGrid,
   nodes: ReadonlyArray<RoadTraceNode>,
   waypoints: ReadonlyArray<Vec2>,
   waypointTolerance: number,
   termination: WaypointRoadPlanOptions['termination'],
-): RoadTraceNode[] {
+): RoadTraceNode[] | null {
   if (nodes.length < 3) {
     return nodes.map((node) => ({ ...node }))
   }
-  const lastSmoothableWaypoint = termination === 'dead-end'
+  const anchorIndices: number[] = []
+  const waypointAnchors: Array<{
+    waypointIndex: number
+    nodeIndex: number
+    distance: number
+  }> = []
+  let searchStart = 1
+  const lastAnchorWaypoint = termination === 'dead-end'
     ? waypoints.length - 1
     : waypoints.length
-  const jointIndices: number[] = []
-  let searchStart = 0
-  for (let waypointIndex = 1; waypointIndex < lastSmoothableWaypoint; waypointIndex += 1) {
+  for (let waypointIndex = 1; waypointIndex < lastAnchorWaypoint; waypointIndex += 1) {
     const waypoint = waypoints[waypointIndex]!
     let bestIndex = -1
     let bestDistance = Number.POSITIVE_INFINITY
-    for (let index = searchStart; index < nodes.length; index += 1) {
+    for (let index = searchStart; index < nodes.length - 1; index += 1) {
       const node = nodes[index]!
       const candidate = Math.hypot(node.x - waypoint.x, node.z - waypoint.z)
       if (candidate < bestDistance) {
@@ -521,23 +657,39 @@ function roundRoadWaypointCorners(
       }
     }
     if (bestIndex > 0 && bestDistance <= waypointTolerance) {
-      jointIndices.push(bestIndex)
+      anchorIndices.push(bestIndex)
+      waypointAnchors.push({
+        waypointIndex,
+        nodeIndex: bestIndex,
+        distance: bestDistance,
+      })
       searchStart = bestIndex + 1
     }
   }
-  if (!jointIndices.length) {
-    return nodes.map((node) => ({ ...node }))
-  }
   const firstSurface = grid.sampleHeight(nodes[0]!.x, nodes[0]!.z)
   const yOffset = firstSurface == null ? 0 : nodes[0]!.y - firstSurface
-  for (const cutScale of [1, 0.65, 0.35]) {
-    const rounded = roundGuideJoints(
-      grid,
-      nodes.map((node) => ({ x: node.x, z: node.z })),
-      jointIndices,
-      2,
-      waypointTolerance,
-      cutScale,
+  const waypointOffsets = resolveWaypointTerrainOffsets(
+    grid,
+    nodes,
+    waypoints,
+    waypointTolerance,
+    waypointAnchors,
+  )
+  for (const radius of [30, 24, 18, 12]) {
+    const sourcePoints = applyWaypointTerrainOffsets(
+      nodes,
+      waypointOffsets,
+      Math.max(32, radius * 1.25),
+    )
+    const rounded = smoothPlanarCenterline(
+      sourcePoints,
+      {
+        radius,
+        sampleSpacing: 2,
+        controlSpacing: Math.max(10, radius * 1.1),
+        closed: termination === 'loop',
+        anchorIndices,
+      },
     )
     const next: RoadTraceNode[] = []
     let valid = true
@@ -565,28 +717,71 @@ function roundRoadWaypointCorners(
         ? 0
         : wrapAngle(current.heading - previous.heading)
     }
-    let gradeValid = true
-    for (let index = 1; index < next.length; index += 1) {
-      const previous = next[index - 1]!
-      const current = next[index]!
-      const segmentLength = Math.max(1e-6, distance(previous, current))
-      if (
-        Math.abs(current.y - previous.y) / segmentLength
-        > SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade + 1e-4
-      ) {
-        gradeValid = false
-        break
-      }
-    }
+    const closedError = termination === 'loop'
+      ? distance(next[0]!, next[next.length - 1]!)
+      : 0
+    const terrain = evaluateRouteTerrain(grid, next)
+    const waypointError = waypointPassStats(next, waypoints, waypointTolerance).maxError
     if (
-      gradeValid
-      && waypointPassStats(next, waypoints, waypointTolerance).maxError
-        <= waypointTolerance + 1e-4
+      terrain.valid
+      && closedError <= 0.5
+      && waypointError <= waypointTolerance + 1e-4
     ) {
       return next
     }
   }
-  return nodes.map((node) => ({ ...node }))
+  return null
+}
+
+function evaluateRouteTerrain(
+  grid: TerrainHeightGrid,
+  nodes: ReadonlyArray<RoadTraceNode>,
+): { valid: boolean; maxForwardGrade: number; maxCrossSlope: number } {
+  const gradeLimit = SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade * 1.08
+  const crossLimit = SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 1.08
+  const lateralSample = Math.max(8, grid.cellSize)
+  let maxForwardGrade = 0
+  let maxCrossSlope = 0
+  for (let index = 1; index < nodes.length; index += 1) {
+    const previous = nodes[index - 1]!
+    const current = nodes[index]!
+    const segmentLength = distance(previous, current)
+    if (segmentLength <= 1e-6) {
+      continue
+    }
+    if (grid.sampleHeight(current.x, current.z) == null) {
+      return { valid: false, maxForwardGrade, maxCrossSlope }
+    }
+    maxForwardGrade = Math.max(
+      maxForwardGrade,
+      Math.abs(current.y - previous.y) / segmentLength,
+    )
+    const heading = Math.atan2(current.z - previous.z, current.x - previous.x)
+    const normalX = -Math.sin(heading)
+    const normalZ = Math.cos(heading)
+    const middleX = (previous.x + current.x) * 0.5
+    const middleZ = (previous.z + current.z) * 0.5
+    const left = grid.sampleHeight(
+      middleX + normalX * lateralSample,
+      middleZ + normalZ * lateralSample,
+    )
+    const right = grid.sampleHeight(
+      middleX - normalX * lateralSample,
+      middleZ - normalZ * lateralSample,
+    )
+    if (left != null && right != null) {
+      maxCrossSlope = Math.max(
+        maxCrossSlope,
+        Math.abs(left - right) / (2 * lateralSample),
+      )
+    }
+  }
+  return {
+    valid: maxForwardGrade <= gradeLimit + 1e-4
+      && maxCrossSlope <= crossLimit + 1e-4,
+    maxForwardGrade,
+    maxCrossSlope,
+  }
 }
 
 function roadNodesLength(nodes: ReadonlyArray<RoadTraceNode>): number {
@@ -966,7 +1161,10 @@ function finalizeRouteTermination(
     }
   }
   if (terminalDistance > 1e-3) {
-    const grade = Math.abs(terminalHeight - last.y) / terminalDistance
+    const lastSurfaceHeight = grid.sampleHeight(last.x, last.z)
+    const roadOffset = lastSurfaceHeight == null ? 0 : last.y - lastSurfaceHeight
+    const terminalY = terminalHeight + roadOffset
+    const grade = Math.abs(terminalY - last.y) / terminalDistance
     if (grade > maxGrade + 1e-6) {
       return {
         result: route,
@@ -981,7 +1179,7 @@ function finalizeRouteTermination(
     nodes.push({
       x: target.x,
       z: target.z,
-      y: terminalHeight,
+      y: terminalY,
       heading: Math.atan2(target.z - previous.z, target.x - previous.x),
       index: nodes.length,
       lateral: 0,
@@ -1398,18 +1596,24 @@ export function planWaypointRoadRoute(
     }
     let result = terminationResult?.result ?? traced
     if (result.complete && result.nodes.length >= 3) {
-      const roundedNodes = roundRoadWaypointCorners(
+      const roundedNodes = smoothRoadCenterline(
         grid,
         result.nodes,
         waypoints,
         options.waypointTolerance,
         termination,
       )
-      result = {
-        ...result,
-        nodes: roundedNodes,
-        length: roadNodesLength(roundedNodes),
-      }
+      result = roundedNodes
+        ? {
+            ...result,
+            nodes: roundedNodes,
+            length: roadNodesLength(roundedNodes),
+          }
+        : {
+            ...result,
+            complete: false,
+            failureReason: 'blocked',
+          }
     }
     const terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
       preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
@@ -1594,18 +1798,24 @@ export function planWaypointRoadRoute(
     result = appendBoundaryTail(grid, result, options)
   }
   if (result.complete && result.nodes.length >= 3) {
-    const roundedNodes = roundRoadWaypointCorners(
+    const roundedNodes = smoothRoadCenterline(
       grid,
       result.nodes,
       waypoints,
       options.waypointTolerance,
       options.termination,
     )
-    result = {
-      ...result,
-      nodes: roundedNodes,
-      length: roadNodesLength(roundedNodes),
-    }
+    result = roundedNodes
+      ? {
+          ...result,
+          nodes: roundedNodes,
+          length: roadNodesLength(roundedNodes),
+        }
+      : {
+          ...result,
+          complete: false,
+          failureReason: 'blocked',
+        }
   }
   const stats = waypointPassStats(result.nodes, waypoints, options.waypointTolerance)
   const closedError = closed && result.nodes.length > 1

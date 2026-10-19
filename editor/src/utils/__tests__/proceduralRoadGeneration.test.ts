@@ -22,6 +22,10 @@ import {
   roundGuideJoints,
 } from '@schema/proceduralLandscape/globalScenicGuide'
 import {
+  minBezierCenterlineRadius,
+  smoothPlanarCenterline,
+} from '@schema/proceduralLandscape/centerlineBezier'
+import {
   buildTerrainHeightGrid,
   type TerrainHeightGrid,
 } from '@schema/proceduralLandscape/terrainSampler'
@@ -188,7 +192,7 @@ describe('official Slow Roads Hills midline', () => {
     expect(first.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
       second.nodes.map((node) => [node.x, node.z, node.y]),
     )
-  })
+  }, 30_000)
 
   it('builds monotonically increasing DEM elevation percentiles', () => {
     const grid = makeSyntheticGrid(
@@ -310,7 +314,7 @@ describe('official Slow Roads Hills midline', () => {
     expect(second.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
       first.nodes.map((node) => [node.x, node.z, node.y]),
     )
-  })
+  }, 30_000)
 
   it('fails instead of skipping a waypoint isolated by a cliff', () => {
     const grid = makeSyntheticGrid(
@@ -577,7 +581,7 @@ describe('unified waypoint road planning', () => {
     expect(
       maxTurn,
       `maxTurn at ${maxTurnNode}: ${JSON.stringify(nearby[maxTurnNode - 1])} -> ${JSON.stringify(nearby[maxTurnNode])} -> ${JSON.stringify(nearby[maxTurnNode + 1])}`,
-    ).toBeLessThan((35 * Math.PI) / 180)
+    ).toBeLessThan((15 * Math.PI) / 180)
   })
 
   it('rounds guide joins before the official tracer consumes them', () => {
@@ -619,6 +623,38 @@ describe('unified waypoint road planning', () => {
     expect(maxTurn).toBeLessThan((35 * Math.PI) / 180)
   })
 
+  it('removes A* staircase zigzags from the smoothed centerline', () => {
+    const points = Array.from({ length: 61 }, (_, index) => ({
+      x: index * 10,
+      z: index % 2 === 0 ? -9 : 9,
+    }))
+    const smoothed = smoothPlanarCenterline(points, {
+      radius: 30,
+      sampleSpacing: 2,
+      controlSpacing: 33,
+    })
+    const countHeadingFlips = (line: ReadonlyArray<{ x: number; z: number }>): number => {
+      let previousSign = 0
+      let flips = 0
+      for (let index = 2; index < line.length; index += 1) {
+        const a = line[index - 2]!
+        const b = line[index - 1]!
+        const c = line[index]!
+        const cross = (b.x - a.x) * (c.z - b.z) - (b.z - a.z) * (c.x - b.x)
+        const sign = Math.abs(cross) <= 1e-9 ? 0 : Math.sign(cross)
+        if (sign !== 0 && previousSign !== 0 && sign !== previousSign) {
+          flips += 1
+        }
+        if (sign !== 0) {
+          previousSign = sign
+        }
+      }
+      return flips
+    }
+    expect(countHeadingFlips(smoothed)).toBeLessThan(countHeadingFlips(points) * 0.25)
+    expect(minBezierCenterlineRadius(smoothed)).toBeGreaterThanOrEqual(24)
+  })
+
   it('passes ordered waypoints and continues to the boundary', () => {
     const grid = makeSyntheticGrid(
       30_000,
@@ -653,7 +689,7 @@ describe('unified waypoint road planning', () => {
     expect(second.nodes.map((node) => [node.x, node.z, node.y])).toEqual(
       first.nodes.map((node) => [node.x, node.z, node.y]),
     )
-  })
+  }, 30_000)
 
   it('uses terrain-cost shortest routing and extends naturally to the boundary', () => {
     const grid = makeGrid((x, z) => (

@@ -907,6 +907,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               @click="handleClearRoadPath"
             >清除公路</button>
           </div>
+          <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
 
           <div class="pl-subtitle">选线策略</div>
           <div class="pl-choice-row">
@@ -977,6 +978,7 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               </template>
             </v-virtual-scroll>
           </div>
+          <div v-if="roadStatusText" class="pl-hint">{{ roadStatusText }}</div>
           <div v-if="roadFailureText" class="pl-hint pl-hint--error">{{ roadFailureText }}</div>
 
           <div class="pl-road-style">

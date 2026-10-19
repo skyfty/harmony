@@ -3,6 +3,7 @@ import {
   buildScenicTerrainElevationProfile,
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
 } from './officialScenicRoad'
+import { smoothPlanarCenterline } from './centerlineBezier'
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
 
@@ -801,6 +802,7 @@ function prepareGuide(
     ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope
   const spacing = Math.max(4, Math.min(16, options.stepLength))
   const waypointTolerance = Math.max(4, options.waypointTolerance ?? 12)
+  let accepted: { points: Vec2[]; jointIndices: number[] } | null = null
   for (const iterations of [4, 3, 2, 1, 0]) {
     const points: Vec2[] = []
     const jointIndices: number[] = []
@@ -824,7 +826,8 @@ function prepareGuide(
         maxGrade * 1.08,
         maxCrossSlope * 1.08,
       )) {
-        return points
+        accepted = { points, jointIndices }
+        break
       }
       continue
     }
@@ -842,7 +845,8 @@ function prepareGuide(
       maxGrade * 1.08,
       maxCrossSlope * 1.08,
     )) {
-      return rounded
+      accepted = { points: rounded, jointIndices }
+      break
     }
     if (guideValid(
       grid,
@@ -850,8 +854,29 @@ function prepareGuide(
       maxGrade * 1.08,
       maxCrossSlope * 1.08,
     )) {
-      return points
+      accepted = { points, jointIndices }
+      break
     }
+  }
+  if (accepted) {
+    if (accepted.jointIndices.length) {
+      const bezier = smoothPlanarCenterline(accepted.points, {
+        radius: 30,
+        sampleSpacing: Math.max(3, spacing * 0.5),
+        controlSpacing: 20,
+        smoothingIterations: 72,
+        anchorIndices: accepted.jointIndices,
+      })
+      if (guideValid(
+        grid,
+        bezier,
+        maxGrade * 1.08,
+        maxCrossSlope * 1.08,
+      )) {
+        return bezier
+      }
+    }
+    return accepted.points
   }
   const raw: Vec2[] = []
   for (const leg of rawLegs) {
