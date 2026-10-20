@@ -62,24 +62,51 @@
               mode="aspectFit"
             />
           </button>
+          <button
+            type="button"
+            class="viewer-environment-trigger"
+            :class="{ 'is-open': viewerEnvironmentMenu === 'weather' }"
+            hover-class="none"
+            :aria-label="`当前天气：${WEATHER_LABELS[viewerEnvironmentState.weather]}，点击切换`"
+            :aria-expanded="viewerEnvironmentMenu === 'weather'"
+            :disabled="viewerEnvironmentSwitchBusy"
+            data-control-skip="environment-controls"
+            @tap.stop="toggleViewerEnvironmentMenu('weather')"
+          >
+            <image
+              class="viewer-environment-trigger__icon"
+              :src="viewerWeatherIconMap[viewerEnvironmentState.weather]"
+              mode="aspectFit"
+            />
+          </button>
         </view>
         <view v-if="viewerEnvironmentMenu" class="viewer-environment-popover">
           <view class="viewer-environment-option-grid">
             <button
-              v-for="option in (viewerEnvironmentMenu === 'season' ? viewerSeasonOptions : viewerTimeOptions)"
+              v-for="option in (
+                viewerEnvironmentMenu === 'season'
+                  ? viewerSeasonOptions
+                  : viewerEnvironmentMenu === 'time'
+                    ? viewerTimeOptions
+                    : viewerWeatherOptions
+              )"
               :key="option.value"
               type="button"
               class="viewer-environment-option"
               :class="{
                 'is-active': viewerEnvironmentMenu === 'season'
                   ? viewerEnvironmentState.season === option.value
-                  : viewerEnvironmentState.timeOfDay === option.value,
+                  : viewerEnvironmentMenu === 'time'
+                    ? viewerEnvironmentState.timeOfDay === option.value
+                    : viewerEnvironmentState.weather === option.value,
               }"
               hover-class="none"
               :aria-label="option.label"
               :aria-pressed="viewerEnvironmentMenu === 'season'
                 ? viewerEnvironmentState.season === option.value
-                : viewerEnvironmentState.timeOfDay === option.value"
+                : viewerEnvironmentMenu === 'time'
+                  ? viewerEnvironmentState.timeOfDay === option.value
+                  : viewerEnvironmentState.weather === option.value"
               :disabled="viewerEnvironmentSwitchBusy"
               data-control-skip="environment-controls"
               @tap.stop.prevent="handleViewerEnvironmentSelection(viewerEnvironmentMenu, option.value)"
@@ -117,6 +144,11 @@
               <image
                 class="viewer-environment-switch__icon"
                 :src="viewerTimeIconMap[viewerEnvironmentSwitchTarget.timeOfDay]"
+                mode="aspectFit"
+              />
+              <image
+                class="viewer-environment-switch__icon"
+                :src="viewerWeatherIconMap[viewerEnvironmentSwitchTarget.weather]"
                 mode="aspectFit"
               />
             </view>
@@ -990,6 +1022,8 @@ import {
   resolveCameraFarForFogDistance,
   TIME_OF_DAY_LABELS,
   TIME_OF_DAY_ORDER,
+  WEATHER_LABELS,
+  WEATHER_ORDER,
 } from '@harmony/schema/slowroads/core/environment';
 import {
   getSharedSlowroadsAssetStore,
@@ -1019,6 +1053,8 @@ import timeMorningIcon from '../static/environment-icons/time-morning.png';
 import timeDayIcon from '../static/environment-icons/time-day.png';
 import timeEveningIcon from '../static/environment-icons/time-evening.png';
 import timeNightIcon from '../static/environment-icons/time-night.png';
+import weatherClearIcon from '../static/environment-icons/weather-clear.png';
+import weatherOvercastIcon from '../static/environment-icons/weather-overcast.png';
 import {
   deviceAdaptationComponentDefinition,
 } from '@harmony/schema/components/definitions/deviceAdaptationComponent';
@@ -1980,7 +2016,8 @@ let currentSlowroadsEnvironmentState: { season: 'spring' | 'summer' | 'autumn' |
 
 type ViewerEnvironmentSeason = SlowroadsEnvironmentSettings['season'];
 type ViewerEnvironmentTimeOfDay = SlowroadsEnvironmentSettings['timeOfDay'];
-type ViewerEnvironmentMenu = 'season' | 'time' | null;
+type ViewerEnvironmentWeather = SlowroadsEnvironmentSettings['weather'];
+type ViewerEnvironmentMenu = 'season' | 'time' | 'weather' | null;
 type ViewerEnvironmentSwitchPhase = 'idle' | 'covering' | 'loading' | 'revealing';
 
 const viewerEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('manual');
@@ -2000,9 +2037,11 @@ const viewerEnvironmentSwitchProgress = ref(0);
 const viewerEnvironmentSwitchTarget = reactive<{
   season: ViewerEnvironmentSeason;
   timeOfDay: ViewerEnvironmentTimeOfDay;
+  weather: ViewerEnvironmentWeather;
 }>({
   season: 'spring',
   timeOfDay: 'day',
+  weather: 'clear',
 });
 let viewerEnvironmentSwitchToken = 0;
 
@@ -2018,6 +2057,10 @@ const viewerTimeIconMap: Record<ViewerEnvironmentTimeOfDay, string> = {
   evening: timeEveningIcon,
   night: timeNightIcon,
 };
+const viewerWeatherIconMap: Record<ViewerEnvironmentWeather, string> = {
+  clear: weatherClearIcon,
+  overcast: weatherOvercastIcon,
+};
 const viewerSeasonOptions = SEASON_IDS.map((value) => ({
   value,
   label: SEASON_LABELS[value],
@@ -2027,6 +2070,11 @@ const viewerTimeOptions = TIME_OF_DAY_ORDER.map((value) => ({
   value,
   label: TIME_OF_DAY_LABELS[value],
   icon: viewerTimeIconMap[value],
+}));
+const viewerWeatherOptions = WEATHER_ORDER.map((value) => ({
+  value,
+  label: WEATHER_LABELS[value],
+  icon: viewerWeatherIconMap[value],
 }));
 const viewerEnvironmentSwitchBusy = computed(() => viewerEnvironmentSwitchPhase.value !== 'idle');
 const viewerEnvironmentSwitchPercent = computed(() => Math.max(
@@ -21234,7 +21282,7 @@ function closeViewerEnvironmentMenu(): void {
 
 function handleViewerEnvironmentSelection(
   kind: ViewerEnvironmentMenu,
-  value: ViewerEnvironmentSeason | ViewerEnvironmentTimeOfDay,
+  value: ViewerEnvironmentSeason | ViewerEnvironmentTimeOfDay | ViewerEnvironmentWeather,
 ): void {
   if (!kind || viewerEnvironmentSwitchBusy.value) {
     return;
@@ -21246,18 +21294,23 @@ function handleViewerEnvironmentSelection(
   const nextTimeOfDay = kind === 'time'
     ? value as ViewerEnvironmentTimeOfDay
     : viewerEnvironmentState.timeOfDay;
+  const nextWeather = kind === 'weather'
+    ? value as ViewerEnvironmentWeather
+    : viewerEnvironmentState.weather;
   if (
     nextSeason === viewerEnvironmentState.season
     && nextTimeOfDay === viewerEnvironmentState.timeOfDay
+    && nextWeather === viewerEnvironmentState.weather
   ) {
     return;
   }
-  void runViewerEnvironmentSwitch(nextSeason, nextTimeOfDay);
+  void runViewerEnvironmentSwitch(nextSeason, nextTimeOfDay, nextWeather);
 }
 
 async function runViewerEnvironmentSwitch(
   nextSeason: ViewerEnvironmentSeason,
   nextTimeOfDay: ViewerEnvironmentTimeOfDay,
+  nextWeather: ViewerEnvironmentWeather,
 ): Promise<void> {
   const targetDocument = currentDocument;
   if (!targetDocument || viewerEnvironmentSwitchBusy.value) {
@@ -21268,6 +21321,7 @@ async function runViewerEnvironmentSwitch(
   const token = ++viewerEnvironmentSwitchToken;
   viewerEnvironmentSwitchTarget.season = nextSeason;
   viewerEnvironmentSwitchTarget.timeOfDay = nextTimeOfDay;
+  viewerEnvironmentSwitchTarget.weather = nextWeather;
   viewerEnvironmentSwitchPhase.value = 'covering';
   viewerEnvironmentSwitchProgress.value = 0;
   viewerEnvironmentMenu.value = null;
@@ -21324,11 +21378,13 @@ async function runViewerEnvironmentSwitch(
         ...activeEnvironmentSettings.slowroads,
         season: nextSeason,
         timeOfDay: nextTimeOfDay,
+        weather: nextWeather,
       },
     };
     await applyEnvironmentSettingsToScene(nextSettings);
     viewerEnvironmentState.season = nextSeason;
     viewerEnvironmentState.timeOfDay = nextTimeOfDay;
+    viewerEnvironmentState.weather = nextWeather;
 
     if (seasonChanged) {
       const landscapeNodeIds = collectActiveProceduralLandscapeNodeIdsFromNodes(
@@ -22674,6 +22730,9 @@ async function ensureRendererContext(result: UseCanvasResult) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#f9f9f9');
   scene.environmentIntensity = SKY_ENVIRONMENT_INTENSITY;
+  // Slow Roads 天空/云层是 camera 的子节点；camera 必须进入场景图，
+  // 否则天空平面不会参与渲染，夜间只剩宿主背景色与星点。
+  scene.add(camera);
 
   scene.add(instancedMeshGroup);
   stopInstancedMeshSubscription?.();

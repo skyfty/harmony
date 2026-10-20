@@ -192,6 +192,8 @@ import {
 	resolveCameraFarForFogDistance,
 	TIME_OF_DAY_LABELS,
 	TIME_OF_DAY_ORDER,
+	WEATHER_LABELS,
+	WEATHER_ORDER,
 } from '@schema/slowroads/core/environment'
 import { SEASON_IDS, SEASON_LABELS } from '@schema/slowroads/core/seasonCatalog'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
@@ -214,6 +216,8 @@ import timeMorningIcon from '@/assets/environment-icons/time-morning.png'
 import timeDayIcon from '@/assets/environment-icons/time-day.png'
 import timeEveningIcon from '@/assets/environment-icons/time-evening.png'
 import timeNightIcon from '@/assets/environment-icons/time-night.png'
+import weatherClearIcon from '@/assets/environment-icons/weather-clear.png'
+import weatherOvercastIcon from '@/assets/environment-icons/weather-overcast.png'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -886,7 +890,8 @@ const sceneSwitching = ref(false)
 
 type PreviewEnvironmentSeason = SlowroadsEnvironmentSettings['season']
 type PreviewEnvironmentTimeOfDay = SlowroadsEnvironmentSettings['timeOfDay']
-type PreviewEnvironmentMenu = 'season' | 'time' | null
+type PreviewEnvironmentWeather = SlowroadsEnvironmentSettings['weather']
+type PreviewEnvironmentMenu = 'season' | 'time' | 'weather' | null
 type PreviewEnvironmentSwitchPhase = 'idle' | 'covering' | 'loading' | 'revealing'
 
 const previewEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('manual')
@@ -910,14 +915,17 @@ const previewEnvironmentSwitchNotice = ref('')
 const previewEnvironmentSwitchTarget = reactive<{
 	season: PreviewEnvironmentSeason
 	timeOfDay: PreviewEnvironmentTimeOfDay
+	weather: PreviewEnvironmentWeather
 }>({
 	season: 'spring',
 	timeOfDay: 'day',
+	weather: 'clear',
 })
 let previewEnvironmentSwitchToken = 0
 let previewEnvironmentSessionOverride: {
 	season: PreviewEnvironmentSeason
 	timeOfDay: PreviewEnvironmentTimeOfDay
+	weather: PreviewEnvironmentWeather
 } | null = null
 let previewEnvironmentSessionSceneId = ''
 
@@ -933,6 +941,10 @@ const previewTimeIconMap: Record<PreviewEnvironmentTimeOfDay, string> = {
 	evening: timeEveningIcon,
 	night: timeNightIcon,
 }
+const previewWeatherIconMap: Record<PreviewEnvironmentWeather, string> = {
+	clear: weatherClearIcon,
+	overcast: weatherOvercastIcon,
+}
 const previewSeasonOptions = SEASON_IDS.map((value) => ({
 	value,
 	label: SEASON_LABELS[value],
@@ -942,6 +954,11 @@ const previewTimeOptions = TIME_OF_DAY_ORDER.map((value) => ({
 	value,
 	label: TIME_OF_DAY_LABELS[value],
 	icon: previewTimeIconMap[value],
+}))
+const previewWeatherOptions = WEATHER_ORDER.map((value) => ({
+	value,
+	label: WEATHER_LABELS[value],
+	icon: previewWeatherIconMap[value],
 }))
 
 const previewEnvironmentSwitchBusy = computed(() => (
@@ -1029,7 +1046,7 @@ function closePreviewEnvironmentMenu(): void {
 
 function handlePreviewEnvironmentSelection(
 	kind: PreviewEnvironmentMenu,
-	value: PreviewEnvironmentSeason | PreviewEnvironmentTimeOfDay,
+	value: PreviewEnvironmentSeason | PreviewEnvironmentTimeOfDay | PreviewEnvironmentWeather,
 ): void {
 	if (!kind || previewEnvironmentSwitchBusy.value) {
 		return
@@ -1041,18 +1058,23 @@ function handlePreviewEnvironmentSelection(
 	const nextTimeOfDay = kind === 'time'
 		? value as PreviewEnvironmentTimeOfDay
 		: previewEnvironmentState.timeOfDay
+	const nextWeather = kind === 'weather'
+		? value as PreviewEnvironmentWeather
+		: previewEnvironmentState.weather
 	if (
 		nextSeason === previewEnvironmentState.season
 		&& nextTimeOfDay === previewEnvironmentState.timeOfDay
+		&& nextWeather === previewEnvironmentState.weather
 	) {
 		return
 	}
-	void runPreviewEnvironmentSwitch(nextSeason, nextTimeOfDay)
+	void runPreviewEnvironmentSwitch(nextSeason, nextTimeOfDay, nextWeather)
 }
 
 async function runPreviewEnvironmentSwitch(
 	nextSeason: PreviewEnvironmentSeason,
 	nextTimeOfDay: PreviewEnvironmentTimeOfDay,
+	nextWeather: PreviewEnvironmentWeather,
 ): Promise<void> {
 	const targetDocument = currentDocument
 	const currentSettings = currentScenePreviewEnvironmentSettings
@@ -1064,14 +1086,15 @@ async function runPreviewEnvironmentSwitch(
 	const token = ++previewEnvironmentSwitchToken
 	previewEnvironmentSwitchTarget.season = nextSeason
 	previewEnvironmentSwitchTarget.timeOfDay = nextTimeOfDay
+	previewEnvironmentSwitchTarget.weather = nextWeather
 	previewEnvironmentSwitchPhase.value = 'covering'
 	previewEnvironmentSwitchProgress.value = 0
 	previewEnvironmentSwitchLoaded.value = 0
 	previewEnvironmentSwitchTotal.value = 0
 	previewEnvironmentSwitchNotice.value = ''
 	previewEnvironmentSwitchMessage.value = seasonChanged
-		? `正在切换到${SEASON_LABELS[nextSeason]} · ${TIME_OF_DAY_LABELS[nextTimeOfDay]}`
-		: `正在调整到${TIME_OF_DAY_LABELS[nextTimeOfDay]}`
+		? `正在切换到${SEASON_LABELS[nextSeason]} · ${TIME_OF_DAY_LABELS[nextTimeOfDay]} · ${WEATHER_LABELS[nextWeather]}`
+		: `正在调整到${TIME_OF_DAY_LABELS[nextTimeOfDay]} · ${WEATHER_LABELS[nextWeather]}`
 	previewEnvironmentMenu.value = null
 
 	try {
@@ -1132,15 +1155,18 @@ async function runPreviewEnvironmentSwitch(
 				...currentSettings.slowroads,
 				season: nextSeason,
 				timeOfDay: nextTimeOfDay,
+			weather: nextWeather,
 			},
 		}
 		previewEnvironmentSessionOverride = {
 			season: nextSeason,
 			timeOfDay: nextTimeOfDay,
+			weather: nextWeather,
 		}
 		applyEnvironmentSettingsToScene(nextSettings)
 		previewEnvironmentState.season = nextSeason
 		previewEnvironmentState.timeOfDay = nextTimeOfDay
+		previewEnvironmentState.weather = nextWeather
 		previewEnvironmentSwitchMessage.value = seasonChanged
 			? '正在应用季节材质'
 			: '正在应用环境光照'
@@ -16163,28 +16189,56 @@ watch(
 					<img :src="previewTimeIconMap[previewEnvironmentState.timeOfDay]" alt="" aria-hidden="true" />
 					<span>{{ TIME_OF_DAY_LABELS[previewEnvironmentState.timeOfDay] }}</span>
 				</button>
+				<button
+					type="button"
+					class="scene-preview__environment-trigger"
+					:class="{ 'is-open': previewEnvironmentMenu === 'weather' }"
+					:aria-label="`当前天气：${WEATHER_LABELS[previewEnvironmentState.weather]}，点击切换`"
+					:aria-expanded="previewEnvironmentMenu === 'weather'"
+					:disabled="previewEnvironmentSwitchBusy"
+					@click="togglePreviewEnvironmentMenu('weather')"
+				>
+					<img :src="previewWeatherIconMap[previewEnvironmentState.weather]" alt="" aria-hidden="true" />
+					<span>{{ WEATHER_LABELS[previewEnvironmentState.weather] }}</span>
+				</button>
 			</div>
 			<div
 				v-if="previewEnvironmentMenu"
 				class="scene-preview__environment-popover"
 			>
 				<div class="scene-preview__environment-popover-title">
-					{{ previewEnvironmentMenu === 'season' ? '切换季节' : '切换时间' }}
+					{{
+						previewEnvironmentMenu === 'season'
+							? '切换季节'
+							: previewEnvironmentMenu === 'time'
+								? '切换时间'
+								: '切换天气'
+					}}
 				</div>
 				<div class="scene-preview__environment-option-grid">
 					<button
-						v-for="option in (previewEnvironmentMenu === 'season' ? previewSeasonOptions : previewTimeOptions)"
+						v-for="option in (
+							previewEnvironmentMenu === 'season'
+								? previewSeasonOptions
+								: previewEnvironmentMenu === 'time'
+									? previewTimeOptions
+									: previewWeatherOptions
+						)"
 						:key="option.value"
 						type="button"
 						class="scene-preview__environment-option"
 						:class="{
 							'is-active': previewEnvironmentMenu === 'season'
 								? previewEnvironmentState.season === option.value
-								: previewEnvironmentState.timeOfDay === option.value,
+								: previewEnvironmentMenu === 'time'
+									? previewEnvironmentState.timeOfDay === option.value
+									: previewEnvironmentState.weather === option.value,
 						}"
 						:aria-pressed="previewEnvironmentMenu === 'season'
 							? previewEnvironmentState.season === option.value
-							: previewEnvironmentState.timeOfDay === option.value"
+							: previewEnvironmentMenu === 'time'
+								? previewEnvironmentState.timeOfDay === option.value
+								: previewEnvironmentState.weather === option.value"
 						:disabled="previewEnvironmentSwitchBusy"
 						@click="handlePreviewEnvironmentSelection(previewEnvironmentMenu, option.value)"
 					>
@@ -16212,6 +16266,7 @@ watch(
 				<div class="scene-preview__environment-transition-icons">
 					<img :src="previewSeasonIconMap[previewEnvironmentSwitchTarget.season]" alt="" aria-hidden="true" />
 					<img :src="previewTimeIconMap[previewEnvironmentSwitchTarget.timeOfDay]" alt="" aria-hidden="true" />
+					<img :src="previewWeatherIconMap[previewEnvironmentSwitchTarget.weather]" alt="" aria-hidden="true" />
 				</div>
 				<div class="scene-preview__environment-transition-title">{{ previewEnvironmentSwitchMessage }}</div>
 				<div class="scene-preview__environment-transition-progress">
