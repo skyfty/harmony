@@ -12,8 +12,11 @@ import {
   removePhysicsBodyBindingBodies,
 } from './physicsRuntimeBridge'
 import {
+  isProceduralLandscapeDemTerrain,
   isProceduralLandscapeRoadbedSurface,
   isProceduralLandscapeRoadSurface,
+  resolveProceduralLandscapeDemCollisionSampler,
+  type ProceduralLandscapeDemCollisionSampler,
 } from './proceduralLandscape/collisionMetadata'
 
 // Mesh driven collision runtime.
@@ -63,6 +66,8 @@ export const MESH_COLLISION_INDEX_TRIANGLES_PER_TICK = 200000
 const MESH_COLLISION_MESH_SERIAL_KEY = '__meshCollisionSerial'
 /** `userData` key (BufferGeometry): lazily assigned stable serial per geometry. */
 const MESH_COLLISION_GEOMETRY_SERIAL_KEY = '__meshCollisionGeometrySerial'
+const MESH_COLLISION_GROUND_PATCH_CELLS = 8
+const MESH_COLLISION_GROUND_PATCH_UPDATE_DISTANCE_CELLS = 2
 
 export type MeshCollisionChunkShape = StaticMeshCollisionShapeDefinition
 
@@ -90,6 +95,25 @@ export type MeshCollisionRuntimeHostSnapshot = {
   indexing: boolean
   /** Chunks inside the activation radius that are still waiting for their create budget. */
   pendingChunkCount: number
+  /** Number of indexed meshes explicitly marked as DEM ground surfaces. */
+  groundSourceCount: number
+  /** Ground chunks currently resident in the physics world. */
+  groundChunkCount: number
+  /** One nearest-ground-chunk result per Ground Anchor reference. */
+  referenceGroundCoverage: MeshCollisionReferenceGroundCoverage[]
+  /** References with no ground chunk inside the normal activation radius. */
+  uncoveredReferenceCount: number
+}
+
+export type MeshCollisionReferenceGroundCoverage = {
+  referenceIndex: number
+  referenceWorldPosition: [number, number, number]
+  chunkKey: string | null
+  distanceMeters: number | null
+  resident: boolean
+  active: boolean
+  pending: boolean
+  covered: boolean
 }
 
 type MeshCollisionChunkBounds = {
@@ -101,6 +125,7 @@ type MeshCollisionChunkBounds = {
 
 type MeshCollisionMeshSource = {
   mesh: THREE.Mesh
+  isGroundSurface: boolean
   /** World matrix snapshot; the source node is treated as static. */
   matrixWorld: THREE.Matrix4
   position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute
@@ -114,6 +139,7 @@ type MeshCollisionMeshSource = {
 type MeshCollisionChunk = MeshCollisionChunkBounds & {
   key: string
   meshIndex: number
+  isGroundSurface: boolean
   /** `null` means "every triangle of the mesh". */
   triangles: Int32Array | null
   triangleCount: number
@@ -148,6 +174,20 @@ type MeshCollisionHostState = {
   /** Raised chunk-creation budget active while re-indexing a changed mesh set. */
   burst: boolean
   lastDeps: MeshCollisionRuntimeDeps | null
+  coverageWarned: boolean
+  lastReferenceGroundCoverage: MeshCollisionReferenceGroundCoverage[]
+  lastGroundSourceCount: number
+  lastGroundChunkCount: number
+  lastUncoveredReferenceCount: number
+  groundPatchSampler: ProceduralLandscapeDemCollisionSampler | null
+  groundPatches: Map<number, MeshCollisionGroundPatch>
+}
+
+type MeshCollisionGroundPatch = {
+  key: string
+  centerX: number
+  centerZ: number
+  instance: RigidbodyInstance
 }
 
 type MeshCollisionChunkCandidate = {
@@ -167,6 +207,10 @@ const EMPTY_MESH_COLLISION_SNAPSHOT: MeshCollisionRuntimeHostSnapshot = {
   chunkCount: 0,
   indexing: false,
   pendingChunkCount: 0,
+  groundSourceCount: 0,
+  groundChunkCount: 0,
+  referenceGroundCoverage: [],
+  uncoveredReferenceCount: 0,
 }
 
 let meshCollisionMeshSerialCounter = 0
@@ -339,6 +383,12 @@ function applyCollisionMeshSetChanges(
     state.triangleCursor = 0
     state.buckets = null
     state.burst = true
+    state.coverageWarned = false
+    state.lastReferenceGroundCoverage = []
+    state.lastGroundSourceCount = 0
+    state.lastGroundChunkCount = 0
+    state.lastUncoveredReferenceCount = 0
+    state.groundPatchSampler = null
   }
 }
 
@@ -379,6 +429,7 @@ function resolveMeshSource(object: THREE.Object3D): MeshCollisionMeshSource | nu
   const extentZ = bounds.maxZ - bounds.minZ
   return {
     mesh,
+    isGroundSurface: isProceduralLandscapeDemTerrain(object),
     matrixWorld,
     position,
     index: indexAttribute,
@@ -418,13 +469,14 @@ function readMeshVertex(
   source: MeshCollisionMeshSource,
   vertexOffset: number,
   target: THREE.Vector3,
-): void {
+): THREE.Vector3 {
   const positionIndex = source.index ? source.index.getX(vertexOffset) : vertexOffset
   target.set(
     source.position.getX(positionIndex),
     source.position.getY(positionIndex),
     source.position.getZ(positionIndex),
   )
+  return target
 }
 
 function computeTriangleWorldCentroid(
@@ -478,6 +530,13 @@ function createHostState(sourceId: string, sourceObject: THREE.Object3D): MeshCo
     oversizeWarned: false,
     burst: false,
     lastDeps: null,
+    coverageWarned: false,
+    lastReferenceGroundCoverage: [],
+    lastGroundSourceCount: 0,
+    lastGroundChunkCount: 0,
+    lastUncoveredReferenceCount: 0,
+    groundPatchSampler: null,
+    groundPatches: new Map(),
   }
 }
 
@@ -567,6 +626,7 @@ function createWholeMeshChunk(
   return {
     key: `mesh:${meshIndex}`,
     meshIndex,
+    isGroundSurface: source.isGroundSurface,
     triangles: null,
     triangleCount: source.triangleCount,
     ...source.bounds,
@@ -585,6 +645,7 @@ function createSubdividedChunk(
   return {
     key: `mesh:${meshIndex}:cell:${cellX}:${cellZ}:${cellSizeKey}`,
     meshIndex,
+    isGroundSurface: source.isGroundSurface,
     triangles: Int32Array.from(triangles),
     triangleCount: triangles.length,
     ...computeTrianglesWorldBounds(source, triangles),
@@ -759,18 +820,25 @@ function resolveChunkDistanceSq(
     if (!reference) {
       continue
     }
-    const dx = reference.x < chunk.minX
-      ? chunk.minX - reference.x
-      : (reference.x > chunk.maxX ? reference.x - chunk.maxX : 0)
-    const dz = reference.z < chunk.minZ
-      ? chunk.minZ - reference.z
-      : (reference.z > chunk.maxZ ? reference.z - chunk.maxZ : 0)
-    const distanceSq = dx * dx + dz * dz
+    const distanceSq = resolveChunkReferenceDistanceSq(chunk, reference)
     if (distanceSq < best) {
       best = distanceSq
     }
   }
   return best
+}
+
+function resolveChunkReferenceDistanceSq(
+  chunk: MeshCollisionChunkBounds,
+  reference: THREE.Vector3,
+): number {
+  const dx = reference.x < chunk.minX
+    ? chunk.minX - reference.x
+    : (reference.x > chunk.maxX ? reference.x - chunk.maxX : 0)
+  const dz = reference.z < chunk.minZ
+    ? chunk.minZ - reference.z
+    : (reference.z > chunk.maxZ ? reference.z - chunk.maxZ : 0)
+  return dx * dx + dz * dz
 }
 
 function createChunkInstance(
@@ -801,6 +869,148 @@ function createChunkInstance(
   }
 }
 
+function createGroundPatchInstance(
+  deps: MeshCollisionRuntimeDeps,
+  sourceId: string,
+  sourceObject: THREE.Object3D,
+  referenceIndex: number,
+  reference: THREE.Vector3,
+  sampler: ProceduralLandscapeDemCollisionSampler,
+): MeshCollisionGroundPatch | null {
+  const cellSize = Math.max(1, sampler.cellSize)
+  const halfCells = Math.max(2, Math.floor(MESH_COLLISION_GROUND_PATCH_CELLS / 2))
+  const cellsPerSide = halfCells * 2
+  const verticesPerSide = cellsPerSide + 1
+  const vertices = new Float32Array(verticesPerSide * verticesPerSide * 3)
+  const indices = new Uint32Array(cellsPerSide * cellsPerSide * 6)
+  let vertexOffset = 0
+  for (let row = 0; row <= cellsPerSide; row += 1) {
+    const z = reference.z + (row - halfCells) * cellSize
+    for (let column = 0; column <= cellsPerSide; column += 1) {
+      const x = reference.x + (column - halfCells) * cellSize
+      const y = sampler.sampleHeightAt(x, z)
+      if (y == null || !Number.isFinite(y)) {
+        return null
+      }
+      vertices[vertexOffset] = x
+      vertices[vertexOffset + 1] = y
+      vertices[vertexOffset + 2] = z
+      vertexOffset += 3
+    }
+  }
+
+  let indexOffset = 0
+  for (let row = 0; row < cellsPerSide; row += 1) {
+    for (let column = 0; column < cellsPerSide; column += 1) {
+      const a = row * verticesPerSide + column
+      const b = a + 1
+      const c = a + verticesPerSide
+      const d = c + 1
+      indices[indexOffset] = a
+      indices[indexOffset + 1] = c
+      indices[indexOffset + 2] = d
+      indices[indexOffset + 3] = a
+      indices[indexOffset + 4] = d
+      indices[indexOffset + 5] = b
+      indexOffset += 6
+    }
+  }
+
+  const bodyResult = deps.createBody({
+    kind: 'static-mesh',
+    vertices,
+    indices,
+  }, sourceObject)
+  if (!bodyResult?.body) {
+    return null
+  }
+  addPhysicsBodyToWorld(deps.ensurePhysicsWorld(), bodyResult.body)
+  const key = `ground-patch:${referenceIndex}`
+  ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `terrain-collision:${sourceId}:${key}`
+  return {
+    key,
+    centerX: reference.x,
+    centerZ: reference.z,
+    instance: {
+      nodeId: sourceId,
+      body: bodyResult.body,
+      bodies: [bodyResult.body],
+      object: sourceObject,
+      orientationAdjustment: bodyResult.orientationAdjustment,
+      syncObjectFromBody: false,
+      signature: `${sourceId}|${key}`,
+    },
+  }
+}
+
+function removeGroundPatch(
+  deps: MeshCollisionRuntimeDeps | null,
+  patch: MeshCollisionGroundPatch,
+): void {
+  if (!deps) {
+    return
+  }
+  removePhysicsBodyBindingBodies(deps.getPhysicsWorld(), patch.instance)
+}
+
+function syncGroundAnchorPatches(
+  state: MeshCollisionHostState,
+  deps: MeshCollisionRuntimeDeps,
+  sourceObject: THREE.Object3D,
+  references: readonly THREE.Vector3[],
+): void {
+  if (!state.groundPatchSampler) {
+    state.groundPatchSampler = findGroundPatchSampler(sourceObject)
+  }
+  const sampler = state.groundPatchSampler
+  if (!sampler) {
+    state.groundPatches.forEach((patch) => removeGroundPatch(deps, patch))
+    state.groundPatches.clear()
+    return
+  }
+
+  const updateDistance = Math.max(
+    1,
+    sampler.cellSize * MESH_COLLISION_GROUND_PATCH_UPDATE_DISTANCE_CELLS,
+  )
+  for (let index = 0; index < references.length; index += 1) {
+    const reference = references[index]
+    if (!reference) {
+      continue
+    }
+    const existing = state.groundPatches.get(index) ?? null
+    if (
+      existing
+      && Math.hypot(reference.x - existing.centerX, reference.z - existing.centerZ) <= updateDistance
+    ) {
+      continue
+    }
+    const replacement = createGroundPatchInstance(
+      deps,
+      state.sourceId,
+      sourceObject,
+      index,
+      reference,
+      sampler,
+    )
+    if (!replacement) {
+      continue
+    }
+    if (existing) {
+      removeGroundPatch(deps, existing)
+    }
+    state.groundPatches.set(index, replacement)
+  }
+
+  Array.from(state.groundPatches.entries()).forEach(([index, patch]) => {
+    if (index < references.length) {
+      return
+    }
+    removeGroundPatch(deps, patch)
+    state.groundPatches.delete(index)
+  })
+}
+
 function removeChunkInstance(
   deps: MeshCollisionRuntimeDeps | null,
   instance: RigidbodyInstance,
@@ -825,6 +1035,26 @@ function isSourceObjectLazyPlaceholder(object: THREE.Object3D): boolean {
   return object.children.some((child) => isLazyPlaceholderObject(child))
 }
 
+function findGroundPatchSampler(
+  sourceObject: THREE.Object3D,
+): ProceduralLandscapeDemCollisionSampler | null {
+  const stack: THREE.Object3D[] = [sourceObject]
+  while (stack.length > 0) {
+    const object = stack.pop()
+    if (!object || object.visible === false) {
+      continue
+    }
+    const sampler = resolveProceduralLandscapeDemCollisionSampler(object)
+    if (sampler) {
+      return sampler
+    }
+    if (object.children.length > 0) {
+      stack.push(...object.children)
+    }
+  }
+  return null
+}
+
 export function syncMeshCollisionRuntimeHost(
   params: SyncMeshCollisionRuntimeHostParams,
 ): MeshCollisionRuntimeHostSnapshot {
@@ -843,6 +1073,23 @@ export function syncMeshCollisionRuntimeHost(
       chunkCount: 0,
       indexing: true,
       pendingChunkCount: 0,
+      groundSourceCount: 0,
+      groundChunkCount: 0,
+      referenceGroundCoverage: references.map((_reference, referenceIndex) => ({
+        referenceIndex,
+        referenceWorldPosition: [
+          _reference.x,
+          _reference.y,
+          _reference.z,
+        ] as [number, number, number],
+        chunkKey: null,
+        distanceMeters: null,
+        resident: false,
+        active: false,
+        pending: false,
+        covered: false,
+      })),
+      uncoveredReferenceCount: references.length,
     }
   }
 
@@ -876,8 +1123,30 @@ export function syncMeshCollisionRuntimeHost(
       chunkCount: state.instances.size,
       indexing: true,
       pendingChunkCount: 0,
+      groundSourceCount: state.sources.reduce(
+        (count, source) => count + (source?.isGroundSurface ? 1 : 0),
+        0,
+      ),
+      groundChunkCount: 0,
+      referenceGroundCoverage: references.map((_reference, referenceIndex) => ({
+        referenceIndex,
+        referenceWorldPosition: [
+          _reference.x,
+          _reference.y,
+          _reference.z,
+        ] as [number, number, number],
+        chunkKey: null,
+        distanceMeters: null,
+        resident: false,
+        active: false,
+        pending: false,
+        covered: false,
+      })),
+      uncoveredReferenceCount: references.length,
     }
   }
+
+  syncGroundAnchorPatches(state, deps, sourceObject, references)
 
   const activationSq = MESH_COLLISION_ACTIVATION_RADIUS_METERS * MESH_COLLISION_ACTIVATION_RADIUS_METERS
   const retentionSq = MESH_COLLISION_RETENTION_RADIUS_METERS * MESH_COLLISION_RETENTION_RADIUS_METERS
@@ -888,24 +1157,71 @@ export function syncMeshCollisionRuntimeHost(
       candidates.push({ chunk, distanceSq })
     }
   })
-  candidates.sort((left, right) => left.distanceSq - right.distanceSq)
+  candidates.sort((left, right) => {
+    if (left.distanceSq !== right.distanceSq) {
+      return left.distanceSq - right.distanceSq
+    }
+    if (left.chunk.isGroundSurface !== right.chunk.isGroundSurface) {
+      return left.chunk.isGroundSurface ? -1 : 1
+    }
+    return left.chunk.key.localeCompare(right.chunk.key)
+  })
 
-  // Keep already resident chunks first (nearest first) so crossing the budget does not
-  // churn bodies that are still inside the window, then fill free slots with new ones.
+  const groundCandidates = candidates.filter(
+    (candidate) => candidate.chunk.isGroundSurface && candidate.distanceSq <= activationSq,
+  )
+  const nearestGroundByReference = references.map((reference) => {
+    let best: MeshCollisionChunkCandidate | null = null
+    let bestDistanceSq = Number.POSITIVE_INFINITY
+    groundCandidates.forEach((candidate) => {
+      const distanceSq = resolveChunkReferenceDistanceSq(candidate.chunk, reference)
+      if (distanceSq < bestDistanceSq) {
+        bestDistanceSq = distanceSq
+        best = { chunk: candidate.chunk, distanceSq }
+      }
+    })
+    return best as MeshCollisionChunkCandidate | null
+  })
+  const mandatoryGroundByReference = nearestGroundByReference
+  const mandatoryGroundKeys = new Set<string>()
+  mandatoryGroundByReference.forEach((candidate) => {
+    if (candidate) {
+      mandatoryGroundKeys.add(candidate.chunk.key)
+    }
+  })
+
+  // The DEM terrain under every Ground Anchor is mandatory. Other road, roadbed
+  // and wall chunks only fill the remaining budget by distance.
   const residentKeys = new Set<string>()
-  const pendingCandidates: MeshCollisionChunkCandidate[] = []
+  mandatoryGroundKeys.forEach((key) => residentKeys.add(key))
+  const residentLimit = Math.max(MESH_COLLISION_MAX_RESIDENT_CHUNKS, mandatoryGroundKeys.size)
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index]
     if (!candidate) {
       continue
     }
-    if (residentKeys.size < MESH_COLLISION_MAX_RESIDENT_CHUNKS) {
+    if (residentKeys.size < residentLimit) {
       residentKeys.add(candidate.chunk.key)
     }
-    if (!state.instances.has(candidate.chunk.key) && candidate.distanceSq <= activationSq) {
-      pendingCandidates.push(candidate)
-    }
   }
+
+  const pendingCandidates: MeshCollisionChunkCandidate[] = []
+  const pendingKeys = new Set<string>()
+  const appendPending = (candidate: MeshCollisionChunkCandidate | null): void => {
+    if (
+      !candidate
+      || candidate.distanceSq > activationSq
+      || state.instances.has(candidate.chunk.key)
+      || pendingKeys.has(candidate.chunk.key)
+      || !residentKeys.has(candidate.chunk.key)
+    ) {
+      return
+    }
+    pendingKeys.add(candidate.chunk.key)
+    pendingCandidates.push(candidate)
+  }
+  mandatoryGroundByReference.forEach(appendPending)
+  candidates.forEach(appendPending)
 
   Array.from(state.instances.entries()).forEach(([key, instance]) => {
     if (residentKeys.has(key)) {
@@ -944,11 +1260,81 @@ export function syncMeshCollisionRuntimeHost(
     state.burst = false
   }
 
+  const candidateByKey = new Map(candidates.map((candidate) => [candidate.chunk.key, candidate]))
+  const referenceGroundCoverage = mandatoryGroundByReference.map((candidate, referenceIndex) => {
+    const key = candidate?.chunk.key ?? null
+    const resident = key ? residentKeys.has(key) : false
+    const staticChunkActive = key ? state.instances.has(key) : false
+    const groundPatch = state.groundPatches.get(referenceIndex) ?? null
+    const active = staticChunkActive || Boolean(groundPatch)
+    const pending = resident && !staticChunkActive && !groundPatch && Boolean(
+      candidate && candidate.distanceSq <= activationSq,
+    )
+    return {
+      referenceIndex,
+      referenceWorldPosition: [
+        references[referenceIndex]?.x ?? 0,
+        references[referenceIndex]?.y ?? 0,
+        references[referenceIndex]?.z ?? 0,
+      ] as [number, number, number],
+      chunkKey: groundPatch?.key ?? key,
+      distanceMeters: groundPatch ? 0 : (candidate ? Math.sqrt(candidate.distanceSq) : null),
+      resident,
+      active,
+      pending,
+      covered: active,
+    }
+  })
+  const groundSourceCount = state.sources.reduce(
+    (count, source) => count + (source?.isGroundSurface ? 1 : 0),
+    0,
+  )
+  let groundChunkCount = 0
+  state.instances.forEach((_instance, key) => {
+    if (candidateByKey.get(key)?.chunk.isGroundSurface) {
+      groundChunkCount += 1
+    }
+  })
+  groundChunkCount += state.groundPatches.size
+  const uncoveredReferenceCount = referenceGroundCoverage.filter((entry) => !entry.covered).length
+  state.lastReferenceGroundCoverage = referenceGroundCoverage
+  state.lastGroundSourceCount = groundSourceCount
+  state.lastGroundChunkCount = groundChunkCount
+  state.lastUncoveredReferenceCount = uncoveredReferenceCount
+
+  if (
+    pendingChunkCount === 0
+    && groundSourceCount > 0
+    && uncoveredReferenceCount > 0
+    && !state.coverageWarned
+  ) {
+    state.coverageWarned = true
+    console.warn(
+      '[MeshCollision] Ground Anchor has no active DEM collision chunk',
+      JSON.stringify({
+        loggerTag: params.loggerTag ?? 'MeshCollision',
+        sourceId: state.sourceId,
+        groundSourceCount,
+        uncoveredReferenceCount,
+        references: referenceGroundCoverage,
+      }),
+    )
+  } else if (uncoveredReferenceCount === 0) {
+    state.coverageWarned = false
+  }
+
   return {
-    activeChunkKeys: Array.from(state.instances.keys()).sort(),
-    chunkCount: state.instances.size,
+    activeChunkKeys: [
+      ...Array.from(state.instances.keys()),
+      ...Array.from(state.groundPatches.values(), (patch) => patch.key),
+    ].sort(),
+    chunkCount: state.instances.size + state.groundPatches.size,
     indexing: false,
     pendingChunkCount,
+    groundSourceCount,
+    groundChunkCount,
+    referenceGroundCoverage,
+    uncoveredReferenceCount,
   }
 }
 
@@ -962,6 +1348,10 @@ export function clearMeshCollisionRuntimeHost(
   if (!state) {
     return
   }
+  state.groundPatches.forEach((patch) => {
+    removeGroundPatch(state.lastDeps, patch)
+  })
+  state.groundPatches.clear()
   Array.from(state.instances.values()).forEach((instance) => {
     removeChunkInstance(state.lastDeps, instance)
   })
@@ -984,9 +1374,16 @@ export function resolveMeshCollisionRuntimeHostSnapshot(
     return EMPTY_MESH_COLLISION_SNAPSHOT
   }
   return {
-    activeChunkKeys: Array.from(state.instances.keys()).sort(),
-    chunkCount: state.instances.size,
+    activeChunkKeys: [
+      ...Array.from(state.instances.keys()),
+      ...Array.from(state.groundPatches.values(), (patch) => patch.key),
+    ].sort(),
+    chunkCount: state.instances.size + state.groundPatches.size,
     indexing: state.phase !== 'ready',
     pendingChunkCount: 0,
+    groundSourceCount: state.lastGroundSourceCount,
+    groundChunkCount: state.lastGroundChunkCount,
+    referenceGroundCoverage: state.lastReferenceGroundCoverage,
+    uncoveredReferenceCount: state.lastUncoveredReferenceCount,
   }
 }

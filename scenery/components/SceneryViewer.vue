@@ -3043,8 +3043,10 @@ let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
 const sceneryGroundCollisionReferencePositions: THREE.Vector3[] = [];
 const lastSceneryGroundCollisionReferencePositions: THREE.Vector3[] = [];
+const SCENERY_GROUND_COLLISION_REFERENCE_SAMPLE_INTERVAL_SECONDS = 0.05;
 let sceneryGroundCollisionReferenceInitialized = false;
 let sceneryGroundCollisionReferenceElapsed = 0;
+let sceneryGroundCollisionReferenceSampleElapsed = 0;
 const physicsBridgeBodyIdByNodeId = new Map<string, number>();
 const physicsBridgeNodeIdByBodyId = new Map<number, string>();
 const physicsBridgeVehicleIdByNodeId = new Map<string, number>();
@@ -10245,6 +10247,7 @@ function resetPhysicsWorld(): void {
   clearLegacyPhysicsWorld();
   sceneryGroundCollisionReferenceInitialized = false;
   sceneryGroundCollisionReferenceElapsed = 0;
+  sceneryGroundCollisionReferenceSampleElapsed = 0;
 }
 
 function resolveSceneryPhysicsBridgePreference(
@@ -10315,6 +10318,7 @@ function resolveSceneryGroundCollisionReferenceWorld(
   targetPositions.push(...collectGroundAnchorWorldPositions({
     document: currentDocument,
     resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+    runtimeRoots: sceneGraphRoot,
   }));
   return targetPositions.length > 0;
 }
@@ -10345,6 +10349,19 @@ function shouldUpdateSceneryGroundCollisionForFrame(delta: number, referenceWorl
   }
   sceneryGroundCollisionReferenceElapsed = 0;
   syncSceneryGroundCollisionReferencePositions(referenceWorldPositions, lastSceneryGroundCollisionReferencePositions);
+  return true;
+}
+
+function shouldSampleSceneryGroundCollisionReferences(delta: number, force: boolean): boolean {
+  if (force) {
+    sceneryGroundCollisionReferenceSampleElapsed = 0;
+    return true;
+  }
+  sceneryGroundCollisionReferenceSampleElapsed += Math.max(0, delta);
+  if (sceneryGroundCollisionReferenceSampleElapsed < SCENERY_GROUND_COLLISION_REFERENCE_SAMPLE_INTERVAL_SECONDS) {
+    return false;
+  }
+  sceneryGroundCollisionReferenceSampleElapsed = 0;
   return true;
 }
 
@@ -11939,6 +11956,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     sceneryGroundCollisionRuntimeBodyIds.clear();
     sceneryGroundCollisionReferenceInitialized = false;
     sceneryGroundCollisionReferenceElapsed = 0;
+    sceneryGroundCollisionReferenceSampleElapsed = 0;
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
     physicsBridgeFrameBodiesByNodeId.clear();
     characterPhysicsBridgeVisualStateByNodeId.clear();
@@ -11973,6 +11991,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     releaseSceneryMeshCollisionRuntime();
     sceneryGroundCollisionReferenceInitialized = false;
     sceneryGroundCollisionReferenceElapsed = 0;
+    sceneryGroundCollisionReferenceSampleElapsed = 0;
     physicsBridgeBodyIdByNodeId.clear();
     physicsBridgeNodeIdByBodyId.clear();
     physicsBridgeVehicleIdByNodeId.clear();
@@ -23748,32 +23767,42 @@ function startRenderLoop(
             if (cachedGround) {
               syncSceneryCompiledGroundRenderTiles(camera);
             }
-            // Ground Anchor probe positions drive both the ground node collision and the
-            // mesh collision sources, so they must be collected even without a ground node.
-            const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(camera, sceneryGroundCollisionReferencePositions);
-            if (!physicsBridgeSceneReloading) {
-              const groundObject = cachedGround ? (nodeObjectMap.get(cachedGround.nodeId) ?? null) : null;
-              if (!hasGroundCollisionReference) {
-                if (groundObject) {
-                  clearGroundCollisionRuntimeHost(groundObject);
+          }
+          // Ground Anchor probe positions drive both the ground node collision and the
+          // mesh collision sources. This path is intentionally independent of compiled
+          // ground/camera streaming: procedural DEM scenes may have no compiled ground
+          // node at all, while the vehicle can still move far away from the road.
+          if (
+            !physicsBridgeSceneReloading
+            && shouldSampleSceneryGroundCollisionReferences(
+              deltaSeconds,
+              sceneryMeshCollisionWorkPending,
+            )
+          ) {
+            const groundObject = cachedGround ? (nodeObjectMap.get(cachedGround.nodeId) ?? null) : null;
+            const hasGroundCollisionReference = resolveSceneryGroundCollisionReferenceWorld(
+              camera,
+              sceneryGroundCollisionReferencePositions,
+            );
+            if (!hasGroundCollisionReference) {
+              if (groundObject) {
+                clearGroundCollisionRuntimeHost(groundObject);
+              }
+              releaseSceneryMeshCollisionRuntime();
+            } else {
+              // Pending chunks continue on every frame; normal refreshes stay throttled.
+              const shouldUpdateReferenceSystems = shouldUpdateSceneryGroundCollisionForFrame(
+                deltaSeconds,
+                sceneryGroundCollisionReferencePositions,
+              );
+              if (physicsBridgeSceneLoaded && (shouldUpdateReferenceSystems || sceneryMeshCollisionWorkPending)) {
+                if (groundObject && shouldUpdateReferenceSystems) {
+                  syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
                 }
-                releaseSceneryMeshCollisionRuntime();
-              } else {
-                // Mesh collision chunks are created with a per tick budget, so a pending
-                // fill keeps running even while the probes stand still.
-                const shouldUpdateReferenceSystems = shouldUpdateSceneryGroundCollisionForFrame(
-                  deltaSeconds,
+                sceneryMeshCollisionWorkPending = syncSceneryMeshCollisionRuntime(
+                  currentDocument,
                   sceneryGroundCollisionReferencePositions,
                 );
-                if (physicsBridgeSceneLoaded && (shouldUpdateReferenceSystems || sceneryMeshCollisionWorkPending)) {
-                  if (groundObject && shouldUpdateReferenceSystems) {
-                    syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
-                  }
-                  sceneryMeshCollisionWorkPending = syncSceneryMeshCollisionRuntime(
-                    currentDocument,
-                    sceneryGroundCollisionReferencePositions,
-                  );
-                }
               }
             }
           }
@@ -23924,6 +23953,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   sceneryCollisionSourceNodeIdSet = new Set();
   sceneryGroundCollisionReferenceInitialized = false;
   sceneryGroundCollisionReferenceElapsed = 0;
+  sceneryGroundCollisionReferenceSampleElapsed = 0;
 
   if (sceneGraphRoot) {
     renderContext.scene.remove(sceneGraphRoot);

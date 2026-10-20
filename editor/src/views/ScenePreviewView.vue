@@ -658,6 +658,7 @@ const previousSceneById = new Map<string, string>()
 const physicsCollisionDebugRuntime = new ScenePreviewPhysicsCollisionDebugRuntime()
 
 const isPhysicsCollisionDebugVisible = ref(DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE)
+const isMeshCollisionDebugVisible = ref(false)
 const isInstancedCullingVisualizationVisible = ref(false)
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
@@ -669,7 +670,8 @@ const isDebugOverlayVisible = computed(
 	() =>
 		isRendererDebugVisible.value ||
 		isInstancingDebugVisible.value ||
-		isGroundChunkStatsVisible.value,
+		isGroundChunkStatsVisible.value ||
+		isMeshCollisionDebugVisible.value,
 )
 
 const runtimeBudgetReport = computed<RuntimeResourceBudgetReport | null>(() => {
@@ -718,6 +720,36 @@ const rendererDebug = reactive({
 	geometries: 0,
 	textures: 0,
 	})
+
+const meshCollisionDebug = reactive({
+	sourceCount: 0,
+	chunkCount: 0,
+	groundSourceCount: 0,
+	groundChunkCount: 0,
+	uncoveredReferenceCount: 0,
+	referenceCount: 0,
+	referenceX: 0,
+	referenceY: 0,
+	referenceZ: 0,
+	chunkKey: '',
+	distanceMeters: 0,
+	covered: false,
+})
+
+function resetMeshCollisionDebug(): void {
+	meshCollisionDebug.sourceCount = 0
+	meshCollisionDebug.chunkCount = 0
+	meshCollisionDebug.groundSourceCount = 0
+	meshCollisionDebug.groundChunkCount = 0
+	meshCollisionDebug.uncoveredReferenceCount = 0
+	meshCollisionDebug.referenceCount = 0
+	meshCollisionDebug.referenceX = 0
+	meshCollisionDebug.referenceY = 0
+	meshCollisionDebug.referenceZ = 0
+	meshCollisionDebug.chunkKey = ''
+	meshCollisionDebug.distanceMeters = 0
+	meshCollisionDebug.covered = false
+}
 
 function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
 	let current: THREE.Object3D | null = object
@@ -12871,6 +12903,7 @@ function releaseScenePreviewMeshCollisionRuntime(): void {
 	clearAllMeshCollisionRuntimeHosts()
 	scenePreviewMeshCollisionSourceObjects.clear()
 	scenePreviewMeshCollisionWorkPending = false
+	resetMeshCollisionDebug()
 }
 
 /**
@@ -12894,6 +12927,8 @@ function syncScenePreviewMeshCollisionRuntime(
 	}
 	const activeObjects = new Set<THREE.Object3D>()
 	let workPending = false
+	let bestSnapshot: ReturnType<typeof syncMeshCollisionRuntimeHost> | null = null
+	resetMeshCollisionDebug()
 	sourceNodeIds.forEach((nodeId) => {
 		const object = nodeObjectMap.get(nodeId) ?? null
 		if (!object) {
@@ -12908,10 +12943,28 @@ function syncScenePreviewMeshCollisionRuntime(
 			runtimeDeps,
 			loggerTag: 'ScenePreviewMeshCollision',
 		})
+		meshCollisionDebug.sourceCount += 1
+		meshCollisionDebug.chunkCount += snapshot.chunkCount
+		meshCollisionDebug.groundSourceCount += snapshot.groundSourceCount
+		meshCollisionDebug.groundChunkCount += snapshot.groundChunkCount
+		meshCollisionDebug.uncoveredReferenceCount += snapshot.uncoveredReferenceCount
+		if (!bestSnapshot || snapshot.groundSourceCount > bestSnapshot.groundSourceCount) {
+			bestSnapshot = snapshot
+		}
 		if (snapshot.indexing || snapshot.pendingChunkCount > 0) {
 			workPending = true
 		}
 	})
+	const coverage = bestSnapshot?.referenceGroundCoverage[0] ?? null
+	if (coverage) {
+		meshCollisionDebug.referenceCount = bestSnapshot?.referenceGroundCoverage.length ?? 0
+		meshCollisionDebug.referenceX = coverage.referenceWorldPosition[0]
+		meshCollisionDebug.referenceY = coverage.referenceWorldPosition[1]
+		meshCollisionDebug.referenceZ = coverage.referenceWorldPosition[2]
+		meshCollisionDebug.chunkKey = coverage.chunkKey ?? ''
+		meshCollisionDebug.distanceMeters = coverage.distanceMeters ?? 0
+		meshCollisionDebug.covered = coverage.covered
+	}
 	Array.from(scenePreviewMeshCollisionSourceObjects).forEach((object) => {
 		if (activeObjects.has(object)) {
 			return
@@ -12971,6 +13024,7 @@ function resolveGroundCollisionReferenceWorld(targetPositions: THREE.Vector3[]):
 	const positions = collectGroundAnchorWorldPositions({
 		document: currentDocument,
 		resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
+		runtimeRoots: rootGroup,
 	})
 	targetPositions.push(...positions)
 	return targetPositions.length > 0
@@ -16346,6 +16400,29 @@ watch(
 				<div class="scene-preview__stats-fallback">
 					Multiuser visible peers max: {{ scenePreviewMultiuserVisiblePeerLimit }}
 				</div>
+				<template v-if="isMeshCollisionDebugVisible">
+					<div class="scene-preview__stats-fallback">[Mesh collision]</div>
+					<div class="scene-preview__stats-fallback">
+						Sources/chunks: {{ meshCollisionDebug.sourceCount }} / {{ meshCollisionDebug.chunkCount }}
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Ground sources/chunks: {{ meshCollisionDebug.groundSourceCount }} / {{ meshCollisionDebug.groundChunkCount }}
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Anchor coverage: {{ meshCollisionDebug.covered ? 'active' : 'missing' }}
+						({{ meshCollisionDebug.uncoveredReferenceCount }} uncovered)
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Anchor:
+						{{ meshCollisionDebug.referenceX.toFixed(1) }},
+						{{ meshCollisionDebug.referenceY.toFixed(1) }},
+						{{ meshCollisionDebug.referenceZ.toFixed(1) }}
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Ground chunk: {{ meshCollisionDebug.chunkKey || 'none' }}
+						@ {{ meshCollisionDebug.distanceMeters.toFixed(1) }}m
+					</div>
+				</template>
 				<template v-if="isRendererDebugVisible">
 					<div class="scene-preview__stats-fallback">[Renderer]</div>
 					<div class="scene-preview__stats-fallback">
@@ -16488,6 +16565,16 @@ watch(
 								density="compact"
 								color="warning"
 								@update:model-value="togglePhysicsCollisionDebug"
+							/>
+						</v-list-item>
+						<v-list-item>
+							<v-checkbox
+								class="scene-preview__debug-checkbox"
+								label="Mesh collision stats"
+								v-model="isMeshCollisionDebugVisible"
+								hide-details
+								density="compact"
+								color="warning"
 							/>
 						</v-list-item>
 						<div class="scene-preview__debug-hint">

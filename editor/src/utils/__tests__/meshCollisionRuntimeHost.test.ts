@@ -8,7 +8,7 @@
  * gap) and hidden / removed / geometry-swapped meshes lose theirs. The rendered
  * road band stays excluded; the runtime supplies a decimated collision ribbon.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import {
   MESH_COLLISION_ACTIVATION_RADIUS_METERS,
@@ -28,6 +28,7 @@ import { createRoadCollisionGeometry } from '@schema/proceduralLandscape/roadCol
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
 import {
   isProceduralLandscapeRoadSurface,
+  markProceduralLandscapeDemTerrain,
   markProceduralLandscapeRoadbedSurface,
   markProceduralLandscapeRoadCollision,
 } from '@schema/proceduralLandscape/collisionMetadata'
@@ -587,5 +588,152 @@ describe('mesh collision runtime host incremental re-index', () => {
 
     expect(snapshot.chunkCount).toBe(32)
     expect(harness.created).toHaveLength(32)
+  })
+
+  it('keeps the DEM chunk under an anchor when obstacle chunks exceed the budget', () => {
+    const host = new THREE.Group()
+    for (let index = 0; index < 40; index += 1) {
+      addSmallObstacle(
+        host,
+        (index % 8) * 4 - 14,
+        Math.floor(index / 8) * 4 - 10,
+      )
+    }
+    const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
+    markProceduralLandscapeDemTerrain(terrain)
+    host.add(terrain)
+
+    const harness = createHarness()
+    const snapshot = drain(
+      harness,
+      host,
+      'ground-priority-node',
+      [new THREE.Vector3(0, 0, 0)],
+    )
+
+    expect(snapshot.chunkCount).toBe(MESH_COLLISION_MAX_RESIDENT_CHUNKS)
+    expect(snapshot.groundSourceCount).toBe(1)
+    expect(snapshot.groundChunkCount).toBeGreaterThan(0)
+    expect(snapshot.uncoveredReferenceCount).toBe(0)
+    expect(snapshot.referenceGroundCoverage[0]?.covered).toBe(true)
+    expect(harness.created.filter((record) => !isElevatedRecord(record)).length).toBeGreaterThan(0)
+  })
+
+  it('keeps one mandatory DEM chunk for every separated Ground Anchor', () => {
+    const host = new THREE.Group()
+    for (let index = 0; index < 40; index += 1) {
+      addSmallObstacle(host, 0, 0)
+    }
+    const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
+    markProceduralLandscapeDemTerrain(terrain)
+    host.add(terrain)
+
+    const harness = createHarness()
+    const snapshot = drain(
+      harness,
+      host,
+      'multi-anchor-node',
+      [
+        new THREE.Vector3(-250, 0, 0),
+        new THREE.Vector3(250, 0, 0),
+      ],
+    )
+
+    expect(snapshot.referenceGroundCoverage).toHaveLength(2)
+    expect(snapshot.referenceGroundCoverage.every((entry) => entry.covered)).toBe(true)
+    expect(new Set(
+      snapshot.referenceGroundCoverage.map((entry) => entry.chunkKey),
+    ).size).toBe(2)
+  })
+
+  it('moves mandatory DEM coverage across consecutive collision cells', () => {
+    const host = new THREE.Group()
+    const geometry = new THREE.PlaneGeometry(1200, 240, 800, 160).rotateX(-Math.PI / 2)
+    const terrain = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial())
+    markProceduralLandscapeDemTerrain(terrain)
+    host.add(terrain)
+
+    const harness = createHarness()
+    const chunkKeys: string[] = []
+    ;[-400, 0, 400].forEach((x) => {
+      const snapshot = drain(
+        harness,
+        host,
+        'moving-ground-node',
+        [new THREE.Vector3(x, 0, 0)],
+      )
+      expect(snapshot.referenceGroundCoverage[0]?.covered).toBe(true)
+      chunkKeys.push(snapshot.referenceGroundCoverage[0]?.chunkKey ?? '')
+    })
+
+    expect(new Set(chunkKeys).size).toBe(3)
+  })
+
+  it('keeps a sampled ground patch under moving anchors', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(
+      new THREE.PlaneGeometry(200, 200, 20, 20).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeDemTerrain(terrain, {
+      cellSize: 10,
+      sampleHeightAt: () => 0,
+    })
+    host.add(terrain)
+    const harness = createHarness()
+    const getPatchBodies = (): object[] => harness.created
+      .filter((record) => (
+        typeof (record.body as { name?: unknown }).name === 'string'
+        && (record.body as { name: string }).name.includes(':ground-patch:')
+      ))
+      .map((record) => record.body)
+
+    const first = drain(
+      harness,
+      host,
+      'ground-patch-node',
+      [new THREE.Vector3(0, 0, 0)],
+    )
+    const firstPatches = getPatchBodies()
+    expect(first.referenceGroundCoverage[0]?.chunkKey).toBe('ground-patch:0')
+    expect(firstPatches).toHaveLength(1)
+
+    const second = drain(
+      harness,
+      host,
+      'ground-patch-node',
+      [new THREE.Vector3(64, 0, 0)],
+    )
+    const secondPatches = getPatchBodies()
+    expect(second.referenceGroundCoverage[0]?.chunkKey).toBe('ground-patch:0')
+    expect(secondPatches).toHaveLength(2)
+    expect(harness.removed).toContain(firstPatches[0])
+  })
+
+  it('warns once when every DEM ground chunk is outside the activation radius', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(
+      new THREE.PlaneGeometry(100, 100, 4, 4).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeDemTerrain(terrain)
+    host.add(terrain)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const harness = createHarness()
+      const snapshot = drain(
+        harness,
+        host,
+        'outside-dem-node',
+        [new THREE.Vector3(400, 0, 0)],
+      )
+      expect(snapshot.groundSourceCount).toBe(1)
+      expect(snapshot.uncoveredReferenceCount).toBe(1)
+      expect(snapshot.referenceGroundCoverage[0]?.covered).toBe(false)
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

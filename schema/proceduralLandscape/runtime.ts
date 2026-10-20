@@ -82,6 +82,7 @@ import {
 import { createRoadBand, type RoadBandHandle, type RoadBandTextures } from './roadBand'
 import { createRoadCollisionGeometry } from './roadCollision'
 import {
+  markProceduralLandscapeDemTerrain,
   markProceduralLandscapeRoadbedSurface,
   markProceduralLandscapeRoadCollision,
 } from './collisionMetadata'
@@ -1693,7 +1694,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const material = new THREE.MeshLambertMaterial({ color: 0xffffff })
     const mesh = new THREE.Mesh(demGeometry, material)
     mesh.name = `slowroads-dem-terrain-${hooks.nodeId}`
-    mesh.userData.proceduralLandscapeDemTerrain = true
+    markProceduralLandscapeDemTerrain(mesh, {
+      cellSize: Math.max(1, (demGridData?.cellSizeX ?? 1) * demGridSampleStep),
+      sampleHeightAt: (worldX, worldZ) => grid?.sampleHeight(worldX, worldZ) ?? null,
+    })
     hostObject.add(mesh)
     demMesh = mesh
     demMeshRoadbedSignature = completedRoadbedSignature

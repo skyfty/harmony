@@ -292,6 +292,15 @@ static triangle collision while a Ground Anchor probe is nearby
 
 - Only non-instanced meshes participate; grass / bushes / tree cards / near-tree 3D /
   far-forest imposters stay non-colliding on purpose.
+- The streamed DEM terrain is marked as a mandatory ground source. For every live
+  Ground Anchor, its nearest DEM chunk is retained before the shared 32-chunk budget
+  is filled with road, roadbed and wall chunks. Multiple anchors may temporarily raise
+  the effective cap by the number of mandatory ground chunks.
+- The DEM also exposes its world-space height sampler to the collision runtime. Each
+  Ground Anchor keeps a lightweight sampled ground patch centred near the moving probe.
+  The patch is replaced with overlap before the anchor approaches its edge, so terrain
+  contact does not depend on whether the large rendered mesh happens to have been split
+  into a collision chunk across that exact triangle.
 - Collision follows visibility: a hidden mesh (and its subtree) contributes nothing.
 - The indexed mesh set is **not frozen at the first sync**. Components may add or
   rebuild meshes later — the procedural landscape only creates its road band / walls
