@@ -224,6 +224,69 @@ export interface DemTerrainMeshBuilderOptions {
   } | null
 }
 
+export type DemCoarseSurfaceHeightAt = (worldX: number, worldZ: number) => number | null
+
+/**
+ * Samples the exact triangle surface produced by `createDemTerrainMeshBuilder`.
+ *
+ * The roadbed coverage ring must be buried below the visible coarse mesh, not
+ * merely below the continuous roadbed target. Interpolating the same decimated
+ * corners and triangle split here keeps both surfaces closed at every DEM cell
+ * phase.
+ */
+export function createDemCoarseSurfaceHeightAt(
+  data: TerrainDemRuntimeGridData,
+  requestedStep: number,
+  options: DemTerrainMeshBuilderOptions = {},
+): DemCoarseSurfaceHeightAt {
+  const sampleStep = Math.max(1, Math.min(8, Math.round(requestedStep)))
+  const cols = Math.max(2, Math.floor((data.width - 1) / sampleStep) + 1)
+  const rows = Math.max(2, Math.floor((data.height - 1) / sampleStep) + 1)
+  const cellSizeX = (data.maxX - data.minX) / (cols - 1)
+  const cellSizeZ = (data.maxZ - data.minZ) / (rows - 1)
+  const offsetX = options.worldOffset?.x ?? 0
+  const offsetY = options.worldOffset?.y ?? 0
+  const offsetZ = options.worldOffset?.z ?? 0
+
+  const sampleVertexLocalHeight = (col: number, row: number): number => {
+    const localX = data.minX + col * cellSizeX
+    const localZ = data.minZ + row * cellSizeZ
+    const worldX = localX + offsetX
+    const worldZ = localZ + offsetZ
+    if (options.roadbed && options.roadbed.distanceAt(worldX, worldZ) <= options.roadbed.influenceHalfWidth) {
+      return options.roadbed.coarseHeightAt(worldX, worldZ) - offsetY
+    }
+    const sourceCol = Math.min(data.width - 1, col * sampleStep)
+    const sourceRow = Math.min(data.height - 1, row * sampleStep)
+    return data.heights[sourceRow * data.width + sourceCol]!
+  }
+
+  return (worldX: number, worldZ: number): number | null => {
+    const localX = worldX - offsetX
+    const localZ = worldZ - offsetZ
+    const gx = (localX - data.minX) / cellSizeX
+    const gz = (localZ - data.minZ) / cellSizeZ
+    if (!Number.isFinite(gx) || !Number.isFinite(gz)) {
+      return null
+    }
+    if (gx < 0 || gx > cols - 1 || gz < 0 || gz > rows - 1) {
+      return null
+    }
+    const col = Math.max(0, Math.min(cols - 2, Math.floor(gx)))
+    const row = Math.max(0, Math.min(rows - 2, Math.floor(gz)))
+    const tx = Math.max(0, Math.min(1, gx - col))
+    const tz = Math.max(0, Math.min(1, gz - row))
+    const h00 = sampleVertexLocalHeight(col, row)
+    const h10 = sampleVertexLocalHeight(col + 1, row)
+    const h01 = sampleVertexLocalHeight(col, row + 1)
+    const h11 = sampleVertexLocalHeight(col + 1, row + 1)
+    const surfaceHeight = tz >= tx
+      ? h00 + (h01 - h00) * tz + (h11 - h01) * tx
+      : h00 + (h10 - h00) * tx + (h11 - h10) * tz
+    return offsetY + surfaceHeight
+  }
+}
+
 /** Time-sliced rectangular DEM mesh. Positions stay local; the host node owns XZ placement. */
 export function createDemTerrainMeshBuilder(
   data: TerrainDemRuntimeGridData,

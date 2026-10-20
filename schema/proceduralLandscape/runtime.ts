@@ -15,6 +15,7 @@ import {
   collectTerrainMeshSources,
 } from './terrainSampler'
 import {
+  createDemCoarseSurfaceHeightAt,
   createDemTerrainHeightGrid,
   createDemTerrainMeshBuilder,
   createTerrainDemRuntimeOrthoTexture,
@@ -390,6 +391,7 @@ export interface ProceduralLandscapeRuntimeStats {
   roadbedMaxCutFill: number
   roadbedCrossSlopeMax: number
   roadbedOuterError: number
+  roadbedMaxOuterGap: number
   roadbedOcclusionCount: number
   roadbedAuditSamples: number
   roadbedTriangleCount: number
@@ -1009,6 +1011,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demRoadbedSideWidth = 0
   let demRoadbedCutProx = 0
   let demRoadbedMaxCutFill = 0
+  let demRoadbedMaxOuterGap = 0
   let demRoadbedOcclusionCount = 0
   let demRoadbedAuditSamples = 0
   let demRoadbedTriangleCount = 0
@@ -1178,6 +1181,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadbedMaxCutFill: 0,
     roadbedCrossSlopeMax: 0,
     roadbedOuterError: 0,
+    roadbedMaxOuterGap: 0,
     roadbedOcclusionCount: 0,
     roadbedAuditSamples: 0,
     roadbedTriangleCount: 0,
@@ -1767,6 +1771,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demRoadbedSideWidth = 0
     demRoadbedCutProx = 0
     demRoadbedMaxCutFill = 0
+    demRoadbedMaxOuterGap = 0
     demRoadbedOcclusionCount = 0
     demRoadbedAuditSamples = 0
     demRoadbedTriangleCount = 0
@@ -2388,6 +2393,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demRoadbedSideWidth = 0
     demRoadbedCutProx = 0
     demRoadbedMaxCutFill = 0
+    demRoadbedMaxOuterGap = 0
     demRoadbedOcclusionCount = 0
     demRoadbedAuditSamples = 0
     demRoadbedTriangleCount = 0
@@ -2583,6 +2589,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           })
           demRoadbedSideWidth = demRoadbedTarget.sideWidth
           demRoadbedHalfWidth = demRoadbedTarget.meshHalfWidth
+          const roadbedWorldOffset = new THREE.Vector3().setFromMatrixPosition(hostObject.matrixWorld)
+          const coarseSurfaceHeightAt = demGridData
+            ? createDemCoarseSurfaceHeightAt(demGridData, demGridSampleStep, {
+                roadbed: demRoadbedTarget,
+                worldOffset: {
+                  x: roadbedWorldOffset.x,
+                  y: roadbedWorldOffset.y,
+                  z: roadbedWorldOffset.z,
+                },
+              })
+            : null
           // Keep the shader cut limited to the actual asphalt + shoulder.
           // A 60m distance-field cut is a circular tube, while the high-res
           // roadbed is a swept ribbon; on hairpins the two disagree and leave
@@ -2593,6 +2610,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             lateralStep: 3,
             lift: 0.01,
             asphaltOverlap: 0.5,
+            coarseSurfaceHeightAt,
+            burialDepth: 0.3,
+            edgeSkirtDepth: 0.5,
             hostInverse,
           })
           if (roadbed) {
@@ -2613,6 +2633,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               rowSpacing: 8,
               lift: 0.01,
               asphaltOverlap: 0.5,
+              coarseSurfaceHeightAt,
+              burialDepth: 0.3,
+              edgeSkirtDepth: 0.5,
               hostInverse,
             })
             if (collisionRoadbed) {
@@ -2626,6 +2649,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
               demRoadbedCollisionMesh = collisionMesh
             }
             demRoadbedMaxCutFill = roadbed.maxCutFill
+            demRoadbedMaxOuterGap = roadbed.maxOuterGap
             demRoadbedTriangleCount = roadbed.triangleCount
             stats.roadbedOuterError = roadbed.outerError
             const auditStride = Math.max(1, Math.floor(roadBandRows.length / 4096))
@@ -2639,7 +2663,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
                 const x = row.x + normalX * lateral
                 const z = row.z + normalZ * lateral
                 const targetY = demRoadbedTarget.heightAt(x, z)
-                const coarseY = demRoadbedTarget.coarseHeightAt(x, z)
+                const coarseY = coarseSurfaceHeightAt?.(x, z)
+                  ?? demRoadbedTarget.coarseHeightAt(x, z)
                 const rawY = demRoadbedTarget.rawHeightAt(x, z)
                 demRoadbedMaxCutFill = Math.max(demRoadbedMaxCutFill, Math.abs(targetY - rawY))
                 demRoadbedAuditSamples += 1
@@ -4253,6 +4278,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadbedMaxCutFill = demRoadbedMaxCutFill
     stats.roadbedCrossSlopeMax = 0
     stats.roadbedOcclusionCount = demRoadbedOcclusionCount
+    stats.roadbedMaxOuterGap = demRoadbedMaxOuterGap
     stats.roadbedAuditSamples = demRoadbedAuditSamples
     stats.roadbedTriangleCount = demRoadbedTriangleCount
     stats.waterEnabled = Boolean(waterPlane && waterPlane.mesh.visible)

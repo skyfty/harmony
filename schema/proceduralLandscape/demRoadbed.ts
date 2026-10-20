@@ -123,13 +123,18 @@ export interface DemRoadbedGeometryResult {
 
 export interface DemRoadbedTargetGeometryResult extends DemRoadbedGeometryResult {
   maxCutFill: number
+  /** Largest positive gap between the coverage ring's outer surface and the visible coarse DEM. */
+  maxOuterGap: number
+  /** Kept for callers that report whether the roadbed protrudes above raw terrain. */
   outerError: number
 }
 
 /**
- * High-resolution DEM roadbed side ribbons whose outer edge is exactly the raw
- * terrain. The asphalt width is intentionally left open: the road band owns
- * that surface, so a cut/fill apron can never be rendered above the asphalt.
+ * High-resolution DEM roadbed side ribbons. The asphalt width is intentionally
+ * left open: the road band owns that surface, so a cut/fill apron can never be
+ * rendered above the asphalt. Beyond the cut/fill toe, the coverage ring dives
+ * below the visible coarse DEM and ends in a short skirt. This prevents the DEM
+ * cell interpolation from exposing a vertical cliff at the apron boundary.
  * The extra attributes keep the gravel/rock palette continuous with the
  * adjacent coarse terrain.
  */
@@ -142,6 +147,12 @@ export function createDemRoadbedTargetGeometry(
     lift?: number
     /** Extend the apron inward under the asphalt to seal the edge seam. */
     asphaltOverlap?: number
+    /** Exact visible coarse DEM surface height in world space. */
+    coarseSurfaceHeightAt?: ((x: number, z: number) => number | null) | null
+    /** Minimum distance below the coarse DEM at the coverage ring's outer edge. */
+    burialDepth?: number
+    /** Extra downward wall at the outer edge to hide the mesh from below. */
+    edgeSkirtDepth?: number
     hostInverse: THREE.Matrix4
   },
 ): DemRoadbedTargetGeometryResult | null {
@@ -150,6 +161,8 @@ export function createDemRoadbedTargetGeometry(
   }
   const lateralStep = Math.max(1, options.lateralStep ?? 3)
   const lift = options.lift ?? 0.01
+  const burialDepth = Math.max(0, options.burialDepth ?? 0.3)
+  const edgeSkirtDepth = Math.max(0, options.edgeSkirtDepth ?? 0.5)
   const baseRowSpacing = Math.max(0.1, Math.hypot(
     rows[1]!.x - rows[0]!.x,
     rows[1]!.z - rows[0]!.z,
@@ -171,7 +184,8 @@ export function createDemRoadbedTargetGeometry(
     Math.min(halfWidth, target.halfWidth - asphaltOverlap),
   )
   const sideSpan = Math.max(0.001, halfWidth - asphaltHalfWidth)
-  const columns = Math.max(2, Math.ceil(sideSpan / lateralStep) + 1)
+  const surfaceColumns = Math.max(2, Math.ceil(sideSpan / lateralStep) + 1)
+  const columns = surfaceColumns + (edgeSkirtDepth > 0 ? 1 : 0)
   const stripCount = 2
   const verticesPerStrip = selectedRows.length * columns
   const vertexCount = verticesPerStrip * stripCount
@@ -183,9 +197,10 @@ export function createDemRoadbedTargetGeometry(
   const indices = new Uint32Array(triangleCount * 3)
   const point = new THREE.Vector3()
   let maxCutFill = 0
+  let maxOuterGap = 0
   let outerError = 0
 
-  const crossSpacing = sideSpan / (columns - 1)
+  const crossSpacing = sideSpan / (surfaceColumns - 1)
   const rowSpan = Math.max(0.5, Math.hypot(
     selectedRows[1]!.x - selectedRows[0]!.x,
     selectedRows[1]!.z - selectedRows[0]!.z,
@@ -201,19 +216,30 @@ export function createDemRoadbedTargetGeometry(
       const normalX = -Math.sin(row.heading)
       const normalZ = Math.cos(row.heading)
       for (let column = 0; column < columns; column += 1) {
-        const t = column / (columns - 1)
+        const isSkirt = column >= surfaceColumns
+        const t = isSkirt ? 1 : column / (surfaceColumns - 1)
         const lateral = side * (asphaltHalfWidth + t * sideSpan)
         const x = row.x + normalX * lateral
         const z = row.z + normalZ * lateral
         const index = vertexBase + rowIndex * columns + column
         const rawY = target.rawHeightAt(x, z)
-        const y = column === columns - 1
-          ? rawY
-          : target.heightAt(x, z)
-        maxCutFill = Math.max(maxCutFill, Math.abs(y - rawY))
+        const distance = Math.abs(lateral)
+        const coarseY = options.coarseSurfaceHeightAt?.(x, z) ?? rawY
+        let surfaceY = target.heightAt(x, z)
+        if (distance > target.outerHalfWidth) {
+          const buriedY = Math.min(rawY, coarseY - burialDepth)
+          const trough = smoothstep(target.outerHalfWidth, halfWidth, distance)
+          surfaceY = rawY + (buriedY - rawY) * trough
+        }
+        const y = isSkirt ? surfaceY - edgeSkirtDepth : surfaceY
+        if (!isSkirt) {
+          maxCutFill = Math.max(maxCutFill, Math.abs(surfaceY - rawY))
+        }
         baseHeights[index] = rawY
-        if (column === columns - 1) {
-          outerError = Math.max(outerError, Math.abs(y - rawY))
+        if (column === surfaceColumns - 1) {
+          maxOuterGap = Math.max(maxOuterGap, surfaceY - coarseY)
+          // Preserve the old diagnostic meaning: never protrude above raw.
+          outerError = Math.max(outerError, surfaceY - rawY)
         }
         const baseNormal = target.rawNormalAt(x, z)
         baseNormals[index * 3] = baseNormal.x
@@ -227,10 +253,10 @@ export function createDemRoadbedTargetGeometry(
     }
 
     for (let rowIndex = 0; rowIndex < selectedRows.length; rowIndex += 1) {
-      for (let column = 0; column < columns; column += 1) {
+      for (let column = 0; column < surfaceColumns; column += 1) {
         const index = vertexBase + rowIndex * columns + column
         const leftIndex = vertexBase + rowIndex * columns + Math.max(0, column - 1)
-        const rightIndex = vertexBase + rowIndex * columns + Math.min(columns - 1, column + 1)
+        const rightIndex = vertexBase + rowIndex * columns + Math.min(surfaceColumns - 1, column + 1)
         const upIndex = vertexBase + Math.max(0, rowIndex - 1) * columns + column
         const downIndex = vertexBase + Math.min(selectedRows.length - 1, rowIndex + 1) * columns + column
         const dx = (positions[rightIndex * 3 + 1]! - positions[leftIndex * 3 + 1]!)
@@ -241,6 +267,15 @@ export function createDemRoadbedTargetGeometry(
         normals[index * 3] = -dx * inverseLength
         normals[index * 3 + 1] = inverseLength
         normals[index * 3 + 2] = -dz * inverseLength
+      }
+    }
+    if (surfaceColumns < columns) {
+      for (let rowIndex = 0; rowIndex < selectedRows.length; rowIndex += 1) {
+        const row = selectedRows[rowIndex]!
+        const index = vertexBase + rowIndex * columns + surfaceColumns
+        normals[index * 3] = side * -Math.sin(row.heading)
+        normals[index * 3 + 1] = 0
+        normals[index * 3 + 2] = side * Math.cos(row.heading)
       }
     }
 
@@ -285,6 +320,7 @@ export function createDemRoadbedTargetGeometry(
     vertexCount,
     triangleCount,
     maxCutFill,
+    maxOuterGap,
     outerError,
   }
 }

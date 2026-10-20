@@ -43,12 +43,16 @@ describe('DEM roadbed collision LOD', () => {
     const full = createDemRoadbedTargetGeometry(rows, target, {
       lateralStep: 3,
       lift: 0.01,
+      burialDepth: 0,
+      edgeSkirtDepth: 0,
       hostInverse: matrix,
     })
     const collision = createDemRoadbedTargetGeometry(rows, target, {
       lateralStep: 8,
       rowSpacing: 8,
       lift: 0.01,
+      burialDepth: 0,
+      edgeSkirtDepth: 0,
       hostInverse: matrix,
     })
 

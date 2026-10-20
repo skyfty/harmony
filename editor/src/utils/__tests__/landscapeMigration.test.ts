@@ -10,7 +10,10 @@ import {
   createDemRoadbedTargetGeometry,
   createDemRoadbedTarget,
 } from '@schema/proceduralLandscape/demRoadbed'
-import { createDemTerrainMeshBuilder } from '@schema/proceduralLandscape/demTerrain'
+import {
+  createDemCoarseSurfaceHeightAt,
+  createDemTerrainMeshBuilder,
+} from '@schema/proceduralLandscape/demTerrain'
 import { createDefaultProceduralLandscapeProps } from '@schema/proceduralLandscape/config'
 import {
   resolveDemRoadbedSignature,
@@ -75,14 +78,18 @@ function makeDensity(): LandscapeDensityField {
   }
 }
 
-function makeDemRuntimeGrid(size = 7, cellSize = 30): TerrainDemRuntimeGridData {
+function makeDemRuntimeGrid(
+  size = 7,
+  cellSize = 30,
+  heightAt: (x: number, z: number) => number = (x, z) => z * 0.4 + x * 0.05,
+): TerrainDemRuntimeGridData {
   const width = size
   const height = size
   const heights = new Float32Array(width * height)
   let maxElevation = 0
   for (let row = 0; row < height; row += 1) {
     for (let col = 0; col < width; col += 1) {
-      const value = row * cellSize * 0.4 + col * cellSize * 0.05
+      const value = heightAt(col * cellSize, row * cellSize)
       heights[row * width + col] = value
       maxElevation = Math.max(maxElevation, value)
     }
@@ -159,6 +166,45 @@ function geometryHeightAt(
     }
   }
   return null
+}
+
+function geometrySurfaceHeightAt(
+  geometry: THREE.BufferGeometry,
+  x: number,
+  z: number,
+): number | null {
+  const position = geometry.getAttribute('position')
+  const index = geometry.getIndex()
+  if (!index) {
+    return null
+  }
+  let best: number | null = null
+  for (let cursor = 0; cursor + 2 < index.count; cursor += 3) {
+    const ia = index.getX(cursor)
+    const ib = index.getX(cursor + 1)
+    const ic = index.getX(cursor + 2)
+    const ax = position.getX(ia)
+    const az = position.getZ(ia)
+    const bx = position.getX(ib)
+    const bz = position.getZ(ib)
+    const cx = position.getX(ic)
+    const cz = position.getZ(ic)
+    const denominator = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz)
+    if (Math.abs(denominator) < 1e-9) {
+      continue
+    }
+    const wa = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / denominator
+    const wb = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / denominator
+    const wc = 1 - wa - wb
+    if (wa < -1e-6 || wb < -1e-6 || wc < -1e-6) {
+      continue
+    }
+    const height = wa * position.getY(ia) + wb * position.getY(ib) + wc * position.getY(ic)
+    if (best == null || height > best) {
+      best = height
+    }
+  }
+  return best
 }
 
 describe('tree LOD bands', () => {
@@ -282,6 +328,230 @@ describe('DEM roadbed target', () => {
     const c = new THREE.Vector3().fromBufferAttribute(position, index.getX(2))
     const normal = b.sub(a).cross(c.sub(a)).normalize()
     expect(normal.y).toBeGreaterThan(0.9)
+  })
+
+  it('samples the same coarse triangles that the DEM builder renders', () => {
+    const data = makeDemRuntimeGrid(9, 30)
+    const worldOffset = { x: 500, y: 20, z: -300 }
+    const rawAt = createDemCoarseSurfaceHeightAt(data, 1, { worldOffset })
+    const roadNodes = [
+      60,
+      100,
+      140,
+      180,
+    ].map((localX, index) => {
+      const x = localX + worldOffset.x
+      const z = 120 + worldOffset.z
+      return {
+        x,
+        z,
+        y: rawAt(x, z)!,
+        heading: 0,
+        index,
+        lateral: 0,
+        longitudinal: 0,
+        turn: 0,
+        headingDelta: 0,
+      } satisfies RoadTraceNode
+    })
+    const roadField = buildRoadProximityIndex(roadNodes, { maxDistance: 90 })!
+    const target = createDemRoadbedTarget({
+      roadField,
+      rawHeightAt: rawAt,
+      halfWidth: 3.5,
+      shoulderWidth: 2.5,
+      demCellSize: 30,
+      sideWidth: 24,
+      coverageWidth: 10.5,
+      coarseClearance: 2,
+    })
+    for (const sampleStep of [1, 3]) {
+      const coarseSurfaceHeightAt = createDemCoarseSurfaceHeightAt(data, sampleStep, {
+        roadbed: target,
+        worldOffset,
+      })
+      const builder = createDemTerrainMeshBuilder(data, sampleStep, {
+        roadbed: target,
+        worldOffset,
+      })
+      while (!builder.step(250)) {
+        // Tiny fixture: this normally finishes on the first step.
+      }
+      expect(builder.geometry).not.toBeNull()
+      const geometry = builder.geometry!
+
+      for (const localX of [45.5, 78.25, 120.75, 176.5]) {
+        for (const localZ of [72.3, 96.5, 120, 143.7, 168.9]) {
+          const localSurface = geometrySurfaceHeightAt(geometry, localX, localZ)
+          const coarseSurface = coarseSurfaceHeightAt(
+            localX + worldOffset.x,
+            localZ + worldOffset.z,
+          )
+          expect(localSurface).not.toBeNull()
+          expect(coarseSurface).not.toBeNull()
+          expect(coarseSurface!).toBeCloseTo(localSurface! + worldOffset.y, 5)
+        }
+      }
+    }
+  })
+
+  it('buries every outer roadbed edge below the visible coarse DEM', () => {
+    const worldOffset = { x: 500, y: 20, z: -300 }
+    const surfaces = [
+      { name: 'flat', heightAt: () => 55 },
+      { name: 'uphill', heightAt: (x: number, z: number) => 22 + x * 0.12 + z * 0.08 },
+      { name: 'downhill', heightAt: (x: number, z: number) => 130 - x * 0.1 - z * 0.06 },
+    ] as const
+    const roadElevations = [
+      { name: 'at-grade', offset: 0 },
+      { name: 'fill', offset: 6 },
+      { name: 'cut', offset: -6 },
+    ] as const
+    const cellPhases = [0, 5, 11, 17, 23, 29]
+    const burialDepth = 0.3
+    const skirtDepth = 0.5
+    const lift = 0.01
+
+    for (const surface of surfaces) {
+      const data = makeDemRuntimeGrid(9, 30, surface.heightAt)
+      const rawAt = createDemCoarseSurfaceHeightAt(data, 1, { worldOffset })
+      for (const elevation of roadElevations) {
+        for (const phase of cellPhases) {
+          const roadZ = 95 + phase + worldOffset.z
+          const roadNodes = [60, 100, 140, 180].map((localX, index) => {
+            const x = localX + worldOffset.x
+            return {
+              x,
+              z: roadZ,
+              y: rawAt(x, roadZ)! + elevation.offset,
+              heading: 0,
+              index,
+              lateral: 0,
+              longitudinal: 0,
+              turn: 0,
+              headingDelta: 0,
+            } satisfies RoadTraceNode
+          })
+          const roadField = buildRoadProximityIndex(roadNodes, { maxDistance: 90 })
+          expect(roadField, `${surface.name}/${elevation.name}/${phase}`).not.toBeNull()
+          if (!roadField) continue
+          const target = createDemRoadbedTarget({
+            roadField,
+            rawHeightAt: rawAt,
+            halfWidth: 3.5,
+            shoulderWidth: 2.5,
+            demCellSize: 30,
+            sideWidth: 24,
+            coverageWidth: 10.5,
+            coarseClearance: 2,
+          })
+          const coarseSurfaceHeightAt = createDemCoarseSurfaceHeightAt(data, 1, {
+            roadbed: target,
+            worldOffset,
+          })
+          const result = createDemRoadbedTargetGeometry(
+            densifyRoadRows(roadNodes, 2),
+            target,
+            {
+              lateralStep: 3,
+              lift,
+              asphaltOverlap: 0.5,
+              coarseSurfaceHeightAt,
+              burialDepth,
+              edgeSkirtDepth: skirtDepth,
+              hostInverse: new THREE.Matrix4(),
+            },
+          )
+          expect(result, `${surface.name}/${elevation.name}/${phase}`).not.toBeNull()
+          if (!result) continue
+          expect(result.maxOuterGap, `${surface.name}/${elevation.name}/${phase}`)
+            .toBeLessThanOrEqual(1e-6)
+
+          const position = result.geometry.getAttribute('position')
+          const heightsByOuterEdge = new Map<string, number[]>()
+          for (let index = 0; index < position.count; index += 1) {
+            const x = position.getX(index)
+            const z = position.getZ(index)
+            if (Math.abs(roadField.distanceAt(x, z) - target.meshHalfWidth) > 0.02) {
+              continue
+            }
+            const key = `${x.toFixed(4)}:${z.toFixed(4)}`
+            const heights = heightsByOuterEdge.get(key) ?? []
+            heights.push(position.getY(index))
+            heightsByOuterEdge.set(key, heights)
+          }
+          expect(heightsByOuterEdge.size).toBeGreaterThan(0)
+          for (const [key, heights] of heightsByOuterEdge) {
+            const [edgeXText, edgeZText] = key.split(':')
+            const edgeX = Number(edgeXText)
+            const edgeZ = Number(edgeZText)
+            const surfaceY = Math.max(...heights)
+            const skirtY = Math.min(...heights)
+            expect(surfaceY).toBeLessThanOrEqual(
+              coarseSurfaceHeightAt(edgeX, edgeZ)! - burialDepth + lift + 1e-5,
+            )
+            expect(surfaceY - skirtY).toBeCloseTo(skirtDepth, 4)
+          }
+        }
+      }
+    }
+  })
+
+  it("keeps the outer edge buried where an elevated hairpin's aprons overlap", () => {
+    const data = makeDemRuntimeGrid(11, 30, () => 70)
+    const centerX = 150
+    const centerZ = 150
+    const radius = 24
+    const nodeCount = 81
+    const roadNodes = Array.from({ length: nodeCount }, (_, index) => {
+      const angle = -Math.PI / 2 + Math.PI * (index / (nodeCount - 1))
+      const nextAngle = -Math.PI / 2 + Math.PI * Math.min(1, (index + 1) / (nodeCount - 1))
+      return {
+        x: centerX + Math.cos(angle) * radius,
+        z: centerZ + Math.sin(angle) * radius,
+        y: 90 + 10 * (index / (nodeCount - 1)),
+        heading: Math.atan2(
+          Math.sin(nextAngle) - Math.sin(angle),
+          Math.cos(nextAngle) - Math.cos(angle),
+        ),
+        index,
+        lateral: 0,
+        longitudinal: 0,
+        turn: 0,
+        headingDelta: 0,
+      } satisfies RoadTraceNode
+    })
+    const roadField = buildRoadProximityIndex(roadNodes, { maxDistance: 90 })
+    expect(roadField).not.toBeNull()
+    if (!roadField) return
+    const rawHeightAt = createDemCoarseSurfaceHeightAt(data, 1)
+    const target = createDemRoadbedTarget({
+      roadField,
+      rawHeightAt,
+      halfWidth: 3.5,
+      shoulderWidth: 2.5,
+      demCellSize: 30,
+      sideWidth: 24,
+      coverageWidth: 10.5,
+      coarseClearance: 2,
+    })
+    const result = createDemRoadbedTargetGeometry(
+      densifyRoadRows(roadNodes, 2),
+      target,
+      {
+        lateralStep: 3,
+        lift: 0.01,
+        asphaltOverlap: 0.5,
+        coarseSurfaceHeightAt: createDemCoarseSurfaceHeightAt(data, 1, {
+          roadbed: target,
+        }),
+        burialDepth: 0.3,
+        edgeSkirtDepth: 0.5,
+        hostInverse: new THREE.Matrix4(),
+      },
+    )
+    expect(result).not.toBeNull()
+    expect(result!.maxOuterGap).toBeLessThanOrEqual(1e-6)
   })
 
   it('rebuilds the coarse DEM from the latest committed roadbed target', () => {
