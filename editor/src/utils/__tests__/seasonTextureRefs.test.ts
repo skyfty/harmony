@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { downloadAssetTempFilePath } from '@schema/assetDownload'
 import {
   collectLandscapeSharedTextureRefs,
   collectSeasonTextureRefs,
@@ -8,6 +9,7 @@ import {
 import {
   resolveSlowroadsLogicalId,
   resolveSlowroadsTextureCandidateIds,
+  resolveSlowroadsVersionedAssetUrl,
   SlowroadsAssetStore,
 } from '@schema/slowroads/assets/assetStore'
 
@@ -111,6 +113,51 @@ describe('season texture refs', () => {
   })
 })
 
+describe('mini-program texture download source', () => {
+  it('keeps the native temporary file path without reading it back into JS memory', async () => {
+    let readFileCalled = false
+    const globalObject = globalThis as typeof globalThis & {
+      uni?: unknown
+      wx?: unknown
+    }
+    const previousUni = globalObject.uni
+    const previousWx = globalObject.wx
+    globalObject.uni = {
+      getSystemInfoSync: () => ({ uniPlatform: 'mp-weixin' }),
+      getFileSystemManager: () => ({
+        readFile: () => {
+          readFileCalled = true
+        },
+      }),
+      downloadFile: (options: {
+        success: (payload: { statusCode: number; tempFilePath: string }) => void
+      }) => {
+        queueMicrotask(() => {
+          options.success({ statusCode: 200, tempFilePath: 'wxfile://tmp/texture.png' })
+        })
+        return {
+          abort: () => {},
+          onProgressUpdate: () => {},
+        }
+      },
+    }
+    globalObject.wx = { getFileSystemManager: () => ({ readFile: () => {} }) }
+
+    try {
+      const source = await downloadAssetTempFilePath(
+        'https://v.touchmagic.cn/uploads/slowroads/grass.15f2422c.png',
+        new AbortController(),
+        () => {},
+      )
+      expect(source).toBe('wxfile://tmp/texture.png')
+      expect(readFileCalled).toBe(false)
+    } finally {
+      globalObject.uni = previousUni
+      globalObject.wx = previousWx
+    }
+  })
+})
+
 describe('slowroads texture variant', () => {
   it('uses @2048 for mini programs even when the GPU texture limit is large', () => {
     const store = new SlowroadsAssetStore({
@@ -162,5 +209,19 @@ describe('slowroads texture variant', () => {
         (id) => available.has(id),
       ),
     ).toEqual(['autumn_imposters_0_n.d10ccd46'])
+  })
+
+  it('versions stable asset paths with the manifest content hash', () => {
+    expect(resolveSlowroadsVersionedAssetUrl(
+      'https://v.touchmagic.cn/uploads/slowroads/summer_imposters_0_d.6a3261f4@2048.png',
+      'sha256-2e67db77abcdef12',
+    )).toBe(
+      'https://v.touchmagic.cn/uploads/slowroads/summer_imposters_0_d.6a3261f4@2048.png'
+      + '?v=sha256-2e67db77abcdef12',
+    )
+    expect(resolveSlowroadsVersionedAssetUrl('https://example.test/a.png?x=1', 'hash'))
+      .toBe('https://example.test/a.png?x=1&v=hash')
+    expect(resolveSlowroadsVersionedAssetUrl('https://example.test/a.png', ''))
+      .toBe('https://example.test/a.png')
   })
 })

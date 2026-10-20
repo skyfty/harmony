@@ -72,6 +72,54 @@ describe('surface injection compilability', () => {
     expect(vertex).toContain('vRoadWorldPosition')
     handle.dispose()
   })
+
+  it('replaces the fresh white DEM roadbed material with the seasonal surface', () => {
+    const geometry = new THREE.PlaneGeometry(20, 40, 4, 8)
+    geometry.setAttribute(
+      'aBaseHeight',
+      new THREE.Float32BufferAttribute(new Float32Array(geometry.getAttribute('position').count), 1),
+    )
+    geometry.setAttribute(
+      'aBaseNormal',
+      new THREE.Float32BufferAttribute(
+        new Float32Array(geometry.getAttribute('position').count * 3).fill(0),
+        3,
+      ),
+    )
+    const baseNormal = geometry.getAttribute('aBaseNormal') as THREE.BufferAttribute
+    for (let index = 0; index < baseNormal.count; index += 1) {
+      baseNormal.setXYZ(index, 0, 1, 0)
+    }
+    const original = new THREE.MeshLambertMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+    })
+    const roadbed = new THREE.Mesh(geometry, original)
+    const patch = applyProceduralLandscapeSurfaceInjection(
+      [roadbed],
+      createProceduralLandscapeSurfaceUniforms(),
+      {
+        overridesForMesh: () => ({
+          uPlRoadbedCutProx: 0,
+          uPlUseBaseSurface: 1,
+          uPlRoadDisplacement: 0,
+          uPlFlattenStrength: 0,
+          uPlShowCanopy: 0,
+          uPlRoadbedBrightness: 1.1,
+        }),
+      },
+    )
+
+    expect(patch.patchedMaterialCount).toBe(1)
+    expect(roadbed.material).not.toBe(original)
+    expect((roadbed.material as THREE.MeshLambertMaterial).isMeshLambertMaterial).toBe(true)
+    expect((roadbed.material as THREE.MeshLambertMaterial).side).toBe(THREE.DoubleSide)
+
+    patch.restore()
+    expect(roadbed.material).toBe(original)
+    original.dispose()
+    geometry.dispose()
+  })
 })
 
 /** 构造一个最小合法 treebin（3 顶点 / 3 索引），供近树材质编译测试使用。 */

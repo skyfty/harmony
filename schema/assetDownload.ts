@@ -132,6 +132,40 @@ export async function fetchAssetBlob(
   return await downloadAssetBlob(candidates, controller, onProgress, options)
 }
 
+/**
+ * Download a remote asset to the platform's temporary file path.
+ *
+ * Mini-program runtimes can decode `tempFilePath` directly with their image
+ * implementation. Keeping the bytes on disk avoids the extra ArrayBuffer,
+ * Blob and base64 copies that otherwise dominate large texture decode time.
+ * Returns null when the platform has no file-download API; network failures
+ * also return null so callers can fall back to the blob download path.
+ */
+export async function downloadAssetTempFilePath(
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<string | null> {
+  const api = resolveUniDownloadFileApi()
+  const candidates = createDownloadUrlCandidates(url)
+  if (!api || !candidates.length) {
+    return null
+  }
+  for (const candidate of candidates) {
+    if (controller.signal.aborted) {
+      throw createAbortError()
+    }
+    try {
+      return await downloadAssetTempFilePathFromCandidate(api, candidate, controller, onProgress)
+    } catch (error) {
+      if (isAbortErrorLike(error)) {
+        throw error
+      }
+    }
+  }
+  return null
+}
+
 export async function fetchAssetBlobWithResponse(
   url: string,
   controller: AbortController,
@@ -642,6 +676,87 @@ async function downloadAssetBlobViaUniDownloadFile(
     url: result.url,
     bytes: result.bytes ?? null,
   }
+}
+
+async function downloadAssetTempFilePathFromCandidate(
+  api: UniDownloadFileApi,
+  url: string,
+  controller: AbortController,
+  onProgress: (value: number) => void,
+): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false
+    let task: UniDownloadFileTask | null = null
+
+    function cleanup(): void {
+      controller.signal.removeEventListener('abort', abortListener)
+    }
+
+    function abortListener(): void {
+      if (settled) {
+        return
+      }
+      settled = true
+      cleanup()
+      try {
+        task?.abort?.()
+      } catch {
+        /* noop */
+      }
+      reject(createAbortError())
+    }
+
+    const settleFailure = (error: unknown): void => {
+      if (settled) {
+        return
+      }
+      settled = true
+      cleanup()
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+
+    task = api.downloadFile({
+      url,
+      success: (payload) => {
+        if (settled) {
+          return
+        }
+        const statusCode = payload.statusCode ?? 200
+        if (statusCode < 200 || statusCode >= 300) {
+          settleFailure(new Error(`资源下载失败（${statusCode}）`))
+          return
+        }
+        const tempFilePath = typeof payload.tempFilePath === 'string'
+          ? payload.tempFilePath.trim()
+          : ''
+        if (!tempFilePath) {
+          settleFailure(new Error('资源下载失败（未返回临时文件路径）'))
+          return
+        }
+        settled = true
+        cleanup()
+        onProgress(100)
+        resolve(tempFilePath)
+      },
+      fail: (error) => settleFailure(error),
+    }) ?? null
+
+    task?.onProgressUpdate?.((info) => {
+      if (settled) {
+        return
+      }
+      const progress = typeof info?.progress === 'number' && Number.isFinite(info.progress)
+        ? info.progress
+        : 0
+      onProgress(Math.min(99, Math.max(0, Math.round(progress))))
+    })
+
+    if (controller.signal.aborted) {
+      abortListener()
+      return
+    }
+    controller.signal.addEventListener('abort', abortListener, { once: true })
+  })
 }
 
 async function downloadAssetBlobViaUniDownloadFileWithResponse(

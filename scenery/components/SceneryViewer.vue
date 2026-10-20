@@ -865,6 +865,7 @@ import {
 } from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
 import {
   collectActiveProceduralLandscapeNodeIds as collectActiveProceduralLandscapeNodeIdsFromNodes,
+  collectProceduralLandscapeCoreTexturePreloadForNodes,
   collectProceduralLandscapeTexturePreloadForNodes,
 } from '@harmony/schema/proceduralLandscape/preload';
 import {
@@ -2043,6 +2044,7 @@ function ensureSlowroadsEnvironmentRuntime(): void {
     maxTextureSize: context.renderer.capabilities.maxTextureSize,
     maxAnisotropy: Math.min(8, context.renderer.capabilities.getMaxAnisotropy()),
     preferredVariant: isWeChatMiniProgram ? '2048' : 'full',
+    preferLocalFileTextures: isWeChatMiniProgram,
   });
   slowroadsEnvironment = createSlowroadsEnvironmentRuntime({
     scene: context.scene,
@@ -5623,10 +5625,11 @@ const SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS = 30_000;
 
 function resolveSceneSlowroadsTexturePreload(
   document: SceneJsonExportDocument,
+  scope: 'core' | 'all' = 'all',
 ): SceneSlowroadsTexturePreload | null {
   const season = resolveDocumentEnvironment(document).slowroads.season;
   const textureIds = new Set<string>();
-  const stored = document.assetPreload?.slowroadsTextures;
+  const stored = scope === 'all' ? document.assetPreload?.slowroadsTextures : undefined;
   if (stored?.season === season) {
     stored.textureIds.forEach((id) => {
       const normalized = typeof id === 'string' ? id.trim() : '';
@@ -5636,7 +5639,9 @@ function resolveSceneSlowroadsTexturePreload(
     });
   }
 
-  const derived = collectProceduralLandscapeTexturePreloadForNodes(document.nodes, season);
+  const derived = scope === 'core'
+    ? collectProceduralLandscapeCoreTexturePreloadForNodes(document.nodes, season)
+    : collectProceduralLandscapeTexturePreloadForNodes(document.nodes, season);
   derived?.textureIds.forEach((id) => textureIds.add(id));
 
   if (!textureIds.size) {
@@ -22327,7 +22332,7 @@ async function preloadSceneSlowroadsTextures(
   document: SceneJsonExportDocument,
   token: number,
 ): Promise<void> {
-  const preload = resolveSceneSlowroadsTexturePreload(document);
+  const preload = resolveSceneSlowroadsTexturePreload(document, 'core');
   if (!preload || !preload.textureIds.length) {
     return;
   }
@@ -22347,11 +22352,12 @@ async function preloadSceneSlowroadsTextures(
   resourcePreload.total = total;
   resourcePreload.loadedBytes = 0;
   resourcePreload.totalBytes = 0;
-  resourcePreload.label = '正在预下载景观材质纹理...';
+  resourcePreload.label = '正在预下载地表核心纹理...';
+  const startedAt = Date.now();
   setSceneInitState({
     stage: 'preloadingTextures',
-    label: '正在预下载景观材质纹理',
-    detail: `正在下载 0 / ${total} 张纹理`,
+    label: '正在预下载地表核心纹理',
+    detail: `正在下载 0 / ${total} 张核心纹理`,
     stagePercent: 0,
     currentIndex: 0,
     currentTotal: total,
@@ -22380,11 +22386,11 @@ async function preloadSceneSlowroadsTextures(
         }
         resourcePreload.loaded = loaded;
         resourcePreload.total = count;
-        resourcePreload.label = `景观纹理 ${loaded} / ${count}`;
+        resourcePreload.label = `地表核心纹理 ${loaded} / ${count}`;
         setSceneInitState({
           stage: 'preloadingTextures',
-          label: '正在预下载景观材质纹理',
-          detail: `正在下载 ${loaded} / ${count} 张纹理`,
+          label: '正在预下载地表核心纹理',
+          detail: `正在下载 ${loaded} / ${count} 张核心纹理`,
           stagePercent: count > 0 ? (loaded / count) * 100 : 100,
           currentIndex: loaded,
           currentTotal: count,
@@ -22408,12 +22414,16 @@ async function preloadSceneSlowroadsTextures(
     return;
   }
   if (timedOut) {
+    console.warn(
+      `[SceneryLandscape] core texture preload timed out after ${SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS}ms; continuing in background`,
+    );
     appendSceneInitWarning(
-      `景观纹理预载超时（${Math.round(SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS / 1000)}s），将在进入场景后继续加载`,
+      `地表核心纹理预载超时（${Math.round(SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS / 1000)}s），将边进入场景边继续加载`,
     );
   } else if (preloadError || !textures) {
     const detail = preloadError instanceof Error ? preloadError.message : String(preloadError ?? 'unknown');
-    appendSceneInitWarning(`景观纹理预载失败：${detail}`);
+    console.warn(`[SceneryLandscape] core texture preload failed: ${detail}`);
+    appendSceneInitWarning(`地表核心纹理预载失败：${detail}`);
   } else {
     const missingIds = refs
       .filter((ref) => !textures?.has(ref.id))
@@ -22427,14 +22437,17 @@ async function preloadSceneSlowroadsTextures(
     }
     setSceneInitState({
       stage: 'preloadingTextures',
-      label: '景观材质纹理已缓存',
-      detail: `${total} 张纹理已准备完成`,
+      label: '地表核心纹理已缓存',
+      detail: `${total} 张核心纹理已准备完成`,
       stagePercent: 100,
       currentIndex: total,
       currentTotal: total,
       currentLabel: preload.season,
       active: true,
     });
+    console.info(
+      `[SceneryLandscape] core textures ready in ${Date.now() - startedAt}ms (${textures.size}/${total})`,
+    );
   }
   resourcePreload.active = false;
   resourcePreload.label = '';
@@ -23425,6 +23438,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     maxTextureSize: assetRenderer.capabilities.maxTextureSize,
     maxAnisotropy: maxAssetAnisotropy,
     preferredVariant: isWeChatMiniProgram ? '2048' : 'full',
+    preferLocalFileTextures: isWeChatMiniProgram,
   });
   latestControlNodeRestoreSnapshot = null;
   refreshDynamicGroundCache(currentDocument);

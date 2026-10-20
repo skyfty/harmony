@@ -103,6 +103,7 @@ import { computeWallSegments, type WallSegment } from './walls'
 import { createWallLayers, wallFenceSpriteSamples, type WallLayerHandle } from './wallLayer'
 import { createWaterPlane, type WaterPlaneHandle } from './waterPlane'
 import { getSharedSlowroadsAssetStore, slowroadsSharedRetainIds, type SlowroadsAssetStore } from '../slowroads/assets/assetStore'
+import { collectProceduralLandscapeCoreTextureRefs } from './preload'
 import {
   collectLandscapeSharedTextureRefs,
   collectSeasonTextureRefs,
@@ -110,6 +111,7 @@ import {
   SEASON_CATALOG,
   SHARED_TEXTURES,
   type SeasonId,
+  type SeasonTextureRef,
   type SeasonTextureRefFilter,
 } from '../slowroads/core/seasonCatalog'
 import { SEASON_PARAMS } from '../slowroads/core/seasonParams'
@@ -1040,6 +1042,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let seasonAssetsSeason: SeasonId | null = null
   let seasonLoadToken = 0
   let seasonLoadInFlight = false
+  let seasonCoreAssetsReady = false
   let surfaceTexturesReady = false
   let lastLoadedTextureNeedsKey = ''
   let roadTexturesRequested = false
@@ -2676,6 +2679,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     buildWater()
     releaseAllBatches()
     startWorldForest()
+    // Every world rebuild (startup, adaptive calibration, road edits, host
+    // translation) replaces the DEM roadbed with a fresh white material. Keep
+    // the re-injection here so no caller can forget it and expose that mesh.
+    installSurfaceInjection()
     dirty.instances = true
     forceStream = true
   }
@@ -2730,7 +2737,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     // 材质是随渲染逐步编译的：签名不变时才算「收敛」，跑完停用；签名变化时重跑审计
     // （面板 warnings 会在每次失败时补齐）。
     const signature = audits.map((audit) => audit.name).sort().join('|')
-    console.info(`[slowroads] shader audits (${audits.length}): ${signature}`)
     if (signature === lastAuditSignature && audits.length > 1) {
       selfChecksDone = true
     } else {
@@ -4188,9 +4194,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       stats.roadMaxStraightRunMeters = 0
     }
     stats.season = currentSeason
+    // Scene readiness only waits for the small terrain core. Optional foliage,
+    // road, wall and water atlases continue streaming after the first frame.
     stats.seasonAssetsReady = seasonAssetsSeason === currentSeason
       && Boolean(seasonAssets)
-      && !seasonLoadInFlight
+      && seasonCoreAssetsReady
     stats.nearTreeInstances = treeMeshManager?.instanceCount ?? 0
     stats.nearCardInstances = (nearCardLayers?.broadleaf.count ?? 0) + (nearCardLayers?.conifer.count ?? 0)
     stats.nearTreeReady = treeMeshManager?.ready === true
@@ -4262,7 +4270,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       grid = gridBuilder.result
       gridBuilder = null
       buildWorld()
-      installSurfaceInjection()
       return true
     }
     const error = gridBuilder.error ?? 'unknown'
@@ -4320,6 +4327,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     const token = ++seasonLoadToken
     seasonLoadInFlight = true
+    seasonCoreAssetsReady = false
     const required = collectSeasonTextureRefs(season, needs)
     const shared = collectLandscapeSharedTextureRefs({
       surface: needs.surface,
@@ -4329,21 +4337,69 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       water: needs.water,
     })
     const refs = [...required, ...shared]
-    try {
-      const textures = await assetStore.textureSet(refs)
-      if (disposed || token !== seasonLoadToken) {
-        return
-      }
-      // 失败保持原季（lab 语义）：缺文件的键用旧贴图兜底，整季全失败则保留旧季。
+    const coreRefs = collectProceduralLandscapeCoreTextureRefs(season, {
+      surface: needs.surface,
+      foliage: needs.forest || needs.grass || needs.bushes,
+    })
+    const coreIds = new Set(coreRefs.map((ref) => ref.id))
+    const entryRefs = refs.filter((ref) => coreIds.has(ref.id))
+    const deferredRefs = refs.filter((ref) => !coreIds.has(ref.id))
+    const mergeTextures = (textures: Map<string, THREE.Texture>): void => {
       const merged = new Map<string, THREE.Texture>(seasonAssets ?? undefined)
       for (const [id, texture] of textures) {
         merged.set(id, texture)
       }
-      const missing = required.filter((ref) => !merged.has(ref.id))
       seasonAssets = merged
       seasonAssetsSeason = season
       surfaceTexturesReady = needs.surface === true
         && collectSurfaceTextureRefs(season).every((ref) => merged.has(ref.id))
+    }
+    const applyArrivingTexture = (ref: SeasonTextureRef, texture: THREE.Texture): void => {
+      if (disposed || token !== seasonLoadToken) {
+        return
+      }
+      mergeTextures(new Map([[ref.id, texture]]))
+      // Bind every arrived texture immediately. This is intentionally lighter
+      // than applySeasonToMaterials(): it must not rebuild instancing for each
+      // individual PNG.
+      applyStreamingSeasonTextures(season)
+    }
+    const startedAt = Date.now()
+    try {
+      if (entryRefs.length) {
+        const textures = await assetStore.textureSet(
+          entryRefs,
+          undefined,
+          { onTexture: applyArrivingTexture },
+        )
+        if (disposed || token !== seasonLoadToken) {
+          return
+        }
+        mergeTextures(textures)
+      }
+      seasonCoreAssetsReady = true
+      console.info(
+        `[SceneryLandscape] core textures ready in ${Date.now() - startedAt}ms (${entryRefs.length} refs)`,
+      )
+      // Commit the first complete terrain frame before optional atlases settle.
+      applySeasonToMaterials(season)
+
+      if (deferredRefs.length) {
+        const textures = await assetStore.textureSet(
+          deferredRefs,
+          undefined,
+          { onTexture: applyArrivingTexture },
+        )
+        if (disposed || token !== seasonLoadToken) {
+          return
+        }
+        mergeTextures(textures)
+      }
+      if (disposed || token !== seasonLoadToken) {
+        return
+      }
+      const merged = seasonAssets ?? new Map<string, THREE.Texture>()
+      const missing = required.filter((ref) => !merged.has(ref.id))
       lastLoadedTextureNeedsKey = needsKey
       if (merged.has(SHARED_TEXTURES.seaWaves.id)) {
         waterTextureRequested = false
@@ -4361,13 +4417,44 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // pruning to the immediate `required` subset would evict and re-download.
       assetStore.prune(slowroadsSharedRetainIds(collectSeasonTextureRefs(season)))
       applySeasonToMaterials(season)
+      console.info(
+        `[SceneryLandscape] season textures complete in ${Date.now() - startedAt}ms (${refs.length} refs)`,
+      )
     } catch (error) {
       warn(`season-load-failed:${season}:${error instanceof Error ? error.message : String(error)}`)
+      if (token === seasonLoadToken) {
+        // A failed optional batch must not leave the scene stuck in a 30s
+        // readiness timeout. The error remains visible in warnings.
+        seasonCoreAssetsReady = true
+        applySeasonToMaterials(season)
+      }
     } finally {
       if (token === seasonLoadToken) {
         seasonLoadInFlight = false
       }
     }
+  }
+
+  function applyStreamingSeasonTextures(season: SeasonId): void {
+    applySeasonUniformsToSurface()
+    for (const handle of foliageMaterials.values()) {
+      applyFoliageSeasonToHandle(handle)
+    }
+    const entry = SEASON_CATALOG[season]
+    roadBand?.setSeason(season, roadBandTexturesFor(season))
+    if (wallLayer) {
+      wallLayer.setTextures(
+        {
+          drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
+          barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
+          seaWall: textureFor(entry.walls.seaWall.id) ?? getSharedPlaceholderTexture(),
+        },
+        SEASON_PARAMS[season].shadowFactor,
+        appliedLighting.radiance,
+      )
+    }
+    applyTreeMeshSeasonTextures()
+    buildWater()
   }
 
   function applySeasonToMaterials(season: SeasonId): void {
@@ -4576,11 +4663,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       dirty.world = false
       buildWorld()
       rebuildRoadDebugLine()
-      // DEM world rebuilds (road edits, host translation) create a fresh
-      // roadbed mesh; re-inject the seasonal surface so it is not left white.
-      if (usesDemTerrain()) {
-        installSurfaceInjection()
-      }
     }
     if (dirty.demMesh) {
       if (!usesDemTerrain() || !demGridData) {
@@ -4758,6 +4840,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (keys.textureNeeds !== previousKeys.textureNeeds) {
         seasonLoadToken += 1
         seasonLoadInFlight = false
+        seasonCoreAssetsReady = false
         seasonAssetsSeason = null
         lastLoadedTextureNeedsKey = ''
         roadTexturesRequested = false

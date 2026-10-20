@@ -698,7 +698,7 @@ export function injectSlowroadsFogFragmentSequence(
     // 显示空间等价的前半段必须与 lab/官方在该材质上的处理一致：材质被排除在
     // 色调映射之外时（lab 侧同样不会过 Cineon），基色编码应改用 'color-space'。
     console.warn(
-      `[slowroads] fog display-space injection: material "${options.material.name || options.material.type}" `
+      `[SceneryLandscape] fog display-space injection: material "${options.material.name || options.material.type}" `
         + 'has toneMapped=false but uses the tone-mapped base encoding',
     )
   }

@@ -44,27 +44,12 @@
 
 ## 诊断日志
 
-日志默认开启，单行 JSON 字符串，前缀固定：
+旧的 `[PL-DIAG*]` 周期探针已移除。当前只保留按阶段输出的一次性日志：
 
-- `[PL-DIAG-BOOT]`：场景启动约 2 秒后输出设备、WebGL 能力、场景、环境和初始景观参数。
-- `[PL-DIAG]`：每 10 秒输出一次 FPS、渲染统计、素材库状态、景观实例/构建状态和 warnings。
-- `[PL-DIAG-TEX]`：启动、纹理加载完成、每 30 秒输出纹理尺寸、显存估算、各向异性和 mipmap 状态。
-
-在真机调试控制台筛选 `PL-DIAG`，复制所有以 `[PL-DIAG` 开头的整行发送即可。也可以立即手动导出：
-
-```js
-__HARMONY_PL_DIAG__.dump()
-```
-
-重点核对：
-
-- `assets.variant` 是否为 `full`；
-- 树木图集的 `w/h` 和 `aniso` 是否与设备 `maxAnisotropy` 匹配；
-- `landscape[].stats.worldForestInstances / nearTreeInstances / tris / fps` 的关系；
-- `phase / pendingDownloads / worldForestBuildMs` 是否说明仍在加载或构建；
-- `warnings` 是否包含素材缺失、实例预算或 DEM 错误。
-
-日志开关在 `scenery/common/utils/landscapeDiagnostics.ts` 顶部的 `LANDSCAPE_DIAGNOSTICS_ENABLED`。
+- `[SceneryLandscape] core textures ready ...`：地表核心纹理完成，场景已可进入。
+- `[SceneryLandscape] season textures complete ...`：可选植被/道路/墙体/水面图集补齐。
+- `[SceneryLandscape] core texture preload timed out ...`：核心图集超过入场预算，继续在后台加载。
+- `[SceneryLandscape] ... checks failed` / `treebin parse failed`：只在实际失败时输出。
 
 ## 首轮真机日志结论
 
@@ -82,14 +67,14 @@ __HARMONY_PL_DIAG__.dump()
 - 共享素材库新增 `configure()`，在场景构建前按 renderer 能力更新并重新应用 anisotropy；真机应看到 `aniso` 变为 8，而不是 1。
 - DEM 密度场应用 `forest.coverage`，world forest 预算乘以 `forest.density`；`coverage=0` 时全图森林应降为 0。
 - 物理桥接等待期间只推进 `proceduralLandscape` 组件的 update，让 DEM 网格能在 30 秒超时前完成。
-- 日志新增 `camera`、`nearCardInstances`、`nearTreeReady`、`roadLength/roadNodeCount/roadComplete/roadFailureReason`，以及独立的 `[PL-DIAG-GUARD]` 状态切换行。
+- 当轮新增的周期探针现已移除；后续只保留纹理阶段完成和真实失败日志。
 
 下一轮请重新构建真机包，重点看：
 
-- `[PL-DIAG-TEX]` 中树木图集的 `aniso` 是否变为 8；
-- `[PL-DIAG-GUARD]` 是否仍在 10 秒左右进入 critical；
-- `nearCardInstances / nearTreeReady` 是否说明近树层已建立；
-- `camera` 是否位于森林空洞，导致近树为 0；
+- 树木图集的实际 `aniso` 是否与设备能力匹配；
+- 内存保护是否仍在启动阶段进入 critical；
+- 近树层是否已经建立；
+- 相机是否位于森林空洞，导致近树为 0；
 - 初始化是否还出现 30 秒碰撞等待。
 
 ## 纹理内存优化（保留全部图层）
@@ -276,3 +261,47 @@ wx.downloadFile({
 | `textures>0`，`tris` 高但无植被 | 图集、alphaTest 或着色器 |
 | 纹理/植被可见但 FPS 低 | high 档森林预算 |
 | `diag-minimal` 仍低 | 非景观层瓶颈 |
+
+## 第七轮：远景树绿框与路基纯白（2026-10-20）
+
+两个问题是独立回归：
+
+- **远景树绿框**：微信端优先加载 `@2048` 变体。旧的降采样产物丢失了 PNG
+  透明通道，透明树卡背景变成实色绿色矩形。原图 4096×1024 带 alpha，旧
+  变体为无 `tRNS` 的 8 位索引图；重新生成后 14 张变体均为 32 位 RGBA。
+- **路基纯白**：`quality: auto` 在实机触发森林自适应校准后会直接重建世界。
+  旧路径新建的 DEM 路基使用默认白色 Lambert 材质，但没有重新执行季节地表
+  注入。现在 `buildWorld()` 完成时统一注入，DEM 高分辨率网格生成后再补一次。
+
+资源流水线现在会检查源 PNG 的 alpha/`tRNS`，若 2048 变体丢失透明信息会直接
+失败。资产 URL 也会附加 manifest 内容哈希，避免 CDN 继续命中旧图集。
+
+本次修复的 14 张变体、`catalog.json` 与 `asset-bundle.json` 已打包到
+`tools/slowroads-lab/slowroads-imposter-2048-alpha-fix.zip`。上传时应将其中
+同名文件放到服务端 `uploads/slowroads/`，并同步替换 manifest 后刷新 CDN。
+
+旧的高频 `[PL-DIAG-SURFACE]` 日志已移除。需要继续排查世界重建时，优先查看
+`[SceneryLandscape]` 阶段日志和场景面板里保留的 warnings。
+
+## 第八轮：预载超时与“先差后好”（2026-10-20）
+
+截图里的“景观纹理预载超时”不是下载最终失败，而是 30 秒入场预算到期；原任务
+没有被取消，仍会在后台继续。随后地形初始化又使用独立的 30 秒预算，并等待
+`seasonAssetsReady && !seasonLoadInFlight`，所以整季 37 张图集（压缩约 33.7MB）
+未完成时会再报一次 `textures-loading` 超时。
+
+画面“先差后好”的直接原因是 `applySeasonToMaterials()` 只在整季 `textureSet()`
+完成后执行。加载期间地表和植被仍使用无贴图/占位材质，完成后才一次性上材质。
+
+现在改为：
+
+- 入场预载只等待 11 张地表核心纹理（约 3.6MB），不再等待植被、道路、墙体和
+  水面图集；
+- 季节纹理逐张到达即绑定，核心批次完成后即可进入场景并显示正确地表；
+- 其余图集在后台继续加载，补齐后再次提交；
+- `seasonAssetsReady` 表示“首屏所需核心素材已就绪”，不再包含可选图集；
+- 微信端优先把 `uni.downloadFile` 的临时路径直接交给图片解码，失败才回退到
+  ArrayBuffer/Blob 路径，避免整张 PNG 多次复制和 base64 化。
+
+真机验收时只看两条新日志：`core textures ready` 应在入场前出现，
+`season textures complete` 可以晚于入场出现。

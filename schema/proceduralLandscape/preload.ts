@@ -23,6 +23,51 @@ export interface ProceduralLandscapeTexturePreloadOptions {
   waterVisible?: boolean
 }
 
+export interface ProceduralLandscapeCoreTextureOptions {
+  /** Terrain shader textures are visible. */
+  surface?: boolean
+  /** Any foliage layer will sample the shared detail and variation maps. */
+  foliage?: boolean
+}
+
+/**
+ * Textures required before the first useful landscape frame can render.
+ *
+ * This deliberately excludes road, wall, water and foliage atlases. Those are
+ * visible later and can stream in without holding the whole scene behind one
+ * all-or-nothing texture set.
+ */
+export function collectProceduralLandscapeCoreTextureRefs(
+  season: SeasonId,
+  options: ProceduralLandscapeCoreTextureOptions = {},
+): SeasonTextureRef[] {
+  const surface = options.surface === true
+  const foliage = options.foliage === true
+  const refs = [
+    ...collectSeasonTextureRefs(season, {
+      surface,
+      forest: !surface && foliage,
+      grass: false,
+      bushes: false,
+      roadSingle: false,
+      roadWide: false,
+      walls: false,
+    }),
+    ...collectLandscapeSharedTextureRefs({
+      surface,
+      forest: !surface && foliage,
+      grass: false,
+      bushes: false,
+      water: false,
+    }),
+  ]
+  const unique = new Map<string, SeasonTextureRef>()
+  for (const ref of refs) {
+    unique.set(ref.id, ref)
+  }
+  return [...unique.values()].sort((left, right) => left.id.localeCompare(right.id))
+}
+
 function hasEnabledWallLayer(props: ProceduralLandscapeComponentProps): boolean {
   return Boolean(
     props.walls.drystone.enabled
@@ -136,6 +181,29 @@ export function collectProceduralLandscapeTexturePreloadForNodes(
   for (const { props } of collectActiveProceduralLandscapeNodes(nodes)) {
     collectProceduralLandscapeTexturePreloadIds(props, season)
       .forEach((id) => textureIds.add(id))
+  }
+  if (!textureIds.size) {
+    return undefined
+  }
+  return {
+    season,
+    textureIds: [...textureIds].sort(),
+  }
+}
+
+export function collectProceduralLandscapeCoreTexturePreloadForNodes(
+  nodes: SceneNode[] | null | undefined,
+  season: SeasonId,
+): SceneSlowroadsTexturePreload | undefined {
+  const textureIds = new Set<string>()
+  for (const { props } of collectActiveProceduralLandscapeNodes(nodes)) {
+    const foliage = (props.forest.coverage > 0 && props.forest.density > 0)
+      || props.grass.enabled
+      || props.bushes.enabled
+    collectProceduralLandscapeCoreTextureRefs(season, {
+      surface: props.surface.enabled && props.surface.textures,
+      foliage,
+    }).forEach((ref) => textureIds.add(ref.id))
   }
   if (!textureIds.size) {
     return undefined

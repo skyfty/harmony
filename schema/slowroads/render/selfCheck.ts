@@ -52,16 +52,13 @@ export interface SlowroadsSelfCheckResult {
   detail: string
 }
 
-function createRecorder(label: string): {
+function createRecorder(): {
   results: SlowroadsSelfCheckResult[]
   record: (name: string, ok: boolean, detail?: string) => void
 } {
   const results: SlowroadsSelfCheckResult[] = []
   const record = (name: string, ok: boolean, detail = ''): void => {
     results.push({ name, ok, detail })
-    if (!ok) {
-      console.error(`[slowroads ${label} check] ${name}${detail ? ` — ${detail}` : ''}`)
-    }
   }
   return { results, record }
 }
@@ -70,9 +67,9 @@ function createRecorder(label: string): {
 export function reportSlowroadsSelfChecks(label: string, results: SlowroadsSelfCheckResult[]): void {
   const failed = results.filter((result) => !result.ok)
   if (failed.length) {
-    console.error(`[slowroads] ${label} checks failed: ${failed.map((result) => result.name).join(', ')}`)
-  } else {
-    console.info(`[slowroads] ${label} checks passed (${results.length})`)
+    console.warn(
+      `[SceneryLandscape] ${label} checks failed: ${failed.map((result) => result.name).join(', ')}`,
+    )
   }
 }
 
@@ -90,7 +87,7 @@ const HEX_PATTERN = /^#[0-9a-fA-F]{6}$/
  * 这里对 32 套预设 × 全机位高度范围断言「far 恒为正、far > near」。
  */
 export function runSlowroadsHazeInterpolationChecks(): SlowroadsSelfCheckResult[] {
-  const { results, record } = createRecorder('haze')
+  const { results, record } = createRecorder()
   let failures = 0
   let worst = ''
   const seasons: SeasonId[] = ['spring', 'summer', 'autumn', 'winter']
@@ -156,7 +153,7 @@ function colorTriplet(color: THREE.Color): string {
  * 「场景 fogAvg < 500」的预设上（尺度拆分的影响面）。
  */
 export function runSlowroadsEnvironmentChecks(): SlowroadsSelfCheckResult[] {
-  const { results, record } = createRecorder('environment')
+  const { results, record } = createRecorder()
 
   let presetCount = 0
   let starsCount = 0
@@ -315,7 +312,7 @@ export interface FogColorSpaceCheckInput {
  *     旧实现（线性域反 Cineon 预补偿）把天顶压成异常深蓝的地方。
  */
 export function runSlowroadsFogColorSpaceChecks(input: FogColorSpaceCheckInput): SlowroadsSelfCheckResult[] {
-  const { results, record } = createRecorder('fog-color')
+  const { results, record } = createRecorder()
 
   const converted = new THREE.Color().set(FOG_COLOR_SPACE_REFERENCE.hex)
   converted.getRGB(converted, THREE.SRGBColorSpace)
@@ -436,7 +433,7 @@ export interface FogUniformCheckInput {
  *    因此 `vFogDepth = 1 - exp(-20)` 饱和为 1，`vHaze` 巨值外推不会泄漏。
  */
 export function runSlowroadsFogUniformChecks(input: FogUniformCheckInput): SlowroadsSelfCheckResult[] {
-  const { results, record } = createRecorder('fog-uniform')
+  const { results, record } = createRecorder()
   const matches = (got: number, want: number): boolean => Math.abs(got - want) < 1e-6
   const viewDistanceScale = typeof input.viewDistanceScale === 'number'
     && Number.isFinite(input.viewDistanceScale)
@@ -478,10 +475,7 @@ export function runSlowroadsFogUniformChecks(input: FogUniformCheckInput): Slowr
     `vFogBlend=${blend.toFixed(4)} want ${wantBlend.toFixed(4)}`,
   )
   const sceneBlend = resolveFogDepthBlend(input.sceneUniforms.near, input.sceneUniforms.far)
-  console.info(
-    `[slowroads] sky fog scale: sky vFogBlend=${blend.toFixed(4)} scene vFogBlend=${sceneBlend.toFixed(4)} `
-      + `(skyFar=${input.skyUniforms.far.toFixed(1)}, sceneFar=${input.sceneUniforms.far.toFixed(1)})`,
-  )
+  void sceneBlend
 
   if (input.skyPlaneZ === null) {
     record('sky plane hangs at official n1 distance', false, 'sky mesh missing')
@@ -553,7 +547,7 @@ export function runSlowroadsFogUniformChecks(input: FogUniformCheckInput): Slowr
  * 树卡变色幅度语义）。
  */
 export function runSlowroadsSeasonChecks(): SlowroadsSelfCheckResult[] {
-  const { results, record } = createRecorder('season')
+  const { results, record } = createRecorder()
 
   let seasonRefsOk = true
   const counts: string[] = []
@@ -804,7 +798,7 @@ function stripGlslComments(source: string): string {
 export function runTreeDiscolourationShaderChecks(
   materials: TreeDiscolourationShaderInput[],
 ): SlowroadsSelfCheckResult[] {
-  const { results, record } = createRecorder('tree-discolouration')
+  const { results, record } = createRecorder()
 
   const violations = new Set<string>()
   const scoped = materials.filter((material) => TREE_SHADER_NAME.test(material.name))
@@ -874,7 +868,7 @@ export interface MaterialUniformCheckInput {
 export function runMaterialUniformCoverageChecks(
   materials: MaterialUniformCheckInput[],
 ): SlowroadsSelfCheckResult[] {
-  const { results, record } = createRecorder('uniform')
+  const { results, record } = createRecorder()
 
   const violations = new Set<string>()
   for (const material of materials) {

@@ -68,13 +68,34 @@ function computeFnv1a64CompatHash(bytes) {
 
 // ---- PNG header reading (no deps) ----
 
-function readPngSize(buffer) {
+function readPngInfo(buffer) {
   if (buffer.length < 24 || buffer.readUInt32BE(0) !== 0x89504e47) {
     throw new Error('not a PNG file')
   }
   const width = buffer.readUInt32BE(16)
   const height = buffer.readUInt32BE(20)
-  return { width, height }
+  const bitDepth = buffer[24]
+  const colorType = buffer[25]
+  let hasTransparencyChunk = false
+  let offset = 8
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset)
+    const type = buffer.toString('ascii', offset + 4, offset + 8)
+    if (type === 'tRNS') {
+      hasTransparencyChunk = true
+    }
+    if (type === 'IEND' || length > buffer.length - offset - 12) {
+      break
+    }
+    offset += 12 + length
+  }
+  return {
+    width,
+    height,
+    bitDepth,
+    colorType,
+    hasAlpha: colorType === 4 || colorType === 6 || hasTransparencyChunk,
+  }
 }
 
 // ---- OBJ parsing ----
@@ -239,7 +260,8 @@ async function main() {
     const to = join(args.out, name)
     await copyFile(from, to)
     const buffer = readFileSync(to)
-    const { width, height } = readPngSize(buffer)
+    const sourceInfo = readPngInfo(buffer)
+    const { width, height } = sourceInfo
     files.push({
       logicalId: logicalIdOf(name),
       file: name,
@@ -249,6 +271,7 @@ async function main() {
       width,
       height,
       rgbaBytes: width * height * 4,
+      hasAlpha: sourceInfo.hasAlpha,
     })
 
     // Downscaled variant for texture-size-capped devices (WeChat, old phones).
@@ -275,6 +298,13 @@ async function main() {
           stdio: ['ignore', 'ignore', 'pipe'],
         })
         const variantBuffer = readFileSync(variantPath)
+        const variantInfo = readPngInfo(variantBuffer)
+        if (sourceInfo.hasAlpha && !variantInfo.hasAlpha) {
+          throw new Error(
+            `${variantName} lost the source alpha channel `
+            + `(source colorType=${sourceInfo.colorType}, variant colorType=${variantInfo.colorType})`,
+          )
+        }
         files.push({
           logicalId: logicalIdOf(variantName),
           file: variantName,
@@ -286,6 +316,7 @@ async function main() {
           width: targetW,
           height: targetH,
           rgbaBytes: targetW * targetH * 4,
+          hasAlpha: variantInfo.hasAlpha,
         })
       } catch (error) {
         console.error(`[materialize] ffmpeg failed for ${name}: ${error instanceof Error ? error.message : error}`)

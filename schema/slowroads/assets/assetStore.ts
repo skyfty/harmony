@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { AssetBundleManifest } from '../../asset-api'
-import { fetchAssetBlob } from '../../assetDownload'
+import { downloadAssetTempFilePath, fetchAssetBlob } from '../../assetDownload'
 import { loadTextureFromSourceUrl } from '../../textureSourceLoader'
 import { SHARED_TEXTURES, type SeasonTextureRef } from '../core/seasonCatalog'
 
@@ -19,10 +19,13 @@ import { SHARED_TEXTURES, type SeasonTextureRef } from '../core/seasonCatalog'
 export const SLOWROADS_ASSET_BASE_URL = 'https://v.touchmagic.cn/uploads/slowroads/'
 export const SLOWROADS_ASSET_MANIFEST_FILE = 'asset-bundle.json'
 export const SLOWROADS_TEXTURE_2048_THRESHOLD = 4096
+/** Bump when replacing stable asset files behind an unchanged manifest path. */
+export const SLOWROADS_ASSET_MANIFEST_VERSION = '2'
 
 const SLOWROADS_TEXTURE_LOAD_CONCURRENCY = 2
 const SLOWROADS_TEXTURE_LOAD_ATTEMPTS = 2
 const SLOWROADS_TEXTURE_RETRY_DELAY_MS = 150
+const SLOWROADS_TEXTURE_LOAD_TIMEOUT_MS = 20_000
 
 export function resolveSlowroadsLogicalId(
   variant: 'full' | '2048',
@@ -80,9 +83,31 @@ function resolveAssetUrl(baseUrl: string, path: string): string {
   return `${normalizedBase.replace(/\/+$/, '')}/${normalizedPath.replace(/^\/+/, '')}`
 }
 
+/**
+ * Keep the stable upload path (which the server/CDN serves) while forcing a
+ * fresh request whenever the manifest reports new bytes for the same logical
+ * asset. This prevents a long-lived CDN cache from serving an older @2048
+ * atlas after the asset bundle has been repaired.
+ */
+export function resolveSlowroadsVersionedAssetUrl(url: string, contentHash: string | null | undefined): string {
+  const normalizedUrl = typeof url === 'string' ? url.trim() : ''
+  const normalizedHash = typeof contentHash === 'string' ? contentHash.trim() : ''
+  if (!normalizedUrl || !normalizedHash) {
+    return normalizedUrl
+  }
+  const separator = normalizedUrl.includes('?') ? '&' : '?'
+  return `${normalizedUrl}${separator}v=${encodeURIComponent(normalizedHash)}`
+}
+
+function versionSlowroadsManifestUrl(url: string): string {
+  return resolveSlowroadsVersionedAssetUrl(url, SLOWROADS_ASSET_MANIFEST_VERSION)
+}
+
 let assetRuntimeConfig: SlowroadsAssetRuntimeConfig = {
   baseUrl: SLOWROADS_ASSET_BASE_URL,
-  manifestUrl: resolveAssetUrl(SLOWROADS_ASSET_BASE_URL, SLOWROADS_ASSET_MANIFEST_FILE),
+  manifestUrl: versionSlowroadsManifestUrl(
+    resolveAssetUrl(SLOWROADS_ASSET_BASE_URL, SLOWROADS_ASSET_MANIFEST_FILE),
+  ),
 }
 
 export function configureSlowroadsAssetBaseUrl(baseUrl: string, manifestFileName = SLOWROADS_ASSET_MANIFEST_FILE): void {
@@ -90,7 +115,7 @@ export function configureSlowroadsAssetBaseUrl(baseUrl: string, manifestFileName
   assetRuntimeConfig = {
     ...assetRuntimeConfig,
     baseUrl: normalized,
-    manifestUrl: resolveAssetUrl(normalized, manifestFileName),
+    manifestUrl: versionSlowroadsManifestUrl(resolveAssetUrl(normalized, manifestFileName)),
   }
   sharedSlowroadsAssetStore?.reset()
 }
@@ -121,15 +146,6 @@ export interface SlowroadsAssetStoreStats {
   warnings: string[]
 }
 
-export interface SlowroadsTextureDiagnostic {
-  id: string
-  width: number
-  height: number
-  estimatedBytes: number
-  anisotropy: number
-  generateMipmaps: boolean
-}
-
 export interface SlowroadsAssetStoreOptions {
   /** 设备纹理上限（renderer.capabilities.maxTextureSize）；< 4096 用 @2048 变体。 */
   maxTextureSize?: number
@@ -139,6 +155,17 @@ export interface SlowroadsAssetStoreOptions {
    * atlases even when the GPU reports a larger texture limit.
    */
   preferredVariant?: 'full' | '2048'
+  /**
+   * Mini programs can hand a downloaded temp-file path directly to their
+   * Image implementation. This avoids materialising every PNG as an
+   * ArrayBuffer, Blob and eventually a base64 data URL on the JS thread.
+   */
+  preferLocalFileTextures?: boolean
+}
+
+export interface SlowroadsTextureSetOptions {
+  /** Called as soon as one texture is decoded, before the whole set settles. */
+  onTexture?: (ref: SeasonTextureRef, texture: THREE.Texture) => void
 }
 
 interface TextureEntry {
@@ -163,7 +190,7 @@ const placeholderWarnings = new Set<string>()
 
 export class SlowroadsAssetStore {
   private readonly options: Required<Pick<SlowroadsAssetStoreOptions, 'maxTextureSize' | 'maxAnisotropy'>>
-    & { preferredVariant: 'full' | '2048' | null }
+    & { preferredVariant: 'full' | '2048' | null; preferLocalFileTextures: boolean }
   private manifest: AssetBundleManifest | null = null
   private manifestPromise: Promise<AssetBundleManifest | null> | null = null
   private manifestFailed = false
@@ -182,6 +209,7 @@ export class SlowroadsAssetStore {
       preferredVariant: options.preferredVariant === 'full' || options.preferredVariant === '2048'
         ? options.preferredVariant
         : null,
+      preferLocalFileTextures: options.preferLocalFileTextures === true,
     }
   }
 
@@ -206,6 +234,9 @@ export class SlowroadsAssetStore {
     this.options.maxAnisotropy = nextMaxAnisotropy
     if (options.preferredVariant === 'full' || options.preferredVariant === '2048') {
       this.options.preferredVariant = options.preferredVariant
+    }
+    if (typeof options.preferLocalFileTextures === 'boolean') {
+      this.options.preferLocalFileTextures = options.preferLocalFileTextures
     }
     const anisotropy = Math.max(1, Math.min(8, nextMaxAnisotropy))
     for (const entry of this.textures.values()) {
@@ -249,39 +280,19 @@ export class SlowroadsAssetStore {
     }
   }
 
-  /**
-   * Read-only texture inventory for runtime diagnostics. The scene viewer uses
-   * this to explain mobile-only quality differences (full vs @2048 atlases,
-   * anisotropy and mipmap state) without traversing materials per frame.
-   */
-  textureDiagnostics(): SlowroadsTextureDiagnostic[] {
-    const diagnostics: SlowroadsTextureDiagnostic[] = []
-    for (const entry of this.textures.values()) {
-      const image = entry.texture.image as { width?: number; height?: number } | null
-      const width = Number(image?.width)
-      const height = Number(image?.height)
-      diagnostics.push({
-        id: entry.logicalId,
-        width: Number.isFinite(width) && width > 0 ? width : 0,
-        height: Number.isFinite(height) && height > 0 ? height : 0,
-        estimatedBytes: entry.estimatedBytes,
-        anisotropy: entry.texture.anisotropy,
-        generateMipmaps: entry.texture.generateMipmaps === true,
-      })
-    }
-    return diagnostics.sort((left, right) => left.id.localeCompare(right.id))
-  }
-
   private warn(code: string): void {
     if (!this.warnings.has(code)) {
-      console.warn(`[SlowroadsAssetStore] ${code}`)
+      console.warn(`[SceneryLandscape] asset ${code}`)
     }
     this.warnings.add(code)
     placeholderWarnings.add(code)
   }
 
   private fileUrl(file: SlowroadsBundleFile): string {
-    return resolveAssetUrl(assetRuntimeConfig.baseUrl, file.path)
+    return resolveSlowroadsVersionedAssetUrl(
+      resolveAssetUrl(assetRuntimeConfig.baseUrl, file.path),
+      file.hash,
+    )
   }
 
   /** 按设备上限选择档位：`@2048` 变体存在时优先（低配设备）。 */
@@ -378,6 +389,7 @@ export class SlowroadsAssetStore {
   async textureSet(
     refs: ReadonlyArray<SeasonTextureRef>,
     onProgress?: (loaded: number, total: number) => void,
+    options: SlowroadsTextureSetOptions = {},
   ): Promise<Map<string, THREE.Texture>> {
     await this.ensureManifest()
     const result = new Map<string, THREE.Texture>()
@@ -397,9 +409,19 @@ export class SlowroadsAssetStore {
       while (nextIndex < unique.length) {
         const ref = unique[nextIndex]
         nextIndex += 1
+        if (!ref) {
+          break
+        }
         const texture = await this.texture(ref)
         if (texture) {
           result.set(ref.id, texture)
+          if (options.onTexture) {
+            try {
+              options.onTexture(ref, texture)
+            } catch (error) {
+              this.warn(`texture-callback-failed:${ref.id}:${error instanceof Error ? error.message : String(error)}`)
+            }
+          }
         }
         loaded += 1
         onProgress?.(loaded, unique.length)
@@ -448,7 +470,11 @@ export class SlowroadsAssetStore {
     let lastError = ''
     for (const candidateId of candidates) {
       for (let attempt = 1; attempt <= SLOWROADS_TEXTURE_LOAD_ATTEMPTS; attempt += 1) {
-        const result = await this.loadTextureCandidate(ref, candidateId)
+        const result = await this.loadTextureCandidate(
+          ref,
+          candidateId,
+          attempt === 1 && this.options.preferLocalFileTextures,
+        )
         if (result.texture) {
           return result.texture
         }
@@ -466,6 +492,7 @@ export class SlowroadsAssetStore {
   private async loadTextureCandidate(
     ref: SeasonTextureRef,
     logicalId: string,
+    preferLocalFile: boolean,
   ): Promise<TextureLoadAttempt> {
     await this.ensureManifest()
     const file = this.fileByLogicalId.get(logicalId)
@@ -474,27 +501,47 @@ export class SlowroadsAssetStore {
     }
     let objectUrl: string | null = null
     let textureSource: string | null = null
+    const controller = new AbortController()
+    const timeoutHandle = setTimeout(() => controller.abort(), SLOWROADS_TEXTURE_LOAD_TIMEOUT_MS)
     this.pendingDownloads += 1
     try {
-      const controller = new AbortController()
-      const payload = await fetchAssetBlob(this.fileUrl(file), controller, () => {})
-      this.downloadedBytes += payload.blob?.size ?? 0
-      const custom = assetRuntimeConfig.resolveTextureSource?.(file, null)
-      if (custom) {
-        textureSource = custom
-      } else if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' && payload.blob) {
+      const fileUrl = this.fileUrl(file)
+      if (preferLocalFile) {
         try {
-          objectUrl = URL.createObjectURL(payload.blob)
-          textureSource = objectUrl
+          const localPath = await downloadAssetTempFilePath(fileUrl, controller, () => {})
+          if (localPath) {
+            textureSource = localPath
+            this.downloadedBytes += file.size
+          }
         } catch {
-          objectUrl = null
+          // Fall through to the regular blob path. Local-file decoding support
+          // differs between mini-program base libraries.
         }
       }
       if (!textureSource) {
-        // 平台无 object URL（部分小程序环境）：退回远端直连，交由平台 loader 处理。
-        textureSource = this.fileUrl(file)
+        const payload = await fetchAssetBlob(fileUrl, controller, () => {}, { fileDownload: true })
+        this.downloadedBytes += payload.blob?.size ?? 0
+        const custom = assetRuntimeConfig.resolveTextureSource?.(file, null)
+        if (custom) {
+          textureSource = custom
+        } else if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' && payload.blob) {
+          try {
+            objectUrl = URL.createObjectURL(payload.blob)
+            textureSource = objectUrl
+          } catch {
+            objectUrl = null
+          }
+        }
+        if (!textureSource) {
+          // 平台无 object URL（部分小程序环境）：退回远端直连，交由平台 loader 处理。
+          textureSource = fileUrl
+        }
       }
-      const texture = await loadTextureFromSourceUrl(textureSource)
+      const texture = await withTimeout(
+        loadTextureFromSourceUrl(textureSource),
+        SLOWROADS_TEXTURE_LOAD_TIMEOUT_MS,
+        `texture-decode-timeout:${ref.id}`,
+      )
       texture.wrapS = THREE.RepeatWrapping
       texture.wrapT = THREE.RepeatWrapping
       texture.colorSpace = ref.colorSpace === 'srgb' ? THREE.SRGBColorSpace : THREE.NoColorSpace
@@ -522,6 +569,7 @@ export class SlowroadsAssetStore {
         error: error instanceof Error ? error.message : String(error),
       }
     } finally {
+      clearTimeout(timeoutHandle)
       this.pendingDownloads -= 1
     }
   }
@@ -602,6 +650,22 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, milliseconds)))
 }
 
+function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const handle = setTimeout(() => reject(new Error(message)), Math.max(1, milliseconds))
+    promise.then(
+      (value) => {
+        clearTimeout(handle)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(handle)
+        reject(error)
+      },
+    )
+  })
+}
+
 function revokeObjectUrl(url: string): void {
   if (typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') {
     return
@@ -626,11 +690,6 @@ export function getSharedSlowroadsAssetStore(options: SlowroadsAssetStoreOptions
   ) {
     sharedSlowroadsAssetStore.configure(options)
   }
-  return sharedSlowroadsAssetStore
-}
-
-/** Read-only access that must not create or reconfigure the shared store. */
-export function peekSharedSlowroadsAssetStore(): SlowroadsAssetStore | null {
   return sharedSlowroadsAssetStore
 }
 

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 import type { SceneJsonExportDocument, SceneNode, SceneNodeComponentState } from '@schema/core'
 import { createDefaultProceduralLandscapeProps } from '@schema/proceduralLandscape/config'
 import {
+  collectProceduralLandscapeCoreTexturePreloadForNodes,
+  collectProceduralLandscapeCoreTextureRefs,
   collectProceduralLandscapeTexturePreloadIds,
   collectProceduralLandscapeTexturePreloadRefs,
 } from '@schema/proceduralLandscape/preload'
@@ -69,6 +71,28 @@ function createDocument(nodes: SceneNode[], season: 'spring' | 'summer' | 'autum
 }
 
 describe('procedural landscape texture preload', () => {
+  it('keeps the entry set to terrain maps and defers foliage and road atlases', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'terrain' })
+    const coreIds = collectProceduralLandscapeCoreTextureRefs('spring', {
+      surface: props.surface.enabled && props.surface.textures,
+      foliage: true,
+    }).map((ref) => ref.id)
+
+    expect(coreIds).toContain('grass.15f2422c')
+    expect(coreIds).toContain('noise_fine.592be1a0')
+    expect(coreIds).not.toContain('spring_trees_0.aee94219')
+    expect(coreIds).not.toContain('spring_bushes.2db1f4bc')
+    expect(coreIds).not.toContain('road_base.40d53c3c')
+    expect(coreIds).not.toContain('wall_barrier.63193046')
+  })
+
+  it('derives the same core preload set from active scene nodes', () => {
+    const document = createDocument([createLandscapeNode('terrain')], 'spring')
+    const core = collectProceduralLandscapeCoreTexturePreloadForNodes(document.nodes, 'spring')
+    expect(core?.textureIds).toContain('grass.15f2422c')
+    expect(core?.textureIds).not.toContain('spring_trees_0.aee94219')
+  })
+
   it('collects the current season, enabled layers and shared maps in stable order', () => {
     const props = createDefaultProceduralLandscapeProps({ id: 'terrain' })
     const refs = collectProceduralLandscapeTexturePreloadRefs(props, 'winter')

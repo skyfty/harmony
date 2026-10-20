@@ -88,8 +88,9 @@ export function resolveProceduralLandscapeSceneNodeReadiness(
 
 /**
  * Wait until every enabled procedural landscape has finished its DEM mesh,
- * initial world build and current-season material bind. Camera-dependent
- * vegetation streaming is intentionally outside this readiness boundary.
+ * initial world build and the terrain core of its current-season material bind.
+ * Optional foliage/road/wall/water atlases and camera-dependent vegetation
+ * streaming are intentionally outside this readiness boundary.
  */
 export async function waitForProceduralLandscapeSceneReady(
   options: ProceduralLandscapeSceneReadyOptions,

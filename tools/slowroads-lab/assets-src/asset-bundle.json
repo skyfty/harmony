@@ -2,7 +2,7 @@
   "format": "harmony-asset-bundle",
   "version": 1,
   "bundleId": "slowroads-atlas-v1",
-  "createdAt": "2026-10-19T14:59:08.683Z",
+  "createdAt": "2026-10-20T05:25:45.096Z",
   "primaryAsset": {
     "logicalId": "slowroads-atlas-catalog",
     "name": "Slow Roads 四季素材库",
@@ -20,9 +20,9 @@
       "assetType": "file",
       "mimeType": "application/json",
       "extension": "json",
-      "hash": "sha256-b40151dadd5f7416",
+      "hash": "sha256-29f284ae8d31b6ed",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 39485
+      "size": 42510
     },
     {
       "logicalId": "autumn_bushes.b82ca395",
@@ -75,9 +75,9 @@
       "sourceLocalAssetId": "autumn_imposters_0_d.4c4b38fd@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-b5c7cb85e1d56276",
+      "hash": "sha256-b812138821debefd",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 413257,
+      "size": 1205280,
       "rewriteTarget": false
     },
     {
@@ -117,9 +117,9 @@
       "sourceLocalAssetId": "autumn_imposters_0_n.d10ccd46@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-fc1006954dca7f1a",
+      "hash": "sha256-0619e22e4faf2a5a",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 449825,
+      "size": 1216763,
       "rewriteTarget": false
     },
     {
@@ -145,9 +145,9 @@
       "sourceLocalAssetId": "autumn_imposters_1_d.0160320a@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-29653d73eab555a7",
+      "hash": "sha256-789857a1f750c022",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 374924,
+      "size": 880478,
       "rewriteTarget": false
     },
     {
@@ -173,9 +173,9 @@
       "sourceLocalAssetId": "autumn_imposters_1_n.2a7e8cf6@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-b4b6f2891dee0889",
+      "hash": "sha256-afce4b0452327cca",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 441026,
+      "size": 934415,
       "rewriteTarget": false
     },
     {
@@ -873,9 +873,9 @@
       "sourceLocalAssetId": "spring_imposters_0_d.2e67db77@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-830a900fa47bacdd",
+      "hash": "sha256-398bda3a8323d0df",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 387473,
+      "size": 1163930,
       "rewriteTarget": false
     },
     {
@@ -915,9 +915,9 @@
       "sourceLocalAssetId": "spring_imposters_0_n.1d5afe54@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-71f810e06151e515",
+      "hash": "sha256-b92a257b87603708",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 478251,
+      "size": 1182842,
       "rewriteTarget": false
     },
     {
@@ -943,9 +943,9 @@
       "sourceLocalAssetId": "spring_imposters_1_d.05133c03@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-1f0df9a433916784",
+      "hash": "sha256-c9735742c51e8948",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 377394,
+      "size": 883150,
       "rewriteTarget": false
     },
     {
@@ -971,9 +971,9 @@
       "sourceLocalAssetId": "spring_imposters_1_d.05133c03_metool@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-312542ce89a08abf",
+      "hash": "sha256-050db83a5f41e710",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 801005,
+      "size": 863747,
       "rewriteTarget": false
     },
     {
@@ -1181,9 +1181,9 @@
       "sourceLocalAssetId": "summer_imposters_0_d.6a3261f4@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-cc41dcf7487c2c7d",
+      "hash": "sha256-4c70aa9eda2419bb",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 359159,
+      "size": 923706,
       "rewriteTarget": false
     },
     {
@@ -1209,9 +1209,9 @@
       "sourceLocalAssetId": "summer_imposters_0_n.99abbc99@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-40e3c528a1e0a03e",
+      "hash": "sha256-ffe4f8c5eb6e26d1",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 502605,
+      "size": 1291650,
       "rewriteTarget": false
     },
     {
@@ -1251,9 +1251,9 @@
       "sourceLocalAssetId": "summer_imposters_1_d.a1e60bf5@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-8ae7721890e80b2e",
+      "hash": "sha256-ef7ef79e0701b71a",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 373064,
+      "size": 883881,
       "rewriteTarget": false
     },
     {
@@ -1699,9 +1699,9 @@
       "sourceLocalAssetId": "winter_imposters_0_d.ce1a9b7d@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-c1488ff31634d2d0",
+      "hash": "sha256-ac7c25062283cf45",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 381570,
+      "size": 1110812,
       "rewriteTarget": false
     },
     {
@@ -1727,9 +1727,9 @@
       "sourceLocalAssetId": "winter_imposters_0_n.8293f6b6@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-07b42b78656554bf",
+      "hash": "sha256-32c2712b7aeda35f",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 415610,
+      "size": 825972,
       "rewriteTarget": false
     },
     {
@@ -1755,9 +1755,9 @@
       "sourceLocalAssetId": "winter_imposters_1_d.2882c5c9@2048",
       "mimeType": "image/png",
       "extension": "png",
-      "hash": "sha256-9645e92e2215da56",
+      "hash": "sha256-7fa271d7e0111432",
       "hashAlgorithm": "fnv1a-64-compat",
-      "size": 379170,
+      "size": 922853,
       "rewriteTarget": false
     },
     {
