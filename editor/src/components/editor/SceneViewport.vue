@@ -355,6 +355,7 @@ import {
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
 import {
+  getProceduralLandscapeRoadCenterlineLocal,
   resolveProceduralLandscapeScenicWaypointLocal,
   sampleProceduralLandscapeTerrainHeight,
   setProceduralLandscapeEnvironment,
@@ -7491,6 +7492,39 @@ const LANDSCAPE_ROAD_WAYPOINT_INSERT_DISTANCE = 8
 const LANDSCAPE_ROAD_SURFACE_MARCH_MAX_STEP = 64
 const LANDSCAPE_ROAD_SURFACE_MARCH_FAR_DEFAULT = 20000
 const LANDSCAPE_ROAD_PLACEMENT_NOTICE_DURATION_MS = 2500
+const proceduralLandscapeCenterlineBackfillAttempts = new Set<string>()
+
+function backfillProceduralLandscapeRouteCenterlines(): void {
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+    const component = node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+      | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+      | undefined
+    const generatedRoute = component?.props?.road?.generatedRoute
+    if (!generatedRoute || generatedRoute.centerline?.pointsXZ.length) {
+      continue
+    }
+    const attemptKey = `${node.id}:${generatedRoute.revision}`
+    if (proceduralLandscapeCenterlineBackfillAttempts.has(attemptKey)) {
+      continue
+    }
+    const centerline = getProceduralLandscapeRoadCenterlineLocal(node.id)
+    if (!centerline || centerline.pointsXZ.length < 4) {
+      continue
+    }
+    proceduralLandscapeCenterlineBackfillAttempts.add(attemptKey)
+    if (sceneStore.backfillProceduralLandscapeRouteCenterline(node.id, centerline)) {
+      console.info(`[SceneViewport] Backfilled procedural road centerline for ${node.name ?? node.id}`)
+    }
+  }
+}
 
 const landscapeRoadPlacementNotice = ref<{
   text: string
@@ -15333,6 +15367,7 @@ function animate() {
         },
       })
       componentManager.update(effectiveDelta, { types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES })
+      backfillProceduralLandscapeRouteCenterlines()
     } catch (error) {
       console.warn('[SceneViewport] Failed to advance procedural landscape runtime', error)
     }

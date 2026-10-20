@@ -15,6 +15,7 @@ type SceneNodeComponentState<T> = { props: T } | null | undefined
 import type { VehicleComponentProps, RigidbodyComponentProps } from './components'
 import {
   clampVehicleComponentProps,
+  VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER,
 } from './components'
 import type { BehaviorEventResolution } from './behaviors/runtime'
 import type { VehicleSurfaceSample } from './vehicleSurfaceSampler'
@@ -559,7 +560,7 @@ export class VehicleDriveController {
       steering = clampAxisScalar(bindings.steeringKeyboardValue.value)
     }
     if (inputFlags.left !== inputFlags.right) {
-      steering = inputFlags.right ? 1 : -1
+      steering = inputFlags.left ? 1 : -1
     }
 
     if (inputFlags.brake) {
@@ -644,7 +645,9 @@ export class VehicleDriveController {
         const vehicleComponent = this.deps.resolveVehicleComponent(node)
         if (vehicleComponent) {
           const vehicleProps = clampVehicleComponentProps(vehicleComponent.props ?? null)
-          const vehicleCap = vehicleProps.maxSpeedKmh > 0 ? vehicleProps.maxSpeedKmh / 3.6 : Number.POSITIVE_INFINITY
+          const vehicleCap = vehicleProps.maxSpeedKmh > 0
+            ? (vehicleProps.maxSpeedKmh / 3.6) * VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER
+            : Number.POSITIVE_INFINITY
           if (Number.isFinite(vehicleCap) && vehicleCap > 0) {
             hardCap = Math.min(hardCap, vehicleCap)
           }

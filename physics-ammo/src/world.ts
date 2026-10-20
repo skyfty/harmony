@@ -411,6 +411,25 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
     }
   }
 
+  protected holdVehicleAtRest(state: VehicleState, transform: PhysicsTransform): void {
+    const ammo = this.ammo
+    if (!ammo) {
+      return
+    }
+    const worldTransform = createAmmoTransform(ammo, transform)
+    state.body.setWorldTransform(worldTransform)
+    const motionState = state.body.getMotionState?.()
+    if (motionState) {
+      motionState.setWorldTransform(worldTransform)
+    }
+    const zero = createAmmoVector3(ammo, [0, 0, 0])
+    state.body.setLinearVelocity?.(zero)
+    state.body.setAngularVelocity?.(zero)
+    state.body.clearForces?.()
+    ammo.destroy(zero)
+    ammo.destroy(worldTransform)
+  }
+
   protected shouldWakeVehicle(
     _state: VehicleState,
     input: PhysicsVehicleInputCommand | undefined,

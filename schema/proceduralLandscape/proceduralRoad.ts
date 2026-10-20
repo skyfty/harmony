@@ -67,7 +67,7 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
   waypointsSkipped?: number
   skippedWaypointIndices?: number[]
   waypointsAttempted?: number
-  plannerMode?: 'official' | 'guided-global' | 'official-natural'
+  plannerMode?: 'official' | 'guided-global' | 'official-natural' | 'cached-centerline'
   guideExpandedStates?: number
   maxGuideDeviation?: number
   unreachableWaypointIndex?: number | null
@@ -88,6 +88,16 @@ export interface WaypointRoadPlanResult extends RoadTraceResult {
 }
 
 type Vec2 = { x: number; z: number }
+
+export interface CachedCenterlineRoadOptions {
+  /** World-space centerline sampled by the editor when the route was generated. */
+  centerline: ReadonlyArray<RoadWaypoint>
+  termination: 'loop' | 'boundary' | 'dead-end'
+  feelDistance: number
+  feelAngleRad: number
+  maxSlope: number
+  waypointCount?: number
+}
 
 const AUTO_REPAIR_WAYPOINT_TOLERANCE = 30
 
@@ -1348,6 +1358,110 @@ function makeNode(
     longitudinal: 0,
     turn: 0,
     headingDelta,
+  }
+}
+
+/**
+ * Rehydrates an editor-authored road centerline on another runtime grid.
+ *
+ * XZ comes exclusively from the saved snapshot so DEM sample-step changes
+ * cannot move the road. Heights and slope metadata are re-sampled locally
+ * because preview/viewer intentionally use coarser terrain meshes.
+ */
+export function createCachedCenterlineRoadRoute(
+  grid: TerrainHeightGrid,
+  options: CachedCenterlineRoadOptions,
+): WaypointRoadPlanResult | null {
+  if (options.centerline.length < 2) {
+    return null
+  }
+  const nodes: RoadTraceNode[] = []
+  for (let index = 0; index < options.centerline.length; index += 1) {
+    const point = options.centerline[index]!
+    if (
+      !Number.isFinite(point.x)
+      || !Number.isFinite(point.z)
+      || !grid.contains(point.x, point.z)
+    ) {
+      continue
+    }
+    const y = grid.sampleHeight(point.x, point.z)
+    if (y == null) {
+      continue
+    }
+    const previous = options.centerline[index - 1] ?? point
+    const next = options.centerline[index + 1] ?? point
+    const heading = distance(previous, next) > 1e-6
+      ? Math.atan2(next.z - previous.z, next.x - previous.x)
+      : 0
+    nodes.push(makeNode(point, y, heading, nodes.length))
+  }
+  if (nodes.length < 2) {
+    return null
+  }
+  if (nodes.length > 2) {
+    const original = nodes.map((node) => node.y)
+    for (let index = 1; index < nodes.length - 1; index += 1) {
+      const smoothed = (original[index - 1]! + original[index]! * 2 + original[index + 1]!) / 4
+      nodes[index]!.y = clamp(smoothed, original[index]! - 0.75, original[index]! + 0.75)
+    }
+  }
+  for (let index = 1; index < nodes.length; index += 1) {
+    const node = nodes[index]!
+    node.headingDelta = wrapAngle(node.heading - nodes[index - 1]!.heading)
+  }
+  const feelScale = Math.max(1e-4, options.feelDistance * options.maxSlope)
+  for (let index = 1; index < nodes.length; index += 1) {
+    const node = nodes[index]!
+    const leftY = grid.sampleHeight(
+      node.x + Math.cos(node.heading - options.feelAngleRad) * options.feelDistance,
+      node.z + Math.sin(node.heading - options.feelAngleRad) * options.feelDistance,
+    )
+    const rightY = grid.sampleHeight(
+      node.x + Math.cos(node.heading + options.feelAngleRad) * options.feelDistance,
+      node.z + Math.sin(node.heading + options.feelAngleRad) * options.feelDistance,
+    )
+    if (leftY == null || rightY == null) {
+      continue
+    }
+    const average = (leftY + rightY) * 0.5
+    const difference = (rightY - leftY) * 0.5
+    node.lateral = (leftY - rightY) / feelScale
+    node.longitudinal = (average - node.y) / feelScale
+    node.turn = difference !== 0 ? clamp((average - node.y) / difference, -1, 1) : 0
+  }
+  let length = 0
+  for (let index = 1; index < nodes.length; index += 1) {
+    length += distance(nodes[index - 1]!, nodes[index]!)
+  }
+  const waypointCount = Math.max(1, Math.round(options.waypointCount ?? 1))
+  const terrain = summarizeScenicRoadTerrain(grid, nodes, {
+    preferredGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade,
+    maxGrade: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade,
+    maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope,
+  })
+  return {
+    nodes,
+    length,
+    complete: true,
+    failureReason: null,
+    rescueTurns: 0,
+    closed: options.termination === 'loop',
+    waypointCount,
+    waypointsPassed: waypointCount,
+    maxWaypointError: 0,
+    closureHeadingErrorRad: 0,
+    shortestExpandedStates: 0,
+    plannerMode: 'cached-centerline',
+    waypointsSkipped: 0,
+    skippedWaypointIndices: [],
+    waypointsAttempted: Math.max(0, waypointCount - 1),
+    unreachableWaypointIndex: null,
+    maxGuideDeviation: 0,
+    detourRadius: 0,
+    maxDetourDistance: 0,
+    detourRadiusExpanded: false,
+    ...terrain,
   }
 }
 

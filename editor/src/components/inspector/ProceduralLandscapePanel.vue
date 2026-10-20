@@ -237,6 +237,8 @@ const roadStatusText = computed(() => {
   }
   const strategy = stats.roadStrategy === 'shortest'
     ? '最短路径'
+    : stats.roadPlannerMode === 'cached-centerline'
+      ? '已固化道路中线'
     : stats.roadPlannerMode === 'official-natural'
       ? '官方自然螺旋'
     : stats.roadPlannerMode === 'guided-global'
@@ -260,7 +262,7 @@ const roadStatusText = computed(() => {
         : stats.roadComplete
           ? '已完成'
       : '未完成'
-  const official = stats.roadStrategy === 'seeded'
+  const official = stats.roadStrategy === 'seeded' && stats.roadPlannerMode !== 'cached-centerline'
     ? ` · 海拔均值 P${Math.round(stats.roadAverageElevationPercentile * 100)} / 最高 P${Math.round(stats.roadMaxElevationPercentile * 100)} · 低地 ${Math.round(stats.roadLowlandCoverageFraction * 100)}% · 纵坡 ${Math.round(stats.roadMaxForwardGrade * 100)}% · 横坡 ${Math.round(stats.roadMaxCrossSlope * 100)}%${stats.roadPlannerMode === 'guided-global' ? '' : ` · 陡坡改线 ${stats.roadSteepReplacementSteps}`} · 曲率 ${stats.roadTurnDegreesPerKm.toFixed(1)}°/km`
     : ''
   const skipped = stats.roadWaypointsSkipped > 0

@@ -34,6 +34,11 @@ export const DEFAULT_PHYSICS_WORLD_SETTINGS: PhysicsWorldSettings = {
   maxSubSteps: 4,
 }
 
+const PARKED_VEHICLE_BRAKE_THRESHOLD = 0.95
+const PARKED_VEHICLE_THROTTLE_DEADZONE = 0.01
+const PARKED_VEHICLE_SPEED_THRESHOLD_MPS = 0.35
+const PARKED_VEHICLE_STABLE_SECONDS = 1
+
 export type PhysicsWorldBodyState<TBody> = {
   desc: PhysicsBodyDesc
   body: TBody
@@ -46,6 +51,8 @@ export type PhysicsWorldVehicleState<TBody, TVehicle> = {
   vehicle: TVehicle
   steerableWheelIndices: number[]
   cleanup?: Array<() => void>
+  parkedTransform?: PhysicsTransform
+  parkedStableSeconds?: number
 } & PhysicsVehicleSpeedGovernorState
 
 export type PhysicsWorldCharacterState<TBody> = {
@@ -127,6 +134,7 @@ export abstract class PhysicsWorldBase<
     const deltaSeconds = Math.max(0, deltaMs) / 1000
     if (deltaSeconds > 0) {
       this.stepWorld(deltaSeconds)
+      this.holdParkedVehicles(deltaSeconds)
     }
 
     const bodyCount = this.scene.bodies.length
@@ -407,9 +415,43 @@ export abstract class PhysicsWorldBase<
   protected abstract readWheelTransform(vehicleState: TVehicleState, wheelIndex: number): PhysicsTransform
   protected abstract getVehicleForwardSpeed(state: TVehicleState): number
   protected abstract applyVehicleControls(state: TVehicleState, control: PhysicsWorldVehicleControl): void
+  protected abstract holdVehicleAtRest(state: TVehicleState, transform: PhysicsTransform): void
   protected abstract resolveCharacterGroundProbe(state: TCharacterState): PhysicsCharacterMotorGroundProbe
   protected abstract applyCharacterStep(state: TCharacterState, result: PhysicsCharacterMotorStepResult): void
   protected abstract collectContacts(): PhysicsContactEvent[]
+
+  private holdParkedVehicles(deltaSeconds: number): void {
+    this.vehicles.forEach((state, vehicleId) => {
+      const input = this.vehicleInputs.get(vehicleId)
+      if (!input) {
+        state.parkedStableSeconds = 0
+        state.parkedTransform = undefined
+        return
+      }
+      const brakeInput = Math.max(input.brake, input.handbrake ?? 0)
+      if (
+        brakeInput < PARKED_VEHICLE_BRAKE_THRESHOLD
+        || Math.abs(input.throttle) > PARKED_VEHICLE_THROTTLE_DEADZONE
+      ) {
+        state.parkedStableSeconds = 0
+        state.parkedTransform = undefined
+        return
+      }
+      const velocity = this.readBodyLinearVelocity(state.body)
+      const speedSq = velocity[0] * velocity[0] + velocity[1] * velocity[1] + velocity[2] * velocity[2]
+      if (speedSq > PARKED_VEHICLE_SPEED_THRESHOLD_MPS * PARKED_VEHICLE_SPEED_THRESHOLD_MPS) {
+        state.parkedStableSeconds = 0
+        state.parkedTransform = undefined
+        return
+      }
+      state.parkedStableSeconds = (state.parkedStableSeconds ?? 0) + deltaSeconds
+      if (state.parkedStableSeconds < PARKED_VEHICLE_STABLE_SECONDS) {
+        return
+      }
+      state.parkedTransform ??= this.readBodyTransform(state.body)
+      this.holdVehicleAtRest(state, state.parkedTransform)
+    })
+  }
 }
 
 export function createEmptyPhysicsStepFrame(frame: number): PhysicsStepFrame {

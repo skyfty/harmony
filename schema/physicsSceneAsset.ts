@@ -28,6 +28,7 @@ import {
   resolveVehicleScaleFactors,
   resolveModelCollisionComponentPropsFromNode,
   clampVehicleComponentProps,
+  VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER,
   type BoundaryWallComponentProps,
   type CharacterControllerComponentProps,
   type RigidbodyComponentMetadata,
@@ -1045,7 +1046,7 @@ export async function buildPhysicsSceneAsset(
         indexRightAxis: vehicleProps.indexRightAxis as 0 | 1 | 2,
         indexUpAxis: vehicleProps.indexUpAxis as 0 | 1 | 2,
         indexForwardAxis: vehicleProps.indexForwardAxis as 0 | 1 | 2,
-        maxSpeedKmh: vehicleProps.maxSpeedKmh,
+        maxSpeedKmh: vehicleProps.maxSpeedKmh * VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER,
         wheels,
       }
       asset.vehicles.push(vehicle)

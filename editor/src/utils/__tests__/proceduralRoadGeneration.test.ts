@@ -19,6 +19,7 @@ import {
   resolveSlowroadsMidlineProfile,
 } from '@schema/proceduralLandscape/roadStyle'
 import {
+  createCachedCenterlineRoadRoute,
   planWaypointRoadRoute,
   type WaypointRoadPlanOptions,
 } from '@schema/proceduralLandscape/proceduralRoad'
@@ -613,6 +614,53 @@ describe('unified waypoint road configuration', () => {
     )
   })
 
+  it('clamps and deep-clones the fixed centerline snapshot', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
+    props.road.generatedRoute = {
+      waypoints: [{ x: 1, z: 2 }],
+      strategy: 'seeded',
+      termination: 'boundary',
+      style: 'normal',
+      seed: 1,
+      waypointTolerance: 4,
+      pathDeviation: 60,
+      revision: 1,
+      centerline: {
+        pointsXZ: [1, 2, 3, 4, 5, 6],
+        authoringSampleStep: 1.4,
+        authoringCellSize: 10,
+      },
+    }
+    const clamped = clampProceduralLandscapeProps(props, 'terrain-a')
+    expect(clamped.road.generatedRoute?.centerline).toEqual({
+      pointsXZ: [1, 2, 3, 4, 5, 6],
+      authoringSampleStep: 1,
+      authoringCellSize: 10,
+    })
+
+    const clone = cloneProceduralLandscapeProps(clamped)
+    expect(clone.road.generatedRoute?.centerline?.pointsXZ).toEqual([1, 2, 3, 4, 5, 6])
+    expect(clone.road.generatedRoute?.centerline?.pointsXZ).not.toBe(
+      clamped.road.generatedRoute?.centerline?.pointsXZ,
+    )
+
+    const invalid = clampProceduralLandscapeProps({
+      ...props,
+      road: {
+        ...props.road,
+        generatedRoute: {
+          ...props.road.generatedRoute,
+          centerline: {
+            pointsXZ: [1, 2, Number.NaN, 4],
+            authoringSampleStep: 1,
+            authoringCellSize: 10,
+          },
+        },
+      },
+    }, 'terrain-a')
+    expect(invalid.road.generatedRoute?.centerline).toBeNull()
+  })
+
   it('preserves all termination modes in live routing and snapshots', () => {
     const defaults = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
     for (const termination of ['loop', 'boundary', 'dead-end'] as const) {
@@ -639,6 +687,53 @@ describe('unified waypoint road configuration', () => {
 })
 
 describe('unified waypoint road planning', () => {
+  it('hydrates an authored centerline identically on fine and coarse grids', () => {
+    const height = (x: number, z: number) => (
+      120
+      + Math.sin(x / 170) * 18
+      + Math.cos(z / 230) * 12
+    )
+    const fineGrid = makeSyntheticGrid(4_000, 10, height)
+    const coarseGrid = makeSyntheticGrid(4_000, 40, height)
+    const waypoints = [
+      { x: -1_200, z: -800 },
+      { x: 800, z: 600 },
+    ]
+    const finePlan = planWaypointRoadRoute(fineGrid, {
+      ...baseOptions,
+      waypoints,
+    })
+    const coarsePlan = planWaypointRoadRoute(coarseGrid, {
+      ...baseOptions,
+      waypoints,
+    })
+    expect(finePlan.complete).toBe(true)
+    expect(coarsePlan.complete).toBe(true)
+
+    const centerline = finePlan.nodes.map(({ x, z }) => ({ x, z }))
+    const cachedFine = createCachedCenterlineRoadRoute(fineGrid, {
+      centerline,
+      termination: 'boundary',
+      feelDistance: baseOptions.feelDistance,
+      feelAngleRad: baseOptions.feelAngleRad,
+      maxSlope: baseOptions.maxSlope,
+      waypointCount: waypoints.length,
+    })
+    const cachedCoarse = createCachedCenterlineRoadRoute(coarseGrid, {
+      centerline,
+      termination: 'boundary',
+      feelDistance: baseOptions.feelDistance,
+      feelAngleRad: baseOptions.feelAngleRad,
+      maxSlope: baseOptions.maxSlope,
+      waypointCount: waypoints.length,
+    })
+    expect(cachedFine?.plannerMode).toBe('cached-centerline')
+    expect(cachedCoarse?.plannerMode).toBe('cached-centerline')
+    expect(cachedCoarse?.nodes.map(({ x, z }) => ({ x, z }))).toEqual(
+      cachedFine?.nodes.map(({ x, z }) => ({ x, z })),
+    )
+  })
+
   it('fills a 30km DEM with one deterministic natural spiral', () => {
     const grid = makeSyntheticGrid(
       30_000,

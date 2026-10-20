@@ -51,10 +51,9 @@ type VehicleSpeedGovernorContext = {
   acceleratingSameDirection: boolean
   hardCap: number
   softCap: number
-  brakeBlend: number
 }
 
-const VEHICLE_ENGINE_FORCE = 420
+const VEHICLE_ENGINE_FORCE = 765
 const VEHICLE_BRAKE_FORCE = 42
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
 const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.96
@@ -63,7 +62,6 @@ const VEHICLE_SPEED_GOVERNOR_BRAKE_EXIT_OFFSET = 0.2
 const VEHICLE_SPEED_GOVERNOR_BRAKE_DEADBAND = 0.35
 const VEHICLE_SPEED_GOVERNOR_BRAKE_BAND = 1.8
 const VEHICLE_SPEED_GOVERNOR_BRAKE_MAX_RATIO = 0.14
-const VEHICLE_BRAKE_RELEASE_SPEED = 0.45
 const VEHICLE_WAKE_SPEED_THRESHOLD = 0.2
 
 export function smoothVehicleGovernorValue(
@@ -132,7 +130,6 @@ export function stepPhysicsVehicleSpeedGovernor(
   const context = createVehicleSpeedGovernorContext(state, normalizedInput)
   const speedForGovernor = updateVehicleSpeedGovernorSpeed(state, context)
   context.speedForGovernor = speedForGovernor
-  context.brakeBlend = smoothstep(0.08, VEHICLE_BRAKE_RELEASE_SPEED, speedForGovernor)
   const engineForce = resolveVehicleEngineForce(state, context)
   const brakeForce = resolveVehicleBrakeForce(state, context)
 
@@ -215,10 +212,12 @@ function resolveVehicleBrakeForce(
   state: PhysicsVehicleSpeedGovernorState,
   context: VehicleSpeedGovernorContext,
 ): number {
-  const assistedBrake = Math.max(context.input.brakeInput, context.input.handbrakeInput)
+  // Explicit brake and handbrake input are authoritative at every speed. Scaling
+  // them down near zero would release a parked vehicle and let gravity produce
+  // a slow reverse roll followed by a brake/release oscillation on slopes.
+  const requestedBrake = Math.max(context.input.brakeInput, context.input.handbrakeInput)
     * VEHICLE_BRAKE_FORCE
-    * context.brakeBlend
-  return Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, assistedBrake + state.speedGovernorBrakeAssist))
+  return Math.min(VEHICLE_BRAKE_FORCE, Math.max(0, requestedBrake + state.speedGovernorBrakeAssist))
 }
 
 function relaxVehicleSpeedGovernor(state: PhysicsVehicleSpeedGovernorState, deltaSeconds: number): void {
@@ -232,14 +231,6 @@ function resolveVehicleMaxSpeedMps(maxSpeedKmh: number | null | undefined): numb
     return 45 / 3.6
   }
   return maxSpeedKmh / 3.6
-}
-
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  if (edge0 === edge1) {
-    return x < edge0 ? 0 : 1
-  }
-  const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)))
-  return t * t * (3 - 2 * t)
 }
 
 function normalizeVehicleSpeedGovernorInput(
@@ -277,7 +268,6 @@ function createVehicleSpeedGovernorContext(
     acceleratingSameDirection,
     hardCap,
     softCap,
-    brakeBlend: 0,
   }
 }
 

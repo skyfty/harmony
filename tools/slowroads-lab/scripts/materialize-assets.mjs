@@ -260,7 +260,18 @@ async function main() {
       const variantName = `${basename(name, extname(name))}${VARIANT_SUFFIX}.png`
       const variantPath = join(args.out, variantName)
       try {
-        execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', to, '-vf', `scale=${targetW}:${targetH}`, variantPath], {
+        execFileSync('ffmpeg', [
+          '-y',
+          '-loglevel',
+          'error',
+          '-i',
+          to,
+          '-vf',
+          `scale=${targetW}:${targetH}:flags=lanczos,format=rgba`,
+          '-pix_fmt',
+          'rgba',
+          variantPath,
+        ], {
           stdio: ['ignore', 'ignore', 'pipe'],
         })
         const variantBuffer = readFileSync(variantPath)

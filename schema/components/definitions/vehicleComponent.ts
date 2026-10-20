@@ -56,6 +56,9 @@ export interface VehicleComponentProps {
 export const DEFAULT_VEHICLE_WHEEL_SCALE_MODE: VehicleScaleMode = 'relative'
 export const DEFAULT_VEHICLE_CAMERA_FOLLOW_DISTANCE = DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE
 export const DEFAULT_VEHICLE_CAMERA_FOLLOW_HEIGHT = DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT
+// Manual driving is intentionally faster than the authored cruise-speed value,
+// which is also used by auto tours and pursuit controllers.
+export const VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER = 2.25
 
 export function createDefaultVehicleComponentProps(): VehicleComponentProps {
   return clampVehicleComponentProps({ wheelScaleMode: DEFAULT_VEHICLE_WHEEL_SCALE_MODE })

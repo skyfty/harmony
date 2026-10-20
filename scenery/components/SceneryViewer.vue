@@ -7,6 +7,7 @@
       @touchend.capture="handleControlPadTouchEnd"
       @touchcancel.capture="handleControlPadTouchEnd"
       @mousedown.capture="handleControlPadMouseDown"
+      @pointerdown.capture="handleControlPadPointerDown"
     >
       <PlatformCanvas
         v-if="!error"
@@ -1472,7 +1473,21 @@ configureAssetBlobDownloader(
 configureGltfParseWorkerFactory(createGltfParseWorkerFactory());
 
 const globalApp = globalThis as typeof globalThis & { wx?: { getSystemInfoSync?: () => unknown } };
-const isWeChatMiniProgram = Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
+
+function resolveWeChatMiniProgramRuntime(): boolean {
+  try {
+    const platform = uni.getSystemInfoSync()?.uniPlatform;
+    if (typeof platform === 'string' && platform.trim().length) {
+      return platform.trim().toLowerCase() === 'mp-weixin';
+    }
+  } catch {
+    // Fall through to the capability check for runtimes without uniPlatform.
+  }
+  return typeof document === 'undefined'
+    && Boolean(globalApp.wx && typeof globalApp.wx.getSystemInfoSync === 'function');
+}
+
+const isWeChatMiniProgram = resolveWeChatMiniProgramRuntime();
 
 const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersistentAssetStorageSupported()
   ? createWeChatFileSystemPersistentAssetStorage()
@@ -3139,6 +3154,18 @@ const characterControlYawForwardScratch = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
 const STEERING_KEYBOARD_RETURN_SPEED = 7;
 const STEERING_KEYBOARD_CATCH_SPEED = 18;
+type VehicleDriveControlAction = keyof VehicleDriveControlFlags;
+const VEHICLE_DRIVE_KEYBOARD_ACTIONS: Readonly<Record<string, VehicleDriveControlAction>> = {
+  KeyW: 'forward',
+  ArrowUp: 'forward',
+  KeyS: 'backward',
+  ArrowDown: 'backward',
+  KeyA: 'left',
+  ArrowLeft: 'left',
+  KeyD: 'right',
+  ArrowRight: 'right',
+  Space: 'brake',
+};
 const cameraRotationAnchor = new THREE.Vector3();
 let suppressSelfYawRecenter = false;
 let characterCameraFollowNodeId: string | null = null;
@@ -3563,6 +3590,8 @@ const characterActionsBarRef = ref<ComponentPublicInstance | HTMLElement | null>
 const DRIVE_PAD_MOUSE_POINTER_ID = -2;
 let drivePadMouseTracking = false;
 let characterDrivePadMouseTracking = false;
+let drivePadPointerTracking = false;
+let drivePadPointerCaptureTarget: Element | null = null;
 const isBrowserEnvironment = typeof window !== 'undefined';
 // Plain (non-reactive) floating pad input. Touch/mouse handlers only mutate
 // these fields; the WebGL overlay visual and the drive inputs are sampled once
@@ -11360,7 +11389,6 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
     bridgeInput.brake = 0;
   }
 
-
   syncPhysicsBridgeVehicleInput({
     state: physicsBridgeVehicleInputSyncState,
     bridge: physicsBridge,
@@ -18646,6 +18674,35 @@ function setCharacterKeyState(key: string, pressed: boolean): void {
   updateCharacterAuthorityInputFromKeys();
 }
 
+function updateVehicleKeyboardSteeringTarget(): void {
+  const target = vehicleDriveInputFlags.left === vehicleDriveInputFlags.right
+    ? 0
+    : vehicleDriveInputFlags.left
+      ? 1
+      : -1;
+  steeringKeyboardTarget.value = target;
+  if (target !== 0) {
+    steeringKeyboardValue.value = target;
+  }
+}
+
+function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean): boolean {
+  if (!vehicleDriveActive.value || watchExclusiveUiActive.value) {
+    return false;
+  }
+  const action = VEHICLE_DRIVE_KEYBOARD_ACTIONS[event.code];
+  if (!action) {
+    return false;
+  }
+  event.preventDefault();
+  vehicleDriveController.setControlFlag(action, pressed);
+  if (action === 'left' || action === 'right') {
+    updateVehicleKeyboardSteeringTarget();
+  }
+  recomputeVehicleDriveInputs();
+  return true;
+}
+
 function resetCharacterControlInputs(): void {
   clearCharacterActionJumpReleaseTimer();
   releaseActiveCharacterActionAnimation();
@@ -18672,10 +18729,14 @@ function resetCharacterControlInputs(): void {
 
 function handleWindowBlur(): void {
   resetCharacterControlInputs();
+  resetVehicleDriveInputs();
 }
 
 function handleWindowKeyDown(event: KeyboardEvent): void {
   if (event.defaultPrevented || controlNodeSwitchBusy.value) {
+    return;
+  }
+  if (handleVehicleDriveKeyboardInput(event, true)) {
     return;
   }
   setCharacterKeyState(event.key, true);
@@ -18683,6 +18744,9 @@ function handleWindowKeyDown(event: KeyboardEvent): void {
 
 function handleWindowKeyUp(event: KeyboardEvent): void {
   if (event.defaultPrevented || controlNodeSwitchBusy.value) {
+    return;
+  }
+  if (handleVehicleDriveKeyboardInput(event, false)) {
     return;
   }
   setCharacterKeyState(event.key, false);
@@ -18759,6 +18823,122 @@ function resolvePadRawFromDelta(dx: number, dy: number): { x: number; y: number 
   return { x: rawX, y: rawY };
 }
 
+function shouldUseH5PointerInput(): boolean {
+  return isBrowserEnvironment && typeof window.PointerEvent === 'function';
+}
+
+function shouldSkipDrivePadPointerFromEventTarget(target: EventTarget | null): boolean {
+  const candidate = target as Element | null;
+  if (!candidate || typeof candidate.closest !== 'function') {
+    return false;
+  }
+  return Boolean(candidate.closest(
+    'button, uni-button, input, textarea, select, [role="button"], [data-control-skip]',
+  ));
+}
+
+function releaseDrivePadPointerCapture(pointerId: number): void {
+  const target = drivePadPointerCaptureTarget;
+  drivePadPointerCaptureTarget = null;
+  if (!target || pointerId < 0 || typeof target.releasePointerCapture !== 'function') {
+    return;
+  }
+  try {
+    target.releasePointerCapture(pointerId);
+  } catch {
+    // The browser may already have released capture after pointerup/cancel.
+  }
+}
+
+function attachDrivePadPointerListeners(): void {
+  if (!isBrowserEnvironment || drivePadPointerTracking) {
+    return;
+  }
+  drivePadPointerTracking = true;
+  window.addEventListener('pointermove', handleDrivePadPointerMove, { passive: false });
+  window.addEventListener('pointerup', handleDrivePadPointerUp);
+  window.addEventListener('pointercancel', handleDrivePadPointerCancel);
+  window.addEventListener('blur', handleDrivePadPointerUp);
+}
+
+function detachDrivePadPointerListeners(): void {
+  if (!isBrowserEnvironment || !drivePadPointerTracking) {
+    return;
+  }
+  drivePadPointerTracking = false;
+  window.removeEventListener('pointermove', handleDrivePadPointerMove);
+  window.removeEventListener('pointerup', handleDrivePadPointerUp);
+  window.removeEventListener('pointercancel', handleDrivePadPointerCancel);
+  window.removeEventListener('blur', handleDrivePadPointerUp);
+}
+
+function handleControlPadPointerDown(event: PointerEvent): void {
+  if (
+    !shouldUseH5PointerInput()
+    || !vehicleDriveUi.value.visible
+    || !vehicleDriveActive.value
+    || watchExclusiveUiActive.value
+  ) {
+    return;
+  }
+  if (event.pointerType === 'mouse' && event.button !== 0) {
+    return;
+  }
+  if (vehiclePadInput.active || shouldSkipDrivePadPointerFromEventTarget(event.target)) {
+    return;
+  }
+  const coords = { x: event.clientX, y: event.clientY };
+  if (!Number.isFinite(coords.x) || !Number.isFinite(coords.y) || !shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+
+  event.stopPropagation();
+  if (event.cancelable) {
+    event.preventDefault();
+  }
+  cancelVehicleSmoothStop();
+  const captureTarget = event.currentTarget as Element | null;
+  if (captureTarget && typeof captureTarget.setPointerCapture === 'function') {
+    try {
+      captureTarget.setPointerCapture(event.pointerId);
+      drivePadPointerCaptureTarget = captureTarget;
+    } catch {
+      drivePadPointerCaptureTarget = null;
+    }
+  }
+  beginVehiclePad(event.pointerId, coords.x, coords.y);
+  attachDrivePadPointerListeners();
+}
+
+function handleDrivePadPointerMove(event: PointerEvent): void {
+  if (!vehiclePadInput.active || event.pointerId !== vehiclePadInput.pointerId) {
+    return;
+  }
+  if (event.cancelable) {
+    event.preventDefault();
+  }
+  moveVehiclePad(event.clientX, event.clientY);
+}
+
+function handleDrivePadPointerUp(event: PointerEvent | Event): void {
+  if (!vehiclePadInput.active) {
+    detachDrivePadPointerListeners();
+    return;
+  }
+  const pointerEvent = event as PointerEvent;
+  if (event.type !== 'blur' && pointerEvent.pointerId !== vehiclePadInput.pointerId) {
+    return;
+  }
+  if (event.cancelable) {
+    event.preventDefault();
+  }
+  endVehiclePad();
+}
+
+function handleDrivePadPointerCancel(event: PointerEvent): void {
+  handleDrivePadPointerUp(event);
+}
+
 function beginVehiclePad(pointerId: number, baseX: number, baseY: number): void {
   vehiclePadInput.pointerId = pointerId;
   vehiclePadInput.active = true;
@@ -18778,14 +18958,20 @@ function moveVehiclePad(x: number, y: number): void {
 
 function endVehiclePad(): void {
   if (!vehiclePadInput.active && vehiclePadInput.pointerId === -1) {
+    detachDrivePadPointerListeners();
     return;
   }
+  const pointerId = vehiclePadInput.pointerId;
   vehiclePadInput.active = false;
   vehiclePadInput.pointerId = -1;
   vehiclePadInput.rawX = 0;
   vehiclePadInput.rawY = 0;
   vehicleJoystickOverlay?.end();
   recomputeVehicleDriveInputs(0, 0);
+  if (pointerId >= 0) {
+    releaseDrivePadPointerCapture(pointerId);
+  }
+  detachDrivePadPointerListeners();
 }
 
 function beginCharacterPad(pointerId: number, baseX: number, baseY: number): void {
@@ -18959,6 +19145,9 @@ function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null):
 }
 
 function handleControlPadTouchStart(event: TouchEvent): void {
+  if (shouldUseH5PointerInput()) {
+    return;
+  }
   if (vehicleDriveUi.value.visible) {
     handleDrivePadTouchStart(event);
     return;
@@ -18980,6 +19169,9 @@ function handleControlPadTouchStart(event: TouchEvent): void {
 }
 
 function handleControlPadTouchMove(event: TouchEvent): void {
+  if (shouldUseH5PointerInput()) {
+    return;
+  }
   if (vehicleDriveUi.value.visible) {
     handleDrivePadTouchMove(event);
     return;
@@ -18990,6 +19182,9 @@ function handleControlPadTouchMove(event: TouchEvent): void {
 }
 
 function handleControlPadTouchEnd(event: TouchEvent): void {
+  if (shouldUseH5PointerInput()) {
+    return;
+  }
   if (vehicleDriveUi.value.visible) {
     handleDrivePadTouchEnd(event);
     return;
@@ -19000,6 +19195,9 @@ function handleControlPadTouchEnd(event: TouchEvent): void {
 }
 
 function handleControlPadMouseDown(event: MouseEvent): void {
+  if (shouldUseH5PointerInput()) {
+    return;
+  }
   if (vehicleDriveUi.value.visible) {
     handleDrivePadMouseDown(event);
     return;
@@ -23619,7 +23817,7 @@ onMounted(() => {
   }
 
   if (typeof window !== 'undefined') {
-    window.addEventListener('keydown', handleWindowKeyDown, { passive: true });
+    window.addEventListener('keydown', handleWindowKeyDown, { passive: false });
     window.addEventListener('keyup', handleWindowKeyUp, { passive: true });
     window.addEventListener('blur', handleWindowBlur);
   }

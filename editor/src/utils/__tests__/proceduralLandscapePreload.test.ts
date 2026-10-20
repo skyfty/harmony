@@ -163,6 +163,42 @@ describe('procedural landscape texture preload', () => {
 })
 
 describe('scene document landscape preload metadata', () => {
+  it('preserves a fixed road centerline through the scene package codec', () => {
+    const node = createLandscapeNode('terrain')
+    node.components![PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]!.props = {
+      ...node.components![PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]!.props,
+      road: {
+        ...node.components![PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]!.props.road,
+        generatedRoute: {
+          waypoints: [{ x: 10, z: 20 }, { x: 30, z: 40 }],
+          strategy: 'seeded',
+          termination: 'boundary',
+          style: 'normal',
+          seed: 7,
+          waypointTolerance: 4,
+          pathDeviation: 60,
+          revision: 3,
+          centerline: {
+            pointsXZ: [10, 20, 20, 30, 30, 40],
+            authoringSampleStep: 1,
+            authoringCellSize: 10,
+          },
+        },
+      },
+    }
+    const decoded = decodeScenePackageSceneDocument(
+      encodeScenePackageSceneDocument(createDocument([node], 'summer')),
+    )
+    expect(
+      decoded.nodes[0]!.components![PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]!.props
+        .road.generatedRoute?.centerline,
+    ).toEqual({
+      pointsXZ: [10, 20, 20, 30, 30, 40],
+      authoringSampleStep: 1,
+      authoringCellSize: 10,
+    })
+  })
+
   it('merges visible enabled landscapes and ignores hidden or disabled nodes', () => {
     const surfaceNode = createLandscapeNode('surface-node')
     const grassNode = createLandscapeNode('grass-node')

@@ -437,6 +437,7 @@ import {
 import {
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
+  type ProceduralLandscapeGeneratedRouteCenterline,
   type ProceduralLandscapeGeneratedRouteProps,
 } from '@schema/proceduralLandscape/config'
 import {
@@ -18971,6 +18972,10 @@ export const useSceneStore = defineStore('scene', {
           unreachableWaypointIndex: validation?.unreachableWaypointIndex ?? null,
         }
       }
+      const committedGeneratedRoute: ProceduralLandscapeGeneratedRouteProps = {
+        ...generatedRoute,
+        centerline: validation.centerline,
+      }
       const accepted = this.updateNodeComponentProps(nodeId, component.id, {
         generationRevision: Math.max(0, Math.round(Number(currentProps?.generationRevision) || 0)) + 1,
         road: {
@@ -18978,13 +18983,50 @@ export const useSceneStore = defineStore('scene', {
           enabled: true,
           routing,
           waypoints,
-          generatedRoute,
+          generatedRoute: committedGeneratedRoute,
         },
       })
       return {
         accepted,
         failureReason: accepted ? null : 'scene-update-failed',
       }
+    },
+
+    backfillProceduralLandscapeRouteCenterline(
+      nodeId: string,
+      centerline: ProceduralLandscapeGeneratedRouteCenterline,
+    ): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+        | undefined
+      if (!target || !component?.id) {
+        return false
+      }
+      const currentProps = component.props as Partial<ProceduralLandscapeComponentProps> | undefined
+      const currentRoad = (currentProps?.road ?? {}) as Record<string, unknown>
+      const generatedRoute = currentProps?.road?.generatedRoute
+      if (!generatedRoute || generatedRoute.centerline?.pointsXZ.length) {
+        return false
+      }
+      return this.updateNodeComponentProps(
+        nodeId,
+        component.id,
+        {
+          road: {
+            ...currentRoad,
+            generatedRoute: {
+              ...generatedRoute,
+              centerline: {
+                pointsXZ: [...centerline.pointsXZ],
+                authoringSampleStep: centerline.authoringSampleStep,
+                authoringCellSize: centerline.authoringCellSize,
+              },
+            },
+          },
+        },
+        { autoSaveMode: 'structural' },
+      )
     },
 
     clearProceduralLandscapeRoad(nodeId: string): boolean {

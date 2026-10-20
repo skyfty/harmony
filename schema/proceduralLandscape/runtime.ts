@@ -163,6 +163,7 @@ import {
   roadFlattenParams,
   roadHalfWidth,
   shouldLoadProceduralLandscapeOrtho,
+  type ProceduralLandscapeGeneratedRouteCenterline,
   type ProceduralLandscapeComponentProps,
   type ProceduralLandscapeEnvironment,
   type ProceduralLandscapeGeneratedRouteProps,
@@ -171,6 +172,7 @@ import {
 } from './config'
 import { transformRoadWaypointsToWorld, type RoadWaypoint } from './roadWaypoints'
 import {
+  createCachedCenterlineRoadRoute,
   planWaypointRoadRoute,
   type WaypointRoadPlanResult,
 } from './proceduralRoad'
@@ -295,7 +297,7 @@ export interface ProceduralLandscapeRuntimeStats {
   roadComplete: boolean
   roadFailureReason: string | null
   roadStrategy: 'seeded' | 'shortest' | null
-  roadPlannerMode: 'official' | 'guided-global' | 'official-natural' | null
+  roadPlannerMode: 'official' | 'guided-global' | 'official-natural' | 'cached-centerline' | null
   roadStyle: RoadStyleId | null
   roadNaturalTargetLength: number
   roadNaturalLaps: number
@@ -437,6 +439,8 @@ export interface ProceduralLandscapeRuntime {
     route: ProceduralLandscapeGeneratedRouteProps,
     road: ProceduralLandscapeRoadProps,
   ): ProceduralLandscapeRoadValidation
+  /** Editor-authored centerline snapshot in host-node local XZ. */
+  getGeneratedRoadCenterlineLocal(): ProceduralLandscapeGeneratedRouteCenterline | null
   /** Terrain XZ center in host-node local coordinates, when the grid is ready. */
   getTerrainCenterLocal(): RoadWaypoint | null
   /** Low, gentle automatic start near the terrain centre, in local XZ. */
@@ -460,6 +464,7 @@ export interface ProceduralLandscapeRoadValidation {
   nodeCount: number
   length: number
   unreachableWaypointIndex?: number | null
+  centerline: ProceduralLandscapeGeneratedRouteCenterline | null
 }
 
 export interface ProceduralLandscapeScenicWaypointResolution extends ScenicWaypointPlacement {
@@ -541,6 +546,13 @@ export function getProceduralLandscapeScenicStartLocal(
 ): RoadWaypoint | null {
   const runtime = runtimeRegistry.get(nodeId)
   return runtime?.getScenicStartLocal() ?? null
+}
+
+export function getProceduralLandscapeRoadCenterlineLocal(
+  nodeId: string,
+): ProceduralLandscapeGeneratedRouteCenterline | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.getGeneratedRoadCenterlineLocal() ?? null
 }
 
 export function resolveProceduralLandscapeScenicWaypointLocal(
@@ -2034,6 +2046,33 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     return collectProceduralLandscapeSurfaceMeshes(hostObject)
   }
 
+  function buildCenterlineLocalSnapshot(
+    host: THREE.Object3D,
+    nodes: ReadonlyArray<RoadTraceNode>,
+    authoringSampleStep: number,
+    authoringCellSize: number,
+  ): ProceduralLandscapeGeneratedRouteCenterline | null {
+    if (nodes.length < 2) {
+      return null
+    }
+    host.updateMatrixWorld(true)
+    const inverse = new THREE.Matrix4().copy(host.matrixWorld).invert()
+    const point = new THREE.Vector3()
+    const pointsXZ: number[] = []
+    for (const node of nodes) {
+      point.set(node.x, node.y, node.z).applyMatrix4(inverse)
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.z)) {
+        return null
+      }
+      pointsXZ.push(point.x, point.z)
+    }
+    return {
+      pointsXZ,
+      authoringSampleStep,
+      authoringCellSize,
+    }
+  }
+
   function planGeneratedRoad(
     activeGrid: TerrainHeightGrid,
     host: THREE.Object3D,
@@ -2044,6 +2083,29 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return null
     }
     host.updateMatrixWorld(true)
+    const cachedPointsXZ = route.centerline?.pointsXZ
+    if (cachedPointsXZ?.length) {
+      const centerlineWorld: RoadWaypoint[] = []
+      const point = new THREE.Vector3()
+      for (let index = 0; index + 1 < cachedPointsXZ.length; index += 2) {
+        point
+          .set(cachedPointsXZ[index]!, 0, cachedPointsXZ[index + 1]!)
+          .applyMatrix4(host.matrixWorld)
+        centerlineWorld.push({ x: point.x, z: point.z })
+      }
+      const cached = createCachedCenterlineRoadRoute(activeGrid, {
+        centerline: centerlineWorld,
+        termination: route.termination,
+        feelDistance: road.feelDistance,
+        feelAngleRad: degreesToRadians(road.feelAngleDeg),
+        maxSlope: road.maxSlope,
+        waypointCount: route.waypoints.length,
+      })
+      if (cached) {
+        return cached
+      }
+      warn('road-centerline-snapshot-unusable')
+    }
     const waypointsWorld = transformRoadWaypointsToWorld(host.matrixWorld, route.waypoints)
     if (!waypointsWorld.length) {
       return null
@@ -4680,6 +4742,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           nodeCount: 0,
           length: 0,
           unreachableWaypointIndex: null,
+          centerline: null,
         }
       }
       const result = planGeneratedRoad(grid, hostObject, route, road)
@@ -4690,6 +4753,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           nodeCount: result?.nodes.length ?? 0,
           length: result?.length ?? 0,
           unreachableWaypointIndex: result?.unreachableWaypointIndex ?? null,
+          centerline: null,
         }
       }
       {
@@ -4703,6 +4767,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             nodeCount: result.nodes.length,
             length: result.length,
             unreachableWaypointIndex: result.unreachableWaypointIndex ?? null,
+            centerline: null,
           }
         }
         if (
@@ -4715,6 +4780,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             nodeCount: result.nodes.length,
             length: result.length,
             unreachableWaypointIndex: result.unreachableWaypointIndex ?? null,
+            centerline: null,
           }
         }
       }
@@ -4726,7 +4792,34 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         nodeCount: result.nodes.length,
         length: result.length,
         unreachableWaypointIndex: result.unreachableWaypointIndex ?? null,
+        centerline: result.complete
+          ? buildCenterlineLocalSnapshot(
+              hostObject,
+              result.nodes,
+              Math.max(1, demGridSampleStep),
+              grid.cellSize,
+            )
+          : null,
       }
+    },
+    getGeneratedRoadCenterlineLocal(): ProceduralLandscapeGeneratedRouteCenterline | null {
+      const saved = props.road.generatedRoute?.centerline
+      if (saved?.pointsXZ.length) {
+        return {
+          pointsXZ: [...saved.pointsXZ],
+          authoringSampleStep: saved.authoringSampleStep,
+          authoringCellSize: saved.authoringCellSize,
+        }
+      }
+      if (!grid || !hostObject || !roadResult || roadResult.nodes.length < 2) {
+        return null
+      }
+      return buildCenterlineLocalSnapshot(
+        hostObject,
+        roadResult.nodes,
+        Math.max(1, demGridSampleStep),
+        grid.cellSize,
+      )
     },
     getTerrainCenterLocal(): RoadWaypoint | null {
       if (!grid || !hostObject) {

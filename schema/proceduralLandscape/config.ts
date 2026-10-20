@@ -94,6 +94,16 @@ export interface ProceduralLandscapeRoadRoutingProps {
   termination: ProceduralLandscapeRoadTermination
 }
 
+/** Fixed editor-authored path rehydrated by preview/viewer. */
+export interface ProceduralLandscapeGeneratedRouteCenterline {
+  /** Host-local centerline XZ pairs: [x0, z0, x1, z1, ...]. */
+  pointsXZ: number[]
+  /** DEM sample step used by the editor when the snapshot was authored. */
+  authoringSampleStep: number
+  /** Runtime height-grid cell size used when the snapshot was authored. */
+  authoringCellSize: number
+}
+
 /** Immutable snapshot used by the runtime until the user regenerates the road. */
 export interface ProceduralLandscapeGeneratedRouteProps {
   waypoints: RoadWaypoint[]
@@ -104,6 +114,8 @@ export interface ProceduralLandscapeGeneratedRouteProps {
   waypointTolerance: number
   pathDeviation: number
   revision: number
+  /** Fixed editor-authored road path, used by preview/viewer instead of replanning. */
+  centerline?: ProceduralLandscapeGeneratedRouteCenterline | null
 }
 
 export interface ProceduralLandscapeRoadProps {
@@ -393,6 +405,55 @@ function normalizeColor(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length ? value.trim() : fallback
 }
 
+const GENERATED_ROUTE_CENTERLINE_MAX_POINTS = 100_000
+const GENERATED_ROUTE_CENTERLINE_MAX_COORDINATE = 10_000_000
+
+export function clampGeneratedRouteCenterline(
+  value: unknown,
+): ProceduralLandscapeGeneratedRouteCenterline | null {
+  const raw = value as Partial<ProceduralLandscapeGeneratedRouteCenterline> | null | undefined
+  if (!raw || typeof raw !== 'object' || !Array.isArray(raw.pointsXZ)) {
+    return null
+  }
+  if (
+    raw.pointsXZ.length < 4
+    || raw.pointsXZ.length > GENERATED_ROUTE_CENTERLINE_MAX_POINTS * 2
+    || raw.pointsXZ.length % 2 !== 0
+  ) {
+    return null
+  }
+  const pointsXZ: number[] = []
+  pointsXZ.length = raw.pointsXZ.length
+  for (let index = 0; index < raw.pointsXZ.length; index += 1) {
+    const coordinate = Number(raw.pointsXZ[index])
+    if (
+      !Number.isFinite(coordinate)
+      || Math.abs(coordinate) > GENERATED_ROUTE_CENTERLINE_MAX_COORDINATE
+    ) {
+      return null
+    }
+    pointsXZ[index] = coordinate
+  }
+  return {
+    pointsXZ,
+    authoringSampleStep: Math.round(clampNumber(raw.authoringSampleStep, 1, 1, 8)),
+    authoringCellSize: clampNumber(raw.authoringCellSize, 1, 0.01, 100_000),
+  }
+}
+
+export function cloneGeneratedRouteCenterline(
+  value: ProceduralLandscapeGeneratedRouteCenterline | null | undefined,
+): ProceduralLandscapeGeneratedRouteCenterline | null {
+  if (!value) {
+    return null
+  }
+  return {
+    pointsXZ: [...value.pointsXZ],
+    authoringSampleStep: value.authoringSampleStep,
+    authoringCellSize: value.authoringCellSize,
+  }
+}
+
 function clampGeneratedRoute(
   value: unknown,
   fallbackSeed: number,
@@ -415,6 +476,7 @@ function clampGeneratedRoute(
     waypointTolerance: clampNumber(raw.waypointTolerance, 4, 1, 64),
     pathDeviation: clampNumber(raw.pathDeviation, fallbackPathDeviation, 10, 500),
     revision: Math.round(clampNumber(raw.revision, 0, 0, 0x7fffffff)),
+    centerline: clampGeneratedRouteCenterline(raw.centerline),
   }
 }
 
@@ -755,6 +817,7 @@ export function cloneProceduralLandscapeProps(
         ? {
             ...props.road.generatedRoute,
             waypoints: props.road.generatedRoute.waypoints.map((point) => ({ ...point })),
+            centerline: cloneGeneratedRouteCenterline(props.road.generatedRoute.centerline),
           }
         : null,
       waypoints: props.road.waypoints.map((waypoint) => ({ x: waypoint.x, z: waypoint.z })),

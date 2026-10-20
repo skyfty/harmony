@@ -450,9 +450,6 @@ export class SlowroadsAssetStore {
       for (let attempt = 1; attempt <= SLOWROADS_TEXTURE_LOAD_ATTEMPTS; attempt += 1) {
         const result = await this.loadTextureCandidate(ref, candidateId)
         if (result.texture) {
-          if (candidateId !== resolvedId) {
-            this.warn(`variant-fallback:${ref.id}->${candidateId}`)
-          }
           return result.texture
         }
         lastError = result.error || lastError

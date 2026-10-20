@@ -343,6 +343,16 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
     }
   }
 
+  protected holdVehicleAtRest(state: VehicleState, transform: PhysicsTransform): void {
+    state.body.position.set(...transform.position)
+    state.body.quaternion.set(...transform.rotation)
+    state.body.velocity.set(0, 0, 0)
+    state.body.angularVelocity.set(0, 0, 0)
+    state.body.force.set(0, 0, 0)
+    state.body.torque.set(0, 0, 0)
+    state.body.aabbNeedsUpdate = true
+  }
+
   protected shouldWakeVehicle(
     _state: VehicleState,
     input: PhysicsVehicleInputCommand | undefined,
