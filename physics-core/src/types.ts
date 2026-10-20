@@ -152,6 +152,12 @@ export type PhysicsVehicleDesc = {
   indexUpAxis: 0 | 1 | 2
   indexForwardAxis: 0 | 1 | 2
   maxSpeedKmh?: number
+  /** Chassis mass in kilograms. Drive force is normalized against this value so
+   * the same vehicle tuning produces the same acceleration at any mass. */
+  mass?: number
+  /** Authored engine-force tuning value from the Vehicle component. The bridge
+   * normalizes it against chassis mass before applying it to the driven wheels. */
+  engineForceMax?: number
   wheels: PhysicsVehicleWheelDesc[]
 }
 

@@ -53,7 +53,16 @@ type VehicleSpeedGovernorContext = {
   softCap: number
 }
 
-const VEHICLE_ENGINE_FORCE = 765
+// `engineForceMax` is authored as a per-wheel force at the reference mass used
+// by the vehicle component defaults. The bridge must turn that tuning into a
+// mass-normalized force: a fixed force makes the same vehicle accelerate more
+// than an order of magnitude slower once its 1400 kg rigidbody is simulated.
+const VEHICLE_ENGINE_FORCE_REFERENCE = 340
+const VEHICLE_DRIVE_REFERENCE_MASS_KG = 1400
+const VEHICLE_DRIVE_TARGET_ACCEL_MPS2 = 5.5
+const VEHICLE_DRIVE_MIN_TARGET_ACCEL_MPS2 = 0.8
+const VEHICLE_DRIVE_MAX_TARGET_ACCEL_MPS2 = 9
+const VEHICLE_DRIVE_FALLBACK_WHEEL_COUNT = 2
 const VEHICLE_BRAKE_FORCE = 42
 const VEHICLE_STEER_ANGLE = (26 * Math.PI) / 180
 const VEHICLE_SPEED_GOVERNOR_SOFT_RATIO = 0.96
@@ -171,7 +180,7 @@ function resolveVehicleEngineForce(
   context: VehicleSpeedGovernorContext,
 ): number {
   const throttleInput = context.input.throttleInput
-  let engineForce = throttleInput * VEHICLE_ENGINE_FORCE
+  let engineForce = throttleInput * resolveVehicleMaxEngineForce(state.desc)
   const { dt } = context
 
   if (!context.throttleActive || context.maxSpeedMps == null) {
@@ -187,6 +196,33 @@ function resolveVehicleEngineForce(
   updateVehicleSpeedGovernorScale(state, context)
   engineForce *= state.speedGovernorScale
   return engineForce
+}
+
+function resolveVehicleMaxEngineForce(desc: PhysicsVehicleDesc): number {
+  const rawEngineForceMax = Number.isFinite(desc.engineForceMax) ? desc.engineForceMax as number : VEHICLE_ENGINE_FORCE_REFERENCE
+  const engineForceMax = Math.max(0, rawEngineForceMax)
+  if (engineForceMax <= 0) {
+    return 0
+  }
+
+  const mass = Number.isFinite(desc.mass) && (desc.mass as number) > 0
+    ? desc.mass as number
+    : VEHICLE_DRIVE_REFERENCE_MASS_KG
+  // Keep authored differences between vehicles, but normalize their runtime
+  // acceleration against chassis mass. The clamp prevents an extreme inspector
+  // value from launching the vehicle or producing unusable traction.
+  const tuningRatio = clamp(engineForceMax / VEHICLE_ENGINE_FORCE_REFERENCE, 0.25, 3)
+  const targetAcceleration = clamp(
+    VEHICLE_DRIVE_TARGET_ACCEL_MPS2 * tuningRatio,
+    VEHICLE_DRIVE_MIN_TARGET_ACCEL_MPS2,
+    VEHICLE_DRIVE_MAX_TARGET_ACCEL_MPS2,
+  )
+  const frontWheelCount = desc.wheels.reduce((count, wheel) => count + (wheel.isFrontWheel ? 1 : 0), 0)
+  const drivenWheelCount = Math.max(
+    1,
+    frontWheelCount > 0 ? frontWheelCount : Math.min(VEHICLE_DRIVE_FALLBACK_WHEEL_COUNT, desc.wheels.length || VEHICLE_DRIVE_FALLBACK_WHEEL_COUNT),
+  )
+  return (mass * targetAcceleration) / drivenWheelCount
 }
 
 function updateVehicleBrakeAssist(

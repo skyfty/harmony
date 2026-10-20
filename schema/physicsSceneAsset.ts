@@ -844,6 +844,7 @@ export async function buildPhysicsSceneAsset(
   const asset = createEmptyPhysicsSceneAsset()
   const materialIds = new Map<string, number>()
   const bodyIdsByNodeId = new Map<string, number>()
+  const bodyMassByNodeId = new Map<string, number>()
   const floorShapeCache: FloorShapeCache = new Map()
   const regionShapeCache: RegionShapeCache = new Map()
   const wallShapeCache: WallTrimeshCache = new Map()
@@ -990,6 +991,7 @@ export async function buildPhysicsSceneAsset(
           }
           asset.bodies.push(body)
           bodyIdsByNodeId.set(node.id, bodyId)
+          bodyMassByNodeId.set(node.id, body.mass)
         }
       }
     }
@@ -1047,6 +1049,8 @@ export async function buildPhysicsSceneAsset(
         indexUpAxis: vehicleProps.indexUpAxis as 0 | 1 | 2,
         indexForwardAxis: vehicleProps.indexForwardAxis as 0 | 1 | 2,
         maxSpeedKmh: vehicleProps.maxSpeedKmh * VEHICLE_MANUAL_DRIVE_SPEED_MULTIPLIER,
+        mass: bodyMassByNodeId.get(node.id) ?? 0,
+        engineForceMax: vehicleProps.engineForceMax,
         wheels,
       }
       asset.vehicles.push(vehicle)

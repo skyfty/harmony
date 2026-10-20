@@ -263,6 +263,8 @@ function normalizePhysicsVehicleDesc(raw: any): any | null {
     indexRightAxis: Math.trunc(normalizeNumber(raw.indexRightAxis, 0)) as 0 | 1 | 2,
     indexUpAxis: Math.trunc(normalizeNumber(raw.indexUpAxis, 1)) as 0 | 1 | 2,
     indexForwardAxis: Math.trunc(normalizeNumber(raw.indexForwardAxis, 2)) as 0 | 1 | 2,
+    mass: raw.mass == null ? undefined : normalizeNumber(raw.mass, 0),
+    engineForceMax: raw.engineForceMax == null ? undefined : normalizeNumber(raw.engineForceMax, 0),
     wheels: Array.isArray(raw.wheels) ? raw.wheels.map((wheel: any) => wheel && typeof wheel === 'object' ? {
       id: Math.trunc(normalizeNumber((wheel as Record<string, unknown>).id, 0)),
       radius: normalizeNumber((wheel as Record<string, unknown>).radius, 0),

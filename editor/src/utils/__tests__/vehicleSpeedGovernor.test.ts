@@ -64,14 +64,49 @@ describe('vehicle speed governor brakes', () => {
     expect(result.control.brakeForce).toBe(0)
   })
 
-  it('uses the strengthened engine force for acceleration', () => {
+  it('normalizes engine force against chassis mass for acceleration', () => {
     const result = stepGovernor(createGovernorState(), {
       brakeInput: 0,
       forwardSpeed: 0,
       throttleInput: 1,
     })
 
-    expect(result.control.engineForce).toBe(765)
+    // The default rigidbody mass is 1400 kg. Two driven wheels must produce
+    // the configured target acceleration instead of a fixed per-wheel force.
+    expect(result.control.engineForce * 2 / 1400).toBeCloseTo(5.5, 5)
+  })
+
+  it('keeps acceleration stable when the chassis mass changes', () => {
+    const lightState = createGovernorState()
+    lightState.desc.mass = 150
+    const heavyState = createGovernorState()
+    heavyState.desc.mass = 1400
+
+    const lightResult = stepGovernor(lightState, {
+      brakeInput: 0,
+      forwardSpeed: 0,
+      throttleInput: 1,
+    })
+    const heavyResult = stepGovernor(heavyState, {
+      brakeInput: 0,
+      forwardSpeed: 0,
+      throttleInput: 1,
+    })
+
+    expect(lightResult.control.engineForce * 2 / 150).toBeCloseTo(5.5, 5)
+    expect(heavyResult.control.engineForce * 2 / 1400).toBeCloseTo(5.5, 5)
+  })
+
+  it('still lets authored engine tuning increase acceleration', () => {
+    const state = createGovernorState()
+    state.desc.engineForceMax = 680
+    const result = stepGovernor(state, {
+      brakeInput: 0,
+      forwardSpeed: 0,
+      throttleInput: 1,
+    })
+
+    expect(result.control.engineForce * 2 / 1400).toBeCloseTo(9, 5)
   })
 
   it('still applies speed-governor brake assist above the hard speed cap', () => {
