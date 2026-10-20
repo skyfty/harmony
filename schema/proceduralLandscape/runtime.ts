@@ -124,7 +124,6 @@ import {
   type ProceduralLandscapeDeviceProfile,
 } from './adaptive'
 import {
-  reportSlowroadsSelfChecks,
   runMaterialUniformCoverageChecks,
   runSlowroadsSeasonChecks,
   runTreeDiscolourationShaderChecks,
@@ -2746,7 +2745,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const seasonResults = seasonChecksRun ? [] : runSlowroadsSeasonChecks()
     if (!seasonChecksRun) {
       seasonChecksRun = true
-      reportSlowroadsSelfChecks('season', seasonResults)
     }
     const uniformResults = runMaterialUniformCoverageChecks(
       audits.map((audit) => ({
@@ -2756,7 +2754,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         uniformKeys: audit.uniformKeys,
       })),
     )
-    reportSlowroadsSelfChecks('uniform', uniformResults)
     const treeResults = runTreeDiscolourationShaderChecks(
       audits.map((audit) => ({
         name: audit.name,
@@ -2764,7 +2761,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         fragmentShader: audit.fragmentShader,
       })),
     )
-    reportSlowroadsSelfChecks('tree-discolouration', treeResults)
     for (const result of [...seasonResults, ...uniformResults, ...treeResults]) {
       if (!result.ok) {
         warn(`self-check:${result.name}`)
@@ -4364,7 +4360,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // individual PNG.
       applyStreamingSeasonTextures(season)
     }
-    const startedAt = Date.now()
     try {
       if (entryRefs.length) {
         const textures = await assetStore.textureSet(
@@ -4378,9 +4373,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         mergeTextures(textures)
       }
       seasonCoreAssetsReady = true
-      console.info(
-        `[SceneryLandscape] core textures ready in ${Date.now() - startedAt}ms (${entryRefs.length} refs)`,
-      )
       // Commit the first complete terrain frame before optional atlases settle.
       applySeasonToMaterials(season)
 
@@ -4417,9 +4409,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // pruning to the immediate `required` subset would evict and re-download.
       assetStore.prune(slowroadsSharedRetainIds(collectSeasonTextureRefs(season)))
       applySeasonToMaterials(season)
-      console.info(
-        `[SceneryLandscape] season textures complete in ${Date.now() - startedAt}ms (${refs.length} refs)`,
-      )
     } catch (error) {
       warn(`season-load-failed:${season}:${error instanceof Error ? error.message : String(error)}`)
       if (token === seasonLoadToken) {

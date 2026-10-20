@@ -44,12 +44,8 @@
 
 ## 诊断日志
 
-旧的 `[PL-DIAG*]` 周期探针已移除。当前只保留按阶段输出的一次性日志：
-
-- `[SceneryLandscape] core textures ready ...`：地表核心纹理完成，场景已可进入。
-- `[SceneryLandscape] season textures complete ...`：可选植被/道路/墙体/水面图集补齐。
-- `[SceneryLandscape] core texture preload timed out ...`：核心图集超过入场预算，继续在后台加载。
-- `[SceneryLandscape] ... checks failed` / `treebin parse failed`：只在实际失败时输出。
+旧的 `[PL-DIAG*]` 周期探针和 `[slowroads]` 调试输出已移除。景观加载错误只写入
+场景面板的 warnings 和运行时错误状态，不再向控制台输出调试日志。
 
 ## 首轮真机日志结论
 
@@ -303,5 +299,4 @@ wx.downloadFile({
 - 微信端优先把 `uni.downloadFile` 的临时路径直接交给图片解码，失败才回退到
   ArrayBuffer/Blob 路径，避免整张 PNG 多次复制和 base64 化。
 
-真机验收时只看两条新日志：`core textures ready` 应在入场前出现，
-`season textures complete` 可以晚于入场出现。
+真机验收时观察入场 warnings 和画面即可；调试日志代码已移除。

@@ -22353,7 +22353,6 @@ async function preloadSceneSlowroadsTextures(
   resourcePreload.loadedBytes = 0;
   resourcePreload.totalBytes = 0;
   resourcePreload.label = '正在预下载地表核心纹理...';
-  const startedAt = Date.now();
   setSceneInitState({
     stage: 'preloadingTextures',
     label: '正在预下载地表核心纹理',
@@ -22414,15 +22413,11 @@ async function preloadSceneSlowroadsTextures(
     return;
   }
   if (timedOut) {
-    console.warn(
-      `[SceneryLandscape] core texture preload timed out after ${SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS}ms; continuing in background`,
-    );
     appendSceneInitWarning(
       `地表核心纹理预载超时（${Math.round(SCENE_ENTRY_TEXTURE_PRELOAD_TIMEOUT_MS / 1000)}s），将边进入场景边继续加载`,
     );
   } else if (preloadError || !textures) {
     const detail = preloadError instanceof Error ? preloadError.message : String(preloadError ?? 'unknown');
-    console.warn(`[SceneryLandscape] core texture preload failed: ${detail}`);
     appendSceneInitWarning(`地表核心纹理预载失败：${detail}`);
   } else {
     const missingIds = refs
@@ -22445,9 +22440,6 @@ async function preloadSceneSlowroadsTextures(
       currentLabel: preload.season,
       active: true,
     });
-    console.info(
-      `[SceneryLandscape] core textures ready in ${Date.now() - startedAt}ms (${textures.size}/${total})`,
-    );
   }
   resourcePreload.active = false;
   resourcePreload.label = '';

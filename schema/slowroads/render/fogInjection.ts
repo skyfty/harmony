@@ -689,20 +689,6 @@ export function injectSlowroadsFogFragmentSequence(
   const append = options.append ?? ''
   const base = options.base ?? 'tone-mapped'
   registerInjectedMaterial(options.material)
-  if (
-    displaySpaceFogEnabled
-    && base === 'tone-mapped'
-    && options.material
-    && options.material.toneMapped === false
-  ) {
-    // 显示空间等价的前半段必须与 lab/官方在该材质上的处理一致：材质被排除在
-    // 色调映射之外时（lab 侧同样不会过 Cineon），基色编码应改用 'color-space'。
-    console.warn(
-      `[SceneryLandscape] fog display-space injection: material "${options.material.name || options.material.type}" `
-        + 'has toneMapped=false but uses the tone-mapped base encoding',
-    )
-  }
-
   if (group === 'sky') {
     bindSlowroadsSkyFogUniforms(shader.uniforms)
   } else {

@@ -43,7 +43,7 @@ import {
  *  - 季节贴图槽位/色彩空间/别名一致性/alphaTest 表/树卡变色乘数语义；
  *  - 树卡变色着色器源码断言 + 景观材质 uniform 覆盖审计。
  *
- * 失败写 console 并返回结果，宿主把它们并入面板 warnings。
+ * 返回结果，宿主把失败项并入面板 warnings。
  */
 
 export interface SlowroadsSelfCheckResult {
@@ -61,16 +61,6 @@ function createRecorder(): {
     results.push({ name, ok, detail })
   }
   return { results, record }
-}
-
-/** 汇总输出 & 失败 → console.error（成功 → console.info 一行）。 */
-export function reportSlowroadsSelfChecks(label: string, results: SlowroadsSelfCheckResult[]): void {
-  const failed = results.filter((result) => !result.ok)
-  if (failed.length) {
-    console.warn(
-      `[SceneryLandscape] ${label} checks failed: ${failed.map((result) => result.name).join(', ')}`,
-    )
-  }
 }
 
 const HEX_PATTERN = /^#[0-9a-fA-F]{6}$/

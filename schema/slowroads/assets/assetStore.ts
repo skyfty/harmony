@@ -186,8 +186,6 @@ interface TextureLoadAttempt {
   error: string
 }
 
-const placeholderWarnings = new Set<string>()
-
 export class SlowroadsAssetStore {
   private readonly options: Required<Pick<SlowroadsAssetStoreOptions, 'maxTextureSize' | 'maxAnisotropy'>>
     & { preferredVariant: 'full' | '2048' | null; preferLocalFileTextures: boolean }
@@ -281,11 +279,7 @@ export class SlowroadsAssetStore {
   }
 
   private warn(code: string): void {
-    if (!this.warnings.has(code)) {
-      console.warn(`[SceneryLandscape] asset ${code}`)
-    }
     this.warnings.add(code)
-    placeholderWarnings.add(code)
   }
 
   private fileUrl(file: SlowroadsBundleFile): string {

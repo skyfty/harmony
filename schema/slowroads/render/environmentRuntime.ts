@@ -26,18 +26,10 @@ import {
   type SlowroadsFogColorSet,
   type SlowroadsHazeState,
 } from './fogInjection'
-import { createSlowroadsSky, resolveSkyPlaneScale, type SlowroadsSkyHandle } from './sky'
+import { createSlowroadsSky, type SlowroadsSkyHandle } from './sky'
 import { createSlowroadsClouds, type SlowroadsCloudsHandle } from './clouds'
 import { createSlowroadsStars, resolveStarSize, type SlowroadsStarsHandle } from './stars'
 import { createSlowroadsSnow, type SlowroadsSnowHandle } from './snow'
-import {
-  reportSlowroadsSelfChecks,
-  runSlowroadsEnvironmentChecks,
-  runSlowroadsFogColorSpaceChecks,
-  runSlowroadsFogUniformChecks,
-  runSlowroadsHazeInterpolationChecks,
-} from './selfCheck'
-import { slowroadsSkyFogUniforms } from './fogInjection'
 import { SLOWROADS_SKY_COLOR } from '../core/environment'
 
 /**
@@ -243,7 +235,6 @@ export function createSlowroadsEnvironmentRuntime(
   let elapsedSeconds = 0
   let disposed = false
   let textureToken = 0
-  let selfChecksDone = false
 
   const lightingState: SlowroadsLightingState = {
     sunColor: new THREE.Color('#ffffff'),
@@ -434,7 +425,6 @@ export function createSlowroadsEnvironmentRuntime(
     waterState.fresnelFactor = next.lights.fresnelFactor
     waterState.frozen = SEASON_PARAMS[nextSettings?.season ?? 'spring'].frozenWater
     applyToggles(nextSettings)
-    runEnvironmentSelfChecks()
   }
 
   function applyToggles(nextSettings: SlowroadsEnvironmentSettings | null): void {
@@ -446,72 +436,6 @@ export function createSlowroadsEnvironmentRuntime(
     clouds.setVisible(showClouds)
     stars.setConfig(showStars ? preset.stars ?? null : null)
     snow.setConfig(showSnow ? preset.snow ?? null : null)
-  }
-
-  /**
-   * 启动自检（console；失败由 record 直接 console.error，同时在调用端可见）：
-   * 32 套预设完整性、雾色色空间（显示空间等价注入的逐点对齐）、下发后的
-   * 场景组/天空组 uniform（天空 = 官方 n1 尺度、far 2×、三色同源、天空平面 z +
-   * 覆盖角几何）。
-   */
-  function runEnvironmentSelfChecks(): void {
-    if (selfChecksDone) {
-      return
-    }
-    selfChecksDone = true
-    reportSlowroadsSelfChecks('environment', runSlowroadsEnvironmentChecks())
-    reportSlowroadsSelfChecks('haze', runSlowroadsHazeInterpolationChecks())
-    reportSlowroadsSelfChecks(
-      'fog-color',
-      runSlowroadsFogColorSpaceChecks({
-        preset,
-        uniformColors: {
-          colA: slowroadsFogUniforms.fogColorA.value,
-          colB: slowroadsFogUniforms.fogColorB.value,
-          colC: slowroadsFogUniforms.fogColorC.value,
-        },
-        deferredToneMapping,
-        toneMappingExposure: renderer.toneMappingExposure,
-        displaySpaceFog,
-      }),
-    )
-    reportSlowroadsSelfChecks(
-      'fog-uniform',
-      runSlowroadsFogUniformChecks({
-        preset,
-        cameraY: camera.position.y,
-        viewDistanceScale: sceneViewDistanceScale,
-        sceneUniforms: {
-          near: slowroadsFogUniforms.fogNear.value,
-          far: slowroadsFogUniforms.fogFar.value,
-          hazeHeight: slowroadsFogUniforms.hazeHeight.value,
-          hazeIntensity: slowroadsFogUniforms.hazeIntensity.value,
-        },
-        skyUniforms: {
-          near: slowroadsSkyFogUniforms.fogNear.value,
-          far: slowroadsSkyFogUniforms.fogFar.value,
-          hazeHeight: slowroadsSkyFogUniforms.hazeHeight.value,
-          hazeIntensity: slowroadsSkyFogUniforms.hazeIntensity.value,
-        },
-        sceneColors: {
-          colA: slowroadsFogUniforms.fogColorA.value,
-          colB: slowroadsFogUniforms.fogColorB.value,
-          colC: slowroadsFogUniforms.fogColorC.value,
-        },
-        skyColors: {
-          colA: slowroadsSkyFogUniforms.fogColorA.value,
-          colB: slowroadsSkyFogUniforms.fogColorB.value,
-          colC: slowroadsSkyFogUniforms.fogColorC.value,
-        },
-        skyPlaneZ: sky.mesh.position.z,
-        expectedSkyPlaneZ: -(appliedSkyPlaneDistance - 0.1),
-        skyDepthCorrection: slowroadsSkyFogUniforms.skyDepthCorrection.value,
-        skyPlaneScale: sky.mesh.scale.y / 1e5,
-        expectedSkyPlaneScale: resolveSkyPlaneScale(appliedSkyCoverageDistance),
-        skyDensity: slowroadsSkyFogUniforms.fogDensity.value,
-        sceneDensity: slowroadsFogUniforms.fogDensity.value,
-      }),
-    )
   }
 
   /**

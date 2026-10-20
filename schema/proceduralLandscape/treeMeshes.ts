@@ -207,9 +207,8 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
       }
       try {
         speciesModels[species]!.push(parseTreeBin(buffer))
-      } catch (error) {
-        // 单个模型失败不阻塞其余模型，但必须留下诊断信息。
-        console.warn(`[SceneryLandscape] treebin parse failed: ${id}`, error)
+      } catch {
+        // 单个模型失败不阻塞其余模型。
       }
     }
   }
