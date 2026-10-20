@@ -156,6 +156,7 @@ __HARMONY_PL_DIAG__.dump()
 - 近树 `.treebin` 解析时以模型最低 Y 为地面零点归一化，修复模型下沉/埋入地形的问题。
 - 世界森林走廊最内侧 3 条横向带使用 3m 沿路采样和更高落树概率，仍遵守道路净空、坡度、水线、树线和道路可达性约束。
 - 近路补树改为按固定道路节点一次性生成并建立空间索引，不再跟随相机位置或朝向移动；近树卡原地复用实例缓冲，行驶时不会整批销毁重建。
+- 近路补树会并入完整世界森林索引，因此同时参与近树卡与远景树卡的连续 LOD；道路草灌走廊扩展到近树距离，不再在 80m 后留下裸带。
 - 针叶近树 alpha 裁切按 H5 mipmap 覆盖率降到 0.2；`.4` 会让近处细枝森林几乎整体被裁掉。
 
 验证包：`D:\Downloads\diag-auto.zip`（`quality=auto`）。日志中的 `adaptive` 字段会显示 `deviceTier / sceneAreaKm2 / targetCoverage / effectiveCoverage / targetTreeCount / measuredFps / calibrationState / calibrationAttempts`。

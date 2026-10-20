@@ -979,7 +979,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let worldForestConiferInstances = 0
   let worldForestScan: WorldForestScan | null = null
   let worldForestIndex: WorldForestPlacementIndex | null = null
-  let nearRoadFallbackIndex: WorldForestPlacementIndex | null = null
   let worldForestRevision = 0
   let worldForestPlacements: TreePlacement[] = []
   let worldForestCorridor: TreePlacement[] = []
@@ -1275,24 +1274,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!worldForestIndex || radius <= 0) {
       return []
     }
-    const active = worldForestIndex.queryCircle(camera.x, camera.z, radius + 32)
-    const fallback = ensureNearRoadFallbackIndex()
-    if (fallback) {
-      active.push(...fallback.queryCircle(camera.x, camera.z, radius + 32))
-    }
-    return active
+    return worldForestIndex.queryCircle(camera.x, camera.z, radius + 32)
   }
 
-  function ensureNearRoadFallbackIndex(): WorldForestPlacementIndex | null {
-    if (nearRoadFallbackIndex) {
-      return nearRoadFallbackIndex
-    }
+  function buildNearRoadFallbackPlacements(
+    existing: ReadonlyArray<TreePlacement>,
+  ): TreePlacement[] {
     if (!grid || !densityField || !roadResult || roadResult.nodes.length < 2) {
-      return null
-    }
-    const existing = worldForestIndex
-    if (!existing) {
-      return null
+      return []
     }
     const treeLine = slowroadsTreeLineBounds(grid.minY, grid.maxY)
     const waterLevel = resolveWaterLevel()
@@ -1303,7 +1292,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const nodeStride = Math.max(1, Math.round(NEAR_ROAD_FALLBACK_SAMPLE_METERS / nodeSpacing))
     const dedupeCellSize = NEAR_ROAD_FALLBACK_DEDUPE_CELL_METERS
     const occupied = new Set<string>()
-    for (const placement of existing.placements) {
+    for (const placement of existing) {
       occupied.add(
         `${Math.round(placement.x / dedupeCellSize)},${Math.round(placement.z / dedupeCellSize)}`,
       )
@@ -1383,8 +1372,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         }
       }
     }
-    nearRoadFallbackIndex = createWorldForestPlacementIndex(placements, 32)
-    return nearRoadFallbackIndex
+    return placements
   }
 
   function usesDemTerrain(): boolean {
@@ -1829,7 +1817,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     farForestRadius = 0
     worldForestScan = null
     worldForestIndex = null
-    nearRoadFallbackIndex = null
     worldForestPlacements = []
     worldForestCorridor = []
     worldForestBuildMs = 0
@@ -1912,7 +1899,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     worldForestPlacements = placements.slice()
     worldForestIndex = createWorldForestPlacementIndex(worldForestPlacements)
-    nearRoadFallbackIndex = null
     worldForestRevision += 1
     nearCardCamera.set(Number.NaN, Number.NaN)
     nearMeshCamera.set(Number.NaN, Number.NaN)
@@ -2017,6 +2003,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     )
     if (done) {
       const placements = worldForestCorridor.concat(worldForestScan.placements)
+      placements.push(...buildNearRoadFallbackPlacements(placements))
       worldForestScan = null
       buildWorldForestLayers(placements)
     }
@@ -2038,11 +2025,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     const indexedNearCards = worldForestIndex.queryCircle(camera.x, camera.z, bands.cardFar + 32)
-    const fallbackIndex = ensureNearRoadFallbackIndex()
-    const fallbackTrees = fallbackIndex
-      ? fallbackIndex.queryCircle(camera.x, camera.z, bands.cardFar + 32)
-      : []
-    const nearCards = indexedNearCards.concat(fallbackTrees).sort((a, b) => (
+    const nearCards = indexedNearCards.sort((a, b) => (
       (a.x - camera.x) ** 2 + (a.z - camera.z) ** 2
       - ((b.x - camera.x) ** 2 + (b.z - camera.z) ** 2)
     ))
@@ -3798,7 +3781,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
     // Road corridor grass / bushes.
     if (roadBucketTable.length) {
-      const corridorRadius = tier.grassRadius + props.grass.corridorWidth + ROAD_BUCKET_LENGTH
+      // Keep roadside shrubs visible through the near-card tree range. The old
+      // 80m grass tier ended long before tree cards did, leaving a bare band.
+      const nearForestDistance = props.forest.nearDistance ?? tier.treeNearDistance
+      const corridorRadius = Math.max(tier.grassRadius, nearForestDistance)
+        + props.grass.corridorWidth
+        + ROAD_BUCKET_LENGTH
       for (const entry of Array.from(roadBatches.values())) {
         if (Math.hypot(entry.centerX - camera.x, entry.centerZ - camera.z) > corridorRadius + TREE_BATCH_RELEASE_PADDING) {
           releaseBatch(entry, roadBatches)

@@ -879,7 +879,6 @@ import {
 import { resolveCameraFarForFogDistance } from '@harmony/schema/slowroads/core/environment';
 import {
   getSharedSlowroadsAssetStore,
-  peekSharedSlowroadsAssetStore,
 } from '@harmony/schema/slowroads/assets/assetStore';
 import { resolveSeasonTextureRefsByIds } from '@harmony/schema/slowroads/core/seasonCatalog';
 import {
@@ -888,10 +887,6 @@ import {
   setProceduralLandscapeEnvironment,
   setProceduralLandscapeMemoryPressure,
 } from '@harmony/schema/proceduralLandscape/runtime';
-import {
-  createLandscapeDiagnosticsLogger,
-  type LandscapeDiagnosticsLogger,
-} from '../common/utils/landscapeDiagnostics';
 import {
   deviceAdaptationComponentDefinition,
 } from '@harmony/schema/components/definitions/deviceAdaptationComponent';
@@ -1858,7 +1853,6 @@ type CameraFrameSnapshot = {
 const cameraFrameSnapshotPosition = new THREE.Vector3();
 const cameraFrameSnapshotQuaternion = new THREE.Quaternion();
 let renderContext: RenderContext | null = null;
-let landscapeDiagnostics: LandscapeDiagnosticsLogger | null = null;
 let baseRendererPixelRatio = 1;
 let landscapePixelRatioCap: number | null = null;
 let baseRendererShadowsEnabled = true;
@@ -23015,26 +23009,6 @@ function startRenderLoop(
     renderScope = effectScope();
   }
 
-  landscapeDiagnostics?.dispose();
-  landscapeDiagnostics = createLandscapeDiagnosticsLogger({
-    getDocument: () => currentDocument,
-    getRenderer: () => renderContext?.renderer ?? null,
-    getCanvasSize: () => {
-      const canvas = canvasResult?.canvas as { width?: number; height?: number } | null;
-      return canvas
-        ? { width: canvas.width ?? 0, height: canvas.height ?? 0 }
-        : null;
-    },
-    getWarnings: () => warnings.value,
-    getMemoryGuard: () => runtimeMemoryGuard.state,
-    getAssetCacheBytes: () => sceneAssetCache.getInMemoryBytes(),
-    getEnvironment: () => currentSlowroadsEnvironmentState,
-    getCameraPosition: () => renderContext?.camera.position ?? null,
-    getLandscapeStats: (nodeId) => getProceduralLandscapeStats(nodeId),
-    getAssetStore: () => peekSharedSlowroadsAssetStore(),
-  });
-  landscapeDiagnostics.start();
-
   let accumulatedDelta = 0;
   renderScope.run(() => {
     watchEffect((onCleanup) => {
@@ -23044,8 +23018,6 @@ function startRenderLoop(
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
         accumulatedDelta = 0;
-
-        landscapeDiagnostics?.tick(deltaSeconds);
 
         if (debugEnabled.value) {
           updateDebugFps(deltaSeconds);
@@ -23276,8 +23248,6 @@ function startRenderLoop(
       });
       onCleanup(() => {
         cancel();
-        landscapeDiagnostics?.dispose();
-        landscapeDiagnostics = null;
       });
     });
   });
@@ -23293,8 +23263,6 @@ function cleanupForUnrelatedSceneSwitch(): void {
   // Stop the old frame loop to avoid stacking multiple useFrame() tickers.
   renderScope?.stop();
   renderScope = null;
-  landscapeDiagnostics?.dispose();
-  landscapeDiagnostics = null;
 
   resetProtagonistPoseState();
   resetSceneryCharacterInputYawState();
@@ -23906,8 +23874,6 @@ defineExpose({
 });
 
 function cleanupRuntime(): void {
-  landscapeDiagnostics?.dispose();
-  landscapeDiagnostics = null;
   runtimeMemoryGuard.stop();
   dismissBehaviorBubble({ type: 'continue' });
   removeBehaviorRuntimeListener(behaviorRuntimeListener);
