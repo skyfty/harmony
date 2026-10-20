@@ -17,6 +17,113 @@
         @useCanvas="handleUseCanvas"
       />
       <view
+        v-if="viewerEnvironmentControlsVisible && viewerEnvironmentMenu"
+        class="viewer-environment-dismiss"
+        @tap="closeViewerEnvironmentMenu"
+      ></view>
+      <view
+        v-if="viewerEnvironmentControlsVisible"
+        class="viewer-environment-controls"
+        :style="viewerEnvironmentControlsStyle"
+        data-control-skip="environment-controls"
+      >
+        <view class="viewer-environment-trigger-row">
+          <button
+            type="button"
+            class="viewer-environment-trigger"
+            :class="{ 'is-open': viewerEnvironmentMenu === 'season' }"
+            hover-class="none"
+            :aria-label="`当前季节：${SEASON_LABELS[viewerEnvironmentState.season]}，点击切换`"
+            :aria-expanded="viewerEnvironmentMenu === 'season'"
+            :disabled="viewerEnvironmentSwitchBusy"
+            data-control-skip="environment-controls"
+            @tap.stop="toggleViewerEnvironmentMenu('season')"
+          >
+            <image
+              class="viewer-environment-trigger__icon"
+              :src="viewerSeasonIconMap[viewerEnvironmentState.season]"
+              mode="aspectFit"
+            />
+          </button>
+          <button
+            type="button"
+            class="viewer-environment-trigger"
+            :class="{ 'is-open': viewerEnvironmentMenu === 'time' }"
+            hover-class="none"
+            :aria-label="`当前时间：${TIME_OF_DAY_LABELS[viewerEnvironmentState.timeOfDay]}，点击切换`"
+            :aria-expanded="viewerEnvironmentMenu === 'time'"
+            :disabled="viewerEnvironmentSwitchBusy"
+            data-control-skip="environment-controls"
+            @tap.stop="toggleViewerEnvironmentMenu('time')"
+          >
+            <image
+              class="viewer-environment-trigger__icon"
+              :src="viewerTimeIconMap[viewerEnvironmentState.timeOfDay]"
+              mode="aspectFit"
+            />
+          </button>
+        </view>
+        <view v-if="viewerEnvironmentMenu" class="viewer-environment-popover">
+          <view class="viewer-environment-option-grid">
+            <button
+              v-for="option in (viewerEnvironmentMenu === 'season' ? viewerSeasonOptions : viewerTimeOptions)"
+              :key="option.value"
+              type="button"
+              class="viewer-environment-option"
+              :class="{
+                'is-active': viewerEnvironmentMenu === 'season'
+                  ? viewerEnvironmentState.season === option.value
+                  : viewerEnvironmentState.timeOfDay === option.value,
+              }"
+              hover-class="none"
+              :aria-label="option.label"
+              :aria-pressed="viewerEnvironmentMenu === 'season'
+                ? viewerEnvironmentState.season === option.value
+                : viewerEnvironmentState.timeOfDay === option.value"
+              :disabled="viewerEnvironmentSwitchBusy"
+              data-control-skip="environment-controls"
+              @tap.stop.prevent="handleViewerEnvironmentSelection(viewerEnvironmentMenu, option.value)"
+            >
+              <image class="viewer-environment-option__icon" :src="option.icon" mode="aspectFit" />
+            </button>
+          </view>
+        </view>
+      </view>
+      <view
+        v-if="viewerEnvironmentSwitchBusy"
+        class="viewer-environment-switch"
+        :class="[
+          `is-${viewerEnvironmentSwitchPhase}`,
+          `season-${viewerEnvironmentSwitchTarget.season}`,
+        ]"
+        role="status"
+        aria-live="polite"
+        :aria-label="`季节与时间切换 ${viewerEnvironmentSwitchPercent}%`"
+      >
+        <view class="viewer-environment-switch__glow" aria-hidden="true"></view>
+        <view class="viewer-environment-switch__scan" aria-hidden="true"></view>
+        <view
+          class="viewer-environment-switch__progress-ring"
+          :style="{ '--environment-progress': `${viewerEnvironmentSwitchPercent}%` }"
+          aria-hidden="true"
+        >
+          <view class="viewer-environment-switch__progress-inner">
+            <view class="viewer-environment-switch__icons">
+              <image
+                class="viewer-environment-switch__icon"
+                :src="viewerSeasonIconMap[viewerEnvironmentSwitchTarget.season]"
+                mode="aspectFit"
+              />
+              <image
+                class="viewer-environment-switch__icon"
+                :src="viewerTimeIconMap[viewerEnvironmentSwitchTarget.timeOfDay]"
+                mode="aspectFit"
+              />
+            </view>
+          </view>
+        </view>
+      </view>
+      <view
         v-if="punchTotalCount > 0"
         class="viewer-punch-summary"
         :style="punchSummaryStyle"
@@ -552,8 +659,10 @@ import {
   DEFAULT_ENVIRONMENT_GRAVITY,
   cloneEnvironmentSettings,
   resolveDocumentEnvironment,
+  resolveSceneRuntimeEnvironment,
   type EnvironmentNorthDirection,
   type EnvironmentSettings,
+  type SlowroadsEnvironmentSettings,
 } from '@harmony/schema/environmentSettingsUtils';
 import { deserializeGroundScatterSidecar } from '@harmony/schema/groundScatterSidecar';
 import { deserializeGroundSplatSidecar } from '@harmony/schema/groundSplatSidecar';
@@ -877,17 +986,39 @@ import {
   getSlowroadsSceneFogFar,
   type SlowroadsEnvironmentRuntime,
 } from '@harmony/schema/slowroads/render/environmentRuntime';
-import { resolveCameraFarForFogDistance } from '@harmony/schema/slowroads/core/environment';
+import {
+  resolveCameraFarForFogDistance,
+  TIME_OF_DAY_LABELS,
+  TIME_OF_DAY_ORDER,
+} from '@harmony/schema/slowroads/core/environment';
 import {
   getSharedSlowroadsAssetStore,
 } from '@harmony/schema/slowroads/assets/assetStore';
-import { resolveSeasonTextureRefsByIds } from '@harmony/schema/slowroads/core/seasonCatalog';
+import {
+  resolveSeasonTextureRefsByIds,
+  SEASON_IDS,
+  SEASON_LABELS,
+} from '@harmony/schema/slowroads/core/seasonCatalog';
 import {
   getProceduralLandscapeStats,
   setProceduralLandscapeDeviceProfile,
   setProceduralLandscapeEnvironment,
   setProceduralLandscapeMemoryPressure,
 } from '@harmony/schema/proceduralLandscape/runtime';
+import {
+  PROCEDURAL_LANDSCAPE_SEASON_PRELOAD_TIMEOUT_MS,
+  preloadProceduralLandscapeSeasonAssets,
+  waitForProceduralLandscapeSeasonApplied,
+  withProceduralLandscapeSeasonPreloadTimeout,
+} from '@harmony/schema/proceduralLandscape/seasonSwitch';
+import seasonSpringIcon from '../static/environment-icons/season-spring.png';
+import seasonSummerIcon from '../static/environment-icons/season-summer.png';
+import seasonAutumnIcon from '../static/environment-icons/season-autumn.png';
+import seasonWinterIcon from '../static/environment-icons/season-winter.png';
+import timeMorningIcon from '../static/environment-icons/time-morning.png';
+import timeDayIcon from '../static/environment-icons/time-day.png';
+import timeEveningIcon from '../static/environment-icons/time-evening.png';
+import timeNightIcon from '../static/environment-icons/time-night.png';
 import {
   deviceAdaptationComponentDefinition,
 } from '@harmony/schema/components/definitions/deviceAdaptationComponent';
@@ -1846,6 +1977,62 @@ let slowroadsAmbientLight: THREE.AmbientLight | null = null;
 /** 官方三件套之一：半球光（sky = 预设 sun 色、ground = 黑）。 */
 let slowroadsHemisphereLight: THREE.HemisphereLight | null = null;
 let currentSlowroadsEnvironmentState: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null = null;
+
+type ViewerEnvironmentSeason = SlowroadsEnvironmentSettings['season'];
+type ViewerEnvironmentTimeOfDay = SlowroadsEnvironmentSettings['timeOfDay'];
+type ViewerEnvironmentMenu = 'season' | 'time' | null;
+type ViewerEnvironmentSwitchPhase = 'idle' | 'covering' | 'loading' | 'revealing';
+
+const viewerEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('manual');
+const viewerEnvironmentHasLandscape = ref(false);
+const viewerEnvironmentState = reactive<{
+  season: ViewerEnvironmentSeason;
+  timeOfDay: ViewerEnvironmentTimeOfDay;
+  weather: SlowroadsEnvironmentSettings['weather'];
+}>({
+  season: 'spring',
+  timeOfDay: 'day',
+  weather: 'clear',
+});
+const viewerEnvironmentMenu = ref<ViewerEnvironmentMenu>(null);
+const viewerEnvironmentSwitchPhase = ref<ViewerEnvironmentSwitchPhase>('idle');
+const viewerEnvironmentSwitchProgress = ref(0);
+const viewerEnvironmentSwitchTarget = reactive<{
+  season: ViewerEnvironmentSeason;
+  timeOfDay: ViewerEnvironmentTimeOfDay;
+}>({
+  season: 'spring',
+  timeOfDay: 'day',
+});
+let viewerEnvironmentSwitchToken = 0;
+
+const viewerSeasonIconMap: Record<ViewerEnvironmentSeason, string> = {
+  spring: seasonSpringIcon,
+  summer: seasonSummerIcon,
+  autumn: seasonAutumnIcon,
+  winter: seasonWinterIcon,
+};
+const viewerTimeIconMap: Record<ViewerEnvironmentTimeOfDay, string> = {
+  morning: timeMorningIcon,
+  day: timeDayIcon,
+  evening: timeEveningIcon,
+  night: timeNightIcon,
+};
+const viewerSeasonOptions = SEASON_IDS.map((value) => ({
+  value,
+  label: SEASON_LABELS[value],
+  icon: viewerSeasonIconMap[value],
+}));
+const viewerTimeOptions = TIME_OF_DAY_ORDER.map((value) => ({
+  value,
+  label: TIME_OF_DAY_LABELS[value],
+  icon: viewerTimeIconMap[value],
+}));
+const viewerEnvironmentSwitchBusy = computed(() => viewerEnvironmentSwitchPhase.value !== 'idle');
+const viewerEnvironmentSwitchPercent = computed(() => Math.max(
+  0,
+  Math.min(100, Math.round(viewerEnvironmentSwitchProgress.value)),
+));
 type CameraFrameSnapshot = {
   nowMs: number;
   position: THREE.Vector3;
@@ -3382,6 +3569,19 @@ const floatingAutoTourPauseButtonStyle = computed(() => ({
   top: 'auto',
   bottom: 'calc(22px + var(--viewer-safe-area-bottom, 0px))',
 }));
+
+const viewerEnvironmentControlsStyle = computed(() => ({
+  top: `${punchSummaryTopOffset.value + 52}px`,
+}));
+const viewerEnvironmentControlsVisible = computed(() => (
+  viewerEnvironmentControlMode.value === 'manual'
+  && viewerEnvironmentHasLandscape.value
+  && !loading.value
+  && !sceneSwitching.value
+  && !watchExclusiveUiActive.value
+  && !error.value
+  && !viewerEnvironmentSwitchBusy.value
+));
 
 const lanternViewerOptions: Record<string, any> = {};
 // #ifdef H5
@@ -5627,7 +5827,7 @@ function resolveSceneSlowroadsTexturePreload(
   document: SceneJsonExportDocument,
   scope: 'core' | 'all' = 'all',
 ): SceneSlowroadsTexturePreload | null {
-  const season = resolveDocumentEnvironment(document).slowroads.season;
+  const season = activeEnvironmentSettings.slowroads.season;
   const textureIds = new Set<string>();
   const stored = scope === 'all' ? document.assetPreload?.slowroadsTextures : undefined;
   if (stored?.season === season) {
@@ -18884,6 +19084,7 @@ function handleControlPadPointerDown(event: PointerEvent): void {
     || !vehicleDriveUi.value.visible
     || !vehicleDriveActive.value
     || watchExclusiveUiActive.value
+    || viewerEnvironmentSwitchBusy.value
   ) {
     return;
   }
@@ -19141,17 +19342,25 @@ function isPointInsidePurposeControls(x: number, y: number): boolean {
 function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null): boolean {
   const candidate = target as { dataset?: Record<string, unknown>; parentElement?: Element | null } | null;
   const datasetValue = candidate?.dataset?.controlSkip;
-  if (datasetValue === 'character-actions' || datasetValue === 'purpose-controls' || datasetValue === 'watch-leave') {
+  if (
+    datasetValue === 'character-actions'
+    || datasetValue === 'purpose-controls'
+    || datasetValue === 'watch-leave'
+    || datasetValue === 'environment-controls'
+  ) {
     return true;
   }
   if (typeof (target as Element | null)?.closest === 'function') {
-    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"], [data-control-skip="watch-leave"]'));
+    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"], [data-control-skip="watch-leave"], [data-control-skip="environment-controls"]'));
   }
   return false;
 }
 
 function handleControlPadTouchStart(event: TouchEvent): void {
   if (shouldUseH5PointerInput()) {
+    return;
+  }
+  if (viewerEnvironmentSwitchBusy.value) {
     return;
   }
   if (vehicleDriveUi.value.visible) {
@@ -19202,6 +19411,9 @@ function handleControlPadTouchEnd(event: TouchEvent): void {
 
 function handleControlPadMouseDown(event: MouseEvent): void {
   if (shouldUseH5PointerInput()) {
+    return;
+  }
+  if (viewerEnvironmentSwitchBusy.value) {
     return;
   }
   if (vehicleDriveUi.value.visible) {
@@ -20987,6 +21199,186 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
   canvas.addEventListener('click', handleBehaviorClick);
 }
 
+function waitViewerEnvironmentDelay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, milliseconds));
+  });
+}
+
+function syncViewerEnvironmentControlState(settings: EnvironmentSettings): void {
+  viewerEnvironmentControlMode.value = settings.slowroads.controlMode;
+  viewerEnvironmentState.season = settings.slowroads.season;
+  viewerEnvironmentState.timeOfDay = settings.slowroads.timeOfDay;
+  viewerEnvironmentState.weather = settings.slowroads.weather;
+}
+
+function resolveViewerRuntimeEnvironment(document: SceneJsonExportDocument): EnvironmentSettings {
+  const effective = resolveSceneRuntimeEnvironment(document);
+  viewerEnvironmentHasLandscape.value = collectActiveProceduralLandscapeNodeIdsFromNodes(
+    document.nodes,
+  ).length > 0;
+  syncViewerEnvironmentControlState(effective);
+  return effective;
+}
+
+function toggleViewerEnvironmentMenu(menu: Exclude<ViewerEnvironmentMenu, null>): void {
+  if (viewerEnvironmentSwitchBusy.value) {
+    return;
+  }
+  viewerEnvironmentMenu.value = viewerEnvironmentMenu.value === menu ? null : menu;
+}
+
+function closeViewerEnvironmentMenu(): void {
+  viewerEnvironmentMenu.value = null;
+}
+
+function handleViewerEnvironmentSelection(
+  kind: ViewerEnvironmentMenu,
+  value: ViewerEnvironmentSeason | ViewerEnvironmentTimeOfDay,
+): void {
+  if (!kind || viewerEnvironmentSwitchBusy.value) {
+    return;
+  }
+  viewerEnvironmentMenu.value = null;
+  const nextSeason = kind === 'season'
+    ? value as ViewerEnvironmentSeason
+    : viewerEnvironmentState.season;
+  const nextTimeOfDay = kind === 'time'
+    ? value as ViewerEnvironmentTimeOfDay
+    : viewerEnvironmentState.timeOfDay;
+  if (
+    nextSeason === viewerEnvironmentState.season
+    && nextTimeOfDay === viewerEnvironmentState.timeOfDay
+  ) {
+    return;
+  }
+  void runViewerEnvironmentSwitch(nextSeason, nextTimeOfDay);
+}
+
+async function runViewerEnvironmentSwitch(
+  nextSeason: ViewerEnvironmentSeason,
+  nextTimeOfDay: ViewerEnvironmentTimeOfDay,
+): Promise<void> {
+  const targetDocument = currentDocument;
+  if (!targetDocument || viewerEnvironmentSwitchBusy.value) {
+    return;
+  }
+  const seasonChanged = nextSeason !== viewerEnvironmentState.season;
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  const token = ++viewerEnvironmentSwitchToken;
+  viewerEnvironmentSwitchTarget.season = nextSeason;
+  viewerEnvironmentSwitchTarget.timeOfDay = nextTimeOfDay;
+  viewerEnvironmentSwitchPhase.value = 'covering';
+  viewerEnvironmentSwitchProgress.value = 0;
+  viewerEnvironmentMenu.value = null;
+
+  try {
+    await waitViewerEnvironmentDelay(180);
+    if (token !== viewerEnvironmentSwitchToken) {
+      return;
+    }
+    viewerEnvironmentSwitchPhase.value = 'loading';
+
+    if (seasonChanged) {
+      const preload = await withProceduralLandscapeSeasonPreloadTimeout(
+        preloadProceduralLandscapeSeasonAssets(
+          targetDocument.nodes,
+          nextSeason,
+          {
+            onProgress: ({ loaded, total }) => {
+              if (token !== viewerEnvironmentSwitchToken) {
+                return;
+              }
+              viewerEnvironmentSwitchProgress.value = total > 0
+                ? (loaded / total) * 100
+                : 100;
+            },
+          },
+        ),
+        PROCEDURAL_LANDSCAPE_SEASON_PRELOAD_TIMEOUT_MS,
+      );
+      if (token !== viewerEnvironmentSwitchToken) {
+        return;
+      }
+      if (preload.coreMissingIds.length) {
+        throw new Error(`核心季节贴图缺失：${preload.coreMissingIds.slice(0, 3).join(', ')}`);
+      }
+      viewerEnvironmentSwitchProgress.value = 100;
+    } else {
+      viewerEnvironmentSwitchProgress.value = 100;
+    }
+
+    const minimumDuration = seasonChanged ? 700 : 450;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const elapsed = now - startedAt;
+    if (elapsed < minimumDuration) {
+      await waitViewerEnvironmentDelay(minimumDuration - elapsed);
+    }
+    if (token !== viewerEnvironmentSwitchToken) {
+      return;
+    }
+
+    const nextSettings: EnvironmentSettings = {
+      ...activeEnvironmentSettings,
+      slowroads: {
+        ...activeEnvironmentSettings.slowroads,
+        season: nextSeason,
+        timeOfDay: nextTimeOfDay,
+      },
+    };
+    await applyEnvironmentSettingsToScene(nextSettings);
+    viewerEnvironmentState.season = nextSeason;
+    viewerEnvironmentState.timeOfDay = nextTimeOfDay;
+
+    if (seasonChanged) {
+      const landscapeNodeIds = collectActiveProceduralLandscapeNodeIdsFromNodes(
+        targetDocument.nodes,
+      );
+      const application = await waitForProceduralLandscapeSeasonApplied({
+        nodeIds: landscapeNodeIds,
+        season: nextSeason,
+        getStats: getProceduralLandscapeStats,
+        shouldAbort: () => token !== viewerEnvironmentSwitchToken,
+      });
+      if (token !== viewerEnvironmentSwitchToken) {
+        return;
+      }
+      if (application.status === 'timeout') {
+        appendSceneInitWarning('季节材质应用超时，已继续显示当前场景。');
+      }
+    }
+
+    await nextTick();
+    await yieldToMainThread();
+    if (token !== viewerEnvironmentSwitchToken) {
+      return;
+    }
+    viewerEnvironmentSwitchPhase.value = 'revealing';
+    await waitViewerEnvironmentDelay(420);
+    if (token === viewerEnvironmentSwitchToken) {
+      viewerEnvironmentSwitchPhase.value = 'idle';
+      viewerEnvironmentSwitchProgress.value = 0;
+    }
+  } catch (switchError) {
+    if (token !== viewerEnvironmentSwitchToken) {
+      return;
+    }
+    const detail = switchError instanceof Error ? switchError.message : String(switchError);
+    viewerEnvironmentSwitchPhase.value = 'revealing';
+    appendSceneInitWarning(`季节/时间切换失败：${detail}`);
+    try {
+      uni.showToast({ title: `切换失败：${detail}`, icon: 'none' });
+    } catch (_error) {
+      // toast is optional on non-uni hosts
+    }
+    await waitViewerEnvironmentDelay(520);
+    if (token === viewerEnvironmentSwitchToken) {
+      viewerEnvironmentSwitchPhase.value = 'idle';
+      viewerEnvironmentSwitchProgress.value = 0;
+    }
+  }
+}
+
 /**
  * Slow Roads 三色雾是场景唯一雾系统：viewer 里雾始终生效（标准 fogMode 已移除）。
  */
@@ -21010,6 +21402,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   const scene = renderContext?.scene ?? null;
   const snapshot = cloneEnvironmentSettings(settings);
   activeEnvironmentSettings = snapshot;
+  syncViewerEnvironmentControlState(snapshot);
   applyPhysicsEnvironmentSettings(snapshot);
   if (!scene) {
     pendingEnvironmentSettings = snapshot;
@@ -21031,6 +21424,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 function disposeEnvironmentResources() {
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
+  viewerEnvironmentHasLandscape.value = false;
+  viewerEnvironmentMenu.value = null;
 }
 
 function resetRemovedSkyState() {
@@ -21807,7 +22202,9 @@ function prepareScenePreviewPayload(payload: ScenePreviewPayload): void {
   error.value = null;
   warnings.value = [];
   resetRemovedSkyState();
-  pendingEnvironmentSettings = cloneEnvironmentSettings(resolveDocumentEnvironment(payload.document));
+  pendingEnvironmentSettings = cloneEnvironmentSettings(
+    resolveSceneRuntimeEnvironment(payload.document),
+  );
   try {
     uni.setNavigationBarTitle({ title: payload.title || '场景预览' });
   } catch (_error) {
@@ -22731,7 +23128,9 @@ async function mountGraphAndSyncSubsystems(
     currentLabel: 'previewComponentManager.syncScene',
     active: true,
   });
-  const environment = resolveDocumentEnvironment(payload.document).slowroads;
+  const environment = currentSlowroadsEnvironmentState ?? resolveViewerRuntimeEnvironment(
+    payload.document,
+  ).slowroads;
   currentSlowroadsEnvironmentState = {
     season: environment.season,
     timeOfDay: environment.timeOfDay,
@@ -22984,12 +23383,12 @@ async function mountGraphAndSyncSubsystems(
 }
 
 /** Apply camera alignment and environment settings for the current document. */
-function applyDocumentViewSettings(document: SceneJsonExportDocument, camera: THREE.PerspectiveCamera): void {
+function applyDocumentViewSettings(camera: THREE.PerspectiveCamera): void {
   resetRemovedSkyState();
 
   // Environment settings are applied asynchronously (e.g. texture loads) and will self-defer
   // into `pendingEnvironmentSettings` when the render context is not ready.
-  void applyEnvironmentSettingsToScene(resolveDocumentEnvironment(document));
+  void applyEnvironmentSettingsToScene(activeEnvironmentSettings);
 
   // Ensure camera projection matches the current canvas size.
   const width = (canvasResult?.canvas?.width || canvasResult?.canvas?.clientWidth || 1) as number;
@@ -23259,6 +23658,10 @@ function startRenderLoop(
 }
 
 function cleanupForUnrelatedSceneSwitch(): void {
+  viewerEnvironmentSwitchToken += 1;
+  viewerEnvironmentSwitchPhase.value = 'idle';
+  viewerEnvironmentSwitchProgress.value = 0;
+  viewerEnvironmentMenu.value = null;
   if (!renderContext) {
     return;
   }
@@ -23445,7 +23848,9 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
     });
   }
 
-  const sceneEnvironment = resolveDocumentEnvironment(currentDocument);
+  const sceneEnvironment = resolveViewerRuntimeEnvironment(currentDocument);
+  activeEnvironmentSettings = cloneEnvironmentSettings(sceneEnvironment);
+  pendingEnvironmentSettings = cloneEnvironmentSettings(sceneEnvironment);
   currentSlowroadsEnvironmentState = {
     season: sceneEnvironment.slowroads.season,
     timeOfDay: sceneEnvironment.slowroads.timeOfDay,
@@ -23494,7 +23899,7 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
 
   // Phase 5: apply view settings (camera alignment, environment, projection).
-  applyDocumentViewSettings(payload.document, camera);
+  applyDocumentViewSettings(camera);
   activatePendingDefaultSteerDriveIfNeeded();
   updateCharacterFollowCamera(0, { immediate: true });
   markInstancedCullingDirty();
@@ -23916,6 +24321,8 @@ function cleanupRuntime(): void {
 }
 
 onUnmounted(() => {
+  viewerEnvironmentSwitchToken += 1;
+  viewerEnvironmentSwitchPhase.value = 'idle';
   releaseInstancedLodCullingWorker();
   cancelMoveToTransition();
   resetCharacterActionButtonState();
@@ -23988,6 +24395,273 @@ onUnmounted(() => {
   flex: 1;
   background-color: #e9eef5;
   isolation: isolate;
+}
+
+.viewer-environment-dismiss {
+  position: absolute;
+  inset: 0;
+  z-index: 1458;
+}
+
+.viewer-environment-controls {
+  position: absolute;
+  left: 12px;
+  z-index: 1470;
+  display: flex;
+  flex-direction: column;
+  gap: 12rpx;
+  color: #f4f9ff;
+  pointer-events: auto;
+}
+
+.viewer-environment-trigger-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8rpx;
+  align-self: flex-start;
+  padding: 8rpx;
+  border: 1px solid rgba(153, 193, 255, 0.24);
+  border-radius: 999rpx;
+  background:
+    radial-gradient(circle at 12% 16%, rgba(111, 214, 255, 0.16), transparent 38%),
+    linear-gradient(180deg, rgba(10, 22, 37, 0.82), rgba(6, 15, 27, 0.7));
+  box-shadow: 0 18rpx 42rpx rgba(4, 12, 24, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(18rpx) saturate(1.08);
+}
+
+.viewer-environment-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 62rpx;
+  height: 62rpx;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(229, 241, 255, 0.84);
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.viewer-environment-trigger.is-open,
+.viewer-environment-trigger:active {
+  border-color: rgba(119, 202, 255, 0.3);
+  background: rgba(92, 171, 235, 0.16);
+  color: #ffffff;
+}
+
+.viewer-environment-trigger[disabled] {
+  opacity: 0.55;
+}
+
+.viewer-environment-trigger__icon {
+  width: 38rpx;
+  height: 38rpx;
+  flex: none;
+  filter: drop-shadow(0 0 8rpx rgba(120, 208, 255, 0.28));
+}
+
+.viewer-environment-popover {
+  width: 296rpx;
+  padding: 16rpx;
+  border: 1px solid rgba(143, 194, 237, 0.26);
+  border-radius: 26rpx;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(104, 193, 255, 0.16), transparent 38%),
+    linear-gradient(180deg, rgba(11, 23, 38, 0.96), rgba(6, 15, 27, 0.92));
+  box-shadow: 0 26rpx 60rpx rgba(2, 8, 18, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(24rpx) saturate(1.1);
+  animation: viewer-environment-popover-in 0.16s ease-out both;
+}
+
+.viewer-environment-option-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12rpx;
+}
+
+.viewer-environment-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 112rpx;
+  padding: 12rpx;
+  border: 1px solid rgba(130, 166, 199, 0.2);
+  border-radius: 18rpx;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(226, 238, 249, 0.84);
+  line-height: 1;
+}
+
+.viewer-environment-option.is-active {
+  border-color: rgba(103, 202, 255, 0.74);
+  background:
+    radial-gradient(circle at 50% 20%, rgba(103, 202, 255, 0.2), transparent 58%),
+    rgba(79, 157, 219, 0.16);
+  color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(126, 218, 255, 0.12), 0 0 24rpx rgba(74, 173, 245, 0.16);
+}
+
+.viewer-environment-option__icon {
+  width: 56rpx;
+  height: 56rpx;
+  opacity: 0.88;
+}
+
+.viewer-environment-option.is-active .viewer-environment-option__icon {
+  opacity: 1;
+  filter: drop-shadow(0 0 10rpx rgba(125, 220, 255, 0.52));
+}
+
+@keyframes viewer-environment-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8rpx) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.viewer-environment-switch {
+  --environment-accent: #9fe58f;
+  --environment-accent-rgb: 159, 229, 143;
+  position: absolute;
+  inset: 0;
+  z-index: 2600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at center, rgba(var(--environment-accent-rgb), 0.14), transparent 36%),
+    rgba(3, 8, 14, 0.8);
+  backdrop-filter: blur(12rpx) saturate(0.9);
+  animation: viewer-environment-cover 0.18s ease-out both;
+}
+
+.viewer-environment-switch.season-summer {
+  --environment-accent: #8ff0ff;
+  --environment-accent-rgb: 143, 240, 255;
+}
+
+.viewer-environment-switch.season-autumn {
+  --environment-accent: #ffc36f;
+  --environment-accent-rgb: 255, 195, 111;
+}
+
+.viewer-environment-switch.season-winter {
+  --environment-accent: #a9d4ff;
+  --environment-accent-rgb: 169, 212, 255;
+}
+
+.viewer-environment-switch.is-revealing {
+  animation: viewer-environment-reveal 0.42s ease-out both;
+}
+
+.viewer-environment-switch__glow {
+  position: absolute;
+  inset: -30%;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      rgba(var(--environment-accent-rgb), 0.17) 54deg,
+      transparent 112deg,
+      rgba(var(--environment-accent-rgb), 0.11) 186deg,
+      transparent 268deg,
+      rgba(var(--environment-accent-rgb), 0.15) 332deg,
+      transparent 360deg
+    );
+  filter: blur(48rpx);
+  opacity: 0.82;
+  animation: viewer-environment-glow 6s linear infinite;
+}
+
+.viewer-environment-switch__scan {
+  position: absolute;
+  inset: -12% 0;
+  background: linear-gradient(180deg, transparent, rgba(var(--environment-accent-rgb), 0.28), transparent);
+  opacity: 0.72;
+  animation: viewer-environment-scan 1.35s linear infinite;
+}
+
+.viewer-environment-switch__progress-ring {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 340rpx;
+  height: 340rpx;
+  border-radius: 50%;
+  background: conic-gradient(
+    var(--environment-accent) 0% var(--environment-progress, 0%),
+    rgba(255, 255, 255, 0.1) var(--environment-progress, 0%) 100%
+  );
+  box-shadow:
+    0 0 60rpx rgba(var(--environment-accent-rgb), 0.26),
+    0 0 140rpx rgba(var(--environment-accent-rgb), 0.1);
+}
+
+.viewer-environment-switch__progress-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 296rpx;
+  height: 296rpx;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--environment-accent-rgb), 0.2);
+  background:
+    radial-gradient(circle at center, rgba(var(--environment-accent-rgb), 0.1), transparent 70%),
+    linear-gradient(180deg, rgba(9, 19, 31, 0.96), rgba(5, 12, 22, 0.94));
+  box-shadow:
+    inset 0 0 42rpx rgba(var(--environment-accent-rgb), 0.08),
+    0 20rpx 48rpx rgba(0, 0, 0, 0.26);
+}
+
+.viewer-environment-switch__icons {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+}
+
+.viewer-environment-switch__icon {
+  width: 72rpx;
+  height: 72rpx;
+  filter: drop-shadow(0 0 20rpx rgba(var(--environment-accent-rgb), 0.38));
+}
+
+@keyframes viewer-environment-cover {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes viewer-environment-reveal {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes viewer-environment-glow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes viewer-environment-scan {
+  from { transform: translateY(-52%); }
+  to { transform: translateY(52%); }
+}
+
+@media (max-width: 360px) {
+  .viewer-environment-controls {
+    left: 10px;
+  }
+
+  .viewer-environment-popover {
+    width: 272rpx;
+    padding: 14rpx;
+  }
 }
 
 .viewer-punch-summary {

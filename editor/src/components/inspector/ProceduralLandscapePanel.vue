@@ -20,13 +20,10 @@ import {
   type ProceduralLandscapeRuntimeStats,
 } from '@schema/proceduralLandscape/runtime'
 import {
-  ROAD_SINGLE_TRACK_THRESHOLD,
   ROAD_STYLE_PROFILES,
   ROAD_WIDTH_PRESETS,
-  isSingleTrackRoad,
   type RoadStyleId,
 } from '@schema/proceduralLandscape/roadStyle'
-import { WATER_FLOOD_VISIBLE_FRACTION } from '@schema/proceduralLandscape/waterStats'
 
 const sceneStore = useSceneStore()
 const buildToolsStore = useBuildToolsStore()
@@ -66,14 +63,6 @@ onBeforeUnmount(() => {
     window.clearInterval(runtimeStatsTimer)
     runtimeStatsTimer = null
   }
-})
-
-const waterBuriedHint = computed(() => {
-  const stats = runtimeStats.value
-  if (!stats || !stats.waterEnabled || stats.waterFloodedFraction >= WATER_FLOOD_VISIBLE_FRACTION) {
-    return ''
-  }
-  return '水面被地形完全遮挡（水线 = 地形最低点 + 水线偏移）：把「水线偏移」提高到低地水位才能看到湖面。'
 })
 
 const propsValue = computed<ProceduralLandscapeComponentProps | null>(() => {
@@ -186,9 +175,6 @@ const roadCurveStyleOptions: RoadStyleId[] = [
   'normal',
   'winding',
 ]
-const scenicPreferredPercent = Math.round(
-  SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade * 100,
-)
 const scenicMaxGradePercent = Math.round(
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxGrade * 100,
 )
@@ -577,17 +563,6 @@ const roadWidthPresets = [
   { label: '常规 3.2m', width: ROAD_WIDTH_PRESETS.regular },
   { label: '宽路 4.0m', width: ROAD_WIDTH_PRESETS.wide },
 ] as const
-
-const roadSingleTrack = computed(() => {
-  const width = propsValue.value?.road.width
-  return typeof width === 'number' && isSingleTrackRoad(width)
-})
-
-const roadStyleHint = computed(() => (
-  roadSingleTrack.value
-    ? `单车道材质（无划线，路宽 < ${ROAD_SINGLE_TRACK_THRESHOLD}m）`
-    : '宽路材质 + 划线'
-))
 
 function isRoadWidthPresetActive(width: number): boolean {
   const current = propsValue.value?.road.width

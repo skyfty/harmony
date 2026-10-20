@@ -93,6 +93,7 @@ export function extractEnvironmentSettings(node: SceneNode | null | undefined): 
 
 export function environmentSettingsEqual(a: EnvironmentSettings, b: EnvironmentSettings, epsilon = 1e-4): boolean {
   return (
+    a.slowroads.controlMode === b.slowroads.controlMode &&
     a.slowroads.season === b.slowroads.season &&
     a.slowroads.timeOfDay === b.slowroads.timeOfDay &&
     a.slowroads.weather === b.slowroads.weather &&

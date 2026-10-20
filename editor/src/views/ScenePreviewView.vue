@@ -8,7 +8,8 @@ import {
 	DEFAULT_ENVIRONMENT_SETTINGS,
 	DEFAULT_ENVIRONMENT_GRAVITY,
 	cloneEnvironmentSettings,
-	resolveDocumentEnvironment,
+	resolveSceneRuntimeEnvironment,
+	isRuntimeEnvironmentSwitchEnabled,
 	clampSceneNodeInstanceLayout,
 	computeInstanceLayoutLocalBoundingBox,
 	forEachInstanceWorldMatrix,
@@ -77,6 +78,7 @@ import type {
 	LanternSlideDefinition,
 	SceneAssetRegistryEntry,
 	SceneJsonExportDocument,
+	SlowroadsEnvironmentSettings,
 	CompiledGroundManifest,
 	SceneNode,
 	SceneNodeComponentState,
@@ -186,9 +188,32 @@ import {
 	getSlowroadsSceneFogFar,
 	type SlowroadsEnvironmentRuntime,
 } from '@schema/slowroads/render/environmentRuntime'
-import { resolveCameraFarForFogDistance } from '@schema/slowroads/core/environment'
+import {
+	resolveCameraFarForFogDistance,
+	TIME_OF_DAY_LABELS,
+	TIME_OF_DAY_ORDER,
+} from '@schema/slowroads/core/environment'
+import { SEASON_IDS, SEASON_LABELS } from '@schema/slowroads/core/seasonCatalog'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
-import { setProceduralLandscapeEnvironment } from '@schema/proceduralLandscape/runtime'
+import {
+	getProceduralLandscapeStats,
+	setProceduralLandscapeEnvironment,
+} from '@schema/proceduralLandscape/runtime'
+import { collectActiveProceduralLandscapeNodeIds } from '@schema/proceduralLandscape/preload'
+import {
+	PROCEDURAL_LANDSCAPE_SEASON_PRELOAD_TIMEOUT_MS,
+	preloadProceduralLandscapeSeasonAssets,
+	waitForProceduralLandscapeSeasonApplied,
+	withProceduralLandscapeSeasonPreloadTimeout,
+} from '@schema/proceduralLandscape/seasonSwitch'
+import seasonSpringIcon from '@/assets/environment-icons/season-spring.png'
+import seasonSummerIcon from '@/assets/environment-icons/season-summer.png'
+import seasonAutumnIcon from '@/assets/environment-icons/season-autumn.png'
+import seasonWinterIcon from '@/assets/environment-icons/season-winter.png'
+import timeMorningIcon from '@/assets/environment-icons/time-morning.png'
+import timeDayIcon from '@/assets/environment-icons/time-day.png'
+import timeEveningIcon from '@/assets/environment-icons/time-evening.png'
+import timeNightIcon from '@/assets/environment-icons/time-night.png'
 import {
 	createSceneCsmShadowRuntime,
 	DEFAULT_SCENE_CSM_CONFIG,
@@ -239,6 +264,7 @@ import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import { ComponentManager } from '@schema/components/componentManager'
 import { onlineComponentDefinition } from '@schema/components/definitions/onlineComponent'
 import { preloadableComponentDefinition } from '@schema/components/definitions/preloadableComponent'
+import { PROCEDURAL_LANDSCAPE_UPDATE_TYPES } from '@schema/components/definitions/proceduralLandscapeComponent'
 import { setActiveMultiuserSceneId } from '@schema/multiuserContext'
 import {
 	DEFAULT_REMOTE_MULTIUSER_VISIBLE_PEERS,
@@ -857,6 +883,333 @@ const resourceProgress = reactive({
 })
 
 const sceneSwitching = ref(false)
+
+type PreviewEnvironmentSeason = SlowroadsEnvironmentSettings['season']
+type PreviewEnvironmentTimeOfDay = SlowroadsEnvironmentSettings['timeOfDay']
+type PreviewEnvironmentMenu = 'season' | 'time' | null
+type PreviewEnvironmentSwitchPhase = 'idle' | 'covering' | 'loading' | 'revealing'
+
+const previewEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('manual')
+const previewEnvironmentHasLandscape = ref(false)
+const previewEnvironmentState = reactive<{
+	season: PreviewEnvironmentSeason
+	timeOfDay: PreviewEnvironmentTimeOfDay
+	weather: SlowroadsEnvironmentSettings['weather']
+}>({
+	season: 'spring',
+	timeOfDay: 'day',
+	weather: 'clear',
+})
+const previewEnvironmentMenu = ref<PreviewEnvironmentMenu>(null)
+const previewEnvironmentSwitchPhase = ref<PreviewEnvironmentSwitchPhase>('idle')
+const previewEnvironmentSwitchProgress = ref(0)
+const previewEnvironmentSwitchLoaded = ref(0)
+const previewEnvironmentSwitchTotal = ref(0)
+const previewEnvironmentSwitchMessage = ref('')
+const previewEnvironmentSwitchNotice = ref('')
+const previewEnvironmentSwitchTarget = reactive<{
+	season: PreviewEnvironmentSeason
+	timeOfDay: PreviewEnvironmentTimeOfDay
+}>({
+	season: 'spring',
+	timeOfDay: 'day',
+})
+let previewEnvironmentSwitchToken = 0
+let previewEnvironmentSessionOverride: {
+	season: PreviewEnvironmentSeason
+	timeOfDay: PreviewEnvironmentTimeOfDay
+} | null = null
+let previewEnvironmentSessionSceneId = ''
+
+const previewSeasonIconMap: Record<PreviewEnvironmentSeason, string> = {
+	spring: seasonSpringIcon,
+	summer: seasonSummerIcon,
+	autumn: seasonAutumnIcon,
+	winter: seasonWinterIcon,
+}
+const previewTimeIconMap: Record<PreviewEnvironmentTimeOfDay, string> = {
+	morning: timeMorningIcon,
+	day: timeDayIcon,
+	evening: timeEveningIcon,
+	night: timeNightIcon,
+}
+const previewSeasonOptions = SEASON_IDS.map((value) => ({
+	value,
+	label: SEASON_LABELS[value],
+	icon: previewSeasonIconMap[value],
+}))
+const previewTimeOptions = TIME_OF_DAY_ORDER.map((value) => ({
+	value,
+	label: TIME_OF_DAY_LABELS[value],
+	icon: previewTimeIconMap[value],
+}))
+
+const previewEnvironmentSwitchBusy = computed(() => (
+	previewEnvironmentSwitchPhase.value !== 'idle'
+))
+const previewEnvironmentSwitchUiVisible = computed(() => (
+	previewEnvironmentControlMode.value === 'manual'
+	&& previewEnvironmentHasLandscape.value
+	&& !previewEnvironmentSwitchBusy.value
+	&& !sceneInit.active
+	&& sceneInit.stage !== 'error'
+	&& !sceneSwitching.value
+	&& !isLiveUpdatesDisabled.value
+	&& !watchExclusiveUiActive.value
+))
+const previewEnvironmentSwitchPercent = computed(() => Math.max(
+	0,
+	Math.min(100, Math.round(previewEnvironmentSwitchProgress.value)),
+))
+
+function waitPreviewEnvironmentDelay(milliseconds: number): Promise<void> {
+	return new Promise((resolve) => {
+		window.setTimeout(resolve, Math.max(0, milliseconds))
+	})
+}
+
+function resolvePreviewRuntimeEnvironment(document: SceneJsonExportDocument): EnvironmentSettings {
+	const sceneId = document.id?.trim() ?? ''
+	if (sceneId !== previewEnvironmentSessionSceneId) {
+		previewEnvironmentSessionSceneId = sceneId
+		previewEnvironmentSessionOverride = null
+	}
+	const effective = resolveSceneRuntimeEnvironment(document)
+	previewEnvironmentHasLandscape.value = collectActiveProceduralLandscapeNodeIds(document.nodes).length > 0
+	if (!isRuntimeEnvironmentSwitchEnabled(effective)) {
+		previewEnvironmentSessionOverride = null
+		return effective
+	}
+	if (!previewEnvironmentSessionOverride) {
+		return effective
+	}
+	return {
+		...effective,
+		slowroads: {
+			...effective.slowroads,
+			...previewEnvironmentSessionOverride,
+		},
+	}
+}
+
+function syncPreviewEnvironmentControlState(settings: EnvironmentSettings): void {
+	previewEnvironmentControlMode.value = settings.slowroads.controlMode
+	previewEnvironmentState.season = settings.slowroads.season
+	previewEnvironmentState.timeOfDay = settings.slowroads.timeOfDay
+	previewEnvironmentState.weather = settings.slowroads.weather
+}
+
+function syncPreviewLandscapeFrameState(): void {
+	const activeCamera = camera
+	previewComponentManager.setFrameState({
+		cameraWorldPosition: activeCamera
+			? {
+				x: activeCamera.position.x,
+				y: activeCamera.position.y,
+				z: activeCamera.position.z,
+			}
+			: null,
+		cameraWorldDirection: activeCamera
+			? activeCamera.getWorldDirection(landscapeFrameCameraDirection)
+			: null,
+		environment: currentSlowroadsEnvironmentState,
+	})
+}
+
+function togglePreviewEnvironmentMenu(menu: Exclude<PreviewEnvironmentMenu, null>): void {
+	if (previewEnvironmentSwitchBusy.value) {
+		return
+	}
+	previewEnvironmentMenu.value = previewEnvironmentMenu.value === menu ? null : menu
+}
+
+function closePreviewEnvironmentMenu(): void {
+	previewEnvironmentMenu.value = null
+}
+
+function handlePreviewEnvironmentSelection(
+	kind: PreviewEnvironmentMenu,
+	value: PreviewEnvironmentSeason | PreviewEnvironmentTimeOfDay,
+): void {
+	if (!kind || previewEnvironmentSwitchBusy.value) {
+		return
+	}
+	previewEnvironmentMenu.value = null
+	const nextSeason = kind === 'season'
+		? value as PreviewEnvironmentSeason
+		: previewEnvironmentState.season
+	const nextTimeOfDay = kind === 'time'
+		? value as PreviewEnvironmentTimeOfDay
+		: previewEnvironmentState.timeOfDay
+	if (
+		nextSeason === previewEnvironmentState.season
+		&& nextTimeOfDay === previewEnvironmentState.timeOfDay
+	) {
+		return
+	}
+	void runPreviewEnvironmentSwitch(nextSeason, nextTimeOfDay)
+}
+
+async function runPreviewEnvironmentSwitch(
+	nextSeason: PreviewEnvironmentSeason,
+	nextTimeOfDay: PreviewEnvironmentTimeOfDay,
+): Promise<void> {
+	const targetDocument = currentDocument
+	const currentSettings = currentScenePreviewEnvironmentSettings
+	if (!targetDocument || !currentSettings || previewEnvironmentSwitchBusy.value) {
+		return
+	}
+	const seasonChanged = nextSeason !== previewEnvironmentState.season
+	const startedAt = performance.now()
+	const token = ++previewEnvironmentSwitchToken
+	previewEnvironmentSwitchTarget.season = nextSeason
+	previewEnvironmentSwitchTarget.timeOfDay = nextTimeOfDay
+	previewEnvironmentSwitchPhase.value = 'covering'
+	previewEnvironmentSwitchProgress.value = 0
+	previewEnvironmentSwitchLoaded.value = 0
+	previewEnvironmentSwitchTotal.value = 0
+	previewEnvironmentSwitchNotice.value = ''
+	previewEnvironmentSwitchMessage.value = seasonChanged
+		? `正在切换到${SEASON_LABELS[nextSeason]} · ${TIME_OF_DAY_LABELS[nextTimeOfDay]}`
+		: `正在调整到${TIME_OF_DAY_LABELS[nextTimeOfDay]}`
+	previewEnvironmentMenu.value = null
+
+	try {
+		await waitPreviewEnvironmentDelay(180)
+		if (token !== previewEnvironmentSwitchToken) {
+			return
+		}
+		previewEnvironmentSwitchPhase.value = 'loading'
+		previewEnvironmentSwitchMessage.value = seasonChanged
+			? `正在下载${SEASON_LABELS[nextSeason]}资源`
+			: '正在调整光照与天空'
+
+		if (seasonChanged) {
+			const preload = await withProceduralLandscapeSeasonPreloadTimeout(
+				preloadProceduralLandscapeSeasonAssets(
+					targetDocument.nodes,
+					nextSeason,
+					{
+						onProgress: ({ loaded, total }) => {
+							if (token !== previewEnvironmentSwitchToken) {
+								return
+							}
+							previewEnvironmentSwitchLoaded.value = loaded
+							previewEnvironmentSwitchTotal.value = total
+							previewEnvironmentSwitchProgress.value = total > 0
+								? (loaded / total) * 100
+								: 100
+						},
+					},
+				),
+				PROCEDURAL_LANDSCAPE_SEASON_PRELOAD_TIMEOUT_MS,
+			)
+			if (token !== previewEnvironmentSwitchToken) {
+				return
+			}
+			if (preload.coreMissingIds.length) {
+				throw new Error(`核心季节贴图缺失：${preload.coreMissingIds.slice(0, 3).join(', ')}`)
+			}
+			previewEnvironmentSwitchLoaded.value = preload.refs.length - preload.missingIds.length
+			previewEnvironmentSwitchTotal.value = preload.refs.length
+			previewEnvironmentSwitchProgress.value = 100
+		} else {
+			previewEnvironmentSwitchProgress.value = 100
+		}
+
+		const minimumDuration = seasonChanged ? 700 : 450
+		const elapsed = performance.now() - startedAt
+		if (elapsed < minimumDuration) {
+			await waitPreviewEnvironmentDelay(minimumDuration - elapsed)
+		}
+		if (token !== previewEnvironmentSwitchToken) {
+			return
+		}
+
+		const nextSettings: EnvironmentSettings = {
+			...currentSettings,
+			slowroads: {
+				...currentSettings.slowroads,
+				season: nextSeason,
+				timeOfDay: nextTimeOfDay,
+			},
+		}
+		previewEnvironmentSessionOverride = {
+			season: nextSeason,
+			timeOfDay: nextTimeOfDay,
+		}
+		applyEnvironmentSettingsToScene(nextSettings)
+		previewEnvironmentState.season = nextSeason
+		previewEnvironmentState.timeOfDay = nextTimeOfDay
+		previewEnvironmentSwitchMessage.value = seasonChanged
+			? '正在应用季节材质'
+			: '正在应用环境光照'
+
+		if (seasonChanged) {
+			const landscapeNodeIds = collectActiveProceduralLandscapeNodeIds(targetDocument.nodes)
+			syncPreviewLandscapeFrameState()
+			const pump = isPlaying.value
+				? null
+				: window.setInterval(() => {
+					if (token !== previewEnvironmentSwitchToken) {
+						return
+					}
+					syncPreviewLandscapeFrameState()
+					previewComponentManager.update(1 / 60, {
+						types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
+					})
+				}, 16)
+			let application: Awaited<ReturnType<typeof waitForProceduralLandscapeSeasonApplied>>
+			try {
+				application = await waitForProceduralLandscapeSeasonApplied({
+					nodeIds: landscapeNodeIds,
+					season: nextSeason,
+					getStats: getProceduralLandscapeStats,
+					shouldAbort: () => token !== previewEnvironmentSwitchToken,
+				})
+			} finally {
+				if (pump !== null) {
+					window.clearInterval(pump)
+				}
+			}
+			if (token !== previewEnvironmentSwitchToken) {
+				return
+			}
+			if (application.status === 'timeout') {
+				previewEnvironmentSwitchNotice.value = '季节材质应用超时，已继续显示当前场景。'
+				appendWarningMessage(previewEnvironmentSwitchNotice.value)
+			}
+		}
+
+		await nextTick()
+		await yieldToMainThread()
+		if (token !== previewEnvironmentSwitchToken) {
+			return
+		}
+		previewEnvironmentSwitchPhase.value = 'revealing'
+		previewEnvironmentSwitchMessage.value = '切换完成'
+		await waitPreviewEnvironmentDelay(420)
+		if (token === previewEnvironmentSwitchToken) {
+			previewEnvironmentSwitchPhase.value = 'idle'
+			previewEnvironmentSwitchProgress.value = 0
+		}
+	} catch (error) {
+		if (token !== previewEnvironmentSwitchToken) {
+			return
+		}
+		const detail = error instanceof Error ? error.message : String(error)
+		previewEnvironmentSwitchNotice.value = `切换失败：${detail}`
+		previewEnvironmentSwitchMessage.value = '已保留当前环境'
+		previewEnvironmentSwitchPhase.value = 'revealing'
+		setTransientStatusMessage(`季节/时间切换失败：${detail}`)
+		appendWarningMessage(`季节/时间切换失败：${detail}`)
+		await waitPreviewEnvironmentDelay(520)
+		if (token === previewEnvironmentSwitchToken) {
+			previewEnvironmentSwitchPhase.value = 'idle'
+			previewEnvironmentSwitchProgress.value = 0
+		}
+	}
+}
 const sceneSwitchOverlayVisible = ref(false)
 const sceneSwitchFlashActive = ref(false)
 
@@ -1734,7 +2087,6 @@ const activeBehaviorSounds = new Map<string, BehaviorSoundInstance>()
 const behaviorSoundDistanceScratch = new THREE.Vector3()
 const nodeAnimationRuntime = new SceneAnimationRuntimeManager()
 const characterControllerAnimationRuntime = new CharacterControllerAnimationRuntimeManager()
-const lastCharacterPhysicsDiagnosticSignatureByNodeId = new Map<string, string>()
 const characterAutoTourRuntime = new CharacterAutoTourRuntimeManager()
 const behaviorProximityCandidates = new Map<string, BehaviorProximityCandidate>()
 const behaviorProximityState = new Map<string, BehaviorProximityState>()
@@ -8698,7 +9050,7 @@ function restoreControlledSubjectPoseAfterWatch(
 	scheduleWatchRestorePoseVerify(controlledNodeId)
 }
 
-let watchRestoreVerifyTimer: ReturnType<typeof setTimeout> | null = null
+let watchRestoreVerifyTimer: number | null = null
 
 /** Re-check the applied pose shortly after restore to catch physics pull-back. */
 function scheduleWatchRestorePoseVerify(controlledNodeId: string): void {
@@ -11910,6 +12262,7 @@ function applyPhysicsEnvironmentSettings(settings: EnvironmentSettings) {
 function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 	const snapshot = cloneEnvironmentSettings(settings)
 	currentScenePreviewEnvironmentSettings = snapshot
+	syncPreviewEnvironmentControlState(snapshot)
 	if (!scene) {
 		pendingEnvironmentSettings = snapshot
 		return
@@ -15228,7 +15581,23 @@ async function updateScene(document: SceneJsonExportDocument) {
 	if (renderer) {
 		renderer.toneMappingExposure = DEFAULT_TONE_MAPPING_EXPOSURE
 	}
-	const environmentSettings = resolveDocumentEnvironment(document)
+	previewEnvironmentSwitchToken += 1
+	previewEnvironmentSwitchPhase.value = 'idle'
+	previewEnvironmentSwitchProgress.value = 0
+	previewEnvironmentSwitchNotice.value = ''
+	previewEnvironmentMenu.value = null
+	const environmentSettings = resolvePreviewRuntimeEnvironment(document)
+	syncPreviewEnvironmentControlState(environmentSettings)
+	currentScenePreviewEnvironmentSettings = cloneEnvironmentSettings(environmentSettings)
+	currentSlowroadsEnvironmentState = {
+		season: environmentSettings.slowroads.season,
+		timeOfDay: environmentSettings.slowroads.timeOfDay,
+		weather: environmentSettings.slowroads.weather,
+	}
+	previewComponentManager.setFrameState({
+		cameraWorldPosition: null,
+		environment: currentSlowroadsEnvironmentState,
+	})
 	activeScenePreviewDeviceProfileId = resolveScenePreviewDeviceProfileId(document)
 	lazyLoadMeshesEnabled = document.lazyLoadMeshes !== false
 	deferredInstancingNodeIds.clear()
@@ -15634,6 +16003,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+	previewEnvironmentSwitchToken += 1
+	previewEnvironmentSwitchPhase.value = 'idle'
 	cancelMoveToTransition()
 	clearSceneInitState()
 	if (screenshotStatusTimer) {
@@ -15757,6 +16128,110 @@ watch(
 			ref="containerRef"
 			class="scene-preview__canvas"
 		></div>
+		<div
+			v-if="previewEnvironmentSwitchUiVisible && previewEnvironmentMenu"
+			class="scene-preview__environment-dismiss"
+			@pointerdown="closePreviewEnvironmentMenu"
+		></div>
+		<div
+			v-if="previewEnvironmentSwitchUiVisible"
+			class="scene-preview__environment-controls"
+			@pointerdown.stop
+		>
+			<div class="scene-preview__environment-trigger-row">
+				<button
+					type="button"
+					class="scene-preview__environment-trigger"
+					:class="{ 'is-open': previewEnvironmentMenu === 'season' }"
+					:aria-label="`当前季节：${SEASON_LABELS[previewEnvironmentState.season]}，点击切换`"
+					:aria-expanded="previewEnvironmentMenu === 'season'"
+					:disabled="previewEnvironmentSwitchBusy"
+					@click="togglePreviewEnvironmentMenu('season')"
+				>
+					<img :src="previewSeasonIconMap[previewEnvironmentState.season]" alt="" aria-hidden="true" />
+					<span>{{ SEASON_LABELS[previewEnvironmentState.season] }}</span>
+				</button>
+				<button
+					type="button"
+					class="scene-preview__environment-trigger"
+					:class="{ 'is-open': previewEnvironmentMenu === 'time' }"
+					:aria-label="`当前时间：${TIME_OF_DAY_LABELS[previewEnvironmentState.timeOfDay]}，点击切换`"
+					:aria-expanded="previewEnvironmentMenu === 'time'"
+					:disabled="previewEnvironmentSwitchBusy"
+					@click="togglePreviewEnvironmentMenu('time')"
+				>
+					<img :src="previewTimeIconMap[previewEnvironmentState.timeOfDay]" alt="" aria-hidden="true" />
+					<span>{{ TIME_OF_DAY_LABELS[previewEnvironmentState.timeOfDay] }}</span>
+				</button>
+			</div>
+			<div
+				v-if="previewEnvironmentMenu"
+				class="scene-preview__environment-popover"
+			>
+				<div class="scene-preview__environment-popover-title">
+					{{ previewEnvironmentMenu === 'season' ? '切换季节' : '切换时间' }}
+				</div>
+				<div class="scene-preview__environment-option-grid">
+					<button
+						v-for="option in (previewEnvironmentMenu === 'season' ? previewSeasonOptions : previewTimeOptions)"
+						:key="option.value"
+						type="button"
+						class="scene-preview__environment-option"
+						:class="{
+							'is-active': previewEnvironmentMenu === 'season'
+								? previewEnvironmentState.season === option.value
+								: previewEnvironmentState.timeOfDay === option.value,
+						}"
+						:aria-pressed="previewEnvironmentMenu === 'season'
+							? previewEnvironmentState.season === option.value
+							: previewEnvironmentState.timeOfDay === option.value"
+						:disabled="previewEnvironmentSwitchBusy"
+						@click="handlePreviewEnvironmentSelection(previewEnvironmentMenu, option.value)"
+					>
+						<img :src="option.icon" alt="" aria-hidden="true" />
+						<span>{{ option.label }}</span>
+					</button>
+				</div>
+			</div>
+		</div>
+		<div
+			v-if="previewEnvironmentSwitchBusy"
+			class="scene-preview__environment-transition"
+			:class="[
+				`is-${previewEnvironmentSwitchPhase}`,
+				`season-${previewEnvironmentSwitchTarget.season}`,
+			]"
+			role="status"
+			aria-live="polite"
+		>
+			<div class="scene-preview__environment-transition-glow" aria-hidden="true"></div>
+			<div class="scene-preview__environment-transition-ring scene-preview__environment-transition-ring--outer" aria-hidden="true"></div>
+			<div class="scene-preview__environment-transition-ring scene-preview__environment-transition-ring--inner" aria-hidden="true"></div>
+			<div class="scene-preview__environment-transition-scan" aria-hidden="true"></div>
+			<div class="scene-preview__environment-transition-card">
+				<div class="scene-preview__environment-transition-icons">
+					<img :src="previewSeasonIconMap[previewEnvironmentSwitchTarget.season]" alt="" aria-hidden="true" />
+					<img :src="previewTimeIconMap[previewEnvironmentSwitchTarget.timeOfDay]" alt="" aria-hidden="true" />
+				</div>
+				<div class="scene-preview__environment-transition-title">{{ previewEnvironmentSwitchMessage }}</div>
+				<div class="scene-preview__environment-transition-progress">
+					<div
+						class="scene-preview__environment-transition-progress-fill"
+						:style="{ '--environment-progress': `${previewEnvironmentSwitchPercent}%` }"
+					></div>
+				</div>
+				<div class="scene-preview__environment-transition-meta">
+					<span>{{ previewEnvironmentSwitchPercent }}%</span>
+					<span v-if="previewEnvironmentSwitchTotal > 0">
+						{{ previewEnvironmentSwitchLoaded }} / {{ previewEnvironmentSwitchTotal }} 张贴图
+					</span>
+					<span v-else>光照 · 天空 · 雾</span>
+				</div>
+				<div v-if="previewEnvironmentSwitchNotice" class="scene-preview__environment-transition-notice">
+					{{ previewEnvironmentSwitchNotice }}
+				</div>
+			</div>
+		</div>
 		<div
 			v-if="controlNodeSwitchBusy"
 			class="scene-preview__control-switch-overlay"
@@ -16705,6 +17180,352 @@ watch(
 @keyframes control-switch-reveal { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(2.2); } }
 @keyframes control-switch-glitch { 0%, 100% { filter: none; transform: translate(0); } 50% { filter: hue-rotate(90deg); transform: translate(4px, -2px); } }
 @media (prefers-reduced-motion: reduce) { .scene-preview__control-switch-overlay *, .scene-preview__control-switch-overlay::before { animation-duration: .2s !important; } }
+
+.scene-preview__environment-dismiss {
+	position: absolute;
+	inset: 0;
+	z-index: 1205;
+	pointer-events: auto;
+}
+
+.scene-preview__environment-controls {
+	position: absolute;
+	top: 16px;
+	left: 16px;
+	z-index: 1210;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	pointer-events: auto;
+	color: #f4f9ff;
+}
+
+.scene-preview__environment-trigger-row {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 5px;
+	width: fit-content;
+	border: 1px solid rgba(153, 193, 255, 0.22);
+	border-radius: 999px;
+	background:
+		radial-gradient(circle at 12% 16%, rgba(111, 214, 255, 0.14), transparent 38%),
+		linear-gradient(180deg, rgba(11, 23, 38, 0.78), rgba(7, 16, 29, 0.68));
+	box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+	backdrop-filter: blur(16px) saturate(1.08);
+}
+
+.scene-preview__environment-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	min-height: 34px;
+	padding: 0 11px 0 8px;
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: transparent;
+	color: rgba(229, 241, 255, 0.82);
+	font-size: 12px;
+	font-weight: 650;
+	letter-spacing: 0.02em;
+	cursor: pointer;
+	transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.scene-preview__environment-trigger img {
+	width: 22px;
+	height: 22px;
+	object-fit: contain;
+	filter: drop-shadow(0 0 5px rgba(120, 208, 255, 0.25));
+}
+
+.scene-preview__environment-trigger:hover,
+.scene-preview__environment-trigger.is-open {
+	border-color: rgba(119, 202, 255, 0.28);
+	background: rgba(92, 171, 235, 0.13);
+	color: #ffffff;
+}
+
+.scene-preview__environment-trigger:disabled {
+	opacity: 0.55;
+	cursor: wait;
+}
+
+.scene-preview__environment-popover {
+	width: 228px;
+	padding: 12px;
+	border: 1px solid rgba(143, 194, 237, 0.24);
+	border-radius: 16px;
+	background:
+		radial-gradient(circle at 18% 0%, rgba(104, 193, 255, 0.14), transparent 38%),
+		linear-gradient(180deg, rgba(12, 24, 39, 0.96), rgba(7, 16, 28, 0.92));
+	box-shadow: 0 22px 52px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+	backdrop-filter: blur(20px) saturate(1.1);
+	animation: environment-popover-in 160ms ease-out;
+}
+
+.scene-preview__environment-popover-title {
+	margin-bottom: 9px;
+	color: rgba(213, 234, 251, 0.68);
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+}
+
+.scene-preview__environment-option-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 7px;
+}
+
+.scene-preview__environment-option {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 5px;
+	min-height: 70px;
+	padding: 8px 6px;
+	border: 1px solid rgba(130, 166, 199, 0.18);
+	border-radius: 12px;
+	background: rgba(255, 255, 255, 0.035);
+	color: rgba(226, 238, 249, 0.82);
+	font-size: 12px;
+	cursor: pointer;
+	transition: transform 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+
+.scene-preview__environment-option img {
+	width: 30px;
+	height: 30px;
+	object-fit: contain;
+	opacity: 0.88;
+}
+
+.scene-preview__environment-option:hover:not(:disabled) {
+	transform: translateY(-1px);
+	border-color: rgba(114, 200, 255, 0.46);
+	background: rgba(87, 168, 231, 0.1);
+}
+
+.scene-preview__environment-option.is-active {
+	border-color: rgba(103, 202, 255, 0.72);
+	background:
+		radial-gradient(circle at 50% 20%, rgba(103, 202, 255, 0.18), transparent 58%),
+		rgba(79, 157, 219, 0.14);
+	color: #ffffff;
+	box-shadow: 0 0 0 1px rgba(126, 218, 255, 0.12), 0 0 20px rgba(74, 173, 245, 0.14);
+}
+
+.scene-preview__environment-option.is-active img {
+	opacity: 1;
+	filter: drop-shadow(0 0 7px rgba(125, 220, 255, 0.52));
+}
+
+.scene-preview__environment-option:disabled {
+	opacity: 0.5;
+	cursor: wait;
+}
+
+@keyframes environment-popover-in {
+	from { opacity: 0; transform: translateY(-5px) scale(0.98); }
+	to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.scene-preview__environment-transition {
+	--environment-accent: #9fe58f;
+	--environment-accent-rgb: 159, 229, 143;
+	position: absolute;
+	inset: 0;
+	z-index: 3000;
+	display: grid;
+	place-items: center;
+	overflow: hidden;
+	pointer-events: auto;
+	background:
+		radial-gradient(circle at center, rgba(var(--environment-accent-rgb), 0.12), transparent 34%),
+		rgba(3, 8, 14, 0.78);
+	backdrop-filter: blur(7px) saturate(0.9);
+	animation: environment-transition-cover 180ms ease-out both;
+}
+
+.scene-preview__environment-transition.season-summer {
+	--environment-accent: #8ff0ff;
+	--environment-accent-rgb: 143, 240, 255;
+}
+
+.scene-preview__environment-transition.season-autumn {
+	--environment-accent: #ffc36f;
+	--environment-accent-rgb: 255, 195, 111;
+}
+
+.scene-preview__environment-transition.season-winter {
+	--environment-accent: #a9d4ff;
+	--environment-accent-rgb: 169, 212, 255;
+}
+
+.scene-preview__environment-transition.is-revealing {
+	animation: environment-transition-reveal 420ms ease-out both;
+}
+
+.scene-preview__environment-transition-glow {
+	position: absolute;
+	inset: -30%;
+	background:
+		conic-gradient(
+			from 0deg,
+			transparent 0deg,
+			rgba(var(--environment-accent-rgb), 0.16) 54deg,
+			transparent 112deg,
+			rgba(var(--environment-accent-rgb), 0.1) 186deg,
+			transparent 268deg,
+			rgba(var(--environment-accent-rgb), 0.14) 332deg,
+			transparent 360deg
+		);
+	animation: environment-transition-glow 6s linear infinite;
+	filter: blur(28px);
+	opacity: 0.8;
+}
+
+.scene-preview__environment-transition-ring {
+	position: absolute;
+	border-radius: 50%;
+	border: 1px solid rgba(var(--environment-accent-rgb), 0.72);
+	box-shadow:
+		0 0 32px rgba(var(--environment-accent-rgb), 0.34),
+		inset 0 0 34px rgba(var(--environment-accent-rgb), 0.12);
+}
+
+.scene-preview__environment-transition-ring--outer {
+	width: min(58vw, 520px);
+	aspect-ratio: 1;
+	border-style: dashed;
+	animation: environment-transition-ring 4.2s linear infinite;
+}
+
+.scene-preview__environment-transition-ring--inner {
+	width: min(32vw, 280px);
+	aspect-ratio: 1;
+	animation: environment-transition-ring 2.8s linear infinite reverse;
+}
+
+.scene-preview__environment-transition-scan {
+	position: absolute;
+	inset: -12% 0;
+	background: linear-gradient(180deg, transparent, rgba(var(--environment-accent-rgb), 0.26), transparent);
+	animation: environment-transition-scan 1.35s linear infinite;
+	opacity: 0.7;
+}
+
+.scene-preview__environment-transition-card {
+	position: relative;
+	z-index: 2;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	width: min(360px, calc(100% - 42px));
+	padding: 22px 24px 19px;
+	border: 1px solid rgba(var(--environment-accent-rgb), 0.32);
+	border-radius: 22px;
+	background: linear-gradient(180deg, rgba(9, 19, 31, 0.9), rgba(5, 12, 22, 0.82));
+	box-shadow: 0 28px 70px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+	color: #f6fbff;
+	text-align: center;
+}
+
+.scene-preview__environment-transition-icons {
+	display: inline-flex;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 12px;
+}
+
+.scene-preview__environment-transition-icons img {
+	width: 42px;
+	height: 42px;
+	object-fit: contain;
+	filter: drop-shadow(0 0 12px rgba(var(--environment-accent-rgb), 0.36));
+}
+
+.scene-preview__environment-transition-title {
+	font-size: 16px;
+	font-weight: 750;
+	letter-spacing: 0.035em;
+}
+
+.scene-preview__environment-transition-progress {
+	width: 100%;
+	height: 4px;
+	margin-top: 16px;
+	overflow: hidden;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.09);
+}
+
+.scene-preview__environment-transition-progress-fill {
+	width: var(--environment-progress, 0%);
+	height: 100%;
+	border-radius: inherit;
+	background: linear-gradient(90deg, rgba(var(--environment-accent-rgb), 0.54), var(--environment-accent));
+	box-shadow: 0 0 14px rgba(var(--environment-accent-rgb), 0.46);
+	transition: width 160ms ease-out;
+}
+
+.scene-preview__environment-transition-meta {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	width: 100%;
+	margin-top: 8px;
+	color: rgba(218, 234, 247, 0.62);
+	font-size: 11px;
+	letter-spacing: 0.03em;
+}
+
+.scene-preview__environment-transition-notice {
+	margin-top: 12px;
+	padding: 7px 10px;
+	border: 1px solid rgba(255, 184, 108, 0.24);
+	border-radius: 9px;
+	background: rgba(255, 168, 72, 0.08);
+	color: #ffd7a3;
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+@keyframes environment-transition-cover {
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+@keyframes environment-transition-reveal {
+	from { opacity: 1; }
+	to { opacity: 0; }
+}
+
+@keyframes environment-transition-glow {
+	from { transform: rotate(0deg); }
+	to { transform: rotate(360deg); }
+}
+
+@keyframes environment-transition-ring {
+	from { transform: rotate(0deg) scale(0.98); opacity: 0.5; }
+	50% { opacity: 0.95; }
+	to { transform: rotate(360deg) scale(1); opacity: 0.5; }
+}
+
+@keyframes environment-transition-scan {
+	from { transform: translateY(-52%); }
+	to { transform: translateY(52%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.scene-preview__environment-transition *,
+	.scene-preview__environment-transition::before {
+		animation-duration: 0.2s !important;
+	}
+}
 
 .scene-preview__punch-badge-layer {
 	position: absolute;

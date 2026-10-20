@@ -13,6 +13,20 @@ import type {
   EnvironmentSettings,
 } from '@/types/environment'
 import { useSceneStore } from '@/stores/sceneStore'
+import {
+  resolveAutoSlowroadsEnvironment,
+  type SlowroadsEnvironmentControlMode,
+} from '@schema/core'
+import seasonSpringIcon from '@/assets/environment-icons/season-spring.png'
+import seasonSummerIcon from '@/assets/environment-icons/season-summer.png'
+import seasonAutumnIcon from '@/assets/environment-icons/season-autumn.png'
+import seasonWinterIcon from '@/assets/environment-icons/season-winter.png'
+import timeMorningIcon from '@/assets/environment-icons/time-morning.png'
+import timeDayIcon from '@/assets/environment-icons/time-day.png'
+import timeEveningIcon from '@/assets/environment-icons/time-evening.png'
+import timeNightIcon from '@/assets/environment-icons/time-night.png'
+import weatherClearIcon from '@/assets/environment-icons/weather-clear.png'
+import weatherOvercastIcon from '@/assets/environment-icons/weather-overcast.png'
 
 const sceneStore = useSceneStore()
 const { environmentSettings: storeEnvironmentSettings, shadowsEnabled } = storeToRefs(sceneStore)
@@ -35,22 +49,54 @@ const isPhysicsEnabled = computed(() => environmentSettings.value.physicsEnabled
 const physicsEngine = computed<EnvironmentPhysicsEngine>(() => environmentSettings.value.physicsEngine ?? 'cannon')
 
 // ---- Slow Roads 环境（季节 × 时间 × 天气）----
+const SLOWROADS_CONTROL_MODES: Array<{
+  title: string
+  value: SlowroadsEnvironmentControlMode
+  hint: string
+}> = [
+  {
+    title: '运行时切换',
+    value: 'manual',
+    hint: 'preview / SceneryViewer 显示季节与时间切换按钮；选择只影响本次会话。',
+  },
+  {
+    title: '跟随当前日期时间',
+    value: 'auto',
+    hint: '进入场景时按设备本地日期与时间计算一次，不显示切换按钮。',
+  },
+  {
+    title: '仅默认配置',
+    value: 'default',
+    hint: '始终使用下方默认季节与时间，不显示切换按钮。',
+  },
+]
 const SLOWROADS_SEASONS = [
-  { title: '春', value: 'spring' as const },
-  { title: '夏', value: 'summer' as const },
-  { title: '秋', value: 'autumn' as const },
-  { title: '冬', value: 'winter' as const },
+  { title: '春', value: 'spring' as const, icon: seasonSpringIcon },
+  { title: '夏', value: 'summer' as const, icon: seasonSummerIcon },
+  { title: '秋', value: 'autumn' as const, icon: seasonAutumnIcon },
+  { title: '冬', value: 'winter' as const, icon: seasonWinterIcon },
 ]
 const SLOWROADS_TIMES = [
-  { title: '早晨', value: 'morning' as const },
-  { title: '白天', value: 'day' as const },
-  { title: '傍晚', value: 'evening' as const },
-  { title: '夜晚', value: 'night' as const },
+  { title: '早晨', value: 'morning' as const, icon: timeMorningIcon },
+  { title: '白天', value: 'day' as const, icon: timeDayIcon },
+  { title: '傍晚', value: 'evening' as const, icon: timeEveningIcon },
+  { title: '夜晚', value: 'night' as const, icon: timeNightIcon },
 ]
 const SLOWROADS_WEATHERS = [
-  { title: '晴', value: 'clear' as const },
-  { title: '阴', value: 'overcast' as const },
+  { title: '晴', value: 'clear' as const, icon: weatherClearIcon },
+  { title: '阴', value: 'overcast' as const, icon: weatherOvercastIcon },
 ]
+
+const slowroadsControlMode = computed(() => environmentSettings.value.slowroads.controlMode)
+const slowroadsControlModeHint = computed(() => (
+  SLOWROADS_CONTROL_MODES.find((item) => item.value === slowroadsControlMode.value)?.hint ?? ''
+))
+const autoEnvironmentPreview = computed(() => resolveAutoSlowroadsEnvironment(new Date()))
+const autoEnvironmentLabel = computed(() => {
+  const season = SLOWROADS_SEASONS.find((item) => item.value === autoEnvironmentPreview.value.season)?.title ?? ''
+  const time = SLOWROADS_TIMES.find((item) => item.value === autoEnvironmentPreview.value.timeOfDay)?.title ?? ''
+  return `${season} · ${time}`
+})
 
 function patchSlowroadsSettings(patch: Partial<EnvironmentSettings['slowroads']>) {
   sceneStore.patchEnvironmentSettings({
@@ -172,38 +218,68 @@ function formatFriction(): string {
       <div class="environment-panel">
         <section class="environment-section">
           <div class="section-title">Slow Roads 环境</div>
-          <div class="toggle-label">季节</div>
+          <div class="toggle-label">运行模式</div>
           <div class="pl-choice-row">
+            <button
+              v-for="item in SLOWROADS_CONTROL_MODES"
+              :key="item.value"
+              type="button"
+              class="pl-choice"
+              :class="{ 'pl-choice--active': slowroadsControlMode === item.value }"
+              @click="patchSlowroadsSettings({ controlMode: item.value })"
+            >{{ item.title }}</button>
+          </div>
+          <div class="section-hint">{{ slowroadsControlModeHint }}</div>
+          <div v-if="slowroadsControlMode === 'auto'" class="section-hint">
+            当前将进入：{{ autoEnvironmentLabel }}。设备时间不可用时回退到下方默认值。
+          </div>
+          <div class="toggle-label">季节</div>
+          <div class="icon-choice-row">
             <button
               v-for="item in SLOWROADS_SEASONS"
               :key="item.value"
               type="button"
-              class="pl-choice"
-              :class="{ 'pl-choice--active': environmentSettings.slowroads.season === item.value }"
+              class="icon-choice"
+              :class="{ 'icon-choice--active': environmentSettings.slowroads.season === item.value }"
+              :aria-label="`季节：${item.title}`"
+              :aria-pressed="environmentSettings.slowroads.season === item.value"
               @click="patchSlowroadsSettings({ season: item.value })"
-            >{{ item.title }}</button>
+            >
+              <img :src="item.icon" alt="" aria-hidden="true" />
+              <span>{{ item.title }}</span>
+            </button>
           </div>
           <div class="toggle-label">时间</div>
-          <div class="pl-choice-row">
+          <div class="icon-choice-row">
             <button
               v-for="item in SLOWROADS_TIMES"
               :key="item.value"
               type="button"
-              class="pl-choice"
-              :class="{ 'pl-choice--active': environmentSettings.slowroads.timeOfDay === item.value }"
+              class="icon-choice"
+              :class="{ 'icon-choice--active': environmentSettings.slowroads.timeOfDay === item.value }"
+              :aria-label="`时间：${item.title}`"
+              :aria-pressed="environmentSettings.slowroads.timeOfDay === item.value"
               @click="patchSlowroadsSettings({ timeOfDay: item.value })"
-            >{{ item.title }}</button>
+            >
+              <img :src="item.icon" alt="" aria-hidden="true" />
+              <span>{{ item.title }}</span>
+            </button>
           </div>
           <div class="toggle-label">天气</div>
-          <div class="pl-choice-row">
+          <div class="icon-choice-row icon-choice-row--pair">
             <button
               v-for="item in SLOWROADS_WEATHERS"
               :key="item.value"
               type="button"
-              class="pl-choice"
-              :class="{ 'pl-choice--active': environmentSettings.slowroads.weather === item.value }"
+              class="icon-choice"
+              :class="{ 'icon-choice--active': environmentSettings.slowroads.weather === item.value }"
+              :aria-label="`天气：${item.title}`"
+              :aria-pressed="environmentSettings.slowroads.weather === item.value"
               @click="patchSlowroadsSettings({ weather: item.value })"
-            >{{ item.title }}</button>
+            >
+              <img :src="item.icon" alt="" aria-hidden="true" />
+              <span>{{ item.title }}</span>
+            </button>
           </div>
           <div class="toggle-row">
             <span class="toggle-label">云层</span>
@@ -442,6 +518,59 @@ function formatFriction(): string {
   border-color: rgba(88, 160, 232, 0.9);
   background: rgba(88, 160, 232, 0.18);
   color: #ffffff;
+}
+
+.icon-choice-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+
+.icon-choice-row--pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: calc(50% - 3px);
+}
+
+.icon-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 2px 5px;
+  border: 1px solid rgba(126, 148, 168, 0.35);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  color: rgba(214, 226, 236, 0.82);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.icon-choice img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  opacity: 0.86;
+}
+
+.icon-choice:hover:not(:disabled) {
+  border-color: rgba(118, 191, 245, 0.65);
+  background: rgba(118, 191, 245, 0.08);
+}
+
+.icon-choice--active {
+  border-color: rgba(100, 190, 255, 0.92);
+  background: rgba(76, 157, 224, 0.2);
+  color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(110, 198, 255, 0.14), 0 0 14px rgba(81, 173, 245, 0.14);
+}
+
+.icon-choice--active img {
+  opacity: 1;
+  filter: drop-shadow(0 0 5px rgba(118, 212, 255, 0.48));
 }
 
 .section-select :deep(.v-field__input) {

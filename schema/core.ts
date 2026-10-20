@@ -60,6 +60,9 @@ export {
   cloneEnvironmentSettings,
   extractEnvironmentSettingsFromNodes,
   resolveDocumentEnvironment,
+  resolveAutoSlowroadsEnvironment,
+  resolveSceneRuntimeEnvironment,
+  isRuntimeEnvironmentSwitchEnabled,
 } from './environmentSettingsUtils'
 export {
   collectCompiledGroundCollisionTileKeys,
@@ -1773,7 +1776,16 @@ export interface SceneResourceSummary {
  * 官方 (0,1,0) 竖直向下，三端 CSM 统一 syncSun((0,1000,0))），天空是唯一背景，
  * 雾始终生效，均不再有独立的环境（Background/Fog/阳光）参数。
  */
+export type SlowroadsEnvironmentControlMode = 'manual' | 'auto' | 'default'
+
 export interface SlowroadsEnvironmentSettings {
+  /**
+   * 运行时季节/时间控制模式：
+   * - manual：preview / SceneryViewer 显示切换 UI，初始值使用下方 season/timeOfDay。
+   * - auto：进入场景时按设备本地日期时间覆盖季节/时间，不显示切换 UI。
+   * - default：始终使用下方 season/timeOfDay，不显示切换 UI。
+   */
+  controlMode: SlowroadsEnvironmentControlMode
   /** 季节（spring/summer/autumn/winter）。 */
   season: 'spring' | 'summer' | 'autumn' | 'winter'
   /** 时间（morning/day/evening/night）。 */

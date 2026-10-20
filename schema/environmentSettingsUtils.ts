@@ -1,4 +1,8 @@
-export type { EnvironmentSettings, EnvironmentNorthDirection } from './core';
+export type {
+  EnvironmentSettings,
+  EnvironmentNorthDirection,
+  SlowroadsEnvironmentSettings,
+} from './core';
 import type {
   EnvironmentNorthDirection,
   EnvironmentSettings,
@@ -6,6 +10,7 @@ import type {
   SceneNode,
   SlowroadsEnvironmentSettings,
 } from './core'
+import type { SeasonId, TimeOfDay } from './slowroads/core/environment'
 
 export const DEFAULT_ENVIRONMENT_PHYSICS_ENABLED = true
 export const DEFAULT_ENVIRONMENT_PHYSICS_ENGINE = 'cannon' as const
@@ -16,6 +21,7 @@ export const DEFAULT_ENVIRONMENT_NORTH_DIRECTION = '+X' as const
 export const DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE = false
 
 export const DEFAULT_SLOWROADS_ENVIRONMENT: import('./core').SlowroadsEnvironmentSettings = {
+  controlMode: 'manual',
   season: 'spring',
   timeOfDay: 'day',
   weather: 'clear',
@@ -71,10 +77,15 @@ function normalizeNorthDirection(value: unknown): EnvironmentNorthDirection {
 
 function normalizeSlowroadsEnvironment(value: unknown): SlowroadsEnvironmentSettings {
   const source = isPlainRecord(value) ? value : {}
+  const controlMode = source.controlMode
   const season = source.season
   const timeOfDay = source.timeOfDay
   const weather = source.weather
   return {
+    controlMode:
+      controlMode === 'manual' || controlMode === 'auto' || controlMode === 'default'
+        ? controlMode
+        : DEFAULT_SLOWROADS_ENVIRONMENT.controlMode,
     season:
       season === 'spring' || season === 'summer' || season === 'autumn' || season === 'winter'
         ? season
@@ -195,4 +206,59 @@ export function resolveDocumentEnvironment(
   }
 
   return cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS)
+}
+
+/**
+ * 设备本地日期 → 季节，时间 → 时段。
+ *
+ * 季节采用气象季节（北半球月序）：3–5 春、6–8 夏、9–11 秋、12–2 冬。
+ * 时段按产品约定：05–08 早晨、09–16 白天、17–19 傍晚、20–04 夜晚。
+ * 该函数只读取本地时间，不依赖经纬度或太阳高度角。
+ */
+export function resolveAutoSlowroadsEnvironment(
+  date: Date = new Date(),
+): Pick<SlowroadsEnvironmentSettings, 'season' | 'timeOfDay'> {
+  const validDate = date instanceof Date && Number.isFinite(date.getTime()) ? date : new Date()
+  const month = validDate.getMonth() + 1
+  const hour = validDate.getHours()
+  const season: SeasonId = month >= 3 && month <= 5
+    ? 'spring'
+    : month >= 6 && month <= 8
+      ? 'summer'
+      : month >= 9 && month <= 11
+        ? 'autumn'
+        : 'winter'
+  const timeOfDay: TimeOfDay = hour >= 5 && hour < 9
+    ? 'morning'
+    : hour >= 9 && hour < 17
+      ? 'day'
+      : hour >= 17 && hour < 20
+        ? 'evening'
+        : 'night'
+  return { season, timeOfDay }
+}
+
+/**
+ * 解析 viewer / preview 实际使用的环境。`auto` 只在进入场景时调用一次，
+ * 返回副本，不修改场景文档；天气等其余字段保持作者配置。
+ */
+export function resolveSceneRuntimeEnvironment(
+  document: SceneJsonExportDocument | null | undefined,
+  now: Date = new Date(),
+): EnvironmentSettings {
+  const settings = resolveDocumentEnvironment(document)
+  if (settings.slowroads.controlMode !== 'auto') {
+    return settings
+  }
+  return {
+    ...settings,
+    slowroads: {
+      ...settings.slowroads,
+      ...resolveAutoSlowroadsEnvironment(now),
+    },
+  }
+}
+
+export function isRuntimeEnvironmentSwitchEnabled(settings: EnvironmentSettings): boolean {
+  return settings.slowroads.controlMode === 'manual'
 }

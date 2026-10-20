@@ -54,6 +54,7 @@ function createDocument(nodes: SceneNode[], season: 'spring' | 'summer' | 'autum
     nodes,
     environment: {
       slowroads: {
+        controlMode: 'manual',
         season,
         timeOfDay: 'day',
         weather: 'clear',
