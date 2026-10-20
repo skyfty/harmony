@@ -2658,12 +2658,19 @@ const behaviorBubbleCameraScratch = new THREE.Vector3();
 const OVERLAY_HORIZONTAL_DISTANCE_Y_EPSILON = 1.5;
 const browserStoredPunchedNodeIds = ref<string[]>([]);
 const previewFrameCameraWorldPosition = { x: 0, y: 0, z: 0 };
+const previewFrameCameraWorldDirection = { x: 0, y: 0, z: 1 };
+const previewFrameCameraWorldDirectionScratch = new THREE.Vector3();
 // Reused frame-state wrapper; ComponentManager copies these values into its own
 // scratch, so the caller does not need a fresh object per frame.
 const previewFrameStateScratch: {
   cameraWorldPosition: typeof previewFrameCameraWorldPosition;
+  cameraWorldDirection: typeof previewFrameCameraWorldDirection;
   environment: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null;
-} = { cameraWorldPosition: previewFrameCameraWorldPosition, environment: null };
+} = {
+  cameraWorldPosition: previewFrameCameraWorldPosition,
+  cameraWorldDirection: previewFrameCameraWorldDirection,
+  environment: null,
+};
 
 const normalizedInitialPunchedNodeIds = computed(() => {
   const next = new Set<string>();
@@ -23085,6 +23092,10 @@ function startRenderLoop(
           previewFrameCameraWorldPosition.x = camera.position.x;
           previewFrameCameraWorldPosition.y = camera.position.y;
           previewFrameCameraWorldPosition.z = camera.position.z;
+          camera.getWorldDirection(previewFrameCameraWorldDirectionScratch);
+          previewFrameCameraWorldDirection.x = previewFrameCameraWorldDirectionScratch.x;
+          previewFrameCameraWorldDirection.y = previewFrameCameraWorldDirectionScratch.y;
+          previewFrameCameraWorldDirection.z = previewFrameCameraWorldDirectionScratch.z;
           previewFrameStateScratch.environment = currentSlowroadsEnvironmentState;
           previewComponentManager.setFrameState(previewFrameStateScratch);
           if (previewComponentManager.size > 0) {

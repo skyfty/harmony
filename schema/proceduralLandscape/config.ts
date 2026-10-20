@@ -366,9 +366,8 @@ export const PROCEDURAL_LANDSCAPE_AUTO_QUALITY: Record<ProceduralLandscapeEnviro
   // 与 slowroads-lab 观感一致：编辑器视口默认全量植被密度。
   editor: 'high',
   preview: 'high',
-  // Match the slowroads-lab full-terrain forest in the viewer: 40m placement
-  // cells and the complete DEM-wide tree pass. Medium remains available as an
-  // explicit low-power choice.
+  // Match the editor's full vegetation layout. Adaptive density calibration still
+  // reduces coverage on slower devices, while explicit quality settings still win.
   viewer: 'high',
 }
 

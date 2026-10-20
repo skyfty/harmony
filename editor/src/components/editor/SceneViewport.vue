@@ -2067,6 +2067,7 @@ const CAMERA_DOUBLE_CLICK_FOCUS_DISTANCE = Math.max(8, defaultCameraStatusDistan
 const cameraStatusDistance = ref(defaultCameraStatusDistance)
 const cameraNorthHeadingDegrees = ref(0)
 const cameraNorthForwardHelper = new THREE.Vector3()
+const proceduralLandscapeCameraDirectionHelper = new THREE.Vector3()
 
 const isDragHovering = ref(false)
 const gridVisible = computed(() => sceneStore.viewportSettings.showGrid)
@@ -15360,6 +15361,7 @@ function animate() {
       const slowroadsSettings = environmentSettings.value.slowroads
       componentManager.setFrameState({
         cameraWorldPosition: camera.position,
+        cameraWorldDirection: camera.getWorldDirection(proceduralLandscapeCameraDirectionHelper),
         environment: {
           season: slowroadsSettings.season,
           timeOfDay: slowroadsSettings.timeOfDay,

@@ -254,6 +254,7 @@ export function planWorldForestCorridor(
     maxDistance?: number
     alongStep?: number
     lateralStep?: number
+    nearBeltBands?: number
   } = {},
 ): TreePlacement[] {
   const roadField = deps.roadField
@@ -264,8 +265,9 @@ export function planWorldForestCorridor(
   const treeLine: TreeLineBounds = slowroadsTreeLineBounds(deps.grid.minY, deps.grid.maxY)
   const maxTrees = Math.max(0, Math.floor(options.maxTrees ?? 30_000))
   const maxDistance = Math.max(params.roadClearance + 8, options.maxDistance ?? 150)
-  const alongStep = Math.max(2, options.alongStep ?? 6)
+  const alongStep = Math.max(2, options.alongStep ?? 4)
   const lateralStep = Math.max(2, options.lateralStep ?? 10)
+  const tierDensity = clamp01(params.densityMultiplier)
   const placements: TreePlacement[] = []
   const cumulative: number[] = [0]
   for (let index = 1; index < nodes.length; index += 1) {
@@ -295,6 +297,7 @@ export function planWorldForestCorridor(
   }
   const alongCount = Math.max(1, Math.ceil(total / alongStep))
   const bandCount = Math.max(1, Math.ceil((maxDistance - params.roadClearance) / lateralStep))
+  const nearBeltBands = Math.max(0, Math.min(bandCount, Math.floor(options.nearBeltBands ?? 2)))
   for (let along = 0; along < alongCount && placements.length < maxTrees; along += 1) {
     const sample = sampleAt(along * alongStep)
     if (!sample) continue
@@ -313,7 +316,11 @@ export function planWorldForestCorridor(
           continue
         }
         const densityValue = deps.density.sampleUnit(x, z)
-        if (hashUnit(seed, along, band * 16 + (side > 0 ? 5 : 6)) >= densityValue * 0.48) {
+        const nearBelt = band < nearBeltBands
+        const densityGate = nearBelt
+          ? Math.max(0.7, densityValue * 0.95)
+          : densityValue * 0.48
+        if (hashUnit(seed, along, band * 16 + (side > 0 ? 5 : 6)) >= densityGate * tierDensity) {
           continue
         }
         const y = deps.heightAt(x, z)

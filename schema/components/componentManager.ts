@@ -136,8 +136,9 @@ class ComponentContextImpl<TProps> implements ComponentRuntimeContext<TProps> {
 export class ComponentManager {
   private readonly definitions = new Map<NodeComponentType, AnyComponentDefinition>()
   private readonly nodeBundles = new Map<string, NodeComponentBundle>()
-  private readonly frameState: ComponentFrameState = { cameraWorldPosition: null }
+  private readonly frameState: ComponentFrameState = { cameraWorldPosition: null, cameraWorldDirection: null }
   private readonly frameStateCameraWorldPosition = { x: 0, y: 0, z: 0 }
+  private readonly frameStateCameraWorldDirection = { x: 0, y: 0, z: 1 }
   private readonly frameStateEnvironment: NonNullable<ComponentFrameState['environment']> = {
     season: 'spring',
     timeOfDay: 'day',
@@ -182,6 +183,7 @@ export class ComponentManager {
     })
     this.nodeBundles.clear()
     this.frameState.cameraWorldPosition = null
+    this.frameState.cameraWorldDirection = null
     this.frameState.environment = null
   }
 
@@ -212,6 +214,15 @@ export class ComponentManager {
     this.frameStateCameraWorldPosition.y = nextCameraWorldPosition.y
     this.frameStateCameraWorldPosition.z = nextCameraWorldPosition.z
     this.frameState.cameraWorldPosition = this.frameStateCameraWorldPosition
+    const nextCameraWorldDirection = frameState?.cameraWorldDirection ?? null
+    if (!nextCameraWorldDirection) {
+      this.frameState.cameraWorldDirection = null
+      return
+    }
+    this.frameStateCameraWorldDirection.x = nextCameraWorldDirection.x
+    this.frameStateCameraWorldDirection.y = nextCameraWorldDirection.y
+    this.frameStateCameraWorldDirection.z = nextCameraWorldDirection.z
+    this.frameState.cameraWorldDirection = this.frameStateCameraWorldDirection
   }
 
   syncScene(nodes: SceneNode[]): void {

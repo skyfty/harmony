@@ -112,6 +112,11 @@ export function getGrassEntries(season: SeasonId): SpriteCellRegion[] {
   return fromGeneratedEntries(GENERATED_GRASS_SPRITE_REGIONS[season].entries)
 }
 
+/** 常规草层只使用 0..2 号草格；3 号是棕色草球，不属于道路草灌样式。 */
+export function grassVariantEntries(season: SeasonId): SpriteCellRegion[] {
+  return getGrassEntries(season).filter((entry) => entry.cell <= 2)
+}
+
 /** 针叶近树卡：每季 2 株“主干落地”的侧视树（实测区域已裁掉倒挂枝/俯视冠盘）。 */
 export function getConiferCardRegions(season: SeasonId): SpriteRegion[] {
   return GENERATED_CONIFER_CARD_REGIONS[season].regions.map((region) => fromGenerated(region)!)

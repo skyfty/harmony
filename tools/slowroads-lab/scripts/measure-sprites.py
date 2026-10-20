@@ -175,7 +175,14 @@ def cluster_box(cluster):
     }
 
 
-def measure_columns(assets_dir: str, pattern: str, columns: int = 4, season_files=None):
+def measure_columns(
+    assets_dir: str,
+    pattern: str,
+    columns: int = 4,
+    season_files=None,
+    vertical_rows: int = 1,
+    ground_row_only: bool = False,
+):
     """Sprite entries per equal atlas cell (the slowroads variant slot).
 
     The cell index is the shader-facing variant id (winter crops cells 0/1 and
@@ -199,16 +206,29 @@ def measure_columns(assets_dir: str, pattern: str, columns: int = 4, season_file
         column_width = width / columns
         entries = []
         dropped = 0
+        row_height = height / max(1, vertical_rows)
         for column in range(columns):
             cx0 = column * column_width
             cx1 = (column + 1) * column_width
             inside = [c for c in comps if cx0 <= (c["x0"] + c["x1"]) / 2 < cx1]
-            for cluster in cluster_components(inside):
-                box = cluster_box(cluster)
-                if box["area"] < MIN_CLUSTER_AREA:
-                    dropped += 1
-                    continue
-                entries.append({"cell": column, "box": box})
+            for row in range(vertical_rows):
+                row_inside = [
+                    c
+                    for c in inside
+                    if row * row_height <= (c["y0"] + c["y1"]) / 2 < (row + 1) * row_height
+                ]
+                for cluster in cluster_components(row_inside):
+                    box = cluster_box(cluster)
+                    if box["area"] < MIN_CLUSTER_AREA:
+                        dropped += 1
+                        continue
+                    # Ground vegetation only uses the atlas' lower sprite row.
+                    # Hanging branches/canopy discs in the upper row are separate
+                    # atlas content, not variants of the same plant.
+                    if ground_row_only and row != vertical_rows - 1:
+                        dropped += 1
+                        continue
+                    entries.append({"cell": column, "box": box})
         all_boxes = [entry["box"] for entry in entries]
         atlas_content_height = max((b["y1"] - b["y0"]) for b in all_boxes) if all_boxes else 1
         out_entries = []
@@ -444,7 +464,12 @@ def main():
         sys.exit(0)
 
     print("measuring bushes ...")
-    bushes = measure_columns(args.assets, "bushes")
+    bushes = measure_columns(
+        args.assets,
+        "bushes",
+        vertical_rows=2,
+        ground_row_only=True,
+    )
     print("measuring grass sprites ...")
     grass = measure_columns(args.assets, "grasses", season_files=GRASS_FILE_SEASONS)
     print("measuring conifer cards ...")

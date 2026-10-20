@@ -59,10 +59,17 @@ export function parseTreeBin(buffer: ArrayBuffer): ParsedTreeModel {
     offset += indexBits / 8
   }
 
-  let maxY = 0
+  let minY = Number.POSITIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
   for (let i = 1; i < positions.length; i += 3) {
-    if (positions[i]! > maxY) {
-      maxY = positions[i]!
+    const y = positions[i]!
+    if (y < minY) minY = y
+    if (y > maxY) maxY = y
+  }
+  const height = Number.isFinite(minY) && Number.isFinite(maxY) ? maxY - minY : 0
+  if (height > 0 && minY !== 0) {
+    for (let i = 1; i < positions.length; i += 3) {
+      positions[i] = positions[i]! - minY
     }
   }
   const geometry = new THREE.BufferGeometry()
@@ -71,7 +78,7 @@ export function parseTreeBin(buffer: ArrayBuffer): ParsedTreeModel {
   geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
   geometry.computeBoundingSphere()
-  return { geometry, unitScale: maxY > 0 ? TREE_UNIT_SIZE / maxY : 1 }
+  return { geometry, unitScale: height > 0 ? TREE_UNIT_SIZE / height : 1 }
 }
 
 const FRAGMENT_PARS = /* glsl */ `
@@ -98,9 +105,8 @@ varying vec3 vPlCameraUp;
 const FRAGMENT_BODY = /* glsl */ `
 {
   vec4 treeTexel = texture2D(uTreeAtlas, vPlUv);
-  // 官方共享近树材质（xr()）：alphaMap 走绿通道，阔叶 alphaTest .5（贴图 alpha）、
-  // 针叶 alphaTest .4（alpha 图）。
-  // 官方 alphaMap 走绿通道（three 语义）。
+  // 官方共享近树材质（xr()）：alphaMap 走绿通道。阔叶使用贴图 alpha；
+  // 针叶使用独立 alpha 图，H5 mipmap 下阈值见 uTreeAlphaTest 的创建处。
   float treeAlpha = mix(treeTexel.a, texture2D(uTreeAlphaTex, vPlUv).g, uTreeHasAlphaTex);
   if (treeAlpha < uTreeAlphaTest) {
     discard;
@@ -215,8 +221,9 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
     uTreeNormalTex: { value: null },
     uTreeHasAlphaTex: { value: species === 1 ? 1 : 0 },
     uTreeHasNormalTex: { value: species === 0 ? 1 : 0 },
-    // 官方共享近树材质：阔叶 alphaTest .5（贴图 alpha）、针叶 .4（alpha 图）。
-    uTreeAlphaTest: { value: species === 1 ? 0.4 : 0.5 },
+    // 阔叶图集自带 alpha；针叶 alpha 图以细枝覆盖为主，H5 的 mipmap
+    // 采样会降低边缘覆盖率，沿用 .4 时近处会整片消失，因此取 .2。
+    uTreeAlphaTest: { value: species === 1 ? 0.2 : 0.5 },
     uTreeRadiance: { value: 2 },
     uTreeHasSnow: { value: 0 },
     uTreeSpecies: { value: species },
@@ -237,7 +244,7 @@ export async function createTreeMeshManager(options: TreeMeshManagerOptions): Pr
     // （依赖车灯），白天不产生自发光，因此这里保持纯 Lambert 光照。
     const material = new THREE.MeshLambertMaterial({
       color: 0xffffff,
-      // 逐种 alpha 裁切在片元体里按 uTreeAlphaTest 处理（阔叶 .5 / 针叶 .4）。
+      // 逐种 alpha 裁切在片元体里按 uTreeAlphaTest 处理（阔叶 .5 / 针叶 .2）。
       alphaTest: 0,
       side: THREE.DoubleSide,
       transparent: false,

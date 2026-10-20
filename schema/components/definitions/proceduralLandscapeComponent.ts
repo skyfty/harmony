@@ -19,6 +19,7 @@ export const PROCEDURAL_LANDSCAPE_COMPONENT_TYPE = 'proceduralLandscape'
 export const PROCEDURAL_LANDSCAPE_UPDATE_TYPES: ReadonlySet<string> = new Set([PROCEDURAL_LANDSCAPE_COMPONENT_TYPE])
 
 const cameraWorldPositionScratch = new Vector3()
+const cameraWorldDirectionScratch = new Vector3()
 
 class ProceduralLandscapeComponent extends Component<ProceduralLandscapeComponentProps> {
   private readonly runtime: ProceduralLandscapeRuntime
@@ -37,6 +38,15 @@ class ProceduralLandscapeComponent extends Component<ProceduralLandscapeComponen
         }
         cameraWorldPositionScratch.set(position.x, position.y, position.z)
         return cameraWorldPositionScratch
+      },
+      getCameraWorldDirection: () => {
+        const frameState = this.context.getFrameState()
+        const direction = frameState.cameraWorldDirection
+        if (!direction) {
+          return null
+        }
+        cameraWorldDirectionScratch.set(direction.x, direction.y, direction.z)
+        return cameraWorldDirectionScratch
       },
       getSeasonState: () => {
         const frameState = this.context.getFrameState()

@@ -11,7 +11,7 @@ import {
   createProceduralLandscapeSurfaceUniforms,
 } from '@schema/proceduralLandscape/surfaceMaterial'
 import { createFoliageMaterial, createFoliageShaderUniforms } from '@schema/proceduralLandscape/instancing'
-import { createTreeMeshManager } from '@schema/proceduralLandscape/treeMeshes'
+import { createTreeMeshManager, parseTreeBin } from '@schema/proceduralLandscape/treeMeshes'
 
 function compileSources(material: THREE.Material): { vertex: string; fragment: string } {
   const parameters = {
@@ -106,7 +106,51 @@ function createMinimalTreeBin(): ArrayBuffer {
   return buffer
 }
 
+function createOffsetTreeBin(): ArrayBuffer {
+  const vertexCount = 3
+  const indexCount = 3
+  const buffer = new ArrayBuffer(20 + vertexCount * 8 * 4 + indexCount * 2)
+  const view = new DataView(buffer)
+  view.setUint32(0, 0x53525442, false)
+  view.setUint32(4, 1, true)
+  view.setUint32(8, vertexCount, true)
+  view.setUint32(12, indexCount, true)
+  view.setUint32(16, 16, true)
+  let offset = 20
+  const positions = [
+    0, -2, 0,
+    1, 0, 0,
+    0, 2, 0,
+  ]
+  for (const value of positions) {
+    view.setFloat32(offset, value, true)
+    offset += 4
+  }
+  for (let i = 0; i < vertexCount * 3; i += 1) {
+    view.setFloat32(offset, i % 3 === 1 ? 1 : 0, true)
+    offset += 4
+  }
+  for (let i = 0; i < vertexCount * 2; i += 1) {
+    view.setFloat32(offset, i % 2, true)
+    offset += 4
+  }
+  for (let i = 0; i < indexCount; i += 1) {
+    view.setUint16(offset, i, true)
+    offset += 2
+  }
+  return buffer
+}
+
 describe('double-sided foliage lighting normal (背面不翻转)', () => {
+  it('normalizes negative-Y tree models to stand on the terrain', () => {
+    const parsed = parseTreeBin(createOffsetTreeBin())
+    parsed.geometry.computeBoundingBox()
+    expect(parsed.geometry.boundingBox?.min.y).toBeCloseTo(0, 6)
+    expect(parsed.geometry.boundingBox?.max.y).toBeCloseTo(4, 6)
+    expect(parsed.unitScale).toBeCloseTo(2, 6)
+    parsed.geometry.dispose()
+  })
+
   it('foliage uses the per-instance ground normal without the DOUBLE_SIDED flip', () => {
     const material = createFoliageMaterial(
       {

@@ -1815,6 +1815,7 @@ const SCENE_CAMERA_FAR_MAX = 30000
  */
 const SCENE_CAMERA_FAR_FOG_MARGIN = 1.25
 const tempDirection = new THREE.Vector3()
+const landscapeFrameCameraDirection = new THREE.Vector3()
 const tempTarget = new THREE.Vector3()
 const tempQuaternion = new THREE.Quaternion()
 const protagonistPosePosition = new THREE.Vector3()
@@ -11393,6 +11394,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 			y: camera.position.y,
 			z: camera.position.z,
 		},
+		cameraWorldDirection: camera.getWorldDirection(landscapeFrameCameraDirection),
 		environment: currentSlowroadsEnvironmentState,
 	})
 	previewComponentManager.update(delta)

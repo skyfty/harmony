@@ -2,6 +2,7 @@ import type { Object3D } from 'three'
 
 export interface ComponentFrameState {
   cameraWorldPosition: { x: number; y: number; z: number } | null
+  cameraWorldDirection?: { x: number; y: number; z: number } | null
   /**
    * Slow Roads 环境状态（季节 × 时间 × 天气）。宿主每帧从
    * EnvironmentSettings.slowroads 注入，proceduralLandscape 等组件据此

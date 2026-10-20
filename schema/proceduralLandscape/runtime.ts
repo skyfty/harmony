@@ -49,9 +49,11 @@ import {
   createFoliageMaterial,
   createFoliageShaderUniforms,
   disposeFoliageLayerMesh,
+  getFoliageLayerCapacity,
   setFoliageMaterialCardRange,
   setFoliageMaterialLighting,
   setFoliageMaterialTextures,
+  updateFoliageLayerMesh,
   type FoliageMaterialHandle,
   type FoliageMaterialSpec,
   type FoliageShaderUniforms,
@@ -85,7 +87,9 @@ import {
 import { createTreeMeshManager, type TreeMeshManager } from './treeMeshes'
 import {
   buildTreeSpeciesField,
+  slowroadsTreeLineFactor,
   slowroadsTreeLineBounds,
+  slowroadsTreeSpeciesAt,
   type TreeSpeciesField,
 } from './treeSpecies'
 import { computeRoadMarkings, type RoadMarkingWeights } from './roadMarkings'
@@ -126,8 +130,8 @@ import {
 import { collectSlowroadsShaderAudits } from './shaderAudit'
 import {
   BARRIER_RAIL_REGIONS,
-  getBushEntries,
-  getGrassEntries,
+  bushVariantEntries,
+  grassVariantEntries,
   gridRegions,
   type SpriteCellRegion,
   type SpriteRegion,
@@ -139,7 +143,7 @@ import {
   COMPONENT_ARTIFACT_NODE_ID_KEY,
 } from '../components/componentManager'
 import { findTerrainTextureStreamFrom } from '../terrainTextureStream'
-import { clamp, degreesToRadians } from './noise'
+import { clamp, degreesToRadians, hashUnit, lerp } from './noise'
 import {
   densifyRoadRows,
   sampleRoadRowColumns,
@@ -192,8 +196,10 @@ const CAMERA_GRASS_BATCH_SIZE = 32
 const CAMERA_GRASS_CELL_SIZE = 8
 const STREAM_INTERVAL_MS = 200
 const STREAM_MOVE_THRESHOLD = 8
-const NEAR_CARD_REFRESH_DISTANCE = 8
-const NEAR_MESH_REFRESH_DISTANCE = 4
+const NEAR_CARD_REFRESH_DISTANCE = 24
+const NEAR_MESH_REFRESH_DISTANCE = 8
+const NEAR_ROAD_FALLBACK_SAMPLE_METERS = 10
+const NEAR_ROAD_FALLBACK_DEDUPE_CELL_METERS = 5
 const ROAD_FIELD_RESOLUTION = 1024
 /** 横坡贴合模式下路面带相对地形的固定抬升（米）。 */
 const ROAD_BAND_LIFT = 0.05
@@ -423,6 +429,7 @@ export interface ProceduralLandscapeRuntimeHooks {
   componentId: string
   getHostObject(): THREE.Object3D | null
   getCameraWorldPosition(): THREE.Vector3 | null
+  getCameraWorldDirection?(): THREE.Vector3 | null
   /** 来自 ComponentFrameState.environment（EnvironmentPanel 设置）。 */
   getSeasonState(): ProceduralLandscapeEnvironmentState | null
 }
@@ -972,6 +979,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let worldForestConiferInstances = 0
   let worldForestScan: WorldForestScan | null = null
   let worldForestIndex: WorldForestPlacementIndex | null = null
+  let nearRoadFallbackIndex: WorldForestPlacementIndex | null = null
   let worldForestRevision = 0
   let worldForestPlacements: TreePlacement[] = []
   let worldForestCorridor: TreePlacement[] = []
@@ -1189,11 +1197,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function resolveQuality(): ResolvedProceduralLandscapeQuality {
-    if (props.quality === 'auto' && currentEnvironment !== 'editor') {
-      // Keep the mobile world-forest budget at the low tier; the adaptive
-      // target coverage/density below is the density control.
-      return 'low'
-    }
     return resolveProceduralLandscapeQuality(props.quality, currentEnvironment)
   }
 
@@ -1272,7 +1275,116 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!worldForestIndex || radius <= 0) {
       return []
     }
-    return worldForestIndex.queryCircle(camera.x, camera.z, radius + 32)
+    const active = worldForestIndex.queryCircle(camera.x, camera.z, radius + 32)
+    const fallback = ensureNearRoadFallbackIndex()
+    if (fallback) {
+      active.push(...fallback.queryCircle(camera.x, camera.z, radius + 32))
+    }
+    return active
+  }
+
+  function ensureNearRoadFallbackIndex(): WorldForestPlacementIndex | null {
+    if (nearRoadFallbackIndex) {
+      return nearRoadFallbackIndex
+    }
+    if (!grid || !densityField || !roadResult || roadResult.nodes.length < 2) {
+      return null
+    }
+    const existing = worldForestIndex
+    if (!existing) {
+      return null
+    }
+    const treeLine = slowroadsTreeLineBounds(grid.minY, grid.maxY)
+    const waterLevel = resolveWaterLevel()
+    // Fallback trees must clear the drivable surface and shoulder. They are
+    // generated once from fixed road nodes, never from the moving camera.
+    const clearance = roadHalfWidth(props) + props.road.shoulderWidth + props.forest.roadClearance
+    const nodeSpacing = roadResult.length / Math.max(1, roadResult.nodes.length - 1)
+    const nodeStride = Math.max(1, Math.round(NEAR_ROAD_FALLBACK_SAMPLE_METERS / nodeSpacing))
+    const dedupeCellSize = NEAR_ROAD_FALLBACK_DEDUPE_CELL_METERS
+    const occupied = new Set<string>()
+    for (const placement of existing.placements) {
+      occupied.add(
+        `${Math.round(placement.x / dedupeCellSize)},${Math.round(placement.z / dedupeCellSize)}`,
+      )
+    }
+    const placements: TreePlacement[] = []
+    let sampleOrdinal = 0
+    for (let index = 0; index < roadResult.nodes.length; index += nodeStride) {
+      const node = roadResult.nodes[index]!
+      const dirX = Math.cos(node.heading)
+      const dirZ = Math.sin(node.heading)
+      const perpX = -dirZ
+      const perpZ = dirX
+      const bandCount = sampleOrdinal % 2 === 0 ? 2 : 1
+      sampleOrdinal += 1
+      for (const side of [1, -1] as const) {
+        for (let band = 0; band < bandCount; band += 1) {
+          const lateralJitter = hashUnit(props.seed ^ 0x44b7a2d3, index, side * 17 + band) * 2.5
+          const alongJitter = (hashUnit(props.seed ^ 0x9e3779b9, index, side * 31 + band) - 0.5) * 2
+          const lateral = clearance + 1.5 + band * 7 + lateralJitter
+          const x = node.x + dirX * alongJitter + perpX * side * lateral
+          const z = node.z + dirZ * alongJitter + perpZ * side * lateral
+          if (!grid.contains(x, z)) {
+            continue
+          }
+          if (roadProximity != null && roadProximity.distanceAt(x, z) < clearance) {
+            continue
+          }
+          const cellX = Math.round(x / dedupeCellSize)
+          const cellZ = Math.round(z / dedupeCellSize)
+          let occupiedNearby = false
+          for (let cellOffsetX = -1; cellOffsetX <= 1 && !occupiedNearby; cellOffsetX += 1) {
+            for (let cellOffsetZ = -1; cellOffsetZ <= 1; cellOffsetZ += 1) {
+              if (occupied.has(`${cellX + cellOffsetX},${cellZ + cellOffsetZ}`)) {
+                occupiedNearby = true
+                break
+              }
+            }
+          }
+          if (occupiedNearby) {
+            continue
+          }
+          const y = visibleForestHeightAt(x, z)
+          const normal = visibleForestNormalAt(x, z)
+          const slope = normal ? 1 - clamp(normal.y, -1, 1) : 0
+          if (y == null) {
+            continue
+          }
+          if (y < waterLevel + 0.5) {
+            continue
+          }
+          if (slope > Math.max(props.forest.maxSlope, 0.8)) {
+            continue
+          }
+          if (slowroadsTreeLineFactor(y, treeLine) <= 0) {
+            continue
+          }
+          const species = treeSpeciesField
+            ? treeSpeciesField.sampleSpecies(x, z)
+            : slowroadsTreeSpeciesAt(props.seed, x, z)
+          const keyX = Math.round(x * 10)
+          const keyZ = Math.round(z * 10)
+          placements.push({
+            x,
+            z,
+            y,
+            rotation: hashUnit(props.seed ^ 0x85ebca6b, keyX, keyZ) * Math.PI * 2,
+            scale: lerp(
+              props.forest.minScale,
+              props.forest.maxScale,
+              hashUnit(props.seed ^ 0xc2b2ae35, keyX, keyZ),
+            ),
+            variant: hashUnit(props.seed ^ 0x27d4eb2f, keyX, keyZ),
+            species,
+            rank: 0,
+          })
+          occupied.add(`${cellX},${cellZ}`)
+        }
+      }
+    }
+    nearRoadFallbackIndex = createWorldForestPlacementIndex(placements, 32)
+    return nearRoadFallbackIndex
   }
 
   function usesDemTerrain(): boolean {
@@ -1717,6 +1829,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     farForestRadius = 0
     worldForestScan = null
     worldForestIndex = null
+    nearRoadFallbackIndex = null
     worldForestPlacements = []
     worldForestCorridor = []
     worldForestBuildMs = 0
@@ -1799,6 +1912,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     worldForestPlacements = placements.slice()
     worldForestIndex = createWorldForestPlacementIndex(worldForestPlacements)
+    nearRoadFallbackIndex = null
     worldForestRevision += 1
     nearCardCamera.set(Number.NaN, Number.NaN)
     nearMeshCamera.set(Number.NaN, Number.NaN)
@@ -1874,7 +1988,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         : undefined,
     }
     worldForestCorridor = roadResult
-      ? planWorldForestCorridor(params, deps, roadResult.nodes)
+      ? planWorldForestCorridor(params, deps, roadResult.nodes, {
+          alongStep: 3,
+          lateralStep: 8,
+          nearBeltBands: 3,
+        })
       : []
     worldForestScan = createWorldForestScan(params, deps)
     worldForestBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
@@ -1912,7 +2030,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       props.forest.nearDistance ?? PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()].treeNearDistance,
       resolveNearTreeRadius(),
     )
-    const radius = bands.cardFar + 32
     if (
       nearCardLayers
       && Math.hypot(camera.x - nearCardCamera.x, camera.z - nearCardCamera.y)
@@ -1920,8 +2037,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     ) {
       return
     }
-    const nearCards = worldForestIndex.queryCircle(camera.x, camera.z, radius)
-    disposeNearCardLayers()
+    const indexedNearCards = worldForestIndex.queryCircle(camera.x, camera.z, bands.cardFar + 32)
+    const fallbackIndex = ensureNearRoadFallbackIndex()
+    const fallbackTrees = fallbackIndex
+      ? fallbackIndex.queryCircle(camera.x, camera.z, bands.cardFar + 32)
+      : []
+    const nearCards = indexedNearCards.concat(fallbackTrees).sort((a, b) => (
+      (a.x - camera.x) ** 2 + (a.z - camera.z) ** 2
+      - ((b.x - camera.x) ** 2 + (b.z - camera.z) ** 2)
+    ))
     const broadleaf: FoliageSpriteInstance[] = []
     const conifer: FoliageSpriteInstance[] = []
     for (const placement of nearCards) {
@@ -1933,23 +2057,47 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const handleBroadleaf = getFoliageMaterialHandle(nearCardMaterialSpec(0))
     applyCardDissolveRange(handleBroadleaf)
     applyCardDissolveRange(handleConifer)
-    nearCardLayers = {
-      broadleaf: createFoliageLayerMesh(
+    if (
+      nearCardLayers
+      && getFoliageLayerCapacity(nearCardLayers.broadleaf) >= broadleaf.length
+      && getFoliageLayerCapacity(nearCardLayers.conifer) >= conifer.length
+    ) {
+      updateFoliageLayerMesh(
+        nearCardLayers.broadleaf,
         broadleaf,
-        handleBroadleaf.material,
         TREE_UNIT_SIZE,
         hostInverse,
-        { singlePlane: true, staticBillboard: true },
-      ),
-      conifer: createFoliageLayerMesh(
+        { staticBillboard: true },
+      )
+      updateFoliageLayerMesh(
+        nearCardLayers.conifer,
         conifer,
-        handleConifer.material,
         TREE_UNIT_SIZE,
         hostInverse,
-        { singlePlane: true, staticBillboard: true },
-      ),
+        { staticBillboard: true },
+      )
+    } else {
+      disposeNearCardLayers()
+      const broadleafCapacity = Math.ceil(broadleaf.length * 1.25) + 64
+      const coniferCapacity = Math.ceil(conifer.length * 1.25) + 64
+      nearCardLayers = {
+        broadleaf: createFoliageLayerMesh(
+          broadleaf,
+          handleBroadleaf.material,
+          TREE_UNIT_SIZE,
+          hostInverse,
+          { singlePlane: true, staticBillboard: true, capacity: broadleafCapacity },
+        ),
+        conifer: createFoliageLayerMesh(
+          conifer,
+          handleConifer.material,
+          TREE_UNIT_SIZE,
+          hostInverse,
+          { singlePlane: true, staticBillboard: true, capacity: coniferCapacity },
+        ),
+      }
+      farForestRoot.add(nearCardLayers.broadleaf, nearCardLayers.conifer)
     }
-    farForestRoot.add(nearCardLayers.broadleaf, nearCardLayers.conifer)
     nearCardCamera.set(camera.x, camera.z)
   }
 
@@ -3330,7 +3478,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       key: `${kind}:all`,
     }
     const handle = getFoliageMaterialHandle(spec)
-    const entries = kind === 'grass' ? getGrassEntries(season) : getBushEntries(season).filter((item) => item.cell <= 2)
+    const entries = kind === 'grass' ? grassVariantEntries(season) : bushVariantEntries(season)
     // 草丛/灌木的 placement.scale 是 slowroads-lab 语义的摆放倍率（不是米）：
     // 世界尺寸 = 基准尺寸（草 1.6m / 灌木 2m，见下方 unit）× 倍率 × 区域相对高度。
     const instances: FoliageSpriteInstance[] = placements.map((placement) => {
@@ -3773,17 +3921,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           >= NEAR_MESH_REFRESH_DISTANCE
       const forestChanged = nearMeshForestRevision !== worldForestRevision
       const refresh = moved || forceStream || forestChanged
-      const placements = refresh
-        ? collectActiveTreePlacements(camera, radius)
-        : []
       if (refresh) {
+        const placements = collectActiveTreePlacements(camera, radius)
         nearMeshCamera.set(camera.x, camera.z)
         nearMeshForestRevision = worldForestRevision
+        // `refresh` is the single source of truth for re-anchoring. Forcing the
+        // manager prevents its own move threshold from clearing a populated
+        // instance buffer with the empty placement list of a skipped frame.
+        treeMeshManager.update(camera, placements, radius, true)
       }
-      treeMeshManager.update(camera, placements, radius, forceStream || forestChanged)
-      // Near cards may only yield to the 3D layer once it is ready and has
-      // actual instances. Otherwise a failed/late treebin load leaves a hole
-      // inside the mesh radius where both LODs are hidden.
+      // Hand off to the 3D layer only when it is ready and populated. Its fade
+      // band now matches the card collapse band, so the two LODs cross-fade
+      // instead of drawing overlapping billboards across the same tree.
       foliageUniforms.meshRadius.value = treeMeshManager.ready && treeMeshManager.instanceCount > 0
         ? radius
         : 0

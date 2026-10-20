@@ -19,7 +19,7 @@
 
 - DEM：`1422 × 1308`、30m，约 `42.6 × 39.2km`。
 - `dem-grid.bin`：`https://v.touchmagic.cn/uploads/terrain-packs/terrain-B_rWlXZn4zpuGru_/runtime/dem-grid.bin`，4,402,595 字节。
-- 景观组件：`quality: auto`，viewer 解析为 `high`；森林/草/灌木/道路/水面/墙体全部开启。
+- 景观组件：`quality: auto`，viewer 当前解析为 `high`；森林/草/灌木/道路/水面/墙体全部开启。
 - spring 季 + 共享贴图共 37 张，压缩总量约 33.7MB。
 - 其中 3 张远景树图集为 `4096 × 1024`：
   - `spring_imposters_0_d.2e67db77`
@@ -139,7 +139,7 @@ __HARMONY_PL_DIAG__.dump()
 
 ### 第五轮：自适应森林参数
 
-`quality="auto"` 的 viewer/preview 场景现在自动按设备与场景面积选择森林目标：
+`quality="auto"` 的 viewer 与 preview 都使用 `high` 画质；自动森林目标继续按设备与场景面积选择：
 
 - LIO-AN00m（benchmark 26、7.5GB）判为 mid；42.6×39.2km 场景目标 coverage/density 约 0.70；
 - 设备档基础值：low 0.55、mid 0.75、high 0.90；大于 500km² 减 0.05，大于 2000km² 减 0.10，小于 50km² 加 0.05；
@@ -147,6 +147,16 @@ __HARMONY_PL_DIAG__.dump()
 - FPS <35 或 memory guard critical：目标降低 0.06；FPS >48 且树量低于目标 90%：目标提高 0.06；
 - 每个场景最多重建一次；显式 `low/medium/high` 仍为手动覆盖，不运行自适应；
 - editor 视口不自动调整，保持作者质量。
+- viewer 的自动档位与编辑器对齐为 `high`，FPS/内存校准只调整覆盖率和密度，不再把画质档压回 `low`；显式 `low` 仍完全保持低档策略。
+
+### 第六轮：近路树带与草灌图集修正
+
+- 灌木测量按图集上下两行分别聚类，只保留底部落地行；夏季图集上方的倒挂枝不再和下方便灌木合并成一张 UV。
+- 常规草层排除 3 号棕色草球，只使用 0–2 号草格。
+- 近树 `.treebin` 解析时以模型最低 Y 为地面零点归一化，修复模型下沉/埋入地形的问题。
+- 世界森林走廊最内侧 3 条横向带使用 3m 沿路采样和更高落树概率，仍遵守道路净空、坡度、水线、树线和道路可达性约束。
+- 近路补树改为按固定道路节点一次性生成并建立空间索引，不再跟随相机位置或朝向移动；近树卡原地复用实例缓冲，行驶时不会整批销毁重建。
+- 针叶近树 alpha 裁切按 H5 mipmap 覆盖率降到 0.2；`.4` 会让近处细枝森林几乎整体被裁掉。
 
 验证包：`D:\Downloads\diag-auto.zip`（`quality=auto`）。日志中的 `adaptive` 字段会显示 `deviceTier / sceneAreaKm2 / targetCoverage / effectiveCoverage / targetTreeCount / measuredFps / calibrationState / calibrationAttempts`。
 
