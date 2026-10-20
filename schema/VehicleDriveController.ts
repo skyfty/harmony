@@ -21,6 +21,7 @@ import type { BehaviorEventResolution } from './behaviors/runtime'
 import type { VehicleSurfaceSample } from './vehicleSurfaceSampler'
 import { sleepPhysicsBody, stopPhysicsBodyMotion } from './physicsRuntimeBridge'
 import { applyPhysicsVehicleWheelControl } from '@harmony/physics-core'
+import { computeUprightVehicleYawQuaternion } from './vehicleRoadRespawn'
 
 export type RefLike<T> = { value: T }
 
@@ -147,6 +148,11 @@ export type VehicleInstance = {
 }
 
 export type VehicleDriveCameraOptions = { immediate?: boolean; applyOrbitTween?: boolean; followControlsDirty?: boolean }
+
+export type VehicleDriveResetPose = {
+  position: { x: number; y: number; z: number }
+  yawRad: number
+}
 
 export type VehicleDriveControllerDeps = {
   vehicleInstances: Map<string, VehicleInstance>
@@ -348,7 +354,6 @@ export class VehicleDriveController {
     planarVelocity: new THREE.Vector3(),
     cameraQuaternionInverse: new THREE.Quaternion(),
     resetQuaternion: new THREE.Quaternion(),
-    cameraMatrix: new THREE.Matrix4(),
     euler: new THREE.Euler(0, 0, 0, 'YXZ'),
     vehicleDimensions: new THREE.Vector3(),
     tempQuaternion: new THREE.Quaternion(),
@@ -1083,7 +1088,7 @@ export class VehicleDriveController {
     }
   }
 
-  resetPose(): boolean {
+  resetPose(targetPose: VehicleDriveResetPose | null = null): boolean {
     const state = this.state
     if (!state.nodeId) {
       return false
@@ -1094,9 +1099,18 @@ export class VehicleDriveController {
         return false
       }
       object.updateMatrixWorld(true)
-      object.getWorldPosition(this.transformDriveState.worldPosition)
+      if (targetPose) {
+        this.transformDriveState.worldPosition.set(
+          targetPose.position.x,
+          targetPose.position.y,
+          targetPose.position.z,
+        )
+        this.transformDriveState.yaw = targetPose.yawRad
+      } else {
+        object.getWorldPosition(this.transformDriveState.worldPosition)
+        this.transformDriveState.yaw = this.extractWorldYawRadians(object)
+      }
       this.transformDriveState.worldPosition.y += VEHICLE_RESET_LIFT
-      this.transformDriveState.yaw = this.extractWorldYawRadians(object)
       this.transformDriveState.worldQuaternion.setFromAxisAngle(VEHICLE_CAMERA_WORLD_UP, this.transformDriveState.yaw)
       this.transformDriveState.speed = 0
       this.transformDriveState.velocityWorld.set(0, 0, 0)
@@ -1111,50 +1125,46 @@ export class VehicleDriveController {
       return false
     }
     const temp = this.temp
-    const chassisPosition = temp.seatPosition.set(
-      rigidbody.body.position.x,
-      rigidbody.body.position.y,
-      rigidbody.body.position.z,
-    )
+    const chassisPosition = targetPose
+      ? temp.seatPosition.set(
+          targetPose.position.x,
+          targetPose.position.y,
+          targetPose.position.z,
+        )
+      : temp.seatPosition.set(
+          rigidbody.body.position.x,
+          rigidbody.body.position.y,
+          rigidbody.body.position.z,
+        )
     chassisPosition.y += VEHICLE_RESET_LIFT
-    const sourceQuaternion = temp.tempQuaternion
-    if (instance.initialChassisQuaternion) {
-      sourceQuaternion.copy(instance.initialChassisQuaternion)
-    } else {
-      rigidbody.object.updateMatrixWorld(true)
-      rigidbody.object.getWorldQuaternion(sourceQuaternion)
+    let yawRad = targetPose?.yawRad ?? 0
+    if (!targetPose) {
+      const currentQuaternion = temp.tempQuaternion.set(
+        rigidbody.body.quaternion.x,
+        rigidbody.body.quaternion.y,
+        rigidbody.body.quaternion.z,
+        rigidbody.body.quaternion.w,
+      )
+      const worldForward = temp.seatForward
+        .copy(instance.axisForward)
+        .applyQuaternion(currentQuaternion)
+      worldForward.y = 0
+      if (worldForward.lengthSq() < 1e-8) {
+        yawRad = this.extractWorldYawRadians(rigidbody.object)
+      } else {
+        worldForward.normalize()
+        yawRad = Math.atan2(-worldForward.z, worldForward.x)
+      }
     }
-    const worldForward = temp.seatForward.copy(instance.axisForward).applyQuaternion(sourceQuaternion)
-    if (worldForward.lengthSq() < 1e-6) {
-      worldForward.set(0, 0, 1)
-    }
-    worldForward.y = 0
-    if (worldForward.lengthSq() < 1e-6) {
-      worldForward.set(0, 0, 1)
-    } else {
-      worldForward.normalize()
-    }
-    const worldUp = temp.seatUp.copy(instance.axisUp).applyQuaternion(sourceQuaternion)
-    if (worldUp.lengthSq() < 1e-6) {
-      worldUp.set(0, 1, 0)
-    } else {
-      worldUp.normalize()
-    }
-    const worldRight = temp.seatRight.copy(worldUp).cross(worldForward)
-    if (worldRight.lengthSq() < 1e-6) {
-      worldRight.set(1, 0, 0)
-    } else {
-      worldRight.normalize()
-    }
-    worldUp.copy(VEHICLE_CAMERA_WORLD_UP)
-    const correctedForward = temp.cameraForward.copy(worldRight).cross(worldUp)
-    if (correctedForward.lengthSq() < 1e-6) {
-      correctedForward.set(0, 0, 1)
-    } else {
-      correctedForward.normalize()
-    }
-    temp.cameraMatrix.makeBasis(worldRight, worldUp, correctedForward)
-    temp.resetQuaternion.setFromRotationMatrix(temp.cameraMatrix)
+    computeUprightVehicleYawQuaternion(
+      {
+        rightIndex: instance.axisRightIndex,
+        upIndex: instance.axisUpIndex,
+        forwardIndex: instance.axisForwardIndex,
+      },
+      yawRad,
+      temp.resetQuaternion,
+    )
     rigidbody.body.position.set(chassisPosition.x, chassisPosition.y, chassisPosition.z)
     stopPhysicsBodyMotion(rigidbody.body)
     rigidbody.body.quaternion.set(

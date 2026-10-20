@@ -21,7 +21,7 @@ export const DEFAULT_ENVIRONMENT_NORTH_DIRECTION = '+X' as const
 export const DEFAULT_ENVIRONMENT_VIEWPORT_PERFORMANCE_MODE = false
 
 export const DEFAULT_SLOWROADS_ENVIRONMENT: import('./core').SlowroadsEnvironmentSettings = {
-  controlMode: 'manual',
+  controlMode: 'default',
   season: 'spring',
   timeOfDay: 'day',
   weather: 'clear',

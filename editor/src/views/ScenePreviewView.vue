@@ -894,7 +894,7 @@ type PreviewEnvironmentWeather = SlowroadsEnvironmentSettings['weather']
 type PreviewEnvironmentMenu = 'season' | 'time' | 'weather' | null
 type PreviewEnvironmentSwitchPhase = 'idle' | 'covering' | 'loading' | 'revealing'
 
-const previewEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('manual')
+const previewEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('default')
 const previewEnvironmentHasLandscape = ref(false)
 const previewEnvironmentState = reactive<{
 	season: PreviewEnvironmentSeason

@@ -151,6 +151,10 @@ import {
   type RoadBandRow,
 } from './roadBandRows'
 import {
+  resolveRoadLanePoseFromRows,
+  type RoadLanePose,
+} from '../vehicleRoadRespawn'
+import {
   createDemRoadbedTarget,
   createDemRoadbedTargetGeometry,
   type DemRoadbedTarget,
@@ -449,6 +453,12 @@ export interface ProceduralLandscapeRuntime {
   ): ProceduralLandscapeRoadValidation
   /** Editor-authored centerline snapshot in host-node local XZ. */
   getGeneratedRoadCenterlineLocal(): ProceduralLandscapeGeneratedRouteCenterline | null
+  /** Nearest right-hand road lane pose for vehicle recovery, in world space. */
+  resolveRoadLanePose(
+    worldX: number,
+    worldZ: number,
+    facingYawRad: number,
+  ): RoadLanePose | null
   /** Terrain XZ center in host-node local coordinates, when the grid is ready. */
   getTerrainCenterLocal(): RoadWaypoint | null
   /** Low, gentle automatic start near the terrain centre, in local XZ. */
@@ -561,6 +571,16 @@ export function getProceduralLandscapeRoadCenterlineLocal(
 ): ProceduralLandscapeGeneratedRouteCenterline | null {
   const runtime = runtimeRegistry.get(nodeId)
   return runtime?.getGeneratedRoadCenterlineLocal() ?? null
+}
+
+export function resolveProceduralLandscapeRoadLanePose(
+  nodeId: string,
+  worldX: number,
+  worldZ: number,
+  facingYawRad: number,
+): RoadLanePose | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.resolveRoadLanePose(worldX, worldZ, facingYawRad) ?? null
 }
 
 export function resolveProceduralLandscapeScenicWaypointLocal(
@@ -5029,6 +5049,27 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         Math.max(1, demGridSampleStep),
         grid.cellSize,
       )
+    },
+    resolveRoadLanePose(
+      worldX: number,
+      worldZ: number,
+      facingYawRad: number,
+    ): RoadLanePose | null {
+      if (!props.road.enabled) {
+        return null
+      }
+      const rows = roadBandRows ?? roadResult?.nodes ?? null
+      if (!rows || rows.length < 2) {
+        return null
+      }
+      return resolveRoadLanePoseFromRows(rows, {
+        worldX,
+        worldZ,
+        facingYawRad,
+        halfWidth: roadHalfWidth(props),
+        columnHeights: roadBandRows ? roadBandColumns : null,
+        surfaceLift: ROAD_BAND_LIFT,
+      })
     },
     getTerrainCenterLocal(): RoadWaypoint | null {
       if (!grid || !hostObject) {

@@ -32,7 +32,7 @@ describe('environment settings (Slow Roads only)', () => {
     expect(settings.slowroads.showStars).toBe(true)
     expect(settings.slowroads.showSnow).toBe(true)
     expect(settings.slowroads.exposureScale).toBe(1)
-    expect(settings.slowroads.controlMode).toBe('manual')
+    expect(settings.slowroads.controlMode).toBe('default')
   })
 
   it('drops legacy fields and clamps exposure scale on normalize', () => {
@@ -218,18 +218,18 @@ describe('runtime season/time control mode', () => {
         exposureScale: 1,
       } as never,
     })
-    expect(legacy.slowroads.controlMode).toBe('manual')
+    expect(legacy.slowroads.controlMode).toBe('default')
     expect(cloneEnvironmentSettings({
       slowroads: { ...legacy.slowroads, controlMode: 'invalid' as never },
-    }).slowroads.controlMode).toBe('manual')
+    }).slowroads.controlMode).toBe('default')
   })
 
   it('treats control mode as a persisted environment change', () => {
-    const manual = cloneEnvironmentSettings()
-    const fixed = cloneEnvironmentSettings({
-      slowroads: { ...manual.slowroads, controlMode: 'default' },
+    const fixed = cloneEnvironmentSettings()
+    const manual = cloneEnvironmentSettings({
+      slowroads: { ...fixed.slowroads, controlMode: 'manual' },
     })
-    expect(environmentSettingsEqual(manual, fixed)).toBe(false)
+    expect(environmentSettingsEqual(fixed, manual)).toBe(false)
   })
 })
 

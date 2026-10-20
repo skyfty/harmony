@@ -413,10 +413,12 @@
           hover-class="none"
           :disabled="vehicleDriveResetBusy"
           aria-label="重置车辆"
-          @tap="handleVehicleDriveResetTap"
+          data-control-skip="vehicle-reset"
+          @tap.stop.prevent="handleVehicleDriveResetTap"
         >
-          <view class="viewer-drive-icon" aria-hidden="true">
-            <text class="viewer-drive-icon-text">🔄</text>
+          <view class="viewer-drive-reset-glyph" aria-hidden="true" data-control-skip="vehicle-reset">
+            <view class="viewer-drive-reset-arc" data-control-skip="vehicle-reset"></view>
+            <view class="viewer-drive-reset-head" data-control-skip="vehicle-reset"></view>
           </view>
         </button>
       </view>
@@ -1035,10 +1037,15 @@ import {
 } from '@harmony/schema/slowroads/core/seasonCatalog';
 import {
   getProceduralLandscapeStats,
+  resolveProceduralLandscapeRoadLanePose,
   setProceduralLandscapeDeviceProfile,
   setProceduralLandscapeEnvironment,
   setProceduralLandscapeMemoryPressure,
 } from '@harmony/schema/proceduralLandscape/runtime';
+import {
+  selectNearestRoadLanePose,
+  type RoadLanePose,
+} from '@harmony/schema/vehicleRoadRespawn';
 import {
   PROCEDURAL_LANDSCAPE_SEASON_PRELOAD_TIMEOUT_MS,
   preloadProceduralLandscapeSeasonAssets,
@@ -2020,7 +2027,7 @@ type ViewerEnvironmentWeather = SlowroadsEnvironmentSettings['weather'];
 type ViewerEnvironmentMenu = 'season' | 'time' | 'weather' | null;
 type ViewerEnvironmentSwitchPhase = 'idle' | 'covering' | 'loading' | 'revealing';
 
-const viewerEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('manual');
+const viewerEnvironmentControlMode = ref<SlowroadsEnvironmentSettings['controlMode']>('default');
 const viewerEnvironmentHasLandscape = ref(false);
 const viewerEnvironmentState = reactive<{
   season: ViewerEnvironmentSeason;
@@ -3871,6 +3878,10 @@ let characterJoystickOverlay: WebglJoystickOverlay | null = null;
 const steeringKeyboardValue = ref(0);
 const steeringKeyboardTarget = ref(0);
 const vehicleDriveResetBusy = ref(false);
+const vehicleLaneResetPositionScratch = new THREE.Vector3();
+const vehicleLaneResetQuaternionScratch = new THREE.Quaternion();
+const vehicleLaneResetForwardScratch = new THREE.Vector3();
+const vehicleLaneResetDefaultForward = new THREE.Vector3(1, 0, 0);
 
 type CameraViewMode = 'level' | 'watching';
 const cameraViewState = reactive<{ mode: CameraViewMode; targetNodeId: string | null }>({
@@ -19083,6 +19094,10 @@ function shouldUseH5PointerInput(): boolean {
 
 function shouldSkipDrivePadPointerFromEventTarget(target: EventTarget | null): boolean {
   const candidate = target as Element | null;
+  const datasetValue = (target as { dataset?: Record<string, unknown> } | null)?.dataset?.controlSkip;
+  if (typeof datasetValue === 'string' && datasetValue.length > 0) {
+    return true;
+  }
   if (!candidate || typeof candidate.closest !== 'function') {
     return false;
   }
@@ -19486,6 +19501,9 @@ function handleDrivePadTouchStart(event: TouchEvent): void {
   if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value) {
     return;
   }
+  if (shouldSkipDrivePadPointerFromEventTarget(event.target)) {
+    return;
+  }
   const touch = event.changedTouches?.[0] ?? null;
   const coords = getTouchCoordinates(touch);
   if (!coords) {
@@ -19548,6 +19566,9 @@ function detachDrivePadMouseListeners(): void {
 
 function handleDrivePadMouseDown(event: MouseEvent): void {
   if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value || event.button !== 0) {
+    return;
+  }
+  if (shouldSkipDrivePadPointerFromEventTarget(event.target)) {
     return;
   }
   const coords = { x: event.clientX, y: event.clientY };
@@ -19888,6 +19909,57 @@ function updateSceneCompassHeading(): void {
   commitVehicleHeadingDegrees(0);
 }
 
+function resolveVehicleLaneResetPose(): RoadLanePose | null {
+  const nodeId = vehicleDriveNodeId.value;
+  const document = currentDocument;
+  if (!nodeId || !document) {
+    return null;
+  }
+  const instance = vehicleInstances.get(nodeId) ?? null;
+  const body = vehicleDriveVehicle?.chassisBody ?? null;
+  if (body) {
+    vehicleLaneResetPositionScratch.set(body.position.x, body.position.y, body.position.z);
+    vehicleLaneResetQuaternionScratch.set(
+      body.quaternion.x,
+      body.quaternion.y,
+      body.quaternion.z,
+      body.quaternion.w,
+    );
+    vehicleLaneResetForwardScratch
+      .copy(instance?.axisForward ?? vehicleLaneResetDefaultForward)
+      .applyQuaternion(vehicleLaneResetQuaternionScratch);
+  } else {
+    const object = nodeObjectMap.get(nodeId) ?? null;
+    if (!object) {
+      return null;
+    }
+    object.updateWorldMatrix(true, false);
+    object.getWorldPosition(vehicleLaneResetPositionScratch);
+    object.getWorldQuaternion(vehicleLaneResetQuaternionScratch);
+    vehicleLaneResetForwardScratch
+      .copy(vehicleLaneResetDefaultForward)
+      .applyQuaternion(vehicleLaneResetQuaternionScratch);
+  }
+  vehicleLaneResetForwardScratch.y = 0;
+  if (vehicleLaneResetForwardScratch.lengthSq() < 1e-8) {
+    return null;
+  }
+  vehicleLaneResetForwardScratch.normalize();
+  const facingYawRad = Math.atan2(
+    -vehicleLaneResetForwardScratch.z,
+    vehicleLaneResetForwardScratch.x,
+  );
+  const landscapeNodeIds = collectActiveProceduralLandscapeNodeIdsFromNodes(document.nodes);
+  return selectNearestRoadLanePose(
+    landscapeNodeIds.map((landscapeNodeId) => resolveProceduralLandscapeRoadLanePose(
+      landscapeNodeId,
+      vehicleLaneResetPositionScratch.x,
+      vehicleLaneResetPositionScratch.z,
+      facingYawRad,
+    )),
+  );
+}
+
 function handleVehicleDriveResetTap(): void {
   if (!vehicleDriveActive.value || vehicleDriveResetBusy.value) {
     return;
@@ -19895,12 +19967,44 @@ function handleVehicleDriveResetTap(): void {
   vehicleDriveResetBusy.value = true;
   try {
     clearVehicleDriveIntroState();
-    const success = resetActiveVehiclePose();
+    resetVehicleDriveInputs();
+    const lanePose = resolveVehicleLaneResetPose();
+    const success = lanePose
+      ? vehicleDriveController.resetPose({
+          position: { x: lanePose.x, y: lanePose.y, z: lanePose.z },
+          yawRad: lanePose.yawRad,
+        })
+      : resetActiveVehiclePose();
     if (!success) {
       uni.showToast({ title: '无法重置车辆', icon: 'none' });
       return;
     }
+    if (!lanePose) {
+      uni.showToast({ title: '未找到车道，已原地重置', icon: 'none' });
+    }
+    const resetNodeId = vehicleDriveNodeId.value;
+    const resetRigidbody = resetNodeId ? rigidbodyInstances.get(resetNodeId) ?? null : null;
+    if (resetRigidbody?.body && resetRigidbody.object) {
+      syncSharedBodyFromObject(
+        resetRigidbody.body,
+        resetRigidbody.object,
+        resetRigidbody.orientationAdjustment,
+      );
+      resetPhysicsInterpolationState(resetRigidbody.body);
+      trySleepBody(resetRigidbody.body);
+    }
+    markPhysicsBridgeBodyDirty(resetNodeId);
+    resetPhysicsInterpolationState(vehicleDriveVehicle?.chassisBody as PhysicsBodyLike | null);
+    if (resetNodeId) {
+      controlledNodeMotionRuntime.clear(resetNodeId);
+    }
+    vehicleSpeedDisplayMps.value = 0;
+    vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+    vehicleSpeedDisplayLastCommitAtMs = getVehicleSpeedDisplayNowMs();
     updateVehicleDriveCamera(0, { immediate: true });
+  } catch (error) {
+    console.warn('[SceneViewer] Failed to reset vehicle to lane', error);
+    uni.showToast({ title: '无法重置车辆', icon: 'none' });
   } finally {
     vehicleDriveResetBusy.value = false;
   }
@@ -24467,7 +24571,8 @@ onUnmounted(() => {
   left: 12px;
   z-index: 1470;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: flex-start;
   gap: 12rpx;
   color: #f4f9ff;
   pointer-events: auto;
@@ -24475,17 +24580,20 @@ onUnmounted(() => {
 
 .viewer-environment-trigger-row {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8rpx;
+  gap: 10rpx;
   align-self: flex-start;
   padding: 8rpx;
-  border: 1px solid rgba(153, 193, 255, 0.24);
+  border: 1px solid rgba(153, 193, 255, 0.22);
   border-radius: 999rpx;
   background:
-    radial-gradient(circle at 12% 16%, rgba(111, 214, 255, 0.16), transparent 38%),
-    linear-gradient(180deg, rgba(10, 22, 37, 0.82), rgba(6, 15, 27, 0.7));
-  box-shadow: 0 18rpx 42rpx rgba(4, 12, 24, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(18rpx) saturate(1.08);
+    radial-gradient(circle at 18% 22%, rgba(111, 214, 255, 0.14), transparent 36%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 249, 255, 0.78));
+  box-shadow:
+    0 16rpx 34rpx rgba(52, 87, 128, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(16px) saturate(1.06);
 }
 
 .viewer-environment-trigger {
@@ -24498,15 +24606,15 @@ onUnmounted(() => {
   border: 1px solid transparent;
   border-radius: 50%;
   background: transparent;
-  color: rgba(229, 241, 255, 0.84);
+  color: #28506f;
   transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
 .viewer-environment-trigger.is-open,
 .viewer-environment-trigger:active {
-  border-color: rgba(119, 202, 255, 0.3);
-  background: rgba(92, 171, 235, 0.16);
-  color: #ffffff;
+  border-color: rgba(102, 178, 255, 0.3);
+  background: rgba(102, 178, 255, 0.14);
+  color: #12314d;
 }
 
 .viewer-environment-trigger[disabled] {
@@ -24517,69 +24625,91 @@ onUnmounted(() => {
   width: 38rpx;
   height: 38rpx;
   flex: none;
-  filter: drop-shadow(0 0 8rpx rgba(120, 208, 255, 0.28));
+  filter:
+    brightness(0.3)
+    sepia(0.65)
+    saturate(2.4)
+    hue-rotate(168deg)
+    drop-shadow(0 0 6rpx rgba(102, 178, 255, 0.2));
 }
 
 .viewer-environment-popover {
-  width: 296rpx;
-  padding: 16rpx;
-  border: 1px solid rgba(143, 194, 237, 0.26);
-  border-radius: 26rpx;
+  width: auto;
+  padding: 10rpx;
+  border: 1px solid rgba(153, 193, 255, 0.22);
+  border-radius: 18px;
   background:
-    radial-gradient(circle at 18% 0%, rgba(104, 193, 255, 0.16), transparent 38%),
-    linear-gradient(180deg, rgba(11, 23, 38, 0.96), rgba(6, 15, 27, 0.92));
-  box-shadow: 0 26rpx 60rpx rgba(2, 8, 18, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(24rpx) saturate(1.1);
+    radial-gradient(circle at 18% 0%, rgba(104, 193, 255, 0.14), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(244, 249, 255, 0.86));
+  box-shadow:
+    0 18rpx 40rpx rgba(52, 87, 128, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(20px) saturate(1.06);
+  color: #15324f;
   animation: viewer-environment-popover-in 0.16s ease-out both;
 }
 
 .viewer-environment-option-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12rpx;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10rpx;
 }
 
 .viewer-environment-option {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 112rpx;
-  padding: 12rpx;
-  border: 1px solid rgba(130, 166, 199, 0.2);
-  border-radius: 18rpx;
-  background: rgba(255, 255, 255, 0.035);
-  color: rgba(226, 238, 249, 0.84);
+  width: 76rpx;
+  height: 76rpx;
+  min-width: 76rpx;
+  min-height: 76rpx;
+  padding: 0;
+  border: 1px solid rgba(130, 166, 199, 0.18);
+  border-radius: 16rpx;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(239, 246, 255, 0.58));
+  color: #28506f;
   line-height: 1;
 }
 
 .viewer-environment-option.is-active {
-  border-color: rgba(103, 202, 255, 0.74);
+  border-color: rgba(103, 202, 255, 0.6);
   background:
-    radial-gradient(circle at 50% 20%, rgba(103, 202, 255, 0.2), transparent 58%),
-    rgba(79, 157, 219, 0.16);
-  color: #ffffff;
-  box-shadow: 0 0 0 1px rgba(126, 218, 255, 0.12), 0 0 24rpx rgba(74, 173, 245, 0.16);
+    radial-gradient(circle at 50% 20%, rgba(103, 202, 255, 0.22), transparent 58%),
+    linear-gradient(180deg, rgba(241, 249, 255, 0.94), rgba(224, 240, 255, 0.84));
+  color: #12314d;
+  box-shadow: 0 0 0 1px rgba(126, 218, 255, 0.12), 0 8rpx 20rpx rgba(74, 173, 245, 0.12);
 }
 
 .viewer-environment-option__icon {
-  width: 56rpx;
-  height: 56rpx;
+  width: 62rpx;
+  height: 62rpx;
   opacity: 0.88;
+  filter:
+    brightness(0.32)
+    sepia(0.6)
+    saturate(2.2)
+    hue-rotate(168deg);
 }
 
 .viewer-environment-option.is-active .viewer-environment-option__icon {
   opacity: 1;
-  filter: drop-shadow(0 0 10rpx rgba(125, 220, 255, 0.52));
+  filter:
+    brightness(0.26)
+    sepia(0.7)
+    saturate(2.8)
+    hue-rotate(168deg)
+    drop-shadow(0 0 8rpx rgba(74, 173, 245, 0.28));
 }
 
 @keyframes viewer-environment-popover-in {
   from {
     opacity: 0;
-    transform: translateY(-8rpx) scale(0.98);
+    transform: translateX(-8rpx) scale(0.98);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateX(0) scale(1);
   }
 }
 
@@ -24718,8 +24848,11 @@ onUnmounted(() => {
   }
 
   .viewer-environment-popover {
-    width: 272rpx;
-    padding: 14rpx;
+    padding: 10rpx;
+  }
+
+  .viewer-environment-option-grid {
+    gap: 8rpx;
   }
 }
 
@@ -26179,21 +26312,52 @@ onUnmounted(() => {
 }
 
 .viewer-drive-icon-button {
-  min-width: 48px;
-  min-height: 48px;
-  padding: 6px 12px;
-  border-radius: 14px;
-  border: 1px solid rgba(153, 193, 255, 0.2);
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(153, 193, 255, 0.24);
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 249, 255, 0.8));
-  color: #28506f;
-  box-shadow: 0 10px 24px rgba(52, 87, 128, 0.14);
-  backdrop-filter: blur(16px) saturate(1.06);
-  transition: background-color 0.18s ease, transform 0.18s cubic-bezier(.2,.9,.2,1), opacity 0.18s ease;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(122, 204, 255, 0.22), transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(235, 246, 255, 0.86));
+  color: #2f74a6;
+  box-shadow:
+    0 12px 28px rgba(52, 87, 128, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(18px) saturate(1.12);
+  transition:
+    transform 0.18s cubic-bezier(.2,.9,.2,1),
+    box-shadow 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease;
   position: relative;
   overflow: hidden;
+}
+
+.viewer-drive-icon-button::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 1px solid rgba(120, 190, 240, 0.16);
+  pointer-events: none;
+}
+
+.viewer-drive-icon-button::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle, rgba(102, 178, 255, 0.28), transparent 62%);
+  opacity: 0;
+  transform: scale(0.55);
+  transition: opacity 0.18s ease, transform 0.22s ease;
+  pointer-events: none;
 }
 
 .viewer-drive-icon-button.is-busy,
@@ -26202,45 +26366,61 @@ onUnmounted(() => {
 }
 
 .viewer-drive-icon-button:active {
-  transform: scale(0.95);
+  transform: scale(0.93);
+  border-color: rgba(102, 178, 255, 0.38);
+  box-shadow:
+    0 8px 18px rgba(52, 87, 128, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
-/* Tooltip from aria-label on hover (desktop/H5) */
-.viewer-drive-icon-button:hover::after {
-  content: attr(aria-label);
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%) translateY(-8px);
-  bottom: 100%;
-  margin-bottom: 8px;
-  background: rgba(255, 255, 255, 0.94);
-  color: #28506f;
-  padding: 6px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  white-space: nowrap;
-  box-shadow: 0 8px 20px rgba(52, 87, 128, 0.14);
+.viewer-drive-icon-button:active::after {
   opacity: 1;
-  pointer-events: none;
+  transform: scale(1.18);
 }
 
-/* small click ripple effect */
-.viewer-drive-icon-button::before {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  background: rgba(102, 178, 255, 0.12);
+.viewer-drive-reset-glyph {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.viewer-drive-reset-arc {
+  width: 19px;
+  height: 19px;
   border-radius: 50%;
-  transform: translate(-50%, -50%) scale(0);
-  opacity: 0;
-  transition: transform 420ms cubic-bezier(.2,.9,.2,1), opacity 420ms linear;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-right-color: transparent;
+  transform: rotate(-12deg);
+  transition: transform 0.2s ease;
 }
-.viewer-drive-icon-button:active::before {
-  transform: translate(-50%, -50%) scale(10);
-  opacity: 1;
+
+.viewer-drive-reset-head {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-top: 4.5px solid transparent;
+  border-bottom: 4.5px solid transparent;
+  border-left: 5.5px solid currentColor;
+  transform: rotate(30deg);
+}
+
+.viewer-drive-icon-button:active .viewer-drive-reset-arc {
+  transform: rotate(22deg);
+}
+
+.viewer-drive-icon-button.is-busy .viewer-drive-reset-glyph {
+  animation: viewer-drive-reset-spin 0.72s linear infinite;
+}
+
+@keyframes viewer-drive-reset-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Text-style start buttons (drive / auto-tour) */

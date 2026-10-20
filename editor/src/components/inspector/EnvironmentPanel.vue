@@ -65,7 +65,7 @@ const SLOWROADS_CONTROL_MODES: Array<{
     hint: '进入场景时按设备本地日期与时间计算一次，不显示切换按钮。',
   },
   {
-    title: '仅默认配置',
+    title: '只使用默认配置',
     value: 'default',
     hint: '始终使用下方默认季节与时间，不显示切换按钮。',
   },
