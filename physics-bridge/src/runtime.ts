@@ -17,6 +17,7 @@ export interface PhysicsWorkerController {
   step(deltaMs: number): Promise<PhysicsStepFrame>
   setBodyTransform(command: Extract<PhysicsWorkerRequest, { type: 'set-body-transform' }>['payload']): Promise<void>
   setBodyVelocity(command: PhysicsBodyVelocityCommand): Promise<void>
+  setBodyCollisionEnabled(command: Extract<PhysicsWorkerRequest, { type: 'set-body-collision' }>['payload']): Promise<void>
   setVehicleInput(command: Extract<PhysicsWorkerRequest, { type: 'set-vehicle-input' }>['payload']): Promise<void>
   setCharacterInput(command: PhysicsCharacterInputCommand): Promise<void>
   addRuntimeBodies(command: Extract<PhysicsWorkerRequest, { type: 'add-runtime-bodies' }>['payload']): Promise<void>
@@ -56,6 +57,7 @@ export function createNoopPhysicsWorkerController(): PhysicsWorkerController {
     },
     async setBodyTransform() {},
     async setBodyVelocity() {},
+    async setBodyCollisionEnabled() {},
     async setVehicleInput() {},
     async setCharacterInput() {},
     async addRuntimeBodies() {},
@@ -131,6 +133,11 @@ export function attachPhysicsWorkerRuntime(
             }
             case 'set-body-velocity': {
               await controller.setBodyVelocity(request.payload)
+              scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
+              break
+            }
+            case 'set-body-collision': {
+              await controller.setBodyCollisionEnabled(request.payload)
               scope.postMessage({ id: request.id, ok: true, type: request.type, payload: null } satisfies PhysicsWorkerResponse)
               break
             }

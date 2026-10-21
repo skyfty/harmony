@@ -627,7 +627,9 @@ import { resolveDocumentGroundNode as resolveSharedDocumentGroundNode } from '@h
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@harmony/schema/groundCollisionRuntimeState';
 import { clearGroundCollisionRuntimeHost, syncGroundCollisionRuntimeHost } from '@harmony/schema/groundCollisionRuntimeHost';
 import { createGroundCollisionRuntimeBridgeDeps } from '@harmony/schema/groundCollisionRuntimeBridge';
-import { collectGroundAnchorWorldPositions } from '@harmony/schema/groundAnchorRuntime';
+import {
+  collectGroundAnchorWorldTargets,
+} from '@harmony/schema/groundAnchorRuntime';
 import {
   DEM_GROUND_COLLISION_READY_TIMEOUT_MS,
   collectGroundCollisionSourceNodeIds,
@@ -649,6 +651,7 @@ import {
   type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
   syncBodyFromObject as syncSharedBodyFromObject,
 } from '@harmony/schema/physicsBodySync';
+import { VehicleMotionAuthorityController } from '@harmony/schema/vehicleMotionAuthority';
 import { loadAssetObject, loadNodeObject } from '@harmony/schema/modelAssetLoader';
 import { mergeRuntimePrefabAssetRegistry } from '@harmony/schema/runtimePrefabAssetRegistry';
 import { updateAttachedTerrainTextureStreams } from '@harmony/schema/terrainTextureStream';
@@ -985,9 +988,6 @@ import {
   type AutoTourComponentProps,
 } from '@harmony/schema/components/definitions/autoTourComponent';
 import {
-  purePursuitComponentDefinition,
-} from '@harmony/schema/components/definitions/purePursuitComponent';
-import {
   sceneStateAnchorComponentDefinition,
   SCENE_STATE_ANCHOR_COMPONENT_TYPE,
 } from '@harmony/schema/components/definitions/sceneStateAnchorComponent';
@@ -1094,14 +1094,12 @@ import {
   VehicleDriveController,
   createAutoTourRuntime,
   createBridgeVehicleProxy,
-  createPhysicsAwareAutoTourVehicleInstances,
   CharacterAutoTourRuntimeManager,
   createControlledNodeMotionRuntime,
   resolveVehicleOrObjectWorldPosition,
   stopTourAndUnfollow,
   syncAutoTourActiveNodesFromRuntime,
   resolveAutoTourFollowNodeId,
-  holdVehicleBrakeSafe,
   updateVehicleSpeedAndApplyParkingHoldSafe,
   VEHICLE_PARKED_SPEED_EPSILON,
   VEHICLE_PARKING_HOLD_SPEED_EPSILON,
@@ -2512,7 +2510,6 @@ previewComponentManager.registerDefinition(onlineComponentDefinition);
 previewComponentManager.registerDefinition(networkSyncComponentDefinition);
 previewComponentManager.registerDefinition(guideRouteComponentDefinition);
 previewComponentManager.registerDefinition(autoTourComponentDefinition);
-previewComponentManager.registerDefinition(purePursuitComponentDefinition);
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition);
 previewComponentManager.registerDefinition(groundAnchorComponentDefinition);
 previewComponentManager.registerDefinition(groundCollisionSourceComponentDefinition);
@@ -3087,6 +3084,8 @@ const physicsEnvironmentEnabled = ref(true);
 const physicsBridgeCharacterBindingsReady = ref(false);
 
 const rigidbodyInstances = new Map<string, ViewerRigidbodyInstance>();
+const vehicleMotionAuthority = new VehicleMotionAuthorityController();
+let activeManualAuthorityNodeId: string | null = null;
 const physicsBridgeDirtyBodyNodeIds = new Set<string>();
 const physicsBridgeBodyDirtyRevisionByNodeId = new Map<string, number>();
 const physicsBridgePendingBodySyncRevisionByNodeId = new Map<string, number>();
@@ -4473,7 +4472,7 @@ function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3
     nodeId,
     vehicleInstances,
     nodeObjectMap,
-    isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+    isPhysicsEnabled: () => false,
     target: autoTourCameraFollowAnchorScratch,
   })) {
     return autoTourCameraFollowAnchorScratch;
@@ -5024,6 +5023,10 @@ watch(
 
 watch(vehicleDriveActive, (active) => {
   if (!active) {
+    if (activeManualAuthorityNodeId) {
+      vehicleMotionAuthority.endManualPhysics(activeManualAuthorityNodeId);
+      activeManualAuthorityNodeId = null;
+    }
     clearVehicleDriveIntroState();
     vehicleDriveCameraFollowState.initialized = false;
     vehicleSpeedDisplayMps.value = 0;
@@ -8014,7 +8017,7 @@ function resolvePunchBadgeReference(
       nodeId: followNodeId,
       vehicleInstances,
       nodeObjectMap,
-      isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+      isPhysicsEnabled: () => false,
       target: signboardReferenceScratch,
     })) {
       return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: followNodeId };
@@ -10025,22 +10028,14 @@ const floatingAutoTourPauseButton = computed(() => {
   } as const;
 });
 
-const autoTourVehicleInstances = createPhysicsAwareAutoTourVehicleInstances(
-  vehicleInstances,
-  () => physicsEnvironmentEnabled.value,
-);
-
 const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
   nodeObjectMap,
-  vehicleInstances: autoTourVehicleInstances,
-  resolveVehicleMotionTelemetry: (nodeId) => controlledNodeMotionRuntime.get(nodeId),
   isManualDriveActive: () => vehicleDriveActive.value,
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);
   },
-  requiresExplicitStart: true,
   onTerminalStop: (nodeId) => {
     autoTourPausedIsTerminal.value = true;
     autoTourPausedNodeId.value = nodeId ?? null;
@@ -10049,7 +10044,6 @@ const autoTourRuntime = createAutoTourRuntime({
     }
     autoTourPaused.value = true;
     clearAutoTourResumeBlendState();
-    applyAutoTourPauseForActiveNodes();
     applyAutoTourCameraInputPolicy();
     if (nodeId) {
       reapplyAutoTourPausedCameraSnapshot(nodeId);
@@ -10066,23 +10060,25 @@ const autoTourRuntime = createAutoTourRuntime({
     }
     autoTourPaused.value = true
     clearAutoTourResumeBlendState()
-    applyAutoTourPauseForActiveNodes()
     applyAutoTourCameraInputPolicy()
     if (nodeId) {
       reapplyAutoTourPausedCameraSnapshot(nodeId)
     }
   },
-  stopNodeMotion: (nodeId) => {
-    const entry = rigidbodyInstances.get(nodeId) ?? null;
-    if (!entry) {
-      return;
+  onAutoSurfaceStart: (nodeId) => {
+    const binding = rigidbodyInstances.get(nodeId) ?? null;
+    vehicleMotionAuthority.beginAutoSurface(nodeId, binding);
+    const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
+    if (physicsBridge && Number.isFinite(bodyId)) {
+      void physicsBridge.setBodyCollisionEnabled({ bodyId: bodyId!, enabled: false });
     }
-    if (entry.object) {
-      syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
+  },
+  onAutoSurfaceEnd: (nodeId) => {
+    vehicleMotionAuthority.endAutoSurface(nodeId);
+    const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
+    if (physicsBridge && Number.isFinite(bodyId)) {
+      void physicsBridge.setBodyCollisionEnabled({ bodyId: bodyId!, enabled: true });
     }
-    entry.body.velocity.set(0, 0, 0);
-    entry.body.angularVelocity.set(0, 0, 0);
-    trySleepBody(entry.body);
     markPhysicsBridgeBodyDirty(nodeId);
   },
 });
@@ -10215,6 +10211,8 @@ function syncAirWallsForDocument(sceneDocument: SceneJsonExportDocument | null):
 
 function clearLegacyPhysicsWorld(): void {
   clearVehicleDriveIntroState();
+  vehicleMotionAuthority.clear();
+  activeManualAuthorityNodeId = null;
   vehicleInstances.clear();
   rigidbodyInstances.clear();
   scenePreviewPerf.reset();
@@ -10315,11 +10313,14 @@ function resolveSceneryGroundCollisionReferenceWorld(
 ): boolean {
   void camera;
   targetPositions.length = 0;
-  targetPositions.push(...collectGroundAnchorWorldPositions({
+  const targets = collectGroundAnchorWorldTargets({
     document: currentDocument,
     resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
     runtimeRoots: sceneGraphRoot,
-  }));
+  });
+  targetPositions.push(...targets
+    .filter((target) => !target.nodeId || vehicleMotionAuthority.shouldIncludeGroundAnchor(target.nodeId))
+    .map((target) => target.position));
   return targetPositions.length > 0;
 }
 
@@ -11067,6 +11068,9 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   }
   physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
+    if (!vehicleMotionAuthority.shouldWritePhysicsToObject(nodeId)) {
+      return;
+    }
     if (characterPhysicsBridgeVisualStateByNodeId.has(nodeId)) {
       return;
     }
@@ -11340,6 +11344,12 @@ function syncSceneryPhysicsBridgeBodyTransforms(): void {
     physicsBridgeLastFullBodySyncAtMs = nowMs;
   }
   candidateNodeIds.forEach((nodeId) => {
+    if (!vehicleMotionAuthority.shouldWritePhysicsToObject(nodeId)) {
+      physicsBridgeDirtyBodyNodeIds.delete(nodeId);
+      physicsBridgeBodyDirtyRevisionByNodeId.delete(nodeId);
+      physicsBridgePendingBodySyncRevisionByNodeId.delete(nodeId);
+      return;
+    }
     const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId);
     if (typeof bodyId !== 'number') {
       physicsBridgeDirtyBodyNodeIds.delete(nodeId);
@@ -11550,118 +11560,10 @@ function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: P
   instance.hasChassisPositionSample = false;
 }
 
-function resolveSceneryPhysicsBridgeVehicleControlInput(nodeId: string): PhysicsBridgeVehicleControlInput | null {
-  // 根据节点ID从车辆实例映射表中获取对应的车辆实例
-  const instance = vehicleInstances.get(nodeId) ?? null;
-  if (!instance) {
-    // 未找到实例，返回 null
-    return null;
-  }
-
-  // 通过节点ID解析场景节点，并获取其车辆组件及属性
-  const node = resolveNodeById(nodeId);
-  const vehicleComponent = resolveVehicleComponent(node);
-  // 对车辆属性进行范围限制，确保数值合法
-  const vehicleProps = clampVehicleComponentProps(vehicleComponent?.props ?? null);
-
-  // 获取车轮信息列表，若不是数组则回退为空数组
-  const wheelInfos = Array.isArray(instance.vehicle.wheelInfos) ? instance.vehicle.wheelInfos : [];
-  if (!wheelInfos.length) {
-    // 没有车轮信息，无法计算控制输入，返回 null
-    return null;
-  }
-  const targetSpeedMps = Number.isFinite(instance.vehicle.autoTourTargetSpeedMps)
-    ? Math.max(0, instance.vehicle.autoTourTargetSpeedMps)
-    : 0;
-  const targetSteeringRad = Number.isFinite(instance.vehicle.autoTourTargetSteeringRad)
-    ? instance.vehicle.autoTourTargetSteeringRad
-    : 0;
-  const chassisBody = instance.vehicle.chassisBody ?? null;
-  const velocity = chassisBody?.velocity ?? null;
-  const quaternion = chassisBody?.quaternion ?? null;
-  const maxSpeedMps = Number.isFinite(vehicleProps.maxSpeedKmh) && vehicleProps.maxSpeedKmh > 0
-    ? vehicleProps.maxSpeedKmh / 3.6
-    : Number.POSITIVE_INFINITY;
-  const maxSteerRad = THREE.MathUtils.degToRad(26);
-
-  let forwardSpeed = 0;
-  if (velocity && quaternion && instance.axisForward) {
-    tempForwardVec.copy(instance.axisForward);
-    if (tempForwardVec.lengthSq() > 1e-8) {
-      tempForwardVec.normalize().applyQuaternion(quaternion);
-      forwardSpeed = velocity.x * tempForwardVec.x + velocity.y * tempForwardVec.y + velocity.z * tempForwardVec.z;
-    }
-  }
-
-  // 目标速度为零时直接进入制动保持，避免物理后端把极小油门误判成持续前进。
-  if (targetSpeedMps <= 0.02) {
-    return {
-      steering: THREE.MathUtils.clamp(targetSteeringRad / maxSteerRad, -1, 1),
-      throttle: 0,
-      brake: 1,
-    };
-  }
-
-  const speedError = targetSpeedMps - Math.max(0, forwardSpeed);
-  const speedReference = Number.isFinite(maxSpeedMps) && maxSpeedMps > 0 ? maxSpeedMps : Math.max(1, targetSpeedMps);
-  const speedDeadband = Math.max(0.05, targetSpeedMps * 0.12);
-  const cruiseThrottle = THREE.MathUtils.clamp(targetSpeedMps / speedReference, 0.02, 1);
-  const accelThrottle = speedError > speedDeadband
-    ? THREE.MathUtils.clamp(speedError / speedReference, 0.02, 1)
-    : 0;
-  const brakeInput = speedError < -speedDeadband
-    ? THREE.MathUtils.clamp((-speedError) / speedReference, 0.02, 0.5)
-    : 0;
-  const maintainThrottle = THREE.MathUtils.clamp(Math.max(cruiseThrottle, accelThrottle), 0.02, 0.35);
-  return {
-    steering: THREE.MathUtils.clamp(targetSteeringRad / maxSteerRad, -1, 1),
-    throttle: brakeInput > 0 ? 0 : maintainThrottle,
-    brake: brakeInput,
-  };
-}
-
-function setSceneryAutoTourVehicleDesiredControl(
-  vehicleInstance: VehicleDriveVehicle | null | undefined,
-  control: { targetSpeedMps: number; steeringRad: number },
-): void {
-  const vehicle = vehicleInstance ?? null;
-  if (!vehicle) {
-    return;
-  }
-  vehicle.autoTourTargetSpeedMps = Number.isFinite(control.targetSpeedMps) ? Math.max(0, control.targetSpeedMps) : 0;
-  vehicle.autoTourTargetSteeringRad = Number.isFinite(control.steeringRad) ? control.steeringRad : 0;
-}
-
-function resolveSceneryPhysicsBridgeAutoTourNodeId(): string | null {
-  if (!activeAutoTourNodeIds.size) {
-    return null;
-  }
-  const preferred = autoTourFollowNodeId.value ?? null;
-  if (preferred && activeAutoTourNodeIds.has(preferred)) {
-    return preferred;
-  }
-  return activeAutoTourNodeIds.values().next().value ?? null;
-}
-
 function syncSceneryPhysicsBridgeVehicleInput(): void {
   const manualDriveNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
-  const autoTourNodeId = !manualDriveNodeId ? resolveSceneryPhysicsBridgeAutoTourNodeId() : null;
-  const autoTourControlledNodeId = manualDriveNodeId && activeAutoTourNodeIds.has(manualDriveNodeId)
-    ? manualDriveNodeId
-    : autoTourNodeId;
-  const bridgeActiveNodeId = autoTourControlledNodeId ?? manualDriveNodeId;
-  const resolvedAutoTourInput = autoTourControlledNodeId
-    ? resolveSceneryPhysicsBridgeVehicleControlInput(autoTourControlledNodeId)
-    : null
-  // Reused per-frame input container: `syncPhysicsBridgeVehicleInput` reads it
-  // synchronously, so a single scratch object avoids one allocation per frame.
   const bridgeInput = physicsBridgeVehicleInputScratch;
-  if (autoTourControlledNodeId) {
-    const autoTourInput = resolvedAutoTourInput;
-    bridgeInput.steering = autoTourInput ? autoTourInput.steering : 0;
-    bridgeInput.throttle = autoTourInput ? autoTourInput.throttle : 0;
-    bridgeInput.brake = autoTourInput ? autoTourInput.brake : 1;
-  } else if (manualDriveNodeId) {
+  if (manualDriveNodeId) {
     bridgeInput.steering = vehicleDriveInput.steering;
     bridgeInput.throttle = vehicleDriveInput.throttle;
     bridgeInput.brake = vehicleDriveInput.brake;
@@ -11675,7 +11577,7 @@ function syncSceneryPhysicsBridgeVehicleInput(): void {
     state: physicsBridgeVehicleInputSyncState,
     bridge: physicsBridge,
     sceneLoaded: physicsBridgeSceneLoaded,
-    activeNodeId: bridgeActiveNodeId,
+    activeNodeId: manualDriveNodeId,
     vehicleIdByNodeId: physicsBridgeVehicleIdByNodeId,
     input: bridgeInput,
     resolveBodyId: (nodeId) => physicsBridgeBodyIdByNodeId.get(nodeId),
@@ -19751,6 +19653,11 @@ function startVehicleDriveMode(
     : { camera: null as THREE.PerspectiveCamera | null };
   const result = vehicleDriveController.startDrive(event, ctx);
   if (result.success) {
+    const manualNodeId = event.targetNodeId ?? event.nodeId ?? null;
+    if (manualNodeId) {
+      vehicleMotionAuthority.beginManualPhysics(manualNodeId);
+      activeManualAuthorityNodeId = manualNodeId;
+    }
     resetCharacterControlInputs();
     resetProtagonistPoseState();
     vehicleDriveCameraFollowState.initialized = false;
@@ -19789,18 +19696,20 @@ function resolveNorthDirectionAngleDegrees(direction: EnvironmentNorthDirection 
 
 function updateVehicleSpeedFromVehicle(): void {
   const manualNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
-  const autoTourNodeId = !manualNodeId ? resolveSceneryPhysicsBridgeAutoTourNodeId() : null;
+  const autoTourNodeId = !manualNodeId
+    ? activeAutoTourNodeIds.values().next().value ?? null
+    : null;
   const telemetryNodeId = manualNodeId ?? autoTourNodeId;
   const manualVehicle = vehicleDriveVehicle;
   const manualChassisBody = manualVehicle?.chassisBody ?? null;
-  const telemetryInstance = telemetryNodeId ? vehicleInstances.get(telemetryNodeId) ?? null : null;
+  const telemetryInstance = manualNodeId ? vehicleInstances.get(manualNodeId) ?? null : null;
   if (telemetryNodeId !== autoTourTelemetryLastNodeId) {
     autoTourTelemetryLastNodeId = telemetryNodeId;
     autoTourTelemetryHasWorldPositionSample = false;
     autoTourTelemetryLastSampleAtMs = 0;
   }
   const telemetryVehicle = telemetryInstance?.vehicle ?? manualVehicle;
-  const chassisBody = telemetryVehicle?.chassisBody ?? manualChassisBody;
+  const chassisBody = manualNodeId ? telemetryVehicle?.chassisBody ?? manualChassisBody : null;
   const nowMs = getVehicleSpeedDisplayNowMs();
   let telemetry = telemetryNodeId ? controlledNodeMotionRuntime.get(telemetryNodeId) : null;
   const driveObject = telemetryNodeId ? nodeObjectMap.get(telemetryNodeId) ?? null : null;
@@ -19849,7 +19758,9 @@ function updateVehicleSpeedFromVehicle(): void {
         parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
         parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
         engageParkingHold: false,
-        resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(telemetryNodeId ?? ''),
+        resolveBrakeForce: () => clampVehicleComponentProps(
+          resolveVehicleComponent(resolveNodeById(telemetryNodeId ?? ''))?.props ?? null,
+        ).brakeForceMax * 6,
       });
     }
 
@@ -20360,109 +20271,28 @@ function restoreVehicleDriveCameraState(): void {
   vehicleDriveController.restoreCamera(ctx);
 }
 
-function resolveAutoTourVehicleBrakeForce(nodeId: string): number {
-  const node = resolveNodeById(nodeId);
-  const vehicle = resolveEnabledComponentState<any>(node, VEHICLE_COMPONENT_TYPE);
-  const brakeForceMax = vehicle
-    ? clampVehicleComponentProps(vehicle.props).brakeForceMax
-    : clampVehicleComponentProps(null).brakeForceMax;
-  return brakeForceMax * 6;
-}
-
-function applyAutoTourVehicleHoldBrake(nodeId: string): void {
-  const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
-  if (!vehicleInstance) {
-    return;
-  }
-  const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId);
-  holdVehicleBrakeSafe({ vehicleInstance, brakeForce });
-  try {
-    const chassisBody = vehicleInstance.vehicle.chassisBody;
-    chassisBody.velocity.set(0, 0, 0);
-    chassisBody.angularVelocity.set(0, 0, 0);
-    trySleepBody(chassisBody as PhysicsBodyLike);
-  } catch {
-    // best-effort
-  }
-}
-
-function applyAutoTourRigidBodyStop(nodeId: string): void {
-  const entry = rigidbodyInstances.get(nodeId) ?? null;
-  if (!entry) {
-    return;
-  }
-  try {
-    if (entry.object) {
-      syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment);
-    }
-    entry.body.velocity.set(0, 0, 0);
-    entry.body.angularVelocity.set(0, 0, 0);
-    entry.body.sleep?.();
-    markPhysicsBridgeBodyDirty(nodeId);
-  } catch {
-    // best-effort
-  }
-}
-
-function applyAutoTourPauseForActiveNodes(): void {
-  const manualNodeId = vehicleDriveNodeId.value ?? null;
-  activeAutoTourNodeIds.forEach((nodeId) => {
-    if (manualNodeId && manualNodeId === nodeId) {
-      return;
-    }
-    applyAutoTourVehicleHoldBrake(nodeId);
-    applyAutoTourRigidBodyStop(nodeId);
-  });
-}
-
 function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResult): THREE.Object3D | null {
   const node = resolveNodeById(nodeId);
   const object = nodeObjectMap.get(nodeId) ?? null;
-  const rigidbodyEntry = rigidbodyInstances.get(nodeId) ?? null;
-  const vehicleInstance = vehicleInstances.get(nodeId) ?? null;
+  const vehicleComponent = resolveVehicleComponent(node);
   if (!node || !object) {
     return null;
   }
 
   autoTourSnapWorldQuaternion.setFromAxisAngle(autoTourSnapWorldUp, snap.yaw);
   autoTourSnapWorldPosition.copy(snap.worldPosition);
-  const chassisBody = vehicleInstance?.vehicle?.chassisBody ?? null;
-  const currentChassisY = chassisBody && Number.isFinite(chassisBody.position.y)
-    ? chassisBody.position.y
-    : object.getWorldPosition(autoTourSnapLocalPosition).y;
-  if (Number.isFinite(currentChassisY)) {
-    autoTourSnapWorldPosition.y = currentChassisY;
+  if (vehicleComponent) {
+    object.updateMatrixWorld(true);
+    const objectBounds = new THREE.Box3().setFromObject(object);
+    if (!objectBounds.isEmpty()) {
+      const currentOrigin = object.getWorldPosition(new THREE.Vector3());
+      const groundClearance = Math.max(0, currentOrigin.y - objectBounds.min.y);
+      autoTourSnapWorldPosition.y += groundClearance;
+    }
   }
   applyObjectWorldPose(object, autoTourSnapWorldPosition, autoTourSnapWorldQuaternion);
   syncSceneNodeLocalTransformFromObject(node, object);
   syncInstancedTransform(object, true);
-
-  if (rigidbodyEntry) {
-    syncSharedBodyFromObject(rigidbodyEntry.body, object, rigidbodyEntry.orientationAdjustment);
-    rigidbodyEntry.body.velocity.set(0, 0, 0);
-    rigidbodyEntry.body.angularVelocity.set(0, 0, 0);
-    resetPhysicsInterpolationState(rigidbodyEntry.body);
-    trySleepBody(rigidbodyEntry.body);
-    markPhysicsBridgeBodyDirty(nodeId);
-  }
-
-  if (vehicleInstance && chassisBody) {
-    const wheelCount = Math.max(0, vehicleInstance.wheelCount || vehicleInstance.vehicle.wheelInfos.length || 0);
-    for (let index = 0; index < wheelCount; index += 1) {
-      vehicleInstance.vehicle.applyEngineForce(0, index);
-      vehicleInstance.vehicle.setSteeringValue(0, index);
-      vehicleInstance.vehicle.setBrake(0, index);
-    }
-    chassisBody.velocity.set(0, 0, 0);
-    chassisBody.angularVelocity.set(0, 0, 0);
-    resetPhysicsInterpolationState(chassisBody as PhysicsBodyLike);
-    trySleepBody(chassisBody as PhysicsBodyLike);
-    markPhysicsBridgeBodyDirty(nodeId);
-    setSceneryAutoTourVehicleDesiredControl(vehicleInstance.vehicle, {
-      targetSpeedMps: 0,
-      steeringRad: 0,
-    });
-  }
 
   return object;
 }
@@ -20615,6 +20445,10 @@ function handleFloatingAutoTourTap(): void {
     resetVehicleDriveInputs();
     setVehicleDriveUiOverride('hide');
 
+    vehicleMotionAuthority.beginAutoSurface(
+      targetNodeId,
+      rigidbodyInstances.get(targetNodeId) ?? null,
+    );
     const snappedObject = applyAutoTourSnapToVehicle(targetNodeId, snap);
     if (!snappedObject) {
       uni.showToast({ title: '无法同步车辆位置', icon: 'none' });
@@ -20670,7 +20504,6 @@ function handleFloatingAutoTourPauseToggleTap(): void {
   autoTourPausedNodeId.value = null;
   autoTourPaused.value = true;
   clearAutoTourResumeBlendState();
-  applyAutoTourPauseForActiveNodes();
   applyAutoTourCameraInputPolicy();
   reapplyAutoTourPausedCameraSnapshot(targetNodeId);
 }
@@ -20684,7 +20517,6 @@ function pauseAutoTourForInspection(targetNodeId: string): void {
   autoTourPausedNodeId.value = null;
   autoTourPaused.value = true;
   clearAutoTourResumeBlendState();
-  applyAutoTourPauseForActiveNodes();
   applyAutoTourCameraInputPolicy();
   reapplyAutoTourPausedCameraSnapshot(targetNodeId);
 }
@@ -23679,10 +23511,7 @@ function startRenderLoop(
             applyBehaviorSoundVolume(instance);
           });
 
-          if (autoTourPaused.value) {
-            // Instead of advancing runtime, keep vehicles held still while paused.
-            applyAutoTourPauseForActiveNodes();
-          } else {
+          if (!autoTourPaused.value) {
             autoTourRuntime.update(deltaSeconds);
           }
           const manualDriveNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;

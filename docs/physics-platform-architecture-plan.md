@@ -33,11 +33,9 @@ Today, the physics runtime is deeply coupled to `cannon-es` in shared code.
 Confirmed direct `cannon-es` imports exist in:
 
 - `schema/physicsEngine.ts`
-- `schema/autoTourRuntime.ts`
 - `schema/compiledGroundCollisionRuntime.ts`
 - `schema/infiniteGroundChunkCollisions.ts`
 - `schema/VehicleDriveController.ts`
-- `schema/purePursuitRuntime.ts`
 - `schema/scenePreviewPerf.ts`
 - `schema/airWall.ts`
 - `schema/boundaryWall.ts`
@@ -466,11 +464,9 @@ Exit criteria:
 Refactor:
 
 - `schema/physicsEngine.ts`
-- `schema/autoTourRuntime.ts`
 - `schema/compiledGroundCollisionRuntime.ts`
 - `schema/infiniteGroundChunkCollisions.ts`
 - `schema/VehicleDriveController.ts`
-- `schema/purePursuitRuntime.ts`
 - `schema/scenePreviewPerf.ts`
 
 Goal:

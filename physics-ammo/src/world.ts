@@ -20,6 +20,7 @@ import {
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
   type PhysicsBodyVelocityCommand,
+  type PhysicsBodyCollisionCommand,
   type PhysicsCharacterDesc,
   type PhysicsContactEvent,
   type PhysicsMaterialDesc,
@@ -50,6 +51,7 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
   private dispatcher: any | null = null
   private broadphase: any | null = null
   private solver: any | null = null
+  private bodyCollisionFlags = new Map<number, number>()
 
   setModule(module: unknown): void {
     this.ammo = module as AmmoApi
@@ -97,6 +99,29 @@ export class AmmoPhysicsWorld extends PhysicsWorldBase<any, any, CharacterState,
     if (command.wakeUp !== false) {
       state.body.activate?.(true)
     }
+  }
+
+  setBodyCollisionEnabled(command: PhysicsBodyCollisionCommand): void {
+    const ammo = this.ammo
+    const state = this.bodies.get(command.bodyId)
+    if (!ammo || !state) {
+      return
+    }
+    const noContactResponse = 4
+    const currentFlags = Number(state.body.getCollisionFlags?.() ?? 0)
+    if (!command.enabled) {
+      if (!this.bodyCollisionFlags.has(command.bodyId)) {
+        this.bodyCollisionFlags.set(command.bodyId, currentFlags)
+      }
+      state.body.setCollisionFlags?.(currentFlags | noContactResponse)
+      state.body.setActivationState?.(2)
+      return
+    }
+    const originalFlags = this.bodyCollisionFlags.get(command.bodyId)
+    this.bodyCollisionFlags.delete(command.bodyId)
+    const restoredFlags = originalFlags ?? (currentFlags & ~noContactResponse)
+    state.body.setCollisionFlags?.(restoredFlags)
+    state.body.activate?.(true)
   }
 
   raycast(command: PhysicsRaycastCommand): PhysicsRaycastHit | null {

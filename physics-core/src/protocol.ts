@@ -1,5 +1,6 @@
 import type {
   PhysicsAddRuntimeBodiesCommand,
+  PhysicsBodyCollisionCommand,
   PhysicsBodySnapshot,
   PhysicsBodyTransformCommand,
   PhysicsBodyVelocityCommand,
@@ -52,6 +53,7 @@ export type PhysicsWorkerRequest =
   | { id: number; type: 'step'; payload: { deltaMs: number } }
   | { id: number; type: 'set-body-transform'; payload: PhysicsBodyTransformCommand }
   | { id: number; type: 'set-body-velocity'; payload: PhysicsBodyVelocityCommand }
+  | { id: number; type: 'set-body-collision'; payload: PhysicsBodyCollisionCommand }
   | { id: number; type: 'set-vehicle-input'; payload: PhysicsVehicleInputCommand }
   | { id: number; type: 'set-character-input'; payload: PhysicsCharacterInputCommand }
   | { id: number; type: 'add-runtime-bodies'; payload: PhysicsAddRuntimeBodiesCommand }
@@ -66,6 +68,7 @@ export type PhysicsWorkerSuccessResponse =
   | { id: number; ok: true; type: 'step'; payload: PhysicsStepFrame }
   | { id: number; ok: true; type: 'set-body-transform'; payload: null }
   | { id: number; ok: true; type: 'set-body-velocity'; payload: null }
+  | { id: number; ok: true; type: 'set-body-collision'; payload: null }
   | { id: number; ok: true; type: 'set-vehicle-input'; payload: null }
   | { id: number; ok: true; type: 'set-character-input'; payload: null }
   | { id: number; ok: true; type: 'add-runtime-bodies'; payload: null }

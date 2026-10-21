@@ -1,6 +1,6 @@
-export { createPhysicsAwareAutoTourVehicleInstances, resolveAutoTourReferenceWorldPosition, resolveVehicleOrObjectWorldPosition, startTourAndFollow, stopTourAndUnfollow } from './autoTourHelpers'
+export { resolveVehicleOrObjectWorldPosition, startTourAndFollow, stopTourAndUnfollow } from './autoTourHelpers'
 export { createAutoTourRuntime } from './autoTourRuntime'
-export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourRouteSnapResult, AutoTourVehicleInstanceLike } from './autoTourRuntime'
+export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourRouteSnapResult } from './autoTourRuntime'
 export { AutoTourCameraAvoidanceController } from './autoTourCameraAvoidanceController'
 export { CharacterAutoTourRuntimeManager } from './characterAutoTourRuntime'
 export type {
@@ -27,7 +27,7 @@ export {
   updateMotionAwareFollowCamera,
 } from './followCameraController'
 export type { FollowCameraMotionState } from './followCameraController'
-export { holdVehicleBrakeSafe, updateVehicleSpeedAndApplyParkingHoldSafe, VEHICLE_PARKED_SPEED_EPSILON, VEHICLE_PARKING_HOLD_SPEED_EPSILON, applyPurePursuitVehicleControl, applyPurePursuitVehicleControlSafe } from './purePursuitRuntime'
+export { updateVehicleSpeedAndApplyParkingHoldSafe, VEHICLE_PARKED_SPEED_EPSILON, VEHICLE_PARKING_HOLD_SPEED_EPSILON } from './vehicleParkingHold'
 export { createControlledNodeMotionRuntime, ControlledNodeMotionRuntime } from './controlledNodeMotionRuntime'
 export type { ControlledNodeMotionTelemetry, ControlledNodeMotionSampleInput } from './controlledNodeMotionRuntime'
 export * from './physicsBridgeVehicleInputSync'

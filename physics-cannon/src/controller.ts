@@ -46,6 +46,12 @@ export function createCannonPhysicsController(options: CreateCannonPhysicsContro
       }
       world.setBodyVelocity(command)
     },
+    async setBodyCollisionEnabled(command) {
+      if (!initialized) {
+        throw new Error('Cannon physics controller is not initialized')
+      }
+      world.setBodyCollisionEnabled(command)
+    },
     async setVehicleInput(command) {
       if (!initialized) {
         throw new Error('Cannon physics controller is not initialized')

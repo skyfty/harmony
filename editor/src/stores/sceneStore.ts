@@ -18758,7 +18758,11 @@ export const useSceneStore = defineStore('scene', {
     createGuideRouteNode(payload: {
       nodeId?: string
       points: Vector3Like[]
-      waypoints?: Array<{ name?: string; dock?: boolean }>
+      waypoints?: Array<{ name?: string; dock?: boolean; position?: Vector3Like }>
+      surfaceProviderNodeId?: string | null
+      routeSource?: GuideRouteComponentProps['routeSource']
+      sampleSpacingM?: number
+      roadLateralOffsetM?: number
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
@@ -18780,8 +18784,22 @@ export const useSceneStore = defineStore('scene', {
           const result = this.addNodeComponent(nodeId, GUIDE_ROUTE_COMPONENT_TYPE)
           const component = result?.component ?? (findNodeById(this.nodes, nodeId)?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as any)
           if (component?.id) {
-            const waypoints = buildGuideRouteWaypointsFromPositions(build.definition.vertices, payload.waypoints)
-            this.updateNodeComponentProps(nodeId, component.id, { waypoints })
+            const suppliedPositions = Array.isArray(payload.waypoints)
+              ? payload.waypoints.map((entry) => entry?.position ?? null)
+              : []
+            const waypoints = buildGuideRouteWaypointsFromPositions(
+              suppliedPositions.length === payload.waypoints?.length && suppliedPositions.every(Boolean)
+                ? suppliedPositions
+                : build.definition.vertices,
+              payload.waypoints,
+            )
+            this.updateNodeComponentProps(nodeId, component.id, {
+              surfaceProviderNodeId: payload.surfaceProviderNodeId ?? null,
+              routeSource: payload.routeSource ?? 'drawn',
+              sampleSpacingM: payload.sampleSpacingM ?? 2,
+              roadLateralOffsetM: payload.roadLateralOffsetM ?? 0,
+              waypoints,
+            })
           }
         }
 
@@ -18855,7 +18873,6 @@ export const useSceneStore = defineStore('scene', {
           vertices: nextVertices.map((point) => ({ x: point.x, y: point.y, z: point.z })),
         })
         this.updateNodeComponentProps(nodeId, component.id, { waypoints: nextWaypoints })
-
         const requestedIndex = typeof options.selectedWaypointIndex === 'number' && Number.isFinite(options.selectedWaypointIndex)
           ? Math.max(0, Math.floor(options.selectedWaypointIndex))
           : null

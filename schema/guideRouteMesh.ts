@@ -5,11 +5,24 @@ export type GuideRouteRenderOptions = {
   segmentThickness?: number
   segmentHeight?: number
   waypointRadius?: number
+  displayMode?: 'surface' | 'editor-overlay'
 }
 
-const DEFAULT_SEGMENT_THICKNESS = 0.24
-const DEFAULT_SEGMENT_HEIGHT = 0.03
-const DEFAULT_WAYPOINT_RADIUS = 0.14
+const DEFAULT_SEGMENT_THICKNESS = 0.4
+const DEFAULT_SEGMENT_HEIGHT = 0.05
+const DEFAULT_WAYPOINT_RADIUS = 0.24
+const EDITOR_OVERLAY_SEGMENT_THICKNESS = 0.7
+const EDITOR_OVERLAY_SEGMENT_HEIGHT = 0.12
+const EDITOR_OVERLAY_WAYPOINT_RADIUS = 0.42
+const EDITOR_OVERLAY_SEGMENT_RENDER_ORDER = 9000
+const EDITOR_OVERLAY_WAYPOINT_RENDER_ORDER = 9001
+
+export const GUIDE_ROUTE_EDITOR_RENDER_OPTIONS: Readonly<GuideRouteRenderOptions> = {
+  displayMode: 'editor-overlay',
+  segmentThickness: EDITOR_OVERLAY_SEGMENT_THICKNESS,
+  segmentHeight: EDITOR_OVERLAY_SEGMENT_HEIGHT,
+  waypointRadius: EDITOR_OVERLAY_WAYPOINT_RADIUS,
+}
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const numeric = typeof value === 'number' && Number.isFinite(value) ? value : fallback
@@ -54,25 +67,55 @@ function sanitizeVertices(mesh: GuideRouteDynamicMesh): THREE.Vector3[] {
   return out
 }
 
-function ensureSegmentsMesh(count: number, thickness: number): THREE.InstancedMesh {
+function ensureSegmentsMesh(
+  count: number,
+  thickness: number,
+  editorOverlay: boolean,
+): THREE.InstancedMesh {
   const geometry = new THREE.BoxGeometry(1, 1, 1)
-  const material = new THREE.MeshStandardMaterial({ color: 0x3f464f, roughness: 0.62, metalness: 0.08 })
+  const material = editorOverlay
+    ? new THREE.MeshBasicMaterial({
+      color: 0x28e7ff,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.96,
+      toneMapped: false,
+    })
+    : new THREE.MeshStandardMaterial({ color: 0x3f464f, roughness: 0.62, metalness: 0.08 })
   const mesh = new THREE.InstancedMesh(geometry, material, Math.max(0, count))
   mesh.name = 'GuideRouteSegments'
   mesh.castShadow = false
   mesh.receiveShadow = false
+  mesh.frustumCulled = !editorOverlay
+  mesh.renderOrder = editorOverlay ? EDITOR_OVERLAY_SEGMENT_RENDER_ORDER : 0
   // Each instance uses matrix scaling; base geometry is unit cube.
   ;(mesh as any).userData = { ...(mesh as any).userData, guideRoute: true, thickness }
   return mesh
 }
 
-function ensureWaypointsMesh(count: number, radius: number): THREE.InstancedMesh {
+function ensureWaypointsMesh(
+  count: number,
+  radius: number,
+  editorOverlay: boolean,
+): THREE.InstancedMesh {
   const geometry = new THREE.SphereGeometry(1, 16, 12)
-  const material = new THREE.MeshStandardMaterial({ color: 0x5dfdff, emissive: 0x0f6c72, emissiveIntensity: 0.65, roughness: 0.35 })
+  const material = editorOverlay
+    ? new THREE.MeshBasicMaterial({
+      color: 0xffe45c,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.98,
+      toneMapped: false,
+    })
+    : new THREE.MeshStandardMaterial({ color: 0x5dfdff, emissive: 0x0f6c72, emissiveIntensity: 0.65, roughness: 0.35 })
   const mesh = new THREE.InstancedMesh(geometry, material, Math.max(0, count))
   mesh.name = 'GuideRouteWaypoints'
   mesh.castShadow = false
   mesh.receiveShadow = false
+  mesh.frustumCulled = !editorOverlay
+  mesh.renderOrder = editorOverlay ? EDITOR_OVERLAY_WAYPOINT_RENDER_ORDER : 0
   ;(mesh as any).userData = { ...(mesh as any).userData, guideRoute: true, radius }
   return mesh
 }
@@ -128,14 +171,30 @@ function rebuildGuideRouteGroup(group: THREE.Group, definition: GuideRouteDynami
   clearGroupContent(group)
 
   const vertices = sanitizeVertices(definition)
-  const thickness = clampNumber(options.segmentThickness, 0.02, 1, DEFAULT_SEGMENT_THICKNESS)
-  const segmentHeight = clampNumber(options.segmentHeight, 0.01, 0.4, DEFAULT_SEGMENT_HEIGHT)
-  const radius = clampNumber(options.waypointRadius, 0.01, 2, DEFAULT_WAYPOINT_RADIUS)
+  const editorOverlay = options.displayMode === 'editor-overlay'
+  const thickness = clampNumber(
+    options.segmentThickness,
+    0.02,
+    2.5,
+    editorOverlay ? EDITOR_OVERLAY_SEGMENT_THICKNESS : DEFAULT_SEGMENT_THICKNESS,
+  )
+  const segmentHeight = clampNumber(
+    options.segmentHeight,
+    0.01,
+    0.5,
+    editorOverlay ? EDITOR_OVERLAY_SEGMENT_HEIGHT : DEFAULT_SEGMENT_HEIGHT,
+  )
+  const radius = clampNumber(
+    options.waypointRadius,
+    0.01,
+    2,
+    editorOverlay ? EDITOR_OVERLAY_WAYPOINT_RADIUS : DEFAULT_WAYPOINT_RADIUS,
+  )
 
-  const segments = ensureSegmentsMesh(Math.max(0, vertices.length - 1), thickness)
+  const segments = ensureSegmentsMesh(Math.max(0, vertices.length - 1), thickness, editorOverlay)
   updateSegmentsInstances(segments, vertices, thickness, segmentHeight)
 
-  const waypoints = ensureWaypointsMesh(vertices.length, radius)
+  const waypoints = ensureWaypointsMesh(vertices.length, radius, editorOverlay)
   updateWaypointInstances(waypoints, vertices, radius)
 
   group.add(segments)

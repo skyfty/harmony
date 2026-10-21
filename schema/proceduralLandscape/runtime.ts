@@ -442,6 +442,34 @@ export interface ProceduralLandscapeRuntimeHooks {
   getSeasonState(): ProceduralLandscapeEnvironmentState | null
 }
 
+export type GuideRouteSurfaceProviderStatus = 'inactive' | 'loading' | 'error' | 'ready'
+
+export type GuideRouteSurfaceBounds = {
+  minX: number
+  maxX: number
+  minZ: number
+  maxZ: number
+  minY: number
+  maxY: number
+  cellSize: number
+}
+
+export type GuideRouteSurfaceState = {
+  status: GuideRouteSurfaceProviderStatus
+  revision: number
+  message: string | null
+  /** World-space raster bounds used to restrict editor pointer ray marching. */
+  bounds?: GuideRouteSurfaceBounds | null
+}
+
+export type GuideRouteSurfaceSample = {
+  point: THREE.Vector3
+  normal: THREE.Vector3
+  kind: 'road' | 'terrain'
+  distanceToRoad: number | null
+  revision: number
+}
+
 export interface ProceduralLandscapeRuntime {
   attach(host: THREE.Object3D | null): void
   setProps(props: ProceduralLandscapeComponentProps): void
@@ -477,6 +505,13 @@ export interface ProceduralLandscapeRuntime {
    * ready yet or the point lies outside the rasterized coverage).
    */
   sampleTerrainHeight(worldX: number, worldZ: number): number | null
+  /** Shared road-first surface sampling used by Guide Route and AutoTour. */
+  getGuideRouteSurfaceState(): GuideRouteSurfaceState
+  sampleGuideRouteSurface(
+    worldX: number,
+    worldZ: number,
+    facingYawRad?: number,
+  ): GuideRouteSurfaceSample | null
 }
 
 export interface ProceduralLandscapeRoadValidation {
@@ -553,6 +588,23 @@ export function sampleProceduralLandscapeTerrainHeight(
     return null
   }
   return runtime.sampleTerrainHeight(worldX, worldZ)
+}
+
+export function getProceduralLandscapeGuideRouteSurfaceState(
+  nodeId: string,
+): GuideRouteSurfaceState | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.getGuideRouteSurfaceState() ?? null
+}
+
+export function sampleProceduralLandscapeGuideRouteSurface(
+  nodeId: string,
+  worldX: number,
+  worldZ: number,
+  facingYawRad = 0,
+): GuideRouteSurfaceSample | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.sampleGuideRouteSurface(worldX, worldZ, facingYawRad) ?? null
 }
 
 export function getProceduralLandscapeTerrainCenterLocal(
@@ -939,6 +991,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demGridSampleStep = 1
   let demMeshBuilder: DemTerrainMeshBuilder | null = null
   let demMesh: THREE.Mesh | null = null
+  let guideRouteSurfaceRevision = 0
   let demRoadbedSignature = ''
   let demMeshRoadbedSignature = ''
   let demMeshBuildRoadbedSignature = ''
@@ -1703,6 +1756,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demMeshRoadbedSignature = completedRoadbedSignature
     currentTerrainSourceSignature = `dem:${demSourceKey}`
     stats.demStatus = 'ready'
+    guideRouteSurfaceRevision += 1
     dirty.grid = false
     dirty.world = false
     dirty.demMesh = false
@@ -2185,6 +2239,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return
     }
     updateHostSnapshot()
+    guideRouteSurfaceRevision += 1
     if (
       kind === 'translation'
       && usesDemTerrain()
@@ -2502,6 +2557,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       } else {
         roadResult = plannedRoad
       }
+      guideRouteSurfaceRevision += 1
     }
     if (roadResult && roadResult.nodes.length > 1) {
         const halfWidth = roadHalfWidth(props)
@@ -2720,6 +2776,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
 
     buildRoadBand()
+    guideRouteSurfaceRevision += 1
     applySceneViewDistanceScale()
     applyStaticSurfaceUniforms()
     barrierSignature = resolveBarrierSignature()
@@ -4786,6 +4843,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         treeMeshManager.container.removeFromParent()
       }
       hostObject = host
+      guideRouteSurfaceRevision += 1
       if (hostObject) {
         updateHostSnapshot()
         ensureRoots()
@@ -4802,6 +4860,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         return
       }
       props = clampProceduralLandscapeProps(next, hooks.nodeId)
+      guideRouteSurfaceRevision += 1
       const keys = {
         grid: jsonKey(props.sampling),
         dem: jsonKey([
@@ -4928,6 +4987,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         return
       }
       enabled = value
+      guideRouteSurfaceRevision += 1
       if (!enabled) {
         releaseAllBatches()
       } else {
@@ -5174,6 +5234,107 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         return null
       }
       return grid.sampleHeight(worldX, worldZ)
+    },
+    getGuideRouteSurfaceState(): GuideRouteSurfaceState {
+      if (!enabled) {
+        return {
+          status: 'inactive',
+          revision: guideRouteSurfaceRevision,
+          message: 'Procedural Landscape is disabled.',
+          bounds: null,
+        }
+      }
+      if (gridFailed || stats.demStatus === 'error') {
+        return {
+          status: 'error',
+          revision: guideRouteSurfaceRevision,
+          message: stats.demError ?? 'Terrain generation failed.',
+          bounds: null,
+        }
+      }
+      if (!grid || (usesDemTerrain() && stats.demStatus !== 'ready')) {
+        return {
+          status: 'loading',
+          revision: guideRouteSurfaceRevision,
+          message: usesDemTerrain() ? `DEM terrain is ${stats.demStatus}.` : 'Terrain grid is not ready.',
+          bounds: null,
+        }
+      }
+      return {
+        status: 'ready',
+        revision: guideRouteSurfaceRevision,
+        message: null,
+        bounds: {
+          minX: grid.minX,
+          maxX: grid.maxX,
+          minZ: grid.minZ,
+          maxZ: grid.maxZ,
+          minY: grid.minY,
+          maxY: grid.maxY,
+          cellSize: grid.cellSize,
+        },
+      }
+    },
+    sampleGuideRouteSurface(
+      worldX: number,
+      worldZ: number,
+      facingYawRad = 0,
+    ): GuideRouteSurfaceSample | null {
+      if (!enabled || !grid || !Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+        return null
+      }
+
+      const terrainY = grid.sampleHeight(worldX, worldZ)
+      if (terrainY == null) {
+        return null
+      }
+
+      let centerY = terrainY
+      let kind: GuideRouteSurfaceSample['kind'] = 'terrain'
+      let distanceToRoad: number | null = null
+      if (props.road.enabled) {
+        const rows = roadBandRows ?? roadResult?.nodes ?? null
+        if (rows && rows.length >= 2) {
+          const pose = resolveRoadLanePoseFromRows(rows, {
+            worldX,
+            worldZ,
+            facingYawRad,
+            halfWidth: roadHalfWidth(props),
+            columnHeights: roadBandRows ? roadBandColumns : null,
+            surfaceLift: ROAD_BAND_LIFT,
+          })
+          const roadLimit = roadHalfWidth(props) + Math.max(0, props.road.shoulderWidth)
+          if (pose && pose.distance <= roadLimit) {
+            centerY = pose.y
+            kind = 'road'
+            distanceToRoad = pose.distance
+          }
+        }
+      }
+
+      const delta = Math.max(0.5, grid.cellSize * 0.5)
+      const left = grid.sampleHeight(worldX - delta, worldZ)
+      const right = grid.sampleHeight(worldX + delta, worldZ)
+      const back = grid.sampleHeight(worldX, worldZ - delta)
+      const front = grid.sampleHeight(worldX, worldZ + delta)
+      const normal = new THREE.Vector3()
+      if (left != null && right != null && back != null && front != null) {
+        normal.set(
+          -(right - left) / (delta * 2),
+          1,
+          -(front - back) / (delta * 2),
+        ).normalize()
+      } else {
+        normal.set(0, 1, 0)
+      }
+
+      return {
+        point: new THREE.Vector3(worldX, centerY, worldZ),
+        normal,
+        kind,
+        distanceToRoad,
+        revision: guideRouteSurfaceRevision,
+      }
     },
   }
   runtimeRegistry.set(hooks.nodeId, runtime)

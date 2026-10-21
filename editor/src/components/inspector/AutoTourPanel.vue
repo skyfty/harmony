@@ -45,8 +45,6 @@ const localRouteNodeId = ref<string | null>(null)
 // Display values in km/h in the UI; stored props remain in m/s.
 const localSpeedMps = ref(DEFAULT_AUTO_TOUR_SPEED_MPS * 3.6)
 const localLoop = ref(false)
-const localAlignToPath = ref(true)
-const localUsePhysicsDrive = ref(true)
 const localFollowCameraObstacleAvoidanceEnabled = ref(false)
 
 watch(
@@ -55,8 +53,6 @@ watch(
     localRouteNodeId.value = props.routeNodeId
     localSpeedMps.value = props.speedMps * 3.6
     localLoop.value = props.loop
-    localAlignToPath.value = props.alignToPath
-    localUsePhysicsDrive.value = props.usePhysicsDrive
     localFollowCameraObstacleAvoidanceEnabled.value = props.followCameraObstacleAvoidanceEnabled
   },
   { immediate: true, deep: true },
@@ -103,28 +99,6 @@ function handleLoopChange(value: boolean | null) {
     return
   }
   updateComponent({ loop: value })
-}
-
-function handleAlignToPathChange(value: boolean | null) {
-  if (value === null) {
-    return
-  }
-  localAlignToPath.value = value
-  if (value === normalizedProps.value.alignToPath) {
-    return
-  }
-  updateComponent({ alignToPath: value })
-}
-
-function handleUsePhysicsDriveChange(value: boolean | null) {
-  if (value === null) {
-    return
-  }
-  localUsePhysicsDrive.value = value
-  if (value === normalizedProps.value.usePhysicsDrive) {
-    return
-  }
-  updateComponent({ usePhysicsDrive: value })
 }
 
 function handleFollowCameraObstacleAvoidanceEnabledChange(value: boolean | null) {
@@ -225,24 +199,6 @@ function handleRemoveComponent() {
           :model-value="localLoop"
           :disabled="!componentEnabled"
           @update:model-value="handleLoopChange"
-        />
-
-        <v-switch
-          label="Align To Path"
-          density="compact"
-          hide-details
-          :model-value="localAlignToPath"
-          :disabled="!componentEnabled"
-          @update:model-value="handleAlignToPathChange"
-        />
-
-        <v-switch
-          label="Use Physics Drive"
-          density="compact"
-          hide-details
-          :model-value="localUsePhysicsDrive"
-          :disabled="!componentEnabled"
-          @update:model-value="handleUsePhysicsDriveChange"
         />
 
         <v-switch

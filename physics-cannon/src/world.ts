@@ -20,6 +20,7 @@ import {
   type PhysicsBodyDesc,
   type PhysicsBodyTransformCommand,
   type PhysicsBodyVelocityCommand,
+  type PhysicsBodyCollisionCommand,
   type PhysicsCharacterDesc,
   type PhysicsContactEvent,
   type PhysicsRaycastCommand,
@@ -50,6 +51,7 @@ const CHARACTER_CONTACT_FRICTION = 0.12
 export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.RaycastVehicle, CharacterState, BodyState, VehicleState> {
   private world: CANNON.World | null = null
   private characterContactMaterialKeys = new Set<string>()
+  private bodyCollisionFilterMasks = new Map<number, number>()
 
   setBodyTransform(command: PhysicsBodyTransformCommand): void {
     const state = this.bodies.get(command.bodyId)
@@ -82,6 +84,29 @@ export class CannonPhysicsWorld extends PhysicsWorldBase<CANNON.Body, CANNON.Ray
     if (command.wakeUp !== false) {
       state.body.wakeUp()
     }
+  }
+
+  setBodyCollisionEnabled(command: PhysicsBodyCollisionCommand): void {
+    const state = this.bodies.get(command.bodyId)
+    if (!state) {
+      return
+    }
+    if (!command.enabled) {
+      if (!this.bodyCollisionFilterMasks.has(command.bodyId)) {
+        this.bodyCollisionFilterMasks.set(command.bodyId, state.body.collisionFilterMask)
+      }
+      state.body.collisionResponse = false
+      state.body.collisionFilterMask = 0
+      state.body.sleep()
+      return
+    }
+    const originalMask = this.bodyCollisionFilterMasks.get(command.bodyId)
+    this.bodyCollisionFilterMasks.delete(command.bodyId)
+    if (originalMask !== undefined) {
+      state.body.collisionFilterMask = originalMask
+    }
+    state.body.collisionResponse = true
+    state.body.wakeUp()
   }
 
   raycast(command: PhysicsRaycastCommand): PhysicsRaycastHit | null {

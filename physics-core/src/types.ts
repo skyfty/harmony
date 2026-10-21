@@ -213,6 +213,11 @@ export type PhysicsBodyVelocityCommand = {
   wakeUp?: boolean
 }
 
+export type PhysicsBodyCollisionCommand = {
+  bodyId: number
+  enabled: boolean
+}
+
 export type PhysicsVehicleInputCommand = {
   vehicleId: number
   steering: number

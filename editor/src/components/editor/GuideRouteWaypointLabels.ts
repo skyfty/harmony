@@ -45,6 +45,17 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
       }
 
       const props = clampGuideRouteComponentProps(componentState.props as Partial<GuideRouteComponentProps> | null | undefined)
+      if (!props.surfaceProviderNodeId) {
+        const prefix = `${node.id}:`
+        for (const [key, mesh] of guideRouteWaypointLabelMeshes.entries()) {
+          if (!key.startsWith(prefix)) continue
+          mesh.geometry.dispose()
+          ;(mesh.material as THREE.Material).dispose?.()
+          mesh.removeFromParent()
+          guideRouteWaypointLabelMeshes.delete(key)
+        }
+        return
+      }
       const waypoints = Array.isArray(props.waypoints) ? props.waypoints : []
 
       const desiredKeys = new Set<string>()
@@ -80,6 +91,7 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
       const size = 0.6
       const depth = 0.06
       const yOffset = 0.22
+      container.updateMatrixWorld(true)
 
       for (let index = 0; index < waypoints.length; index += 1) {
         const key = `${node.id}:${index}`
@@ -92,7 +104,12 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
           // Update position in case waypoint moved
           const pos = waypoint?.position
           if (pos) {
-            existing.position.set(Number(pos.x) || 0, (Number(pos.y) || 0) + yOffset, Number(pos.z) || 0)
+            const local = container.worldToLocal(new THREE.Vector3(
+              Number(pos.x) || 0,
+              Number(pos.y) || 0,
+              Number(pos.z) || 0,
+            ))
+            existing.position.set(local.x, local.y + yOffset, local.z)
           }
           continue
         }
@@ -123,7 +140,12 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
         mesh.renderOrder = 9999
 
         const pos = waypoint?.position
-        mesh.position.set(Number(pos?.x) || 0, (Number(pos?.y) || 0) + yOffset, Number(pos?.z) || 0)
+        const local = container.worldToLocal(new THREE.Vector3(
+          Number(pos?.x) || 0,
+          Number(pos?.y) || 0,
+          Number(pos?.z) || 0,
+        ))
+        mesh.position.set(local.x, local.y + yOffset, local.z)
         container.add(mesh)
         guideRouteWaypointLabelMeshes.set(key, mesh)
       }

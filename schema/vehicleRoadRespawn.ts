@@ -191,17 +191,17 @@ export function computeUprightVehicleYawQuaternion(
 
   orientationForward.set(Math.cos(safeYaw), 0, -Math.sin(safeYaw)).normalize()
   orientationRight.copy(orientationForward).cross(WORLD_UP).normalize()
-  orientationAxes[0].set(0, 0, 0)
-  orientationAxes[1].set(0, 0, 0)
-  orientationAxes[2].set(0, 0, 0)
-  orientationAxes[axes.rightIndex].copy(orientationRight)
-  orientationAxes[axes.upIndex].copy(WORLD_UP)
-  orientationAxes[axes.forwardIndex].copy(orientationForward)
+  orientationAxes[0]!.set(0, 0, 0)
+  orientationAxes[1]!.set(0, 0, 0)
+  orientationAxes[2]!.set(0, 0, 0)
+  orientationAxes[axes.rightIndex]!.copy(orientationRight)
+  orientationAxes[axes.upIndex]!.copy(WORLD_UP)
+  orientationAxes[axes.forwardIndex]!.copy(orientationForward)
 
   orientationMatrix.makeBasis(orientationAxes[0]!, orientationAxes[1]!, orientationAxes[2]!)
   if (orientationMatrix.determinant() < 0) {
     orientationRight.negate()
-    orientationAxes[axes.rightIndex].copy(orientationRight)
+    orientationAxes[axes.rightIndex]!.copy(orientationRight)
     orientationMatrix.makeBasis(orientationAxes[0]!, orientationAxes[1]!, orientationAxes[2]!)
   }
   return target.setFromRotationMatrix(orientationMatrix)

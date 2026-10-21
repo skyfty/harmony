@@ -6,7 +6,6 @@ import {
   type PhysicsOrientationAdjustment,
 } from '../physicsBodySync'
 import { sleepPhysicsBody, stopPhysicsBodyMotion } from '../physicsRuntimeBridge'
-import type { PurePursuitVehicleControlState } from '../purePursuitRuntime'
 import { createCharacterNavigationControllerState, type CharacterNavigationControllerState } from '../characterNavigationController'
 
 export type MoveToSubjectType = 'vehicle' | 'character' | 'camera'
@@ -42,7 +41,6 @@ export type MoveToRuntimeSession = {
   targetQuaternion: THREE.Quaternion
   cameraTargetPosition: THREE.Vector3
   cameraTargetLookAt: THREE.Vector3
-  vehicleControlState: PurePursuitVehicleControlState
   characterNavigationState: CharacterNavigationControllerState
 }
 
@@ -333,7 +331,6 @@ export function createMoveToRuntimeSession(): MoveToRuntimeSession {
     targetQuaternion: new THREE.Quaternion(),
     cameraTargetPosition: new THREE.Vector3(),
     cameraTargetLookAt: new THREE.Vector3(),
-    vehicleControlState: {},
     characterNavigationState: createCharacterNavigationControllerState(Math.PI),
   }
 }
@@ -351,7 +348,6 @@ export function resetMoveToRuntimeSession(session: MoveToRuntimeSession): void {
   session.targetQuaternion.identity()
   session.cameraTargetPosition.set(0, 0, 0)
   session.cameraTargetLookAt.set(0, 0, 0)
-  session.vehicleControlState = {}
   session.characterNavigationState = createCharacterNavigationControllerState(Math.PI)
 }
 

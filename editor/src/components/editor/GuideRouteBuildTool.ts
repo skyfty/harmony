@@ -1,13 +1,19 @@
 import * as THREE from 'three'
 import type { Ref } from 'vue'
 import type { BuildTool } from '@/types/build-tool'
-import type { Vector3Like } from '@schema/core'
+import type { GuideRouteDynamicMesh, Vector3Like } from '@schema/core'
 import type { useSceneStore } from '@/stores/sceneStore'
+import {
+  createGuideRouteGroup,
+  GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
+  updateGuideRouteGroup,
+} from '@schema/guideRouteMesh'
 
 export type GuideRouteBuildToolSession = {
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
   previewGroup: THREE.Group | null
+  surfaceProviderNodeId: string | null
 }
 
 export type GuideRouteBuildToolHandle = {
@@ -47,33 +53,30 @@ function getNowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
 }
 
-function createPreviewGroup(points: THREE.Vector3[]): THREE.Group {
-  const group = new THREE.Group()
-  group.name = '__GuideRoutePreview'
+function createPreviewDefinition(points: THREE.Vector3[]): GuideRouteDynamicMesh {
+  return {
+    type: 'GuideRoute',
+    vertices: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+  }
+}
 
-  const line = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(points),
-    new THREE.LineBasicMaterial({
-      color: 0x27ffff,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-    }),
+function createPreviewGroup(points: THREE.Vector3[]): THREE.Group {
+  const group = createGuideRouteGroup(
+    createPreviewDefinition(points),
+    GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
   )
-  line.renderOrder = 101
-  group.userData.line = line
+  group.name = '__GuideRoutePreview'
   group.userData.isGuideRoutePreview = true
-  group.add(line)
   return group
 }
 
 function updatePreviewGroup(group: THREE.Group, points: THREE.Vector3[]): void {
-  const line = group.userData.line as THREE.Line | undefined
-  if (!line) {
-    return
-  }
-  line.geometry?.dispose?.()
-  line.geometry = new THREE.BufferGeometry().setFromPoints(points)
+  updateGuideRouteGroup(
+    group,
+    createPreviewDefinition(points),
+    GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
+  )
+  group.userData.isGuideRoutePreview = true
 }
 
 function disposePreviewGroup(group: THREE.Group): void {
@@ -93,9 +96,10 @@ export function createGuideRouteBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   sceneStore: ReturnType<typeof useSceneStore>
   rootGroup: THREE.Group
-  raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
-  resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
-  resolveBuildPlacementSurfacePoint?: (event: PointerEvent) => BuildSurfacePlacementPoint | null
+  resolveRouteSurfacePlacementPoint?: (
+    event: PointerEvent,
+    options?: { surfaceProviderNodeId?: string | null },
+  ) => (BuildSurfacePlacementPoint & { surfaceProviderNodeId: string }) | null
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: { excludeNodeIds?: readonly string[]; keepSourceY?: boolean }) => THREE.Vector3 | null
   clearVertexSnap?: () => void
@@ -110,24 +114,21 @@ export function createGuideRouteBuildTool(options: {
   let rightClickState: RightClickState | null = null
   let leftClickState: LeftClickState | null = null
 
-  const resolveSurfacePlacementPoint = (event: PointerEvent): BuildSurfacePlacementPoint | null => {
-    if (options.resolveBuildPlacementSurfacePoint) {
-      const resolved = options.resolveBuildPlacementSurfacePoint(event)
-      if (resolved) {
-        return {
-          point: resolved.point.clone(),
-          nodeId: resolved.nodeId ?? null,
-        }
+  const resolveRoutePlacementPoint = (
+    event: PointerEvent,
+  ): (BuildSurfacePlacementPoint & { surfaceProviderNodeId: string }) | null => {
+    const directRoutePlacement = options.resolveRouteSurfacePlacementPoint?.(event, {
+      surfaceProviderNodeId: session?.surfaceProviderNodeId ?? null,
+    })
+    if (directRoutePlacement) {
+      if (session?.surfaceProviderNodeId && session.surfaceProviderNodeId !== directRoutePlacement.surfaceProviderNodeId) {
+        return null
       }
-    }
-
-    const point = new THREE.Vector3()
-    if (options.resolveBuildPlacementPoint?.(event, point)) {
-      return { point, nodeId: null }
-    }
-
-    if (options.raycastGroundPoint(event, point)) {
-      return { point, nodeId: null }
+      return {
+        point: directRoutePlacement.point.clone(),
+        nodeId: directRoutePlacement.surfaceProviderNodeId,
+        surfaceProviderNodeId: directRoutePlacement.surfaceProviderNodeId,
+      }
     }
     return null
   }
@@ -144,7 +145,12 @@ export function createGuideRouteBuildTool(options: {
     if (session) {
       return session
     }
-    session = { points: [], previewEnd: null, previewGroup: null }
+    session = {
+      points: [],
+      previewEnd: null,
+      previewGroup: null,
+      surfaceProviderNodeId: null,
+    }
     return session
   }
 
@@ -218,7 +224,7 @@ export function createGuideRouteBuildTool(options: {
     if (!session || !session.points.length || options.isAltOverrideActive()) {
       return
     }
-    const surfacePlacement = resolveSurfacePlacementPoint(event)
+    const surfacePlacement = resolveRoutePlacementPoint(event)
     if (!surfacePlacement) {
       return
     }
@@ -241,7 +247,7 @@ export function createGuideRouteBuildTool(options: {
       options.showStartIndicator?.(session.points[0]!, { height: 0.2 })
       return
     }
-    const surfacePlacement = resolveSurfacePlacementPoint(event)
+    const surfacePlacement = resolveRoutePlacementPoint(event)
     if (!surfacePlacement) {
       options.hideStartIndicator?.()
       return
@@ -256,9 +262,12 @@ export function createGuideRouteBuildTool(options: {
     }
     const created = options.sceneStore.createGuideRouteNode({
       points: session.points.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
-      waypoints: session.points.map((_, index, points) => ({
+      waypoints: session.points.map((point, index, points) => ({
+        position: { x: point.x, y: point.y, z: point.z },
         dock: index === 0 || index === points.length - 1,
       })),
+      surfaceProviderNodeId: session.surfaceProviderNodeId,
+      sampleSpacingM: 2,
       editorFlags: { runtimeHiddenInPreview: false, editorOnly: true },
     })
     const startPoint = session.points[0]?.clone() ?? null
@@ -297,6 +306,13 @@ export function createGuideRouteBuildTool(options: {
       if (options.activeBuildTool.value !== 'guideRoute') {
         return false
       }
+      // Route drawing is click-based. While any mouse button is held, the
+      // viewport gesture owns the pointer; skip expensive surface sampling.
+      const isPointerGestureActive = event.buttons !== 0 || options.isAltOverrideActive()
+      if (isPointerGestureActive) {
+        options.hideStartIndicator?.()
+        return false
+      }
       updateStartIndicator(event)
       if (session?.points.length) {
         updateCursorPreview(event)
@@ -312,11 +328,12 @@ export function createGuideRouteBuildTool(options: {
         if (options.isAltOverrideActive()) {
           return false
         }
-        const surfacePlacement = resolveSurfacePlacementPoint(event)
+        const surfacePlacement = resolveRoutePlacementPoint(event)
         if (!surfacePlacement) {
           return false
         }
         const current = ensureSession()
+        current.surfaceProviderNodeId ??= surfacePlacement.surfaceProviderNodeId
         const point = resolvePlacementPoint(event, surfacePlacement.point.clone())
         const last = current.points[current.points.length - 1] ?? null
         if (!last || last.distanceToSquared(point) > 1e-6) {

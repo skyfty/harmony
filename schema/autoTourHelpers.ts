@@ -5,7 +5,7 @@ export interface AutoTourRuntimeLike {
   stopTour(nodeId: string): void
 }
 
-type AutoTourVehicleInstanceLike = {
+type PhysicsVehicleReference = {
   vehicle?: {
     chassisBody?: {
       position?: {
@@ -17,37 +17,7 @@ type AutoTourVehicleInstanceLike = {
   } | null
 }
 
-export function createPhysicsAwareAutoTourVehicleInstances<T>(
-  vehicleInstances: Map<string, T>,
-  isPhysicsEnabled: () => boolean,
-): Map<string, T> {
-  return new Proxy(vehicleInstances, {
-    get(target, property, receiver) {
-      if (property === 'get') {
-        return (nodeId: string) => {
-          if (!isPhysicsEnabled()) {
-            return undefined
-          }
-          return target.get(nodeId)
-        }
-      }
-      const value = Reflect.get(target, property, receiver)
-      return typeof value === 'function' ? value.bind(target) : value
-    },
-  }) as Map<string, T>
-}
-
-export function resolveAutoTourReferenceWorldPosition<T extends AutoTourVehicleInstanceLike>(options: {
-  nodeId: string | null | undefined
-  vehicleInstances: Map<string, T>
-  nodeObjectMap: Map<string, THREE.Object3D>
-  isPhysicsEnabled: () => boolean
-  target: THREE.Vector3
-}): boolean {
-  return resolveVehicleOrObjectWorldPosition(options)
-}
-
-export function resolveVehicleOrObjectWorldPosition<T extends AutoTourVehicleInstanceLike>(options: {
+export function resolveVehicleOrObjectWorldPosition<T extends PhysicsVehicleReference>(options: {
   nodeId: string | null | undefined
   vehicleInstances: Map<string, T>
   nodeObjectMap: Map<string, THREE.Object3D>

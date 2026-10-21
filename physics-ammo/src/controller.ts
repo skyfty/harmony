@@ -66,6 +66,12 @@ export function createAmmoPhysicsController<TAmmoModule>(
       }
       world.setBodyVelocity(command)
     },
+    async setBodyCollisionEnabled(command) {
+      if (!initialized) {
+        throw new Error('Ammo physics controller is not initialized')
+      }
+      world.setBodyCollisionEnabled(command)
+    },
     async setVehicleInput(command) {
       if (!initialized) {
         throw new Error('Ammo physics controller is not initialized')

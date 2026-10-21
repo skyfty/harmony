@@ -36,7 +36,6 @@ import LodPanel from '@/components/inspector/LodPanel.vue'
 import DeviceAdaptationPanel from '@/components/inspector/DeviceAdaptationPanel.vue'
 import GuideRoutePanel from '@/components/inspector/GuideRoutePanel.vue'
 import AutoTourPanel from '@/components/inspector/AutoTourPanel.vue'
-import PurePursuitPanel from '@/components/inspector/PurePursuitPanel.vue'
 import PreloadablePanel from '@/components/inspector/PreloadablePanel.vue'
 import InstanceLayoutPanel from '@/components/inspector/InstanceLayoutPanel.vue'
 import PlanningImagesPanel from '@/components/inspector/PlanningImagesPanel.vue'
@@ -66,7 +65,6 @@ import {
   GUIDEBOARD_COMPONENT_TYPE,
   GUIDE_ROUTE_COMPONENT_TYPE,
   AUTO_TOUR_COMPONENT_TYPE,
-  PURE_PURSUIT_COMPONENT_TYPE,
   ANIMATION_COMPONENT_TYPE,
   SKIN_COMPONENT_TYPE,
   CHARACTER_CONTROLLER_COMPONENT_TYPE,
@@ -289,10 +287,6 @@ function computeDefaultExpandedPanels() {
     }
   })
 
-  // Ensure Pure Pursuit component panel is expanded by default when present
-  if (node?.components?.[PURE_PURSUIT_COMPONENT_TYPE]) {
-    panels.push(PURE_PURSUIT_COMPONENT_TYPE)
-  }
   return Array.from(new Set(panels))
 }
 
@@ -744,7 +738,6 @@ watch(
               <DeviceAdaptationPanel v-else-if="component.type === DEVICE_ADAPTATION_COMPONENT_TYPE" />
               <GuideRoutePanel v-else-if="component.type === GUIDE_ROUTE_COMPONENT_TYPE" />
               <AutoTourPanel v-else-if="component.type === AUTO_TOUR_COMPONENT_TYPE" />
-              <PurePursuitPanel v-else-if="component.type === PURE_PURSUIT_COMPONENT_TYPE" />
               <NominatePanel v-else-if="component.type === NOMINATE_COMPONENT_TYPE" />
               <WallPanel v-else-if="component.type === WALL_COMPONENT_TYPE" />
               <WaterPanel v-else-if="component.type === WATER_COMPONENT_TYPE" />

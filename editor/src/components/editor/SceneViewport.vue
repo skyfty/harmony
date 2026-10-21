@@ -257,7 +257,11 @@ import {
 } from '@schema/compiledGroundRuntime'
 import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
-import { createGuideRouteGroup, updateGuideRouteGroup } from '@schema/guideRouteMesh'
+import {
+  createGuideRouteGroup,
+  GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
+  updateGuideRouteGroup,
+} from '@schema/guideRouteMesh'
 import {
   syncProceduralCityRuntimeArtifact,
   syncProceduralCityHostSnapshot,
@@ -356,9 +360,12 @@ import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNeare
 import { generateUuid } from '@/utils/uuid'
 import {
   getProceduralLandscapeRoadCenterlineLocal,
+  getProceduralLandscapeGuideRouteSurfaceState,
   resolveProceduralLandscapeScenicWaypointLocal,
+  sampleProceduralLandscapeGuideRouteSurface,
   sampleProceduralLandscapeTerrainHeight,
   setProceduralLandscapeEnvironment,
+  type GuideRouteSurfaceBounds,
 } from '@schema/proceduralLandscape/runtime'
 import {
   ROAD_WAYPOINT_SNAP_RADIUS,
@@ -2502,6 +2509,10 @@ function resolveEditableGuideRouteNode(nodeId: string | null | undefined): Scene
   }
   const node = findSceneNode(sceneStore.nodes, nodeId)
   if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
+    return null
+  }
+  const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
+  if (!component?.props?.surfaceProviderNodeId) {
     return null
   }
   if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
@@ -7290,7 +7301,7 @@ function buildGuideRoutePreviewFromLocalPoints(nodeId: string, points: Vector3Li
   return updateGuideRouteGroup(runtimeObject, {
     ...(node.dynamicMesh as GuideRouteDynamicMesh),
     vertices: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
-  })
+  }, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
 }
 
 function commitGuideRouteNode(nodeId: string, points: Vector3Like[]): boolean {
@@ -7301,11 +7312,32 @@ function commitGuideRouteNode(nodeId: string, points: Vector3Like[]): boolean {
   if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
     return false
   }
+  const runtimeObject = objectMap.get(nodeId) ?? null
+  if (!runtimeObject) {
+    return false
+  }
+  runtimeObject.updateMatrixWorld(true)
+  const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
+  const providerNodeId = component?.props?.surfaceProviderNodeId ?? null
+  const currentWaypoints = Array.isArray(component?.props?.waypoints) ? component.props.waypoints : []
+  const waypoints = points.map((point, index) => {
+    const world = runtimeObject.localToWorld(new THREE.Vector3(point.x, point.y, point.z))
+    const sampled = providerNodeId
+      ? sampleProceduralLandscapeGuideRouteSurface(providerNodeId, world.x, world.z, 0)
+      : null
+    const position = sampled?.point ?? world
+    return {
+      name: currentWaypoints[index]?.name ?? '',
+      dock: currentWaypoints[index]?.dock === true,
+      position: { x: position.x, y: position.y, z: position.z },
+    }
+  })
   const selectedWaypointIndex = sceneStore.selectedGuideRouteWaypoint?.nodeId === nodeId
     ? sceneStore.selectedGuideRouteWaypoint.waypointIndex
     : null
   return sceneStore.updateGuideRouteWaypoints(nodeId, {
     vertices: points,
+    waypoints,
     selectedWaypointIndex,
   })
 }
@@ -7398,10 +7430,32 @@ function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
     dock: entry?.dock === true,
     position: entry.position,
   }))
+  const runtimeObject = objectMap.get(selectedId) ?? null
+  const insertionWorld = runtimeObject
+    ? runtimeObject.localToWorld(new THREE.Vector3(
+      insertion.point.x,
+      insertion.point.y,
+      insertion.point.z,
+    ))
+    : new THREE.Vector3(insertion.point.x, insertion.point.y, insertion.point.z)
+  const providerNodeId = component?.props?.surfaceProviderNodeId ?? null
+  const insertionSample = providerNodeId
+    ? sampleProceduralLandscapeGuideRouteSurface(
+      providerNodeId,
+      insertionWorld.x,
+      insertionWorld.z,
+      0,
+    )
+    : null
+  const insertionPosition = insertionSample?.point ?? insertionWorld
   nextWaypoints.splice(insertion.insertIndex, 0, {
     name: '',
     dock: false,
-    position: insertion.point,
+    position: {
+      x: insertionPosition.x,
+      y: insertionPosition.y,
+      z: insertionPosition.z,
+    },
   })
 
   const updated = sceneStore.updateGuideRouteWaypoints(selectedId, {
@@ -7713,6 +7767,192 @@ function sampleLandscapeRoadTerrainSurfaceAlongRay(nodeId: string, out: THREE.Ve
     tPrevious = t
   }
   return false
+}
+
+type GuideRouteSurfaceProvider = {
+  nodeId: string
+  bounds: GuideRouteSurfaceBounds | null
+}
+
+function collectGuideRouteSurfaceProviders(
+  preferredProviderNodeId: string | null = null,
+): GuideRouteSurfaceProvider[] {
+  const providers: GuideRouteSurfaceProvider[] = []
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (
+      node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]
+      && (!preferredProviderNodeId || node.id === preferredProviderNodeId)
+    ) {
+      const state = getProceduralLandscapeGuideRouteSurfaceState(node.id)
+      if (state?.status === 'ready') {
+        providers.push({
+          nodeId: node.id,
+          bounds: state.bounds ?? null,
+        })
+      }
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+  }
+  return providers
+}
+
+function resolveGuideRouteRayInterval(
+  ray: THREE.Ray,
+  bounds: GuideRouteSurfaceBounds,
+  far: number,
+): { start: number; end: number } | null {
+  let start = 0
+  let end = far
+  const axes = [
+    { origin: ray.origin.x, direction: ray.direction.x, min: bounds.minX, max: bounds.maxX },
+    { origin: ray.origin.y, direction: ray.direction.y, min: bounds.minY, max: bounds.maxY },
+    { origin: ray.origin.z, direction: ray.direction.z, min: bounds.minZ, max: bounds.maxZ },
+  ]
+  for (const axis of axes) {
+    if (Math.abs(axis.direction) <= 1e-9) {
+      if (axis.origin < axis.min || axis.origin > axis.max) {
+        return null
+      }
+      continue
+    }
+    let near = (axis.min - axis.origin) / axis.direction
+    let axisFar = (axis.max - axis.origin) / axis.direction
+    if (near > axisFar) {
+      const swap = near
+      near = axisFar
+      axisFar = swap
+    }
+    start = Math.max(start, near)
+    end = Math.min(end, axisFar)
+    if (start > end) {
+      return null
+    }
+  }
+  return { start, end }
+}
+
+function sampleGuideRouteSurfaceAlongRay(
+  provider: GuideRouteSurfaceProvider,
+  out: THREE.Vector3,
+): boolean {
+  const ray = raycaster.ray
+  const far = camera && Number.isFinite(camera.far)
+    ? Math.min(camera.far, 100000)
+    : LANDSCAPE_ROAD_SURFACE_MARCH_FAR_DEFAULT
+  const interval = provider.bounds
+    ? resolveGuideRouteRayInterval(ray, provider.bounds, far)
+    : { start: 0, end: far }
+  if (!interval) {
+    return false
+  }
+
+  let step = Math.max(2, Math.min(
+    LANDSCAPE_ROAD_SURFACE_MARCH_MAX_STEP,
+    (provider.bounds?.cellSize ?? 2) * 0.5,
+  ))
+  let previousT = interval.start
+  let distance = interval.start
+  let previousSampleAbove = false
+  let hasPreviousHeight = false
+  const probe = new THREE.Vector3()
+  for (let iteration = 0; iteration < 4096; iteration += 1) {
+    probe.copy(ray.origin).addScaledVector(ray.direction, distance)
+    const height = sampleProceduralLandscapeTerrainHeight(
+      provider.nodeId,
+      probe.x,
+      probe.z,
+    )
+    const sampleAbove = height != null ? probe.y >= height : false
+    if (height != null && hasPreviousHeight && previousSampleAbove && !sampleAbove) {
+      let low = previousT
+      let high = distance
+      for (let bisect = 0; bisect < 16; bisect += 1) {
+        const middle = (low + high) * 0.5
+        probe.copy(ray.origin).addScaledVector(ray.direction, middle)
+        const middleHeight = sampleProceduralLandscapeTerrainHeight(
+          provider.nodeId,
+          probe.x,
+          probe.z,
+        )
+        if (middleHeight != null && probe.y > middleHeight) {
+          low = middle
+        } else {
+          high = middle
+        }
+      }
+      const finalDistance = (low + high) * 0.5
+      probe.copy(ray.origin).addScaledVector(ray.direction, finalDistance)
+      const finalSample = sampleProceduralLandscapeGuideRouteSurface(
+        provider.nodeId,
+        probe.x,
+        probe.z,
+        0,
+      )
+      if (!finalSample) {
+        return false
+      }
+      out.copy(finalSample.point)
+      return true
+    }
+    hasPreviousHeight = height != null
+    previousSampleAbove = sampleAbove
+    previousT = distance
+    if (distance >= interval.end) {
+      break
+    }
+    step = Math.min(step * 1.25, LANDSCAPE_ROAD_SURFACE_MARCH_MAX_STEP)
+    distance = Math.min(distance + step, interval.end)
+  }
+  return false
+}
+
+function resolveGuideRouteSurfacePlacementPoint(
+  event: PointerEvent,
+  options?: { surfaceProviderNodeId?: string | null },
+): {
+  point: THREE.Vector3
+  nodeId: string
+  surfaceProviderNodeId: string
+} | null {
+  // Guide Route has an explicit landscape provider. Generic scene picking
+  // traverses and sorts every scene intersection, which makes large DEM scenes
+  // hundreds of milliseconds slower without improving this surface query.
+  const providers = collectGuideRouteSurfaceProviders(
+    options?.surfaceProviderNodeId ?? null,
+  )
+  if (!providers.length || !normalizedPointerGuard.setRayFromEvent(event)) {
+    return null
+  }
+
+  let best: THREE.Vector3 | null = null
+  let bestProviderNodeId: string | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  const candidate = new THREE.Vector3()
+  for (const provider of providers) {
+    if (!sampleGuideRouteSurfaceAlongRay(provider, candidate)) {
+      continue
+    }
+    const distance = raycaster.ray.origin.distanceToSquared(candidate)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      best = candidate.clone()
+      bestProviderNodeId = provider.nodeId
+    }
+  }
+  return best && bestProviderNodeId
+    ? {
+      point: best,
+      nodeId: bestProviderNodeId,
+      surfaceProviderNodeId: bestProviderNodeId,
+    }
+    : null
 }
 
 /**
@@ -9054,7 +9294,7 @@ const floorBuildTool = createFloorBuildTool({
   rootGroup,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
-  snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
+  snapPoint: (point) => point.clone(),
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
   isAltOverrideActive: () => isAltOverrideActive,
@@ -9151,9 +9391,7 @@ const guideRouteBuildTool = createGuideRouteBuildTool({
   activeBuildTool,
   sceneStore,
   rootGroup,
-  raycastGroundPoint,
-  resolveBuildPlacementPoint,
-  resolveBuildPlacementSurfacePoint: resolveBuildSurfaceAtPointer,
+  resolveRouteSurfacePlacementPoint: resolveGuideRouteSurfacePlacementPoint,
   snapPoint: (point) => snapVectorToMajorGrid(point.clone()),
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
@@ -14620,7 +14858,7 @@ function toggleViewportCameraControlMode() {
   sceneStore.setCameraControlMode(nextMode)
 }
 
-const showCameraHintsOpen = ref(true)
+const showCameraHintsOpen = ref(false)
 function toggleCameraHints() {
   showCameraHintsOpen.value = !showCameraHintsOpen.value
 }
@@ -17682,9 +17920,10 @@ async function handlePointerDown(event: PointerEvent) {
         return
       }
 
-      if (!guideRouteEditModeLocked) {
-        guideRouteBuildTool.handlePointerDown(event)
+      if (guideRouteEditModeLocked) {
+        clearGuideRouteEditMode()
       }
+      guideRouteBuildTool.handlePointerDown(event)
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -18012,6 +18251,7 @@ function handlePointerMove(event: PointerEvent) {
   // Hover highlight for endpoint gizmos (mouse only, no active drag).
   const canHoverGizmos =
     event.pointerType === 'mouse' &&
+    event.buttons === 0 &&
     !roadVertexDragState &&
     !floorVertexDragState &&
     !regionContourVertexDragState &&
@@ -22736,7 +22976,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     const guideDefinition = node.dynamicMesh as GuideRouteDynamicMesh
     let guideGroup = userData.guideRouteGroup as THREE.Group | undefined
     if (!guideGroup) {
-      guideGroup = createGuideRouteGroup(guideDefinition)
+      guideGroup = createGuideRouteGroup(guideDefinition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
       tagInternalRuntimeGroup(guideGroup, node.id, 'GuideRoute')
       guideGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGuideRouteDynamicMeshSignature(guideDefinition)
       object.add(guideGroup)
@@ -22746,7 +22986,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       const groupData = guideGroup.userData ?? (guideGroup.userData = {})
       const nextSignature = computeGuideRouteDynamicMeshSignature(guideDefinition)
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
-        updateGuideRouteGroup(guideGroup, guideDefinition)
+        updateGuideRouteGroup(guideGroup, guideDefinition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
         groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
       }
     }
@@ -24332,7 +24572,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
     } else if (node.dynamicMesh?.type === 'GuideRoute') {
       containerData.dynamicMeshType = 'GuideRoute'
       const guideDefinition = node.dynamicMesh as GuideRouteDynamicMesh
-      const guideGroup = createGuideRouteGroup(guideDefinition)
+      const guideGroup = createGuideRouteGroup(guideDefinition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
       guideGroup.removeFromParent()
       tagInternalRuntimeGroup(guideGroup, node.id, 'GuideRoute')
       guideGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGuideRouteDynamicMeshSignature(guideDefinition)

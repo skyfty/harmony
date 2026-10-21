@@ -1,7 +1,7 @@
 import type { Object3D } from 'three'
 import { Component, type ComponentRuntimeContext } from '../Component'
 import { componentManager, type ComponentDefinition } from '../componentManager'
-import type { GuideRouteDynamicMesh, SceneNodeComponentState, SceneNode, Vector3Like } from '../../index'
+import type { SceneNodeComponentState, SceneNode, Vector3Like } from '../../index'
 
 export const GUIDE_ROUTE_COMPONENT_TYPE = 'guideRoute'
 
@@ -12,7 +12,15 @@ export type GuideRouteWaypoint = {
   dock?: boolean
 }
 
+export type GuideRouteRouteSource = 'drawn' | 'generated-road'
+
 export interface GuideRouteComponentProps {
+  /** Breaking Guide Route contract. Fixed terrain-space Y values are ignored. */
+  version: 2
+  surfaceProviderNodeId: string | null
+  routeSource: GuideRouteRouteSource
+  sampleSpacingM: number
+  roadLateralOffsetM: number
   waypoints: GuideRouteWaypoint[]
 }
 
@@ -44,6 +52,26 @@ export function buildGuideRouteWaypointsFromPositions(
   })
 }
 
+function normalizeProviderNodeId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
+}
+
+function normalizeRouteSource(value: unknown): GuideRouteRouteSource {
+  return value === 'generated-road' ? 'generated-road' : 'drawn'
+}
+
+function clampFinite(value: unknown, fallback: number, min: number, max: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) {
+    return fallback
+  }
+  return Math.min(max, Math.max(min, numeric))
+}
+
 export function clampGuideRouteComponentProps(props: Partial<GuideRouteComponentProps> | null | undefined): GuideRouteComponentProps {
   const rawWaypoints = Array.isArray((props as GuideRouteComponentProps | undefined)?.waypoints)
     ? (props as GuideRouteComponentProps).waypoints
@@ -55,20 +83,23 @@ export function clampGuideRouteComponentProps(props: Partial<GuideRouteComponent
     sanitizedEntries,
   )
 
-  return { waypoints }
-}
-
-export function resolveGuideRouteComponentPropsFromMesh(mesh: GuideRouteDynamicMesh | undefined | null): GuideRouteComponentProps {
-  if (!mesh || !Array.isArray(mesh.vertices)) {
-    return { waypoints: [] }
-  }
   return {
-    waypoints: buildGuideRouteWaypointsFromPositions(mesh.vertices),
+    version: 2,
+    surfaceProviderNodeId: normalizeProviderNodeId(props?.surfaceProviderNodeId),
+    routeSource: normalizeRouteSource(props?.routeSource),
+    sampleSpacingM: clampFinite(props?.sampleSpacingM, 2, 0.5, 20),
+    roadLateralOffsetM: clampFinite(props?.roadLateralOffsetM, 0, -50, 50),
+    waypoints,
   }
 }
 
 export function cloneGuideRouteComponentProps(props: GuideRouteComponentProps): GuideRouteComponentProps {
   return {
+    version: 2,
+    surfaceProviderNodeId: props.surfaceProviderNodeId,
+    routeSource: props.routeSource,
+    sampleSpacingM: props.sampleSpacingM,
+    roadLateralOffsetM: props.roadLateralOffsetM,
     waypoints: props.waypoints.map((w) => ({
       name: w.name,
       position: { x: w.position.x, y: w.position.y, z: w.position.z },
@@ -107,9 +138,8 @@ const guideRouteComponentDefinition: ComponentDefinition<GuideRouteComponentProp
     return node.dynamicMesh?.type === 'GuideRoute'
   },
   createDefaultProps(node: SceneNode) {
-    return resolveGuideRouteComponentPropsFromMesh(node.dynamicMesh?.type === 'GuideRoute'
-      ? (node.dynamicMesh as GuideRouteDynamicMesh)
-      : null)
+    void node
+    return clampGuideRouteComponentProps(null)
   },
   createInstance(context) {
     return new GuideRouteComponent(context)
@@ -125,6 +155,8 @@ export function createGuideRouteComponentState(
 ): SceneNodeComponentState<GuideRouteComponentProps> {
   const defaults = guideRouteComponentDefinition.createDefaultProps(node)
   const merged = clampGuideRouteComponentProps({
+    ...defaults,
+    ...overrides,
     waypoints: overrides?.waypoints ?? defaults.waypoints,
   })
   return {

@@ -12,8 +12,6 @@ export interface AutoTourComponentProps {
   routeNodeId: string | null
   speedMps: number
   loop: boolean
-  alignToPath: boolean
-  usePhysicsDrive: boolean
   followCameraObstacleAvoidanceEnabled: boolean
 }
 
@@ -54,8 +52,6 @@ export function clampAutoTourComponentProps(
     routeNodeId: normalizeNodeId(raw.routeNodeId),
     speedMps: clampNumber(raw.speedMps, DEFAULT_AUTO_TOUR_SPEED_MPS, MIN_AUTO_TOUR_SPEED_MPS, MAX_AUTO_TOUR_SPEED_MPS),
     loop: clampBoolean(raw.loop, false),
-    alignToPath: clampBoolean(raw.alignToPath, true),
-    usePhysicsDrive: clampBoolean(raw.usePhysicsDrive, true),
     followCameraObstacleAvoidanceEnabled: clampBoolean(raw.followCameraObstacleAvoidanceEnabled, false),
   }
 }
@@ -65,8 +61,6 @@ export function cloneAutoTourComponentProps(props: AutoTourComponentProps): Auto
     routeNodeId: props.routeNodeId ?? null,
     speedMps: props.speedMps,
     loop: props.loop,
-    alignToPath: props.alignToPath,
-    usePhysicsDrive: props.usePhysicsDrive,
     followCameraObstacleAvoidanceEnabled: props.followCameraObstacleAvoidanceEnabled,
   }
 }
@@ -89,8 +83,6 @@ const autoTourComponentDefinition: ComponentDefinition<AutoTourComponentProps> =
       fields: [
         { kind: 'number', key: 'speedMps', label: 'Base Speed (m/s)', min: MIN_AUTO_TOUR_SPEED_MPS, max: MAX_AUTO_TOUR_SPEED_MPS, step: 0.1, precision: 2 },
         { kind: 'boolean', key: 'loop', label: 'Loop' },
-        { kind: 'boolean', key: 'alignToPath', label: 'Align To Path' },
-        { kind: 'boolean', key: 'usePhysicsDrive', label: 'Use Physics Drive' },
         { kind: 'boolean', key: 'followCameraObstacleAvoidanceEnabled', label: 'Obstacle Avoidance' },
       ],
     },

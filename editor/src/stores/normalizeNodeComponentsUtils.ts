@@ -6,7 +6,6 @@ import type {
   NodeComponentType,
   WallDynamicMesh,
   FloorDynamicMesh,
-  GuideRouteDynamicMesh,
 } from '@schema/core'
 
 import {
@@ -24,7 +23,6 @@ import {
   cloneFloorComponentProps,
   clampFloorComponentProps,
   GUIDE_ROUTE_COMPONENT_TYPE,
-  resolveGuideRouteComponentPropsFromMesh,
   cloneGuideRouteComponentProps,
   clampGuideRouteComponentProps,
   DISPLAY_BOARD_COMPONENT_TYPE,
@@ -246,28 +244,18 @@ export function normalizeNodeComponents(
   }
 
   if (node.dynamicMesh?.type === 'GuideRoute') {
-    const baseProps = resolveGuideRouteComponentPropsFromMesh(node.dynamicMesh as GuideRouteDynamicMesh)
     const existing = normalized[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
-    const existingProps = existing?.props as any | undefined
-    const mergedWaypoints = baseProps.waypoints.map((waypoint, index) => ({
-      name: typeof existingProps?.waypoints?.[index]?.name === 'string' ? existingProps.waypoints[index].name : waypoint.name,
-      position: waypoint.position,
-      dock: existingProps?.waypoints?.[index]?.dock === true,
-    }))
-    const nextProps = cloneGuideRouteComponentProps(
-      clampGuideRouteComponentProps({
-        waypoints: mergedWaypoints,
-      }),
-    )
-
-    const clonedMetadata: Record<string, unknown> | undefined = existing?.metadata
-
-    normalized[GUIDE_ROUTE_COMPONENT_TYPE] = {
-      id: existing?.id && existing.id.trim().length ? existing.id : generateUuid(),
-      type: GUIDE_ROUTE_COMPONENT_TYPE,
-      enabled: existing?.enabled ?? true,
-      props: nextProps,
-      metadata: clonedMetadata,
+    if (existing?.props?.version === 2) {
+      const nextProps = cloneGuideRouteComponentProps(
+        clampGuideRouteComponentProps(existing.props as any),
+      )
+      normalized[GUIDE_ROUTE_COMPONENT_TYPE] = {
+        ...existing,
+        id: existing.id && existing.id.trim().length ? existing.id : generateUuid(),
+        type: GUIDE_ROUTE_COMPONENT_TYPE,
+        enabled: existing.enabled ?? true,
+        props: nextProps,
+      }
     }
   }
 

@@ -71,6 +71,12 @@ class WebPhysicsBridge implements PhysicsBridge {
     await this.request('set-body-velocity', command)
   }
 
+  async setBodyCollisionEnabled(
+    command: Extract<PhysicsWorkerRequest, { type: 'set-body-collision' }>['payload'],
+  ): Promise<void> {
+    await this.request('set-body-collision', command)
+  }
+
   async setVehicleInput(command: PhysicsVehicleInputCommand): Promise<void> {
     await this.request('set-vehicle-input', command)
   }

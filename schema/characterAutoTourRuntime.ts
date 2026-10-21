@@ -18,6 +18,7 @@ import {
   clampGuideRouteComponentProps,
   type GuideRouteComponentProps,
 } from './components/definitions/guideRouteComponent'
+import { evaluateGuideRoute } from './guideRouteRuntime'
 import { findClosestWaypointIndex, resolvePathFollowLookaheadDistance, resolvePathFollowSample } from './pathFollowCommon'
 
 export type CharacterAutoTourInputState = {
@@ -143,27 +144,18 @@ function resolveGuideRouteWorldWaypoints(
   if (!routeNode) {
     return null
   }
-  const routeComponent = resolveEnabledComponentState<GuideRouteComponentProps>(routeNode, GUIDE_ROUTE_COMPONENT_TYPE)
-  if (!routeComponent) {
-    return null
-  }
-  const routeObject = nodeObjectMap.get(routeNodeId) ?? null
-  if (!routeObject) {
-    return null
-  }
-  const props = clampGuideRouteComponentProps(routeComponent.props)
-  if (!props.waypoints.length) {
-    return null
-  }
-  routeObject.updateMatrixWorld(true)
-  const points: THREE.Vector3[] = []
-  const dock: boolean[] = []
-  props.waypoints.forEach((wp) => {
-    characterPathFollowTargetPosition.set(wp.position.x, wp.position.y, wp.position.z)
-    points.push(routeObject.localToWorld(characterPathFollowTargetPosition.clone()))
-    dock.push(wp.dock === true)
-  })
-  return points.length >= 2 ? { points, dock } : null
+  const props = clampGuideRouteComponentProps(
+    (routeNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props ?? null) as
+      | Partial<GuideRouteComponentProps>
+      | null,
+  )
+  const providerObject = props.surfaceProviderNodeId
+    ? nodeObjectMap.get(props.surfaceProviderNodeId) ?? null
+    : null
+  const evaluation = evaluateGuideRoute({ routeNode, providerObject })
+  return evaluation.status === 'ready'
+    ? { points: evaluation.points, dock: evaluation.dock }
+    : null
 }
 
 function getObjectWorldPosition(object: THREE.Object3D, out: THREE.Vector3): THREE.Vector3 {
@@ -324,16 +316,14 @@ export class CharacterAutoTourRuntimeManager {
         const arrivalDistance = Math.max(0.35, Math.min(1.25, speedMps * 0.2))
         if (endDistance <= arrivalDistance) {
           entry.smoothedWorldPosition.copy(endPoint)
-          if (entry.props.alignToPath) {
-            const prevPoint = routeData.points[Math.max(0, routeData.points.length - 2)] ?? endPoint
-            characterPathFollowDirection.copy(endPoint).sub(prevPoint)
-            characterPathFollowDirection.y = 0
-            if (characterPathFollowDirection.lengthSq() > 1e-8) {
-              characterPathFollowDirection.normalize()
-              entry.smoothedYaw =
-                Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x)
-                + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
-            }
+          const prevPoint = routeData.points[Math.max(0, routeData.points.length - 2)] ?? endPoint
+          characterPathFollowDirection.copy(endPoint).sub(prevPoint)
+          characterPathFollowDirection.y = 0
+          if (characterPathFollowDirection.lengthSq() > 1e-8) {
+            characterPathFollowDirection.normalize()
+            entry.smoothedYaw =
+              Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x)
+              + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
           }
 
           const shouldApplyWorldTransform = host.shouldApplyWorldTransform?.(nodeId) ?? true
@@ -378,23 +368,19 @@ export class CharacterAutoTourRuntimeManager {
       const stepDistance = Math.max(0, speedMps * deltaSeconds * speedFactor)
       const actualStep = Math.min(stepDistance, distanceToLookahead)
       characterPathFollowTargetPosition.copy(currentPosition).addScaledVector(characterPathFollowDirection, actualStep)
+      const heightAlpha = distanceToLookahead > 1e-6
+        ? Math.min(1, actualStep / distanceToLookahead)
+        : 0
       characterPathFollowTargetPosition.y = currentPosition.y
+        + (sample.lookaheadPoint.y - currentPosition.y) * heightAlpha
 
-      if (!entry.props.alignToPath) {
-        characterPathFollowTargetPosition.copy(currentPosition).addScaledVector(characterPathFollowDirection, actualStep)
-      }
-
-      if (entry.props.alignToPath) {
-        const targetYaw = Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x) + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
-        const alpha = 1 - Math.exp(-Math.max(0, 10) * deltaSeconds)
-        const yawDelta = Math.atan2(
-          Math.sin(targetYaw - entry.smoothedYaw),
-          Math.cos(targetYaw - entry.smoothedYaw),
-        )
-        entry.smoothedYaw += yawDelta * clamp01(alpha)
-      } else {
-        entry.smoothedYaw = getObjectWorldYawRadians(object, controllerProps.forwardAxis)
-      }
+      const targetYaw = Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x) + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
+      const alpha = 1 - Math.exp(-Math.max(0, 10) * deltaSeconds)
+      const yawDelta = Math.atan2(
+        Math.sin(targetYaw - entry.smoothedYaw),
+        Math.cos(targetYaw - entry.smoothedYaw),
+      )
+      entry.smoothedYaw += yawDelta * clamp01(alpha)
 
       entry.smoothedWorldPosition.copy(characterPathFollowTargetPosition)
 

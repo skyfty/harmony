@@ -167,7 +167,8 @@ import {
 } from '@schema/groundCollisionRuntimeHost'
 import { createGroundCollisionRuntimeBridgeDeps } from '@schema/groundCollisionRuntimeBridge'
 import { syncGroundCollisionRuntimeLoadedTileKeys } from '@schema/groundCollisionRuntimeState'
-import { collectGroundAnchorWorldPositions } from '@schema/groundAnchorRuntime'
+import { collectGroundAnchorWorldTargets } from '@schema/groundAnchorRuntime'
+import { VehicleMotionAuthorityController } from '@schema/vehicleMotionAuthority'
 import {
 	DEM_GROUND_COLLISION_READY_TIMEOUT_MS,
 	collectGroundCollisionSourceNodeIds,
@@ -227,7 +228,6 @@ import {
 import {
 	type PhysicsBodyBindingEntry as RigidbodyInstance,
 	type PhysicsOrientationAdjustment as RigidbodyOrientationAdjustment,
-	syncBodyFromObject as syncSharedBodyFromObject,
 } from '@schema/physicsBodySync'
 import { loadAssetObject, loadNodeObject } from '@schema/modelAssetLoader'
 import { updateAttachedTerrainTextureStreams } from '@schema/terrainTextureStream'
@@ -308,7 +308,6 @@ import {
 	CHARACTER_CONTROLLER_COMPONENT_TYPE,
 	guideRouteComponentDefinition,
 	autoTourComponentDefinition,
-	purePursuitComponentDefinition,
 	sceneStateAnchorComponentDefinition,
 	groundAnchorComponentDefinition,
 	groundCollisionSourceComponentDefinition,
@@ -414,14 +413,12 @@ import {
   resetFollowCameraMotionState,
 } from '@schema/motion'
 import {
-  createPhysicsAwareAutoTourVehicleInstances,
   resolveVehicleOrObjectWorldPosition,
   startTourAndFollow,
   stopTourAndUnfollow,
 } from '@schema/motion'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/motion'
 import {
-	holdVehicleBrakeSafe,
 	createControlledNodeMotionRuntime,
 	updateVehicleSpeedAndApplyParkingHoldSafe,
 	VEHICLE_PARKED_SPEED_EPSILON,
@@ -505,6 +502,7 @@ import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import { createAutoTourRuntime } from '@schema/motion'
+import { evaluateGuideRoute } from '@schema/guideRouteRuntime'
 import { createScenePreviewPerfController } from '@schema/overlay'
 import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
 
@@ -1827,7 +1825,6 @@ previewComponentManager.registerDefinition(characterControllerComponentDefinitio
 previewComponentManager.registerDefinition(lodComponentDefinition)
 previewComponentManager.registerDefinition(guideRouteComponentDefinition)
 previewComponentManager.registerDefinition(autoTourComponentDefinition)
-previewComponentManager.registerDefinition(purePursuitComponentDefinition)
 previewComponentManager.registerDefinition(sceneStateAnchorComponentDefinition)
 previewComponentManager.registerDefinition(groundAnchorComponentDefinition)
 previewComponentManager.registerDefinition(groundCollisionSourceComponentDefinition)
@@ -2037,9 +2034,6 @@ const autoTourCameraFollowQuaternionScratch = new THREE.Quaternion()
 let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
-const autoTourCameraRoutePointsScratch: THREE.Vector3[] = []
-const autoTourCameraRouteDockScratch: boolean[] = []
-const autoTourRoutePointScratch = new THREE.Vector3()
 
 const vehicleDrivePrompt = computed(() => {
 	// Ensure this computed updates when the set changes.
@@ -3073,6 +3067,8 @@ const physicsBridgeBodySyncPositionHelper = new THREE.Vector3()
 const physicsBridgeBodySyncQuaternionHelper = new THREE.Quaternion()
 const physicsEnvironmentEnabled = ref(true)
 const rigidbodyInstances = new Map<string, RigidbodyInstance>()
+const vehicleMotionAuthority = new VehicleMotionAuthorityController()
+let activeManualAuthorityNodeId: string | null = null
 let previewGroundCollisionNextRuntimeId = 0x70000000
 let previewGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve()
 let previewGroundCollisionBridgeMutationEpoch = 0
@@ -3373,7 +3369,7 @@ function resolveSignboardReference(): { position: THREE.Vector3; kind: 'camera' 
 			nodeId: autoTourFollowNodeId.value,
 			vehicleInstances,
 			nodeObjectMap,
-			isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+			isPhysicsEnabled: () => false,
 			target: signboardReferenceScratch,
 		})) {
 			return { position: signboardReferenceScratch, kind: 'vehicle', nodeId: autoTourFollowNodeId.value }
@@ -3924,6 +3920,10 @@ watch(
 	() => vehicleDriveState.active,
 	(active) => {
 		if (!active) {
+			if (activeManualAuthorityNodeId) {
+				vehicleMotionAuthority.endManualPhysics(activeManualAuthorityNodeId)
+				activeManualAuthorityNodeId = null
+			}
 			vehicleSpeedDisplayMps.value = 0
 			vehicleSpeedDisplayLastCommitAtMs = 0
 			vehicleSpeedDisplayLowSpeedSinceAtMs = null
@@ -4341,27 +4341,20 @@ function resolveAutoTourComponent(
 
 function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): { points: THREE.Vector3[]; dock: boolean[] } | null {
 	const routeNode = resolveNodeById(routeNodeId)
-	const routeObject = nodeObjectMap.get(routeNodeId) ?? null
-	if (!routeNode || !routeObject) {
+	if (!routeNode) {
 		return null
 	}
-	const component = resolveEnabledComponentState<GuideRouteComponentProps>(routeNode, GUIDE_ROUTE_COMPONENT_TYPE)
-	if (!component) {
-		return null
-	}
-	const props = clampGuideRouteComponentProps(component.props)
-	if (!props.waypoints.length) {
-		return null
-	}
-	autoTourCameraRoutePointsScratch.length = 0
-	autoTourCameraRouteDockScratch.length = 0
-	props.waypoints.forEach((waypoint) => {
-		autoTourRoutePointScratch.set(waypoint.position.x, waypoint.position.y, waypoint.position.z)
-		autoTourCameraRoutePointsScratch.push(routeObject.localToWorld(autoTourRoutePointScratch.clone()))
-		autoTourCameraRouteDockScratch.push(waypoint.dock === true)
-	})
-	return autoTourCameraRoutePointsScratch.length >= 2
-		? { points: autoTourCameraRoutePointsScratch, dock: autoTourCameraRouteDockScratch }
+	const props = clampGuideRouteComponentProps(
+		(routeNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props ?? null) as
+			| Partial<GuideRouteComponentProps>
+			| null,
+	)
+	const providerObject = props.surfaceProviderNodeId
+		? nodeObjectMap.get(props.surfaceProviderNodeId) ?? null
+		: null
+	const evaluation = evaluateGuideRoute({ routeNode, providerObject })
+	return evaluation.status === 'ready'
+		? { points: evaluation.points, dock: evaluation.dock }
 		: null
 }
 
@@ -4392,20 +4385,13 @@ function resolveAutoTourCameraRouteData(nodeId: string): AutoTourCameraRouteData
 	}
 }
 
-const autoTourVehicleInstances = createPhysicsAwareAutoTourVehicleInstances(
-	vehicleInstances,
-	() => physicsEnvironmentEnabled.value,
-)
 const controlledNodeMotionRuntime = createControlledNodeMotionRuntime()
 
 const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),
 	resolveNodeById,
 	nodeObjectMap,
-	vehicleInstances: autoTourVehicleInstances,
-	resolveVehicleMotionTelemetry: (nodeId) => controlledNodeMotionRuntime.get(nodeId),
 	isManualDriveActive: () => vehicleDriveState.active,
-	requiresExplicitStart: true,
 	onDockRequestedPause: (nodeId, payload) => {
 		autoTourPausedIsTerminal.value = payload.terminal === true
 		autoTourPausedNodeId.value = nodeId
@@ -4413,26 +4399,26 @@ const autoTourRuntime = createAutoTourRuntime({
 			return
 		}
 		autoTourPaused.value = true
-		applyAutoTourPauseForActiveNodes()
-	},
-	stopNodeMotion: (nodeId) => {
-		const entry = rigidbodyInstances.get(nodeId) ?? null
-		if (!entry) {
-			return
-		}
-		try {
-			if (entry.object) {
-				syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment)
-			}
-			entry.body.velocity.set(0, 0, 0)
-			entry.body.angularVelocity.set(0, 0, 0)
-			entry.body.sleep?.()
-		} catch {
-			// Best-effort; body may be disposed/resetting.
-		}
 	},
 	onNodeObjectTransformUpdated: (_nodeId, object) => {
 		syncInstancedTransform(object)
+	},
+	onAutoSurfaceStart: (nodeId) => {
+		vehicleMotionAuthority.beginAutoSurface(
+			nodeId,
+			rigidbodyInstances.get(nodeId) ?? null,
+		)
+		const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
+		if (physicsBridge && typeof bodyId === 'number') {
+			void physicsBridge.setBodyCollisionEnabled({ bodyId, enabled: false })
+		}
+	},
+	onAutoSurfaceEnd: (nodeId) => {
+		vehicleMotionAuthority.endAutoSurface(nodeId)
+		const bodyId = physicsBridgeBodyIdByNodeId.get(nodeId)
+		if (physicsBridge && typeof bodyId === 'number') {
+			void physicsBridge.setBodyCollisionEnabled({ bodyId, enabled: true })
+		}
 	},
 })
 
@@ -8008,7 +7994,7 @@ function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3
 		nodeId,
 		vehicleInstances,
 		nodeObjectMap,
-		isPhysicsEnabled: () => physicsEnvironmentEnabled.value,
+		isPhysicsEnabled: () => false,
 		target: autoTourCameraFollowAnchorScratch,
 	})) {
 		return autoTourCameraFollowAnchorScratch
@@ -10394,6 +10380,8 @@ function startVehicleDriveMode(
 	if (!result.success) {
 		return result
 	}
+	vehicleMotionAuthority.beginManualPhysics(targetNodeId)
+	activeManualAuthorityNodeId = targetNodeId
 	resetVehicleFollowLocalOffset()
 	vehicleDriveExitBusy.value = false
 	resetVehicleDriveInputs()
@@ -10483,7 +10471,9 @@ function updateVehicleSpeedFromVehicle(): void {
 			parkedSpeedEpsilon: VEHICLE_PARKED_SPEED_EPSILON,
 			parkingHoldSpeedEpsilon: VEHICLE_PARKING_HOLD_SPEED_EPSILON,
 			engageParkingHold: false,
-			resolveBrakeForce: () => resolveAutoTourVehicleBrakeForce(vehicleNodeId!),
+			resolveBrakeForce: () => clampVehicleComponentProps(
+				resolveVehicleComponent(resolveNodeById(vehicleNodeId!))?.props ?? null,
+			).brakeForceMax * 6,
 		})
 	}
 
@@ -10775,61 +10765,6 @@ function handleHideVehicleCockpitEvent(): void {
 	setVehicleDriveUiOverride('hide')
 }
 
-function resolveAutoTourVehicleBrakeForce(nodeId: string): number {
-	const node = resolveNodeById(nodeId)
-	const vehicle = resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
-	const brakeForceMax = vehicle
-		? clampVehicleComponentProps(vehicle.props).brakeForceMax
-		: clampVehicleComponentProps(null).brakeForceMax
-	// Match schema autoTourRuntime: hold brake strongly to avoid rolling.
-	return brakeForceMax * 6
-}
-
-function applyAutoTourVehicleHoldBrake(nodeId: string): void {
-	const vehicleInstance = vehicleInstances.get(nodeId) ?? null
-	if (!vehicleInstance) {
-		return
-	}
-	const brakeForce = resolveAutoTourVehicleBrakeForce(nodeId)
-	holdVehicleBrakeSafe({ vehicleInstance, brakeForce })
-	try {
-		const chassisBody = vehicleInstance.vehicle.chassisBody
-		chassisBody.velocity.set(0, 0, 0)
-		chassisBody.angularVelocity.set(0, 0, 0)
-		chassisBody.sleep?.()
-	} catch {
-		// Best-effort; vehicle may be disposed/resetting.
-	}
-}
-
-function applyAutoTourRigidBodyStop(nodeId: string): void {
-	const entry = rigidbodyInstances.get(nodeId) ?? null
-	if (!entry) {
-		return
-	}
-	try {
-		if (entry.object) {
-			syncSharedBodyFromObject(entry.body, entry.object, entry.orientationAdjustment)
-		}
-		entry.body.velocity.set(0, 0, 0)
-		entry.body.angularVelocity.set(0, 0, 0)
-		entry.body.sleep?.()
-	} catch {
-		// Best-effort; body may be disposed/resetting.
-	}
-}
-
-function applyAutoTourPauseForActiveNodes(): void {
-	const manualNodeId = vehicleDriveState.active ? vehicleDriveState.nodeId : null
-	activeAutoTourNodeIds.forEach((nodeId) => {
-		if (manualNodeId && manualNodeId === nodeId) {
-			return
-		}
-		applyAutoTourVehicleHoldBrake(nodeId)
-		applyAutoTourRigidBodyStop(nodeId)
-	})
-}
-
 async function handleVehicleAutoTourStartClick(): Promise<void> {
 	const event = pendingVehicleDriveEvent.value
 	if (!event || vehicleDrivePromptBusy.value) {
@@ -10907,7 +10842,6 @@ function handleVehicleAutoTourPauseToggleClick(): void {
 		autoTourPausedIsTerminal.value = false
 		autoTourPausedNodeId.value = null
 		autoTourPaused.value = true
-		applyAutoTourPauseForActiveNodes()
 	}
 	applyAutoTourCameraInputPolicy()
 }
@@ -11825,9 +11759,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		}
 		updateBehaviorSoundDistanceGain(instance)
 	})
-	if (autoTourPaused.value) {
-		applyAutoTourPauseForActiveNodes()
-	} else {
+	if (!autoTourPaused.value) {
 		autoTourRuntime.update(delta)
 	}
 	if (vehicleDriveState.active) {
@@ -12240,6 +12172,8 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Scene reset; driving ended.' } })
 	}
+	vehicleMotionAuthority.clear()
+	activeManualAuthorityNodeId = null
 	autoTourRuntime.reset()
 	waterRuntime.reset()
 	activeAutoTourNodeIds.clear()
@@ -12955,9 +12889,10 @@ function syncScenePreviewMeshCollisionRuntime(
 			workPending = true
 		}
 	})
-	const coverage = bestSnapshot?.referenceGroundCoverage[0] ?? null
+	const resolvedBestSnapshot = bestSnapshot as ReturnType<typeof syncMeshCollisionRuntimeHost> | null
+	const coverage = resolvedBestSnapshot?.referenceGroundCoverage[0] ?? null
 	if (coverage) {
-		meshCollisionDebug.referenceCount = bestSnapshot?.referenceGroundCoverage.length ?? 0
+		meshCollisionDebug.referenceCount = resolvedBestSnapshot?.referenceGroundCoverage.length ?? 0
 		meshCollisionDebug.referenceX = coverage.referenceWorldPosition[0]
 		meshCollisionDebug.referenceY = coverage.referenceWorldPosition[1]
 		meshCollisionDebug.referenceZ = coverage.referenceWorldPosition[2]
@@ -13021,12 +12956,14 @@ async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocu
 
 function resolveGroundCollisionReferenceWorld(targetPositions: THREE.Vector3[]): boolean {
 	targetPositions.length = 0
-	const positions = collectGroundAnchorWorldPositions({
+	const targets = collectGroundAnchorWorldTargets({
 		document: currentDocument,
 		resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
 		runtimeRoots: rootGroup,
 	})
-	targetPositions.push(...positions)
+	targetPositions.push(...targets
+		.filter((target) => !target.nodeId || vehicleMotionAuthority.shouldIncludeGroundAnchor(target.nodeId))
+		.map((target) => target.position))
 	return targetPositions.length > 0
 }
 
@@ -13504,6 +13441,9 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 	}
 	const transformSyncEntries: PhysicsBridgeTransformSyncEntry[] = []
 	physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
+		if (!vehicleMotionAuthority.shouldWritePhysicsToObject(nodeId)) {
+			return
+		}
 		const entry = resolveScenePreviewPhysicsBridgeTransformSyncEntry(nodeId, state)
 		if (entry) {
 			transformSyncEntries.push(entry)
@@ -13698,6 +13638,9 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 	const commands: Array<Promise<void>> = []
 	const syncedNodeIds = new Set<string>()
 	rigidbodyInstances.forEach((entry, nodeId) => {
+		if (!vehicleMotionAuthority.shouldWritePhysicsToObject(nodeId)) {
+			return
+		}
 		if (entry.bindingKind === 'character') {
 			if (moveToRuntimeSession.active && moveToRuntimeSession.subjectNodeId === nodeId && entry.body) {
 			}
@@ -13728,6 +13671,9 @@ function syncScenePreviewPhysicsBridgeBodyTransforms(): void {
 		)
 	})
 	physicsBridgeBodyIdByNodeId.forEach((bodyId, nodeId) => {
+		if (!vehicleMotionAuthority.shouldWritePhysicsToObject(nodeId)) {
+			return
+		}
 		if (syncedNodeIds.has(nodeId)) {
 			return
 		}

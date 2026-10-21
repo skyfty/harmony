@@ -5,6 +5,7 @@ import { useSceneStore } from '@/stores/sceneStore'
 import type { SceneNodeComponentState } from '@schema/core'
 import { GUIDE_ROUTE_COMPONENT_TYPE } from '@schema/components'
 import type { GuideRouteComponentProps } from '@schema/components'
+import { getProceduralLandscapeGuideRouteSurfaceState } from '@schema/proceduralLandscape/runtime'
 
 type WaypointDraft = {
   name: string
@@ -33,14 +34,37 @@ const selectedWaypointIndex = computed(() => {
 })
 const canDeleteWaypoint = computed(() => localWaypoints.value.length > 2)
 const isComponentEnabled = computed(() => guideRouteComponent.value?.enabled !== false)
+const isGuideRouteV2 = computed(() => guideRouteComponent.value?.props?.version === 2)
+const surfaceProviderNodeId = computed(() => (
+  isGuideRouteV2.value
+    ? guideRouteComponent.value?.props?.surfaceProviderNodeId ?? null
+    : null
+))
+const surfaceProviderName = computed(() => {
+  const nodeId = surfaceProviderNodeId.value
+  if (!nodeId) {
+    return ''
+  }
+  return sceneStore.getNodeById(nodeId)?.name?.trim() || nodeId
+})
+const surfaceState = computed(() => {
+  const nodeId = surfaceProviderNodeId.value
+  return nodeId ? getProceduralLandscapeGuideRouteSurfaceState(nodeId) : null
+})
 
 function commitWaypoints(nextWaypoints: Array<WaypointDraft & { position: GuideRouteComponentProps['waypoints'][number]['position'] }>, selectedIndex?: number | null) {
   const nodeId = selectedNode.value?.id ?? null
   if (!nodeId) {
     return false
   }
+  const origin = selectedNode.value?.position
+  const vertices = nextWaypoints.map((entry) => ({
+    x: entry.position.x - (origin?.x ?? 0),
+    y: entry.position.y - (origin?.y ?? 0),
+    z: entry.position.z - (origin?.z ?? 0),
+  }))
   return sceneStore.updateGuideRouteWaypoints(nodeId, {
-    vertices: nextWaypoints.map((entry) => entry.position),
+    vertices,
     waypoints: nextWaypoints,
     selectedWaypointIndex: selectedIndex ?? selectedWaypointIndex.value,
   })
@@ -113,7 +137,9 @@ watch(
       return
     }
 
-    const waypoints = Array.isArray(component.props.waypoints) ? component.props.waypoints : []
+    const waypoints = component.props.version === 2 && Array.isArray(component.props.waypoints)
+      ? component.props.waypoints
+      : []
     localWaypoints.value = waypoints.map((entry, index) => {
       const raw = typeof entry?.name === 'string' ? entry.name : ''
       const name = raw.trim().length ? raw.trim() : `P${index + 1}`
@@ -143,6 +169,26 @@ watch(
       </div>
     </v-expansion-panel-title>
     <v-expansion-panel-text>
+      <v-alert
+        v-if="!surfaceProviderNodeId"
+        type="warning"
+        variant="tonal"
+        density="compact"
+        class="mb-3"
+      >
+        This Guide Route is not bound to a terrain provider. Recreate it with the Guide Route tool on a Procedural Landscape.
+      </v-alert>
+      <div v-else class="guide-route-surface-status">
+        <span>{{ surfaceProviderName }}</span>
+        <v-chip
+          size="small"
+          :color="surfaceState?.status === 'ready' ? 'success' : surfaceState?.status === 'error' ? 'error' : 'warning'"
+          variant="tonal"
+        >
+          {{ surfaceState?.status ?? 'missing' }}
+        </v-chip>
+        <span class="guide-route-surface-revision">r{{ surfaceState?.revision ?? 0 }}</span>
+      </div>
       <div class="guide-route-waypoint-list" v-if="localWaypoints.length">
         <div
           v-for="(waypoint, index) in localWaypoints"
@@ -221,6 +267,19 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+.guide-route-surface-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.82rem;
+}
+
+.guide-route-surface-revision {
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
 }
 
 .guide-route-waypoint-card {

@@ -42,11 +42,6 @@ export type VehicleDriveInputState = {
   analogBrake?: number
 }
 
-export type VehicleDriveAutoTourTargetState = {
-  autoTourTargetSpeedMps: number
-  autoTourTargetSteeringRad: number
-}
-
 export type VehicleDriveRuntimeState = {
   active: boolean
   nodeId: string | null
@@ -69,7 +64,7 @@ export type VehicleDriveVehicle = {
   applyEngineForce: (force: number, wheelIndex: number) => void
   setSteeringValue: (value: number, wheelIndex: number) => void
   setBrake: (brake: number, wheelIndex: number) => void
-} & VehicleDriveAutoTourTargetState
+}
 
 export type VehicleDriveChassisBody = {
   position: VehicleDriveVec3
@@ -706,8 +701,11 @@ export class VehicleDriveController {
     if (!vehicleObject) {
       return { success: false, message: '车辆尚未准备就绪，请稍后再试。' }
     }
-    if (!rigidbodyComponent || !physicsEnabled) {
-      return { success: true, mode: 'transform', vehicleObject }
+    if (!physicsEnabled) {
+      return { success: false, message: 'Manual driving requires physics to be enabled.' }
+    }
+    if (!rigidbodyComponent) {
+      return { success: false, message: 'Manual driving requires a Rigidbody component.' }
     }
     this.deps.ensureVehicleBindingForNode(normalized)
     const instance = this.deps.vehicleInstances.get(normalized)
