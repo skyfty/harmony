@@ -9,6 +9,7 @@ import {
 import {
   clampAutoTourComponentProps,
   clampGuideRouteComponentProps,
+  clampVehicleComponentProps,
 } from '@schema/components'
 import { createAutoTourRuntime } from '@schema/autoTourRuntime'
 import { VehicleMotionAuthorityController } from '@schema/vehicleMotionAuthority'
@@ -16,14 +17,17 @@ import { VehicleMotionAuthorityController } from '@schema/vehicleMotionAuthority
 const surfaceMocks = vi.hoisted(() => ({
   state: vi.fn(),
   sample: vi.fn(),
+  terrainHeight: vi.fn(),
 }))
 const surfaceStateMock = surfaceMocks.state
 const surfaceSampleMock = surfaceMocks.sample
+const terrainHeightMock = surfaceMocks.terrainHeight
 
 vi.mock('@schema/proceduralLandscape/runtime', () => ({
   getProceduralLandscapeGuideRouteSurfaceState: (...args: unknown[]) => surfaceStateMock(...args),
   getProceduralLandscapeRoadCenterlineLocal: () => null,
   sampleProceduralLandscapeGuideRouteSurface: (...args: unknown[]) => surfaceSampleMock(...args),
+  sampleProceduralLandscapeTerrainHeight: (...args: unknown[]) => terrainHeightMock(...args),
 }))
 
 function createRouteNode() {
@@ -65,6 +69,7 @@ describe('guideRouteRuntime', () => {
     clearGuideRouteEvaluationCache()
     surfaceStateMock.mockReset()
     surfaceSampleMock.mockReset()
+    terrainHeightMock.mockReset()
   })
 
   it('blocks evaluation while the surface provider is loading', () => {
@@ -130,6 +135,351 @@ describe('guideRouteRuntime', () => {
     expect(middle).not.toBeNull()
     expect(middle!.point.y).toBeGreaterThan(40)
     expect(middle!.point.y).toBeLessThan(43)
+  })
+
+  it('samples exactly along the visible control-point polyline', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 11,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 20, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 11,
+    }))
+    const routeNode = createRouteNode()
+    routeNode.components.guideRoute.props = clampGuideRouteComponentProps({
+      surfaceProviderNodeId: 'terrain-1',
+      routeSource: 'drawn',
+      sampleSpacingM: 2,
+      waypoints: [
+        { name: 'P1', position: { x: 0, y: 20, z: 0 }, dock: true },
+        { name: 'P2', position: { x: 10, y: 20, z: 0 }, dock: false },
+        { name: 'P3', position: { x: 10, y: 20, z: 10 }, dock: true },
+      ],
+    })
+
+    const result = evaluateGuideRoute({ routeNode, providerObject: null })
+
+    expect(result.status).toBe('ready')
+    result.points.forEach((point) => {
+      const onFirstSegment = Math.abs(point.z) <= 1e-6 && point.x >= -1e-6 && point.x <= 10 + 1e-6
+      const onSecondSegment = Math.abs(point.x - 10) <= 1e-6 && point.z >= -1e-6 && point.z <= 10 + 1e-6
+      expect(onFirstSegment || onSecondSegment).toBe(true)
+    })
+  })
+
+  it('keeps every sampled wheel support point above a sloped terrain patch', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 12,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 10, z),
+      normal: new THREE.Vector3(-0.196116, 0.980581, -0.098058).normalize(),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 12,
+    }))
+    terrainHeightMock.mockImplementation((_nodeId, x, z) => 10 + x * 0.2 + z * 0.1)
+
+    const routeNode = createRouteNode()
+    const vehicleNode = {
+      id: 'vehicle-ground',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        vehicle: {
+          id: 'vehicle-component',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            indexRightAxis: 2,
+            indexUpAxis: 1,
+            indexForwardAxis: 0,
+          }),
+        },
+        autoTour: {
+          id: 'tour-ground',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 2,
+            loop: false,
+          }),
+        },
+      },
+    } as any
+    const vehicleObject = new THREE.Object3D()
+    vehicleObject.position.set(0, 10.5, 0)
+    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4)))
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    runtime.update(1)
+
+    const bounds = new THREE.Box3().setFromObject(vehicleObject)
+    const surfaceHeights = [
+      terrainHeightMock(routeNode.id, bounds.min.x, bounds.min.z),
+      terrainHeightMock(routeNode.id, bounds.max.x, bounds.min.z),
+      terrainHeightMock(routeNode.id, bounds.min.x, bounds.max.z),
+      terrainHeightMock(routeNode.id, bounds.max.x, bounds.max.z),
+    ].map((value) => Number(value))
+    const highestSurface = Math.max(...surfaceHeights)
+    expect(bounds.min.y).toBeGreaterThanOrEqual(highestSurface + 0.039)
+    expect(bounds.min.y).toBeLessThanOrEqual(highestSurface + 0.08)
+  })
+
+  it('uses instanced proxy bounds when the vehicle container has no meshes', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 13,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 10, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 13,
+    }))
+    terrainHeightMock.mockReturnValue(10)
+
+    const routeNode = createRouteNode()
+    const vehicleNode = {
+      id: 'vehicle-instanced-bounds',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        vehicle: {
+          id: 'vehicle-component',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            indexRightAxis: 2,
+            indexUpAxis: 1,
+            indexForwardAxis: 0,
+          }),
+        },
+        autoTour: {
+          id: 'tour-instanced-bounds',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 2,
+            loop: false,
+          }),
+        },
+      },
+    } as any
+    const vehicleProxy = new THREE.Object3D()
+    vehicleProxy.position.set(0, 10, 0)
+    vehicleProxy.userData.instancedBounds = {
+      min: [-1, -0.75, -2],
+      max: [1, 0.75, 2],
+    }
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleProxy],
+    ])
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      resolveObjectBounds: (object) => {
+        const raw = object.userData.instancedBounds as {
+          min: [number, number, number]
+          max: [number, number, number]
+        }
+        const bounds = new THREE.Box3(
+          new THREE.Vector3().fromArray(raw.min),
+          new THREE.Vector3().fromArray(raw.max),
+        )
+        return bounds.applyMatrix4(object.matrixWorld)
+      },
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    runtime.update(1)
+
+    expect(vehicleProxy.position.y).toBeCloseTo(10.79)
+  })
+
+  it('does not re-evaluate support height from changing wheel mesh bounds', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 16,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 10, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 16,
+    }))
+    terrainHeightMock.mockReturnValue(10)
+
+    const routeNode = createRouteNode()
+    const vehicleNode = {
+      id: 'vehicle-stable-ground-bounds',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        vehicle: {
+          id: 'vehicle-component',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            indexRightAxis: 2,
+            indexUpAxis: 1,
+            indexForwardAxis: 0,
+          }),
+        },
+        autoTour: {
+          id: 'tour-stable-ground-bounds',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 5,
+            loop: false,
+          }),
+        },
+      },
+    } as any
+    const vehicleObject = new THREE.Object3D()
+    vehicleObject.position.set(0, 10.5, 0)
+    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(0.2, 1, 0.2)))
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    runtime.update(0.1)
+    const initialY = vehicleObject.position.y
+
+    const animatedWheelBounds = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1, 0.2))
+    animatedWheelBounds.position.set(0, -5, 0)
+    vehicleObject.add(animatedWheelBounds)
+    vehicleObject.updateMatrixWorld(true)
+    runtime.update(0.1)
+
+    expect(vehicleObject.position.y).toBeCloseTo(initialY, 2)
+  })
+
+  it('rises immediately and settles smoothly when terrain drops', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 14,
+      message: null,
+    })
+    let surfaceHeight = 12
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, surfaceHeight, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 14,
+    }))
+    terrainHeightMock.mockImplementation(() => surfaceHeight)
+
+    const routeNode = createRouteNode()
+    const vehicleNode = {
+      id: 'vehicle-undulation',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        vehicle: {
+          id: 'vehicle-component',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            indexRightAxis: 2,
+            indexUpAxis: 1,
+            indexForwardAxis: 0,
+          }),
+        },
+        autoTour: {
+          id: 'tour-undulation',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 5,
+            loop: false,
+          }),
+        },
+      },
+    } as any
+    const vehicleObject = new THREE.Object3D()
+    vehicleObject.position.set(0, 12.5, 0)
+    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(0.2, 1, 0.2)))
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    runtime.update(0.1)
+    const uphillY = vehicleObject.position.y
+    expect(uphillY).toBeCloseTo(12.54, 1)
+
+    surfaceHeight = 8
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 15,
+      message: null,
+    })
+    runtime.update(0.1)
+    const downhillTarget = 8.54
+    expect(vehicleObject.position.y).toBeLessThan(uphillY)
+    expect(vehicleObject.position.y).toBeGreaterThan(downhillTarget + 1)
   })
 
   it('moves a vehicle directly along route elevation without a physics instance', () => {

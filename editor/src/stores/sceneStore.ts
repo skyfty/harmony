@@ -206,6 +206,7 @@ import { attachGroundScatterRuntimeToNode, useGroundScatterStore } from './groun
 import { useUiStore } from './uiStore'
 import { useScenesStore, type SceneWorkspaceType } from './scenesStore'
 import { updateSceneAssets } from './ensureSceneAssetsReady'
+import { refreshRuntimeModelInstancingPolicy } from '@schema/runtimeModelInstancing'
 import { useClipboardStore } from './clipboardStore'
 import { getImportedObjectBounds, loadObjectFromFile } from '@schema/assetImport'
 import { createFileFromEntry } from '@schema/modelAssetLoader'
@@ -13472,6 +13473,7 @@ export const useSceneStore = defineStore('scene', {
       this.selectedAssetId = id
     },
     async ensureSceneAssetsReady(options: EnsureSceneAssetsOptions = {}) {
+      refreshRuntimeModelInstancingPolicy(this.nodes)
       const assetCache = useAssetCacheStore()
       const uiStore = useUiStore()
       const sceneContext = options.sceneContext ?? {

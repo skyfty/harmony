@@ -1106,6 +1106,12 @@ import {
 } from '@harmony/schema/motion';
 import { createBridgePhysicsBodyProxy } from '@harmony/schema/bridgePhysicsBodyProxy';
 import {
+  resolveSignedVehicleTravel,
+  resolveVehicleVisualForwardWorld,
+  resolveVehicleVisualMotionPose,
+  resolveWheelSpinAxisInObjectSpace,
+} from '@harmony/schema/autoTourVisualKinematics';
+import {
   createScenePreviewPerfController,
   disposeSignboardBillboards,
   syncSignboardBillboards,
@@ -3308,7 +3314,6 @@ function applyObjectWorldPose(object: THREE.Object3D, worldPosition: THREE.Vecto
   object.updateWorldMatrix(false, true);
 }
 
-const wheelForwardHelper = new THREE.Vector3();
 const wheelAxisHelper = new THREE.Vector3();
 const wheelQuaternionHelper = new THREE.Quaternion();
 const wheelVisualQuaternionHelper = new THREE.Quaternion();
@@ -3316,6 +3321,7 @@ const wheelParentWorldQuaternionHelper = new THREE.Quaternion();
 const wheelParentWorldQuaternionInverseHelper = new THREE.Quaternion();
 const wheelSteeringQuaternionHelper = new THREE.Quaternion();
 const wheelSpinQuaternionHelper = new THREE.Quaternion();
+const wheelBaseQuaternionInverseHelper = new THREE.Quaternion();
 const wheelChassisPositionHelper = new THREE.Vector3();
 const wheelChassisDisplacementHelper = new THREE.Vector3();
 const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y, DEFAULT_AXLE.z).normalize();
@@ -3482,8 +3488,9 @@ type VehicleInstanceWithWheels = VehicleInstance & {
   vehicle: VehicleDriveVehicle;
   wheelBindings: VehicleWheelBinding[];
   forwardAxis: THREE.Vector3;
-  lastChassisPosition: THREE.Vector3;
-  hasChassisPositionSample: boolean;
+  lastWheelMotionPosition: THREE.Vector3;
+  hasWheelMotionSample: boolean;
+  wheelMotionSource: 'physics' | 'visual' | null;
   bridgeBodyId?: number | null;
   vehicleId?: number | null;
   hasBridgeFrameSample?: boolean;
@@ -4288,6 +4295,16 @@ const vehicleDriveIntroPendingState = reactive({
 });
 const vehicleDrivePromptBusy = ref(false);
 const activeAutoTourNodeIds = reactive(new Set<string>());
+type SceneryVehicleDriveEvent = Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>;
+let pendingAutoTourManualDriveNodeId: string | null = null;
+let pendingAutoTourManualDriveSourceEvent: SceneryVehicleDriveEvent | null = null;
+type ManualDrivePoseHandoff = {
+  nodeId: string;
+  worldPosition: THREE.Vector3;
+  worldQuaternion: THREE.Quaternion;
+  bridgeTransformCommitted: boolean;
+};
+let manualDrivePoseHandoff: ManualDrivePoseHandoff | null = null;
 
 // Auto-tour pause only affects auto-tour playback and vehicles driven by auto-tour.
 // It does NOT change manual driving (`vehicleDriveActive`) behavior or global playback.
@@ -4306,8 +4323,28 @@ const autoTourCameraFollowVelocityScratch = new THREE.Vector3();
 const autoTourCameraFollowAnchorScratch = new THREE.Vector3();
 const autoTourCameraFollowForwardScratch = new THREE.Vector3();
 const autoTourCameraFollowOffsetScratch = new THREE.Vector3();
-const autoTourCameraFollowQuaternionScratch = new THREE.Quaternion();
 const autoTourCameraFollowBox = new THREE.Box3();
+const autoTourCameraObjectMetricsByNodeId = new Map<string, {
+  anchorLocal: THREE.Vector3;
+  width: number;
+  height: number;
+  length: number;
+}>();
+const AUTO_TOUR_CAMERA_DISTANCE_PER_MPS = 0.18;
+const AUTO_TOUR_CAMERA_HEIGHT_PER_MPS = 0.06;
+const AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M = 1.2;
+const AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M = 0.45;
+const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createBackFollowCameraTuning({
+  positionLerpSpeed: 4.2,
+  targetLerpSpeed: 6,
+  headingLerpSpeed: 2.4,
+  anchorLerpSpeed: 8,
+  lookaheadTime: 0.3,
+  lookaheadDistanceMax: 2,
+  lookaheadMinSpeedSq: 0.25,
+  lookaheadBlendStart: 0.5,
+  lookaheadBlendSpeed: 1.5,
+});
 const AUTO_TOUR_RESUME_BLEND_SECONDS = 0.28;
 const autoTourPausedCameraPosition = new THREE.Vector3();
 const autoTourPausedCameraTarget = new THREE.Vector3();
@@ -4375,7 +4412,13 @@ function captureAutoTourPausedCameraSnapshot(nodeId: string): void {
     return;
   }
   autoTourPausedCameraPosition.copy(context.camera.position);
-  autoTourPausedCameraTarget.copy(context.controls.target);
+  // The follow camera updates the actual camera orientation directly while
+  // OrbitControls retains its last manual target. Reconstruct the OrbitControls
+  // target from the current view direction so resuming controls cannot re-aim
+  // the camera at a stale point and visibly snap away from the vehicle.
+  context.camera.getWorldDirection(autoTourPausedCameraTarget)
+    .multiplyScalar(CAMERA_FORWARD_OFFSET)
+    .add(autoTourPausedCameraPosition);
   autoTourPausedCameraSnapshotValid = true;
   autoTourPausedCameraNodeId.value = nodeId;
 }
@@ -4389,6 +4432,7 @@ function reapplyAutoTourPausedCameraSnapshot(nodeId: string): void {
     context.camera.position.copy(autoTourPausedCameraPosition);
     context.controls.target.copy(autoTourPausedCameraTarget);
     context.camera.lookAt(context.controls.target);
+    context.controls.update();
   });
 }
 
@@ -4408,25 +4452,7 @@ function resolveAutoTourVehicleForwardWorld(
   if (!axisForward || axisForward.lengthSq() < 1e-8) {
     return false;
   }
-
-  const chassisQuaternion = physicsEnvironmentEnabled.value
-    ? instance?.vehicle?.chassisBody?.quaternion ?? null
-    : null;
-  if (chassisQuaternion) {
-    autoTourCameraFollowQuaternionScratch
-      .set(chassisQuaternion.x, chassisQuaternion.y, chassisQuaternion.z, chassisQuaternion.w)
-      .normalize();
-  } else {
-    object.getWorldQuaternion(autoTourCameraFollowQuaternionScratch).normalize();
-  }
-
-  target.copy(axisForward).applyQuaternion(autoTourCameraFollowQuaternionScratch);
-  target.y = 0;
-  if (target.lengthSq() < 1e-8) {
-    return false;
-  }
-  target.normalize();
-  return true;
+  return resolveVehicleVisualForwardWorld(object, axisForward, target);
 }
 
 function prepareAutoTourResumeBlendContext(
@@ -4464,27 +4490,98 @@ function prepareAutoTourResumeBlendContext(
   );
   autoTourResumeBlendTempCamera.position.copy(autoTourResumeBlendStartPosition);
   autoTourResumeBlendTempCamera.up.copy(context.camera.up);
-  return computeFollowPlacement(getApproxDimensions(object));
+  return computeFollowPlacement(resolveAutoTourCameraObjectDimensions(targetNodeId, object));
+}
+
+function resolveSceneryRuntimeObjectBounds(object: THREE.Object3D): THREE.Box3 {
+  const raw = object.userData?.instancedBounds as {
+    min?: [number, number, number];
+    max?: [number, number, number];
+  } | undefined;
+  if (raw?.min && raw?.max) {
+    const localBounds = new THREE.Box3(
+      new THREE.Vector3().fromArray(raw.min),
+      new THREE.Vector3().fromArray(raw.max),
+    );
+    object.updateMatrixWorld(true);
+    return localBounds.applyMatrix4(object.matrixWorld);
+  }
+  return new THREE.Box3().setFromObject(object);
+}
+
+function ensureAutoTourCameraObjectMetrics(
+  nodeId: string,
+  object: THREE.Object3D,
+): {
+  anchorLocal: THREE.Vector3;
+  width: number;
+  height: number;
+  length: number;
+} {
+  const cached = autoTourCameraObjectMetricsByNodeId.get(nodeId);
+  if (cached) {
+    return cached;
+  }
+  object.updateMatrixWorld(true);
+  const bounds = resolveSceneryRuntimeObjectBounds(object);
+  const fallback = getApproxDimensions(null);
+  let metrics: {
+    anchorLocal: THREE.Vector3;
+    width: number;
+    height: number;
+    length: number;
+  };
+  if (bounds.isEmpty()) {
+    metrics = {
+      anchorLocal: new THREE.Vector3(),
+      width: fallback.width,
+      height: fallback.height,
+      length: fallback.length,
+    };
+  } else {
+    const centerWorld = bounds.getCenter(new THREE.Vector3());
+    const anchorLocal = object.worldToLocal(centerWorld);
+    const size = bounds.getSize(new THREE.Vector3());
+    metrics = {
+      anchorLocal,
+      width: Math.max(size.x, fallback.width),
+      height: Math.max(size.y, fallback.height),
+      length: Math.max(size.z, fallback.length),
+    };
+  }
+  autoTourCameraObjectMetricsByNodeId.set(nodeId, metrics);
+  return metrics;
 }
 
 function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3D): THREE.Vector3 {
-  if (resolveVehicleOrObjectWorldPosition({
-    nodeId,
-    vehicleInstances,
-    nodeObjectMap,
-    isPhysicsEnabled: () => false,
-    target: autoTourCameraFollowAnchorScratch,
-  })) {
-    return autoTourCameraFollowAnchorScratch;
-  }
+  const metrics = ensureAutoTourCameraObjectMetrics(nodeId, object);
   autoTourCameraFollowBox.makeEmpty();
-  autoTourCameraFollowBox.setFromObject(object);
-  if (!autoTourCameraFollowBox.isEmpty() && Number.isFinite(autoTourCameraFollowBox.min.x)) {
-    autoTourCameraFollowBox.getCenter(autoTourCameraFollowAnchorScratch);
-  } else {
-    object.getWorldPosition(autoTourCameraFollowAnchorScratch);
-  }
+  autoTourCameraFollowAnchorScratch.copy(metrics.anchorLocal);
+  object.updateMatrixWorld(true);
+  object.localToWorld(autoTourCameraFollowAnchorScratch);
   return autoTourCameraFollowAnchorScratch;
+}
+
+function resolveAutoTourCameraObjectDimensions(
+  nodeId: string,
+  object: THREE.Object3D,
+): {
+  width: number;
+  height: number;
+  length: number;
+} {
+  const metrics = ensureAutoTourCameraObjectMetrics(nodeId, object);
+  return {
+    width: metrics.width,
+    height: metrics.height,
+    length: metrics.length,
+  };
+}
+
+function clearAutoTourCameraObjectMetrics(nodeId: string | null | undefined): void {
+  if (nodeId) {
+    autoTourCameraObjectMetricsByNodeId.delete(nodeId);
+  }
 }
 
 function seedAutoTourCameraFollowStateFromView(
@@ -7901,7 +7998,21 @@ function advanceCameraOffsetOverrides(deltaSeconds: number): void {
   });
 }
 
-function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null {
+function resolveCinematicFollowDistance(distance: number, speedMps: number): number {
+  return distance + Math.min(
+    AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M,
+    Math.max(0, speedMps) * AUTO_TOUR_CAMERA_DISTANCE_PER_MPS,
+  );
+}
+
+function resolveCinematicFollowHeight(height: number, speedMps: number): number {
+  return height + Math.min(
+    AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M,
+    Math.max(0, speedMps) * AUTO_TOUR_CAMERA_HEIGHT_PER_MPS,
+  );
+}
+
+function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.Vector3 | null {
   const node = resolveNodeById(nodeId);
   if (!node) {
     return null;
@@ -7910,8 +8021,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
   if (override) {
     return resolveBackFollowCameraLocalOffset(
       autoTourCameraFollowOffsetScratch,
-      override.distance,
-      override.height,
+      resolveCinematicFollowDistance(override.distance, speedMps),
+      resolveCinematicFollowHeight(override.height, speedMps),
     );
   }
   const vehicleComponent = resolveVehicleComponent(node);
@@ -7919,8 +8030,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
     const props = clampVehicleComponentProps(vehicleComponent.props ?? null);
     return resolveBackFollowCameraLocalOffset(
       autoTourCameraFollowOffsetScratch,
-      props.cameraFollowDistance,
-      props.cameraFollowHeight,
+      resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
+      resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
     );
   }
   const characterComponent = resolveCharacterControllerComponent(node);
@@ -7928,8 +8039,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
     const props = clampCharacterControllerComponentProps(characterComponent.props ?? null);
     return resolveBackFollowCameraLocalOffset(
       autoTourCameraFollowOffsetScratch,
-      props.cameraFollowDistance,
-      props.cameraFollowHeight,
+      resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
+      resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
     );
   }
   return null;
@@ -10032,24 +10143,26 @@ const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
   nodeObjectMap,
+  resolveObjectBounds: resolveSceneryRuntimeObjectBounds,
   isManualDriveActive: () => vehicleDriveActive.value,
   onNodeObjectTransformUpdated: (_nodeId, object) => {
     syncInstancedTransform(object);
   },
   onTerminalStop: (nodeId) => {
-    autoTourPausedIsTerminal.value = true;
-    autoTourPausedNodeId.value = nodeId ?? null;
-    if (nodeId) {
-      captureAutoTourPausedCameraSnapshot(nodeId);
+    if (!nodeId) {
+      return;
     }
-    autoTourPaused.value = true;
-    clearAutoTourResumeBlendState();
-    applyAutoTourCameraInputPolicy();
-    if (nodeId) {
-      reapplyAutoTourPausedCameraSnapshot(nodeId);
-    }
+    pendingAutoTourManualDriveNodeId = nodeId;
+    pendingAutoTourManualDriveSourceEvent = activeVehicleDriveEvent.value;
   },
   onDockRequestedPause: (nodeId, payload) => {
+    if (
+      payload.terminal
+      && nodeId
+      && pendingAutoTourManualDriveNodeId === nodeId
+    ) {
+      return;
+    }
     autoTourPausedIsTerminal.value = payload.terminal === true;
     autoTourPausedNodeId.value = nodeId ?? null;
     if (autoTourPaused.value) {
@@ -10221,6 +10334,9 @@ function clearLegacyPhysicsWorld(): void {
   vehicleDriveToken.value = null;
   activeVehicleDriveEvent.value = null;
   pendingVehicleDriveEvent.value = null;
+  pendingAutoTourManualDriveNodeId = null;
+  pendingAutoTourManualDriveSourceEvent = null;
+  clearManualDrivePoseHandoff();
   vehicleDrivePromptBusy.value = false;
   vehicleDriveExitBusy.value = false;
   vehicleDriveResetBusy.value = false;
@@ -10998,6 +11114,15 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
       }
       physicsBridgeFrameBodiesByNodeId.set(nodeId, existing);
     }
+    const pendingHandoff = manualDrivePoseHandoff;
+    if (
+      pendingHandoff?.nodeId === nodeId
+      && pendingHandoff.bridgeTransformCommitted
+    ) {
+      if (isManualDrivePoseHandoffFrameReached(pendingHandoff, existing)) {
+        clearManualDrivePoseHandoff(nodeId);
+      }
+    }
     const rigidbodyEntry = rigidbodyInstances.get(nodeId);
     const characterControllerNodeId = physicsBridgeCharacterControllerNodeIdByBodyNodeId.get(nodeId) ?? null;
     if (rigidbodyEntry?.bindingKind === 'character' || characterControllerNodeId || physicsBridgeCharacterIdByNodeId.has(nodeId)) {
@@ -11010,7 +11135,9 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
       visualState.targetQuaternion.copy(nextQuaternion);
       characterPhysicsBridgeVisualStateByNodeId.set(nodeId, visualState);
     }
-    syncSceneryBridgeVehicleFromFrame(nodeId, existing);
+    if (!hasPendingManualDrivePoseHandoff(nodeId)) {
+      syncSceneryBridgeVehicleFromFrame(nodeId, existing);
+    }
   }
 
   applySceneryPhysicsBridgeFrameToObjects();
@@ -11068,6 +11195,9 @@ function applySceneryPhysicsBridgeFrameToObjects(): void {
   }
   physicsBridgeFrameUpdatedParents = new WeakSet<THREE.Object3D>();
   physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
+    if (hasPendingManualDrivePoseHandoff(nodeId)) {
+      return;
+    }
     if (!vehicleMotionAuthority.shouldWritePhysicsToObject(nodeId)) {
       return;
     }
@@ -11556,8 +11686,9 @@ function resetSceneryPhysicsBridgeVehicleLocalState(nodeId: string, transform: P
   chassisBody.velocity.set(0, 0, 0);
   chassisBody.angularVelocity.set(0, 0, 0);
   instance.hasBridgeFrameSample = false;
-  instance.lastChassisPosition.set(...transform.position);
-  instance.hasChassisPositionSample = false;
+  instance.lastWheelMotionPosition.set(...transform.position);
+  instance.hasWheelMotionSample = false;
+  instance.wheelMotionSource = null;
 }
 
 function syncSceneryPhysicsBridgeVehicleInput(): void {
@@ -12098,8 +12229,9 @@ function createBridgeVehicleInstance(
     axisRight: axisRightVector,
     axisUp: axisUpVector,
     axisForward: axisForwardVector,
-    lastChassisPosition: physicsBridgeSyncPositionHelper.clone(),
-    hasChassisPositionSample: false,
+    lastWheelMotionPosition: physicsBridgeSyncPositionHelper.clone(),
+    hasWheelMotionSample: false,
+    wheelMotionSource: null,
     initialChassisQuaternion: physicsBridgeSyncQuaternionHelper.clone(),
     bridgeBodyId: physicsBridgeBodyIdByNodeId.get(node.id) ?? null,
     vehicleId: physicsBridgeVehicleIdByNodeId.get(node.id) ?? null,
@@ -12477,24 +12609,31 @@ function updateVehicleWheelVisuals(delta: number): void {
       return;
     }
 
-    // 读取车身的插值后位姿，避免轮子视觉直接使用未平滑的物理状态。
+    const vehicleObject = nodeId ? nodeObjectMap.get(nodeId) ?? null : null;
     resolveInterpolatedBodyPosition(chassisBody as PhysicsBodyLike, wheelChassisPositionHelper);
-    wheelQuaternionHelper
-      .set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
-      .normalize();
+    const motionSource = resolveVehicleVisualMotionPose({
+      tourActive,
+      object: vehicleObject,
+      chassisPosition: wheelChassisPositionHelper,
+      chassisQuaternion: chassisBody.quaternion,
+      positionOut: wheelChassisPositionHelper,
+      quaternionOut: wheelQuaternionHelper,
+    });
+    if (instance.wheelMotionSource !== motionSource) {
+      instance.wheelMotionSource = motionSource;
+      instance.hasWheelMotionSample = false;
+    }
 
     // 计算车辆沿自身前进方向的有符号位移，用于驱动轮胎滚动角。
     // 这里保留正负号，因此倒车时轮子也会反向滚动。
     let signedTravel = 0;
-    if (instance.hasChassisPositionSample) {
-      wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition);
-      wheelForwardHelper.copy(instance.axisForward).applyQuaternion(wheelQuaternionHelper);
-      if (wheelForwardHelper.lengthSq() < 1e-10) {
-        wheelForwardHelper.set(0, 0, 1);
-      } else {
-        wheelForwardHelper.normalize();
-      }
-      signedTravel = wheelChassisDisplacementHelper.dot(wheelForwardHelper);
+    if (instance.hasWheelMotionSample) {
+      wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastWheelMotionPosition);
+      signedTravel = resolveSignedVehicleTravel(
+        wheelChassisDisplacementHelper,
+        instance.axisForward,
+        wheelQuaternionHelper,
+      );
       if (!Number.isFinite(signedTravel) || Math.abs(signedTravel) < VEHICLE_TRAVEL_EPSILON) {
         signedTravel = 0;
       }
@@ -12503,8 +12642,8 @@ function updateVehicleWheelVisuals(delta: number): void {
         signedTravel = 0;
       }
     }
-    instance.lastChassisPosition.copy(wheelChassisPositionHelper);
-    instance.hasChassisPositionSample = true;
+    instance.lastWheelMotionPosition.copy(wheelChassisPositionHelper);
+    instance.hasWheelMotionSample = true;
 
     const wheelInfos = instance.vehicle.wheelInfos as Array<{ steering?: number }>;
 
@@ -12582,6 +12721,17 @@ function updateVehicleWheelVisuals(delta: number): void {
       binding.steeringAxis.copy(wheelAxisHelper);
       wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle);
 
+      wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert();
+      resolveWheelSpinAxisInObjectSpace({
+        axleAxis: binding.axleAxis,
+        vehicleWorldQuaternion: wheelQuaternionHelper,
+        parentWorldQuaternionInverse: wheelParentWorldQuaternionInverseHelper,
+        baseQuaternionInverse: wheelBaseQuaternionInverseHelper,
+        target: wheelAxisHelper,
+      });
+      binding.spinAxis.copy(wheelAxisHelper);
+      wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle);
+
       // 合成最终轮子朝向：
       // 1. 先回到模型的基础姿态
       // 2. 再叠加转向
@@ -12589,6 +12739,9 @@ function updateVehicleWheelVisuals(delta: number): void {
       wheelVisualQuaternionHelper.copy(binding.baseQuaternion);
       if (steeringAngle !== 0) {
         wheelVisualQuaternionHelper.premultiply(wheelSteeringQuaternionHelper);
+      }
+      if (binding.spinAngle !== 0) {
+        wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
       }
       wheelObject.quaternion.copy(wheelVisualQuaternionHelper);
 
@@ -20148,7 +20301,11 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   if (autoTourResumeBlendActive && autoTourResumeBlendNodeId === nodeId && !options.immediate) {
-    const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId);
+    const resumeSpeedMps = Math.hypot(
+      autoTourCameraFollowVelocity.x,
+      autoTourCameraFollowVelocity.z,
+    );
+    const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId, resumeSpeedMps);
     const placement = prepareAutoTourResumeBlendContext(nodeId, object, context);
     autoTourCameraFollowController.update({
       follow: autoTourResumeBlendState,
@@ -20160,7 +20317,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       ctx: { camera: autoTourResumeBlendTempCamera, mapControls: undefined },
       immediate: true,
       ...(localOffsetOverride ? { localOffsetOverride } : {}),
-      tuning: createBackFollowCameraTuning(),
+      tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
       distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
       lockLocalOffset: true,
     });
@@ -20212,8 +20369,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     autoTourCameraFollowForwardScratch.normalize();
   }
 
-  const placement = computeFollowPlacement(getApproxDimensions(object));
-  const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId);
+  const placement = computeFollowPlacement(resolveAutoTourCameraObjectDimensions(nodeId, object));
   if (deltaSeconds > 0 && autoTourCameraFollowHasSample) {
     autoTourCameraFollowVelocityScratch
       .copy(autoTourCameraFollowAnchorScratch)
@@ -20225,6 +20381,11 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   } else if (options.immediate) {
     autoTourCameraFollowVelocity.set(0, 0, 0);
   }
+  const autoTourSpeedMps = Math.hypot(
+    autoTourCameraFollowVelocity.x,
+    autoTourCameraFollowVelocity.z,
+  );
+  const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId, autoTourSpeedMps);
 
   const hasVehicleForward = resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch);
   if (!hasVehicleForward && autoTourCameraFollowVelocity.lengthSq() > 1e-6) {
@@ -20250,7 +20411,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     immediate: Boolean(options.immediate),
     smoothTargetForProgrammaticFollow: false,
     ...(localOffsetOverride ? { localOffsetOverride } : {}),
-    tuning: createBackFollowCameraTuning(),
+    tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     lockLocalOffset: true,
   })
@@ -20321,16 +20482,136 @@ function buildFloatingAutoTourDriveEvent(
   };
 }
 
+function hasPendingManualDrivePoseHandoff(nodeId: string): boolean {
+  return manualDrivePoseHandoff?.nodeId === nodeId;
+}
+
+function isManualDrivePoseHandoffFrameReached(
+  handoff: ManualDrivePoseHandoff,
+  frameState: PhysicsBridgeBodyFrameState,
+): boolean {
+  const positionDeltaSq = frameState.position.distanceToSquared(handoff.worldPosition);
+  if (positionDeltaSq > 2.5e-3) {
+    return false;
+  }
+  return Math.abs(frameState.quaternion.dot(handoff.worldQuaternion)) >= 1 - 1e-5;
+}
+
+function clearManualDrivePoseHandoff(nodeId?: string | null): void {
+  if (!manualDrivePoseHandoff) {
+    return;
+  }
+  if (nodeId && manualDrivePoseHandoff.nodeId !== nodeId) {
+    return;
+  }
+  manualDrivePoseHandoff = null;
+}
+
+function captureManualDrivePoseHandoff(nodeId: string): ManualDrivePoseHandoff | null {
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object) {
+    clearManualDrivePoseHandoff(nodeId);
+    return null;
+  }
+  object.updateMatrixWorld(true);
+  const handoff: ManualDrivePoseHandoff = {
+    nodeId,
+    worldPosition: object.getWorldPosition(new THREE.Vector3()),
+    worldQuaternion: object.getWorldQuaternion(new THREE.Quaternion()).normalize(),
+    bridgeTransformCommitted: false,
+  };
+  manualDrivePoseHandoff = handoff;
+  return handoff;
+}
+
+function commitManualDrivePoseHandoffToPhysics(handoff: ManualDrivePoseHandoff | null): void {
+  if (!handoff) {
+    return;
+  }
+  const bodyId = physicsBridgeBodyIdByNodeId.get(handoff.nodeId);
+  const bridge = physicsBridge;
+  if (!bridge || !physicsBridgeSceneLoaded || typeof bodyId !== 'number') {
+    clearManualDrivePoseHandoff(handoff.nodeId);
+    return;
+  }
+
+  physicsBridgeDirtyBodyNodeIds.delete(handoff.nodeId);
+  physicsBridgeBodyDirtyRevisionByNodeId.delete(handoff.nodeId);
+  physicsBridgePendingBodySyncRevisionByNodeId.delete(handoff.nodeId);
+  void bridge.setBodyTransform({
+    bodyId,
+    transform: {
+      position: [
+        handoff.worldPosition.x,
+        handoff.worldPosition.y,
+        handoff.worldPosition.z,
+      ],
+      rotation: [
+        handoff.worldQuaternion.x,
+        handoff.worldQuaternion.y,
+        handoff.worldQuaternion.z,
+        handoff.worldQuaternion.w,
+      ],
+    },
+    resetVelocity: true,
+  }).then(() => {
+    if (manualDrivePoseHandoff !== handoff) {
+      return;
+    }
+    const instance = vehicleInstances.get(handoff.nodeId) ?? null;
+    const chassisBody = instance?.vehicle.chassisBody ?? null;
+    if (chassisBody) {
+      chassisBody.position.set(
+        handoff.worldPosition.x,
+        handoff.worldPosition.y,
+        handoff.worldPosition.z,
+      );
+      chassisBody.quaternion.set(
+        handoff.worldQuaternion.x,
+        handoff.worldQuaternion.y,
+        handoff.worldQuaternion.z,
+        handoff.worldQuaternion.w,
+      );
+      chassisBody.velocity.set(0, 0, 0);
+      chassisBody.angularVelocity.set(0, 0, 0);
+    }
+    const rigidbodyEntry = rigidbodyInstances.get(handoff.nodeId) ?? null;
+    if (rigidbodyEntry?.body) {
+      rigidbodyEntry.body.position.set(
+        handoff.worldPosition.x,
+        handoff.worldPosition.y,
+        handoff.worldPosition.z,
+      );
+      rigidbodyEntry.body.quaternion.x = handoff.worldQuaternion.x;
+      rigidbodyEntry.body.quaternion.y = handoff.worldQuaternion.y;
+      rigidbodyEntry.body.quaternion.z = handoff.worldQuaternion.z;
+      rigidbodyEntry.body.quaternion.w = handoff.worldQuaternion.w;
+      rigidbodyEntry.bridgeSyncDirty = false;
+    }
+    physicsBridgeDirtyBodyNodeIds.delete(handoff.nodeId);
+    physicsBridgeBodyDirtyRevisionByNodeId.delete(handoff.nodeId);
+    physicsBridgePendingBodySyncRevisionByNodeId.delete(handoff.nodeId);
+    handoff.bridgeTransformCommitted = true;
+  }).catch((error) => {
+    console.warn('[SceneryViewer] Failed to commit auto-tour endpoint pose to physics', error);
+    clearManualDrivePoseHandoff(handoff.nodeId);
+  });
+}
+
 function stopFloatingAutoTourAndResumeManualDrive(
   nodeId: string,
   sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
 ): boolean {
+  const handoff = captureManualDrivePoseHandoff(nodeId);
+  pendingAutoTourManualDriveNodeId = null;
+  pendingAutoTourManualDriveSourceEvent = null;
   autoTourPaused.value = false;
   autoTourPausedIsTerminal.value = false;
   autoTourPausedNodeId.value = null;
   autoTourRotationOnlyHold.value = false;
   clearAutoTourPausedCameraSnapshot();
   clearAutoTourResumeBlendState();
+  clearAutoTourCameraObjectMetrics(nodeId);
   stopTourAndUnfollow(autoTourRuntime, nodeId, (activeNodeId) => {
     activeAutoTourNodeIds.delete(activeNodeId);
     if (autoTourFollowNodeId.value === activeNodeId) {
@@ -20338,6 +20619,7 @@ function stopFloatingAutoTourAndResumeManualDrive(
     }
     resetAutoTourCameraFollowState();
   });
+  commitManualDrivePoseHandoffToPhysics(handoff);
 
   const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
   const result = startVehicleDriveMode(driveEvent);
@@ -20353,6 +20635,30 @@ function stopFloatingAutoTourAndResumeManualDrive(
   handleShowVehicleCockpitEvent();
   applyAutoTourCameraInputPolicy();
   return true;
+}
+
+function completePendingAutoTourManualDriveTransition(): void {
+  const nodeId = pendingAutoTourManualDriveNodeId;
+  if (!nodeId) {
+    return;
+  }
+  const sourceEvent = pendingAutoTourManualDriveSourceEvent;
+  pendingAutoTourManualDriveNodeId = null;
+  pendingAutoTourManualDriveSourceEvent = null;
+
+  const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
+  vehicleDrivePromptBusy.value = true;
+  try {
+    const resumed = stopFloatingAutoTourAndResumeManualDrive(nodeId, driveEvent);
+    if (!resumed && !vehicleDriveActive.value) {
+      // A terminal transition must not strand the vehicle if the physics bridge
+      // is still completing its final-binding pass. Reuse the normal drive retry.
+      pendingVehicleDriveEvent.value = driveEvent;
+      pendingVehicleDriveRetryRequested.value = true;
+    }
+  } finally {
+    vehicleDrivePromptBusy.value = false;
+  }
 }
 
 function activatePendingDefaultSteerDriveIfNeeded(): void {
@@ -20428,6 +20734,7 @@ function handleFloatingAutoTourTap(): void {
   vehicleDrivePromptBusy.value = true;
   try {
     activeCameraWatchTween = null;
+    clearManualDrivePoseHandoff();
     autoTourPaused.value = false;
     autoTourPausedIsTerminal.value = false;
     autoTourPausedNodeId.value = null;
@@ -20444,6 +20751,11 @@ function handleFloatingAutoTourTap(): void {
 
     resetVehicleDriveInputs();
     setVehicleDriveUiOverride('hide');
+    clearAutoTourCameraObjectMetrics(targetNodeId);
+    const targetObject = nodeObjectMap.get(targetNodeId) ?? null;
+    if (targetObject) {
+      ensureAutoTourCameraObjectMetrics(targetNodeId, targetObject);
+    }
 
     vehicleMotionAuthority.beginAutoSurface(
       targetNodeId,
@@ -20528,6 +20840,10 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
     return;
   }
   const placement = prepareAutoTourResumeBlendContext(targetNodeId, object, context);
+  const localOffsetOverride = resolveAutoTourFollowCameraOffset(
+    targetNodeId,
+    Math.hypot(autoTourCameraFollowVelocity.x, autoTourCameraFollowVelocity.z),
+  );
   autoTourCameraFollowController.update({
     follow: autoTourResumeBlendState,
     placement,
@@ -20537,7 +20853,8 @@ function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
     deltaSeconds: 1 / 60,
     ctx: { camera: autoTourResumeBlendTempCamera, mapControls: undefined },
     immediate: true,
-    tuning: createBackFollowCameraTuning(),
+    ...(localOffsetOverride ? { localOffsetOverride } : {}),
+    tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     lockLocalOffset: true,
   });
@@ -20606,6 +20923,7 @@ function handleVehicleDriveEvent(
   vehicleDriveExitBusy.value = false;
   try {
     if (activeAutoTourNodeIds.has(targetNodeId)) {
+      clearAutoTourCameraObjectMetrics(targetNodeId);
       stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
         activeAutoTourNodeIds.delete(n);
         if (autoTourFollowNodeId.value === n) {
@@ -22514,7 +22832,11 @@ function teardownRenderer() {
   previewNodeMap.clear();
   clearSteerBindingIndex();
   autoTourRuntime.reset();
+  autoTourCameraObjectMetricsByNodeId.clear();
   activeAutoTourNodeIds.clear();
+  pendingAutoTourManualDriveNodeId = null;
+  pendingAutoTourManualDriveSourceEvent = null;
+  clearManualDrivePoseHandoff();
   autoTourRotationOnlyHold.value = false;
   autoTourFollowNodeId.value = null;
   resetAutoTourCameraFollowState();
@@ -23458,7 +23780,9 @@ function startRenderLoop(
         } else {
           maybeInitializeWatchFramingEnvelope();
           cameraRotationAnchor.copy(camera.position);
-          if (!vehicleDriveActive.value) {
+          const autoTourCameraOwnsControls = Boolean(autoTourFollowNodeId.value)
+            && !autoTourPaused.value;
+          if (!vehicleDriveActive.value && !autoTourCameraOwnsControls) {
             controls.update();
           }
           if (isWatchFramingAdjustmentActive()) {
@@ -23513,6 +23837,7 @@ function startRenderLoop(
 
           if (!autoTourPaused.value) {
             autoTourRuntime.update(deltaSeconds);
+            completePendingAutoTourManualDriveTransition();
           }
           const manualDriveNodeId = vehicleDriveActive.value ? vehicleDriveNodeId.value : null;
           const autoTourControlsVehicle = manualDriveNodeId ? activeAutoTourNodeIds.has(manualDriveNodeId) : false;
@@ -23729,8 +24054,12 @@ function cleanupForUnrelatedSceneSwitch(): void {
   previewNodeMap.clear();
   clearSteerBindingIndex();
   autoTourRuntime.reset();
+  autoTourCameraObjectMetricsByNodeId.clear();
   waterRuntime.reset();
   activeAutoTourNodeIds.clear();
+  pendingAutoTourManualDriveNodeId = null;
+  pendingAutoTourManualDriveSourceEvent = null;
+  clearManualDrivePoseHandoff();
   autoTourRotationOnlyHold.value = false;
   autoTourFollowNodeId.value = null;
   resetAutoTourCameraFollowState();

@@ -15,6 +15,7 @@ import {
   sampleEvaluatedGuideRouteAtDistance,
   type EvaluatedGuideRoute,
 } from './guideRouteRuntime'
+import { sampleProceduralLandscapeTerrainHeight } from './proceduralLandscape/runtime'
 import {
   buildPolylineMetricData,
   buildPolylineVertexArcLengths,
@@ -27,6 +28,7 @@ export type AutoTourRuntimeDeps = {
   iterNodes: () => Iterable<SceneNode>
   resolveNodeById: (id: string) => SceneNode | null | undefined
   nodeObjectMap: Map<string, THREE.Object3D>
+  resolveObjectBounds?: (object: THREE.Object3D) => THREE.Box3
   isManualDriveActive: () => boolean
   onNodeObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
   onAutoSurfaceStart?: (nodeId: string) => void
@@ -73,7 +75,7 @@ type PlaybackState = {
   routeNodeId: string
   routeWaypointCount: number
   distanceAlongRoute: number
-  groundClearanceM: number
+  hasGroundSupportSample: boolean
   dockHoldIndex: number | null
 }
 
@@ -81,7 +83,25 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0)
 const TERMINAL_DISTANCE_EPSILON = 0.05
 const DOCK_DISTANCE_EPSILON = 0.05
 const AUTO_TOUR_YAW_SMOOTHING = 12
+const AUTO_TOUR_SURFACE_CLEARANCE_M = 0.04
+const AUTO_TOUR_GROUND_FOLLOW_DAMPING = 10
 const routeDataCache = new WeakMap<EvaluatedGuideRoute, RouteData>()
+
+function transformBoundsCorners(
+  bounds: THREE.Box3,
+  matrix: THREE.Matrix4,
+): THREE.Box3 {
+  const transformed = new THREE.Box3()
+  const corner = new THREE.Vector3()
+  for (const x of [bounds.min.x, bounds.max.x]) {
+    for (const y of [bounds.min.y, bounds.max.y]) {
+      for (const z of [bounds.min.z, bounds.max.z]) {
+        transformed.expandByPoint(corner.set(x, y, z).applyMatrix4(matrix))
+      }
+    }
+  }
+  return transformed
+}
 
 function expSmoothingAlpha(speed: number, deltaSeconds: number): number {
   return 1 - Math.exp(-Math.max(0, speed) * Math.max(0, deltaSeconds))
@@ -110,28 +130,6 @@ function syncNodeTransformFromObject(node: SceneNode, object: THREE.Object3D): v
   const euler = new THREE.Euler(0, 0, 0, 'YXZ')
   euler.setFromQuaternion(object.quaternion)
   setVector3Like(node.rotation as any, euler.x, euler.y, euler.z)
-}
-
-function resolveObjectGroundClearance(object: THREE.Object3D | null): number {
-  if (!object) {
-    return 0
-  }
-  object.updateMatrixWorld(true)
-  const bounds = new THREE.Box3().setFromObject(object)
-  if (bounds.isEmpty()) {
-    return 0
-  }
-  const origin = object.getWorldPosition(new THREE.Vector3())
-  return Math.max(0, origin.y - bounds.min.y)
-}
-
-function resolveVehicleGroundClearance(
-  node: SceneNode,
-  object: THREE.Object3D | null,
-): number {
-  return resolveEnabledComponentState<VehicleComponentProps>(node, VEHICLE_COMPONENT_TYPE)
-    ? resolveObjectGroundClearance(object)
-    : 0
 }
 
 function resolveRouteData(
@@ -203,6 +201,68 @@ function applyObjectWorldPose(
   object.updateMatrixWorld(true)
 }
 
+function resolveSupportedVehicleWorldPosition(params: {
+  object: THREE.Object3D
+  routePoint: THREE.Vector3
+  worldQuaternion: THREE.Quaternion
+  providerNodeId: string | null
+  resolveObjectBounds: (object: THREE.Object3D) => THREE.Box3
+  localBoundsCache: WeakMap<THREE.Object3D, THREE.Box3>
+}): THREE.Vector3 {
+  const {
+    object,
+    routePoint,
+    worldQuaternion,
+    providerNodeId,
+    resolveObjectBounds,
+    localBoundsCache,
+  } = params
+  const originalPosition = object.position.clone()
+  const originalQuaternion = object.quaternion.clone()
+  try {
+    object.updateMatrixWorld(true)
+    let localBounds = localBoundsCache.get(object) ?? null
+    if (!localBounds) {
+      const sourceBounds = resolveObjectBounds(object)
+      if (sourceBounds.isEmpty()) {
+        return routePoint.clone()
+      }
+      const inverseObjectMatrix = object.matrixWorld.clone().invert()
+      localBounds = transformBoundsCorners(sourceBounds, inverseObjectMatrix)
+      localBoundsCache.set(object, localBounds)
+    }
+    applyObjectWorldPose(object, routePoint.clone(), worldQuaternion)
+    const bounds = transformBoundsCorners(localBounds, object.matrixWorld)
+    if (bounds.isEmpty()) {
+      return routePoint.clone()
+    }
+    const surfaceHeights = [routePoint.y]
+    if (providerNodeId) {
+      const samplePoints = [
+        [routePoint.x, routePoint.z],
+        [bounds.min.x, bounds.min.z],
+        [bounds.max.x, bounds.min.z],
+        [bounds.min.x, bounds.max.z],
+        [bounds.max.x, bounds.max.z],
+      ] as const
+      samplePoints.forEach(([x, z]) => {
+        const height = sampleProceduralLandscapeTerrainHeight(providerNodeId, x, z)
+        if (height != null && Number.isFinite(height)) {
+          surfaceHeights.push(height)
+        }
+      })
+    }
+    const supportSurfaceY = Math.max(...surfaceHeights)
+    const supported = routePoint.clone()
+    supported.y += supportSurfaceY + AUTO_TOUR_SURFACE_CLEARANCE_M - bounds.min.y
+    return supported
+  } finally {
+    object.position.copy(originalPosition)
+    object.quaternion.copy(originalQuaternion)
+    object.updateMatrixWorld(true)
+  }
+}
+
 function buildVehicleQuaternion(
   vehicleProps: VehicleComponentProps,
   forwardWorld: THREE.Vector3,
@@ -257,6 +317,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const playbackStates = new Map<string, PlaybackState>()
   const activeTourNodes = new Set<string>()
   const disabledTourNodes = new Set<string>()
+  const vehicleLocalBoundsCache = new WeakMap<THREE.Object3D, THREE.Box3>()
+  const resolveObjectBounds = deps.resolveObjectBounds
+    ?? ((object: THREE.Object3D) => new THREE.Box3().setFromObject(object))
 
   function resolveNodeRoute(tourProps: AutoTourComponentProps): RouteData | null {
     const routeNodeId = tourProps.routeNodeId
@@ -280,12 +343,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   }
 
   function initializePlaybackState(params: {
-    node: SceneNode
     object: THREE.Object3D
     routeNodeId: string
     routeData: RouteData
   }): PlaybackState {
-    const { node, object, routeNodeId, routeData } = params
+    const { object, routeNodeId, routeData } = params
     object.updateMatrixWorld(true)
     const worldPosition = object.getWorldPosition(new THREE.Vector3())
     const projection = projectPointToPolyline(
@@ -298,7 +360,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       routeNodeId,
       routeWaypointCount: routeData.evaluation.points.length,
       distanceAlongRoute: projection.s,
-      groundClearanceM: resolveVehicleGroundClearance(node, object),
+      hasGroundSupportSample: false,
       dockHoldIndex: null,
     }
   }
@@ -345,8 +407,24 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     } else {
       forwardWorld.normalize()
     }
-    const worldPosition = sample.point.clone()
-    worldPosition.y += resolveVehicleGroundClearance(node, object)
+    const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(
+      node,
+      VEHICLE_COMPONENT_TYPE,
+    )
+    const worldPosition = vehicleComponent
+      ? resolveSupportedVehicleWorldPosition({
+        object,
+        routePoint: sample.point,
+        worldQuaternion: buildVehicleQuaternion(
+          clampVehicleComponentProps(vehicleComponent.props),
+          forwardWorld,
+          sample.normal,
+        ),
+        providerNodeId: routeData.evaluation.providerNodeId,
+        resolveObjectBounds,
+        localBoundsCache: vehicleLocalBoundsCache,
+      })
+      : sample.point.clone()
     return {
       nodeId,
       routeNodeId: tourProps.routeNodeId!,
@@ -398,7 +476,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       routeNodeId: snap.routeNodeId,
       routeWaypointCount: snap.routeWaypointCount,
       distanceAlongRoute: snap.projectedS,
-      groundClearanceM: resolveVehicleGroundClearance(node, object),
+      hasGroundSupportSample: false,
       dockHoldIndex: null,
     })
   }
@@ -446,7 +524,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         || state.routeWaypointCount !== routeData.evaluation.points.length
       ) {
         state = initializePlaybackState({
-          node,
           object,
           routeNodeId,
           routeData,
@@ -524,8 +601,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       } else {
         forwardWorld.normalize()
       }
-      const desiredPosition = sample.point.clone()
-      desiredPosition.y += state.groundClearanceM
+      let desiredPosition = sample.point.clone()
       const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(
         node,
         VEHICLE_COMPONENT_TYPE,
@@ -543,6 +619,24 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           desiredQuaternion,
           expSmoothingAlpha(AUTO_TOUR_YAW_SMOOTHING, deltaSeconds),
         )
+        desiredPosition = resolveSupportedVehicleWorldPosition({
+          object,
+          routePoint: sample.point,
+          worldQuaternion: currentWorldQuaternion,
+          providerNodeId: routeData.evaluation.providerNodeId,
+          resolveObjectBounds,
+          localBoundsCache: vehicleLocalBoundsCache,
+        })
+        if (state.hasGroundSupportSample) {
+          const currentWorldPosition = object.getWorldPosition(new THREE.Vector3())
+          const smoothedY = THREE.MathUtils.lerp(
+            currentWorldPosition.y,
+            desiredPosition.y,
+            expSmoothingAlpha(AUTO_TOUR_GROUND_FOLLOW_DAMPING, deltaSeconds),
+          )
+          desiredPosition.y = Math.max(desiredPosition.y, smoothedY)
+        }
+        state.hasGroundSupportSample = true
         applyObjectWorldPose(object, desiredPosition, currentWorldQuaternion)
       } else {
         const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
@@ -587,12 +681,20 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (!nodeId) {
         return
       }
+      const object = deps.nodeObjectMap.get(nodeId) ?? null
+      if (object) {
+        vehicleLocalBoundsCache.delete(object)
+      }
       disabledTourNodes.delete(nodeId)
       playbackStates.delete(nodeId)
       activeTourNodes.add(nodeId)
       deps.onAutoSurfaceStart?.(nodeId)
     },
     continueFromEnd: (nodeId) => {
+      const object = deps.nodeObjectMap.get(nodeId) ?? null
+      if (object) {
+        vehicleLocalBoundsCache.delete(object)
+      }
       disabledTourNodes.delete(nodeId)
       playbackStates.delete(nodeId)
       activeTourNodes.add(nodeId)

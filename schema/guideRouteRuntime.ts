@@ -94,10 +94,6 @@ function normalizeXZDirection(x: number, z: number): { x: number; z: number } {
     : { x: 1, z: 0 }
 }
 
-function sampleSpacingForDistance(totalDistance: number, spacing: number): number {
-  return Math.max(2, Math.ceil(Math.max(0, totalDistance) / Math.max(0.5, spacing)) + 1)
-}
-
 function densifyWorldControls(
   controls: THREE.Vector3[],
   spacingM: number,
@@ -105,23 +101,23 @@ function densifyWorldControls(
   if (controls.length < 2) {
     return controls.map((entry) => entry.clone())
   }
-  let planarLength = 0
-  for (let index = 1; index < controls.length; index += 1) {
-    planarLength += Math.hypot(
-      controls[index]!.x - controls[index - 1]!.x,
-      controls[index]!.z - controls[index - 1]!.z,
-    )
+  const spacing = Math.max(0.5, spacingM)
+  const points: THREE.Vector3[] = []
+  for (let segmentIndex = 0; segmentIndex + 1 < controls.length; segmentIndex += 1) {
+    const start = controls[segmentIndex]!
+    const end = controls[segmentIndex + 1]!
+    const planarLength = Math.hypot(end.x - start.x, end.z - start.z)
+    const steps = Math.max(1, Math.ceil(planarLength / spacing))
+    for (let step = segmentIndex === 0 ? 0 : 1; step <= steps; step += 1) {
+      const t = step / steps
+      points.push(new THREE.Vector3(
+        start.x + (end.x - start.x) * t,
+        0,
+        start.z + (end.z - start.z) * t,
+      ))
+    }
   }
-  const sampleCount = sampleSpacingForDistance(planarLength, spacingM)
-  if (controls.length === 2) {
-    return new THREE.LineCurve3(controls[0]!, controls[1]!).getPoints(sampleCount - 1)
-  }
-  const curve = new THREE.CatmullRomCurve3(
-    controls.map((entry) => new THREE.Vector3(entry.x, 0, entry.z)),
-    false,
-    'centripetal',
-  )
-  return curve.getPoints(sampleCount - 1)
+  return points
 }
 
 function resolveGeneratedRoadWorldControls(

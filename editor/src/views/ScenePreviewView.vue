@@ -464,6 +464,12 @@ import {
 } from '@schema/components/definitions/couponComponent'
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
+	resolveVehicleVisualForwardWorld,
+	resolveVehicleVisualMotionPose,
+	resolveSignedVehicleTravel,
+	resolveWheelSpinAxisInObjectSpace,
+} from '@schema/autoTourVisualKinematics'
+import {
 	addBehaviorRuntimeListener,
 	getBehaviorNodeVisible,
 	hasRegisteredBehaviors,
@@ -1900,6 +1906,18 @@ function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): 
 	syncInteractionLayersForNonNodeDescendants(target, behaviorInteractive, vehicleInteractive)
 }
 
+function syncVehicleSubtreeInteractionLayers(): void {
+	previewNodeMap.forEach((_node, nodeId) => {
+		if (!resolveVehicleAncestorNodeId(nodeId)) {
+			return
+		}
+		const object = nodeObjectMap.get(nodeId) ?? null
+		object?.traverse((child) => {
+			applyInteractionLayers(child, true, true)
+		})
+	})
+}
+
 const behaviorAlertVisible = ref(false)
 const behaviorAlertTitle = ref('')
 const behaviorAlertMessage = ref('')
@@ -2030,10 +2048,30 @@ const autoTourCameraFollowAnchorScratch = new THREE.Vector3()
 const autoTourCameraFollowForwardScratch = new THREE.Vector3()
 const autoTourCameraFollowBox = new THREE.Box3()
 const autoTourCameraFollowOffsetScratch = new THREE.Vector3()
-const autoTourCameraFollowQuaternionScratch = new THREE.Quaternion()
+const autoTourCameraObjectMetricsByNodeId = new Map<string, {
+	anchorLocal: THREE.Vector3
+	width: number
+	height: number
+	length: number
+}>()
 let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
+const AUTO_TOUR_CAMERA_DISTANCE_PER_MPS = 0.18
+const AUTO_TOUR_CAMERA_HEIGHT_PER_MPS = 0.06
+const AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M = 1.2
+const AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M = 0.45
+const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createBackFollowCameraTuning({
+	positionLerpSpeed: 4.2,
+	targetLerpSpeed: 6,
+	headingLerpSpeed: 2.4,
+	anchorLerpSpeed: 8,
+	lookaheadTime: 0.3,
+	lookaheadDistanceMax: 2,
+	lookaheadMinSpeedSq: 0.25,
+	lookaheadBlendStart: 0.5,
+	lookaheadBlendSpeed: 1.5,
+})
 
 const vehicleDrivePrompt = computed(() => {
 	// Ensure this computed updates when the set changes.
@@ -2740,7 +2778,6 @@ function copyMatrixElements(target: Float32Array, source: ArrayLike<number>): vo
 		target[i] = source[i] ?? 0
 	}
 }
-const wheelForwardHelper = new THREE.Vector3()
 const wheelAxisHelper = new THREE.Vector3()
 const wheelChassisQuaternionHelper = new THREE.Quaternion()
 const wheelVisualQuaternionHelper = new THREE.Quaternion()
@@ -3111,8 +3148,9 @@ type VehicleInstance = {
 	axisRightIndex: 0 | 1 | 2
 	axisUpIndex: 0 | 1 | 2
 	axisForwardIndex: 0 | 1 | 2
-	lastChassisPosition: THREE.Vector3
-	hasChassisPositionSample: boolean
+	lastWheelMotionPosition: THREE.Vector3
+	hasWheelMotionSample: boolean
+	wheelMotionSource: 'physics' | 'visual' | null
 	initialChassisQuaternion: THREE.Quaternion
 	bridgeBodyId?: number | null
 	vehicleId?: number | null
@@ -4391,6 +4429,7 @@ const autoTourRuntime = createAutoTourRuntime({
 	iterNodes: () => previewNodeMap.values(),
 	resolveNodeById,
 	nodeObjectMap,
+	resolveObjectBounds: (object) => setBoundingBoxFromObject(object, new THREE.Box3()),
 	isManualDriveActive: () => vehicleDriveState.active,
 	onDockRequestedPause: (nodeId, payload) => {
 		autoTourPausedIsTerminal.value = payload.terminal === true
@@ -7924,7 +7963,21 @@ function advanceCameraOffsetOverrides(deltaSeconds: number): void {
 	})
 }
 
-function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null {
+function resolveCinematicFollowDistance(distance: number, speedMps: number): number {
+	return distance + Math.min(
+		AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M,
+		Math.max(0, speedMps) * AUTO_TOUR_CAMERA_DISTANCE_PER_MPS,
+	)
+}
+
+function resolveCinematicFollowHeight(height: number, speedMps: number): number {
+	return height + Math.min(
+		AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M,
+		Math.max(0, speedMps) * AUTO_TOUR_CAMERA_HEIGHT_PER_MPS,
+	)
+}
+
+function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.Vector3 | null {
 	const node = resolveNodeById(nodeId)
 	if (!node) {
 		return null
@@ -7933,8 +7986,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
 	if (override) {
 		return resolveBackFollowCameraLocalOffset(
 			autoTourCameraFollowOffsetScratch,
-			override.distance,
-			override.height,
+			resolveCinematicFollowDistance(override.distance, speedMps),
+			resolveCinematicFollowHeight(override.height, speedMps),
 		)
 	}
 	const vehicleComponent = resolveVehicleComponent(node)
@@ -7942,8 +7995,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
 		const props = clampVehicleComponentProps(vehicleComponent.props ?? null)
 		return resolveBackFollowCameraLocalOffset(
 			autoTourCameraFollowOffsetScratch,
-			props.cameraFollowDistance,
-			props.cameraFollowHeight,
+			resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
+			resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
 		)
 	}
 	const characterComponent = resolveCharacterControllerComponent(node)
@@ -7951,8 +8004,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null
 		const props = clampCharacterControllerComponentProps(characterComponent.props ?? null)
 		return resolveBackFollowCameraLocalOffset(
 			autoTourCameraFollowOffsetScratch,
-			props.cameraFollowDistance,
-			props.cameraFollowHeight,
+			resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
+			resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
 		)
 	}
 	return null
@@ -7969,44 +8022,82 @@ function resolveAutoTourVehicleForwardWorld(
 		return false
 	}
 
-	const chassisQuaternion = physicsEnvironmentEnabled.value
-		? instance?.vehicle?.chassisBody?.quaternion ?? null
-		: null
-	if (chassisQuaternion) {
-		autoTourCameraFollowQuaternionScratch
-			.set(chassisQuaternion.x, chassisQuaternion.y, chassisQuaternion.z, chassisQuaternion.w)
-			.normalize()
-	} else {
-		object.getWorldQuaternion(autoTourCameraFollowQuaternionScratch).normalize()
-	}
+	return resolveVehicleVisualForwardWorld(object, axisForward, target)
+}
 
-	target.copy(axisForward).applyQuaternion(autoTourCameraFollowQuaternionScratch)
-	target.y = 0
-	if (target.lengthSq() < 1e-8) {
-		return false
+function ensureAutoTourCameraObjectMetrics(
+	nodeId: string,
+	object: THREE.Object3D,
+): {
+	anchorLocal: THREE.Vector3
+	width: number
+	height: number
+	length: number
+} {
+	const cached = autoTourCameraObjectMetricsByNodeId.get(nodeId)
+	if (cached) {
+		return cached
 	}
-	target.normalize()
-	return true
+	object.updateMatrixWorld(true)
+	autoTourCameraFollowBox.makeEmpty()
+	setBoundingBoxFromObject(object, autoTourCameraFollowBox)
+	const fallback = getApproxDimensions(null)
+	let metrics: {
+		anchorLocal: THREE.Vector3
+		width: number
+		height: number
+		length: number
+	}
+	if (autoTourCameraFollowBox.isEmpty()) {
+		metrics = {
+			anchorLocal: new THREE.Vector3(),
+			width: fallback.width,
+			height: fallback.height,
+			length: fallback.length,
+		}
+	} else {
+		const centerWorld = autoTourCameraFollowBox.getCenter(new THREE.Vector3())
+		const anchorLocal = object.worldToLocal(centerWorld)
+		const size = autoTourCameraFollowBox.getSize(new THREE.Vector3())
+		metrics = {
+			anchorLocal,
+			width: Math.max(size.x, fallback.width),
+			height: Math.max(size.y, fallback.height),
+			length: Math.max(size.z, fallback.length),
+		}
+	}
+	autoTourCameraObjectMetricsByNodeId.set(nodeId, metrics)
+	return metrics
 }
 
 function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3D): THREE.Vector3 {
-	if (resolveVehicleOrObjectWorldPosition({
-		nodeId,
-		vehicleInstances,
-		nodeObjectMap,
-		isPhysicsEnabled: () => false,
-		target: autoTourCameraFollowAnchorScratch,
-	})) {
-		return autoTourCameraFollowAnchorScratch
-	}
-	autoTourCameraFollowBox.makeEmpty()
-	autoTourCameraFollowBox.setFromObject(object)
-	if (autoTourCameraFollowBox.isEmpty()) {
-		object.getWorldPosition(autoTourCameraFollowAnchorScratch)
-		return autoTourCameraFollowAnchorScratch
-	}
-	autoTourCameraFollowBox.getCenter(autoTourCameraFollowAnchorScratch)
+	const metrics = ensureAutoTourCameraObjectMetrics(nodeId, object)
+	object.updateMatrixWorld(true)
+	autoTourCameraFollowAnchorScratch.copy(metrics.anchorLocal)
+	object.localToWorld(autoTourCameraFollowAnchorScratch)
 	return autoTourCameraFollowAnchorScratch
+}
+
+function resolveAutoTourCameraObjectDimensions(
+	nodeId: string,
+	object: THREE.Object3D,
+): {
+	width: number
+	height: number
+	length: number
+} {
+	const metrics = ensureAutoTourCameraObjectMetrics(nodeId, object)
+	return {
+		width: metrics.width,
+		height: metrics.height,
+		length: metrics.length,
+	}
+}
+
+function clearAutoTourCameraObjectMetrics(nodeId: string | null | undefined): void {
+	if (nodeId) {
+		autoTourCameraObjectMetricsByNodeId.delete(nodeId)
+	}
 }
 
 function resetAutoTourCameraFollowState(): void {
@@ -10794,6 +10885,11 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 
 		resetVehicleDriveInputs()
 		setVehicleDriveUiOverride('hide')
+		clearAutoTourCameraObjectMetrics(targetNodeId)
+		const targetObject = nodeObjectMap.get(targetNodeId) ?? null
+		if (targetObject) {
+			ensureAutoTourCameraObjectMetrics(targetNodeId, targetObject)
+		}
 		startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.add(n)
 			autoTourFollowNodeId.value = n
@@ -10868,6 +10964,7 @@ function handleVehicleAutoTourStopClick(): void {
 		autoTourPaused.value = false
 		autoTourPausedIsTerminal.value = false
 		autoTourPausedNodeId.value = null
+		clearAutoTourCameraObjectMetrics(targetNodeId)
 		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.delete(n)
 			if (autoTourFollowNodeId.value === n) {
@@ -11823,7 +11920,6 @@ function updateAutoTourCameraForFrame(
 	if (!routeData) {
 		return
 	}
-	const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId)
 	if (autoTourPaused.value) {
 		autoTourCameraFollowVelocity.set(0, 0, 0)
 		autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch)
@@ -11839,7 +11935,7 @@ function updateAutoTourCameraForFrame(
 	} else {
 		autoTourCameraFollowForwardScratch.normalize()
 	}
-	const placement = computeFollowPlacement(getApproxDimensions(object))
+	const placement = computeFollowPlacement(resolveAutoTourCameraObjectDimensions(nodeId, object))
 	if (delta > 0 && autoTourCameraFollowHasSample) {
 		autoTourCameraFollowVelocityScratch
 			.copy(autoTourCameraFollowAnchorScratch)
@@ -11862,6 +11958,11 @@ function updateAutoTourCameraForFrame(
 	} else {
 		autoTourCameraFollowForwardScratch.normalize()
 	}
+	const autoTourSpeedMps = Math.hypot(
+		autoTourCameraFollowVelocity.x,
+		autoTourCameraFollowVelocity.z,
+	)
+	const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId, autoTourSpeedMps)
 	autoTourCameraFollowController.update({
 		follow: autoTourCameraFollowState,
 		placement,
@@ -11873,7 +11974,7 @@ function updateAutoTourCameraForFrame(
 		immediate: false,
 		smoothTargetForProgrammaticFollow: false,
 		...(localOffsetOverride ? { localOffsetOverride } : {}),
-		tuning: createBackFollowCameraTuning(),
+		tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
 		distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
 		lockLocalOffset: true,
 	})
@@ -12175,6 +12276,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	vehicleMotionAuthority.clear()
 	activeManualAuthorityNodeId = null
 	autoTourRuntime.reset()
+	autoTourCameraObjectMetricsByNodeId.clear()
 	waterRuntime.reset()
 	activeAutoTourNodeIds.clear()
 	autoTourFollowNodeId.value = null
@@ -13794,8 +13896,9 @@ function resetScenePreviewPhysicsBridgeVehicleLocalState(nodeId: string, transfo
 	chassisBody.angularVelocity.set(0, 0, 0)
 	instance.lastBridgeFramePosition = new THREE.Vector3(...transform.position)
 	instance.hasBridgeFrameSample = false
-	instance.lastChassisPosition.set(...transform.position)
-	instance.hasChassisPositionSample = false
+	instance.lastWheelMotionPosition.set(...transform.position)
+	instance.hasWheelMotionSample = false
+	instance.wheelMotionSource = null
 }
 
 function syncScenePreviewPhysicsBridgeVehicleInput(deltaSeconds: number): void {
@@ -14199,8 +14302,9 @@ function createBridgeVehicleInstance(
 		axisRightIndex: rightAxis,
 		axisUpIndex: upAxis,
 		axisForwardIndex: forwardAxis,
-		lastChassisPosition: physicsBridgeSyncPositionHelper.clone(),
-		hasChassisPositionSample: false,
+		lastWheelMotionPosition: physicsBridgeSyncPositionHelper.clone(),
+		hasWheelMotionSample: false,
+		wheelMotionSource: null,
 		initialChassisQuaternion: physicsBridgeSyncQuaternionHelper.clone(),
 		bridgeBodyId: physicsBridgeBodyIdByNodeId.get(node.id) ?? null,
 		vehicleId: physicsBridgeVehicleIdByNodeId.get(node.id) ?? null,
@@ -14559,18 +14663,29 @@ function updateVehicleWheelVisuals(delta: number): void {
 			return
 		}
 
-		wheelChassisPositionHelper.set(chassisBody.position.x, chassisBody.position.y, chassisBody.position.z)
-		wheelChassisQuaternionHelper
-			.set(chassisBody.quaternion.x, chassisBody.quaternion.y, chassisBody.quaternion.z, chassisBody.quaternion.w)
-			.normalize()
+		const vehicleObject = nodeId ? nodeObjectMap.get(nodeId) ?? null : null
+		const motionSource = resolveVehicleVisualMotionPose({
+			tourActive,
+			object: vehicleObject,
+			chassisPosition: chassisBody.position,
+			chassisQuaternion: chassisBody.quaternion,
+			positionOut: wheelChassisPositionHelper,
+			quaternionOut: wheelChassisQuaternionHelper,
+		})
+		if (instance.wheelMotionSource !== motionSource) {
+			instance.wheelMotionSource = motionSource
+			instance.hasWheelMotionSample = false
+		}
 
 		// Signed travel along the vehicle forward axis (supports reverse).
 		let signedTravel = 0
-		if (instance.hasChassisPositionSample) {
-			wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastChassisPosition)
-			wheelForwardHelper.copy(instance.axisForward).applyQuaternion(wheelChassisQuaternionHelper)
-			normalizeVectorOrFallback(wheelForwardHelper, 0, 0, 1)
-			signedTravel = wheelChassisDisplacementHelper.dot(wheelForwardHelper)
+		if (instance.hasWheelMotionSample) {
+			wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastWheelMotionPosition)
+			signedTravel = resolveSignedVehicleTravel(
+				wheelChassisDisplacementHelper,
+				instance.axisForward,
+				wheelChassisQuaternionHelper,
+			)
 			if (!Number.isFinite(signedTravel) || Math.abs(signedTravel) < VEHICLE_TRAVEL_EPSILON) {
 				signedTravel = 0
 			}
@@ -14579,8 +14694,8 @@ function updateVehicleWheelVisuals(delta: number): void {
 				signedTravel = 0
 			}
 		}
-		instance.lastChassisPosition.copy(wheelChassisPositionHelper)
-		instance.hasChassisPositionSample = true
+		instance.lastWheelMotionPosition.copy(wheelChassisPositionHelper)
+		instance.hasWheelMotionSample = true
 
 		const wheelInfos = vehicle.wheelInfos as Array<{ steering?: number }>
 
@@ -14653,21 +14768,14 @@ function updateVehicleWheelVisuals(delta: number): void {
 			wheelSteeringQuaternionHelper.setFromAxisAngle(wheelAxisHelper, steeringAngle)
 
 			// Build local-space spin quaternion (around wheel axle).
-			wheelAxisHelper.copy(binding.axleAxis).applyQuaternion(wheelChassisQuaternionHelper)
-			if (wheelParent) {
-				wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
-			}
-			if (wheelAxisHelper.lengthSq() < 1e-10) {
-				wheelAxisHelper.copy(defaultWheelAxisVector)
-				wheelAxisHelper.applyQuaternion(wheelChassisQuaternionHelper)
-				if (wheelParent) {
-					wheelAxisHelper.applyQuaternion(wheelParentWorldQuaternionInverseHelper)
-				}
-			}
-			normalizeVectorOrFallback(wheelAxisHelper, 1, 0, 0)
 			wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert()
-			wheelAxisHelper.applyQuaternion(wheelBaseQuaternionInverseHelper)
-			normalizeVectorOrFallback(wheelAxisHelper, 1, 0, 0)
+			resolveWheelSpinAxisInObjectSpace({
+				axleAxis: binding.axleAxis,
+				vehicleWorldQuaternion: wheelChassisQuaternionHelper,
+				parentWorldQuaternionInverse: wheelParentWorldQuaternionInverseHelper,
+				baseQuaternionInverse: wheelBaseQuaternionInverseHelper,
+				target: wheelAxisHelper,
+			})
 			wheelSpinQuaternionHelper.setFromAxisAngle(wheelAxisHelper, binding.spinAngle)
 
 			// Compose: base -> (parent-space steer) -> (local-space spin).
@@ -15288,6 +15396,7 @@ async function loadActualAssetForPlaceholder(state: LazyPlaceholderState): Promi
 		lazyPlaceholderStates.delete(state.nodeId)
 		refreshAnimations()
 		refreshSkinRuntime()
+		syncVehicleSubtreeInteractionLayers()
 	} catch (error) {
 		console.warn('[ScenePreview] Deferred asset load failed', error)
 		lazyPlaceholderStates.delete(state.nodeId)
@@ -15786,6 +15895,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 			})
 		}
 		scenePreviewDriveBindingsReady.value = true
+		syncVehicleSubtreeInteractionLayers()
 		applyPreviewNominateOverrides()
 		activatePendingDefaultSteerDriveIfNeeded()
 		setSceneInitState({

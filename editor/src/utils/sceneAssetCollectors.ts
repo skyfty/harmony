@@ -2,6 +2,7 @@ import type { SceneNode } from '@schema/core'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from '@schema/instanceLayout'
 import {
   canNodeUseRuntimeModelInstancing,
+  refreshRuntimeModelInstancingPolicy,
 } from '@schema/runtimeModelInstancing'
 
 const PREFAB_SOURCE_METADATA_KEY = '__prefabAssetId'
@@ -90,6 +91,7 @@ export function collectRuntimeModelNodesByAssetId(
   if (!Array.isArray(nodes) || !nodes.length) {
     return map
   }
+  refreshRuntimeModelInstancingPolicy(nodes)
 
   const ensureNodeAssetId = (assetId: string, node: SceneNode): void => {
     const normalized = assetId.trim()

@@ -3,7 +3,14 @@ import { ANIMATION_COMPONENT_TYPE } from './components/definitions/animationComp
 import { SKIN_COMPONENT_TYPE } from './components/definitions/skinComponent'
 import { GENERAL_MESH_COMPONENT_TYPE } from './components/definitions/generalMeshComponent'
 import { PROCEDURAL_LANDSCAPE_COMPONENT_TYPE } from './components/definitions/proceduralLandscapeComponent'
+import { VEHICLE_COMPONENT_TYPE } from './components/definitions/vehicleComponent'
 import { clampSceneNodeInstanceLayout, resolveInstanceLayoutTemplateAssetId } from './instanceLayout'
+
+const FORCE_REAL_MODEL_INSTANCING = Symbol('harmony.forceRealModelInstancing')
+
+type RuntimeModelInstancingPolicyNode = SceneNode & {
+  [FORCE_REAL_MODEL_INSTANCING]?: boolean
+}
 
 function isSceneNodeComponentState(value: unknown): value is SceneNodeComponentState<unknown> {
   return typeof value === 'object' && value !== null && 'enabled' in value
@@ -42,8 +49,60 @@ export function hasEnabledProceduralLandscapeComponent(node: SceneNode | null | 
   return component.enabled !== false
 }
 
+export function hasEnabledVehicleComponent(node: SceneNode | null | undefined): boolean {
+  if (!node?.components) {
+    return false
+  }
+  const component = node.components[VEHICLE_COMPONENT_TYPE]
+  return isSceneNodeComponentState(component) && component.enabled !== false
+}
+
+/**
+ * Recomputes runtime-only model instancing policy. Every descendant of an
+ * enabled Vehicle node must use real Object3D meshes so vehicle bounds, wheel
+ * transforms and physics bindings observe the same renderable geometry.
+ */
+export function refreshRuntimeModelInstancingPolicy(
+  nodes: SceneNode[] | null | undefined,
+): Set<string> {
+  const realMeshNodeIds = new Set<string>()
+  if (!Array.isArray(nodes) || !nodes.length) {
+    return realMeshNodeIds
+  }
+  const stack: Array<{ node: SceneNode; insideVehicle: boolean }> = nodes.map((node) => ({
+    node,
+    insideVehicle: false,
+  }))
+  while (stack.length) {
+    const entry = stack.pop()
+    if (!entry) {
+      continue
+    }
+    const { node } = entry
+    const insideVehicle = entry.insideVehicle || hasEnabledVehicleComponent(node)
+    const policyNode = node as RuntimeModelInstancingPolicyNode
+    if (insideVehicle) {
+      policyNode[FORCE_REAL_MODEL_INSTANCING] = true
+      realMeshNodeIds.add(node.id)
+    } else {
+      delete policyNode[FORCE_REAL_MODEL_INSTANCING]
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      node.children.forEach((child) => {
+        if (child) {
+          stack.push({ node: child, insideVehicle })
+        }
+      })
+    }
+  }
+  return realMeshNodeIds
+}
+
 export function canNodeUseRuntimeModelInstancing(node: SceneNode | null | undefined): boolean {
   if (!node) {
+    return false
+  }
+  if ((node as RuntimeModelInstancingPolicyNode)[FORCE_REAL_MODEL_INSTANCING] === true) {
     return false
   }
 
@@ -92,6 +151,7 @@ export function collectRuntimeModelNodesByAssetId(
   if (!Array.isArray(nodes) || !nodes.length) {
     return map
   }
+  refreshRuntimeModelInstancingPolicy(nodes)
 
   const ensureNodeAssetId = (assetId: string, node: SceneNode): void => {
     const normalized = assetId.trim()
@@ -120,6 +180,8 @@ export function collectRuntimeModelNodesByAssetId(
       if (runtimeAssetId) {
         ensureNodeAssetId(runtimeAssetId, node)
       }
+    } else if (typeof node.sourceAssetId === 'string' && node.sourceAssetId.trim().length > 0) {
+      ensureNodeAssetId(node.sourceAssetId, node)
     }
 
     if (Array.isArray(node.children) && node.children.length) {
