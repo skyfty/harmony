@@ -8,10 +8,12 @@ import {
 } from '@schema/guideRouteRuntime'
 import {
   clampAutoTourComponentProps,
+  clampCharacterControllerComponentProps,
   clampGuideRouteComponentProps,
   clampVehicleComponentProps,
 } from '@schema/components'
 import { createAutoTourRuntime } from '@schema/autoTourRuntime'
+import { CharacterAutoTourRuntimeManager } from '@schema/characterAutoTourRuntime'
 import { VehicleMotionAuthorityController } from '@schema/vehicleMotionAuthority'
 
 const surfaceMocks = vi.hoisted(() => ({
@@ -539,6 +541,68 @@ describe('guideRouteRuntime', () => {
     expect(vehicleObject.position.y).toBeGreaterThan(40)
     expect(Number.isFinite(vehicleObject.quaternion.w)).toBe(true)
   })
+
+  it('snaps a vehicle to the nearest route point with a complete world quaternion', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 10,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 20, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 10,
+    }))
+    const routeNode = createRouteNode()
+    const vehicleNode = {
+      id: 'vehicle-snap-1',
+      name: 'Vehicle Snap',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'tour-snap-1',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 2,
+            loop: false,
+          }),
+        },
+        vehicle: {
+          id: 'vehicle-component-snap-1',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps(null),
+        },
+      },
+    } as any
+    const vehicleObject = new THREE.Object3D()
+    vehicleObject.position.set(4, 20, 3)
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+
+    const snap = runtime.resolveRouteSnap(vehicleNode.id)
+
+    expect(snap).not.toBeNull()
+    expect(snap!.worldPosition.x).toBeCloseTo(4)
+    expect(snap!.worldPosition.z).toBeCloseTo(0)
+    expect(Math.abs(snap!.worldQuaternion.length())).toBeCloseTo(1)
+  })
 })
 
 describe('VehicleMotionAuthorityController', () => {
@@ -574,5 +638,142 @@ describe('VehicleMotionAuthorityController', () => {
     expect(body.collisionResponse).toBe(true)
     expect(body.collisionFilterMask).toBe(0xffff)
     expect(body.collisionFilterGroup).toBe(0x0001)
+  })
+})
+
+describe('CharacterAutoTourRuntimeManager', () => {
+  beforeEach(() => {
+    clearGuideRouteEvaluationCache()
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 21,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 20, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 21,
+    }))
+  })
+
+  function createCharacterTourFixture() {
+    const routeNode = createRouteNode()
+    const characterNode = {
+      id: 'character-1',
+      name: 'Character',
+      nodeType: 'Group',
+      components: {
+        autoTour: {
+          id: 'tour-character-1',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 2,
+            loop: false,
+          }),
+        },
+        characterController: {
+          id: 'controller-character-1',
+          type: 'characterController',
+          enabled: true,
+          props: clampCharacterControllerComponentProps({
+            forwardAxis: '+x',
+            walkSpeed: 2,
+          }),
+        },
+      },
+    } as any
+    const characterObject = new THREE.Object3D()
+    characterObject.position.set(0, 20, 0)
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [characterNode.id, characterNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [characterNode.id, characterObject],
+    ])
+    const onTourComplete = vi.fn()
+    const host = {
+      iterNodes: () => nodes.entries(),
+      resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      onTourComplete,
+    }
+    return {
+      manager: new CharacterAutoTourRuntimeManager(),
+      host,
+      characterNode,
+      characterObject,
+      onTourComplete,
+    }
+  }
+
+  it('stays idle until activated and freezes movement while paused', () => {
+    const { manager, host, characterNode, characterObject } = createCharacterTourFixture()
+
+    manager.refresh(host)
+    manager.update(host, 1)
+    expect(manager.size).toBe(0)
+    expect(manager.isActive(characterNode.id)).toBe(false)
+    expect(characterObject.position.x).toBeCloseTo(0)
+
+    manager.activate(characterNode.id)
+    manager.refresh(host)
+    manager.update(host, 1)
+    expect(manager.isActive(characterNode.id)).toBe(true)
+    expect(characterObject.position.x).toBeGreaterThan(0)
+
+    const pausedX = characterObject.position.x
+    manager.setPaused(characterNode.id, true)
+    manager.update(host, 1)
+    expect(characterObject.position.x).toBeCloseTo(pausedX)
+    expect(manager.getInput(characterNode.id)?.moveZ).toBe(0)
+
+    manager.setPaused(characterNode.id, false)
+    manager.update(host, 1)
+    expect(characterObject.position.x).toBeGreaterThan(pausedX)
+
+    manager.deactivate(characterNode.id)
+    manager.update(host, 1)
+    expect(manager.size).toBe(0)
+  })
+
+  it('projects a character to the nearest route point with route alignment', () => {
+    const { manager, host, characterNode, characterObject } = createCharacterTourFixture()
+    characterObject.position.set(4, 20, 3)
+
+    const snap = manager.resolveRouteSnap(host, characterNode.id)
+
+    expect(snap).not.toBeNull()
+    expect(snap!.worldPosition.x).toBeCloseTo(4)
+    expect(snap!.worldPosition.y).toBeCloseTo(20.52)
+    expect(snap!.worldPosition.z).toBeCloseTo(0)
+    expect(snap!.forwardWorld.x).toBeCloseTo(1)
+    expect(Math.abs(snap!.worldQuaternion.length())).toBeCloseTo(1)
+  })
+
+  it('stops at the endpoint and reports completion for non-loop routes', () => {
+    const {
+      manager,
+      host,
+      characterNode,
+      characterObject,
+      onTourComplete,
+    } = createCharacterTourFixture()
+
+    manager.activate(characterNode.id)
+    manager.refresh(host)
+    characterObject.position.set(11.8, 20, 0)
+    manager.update(host, 1)
+
+    expect(characterObject.position.x).toBeCloseTo(12)
+    expect(manager.isActive(characterNode.id)).toBe(false)
+    expect(manager.size).toBe(0)
+    expect(onTourComplete).toHaveBeenCalledOnce()
+    expect(onTourComplete).toHaveBeenCalledWith(characterNode.id)
   })
 })

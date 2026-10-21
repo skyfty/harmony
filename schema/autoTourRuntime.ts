@@ -44,6 +44,7 @@ export type AutoTourRouteSnapResult = {
   nodeId: string
   routeNodeId: string
   worldPosition: THREE.Vector3
+  worldQuaternion: THREE.Quaternion
   forwardWorld: THREE.Vector3
   yaw: number
   projectedS: number
@@ -411,15 +412,19 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       node,
       VEHICLE_COMPONENT_TYPE,
     )
+    const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
+    const worldQuaternion = vehicleComponent
+      ? buildVehicleQuaternion(
+        clampVehicleComponentProps(vehicleComponent.props),
+        forwardWorld,
+        sample.normal,
+      )
+      : new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw)
     const worldPosition = vehicleComponent
       ? resolveSupportedVehicleWorldPosition({
         object,
         routePoint: sample.point,
-        worldQuaternion: buildVehicleQuaternion(
-          clampVehicleComponentProps(vehicleComponent.props),
-          forwardWorld,
-          sample.normal,
-        ),
+        worldQuaternion,
         providerNodeId: routeData.evaluation.providerNodeId,
         resolveObjectBounds,
         localBoundsCache: vehicleLocalBoundsCache,
@@ -429,8 +434,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       nodeId,
       routeNodeId: tourProps.routeNodeId!,
       worldPosition,
+      worldQuaternion,
       forwardWorld,
-      yaw: Math.atan2(-forwardWorld.z, forwardWorld.x),
+      yaw,
       projectedS: projection.s,
       segmentIndex: projection.segmentIndex,
       targetIndex: findTargetWaypointIndexByProjectedS(

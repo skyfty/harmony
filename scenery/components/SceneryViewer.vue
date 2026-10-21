@@ -424,7 +424,7 @@
       </view>
 
       <view
-        v-if="(autoTourTelemetryUiVisible || (characterControlUi.visible && isWeChatMiniProgram)) && !watchExclusiveUiActive"
+        v-if="(autoTourTelemetryUiVisible || characterControlUi.visible) && !watchExclusiveUiActive"
         class="viewer-drive-compass-right-floating"
         aria-hidden="true"
       >
@@ -3329,8 +3329,6 @@ const VEHICLE_WHEEL_MIN_RADIUS = 0.01;
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4;
 const VEHICLE_TRAVEL_EPSILON = 1e-5;
 const autoTourSnapLocalPosition = new THREE.Vector3();
-const autoTourSnapWorldPosition = new THREE.Vector3();
-const autoTourSnapWorldQuaternion = new THREE.Quaternion();
 const autoTourSnapParentWorldQuaternion = new THREE.Quaternion();
 const autoTourSnapEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const autoTourSnapCameraRight = new THREE.Vector3();
@@ -3366,6 +3364,31 @@ function syncInteractionLayersForNonNodeDescendants(root: THREE.Object3D, behavi
     applyInteractionLayers(child, behaviorInteractive);
     stack.push(...child.children);
   }
+}
+
+function resolveCharacterControllerAncestorNodeId(nodeId: string | null): string | null {
+  let currentId = nodeId;
+  while (currentId) {
+    const node = resolveNodeById(currentId);
+    if (!node) {
+      break;
+    }
+    if (resolveCharacterControllerComponent(node)) {
+      return currentId;
+    }
+    currentId = resolveParentNodeId(currentId);
+  }
+  return null;
+}
+
+function resolveCharacterAutoTourAncestorNodeId(nodeId: string | null): string | null {
+  const characterNodeId = resolveCharacterControllerAncestorNodeId(nodeId);
+  if (!characterNodeId) {
+    return null;
+  }
+  return resolveAutoTourComponent(resolveNodeById(characterNodeId))?.props?.routeNodeId
+    ? characterNodeId
+    : null;
 }
 
 function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): void {
@@ -3854,6 +3877,8 @@ const vehicleDriveIntroVisible = computed(() => (
 ));
 const characterActionsBarRef = ref<ComponentPublicInstance | HTMLElement | null>(null);
 const DRIVE_PAD_MOUSE_POINTER_ID = -2;
+type DrivePadKind = 'character' | 'vehicle';
+let activeDrivePadKind: DrivePadKind | null = null;
 let drivePadMouseTracking = false;
 let characterDrivePadMouseTracking = false;
 let drivePadPointerTracking = false;
@@ -4295,6 +4320,8 @@ const vehicleDriveIntroPendingState = reactive({
 });
 const vehicleDrivePromptBusy = ref(false);
 const activeAutoTourNodeIds = reactive(new Set<string>());
+const activeCharacterAutoTourNodeIds = reactive(new Set<string>());
+const characterPlayerControlNodeIdOverride = ref<string | null>(null);
 type SceneryVehicleDriveEvent = Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>;
 let pendingAutoTourManualDriveNodeId: string | null = null;
 let pendingAutoTourManualDriveSourceEvent: SceneryVehicleDriveEvent | null = null;
@@ -7860,6 +7887,10 @@ function resolveParentNodeId(nodeId: string): string | null {
 }
 
 function resolveDefaultControlledCharacterNodeId(): string | null {
+  const overrideNodeId = characterPlayerControlNodeIdOverride.value;
+  if (overrideNodeId && resolveCharacterControllerComponent(resolveNodeById(overrideNodeId))) {
+    return overrideNodeId;
+  }
   const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
     ? props.defaultSteerIdentifier.trim() || null
     : null;
@@ -8616,6 +8647,7 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
     onNodeObjectTransformUpdated: (_nodeId, object) => {
       syncInstancedTransform(object);
     },
+    onTourComplete: handleCharacterAutoTourComplete,
   });
 }
 
@@ -8654,6 +8686,7 @@ function updateCharacterPathFollow(deltaSeconds: number): void {
     onNodeObjectTransformUpdated: (_nodeId, object) => {
       syncInstancedTransform(object);
     },
+    onTourComplete: handleCharacterAutoTourComplete,
   }, deltaSeconds);
 }
 
@@ -10084,6 +10117,14 @@ function resolveFloatingAutoTourContext(): {
     return { nodeId: firstActiveNodeId, event: activeVehicleDriveEvent.value };
   }
 
+  const activeCharacterNodeId = activeCharacterAutoTourNodeIds.values().next().value ?? null;
+  if (activeCharacterNodeId) {
+    return {
+      nodeId: activeCharacterNodeId,
+      event: pendingVehicleDriveEvent.value ?? activeVehicleDriveEvent.value,
+    };
+  }
+
   const candidates = [pendingVehicleDriveEvent.value, activeVehicleDriveEvent.value];
   for (const event of candidates) {
     const nodeId = event?.targetNodeId ?? event?.nodeId ?? null;
@@ -10112,7 +10153,9 @@ function resolveFloatingAutoTourContext(): {
 
 const floatingAutoTourButton = computed(() => {
   const context = resolveFloatingAutoTourContext();
-  const active = context.nodeId ? activeAutoTourNodeIds.has(context.nodeId) : false;
+  const active = context.nodeId
+    ? activeAutoTourNodeIds.has(context.nodeId) || activeCharacterAutoTourNodeIds.has(context.nodeId)
+    : false;
   const busy = vehicleDrivePromptBusy.value;
   return {
     visible: Boolean(context.nodeId),
@@ -10127,7 +10170,9 @@ const floatingAutoTourButton = computed(() => {
 
 const floatingAutoTourPauseButton = computed(() => {
   const context = resolveFloatingAutoTourContext();
-  const active = context.nodeId ? activeAutoTourNodeIds.has(context.nodeId) : false;
+  const active = context.nodeId
+    ? activeAutoTourNodeIds.has(context.nodeId) || activeCharacterAutoTourNodeIds.has(context.nodeId)
+    : false;
   const busy = vehicleDrivePromptBusy.value;
   return {
     visible: active,
@@ -17071,6 +17116,8 @@ function resetAnimationControllers(): void {
   activeBehaviorAnimations.clear();
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
+  activeCharacterAutoTourNodeIds.clear();
+  characterPlayerControlNodeIdOverride.value = null;
   nodeAnimationRuntime.listMixers().forEach((mixer) => {
     try {
       mixer.stopAllAction();
@@ -19166,6 +19213,12 @@ function shouldUseH5PointerInput(): boolean {
   return isBrowserEnvironment && typeof window.PointerEvent === 'function';
 }
 
+function isPrimaryControlPadButton(event: MouseEvent | PointerEvent): boolean {
+  // Uni's normalized mouse event can omit `button` while still representing
+  // the primary click. Treat only an explicit non-zero button as secondary.
+  return event.button == null || event.button === 0;
+}
+
 function shouldSkipDrivePadPointerFromEventTarget(target: EventTarget | null): boolean {
   const candidate = target as Element | null;
   const datasetValue = (target as { dataset?: Record<string, unknown> } | null)?.dataset?.controlSkip;
@@ -19198,10 +19251,12 @@ function attachDrivePadPointerListeners(): void {
     return;
   }
   drivePadPointerTracking = true;
-  window.addEventListener('pointermove', handleDrivePadPointerMove, { passive: false });
-  window.addEventListener('pointerup', handleDrivePadPointerUp);
-  window.addEventListener('pointercancel', handleDrivePadPointerCancel);
-  window.addEventListener('blur', handleDrivePadPointerUp);
+  // Capture on the window so canvas controls cannot consume a joystick move
+  // after the pad has claimed the gesture.
+  window.addEventListener('pointermove', handleDrivePadPointerMove, { capture: true, passive: false });
+  window.addEventListener('pointerup', handleDrivePadPointerUp, true);
+  window.addEventListener('pointercancel', handleDrivePadPointerCancel, true);
+  window.addEventListener('blur', handleDrivePadPointerUp, true);
 }
 
 function detachDrivePadPointerListeners(): void {
@@ -19209,30 +19264,60 @@ function detachDrivePadPointerListeners(): void {
     return;
   }
   drivePadPointerTracking = false;
-  window.removeEventListener('pointermove', handleDrivePadPointerMove);
-  window.removeEventListener('pointerup', handleDrivePadPointerUp);
-  window.removeEventListener('pointercancel', handleDrivePadPointerCancel);
-  window.removeEventListener('blur', handleDrivePadPointerUp);
+  window.removeEventListener('pointermove', handleDrivePadPointerMove, true);
+  window.removeEventListener('pointerup', handleDrivePadPointerUp, true);
+  window.removeEventListener('pointercancel', handleDrivePadPointerCancel, true);
+  window.removeEventListener('blur', handleDrivePadPointerUp, true);
 }
 
 function handleControlPadPointerDown(event: PointerEvent): void {
   if (
     !shouldUseH5PointerInput()
-    || !vehicleDriveUi.value.visible
-    || !vehicleDriveActive.value
     || watchExclusiveUiActive.value
     || viewerEnvironmentSwitchBusy.value
   ) {
     return;
   }
-  if (event.pointerType === 'mouse' && event.button !== 0) {
-    return;
-  }
-  if (vehiclePadInput.active || shouldSkipDrivePadPointerFromEventTarget(event.target)) {
-    return;
-  }
   const coords = { x: event.clientX, y: event.clientY };
-  if (!Number.isFinite(coords.x) || !Number.isFinite(coords.y) || !shouldActivateDrivePad(coords.y)) {
+  // Uni H5 normalizes some pointerdown events without DOM coordinates. Ignore
+  // those so the native-compatible mousedown/touchstart path can take over.
+  if (
+    !Number.isFinite(coords.x)
+    || !Number.isFinite(coords.y)
+    || !Number.isFinite(event.pointerId)
+  ) {
+    return;
+  }
+  if (
+    event.isPrimary === false
+    || (event.pointerType === 'mouse' && !isPrimaryControlPadButton(event))
+    || activeDrivePadKind !== null
+  ) {
+    return;
+  }
+  // A stale listener should not be able to block the next gesture.
+  if (drivePadPointerTracking) {
+    detachDrivePadPointerListeners();
+  }
+  if (shouldSkipDrivePadPointerFromEventTarget(event.target)) {
+    return;
+  }
+  if (!shouldActivateDrivePad(coords.y)) {
+    return;
+  }
+  const useVehiclePad = vehicleDriveUi.value.visible && vehicleDriveActive.value;
+  const useCharacterPad = !useVehiclePad && characterControlUi.value.visible;
+  if (!useVehiclePad && !useCharacterPad) {
+    return;
+  }
+  if (
+    useCharacterPad
+    && (
+      shouldSkipCharacterDrivePadFromEventTarget(event.target)
+      || isPointInsideCharacterActionsBar(coords.x, coords.y)
+      || isPointInsidePurposeControls(coords.x, coords.y)
+    )
+  ) {
     return;
   }
 
@@ -19240,7 +19325,6 @@ function handleControlPadPointerDown(event: PointerEvent): void {
   if (event.cancelable) {
     event.preventDefault();
   }
-  cancelVehicleSmoothStop();
   const captureTarget = event.currentTarget as Element | null;
   if (captureTarget && typeof captureTarget.setPointerCapture === 'function') {
     try {
@@ -19250,33 +19334,65 @@ function handleControlPadPointerDown(event: PointerEvent): void {
       drivePadPointerCaptureTarget = null;
     }
   }
-  beginVehiclePad(event.pointerId, coords.x, coords.y);
+  if (useVehiclePad) {
+    cancelVehicleSmoothStop();
+    beginVehiclePad(event.pointerId, coords.x, coords.y);
+  } else {
+    beginCharacterPad(event.pointerId, coords.x, coords.y);
+  }
   attachDrivePadPointerListeners();
 }
 
 function handleDrivePadPointerMove(event: PointerEvent): void {
-  if (!vehiclePadInput.active || event.pointerId !== vehiclePadInput.pointerId) {
+  const moveVehicle = activeDrivePadKind === 'vehicle'
+    && vehiclePadInput.active
+    && event.pointerId === vehiclePadInput.pointerId;
+  const moveCharacter = activeDrivePadKind === 'character'
+    && characterPadInput.active
+    && event.pointerId === characterPadInput.pointerId;
+  if (!moveVehicle && !moveCharacter) {
     return;
   }
   if (event.cancelable) {
     event.preventDefault();
   }
-  moveVehiclePad(event.clientX, event.clientY);
+  if (moveVehicle) {
+    moveVehiclePad(event.clientX, event.clientY);
+  } else {
+    moveCharacterPad(event.clientX, event.clientY);
+  }
 }
 
 function handleDrivePadPointerUp(event: PointerEvent | Event): void {
-  if (!vehiclePadInput.active) {
+  const pointerEvent = event as PointerEvent;
+  const isBlur = event.type === 'blur';
+  if (isBlur) {
+    if (activeDrivePadKind === 'vehicle') {
+      endVehiclePad();
+    } else if (activeDrivePadKind === 'character') {
+      endCharacterPad();
+    }
     detachDrivePadPointerListeners();
     return;
   }
-  const pointerEvent = event as PointerEvent;
-  if (event.type !== 'blur' && pointerEvent.pointerId !== vehiclePadInput.pointerId) {
+  if (activeDrivePadKind === null) {
+    detachDrivePadPointerListeners();
+    return;
+  }
+  if (pointerEvent.pointerId !== (activeDrivePadKind === 'vehicle'
+    ? vehiclePadInput.pointerId
+    : characterPadInput.pointerId)) {
     return;
   }
   if (event.cancelable) {
     event.preventDefault();
   }
-  endVehiclePad();
+  if (activeDrivePadKind === 'vehicle') {
+    endVehiclePad();
+  } else {
+    endCharacterPad();
+  }
+  detachDrivePadPointerListeners();
 }
 
 function handleDrivePadPointerCancel(event: PointerEvent): void {
@@ -19284,6 +19400,7 @@ function handleDrivePadPointerCancel(event: PointerEvent): void {
 }
 
 function beginVehiclePad(pointerId: number, baseX: number, baseY: number): void {
+  activeDrivePadKind = 'vehicle';
   vehiclePadInput.pointerId = pointerId;
   vehiclePadInput.active = true;
   vehiclePadInput.baseX = baseX;
@@ -19302,10 +19419,18 @@ function moveVehiclePad(x: number, y: number): void {
 
 function endVehiclePad(): void {
   if (!vehiclePadInput.active && vehiclePadInput.pointerId === -1) {
-    detachDrivePadPointerListeners();
+    if (activeDrivePadKind === 'vehicle') {
+      activeDrivePadKind = null;
+    }
+    if (activeDrivePadKind === null) {
+      detachDrivePadPointerListeners();
+    }
     return;
   }
   const pointerId = vehiclePadInput.pointerId;
+  if (activeDrivePadKind === 'vehicle') {
+    activeDrivePadKind = null;
+  }
   vehiclePadInput.active = false;
   vehiclePadInput.pointerId = -1;
   vehiclePadInput.rawX = 0;
@@ -19319,6 +19444,7 @@ function endVehiclePad(): void {
 }
 
 function beginCharacterPad(pointerId: number, baseX: number, baseY: number): void {
+  activeDrivePadKind = 'character';
   characterPadInput.pointerId = pointerId;
   characterPadInput.active = true;
   characterPadInput.baseX = baseX;
@@ -19333,11 +19459,22 @@ function moveCharacterPad(x: number, y: number): void {
   characterPadInput.rawX = raw.x;
   characterPadInput.rawY = raw.y;
   characterJoystickOverlay?.move(raw.x, raw.y);
+  updateCharacterAuthorityInputFromKeys();
 }
 
 function endCharacterPad(): void {
   if (!characterPadInput.active && characterPadInput.pointerId === -1) {
+    if (activeDrivePadKind === 'character') {
+      activeDrivePadKind = null;
+    }
+    if (activeDrivePadKind === null) {
+      detachDrivePadPointerListeners();
+    }
     return;
+  }
+  const pointerId = characterPadInput.pointerId;
+  if (activeDrivePadKind === 'character') {
+    activeDrivePadKind = null;
   }
   characterPadInput.active = false;
   characterPadInput.pointerId = -1;
@@ -19345,6 +19482,9 @@ function endCharacterPad(): void {
   characterPadInput.rawY = 0;
   characterJoystickOverlay?.end();
   updateCharacterAuthorityInputFromKeys();
+  if (pointerId >= 0) {
+    releaseDrivePadPointerCapture(pointerId);
+  }
 }
 
 // Reused: the viewport is consumed synchronously by both overlay updates.
@@ -19494,7 +19634,7 @@ function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null):
 }
 
 function handleControlPadTouchStart(event: TouchEvent): void {
-  if (shouldUseH5PointerInput()) {
+  if (drivePadPointerTracking || activeDrivePadKind !== null) {
     return;
   }
   if (viewerEnvironmentSwitchBusy.value) {
@@ -19504,12 +19644,15 @@ function handleControlPadTouchStart(event: TouchEvent): void {
     handleDrivePadTouchStart(event);
     return;
   }
-  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+  if (characterControlUi.value.visible) {
     if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
       return;
     }
     const touch = event.changedTouches?.[0] ?? null;
     const coords = getTouchCoordinates(touch);
+    if (coords && !shouldActivateDrivePad(coords.y)) {
+      return;
+    }
     if (coords && isPointInsideCharacterActionsBar(coords.x, coords.y)) {
       return;
     }
@@ -19521,40 +19664,42 @@ function handleControlPadTouchStart(event: TouchEvent): void {
 }
 
 function handleControlPadTouchMove(event: TouchEvent): void {
-  if (shouldUseH5PointerInput()) {
+  if (drivePadPointerTracking) {
     return;
   }
   if (vehicleDriveUi.value.visible) {
     handleDrivePadTouchMove(event);
     return;
   }
-  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+  if (characterControlUi.value.visible) {
     handleCharacterDrivePadTouchMove(event);
   }
 }
 
 function handleControlPadTouchEnd(event: TouchEvent): void {
-  if (shouldUseH5PointerInput()) {
+  if (drivePadPointerTracking) {
     return;
   }
   if (vehicleDriveUi.value.visible) {
     handleDrivePadTouchEnd(event);
     return;
   }
-  if (characterControlUi.value.visible && isWeChatMiniProgram) {
+  if (characterControlUi.value.visible) {
     handleCharacterDrivePadTouchEnd(event);
   }
 }
 
 function handleControlPadMouseDown(event: MouseEvent): void {
-  if (shouldUseH5PointerInput()) {
+  if (drivePadPointerTracking || activeDrivePadKind !== null) {
     return;
   }
   if (viewerEnvironmentSwitchBusy.value) {
     return;
   }
   if (vehicleDriveUi.value.visible) {
-    handleDrivePadMouseDown(event);
+    if (!vehiclePadInput.active) {
+      handleDrivePadMouseDown(event);
+    }
     return;
   }
   if (characterControlUi.value.visible) {
@@ -19572,7 +19717,7 @@ function handleControlPadMouseDown(event: MouseEvent): void {
 }
 
 function handleDrivePadTouchStart(event: TouchEvent): void {
-  if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value) {
+  if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value || activeDrivePadKind !== null) {
     return;
   }
   if (shouldSkipDrivePadPointerFromEventTarget(event.target)) {
@@ -19639,7 +19784,7 @@ function detachDrivePadMouseListeners(): void {
 }
 
 function handleDrivePadMouseDown(event: MouseEvent): void {
-  if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value || event.button !== 0) {
+  if (!vehicleDriveUi.value.visible || watchExclusiveUiActive.value || !isPrimaryControlPadButton(event)) {
     return;
   }
   if (shouldSkipDrivePadPointerFromEventTarget(event.target)) {
@@ -19672,12 +19817,20 @@ function handleDrivePadMouseUp(): void {
 }
 
 function handleCharacterDrivePadTouchStart(event: TouchEvent): void {
-  if (!characterControlUi.value.visible || vehicleDriveUi.value.visible || watchExclusiveUiActive.value) {
+  if (
+    !characterControlUi.value.visible
+    || vehicleDriveUi.value.visible
+    || watchExclusiveUiActive.value
+    || activeDrivePadKind !== null
+  ) {
     return;
   }
   const touch = event.changedTouches?.[0] ?? null;
   const coords = getTouchCoordinates(touch);
   if (!coords) {
+    return;
+  }
+  if (!shouldActivateDrivePad(coords.y)) {
     return;
   }
   if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
@@ -19738,14 +19891,25 @@ function detachCharacterDrivePadMouseListeners(): void {
 }
 
 function handleCharacterDrivePadMouseDown(event: MouseEvent): void {
-  if (!characterControlUi.value.visible || watchExclusiveUiActive.value || event.button !== 0) {
+  if (
+    !characterControlUi.value.visible
+    || activeDrivePadKind !== null
+    || watchExclusiveUiActive.value
+    || !isPrimaryControlPadButton(event)
+  ) {
     return;
   }
   const coords = { x: event.clientX, y: event.clientY };
+  if (!shouldActivateDrivePad(coords.y)) {
+    return;
+  }
   if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
     return;
   }
   if (isPointInsideCharacterActionsBar(coords.x, coords.y)) {
+    return;
+  }
+  if (isPointInsidePurposeControls(coords.x, coords.y)) {
     return;
   }
   event.stopPropagation();
@@ -19801,6 +19965,11 @@ function startVehicleDriveMode(
   event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
   options: { deferCameraUpdate?: boolean } = {},
 ): VehicleDriveStartResult {
+  Array.from(activeCharacterAutoTourNodeIds).forEach((nodeId) => {
+    characterAutoTourRuntime.deactivate(nodeId);
+  });
+  activeCharacterAutoTourNodeIds.clear();
+  autoTourPaused.value = false;
   const ctx = renderContext
     ? { camera: renderContext.camera, mapControls: renderContext.controls }
     : { camera: null as THREE.PerspectiveCamera | null };
@@ -20435,23 +20604,11 @@ function restoreVehicleDriveCameraState(): void {
 function applyAutoTourSnapToVehicle(nodeId: string, snap: AutoTourRouteSnapResult): THREE.Object3D | null {
   const node = resolveNodeById(nodeId);
   const object = nodeObjectMap.get(nodeId) ?? null;
-  const vehicleComponent = resolveVehicleComponent(node);
   if (!node || !object) {
     return null;
   }
 
-  autoTourSnapWorldQuaternion.setFromAxisAngle(autoTourSnapWorldUp, snap.yaw);
-  autoTourSnapWorldPosition.copy(snap.worldPosition);
-  if (vehicleComponent) {
-    object.updateMatrixWorld(true);
-    const objectBounds = new THREE.Box3().setFromObject(object);
-    if (!objectBounds.isEmpty()) {
-      const currentOrigin = object.getWorldPosition(new THREE.Vector3());
-      const groundClearance = Math.max(0, currentOrigin.y - objectBounds.min.y);
-      autoTourSnapWorldPosition.y += groundClearance;
-    }
-  }
-  applyObjectWorldPose(object, autoTourSnapWorldPosition, autoTourSnapWorldQuaternion);
+  applyMoveToSubjectWorldPose(nodeId, snap.worldPosition, snap.worldQuaternion);
   syncSceneNodeLocalTransformFromObject(node, object);
   syncInstancedTransform(object, true);
 
@@ -20598,6 +20755,92 @@ function commitManualDrivePoseHandoffToPhysics(handoff: ManualDrivePoseHandoff |
   });
 }
 
+function handleCharacterAutoTourComplete(nodeId: string): void {
+  activeCharacterAutoTourNodeIds.delete(nodeId);
+  autoTourPaused.value = false;
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  characterPlayerControlNodeIdOverride.value = nodeId;
+  resetCharacterControlInputs();
+  resetProtagonistPoseState();
+  setCameraCaging(false);
+  const event = pendingVehicleDriveEvent.value;
+  const eventNodeId = event?.targetNodeId ?? event?.nodeId ?? null;
+  if (eventNodeId !== nodeId) {
+    pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(nodeId, null);
+  }
+  applyAutoTourCameraInputPolicy();
+}
+
+function stopCharacterAutoTourAndResumePlayerControl(nodeId: string): void {
+  characterAutoTourRuntime.deactivate(nodeId);
+  activeCharacterAutoTourNodeIds.delete(nodeId);
+  autoTourPaused.value = false;
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  characterPlayerControlNodeIdOverride.value = nodeId;
+  resetCharacterControlInputs();
+  resetProtagonistPoseState();
+  setCameraCaging(false);
+  applyAutoTourCameraInputPolicy();
+}
+
+function startCharacterAutoTourFromPrompt(
+  nodeId: string,
+  sourceEvent: SceneryVehicleDriveEvent | null,
+): boolean {
+  const node = resolveNodeById(nodeId);
+  if (
+    !node
+    || !resolveCharacterControllerComponent(node)
+    || !resolveAutoTourComponent(node)?.props?.routeNodeId
+  ) {
+    return false;
+  }
+  Array.from(activeAutoTourNodeIds).forEach((activeNodeId) => {
+    stopTourAndUnfollow(autoTourRuntime, activeNodeId, () => undefined);
+  });
+  activeAutoTourNodeIds.clear();
+  autoTourFollowNodeId.value = null;
+  resetAutoTourCameraFollowState();
+  Array.from(activeCharacterAutoTourNodeIds).forEach((activeNodeId) => {
+    characterAutoTourRuntime.deactivate(activeNodeId);
+  });
+  activeCharacterAutoTourNodeIds.clear();
+  autoTourPaused.value = false;
+  autoTourPausedIsTerminal.value = false;
+  autoTourPausedNodeId.value = null;
+  const snap = characterAutoTourRuntime.resolveRouteSnap({
+    iterNodes: () => previewNodeMap.entries(),
+    resolveNode: (nodeId) => resolveNodeById(nodeId),
+    nodeObjectMap,
+  }, nodeId);
+  if (!snap) {
+    return false;
+  }
+  applyMoveToSubjectWorldPose(nodeId, snap.worldPosition, snap.worldQuaternion);
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (object) {
+    syncSceneNodeLocalTransformFromObject(node, object);
+    syncInstancedTransform(object, true);
+  }
+  characterPlayerControlNodeIdOverride.value = nodeId;
+  characterAutoTourRuntime.activate(nodeId);
+  refreshCharacterPathFollowRuntimeEntries();
+  activeCharacterAutoTourNodeIds.add(nodeId);
+  resetCharacterControlInputs();
+  resetProtagonistPoseState();
+  setCameraCaging(false);
+  const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
+  pendingVehicleDriveEvent.value = driveEvent;
+  if (driveEvent.token) {
+    resolveBehaviorToken(driveEvent.token, { type: 'continue' });
+    pendingVehicleDriveEvent.value = { ...driveEvent, token: '' };
+  }
+  applyAutoTourCameraInputPolicy();
+  return true;
+}
+
 function stopFloatingAutoTourAndResumeManualDrive(
   nodeId: string,
   sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
@@ -20706,7 +20949,11 @@ function handleFloatingAutoTourTap(): void {
   if (button.active) {
     vehicleDrivePromptBusy.value = true;
     try {
-      stopFloatingAutoTourAndResumeManualDrive(targetNodeId, button.event);
+      if (activeCharacterAutoTourNodeIds.has(targetNodeId)) {
+        stopCharacterAutoTourAndResumePlayerControl(targetNodeId);
+      } else {
+        stopFloatingAutoTourAndResumeManualDrive(targetNodeId, button.event);
+      }
     } finally {
       vehicleDrivePromptBusy.value = false;
     }
@@ -20721,9 +20968,35 @@ function handleFloatingAutoTourTap(): void {
   }
 
   if (!nodeObjectMap.has(targetNodeId)) {
-    uni.showToast({ title: '未找到车辆对象', icon: 'none' });
+    uni.showToast({ title: '未找到角色或车辆对象', icon: 'none' });
     return;
   }
+
+  if (resolveCharacterControllerComponent(node) && !resolveVehicleComponent(node)) {
+    vehicleDrivePromptBusy.value = true;
+    try {
+      if (vehicleDriveActive.value) {
+        handleHideVehicleCockpitEvent();
+        vehicleDriveController.stopDrive(
+          { resolution: { type: 'continue' }, preserveCamera: true },
+          renderContext ? { camera: renderContext.camera, mapControls: renderContext.controls } : { camera: null },
+        );
+      }
+      resetVehicleDriveInputs();
+      setVehicleDriveUiOverride('hide');
+      if (!startCharacterAutoTourFromPrompt(targetNodeId, button.event)) {
+        uni.showToast({ title: '角色自动导览尚未准备就绪', icon: 'none' });
+      }
+    } finally {
+      vehicleDrivePromptBusy.value = false;
+    }
+    return;
+  }
+
+  Array.from(activeCharacterAutoTourNodeIds).forEach((activeNodeId) => {
+    characterAutoTourRuntime.deactivate(activeNodeId);
+  });
+  activeCharacterAutoTourNodeIds.clear();
 
   const snap = autoTourRuntime.resolveRouteSnap(targetNodeId);
   if (!snap) {
@@ -20794,6 +21067,15 @@ function handleFloatingAutoTourPauseToggleTap(): void {
 
   const targetNodeId = button.nodeId;
   if (!activeAutoTourNodeIds.has(targetNodeId)) {
+    if (!activeCharacterAutoTourNodeIds.has(targetNodeId)) {
+      return;
+    }
+    const nextCharacterPaused = !autoTourPaused.value;
+    characterAutoTourRuntime.setPaused(targetNodeId, nextCharacterPaused);
+    autoTourPausedIsTerminal.value = false;
+    autoTourPausedNodeId.value = null;
+    autoTourPaused.value = nextCharacterPaused;
+    applyAutoTourCameraInputPolicy();
     return;
   }
 
@@ -21443,9 +21725,6 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
     if (!renderContext?.scene) {
       return;
     }
-    if (!hasRegisteredBehaviors()) {
-      return;
-    }
     const bounds = canvas.getBoundingClientRect();
     if (!bounds.width || !bounds.height) {
       return;
@@ -21496,25 +21775,39 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
       if (!getBehaviorNodeVisible(nodeId)) {
         continue;
       }
-      const directActions = listRegisteredBehaviorActions(nodeId);
-      const behaviorTargetId = directActions.includes('click') ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
-      if (!behaviorTargetId) {
-        continue;
+      if (hasRegisteredBehaviors()) {
+        const directActions = listRegisteredBehaviorActions(nodeId);
+        const behaviorTargetId = directActions.includes('click') ? nodeId : resolveClickBehaviorAncestorNodeId(nodeId);
+        if (behaviorTargetId) {
+          const hitObject = nodeObjectMap.get(behaviorTargetId) ?? intersection.object;
+          const results = triggerBehaviorAction(behaviorTargetId, 'click', {
+            intersection: {
+              object: hitObject,
+              point: {
+                x: intersection.point.x,
+                y: intersection.point.y,
+                z: intersection.point.z,
+              },
+            },
+            pointerEvent: event,
+          });
+          processBehaviorEvents(results);
+          return;
+        }
       }
-      const hitObject = nodeObjectMap.get(behaviorTargetId) ?? intersection.object;
-      const results = triggerBehaviorAction(behaviorTargetId, 'click', {
-        intersection: {
-          object: hitObject,
-          point: {
-            x: intersection.point.x,
-            y: intersection.point.y,
-            z: intersection.point.z,
-          },
-        },
-        pointerEvent: event,
-      });
-      processBehaviorEvents(results);
-      break;
+      const characterControllerNodeId = resolveCharacterControllerAncestorNodeId(nodeId);
+      if (characterControllerNodeId) {
+        characterPlayerControlNodeIdOverride.value = characterControllerNodeId;
+        resetCharacterControlInputs();
+        resetProtagonistPoseState();
+        setCameraCaging(false);
+        const autoTourNodeId = resolveCharacterAutoTourAncestorNodeId(nodeId);
+        if (autoTourNodeId) {
+          pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(autoTourNodeId, null);
+          vehicleDrivePromptBusy.value = false;
+        }
+        return;
+      }
     }
   };
   canvas.addEventListener('click', handleBehaviorClick);
@@ -22769,7 +23062,22 @@ function handleWheelEvent(event: WheelEvent): void {
   });
 }
 
+function resetDrivePadInputSessions(): void {
+  if (vehiclePadInput.active || vehiclePadInput.pointerId !== -1) {
+    endVehiclePad();
+  }
+  if (characterPadInput.active || characterPadInput.pointerId !== -1) {
+    endCharacterPad();
+  }
+  activeDrivePadKind = null;
+  drivePadPointerCaptureTarget = null;
+  detachDrivePadPointerListeners();
+  detachDrivePadMouseListeners();
+  detachCharacterDrivePadMouseListeners();
+}
+
 function disposeJoystickOverlays(): void {
+  resetDrivePadInputSessions();
   vehicleJoystickOverlay?.dispose();
   vehicleJoystickOverlay = null;
   characterJoystickOverlay?.dispose();
@@ -22854,6 +23162,8 @@ function teardownRenderer() {
   networkSyncNodeEntries.clear();
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
+  activeCharacterAutoTourNodeIds.clear();
+  characterPlayerControlNodeIdOverride.value = null;
   physicsBridgeContactsByNodeId.clear();
   physicsBridgeCharacterMotorStateByCharacterId.clear();
   behaviorCollisionCandidates.clear();
@@ -24077,6 +24387,8 @@ function cleanupForUnrelatedSceneSwitch(): void {
   networkSyncNodeEntries.clear();
   characterControllerAnimationRuntime.clear();
   characterAutoTourRuntime.clear();
+  activeCharacterAutoTourNodeIds.clear();
+  characterPlayerControlNodeIdOverride.value = null;
   clearWatchRestorePoseStore(watchRestorePoseStore);
   physicsBridgeContactsByNodeId.clear();
   physicsBridgeCharacterMotorStateByCharacterId.clear();
@@ -24744,6 +25056,10 @@ onUnmounted(() => {
 .viewer-canvas-wrapper {
   position: relative;
   flex: 1;
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
   background-color: #e9eef5;
   isolation: isolate;
 }

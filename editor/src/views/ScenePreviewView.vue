@@ -1899,7 +1899,8 @@ function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): 
 	}
 
 	const vehicleNodeId = resolveVehicleAncestorNodeId(nodeId)
-	const vehicleInteractive = Boolean(vehicleNodeId)
+	const characterAutoTourNodeId = resolveCharacterAutoTourAncestorNodeId(nodeId)
+	const vehicleInteractive = Boolean(vehicleNodeId || characterAutoTourNodeId)
 
 	applyInteractionLayers(target, behaviorInteractive, vehicleInteractive)
 	// Runtime component visuals (Warp Gate, Guideboard, etc.) are attached as non-node children.
@@ -1908,7 +1909,10 @@ function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): 
 
 function syncVehicleSubtreeInteractionLayers(): void {
 	previewNodeMap.forEach((_node, nodeId) => {
-		if (!resolveVehicleAncestorNodeId(nodeId)) {
+		if (
+			!resolveVehicleAncestorNodeId(nodeId)
+			&& !resolveCharacterAutoTourAncestorNodeId(nodeId)
+		) {
 			return
 		}
 		const object = nodeObjectMap.get(nodeId) ?? null
@@ -2033,6 +2037,8 @@ const vehicleDrivePromptBusy = ref(false)
 const vehicleDriveExitBusy = ref(false)
 const scenePreviewDriveBindingsReady = ref(false)
 const activeAutoTourNodeIds = reactive(new Set<string>())
+const activeCharacterAutoTourNodeIds = reactive(new Set<string>())
+const characterPlayerControlNodeIdOverride = ref<string | null>(null)
 // Auto-tour pause only affects tour (not global playback), and does not change manual-drive behavior.
 const autoTourPaused = ref(false)
 const autoTourPausedIsTerminal = ref(false)
@@ -2076,6 +2082,7 @@ const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createBackFollowCameraTuning({
 const vehicleDrivePrompt = computed(() => {
 	// Ensure this computed updates when the set changes.
 	activeAutoTourNodeIds.size
+	activeCharacterAutoTourNodeIds.size
 	autoTourPaused.value
 	const event = pendingVehicleDriveEvent.value
 	if (!event) {
@@ -2096,7 +2103,13 @@ const vehicleDrivePrompt = computed(() => {
 	const label = node?.name?.trim() || targetNodeId || 'Vehicle'
 	const canDrive = Boolean(resolveVehicleComponent(node))
 	const canAutoTour = Boolean(resolveAutoTourComponent(node))
-	const isTouring = Boolean(targetNodeId && activeAutoTourNodeIds.has(targetNodeId))
+	const isTouring = Boolean(
+		targetNodeId
+		&& (
+			activeAutoTourNodeIds.has(targetNodeId)
+			|| activeCharacterAutoTourNodeIds.has(targetNodeId)
+		),
+	)
 	const hasAnyAction = isTouring || canDrive || canAutoTour
 	const pauseTourLabel = autoTourPaused.value ? '继续巡游' : '暂停巡游'
 	const pauseTourIcon = autoTourPaused.value ? 'mdi-play-circle' : 'mdi-pause-circle'
@@ -3592,6 +3605,24 @@ function resolveVehicleAncestorNodeId(nodeId: string | null): string | null {
 	return null
 }
 
+function resolveCharacterAutoTourAncestorNodeId(nodeId: string | null): string | null {
+	let currentId: string | null = nodeId
+	while (currentId) {
+		const node = resolveNodeById(currentId)
+		if (!node) {
+			break
+		}
+		if (
+			resolveCharacterControllerComponent(node)
+			&& Boolean(resolveAutoTourComponent(node)?.props?.routeNodeId)
+		) {
+			return currentId
+		}
+		currentId = resolveParentNodeId(currentId)
+	}
+	return null
+}
+
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
 	let currentId: string | null = nodeId
 	while (currentId) {
@@ -4368,6 +4399,20 @@ function buildDefaultSteerDriveEvent(nodeId: string): Extract<BehaviorRuntimeEve
 		targetNodeId: nodeId,
 		seatNodeId: null,
 		token: `scene-preview-default-steer:${nodeId}`,
+	}
+}
+
+function buildActorAutoTourPromptEvent(nodeId: string): Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> {
+	return {
+		type: 'vehicle-drive',
+		nodeId,
+		action: 'click',
+		sequenceId: '__actor-auto-tour__',
+		behaviorSequenceId: '__actor-auto-tour__',
+		behaviorId: '__actor-auto-tour__',
+		targetNodeId: nodeId,
+		seatNodeId: null,
+		token: '',
 	}
 }
 
@@ -7758,6 +7803,8 @@ function resetAnimationControllers(): void {
 	})
 	characterControllerAnimationRuntime.clear()
 	characterAutoTourRuntime.clear()
+	activeCharacterAutoTourNodeIds.clear()
+	characterPlayerControlNodeIdOverride.value = null
 	nodeAnimationRuntime.listMixers().forEach((mixer) => {
 		try {
 			mixer.stopAllAction()
@@ -7843,6 +7890,10 @@ function resetCharacterFollowCameraState(): void {
 }
 
 function resolveDefaultControlledCharacterNodeId(): string | null {
+	const overrideNodeId = characterPlayerControlNodeIdOverride.value
+	if (overrideNodeId && resolveCharacterControllerComponent(resolveNodeById(overrideNodeId))) {
+		return overrideNodeId
+	}
 	return resolveDefaultCharacterSteerNodeId(currentDocument)
 }
 
@@ -8461,6 +8512,24 @@ function resolveScenePreviewCharacterAnimationInput(nodeId: string): {
 	}
 }
 
+function handleCharacterAutoTourComplete(nodeId: string): void {
+	activeCharacterAutoTourNodeIds.delete(nodeId)
+	autoTourPaused.value = false
+	autoTourPausedIsTerminal.value = false
+	autoTourPausedNodeId.value = null
+	characterPlayerControlNodeIdOverride.value = nodeId
+	resetCharacterControlInputs()
+	if (characterCameraMode.value !== 'follow') {
+		characterCameraMode.value = 'follow'
+	}
+	const event = pendingVehicleDriveEvent.value
+	const eventNodeId = event?.targetNodeId ?? event?.nodeId ?? null
+	if (eventNodeId !== nodeId) {
+		pendingVehicleDriveEvent.value = buildActorAutoTourPromptEvent(nodeId)
+	}
+	applyAutoTourCameraInputPolicy()
+}
+
 function refreshCharacterPathFollowRuntimeEntries(): void {
 	characterAutoTourRuntime.refresh({
 		iterNodes: () => previewNodeMap.entries(),
@@ -8470,6 +8539,7 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
 		onNodeObjectTransformUpdated: (_nodeId, object) => {
 			syncInstancedTransform(object)
 		},
+		onTourComplete: handleCharacterAutoTourComplete,
 	})
 }
 
@@ -8686,6 +8756,7 @@ function updateCharacterPathFollow(delta: number): void {
 		onNodeObjectTransformUpdated: (_nodeId, object) => {
 			syncInstancedTransform(object)
 		},
+		onTourComplete: handleCharacterAutoTourComplete,
 	}, delta)
 }
 
@@ -10463,6 +10534,11 @@ function startVehicleDriveMode(
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Driving state was replaced by a new script.' } })
 	}
+	Array.from(activeCharacterAutoTourNodeIds).forEach((nodeId) => {
+		characterAutoTourRuntime.deactivate(nodeId)
+	})
+	activeCharacterAutoTourNodeIds.clear()
+	autoTourPaused.value = false
 	// Capture camera settings before drive mutates controls/caging/view.
 	const ctx = camera && renderer
 		? { camera, mapControls: mapControls ?? undefined }
@@ -10866,10 +10942,12 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 		return
 	}
 	const node = resolveNodeById(targetNodeId)
-	if (!resolveAutoTourComponent(node)) {
+	const autoTourComponent = resolveAutoTourComponent(node)
+	if (!autoTourComponent?.props?.routeNodeId) {
 		appendWarningMessage('AutoTour component is not enabled on the target node.')
 		return
 	}
+	const isCharacterTour = Boolean(resolveCharacterControllerComponent(node))
 
 	vehicleDrivePromptBusy.value = true
 	try {
@@ -10882,9 +10960,63 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 			handleHideVehicleCockpitEvent()
 			stopVehicleDriveMode({ resolution: { type: 'continue' } })
 		}
+		Array.from(activeCharacterAutoTourNodeIds).forEach((nodeId) => {
+			characterAutoTourRuntime.deactivate(nodeId)
+		})
+		activeCharacterAutoTourNodeIds.clear()
+		if (isCharacterTour) {
+			Array.from(activeAutoTourNodeIds).forEach((nodeId) => {
+				stopTourAndUnfollow(autoTourRuntime, nodeId, () => undefined)
+			})
+			activeAutoTourNodeIds.clear()
+			autoTourFollowNodeId.value = null
+			resetAutoTourCameraFollowState()
+			const snap = characterAutoTourRuntime.resolveRouteSnap({
+				iterNodes: () => previewNodeMap.entries(),
+				resolveNode: (nodeId) => resolveNodeById(nodeId),
+				nodeObjectMap,
+			}, targetNodeId)
+			if (!snap) {
+				appendWarningMessage('Character auto-tour route is not ready.')
+				return
+			}
+			applyMoveToSubjectWorldPose(targetNodeId, snap.worldPosition, snap.worldQuaternion)
+			const targetObject = nodeObjectMap.get(targetNodeId) ?? null
+			if (targetObject) {
+				syncSceneNodeLocalTransformFromObject(node, targetObject)
+				syncInstancedTransform(targetObject, true)
+			}
+			resetCharacterFollowCameraState()
+			characterPlayerControlNodeIdOverride.value = targetNodeId
+			characterAutoTourRuntime.activate(targetNodeId)
+			refreshCharacterPathFollowRuntimeEntries()
+			activeCharacterAutoTourNodeIds.add(targetNodeId)
+			resetCharacterControlInputs()
+			if (characterCameraMode.value !== 'follow') {
+				characterCameraMode.value = 'follow'
+			}
+			setCameraCaging(false)
+			if (event.token) {
+				resolveBehaviorToken(event.token, { type: 'continue' })
+				pendingVehicleDriveEvent.value = { ...event, token: '' }
+			}
+			applyAutoTourCameraInputPolicy()
+			return
+		}
 
 		resetVehicleDriveInputs()
 		setVehicleDriveUiOverride('hide')
+		const snap = autoTourRuntime.resolveRouteSnap(targetNodeId)
+		if (!snap) {
+			appendWarningMessage('Auto-tour route is not ready.')
+			return
+		}
+		applyMoveToSubjectWorldPose(targetNodeId, snap.worldPosition, snap.worldQuaternion)
+		const snappedObject = nodeObjectMap.get(targetNodeId) ?? null
+		if (snappedObject) {
+			syncSceneNodeLocalTransformFromObject(node, snappedObject)
+			syncInstancedTransform(snappedObject, true)
+		}
 		clearAutoTourCameraObjectMetrics(targetNodeId)
 		const targetObject = nodeObjectMap.get(targetNodeId) ?? null
 		if (targetObject) {
@@ -10900,6 +11032,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 			setCameraCaging(true, { force: true })
 			applyAutoTourCameraInputPolicy()
 		})
+		autoTourRuntime.seedTourPlaybackState(targetNodeId, snap)
 
 		// Behavior script tokens should not hang: auto-tour starts immediately.
 		if (event.token) {
@@ -10922,6 +11055,15 @@ function handleVehicleAutoTourPauseToggleClick(): void {
 		return
 	}
 	if (!activeAutoTourNodeIds.has(targetNodeId)) {
+		if (!activeCharacterAutoTourNodeIds.has(targetNodeId)) {
+			return
+		}
+		const nextCharacterPaused = !autoTourPaused.value
+		characterAutoTourRuntime.setPaused(targetNodeId, nextCharacterPaused)
+		autoTourPausedIsTerminal.value = false
+		autoTourPausedNodeId.value = null
+		autoTourPaused.value = nextCharacterPaused
+		applyAutoTourCameraInputPolicy()
 		return
 	}
 	const nextPaused = !autoTourPaused.value
@@ -10955,6 +11097,30 @@ function handleVehicleAutoTourStopClick(): void {
 		autoTourRuntime,
 	)
 	const promptNodeId = event.targetNodeId ?? event.nodeId ?? null
+	const characterTourNodeId = (
+		promptNodeId
+		&& activeCharacterAutoTourNodeIds.has(promptNodeId)
+			? promptNodeId
+			: activeCharacterAutoTourNodeIds.values().next().value ?? null
+	)
+	if (characterTourNodeId) {
+		characterAutoTourRuntime.deactivate(characterTourNodeId)
+		activeCharacterAutoTourNodeIds.delete(characterTourNodeId)
+		autoTourPaused.value = false
+		autoTourPausedIsTerminal.value = false
+		autoTourPausedNodeId.value = null
+		characterPlayerControlNodeIdOverride.value = characterTourNodeId
+		resetCharacterControlInputs()
+		if (characterCameraMode.value !== 'follow') {
+			characterCameraMode.value = 'follow'
+		}
+		if (event.token) {
+			resolveBehaviorToken(event.token, { type: 'continue' })
+			pendingVehicleDriveEvent.value = { ...event, token: '' }
+		}
+		applyAutoTourCameraInputPolicy()
+		return
+	}
 	const targetNodeId = currentTourNodeId ?? promptNodeId
 	if (!targetNodeId) {
 		return
@@ -11367,6 +11533,19 @@ function handleCanvasClick(event: MouseEvent) {
 			}
 		}
 
+		const actorNodeId = resolveVehicleAncestorNodeId(resolvedId)
+			?? resolveCharacterAutoTourAncestorNodeId(resolvedId)
+		if (!actorNodeId) {
+			continue
+		}
+		const actorNode = resolveNodeById(actorNodeId)
+		const canDrive = Boolean(resolveVehicleComponent(actorNode))
+		const canAutoTour = Boolean(resolveAutoTourComponent(actorNode)?.props?.routeNodeId)
+		if (!actorNode || (!canDrive && !canAutoTour)) {
+			continue
+		}
+		handleVehicleDriveEvent(buildActorAutoTourPromptEvent(actorNodeId))
+		return
 	}
 }
 
@@ -15701,6 +15880,8 @@ function resolveScenePreviewDeviceProfileId(document: SceneJsonExportDocument): 
 
 async function updateScene(document: SceneJsonExportDocument) {
 	scenePreviewDriveBindingsReady.value = false
+	activeCharacterAutoTourNodeIds.clear()
+	characterPlayerControlNodeIdOverride.value = null
 	resetAssetResolutionCaches()
 	releaseTerrainScatterInstances()
 	resetProtagonistPoseState()
@@ -16173,6 +16354,8 @@ onBeforeUnmount(() => {
 	activeBehaviorAnimations.clear()
 	characterControllerAnimationRuntime.clear()
 	characterAutoTourRuntime.clear()
+	activeCharacterAutoTourNodeIds.clear()
+	characterPlayerControlNodeIdOverride.value = null
 	physicsBridgeContactsByNodeId.clear()
 	physicsBridgeCharacterMotorStateByCharacterId.clear()
 	behaviorCollisionCandidates.clear()

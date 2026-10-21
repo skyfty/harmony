@@ -46,12 +46,21 @@ export type CharacterAutoTourRuntimeEntry = {
   lastTargetIndex: number
 }
 
+export type CharacterAutoTourRouteSnapResult = {
+  nodeId: string
+  worldPosition: THREE.Vector3
+  worldQuaternion: THREE.Quaternion
+  forwardWorld: THREE.Vector3
+  yaw: number
+}
+
 export type CharacterAutoTourRuntimeHost = {
   iterNodes: () => Iterable<[string, SceneNode]>
   resolveNode: (nodeId: string) => SceneNode | null
   nodeObjectMap: Map<string, THREE.Object3D>
   onNodeObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
   shouldApplyWorldTransform?: (nodeId: string) => boolean
+  onTourComplete?: (nodeId: string) => void
 }
 
 type GuideRouteWorldWaypoints = {
@@ -132,6 +141,12 @@ function resolveCharacterForwardAxisOffsetRadians(forwardAxis: CharacterForwardA
   }
 }
 
+function resolveCharacterGroundOffsetY(props: CharacterControllerComponentProps): number {
+  const radius = Math.max(0.05, props.colliderRadius)
+  const halfHeight = Math.max(radius, props.colliderHeight * 0.5)
+  return Math.max(0, halfHeight - radius) + 0.02
+}
+
 function resolveGuideRouteWorldWaypoints(
   resolveNode: (nodeId: string) => SceneNode | null,
   nodeObjectMap: Map<string, THREE.Object3D>,
@@ -192,9 +207,46 @@ function createIdleCharacterAutoTourInput(yaw: number): CharacterAutoTourInputSt
 
 export class CharacterAutoTourRuntimeManager {
   private readonly entries = new Map<string, CharacterAutoTourRuntimeEntry>()
+  private readonly activeNodeIds = new Set<string>()
+  private readonly pausedNodeIds = new Set<string>()
 
   has(nodeId: string): boolean {
     return this.entries.has(nodeId)
+  }
+
+  isActive(nodeId: string): boolean {
+    return this.activeNodeIds.has(nodeId) && this.entries.has(nodeId)
+  }
+
+  activate(nodeId: string): void {
+    this.activeNodeIds.add(nodeId)
+    this.pausedNodeIds.delete(nodeId)
+    this.entries.delete(nodeId)
+  }
+
+  deactivate(nodeId: string): void {
+    this.activeNodeIds.delete(nodeId)
+    this.pausedNodeIds.delete(nodeId)
+    this.entries.delete(nodeId)
+  }
+
+  setPaused(nodeId: string, paused: boolean): void {
+    if (!this.activeNodeIds.has(nodeId)) {
+      return
+    }
+    if (paused) {
+      this.pausedNodeIds.add(nodeId)
+      const entry = this.entries.get(nodeId)
+      if (entry) {
+        entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
+      }
+    } else {
+      this.pausedNodeIds.delete(nodeId)
+    }
+  }
+
+  getActiveNodeIds(): IterableIterator<string> {
+    return this.activeNodeIds.values()
   }
 
   /** Number of nodes currently following an auto-tour/path-follow route. */
@@ -206,13 +258,86 @@ export class CharacterAutoTourRuntimeManager {
     return this.entries.get(nodeId)?.lastInput ?? null
   }
 
+  resolveRouteSnap(
+    host: CharacterAutoTourRuntimeHost,
+    nodeId: string,
+  ): CharacterAutoTourRouteSnapResult | null {
+    const node = host.resolveNode(nodeId)
+    const object = host.nodeObjectMap.get(nodeId) ?? null
+    const component = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
+    const controllerComponent = resolveEnabledComponentState<CharacterControllerComponentProps>(
+      node,
+      CHARACTER_CONTROLLER_COMPONENT_TYPE,
+    )
+    if (!node || !object || !component || !controllerComponent) {
+      return null
+    }
+    const tourProps = clampAutoTourComponentProps(component.props)
+    const controllerProps = clampCharacterControllerComponentProps(controllerComponent.props)
+    const routeData = resolveGuideRouteWorldWaypoints(host.resolveNode, host.nodeObjectMap, tourProps.routeNodeId)
+    if (!routeData || routeData.points.length < 2) {
+      return null
+    }
+    const currentPosition = getObjectWorldPosition(object, new THREE.Vector3())
+    const lookaheadDistance = resolvePathFollowLookaheadDistance({
+      speedMps: tourProps.speedMps,
+      baseMeters: 1.4,
+      speedGain: 0.35,
+      minMeters: 1.1,
+      maxMeters: 5.5,
+    })
+    const sample = resolvePathFollowSample({
+      points: routeData.points,
+      loop: tourProps.loop,
+      currentPosition,
+      lookaheadDistance,
+      outLookaheadPoint: new THREE.Vector3(),
+      outClosestPoint: new THREE.Vector3(),
+    })
+    if (!sample) {
+      return null
+    }
+    const segmentIndex = sample.projection.segmentIndex
+    const segmentStart = routeData.points[segmentIndex] ?? sample.projection.closestPoint
+    const segmentEnd = routeData.points[segmentIndex + 1]
+      ?? (tourProps.loop ? routeData.points[0] : null)
+      ?? sample.lookaheadPoint
+    const forwardWorld = segmentEnd.clone().sub(segmentStart)
+    forwardWorld.y = 0
+    if (forwardWorld.lengthSq() <= 1e-8) {
+      forwardWorld.copy(sample.lookaheadPoint).sub(sample.projection.closestPoint)
+      forwardWorld.y = 0
+    }
+    if (forwardWorld.lengthSq() <= 1e-8) {
+      forwardWorld.set(1, 0, 0)
+    } else {
+      forwardWorld.normalize()
+    }
+    const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
+      + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
+    const worldPosition = sample.projection.closestPoint.clone()
+    worldPosition.y += resolveCharacterGroundOffsetY(controllerProps)
+    return {
+      nodeId,
+      worldPosition,
+      worldQuaternion: new THREE.Quaternion().setFromAxisAngle(characterPathFollowUp, yaw),
+      forwardWorld,
+      yaw,
+    }
+  }
+
   clear(): void {
     this.entries.clear()
+    this.activeNodeIds.clear()
+    this.pausedNodeIds.clear()
   }
 
   refresh(host: CharacterAutoTourRuntimeHost): void {
     const nextEntries = new Map<string, CharacterAutoTourRuntimeEntry>()
     for (const [nodeId, node] of host.iterNodes()) {
+      if (!this.activeNodeIds.has(nodeId)) {
+        continue
+      }
       const component = resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
       if (!component) {
         continue
@@ -246,6 +371,12 @@ export class CharacterAutoTourRuntimeManager {
         lastTargetIndex: previous?.lastTargetIndex ?? 0,
       })
     }
+    this.activeNodeIds.forEach((nodeId) => {
+      if (!nextEntries.has(nodeId)) {
+        this.activeNodeIds.delete(nodeId)
+        this.pausedNodeIds.delete(nodeId)
+      }
+    })
     this.entries.clear()
     nextEntries.forEach((entry, nodeId) => {
       this.entries.set(nodeId, entry)
@@ -274,6 +405,12 @@ export class CharacterAutoTourRuntimeManager {
       entry.props = normalizedProps
       entry.routeNodeId = normalizedProps.routeNodeId
       entry.controllerProps = clampCharacterControllerComponentProps(controllerComponent.props)
+      if (this.pausedNodeIds.has(nodeId)) {
+        entry.lastInput = createIdleCharacterAutoTourInput(
+          getObjectWorldYawRadians(object, entry.controllerProps.forwardAxis),
+        )
+        return
+      }
 
       const routeData = resolveGuideRouteWorldWaypoints(host.resolveNode, host.nodeObjectMap, entry.routeNodeId)
       if (!routeData) {
@@ -291,6 +428,7 @@ export class CharacterAutoTourRuntimeManager {
       }
 
       const controllerProps = entry.controllerProps ?? clampCharacterControllerComponentProps(null)
+      const groundOffsetY = resolveCharacterGroundOffsetY(controllerProps)
       const speedMps = Math.max(0, entry.props.speedMps)
       const lookaheadDistance = resolvePathFollowLookaheadDistance({
         speedMps,
@@ -312,10 +450,14 @@ export class CharacterAutoTourRuntimeManager {
 
       if (!entry.props.loop) {
         const endPoint = routeData.points[routeData.points.length - 1]!
-        const endDistance = currentPosition.distanceTo(endPoint)
+        const endDistance = Math.hypot(
+          currentPosition.x - endPoint.x,
+          currentPosition.z - endPoint.z,
+        )
         const arrivalDistance = Math.max(0.35, Math.min(1.25, speedMps * 0.2))
         if (endDistance <= arrivalDistance) {
           entry.smoothedWorldPosition.copy(endPoint)
+          entry.smoothedWorldPosition.y += groundOffsetY
           const prevPoint = routeData.points[Math.max(0, routeData.points.length - 2)] ?? endPoint
           characterPathFollowDirection.copy(endPoint).sub(prevPoint)
           characterPathFollowDirection.y = 0
@@ -335,6 +477,8 @@ export class CharacterAutoTourRuntimeManager {
           }
 
           entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
+          this.deactivate(nodeId)
+          host.onTourComplete?.(nodeId)
           return
         }
       }
@@ -371,8 +515,10 @@ export class CharacterAutoTourRuntimeManager {
       const heightAlpha = distanceToLookahead > 1e-6
         ? Math.min(1, actualStep / distanceToLookahead)
         : 0
-      characterPathFollowTargetPosition.y = currentPosition.y
-        + (sample.lookaheadPoint.y - currentPosition.y) * heightAlpha
+      const currentGroundY = currentPosition.y - groundOffsetY
+      const targetGroundY = currentGroundY
+        + (sample.lookaheadPoint.y - currentGroundY) * heightAlpha
+      characterPathFollowTargetPosition.y = targetGroundY + groundOffsetY
 
       const targetYaw = Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x) + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
       const alpha = 1 - Math.exp(-Math.max(0, 10) * deltaSeconds)

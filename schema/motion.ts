@@ -5,6 +5,7 @@ export { AutoTourCameraAvoidanceController } from './autoTourCameraAvoidanceCont
 export { CharacterAutoTourRuntimeManager } from './characterAutoTourRuntime'
 export type {
   CharacterAutoTourInputState,
+  CharacterAutoTourRouteSnapResult,
   CharacterAutoTourRuntimeEntry,
   CharacterAutoTourRuntimeHost,
 } from './characterAutoTourRuntime'
