@@ -3,6 +3,10 @@ import type { RoadTraceNode, RoadTraceResult } from './roadTrace'
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
 import {
+  segmentIntersectsExclusion,
+  type LandscapeExclusionCircle,
+} from './exclusion'
+import {
   resolveSlowroadsMidlineProfile,
   type RoadStyleId,
   type SlowroadsMidlineProfile,
@@ -98,6 +102,9 @@ export interface OfficialScenicRoadOptions {
   natural?: NaturalRoadExtensionConfig
   /** Optional starting tangent; defaults to the official contour tangent. */
   initialHeadingRad?: number | null
+  /** Hard world-space keep-out circles for the road footprint. */
+  exclusionCircles?: ReadonlyArray<LandscapeExclusionCircle>
+  exclusionMargin?: number
 }
 
 export interface NaturalRoadExtensionConfig {
@@ -1319,10 +1326,22 @@ function traceOnce(
   natural: NaturalRoadExtensionConfig | null = null,
   midlineProfile: SlowroadsMidlineProfile = SLOWROADS_HILLS_ROAD_PROFILE,
   initialHeadingRad: number | null = null,
+  exclusionCircles: ReadonlyArray<LandscapeExclusionCircle> = [],
+  exclusionMargin = 0,
 ): TraceOnceResult {
   const startY = grid.sampleHeight(origin.x, origin.z)
   if (startY == null) {
     return { result: emptyResult('start-outside-terrain'), restart: false }
+  }
+  if (segmentIntersectsExclusion(
+    origin.x,
+    origin.z,
+    origin.x,
+    origin.z,
+    exclusionCircles,
+    exclusionMargin,
+  )) {
+    return { result: emptyResult('blocked-by-exclusion-zone'), restart: false }
   }
   if (
     origin.x < grid.minX + margin
@@ -1909,7 +1928,7 @@ function traceOnce(
         z: number
         y: number
         valid: boolean
-        invalidReason: 'forward-grade' | 'cross-slope' | 'guide-corridor' | null
+        invalidReason: 'forward-grade' | 'cross-slope' | 'guide-corridor' | 'exclusion-zone' | null
         score: number
       } | null => {
         const candidateX = x + Math.cos(candidateHeading) * profile.stepLength
@@ -1937,7 +1956,15 @@ function traceOnce(
         const guideValid = !guide
           || dockingToWaypoint
           || guideDeviation <= guide.corridorWidth + 1e-6
-        const valid = forwardValid && crossValid && guideValid
+        const exclusionPathValid = !segmentIntersectsExclusion(
+          x,
+          z,
+          candidateX,
+          candidateZ,
+          exclusionCircles,
+          exclusionMargin,
+        )
+        const valid = forwardValid && crossValid && guideValid && exclusionPathValid
         const headingError = Math.abs(wrapAngle(candidateHeading - referenceHeading))
         const turnScore = headingError / profile.feelAngleRad
         const crossExcess = Math.max(
@@ -1984,7 +2011,9 @@ function traceOnce(
               ? 'forward-grade'
               : !crossValid
                 ? 'cross-slope'
-                : 'guide-corridor',
+                : !guideValid
+                  ? 'guide-corridor'
+                  : 'exclusion-zone',
           score:
             turnScore * 1.5
             + (forwardGrade / Math.max(1e-4, constraints.preferredGrade)) ** 2 * 1.5
@@ -2006,6 +2035,7 @@ function traceOnce(
       let sawForwardGradeFailure = chosen?.invalidReason === 'forward-grade'
       let sawCrossSlopeFailure = chosen?.invalidReason === 'cross-slope'
       let sawGuideFailure = chosen?.invalidReason === 'guide-corridor'
+      let sawExclusionFailure = chosen?.invalidReason === 'exclusion-zone'
       if (!chosen?.valid) {
         let rescued: ReturnType<typeof evaluateHeading> = null
         for (let level = 1; level <= 36; level += 1) {
@@ -2021,6 +2051,8 @@ function traceOnce(
               sawCrossSlopeFailure = true
             } else if (candidate?.invalidReason === 'guide-corridor') {
               sawGuideFailure = true
+            } else if (candidate?.invalidReason === 'exclusion-zone') {
+              sawExclusionFailure = true
             }
             if (candidate?.valid && (!rescued || candidate.score < rescued.score)) {
               rescued = candidate
@@ -2044,7 +2076,9 @@ function traceOnce(
             ? 'blocked-by-cross-slope'
             : sawGuideFailure
               ? 'blocked-by-guide-corridor'
-              : 'blocked-by-grade'
+              : sawExclusionFailure
+                ? 'blocked-by-exclusion-zone'
+                : 'blocked-by-grade'
         break
       }
       if (Math.abs(wrapAngle(chosen.heading - officialHeading)) > 1e-6) {
@@ -2260,6 +2294,8 @@ export function traceOfficialScenicGuidedRoad(
       options.natural ?? null,
       options.midlineProfile ?? SLOWROADS_HILLS_ROAD_PROFILE,
       options.initialHeadingRad ?? null,
+      options.exclusionCircles ?? [],
+      Math.max(0, options.exclusionMargin ?? 0),
     )
     last = traced.result
     if (
@@ -2316,6 +2352,8 @@ export function traceOfficialScenicNaturalRoad(
     natural,
     options.midlineProfile ?? SLOWROADS_HILLS_ROAD_PROFILE,
     options.initialHeadingRad ?? null,
+    options.exclusionCircles ?? [],
+    Math.max(0, options.exclusionMargin ?? 0),
   )
   return traced.result
 }

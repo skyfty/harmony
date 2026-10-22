@@ -102,7 +102,11 @@ import {
   isSingleTrackRoad,
   type RoadStyleId,
 } from './roadStyle'
-import { computeWallSegments, type WallSegment } from './walls'
+import {
+  clipWallSegmentsToExclusions,
+  computeWallSegments,
+  type WallSegment,
+} from './walls'
 import { createWallLayers, wallFenceSpriteSamples, type WallLayerHandle } from './wallLayer'
 import { createWaterPlane, type WaterPlaneHandle } from './waterPlane'
 import { getSharedSlowroadsAssetStore, slowroadsSharedRetainIds, type SlowroadsAssetStore } from '../slowroads/assets/assetStore'
@@ -197,6 +201,13 @@ import {
   type ScenicWaypointPlacement,
 } from './officialScenicRoad'
 import { setSlowroadsSceneViewDistanceScale } from '../slowroads/render/environmentRuntime'
+import {
+  filterLandscapeExclusionPlacements,
+  getLandscapeExclusionSnapshot,
+  landscapeExclusionSignature,
+  polylineIntersectsExclusion,
+  type LandscapeExclusionCircle,
+} from './exclusion'
 
 const TREE_BATCH_RELEASE_PADDING = 48
 const ROAD_BUCKET_LENGTH = 16
@@ -293,6 +304,8 @@ export interface ProceduralLandscapeRuntimeStats {
   progress: number
   warnings: string[]
   quality: ResolvedProceduralLandscapeQuality
+  exclusionZoneCount: number
+  exclusionSignature: string
   treeInstances: number
   grassInstances: number
   bushInstances: number
@@ -977,6 +990,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     instances: false,
     uniforms: true,
   }
+  let appliedExclusionCircles: LandscapeExclusionCircle[] = []
+  let exclusionCapturePending = true
+  let landscapeWorldBuilt = false
   let forceStream = true
   let enabled = true
   let disposed = false
@@ -1143,6 +1159,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     progress: 0,
     warnings: [],
     quality: resolveProceduralLandscapeQuality(props.quality, currentEnvironment),
+    exclusionZoneCount: 0,
+    exclusionSignature: '',
     treeInstances: 0,
     grassInstances: 0,
     bushInstances: 0,
@@ -1453,7 +1471,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         }
       }
     }
-    return placements
+    return filterExcludedTrees(placements)
   }
 
   function usesDemTerrain(): boolean {
@@ -1480,6 +1498,43 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   function resolveForestRoadClearance(): number {
     const base = props.forest.roadClearance
     return demRoadbedHalfWidth > 0 ? Math.max(base, demRoadbedHalfWidth) : base
+  }
+
+  function captureAppliedExclusionsIfNeeded(): void {
+    if (landscapeWorldBuilt && !exclusionCapturePending) {
+      return
+    }
+    appliedExclusionCircles = getLandscapeExclusionSnapshot()
+    stats.exclusionZoneCount = appliedExclusionCircles.length
+    stats.exclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
+    exclusionCapturePending = false
+  }
+
+  function resolveRoadExclusionMargin(): number {
+    return roadHalfWidth(props)
+      + props.road.shoulderWidth
+      + Math.max(2, props.road.flattenBand)
+      + 0.5
+  }
+
+  function treeExclusionMargin(placement: TreePlacement): number {
+    return Math.max(1.25, placement.scale * 0.35)
+  }
+
+  function grassExclusionMargin(placement: GrassPlacement): number {
+    return Math.max(0.2, placement.scale * 0.5)
+  }
+
+  function bushExclusionMargin(placement: GrassPlacement): number {
+    return Math.max(0.35, placement.scale * 0.9)
+  }
+
+  function filterExcludedTrees(placements: TreePlacement[]): TreePlacement[] {
+    return filterLandscapeExclusionPlacements(
+      placements,
+      appliedExclusionCircles,
+      treeExclusionMargin,
+    )
   }
 
   function disposeDemMesh(): void {
@@ -2090,8 +2145,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       25_000,
     )
     if (done) {
-      const placements = worldForestCorridor.concat(worldForestScan.placements)
+      let placements = worldForestCorridor.concat(worldForestScan.placements)
       placements.push(...buildNearRoadFallbackPlacements(placements))
+      placements = filterExcludedTrees(placements)
       worldForestScan = null
       buildWorldForestLayers(placements)
     }
@@ -2290,6 +2346,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       pointsXZ,
       authoringSampleStep,
       authoringCellSize,
+      exclusionSignature: landscapeExclusionSignature(appliedExclusionCircles),
     }
   }
 
@@ -2303,7 +2360,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       return null
     }
     host.updateMatrixWorld(true)
+    const currentExclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
+    const exclusionMargin = resolveRoadExclusionMargin()
     const cachedPointsXZ = route.centerline?.pointsXZ
+    let cachedFallback: WaypointRoadPlanResult | null = null
     if (cachedPointsXZ?.length) {
       const centerlineWorld: RoadWaypoint[] = []
       const point = new THREE.Vector3()
@@ -2322,9 +2382,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         waypointCount: route.waypoints.length,
       })
       if (cached) {
-        return cached
+        cachedFallback = cached
+        const exclusionSignatureMatches = currentExclusionSignature
+          === (route.centerline?.exclusionSignature ?? '')
+        const crossesExclusion = polylineIntersectsExclusion(
+          centerlineWorld,
+          appliedExclusionCircles,
+          exclusionMargin,
+        )
+        if (exclusionSignatureMatches && !crossesExclusion) {
+          return cached
+        }
+      } else {
+        warn('road-centerline-snapshot-unusable')
       }
-      warn('road-centerline-snapshot-unusable')
     }
     const waypointsWorld = transformRoadWaypointsToWorld(host.matrixWorld, route.waypoints)
     if (!waypointsWorld.length) {
@@ -2334,7 +2405,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       activeGrid.cellSize * 2,
       Math.max(0.5, road.width * 0.5) + road.shoulderWidth + 2,
     )
-    return planWaypointRoadRoute(activeGrid, {
+    const planned = planWaypointRoadRoute(activeGrid, {
       waypoints: waypointsWorld,
       strategy: route.strategy,
       termination: route.termination,
@@ -2354,7 +2425,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       ),
       minimumTurnRadius: 20,
       maximumHeadingChangeRad: (10 * Math.PI) / 180,
+      exclusionCircles: appliedExclusionCircles,
+      exclusionMargin,
     })
+    if (planned?.complete) {
+      return planned
+    }
+    if (cachedFallback?.complete) {
+      warn('landscape-exclusion-road-unavoidable')
+      return {
+        ...cachedFallback,
+        complete: false,
+        failureReason: planned?.failureReason ?? 'blocked-by-exclusion-zone',
+      }
+    }
+    return planned
   }
 
   function buildTerrainSourceSignature(
@@ -2448,6 +2533,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!grid) {
       return
     }
+    captureAppliedExclusionsIfNeeded()
     // The previous roadbed is a surface mesh under the host; remove it before
     // resolving terrain triangles so it cannot be mistaken for raw DEM.
     disposeDemRoadbed()
@@ -2793,6 +2879,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     installSurfaceInjection()
     dirty.instances = true
     forceStream = true
+    landscapeWorldBuilt = true
   }
 
   /**
@@ -2955,13 +3042,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         return forestDensityClassAt(densityField, x, z) / 3
       },
     }
-    wallSegments = computeWallSegments(wallProbe, roadResult.nodes, {
-      seed: props.seed,
-      roadWidth: roadHalfWidth(props) * 2,
-      density: props.walls.drystone.density,
-      detail: 3,
-      style: ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE],
-    })
+    wallSegments = clipWallSegmentsToExclusions(
+      computeWallSegments(wallProbe, roadResult.nodes, {
+        seed: props.seed,
+        roadWidth: roadHalfWidth(props) * 2,
+        density: props.walls.drystone.density,
+        detail: 3,
+        style: ROAD_STYLE_PROFILES[DEFAULT_ROAD_STYLE],
+      }),
+      appliedExclusionCircles,
+      0.75,
+    )
     stats.wallSegmentCount = wallSegments.length
     if (!wallSegments.length) {
       if (wallTexturesRequested) {
@@ -3084,13 +3175,21 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (waterPlane && Math.abs(waterPlane.worldSize - size) <= 1e-3) {
       waterPlane.setWavesTexture(waves)
       waterPlane.setWaterLevel(waterLevel)
+      waterPlane.setExclusionCircles(appliedExclusionCircles)
       waterPlane.mesh.position.x = centerX
       waterPlane.mesh.position.z = centerZ
       waterPlane.setVisible(true)
       return
     }
     waterPlane?.dispose()
-    waterPlane = createWaterPlane({ worldSize: size, waterLevel, waves })
+    waterPlane = createWaterPlane({
+      worldSize: size,
+      centerX,
+      centerZ,
+      waterLevel,
+      waves,
+      exclusionCircles: appliedExclusionCircles,
+    })
     waterPlane.mesh.position.x = centerX
     waterPlane.mesh.position.z = centerZ
     tagArtifact(waterPlane.mesh)
@@ -3656,7 +3755,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         surfaceNormalAt: visibleForestNormalAt,
       },
     )
-    const kept = takeDensityPrefix(placements, tier.densityMultiplier)
+    const kept = filterExcludedTrees(
+      takeDensityPrefix(placements, tier.densityMultiplier),
+    )
     const key = chunkKey
     if (!kept.length) {
       // 记录空分块：否则每帧都会把邻近的空块当成待建任务重复规划，
@@ -3734,8 +3835,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         surfaceNormalAt: visibleForestNormalAt,
       },
     )
-    const grass = grassEnabled ? takeDensityPrefix(result.grass, tier.densityMultiplier) : []
-    const bushes = bushesEnabled ? takeDensityPrefix(result.bushes, tier.densityMultiplier) : []
+    const grass = grassEnabled
+      ? filterLandscapeExclusionPlacements(
+          takeDensityPrefix(result.grass, tier.densityMultiplier),
+          appliedExclusionCircles,
+          grassExclusionMargin,
+        )
+      : []
+    const bushes = bushesEnabled
+      ? filterLandscapeExclusionPlacements(
+          takeDensityPrefix(result.bushes, tier.densityMultiplier),
+          appliedExclusionCircles,
+          bushExclusionMargin,
+        )
+      : []
     const key = `r:${entry.index}`
     if (!grass.length && !bushes.length) {
       // 记录空分块，避免流式每帧重复规划（否则会一直占用预算）。
@@ -3806,7 +3919,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         ))
       }
     }
-    const kept = takeDensityPrefix(placements, tier.densityMultiplier)
+    const kept = filterLandscapeExclusionPlacements(
+      takeDensityPrefix(placements, tier.densityMultiplier),
+      appliedExclusionCircles,
+      grassExclusionMargin,
+    )
     const key = `g:${batchX}:${batchZ}`
     if (!kept.length) {
       // 记录空分块（相机在网格外/全是陡坡等），避免流式每帧重试。
@@ -4862,7 +4979,15 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (disposed) {
         return
       }
+      const previousGenerationRevision = props.generationRevision
+      const previousGeneratedRouteKey = jsonKey(props.road.generatedRoute)
       props = clampProceduralLandscapeProps(next, hooks.nodeId)
+      if (
+        previousGenerationRevision !== props.generationRevision
+        || previousGeneratedRouteKey !== jsonKey(props.road.generatedRoute)
+      ) {
+        exclusionCapturePending = true
+      }
       guideRouteSurfaceRevision += 1
       const keys = {
         grid: jsonKey(props.sampling),
@@ -5067,6 +5192,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           centerline: null,
         }
       }
+      appliedExclusionCircles = getLandscapeExclusionSnapshot()
+      stats.exclusionZoneCount = appliedExclusionCircles.length
+      stats.exclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
+      exclusionCapturePending = false
       const result = planGeneratedRoad(grid, hostObject, route, road)
       if (!result || result.nodes.length < 2) {
         return {
@@ -5126,11 +5255,16 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     },
     getGeneratedRoadCenterlineLocal(): ProceduralLandscapeGeneratedRouteCenterline | null {
       const saved = props.road.generatedRoute?.centerline
-      if (saved?.pointsXZ.length) {
+      const currentExclusionSignature = landscapeExclusionSignature(appliedExclusionCircles)
+      if (
+        saved?.pointsXZ.length
+        && (saved.exclusionSignature ?? '') === currentExclusionSignature
+      ) {
         return {
           pointsXZ: [...saved.pointsXZ],
           authoringSampleStep: saved.authoringSampleStep,
           authoringCellSize: saved.authoringCellSize,
+          exclusionSignature: saved.exclusionSignature ?? '',
         }
       }
       if (!grid || !hostObject || !roadResult || roadResult.nodes.length < 2) {

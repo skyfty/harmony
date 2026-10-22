@@ -20,6 +20,10 @@ import {
   type ProceduralLandscapeRuntimeStats,
 } from '@schema/proceduralLandscape/runtime'
 import {
+  getLandscapeExclusionSnapshot,
+  landscapeExclusionSignature,
+} from '@schema/proceduralLandscape/exclusion'
+import {
   ROAD_STYLE_PROFILES,
   ROAD_WIDTH_PRESETS,
   type RoadStyleId,
@@ -43,15 +47,27 @@ const componentEnabled = computed(() => landscapeComponent.value?.enabled !== fa
  * 远景林覆盖近景流式半径之外的可见地形，水位诊断用来判断水面是否被地形完全遮住。
  */
 const runtimeStats = ref<ProceduralLandscapeRuntimeStats | null>(null)
+const currentExclusionSignature = ref('')
+const currentExclusionZoneCount = ref(0)
 let runtimeStatsTimer: number | null = null
 
 function refreshRuntimeStats(): void {
+  const circles = getLandscapeExclusionSnapshot()
+  currentExclusionSignature.value = landscapeExclusionSignature(circles)
+  currentExclusionZoneCount.value = circles.length
   const nodeId = selectedNodeId.value
   const next = nodeId ? getProceduralLandscapeStats(nodeId) : null
   // The runtime updates its stats object in place. Reassigning that same
   // reference is a no-op for Vue's ref setter, so copy it to force a render.
   runtimeStats.value = next ? { ...next, warnings: [...next.warnings] } : null
 }
+
+const exclusionStale = computed(() => (
+  currentExclusionZoneCount.value > 0
+  || Boolean(runtimeStats.value?.exclusionSignature)
+)
+  && currentExclusionSignature.value !== (runtimeStats.value?.exclusionSignature ?? '')
+)
 
 onMounted(() => {
   refreshRuntimeStats()
@@ -908,6 +924,15 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             />
             <v-btn size="small" variant="text" :disabled="!componentEnabled" @click="handleRandomizeSeed">随机</v-btn>
             <v-btn size="small" variant="tonal" :disabled="!componentEnabled" @click="handleRegenerate">重新生成</v-btn>
+          </div>
+          <div v-if="currentExclusionZoneCount > 0 || runtimeStats?.exclusionZoneCount" class="pl-hint">
+            已应用排除区 {{ runtimeStats?.exclusionZoneCount ?? 0 }} 个
+            <template v-if="currentExclusionZoneCount !== (runtimeStats?.exclusionZoneCount ?? 0)">
+              · 当前场景 {{ currentExclusionZoneCount }} 个
+            </template>
+          </div>
+          <div v-if="exclusionStale" class="pl-hint pl-hint--stale">
+            排除区位置或半径已变更，点击“重新生成”应用。
           </div>
           <v-select
             :model-value="propsValue.quality"

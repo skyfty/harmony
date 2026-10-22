@@ -102,6 +102,8 @@ export interface ProceduralLandscapeGeneratedRouteCenterline {
   authoringSampleStep: number
   /** Runtime height-grid cell size used when the snapshot was authored. */
   authoringCellSize: number
+  /** Landscape exclusion signature used when this path was generated. */
+  exclusionSignature?: string
 }
 
 /** Immutable snapshot used by the runtime until the user regenerates the road. */
@@ -437,6 +439,9 @@ export function clampGeneratedRouteCenterline(
     pointsXZ,
     authoringSampleStep: Math.round(clampNumber(raw.authoringSampleStep, 1, 1, 8)),
     authoringCellSize: clampNumber(raw.authoringCellSize, 1, 0.01, 100_000),
+    ...(typeof raw.exclusionSignature === 'string'
+      ? { exclusionSignature: raw.exclusionSignature.slice(0, 65_536) }
+      : {}),
   }
 }
 
@@ -450,6 +455,9 @@ export function cloneGeneratedRouteCenterline(
     pointsXZ: [...value.pointsXZ],
     authoringSampleStep: value.authoringSampleStep,
     authoringCellSize: value.authoringCellSize,
+    ...(value.exclusionSignature !== undefined
+      ? { exclusionSignature: value.exclusionSignature }
+      : {}),
   }
 }
 

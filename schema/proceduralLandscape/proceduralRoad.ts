@@ -27,6 +27,11 @@ import {
 import {
   smoothPlanarCenterline,
 } from './centerlineBezier'
+import {
+  isPointExcluded,
+  segmentIntersectsExclusion,
+  type LandscapeExclusionCircle,
+} from './exclusion'
 
 export interface WaypointRoadPlanOptions {
   waypoints: RoadWaypoint[]
@@ -45,6 +50,8 @@ export interface WaypointRoadPlanOptions {
   minimumTurnRadius?: number
   maximumHeadingChangeRad?: number
   style?: RoadStyleId
+  exclusionCircles?: ReadonlyArray<LandscapeExclusionCircle>
+  exclusionMargin?: number
 }
 
 export interface WaypointRoadPlanResult extends RoadTraceResult {
@@ -309,6 +316,14 @@ function planShortestLeg(
   end: Vec2,
   options: WaypointRoadPlanOptions,
 ): { points: Vec2[] | null; expanded: number } {
+  const exclusionCircles = options.exclusionCircles ?? []
+  const exclusionMargin = Math.max(0, options.exclusionMargin ?? 0)
+  if (
+    isPointExcluded(start.x, start.z, exclusionCircles, exclusionMargin)
+    || isPointExcluded(end.x, end.z, exclusionCircles, exclusionMargin)
+  ) {
+    return { points: null, expanded: 0 }
+  }
   const spanX = grid.maxX - grid.minX
   const spanZ = grid.maxZ - grid.minZ
   const cellSize = Math.max(
@@ -383,6 +398,23 @@ function planShortestLeg(
       if (!Number.isFinite(nextHeight)) {
         continue
       }
+      const nextX = grid.minX + nextCol * cellSize
+      const nextZ = grid.minZ + nextRow * cellSize
+      const currentX = grid.minX + col * cellSize
+      const currentZ = grid.minZ + row * cellSize
+      if (
+        isPointExcluded(nextX, nextZ, exclusionCircles, exclusionMargin)
+        || segmentIntersectsExclusion(
+          currentX,
+          currentZ,
+          nextX,
+          nextZ,
+          exclusionCircles,
+          exclusionMargin,
+        )
+      ) {
+        continue
+      }
       const segmentLength = Math.hypot(dx, dz) * cellSize
       const slope = Math.abs(nextHeight - currentHeight) / segmentLength
       if (slope > options.maxSlope * 1.05) {
@@ -419,8 +451,6 @@ function planShortestLeg(
       parents.set(nextState, currentState)
       const goalX = grid.minX + endCell.col * cellSize
       const goalZ = grid.minZ + endCell.row * cellSize
-      const nextX = grid.minX + nextCol * cellSize
-      const nextZ = grid.minZ + nextRow * cellSize
       heap.push(nextState, nextDistance + Math.hypot(goalX - nextX, goalZ - nextZ))
     }
   }
@@ -1258,6 +1288,32 @@ function roadNodesLength(nodes: ReadonlyArray<RoadTraceNode>): number {
   return length
 }
 
+function roadNodesHitExclusion(
+  nodes: ReadonlyArray<RoadTraceNode>,
+  circles: ReadonlyArray<LandscapeExclusionCircle> | undefined,
+  margin: number | undefined,
+): boolean {
+  if (!circles?.length || nodes.length < 2) {
+    return false
+  }
+  const safeMargin = Math.max(0, margin ?? 0)
+  for (let index = 1; index < nodes.length; index += 1) {
+    const previous = nodes[index - 1]!
+    const current = nodes[index]!
+    if (segmentIntersectsExclusion(
+      previous.x,
+      previous.z,
+      current.x,
+      current.z,
+      circles,
+      safeMargin,
+    )) {
+      return true
+    }
+  }
+  return false
+}
+
 function samplePolylineLinear(
   grid: TerrainHeightGrid,
   points: ReadonlyArray<Vec2>,
@@ -1331,7 +1387,13 @@ function planShortestGuide(
   }
   const spacing = Math.max(8, Math.min(16, options.stepLength))
   const smoothed = smoothPolyline(route, spacing, anchors, closed)
-  const guide = scoreSeededSegment(grid, smoothed, options.maxSlope * 0.8)
+  const smoothedHitsExclusion = roadNodesHitExclusion(
+    smoothed.map((point, index) => makeNode(point, 0, 0, index)),
+    options.exclusionCircles,
+    options.exclusionMargin,
+  )
+  const guide = !smoothedHitsExclusion
+    && scoreSeededSegment(grid, smoothed, options.maxSlope * 0.8)
     ? smoothed
     : samplePolylineLinear(grid, route, spacing, closed)
   return {
@@ -2077,7 +2139,8 @@ export function planWaypointRoadRoute(
       }
       guideWaypoints = anchors
     }
-    const guide = naturalPlan && guideWaypoints.length === 1
+    const hasExclusions = (options.exclusionCircles?.length ?? 0) > 0
+    const guide = naturalPlan && guideWaypoints.length === 1 && !hasExclusions
       ? null
       : buildGlobalScenicGuide(grid, guideWaypoints, {
           seed: options.seed,
@@ -2091,6 +2154,8 @@ export function planWaypointRoadRoute(
           crossSlopeWeight: 18,
           waypointTolerance: options.waypointTolerance,
           extendToBoundary: naturalPlan == null,
+          exclusionCircles: options.exclusionCircles,
+          exclusionMargin: options.exclusionMargin,
         })
     if (guide && (guide.failureReason || guide.points.length < 2)) {
       return {
@@ -2131,6 +2196,8 @@ export function planWaypointRoadRoute(
             guideTermination: termination,
             midlineProfile,
             natural: naturalPlan ?? undefined,
+            exclusionCircles: options.exclusionCircles,
+            exclusionMargin: options.exclusionMargin,
           },
         )
       : traceOfficialScenicNaturalRoad(
@@ -2147,6 +2214,8 @@ export function planWaypointRoadRoute(
             guideTermination: 'boundary',
             midlineProfile,
             natural: naturalPlan ?? undefined,
+            exclusionCircles: options.exclusionCircles,
+            exclusionMargin: options.exclusionMargin,
           },
         )
     if (!traced.complete && guide && !naturalPlan) {
@@ -2195,6 +2264,8 @@ export function planWaypointRoadRoute(
               midlineProfile,
               natural: naturalPlan,
               initialHeadingRad: guideTail.heading,
+              exclusionCircles: options.exclusionCircles,
+              exclusionMargin: options.exclusionMargin,
             },
           )
         : null
@@ -2210,6 +2281,8 @@ export function planWaypointRoadRoute(
             maxCrossSlope: SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope * 0.9,
             crossSlopeWeight: 18,
             waypointTolerance: options.waypointTolerance,
+            exclusionCircles: options.exclusionCircles,
+            exclusionMargin: options.exclusionMargin,
           })
         : null
       const fullFallback = fullGuide && !fullGuide.failureReason
@@ -2312,10 +2385,37 @@ export function planWaypointRoadRoute(
       )
       smoothingFallback = smoothing.smoothingFallback
       smoothingFailureReason = smoothing.failureReason
-      result = {
-        ...result,
-        nodes: smoothing.nodes,
-        length: roadNodesLength(smoothing.nodes),
+      if (roadNodesHitExclusion(
+        smoothing.nodes,
+        options.exclusionCircles,
+        options.exclusionMargin,
+      )) {
+        smoothingFallback = true
+        smoothingFailureReason = 'blocked-by-exclusion-zone'
+      } else {
+        result = {
+          ...result,
+          nodes: smoothing.nodes,
+          length: roadNodesLength(smoothing.nodes),
+        }
+      }
+    }
+    if (
+      guide
+      && roadNodesHitExclusion(
+        result.nodes,
+        options.exclusionCircles,
+        options.exclusionMargin,
+      )
+    ) {
+      const guideFallback = createGuideFallbackRoute(grid, guide.points)
+      if (guideFallback.complete && guideFallback.nodes.length >= 2) {
+        result = {
+          ...result,
+          ...guideFallback,
+        }
+        smoothingFallback = true
+        smoothingFailureReason = 'blocked-by-exclusion-zone'
       }
     }
     let terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
@@ -2357,7 +2457,14 @@ export function planWaypointRoadRoute(
         options.maximumHeadingChangeRad ?? Math.PI,
         termination === 'loop',
       )
-      if (repaired) {
+      if (
+        repaired
+        && !roadNodesHitExclusion(
+          repaired.nodes,
+          options.exclusionCircles,
+          options.exclusionMargin,
+        )
+      ) {
         result = {
           ...result,
           nodes: repaired.nodes,
@@ -2428,14 +2535,22 @@ export function planWaypointRoadRoute(
       waypoints,
       effectiveWaypointTolerance,
     )
-    const failureReason = terminationResult?.failureReason
-      ?? (
-        stats.passed !== waypoints.length
-        || stats.maxError > effectiveWaypointTolerance + 1e-4
-          ? 'waypoint-missed'
-          : result.failureReason
-      )
-    const complete = result.complete
+    const exclusionBlocked = roadNodesHitExclusion(
+      result.nodes,
+      options.exclusionCircles,
+      options.exclusionMargin,
+    )
+    const failureReason = exclusionBlocked
+      ? 'blocked-by-exclusion-zone'
+      : terminationResult?.failureReason
+        ?? (
+          stats.passed !== waypoints.length
+          || stats.maxError > effectiveWaypointTolerance + 1e-4
+            ? 'waypoint-missed'
+            : result.failureReason
+        )
+    const complete = !exclusionBlocked
+      && result.complete
       && !terminationResult?.failureReason
       && stats.passed === waypoints.length
       && stats.maxError <= effectiveWaypointTolerance + 1e-4
@@ -2642,10 +2757,36 @@ export function planWaypointRoadRoute(
     )
     smoothingFallback = smoothing.smoothingFallback
     smoothingFailureReason = smoothing.failureReason
-    result = {
-      ...result,
-      nodes: smoothing.nodes,
-      length: roadNodesLength(smoothing.nodes),
+    if (roadNodesHitExclusion(
+      smoothing.nodes,
+      options.exclusionCircles,
+      options.exclusionMargin,
+    )) {
+      smoothingFallback = true
+      smoothingFailureReason = 'blocked-by-exclusion-zone'
+    } else {
+      result = {
+        ...result,
+        nodes: smoothing.nodes,
+        length: roadNodesLength(smoothing.nodes),
+      }
+    }
+  }
+  if (
+    roadNodesHitExclusion(
+      result.nodes,
+      options.exclusionCircles,
+      options.exclusionMargin,
+    )
+  ) {
+    const guideFallback = createGuideFallbackRoute(grid, guide)
+    if (guideFallback.complete && guideFallback.nodes.length >= 2) {
+      result = {
+        ...result,
+        ...guideFallback,
+      }
+      smoothingFallback = true
+      smoothingFailureReason = 'blocked-by-exclusion-zone'
     }
   }
   let terrain = summarizeScenicRoadTerrain(grid, result.nodes, {
@@ -2683,7 +2824,14 @@ export function planWaypointRoadRoute(
       options.maximumHeadingChangeRad ?? Math.PI,
       options.termination === 'loop',
     )
-    if (repaired) {
+    if (
+      repaired
+      && !roadNodesHitExclusion(
+        repaired.nodes,
+        options.exclusionCircles,
+        options.exclusionMargin,
+      )
+    ) {
       result = {
         ...result,
         nodes: repaired.nodes,
@@ -2771,6 +2919,17 @@ export function planWaypointRoadRoute(
     failureReason = 'reached-route-start'
   } else if (complete && options.termination === 'dead-end') {
     failureReason = 'reached-route-end'
+  }
+  if (
+    complete
+    && roadNodesHitExclusion(
+      result.nodes,
+      options.exclusionCircles,
+      options.exclusionMargin,
+    )
+  ) {
+    complete = false
+    failureReason = 'blocked-by-exclusion-zone'
   }
   return {
     ...result,

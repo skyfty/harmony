@@ -19057,7 +19057,15 @@ export const useSceneStore = defineStore('scene', {
       const currentProps = component.props as Partial<ProceduralLandscapeComponentProps> | undefined
       const currentRoad = (currentProps?.road ?? {}) as Record<string, unknown>
       const generatedRoute = currentProps?.road?.generatedRoute
-      if (!generatedRoute || generatedRoute.centerline?.pointsXZ.length) {
+      if (!generatedRoute) {
+        return false
+      }
+      const currentCenterline = generatedRoute.centerline
+      if (
+        currentCenterline?.pointsXZ.length
+        && (currentCenterline.exclusionSignature ?? '')
+          === (centerline.exclusionSignature ?? '')
+      ) {
         return false
       }
       return this.updateNodeComponentProps(
@@ -19072,6 +19080,7 @@ export const useSceneStore = defineStore('scene', {
                 pointsXZ: [...centerline.pointsXZ],
                 authoringSampleStep: centerline.authoringSampleStep,
                 authoringCellSize: centerline.authoringCellSize,
+                exclusionSignature: centerline.exclusionSignature ?? '',
               },
             },
           },

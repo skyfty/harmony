@@ -13,6 +13,7 @@ import {
   type RoadStyleProfile,
 } from './roadStyle'
 import type { RoadTraceNode } from './roadTrace'
+import type { LandscapeExclusionCircle } from './exclusion'
 
 /**
  * 官方路侧墙体（`WallController` + 各生成器）的平台无关移植，与
@@ -399,6 +400,136 @@ export function computeWallSegments(
 
   segments.sort((a, b) => (a.startAlong - b.startAlong) || (a.side - b.side))
   return segments
+}
+
+function wallSampleInsideExclusion(
+  point: WallSample,
+  circles: ReadonlyArray<LandscapeExclusionCircle>,
+  margin: number,
+): boolean {
+  for (const circle of circles) {
+    const radius = circle.radius + margin
+    const dx = point.x - circle.centerX
+    const dz = point.z - circle.centerZ
+    if (dx * dx + dz * dz <= radius * radius + 1e-9) {
+      return true
+    }
+  }
+  return false
+}
+
+function lerpWallSample(
+  from: WallSample,
+  to: WallSample,
+  t: number,
+): WallSample {
+  const mix = (a: number, b: number): number => a + (b - a) * t
+  return {
+    x: mix(from.x, to.x),
+    z: mix(from.z, to.z),
+    roadY: mix(from.roadY, to.roadY),
+    groundY: mix(from.groundY, to.groundY),
+    nx: mix(from.nx, to.nx),
+    nz: mix(from.nz, to.nz),
+    rotation: mix(from.rotation, to.rotation),
+    u: mix(from.u, to.u),
+    shadow: mix(from.shadow, to.shadow),
+    jitterHeight: mix(from.jitterHeight, to.jitterHeight),
+  }
+}
+
+function findWallExclusionBoundary(
+  outside: WallSample,
+  inside: WallSample,
+  circles: ReadonlyArray<LandscapeExclusionCircle>,
+  margin: number,
+): WallSample {
+  let outsideT = 0
+  let insideT = 1
+  for (let iteration = 0; iteration < 20; iteration += 1) {
+    const t = (outsideT + insideT) * 0.5
+    const sample = lerpWallSample(outside, inside, t)
+    if (wallSampleInsideExclusion(sample, circles, margin)) {
+      insideT = t
+    } else {
+      outsideT = t
+    }
+  }
+  return lerpWallSample(outside, inside, outsideT)
+}
+
+/**
+ * Split generated wall runs at circular keep-out areas. Boundary vertices are
+ * projected onto the circle by bisection so fences and wall caps end cleanly
+ * outside the protected model instead of stopping at the next 2m sample.
+ */
+export function clipWallSegmentsToExclusions(
+  segments: ReadonlyArray<WallSegment>,
+  circles: ReadonlyArray<LandscapeExclusionCircle>,
+  margin = 0.5,
+): WallSegment[] {
+  if (!circles.length) {
+    return segments.slice()
+  }
+  const safeMargin = Math.max(0, margin)
+  const output: WallSegment[] = []
+  for (const segment of segments) {
+    if (segment.points.length < 2) {
+      continue
+    }
+    const span = Math.max(1e-3, segment.endAlong - segment.startAlong)
+    const denominator = Math.max(1, segment.points.length - 1)
+    let run: WallSample[] = []
+    let runStartOrdinal = 0
+
+    const finishRun = (endOrdinal: number): void => {
+      if (run.length < 2) {
+        run = []
+        return
+      }
+      output.push({
+        ...segment,
+        startAlong: segment.startAlong + span * (runStartOrdinal / denominator),
+        endAlong: segment.startAlong + span * (endOrdinal / denominator),
+        points: run,
+      })
+      run = []
+    }
+
+    for (let index = 0; index < segment.points.length; index += 1) {
+      const current = segment.points[index]!
+      const currentInside = wallSampleInsideExclusion(current, circles, safeMargin)
+      const previous = index > 0 ? segment.points[index - 1]! : null
+      const previousInside = previous
+        ? wallSampleInsideExclusion(previous, circles, safeMargin)
+        : false
+
+      if (!currentInside) {
+        if (previousInside && previous) {
+          runStartOrdinal = index - 1 + 0.999
+          run = [findWallExclusionBoundary(current, previous, circles, safeMargin)]
+          runStartOrdinal = index - 1
+        } else if (!previous) {
+          runStartOrdinal = 0
+        }
+        const last = run[run.length - 1]
+        if (!last || Math.hypot(last.x - current.x, last.z - current.z) > 1e-4) {
+          run.push(current)
+        }
+      } else if (!previousInside && previous) {
+        const boundary = findWallExclusionBoundary(previous, current, circles, safeMargin)
+        const last = run[run.length - 1]
+        if (!last || Math.hypot(last.x - boundary.x, last.z - boundary.z) > 1e-4) {
+          run.push(boundary)
+        }
+        finishRun(index - 1 + 0.999)
+      }
+    }
+    if (run.length >= 2) {
+      finishRun(segment.points.length - 1)
+    }
+  }
+  return output
 }
 
 function samplePoints(

@@ -2,6 +2,10 @@ import * as THREE from 'three'
 import { SLOWROADS_SKY_COLOR } from '../slowroads/core/environment'
 import { injectSlowroadsFog } from '../slowroads/render/fogInjection'
 import { getSlowroadsWaterEnvironment } from '../slowroads/render/environmentRuntime'
+import {
+  landscapeExclusionSignature,
+  type LandscapeExclusionCircle,
+} from './exclusion'
 
 /**
  * 水面平面（slowroads-lab `lab/water.ts` 移植）。
@@ -18,8 +22,11 @@ import { getSlowroadsWaterEnvironment } from '../slowroads/render/environmentRun
 export interface WaterPlaneOptions {
   /** 平面尺寸（米）——按地形水平包围盒放宽。 */
   worldSize: number
+  centerX: number
+  centerZ: number
   waterLevel: number
   waves: THREE.Texture
+  exclusionCircles?: ReadonlyArray<LandscapeExclusionCircle>
 }
 
 export interface WaterPlaneHandle {
@@ -30,6 +37,7 @@ export interface WaterPlaneHandle {
   setWaterLevel(level: number): void
   /** 换季换水波贴图（幂等；同一贴图重复下发无副作用）。 */
   setWavesTexture(texture: THREE.Texture): void
+  setExclusionCircles(circles: ReadonlyArray<LandscapeExclusionCircle>): void
   /** 每帧调用：同步环境快照（水色 / 冻水 / 时间 / 太阳高光）。 */
   update(): void
   setVisible(visible: boolean): void
@@ -103,8 +111,62 @@ void main() {
 }
 `
 
+function createWaterGeometry(
+  worldSize: number,
+  centerX: number,
+  centerZ: number,
+  exclusionCircles: ReadonlyArray<LandscapeExclusionCircle>,
+): THREE.ShapeGeometry {
+  const half = worldSize * 0.5
+  const shape = new THREE.Shape()
+  shape.moveTo(-half, -half)
+  shape.lineTo(half, -half)
+  shape.lineTo(half, half)
+  shape.lineTo(-half, half)
+  shape.closePath()
+
+  for (const circle of exclusionCircles) {
+    const localX = circle.centerX - centerX
+    // ShapeGeometry is authored in XY, then rotated -90 degrees around X.
+    // A world +Z offset therefore maps to local -Y.
+    const localY = -(circle.centerZ - centerZ)
+    if (
+      !Number.isFinite(localX)
+      || !Number.isFinite(localY)
+      || !Number.isFinite(circle.radius)
+      || circle.radius <= 0
+      || Math.abs(localX) + circle.radius >= half
+      || Math.abs(localY) + circle.radius >= half
+    ) {
+      continue
+    }
+    const hole = new THREE.Path()
+    const segments = Math.max(32, Math.min(128, Math.ceil(circle.radius * 2)))
+    for (let index = 0; index < segments; index += 1) {
+      const angle = -(index / segments) * Math.PI * 2
+      const x = localX + Math.cos(angle) * circle.radius
+      const y = localY + Math.sin(angle) * circle.radius
+      if (index === 0) {
+        hole.moveTo(x, y)
+      } else {
+        hole.lineTo(x, y)
+      }
+    }
+    hole.closePath()
+    shape.holes.push(hole)
+  }
+  return new THREE.ShapeGeometry(shape, 1)
+}
+
 export function createWaterPlane(options: WaterPlaneOptions): WaterPlaneHandle {
-  const geometry = new THREE.PlaneGeometry(options.worldSize, options.worldSize, 1, 1)
+  let exclusionCircles = (options.exclusionCircles ?? []).slice()
+  let exclusionSignature = landscapeExclusionSignature(exclusionCircles)
+  let geometry = createWaterGeometry(
+    options.worldSize,
+    options.centerX,
+    options.centerZ,
+    exclusionCircles,
+  )
   const waves = options.waves
   waves.wrapS = THREE.RepeatWrapping
   waves.wrapT = THREE.RepeatWrapping
@@ -134,6 +196,8 @@ export function createWaterPlane(options: WaterPlaneOptions): WaterPlaneHandle {
 
   const mesh = new THREE.Mesh(geometry, material)
   mesh.rotation.x = -Math.PI / 2
+  mesh.position.x = options.centerX
+  mesh.position.z = options.centerZ
   mesh.position.y = options.waterLevel
   mesh.name = 'slowroads-water'
   mesh.receiveShadow = false
@@ -156,6 +220,23 @@ export function createWaterPlane(options: WaterPlaneOptions): WaterPlaneHandle {
       texture.wrapT = THREE.RepeatWrapping
       material.uniforms.uWaves!.value = texture
       material.needsUpdate = true
+    },
+    setExclusionCircles(circles: ReadonlyArray<LandscapeExclusionCircle>): void {
+      const nextSignature = landscapeExclusionSignature(circles)
+      if (nextSignature === exclusionSignature) {
+        return
+      }
+      exclusionCircles = circles.slice()
+      exclusionSignature = nextSignature
+      const nextGeometry = createWaterGeometry(
+        options.worldSize,
+        options.centerX,
+        options.centerZ,
+        exclusionCircles,
+      )
+      mesh.geometry = nextGeometry
+      geometry.dispose()
+      geometry = nextGeometry
     },
     update(): void {
       const state = getSlowroadsWaterEnvironment()

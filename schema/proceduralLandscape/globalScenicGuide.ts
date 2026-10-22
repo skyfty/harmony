@@ -6,6 +6,12 @@ import {
 import { smoothPlanarCenterline } from './centerlineBezier'
 import type { RoadWaypoint } from './roadWaypoints'
 import type { TerrainHeightGrid } from './terrainSampler'
+import {
+  isPointExcluded,
+  polylineIntersectsExclusion,
+  segmentIntersectsExclusion,
+  type LandscapeExclusionCircle,
+} from './exclusion'
 
 const MAX_PLANNING_CELLS_PER_AXIS = 2048
 const MIN_PLANNING_CELL_SIZE = 10
@@ -39,6 +45,10 @@ export interface GlobalScenicGuideOptions {
   crossSlopeWeight?: number
   maxExpandedStates?: number
   waypointTolerance?: number
+  /** Hard world-space keep-out circles for the road centerline. */
+  exclusionCircles?: ReadonlyArray<LandscapeExclusionCircle>
+  /** Road width / shoulder / grading clearance added to every exclusion radius. */
+  exclusionMargin?: number
   /** When false, a boundary termination stops at the final required waypoint. */
   extendToBoundary?: boolean
 }
@@ -354,6 +364,24 @@ function runGuideLegSearch(
     ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.maxCrossSlope
   const preferredGrade = options.preferredGrade
     ?? SLOWROADS_SCENIC_ROAD_CONSTRAINTS.preferredGrade
+  const exclusionCircles = options.exclusionCircles ?? []
+  const exclusionMargin = Math.max(0, options.exclusionMargin ?? 0)
+  if (
+    isPointExcluded(start.x, start.z, exclusionCircles, exclusionMargin)
+    || (
+      end
+      && isPointExcluded(end.x, end.z, exclusionCircles, exclusionMargin)
+    )
+  ) {
+    return {
+      points: null,
+      expanded: 0,
+      budgetExceeded: false,
+      unreachable: true,
+      maxDetourDistance: 0,
+      detourRadiusExpanded: false,
+    }
+  }
   const startCell = resolveAnchorCell(planning, start, maxGrade)
   const endCell = end
     ? resolveAnchorCell(planning, end, maxGrade)
@@ -455,9 +483,24 @@ function runGuideLegSearch(
       if (closed[nextIndex]) {
         continue
       }
+      const nextX = planning.minX + nextCol * planning.cellSize
+      const nextZ = planning.minZ + nextRow * planning.cellSize
+      const currentX = planning.minX + col * planning.cellSize
+      const currentZ = planning.minZ + row * planning.cellSize
+      if (
+        isPointExcluded(nextX, nextZ, exclusionCircles, exclusionMargin)
+        || segmentIntersectsExclusion(
+          currentX,
+          currentZ,
+          nextX,
+          nextZ,
+          exclusionCircles,
+          exclusionMargin,
+        )
+      ) {
+        continue
+      }
       if (end && maxLateralDistance != null) {
-        const nextX = planning.minX + nextCol * planning.cellSize
-        const nextZ = planning.minZ + nextRow * planning.cellSize
         const chordX = end.x - start.x
         const chordZ = end.z - start.z
         const chordLengthSq = chordX * chordX + chordZ * chordZ
@@ -778,7 +821,12 @@ function guideValid(
   points: ReadonlyArray<Vec2>,
   maxGrade: number,
   maxCrossSlope: number,
+  exclusionCircles: ReadonlyArray<LandscapeExclusionCircle> = [],
+  exclusionMargin = 0,
 ): boolean {
+  if (polylineIntersectsExclusion(points, exclusionCircles, exclusionMargin)) {
+    return false
+  }
   for (let index = 1; index < points.length; index += 1) {
     if (!guideSegmentValid(
       grid,
@@ -971,6 +1019,8 @@ function prepareGuide(
         points,
         maxGrade * 1.08,
         maxCrossSlope * 1.08,
+        options.exclusionCircles ?? [],
+        Math.max(0, options.exclusionMargin ?? 0),
       )) {
         accepted = { points, jointIndices }
         break
@@ -990,6 +1040,8 @@ function prepareGuide(
       rounded,
       maxGrade * 1.08,
       maxCrossSlope * 1.08,
+      options.exclusionCircles ?? [],
+      Math.max(0, options.exclusionMargin ?? 0),
     )) {
       accepted = { points: rounded, jointIndices }
       break
@@ -999,6 +1051,8 @@ function prepareGuide(
       points,
       maxGrade * 1.08,
       maxCrossSlope * 1.08,
+      options.exclusionCircles ?? [],
+      Math.max(0, options.exclusionMargin ?? 0),
     )) {
       accepted = { points, jointIndices }
       break
@@ -1018,6 +1072,8 @@ function prepareGuide(
         bezier,
         maxGrade * 1.08,
         maxCrossSlope * 1.08,
+        options.exclusionCircles ?? [],
+        Math.max(0, options.exclusionMargin ?? 0),
       )) {
         return bezier
       }

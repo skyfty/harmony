@@ -423,6 +423,7 @@ import {
   resolveViewPointComponentProps,
   resolveViewPointWorldCameraPose,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+  LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
 } from '@schema/components'
 
 import type {
@@ -1130,6 +1131,7 @@ let statsPanelIndex = 0
 let stopInstancedMeshSubscription: (() => void) | null = null
 let stopBillboardMeshSubscription: (() => void) | null = null
 let gridHighlight: THREE.Group | null = null
+let primaryLandscapeExclusionRing: THREE.LineLoop | null = null
 let pendingEnvironmentSettings: EnvironmentSettings | null = null
 let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null
 let slowroadsAmbientLight: THREE.AmbientLight | null = null
@@ -15356,6 +15358,8 @@ function initScene() {
   if (gridHighlight) {
     scene.add(gridHighlight)
   }
+  primaryLandscapeExclusionRing = createLandscapeExclusionRing()
+  scene.add(primaryLandscapeExclusionRing)
   // 编辑器辅助物（网格/坐标轴/选择轮廓/顶点提示/笔刷/预览）不参与 Cineon 色调映射，
   // 保持 UI 颜色与亮度恒定（景观与场景物体按官方 Cineon 渲染）。
   for (const helper of [
@@ -15372,6 +15376,7 @@ function initScene() {
     wallDoorSelectionHighlightGroup,
     vertexOverlayGroup,
     gridHighlight,
+    primaryLandscapeExclusionRing,
   ]) {
     markHelperMaterialsUntoned(helper)
   }
@@ -15951,6 +15956,15 @@ function disposeScene() {
     })
     gridHighlight = null
   }
+  if (primaryLandscapeExclusionRing) {
+    primaryLandscapeExclusionRing.removeFromParent()
+    primaryLandscapeExclusionRing.geometry.dispose()
+    const materials = Array.isArray(primaryLandscapeExclusionRing.material)
+      ? primaryLandscapeExclusionRing.material
+      : [primaryLandscapeExclusionRing.material]
+    materials.forEach((material) => material?.dispose?.())
+    primaryLandscapeExclusionRing = null
+  }
 
   terrainGridController.dispose()
   terrainGridHelper.removeFromParent()
@@ -16050,6 +16064,35 @@ function createGridHighlight() {
   return group
 }
 
+function createLandscapeExclusionRing(): THREE.LineLoop {
+  const segments = 96
+  const positions = new Float32Array(segments * 3)
+  for (let index = 0; index < segments; index += 1) {
+    const angle = (index / segments) * Math.PI * 2
+    positions[index * 3] = Math.cos(angle)
+    positions[index * 3 + 1] = Math.sin(angle)
+    positions[index * 3 + 2] = 0
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  const material = new THREE.LineBasicMaterial({
+    color: 0x66e39a,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+  })
+  const ring = new THREE.LineLoop(geometry, material)
+  ring.name = 'LandscapeExclusionRing'
+  ring.rotation.x = -Math.PI / 2
+  ring.renderOrder = 4
+  ring.visible = false
+  // Editor-only guidance must never intercept viewport picking.
+  ring.raycast = () => {}
+  return ring
+}
+
 function createSelectionIndicator(): THREE.Group {
   const group = new THREE.Group()
   group.name = 'SelectionIndicator'
@@ -16131,6 +16174,7 @@ function ensureSelectionIndicator(nodeId: string): THREE.Group | null {
     group = createSelectionIndicator()
     selectionHighlights.set(nodeId, group)
   }
+  group.userData.nodeId = nodeId
   if (group.parent !== scene) {
     scene.add(group)
   }
@@ -16251,6 +16295,12 @@ function updateSelectionHighlights() {
   if (!scene) {
     return
   }
+
+  const primaryId = props.selectedNodeId ?? sceneStore.selectedNodeId ?? null
+  const primaryObject = primaryId && !sceneStore.isNodeSelectionLocked(primaryId)
+    ? objectMap.get(primaryId) ?? null
+    : null
+  updatePrimaryLandscapeExclusionRing(primaryObject)
 
   selectedIds.forEach((id) => {
     const object = objectMap.get(id)
@@ -16880,6 +16930,39 @@ function updateGridHighlightFromObject(object: THREE.Object3D | null) {
   const width = Math.max(gridHighlightSizeHelper.x + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
   const depth = Math.max(gridHighlightSizeHelper.z + GRID_HIGHLIGHT_PADDING * 2, GRID_HIGHLIGHT_MIN_SIZE)
   updateGridHighlight(gridHighlightPositionHelper, { width, depth })
+}
+
+function updatePrimaryLandscapeExclusionRing(object: THREE.Object3D | null): void {
+  if (!primaryLandscapeExclusionRing) {
+    return
+  }
+  const nodeId = props.selectedNodeId ?? sceneStore.selectedNodeId ?? null
+  const component = nodeId
+    ? resolveSceneNodeById(nodeId)?.components?.[LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE]
+    : null
+  const radius = Number(component?.props?.radius)
+  if (
+    !object
+    || !component?.enabled
+    || !Number.isFinite(radius)
+    || radius <= 0
+  ) {
+    primaryLandscapeExclusionRing.visible = false
+    return
+  }
+  object.updateMatrixWorld(true)
+  object.getWorldPosition(gridHighlightPositionHelper)
+  setBoundingBoxFromObject(object, gridHighlightBoundingBox)
+  const ringWorldY = gridHighlightBoundingBox.isEmpty()
+    ? gridHighlightPositionHelper.y
+    : gridHighlightBoundingBox.min.y
+  primaryLandscapeExclusionRing.position.set(
+    gridHighlightPositionHelper.x,
+    ringWorldY + 0.04,
+    gridHighlightPositionHelper.z,
+  )
+  primaryLandscapeExclusionRing.scale.setScalar(radius)
+  primaryLandscapeExclusionRing.visible = true
 }
 
 function restoreGridHighlightForSelection() {
@@ -25195,12 +25278,14 @@ function updateSelectionPivotObject(primaryId: string | null, tool: EditorTool):
 
 function attachSelection(nodeId: string | null, tool: EditorTool = props.activeTool) {
   if (rigidbodyColliderEditActive.value) {
+    updatePrimaryLandscapeExclusionRing(null)
     return
   }
   const effectiveTool = getSafeTransformTool(tool)
   const primaryId = nodeId ?? sceneStore.selectedNodeId ?? null
   const locked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const target = !locked && primaryId ? (objectMap.get(primaryId) ?? null) : null
+  updatePrimaryLandscapeExclusionRing(target)
   syncLandformEditorVisibility()
   updateOutlineSelectionTargets()
 
