@@ -54,7 +54,9 @@ import {
   type FarForestRingSpec,
 } from '@schema/proceduralLandscape/farForest'
 import {
+  AUTO_WATER_FLOOD_FRACTION,
   computeWaterFloodStats,
+  resolveAutoWaterLevel,
   resolveWaterLevelForFloodFraction,
   WATER_FLOOD_VISIBLE_FRACTION,
 } from '@schema/proceduralLandscape/waterStats'
@@ -1537,13 +1539,37 @@ describe('water flood stats', () => {
     expect(higher).toBeGreaterThan(level!)
   })
 
+  it('uses an automatic visible waterline for new and legacy zero-offset scenes', () => {
+    const grid = createSlopedGrid()
+    const level = resolveAutoWaterLevel(grid)
+    const stats = computeWaterFloodStats(grid, level)
+    expect(AUTO_WATER_FLOOD_FRACTION).toBe(0.03)
+    expect(stats.floodedFraction).toBeGreaterThan(0.02)
+    expect(stats.floodedFraction).toBeLessThan(0.05)
+    expect(clampProceduralLandscapeProps({}).water.levelMode).toBe('auto')
+    expect(clampProceduralLandscapeProps({
+      water: { enabled: true, levelOffset: 0 },
+    }).water.levelMode).toBe('auto')
+    expect(clampProceduralLandscapeProps({
+      water: { enabled: true, levelOffset: 12 },
+    }).water.levelMode).toBe('manual')
+  })
+
   it('widens the waterline offset range for real terrains', () => {
-    const wide = clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: 250 } })
+    const wide = clampProceduralLandscapeProps({
+      water: { enabled: true, levelMode: 'manual', levelOffset: 250 },
+    })
     expect(wide.water.levelOffset).toBe(250)
-    expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: 5000 } }).water.levelOffset).toBe(1000)
-    expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: -5000 } }).water.levelOffset).toBe(-1000)
+    expect(clampProceduralLandscapeProps({
+      water: { enabled: true, levelMode: 'manual', levelOffset: 5000 },
+    }).water.levelOffset).toBe(1000)
+    expect(clampProceduralLandscapeProps({
+      water: { enabled: true, levelMode: 'manual', levelOffset: -5000 },
+    }).water.levelOffset).toBe(-1000)
     // 旧文档里的 ±50m 夹紧会把大地形的水线偏移吃掉（水位永远贴近最低点）。
-    expect(clampProceduralLandscapeProps({ water: { enabled: true, levelOffset: 120 } }).water.levelOffset).toBe(120)
+    expect(clampProceduralLandscapeProps({
+      water: { enabled: true, levelMode: 'manual', levelOffset: 120 },
+    }).water.levelOffset).toBe(120)
   })
 })
 

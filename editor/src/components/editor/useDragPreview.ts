@@ -18,7 +18,7 @@ export type DragPreviewController = {
   group: THREE.Group
   getLastPoint: () => THREE.Vector3 | null
   setPosition: (point: THREE.Vector3 | null) => void
-  prepare: (assetId: string) => void
+  prepare: (assetId: string) => Promise<boolean>
   prepareObject: (previewId: string, object: THREE.Object3D) => void
   dispose: (cancelLoad?: boolean) => void
 }
@@ -127,6 +127,7 @@ export function useDragPreview(options: Options): DragPreviewController {
   let dragPreviewObject: THREE.Object3D | null = null
   let dragPreviewAssetId: string | null = null
   let pendingPreviewAssetId: string | null = null
+  let pendingPreviewPromise: Promise<boolean> | null = null
   let dragPreviewLoadToken = 0
   let lastDragPoint: THREE.Vector3 | null = null
   let activePrefabHandle: PrefabPreviewHandle | null = null
@@ -154,6 +155,7 @@ export function useDragPreview(options: Options): DragPreviewController {
     if (cancelLoad) {
       dragPreviewLoadToken += 1
       pendingPreviewAssetId = null
+      pendingPreviewPromise = null
     }
     lastDragPoint = null
     clearObject(true)
@@ -222,6 +224,7 @@ export function useDragPreview(options: Options): DragPreviewController {
       dragPreviewObject = previewObject
       dragPreviewAssetId = previewId
       group.add(previewObject)
+      setDragPreviewReady(previewId, true)
 
       if (lastDragPoint) {
         group.position.copy(lastDragPoint)
@@ -422,11 +425,11 @@ export function useDragPreview(options: Options): DragPreviewController {
     }
   }
 
-  const prepare = (assetId: string) => {
+  const prepare = (assetId: string): Promise<boolean> => {
     const asset = findAssetMetadata(assetId, options.getProjectTree())
     if (!asset || (asset.type !== 'model' && asset.type !== 'mesh' && asset.type !== 'prefab' && asset.type !== 'lod' && asset.type !== 'dice')) {
       dispose(true)
-      return
+      return Promise.resolve(false)
     }
 
     if (dragPreviewAssetId === asset.id && dragPreviewObject) {
@@ -434,26 +437,35 @@ export function useDragPreview(options: Options): DragPreviewController {
         group.position.copy(lastDragPoint)
         group.visible = true
       }
-      return
+      return Promise.resolve(true)
     }
 
-    if (pendingPreviewAssetId === asset.id) {
-      return
+    if (pendingPreviewAssetId === asset.id && pendingPreviewPromise) {
+      return pendingPreviewPromise
     }
 
+    let loadPromise: Promise<boolean>
     if (asset.type === 'prefab') {
       if (isBuildPresetAsset(asset)) {
         dispose(true)
-        return
+        return Promise.resolve(false)
       }
-      void loadForPrefab(asset)
+      loadPromise = loadForPrefab(asset)
     } else if (asset.type === 'lod') {
-      void loadForLodPreset(asset)
+      loadPromise = loadForLodPreset(asset)
     } else if (asset.type === 'dice') {
-      void loadForDicePreset(asset)
+      loadPromise = loadForDicePreset(asset)
     } else {
-      void loadForAsset(asset)
+      loadPromise = loadForAsset(asset)
     }
+
+    pendingPreviewPromise = loadPromise
+    void loadPromise.finally(() => {
+      if (pendingPreviewPromise === loadPromise) {
+        pendingPreviewPromise = null
+      }
+    })
+    return loadPromise
   }
 
   return {

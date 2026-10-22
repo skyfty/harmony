@@ -24,6 +24,8 @@ export interface WaterFloodStatsOptions {
 }
 
 export const WATER_FLOOD_VISIBLE_FRACTION = 0.0005
+/** 自动水线目标：约 3% 地形低洼区被水面覆盖。 */
+export const AUTO_WATER_FLOOD_FRACTION = 0.03
 
 function resolveStride(grid: TerrainHeightGrid, options: WaterFloodStatsOptions | undefined): number {
   const requested = Number.isFinite(options?.maxSamplesPerAxis)
@@ -106,4 +108,16 @@ export function resolveWaterLevelForFloodFraction(
   const target = clamp(fraction, 0, 1)
   const index = Math.min(heights.length - 1, Math.max(0, Math.floor(target * heights.length)))
   return heights[index]!
+}
+
+/** Resolve the default lowland water line for the current terrain grid. */
+export function resolveAutoWaterLevel(
+  grid: TerrainHeightGrid,
+  options?: WaterFloodStatsOptions,
+): number {
+  return resolveWaterLevelForFloodFraction(
+    grid,
+    AUTO_WATER_FLOOD_FRACTION,
+    options,
+  ) ?? grid.minY
 }

@@ -198,9 +198,15 @@ export interface ProceduralLandscapeCanopyProps {
   enabled: boolean
 }
 
-/** 水面（lab showWater）：水线 = 地形最低点 + levelOffset。 */
+export type ProceduralLandscapeWaterLevelMode = 'auto' | 'manual'
+
+/**
+ * 水面：自动模式按低洼地形比例反解水线；手动模式沿用
+ * “地形最低点 + levelOffset”的语义。
+ */
 export interface ProceduralLandscapeWaterProps {
   enabled: boolean
+  levelMode: ProceduralLandscapeWaterLevelMode
   levelOffset: number
 }
 
@@ -581,6 +587,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
     },
     water: {
       enabled: true,
+      levelMode: 'auto',
       levelOffset: 0,
     },
     walls: {
@@ -601,7 +608,10 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
 }
 
 export function clampProceduralLandscapeProps(
-  props: Partial<ProceduralLandscapeComponentProps> | null | undefined,
+  props: (
+    Omit<Partial<ProceduralLandscapeComponentProps>, 'water'>
+    & { water?: Partial<ProceduralLandscapeWaterProps> }
+  ) | null | undefined,
   fallbackNodeId = 'procedural-landscape',
 ): ProceduralLandscapeComponentProps {
   const defaults = createDefaultProceduralLandscapeProps({ id: fallbackNodeId })
@@ -653,6 +663,13 @@ export function clampProceduralLandscapeProps(
       }
     : null
   const seedValue = Math.round(clampNumber(props?.seed, defaults.seed, 0, 0xffffffff)) >>> 0
+  const inferredWaterLevelMode: ProceduralLandscapeWaterLevelMode = (
+    water?.levelMode === 'auto' || water?.levelMode === 'manual'
+      ? water.levelMode
+      : typeof water?.levelOffset === 'number' && water.levelOffset !== 0
+        ? 'manual'
+        : 'auto'
+  )
   const waypointTolerance = clampNumber(
     road?.waypointTolerance,
     defaults.road.waypointTolerance,
@@ -776,6 +793,7 @@ export function clampProceduralLandscapeProps(
     },
     water: {
       enabled: water?.enabled !== false,
+      levelMode: inferredWaterLevelMode,
       // 水线语义 = 地形最低点 + 偏移。偏移范围按真实地形放宽到 ±1000m：
       // 编辑器地形起伏可达 2000m+，旧 ±50m 无法把低地调到水面以上（看不到任何水面）。
       levelOffset: clampNumber(water?.levelOffset, defaults.water.levelOffset, -1000, 1000),

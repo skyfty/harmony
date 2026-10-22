@@ -70,6 +70,7 @@ import {
   type WorldForestScan,
 } from './worldForest'
 import {
+  resolveAutoWaterLevel,
   computeWaterFloodStats,
   WATER_FLOOD_VISIBLE_FRACTION,
   type WaterFloodStats,
@@ -184,6 +185,7 @@ import {
   type ProceduralLandscapeEnvironment,
   type ProceduralLandscapeGeneratedRouteProps,
   type ProceduralLandscapeRoadProps,
+  type ProceduralLandscapeWaterLevelMode,
   type ResolvedProceduralLandscapeQuality,
 } from './config'
 import { transformRoadWaypointsToWorld, type RoadWaypoint } from './roadWaypoints'
@@ -410,10 +412,13 @@ export interface ProceduralLandscapeRuntimeStats {
   roadbedOcclusionCount: number
   roadbedAuditSamples: number
   roadbedTriangleCount: number
-  /** 水面是否启用（水线 = 地形最低点 + water.levelOffset）。 */
+  /** 水面是否启用。 */
   waterEnabled: boolean
-  /** 当前水线（世界 Y；= 地形最低点 + water.levelOffset）。 */
+  /** 当前实际水线（世界 Y，已包含自动或手动模式）。 */
   waterLevel: number
+  waterLevelMode: ProceduralLandscapeWaterLevelMode
+  /** 压缩后的水面 DEM 深度纹理字节数。 */
+  waterDepthTextureBytes: number
   /**
    * 水线以下地形面积占比（0..1，采样统计）。
    * ≈0 表示水面与地形最低点相切、被地形整体遮住（看不到任何水面）。
@@ -484,6 +489,14 @@ export type GuideRouteSurfaceSample = {
   revision: number
 }
 
+export type ProceduralLandscapePlacementSurface = {
+  /** Monotonic revision for runtime-owned visible surface changes. */
+  revision: number
+  bounds: GuideRouteSurfaceBounds
+  /** Exact visible terrain height at a world-space XZ position. */
+  sampleHeightAt(worldX: number, worldZ: number): number | null
+}
+
 export interface ProceduralLandscapeRuntime {
   attach(host: THREE.Object3D | null): void
   setProps(props: ProceduralLandscapeComponentProps): void
@@ -519,6 +532,8 @@ export interface ProceduralLandscapeRuntime {
    * ready yet or the point lies outside the rasterized coverage).
    */
   sampleTerrainHeight(worldX: number, worldZ: number): number | null
+  /** Ready visible terrain surface used by editor asset placement. */
+  getPlacementSurface(): ProceduralLandscapePlacementSurface | null
   /** Shared road-first surface sampling used by Guide Route and AutoTour. */
   getGuideRouteSurfaceState(): GuideRouteSurfaceState
   sampleGuideRouteSurface(
@@ -602,6 +617,13 @@ export function sampleProceduralLandscapeTerrainHeight(
     return null
   }
   return runtime.sampleTerrainHeight(worldX, worldZ)
+}
+
+export function getProceduralLandscapePlacementSurface(
+  nodeId: string,
+): ProceduralLandscapePlacementSurface | null {
+  const runtime = runtimeRegistry.get(nodeId)
+  return runtime?.getPlacementSurface() ?? null
 }
 
 export function getProceduralLandscapeGuideRouteSurfaceState(
@@ -963,6 +985,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       props.quality,
     ]),
     instances: jsonKey([props.grass, props.bushes, props.quality]),
+    waterSpatial: jsonKey([props.water.levelMode, props.water.levelOffset]),
     lod: jsonKey([props.forest.nearDistance, props.forest.nearTreeRadius, props.quality]),
     uniforms: jsonKey([props.surface, props.canopy, props.wind, props.road.flattenBand, props.road.flattenStrength]),
     textureNeeds: jsonKey([
@@ -1092,6 +1115,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let nearMeshForestRevision = -1
   /** 水线诊断（世界构建时按地形直方图统计一次，水位变化时刷新淹没比例）。 */
   let waterFloodStats: WaterFloodStats | null = null
+  let cachedAutoWaterGrid: TerrainHeightGrid | null = null
+  let cachedAutoWaterLevel = 0
   /** 官方墙体网格层（Drystone / Barrier / SeaWall）与最近一次放置结果。 */
   let wallLayer: WallLayerHandle | null = null
   let wallSegments: WallSegment[] = []
@@ -1260,6 +1285,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadbedTriangleCount: 0,
     waterEnabled: false,
     waterLevel: 0,
+    waterLevelMode: props.water.levelMode,
+    waterDepthTextureBytes: 0,
     waterFloodedFraction: 0,
     viewDistanceScale: 1,
     demStatus: 'inactive',
@@ -1908,10 +1935,20 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     wallSegments = []
   }
 
-  /** 水线 = 地形最低点 + water.levelOffset（lab：高度场的固定水位）。 */
+  /**
+   * Effective water line. Auto mode targets the lowest ~3% of covered terrain;
+   * manual mode keeps the original minY + levelOffset behavior.
+   */
   function resolveWaterLevel(): number {
     if (!grid) {
       return 0
+    }
+    if (props.water.levelMode === 'auto') {
+      if (cachedAutoWaterGrid !== grid) {
+        cachedAutoWaterGrid = grid
+        cachedAutoWaterLevel = resolveAutoWaterLevel(grid, { maxSamplesPerAxis: 256 })
+      }
+      return cachedAutoWaterLevel
     }
     return grid.minY + props.water.levelOffset
   }
@@ -3138,11 +3175,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   /**
-   * 水面（lab water.ts）：世界空间水平面，水线 = 地形最低点 + water.levelOffset。
-   *
-   * 幂等：季节素材（sea_waves）尚未加载完成时**不**动已有水面（素材到达后由
-   * `applySeasonToMaterials` 再调一次补建/换贴图），避免「世界构建早于素材加载 →
-   * 水面永不创建」的竞态；尺寸没变时原地更新贴图/水位，不做重建。
+   * Slow Roads water surface: a world-space horizontal plane whose effective
+   * water line comes from either the auto lowland quantile or manual offset.
+   * The DEM depth texture gives the shader the same shoreline/depth response as
+   * the source scene without duplicating every terrain vertex.
    */
   function buildWater(): void {
     if (!grid || !props.water.enabled || !sceneRoot) {
@@ -3174,6 +3210,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const waterLevel = resolveWaterLevel()
     if (waterPlane && Math.abs(waterPlane.worldSize - size) <= 1e-3) {
       waterPlane.setWavesTexture(waves)
+      waterPlane.setTerrainGrid(grid)
       waterPlane.setWaterLevel(waterLevel)
       waterPlane.setExclusionCircles(appliedExclusionCircles)
       waterPlane.mesh.position.x = centerX
@@ -3188,6 +3225,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       centerZ,
       waterLevel,
       waves,
+      terrainGrid: grid,
       exclusionCircles: appliedExclusionCircles,
     })
     waterPlane.mesh.position.x = centerX
@@ -3197,19 +3235,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     waterPlane.setVisible(true)
   }
 
-  /**
-   * 水线诊断：统计水线以下的地形面积占比。
-   * 偏移为 0 时水线 = 地形最低点 → 水面只与最低点相切、被地形整体遮住
-   * （用户实测「看不到任何水面」），占比 ≈0 时面板给出提高水线偏移的提示。
-   */
+  /** Diagnose a manually selected water line that remains buried by terrain. */
   function refreshWaterFloodStats(): void {
     if (!grid) {
       waterFloodStats = null
       return
     }
     waterFloodStats = computeWaterFloodStats(grid, resolveWaterLevel())
-    if (props.water.enabled && waterFloodStats.floodedFraction < WATER_FLOOD_VISIBLE_FRACTION) {
-      // 水线 = 地形最低点 + 偏移：偏移 0 时水面只与最低点相切、被地形整体遮住。
+    if (
+      props.water.enabled
+      && props.water.levelMode === 'manual'
+      && waterFloodStats.floodedFraction < WATER_FLOOD_VISIBLE_FRACTION
+    ) {
       warn('water-buried-by-terrain')
     } else {
       // 调高水线偏移（或关掉水面）后这条告警不再成立，别留在面板里误导。
@@ -3341,7 +3378,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     )
     uniforms.uPlHeightMin.value = grid.minY
     uniforms.uPlHeightRange.value = Math.max(0.001, grid.maxY - grid.minY)
-    uniforms.uPlWaterLevel.value = grid.minY
     const treeLine = slowroadsTreeLineBounds(grid.minY, grid.maxY)
     uniforms.uPlTreeLineMidY.value = treeLine.midY
     uniforms.uPlTreeLineTopY.value = treeLine.topY
@@ -3384,6 +3420,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
   function applyDynamicSurfaceUniforms(): void {
     const flatten = roadFlattenParams(props)
+    // The shoreline shader must follow the same effective line as the water mesh.
+    uniforms.uPlWaterLevel.value = resolveWaterLevel()
     uniforms.uPlFlattenInner.value = flatten.innerRadius
     uniforms.uPlFlattenOuter.value = flatten.outerRadius
     uniforms.uPlFlattenStrength.value = flatten.strength
@@ -4464,6 +4502,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.roadbedTriangleCount = demRoadbedTriangleCount
     stats.waterEnabled = Boolean(waterPlane && waterPlane.mesh.visible)
     stats.waterLevel = grid ? resolveWaterLevel() : 0
+    stats.waterLevelMode = props.water.levelMode
+    stats.waterDepthTextureBytes = waterPlane?.depthTextureBytes ?? 0
     stats.waterFloodedFraction = waterFloodStats?.floodedFraction ?? 0
     stats.viewDistanceScale = appliedViewDistanceScale
   }
@@ -5028,6 +5068,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           props.quality,
         ]),
         instances: jsonKey([props.grass, props.bushes, props.quality]),
+        waterSpatial: jsonKey([props.water.levelMode, props.water.levelOffset]),
         lod: jsonKey([props.forest.nearDistance, props.forest.nearTreeRadius, props.quality]),
         uniforms: jsonKey([
           props.surface,
@@ -5060,6 +5101,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         chunkDebug: jsonKey(props.debug.showChunks),
       }
       const forestControlsChanged = keys.forest !== previousKeys.forest
+      const waterSpatialChanged = keys.waterSpatial !== previousKeys.waterSpatial
       if (forestControlsChanged) {
         resetAdaptiveState()
       }
@@ -5090,6 +5132,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (dirty.grid || dirty.world || keys.instances !== previousKeys.instances) {
         dirty.instances = true
         forceStream = true
+      }
+      if (waterSpatialChanged) {
+        releaseAllBatches()
+        dirty.instances = true
+        forceStream = true
+        if (grid && densityField) {
+          startWorldForest()
+        }
       }
       if (forestControlsChanged && grid && densityField && !dirty.world) {
         startWorldForest()
@@ -5371,6 +5421,32 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         return null
       }
       return grid.sampleHeight(worldX, worldZ)
+    },
+    getPlacementSurface(): ProceduralLandscapePlacementSurface | null {
+      if (!enabled || !grid || gridFailed) {
+        return null
+      }
+      if (usesDemTerrain() && stats.demStatus !== 'ready') {
+        return null
+      }
+      const activeGrid = grid
+      return {
+        revision: guideRouteSurfaceRevision,
+        bounds: {
+          minX: activeGrid.minX,
+          maxX: activeGrid.maxX,
+          minZ: activeGrid.minZ,
+          maxZ: activeGrid.maxZ,
+          minY: activeGrid.minY,
+          maxY: activeGrid.maxY,
+          cellSize: activeGrid.cellSize,
+        },
+        sampleHeightAt: (worldX: number, worldZ: number) => (
+          usesDemTerrain()
+            ? sampleVisibleDemSurfaceHeightAt(activeGrid, demRoadbedTarget, worldX, worldZ)
+            : activeGrid.sampleHeight(worldX, worldZ)
+        ),
+      }
     },
     getGuideRouteSurfaceState(): GuideRouteSurfaceState {
       if (!enabled) {

@@ -361,11 +361,14 @@ import { generateUuid } from '@/utils/uuid'
 import {
   getProceduralLandscapeRoadCenterlineLocal,
   getProceduralLandscapeGuideRouteSurfaceState,
+  getProceduralLandscapePlacementSurface,
+  getProceduralLandscapeStats,
   resolveProceduralLandscapeScenicWaypointLocal,
   sampleProceduralLandscapeGuideRouteSurface,
   sampleProceduralLandscapeTerrainHeight,
   setProceduralLandscapeEnvironment,
   type GuideRouteSurfaceBounds,
+  type ProceduralLandscapePlacementSurface,
 } from '@schema/proceduralLandscape/runtime'
 import {
   ROAD_WAYPOINT_SNAP_RADIUS,
@@ -381,6 +384,8 @@ import {
 } from '@schema/slowroads/render/environmentRuntime'
 import { getSharedSlowroadsAssetStore } from '@schema/slowroads/assets/assetStore'
 import { resolveViewportCameraFar } from './viewportCameraFar'
+import { PlacementSurfaceTargetIndex } from '@/utils/placementSurfaceTargetIndex'
+import { intersectRayWithPlacementHeightfield } from '@/utils/placementHeightfieldRaycast'
 import {
   componentManager,
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
@@ -4218,7 +4223,7 @@ const groundEditor = createGroundEditor({
     const ownerNodeId = typeof groundObject.userData?.nodeId === 'string' ? groundObject.userData.nodeId : ''
     if (ownerNodeId) {
       refreshPlacementSurfaceTargetsForNode(ownerNodeId)
-      placementSurfaceTargetsDirty = true
+      placementSurfaceTargetIndex.markDirty()
     }
   },
   onSculptCommitApplied: ({ groundObject, definition, affectedRegion, chunkKeys, chunkCells }: {
@@ -11596,11 +11601,14 @@ const selectionHighlightEulerHelper = new THREE.Euler(0, 0, 0, 'YXZ')
 const selectionHighlights = new Map<string, THREE.Group>()
 const outlineSelectionTargets: THREE.Object3D[] = []
 // Cached raycast targets for asset placement (mesh/model/prefab).
-// Built from scene node Object3Ds (excluding editor helpers/pick proxies) and refreshed on scene patches.
-const placementSurfaceTargets: THREE.Object3D[] = []
-const placementSurfaceTargetsByNodeId = new Map<string, THREE.Object3D[]>()
-let placementSurfaceTargetsDirty = true
-let placementSurfaceTargetsInstancedRevision = -1
+// Runtime components can append visible surfaces asynchronously, so their
+// revisions participate in cache invalidation as well as scene patches.
+const placementSurfaceTargetIndex = new PlacementSurfaceTargetIndex({
+  getObject: (nodeId) => objectMap.get(nodeId) ?? null,
+  getInstancedTargets: () => collectInstancedPickTargets(),
+  getInstancedRevision: () => instancedMeshRevision.value,
+})
+const proceduralLandscapePlacementRevisions = new Map<string, number>()
 const placementBvhCache = new WeakMap<THREE.BufferGeometry, MeshBVH>()
 const placementAcceleratedMeshes = new WeakSet<THREE.Mesh>()
 
@@ -11636,109 +11644,74 @@ function preparePlacementSurfaceRaycast(object: THREE.Object3D): void {
   }
 }
 
-function shouldIncludePlacementSurfaceCandidate(object: THREE.Object3D): boolean {
-  const userData = object.userData as Record<string, unknown> | undefined
-  if (userData?.editorOnly) {
-    return false
-  }
-  if (userData?.instancedPickProxy) {
-    return false
-  }
-
-  const candidate = object as unknown as {
-    isMesh?: boolean
-    isSkinnedMesh?: boolean
-    isInstancedMesh?: boolean
-    count?: number
-  }
-  if (candidate.isInstancedMesh) {
-    const count = typeof candidate.count === 'number' ? candidate.count : 0
-    return count > 0
-  }
-  return Boolean(candidate.isMesh || candidate.isSkinnedMesh)
-}
-
-function collectPlacementSurfaceTargetsFromObject(object: THREE.Object3D, out: THREE.Object3D[], parentVisible = true) {
-  const currentVisible = parentVisible && object.visible
-  if (!currentVisible) {
-    return
-  }
-
-  if (shouldIncludePlacementSurfaceCandidate(object)) {
-    out.push(object)
-  }
-
-  const childCount = object.children.length
-  for (let i = 0; i < childCount; i += 1) {
-    const child = object.children[i]
-    if (!child) {
-      continue
-    }
-    collectPlacementSurfaceTargetsFromObject(child, out, currentVisible)
-  }
-}
-
 function refreshPlacementSurfaceTargetsForNode(nodeId: string): void {
-  const object = objectMap.get(nodeId) ?? null
-  if (!object) {
-    if (placementSurfaceTargetsByNodeId.has(nodeId)) {
-      placementSurfaceTargetsByNodeId.delete(nodeId)
-      placementSurfaceTargetsDirty = true
-    }
-    return
-  }
-
-  const targets: THREE.Object3D[] = []
-  collectPlacementSurfaceTargetsFromObject(object, targets, true)
-
-  if (targets.length) {
-    placementSurfaceTargetsByNodeId.set(nodeId, targets)
-  } else {
-    placementSurfaceTargetsByNodeId.delete(nodeId)
-  }
-  placementSurfaceTargetsDirty = true
+  placementSurfaceTargetIndex.refreshNode(nodeId)
 }
 
 function rebuildPlacementSurfaceTargetsFull(): void {
-  placementSurfaceTargetsByNodeId.clear()
+  proceduralLandscapePlacementRevisions.clear()
+  placementSurfaceTargetIndex.rebuild(objectMap.keys())
+  syncProceduralLandscapePlacementRevisions()
+}
+
+function syncProceduralLandscapePlacementRevisions(): void {
   objectMap.forEach((_object, nodeId) => {
-    refreshPlacementSurfaceTargetsForNode(nodeId)
+    const surface = getProceduralLandscapePlacementSurface(nodeId)
+    if (!surface) {
+      if (proceduralLandscapePlacementRevisions.delete(nodeId)) {
+        refreshPlacementSurfaceTargetsForNode(nodeId)
+      }
+      return
+    }
+    if (proceduralLandscapePlacementRevisions.get(nodeId) !== surface.revision) {
+      proceduralLandscapePlacementRevisions.set(nodeId, surface.revision)
+      refreshPlacementSurfaceTargetsForNode(nodeId)
+    }
   })
-  placementSurfaceTargetsDirty = true
 }
 
 function ensurePlacementSurfaceTargetsUpToDate(): THREE.Object3D[] {
-  const instancedRevision = instancedMeshRevision.value
-  if (!placementSurfaceTargetsDirty && placementSurfaceTargetsInstancedRevision === instancedRevision) {
-    return placementSurfaceTargets
-  }
+  syncProceduralLandscapePlacementRevisions()
+  return placementSurfaceTargetIndex.ensureUpToDate()
+}
 
-  placementSurfaceTargets.length = 0
-  const seen = new Set<THREE.Object3D>()
-
-  placementSurfaceTargetsByNodeId.forEach((targets) => {
-    for (const target of targets) {
-      if (!target || seen.has(target)) {
-        continue
-      }
-      placementSurfaceTargets.push(target)
-      seen.add(target)
+function listReadyProceduralLandscapePlacementSurfaces(): Array<{
+  nodeId: string
+  surface: ProceduralLandscapePlacementSurface
+}> {
+  const surfaces: Array<{ nodeId: string; surface: ProceduralLandscapePlacementSurface }> = []
+  objectMap.forEach((_object, nodeId) => {
+    const surface = getProceduralLandscapePlacementSurface(nodeId)
+    if (surface) {
+      surfaces.push({ nodeId, surface })
     }
   })
+  return surfaces
+}
 
-  // Include instanced meshes that are managed outside the node object hierarchy.
-  const instancedTargets = collectInstancedPickTargets()
-  for (const mesh of instancedTargets) {
-    if (!mesh || seen.has(mesh)) {
-      continue
+function hasPendingProceduralLandscapePlacementSurface(): boolean {
+  const node = sceneStore.nodes
+  let pending = false
+  const visit = (nodes: SceneNode[]): void => {
+    for (const candidate of nodes) {
+      const component = candidate.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]
+      if (component?.enabled !== false && component) {
+        const status = getProceduralLandscapeStats(candidate.id)?.demStatus
+        if (status === 'idle' || status === 'loading' || status === 'building' || status === 'error') {
+          pending = true
+          return
+        }
+      }
+      if (candidate.children?.length) {
+        visit(candidate.children)
+        if (pending) {
+          return
+        }
+      }
     }
-    placementSurfaceTargets.push(mesh)
-    seen.add(mesh)
   }
-
-  placementSurfaceTargetsDirty = false
-  placementSurfaceTargetsInstancedRevision = instancedRevision
-  return placementSurfaceTargets
+  visit(node)
+  return pending
 }
 
 let nodePickerHighlight: THREE.Group | null = null
@@ -12936,23 +12909,6 @@ function computeWorldAabbBottomAlignedPoint(
   return dragPreviewAlignedPointHelper.clone()
 }
 
-function computeSpawnPointForSelectionClick(
-  event: PointerEvent,
-  assetId: string,
-  placementSideSnap: VertexSnapResult | null,
-): THREE.Vector3 {
-  const placement = computePointerDropPlacement(event)
-  const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
-  const canUsePreviewBounds = selectionPreviewActive && assetPlacementPreviewSnapshot?.assetId === assetId
-  const spawnPoint = canUsePreviewBounds
-    ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
-    : basePoint
-  if (placementSideSnap) {
-    spawnPoint.add(placementSideSnap.delta)
-  }
-  return spawnPoint
-}
-
 function clonePlacementPreviewSnapshot(snapshot: AssetPlacementPreviewSnapshot | null): AssetPlacementPreviewSnapshot | null {
   if (!snapshot) {
     return null
@@ -13013,7 +12969,12 @@ function finalizeAssetPlacementPreview(params: {
 
   dragPreviewGroup.rotation.set(0, placementPreviewYaw, 0)
 
-  const aligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint.clone()
+  const aligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
+  if (!aligned) {
+    clearAssetPlacementPreviewSnapshot()
+    dragPreviewGroup.visible = false
+    return null
+  }
   const finalPosition = aligned.clone()
   const bestSnap = snapResult?.best ?? null
   if (bestSnap?.delta) {
@@ -13042,7 +13003,7 @@ async function refreshRandomDiceSelectionPreview(assetId: string): Promise<void>
   placementPreviewYaw = 0
   clearAssetPlacementPreviewSnapshot()
   dragPreviewGroup.rotation.set(0, 0, 0)
-  dragPreview.prepare(resolved.previewAsset.id)
+  void dragPreview.prepare(resolved.previewAsset.id)
 }
 
 function isUserCreatedEmptyGroupForPlacement(selectedId: string | null, parentGroupId: string | null): boolean {
@@ -13290,7 +13251,7 @@ watch(
           // prepare preview object (use existing drag preview loader)
           try {
             clearAssetPlacementPreviewSnapshot()
-            dragPreview.prepare(previewAsset.id)
+            void dragPreview.prepare(previewAsset.id)
           } catch (e) {
             console.warn('Failed to prepare selection preview', e)
             clearAssetPlacementPreviewSnapshot()
@@ -13364,7 +13325,7 @@ watch(
         dragPreviewGroup.rotation.set(0, 0, 0)
         try {
           clearAssetPlacementPreviewSnapshot()
-          dragPreview.prepare(asset.id)
+          void dragPreview.prepare(asset.id)
         } catch (e) {
           console.warn('Failed to prepare scatter selection preview', e)
           clearAssetPlacementPreviewSnapshot()
@@ -13400,7 +13361,7 @@ watch(
           clearAssetPlacementPreviewSnapshot()
           dragPreviewGroup.rotation.set(0, 0, 0)
           if (selectionPreviewActive && selectionPreviewAssetId) {
-            dragPreview.prepare(selectionPreviewAssetId)
+            void dragPreview.prepare(selectionPreviewAssetId)
           } else {
             dragPreview.dispose()
           }
@@ -19913,17 +19874,38 @@ async function handlePointerUp(event: PointerEvent) {
           clearPlacementSideSnapMarkers()
 
           try {
+            const previewReady = await dragPreview.prepare(session.assetId)
+            if (!previewReady) {
+              throw new Error(`Asset preview is not ready for placement: ${session.assetId}`)
+            }
+            const placement = computePointerDropPlacement(event)
+            const basePoint = computePreviewPointForPlacement(placement)
+            if (!basePoint) {
+              throw new Error(`No valid terrain surface for asset placement: ${session.assetId}`)
+            }
+            dragPreviewGroup.rotation.set(0, placementPreviewYaw, 0)
+            const alignedPosition = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
+            if (!alignedPosition) {
+              throw new Error(`Asset placement bounds are unavailable: ${session.assetId}`)
+            }
+            dragPreviewGroup.position.copy(alignedPosition)
+            if (placementSideSnap) {
+              dragPreviewGroup.position.add(placementSideSnap.delta)
+            }
+            dragPreviewGroup.updateWorldMatrix(true, true)
+            setAssetPlacementPreviewSnapshot(session.assetId, session.assetId, dragPreviewGroup)
             const previewSnapshot = getAssetPlacementPreviewSnapshot(session.assetId)
-            const fallbackPosition = computeSpawnPointForSelectionClick(event, session.assetId, placementSideSnap)
+            if (!previewSnapshot) {
+              throw new Error(`Asset placement snapshot is unavailable: ${session.assetId}`)
+            }
             const parentGroupId = resolveSelectedGroupDropParent()
-            const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
-            
-            const placementAssetId = asset.type === 'dice'? previewSnapshot?.placementAssetId ?? session.assetId : session.assetId
+            const rotation = previewSnapshot.rotation
+            const placementAssetId = asset.type === 'dice' ? previewSnapshot.placementAssetId : session.assetId
             await spawnAssetFromSelectionClick({
               assetId: placementAssetId,
-              worldPosition: previewSnapshot?.worldPosition ?? fallbackPosition,
+              worldPosition: previewSnapshot.worldPosition,
               rotation,
-              scale: previewSnapshot?.scale ?? null,
+              scale: previewSnapshot.scale,
               parentGroupId,
               selectedId: props.selectedNodeId ?? null,
             })
@@ -21141,7 +21123,7 @@ type PlacementHitResult = {
   hitNodeId: string | null
 }
 
-function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } | null {
+function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string; distance: number } | null {
   const targets = ensurePlacementSurfaceTargetsUpToDate()
   if (!targets.length) {
     return null
@@ -21189,7 +21171,7 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string } 
       continue
     }
 
-    return { point: intersection.point.clone(), nodeId }
+    return { point: intersection.point.clone(), nodeId, distance: intersection.distance }
   }
 
   return null
@@ -21350,6 +21332,29 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
   return null
 }
 
+function computeProceduralLandscapePlacementSurfaceHit(): {
+  point: THREE.Vector3
+  nodeId: string
+  distance: number
+} | null {
+  let nearest: { point: THREE.Vector3; nodeId: string; distance: number } | null = null
+  for (const { nodeId, surface } of listReadyProceduralLandscapePlacementSurfaces()) {
+    const point = intersectRayWithPlacementHeightfield(
+      raycaster.ray,
+      surface.bounds,
+      surface.sampleHeightAt,
+    )
+    if (!point) {
+      continue
+    }
+    const distance = raycaster.ray.origin.distanceTo(point)
+    if (!nearest || distance < nearest.distance) {
+      nearest = { point, nodeId, distance }
+    }
+  }
+  return nearest
+}
+
 function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null {
   const groundDefinition = resolveGroundDynamicMeshDefinition()
   if (!groundDefinition) {
@@ -21473,6 +21478,15 @@ function computePreviewPointForPlacement(placement: PlacementHitResult | null): 
   const spawnPoint = placement.point.clone()
   snapVectorToGrid(spawnPoint)
 
+  const proceduralSurface = placement.hitNodeId
+    ? getProceduralLandscapePlacementSurface(placement.hitNodeId)
+    : null
+  const proceduralHeight = proceduralSurface?.sampleHeightAt(spawnPoint.x, spawnPoint.z)
+  if (typeof proceduralHeight === 'number' && Number.isFinite(proceduralHeight)) {
+    spawnPoint.y = proceduralHeight
+    return spawnPoint
+  }
+
   const groundNodeId = resolveGroundNodeIdForPlacement()
   const shouldSnapToHeightfield =
     placement.kind === 'planeFallback'
@@ -21488,7 +21502,11 @@ function computePreviewPointForPlacement(placement: PlacementHitResult | null): 
   return spawnPoint
 }
 
-function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
+function computeDropPlacement(event: {
+  clientX: number
+  clientY: number
+  altKey: boolean
+}): PlacementHitResult | null {
   if (!camera || !canvasRef.value) return null
   const rect = canvasRef.value.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) return null
@@ -21500,14 +21518,27 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
   // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
   // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
   if (!event.altKey && !isTemporaryNavigationOverrideActive()) {
+    const hasPendingProceduralSurface = hasPendingProceduralLandscapePlacementSurface()
     const surfaceHit = computePlacementSurfaceHit()
-    if (surfaceHit) {
-      const point = surfaceHit.point.clone()
+    const proceduralSurfaceHit = computeProceduralLandscapePlacementSurfaceHit()
+    const nearestSurfaceHit = !surfaceHit
+      ? proceduralSurfaceHit
+      : !proceduralSurfaceHit || surfaceHit.distance <= proceduralSurfaceHit.distance
+        ? surfaceHit
+        : proceduralSurfaceHit
+    if (nearestSurfaceHit) {
+      if (
+        hasPendingProceduralSurface
+        && nearestSurfaceHit.nodeId === resolveGroundNodeIdForPlacement()
+      ) {
+        return null
+      }
+      const point = nearestSurfaceHit.point.clone()
       snapVectorToGrid(point)
       return {
         point,
         kind: 'surfaceHit',
-        hitNodeId: surfaceHit.nodeId,
+        hitNodeId: nearestSurfaceHit.nodeId,
       }
     }
 
@@ -21517,6 +21548,12 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
       const point = heightfieldHit.clone()
       snapVectorToGrid(point)
       return { point, kind: 'planeFallback', hitNodeId: null }
+    }
+
+    // Never silently place through a loading procedural terrain onto the
+    // legacy y=0 plane. Once its sampler is ready it will be resolved above.
+    if (hasPendingProceduralSurface) {
+      return null
     }
   }
 
@@ -21530,43 +21567,7 @@ function computeDropPlacement(event: DragEvent): PlacementHitResult | null {
 }
 
 function computePointerDropPlacement(event: PointerEvent): PlacementHitResult | null {
-  if (!camera || !canvasRef.value) return null
-  const rect = canvasRef.value.getBoundingClientRect()
-  if (rect.width === 0 || rect.height === 0) return null
-  const ndcX = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  const ndcY = -((event.clientY - rect.top) / rect.height) * 2 + 1
-  pointer.set(ndcX, ndcY)
-  raycaster.setFromCamera(pointer, camera)
-
-  // Placement modifier: hold Alt to force ground-plane placement (legacy behavior).
-  // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
-  if (!event.altKey && !isTemporaryNavigationOverrideActive()) {
-    const surfaceHit = computePlacementSurfaceHit()
-    if (surfaceHit) {
-      const point = surfaceHit.point.clone()
-      snapVectorToGrid(point)
-      return {
-        point,
-        kind: 'surfaceHit',
-        hitNodeId: surfaceHit.nodeId,
-      }
-    }
-
-    const heightfieldHit = intersectRayWithGroundHeightfieldWorld(raycaster.ray)
-    if (heightfieldHit) {
-      const point = heightfieldHit.clone()
-      snapVectorToGrid(point)
-      return { point, kind: 'planeFallback', hitNodeId: null }
-    }
-  }
-
-  const planeHit = new THREE.Vector3()
-  if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
-    const point = planeHit.clone()
-    snapVectorToGrid(point)
-    return { point, kind: 'planeFallback', hitNodeId: null }
-  }
-  return null
+  return computeDropPlacement(event)
 }
 
 function isImportedModelOverrideNode(node: SceneNode | null): boolean {
@@ -21985,14 +21986,14 @@ function handleViewportDragOver(event: DragEvent) {
   const basePoint = computePreviewPointForPlacement(placement)
   event.preventDefault()
   if (event.dataTransfer) {
-    event.dataTransfer.dropEffect = 'copy'
+    event.dataTransfer.dropEffect = basePoint && info ? 'copy' : 'none'
   }
   isDragHovering.value = true
   updateGridHighlight(basePoint, DEFAULT_GRID_HIGHLIGHT_DIMENSIONS)
   // Keep dragPreview internal state aligned to the *surface* point so grid highlight remains correct.
   dragPreview.setPosition(basePoint)
   if (info) {
-    dragPreview.prepare(info.assetId)
+    void dragPreview.prepare(info.assetId)
     if (basePoint) {
       const provisionalAligned = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
       if (provisionalAligned) {
@@ -22048,6 +22049,19 @@ function handleViewportDragLeave(event: DragEvent) {
   clearAssetPlacementPreviewSnapshot()
   dragPreview.dispose()
   restoreGridHighlightForSelection()
+}
+
+function cancelPendingViewportAssetDrop(message?: string): void {
+  if (message) {
+    console.warn(message)
+  }
+  clearAssetPlacementPreviewSnapshot()
+  dragPreview.dispose()
+  sceneStore.setDraggingAssetObject(null)
+  updateGridHighlight(null)
+  restoreGridHighlightForSelection()
+  snapController.resetPlacementSideSnap()
+  clearPlacementSideSnapMarkers()
 }
 
 async function handleViewportDrop(event: DragEvent) {
@@ -22189,20 +22203,41 @@ async function handleViewportDrop(event: DragEvent) {
     return
   }
 
+  const previewReady = await dragPreview.prepare(assetId)
+  if (!previewReady) {
+    cancelPendingViewportAssetDrop(`Asset preview is not ready for placement: ${assetId}`)
+    return
+  }
+
   const placementSideSnap = (isVertexSnapActiveEffective.value && props.activeTool === 'select')
     ? snapController.consumePlacementSideSnapResult()
     : null
-
-  const previewSnapshot = getAssetPlacementPreviewSnapshot(assetId)
   const placement = computeDropPlacement(event)
-  const basePoint = computePreviewPointForPlacement(placement) ?? new THREE.Vector3(0, 0, 0)
-  const canUsePreviewBounds = Boolean(dragPreviewGroup.children && dragPreviewGroup.children.length > 0)
-  let fallbackPosition = canUsePreviewBounds
-    ? (computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup) ?? basePoint)
-    : basePoint
-  if (placementSideSnap) {
-    fallbackPosition.add(placementSideSnap.delta)
+  const basePoint = computePreviewPointForPlacement(placement)
+  if (!basePoint) {
+    cancelPendingViewportAssetDrop(`No valid terrain surface for asset placement: ${assetId}`)
+    return
   }
+
+  dragPreviewGroup.rotation.set(0, placementPreviewYaw, 0)
+  const alignedPosition = computeWorldAabbBottomAlignedPoint(basePoint, dragPreviewGroup)
+  if (!alignedPosition) {
+    cancelPendingViewportAssetDrop(`Asset placement bounds are unavailable: ${assetId}`)
+    return
+  }
+  dragPreviewGroup.position.copy(alignedPosition)
+  dragPreviewGroup.updateWorldMatrix(true, true)
+  if (placementSideSnap) {
+    dragPreviewGroup.position.add(placementSideSnap.delta)
+    dragPreviewGroup.updateWorldMatrix(true, true)
+  }
+  setAssetPlacementPreviewSnapshot(assetId, assetId, dragPreviewGroup)
+  const previewSnapshot = getAssetPlacementPreviewSnapshot(assetId)
+  if (!previewSnapshot) {
+    cancelPendingViewportAssetDrop(`Asset placement snapshot is unavailable: ${assetId}`)
+    return
+  }
+
   const parentGroupId = assetType === 'prefab' ? null : resolveSelectedGroupDropParent()
   try {
     const selectedId = props.selectedNodeId
@@ -22215,10 +22250,10 @@ async function handleViewportDrop(event: DragEvent) {
     })()
 
     let spawnResult: { node: { id: string } } | null = null
-    const worldPosition = previewSnapshot?.worldPosition ?? fallbackPosition
-    const rotation = previewSnapshot?.rotation ?? new THREE.Vector3(0, placementPreviewYaw, 0)
-    const scale = previewSnapshot?.scale ?? null
-    const placementAssetId = assetType === 'dice' ? previewSnapshot?.placementAssetId ?? assetId : assetId
+    const worldPosition = previewSnapshot.worldPosition
+    const rotation = previewSnapshot.rotation
+    const scale = previewSnapshot.scale
+    const placementAssetId = assetType === 'dice' ? previewSnapshot.placementAssetId : assetId
 
     if (isEmptySelectedGroup && parentGroupId) {
       spawnResult = await sceneStore.spawnAssetIntoEmptyGroupAtWorldTransform(placementAssetId, parentGroupId, {
@@ -23684,7 +23719,7 @@ function updateGroundChunkStreaming() {
   if (signature !== lastGroundChunkSetSignatureForPlacement) {
     lastGroundChunkSetSignatureForPlacement = signature
     refreshPlacementSurfaceTargetsForNode(node.id)
-    placementSurfaceTargetsDirty = true
+    placementSurfaceTargetIndex.markDirty()
 
     onGroundChunkSetChanged()
   }
@@ -24260,10 +24295,8 @@ function disposeSceneNodes() {
   clearOutlineSelectionTargets()
   instanceLayoutMatrixCache.clear()
   clearLightHelpers()
-  placementSurfaceTargetsByNodeId.clear()
-  placementSurfaceTargets.length = 0
-  placementSurfaceTargetsDirty = true
-  placementSurfaceTargetsInstancedRevision = -1
+  placementSurfaceTargetIndex.clear()
+  proceduralLandscapePlacementRevisions.clear()
   const nodeIds = Array.from(objectMap.keys())
   nodeIds.forEach((id) => {
     if (objectMap.has(id)) {

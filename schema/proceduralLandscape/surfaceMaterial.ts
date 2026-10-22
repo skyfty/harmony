@@ -466,7 +466,7 @@ const FRAGMENT_BODY = `#include <map_fragment>
       texelColor = texture2D(uPlSandTex, wUv) * 0.75;
     } else {
       if (vHeight < 2.0) {
-        dark = min(dark, 1.0 - (2.0 - vHeight) / 4.0);
+        dark = min(dark, 1.0 - (2.0 - vHeight) / 8.0);
       } else if (vHeight > 2.5) {
         dark = 1.0 - (vHeight - 2.5) / 2.0;
       }

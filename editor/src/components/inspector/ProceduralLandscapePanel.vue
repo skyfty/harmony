@@ -101,6 +101,33 @@ const effectiveBaseMapMode = computed(() => (
   propsValue.value ? resolveProceduralLandscapeBaseMapMode(propsValue.value) : 'replace'
 ))
 
+const waterLevelMode = computed(() => propsValue.value?.water.levelMode ?? 'auto')
+const waterStatusText = computed(() => {
+  const current = propsValue.value
+  if (!current?.water.enabled) {
+    return ''
+  }
+  const stats = runtimeStats.value
+  const level = stats && Number.isFinite(stats.waterLevel)
+    ? `当前水位 ${stats.waterLevel.toFixed(1)}m`
+    : ''
+  const flooded = stats
+    ? `覆盖低地 ${(Math.max(0, stats.waterFloodedFraction) * 100).toFixed(1)}%`
+    : ''
+  const layerState = stats
+    ? stats.waterEnabled
+      ? '水面已建立'
+      : '水面层尚未建立'
+    : ''
+  if (current.water.levelMode === 'auto') {
+    return [`自动选择约 3% 低地`, level, flooded, layerState].filter(Boolean).join(' · ')
+  }
+  if (stats && stats.waterFloodedFraction < 0.0005) {
+    return '当前水线被地形遮住；请提高水线偏移或切换自动低地。'
+  }
+  return [level, flooded, layerState].filter(Boolean).join(' · ')
+})
+
 const demOrthoStatusText = computed(() => {
   const stats = runtimeStats.value
   if (!stats || !propsValue.value?.dem.assetId) {
@@ -754,11 +781,7 @@ const featureSections: FieldSection[] = [
     group: 'water',
     title: '水面',
     withSwitch: true,
-    blocks: [
-      {
-        rows: [[{ key: 'levelOffset', label: '水线偏移', suffix: 'm', placeholder: '相对地形最低点', step: 0.5 }]],
-      },
-    ],
+    blocks: [],
   },
   {
     group: 'wind',
@@ -1324,30 +1347,65 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
               @update:model-value="(value) => patchGroup(section.group, { enabled: value !== false })"
             />
           </div>
-          <template v-for="(block, blockIndex) in section.blocks" :key="`${section.group}-${blockIndex}`">
-            <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>
-            <div
-              v-for="(row, rowIndex) in block.rows"
-              :key="`${section.group}-row-${rowIndex}`"
-              class="pl-field-row"
-              :class="{ 'pl-field-row--single': row.length === 1 }"
-            >
-              <v-text-field
-                v-for="field in row"
-                :key="field.key"
-                :model-value="fieldValue(section.group, field.key)"
-                :label="field.label"
-                :suffix="field.suffix"
-                :placeholder="field.placeholder"
-                density="compact"
-                variant="underlined"
-                type="number"
-                hide-details
-                :step="field.step"
+          <template v-if="section.group === 'water'">
+            <div class="pl-choice-row">
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': waterLevelMode === 'auto' }"
                 :disabled="!componentEnabled"
-                @update:model-value="(value) => handleNumberInput(section.group, field, value)"
-              />
+                @click="patchGroup('water', { levelMode: 'auto' })"
+              >自动低地</button>
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': waterLevelMode === 'manual' }"
+                :disabled="!componentEnabled"
+                @click="patchGroup('water', { levelMode: 'manual' })"
+              >手动偏移</button>
             </div>
+            <v-text-field
+              v-if="waterLevelMode === 'manual'"
+              :model-value="propsValue.water.levelOffset"
+              label="水线偏移"
+              suffix="m"
+              placeholder="相对地形最低点"
+              density="compact"
+              variant="underlined"
+              type="number"
+              hide-details
+              :step="0.5"
+              :disabled="!componentEnabled"
+              @update:model-value="(value) => patchGroup('water', { levelOffset: Number(value) || 0 })"
+            />
+            <div v-if="waterStatusText" class="pl-hint">{{ waterStatusText }}</div>
+          </template>
+          <template v-else>
+            <template v-for="(block, blockIndex) in section.blocks" :key="`${section.group}-${blockIndex}`">
+              <div v-if="block.title" class="pl-subtitle">{{ block.title }}</div>
+              <div
+                v-for="(row, rowIndex) in block.rows"
+                :key="`${section.group}-row-${rowIndex}`"
+                class="pl-field-row"
+                :class="{ 'pl-field-row--single': row.length === 1 }"
+              >
+                <v-text-field
+                  v-for="field in row"
+                  :key="field.key"
+                  :model-value="fieldValue(section.group, field.key)"
+                  :label="field.label"
+                  :suffix="field.suffix"
+                  :placeholder="field.placeholder"
+                  density="compact"
+                  variant="underlined"
+                  type="number"
+                  hide-details
+                  :step="field.step"
+                  :disabled="!componentEnabled"
+                  @update:model-value="(value) => handleNumberInput(section.group, field, value)"
+                />
+              </div>
+            </template>
           </template>
         </div>
 

@@ -33,7 +33,6 @@ import {
 } from '@/api/resourceAssets'
 import { mapServerAssetToProjectAsset, type ServerAssetDto } from '@/api/serverAssetTypes'
 import { deleteProviderCatalog, loadProviderCatalog, storeProviderCatalog } from '@/stores/providerCatalogCache'
-import { getCachedModelObject } from '@schema/modelObjectCache'
 import { computeBlobHash, dataUrlToBlob, extractExtension } from '@/utils/blob'
 import { prepareLocalAssetImport, type LocalAssetImportPhase, type PreparedLocalAssetImport } from '@/utils/localAssetImport'
 import type { SceneNode } from '@schema/core'
@@ -636,6 +635,8 @@ async function selectAsset(asset: ProjectAsset) {
     try {
       assetCacheStore.setError(prepared.id, null)
       await ensureAssetCached(prepared)
+      sceneStore.selectAsset(prepared.id)
+      uiStore.setActiveSelectionContext('asset-panel')
     } catch (error) {
       const message = (error as Error).message ?? 'Failed to load asset'
       assetCacheStore.setError(prepared.id, message)
@@ -672,6 +673,8 @@ async function selectAsset(asset: ProjectAsset) {
       await sceneStore.preparePrefabAsset(asset.id, {
         prefabAssetIdForDownloadProgress: asset.id,
       })
+      sceneStore.selectAsset(asset.id)
+      uiStore.setActiveSelectionContext('asset-panel')
     } catch (error) {
       const message = (error as Error).message ?? 'Failed to prepare prefab asset'
       assetCacheStore.setError(asset.id, message)
@@ -697,6 +700,8 @@ async function selectAsset(asset: ProjectAsset) {
     try {
       assetCacheStore.setError(asset.id, null)
       await sceneStore.prepareLodAsset(asset.id)
+      sceneStore.selectAsset(asset.id)
+      uiStore.setActiveSelectionContext('asset-panel')
     } catch (error) {
       const message = (error as Error).message ?? 'Failed to prepare LOD asset'
       assetCacheStore.setError(asset.id, message)
@@ -1129,6 +1134,26 @@ function primePrefabAsset(asset: ProjectAsset): void {
   })
 }
 
+function primePlaceableAsset(asset: ProjectAsset): void {
+  const preparedAsset = prepareAssetForOperations(asset)
+  if (preparedAsset.type === 'prefab') {
+    primePrefabAsset(preparedAsset)
+    return
+  }
+  if (!MODEL_ASSET_TYPES.has(preparedAsset.type)) {
+    return
+  }
+  if (assetCacheStore.hasCache(resolveAssetCacheId(preparedAsset)) || isAssetDownloading(preparedAsset)) {
+    return
+  }
+  assetCacheStore.setError(preparedAsset.id, null)
+  void ensureAssetCached(preparedAsset).catch((error) => {
+    const message = (error as Error).message ?? 'Failed to prepare asset'
+    assetCacheStore.setError(preparedAsset.id, message)
+    console.error('Failed to prepare asset before drag', error)
+  })
+}
+
 void handleAddAsset
 
 function refreshGallery() {
@@ -1150,13 +1175,7 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
       packagePathSegments: assetPackagePathMap.value.get(preparedAsset.id) ?? [],
     })
   }
-  if (preparedAsset.type === 'prefab') {
-    primePrefabAsset(preparedAsset)
-  }
-  if (!isAssetReadyForMouseAction(preparedAsset) || assetActivationPendingId.value === resolveAssetCacheId(preparedAsset)) {
-    event.preventDefault()
-    return
-  }
+  primePlaceableAsset(preparedAsset)
   sceneStore.setDraggingAssetId(asset.id)
   assetCacheStore.touch(preparedAsset.id)
 
@@ -1167,10 +1186,7 @@ function handleAssetDragStart(event: DragEvent, asset: ProjectAsset) {
     event.dataTransfer.setData(ASSET_DRAG_MIME, JSON.stringify({ assetId: preparedAsset.id }))
     event.dataTransfer.dropEffect = 'copy'
 
-    const isModelOrMesh = asset.type === 'model' || asset.type === 'mesh'
-    const isCached = assetCacheStore.hasCache(preparedAsset.id)
-
-    if (isModelOrMesh && isCached) {
+    if (isDragPreviewReady(preparedAsset.id)) {
       applyHiddenDragImage(event)
       dragImageOffset = null
     } else {
@@ -1255,10 +1271,7 @@ function handleWindowDragOver(event: DragEvent) {
   if (typeof document === 'undefined') {
     return
   }
-  const cachedObjectReady = dragSuppressionPreparedAssetType === 'prefab'
-    ? isDragPreviewReady(dragSuppressionPreparedAssetId)
-    : !!getCachedModelObject(dragSuppressionPreparedAssetId)
-  if (!cachedObjectReady) {
+  if (!isDragPreviewReady(dragSuppressionPreparedAssetId)) {
     if (dragSuppressionActive) {
       restorePreviewDragImage(event)
       dragSuppressionActive = false
@@ -4378,7 +4391,7 @@ function isDirectoryLoading(id: string | undefined | null): boolean {
                 ]"
                 elevation="4"
                 :draggable="true"
-                @pointerdown.left="primePrefabAsset(asset)"
+                @pointerdown.left="primePlaceableAsset(asset)"
                 @click="selectAsset(asset)"
                 @dblclick.stop="handleAssetDoubleClick(asset)"
                 @dragstart.stop="handleAssetDragStart($event, asset)"
