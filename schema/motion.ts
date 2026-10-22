@@ -37,6 +37,8 @@ export {
   createFollowCameraMotionState,
   getApproxDimensions,
   resolveBackFollowCameraLocalOffset,
+  resolveFollowForwardPitch,
+  resolveGroundAlignedFollowForward,
   updateBackFollowCamera,
   resetCameraFollowState,
   resetFollowCameraMotionState,

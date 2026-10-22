@@ -129,6 +129,7 @@ export const DEFAULT_CAMERA_FOLLOW_TUNING: CameraFollowTuning = {
 }
 
 export const DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE = 1.5
+export const DEFAULT_FOLLOW_FORWARD_PITCH_LIMIT = Math.PI / 4
 
 export const DEFAULT_BACK_FOLLOW_CAMERA_TUNING: Partial<CameraFollowTuning> = {
   distanceMax: 16,
@@ -157,6 +158,70 @@ export function createBackFollowCameraTuning(overrides: Partial<CameraFollowTuni
 
 export function resolveBackFollowCameraLocalOffset(target: THREE.Vector3, distance: number, height: number): THREE.Vector3 {
   return target.set(0, height, -distance)
+}
+
+export function resolveFollowForwardPitch(
+  sourceForwardWorld: THREE.Vector3,
+  previousHeading: THREE.Vector3,
+  target: THREE.Vector3,
+  maxPitch = DEFAULT_FOLLOW_FORWARD_PITCH_LIMIT,
+): THREE.Vector3 {
+  target.copy(sourceForwardWorld)
+  let horizontalLength = Math.hypot(target.x, target.z)
+  if (!Number.isFinite(target.x) || !Number.isFinite(target.y) || !Number.isFinite(target.z)
+    || horizontalLength < 1e-5) {
+    const previousHorizontalLength = Math.hypot(previousHeading.x, previousHeading.z)
+    if (Number.isFinite(previousHorizontalLength) && previousHorizontalLength >= 1e-5) {
+      target.set(previousHeading.x, Number.isFinite(target.y) ? target.y : 0, previousHeading.z)
+    } else {
+      target.set(0, Number.isFinite(target.y) ? target.y : 0, target.z >= 0 ? 1 : -1)
+    }
+    horizontalLength = Math.hypot(target.x, target.z)
+  }
+  if (horizontalLength < 1e-5) {
+    return target.set(0, 0, 1)
+  }
+
+  const clampedMaxPitch = Number.isFinite(maxPitch) && maxPitch > 0
+    ? maxPitch
+    : DEFAULT_FOLLOW_FORWARD_PITCH_LIMIT
+  const pitch = THREE.MathUtils.clamp(
+    Math.atan2(target.y, horizontalLength),
+    -clampedMaxPitch,
+    clampedMaxPitch,
+  )
+  const horizontalScale = Math.cos(pitch) / horizontalLength
+  target.x *= horizontalScale
+  target.z *= horizontalScale
+  target.y = Math.sin(pitch)
+  return target.normalize()
+}
+
+export function resolveGroundAlignedFollowForward(
+  sourceForwardWorld: THREE.Vector3,
+  groundNormalWorld: THREE.Vector3 | null,
+  previousHeading: THREE.Vector3,
+  target: THREE.Vector3,
+  maxPitch = DEFAULT_FOLLOW_FORWARD_PITCH_LIMIT,
+): THREE.Vector3 {
+  target.copy(sourceForwardWorld)
+  target.y = 0
+  if (target.lengthSq() < 1e-8) {
+    target.set(0, 0, 1)
+  } else {
+    target.normalize()
+  }
+
+  if (groundNormalWorld
+    && Number.isFinite(groundNormalWorld.x)
+    && Number.isFinite(groundNormalWorld.y)
+    && Number.isFinite(groundNormalWorld.z)
+    && groundNormalWorld.y > 1e-4) {
+    const normalDotForward = target.dot(groundNormalWorld)
+    target.addScaledVector(groundNormalWorld, -normalDotForward)
+  }
+
+  return resolveFollowForwardPitch(target, previousHeading, target, maxPitch)
 }
 
 export const DEFAULT_OBJECT_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }

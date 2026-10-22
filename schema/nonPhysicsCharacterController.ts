@@ -11,6 +11,8 @@ export type NonPhysicsCharacterState = {
   velocity: THREE.Vector3
   moveDirection: THREE.Vector3
   facingDirection: THREE.Vector3
+  groundNormal: THREE.Vector3
+  hasGroundNormal: boolean
   cameraForward: THREE.Vector3
   cameraRight: THREE.Vector3
   grounded: boolean
@@ -82,6 +84,8 @@ export function createNonPhysicsCharacterState(params: {
     velocity: new THREE.Vector3(),
     moveDirection: new THREE.Vector3(),
     facingDirection: new THREE.Vector3(),
+    groundNormal: new THREE.Vector3(0, 1, 0),
+    hasGroundNormal: false,
     cameraForward: new THREE.Vector3(),
     cameraRight: new THREE.Vector3(),
     grounded: false,
@@ -101,6 +105,8 @@ export function resetNonPhysicsCharacterState(
   state.velocity.set(0, 0, 0)
   state.grounded = false
   state.jumpConsumed = false
+  state.groundNormal.set(0, 1, 0)
+  state.hasGroundNormal = false
   state.object.updateMatrixWorld(true)
 }
 
@@ -149,6 +155,10 @@ export function updateNonPhysicsCharacter(
     && groundProbe.distance <= props.stepHeight + 0.08
     && groundProbe.normal.y >= minGroundNormalY,
   )
+  if (probeGrounded && groundProbe) {
+    state.groundNormal.copy(groundProbe.normal).normalize()
+    state.hasGroundNormal = true
+  }
   if (probeGrounded && state.velocity.y <= 0) {
     state.grounded = true
     state.velocity.y = 0

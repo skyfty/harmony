@@ -394,6 +394,7 @@ import {
 	createBackFollowCameraTuning,
 	VehicleDriveController,
 	CharacterAutoTourRuntimeManager,
+	resolveGroundAlignedFollowForward,
 	updateBackFollowCamera,
 } from '@schema/motion'
 import type { FollowCameraMotionState, VehicleDriveRuntimeState, VehicleDriveVehicle } from '@schema/motion'
@@ -2323,6 +2324,7 @@ const protagonistPoseDirection = new THREE.Vector3()
 const protagonistPoseTarget = new THREE.Vector3()
 const characterFollowAnchorPosition = new THREE.Vector3()
 const characterFollowForwardScratch = new THREE.Vector3()
+const characterFollowGroundNormalScratch = new THREE.Vector3(0, 1, 0)
 const tempBox = new THREE.Box3()
 const tempPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
@@ -8169,6 +8171,7 @@ function resetCharacterFollowCameraState(): void {
 	characterCameraFollowPlacementCache.nodeId = null
 	characterCameraFollowPlacementCache.objectUuid = null
 	characterCameraFollowPlacementCache.placement = null
+	characterFollowGroundNormalScratch.set(0, 1, 0)
 	resetCameraFollowState(characterFollowCameraState)
 	resetFollowCameraMotionState(characterFollowCameraMotionState)
 	resetCharacterNavigationControllerState(characterNavigationControllerState, characterInputYaw)
@@ -8500,6 +8503,33 @@ function resolveCharacterFollowPlacement(
 	}
 }
 
+function resolveCharacterFollowGroundNormalWorld(
+	nodeId: string,
+	bindingNodeId: string | null,
+	target: THREE.Vector3,
+): boolean {
+	const physicsNodeId = bindingNodeId ?? nodeId
+	const localCharacter = nonPhysicsCharacterStates.get(physicsNodeId)
+		?? nonPhysicsCharacterStates.get(nodeId)
+		?? null
+	if (localCharacter?.hasGroundNormal) {
+		target.copy(localCharacter.groundNormal)
+		return true
+	}
+	const motorState = resolveScenePreviewPhysicsBridgeCharacterMotorState(physicsNodeId)
+		?? resolveScenePreviewPhysicsBridgeCharacterMotorState(nodeId)
+	const normal = motorState?.groundNormal ?? null
+	if (normal
+		&& Number.isFinite(normal[0])
+		&& Number.isFinite(normal[1])
+		&& Number.isFinite(normal[2])
+		&& normal[1] > 1e-4) {
+		target.set(normal[0], normal[1], normal[2]).normalize()
+		return true
+	}
+	return false
+}
+
 function resolveCharacterFollowForwardWorld(target: THREE.Vector3): THREE.Vector3 {
 	const protagonistObject = findDefaultControlledCharacterObject()
 	if (!protagonistObject) {
@@ -8514,7 +8544,20 @@ function resolveCharacterFollowForwardWorld(target: THREE.Vector3): THREE.Vector
 	} else {
 		target.normalize()
 	}
-	return target
+	const controlledNodeId = resolveDefaultControlledCharacterNodeId()
+	if (controlledNodeId) {
+		resolveCharacterFollowGroundNormalWorld(
+			controlledNodeId,
+			resolveCharacterControllerBindingNodeId(controlledNodeId),
+			characterFollowGroundNormalScratch,
+		)
+	}
+	return resolveGroundAlignedFollowForward(
+		target,
+		characterFollowGroundNormalScratch,
+		characterFollowCameraState.heading,
+		target,
+	)
 }
 
 function resolveCharacterFollowCameraOffset(target: THREE.Vector3): THREE.Vector3 {
@@ -8676,12 +8719,12 @@ function updateCharacterFollowCamera(
 		characterCameraChaseHeadingSpeed = resolveCharacterCameraChaseHeadingSpeed(activeCamera)
 		if (characterCameraChaseHeadingSpeed <= 1e-4) {
 			activeCamera.getWorldDirection(desiredForwardWorld)
-			desiredForwardWorld.y = 0
-			if (desiredForwardWorld.lengthSq() <= 1e-8) {
-				desiredForwardWorld.set(0, 0, 1)
-			} else {
-				desiredForwardWorld.normalize()
-			}
+			resolveGroundAlignedFollowForward(
+				desiredForwardWorld,
+				characterFollowGroundNormalScratch,
+				characterFollowCameraState.heading,
+				desiredForwardWorld,
+			)
 		} else {
 			desiredForwardWorld.copy(characterFollowForwardScratch)
 		}
@@ -8713,6 +8756,7 @@ function updateCharacterFollowCamera(
 		lockLocalOffset: true,
 		applyOrbitTween: false,
 		followControlsDirty: false,
+		followForwardPitch: true,
 		immediate,
 		tuning: {
 			...createBackFollowCameraTuning(),
@@ -8921,8 +8965,10 @@ function resolveCharacterCameraChaseHeadingSpeed(activeCamera: THREE.Perspective
 	const cameraForwardLength = Math.hypot(cameraForwardX, cameraForwardZ)
 	const characterForwardX = characterFollowForwardScratch.x
 	const characterForwardZ = characterFollowForwardScratch.z
-	const dot = cameraForwardLength > 1e-6
-		? (cameraForwardX * characterForwardX + cameraForwardZ * characterForwardZ) / cameraForwardLength
+	const characterForwardLength = Math.hypot(characterForwardX, characterForwardZ)
+	const dot = cameraForwardLength > 1e-6 && characterForwardLength > 1e-6
+		? (cameraForwardX * characterForwardX + cameraForwardZ * characterForwardZ)
+			/ (cameraForwardLength * characterForwardLength)
 		: 1
 	const props = resolveDefaultControlledCharacterComponentProps()
 	const turnRateRadiansPerSecond = props

@@ -1205,6 +1205,7 @@ import {
   createFollowCameraMotionState,
   getApproxDimensions,
   resolveBackFollowCameraLocalOffset,
+  resolveGroundAlignedFollowForward,
   resetCameraFollowState,
   resetFollowCameraMotionState,
   updateBackFollowCamera,
@@ -3547,6 +3548,7 @@ const protagonistPosePosition = new THREE.Vector3();
 const protagonistPoseQuaternion = new THREE.Quaternion();
 const characterCameraFollowAnchorScratch = new THREE.Vector3();
 const characterCameraFollowForwardScratch = new THREE.Vector3();
+const characterCameraFollowGroundNormalScratch = new THREE.Vector3(0, 1, 0);
 const characterCameraFollowOffsetScratch = new THREE.Vector3();
 const characterControlYawForwardScratch = new THREE.Vector3();
 const vehicleCompassQuaternion = new THREE.Quaternion();
@@ -14481,6 +14483,7 @@ function resetProtagonistPoseState(): void {
   resetFollowCameraMotionState(characterCameraFollowMotionState);
   characterCameraFollowAnchorScratch.set(0, 0, 0);
   characterCameraFollowForwardScratch.set(0, 0, 0);
+  characterCameraFollowGroundNormalScratch.set(0, 1, 0);
   resetCameraFollowState(characterCameraFollowState);
 }
 
@@ -14537,7 +14540,29 @@ function resolveCharacterRootWorldPosition(
   return target;
 }
 
+function resolveCharacterFollowGroundNormalWorld(
+  nodeId: string,
+  bindingNodeId: string | null,
+  target: THREE.Vector3,
+): boolean {
+  const physicsNodeId = bindingNodeId ?? nodeId;
+  const motorState = resolveSceneryPhysicsBridgeCharacterMotorState(physicsNodeId)
+    ?? resolveSceneryPhysicsBridgeCharacterMotorState(nodeId);
+  const normal = motorState?.groundNormal ?? null;
+  if (normal
+    && Number.isFinite(normal[0])
+    && Number.isFinite(normal[1])
+    && Number.isFinite(normal[2])
+    && normal[1] > 1e-4) {
+    target.set(normal[0], normal[1], normal[2]).normalize();
+    return true;
+  }
+  return false;
+}
+
 function resolveCharacterFollowForwardWorld(
+  nodeId: string,
+  bindingNodeId: string | null,
   object: THREE.Object3D,
   props: CharacterControllerComponentProps,
   target: THREE.Vector3,
@@ -14551,7 +14576,17 @@ function resolveCharacterFollowForwardWorld(
   } else {
     target.normalize();
   }
-  return target;
+  resolveCharacterFollowGroundNormalWorld(
+    nodeId,
+    bindingNodeId,
+    characterCameraFollowGroundNormalScratch,
+  );
+  return resolveGroundAlignedFollowForward(
+    target,
+    characterCameraFollowGroundNormalScratch,
+    characterCameraFollowState.heading,
+    target,
+  );
 }
 
 function resolveCharacterFollowPlacement(
@@ -19269,8 +19304,10 @@ function resolveCharacterCameraChaseHeadingSpeed(): number {
   const cameraForwardLength = Math.hypot(cameraForwardX, cameraForwardZ);
   const characterForwardX = characterCameraFollowForwardScratch.x;
   const characterForwardZ = characterCameraFollowForwardScratch.z;
-  const dot = cameraForwardLength > 1e-6
-    ? (cameraForwardX * characterForwardX + cameraForwardZ * characterForwardZ) / cameraForwardLength
+  const characterForwardLength = Math.hypot(characterForwardX, characterForwardZ);
+  const dot = cameraForwardLength > 1e-6 && characterForwardLength > 1e-6
+    ? (cameraForwardX * characterForwardX + cameraForwardZ * characterForwardZ)
+      / (cameraForwardLength * characterForwardLength)
     : 1;
   const props = resolveDefaultControlledCharacterComponentProps();
   const turnRateRadiansPerSecond = props
@@ -20773,7 +20810,13 @@ function updateCharacterFollowCamera(
   if (!characterCameraFollowState.initialized) {
     // First frame after (re)initialization: frame the camera behind the
     // character's current facing once.
-    resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+    resolveCharacterFollowForwardWorld(
+      controlledNodeId,
+      bindingNodeId,
+      object,
+      props,
+      characterCameraFollowForwardScratch,
+    );
   } else if (characterSteeringActive) {
     // Summer Afternoon style: while steering, let the camera slowly chase the
     // character's facing. The joystick direction is re-expressed in the camera
@@ -20782,23 +20825,35 @@ function updateCharacterFollowCamera(
     // stick's deviation from straight-ahead (pure up stays straight, pure
     // sideways becomes a tight circle). Locking the heading here would let a
     // diagonal push settle into a straight diagonal walk instead.
-    resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+    resolveCharacterFollowForwardWorld(
+      controlledNodeId,
+      bindingNodeId,
+      object,
+      props,
+      characterCameraFollowForwardScratch,
+    );
     characterCameraChaseHeadingSpeed = resolveCharacterCameraChaseHeadingSpeed();
     if (characterCameraChaseHeadingSpeed <= 1e-4) {
       // The character is turning to face the camera (e.g. a held backward
       // push); hold the current view direction instead of snapping behind the
       // character, so the camera does not swing around and flip the input.
       context.camera.getWorldDirection(characterCameraFollowForwardScratch);
-      characterCameraFollowForwardScratch.y = 0;
-      if (characterCameraFollowForwardScratch.lengthSq() <= 1e-8) {
-        characterCameraFollowForwardScratch.set(0, 0, 1);
-      } else {
-        characterCameraFollowForwardScratch.normalize();
-      }
+      resolveGroundAlignedFollowForward(
+        characterCameraFollowForwardScratch,
+        characterCameraFollowGroundNormalScratch,
+        characterCameraFollowState.heading,
+        characterCameraFollowForwardScratch,
+      );
     }
   } else {
     // Idle: smoothly re-center the camera behind the character's facing.
-    resolveCharacterFollowForwardWorld(object, props, characterCameraFollowForwardScratch);
+    resolveCharacterFollowForwardWorld(
+      controlledNodeId,
+      bindingNodeId,
+      object,
+      props,
+      characterCameraFollowForwardScratch,
+    );
   }
   const localOffsetOverride = resolveCharacterFollowCameraOffset(props);
 
@@ -20844,6 +20899,7 @@ function updateCharacterFollowCamera(
     immediate: Boolean(options.immediate),
     lockLocalOffset: true,
     smoothTargetForProgrammaticFollow: false,
+    followForwardPitch: true,
   }));
 }
 

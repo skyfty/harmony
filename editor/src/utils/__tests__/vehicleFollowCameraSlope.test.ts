@@ -4,6 +4,7 @@ import {
   createBackFollowCameraTuning,
   createCameraFollowState,
   FollowCameraController,
+  resolveGroundAlignedFollowForward,
 } from '@schema/followCameraController'
 import {
   VehicleDriveController,
@@ -279,5 +280,69 @@ describe('follow camera forward pitch option', () => {
     expect(result.heading.y).toBeCloseTo(Math.sin(MAX_FOLLOW_PITCH), 5)
     expect(result.camera.up.y).toBeCloseTo(Math.cos(MAX_FOLLOW_PITCH), 5)
     expect(result.camera.up.z).toBeGreaterThan(0)
+  })
+})
+
+describe('ground-aligned character follow forward', () => {
+  it('projects the character heading onto an uphill or downhill surface', () => {
+    const slopeRadians = THREE.MathUtils.degToRad(15)
+    const groundNormal = new THREE.Vector3(0, Math.cos(slopeRadians), Math.sin(slopeRadians))
+    const previousHeading = new THREE.Vector3(0, 0, -1)
+
+    const uphill = resolveGroundAlignedFollowForward(
+      new THREE.Vector3(0, 0, -1),
+      groundNormal,
+      previousHeading,
+      new THREE.Vector3(),
+    )
+    const downhill = resolveGroundAlignedFollowForward(
+      new THREE.Vector3(0, 0, 1),
+      groundNormal,
+      previousHeading,
+      new THREE.Vector3(),
+    )
+
+    expect(uphill.y).toBeCloseTo(Math.sin(slopeRadians), 5)
+    expect(uphill.z).toBeCloseTo(-Math.cos(slopeRadians), 5)
+    expect(downhill.y).toBeCloseTo(-Math.sin(slopeRadians), 5)
+    expect(downhill.z).toBeCloseTo(Math.cos(slopeRadians), 5)
+  })
+
+  it('keeps flat movement level and ignores cross-slope roll', () => {
+    const level = resolveGroundAlignedFollowForward(
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(),
+    )
+    const crossSlope = resolveGroundAlignedFollowForward(
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(Math.sin(THREE.MathUtils.degToRad(20)), Math.cos(THREE.MathUtils.degToRad(20)), 0),
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(),
+    )
+
+    expect(level.distanceTo(new THREE.Vector3(0, 0, -1))).toBeLessThan(1e-5)
+    expect(crossSlope.y).toBeCloseTo(0, 5)
+    expect(crossSlope.z).toBeCloseTo(-1, 5)
+  })
+
+  it('clamps steep ground pitch and rejects invalid normals', () => {
+    const steepSlopeRadians = THREE.MathUtils.degToRad(60)
+    const steep = resolveGroundAlignedFollowForward(
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(0, Math.cos(steepSlopeRadians), Math.sin(steepSlopeRadians)),
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(),
+    )
+    const invalid = resolveGroundAlignedFollowForward(
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(Number.NaN, 1, 0),
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(),
+    )
+
+    expect(steep.y).toBeCloseTo(Math.sin(MAX_FOLLOW_PITCH), 5)
+    expect(invalid.distanceTo(new THREE.Vector3(0, 0, -1))).toBeLessThan(1e-5)
   })
 })
