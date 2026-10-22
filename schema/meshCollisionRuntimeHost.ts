@@ -106,6 +106,8 @@ export type MeshCollisionRuntimeHostSnapshot = {
   groundSourceCount: number
   /** Ground chunks currently resident in the physics world. */
   groundChunkCount: number
+  /** Moving-anchor fallback patches currently resident in the physics world. */
+  groundPatchCount: number
   /** One nearest-ground-chunk result per Ground Anchor reference. */
   referenceGroundCoverage: MeshCollisionReferenceGroundCoverage[]
   /** References with no ground chunk inside the normal activation radius. */
@@ -216,6 +218,7 @@ const EMPTY_MESH_COLLISION_SNAPSHOT: MeshCollisionRuntimeHostSnapshot = {
   pendingChunkCount: 0,
   groundSourceCount: 0,
   groundChunkCount: 0,
+  groundPatchCount: 0,
   referenceGroundCoverage: [],
   uncoveredReferenceCount: 0,
 }
@@ -1086,6 +1089,7 @@ export function syncMeshCollisionRuntimeHost(
       pendingChunkCount: 0,
       groundSourceCount: 0,
       groundChunkCount: 0,
+      groundPatchCount: 0,
       referenceGroundCoverage: references.map((_reference, referenceIndex) => ({
         referenceIndex,
         referenceWorldPosition: [
@@ -1139,6 +1143,7 @@ export function syncMeshCollisionRuntimeHost(
         0,
       ),
       groundChunkCount: 0,
+      groundPatchCount: 0,
       referenceGroundCoverage: references.map((_reference, referenceIndex) => ({
         referenceIndex,
         referenceWorldPosition: [
@@ -1194,9 +1199,11 @@ export function syncMeshCollisionRuntimeHost(
     return best as MeshCollisionChunkCandidate | null
   })
   const mandatoryGroundByReference = nearestGroundByReference
+  const allReferencesUseGroundPatches = references.length > 0
+    && references.every((_reference, referenceIndex) => state.groundPatches.has(referenceIndex))
   const mandatoryGroundKeys = new Set<string>()
   mandatoryGroundByReference.forEach((candidate) => {
-    if (candidate) {
+    if (candidate && !allReferencesUseGroundPatches) {
       mandatoryGroundKeys.add(candidate.chunk.key)
     }
   })
@@ -1209,6 +1216,9 @@ export function syncMeshCollisionRuntimeHost(
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index]
     if (!candidate) {
+      continue
+    }
+    if (allReferencesUseGroundPatches && candidate.chunk.isGroundSurface) {
       continue
     }
     if (residentKeys.size < residentLimit) {
@@ -1344,6 +1354,7 @@ export function syncMeshCollisionRuntimeHost(
     pendingChunkCount,
     groundSourceCount,
     groundChunkCount,
+    groundPatchCount: state.groundPatches.size,
     referenceGroundCoverage,
     uncoveredReferenceCount,
   }
@@ -1394,6 +1405,7 @@ export function resolveMeshCollisionRuntimeHostSnapshot(
     pendingChunkCount: 0,
     groundSourceCount: state.lastGroundSourceCount,
     groundChunkCount: state.lastGroundChunkCount,
+    groundPatchCount: state.groundPatches.size,
     referenceGroundCoverage: state.lastReferenceGroundCoverage,
     uncoveredReferenceCount: state.lastUncoveredReferenceCount,
   }

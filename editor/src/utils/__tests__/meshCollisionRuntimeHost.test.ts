@@ -733,6 +733,8 @@ describe('mesh collision runtime host incremental re-index', () => {
       [new THREE.Vector3(0, 0, 0)],
     )
     expect(snapshot.referenceGroundCoverage[0]?.chunkKey).toBe('ground-patch:0')
+    expect(snapshot.groundChunkCount).toBe(1)
+    expect(snapshot.chunkCount).toBe(1)
     const patch = harness.created.find((record) => (
       typeof (record.body as { name?: unknown }).name === 'string'
       && (record.body as { name: string }).name.includes(':ground-patch:')

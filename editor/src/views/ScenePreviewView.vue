@@ -745,6 +745,7 @@ const meshCollisionDebug = reactive({
 	chunkCount: 0,
 	groundSourceCount: 0,
 	groundChunkCount: 0,
+	groundPatchCount: 0,
 	uncoveredReferenceCount: 0,
 	referenceCount: 0,
 	referenceX: 0,
@@ -760,6 +761,7 @@ function resetMeshCollisionDebug(): void {
 	meshCollisionDebug.chunkCount = 0
 	meshCollisionDebug.groundSourceCount = 0
 	meshCollisionDebug.groundChunkCount = 0
+	meshCollisionDebug.groundPatchCount = 0
 	meshCollisionDebug.uncoveredReferenceCount = 0
 	meshCollisionDebug.referenceCount = 0
 	meshCollisionDebug.referenceX = 0
@@ -13643,6 +13645,7 @@ function syncScenePreviewMeshCollisionRuntime(
 		meshCollisionDebug.chunkCount += snapshot.chunkCount
 		meshCollisionDebug.groundSourceCount += snapshot.groundSourceCount
 		meshCollisionDebug.groundChunkCount += snapshot.groundChunkCount
+		meshCollisionDebug.groundPatchCount += snapshot.groundPatchCount
 		meshCollisionDebug.uncoveredReferenceCount += snapshot.uncoveredReferenceCount
 		if (!bestSnapshot || snapshot.groundSourceCount > bestSnapshot.groundSourceCount) {
 			bestSnapshot = snapshot
@@ -17150,6 +17153,9 @@ watch(watchExclusiveUiActive, (active) => {
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Ground sources/chunks: {{ meshCollisionDebug.groundSourceCount }} / {{ meshCollisionDebug.groundChunkCount }}
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Anchors/patches: {{ meshCollisionDebug.referenceCount }} / {{ meshCollisionDebug.groundPatchCount }}
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Anchor coverage: {{ meshCollisionDebug.covered ? 'active' : 'missing' }}
