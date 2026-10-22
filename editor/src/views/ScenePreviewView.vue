@@ -7231,6 +7231,7 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 	const buildOptions: SceneGraphBuildOptions = {
 		serverAssetBaseUrl: readServerDownloadBaseUrl(),
 		deviceProfileId: activeScenePreviewDeviceProfileId,
+		renderGuideRouteVisuals: false,
 		materialFactoryOptions: {
 			hdrLoader: rgbeLoader,
 		},
@@ -16226,6 +16227,7 @@ async function updateScene(document: SceneJsonExportDocument) {
 		const buildOptions: SceneGraphBuildOptions = {
 			serverAssetBaseUrl: readServerDownloadBaseUrl(),
 			deviceProfileId: activeScenePreviewDeviceProfileId,
+			renderGuideRouteVisuals: false,
 			onProgress: (info) => {
 				resourceProgress.total = info.total
 				resourceProgress.loaded = info.loaded

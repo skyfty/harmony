@@ -6321,6 +6321,7 @@ function createSceneGraphBuildOptions(
   onProgress?: SceneGraphBuildOptions['onProgress'],
 ): SceneGraphBuildOptions {
   const buildOptions: SceneGraphBuildOptions = {};
+  buildOptions.renderGuideRouteVisuals = false;
   // Coarse phase timing for the graph builder. The host owns the clock, so the
   // callback only reports names/details and this closure adds the deltas.
   activeDeviceAdaptationProfile = resolveDeviceAdaptationProfile(payload.document.deviceAdaptation, readDeviceAdaptationSystemInfo());
@@ -7300,6 +7301,7 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   const anchorTransform = applyRuntimePrefabTransform(cloned.root, request);
   const runtimeDocument = createRuntimePrefabDocument(prefab, cloned.root);
   const buildOptions: SceneGraphBuildOptions = {};
+  buildOptions.renderGuideRouteVisuals = false;
   buildOptions.deviceProfileId = activeDeviceAdaptationProfile?.id ?? null;
   if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
     buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();
@@ -15417,6 +15419,7 @@ async function loadRemoteMultiuserPrefabObject(state: MultiuserPeerState): Promi
     stripRemoteMultiuserPrefabRuntimeComponents(cloned.root);
     const runtimeDocument = createRuntimePrefabDocument(source.prefab, cloned.root);
     const buildOptions: SceneGraphBuildOptions = {};
+    buildOptions.renderGuideRouteVisuals = false;
     buildOptions.deviceProfileId = activeDeviceAdaptationProfile?.id ?? null;
     if (typeof props.serverAssetBaseUrl === 'string' && props.serverAssetBaseUrl.trim().length) {
       buildOptions.serverAssetBaseUrl = props.serverAssetBaseUrl.trim();

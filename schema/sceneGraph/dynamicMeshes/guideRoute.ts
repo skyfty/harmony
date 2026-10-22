@@ -13,20 +13,24 @@ export async function buildGuideRouteMesh(
   },
   meshInfo: GuideRouteDynamicMesh,
   node: SceneNodeWithExtras,
+  options: { renderVisuals?: boolean } = {},
 ): Promise<THREE.Object3D | null> {
-  const group = createGuideRouteRenderGroup(meshInfo, {})
+  const renderVisuals = options.renderVisuals !== false
+  const group = renderVisuals ? createGuideRouteRenderGroup(meshInfo, {}) : new THREE.Group()
   group.name = node.name ?? (group.name || 'GuideRoute')
 
-  const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : []
-  const resolvedMaterials = await deps.resolveNodeMaterials(node)
-  const defaultMaterialAssignment = deps.pickMaterialAssignment(resolvedMaterials)
+  if (renderVisuals) {
+    const nodeMaterialConfigs = Array.isArray(node.materials) ? (node.materials as SceneNodeMaterial[]) : []
+    const resolvedMaterials = await deps.resolveNodeMaterials(node)
+    const defaultMaterialAssignment = deps.pickMaterialAssignment(resolvedMaterials)
 
-  if (defaultMaterialAssignment) {
-    const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials)
-    applyMaterialConfigAssignment(group, {
-      defaultMaterial: defaultMaterialAssignment,
-      materialByConfigId,
-    })
+    if (defaultMaterialAssignment) {
+      const materialByConfigId = buildMaterialConfigMap(nodeMaterialConfigs, resolvedMaterials)
+      applyMaterialConfigAssignment(group, {
+        defaultMaterial: defaultMaterialAssignment,
+        materialByConfigId,
+      })
+    }
   }
 
   deps.applyTransform(group, node)

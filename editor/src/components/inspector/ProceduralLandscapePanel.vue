@@ -1279,9 +1279,6 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             label="底图混合强度"
             @update:model-value="(value) => patchGroup('surface', { baseMapBlend: Number(value) })"
           />
-          <div v-if="!aerialBaseMapAvailable" class="pl-hint">
-            当前 DEM 资源包没有运行时正射影像；如需航拍底图，请重新上传资源包并重建地形节点。
-          </div>
           <div v-else-if="effectiveBaseMapMode !== 'replace' && demOrthoStatusText" class="pl-hint">
             {{ demOrthoStatusText }}
           </div>

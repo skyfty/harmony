@@ -106,6 +106,12 @@ export interface SceneGraphBuildOptions {
   >;
   onProgress?: (progress: SceneGraphResourceProgress) => void;
   lazyLoadMeshes?: boolean;
+  /**
+   * Guide Route visuals are editor authoring aids. Runtime consumers that only
+   * use the route for navigation can disable the meshes while retaining the
+   * transformed node container in the scene graph.
+   */
+  renderGuideRouteVisuals?: boolean;
   deviceProfileId?: string | null;
   resolveNodeAdaptation?: (node: SceneNode) => DeviceAdaptationNodeRule | null;
   materialFactoryOptions?: Pick<SceneMaterialFactoryOptions, 'textureLoader' | 'hdrLoader'>;
@@ -2096,6 +2102,7 @@ class SceneGraphBuilder {
       },
       meshInfo,
       node,
+      { renderVisuals: this.options.renderGuideRouteVisuals !== false },
     );
   }
 

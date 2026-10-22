@@ -24,7 +24,8 @@ import {
   type GuideRouteTourTargetOptions,
   type GuideRouteTravelWindow,
 } from './guideRouteTourTarget'
-import { findClosestWaypointIndex, resolvePathFollowLookaheadDistance, resolvePathFollowSample } from './pathFollowCommon'
+import { resolvePathFollowLookaheadDistance, resolvePathFollowSample } from './pathFollowCommon'
+import { sampleProceduralLandscapeGuideRouteSurface } from './proceduralLandscape/runtime'
 
 export type CharacterAutoTourInputState = {
   moveX: number
@@ -77,6 +78,7 @@ type GuideRouteWorldWaypoints = {
   evaluation: ReturnType<typeof evaluateGuideRoute>
   points: THREE.Vector3[]
   dock: boolean[]
+  providerNodeId: string | null
 } | null
 
 const characterPathFollowWorldPosition = new THREE.Vector3()
@@ -181,8 +183,53 @@ function resolveGuideRouteWorldWaypoints(
   const routeObject = nodeObjectMap.get(routeNode.id) ?? null
   const evaluation = evaluateGuideRoute({ routeNode, providerObject, routeObject })
   return evaluation.status === 'ready'
-    ? { evaluation, points: evaluation.points, dock: evaluation.dock }
+    ? {
+      evaluation,
+      points: evaluation.points,
+      dock: evaluation.dock,
+      providerNodeId: evaluation.providerNodeId,
+    }
     : null
+}
+
+function resolveCharacterSurfaceY(
+  routeData: NonNullable<GuideRouteWorldWaypoints>,
+  worldX: number,
+  worldZ: number,
+  facingYawRad: number,
+  fallbackY: number,
+): number {
+  if (!routeData.providerNodeId) {
+    return fallbackY
+  }
+  return sampleProceduralLandscapeGuideRouteSurface(
+    routeData.providerNodeId,
+    worldX,
+    worldZ,
+    facingYawRad,
+  )?.point.y ?? fallbackY
+}
+
+function findClosestWaypointIndexXZ(
+  points: readonly THREE.Vector3[],
+  position: THREE.Vector3,
+): number {
+  let bestIndex = 0
+  let bestDistanceSq = Number.POSITIVE_INFINITY
+  for (let index = 0; index < points.length; index += 1) {
+    const point = points[index]
+    if (!point) {
+      continue
+    }
+    const deltaX = point.x - position.x
+    const deltaZ = point.z - position.z
+    const distanceSq = deltaX * deltaX + deltaZ * deltaZ
+    if (distanceSq < bestDistanceSq) {
+      bestDistanceSq = distanceSq
+      bestIndex = index
+    }
+  }
+  return bestIndex
 }
 
 function getObjectWorldPosition(object: THREE.Object3D, out: THREE.Vector3): THREE.Vector3 {
@@ -311,6 +358,7 @@ export class CharacterAutoTourRuntimeManager {
       loop: tourProps.loop,
       currentPosition,
       lookaheadDistance,
+      mode: 'xz',
       outLookaheadPoint: new THREE.Vector3(),
       outClosestPoint: new THREE.Vector3(),
     })
@@ -348,7 +396,14 @@ export class CharacterAutoTourRuntimeManager {
     const worldPosition = travelWindow
       ? effectivePoints[0]?.clone() ?? sample.projection.closestPoint.clone()
       : sample.projection.closestPoint.clone()
-    worldPosition.y += resolveCharacterGroundOffsetY(controllerProps)
+    const groundOffsetY = resolveCharacterGroundOffsetY(controllerProps)
+    worldPosition.y = resolveCharacterSurfaceY(
+      routeData,
+      worldPosition.x,
+      worldPosition.z,
+      Math.atan2(-forwardWorld.z, forwardWorld.x),
+      worldPosition.y,
+    ) + groundOffsetY
     return {
       nodeId,
       worldPosition,
@@ -474,6 +529,7 @@ export class CharacterAutoTourRuntimeManager {
             loop: entry.props.loop,
             currentPosition,
             lookaheadDistance: 0,
+            mode: 'xz',
           })
           const travelWindow = buildGuideRouteTravelWindow(
             routeData.evaluation,
@@ -503,7 +559,7 @@ export class CharacterAutoTourRuntimeManager {
         entry.sourceRouteWaypointCount = sourceRouteWaypointCount
         entry.smoothedWorldPosition.copy(currentPosition)
         entry.smoothedYaw = getObjectWorldYawRadians(object, entry.controllerProps?.forwardAxis ?? '+x')
-        entry.lastTargetIndex = findClosestWaypointIndex(activePoints, currentPosition)
+        entry.lastTargetIndex = findClosestWaypointIndexXZ(activePoints, currentPosition)
       }
 
       const controllerProps = entry.controllerProps ?? clampCharacterControllerComponentProps(null)
@@ -521,6 +577,7 @@ export class CharacterAutoTourRuntimeManager {
         loop: activeLoop,
         currentPosition,
         lookaheadDistance,
+        mode: 'xz',
         outLookaheadPoint: characterPathFollowLookaheadPoint,
       })
       if (!sample) {
@@ -535,17 +592,25 @@ export class CharacterAutoTourRuntimeManager {
         )
         const arrivalDistance = Math.max(0.35, Math.min(1.25, speedMps * 0.2))
         if (endDistance <= arrivalDistance) {
-          entry.smoothedWorldPosition.copy(endPoint)
-          entry.smoothedWorldPosition.y += groundOffsetY
           const prevPoint = activePoints[Math.max(0, activePoints.length - 2)] ?? endPoint
           characterPathFollowDirection.copy(endPoint).sub(prevPoint)
           characterPathFollowDirection.y = 0
+          let endpointFacingYaw = entry.smoothedYaw
           if (characterPathFollowDirection.lengthSq() > 1e-8) {
             characterPathFollowDirection.normalize()
-            entry.smoothedYaw =
+            endpointFacingYaw =
               Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x)
               + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
+            entry.smoothedYaw = endpointFacingYaw
           }
+          entry.smoothedWorldPosition.copy(endPoint)
+          entry.smoothedWorldPosition.y = resolveCharacterSurfaceY(
+            routeData,
+            endPoint.x,
+            endPoint.z,
+            endpointFacingYaw - resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis),
+            endPoint.y,
+          ) + groundOffsetY
 
           const shouldApplyWorldTransform = host.shouldApplyWorldTransform?.(nodeId) ?? true
           if (shouldApplyWorldTransform) {
@@ -572,7 +637,7 @@ export class CharacterAutoTourRuntimeManager {
       characterPathFollowDirection.multiplyScalar(1 / distanceToLookahead)
 
       let speedFactor = 1
-      const projectedPointIndex = findClosestWaypointIndex(activePoints, sample.projection.closestPoint)
+      const projectedPointIndex = findClosestWaypointIndexXZ(activePoints, sample.projection.closestPoint)
       const nextIndex = activeLoop
         ? (projectedPointIndex + 1) % activePoints.length
         : Math.min(activePoints.length - 1, projectedPointIndex + 1)
@@ -595,8 +660,15 @@ export class CharacterAutoTourRuntimeManager {
         ? Math.min(1, actualStep / distanceToLookahead)
         : 0
       const currentGroundY = currentPosition.y - groundOffsetY
-      const targetGroundY = currentGroundY
+      const pathGroundY = currentGroundY
         + (sample.lookaheadPoint.y - currentGroundY) * heightAlpha
+      const targetGroundY = resolveCharacterSurfaceY(
+        routeData,
+        characterPathFollowTargetPosition.x,
+        characterPathFollowTargetPosition.z,
+        Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x),
+        pathGroundY,
+      )
       characterPathFollowTargetPosition.y = targetGroundY + groundOffsetY
 
       const targetYaw = Math.atan2(-characterPathFollowDirection.z, characterPathFollowDirection.x) + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)

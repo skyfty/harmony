@@ -20,7 +20,7 @@ import {
   type GuideRouteTourTargetOptions,
   type GuideRouteTravelWindow,
 } from './guideRouteTourTarget'
-import { sampleProceduralLandscapeTerrainHeight } from './proceduralLandscape/runtime'
+import { sampleProceduralLandscapeGuideRouteSurface } from './proceduralLandscape/runtime'
 import {
   buildPolylineMetricData,
   buildPolylineVertexArcLengths,
@@ -85,7 +85,6 @@ type PlaybackState = {
   routeWaypointCount: number
   sourceRouteWaypointCount: number
   distanceAlongRoute: number
-  hasGroundSupportSample: boolean
   dockHoldIndex: number | null
   travelWindow: GuideRouteTravelWindow | null
 }
@@ -93,9 +92,11 @@ type PlaybackState = {
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 const TERMINAL_DISTANCE_EPSILON = 0.05
 const DOCK_DISTANCE_EPSILON = 0.05
+const ROUTE_END_REVERSE_EPSILON = 0.5
 const AUTO_TOUR_YAW_SMOOTHING = 12
 const AUTO_TOUR_SURFACE_CLEARANCE_M = 0.04
-const AUTO_TOUR_GROUND_FOLLOW_DAMPING = 10
+const AUTO_TOUR_SUPPORT_FOOTPRINT_INSET_RATIO = 0.15
+const AUTO_TOUR_MAX_SUPPORT_SLOPE = Math.tan(THREE.MathUtils.degToRad(30))
 const routeDataCache = new WeakMap<EvaluatedGuideRoute, RouteData>()
 
 function transformBoundsCorners(
@@ -240,17 +241,71 @@ function applyObjectWorldPose(
   object.updateMatrixWorld(true)
 }
 
-function resolveSupportedVehicleWorldPosition(params: {
+type SupportedVehiclePose = {
+  worldPosition: THREE.Vector3
+  worldQuaternion: THREE.Quaternion
+}
+
+function readVectorAxis(vector: THREE.Vector3, axis: number): number {
+  return axis === 0 ? vector.x : axis === 1 ? vector.y : vector.z
+}
+
+function writeVectorAxis(vector: THREE.Vector3, axis: number, value: number): void {
+  if (axis === 0) {
+    vector.x = value
+  } else if (axis === 1) {
+    vector.y = value
+  } else {
+    vector.z = value
+  }
+}
+
+function buildVehicleSupportFootprint(
+  localBounds: THREE.Box3,
+  vehicleProps: VehicleComponentProps,
+): THREE.Vector3[] {
+  const rightAxis = vehicleProps.indexRightAxis
+  const upAxis = vehicleProps.indexUpAxis
+  const forwardAxis = vehicleProps.indexForwardAxis
+  const minRight = readVectorAxis(localBounds.min, rightAxis)
+  const maxRight = readVectorAxis(localBounds.max, rightAxis)
+  const minForward = readVectorAxis(localBounds.min, forwardAxis)
+  const maxForward = readVectorAxis(localBounds.max, forwardAxis)
+  const centerRight = (minRight + maxRight) * 0.5
+  const centerForward = (minForward + maxForward) * 0.5
+  const halfRight = (maxRight - minRight) * 0.5 * (1 - AUTO_TOUR_SUPPORT_FOOTPRINT_INSET_RATIO)
+  const halfForward = (maxForward - minForward) * 0.5 * (1 - AUTO_TOUR_SUPPORT_FOOTPRINT_INSET_RATIO)
+  const bottom = readVectorAxis(localBounds.min, upAxis)
+  const combinations = [
+    [-1, 1],
+    [1, 1],
+    [-1, -1],
+    [1, -1],
+  ] as const
+  return combinations.map(([rightSign, forwardSign]) => {
+    const point = new THREE.Vector3()
+    writeVectorAxis(point, rightAxis, centerRight + halfRight * rightSign)
+    writeVectorAxis(point, upAxis, bottom)
+    writeVectorAxis(point, forwardAxis, centerForward + halfForward * forwardSign)
+    return point
+  })
+}
+
+function resolveSupportedVehiclePose(params: {
   object: THREE.Object3D
   routePoint: THREE.Vector3
+  forwardWorld: THREE.Vector3
+  vehicleProps: VehicleComponentProps
   worldQuaternion: THREE.Quaternion
   providerNodeId: string | null
   resolveObjectBounds: (object: THREE.Object3D) => THREE.Box3
   localBoundsCache: WeakMap<THREE.Object3D, THREE.Box3>
-}): THREE.Vector3 {
+}): SupportedVehiclePose {
   const {
     object,
     routePoint,
+    forwardWorld,
+    vehicleProps,
     worldQuaternion,
     providerNodeId,
     resolveObjectBounds,
@@ -264,37 +319,106 @@ function resolveSupportedVehicleWorldPosition(params: {
     if (!localBounds) {
       const sourceBounds = resolveObjectBounds(object)
       if (sourceBounds.isEmpty()) {
-        return routePoint.clone()
+        return {
+          worldPosition: routePoint.clone(),
+          worldQuaternion: worldQuaternion.clone(),
+        }
       }
       const inverseObjectMatrix = object.matrixWorld.clone().invert()
       localBounds = transformBoundsCorners(sourceBounds, inverseObjectMatrix)
       localBoundsCache.set(object, localBounds)
     }
+
+    const footprint = buildVehicleSupportFootprint(localBounds, vehicleProps)
     applyObjectWorldPose(object, routePoint.clone(), worldQuaternion)
-    const bounds = transformBoundsCorners(localBounds, object.matrixWorld)
-    if (bounds.isEmpty()) {
-      return routePoint.clone()
+    const footprintWorld = footprint.map((point) => point.clone().applyMatrix4(object.matrixWorld))
+    const facingYawRad = Math.atan2(-forwardWorld.z, forwardWorld.x)
+    const sampleHeights = footprintWorld.map((point) => (
+      providerNodeId
+        ? sampleProceduralLandscapeGuideRouteSurface(
+          providerNodeId,
+          point.x,
+          point.z,
+          facingYawRad,
+        )?.point.y ?? null
+        : null
+    ))
+    const average = (indices: number[]): number | null => {
+      const values = indices
+        .map((index) => sampleHeights[index])
+        .filter((value): value is number => value != null && Number.isFinite(value))
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
     }
-    const surfaceHeights = [routePoint.y]
-    if (providerNodeId) {
-      const samplePoints = [
-        [routePoint.x, routePoint.z],
-        [bounds.min.x, bounds.min.z],
-        [bounds.max.x, bounds.min.z],
-        [bounds.min.x, bounds.max.z],
-        [bounds.max.x, bounds.max.z],
-      ] as const
-      samplePoints.forEach(([x, z]) => {
-        const height = sampleProceduralLandscapeTerrainHeight(providerNodeId, x, z)
-        if (height != null && Number.isFinite(height)) {
-          surfaceHeights.push(height)
-        }
-      })
+    const planarDistance = (leftIndex: number, rightIndex: number): number => (
+      Math.hypot(
+        footprintWorld[leftIndex]!.x - footprintWorld[rightIndex]!.x,
+        footprintWorld[leftIndex]!.z - footprintWorld[rightIndex]!.z,
+      )
+    )
+    const frontHeight = average([0, 1])
+    const rearHeight = average([2, 3])
+    const leftHeight = average([0, 2])
+    const rightHeight = average([1, 3])
+    const pitchDistance = (planarDistance(0, 2) + planarDistance(1, 3)) * 0.5
+    const rollDistance = (planarDistance(0, 1) + planarDistance(2, 3)) * 0.5
+    const pitchSlope = frontHeight != null && rearHeight != null && pitchDistance > 1e-4
+      ? THREE.MathUtils.clamp(
+        (frontHeight - rearHeight) / pitchDistance,
+        -AUTO_TOUR_MAX_SUPPORT_SLOPE,
+        AUTO_TOUR_MAX_SUPPORT_SLOPE,
+      )
+      : 0
+    const rollSlope = rightHeight != null && leftHeight != null && rollDistance > 1e-4
+      ? THREE.MathUtils.clamp(
+        (rightHeight - leftHeight) / rollDistance,
+        -AUTO_TOUR_MAX_SUPPORT_SLOPE,
+        AUTO_TOUR_MAX_SUPPORT_SLOPE,
+      )
+      : 0
+    const validSupportHeights = sampleHeights.filter(
+      (height): height is number => height != null && Number.isFinite(height),
+    )
+    const supportSurfaceY = validSupportHeights.length
+      ? Math.max(...validSupportHeights)
+      : routePoint.y
+    let supportedQuaternion = worldQuaternion.clone()
+    if (frontHeight != null || rearHeight != null || leftHeight != null || rightHeight != null) {
+      const forwardBase = forwardWorld.clone()
+      forwardBase.y = 0
+      if (forwardBase.lengthSq() <= 1e-8) {
+        forwardBase.set(1, 0, 0)
+      } else {
+        forwardBase.normalize()
+      }
+      const rightBase = new THREE.Vector3().crossVectors(forwardBase, WORLD_UP).normalize()
+      const supportNormal = WORLD_UP.clone()
+        .addScaledVector(forwardBase, -pitchSlope)
+        .addScaledVector(rightBase, -rollSlope)
+        .normalize()
+      supportedQuaternion = buildVehicleQuaternion(vehicleProps, forwardBase, supportNormal)
     }
-    const supportSurfaceY = Math.max(...surfaceHeights)
+
+    applyObjectWorldPose(object, routePoint.clone(), supportedQuaternion)
+    const supportPointWorldPositions = footprint.map((point) => (
+      point.clone().applyMatrix4(object.matrixWorld)
+    ))
+    const requiredOriginHeights = sampleHeights.flatMap((height, index) => (
+      height == null
+        ? []
+        : [
+          height
+          + AUTO_TOUR_SURFACE_CLEARANCE_M
+          - (supportPointWorldPositions[index]!.y - routePoint.y),
+        ]
+    ))
     const supported = routePoint.clone()
-    supported.y += supportSurfaceY + AUTO_TOUR_SURFACE_CLEARANCE_M - bounds.min.y
-    return supported
+    supported.y = requiredOriginHeights.length
+      ? Math.max(...requiredOriginHeights)
+      : supportSurfaceY
+    return {
+      worldPosition: supported,
+      worldQuaternion: supportedQuaternion,
+    }
   } finally {
     object.position.copy(originalPosition)
     object.quaternion.copy(originalQuaternion)
@@ -402,7 +526,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       routeWaypointCount: routeData.evaluation.points.length,
       sourceRouteWaypointCount: routeData.evaluation.points.length,
       distanceAlongRoute: projection.s,
-      hasGroundSupportSample: false,
       dockHoldIndex: null,
       travelWindow: null,
     }
@@ -454,24 +577,30 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       node,
       VEHICLE_COMPONENT_TYPE,
     )
+    const vehicleProps = vehicleComponent ? clampVehicleComponentProps(vehicleComponent.props) : null
     const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
-    const worldQuaternion = vehicleComponent
+    let worldQuaternion = vehicleComponent
       ? buildVehicleQuaternion(
-        clampVehicleComponentProps(vehicleComponent.props),
+        vehicleProps!,
         forwardWorld,
         sample.normal,
       )
       : new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw)
-    const worldPosition = vehicleComponent
-      ? resolveSupportedVehicleWorldPosition({
+    let worldPosition = sample.point.clone()
+    if (vehicleComponent && vehicleProps) {
+      const supportedPose = resolveSupportedVehiclePose({
         object,
         routePoint: sample.point,
+        forwardWorld,
+        vehicleProps,
         worldQuaternion,
         providerNodeId: routeData.evaluation.providerNodeId,
         resolveObjectBounds,
         localBoundsCache: vehicleLocalBoundsCache,
       })
-      : sample.point.clone()
+      worldPosition = supportedPose.worldPosition
+      worldQuaternion = supportedPose.worldQuaternion
+    }
     return {
       nodeId,
       routeNodeId: tourProps.routeNodeId!,
@@ -538,27 +667,34 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         node,
         VEHICLE_COMPONENT_TYPE,
       )
+      const vehicleProps = vehicleComponent ? clampVehicleComponentProps(vehicleComponent.props) : null
       const yaw = Math.atan2(-tangent.z, tangent.x)
-      const worldQuaternion = vehicleComponent
+      let worldQuaternion = vehicleComponent
         ? buildVehicleQuaternion(
-          clampVehicleComponentProps(vehicleComponent.props),
+          vehicleProps!,
           tangent,
           sample.normal,
         )
         : new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw)
+      let worldPosition = sample.point.clone()
+      if (vehicleComponent && vehicleProps) {
+        const supportedPose = resolveSupportedVehiclePose({
+          object,
+          routePoint: sample.point,
+          forwardWorld: tangent,
+          vehicleProps,
+          worldQuaternion,
+          providerNodeId: routeData.evaluation.providerNodeId,
+          resolveObjectBounds,
+          localBoundsCache: vehicleLocalBoundsCache,
+        })
+        worldPosition = supportedPose.worldPosition
+        worldQuaternion = supportedPose.worldQuaternion
+      }
       return {
         nodeId,
         routeNodeId: tourProps.routeNodeId!,
-        worldPosition: vehicleComponent
-          ? resolveSupportedVehicleWorldPosition({
-            object,
-            routePoint: sample.point,
-            worldQuaternion,
-            providerNodeId: routeData.evaluation.providerNodeId,
-            resolveObjectBounds,
-            localBoundsCache: vehicleLocalBoundsCache,
-          })
-          : sample.point.clone(),
+        worldPosition,
         worldQuaternion,
         forwardWorld: tangent,
         yaw,
@@ -596,27 +732,34 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       node,
       VEHICLE_COMPONENT_TYPE,
     )
+    const vehicleProps = vehicleComponent ? clampVehicleComponentProps(vehicleComponent.props) : null
     const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
-    const worldQuaternion = vehicleComponent
+    let worldQuaternion = vehicleComponent
       ? buildVehicleQuaternion(
-        clampVehicleComponentProps(vehicleComponent.props),
+        vehicleProps!,
         forwardWorld,
         sample.normal,
       )
       : new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw)
+    let worldPosition = sample.point.clone()
+    if (vehicleComponent && vehicleProps) {
+      const supportedPose = resolveSupportedVehiclePose({
+        object,
+        routePoint: sample.point,
+        forwardWorld,
+        vehicleProps,
+        worldQuaternion,
+        providerNodeId: routeData.evaluation.providerNodeId,
+        resolveObjectBounds,
+        localBoundsCache: vehicleLocalBoundsCache,
+      })
+      worldPosition = supportedPose.worldPosition
+      worldQuaternion = supportedPose.worldQuaternion
+    }
     return {
       nodeId,
       routeNodeId: tourProps.routeNodeId!,
-      worldPosition: vehicleComponent
-        ? resolveSupportedVehicleWorldPosition({
-          object,
-          routePoint: sample.point,
-          worldQuaternion,
-          providerNodeId: routeData.evaluation.providerNodeId,
-          resolveObjectBounds,
-          localBoundsCache: vehicleLocalBoundsCache,
-        })
-        : sample.point.clone(),
+      worldPosition,
       worldQuaternion,
       forwardWorld,
       yaw,
@@ -652,9 +795,24 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (!routeData) {
       return null
     }
-    return target
+    const snap = target
       ? resolveTargetedSnap(nodeId, tourProps, node, routeData, target)
       : resolveSnap(nodeId, tourProps, node, routeData)
+    if (
+      snap
+      && !target
+      && !tourProps.loop
+      && snap.projectedS >= routeData.evaluation.totalLength - ROUTE_END_REVERSE_EPSILON
+    ) {
+      return resolveTargetedSnap(
+        nodeId,
+        tourProps,
+        node,
+        routeData,
+        { destinationWaypointIndex: 0 },
+      ) ?? snap
+    }
+    return snap
   }
 
   function seedTourPlaybackState(
@@ -671,7 +829,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       routeWaypointCount: snap.routeWaypointCount,
       sourceRouteWaypointCount: snap.sourceRouteWaypointCount,
       distanceAlongRoute: snap.travelWindow ? 0 : snap.projectedS,
-      hasGroundSupportSample: false,
       dockHoldIndex: null,
       travelWindow: snap.travelWindow,
     })
@@ -752,7 +909,6 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             routeWaypointCount: targetedRouteData.evaluation.points.length,
             sourceRouteWaypointCount: fullRouteData.evaluation.points.length,
             distanceAlongRoute: 0,
-            hasGroundSupportSample: false,
             dockHoldIndex: null,
             travelWindow,
           }
@@ -857,31 +1013,18 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           forwardWorld,
           sample.normal,
         )
-        object.updateMatrixWorld(true)
-        const currentWorldQuaternion = object.getWorldQuaternion(new THREE.Quaternion())
-        currentWorldQuaternion.slerp(
-          desiredQuaternion,
-          expSmoothingAlpha(AUTO_TOUR_YAW_SMOOTHING, deltaSeconds),
-        )
-        desiredPosition = resolveSupportedVehicleWorldPosition({
+        const supportedPose = resolveSupportedVehiclePose({
           object,
           routePoint: sample.point,
-          worldQuaternion: currentWorldQuaternion,
+          forwardWorld,
+          vehicleProps,
+          worldQuaternion: desiredQuaternion,
           providerNodeId: routeData.evaluation.providerNodeId,
           resolveObjectBounds,
           localBoundsCache: vehicleLocalBoundsCache,
         })
-        if (state.hasGroundSupportSample) {
-          const currentWorldPosition = object.getWorldPosition(new THREE.Vector3())
-          const smoothedY = THREE.MathUtils.lerp(
-            currentWorldPosition.y,
-            desiredPosition.y,
-            expSmoothingAlpha(AUTO_TOUR_GROUND_FOLLOW_DAMPING, deltaSeconds),
-          )
-          desiredPosition.y = Math.max(desiredPosition.y, smoothedY)
-        }
-        state.hasGroundSupportSample = true
-        applyObjectWorldPose(object, desiredPosition, currentWorldQuaternion)
+        desiredPosition = supportedPose.worldPosition
+        applyObjectWorldPose(object, desiredPosition, supportedPose.worldQuaternion)
       } else {
         const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
         const current = object.getWorldQuaternion(new THREE.Quaternion())
