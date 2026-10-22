@@ -6,11 +6,13 @@ import {
   evaluateGuideRoute,
   sampleEvaluatedGuideRouteAtDistance,
 } from '@schema/guideRouteRuntime'
+import { buildGuideRouteTravelWindow } from '@schema/guideRouteTourTarget'
 import {
   clampAutoTourComponentProps,
   clampCharacterControllerComponentProps,
   clampGuideRouteComponentProps,
   clampVehicleComponentProps,
+  cloneGuideRouteComponentProps,
 } from '@schema/components'
 import { createAutoTourRuntime } from '@schema/autoTourRuntime'
 import { CharacterAutoTourRuntimeManager } from '@schema/characterAutoTourRuntime'
@@ -104,6 +106,132 @@ describe('guideRouteRuntime', () => {
     expect(result.status).toBe('unsupported')
     expect(result.message).toContain('not V2')
     expect(surfaceSampleMock).not.toHaveBeenCalled()
+  })
+
+  it('preserves an optional thumbnail asset on every waypoint round-trip', () => {
+    const props = clampGuideRouteComponentProps({
+      surfaceProviderNodeId: 'terrain-1',
+      waypoints: [
+        {
+          name: 'P1',
+          position: { x: 1, y: 2, z: 3 },
+          thumbnailAssetId: 'asset://thumbnail-one',
+        },
+        {
+          name: 'P2',
+          position: { x: 4, y: 5, z: 6 },
+          thumbnailAssetId: '   ',
+        },
+      ],
+    })
+
+    expect(props.waypoints[0]?.thumbnailAssetId).toBe('asset://thumbnail-one')
+    expect(props.waypoints[1]?.thumbnailAssetId).toBeNull()
+    expect(cloneGuideRouteComponentProps(props).waypoints).toEqual(props.waypoints)
+  })
+
+  it('rebases stale authored waypoints onto the route node when they miss the provider surface', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 9,
+      message: null,
+      bounds: {
+        minX: -100,
+        maxX: 100,
+        minZ: -100,
+        maxZ: 100,
+        minY: 0,
+        maxY: 10,
+        cellSize: 2,
+      },
+    })
+    surfaceSampleMock.mockImplementation((_nodeId: string, x: number, z: number) => (
+      Math.abs(x) <= 100 && Math.abs(z) <= 100
+        ? {
+          point: new THREE.Vector3(x, 1, z),
+          normal: new THREE.Vector3(0, 1, 0),
+          kind: 'terrain',
+          distanceToRoad: null,
+          revision: 9,
+        }
+        : null
+    ))
+    const routeNode = createRouteNode()
+    routeNode.dynamicMesh.vertices = [
+      { x: -1000, y: 0, z: -1000 },
+      { x: -900, y: 0, z: -900 },
+    ]
+    routeNode.components.guideRoute.props.waypoints = [
+      { name: 'P1', position: { x: -1000, y: 0, z: -1000 }, dock: false },
+      { name: 'P2', position: { x: -900, y: 0, z: -900 }, dock: false },
+    ]
+    const routeObject = new THREE.Object3D()
+    routeObject.position.set(0, 0, 0)
+    const providerObject = new THREE.Object3D()
+
+    const result = evaluateGuideRoute({
+      routeNode,
+      providerObject,
+      routeObject,
+    })
+
+    expect(result.status).toBe('ready')
+    expect(result.points[0]?.x).toBeCloseTo(-50)
+    expect(result.points[0]?.z).toBeCloseTo(-50)
+    const endPoint = result.points[result.points.length - 1]
+    expect(endPoint?.x).toBeCloseTo(50)
+    expect(endPoint?.z).toBeCloseTo(50)
+  })
+
+  it('builds the shortest directed path window for open and looped routes', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 31,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 20, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 31,
+    }))
+    const routeNode = createRouteNode()
+    routeNode.components.guideRoute.props = clampGuideRouteComponentProps({
+      surfaceProviderNodeId: 'terrain-1',
+      routeSource: 'drawn',
+      sampleSpacingM: 2,
+      waypoints: [
+        { name: 'P1', position: { x: 0, y: 20, z: 0 }, dock: true },
+        { name: 'P2', position: { x: 10, y: 20, z: 0 }, dock: true },
+        { name: 'P3', position: { x: 10, y: 20, z: 10 }, dock: false },
+        { name: 'P4', position: { x: 0, y: 20, z: 10 }, dock: false },
+      ],
+    })
+    const route = evaluateGuideRoute({ routeNode, providerObject: null })
+
+    const backward = buildGuideRouteTravelWindow(
+      route,
+      24,
+      { destinationWaypointIndex: 0 },
+      false,
+    )
+    expect(backward?.direction).toBe(-1)
+    expect(backward?.route.points[0]?.x).toBeCloseTo(6)
+    expect(backward?.route.points[0]?.z).toBeCloseTo(10)
+    expect(backward?.route.points[backward.route.points.length - 1]?.x).toBeCloseTo(0)
+    expect(backward?.route.points[backward.route.points.length - 1]?.z).toBeCloseTo(0)
+    expect(backward?.route.dock.every((dock) => dock === false)).toBe(true)
+
+    const loopForward = buildGuideRouteTravelWindow(
+      route,
+      24,
+      { destinationWaypointIndex: 0 },
+      true,
+    )
+    expect(loopForward?.direction).toBe(1)
+    expect(loopForward?.route.totalLength).toBeCloseTo(16)
+    expect(loopForward?.route.points[loopForward.route.points.length - 1]?.x).toBeCloseTo(0)
   })
 
   it('densifies controls and uses the shared surface height and normal', () => {
@@ -603,6 +731,83 @@ describe('guideRouteRuntime', () => {
     expect(snap!.worldPosition.z).toBeCloseTo(0)
     expect(Math.abs(snap!.worldQuaternion.length())).toBeCloseTo(1)
   })
+
+  it('moves a vehicle backward to a destination behind it and skips intermediate docks', () => {
+    surfaceStateMock.mockReturnValue({
+      status: 'ready',
+      revision: 33,
+      message: null,
+    })
+    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+      point: new THREE.Vector3(x, 20, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 33,
+    }))
+    const routeNode = createRouteNode()
+    routeNode.components.guideRoute.props = clampGuideRouteComponentProps({
+      surfaceProviderNodeId: 'terrain-1',
+      routeSource: 'drawn',
+      sampleSpacingM: 1,
+      waypoints: [
+        { name: 'P1', position: { x: 0, y: 20, z: 0 }, dock: true },
+        { name: 'P2', position: { x: 4, y: 20, z: 0 }, dock: true },
+        { name: 'P3', position: { x: 8, y: 20, z: 0 }, dock: true },
+      ],
+    })
+    const vehicleNode = {
+      id: 'vehicle-target',
+      name: 'Vehicle target',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'tour-target',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 2,
+            loop: false,
+          }),
+        },
+      },
+    } as any
+    const vehicleObject = new THREE.Object3D()
+    vehicleObject.position.set(8, 20, 0)
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const onDockRequestedPause = vi.fn()
+    const onTerminalStop = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+      onDockRequestedPause,
+      onTerminalStop,
+    })
+    const target = { destinationWaypointIndex: 0 }
+    const snap = runtime.resolveRouteSnap(vehicleNode.id, target)
+
+    expect(snap?.travelWindow?.direction).toBe(-1)
+    expect(snap?.targetReached).toBe(false)
+    runtime.startTour(vehicleNode.id, target)
+    runtime.seedTourPlaybackState(vehicleNode.id, snap!)
+    runtime.update(5)
+
+    expect(vehicleObject.position.x).toBeCloseTo(0)
+    expect(onDockRequestedPause).not.toHaveBeenCalled()
+    expect(onTerminalStop).toHaveBeenCalledOnce()
+    expect(onTerminalStop).toHaveBeenCalledWith(vehicleNode.id, 'guide-route-complete')
+    expect(runtime.resolveRouteSnap(vehicleNode.id, target)?.targetReached).toBe(true)
+  })
 })
 
 describe('VehicleMotionAuthorityController', () => {
@@ -775,5 +980,31 @@ describe('CharacterAutoTourRuntimeManager', () => {
     expect(manager.size).toBe(0)
     expect(onTourComplete).toHaveBeenCalledOnce()
     expect(onTourComplete).toHaveBeenCalledWith(characterNode.id)
+  })
+
+  it('follows the shortest route segment to a target that is behind the character', () => {
+    const {
+      manager,
+      host,
+      characterNode,
+      characterObject,
+      onTourComplete,
+    } = createCharacterTourFixture()
+    characterObject.position.set(9, 20, 0)
+    const target = { destinationWaypointIndex: 0 }
+
+    const snap = manager.resolveRouteSnap(host, characterNode.id, target)
+    expect(snap?.travelWindow?.direction).toBe(-1)
+    expect(snap?.worldPosition.x).toBeCloseTo(9)
+
+    manager.activate(characterNode.id, target)
+    manager.refresh(host)
+    for (let step = 0; step < 12; step += 1) {
+      manager.update(host, 0.5)
+    }
+
+    expect(characterObject.position.x).toBeCloseTo(0)
+    expect(manager.isActive(characterNode.id)).toBe(false)
+    expect(onTourComplete).toHaveBeenCalledOnce()
   })
 })

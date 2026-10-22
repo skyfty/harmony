@@ -10,6 +10,7 @@ import {
   getProceduralLandscapeRoadCenterlineLocal,
   sampleProceduralLandscapeGuideRouteSurface,
 } from './proceduralLandscape/runtime'
+import { buildPolylineMetricData, projectPointToPolyline } from './polylineProgress'
 
 export type EvaluatedGuideRouteStatus =
   | 'ready'
@@ -29,6 +30,8 @@ export type EvaluatedGuideRoute = {
   points: THREE.Vector3[]
   normals: THREE.Vector3[]
   dock: boolean[]
+  /** Arc length from the route start to each authored waypoint. */
+  waypointArcLengths: number[]
   cumulativeLengths: number[]
   totalLength: number
 }
@@ -36,6 +39,7 @@ export type EvaluatedGuideRoute = {
 export type EvaluateGuideRouteParams = {
   routeNode: SceneNode
   providerObject: THREE.Object3D | null
+  routeObject?: THREE.Object3D | null
 }
 
 const ROUTE_CACHE_LIMIT = 64
@@ -57,6 +61,7 @@ function emptyEvaluation(
     points: [],
     normals: [],
     dock: [],
+    waypointArcLengths: [],
     cumulativeLengths: [],
     totalLength: 0,
   }
@@ -66,12 +71,17 @@ function hashRouteParameters(
   routeNodeId: string,
   props: GuideRouteComponentProps,
   providerMatrix: THREE.Matrix4 | null,
+  routeMatrix: THREE.Matrix4 | null,
+  candidateKey: string,
 ): string {
-  const matrix = providerMatrix
-    ? Array.from(providerMatrix.elements, (value) => Number(value.toFixed(5))).join(',')
-    : ''
+  const serializeMatrix = (matrix: THREE.Matrix4 | null): string => (
+    matrix
+      ? Array.from(matrix.elements, (value) => Number(value.toFixed(5))).join(',')
+      : ''
+  )
   return JSON.stringify([
     routeNodeId,
+    candidateKey,
     props.surfaceProviderNodeId,
     props.routeSource,
     props.sampleSpacingM,
@@ -83,7 +93,8 @@ function hashRouteParameters(
       entry.position.y,
       entry.position.z,
     ]),
-    matrix,
+    serializeMatrix(providerMatrix),
+    serializeMatrix(routeMatrix),
   ])
 }
 
@@ -165,6 +176,75 @@ function resolveControlPoints(
   ))
 }
 
+function resolveRouteNodeWorldPosition(
+  routeNode: SceneNode,
+  routeObject: THREE.Object3D | null | undefined,
+): THREE.Vector3 | null {
+  if (routeObject) {
+    routeObject.updateMatrixWorld(true)
+    return routeObject.getWorldPosition(new THREE.Vector3())
+  }
+  const position = routeNode.position
+  if (!position) {
+    return null
+  }
+  return new THREE.Vector3(position.x, position.y, position.z)
+}
+
+function isPointInsideSurfaceBounds(
+  point: THREE.Vector3,
+  bounds: NonNullable<ReturnType<typeof getProceduralLandscapeGuideRouteSurfaceState>>['bounds'],
+): boolean {
+  return Boolean(
+    bounds
+    && point.x >= bounds.minX
+    && point.x <= bounds.maxX
+    && point.z >= bounds.minZ
+    && point.z <= bounds.maxZ
+  )
+}
+
+function resolveControlPointCenter(controls: readonly THREE.Vector3[]): THREE.Vector3 | null {
+  if (!controls.length) {
+    return null
+  }
+  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
+  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
+  for (const control of controls) {
+    min.x = Math.min(min.x, control.x)
+    min.z = Math.min(min.z, control.z)
+    max.x = Math.max(max.x, control.x)
+    max.z = Math.max(max.z, control.z)
+  }
+  return new THREE.Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
+}
+
+function rebaseStaleControlsToRouteNode(
+  controls: readonly THREE.Vector3[],
+  routeNode: SceneNode,
+  routeObject: THREE.Object3D | null | undefined,
+  bounds: NonNullable<ReturnType<typeof getProceduralLandscapeGuideRouteSurfaceState>>['bounds'],
+): THREE.Vector3[] {
+  if (!bounds || controls.every((control) => isPointInsideSurfaceBounds(control, bounds))) {
+    return []
+  }
+  const anchor = resolveRouteNodeWorldPosition(routeNode, routeObject)
+  const center = resolveControlPointCenter(controls)
+  if (!anchor || !center || !isPointInsideSurfaceBounds(anchor, bounds)) {
+    return []
+  }
+  const offsetX = anchor.x - center.x
+  const offsetZ = anchor.z - center.z
+  if (Math.hypot(offsetX, offsetZ) <= 1e-5) {
+    return []
+  }
+  return controls.map((control) => new THREE.Vector3(
+    control.x + offsetX,
+    control.y,
+    control.z + offsetZ,
+  ))
+}
+
 function buildCumulativeLengths(points: readonly THREE.Vector3[]): number[] {
   const lengths = new Array<number>(points.length)
   let total = 0
@@ -218,7 +298,7 @@ function cacheEvaluation(key: string, evaluation: EvaluatedGuideRoute): Evaluate
 }
 
 export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedGuideRoute {
-  const { routeNode, providerObject } = params
+  const { routeNode, providerObject, routeObject } = params
   const rawProps = routeNode.components?.guideRoute?.props as
     | Partial<GuideRouteComponentProps>
     | null
@@ -257,6 +337,7 @@ export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedG
       surfaceState.revision,
     )
   }
+  routeObject?.updateMatrixWorld(true)
 
   const rawControls = resolveControlPoints(props, providerObject)
   if (rawControls.length < 2) {
@@ -269,61 +350,108 @@ export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedG
     )
   }
 
-  const cacheKey = `${surfaceState.revision}|${hashRouteParameters(
-    routeNode.id,
-    props,
-    providerObject?.matrixWorld ?? null,
-  )}`
-  const cached = routeEvaluationCache.get(cacheKey)
-  if (cached) {
-    return cached
-  }
-
-  const controls = densifyWorldControls(rawControls, props.sampleSpacingM)
-  const points: THREE.Vector3[] = []
-  const normals: THREE.Vector3[] = []
-  for (let index = 0; index < controls.length; index += 1) {
-    const control = controls[index]!
-    const previous = controls[Math.max(0, index - 1)]!
-    const next = controls[Math.min(controls.length - 1, index + 1)]!
-    const direction = normalizeXZDirection(next.x - previous.x, next.z - previous.z)
-    const facingYaw = Math.atan2(-direction.z, direction.x)
-    const sample = sampleProceduralLandscapeGuideRouteSurface(
-      providerNodeId,
-      control.x,
-      control.z,
-      facingYaw,
-    )
-    if (!sample) {
-      return cacheEvaluation(cacheKey, emptyEvaluation(
-        routeNode,
-        'surface-gap',
-        `Guide Route has no surface at ${control.x.toFixed(2)}, ${control.z.toFixed(2)}.`,
-        providerNodeId,
-        surfaceState.revision,
-      ))
+  const buildCandidateEvaluation = (
+    sourceControls: readonly THREE.Vector3[],
+    waypointPositions: readonly THREE.Vector3[],
+    candidateKey: string,
+  ): EvaluatedGuideRoute => {
+    const cacheKey = `${surfaceState.revision}|${hashRouteParameters(
+      routeNode.id,
+      props,
+      providerObject?.matrixWorld ?? null,
+      routeObject?.matrixWorld ?? null,
+      candidateKey,
+    )}`
+    const cached = routeEvaluationCache.get(cacheKey)
+    if (cached) {
+      return cached
     }
-    points.push(sample.point)
-    normals.push(sample.normal)
+
+    const controls = densifyWorldControls([...sourceControls], props.sampleSpacingM)
+    const points: THREE.Vector3[] = []
+    const normals: THREE.Vector3[] = []
+    for (let index = 0; index < controls.length; index += 1) {
+      const control = controls[index]!
+      const previous = controls[Math.max(0, index - 1)]!
+      const next = controls[Math.min(controls.length - 1, index + 1)]!
+      const direction = normalizeXZDirection(next.x - previous.x, next.z - previous.z)
+      const facingYaw = Math.atan2(-direction.z, direction.x)
+      const sample = sampleProceduralLandscapeGuideRouteSurface(
+        providerNodeId,
+        control.x,
+        control.z,
+        facingYaw,
+      )
+      if (!sample) {
+        return cacheEvaluation(cacheKey, emptyEvaluation(
+          routeNode,
+          'surface-gap',
+          `Guide Route has no surface at ${control.x.toFixed(2)}, ${control.z.toFixed(2)}.`,
+          providerNodeId,
+          surfaceState.revision,
+        ))
+      }
+      points.push(sample.point)
+      normals.push(sample.normal)
+    }
+
+    const cumulativeLengths = buildCumulativeLengths(points)
+    const waypointMetricData = buildPolylineMetricData(points, {
+      closed: false,
+      mode: '3d',
+    })
+    const waypointArcLengths = waypointPositions.map((waypoint) => (
+      waypointMetricData
+        ? projectPointToPolyline(points, waypointMetricData, waypoint).s
+        : 0
+    ))
+    return cacheEvaluation(cacheKey, {
+      status: 'ready',
+      message: null,
+      routeNodeId: routeNode.id,
+      providerNodeId,
+      revision: surfaceState.revision,
+      points,
+      normals,
+      dock: markDockPoints(
+        points,
+        sourceControls,
+        props.waypoints.map((entry) => entry.dock === true),
+      ),
+      waypointArcLengths,
+      cumulativeLengths,
+      totalLength: cumulativeLengths[cumulativeLengths.length - 1] ?? 0,
+    })
   }
 
-  const cumulativeLengths = buildCumulativeLengths(points)
-  return cacheEvaluation(cacheKey, {
-    status: 'ready',
-    message: null,
-    routeNodeId: routeNode.id,
-    providerNodeId,
-    revision: surfaceState.revision,
-    points,
-    normals,
-    dock: markDockPoints(
-      points,
-      rawControls,
-      props.waypoints.map((entry) => entry.dock === true),
-    ),
-    cumulativeLengths,
-    totalLength: cumulativeLengths[cumulativeLengths.length - 1] ?? 0,
-  })
+  const authoredWaypointPositions = props.waypoints.map((entry) => new THREE.Vector3(
+    entry.position.x,
+    entry.position.y,
+    entry.position.z,
+  ))
+  const authoredEvaluation = buildCandidateEvaluation(
+    rawControls,
+    authoredWaypointPositions,
+    'authored',
+  )
+  if (authoredEvaluation.status === 'ready' || props.routeSource !== 'drawn') {
+    return authoredEvaluation
+  }
+  const rebasedControls = rebaseStaleControlsToRouteNode(
+    rawControls,
+    routeNode,
+    routeObject,
+    surfaceState.bounds,
+  )
+  if (!rebasedControls.length) {
+    return authoredEvaluation
+  }
+  const rebasedEvaluation = buildCandidateEvaluation(
+    rebasedControls,
+    rebasedControls,
+    'rebased',
+  )
+  return rebasedEvaluation.status === 'ready' ? rebasedEvaluation : authoredEvaluation
 }
 
 export function sampleEvaluatedGuideRouteAtDistance(

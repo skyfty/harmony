@@ -7429,6 +7429,7 @@ function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
     name: typeof entry?.name === 'string' ? entry.name : '',
     dock: entry?.dock === true,
     position: entry.position,
+    thumbnailAssetId: typeof entry?.thumbnailAssetId === 'string' ? entry.thumbnailAssetId : null,
   }))
   const runtimeObject = objectMap.get(selectedId) ?? null
   const insertionWorld = runtimeObject
@@ -7451,6 +7452,7 @@ function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
   nextWaypoints.splice(insertion.insertIndex, 0, {
     name: '',
     dock: false,
+    thumbnailAssetId: null,
     position: {
       x: insertionPosition.x,
       y: insertionPosition.y,

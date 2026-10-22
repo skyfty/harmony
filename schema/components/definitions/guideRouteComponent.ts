@@ -10,6 +10,8 @@ export type GuideRouteWaypoint = {
   position: Vector3Like
   /** When true, AutoTour should pause at this waypoint. */
   dock?: boolean
+  /** Optional image asset used as the destination thumbnail in tour menus. */
+  thumbnailAssetId?: string | null
 }
 
 export type GuideRouteRouteSource = 'drawn' | 'generated-road'
@@ -48,8 +50,17 @@ export function buildGuideRouteWaypointsFromPositions(
       name: normalizeGuideRouteWaypointName(entry?.name, index),
       position: clampVector3Like(position),
       dock: entry?.dock === true,
+      thumbnailAssetId: normalizeOptionalAssetId(entry?.thumbnailAssetId),
     }
   })
+}
+
+function normalizeOptionalAssetId(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+  const trimmed = value.trim()
+  return trimmed.length ? trimmed : null
 }
 
 function normalizeProviderNodeId(value: unknown): string | null {
@@ -104,6 +115,7 @@ export function cloneGuideRouteComponentProps(props: GuideRouteComponentProps): 
       name: w.name,
       position: { x: w.position.x, y: w.position.y, z: w.position.z },
       dock: w.dock === true,
+      thumbnailAssetId: normalizeOptionalAssetId(w.thumbnailAssetId),
     })),
   }
 }

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { DEVICE_ADAPTATION_COMPONENT_TYPE } from '@schema/components'
+import {
+  DEVICE_ADAPTATION_COMPONENT_TYPE,
+  GUIDE_ROUTE_COMPONENT_TYPE,
+} from '@schema/components'
 import {
   buildSceneAssetReferenceSummaryMap,
   collectSceneAssetReferenceRecords,
@@ -93,6 +96,39 @@ describe('scene asset diagnostics', () => {
     expect(report.issues).toContainEqual(expect.objectContaining({
       assetId: 'scatter-asset',
       code: 'missing-catalog-entry',
+    }))
+  })
+
+  it('treats Guide Route waypoint thumbnails as runtime asset references', () => {
+    const scene = createScene([createNode({
+      dynamicMesh: { type: 'GuideRoute', vertices: [] },
+      components: {
+        [GUIDE_ROUTE_COMPONENT_TYPE]: {
+          id: 'guide-route-component',
+          type: GUIDE_ROUTE_COMPONENT_TYPE,
+          enabled: true,
+          props: {
+            version: 2,
+            surfaceProviderNodeId: 'terrain',
+            routeSource: 'drawn',
+            sampleSpacingM: 2,
+            roadLateralOffsetM: 0,
+            waypoints: [
+              {
+                name: 'P1',
+                position: { x: 0, y: 0, z: 0 },
+                thumbnailAssetId: 'waypoint-thumbnail',
+              },
+            ],
+          },
+        },
+      },
+    })])
+
+    const references = collectSceneAssetReferenceRecords(scene)
+    expect(references).toContainEqual(expect.objectContaining({
+      assetId: 'waypoint-thumbnail',
+      path: expect.stringContaining('waypoints[0].thumbnailAssetId'),
     }))
   })
 })

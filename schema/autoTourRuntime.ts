@@ -15,6 +15,11 @@ import {
   sampleEvaluatedGuideRouteAtDistance,
   type EvaluatedGuideRoute,
 } from './guideRouteRuntime'
+import {
+  buildGuideRouteTravelWindow,
+  type GuideRouteTourTargetOptions,
+  type GuideRouteTravelWindow,
+} from './guideRouteTourTarget'
 import { sampleProceduralLandscapeTerrainHeight } from './proceduralLandscape/runtime'
 import {
   buildPolylineMetricData,
@@ -51,16 +56,19 @@ export type AutoTourRouteSnapResult = {
   segmentIndex: number
   targetIndex: number
   routeWaypointCount: number
+  sourceRouteWaypointCount: number
   polylineData3d: PolylineMetricData
   waypointArcLengths3d: number[]
+  travelWindow: GuideRouteTravelWindow | null
+  targetReached: boolean
 }
 
 export type AutoTourRuntime = {
   update: (deltaSeconds: number) => void
   reset: () => void
-  resolveRouteSnap: (nodeId: string) => AutoTourRouteSnapResult | null
+  resolveRouteSnap: (nodeId: string, target?: GuideRouteTourTargetOptions) => AutoTourRouteSnapResult | null
   seedTourPlaybackState: (nodeId: string, snap: AutoTourRouteSnapResult) => void
-  startTour: (nodeId: string) => void
+  startTour: (nodeId: string, target?: GuideRouteTourTargetOptions) => void
   continueFromEnd: (nodeId: string) => void
   stopTour: (nodeId: string) => void
   isTourActive: (nodeId: string) => boolean
@@ -75,9 +83,11 @@ type RouteData = {
 type PlaybackState = {
   routeNodeId: string
   routeWaypointCount: number
+  sourceRouteWaypointCount: number
   distanceAlongRoute: number
   hasGroundSupportSample: boolean
   dockHoldIndex: number | null
+  travelWindow: GuideRouteTravelWindow | null
 }
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
@@ -136,12 +146,40 @@ function syncNodeTransformFromObject(node: SceneNode, object: THREE.Object3D): v
 function resolveRouteData(
   routeNode: SceneNode,
   providerObject: THREE.Object3D | null,
+  routeObject: THREE.Object3D | null,
   loop: boolean,
 ): RouteData | null {
-  const evaluation = evaluateGuideRoute({ routeNode, providerObject })
+  const evaluation = evaluateGuideRoute({ routeNode, providerObject, routeObject })
   if (evaluation.status !== 'ready') {
     return null
   }
+  const cached = routeDataCache.get(evaluation)
+  if (cached) {
+    return cached
+  }
+  const polylineData3d = buildPolylineMetricData(evaluation.points, {
+    closed: loop,
+    mode: '3d',
+  })
+  if (!polylineData3d) {
+    return null
+  }
+  const routeData: RouteData = {
+    evaluation,
+    polylineData3d,
+    waypointArcLengths3d: buildPolylineVertexArcLengths(
+      evaluation.points,
+      polylineData3d,
+    ),
+  }
+  routeDataCache.set(evaluation, routeData)
+  return routeData
+}
+
+function buildRouteDataFromEvaluation(
+  evaluation: EvaluatedGuideRoute,
+  loop: boolean,
+): RouteData | null {
   const cached = routeDataCache.get(evaluation)
   if (cached) {
     return cached
@@ -318,6 +356,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const playbackStates = new Map<string, PlaybackState>()
   const activeTourNodes = new Set<string>()
   const disabledTourNodes = new Set<string>()
+  const pendingTourTargets = new Map<string, GuideRouteTourTargetOptions>()
   const vehicleLocalBoundsCache = new WeakMap<THREE.Object3D, THREE.Box3>()
   const resolveObjectBounds = deps.resolveObjectBounds
     ?? ((object: THREE.Object3D) => new THREE.Box3().setFromObject(object))
@@ -340,7 +379,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     const providerObject = providerNodeId
       ? deps.nodeObjectMap.get(providerNodeId) ?? null
       : null
-    return resolveRouteData(routeNode, providerObject, Boolean(tourProps.loop))
+    const routeObject = deps.nodeObjectMap.get(routeNodeId) ?? null
+    return resolveRouteData(routeNode, providerObject, routeObject, Boolean(tourProps.loop))
   }
 
   function initializePlaybackState(params: {
@@ -360,9 +400,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     return {
       routeNodeId,
       routeWaypointCount: routeData.evaluation.points.length,
+      sourceRouteWaypointCount: routeData.evaluation.points.length,
       distanceAlongRoute: projection.s,
       hasGroundSupportSample: false,
       dockHoldIndex: null,
+      travelWindow: null,
     }
   }
 
@@ -445,12 +487,155 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         Boolean(tourProps.loop),
       ),
       routeWaypointCount: routeData.evaluation.points.length,
+      sourceRouteWaypointCount: routeData.evaluation.points.length,
       polylineData3d: routeData.polylineData3d,
       waypointArcLengths3d: routeData.waypointArcLengths3d,
+      travelWindow: null,
+      targetReached: false,
     }
   }
 
-  function resolveRouteSnap(nodeId: string): AutoTourRouteSnapResult | null {
+  function resolveTargetedSnap(
+    nodeId: string,
+    tourProps: AutoTourComponentProps,
+    node: SceneNode,
+    routeData: RouteData,
+    target: GuideRouteTourTargetOptions,
+  ): AutoTourRouteSnapResult | null {
+    const object = deps.nodeObjectMap.get(nodeId) ?? null
+    if (!object) {
+      return null
+    }
+    object.updateMatrixWorld(true)
+    const current = object.getWorldPosition(new THREE.Vector3())
+    const projection = projectPointToPolyline(
+      routeData.evaluation.points,
+      routeData.polylineData3d,
+      current,
+      new THREE.Vector3(),
+    )
+    const travelWindow = buildGuideRouteTravelWindow(
+      routeData.evaluation,
+      projection.s,
+      target,
+      Boolean(tourProps.loop),
+    )
+    if (!travelWindow) {
+      const sample = sampleEvaluatedGuideRouteAtDistance(routeData.evaluation, projection.s)
+      if (!sample) {
+        return null
+      }
+      const tangent = sampleEvaluatedGuideRouteAtDistance(
+        routeData.evaluation,
+        Math.min(routeData.evaluation.totalLength, projection.s + 0.001),
+      )?.point.clone().sub(sample.point) ?? new THREE.Vector3(1, 0, 0)
+      if (tangent.lengthSq() <= 1e-8) {
+        tangent.set(1, 0, 0)
+      } else {
+        tangent.normalize()
+      }
+      const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(
+        node,
+        VEHICLE_COMPONENT_TYPE,
+      )
+      const yaw = Math.atan2(-tangent.z, tangent.x)
+      const worldQuaternion = vehicleComponent
+        ? buildVehicleQuaternion(
+          clampVehicleComponentProps(vehicleComponent.props),
+          tangent,
+          sample.normal,
+        )
+        : new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw)
+      return {
+        nodeId,
+        routeNodeId: tourProps.routeNodeId!,
+        worldPosition: vehicleComponent
+          ? resolveSupportedVehicleWorldPosition({
+            object,
+            routePoint: sample.point,
+            worldQuaternion,
+            providerNodeId: routeData.evaluation.providerNodeId,
+            resolveObjectBounds,
+            localBoundsCache: vehicleLocalBoundsCache,
+          })
+          : sample.point.clone(),
+        worldQuaternion,
+        forwardWorld: tangent,
+        yaw,
+        projectedS: projection.s,
+        segmentIndex: projection.segmentIndex,
+        targetIndex: 0,
+        routeWaypointCount: routeData.evaluation.points.length,
+        sourceRouteWaypointCount: routeData.evaluation.points.length,
+        polylineData3d: routeData.polylineData3d,
+        waypointArcLengths3d: routeData.waypointArcLengths3d,
+        travelWindow: null,
+        targetReached: true,
+      }
+    }
+
+    const windowRouteData = buildRouteDataFromEvaluation(travelWindow.route, false)
+    if (!windowRouteData) {
+      return null
+    }
+    const sample = sampleEvaluatedGuideRouteAtDistance(windowRouteData.evaluation, 0)
+    if (!sample) {
+      return null
+    }
+    const tangentStart = sampleEvaluatedGuideRouteAtDistance(windowRouteData.evaluation, 0)
+    const tangentEnd = sampleEvaluatedGuideRouteAtDistance(windowRouteData.evaluation, 0.5)
+    const forwardWorld = tangentStart && tangentEnd
+      ? tangentEnd.point.clone().sub(tangentStart.point)
+      : new THREE.Vector3(1, 0, 0)
+    if (forwardWorld.lengthSq() <= 1e-8) {
+      forwardWorld.set(1, 0, 0)
+    } else {
+      forwardWorld.normalize()
+    }
+    const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(
+      node,
+      VEHICLE_COMPONENT_TYPE,
+    )
+    const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
+    const worldQuaternion = vehicleComponent
+      ? buildVehicleQuaternion(
+        clampVehicleComponentProps(vehicleComponent.props),
+        forwardWorld,
+        sample.normal,
+      )
+      : new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw)
+    return {
+      nodeId,
+      routeNodeId: tourProps.routeNodeId!,
+      worldPosition: vehicleComponent
+        ? resolveSupportedVehicleWorldPosition({
+          object,
+          routePoint: sample.point,
+          worldQuaternion,
+          providerNodeId: routeData.evaluation.providerNodeId,
+          resolveObjectBounds,
+          localBoundsCache: vehicleLocalBoundsCache,
+        })
+        : sample.point.clone(),
+      worldQuaternion,
+      forwardWorld,
+      yaw,
+      projectedS: 0,
+      segmentIndex: 0,
+      targetIndex: 1,
+      routeWaypointCount: windowRouteData.evaluation.points.length,
+      sourceRouteWaypointCount: routeData.evaluation.points.length,
+      polylineData3d: windowRouteData.polylineData3d,
+      waypointArcLengths3d: windowRouteData.waypointArcLengths3d,
+      travelWindow,
+      targetReached: false,
+    }
+  }
+
+  function resolveRouteSnap(
+    nodeId: string,
+    target?: GuideRouteTourTargetOptions,
+  ): AutoTourRouteSnapResult | null {
     const node = deps.resolveNodeById(nodeId)
     if (!node) {
       return null
@@ -464,9 +649,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
     const tourProps = clampAutoTourComponentProps(component.props)
     const routeData = resolveNodeRoute(tourProps)
-    return routeData
-      ? resolveSnap(nodeId, tourProps, node, routeData)
-      : null
+    if (!routeData) {
+      return null
+    }
+    return target
+      ? resolveTargetedSnap(nodeId, tourProps, node, routeData, target)
+      : resolveSnap(nodeId, tourProps, node, routeData)
   }
 
   function seedTourPlaybackState(
@@ -481,16 +669,20 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     playbackStates.set(nodeId, {
       routeNodeId: snap.routeNodeId,
       routeWaypointCount: snap.routeWaypointCount,
-      distanceAlongRoute: snap.projectedS,
+      sourceRouteWaypointCount: snap.sourceRouteWaypointCount,
+      distanceAlongRoute: snap.travelWindow ? 0 : snap.projectedS,
       hasGroundSupportSample: false,
       dockHoldIndex: null,
+      travelWindow: snap.travelWindow,
     })
+    pendingTourTargets.delete(nodeId)
   }
 
   function stopTour(nodeId: string): void {
     playbackStates.delete(nodeId)
     activeTourNodes.delete(nodeId)
     disabledTourNodes.add(nodeId)
+    pendingTourTargets.delete(nodeId)
     deps.onAutoSurfaceEnd?.(nodeId)
   }
 
@@ -518,8 +710,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
       const tourProps = clampAutoTourComponentProps(component.props)
-      const routeData = resolveNodeRoute(tourProps)
-      if (!routeData) {
+      const fullRouteData = resolveNodeRoute(tourProps)
+      if (!fullRouteData) {
         continue
       }
       const routeNodeId = tourProps.routeNodeId!
@@ -527,15 +719,61 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (
         !state
         || state.routeNodeId !== routeNodeId
-        || state.routeWaypointCount !== routeData.evaluation.points.length
+        || state.sourceRouteWaypointCount !== fullRouteData.evaluation.points.length
       ) {
-        state = initializePlaybackState({
-          object,
-          routeNodeId,
-          routeData,
-        })
+        const pendingTarget = pendingTourTargets.get(node.id)
+        if (pendingTarget) {
+          object.updateMatrixWorld(true)
+          const worldPosition = object.getWorldPosition(new THREE.Vector3())
+          const projection = projectPointToPolyline(
+            fullRouteData.evaluation.points,
+            fullRouteData.polylineData3d,
+            worldPosition,
+            new THREE.Vector3(),
+          )
+          const travelWindow = buildGuideRouteTravelWindow(
+            fullRouteData.evaluation,
+            projection.s,
+            pendingTarget,
+            Boolean(tourProps.loop),
+          )
+          const targetedRouteData = travelWindow
+            ? buildRouteDataFromEvaluation(travelWindow.route, false)
+            : null
+          pendingTourTargets.delete(node.id)
+          if (!travelWindow || !targetedRouteData) {
+            activeTourNodes.delete(node.id)
+            disabledTourNodes.add(node.id)
+            deps.onTerminalStop?.(node.id, 'guide-route-target-reached')
+            continue
+          }
+          state = {
+            routeNodeId,
+            routeWaypointCount: targetedRouteData.evaluation.points.length,
+            sourceRouteWaypointCount: fullRouteData.evaluation.points.length,
+            distanceAlongRoute: 0,
+            hasGroundSupportSample: false,
+            dockHoldIndex: null,
+            travelWindow,
+          }
+        } else {
+          state = initializePlaybackState({
+            object,
+            routeNodeId,
+            routeData: fullRouteData,
+          })
+        }
         playbackStates.set(node.id, state)
       }
+      let routeData = fullRouteData
+      if (state.travelWindow) {
+        const targetedRouteData = buildRouteDataFromEvaluation(state.travelWindow.route, false)
+        if (!targetedRouteData) {
+          continue
+        }
+        routeData = targetedRouteData
+      }
+      const routeIsLooping = Boolean(tourProps.loop) && !state.travelWindow
       if (!activeTourNodes.has(node.id)) {
         activeTourNodes.add(node.id)
         deps.onAutoSurfaceStart?.(node.id)
@@ -564,11 +802,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         nextDistance = nextDock.distance
         pauseAfterApply = {
           index: nextDock.index,
-          terminal: !tourProps.loop && nextDock.distance >= totalLength - TERMINAL_DISTANCE_EPSILON,
+          terminal: !routeIsLooping && nextDock.distance >= totalLength - TERMINAL_DISTANCE_EPSILON,
         }
       }
 
-      const isTerminal = !tourProps.loop
+      const isTerminal = !routeIsLooping
         && nextDistance >= totalLength - TERMINAL_DISTANCE_EPSILON
       if (isTerminal) {
         nextDistance = totalLength
@@ -577,7 +815,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           terminal: true,
         }
       } else if (totalLength > 0 && nextDistance > totalLength) {
-        if (tourProps.loop) {
+        if (routeIsLooping) {
           nextDistance %= totalLength
         } else {
           nextDistance = totalLength
@@ -660,6 +898,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
       state.distanceAlongRoute = nextDistance
       state.routeWaypointCount = routeData.evaluation.points.length
+      state.sourceRouteWaypointCount = fullRouteData.evaluation.points.length
       syncNodeTransformFromObject(node, object)
       deps.onNodeObjectTransformUpdated?.(node.id, object)
 
@@ -671,10 +910,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         } else {
           state.dockHoldIndex = pauseAfterApply.index
         }
-        deps.onDockRequestedPause?.(node.id, {
-          waypointIndex: pauseAfterApply.index,
-          terminal: pauseAfterApply.terminal,
-        })
+        if (!pauseAfterApply.terminal || !state.travelWindow) {
+          deps.onDockRequestedPause?.(node.id, {
+            waypointIndex: pauseAfterApply.index,
+            terminal: pauseAfterApply.terminal,
+          })
+        }
       }
     }
   }
@@ -683,7 +924,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     update,
     resolveRouteSnap,
     seedTourPlaybackState,
-    startTour: (nodeId) => {
+    startTour: (nodeId, target) => {
       if (!nodeId) {
         return
       }
@@ -693,6 +934,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       disabledTourNodes.delete(nodeId)
       playbackStates.delete(nodeId)
+      if (target) {
+        pendingTourTargets.set(nodeId, target)
+      } else {
+        pendingTourTargets.delete(nodeId)
+      }
       activeTourNodes.add(nodeId)
       deps.onAutoSurfaceStart?.(nodeId)
     },
@@ -703,6 +949,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       disabledTourNodes.delete(nodeId)
       playbackStates.delete(nodeId)
+      pendingTourTargets.delete(nodeId)
       activeTourNodes.add(nodeId)
       deps.onAutoSurfaceStart?.(nodeId)
     },
@@ -717,6 +964,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       activeTourNodes.clear()
       disabledTourNodes.clear()
       playbackStates.clear()
+      pendingTourTargets.clear()
     },
   }
 }

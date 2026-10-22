@@ -2,17 +2,23 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
+import { useAssetCacheStore } from '@/stores/assetCacheStore'
 import type { SceneNodeComponentState } from '@schema/core'
 import { GUIDE_ROUTE_COMPONENT_TYPE } from '@schema/components'
 import type { GuideRouteComponentProps } from '@schema/components'
 import { getProceduralLandscapeGuideRouteSurfaceState } from '@schema/proceduralLandscape/runtime'
+import type { ProjectAsset } from '@/types/project-asset'
+import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 type WaypointDraft = {
   name: string
   dock: boolean
+  thumbnailAssetId: string | null
 }
 
 const sceneStore = useSceneStore()
+const assetCacheStore = useAssetCacheStore()
 const { selectedGuideRouteWaypoint, selectedNode } = storeToRefs(sceneStore)
 
 const guideRouteComponent = computed(() => {
@@ -25,6 +31,11 @@ const guideRouteComponent = computed(() => {
 
 const localWaypoints = ref<WaypointDraft[]>([])
 const isSyncingFromScene = ref(false)
+const assetDialogVisible = ref(false)
+const assetDialogSelectedId = ref('')
+const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
+const assetDialogWaypointIndex = ref<number | null>(null)
+const dragTargetIndex = ref<number | null>(null)
 const selectedWaypointIndex = computed(() => {
   const selectedNodeId = selectedNode.value?.id ?? null
   if (!selectedNodeId || selectedGuideRouteWaypoint.value?.nodeId !== selectedNodeId) {
@@ -51,6 +62,24 @@ const surfaceState = computed(() => {
   const nodeId = surfaceProviderNodeId.value
   return nodeId ? getProceduralLandscapeGuideRouteSurfaceState(nodeId) : null
 })
+
+function normalizeAssetId(value: string | null | undefined): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  return trimmed
+}
+
+function resolveWaypointAsset(assetId: string | null | undefined): ProjectAsset | null {
+  const normalized = normalizeAssetId(assetId)
+  return normalized ? sceneStore.getAsset(normalized) ?? null : null
+}
+
+function resolveWaypointThumbnail(assetId: string | null | undefined): string | null {
+  const asset = resolveWaypointAsset(assetId)
+  if (!asset) {
+    return null
+  }
+  return assetCacheStore.resolveAssetThumbnail({ asset, assetId: asset.id })
+}
 
 function commitWaypoints(nextWaypoints: Array<WaypointDraft & { position: GuideRouteComponentProps['waypoints'][number]['position'] }>, selectedIndex?: number | null) {
   const nodeId = selectedNode.value?.id ?? null
@@ -88,6 +117,7 @@ function handleWaypointNameChange(index: number, value: string) {
     name: entryIndex === index ? String(value ?? '') : (typeof entry?.name === 'string' ? entry.name : ''),
     dock: entry?.dock === true,
     position: entry.position,
+    thumbnailAssetId: normalizeAssetId(entry?.thumbnailAssetId) || null,
   }))
   commitWaypoints(nextWaypoints, index)
 }
@@ -102,6 +132,46 @@ function handleWaypointDockChange(index: number, value: boolean | null) {
     name: typeof entry?.name === 'string' ? entry.name : '',
     dock: entryIndex === index ? value === true : entry?.dock === true,
     position: entry.position,
+    thumbnailAssetId: normalizeAssetId(entry?.thumbnailAssetId) || null,
+  }))
+  commitWaypoints(nextWaypoints, index)
+}
+
+function handleWaypointThumbnailChange(
+  index: number,
+  value: string | ProjectAsset | null | undefined,
+) {
+  const component = guideRouteComponent.value
+  if (!component || isSyncingFromScene.value || !isComponentEnabled.value) {
+    return
+  }
+  const current = Array.isArray(component.props.waypoints) ? component.props.waypoints : []
+  const requestedAsset = typeof value === 'object' && value
+    ? value
+    : resolveWaypointAsset(normalizeAssetId(value))
+  if (typeof value === 'string' && normalizeAssetId(value) && !requestedAsset) {
+    return
+  }
+  let registeredAsset: ProjectAsset | null = null
+  if (requestedAsset) {
+    try {
+      registeredAsset = sceneStore.ensureSceneAssetRegistered(requestedAsset, {
+        source: requestedAsset.source ?? { type: 'url' },
+        commitOptions: { updateNodes: false },
+      })
+    } catch (error) {
+      console.warn('Failed to register Guide Route thumbnail asset', requestedAsset.id, error)
+      return
+    }
+  }
+  const normalized = normalizeAssetId(registeredAsset?.id ?? '')
+  const nextWaypoints = current.map((entry, entryIndex) => ({
+    name: typeof entry?.name === 'string' ? entry.name : '',
+    dock: entry?.dock === true,
+    position: entry.position,
+    thumbnailAssetId: entryIndex === index
+      ? (normalized || null)
+      : (normalizeAssetId(entry?.thumbnailAssetId) || null),
   }))
   commitWaypoints(nextWaypoints, index)
 }
@@ -118,6 +188,7 @@ function handleDeleteWaypoint(index: number) {
       name: typeof entry?.name === 'string' ? entry.name : '',
       dock: entry?.dock === true,
       position: entry.position,
+      thumbnailAssetId: normalizeAssetId(entry?.thumbnailAssetId) || null,
     }))
   const nextSelectedIndex = nextWaypoints.length
     ? Math.min(index, nextWaypoints.length - 1)
@@ -146,6 +217,7 @@ watch(
       return {
         name,
         dock: entry?.dock === true,
+        thumbnailAssetId: normalizeAssetId(entry?.thumbnailAssetId) || null,
       }
     })
 
@@ -156,7 +228,136 @@ watch(
   { immediate: true },
 )
 
-// waypoint helpers removed (not referenced)
+function parseDraggedAssetId(event: DragEvent): string {
+  if (event.dataTransfer) {
+    const raw = event.dataTransfer.getData(ASSET_DRAG_MIME)
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { assetId?: unknown } | null
+        if (typeof parsed?.assetId === 'string' && parsed.assetId.trim()) {
+          return parsed.assetId.trim()
+        }
+      } catch (error) {
+        console.warn('Failed to parse Guide Route thumbnail drag payload', error)
+      }
+    }
+  }
+  return typeof sceneStore.draggingAssetId === 'string'
+    ? sceneStore.draggingAssetId.trim()
+    : ''
+}
+
+function isSupportedThumbnailAsset(asset: ProjectAsset | null): asset is ProjectAsset {
+  return Boolean(asset && (asset.type === 'image' || asset.type === 'texture'))
+}
+
+function resolveDraggedThumbnailAsset(event: DragEvent): ProjectAsset | null {
+  const assetId = parseDraggedAssetId(event)
+  return assetId ? sceneStore.getAsset(assetId) ?? null : null
+}
+
+function handleThumbnailDragEnter(event: DragEvent, index: number) {
+  if (!isComponentEnabled.value || !isSupportedThumbnailAsset(resolveDraggedThumbnailAsset(event))) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  dragTargetIndex.value = index
+}
+
+function handleThumbnailDragOver(event: DragEvent, index: number) {
+  if (!isComponentEnabled.value) {
+    return
+  }
+  if (!isSupportedThumbnailAsset(resolveDraggedThumbnailAsset(event))) {
+    if (dragTargetIndex.value === index) {
+      dragTargetIndex.value = null
+    }
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy'
+  }
+  dragTargetIndex.value = index
+}
+
+function handleThumbnailDragLeave(event: DragEvent, index: number) {
+  if (dragTargetIndex.value !== index) {
+    return
+  }
+  const target = event.currentTarget as HTMLElement | null
+  const related = event.relatedTarget as Node | null
+  if (target && related && target.contains(related)) {
+    return
+  }
+  dragTargetIndex.value = null
+}
+
+function handleThumbnailDrop(event: DragEvent, index: number) {
+  dragTargetIndex.value = null
+  if (!isComponentEnabled.value) {
+    return
+  }
+  const asset = resolveDraggedThumbnailAsset(event)
+  if (!isSupportedThumbnailAsset(asset)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  handleWaypointThumbnailChange(index, asset)
+}
+
+function handleOpenThumbnailPicker(event: MouseEvent, index: number) {
+  if (!isComponentEnabled.value) {
+    return
+  }
+  event.stopPropagation()
+  assetDialogWaypointIndex.value = index
+  assetDialogSelectedId.value = localWaypoints.value[index]?.thumbnailAssetId ?? ''
+  assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
+  assetDialogVisible.value = true
+}
+
+function handleThumbnailDialogUpdate(asset: ProjectAsset | null) {
+  const waypointIndex = assetDialogWaypointIndex.value
+  if (waypointIndex == null) {
+    assetDialogVisible.value = false
+    return
+  }
+  if (asset && !isSupportedThumbnailAsset(asset)) {
+    return
+  }
+  handleWaypointThumbnailChange(waypointIndex, asset)
+  assetDialogVisible.value = false
+}
+
+function handleThumbnailDialogCancel() {
+  assetDialogVisible.value = false
+}
+
+function handleClearThumbnail(event: MouseEvent, index: number) {
+  event.stopPropagation()
+  handleWaypointThumbnailChange(index, null)
+}
+
+watch(assetDialogVisible, (open) => {
+  if (!open) {
+    assetDialogWaypointIndex.value = null
+    assetDialogAnchor.value = null
+  }
+})
+
+watch(isComponentEnabled, (enabled) => {
+  if (!enabled) {
+    assetDialogVisible.value = false
+    dragTargetIndex.value = null
+  }
+})
 </script>
 
 <template>
@@ -221,6 +422,50 @@ watch(
               @click.stop
               @update:modelValue="(value) => handleWaypointDockChange(index, value as boolean | null)"
             />
+            <div
+              class="guide-route-waypoint-thumbnail"
+              :class="{
+                'is-drag-active': dragTargetIndex === index,
+                'is-disabled': !isComponentEnabled,
+                'is-empty': !waypoint.thumbnailAssetId,
+              }"
+              @click.stop="handleOpenThumbnailPicker($event, index)"
+              @dragenter="handleThumbnailDragEnter($event, index)"
+              @dragover="handleThumbnailDragOver($event, index)"
+              @dragleave="handleThumbnailDragLeave($event, index)"
+              @drop="handleThumbnailDrop($event, index)"
+            >
+              <div class="guide-route-waypoint-thumbnail__preview">
+                <img
+                  v-if="resolveWaypointThumbnail(waypoint.thumbnailAssetId)"
+                  :src="resolveWaypointThumbnail(waypoint.thumbnailAssetId) ?? undefined"
+                  :alt="resolveWaypointAsset(waypoint.thumbnailAssetId)?.name ?? '导航点缩略图'"
+                />
+                <v-icon v-else size="24">
+                  {{ waypoint.thumbnailAssetId ? 'mdi-image-broken-variant' : 'mdi-image-plus-outline' }}
+                </v-icon>
+              </div>
+              <div class="guide-route-waypoint-thumbnail__copy">
+                <span class="guide-route-waypoint-thumbnail__title">
+                  {{ resolveWaypointAsset(waypoint.thumbnailAssetId)?.name || (waypoint.thumbnailAssetId ? '资源不可用' : '选择缩略图') }}
+                </span>
+                <span class="guide-route-waypoint-thumbnail__hint">
+                  {{ waypoint.thumbnailAssetId ? '点击替换，或拖入图片资产' : '点击选择，或从资产面板拖入' }}
+                </span>
+              </div>
+              <v-btn
+                v-if="waypoint.thumbnailAssetId"
+                icon
+                variant="text"
+                density="compact"
+                size="small"
+                :disabled="!isComponentEnabled"
+                aria-label="清除导航点缩略图"
+                @click="handleClearThumbnail($event, index)"
+              >
+                <v-icon size="16">mdi-close</v-icon>
+              </v-btn>
+            </div>
           </div>
           <div class="guide-route-waypoint-actions">
             <v-btn
@@ -238,6 +483,15 @@ watch(
       <div v-else class="guide-route-empty">
         GuideRoute needs at least two points. Use edit mode in the scene to create or insert waypoints.
       </div>
+      <AssetPickerDialog
+        v-model="assetDialogVisible"
+        :asset-id="assetDialogSelectedId"
+        asset-type="image,texture"
+        title="选择导航点缩略图"
+        :anchor="assetDialogAnchor"
+        @update:asset="handleThumbnailDialogUpdate"
+        @cancel="handleThumbnailDialogCancel"
+      />
       <div class="guide-route-hint">
         In scene edit mode, click a route segment to insert a new waypoint.
       </div>
@@ -309,6 +563,79 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+.guide-route-waypoint-thumbnail {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 58px;
+  padding: 0.45rem;
+  border: 1px dashed rgba(var(--v-theme-primary), 0.28);
+  border-radius: 10px;
+  background: rgba(var(--v-theme-primary), 0.045);
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.guide-route-waypoint-thumbnail:hover {
+  border-color: rgba(var(--v-theme-primary), 0.62);
+  background: rgba(var(--v-theme-primary), 0.09);
+}
+
+.guide-route-waypoint-thumbnail.is-drag-active {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.16);
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-primary), 0.34) inset;
+}
+
+.guide-route-waypoint-thumbnail.is-disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.guide-route-waypoint-thumbnail__preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px;
+  height: 42px;
+  overflow: hidden;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.26);
+  color: rgba(233, 236, 241, 0.62);
+}
+
+.guide-route-waypoint-thumbnail__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.guide-route-waypoint-thumbnail__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.guide-route-waypoint-thumbnail__title {
+  overflow: hidden;
+  color: rgba(241, 245, 250, 0.92);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.guide-route-waypoint-thumbnail__hint {
+  color: rgba(233, 236, 241, 0.56);
+  font-size: 0.66rem;
+  line-height: 1.25;
 }
 
 .guide-route-waypoint-actions {

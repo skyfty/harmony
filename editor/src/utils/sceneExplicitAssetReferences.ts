@@ -4,10 +4,12 @@ import {
   BEHAVIOR_COMPONENT_TYPE,
   BILLBOARD_COMPONENT_TYPE,
   DISPLAY_BOARD_COMPONENT_TYPE,
+  GUIDE_ROUTE_COMPONENT_TYPE,
   LOD_COMPONENT_TYPE,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   type BillboardComponentProps,
   type DisplayBoardComponentProps,
+  type GuideRouteComponentProps,
   type LodComponentProps,
 } from '@schema/components'
 
@@ -46,6 +48,19 @@ function visitDisplayAssetReference(
   visit({
     assetId: props?.assetId,
     path: 'assetId',
+  })
+}
+
+function visitGuideRouteAssetReferences(
+  props: Partial<GuideRouteComponentProps> | null | undefined,
+  visit: (reference: ExplicitSceneAssetReference) => void,
+): void {
+  const waypoints = Array.isArray(props?.waypoints) ? props.waypoints : []
+  waypoints.forEach((waypoint, index) => {
+    visit({
+      assetId: waypoint?.thumbnailAssetId,
+      path: `waypoints[${index}].thumbnailAssetId`,
+    })
   })
 }
 
@@ -117,6 +132,12 @@ export function visitExplicitComponentAssetReferences(
       return
     case BILLBOARD_COMPONENT_TYPE:
       visitDisplayAssetReference(props as Partial<BillboardComponentProps> | null | undefined, visit)
+      return
+    case GUIDE_ROUTE_COMPONENT_TYPE:
+      visitGuideRouteAssetReferences(
+        props as Partial<GuideRouteComponentProps> | null | undefined,
+        visit,
+      )
       return
     case BEHAVIOR_COMPONENT_TYPE:
       visitBehaviorAssetReferences(props as Partial<BehaviorComponentProps> | null | undefined, visit)

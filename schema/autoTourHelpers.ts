@@ -1,7 +1,8 @@
 import * as THREE from 'three'
+import type { GuideRouteTourTargetOptions } from './guideRouteTourTarget'
 
 export interface AutoTourRuntimeLike {
-  startTour(nodeId: string): void
+  startTour(nodeId: string, target?: GuideRouteTourTargetOptions): void
   stopTour(nodeId: string): void
 }
 

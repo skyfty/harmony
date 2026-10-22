@@ -18760,7 +18760,12 @@ export const useSceneStore = defineStore('scene', {
     createGuideRouteNode(payload: {
       nodeId?: string
       points: Vector3Like[]
-      waypoints?: Array<{ name?: string; dock?: boolean; position?: Vector3Like }>
+      waypoints?: Array<{
+        name?: string
+        dock?: boolean
+        position?: Vector3Like
+        thumbnailAssetId?: string | null
+      }>
       surfaceProviderNodeId?: string | null
       routeSource?: GuideRouteComponentProps['routeSource']
       sampleSpacingM?: number

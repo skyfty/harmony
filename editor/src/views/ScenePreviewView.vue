@@ -265,6 +265,10 @@ import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstanc
 import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import {
+	fetchResourceAsset,
+	mapServerAssetToProjectAsset,
+} from '@/api/resourceAssets'
 import { ComponentManager } from '@schema/components/componentManager'
 import { onlineComponentDefinition } from '@schema/components/definitions/onlineComponent'
 import { preloadableComponentDefinition } from '@schema/components/definitions/preloadableComponent'
@@ -418,6 +422,12 @@ import {
   stopTourAndUnfollow,
 } from '@schema/motion'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/motion'
+import type { GuideRouteTourTargetOptions } from '@schema/guideRouteTourTarget'
+import {
+	ensureSceneActorAutoTourComponents,
+	findFirstSceneActorNode,
+	transferSceneActorAutoTourComponent,
+} from '@schema/sceneActorAutoTour'
 import {
 	createControlledNodeMotionRuntime,
 	updateVehicleSpeedAndApplyParkingHoldSafe,
@@ -2045,6 +2055,31 @@ const autoTourPausedIsTerminal = ref(false)
 const autoTourPausedNodeId = ref<string | null>(null)
 
 const autoTourFollowNodeId = ref<string | null>(null)
+type GuideWaypointMenuItem = {
+	index: number
+	name: string
+	thumbnailAssetId: string
+	imageUrl: string | null
+	loading: boolean
+	error: string | null
+}
+const guideWaypointMenuOpen = ref(false)
+const guideWaypointMenuLoading = ref(false)
+const guideWaypointMenuItems = ref<GuideWaypointMenuItem[]>([])
+const guideWaypointMenuContextRevision = ref(0)
+const guideWaypointMenuActorNodeId = computed<string | null>(() => (
+	guideWaypointMenuContextRevision.value,
+	resolveCurrentGuideWaypointActorNodeId()
+))
+const guideWaypointMenuRouteNodeId = computed<string | null>(() => {
+	guideWaypointMenuContextRevision.value
+	const actor = resolveAutoTourComponent(resolveNodeById(guideWaypointMenuActorNodeId.value ?? ''))
+	return actor?.props?.routeNodeId?.trim() || null
+})
+const guideWaypointMenuVisible = computed(() => (
+	Boolean(guideWaypointMenuRouteNodeId.value)
+	&& guideWaypointMenuItems.value.length > 0
+))
 const autoTourCameraFollowState = createCameraFollowState()
 const autoTourCameraFollowController = new FollowCameraController()
 const autoTourCameraFollowLastAnchor = new THREE.Vector3()
@@ -4422,6 +4457,187 @@ function resolveAutoTourComponent(
 	return resolveEnabledComponentState<AutoTourComponentProps>(node, AUTO_TOUR_COMPONENT_TYPE)
 }
 
+function resolveCurrentGuideWaypointActorNodeId(): string | null {
+	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
+		return vehicleDriveState.nodeId
+	}
+	if (autoTourFollowNodeId.value) {
+		return autoTourFollowNodeId.value
+	}
+	const activeCharacterNodeId = activeCharacterAutoTourNodeIds.values().next().value as string | undefined
+	if (activeCharacterNodeId) {
+		return activeCharacterNodeId
+	}
+	const pendingNodeId = pendingVehicleDriveEvent.value?.targetNodeId
+		?? pendingVehicleDriveEvent.value?.nodeId
+		?? null
+	if (pendingNodeId) {
+		return pendingNodeId
+	}
+	return resolveDefaultControlledCharacterNodeId()
+}
+
+let guideWaypointMenuRefreshRevision = 0
+let guideWaypointMenuRefreshSignature = ''
+const guideWaypointThumbnailUrlCache = new Map<string, Promise<string | null>>()
+
+async function resolveGuideWaypointThumbnailUrl(assetId: string): Promise<string | null> {
+	const normalizedAssetId = assetId.trim().replace(/^asset:\/\//i, '')
+	if (!normalizedAssetId) {
+		return null
+	}
+	const cached = guideWaypointThumbnailUrlCache.get(normalizedAssetId)
+	if (cached) {
+		return await cached
+	}
+	const request = (async () => {
+		const resolved = await resolveAssetUrlReference(normalizedAssetId)
+		if (resolved?.url) {
+			return resolved.url
+		}
+		const registryEntry = currentDocument?.assetRegistry?.[normalizedAssetId] as
+			| Record<string, unknown>
+			| undefined
+		const resolvedUrl = typeof registryEntry?.resolvedUrl === 'string'
+			? registryEntry.resolvedUrl.trim()
+			: ''
+		if (resolvedUrl) {
+			return resolvedUrl
+		}
+		const directUrl = typeof registryEntry?.url === 'string'
+			? registryEntry.url.trim()
+			: ''
+		if (directUrl) {
+			return directUrl
+		}
+		const summaryUrl = currentDocument?.resourceSummary?.assets
+			?.find((entry) => entry.assetId === normalizedAssetId)
+			?.downloadUrl
+			?.trim() ?? ''
+		if (summaryUrl) {
+			return summaryUrl
+		}
+		const serverAssetId = typeof registryEntry?.serverAssetId === 'string'
+			? registryEntry.serverAssetId.trim()
+			: normalizedAssetId
+		if (!serverAssetId) {
+			return null
+		}
+		try {
+			const serverAsset = await fetchResourceAsset(serverAssetId)
+			const projectAsset = mapServerAssetToProjectAsset(serverAsset)
+			return projectAsset.downloadUrl?.trim() || null
+		} catch (error) {
+			console.warn('[ScenePreviewView] Failed to fetch Guide Route thumbnail metadata', normalizedAssetId, error)
+			return null
+		}
+	})()
+	guideWaypointThumbnailUrlCache.set(normalizedAssetId, request)
+	return await request
+}
+
+function closeGuideWaypointMenu(): void {
+	guideWaypointMenuOpen.value = false
+}
+
+async function refreshGuideWaypointMenuDestinations(force = false): Promise<void> {
+	const actorNodeId = guideWaypointMenuActorNodeId.value
+	const routeNodeId = guideWaypointMenuRouteNodeId.value
+	const signature = `${actorNodeId ?? ''}|${routeNodeId ?? ''}|${currentDocument?.updatedAt ?? ''}`
+	if (!force && signature === guideWaypointMenuRefreshSignature) {
+		return
+	}
+	guideWaypointMenuRefreshSignature = signature
+	const revision = ++guideWaypointMenuRefreshRevision
+	closeGuideWaypointMenu()
+	const routeNode = routeNodeId ? resolveNodeById(routeNodeId) : null
+	if (!routeNode) {
+		guideWaypointMenuItems.value = []
+		guideWaypointMenuLoading.value = false
+		return
+	}
+	const props = clampGuideRouteComponentProps(
+		(routeNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props ?? null) as
+			| Partial<GuideRouteComponentProps>
+			| null,
+	)
+	const items = props.waypoints.flatMap((waypoint, index) => {
+		const thumbnailAssetId = typeof waypoint.thumbnailAssetId === 'string'
+			? waypoint.thumbnailAssetId.trim()
+			: ''
+		return thumbnailAssetId
+			? [{
+				index,
+				name: waypoint.name.trim() || `P${index + 1}`,
+				thumbnailAssetId,
+				imageUrl: null,
+				loading: true,
+				error: null,
+			} satisfies GuideWaypointMenuItem]
+			: []
+	})
+	guideWaypointMenuItems.value = items
+	if (!items.length) {
+		guideWaypointMenuLoading.value = false
+		return
+	}
+	guideWaypointMenuLoading.value = true
+	const resolvedItems = await Promise.all(items.map(async (item) => {
+		try {
+			const imageUrl = await resolveGuideWaypointThumbnailUrl(item.thumbnailAssetId)
+			return {
+				...item,
+				imageUrl,
+				loading: false,
+				error: imageUrl ? null : '缩略图资源不可用',
+			}
+		} catch (error) {
+			console.warn('[ScenePreviewView] Failed to resolve Guide Route thumbnail', item.thumbnailAssetId, error)
+			return {
+				...item,
+				imageUrl: null,
+				loading: false,
+				error: '缩略图资源加载失败',
+			}
+		}
+	}))
+	if (revision !== guideWaypointMenuRefreshRevision) {
+		return
+	}
+	guideWaypointMenuItems.value = resolvedItems
+	guideWaypointMenuLoading.value = false
+}
+
+function toggleGuideWaypointMenu(): void {
+	if (!guideWaypointMenuVisible.value) {
+		return
+	}
+	guideWaypointMenuOpen.value = !guideWaypointMenuOpen.value
+	if (guideWaypointMenuOpen.value) {
+		closePreviewEnvironmentMenu()
+	}
+}
+
+function isGuideWaypointMenuItemDisabled(item: GuideWaypointMenuItem): boolean {
+	return item.loading || !item.imageUrl || Boolean(item.error) || vehicleDrivePromptBusy.value
+}
+
+function handleGuideWaypointSelect(item: GuideWaypointMenuItem): void {
+	closeGuideWaypointMenu()
+	if (isGuideWaypointMenuItemDisabled(item)) {
+		return
+	}
+	void handleGuideWaypointAutoTourStart(item.index)
+}
+
+function handleGuideWaypointImageError(item: GuideWaypointMenuItem): void {
+	guideWaypointMenuItems.value = guideWaypointMenuItems.value.map((entry) => (
+		entry.index === item.index
+			? { ...entry, imageUrl: null, loading: false, error: '缩略图加载失败' }
+			: entry
+	))
+}
+
 function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): { points: THREE.Vector3[]; dock: boolean[] } | null {
 	const routeNode = resolveNodeById(routeNodeId)
 	if (!routeNode) {
@@ -4435,7 +4651,8 @@ function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): { points:
 	const providerObject = props.surfaceProviderNodeId
 		? nodeObjectMap.get(props.surfaceProviderNodeId) ?? null
 		: null
-	const evaluation = evaluateGuideRoute({ routeNode, providerObject })
+	const routeObject = nodeObjectMap.get(routeNode.id) ?? null
+	const evaluation = evaluateGuideRoute({ routeNode, providerObject, routeObject })
 	return evaluation.status === 'ready'
 		? { points: evaluation.points, dock: evaluation.dock }
 		: null
@@ -4476,6 +4693,20 @@ const autoTourRuntime = createAutoTourRuntime({
 	nodeObjectMap,
 	resolveObjectBounds: (object) => setBoundingBoxFromObject(object, new THREE.Box3()),
 	isManualDriveActive: () => vehicleDriveState.active,
+	onTerminalStop: (nodeId) => {
+		activeAutoTourNodeIds.delete(nodeId)
+		if (autoTourFollowNodeId.value === nodeId) {
+			autoTourFollowNodeId.value = null
+			resetAutoTourCameraFollowState()
+			followCameraControlActive = false
+			followCameraControlDirty = false
+			setCameraViewState('level', null)
+		}
+		autoTourPaused.value = false
+		autoTourPausedIsTerminal.value = false
+		autoTourPausedNodeId.value = null
+		applyAutoTourCameraInputPolicy()
+	},
 	onDockRequestedPause: (nodeId, payload) => {
 		autoTourPausedIsTerminal.value = payload.terminal === true
 		autoTourPausedNodeId.value = nodeId
@@ -6984,6 +7215,7 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 	}
 	const prefab = parseRuntimePrefabData(raw)
 	const cloned = cloneRuntimePrefabNode(prefab)
+	const donorNode = event.targetNodeId ? resolveNodeById(event.targetNodeId) : null
 	const anchor = resolveRuntimePrefabAnchorTransform(event.targetNodeId, null)
 	if (anchor.position) {
 		cloned.root.position = anchor.position
@@ -7023,9 +7255,14 @@ async function spawnBehaviorRuntimePrefab(event: Extract<BehaviorRuntimeEvent, {
 	runtimePrefabPreviewRoots.add(graph.root)
 
 	if (normalizeRuntimePrefabMode(event.initializationMode) === 'full') {
+		const spawnedActor = findFirstSceneActorNode(cloned.root)
+		if (donorNode && spawnedActor) {
+			transferSceneActorAutoTourComponent(donorNode, spawnedActor)
+		}
 		mergeRuntimePrefabAssetRegistry(currentDocument, runtimeDocument)
 		currentDocument.nodes = [...(currentDocument.nodes ?? []), cloned.root]
 		currentDocument.updatedAt = new Date().toISOString()
+		ensureSceneActorAutoTourComponents(currentDocument)
 		rebuildPreviewNodeMap(currentDocument)
 		registerSubtree(graph.root)
 		await syncPhysicsBodiesForDocument(currentDocument)
@@ -7193,6 +7430,10 @@ async function switchControlNodeRuntimePrefab(
 		const resolvedEffectiveNodeId = effectiveNodeId
 		const isCharacter = event.targetType === 'character'
 		if (isCharacter ? !resolveCharacterControllerComponent(effectiveNode) : !resolveVehicleComponent(effectiveNode)) return false
+		transferSceneActorAutoTourComponent(
+			mainNode,
+			findFirstSceneActorNode(effectiveNode, isCharacter ? 'character' : 'vehicle') ?? effectiveNode,
+		)
 		if (!existing) {
 			latestControlNodeRestoreSnapshot = {
 				targetType: binding.steerProps.targetType, mainNodeId: resolvedMainNodeId, temporaryNodeId: resolvedEffectiveNodeId,
@@ -7206,6 +7447,7 @@ async function switchControlNodeRuntimePrefab(
 		const mainObject = nodeObjectMap.get(resolvedMainNodeId) ?? null
 		if (mainObject) mainObject.visible = false
 		currentDocument.nodes = [...(currentDocument.nodes ?? []), effectiveNode]
+		ensureSceneActorAutoTourComponents(currentDocument)
 		scene.add(instanced.sceneRootObject); registerSubtree(instanced.sceneRootObject); rebuildPreviewNodeMap(currentDocument)
 		binding.steerComponent.props = clampSteerComponentProps({ ...binding.steerComponent.props, targetType: event.targetType, targetNodeId: resolvedEffectiveNodeId })
 		syncSteerBindingIndexForNode(binding.steerNode); attachControlNodePrefabMetadata(effectiveNode, assetId)
@@ -10042,6 +10284,7 @@ async function buildPreviewRuntimeDocument(
 		attachGroundScatterRuntimeToNode(runtimeDocument.id, groundNode)
 	}
 	attachRoadCollisionCompiledExportToDocument(runtimeDocument)
+	ensureSceneActorAutoTourComponents(runtimeDocument)
 	return runtimeDocument
 }
 
@@ -10932,16 +11175,19 @@ function handleHideVehicleCockpitEvent(): void {
 	setVehicleDriveUiOverride('hide')
 }
 
-async function handleVehicleAutoTourStartClick(): Promise<void> {
-	const event = pendingVehicleDriveEvent.value
-	if (!event || vehicleDrivePromptBusy.value) {
+async function startAutoTourForActor(
+	targetNodeId: string,
+	target?: GuideRouteTourTargetOptions,
+): Promise<void> {
+	if (vehicleDrivePromptBusy.value) {
 		return
 	}
-	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
-	if (!targetNodeId) {
-		return
-	}
+	const event = pendingVehicleDriveEvent.value ?? buildActorAutoTourPromptEvent(targetNodeId)
 	const node = resolveNodeById(targetNodeId)
+	if (!node) {
+		appendWarningMessage('无法找到目标角色或车辆。')
+		return
+	}
 	const autoTourComponent = resolveAutoTourComponent(node)
 	if (!autoTourComponent?.props?.routeNodeId) {
 		appendWarningMessage('AutoTour component is not enabled on the target node.')
@@ -10964,18 +11210,18 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 			characterAutoTourRuntime.deactivate(nodeId)
 		})
 		activeCharacterAutoTourNodeIds.clear()
+		Array.from(activeAutoTourNodeIds).forEach((activeNodeId) => {
+			stopTourAndUnfollow(autoTourRuntime, activeNodeId, () => undefined)
+		})
+		activeAutoTourNodeIds.clear()
+		autoTourFollowNodeId.value = null
+		resetAutoTourCameraFollowState()
 		if (isCharacterTour) {
-			Array.from(activeAutoTourNodeIds).forEach((nodeId) => {
-				stopTourAndUnfollow(autoTourRuntime, nodeId, () => undefined)
-			})
-			activeAutoTourNodeIds.clear()
-			autoTourFollowNodeId.value = null
-			resetAutoTourCameraFollowState()
 			const snap = characterAutoTourRuntime.resolveRouteSnap({
 				iterNodes: () => previewNodeMap.entries(),
 				resolveNode: (nodeId) => resolveNodeById(nodeId),
 				nodeObjectMap,
-			}, targetNodeId)
+			}, targetNodeId, target)
 			if (!snap) {
 				appendWarningMessage('Character auto-tour route is not ready.')
 				return
@@ -10986,9 +11232,13 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 				syncSceneNodeLocalTransformFromObject(node, targetObject)
 				syncInstancedTransform(targetObject, true)
 			}
+			if (snap.targetReached) {
+				appendWarningMessage('角色已经在目标导航点。')
+				return
+			}
 			resetCharacterFollowCameraState()
 			characterPlayerControlNodeIdOverride.value = targetNodeId
-			characterAutoTourRuntime.activate(targetNodeId)
+			characterAutoTourRuntime.activate(targetNodeId, target)
 			refreshCharacterPathFollowRuntimeEntries()
 			activeCharacterAutoTourNodeIds.add(targetNodeId)
 			resetCharacterControlInputs()
@@ -11006,7 +11256,7 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 
 		resetVehicleDriveInputs()
 		setVehicleDriveUiOverride('hide')
-		const snap = autoTourRuntime.resolveRouteSnap(targetNodeId)
+		const snap = autoTourRuntime.resolveRouteSnap(targetNodeId, target)
 		if (!snap) {
 			appendWarningMessage('Auto-tour route is not ready.')
 			return
@@ -11016,6 +11266,10 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 		if (snappedObject) {
 			syncSceneNodeLocalTransformFromObject(node, snappedObject)
 			syncInstancedTransform(snappedObject, true)
+		}
+		if (snap.targetReached) {
+			appendWarningMessage('车辆已经在目标导航点。')
+			return
 		}
 		clearAutoTourCameraObjectMetrics(targetNodeId)
 		const targetObject = nodeObjectMap.get(targetNodeId) ?? null
@@ -11043,6 +11297,25 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 		vehicleDrivePromptBusy.value = false
 		applyAutoTourCameraInputPolicy()
 	}
+}
+
+async function handleVehicleAutoTourStartClick(): Promise<void> {
+	const event = pendingVehicleDriveEvent.value
+	const targetNodeId = event?.targetNodeId ?? event?.nodeId ?? null
+	if (!targetNodeId) {
+		return
+	}
+	await startAutoTourForActor(targetNodeId)
+}
+
+async function handleGuideWaypointAutoTourStart(waypointIndex: number): Promise<void> {
+	const actorNodeId = guideWaypointMenuActorNodeId.value
+	if (!actorNodeId) {
+		appendWarningMessage('当前没有可控制且绑定了 Guide Route 的角色或车辆。')
+		return
+	}
+	pendingVehicleDriveEvent.value = buildActorAutoTourPromptEvent(actorNodeId)
+	await startAutoTourForActor(actorNodeId, { destinationWaypointIndex: waypointIndex })
 }
 
 function handleVehicleAutoTourPauseToggleClick(): void {
@@ -15880,6 +16153,12 @@ function resolveScenePreviewDeviceProfileId(document: SceneJsonExportDocument): 
 
 async function updateScene(document: SceneJsonExportDocument) {
 	scenePreviewDriveBindingsReady.value = false
+	guideWaypointMenuRefreshRevision += 1
+	guideWaypointMenuRefreshSignature = ''
+	guideWaypointThumbnailUrlCache.clear()
+	closeGuideWaypointMenu()
+	guideWaypointMenuItems.value = []
+	guideWaypointMenuLoading.value = false
 	activeCharacterAutoTourNodeIds.clear()
 	characterPlayerControlNodeIdOverride.value = null
 	resetAssetResolutionCaches()
@@ -16076,6 +16355,8 @@ async function updateScene(document: SceneJsonExportDocument) {
 			})
 		}
 		scenePreviewDriveBindingsReady.value = true
+		guideWaypointMenuContextRevision.value += 1
+		await refreshGuideWaypointMenuDestinations(true)
 		syncVehicleSubtreeInteractionLayers()
 		applyPreviewNominateOverrides()
 		activatePendingDefaultSteerDriveIfNeeded()
@@ -16322,6 +16603,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
 	previewEnvironmentSwitchToken += 1
 	previewEnvironmentSwitchPhase.value = 'idle'
+	guideWaypointMenuRefreshRevision += 1
+	guideWaypointThumbnailUrlCache.clear()
+	closeGuideWaypointMenu()
+	guideWaypointMenuItems.value = []
 	cancelMoveToTransition()
 	clearSceneInitState()
 	if (screenshotStatusTimer) {
@@ -16418,6 +16703,16 @@ watch(
 	},
 	{ deep: true },
 )
+
+watch(guideWaypointMenuRouteNodeId, () => {
+	void refreshGuideWaypointMenuDestinations(true)
+})
+
+watch(watchExclusiveUiActive, (active) => {
+	if (active) {
+		closeGuideWaypointMenu()
+	}
+})
 </script>
 
 <template>
@@ -16709,6 +17004,92 @@ watch(
 				{{ memoryFallbackLabel }}
 			</div>
 			<div ref="statsContainerRef" class="scene-preview__stats-panels"></div>
+		</div>
+		<div
+			v-if="guideWaypointMenuVisible && !watchExclusiveUiActive"
+			class="scene-preview__waypoint-menu"
+		>
+			<div
+				v-if="guideWaypointMenuOpen"
+				class="scene-preview__waypoint-menu-dismiss"
+				@pointerdown="closeGuideWaypointMenu"
+			></div>
+			<button
+				type="button"
+				class="scene-preview__waypoint-menu-trigger"
+				:class="{ 'is-open': guideWaypointMenuOpen }"
+				:aria-expanded="guideWaypointMenuOpen"
+				aria-controls="scene-preview-waypoint-menu-panel"
+				aria-label="景点导航"
+				@pointerdown.stop
+				@click="toggleGuideWaypointMenu"
+			>
+				<v-icon icon="mdi-map-marker-radius-outline" size="22" />
+				<span>景点导航</span>
+			</button>
+			<div
+				v-if="guideWaypointMenuOpen"
+				id="scene-preview-waypoint-menu-panel"
+				class="scene-preview__waypoint-menu-panel"
+				role="dialog"
+				aria-label="选择景点导航目标"
+				@pointerdown.stop
+			>
+				<div class="scene-preview__waypoint-menu-head">
+					<div>
+						<div class="scene-preview__waypoint-menu-title">选择景点</div>
+						<div class="scene-preview__waypoint-menu-subtitle">前往已配置缩略图的导航点</div>
+					</div>
+					<v-btn
+						icon="mdi-close"
+						variant="text"
+						size="small"
+						aria-label="关闭景点导航列表"
+						@click="closeGuideWaypointMenu"
+					/>
+				</div>
+				<div class="scene-preview__waypoint-menu-list">
+					<button
+						v-for="item in guideWaypointMenuItems"
+						:key="item.index"
+						type="button"
+						class="scene-preview__waypoint-menu-item"
+						:class="{ 'is-unavailable': item.error }"
+						:disabled="isGuideWaypointMenuItemDisabled(item)"
+						@click="handleGuideWaypointSelect(item)"
+					>
+						<span class="scene-preview__waypoint-menu-thumbnail">
+							<img
+								v-if="item.imageUrl"
+								:src="item.imageUrl"
+								:alt="item.name"
+								loading="lazy"
+								@error="handleGuideWaypointImageError(item)"
+							/>
+							<v-progress-circular
+								v-else-if="item.loading"
+								indeterminate
+								size="22"
+								width="2"
+							/>
+							<v-icon v-else icon="mdi-image-broken-variant" size="22" />
+						</span>
+						<span class="scene-preview__waypoint-menu-copy">
+							<span class="scene-preview__waypoint-menu-item-title">{{ item.name }}</span>
+							<span class="scene-preview__waypoint-menu-item-meta">
+								{{ item.loading ? '正在加载缩略图' : item.error || '点击前往' }}
+							</span>
+						</span>
+						<v-icon icon="mdi-chevron-right" size="20" />
+					</button>
+					<div
+						v-if="guideWaypointMenuLoading && !guideWaypointMenuItems.some((item) => item.imageUrl)"
+						class="scene-preview__waypoint-menu-loading"
+					>
+						正在准备缩略图…
+					</div>
+				</div>
+			</div>
 		</div>
 		<div
 			v-if="isRuntimeBudgetPanelVisible"
@@ -18134,6 +18515,196 @@ watch(
 	}
 }
 
+.scene-preview__waypoint-menu {
+	position: absolute;
+	left: 18px;
+	top: 50%;
+	z-index: 2170;
+	display: flex;
+	align-items: center;
+	transform: translateY(-50%);
+	pointer-events: none;
+}
+
+.scene-preview__waypoint-menu-dismiss {
+	position: fixed;
+	inset: 0;
+	z-index: 0;
+	pointer-events: auto;
+}
+
+.scene-preview__waypoint-menu-trigger {
+	position: relative;
+	z-index: 2;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 54px;
+	height: 52px;
+	padding: 0 14px;
+	border: 1px solid rgba(151, 214, 255, 0.24);
+	border-radius: 16px;
+	background: linear-gradient(180deg, rgba(10, 24, 39, 0.88), rgba(8, 16, 28, 0.82));
+	box-shadow: 0 16px 32px rgba(0, 0, 0, 0.28);
+	color: #eef8ff;
+	font: inherit;
+	font-size: 0.82rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	cursor: pointer;
+	pointer-events: auto;
+	backdrop-filter: blur(14px);
+	transition:
+		border-color 160ms ease,
+		background-color 160ms ease,
+		transform 160ms ease;
+}
+
+.scene-preview__waypoint-menu-trigger:hover,
+.scene-preview__waypoint-menu-trigger.is-open {
+	border-color: rgba(124, 220, 255, 0.58);
+	background: linear-gradient(180deg, rgba(14, 42, 60, 0.94), rgba(8, 24, 38, 0.9));
+	transform: translateX(2px);
+}
+
+.scene-preview__waypoint-menu-trigger:focus-visible,
+.scene-preview__waypoint-menu-item:focus-visible {
+	outline: 2px solid #8be7ff;
+	outline-offset: 2px;
+}
+
+.scene-preview__waypoint-menu-panel {
+	position: absolute;
+	left: calc(100% + 10px);
+	top: 50%;
+	z-index: 2;
+	width: min(320px, calc(100vw - 100px));
+	max-height: min(62vh, 520px);
+	padding: 12px;
+	overflow: hidden;
+	border: 1px solid rgba(151, 214, 255, 0.22);
+	border-radius: 18px;
+	background: linear-gradient(180deg, rgba(9, 21, 35, 0.96), rgba(7, 14, 25, 0.92));
+	box-shadow: 0 24px 56px rgba(0, 0, 0, 0.44);
+	color: #f3f9ff;
+	transform: translateY(-50%);
+	pointer-events: auto;
+	backdrop-filter: blur(18px) saturate(1.12);
+}
+
+.scene-preview__waypoint-menu-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 2px 2px 10px;
+}
+
+.scene-preview__waypoint-menu-title {
+	font-size: 0.92rem;
+	font-weight: 750;
+	letter-spacing: 0.04em;
+}
+
+.scene-preview__waypoint-menu-subtitle {
+	margin-top: 3px;
+	color: rgba(221, 238, 250, 0.62);
+	font-size: 0.7rem;
+}
+
+.scene-preview__waypoint-menu-list {
+	display: flex;
+	max-height: calc(min(62vh, 520px) - 66px);
+	flex-direction: column;
+	gap: 8px;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+.scene-preview__waypoint-menu-item {
+	display: grid;
+	grid-template-columns: 78px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 11px;
+	width: 100%;
+	min-height: 66px;
+	padding: 7px 9px 7px 7px;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 13px;
+	background: rgba(255, 255, 255, 0.045);
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+	transition:
+		border-color 150ms ease,
+		background-color 150ms ease,
+		transform 150ms ease;
+}
+
+.scene-preview__waypoint-menu-item:hover:not(:disabled) {
+	border-color: rgba(123, 222, 255, 0.4);
+	background: rgba(91, 187, 230, 0.12);
+	transform: translateX(2px);
+}
+
+.scene-preview__waypoint-menu-item:disabled {
+	cursor: default;
+	opacity: 0.58;
+}
+
+.scene-preview__waypoint-menu-item.is-unavailable {
+	border-color: rgba(255, 166, 120, 0.16);
+}
+
+.scene-preview__waypoint-menu-thumbnail {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 78px;
+	height: 50px;
+	overflow: hidden;
+	border-radius: 9px;
+	background: rgba(0, 0, 0, 0.3);
+	color: rgba(226, 241, 252, 0.68);
+}
+
+.scene-preview__waypoint-menu-thumbnail img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.scene-preview__waypoint-menu-copy {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.scene-preview__waypoint-menu-item-title {
+	overflow: hidden;
+	font-size: 0.83rem;
+	font-weight: 700;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.scene-preview__waypoint-menu-item-meta {
+	overflow: hidden;
+	color: rgba(221, 238, 250, 0.58);
+	font-size: 0.68rem;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.scene-preview__waypoint-menu-loading {
+	padding: 10px;
+	color: rgba(221, 238, 250, 0.62);
+	font-size: 0.74rem;
+	text-align: center;
+}
+
 .scene-preview__stats {
 	position: absolute;
 	top: 16px;
@@ -18902,6 +19473,26 @@ watch(
 }
 
 @media (max-width: 720px) {
+	.scene-preview__waypoint-menu {
+		left: max(12px, env(safe-area-inset-left));
+		top: 46%;
+	}
+
+	.scene-preview__waypoint-menu-trigger {
+		width: 52px;
+		padding: 0;
+		justify-content: center;
+	}
+
+	.scene-preview__waypoint-menu-trigger span {
+		display: none;
+	}
+
+	.scene-preview__waypoint-menu-panel {
+		left: calc(100% + 8px);
+		width: min(286px, calc(100vw - 82px));
+	}
+
 	.scene-preview__purpose-controls {
 		flex-direction: column;
 		align-items: flex-start;

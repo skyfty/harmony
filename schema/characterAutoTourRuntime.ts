@@ -19,6 +19,11 @@ import {
   type GuideRouteComponentProps,
 } from './components/definitions/guideRouteComponent'
 import { evaluateGuideRoute } from './guideRouteRuntime'
+import {
+  buildGuideRouteTravelWindow,
+  type GuideRouteTourTargetOptions,
+  type GuideRouteTravelWindow,
+} from './guideRouteTourTarget'
 import { findClosestWaypointIndex, resolvePathFollowLookaheadDistance, resolvePathFollowSample } from './pathFollowCommon'
 
 export type CharacterAutoTourInputState = {
@@ -39,6 +44,9 @@ export type CharacterAutoTourRuntimeEntry = {
   controllerProps: CharacterControllerComponentProps | null
   routeNodeId: string | null
   routeWaypointCount: number
+  sourceRouteWaypointCount: number
+  target: GuideRouteTourTargetOptions | null
+  travelWindow: GuideRouteTravelWindow | null
   hasSample: boolean
   smoothedWorldPosition: THREE.Vector3
   smoothedYaw: number
@@ -52,6 +60,8 @@ export type CharacterAutoTourRouteSnapResult = {
   worldQuaternion: THREE.Quaternion
   forwardWorld: THREE.Vector3
   yaw: number
+  travelWindow: GuideRouteTravelWindow | null
+  targetReached: boolean
 }
 
 export type CharacterAutoTourRuntimeHost = {
@@ -64,6 +74,7 @@ export type CharacterAutoTourRuntimeHost = {
 }
 
 type GuideRouteWorldWaypoints = {
+  evaluation: ReturnType<typeof evaluateGuideRoute>
   points: THREE.Vector3[]
   dock: boolean[]
 } | null
@@ -167,9 +178,10 @@ function resolveGuideRouteWorldWaypoints(
   const providerObject = props.surfaceProviderNodeId
     ? nodeObjectMap.get(props.surfaceProviderNodeId) ?? null
     : null
-  const evaluation = evaluateGuideRoute({ routeNode, providerObject })
+  const routeObject = nodeObjectMap.get(routeNode.id) ?? null
+  const evaluation = evaluateGuideRoute({ routeNode, providerObject, routeObject })
   return evaluation.status === 'ready'
-    ? { points: evaluation.points, dock: evaluation.dock }
+    ? { evaluation, points: evaluation.points, dock: evaluation.dock }
     : null
 }
 
@@ -209,6 +221,7 @@ export class CharacterAutoTourRuntimeManager {
   private readonly entries = new Map<string, CharacterAutoTourRuntimeEntry>()
   private readonly activeNodeIds = new Set<string>()
   private readonly pausedNodeIds = new Set<string>()
+  private readonly pendingTargets = new Map<string, GuideRouteTourTargetOptions>()
 
   has(nodeId: string): boolean {
     return this.entries.has(nodeId)
@@ -218,16 +231,22 @@ export class CharacterAutoTourRuntimeManager {
     return this.activeNodeIds.has(nodeId) && this.entries.has(nodeId)
   }
 
-  activate(nodeId: string): void {
+  activate(nodeId: string, target?: GuideRouteTourTargetOptions): void {
     this.activeNodeIds.add(nodeId)
     this.pausedNodeIds.delete(nodeId)
     this.entries.delete(nodeId)
+    if (target) {
+      this.pendingTargets.set(nodeId, target)
+    } else {
+      this.pendingTargets.delete(nodeId)
+    }
   }
 
   deactivate(nodeId: string): void {
     this.activeNodeIds.delete(nodeId)
     this.pausedNodeIds.delete(nodeId)
     this.entries.delete(nodeId)
+    this.pendingTargets.delete(nodeId)
   }
 
   setPaused(nodeId: string, paused: boolean): void {
@@ -261,6 +280,7 @@ export class CharacterAutoTourRuntimeManager {
   resolveRouteSnap(
     host: CharacterAutoTourRuntimeHost,
     nodeId: string,
+    target?: GuideRouteTourTargetOptions,
   ): CharacterAutoTourRouteSnapResult | null {
     const node = host.resolveNode(nodeId)
     const object = host.nodeObjectMap.get(nodeId) ?? null
@@ -297,10 +317,20 @@ export class CharacterAutoTourRuntimeManager {
     if (!sample) {
       return null
     }
-    const segmentIndex = sample.projection.segmentIndex
-    const segmentStart = routeData.points[segmentIndex] ?? sample.projection.closestPoint
-    const segmentEnd = routeData.points[segmentIndex + 1]
-      ?? (tourProps.loop ? routeData.points[0] : null)
+    const travelWindow = target
+      ? buildGuideRouteTravelWindow(
+        routeData.evaluation,
+        sample.projection.s,
+        target,
+        tourProps.loop,
+      )
+      : null
+    const targetReached = Boolean(target && !travelWindow)
+    const effectivePoints = travelWindow?.route.points ?? routeData.points
+    const segmentIndex = travelWindow ? 0 : sample.projection.segmentIndex
+    const segmentStart = effectivePoints[segmentIndex] ?? sample.projection.closestPoint
+    const segmentEnd = effectivePoints[segmentIndex + 1]
+      ?? (!target && tourProps.loop ? effectivePoints[0] : null)
       ?? sample.lookaheadPoint
     const forwardWorld = segmentEnd.clone().sub(segmentStart)
     forwardWorld.y = 0
@@ -315,7 +345,9 @@ export class CharacterAutoTourRuntimeManager {
     }
     const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
       + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
-    const worldPosition = sample.projection.closestPoint.clone()
+    const worldPosition = travelWindow
+      ? effectivePoints[0]?.clone() ?? sample.projection.closestPoint.clone()
+      : sample.projection.closestPoint.clone()
     worldPosition.y += resolveCharacterGroundOffsetY(controllerProps)
     return {
       nodeId,
@@ -323,6 +355,8 @@ export class CharacterAutoTourRuntimeManager {
       worldQuaternion: new THREE.Quaternion().setFromAxisAngle(characterPathFollowUp, yaw),
       forwardWorld,
       yaw,
+      travelWindow,
+      targetReached,
     }
   }
 
@@ -330,6 +364,7 @@ export class CharacterAutoTourRuntimeManager {
     this.entries.clear()
     this.activeNodeIds.clear()
     this.pausedNodeIds.clear()
+    this.pendingTargets.clear()
   }
 
   refresh(host: CharacterAutoTourRuntimeHost): void {
@@ -348,12 +383,16 @@ export class CharacterAutoTourRuntimeManager {
       }
       const previous = this.entries.get(nodeId) ?? null
       const normalizedProps = clampAutoTourComponentProps(component.props)
+      const target = this.pendingTargets.get(nodeId) ?? previous?.target ?? null
       nextEntries.set(nodeId, {
         nodeId,
         props: normalizedProps,
         controllerProps: clampCharacterControllerComponentProps(controllerComponent.props),
         routeNodeId: normalizedProps.routeNodeId,
         routeWaypointCount: previous?.routeWaypointCount ?? 0,
+        sourceRouteWaypointCount: previous?.sourceRouteWaypointCount ?? 0,
+        target,
+        travelWindow: previous?.travelWindow ?? null,
         hasSample: previous?.hasSample ?? false,
         smoothedWorldPosition: previous?.smoothedWorldPosition?.clone?.() ?? new THREE.Vector3(),
         smoothedYaw: previous?.smoothedYaw ?? 0,
@@ -370,11 +409,13 @@ export class CharacterAutoTourRuntimeManager {
         },
         lastTargetIndex: previous?.lastTargetIndex ?? 0,
       })
+      this.pendingTargets.delete(nodeId)
     }
     this.activeNodeIds.forEach((nodeId) => {
       if (!nextEntries.has(nodeId)) {
         this.activeNodeIds.delete(nodeId)
         this.pausedNodeIds.delete(nodeId)
+        this.pendingTargets.delete(nodeId)
       }
     })
     this.entries.clear()
@@ -419,12 +460,50 @@ export class CharacterAutoTourRuntimeManager {
       }
 
       const currentPosition = getObjectWorldPosition(object, characterPathFollowWorldPosition)
-      if (!entry.hasSample || previousRouteNodeId !== entry.routeNodeId || entry.routeWaypointCount !== routeData.points.length) {
+      const sourceRouteWaypointCount = routeData.points.length
+      if (previousRouteNodeId !== entry.routeNodeId) {
+        entry.travelWindow = null
+        entry.target = null
+      }
+      if (entry.target) {
+        const existingWindowMatchesRoute = entry.travelWindow
+          && entry.sourceRouteWaypointCount === sourceRouteWaypointCount
+        if (!existingWindowMatchesRoute) {
+          const projectionSample = resolvePathFollowSample({
+            points: routeData.points,
+            loop: entry.props.loop,
+            currentPosition,
+            lookaheadDistance: 0,
+          })
+          const travelWindow = buildGuideRouteTravelWindow(
+            routeData.evaluation,
+            projectionSample?.projection.s ?? 0,
+            entry.target,
+            entry.props.loop,
+          )
+          if (!travelWindow) {
+            entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
+            this.deactivate(nodeId)
+            host.onTourComplete?.(nodeId)
+            return
+          }
+          entry.travelWindow = travelWindow
+        }
+      }
+      const activePoints = entry.travelWindow?.route.points ?? routeData.points
+      const activeLoop = entry.travelWindow ? false : entry.props.loop
+      if (
+        !entry.hasSample
+        || previousRouteNodeId !== entry.routeNodeId
+        || entry.sourceRouteWaypointCount !== sourceRouteWaypointCount
+        || entry.routeWaypointCount !== activePoints.length
+      ) {
         entry.hasSample = true
-        entry.routeWaypointCount = routeData.points.length
+        entry.routeWaypointCount = activePoints.length
+        entry.sourceRouteWaypointCount = sourceRouteWaypointCount
         entry.smoothedWorldPosition.copy(currentPosition)
         entry.smoothedYaw = getObjectWorldYawRadians(object, entry.controllerProps?.forwardAxis ?? '+x')
-        entry.lastTargetIndex = findClosestWaypointIndex(routeData.points, currentPosition)
+        entry.lastTargetIndex = findClosestWaypointIndex(activePoints, currentPosition)
       }
 
       const controllerProps = entry.controllerProps ?? clampCharacterControllerComponentProps(null)
@@ -438,8 +517,8 @@ export class CharacterAutoTourRuntimeManager {
         maxMeters: 5.5,
       })
       const sample = resolvePathFollowSample({
-        points: routeData.points,
-        loop: entry.props.loop,
+        points: activePoints,
+        loop: activeLoop,
         currentPosition,
         lookaheadDistance,
         outLookaheadPoint: characterPathFollowLookaheadPoint,
@@ -448,8 +527,8 @@ export class CharacterAutoTourRuntimeManager {
         return
       }
 
-      if (!entry.props.loop) {
-        const endPoint = routeData.points[routeData.points.length - 1]!
+      if (!activeLoop) {
+        const endPoint = activePoints[activePoints.length - 1]!
         const endDistance = Math.hypot(
           currentPosition.x - endPoint.x,
           currentPosition.z - endPoint.z,
@@ -458,7 +537,7 @@ export class CharacterAutoTourRuntimeManager {
         if (endDistance <= arrivalDistance) {
           entry.smoothedWorldPosition.copy(endPoint)
           entry.smoothedWorldPosition.y += groundOffsetY
-          const prevPoint = routeData.points[Math.max(0, routeData.points.length - 2)] ?? endPoint
+          const prevPoint = activePoints[Math.max(0, activePoints.length - 2)] ?? endPoint
           characterPathFollowDirection.copy(endPoint).sub(prevPoint)
           characterPathFollowDirection.y = 0
           if (characterPathFollowDirection.lengthSq() > 1e-8) {
@@ -493,12 +572,12 @@ export class CharacterAutoTourRuntimeManager {
       characterPathFollowDirection.multiplyScalar(1 / distanceToLookahead)
 
       let speedFactor = 1
-      const projectedPointIndex = findClosestWaypointIndex(routeData.points, sample.projection.closestPoint)
-      const nextIndex = entry.props.loop
-        ? (projectedPointIndex + 1) % routeData.points.length
-        : Math.min(routeData.points.length - 1, projectedPointIndex + 1)
-      const currentWaypoint = routeData.points[projectedPointIndex] ?? null
-      const nextWaypoint = routeData.points[nextIndex] ?? null
+      const projectedPointIndex = findClosestWaypointIndex(activePoints, sample.projection.closestPoint)
+      const nextIndex = activeLoop
+        ? (projectedPointIndex + 1) % activePoints.length
+        : Math.min(activePoints.length - 1, projectedPointIndex + 1)
+      const currentWaypoint = activePoints[projectedPointIndex] ?? null
+      const nextWaypoint = activePoints[nextIndex] ?? null
       if (currentWaypoint && nextWaypoint) {
         const currentSegment = characterPathFollowTargetPosition.copy(nextWaypoint).sub(currentWaypoint)
         currentSegment.y = 0

@@ -165,6 +165,102 @@
         <text class="viewer-punch-summary__value">{{ punchCheckedCount }}/{{ punchTotalCount }}</text>
       </view>
       <view
+        v-if="guideWaypointMenuVisible && !watchExclusiveUiActive"
+        class="viewer-waypoint-menu"
+        data-control-skip="guide-waypoints"
+      >
+        <view
+          v-if="guideWaypointMenuOpen"
+          class="viewer-waypoint-menu__dismiss"
+          data-control-skip="guide-waypoints"
+          @tap="closeGuideWaypointMenu"
+        ></view>
+        <button
+          type="button"
+          class="viewer-waypoint-menu__trigger"
+          :class="{ 'is-open': guideWaypointMenuOpen }"
+          hover-class="none"
+          :aria-expanded="guideWaypointMenuOpen"
+          aria-controls="viewer-waypoint-menu-panel"
+          aria-label="景点导航"
+          data-control-skip="guide-waypoints"
+          @tap.stop.prevent="toggleGuideWaypointMenu"
+        >
+          <text class="viewer-waypoint-menu__trigger-icon">景</text>
+          <text class="viewer-waypoint-menu__trigger-label">景点导航</text>
+        </button>
+        <view
+          v-if="guideWaypointMenuOpen"
+          id="viewer-waypoint-menu-panel"
+          class="viewer-waypoint-menu__panel"
+          role="dialog"
+          aria-label="选择景点导航目标"
+          data-control-skip="guide-waypoints"
+        >
+          <view class="viewer-waypoint-menu__head">
+            <view class="viewer-waypoint-menu__head-copy">
+              <text class="viewer-waypoint-menu__title">选择景点</text>
+              <text class="viewer-waypoint-menu__subtitle">前往已配置缩略图的导航点</text>
+            </view>
+            <button
+              type="button"
+              class="viewer-waypoint-menu__close"
+              hover-class="none"
+              aria-label="关闭景点导航列表"
+              data-control-skip="guide-waypoints"
+              @tap.stop.prevent="closeGuideWaypointMenu"
+            >
+              <text>×</text>
+            </button>
+          </view>
+          <scroll-view
+            scroll-y
+            class="viewer-waypoint-menu__list"
+            :show-scrollbar="false"
+            data-control-skip="guide-waypoints"
+          >
+            <button
+              v-for="item in guideWaypointMenuItems"
+              :key="item.index"
+              type="button"
+              class="viewer-waypoint-menu__item"
+              :class="{ 'is-unavailable': item.error }"
+              :disabled="isGuideWaypointMenuItemDisabled(item)"
+              hover-class="none"
+              :aria-label="`${item.name}，${item.error || '点击前往'}`"
+              data-control-skip="guide-waypoints"
+              @tap.stop.prevent="handleGuideWaypointSelect(item)"
+            >
+              <view class="viewer-waypoint-menu__thumbnail">
+                <image
+                  v-if="item.imageUrl"
+                  class="viewer-waypoint-menu__thumbnail-image"
+                  :src="item.imageUrl"
+                  mode="aspectFill"
+                  @error="handleGuideWaypointImageError(item)"
+                />
+                <text v-else class="viewer-waypoint-menu__thumbnail-placeholder">
+                  {{ item.loading ? '…' : '!' }}
+                </text>
+              </view>
+              <view class="viewer-waypoint-menu__item-copy">
+                <text class="viewer-waypoint-menu__item-title">{{ item.name }}</text>
+                <text class="viewer-waypoint-menu__item-meta">
+                  {{ item.loading ? '正在加载缩略图' : item.error || '点击前往' }}
+                </text>
+              </view>
+              <text class="viewer-waypoint-menu__chevron">›</text>
+            </button>
+            <text
+              v-if="guideWaypointMenuLoading && !guideWaypointMenuItems.some((item) => item.imageUrl)"
+              class="viewer-waypoint-menu__loading"
+            >
+              正在准备缩略图…
+            </text>
+          </scroll-view>
+        </view>
+      </view>
+      <view
         v-if="vehicleDriveIntroVisible"
         class="viewer-vehicle-intro-banner"
         aria-hidden="true"
@@ -979,14 +1075,23 @@ import {
   type NetworkSyncComponentProps,
 } from '@harmony/schema/components/definitions/networkSyncComponent';
 import {
+  clampGuideRouteComponentProps,
+  GUIDE_ROUTE_COMPONENT_TYPE,
   guideRouteComponentDefinition,
+  type GuideRouteComponentProps,
 } from '@harmony/schema/components/definitions/guideRouteComponent';
+import type { GuideRouteTourTargetOptions } from '@harmony/schema/guideRouteTourTarget';
 import {
   autoTourComponentDefinition,
   AUTO_TOUR_COMPONENT_TYPE,
-  cloneAutoTourComponentProps,
   type AutoTourComponentProps,
 } from '@harmony/schema/components/definitions/autoTourComponent';
+import {
+  ensureSceneActorAutoTourComponents,
+  findFirstSceneActorNode,
+  resolveSceneActorKind,
+  transferSceneActorAutoTourComponent,
+} from '@harmony/schema/sceneActorAutoTour';
 import {
   sceneStateAnchorComponentDefinition,
   SCENE_STATE_ANCHOR_COMPONENT_TYPE,
@@ -4321,6 +4426,33 @@ const vehicleDriveIntroPendingState = reactive({
 const vehicleDrivePromptBusy = ref(false);
 const activeAutoTourNodeIds = reactive(new Set<string>());
 const activeCharacterAutoTourNodeIds = reactive(new Set<string>());
+type GuideWaypointMenuItem = {
+  index: number;
+  name: string;
+  thumbnailAssetId: string;
+  imageUrl: string | null;
+  loading: boolean;
+  error: string | null;
+};
+const guideWaypointMenuOpen = ref(false);
+const guideWaypointMenuLoading = ref(false);
+const guideWaypointMenuItems = ref<GuideWaypointMenuItem[]>([]);
+const guideWaypointMenuContextRevision = ref(0);
+let guideWaypointPendingTarget: GuideRouteTourTargetOptions | null = null;
+const guideWaypointMenuActorNodeId = computed(() => {
+  guideWaypointMenuContextRevision.value;
+  return resolveGuideWaypointActorNodeId();
+});
+const guideWaypointMenuRouteNodeId = computed(() => {
+  guideWaypointMenuContextRevision.value;
+  const actorNode = guideWaypointMenuActorNodeId.value
+    ? resolveNodeById(guideWaypointMenuActorNodeId.value)
+    : null;
+  return resolveAutoTourComponent(actorNode)?.props?.routeNodeId?.trim() || null;
+});
+const guideWaypointMenuVisible = computed(() => (
+  Boolean(guideWaypointMenuRouteNodeId.value) && guideWaypointMenuItems.value.length > 0
+));
 const characterPlayerControlNodeIdOverride = ref<string | null>(null);
 type SceneryVehicleDriveEvent = Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>;
 let pendingAutoTourManualDriveNodeId: string | null = null;
@@ -5131,9 +5263,15 @@ watch(
 
 watch(watchExclusiveUiActive, (active) => {
   if (active) {
+    closeGuideWaypointMenu();
     endVehiclePad();
     endCharacterPad();
   }
+});
+
+watch(guideWaypointMenuRouteNodeId, () => {
+  guideWaypointMenuRefreshRevision += 1;
+  void refreshGuideWaypointMenuDestinations(true);
 });
 
 watch(
@@ -6704,6 +6842,7 @@ async function prepareRenderPayloadForSceneEntry(
   const steerPreparedPayload = await prepareRenderPayloadForDefaultSteer(renderPayload);
   const runtimeGroundPrepared = await prepareRuntimeGroundSceneDocument(steerPreparedPayload.document);
   applySceneryGroundTilingBudget(runtimeGroundPrepared.document);
+  ensureSceneActorAutoTourComponents(runtimeGroundPrepared.document);
   const groundNode = resolveSharedDocumentGroundNode(runtimeGroundPrepared.document);
   const compiledGroundManifest = groundNode?.userData?.compiledGroundManifest as { renderTiles?: unknown[] } | null | undefined;
   const compiledTileCount = Array.isArray(compiledGroundManifest?.renderTiles) ? compiledGroundManifest.renderTiles.length : 0;
@@ -6740,19 +6879,11 @@ async function commitSceneEntryRendering(
   return isCurrentInitializationToken(token) && !error.value;
 }
 
-function findFirstSteerTargetNodeId(node: SceneNode | null | undefined, targetType: SteerControllableTargetType): string | null {
-  if (!node) return null;
-  const stack: SceneNode[] = [node];
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current) continue;
-    const hasTarget = targetType === 'character'
-      ? resolveEnabledComponentState(current, CHARACTER_CONTROLLER_COMPONENT_TYPE)
-      : resolveEnabledComponentState<VehicleComponentProps>(current, VEHICLE_COMPONENT_TYPE);
-    if (hasTarget) return current.id ?? null;
-    if (Array.isArray(current.children)) stack.push(...current.children);
-  }
-  return null;
+function findFirstSteerTargetNode(
+  node: SceneNode | null | undefined,
+  targetType: SteerControllableTargetType,
+): SceneNode | null {
+  return findFirstSceneActorNode(node, targetType === 'character' ? 'character' : 'vehicle');
 }
 
 function replaceSceneNodeById(nodes: SceneNode[] | undefined | null, nodeId: string, replacement: SceneNode): boolean {
@@ -7051,16 +7182,6 @@ function findRuntimePrefabRequestByVehicleNode(
   return null;
 }
 
-function transferAutoTourComponentProps(sourceNode: SceneNode, targetNode: SceneNode): void {
-  const sourceAutoTourComponent = sourceNode.components?.[AUTO_TOUR_COMPONENT_TYPE] ?? null;
-  const targetAutoTourComponent = targetNode.components?.[AUTO_TOUR_COMPONENT_TYPE] ?? null;
-  if (!sourceAutoTourComponent || !targetAutoTourComponent) {
-    return;
-  }
-  targetAutoTourComponent.props = cloneAutoTourComponentProps(sourceAutoTourComponent.props);
-  targetAutoTourComponent.enabled = sourceAutoTourComponent.enabled ?? targetAutoTourComponent.enabled;
-}
-
 async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload): Promise<ScenePreviewPayload> {
   pendingDefaultSteerDriveEvent.value = null;
   const defaultSteerIdentifier = typeof props.defaultSteerIdentifier === 'string'
@@ -7102,13 +7223,14 @@ async function prepareRenderPayloadForDefaultSteer(payload: ScenePreviewPayload)
   if (targetNode && steerHostNode && steerHostComponent) {
     const cloned = cloneRuntimePrefabNode(source.prefab);
     applySteerTargetTransform(targetNode, cloned.root);
-    const replacementTargetNodeId = findFirstSteerTargetNodeId(cloned.root, binding.steerProps.targetType) ?? cloned.root.id ?? null;
+    const replacementTargetNode = findFirstSteerTargetNode(cloned.root, binding.steerProps.targetType);
+    const replacementTargetNodeId = replacementTargetNode?.id ?? cloned.root.id ?? null;
     if (!replacementTargetNodeId) {
       throw new Error(`资产 "${selectedAsset.identifier?.trim() || selectedAsset.id}" 不包含 targetType="${binding.steerProps.targetType}" 的可控节点`);
     }
     if (replaceSceneNodeById(nextDocument.nodes, targetNode.id, cloned.root)) {
       mergeRuntimePrefabAssetRegistry(nextDocument, source.prefab);
-      transferAutoTourComponentProps(targetNode, cloned.root);
+      transferSceneActorAutoTourComponent(targetNode, replacementTargetNode ?? cloned.root);
       steerHostComponent.props = clampSteerComponentProps({
         ...(steerHostComponent.props ?? {}),
         targetNodeId: replacementTargetNodeId,
@@ -7187,9 +7309,25 @@ async function spawnRuntimePrefabRequest(request: RuntimePrefabSpawnRequest): Pr
   });
 
   if (normalizeRuntimePrefabMode(request.initializationMode) === 'full') {
+    const donorNodeId = resolveRuntimePrefabAnchorNodeId(request);
+    const donorNode = donorNodeId ? resolveNodeById(donorNodeId) : null;
+    const requestedKind = request.controllableType === 'character'
+      ? 'character'
+      : request.controllableType
+        ? 'vehicle'
+        : null;
+    const spawnedActor = findFirstSceneActorNode(cloned.root, requestedKind);
+    if (
+      donorNode
+      && spawnedActor
+      && resolveSceneActorKind(donorNode) === resolveSceneActorKind(spawnedActor)
+    ) {
+      transferSceneActorAutoTourComponent(donorNode, spawnedActor);
+    }
     mergeRuntimePrefabAssetRegistry(document, runtimeDocument);
     document.nodes = [...(document.nodes ?? []), cloned.root];
     document.updatedAt = new Date().toISOString();
+    ensureSceneActorAutoTourComponents(document);
     rebuildPreviewNodeMap(document);
     viewerResourceCache = ensureResourceCache(document, buildOptions);
     registerSceneSubtree(graph.root);
@@ -7372,6 +7510,10 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     const effectiveNode = instanced.cloned.root; const effectiveNodeId = effectiveNode.id;
     const isCharacter = targetType === 'character';
     if (isCharacter ? !resolveCharacterControllerComponent(effectiveNode) : !resolveVehicleComponent(effectiveNode)) return false;
+    transferSceneActorAutoTourComponent(
+      mainNode,
+      findFirstSceneActorNode(effectiveNode, isCharacter ? 'character' : 'vehicle') ?? effectiveNode,
+    );
     if (!existing) {
       latestControlNodeRestoreSnapshot = { targetType: binding.steerProps.targetType, mainNodeId, temporaryNodeId: effectiveNodeId, mainVisible: nodeObjectMap.get(mainNodeId)?.visible !== false, componentEnabled: setControlNodeComponentEnabled(mainNode, false) };
     } else if (existing.temporaryNodeId) {
@@ -7385,6 +7527,7 @@ async function switchControlNodeToAsset(targetType: SteerControllableTargetType,
     const mainObject = nodeObjectMap.get(mainNodeId) ?? null;
     if (mainObject) mainObject.visible = false;
     currentDocument.nodes = [...(currentDocument.nodes ?? []), effectiveNode];
+    ensureSceneActorAutoTourComponents(currentDocument);
     renderContext.scene.add(instanced.sceneRootObject); registerSceneSubtree(instanced.sceneRootObject); rebuildPreviewNodeMap(currentDocument);
     binding.steerComponent.props = clampSteerComponentProps({ ...binding.steerComponent.props, targetType, targetNodeId: effectiveNodeId });
     syncSteerBindingIndexForNode(binding.steerNode); attachControlNodePrefabMetadata(effectiveNode, assetId); latestControlNodeRestoreSnapshot!.temporaryNodeId = effectiveNodeId;
@@ -10149,6 +10292,135 @@ function resolveFloatingAutoTourContext(): {
   }
 
   return { nodeId: null, event: null };
+}
+
+let guideWaypointMenuRefreshRevision = 0;
+let guideWaypointMenuRefreshSignature = '';
+const guideWaypointThumbnailUrlCache = new Map<string, Promise<string | null>>();
+
+function resolveGuideWaypointActorNodeId(): string | null {
+  const context = resolveFloatingAutoTourContext();
+  if (context.nodeId) {
+    return context.nodeId;
+  }
+  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
+  if (!controlledNodeId) {
+    return null;
+  }
+  const node = resolveNodeById(controlledNodeId);
+  return resolveAutoTourComponent(node)?.props?.routeNodeId
+    ? controlledNodeId
+    : null;
+}
+
+async function resolveGuideWaypointThumbnailUrl(assetId: string): Promise<string | null> {
+  const normalizedAssetId = assetId.trim().replace(/^asset:\/\//i, '');
+  if (!normalizedAssetId) {
+    return null;
+  }
+  const cached = guideWaypointThumbnailUrlCache.get(normalizedAssetId);
+  if (cached) {
+    return await cached;
+  }
+  const request = resolveAssetUrlReference(normalizedAssetId)
+    .then((resolved) => resolved?.url ?? null)
+    .catch((error) => {
+      console.warn('[SceneryViewer] Failed to resolve Guide Route thumbnail', normalizedAssetId, error);
+      return null;
+    });
+  guideWaypointThumbnailUrlCache.set(normalizedAssetId, request);
+  return await request;
+}
+
+function closeGuideWaypointMenu(): void {
+  guideWaypointMenuOpen.value = false;
+}
+
+async function refreshGuideWaypointMenuDestinations(force = false): Promise<void> {
+  const actorNodeId = guideWaypointMenuActorNodeId.value;
+  const routeNodeId = guideWaypointMenuRouteNodeId.value;
+  const signature = `${actorNodeId ?? ''}|${routeNodeId ?? ''}|${currentDocument?.updatedAt ?? ''}`;
+  if (!force && signature === guideWaypointMenuRefreshSignature) {
+    return;
+  }
+  guideWaypointMenuRefreshSignature = signature;
+  const revision = ++guideWaypointMenuRefreshRevision;
+  closeGuideWaypointMenu();
+  const routeNode = routeNodeId ? resolveNodeById(routeNodeId) : null;
+  if (!routeNode) {
+    guideWaypointMenuItems.value = [];
+    guideWaypointMenuLoading.value = false;
+    return;
+  }
+  const props = clampGuideRouteComponentProps(
+    routeNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | null
+      | undefined,
+  );
+  const items = props.waypoints.flatMap((waypoint, index) => {
+    const thumbnailAssetId = waypoint.thumbnailAssetId?.trim() ?? '';
+    return thumbnailAssetId
+      ? [{
+        index,
+        name: waypoint.name.trim() || `P${index + 1}`,
+        thumbnailAssetId,
+        imageUrl: null,
+        loading: true,
+        error: null,
+      } satisfies GuideWaypointMenuItem]
+      : [];
+  });
+  guideWaypointMenuItems.value = items;
+  if (!items.length) {
+    guideWaypointMenuLoading.value = false;
+    return;
+  }
+  guideWaypointMenuLoading.value = true;
+  const resolvedItems = await Promise.all(items.map(async (item) => {
+    const imageUrl = await resolveGuideWaypointThumbnailUrl(item.thumbnailAssetId);
+    return {
+      ...item,
+      imageUrl,
+      loading: false,
+      error: imageUrl ? null : '缩略图资源不可用',
+    };
+  }));
+  if (revision !== guideWaypointMenuRefreshRevision) {
+    return;
+  }
+  guideWaypointMenuItems.value = resolvedItems;
+  guideWaypointMenuLoading.value = false;
+}
+
+function toggleGuideWaypointMenu(): void {
+  if (!guideWaypointMenuVisible.value) {
+    return;
+  }
+  guideWaypointMenuOpen.value = !guideWaypointMenuOpen.value;
+  if (guideWaypointMenuOpen.value) {
+    closeViewerEnvironmentMenu();
+  }
+}
+
+function isGuideWaypointMenuItemDisabled(item: GuideWaypointMenuItem): boolean {
+  return item.loading || !item.imageUrl || Boolean(item.error) || vehicleDrivePromptBusy.value;
+}
+
+function handleGuideWaypointSelect(item: GuideWaypointMenuItem): void {
+  closeGuideWaypointMenu();
+  if (isGuideWaypointMenuItemDisabled(item)) {
+    return;
+  }
+  handleGuideWaypointAutoTourStart(item.index);
+}
+
+function handleGuideWaypointImageError(item: GuideWaypointMenuItem): void {
+  guideWaypointMenuItems.value = guideWaypointMenuItems.value.map((entry) => (
+    entry.index === item.index
+      ? { ...entry, imageUrl: null, loading: false, error: '缩略图加载失败' }
+      : entry
+  ));
 }
 
 const floatingAutoTourButton = computed(() => {
@@ -20788,6 +21060,7 @@ function stopCharacterAutoTourAndResumePlayerControl(nodeId: string): void {
 function startCharacterAutoTourFromPrompt(
   nodeId: string,
   sourceEvent: SceneryVehicleDriveEvent | null,
+  target?: GuideRouteTourTargetOptions,
 ): boolean {
   const node = resolveNodeById(nodeId);
   if (
@@ -20814,7 +21087,7 @@ function startCharacterAutoTourFromPrompt(
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
     nodeObjectMap,
-  }, nodeId);
+  }, nodeId, target);
   if (!snap) {
     return false;
   }
@@ -20824,8 +21097,11 @@ function startCharacterAutoTourFromPrompt(
     syncSceneNodeLocalTransformFromObject(node, object);
     syncInstancedTransform(object, true);
   }
+  if (snap.targetReached) {
+    return false;
+  }
   characterPlayerControlNodeIdOverride.value = nodeId;
-  characterAutoTourRuntime.activate(nodeId);
+  characterAutoTourRuntime.activate(nodeId, target);
   refreshCharacterPathFollowRuntimeEntries();
   activeCharacterAutoTourNodeIds.add(nodeId);
   resetCharacterControlInputs();
@@ -20946,6 +21222,8 @@ function handleFloatingAutoTourTap(): void {
   }
 
   const targetNodeId = button.nodeId;
+  const waypointTarget = guideWaypointPendingTarget;
+  guideWaypointPendingTarget = null;
   if (button.active) {
     vehicleDrivePromptBusy.value = true;
     try {
@@ -20957,7 +21235,9 @@ function handleFloatingAutoTourTap(): void {
     } finally {
       vehicleDrivePromptBusy.value = false;
     }
-    return;
+    if (!waypointTarget) {
+      return;
+    }
   }
 
   const node = resolveNodeById(targetNodeId);
@@ -20984,8 +21264,11 @@ function handleFloatingAutoTourTap(): void {
       }
       resetVehicleDriveInputs();
       setVehicleDriveUiOverride('hide');
-      if (!startCharacterAutoTourFromPrompt(targetNodeId, button.event)) {
-        uni.showToast({ title: '角色自动导览尚未准备就绪', icon: 'none' });
+      if (!startCharacterAutoTourFromPrompt(targetNodeId, button.event, waypointTarget ?? undefined)) {
+        uni.showToast({
+          title: waypointTarget ? '角色已在目标点或导览路线未就绪' : '角色自动导览尚未准备就绪',
+          icon: 'none',
+        });
       }
     } finally {
       vehicleDrivePromptBusy.value = false;
@@ -20998,9 +21281,13 @@ function handleFloatingAutoTourTap(): void {
   });
   activeCharacterAutoTourNodeIds.clear();
 
-  const snap = autoTourRuntime.resolveRouteSnap(targetNodeId);
+  const snap = autoTourRuntime.resolveRouteSnap(targetNodeId, waypointTarget ?? undefined);
   if (!snap) {
     uni.showToast({ title: '未找到绑定 Guide Route', icon: 'none' });
+    return;
+  }
+  if (snap.targetReached) {
+    uni.showToast({ title: '车辆已经在目标导航点', icon: 'none' });
     return;
   }
 
@@ -21040,7 +21327,7 @@ function handleFloatingAutoTourTap(): void {
       return;
     }
 
-    autoTourRuntime.startTour(targetNodeId);
+    autoTourRuntime.startTour(targetNodeId, waypointTarget ?? undefined);
     autoTourRuntime.seedTourPlaybackState(targetNodeId, snap);
     activeAutoTourNodeIds.add(targetNodeId);
     autoTourFollowNodeId.value = targetNodeId;
@@ -21057,6 +21344,18 @@ function handleFloatingAutoTourTap(): void {
   } finally {
     vehicleDrivePromptBusy.value = false;
   }
+}
+
+function handleGuideWaypointAutoTourStart(waypointIndex: number): void {
+  const actorNodeId = resolveGuideWaypointActorNodeId();
+  if (!actorNodeId) {
+    uni.showToast({ title: '当前没有可用的 Automatic Tour 路线', icon: 'none' });
+    return;
+  }
+  guideWaypointPendingTarget = { destinationWaypointIndex: waypointIndex };
+  pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(actorNodeId, null);
+  guideWaypointMenuContextRevision.value += 1;
+  handleFloatingAutoTourTap();
 }
 
 function handleFloatingAutoTourPauseToggleTap(): void {
@@ -24469,6 +24768,13 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
 
   // Phase 1: bind state for the new payload.
   currentDocument = payload.document;
+  guideWaypointMenuRefreshRevision += 1;
+  guideWaypointMenuRefreshSignature = '';
+  guideWaypointThumbnailUrlCache.clear();
+  guideWaypointPendingTarget = null;
+  closeGuideWaypointMenu();
+  guideWaypointMenuItems.value = [];
+  guideWaypointMenuLoading.value = false;
   landscapePixelRatioCap = resolveLandscapePixelRatioCap(payload.document);
   setProceduralLandscapeMemoryPressure(false);
   if (isWeChatMiniProgram) {
@@ -24564,6 +24870,8 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 5: apply view settings (camera alignment, environment, projection).
   applyDocumentViewSettings(camera);
   activatePendingDefaultSteerDriveIfNeeded();
+  guideWaypointMenuContextRevision.value += 1;
+  void refreshGuideWaypointMenuDestinations(true);
   updateCharacterFollowCamera(0, { immediate: true });
   markInstancedCullingDirty();
 
@@ -24986,6 +25294,11 @@ function cleanupRuntime(): void {
 onUnmounted(() => {
   viewerEnvironmentSwitchToken += 1;
   viewerEnvironmentSwitchPhase.value = 'idle';
+  guideWaypointMenuRefreshRevision += 1;
+  guideWaypointThumbnailUrlCache.clear();
+  guideWaypointPendingTarget = null;
+  closeGuideWaypointMenu();
+  guideWaypointMenuItems.value = [];
   releaseInstancedLodCullingWorker();
   cancelMoveToTransition();
   resetCharacterActionButtonState();
@@ -25428,6 +25741,294 @@ onUnmounted(() => {
   50% {
     transform: scale(1.03);
     opacity: 1;
+  }
+}
+
+.viewer-waypoint-menu {
+  position: absolute;
+  left: calc(12px + env(safe-area-inset-left));
+  top: 48%;
+  z-index: 1480;
+  display: flex;
+  align-items: center;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.viewer-waypoint-menu__dismiss {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: auto;
+}
+
+.viewer-waypoint-menu__trigger {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4rpx;
+  width: 104rpx;
+  min-width: 104rpx;
+  height: 104rpx;
+  min-height: 104rpx;
+  padding: 8rpx;
+  border: 1px solid rgba(153, 193, 255, 0.28);
+  border-radius: 24rpx;
+  background:
+    radial-gradient(circle at 24% 18%, rgba(111, 214, 255, 0.2), transparent 40%),
+    linear-gradient(180deg, rgba(13, 31, 48, 0.9), rgba(8, 20, 33, 0.84));
+  box-shadow:
+    0 16rpx 34rpx rgba(16, 32, 52, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #f2f9ff;
+  pointer-events: auto;
+  backdrop-filter: blur(18rpx) saturate(1.08);
+  transition: border-color 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
+}
+
+.viewer-waypoint-menu__trigger::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(145deg, rgba(107, 221, 255, 0.22), transparent 48%);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  pointer-events: none;
+}
+
+.viewer-waypoint-menu__trigger.is-open,
+.viewer-waypoint-menu__trigger:active {
+  border-color: rgba(116, 218, 255, 0.66);
+  background-color: rgba(20, 54, 76, 0.92);
+  transform: translateX(3rpx);
+}
+
+.viewer-waypoint-menu__trigger.is-open::before,
+.viewer-waypoint-menu__trigger:active::before {
+  opacity: 1;
+}
+
+.viewer-waypoint-menu__trigger-icon {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38rpx;
+  height: 38rpx;
+  border-radius: 12rpx 12rpx 12rpx 4rpx;
+  background: rgba(101, 213, 246, 0.18);
+  color: #bceeff;
+  font-size: 23rpx;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.viewer-waypoint-menu__trigger-label {
+  position: relative;
+  z-index: 1;
+  color: rgba(242, 249, 255, 0.86);
+  font-size: 18rpx;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.viewer-waypoint-menu__panel {
+  position: absolute;
+  left: calc(100% + 12rpx);
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: min(560rpx, 62vw);
+  max-height: 62vh;
+  padding: 18rpx;
+  overflow: hidden;
+  border: 1px solid rgba(153, 193, 255, 0.24);
+  border-radius: 24rpx;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(91, 190, 238, 0.16), transparent 38%),
+    linear-gradient(180deg, rgba(9, 23, 38, 0.96), rgba(6, 15, 26, 0.92));
+  box-shadow:
+    0 28rpx 64rpx rgba(3, 12, 22, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  color: #f3f9ff;
+  transform: translateY(-50%);
+  pointer-events: auto;
+  backdrop-filter: blur(24rpx) saturate(1.1);
+  animation: viewer-waypoint-menu-in 0.16s ease-out both;
+}
+
+.viewer-waypoint-menu__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12rpx;
+  padding: 2rpx 2rpx 14rpx;
+}
+
+.viewer-waypoint-menu__head-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5rpx;
+}
+
+.viewer-waypoint-menu__title {
+  font-size: 25rpx;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.viewer-waypoint-menu__subtitle {
+  color: rgba(221, 238, 250, 0.58);
+  font-size: 18rpx;
+}
+
+.viewer-waypoint-menu__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44rpx;
+  height: 44rpx;
+  min-width: 44rpx;
+  min-height: 44rpx;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(235, 246, 255, 0.78);
+  font-size: 30rpx;
+  line-height: 1;
+}
+
+.viewer-waypoint-menu__list {
+  max-height: calc(62vh - 100rpx);
+  overflow: hidden;
+}
+
+.viewer-waypoint-menu__item {
+  display: grid;
+  grid-template-columns: 122rpx minmax(0, 1fr) 28rpx;
+  align-items: center;
+  gap: 16rpx;
+  width: 100%;
+  min-height: 94rpx;
+  margin-bottom: 12rpx;
+  padding: 10rpx 12rpx 10rpx 10rpx;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18rpx;
+  background: rgba(255, 255, 255, 0.045);
+  color: inherit;
+  text-align: left;
+}
+
+.viewer-waypoint-menu__item:active {
+  border-color: rgba(116, 218, 255, 0.46);
+  background: rgba(91, 187, 230, 0.14);
+}
+
+.viewer-waypoint-menu__item[disabled] {
+  opacity: 0.55;
+}
+
+.viewer-waypoint-menu__item.is-unavailable {
+  border-color: rgba(255, 166, 120, 0.16);
+}
+
+.viewer-waypoint-menu__thumbnail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 122rpx;
+  height: 78rpx;
+  overflow: hidden;
+  border-radius: 12rpx;
+  background: rgba(0, 0, 0, 0.3);
+  color: rgba(226, 241, 252, 0.68);
+}
+
+.viewer-waypoint-menu__thumbnail-image {
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-waypoint-menu__thumbnail-placeholder {
+  font-size: 30rpx;
+  font-weight: 600;
+}
+
+.viewer-waypoint-menu__item-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6rpx;
+}
+
+.viewer-waypoint-menu__item-title {
+  overflow: hidden;
+  font-size: 23rpx;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-waypoint-menu__item-meta {
+  overflow: hidden;
+  color: rgba(221, 238, 250, 0.56);
+  font-size: 18rpx;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-waypoint-menu__chevron {
+  color: rgba(221, 238, 250, 0.6);
+  font-size: 34rpx;
+  line-height: 1;
+}
+
+.viewer-waypoint-menu__loading {
+  display: block;
+  padding: 14rpx;
+  color: rgba(221, 238, 250, 0.6);
+  font-size: 19rpx;
+  text-align: center;
+}
+
+@keyframes viewer-waypoint-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-8rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .viewer-waypoint-menu__panel {
+    width: min(520rpx, calc(100vw - 150rpx));
+    max-height: 58vh;
+  }
+
+  .viewer-waypoint-menu__list {
+    max-height: calc(58vh - 100rpx);
+  }
+
+  .viewer-waypoint-menu__item {
+    grid-template-columns: 104rpx minmax(0, 1fr) 24rpx;
+    gap: 12rpx;
+  }
+
+  .viewer-waypoint-menu__thumbnail {
+    width: 104rpx;
+    height: 68rpx;
   }
 }
 
