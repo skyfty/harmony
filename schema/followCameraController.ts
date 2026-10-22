@@ -29,6 +29,7 @@ export type CameraFollowOptions = {
   immediate?: boolean
   applyOrbitTween?: boolean
   followControlsDirty?: boolean
+  followForwardPitch?: boolean
   localOffsetOverride?: THREE.Vector3 | null
   lockLocalOffset?: boolean
   smoothTargetForProgrammaticFollow?: boolean
@@ -329,6 +330,7 @@ export type UpdateMotionAwareFollowCameraOptions = {
   applyOrbitTween?: boolean
   smoothTargetForProgrammaticFollow?: boolean
   velocityLerpSpeed?: number
+  followForwardPitch?: boolean
 }
 
 export function updateMotionAwareFollowCamera(options: UpdateMotionAwareFollowCameraOptions): boolean {
@@ -401,6 +403,7 @@ export function updateMotionAwareFollowCamera(options: UpdateMotionAwareFollowCa
     immediate: Boolean(options.immediate),
     applyOrbitTween: options.applyOrbitTween,
     smoothTargetForProgrammaticFollow: options.smoothTargetForProgrammaticFollow,
+    followForwardPitch: options.followForwardPitch,
   })
 }
 
@@ -481,6 +484,8 @@ export class FollowCameraController {
     applyOrbitTween?: boolean
     // 当没有 mapControls 或 mapControls 被禁用时，是否仍然对 target 使用平滑插值。
     smoothTargetForProgrammaticFollow?: boolean
+    // 是否保留目标前向的纵向分量。车辆在坡道上需要随俯仰，角色等调用方默认仍保持水平。
+    followForwardPitch?: boolean
   }): boolean {
     // 这里通过参数对象统一接收本次相机跟随更新所需的全部输入，
     // 便于在不同调用场景下按需传入：例如程序驱动、玩家控制，
@@ -504,6 +509,7 @@ export class FollowCameraController {
     const tuning: CameraFollowTuning = { ...DEFAULT_CAMERA_FOLLOW_TUNING, ...(options.tuning ?? {}) }
     // 世界上方向量默认取 Y 轴正方向；允许外部覆盖以适配不同坐标系。
     const worldUp = options.worldUp ?? new THREE.Vector3(0, 1, 0)
+    const followForwardPitch = Boolean(options.followForwardPitch)
 
     // 复用临时向量，避免每帧分配对象造成 GC 压力。
     const temp = this.temp
@@ -575,7 +581,9 @@ export class FollowCameraController {
     if (!follow.initialized) {
       // 初始化阶段：用目标朝向建立初始 heading，作为后续平滑插值的基准。
       follow.heading.copy(desiredForwardWorld)
-      follow.heading.y = 0
+      if (!followForwardPitch) {
+        follow.heading.y = 0
+      }
       if (follow.heading.lengthSq() < 1e-6) {
         follow.heading.set(0, 0, 1)
       } else {
@@ -600,7 +608,9 @@ export class FollowCameraController {
     } else {
       desiredHeading.set(0, 0, 1)
     }
-    desiredHeading.y = 0
+    if (!followForwardPitch) {
+      desiredHeading.y = 0
+    }
     if (desiredHeading.lengthSq() < 1e-6) {
       desiredHeading.set(0, 0, 1)
     } else {
@@ -634,7 +644,17 @@ export class FollowCameraController {
     } else {
       headingRight.normalize()
     }
-    const headingUp = temp.cameraUp.copy(worldUp)
+    const headingUp = temp.cameraUp
+    if (followForwardPitch) {
+      headingUp.crossVectors(headingForward, headingRight)
+      if (headingUp.lengthSq() < 1e-6) {
+        headingUp.copy(worldUp)
+      } else {
+        headingUp.normalize()
+      }
+    } else {
+      headingUp.copy(worldUp)
+    }
 
     // 根据速度与阈值，计算前瞻（lookahead）混合量：越接近高速，前瞻越明显。
     const lookaheadBlendRange = Math.max(1e-3, Math.sqrt(tuning.lookaheadMinSpeedSq) - tuning.lookaheadBlendStart)

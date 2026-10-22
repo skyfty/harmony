@@ -228,6 +228,7 @@ const VEHICLE_STEER_HARD_CAP = 10
 const VEHICLE_STEER_SOFT_CAP_SQ = VEHICLE_STEER_SOFT_CAP * VEHICLE_STEER_SOFT_CAP
 // 相机世界上方向
 const VEHICLE_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
+const VEHICLE_CAMERA_MAX_FOLLOW_PITCH = THREE.MathUtils.degToRad(45)
 // 相机高度兜底值
 const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
 // 相机高度兜底比例
@@ -278,6 +279,40 @@ function clampAxisScalar(value: number): number {
     return 0
   }
   return Math.max(-1, Math.min(1, value))
+}
+
+function resolveVehicleFollowForward(
+  seatForward: THREE.Vector3,
+  previousHeading: THREE.Vector3,
+  target: THREE.Vector3,
+): void {
+  target.copy(seatForward)
+  let horizontalLength = Math.hypot(target.x, target.z)
+  if (!Number.isFinite(target.x) || !Number.isFinite(target.y) || !Number.isFinite(target.z)
+    || horizontalLength < 1e-5) {
+    const previousHorizontalLength = Math.hypot(previousHeading.x, previousHeading.z)
+    if (Number.isFinite(previousHorizontalLength) && previousHorizontalLength >= 1e-5) {
+      target.set(previousHeading.x, Number.isFinite(target.y) ? target.y : 0, previousHeading.z)
+    } else {
+      target.set(0, Number.isFinite(target.y) ? target.y : 0, target.z >= 0 ? 1 : -1)
+    }
+    horizontalLength = Math.hypot(target.x, target.z)
+  }
+  if (horizontalLength < 1e-5) {
+    target.set(0, 0, 1)
+    return
+  }
+
+  const pitch = THREE.MathUtils.clamp(
+    Math.atan2(target.y, horizontalLength),
+    -VEHICLE_CAMERA_MAX_FOLLOW_PITCH,
+    VEHICLE_CAMERA_MAX_FOLLOW_PITCH,
+  )
+  const horizontalScale = Math.cos(pitch) / horizontalLength
+  target.x *= horizontalScale
+  target.z *= horizontalScale
+  target.y = Math.sin(pitch)
+  target.normalize()
 }
 
 function applySteeringResponseCurve(value: number): number {
@@ -1305,13 +1340,8 @@ export class VehicleDriveController {
       }
     }
 
-    const desiredFollowForward = temp.cameraForward.copy(temp.seatForward)
-    desiredFollowForward.y = 0
-    if (desiredFollowForward.lengthSq() < 1e-6) {
-      desiredFollowForward.set(0, 0, 1)
-    } else {
-      desiredFollowForward.normalize()
-    }
+    const desiredFollowForward = temp.cameraForward
+    resolveVehicleFollowForward(temp.seatForward, follow.heading, desiredFollowForward)
 
     const steeringInput = THREE.MathUtils.clamp(this.input.steering, -1, 1)
     const planarSpeed = Math.sqrt(this.followCameraVelocity.x * this.followCameraVelocity.x + this.followCameraVelocity.z * this.followCameraVelocity.z)
@@ -1370,6 +1400,7 @@ export class VehicleDriveController {
       followControlsDirty: options.followControlsDirty ?? false,
       immediate: options.immediate ?? false,
       velocityLerpSpeed: this.getFollowCameraVelocityLerpSpeed(),
+      followForwardPitch: true,
     })
   }
 
