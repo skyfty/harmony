@@ -135,7 +135,7 @@ function requestSceneSyncWorker(
 
 class SceneSyncUploadQueue {
   private readonly pendingBySceneId = new Map<string, QueuedSceneSync>()
-  private timer: ReturnType<typeof window.setTimeout> | null = null
+  private timer: number | null = null
   private active = false
   private runtime: SceneSyncWorkerRuntime | null = null
 

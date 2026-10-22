@@ -45,18 +45,7 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
       }
 
       const props = clampGuideRouteComponentProps(componentState.props as Partial<GuideRouteComponentProps> | null | undefined)
-      if (!props.surfaceProviderNodeId) {
-        const prefix = `${node.id}:`
-        for (const [key, mesh] of guideRouteWaypointLabelMeshes.entries()) {
-          if (!key.startsWith(prefix)) continue
-          mesh.geometry.dispose()
-          ;(mesh.material as THREE.Material).dispose?.()
-          mesh.removeFromParent()
-          guideRouteWaypointLabelMeshes.delete(key)
-        }
-        return
-      }
-      const waypoints = Array.isArray(props.waypoints) ? props.waypoints : []
+      const waypoints = Array.isArray(props.stops) ? props.stops : []
 
       const desiredKeys = new Set<string>()
       for (let index = 0; index < waypoints.length; index += 1) {
@@ -102,7 +91,7 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
         const existing = guideRouteWaypointLabelMeshes.get(key)
         if (existing && existing.userData?.labelText === labelText) {
           // Update position in case waypoint moved
-          const pos = waypoint?.position
+          const pos = waypoint?.anchor
           if (pos) {
             const local = container.worldToLocal(new THREE.Vector3(
               Number(pos.x) || 0,
@@ -139,7 +128,7 @@ export function createGuideRouteWaypointLabelsManager(sceneStore: any, objectMap
         mesh.userData = { nodeId: node.id, editorOnly: true, labelText, waypointIndex: index }
         mesh.renderOrder = 9999
 
-        const pos = waypoint?.position
+        const pos = waypoint?.anchor
         const local = container.worldToLocal(new THREE.Vector3(
           Number(pos?.x) || 0,
           Number(pos?.y) || 0,

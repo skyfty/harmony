@@ -12,7 +12,10 @@ import {
 } from './components'
 import {
   evaluateGuideRoute,
+  resolveGuideRoutePrimaryProviderNodeId,
   sampleEvaluatedGuideRouteAtDistance,
+  type CompiledGuideStop,
+  type CompiledGuideTransition,
   type EvaluatedGuideRoute,
 } from './guideRouteRuntime'
 import {
@@ -39,9 +42,13 @@ export type AutoTourRuntimeDeps = {
   onAutoSurfaceStart?: (nodeId: string) => void
   onAutoSurfaceEnd?: (nodeId: string) => void
   onTerminalStop?: (nodeId: string, reason: string) => void
-  onDockRequestedPause?: (
+  onGuideStop?: (
     nodeId: string,
-    payload: { waypointIndex: number; terminal: boolean },
+    stop: CompiledGuideStop,
+  ) => void
+  onGuideTransition?: (
+    nodeId: string,
+    transition: CompiledGuideTransition,
   ) => void
 }
 
@@ -72,6 +79,7 @@ export type AutoTourRuntime = {
   continueFromEnd: (nodeId: string) => void
   stopTour: (nodeId: string) => void
   isTourActive: (nodeId: string) => boolean
+  completeGuideTransition: (nodeId: string, success: boolean, message?: string) => void
 }
 
 type RouteData = {
@@ -85,13 +93,15 @@ type PlaybackState = {
   routeWaypointCount: number
   sourceRouteWaypointCount: number
   distanceAlongRoute: number
-  dockHoldIndex: number | null
   travelWindow: GuideRouteTravelWindow | null
+  firedStopIds: Set<string>
+  firedTransitionIds: Set<string>
+  pendingTransitionId: string | null
+  smoothedSpeedMps: number
 }
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 const TERMINAL_DISTANCE_EPSILON = 0.05
-const DOCK_DISTANCE_EPSILON = 0.05
 const ROUTE_END_REVERSE_EPSILON = 0.5
 const AUTO_TOUR_YAW_SMOOTHING = 12
 const AUTO_TOUR_SURFACE_CLEARANCE_M = 0.04
@@ -148,7 +158,6 @@ function resolveRouteData(
   routeNode: SceneNode,
   providerObject: THREE.Object3D | null,
   routeObject: THREE.Object3D | null,
-  loop: boolean,
 ): RouteData | null {
   const evaluation = evaluateGuideRoute({ routeNode, providerObject, routeObject })
   if (evaluation.status !== 'ready') {
@@ -159,7 +168,7 @@ function resolveRouteData(
     return cached
   }
   const polylineData3d = buildPolylineMetricData(evaluation.points, {
-    closed: loop,
+    closed: evaluation.loop,
     mode: '3d',
   })
   if (!polylineData3d) {
@@ -202,22 +211,6 @@ function buildRouteDataFromEvaluation(
   }
   routeDataCache.set(evaluation, routeData)
   return routeData
-}
-
-function resolveNextDockDistance(
-  evaluation: EvaluatedGuideRoute,
-  currentDistance: number,
-): { index: number; distance: number } | null {
-  for (let index = 0; index < evaluation.dock.length; index += 1) {
-    if (!evaluation.dock[index]) {
-      continue
-    }
-    const distance = evaluation.cumulativeLengths[index] ?? 0
-    if (distance > currentDistance + DOCK_DISTANCE_EPSILON) {
-      return { index, distance }
-    }
-  }
-  return null
 }
 
 function applyObjectWorldPose(
@@ -494,17 +487,13 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (!routeNode || routeNode.dynamicMesh?.type !== 'GuideRoute') {
       return null
     }
-    const routeProps = routeNode.components?.guideRoute?.props as
-      | { surfaceProviderNodeId?: unknown }
-      | undefined
-    const providerNodeId = typeof routeProps?.surfaceProviderNodeId === 'string'
-      ? routeProps.surfaceProviderNodeId
-      : ''
+    const routeProps = routeNode.components?.guideRoute?.props
+    const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(routeProps)
     const providerObject = providerNodeId
       ? deps.nodeObjectMap.get(providerNodeId) ?? null
       : null
     const routeObject = deps.nodeObjectMap.get(routeNodeId) ?? null
-    return resolveRouteData(routeNode, providerObject, routeObject, Boolean(tourProps.loop))
+    return resolveRouteData(routeNode, providerObject, routeObject)
   }
 
   function initializePlaybackState(params: {
@@ -526,8 +515,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       routeWaypointCount: routeData.evaluation.points.length,
       sourceRouteWaypointCount: routeData.evaluation.points.length,
       distanceAlongRoute: projection.s,
-      dockHoldIndex: null,
       travelWindow: null,
+      firedStopIds: new Set(),
+      firedTransitionIds: new Set(),
+      pendingTransitionId: null,
+      smoothedSpeedMps: 0,
     }
   }
 
@@ -613,7 +605,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       targetIndex: findTargetWaypointIndexByProjectedS(
         routeData.waypointArcLengths3d,
         projection.s,
-        Boolean(tourProps.loop),
+        routeData.evaluation.loop,
       ),
       routeWaypointCount: routeData.evaluation.points.length,
       sourceRouteWaypointCount: routeData.evaluation.points.length,
@@ -647,7 +639,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       routeData.evaluation,
       projection.s,
       target,
-      Boolean(tourProps.loop),
+      routeData.evaluation.loop,
     )
     if (!travelWindow) {
       const sample = sampleEvaluatedGuideRouteAtDistance(routeData.evaluation, projection.s)
@@ -801,7 +793,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (
       snap
       && !target
-      && !tourProps.loop
+      && !routeData.evaluation.loop
       && snap.projectedS >= routeData.evaluation.totalLength - ROUTE_END_REVERSE_EPSILON
     ) {
       return resolveTargetedSnap(
@@ -809,7 +801,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         tourProps,
         node,
         routeData,
-        { destinationWaypointIndex: 0 },
+        { destinationStopIndex: 0 },
       ) ?? snap
     }
     return snap
@@ -829,8 +821,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       routeWaypointCount: snap.routeWaypointCount,
       sourceRouteWaypointCount: snap.sourceRouteWaypointCount,
       distanceAlongRoute: snap.travelWindow ? 0 : snap.projectedS,
-      dockHoldIndex: null,
       travelWindow: snap.travelWindow,
+      firedStopIds: new Set(),
+      firedTransitionIds: new Set(),
+      pendingTransitionId: null,
+      smoothedSpeedMps: 0,
     })
     pendingTourTargets.delete(nodeId)
   }
@@ -892,7 +887,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             fullRouteData.evaluation,
             projection.s,
             pendingTarget,
-            Boolean(tourProps.loop),
+            fullRouteData.evaluation.loop,
           )
           const targetedRouteData = travelWindow
             ? buildRouteDataFromEvaluation(travelWindow.route, false)
@@ -909,8 +904,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             routeWaypointCount: targetedRouteData.evaluation.points.length,
             sourceRouteWaypointCount: fullRouteData.evaluation.points.length,
             distanceAlongRoute: 0,
-            dockHoldIndex: null,
             travelWindow,
+            firedStopIds: new Set(),
+            firedTransitionIds: new Set(),
+            pendingTransitionId: null,
+            smoothedSpeedMps: 0,
           }
         } else {
           state = initializePlaybackState({
@@ -929,47 +927,106 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         }
         routeData = targetedRouteData
       }
-      const routeIsLooping = Boolean(tourProps.loop) && !state.travelWindow
+      const routeIsLooping = routeData.evaluation.loop && !state.travelWindow
       if (!activeTourNodes.has(node.id)) {
         activeTourNodes.add(node.id)
         deps.onAutoSurfaceStart?.(node.id)
       }
 
-      if (state.dockHoldIndex !== null) {
-        const heldDistance = routeData.evaluation.cumulativeLengths[state.dockHoldIndex] ?? 0
-        state.distanceAlongRoute = heldDistance + DOCK_DISTANCE_EPSILON
-        state.dockHoldIndex = null
+      if (state.pendingTransitionId) {
+        continue
       }
 
       const totalLength = routeData.evaluation.totalLength
       if (totalLength <= 1e-6) {
         continue
       }
-      const speedMps = Math.max(0, tourProps.speedMps)
-      const step = speedMps * deltaSeconds
-      let nextDistance = state.distanceAlongRoute + step
-      let pauseAfterApply: { index: number; terminal: boolean } | null = null
-
-      const nextDock = resolveNextDockDistance(
+      const progressLeg = routeData.evaluation.legs.find((leg) => (
+        state.distanceAlongRoute >= leg.routeStartDistance - 1e-4
+        && state.distanceAlongRoute <= leg.routeEndDistance + 1e-4
+      )) ?? routeData.evaluation.legs[routeData.evaluation.legs.length - 1]
+      if (progressLeg && progressLeg.travelMode !== 'vehicle') {
+        disabledTourNodes.add(node.id)
+        activeTourNodes.delete(node.id)
+        deps.onTerminalStop?.(node.id, 'guide-route-actor-mismatch')
+        continue
+      }
+      const speedProbe = Math.max(1, Math.min(8, tourProps.speedMps * 0.5))
+      const speedSampleBefore = sampleEvaluatedGuideRouteAtDistance(
         routeData.evaluation,
-        state.distanceAlongRoute,
+        Math.max(0, state.distanceAlongRoute - speedProbe),
       )
-      if (nextDock && nextDistance >= nextDock.distance) {
-        nextDistance = nextDock.distance
-        pauseAfterApply = {
-          index: nextDock.index,
-          terminal: !routeIsLooping && nextDock.distance >= totalLength - TERMINAL_DISTANCE_EPSILON,
+      const speedSampleAfter = sampleEvaluatedGuideRouteAtDistance(
+        routeData.evaluation,
+        Math.min(totalLength, state.distanceAlongRoute + speedProbe),
+      )
+      let curveSpeedLimit = Number.POSITIVE_INFINITY
+      if (speedSampleBefore && speedSampleAfter) {
+        const beforeDirection = speedSampleAfter.point.clone().sub(speedSampleBefore.point)
+        const afterDirection = sampleEvaluatedGuideRouteAtDistance(
+          routeData.evaluation,
+          Math.min(totalLength, state.distanceAlongRoute + speedProbe * 2),
+        )?.point.clone().sub(speedSampleAfter.point)
+        beforeDirection.y = 0
+        afterDirection?.setY(0)
+        if (beforeDirection.lengthSq() > 1e-8 && afterDirection && afterDirection.lengthSq() > 1e-8) {
+          beforeDirection.normalize()
+          afterDirection.normalize()
+          const angle = Math.acos(THREE.MathUtils.clamp(beforeDirection.dot(afterDirection), -1, 1))
+          const curvature = angle / Math.max(1e-4, speedSampleAfter.point.distanceTo(speedSampleBefore.point))
+          curveSpeedLimit = Math.sqrt(
+            Math.max(0.01, progressLeg?.speedProfile.lateralAccelLimitMps2 ?? 2.5)
+            / Math.max(1e-5, curvature),
+          )
         }
+      }
+      const targetSpeedMps = Math.max(
+        0,
+        Math.min(
+          tourProps.speedMps,
+          progressLeg?.speedProfile.cruiseSpeedMps ?? tourProps.speedMps,
+          curveSpeedLimit,
+        ),
+      )
+      const speedAlpha = 1 - Math.exp(-Math.max(0, deltaSeconds) / 0.85)
+      state.smoothedSpeedMps = state.smoothedSpeedMps <= 0
+        ? targetSpeedMps
+        : state.smoothedSpeedMps + (targetSpeedMps - state.smoothedSpeedMps) * speedAlpha
+      const step = state.smoothedSpeedMps * deltaSeconds
+      const previousDistance = state.distanceAlongRoute
+      let nextDistance = previousDistance + step
+      let wrapped = false
+      let eventRangeEnd = Math.min(totalLength, nextDistance)
+      if (routeIsLooping && nextDistance >= totalLength) {
+        eventRangeEnd = totalLength
+        nextDistance = 0
+        wrapped = true
+      }
+
+      const crosses = (eventDistance: number, endDistance: number): boolean => (
+        (previousDistance <= 1e-4 && eventDistance <= 1e-4)
+        || (
+          eventDistance > previousDistance + 1e-4
+          && eventDistance <= endDistance + 1e-4
+        )
+      )
+      const reachedStops = routeData.evaluation.stops.filter((stop) => (
+        !state!.firedStopIds.has(stop.definition.id)
+        && crosses(stop.routeDistance, eventRangeEnd)
+      ))
+      const nextTransition = routeData.evaluation.transitions.find((transition) => (
+        !state!.firedTransitionIds.has(transition.definition.id)
+        && crosses(transition.routeDistance, eventRangeEnd)
+      )) ?? null
+      if (nextTransition) {
+        nextDistance = nextTransition.routeDistance
+        wrapped = false
       }
 
       const isTerminal = !routeIsLooping
         && nextDistance >= totalLength - TERMINAL_DISTANCE_EPSILON
       if (isTerminal) {
         nextDistance = totalLength
-        pauseAfterApply = {
-          index: routeData.evaluation.points.length - 1,
-          terminal: true,
-        }
       } else if (totalLength > 0 && nextDistance > totalLength) {
         if (routeIsLooping) {
           nextDistance %= totalLength
@@ -1045,20 +1102,23 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       syncNodeTransformFromObject(node, object)
       deps.onNodeObjectTransformUpdated?.(node.id, object)
 
-      if (pauseAfterApply) {
-        if (pauseAfterApply.terminal) {
-          disabledTourNodes.add(node.id)
-          activeTourNodes.delete(node.id)
-          deps.onTerminalStop?.(node.id, 'guide-route-complete')
-        } else {
-          state.dockHoldIndex = pauseAfterApply.index
-        }
-        if (!pauseAfterApply.terminal || !state.travelWindow) {
-          deps.onDockRequestedPause?.(node.id, {
-            waypointIndex: pauseAfterApply.index,
-            terminal: pauseAfterApply.terminal,
-          })
-        }
+      for (const stop of reachedStops) {
+        state.firedStopIds.add(stop.definition.id)
+        deps.onGuideStop?.(node.id, stop)
+      }
+      if (nextTransition) {
+        state.firedTransitionIds.add(nextTransition.definition.id)
+        state.pendingTransitionId = nextTransition.definition.id
+        deps.onGuideTransition?.(node.id, nextTransition)
+      }
+      if (wrapped) {
+        state.firedStopIds.clear()
+        state.firedTransitionIds.clear()
+      }
+      if (isTerminal && !nextTransition) {
+        disabledTourNodes.add(node.id)
+        activeTourNodes.delete(node.id)
+        deps.onTerminalStop?.(node.id, 'guide-route-complete')
       }
     }
   }
@@ -1100,6 +1160,18 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     isTourActive: (nodeId) => (
       !disabledTourNodes.has(nodeId) && activeTourNodes.has(nodeId)
     ),
+    completeGuideTransition: (nodeId, success, message) => {
+      const state = playbackStates.get(nodeId)
+      if (!state?.pendingTransitionId) {
+        return
+      }
+      state.pendingTransitionId = null
+      if (!success) {
+        disabledTourNodes.add(nodeId)
+        activeTourNodes.delete(nodeId)
+        deps.onTerminalStop?.(nodeId, message || 'guide-route-transition-failed')
+      }
+    },
     reset: () => {
       Array.from(activeTourNodes).forEach((nodeId) => {
         deps.onAutoSurfaceEnd?.(nodeId)

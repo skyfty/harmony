@@ -246,11 +246,12 @@ function resolveRouteStart(
   const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
     | SceneNodeComponentState<Partial<GuideRouteComponentProps>>
     | undefined
-  const waypoint = component?.props?.waypoints?.[0]?.position
-  if (waypoint) {
+  const firstPathLeg = component?.props?.legs?.find((leg) => leg.kind === 'path')
+  const anchor = firstPathLeg?.kind === 'path' ? firstPathLeg.anchors[0] : null
+  if (anchor) {
     return {
-      x: finiteNumber(waypoint.x, worldMatrix.elements[12]!),
-      z: finiteNumber(waypoint.z, worldMatrix.elements[14]!),
+      x: finiteNumber(anchor.x, worldMatrix.elements[12]!),
+      z: finiteNumber(anchor.z, worldMatrix.elements[14]!),
     }
   }
   return {
@@ -269,7 +270,7 @@ function isUsableGuideRoute(node: SceneNode): boolean {
   return Boolean(
     component
     && component.enabled !== false
-    && component.props?.version === 2,
+    && component.props?.version === 3,
   )
 }
 

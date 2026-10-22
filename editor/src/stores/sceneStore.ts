@@ -335,7 +335,9 @@ import type {
   BillboardComponentProps,
   DisplayBoardComponentProps,
   GuideRouteComponentProps,
-  GuideRouteWaypoint,
+  GuideRouteLeg,
+  GuideRouteStop,
+  GuideRouteTransition,
   GuideboardComponentProps,
   NominateComponentProps,
   OnlineComponentProps,
@@ -385,7 +387,8 @@ import {
   resolveRoadComponentPropsFromMesh,
   clampRoadProps,
   cloneRoadComponentProps,
-  buildGuideRouteWaypointsFromPositions,
+  createGuidePathRouteLeg,
+  clampGuideRouteComponentProps,
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
   clampBillboardComponentProps,
@@ -18760,16 +18763,13 @@ export const useSceneStore = defineStore('scene', {
     createGuideRouteNode(payload: {
       nodeId?: string
       points: Vector3Like[]
-      waypoints?: Array<{
-        name?: string
-        dock?: boolean
-        position?: Vector3Like
-        thumbnailAssetId?: string | null
-      }>
+      legs?: GuideRouteLeg[]
+      stops?: GuideRouteStop[]
+      transitions?: GuideRouteTransition[]
+      loop?: boolean
       surfaceProviderNodeId?: string | null
-      routeSource?: GuideRouteComponentProps['routeSource']
       sampleSpacingM?: number
-      roadLateralOffsetM?: number
+      travelMode?: 'vehicle' | 'character'
       name?: string
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
@@ -18791,22 +18791,24 @@ export const useSceneStore = defineStore('scene', {
           const result = this.addNodeComponent(nodeId, GUIDE_ROUTE_COMPONENT_TYPE)
           const component = result?.component ?? (findNodeById(this.nodes, nodeId)?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as any)
           if (component?.id) {
-            const suppliedPositions = Array.isArray(payload.waypoints)
-              ? payload.waypoints.map((entry) => entry?.position ?? null)
-              : []
-            const waypoints = buildGuideRouteWaypointsFromPositions(
-              suppliedPositions.length === payload.waypoints?.length && suppliedPositions.every(Boolean)
-                ? suppliedPositions
-                : build.definition.vertices,
-              payload.waypoints,
-            )
-            this.updateNodeComponentProps(nodeId, component.id, {
+            const defaultPathLeg = createGuidePathRouteLeg({
+              travelMode: payload.travelMode ?? 'character',
               surfaceProviderNodeId: payload.surfaceProviderNodeId ?? null,
-              routeSource: payload.routeSource ?? 'drawn',
-              sampleSpacingM: payload.sampleSpacingM ?? 2,
-              roadLateralOffsetM: payload.roadLateralOffsetM ?? 0,
-              waypoints,
+              anchors: payload.points.map((point) => ({ ...point })),
+              preserveAuthoredY: !payload.surfaceProviderNodeId,
             })
+            const nextProps = clampGuideRouteComponentProps({
+              version: 3,
+              loop: payload.loop === true,
+              legs: payload.legs?.length ? payload.legs : [defaultPathLeg],
+              stops: payload.stops ?? [],
+              transitions: payload.transitions ?? [],
+            })
+            this.updateNodeComponentProps(
+              nodeId,
+              component.id,
+              nextProps as unknown as Partial<Record<string, unknown>>,
+            )
           }
         }
 
@@ -18848,7 +18850,8 @@ export const useSceneStore = defineStore('scene', {
     },
     updateGuideRouteWaypoints(nodeId: string, options: {
       vertices: Vector3Like[]
-      waypoints?: Array<Partial<GuideRouteWaypoint> | null | undefined>
+      anchors?: Vector3Like[]
+      legId?: string
       selectedWaypointIndex?: number | null
     }): boolean {
       const target = findNodeById(this.nodes, nodeId)
@@ -18856,7 +18859,7 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const nextVertices = buildGuideRouteWaypointsFromPositions(options.vertices).map((entry) => entry.position)
+      const nextVertices = options.vertices.map((entry) => ({ x: entry.x, y: entry.y, z: entry.z }))
       if (nextVertices.length < 2) {
         return false
       }
@@ -18868,9 +18871,21 @@ export const useSceneStore = defineStore('scene', {
         return false
       }
 
-      const currentWaypoints = Array.isArray(component.props?.waypoints) ? component.props.waypoints : []
-      const waypointSource = Array.isArray(options.waypoints) ? options.waypoints : currentWaypoints
-      const nextWaypoints = buildGuideRouteWaypointsFromPositions(nextVertices, waypointSource)
+      const currentProps = clampGuideRouteComponentProps(component.props)
+      const pathLegIndex = currentProps.legs.findIndex((leg) => (
+        leg.kind === 'path' && (!options.legId || leg.id === options.legId)
+      ))
+      if (pathLegIndex < 0) {
+        return false
+      }
+      const nextLegs = currentProps.legs.map((leg, index) => (
+        index === pathLegIndex && leg.kind === 'path'
+          ? {
+              ...leg,
+              anchors: (options.anchors ?? nextVertices).map((anchor) => ({ ...anchor })),
+            }
+          : leg
+      ))
 
       this.captureHistorySnapshot()
       this.beginHistoryCaptureSuppression()
@@ -18879,17 +18894,17 @@ export const useSceneStore = defineStore('scene', {
           ...(target.dynamicMesh as GuideRouteDynamicMesh),
           vertices: nextVertices.map((point) => ({ x: point.x, y: point.y, z: point.z })),
         })
-        this.updateNodeComponentProps(nodeId, component.id, { waypoints: nextWaypoints })
+        this.updateNodeComponentProps(nodeId, component.id, { legs: nextLegs })
         const requestedIndex = typeof options.selectedWaypointIndex === 'number' && Number.isFinite(options.selectedWaypointIndex)
           ? Math.max(0, Math.floor(options.selectedWaypointIndex))
           : null
         const nextSelectedIndex = requestedIndex === null
           ? (this.selectedGuideRouteWaypoint?.nodeId === nodeId
-              ? Math.min(this.selectedGuideRouteWaypoint.waypointIndex, nextWaypoints.length - 1)
+              ? Math.min(this.selectedGuideRouteWaypoint.waypointIndex, nextVertices.length - 1)
               : null)
-          : Math.min(requestedIndex, nextWaypoints.length - 1)
+          : Math.min(requestedIndex, nextVertices.length - 1)
 
-        if (nextSelectedIndex === null || nextWaypoints.length === 0) {
+        if (nextSelectedIndex === null || nextVertices.length === 0) {
           this.clearSelectedGuideRouteWaypoint()
         } else {
           this.setSelectedGuideRouteWaypoint(nodeId, nextSelectedIndex)
@@ -18898,6 +18913,18 @@ export const useSceneStore = defineStore('scene', {
       } finally {
         this.endHistoryCaptureSuppression()
       }
+    },
+
+    setGuideRouteDisplayVertices(nodeId: string, vertices: Vector3Like[]): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      if (!target || target.dynamicMesh?.type !== 'GuideRoute') {
+        return false
+      }
+      this.updateNodeDynamicMesh(nodeId, {
+        ...(target.dynamicMesh as GuideRouteDynamicMesh),
+        vertices: vertices.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+      })
+      return true
     },
 
     /** Updates the editable waypoint draft without regenerating the road. */

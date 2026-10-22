@@ -1,13 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
-import { Vector3 } from 'three'
 import type { SceneNodeComponentState } from '@schema/core'
-import { resolveSceneNodeWorldMatrix, useSceneStore } from '@/stores/sceneStore'
+import { useSceneStore } from '@/stores/sceneStore'
 import {
   CITY_GENERATOR_COMPONENT_TYPE,
-  CITY_GENERATOR_MAX_INSTANCES,
-  CITY_GENERATOR_VERTEX_BUDGET,
   clampCityGeneratorComponentProps,
   cloneProceduralCityHostSnapshot,
   resolveCityGeneratorGridPlan,
@@ -29,12 +26,6 @@ const cityComponent = computed(
 const props = computed(() => clampCityGeneratorComponentProps(cityComponent.value?.props))
 const blockWidth = computed(() => props.value.lot * props.value.lotsX)
 const blockDepth = computed(() => props.value.lot * props.value.lotsZ)
-const hostOutline = computed(() => {
-  const type = selectedNode.value?.dynamicMesh?.type
-  return type === 'Region' || type === 'Floor' || type === 'Landform'
-})
-const detailedBuildings = computed(() => props.value.buildingPreset === 'skyscraper')
-
 // the same derivation the component builds from, run in its dry-run mode so the panel
 // can show what a region is going to cost before it is paid for
 const plan = computed(() => {
@@ -44,39 +35,11 @@ const plan = computed(() => {
 })
 const blocksOnAuto = computed(() => props.value.blocksX === 0 || props.value.blocksZ === 0)
 
-// where the reserved block ended up, in the host's own local space — the space a
-// theme node's transform is written in when it is parented to the host
-const reserve = computed(() => plan.value.reserve)
-const reserveWorld = computed(() => {
-  const zone = reserve.value
-  const nodeId = selectedNodeId.value
-  if (!zone || !nodeId) {
-    return null
-  }
-  const matrix = resolveSceneNodeWorldMatrix(sceneStore.nodes, nodeId)
-  return matrix ? new Vector3(zone.centerX, zone.padTopY, zone.centerZ).applyMatrix4(matrix) : null
-})
-// a reserve that swallowed the whole grid leaves a city of streets and pavement
-const reserveEmptiedGrid = computed(() => reserve.value !== null && plan.value.towers === 0)
-
-const reserveLocalLabel = computed(() => {
-  const zone = reserve.value
-  return zone === null
-    ? ''
-    : `${zone.centerX.toFixed(2)}, ${zone.padTopY.toFixed(2)}, ${zone.centerZ.toFixed(2)}`
-})
-const reserveSceneLabel = computed(() => {
-  const point = reserveWorld.value
-  return point === null ? '' : `${point.x.toFixed(2)}, ${point.y.toFixed(2)}, ${point.z.toFixed(2)}`
-})
-
 const vertexLabel = computed(() => {
   const value = plan.value.estimatedVertices
   return value >= 100000 ? `${(value / 1e6).toFixed(2)} M` : Math.round(value).toLocaleString('en-US')
 })
 
-const budgetLabel = computed(() => `${(CITY_GENERATOR_VERTEX_BUDGET / 1e6).toFixed(0)} M`)
-const instanceCapLabel = computed(() => CITY_GENERATOR_MAX_INSTANCES.toLocaleString('en-US'))
 
 const buildingPresetOptions: Array<{ title: string; value: CityGeneratorBuildingPreset }> = [
   { title: 'Skyscraper (detailed)', value: 'skyscraper' },

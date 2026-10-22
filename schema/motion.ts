@@ -3,6 +3,19 @@ export { createAutoTourRuntime } from './autoTourRuntime'
 export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourRouteSnapResult } from './autoTourRuntime'
 export { buildGuideRouteTravelWindow } from './guideRouteTourTarget'
 export type { GuideRouteTourTargetOptions, GuideRouteTravelWindow } from './guideRouteTourTarget'
+export {
+  evaluateGuideRoute,
+  sampleEvaluatedGuideRouteAtDistance,
+  resolveCompiledGuideLegAtDistance,
+  resolveGuideRoutePrimaryProviderNodeId,
+} from './guideRouteRuntime'
+export type {
+  CompiledGuideLeg,
+  CompiledGuideStop,
+  CompiledGuideTransition,
+  EvaluatedGuideRoute,
+  EvaluatedGuideRouteStatus,
+} from './guideRouteRuntime'
 export { AutoTourCameraAvoidanceController } from './autoTourCameraAvoidanceController'
 export { CharacterAutoTourRuntimeManager } from './characterAutoTourRuntime'
 export type {

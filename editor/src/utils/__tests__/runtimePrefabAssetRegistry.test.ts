@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { SceneAssetRegistryEntry, SceneJsonExportDocument } from '@schema/core'
+import type { SceneAssetServerEntry, SceneJsonExportDocument } from '@schema/core'
 import { mergeRuntimePrefabAssetRegistry } from '@schema/runtimePrefabAssetRegistry'
 
-function createAsset(url: string): SceneAssetRegistryEntry {
+function createAsset(url: string): SceneAssetServerEntry {
   return {
     sourceType: 'server',
     fileKey: url.split('/').pop() ?? null,
@@ -12,13 +12,13 @@ function createAsset(url: string): SceneAssetRegistryEntry {
 }
 
 function createDocument(
-  assetRegistry: Record<string, SceneAssetRegistryEntry> = {},
+  assetRegistry: Record<string, SceneAssetServerEntry> = {},
 ): SceneJsonExportDocument {
   return {
     id: 'scene',
     nodes: [],
     assetRegistry,
-  } as SceneJsonExportDocument
+  } as unknown as SceneJsonExportDocument
 }
 
 describe('mergeRuntimePrefabAssetRegistry', () => {
@@ -53,6 +53,10 @@ describe('mergeRuntimePrefabAssetRegistry', () => {
       },
     })
 
-    expect(document.assetRegistry?.shared?.resolvedUrl).toBe('https://cdn.example/new.glb')
+    const shared = document.assetRegistry?.shared
+    expect(shared?.sourceType).toBe('server')
+    if (shared?.sourceType === 'server') {
+      expect(shared.resolvedUrl).toBe('https://cdn.example/new.glb')
+    }
   })
 })

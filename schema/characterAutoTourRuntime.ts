@@ -18,7 +18,10 @@ import {
   clampGuideRouteComponentProps,
   type GuideRouteComponentProps,
 } from './components/definitions/guideRouteComponent'
-import { evaluateGuideRoute } from './guideRouteRuntime'
+import {
+  evaluateGuideRoute,
+  resolveGuideRoutePrimaryProviderNodeId,
+} from './guideRouteRuntime'
 import {
   buildGuideRouteTravelWindow,
   type GuideRouteTourTargetOptions,
@@ -53,6 +56,11 @@ export type CharacterAutoTourRuntimeEntry = {
   smoothedYaw: number
   lastInput: CharacterAutoTourInputState
   lastTargetIndex: number
+  firedStopIds: Set<string>
+  firedTransitionIds: Set<string>
+  pendingTransitionId: string | null
+  smoothedSpeedMps: number
+  lastRouteDistance: number
 }
 
 export type CharacterAutoTourRouteSnapResult = {
@@ -72,12 +80,19 @@ export type CharacterAutoTourRuntimeHost = {
   onNodeObjectTransformUpdated?: (nodeId: string, object: THREE.Object3D) => void
   shouldApplyWorldTransform?: (nodeId: string) => boolean
   onTourComplete?: (nodeId: string) => void
+  onGuideStop?: (
+    nodeId: string,
+    stop: NonNullable<ReturnType<typeof evaluateGuideRoute>['stops'][number]>,
+  ) => void
+  onGuideTransition?: (
+    nodeId: string,
+    transition: NonNullable<ReturnType<typeof evaluateGuideRoute>['transitions'][number]>,
+  ) => void
 }
 
 type GuideRouteWorldWaypoints = {
   evaluation: ReturnType<typeof evaluateGuideRoute>
   points: THREE.Vector3[]
-  dock: boolean[]
   providerNodeId: string | null
 } | null
 
@@ -177,8 +192,9 @@ function resolveGuideRouteWorldWaypoints(
       | Partial<GuideRouteComponentProps>
       | null,
   )
-  const providerObject = props.surfaceProviderNodeId
-    ? nodeObjectMap.get(props.surfaceProviderNodeId) ?? null
+  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
+  const providerObject = providerNodeId
+    ? nodeObjectMap.get(providerNodeId) ?? null
     : null
   const routeObject = nodeObjectMap.get(routeNode.id) ?? null
   const evaluation = evaluateGuideRoute({ routeNode, providerObject, routeObject })
@@ -186,7 +202,6 @@ function resolveGuideRouteWorldWaypoints(
     ? {
       evaluation,
       points: evaluation.points,
-      dock: evaluation.dock,
       providerNodeId: evaluation.providerNodeId,
     }
     : null
@@ -355,7 +370,7 @@ export class CharacterAutoTourRuntimeManager {
     })
     const sample = resolvePathFollowSample({
       points: routeData.points,
-      loop: tourProps.loop,
+      loop: routeData.evaluation.loop,
       currentPosition,
       lookaheadDistance,
       mode: 'xz',
@@ -370,7 +385,7 @@ export class CharacterAutoTourRuntimeManager {
         routeData.evaluation,
         sample.projection.s,
         target,
-        tourProps.loop,
+        routeData.evaluation.loop,
       )
       : null
     const targetReached = Boolean(target && !travelWindow)
@@ -378,7 +393,7 @@ export class CharacterAutoTourRuntimeManager {
     const segmentIndex = travelWindow ? 0 : sample.projection.segmentIndex
     const segmentStart = effectivePoints[segmentIndex] ?? sample.projection.closestPoint
     const segmentEnd = effectivePoints[segmentIndex + 1]
-      ?? (!target && tourProps.loop ? effectivePoints[0] : null)
+      ?? (!target && routeData.evaluation.loop ? effectivePoints[0] : null)
       ?? sample.lookaheadPoint
     const forwardWorld = segmentEnd.clone().sub(segmentStart)
     forwardWorld.y = 0
@@ -422,6 +437,18 @@ export class CharacterAutoTourRuntimeManager {
     this.pendingTargets.clear()
   }
 
+  completeGuideTransition(nodeId: string, success: boolean, message?: string): void {
+    const entry = this.entries.get(nodeId)
+    if (!entry?.pendingTransitionId) {
+      return
+    }
+    entry.pendingTransitionId = null
+    if (!success) {
+      this.deactivate(nodeId)
+      void message
+    }
+  }
+
   refresh(host: CharacterAutoTourRuntimeHost): void {
     const nextEntries = new Map<string, CharacterAutoTourRuntimeEntry>()
     for (const [nodeId, node] of host.iterNodes()) {
@@ -463,6 +490,11 @@ export class CharacterAutoTourRuntimeManager {
           locallyControlled: false,
         },
         lastTargetIndex: previous?.lastTargetIndex ?? 0,
+        firedStopIds: previous?.firedStopIds ?? new Set(),
+        firedTransitionIds: previous?.firedTransitionIds ?? new Set(),
+        pendingTransitionId: previous?.pendingTransitionId ?? null,
+        smoothedSpeedMps: previous?.smoothedSpeedMps ?? 0,
+        lastRouteDistance: previous?.lastRouteDistance ?? 0,
       })
       this.pendingTargets.delete(nodeId)
     }
@@ -507,6 +539,10 @@ export class CharacterAutoTourRuntimeManager {
         )
         return
       }
+      if (entry.pendingTransitionId) {
+        entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
+        return
+      }
 
       const routeData = resolveGuideRouteWorldWaypoints(host.resolveNode, host.nodeObjectMap, entry.routeNodeId)
       if (!routeData) {
@@ -526,7 +562,7 @@ export class CharacterAutoTourRuntimeManager {
         if (!existingWindowMatchesRoute) {
           const projectionSample = resolvePathFollowSample({
             points: routeData.points,
-            loop: entry.props.loop,
+            loop: routeData.evaluation.loop,
             currentPosition,
             lookaheadDistance: 0,
             mode: 'xz',
@@ -535,7 +571,7 @@ export class CharacterAutoTourRuntimeManager {
             routeData.evaluation,
             projectionSample?.projection.s ?? 0,
             entry.target,
-            entry.props.loop,
+            routeData.evaluation.loop,
           )
           if (!travelWindow) {
             entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
@@ -547,13 +583,14 @@ export class CharacterAutoTourRuntimeManager {
         }
       }
       const activePoints = entry.travelWindow?.route.points ?? routeData.points
-      const activeLoop = entry.travelWindow ? false : entry.props.loop
-      if (
+      const activeLoop = entry.travelWindow ? false : routeData.evaluation.loop
+      const resettingRouteProgress = (
         !entry.hasSample
         || previousRouteNodeId !== entry.routeNodeId
         || entry.sourceRouteWaypointCount !== sourceRouteWaypointCount
         || entry.routeWaypointCount !== activePoints.length
-      ) {
+      )
+      if (resettingRouteProgress) {
         entry.hasSample = true
         entry.routeWaypointCount = activePoints.length
         entry.sourceRouteWaypointCount = sourceRouteWaypointCount
@@ -564,9 +601,9 @@ export class CharacterAutoTourRuntimeManager {
 
       const controllerProps = entry.controllerProps ?? clampCharacterControllerComponentProps(null)
       const groundOffsetY = resolveCharacterGroundOffsetY(controllerProps)
-      const speedMps = Math.max(0, entry.props.speedMps)
+      const baseSpeedMps = Math.max(0, entry.props.speedMps)
       const lookaheadDistance = resolvePathFollowLookaheadDistance({
-        speedMps,
+        speedMps: baseSpeedMps,
         baseMeters: 1.4,
         speedGain: 0.35,
         minMeters: 1.1,
@@ -583,6 +620,54 @@ export class CharacterAutoTourRuntimeManager {
       if (!sample) {
         return
       }
+      if (resettingRouteProgress) {
+        entry.lastRouteDistance = entry.travelWindow ? 0 : sample.projection.s
+      }
+      const progressDistance = entry.travelWindow ? 0 : sample.projection.s
+      const progressLeg = routeData.evaluation.legs.find((leg) => (
+        progressDistance >= leg.routeStartDistance - 1e-4
+        && progressDistance <= leg.routeEndDistance + 1e-4
+      )) ?? routeData.evaluation.legs[routeData.evaluation.legs.length - 1]
+      if (progressLeg && progressLeg.travelMode !== 'character') {
+        entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
+        this.deactivate(nodeId)
+        host.onTourComplete?.(nodeId)
+        return
+      }
+      const speedMps = Math.max(
+        0,
+        Math.min(
+          baseSpeedMps,
+          progressLeg?.speedProfile.cruiseSpeedMps ?? baseSpeedMps,
+        ),
+      )
+      const speedAlpha = 1 - Math.exp(-Math.max(0, deltaSeconds) / 0.55)
+      entry.smoothedSpeedMps = entry.smoothedSpeedMps <= 0
+        ? speedMps
+        : entry.smoothedSpeedMps + (speedMps - entry.smoothedSpeedMps) * speedAlpha
+      const previousRouteDistance = entry.lastRouteDistance
+      const plannedRouteDistance = sample.projection.s + entry.smoothedSpeedMps * deltaSeconds
+      const crossesRouteDistance = (distance: number): boolean => (
+        distance > previousRouteDistance + 1e-4
+        && distance <= plannedRouteDistance + 1e-4
+      )
+      if (!entry.travelWindow) {
+        for (const stop of routeData.evaluation.stops) {
+          if (
+            !entry.firedStopIds.has(stop.definition.id)
+            && crossesRouteDistance(stop.routeDistance)
+          ) {
+            entry.firedStopIds.add(stop.definition.id)
+            host.onGuideStop?.(nodeId, stop)
+          }
+        }
+      }
+      const scheduledTransition = !entry.travelWindow
+        ? routeData.evaluation.transitions.find((transition) => (
+          !entry.firedTransitionIds.has(transition.definition.id)
+          && crossesRouteDistance(transition.routeDistance)
+        )) ?? null
+        : null
 
       if (!activeLoop) {
         const endPoint = activePoints[activePoints.length - 1]!
@@ -592,6 +677,19 @@ export class CharacterAutoTourRuntimeManager {
         )
         const arrivalDistance = Math.max(0.35, Math.min(1.25, speedMps * 0.2))
         if (endDistance <= arrivalDistance) {
+          const endpointTransition = !entry.travelWindow
+            ? routeData.evaluation.transitions.find((transition) => (
+              !entry.firedTransitionIds.has(transition.definition.id)
+              && transition.routeDistance >= routeData.evaluation.totalLength - 0.1
+            )) ?? null
+            : null
+          if (endpointTransition) {
+            entry.firedTransitionIds.add(endpointTransition.definition.id)
+            entry.pendingTransitionId = endpointTransition.definition.id
+            entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
+            host.onGuideTransition?.(nodeId, endpointTransition)
+            return
+          }
           const prevPoint = activePoints[Math.max(0, activePoints.length - 2)] ?? endPoint
           characterPathFollowDirection.copy(endPoint).sub(prevPoint)
           characterPathFollowDirection.y = 0
@@ -653,7 +751,13 @@ export class CharacterAutoTourRuntimeManager {
           speedFactor = Math.min(speedFactor, 1 - cornerSharpness * 0.25)
         }
       }
-      const stepDistance = Math.max(0, speedMps * deltaSeconds * speedFactor)
+      let stepDistance = Math.max(0, entry.smoothedSpeedMps * deltaSeconds * speedFactor)
+      if (scheduledTransition) {
+        stepDistance = Math.min(
+          stepDistance,
+          Math.max(0, scheduledTransition.routeDistance - sample.projection.s),
+        )
+      }
       const actualStep = Math.min(stepDistance, distanceToLookahead)
       characterPathFollowTargetPosition.copy(currentPosition).addScaledVector(characterPathFollowDirection, actualStep)
       const heightAlpha = distanceToLookahead > 1e-6
@@ -701,6 +805,17 @@ export class CharacterAutoTourRuntimeManager {
         interact: false,
         yaw: entry.smoothedYaw,
         locallyControlled: false,
+      }
+      if (!entry.travelWindow) {
+        entry.lastRouteDistance = Math.min(
+          routeData.evaluation.totalLength,
+          sample.projection.s + actualStep,
+        )
+      }
+      if (scheduledTransition) {
+        entry.firedTransitionIds.add(scheduledTransition.definition.id)
+        entry.pendingTransitionId = scheduledTransition.definition.id
+        host.onGuideTransition?.(nodeId, scheduledTransition)
       }
     })
   }

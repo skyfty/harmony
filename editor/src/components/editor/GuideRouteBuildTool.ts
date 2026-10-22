@@ -262,12 +262,8 @@ export function createGuideRouteBuildTool(options: {
     }
     const created = options.sceneStore.createGuideRouteNode({
       points: session.points.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
-      waypoints: session.points.map((point, index, points) => ({
-        position: { x: point.x, y: point.y, z: point.z },
-        dock: index === 0 || index === points.length - 1,
-      })),
       surfaceProviderNodeId: session.surfaceProviderNodeId,
-      sampleSpacingM: 2,
+      travelMode: 'vehicle',
       editorFlags: { runtimeHiddenInPreview: false, editorOnly: true },
     })
     const startPoint = session.points[0]?.clone() ?? null

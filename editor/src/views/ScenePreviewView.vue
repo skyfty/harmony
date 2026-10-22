@@ -519,7 +519,10 @@ import type Viewer from 'viewerjs'
 import type { ViewerOptions } from 'viewerjs'
 import { readServerDownloadBaseUrl } from '@/api/serverApiConfig'
 import { createAutoTourRuntime } from '@schema/motion'
-import { evaluateGuideRoute } from '@schema/guideRouteRuntime'
+import {
+	evaluateGuideRoute,
+	resolveGuideRoutePrimaryProviderNodeId,
+} from '@schema/guideRouteRuntime'
 import { createScenePreviewPerfController } from '@schema/overlay'
 import { canNodeUseRuntimeModelInstancing } from '@schema/runtimeModelInstancing'
 
@@ -4564,14 +4567,14 @@ async function refreshGuideWaypointMenuDestinations(force = false): Promise<void
 			| Partial<GuideRouteComponentProps>
 			| null,
 	)
-	const items = props.waypoints.flatMap((waypoint, index) => {
-		const thumbnailAssetId = typeof waypoint.thumbnailAssetId === 'string'
-			? waypoint.thumbnailAssetId.trim()
+	const items = props.stops.flatMap((stop, index) => {
+		const thumbnailAssetId = typeof stop.thumbnailAssetId === 'string'
+			? stop.thumbnailAssetId.trim()
 			: ''
 		return thumbnailAssetId
 			? [{
 				index,
-				name: waypoint.name.trim() || `P${index + 1}`,
+				name: stop.name.trim() || `Stop ${index + 1}`,
 				thumbnailAssetId,
 				imageUrl: null,
 				loading: true,
@@ -4641,7 +4644,11 @@ function handleGuideWaypointImageError(item: GuideWaypointMenuItem): void {
 	))
 }
 
-function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): { points: THREE.Vector3[]; dock: boolean[] } | null {
+function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): {
+	points: THREE.Vector3[]
+	dock: boolean[]
+	loop: boolean
+} | null {
 	const routeNode = resolveNodeById(routeNodeId)
 	if (!routeNode) {
 		return null
@@ -4651,14 +4658,29 @@ function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): { points:
 			| Partial<GuideRouteComponentProps>
 			| null,
 	)
-	const providerObject = props.surfaceProviderNodeId
-		? nodeObjectMap.get(props.surfaceProviderNodeId) ?? null
+	const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
+	const providerObject = providerNodeId
+		? nodeObjectMap.get(providerNodeId) ?? null
 		: null
 	const routeObject = nodeObjectMap.get(routeNode.id) ?? null
 	const evaluation = evaluateGuideRoute({ routeNode, providerObject, routeObject })
-	return evaluation.status === 'ready'
-		? { points: evaluation.points, dock: evaluation.dock }
-		: null
+	if (evaluation.status !== 'ready') {
+		return null
+	}
+	const dock = evaluation.points.map(() => false)
+	for (const stop of evaluation.stops) {
+		let nearestIndex = 0
+		let nearestDistance = Number.POSITIVE_INFINITY
+		for (let index = 0; index < evaluation.cumulativeLengths.length; index += 1) {
+			const delta = Math.abs((evaluation.cumulativeLengths[index] ?? 0) - stop.routeDistance)
+			if (delta < nearestDistance) {
+				nearestDistance = delta
+				nearestIndex = index
+			}
+		}
+		dock[nearestIndex] = true
+	}
+	return { points: evaluation.points, dock, loop: evaluation.loop }
 }
 
 function resolveAutoTourCameraRouteData(nodeId: string): AutoTourCameraRouteData | null {
@@ -4672,7 +4694,7 @@ function resolveAutoTourCameraRouteData(nodeId: string): AutoTourCameraRouteData
 		return null
 	}
 	const polylineData3d = buildPolylineMetricData(routeData.points, {
-		closed: Boolean(autoTour.props.loop),
+		closed: routeData.loop,
 		mode: '3d',
 	})
 	if (!polylineData3d) {
@@ -4710,13 +4732,30 @@ const autoTourRuntime = createAutoTourRuntime({
 		autoTourPausedNodeId.value = null
 		applyAutoTourCameraInputPolicy()
 	},
-	onDockRequestedPause: (nodeId, payload) => {
-		autoTourPausedIsTerminal.value = payload.terminal === true
-		autoTourPausedNodeId.value = nodeId
-		if (autoTourPaused.value) {
+	onGuideStop: (_nodeId, stop) => {
+		if (!stop.behavior) {
 			return
 		}
-		autoTourPaused.value = true
+		processBehaviorEvents(triggerBehaviorAction(
+			stop.behavior.nodeId,
+			'perform',
+			{ payload: { routeEvent: stop.definition.id } },
+			{ sequenceId: stop.behavior.sequenceId },
+		))
+	},
+	onGuideTransition: (nodeId, transition) => {
+		pendingGuideTransitionAutoTourNodes.set(transition.behavior.sequenceId, {
+			nodeId,
+			routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+			afterLegId: transition.afterLegId,
+			source: 'vehicle',
+		})
+		processBehaviorEvents(triggerBehaviorAction(
+			transition.behavior.nodeId,
+			'perform',
+			{ payload: { routeTransition: transition.definition.id } },
+			{ sequenceId: transition.behavior.sequenceId },
+		))
 	},
 	onNodeObjectTransformUpdated: (_nodeId, object) => {
 		syncInstancedTransform(object)
@@ -8786,6 +8825,31 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
 			syncInstancedTransform(object)
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
+		onGuideStop: (_nodeId, stop) => {
+			if (!stop.behavior) {
+				return
+			}
+			processBehaviorEvents(triggerBehaviorAction(
+				stop.behavior.nodeId,
+				'perform',
+				{ payload: { routeEvent: stop.definition.id } },
+				{ sequenceId: stop.behavior.sequenceId },
+			))
+		},
+		onGuideTransition: (nodeId, transition) => {
+			pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
+				nodeId,
+				routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+				afterLegId: transition.afterLegId,
+				source: 'character',
+			})
+			processBehaviorEvents(triggerBehaviorAction(
+				transition.behavior.nodeId,
+				'perform',
+				{ payload: { routeTransition: transition.definition.id } },
+				{ sequenceId: transition.behavior.sequenceId },
+			))
+		},
 	})
 }
 
@@ -9003,6 +9067,31 @@ function updateCharacterPathFollow(delta: number): void {
 			syncInstancedTransform(object)
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
+		onGuideStop: (_nodeId, stop) => {
+			if (!stop.behavior) {
+				return
+			}
+			processBehaviorEvents(triggerBehaviorAction(
+				stop.behavior.nodeId,
+				'perform',
+				{ payload: { routeEvent: stop.definition.id } },
+				{ sequenceId: stop.behavior.sequenceId },
+			))
+		},
+		onGuideTransition: (nodeId, transition) => {
+			pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
+				nodeId,
+				routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+				afterLegId: transition.afterLegId,
+				source: 'character',
+			})
+			processBehaviorEvents(triggerBehaviorAction(
+				transition.behavior.nodeId,
+				'perform',
+				{ payload: { routeTransition: transition.definition.id } },
+				{ sequenceId: transition.behavior.sequenceId },
+			))
+		},
 	}, delta)
 }
 
@@ -9068,7 +9157,77 @@ const behaviorRuntimeListener: BehaviorRuntimeListener = {
 	},
 	onSequenceFinished(event) {
 		behaviorProximityRuntime.handleSequenceFinished(event.sequenceId)
+		const autoTourTransition = pendingGuideTransitionAutoTourNodes.get(event.sequenceId)
+		if (autoTourTransition) {
+			pendingGuideTransitionAutoTourNodes.delete(event.sequenceId)
+			if (event.status !== 'success') {
+				appendWarningMessage('GuideRoute 换乘行为未完成，导览已保持在段末。')
+			}
+			void finishGuideTransition(autoTourTransition, event.status)
+		}
+		const characterTransition = pendingGuideTransitionCharacterNodes.get(event.sequenceId)
+		if (characterTransition) {
+			pendingGuideTransitionCharacterNodes.delete(event.sequenceId)
+			if (event.status !== 'success') {
+				appendWarningMessage('GuideRoute 换乘行为未完成，导览已保持暂停。')
+			}
+			void finishGuideTransition(characterTransition, event.status)
+		}
 	},
+}
+
+type PendingGuideTransition = {
+	nodeId: string
+	routeNodeId: string | null
+	afterLegId: string
+	source: 'vehicle' | 'character'
+}
+
+const pendingGuideTransitionAutoTourNodes = new Map<string, PendingGuideTransition>()
+const pendingGuideTransitionCharacterNodes = new Map<string, PendingGuideTransition>()
+
+async function finishGuideTransition(
+	pending: PendingGuideTransition,
+	status: 'success' | 'failure' | 'aborted',
+): Promise<void> {
+	const success = status === 'success'
+	if (pending.source === 'vehicle') {
+		autoTourRuntime.completeGuideTransition(
+			pending.nodeId,
+			success,
+			success ? undefined : `guide-route-transition-${status}`,
+		)
+	} else {
+		characterAutoTourRuntime.completeGuideTransition(
+			pending.nodeId,
+			success,
+			success ? undefined : `guide-route-transition-${status}`,
+		)
+	}
+	if (!success || !pending.routeNodeId) {
+		return
+	}
+	const routeNode = resolveNodeById(pending.routeNodeId)
+	const props = clampGuideRouteComponentProps(
+		(routeNode?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props ?? null) as
+			| Partial<GuideRouteComponentProps>
+			| null,
+	)
+	const legIndex = props.legs.findIndex((leg) => leg.id === pending.afterLegId)
+	const nextLeg = legIndex >= 0 ? props.legs[legIndex + 1] : null
+	if (!nextLeg) {
+		return
+	}
+	const nextNodeId = nextLeg.travelMode === 'character'
+		? resolveDefaultControlledCharacterNodeId()
+		: vehicleDriveState.active
+			? vehicleDriveState.nodeId
+			: null
+	if (!nextNodeId) {
+		appendWarningMessage(`导览换乘已完成，但没有活动的${nextLeg.travelMode === 'character' ? '角色' : '车辆'}。`)
+		return
+	}
+	await startAutoTourForActor(nextNodeId)
 }
 
 function updateBehaviorProximity(): void {
@@ -11318,7 +11477,7 @@ async function handleGuideWaypointAutoTourStart(waypointIndex: number): Promise<
 		return
 	}
 	pendingVehicleDriveEvent.value = buildActorAutoTourPromptEvent(actorNodeId)
-	await startAutoTourForActor(actorNodeId, { destinationWaypointIndex: waypointIndex })
+	await startAutoTourForActor(actorNodeId, { destinationStopIndex: waypointIndex })
 }
 
 function handleVehicleAutoTourPauseToggleClick(): void {

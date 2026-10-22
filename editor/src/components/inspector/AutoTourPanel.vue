@@ -44,7 +44,6 @@ const normalizedProps = computed(() => {
 const localRouteNodeId = ref<string | null>(null)
 // Display values in km/h in the UI; stored props remain in m/s.
 const localSpeedMps = ref(DEFAULT_AUTO_TOUR_SPEED_MPS * 3.6)
-const localLoop = ref(false)
 const localFollowCameraObstacleAvoidanceEnabled = ref(false)
 
 watch(
@@ -52,7 +51,6 @@ watch(
   (props) => {
     localRouteNodeId.value = props.routeNodeId
     localSpeedMps.value = props.speedMps * 3.6
-    localLoop.value = props.loop
     localFollowCameraObstacleAvoidanceEnabled.value = props.followCameraObstacleAvoidanceEnabled
   },
   { immediate: true, deep: true },
@@ -88,17 +86,6 @@ function handleSpeedInput(value: string | number) {
     return
   }
   updateComponent({ speedMps: clamped })
-}
-
-function handleLoopChange(value: boolean | null) {
-  if (value === null) {
-    return
-  }
-  localLoop.value = value
-  if (value === normalizedProps.value.loop) {
-    return
-  }
-  updateComponent({ loop: value })
 }
 
 function handleFollowCameraObstacleAvoidanceEnabledChange(value: boolean | null) {
@@ -190,15 +177,6 @@ function handleRemoveComponent() {
           :model-value="localSpeedMps"
           :disabled="!componentEnabled"
           @update:modelValue="handleSpeedInput"
-        />
-
-        <v-switch
-          label="Loop"
-          density="compact"
-          hide-details
-          :model-value="localLoop"
-          :disabled="!componentEnabled"
-          @update:model-value="handleLoopChange"
         />
 
         <v-switch

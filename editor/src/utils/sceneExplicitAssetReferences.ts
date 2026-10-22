@@ -55,11 +55,11 @@ function visitGuideRouteAssetReferences(
   props: Partial<GuideRouteComponentProps> | null | undefined,
   visit: (reference: ExplicitSceneAssetReference) => void,
 ): void {
-  const waypoints = Array.isArray(props?.waypoints) ? props.waypoints : []
-  waypoints.forEach((waypoint, index) => {
+  const stops = Array.isArray(props?.stops) ? props.stops : []
+  stops.forEach((stop, index) => {
     visit({
-      assetId: waypoint?.thumbnailAssetId,
-      path: `waypoints[${index}].thumbnailAssetId`,
+      assetId: stop?.thumbnailAssetId,
+      path: `stops[${index}].thumbnailAssetId`,
     })
   })
 }

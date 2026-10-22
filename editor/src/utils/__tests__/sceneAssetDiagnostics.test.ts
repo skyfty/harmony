@@ -108,18 +108,36 @@ describe('scene asset diagnostics', () => {
           type: GUIDE_ROUTE_COMPONENT_TYPE,
           enabled: true,
           props: {
-            version: 2,
-            surfaceProviderNodeId: 'terrain',
-            routeSource: 'drawn',
-            sampleSpacingM: 2,
-            roadLateralOffsetM: 0,
-            waypoints: [
+            version: 3,
+            loop: false,
+            legs: [
               {
+                id: 'path-1',
+                kind: 'path',
+                travelMode: 'character',
+                speedProfile: {
+                  cruiseSpeedMps: 1.4,
+                  lateralAccelLimitMps2: 2.5,
+                },
+                surfaceProviderNodeId: null,
+                preserveAuthoredY: true,
+                anchors: [
+                  { x: 0, y: 0, z: 0 },
+                  { x: 10, y: 0, z: 0 },
+                ],
+              },
+            ],
+            stops: [
+              {
+                id: 'stop-1',
                 name: 'P1',
-                position: { x: 0, y: 0, z: 0 },
+                anchor: { x: 0, y: 0, z: 0 },
+                legId: 'path-1',
+                behavior: null,
                 thumbnailAssetId: 'waypoint-thumbnail',
               },
             ],
+            transitions: [],
           },
         },
       },
@@ -128,7 +146,7 @@ describe('scene asset diagnostics', () => {
     const references = collectSceneAssetReferenceRecords(scene)
     expect(references).toContainEqual(expect.objectContaining({
       assetId: 'waypoint-thumbnail',
-      path: expect.stringContaining('waypoints[0].thumbnailAssetId'),
+      path: expect.stringContaining('stops[0].thumbnailAssetId'),
     }))
   })
 })

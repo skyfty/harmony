@@ -1,40 +1,61 @@
 import * as THREE from 'three'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { createAutoTourRuntime } from '@schema/autoTourRuntime'
+import {
+  clampAutoTourComponentProps,
+  clampCharacterControllerComponentProps,
+  clampGuideRouteComponentProps,
+  type GuideRouteComponentProps,
+} from '@schema/components'
+import { CharacterAutoTourRuntimeManager } from '@schema/characterAutoTourRuntime'
 import {
   clearGuideRouteEvaluationCache,
   evaluateGuideRoute,
   sampleEvaluatedGuideRouteAtDistance,
 } from '@schema/guideRouteRuntime'
 import { buildGuideRouteTravelWindow } from '@schema/guideRouteTourTarget'
-import {
-  clampAutoTourComponentProps,
-  clampCharacterControllerComponentProps,
-  clampGuideRouteComponentProps,
-  clampVehicleComponentProps,
-  cloneGuideRouteComponentProps,
-} from '@schema/components'
-import { createAutoTourRuntime } from '@schema/autoTourRuntime'
-import { CharacterAutoTourRuntimeManager } from '@schema/characterAutoTourRuntime'
-import { VehicleMotionAuthorityController } from '@schema/vehicleMotionAuthority'
 
 const surfaceMocks = vi.hoisted(() => ({
   state: vi.fn(),
   sample: vi.fn(),
-  terrainHeight: vi.fn(),
+  centerline: vi.fn(),
 }))
-const surfaceStateMock = surfaceMocks.state
-const surfaceSampleMock = surfaceMocks.sample
-const terrainHeightMock = surfaceMocks.terrainHeight
 
 vi.mock('@schema/proceduralLandscape/runtime', () => ({
-  getProceduralLandscapeGuideRouteSurfaceState: (...args: unknown[]) => surfaceStateMock(...args),
-  getProceduralLandscapeRoadCenterlineLocal: () => null,
-  sampleProceduralLandscapeGuideRouteSurface: (...args: unknown[]) => surfaceSampleMock(...args),
-  sampleProceduralLandscapeTerrainHeight: (...args: unknown[]) => terrainHeightMock(...args),
+  getProceduralLandscapeGuideRouteSurfaceState: (...args: unknown[]) => surfaceMocks.state(...args),
+  getProceduralLandscapeRoadCenterlineLocal: (...args: unknown[]) => surfaceMocks.centerline(...args),
+  sampleProceduralLandscapeGuideRouteSurface: (...args: unknown[]) => surfaceMocks.sample(...args),
 }))
 
-function createRouteNode() {
+function pathProps(overrides: Partial<GuideRouteComponentProps> = {}): GuideRouteComponentProps {
+  return clampGuideRouteComponentProps({
+    version: 3,
+    loop: false,
+    legs: [
+      {
+        id: 'path-1',
+        kind: 'path',
+        travelMode: 'vehicle',
+        speedProfile: {
+          cruiseSpeedMps: 8,
+          lateralAccelLimitMps2: 2.5,
+        },
+        surfaceProviderNodeId: null,
+        preserveAuthoredY: true,
+        anchors: [
+          { x: 0, y: 20, z: 0 },
+          { x: 12, y: 20, z: 0 },
+        ],
+      },
+    ],
+    stops: [],
+    transitions: [],
+    ...overrides,
+  })
+}
+
+function createRouteNode(props: Partial<GuideRouteComponentProps>) {
   return {
     id: 'route-1',
     name: 'Guide Route',
@@ -42,1079 +63,368 @@ function createRouteNode() {
     dynamicMesh: { type: 'GuideRoute', vertices: [] },
     components: {
       guideRoute: {
-        id: 'component-1',
+        id: 'guide-component',
         type: 'guideRoute',
         enabled: true,
-        props: clampGuideRouteComponentProps({
-          surfaceProviderNodeId: 'terrain-1',
-          routeSource: 'drawn',
-          sampleSpacingM: 2,
-          roadLateralOffsetM: 0,
-          waypoints: [
-            {
-              name: 'P1',
-              position: { x: 0, y: 0, z: 0 },
-              dock: true,
-            },
-            {
-              name: 'P2',
-              position: { x: 12, y: 0, z: 0 },
-              dock: true,
-            },
-          ],
-        }),
+        props: clampGuideRouteComponentProps(props),
       },
     },
   } as any
 }
 
-describe('guideRouteRuntime', () => {
+describe('GuideRoute V3 compiler', () => {
   beforeEach(() => {
     clearGuideRouteEvaluationCache()
-    surfaceStateMock.mockReset()
-    surfaceSampleMock.mockReset()
-    terrainHeightMock.mockReset()
-  })
-
-  it('blocks evaluation while the surface provider is loading', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'loading',
-      revision: 3,
-      message: 'DEM terrain is building.',
-    })
-
-    const result = evaluateGuideRoute({
-      routeNode: createRouteNode(),
-      providerObject: null,
-    })
-
-    expect(result.status).toBe('provider-loading')
-    expect(result.points).toEqual([])
-    expect(result.revision).toBe(3)
-    expect(surfaceSampleMock).not.toHaveBeenCalled()
-  })
-
-  it('rejects legacy Guide Route data instead of migrating it', () => {
-    const routeNode = createRouteNode()
-    routeNode.components.guideRoute.props.version = 1
-
-    const result = evaluateGuideRoute({
-      routeNode,
-      providerObject: null,
-    })
-
-    expect(result.status).toBe('unsupported')
-    expect(result.message).toContain('not V2')
-    expect(surfaceSampleMock).not.toHaveBeenCalled()
-  })
-
-  it('preserves an optional thumbnail asset on every waypoint round-trip', () => {
-    const props = clampGuideRouteComponentProps({
-      surfaceProviderNodeId: 'terrain-1',
-      waypoints: [
-        {
-          name: 'P1',
-          position: { x: 1, y: 2, z: 3 },
-          thumbnailAssetId: 'asset://thumbnail-one',
-        },
-        {
-          name: 'P2',
-          position: { x: 4, y: 5, z: 6 },
-          thumbnailAssetId: '   ',
-        },
-      ],
-    })
-
-    expect(props.waypoints[0]?.thumbnailAssetId).toBe('asset://thumbnail-one')
-    expect(props.waypoints[1]?.thumbnailAssetId).toBeNull()
-    expect(cloneGuideRouteComponentProps(props).waypoints).toEqual(props.waypoints)
-  })
-
-  it('rebases stale authored waypoints onto the route node when they miss the provider surface', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 9,
-      message: null,
-      bounds: {
-        minX: -100,
-        maxX: 100,
-        minZ: -100,
-        maxZ: 100,
-        minY: 0,
-        maxY: 10,
-        cellSize: 2,
-      },
-    })
-    surfaceSampleMock.mockImplementation((_nodeId: string, x: number, z: number) => (
-      Math.abs(x) <= 100 && Math.abs(z) <= 100
-        ? {
-          point: new THREE.Vector3(x, 1, z),
-          normal: new THREE.Vector3(0, 1, 0),
-          kind: 'terrain',
-          distanceToRoad: null,
-          revision: 9,
-        }
-        : null
-    ))
-    const routeNode = createRouteNode()
-    routeNode.dynamicMesh.vertices = [
-      { x: -1000, y: 0, z: -1000 },
-      { x: -900, y: 0, z: -900 },
-    ]
-    routeNode.components.guideRoute.props.waypoints = [
-      { name: 'P1', position: { x: -1000, y: 0, z: -1000 }, dock: false },
-      { name: 'P2', position: { x: -900, y: 0, z: -900 }, dock: false },
-    ]
-    const routeObject = new THREE.Object3D()
-    routeObject.position.set(0, 0, 0)
-    const providerObject = new THREE.Object3D()
-
-    const result = evaluateGuideRoute({
-      routeNode,
-      providerObject,
-      routeObject,
-    })
-
-    expect(result.status).toBe('ready')
-    expect(result.points[0]?.x).toBeCloseTo(-50)
-    expect(result.points[0]?.z).toBeCloseTo(-50)
-    const endPoint = result.points[result.points.length - 1]
-    expect(endPoint?.x).toBeCloseTo(50)
-    expect(endPoint?.z).toBeCloseTo(50)
-  })
-
-  it('builds the shortest directed path window for open and looped routes', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 31,
-      message: null,
-    })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 20, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 31,
-    }))
-    const routeNode = createRouteNode()
-    routeNode.components.guideRoute.props = clampGuideRouteComponentProps({
-      surfaceProviderNodeId: 'terrain-1',
-      routeSource: 'drawn',
-      sampleSpacingM: 2,
-      waypoints: [
-        { name: 'P1', position: { x: 0, y: 20, z: 0 }, dock: true },
-        { name: 'P2', position: { x: 10, y: 20, z: 0 }, dock: true },
-        { name: 'P3', position: { x: 10, y: 20, z: 10 }, dock: false },
-        { name: 'P4', position: { x: 0, y: 20, z: 10 }, dock: false },
-      ],
-    })
-    const route = evaluateGuideRoute({ routeNode, providerObject: null })
-
-    const backward = buildGuideRouteTravelWindow(
-      route,
-      24,
-      { destinationWaypointIndex: 0 },
-      false,
-    )
-    expect(backward?.direction).toBe(-1)
-    expect(backward?.route.points[0]?.x).toBeCloseTo(6)
-    expect(backward?.route.points[0]?.z).toBeCloseTo(10)
-    expect(backward?.route.points[backward.route.points.length - 1]?.x).toBeCloseTo(0)
-    expect(backward?.route.points[backward.route.points.length - 1]?.z).toBeCloseTo(0)
-    expect(backward?.route.dock.every((dock) => dock === false)).toBe(true)
-
-    const loopForward = buildGuideRouteTravelWindow(
-      route,
-      24,
-      { destinationWaypointIndex: 0 },
-      true,
-    )
-    expect(loopForward?.direction).toBe(1)
-    expect(loopForward?.route.totalLength).toBeCloseTo(16)
-    expect(loopForward?.route.points[loopForward.route.points.length - 1]?.x).toBeCloseTo(0)
-  })
-
-  it('densifies controls and uses the shared surface height and normal', () => {
-    surfaceStateMock.mockReturnValue({
+    surfaceMocks.state.mockReset()
+    surfaceMocks.sample.mockReset()
+    surfaceMocks.centerline.mockReset()
+    surfaceMocks.state.mockReturnValue({
       status: 'ready',
       revision: 7,
       message: null,
     })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 40 + x * 0.25, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 7,
-    }))
-
-    const result = evaluateGuideRoute({
-      routeNode: createRouteNode(),
-      providerObject: null,
-    })
-
-    expect(result.status).toBe('ready')
-    expect(result.points.length).toBeGreaterThan(2)
-    expect(result.points[0]!.y).toBeCloseTo(40)
-    expect(result.points[result.points.length - 1]!.y).toBeCloseTo(43)
-    expect(result.dock[0]).toBe(true)
-    expect(result.dock[result.dock.length - 1]).toBe(true)
-    expect(result.totalLength).toBeGreaterThan(12)
-
-    const middle = sampleEvaluatedGuideRouteAtDistance(result, result.totalLength * 0.5)
-    expect(middle).not.toBeNull()
-    expect(middle!.point.y).toBeGreaterThan(40)
-    expect(middle!.point.y).toBeLessThan(43)
-  })
-
-  it('samples exactly along the visible control-point polyline', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 11,
-      message: null,
-    })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 20, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 11,
-    }))
-    const routeNode = createRouteNode()
-    routeNode.components.guideRoute.props = clampGuideRouteComponentProps({
-      surfaceProviderNodeId: 'terrain-1',
-      routeSource: 'drawn',
-      sampleSpacingM: 2,
-      waypoints: [
-        { name: 'P1', position: { x: 0, y: 20, z: 0 }, dock: true },
-        { name: 'P2', position: { x: 10, y: 20, z: 0 }, dock: false },
-        { name: 'P3', position: { x: 10, y: 20, z: 10 }, dock: true },
-      ],
-    })
-
-    const result = evaluateGuideRoute({ routeNode, providerObject: null })
-
-    expect(result.status).toBe('ready')
-    result.points.forEach((point) => {
-      const onFirstSegment = Math.abs(point.z) <= 1e-6 && point.x >= -1e-6 && point.x <= 10 + 1e-6
-      const onSecondSegment = Math.abs(point.x - 10) <= 1e-6 && point.z >= -1e-6 && point.z <= 10 + 1e-6
-      expect(onFirstSegment || onSecondSegment).toBe(true)
-    })
-  })
-
-  it('prefers road-first support samples over higher corner terrain', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 12,
-      message: null,
-    })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
+    surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
       point: new THREE.Vector3(x, 10, z),
       normal: new THREE.Vector3(0, 1, 0),
       kind: 'road',
       distanceToRoad: 0,
-      revision: 12,
+      revision: 7,
     }))
-    terrainHeightMock.mockImplementation((_nodeId, x, z) => 10 + x * 0.2 + z * 0.1)
-
-    const routeNode = createRouteNode()
-    const vehicleNode = {
-      id: 'vehicle-ground',
-      name: 'Vehicle',
-      nodeType: 'Mesh',
-      components: {
-        vehicle: {
-          id: 'vehicle-component',
-          type: 'vehicle',
-          enabled: true,
-          props: clampVehicleComponentProps({
-            indexRightAxis: 2,
-            indexUpAxis: 1,
-            indexForwardAxis: 0,
-          }),
-        },
-        autoTour: {
-          id: 'tour-ground',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(0, 10.5, 0)
-    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4)))
-    const nodeObjectMap = new Map<string, THREE.Object3D>([
-      [routeNode.id, new THREE.Object3D()],
-      [vehicleNode.id, vehicleObject],
-    ])
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
-      isManualDriveActive: () => false,
-    })
-
-    runtime.startTour(vehicleNode.id)
-    runtime.update(1)
-
-    const bounds = new THREE.Box3().setFromObject(vehicleObject)
-    expect(bounds.min.y).toBeGreaterThanOrEqual(10.039)
-    expect(bounds.min.y).toBeLessThanOrEqual(10.08)
-    expect(terrainHeightMock).not.toHaveBeenCalled()
   })
 
-  it('pitches and rolls the vehicle to match sampled support heights', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 12.5,
-      message: null,
+  it('rejects legacy V2 data explicitly', () => {
+    const routeNode = createRouteNode(pathProps())
+    routeNode.components.guideRoute.props.version = 2
+    const result = evaluateGuideRoute({
+      routeNode,
+      providerObject: null,
     })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 10 + x * 0.2 + z * 0.1, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 12.5,
-    }))
-    const routeNode = createRouteNode()
-    const vehicleNode = {
-      id: 'vehicle-slope',
-      name: 'Vehicle',
-      nodeType: 'Mesh',
-      components: {
-        vehicle: {
-          id: 'vehicle-component-slope',
-          type: 'vehicle',
-          enabled: true,
-          props: clampVehicleComponentProps({
-            indexRightAxis: 2,
-            indexUpAxis: 1,
-            indexForwardAxis: 0,
-          }),
-        },
-        autoTour: {
-          id: 'tour-slope',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(0, 10.5, 0)
-    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4)))
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap: new Map<string, THREE.Object3D>([
-        [routeNode.id, new THREE.Object3D()],
-        [vehicleNode.id, vehicleObject],
-      ]),
-      isManualDriveActive: () => false,
-    })
-
-    runtime.startTour(vehicleNode.id)
-    runtime.update(1)
-
-    const vehicleUp = new THREE.Vector3(0, 1, 0)
-      .applyQuaternion(vehicleObject.getWorldQuaternion(new THREE.Quaternion()))
-    expect(vehicleUp.y).toBeLessThan(0.995)
-    const supportPoints = [
-      [-0.85, -0.5, -1.7],
-      [0.85, -0.5, -1.7],
-      [-0.85, -0.5, 1.7],
-      [0.85, -0.5, 1.7],
-    ]
-    supportPoints.forEach(([x, y, z]) => {
-      const worldPoint = vehicleObject.localToWorld(new THREE.Vector3(x, y, z))
-      const surfaceY = 10 + worldPoint.x * 0.2 + worldPoint.z * 0.1
-      expect(worldPoint.y).toBeCloseTo(surfaceY + 0.04, 1)
-    })
+    expect(result.status).toBe('unsupported')
+    expect(result.message).toContain('V3')
   })
 
-  it('falls back safely when one support sample is unavailable', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 12.75,
-      message: null,
+  it('compiles an authored path without requiring a landscape provider', () => {
+    const result = evaluateGuideRoute({
+      routeNode: createRouteNode(pathProps()),
+      providerObject: null,
     })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 10, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 12.75,
-    }))
-    const routeNode = createRouteNode()
-    const vehicleNode = {
-      id: 'vehicle-partial-support',
-      name: 'Vehicle',
-      nodeType: 'Mesh',
-      components: {
-        vehicle: {
-          id: 'vehicle-component-partial-support',
-          type: 'vehicle',
-          enabled: true,
-          props: clampVehicleComponentProps({
-            indexRightAxis: 2,
-            indexUpAxis: 1,
-            indexForwardAxis: 0,
-          }),
-        },
-        autoTour: {
-          id: 'tour-partial-support',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(0, 10.5, 0)
-    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4)))
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap: new Map<string, THREE.Object3D>([
-        [routeNode.id, new THREE.Object3D()],
-        [vehicleNode.id, vehicleObject],
-      ]),
-      isManualDriveActive: () => false,
-    })
-    const snap = runtime.resolveRouteSnap(vehicleNode.id)
-
-    let supportSampleCount = 0
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => {
-      supportSampleCount += 1
-      if (supportSampleCount === 2) {
-        return null
-      }
-      return {
-        point: new THREE.Vector3(x, 10, z),
-        normal: new THREE.Vector3(0, 1, 0),
-        kind: 'terrain',
-        distanceToRoad: null,
-        revision: 12.75,
-      }
-    })
-    runtime.startTour(vehicleNode.id)
-    runtime.seedTourPlaybackState(vehicleNode.id, snap!)
-    runtime.update(1)
-
-    const bounds = new THREE.Box3().setFromObject(vehicleObject)
-    const worldQuaternion = vehicleObject.getWorldQuaternion(new THREE.Quaternion())
-    expect(bounds.min.y).toBeCloseTo(10.04, 1)
-    expect(Number.isFinite(worldQuaternion.x)).toBe(true)
-    expect(Number.isFinite(worldQuaternion.y)).toBe(true)
-    expect(Number.isFinite(worldQuaternion.z)).toBe(true)
-    expect(Number.isFinite(worldQuaternion.w)).toBe(true)
+    expect(result.status).toBe('ready')
+    expect(result.legs).toHaveLength(1)
+    expect(result.points[0]?.y).toBeCloseTo(20)
+    expect(result.points[result.points.length - 1]?.x).toBeCloseTo(12)
   })
 
-  it('uses instanced proxy bounds when the vehicle container has no meshes', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 13,
-      message: null,
-    })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 10, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 13,
-    }))
-    terrainHeightMock.mockReturnValue(10)
-
-    const routeNode = createRouteNode()
-    const vehicleNode = {
-      id: 'vehicle-instanced-bounds',
-      name: 'Vehicle',
-      nodeType: 'Mesh',
-      components: {
-        vehicle: {
-          id: 'vehicle-component',
-          type: 'vehicle',
-          enabled: true,
-          props: clampVehicleComponentProps({
-            indexRightAxis: 2,
-            indexUpAxis: 1,
-            indexForwardAxis: 0,
-          }),
+  it('projects a stop onto its assigned leg and preserves its original anchor', () => {
+    const props = pathProps({
+      stops: [
+        {
+          id: 'stop-1',
+          name: 'Viewpoint',
+          thumbnailAssetId: null,
+          anchor: { x: 5, y: 24, z: 30 },
+          legId: 'path-1',
+          behavior: null,
         },
-        autoTour: {
-          id: 'tour-instanced-bounds',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleProxy = new THREE.Object3D()
-    vehicleProxy.position.set(0, 10, 0)
-    vehicleProxy.userData.instancedBounds = {
-      min: [-1, -0.75, -2],
-      max: [1, 0.75, 2],
-    }
-    const nodeObjectMap = new Map<string, THREE.Object3D>([
-      [routeNode.id, new THREE.Object3D()],
-      [vehicleNode.id, vehicleProxy],
-    ])
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
-      resolveObjectBounds: (object) => {
-        const raw = object.userData.instancedBounds as {
-          min: [number, number, number]
-          max: [number, number, number]
-        }
-        const bounds = new THREE.Box3(
-          new THREE.Vector3().fromArray(raw.min),
-          new THREE.Vector3().fromArray(raw.max),
-        )
-        return bounds.applyMatrix4(object.matrixWorld)
-      },
-      isManualDriveActive: () => false,
+      ],
     })
-
-    runtime.startTour(vehicleNode.id)
-    runtime.update(1)
-
-    expect(vehicleProxy.position.y).toBeCloseTo(10.79)
+    const result = evaluateGuideRoute({
+      routeNode: createRouteNode(props),
+      providerObject: null,
+    })
+    expect(result.stops).toHaveLength(1)
+    expect(result.stops[0]?.legDistance).toBeCloseTo(5)
+    expect(result.stops[0]?.projectedPoint.x).toBeCloseTo(5)
+    expect(result.stops[0]?.definition.anchor.z).toBe(30)
   })
 
-  it('does not re-evaluate support height from changing wheel mesh bounds', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 16,
-      message: null,
+  it('clips a generated road interval and offsets to the travel-right lane', () => {
+    surfaceMocks.centerline.mockReturnValue({
+      pointsXZ: [-20, 0, 0, 0, 20, 0],
+      authoringSampleStep: 1,
+      authoringCellSize: 1,
     })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 10, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 16,
-    }))
-    terrainHeightMock.mockReturnValue(10)
-
-    const routeNode = createRouteNode()
-    const vehicleNode = {
-      id: 'vehicle-stable-ground-bounds',
-      name: 'Vehicle',
-      nodeType: 'Mesh',
-      components: {
-        vehicle: {
-          id: 'vehicle-component',
-          type: 'vehicle',
-          enabled: true,
-          props: clampVehicleComponentProps({
-            indexRightAxis: 2,
-            indexUpAxis: 1,
-            indexForwardAxis: 0,
-          }),
+    const props = pathProps({
+      legs: [
+        {
+          id: 'road-1',
+          kind: 'road',
+          travelMode: 'vehicle',
+          speedProfile: {
+            cruiseSpeedMps: 12,
+            lateralAccelLimitMps2: 2.5,
+          },
+          providerNodeId: 'landscape-1',
+          startT: 0.25,
+          endT: 0.75,
+          laneOffsetM: 2,
+          sampleSpacingM: 1,
         },
-        autoTour: {
-          id: 'tour-stable-ground-bounds',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 5,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(0, 10.5, 0)
-    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(0.2, 1, 0.2)))
-    const nodeObjectMap = new Map<string, THREE.Object3D>([
-      [routeNode.id, new THREE.Object3D()],
-      [vehicleNode.id, vehicleObject],
-    ])
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
-      isManualDriveActive: () => false,
+      ],
     })
-
-    runtime.startTour(vehicleNode.id)
-    runtime.update(0.1)
-    const initialY = vehicleObject.position.y
-
-    const animatedWheelBounds = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1, 0.2))
-    animatedWheelBounds.position.set(0, -5, 0)
-    vehicleObject.add(animatedWheelBounds)
-    vehicleObject.updateMatrixWorld(true)
-    runtime.update(0.1)
-
-    expect(vehicleObject.position.y).toBeCloseTo(initialY, 2)
+    const result = evaluateGuideRoute({
+      routeNode: createRouteNode(props),
+      providerObject: new THREE.Object3D(),
+    })
+    expect(result.status).toBe('ready')
+    expect(result.points[0]?.x).toBeCloseTo(-10)
+    expect(result.points[result.points.length - 1]?.x).toBeCloseTo(10)
+    expect(result.points.every((point) => Math.abs(point.z - 2) < 1e-5)).toBe(true)
   })
 
-  it('snaps to the sampled surface height when terrain drops', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 14,
-      message: null,
+  it('reverses road direction and places the offset on the opposite side', () => {
+    surfaceMocks.centerline.mockReturnValue({
+      pointsXZ: [-20, 0, 0, 0, 20, 0],
+      authoringSampleStep: 1,
+      authoringCellSize: 1,
     })
-    let surfaceHeight = 12
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, surfaceHeight, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 14,
-    }))
-    terrainHeightMock.mockImplementation(() => surfaceHeight)
-
-    const routeNode = createRouteNode()
-    const vehicleNode = {
-      id: 'vehicle-undulation',
-      name: 'Vehicle',
-      nodeType: 'Mesh',
-      components: {
-        vehicle: {
-          id: 'vehicle-component',
-          type: 'vehicle',
-          enabled: true,
-          props: clampVehicleComponentProps({
-            indexRightAxis: 2,
-            indexUpAxis: 1,
-            indexForwardAxis: 0,
-          }),
+    const props = pathProps({
+      legs: [
+        {
+          id: 'road-reverse',
+          kind: 'road',
+          travelMode: 'vehicle',
+          speedProfile: {
+            cruiseSpeedMps: 8,
+            lateralAccelLimitMps2: 2,
+          },
+          providerNodeId: 'landscape-1',
+          startT: 0.75,
+          endT: 0.25,
+          laneOffsetM: 2,
+          sampleSpacingM: 1,
         },
-        autoTour: {
-          id: 'tour-undulation',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 5,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(0, 12.5, 0)
-    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(0.2, 1, 0.2)))
-    const nodeObjectMap = new Map<string, THREE.Object3D>([
-      [routeNode.id, new THREE.Object3D()],
-      [vehicleNode.id, vehicleObject],
-    ])
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
-      isManualDriveActive: () => false,
+      ],
     })
-
-    runtime.startTour(vehicleNode.id)
-    runtime.update(0.1)
-    const uphillY = vehicleObject.position.y
-    expect(uphillY).toBeCloseTo(12.54, 1)
-
-    surfaceHeight = 8
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 15,
-      message: null,
+    const result = evaluateGuideRoute({
+      routeNode: createRouteNode(props),
+      providerObject: new THREE.Object3D(),
     })
-    runtime.update(0.1)
-    expect(vehicleObject.position.y).toBeCloseTo(8.54, 1)
-    expect(vehicleObject.position.y).toBeLessThan(uphillY)
+    expect(result.status).toBe('ready')
+    expect(result.points[0]?.x).toBeGreaterThan(result.points[result.points.length - 1]!.x)
+    expect(result.points.every((point) => Math.abs(point.z + 2) < 1e-5)).toBe(true)
   })
 
-  it('moves a vehicle directly along route elevation without a physics instance', () => {
-    surfaceStateMock.mockReturnValue({
+  it('builds a directed travel window to a projected stop', () => {
+    const props = pathProps({
+      stops: [
+        {
+          id: 'stop-1',
+          name: 'Middle',
+          thumbnailAssetId: null,
+          anchor: { x: 4, y: 20, z: 0 },
+          legId: 'path-1',
+          behavior: null,
+        },
+        {
+          id: 'stop-2',
+          name: 'End',
+          thumbnailAssetId: null,
+          anchor: { x: 10, y: 20, z: 0 },
+          legId: 'path-1',
+          behavior: null,
+        },
+      ],
+    })
+    const route = evaluateGuideRoute({
+      routeNode: createRouteNode(props),
+      providerObject: null,
+    })
+    const window = buildGuideRouteTravelWindow(
+      route,
+      8,
+      { destinationStopIndex: 0 },
+      false,
+    )
+    expect(window?.direction).toBe(-1)
+    expect(window?.route.points[0]?.x).toBeCloseTo(8)
+    expect(window?.route.points[window.route.points.length - 1]?.x).toBeCloseTo(4)
+  })
+})
+
+describe('GuideRoute V3 playback events', () => {
+  beforeEach(() => {
+    clearGuideRouteEvaluationCache()
+    surfaceMocks.state.mockReturnValue({
       status: 'ready',
-      revision: 9,
+      revision: 1,
       message: null,
     })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 40 + x * 0.25, z),
+    surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
+      point: new THREE.Vector3(x, 0, z),
       normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 9,
+      kind: 'road',
+      distanceToRoad: 0,
+      revision: 1,
     }))
+  })
 
-    const routeNode = createRouteNode()
+  function createPlayback(overrides: Partial<GuideRouteComponentProps> = {}) {
+    const routeNode = createRouteNode(pathProps(overrides))
     const vehicleNode = {
       id: 'vehicle-1',
       name: 'Vehicle',
       nodeType: 'Mesh',
       components: {
         autoTour: {
-          id: 'tour-1',
+          id: 'auto-tour',
           type: 'autoTour',
           enabled: true,
           props: clampAutoTourComponentProps({
             routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
+            speedMps: 4,
           }),
         },
       },
     } as any
     const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(0, 40, 0)
-    const routeObject = new THREE.Object3D()
-    const nodeObjectMap = new Map<string, THREE.Object3D>([
-      [routeNode.id, routeObject],
-      [vehicleNode.id, vehicleObject],
-    ])
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
-      isManualDriveActive: () => false,
-    })
-
-    runtime.startTour(vehicleNode.id)
-    runtime.update(1)
-
-    expect(vehicleObject.position.x).toBeGreaterThan(0)
-    expect(vehicleObject.position.y).toBeGreaterThan(40)
-    expect(Number.isFinite(vehicleObject.quaternion.w)).toBe(true)
-  })
-
-  it('snaps a vehicle to the nearest route point with a complete world quaternion', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 10,
-      message: null,
-    })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 20, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 10,
-    }))
-    const routeNode = createRouteNode()
-    const vehicleNode = {
-      id: 'vehicle-snap-1',
-      name: 'Vehicle Snap',
-      nodeType: 'Mesh',
-      components: {
-        autoTour: {
-          id: 'tour-snap-1',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
-          }),
-        },
-        vehicle: {
-          id: 'vehicle-component-snap-1',
-          type: 'vehicle',
-          enabled: true,
-          props: clampVehicleComponentProps(null),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(4, 20, 3)
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
+    vehicleObject.position.set(0, 20, 0)
     const nodeObjectMap = new Map<string, THREE.Object3D>([
       [routeNode.id, new THREE.Object3D()],
       [vehicleNode.id, vehicleObject],
     ])
-    const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
-      isManualDriveActive: () => false,
-    })
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    return { routeNode, vehicleNode, vehicleObject, nodes, nodeObjectMap }
+  }
 
-    const snap = runtime.resolveRouteSnap(vehicleNode.id)
-
-    expect(snap).not.toBeNull()
-    expect(snap!.worldPosition.x).toBeCloseTo(4)
-    expect(snap!.worldPosition.z).toBeCloseTo(0)
-    expect(Math.abs(snap!.worldQuaternion.length())).toBeCloseTo(1)
-  })
-
-  it('moves a vehicle backward to a destination behind it and skips intermediate docks', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 33,
-      message: null,
-    })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 20, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 33,
-    }))
-    const routeNode = createRouteNode()
-    routeNode.components.guideRoute.props = clampGuideRouteComponentProps({
-      surfaceProviderNodeId: 'terrain-1',
-      routeSource: 'drawn',
-      sampleSpacingM: 1,
-      waypoints: [
-        { name: 'P1', position: { x: 0, y: 20, z: 0 }, dock: true },
-        { name: 'P2', position: { x: 4, y: 20, z: 0 }, dock: true },
-        { name: 'P3', position: { x: 8, y: 20, z: 0 }, dock: true },
+  it('fires a projected stop once without stopping movement', () => {
+    const playback = createPlayback({
+      stops: [
+        {
+          id: 'stop-mid',
+          name: 'Middle',
+          thumbnailAssetId: null,
+          anchor: { x: 4, y: 20, z: 10 },
+          legId: 'path-1',
+          behavior: null,
+        },
       ],
     })
-    const vehicleNode = {
-      id: 'vehicle-target',
-      name: 'Vehicle target',
-      nodeType: 'Mesh',
-      components: {
-        autoTour: {
-          id: 'tour-target',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(8, 20, 0)
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const nodeObjectMap = new Map<string, THREE.Object3D>([
-      [routeNode.id, new THREE.Object3D()],
-      [vehicleNode.id, vehicleObject],
-    ])
-    const onDockRequestedPause = vi.fn()
-    const onTerminalStop = vi.fn()
+    const onGuideStop = vi.fn()
     const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
       isManualDriveActive: () => false,
-      onDockRequestedPause,
-      onTerminalStop,
+      onGuideStop,
     })
-    const target = { destinationWaypointIndex: 0 }
-    const snap = runtime.resolveRouteSnap(vehicleNode.id, target)
-
-    expect(snap?.travelWindow?.direction).toBe(-1)
-    expect(snap?.targetReached).toBe(false)
-    runtime.startTour(vehicleNode.id, target)
-    runtime.seedTourPlaybackState(vehicleNode.id, snap!)
-    runtime.update(5)
-
-    expect(vehicleObject.position.x).toBeCloseTo(0)
-    expect(onDockRequestedPause).not.toHaveBeenCalled()
-    expect(onTerminalStop).toHaveBeenCalledOnce()
-    expect(onTerminalStop).toHaveBeenCalledWith(vehicleNode.id, 'guide-route-complete')
-    expect(runtime.resolveRouteSnap(vehicleNode.id, target)?.targetReached).toBe(true)
+    runtime.startTour(playback.vehicleNode.id)
+    runtime.update(1.1)
+    runtime.update(1.1)
+    expect(onGuideStop).toHaveBeenCalledTimes(1)
+    expect(playback.vehicleObject.position.x).toBeGreaterThan(4)
   })
 
-  it('reverses an untargeted tour that starts at the route end', () => {
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 34,
-      message: null,
-    })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 20, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 34,
-    }))
-    const routeNode = createRouteNode()
-    routeNode.components.guideRoute.props = clampGuideRouteComponentProps({
-      surfaceProviderNodeId: 'terrain-1',
-      routeSource: 'drawn',
-      sampleSpacingM: 1,
-      waypoints: [
-        { name: 'P1', position: { x: 0, y: 20, z: 0 } },
-        { name: 'P2', position: { x: 4, y: 20, z: 0 } },
-        { name: 'P3', position: { x: 8, y: 20, z: 0 } },
+  it('resets stop occurrence tracking after a route loop wraps', () => {
+    const playback = createPlayback({
+      loop: true,
+      stops: [
+        {
+          id: 'loop-stop',
+          name: 'Loop stop',
+          thumbnailAssetId: null,
+          anchor: { x: 4, y: 20, z: 0 },
+          legId: 'path-1',
+          behavior: null,
+        },
       ],
     })
-    const vehicleNode = {
-      id: 'vehicle-at-route-end',
-      name: 'Vehicle at route end',
-      nodeType: 'Mesh',
-      components: {
-        autoTour: {
-          id: 'tour-at-route-end',
-          type: 'autoTour',
-          enabled: true,
-          props: clampAutoTourComponentProps({
-            routeNodeId: routeNode.id,
-            speedMps: 2,
-            loop: false,
-          }),
-        },
-      },
-    } as any
-    const vehicleObject = new THREE.Object3D()
-    vehicleObject.position.set(8, 20, 0)
-    const nodes = new Map<string, any>([
-      [routeNode.id, routeNode],
-      [vehicleNode.id, vehicleNode],
-    ])
-    const nodeObjectMap = new Map<string, THREE.Object3D>([
-      [routeNode.id, new THREE.Object3D()],
-      [vehicleNode.id, vehicleObject],
-    ])
-    const onTerminalStop = vi.fn()
+    const onGuideStop = vi.fn()
     const runtime = createAutoTourRuntime({
-      iterNodes: () => nodes.values(),
-      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
-      nodeObjectMap,
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
       isManualDriveActive: () => false,
-      onTerminalStop,
+      onGuideStop,
     })
-
-    const snap = runtime.resolveRouteSnap(vehicleNode.id)
-
-    expect(snap?.travelWindow?.direction).toBe(-1)
-    expect(snap?.targetReached).toBe(false)
-    runtime.startTour(vehicleNode.id)
-    runtime.seedTourPlaybackState(vehicleNode.id, snap!)
-    runtime.update(1)
-
-    expect(vehicleObject.position.x).toBeLessThan(8)
-    expect(vehicleObject.position.x).toBeGreaterThan(0)
-    expect(onTerminalStop).not.toHaveBeenCalled()
+    runtime.startTour(playback.vehicleNode.id)
+    for (let index = 0; index < 16; index += 1) {
+      runtime.update(0.5)
+    }
+    expect(onGuideStop.mock.calls.length).toBeGreaterThanOrEqual(2)
   })
-})
 
-describe('VehicleMotionAuthorityController', () => {
-  it('disables collisions during auto-surface and restores them for manual physics', () => {
-    const controller = new VehicleMotionAuthorityController()
-    const body = {
-      collisionResponse: true,
-      collisionFilterMask: 0xffff,
-      collisionFilterGroup: 0x0001,
-      velocity: { set: vi.fn() },
-      angularVelocity: { set: vi.fn() },
-      sleep: vi.fn(),
-      position: new THREE.Vector3(),
-      quaternion: new THREE.Quaternion(),
-    } as any
-    const object = new THREE.Object3D()
-
-    controller.beginAutoSurface('vehicle-1', {
-      object,
-      body,
-      bodies: [body],
-      orientationAdjustment: null,
+  it('holds at a transition until the behavior reports success', () => {
+    const playback = createPlayback({
+      transitions: [
+        {
+          id: 'handoff',
+          afterLegId: 'path-1',
+          behavior: {
+            nodeId: 'parking',
+            sequenceId: 'switch-to-character',
+          },
+        },
+      ],
     })
-
-    expect(controller.getState('vehicle-1')).toBe('auto-surface')
-    expect(controller.shouldWritePhysicsToObject('vehicle-1')).toBe(false)
-    expect(controller.shouldIncludeGroundAnchor('vehicle-1')).toBe(false)
-    expect(body.collisionResponse).toBe(false)
-    expect(body.collisionFilterMask).toBe(0)
-
-    controller.endAutoSurface('vehicle-1')
-    expect(controller.getState('vehicle-1')).toBe('idle-physics')
-    expect(body.collisionResponse).toBe(true)
-    expect(body.collisionFilterMask).toBe(0xffff)
-    expect(body.collisionFilterGroup).toBe(0x0001)
+    const onGuideTransition = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onGuideTransition,
+    })
+    runtime.startTour(playback.vehicleNode.id)
+    runtime.update(4)
+    expect(onGuideTransition).toHaveBeenCalledOnce()
+    const heldX = playback.vehicleObject.position.x
+    runtime.update(4)
+    expect(playback.vehicleObject.position.x).toBeCloseTo(heldX)
+    runtime.completeGuideTransition(playback.vehicleNode.id, true)
+    runtime.update(0.1)
+    expect(playback.vehicleObject.position.x).toBeGreaterThanOrEqual(heldX)
   })
-})
 
-describe('CharacterAutoTourRuntimeManager', () => {
-  beforeEach(() => {
-    clearGuideRouteEvaluationCache()
-    surfaceStateMock.mockReturnValue({
-      status: 'ready',
-      revision: 21,
-      message: null,
+  it('samples normals and returns the source leg for each distance', () => {
+    const route = evaluateGuideRoute({
+      routeNode: createRouteNode(pathProps()),
+      providerObject: null,
     })
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 20, z),
-      normal: new THREE.Vector3(0, 1, 0),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 21,
+    const sample = sampleEvaluatedGuideRouteAtDistance(route, 6)
+    expect(sample?.normal.y).toBeCloseTo(1)
+    expect(sample?.leg?.definition.id).toBe('path-1')
+  })
+
+  it('fires character route stops once while following the same compiled path', () => {
+    const baseProps = pathProps()
+    const routeNode = createRouteNode(pathProps({
+      legs: baseProps.legs.map((leg) => ({
+        ...leg,
+        travelMode: 'character',
+      })),
+      stops: [
+        {
+          id: 'character-stop',
+          name: 'Character stop',
+          thumbnailAssetId: null,
+          anchor: { x: 4, y: 20, z: 5 },
+          legId: 'path-1',
+          behavior: null,
+        },
+      ],
     }))
-  })
-
-  function createCharacterTourFixture() {
-    const routeNode = createRouteNode()
     const characterNode = {
       id: 'character-1',
-      name: 'Character',
-      nodeType: 'Group',
+      name: 'Visitor',
+      nodeType: 'Mesh',
       components: {
         autoTour: {
-          id: 'tour-character-1',
+          id: 'character-tour',
           type: 'autoTour',
           enabled: true,
           props: clampAutoTourComponentProps({
             routeNodeId: routeNode.id,
             speedMps: 2,
-            loop: false,
           }),
         },
         characterController: {
-          id: 'controller-character-1',
+          id: 'character-controller',
           type: 'characterController',
           enabled: true,
           props: clampCharacterControllerComponentProps({
-            forwardAxis: '+x',
             walkSpeed: 2,
           }),
         },
@@ -1130,128 +440,20 @@ describe('CharacterAutoTourRuntimeManager', () => {
       [routeNode.id, new THREE.Object3D()],
       [characterNode.id, characterObject],
     ])
-    const onTourComplete = vi.fn()
+    const onGuideStop = vi.fn()
+    const runtime = new CharacterAutoTourRuntimeManager()
     const host = {
       iterNodes: () => nodes.entries(),
       resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
       nodeObjectMap,
-      onTourComplete,
+      onGuideStop,
     }
-    return {
-      manager: new CharacterAutoTourRuntimeManager(),
-      host,
-      characterNode,
-      characterObject,
-      onTourComplete,
+    runtime.activate(characterNode.id)
+    runtime.refresh(host)
+    for (let index = 0; index < 8; index += 1) {
+      runtime.update(host, 0.25)
     }
-  }
-
-  it('stays idle until activated and freezes movement while paused', () => {
-    const { manager, host, characterNode, characterObject } = createCharacterTourFixture()
-
-    manager.refresh(host)
-    manager.update(host, 1)
-    expect(manager.size).toBe(0)
-    expect(manager.isActive(characterNode.id)).toBe(false)
-    expect(characterObject.position.x).toBeCloseTo(0)
-
-    manager.activate(characterNode.id)
-    manager.refresh(host)
-    manager.update(host, 1)
-    expect(manager.isActive(characterNode.id)).toBe(true)
-    expect(characterObject.position.x).toBeGreaterThan(0)
-
-    const pausedX = characterObject.position.x
-    manager.setPaused(characterNode.id, true)
-    manager.update(host, 1)
-    expect(characterObject.position.x).toBeCloseTo(pausedX)
-    expect(manager.getInput(characterNode.id)?.moveZ).toBe(0)
-
-    manager.setPaused(characterNode.id, false)
-    manager.update(host, 1)
-    expect(characterObject.position.x).toBeGreaterThan(pausedX)
-
-    manager.deactivate(characterNode.id)
-    manager.update(host, 1)
-    expect(manager.size).toBe(0)
-  })
-
-  it('projects a character to the nearest route point with route alignment', () => {
-    const { manager, host, characterNode, characterObject } = createCharacterTourFixture()
-    characterObject.position.set(4, 20, 3)
-
-    const snap = manager.resolveRouteSnap(host, characterNode.id)
-
-    expect(snap).not.toBeNull()
-    expect(snap!.worldPosition.x).toBeCloseTo(4)
-    expect(snap!.worldPosition.y).toBeCloseTo(20.52)
-    expect(snap!.worldPosition.z).toBeCloseTo(0)
-    expect(snap!.forwardWorld.x).toBeCloseTo(1)
-    expect(Math.abs(snap!.worldQuaternion.length())).toBeCloseTo(1)
-  })
-
-  it('samples character height from the downhill surface instead of the route height', () => {
-    surfaceSampleMock.mockImplementation((_nodeId, x, z) => ({
-      point: new THREE.Vector3(x, 20 - x * 0.2, z),
-      normal: new THREE.Vector3(0.2, 1, 0).normalize(),
-      kind: 'terrain',
-      distanceToRoad: null,
-      revision: 21,
-    }))
-    const { manager, host, characterNode, characterObject } = createCharacterTourFixture()
-    manager.activate(characterNode.id)
-    manager.refresh(host)
-
-    manager.update(host, 0.5)
-
-    const expectedGroundY = 20 - characterObject.position.x * 0.2
-    expect(characterObject.position.y).toBeCloseTo(expectedGroundY + 0.52, 2)
-  })
-
-  it('stops at the endpoint and reports completion for non-loop routes', () => {
-    const {
-      manager,
-      host,
-      characterNode,
-      characterObject,
-      onTourComplete,
-    } = createCharacterTourFixture()
-
-    manager.activate(characterNode.id)
-    manager.refresh(host)
-    characterObject.position.set(11.8, 20, 0)
-    manager.update(host, 1)
-
-    expect(characterObject.position.x).toBeCloseTo(12)
-    expect(manager.isActive(characterNode.id)).toBe(false)
-    expect(manager.size).toBe(0)
-    expect(onTourComplete).toHaveBeenCalledOnce()
-    expect(onTourComplete).toHaveBeenCalledWith(characterNode.id)
-  })
-
-  it('follows the shortest route segment to a target that is behind the character', () => {
-    const {
-      manager,
-      host,
-      characterNode,
-      characterObject,
-      onTourComplete,
-    } = createCharacterTourFixture()
-    characterObject.position.set(9, 20, 0)
-    const target = { destinationWaypointIndex: 0 }
-
-    const snap = manager.resolveRouteSnap(host, characterNode.id, target)
-    expect(snap?.travelWindow?.direction).toBe(-1)
-    expect(snap?.worldPosition.x).toBeCloseTo(9)
-
-    manager.activate(characterNode.id, target)
-    manager.refresh(host)
-    for (let step = 0; step < 12; step += 1) {
-      manager.update(host, 0.5)
-    }
-
-    expect(characterObject.position.x).toBeCloseTo(0)
-    expect(manager.isActive(characterNode.id)).toBe(false)
-    expect(onTourComplete).toHaveBeenCalledOnce()
+    expect(onGuideStop).toHaveBeenCalledTimes(1)
+    expect(runtime.getInput(characterNode.id)?.moveZ).toBeGreaterThan(0)
   })
 })

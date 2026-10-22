@@ -440,6 +440,10 @@ import type {
 
 } from '@schema/components'
 import type { EnvironmentSettings } from '@/types/environment'
+import {
+  evaluateGuideRoute,
+  resolveGuideRoutePrimaryProviderNodeId,
+} from '@schema/guideRouteRuntime'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
@@ -1942,6 +1946,159 @@ function computeGuideRouteDynamicMeshSignature(definition: GuideRouteDynamicMesh
   return hashString(serialized)
 }
 
+function resolveGuideRouteVisualDefinition(
+  node: SceneNode,
+  routeObject: THREE.Object3D,
+): GuideRouteDynamicMesh {
+  const fallback = node.dynamicMesh as GuideRouteDynamicMesh
+  const props = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  if (props?.version !== 3 || !props.legs?.some((leg) => leg.kind === 'road')) {
+    return fallback
+  }
+  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
+  const providerObject = providerNodeId
+    ? objectMap.get(providerNodeId) ?? null
+    : null
+  routeObject.updateMatrixWorld(true)
+  const evaluation = evaluateGuideRoute({
+    routeNode: node,
+    providerObject,
+    routeObject,
+  })
+  if (evaluation.status !== 'ready' || evaluation.points.length < 2) {
+    return fallback
+  }
+  const inverse = new THREE.Matrix4().copy(routeObject.matrixWorld).invert()
+  return {
+    type: 'GuideRoute',
+    vertices: evaluation.points.map((point) => {
+      const local = point.clone().applyMatrix4(inverse)
+      return { x: local.x, y: local.y, z: local.z }
+    }),
+  }
+}
+
+function syncGuideRouteStopOverlay(
+  node: SceneNode,
+  routeObject: THREE.Object3D,
+): void {
+  const userData = routeObject.userData as Record<string, unknown>
+  const existing = userData.guideRouteStopOverlay
+  const props = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  if (props?.version !== 3 || !Array.isArray(props.stops) || !props.stops.length) {
+    if (existing instanceof THREE.Object3D) {
+      existing.removeFromParent()
+    }
+    delete userData.guideRouteStopOverlay
+    return
+  }
+  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
+  const evaluation = evaluateGuideRoute({
+    routeNode: node,
+    providerObject: providerNodeId ? objectMap.get(providerNodeId) ?? null : null,
+    routeObject,
+  })
+  if (evaluation.status !== 'ready' || !evaluation.stops.length) {
+    return
+  }
+  routeObject.updateMatrixWorld(true)
+  const inverse = new THREE.Matrix4().copy(routeObject.matrixWorld).invert()
+  const signature = stableSerialize(evaluation.stops.map((stop) => ({
+    id: stop.definition.id,
+    name: stop.definition.name,
+    anchor: stop.definition.anchor,
+    projected: stop.projectedPoint.toArray(),
+    distance: stop.routeDistance,
+  })))
+  const group = existing instanceof THREE.Group ? existing : new THREE.Group()
+  if (group.userData.stopOverlaySignature === signature) {
+    return
+  }
+  while (group.children.length) {
+    const child = group.children.pop()!
+    child.removeFromParent()
+    child.traverse((entry) => {
+      const mesh = entry as THREE.Mesh
+      if (mesh.isMesh || (entry as THREE.Line).isLine) {
+        mesh.geometry?.dispose?.()
+        const material = mesh.material as THREE.Material | THREE.Material[] | undefined
+        if (Array.isArray(material)) {
+          material.forEach((entryMaterial) => entryMaterial.dispose())
+        } else {
+          material?.dispose?.()
+        }
+      }
+    })
+  }
+  group.name = '__GuideRouteStopOverlay'
+  group.userData.stopOverlaySignature = signature
+  group.userData.isGuideRouteStopOverlay = true
+  for (const stop of evaluation.stops) {
+    const anchorWorld = new THREE.Vector3(
+      stop.definition.anchor.x,
+      stop.definition.anchor.y,
+      stop.definition.anchor.z,
+    )
+    const anchorLocal = anchorWorld.clone().applyMatrix4(inverse)
+    const projectedLocal = stop.projectedPoint.clone().applyMatrix4(inverse)
+    const anchorMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.35, 10, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd54f,
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    )
+    anchorMarker.position.copy(anchorLocal)
+    anchorMarker.renderOrder = 10020
+    anchorMarker.userData.isGuideRouteStopMarker = true
+    group.add(anchorMarker)
+
+    const projectedMarker = new THREE.Mesh(
+      new THREE.TorusGeometry(0.28, 0.08, 8, 20),
+      new THREE.MeshBasicMaterial({
+        color: 0x29b6f6,
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    )
+    projectedMarker.rotation.x = Math.PI * 0.5
+    projectedMarker.position.copy(projectedLocal)
+    projectedMarker.renderOrder = 10021
+    projectedMarker.userData.isGuideRouteStopProjection = true
+    group.add(projectedMarker)
+
+    if (anchorLocal.distanceToSquared(projectedLocal) > 1e-4) {
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([anchorLocal, projectedLocal]),
+        new THREE.LineDashedMaterial({
+          color: 0xffd54f,
+          dashSize: 0.8,
+          gapSize: 0.45,
+          depthTest: false,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      )
+      line.computeLineDistances()
+      line.renderOrder = 10019
+      line.userData.isGuideRouteStopProjectionLine = true
+      group.add(line)
+    }
+  }
+  if (!existing) {
+    tagInternalRuntimeGroup(group, node.id, 'GuideRouteStops')
+    routeObject.add(group)
+    userData.guideRouteStopOverlay = group
+  }
+}
+
 function computeRegionRuntimeSignature(definition: RegionDynamicMesh): string {
   return computeRegionDynamicMeshSignature(definition)
 }
@@ -2512,7 +2669,7 @@ function resolveEditableGuideRouteNode(nodeId: string | null | undefined): Scene
     return null
   }
   const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
-  if (!component?.props?.surfaceProviderNodeId) {
+  if (component?.props?.version !== 3) {
     return null
   }
   if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {
@@ -7318,26 +7475,22 @@ function commitGuideRouteNode(nodeId: string, points: Vector3Like[]): boolean {
   }
   runtimeObject.updateMatrixWorld(true)
   const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
-  const providerNodeId = component?.props?.surfaceProviderNodeId ?? null
-  const currentWaypoints = Array.isArray(component?.props?.waypoints) ? component.props.waypoints : []
-  const waypoints = points.map((point, index) => {
+  const currentPathLeg = component?.props?.legs?.find((leg) => leg.kind === 'path')
+  const providerNodeId = currentPathLeg?.kind === 'path' ? currentPathLeg.surfaceProviderNodeId : null
+  const anchors = points.map((point) => {
     const world = runtimeObject.localToWorld(new THREE.Vector3(point.x, point.y, point.z))
     const sampled = providerNodeId
       ? sampleProceduralLandscapeGuideRouteSurface(providerNodeId, world.x, world.z, 0)
       : null
     const position = sampled?.point ?? world
-    return {
-      name: currentWaypoints[index]?.name ?? '',
-      dock: currentWaypoints[index]?.dock === true,
-      position: { x: position.x, y: position.y, z: position.z },
-    }
+    return { x: position.x, y: position.y, z: position.z }
   })
   const selectedWaypointIndex = sceneStore.selectedGuideRouteWaypoint?.nodeId === nodeId
     ? sceneStore.selectedGuideRouteWaypoint.waypointIndex
     : null
   return sceneStore.updateGuideRouteWaypoints(nodeId, {
     vertices: points,
-    waypoints,
+    anchors,
     selectedWaypointIndex,
   })
 }
@@ -7424,13 +7577,7 @@ function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
   nextPoints.splice(insertion.insertIndex, 0, insertion.point)
 
   const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
-  const currentWaypoints = Array.isArray(component?.props?.waypoints) ? component.props.waypoints : []
-  const nextWaypoints = currentWaypoints.map((entry: GuideRouteComponentProps['waypoints'][number]) => ({
-    name: typeof entry?.name === 'string' ? entry.name : '',
-    dock: entry?.dock === true,
-    position: entry.position,
-    thumbnailAssetId: typeof entry?.thumbnailAssetId === 'string' ? entry.thumbnailAssetId : null,
-  }))
+  const currentPathLeg = component?.props?.legs?.find((leg) => leg.kind === 'path')
   const runtimeObject = objectMap.get(selectedId) ?? null
   const insertionWorld = runtimeObject
     ? runtimeObject.localToWorld(new THREE.Vector3(
@@ -7439,7 +7586,9 @@ function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
       insertion.point.z,
     ))
     : new THREE.Vector3(insertion.point.x, insertion.point.y, insertion.point.z)
-  const providerNodeId = component?.props?.surfaceProviderNodeId ?? null
+  const providerNodeId = currentPathLeg?.kind === 'path'
+    ? currentPathLeg.surfaceProviderNodeId
+    : null
   const insertionSample = providerNodeId
     ? sampleProceduralLandscapeGuideRouteSurface(
       providerNodeId,
@@ -7449,20 +7598,18 @@ function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
     )
     : null
   const insertionPosition = insertionSample?.point ?? insertionWorld
-  nextWaypoints.splice(insertion.insertIndex, 0, {
-    name: '',
-    dock: false,
-    thumbnailAssetId: null,
-    position: {
-      x: insertionPosition.x,
-      y: insertionPosition.y,
-      z: insertionPosition.z,
-    },
+  const nextAnchors = currentPathLeg?.kind === 'path'
+    ? currentPathLeg.anchors.map((anchor) => ({ ...anchor }))
+    : []
+  nextAnchors.splice(insertion.insertIndex, 0, {
+    x: insertionPosition.x,
+    y: insertionPosition.y,
+    z: insertionPosition.z,
   })
 
   const updated = sceneStore.updateGuideRouteWaypoints(selectedId, {
     vertices: nextPoints,
-    waypoints: nextWaypoints,
+    anchors: nextAnchors,
     selectedWaypointIndex: insertion.insertIndex,
   })
   if (!updated) {
@@ -22975,7 +23122,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
 
   } else if (node.dynamicMesh?.type === 'GuideRoute') {
-    const guideDefinition = node.dynamicMesh as GuideRouteDynamicMesh
+    const guideDefinition = resolveGuideRouteVisualDefinition(node, object)
     let guideGroup = userData.guideRouteGroup as THREE.Group | undefined
     if (!guideGroup) {
       guideGroup = createGuideRouteGroup(guideDefinition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
@@ -22994,6 +23141,7 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
     }
 
     void createOrUpdateGuideRouteWaypointLabels(node, object)
+    syncGuideRouteStopOverlay(node, object)
   } else if (node.dynamicMesh?.type === 'Region') {
     const regionDefinition = node.dynamicMesh as RegionDynamicMesh
     let regionGroup = userData.regionGroup as THREE.Group | undefined
@@ -24573,7 +24721,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       containerData.floorGroup = floorGroup
     } else if (node.dynamicMesh?.type === 'GuideRoute') {
       containerData.dynamicMeshType = 'GuideRoute'
-      const guideDefinition = node.dynamicMesh as GuideRouteDynamicMesh
+      const guideDefinition = resolveGuideRouteVisualDefinition(node, container)
       const guideGroup = createGuideRouteGroup(guideDefinition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
       guideGroup.removeFromParent()
       tagInternalRuntimeGroup(guideGroup, node.id, 'GuideRoute')
@@ -24581,6 +24729,7 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
       container.add(guideGroup)
       ;(containerData as any).guideRouteGroup = guideGroup
       void createOrUpdateGuideRouteWaypointLabels(node, container)
+      syncGuideRouteStopOverlay(node, container)
     } else if (node.dynamicMesh?.type === 'Region') {
       containerData.dynamicMeshType = 'Region'
       const regionDefinition = node.dynamicMesh as RegionDynamicMesh

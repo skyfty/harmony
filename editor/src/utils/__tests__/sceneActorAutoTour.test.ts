@@ -47,14 +47,27 @@ function createRoute(id: string, startX: number): SceneNode {
         type: GUIDE_ROUTE_COMPONENT_TYPE,
         enabled: true,
         props: clampGuideRouteComponentProps({
-          surfaceProviderNodeId: 'terrain',
-          routeSource: 'drawn',
-          sampleSpacingM: 2,
-          roadLateralOffsetM: 0,
-          waypoints: [
-            { name: 'Start', position: { x: startX, y: 0, z: 0 } },
-            { name: 'End', position: { x: startX + 20, y: 0, z: 0 } },
+          version: 3,
+          loop: false,
+          legs: [
+            {
+              id: 'path',
+              kind: 'path',
+              travelMode: 'vehicle',
+              speedProfile: {
+                cruiseSpeedMps: 8,
+                lateralAccelLimitMps2: 2.5,
+              },
+              surfaceProviderNodeId: null,
+              preserveAuthoredY: true,
+              anchors: [
+                { x: startX, y: 0, z: 0 },
+                { x: startX + 20, y: 0, z: 0 },
+              ],
+            },
           ],
+          stops: [],
+          transitions: [],
         }),
       },
     },
@@ -202,7 +215,7 @@ describe('sceneActorAutoTour', () => {
     expect(getAutoTour(character)).toMatchObject({
       id: buildSceneActorAutoTourComponentId('character'),
       enabled: true,
-      props: { routeNodeId: 'route', loop: false },
+      props: { routeNodeId: 'route' },
     })
     expect(getAutoTour(vehicle).props.routeNodeId).toBe('route')
     expect(mesh.components?.[AUTO_TOUR_COMPONENT_TYPE]).toBeUndefined()
@@ -274,7 +287,6 @@ describe('sceneActorAutoTour', () => {
           props: clampAutoTourComponentProps({
             routeNodeId: 'far-route',
             speedMps: 7,
-            loop: true,
             followCameraObstacleAvoidanceEnabled: true,
           }),
         },
@@ -295,7 +307,6 @@ describe('sceneActorAutoTour', () => {
       props: {
         routeNodeId: 'far-route',
         speedMps: 7,
-        loop: true,
         followCameraObstacleAvoidanceEnabled: true,
       },
     })
@@ -361,7 +372,6 @@ describe('sceneActorAutoTour', () => {
           props: clampAutoTourComponentProps({
             routeNodeId: 'scene-route',
             speedMps: 6,
-            loop: true,
             followCameraObstacleAvoidanceEnabled: true,
           }),
         },
@@ -382,7 +392,6 @@ describe('sceneActorAutoTour', () => {
       props: {
         routeNodeId: 'scene-route',
         speedMps: 6,
-        loop: true,
         followCameraObstacleAvoidanceEnabled: true,
       },
     })

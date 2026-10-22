@@ -6,11 +6,11 @@ import {
 } from './guideRouteRuntime'
 
 export type GuideRouteTourTargetOptions = {
-  destinationWaypointIndex: number
+  destinationStopIndex: number
 }
 
 export type GuideRouteTravelWindow = {
-  destinationWaypointIndex: number
+  destinationStopIndex: number
   direction: -1 | 1
   startDistance: number
   endDistance: number
@@ -175,10 +175,15 @@ function createWindowRoute(
     ...route,
     points,
     normals,
-    dock: new Array(points.length).fill(false),
-    waypointArcLengths: [0, totalLength],
     cumulativeLengths,
     totalLength,
+    legs: route.legs.map((leg) => ({
+      ...leg,
+      routeStartDistance: 0,
+      routeEndDistance: totalLength,
+    })),
+    stops: [],
+    transitions: [],
   }
 }
 
@@ -191,11 +196,11 @@ export function buildGuideRouteTravelWindow(
   if (route.status !== 'ready' || route.points.length < 2) {
     return null
   }
-  const waypointIndex = Math.max(
+  const stopIndex = Math.max(
     0,
-    Math.min(route.waypointArcLengths.length - 1, Math.trunc(options.destinationWaypointIndex)),
+    Math.min(route.stops.length - 1, Math.trunc(options.destinationStopIndex)),
   )
-  const destinationDistance = route.waypointArcLengths[waypointIndex]
+  const destinationDistance = route.stops[stopIndex]?.routeDistance
   if (destinationDistance == null) {
     return null
   }
@@ -207,7 +212,7 @@ export function buildGuideRouteTravelWindow(
   }
   const windowRoute = createWindowRoute(route, start, end, travelDirection.direction, loop)
   return {
-    destinationWaypointIndex: waypointIndex,
+    destinationStopIndex: stopIndex,
     direction: travelDirection.direction,
     startDistance: start,
     endDistance: end,

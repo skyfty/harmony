@@ -8812,6 +8812,31 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
       syncInstancedTransform(object);
     },
     onTourComplete: handleCharacterAutoTourComplete,
+    onGuideStop: (_nodeId, stop) => {
+      if (!stop.behavior) {
+        return;
+      }
+      processBehaviorEvents(triggerBehaviorAction(
+        stop.behavior.nodeId,
+        'perform',
+        { payload: { routeEvent: stop.definition.id } },
+        { sequenceId: stop.behavior.sequenceId },
+      ));
+    },
+    onGuideTransition: (nodeId, transition) => {
+      pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
+        nodeId,
+        routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+        afterLegId: transition.afterLegId,
+        source: 'character',
+      });
+      processBehaviorEvents(triggerBehaviorAction(
+        transition.behavior.nodeId,
+        'perform',
+        { payload: { routeTransition: transition.definition.id } },
+        { sequenceId: transition.behavior.sequenceId },
+      ));
+    },
   });
 }
 
@@ -8851,6 +8876,31 @@ function updateCharacterPathFollow(deltaSeconds: number): void {
       syncInstancedTransform(object);
     },
     onTourComplete: handleCharacterAutoTourComplete,
+    onGuideStop: (_nodeId, stop) => {
+      if (!stop.behavior) {
+        return;
+      }
+      processBehaviorEvents(triggerBehaviorAction(
+        stop.behavior.nodeId,
+        'perform',
+        { payload: { routeEvent: stop.definition.id } },
+        { sequenceId: stop.behavior.sequenceId },
+      ));
+    },
+    onGuideTransition: (nodeId, transition) => {
+      pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
+        nodeId,
+        routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+        afterLegId: transition.afterLegId,
+        source: 'character',
+      });
+      processBehaviorEvents(triggerBehaviorAction(
+        transition.behavior.nodeId,
+        'perform',
+        { payload: { routeTransition: transition.definition.id } },
+        { sequenceId: transition.behavior.sequenceId },
+      ));
+    },
   }, deltaSeconds);
 }
 
@@ -10348,12 +10398,12 @@ async function refreshGuideWaypointMenuDestinations(force = false): Promise<void
       | null
       | undefined,
   );
-  const items = props.waypoints.flatMap((waypoint, index) => {
-    const thumbnailAssetId = waypoint.thumbnailAssetId?.trim() ?? '';
+  const items = props.stops.flatMap((stop, index) => {
+    const thumbnailAssetId = stop.thumbnailAssetId?.trim() ?? '';
     return thumbnailAssetId
       ? [{
         index,
-        name: waypoint.name.trim() || `P${index + 1}`,
+        name: stop.name.trim() || `Stop ${index + 1}`,
         thumbnailAssetId,
         imageUrl: null,
         loading: true,
@@ -10464,28 +10514,30 @@ const autoTourRuntime = createAutoTourRuntime({
     pendingAutoTourManualDriveNodeId = nodeId;
     pendingAutoTourManualDriveSourceEvent = activeVehicleDriveEvent.value;
   },
-  onDockRequestedPause: (nodeId, payload) => {
-    if (
-      payload.terminal
-      && nodeId
-      && pendingAutoTourManualDriveNodeId === nodeId
-    ) {
+  onGuideStop: (_nodeId, stop) => {
+    if (!stop.behavior) {
       return;
     }
-    autoTourPausedIsTerminal.value = payload.terminal === true;
-    autoTourPausedNodeId.value = nodeId ?? null;
-    if (autoTourPaused.value) {
-      return
-    }
-    if (nodeId) {
-      captureAutoTourPausedCameraSnapshot(nodeId);
-    }
-    autoTourPaused.value = true
-    clearAutoTourResumeBlendState()
-    applyAutoTourCameraInputPolicy()
-    if (nodeId) {
-      reapplyAutoTourPausedCameraSnapshot(nodeId)
-    }
+    processBehaviorEvents(triggerBehaviorAction(
+      stop.behavior.nodeId,
+      'perform',
+      { payload: { routeEvent: stop.definition.id } },
+      { sequenceId: stop.behavior.sequenceId },
+    ));
+  },
+  onGuideTransition: (nodeId, transition) => {
+    pendingGuideTransitionAutoTourNodes.set(transition.behavior.sequenceId, {
+      nodeId,
+      routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+      afterLegId: transition.afterLegId,
+      source: 'vehicle',
+    });
+    processBehaviorEvents(triggerBehaviorAction(
+      transition.behavior.nodeId,
+      'perform',
+      { payload: { routeTransition: transition.definition.id } },
+      { sequenceId: transition.behavior.sequenceId },
+    ));
   },
   onAutoSurfaceStart: (nodeId) => {
     const binding = rigidbodyInstances.get(nodeId) ?? null;
@@ -17217,8 +17269,85 @@ const behaviorRuntimeListener: BehaviorRuntimeListener = {
   },
   onSequenceFinished(event) {
     behaviorProximityRuntime.handleSequenceFinished(event.sequenceId);
+    const autoTourTransition = pendingGuideTransitionAutoTourNodes.get(event.sequenceId);
+    if (autoTourTransition) {
+      pendingGuideTransitionAutoTourNodes.delete(event.sequenceId);
+      if (event.status !== 'success') {
+        uni.showToast({ title: '导览换乘行为未完成', icon: 'none' });
+      }
+      finishGuideTransition(autoTourTransition, event.status);
+    }
+    const characterTransition = pendingGuideTransitionCharacterNodes.get(event.sequenceId);
+    if (characterTransition) {
+      pendingGuideTransitionCharacterNodes.delete(event.sequenceId);
+      if (event.status !== 'success') {
+        uni.showToast({ title: '导览换乘行为未完成', icon: 'none' });
+      }
+      finishGuideTransition(characterTransition, event.status);
+    }
   },
 };
+
+type PendingGuideTransition = {
+  nodeId: string;
+  routeNodeId: string | null;
+  afterLegId: string;
+  source: 'vehicle' | 'character';
+};
+
+const pendingGuideTransitionAutoTourNodes = new Map<string, PendingGuideTransition>();
+const pendingGuideTransitionCharacterNodes = new Map<string, PendingGuideTransition>();
+
+function finishGuideTransition(
+  pending: PendingGuideTransition,
+  status: 'success' | 'failure' | 'aborted',
+): void {
+  const success = status === 'success';
+  if (pending.source === 'vehicle') {
+    autoTourRuntime.completeGuideTransition(
+      pending.nodeId,
+      success,
+      success ? undefined : `guide-route-transition-${status}`,
+    );
+  } else {
+    characterAutoTourRuntime.completeGuideTransition(
+      pending.nodeId,
+      success,
+      success ? undefined : `guide-route-transition-${status}`,
+    );
+  }
+  if (!success || !pending.routeNodeId) {
+    return;
+  }
+  const routeNode = resolveNodeById(pending.routeNodeId);
+  const props = clampGuideRouteComponentProps(
+    routeNode?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | null
+      | undefined,
+  );
+  const legIndex = props.legs.findIndex((leg) => leg.id === pending.afterLegId);
+  const nextLeg = legIndex >= 0 ? props.legs[legIndex + 1] : null;
+  if (!nextLeg) {
+    return;
+  }
+  autoTourRuntime.stopTour(pending.nodeId);
+  characterAutoTourRuntime.deactivate(pending.nodeId);
+  activeAutoTourNodeIds.delete(pending.nodeId);
+  activeCharacterAutoTourNodeIds.delete(pending.nodeId);
+  const nextNodeId = nextLeg.travelMode === 'character'
+    ? resolveDefaultControlledCharacterNodeId()
+    : vehicleDriveActive.value
+      ? vehicleDriveNodeId.value
+      : null;
+  if (!nextNodeId) {
+    uni.showToast({ title: '导览换乘后没有活动载体', icon: 'none' });
+    return;
+  }
+  pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(nextNodeId, null);
+  guideWaypointMenuContextRevision.value += 1;
+  handleFloatingAutoTourTap();
+}
 
 function syncBehaviorCollisionCandidate(nodeId: string): void {
   if (!previewNodeMap.has(nodeId) || !listRegisteredBehaviorActions(nodeId).includes('collision')) {
@@ -21393,7 +21522,7 @@ function handleGuideWaypointAutoTourStart(waypointIndex: number): void {
     uni.showToast({ title: '当前没有可用的 Automatic Tour 路线', icon: 'none' });
     return;
   }
-  guideWaypointPendingTarget = { destinationWaypointIndex: waypointIndex };
+  guideWaypointPendingTarget = { destinationStopIndex: waypointIndex };
   pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(actorNodeId, null);
   guideWaypointMenuContextRevision.value += 1;
   handleFloatingAutoTourTap();

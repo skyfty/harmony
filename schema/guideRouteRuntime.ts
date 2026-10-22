@@ -3,23 +3,66 @@ import * as THREE from 'three'
 import type { SceneNode } from './core'
 import {
   clampGuideRouteComponentProps,
+  type GuidePathRouteLeg,
+  type GuideRoadRouteLeg,
+  type GuideRouteBehaviorRef,
   type GuideRouteComponentProps,
+  type GuideRouteLeg,
+  type GuideRouteSpeedProfile,
+  type GuideRouteStop,
+  type GuideRouteTransition,
 } from './components/definitions/guideRouteComponent'
 import {
   getProceduralLandscapeGuideRouteSurfaceState,
   getProceduralLandscapeRoadCenterlineLocal,
   sampleProceduralLandscapeGuideRouteSurface,
 } from './proceduralLandscape/runtime'
-import { buildPolylineMetricData, projectPointToPolyline } from './polylineProgress'
+import {
+  buildPolylineMetricData,
+  projectPointToPolyline,
+  samplePolylineAtS,
+  type PolylineMetricData,
+} from './polylineProgress'
 
 export type EvaluatedGuideRouteStatus =
   | 'ready'
   | 'unsupported'
+  | 'empty-route'
   | 'provider-missing'
   | 'provider-loading'
   | 'provider-error'
-  | 'too-few-points'
+  | 'invalid-leg'
   | 'surface-gap'
+
+export type CompiledGuideLeg = {
+  definition: GuideRouteLeg
+  points: THREE.Vector3[]
+  normals: THREE.Vector3[]
+  cumulativeLengths: number[]
+  metricData: PolylineMetricData
+  totalLength: number
+  routeStartDistance: number
+  routeEndDistance: number
+  travelMode: GuideRouteLeg['travelMode']
+  speedProfile: GuideRouteSpeedProfile
+}
+
+export type CompiledGuideStop = {
+  definition: GuideRouteStop
+  legId: string
+  legDistance: number
+  routeDistance: number
+  projectedPoint: THREE.Vector3
+  projectionDistance: number
+  behavior: GuideRouteBehaviorRef | null
+}
+
+export type CompiledGuideTransition = {
+  definition: GuideRouteTransition
+  afterLegId: string
+  routeDistance: number
+  behavior: GuideRouteBehaviorRef
+}
 
 export type EvaluatedGuideRoute = {
   status: EvaluatedGuideRouteStatus
@@ -27,13 +70,16 @@ export type EvaluatedGuideRoute = {
   routeNodeId: string
   providerNodeId: string | null
   revision: number
+  loop: boolean
   points: THREE.Vector3[]
   normals: THREE.Vector3[]
-  dock: boolean[]
-  /** Arc length from the route start to each authored waypoint. */
-  waypointArcLengths: number[]
   cumulativeLengths: number[]
   totalLength: number
+  legs: CompiledGuideLeg[]
+  stops: CompiledGuideStop[]
+  transitions: CompiledGuideTransition[]
+  warnings: string[]
+  drop?: boolean
 }
 
 export type EvaluateGuideRouteParams = {
@@ -42,8 +88,42 @@ export type EvaluateGuideRouteParams = {
   routeObject?: THREE.Object3D | null
 }
 
+export function resolveGuideRoutePrimaryProviderNodeId(
+  props: Partial<GuideRouteComponentProps> | null | undefined,
+): string | null {
+  const normalized = clampGuideRouteComponentProps(props)
+  for (const leg of normalized.legs) {
+    if (leg.kind === 'road') {
+      return leg.providerNodeId
+    }
+  }
+  for (const leg of normalized.legs) {
+    if (leg.kind === 'path' && leg.surfaceProviderNodeId) {
+      return leg.surfaceProviderNodeId
+    }
+  }
+  return null
+}
+
+type LegCompilationResult =
+  | {
+      ok: true
+      leg: CompiledGuideLeg
+      providerRevision: number
+      providerNodeId: string | null
+      warnings: string[]
+    }
+  | {
+      ok: false
+      status: EvaluatedGuideRouteStatus
+      message: string
+      providerRevision: number
+      providerNodeId: string | null
+    }
+
 const ROUTE_CACHE_LIMIT = 64
 const routeEvaluationCache = new Map<string, EvaluatedGuideRoute>()
+const UP = new THREE.Vector3(0, 1, 0)
 
 function emptyEvaluation(
   routeNode: SceneNode,
@@ -58,44 +138,16 @@ function emptyEvaluation(
     routeNodeId: routeNode.id,
     providerNodeId,
     revision,
+    loop: false,
     points: [],
     normals: [],
-    dock: [],
-    waypointArcLengths: [],
     cumulativeLengths: [],
     totalLength: 0,
+    legs: [],
+    stops: [],
+    transitions: [],
+    warnings: [],
   }
-}
-
-function hashRouteParameters(
-  routeNodeId: string,
-  props: GuideRouteComponentProps,
-  providerMatrix: THREE.Matrix4 | null,
-  routeMatrix: THREE.Matrix4 | null,
-  candidateKey: string,
-): string {
-  const serializeMatrix = (matrix: THREE.Matrix4 | null): string => (
-    matrix
-      ? Array.from(matrix.elements, (value) => Number(value.toFixed(5))).join(',')
-      : ''
-  )
-  return JSON.stringify([
-    routeNodeId,
-    candidateKey,
-    props.surfaceProviderNodeId,
-    props.routeSource,
-    props.sampleSpacingM,
-    props.roadLateralOffsetM,
-    props.waypoints.map((entry) => [
-      entry.name,
-      entry.dock === true,
-      entry.position.x,
-      entry.position.y,
-      entry.position.z,
-    ]),
-    serializeMatrix(providerMatrix),
-    serializeMatrix(routeMatrix),
-  ])
 }
 
 function normalizeXZDirection(x: number, z: number): { x: number; z: number } {
@@ -103,146 +155,6 @@ function normalizeXZDirection(x: number, z: number): { x: number; z: number } {
   return length > 1e-8
     ? { x: x / length, z: z / length }
     : { x: 1, z: 0 }
-}
-
-function densifyWorldControls(
-  controls: THREE.Vector3[],
-  spacingM: number,
-): THREE.Vector3[] {
-  if (controls.length < 2) {
-    return controls.map((entry) => entry.clone())
-  }
-  const spacing = Math.max(0.5, spacingM)
-  const points: THREE.Vector3[] = []
-  for (let segmentIndex = 0; segmentIndex + 1 < controls.length; segmentIndex += 1) {
-    const start = controls[segmentIndex]!
-    const end = controls[segmentIndex + 1]!
-    const planarLength = Math.hypot(end.x - start.x, end.z - start.z)
-    const steps = Math.max(1, Math.ceil(planarLength / spacing))
-    for (let step = segmentIndex === 0 ? 0 : 1; step <= steps; step += 1) {
-      const t = step / steps
-      points.push(new THREE.Vector3(
-        start.x + (end.x - start.x) * t,
-        0,
-        start.z + (end.z - start.z) * t,
-      ))
-    }
-  }
-  return points
-}
-
-function resolveGeneratedRoadWorldControls(
-  providerNodeId: string,
-  providerObject: THREE.Object3D,
-  lateralOffsetM: number,
-): THREE.Vector3[] {
-  const centerline = getProceduralLandscapeRoadCenterlineLocal(providerNodeId)
-  const raw = centerline?.pointsXZ
-  if (!raw || raw.length < 4) {
-    return []
-  }
-  providerObject.updateMatrixWorld(true)
-  const localControls: THREE.Vector3[] = []
-  for (let index = 0; index + 1 < raw.length; index += 2) {
-    localControls.push(new THREE.Vector3(raw[index]!, 0, raw[index + 1]!))
-  }
-  if (lateralOffsetM !== 0 && localControls.length >= 2) {
-    for (let index = 0; index < localControls.length; index += 1) {
-      const previous = localControls[Math.max(0, index - 1)]!
-      const next = localControls[Math.min(localControls.length - 1, index + 1)]!
-      const direction = normalizeXZDirection(next.x - previous.x, next.z - previous.z)
-      localControls[index]!.x += -direction.z * lateralOffsetM
-      localControls[index]!.z += direction.x * lateralOffsetM
-    }
-  }
-  return localControls.map((entry) => entry.applyMatrix4(providerObject.matrixWorld))
-}
-
-function resolveControlPoints(
-  props: GuideRouteComponentProps,
-  providerObject: THREE.Object3D | null,
-): THREE.Vector3[] {
-  if (props.routeSource === 'generated-road' && props.surfaceProviderNodeId && providerObject) {
-    return resolveGeneratedRoadWorldControls(
-      props.surfaceProviderNodeId,
-      providerObject,
-      props.roadLateralOffsetM,
-    )
-  }
-  return props.waypoints.map((entry) => new THREE.Vector3(
-    entry.position.x,
-    entry.position.y,
-    entry.position.z,
-  ))
-}
-
-function resolveRouteNodeWorldPosition(
-  routeNode: SceneNode,
-  routeObject: THREE.Object3D | null | undefined,
-): THREE.Vector3 | null {
-  if (routeObject) {
-    routeObject.updateMatrixWorld(true)
-    return routeObject.getWorldPosition(new THREE.Vector3())
-  }
-  const position = routeNode.position
-  if (!position) {
-    return null
-  }
-  return new THREE.Vector3(position.x, position.y, position.z)
-}
-
-function isPointInsideSurfaceBounds(
-  point: THREE.Vector3,
-  bounds: NonNullable<ReturnType<typeof getProceduralLandscapeGuideRouteSurfaceState>>['bounds'],
-): boolean {
-  return Boolean(
-    bounds
-    && point.x >= bounds.minX
-    && point.x <= bounds.maxX
-    && point.z >= bounds.minZ
-    && point.z <= bounds.maxZ
-  )
-}
-
-function resolveControlPointCenter(controls: readonly THREE.Vector3[]): THREE.Vector3 | null {
-  if (!controls.length) {
-    return null
-  }
-  const min = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, Number.POSITIVE_INFINITY)
-  const max = new THREE.Vector3(Number.NEGATIVE_INFINITY, 0, Number.NEGATIVE_INFINITY)
-  for (const control of controls) {
-    min.x = Math.min(min.x, control.x)
-    min.z = Math.min(min.z, control.z)
-    max.x = Math.max(max.x, control.x)
-    max.z = Math.max(max.z, control.z)
-  }
-  return new THREE.Vector3((min.x + max.x) * 0.5, 0, (min.z + max.z) * 0.5)
-}
-
-function rebaseStaleControlsToRouteNode(
-  controls: readonly THREE.Vector3[],
-  routeNode: SceneNode,
-  routeObject: THREE.Object3D | null | undefined,
-  bounds: NonNullable<ReturnType<typeof getProceduralLandscapeGuideRouteSurfaceState>>['bounds'],
-): THREE.Vector3[] {
-  if (!bounds || controls.every((control) => isPointInsideSurfaceBounds(control, bounds))) {
-    return []
-  }
-  const anchor = resolveRouteNodeWorldPosition(routeNode, routeObject)
-  const center = resolveControlPointCenter(controls)
-  if (!anchor || !center || !isPointInsideSurfaceBounds(anchor, bounds)) {
-    return []
-  }
-  const offsetX = anchor.x - center.x
-  const offsetZ = anchor.z - center.z
-  if (Math.hypot(offsetX, offsetZ) <= 1e-5) {
-    return []
-  }
-  return controls.map((control) => new THREE.Vector3(
-    control.x + offsetX,
-    control.y,
-    control.z + offsetZ,
-  ))
 }
 
 function buildCumulativeLengths(points: readonly THREE.Vector3[]): number[] {
@@ -257,33 +169,287 @@ function buildCumulativeLengths(points: readonly THREE.Vector3[]): number[] {
   return lengths
 }
 
-function markDockPoints(
-  points: readonly THREE.Vector3[],
-  controls: readonly THREE.Vector3[],
-  sourceDock: readonly boolean[],
-): boolean[] {
-  const dock = new Array<boolean>(points.length).fill(false)
-  if (!points.length) {
-    return dock
+function appendUniquePoint(
+  points: THREE.Vector3[],
+  normals: THREE.Vector3[],
+  point: THREE.Vector3,
+  normal: THREE.Vector3,
+): void {
+  const previous = points[points.length - 1]
+  if (previous && previous.distanceToSquared(point) <= 1e-8) {
+    normals[normals.length - 1] = normal.clone()
+    return
   }
-  controls.forEach((control, controlIndex) => {
-    if (sourceDock[controlIndex] !== true) {
-      return
+  points.push(point.clone())
+  normals.push(normal.clone())
+}
+
+function resolveRoadWorldCenterline(
+  providerNodeId: string,
+  providerObject: THREE.Object3D,
+): THREE.Vector3[] {
+  const centerline = getProceduralLandscapeRoadCenterlineLocal(providerNodeId)
+  const raw = centerline?.pointsXZ
+  if (!raw || raw.length < 4) {
+    return []
+  }
+  providerObject.updateMatrixWorld(true)
+  const points: THREE.Vector3[] = []
+  for (let index = 0; index + 1 < raw.length; index += 2) {
+    points.push(new THREE.Vector3(raw[index]!, 0, raw[index + 1]!))
+  }
+  for (const point of points) {
+    point.applyMatrix4(providerObject.matrixWorld)
+  }
+  return points
+}
+
+function compileRoadLeg(
+  definition: GuideRoadRouteLeg,
+  providerObjects: Map<string, THREE.Object3D>,
+): LegCompilationResult {
+  const state = getProceduralLandscapeGuideRouteSurfaceState(definition.providerNodeId)
+  if (!state) {
+    return {
+      ok: false,
+      status: 'provider-missing',
+      message: `Road provider ${definition.providerNodeId} is missing.`,
+      providerRevision: 0,
+      providerNodeId: definition.providerNodeId,
     }
-    let nearestIndex = 0
-    let nearestDistanceSq = Number.POSITIVE_INFINITY
-    points.forEach((point, pointIndex) => {
-      const dx = point.x - control.x
-      const dz = point.z - control.z
-      const distanceSq = dx * dx + dz * dz
-      if (distanceSq < nearestDistanceSq) {
-        nearestDistanceSq = distanceSq
-        nearestIndex = pointIndex
+  }
+  if (state.status !== 'ready') {
+    return {
+      ok: false,
+      status: state.status === 'error' ? 'provider-error' : 'provider-loading',
+      message: state.message ?? 'Road provider is not ready.',
+      providerRevision: state.revision,
+      providerNodeId: definition.providerNodeId,
+    }
+  }
+  const providerObject = providerObjects.get(definition.providerNodeId) ?? null
+  const centerline = providerObject
+    ? resolveRoadWorldCenterline(definition.providerNodeId, providerObject)
+    : []
+  if (centerline.length < 2) {
+    return {
+      ok: false,
+      status: 'invalid-leg',
+      message: `Road leg ${definition.id} has no generated road centerline.`,
+      providerRevision: state.revision,
+      providerNodeId: definition.providerNodeId,
+    }
+  }
+  const sourceMetric = buildPolylineMetricData(centerline, { closed: false, mode: 'xz' })
+  if (!sourceMetric || sourceMetric.totalLength <= 1e-6) {
+    return {
+      ok: false,
+      status: 'invalid-leg',
+      message: `Road leg ${definition.id} has a degenerate centerline.`,
+      providerRevision: state.revision,
+      providerNodeId: definition.providerNodeId,
+    }
+  }
+
+  const startT = Math.max(0, Math.min(1, definition.startT))
+  const endT = Math.max(0, Math.min(1, definition.endT))
+  const startS = sourceMetric.totalLength * startT
+  const endS = sourceMetric.totalLength * endT
+  const directionSign = endS >= startS ? 1 : -1
+  const travelLength = Math.abs(endS - startS)
+  if (travelLength <= 1e-6) {
+    return {
+      ok: false,
+      status: 'invalid-leg',
+      message: `Road leg ${definition.id} has a zero-length interval.`,
+      providerRevision: state.revision,
+      providerNodeId: definition.providerNodeId,
+    }
+  }
+
+  const sampleCount = Math.max(2, Math.ceil(travelLength / Math.max(0.5, definition.sampleSpacingM)) + 1)
+  const points: THREE.Vector3[] = []
+  const normals: THREE.Vector3[] = []
+  const center = new THREE.Vector3()
+  const before = new THREE.Vector3()
+  const after = new THREE.Vector3()
+  for (let index = 0; index < sampleCount; index += 1) {
+    const alpha = index / (sampleCount - 1)
+    const sourceS = startS + (endS - startS) * alpha
+    samplePolylineAtS(centerline, sourceMetric, sourceS, center)
+    samplePolylineAtS(centerline, sourceMetric, sourceS - 0.5, before)
+    samplePolylineAtS(centerline, sourceMetric, sourceS + 0.5, after)
+    const tangent = normalizeXZDirection(
+      (after.x - before.x) * directionSign,
+      (after.z - before.z) * directionSign,
+    )
+    center.x += -tangent.z * definition.laneOffsetM
+    center.z += tangent.x * definition.laneOffsetM
+    const surface = sampleProceduralLandscapeGuideRouteSurface(
+      definition.providerNodeId,
+      center.x,
+      center.z,
+      Math.atan2(-tangent.z, tangent.x),
+    )
+    if (!surface) {
+      return {
+        ok: false,
+        status: 'surface-gap',
+        message: `Road leg ${definition.id} has no surface at ${center.x.toFixed(2)}, ${center.z.toFixed(2)}.`,
+        providerRevision: state.revision,
+        providerNodeId: definition.providerNodeId,
       }
-    })
-    dock[nearestIndex] = true
-  })
-  return dock
+    }
+    appendUniquePoint(points, normals, surface.point, surface.normal)
+  }
+  const cumulativeLengths = buildCumulativeLengths(points)
+  const totalLength = cumulativeLengths[cumulativeLengths.length - 1] ?? 0
+  const metricData = buildPolylineMetricData(points, { closed: false, mode: '3d' })
+  if (!metricData || totalLength <= 1e-6) {
+    return {
+      ok: false,
+      status: 'invalid-leg',
+      message: `Road leg ${definition.id} could not be sampled.`,
+      providerRevision: state.revision,
+      providerNodeId: definition.providerNodeId,
+    }
+  }
+  return {
+    ok: true,
+    providerRevision: state.revision,
+    providerNodeId: definition.providerNodeId,
+    warnings: [],
+    leg: {
+      definition,
+      points,
+      normals,
+      cumulativeLengths,
+      metricData,
+      totalLength,
+      routeStartDistance: 0,
+      routeEndDistance: totalLength,
+      travelMode: definition.travelMode,
+      speedProfile: definition.speedProfile,
+    },
+  }
+}
+
+function compilePathLeg(definition: GuidePathRouteLeg): LegCompilationResult {
+  if (definition.anchors.length < 2) {
+    return {
+      ok: false,
+      status: 'invalid-leg',
+      message: `Path leg ${definition.id} needs at least two anchors.`,
+      providerRevision: 0,
+      providerNodeId: definition.surfaceProviderNodeId,
+    }
+  }
+  if (definition.surfaceProviderNodeId) {
+    const state = getProceduralLandscapeGuideRouteSurfaceState(definition.surfaceProviderNodeId)
+    if (!state) {
+      return {
+        ok: false,
+        status: 'provider-missing',
+        message: `Surface provider ${definition.surfaceProviderNodeId} is missing.`,
+        providerRevision: 0,
+        providerNodeId: definition.surfaceProviderNodeId,
+      }
+    }
+    if (state.status !== 'ready') {
+      return {
+        ok: false,
+        status: state.status === 'error' ? 'provider-error' : 'provider-loading',
+        message: state.message ?? 'Surface provider is not ready.',
+        providerRevision: state.revision,
+        providerNodeId: definition.surfaceProviderNodeId,
+      }
+    }
+  }
+
+  const anchors = definition.anchors.map((anchor) => new THREE.Vector3(anchor.x, anchor.y, anchor.z))
+  const points: THREE.Vector3[] = []
+  const normals: THREE.Vector3[] = []
+  for (let segmentIndex = 0; segmentIndex + 1 < anchors.length; segmentIndex += 1) {
+    const start = anchors[segmentIndex]!
+    const end = anchors[segmentIndex + 1]!
+    const planarLength = Math.hypot(end.x - start.x, end.z - start.z)
+    const steps = Math.max(1, Math.ceil(planarLength / 2))
+    for (let step = segmentIndex === 0 ? 0 : 1; step <= steps; step += 1) {
+      const alpha = step / steps
+      const point = new THREE.Vector3().lerpVectors(start, end, alpha)
+      let normal = UP.clone()
+      if (definition.surfaceProviderNodeId && !definition.preserveAuthoredY) {
+        const direction = normalizeXZDirection(end.x - start.x, end.z - start.z)
+        const surface = sampleProceduralLandscapeGuideRouteSurface(
+          definition.surfaceProviderNodeId,
+          point.x,
+          point.z,
+          Math.atan2(-direction.z, direction.x),
+        )
+        if (!surface) {
+          return {
+            ok: false,
+            status: 'surface-gap',
+            message: `Path leg ${definition.id} has no surface at ${point.x.toFixed(2)}, ${point.z.toFixed(2)}.`,
+            providerRevision: 0,
+            providerNodeId: definition.surfaceProviderNodeId,
+          }
+        }
+        point.copy(surface.point)
+        normal = surface.normal
+      }
+      appendUniquePoint(points, normals, point, normal)
+    }
+  }
+  const cumulativeLengths = buildCumulativeLengths(points)
+  const totalLength = cumulativeLengths[cumulativeLengths.length - 1] ?? 0
+  const metricData = buildPolylineMetricData(points, { closed: false, mode: '3d' })
+  if (!metricData || totalLength <= 1e-6) {
+    return {
+      ok: false,
+      status: 'invalid-leg',
+      message: `Path leg ${definition.id} has a degenerate path.`,
+      providerRevision: 0,
+      providerNodeId: definition.surfaceProviderNodeId,
+    }
+  }
+  return {
+    ok: true,
+    providerRevision: 0,
+    providerNodeId: definition.surfaceProviderNodeId,
+    warnings: [],
+    leg: {
+      definition,
+      points,
+      normals,
+      cumulativeLengths,
+      metricData,
+      totalLength,
+      routeStartDistance: 0,
+      routeEndDistance: totalLength,
+      travelMode: definition.travelMode,
+      speedProfile: definition.speedProfile,
+    },
+  }
+}
+
+function buildCacheKey(
+  routeNode: SceneNode,
+  props: GuideRouteComponentProps,
+  providerMatrix: THREE.Matrix4 | null,
+  routeMatrix: THREE.Matrix4 | null,
+  providerSourceSignature: string,
+): string {
+  const matrix = (value: THREE.Matrix4 | null) => value
+    ? Array.from(value.elements, (entry) => Number(entry.toFixed(5))).join(',')
+    : ''
+  return JSON.stringify([
+    routeNode.id,
+    matrix(providerMatrix),
+    matrix(routeMatrix),
+    providerSourceSignature,
+    props,
+  ])
 }
 
 function cacheEvaluation(key: string, evaluation: EvaluatedGuideRoute): EvaluatedGuideRoute {
@@ -297,167 +463,202 @@ function cacheEvaluation(key: string, evaluation: EvaluatedGuideRoute): Evaluate
   return evaluation
 }
 
+function findLegContainingDistance(
+  legs: readonly CompiledGuideLeg[],
+  distance: number,
+): CompiledGuideLeg | null {
+  for (const leg of legs) {
+    if (distance >= leg.routeStartDistance - 1e-6 && distance <= leg.routeEndDistance + 1e-6) {
+      return leg
+    }
+  }
+  return legs[legs.length - 1] ?? null
+}
+
 export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedGuideRoute {
   const { routeNode, providerObject, routeObject } = params
   const rawProps = routeNode.components?.guideRoute?.props as
     | Partial<GuideRouteComponentProps>
     | null
     | undefined
-  if (rawProps?.version !== 2) {
+  if (rawProps?.version !== 3) {
     return emptyEvaluation(
       routeNode,
       'unsupported',
-      'Guide Route data is not V2 and is not supported.',
+      'Guide Route data is not V3. Recreate this route.',
     )
   }
   const props = clampGuideRouteComponentProps(rawProps)
-  const providerNodeId = props.surfaceProviderNodeId
-  if (!providerNodeId) {
-    return emptyEvaluation(
-      routeNode,
-      'unsupported',
-      'This Guide Route is not bound to a surface provider. Recreate the route.',
-    )
+  if (!props.legs.length) {
+    return emptyEvaluation(routeNode, 'empty-route', 'Guide Route needs at least one leg.')
   }
-  const surfaceState = getProceduralLandscapeGuideRouteSurfaceState(providerNodeId)
-  if (!surfaceState) {
-    return emptyEvaluation(
-      routeNode,
-      'provider-missing',
-      `Surface provider ${providerNodeId} is missing.`,
-      providerNodeId,
-    )
+
+  const providerObjects = new Map<string, THREE.Object3D>()
+  const routeProviderId = props.legs.find((leg): leg is GuideRoadRouteLeg => leg.kind === 'road')?.providerNodeId
+  if (providerObject && routeProviderId) {
+    providerObjects.set(routeProviderId, providerObject)
   }
-  if (surfaceState.status !== 'ready') {
-    return emptyEvaluation(
-      routeNode,
-      surfaceState.status === 'error' ? 'provider-error' : 'provider-loading',
-      surfaceState.message ?? 'Surface provider is not ready.',
-      providerNodeId,
-      surfaceState.revision,
-    )
-  }
+
+  const providerMatrix = providerObject?.matrixWorld ?? null
   routeObject?.updateMatrixWorld(true)
-
-  const rawControls = resolveControlPoints(props, providerObject)
-  if (rawControls.length < 2) {
-    return emptyEvaluation(
-      routeNode,
-      'too-few-points',
-      'Guide Route needs at least two control points.',
-      providerNodeId,
-      surfaceState.revision,
-    )
-  }
-
-  const buildCandidateEvaluation = (
-    sourceControls: readonly THREE.Vector3[],
-    waypointPositions: readonly THREE.Vector3[],
-    candidateKey: string,
-  ): EvaluatedGuideRoute => {
-    const cacheKey = `${surfaceState.revision}|${hashRouteParameters(
-      routeNode.id,
-      props,
-      providerObject?.matrixWorld ?? null,
-      routeObject?.matrixWorld ?? null,
-      candidateKey,
-    )}`
-    const cached = routeEvaluationCache.get(cacheKey)
-    if (cached) {
-      return cached
+  const providerSourceSignature = JSON.stringify(props.legs.map((leg) => {
+    if (leg.kind === 'road') {
+      return [
+        leg.providerNodeId,
+        getProceduralLandscapeGuideRouteSurfaceState(leg.providerNodeId)?.revision ?? 0,
+        getProceduralLandscapeRoadCenterlineLocal(leg.providerNodeId)?.pointsXZ ?? [],
+      ]
     }
-
-    const controls = densifyWorldControls([...sourceControls], props.sampleSpacingM)
-    const points: THREE.Vector3[] = []
-    const normals: THREE.Vector3[] = []
-    for (let index = 0; index < controls.length; index += 1) {
-      const control = controls[index]!
-      const previous = controls[Math.max(0, index - 1)]!
-      const next = controls[Math.min(controls.length - 1, index + 1)]!
-      const direction = normalizeXZDirection(next.x - previous.x, next.z - previous.z)
-      const facingYaw = Math.atan2(-direction.z, direction.x)
-      const sample = sampleProceduralLandscapeGuideRouteSurface(
-        providerNodeId,
-        control.x,
-        control.z,
-        facingYaw,
-      )
-      if (!sample) {
-        return cacheEvaluation(cacheKey, emptyEvaluation(
-          routeNode,
-          'surface-gap',
-          `Guide Route has no surface at ${control.x.toFixed(2)}, ${control.z.toFixed(2)}.`,
-          providerNodeId,
-          surfaceState.revision,
-        ))
-      }
-      points.push(sample.point)
-      normals.push(sample.normal)
-    }
-
-    const cumulativeLengths = buildCumulativeLengths(points)
-    const waypointMetricData = buildPolylineMetricData(points, {
-      closed: false,
-      mode: '3d',
-    })
-    const waypointArcLengths = waypointPositions.map((waypoint) => (
-      waypointMetricData
-        ? projectPointToPolyline(points, waypointMetricData, waypoint).s
-        : 0
-    ))
-    return cacheEvaluation(cacheKey, {
-      status: 'ready',
-      message: null,
-      routeNodeId: routeNode.id,
-      providerNodeId,
-      revision: surfaceState.revision,
-      points,
-      normals,
-      dock: markDockPoints(
-        points,
-        sourceControls,
-        props.waypoints.map((entry) => entry.dock === true),
-      ),
-      waypointArcLengths,
-      cumulativeLengths,
-      totalLength: cumulativeLengths[cumulativeLengths.length - 1] ?? 0,
-    })
-  }
-
-  const authoredWaypointPositions = props.waypoints.map((entry) => new THREE.Vector3(
-    entry.position.x,
-    entry.position.y,
-    entry.position.z,
-  ))
-  const authoredEvaluation = buildCandidateEvaluation(
-    rawControls,
-    authoredWaypointPositions,
-    'authored',
-  )
-  if (authoredEvaluation.status === 'ready' || props.routeSource !== 'drawn') {
-    return authoredEvaluation
-  }
-  const rebasedControls = rebaseStaleControlsToRouteNode(
-    rawControls,
+    return [
+      leg.surfaceProviderNodeId,
+      leg.surfaceProviderNodeId
+        ? getProceduralLandscapeGuideRouteSurfaceState(leg.surfaceProviderNodeId)?.revision ?? 0
+        : 0,
+    ]
+  }))
+  const cacheKey = buildCacheKey(
     routeNode,
-    routeObject,
-    surfaceState.bounds,
+    props,
+    providerMatrix,
+    routeObject?.matrixWorld ?? null,
+    providerSourceSignature,
   )
-  if (!rebasedControls.length) {
-    return authoredEvaluation
+  const cached = routeEvaluationCache.get(cacheKey)
+  if (cached) {
+    return cached
   }
-  const rebasedEvaluation = buildCandidateEvaluation(
-    rebasedControls,
-    rebasedControls,
-    'rebased',
-  )
-  return rebasedEvaluation.status === 'ready' ? rebasedEvaluation : authoredEvaluation
+
+  const compiledLegs: CompiledGuideLeg[] = []
+  let providerRevision = 0
+  let providerNodeId: string | null = null
+  const warnings: string[] = []
+  let routeDistance = 0
+  const points: THREE.Vector3[] = []
+  const normals: THREE.Vector3[] = []
+
+  for (const leg of props.legs) {
+    const result = leg.kind === 'road'
+      ? compileRoadLeg(leg, providerObjects)
+      : compilePathLeg(leg)
+    if (!result.ok) {
+      return cacheEvaluation(cacheKey, emptyEvaluation(
+        routeNode,
+        result.status,
+        result.message,
+        result.providerNodeId,
+        Math.max(providerRevision, result.providerRevision),
+      ))
+    }
+    providerRevision = Math.max(providerRevision, result.providerRevision)
+    providerNodeId ??= result.providerNodeId
+    warnings.push(...result.warnings)
+    const compiled = result.leg
+    compiled.routeStartDistance = routeDistance
+    for (let index = 0; index < compiled.points.length; index += 1) {
+      appendUniquePoint(points, normals, compiled.points[index]!, compiled.normals[index]!)
+    }
+    routeDistance += compiled.totalLength
+    compiled.routeEndDistance = routeDistance
+    compiledLegs.push(compiled)
+  }
+
+  if (points.length < 2) {
+    return cacheEvaluation(cacheKey, emptyEvaluation(
+      routeNode,
+      'invalid-leg',
+      'Guide Route has no usable path.',
+      providerNodeId,
+      providerRevision,
+    ))
+  }
+  const cumulativeLengths = buildCumulativeLengths(points)
+  const totalLength = cumulativeLengths[cumulativeLengths.length - 1] ?? 0
+  const stops: CompiledGuideStop[] = []
+  for (const stop of props.stops) {
+    const leg = compiledLegs.find((entry) => entry.definition.id === stop.legId)
+    if (!leg || leg.points.length < 2) {
+      continue
+    }
+    const projectionMetric = buildPolylineMetricData(leg.points, {
+      closed: false,
+      mode: 'xz',
+    })
+    if (!projectionMetric) {
+      continue
+    }
+    const projection = projectPointToPolyline(
+      leg.points,
+      projectionMetric,
+      new THREE.Vector3(stop.anchor.x, stop.anchor.y, stop.anchor.z),
+      new THREE.Vector3(),
+    )
+    const projectionDistance = Math.sqrt(Math.max(0, projection.distanceSq))
+    const segmentStart = leg.cumulativeLengths[projection.segmentIndex] ?? 0
+    const segmentEnd = leg.cumulativeLengths[projection.segmentIndex + 1] ?? segmentStart
+    const clampedLegS = Math.max(
+      0,
+      Math.min(leg.totalLength, segmentStart + (segmentEnd - segmentStart) * projection.t),
+    )
+    stops.push({
+      definition: stop,
+      legId: leg.definition.id,
+      legDistance: clampedLegS,
+      routeDistance: leg.routeStartDistance + clampedLegS,
+      projectedPoint: projection.closestPoint.clone(),
+      projectionDistance,
+      behavior: stop.behavior,
+    })
+    if (projectionDistance > 1000) {
+      warnings.push(`Stop ${stop.name} is ${projectionDistance.toFixed(0)}m from its assigned leg.`)
+    }
+  }
+  stops.sort((a, b) => (
+    a.routeDistance - b.routeDistance
+    || props.stops.findIndex((entry) => entry.id === a.definition.id)
+      - props.stops.findIndex((entry) => entry.id === b.definition.id)
+  ))
+  const transitions: CompiledGuideTransition[] = []
+  for (const transition of props.transitions) {
+    const leg = compiledLegs.find((entry) => entry.definition.id === transition.afterLegId)
+    if (!leg) {
+      continue
+    }
+    transitions.push({
+      definition: transition,
+      afterLegId: transition.afterLegId,
+      routeDistance: leg.routeEndDistance,
+      behavior: transition.behavior,
+    })
+  }
+  transitions.sort((a, b) => a.routeDistance - b.routeDistance)
+
+  const evaluation: EvaluatedGuideRoute = {
+    status: 'ready',
+    message: null,
+    routeNodeId: routeNode.id,
+    providerNodeId,
+    revision: providerRevision,
+    loop: props.loop,
+    points,
+    normals,
+    cumulativeLengths,
+    totalLength,
+    legs: compiledLegs,
+    stops,
+    transitions,
+    warnings,
+  }
+  return cacheEvaluation(cacheKey, evaluation)
 }
 
 export function sampleEvaluatedGuideRouteAtDistance(
   route: EvaluatedGuideRoute,
   distanceM: number,
-): { point: THREE.Vector3; normal: THREE.Vector3 } | null {
+): {
+  point: THREE.Vector3
+  normal: THREE.Vector3
+  leg: CompiledGuideLeg | null
+} | null {
   if (route.status !== 'ready' || route.points.length === 0) {
     return null
   }
@@ -480,7 +681,18 @@ export function sampleEvaluatedGuideRouteAtDistance(
   const alpha = span > 1e-8 ? (target - startLength) / span : 0
   const point = route.points[startIndex]!.clone().lerp(route.points[endIndex]!, alpha)
   const normal = route.normals[startIndex]!.clone().lerp(route.normals[endIndex]!, alpha).normalize()
-  return { point, normal }
+  return {
+    point,
+    normal,
+    leg: findLegContainingDistance(route.legs, target),
+  }
+}
+
+export function resolveCompiledGuideLegAtDistance(
+  route: EvaluatedGuideRoute,
+  distanceM: number,
+): CompiledGuideLeg | null {
+  return findLegContainingDistance(route.legs, Math.max(0, Math.min(route.totalLength, distanceM)))
 }
 
 export function clearGuideRouteEvaluationCache(): void {

@@ -95,6 +95,8 @@ class ProbeGroundedWorld extends PhysicsWorldBase<
 
   protected wakeVehicleBody(): void {}
 
+  protected holdVehicleAtRest(_state: TestVehicleState, _transform: PhysicsTransform): void {}
+
   protected readBodyTransform(body: TestBody): PhysicsTransform {
     return {
       position: body.position,
