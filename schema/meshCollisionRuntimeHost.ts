@@ -66,8 +66,15 @@ export const MESH_COLLISION_INDEX_TRIANGLES_PER_TICK = 200000
 const MESH_COLLISION_MESH_SERIAL_KEY = '__meshCollisionSerial'
 /** `userData` key (BufferGeometry): lazily assigned stable serial per geometry. */
 const MESH_COLLISION_GEOMETRY_SERIAL_KEY = '__meshCollisionGeometrySerial'
-const MESH_COLLISION_GROUND_PATCH_CELLS = 8
-const MESH_COLLISION_GROUND_PATCH_UPDATE_DISTANCE_CELLS = 2
+/**
+ * The sampled patch must remain a local support surface. Reusing the DEM
+ * grid's coarse cell size produced 160m patches whose triangles could bridge
+ * above a narrow road. Two-metre vertices keep the fallback visually and
+ * physically aligned while the 8m overlap window prevents replacement gaps.
+ */
+const MESH_COLLISION_GROUND_PATCH_CELL_SIZE_METERS = 2
+const MESH_COLLISION_GROUND_PATCH_CELLS = 16
+const MESH_COLLISION_GROUND_PATCH_UPDATE_DISTANCE_CELLS = 4
 
 export type MeshCollisionChunkShape = StaticMeshCollisionShapeDefinition
 
@@ -877,7 +884,10 @@ function createGroundPatchInstance(
   reference: THREE.Vector3,
   sampler: ProceduralLandscapeDemCollisionSampler,
 ): MeshCollisionGroundPatch | null {
-  const cellSize = Math.max(1, sampler.cellSize)
+  const cellSize = Math.max(
+    1,
+    Math.min(MESH_COLLISION_GROUND_PATCH_CELL_SIZE_METERS, sampler.cellSize),
+  )
   const halfCells = Math.max(2, Math.floor(MESH_COLLISION_GROUND_PATCH_CELLS / 2))
   const cellsPerSide = halfCells * 2
   const verticesPerSide = cellsPerSide + 1
@@ -971,7 +981,8 @@ function syncGroundAnchorPatches(
 
   const updateDistance = Math.max(
     1,
-    sampler.cellSize * MESH_COLLISION_GROUND_PATCH_UPDATE_DISTANCE_CELLS,
+    Math.min(MESH_COLLISION_GROUND_PATCH_CELL_SIZE_METERS, sampler.cellSize)
+      * MESH_COLLISION_GROUND_PATCH_UPDATE_DISTANCE_CELLS,
   )
   for (let index = 0; index < references.length; index += 1) {
     const reference = references[index]

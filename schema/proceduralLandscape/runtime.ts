@@ -21,6 +21,7 @@ import {
   createTerrainDemRuntimeOrthoTexture,
   loadTerrainDemRuntimeGrid,
   loadTerrainDemRuntimeOrtho,
+  sampleVisibleDemSurfaceHeightAt,
   type DemTerrainMeshBuilder,
 } from './demTerrain'
 import type { TerrainDemRuntimeGridData } from '../terrainDemRuntimeGrid'
@@ -1749,7 +1750,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     mesh.name = `slowroads-dem-terrain-${hooks.nodeId}`
     markProceduralLandscapeDemTerrain(mesh, {
       cellSize: Math.max(1, (demGridData?.cellSizeX ?? 1) * demGridSampleStep),
-      sampleHeightAt: (worldX, worldZ) => grid?.sampleHeight(worldX, worldZ) ?? null,
+      sampleHeightAt: (worldX, worldZ) => (
+        sampleVisibleDemSurfaceHeightAt(grid, demRoadbedTarget, worldX, worldZ)
+      ),
     })
     hostObject.add(mesh)
     demMesh = mesh

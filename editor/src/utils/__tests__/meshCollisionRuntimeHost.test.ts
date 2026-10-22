@@ -710,6 +710,54 @@ describe('mesh collision runtime host incremental re-index', () => {
     expect(harness.removed).toContain(firstPatches[0])
   })
 
+  it('builds a fine visible-surface fallback under an active DEM chunk', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(
+      new THREE.PlaneGeometry(200, 200, 20, 20)
+        .rotateX(-Math.PI / 2)
+        .translate(0, 40, 0),
+      new THREE.MeshBasicMaterial(),
+    )
+    const visibleSurfaceHeightAt = (x: number, z: number): number => 5 + x * 0.01 + z * 0.02
+    markProceduralLandscapeDemTerrain(terrain, {
+      cellSize: 10,
+      sampleHeightAt: visibleSurfaceHeightAt,
+    })
+    host.add(terrain)
+    const harness = createHarness()
+
+    const snapshot = drain(
+      harness,
+      host,
+      'visible-surface-node',
+      [new THREE.Vector3(0, 0, 0)],
+    )
+    expect(snapshot.referenceGroundCoverage[0]?.chunkKey).toBe('ground-patch:0')
+    const patch = harness.created.find((record) => (
+      typeof (record.body as { name?: unknown }).name === 'string'
+      && (record.body as { name: string }).name.includes(':ground-patch:')
+    ))
+    expect(patch).toBeDefined()
+    const { vertices } = patch!.shape
+    const uniqueX = new Set<number>()
+    const uniqueZ = new Set<number>()
+    for (let index = 0; index < vertices.length; index += 3) {
+      const x = vertices[index]!
+      const y = vertices[index + 1]!
+      const z = vertices[index + 2]!
+      expect(y).toBeCloseTo(visibleSurfaceHeightAt(x, z), 5)
+      expect(y).toBeLessThan(20)
+      uniqueX.add(x)
+      uniqueZ.add(z)
+    }
+    expect(uniqueX.size).toBe(17)
+    expect(uniqueZ.size).toBe(17)
+    expect(Math.min(...uniqueX)).toBeCloseTo(-16, 5)
+    expect(Math.max(...uniqueX)).toBeCloseTo(16, 5)
+    expect(Math.min(...uniqueZ)).toBeCloseTo(-16, 5)
+    expect(Math.max(...uniqueZ)).toBeCloseTo(16, 5)
+  })
+
   it('warns once when every DEM ground chunk is outside the activation radius', () => {
     const host = new THREE.Group()
     const terrain = new THREE.Mesh(

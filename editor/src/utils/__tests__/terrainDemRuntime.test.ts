@@ -11,9 +11,15 @@ import {
   createDemTerrainHeightGrid,
   createDemTerrainMeshBuilder,
   createTerrainDemRuntimeOrthoTexture,
+  sampleVisibleDemSurfaceHeightAt,
 } from '@schema/proceduralLandscape/demTerrain'
-import { createDemRoadbedGeometry } from '@schema/proceduralLandscape/demRoadbed'
+import {
+  createDemRoadbedGeometry,
+  createDemRoadbedTarget,
+} from '@schema/proceduralLandscape/demRoadbed'
+import { buildRoadProximityIndex } from '@schema/proceduralLandscape/roadProximity'
 import { densifyRoadRows } from '@schema/proceduralLandscape/roadBandRows'
+import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
 import * as THREE from 'three'
 import {
   clampProceduralLandscapeProps,
@@ -253,6 +259,57 @@ describe('endpoint road planner', () => {
 })
 
 describe('DEM roadbed', () => {
+  it('samples the visible roadbed for collision and falls back to DEM off-road', () => {
+    const grid = createDemTerrainHeightGrid(makeGrid())
+    const nodes: RoadTraceNode[] = [
+      {
+        x: -30,
+        y: 10,
+        z: 0,
+        heading: 0,
+        index: 0,
+        lateral: 0,
+        longitudinal: 0,
+        turn: 0,
+        headingDelta: 0,
+      },
+      {
+        x: 30,
+        y: 10,
+        z: 0,
+        heading: 0,
+        index: 1,
+        lateral: 0,
+        longitudinal: 0,
+        turn: 0,
+        headingDelta: 0,
+      },
+    ]
+    const roadField = buildRoadProximityIndex(nodes, { maxDistance: 60 })
+    expect(roadField).not.toBeNull()
+    const roadbed = createDemRoadbedTarget({
+      roadField: roadField!,
+      rawHeightAt: (_x, z) => 20 + z * 0.6,
+      halfWidth: 3.5,
+      shoulderWidth: 2.5,
+      demCellSize: 20,
+      sideWidth: 8,
+      coverageWidth: 2,
+    })
+
+    // The raw terrain rises across the corridor, while the road design stays flat.
+    expect(roadbed.rawHeightAt(0, 0)).toBeCloseTo(20, 5)
+    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)).toBeCloseTo(9.95, 5)
+    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 5.5)).toBeCloseTo(9.95, 5)
+    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)!).toBeLessThanOrEqual(10)
+
+    // Outside the generated roadbed, collision continues to follow the visible DEM.
+    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 20)).toBeCloseTo(
+      grid.sampleHeight(0, 20)!,
+      5,
+    )
+  })
+
   it('keeps the carriageway flat and meets the raw terrain at the outer edge', () => {
     const rows = densifyRoadRows([
       { x: 0, z: 0, y: 100, heading: 0, index: 0, lateral: 0, longitudinal: 0, turn: 0, headingDelta: 0 },

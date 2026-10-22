@@ -16,6 +16,33 @@ const demGridLoads = new Map<string, Promise<TerrainDemRuntimeGridData>>()
 const demOrthoLoads = new Map<string, Promise<TerrainDemRuntimeOrthoData>>()
 const demCoverageCache = new WeakMap<TerrainDemRuntimeGridData, Uint8Array>()
 
+/**
+ * Samples the DEM surface that is visible and physically walkable at a world
+ * position. Generated roadbeds replace the raw terrain inside their footprint;
+ * outside it the decimated DEM grid is already the visible triangle surface.
+ *
+ * Ground Anchor collision patches must use this sampler rather than the raw
+ * nearest DEM cell. In a cut section the raw surface can sit metres above the
+ * rendered road and would lift the vehicle onto an invisible slab.
+ */
+export function sampleVisibleDemSurfaceHeightAt(
+  grid: TerrainHeightGrid | null | undefined,
+  roadbed: DemRoadbedTarget | null | undefined,
+  worldX: number,
+  worldZ: number,
+): number | null {
+  if (!Number.isFinite(worldX) || !Number.isFinite(worldZ)) {
+    return null
+  }
+  if (
+    roadbed
+    && roadbed.distanceAt(worldX, worldZ) <= roadbed.meshHalfWidth
+  ) {
+    return roadbed.heightAt(worldX, worldZ)
+  }
+  return grid?.sampleHeight(worldX, worldZ) ?? null
+}
+
 export function loadTerrainDemRuntimeGrid(
   url: string,
   onProgress?: (value: number) => void,
