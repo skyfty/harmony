@@ -426,6 +426,7 @@ import type { GuideRouteTourTargetOptions } from '@schema/guideRouteTourTarget'
 import {
 	ensureSceneActorAutoTourComponents,
 	findFirstSceneActorNode,
+	resolveAutoTourActorNodeId,
 	transferSceneActorAutoTourComponent,
 } from '@schema/sceneActorAutoTour'
 import {
@@ -2120,23 +2121,27 @@ const vehicleDrivePrompt = computed(() => {
 	activeCharacterAutoTourNodeIds.size
 	autoTourPaused.value
 	const event = pendingVehicleDriveEvent.value
-	if (!event) {
+	const eventTargetNodeId = event?.targetNodeId ?? event?.nodeId ?? null
+	const targetNodeId = eventTargetNodeId ?? guideWaypointMenuActorNodeId.value
+	const node = targetNodeId ? resolveNodeById(targetNodeId) : null
+	if (!node) {
 		return {
 			visible: false,
 			label: '',
 			busy: false,
+			targetNodeId: null,
+			sourceEvent: null,
 			showDrive: false,
 			showAutoTour: false,
 			showStopTour: false,
 			showPauseTour: false,
+			showClose: false,
 			pauseTourLabel: '暂停巡游',
 			pauseTourIcon: 'mdi-pause-circle',
 		}
 	}
-	const targetNodeId = event.targetNodeId ?? event.nodeId
-	const node = targetNodeId ? resolveNodeById(targetNodeId) : null
 	const label = node?.name?.trim() || targetNodeId || 'Vehicle'
-	const canDrive = Boolean(resolveVehicleComponent(node))
+	const canDrive = Boolean(event && resolveVehicleComponent(node))
 	const canAutoTour = Boolean(resolveAutoTourComponent(node))
 	const isTouring = Boolean(
 		targetNodeId
@@ -2145,17 +2150,19 @@ const vehicleDrivePrompt = computed(() => {
 			|| activeCharacterAutoTourNodeIds.has(targetNodeId)
 		),
 	)
-	const hasAnyAction = isTouring || canDrive || canAutoTour
 	const pauseTourLabel = autoTourPaused.value ? '继续巡游' : '暂停巡游'
 	const pauseTourIcon = autoTourPaused.value ? 'mdi-play-circle' : 'mdi-pause-circle'
 	return {
-		visible: hasAnyAction,
+		visible: isTouring || canDrive || canAutoTour,
 		label,
 		busy: vehicleDrivePromptBusy.value,
+		targetNodeId,
+		sourceEvent: event,
 		showDrive: canDrive && !isTouring,
 		showAutoTour: canAutoTour && !isTouring,
 		showStopTour: isTouring,
 		showPauseTour: isTouring,
+		showClose: Boolean(event) && !isTouring,
 		pauseTourLabel,
 		pauseTourIcon,
 	}
@@ -3252,6 +3259,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
 	disposeSignboardBillboards(scene)
 	clearSteerBindingIndex()
 	rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap)
+	guideWaypointMenuContextRevision.value += 1
 	signboardNodeIds.clear()
 	punchNodeIds.clear()
 	resetPunchOverlaySmoothing()
@@ -4458,23 +4466,18 @@ function resolveAutoTourComponent(
 }
 
 function resolveCurrentGuideWaypointActorNodeId(): string | null {
-	if (vehicleDriveState.active && vehicleDriveState.nodeId) {
-		return vehicleDriveState.nodeId
-	}
-	if (autoTourFollowNodeId.value) {
-		return autoTourFollowNodeId.value
-	}
-	const activeCharacterNodeId = activeCharacterAutoTourNodeIds.values().next().value as string | undefined
-	if (activeCharacterNodeId) {
-		return activeCharacterNodeId
-	}
-	const pendingNodeId = pendingVehicleDriveEvent.value?.targetNodeId
-		?? pendingVehicleDriveEvent.value?.nodeId
-		?? null
-	if (pendingNodeId) {
-		return pendingNodeId
-	}
-	return resolveDefaultControlledCharacterNodeId()
+	const pendingEvent = pendingVehicleDriveEvent.value
+	return resolveAutoTourActorNodeId(previewNodeMap.values(), {
+		preferredNodeIds: [
+			autoTourFollowNodeId.value,
+			activeAutoTourNodeIds.values().next().value ?? null,
+			activeCharacterAutoTourNodeIds.values().next().value ?? null,
+			vehicleDriveState.active ? vehicleDriveState.nodeId : null,
+			pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null,
+			resolveDefaultControlledCharacterNodeId(),
+		],
+		hasRuntimeObject: (nodeId) => nodeObjectMap.has(nodeId),
+	})
 }
 
 let guideWaypointMenuRefreshRevision = 0
@@ -11289,7 +11292,7 @@ async function startAutoTourForActor(
 		autoTourRuntime.seedTourPlaybackState(targetNodeId, snap)
 
 		// Behavior script tokens should not hang: auto-tour starts immediately.
-		if (event.token) {
+		if (event?.token) {
 			resolveBehaviorToken(event.token, { type: 'continue' })
 			pendingVehicleDriveEvent.value = { ...event, token: '' }
 		}
@@ -11300,8 +11303,7 @@ async function startAutoTourForActor(
 }
 
 async function handleVehicleAutoTourStartClick(): Promise<void> {
-	const event = pendingVehicleDriveEvent.value
-	const targetNodeId = event?.targetNodeId ?? event?.nodeId ?? null
+	const targetNodeId = vehicleDrivePrompt.value.targetNodeId
 	if (!targetNodeId) {
 		return
 	}
@@ -11319,11 +11321,10 @@ async function handleGuideWaypointAutoTourStart(waypointIndex: number): Promise<
 }
 
 function handleVehicleAutoTourPauseToggleClick(): void {
-	const event = pendingVehicleDriveEvent.value
-	if (!event || vehicleDrivePromptBusy.value) {
+	if (vehicleDrivePromptBusy.value) {
 		return
 	}
-	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
+	const targetNodeId = vehicleDrivePrompt.value.targetNodeId
 	if (!targetNodeId) {
 		return
 	}
@@ -11358,10 +11359,11 @@ function handleVehicleAutoTourPauseToggleClick(): void {
 }
 
 function handleVehicleAutoTourStopClick(): void {
-	const event = pendingVehicleDriveEvent.value
-	if (!event || vehicleDrivePromptBusy.value) {
+	if (vehicleDrivePromptBusy.value) {
 		return
 	}
+	const prompt = vehicleDrivePrompt.value
+	const event = prompt.sourceEvent
 	const currentTourNodeId = resolveAutoTourFollowNodeId(
 		autoTourFollowNodeId.value,
 		cameraViewState.watchTargetId,
@@ -11369,7 +11371,7 @@ function handleVehicleAutoTourStopClick(): void {
 		previewNodeMap.keys(),
 		autoTourRuntime,
 	)
-	const promptNodeId = event.targetNodeId ?? event.nodeId ?? null
+	const promptNodeId = prompt.targetNodeId
 	const characterTourNodeId = (
 		promptNodeId
 		&& activeCharacterAutoTourNodeIds.has(promptNodeId)
@@ -11387,7 +11389,7 @@ function handleVehicleAutoTourStopClick(): void {
 		if (characterCameraMode.value !== 'follow') {
 			characterCameraMode.value = 'follow'
 		}
-		if (event.token) {
+		if (event?.token) {
 			resolveBehaviorToken(event.token, { type: 'continue' })
 			pendingVehicleDriveEvent.value = { ...event, token: '' }
 		}
@@ -17412,7 +17414,7 @@ watch(watchExclusiveUiActive, (active) => {
 				{{ vehicleDrivePrompt.pauseTourLabel }} {{ vehicleDrivePrompt.label }}
 			</v-btn>
 			<v-btn
-				v-if="!vehicleDrivePrompt.showStopTour"
+				v-if="vehicleDrivePrompt.showClose"
 				color="" 
 				variant="flat"
 				size="large"

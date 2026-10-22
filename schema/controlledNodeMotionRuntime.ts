@@ -55,6 +55,7 @@ const DEFAULT_LINEAR_EMA_TAU_SECONDS = 0.18
 const DEFAULT_ANGULAR_EMA_TAU_SECONDS = 0.14
 const TELEPORT_RESET_DISTANCE_METERS = 50
 const MIN_SAMPLE_INTERVAL_SECONDS = 1 / 120
+const DEFAULT_OBJECT_POSITION_ALIGNMENT_METERS = 4
 
 const controlledNodeMotionPositionScratch = new THREE.Vector3()
 const controlledNodeMotionQuaternionScratch = new THREE.Quaternion()
@@ -66,6 +67,28 @@ const controlledNodeMotionAngularVelocityScratch = new THREE.Vector3()
 
 function clampFinite(value: number, fallback = 0): number {
   return Number.isFinite(value) ? value : fallback
+}
+
+/**
+ * Prevents follow cameras from consuming telemetry from before a teleport.
+ * Motion and rendered objects normally differ by well under this threshold,
+ * while route snapping can move an actor across the scene in one frame.
+ */
+export function isControlledNodeMotionPositionAligned(
+  telemetryPosition: ControlledNodeMotionVectorLike,
+  objectPosition: ControlledNodeMotionVectorLike,
+  maxDistanceMeters = DEFAULT_OBJECT_POSITION_ALIGNMENT_METERS,
+): boolean {
+  const dx = telemetryPosition.x - objectPosition.x
+  const dy = telemetryPosition.y - objectPosition.y
+  const dz = telemetryPosition.z - objectPosition.z
+  const maxDistance = Number.isFinite(maxDistanceMeters) && maxDistanceMeters > 0
+    ? maxDistanceMeters
+    : DEFAULT_OBJECT_POSITION_ALIGNMENT_METERS
+  if (!Number.isFinite(dx) || !Number.isFinite(dy) || !Number.isFinite(dz)) {
+    return false
+  }
+  return dx * dx + dy * dy + dz * dz <= maxDistance * maxDistance
 }
 
 function getNowMs(): number {

@@ -169,12 +169,6 @@
         class="viewer-waypoint-menu"
         data-control-skip="guide-waypoints"
       >
-        <view
-          v-if="guideWaypointMenuOpen"
-          class="viewer-waypoint-menu__dismiss"
-          data-control-skip="guide-waypoints"
-          @tap="closeGuideWaypointMenu"
-        ></view>
         <button
           type="button"
           class="viewer-waypoint-menu__trigger"
@@ -186,77 +180,85 @@
           data-control-skip="guide-waypoints"
           @tap.stop.prevent="toggleGuideWaypointMenu"
         >
-          <text class="viewer-waypoint-menu__trigger-icon">景</text>
-          <text class="viewer-waypoint-menu__trigger-label">景点导航</text>
-        </button>
-        <view
-          v-if="guideWaypointMenuOpen"
-          id="viewer-waypoint-menu-panel"
-          class="viewer-waypoint-menu__panel"
-          role="dialog"
-          aria-label="选择景点导航目标"
-          data-control-skip="guide-waypoints"
-        >
-          <view class="viewer-waypoint-menu__head">
-            <view class="viewer-waypoint-menu__head-copy">
-              <text class="viewer-waypoint-menu__title">选择景点</text>
-              <text class="viewer-waypoint-menu__subtitle">前往已配置缩略图的导航点</text>
-            </view>
-            <button
-              type="button"
-              class="viewer-waypoint-menu__close"
-              hover-class="none"
-              aria-label="关闭景点导航列表"
-              data-control-skip="guide-waypoints"
-              @tap.stop.prevent="closeGuideWaypointMenu"
-            >
-              <text>×</text>
-            </button>
+          <view class="viewer-waypoint-menu__trigger-icon" aria-hidden="true">
+            <view class="viewer-waypoint-menu__pin-core"></view>
           </view>
+        </button>
+      </view>
+      <view
+        v-if="guideWaypointMenuOpen && guideWaypointMenuVisible && !watchExclusiveUiActive"
+        class="viewer-waypoint-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label="选择景点导航目标"
+        data-control-skip="guide-waypoints"
+      >
+        <view
+          class="viewer-waypoint-sheet__backdrop"
+          data-control-skip="guide-waypoints"
+          @tap="closeGuideWaypointMenu"
+          @touchmove.stop.prevent
+        ></view>
+        <view
+          id="viewer-waypoint-menu-panel"
+          class="viewer-waypoint-sheet__panel"
+          data-control-skip="guide-waypoints"
+          @tap.stop
+        >
+          <view class="viewer-waypoint-sheet__handle" aria-hidden="true"></view>
           <scroll-view
             scroll-y
-            class="viewer-waypoint-menu__list"
+            class="viewer-waypoint-sheet__list"
             :show-scrollbar="false"
             data-control-skip="guide-waypoints"
           >
-            <button
-              v-for="item in guideWaypointMenuItems"
-              :key="item.index"
-              type="button"
-              class="viewer-waypoint-menu__item"
-              :class="{ 'is-unavailable': item.error }"
-              :disabled="isGuideWaypointMenuItemDisabled(item)"
-              hover-class="none"
-              :aria-label="`${item.name}，${item.error || '点击前往'}`"
-              data-control-skip="guide-waypoints"
-              @tap.stop.prevent="handleGuideWaypointSelect(item)"
-            >
-              <view class="viewer-waypoint-menu__thumbnail">
-                <image
-                  v-if="item.imageUrl"
-                  class="viewer-waypoint-menu__thumbnail-image"
-                  :src="item.imageUrl"
-                  mode="aspectFill"
-                  @error="handleGuideWaypointImageError(item)"
-                />
-                <text v-else class="viewer-waypoint-menu__thumbnail-placeholder">
-                  {{ item.loading ? '…' : '!' }}
-                </text>
-              </view>
-              <view class="viewer-waypoint-menu__item-copy">
-                <text class="viewer-waypoint-menu__item-title">{{ item.name }}</text>
-                <text class="viewer-waypoint-menu__item-meta">
-                  {{ item.loading ? '正在加载缩略图' : item.error || '点击前往' }}
-                </text>
-              </view>
-              <text class="viewer-waypoint-menu__chevron">›</text>
-            </button>
-            <text
+            <view class="viewer-waypoint-sheet__grid">
+              <button
+                v-for="item in guideWaypointMenuItems"
+                :key="item.index"
+                type="button"
+                class="viewer-waypoint-sheet__card"
+                :class="{ 'is-unavailable': item.error, 'is-loading': item.loading }"
+                :disabled="isGuideWaypointMenuItemDisabled(item)"
+                hover-class="none"
+                :aria-label="`${item.name}，${item.error || '点击前往'}`"
+                data-control-skip="guide-waypoints"
+                @tap.stop.prevent="handleGuideWaypointSelect(item)"
+              >
+                <view class="viewer-waypoint-sheet__cover">
+                  <image
+                    v-if="item.imageUrl"
+                    class="viewer-waypoint-sheet__cover-image"
+                    :src="item.imageUrl"
+                    mode="aspectFill"
+                    @error="handleGuideWaypointImageError(item)"
+                  />
+                  <view
+                    v-else
+                    class="viewer-waypoint-sheet__cover-placeholder"
+                    :class="{ 'is-loading': item.loading }"
+                  >
+                    <view v-if="item.loading" class="viewer-waypoint-sheet__skeleton"></view>
+                    <text>{{ item.loading ? '加载中' : '图片不可用' }}</text>
+                  </view>
+                  <view v-if="item.imageUrl" class="viewer-waypoint-sheet__cover-action">
+                    <text>前往</text>
+                  </view>
+                </view>
+                <view class="viewer-waypoint-sheet__card-copy">
+                  <text class="viewer-waypoint-sheet__card-title">{{ item.name }}</text>
+                  <text class="viewer-waypoint-sheet__card-meta">
+                    {{ item.loading ? '正在加载缩略图' : item.error || '点击开始导航' }}
+                  </text>
+                </view>
+              </button>
+            </view>
+            <view
               v-if="guideWaypointMenuLoading && !guideWaypointMenuItems.some((item) => item.imageUrl)"
-              class="viewer-waypoint-menu__loading"
+              class="viewer-waypoint-sheet__loading"
             >
               正在准备缩略图…
-            </text>
+            </view>
           </scroll-view>
         </view>
       </view>
@@ -278,11 +280,14 @@
         :disabled="floatingAutoTourButton.disabled"
         type="button"
         hover-class="none"
-        aria-label="自动导览"
+        :aria-label="floatingAutoTourButton.label"
+        :aria-pressed="floatingAutoTourButton.active"
         @tap="handleFloatingAutoTourTap"
       >
-        <view class="viewer-auto-tour-trigger__content">
-          <text class="viewer-auto-tour-trigger__label">{{ floatingAutoTourButton.label }}</text>
+        <view class="viewer-auto-tour-trigger__icon viewer-auto-tour-route-icon" aria-hidden="true">
+          <view class="viewer-auto-tour-route-icon__dot viewer-auto-tour-route-icon__dot--start"></view>
+          <view class="viewer-auto-tour-route-icon__line"></view>
+          <view class="viewer-auto-tour-route-icon__dot viewer-auto-tour-route-icon__dot--end"></view>
         </view>
       </button>
       <button
@@ -300,8 +305,13 @@
         :aria-pressed="floatingAutoTourPauseButton.pressed"
         @tap="handleFloatingAutoTourPauseToggleTap"
       >
-        <view class="viewer-auto-tour-trigger__content">
-          <text class="viewer-auto-tour-trigger__label">{{ floatingAutoTourPauseButton.label }}</text>
+        <view
+          class="viewer-auto-tour-pause-icon"
+          :class="{ 'is-play': floatingAutoTourPauseButton.pressed }"
+          aria-hidden="true"
+        >
+          <view class="viewer-auto-tour-pause-icon__bar"></view>
+          <view class="viewer-auto-tour-pause-icon__bar"></view>
         </view>
       </button>
       <view v-if="punchBadgeOverlayEntries.length" class="viewer-punch-badge-layer" aria-hidden="true">
@@ -1082,6 +1092,10 @@ import {
 } from '@harmony/schema/components/definitions/guideRouteComponent';
 import type { GuideRouteTourTargetOptions } from '@harmony/schema/guideRouteTourTarget';
 import {
+  shouldApplyPhysicsBridgeFrameForPendingSnap,
+  type PendingPhysicsBridgeSnap,
+} from '@harmony/schema/physicsBridgeSnapGuard';
+import {
   autoTourComponentDefinition,
   AUTO_TOUR_COMPONENT_TYPE,
   type AutoTourComponentProps,
@@ -1089,6 +1103,7 @@ import {
 import {
   ensureSceneActorAutoTourComponents,
   findFirstSceneActorNode,
+  resolveAutoTourActorNodeId,
   resolveSceneActorKind,
   transferSceneActorAutoTourComponent,
 } from '@harmony/schema/sceneActorAutoTour';
@@ -1201,6 +1216,7 @@ import {
   createBridgeVehicleProxy,
   CharacterAutoTourRuntimeManager,
   createControlledNodeMotionRuntime,
+  isControlledNodeMotionPositionAligned,
   resolveVehicleOrObjectWorldPosition,
   stopTourAndUnfollow,
   syncAutoTourActiveNodesFromRuntime,
@@ -3175,6 +3191,8 @@ type ViewerRigidbodyInstance = RigidbodyInstance & {
   bridgeSyncDirty?: boolean;
 };
 const physicsBridgeFrameBodiesByNodeId = new Map<string, PhysicsBridgeBodyFrameState>();
+const pendingPhysicsBridgeSnapTargets = new Map<string, PendingPhysicsBridgeSnap>();
+const PHYSICS_BRIDGE_SNAP_GUARD_MS = 1500;
 type CharacterPhysicsBridgeVisualState = {
   initialized: boolean;
   targetPosition: THREE.Vector3;
@@ -7965,6 +7983,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
   disposeSignboardBillboards(renderContext?.scene ?? null);
   clearSteerBindingIndex();
   rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap);
+  guideWaypointMenuContextRevision.value += 1;
   // Scene capability flags: the frame loop skips whole subsystem calls when the
   // document cannot use them. Rebuilt here because this is the one function that
   // always runs after the node graph changes (scene load, runtime prefab spawn,
@@ -10250,48 +10269,28 @@ function resolveFloatingAutoTourContext(): {
   nodeId: string | null;
   event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null;
 } {
-  const activeFollowNodeId = autoTourFollowNodeId.value;
-  if (activeFollowNodeId && activeAutoTourNodeIds.has(activeFollowNodeId)) {
-    return { nodeId: activeFollowNodeId, event: activeVehicleDriveEvent.value };
+  const pendingEvent = pendingVehicleDriveEvent.value;
+  const activeEvent = activeVehicleDriveEvent.value;
+  const nodeId = resolveAutoTourActorNodeId(previewNodeMap.values(), {
+    preferredNodeIds: [
+      autoTourFollowNodeId.value,
+      activeAutoTourNodeIds.values().next().value ?? null,
+      activeCharacterAutoTourNodeIds.values().next().value ?? null,
+      vehicleDriveActive.value ? vehicleDriveNodeId.value : null,
+      pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null,
+      activeEvent?.targetNodeId ?? activeEvent?.nodeId ?? null,
+      resolveDefaultControlledCharacterNodeId(),
+    ],
+    hasRuntimeObject: (candidateNodeId) => nodeObjectMap.has(candidateNodeId),
+  });
+  if (!nodeId) {
+    return { nodeId: null, event: null };
   }
-
-  const firstActiveNodeId = activeAutoTourNodeIds.values().next().value ?? null;
-  if (firstActiveNodeId) {
-    return { nodeId: firstActiveNodeId, event: activeVehicleDriveEvent.value };
-  }
-
-  const activeCharacterNodeId = activeCharacterAutoTourNodeIds.values().next().value ?? null;
-  if (activeCharacterNodeId) {
-    return {
-      nodeId: activeCharacterNodeId,
-      event: pendingVehicleDriveEvent.value ?? activeVehicleDriveEvent.value,
-    };
-  }
-
-  const candidates = [pendingVehicleDriveEvent.value, activeVehicleDriveEvent.value];
-  for (const event of candidates) {
-    const nodeId = event?.targetNodeId ?? event?.nodeId ?? null;
-    if (!nodeId) {
-      continue;
-    }
-    const node = resolveNodeById(nodeId);
-    const autoTour = resolveAutoTourComponent(node);
-    if (!autoTour?.props?.routeNodeId || !nodeObjectMap.has(nodeId)) {
-      continue;
-    }
-    return { nodeId, event };
-  }
-
-  const nodeId = vehicleDriveNodeId.value;
-  if (nodeId) {
-    const node = resolveNodeById(nodeId);
-    const autoTour = resolveAutoTourComponent(node);
-    if (autoTour?.props?.routeNodeId && nodeObjectMap.has(nodeId)) {
-      return { nodeId, event: activeVehicleDriveEvent.value };
-    }
-  }
-
-  return { nodeId: null, event: null };
+  const event = [pendingEvent, activeEvent].find((candidate) => (
+    candidate
+    && (candidate.targetNodeId ?? candidate.nodeId ?? null) === nodeId
+  )) ?? null;
+  return { nodeId, event };
 }
 
 let guideWaypointMenuRefreshRevision = 0;
@@ -10299,18 +10298,7 @@ let guideWaypointMenuRefreshSignature = '';
 const guideWaypointThumbnailUrlCache = new Map<string, Promise<string | null>>();
 
 function resolveGuideWaypointActorNodeId(): string | null {
-  const context = resolveFloatingAutoTourContext();
-  if (context.nodeId) {
-    return context.nodeId;
-  }
-  const controlledNodeId = resolveDefaultControlledCharacterNodeId();
-  if (!controlledNodeId) {
-    return null;
-  }
-  const node = resolveNodeById(controlledNodeId);
-  return resolveAutoTourComponent(node)?.props?.routeNodeId
-    ? controlledNodeId
-    : null;
+  return resolveFloatingAutoTourContext().nodeId;
 }
 
 async function resolveGuideWaypointThumbnailUrl(assetId: string): Promise<string | null> {
@@ -10424,6 +10412,7 @@ function handleGuideWaypointImageError(item: GuideWaypointMenuItem): void {
 }
 
 const floatingAutoTourButton = computed(() => {
+  guideWaypointMenuContextRevision.value;
   const context = resolveFloatingAutoTourContext();
   const active = context.nodeId
     ? activeAutoTourNodeIds.has(context.nodeId) || activeCharacterAutoTourNodeIds.has(context.nodeId)
@@ -10441,6 +10430,7 @@ const floatingAutoTourButton = computed(() => {
 });
 
 const floatingAutoTourPauseButton = computed(() => {
+  guideWaypointMenuContextRevision.value;
   const context = resolveFloatingAutoTourContext();
   const active = context.nodeId
     ? activeAutoTourNodeIds.has(context.nodeId) || activeCharacterAutoTourNodeIds.has(context.nodeId)
@@ -11138,6 +11128,7 @@ function updateSceneryPhysicsBridgeIndex(document: SceneJsonExportDocument, asse
   physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
   physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
+  pendingPhysicsBridgeSnapTargets.clear();
   characterPhysicsBridgeVisualStateByNodeId.clear();
   physicsBridgeContactsByNodeId.clear();
   physicsBridgeCharacterMotorStateByCharacterId.clear();
@@ -11391,6 +11382,17 @@ function consumeSceneryPhysicsBridgeStepFrame(frame: PhysicsStepFrame): void {
       frame.bodyTransforms[base + 1] ?? 0,
       frame.bodyTransforms[base + 2] ?? 0,
     );
+    const pendingSnap = pendingPhysicsBridgeSnapTargets.get(nodeId) ?? null;
+    if (!shouldApplyPhysicsBridgeFrameForPendingSnap(
+      pendingSnap,
+      nextPosition,
+      Date.now(),
+    )) {
+      continue;
+    }
+    if (pendingSnap) {
+      pendingPhysicsBridgeSnapTargets.delete(nodeId);
+    }
     const nextQuaternion = new THREE.Quaternion(
       frame.bodyTransforms[base + 3] ?? 0,
       frame.bodyTransforms[base + 4] ?? 0,
@@ -11723,7 +11725,13 @@ function stepSceneryPhysicsBridge(delta: number): void {
   // setCharacterInput is posted before step in the same frame and the worker
   // applies requests in order, so holding on the input round-trip starved the
   // simulation whenever the worker reply took longer than one frame.
-  if (physicsBridgeBodySyncPromise && physicsBridgePendingBodySyncRevisionByNodeId.size > 0) {
+  if (
+    physicsBridgeBodySyncPromise
+    && (
+      physicsBridgePendingBodySyncRevisionByNodeId.size > 0
+      || pendingPhysicsBridgeSnapTargets.size > 0
+    )
+  ) {
     return;
   }
   const stepNowMs = Date.now();
@@ -12270,6 +12278,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
   physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
   physicsBridgeFrameBodiesByNodeId.clear();
+  pendingPhysicsBridgeSnapTargets.clear();
   physicsBridgeDirtyBodyNodeIds.clear();
   physicsBridgeBodyDirtyRevisionByNodeId.clear();
   physicsBridgePendingBodySyncRevisionByNodeId.clear();
@@ -12309,6 +12318,7 @@ async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
     sceneryGroundCollisionReferenceSampleElapsed = 0;
     resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState);
     physicsBridgeFrameBodiesByNodeId.clear();
+  pendingPhysicsBridgeSnapTargets.clear();
     characterPhysicsBridgeVisualStateByNodeId.clear();
     physicsBridgeDirtyBodyNodeIds.clear();
     physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -12349,6 +12359,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear();
     physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear();
     physicsBridgeFrameBodiesByNodeId.clear();
+    pendingPhysicsBridgeSnapTargets.clear();
     characterPhysicsBridgeVisualStateByNodeId.clear();
     physicsBridgeDirtyBodyNodeIds.clear();
     physicsBridgeBodyDirtyRevisionByNodeId.clear();
@@ -14441,8 +14452,11 @@ function resolveCharacterRootWorldPosition(
   protagonistObject: THREE.Object3D,
   target: THREE.Vector3,
 ): THREE.Vector3 {
+  protagonistObject.updateMatrixWorld(true)
+  protagonistObject.getWorldPosition(target)
   const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? nodeId);
   if (motionTelemetry?.hasSample
+    && isControlledNodeMotionPositionAligned(motionTelemetry.worldPosition, target)
     && Number.isFinite(motionTelemetry.worldPosition.x)
     && Number.isFinite(motionTelemetry.worldPosition.y)
     && Number.isFinite(motionTelemetry.worldPosition.z)) {
@@ -14466,7 +14480,6 @@ function resolveCharacterRootWorldPosition(
     target.set(rigidbodyBody.position.x, rigidbodyBody.position.y, rigidbodyBody.position.z);
     return target;
   }
-  protagonistObject.getWorldPosition(target);
   return target;
 }
 
@@ -17832,7 +17845,21 @@ function syncMoveToSubjectTargetToPhysicsBridge(
     quaternion: targetPose.quaternion.clone(),
     motionState: 0,
   });
-  void physicsBridge.setBodyTransform({
+  pendingPhysicsBridgeSnapTargets.set(bridgeNodeId, {
+    position: {
+      x: targetPose.position.x,
+      y: targetPose.position.y,
+      z: targetPose.position.z,
+    },
+    expiresAtMs: Date.now() + PHYSICS_BRIDGE_SNAP_GUARD_MS,
+  });
+  const characterVisualState = characterPhysicsBridgeVisualStateByNodeId.get(bridgeNodeId);
+  if (characterVisualState) {
+    characterVisualState.initialized = true;
+    characterVisualState.targetPosition.copy(targetPose.position);
+    characterVisualState.targetQuaternion.copy(targetPose.quaternion);
+  }
+  const snapPromise = physicsBridge.setBodyTransform({
     bodyId,
     transform: {
       position: [targetPose.position.x, targetPose.position.y, targetPose.position.z],
@@ -17843,6 +17870,16 @@ function syncMoveToSubjectTargetToPhysicsBridge(
         targetPose.quaternion.w,
       ],
     },
+    resetVelocity: true,
+  }).then(() => undefined, (error) => {
+    pendingPhysicsBridgeSnapTargets.delete(bridgeNodeId);
+    console.warn('[SceneryViewer] Failed to commit teleport to physics bridge', error);
+  });
+  physicsBridgeBodySyncPromise = snapPromise;
+  void snapPromise.finally(() => {
+    if (physicsBridgeBodySyncPromise === snapPromise) {
+      physicsBridgeBodySyncPromise = null;
+    }
   });
 }
 
@@ -21107,6 +21144,7 @@ function startCharacterAutoTourFromPrompt(
   resetCharacterControlInputs();
   resetProtagonistPoseState();
   setCameraCaging(false);
+  updateCharacterFollowCamera(0, { immediate: true });
   const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
   pendingVehicleDriveEvent.value = driveEvent;
   if (driveEvent.token) {
@@ -25745,9 +25783,9 @@ onUnmounted(() => {
 }
 
 .viewer-waypoint-menu {
-  position: absolute;
-  left: calc(12px + env(safe-area-inset-left));
-  top: 48%;
+  position: fixed;
+  right: calc(12px + env(safe-area-inset-right));
+  top: 50%;
   z-index: 1480;
   display: flex;
   align-items: center;
@@ -25755,280 +25793,304 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-.viewer-waypoint-menu__dismiss {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: auto;
-}
-
 .viewer-waypoint-menu__trigger {
   position: relative;
-  z-index: 2;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 4rpx;
-  width: 104rpx;
-  min-width: 104rpx;
-  height: 104rpx;
-  min-height: 104rpx;
-  padding: 8rpx;
-  border: 1px solid rgba(153, 193, 255, 0.28);
-  border-radius: 24rpx;
-  background:
-    radial-gradient(circle at 24% 18%, rgba(111, 214, 255, 0.2), transparent 40%),
-    linear-gradient(180deg, rgba(13, 31, 48, 0.9), rgba(8, 20, 33, 0.84));
+  width: 88rpx;
+  min-width: 88rpx;
+  height: 88rpx;
+  min-height: 88rpx;
+  padding: 0;
+  border: 1rpx solid rgba(0, 0, 0, 0.08);
+  border-radius: 999rpx;
+  background: rgba(255, 255, 255, 0.96);
   box-shadow:
-    0 16rpx 34rpx rgba(16, 32, 52, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  color: #f2f9ff;
+    0 12rpx 32rpx rgba(0, 0, 0, 0.16),
+    0 2rpx 8rpx rgba(0, 0, 0, 0.06);
+  color: #1f2329;
   pointer-events: auto;
-  backdrop-filter: blur(18rpx) saturate(1.08);
-  transition: border-color 0.16s ease, background-color 0.16s ease, transform 0.16s ease;
-}
-
-.viewer-waypoint-menu__trigger::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  background: linear-gradient(145deg, rgba(107, 221, 255, 0.22), transparent 48%);
-  opacity: 0;
-  transition: opacity 0.16s ease;
-  pointer-events: none;
+  backdrop-filter: blur(20rpx) saturate(1.1);
+  transition: transform 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .viewer-waypoint-menu__trigger.is-open,
 .viewer-waypoint-menu__trigger:active {
-  border-color: rgba(116, 218, 255, 0.66);
-  background-color: rgba(20, 54, 76, 0.92);
-  transform: translateX(3rpx);
-}
-
-.viewer-waypoint-menu__trigger.is-open::before,
-.viewer-waypoint-menu__trigger:active::before {
-  opacity: 1;
+  background: #ffffff;
+  box-shadow: 0 6rpx 18rpx rgba(0, 0, 0, 0.14);
+  transform: scale(0.97);
 }
 
 .viewer-waypoint-menu__trigger-icon {
   position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38rpx;
-  height: 38rpx;
-  border-radius: 12rpx 12rpx 12rpx 4rpx;
-  background: rgba(101, 213, 246, 0.18);
-  color: #bceeff;
-  font-size: 23rpx;
-  font-weight: 700;
-  line-height: 1;
+  width: 42rpx;
+  height: 42rpx;
+  border-radius: 50% 50% 50% 0;
+  background: #07c160;
+  transform: rotate(-45deg);
 }
 
-.viewer-waypoint-menu__trigger-label {
+.viewer-waypoint-menu__pin-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 15rpx;
+  height: 15rpx;
+  border-radius: 50%;
+  background: #ffffff;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.viewer-waypoint-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 2300;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.viewer-waypoint-sheet__backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    rgba(0, 0, 0, 0.42);
+  pointer-events: auto;
+  backdrop-filter: blur(3rpx);
+  animation: viewer-waypoint-sheet-fade 0.18s ease-out both;
+}
+
+.viewer-waypoint-sheet__panel {
   position: relative;
   z-index: 1;
-  color: rgba(242, 249, 255, 0.86);
-  font-size: 18rpx;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
-
-.viewer-waypoint-menu__panel {
-  position: absolute;
-  left: calc(100% + 12rpx);
-  top: 50%;
-  z-index: 2;
   display: flex;
   flex-direction: column;
-  width: min(560rpx, 62vw);
-  max-height: 62vh;
-  padding: 18rpx;
-  overflow: hidden;
-  border: 1px solid rgba(153, 193, 255, 0.24);
-  border-radius: 24rpx;
-  background:
-    radial-gradient(circle at 12% 0%, rgba(91, 190, 238, 0.16), transparent 38%),
-    linear-gradient(180deg, rgba(9, 23, 38, 0.96), rgba(6, 15, 26, 0.92));
-  box-shadow:
-    0 28rpx 64rpx rgba(3, 12, 22, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.07);
-  color: #f3f9ff;
-  transform: translateY(-50%);
-  pointer-events: auto;
-  backdrop-filter: blur(24rpx) saturate(1.1);
-  animation: viewer-waypoint-menu-in 0.16s ease-out both;
-}
-
-.viewer-waypoint-menu__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12rpx;
-  padding: 2rpx 2rpx 14rpx;
-}
-
-.viewer-waypoint-menu__head-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5rpx;
-}
-
-.viewer-waypoint-menu__title {
-  font-size: 25rpx;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.viewer-waypoint-menu__subtitle {
-  color: rgba(221, 238, 250, 0.58);
-  font-size: 18rpx;
-}
-
-.viewer-waypoint-menu__close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 44rpx;
-  height: 44rpx;
-  min-width: 44rpx;
-  min-height: 44rpx;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(235, 246, 255, 0.78);
-  font-size: 30rpx;
-  line-height: 1;
-}
-
-.viewer-waypoint-menu__list {
-  max-height: calc(62vh - 100rpx);
-  overflow: hidden;
-}
-
-.viewer-waypoint-menu__item {
-  display: grid;
-  grid-template-columns: 122rpx minmax(0, 1fr) 28rpx;
-  align-items: center;
-  gap: 16rpx;
   width: 100%;
-  min-height: 94rpx;
-  margin-bottom: 12rpx;
-  padding: 10rpx 12rpx 10rpx 10rpx;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 18rpx;
-  background: rgba(255, 255, 255, 0.045);
+  max-width: 680px;
+  max-height: 70vh;
+  padding:
+    12rpx 24rpx
+    calc(16rpx + env(safe-area-inset-bottom));
+  overflow: hidden;
+  border-radius: 36rpx 36rpx 0 0;
+  background: #ffffff;
+  box-shadow:
+    0 -12rpx 48rpx rgba(0, 0, 0, 0.16),
+    inset 0 1rpx 0 rgba(0, 0, 0, 0.04);
+  color: #1f2329;
+  pointer-events: auto;
+  box-sizing: border-box;
+  animation: viewer-waypoint-sheet-up 0.22s cubic-bezier(0.2, 0.86, 0.24, 1) both;
+}
+
+.viewer-waypoint-sheet__handle {
+  align-self: center;
+  width: 72rpx;
+  height: 8rpx;
+  margin: 0 0 14rpx;
+  border-radius: 999rpx;
+  background: #d8dadd;
+}
+
+.viewer-waypoint-sheet__list {
+  flex: 1;
+  min-height: 260rpx;
+  height: calc(70vh - 64rpx);
+  max-height: 760px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.viewer-waypoint-sheet__grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18rpx;
+  padding: 2rpx 4rpx 18rpx;
+}
+
+.viewer-waypoint-sheet__card {
+  position: relative;
+  width: calc(50% - 9rpx);
+  min-height: 260rpx;
+  padding: 0;
+  overflow: hidden;
+  border: 1rpx solid #eceef0;
+  border-radius: 24rpx;
+  background: #ffffff;
   color: inherit;
   text-align: left;
+  box-sizing: border-box;
+  transition: transform 0.14s ease, border-color 0.14s ease, opacity 0.14s ease;
 }
 
-.viewer-waypoint-menu__item:active {
-  border-color: rgba(116, 218, 255, 0.46);
-  background: rgba(91, 187, 230, 0.14);
+.viewer-waypoint-sheet__card:active {
+  border-color: rgba(7, 193, 96, 0.45);
+  transform: scale(0.985);
 }
 
-.viewer-waypoint-menu__item[disabled] {
-  opacity: 0.55;
+.viewer-waypoint-sheet__card[disabled] {
+  opacity: 0.7;
 }
 
-.viewer-waypoint-menu__item.is-unavailable {
-  border-color: rgba(255, 166, 120, 0.16);
+.viewer-waypoint-sheet__card.is-unavailable {
+  border-color: #eceef0;
+  background: #fafafa;
 }
 
-.viewer-waypoint-menu__thumbnail {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 122rpx;
-  height: 78rpx;
+.viewer-waypoint-sheet__cover {
+  position: relative;
+  width: 100%;
+  padding-top: 62.5%;
   overflow: hidden;
-  border-radius: 12rpx;
-  background: rgba(0, 0, 0, 0.3);
-  color: rgba(226, 241, 252, 0.68);
+  background: #eef0f2;
 }
 
-.viewer-waypoint-menu__thumbnail-image {
+.viewer-waypoint-sheet__cover-image {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
 }
 
-.viewer-waypoint-menu__thumbnail-placeholder {
-  font-size: 30rpx;
-  font-weight: 600;
+.viewer-waypoint-sheet__cover-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #eef0f2;
+  color: #969ba1;
+  font-size: 22rpx;
 }
 
-.viewer-waypoint-menu__item-copy {
+.viewer-waypoint-sheet__cover-placeholder.is-loading {
+  color: #7a8087;
+}
+
+.viewer-waypoint-sheet__cover-placeholder text {
+  position: relative;
+  z-index: 1;
+}
+
+.viewer-waypoint-sheet__skeleton {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0) 20%,
+    rgba(255, 255, 255, 0.76) 42%,
+    rgba(255, 255, 255, 0) 64%
+  );
+  animation: viewer-waypoint-skeleton 1.15s ease-in-out infinite;
+}
+
+.viewer-waypoint-sheet__cover-action {
+  position: absolute;
+  right: 14rpx;
+  bottom: 14rpx;
+  padding: 8rpx 16rpx;
+  border-radius: 999rpx;
+  background: rgba(7, 193, 96, 0.94);
+  color: #ffffff;
+  font-size: 21rpx;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.viewer-waypoint-sheet__card-copy {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 6rpx;
+  padding: 16rpx 18rpx 18rpx;
 }
 
-.viewer-waypoint-menu__item-title {
+.viewer-waypoint-sheet__card-title {
+  display: -webkit-box;
   overflow: hidden;
-  font-size: 23rpx;
+  color: #1f2329;
+  font-size: 27rpx;
   font-weight: 650;
+  line-height: 1.34;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.viewer-waypoint-menu__item-meta {
+.viewer-waypoint-sheet__card-meta {
   overflow: hidden;
-  color: rgba(221, 238, 250, 0.56);
-  font-size: 18rpx;
+  color: #8a9098;
+  font-size: 21rpx;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.viewer-waypoint-menu__chevron {
-  color: rgba(221, 238, 250, 0.6);
-  font-size: 34rpx;
-  line-height: 1;
+.viewer-waypoint-sheet__card.is-unavailable .viewer-waypoint-sheet__card-title,
+.viewer-waypoint-sheet__card.is-unavailable .viewer-waypoint-sheet__card-meta {
+  color: #92979d;
 }
 
-.viewer-waypoint-menu__loading {
-  display: block;
-  padding: 14rpx;
-  color: rgba(221, 238, 250, 0.6);
-  font-size: 19rpx;
+.viewer-waypoint-sheet__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120rpx;
+  color: #8a9098;
+  font-size: 23rpx;
   text-align: center;
 }
 
-@keyframes viewer-waypoint-menu-in {
+@keyframes viewer-waypoint-sheet-fade {
   from {
     opacity: 0;
-    transform: translateY(-50%) translateX(-8rpx);
   }
   to {
     opacity: 1;
-    transform: translateY(-50%) translateX(0);
   }
 }
 
-@media (max-width: 720px) {
-  .viewer-waypoint-menu__panel {
-    width: min(520rpx, calc(100vw - 150rpx));
-    max-height: 58vh;
+@keyframes viewer-waypoint-sheet-up {
+  from {
+    opacity: 0.7;
+    transform: translateY(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes viewer-waypoint-skeleton {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 350px) {
+  .viewer-waypoint-sheet__grid {
+    gap: 14rpx;
   }
 
-  .viewer-waypoint-menu__list {
-    max-height: calc(58vh - 100rpx);
+  .viewer-waypoint-sheet__card {
+    width: 100%;
   }
 
-  .viewer-waypoint-menu__item {
-    grid-template-columns: 104rpx minmax(0, 1fr) 24rpx;
-    gap: 12rpx;
+  .viewer-waypoint-sheet__cover {
+    padding-top: 52%;
   }
 
-  .viewer-waypoint-menu__thumbnail {
-    width: 104rpx;
-    height: 68rpx;
+  .viewer-waypoint-menu__trigger {
+    width: 88rpx;
+    min-width: 88rpx;
+    padding: 0;
   }
 }
 
@@ -26039,20 +26101,20 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 172rpx;
-  min-height: 72rpx;
-  padding: 0 24rpx;
-  border: 1px solid rgba(153, 193, 255, 0.22);
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at 18% 22%, rgba(111, 214, 255, 0.14), transparent 36%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 249, 255, 0.78));
+  width: 88rpx;
+  min-width: 88rpx;
+  height: 88rpx;
+  min-height: 88rpx;
+  padding: 0;
+  border: 1rpx solid rgba(0, 0, 0, 0.08);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
   box-shadow:
-    0 16rpx 34rpx rgba(52, 87, 128, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(16px) saturate(1.06);
-  color: #15324f;
+    0 12rpx 32rpx rgba(0, 0, 0, 0.16),
+    0 2rpx 8rpx rgba(0, 0, 0, 0.06);
+  color: #07c160;
   overflow: hidden;
+  backdrop-filter: blur(20rpx) saturate(1.1);
   transition:
     transform 0.18s cubic-bezier(0.2, 0.9, 0.2, 1),
     box-shadow 0.18s ease,
@@ -26063,50 +26125,63 @@ onUnmounted(() => {
 .viewer-auto-tour-trigger::before {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 10rpx;
-  border-radius: 18px 0 0 18px;
-  background: linear-gradient(180deg, rgba(102, 178, 255, 0.94), rgba(157, 229, 143, 0.92));
-}
-
-.viewer-auto-tour-trigger::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 48%);
+  inset: 7rpx;
+  border: 1rpx solid currentColor;
+  border-radius: 50%;
+  opacity: 0.16;
   pointer-events: none;
 }
 
-.viewer-auto-tour-trigger__content {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  padding-left: 6rpx;
-}
-
-.viewer-auto-tour-trigger__label {
-  font-size: 24rpx;
-  font-weight: 700;
-  letter-spacing: 0.6rpx;
-  white-space: nowrap;
-  color: inherit;
+.viewer-auto-tour-trigger::after {
+  display: none;
 }
 
 .viewer-auto-tour-trigger.is-active {
-  border-color: rgba(255, 198, 104, 0.28);
-  background:
-    radial-gradient(circle at 18% 22%, rgba(255, 198, 104, 0.16), transparent 36%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 250, 240, 0.82));
-  color: #8e6a18;
+  border-color: rgba(7, 193, 96, 0.28);
+  background: #eaf8f0;
+  color: #059b4c;
+  box-shadow:
+    0 10rpx 26rpx rgba(7, 193, 96, 0.2),
+    0 2rpx 8rpx rgba(0, 0, 0, 0.05);
 }
 
-.viewer-auto-tour-trigger.is-active::before {
-  background: linear-gradient(180deg, rgba(255, 198, 104, 0.96), rgba(157, 229, 143, 0.92));
+.viewer-auto-tour-trigger__icon {
+  position: relative;
+  z-index: 1;
+}
+
+.viewer-auto-tour-route-icon {
+  width: 46rpx;
+  height: 32rpx;
+}
+
+.viewer-auto-tour-route-icon__line {
+  position: absolute;
+  left: 8rpx;
+  right: 8rpx;
+  top: 14rpx;
+  height: 4rpx;
+  border-radius: 999rpx;
+  background: currentColor;
+}
+
+.viewer-auto-tour-route-icon__dot {
+  position: absolute;
+  top: 10rpx;
+  width: 12rpx;
+  height: 12rpx;
+  border: 3rpx solid #ffffff;
+  border-radius: 50%;
+  background: currentColor;
+  box-sizing: border-box;
+}
+
+.viewer-auto-tour-route-icon__dot--start {
+  left: 0;
+}
+
+.viewer-auto-tour-route-icon__dot--end {
+  right: 0;
 }
 
 .viewer-auto-tour-trigger--secondary {
@@ -26114,37 +26189,22 @@ onUnmounted(() => {
   right: auto;
   top: auto;
   transform: translateX(-50%);
-  min-width: 156rpx;
-  min-height: 64rpx;
-  padding: 0 22rpx;
-  border-color: rgba(153, 193, 255, 0.22);
-  background:
-    radial-gradient(circle at 18% 22%, rgba(90, 224, 205, 0.12), transparent 36%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(244, 249, 255, 0.78));
+  width: 88rpx;
+  min-width: 88rpx;
+  height: 88rpx;
+  min-height: 88rpx;
+  padding: 0;
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.96);
   box-shadow:
-    0 14rpx 28rpx rgba(52, 87, 128, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.2);
-}
-
-.viewer-auto-tour-trigger--secondary::before {
-  background: linear-gradient(180deg, rgba(102, 178, 255, 0.94), rgba(157, 229, 143, 0.9));
-}
-
-.viewer-auto-tour-trigger--secondary .viewer-auto-tour-trigger__label {
-  font-size: 22rpx;
-  letter-spacing: 0.4rpx;
+    0 12rpx 32rpx rgba(0, 0, 0, 0.16),
+    0 2rpx 8rpx rgba(0, 0, 0, 0.06);
 }
 
 .viewer-auto-tour-trigger--secondary.is-active {
-  border-color: rgba(153, 193, 255, 0.24);
-  background:
-    radial-gradient(circle at 18% 22%, rgba(111, 214, 255, 0.14), transparent 36%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 249, 255, 0.8));
-  color: #12314d;
-}
-
-.viewer-auto-tour-trigger--secondary.is-active::before {
-  background: linear-gradient(180deg, rgba(102, 178, 255, 0.96), rgba(157, 229, 143, 0.92));
+  border-color: rgba(7, 193, 96, 0.28);
+  background: #eaf8f0;
+  color: #059b4c;
 }
 
 .viewer-auto-tour-trigger--secondary:active {
@@ -26159,6 +26219,42 @@ onUnmounted(() => {
 .viewer-auto-tour-trigger:active {
   transform: translateY(1px) scale(0.985);
   box-shadow: 0 12rpx 24rpx rgba(4, 6, 18, 0.28);
+}
+
+.viewer-auto-tour-pause-icon {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7rpx;
+  width: 34rpx;
+  height: 34rpx;
+}
+
+.viewer-auto-tour-pause-icon__bar {
+  width: 7rpx;
+  height: 28rpx;
+  border-radius: 3rpx;
+  background: currentColor;
+}
+
+.viewer-auto-tour-pause-icon.is-play {
+  gap: 0;
+}
+
+.viewer-auto-tour-pause-icon.is-play .viewer-auto-tour-pause-icon__bar:first-child {
+  width: 0;
+  height: 0;
+  border-top: 13rpx solid transparent;
+  border-bottom: 13rpx solid transparent;
+  border-left: 21rpx solid currentColor;
+  border-radius: 0;
+  background: transparent;
+}
+
+.viewer-auto-tour-pause-icon.is-play .viewer-auto-tour-pause-icon__bar:last-child {
+  display: none;
 }
 
 .viewer-punch-summary__label {
@@ -26198,9 +26294,11 @@ onUnmounted(() => {
 
   .viewer-auto-tour-trigger {
     right: 10px;
-    min-width: 152rpx;
-    min-height: 68rpx;
-    padding: 0 20rpx;
+    width: 88rpx;
+    min-width: 88rpx;
+    height: 88rpx;
+    min-height: 88rpx;
+    padding: 0;
   }
 
   .viewer-punch-summary__value {

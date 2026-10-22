@@ -31,7 +31,11 @@ export {
 } from './followCameraController'
 export type { FollowCameraMotionState } from './followCameraController'
 export { updateVehicleSpeedAndApplyParkingHoldSafe, VEHICLE_PARKED_SPEED_EPSILON, VEHICLE_PARKING_HOLD_SPEED_EPSILON } from './vehicleParkingHold'
-export { createControlledNodeMotionRuntime, ControlledNodeMotionRuntime } from './controlledNodeMotionRuntime'
+export {
+  createControlledNodeMotionRuntime,
+  ControlledNodeMotionRuntime,
+  isControlledNodeMotionPositionAligned,
+} from './controlledNodeMotionRuntime'
 export type { ControlledNodeMotionTelemetry, ControlledNodeMotionSampleInput } from './controlledNodeMotionRuntime'
 export * from './physicsBridgeVehicleInputSync'
 export * from './polylineProgress'

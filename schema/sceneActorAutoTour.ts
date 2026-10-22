@@ -36,6 +36,11 @@ export type SceneActorAutoTourEnsureResult = {
   unboundNodeIds: string[]
 }
 
+export type AutoTourActorSelectionOptions = {
+  preferredNodeIds?: readonly (string | null | undefined)[]
+  hasRuntimeObject?: (nodeId: string) => boolean
+}
+
 type IndexedNode = {
   node: SceneNode
   order: number
@@ -99,6 +104,45 @@ export function findFirstSceneActorNode(
     }
   }
   return null
+}
+
+/**
+ * Selects the actor used by always-available AutoTour UI. The node must be an
+ * enabled character/vehicle with an enabled AutoTour component and runtime
+ * object. A Guide Route is intentionally not required here so the entry remains
+ * available and can report a missing route when invoked.
+ */
+export function resolveAutoTourActorNodeId(
+  nodes: Iterable<SceneNode>,
+  options: AutoTourActorSelectionOptions = {},
+): string | null {
+  const candidateNodeIds = new Set<string>()
+  const orderedCandidateNodeIds: string[] = []
+  const hasRuntimeObject = options.hasRuntimeObject ?? (() => true)
+  for (const node of nodes) {
+    const nodeId = normalizeNodeId(node?.id)
+    if (
+      !nodeId
+      || candidateNodeIds.has(nodeId)
+      || !resolveSceneActorKind(node)
+      || !isEnabledComponent(node, AUTO_TOUR_COMPONENT_TYPE)
+      || !hasRuntimeObject(nodeId)
+    ) {
+      continue
+    }
+    candidateNodeIds.add(nodeId)
+    orderedCandidateNodeIds.push(nodeId)
+  }
+  if (!candidateNodeIds.size) {
+    return null
+  }
+  for (const candidate of options.preferredNodeIds ?? []) {
+    const nodeId = normalizeNodeId(candidate)
+    if (nodeId && candidateNodeIds.has(nodeId)) {
+      return nodeId
+    }
+  }
+  return orderedCandidateNodeIds[0] ?? null
 }
 
 export function buildSceneActorAutoTourComponentId(nodeId: string): string {

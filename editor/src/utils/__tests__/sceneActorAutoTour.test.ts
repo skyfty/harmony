@@ -17,6 +17,7 @@ import {
 import {
   buildSceneActorAutoTourComponentId,
   ensureSceneActorAutoTourComponents,
+  resolveAutoTourActorNodeId,
   transferSceneActorAutoTourComponent,
 } from '@schema/sceneActorAutoTour'
 
@@ -96,6 +97,98 @@ function getAutoTour(node: SceneNode): SceneNodeComponentState<AutoTourComponent
 }
 
 describe('sceneActorAutoTour', () => {
+  it('finds an enabled AutoTour actor without requiring a guide route or click event', () => {
+    const character = createActor('character', 'character', {
+      components: {
+        [AUTO_TOUR_COMPONENT_TYPE]: {
+          id: 'auto-tour',
+          type: AUTO_TOUR_COMPONENT_TYPE,
+          enabled: true,
+          props: clampAutoTourComponentProps(null),
+        },
+      },
+    })
+
+    expect(resolveAutoTourActorNodeId([character])).toBe('character')
+  })
+
+  it('selects preferred AutoTour actors before scene order', () => {
+    const first = createActor('first', 'vehicle', {
+      components: {
+        [AUTO_TOUR_COMPONENT_TYPE]: {
+          id: 'auto-tour-first',
+          type: AUTO_TOUR_COMPONENT_TYPE,
+          enabled: true,
+          props: clampAutoTourComponentProps(null),
+        },
+      },
+    })
+    const preferred = createActor('preferred', 'character', {
+      components: {
+        [AUTO_TOUR_COMPONENT_TYPE]: {
+          id: 'auto-tour-preferred',
+          type: AUTO_TOUR_COMPONENT_TYPE,
+          enabled: true,
+          props: clampAutoTourComponentProps(null),
+        },
+      },
+    })
+
+    expect(resolveAutoTourActorNodeId([first, preferred], {
+      preferredNodeIds: [null, 'missing', 'preferred'],
+    })).toBe('preferred')
+    expect(resolveAutoTourActorNodeId([first, preferred])).toBe('first')
+  })
+
+  it('ignores disabled AutoTour, non-actors, and actors without runtime objects', () => {
+    const disabled = createActor('disabled', 'vehicle', {
+      components: {
+        [AUTO_TOUR_COMPONENT_TYPE]: {
+          id: 'auto-tour-disabled',
+          type: AUTO_TOUR_COMPONENT_TYPE,
+          enabled: false,
+          props: clampAutoTourComponentProps(null),
+        },
+      },
+    })
+    const nonActor = createNode({
+      id: 'mesh',
+      components: {
+        [AUTO_TOUR_COMPONENT_TYPE]: {
+          id: 'auto-tour-mesh',
+          type: AUTO_TOUR_COMPONENT_TYPE,
+          enabled: true,
+          props: clampAutoTourComponentProps(null),
+        },
+      },
+    })
+    const unavailable = createActor('unavailable', 'character', {
+      components: {
+        [AUTO_TOUR_COMPONENT_TYPE]: {
+          id: 'auto-tour-unavailable',
+          type: AUTO_TOUR_COMPONENT_TYPE,
+          enabled: true,
+          props: clampAutoTourComponentProps(null),
+        },
+      },
+    })
+    const fallback = createActor('fallback', 'character', {
+      components: {
+        [AUTO_TOUR_COMPONENT_TYPE]: {
+          id: 'auto-tour-fallback',
+          type: AUTO_TOUR_COMPONENT_TYPE,
+          enabled: true,
+          props: clampAutoTourComponentProps(null),
+        },
+      },
+    })
+
+    expect(resolveAutoTourActorNodeId(
+      [disabled, nonActor, unavailable, fallback],
+      { hasRuntimeObject: (nodeId) => nodeId !== 'unavailable' },
+    )).toBe('fallback')
+  })
+
   it('attaches an enabled AutoTour with a stable id to characters and vehicles', () => {
     const character = createActor('character', 'character')
     const vehicle = createActor('vehicle', 'vehicle')
