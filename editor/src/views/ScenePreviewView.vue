@@ -202,6 +202,7 @@ import {
 	getProceduralLandscapeStats,
 	setProceduralLandscapeEnvironment,
 } from '@schema/proceduralLandscape/runtime'
+import { setProceduralLandscapeDemOrthoResolver } from '@schema/proceduralLandscape/demOrthoResolver'
 import { collectActiveProceduralLandscapeNodeIds } from '@schema/proceduralLandscape/preload'
 import {
 	PROCEDURAL_LANDSCAPE_SEASON_PRELOAD_TIMEOUT_MS,
@@ -265,6 +266,7 @@ import { syncContinuousInstancedModelCommitted } from '@schema/continuousInstanc
 import { hasWallInstancedBindings, syncWallInstancedBindingsForObject } from '@schema/wallInstancing'
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@schema/mirror'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
+import { createProceduralLandscapeDemOrthoResolver } from '@/utils/demOrthoTextureLoader'
 import {
 	fetchResourceAsset,
 	mapServerAssetToProjectAsset,
@@ -1541,6 +1543,15 @@ const resourceProgressItems = ref<ResourceProgressItem[]>([])
 const resourceAssetInfoMap = new Map<string, { name: string; bytes: number }>()
 
 const assetCacheStore = useAssetCacheStore()
+const previewSceneStore = useSceneStore()
+const proceduralLandscapeDemOrthoResolver = createProceduralLandscapeDemOrthoResolver({
+	getAsset: (assetId) => previewSceneStore.getAsset(assetId),
+	ensureAssetFile: (assetId, options) => assetCacheStore.ensureAssetFile(assetId, options),
+	ensureCachedFile: (cacheId, url, name) => assetCacheStore.ensureAssetFile(cacheId, {
+		downloadUrl: url,
+		name,
+	}),
+})
 
 const editorAssetCache = createEditorRuntimeAssetCache()
 const editorAssetLoader = new AssetLoader(editorAssetCache)
@@ -16793,6 +16804,7 @@ onMounted(() => {
 		DISPLAY_BOARD_RESOLVER_KEY
 	] = resolveDisplayBoardMediaSource
 	setGroundTextureSourceResolver(resolveGroundTextureSource)
+	setProceduralLandscapeDemOrthoResolver(proceduralLandscapeDemOrthoResolver)
 	setProceduralLandscapeEnvironment('preview')
 	setParticleTextureResolver(resolveParticleTextureAssetSource)
 	addBehaviorRuntimeListener(behaviorRuntimeListener)
@@ -16902,6 +16914,7 @@ onBeforeUnmount(() => {
 		DISPLAY_BOARD_RESOLVER_KEY
 	] = undefined
 	setGroundTextureSourceResolver(null)
+	setProceduralLandscapeDemOrthoResolver(null)
 	setParticleTextureResolver(null)
 	slowroadsEnvironment?.dispose()
 	slowroadsEnvironment = null

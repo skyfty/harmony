@@ -1,5 +1,4 @@
 import * as THREE from 'three'
-import { MeshBVH } from 'three-mesh-bvh'
 import { writeArrayBuffer } from 'geotiff'
 import type { TerrainDemPackageSidecar } from '../../../schema/terrainDemPackage'
 import { eastOffsetToLongitudeDeltaDegrees, latLonToUtm, utmZoneOfLongitude } from './wgs84Utm'
@@ -25,7 +24,32 @@ export const DEFAULT_DEM_GRID_MAX_SIZE = 4096
 export const DEM_CELL_SIZE_SNAP_STEPS = [0.5, 1, 2, 5, 10, 20] as const
 
 const MEDIAN_EDGE_MAX_TRIANGLE_SAMPLES = 50000
-const DEFAULT_SAMPLE_CHUNK_CELLS = 262144
+const DEFAULT_SAMPLE_CHUNK_TRIANGLES = 65536
+const RASTER_EDGE_EPSILON = 1e-9
+const RASTER_MIN_PROJECTED_AREA = 1e-12
+
+export type DemExportPhase =
+  | 'prepare'
+  | 'merge'
+  | 'sample'
+  | 'fill-dem'
+  | 'encode-dem'
+  | 'ortho-render'
+  | 'ortho-process'
+  | 'encode-ortho'
+  | 'package'
+
+export interface DemExportProgress {
+  phase: DemExportPhase
+  completed: number
+  total: number
+  label: string
+}
+
+export interface DemExportStageTiming {
+  phase: DemExportPhase
+  elapsedMs: number
+}
 
 export interface DemExportFrame {
   latitudeDegrees: number
@@ -45,6 +69,41 @@ export interface DemGridPlan {
   zMin: number
   zMax: number
   autoCellSize: boolean
+}
+
+export interface DemOrthoCameraFrame {
+  xCenter: number
+  zCenter: number
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+/**
+ * OrthographicCamera frustum values are camera-local offsets, not absolute
+ * scene coordinates. Keep every tile symmetric around its camera position so
+ * a raster tile maps exactly to NDC [-1, 1] on both axes.
+ */
+export function resolveDemOrthoCameraFrame(
+  plan: DemGridPlan,
+  tile: {
+    rowStart: number
+    colStart: number
+    width: number
+    height: number
+  },
+): DemOrthoCameraFrame {
+  const halfWidth = tile.width * plan.cellSizeMeters * 0.5
+  const halfHeight = tile.height * plan.cellSizeMeters * 0.5
+  return {
+    xCenter: plan.xMax - (tile.rowStart + tile.height * 0.5) * plan.cellSizeMeters,
+    zCenter: plan.zMin + (tile.colStart + tile.width * 0.5) * plan.cellSizeMeters,
+    left: -halfWidth,
+    right: halfWidth,
+    top: halfHeight,
+    bottom: -halfHeight,
+  }
 }
 
 export interface DemPlanResult {
@@ -79,7 +138,7 @@ export interface DemSampleProgress {
 
 export interface DemSampleOptions {
   onProgress?: (progress: DemSampleProgress) => void
-  /** Cells processed between event-loop yields. Default 262144. */
+  /** Triangle visits processed between event-loop yields/progress updates. */
   chunkCells?: number
   /** Injectable yield hook for tests. */
   yieldFn?: () => Promise<void>
@@ -293,13 +352,18 @@ export function fillDemHoles(
   heights: Float32Array,
   rows: number,
   cols: number,
+  options: {
+    onProgress?: (progress: { filledCount: number; processedCount: number; totalCount: number }) => void
+  } = {},
 ): { filledCount: number; wasHole: Uint8Array } {
   const count = rows * cols
   const wasHole = new Uint8Array(count)
   const queue = new Int32Array(count)
+  const onProgress = options.onProgress
   let head = 0
   let tail = 0
   let filledCount = 0
+  let lastProgressAt = 0
 
   for (let index = 0; index < count; index += 1) {
     if (Number.isFinite(heights[index])) {
@@ -358,14 +422,22 @@ export function fillDemHoles(
         tail += 1
       }
     }
+
+    if (onProgress && head - lastProgressAt >= 65536) {
+      lastProgressAt = head
+      onProgress({ filledCount, processedCount: head, totalCount: count })
+    }
   }
 
+  onProgress?.({ filledCount, processedCount: count, totalCount: count })
   return { filledCount, wasHole }
 }
 
 /**
- * Samples the merged terrain mesh into a height grid with vertical rays,
- * accelerated by a MeshBVH, then fills sampling holes.
+ * Samples the merged terrain mesh into a height grid by scan-converting every
+ * triangle into the target raster. Each cell keeps the highest triangle
+ * intersection, matching a vertical ray entering the mesh from above without
+ * paying for one BVH query per cell.
  */
 export async function sampleDemHeights(
   geometry: THREE.BufferGeometry,
@@ -381,57 +453,121 @@ export async function sampleDemHeights(
     throw new Error('DEM 采样失败：地形网格包围盒为空。')
   }
 
-  const bvh = new MeshBVH(geometry)
   const heights = new Float32Array(plan.rows * plan.cols)
   heights.fill(Number.NaN)
 
-  const ray = new THREE.Ray()
-  const origin = new THREE.Vector3()
-  const down = new THREE.Vector3(0, -1, 0)
-  const rayTop = box.max.y + Math.max(1, (box.max.y - box.min.y) * 0.05)
+  const position = geometry.getAttribute('position')
+  if (!position || position.count < 3) {
+    throw new Error('DEM 采样失败：地形网格没有顶点。')
+  }
+  const index = geometry.getIndex()
+  const triangleCount = index ? Math.floor(index.count / 3) : Math.floor(position.count / 3)
+  if (triangleCount <= 0) {
+    throw new Error('DEM 采样失败：地形网格没有三角形。')
+  }
 
-  const chunkCells = Math.max(1024, options.chunkCells ?? DEFAULT_SAMPLE_CHUNK_CELLS)
+  const chunkTriangles = Math.max(1024, options.chunkCells ?? DEFAULT_SAMPLE_CHUNK_TRIANGLES)
   const yieldFn = options.yieldFn ?? defaultYield
   const onProgress = options.onProgress
+  const cellSize = plan.cellSizeMeters
+  const cellCount = plan.rows * plan.cols
 
   let hitCount = 0
   let processedSinceYield = 0
 
-  for (let row = 0; row < plan.rows; row += 1) {
-    const x = plan.xMax - (row + 0.5) * plan.cellSizeMeters
-    for (let col = 0; col < plan.cols; col += 1) {
-      const z = plan.zMin + (col + 0.5) * plan.cellSizeMeters
-      origin.set(x, rayTop, z)
-      ray.set(origin, down)
-      const hit = bvh.raycastFirst(ray, THREE.DoubleSide)
-      if (hit) {
-        heights[row * plan.cols + col] = hit.point.y + frame.groundElevationMeters
-        hitCount += 1
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+    const ia = index ? index.getX(triangle * 3) : triangle * 3
+    const ib = index ? index.getX(triangle * 3 + 1) : triangle * 3 + 1
+    const ic = index ? index.getX(triangle * 3 + 2) : triangle * 3 + 2
+
+    const ax = position.getX(ia)
+    const ay = position.getY(ia)
+    const az = position.getZ(ia)
+    const bx = position.getX(ib)
+    const by = position.getY(ib)
+    const bz = position.getZ(ib)
+    const cx = position.getX(ic)
+    const cy = position.getY(ic)
+    const cz = position.getZ(ic)
+
+    // A projected triangle with no X/Z area can only touch a raster cell on a
+    // measure-zero edge (vertical skirts). The hole filler handles those cells.
+    const denominator = (bz - az) * (cx - ax) - (bx - ax) * (cz - az)
+    if (!Number.isFinite(denominator) || Math.abs(denominator) <= RASTER_MIN_PROJECTED_AREA) {
+      processedSinceYield += 1
+      continue
+    }
+
+    const minZ = Math.min(az, bz, cz)
+    const maxZ = Math.max(az, bz, cz)
+    const minX = Math.min(ax, bx, cx)
+    const maxX = Math.max(ax, bx, cx)
+
+    const colStart = Math.max(0, Math.ceil((minZ - plan.zMin) / cellSize - 0.5))
+    const colEnd = Math.min(plan.cols - 1, Math.floor((maxZ - plan.zMin) / cellSize - 0.5))
+    const rowStart = Math.max(0, Math.ceil((plan.xMax - maxX) / cellSize - 0.5))
+    const rowEnd = Math.min(plan.rows - 1, Math.floor((plan.xMax - minX) / cellSize - 0.5))
+
+    if (colStart <= colEnd && rowStart <= rowEnd) {
+      for (let row = rowStart; row <= rowEnd; row += 1) {
+        const x = plan.xMax - (row + 0.5) * cellSize
+        for (let col = colStart; col <= colEnd; col += 1) {
+          const z = plan.zMin + (col + 0.5) * cellSize
+          const weightB = ((z - az) * (cx - ax) - (x - ax) * (cz - az)) / denominator
+          const weightC = ((x - ax) * (bz - az) - (z - az) * (bx - ax)) / denominator
+          const weightA = 1 - weightB - weightC
+          if (
+            weightA < -RASTER_EDGE_EPSILON
+            || weightB < -RASTER_EDGE_EPSILON
+            || weightC < -RASTER_EDGE_EPSILON
+          ) {
+            continue
+          }
+
+          const y = weightA * ay + weightB * by + weightC * cy
+          const offset = row * plan.cols + col
+          const previous = heights[offset] ?? Number.NaN
+          if (Number.isNaN(previous)) {
+            hitCount += 1
+            heights[offset] = y + frame.groundElevationMeters
+          } else if (y + frame.groundElevationMeters > previous) {
+            heights[offset] = y + frame.groundElevationMeters
+          }
+        }
       }
     }
 
-    processedSinceYield += plan.cols
-    if (processedSinceYield >= chunkCells) {
+    processedSinceYield += 1
+    if (processedSinceYield >= chunkTriangles) {
       processedSinceYield = 0
       onProgress?.({
         phase: 'sample',
-        loaded: row + 1,
-        total: plan.rows,
-        label: `采样 DEM 第 ${row + 1}/${plan.rows} 行`,
+        loaded: triangle + 1,
+        total: triangleCount,
+        label: `扫描地形三角形 ${triangle + 1}/${triangleCount}`,
       })
       await yieldFn()
     }
   }
 
   onProgress?.({
-    phase: 'fill',
-    loaded: plan.rows,
-    total: plan.rows,
-    label: '填充采样空洞',
+    phase: 'sample',
+    loaded: triangleCount,
+    total: triangleCount,
+    label: `扫描地形三角形 ${triangleCount}/${triangleCount}`,
   })
 
-  const { filledCount, wasHole } = fillDemHoles(heights, plan.rows, plan.cols)
-  const totalCells = plan.rows * plan.cols
+  const { filledCount, wasHole } = fillDemHoles(heights, plan.rows, plan.cols, {
+    onProgress: ({ filledCount: currentFilledCount, processedCount, totalCount }) => {
+      onProgress?.({
+        phase: 'fill',
+        loaded: processedCount,
+        total: totalCount,
+        label: `填充采样空洞 ${currentFilledCount}/${totalCount}`,
+      })
+    },
+  })
+  const totalCells = cellCount
 
   return {
     heights,
@@ -533,12 +669,17 @@ export function fillRgbHoles(
   wasHole: Uint8Array,
   rows: number,
   cols: number,
+  options: {
+    onProgress?: (progress: { processedCount: number; totalCount: number }) => void
+  } = {},
 ): number {
   const count = rows * cols
   const queue = new Int32Array(count)
   const pending = new Uint8Array(count)
+  const onProgress = options.onProgress
   let head = 0
   let tail = 0
+  let lastProgressAt = 0
 
   for (let index = 0; index < count; index += 1) {
     if (wasHole[index] === 1) {
@@ -578,8 +719,55 @@ export function fillRgbHoles(
       queue[tail] = neighbour
       tail += 1
     }
+
+    if (onProgress && head - lastProgressAt >= 65536) {
+      lastProgressAt = head
+      onProgress({ processedCount: head, totalCount: count })
+    }
   }
+  onProgress?.({ processedCount: count, totalCount: count })
   return filled
+}
+
+/**
+ * Treat both DEM sampling holes and actual black ortho pixels as uncovered.
+ * A missing material or failed tile otherwise survives as RGB 0 and causes the
+ * editor to reveal procedural terrain inside an otherwise textured raster.
+ */
+export function buildRgbCoverageHoleMask(
+  rgb: Uint8Array,
+  wasHole: Uint8Array,
+  rows: number,
+  cols: number,
+  options: {
+    onProgress?: (progress: { processedCount: number; totalCount: number }) => void
+  } = {},
+): { mask: Uint8Array; coveredCount: number; holeCount: number } {
+  const count = rows * cols
+  const mask = new Uint8Array(count)
+  const onProgress = options.onProgress
+  let coveredCount = 0
+  let holeCount = 0
+  for (let index = 0; index < count; index += 1) {
+    const offset = index * 3
+    const covered = (
+      (rgb[offset] ?? 0) !== 0
+      || (rgb[offset + 1] ?? 0) !== 0
+      || (rgb[offset + 2] ?? 0) !== 0
+    )
+    if (covered) {
+      coveredCount += 1
+    }
+    if (wasHole[index] === 1 || !covered) {
+      mask[index] = 1
+      holeCount += 1
+    }
+    if (onProgress && index > 0 && index % 65536 === 0) {
+      onProgress({ processedCount: index, totalCount: count })
+    }
+  }
+  onProgress?.({ processedCount: count, totalCount: count })
+  return { mask, coveredCount, holeCount }
 }
 
 /** Builds the `dem.json` sidecar for the exported package. */

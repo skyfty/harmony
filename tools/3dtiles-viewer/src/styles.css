@@ -391,6 +391,18 @@ input:focus, select:focus { border-color: var(--accent); }
   font-size: .76rem;
   line-height: 1.35;
 }
+.glb-preview-progress__cancel {
+  justify-self: start;
+  padding: .38rem .62rem;
+  border: 1px solid rgba(255, 159, 159, .34);
+  color: #ffd0d0;
+  background: rgba(255, 100, 100, .12);
+  font-size: .74rem;
+  pointer-events: auto;
+}
+.glb-preview-progress__cancel[hidden] {
+  display: none;
+}
 .glb-preview-progress__track {
   height: 5px;
   overflow: hidden;

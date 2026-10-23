@@ -48,6 +48,7 @@ class ProceduralLandscapeComponent extends Component<ProceduralLandscapeComponen
         cameraWorldDirectionScratch.set(direction.x, direction.y, direction.z)
         return cameraWorldDirectionScratch
       },
+      isCameraInteractionActive: () => this.context.getFrameState().cameraInteractionActive === true,
       getSeasonState: () => {
         const frameState = this.context.getFrameState()
         const environment = frameState.environment

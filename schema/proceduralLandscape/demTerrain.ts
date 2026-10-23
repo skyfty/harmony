@@ -5,7 +5,6 @@ import {
   type TerrainDemRuntimeGridData,
 } from '../terrainDemRuntimeGrid'
 import {
-  decodeTerrainDemRuntimeOrthoFile,
   terrainDemRuntimeOrthoToRgba,
   type TerrainDemRuntimeOrthoData,
 } from '../terrainDemRuntimeOrtho'
@@ -13,7 +12,6 @@ import type { TerrainHeightGrid } from './terrainSampler'
 import type { DemRoadbedTarget } from './demRoadbed'
 
 const demGridLoads = new Map<string, Promise<TerrainDemRuntimeGridData>>()
-const demOrthoLoads = new Map<string, Promise<TerrainDemRuntimeOrthoData>>()
 const demCoverageCache = new WeakMap<TerrainDemRuntimeGridData, Uint8Array>()
 
 /**
@@ -171,37 +169,6 @@ export function createDemTerrainHeightGrid(
     },
   }
   return grid
-}
-
-export function loadTerrainDemRuntimeOrtho(
-  url: string,
-  onProgress?: (value: number) => void,
-): Promise<TerrainDemRuntimeOrthoData> {
-  const normalized = url.trim()
-  if (!normalized) {
-    return Promise.reject(new Error('DEM runtime ortho URL is empty'))
-  }
-  const cached = demOrthoLoads.get(normalized)
-  if (cached) {
-    return cached
-  }
-  const controller = new AbortController()
-  const pending = fetchAssetBlob(normalized, controller, (value) => onProgress?.(value))
-    .then((payload) => {
-      const bytes = payload.bytes
-        ? new Uint8Array(payload.bytes)
-        : null
-      if (!bytes) {
-        throw new Error('DEM runtime ortho download returned no bytes')
-      }
-      return decodeTerrainDemRuntimeOrthoFile(bytes)
-    })
-    .catch((error) => {
-      demOrthoLoads.delete(normalized)
-      throw error
-    })
-  demOrthoLoads.set(normalized, pending)
-  return pending
 }
 
 export function createTerrainDemRuntimeOrthoTexture(

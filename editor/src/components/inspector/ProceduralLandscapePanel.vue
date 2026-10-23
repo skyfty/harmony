@@ -19,6 +19,7 @@ import {
   getProceduralLandscapeStats,
   type ProceduralLandscapeRuntimeStats,
 } from '@schema/proceduralLandscape/runtime'
+import { getProceduralLandscapeDemOrthoResolver } from '@schema/proceduralLandscape/demOrthoResolver'
 import {
   getLandscapeExclusionSnapshot,
   landscapeExclusionSignature,
@@ -28,6 +29,7 @@ import {
   ROAD_WIDTH_PRESETS,
   type RoadStyleId,
 } from '@schema/proceduralLandscape/roadStyle'
+import { getTerrainDemOrthoFileInfo } from '@/utils/demOrthoTextureLoader'
 
 const sceneStore = useSceneStore()
 const buildToolsStore = useBuildToolsStore()
@@ -89,12 +91,21 @@ const propsValue = computed<ProceduralLandscapeComponentProps | null>(() => {
   return clampProceduralLandscapeProps(component.props, selectedNodeId.value ?? '')
 })
 
-const aerialBaseMapAvailable = computed(() => {
+const isDemLandscape = computed(() => Boolean(propsValue.value?.dem.assetId))
+
+const orthoTextureAvailable = computed(() => {
   const dem = propsValue.value?.dem
   if (!dem) {
     return false
   }
-  return !dem.assetId || Boolean(dem.runtimeOrthoUrl)
+  if (!dem.assetId) {
+    return true
+  }
+  const asset = sceneStore.getAsset(dem.assetId)
+  return Boolean(
+    getTerrainDemOrthoFileInfo(asset)
+    || getProceduralLandscapeDemOrthoResolver()?.canResolve(dem.assetId),
+  )
 })
 
 const effectiveBaseMapMode = computed(() => (
@@ -134,17 +145,18 @@ const demOrthoStatusText = computed(() => {
     return ''
   }
   if (stats.demOrthoStatus === 'loading') {
-    return '航拍底图加载中…'
+    return '正射纹理加载中…'
   }
   if (stats.demOrthoStatus === 'ready') {
     const coverage = Math.max(0, Math.min(1, stats.demOrthoCoverage))
     const coverageHint = coverage < 0.999
       ? ` · 覆盖 ${Math.round(coverage * 100)}%（缺失区使用程序化地表）`
       : ''
-    return `航拍底图已加载${stats.demOrthoWidth > 0 ? ` · ${stats.demOrthoWidth}×${stats.demOrthoHeight}` : ''}${coverageHint}`
+    const sourceHint = stats.demOrthoSource === 'ortho-tif' ? ' · ortho.tif' : ''
+    return `正射纹理已加载${sourceHint}${stats.demOrthoWidth > 0 ? ` · ${stats.demOrthoWidth}×${stats.demOrthoHeight}` : ''}${coverageHint}`
   }
   if (stats.demOrthoStatus === 'error') {
-    return `航拍底图加载失败：${stats.demOrthoError ?? '未知错误'}`
+    return `正射纹理加载失败，已回退程序化地表：${stats.demOrthoError ?? '未知错误'}`
   }
   return ''
 })
@@ -1289,47 +1301,69 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
             </label>
           </div>
           <div class="pl-subtitle">基色模式</div>
-          <div class="pl-choice-row">
-            <button
-              type="button"
-              class="pl-choice"
-              :class="{ 'pl-choice--active': effectiveBaseMapMode === 'replace' }"
+          <template v-if="isDemLandscape">
+            <div class="pl-choice-row">
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': effectiveBaseMapMode === 'replace' }"
+                :disabled="!componentEnabled"
+                @click="patchGroup('surface', { baseMapMode: 'replace' })"
+              >仅程序化</button>
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': effectiveBaseMapMode === 'aerial' }"
+                :disabled="!componentEnabled || !orthoTextureAvailable"
+                :title="orthoTextureAvailable ? '从服务器加载 ortho.tif' : '当前 DEM 资源包未包含 ortho.tif'"
+                @click="patchGroup('surface', { baseMapMode: 'aerial' })"
+              >正射纹理</button>
+            </div>
+            <div v-if="!orthoTextureAvailable" class="pl-hint">
+              当前 DEM 资源包未包含 ortho.tif，只能使用程序化地表。
+            </div>
+            <div v-else-if="demOrthoStatusText" class="pl-hint">
+              {{ demOrthoStatusText }}
+            </div>
+          </template>
+          <template v-else>
+            <div class="pl-choice-row">
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': effectiveBaseMapMode === 'replace' }"
+                :disabled="!componentEnabled"
+                @click="patchGroup('surface', { baseMapMode: 'replace' })"
+              >仅程序化</button>
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': effectiveBaseMapMode === 'aerial' }"
+                :disabled="!componentEnabled"
+                @click="patchGroup('surface', { baseMapMode: 'aerial' })"
+              >仅航拍</button>
+              <button
+                type="button"
+                class="pl-choice"
+                :class="{ 'pl-choice--active': effectiveBaseMapMode === 'blend' }"
+                :disabled="!componentEnabled"
+                @click="patchGroup('surface', { baseMapMode: 'blend' })"
+              >混合</button>
+            </div>
+            <v-slider
+              v-if="effectiveBaseMapMode === 'blend'"
+              :model-value="propsValue.surface.baseMapBlend"
+              :min="0"
+              :max="1"
+              :step="0.05"
+              density="compact"
+              hide-details
+              color="primary"
               :disabled="!componentEnabled"
-              @click="patchGroup('surface', { baseMapMode: 'replace' })"
-            >仅程序化</button>
-            <button
-              v-if="aerialBaseMapAvailable"
-              type="button"
-              class="pl-choice"
-              :class="{ 'pl-choice--active': effectiveBaseMapMode === 'aerial' }"
-              :disabled="!componentEnabled"
-              @click="patchGroup('surface', { baseMapMode: 'aerial' })"
-            >仅航拍</button>
-            <button
-              v-if="aerialBaseMapAvailable"
-              type="button"
-              class="pl-choice"
-              :class="{ 'pl-choice--active': effectiveBaseMapMode === 'blend' }"
-              :disabled="!componentEnabled"
-              @click="patchGroup('surface', { baseMapMode: 'blend' })"
-            >混合</button>
-          </div>
-          <v-slider
-            v-if="aerialBaseMapAvailable && effectiveBaseMapMode === 'blend'"
-            :model-value="propsValue.surface.baseMapBlend"
-            :min="0"
-            :max="1"
-            :step="0.05"
-            density="compact"
-            hide-details
-            color="primary"
-            :disabled="!componentEnabled"
-            label="底图混合强度"
-            @update:model-value="(value) => patchGroup('surface', { baseMapBlend: Number(value) })"
-          />
-          <div v-else-if="effectiveBaseMapMode !== 'replace' && demOrthoStatusText" class="pl-hint">
-            {{ demOrthoStatusText }}
-          </div>
+              label="底图混合强度"
+              @update:model-value="(value) => patchGroup('surface', { baseMapBlend: Number(value) })"
+            />
+          </template>
         </div>
 
         <!-- 植被与其他要素 -->

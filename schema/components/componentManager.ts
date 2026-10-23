@@ -196,6 +196,7 @@ export class ComponentManager {
    * `getFrameState().environment` 永远为空，季节/时间/天气不会生效。
    */
   setFrameState(frameState: Partial<ComponentFrameState> | null | undefined): void {
+    this.frameState.cameraInteractionActive = frameState?.cameraInteractionActive === true
     const nextEnvironment = frameState?.environment
     if (nextEnvironment) {
       this.frameStateEnvironment.season = nextEnvironment.season

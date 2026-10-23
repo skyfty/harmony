@@ -49,7 +49,7 @@ export interface TerrainDemAssetContents {
   ortho: TerrainDemAssetFile | null
 }
 
-function resolveTerrainDemRasterUrl(assetUrl: string, relativePath: string): string {
+export function resolveTerrainDemRasterUrl(assetUrl: string, relativePath: string): string {
   const base = assetUrl.trim()
   const relative = relativePath.trim().replace(/\\/g, '/')
   if (

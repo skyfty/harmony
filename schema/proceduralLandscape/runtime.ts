@@ -20,12 +20,12 @@ import {
   createDemTerrainMeshBuilder,
   createTerrainDemRuntimeOrthoTexture,
   loadTerrainDemRuntimeGrid,
-  loadTerrainDemRuntimeOrtho,
   sampleVisibleDemSurfaceHeightAt,
   type DemTerrainMeshBuilder,
 } from './demTerrain'
 import type { TerrainDemRuntimeGridData } from '../terrainDemRuntimeGrid'
 import { terrainDemRuntimeOrthoCoverage } from '../terrainDemRuntimeOrtho'
+import { getProceduralLandscapeDemOrthoResolver } from './demOrthoResolver'
 import {
   buildTerrainSurfaceSampler,
   type TerrainSurfaceBounds,
@@ -436,6 +436,7 @@ export interface ProceduralLandscapeRuntimeStats {
   demOrthoBytes: number | null
   demOrthoWidth: number
   demOrthoHeight: number
+  demOrthoSource: 'ortho-tif' | null
   /** Fraction of orthophoto pixels with RGB data (0..1; missing pixels are black). */
   demOrthoCoverage: number
   demOrthoError: string | null
@@ -457,6 +458,7 @@ export interface ProceduralLandscapeRuntimeHooks {
   getHostObject(): THREE.Object3D | null
   getCameraWorldPosition(): THREE.Vector3 | null
   getCameraWorldDirection?(): THREE.Vector3 | null
+  isCameraInteractionActive?(): boolean
   /** 来自 ComponentFrameState.environment（EnvironmentPanel 设置）。 */
   getSeasonState(): ProceduralLandscapeEnvironmentState | null
 }
@@ -757,7 +759,6 @@ export function resolveDemRoadbedSignature(
   return jsonKey([
     props.dem.assetId,
     props.dem.runtimeGridUrl,
-    props.dem.runtimeOrthoUrl,
     options.sampleStep,
     options.cellSize,
     props.generationRevision,
@@ -951,7 +952,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     dem: jsonKey([
       props.dem.assetId,
       props.dem.runtimeGridUrl,
-      props.dem.runtimeOrthoUrl,
       props.dem.sampleStep,
     ]),
     world: jsonKey([
@@ -1017,6 +1017,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let exclusionCapturePending = true
   let landscapeWorldBuilt = false
   let forceStream = true
+  let deferredCameraInteractionWork = false
   let enabled = true
   let disposed = false
   let hostObject: THREE.Object3D | null = null
@@ -1298,6 +1299,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demOrthoBytes: null,
     demOrthoWidth: 0,
     demOrthoHeight: 0,
+    demOrthoSource: null,
     demOrthoCoverage: 0,
     demOrthoError: null,
     demTransformWarning: null,
@@ -1585,10 +1587,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     demOrthoTexture?.dispose()
     demOrthoTexture = null
     demOrthoSourceKey = ''
-    stats.demOrthoStatus = props.dem.runtimeOrthoUrl ? 'idle' : 'unavailable'
-    stats.demOrthoBytes = props.dem.runtimeOrthoBytes ?? null
+    stats.demOrthoStatus = props.dem.assetId ? 'idle' : 'unavailable'
+    stats.demOrthoBytes = null
     stats.demOrthoWidth = 0
     stats.demOrthoHeight = 0
+    stats.demOrthoSource = null
     stats.demOrthoCoverage = 0
     stats.demOrthoError = null
   }
@@ -1620,14 +1623,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   function ensureDemOrthoTexture(): void {
     if (!enabled || !shouldLoadProceduralLandscapeOrtho(props)) {
       syncDemOrthoTextureBinding()
-      if (!props.dem.runtimeOrthoUrl) {
+      if (!props.dem.assetId) {
         stats.demOrthoStatus = 'unavailable'
       }
       return
     }
-    const url = props.dem.runtimeOrthoUrl
-    if (!url) {
-      stats.demOrthoStatus = 'unavailable'
+    const assetId = props.dem.assetId
+    const resolver = getProceduralLandscapeDemOrthoResolver()
+    if (!assetId || !resolver?.canResolve(assetId)) {
+      stats.demOrthoStatus = 'error'
+      stats.demOrthoSource = null
+      stats.demOrthoError = '当前 DEM 资源缺少可解析的 ortho.tif。'
       syncDemOrthoTextureBinding()
       return
     }
@@ -1636,17 +1642,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       syncDemOrthoTextureBinding()
       return
     }
-    if (demOrthoLoadPromise && demOrthoSourceKey === url) {
+    if (demOrthoLoadPromise && demOrthoSourceKey === assetId) {
       return
     }
     const token = ++demOrthoLoadToken
-    const key = url
+    const key = assetId
     demOrthoSourceKey = key
     stats.demOrthoStatus = 'loading'
+    stats.demOrthoSource = null
     stats.demOrthoError = null
-    demOrthoLoadPromise = loadTerrainDemRuntimeOrtho(url)
+    demOrthoLoadPromise = resolver.load(assetId)
       .then((data) => {
-        if (disposed || token !== demOrthoLoadToken || key !== props.dem.runtimeOrthoUrl) {
+        if (disposed || token !== demOrthoLoadToken || key !== props.dem.assetId) {
           return
         }
         const texture = createTerrainDemRuntimeOrthoTexture(
@@ -1655,9 +1662,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         )
         demOrthoTexture = texture
         stats.demOrthoStatus = 'ready'
-        stats.demOrthoBytes = data.width * data.height * 4
+        stats.demOrthoBytes = data.sourceBytes
         stats.demOrthoWidth = data.width
         stats.demOrthoHeight = data.height
+        stats.demOrthoSource = 'ortho-tif'
         stats.demOrthoCoverage = terrainDemRuntimeOrthoCoverage(data)
         stats.demOrthoError = null
         syncDemOrthoTextureBinding()
@@ -1667,8 +1675,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           return
         }
         stats.demOrthoStatus = 'error'
+        stats.demOrthoSource = null
         stats.demOrthoError = error instanceof Error ? error.message : String(error)
         warn(`dem-ortho-load-failed:${stats.demOrthoError}`)
+        syncDemOrthoTextureBinding()
       })
       .finally(() => {
         if (token === demOrthoLoadToken) {
@@ -1729,7 +1739,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!usesDemTerrain() || demLoadPromise) {
       return
     }
-    const key = `${props.dem.assetId}|${props.dem.runtimeGridUrl}|${props.dem.runtimeOrthoUrl}|${resolveDemSampleStep()}`
+    const key = `${props.dem.assetId}|${props.dem.runtimeGridUrl}|${resolveDemSampleStep()}`
     demSourceKey = key
     const token = ++demLoadToken
     stats.demStatus = 'loading'
@@ -2164,7 +2174,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     worldForestBuildStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
   }
 
-  function updateWorldForest(): void {
+  function updateWorldForest(scanBudget = 25_000): void {
     if (!worldForestScan || !grid || !densityField) {
       return
     }
@@ -2179,7 +2189,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           ? (x: number, z: number) => treeSpeciesField!.sampleSpecies(x, z)
           : undefined,
       },
-      25_000,
+      scanBudget,
     )
     if (done) {
       let placements = worldForestCorridor.concat(worldForestScan.placements)
@@ -2266,6 +2276,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function resetAll(): void {
+    deferredCameraInteractionWork = false
     disposeSurfaceState()
     disposeWorldState()
     disposeWaterAndBarrier()
@@ -3989,12 +4000,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
    * 调用方应继续请求下一帧（否则相机静止时会停在半成品状态——
    * 编辑器里会出现"只有相机附近一小块有植被"的现象）。
    */
-  function streamBatches(camera: THREE.Vector3): boolean {
+  function streamBatches(camera: THREE.Vector3, budgetOverride?: number): boolean {
     if (!grid || !densityField) {
       return false
     }
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
-    let budget = tier.maxBuildTasksPerTick
+    let budget = Math.max(1, Math.floor(budgetOverride ?? tier.maxBuildTasksPerTick))
     let pendingLeft = false
 
     // Trees are supplied by the world-anchored placement index. The old chunk
@@ -4954,16 +4965,25 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // LOD dissolve must follow the camera every frame, not only when the
       // 200ms streaming tick runs (2.8m at 14m/s is visible on steep slopes).
       foliageUniforms.cameraPosition.value.copy(camera)
+      if (hooks.isCameraInteractionActive?.()) {
+        deferredCameraInteractionWork = true
+        updateStats()
+        return
+      }
+      const isInteractionCatchUp = deferredCameraInteractionWork
       if (needsStreaming(camera, elapsedMs)) {
         lastStreamAt = elapsedMs
         lastStreamCamera.copy(camera)
         forceStream = false
         // 预算用尽但仍有余量任务时继续请求后续帧，直到视野内植被补齐。
-        forceStream = streamBatches(camera)
+        forceStream = streamBatches(camera, isInteractionCatchUp ? 1 : undefined)
       }
-      updateWorldForest()
+      updateWorldForest(isInteractionCatchUp ? 2_500 : undefined)
       updateNearTreeLayers(camera)
       updateTreeMeshes(camera)
+      if (isInteractionCatchUp && !worldForestScan && !forceStream) {
+        deferredCameraInteractionWork = false
+      }
     }
     waterPlane?.update()
     if (chunkDebugDirty) {
@@ -5034,7 +5054,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         dem: jsonKey([
           props.dem.assetId,
           props.dem.runtimeGridUrl,
-          props.dem.runtimeOrthoUrl,
           props.dem.sampleStep,
         ]),
         world: jsonKey([

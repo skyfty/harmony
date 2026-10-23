@@ -4,6 +4,12 @@ export interface ComponentFrameState {
   cameraWorldPosition: { x: number; y: number; z: number } | null
   cameraWorldDirection?: { x: number; y: number; z: number } | null
   /**
+   * Host camera is actively being dragged. Components may defer expensive
+   * camera-driven streaming/LOD rebuilds while keeping camera-dependent
+   * uniforms current.
+   */
+  cameraInteractionActive?: boolean
+  /**
    * Slow Roads 环境状态（季节 × 时间 × 天气）。宿主每帧从
    * EnvironmentSettings.slowroads 注入，proceduralLandscape 等组件据此
    * 选择季节素材与调色板；缺省时组件回退到默认状态。

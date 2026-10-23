@@ -1,5 +1,9 @@
 import * as THREE from 'three'
 import CameraControls from 'camera-controls'
+import {
+  createLatestCameraGestureFrameCoalescer,
+  type CameraGestureFrameApi,
+} from './cameraGestureFrameCoalescer'
 
 type SceneViewportCameraControlEventMap = {
   change: { type: 'change' }
@@ -24,6 +28,17 @@ const POSITION_EPSILON = 1e-8
 const PLANAR_DIRECTION_EPSILON = 1e-10
 const FOCAL_OFFSET_EPSILON = 1e-8
 
+type PendingCameraGesturePointer = {
+  pointerId: number
+  clientX: number
+  clientY: number
+}
+
+const browserFrameApi: CameraGestureFrameApi = {
+  request: (callback) => requestAnimationFrame(callback),
+  cancel: (handle) => cancelAnimationFrame(handle),
+}
+
 export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneViewportCameraControlEventMap> {
   readonly target = new THREE.Vector3()
   readonly focalOffset = new THREE.Vector3()
@@ -38,6 +53,17 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   private readonly planarPanTarget = new THREE.Vector3()
   private readonly planarPanPosition = new THREE.Vector3()
   private readonly clampDirection = new THREE.Vector3()
+  private readonly previousTarget = new THREE.Vector3()
+  private readonly previousPosition = new THREE.Vector3()
+  private readonly previousFocalOffset = new THREE.Vector3()
+  private readonly flushPlanarPanFrame = createLatestCameraGestureFrameCoalescer<PendingCameraGesturePointer>(
+    (pointer) => this.applyPlanarPanGesture(pointer),
+    browserFrameApi,
+  )
+  private readonly flushOrbitRotateFrame = createLatestCameraGestureFrameCoalescer<PendingCameraGesturePointer>(
+    (pointer) => this.applyOrbitRotateGesture(pointer),
+    browserFrameApi,
+  )
   private orbitRotateSession: { pointerId: number; lastX: number; lastY: number } | null = null
   private readonly boundKeyDown: (event: KeyboardEvent) => void
 
@@ -46,6 +72,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   private currentMode: SceneViewportCameraControlMode = 'orbit'
   private planarPanSession: { pointerId: number; lastX: number; lastY: number } | null = null
   private transientLeftRotateActive = false
+  private nativeControlActive = false
 
   constructor(camera: THREE.PerspectiveCamera, domElement: HTMLElement) {
     super()
@@ -73,6 +100,13 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
 
   set enabled(value: boolean) {
     this.controls.enabled = value
+  }
+
+  get isCameraGestureActive(): boolean {
+    return this.nativeControlActive
+      || this.transientLeftRotateActive
+      || this.planarPanSession !== null
+      || this.orbitRotateSession !== null
   }
 
   get object(): THREE.PerspectiveCamera {
@@ -151,6 +185,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   }
 
   applyMode(mode: SceneViewportCameraControlMode) {
+    this.cancelPendingPointerUpdates()
     this.currentMode = mode
     const { ACTION } = CameraControls
 
@@ -196,46 +231,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
       return false
     }
 
-    const dx = clientX - this.planarPanSession.lastX
-    const dy = clientY - this.planarPanSession.lastY
-    this.planarPanSession.lastX = clientX
-    this.planarPanSession.lastY = clientY
-
-    if (Math.abs(dx) <= Number.EPSILON && Math.abs(dy) <= Number.EPSILON) {
-      return false
-    }
-
-    const cameraPosition = this.getPosition(this.planarPanPosition, false)
-    const target = this.getTarget(this.planarPanTarget, false)
-    const distance = Math.max(cameraPosition.distanceTo(target), 1e-3)
-    const unitsPerPixel = this.computeWorldUnitsPerPixel(distance) * Math.max(this.panSpeed, 1e-3)
-
-    this.planarPanForward.copy(target).sub(cameraPosition)
-    this.planarPanForward.y = 0
-    if (this.planarPanForward.lengthSq() <= PLANAR_DIRECTION_EPSILON) {
-      this.controls.camera.getWorldDirection(this.planarPanForward)
-      this.planarPanForward.y = 0
-    }
-    if (this.planarPanForward.lengthSq() <= PLANAR_DIRECTION_EPSILON) {
-      return false
-    }
-    this.planarPanForward.normalize()
-
-    this.planarPanRight.crossVectors(this.planarPanForward, THREE.Object3D.DEFAULT_UP)
-    if (this.planarPanRight.lengthSq() <= PLANAR_DIRECTION_EPSILON) {
-      this.planarPanRight.set(1, 0, 0)
-    } else {
-      this.planarPanRight.normalize()
-    }
-
-    this.planarPanDelta
-      .copy(this.planarPanRight)
-      .multiplyScalar(-dx * unitsPerPixel)
-      .addScaledVector(this.planarPanForward, dy * unitsPerPixel)
-
-    this.planarPanPosition.add(this.planarPanDelta)
-    this.planarPanTarget.add(this.planarPanDelta)
-    this.setLookAt(this.planarPanPosition, this.planarPanTarget, false)
+    this.flushPlanarPanFrame.push({ pointerId, clientX, clientY })
     return true
   }
 
@@ -246,6 +242,18 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     if (typeof pointerId === 'number' && this.planarPanSession.pointerId !== pointerId) {
       return
     }
+    this.flushPlanarPanFrame.flush()
+    this.planarPanSession = null
+  }
+
+  cancelPlanarPanGesture(pointerId?: number) {
+    if (!this.planarPanSession) {
+      return
+    }
+    if (typeof pointerId === 'number' && this.planarPanSession.pointerId !== pointerId) {
+      return
+    }
+    this.cancelPendingPointerUpdates(pointerId)
     this.planarPanSession = null
   }
 
@@ -281,22 +289,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
       return false
     }
 
-    const dx = clientX - this.orbitRotateSession.lastX
-    const dy = clientY - this.orbitRotateSession.lastY
-    this.orbitRotateSession.lastX = clientX
-    this.orbitRotateSession.lastY = clientY
-
-    if (Math.abs(dx) <= Number.EPSILON && Math.abs(dy) <= Number.EPSILON) {
-      return false
-    }
-
-    const width = Math.max(1, this.domElement.clientWidth || 1)
-    const height = Math.max(1, this.domElement.clientHeight || 1)
-    const azimuth = (-dx / width) * Math.PI * Math.max(this.rotateSpeed, 1e-3)
-    const polar = (-dy / height) * Math.PI * Math.max(this.rotateSpeed, 1e-3)
-    this.controls.rotate(azimuth, polar, false)
-    this.syncFromControls()
-    this.dispatchEvent({ type: 'change' })
+    this.flushOrbitRotateFrame.push({ pointerId, clientX, clientY })
     return true
   }
 
@@ -307,7 +300,35 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     if (typeof pointerId === 'number' && this.orbitRotateSession.pointerId !== pointerId) {
       return
     }
+    this.flushOrbitRotateFrame.flush()
     this.orbitRotateSession = null
+  }
+
+  cancelOrbitRotateGesture(pointerId?: number) {
+    if (!this.orbitRotateSession) {
+      return
+    }
+    if (typeof pointerId === 'number' && this.orbitRotateSession.pointerId !== pointerId) {
+      return
+    }
+    this.cancelPendingPointerUpdates(pointerId)
+    this.orbitRotateSession = null
+  }
+
+  flushPendingCameraGesture(pointerId?: number): boolean {
+    const planarPointerId = this.planarPanSession?.pointerId
+    const orbitPointerId = this.orbitRotateSession?.pointerId
+    if (typeof pointerId === 'number' && planarPointerId !== pointerId && orbitPointerId !== pointerId) {
+      return false
+    }
+    let flushed = false
+    if (planarPointerId !== undefined && (pointerId === undefined || planarPointerId === pointerId)) {
+      flushed = this.flushPlanarPanFrame.flush() || flushed
+    }
+    if (orbitPointerId !== undefined && (pointerId === undefined || orbitPointerId === pointerId)) {
+      flushed = this.flushOrbitRotateFrame.flush() || flushed
+    }
+    return flushed
   }
 
   setLookAt(position: THREE.Vector3, target: THREE.Vector3, enableTransition = false) {
@@ -403,6 +424,7 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   handleResize(): void {}
 
   dispose() {
+    this.cancelPendingPointerUpdates()
     window.removeEventListener('keydown', this.boundKeyDown)
     this.controls.removeEventListener('controlstart', this.handleControlStart)
     this.controls.removeEventListener('controlend', this.handleControlEnd)
@@ -410,10 +432,12 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   }
 
   private readonly handleControlStart = () => {
+    this.nativeControlActive = true
     this.dispatchEvent({ type: 'start' })
   }
 
   private readonly handleControlEnd = () => {
+    this.nativeControlActive = false
     this.syncFromControls()
     this.dispatchEvent({ type: 'end' })
     this.dispatchEvent({ type: 'change' })
@@ -539,9 +563,9 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   }
 
   private syncFromControls(): boolean {
-    const previousTarget = new THREE.Vector3().copy(this.target)
-    const previousPosition = new THREE.Vector3().copy(this.lastCameraPosition)
-    const previousFocalOffset = new THREE.Vector3().copy(this.focalOffset)
+    const previousTarget = this.previousTarget.copy(this.target)
+    const previousPosition = this.previousPosition.copy(this.lastCameraPosition)
+    const previousFocalOffset = this.previousFocalOffset.copy(this.focalOffset)
 
     this.controls.getTarget(this.currentTarget, false)
     this.controls.getFocalOffset(this.focalOffset, false)
@@ -551,5 +575,85 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     return previousTarget.distanceToSquared(this.target) > TARGET_EPSILON
       || previousFocalOffset.distanceToSquared(this.focalOffset) > FOCAL_OFFSET_EPSILON
       || previousPosition.distanceToSquared(this.lastCameraPosition) > POSITION_EPSILON
+  }
+
+  private applyPlanarPanGesture(pointer: PendingCameraGesturePointer): void {
+    const session = this.planarPanSession
+    if (this.currentMode !== 'map' || !session || session.pointerId !== pointer.pointerId) {
+      return
+    }
+
+    const dx = pointer.clientX - session.lastX
+    const dy = pointer.clientY - session.lastY
+    session.lastX = pointer.clientX
+    session.lastY = pointer.clientY
+
+    if (Math.abs(dx) <= Number.EPSILON && Math.abs(dy) <= Number.EPSILON) {
+      return
+    }
+
+    const cameraPosition = this.getPosition(this.planarPanPosition, false)
+    const target = this.getTarget(this.planarPanTarget, false)
+    const distance = Math.max(cameraPosition.distanceTo(target), 1e-3)
+    const unitsPerPixel = this.computeWorldUnitsPerPixel(distance) * Math.max(this.panSpeed, 1e-3)
+
+    this.planarPanForward.copy(target).sub(cameraPosition)
+    this.planarPanForward.y = 0
+    if (this.planarPanForward.lengthSq() <= PLANAR_DIRECTION_EPSILON) {
+      this.controls.camera.getWorldDirection(this.planarPanForward)
+      this.planarPanForward.y = 0
+    }
+    if (this.planarPanForward.lengthSq() <= PLANAR_DIRECTION_EPSILON) {
+      return
+    }
+    this.planarPanForward.normalize()
+
+    this.planarPanRight.crossVectors(this.planarPanForward, THREE.Object3D.DEFAULT_UP)
+    if (this.planarPanRight.lengthSq() <= PLANAR_DIRECTION_EPSILON) {
+      this.planarPanRight.set(1, 0, 0)
+    } else {
+      this.planarPanRight.normalize()
+    }
+
+    this.planarPanDelta
+      .copy(this.planarPanRight)
+      .multiplyScalar(-dx * unitsPerPixel)
+      .addScaledVector(this.planarPanForward, dy * unitsPerPixel)
+
+    this.planarPanPosition.add(this.planarPanDelta)
+    this.planarPanTarget.add(this.planarPanDelta)
+    this.setLookAt(this.planarPanPosition, this.planarPanTarget, false)
+  }
+
+  private applyOrbitRotateGesture(pointer: PendingCameraGesturePointer): void {
+    const session = this.orbitRotateSession
+    if (this.currentMode !== 'orbit' || !session || session.pointerId !== pointer.pointerId) {
+      return
+    }
+
+    const dx = pointer.clientX - session.lastX
+    const dy = pointer.clientY - session.lastY
+    session.lastX = pointer.clientX
+    session.lastY = pointer.clientY
+    if (Math.abs(dx) <= Number.EPSILON && Math.abs(dy) <= Number.EPSILON) {
+      return
+    }
+
+    const width = Math.max(1, this.domElement.clientWidth || 1)
+    const height = Math.max(1, this.domElement.clientHeight || 1)
+    const azimuth = (-dx / width) * Math.PI * Math.max(this.rotateSpeed, 1e-3)
+    const polar = (-dy / height) * Math.PI * Math.max(this.rotateSpeed, 1e-3)
+    this.controls.rotate(azimuth, polar, false)
+    this.syncFromControls()
+    this.dispatchEvent({ type: 'change' })
+  }
+
+  private cancelPendingPointerUpdates(pointerId?: number): void {
+    if (pointerId === undefined || this.planarPanSession?.pointerId === pointerId) {
+      this.flushPlanarPanFrame.cancel()
+    }
+    if (pointerId === undefined || this.orbitRotateSession?.pointerId === pointerId) {
+      this.flushOrbitRotateFrame.cancel()
+    }
   }
 }

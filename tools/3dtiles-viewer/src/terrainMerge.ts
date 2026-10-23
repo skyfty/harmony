@@ -34,6 +34,15 @@ export interface TerrainMergeOptions {
   skirtAspectRatio?: number
   /** A near-vertical triangle below this height (m) is never treated as a skirt. */
   skirtMinHeight?: number
+  /** Optional progress reporting used by the browser worker. */
+  onProgress?: (progress: TerrainMergeProgress) => void
+}
+
+export interface TerrainMergeProgress {
+  phase: 'prepare' | 'weld' | 'smooth' | 'assemble'
+  completed: number
+  total: number
+  label: string
 }
 
 export interface TerrainMergeStats {
@@ -185,6 +194,7 @@ function weldPreparedDomain(
   domain: PreparedItem[],
   options: Required<Pick<TerrainMergeOptions, 'weldEpsilon' | 'quantizeStep'>>,
   stats: TerrainMergeStats,
+  onProgress?: (progress: TerrainMergeProgress) => void,
 ): PreparedItem | null {
   const hashStep = Math.max(options.quantizeStep, options.weldEpsilon)
   const vertexMap = new Map<string, number[]>()
@@ -195,6 +205,9 @@ function weldPreparedDomain(
   const sourceToTargetByItem = domain.map(() => new Map<number, number>())
 
   const weldDistanceSq = options.weldEpsilon * options.weldEpsilon
+  const totalTriangles = domain.reduce((sum, item) => sum + item.indices.length / 3, 0)
+  let processedTriangles = 0
+  let lastProgressAt = 0
 
   for (let itemIndex = 0; itemIndex < domain.length; itemIndex += 1) {
     const item = domain[itemIndex]
@@ -272,8 +285,26 @@ function weldPreparedDomain(
         sourceToTarget.set(sourceIndex!, target)
         newIndices.push(target)
       }
+
+      processedTriangles += 1
+      if (onProgress && processedTriangles - lastProgressAt >= 4096) {
+        lastProgressAt = processedTriangles
+        onProgress({
+          phase: 'weld',
+          completed: processedTriangles,
+          total: totalTriangles,
+          label: `焊接地形网格 ${processedTriangles}/${totalTriangles} 三角形`,
+        })
+      }
     }
   }
+
+  onProgress?.({
+    phase: 'weld',
+    completed: totalTriangles,
+    total: totalTriangles,
+    label: `焊接地形网格 ${totalTriangles}/${totalTriangles} 三角形`,
+  })
 
   if (newIndices.length < 3) {
     return null
@@ -475,6 +506,15 @@ export function mergeTerrainGeometries(
     droppedAttributes: [],
   }
 
+  const onProgress = options.onProgress
+  const totalSourceTriangles = sources.reduce((sum, source) => {
+    const position = source.geometry.getAttribute('position')
+    const index = source.geometry.getIndex()
+    if (index) return sum + Math.floor(index.count / 3)
+    return sum + (position ? Math.floor(position.count / 3) : 0)
+  }, 0)
+  let preparedTriangleCount = 0
+
   const itemsByMaterial = new Map<number, PreparedItem[]>()
   for (const source of sources) {
     const item = prepareItem(source, stats)
@@ -484,12 +524,19 @@ export function mergeTerrainGeometries(
     const domain = itemsByMaterial.get(item.materialIndex) ?? []
     domain.push(item)
     itemsByMaterial.set(item.materialIndex, domain)
+    preparedTriangleCount += item.indices.length / 3
+    onProgress?.({
+      phase: 'prepare',
+      completed: preparedTriangleCount,
+      total: totalSourceTriangles,
+      label: `准备地形网格 ${preparedTriangleCount}/${totalSourceTriangles} 三角形`,
+    })
   }
 
   const items: PreparedItem[] = []
   for (const materialIndex of [...itemsByMaterial.keys()].sort((a, b) => a - b)) {
     const domain = itemsByMaterial.get(materialIndex) ?? []
-    const welded = weldPreparedDomain(domain, mergedOptions, stats)
+    const welded = weldPreparedDomain(domain, mergedOptions, stats, onProgress)
     if (!welded) {
       continue
     }
@@ -505,12 +552,24 @@ export function mergeTerrainGeometries(
   }
 
   if (mergedOptions.smoothNormals) {
+    onProgress?.({
+      phase: 'smooth',
+      completed: 0,
+      total: items.length,
+      label: '平滑地形法线',
+    })
     smoothNormalsAcrossItems(items, mergedOptions)
   } else {
     for (const item of items) {
       computeFlatNormalsPerItem(item)
     }
   }
+  onProgress?.({
+    phase: 'smooth',
+    completed: items.length,
+    total: items.length,
+    label: '平滑地形法线',
+  })
 
   let totalVertices = 0
   let totalIndices = 0
@@ -566,6 +625,12 @@ export function mergeTerrainGeometries(
 
   stats.outputVertexCount = totalVertices
   stats.outputTriangleCount = Math.floor(totalIndices / 3)
+  onProgress?.({
+    phase: 'assemble',
+    completed: 1,
+    total: 1,
+    label: `组装地形网格 ${stats.outputTriangleCount} 三角形`,
+  })
 
   return { geometry, groups, stats }
 }

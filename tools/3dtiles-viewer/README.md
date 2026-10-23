@@ -78,15 +78,18 @@ node tools/dist/cli-bin.js process-terrain-textures --manifest <解压目录>/te
 - **正射影像**：取消勾选则只导出高程；
 - 采样空洞（网格未覆盖处）用最近有效值填充，填充率超过 5% 时记录警告。
 
+合并、三角形栅格化、GeoTIFF 编码和 ZIP 打包在 Web Worker 中执行，主界面会显示当前阶段、真实计数、进度和已用时间；点击「取消导出」会终止 Worker 和后续正射渲染，不会产生下载。采样采用三角形扫描转换并保留格点上的最高表面，不再为每个 DEM 格点执行一次 BVH 射线查询。
+
+正射渲染按 `1024×1024` 瓦片切分并使用异步像素回读，相机视锥使用以瓦片中心为原点的局部半宽/半高。修复前的版本曾把绝对 UTM 世界坐标误传给 Three.js 正交相机，导致大瓦片裁切、最后一列瓦片全黑和纹理错位；这类旧 ZIP 内缺失的像素无法修复，需要重新导出并重新上传。导出器还会把 DEM 采样空洞与渲染得到的黑色像素共同作为纹理空洞，用最近有效颜色填充并写入警告。
+
 高程基准为 WGS84 椭球高，与 SRTM/QGIS 使用的大地水准面高存在系统差；该差值记录在侧车的锚点信息中，可在编辑器按需平移校正。
 
-资源库流程：在 admin 资源页上传该 `.zip`。ZIP 只作为服务端导入容器，不会注册或保存；服务端解压后登记 `dem.json`，并将 TIF 保留为同目录私有文件。编辑器资源库只看到 `dem.json` 元数据资产，`PlanningDialog → DEM / Heightmap` 选择该资产后按需下载 TIF：
+资源库流程：在 admin 资源页上传该 `.zip`。ZIP 只作为服务端导入容器，不会注册或保存；服务端解压后登记 `dem.json`，并将 TIF 保留为同目录私有文件。将 DEM 资源拖入场景后，`ProceduralLandscapeComponent` 使用服务端生成的 runtime grid 创建地形几何：
 
-1. 先下载并解析 `dem.json`，再按其中的 `dem.file` / `ortho.file` 相对路径下载 TIF；
-2. `dem.tif` 走既有 GeoTIFF DEM 导入校验（投影坐标系、方形像素、NoData 限制），自动带出世界范围，无需手工覆盖；
-3. `ortho.tif` 存入 planning 资源库，并写入地形 `orthophoto` 元数据（`source: 'manual-upload'`）；
-4. 侧车写入 `PlanningTerrainDemData.sourcePackage`，用于展示来源（UTM 带）与后续偏移校正。
+1. `dem.tif` 在服务端转换为紧凑的高度网格，组件加载后自动取回世界范围和高度；
+2. 默认使用“仅程序化”地表，不下载正射纹理；
+3. 在 `ProceduralLandscapePanel` 中选择“正射纹理”后，组件从服务器下载 `dem.json` 和其中 `ortho.file` 指向的原始 `ortho.tif`；
+4. `ortho.tif` 在 Worker 中校验尺寸、CRS、北向上方向与地理变换，降采样并转换为南向上的地形纹理；
+5. 资源包缺少 `ortho.tif` 时，面板禁用“正射纹理”并保留程序化地表；解析失败时同样回退程序化地表并在面板显示错误。
 
 编辑器不再接受 ZIP 文件导入，也不再下载整个 ZIP 作为可拖放资产。
-
-导入后地形由 `planningDemToGround` 分块生成，proceduralLandscape 直接作用于该地形；`replace` 模式下不会请求任何 GLB 贴图。

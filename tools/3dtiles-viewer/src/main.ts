@@ -11,17 +11,20 @@ import {
   type TerrainMergeStats,
 } from './terrainMerge'
 import {
-  buildTerrainDemSidecar,
   copyRenderTargetTileToOrtho,
-  encodeDemGeoTiff,
-  encodeOrthoGeoTiff,
-  fillRgbHoles,
   planDemGrid,
-  resolveDemGeoReference,
-  sampleDemHeights,
+  resolveDemOrthoCameraFrame,
+  type DemExportPhase,
+  type DemExportStageTiming,
   type DemExportFrame,
   type DemGridPlan,
 } from './demExport'
+import type {
+  DemWorkerMergedGeometry,
+  DemWorkerMergeSource,
+  DemWorkerRequest,
+  DemWorkerResponse,
+} from './demExport.worker'
 import { buildZipArchive } from './zipArchive'
 import { TilesRenderer } from '3d-tiles-renderer'
 import { CAMERA_FRAME } from '3d-tiles-renderer/src/three/renderer/math/Ellipsoid'
@@ -118,6 +121,7 @@ app.innerHTML = `
                 <div class="glb-preview-progress__fill" id="glb-preview-progress-fill"></div>
               </div>
               <div class="glb-preview-progress__detail" id="glb-preview-progress-detail"></div>
+              <button class="glb-preview-progress__cancel" id="glb-preview-cancel" type="button" hidden>取消导出</button>
             </div>
           </div>
         </section>
@@ -159,19 +163,20 @@ const glbPreviewProgressStatus = $('#glb-preview-progress-status')
 const glbPreviewProgressTone = $('#glb-preview-progress-tone')
 const glbPreviewProgressFill = $('#glb-preview-progress-fill')
 const glbPreviewProgressDetail = $('#glb-preview-progress-detail')
+const glbPreviewCancelButton = $('#glb-preview-cancel') as HTMLButtonElement
 
 const CTRL_CLICK_FLY_DURATION_MS = 280
 const CTRL_CLICK_MOVE_THRESHOLD_PX = 6
 
 const query = new URLSearchParams(window.location.search)
 const settings: Settings = {
-  lon: Number(query.get('lon') ?? 91.1158416667),
-  lat: Number(query.get('lat') ?? 29.6439555556),
-  groundElevation: Number(query.get('ground') ?? query.get('groundElevation') ?? 3651.5),
+  lon: Number(query.get('lon') ?? 118.4381361111),
+  lat: Number(query.get('lat') ?? 39.8354166667),
+  groundElevation: Number(query.get('ground') ?? query.get('groundElevation') ?? 89.5),
 }
 coordinateTextInput.value = query.has('lat') || query.has('lon')
   ? `${settings.lat}, ${settings.lon}`
-  : `29°38'38.24"N 91°06'57.03"E`
+  : `39°50'27.50"N 118°26'17.29"E`
 groundElevationInput.value = String(settings.groundElevation)
 
 const mainScene = new THREE.Scene()
@@ -217,7 +222,7 @@ glbRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 glbRenderer.outputColorSpace = THREE.SRGBColorSpace
 glbRenderer.toneMapping = THREE.AgXToneMapping
 glbRenderer.toneMappingExposure = 1.25
-glbPreviewViewport.replaceChildren(glbRenderer.domElement)
+glbPreviewViewport.prepend(glbRenderer.domElement)
 const glbControls = new MapControls(glbCamera, glbRenderer.domElement)
 glbControls.enableDamping = false
 glbControls.dampingFactor = 0.05
@@ -283,6 +288,7 @@ let baseQuaternion = new THREE.Quaternion()
 let yaw = 0
 let pitch = 0
 let exporting = false
+let activeDemExport: { controller: AbortController; worker: DemExportWorkerClient } | null = null
 let anchors: CaptureAnchor[] = []
 let capturedTileNodes = new Map<Tile, THREE.Object3D>()
 let glbCameraFramed = false
@@ -293,6 +299,7 @@ let glbPreviewRefreshPromise: Promise<void> | null = null
 let glbPreviewRefreshRequested = false
 let glbSkippedLargeLeafCount = 0
 let glbPreviewStatusHideTimer: number | null = null
+let glbPreviewCancelHandler: (() => void) | null = null
 const baseFrameMatrix = new THREE.Matrix4()
 const baseFrameInverse = new THREE.Matrix4()
 const tmpFlyVector = new THREE.Vector3()
@@ -302,6 +309,135 @@ const tmpFlyVector4 = new THREE.Vector3()
 const tmpFlyVectorNdc = new THREE.Vector2()
 const tmpFlyPlane = new THREE.Plane()
 const tmpFlyRaycaster = new THREE.Raycaster()
+
+class DemExportCancelledError extends Error {
+  constructor() {
+    super('DEM 导出已取消。')
+    this.name = 'AbortError'
+  }
+}
+
+class DemExportWorkerClient {
+  private readonly worker: Worker
+  private pending: {
+    expected: DemWorkerResponse['type']
+    resolve: (response: DemWorkerResponse) => void
+    reject: (error: Error) => void
+  } | null = null
+  private closed = false
+
+  constructor(
+    private readonly onProgress: (progress: Extract<DemWorkerResponse, { type: 'progress' }>) => void,
+  ) {
+    this.worker = new Worker(new URL('./demExport.worker.ts', import.meta.url), { type: 'module' })
+    this.worker.addEventListener('message', (event: MessageEvent<DemWorkerResponse>) => {
+      const response = event.data
+      if (response.type === 'progress') {
+        this.onProgress(response)
+        return
+      }
+      if (response.type === 'error') {
+        this.fail(new Error(response.message))
+        return
+      }
+      if (this.pending?.expected === response.type) {
+        const pending = this.pending
+        this.pending = null
+        pending.resolve(response)
+      }
+    })
+    this.worker.addEventListener('error', (event) => {
+      this.fail(new Error(event.message || 'DEM 导出 Worker 崩溃。'))
+    })
+  }
+
+  merge(
+    sources: DemWorkerMergeSource[],
+    options: { weldEpsilon: number; stripSkirts: boolean; smoothNormals: boolean },
+  ): Promise<DemWorkerMergedGeometry> {
+    const transfer = new Set<ArrayBuffer>()
+    for (const source of sources) {
+      for (const values of [
+        source.positions,
+        ...(source.normals ? [source.normals] : []),
+        source.uvs,
+        source.indices,
+      ]) {
+        if (values.buffer instanceof ArrayBuffer) transfer.add(values.buffer)
+      }
+    }
+    return this.request<Extract<DemWorkerResponse, { type: 'merged' }>>(
+      { type: 'merge', sources, options },
+      [...transfer],
+    ).then((response) => response.geometry)
+  }
+
+  sample(
+    plan: DemGridPlan,
+    frame: DemExportFrame,
+    warnings: string[],
+    sourceTriangleCount: number,
+  ): Promise<Extract<DemWorkerResponse, { type: 'sampled' }>['sample']> {
+    return this.request<Extract<DemWorkerResponse, { type: 'sampled' }>>({
+      type: 'sample',
+      plan,
+      frame,
+      warnings,
+      sourceTriangleCount,
+    }).then((response) => response.sample)
+  }
+
+  finish(rgb: Uint8Array | null, createdAt: string): Promise<Uint8Array> {
+    const transfer = rgb?.buffer instanceof ArrayBuffer ? [rgb.buffer] : []
+    return this.request<Extract<DemWorkerResponse, { type: 'complete' }>>(
+      { type: 'finish', rgb, createdAt },
+      transfer,
+    ).then((response) => response.zipBytes)
+  }
+
+  cancel(): void {
+    if (this.closed) return
+    this.closed = true
+    this.pending?.reject(new DemExportCancelledError())
+    this.pending = null
+    this.worker.terminate()
+  }
+
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    this.pending?.reject(new Error('DEM 导出连接已关闭。'))
+    this.pending = null
+    this.worker.terminate()
+  }
+
+  private request<T extends DemWorkerResponse>(
+    message: DemWorkerRequest,
+    transfer: Transferable[] = [],
+  ): Promise<T> {
+    if (this.closed) return Promise.reject(new DemExportCancelledError())
+    if (this.pending) return Promise.reject(new Error('DEM 导出 Worker 正在处理其他请求。'))
+    return new Promise<T>((resolve, reject) => {
+      this.pending = {
+        expected: message.type === 'merge' ? 'merged' : message.type === 'sample' ? 'sampled' : 'complete',
+        resolve: (response) => resolve(response as T),
+        reject,
+      }
+      try {
+        this.worker.postMessage(message, transfer)
+      } catch (error) {
+        this.pending = null
+        reject(error instanceof Error ? error : new Error('无法启动 DEM 导出 Worker。'))
+      }
+    })
+  }
+
+  private fail(error: Error): void {
+    if (this.closed) return
+    this.pending?.reject(error)
+    this.pending = null
+  }
+}
 
 function setStatus(text: string, tone: 'idle' | 'ok' | 'error' = 'idle'): void {
   statusChip.textContent = text
@@ -336,6 +472,13 @@ function hideGlbPreviewStatus(): void {
     glbPreviewStatusHideTimer = null
   }
   glbPreviewProgress.hidden = true
+  glbPreviewCancelButton.hidden = true
+}
+
+function setGlbPreviewCancelHandler(handler: (() => void) | null): void {
+  glbPreviewCancelHandler = handler
+  glbPreviewCancelButton.hidden = handler === null
+  glbPreviewCancelButton.disabled = handler === null
 }
 
 function setGlbPreviewStatus(
@@ -343,6 +486,7 @@ function setGlbPreviewStatus(
   tone: GlbPreviewStatusTone = 'idle',
   detail = '',
   autoHideMs?: number,
+  progressPercent?: number,
 ): void {
   if (glbPreviewStatusHideTimer !== null) {
     window.clearTimeout(glbPreviewStatusHideTimer)
@@ -353,8 +497,15 @@ function setGlbPreviewStatus(
   glbPreviewProgressStatus.textContent = text
   glbPreviewProgressTone.textContent = tone === 'loading' ? '处理中' : tone === 'ok' ? '完成' : tone === 'error' ? '错误' : '提示'
   glbPreviewProgressDetail.textContent = detail
-  glbPreviewProgressFill.classList.toggle('is-loading', tone === 'loading')
-  glbPreviewProgressFill.style.width = tone === 'loading' ? '62%' : tone === 'ok' || tone === 'error' ? '100%' : '42%'
+  const determinate = progressPercent !== undefined && Number.isFinite(progressPercent)
+  glbPreviewProgressFill.classList.toggle('is-loading', tone === 'loading' && !determinate)
+  glbPreviewProgressFill.style.width = determinate
+    ? `${Math.max(0, Math.min(100, progressPercent))}%`
+    : tone === 'loading'
+      ? '62%'
+      : tone === 'ok' || tone === 'error'
+        ? '100%'
+        : '42%'
 
   if (autoHideMs !== undefined) {
     glbPreviewStatusHideTimer = window.setTimeout(() => {
@@ -1043,6 +1194,117 @@ function buildMergedCaptureRoot(): THREE.Group {
   return exportRoot
 }
 
+function copyFloatAttribute(
+  attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined,
+  itemSize: 2 | 3,
+): Float32Array | null {
+  if (!attribute) return null
+  if (
+    attribute instanceof THREE.BufferAttribute
+    && attribute.array instanceof Float32Array
+    && attribute.itemSize === itemSize
+    && attribute.array.length === attribute.count * itemSize
+  ) {
+    return attribute.array
+  }
+
+  const output = new Float32Array(attribute.count * itemSize)
+  for (let index = 0; index < attribute.count; index += 1) {
+    output[index * itemSize] = attribute.getX(index)
+    output[index * itemSize + 1] = attribute.getY(index)
+    if (itemSize === 3) {
+      output[index * itemSize + 2] = attribute.getZ(index)
+    }
+  }
+  return output
+}
+
+function toWorkerMergeSources(sources: TerrainMergeSource[]): DemWorkerMergeSource[] {
+  const payloads: DemWorkerMergeSource[] = []
+  for (const source of sources) {
+    const positions = copyFloatAttribute(source.geometry.getAttribute('position'), 3)
+    if (!positions) continue
+    const normals = copyFloatAttribute(source.geometry.getAttribute('normal'), 3)
+    const uvs = copyFloatAttribute(source.geometry.getAttribute('uv'), 2)
+      ?? new Float32Array(source.geometry.getAttribute('position').count * 2)
+    const index = source.geometry.getIndex()
+    let indices: Uint32Array
+    if (index?.array instanceof Uint32Array && index.itemSize === 1) {
+      indices = index.array
+    } else {
+      const indexCount = index?.count ?? source.geometry.getAttribute('position').count
+      indices = new Uint32Array(indexCount)
+      for (let vertexIndex = 0; vertexIndex < indexCount; vertexIndex += 1) {
+        indices[vertexIndex] = index?.getX(vertexIndex) ?? vertexIndex
+      }
+    }
+    payloads.push({
+      positions,
+      normals,
+      uvs,
+      indices,
+      materialIndex: source.materialIndex,
+    })
+  }
+  return payloads
+}
+
+function geometryFromWorkerMerge(merged: DemWorkerMergedGeometry): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.BufferAttribute(merged.positions, 3))
+  geometry.setAttribute('normal', new THREE.BufferAttribute(merged.normals, 3))
+  geometry.setAttribute('uv', new THREE.BufferAttribute(merged.uvs, 2))
+  geometry.setIndex(new THREE.BufferAttribute(merged.indices, 1))
+  geometry.groups = []
+  for (const group of merged.groups) {
+    geometry.addGroup(group.start, group.count, group.materialIndex)
+  }
+  geometry.computeBoundingBox()
+  geometry.computeBoundingSphere()
+  return geometry
+}
+
+function buildDemExportRoot(
+  merged: DemWorkerMergedGeometry,
+  materials: THREE.Material[],
+  looseNodes: CapturableObject[],
+  rawLeafNodes: CapturableObject[],
+): THREE.Group {
+  const geometry = geometryFromWorkerMerge(merged)
+  const exportRoot = new THREE.Group()
+  exportRoot.name = 'glb-export-root'
+  exportRoot.matrixAutoUpdate = false
+  exportRoot.matrix.identity()
+
+  const mergedMesh = new THREE.Mesh(
+    geometry,
+    materials.length === 1 ? materials[0] : materials,
+  )
+  mergedMesh.name = 'merged-terrain'
+  mergedMesh.matrixAutoUpdate = false
+  mergedMesh.matrix.identity()
+  mergedMesh.updateMatrixWorld(true)
+  const textureIds = assignTerrainTextureIds(materials)
+  mergedMesh.userData.plTextureBindings = buildMeshTextureBindings(
+    mergedMesh.name,
+    materials,
+    textureIds,
+  ).bindings
+  exportRoot.add(mergedMesh)
+
+  const looseIdentity = new Set<CapturableObject>(looseNodes)
+  for (const node of rawLeafNodes) {
+    if (!looseIdentity.has(node)) {
+      exportRoot.add(cloneLeafNodeForExport(node))
+    }
+  }
+  for (const node of looseNodes) {
+    exportRoot.add(cloneLeafNodeForExport(node))
+  }
+  exportRoot.updateMatrixWorld(true)
+  return exportRoot
+}
+
 function isRenderableLeaf(node: THREE.Object3D): boolean {
   const renderable = node as CapturableObject & { isSprite?: boolean }
   const hasGeometry = Boolean(renderable.geometry)
@@ -1485,9 +1747,9 @@ function setCaptureButtonState(): void {
     : tiles
       ? '瓦片仍在加载中，完成后才能添加锚点'
       : '请先加载 3D Tiles 数据源'
-  exportCurrentGlbButton.disabled = capturedTileNodes.size === 0
-  exportTerrainPackageButton.disabled = capturedTileNodes.size === 0
-  exportTerrainDemButton.disabled = capturedTileNodes.size === 0
+  exportCurrentGlbButton.disabled = exporting || capturedTileNodes.size === 0
+  exportTerrainPackageButton.disabled = exporting || capturedTileNodes.size === 0
+  exportTerrainDemButton.disabled = exporting || capturedTileNodes.size === 0
 }
 
 function hasVisibleDescendant(tile: CapturableTile, visibleTiles: Set<CapturableTile>): boolean {
@@ -1937,7 +2199,7 @@ async function exportTerrainPackage(): Promise<void> {
   }
 }
 
-const ORTHO_TILE_SIZE = 2048
+const ORTHO_TILE_SIZE = 1024
 
 function readDemCellSizeOption(): number | 'auto' {
   const value = demCellSizeSelect.value
@@ -1985,8 +2247,10 @@ async function renderOrthoRaster(
   renderRoot: THREE.Object3D,
   mesh: THREE.Mesh,
   plan: DemGridPlan,
-  onTile: (label: string) => void,
+  onTile: (completed: number, total: number, label: string) => void,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
+  if (signal?.aborted) throw new DemExportCancelledError()
   if (!mesh.geometry.boundingBox) {
     mesh.geometry.computeBoundingBox()
   }
@@ -2018,6 +2282,9 @@ async function renderOrthoRaster(
   const tileCols = Math.ceil(plan.cols / ORTHO_TILE_SIZE)
   const tileRows = Math.ceil(plan.rows / ORTHO_TILE_SIZE)
   const totalTiles = tileCols * tileRows
+  const renderTarget = new THREE.WebGLRenderTarget(ORTHO_TILE_SIZE, ORTHO_TILE_SIZE, { depthBuffer: true })
+  renderTarget.texture.colorSpace = THREE.SRGBColorSpace
+  const rgba = new Uint8Array(ORTHO_TILE_SIZE * ORTHO_TILE_SIZE * 4)
 
   try {
     let tileIndex = 0
@@ -2031,37 +2298,42 @@ async function renderOrthoRaster(
           continue
         }
 
-        const zWest = plan.zMin + colStart * plan.cellSizeMeters
-        const zEast = plan.zMin + (colStart + tileWidth) * plan.cellSizeMeters
-        const xNorth = plan.xMax - rowStart * plan.cellSizeMeters
-        const xSouth = plan.xMax - (rowStart + tileHeight) * plan.cellSizeMeters
-        const xCenter = (xNorth + xSouth) / 2
-        const zCenter = (zWest + zEast) / 2
+        if (signal?.aborted) throw new DemExportCancelledError()
+        const cameraFrame = resolveDemOrthoCameraFrame(plan, {
+          rowStart,
+          colStart,
+          width: ORTHO_TILE_SIZE,
+          height: ORTHO_TILE_SIZE,
+        })
 
-        camera.left = zWest
-        camera.right = zEast
-        camera.top = xNorth
-        camera.bottom = xSouth
+        camera.left = cameraFrame.left
+        camera.right = cameraFrame.right
+        camera.top = cameraFrame.top
+        camera.bottom = cameraFrame.bottom
         camera.near = 0.1
         camera.far = renderTopY - renderBottomY
-        camera.position.set(xCenter, renderTopY, zCenter)
+        camera.position.set(cameraFrame.xCenter, renderTopY, cameraFrame.zCenter)
         camera.updateProjectionMatrix()
-        camera.lookAt(xCenter, renderBottomY, zCenter)
+        camera.lookAt(cameraFrame.xCenter, renderBottomY, cameraFrame.zCenter)
         camera.updateMatrixWorld(true)
 
-        const target = new THREE.WebGLRenderTarget(tileWidth, tileHeight, { depthBuffer: true })
-        target.texture.colorSpace = THREE.SRGBColorSpace
-        renderer.setRenderTarget(target)
+        renderer.setRenderTarget(renderTarget)
         renderer.render(scene, camera)
-        const rgba = new Uint8Array(tileWidth * tileHeight * 4)
-        renderer.readRenderTargetPixels(target, 0, 0, tileWidth, tileHeight, rgba)
+        await renderer.readRenderTargetPixelsAsync(
+          renderTarget,
+          0,
+          0,
+          ORTHO_TILE_SIZE,
+          ORTHO_TILE_SIZE,
+          rgba,
+        )
         renderer.setRenderTarget(null)
-        target.dispose()
+        if (signal?.aborted) throw new DemExportCancelledError()
 
         copyRenderTargetTileToOrtho({
           rgba,
-          tileWidth,
-          tileHeight,
+          tileWidth: ORTHO_TILE_SIZE,
+          tileHeight: ORTHO_TILE_SIZE,
           rasterRowStart: rowStart,
           rasterColStart: colStart,
           rasterRows: plan.rows,
@@ -2070,7 +2342,7 @@ async function renderOrthoRaster(
         })
 
         tileIndex += 1
-        onTile(`渲染正射影像 ${tileIndex}/${totalTiles}`)
+        onTile(tileIndex, totalTiles, `渲染正射影像 ${tileIndex}/${totalTiles}`)
         await yieldToBrowser()
       }
     }
@@ -2080,11 +2352,153 @@ async function renderOrthoRaster(
     for (const material of orthoMaterials) {
       material.dispose()
     }
+    renderTarget.dispose()
     renderer.dispose()
     renderer.forceContextLoss()
   }
 
   return rgb
+}
+
+const DEM_PHASE_LABELS: Record<DemExportPhase, string> = {
+  prepare: '准备导出数据',
+  merge: '合并地形网格',
+  sample: '采样 DEM',
+  'fill-dem': '填充 DEM 空洞',
+  'encode-dem': '编码 DEM',
+  'ortho-render': '渲染正射影像',
+  'ortho-process': '处理正射影像',
+  'encode-ortho': '编码正射影像',
+  package: '打包 ZIP',
+}
+
+const DEM_PHASE_ORDER: DemExportPhase[] = [
+  'prepare',
+  'merge',
+  'sample',
+  'fill-dem',
+  'encode-dem',
+  'ortho-render',
+  'ortho-process',
+  'encode-ortho',
+  'package',
+]
+
+const DEM_PHASE_WEIGHTS_WITH_ORTHO: Partial<Record<DemExportPhase, number>> = {
+  prepare: 2,
+  merge: 12,
+  sample: 46,
+  'fill-dem': 8,
+  'encode-dem': 5,
+  'ortho-render': 17,
+  'ortho-process': 5,
+  'encode-ortho': 3,
+  package: 2,
+}
+
+const DEM_PHASE_WEIGHTS_WITHOUT_ORTHO: Partial<Record<DemExportPhase, number>> = {
+  prepare: 3,
+  merge: 15,
+  sample: 60,
+  'fill-dem': 10,
+  'encode-dem': 7,
+  package: 5,
+}
+
+function formatExportDuration(elapsedMs: number): string {
+  if (elapsedMs < 1000) return `${Math.max(0, Math.round(elapsedMs))} ms`
+  if (elapsedMs < 60_000) return `${(elapsedMs / 1000).toFixed(1)} s`
+  const minutes = Math.floor(elapsedMs / 60_000)
+  const seconds = Math.round((elapsedMs % 60_000) / 1000)
+  return `${minutes} min ${seconds} s`
+}
+
+function createDemProgressReporter(hasOrtho: boolean, startedAt: number) {
+  const weights = hasOrtho ? DEM_PHASE_WEIGHTS_WITH_ORTHO : DEM_PHASE_WEIGHTS_WITHOUT_ORTHO
+  const totalWeight = Object.values(weights).reduce((sum, weight) => sum + (weight ?? 0), 0)
+  const elapsedByPhase = new Map<DemExportPhase, number>()
+  let current: Extract<DemWorkerResponse, { type: 'progress' }> = {
+    type: 'progress',
+    phase: 'prepare',
+    completed: 0,
+    total: 1,
+    label: '准备捕获的地形数据',
+  }
+  let phaseStartedAt = startedAt
+  let stopped = false
+
+  const finishCurrentPhase = (now: number): void => {
+    const elapsed = now - phaseStartedAt
+    elapsedByPhase.set(current.phase, (elapsedByPhase.get(current.phase) ?? 0) + elapsed)
+    phaseStartedAt = now
+  }
+
+  const render = (): void => {
+    if (stopped) return
+    const now = performance.now()
+    const stageFraction = current.total > 0
+      ? Math.max(0, Math.min(1, current.completed / current.total))
+      : 1
+    let weightedPercent = 0
+    for (const phase of DEM_PHASE_ORDER) {
+      const weight = weights[phase] ?? 0
+      if (phase === current.phase) {
+        weightedPercent += weight * stageFraction
+        break
+      }
+      weightedPercent += weight
+    }
+    weightedPercent = totalWeight > 0 ? (weightedPercent / totalWeight) * 100 : 0
+    const stageElapsed = elapsedByPhase.get(current.phase) ?? 0
+    const runningElapsed = now - phaseStartedAt
+    const totalElapsed = now - startedAt
+    setGlbPreviewStatus(
+      DEM_PHASE_LABELS[current.phase],
+      'loading',
+      `${current.label} · 阶段 ${formatExportDuration(stageElapsed + runningElapsed)} · 总 ${formatExportDuration(totalElapsed)}`,
+      undefined,
+      weightedPercent,
+    )
+  }
+
+  const timer = window.setInterval(render, 250)
+  render()
+  return {
+    update(progress: Extract<DemWorkerResponse, { type: 'progress' }>): void {
+      if (stopped) return
+      if (progress.phase !== current.phase) {
+        finishCurrentPhase(performance.now())
+        phaseStartedAt = performance.now()
+      }
+      current = progress
+      render()
+    },
+    snapshotTimings(): DemExportStageTiming[] {
+      const now = performance.now()
+      const timings: DemExportStageTiming[] = []
+      for (const phase of DEM_PHASE_ORDER) {
+        const elapsed = (elapsedByPhase.get(phase) ?? 0) + (phase === current.phase ? now - phaseStartedAt : 0)
+        if (elapsed > 0) timings.push({ phase, elapsedMs: elapsed })
+      }
+      return timings
+    },
+    stop(): void {
+      if (stopped) return
+      stopped = true
+      window.clearInterval(timer)
+    },
+  }
+}
+
+function summarizeDemStageTimings(timings: DemExportStageTiming[]): string {
+  const selected: DemExportPhase[] = ['merge', 'sample', 'ortho-render', 'package']
+  return selected
+    .map((phase) => {
+      const timing = timings.find((item) => item.phase === phase)
+      return timing ? `${DEM_PHASE_LABELS[phase]} ${formatExportDuration(timing.elapsedMs)}` : null
+    })
+    .filter((value): value is string => value !== null)
+    .join(' · ')
 }
 
 async function exportTerrainDemPackage(): Promise<void> {
@@ -2093,100 +2507,188 @@ async function exportTerrainDemPackage(): Promise<void> {
     setGlbPreviewStatus('没有可导出的锚点内容', 'error', '请先添加一个锚点', 2200)
     return
   }
+
   exporting = true
   exportTerrainDemButton.disabled = true
   exportCurrentGlbButton.disabled = true
   exportTerrainPackageButton.disabled = true
+
+  const startedAt = performance.now()
+  const settingsSnapshot = { ...settings }
+  const includeOrtho = demOrthoInput.checked
+  const cellSize = readDemCellSizeOption()
+  const createdAt = new Date().toISOString()
+  const controller = new AbortController()
+  const reporter = createDemProgressReporter(includeOrtho, startedAt)
+  let exportRoot: THREE.Group | null = null
+  let worker: DemExportWorkerClient | null = null
+  let focusedPhase: DemExportPhase = 'prepare'
+
+  const throwIfCancelled = (): void => {
+    if (controller.signal.aborted) throw new DemExportCancelledError()
+  }
+
   try {
-    setGlbPreviewStatus('正在生成 DEM…', 'loading', '焊接地形网格')
-    const exportRoot = buildMergedCaptureRoot()
-    try {
-      const mergedMesh = exportRoot.getObjectByName('merged-terrain') as THREE.Mesh | undefined
-      if (!mergedMesh || !mergedMesh.isMesh || !mergedMesh.geometry) {
-        throw new Error('当前锚点没有可导出的合并地形网格。')
-      }
-
-      const { plan, warnings } = planDemGrid(mergedMesh.geometry, {
-        cellSize: readDemCellSizeOption(),
-      })
-      const frame: DemExportFrame = {
-        latitudeDegrees: settings.lat,
-        longitudeDegrees: settings.lon,
-        groundElevationMeters: settings.groundElevation,
-      }
-      const geo = resolveDemGeoReference(plan, frame)
-
+    await yieldToBrowser()
+    throwIfCancelled()
+    worker = new DemExportWorkerClient((progress) => {
+      focusedPhase = progress.phase
+      reporter.update(progress)
+    })
+    activeDemExport = { controller, worker }
+    setGlbPreviewCancelHandler(() => {
+      if (controller.signal.aborted) return
+      controller.abort()
+      worker?.cancel()
+      reporter.stop()
+      setGlbPreviewCancelHandler(null)
       setGlbPreviewStatus(
-        '正在采样 DEM…',
+        '正在取消 DEM 导出',
         'loading',
-        `网格 ${plan.cols}×${plan.rows} · 间距 ${plan.cellSizeMeters}m`,
+        `已用时 ${formatExportDuration(performance.now() - startedAt)}`,
       )
-      const sample = await sampleDemHeights(mergedMesh.geometry, plan, frame, {
-        onProgress: (progress) => {
-          const percent = progress.total > 0 ? Math.round((progress.loaded / progress.total) * 100) : 100
-          setGlbPreviewStatus('正在采样 DEM…', 'loading', `${progress.label} · ${percent}%`)
-        },
-      })
-      if (sample.hitCount === 0) {
-        throw new Error('DEM 采样失败：射线没有命中地形网格。')
-      }
-      if (sample.filledRatio > 0.05) {
-        warnings.push(`采样空洞占比 ${(sample.filledRatio * 100).toFixed(1)}%，已用最近有效值填充。`)
-      }
+    })
 
-      const demBuffer = encodeDemGeoTiff(sample.heights, plan, geo)
-
-      let orthoBuffer: ArrayBuffer | null = null
-      if (demOrthoInput.checked) {
-        setGlbPreviewStatus('正在渲染正射影像…', 'loading', `${plan.cols}×${plan.rows} 像素`)
-        const rgb = await renderOrthoRaster(exportRoot, mergedMesh, plan, (label) => {
-          setGlbPreviewStatus('正在渲染正射影像…', 'loading', label)
-        })
-        fillRgbHoles(rgb, sample.wasHole, plan.rows, plan.cols)
-        orthoBuffer = encodeOrthoGeoTiff(rgb, plan, geo)
-      }
-
-      const sidecar = buildTerrainDemSidecar({
-        frame,
-        plan,
-        geo,
-        heights: sample.heights,
-        sample,
-        sourceTriangleCount: lastTerrainMergeStats?.outputTriangleCount ?? 0,
-        hasOrtho: orthoBuffer !== null,
-        warnings,
-      })
-
-      const zipEntries = [
-        { name: 'dem.tif', bytes: new Uint8Array(demBuffer) },
-        ...(orthoBuffer ? [{ name: 'ortho.tif', bytes: new Uint8Array(orthoBuffer) }] : []),
-        { name: 'dem.json', bytes: new TextEncoder().encode(JSON.stringify(sidecar, null, 2)) },
-      ]
-      const zipBytes = buildZipArchive(zipEntries)
-      const blob = new Blob([zipBytes], { type: 'application/zip' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = `terrain-dem-${settings.lat.toFixed(5)}-${settings.lon.toFixed(5)}.zip`
-      link.click()
-      window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
-
-      setGlbPreviewStatus(
-        'DEM 包导出完成',
-        'ok',
-        `${plan.cols}×${plan.rows} · ${plan.cellSizeMeters}m 间距${orthoBuffer ? ' · 含正射影像' : ''}`,
-        3200,
-      )
-    } finally {
-      disposeObject3DResources(exportRoot)
+    reporter.update({
+      type: 'progress',
+      phase: 'prepare',
+      completed: 0,
+      total: 1,
+      label: '收集当前锚点地形',
+    })
+    const { sources, materials, looseNodes, rawLeafNodes } = collectTerrainMergeSources(glbCaptureRoot)
+    if (sources.length === 0 || materials.length === 0) {
+      throw new Error('当前锚点没有可导出的地形网格。')
     }
-  } catch (error) {
+    const sourcePayload = toWorkerMergeSources(sources)
+    throwIfCancelled()
+
+    const mergeOptions = readTerrainMergeOptions()
+    const merged = await worker.merge(sourcePayload, {
+      weldEpsilon: mergeOptions.weldEpsilon ?? 0.05,
+      stripSkirts: mergeOptions.stripSkirts !== false,
+      smoothNormals: mergeOptions.smoothNormals !== false,
+    })
+    throwIfCancelled()
+    lastTerrainMergeStats = merged.stats
+    reporter.update({
+      type: 'progress',
+      phase: 'merge',
+      completed: 1,
+      total: 1,
+      label: `地形网格合并完成 ${merged.stats.outputTriangleCount} 三角形`,
+    })
+
+    exportRoot = buildDemExportRoot(merged, materials, looseNodes, rawLeafNodes)
+    const mergedMesh = exportRoot.getObjectByName('merged-terrain') as THREE.Mesh | undefined
+    if (!mergedMesh || !mergedMesh.isMesh || !mergedMesh.geometry) {
+      throw new Error('当前锚点没有可导出的合并地形网格。')
+    }
+
+    const { plan, warnings } = planDemGrid(mergedMesh.geometry, { cellSize })
+    const frame: DemExportFrame = {
+      latitudeDegrees: settingsSnapshot.lat,
+      longitudeDegrees: settingsSnapshot.lon,
+      groundElevationMeters: settingsSnapshot.groundElevation,
+    }
+    reporter.update({
+      type: 'progress',
+      phase: 'sample',
+      completed: 0,
+      total: merged.stats.outputTriangleCount,
+      label: `网格 ${plan.cols}×${plan.rows} · 间距 ${plan.cellSizeMeters}m`,
+    })
+    await worker.sample(plan, frame, warnings, merged.stats.outputTriangleCount)
+    throwIfCancelled()
+
+    let rgb: Uint8Array | null = null
+    if (includeOrtho) {
+      focusedPhase = 'ortho-render'
+      const tileCols = Math.ceil(plan.cols / ORTHO_TILE_SIZE)
+      const tileRows = Math.ceil(plan.rows / ORTHO_TILE_SIZE)
+      const totalTiles = tileCols * tileRows
+      reporter.update({
+        type: 'progress',
+        phase: 'ortho-render',
+        completed: 0,
+        total: totalTiles,
+        label: `准备渲染 ${totalTiles} 个正射瓦片`,
+      })
+      rgb = await renderOrthoRaster(
+        exportRoot,
+        mergedMesh,
+        plan,
+        (completed, total, label) => {
+          focusedPhase = 'ortho-render'
+          reporter.update({
+            type: 'progress',
+            phase: 'ortho-render',
+            completed,
+            total,
+            label,
+          })
+        },
+        controller.signal,
+      )
+    }
+
+    throwIfCancelled()
+    const zipBytes = await worker.finish(rgb, createdAt)
+    throwIfCancelled()
+    reporter.update({
+      type: 'progress',
+      phase: 'package',
+      completed: 1,
+      total: 1,
+      label: 'ZIP 打包完成',
+    })
+
+    const blob = new Blob([zipBytes], { type: 'application/zip' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `terrain-dem-${settingsSnapshot.lat.toFixed(5)}-${settingsSnapshot.lon.toFixed(5)}.zip`
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000)
+
+    const timings = reporter.snapshotTimings()
+    reporter.stop()
+    setGlbPreviewCancelHandler(null)
+    const totalElapsed = performance.now() - startedAt
     setGlbPreviewStatus(
-      'DEM 包导出失败',
-      'error',
-      error instanceof Error ? error.message : '请稍后重试',
-      3600,
+      'DEM 包导出完成',
+      'ok',
+      `${plan.cols}×${plan.rows} · ${plan.cellSizeMeters}m 间距${includeOrtho ? ' · 含正射影像' : ''} · 总 ${formatExportDuration(totalElapsed)}${summarizeDemStageTimings(timings) ? ` · ${summarizeDemStageTimings(timings)}` : ''}`,
+      4200,
+      100,
     )
+  } catch (error) {
+    reporter.stop()
+    setGlbPreviewCancelHandler(null)
+    const cancelled = controller.signal.aborted
+      || (error instanceof Error && error.name === 'AbortError')
+    if (cancelled) {
+      setGlbPreviewStatus(
+        'DEM 导出已取消',
+        'idle',
+        `未生成下载文件 · 已用时 ${formatExportDuration(performance.now() - startedAt)}`,
+        3600,
+        0,
+      )
+    } else {
+      const stage = DEM_PHASE_LABELS[focusedPhase]
+      setGlbPreviewStatus(
+        'DEM 包导出失败',
+        'error',
+        `${stage}：${error instanceof Error ? error.message : '请稍后重试'} · 已用时 ${formatExportDuration(performance.now() - startedAt)}`,
+        4800,
+      )
+    }
   } finally {
+    reporter.stop()
+    worker?.close()
+    if (activeDemExport?.worker === worker) activeDemExport = null
+    setGlbPreviewCancelHandler(null)
+    disposeObject3DResources(exportRoot)
     exporting = false
     setCaptureButtonState()
   }
@@ -2368,6 +2870,7 @@ addAnchorButton.addEventListener('click', handleAddAnchor)
 exportCurrentGlbButton.addEventListener('click', () => void exportCurrentGlb())
 exportTerrainPackageButton.addEventListener('click', () => void exportTerrainPackage())
 exportTerrainDemButton.addEventListener('click', () => void exportTerrainDemPackage())
+glbPreviewCancelButton.addEventListener('click', () => glbPreviewCancelHandler?.())
 anchorList.addEventListener('click', (event) => {
   const target = event.target
   if (!(target instanceof HTMLElement)) return

@@ -10,6 +10,16 @@ export interface ZipArchiveEntry {
   bytes: Uint8Array
 }
 
+export interface ZipArchiveProgress {
+  completed: number
+  total: number
+  label: string
+}
+
+export interface ZipArchiveOptions {
+  onProgress?: (progress: ZipArchiveProgress) => void
+}
+
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256)
   for (let i = 0; i < 256; i += 1) {
@@ -22,11 +32,15 @@ const CRC32_TABLE = (() => {
   return table
 })()
 
-function crc32(bytes: Uint8Array): number {
+function crc32(bytes: Uint8Array, onChunk?: (processedBytes: number) => void): number {
   let crc = 0xffffffff
   for (let i = 0; i < bytes.length; i += 1) {
     crc = CRC32_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)
+    if (onChunk && (i + 1) % 1_048_576 === 0) {
+      onChunk(i + 1)
+    }
   }
+  onChunk?.(bytes.length)
   return (crc ^ 0xffffffff) >>> 0
 }
 
@@ -52,18 +66,34 @@ function writeU32(view: DataView, offset: number, value: number): void {
   view.setUint32(offset, value, true)
 }
 
-export function buildZipArchive(entries: ZipArchiveEntry[], createdAt: Date = new Date()): Uint8Array {
+export function buildZipArchive(
+  entries: ZipArchiveEntry[],
+  createdAt: Date = new Date(),
+  options: ZipArchiveOptions = {},
+): Uint8Array {
   const encoder = new TextEncoder()
   const localParts: Uint8Array[] = []
   const centralParts: Uint8Array[] = []
   const centralRecords: Array<{ name: Uint8Array; crc: number; size: number; offset: number }> = []
+  const onProgress = options.onProgress
+  const payloadBytes = entries.reduce((sum, entry) => sum + entry.bytes.length, 0)
+  const progressTotal = Math.max(1, payloadBytes * 2)
+  let crcBytesProcessed = 0
 
   let cursor = 0
   const { time, datePart } = toDosDateTime(createdAt)
 
   for (const entry of entries) {
     const nameBytes = encoder.encode(entry.name)
-    const crc = crc32(entry.bytes)
+    const entryBytesBefore = crcBytesProcessed
+    const crc = crc32(entry.bytes, (processedBytes) => {
+      onProgress?.({
+        completed: entryBytesBefore + processedBytes,
+        total: progressTotal,
+        label: `校验 ZIP 数据 ${entryBytesBefore + processedBytes}/${payloadBytes}`,
+      })
+    })
+    crcBytesProcessed += entry.bytes.length
     const localHeader = new DataView(new ArrayBuffer(30))
     writeU32(localHeader, 0, 0x04034b50)
     writeU16(localHeader, 4, 20)
@@ -118,15 +148,29 @@ export function buildZipArchive(entries: ZipArchiveEntry[], createdAt: Date = ne
   const total = cursor + centralSize + 22
   const output = new Uint8Array(total)
   let writeCursor = 0
+  let copiedBytes = 0
   for (const part of localParts) {
     output.set(part, writeCursor)
     writeCursor += part.length
+    copiedBytes += part.length
+    if (part.byteLength >= 1_048_576) {
+      onProgress?.({
+        completed: payloadBytes + Math.min(payloadBytes, copiedBytes),
+        total: progressTotal,
+        label: `写入 ZIP ${Math.min(payloadBytes, copiedBytes)}/${payloadBytes}`,
+      })
+    }
   }
   for (const part of centralParts) {
     output.set(part, writeCursor)
     writeCursor += part.length
   }
   output.set(new Uint8Array(end.buffer), writeCursor)
+  onProgress?.({
+    completed: progressTotal,
+    total: progressTotal,
+    label: 'ZIP 打包完成',
+  })
   return output
 }
 

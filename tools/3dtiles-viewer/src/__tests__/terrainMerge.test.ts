@@ -197,4 +197,30 @@ describe('mergeTerrainGeometries', () => {
     expect(welded!.stats.weldedVertexCount).toBe(2)
     expect(welded!.stats.outputVertexCount).toBe(6)
   })
+
+  it('reports merge stages without changing the output', () => {
+    const progress: Array<{ phase: string; completed: number; total: number }> = []
+    const result = mergeTerrainGeometries(
+      [
+        {
+          geometry: buildQuadGeometry([0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]),
+          materialIndex: 0,
+        },
+        {
+          geometry: buildQuadGeometry([1, 0, 0], [2, 0, 0], [1, 0, 1], [2, 0, 1]),
+          materialIndex: 0,
+        },
+      ],
+      {
+        onProgress: (value) => progress.push(value),
+      },
+    )
+
+    expect(result?.stats.outputTriangleCount).toBe(4)
+    expect(progress.some((value) => value.phase === 'prepare')).toBe(true)
+    expect(progress.some((value) => value.phase === 'weld')).toBe(true)
+    expect(progress.some((value) => value.phase === 'smooth')).toBe(true)
+    expect(progress.at(-1)?.phase).toBe('assemble')
+    expect(progress.at(-1)?.completed).toBe(progress.at(-1)?.total)
+  })
 })

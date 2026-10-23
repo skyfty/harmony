@@ -15,7 +15,10 @@ import type { SceneNode } from '@schema/core'
 
 type ProbeProps = Record<string, never>
 
-const probeSeen: Array<ComponentFrameState['environment']> = []
+const probeSeen: Array<{
+  environment: ComponentFrameState['environment']
+  cameraInteractionActive: boolean | undefined
+}> = []
 
 class EnvironmentProbeComponent extends Component<ProbeProps> {
   constructor(context: ComponentRuntimeContext<ProbeProps>) {
@@ -23,7 +26,11 @@ class EnvironmentProbeComponent extends Component<ProbeProps> {
   }
 
   onUpdate(): void {
-    probeSeen.push(this.context.getFrameState().environment ?? null)
+    const frameState = this.context.getFrameState()
+    probeSeen.push({
+      environment: frameState.environment ?? null,
+      cameraInteractionActive: frameState.cameraInteractionActive,
+    })
   }
 }
 
@@ -60,19 +67,40 @@ describe('ComponentManager frame state', () => {
     manager.setFrameState({ cameraWorldPosition: { x: 1, y: 2, z: 3 }, environment })
     manager.update(0.016)
     const firstSeen = probeSeen[probeSeen.length - 1]
-    expect(firstSeen).toEqual(environment)
+    expect(firstSeen?.environment).toEqual(environment)
     // 帧状态逐字段拷贝，不持有宿主复用的临时对象。
-    expect(firstSeen).not.toBe(environment)
+    expect(firstSeen?.environment).not.toBe(environment)
 
     // 再次切换季节无需重新 syncScene 即可生效。
     const nextEnvironment = { season: 'summer', timeOfDay: 'day', weather: 'overcast' } as const
     manager.setFrameState({ cameraWorldPosition: { x: 1, y: 2, z: 3 }, environment: nextEnvironment })
     manager.update(0.016)
-    expect(probeSeen[probeSeen.length - 1]).toEqual(nextEnvironment)
+    expect(probeSeen[probeSeen.length - 1]?.environment).toEqual(nextEnvironment)
 
     // 宿主未提供环境状态时清空，组件按约定回退默认季节。
     manager.setFrameState({ cameraWorldPosition: null })
     manager.update(0.016)
-    expect(probeSeen[probeSeen.length - 1]).toBeNull()
+    expect(probeSeen[probeSeen.length - 1]?.environment).toBeNull()
+  })
+
+  it('propagates camera interaction state without keeping the host frame object', () => {
+    probeSeen.length = 0
+    const manager = new ComponentManager()
+    manager.registerDefinition(probeDefinition)
+    manager.syncScene([createProbeNode()])
+
+    manager.setFrameState({
+      cameraWorldPosition: { x: 1, y: 2, z: 3 },
+      cameraInteractionActive: true,
+    })
+    manager.update(0.016)
+    expect(probeSeen[probeSeen.length - 1]?.cameraInteractionActive).toBe(true)
+
+    manager.setFrameState({
+      cameraWorldPosition: { x: 2, y: 3, z: 4 },
+      cameraInteractionActive: false,
+    })
+    manager.update(0.016)
+    expect(probeSeen[probeSeen.length - 1]?.cameraInteractionActive).toBe(false)
   })
 })

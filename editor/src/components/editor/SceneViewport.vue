@@ -358,6 +358,7 @@ import {
 } from './waterSurfaceEditUtils'
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
+import { createProceduralLandscapeDemOrthoResolver } from '@/utils/demOrthoTextureLoader'
 import {
   getProceduralLandscapeRoadCenterlineLocal,
   getProceduralLandscapeGuideRouteSurfaceState,
@@ -370,6 +371,7 @@ import {
   type GuideRouteSurfaceBounds,
   type ProceduralLandscapePlacementSurface,
 } from '@schema/proceduralLandscape/runtime'
+import { setProceduralLandscapeDemOrthoResolver } from '@schema/proceduralLandscape/demOrthoResolver'
 import {
   ROAD_WAYPOINT_SNAP_RADIUS,
   SLOWROADS_SCENIC_ROAD_CONSTRAINTS,
@@ -547,6 +549,14 @@ function canCompleteNodePick(nodeId: string): boolean {
 
 const nodePickerStore = useNodePickerStore()
 const assetCacheStore = useAssetCacheStore()
+const proceduralLandscapeDemOrthoResolver = createProceduralLandscapeDemOrthoResolver({
+  getAsset: (assetId) => sceneStore.getAsset(assetId),
+  ensureAssetFile: (assetId, options) => assetCacheStore.ensureAssetFile(assetId, options),
+  ensureCachedFile: (cacheId, url, name) => assetCacheStore.ensureAssetFile(cacheId, {
+    downloadUrl: url,
+    name,
+  }),
+})
 const terrainStore = useTerrainStore()
 
 const { panelVisibility, sceneGraphStructureVersion, sceneNodePropertyVersion } = storeToRefs(sceneStore)
@@ -1319,10 +1329,16 @@ function refreshSceneCsmFrustums(): void {
 
 // Building label font/meshes (planning-conversion buildings)
 const buildingLabelMeshes = new Map<string, THREE.Mesh>()
+const buildingLabelBoundsHelper = new THREE.Box3()
+const buildingLabelCenterHelper = new THREE.Vector3()
 
 // Guide route waypoint labels are managed by a small helper module.
 const createOrUpdateGuideRouteWaypointLabels = createGuideRouteWaypointLabelsManager(sceneStore, objectMap)
 const guideRouteWaypointLabelMeshes = getGuideRouteWaypointLabelMeshes()
+const guideRouteWaypointLabelParentQuaternionHelper = new THREE.Quaternion()
+const guideRouteWaypointLabelInverseParentQuaternionHelper = new THREE.Quaternion()
+const CAMERA_INTERACTION_MAINTENANCE_INTERVAL_MS = 100
+let lastInteractionTerrainTextureUpdateAt = 0
 
 // Guide route waypoint labels are handled by the external manager: `createOrUpdateGuideRouteWaypointLabels`.
 
@@ -2211,6 +2227,7 @@ type DirectionalLightPivotEditState = {
 
 let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
+let isHandlingControlsChange = false
 let lastCameraFocusRadius: number | null = null
 let lastViewportCameraBaseFar = 5000
 const CAMERA_MAX_DISTANCE_ABS_CAP = 60000
@@ -2220,6 +2237,7 @@ const CAMERA_MAX_ZOOM_RATIO_LIMIT = 100
 const VIEWPORT_COMPOSITION_EPSILON_PX = 0.5
 const viewportCompositionOffsetPx = new THREE.Vector2(Number.NaN, Number.NaN)
 const viewportCompositionOffsetTargetPx = new THREE.Vector2()
+let viewportCompositionAppliedDistance = Number.NaN
 let viewportCompositionUpdateFrame: number | null = null
 let viewportCompositionUpdateQueued = false
 let viewportCompositionUpdateForce = false
@@ -2238,6 +2256,9 @@ const CAMERA_DOUBLE_CLICK_FOCUS_DISTANCE = Math.max(8, defaultCameraStatusDistan
 const cameraStatusDistance = ref(defaultCameraStatusDistance)
 const cameraNorthHeadingDegrees = ref(0)
 const cameraNorthForwardHelper = new THREE.Vector3()
+const CAMERA_HUD_REFRESH_INTERVAL_MS = 50
+let cameraHudRefreshPending = false
+let lastCameraHudRefreshAt = 0
 const proceduralLandscapeCameraDirectionHelper = new THREE.Vector3()
 
 const isDragHovering = ref(false)
@@ -5591,23 +5612,35 @@ function resolveViewportCompositionOffsetPx(out: THREE.Vector2 = viewportComposi
   return out
 }
 
-function applyViewportCompositionOffset(force = false): void {
+function applyViewportCompositionOffset(force = false, refreshLayout = force): void {
   if (!mapControls) {
     viewportCompositionOffsetPx.set(Number.NaN, Number.NaN)
+    viewportCompositionAppliedDistance = Number.NaN
     return
   }
 
-  const desiredOffsetPx = resolveViewportCompositionOffsetPx()
+  const desiredOffsetPx = refreshLayout
+    ? resolveViewportCompositionOffsetPx()
+    : viewportCompositionOffsetTargetPx
+  const cameraDistance = camera
+    ? Math.max(camera.position.distanceTo(mapControls.target), 1e-3)
+    : Number.NaN
+  const distanceChanged = !Number.isFinite(viewportCompositionAppliedDistance)
+    || !Number.isFinite(cameraDistance)
+    || Math.abs(cameraDistance - viewportCompositionAppliedDistance)
+      > Math.max(0.01, cameraDistance * 0.001)
   if (
     !force
     && Number.isFinite(viewportCompositionOffsetPx.x)
     && Number.isFinite(viewportCompositionOffsetPx.y)
+    && !distanceChanged
     && viewportCompositionOffsetPx.distanceToSquared(desiredOffsetPx) <= VIEWPORT_COMPOSITION_EPSILON_PX * VIEWPORT_COMPOSITION_EPSILON_PX
   ) {
     return
   }
 
   viewportCompositionOffsetPx.copy(desiredOffsetPx)
+  viewportCompositionAppliedDistance = cameraDistance
   if (Math.abs(desiredOffsetPx.x) <= VIEWPORT_COMPOSITION_EPSILON_PX && Math.abs(desiredOffsetPx.y) <= VIEWPORT_COMPOSITION_EPSILON_PX) {
     mapControls.resetFocalOffset(false)
     return
@@ -5628,7 +5661,7 @@ function scheduleViewportCompositionUpdate(force = false): void {
       viewportCompositionUpdateQueued = false
       const shouldForce = viewportCompositionUpdateForce
       viewportCompositionUpdateForce = false
-      applyViewportCompositionOffset(shouldForce)
+      applyViewportCompositionOffset(shouldForce, true)
       return
     }
 
@@ -5640,7 +5673,7 @@ function scheduleViewportCompositionUpdate(force = false): void {
       viewportCompositionUpdateQueued = false
       const shouldForce = viewportCompositionUpdateForce
       viewportCompositionUpdateForce = false
-      applyViewportCompositionOffset(shouldForce)
+      applyViewportCompositionOffset(shouldForce, true)
     })
   })
 }
@@ -13408,11 +13441,13 @@ function bindControlsToCamera(newCamera: THREE.PerspectiveCamera) {
   }
 }
 
-function renderViewportFrame() {
+function renderViewportFrame(updateTerrainTextureStreams = true) {
   if (!renderer || !scene || !camera) {
     return
   }
-  updateAttachedTerrainTextureStreams(scene, camera)
+  if (updateTerrainTextureStreams) {
+    updateAttachedTerrainTextureStreams(scene, camera)
+  }
   postprocessing.render()
 }
 
@@ -14885,44 +14920,72 @@ function handleDirectionalCameraShortcut(code: string): boolean {
 
 function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
+  if (isHandlingControlsChange) return
 
-  if (camera && mapControls && shiftOrbitPivotSessionState) {
-    const session = shiftOrbitPivotSessionState
-    const currentOffset = shiftOrbitOffsetHelper.copy(camera.position).sub(session.pivot)
-    const currentDistance = currentOffset.length()
-    if (currentDistance > 1e-6 && session.orbitDistance > 1e-6) {
-      const deviation = Math.abs(currentDistance - session.orbitDistance)
-      const tolerance = Math.max(1e-3, session.orbitDistance * 0.005)
-      if (deviation > tolerance) {
-        currentOffset.multiplyScalar(session.orbitDistance / currentDistance)
-        camera.position.copy(session.pivot).add(currentOffset)
+  isHandlingControlsChange = true
+  try {
+    if (camera && mapControls && shiftOrbitPivotSessionState) {
+      const session = shiftOrbitPivotSessionState
+      const currentOffset = shiftOrbitOffsetHelper.copy(camera.position).sub(session.pivot)
+      const currentDistance = currentOffset.length()
+      if (currentDistance > 1e-6 && session.orbitDistance > 1e-6) {
+        const deviation = Math.abs(currentDistance - session.orbitDistance)
+        const tolerance = Math.max(1e-3, session.orbitDistance * 0.005)
+        if (deviation > tolerance) {
+          currentOffset.multiplyScalar(session.orbitDistance / currentDistance)
+          camera.position.copy(session.pivot).add(currentOffset)
+        }
       }
+      mapControls.target.copy(session.pivot)
     }
-    mapControls.target.copy(session.pivot)
-  }
 
-  syncControlsConstraintsAndSpeeds()
-  applyViewportCompositionOffset(true)
+    syncControlsConstraintsAndSpeeds()
+    applyViewportCompositionOffset(false, false)
+    markCameraHudRefreshPending()
+    refreshCameraHudIfNeeded()
+    gizmoControls?.cameraUpdate()
+    terrainGridController.markCameraDirty()
+  } finally {
+    isHandlingControlsChange = false
+  }
+}
+
+function markCameraHudRefreshPending(): void {
+  cameraHudRefreshPending = true
+}
+
+function refreshCameraHudIfNeeded(force = false): boolean {
+  if (!cameraHudRefreshPending && !force) {
+    return false
+  }
+  const now = performance.now()
+  if (!force && now - lastCameraHudRefreshAt < CAMERA_HUD_REFRESH_INTERVAL_MS) {
+    return false
+  }
   updateCameraStatusDistance()
   updateCameraNorthHeading()
-  gizmoControls?.cameraUpdate()
-  terrainGridController.markCameraDirty()
+  cameraHudRefreshPending = false
+  lastCameraHudRefreshAt = now
+  return true
 }
 
 function updateCameraStatusDistance() {
   if (!camera || !mapControls) {
     cameraStatusDistance.value = defaultCameraStatusDistance
+    cameraHudRefreshPending = false
     return
   }
   cameraStatusDistance.value = Math.min(
     camera.position.distanceTo(mapControls.target),
     CAMERA_MAX_ZOOM_DISTANCE_CAP,
   )
+  cameraHudRefreshPending = false
 }
 
 function updateCameraNorthHeading() {
   if (!camera) {
     cameraNorthHeadingDegrees.value = 0
+    cameraHudRefreshPending = false
     return
   }
 
@@ -14933,6 +14996,7 @@ function updateCameraNorthHeading() {
     + cameraNorthForwardHelper.z * cameraNorthForwardHelper.z
   if (horizontalLengthSq <= 1e-8) {
     cameraNorthHeadingDegrees.value = 0
+    cameraHudRefreshPending = false
     return
   }
 
@@ -14942,6 +15006,7 @@ function updateCameraNorthHeading() {
   )
   const northDirectionAngleDegrees = resolveNorthDirectionAngleDegrees(environmentSettings.value.northDirection)
   cameraNorthHeadingDegrees.value = (worldHeadingDegrees - northDirectionAngleDegrees + 360) % 360
+  cameraHudRefreshPending = false
 }
 
 function handleResetCameraStatusZoomClick() {
@@ -15557,14 +15622,14 @@ function animate() {
   renderClock.update()
   const delta = renderClock.getDelta()
   const effectiveDelta = delta > 0 ? Math.min(delta, 0.1) : 0
-  const prof: Record<string, number> = {}
+  const cameraInteractionActive = Boolean(mapControls?.isCameraGestureActive)
+    || cameraTransitionState !== null
 
   // updateBillboardInstanceCameraWorldPosition(camera.position) // Removed: function not defined/imported
 
   let controlsUpdated = false
 
   if (cameraTransitionState && mapControls) {
-    const t_cam0 = performance.now()
     const { startTime, duration, startPosition, startTarget, endPosition, endTarget, relativeOffset } = cameraTransitionState
     const elapsed = Math.max(performance.now() - startTime, 0)
     const progress = duration === 0 ? 1 : Math.min(elapsed / duration, 1)
@@ -15592,6 +15657,7 @@ function animate() {
     }
 
     controlsUpdated = true
+    markCameraHudRefreshPending()
     terrainGridController.markCameraDirty()
 
     if (perspectiveCamera && camera !== perspectiveCamera) {
@@ -15606,32 +15672,24 @@ function animate() {
         perspectiveCamera.quaternion.copy(camera.quaternion)
       }
     }
-    prof.cameraTransition = performance.now() - t_cam0
   }
 
   if (mapControls && !controlsUpdated) {
-    const t0 = performance.now()
     mapControls.update(effectiveDelta)
-    prof.controls = performance.now() - t0
   }
 
   {
-    const t0 = performance.now()
     const now = performance.now()
     terrainGridController.tick(now)
-    prof.terrainGrid = performance.now() - t0
   }
 
   if (lightHelpersNeedingUpdate.size > 0 && scene) {
-    const t0 = performance.now()
     scene.updateMatrixWorld(true)
     lightHelpersNeedingUpdate.forEach((helper) => {
       helper.update?.()
     })
-    prof.lightHelpers = performance.now() - t0
   }
 
-  const t_renderPrep = performance.now()
   wallBuildTool.flushPreviewIfNeeded(scene)
   roadBuildTool.flushPreviewIfNeeded(scene)
   floorBuildTool.flushPreviewIfNeeded(scene)
@@ -15678,14 +15736,11 @@ function animate() {
   updatePlacementSideSnapHintPulse(performance.now())
   updateDebugVertexPoints(performance.now())
   updatePlaceholderOverlayPositions()
-  const t_mid = performance.now()
-  prof.renderPrep = t_mid - t_renderPrep
   gizmoControls?.cameraUpdate()
   if (props.activeTool === 'translate') {
     // alignment hint visuals disabled
   }
   if (effectiveDelta > 0 && effectRuntimeTickers.length) {
-    const t0 = performance.now()
     effectRuntimeTickers.forEach((tick) => {
       try {
         tick(effectiveDelta)
@@ -15693,7 +15748,6 @@ function animate() {
         console.warn('[SceneViewport] Failed to advance effect runtime', error)
       }
     })
-    prof.effectTickers = performance.now() - t0
   }
   if (effectiveDelta > 0 && warpGatePlacementPreviewGroup.visible) {
     try {
@@ -15703,18 +15757,16 @@ function animate() {
     }
   }
   if (typeof updateGroundChunkStreaming === 'function') {
-    const t_gc0 = performance.now()
     updateGroundChunkStreaming()
-    prof.groundStreaming = performance.now() - t_gc0
   }
 
   if (effectiveDelta > 0) {
-    const t_pl0 = performance.now()
     try {
       const slowroadsSettings = environmentSettings.value.slowroads
       componentManager.setFrameState({
         cameraWorldPosition: camera.position,
         cameraWorldDirection: camera.getWorldDirection(proceduralLandscapeCameraDirectionHelper),
+        cameraInteractionActive,
         environment: {
           season: slowroadsSettings.season,
           timeOfDay: slowroadsSettings.timeOfDay,
@@ -15722,11 +15774,12 @@ function animate() {
         },
       })
       componentManager.update(effectiveDelta, { types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES })
-      backfillProceduralLandscapeRouteCenterlines()
+      if (!cameraInteractionActive) {
+        backfillProceduralLandscapeRouteCenterlines()
+      }
     } catch (error) {
       console.warn('[SceneViewport] Failed to advance procedural landscape runtime', error)
     }
-    prof.proceduralLandscape = performance.now() - t_pl0
 
     ensureSlowroadsEnvironmentRuntime()
     slowroadsEnvironment?.update(effectiveDelta)
@@ -15737,54 +15790,47 @@ function animate() {
     flushInstancedBounds()
   }
 
-  const t0_scatter = performance.now()
   updateScatterLod()
   updateInstancedCullingAndBinding()
-  prof.scatterAndCulling = performance.now() - t0_scatter
   // make building labels face the camera and follow their parent container
   if (buildingLabelMeshes.size > 0 && camera) {
-    const t0_labels = performance.now()
-    const tmpBox = new THREE.Box3()
-    const tmpVec = new THREE.Vector3()
     for (const [nodeId, mesh] of buildingLabelMeshes.entries()) {
       const parent = objectMap.get(nodeId)
       if (!parent) continue
-      tmpBox.setFromObject(parent)
-      tmpBox.getCenter(tmpVec)
-      const localCenter = tmpVec.clone()
-      parent.worldToLocal(localCenter)
-      mesh.position.copy(localCenter)
-      mesh.position.y = (tmpBox.max.y - tmpBox.min.y) * 0.5 + 0.2
+      buildingLabelBoundsHelper.setFromObject(parent)
+      buildingLabelBoundsHelper.getCenter(buildingLabelCenterHelper)
+      parent.worldToLocal(buildingLabelCenterHelper)
+      mesh.position.copy(buildingLabelCenterHelper)
+      mesh.position.y = (buildingLabelBoundsHelper.max.y - buildingLabelBoundsHelper.min.y) * 0.5 + 0.2
       mesh.quaternion.copy(camera.quaternion)
     }
-    prof.buildingLabels = performance.now() - t0_labels
   }
   if (guideRouteWaypointLabelMeshes.size > 0 && camera) {
-    const t0_labels = performance.now()
-    const tmpParentQuat = new THREE.Quaternion()
-    const tmpInvParentQuat = new THREE.Quaternion()
     for (const mesh of guideRouteWaypointLabelMeshes.values()) {
       const nodeId = mesh.userData?.nodeId as string | undefined
       if (!nodeId) continue
       const parent = objectMap.get(nodeId)
       if (!parent) continue
-      parent.getWorldQuaternion(tmpParentQuat)
-      tmpInvParentQuat.copy(tmpParentQuat).invert()
-      mesh.quaternion.multiplyQuaternions(tmpInvParentQuat, camera.quaternion)
+      parent.getWorldQuaternion(guideRouteWaypointLabelParentQuaternionHelper)
+      guideRouteWaypointLabelInverseParentQuaternionHelper
+        .copy(guideRouteWaypointLabelParentQuaternionHelper)
+        .invert()
+      mesh.quaternion.multiplyQuaternions(guideRouteWaypointLabelInverseParentQuaternionHelper, camera.quaternion)
     }
-    prof.buildingLabels = (prof.buildingLabels ?? 0) + (performance.now() - t0_labels)
   }
-  const t0_render = performance.now()
   // debug bounds update removed
-  updateCameraNorthHeading()
+  refreshCameraHudIfNeeded()
   sceneCsmShadowRuntime?.update()
-  renderViewportFrame()
+  const now = performance.now()
+  const shouldUpdateTerrainTextureStreams = !cameraInteractionActive
+    || now - lastInteractionTerrainTextureUpdateAt >= CAMERA_INTERACTION_MAINTENANCE_INTERVAL_MS
+  if (shouldUpdateTerrainTextureStreams) {
+    lastInteractionTerrainTextureUpdateAt = now
+  }
+  renderViewportFrame(shouldUpdateTerrainTextureStreams)
   viewPointPreviewDirty = true
   renderViewPointPreview()
-  prof.render = performance.now() - t0_render
-  const t0_gizmoRender = performance.now()
   gizmoControls?.render()
-  prof.gizmoRender = performance.now() - t0_gizmoRender
   stats?.end()
 
   // frame timing previously used for debug logging; removed per request
@@ -15873,6 +15919,7 @@ function disposeScene() {
   }
   mapControls = null
   viewportCompositionOffsetPx.set(Number.NaN, Number.NaN)
+  viewportCompositionAppliedDistance = Number.NaN
   orbitDisableCount = 0
   isSelectDragOrbitDisabled = false
   // dispose building label meshes
@@ -18348,6 +18395,75 @@ async function handlePointerDown(event: PointerEvent) {
   }
 }
 
+function handleActiveCameraPointerMove(event: PointerEvent): boolean {
+  if (event.buttons === 0) {
+    return false
+  }
+
+  let cameraGestureActive = false
+
+  if (middleClickSessionState?.pointerId === event.pointerId && middleClickSessionState.planarPanActive) {
+    if (!middleClickSessionState.moved) {
+      const dx = event.clientX - middleClickSessionState.startX
+      const dy = event.clientY - middleClickSessionState.startY
+      middleClickSessionState.moved = Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
+    }
+    if (middleClickSessionState.moved) {
+      mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
+    }
+    cameraGestureActive = true
+  }
+
+  if (leftEmptyClickSessionState?.pointerId === event.pointerId) {
+    if (!leftEmptyClickSessionState.moved) {
+      const dx = event.clientX - leftEmptyClickSessionState.startX
+      const dy = event.clientY - leftEmptyClickSessionState.startY
+      leftEmptyClickSessionState.moved = Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
+    }
+    if (leftEmptyClickSessionState.cameraGesture === 'planar-pan' && leftEmptyClickSessionState.moved) {
+      mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
+    }
+    cameraGestureActive = true
+  }
+
+  if (
+    pointerTrackingState?.pointerId === event.pointerId
+    && pointerTrackingState.button === 0
+    && pointerTrackingState.cameraGesture === 'orbit-rotate'
+  ) {
+    pointerInteraction.updateMoved(event)
+    const dx = event.clientX - pointerTrackingState.startX
+    const dy = event.clientY - pointerTrackingState.startY
+    if (!pointerTrackingState.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      pointerTrackingState.moved = true
+      mapControls?.beginOrbitRotateGesture(
+        pointerTrackingState.pointerId,
+        pointerTrackingState.startX,
+        pointerTrackingState.startY,
+      )
+    }
+    if (pointerTrackingState.moved) {
+      mapControls?.updateOrbitRotateGesture(event.pointerId, event.clientX, event.clientY)
+    }
+    cameraGestureActive = true
+  } else if (pointerTrackingState?.pointerId === event.pointerId) {
+    const dx = event.clientX - pointerTrackingState.startX
+    const dy = event.clientY - pointerTrackingState.startY
+    if (!pointerTrackingState.moved && Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+      pointerTrackingState.moved = true
+    }
+  }
+
+  if (mapControls?.isCameraGestureActive) {
+    cameraGestureActive = true
+  }
+
+  if (cameraGestureActive && event.cancelable) {
+    event.preventDefault()
+  }
+  return cameraGestureActive
+}
+
 function handlePointerMove(event: PointerEvent) {
   if (rigidbodyColliderEditActive.value) {
     return
@@ -18356,7 +18472,6 @@ function handlePointerMove(event: PointerEvent) {
   lastPointerClientX = event.clientX
   lastPointerClientY = event.clientY
   lastPointerType = event.pointerType
-  updateAutoOverlayHoverIndicator(event)
 
   // (debug hover capture removed)
 
@@ -18364,29 +18479,11 @@ function handlePointerMove(event: PointerEvent) {
     clearShiftOrbitPivotSession(event.pointerId)
   }
 
-  if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId && !middleClickSessionState.moved) {
-    const dx = event.clientX - middleClickSessionState.startX
-    const dy = event.clientY - middleClickSessionState.startY
-    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-      middleClickSessionState.moved = true
-    }
+  if (handleActiveCameraPointerMove(event)) {
+    return
   }
 
-  if (middleClickSessionState?.pointerId === event.pointerId && middleClickSessionState.planarPanActive && middleClickSessionState.moved) {
-    mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
-  }
-
-  if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId && !leftEmptyClickSessionState.moved) {
-    const dx = event.clientX - leftEmptyClickSessionState.startX
-    const dy = event.clientY - leftEmptyClickSessionState.startY
-    if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
-      leftEmptyClickSessionState.moved = true
-    }
-  }
-
-  if (leftEmptyClickSessionState?.pointerId === event.pointerId && leftEmptyClickSessionState.cameraGesture === 'planar-pan' && leftEmptyClickSessionState.moved) {
-    mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
-  }
+  updateAutoOverlayHoverIndicator(event)
 
   if (assetPlacementClickSessionState && assetPlacementClickSessionState.pointerId === event.pointerId && !assetPlacementClickSessionState.moved) {
     const dx = event.clientX - assetPlacementClickSessionState.startX
@@ -19216,6 +19313,7 @@ async function handlePointerUp(event: PointerEvent) {
   }
   // surface snap pointer updates removed (alignment hint disabled)
   try {
+    mapControls?.flushPendingCameraGesture(event.pointerId)
     const isPointerUpOnCanvas = isStrictPointOnCanvas(event.clientX, event.clientY)
     const isPointerEventFromOverlayUi = isEventFromViewportOverlayUi(event)
     const hasViewportSession =
@@ -20085,20 +20183,20 @@ function handlePointerCancel(event: PointerEvent) {
   pendingVertexSnapResult = null
   pointerInteraction.clearIfPointer(event.pointerId)
   if (pointerTrackingState?.pointerId === event.pointerId && pointerTrackingState.cameraGesture === 'orbit-rotate') {
-    mapControls?.endOrbitRotateGesture(event.pointerId)
+    mapControls?.cancelOrbitRotateGesture(event.pointerId)
   }
   if (pointerTrackingState?.pointerId === event.pointerId) {
     pointerTrackingState = null
   }
   if (middleClickSessionState && middleClickSessionState.pointerId === event.pointerId) {
     if (middleClickSessionState.planarPanActive) {
-      mapControls?.endPlanarPanGesture(event.pointerId)
+      mapControls?.cancelPlanarPanGesture(event.pointerId)
     }
     middleClickSessionState = null
   }
   if (leftEmptyClickSessionState && leftEmptyClickSessionState.pointerId === event.pointerId) {
     if (leftEmptyClickSessionState.cameraGesture === 'planar-pan') {
-      mapControls?.endPlanarPanGesture(event.pointerId)
+      mapControls?.cancelPlanarPanGesture(event.pointerId)
     } else if (leftEmptyClickSessionState.cameraGesture === 'orbit-rotate') {
       mapControls?.endTransientLeftRotateGesture()
     }
@@ -25783,6 +25881,7 @@ function handleRectangleAxisAlignedBBlur() {
 
 onMounted(() => {
   setGroundTextureSourceResolver(resolveGroundTextureSource)
+  setProceduralLandscapeDemOrthoResolver(proceduralLandscapeDemOrthoResolver)
   setProceduralLandscapeEnvironment('editor')
   initScene()
   if (canvasRef.value) {
@@ -25836,6 +25935,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   clearLandscapeRoadPlacementNotice()
   setGroundTextureSourceResolver(null)
+  setProceduralLandscapeDemOrthoResolver(null)
   slowroadsEnvironment?.dispose()
   slowroadsEnvironment = null
   disposeRigidbodyColliderEditor()

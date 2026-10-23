@@ -13751,8 +13751,6 @@ export const useSceneStore = defineStore('scene', {
         assetId: placementAsset.id,
         runtimeGridUrl: metadata.runtimeGridUrl,
         runtimeGridBytes: metadata.runtimeGridBytes ?? null,
-        runtimeOrthoUrl: metadata.runtimeOrthoUrl ?? null,
-        runtimeOrthoBytes: metadata.runtimeOrthoBytes ?? null,
         sampleStep: 'auto' as const,
         sourceZipName: metadata.sourceZipName ?? null,
         width: metadata.demWidth ?? null,

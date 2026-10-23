@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
+import { MeshBVH } from 'three-mesh-bvh'
 import { fromArrayBuffer } from 'geotiff'
 import { TERRAIN_DEM_PACKAGE_VERSION, type TerrainDemPackageSidecar } from '../../../../schema/terrainDemPackage'
 import {
+  buildRgbCoverageHoleMask,
   buildTerrainDemSidecar,
   copyRenderTargetTileToOrtho,
   DEM_CELL_SIZE_SNAP_STEPS,
@@ -12,6 +14,7 @@ import {
   fillDemHoles,
   fillRgbHoles,
   planDemGrid,
+  resolveDemOrthoCameraFrame,
   resolveDemGeoReference,
   sampleDemHeights,
   type DemExportFrame,
@@ -145,6 +148,86 @@ describe('sampleDemHeights', () => {
     }
     const maskHoles = result.wasHole.reduce((sum, flag) => sum + (flag === 1 ? 1 : 0), 0)
     expect(maskHoles).toBe(result.holeCount)
+  })
+
+  it('matches the previous vertical-ray sampling on a sloped terrain', async () => {
+    const geometry = buildPlaneGeometry(40, 40, 20)
+    const position = geometry.getAttribute('position')
+    for (let index = 0; index < position.count; index += 1) {
+      position.setY(index, Math.sin(position.getX(index) * 0.2) * 2 + position.getZ(index) * 0.05)
+    }
+    position.needsUpdate = true
+    geometry.computeBoundingBox()
+    geometry.computeBoundingSphere()
+    const { plan } = planDemGrid(geometry)
+    const sampled = await sampleDemHeights(geometry, plan, TEST_FRAME)
+
+    const bvh = new MeshBVH(geometry)
+    const ray = new THREE.Ray()
+    const rayTop = (geometry.boundingBox?.max.y ?? 0) + 10
+    for (let row = 0; row < plan.rows; row += 1) {
+      const x = plan.xMax - (row + 0.5) * plan.cellSizeMeters
+      for (let col = 0; col < plan.cols; col += 1) {
+        const z = plan.zMin + (col + 0.5) * plan.cellSizeMeters
+        const hit = bvh.raycastFirst(ray.set(new THREE.Vector3(x, rayTop, z), new THREE.Vector3(0, -1, 0)), THREE.DoubleSide)
+        const expected = hit ? hit.point.y + TEST_FRAME.groundElevationMeters : Number.NaN
+        const actual = sampled.heights[row * plan.cols + col]
+        if (Number.isFinite(expected)) {
+          expect(actual).toBeCloseTo(expected, 4)
+        }
+      }
+    }
+  })
+
+  it('supports non-indexed geometry', async () => {
+    const indexed = buildPlaneGeometry(20, 20, 10, 5)
+    const geometry = indexed.toNonIndexed()
+    const { plan } = planDemGrid(geometry)
+    const result = await sampleDemHeights(geometry, plan, TEST_FRAME)
+    expect(result.hitCount).toBe(plan.rows * plan.cols)
+    for (const value of result.heights) {
+      expect(value).toBeCloseTo(5 + TEST_FRAME.groundElevationMeters, 4)
+    }
+  })
+
+  it('keeps the highest surface where triangles overlap', async () => {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      -5, 1, -5,
+      5, 1, -5,
+      5, 1, 5,
+      -5, 1, 5,
+      -5, 4, -5,
+      5, 4, 5,
+      5, 4, -5,
+    ], 3))
+    geometry.setIndex([
+      0, 1, 2,
+      0, 2, 3,
+      4, 5, 6,
+    ])
+    const { plan } = planDemGrid(geometry, { cellSize: 1 })
+    const result = await sampleDemHeights(geometry, plan, TEST_FRAME)
+    expect(Math.max(...result.heights)).toBeCloseTo(4 + TEST_FRAME.groundElevationMeters, 5)
+  })
+
+  it('reports monotonic raster and fill progress', async () => {
+    const geometry = buildPlaneGeometry(20, 20, 40, 5)
+    const { plan } = planDemGrid(geometry)
+    const progress: Array<{ phase: 'sample' | 'fill'; loaded: number; total: number }> = []
+    await sampleDemHeights(geometry, plan, TEST_FRAME, {
+      chunkCells: 1024,
+      yieldFn: async () => undefined,
+      onProgress: (value) => progress.push(value),
+    })
+    const sampleProgress = progress.filter((value) => value.phase === 'sample')
+    expect(sampleProgress.length).toBeGreaterThan(1)
+    expect(sampleProgress.at(-1)?.loaded).toBe(sampleProgress.at(-1)?.total)
+    for (let index = 1; index < sampleProgress.length; index += 1) {
+      expect(sampleProgress[index].loaded).toBeGreaterThanOrEqual(sampleProgress[index - 1].loaded)
+    }
+    expect(progress.at(-1)?.phase).toBe('fill')
+    expect(progress.at(-1)?.loaded).toBe(progress.at(-1)?.total)
   })
 })
 
@@ -322,6 +405,89 @@ describe('copyRenderTargetTileToOrtho', () => {
   })
 })
 
+describe('resolveDemOrthoCameraFrame', () => {
+  function expectTileToFillNdc(plan: DemGridPlan, rowStart: number, colStart: number, width: number, height: number): void {
+    const frame = resolveDemOrthoCameraFrame(plan, { rowStart, colStart, width, height })
+    const camera = new THREE.OrthographicCamera(
+      frame.left,
+      frame.right,
+      frame.top,
+      frame.bottom,
+      0.1,
+      200,
+    )
+    camera.up.set(1, 0, 0)
+    camera.position.set(frame.xCenter, 100, frame.zCenter)
+    camera.lookAt(frame.xCenter, -100, frame.zCenter)
+    camera.updateProjectionMatrix()
+    camera.updateMatrixWorld(true)
+
+    const xNorth = plan.xMax - rowStart * plan.cellSizeMeters
+    const xSouth = xNorth - height * plan.cellSizeMeters
+    const zWest = plan.zMin + colStart * plan.cellSizeMeters
+    const zEast = zWest + width * plan.cellSizeMeters
+    for (const [x, z] of [
+      [xSouth, zWest],
+      [xSouth, zEast],
+      [xNorth, zWest],
+      [xNorth, zEast],
+    ]) {
+      const ndc = new THREE.Vector3(x, 0, z).project(camera)
+      expect(Math.abs(Math.abs(ndc.x) - 1)).toBeLessThanOrEqual(1e-8)
+      expect(Math.abs(Math.abs(ndc.y) - 1)).toBeLessThanOrEqual(1e-8)
+    }
+  }
+
+  it('fills the full render target for a 2261x1954 two-tile raster', () => {
+    const plan: DemGridPlan = {
+      rows: 1954,
+      cols: 2261,
+      cellSizeMeters: 5,
+      xMin: -4885,
+      xMax: 4885,
+      zMin: -5652.5,
+      zMax: 5652.5,
+      autoCellSize: false,
+    }
+    expectTileToFillNdc(plan, 0, 0, 2048, 1954)
+    expectTileToFillNdc(plan, 0, 2048, 213, 1954)
+  })
+
+  it('fills every tile in a 4096x4096 four-tile raster', () => {
+    const plan: DemGridPlan = {
+      rows: 4096,
+      cols: 4096,
+      cellSizeMeters: 1,
+      xMin: -2048,
+      xMax: 2048,
+      zMin: -2048,
+      zMax: 2048,
+      autoCellSize: false,
+    }
+    for (const rowStart of [0, 2048]) {
+      for (const colStart of [0, 2048]) {
+        expectTileToFillNdc(plan, rowStart, colStart, 2048, 2048)
+      }
+    }
+  })
+
+  it('fills non-square and final partial tiles without offset', () => {
+    const plan: DemGridPlan = {
+      rows: 4099,
+      cols: 4101,
+      cellSizeMeters: 2,
+      xMin: -4099,
+      xMax: 4099,
+      zMin: -4101,
+      zMax: 4101,
+      autoCellSize: false,
+    }
+    expectTileToFillNdc(plan, 0, 0, 2048, 2048)
+    expectTileToFillNdc(plan, 2048, 2048, 2053, 2051)
+    expectTileToFillNdc(plan, 4096, 0, 3, 3)
+  })
+})
+
 describe('fillRgbHoles', () => {
   it('fills masked pixels from the nearest valid colour', () => {
     const rows = 3
@@ -340,6 +506,46 @@ describe('fillRgbHoles', () => {
     expect(rgb[(0 * 3 + 1) * 3]).toBe(rgb[(0 * 3 + 0) * 3])
     expect(rgb[(1 * 3 + 1) * 3]).toBe(rgb[(1 * 3 + 0) * 3])
     expect(rgb[(1 * 3 + 1) * 3 + 2]).toBe(rgb[(1 * 3 + 0) * 3 + 2])
+  })
+
+  it('marks both DEM holes and black rendered pixels as uncovered', () => {
+    const rgb = new Uint8Array([
+      10, 20, 30,
+      0, 0, 0,
+      50, 60, 70,
+      80, 90, 100,
+    ])
+    const wasHole = new Uint8Array([0, 0, 1, 0])
+    const coverage = buildRgbCoverageHoleMask(rgb, wasHole, 2, 2)
+    expect(Array.from(coverage.mask)).toEqual([0, 1, 1, 0])
+    expect(coverage.coveredCount).toBe(3)
+    expect(coverage.holeCount).toBe(2)
+  })
+
+  it('reports an all-black ortho raster as having no usable pixels', () => {
+    const coverage = buildRgbCoverageHoleMask(
+      new Uint8Array(12),
+      new Uint8Array(4),
+      2,
+      2,
+    )
+    expect(coverage.coveredCount).toBe(0)
+    expect(coverage.holeCount).toBe(4)
+  })
+
+  it('fills black rendered pixels from the coverage mask', () => {
+    const rgb = new Uint8Array([
+      12, 34, 56,
+      0, 0, 0,
+      12, 34, 56,
+    ])
+    const coverage = buildRgbCoverageHoleMask(rgb, new Uint8Array(3), 1, 3)
+    expect(fillRgbHoles(rgb, coverage.mask, 1, 3)).toBe(1)
+    expect(Array.from(rgb)).toEqual([
+      12, 34, 56,
+      12, 34, 56,
+      12, 34, 56,
+    ])
   })
 })
 
