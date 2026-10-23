@@ -10,7 +10,6 @@ import {
 } from '@schema/components'
 import {
   clampProceduralLandscapeProps,
-  PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
   resolveProceduralLandscapeBaseMapMode,
   type ProceduralLandscapeComponentProps,
   type ProceduralLandscapeRoadStrategy,
@@ -241,14 +240,6 @@ const roadPathEditing = computed(
   () => componentEnabled.value && activeBuildTool.value === 'landscapeRoad' && Boolean(landscapeComponent.value),
 )
 const roadHasGeneratedResult = computed(() => (runtimeStats.value?.roadNodeCount ?? 0) >= 2)
-const roadCenterlineLegacy = computed(() => {
-  const centerline = propsValue.value?.road.generatedRoute?.centerline
-  return Boolean(
-    centerline?.pointsXZ.length
-    && (centerline.algorithmVersion ?? 1)
-      < PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
-  )
-})
 const roadStale = computed(() => {
   const generated = propsValue.value?.road.generatedRoute
   const current = propsValue.value?.road
@@ -288,10 +279,7 @@ const roadStatusText = computed(() => {
   const strategy = stats.roadStrategy === 'shortest'
     ? '最短路径'
     : stats.roadPlannerMode === 'cached-centerline'
-      ? (propsValue.value?.road.generatedRoute?.centerline?.algorithmVersion ?? 1)
-          >= PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION
-        ? '已固化平滑中线'
-        : '已固化道路中线'
+      ? '已固化平滑中线'
     : stats.roadPlannerMode === 'waypoint-spline'
       ? '平滑途经点曲线'
     : stats.roadPlannerMode === 'official-natural'
@@ -1063,9 +1051,6 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           <div v-if="roadActionMessage" class="pl-hint">{{ roadActionMessage }}</div>
           <div v-if="roadStale" class="pl-hint pl-hint--stale">
             途经点或公路曲线已修改，点击“重新生成公路”应用。
-          </div>
-          <div v-if="roadCenterlineLegacy" class="pl-hint pl-hint--stale">
-            旧版中线，重新生成以应用修复。
           </div>
   
           <div class="pl-subtitle">选线策略</div>

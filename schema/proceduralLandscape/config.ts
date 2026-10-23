@@ -98,7 +98,7 @@ export interface ProceduralLandscapeGeneratedRouteCenterline {
   /** Host-local centerline XZ pairs: [x0, z0, x1, z1, ...]. */
   pointsXZ: number[]
   /** Generation algorithm version used to validate cached road geometry. */
-  algorithmVersion?: number
+  algorithmVersion: number
   /** DEM sample step used by the editor when the snapshot was authored. */
   authoringSampleStep: number
   /** Runtime height-grid cell size used when the snapshot was authored. */
@@ -430,6 +430,14 @@ export function clampGeneratedRouteCenterline(
   ) {
     return null
   }
+  if (
+    typeof raw.algorithmVersion !== 'number'
+    || !Number.isInteger(raw.algorithmVersion)
+    || raw.algorithmVersion
+      !== PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION
+  ) {
+    return null
+  }
   const pointsXZ: number[] = []
   pointsXZ.length = raw.pointsXZ.length
   for (let index = 0; index < raw.pointsXZ.length; index += 1) {
@@ -444,12 +452,7 @@ export function clampGeneratedRouteCenterline(
   }
   return {
     pointsXZ,
-    algorithmVersion: Math.round(clampNumber(
-      raw.algorithmVersion,
-      1,
-      1,
-      PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
-    )),
+    algorithmVersion: PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
     authoringSampleStep: Math.round(clampNumber(raw.authoringSampleStep, 1, 1, 8)),
     authoringCellSize: clampNumber(raw.authoringCellSize, 1, 0.01, 100_000),
     ...(typeof raw.exclusionSignature === 'string'

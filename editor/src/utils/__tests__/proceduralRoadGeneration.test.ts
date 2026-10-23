@@ -627,6 +627,7 @@ describe('unified waypoint road configuration', () => {
       revision: 1,
       centerline: {
         pointsXZ: [1, 2, 3, 4, 5, 6],
+        algorithmVersion: 2,
         authoringSampleStep: 1.4,
         authoringCellSize: 10,
       },
@@ -634,7 +635,7 @@ describe('unified waypoint road configuration', () => {
     const clamped = clampProceduralLandscapeProps(props, 'terrain-a')
     expect(clamped.road.generatedRoute?.centerline).toEqual({
       pointsXZ: [1, 2, 3, 4, 5, 6],
-      algorithmVersion: 1,
+      algorithmVersion: 2,
       authoringSampleStep: 1,
       authoringCellSize: 10,
     })
@@ -653,6 +654,7 @@ describe('unified waypoint road configuration', () => {
           ...props.road.generatedRoute,
           centerline: {
             pointsXZ: [1, 2, Number.NaN, 4],
+            algorithmVersion: 2,
             authoringSampleStep: 1,
             authoringCellSize: 10,
           },
@@ -662,7 +664,7 @@ describe('unified waypoint road configuration', () => {
     expect(invalid.road.generatedRoute?.centerline).toBeNull()
   })
 
-  it('clamps future centerline versions without migrating legacy snapshots', () => {
+  it('rejects missing or incompatible centerline algorithm versions', () => {
     const props = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
     props.road.generatedRoute = {
       waypoints: [{ x: 1, z: 2 }],
@@ -675,14 +677,32 @@ describe('unified waypoint road configuration', () => {
       revision: 1,
       centerline: {
         pointsXZ: [1, 2, 3, 4],
-        algorithmVersion: 99,
+        algorithmVersion: 2,
         authoringSampleStep: 1,
         authoringCellSize: 10,
       },
     }
     const clamped = clampProceduralLandscapeProps(props, 'terrain-a')
     expect(clamped.road.generatedRoute?.centerline?.algorithmVersion).toBe(2)
-    const legacy = clampProceduralLandscapeProps({
+
+    const incompatible = clampProceduralLandscapeProps({
+      ...props,
+      road: {
+        ...props.road,
+        generatedRoute: {
+          ...props.road.generatedRoute,
+          centerline: {
+            pointsXZ: [1, 2, 3, 4],
+            algorithmVersion: 1,
+            authoringSampleStep: 1,
+            authoringCellSize: 10,
+          },
+        },
+      },
+    }, 'terrain-a')
+    expect(incompatible.road.generatedRoute?.centerline).toBeNull()
+
+    const missingRaw = {
       ...props,
       road: {
         ...props.road,
@@ -695,8 +715,11 @@ describe('unified waypoint road configuration', () => {
           },
         },
       },
-    }, 'terrain-a')
-    expect(legacy.road.generatedRoute?.centerline?.algorithmVersion).toBe(1)
+    } as unknown as ReturnType<typeof createDefaultProceduralLandscapeProps>
+    expect(
+      clampProceduralLandscapeProps(missingRaw, 'terrain-a')
+        .road.generatedRoute?.centerline,
+    ).toBeNull()
   })
 
   it('preserves all termination modes in live routing and snapshots', () => {
