@@ -71,7 +71,6 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
   private keyPanSpeedValue = 7
   private currentMode: SceneViewportCameraControlMode = 'orbit'
   private planarPanSession: { pointerId: number; lastX: number; lastY: number } | null = null
-  private transientLeftRotateActive = false
   private nativeControlActive = false
 
   constructor(camera: THREE.PerspectiveCamera, domElement: HTMLElement) {
@@ -104,7 +103,6 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
 
   get isCameraGestureActive(): boolean {
     return this.nativeControlActive
-      || this.transientLeftRotateActive
       || this.planarPanSession !== null
       || this.orbitRotateSession !== null
   }
@@ -255,22 +253,6 @@ export class SceneViewportCameraControls extends THREE.EventDispatcher<SceneView
     }
     this.cancelPendingPointerUpdates(pointerId)
     this.planarPanSession = null
-  }
-
-  beginTransientLeftRotateGesture() {
-    if (this.currentMode !== 'orbit' || this.transientLeftRotateActive) {
-      return
-    }
-    this.controls.mouseButtons.left = CameraControls.ACTION.ROTATE
-    this.transientLeftRotateActive = true
-  }
-
-  endTransientLeftRotateGesture() {
-    if (!this.transientLeftRotateActive) {
-      return
-    }
-    this.transientLeftRotateActive = false
-    this.applyMode(this.currentMode)
   }
 
   beginOrbitRotateGesture(pointerId: number, clientX: number, clientY: number) {

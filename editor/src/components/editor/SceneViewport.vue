@@ -37,6 +37,7 @@ import { handlePointerUpDrag } from './pointer/upDrag'
 import { handlePointerUpScatter } from './pointer/upScatter'
 import { handlePointerUpTools } from './pointer/upTools'
 import { handlePointerUpSelection } from './pointer/upSelection'
+import { resolveCameraPointerAction } from './pointer/cameraPointerIntent'
 import type {
   InstancedEraseDragState,
   PointerDownResult,
@@ -358,6 +359,7 @@ import {
 } from './waterSurfaceEditUtils'
 import { buildCirclePlanarPoints, computeApproxCircleFromPlanarPoints, pickNearestPlanarEdge, sanitizePlanarPoints } from './planarEditMath'
 import { generateUuid } from '@/utils/uuid'
+import { shouldRunCameraInteractionMaintenance } from '@/utils/cameraInteractionMaintenance'
 import { createProceduralLandscapeDemOrthoResolver } from '@/utils/demOrthoTextureLoader'
 import {
   getProceduralLandscapeRoadCenterlineLocal,
@@ -751,6 +753,11 @@ function getPickMaxDistance() {
 }
 let instancedCullingNeedsRefresh = true
 let instancedCullingCameraStateValid = false
+let instancedCullingCandidateCache: {
+  ids: string[]
+  objects: Map<string, THREE.Object3D>
+  nodes: Map<string, SceneNode>
+} | null = null
 const instancedCullingLastCameraProjectionMatrix = new Float32Array(16)
 const instancedCullingLastCameraMatrixWorldInverse = new Float32Array(16)
 
@@ -759,6 +766,7 @@ const createInstancedOutlineProxy = instancedOutlineManager.createInstancedProxy
 const updateInstancedOutlineEntry = instancedOutlineManager.updateInstancedOutlineEntry
 function markInstancedCullingDirty(): void {
   instancedCullingNeedsRefresh = true
+  instancedCullingCandidateCache = null
 }
 
 function areInstancedCullingCameraMatricesUnchanged(cameraToCompare: THREE.Camera): boolean {
@@ -2228,6 +2236,9 @@ type DirectionalLightPivotEditState = {
 let directionalLightPivotEditState: DirectionalLightPivotEditState | null = null
 let isApplyingCameraState = false
 let isHandlingControlsChange = false
+let cameraDerivedWorkPending = false
+let lastCameraInteractionActive = false
+let lastCameraInteractionMaintenanceAt = 0
 let lastCameraFocusRadius: number | null = null
 let lastViewportCameraBaseFar = 5000
 const CAMERA_MAX_DISTANCE_ABS_CAP = 60000
@@ -5694,6 +5705,8 @@ type LeftEmptyClickSessionState = {
   pointerId: number
   startX: number
   startY: number
+  lastX: number
+  lastY: number
   moved: boolean
   ctrlKey: boolean
   metaKey: boolean
@@ -10854,31 +10867,35 @@ function updateInstancedCullingAndBinding(): void {
   }
 
 
-  const candidateIds: string[] = []
-  const candidateObjects = new Map<string, THREE.Object3D>()
-  const candidateNodes = new Map<string, SceneNode>()
+  if (instancedCullingNeedsRefresh || !instancedCullingCandidateCache) {
+    const ids: string[] = []
+    const objects = new Map<string, THREE.Object3D>()
+    const nodes = new Map<string, SceneNode>()
+    objectMap.forEach((object, nodeId) => {
+      if (!object?.userData?.instancedAssetId) {
+        return
+      }
+      const node = sceneStore.getNodeById(nodeId)
+      if (!node) {
+        return
+      }
 
-  objectMap.forEach((object, nodeId) => {
-    if (!object?.userData?.instancedAssetId) {
-      return
-    }
-    const node = sceneStore.getNodeById(nodeId)
-    if (!node) {
-      return
-    }
-
-    const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
-    if (!component || !component.enabled) {
-      return
-    }
-    const props = clampLodComponentProps(component.props)
-    if (props.enableCulling === false) {
-      return
-    }
-    candidateIds.push(nodeId)
-    candidateObjects.set(nodeId, object)
-    candidateNodes.set(nodeId, node)
-  })
+      const component = node.components?.[LOD_COMPONENT_TYPE] as SceneNodeComponentState<LodComponentProps> | undefined
+      if (!component || !component.enabled) {
+        return
+      }
+      const props = clampLodComponentProps(component.props)
+      if (props.enableCulling === false) {
+        return
+      }
+      ids.push(nodeId)
+      objects.set(nodeId, object)
+      nodes.set(nodeId, node)
+    })
+    ids.sort()
+    instancedCullingCandidateCache = { ids, objects, nodes }
+  }
+  const { ids: candidateIds, objects: candidateObjects, nodes: candidateNodes } = instancedCullingCandidateCache
 
   if (DISABLE_EDITOR_VIEWPORT_INSTANCED_CULLING) {
     candidateIds.forEach((nodeId) => {
@@ -10896,7 +10913,6 @@ function updateInstancedCullingAndBinding(): void {
   instancedCullingProjView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
   instancedCullingFrustum.setFromProjectionMatrix(instancedCullingProjView)
 
-  candidateIds.sort()
   instancedCullingFrustumCuller.setIds(candidateIds)
   const visibleIds = instancedCullingFrustumCuller.updateAndQueryVisible(instancedCullingFrustum, (id: string, centerTarget: THREE.Vector3) => {
     const object = candidateObjects.get(id)
@@ -14921,8 +14937,15 @@ function handleDirectionalCameraShortcut(code: string): boolean {
 function handleControlsChange() {
   if (!isSceneReady.value || isApplyingCameraState) return
   if (isHandlingControlsChange) return
+  cameraDerivedWorkPending = true
+}
 
+function flushCameraDerivedWork(force = false): void {
+  if ((!cameraDerivedWorkPending && !force) || !isSceneReady.value || isApplyingCameraState) {
+    return
+  }
   isHandlingControlsChange = true
+  cameraDerivedWorkPending = false
   try {
     if (camera && mapControls && shiftOrbitPivotSessionState) {
       const session = shiftOrbitPivotSessionState
@@ -14940,10 +14963,9 @@ function handleControlsChange() {
     }
 
     syncControlsConstraintsAndSpeeds()
-    applyViewportCompositionOffset(false, false)
+    applyViewportCompositionOffset(force, force)
     markCameraHudRefreshPending()
-    refreshCameraHudIfNeeded()
-    gizmoControls?.cameraUpdate()
+    refreshCameraHudIfNeeded(force)
     terrainGridController.markCameraDirty()
   } finally {
     isHandlingControlsChange = false
@@ -15624,6 +15646,19 @@ function animate() {
   const effectiveDelta = delta > 0 ? Math.min(delta, 0.1) : 0
   const cameraInteractionActive = Boolean(mapControls?.isCameraGestureActive)
     || cameraTransitionState !== null
+  const cameraInteractionEnded = lastCameraInteractionActive && !cameraInteractionActive
+  lastCameraInteractionActive = cameraInteractionActive
+  const now = performance.now()
+  const runCameraDrivenMaintenance = shouldRunCameraInteractionMaintenance({
+    active: cameraInteractionActive,
+    ended: cameraInteractionEnded,
+    nowMs: now,
+    lastRunAtMs: lastCameraInteractionMaintenanceAt,
+    intervalMs: CAMERA_INTERACTION_MAINTENANCE_INTERVAL_MS,
+  })
+  if (runCameraDrivenMaintenance) {
+    lastCameraInteractionMaintenanceAt = now
+  }
 
   // updateBillboardInstanceCameraWorldPosition(camera.position) // Removed: function not defined/imported
 
@@ -15677,9 +15712,11 @@ function animate() {
   if (mapControls && !controlsUpdated) {
     mapControls.update(effectiveDelta)
   }
+  if (cameraDerivedWorkPending || cameraInteractionEnded) {
+    flushCameraDerivedWork(cameraInteractionEnded)
+  }
 
-  {
-    const now = performance.now()
+  if (runCameraDrivenMaintenance) {
     terrainGridController.tick(now)
   }
 
@@ -15736,7 +15773,9 @@ function animate() {
   updatePlacementSideSnapHintPulse(performance.now())
   updateDebugVertexPoints(performance.now())
   updatePlaceholderOverlayPositions()
-  gizmoControls?.cameraUpdate()
+  if (runCameraDrivenMaintenance) {
+    gizmoControls?.cameraUpdate()
+  }
   if (props.activeTool === 'translate') {
     // alignment hint visuals disabled
   }
@@ -15756,7 +15795,7 @@ function animate() {
       console.warn('[SceneViewport] Failed to advance warp gate placement preview', error)
     }
   }
-  if (typeof updateGroundChunkStreaming === 'function') {
+  if (runCameraDrivenMaintenance && typeof updateGroundChunkStreaming === 'function') {
     updateGroundChunkStreaming()
   }
 
@@ -15786,42 +15825,43 @@ function animate() {
   }
   syncCameraFarToSceneFog()
 
-  if (instancedBoundsHasPending()) {
+  if (runCameraDrivenMaintenance && instancedBoundsHasPending()) {
     flushInstancedBounds()
   }
 
-  updateScatterLod()
-  updateInstancedCullingAndBinding()
-  // make building labels face the camera and follow their parent container
-  if (buildingLabelMeshes.size > 0 && camera) {
-    for (const [nodeId, mesh] of buildingLabelMeshes.entries()) {
-      const parent = objectMap.get(nodeId)
-      if (!parent) continue
-      buildingLabelBoundsHelper.setFromObject(parent)
-      buildingLabelBoundsHelper.getCenter(buildingLabelCenterHelper)
-      parent.worldToLocal(buildingLabelCenterHelper)
-      mesh.position.copy(buildingLabelCenterHelper)
-      mesh.position.y = (buildingLabelBoundsHelper.max.y - buildingLabelBoundsHelper.min.y) * 0.5 + 0.2
-      mesh.quaternion.copy(camera.quaternion)
+  if (runCameraDrivenMaintenance) {
+    updateScatterLod()
+    updateInstancedCullingAndBinding()
+    // Make camera-facing labels follow the throttled camera-maintenance budget.
+    if (buildingLabelMeshes.size > 0 && camera) {
+      for (const [nodeId, mesh] of buildingLabelMeshes.entries()) {
+        const parent = objectMap.get(nodeId)
+        if (!parent) continue
+        buildingLabelBoundsHelper.setFromObject(parent)
+        buildingLabelBoundsHelper.getCenter(buildingLabelCenterHelper)
+        parent.worldToLocal(buildingLabelCenterHelper)
+        mesh.position.copy(buildingLabelCenterHelper)
+        mesh.position.y = (buildingLabelBoundsHelper.max.y - buildingLabelBoundsHelper.min.y) * 0.5 + 0.2
+        mesh.quaternion.copy(camera.quaternion)
+      }
     }
-  }
-  if (guideRouteWaypointLabelMeshes.size > 0 && camera) {
-    for (const mesh of guideRouteWaypointLabelMeshes.values()) {
-      const nodeId = mesh.userData?.nodeId as string | undefined
-      if (!nodeId) continue
-      const parent = objectMap.get(nodeId)
-      if (!parent) continue
-      parent.getWorldQuaternion(guideRouteWaypointLabelParentQuaternionHelper)
-      guideRouteWaypointLabelInverseParentQuaternionHelper
-        .copy(guideRouteWaypointLabelParentQuaternionHelper)
-        .invert()
-      mesh.quaternion.multiplyQuaternions(guideRouteWaypointLabelInverseParentQuaternionHelper, camera.quaternion)
+    if (guideRouteWaypointLabelMeshes.size > 0 && camera) {
+      for (const mesh of guideRouteWaypointLabelMeshes.values()) {
+        const nodeId = mesh.userData?.nodeId as string | undefined
+        if (!nodeId) continue
+        const parent = objectMap.get(nodeId)
+        if (!parent) continue
+        parent.getWorldQuaternion(guideRouteWaypointLabelParentQuaternionHelper)
+        guideRouteWaypointLabelInverseParentQuaternionHelper
+          .copy(guideRouteWaypointLabelParentQuaternionHelper)
+          .invert()
+        mesh.quaternion.multiplyQuaternions(guideRouteWaypointLabelInverseParentQuaternionHelper, camera.quaternion)
+      }
     }
   }
   // debug bounds update removed
   refreshCameraHudIfNeeded()
   sceneCsmShadowRuntime?.update()
-  const now = performance.now()
   const shouldUpdateTerrainTextureStreams = !cameraInteractionActive
     || now - lastInteractionTerrainTextureUpdateAt >= CAMERA_INTERACTION_MAINTENANCE_INTERVAL_MS
   if (shouldUpdateTerrainTextureStreams) {
@@ -15918,6 +15958,10 @@ function disposeScene() {
     mapControls.dispose()
   }
   mapControls = null
+  cameraDerivedWorkPending = false
+  lastCameraInteractionActive = false
+  lastCameraInteractionMaintenanceAt = 0
+  instancedCullingCandidateCache = null
   viewportCompositionOffsetPx.set(Number.NaN, Number.NaN)
   viewportCompositionAppliedDistance = Number.NaN
   orbitDisableCount = 0
@@ -17054,7 +17098,7 @@ function handleClickSelection(event: PointerEvent, trackingState: PointerTrackin
     return
   }
 
-  const hit = pickNodeAtPointer(event) ?? trackingState.hitResult
+  const hit = trackingState.hitResult ?? pickNodeAtPointer(event)
   const isToggle = event.ctrlKey || event.metaKey || trackingState.ctrlKey || trackingState.metaKey
   const isRange = event.shiftKey || trackingState.shiftKey
   const currentSelection = sceneStore.selectedNodeIds
@@ -18307,53 +18351,83 @@ async function handlePointerDown(event: PointerEvent) {
   }
 
   const effectiveSelectionTool = uiStore.activeSelectionContext ? 'blocked' : props.activeTool
+  const cameraPointerAction = resolveCameraPointerAction({
+    enabled: Boolean(mapControls?.enabled),
+    mode: sceneStore.viewportSettings.cameraControlMode,
+    button: event.button,
+  })
+  let prefetchedPointerDownHit: NodeHitResult | null = null
 
   // Left click should preserve click-selection semantics, but in camera-control modes
-  // any press that does not land on the current selection should allow a drag camera gesture.
-  // This applies to all transform tools (select/translate/rotate/scale) so the viewport
-  // remains controllable even when a non-select tool is active.  Skip when the transform
-  // gizmo axis is hovered (transformControls.axis is set) — that click belongs to the gizmo.
-  if (event.button === 0 && effectiveSelectionTool !== 'blocked' && !transformControls?.axis) {
+  // any press that does not land on the current selection should start a camera gesture
+  // without performing a full-scene pick. Click selection is resolved once on pointer-up.
+  if (event.button === 0 && effectiveSelectionTool !== 'blocked' && !transformControls?.axis && cameraPointerAction) {
     const activeSelectionNode = resolveSceneNodeById(sceneStore.selectedNodeId ?? props.selectedNodeId ?? null)
     const allowBoundingBoxFallback = !isNodeExcludedFromSelectionBoundingBoxFallback(activeSelectionNode)
-    const directHit = pickNodeAtPointer(event)
-    const boundingBoxHit = !directHit && allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null
+    // The active selection bounds are cheap compared with a full-scene raycast. Only
+    // inspect the exact scene hit when the pointer is already over that selection.
+    const selectionBoundsHit = allowBoundingBoxFallback ? pickActiveSelectionBoundingBoxHit(event) : null
+    const directHit = selectionBoundsHit ? pickNodeAtPointer(event) : null
+    const boundingBoxHit = selectionBoundsHit && !directHit ? selectionBoundsHit : null
+    const pointerHit = directHit ?? boundingBoxHit
     const selectedNodeIds = sceneStore.selectedNodeIds
     const hitBelongsToSelection = Boolean(
-      directHit && (
-        selectedNodeIds.includes(directHit.nodeId)
-        || selectedNodeIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, directHit.nodeId))
+      pointerHit && (
+        selectedNodeIds.includes(pointerHit.nodeId)
+        || selectedNodeIds.some((selectedNodeId) => sceneStore.isDescendant(selectedNodeId, pointerHit.nodeId))
       ),
     )
     const shouldStartCameraSession = !hitBelongsToSelection
 
     if (shouldStartCameraSession) {
-      let cameraGesture: LeftEmptyClickSessionState['cameraGesture'] = 'none'
-      if (Boolean(mapControls?.enabled)) {
-        if (sceneStore.viewportSettings.cameraControlMode === 'map') {
-          cameraGesture = 'planar-pan'
-        } else if (sceneStore.viewportSettings.cameraControlMode === 'orbit') {
-          cameraGesture = 'orbit-rotate'
-        }
-      }
-      if (cameraGesture === 'planar-pan') {
-        mapControls?.beginPlanarPanGesture(event.pointerId, event.clientX, event.clientY)
-      } else if (cameraGesture === 'orbit-rotate') {
-        mapControls?.beginTransientLeftRotateGesture()
-      }
+      const cameraGesture: LeftEmptyClickSessionState['cameraGesture'] =
+        cameraPointerAction === 'pan' ? 'planar-pan' : 'orbit-rotate'
       leftEmptyClickSessionState = {
         pointerId: event.pointerId,
         startX: event.clientX,
         startY: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
         moved: false,
         ctrlKey: event.ctrlKey,
         metaKey: event.metaKey,
         shiftKey: event.shiftKey,
-        clickHitResult: directHit ?? boundingBoxHit,
+        clickHitResult: null,
         cameraGesture,
       }
       return
     }
+    prefetchedPointerDownHit = pointerHit
+  }
+
+  // Right/middle camera buttons must reach CameraControls without a synchronous
+  // scene pick. Right-up without movement is resolved later to preserve selection
+  // rotation and click-selection behavior.
+  if (
+    event.button === 2
+    && effectiveSelectionTool !== 'blocked'
+    && !transformControls?.axis
+    && !activeBuildTool.value
+    && cameraPointerAction
+  ) {
+    pointerTrackingState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+      button: event.button,
+      hitResult: null,
+      selectionDrag: null,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      cameraGesture: 'none',
+      transformAxis: null,
+      deferredDuplicateDrag: null,
+      deferredDuplicateInFlight: false,
+    }
+    pointerInteraction.capture(event.pointerId)
+    return
   }
 
   const selection = await handlePointerDownSelection(event, {
@@ -18374,6 +18448,7 @@ async function handlePointerDown(event: PointerEvent) {
     transformControlsDragging: Boolean(transformControls?.dragging),
     transformControlsAxis: transformControls?.axis ?? null,
     cameraControlMode: sceneStore.viewportSettings.cameraControlMode,
+    prefetchedHit: prefetchedPointerDownHit,
     createSelectionDragState,
     disableOrbitForSelectDrag,
   })
@@ -18415,14 +18490,27 @@ function handleActiveCameraPointerMove(event: PointerEvent): boolean {
   }
 
   if (leftEmptyClickSessionState?.pointerId === event.pointerId) {
+    const previousX = leftEmptyClickSessionState.lastX
+    const previousY = leftEmptyClickSessionState.lastY
     if (!leftEmptyClickSessionState.moved) {
       const dx = event.clientX - leftEmptyClickSessionState.startX
       const dy = event.clientY - leftEmptyClickSessionState.startY
-      leftEmptyClickSessionState.moved = Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX
+      if (Math.hypot(dx, dy) >= CLICK_DRAG_THRESHOLD_PX) {
+        leftEmptyClickSessionState.moved = true
+        if (leftEmptyClickSessionState.cameraGesture === 'planar-pan') {
+          mapControls?.beginPlanarPanGesture(event.pointerId, previousX, previousY)
+        } else if (leftEmptyClickSessionState.cameraGesture === 'orbit-rotate') {
+          mapControls?.beginOrbitRotateGesture(event.pointerId, previousX, previousY)
+        }
+      }
     }
     if (leftEmptyClickSessionState.cameraGesture === 'planar-pan' && leftEmptyClickSessionState.moved) {
       mapControls?.updatePlanarPanGesture(event.pointerId, event.clientX, event.clientY)
+    } else if (leftEmptyClickSessionState.cameraGesture === 'orbit-rotate' && leftEmptyClickSessionState.moved) {
+      mapControls?.updateOrbitRotateGesture(event.pointerId, event.clientX, event.clientY)
     }
+    leftEmptyClickSessionState.lastX = event.clientX
+    leftEmptyClickSessionState.lastY = event.clientY
     cameraGestureActive = true
   }
 
@@ -20051,18 +20139,19 @@ async function handlePointerUp(event: PointerEvent) {
       if (session.cameraGesture === 'planar-pan') {
         mapControls?.endPlanarPanGesture(event.pointerId)
       } else if (session.cameraGesture === 'orbit-rotate') {
-        mapControls?.endTransientLeftRotateGesture()
+        mapControls?.endOrbitRotateGesture(event.pointerId)
       }
 
       if (!session.moved) {
-        if (session.clickHitResult) {
+        const clickHitResult = session.clickHitResult ?? pickNodeAtPointer(event)
+        if (clickHitResult) {
           const clickTrackingState: PointerTrackingState = {
             pointerId: session.pointerId,
             startX: session.startX,
             startY: session.startY,
             moved: false,
             button: 0,
-            hitResult: session.clickHitResult,
+            hitResult: clickHitResult,
             selectionDrag: null,
             ctrlKey: session.ctrlKey,
             metaKey: session.metaKey,
@@ -20140,7 +20229,7 @@ async function handlePointerUp(event: PointerEvent) {
       if (leftEmptyClickSessionState.cameraGesture === 'planar-pan') {
         mapControls?.endPlanarPanGesture(event.pointerId)
       } else if (leftEmptyClickSessionState.cameraGesture === 'orbit-rotate') {
-        mapControls?.endTransientLeftRotateGesture()
+        mapControls?.endOrbitRotateGesture(event.pointerId)
       }
       leftEmptyClickSessionState = null
     }
@@ -20198,7 +20287,7 @@ function handlePointerCancel(event: PointerEvent) {
     if (leftEmptyClickSessionState.cameraGesture === 'planar-pan') {
       mapControls?.cancelPlanarPanGesture(event.pointerId)
     } else if (leftEmptyClickSessionState.cameraGesture === 'orbit-rotate') {
-      mapControls?.endTransientLeftRotateGesture()
+      mapControls?.cancelOrbitRotateGesture(event.pointerId)
     }
     leftEmptyClickSessionState = null
   }

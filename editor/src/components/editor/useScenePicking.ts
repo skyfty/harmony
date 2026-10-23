@@ -147,9 +147,8 @@ export function useScenePicking(
     const recursive = collectOptions?.recursive ?? true
     const activeRaycaster = collectOptions?.raycaster ?? raycaster
 
-    rootGroup.updateWorldMatrix(true, true)
-    instancedMeshGroup.updateWorldMatrix(true, true)
-
+    // Render-loop and scene-update paths keep these matrices current. Re-walking
+    // both roots here made every click synchronously update the entire scene.
     const pickTargets: THREE.Object3D[] = []
     const seenTargets = new Set<THREE.Object3D>()
 

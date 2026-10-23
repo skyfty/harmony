@@ -71,6 +71,8 @@ export async function handlePointerDownSelection(
 
     pickNodeAtPointer: (event: PointerEvent, options?: { includeSelectionLocked?: boolean }) => NodeHitResult | null
     pickActiveSelectionBoundingBoxHit: (event: PointerEvent) => SelectionHit | null
+    /** A camera-gesture router may resolve the active selection hit before this runs. */
+    prefetchedHit?: NodeHitResult | SelectionHit | null
 
     transformControlsDragging: boolean
     transformControlsAxis: string | null
@@ -93,9 +95,12 @@ export async function handlePointerDownSelection(
 
   const shouldPickForRightClick = button === 2 && ctx.activeTool === 'select'
   const allowLockedSelectionPick = Boolean(event.ctrlKey || event.metaKey)
-  let hit: NodeHitResult | null = button === 0 || shouldPickForRightClick
-    ? ctx.pickNodeAtPointer(event, { includeSelectionLocked: allowLockedSelectionPick })
-    : null
+  let hit: NodeHitResult | null = ctx.prefetchedHit
+    ?? (
+      button === 0 || shouldPickForRightClick
+        ? ctx.pickNodeAtPointer(event, { includeSelectionLocked: allowLockedSelectionPick })
+        : null
+    )
 
   if (!hit && shouldPickForRightClick) {
     const boundingHit = ctx.pickActiveSelectionBoundingBoxHit(event)
