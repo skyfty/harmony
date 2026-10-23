@@ -170,6 +170,7 @@ import {
 import { resolveTreeLodBands } from './treeLod'
 import {
   clampProceduralLandscapeProps,
+  PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
   PROCEDURAL_LANDSCAPE_WIND_FACTOR,
   PROCEDURAL_LANDSCAPE_QUALITY_TIERS,
   resolveSurfaceHeightScale,
@@ -326,7 +327,7 @@ export interface ProceduralLandscapeRuntimeStats {
   roadComplete: boolean
   roadFailureReason: string | null
   roadStrategy: 'seeded' | 'shortest' | null
-  roadPlannerMode: 'official' | 'guided-global' | 'official-natural' | 'cached-centerline' | null
+  roadPlannerMode: 'official' | 'guided-global' | 'official-natural' | 'waypoint-spline' | 'cached-centerline' | null
   roadStyle: RoadStyleId | null
   roadNaturalTargetLength: number
   roadNaturalLaps: number
@@ -2392,6 +2393,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     return {
       pointsXZ,
+      algorithmVersion: PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
       authoringSampleStep,
       authoringCellSize,
       exclusionSignature: landscapeExclusionSignature(appliedExclusionCircles),
@@ -2467,6 +2469,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       maxSlope: road.maxSlope,
       maxTurnRad: degreesToRadians(road.maxTurnDeg),
       margin: traceMargin,
+      centerlineMode: usesDemTerrain()
+        ? 'dem-roadbed-spline'
+        : 'terrain-following',
       routeClearance: Math.max(
         7,
         road.width,
@@ -5331,6 +5336,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       ) {
         return {
           pointsXZ: [...saved.pointsXZ],
+          algorithmVersion: saved.algorithmVersion,
           authoringSampleStep: saved.authoringSampleStep,
           authoringCellSize: saved.authoringCellSize,
           exclusionSignature: saved.exclusionSignature ?? '',

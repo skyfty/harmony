@@ -19076,6 +19076,7 @@ export const useSceneStore = defineStore('scene', {
               ...generatedRoute,
               centerline: {
                 pointsXZ: [...centerline.pointsXZ],
+                algorithmVersion: centerline.algorithmVersion,
                 authoringSampleStep: centerline.authoringSampleStep,
                 authoringCellSize: centerline.authoringCellSize,
                 exclusionSignature: centerline.exclusionSignature ?? '',

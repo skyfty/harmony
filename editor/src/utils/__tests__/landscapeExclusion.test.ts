@@ -272,9 +272,6 @@ describe('landscape exclusion consumers', () => {
       maxSlope: 0.55,
       maxTurnRad: (10 * Math.PI) / 180,
       margin: 12,
-      routeClearance: 20,
-      minimumTurnRadius: 20,
-      maximumHeadingChangeRad: (10 * Math.PI) / 180,
       exclusionCircles: [planningCircle],
       exclusionMargin: 22,
     })

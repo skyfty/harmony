@@ -140,6 +140,7 @@ describe('GuideRoute V3 compiler', () => {
   it('clips a generated road interval and offsets to the travel-right lane', () => {
     surfaceMocks.centerline.mockReturnValue({
       pointsXZ: [-20, 0, 0, 0, 20, 0],
+      algorithmVersion: 2,
       authoringSampleStep: 1,
       authoringCellSize: 1,
     })
@@ -174,6 +175,7 @@ describe('GuideRoute V3 compiler', () => {
   it('reverses road direction and places the offset on the opposite side', () => {
     surfaceMocks.centerline.mockReturnValue({
       pointsXZ: [-20, 0, 0, 0, 20, 0],
+      algorithmVersion: 2,
       authoringSampleStep: 1,
       authoringCellSize: 1,
     })

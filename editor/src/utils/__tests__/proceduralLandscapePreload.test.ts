@@ -205,6 +205,7 @@ describe('scene document landscape preload metadata', () => {
           revision: 3,
           centerline: {
             pointsXZ: [10, 20, 20, 30, 30, 40],
+            algorithmVersion: 2,
             authoringSampleStep: 1,
             authoringCellSize: 10,
           },
@@ -219,6 +220,7 @@ describe('scene document landscape preload metadata', () => {
         .road.generatedRoute?.centerline,
     ).toEqual({
       pointsXZ: [10, 20, 20, 30, 30, 40],
+      algorithmVersion: 2,
       authoringSampleStep: 1,
       authoringCellSize: 10,
     })

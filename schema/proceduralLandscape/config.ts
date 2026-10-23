@@ -92,9 +92,13 @@ export interface ProceduralLandscapeRoadRoutingProps {
 }
 
 /** Fixed editor-authored path rehydrated by preview/viewer. */
+export const PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION = 2
+
 export interface ProceduralLandscapeGeneratedRouteCenterline {
   /** Host-local centerline XZ pairs: [x0, z0, x1, z1, ...]. */
   pointsXZ: number[]
+  /** Generation algorithm version used to validate cached road geometry. */
+  algorithmVersion?: number
   /** DEM sample step used by the editor when the snapshot was authored. */
   authoringSampleStep: number
   /** Runtime height-grid cell size used when the snapshot was authored. */
@@ -440,6 +444,12 @@ export function clampGeneratedRouteCenterline(
   }
   return {
     pointsXZ,
+    algorithmVersion: Math.round(clampNumber(
+      raw.algorithmVersion,
+      1,
+      1,
+      PROCEDURAL_LANDSCAPE_ROAD_CENTERLINE_ALGORITHM_VERSION,
+    )),
     authoringSampleStep: Math.round(clampNumber(raw.authoringSampleStep, 1, 1, 8)),
     authoringCellSize: clampNumber(raw.authoringCellSize, 1, 0.01, 100_000),
     ...(typeof raw.exclusionSignature === 'string'
@@ -456,6 +466,7 @@ export function cloneGeneratedRouteCenterline(
   }
   return {
     pointsXZ: [...value.pointsXZ],
+    algorithmVersion: value.algorithmVersion,
     authoringSampleStep: value.authoringSampleStep,
     authoringCellSize: value.authoringCellSize,
     ...(value.exclusionSignature !== undefined

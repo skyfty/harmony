@@ -634,6 +634,7 @@ describe('unified waypoint road configuration', () => {
     const clamped = clampProceduralLandscapeProps(props, 'terrain-a')
     expect(clamped.road.generatedRoute?.centerline).toEqual({
       pointsXZ: [1, 2, 3, 4, 5, 6],
+      algorithmVersion: 1,
       authoringSampleStep: 1,
       authoringCellSize: 10,
     })
@@ -659,6 +660,43 @@ describe('unified waypoint road configuration', () => {
       },
     }, 'terrain-a')
     expect(invalid.road.generatedRoute?.centerline).toBeNull()
+  })
+
+  it('clamps future centerline versions without migrating legacy snapshots', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'terrain-a' })
+    props.road.generatedRoute = {
+      waypoints: [{ x: 1, z: 2 }],
+      strategy: 'seeded',
+      termination: 'boundary',
+      style: 'normal',
+      seed: 1,
+      waypointTolerance: 4,
+      pathDeviation: 60,
+      revision: 1,
+      centerline: {
+        pointsXZ: [1, 2, 3, 4],
+        algorithmVersion: 99,
+        authoringSampleStep: 1,
+        authoringCellSize: 10,
+      },
+    }
+    const clamped = clampProceduralLandscapeProps(props, 'terrain-a')
+    expect(clamped.road.generatedRoute?.centerline?.algorithmVersion).toBe(2)
+    const legacy = clampProceduralLandscapeProps({
+      ...props,
+      road: {
+        ...props.road,
+        generatedRoute: {
+          ...props.road.generatedRoute,
+          centerline: {
+            pointsXZ: [1, 2, 3, 4],
+            authoringSampleStep: 1,
+            authoringCellSize: 10,
+          },
+        },
+      },
+    }, 'terrain-a')
+    expect(legacy.road.generatedRoute?.centerline?.algorithmVersion).toBe(1)
   })
 
   it('preserves all termination modes in live routing and snapshots', () => {
@@ -866,9 +904,6 @@ describe('unified waypoint road planning', () => {
       ...baseOptions,
       termination: 'boundary',
       waypoints,
-      routeClearance: 7,
-      minimumTurnRadius: 20,
-      maximumHeadingChangeRad: (10 * Math.PI) / 180,
     })
     expect(
       result.waypointsPassed,
@@ -955,6 +990,91 @@ describe('unified waypoint road planning', () => {
       maxTurn,
       `maxTurn at ${maxTurnNode}: ${JSON.stringify(nearby[maxTurnNode - 1])} -> ${JSON.stringify(nearby[maxTurnNode])} -> ${JSON.stringify(nearby[maxTurnNode + 1])}`,
     ).toBeLessThan((15 * Math.PI) / 180)
+  })
+
+  it('builds a curvature-continuous authored spline on a DEM roadbed', () => {
+    const grid = makeGrid()
+    const waypoints = [
+      { x: 250, z: 450 },
+      { x: 450, z: 450 },
+      { x: 450, z: 650 },
+      { x: 650, z: 650 },
+    ]
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'dead-end',
+      waypoints,
+      centerlineMode: 'dem-roadbed-spline',
+      routeClearance: 7,
+      minimumTurnRadius: 20,
+      maximumHeadingChangeRad: (10 * Math.PI) / 180,
+    })
+    expect(
+      result.complete,
+      `${result.failureReason} / passed ${result.waypointsPassed}/4`,
+    ).toBe(true)
+    expect(result.plannerMode).toBe('waypoint-spline')
+    expect(result.waypointsPassed).toBe(waypoints.length)
+    expect(result.maxWaypointError).toBeLessThanOrEqual(1e-4)
+    expect(result.minTurnRadius).toBeGreaterThanOrEqual(19.95)
+    expect(result.maxHeadingChangeRad).toBeLessThanOrEqual(
+      (10 * Math.PI) / 180,
+    )
+    expect(result.minCenterlineClearance).toBeGreaterThanOrEqual(7)
+    const last = result.nodes[result.nodes.length - 1]!
+    expect(last.x).toBeCloseTo(waypoints[waypoints.length - 1]!.x, 6)
+    expect(last.z).toBeCloseTo(waypoints[waypoints.length - 1]!.z, 6)
+  })
+
+  it('keeps roadbed spline geometry valid for loops and boundary tails', () => {
+    const grid = makeGrid()
+    const waypoints = [
+      { x: 300, z: 300 },
+      { x: 600, z: 300 },
+      { x: 600, z: 600 },
+      { x: 300, z: 600 },
+    ]
+    for (const termination of ['loop', 'boundary'] as const) {
+      const result = planWaypointRoadRoute(grid, {
+        ...baseOptions,
+        termination,
+        waypoints,
+        centerlineMode: 'dem-roadbed-spline',
+        routeClearance: 7,
+        minimumTurnRadius: 20,
+        maximumHeadingChangeRad: (10 * Math.PI) / 180,
+      })
+      expect(
+        result.complete,
+        `${termination}: ${result.failureReason}`,
+      ).toBe(true)
+      expect(result.plannerMode).toBe('waypoint-spline')
+      expect(result.minTurnRadius).toBeGreaterThanOrEqual(19.95)
+      expect(result.maxHeadingChangeRad).toBeLessThanOrEqual(
+        (10 * Math.PI) / 180,
+      )
+      expect(result.minCenterlineClearance).toBeGreaterThanOrEqual(7)
+    }
+  })
+
+  it('rejects an all-waypoints-hit route when its geometry is invalid', () => {
+    const grid = makeGrid()
+    const waypoints = [
+      { x: 250, z: 450 },
+      { x: 450, z: 450 },
+      { x: 450, z: 650 },
+    ]
+    const result = planWaypointRoadRoute(grid, {
+      ...baseOptions,
+      termination: 'dead-end',
+      waypoints,
+      routeClearance: 7,
+      minimumTurnRadius: 1_000,
+      maximumHeadingChangeRad: (10 * Math.PI) / 180,
+    })
+    expect(result.waypointsPassed).toBe(waypoints.length)
+    expect(result.complete).toBe(false)
+    expect(result.failureReason).toBe('road-geometry-self-overlap')
   })
 
   it('rounds guide joins before the official tracer consumes them', () => {
