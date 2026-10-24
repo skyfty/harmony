@@ -1124,6 +1124,7 @@ import {
 } from '@harmony/schema/components/definitions/generalMeshComponent';
 import {
   proceduralLandscapeComponentDefinition,
+  PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
 } from '@harmony/schema/components/definitions/proceduralLandscapeComponent';
 import {
@@ -1163,6 +1164,7 @@ import {
   setProceduralLandscapeMemoryPressure,
 } from '@harmony/schema/proceduralLandscape/runtime';
 import {
+  computeUprightVehicleYawQuaternion,
   selectNearestRoadLanePose,
   type RoadLanePose,
 } from '@harmony/schema/vehicleRoadRespawn';
@@ -20639,6 +20641,139 @@ function updateSceneCompassHeading(): void {
   commitVehicleHeadingDegrees(0);
 }
 
+const INITIAL_VEHICLE_ROAD_SNAP_MIN_RADIUS_METERS = 8;
+const INITIAL_VEHICLE_ROAD_SNAP_CLEARANCE_METERS = 0.03;
+
+function resolveInitialVehicleRoadSnapRadius(document: SceneJsonExportDocument): number {
+  const landscapeNodeIds = collectActiveProceduralLandscapeNodeIdsFromNodes(document.nodes);
+  let radius = INITIAL_VEHICLE_ROAD_SNAP_MIN_RADIUS_METERS;
+  landscapeNodeIds.forEach((nodeId) => {
+    const node = resolveSceneNodeById(previewNodeMap, nodeId);
+    const component = resolveEnabledComponentState<{
+      road?: { width?: unknown; shoulderWidth?: unknown };
+    }>(node, PROCEDURAL_LANDSCAPE_COMPONENT_TYPE);
+    const width = Number(component?.props?.road?.width);
+    const shoulderWidth = Number(component?.props?.road?.shoulderWidth);
+    if (Number.isFinite(width)) {
+      radius = Math.max(radius, Math.max(0.5, width * 0.5) + (Number.isFinite(shoulderWidth) ? Math.max(0, shoulderWidth) : 0));
+    }
+  });
+  return radius;
+}
+
+function resolveInitialControlledVehicleRoadPose(
+  document: SceneJsonExportDocument,
+): {
+  nodeId: string;
+  worldPosition: THREE.Vector3;
+  worldQuaternion: THREE.Quaternion;
+  snapBottomToY: number | null;
+} | null {
+  const binding = resolveSceneAutoEnterSteerBinding(document);
+  if (!binding || binding.steerProps.targetType !== 'vehicle') {
+    return null;
+  }
+  const node = resolveSceneNodeById(previewNodeMap, binding.targetNodeId);
+  const vehicleComponent = resolveVehicleComponent(node);
+  const object = node ? nodeObjectMap.get(node.id) ?? null : null;
+  if (!node || !vehicleComponent || !object) {
+    return null;
+  }
+
+  object.updateWorldMatrix(true, false);
+  const currentWorldPosition = object.getWorldPosition(new THREE.Vector3());
+  const currentWorldQuaternion = object.getWorldQuaternion(new THREE.Quaternion()).normalize();
+  const snapRadius = resolveInitialVehicleRoadSnapRadius(document);
+
+  if (resolveAutoTourComponent(node)?.props?.routeNodeId) {
+    try {
+      const snap = autoTourRuntime.resolveRouteSnap(node.id);
+      if (
+        snap
+        && Math.hypot(
+          snap.worldPosition.x - currentWorldPosition.x,
+          snap.worldPosition.z - currentWorldPosition.z,
+        ) <= snapRadius
+      ) {
+        return {
+          nodeId: node.id,
+          worldPosition: snap.worldPosition.clone(),
+          worldQuaternion: snap.worldQuaternion.clone().normalize(),
+          snapBottomToY: null,
+        };
+      }
+    } catch (error) {
+      console.warn('[SceneViewer] Failed to resolve initial vehicle route pose', error);
+    }
+  }
+
+  const props = clampVehicleComponentProps(vehicleComponent.props);
+  const facingForward = resolveVehicleAxisVector(
+    clampVehicleAxisIndex(props.indexForwardAxis),
+  )
+    .applyQuaternion(currentWorldQuaternion);
+  facingForward.y = 0;
+  if (facingForward.lengthSq() < 1e-8) {
+    return null;
+  }
+  facingForward.normalize();
+  const facingYawRad = Math.atan2(-facingForward.z, facingForward.x);
+  const landscapeNodeIds = collectActiveProceduralLandscapeNodeIdsFromNodes(document.nodes);
+  const lanePose = selectNearestRoadLanePose(
+    landscapeNodeIds.map((landscapeNodeId) => resolveProceduralLandscapeRoadLanePose(
+      landscapeNodeId,
+      currentWorldPosition.x,
+      currentWorldPosition.z,
+      facingYawRad,
+    )),
+    snapRadius,
+  );
+  if (!lanePose) {
+    return null;
+  }
+
+  const worldQuaternion = computeUprightVehicleYawQuaternion({
+    rightIndex: clampVehicleAxisIndex(props.indexRightAxis),
+    upIndex: clampVehicleAxisIndex(props.indexUpAxis),
+    forwardIndex: clampVehicleAxisIndex(props.indexForwardAxis),
+  }, lanePose.yawRad);
+  return {
+    nodeId: node.id,
+    worldPosition: new THREE.Vector3(lanePose.x, lanePose.y, lanePose.z),
+    worldQuaternion,
+    snapBottomToY: lanePose.y + INITIAL_VEHICLE_ROAD_SNAP_CLEARANCE_METERS,
+  };
+}
+
+function alignInitialControlledVehicleToRoad(
+  document: SceneJsonExportDocument,
+): boolean {
+  const resolved = resolveInitialControlledVehicleRoadPose(document);
+  if (!resolved) {
+    return false;
+  }
+  const node = resolveSceneNodeById(previewNodeMap, resolved.nodeId);
+  const object = node ? nodeObjectMap.get(node.id) ?? null : null;
+  if (!node || !object) {
+    return false;
+  }
+
+  applyObjectWorldPose(object, resolved.worldPosition, resolved.worldQuaternion);
+  if (resolved.snapBottomToY != null) {
+    const bounds = new THREE.Box3().setFromObject(object);
+    if (!bounds.isEmpty() && Number.isFinite(bounds.min.y)) {
+      resolved.worldPosition.y += resolved.snapBottomToY - bounds.min.y;
+      applyObjectWorldPose(object, resolved.worldPosition, resolved.worldQuaternion);
+    }
+  }
+  syncSceneNodeLocalTransformFromObject(node, object);
+  syncInstancedTransform(object, true);
+  sceneryGroundCollisionReferenceInitialized = false;
+  sceneryGroundCollisionReferenceElapsed = 0;
+  sceneryGroundCollisionReferenceSampleElapsed = 0;
+  return true;
+}
+
 function resolveVehicleLaneResetPose(): RoadLanePose | null {
   const nodeId = vehicleDriveNodeId.value;
   const document = currentDocument;
@@ -24418,6 +24553,18 @@ async function mountGraphAndSyncSubsystems(
           stage: 'initializingLandscape',
           label: '程序化地形已就绪',
           detail: 'DEM、基础世界与当前季节材质已准备完成',
+          stagePercent: 100,
+          currentIndex: landscapeNodeIds.length,
+          currentTotal: landscapeNodeIds.length,
+          currentLabel: '',
+          active: true,
+        });
+      }
+      if (readiness.status === 'ready' && alignInitialControlledVehicleToRoad(payload.document)) {
+        setSceneInitState({
+          stage: 'initializingLandscape',
+          label: '车辆已对齐道路',
+          detail: '已按运行时地形和路线修正初始车辆位姿',
           stagePercent: 100,
           currentIndex: landscapeNodeIds.length,
           currentTotal: landscapeNodeIds.length,

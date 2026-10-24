@@ -115,6 +115,15 @@ describe('procedural road lane respawn pose', () => {
     expect(selectNearestRoadLanePose([far, null, near])).toBe(near)
     expect(selectNearestRoadLanePose([null])).toBeNull()
   })
+
+  it('does not snap a vehicle to a road outside the configured radius', () => {
+    const near = { x: 1, y: 2, z: 3, yawRad: 0, distance: 1.5 }
+    const beyondEdge = { x: 4, y: 5, z: 6, yawRad: 0, distance: 8.1 }
+
+    expect(selectNearestRoadLanePose([near, beyondEdge], 8)).toBe(near)
+    expect(selectNearestRoadLanePose([beyondEdge], 8)).toBeNull()
+    expect(selectNearestRoadLanePose([near], -1)).toBeNull()
+  })
 })
 
 describe('upright vehicle reset orientation', () => {

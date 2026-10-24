@@ -28,10 +28,21 @@ export type RoadLanePoseOptions = {
 
 export function selectNearestRoadLanePose(
   candidates: ReadonlyArray<RoadLanePose | null | undefined>,
+  maxDistanceMeters = Number.POSITIVE_INFINITY,
 ): RoadLanePose | null {
+  const maxDistance = maxDistanceMeters === Number.POSITIVE_INFINITY
+    ? maxDistanceMeters
+    : readFinite(maxDistanceMeters)
+  if (maxDistance == null || maxDistance < 0) {
+    return null
+  }
   let best: RoadLanePose | null = null
   for (const candidate of candidates) {
-    if (candidate && (!best || candidate.distance < best.distance)) {
+    if (
+      candidate
+      && candidate.distance <= maxDistance
+      && (!best || candidate.distance < best.distance)
+    ) {
       best = candidate
     }
   }
