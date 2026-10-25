@@ -21,6 +21,7 @@ import {
   createTerrainDemRuntimeOrthoTexture,
   loadTerrainDemRuntimeGrid,
   sampleVisibleDemSurfaceHeightAt,
+  splitDemTerrainGeometry,
   type DemTerrainMeshBuilder,
 } from './demTerrain'
 import type { TerrainDemRuntimeGridData } from '../terrainDemRuntimeGrid'
@@ -382,6 +383,7 @@ export interface ProceduralLandscapeRuntimeStats {
     measuredFps: number | null
     calibrationState: LandscapeAdaptiveCalibrationState
     calibrationAttempts: number
+    runtimeCalibrationEnabled: boolean
   }
   /** 在线资产库统计（下载/常驻/档位）。 */
   assetTextureCount: number
@@ -1032,7 +1034,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let demGridData: TerrainDemRuntimeGridData | null = null
   let demGridSampleStep = 1
   let demMeshBuilder: DemTerrainMeshBuilder | null = null
-  let demMesh: THREE.Mesh | null = null
+  let demMeshRoot: THREE.Group | null = null
+  let demMeshes: THREE.Mesh[] = []
   let guideRouteSurfaceRevision = 0
   let demRoadbedSignature = ''
   let demMeshRoadbedSignature = ''
@@ -1259,6 +1262,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       measuredFps: null,
       calibrationState: 'disabled',
       calibrationAttempts: 0,
+      runtimeCalibrationEnabled: false,
     },
     assetTextureCount: 0,
     assetResidentBytes: 0,
@@ -1568,16 +1572,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function disposeDemMesh(): void {
-    if (demMesh) {
-      demMesh.removeFromParent()
-      demMesh.geometry.dispose()
-      const material = demMesh.material
-      if (Array.isArray(material)) {
-        material.forEach((entry) => entry.dispose())
-      } else {
-        material.dispose()
+    if (demMeshRoot) {
+      demMeshRoot.removeFromParent()
+      const materials = new Set<THREE.Material>()
+      for (const mesh of demMeshes) {
+        mesh.geometry.dispose()
+        const meshMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+        meshMaterials.forEach((material) => materials.add(material))
       }
-      demMesh = null
+      materials.forEach((material) => material.dispose())
+      demMeshRoot = null
+      demMeshes = []
     }
     demMeshBuilder = null
   }
@@ -1598,7 +1603,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function syncDemOrthoTextureBinding(): void {
-    if (!demMesh) {
+    if (!demMeshes.length) {
       return
     }
     const shouldBind = Boolean(
@@ -1607,9 +1612,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       && resolveProceduralLandscapeBaseMapMode(props) !== 'replace'
       && demOrthoTexture,
     )
-    const materials = Array.isArray(demMesh.material)
-      ? demMesh.material
-      : [demMesh.material]
+    const materials = new Set<THREE.Material>()
+    for (const mesh of demMeshes) {
+      const meshMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      meshMaterials.forEach((material) => materials.add(material))
+    }
     for (const material of materials) {
       const mapped = material as THREE.MeshLambertMaterial
       const nextMap = shouldBind ? demOrthoTexture : null
@@ -1831,6 +1838,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       dirty.demMesh = false
       return false
     }
+    const demColumns = demMeshBuilder.columns
+    const demRows = demMeshBuilder.rows
     const completedRoadbedSignature = demMeshBuildRoadbedSignature
     disposeDemMesh()
     demMeshBuildRoadbedSignature = ''
@@ -1838,17 +1847,36 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const normalBytes = demGeometry.getAttribute('normal')?.array?.byteLength ?? 0
     const indexBytes = demGeometry.getIndex()?.array?.byteLength ?? 0
     stats.demMeshBytes = positionBytes + normalBytes + indexBytes
-    const material = new THREE.MeshLambertMaterial({ color: 0xffffff })
-    const mesh = new THREE.Mesh(demGeometry, material)
-    mesh.name = `slowroads-dem-terrain-${hooks.nodeId}`
-    markProceduralLandscapeDemTerrain(mesh, {
-      cellSize: Math.max(1, (demGridData?.cellSizeX ?? 1) * demGridSampleStep),
-      sampleHeightAt: (worldX, worldZ) => (
-        sampleVisibleDemSurfaceHeightAt(grid, demRoadbedTarget, worldX, worldZ)
-      ),
+    const chunks = splitDemTerrainGeometry(
+      demGeometry,
+      demColumns,
+      demRows,
+    )
+    if (!chunks.length) {
+      demGeometry.dispose()
+      stats.demStatus = 'error'
+      stats.demError = 'DEM terrain mesh chunking failed'
+      gridFailed = true
+      dirty.demMesh = false
+      return false
+    }
+    const demMaterial = new THREE.MeshLambertMaterial({ color: 0xffffff })
+    const root = new THREE.Group()
+    root.name = `slowroads-dem-terrain-${hooks.nodeId}`
+    demMeshes = chunks.map((chunk) => {
+      const mesh = new THREE.Mesh(chunk.geometry, demMaterial)
+      mesh.name = `slowroads-dem-terrain-${hooks.nodeId}-r${chunk.row}-c${chunk.column}`
+      markProceduralLandscapeDemTerrain(mesh, {
+        cellSize: Math.max(1, (demGridData?.cellSizeX ?? 1) * demGridSampleStep),
+        sampleHeightAt: (worldX, worldZ) => (
+          sampleVisibleDemSurfaceHeightAt(grid, demRoadbedTarget, worldX, worldZ)
+        ),
+      })
+      root.add(mesh)
+      return mesh
     })
-    hostObject.add(mesh)
-    demMesh = mesh
+    hostObject.add(root)
+    demMeshRoot = root
     demMeshRoadbedSignature = completedRoadbedSignature
     currentTerrainSourceSignature = `dem:${demSourceKey}`
     stats.demStatus = 'ready'
@@ -2629,7 +2657,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (nextAdaptiveProfile) {
         effectiveForestCoverage = nextAdaptiveProfile.targetCoverage
         effectiveForestDensity = nextAdaptiveProfile.targetDensity
-        adaptiveState = 'waiting'
+        adaptiveState = nextAdaptiveProfile.runtimeCalibrationEnabled ? 'waiting' : 'done'
       } else {
         effectiveForestCoverage = props.forest.coverage
         effectiveForestDensity = props.forest.density
@@ -2808,8 +2836,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           // terrain holes. Coarse side-slope triangles are already graded
           // below the high-res roadbed, so they must not be cut by distance.
           demRoadbedCutProx = Math.max(0, props.road.shoulderWidth + 0.25)
+          // Embedded viewers keep the same apron silhouette but do not need
+          // editor-grade tessellation on a 100m-wide cut/fill slope. At 3m
+          // lateral and 2m along-road spacing this single mesh reached
+          // ~280k triangles for the 5.3km sample route.
+          const viewerRoadbedDetail = currentEnvironment === 'viewer'
           const roadbed = createDemRoadbedTargetGeometry(roadBandRows, demRoadbedTarget, {
-            lateralStep: 3,
+            lateralStep: viewerRoadbedDetail ? 6 : 3,
+            ...(viewerRoadbedDetail ? { rowSpacing: 6 } : {}),
             lift: 0.01,
             asphaltOverlap: 0.5,
             coarseSurfaceHeightAt,
@@ -2892,7 +2926,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       demMeshBuilder = null
       demMeshBuildRoadbedSignature = ''
     }
-    if (demMesh && demMeshRoadbedSignature !== demRoadbedSignature) {
+    if (demMeshes.length && demMeshRoadbedSignature !== demRoadbedSignature) {
       dirty.demMesh = true
     }
     if (roadResult && (roadResult.nodes.length <= 1 || !roadFieldData)) {
@@ -4309,7 +4343,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         if (!usesDemTerrain()) {
           return null
         }
-        if (mesh === demMesh) {
+        if (demMeshes.includes(mesh)) {
           return resolveDemSurfaceOverrides('terrain', demRoadbedCutProx)
         }
         if (mesh === demRoadbedMesh) {
@@ -4490,6 +4524,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       measuredFps: adaptiveMeasuredFps,
       calibrationState: adaptiveState,
       calibrationAttempts: adaptiveAttempts,
+      runtimeCalibrationEnabled: adaptiveProfile?.runtimeCalibrationEnabled === true,
     }
     const storeStats = assetStore.stats()
     stats.assetTextureCount = storeStats.textureCount
@@ -5206,7 +5241,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         runtimeUpdate(deltaTime)
       } catch (error) {
         stats.phase = 'error'
-        warn(`runtime-error:${error instanceof Error ? error.message : String(error)}`)
+        const message = error instanceof Error ? error.message : String(error)
+        if (usesDemTerrain() && stats.demStatus === 'building') {
+          stats.demStatus = 'error'
+          stats.demError = `DEM terrain build failed: ${message}`
+        }
+        warn(`runtime-error:${message}`)
       }
     },
     dispose(): void {

@@ -200,9 +200,20 @@ export interface DemTerrainMeshBuilder {
   readonly geometry: THREE.BufferGeometry | null
   readonly progress: number
   readonly vertexCount: number
+  readonly columns: number
+  readonly rows: number
   readonly triangleCount: number
   readonly sampleStep: number
   readonly error: string | null
+}
+
+export interface DemTerrainMeshChunk {
+  geometry: THREE.BufferGeometry
+  row: number
+  column: number
+  rows: number
+  columns: number
+  triangleCount: number
 }
 
 export interface DemTerrainMeshBuilderOptions {
@@ -216,6 +227,116 @@ export interface DemTerrainMeshBuilderOptions {
     y: number
     z: number
   } | null
+}
+
+/**
+ * Splits the completed DEM grid into independent frustum-culling regions.
+ *
+ * A terrain this large is normally one Mesh: its scene bounds overlap every
+ * forward view, so the renderer submits all million-plus triangles even though
+ * camera.far only covers a small part of the map. Chunk geometries share the
+ * original vertex attributes and allocate only their own index slice, keeping
+ * GPU vertex memory unchanged while allowing off-screen regions to be skipped.
+ */
+export function splitDemTerrainGeometry(
+  geometry: THREE.BufferGeometry,
+  columns: number,
+  rows: number,
+  chunkCells = 128,
+): DemTerrainMeshChunk[] {
+  const position = geometry.getAttribute('position')
+  const normal = geometry.getAttribute('normal')
+  const uv = geometry.getAttribute('uv')
+  if (
+    !position
+    || !normal
+    || !uv
+    || columns < 2
+    || rows < 2
+    || position.count < columns * rows
+  ) {
+    return []
+  }
+
+  const cellsPerChunk = Math.max(1, Math.floor(chunkCells))
+  const chunks: DemTerrainMeshChunk[] = []
+  const center = new THREE.Vector3()
+  const corner = new THREE.Vector3()
+
+  for (let row = 0; row < rows - 1; row += cellsPerChunk) {
+    const endRow = Math.min(rows - 1, row + cellsPerChunk)
+    for (let column = 0; column < columns - 1; column += cellsPerChunk) {
+      const endColumn = Math.min(columns - 1, column + cellsPerChunk)
+      const triangleCount = (endRow - row) * (endColumn - column) * 2
+      const indices = new Uint32Array(triangleCount * 3)
+      let indexCursor = 0
+      let minX = Number.POSITIVE_INFINITY
+      let minY = Number.POSITIVE_INFINITY
+      let minZ = Number.POSITIVE_INFINITY
+      let maxX = Number.NEGATIVE_INFINITY
+      let maxY = Number.NEGATIVE_INFINITY
+      let maxZ = Number.NEGATIVE_INFINITY
+
+      for (let currentRow = row; currentRow <= endRow; currentRow += 1) {
+        for (let currentColumn = column; currentColumn <= endColumn; currentColumn += 1) {
+          const vertexIndex = currentRow * columns + currentColumn
+          const x = position.getX(vertexIndex)
+          const y = position.getY(vertexIndex)
+          const z = position.getZ(vertexIndex)
+          minX = Math.min(minX, x)
+          minY = Math.min(minY, y)
+          minZ = Math.min(minZ, z)
+          maxX = Math.max(maxX, x)
+          maxY = Math.max(maxY, y)
+          maxZ = Math.max(maxZ, z)
+
+          if (currentRow < endRow && currentColumn < endColumn) {
+            const a = vertexIndex
+            const b = a + 1
+            const c = a + columns
+            const d = c + 1
+            indices[indexCursor++] = a
+            indices[indexCursor++] = c
+            indices[indexCursor++] = d
+            indices[indexCursor++] = a
+            indices[indexCursor++] = d
+            indices[indexCursor++] = b
+          }
+        }
+      }
+
+      const chunkGeometry = new THREE.BufferGeometry()
+      chunkGeometry.setAttribute('position', position)
+      chunkGeometry.setAttribute('normal', normal)
+      chunkGeometry.setAttribute('uv', uv)
+      chunkGeometry.setIndex(new THREE.BufferAttribute(indices, 1))
+      chunkGeometry.boundingBox = new THREE.Box3(
+        new THREE.Vector3(minX, minY, minZ),
+        new THREE.Vector3(maxX, maxY, maxZ),
+      )
+      chunkGeometry.boundingBox.getCenter(center)
+      let radiusSquared = 0
+      for (const x of [minX, maxX]) {
+        for (const y of [minY, maxY]) {
+          for (const z of [minZ, maxZ]) {
+            corner.set(x, y, z)
+            radiusSquared = Math.max(radiusSquared, corner.distanceToSquared(center))
+          }
+        }
+      }
+      chunkGeometry.boundingSphere = new THREE.Sphere(center.clone(), Math.sqrt(radiusSquared))
+      chunks.push({
+        geometry: chunkGeometry,
+        row,
+        column,
+        rows: endRow - row,
+        columns: endColumn - column,
+        triangleCount,
+      })
+    }
+  }
+
+  return chunks
 }
 
 export type DemCoarseSurfaceHeightAt = (worldX: number, worldZ: number) => number | null
@@ -421,6 +542,12 @@ export function createDemTerrainMeshBuilder(
     },
     get vertexCount(): number {
       return vertexCount
+    },
+    get columns(): number {
+      return cols
+    },
+    get rows(): number {
+      return rows
     },
     get triangleCount(): number {
       return triangleCount

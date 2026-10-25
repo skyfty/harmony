@@ -622,16 +622,6 @@
 <script setup lang="ts">
 import { effectScope, watchEffect, ref, computed, onMounted, onUnmounted, watch, reactive, nextTick, getCurrentInstance, type EffectScope, type ComponentPublicInstance } from 'vue';
 import { useRuntimeMemoryGuard } from '../composables/useRuntimeMemoryGuard';
-import {
-  createViewerPerfFrameProfiler,
-  createViewerPerfLogger,
-  createViewerPerfRendererPayload,
-  hashViewerPerfIdentity,
-  roundViewerPerf,
-  type ViewerPerfFields,
-  type ViewerPerfFrameFlags,
-  type ViewerPerfRendererMetrics,
-} from '../common/viewerPerfLog';
 import { resolveViewerRenderBudget } from '../common/viewerRenderBudget';
 // #ifdef MP-WEIXIN
 import '@minisheep/three-platform-adapter/wechat';
@@ -1801,11 +1791,6 @@ function resolveWeChatMiniProgramRuntime(): boolean {
 }
 
 const isWeChatMiniProgram = resolveWeChatMiniProgramRuntime();
-const viewerPerfLogger = createViewerPerfLogger();
-let viewerPerfSessionLogged = false;
-let viewerPerfFirstFrameLogged = false;
-let viewerPerfRenderLoopStartedAtMs = 0;
-let lastViewerPerfRendererSignature = '';
 
 const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersistentAssetStorageSupported()
   ? createWeChatFileSystemPersistentAssetStorage()
@@ -1882,248 +1867,6 @@ const {
 } = useDebugOverlay();
 
 const debugOverlayAriaLabel = computed(() => (debugMode.value === 'full' ? '调试信息，当前 full 模式，点击切换为 fps 模式' : '调试信息，当前 fps 模式，点击切换为 full 模式'));
-const viewerPerfDrawingBufferSize = new THREE.Vector2();
-
-type ViewerPerfHostRecord = Record<string, unknown>;
-type ViewerPerfHost = {
-  wx?: {
-    getAppBaseInfo?: () => ViewerPerfHostRecord;
-    getDeviceInfo?: () => ViewerPerfHostRecord;
-    getSystemInfoSync?: () => ViewerPerfHostRecord;
-    getWindowInfo?: () => ViewerPerfHostRecord;
-  };
-  uni?: {
-    getSystemInfoSync?: () => ViewerPerfHostRecord;
-  };
-  navigator?: {
-    hardwareConcurrency?: number;
-  };
-};
-
-function readViewerPerfHostRecord(read: (() => ViewerPerfHostRecord) | undefined): ViewerPerfHostRecord {
-  if (typeof read !== 'function') {
-    return {};
-  }
-  try {
-    const value = read();
-    return value && typeof value === 'object' ? value : {};
-  } catch {
-    return {};
-  }
-}
-
-function readViewerPerfString(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized || null;
-}
-
-function readViewerPerfNumber(value: unknown): number | null {
-  const numeric = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function viewerPerfErrorFields(error: unknown): ViewerPerfFields {
-  if (error instanceof Error) {
-    return {
-      errorName: error.name || 'Error',
-      errorMessage: error.message || 'unknown error',
-    };
-  }
-  return {
-    errorName: typeof error,
-    errorMessage: String(error ?? 'unknown error'),
-  };
-}
-
-async function measureViewerPerfLoadPhase<T>(
-  phase: string,
-  task: () => Promise<T>,
-  fields: ViewerPerfFields = {},
-): Promise<T> {
-  const startedAtMs = viewerPerfLogger.now();
-  viewerPerfLogger.emit('load', { phase, status: 'start', ...fields });
-  try {
-    const result = await task();
-    viewerPerfLogger.emit('load', {
-      phase,
-      status: 'end',
-      durationMs: roundViewerPerf(viewerPerfLogger.now() - startedAtMs, 1),
-      ...fields,
-    });
-    return result;
-  } catch (error) {
-    viewerPerfLogger.emit('load', {
-      phase,
-      status: 'error',
-      durationMs: roundViewerPerf(viewerPerfLogger.now() - startedAtMs, 1),
-      ...fields,
-      ...viewerPerfErrorFields(error),
-    });
-    throw error;
-  }
-}
-
-function measureViewerPerfLoadPhaseSync<T>(
-  phase: string,
-  task: () => T,
-  fields: ViewerPerfFields = {},
-): T {
-  const startedAtMs = viewerPerfLogger.now();
-  viewerPerfLogger.emit('load', { phase, status: 'start', ...fields });
-  try {
-    const result = task();
-    viewerPerfLogger.emit('load', {
-      phase,
-      status: 'end',
-      durationMs: roundViewerPerf(viewerPerfLogger.now() - startedAtMs, 1),
-      ...fields,
-    });
-    return result;
-  } catch (error) {
-    viewerPerfLogger.emit('load', {
-      phase,
-      status: 'error',
-      durationMs: roundViewerPerf(viewerPerfLogger.now() - startedAtMs, 1),
-      ...fields,
-      ...viewerPerfErrorFields(error),
-    });
-    throw error;
-  }
-}
-
-function emitViewerPerfSession(): void {
-  if (viewerPerfSessionLogged) {
-    return;
-  }
-  viewerPerfSessionLogged = true;
-  const host = globalThis as typeof globalThis & ViewerPerfHost;
-  const systemInfo = readViewerPerfHostRecord(() => host.uni?.getSystemInfoSync?.() ?? {});
-  const wxSystemInfo = readViewerPerfHostRecord(() => host.wx?.getSystemInfoSync?.() ?? {});
-  const deviceInfo = readViewerPerfHostRecord(() => host.wx?.getDeviceInfo?.() ?? {});
-  const windowInfo = readViewerPerfHostRecord(() => host.wx?.getWindowInfo?.() ?? {});
-  const appInfo = readViewerPerfHostRecord(() => host.wx?.getAppBaseInfo?.() ?? {});
-  const merged = { ...systemInfo, ...windowInfo, ...deviceInfo, ...appInfo, ...wxSystemInfo };
-  const buildEnv = import.meta.env as unknown as {
-    MODE?: unknown;
-    DEV?: unknown;
-    PROD?: unknown;
-  };
-  const packageIdentity = props.packageUrl || props.packageCacheKey || props.projectId || '';
-  const cpuCores = readViewerPerfNumber(host.navigator?.hardwareConcurrency ?? merged.cpuCores);
-  viewerPerfLogger.emit('session', {
-    startedAtMs: viewerPerfLogger.startedAtMs,
-    platform: isWeChatMiniProgram ? 'wechat-miniprogram' : 'other',
-    buildMode: typeof buildEnv.MODE === 'string' ? buildEnv.MODE : 'unknown',
-    dev: buildEnv.DEV === true,
-    prod: buildEnv.PROD === true,
-    source: props.packageUrl ? 'package-url' : props.projectId ? 'project-id' : 'missing',
-    packageHash: hashViewerPerfIdentity(packageIdentity),
-    projectHash: hashViewerPerfIdentity(props.projectId),
-    sdkVersion: readViewerPerfString(merged.SDKVersion),
-    wxVersion: readViewerPerfString(merged.version),
-    platformDetail: readViewerPerfString(merged.platform),
-    system: readViewerPerfString(merged.system),
-    brand: readViewerPerfString(merged.brand),
-    model: readViewerPerfString(merged.model),
-    benchmarkLevel: readViewerPerfNumber(merged.benchmarkLevel ?? merged.modelLevel),
-    memoryMb: readViewerPerfNumber(merged.memorySize),
-    cpuCores,
-    dpr: readViewerPerfNumber(merged.pixelRatio),
-    window: `${Math.max(0, readViewerPerfNumber(merged.windowWidth) ?? 0)}x${Math.max(0, readViewerPerfNumber(merged.windowHeight) ?? 0)}`,
-    screen: `${Math.max(0, readViewerPerfNumber(merged.screenWidth) ?? 0)}x${Math.max(0, readViewerPerfNumber(merged.screenHeight) ?? 0)}`,
-  });
-}
-
-function resolveViewerPerfShadowType(renderer: THREE.WebGLRenderer): string {
-  switch (renderer.shadowMap.type) {
-    case THREE.BasicShadowMap:
-      return 'basic';
-    case THREE.PCFShadowMap:
-      return 'pcf';
-    case THREE.PCFSoftShadowMap:
-      return 'pcf-soft';
-    case THREE.VSMShadowMap:
-      return 'vsm';
-    default:
-      return String(renderer.shadowMap.type);
-  }
-}
-
-function emitViewerPerfRendererConfig(reason: string): void {
-  const renderer = renderContext?.renderer;
-  if (!renderer) {
-    return;
-  }
-  renderer.getDrawingBufferSize(viewerPerfDrawingBufferSize);
-  const canvas = (canvasResult?.canvas ?? renderer.domElement) as unknown as {
-    clientHeight?: number;
-    clientWidth?: number;
-    height?: number;
-    width?: number;
-  };
-  let deviceDpr: number | null = null;
-  try {
-    const host = globalThis as typeof globalThis & ViewerPerfHost;
-    const systemInfo = readViewerPerfHostRecord(() => host.uni?.getSystemInfoSync?.() ?? {});
-    deviceDpr = readViewerPerfNumber(systemInfo.pixelRatio);
-  } catch {
-    deviceDpr = null;
-  }
-  let maxTextureSize: number | null = null;
-  let antialias: boolean | null = null;
-  let gpuName: string | null = null;
-  try {
-    const gl = renderer.getContext();
-    maxTextureSize = readViewerPerfNumber(gl.getParameter(gl.MAX_TEXTURE_SIZE));
-    try {
-      antialias = gl.getContextAttributes()?.antialias ?? null;
-    } catch {
-      antialias = null;
-    }
-    try {
-      const debugInfo = gl.getExtension('WEBGL_debug_renderer_info') as {
-        UNMASKED_RENDERER_WEBGL?: number;
-      } | null;
-      if (debugInfo && typeof debugInfo.UNMASKED_RENDERER_WEBGL === 'number') {
-        gpuName = readViewerPerfString(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL));
-      }
-    } catch {
-      gpuName = null;
-    }
-  } catch {
-    maxTextureSize = null;
-  }
-
-  const fields: ViewerPerfFields = {
-    reason,
-    quality: activeDeviceAdaptationProfile?.quality ?? null,
-    profile: activeDeviceAdaptationProfile?.id ?? null,
-    pr: roundViewerPerf(renderer.getPixelRatio(), 2),
-    basePr: roundViewerPerf(baseRendererPixelRatio, 2),
-    landscapeCap: roundViewerPerf(landscapePixelRatioCap, 2),
-    dpr: roundViewerPerf(deviceDpr, 2),
-    css: `${Math.max(0, Number(canvas.clientWidth) || 0)}x${Math.max(0, Number(canvas.clientHeight) || 0)}`,
-    bitmap: `${Math.max(0, Number(canvas.width) || 0)}x${Math.max(0, Number(canvas.height) || 0)}`,
-    buffer: `${Math.max(0, Math.trunc(viewerPerfDrawingBufferSize.x))}x${Math.max(0, Math.trunc(viewerPerfDrawingBufferSize.y))}`,
-    shadows: renderer.shadowMap.enabled,
-    shadowType: resolveViewerPerfShadowType(renderer),
-    webgl2: renderer.capabilities.isWebGL2,
-    maxTexture: maxTextureSize,
-    antialias,
-    gpu: gpuName,
-    memoryGuard: runtimeMemoryGuard.state.state,
-    memoryExtreme: runtimeMemoryGuard.state.extreme,
-  };
-  const signature = JSON.stringify(fields);
-  if (signature === lastViewerPerfRendererSignature) {
-    return;
-  }
-  lastViewerPerfRendererSignature = signature;
-  viewerPerfLogger.emit('renderer', fields);
-}
 
 type InstancedTransformCacheEntry = {
   assetId: string | null;
@@ -2504,7 +2247,7 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
       return;
     }
     setProceduralLandscapeMemoryPressure(false);
-    applyViewerRenderBudget('memory-moderate');
+    applyViewerRenderBudget();
   },
   onCritical: () => {
     const context = renderContext;
@@ -2513,7 +2256,7 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
     }
     setProceduralLandscapeMemoryPressure(true);
     sceneAssetCache.evictIfNeeded();
-    applyViewerRenderBudget('memory-critical');
+    applyViewerRenderBudget();
   },
   onExtremeCritical: () => {
     const context = renderContext;
@@ -2523,7 +2266,7 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
     setProceduralLandscapeMemoryPressure(true);
     sceneAssetCache.evictIfNeeded();
     resetSharedKtx2Loader();
-    applyViewerRenderBudget('memory-extreme');
+    applyViewerRenderBudget();
   },
   onRestoreModerate: () => {
     const context = renderContext;
@@ -2531,7 +2274,7 @@ const runtimeMemoryGuard = useRuntimeMemoryGuard({
       return;
     }
     setProceduralLandscapeMemoryPressure(false);
-    applyViewerRenderBudget('memory-restore');
+    applyViewerRenderBudget();
   },
 });
 let currentDocument: SceneJsonExportDocument | null = null;
@@ -2647,7 +2390,7 @@ function ensureSlowroadsEnvironmentRuntime(): void {
   slowroadsEnvironment.setSettings(activeEnvironmentSettings.slowroads);
 }
 
-function applyViewerRenderBudget(reason: string): void {
+function applyViewerRenderBudget(): void {
   const context = renderContext;
   if (!context) {
     return;
@@ -2662,7 +2405,6 @@ function applyViewerRenderBudget(reason: string): void {
   });
   context.renderer.setPixelRatio(budget.pixelRatio);
   context.renderer.shadowMap.enabled = budget.shadowsEnabled;
-  emitViewerPerfRendererConfig(reason);
 }
 
 function supportsFloatTextureLinearFiltering(): boolean {
@@ -6463,7 +6205,7 @@ function createSceneGraphBuildOptions(
   activeDeviceAdaptationProfile = resolveDeviceAdaptationProfile(payload.document.deviceAdaptation, readDeviceAdaptationSystemInfo());
   const renderer = renderContext?.renderer;
   if (renderer) {
-    applyViewerRenderBudget('device-profile');
+    applyViewerRenderBudget();
   }
   if (activeDeviceAdaptationProfile) {
     buildOptions.lazyLoadMeshes = activeDeviceAdaptationProfile.lazyLoadMeshes || activeDeviceAdaptationProfile.quality === 'low';
@@ -23222,15 +22964,6 @@ async function loadProjectFromBundle(bundle: ScenePackageProjectData): Promise<v
 }
 
 async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): Promise<void> {
-  const packagePhaseStartedAtMs = viewerPerfLogger.now();
-  const packagePhaseFields: ViewerPerfFields = {
-    phase: 'package_url',
-    source: 'package-url',
-    packageHash: hashViewerPerfIdentity(cacheKey || url),
-  };
-  viewerPerfLogger.emit('load', { ...packagePhaseFields, status: 'start' });
-  let packageFailure: unknown = null;
-  let downloadedBytes = 0;
   error.value = null;
   activeScenePackageAssetOverrides = null;
   activeScenePackagePkg = null;
@@ -23242,11 +22975,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     const cacheKeyParam = typeof cacheKey === 'string' && cacheKey.trim() ? cacheKey.trim() : '';
     const cachePointer = cacheKeyParam ? resolveScenePackageZipPointerByCacheKey(cacheKeyParam) : null;
     const cachedEntry = cachePointer
-      ? await measureViewerPerfLoadPhase(
-        'package_cache_read',
-        () => loadScenePackageZipEntry(cachePointer).catch(() => null),
-        { packageHash: hashViewerPerfIdentity(cacheKeyParam) },
-      )
+      ? await loadScenePackageZipEntry(cachePointer).catch(() => null)
       : null;
     const cachedBuffer = cachedEntry?.bytes ?? null;
     const cachedMetadata = cachedEntry?.metadata ?? null;
@@ -23302,21 +23031,23 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
 
     let downloadResult: AssetBlobDownloadResult | null = null;
     try {
-      downloadResult = await measureViewerPerfLoadPhase(
-        'package_download',
-        () => fetchAssetBlobWithResponse(url, controller, (progress) => {
+      downloadResult = await fetchAssetBlobWithResponse(
+        url,
+        controller,
+        (progress) => {
           sceneDownload.phase = 'download';
           sceneDownload.percent = clampPercent(progress);
           sceneDownload.indeterminate = false;
           sceneDownload.label = `正在下载场景包… ${sceneDownload.percent}%`;
-        }, requestHeaders, { fileDownload: true }).then((result) => result, async (requestError) => {
-          if (cachedBuffer && await loadCachedScenePackage()) {
-            return null;
-          }
-          throw requestError;
-        }),
-        { packageHash: hashViewerPerfIdentity(cacheKeyParam || url) },
-      );
+        },
+        requestHeaders,
+        { fileDownload: true },
+      ).then((result) => result, async (requestError) => {
+        if (cachedBuffer && await loadCachedScenePackage()) {
+          return null;
+        }
+        throw requestError;
+      });
     } finally {
       if (sceneDownloadController === controller) {
         sceneDownloadController = null;
@@ -23335,15 +23066,7 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
     }
 
     const downloaded = downloadResult;
-    const buffer = await measureViewerPerfLoadPhase(
-      'package_blob_read',
-      () => downloaded.blob.arrayBuffer(),
-      {
-        packageHash: hashViewerPerfIdentity(cacheKeyParam || url),
-        contentLength: downloadResult.headers['content-length'] ?? null,
-      },
-    );
-    downloadedBytes = buffer.byteLength;
+    const buffer = await downloaded.blob.arrayBuffer();
     await loadProjectFromScenePackageBytes(buffer, cacheKeyParam || url);
     if (cacheKeyParam) {
       const metadata: ScenePackageCacheMetadata = {
@@ -23360,19 +23083,11 @@ async function loadProjectFromScenePackageUrl(url: string, cacheKey?: string): P
       });
     }
   } catch (loadError) {
-    packageFailure = loadError;
     console.error('Failed loading scene package from url', loadError);
     throw loadError;
   } finally {
     clearSceneDownloadState();
     loading.value = false;
-    viewerPerfLogger.emit('load', {
-      ...packagePhaseFields,
-      status: packageFailure ? 'error' : 'end',
-      durationMs: roundViewerPerf(viewerPerfLogger.now() - packagePhaseStartedAtMs, 1),
-      bytes: downloadedBytes,
-      ...(packageFailure ? viewerPerfErrorFields(packageFailure) : {}),
-    });
   }
 }
 async function parseScenePackageToProjectData(pkg: ScenePackageUnzipped, compiledGroundBuildKey: string): Promise<ScenePackageProjectData> {
@@ -23574,14 +23289,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
   });
   await yieldToMainThread();
 
-  const pkg = measureViewerPerfLoadPhaseSync(
-    'package_unzip',
-    () => unzipScenePackage(buffer),
-    {
-      bytes: buffer.byteLength,
-      packageHash: hashViewerPerfIdentity(compiledGroundBuildKey),
-    },
-  );
+  const pkg = unzipScenePackage(buffer);
   setSceneDownloadState({
     phase: 'manifest',
     label: '正在解析 manifest',
@@ -23605,15 +23313,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
     currentLabel: '',
   });
   await yieldToMainThread();
-  activeScenePackageAssetOverrides = measureViewerPerfLoadPhaseSync(
-    'package_asset_map',
-    () => buildAssetOverridesFromScenePackage(pkg),
-    {
-      scenes: pkg.manifest.scenes.length,
-      resources: pkg.manifest.resources.length,
-      packageHash: hashViewerPerfIdentity(compiledGroundBuildKey),
-    },
-  );
+  activeScenePackageAssetOverrides = buildAssetOverridesFromScenePackage(pkg);
 
   setSceneDownloadState({
     phase: 'project-meta',
@@ -23628,15 +23328,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
 
   const normalizedBuildKey = compiledGroundBuildKey.trim();
   activeScenePackageBuildKey = normalizedBuildKey || null;
-  const projectData = await measureViewerPerfLoadPhase(
-    'package_scene_parse',
-    () => parseScenePackageToProjectData(activeScenePackagePkg!, normalizedBuildKey),
-    {
-      scenes: pkg.manifest.scenes.length,
-      resources: pkg.manifest.resources.length,
-      packageHash: hashViewerPerfIdentity(normalizedBuildKey),
-    },
-  );
+  const projectData = await parseScenePackageToProjectData(activeScenePackagePkg!, normalizedBuildKey);
   setSceneDownloadState({
     phase: 'bundle',
     label: '正在组装场景索引',
@@ -23647,14 +23339,7 @@ async function loadProjectFromScenePackageBytes(buffer: ArrayBuffer, compiledGro
     currentLabel: '',
   });
   await yieldToMainThread();
-  await measureViewerPerfLoadPhase(
-    'package_bundle_index',
-    () => loadProjectFromBundle(projectData),
-    {
-      scenes: projectData.scenes.length,
-      packageHash: hashViewerPerfIdentity(normalizedBuildKey),
-    },
-  );
+  await loadProjectFromBundle(projectData);
 }
 async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer): Promise<void> {
   error.value = null;
@@ -23676,11 +23361,7 @@ async function loadProjectFromScenePackagePointer(pointer: ScenePackagePointer):
       indeterminate: true,
     });
     await yieldToMainThread();
-    const buffer = await measureViewerPerfLoadPhase(
-      'package_cache_read',
-      () => loadScenePackageZip(pointer),
-      { packageHash: hashViewerPerfIdentity(normalizeScenePackageBuildKey(pointer)) },
-    );
+    const buffer = await loadScenePackageZip(pointer);
     if (!buffer || buffer.byteLength <= 0) {
       throw new Error('场景包数据为空，请重新导入');
     }
@@ -23805,63 +23486,36 @@ async function startRenderIfReady() {
   warnings.value = [];
   initializeToken += 1;
   const token = initializeToken;
-  const renderInitStartedAtMs = viewerPerfLogger.now();
-  const sceneHash = hashViewerPerfIdentity(payload.document.id || payload.title || 'scene');
-  const renderInitFields: ViewerPerfFields = {
-    phase: 'render_init',
-    sceneHash,
-  };
-  viewerPerfFirstFrameLogged = false;
-  viewerPerfLogger.emit('load', { ...renderInitFields, status: 'start' });
-  let renderInitFailure: unknown = null;
   beginSceneSwitchTransition(token);
 
   try {
-    await measureViewerPerfLoadPhase(
-      'renderer_context',
-      () => ensureRendererContext(canvas),
-      { sceneHash },
-    );
+    await ensureRendererContext(canvas);
     resourcePreload.label = '正在准备运行时 prefab 资源...';
-    const runtimePrefabPreloadContext = await measureViewerPerfLoadPhase(
-      'prefab_context',
-      () => collectRuntimePrefabPreloadContext(props.runtimePrefabSpawns, runtimePrefabSourceResolverOptions),
-      { sceneHash },
+    const runtimePrefabPreloadContext = await collectRuntimePrefabPreloadContext(
+      props.runtimePrefabSpawns,
+      runtimePrefabSourceResolverOptions,
     );
     if (!isCurrentInitializationToken(token)) {
       return;
     }
-    const preparedPayload = await measureViewerPerfLoadPhase(
-      'payload_prepare',
-      () => prepareRenderPayloadForSceneEntry(payload, runtimePrefabPreloadContext),
-      { sceneHash },
-    );
+    const preparedPayload = await prepareRenderPayloadForSceneEntry(payload, runtimePrefabPreloadContext);
     if (!isCurrentInitializationToken(token)) {
       return;
     }
-    const warmReady = await measureViewerPerfLoadPhase(
-      'prefab_warm',
-      () => warmRuntimePrefabAssetsForSceneEntry(preparedPayload, runtimePrefabPreloadContext, token),
-      { sceneHash },
+    const warmReady = await warmRuntimePrefabAssetsForSceneEntry(
+      preparedPayload,
+      runtimePrefabPreloadContext,
+      token,
     );
     if (!warmReady) {
       return;
     }
-    const rendered = await measureViewerPerfLoadPhase(
-      'scene_commit',
-      () => commitSceneEntryRendering(preparedPayload, canvas, token),
-      { sceneHash },
-    );
+    const rendered = await commitSceneEntryRendering(preparedPayload, canvas, token);
     if (rendered) {
       hasRenderedSceneOnce = true;
       emit('loaded');
-      viewerPerfLogger.emit('loaded', {
-        sceneHash,
-        initMs: roundViewerPerf(viewerPerfLogger.now() - renderInitStartedAtMs, 1),
-      });
     }
   } catch (initializationError) {
-    renderInitFailure = initializationError;
     console.error('Renderer initialization failed', initializationError);
     console.error(initializationError);
     if (isCurrentInitializationToken(token)) {
@@ -23882,15 +23536,6 @@ async function startRenderIfReady() {
     }
     initializing = false;
     endSceneSwitchTransition(token);
-    viewerPerfLogger.emit('load', {
-      ...renderInitFields,
-      status: renderInitFailure ? 'error' : 'end',
-      durationMs: roundViewerPerf(viewerPerfLogger.now() - renderInitStartedAtMs, 1),
-      ...(renderInitFailure ? viewerPerfErrorFields(renderInitFailure) : {}),
-    });
-    if (renderInitFailure) {
-      viewerFrameProfiler.finish('init_error');
-    }
 
     if (pendingRestartAfterCurrentInit) {
       pendingRestartAfterCurrentInit = false;
@@ -24175,8 +23820,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   if (renderContext) {
     return;
   }
-  lastViewerPerfRendererSignature = '';
-
   activeCameraWatchTween = null;
   frameDeltaMode = null;
   compiledGroundForceNextUpdate = true;
@@ -24304,8 +23947,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   if (pendingEnvironmentSettings) {
     void applyEnvironmentSettingsToScene(pendingEnvironmentSettings);
   }
-  emitViewerPerfRendererConfig('created');
-
   renderScope?.stop();
   renderScope = effectScope();
 }
@@ -25018,165 +24659,6 @@ function applyDocumentViewSettings(camera: THREE.PerspectiveCamera): void {
   markOverlayRuntimeDirty();
 }
 
-function countViewerPerfDocumentNodes(document: SceneJsonExportDocument | null | undefined): number {
-  const stack = Array.isArray(document?.nodes) ? [...document.nodes] : [];
-  let count = 0;
-  while (stack.length) {
-    const node = stack.pop();
-    if (!node) {
-      continue;
-    }
-    count += 1;
-    if (Array.isArray(node.children) && node.children.length) {
-      stack.push(...node.children);
-    }
-  }
-  return count;
-}
-
-function isViewerPerfTransparentMaterial(material: THREE.Material | THREE.Material[] | null | undefined): boolean {
-  if (Array.isArray(material)) {
-    return material.some((entry) => entry.transparent === true || entry.alphaTest > 0);
-  }
-  return Boolean(material && (material.transparent === true || material.alphaTest > 0));
-}
-
-function collectViewerPerfSceneStaticStats(
-  root: THREE.Object3D | null | undefined,
-  document: SceneJsonExportDocument,
-): ViewerPerfFields {
-  if (!root) {
-    return { docNodes: countViewerPerfDocumentNodes(document) };
-  }
-  let objects = 0;
-  let meshes = 0;
-  let transparentMeshes = 0;
-  let skinnedMeshes = 0;
-  let lights = 0;
-  let shadowLights = 0;
-  root.traverse((object) => {
-    objects += 1;
-    if ((object as THREE.Mesh).isMesh) {
-      const mesh = object as THREE.Mesh;
-      meshes += 1;
-      if (isViewerPerfTransparentMaterial(mesh.material)) {
-        transparentMeshes += 1;
-      }
-      if ((mesh as THREE.SkinnedMesh).isSkinnedMesh) {
-        skinnedMeshes += 1;
-      }
-    }
-    if ((object as THREE.Light).isLight) {
-      lights += 1;
-      if ((object as THREE.Light).castShadow) {
-        shadowLights += 1;
-      }
-    }
-  });
-  let visibleMeshes = 0;
-  root.traverseVisible((object) => {
-    if ((object as THREE.Mesh).isMesh) {
-      visibleMeshes += 1;
-    }
-  });
-  const instanceCount = instancedMeshes.reduce(
-    (total, mesh) => total + Math.max(0, Math.trunc(mesh.count)),
-    0,
-  );
-  let scatterVisible = 0;
-  let scatterTotal = 0;
-  try {
-    const stats = terrainScatterRuntime.getInstanceStats();
-    scatterVisible = stats.visible;
-    scatterTotal = stats.total;
-  } catch {
-    scatterVisible = 0;
-    scatterTotal = 0;
-  }
-  return {
-    docNodes: countViewerPerfDocumentNodes(document),
-    objects,
-    meshes,
-    visibleMeshes,
-    transparentMeshes,
-    skinnedMeshes,
-    lights,
-    shadowLights,
-    instancedAssets: instancedMeshes.length,
-    instances: instanceCount,
-    scatterVisible,
-    scatterTotal,
-    waterHandles: countWaterRuntimeHandles(),
-  };
-}
-
-function collectViewerPerfFrameFlags(): ViewerPerfFrameFlags {
-  let mode = 'idle';
-  if (vehicleDriveActive.value) {
-    mode = 'vehicle';
-  } else if (activeAutoTourNodeIds.size > 0) {
-    mode = 'tour';
-  } else if (characterPlayerControlNodeIdOverride.value || characterControlUi.value.visible) {
-    mode = 'character';
-  }
-  let instanceCount = 0;
-  instancedMeshes.forEach((mesh) => {
-    instanceCount += Math.max(0, Math.trunc(mesh.count));
-  });
-  let scatterVisible = 0;
-  let scatterTotal = 0;
-  try {
-    const stats = terrainScatterRuntime.getInstanceStats();
-    scatterVisible = stats.visible;
-    scatterTotal = stats.total;
-  } catch {
-    scatterVisible = 0;
-    scatterTotal = 0;
-  }
-  return {
-    mode,
-    overlay: debugEnabled.value ? debugMode.value : 'off',
-    memoryGuard: runtimeMemoryGuard.state.state,
-    memoryExtreme: runtimeMemoryGuard.state.extreme,
-    hasCharacter: scenerySceneRuntimeFlags.hasCharacter,
-    hasVehicle: scenerySceneRuntimeFlags.hasVehicle,
-    activeTours: activeAutoTourNodeIds.size,
-    nodes: previewNodeMap.size,
-    lazyLoads: activeLazyLoadCount,
-    deferredInstancing: deferredInstancingNodeIds.size,
-    instancedAssets: instancedMeshes.length,
-    instances: instanceCount,
-    scatterVisible,
-    scatterTotal,
-    waterHandles: countWaterRuntimeHandles(),
-    physicsBridge: physicsBridgeSceneReloading
-      ? 'loading'
-      : physicsBridgeSceneLoaded
-        ? 'loaded'
-        : 'off',
-    groundCollisionPending: sceneryMeshCollisionWorkPending,
-    warnings: warnings.value.length,
-  };
-}
-
-const viewerFrameMetrics: ViewerPerfRendererMetrics = {
-  calls: 0,
-  triangles: 0,
-  points: 0,
-  lines: 0,
-  geometries: 0,
-  textures: 0,
-  programs: 0,
-  pixelRatio: 1,
-  drawingBufferWidth: 0,
-  drawingBufferHeight: 0,
-  renderMs: 0,
-};
-const viewerFrameProfiler = createViewerPerfFrameProfiler({
-  logger: viewerPerfLogger,
-  getFlags: collectViewerPerfFrameFlags,
-});
-
 /**
  * Start the render loop (per-frame updates + rendering). Uses Vue effect scope so it can be stopped.
  */
@@ -25196,7 +24678,6 @@ function startRenderLoop(
     watchEffect((onCleanup) => {
       const { cancel } = result.useFrame((delta: number) => {
         const deltaSecondsRaw = normalizeFrameDelta(delta);
-        viewerFrameProfiler.beginFrame(deltaSecondsRaw * 1000);
         accumulatedDelta += deltaSecondsRaw;
         // 只在渲染帧时传递累计deltaSeconds，避免FPS统计超过30
         const deltaSeconds = accumulatedDelta;
@@ -25212,8 +24693,6 @@ function startRenderLoop(
             syncSceneMemoryDebug(scene, sceneAssetCache);
           }
         }
-        viewerFrameProfiler.lap('debug');
-
         if (deltaSeconds > 0) {
           updateDriveInputRelaxation(deltaSeconds);
         }
@@ -25234,7 +24713,6 @@ function startRenderLoop(
           }
         }
         syncWatchTransitionBusyState();
-        viewerFrameProfiler.lap('camera');
 
         if (deltaSeconds > 0) {
           const watchCameraLocked = isWatchCameraLocked();
@@ -25260,7 +24738,6 @@ function startRenderLoop(
           if (previewComponentManager.size > 0) {
             previewComponentManager.update(deltaSeconds);
           }
-          viewerFrameProfiler.lap('components');
           flushParticleRuntimeCommands();
           if (countWaterRuntimeHandles() > 0) {
             waterRuntime.update(deltaSeconds, { renderer, scene, camera });
@@ -25280,7 +24757,6 @@ function startRenderLoop(
             }
             applyBehaviorSoundVolume(instance);
           });
-          viewerFrameProfiler.lap('animation');
 
           if (!autoTourPaused.value) {
             autoTourRuntime.update(deltaSeconds);
@@ -25294,9 +24770,7 @@ function startRenderLoop(
               updateVehicleDriveCamera(deltaSeconds);
             }
           }
-          viewerFrameProfiler.lap('vehicles');
           stepPhysicsWorld(deltaSeconds);
-          viewerFrameProfiler.lap('physicsLocal');
           syncSceneryPhysicsBridgeVehicleInput();
           // Integrate the current joystick turn before sending the character
           // input, otherwise physics receives the previous frame's yaw.
@@ -25305,7 +24779,6 @@ function startRenderLoop(
           syncSceneryPhysicsBridgeBodyTransforms();
           stepSceneryPhysicsBridge(deltaSeconds);
           updateCharacterPhysicsBridgeVisuals(deltaSeconds);
-          viewerFrameProfiler.lap('physicsBridge');
           // Also run while a non-zero speed is still displayed, so removing the last
           // vehicle still drives the readout back to 0.
           if (
@@ -25324,7 +24797,6 @@ function startRenderLoop(
           updateRemoteSharedEntityTransforms(deltaSeconds);
           retryPendingVehicleDriveIfNeeded();
           activatePendingDefaultSteerDriveIfNeeded();
-          viewerFrameProfiler.lap('entities');
         }
 
         // NOTE: keep this call unconditional — it also discovers script-triggered
@@ -25345,7 +24817,6 @@ function startRenderLoop(
             updateVehicleDriveCamera(deltaSeconds);
           }
         }
-        viewerFrameProfiler.lap('cameras');
         updateBillboardInstanceCameraWorldPosition(camera.position);
 
         updateBehaviorProximity();
@@ -25365,7 +24836,6 @@ function startRenderLoop(
         ensureSlowroadsEnvironmentRuntime();
         slowroadsEnvironment?.update(deltaSeconds);
         syncSceneryCameraFarForFog(camera);
-        viewerFrameProfiler.lap('overlay');
 
         // Keep chunked ground meshes in sync with camera position.
         const cachedGround = dynamicGroundCache;
@@ -25422,7 +24892,6 @@ function startRenderLoop(
           cancel();
           return;
         }
-        viewerFrameProfiler.lap('ground');
 
         if (instancingNow - lazyPlaceholderLastScanAtMs >= LAZY_PLACEHOLDER_SCAN_INTERVAL_MS) {
           lazyPlaceholderLastScanAtMs = instancingNow;
@@ -25431,50 +24900,21 @@ function startRenderLoop(
         if (!vehicleDriveIntroState.active && vehicleDriveIntroPendingState.active) {
           tryStartPendingVehicleDriveIntro();
         }
-        viewerFrameProfiler.lap('lazy');
         if (shouldRunTerrainScatterUpdate(cameraFrameSnapshot)) {
           terrainScatterRuntime.update(camera, resolveGroundMeshObject);
         }
-        viewerFrameProfiler.lap('scatter');
         if (shouldRunInstancedCulling(camera, instancingNow)) {
           updateInstancedCullingAndLod();
         }
         scheduleLodPrefetch();
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
         tickInstancedBounds(deltaSeconds);
-        viewerFrameProfiler.lap('instancing');
         updateAttachedTerrainTextureStreams(scene, camera);
-        viewerFrameProfiler.lap('textures');
         renderer.render(scene, camera);
-        viewerFrameMetrics.renderMs = viewerFrameProfiler.lap('render');
-        renderer.getDrawingBufferSize(viewerPerfDrawingBufferSize);
-        viewerFrameMetrics.calls = renderer.info.render.calls;
-        viewerFrameMetrics.triangles = renderer.info.render.triangles;
-        viewerFrameMetrics.points = renderer.info.render.points;
-        viewerFrameMetrics.lines = renderer.info.render.lines;
-        viewerFrameMetrics.geometries = renderer.info.memory.geometries;
-        viewerFrameMetrics.textures = renderer.info.memory.textures;
-        viewerFrameMetrics.programs = renderer.info.programs?.length ?? 0;
-        viewerFrameMetrics.pixelRatio = renderer.getPixelRatio();
-        viewerFrameMetrics.drawingBufferWidth = viewerPerfDrawingBufferSize.x;
-        viewerFrameMetrics.drawingBufferHeight = viewerPerfDrawingBufferSize.y;
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
           syncRendererDebug(renderer, scene, canvasResult?.canvas ?? null);
         }
-        viewerFrameProfiler.lap('debug');
-        if (!viewerPerfFirstFrameLogged) {
-          viewerPerfFirstFrameLogged = true;
-          viewerPerfLogger.emit('first_frame', {
-            sinceLoopStartMs: roundViewerPerf(
-              viewerPerfLogger.now() - viewerPerfRenderLoopStartedAtMs,
-              1,
-            ),
-            render: createViewerPerfRendererPayload(viewerFrameMetrics),
-            flags: collectViewerPerfFrameFlags(),
-          });
-        }
-        viewerFrameProfiler.endFrame(viewerFrameMetrics);
       });
       onCleanup(() => {
         cancel();
@@ -25620,7 +25060,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   if (!renderContext) {
     throw new Error('Render context missing');
   }
-  const sceneHash = hashViewerPerfIdentity(payload.document.id || payload.title || 'scene');
   const { scene, renderer, camera, controls } = renderContext;
   activeCameraWatchTween = null;
   const { canvas } = result;
@@ -25701,22 +25140,14 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // Phase 1.5: warm the exact seasonal texture set before the scene graph and
   // landscape component start constructing materials.
   resetResourcePreloadState();
-  await measureViewerPerfLoadPhase(
-    'preload_scene_textures',
-    () => preloadSceneSlowroadsTextures(currentDocument!, token),
-    { sceneHash },
-  );
+  await preloadSceneSlowroadsTextures(currentDocument!, token);
   if (token !== initializeToken) {
     return;
   }
 
   // Phase 2: build the scene graph (loads assets) with UI progress updates.
   resetResourcePreloadState();
-  const buildResult = await measureViewerPerfLoadPhase(
-    'scene_graph_build',
-    () => buildSceneGraphWithProgress(payload),
-    { sceneHash },
-  );
+  const buildResult = await buildSceneGraphWithProgress(payload);
   if (token !== initializeToken) {
     if (buildResult?.graph?.root) {
       disposeObject(buildResult.graph.root);
@@ -25732,28 +25163,16 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   }
 
   const instancingSkipNodeIds = collectInstancingSkipNodeIdsForLazyPlaceholders(graph.root);
-  await measureViewerPerfLoadPhase(
-    'instancing_prepare',
-    () => prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds),
-    { sceneHash },
-  );
+  await prepareInstancedNodesIfPossible(graph.root, payload, resourceCache, instancingSkipNodeIds);
   if (token !== initializeToken) {
     disposeObject(graph.root);
     return;
   }
 
   // Phase 4: mount the graph and synchronously initialize scene-dependent subsystems.
-  await measureViewerPerfLoadPhase(
-    'subsystem_mount',
-    () => mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera, token),
-    { sceneHash },
-  );
+  await mountGraphAndSyncSubsystems(payload, graph.root, resourceCache, canvas, camera, token);
   applyNominateOverridesForCurrentScene();
-  await measureViewerPerfLoadPhase(
-    'prefab_spawn_flush',
-    () => flushPendingRuntimePrefabSpawnRequests(),
-    { sceneHash },
-  );
+  await flushPendingRuntimePrefabSpawnRequests();
 
   if (token !== initializeToken || sceneGraphRoot !== graph.root) {
     return;
@@ -25771,30 +25190,15 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   // before the interactive render loop starts. Shader compilation and buffer
   // setup are one-time costs; paying them here (behind the loading state)
   // avoids a hitch on the first visible frame after a node's LOD model loads.
-  await measureViewerPerfLoadPhase(
-    'gpu_precompile',
-    async () => {
-      try {
-        await yieldToMainThread();
-        precompileModelInstanceGroup(renderer, camera);
-      } catch (caughtError) {
-        console.warn('[SceneViewer] Failed to precompile model instance groups', caughtError);
-      }
-    },
-    { sceneHash },
-  );
+  try {
+    await yieldToMainThread();
+    precompileModelInstanceGroup(renderer, camera);
+  } catch (caughtError) {
+    console.warn('[SceneViewer] Failed to precompile model instance groups', caughtError);
+  }
 
   // Phase 7: start the render loop.
-  const sceneStatic = collectViewerPerfSceneStaticStats(graph.root, payload.document);
-  viewerPerfLogger.emit('scene_static', { sceneHash, ...sceneStatic });
-  emitViewerPerfRendererConfig('scene-ready');
-  viewerPerfRenderLoopStartedAtMs = viewerPerfLogger.now();
   startRenderLoop(result, renderer, scene, camera, controls);
-  viewerPerfLogger.emit('load', {
-    phase: 'render_loop',
-    status: 'end',
-    sceneHash,
-  });
 }
 
 const handleResize: WindowResizeCallback = (_result: unknown) => {
@@ -25820,11 +25224,6 @@ const handleResize: WindowResizeCallback = (_result: unknown) => {
 
 watch(error, (value) => {
   if (value) {
-    viewerPerfLogger.emit('error', {
-      scope: 'viewer',
-      message: value,
-    });
-    viewerFrameProfiler.finish('viewer_error');
     emit('error', value);
   }
 });
@@ -26082,7 +25481,6 @@ function hasAnyPropInput(): boolean {
 }
 
 onMounted(() => {
-  emitViewerPerfSession();
   runtimeMemoryGuard.start();
   if (!resizeListener) {
     resizeListener = handleResize;
@@ -26223,7 +25621,6 @@ onUnmounted(() => {
     window.removeEventListener('blur', handleWindowBlur);
   }
   cleanupRuntime();
-  viewerFrameProfiler.finish('unmount');
 });
 
 </script>

@@ -26,6 +26,7 @@ function profile(overrides: Partial<ProceduralLandscapeAdaptiveProfile> = {}): P
     calibrationStep: 0.06,
     minFps: 35,
     maxFps: 48,
+    runtimeCalibrationEnabled: false,
     ...overrides,
   }
 }
@@ -46,6 +47,7 @@ describe('adaptive landscape profile', () => {
       targetFps: 40,
       targetTreesPerKm2: 30,
       targetTreeCount: 49_890,
+      runtimeCalibrationEnabled: false,
     })
   })
 
@@ -90,6 +92,16 @@ describe('adaptive landscape profile', () => {
       environment: 'editor',
       quality: 'auto',
     })).toBeNull()
+  })
+
+  it('keeps runtime calibration available for editor preview only', () => {
+    const resolved = resolveAdaptiveLandscapeProfile({
+      device: LIO_DEVICE,
+      sceneAreaKm2: 1663,
+      environment: 'preview',
+      quality: 'auto',
+    })
+    expect(resolved?.runtimeCalibrationEnabled).toBe(true)
   })
 })
 

@@ -24,6 +24,12 @@ export interface ProceduralLandscapeAdaptiveProfile {
   calibrationStep: number
   minFps: number
   maxFps: number
+  /**
+   * Runtime calibration rebuilds the full procedural world and is therefore
+   * disabled for embedded viewers. Their initial device-tier target is still
+   * applied, but remains fixed for the lifetime of the world.
+   */
+  runtimeCalibrationEnabled: boolean
 }
 
 export type LandscapeAdaptiveCalibrationState =
@@ -130,6 +136,7 @@ export function resolveAdaptiveLandscapeProfile(options: {
     calibrationStep: CALIBRATION_STEP,
     minFps: MIN_TARGET_FPS,
     maxFps: MAX_TARGET_FPS,
+    runtimeCalibrationEnabled: options.environment !== 'viewer',
   }
 }
 
