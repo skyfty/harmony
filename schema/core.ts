@@ -1773,7 +1773,7 @@ export interface SceneResourceSummary {
  * 素材固定来自在线资产包（`schema/slowroads`），这里只保存选择与开关；
  * 场景光照/三色雾/天空/云层/星空/降雪全部由这套预设驱动：
  * 太阳方向固定为 lab 常量（见 `slowroads/core/environment.ts` 的
- * 官方 (0,1,0) 竖直向下，三端 CSM 统一 syncSun((0,1000,0))），天空是唯一背景，
+ * 官方 (0,1,0) 竖直向下，三端统一太阳方向光位于 (0,1000,0)，天空是唯一背景，
  * 雾始终生效，均不再有独立的环境（Background/Fog/阳光）参数。
  */
 export type SlowroadsEnvironmentControlMode = 'manual' | 'auto' | 'default'

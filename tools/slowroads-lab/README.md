@@ -156,7 +156,7 @@ lab 世界的海拔只有 ±40m，地表着色把「水面以上高度」按 ×4
    （含默认值与归一化，进 `environmentSettingsUtils`）；`editor/src/types/environment.ts`
    改为 re-export（单一来源）。
 2. `EnvironmentPanel.vue` 新增「Slow Roads 环境」区：季节/时间/天气三个选择器，
-   直接写上述字段（不做派生值回写）；Background / 阳光(CSM) / 方向旋转等旧环境设置
+   直接写上述字段（不做派生值回写）；Background / 独立阳光参数 / 方向旋转等旧环境设置
    已整体移除，旧场景里的这些字段在归一化时直接丢弃（不做兼容）。
 3. 下发通道：`schema/components/Component.ts` 的 `ComponentFrameState` 增加
    `environment?: { season, timeOfDay, weather } | null`；editor `SceneViewport`、

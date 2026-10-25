@@ -20,10 +20,6 @@ import {
   DEFAULT_SHADOW_NORMAL_BIAS,
   DEFAULT_SHADOW_RADIUS,
 } from '@schema/lightDefaults'
-import {
-  DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-  DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
-} from '@schema/sceneCsmDefaults'
 import { PIPELINE_MODES, type CameraViewId, type HelperSettings, type PipelineMode } from '../types'
 
 export type StageBackgroundMode = 'engine' | 'gradient' | 'transparent' | 'hdri'
@@ -54,8 +50,8 @@ export const DEFAULT_STAGE_SETTINGS: StageSettings = {
   ambientIntensity: DEFAULT_ENVIRONMENT_AMBIENT_INTENSITY,
   sunColor: DEFAULT_COLOR,
   sunIntensity: DEFAULT_INTENSITY,
-  sunAzimuthDeg: DEFAULT_SCENE_CSM_SUN_AZIMUTH_DEG,
-  sunElevationDeg: DEFAULT_SCENE_CSM_SUN_ELEVATION_DEG,
+  sunAzimuthDeg: 45,
+  sunElevationDeg: 42,
   shadows: true,
   background: 'engine',
   backgroundColor: DEFAULT_ENVIRONMENT_BACKGROUND_COLOR,
@@ -138,7 +134,7 @@ function findByTraversalIndex(root: THREE.Object3D, index: number): THREE.Object
   return found
 }
 
-/** Engine CSM sun direction convention (schema/sceneCsm.ts). */
+/** Engine sun direction convention. */
 function resolveSunDirection(azimuthDeg: number, elevationDeg: number): THREE.Vector3 {
   const azimuth = THREE.MathUtils.degToRad(azimuthDeg)
   const elevation = THREE.MathUtils.degToRad(elevationDeg)

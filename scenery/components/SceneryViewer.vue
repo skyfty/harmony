@@ -886,13 +886,9 @@ import {
 } from '@harmony/schema/core';
 import { applyMirroredScaleToObject, syncMirroredMeshMaterials } from '@harmony/schema/mirror';
 import {
-  DEFAULT_SCENE_CSM_CONFIG,
-  type SceneCsmConfig,
-} from '@harmony/schema/sceneCsmDefaults';
-import {
-  createSceneCsmShadowRuntime,
-  type SceneCsmShadowRuntime,
-} from '@harmony/schema/sceneCsm';
+  createSceneSunLightRuntime,
+  type SceneSunLightRuntime,
+} from '@harmony/schema/sceneSunLight';
 import { ComponentManager } from '@harmony/schema/components/componentManager';
 import { DEVICE_ADAPTATION_COMPONENT_TYPE, normalizeDeviceAdaptationNodeProps } from '@harmony/schema/components';
 import { SceneAnimationRuntimeManager } from '@harmony/schema/sceneAnimationRuntime';
@@ -2413,6 +2409,8 @@ let slowroadsEnvironment: SlowroadsEnvironmentRuntime | null = null;
 let slowroadsAmbientLight: THREE.AmbientLight | null = null;
 /** 官方三件套之一：半球光（sky = 预设 sun 色、ground = 黑）。 */
 let slowroadsHemisphereLight: THREE.HemisphereLight | null = null;
+let sceneSunLightRuntime: SceneSunLightRuntime | null = null;
+const VIEWER_SUN_POSITION = new THREE.Vector3(0, 1000, 0);
 let currentSlowroadsEnvironmentState: { season: 'spring' | 'summer' | 'autumn' | 'winter'; timeOfDay: 'morning' | 'day' | 'evening' | 'night'; weather: 'clear' | 'overcast' } | null = null;
 
 type ViewerEnvironmentSeason = SlowroadsEnvironmentSettings['season'];
@@ -2555,10 +2553,6 @@ let initializing = false;
 let renderScope: EffectScope | null = null;
 const bootstrapFinished = ref(false);
 
-const SCENERY_SCENE_CSM_CONFIG = DEFAULT_SCENE_CSM_CONFIG;
-let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null;
-let sceneCsmRuntimeConfigKey = '';
-
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
   let current = object;
   while (current) {
@@ -2595,65 +2589,19 @@ function applyNominateOverridesForCurrentScene(): void {
   syncInstancedProxyVisibilityAfterNominate();
 }
 
-function resolveScenerySceneCsmConfig(): SceneCsmConfig {
-  // 阴影质量参数固定（不再有 CSM 用户设置）。
-  return { ...SCENERY_SCENE_CSM_CONFIG };
-}
-
-function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
-  return JSON.stringify({
-    enabled: config.enabled ?? true,
-    shadowEnabled: config.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
-    cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
-    maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
-    shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
-    shadowBias: config.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
-    lightMargin: config.lightMargin ?? DEFAULT_SCENE_CSM_CONFIG.lightMargin,
-  });
-}
-
-function shouldUseSceneCsmShadows(): boolean {
-  const config = resolveScenerySceneCsmConfig();
-  return Boolean(renderContext?.scene && renderContext?.camera && config.enabled);
-}
-
-function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
-  const context = renderContext;
-  // CSM 运行时在小程序端也常驻：阴影档位只控制投影，不再销毁太阳灯
-  // （与官方一致；低端档 shadowsEnabled=false 时景观仍保持预设光照）。
-  if (!context || !shouldUseSceneCsmShadows()) {
-    if (sceneCsmShadowRuntime) {
-      disposeSceneCsmShadowRuntime();
-    }
-    return null;
-  }
-  const config = resolveScenerySceneCsmConfig();
-  const configKey = buildSceneCsmConfigKey(config);
-  if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
-    disposeSceneCsmShadowRuntime();
-  }
-  if (!sceneCsmShadowRuntime) {
-    const runtime = createSceneCsmShadowRuntime(context.scene, context.camera, config);
-    sceneCsmShadowRuntime = runtime;
-    sceneCsmRuntimeConfigKey = configKey;
-    runtime.registerObject(context.scene);
-  }
-  syncSceneCsmSunFromEnvironment();
-  return sceneCsmShadowRuntime;
-}
-
-function disposeSceneCsmShadowRuntime(): void {
-  sceneCsmShadowRuntime?.dispose();
-  sceneCsmShadowRuntime = null;
-  sceneCsmRuntimeConfigKey = '';
-}
-
 /**
  * Slow Roads 场景级环境运行时（天空/云/星空/降雪/三色雾 + 预设光照）。
  */
 function ensureSlowroadsEnvironmentRuntime(): void {
   const context = renderContext;
-  if (slowroadsEnvironment || !context) {
+  if (!context) {
+    return;
+  }
+  if (!sceneSunLightRuntime) {
+    sceneSunLightRuntime = createSceneSunLightRuntime(context.scene);
+    slowroadsEnvironment?.refreshLighting();
+  }
+  if (slowroadsEnvironment) {
     return;
   }
   const assetStore = getSharedSlowroadsAssetStore({
@@ -2685,38 +2633,18 @@ function ensureSlowroadsEnvironmentRuntime(): void {
       slowroadsHemisphereLight.color.copy(state.hemiColor);
       slowroadsHemisphereLight.groundColor.setRGB(0, 0, 0);
       slowroadsHemisphereLight.intensity = state.hemiIntensity;
-      if (sceneCsmShadowRuntime && currentDocument) {
-        // 官方太阳竖直向下（锚定载具的等价物 = 场景原点正上方）。
-        const sunPosition = new THREE.Vector3(0, 1000, 0);
-        sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`);
+      if (!sceneSunLightRuntime) {
+        sceneSunLightRuntime = createSceneSunLightRuntime(context.scene);
       }
+      // Keep direct sunlight without any shadow-pass or cascaded-map work.
+      sceneSunLightRuntime.sync(
+        VIEWER_SUN_POSITION,
+        state.sunIntensity,
+        `#${state.sunColor.getHexString()}`,
+      );
     },
   });
   slowroadsEnvironment.setSettings(activeEnvironmentSettings.slowroads);
-}
-
-/** 太阳定位：官方竖直向下；颜色/强度由 SR 预设经 refreshLighting 下发。 */
-function syncSceneCsmSunFromEnvironment(): void {
-  if (!sceneCsmShadowRuntime || !currentDocument) {
-    return;
-  }
-  const sunPosition = new THREE.Vector3(0, 1000, 0);
-  sceneCsmShadowRuntime.syncSun(
-    sunPosition,
-    DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
-    String(DEFAULT_SCENE_CSM_CONFIG.lightColor ?? '#ffffff'),
-  );
-  // Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
-  slowroadsEnvironment?.refreshLighting();
-}
-
-function applyRendererShadowSetting(): void {
-  const context = renderContext;
-  if (!context) {
-    return;
-  }
-  const castShadows = Boolean(context.renderer.shadowMap.enabled);
-  sceneCsmShadowRuntime?.setActive(castShadows);
 }
 
 function applyViewerRenderBudget(reason: string): void {
@@ -2734,7 +2662,6 @@ function applyViewerRenderBudget(reason: string): void {
   });
   context.renderer.setPixelRatio(budget.pixelRatio);
   context.renderer.shadowMap.enabled = budget.shadowsEnabled;
-  applyRendererShadowSetting();
   emitViewerPerfRendererConfig(reason);
 }
 
@@ -3001,17 +2928,6 @@ const compiledGroundCameraQuatScratch = new THREE.Quaternion();
 let compiledGroundLastUpdateAtMs = 0;
 let compiledGroundForceNextUpdate = true;
 
-const SCENE_CSM_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.06 : 0.04;
-const SCENE_CSM_ROT_THRESHOLD_DEG = isWeChatMiniProgram ? 0.35 : 0.2;
-const SCENE_CSM_MAX_STALE_MS = isWeChatMiniProgram ? 220 : 160;
-const SCENE_CSM_MIN_INTERVAL_MS = isWeChatMiniProgram ? 40 : 33;
-const SCENE_CSM_ROT_THRESHOLD_RAD = (SCENE_CSM_ROT_THRESHOLD_DEG * Math.PI) / 180;
-const sceneCsmLastCameraPos = new THREE.Vector3();
-const sceneCsmLastCameraQuat = new THREE.Quaternion();
-const sceneCsmCameraPosScratch = new THREE.Vector3();
-const sceneCsmCameraQuatScratch = new THREE.Quaternion();
-let sceneCsmLastUpdateAtMs = 0;
-let sceneCsmForceNextUpdate = true;
 // Overlay signboards are relatively expensive because they drive canvas texture redraws.
 // Keep them a bit less eager than the rest of the camera-dependent systems.
 const OVERLAY_SYNC_MOVE_THRESHOLD_M = isWeChatMiniProgram ? 0.16 : 0.1;
@@ -3135,52 +3051,6 @@ function shouldRunCompiledGroundTileSync(snapshot: CameraFrameSnapshot | null): 
   compiledGroundLastUpdateAtMs = snapshot.nowMs;
   compiledGroundLastCameraPos.copy(compiledGroundCameraPosScratch);
   compiledGroundLastCameraQuat.copy(compiledGroundCameraQuatScratch);
-  return true;
-}
-
-function shouldRunSceneCsmShadowUpdate(snapshot: CameraFrameSnapshot | null): boolean {
-  if (!snapshot) {
-    return true;
-  }
-  sceneCsmCameraPosScratch.copy(snapshot.position);
-  sceneCsmCameraQuatScratch.copy(snapshot.quaternion);
-
-  if (sceneCsmForceNextUpdate) {
-    sceneCsmForceNextUpdate = false;
-    sceneCsmLastUpdateAtMs = snapshot.nowMs;
-    sceneCsmLastCameraPos.copy(sceneCsmCameraPosScratch);
-    sceneCsmLastCameraQuat.copy(sceneCsmCameraQuatScratch);
-    return true;
-  }
-
-  const moveThresholdSq = SCENE_CSM_MOVE_THRESHOLD_M * SCENE_CSM_MOVE_THRESHOLD_M;
-  const movedEnough = moveThresholdSq > 0
-    && sceneCsmCameraPosScratch.distanceToSquared(sceneCsmLastCameraPos) >= moveThresholdSq;
-  const rotatedEnough = (() => {
-    if (SCENE_CSM_ROT_THRESHOLD_RAD <= 0) {
-      return false;
-    }
-    const dot = Math.min(1, Math.abs(sceneCsmLastCameraQuat.dot(sceneCsmCameraQuatScratch)));
-    const angle = 2 * Math.acos(dot);
-    return Number.isFinite(angle) && angle >= SCENE_CSM_ROT_THRESHOLD_RAD;
-  })();
-  const shouldUpdateForMotion = movedEnough || rotatedEnough;
-
-  if (shouldUpdateForMotion && snapshot.nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MIN_INTERVAL_MS) {
-    return false;
-  }
-
-  if (
-    !shouldUpdateForMotion
-    && SCENE_CSM_MAX_STALE_MS > 0
-    && snapshot.nowMs - sceneCsmLastUpdateAtMs < SCENE_CSM_MAX_STALE_MS
-  ) {
-    return false;
-  }
-
-  sceneCsmLastUpdateAtMs = snapshot.nowMs;
-  sceneCsmLastCameraPos.copy(sceneCsmCameraPosScratch);
-  sceneCsmLastCameraQuat.copy(sceneCsmCameraQuatScratch);
   return true;
 }
 
@@ -10415,7 +10285,6 @@ function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
   addInstancedBoundsMesh(mesh);
   instancedMeshes.push(mesh);
   instancedMeshGroup.add(mesh);
-  sceneCsmShadowRuntime?.registerObject(mesh);
 }
 
 function clearInstancedMeshes(): void {
@@ -10887,7 +10756,6 @@ function indexSceneObjects(root: THREE.Object3D) {
       }
     }
   });
-  sceneCsmShadowRuntime?.registerObject(root);
 }
 
 function markNestedInstancedProxyHints(root: THREE.Object3D): boolean {
@@ -10966,7 +10834,6 @@ function registerSceneSubtree(root: THREE.Object3D): void {
     syncInstancedTransform(object);
 
   });
-  sceneCsmShadowRuntime?.registerObject(root);
 }
 
 function removeAirWalls(): void {
@@ -23006,10 +22873,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
     pendingEnvironmentSettings = snapshot;
     return;
   }
-  ensureSceneCsmShadowRuntime();
   applyFogSettings(snapshot, renderContext?.camera ?? null);
-  applyRendererShadowSetting();
-  syncSceneCsmSunFromEnvironment();
   currentSlowroadsEnvironmentState = {
     season: snapshot.slowroads.season,
     timeOfDay: snapshot.slowroads.timeOfDay,
@@ -23020,6 +22884,8 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
 }
 
 function disposeEnvironmentResources() {
+  sceneSunLightRuntime?.dispose();
+  sceneSunLightRuntime = null;
   pendingEnvironmentSettings = null;
   activeEnvironmentSettings = cloneEnvironmentSettings(DEFAULT_ENVIRONMENT_SETTINGS);
   viewerEnvironmentHasLandscape.value = false;
@@ -24269,7 +24135,6 @@ function teardownRenderer() {
   frameDeltaMode = null;
   controls.dispose();
   disposeEnvironmentResources();
-  disposeSceneCsmShadowRuntime();
   pruneLanternAssets(new Set<string>(), new Set<string>());
   resetAssetResolutionCaches();
   stopInstancedMeshSubscription?.();
@@ -24296,7 +24161,6 @@ function teardownRenderer() {
   activeScenePackageBuildKey = null;
   lastCompiledGroundLoadedChunkVersion = -1;
   compiledGroundForceNextUpdate = true;
-  sceneCsmForceNextUpdate = true;
   overlaySyncForceNextUpdate = true;
 }
 
@@ -24316,7 +24180,6 @@ async function ensureRendererContext(result: UseCanvasResult) {
   activeCameraWatchTween = null;
   frameDeltaMode = null;
   compiledGroundForceNextUpdate = true;
-  sceneCsmForceNextUpdate = true;
   overlaySyncForceNextUpdate = true;
   instancedLodLastProcessedRevision = -1;
   instancedLodLastCameraStateValid = false;
@@ -25152,7 +25015,6 @@ function applyDocumentViewSettings(camera: THREE.PerspectiveCamera): void {
   const height = (canvasResult?.canvas?.height || canvasResult?.canvas?.clientHeight || 1) as number;
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
-  sceneCsmShadowRuntime?.updateFrustums();
   markOverlayRuntimeDirty();
 }
 
@@ -25581,10 +25443,6 @@ function startRenderLoop(
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
         tickInstancedBounds(deltaSeconds);
         viewerFrameProfiler.lap('instancing');
-        if (sceneCsmShadowRuntime && shouldRunSceneCsmShadowUpdate(cameraFrameSnapshot)) {
-            sceneCsmShadowRuntime.update();
-          }
-        viewerFrameProfiler.lap('shadows');
         updateAttachedTerrainTextureStreams(scene, camera);
         viewerFrameProfiler.lap('textures');
         renderer.render(scene, camera);
@@ -25955,7 +25813,6 @@ const handleResize: WindowResizeCallback = (_result: unknown) => {
     renderContext!.renderer.setSize(width, height, false);
     renderContext!.camera.aspect = width / height;
     renderContext!.camera.updateProjectionMatrix();
-    sceneCsmShadowRuntime?.updateFrustums();
     markInstancedCullingDirty();
     markOverlayRuntimeDirty();
   });

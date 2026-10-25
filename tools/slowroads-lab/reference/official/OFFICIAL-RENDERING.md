@@ -32,7 +32,7 @@ lab 侧对应实现：`lab/fogPatch.ts` 的 `resolveFogUniformColorSpace()` /
 | `AmbientLight` | `preset.lights.ambient.col` | `preset.lights.ambient.intensity` | |
 | `HemisphereLight` | sky = `preset.lights.sun.col`；ground = `0x000000` | `preset.lights.ambient.intensity` | |
 
-无 CSM：阴影是跟随载具的单张局部 shadow map。
+无级联阴影：阴影是跟随载具的单张局部 shadow map。
 
 ## 材质（Lambert 家族，无镜面）
 

@@ -6646,7 +6646,7 @@ function cloneNode(node: SceneNode): SceneNode {
 function createDefaultSceneNodes(settings?: GroundSettings, environment?: EnvironmentSettings): SceneNode[] {
   const environmentSettings = environment ? cloneEnvironmentSettings(environment) : DEFAULT_ENVIRONMENT_SETTINGS
   // 环境光完全由 Slow Roads 预设接管（运行时注入 slowroads-ambient-light +
-  // CSM 太阳灯），因此新场景不再默认创建 Ambient/Hemisphere 灯节点，
+  // 统一太阳灯），因此新场景不再默认创建 Ambient/Hemisphere 灯节点，
   // 避免与预设 ambient 叠加拿亮。
   return ensureEnvironmentNode(ensureGroundNode([], settings), environmentSettings)
 }

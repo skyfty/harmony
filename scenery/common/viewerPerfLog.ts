@@ -15,7 +15,6 @@ export const VIEWER_PERF_SECTIONS = [
   'lazy',
   'scatter',
   'instancing',
-  'shadows',
   'textures',
   'render',
 ] as const

@@ -2534,12 +2534,6 @@ function handleClearScatterMenuAction() {
   padding: 0;
 }
 
-.csm-sun-menu {
-  width: 380px;
-  max-width: min(380px, 92vw);
-  padding: 6px;
-}
-
 .viewport-placement-menu {
   width: 356px;
   max-width: min(356px, 92vw);

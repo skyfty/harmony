@@ -802,9 +802,6 @@ packages:
   text-table@0.2.0:
     resolution: {integrity: sha512-N+8UisAXDGk8PFXP4HAzVR9nbfmVJ3zYLAWiTIoqC5v5isinhr+r5uaO8+7r3BMfuNIufIsA7RdpVgacC2cSpw==}
 
-  three-csm@4.2.1:
-    resolution: {integrity: sha512-yHxKNPB2XMUBgWQTIWR0pESXzGYOdID49f2LdTbz+pNJRzBIMMVEJp5JuRSeCU6c75lmL5L4+FXRHQ1tQIgWEg==}
-
   three-mesh-bvh@0.9.15:
     resolution: {integrity: sha512-9xdEDkCzFoT8VPFH9DznwFSdbaIEjMvM106Iqq7TJurrIheUKDcdW4prfJTCxryih4XS/UxWs0H3K4MLMRFyOQ==}
     peerDependencies:
@@ -972,7 +969,6 @@ snapshots:
       robust-predicates: 1.1.0
       splaytree: 3.2.3
       three: 0.186.0
-      three-csm: 4.2.1
       three-mesh-bvh: 0.9.15(three@0.186.0)
       three-nebula: 10.0.3(three@0.186.0)
       three-player-controller: 0.6.2(three-mesh-bvh@0.9.15(three@0.186.0))(three@0.186.0)
@@ -1672,8 +1668,6 @@ snapshots:
       has-flag: 4.0.0
 
   text-table@0.2.0: {}
-
-  three-csm@4.2.1: {}
 
   three-mesh-bvh@0.9.15(three@0.186.0):
     dependencies:

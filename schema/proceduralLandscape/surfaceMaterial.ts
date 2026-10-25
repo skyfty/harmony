@@ -4,7 +4,7 @@ import { recordSlowroadsShaderAudit } from './shaderAudit'
 
 /**
  * Slow Roads 季节地表着色（官方片元栈移植，注入到 GLB 地形的
- * MeshLambertMaterial —— 与官方同材质族，保留 CSM 阴影）。
+ * MeshLambertMaterial —— 与官方同材质族，保留常规阴影）。
  *
  * 片元顺序与 slowroads 一致：草色混合（grassColA/B × peakColA/B，由
  * noise_fine 的 fade 场驱动 light/dark grass 与 grassBlend）→ heather 混合 →
@@ -642,7 +642,7 @@ function installMaterialInjection(
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRESNEL_BODY}`)
       .replace('#include <map_fragment>', FRAGMENT_BODY)
       // 官方环境光树影调制（与官方 lights_fragment_begin_shadow 变体等效，
-      // 放在 lights_fragment_end 之后可保持 CSM 注入的 lights_fragment_begin 不变）。
+      // 放在 lights_fragment_end 之后，避免改动 three 的标准光照片元起点。
       .replace(
         '#include <lights_fragment_end>',
         '#include <lights_fragment_end>\n\treflectedLight.indirectDiffuse *= plAmbientShadow;',

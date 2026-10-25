@@ -40,7 +40,7 @@ import { SLOWROADS_SKY_COLOR } from '../core/environment'
  *   `ambient = AmbientLight(预设 ambient 色, 预设 ambient 强度)`、
  *   `hemisphere = HemisphereLight(sky = 预设 sun 色, ground = 黑, 强度 = 预设
  *   ambient 强度)`；太阳方向固定竖直向下（官方锚定载具上方 10m 的等价物，
- *   三端 CSM `syncSun((0,1000,0))`），曝光缩放统一乘在三盏灯上。
+ *   三端统一太阳光 `sync((0,1000,0))`），曝光缩放统一乘在三盏灯上。
  *   阴影开关只控制投影（castShadow），不再关灯。
  * - 雾：写入共享三色雾 uniform（场景唯一雾；`scene.fog` 恒为 null）。
  *   两套尺度（第五批）：地形/植被/道路/水面/降雪走「场景组」(1000)，
@@ -125,7 +125,7 @@ export interface SlowroadsEnvironmentRuntimeOptions {
   /** 解析雾色 uniform 的输出色空间（官方 `Bs(renderer)`）。 */
   renderer: THREE.WebGLRenderer
   /**
-   * 预设光照下发：宿主把它应用到自己的 CSM 太阳灯与 ambient/hemisphere 灯。
+   * 预设光照下发：宿主把它应用到自己的太阳方向光与 ambient/hemisphere 灯。
    * 颜色实例复用，宿主应当 copy 而非保存引用。
    */
   applyLighting?: (state: SlowroadsLightingState) => void
@@ -146,7 +146,7 @@ export interface SlowroadsEnvironmentRuntimeOptions {
 
 export interface SlowroadsEnvironmentRuntime {
   setSettings(settings: SlowroadsEnvironmentSettings): void
-  /** CSM 太阳灯被外部重建/同步（如阴影配置变化）后，重新下发一次预设光照。 */
+  /** 太阳方向光被外部重建或同步后，重新下发一次预设光照。 */
   refreshLighting(): void
   /** 运行期调整星点目标屏幕直径（物理像素，FXAA 开关切换时用）。 */
   setStarSizeTargetPixels(targetPixels: number): void

@@ -28,7 +28,6 @@ const sceneOptimizerExcludes = [
   'three',
   'three/examples',
   'three-mesh-bvh',
-  'three-csm',
   'polygon-clipping',
   '@msgpack/msgpack',
   'robust-predicates',
@@ -52,7 +51,6 @@ const utilsSrcPath = fileURLToPath(new URL('../utils/src', import.meta.url)).rep
 const appThreeRootPath = fileURLToPath(new URL('./node_modules/three', import.meta.url)).replaceAll('\\', '/');
 const appThreeExamplesPath = fileURLToPath(new URL('./node_modules/three/examples', import.meta.url)).replaceAll('\\', '/');
 const appThreeMeshBvhPath = fileURLToPath(new URL('./node_modules/three-mesh-bvh', import.meta.url)).replaceAll('\\', '/');
-const appThreeCsmPath = fileURLToPath(new URL('./node_modules/three-csm', import.meta.url)).replaceAll('\\', '/');
 const eventTargetShimPath = fileURLToPath(new URL('./node_modules/event-target-shim/index.mjs', import.meta.url)).replaceAll('\\', '/');
 const webStreamsPolyfillPath = fileURLToPath(new URL('./node_modules/web-streams-polyfill/dist/polyfill.mjs', import.meta.url)).replaceAll('\\', '/');
 const schemaMirrorPath = fileURLToPath(new URL('./src/pages/scenery/schema', import.meta.url)).replaceAll('\\', '/');
@@ -60,7 +58,6 @@ const physicsCoreMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics
 const sceneryPhysicsBridgeMirrorPath = fileURLToPath(new URL('./src/pages/scenery/physics-bridge', import.meta.url)).replaceAll('\\', '/');
 const sceneryThreeChunk = 'pages/scenery/chunks/three';
 const sceneryThreeExamplesChunk = 'pages/scenery/chunks/three-examples';
-const sceneryThreeCsmChunk = 'pages/scenery/chunks/three-csm';
 const sceneryThreeAdapterChunk = 'pages/scenery/chunks/three-adapter';
 const _require = createRequire(import.meta.url);
 let vueRuntimeAlias: string;
@@ -104,9 +101,6 @@ function resolveSceneryChunkGroup(normalizedId: string): string | undefined {
   if (normalizedId.includes('/node_modules/three-mesh-bvh/')) {
     return sceneryThreeChunk;
   }
-  if (normalizedId.includes('/node_modules/three-csm/')) {
-    return sceneryThreeCsmChunk;
-  }
   if (normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')) {
     return sceneryThreeAdapterChunk;
   }
@@ -136,7 +130,6 @@ function resolveManualChunk(id: string): string | undefined {
       || normalizedId.includes('@msgpack/msgpack')
       || normalizedId.includes('robust-predicates')
       || normalizedId.includes('splaytree')
-      || normalizedId.includes('three-csm')
       || normalizedId.includes('fflate')
       || normalizedId.includes('@minisheep/three-platform-adapter')
       || normalizedId.includes('physics-ammo/vendor')
@@ -155,7 +148,6 @@ function resolveManualChunk(id: string): string | undefined {
       if (
         normalizedId.includes('three/examples/jsm')
         || normalizedId.includes('three-mesh-bvh')
-        || normalizedId.includes('three-csm')
         || isThreePlatformAdapterDep(normalizedId)
         || normalizedId.includes('three')
         || (enableSceneryCannonDebugger && normalizedId.includes('@vladkrutenyuk/cannon-es-debugger-pro'))
@@ -191,7 +183,6 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three/')
     || normalizedId.includes('/node_modules/three/examples/jsm/')
     || normalizedId.includes('/node_modules/three-mesh-bvh/')
-    || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/@minisheep/three-platform-adapter/')
   ) {
     return normalizedId.includes('/src/pages/scenery/three-platform-adapter/')
@@ -219,7 +210,6 @@ function resolveManualChunk(id: string): string | undefined {
     || normalizedId.includes('/node_modules/three/')
     || normalizedId.includes('/node_modules/three/examples/jsm/')
     || normalizedId.includes('/node_modules/three-mesh-bvh/')
-    || normalizedId.includes('/node_modules/three-csm/')
     || normalizedId.includes('/node_modules/polygon-clipping/')
     || normalizedId.includes('/node_modules/@msgpack/msgpack/')
     || normalizedId.includes('/node_modules/robust-predicates/')
@@ -282,7 +272,6 @@ export default defineConfig({
       'three',
       'three/examples/jsm',
       'three-mesh-bvh',
-      'three-csm',
       '@minisheep/three-platform-adapter',
     ],
     alias: [
@@ -311,7 +300,6 @@ export default defineConfig({
             { find: /^three\/examples(\/.*)?$/, replacement: `${appThreeExamplesPath}$1` },
             { find: /^three\/addons(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
             { find: /^three-mesh-bvh(\/.*)?$/, replacement: `${appThreeMeshBvhPath}$1` },
-            { find: /^three-csm(\/.*)?$/, replacement: `${appThreeCsmPath}$1` },
             { find: /^three$/, replacement: appThreeRootPath },
           ]
         : [
@@ -334,7 +322,6 @@ export default defineConfig({
             { find: /^three\/examples(\/.*)?$/, replacement: `${appThreeExamplesPath}$1` },
             { find: /^three\/addons(\/.*)?$/, replacement: `${appThreeExamplesPath}/jsm$1` },
             { find: /^three-mesh-bvh(\/.*)?$/, replacement: `${appThreeMeshBvhPath}$1` },
-            { find: /^three-csm(\/.*)?$/, replacement: `${appThreeCsmPath}$1` },
             { find: /^three$/, replacement: appThreeRootPath },
           ]),
       { find: '@harmony/scenery-storage', replacement: fileURLToPath(new URL('./src/pages/scenery/runtime/sceneStorageProxy.ts', import.meta.url)) },
@@ -401,9 +388,6 @@ export default defineConfig({
         ],
         'pages/scenery/chunks/three-examples': [
           '**/three/examples/jsm/**',
-        ],
-        'pages/scenery/chunks/three-csm': [
-          '**/three-csm/**',
         ],
         'pages/scenery/chunks/three-adapter': [
           '**/pages/scenery/three-platform-adapter/**',

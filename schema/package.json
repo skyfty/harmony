@@ -77,7 +77,6 @@
     "robust-predicates": "^1.0.3",
     "splaytree": "^3.2.3",
     "three": "^0.186.0",
-    "three-csm": "^4.2.1",
     "three-mesh-bvh": "^0.9.15",
     "three-nebula": "^10.0.3",
     "three-player-controller": "0.6.2",

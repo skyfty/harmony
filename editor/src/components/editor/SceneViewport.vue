@@ -103,11 +103,9 @@ import {
   resolveGroundWorldBounds,
 } from '@schema/core'
 import {
-  createSceneCsmShadowRuntime,
-  DEFAULT_SCENE_CSM_CONFIG,
-  type SceneCsmConfig,
-  type SceneCsmShadowRuntime,
-} from '@schema/sceneCsm'
+  createSceneSunLightRuntime,
+  type SceneSunLightRuntime,
+} from '@schema/sceneSunLight'
 import {
   applyMaterialOverrides,
   applyMaterialConfigToMaterial,
@@ -1237,19 +1235,8 @@ function resolveGroundTextureSource(assetId: string): string | null {
   return candidate
 }
 
-const VIEWPORT_SCENE_CSM_BASE_CONFIG: SceneCsmConfig = {
-  ...DEFAULT_SCENE_CSM_CONFIG,
-}
-let sceneCsmShadowRuntime: SceneCsmShadowRuntime | null = null
-let sceneCsmRuntimeConfigKey = ''
-
-/**
- * 阴影质量参数固定为默认配置（不再有 CSM 用户设置）；太阳方向固定为官方
- * 竖直向下（场景原点正上方 1000m），颜色/强度由 Slow Roads 预设下发。
- */
-function resolveViewportSceneCsmConfig(): SceneCsmConfig {
-  return { ...VIEWPORT_SCENE_CSM_BASE_CONFIG }
-}
+let sceneSunLightRuntime: SceneSunLightRuntime | null = null
+const VIEWPORT_SUN_POSITION = new THREE.Vector3(0, 1000, 0)
 
 /**
  * 星点目标屏幕直径（物理像素）：编辑器视口默认开 FXAA，官方级别的亚像素星点
@@ -1261,47 +1248,21 @@ function resolveSlowroadsStarTargetPixels(): number {
   return environmentSettings.value.viewportPerformanceMode ? 1.0 : 1.6
 }
 
-function buildSceneCsmConfigKey(config: SceneCsmConfig): string {
-  return JSON.stringify({
-    enabled: config.enabled ?? true,
-    shadowEnabled: config.shadowEnabled ?? DEFAULT_SCENE_CSM_CONFIG.shadowEnabled,
-    cascades: config.cascades ?? DEFAULT_SCENE_CSM_CONFIG.cascades,
-    maxFar: config.maxFar ?? DEFAULT_SCENE_CSM_CONFIG.maxFar,
-    shadowMapSize: config.shadowMapSize ?? DEFAULT_SCENE_CSM_CONFIG.shadowMapSize,
-    shadowBias: config.shadowBias ?? DEFAULT_SCENE_CSM_CONFIG.shadowBias,
-    lightMargin: config.lightMargin ?? DEFAULT_SCENE_CSM_CONFIG.lightMargin,
-  })
-}
-
-function ensureSceneCsmShadowRuntime(): SceneCsmShadowRuntime | null {
-  // CSM 运行时在三端常驻：阴影开关只控制投影，不再销毁太阳灯
-  // （与官方一致；否则关阴影档整片景观只剩环境光而发暗）。
-  if (!scene || !camera) {
-    if (sceneCsmShadowRuntime) {
-      disposeSceneCsmShadowRuntime()
-    }
+function ensureSceneSunLightRuntime(): SceneSunLightRuntime | null {
+  if (!scene) {
+    disposeSceneSunLightRuntime()
     return null
   }
-  const config = resolveViewportSceneCsmConfig()
-  const configKey = buildSceneCsmConfigKey(config)
-  if (sceneCsmShadowRuntime && sceneCsmRuntimeConfigKey !== configKey) {
-    disposeSceneCsmShadowRuntime()
+  if (!sceneSunLightRuntime) {
+    sceneSunLightRuntime = createSceneSunLightRuntime(scene)
+    syncSceneSunPosition()
   }
-  if (!sceneCsmShadowRuntime) {
-    sceneCsmShadowRuntime = createSceneCsmShadowRuntime(scene, camera, config)
-    sceneCsmRuntimeConfigKey = configKey
-    sceneCsmShadowRuntime.registerObject(rootGroup)
-    sceneCsmShadowRuntime.registerObject(instancedMeshGroup)
-  }
-  sceneCsmShadowRuntime.setActive(shadowsActiveInViewport.value)
-  syncSceneCsmSunPosition()
-  return sceneCsmShadowRuntime
+  return sceneSunLightRuntime
 }
 
-function disposeSceneCsmShadowRuntime(): void {
-  sceneCsmShadowRuntime?.dispose()
-  sceneCsmShadowRuntime = null
-  sceneCsmRuntimeConfigKey = ''
+function disposeSceneSunLightRuntime(): void {
+  sceneSunLightRuntime?.dispose()
+  sceneSunLightRuntime = null
 }
 
 /** 编辑器辅助材质不参与渲染器色调映射（Cineon 只作用于场景内容与景观）。 */
@@ -1318,24 +1279,8 @@ function markHelperMaterialsUntoned(root: THREE.Object3D | null | undefined): vo
   })
 }
 
-/** 太阳定位：官方为「竖直向下 + 锚定载具」；编辑器以场景原点正上方 1000m
- *  表示竖直方向（CSM 级联跟随相机），颜色/强度由 SR 预设下发。 */
-function syncSceneCsmSunPosition(): void {
-  if (!sceneCsmShadowRuntime) {
-    return
-  }
-  const sunPosition = new THREE.Vector3(0, 1000, 0)
-  sceneCsmShadowRuntime.syncSun(
-    sunPosition,
-    DEFAULT_SCENE_CSM_CONFIG.lightIntensity,
-    String(DEFAULT_SCENE_CSM_CONFIG.lightColor ?? '#ffffff'),
-  )
-  // Slow Roads 预设接管光色/强度：CSM 同步后重新下发一次。
-  slowroadsEnvironment?.refreshLighting()
-}
-
-function refreshSceneCsmFrustums(): void {
-  sceneCsmShadowRuntime?.updateFrustums()
+function syncSceneSunPosition(color = '#ffffff', intensity = 3): void {
+  sceneSunLightRuntime?.sync(VIEWPORT_SUN_POSITION, intensity, color)
 }
 
 // Building label font/meshes (planning-conversion buildings)
@@ -1688,10 +1633,7 @@ function applyRendererShadowSetting() {
   }
   const castShadows = Boolean(shadowsActiveInViewport.value)
   renderer.shadowMap.enabled = castShadows
-  // 太阳灯常驻（阴影开关只控制投影）：关阴影时仍保留官方预设光照。
-  const runtime = ensureSceneCsmShadowRuntime()
-  runtime?.setActive(castShadows)
-  syncSceneCsmSunPosition()
+  ensureSceneSunLightRuntime()
 }
 
 function resetEffectRuntimeTickers(): void {
@@ -11494,7 +11436,6 @@ const {
 
 function attachInstancedMesh(mesh: THREE.InstancedMesh): void {
   attachInstancedMeshBase(mesh)
-  sceneCsmShadowRuntime?.registerObject(mesh)
 }
 
 const instancedCullingFrustum = new THREE.Frustum()
@@ -15085,7 +15026,6 @@ function resetCameraView() {
   isApplyingCameraState = true
   camera.fov = DEFAULT_PERSPECTIVE_FOV
   camera.updateProjectionMatrix()
-  refreshSceneCsmFrustums()
 
   mapControls.setLookAt(position, target, false)
   applyViewportCompositionOffset(true)
@@ -15164,7 +15104,6 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
     }
     perspectiveCamera.fov = state.fov
     perspectiveCamera.updateProjectionMatrix()
-    refreshSceneCsmFrustums()
   }
 
   if (!camera) return
@@ -15179,7 +15118,6 @@ function applyCameraState(state: SceneCameraState | null | undefined) {
   if (camera instanceof THREE.PerspectiveCamera) {
     camera.fov = state.fov
     camera.updateProjectionMatrix()
-    refreshSceneCsmFrustums()
   }
 
   mapControls.setLookAt(
@@ -15315,7 +15253,6 @@ function syncCameraClipPlanes(params: { target: THREE.Vector3; radiusHint?: numb
       camera.near = near
       camera.far = far
       camera.updateProjectionMatrix()
-      refreshSceneCsmFrustums()
     }
   }
 }
@@ -15334,7 +15271,6 @@ function syncCameraFarToSceneFog(): void {
   }
   camera.far = far
   camera.updateProjectionMatrix()
-  refreshSceneCsmFrustums()
 }
 
 function syncControlsConstraintsAndSpeeds() {
@@ -15902,7 +15838,6 @@ function handleResetCameraStatusZoomClick() {
   isApplyingCameraState = true
   camera.fov = DEFAULT_PERSPECTIVE_FOV
   camera.updateProjectionMatrix()
-  refreshSceneCsmFrustums()
   mapControls.setLookAt(newPosition, target, false)
   applyViewportCompositionOffset(true)
   lastCameraFocusRadius = Math.max(0.25, defaultCameraStatusDistance / 10)
@@ -16330,7 +16265,7 @@ function initScene() {
     viewPointPreviewRenderer.toneMappingExposure = 1
     syncViewPointPreviewRendererSize()
   }
-  ensureSceneCsmShadowRuntime()
+  ensureSceneSunLightRuntime()
 
   applyCameraControlMode()
   updateCameraStatusDistance()
@@ -16384,7 +16319,6 @@ function initScene() {
     if (perspectiveCamera) {
       perspectiveCamera.aspect = h === 0 ? 1 : w / h
       perspectiveCamera.updateProjectionMatrix()
-      refreshSceneCsmFrustums()
     }
     ;(mapControls as any)?.handleResize?.()
     gizmoControls?.update()
@@ -16458,11 +16392,12 @@ function ensureSlowroadsEnvironmentRuntime(): void {
       slowroadsHemisphereLight.color.copy(state.hemiColor)
       slowroadsHemisphereLight.groundColor.setRGB(0, 0, 0)
       slowroadsHemisphereLight.intensity = state.hemiIntensity
-      if (sceneCsmShadowRuntime) {
-        // 官方太阳竖直向下（锚定载具的等价物 = 场景原点正上方）；颜色/强度取预设。
-        const sunPosition = new THREE.Vector3(0, 1000, 0)
-        sceneCsmShadowRuntime.syncSun(sunPosition, state.sunIntensity, `#${state.sunColor.getHexString()}`)
-      }
+      // Keep preset sunlight without shadow-map rendering.
+      ensureSceneSunLightRuntime()?.sync(
+        VIEWPORT_SUN_POSITION,
+        state.sunIntensity,
+        `#${state.sunColor.getHexString()}`,
+      )
     },
   })
   slowroadsEnvironment.setSettings(environmentSettings.value.slowroads)
@@ -16479,8 +16414,7 @@ async function applyEnvironmentSettingsToScene(settings: EnvironmentSettings) {
   // 标准雾不参与渲染：SR 三色雾是场景唯一雾系统，且始终生效。
   scene.fog = null
   applyRendererShadowSetting()
-  syncSceneCsmSunPosition()
-  // SR 环境最后应用：预设光照覆盖 CSM 同步结果（预设接管光色/强度）。
+  // SR 环境最后应用：由预设接管太阳方向、颜色和强度。
   slowroadsEnvironment?.setSettings(snapshot.slowroads)
   pendingEnvironmentSettings = null
 }
@@ -16722,7 +16656,6 @@ function animate() {
   }
   // debug bounds update removed
   refreshCameraHudIfNeeded()
-  sceneCsmShadowRuntime?.update()
   const shouldUpdateTerrainTextureStreams = !cameraInteractionActive
     || now - lastInteractionTerrainTextureUpdateAt >= CAMERA_INTERACTION_MAINTENANCE_INTERVAL_MS
   if (shouldUpdateTerrainTextureStreams) {
@@ -16785,7 +16718,7 @@ function disposeScene() {
 
   clearLightHelpers()
   disposeSkyResources()
-  disposeSceneCsmShadowRuntime()
+  disposeSceneSunLightRuntime()
   if (viewPointCameraHelper) {
     viewPointCameraHelper.removeFromParent()
     viewPointCameraHelper.geometry?.dispose?.()
@@ -25462,8 +25395,6 @@ function syncSceneGraph() {
   terrainGridController.refresh()
   refreshEffectRuntimeTickers()
   updateSelectionHighlights()
-  sceneCsmShadowRuntime?.registerObject(rootGroup)
-  sceneCsmShadowRuntime?.registerObject(instancedMeshGroup)
 }
 
 function disposeSceneNodes() {
@@ -26196,7 +26127,6 @@ function createObjectFromNode(node: SceneNode): THREE.Object3D {
 
   syncInstancedTransform(object)
 
-  sceneCsmShadowRuntime?.registerObject(object)
 
   return object
 }

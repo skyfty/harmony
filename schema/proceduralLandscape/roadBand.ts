@@ -23,7 +23,7 @@ import { markProceduralLandscapeRoadSurface } from './collisionMetadata'
  *   树影由森林密度场在道路两缘采样烘焙；
  * - 官方路面掠射边缘光（ef chunk）：与地表同款 fresnel，但无 blendVal / uv 偏置；
  * - alphaTest 0.75（官方参数），粗糙边缘由底图 alpha 裁切；材质用
- *   MeshStandardMaterial（真实光照/CSM 阴影）+ 共享三色雾。
+ *   MeshStandardMaterial（真实光照/常规阴影）+ 共享三色雾。
  */
 
 export interface RoadBandTextures {

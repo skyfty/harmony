@@ -15,7 +15,7 @@ import { recordSlowroadsShaderAudit } from './shaderAudit'
  *    下沉 0.2m，贴地取**路面高度**。
  *
  * 材质沿用编辑器侧口径：MeshLambertMaterial + 官方自发光/树影注入（同 roadBand.ts），
- * 因此跟随编辑器的真实光照、CSM 阴影与三色雾。
+ * 因此跟随编辑器的真实方向光、常规阴影与三色雾。
  */
 
 export interface WallLayerTextures {

@@ -7,7 +7,7 @@ import { recordSlowroadsShaderAudit } from './shaderAudit'
 
 /**
  * slowroads 风格精灵植被（交叉面片 + 每实例图集区域 + 季节调色板），
- * 注入 MeshLambertMaterial（官方同材质族；无镜面），光照/CSM 走 three 管线，
+ * 注入 MeshLambertMaterial（官方同材质族；无镜面），光照/阴影走 three 管线，
  * 雾走共享三色雾。
  *
  * 与 slowroads-lab 逐项对齐（第一/二/三/六批）：

@@ -48,7 +48,7 @@
   `setSlowroadsSceneViewDistanceScale()`（雾/视距尺度倍率）。
 - `core/environment`：新增 `ENVIRONMENT_SKY_DISTANCE`、`resolveSkyFogParams`、
   `resolveFogDepthBlend`、`SLOWROADS_SKY_COLOR(=0xc9dcee)`；删除 `SLOWROADS_SUN_*`
-  （三端 CSM 太阳统一 `syncSun((0,1000,0))`）。
+  （三端统一使用 `(0,1000,0)` 的非投影方向光）。
 - `ProceduralLandscapeComponentProps` 新结构（默认值取 lab `DEFAULT_LAB_SETTINGS`）：
   `surface{enabled, textures, blendStrength, uvScale, baseMapMode, baseMapBlend, viewDistanceScale}`、
   `forest{..., nearDistance:190, nearTreeRadius:90, minScale:5, maxScale:12}`、

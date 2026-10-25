@@ -119,7 +119,7 @@ export function renderSummary(input: {
     `<div class="kv-list">
       ${row('环境光', `${input.stage.ambientColor} @ ${input.stage.ambientIntensity}`)}
       ${row('方向光', `${input.stage.sunColor} @ ${input.stage.sunIntensity}（方位 ${input.stage.sunAzimuthDeg}° / 仰角 ${input.stage.sunElevationDeg}°）`)}
-      ${row('阴影', input.stage.shadows ? '开启（PCFSoft，近似 CSM）' : '关闭')}
+      ${row('阴影', input.stage.shadows ? '开启（PCFSoft）' : '关闭')}
       ${row('背景', `${input.stage.background} · ${input.stage.backgroundColor}`)}
       ${row('环境强度 / 曝光', `${input.stage.environmentIntensity} / ${input.stage.exposure}`)}
       ${row('色调映射', input.stage.toneMapping)}

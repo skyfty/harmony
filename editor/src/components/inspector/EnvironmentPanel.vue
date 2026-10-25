@@ -3,7 +3,7 @@
  * 环境面板（收敛后）：环境只由 Slow Roads 预设驱动。
  * - Slow Roads 环境：季节 / 时间 / 天气 + 云层 / 星空 / 降雪开关 + 曝光缩放
  * - 其余：阴影总开关、视口性能模式、北向、物理参数（与应用环境无关）
- * 已移除 Background（纯色/渐变/HDRI/SkyCube）与阳光(CSM)设置，避免参数冲突。
+ * 已移除 Background（纯色/渐变/HDRI/SkyCube）与独立阳光参数，避免参数冲突。
  */
 import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
