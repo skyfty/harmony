@@ -17,6 +17,22 @@ export type GuideRouteBehaviorRef = {
   sequenceId: string
 }
 
+export type GuideRoutePathAnchor = Vector3Like & {
+  /** Stable identity used by stops and editor handles. */
+  id?: string
+}
+
+export type GuideRouteRoadOrigin = {
+  kind: 'procedural-landscape-road'
+  providerNodeId: string
+  sourceRevision: number
+}
+
+export type GuideRouteBranchOrigin = {
+  routeNodeId: string
+  stopId: string
+}
+
 type GuideRouteLegBase = {
   id: string
   travelMode: GuideRouteTravelMode
@@ -37,7 +53,7 @@ export type GuideRoadRouteLeg = GuideRouteLegBase & {
 export type GuidePathRouteLeg = GuideRouteLegBase & {
   kind: 'path'
   surfaceProviderNodeId: string | null
-  anchors: Vector3Like[]
+  anchors: GuideRoutePathAnchor[]
   preserveAuthoredY: boolean
 }
 
@@ -50,6 +66,8 @@ export type GuideRouteStop = {
   anchor: Vector3Like
   legId: string
   behavior: GuideRouteBehaviorRef | null
+  /** Links a stop on an authored path to one of that leg's control anchors. */
+  controlAnchorId?: string | null
 }
 
 export type GuideRouteTransition = {
@@ -64,6 +82,10 @@ export interface GuideRouteComponentProps {
   legs: GuideRouteLeg[]
   stops: GuideRouteStop[]
   transitions: GuideRouteTransition[]
+  /** Set for routes maintained automatically from a procedural landscape road. */
+  origin: GuideRouteRoadOrigin | null
+  /** Set when this route was branched from a stop on another route. */
+  branchOrigin: GuideRouteBranchOrigin | null
 }
 
 export const DEFAULT_GUIDE_ROUTE_CRUISE_SPEED_MPS = 40 / 3.6
@@ -137,6 +159,15 @@ function normalizeLegId(value: unknown, index: number): string {
   return normalizeOptionalNodeId(value) ?? `leg-${index + 1}`
 }
 
+function normalizePathAnchor(value: unknown, index: number): GuideRoutePathAnchor {
+  const vector = clampGuideRouteVector3(value)
+  const id = normalizeOptionalNodeId((value as Partial<GuideRoutePathAnchor> | null | undefined)?.id)
+  return {
+    ...vector,
+    id: id ?? `anchor-${index + 1}`,
+  }
+}
+
 function clampGuideRouteLeg(value: unknown, index: number): GuideRouteLeg | null {
   const candidate = value as (Partial<GuideRoadRouteLeg> & Partial<GuidePathRouteLeg>) | null | undefined
   if (!candidate || typeof candidate !== 'object') {
@@ -174,7 +205,7 @@ function clampGuideRouteLeg(value: unknown, index: number): GuideRouteLeg | null
     }
   }
   const rawAnchors = Array.isArray(candidate.anchors) ? candidate.anchors : []
-  const anchors = rawAnchors.map((anchor) => clampGuideRouteVector3(anchor))
+  const anchors = rawAnchors.map((anchor, anchorIndex) => normalizePathAnchor(anchor, anchorIndex))
   return {
     ...base,
     kind: 'path',
@@ -184,25 +215,45 @@ function clampGuideRouteLeg(value: unknown, index: number): GuideRouteLeg | null
   }
 }
 
-function normalizeStop(value: unknown, index: number, legIds: Set<string>): GuideRouteStop | null {
+function normalizeStop(
+  value: unknown,
+  index: number,
+  legsById: Map<string, GuideRouteLeg>,
+): GuideRouteStop | null {
   const candidate = value as Partial<GuideRouteStop> | null | undefined
   if (!candidate || typeof candidate !== 'object') {
     return null
   }
   const legId = normalizeOptionalNodeId(candidate.legId)
-  if (!legId || !legIds.has(legId)) {
+  const leg = legId ? legsById.get(legId) ?? null : null
+  if (!legId || !leg) {
     return null
   }
   const name = typeof candidate.name === 'string' && candidate.name.trim()
     ? candidate.name.trim()
     : `Stop ${index + 1}`
+  const anchor = clampGuideRouteVector3(candidate.anchor)
+  const requestedControlAnchorId = normalizeOptionalNodeId(candidate.controlAnchorId)
+  const controlAnchorId = leg.kind === 'path'
+    ? (
+        requestedControlAnchorId
+        && leg.anchors.some((entry) => entry.id === requestedControlAnchorId)
+          ? requestedControlAnchorId
+          : leg.anchors.find((entry) => (
+              Math.abs(entry.x - anchor.x) <= 1e-4
+              && Math.abs(entry.y - anchor.y) <= 1e-4
+              && Math.abs(entry.z - anchor.z) <= 1e-4
+            ))?.id ?? null
+      )
+    : null
   return {
     id: normalizeOptionalNodeId(candidate.id) ?? `stop-${index + 1}`,
     name,
     thumbnailAssetId: normalizeOptionalAssetId(candidate.thumbnailAssetId),
-    anchor: clampGuideRouteVector3(candidate.anchor),
+    anchor,
     legId,
     behavior: normalizeBehaviorRef(candidate.behavior),
+    controlAnchorId,
   }
 }
 
@@ -231,10 +282,11 @@ export function clampGuideRouteComponentProps(
   const legs = rawLegs
     .map((leg, index) => clampGuideRouteLeg(leg, index))
     .filter((leg): leg is GuideRouteLeg => leg !== null)
-  const legIds = new Set(legs.map((leg) => leg.id))
+  const legsById = new Map(legs.map((leg) => [leg.id, leg]))
+  const legIds = new Set(legsById.keys())
   const rawStops = Array.isArray(props?.stops) ? props.stops : []
   const stops = rawStops
-    .map((stop, index) => normalizeStop(stop, index, legIds))
+    .map((stop, index) => normalizeStop(stop, index, legsById))
     .filter((stop): stop is GuideRouteStop => stop !== null)
   const rawTransitions = Array.isArray(props?.transitions) ? props.transitions : []
   const transitions = rawTransitions
@@ -246,6 +298,8 @@ export function clampGuideRouteComponentProps(
     legs,
     stops,
     transitions,
+    origin: normalizeRoadOrigin(props?.origin),
+    branchOrigin: normalizeBranchOrigin(props?.branchOrigin),
   }
 }
 
@@ -271,11 +325,14 @@ export function cloneGuideRouteComponentProps(
       ...stop,
       anchor: { ...stop.anchor },
       behavior: stop.behavior ? { ...stop.behavior } : null,
+      controlAnchorId: stop.controlAnchorId ?? null,
     })),
     transitions: props.transitions.map((transition) => ({
       ...transition,
       behavior: { ...transition.behavior },
     })),
+    origin: props.origin ? { ...props.origin } : null,
+    branchOrigin: props.branchOrigin ? { ...props.branchOrigin } : null,
   }
 }
 
@@ -296,7 +353,9 @@ export function createGuideRoadRouteLeg(
 }
 
 export function createGuidePathRouteLeg(
-  overrides: Partial<GuidePathRouteLeg> = {},
+  overrides: Partial<Omit<GuidePathRouteLeg, 'anchors'>> & {
+    anchors?: GuideRoutePathAnchor[]
+  } = {},
 ): GuidePathRouteLeg {
   return clampGuideRouteLeg({
     kind: 'path',
@@ -307,6 +366,29 @@ export function createGuidePathRouteLeg(
     anchors: overrides.anchors ?? [],
     preserveAuthoredY: overrides.preserveAuthoredY ?? true,
   }, 0) as GuidePathRouteLeg
+}
+
+function normalizeRoadOrigin(value: unknown): GuideRouteRoadOrigin | null {
+  const candidate = value as Partial<GuideRouteRoadOrigin> | null | undefined
+  if (candidate?.kind !== 'procedural-landscape-road') {
+    return null
+  }
+  const providerNodeId = normalizeOptionalNodeId(candidate.providerNodeId)
+  if (!providerNodeId) {
+    return null
+  }
+  return {
+    kind: 'procedural-landscape-road',
+    providerNodeId,
+    sourceRevision: Math.max(0, Math.round(Number(candidate.sourceRevision) || 0)),
+  }
+}
+
+function normalizeBranchOrigin(value: unknown): GuideRouteBranchOrigin | null {
+  const candidate = value as Partial<GuideRouteBranchOrigin> | null | undefined
+  const routeNodeId = normalizeOptionalNodeId(candidate?.routeNodeId)
+  const stopId = normalizeOptionalNodeId(candidate?.stopId)
+  return routeNodeId && stopId ? { routeNodeId, stopId } : null
 }
 
 class GuideRouteComponent extends Component<GuideRouteComponentProps> {

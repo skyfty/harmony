@@ -427,9 +427,18 @@ import {
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/motion'
 import type { GuideRouteTourTargetOptions } from '@schema/guideRouteTourTarget'
 import {
+  collectGuideRouteDestinations,
+  type GuideRouteDestination,
+} from '@schema/guideRouteDestinations'
+import {
+  selectNearestGuideRouteActorNodeId,
+  type GuideRouteActorCandidate,
+} from '@schema/guideRouteActorSelection'
+import {
 	ensureSceneActorAutoTourComponents,
 	findFirstSceneActorNode,
 	resolveAutoTourActorNodeId,
+	resolveSceneActorKind,
 	transferSceneActorAutoTourComponent,
 } from '@schema/sceneActorAutoTour'
 import {
@@ -2073,10 +2082,7 @@ const autoTourPausedIsTerminal = ref(false)
 const autoTourPausedNodeId = ref<string | null>(null)
 
 const autoTourFollowNodeId = ref<string | null>(null)
-type GuideWaypointMenuItem = {
-	index: number
-	name: string
-	thumbnailAssetId: string
+type GuideWaypointMenuItem = GuideRouteDestination & {
 	imageUrl: string | null
 	loading: boolean
 	error: string | null
@@ -2095,7 +2101,7 @@ const guideWaypointMenuRouteNodeId = computed<string | null>(() => {
 	return actor?.props?.routeNodeId?.trim() || null
 })
 const guideWaypointMenuVisible = computed(() => (
-	Boolean(guideWaypointMenuRouteNodeId.value)
+	Boolean(guideWaypointMenuActorNodeId.value)
 	&& guideWaypointMenuItems.value.length > 0
 ))
 const autoTourCameraFollowState = createCameraFollowState()
@@ -4501,6 +4507,7 @@ function resolveCurrentGuideWaypointActorNodeId(): string | null {
 let guideWaypointMenuRefreshRevision = 0
 let guideWaypointMenuRefreshSignature = ''
 const guideWaypointThumbnailUrlCache = new Map<string, Promise<string | null>>()
+const guideWaypointRouteOverrideByNodeId = new Map<string, string>()
 
 async function resolveGuideWaypointThumbnailUrl(assetId: string): Promise<string | null> {
 	const normalizedAssetId = assetId.trim().replace(/^asset:\/\//i, '')
@@ -4563,40 +4570,24 @@ function closeGuideWaypointMenu(): void {
 
 async function refreshGuideWaypointMenuDestinations(force = false): Promise<void> {
 	const actorNodeId = guideWaypointMenuActorNodeId.value
-	const routeNodeId = guideWaypointMenuRouteNodeId.value
-	const signature = `${actorNodeId ?? ''}|${routeNodeId ?? ''}|${currentDocument?.updatedAt ?? ''}`
+	const signature = `${actorNodeId ?? ''}|${currentDocument?.updatedAt ?? ''}|${previewNodeMap.size}`
 	if (!force && signature === guideWaypointMenuRefreshSignature) {
 		return
 	}
 	guideWaypointMenuRefreshSignature = signature
 	const revision = ++guideWaypointMenuRefreshRevision
 	closeGuideWaypointMenu()
-	const routeNode = routeNodeId ? resolveNodeById(routeNodeId) : null
-	if (!routeNode) {
+	if (!actorNodeId) {
 		guideWaypointMenuItems.value = []
 		guideWaypointMenuLoading.value = false
 		return
 	}
-	const props = clampGuideRouteComponentProps(
-		(routeNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props ?? null) as
-			| Partial<GuideRouteComponentProps>
-			| null,
-	)
-	const items = props.stops.flatMap((stop, index) => {
-		const thumbnailAssetId = typeof stop.thumbnailAssetId === 'string'
-			? stop.thumbnailAssetId.trim()
-			: ''
-		return thumbnailAssetId
-			? [{
-				index,
-				name: stop.name.trim() || `Stop ${index + 1}`,
-				thumbnailAssetId,
-				imageUrl: null,
-				loading: true,
-				error: null,
-			} satisfies GuideWaypointMenuItem]
-			: []
-	})
+	const items = collectGuideRouteDestinations(previewNodeMap.values()).map((destination) => ({
+		...destination,
+		imageUrl: null,
+		loading: true,
+		error: null,
+	})) satisfies GuideWaypointMenuItem[]
 	guideWaypointMenuItems.value = items
 	if (!items.length) {
 		guideWaypointMenuLoading.value = false
@@ -4640,7 +4631,13 @@ function toggleGuideWaypointMenu(): void {
 }
 
 function isGuideWaypointMenuItemDisabled(item: GuideWaypointMenuItem): boolean {
-	return item.loading || !item.imageUrl || Boolean(item.error) || vehicleDrivePromptBusy.value
+	return (
+		item.loading
+		|| !item.imageUrl
+		|| Boolean(item.error)
+		|| vehicleDrivePromptBusy.value
+		|| !resolveGuideWaypointActorForDestination(item.travelMode)
+	)
 }
 
 function handleGuideWaypointSelect(item: GuideWaypointMenuItem): void {
@@ -4648,15 +4645,69 @@ function handleGuideWaypointSelect(item: GuideWaypointMenuItem): void {
 	if (isGuideWaypointMenuItemDisabled(item)) {
 		return
 	}
-	void handleGuideWaypointAutoTourStart(item.index)
+	void handleGuideWaypointAutoTourStart(item)
 }
 
 function handleGuideWaypointImageError(item: GuideWaypointMenuItem): void {
 	guideWaypointMenuItems.value = guideWaypointMenuItems.value.map((entry) => (
-		entry.index === item.index
+		entry.routeNodeId === item.routeNodeId && entry.stopId === item.stopId
 			? { ...entry, imageUrl: null, loading: false, error: '缩略图加载失败' }
 			: entry
 	))
+}
+
+function resolveGuideWaypointActorForDestination(
+	travelMode: GuideRouteDestination['travelMode'],
+): string | null {
+	const currentActorId = guideWaypointMenuActorNodeId.value
+	const referenceObject = currentActorId ? nodeObjectMap.get(currentActorId) ?? null : null
+	const referencePosition = referenceObject
+		? referenceObject.getWorldPosition(new THREE.Vector3())
+		: camera?.position.clone() ?? new THREE.Vector3()
+	const candidates: GuideRouteActorCandidate[] = []
+	for (const node of previewNodeMap.values()) {
+		const kind = resolveSceneActorKind(node)
+		if (
+			!kind
+			|| !resolveAutoTourComponent(node)
+			|| !nodeObjectMap.has(node.id)
+		) {
+			continue
+		}
+		const object = nodeObjectMap.get(node.id)
+		const position = object?.getWorldPosition(new THREE.Vector3())
+		if (position) {
+			candidates.push({
+				nodeId: node.id,
+				kind,
+				position: { x: position.x, y: position.y, z: position.z },
+			})
+		}
+	}
+	return selectNearestGuideRouteActorNodeId({
+		candidates,
+		requiredKind: travelMode,
+		preferredNodeId: currentActorId,
+		referencePosition: {
+			x: referencePosition.x,
+			y: referencePosition.y,
+			z: referencePosition.z,
+		},
+	})
+}
+
+function guideWaypointTravelModeLabel(item: GuideWaypointMenuItem): string {
+	const currentActorId = guideWaypointMenuActorNodeId.value
+	const targetActorId = resolveGuideWaypointActorForDestination(item.travelMode)
+	if (!targetActorId) {
+		return '没有兼容的 Auto Tour 载体'
+	}
+	const targetNode = resolveNodeById(targetActorId)
+	const targetLabel = targetNode?.name?.trim() || targetActorId
+	if (targetActorId === currentActorId) {
+		return `${item.routeName} · 点击前往`
+	}
+	return `${item.routeName} · 将切换到 ${targetLabel}`
 }
 
 function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): {
@@ -4701,10 +4752,12 @@ function resolveAutoTourGuideRouteWorldWaypoints(routeNodeId: string): {
 function resolveAutoTourCameraRouteData(nodeId: string): AutoTourCameraRouteData | null {
 	const node = resolveNodeById(nodeId)
 	const autoTour = resolveAutoTourComponent(node)
-	if (!autoTour?.props?.routeNodeId) {
+	const routeNodeId = guideWaypointRouteOverrideByNodeId.get(nodeId)
+		?? autoTour?.props?.routeNodeId
+	if (!routeNodeId) {
 		return null
 	}
-	const routeData = resolveAutoTourGuideRouteWorldWaypoints(autoTour.props.routeNodeId)
+	const routeData = resolveAutoTourGuideRouteWorldWaypoints(routeNodeId)
 	if (!routeData) {
 		return null
 	}
@@ -4717,7 +4770,7 @@ function resolveAutoTourCameraRouteData(nodeId: string): AutoTourCameraRouteData
 	}
 	const waypointArcLengths3d = buildPolylineVertexArcLengths(routeData.points, polylineData3d)
 	return {
-		routeNodeId: autoTour.props.routeNodeId,
+		routeNodeId,
 		points: routeData.points,
 		dock: routeData.dock,
 		polylineData3d,
@@ -4734,6 +4787,7 @@ const autoTourRuntime = createAutoTourRuntime({
 	resolveObjectBounds: (object) => setBoundingBoxFromObject(object, new THREE.Box3()),
 	isManualDriveActive: () => vehicleDriveState.active,
 	onTerminalStop: (nodeId) => {
+		guideWaypointRouteOverrideByNodeId.delete(nodeId)
 		activeAutoTourNodeIds.delete(nodeId)
 		if (autoTourFollowNodeId.value === nodeId) {
 			autoTourFollowNodeId.value = null
@@ -8855,6 +8909,7 @@ function resolveScenePreviewCharacterAnimationInput(nodeId: string): {
 }
 
 function handleCharacterAutoTourComplete(nodeId: string): void {
+	guideWaypointRouteOverrideByNodeId.delete(nodeId)
 	activeCharacterAutoTourNodeIds.delete(nodeId)
 	autoTourPaused.value = false
 	autoTourPausedIsTerminal.value = false
@@ -11411,9 +11466,12 @@ async function startAutoTourForActor(
 		return
 	}
 	const autoTourComponent = resolveAutoTourComponent(node)
-	if (!autoTourComponent?.props?.routeNodeId) {
+	if (!autoTourComponent) {
 		appendWarningMessage('AutoTour component is not enabled on the target node.')
 		return
+	}
+	if (!target?.routeNodeId) {
+		guideWaypointRouteOverrideByNodeId.delete(targetNodeId)
 	}
 	const isCharacterTour = Boolean(resolveCharacterControllerComponent(node))
 
@@ -11460,6 +11518,9 @@ async function startAutoTourForActor(
 			}
 			resetCharacterFollowCameraState()
 			characterPlayerControlNodeIdOverride.value = targetNodeId
+			if (target?.routeNodeId) {
+				guideWaypointRouteOverrideByNodeId.set(targetNodeId, target.routeNodeId)
+			}
 			characterAutoTourRuntime.activate(targetNodeId, target)
 			refreshCharacterPathFollowRuntimeEntries()
 			activeCharacterAutoTourNodeIds.add(targetNodeId)
@@ -11498,6 +11559,9 @@ async function startAutoTourForActor(
 		if (targetObject) {
 			ensureAutoTourCameraObjectMetrics(targetNodeId, targetObject)
 		}
+		if (target?.routeNodeId) {
+			guideWaypointRouteOverrideByNodeId.set(targetNodeId, target.routeNodeId)
+		}
 		startTourAndFollow(autoTourRuntime, targetNodeId, (n) => {
 			activeAutoTourNodeIds.add(n)
 			autoTourFollowNodeId.value = n
@@ -11507,7 +11571,7 @@ async function startAutoTourForActor(
 			setCameraViewState('watching', n)
 			setCameraCaging(true, { force: true })
 			applyAutoTourCameraInputPolicy()
-		})
+		}, target)
 		autoTourRuntime.seedTourPlaybackState(targetNodeId, snap)
 
 		// Behavior script tokens should not hang: auto-tour starts immediately.
@@ -11529,14 +11593,26 @@ async function handleVehicleAutoTourStartClick(): Promise<void> {
 	await startAutoTourForActor(targetNodeId)
 }
 
-async function handleGuideWaypointAutoTourStart(waypointIndex: number): Promise<void> {
-	const actorNodeId = guideWaypointMenuActorNodeId.value
+async function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): Promise<void> {
+	const actorNodeId = resolveGuideWaypointActorForDestination(item.travelMode)
 	if (!actorNodeId) {
-		appendWarningMessage('当前没有可控制且绑定了 Guide Route 的角色或车辆。')
+		appendWarningMessage('没有可用于目标路段交通类型的 Auto Tour 角色或车辆。')
 		return
 	}
+	const currentActorId = guideWaypointMenuActorNodeId.value
+	if (currentActorId && currentActorId !== actorNodeId) {
+		if (vehicleDriveState.active && vehicleDriveState.nodeId === currentActorId) {
+			stopVehicleDriveMode({ resolution: { type: 'continue' } })
+		}
+		characterPlayerControlNodeIdOverride.value = null
+		resetCharacterControlInputs()
+	}
 	pendingVehicleDriveEvent.value = buildActorAutoTourPromptEvent(actorNodeId)
-	await startAutoTourForActor(actorNodeId, { destinationStopIndex: waypointIndex })
+	guideWaypointMenuContextRevision.value += 1
+	await startAutoTourForActor(actorNodeId, {
+		routeNodeId: item.routeNodeId,
+		destinationStopId: item.stopId,
+	})
 }
 
 function handleVehicleAutoTourPauseToggleClick(): void {
@@ -17279,7 +17355,7 @@ watch(watchExclusiveUiActive, (active) => {
 				<div class="scene-preview__waypoint-menu-list">
 					<button
 						v-for="item in guideWaypointMenuItems"
-						:key="item.index"
+						:key="`${item.routeNodeId}:${item.stopId}`"
 						type="button"
 						class="scene-preview__waypoint-menu-item"
 						:class="{ 'is-unavailable': item.error }"
@@ -17290,7 +17366,7 @@ watch(watchExclusiveUiActive, (active) => {
 							<img
 								v-if="item.imageUrl"
 								:src="item.imageUrl"
-								:alt="item.name"
+								:alt="item.stopName"
 								loading="lazy"
 								@error="handleGuideWaypointImageError(item)"
 							/>
@@ -17303,9 +17379,9 @@ watch(watchExclusiveUiActive, (active) => {
 							<v-icon v-else icon="mdi-image-broken-variant" size="22" />
 						</span>
 						<span class="scene-preview__waypoint-menu-copy">
-							<span class="scene-preview__waypoint-menu-item-title">{{ item.name }}</span>
+							<span class="scene-preview__waypoint-menu-item-title">{{ item.stopName }}</span>
 							<span class="scene-preview__waypoint-menu-item-meta">
-								{{ item.loading ? '正在加载缩略图' : item.error || '点击前往' }}
+								{{ item.loading ? '正在加载缩略图' : item.error || guideWaypointTravelModeLabel(item) }}
 							</span>
 						</span>
 						<v-icon icon="mdi-chevron-right" size="20" />

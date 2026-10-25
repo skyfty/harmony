@@ -71,11 +71,11 @@ async function buildRoute(options: SceneGraphBuildOptions) {
 }
 
 describe('scene graph Guide Route visuals', () => {
-  it('builds route segments and waypoints by default', async () => {
+  it('builds route segments without dense waypoint spheres by default', async () => {
     const route = await buildRoute({})
 
     expect(route.getObjectByName('GuideRouteSegments')).toBeTruthy()
-    expect(route.getObjectByName('GuideRouteWaypoints')).toBeTruthy()
+    expect(route.getObjectByName('GuideRouteWaypoints')).toBeUndefined()
   })
 
   it('keeps a transformed navigation container without route visuals', async () => {

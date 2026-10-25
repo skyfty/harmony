@@ -237,7 +237,10 @@ import { createWallGroup, updateWallGroup } from '@schema/wallMesh'
 import { compileRoadStaticMeshMetadata, createRoadGroup, resolveRoadLocalHeightSampler } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import { createLandformGroup, updateLandformGroup } from '@schema/landformMesh'
-import { createGuideRouteGroup } from '@schema/guideRouteMesh'
+import {
+  createGuideRouteGroup,
+  GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
+} from '@schema/guideRouteMesh'
 import { syncProceduralCityRuntimeArtifact } from '@schema/components/definitions/proceduralCityComponent'
 import { COMPILED_STATIC_MESH_USERDATA_KEY } from '@schema/compiledStaticMesh'
 import { buildRegionDynamicMeshFromLocalVertices, buildRegionDynamicMeshFromWorldPoints } from '@schema/regionUtils'
@@ -336,6 +339,7 @@ import type {
   DisplayBoardComponentProps,
   GuideRouteComponentProps,
   GuideRouteLeg,
+  GuideRouteRoadOrigin,
   GuideRouteStop,
   GuideRouteTransition,
   GuideboardComponentProps,
@@ -388,6 +392,7 @@ import {
   clampRoadProps,
   cloneRoadComponentProps,
   createGuidePathRouteLeg,
+  createGuideRoadRouteLeg,
   clampGuideRouteComponentProps,
   clampDisplayBoardComponentProps,
   cloneDisplayBoardComponentProps,
@@ -436,8 +441,22 @@ import {
 import { clampRoadWaypoints } from '@schema/proceduralLandscape/roadWaypoints'
 import {
   getProceduralLandscapeScenicStartLocal,
+  getProceduralLandscapeRoadCenterlineLocal,
+  sampleProceduralLandscapeGuideRouteSurface,
   validateProceduralLandscapeGeneratedRoute,
 } from '@schema/proceduralLandscape/runtime'
+import {
+  addGuideRouteStop,
+  appendGuideRoutePathExtension,
+  copyGuideRoutePoint,
+  createGuideRouteBranchProps,
+  createGuideRoutePathAnchor,
+  insertGuideRoutePathStop,
+  moveGuideRouteStop,
+  prependGuideRoutePathExtension,
+  removeGuideRouteStop,
+  unlinkGuideRouteBranchOrigins,
+} from '@schema/guideRouteEditing'
 import {
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
@@ -5214,7 +5233,10 @@ function ensureDynamicMeshRuntime(node: SceneNode, groundNode: SceneNode | null)
     } else if (meshType === 'Landform') {
       runtime = createLandformGroup(meshDefinition as LandformDynamicMesh)
     } else if (meshType === 'GuideRoute') {
-      runtime = createGuideRouteGroup(meshDefinition as GuideRouteDynamicMesh)
+      runtime = createGuideRouteGroup(
+        meshDefinition as GuideRouteDynamicMesh,
+        GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
+      )
     } else if (meshType === 'Region') {
       runtime = new THREE.Group()
       runtime.name = 'Region'
@@ -5409,6 +5431,40 @@ function evaluateWarpGateAttributes(
 
 const runtimeObjectRegistry = new Map<string, Object3D>()
 let runtimeRefreshInFlight: Promise<void> | null = null
+
+function buildProceduralLandscapeRoadGuideWorldPoints(
+  providerNodeId: string,
+  centerline: ProceduralLandscapeGeneratedRouteCenterline | null | undefined,
+): Vector3Like[] {
+  const runtimeObject = getRuntimeObject(providerNodeId)
+  const values = centerline?.pointsXZ
+  if (!runtimeObject || !Array.isArray(values) || values.length < 4) {
+    return []
+  }
+  runtimeObject.updateMatrixWorld(true)
+  const points: Vector3Like[] = []
+  for (let index = 0; index + 1 < values.length; index += 2) {
+    const x = Number(values[index])
+    const z = Number(values[index + 1])
+    if (!Number.isFinite(x) || !Number.isFinite(z)) {
+      continue
+    }
+    const world = runtimeObject.localToWorld(new THREE.Vector3(x, 0, z))
+    const surface = sampleProceduralLandscapeGuideRouteSurface(providerNodeId, world.x, world.z, 0)
+    const point = surface?.point ?? world
+    const previous = points[points.length - 1]
+    if (
+      previous
+      && Math.abs(previous.x - point.x) <= 1e-4
+      && Math.abs(previous.y - point.y) <= 1e-4
+      && Math.abs(previous.z - point.z) <= 1e-4
+    ) {
+      continue
+    }
+    points.push({ x: point.x, y: point.y, z: point.z })
+  }
+  return points
+}
 
 export function clearRuntimeObjectRegistry() {
   resetSkinRuntime()
@@ -9533,6 +9589,8 @@ function createInitialSceneState(): SceneState {
     selectedNodeIds: [],
     selectedRoadSegment: null,
     selectedGuideRouteWaypoint: null,
+    selectedGuideRouteStop: null,
+    guideRouteStopSelectionRequestId: 0,
     activeTool: 'select',
     assetCatalog,
     assetManifest,
@@ -9596,6 +9654,8 @@ function resetSceneStateToNoSelection(store: SceneState) {
   store.selectedNodeIds = []
   store.selectedRoadSegment = null
   store.selectedGuideRouteWaypoint = null
+  store.selectedGuideRouteStop = null
+  store.guideRouteStopSelectionRequestId = 0
   store.assetCatalog = cloneAssetCatalog(initialState.assetCatalog)
   store.assetRegistry = cloneSceneAssetRegistry(initialState.assetRegistry)
   store.packageDirectoryCache = {}
@@ -11255,6 +11315,9 @@ export const useSceneStore = defineStore('scene', {
       if (this.selectedGuideRouteWaypoint && (normalized.length !== 1 || normalized[0] !== this.selectedGuideRouteWaypoint.nodeId)) {
         this.selectedGuideRouteWaypoint = null
       }
+      if (this.selectedGuideRouteStop && (normalized.length !== 1 || normalized[0] !== this.selectedGuideRouteStop.nodeId)) {
+        this.selectedGuideRouteStop = null
+      }
       return true
     },
     setSelectedRoadSegment(nodeId: string, segmentIndex: number | null) {
@@ -11287,6 +11350,24 @@ export const useSceneStore = defineStore('scene', {
     clearSelectedGuideRouteWaypoint() {
       if (this.selectedGuideRouteWaypoint) {
         this.selectedGuideRouteWaypoint = null
+      }
+    },
+    setSelectedGuideRouteStop(nodeId: string, stopId: string | null) {
+      const normalizedNodeId = typeof nodeId === 'string' ? nodeId.trim() : ''
+      const normalizedStopId = typeof stopId === 'string' ? stopId.trim() : ''
+      if (!normalizedNodeId || !normalizedStopId) {
+        this.selectedGuideRouteStop = null
+        return
+      }
+      this.selectedGuideRouteStop = {
+        nodeId: normalizedNodeId,
+        stopId: normalizedStopId,
+      }
+      this.guideRouteStopSelectionRequestId += 1
+    },
+    clearSelectedGuideRouteStop() {
+      if (this.selectedGuideRouteStop) {
+        this.selectedGuideRouteStop = null
       }
     },
     isGroupExpanded(nodeId: string): boolean {
@@ -18765,6 +18846,8 @@ export const useSceneStore = defineStore('scene', {
       stops?: GuideRouteStop[]
       transitions?: GuideRouteTransition[]
       loop?: boolean
+      origin?: GuideRouteRoadOrigin | null
+      branchOrigin?: GuideRouteComponentProps['branchOrigin']
       surfaceProviderNodeId?: string | null
       sampleSpacingM?: number
       travelMode?: 'vehicle' | 'character'
@@ -18776,7 +18859,7 @@ export const useSceneStore = defineStore('scene', {
         return null
       }
 
-      const group = createGuideRouteGroup(build.definition)
+      const group = createGuideRouteGroup(build.definition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
       const nodeName = payload.name ?? 'Guide Route'
 
       this.captureHistorySnapshot()
@@ -18801,6 +18884,8 @@ export const useSceneStore = defineStore('scene', {
               legs: payload.legs?.length ? payload.legs : [defaultPathLeg],
               stops: payload.stops ?? [],
               transitions: payload.transitions ?? [],
+              origin: payload.origin ?? null,
+              branchOrigin: payload.branchOrigin ?? null,
             })
             this.updateNodeComponentProps(
               nodeId,
@@ -18846,6 +18931,174 @@ export const useSceneStore = defineStore('scene', {
         this.endHistoryCaptureSuppression()
       }
     },
+    ensureProceduralLandscapeRoadGuideRoute(providerNodeId: string): {
+      node: SceneNode | null
+      created: boolean
+      updated: boolean
+    } {
+      const normalizedProviderNodeId = typeof providerNodeId === 'string' ? providerNodeId.trim() : ''
+      const providerNode = normalizedProviderNodeId ? findNodeById(this.nodes, normalizedProviderNodeId) : null
+      const component = providerNode?.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+        | undefined
+      if (!providerNode || !component?.id || component.enabled === false) {
+        return { node: null, created: false, updated: false }
+      }
+      const landscapeProps = clampProceduralLandscapeProps(component.props, providerNode.id)
+      const centerline = landscapeProps.road.generatedRoute?.centerline
+        ?? getProceduralLandscapeRoadCenterlineLocal(providerNode.id)
+
+      let existing: SceneNode | null = null
+      const stack = [...this.nodes]
+      while (stack.length) {
+        const node = stack.pop()
+        if (!node) {
+          continue
+        }
+        const routeComponent = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+          | SceneNodeComponentState<GuideRouteComponentProps>
+          | undefined
+        if (
+          node.dynamicMesh?.type === 'GuideRoute'
+          && routeComponent?.props?.origin?.kind === 'procedural-landscape-road'
+          && routeComponent.props.origin.providerNodeId === providerNode.id
+        ) {
+          existing = node
+          break
+        }
+        if (Array.isArray(node.children) && node.children.length) {
+          stack.push(...node.children)
+        }
+      }
+
+      const sourceRevision = Math.max(
+        0,
+        Math.round(Number(landscapeProps.road.generatedRoute?.revision) || 0),
+      )
+      const origin: GuideRouteRoadOrigin = {
+        kind: 'procedural-landscape-road',
+        providerNodeId: providerNode.id,
+        sourceRevision,
+      }
+      const loop = landscapeProps.road.routing.termination === 'loop'
+      if (existing) {
+        const existingProps = existing.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+          | Partial<GuideRouteComponentProps>
+          | undefined
+        const existingRoadLeg = existingProps?.legs?.find((leg) => (
+          leg.kind === 'road' && leg.providerNodeId === providerNode.id
+        ))
+        if (
+          existingProps?.origin?.sourceRevision === sourceRevision
+          && existingProps.loop === loop
+          && existingRoadLeg?.kind === 'road'
+          && existingRoadLeg.startT === 0
+          && existingRoadLeg.endT === 1
+        ) {
+          return { node: existing, created: false, updated: false }
+        }
+      }
+      const worldPoints = buildProceduralLandscapeRoadGuideWorldPoints(providerNode.id, centerline)
+      if (worldPoints.length < 2) {
+        return { node: null, created: false, updated: false }
+      }
+      if (!existing) {
+        const node = this.createGuideRouteNode({
+          points: worldPoints,
+          name: `${providerNode.name?.trim() || 'Procedural Landscape'} 公路导览`,
+          legs: [createGuideRoadRouteLeg({ providerNodeId: providerNode.id })],
+          loop,
+          origin,
+        })
+        if (node) {
+          this.requestSceneAutoSave({ mode: 'structural' })
+        }
+        return { node, created: Boolean(node), updated: false }
+      }
+
+      const existingComponent = existing.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!existingComponent?.id) {
+        return { node: existing, created: false, updated: false }
+      }
+      const currentProps = clampGuideRouteComponentProps(existingComponent.props)
+      const legs = currentProps.legs.map((leg) => (
+        leg.kind === 'road' && leg.providerNodeId === providerNode.id
+          ? {
+              ...leg,
+              startT: 0,
+              endT: 1,
+            }
+          : leg
+      )) as GuideRouteLeg[]
+      const roadLegIndex = legs.findIndex((leg) => (
+        leg.kind === 'road' && leg.providerNodeId === providerNode.id
+      ))
+      if (roadLegIndex < 0) {
+        legs.unshift(createGuideRoadRouteLeg({ providerNodeId: providerNode.id }))
+      }
+      const resolvedRoadLegIndex = Math.max(0, legs.findIndex((leg) => (
+        leg.kind === 'road' && leg.providerNodeId === providerNode.id
+      )))
+      const first = worldPoints[0]!
+      const last = worldPoints[worldPoints.length - 1]!
+      const previousLeg = legs[resolvedRoadLegIndex - 1]
+      if (previousLeg?.kind === 'path' && previousLeg.anchors.length) {
+        Object.assign(previousLeg.anchors[previousLeg.anchors.length - 1]!, first)
+      }
+      const nextLeg = legs[resolvedRoadLegIndex + 1]
+      if (nextLeg?.kind === 'path' && nextLeg.anchors.length) {
+        Object.assign(nextLeg.anchors[0]!, last)
+      }
+      const roadLegId = legs[resolvedRoadLegIndex]!.id
+      const roadStopPositions = new Map<string, Vector3Like>()
+      const projectedStops = currentProps.stops.map((stop) => {
+        if (stop.legId !== roadLegId || !worldPoints.length) {
+          return stop
+        }
+        let nearest = worldPoints[0]!
+        let nearestDistanceSq = Number.POSITIVE_INFINITY
+        for (const point of worldPoints) {
+          const dx = point.x - stop.anchor.x
+          const dz = point.z - stop.anchor.z
+          const distanceSq = dx * dx + dz * dz
+          if (distanceSq < nearestDistanceSq) {
+            nearestDistanceSq = distanceSq
+            nearest = point
+          }
+        }
+        roadStopPositions.set(stop.id, nearest)
+        return {
+          ...stop,
+          anchor: { ...nearest },
+          controlAnchorId: null,
+        }
+      })
+      const nextProps = clampGuideRouteComponentProps({
+        ...currentProps,
+        loop,
+        legs,
+        stops: projectedStops,
+        origin,
+      })
+      const updated = this.updateNodeComponentProps(
+        existing.id,
+        existingComponent.id,
+        nextProps as unknown as Partial<Record<string, unknown>>,
+      )
+      if (updated) {
+        roadStopPositions.forEach((anchor, stopId) => {
+          this.updateGuideRouteBranchesForSourceStop(existing!.id, stopId, anchor)
+        })
+        this.requestSceneAutoSave({ mode: 'structural' })
+      }
+      return {
+        node: findNodeById(this.nodes, existing.id),
+        created: false,
+        updated,
+      }
+    },
     updateGuideRouteWaypoints(nodeId: string, options: {
       vertices: Vector3Like[]
       anchors?: Vector3Like[]
@@ -18876,14 +19129,51 @@ export const useSceneStore = defineStore('scene', {
       if (pathLegIndex < 0) {
         return false
       }
+      const currentPathLeg = currentProps.legs[pathLegIndex]
+      if (currentPathLeg?.kind !== 'path') {
+        return false
+      }
+      const previousAnchorsById = new Map(
+        currentPathLeg.anchors
+          .filter((anchor) => typeof anchor.id === 'string' && anchor.id.length > 0)
+          .map((anchor) => [anchor.id!, anchor] as const),
+      )
+      const nextAnchors = (options.anchors ?? nextVertices).map((anchor, index) => {
+        const requestedId = (anchor as { id?: unknown }).id
+        const preferredId = typeof requestedId === 'string' && requestedId.trim()
+          ? requestedId.trim()
+          : currentPathLeg.anchors[index]?.id
+        return createGuideRoutePathAnchor(anchor, preferredId)
+      })
       const nextLegs = currentProps.legs.map((leg, index) => (
         index === pathLegIndex && leg.kind === 'path'
           ? {
               ...leg,
-              anchors: (options.anchors ?? nextVertices).map((anchor) => ({ ...anchor })),
+              anchors: nextAnchors,
             }
           : leg
       ))
+      const movedStopAnchors: Array<{ stopId: string; anchor: Vector3Like }> = []
+      const nextStops = currentProps.stops.map((stop) => {
+        if (stop.legId !== currentPathLeg.id || !stop.controlAnchorId) {
+          return stop
+        }
+        const previousAnchor = previousAnchorsById.get(stop.controlAnchorId)
+        const nextAnchor = nextAnchors.find((anchor) => anchor.id === stop.controlAnchorId)
+        if (!previousAnchor || !nextAnchor) {
+          return stop
+        }
+        if (
+          previousAnchor.x === nextAnchor.x
+          && previousAnchor.y === nextAnchor.y
+          && previousAnchor.z === nextAnchor.z
+        ) {
+          return stop
+        }
+        const anchor = { x: nextAnchor.x, y: nextAnchor.y, z: nextAnchor.z }
+        movedStopAnchors.push({ stopId: stop.id, anchor })
+        return { ...stop, anchor }
+      })
 
       this.captureHistorySnapshot()
       this.beginHistoryCaptureSuppression()
@@ -18892,7 +19182,13 @@ export const useSceneStore = defineStore('scene', {
           ...(target.dynamicMesh as GuideRouteDynamicMesh),
           vertices: nextVertices.map((point) => ({ x: point.x, y: point.y, z: point.z })),
         })
-        this.updateNodeComponentProps(nodeId, component.id, { legs: nextLegs })
+        this.updateNodeComponentProps(nodeId, component.id, {
+          legs: nextLegs,
+          stops: nextStops,
+        })
+        movedStopAnchors.forEach(({ stopId, anchor }) => {
+          this.updateGuideRouteBranchesForSourceStop(nodeId, stopId, anchor)
+        })
         const requestedIndex = typeof options.selectedWaypointIndex === 'number' && Number.isFinite(options.selectedWaypointIndex)
           ? Math.max(0, Math.floor(options.selectedWaypointIndex))
           : null
@@ -18910,6 +19206,310 @@ export const useSceneStore = defineStore('scene', {
         return true
       } finally {
         this.endHistoryCaptureSuppression()
+      }
+    },
+
+    addGuideRouteStopAtRoute(nodeId: string, options: {
+      legId: string
+      anchor: Vector3Like
+      anchorIndex?: number | null
+      name?: string
+      thumbnailAssetId?: string | null
+      behavior?: GuideRouteStop['behavior']
+    }): { stopId: string } | null {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id || component.enabled === false) {
+        return null
+      }
+      const current = clampGuideRouteComponentProps(component.props)
+      let nextProps: GuideRouteComponentProps | null = null
+      let stopId: string | null = null
+      if (typeof options.anchorIndex === 'number' && Number.isFinite(options.anchorIndex)) {
+        const inserted = insertGuideRoutePathStop(current, {
+          legId: options.legId,
+          anchorIndex: options.anchorIndex,
+          anchor: options.anchor,
+          name: options.name,
+          thumbnailAssetId: options.thumbnailAssetId,
+          behavior: options.behavior,
+        })
+        if (inserted) {
+          nextProps = inserted.props
+          stopId = inserted.stopId
+        }
+      } else {
+        const added = addGuideRouteStop(current, {
+          legId: options.legId,
+          anchor: options.anchor,
+          name: options.name,
+          thumbnailAssetId: options.thumbnailAssetId,
+          behavior: options.behavior,
+        })
+        if (added) {
+          nextProps = added.props
+          stopId = added.stopId
+        }
+      }
+      if (!nextProps || !stopId) {
+        return null
+      }
+      const updated = this.updateNodeComponentProps(
+        nodeId,
+        component.id,
+        nextProps as unknown as Partial<Record<string, unknown>>,
+      )
+      if (!updated) {
+        return null
+      }
+      this.refreshGuideRoutePathDisplay(nodeId)
+      this.setSelectedGuideRouteStop(nodeId, stopId)
+      return { stopId }
+    },
+
+    moveGuideRouteStopAtPosition(nodeId: string, stopId: string, anchor: Vector3Like): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id || component.enabled === false) {
+        return false
+      }
+      const current = clampGuideRouteComponentProps(component.props)
+      const stop = current.stops.find((entry) => entry.id === stopId)
+      const leg = stop ? current.legs.find((entry) => entry.id === stop.legId) : null
+      if (!stop || !leg || leg.kind === 'road') {
+        return false
+      }
+      const nextProps = moveGuideRouteStop(current, stopId, anchor)
+      if (!nextProps) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const updated = this.updateNodeComponentProps(
+          nodeId,
+          component.id,
+          nextProps as unknown as Partial<Record<string, unknown>>,
+        )
+        if (!updated) {
+          return false
+        }
+        this.refreshGuideRoutePathDisplay(nodeId)
+        this.setSelectedGuideRouteStop(nodeId, stopId)
+        this.updateGuideRouteBranchesForSourceStop(nodeId, stopId, anchor)
+        return true
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    removeGuideRouteStopWithLinks(nodeId: string, stopId: string): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id || component.enabled === false) {
+        return false
+      }
+      const current = clampGuideRouteComponentProps(component.props)
+      const removed = removeGuideRouteStop(current, stopId)
+      if (!removed.removedStop) {
+        return false
+      }
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const updated = this.updateNodeComponentProps(
+          nodeId,
+          component.id,
+          removed.props as unknown as Partial<Record<string, unknown>>,
+        )
+        if (!updated) {
+          return false
+        }
+        const stack = [...this.nodes]
+        while (stack.length) {
+          const node = stack.pop()
+          if (!node) {
+            continue
+          }
+          if (Array.isArray(node.children) && node.children.length) {
+            stack.push(...node.children)
+          }
+          const branchComponent = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+            | SceneNodeComponentState<GuideRouteComponentProps>
+            | undefined
+          const branchOrigin = branchComponent?.props?.branchOrigin
+          if (
+            !branchComponent?.id
+            || branchOrigin?.routeNodeId !== nodeId
+            || branchOrigin.stopId !== stopId
+          ) {
+            continue
+          }
+          const branchProps = clampGuideRouteComponentProps(branchComponent.props)
+          this.updateNodeComponentProps(
+            node.id,
+            branchComponent.id,
+            unlinkGuideRouteBranchOrigins(branchProps) as unknown as Partial<Record<string, unknown>>,
+          )
+        }
+        this.refreshGuideRoutePathDisplay(nodeId)
+        if (this.selectedGuideRouteStop?.nodeId === nodeId && this.selectedGuideRouteStop.stopId === stopId) {
+          this.clearSelectedGuideRouteStop()
+        }
+        return true
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    extendGuideRouteFromEndpoint(nodeId: string, options: {
+      endpoint: 'start' | 'end'
+      endpointPoint: Vector3Like
+      points: Vector3Like[]
+      surfaceProviderNodeId?: string | null
+    }): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id || component.enabled === false || options.points.length < 1) {
+        return false
+      }
+      const current = clampGuideRouteComponentProps(component.props)
+      const nextProps = options.endpoint === 'start'
+        ? prependGuideRoutePathExtension(current, options.endpointPoint, options.points, {
+            surfaceProviderNodeId: options.surfaceProviderNodeId,
+          })
+        : appendGuideRoutePathExtension(current, options.endpointPoint, options.points, {
+            surfaceProviderNodeId: options.surfaceProviderNodeId,
+          })
+      const updated = this.updateNodeComponentProps(
+        nodeId,
+        component.id,
+        nextProps as unknown as Partial<Record<string, unknown>>,
+      )
+      if (updated) {
+        this.refreshGuideRoutePathDisplay(nodeId)
+      }
+      return updated
+    },
+
+    createGuideRouteBranchFromStop(options: {
+      parentRouteNodeId: string
+      stopId: string
+      points: Vector3Like[]
+      name?: string
+    }): SceneNode | null {
+      const parent = findNodeById(this.nodes, options.parentRouteNodeId)
+      const parentComponent = parent?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!parent || !parentComponent?.id || options.points.length < 2) {
+        return null
+      }
+      const parentProps = clampGuideRouteComponentProps(parentComponent.props)
+      const stop = parentProps.stops.find((entry) => entry.id === options.stopId)
+      if (!stop) {
+        return null
+      }
+      const sourceLeg = parentProps.legs.find((leg) => leg.id === stop.legId)
+      if (!sourceLeg) {
+        return null
+      }
+      const branchProps = createGuideRouteBranchProps({
+        parentRouteNodeId: parent.id,
+        sourceStop: stop,
+        points: options.points,
+        travelMode: sourceLeg.travelMode,
+        surfaceProviderNodeId: sourceLeg.kind === 'road'
+          ? sourceLeg.providerNodeId
+          : sourceLeg.surfaceProviderNodeId,
+      })
+      const created = this.createGuideRouteNode({
+        points: options.points,
+        name: options.name?.trim() || `${parent.name?.trim() || 'Guide Route'} 分支`,
+        legs: branchProps.legs,
+        loop: false,
+        branchOrigin: branchProps.branchOrigin,
+      })
+      if (created) {
+        this.selectNode(created.id)
+        this.setSelectedGuideRouteStop(parent.id, stop.id)
+      }
+      return created
+    },
+
+    refreshGuideRoutePathDisplay(nodeId: string): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id) {
+        return false
+      }
+      const props = clampGuideRouteComponentProps(component.props)
+      if (!props.legs.length || props.legs.some((leg) => leg.kind !== 'path')) {
+        return false
+      }
+      const origin = target.position ?? { x: 0, y: 0, z: 0 }
+      const vertices = props.legs.flatMap((leg) => (
+        leg.kind === 'path'
+          ? leg.anchors.map((anchor) => ({
+              x: anchor.x - origin.x,
+              y: anchor.y - origin.y,
+              z: anchor.z - origin.z,
+            }))
+          : []
+      ))
+      return vertices.length >= 2
+        ? this.setGuideRouteDisplayVertices(nodeId, vertices)
+        : false
+    },
+
+    updateGuideRouteBranchesForSourceStop(
+      sourceRouteNodeId: string,
+      sourceStopId: string,
+      anchor: Vector3Like,
+    ): void {
+      const stack = [...this.nodes]
+      while (stack.length) {
+        const node = stack.pop()
+        if (!node) {
+          continue
+        }
+        if (Array.isArray(node.children) && node.children.length) {
+          stack.push(...node.children)
+        }
+        const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+          | SceneNodeComponentState<GuideRouteComponentProps>
+          | undefined
+        const branchOrigin = component?.props?.branchOrigin
+        if (
+          !component?.id
+          || branchOrigin?.routeNodeId !== sourceRouteNodeId
+          || branchOrigin.stopId !== sourceStopId
+        ) {
+          continue
+        }
+        const props = clampGuideRouteComponentProps(component.props)
+        const firstLeg = props.legs[0]
+        const firstAnchor = firstLeg?.kind === 'path' ? firstLeg.anchors[0] : null
+        if (!firstAnchor) {
+          continue
+        }
+        Object.assign(firstAnchor, copyGuideRoutePoint(anchor))
+        this.updateNodeComponentProps(
+          node.id,
+          component.id,
+          props as unknown as Partial<Record<string, unknown>>,
+        )
+        this.refreshGuideRoutePathDisplay(node.id)
       }
     },
 
@@ -18950,9 +19550,116 @@ export const useSceneStore = defineStore('scene', {
       })
     },
 
+    findProceduralLandscapeRoadGuideRoute(providerNodeId: string): SceneNode | null {
+      const normalizedProviderNodeId = typeof providerNodeId === 'string' ? providerNodeId.trim() : ''
+      if (!normalizedProviderNodeId) {
+        return null
+      }
+      const stack = [...this.nodes]
+      while (stack.length) {
+        const node = stack.pop()
+        if (!node) {
+          continue
+        }
+        const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+          | SceneNodeComponentState<GuideRouteComponentProps>
+          | undefined
+        if (
+          node.dynamicMesh?.type === 'GuideRoute'
+          && component?.props?.origin?.kind === 'procedural-landscape-road'
+          && component.props.origin.providerNodeId === normalizedProviderNodeId
+        ) {
+          return node
+        }
+        if (Array.isArray(node.children) && node.children.length) {
+          stack.push(...node.children)
+        }
+      }
+      return null
+    },
+
+    resetProceduralLandscapeRoadGuideRoute(providerNodeId: string): boolean {
+      const routeNode = this.findProceduralLandscapeRoadGuideRoute(providerNodeId)
+      const component = routeNode?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      const providerNode = findNodeById(this.nodes, providerNodeId)
+      const providerComponent = providerNode?.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<ProceduralLandscapeComponentProps>
+        | undefined
+      if (!routeNode || !component?.id || !providerComponent?.props) {
+        return false
+      }
+      const oldProps = clampGuideRouteComponentProps(component.props)
+      const oldStopIds = new Set(oldProps.stops.map((stop) => stop.id))
+      const stack = [...this.nodes]
+      this.beginHistoryCaptureSuppression()
+      try {
+        while (stack.length) {
+          const node = stack.pop()
+          if (!node) {
+            continue
+          }
+          if (Array.isArray(node.children) && node.children.length) {
+            stack.push(...node.children)
+          }
+          const branchComponent = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+            | SceneNodeComponentState<GuideRouteComponentProps>
+            | undefined
+          const origin = branchComponent?.props?.branchOrigin
+          if (
+            !branchComponent?.id
+            || origin?.routeNodeId !== routeNode.id
+            || !oldStopIds.has(origin.stopId)
+          ) {
+            continue
+          }
+          this.updateNodeComponentProps(
+            node.id,
+            branchComponent.id,
+            unlinkGuideRouteBranchOrigins(
+              clampGuideRouteComponentProps(branchComponent.props),
+            ) as unknown as Partial<Record<string, unknown>>,
+          )
+        }
+        const providerProps = clampProceduralLandscapeProps(
+          providerComponent.props,
+          providerNode?.id ?? providerNodeId,
+        )
+        const nextProps = clampGuideRouteComponentProps({
+          version: 3,
+          loop: providerProps.road.routing.termination === 'loop',
+          legs: [createGuideRoadRouteLeg({ providerNodeId })],
+          stops: [],
+          transitions: [],
+          origin: {
+            kind: 'procedural-landscape-road',
+            providerNodeId,
+            sourceRevision: Math.max(
+              0,
+              Math.round(Number(providerProps.road.generatedRoute?.revision) || 0),
+            ),
+          },
+          branchOrigin: oldProps.branchOrigin,
+        })
+        const updated = this.updateNodeComponentProps(
+          routeNode.id,
+          component.id,
+          nextProps as unknown as Partial<Record<string, unknown>>,
+        )
+        if (updated) {
+          this.requestSceneAutoSave({ mode: 'structural' })
+        }
+        return updated
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
     /** Validates the live draft before replacing the last successful road. */
     generateProceduralLandscapeRoad(
       nodeId: string,
+      options: { guideRoutePolicy?: 'preserve' | 'recreate' } = {},
     ): {
       accepted: boolean
       failureReason: string | null
@@ -19035,6 +19742,12 @@ export const useSceneStore = defineStore('scene', {
           generatedRoute: committedGeneratedRoute,
         },
       })
+      if (accepted) {
+        if (options.guideRoutePolicy === 'recreate') {
+          this.resetProceduralLandscapeRoadGuideRoute(nodeId)
+        }
+        this.ensureProceduralLandscapeRoadGuideRoute(nodeId)
+      }
       return {
         accepted,
         failureReason: accepted ? null : 'scene-update-failed',

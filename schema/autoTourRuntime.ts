@@ -90,6 +90,7 @@ type RouteData = {
 
 type PlaybackState = {
   routeNodeId: string
+  routeTarget: GuideRouteTourTargetOptions | null
   routeWaypointCount: number
   sourceRouteWaypointCount: number
   distanceAlongRoute: number
@@ -478,8 +479,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const resolveObjectBounds = deps.resolveObjectBounds
     ?? ((object: THREE.Object3D) => new THREE.Box3().setFromObject(object))
 
-  function resolveNodeRoute(tourProps: AutoTourComponentProps): RouteData | null {
-    const routeNodeId = tourProps.routeNodeId
+  function resolveRoute(routeNodeId: string | null | undefined): RouteData | null {
     if (!routeNodeId) {
       return null
     }
@@ -512,6 +512,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     )
     return {
       routeNodeId,
+      routeTarget: null,
       routeWaypointCount: routeData.evaluation.points.length,
       sourceRouteWaypointCount: routeData.evaluation.points.length,
       distanceAlongRoute: projection.s,
@@ -525,7 +526,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
   function resolveSnap(
     nodeId: string,
-    tourProps: AutoTourComponentProps,
+    _tourProps: AutoTourComponentProps,
     node: SceneNode,
     routeData: RouteData,
   ): AutoTourRouteSnapResult | null {
@@ -595,7 +596,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
     return {
       nodeId,
-      routeNodeId: tourProps.routeNodeId!,
+      routeNodeId: routeData.evaluation.routeNodeId,
       worldPosition,
       worldQuaternion,
       forwardWorld,
@@ -618,7 +619,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
 
   function resolveTargetedSnap(
     nodeId: string,
-    tourProps: AutoTourComponentProps,
+    _tourProps: AutoTourComponentProps,
     node: SceneNode,
     routeData: RouteData,
     target: GuideRouteTourTargetOptions,
@@ -685,7 +686,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       }
       return {
         nodeId,
-        routeNodeId: tourProps.routeNodeId!,
+        routeNodeId: routeData.evaluation.routeNodeId,
         worldPosition,
         worldQuaternion,
         forwardWorld: tangent,
@@ -750,7 +751,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     }
     return {
       nodeId,
-      routeNodeId: tourProps.routeNodeId!,
+      routeNodeId: routeData.evaluation.routeNodeId,
       worldPosition,
       worldQuaternion,
       forwardWorld,
@@ -783,7 +784,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       return null
     }
     const tourProps = clampAutoTourComponentProps(component.props)
-    const routeData = resolveNodeRoute(tourProps)
+    const routeNodeId = target?.routeNodeId ?? tourProps.routeNodeId
+    const routeData = resolveRoute(routeNodeId)
     if (!routeData) {
       return null
     }
@@ -796,13 +798,19 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       && !routeData.evaluation.loop
       && snap.projectedS >= routeData.evaluation.totalLength - ROUTE_END_REVERSE_EPSILON
     ) {
-      return resolveTargetedSnap(
-        nodeId,
-        tourProps,
-        node,
-        routeData,
-        { destinationStopIndex: 0 },
-      ) ?? snap
+      const firstStop = routeData.evaluation.stops[0]
+      return firstStop
+        ? resolveTargetedSnap(
+            nodeId,
+            tourProps,
+            node,
+            routeData,
+            {
+              routeNodeId: routeData.evaluation.routeNodeId,
+              destinationStopId: firstStop.definition.id,
+            },
+          ) ?? snap
+        : snap
     }
     return snap
   }
@@ -816,8 +824,11 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
     if (!node || !object) {
       return
     }
+    const pendingTarget = pendingTourTargets.get(nodeId) ?? null
+    const resolvedRouteNodeId = snap.routeNodeId
     playbackStates.set(nodeId, {
-      routeNodeId: snap.routeNodeId,
+      routeNodeId: resolvedRouteNodeId,
+      routeTarget: pendingTarget,
       routeWaypointCount: snap.routeWaypointCount,
       sourceRouteWaypointCount: snap.sourceRouteWaypointCount,
       distanceAlongRoute: snap.travelWindow ? 0 : snap.projectedS,
@@ -862,19 +873,22 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
       const tourProps = clampAutoTourComponentProps(component.props)
-      const fullRouteData = resolveNodeRoute(tourProps)
+      let state = playbackStates.get(node.id)
+      const pendingTarget = pendingTourTargets.get(node.id) ?? null
+      const activeTarget = pendingTarget ?? state?.routeTarget ?? null
+      const routeNodeId = state?.routeTarget?.routeNodeId
+        ?? pendingTarget?.routeNodeId
+        ?? tourProps.routeNodeId
+      const fullRouteData = resolveRoute(routeNodeId)
       if (!fullRouteData) {
         continue
       }
-      const routeNodeId = tourProps.routeNodeId!
-      let state = playbackStates.get(node.id)
       if (
         !state
-        || state.routeNodeId !== routeNodeId
+        || state.routeNodeId !== fullRouteData.evaluation.routeNodeId
         || state.sourceRouteWaypointCount !== fullRouteData.evaluation.points.length
       ) {
-        const pendingTarget = pendingTourTargets.get(node.id)
-        if (pendingTarget) {
+        if (activeTarget) {
           object.updateMatrixWorld(true)
           const worldPosition = object.getWorldPosition(new THREE.Vector3())
           const projection = projectPointToPolyline(
@@ -886,7 +900,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           const travelWindow = buildGuideRouteTravelWindow(
             fullRouteData.evaluation,
             projection.s,
-            pendingTarget,
+            activeTarget,
             fullRouteData.evaluation.loop,
           )
           const targetedRouteData = travelWindow
@@ -900,7 +914,8 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             continue
           }
           state = {
-            routeNodeId,
+            routeNodeId: fullRouteData.evaluation.routeNodeId,
+            routeTarget: activeTarget,
             routeWaypointCount: targetedRouteData.evaluation.points.length,
             sourceRouteWaypointCount: fullRouteData.evaluation.points.length,
             distanceAlongRoute: 0,
@@ -913,9 +928,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         } else {
           state = initializePlaybackState({
             object,
-            routeNodeId,
+            routeNodeId: fullRouteData.evaluation.routeNodeId,
             routeData: fullRouteData,
           })
+          state.routeTarget = null
         }
         playbackStates.set(node.id, state)
       }

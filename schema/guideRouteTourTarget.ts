@@ -6,11 +6,12 @@ import {
 } from './guideRouteRuntime'
 
 export type GuideRouteTourTargetOptions = {
-  destinationStopIndex: number
+  routeNodeId: string
+  destinationStopId: string
 }
 
 export type GuideRouteTravelWindow = {
-  destinationStopIndex: number
+  destinationStopId: string
   direction: -1 | 1
   startDistance: number
   endDistance: number
@@ -196,14 +197,14 @@ export function buildGuideRouteTravelWindow(
   if (route.status !== 'ready' || route.points.length < 2) {
     return null
   }
-  const stopIndex = Math.max(
-    0,
-    Math.min(route.stops.length - 1, Math.trunc(options.destinationStopIndex)),
-  )
-  const destinationDistance = route.stops[stopIndex]?.routeDistance
-  if (destinationDistance == null) {
+  if (options.routeNodeId !== route.routeNodeId) {
     return null
   }
+  const destinationStop = route.stops.find((stop) => stop.definition.id === options.destinationStopId) ?? null
+  if (!destinationStop) {
+    return null
+  }
+  const destinationDistance = destinationStop.routeDistance
   const start = clampDistance(route, startDistance, loop)
   const end = clampDistance(route, destinationDistance, loop)
   const travelDirection = resolveTravelDirection(route, start, end, loop)
@@ -212,7 +213,7 @@ export function buildGuideRouteTravelWindow(
   }
   const windowRoute = createWindowRoute(route, start, end, travelDirection.direction, loop)
   return {
-    destinationStopIndex: stopIndex,
+    destinationStopId: destinationStop.definition.id,
     direction: travelDirection.direction,
     startDistance: start,
     endDistance: end,

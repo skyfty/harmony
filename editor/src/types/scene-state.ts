@@ -62,6 +62,9 @@ export interface SceneState {
   selectedRoadSegment: { nodeId: string; segmentIndex: number } | null
   /** Optional sub-selection for GuideRoute editing (waypoint-level). */
   selectedGuideRouteWaypoint: { nodeId: string; waypointIndex: number } | null
+  /** Optional sub-selection for a GuideRoute stop marker. */
+  selectedGuideRouteStop: { nodeId: string; stopId: string } | null
+  guideRouteStopSelectionRequestId: number
   activeTool: EditorTool
   projectTree: ProjectDirectory[]
   assetCatalog: Record<string, ProjectAsset[]>

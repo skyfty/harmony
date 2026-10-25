@@ -259,6 +259,7 @@ import {
 import { compileRoadStaticMeshMetadata, createRoadGroup, updateRoadGroup } from '@schema/roadMesh'
 import { createFloorGroup, updateFloorGroup } from '@schema/floorMesh'
 import {
+  applyGuideRouteEditorOverlay,
   createGuideRouteGroup,
   GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
   updateGuideRouteGroup,
@@ -452,8 +453,10 @@ import type {
 import type { EnvironmentSettings } from '@/types/environment'
 import {
   evaluateGuideRoute,
+  resolveCompiledGuideLegAtDistance,
   resolveGuideRoutePrimaryProviderNodeId,
 } from '@schema/guideRouteRuntime'
+import { buildPolylineMetricData, projectPointToPolyline } from '@schema/polylineProgress'
 import { createEffectPlaybackManager } from './effectPlaybackManager'
 import { usePlaceholderOverlayController } from './placeholderOverlayController'
 import { useToolbarPositioning } from './useToolbarPositioning'
@@ -2020,7 +2023,7 @@ function syncGuideRouteStopOverlay(
   const props = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
     | Partial<GuideRouteComponentProps>
     | undefined
-  if (props?.version !== 3 || !Array.isArray(props.stops) || !props.stops.length) {
+  if (props?.version !== 3) {
     if (existing instanceof THREE.Object3D) {
       existing.removeFromParent()
     }
@@ -2033,18 +2036,25 @@ function syncGuideRouteStopOverlay(
     providerObject: providerNodeId ? objectMap.get(providerNodeId) ?? null : null,
     routeObject,
   })
-  if (evaluation.status !== 'ready' || !evaluation.stops.length) {
+  if (evaluation.status !== 'ready' || evaluation.points.length < 2) {
     return
   }
   routeObject.updateMatrixWorld(true)
   const inverse = new THREE.Matrix4().copy(routeObject.matrixWorld).invert()
-  const signature = stableSerialize(evaluation.stops.map((stop) => ({
-    id: stop.definition.id,
-    name: stop.definition.name,
-    anchor: stop.definition.anchor,
-    projected: stop.projectedPoint.toArray(),
-    distance: stop.routeDistance,
-  })))
+  const signature = stableSerialize({
+    endpoints: [
+      evaluation.points[0]?.toArray() ?? null,
+      evaluation.points[evaluation.points.length - 1]?.toArray() ?? null,
+    ],
+    stops: evaluation.stops.map((stop) => ({
+      id: stop.definition.id,
+      name: stop.definition.name,
+      anchor: stop.definition.anchor,
+      projected: stop.projectedPoint.toArray(),
+      distance: stop.routeDistance,
+      legKind: props.legs?.find((leg) => leg.id === stop.definition.legId)?.kind ?? null,
+    })),
+  })
   const group = existing instanceof THREE.Group ? existing : new THREE.Group()
   if (group.userData.stopOverlaySignature === signature) {
     return
@@ -2068,6 +2078,28 @@ function syncGuideRouteStopOverlay(
   group.name = '__GuideRouteStopOverlay'
   group.userData.stopOverlaySignature = signature
   group.userData.isGuideRouteStopOverlay = true
+  const endpointDefinitions = [
+    { endpoint: 'start' as const, point: evaluation.points[0]! },
+    { endpoint: 'end' as const, point: evaluation.points[evaluation.points.length - 1]! },
+  ]
+  for (const endpoint of endpointDefinitions) {
+    const marker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.4, 14, 10),
+      new THREE.MeshBasicMaterial({
+        color: 0x59dfff,
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    )
+    marker.position.copy(endpoint.point.clone().applyMatrix4(inverse))
+    marker.renderOrder = 10022
+    marker.userData.isGuideRouteEndpointMarker = true
+    marker.userData.nodeId = node.id
+    marker.userData.endpoint = endpoint.endpoint
+    marker.userData.baseRadius = 0.4
+    group.add(marker)
+  }
   for (const stop of evaluation.stops) {
     const anchorWorld = new THREE.Vector3(
       stop.definition.anchor.x,
@@ -2088,6 +2120,12 @@ function syncGuideRouteStopOverlay(
     anchorMarker.position.copy(anchorLocal)
     anchorMarker.renderOrder = 10020
     anchorMarker.userData.isGuideRouteStopMarker = true
+    anchorMarker.userData.nodeId = node.id
+    anchorMarker.userData.stopId = stop.definition.id
+    anchorMarker.userData.baseRadius = 0.35
+    anchorMarker.userData.isLockedToRoad = (
+      props.legs?.find((leg) => leg.id === stop.definition.legId)?.kind === 'road'
+    )
     group.add(anchorMarker)
 
     const projectedMarker = new THREE.Mesh(
@@ -2128,6 +2166,312 @@ function syncGuideRouteStopOverlay(
     routeObject.add(group)
     userData.guideRouteStopOverlay = group
   }
+}
+
+type GuideRouteStopMarkerHit = {
+  nodeId: string
+  stopId: string
+  marker: THREE.Mesh
+  worldPosition: THREE.Vector3
+  screenDistancePx: number
+}
+
+type GuideRouteEndpointMarkerHit = {
+  nodeId: string
+  endpoint: 'start' | 'end'
+  marker: THREE.Mesh
+  worldPosition: THREE.Vector3
+  screenDistancePx: number
+}
+
+const guideRouteStopMarkerProjectionHelper = new THREE.Vector3()
+const guideRouteStopMarkerWorldPositionHelper = new THREE.Vector3()
+
+function resolveGuideRouteStopMarkerHit(event: PointerEvent): GuideRouteStopMarkerHit | null {
+  const canvas = canvasRef.value
+  if (!canvas || !camera) {
+    return null
+  }
+  const rect = canvas.getBoundingClientRect()
+  if (!(rect.width > 0) || !(rect.height > 0)) {
+    return null
+  }
+  camera.updateMatrixWorld(true)
+  let best: GuideRouteStopMarkerHit | null = null
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+    if (node.dynamicMesh?.type !== 'GuideRoute') {
+      continue
+    }
+    const runtimeObject = objectMap.get(node.id) ?? null
+    const overlay = runtimeObject?.userData?.guideRouteStopOverlay
+    if (!(overlay instanceof THREE.Group)) {
+      continue
+    }
+    for (const marker of overlay.children) {
+      if (!(marker instanceof THREE.Mesh) || marker.userData?.isGuideRouteStopMarker !== true) {
+        continue
+      }
+      const nodeId = typeof marker.userData.nodeId === 'string' ? marker.userData.nodeId : ''
+      const stopId = typeof marker.userData.stopId === 'string' ? marker.userData.stopId : ''
+      if (!nodeId || !stopId) {
+        continue
+      }
+      marker.getWorldPosition(guideRouteStopMarkerWorldPositionHelper)
+      guideRouteStopMarkerProjectionHelper
+        .copy(guideRouteStopMarkerWorldPositionHelper)
+        .project(camera)
+      if (
+        !Number.isFinite(guideRouteStopMarkerProjectionHelper.x)
+        || !Number.isFinite(guideRouteStopMarkerProjectionHelper.y)
+        || guideRouteStopMarkerProjectionHelper.z < -1
+        || guideRouteStopMarkerProjectionHelper.z > 1
+      ) {
+        continue
+      }
+      const screenX = rect.left + (guideRouteStopMarkerProjectionHelper.x * 0.5 + 0.5) * rect.width
+      const screenY = rect.top + (-guideRouteStopMarkerProjectionHelper.y * 0.5 + 0.5) * rect.height
+      const distance = Math.hypot(screenX - event.clientX, screenY - event.clientY)
+      if (distance > 22 || (best && distance >= best.screenDistancePx)) {
+        continue
+      }
+      best = {
+        nodeId,
+        stopId,
+        marker,
+        worldPosition: guideRouteStopMarkerWorldPositionHelper.clone(),
+        screenDistancePx: distance,
+      }
+    }
+  }
+  return best
+}
+
+function resolveGuideRouteEndpointMarkerHit(
+  event: PointerEvent,
+): GuideRouteEndpointMarkerHit | null {
+  const canvas = canvasRef.value
+  if (!canvas || !camera) {
+    return null
+  }
+  const rect = canvas.getBoundingClientRect()
+  if (!(rect.width > 0) || !(rect.height > 0)) {
+    return null
+  }
+  camera.updateMatrixWorld(true)
+  let best: GuideRouteEndpointMarkerHit | null = null
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+    if (node.dynamicMesh?.type !== 'GuideRoute') {
+      continue
+    }
+    const overlay = objectMap.get(node.id)?.userData?.guideRouteStopOverlay
+    if (!(overlay instanceof THREE.Group)) {
+      continue
+    }
+    for (const marker of overlay.children) {
+      if (
+        !(marker instanceof THREE.Mesh)
+        || marker.userData?.isGuideRouteEndpointMarker !== true
+        || (marker.userData?.endpoint !== 'start' && marker.userData?.endpoint !== 'end')
+      ) {
+        continue
+      }
+      marker.getWorldPosition(guideRouteStopMarkerWorldPositionHelper)
+      guideRouteStopMarkerProjectionHelper
+        .copy(guideRouteStopMarkerWorldPositionHelper)
+        .project(camera)
+      if (
+        !Number.isFinite(guideRouteStopMarkerProjectionHelper.x)
+        || !Number.isFinite(guideRouteStopMarkerProjectionHelper.y)
+        || guideRouteStopMarkerProjectionHelper.z < -1
+        || guideRouteStopMarkerProjectionHelper.z > 1
+      ) {
+        continue
+      }
+      const screenX = rect.left + (guideRouteStopMarkerProjectionHelper.x * 0.5 + 0.5) * rect.width
+      const screenY = rect.top + (-guideRouteStopMarkerProjectionHelper.y * 0.5 + 0.5) * rect.height
+      const distance = Math.hypot(screenX - event.clientX, screenY - event.clientY)
+      if (distance > 24 || (best && distance >= best.screenDistancePx)) {
+        continue
+      }
+      best = {
+        nodeId: node.id,
+        endpoint: marker.userData.endpoint,
+        marker,
+        worldPosition: guideRouteStopMarkerWorldPositionHelper.clone(),
+        screenDistancePx: distance,
+      }
+    }
+  }
+  return best
+}
+
+function selectGuideRouteStopMarker(hit: GuideRouteStopMarkerHit): void {
+  sceneStore.selectNode(hit.nodeId)
+  if (activeBuildTool.value === 'guideRoute') {
+    enterGuideRouteEditMode(hit.nodeId)
+  }
+  sceneStore.setSelectedGuideRouteStop(hit.nodeId, hit.stopId)
+  const node = resolveSceneNodeById(hit.nodeId)
+  const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  const stop = props?.stops?.find((entry) => entry.id === hit.stopId) ?? null
+  const leg = stop ? props?.legs?.find((entry) => entry.id === stop.legId) : null
+  if (leg?.kind === 'path' && stop?.controlAnchorId) {
+    const index = leg.anchors.findIndex((anchor) => anchor.id === stop.controlAnchorId)
+    if (index >= 0) {
+      sceneStore.setSelectedGuideRouteWaypoint(hit.nodeId, index)
+    }
+  } else {
+    sceneStore.clearSelectedGuideRouteWaypoint()
+  }
+}
+
+function selectGuideRouteEndpointMarker(hit: GuideRouteEndpointMarkerHit): boolean {
+  const node = resolveSceneNodeById(hit.nodeId)
+  const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  if (!node || !props?.legs?.length) {
+    return false
+  }
+  const leg = hit.endpoint === 'start'
+    ? props.legs[0]
+    : props.legs[props.legs.length - 1]
+  sceneStore.selectNode(hit.nodeId)
+  sceneStore.clearSelectedGuideRouteStop()
+  sceneStore.clearSelectedGuideRouteWaypoint()
+  enterGuideRouteEditMode(hit.nodeId)
+  guideRouteCanvasContext = {
+    kind: 'endpoint',
+    nodeId: hit.nodeId,
+    endpoint: hit.endpoint,
+    point: hit.worldPosition.clone(),
+    surfaceProviderNodeId: leg?.kind === 'road'
+      ? leg.providerNodeId
+      : leg?.kind === 'path'
+        ? leg.surfaceProviderNodeId
+        : null,
+  }
+  showLandscapeRoadPlacementNotice(
+    hit.endpoint === 'start'
+      ? '已选择起点，下一次在路线外点击开始延长。'
+      : '已选择终点，下一次在路线外点击开始延长。',
+    'info',
+  )
+  return true
+}
+
+function updateGuideRouteStopMarkerPresentation(): void {
+  const canvas = canvasRef.value
+  if (!canvas || !camera) {
+    return
+  }
+  const selected = sceneStore.selectedGuideRouteStop
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+    if (node.dynamicMesh?.type !== 'GuideRoute') {
+      continue
+    }
+    const runtimeObject = objectMap.get(node.id) ?? null
+    const overlay = runtimeObject?.userData?.guideRouteStopOverlay
+    if (!(overlay instanceof THREE.Group)) {
+      continue
+    }
+    for (const marker of overlay.children) {
+      const isStopMarker = marker.userData?.isGuideRouteStopMarker === true
+      const isEndpointMarker = marker.userData?.isGuideRouteEndpointMarker === true
+      if (!(marker instanceof THREE.Mesh) || (!isStopMarker && !isEndpointMarker)) {
+        continue
+      }
+      marker.getWorldPosition(guideRouteStopMarkerWorldPositionHelper)
+      camera.getWorldPosition(guideRouteStopMarkerProjectionHelper)
+      const distance = marker.getWorldPosition(guideRouteStopMarkerWorldPositionHelper)
+        .distanceTo(camera.getWorldPosition(guideRouteStopMarkerProjectionHelper))
+      const unitsPerPixel = computeWorldUnitsPerPixel({
+        camera,
+        distance,
+        viewportHeightPx: canvas.clientHeight || canvas.height || 1,
+      })
+      const isSelected = isStopMarker
+        ? (
+            selected?.nodeId === marker.userData.nodeId
+            && selected?.stopId === marker.userData.stopId
+          )
+        : (
+            guideRouteCanvasContext?.kind === 'endpoint'
+            && guideRouteCanvasContext.nodeId === marker.userData.nodeId
+            && guideRouteCanvasContext.endpoint === marker.userData.endpoint
+          )
+      const diameterWorld = unitsPerPixel * (isSelected ? 24 : 18)
+      const parent = marker.parent
+      parent?.getWorldScale(guideRouteStopMarkerProjectionHelper)
+      const parentScale = Math.max(
+        1e-6,
+        guideRouteStopMarkerProjectionHelper.x,
+        guideRouteStopMarkerProjectionHelper.y,
+        guideRouteStopMarkerProjectionHelper.z,
+      )
+      const scale = Math.max(1e-4, diameterWorld / 2 / parentScale)
+      marker.scale.setScalar(scale)
+      const material = marker.material
+      if (material instanceof THREE.MeshBasicMaterial) {
+        material.color.setHex(
+          isSelected
+            ? 0xffffff
+            : isEndpointMarker
+              ? 0x59dfff
+              : marker.userData.isLockedToRoad
+                ? 0xffa64d
+                : 0xffd54f,
+        )
+      }
+    }
+  }
+}
+
+function setGuideRouteCanvasCursor(cursor: '' | 'grab' | 'grabbing' | 'pointer' | 'not-allowed'): void {
+  const canvas = canvasRef.value
+  if (!canvas || guideRouteAppliedCursor === cursor) {
+    return
+  }
+  guideRouteAppliedCursor = cursor
+  canvas.style.cursor = cursor
+}
+
+function updateGuideRouteCanvasHoverCursor(event: PointerEvent): void {
+  if (activeBuildTool.value !== 'guideRoute' || event.pointerType !== 'mouse' || event.buttons !== 0) {
+    return
+  }
+  const stopHit = resolveGuideRouteStopMarkerHit(event)
+  if (stopHit) {
+    setGuideRouteCanvasCursor(stopHit.marker.userData?.isLockedToRoad ? 'not-allowed' : 'grab')
+    return
+  }
+  setGuideRouteCanvasCursor(resolveGuideRouteEndpointMarkerHit(event) ? 'pointer' : '')
 }
 
 function computeRegionRuntimeSignature(definition: RegionDynamicMesh): string {
@@ -6085,6 +6429,38 @@ let landformCircleRadiusDragState: LandformCircleRadiusDragState | null = null
 let regionContourVertexDragState: RegionContourVertexDragState | null = null
 let boundaryWallContourVertexDragState: BoundaryWallContourVertexDragState | null = null
 let guideRouteVertexDragState: GuideRouteVertexDragState | null = null
+let guideRouteStopDragState: {
+  pointerId: number
+  nodeId: string
+  stopId: string
+  marker: THREE.Mesh
+  startClientX: number
+  startClientY: number
+  startWorldPosition: THREE.Vector3
+  workingWorldPosition: THREE.Vector3
+  surfaceProviderNodeId: string | null
+  moved: boolean
+} | null = null
+type GuideRouteCanvasContext =
+  | {
+      kind: 'stop'
+      nodeId: string
+      stopId: string
+      point: THREE.Vector3
+      surfaceProviderNodeId: string | null
+      legKind: GuideRouteComponentProps['legs'][number]['kind']
+    }
+  | {
+      kind: 'endpoint'
+      nodeId: string
+      endpoint: 'start' | 'end'
+      point: THREE.Vector3
+      surfaceProviderNodeId: string | null
+    }
+
+let guideRouteCanvasContext: GuideRouteCanvasContext | null = null
+let guideRoutePointerConsumedId: number | null = null
+let guideRouteAppliedCursor = ''
 let landscapeRoadPathDragState: LandscapeRoadPathDragState | null = null
 let landscapeRoadPathSelectedIndex: number | null = null
 let waterCircleCenterDragState: WaterCircleCenterDragState | null = null
@@ -7093,6 +7469,12 @@ function ensureGuideRouteVertexHandlesForSelectedNode(options?: { force?: boolea
     isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
     resolveGuideRouteDefinition: (nodeId: string) => {
       const node = findSceneNode(sceneStore.nodes, nodeId)
+      const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+        | Partial<GuideRouteComponentProps>
+        | undefined
+      if (props?.legs?.some((leg) => leg.kind === 'road')) {
+        return null
+      }
       return node?.dynamicMesh?.type === 'GuideRoute' ? (node.dynamicMesh as GuideRouteDynamicMesh) : null
     },
     resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
@@ -7160,6 +7542,213 @@ function syncSelectedGuideRouteVertexHandle() {
     vertexIndex: selected.waypointIndex,
   })
 }
+
+function tryBeginGuideRouteStopDrag(event: PointerEvent): boolean {
+  if (event.button !== 0 || guideRouteStopDragState) {
+    return false
+  }
+  const hit = resolveGuideRouteStopMarkerHit(event)
+  if (!hit) {
+    return false
+  }
+  guideRouteBuildTool.cancel()
+  selectGuideRouteStopMarker(hit)
+  const node = resolveSceneNodeById(hit.nodeId)
+  const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  const stop = props?.stops?.find((entry) => entry.id === hit.stopId)
+  const leg = stop ? props?.legs?.find((entry) => entry.id === stop.legId) : null
+  const surfaceProviderNodeId = leg?.kind === 'road'
+    ? leg.providerNodeId
+    : leg?.kind === 'path'
+      ? leg.surfaceProviderNodeId
+      : null
+  if (!stop || !leg) {
+    return true
+  }
+  guideRouteCanvasContext = {
+    kind: 'stop',
+    nodeId: hit.nodeId,
+    stopId: hit.stopId,
+    point: hit.worldPosition.clone(),
+    surfaceProviderNodeId,
+    legKind: leg.kind,
+  }
+  if (leg.kind === 'road') {
+    return true
+  }
+  guideRouteStopDragState = {
+    pointerId: event.pointerId,
+    nodeId: hit.nodeId,
+    stopId: hit.stopId,
+    marker: hit.marker,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startWorldPosition: hit.worldPosition.clone(),
+    workingWorldPosition: hit.worldPosition.clone(),
+    surfaceProviderNodeId,
+    moved: false,
+  }
+  pointerInteraction.capture(event.pointerId)
+  return true
+}
+
+function updateGuideRouteStopDrag(event: PointerEvent): boolean {
+  const state = guideRouteStopDragState
+  if (!state || state.pointerId !== event.pointerId) {
+    return false
+  }
+  const delta = Math.hypot(event.clientX - state.startClientX, event.clientY - state.startClientY)
+  if (!state.moved && delta < CLICK_DRAG_THRESHOLD_PX) {
+    return true
+  }
+  state.moved = true
+  const surfacePlacement = resolveGuideRouteSurfacePlacementPoint(event, {
+    surfaceProviderNodeId: state.surfaceProviderNodeId,
+  })
+  let nextWorld: THREE.Vector3 | null = surfacePlacement?.point.clone() ?? null
+  if (!nextWorld) {
+    const fallback = new THREE.Vector3()
+    if (raycastGroundPoint(event, fallback)) {
+      nextWorld = fallback
+    }
+  }
+  if (!nextWorld) {
+    return true
+  }
+  state.workingWorldPosition.copy(nextWorld)
+  const local = state.marker.parent?.worldToLocal(nextWorld.clone()) ?? nextWorld
+  state.marker.position.copy(local)
+  return true
+}
+
+function resolveGuideRouteRoadStopDragPosition(
+  state: NonNullable<typeof guideRouteStopDragState>,
+): THREE.Vector3 {
+  const node = resolveSceneNodeById(state.nodeId)
+  const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  const stop = props?.stops?.find((entry) => entry.id === state.stopId)
+  const leg = stop ? props?.legs?.find((entry) => entry.id === stop.legId) : null
+  if (!node || !props || leg?.kind !== 'road') {
+    return state.workingWorldPosition.clone()
+  }
+  const providerObject = objectMap.get(leg.providerNodeId) ?? null
+  const routeObject = objectMap.get(state.nodeId) ?? null
+  const evaluation = evaluateGuideRoute({
+    routeNode: node,
+    providerObject,
+    routeObject,
+  })
+  if (evaluation.status !== 'ready') {
+    return state.workingWorldPosition.clone()
+  }
+  const metric = buildPolylineMetricData(evaluation.points, { closed: false, mode: '3d' })
+  if (!metric) {
+    return state.workingWorldPosition.clone()
+  }
+  const target = new THREE.Vector3()
+  const projection = projectPointToPolyline(
+    evaluation.points,
+    metric,
+    state.workingWorldPosition,
+    target,
+  )
+  return projection.closestPoint?.clone?.() ?? target
+}
+
+function finishGuideRouteStopDrag(event: PointerEvent): boolean {
+  const state = guideRouteStopDragState
+  if (!state || state.pointerId !== event.pointerId) {
+    return false
+  }
+  guideRouteStopDragState = null
+  if (state.moved) {
+    const nextPosition = resolveGuideRouteRoadStopDragPosition(state)
+    sceneStore.moveGuideRouteStopAtPosition(state.nodeId, state.stopId, {
+      x: nextPosition.x,
+      y: nextPosition.y,
+      z: nextPosition.z,
+    })
+    if (guideRouteCanvasContext?.kind === 'stop' && guideRouteCanvasContext.stopId === state.stopId) {
+      guideRouteCanvasContext = {
+        ...guideRouteCanvasContext,
+        point: nextPosition.clone(),
+      }
+    }
+  }
+  syncGuideRouteStopMarkerPresentationAfterEdit(state.nodeId)
+  setGuideRouteCanvasCursor('')
+  return true
+}
+
+function cancelGuideRouteStopDrag(event?: PointerEvent): boolean {
+  const state = guideRouteStopDragState
+  if (!state || (event && event.pointerId !== state.pointerId)) {
+    return false
+  }
+  const local = state.marker.parent?.worldToLocal(state.startWorldPosition.clone())
+  if (local) {
+    state.marker.position.copy(local)
+  }
+  guideRouteStopDragState = null
+  syncGuideRouteStopMarkerPresentationAfterEdit(state.nodeId)
+  setGuideRouteCanvasCursor('')
+  return true
+}
+
+function syncGuideRouteStopMarkerPresentationAfterEdit(nodeId: string): void {
+  const node = resolveSceneNodeById(nodeId)
+  const object = objectMap.get(nodeId) ?? null
+  if (node && object) {
+    syncGuideRouteStopOverlay(node, object)
+  }
+  ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+}
+
+function restoreGuideRouteCanvasContextFromSelectedStop(): void {
+  const selection = sceneStore.selectedGuideRouteStop
+  if (!selection) {
+    return
+  }
+  const node = resolveSceneNodeById(selection.nodeId)
+  const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  const stop = props?.stops?.find((entry) => entry.id === selection.stopId)
+  const leg = stop ? props?.legs?.find((entry) => entry.id === stop.legId) : null
+  if (!stop || !leg) {
+    return
+  }
+  guideRouteCanvasContext = {
+    kind: 'stop',
+    nodeId: selection.nodeId,
+    stopId: selection.stopId,
+    point: new THREE.Vector3(stop.anchor.x, stop.anchor.y, stop.anchor.z),
+    surfaceProviderNodeId: leg.kind === 'road'
+      ? leg.providerNodeId
+      : leg.surfaceProviderNodeId,
+    legKind: leg.kind,
+  }
+}
+
+watch(
+  () => sceneStore.selectedGuideRouteStop,
+  (selection) => {
+    if (selection) {
+      restoreGuideRouteCanvasContextFromSelectedStop()
+      return
+    }
+    queueMicrotask(() => {
+      if (!sceneStore.selectedGuideRouteStop && guideRouteCanvasContext?.kind === 'stop') {
+        guideRouteCanvasContext = null
+      }
+    })
+  },
+  { deep: true },
+)
 
 function pickLandformVertexHandleAtPointer(event: PointerEvent): LandformVertexHandlePickResult | null {
   return landformVertexRenderer.pick({
@@ -7548,127 +8137,345 @@ function commitGuideRouteNode(nodeId: string, points: Vector3Like[]): boolean {
   })
 }
 
-function pickGuideRouteSegmentInsertion(): { nodeId: string; insertIndex: number; point: Vector3Like } | null {
-  const selectedId = getActiveGuideRouteEditNodeId()
-  if (!selectedId || !camera || !canvasRef.value) {
+function pickAnyGuideRouteSegmentAtPointer(
+  event: PointerEvent,
+): { nodeId: string; worldPoint: THREE.Vector3 } | null {
+  const canvas = canvasRef.value
+  if (!canvas || !camera) {
     return null
   }
-  const node = findSceneNode(sceneStore.nodes, selectedId)
-  const runtimeObject = objectMap.get(selectedId) ?? null
-  if (!node || !runtimeObject || node.dynamicMesh?.type !== 'GuideRoute') {
+  const rect = canvas.getBoundingClientRect()
+  if (!(rect.width > 0) || !(rect.height > 0)) {
     return null
   }
-
-  const routeObject = (runtimeObject.userData?.guideRouteGroup as THREE.Object3D | undefined) ?? runtimeObject
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
-  const hits = raycaster.intersectObjects(routeObject.children, true)
-  for (const hit of hits) {
-    let owner: THREE.Object3D | null = hit.object
-    while (owner && owner !== routeObject && owner.name !== 'GuideRouteSegments') {
-      owner = owner.parent ?? null
-    }
-    if (!owner || owner.name !== 'GuideRouteSegments') {
+  camera.updateMatrixWorld(true)
+  let best: { nodeId: string; worldPoint: THREE.Vector3; distance: number } | null = null
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
       continue
     }
-    if (typeof hit.instanceId !== 'number' || hit.instanceId < 0) {
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+    if (node.dynamicMesh?.type !== 'GuideRoute') {
       continue
     }
-
-    const segmentIndex = Math.floor(hit.instanceId)
-    const points = cloneGuideRouteLocalPoints(node)
-    const start = points[segmentIndex]
-    const end = points[segmentIndex + 1]
-    if (!start || !end) {
+    const runtimeObject = objectMap.get(node.id) ?? null
+    if (!runtimeObject?.visible) {
       continue
     }
-
-    const localHit = runtimeObject.worldToLocal(hit.point.clone())
-    const dx = end.x - start.x
-    const dz = end.z - start.z
-    const denominator = dx * dx + dz * dz
-    const t = denominator > 1e-10
-      ? Math.max(0, Math.min(1, ((localHit.x - start.x) * dx + (localHit.z - start.z) * dz) / denominator))
-      : 0
-    const point = {
-      x: start.x + dx * t,
-      y: start.y + (end.y - start.y) * t,
-      z: start.z + dz * t,
-    }
-    return {
-      nodeId: selectedId,
-      insertIndex: segmentIndex + 1,
-      point,
+    const routeObject = (runtimeObject.userData?.guideRouteGroup as THREE.Object3D | undefined)
+      ?? runtimeObject
+    const hits = raycaster.intersectObjects(routeObject.children, true)
+    for (const hit of hits) {
+      let owner: THREE.Object3D | null = hit.object
+      while (owner && owner !== routeObject && owner.name !== 'GuideRouteSegments') {
+        owner = owner.parent ?? null
+      }
+      if (!owner || owner.name !== 'GuideRouteSegments') {
+        continue
+      }
+      if (best && hit.distance >= best.distance) {
+        continue
+      }
+      best = {
+        nodeId: node.id,
+        worldPoint: hit.point.clone(),
+        distance: hit.distance,
+      }
     }
   }
-
-  return null
+  return best
+    ? { nodeId: best.nodeId, worldPoint: best.worldPoint }
+    : null
 }
 
-function tryInsertGuideRouteWaypoint(event: PointerEvent): boolean {
-  if (!isSelectedGuideRouteEditMode() || guideRouteBuildTool.getSession()) {
+function resolveGuideRouteStopPlacementLeg(
+  node: SceneNode,
+  worldPoint: THREE.Vector3,
+): {
+  leg: GuideRouteComponentProps['legs'][number]
+  anchor: THREE.Vector3
+  anchorIndex: number | null
+} | null {
+  const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideRouteComponentProps>
+    | undefined
+  if (!component?.props) {
+    return null
+  }
+  const props = component.props as GuideRouteComponentProps
+  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
+  const evaluation = evaluateGuideRoute({
+    routeNode: node,
+    providerObject: providerNodeId ? objectMap.get(providerNodeId) ?? null : null,
+    routeObject: objectMap.get(node.id) ?? null,
+  })
+  if (evaluation.status !== 'ready') {
+    return null
+  }
+  const routeMetric = buildPolylineMetricData(evaluation.points, { closed: false, mode: '3d' })
+  if (!routeMetric) {
+    return null
+  }
+  const routeProjection = projectPointToPolyline(
+    evaluation.points,
+    routeMetric,
+    worldPoint,
+    new THREE.Vector3(),
+  )
+  const compiled = resolveCompiledGuideLegAtDistance(evaluation, routeProjection.s)
+  if (!compiled) {
+    return null
+  }
+  const legMetric = buildPolylineMetricData(compiled.points, { closed: false, mode: '3d' })
+  if (!legMetric) {
+    return null
+  }
+  const legProjection = projectPointToPolyline(
+    compiled.points,
+    legMetric,
+    worldPoint,
+    new THREE.Vector3(),
+  )
+  const anchor = legProjection.closestPoint.clone()
+  if (compiled.definition.kind !== 'path') {
+    return {
+      leg: compiled.definition,
+      anchor,
+      anchorIndex: null,
+    }
+  }
+  const anchors = compiled.definition.anchors
+  let bestIndex = 1
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (let index = 0; index + 1 < anchors.length; index += 1) {
+    const start = anchors[index]!
+    const end = anchors[index + 1]!
+    const segment = new THREE.Line3(
+      new THREE.Vector3(start.x, start.y, start.z),
+      new THREE.Vector3(end.x, end.y, end.z),
+    )
+    const closest = segment.closestPointToPoint(anchor, true, new THREE.Vector3())
+    const distance = closest.distanceToSquared(anchor)
+    if (distance < bestDistance) {
+      bestDistance = distance
+      bestIndex = index + 1
+    }
+  }
+  return {
+    leg: compiled.definition,
+    anchor,
+    anchorIndex: bestIndex,
+  }
+}
+
+function tryCreateGuideRouteStopOnRouteClick(event: PointerEvent): boolean {
+  if (event.button !== 0 || guideRouteBuildTool.getSession()) {
     return false
   }
-  if (event.button !== 0 || event.detail !== 1) {
+  const segmentHit = pickAnyGuideRouteSegmentAtPointer(event)
+  if (!segmentHit) {
     return false
   }
-  const selectedId = getActiveGuideRouteEditNodeId()
-  if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
-    return false
-  }
-  const node = findSceneNode(sceneStore.nodes, selectedId)
+  const nodeId = segmentHit.nodeId
+  const node = resolveSceneNodeById(nodeId)
   if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
     return false
   }
-
-  const insertion = pickGuideRouteSegmentInsertion()
-  if (!insertion || insertion.nodeId !== selectedId) {
+  if (sceneStore.selectedNodeId !== nodeId) {
+    sceneStore.selectNode(nodeId)
+  }
+  enterGuideRouteEditMode(nodeId)
+  const worldPoint = segmentHit.worldPoint
+  const placement = resolveGuideRouteStopPlacementLeg(node, worldPoint)
+  if (!placement || placement.anchor.distanceTo(worldPoint) > 40) {
     return false
   }
-
-  const currentPoints = cloneGuideRouteLocalPoints(node)
-  const nextPoints = currentPoints.slice()
-  nextPoints.splice(insertion.insertIndex, 0, insertion.point)
-
-  const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
-  const currentPathLeg = component?.props?.legs?.find((leg) => leg.kind === 'path')
-  const runtimeObject = objectMap.get(selectedId) ?? null
-  const insertionWorld = runtimeObject
-    ? runtimeObject.localToWorld(new THREE.Vector3(
-      insertion.point.x,
-      insertion.point.y,
-      insertion.point.z,
-    ))
-    : new THREE.Vector3(insertion.point.x, insertion.point.y, insertion.point.z)
-  const providerNodeId = currentPathLeg?.kind === 'path'
-    ? currentPathLeg.surfaceProviderNodeId
-    : null
-  const insertionSample = providerNodeId
-    ? sampleProceduralLandscapeGuideRouteSurface(
-      providerNodeId,
-      insertionWorld.x,
-      insertionWorld.z,
-      0,
+  const result = sceneStore.addGuideRouteStopAtRoute(nodeId, {
+    legId: placement.leg.id,
+    anchor: {
+      x: placement.anchor.x,
+      y: placement.anchor.y,
+      z: placement.anchor.z,
+    },
+    anchorIndex: placement.anchorIndex,
+  })
+  if (!result) {
+    return false
+  }
+  sceneStore.setSelectedGuideRouteStop(nodeId, result.stopId)
+  guideRouteCanvasContext = {
+    kind: 'stop',
+    nodeId,
+    stopId: result.stopId,
+    point: placement.anchor.clone(),
+    surfaceProviderNodeId: placement.leg.kind === 'road'
+      ? placement.leg.providerNodeId
+      : placement.leg.surfaceProviderNodeId,
+    legKind: placement.leg.kind,
+  }
+  if (placement.leg.kind === 'road') {
+    showLandscapeRoadPlacementNotice(
+      '已创建公路停靠点：可编辑、删除或创建分支，但不能拖动。',
+      'info',
     )
-    : null
-  const insertionPosition = insertionSample?.point ?? insertionWorld
-  const nextAnchors = currentPathLeg?.kind === 'path'
-    ? currentPathLeg.anchors.map((anchor) => ({ ...anchor }))
-    : []
-  nextAnchors.splice(insertion.insertIndex, 0, {
-    x: insertionPosition.x,
-    y: insertionPosition.y,
-    z: insertionPosition.z,
-  })
+  }
+  return true
+}
 
-  const updated = sceneStore.updateGuideRouteWaypoints(selectedId, {
-    vertices: nextPoints,
-    anchors: nextAnchors,
-    selectedWaypointIndex: insertion.insertIndex,
-  })
-  if (!updated) {
+function tryCreateGuideRouteStopNearSurfaceClick(event: PointerEvent): boolean {
+  if (event.button !== 0 || guideRouteBuildTool.getSession()) {
     return false
   }
-  ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+  const surfacePlacement = resolveGuideRouteSurfacePlacementPoint(event)
+  const worldPoint = surfacePlacement?.point.clone() ?? new THREE.Vector3()
+  if (!surfacePlacement && !raycastGroundPoint(event, worldPoint)) {
+    return false
+  }
+  let best: {
+    nodeId: string
+    placement: NonNullable<ReturnType<typeof resolveGuideRouteStopPlacementLeg>>
+    distance: number
+  } | null = null
+  const stack = [...sceneStore.nodes]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (Array.isArray(node.children) && node.children.length) {
+      stack.push(...node.children)
+    }
+    if (node.dynamicMesh?.type !== 'GuideRoute') {
+      continue
+    }
+    const placement = resolveGuideRouteStopPlacementLeg(node, worldPoint)
+    if (!placement) {
+      continue
+    }
+    const distance = placement.anchor.distanceTo(worldPoint)
+    if (distance > 8 || (best && distance >= best.distance)) {
+      continue
+    }
+    best = { nodeId: node.id, placement, distance }
+  }
+  if (!best) {
+    return false
+  }
+  const nodeId = best.nodeId
+  sceneStore.selectNode(nodeId)
+  enterGuideRouteEditMode(nodeId)
+  const result = sceneStore.addGuideRouteStopAtRoute(nodeId, {
+    legId: best.placement.leg.id,
+    anchor: {
+      x: best.placement.anchor.x,
+      y: best.placement.anchor.y,
+      z: best.placement.anchor.z,
+    },
+    anchorIndex: best.placement.anchorIndex,
+  })
+  if (!result) {
+    return false
+  }
+  sceneStore.setSelectedGuideRouteStop(nodeId, result.stopId)
+  guideRouteCanvasContext = {
+    kind: 'stop',
+    nodeId,
+    stopId: result.stopId,
+    point: best.placement.anchor.clone(),
+    surfaceProviderNodeId: best.placement.leg.kind === 'road'
+      ? best.placement.leg.providerNodeId
+      : best.placement.leg.surfaceProviderNodeId,
+    legKind: best.placement.leg.kind,
+  }
+  if (best.placement.leg.kind === 'road') {
+    showLandscapeRoadPlacementNotice(
+      '已创建公路停靠点：位置由公路锁定，可编辑、删除或创建分支。',
+      'info',
+    )
+  }
+  return true
+}
+
+function beginGuideRouteDrawingFromCanvasContext(event: PointerEvent): boolean {
+  if (event.button !== 0 || guideRouteBuildTool.getSession()) {
+    return false
+  }
+  const context = guideRouteCanvasContext
+  if (context?.kind === 'stop') {
+    const node = resolveSceneNodeById(context.nodeId)
+    const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | undefined
+    const stop = props?.stops?.find((entry) => entry.id === context.stopId)
+    const leg = stop ? props?.legs?.find((entry) => entry.id === stop.legId) : null
+    if (!stop || !leg) {
+      guideRouteCanvasContext = null
+      return false
+    }
+    const surfaceProviderNodeId = leg.kind === 'road'
+      ? leg.providerNodeId
+      : leg.surfaceProviderNodeId
+    if (!resolveGuideRouteSurfacePlacementPoint(event, { surfaceProviderNodeId })) {
+      return false
+    }
+    const point = new THREE.Vector3(stop.anchor.x, stop.anchor.y, stop.anchor.z)
+    sceneStore.selectNode(context.nodeId)
+    enterGuideRouteEditMode(context.nodeId)
+    guideRouteBuildTool.beginBranch({
+      nodeId: context.nodeId,
+      stopId: context.stopId,
+      point,
+      surfaceProviderNodeId,
+    })
+    showLandscapeRoadPlacementNotice(
+      '已从停靠点开始新建分支，继续点击路径点，双击完成。',
+      'info',
+    )
+    return true
+  }
+  if (context?.kind === 'endpoint') {
+    const endpointContext = resolveGuideRouteEndpointDrawingContext(
+      context.nodeId,
+      context.endpoint,
+    )
+    if (!endpointContext) {
+      guideRouteCanvasContext = null
+      showLandscapeRoadPlacementNotice('Guide Route 尚未准备就绪，无法延长。', 'error')
+      return false
+    }
+    if (!resolveGuideRouteSurfacePlacementPoint(event, {
+      surfaceProviderNodeId: endpointContext.surfaceProviderNodeId,
+    })) {
+      return false
+    }
+    sceneStore.selectNode(context.nodeId)
+    enterGuideRouteEditMode(context.nodeId)
+    guideRouteBuildTool.beginExtension({
+      nodeId: context.nodeId,
+      endpoint: context.endpoint,
+      point: endpointContext.point,
+      surfaceProviderNodeId: endpointContext.surfaceProviderNodeId,
+    })
+    showLandscapeRoadPlacementNotice(
+      '已开始延长 Guide Route，继续点击路径点，双击完成。',
+      'info',
+    )
+    return true
+  }
+  if (!resolveGuideRouteSurfacePlacementPoint(event)) {
+    return false
+  }
+  guideRouteCanvasContext = null
+  sceneStore.clearSelectedGuideRouteStop()
+  sceneStore.clearSelectedGuideRouteWaypoint()
+  guideRouteBuildTool.beginNewRoute()
   return true
 }
 
@@ -7695,6 +8502,8 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
     return false
   }
 
+  guideRouteCanvasContext = null
+  sceneStore.clearSelectedGuideRouteStop()
   sceneStore.setSelectedGuideRouteWaypoint(selectedId, hit.vertexIndex)
   syncSelectedGuideRouteVertexHandle()
 
@@ -7750,6 +8559,7 @@ const LANDSCAPE_ROAD_SURFACE_MARCH_MAX_STEP = 64
 const LANDSCAPE_ROAD_SURFACE_MARCH_FAR_DEFAULT = 20000
 const LANDSCAPE_ROAD_PLACEMENT_NOTICE_DURATION_MS = 2500
 const proceduralLandscapeCenterlineBackfillAttempts = new Set<string>()
+const proceduralLandscapeGuideRouteBackfillAttempts = new Set<string>()
 
 function backfillProceduralLandscapeRouteCenterlines(): void {
   const stack = [...sceneStore.nodes]
@@ -7765,20 +8575,30 @@ function backfillProceduralLandscapeRouteCenterlines(): void {
       | SceneNodeComponentState<ProceduralLandscapeComponentProps>
       | undefined
     const generatedRoute = component?.props?.road?.generatedRoute
-    if (!generatedRoute || generatedRoute.centerline?.pointsXZ.length) {
+    if (!generatedRoute) {
       continue
     }
-    const attemptKey = `${node.id}:${generatedRoute.revision}`
-    if (proceduralLandscapeCenterlineBackfillAttempts.has(attemptKey)) {
-      continue
+    if (!generatedRoute.centerline?.pointsXZ.length) {
+      const attemptKey = `${node.id}:${generatedRoute.revision}`
+      if (!proceduralLandscapeCenterlineBackfillAttempts.has(attemptKey)) {
+        const centerline = getProceduralLandscapeRoadCenterlineLocal(node.id)
+        if (centerline && centerline.pointsXZ.length >= 4) {
+          proceduralLandscapeCenterlineBackfillAttempts.add(attemptKey)
+          if (sceneStore.backfillProceduralLandscapeRouteCenterline(node.id, centerline)) {
+            console.info(`[SceneViewport] Backfilled procedural road centerline for ${node.name ?? node.id}`)
+          }
+        }
+      }
     }
-    const centerline = getProceduralLandscapeRoadCenterlineLocal(node.id)
-    if (!centerline || centerline.pointsXZ.length < 4) {
-      continue
-    }
-    proceduralLandscapeCenterlineBackfillAttempts.add(attemptKey)
-    if (sceneStore.backfillProceduralLandscapeRouteCenterline(node.id, centerline)) {
-      console.info(`[SceneViewport] Backfilled procedural road centerline for ${node.name ?? node.id}`)
+    const guideRouteAttemptKey = `${node.id}:${generatedRoute.revision}`
+    if (!proceduralLandscapeGuideRouteBackfillAttempts.has(guideRouteAttemptKey)) {
+      const ensured = sceneStore.ensureProceduralLandscapeRoadGuideRoute(node.id)
+      if (ensured.node) {
+        proceduralLandscapeGuideRouteBackfillAttempts.add(guideRouteAttemptKey)
+      }
+      if (ensured.created) {
+        console.info(`[SceneViewport] Created automatic Guide Route for ${node.name ?? node.id}`)
+      }
     }
   }
 }
@@ -9603,6 +10423,46 @@ const guideRouteBuildTool = createGuideRouteBuildTool({
   holdStartIndicatorUntilNodeVisible: holdBuildStartIndicatorUntilNodeVisible,
   clickDragThresholdPx: CLICK_DRAG_THRESHOLD_PX,
 })
+
+function resolveGuideRouteEndpointDrawingContext(
+  nodeId: string,
+  endpoint: 'start' | 'end',
+): {
+  point: THREE.Vector3
+  surfaceProviderNodeId: string | null
+} | null {
+  const node = resolveSceneNodeById(nodeId)
+  const component = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<GuideRouteComponentProps>
+    | undefined
+  if (!node || !component?.props) {
+    return null
+  }
+  const props = component.props as GuideRouteComponentProps
+  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
+  const evaluation = evaluateGuideRoute({
+    routeNode: node,
+    providerObject: providerNodeId ? objectMap.get(providerNodeId) ?? null : null,
+    routeObject: objectMap.get(node.id) ?? null,
+  })
+  if (evaluation.status !== 'ready' || evaluation.points.length < 2) {
+    return null
+  }
+  const leg = endpoint === 'start'
+    ? props.legs[0]
+    : props.legs[props.legs.length - 1]
+  return {
+    point: (endpoint === 'start'
+      ? evaluation.points[0]!
+      : evaluation.points[evaluation.points.length - 1]!
+    ).clone(),
+    surfaceProviderNodeId: leg?.kind === 'road'
+      ? leg.providerNodeId
+      : leg?.kind === 'path'
+        ? leg.surfaceProviderNodeId
+        : null,
+  }
+}
 
 const waterBuildTool = createWaterBuildTool({
   activeBuildTool,
@@ -15845,6 +16705,7 @@ function animate() {
         mesh.quaternion.copy(camera.quaternion)
       }
     }
+    updateGuideRouteStopMarkerPresentation()
     if (guideRouteWaypointLabelMeshes.size > 0 && camera) {
       for (const mesh of guideRouteWaypointLabelMeshes.values()) {
         const nodeId = mesh.userData?.nodeId as string | undefined
@@ -17833,6 +18694,39 @@ async function handlePointerDown(event: PointerEvent) {
     applyPointerDownResult(guard)
     return
   }
+  if (
+    event.button === 0
+    && !isTemporaryNavigationOverrideActive()
+    && (props.activeTool === 'select' || activeBuildTool.value === 'guideRoute')
+  ) {
+    let handledMarker = false
+    if (activeBuildTool.value === 'guideRoute') {
+      handledMarker = tryBeginGuideRouteStopDrag(event)
+      if (!handledMarker) {
+        const endpointHit = resolveGuideRouteEndpointMarkerHit(event)
+        if (endpointHit) {
+          guideRouteBuildTool.cancel()
+          handledMarker = selectGuideRouteEndpointMarker(endpointHit)
+        }
+      }
+    } else {
+      const stopHit = resolveGuideRouteStopMarkerHit(event)
+      if (stopHit) {
+        guideRouteBuildTool.cancel()
+        selectGuideRouteStopMarker(stopHit)
+        handledMarker = true
+      }
+    }
+    if (handledMarker) {
+      if (!guideRouteStopDragState) {
+        guideRoutePointerConsumedId = event.pointerId
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+  }
   maybeBeginShiftOrbitPivotSession(event)
 
   // Fallback for cases where build-tool pointer handlers suppress browser dblclick events.
@@ -18197,16 +19091,28 @@ async function handlePointerDown(event: PointerEvent) {
         return
       }
 
-      if (guideRouteEditModeLocked && tryInsertGuideRouteWaypoint(event)) {
+      if (!guideRouteBuildTool.getSession() && tryCreateGuideRouteStopOnRouteClick(event)) {
+        guideRoutePointerConsumedId = event.pointerId
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
+      }
+      if (!guideRouteBuildTool.getSession() && tryCreateGuideRouteStopNearSurfaceClick(event)) {
+        guideRoutePointerConsumedId = event.pointerId
         event.preventDefault()
         event.stopPropagation()
         event.stopImmediatePropagation()
         return
       }
 
-      if (guideRouteEditModeLocked) {
-        clearGuideRouteEditMode()
+      if (beginGuideRouteDrawingFromCanvasContext(event)) {
+        event.preventDefault()
+        event.stopPropagation()
+        event.stopImmediatePropagation()
+        return
       }
+
       guideRouteBuildTool.handlePointerDown(event)
       event.preventDefault()
       event.stopPropagation()
@@ -18565,6 +19471,19 @@ function handlePointerMove(event: PointerEvent) {
 
   if (shiftOrbitPivotSessionState && shiftOrbitPivotSessionState.pointerId === event.pointerId && !event.altKey) {
     clearShiftOrbitPivotSession(event.pointerId)
+  }
+
+  if (guideRouteStopDragState) {
+    setGuideRouteCanvasCursor('grabbing')
+  } else {
+    updateGuideRouteCanvasHoverCursor(event)
+  }
+
+  if (updateGuideRouteStopDrag(event)) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
   }
 
   if (handleActiveCameraPointerMove(event)) {
@@ -19404,6 +20323,21 @@ async function handlePointerUp(event: PointerEvent) {
     mapControls?.flushPendingCameraGesture(event.pointerId)
     const isPointerUpOnCanvas = isStrictPointOnCanvas(event.clientX, event.clientY)
     const isPointerEventFromOverlayUi = isEventFromViewportOverlayUi(event)
+    if (finishGuideRouteStopDrag(event)) {
+      pointerInteraction.releaseIfCaptured(event.pointerId)
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+    if (guideRoutePointerConsumedId === event.pointerId) {
+      guideRoutePointerConsumedId = null
+      pointerInteraction.releaseIfCaptured(event.pointerId)
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
     const hasViewportSession =
       pointerCaptureGuard.hasCaptured(event.pointerId) ||
       pointerTrackingState?.pointerId === event.pointerId ||
@@ -19411,6 +20345,7 @@ async function handlePointerUp(event: PointerEvent) {
       floorVertexDragState?.pointerId === event.pointerId ||
       regionContourVertexDragState?.pointerId === event.pointerId ||
       guideRouteVertexDragState?.pointerId === event.pointerId ||
+      guideRouteStopDragState?.pointerId === event.pointerId ||
       displayBoardCornerDragState?.pointerId === event.pointerId ||
       waterContourVertexDragState?.pointerId === event.pointerId ||
       waterCircleCenterDragState?.pointerId === event.pointerId ||
@@ -19910,7 +20845,16 @@ async function handlePointerUp(event: PointerEvent) {
         modelCollisionBuildToolHandlePointerUp: (e) => modelCollisionFaceBuildTool.handlePointerUp(e),
         landformBuildToolHandlePointerUp: (e) => landformBuildTool.handlePointerUp(e),
         regionBuildToolHandlePointerUp: (e) => regionBuildTool.handlePointerUp(e),
-        guideRouteBuildToolHandlePointerUp: (e) => guideRouteBuildTool.handlePointerUp(e),
+        guideRouteBuildToolHandlePointerUp: (e) => {
+          const hadSession = Boolean(guideRouteBuildTool.getSession())
+          const handled = guideRouteBuildTool.handlePointerUp(e)
+          if (hadSession && !guideRouteBuildTool.getSession() && e.button === 0) {
+            guideRouteCanvasContext = null
+            sceneStore.clearSelectedGuideRouteStop()
+            sceneStore.clearSelectedGuideRouteWaypoint()
+          }
+          return handled
+        },
         waterBuildToolHandlePointerUp: (e) => waterBuildTool.handlePointerUp(e),
         wallBuildToolHandlePointerUp: (e) => wallBuildTool.handlePointerUp(e),
         roadBuildToolHandlePointerUp: (e) => roadBuildTool.handlePointerUp(e),
@@ -20270,6 +21214,10 @@ function handlePointerCancel(event: PointerEvent) {
   clearVertexSnapMarkers()
   clearPlacementSideSnapMarkers()
   pendingVertexSnapResult = null
+  cancelGuideRouteStopDrag(event)
+  if (guideRoutePointerConsumedId === event.pointerId) {
+    guideRoutePointerConsumedId = null
+  }
   pointerInteraction.clearIfPointer(event.pointerId)
   if (pointerTrackingState?.pointerId === event.pointerId && pointerTrackingState.cameraGesture === 'orbit-rotate') {
     mapControls?.cancelOrbitRotateGesture(event.pointerId)
@@ -21171,8 +22119,17 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handled = true
       break
     case 'guideRoute':
-      guideRouteBuildTool.cancel()
-      handleBuildToolChange(null)
+      if (guideRouteStopDragState) {
+        cancelGuideRouteStopDrag()
+      } else if (guideRouteBuildTool.getSession()) {
+        guideRouteBuildTool.cancel()
+      } else if (guideRouteCanvasContext) {
+        guideRouteCanvasContext = null
+        sceneStore.clearSelectedGuideRouteStop()
+        sceneStore.clearSelectedGuideRouteWaypoint()
+      } else {
+        handleBuildToolChange(null)
+      }
       handled = true
       break
     case 'landscapeRoad':
@@ -21244,6 +22201,10 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'guideRoute' && tool !== 'guideRoute') {
     guideRouteBuildTool.cancel()
+    guideRouteCanvasContext = null
+    guideRoutePointerConsumedId = null
+    cancelGuideRouteStopDrag()
+    setGuideRouteCanvasCursor('')
   }
   if (activeBuildTool.value === 'water' && tool !== 'water') {
     waterBuildTool.cancel()
@@ -21266,6 +22227,9 @@ function handleBuildToolChange(tool: BuildTool | null) {
   const accepted = buildToolsStore.setActiveBuildTool(tool)
   if (!accepted) {
     return
+  }
+  if (tool === 'guideRoute') {
+    restoreGuideRouteCanvasContextFromSelectedStop()
   }
   const desiredContext = resolveSelectionContextForBuildTool(tool)
   if (desiredContext) {
@@ -23429,6 +24393,14 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
   } else if (node.dynamicMesh?.type === 'GuideRoute') {
     const guideDefinition = resolveGuideRouteVisualDefinition(node, object)
     let guideGroup = userData.guideRouteGroup as THREE.Group | undefined
+    if (
+      !guideGroup
+      && object instanceof THREE.Group
+      && object.getObjectByName('GuideRouteSegments')
+    ) {
+      guideGroup = object
+      userData.guideRouteGroup = guideGroup
+    }
     if (!guideGroup) {
       guideGroup = createGuideRouteGroup(guideDefinition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
       tagInternalRuntimeGroup(guideGroup, node.id, 'GuideRoute')
@@ -23442,6 +24414,22 @@ function updateNodeObject(object: THREE.Object3D, node: SceneNode) {
       if (groupData[DYNAMIC_MESH_SIGNATURE_KEY] !== nextSignature) {
         updateGuideRouteGroup(guideGroup, guideDefinition, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
         groupData[DYNAMIC_MESH_SIGNATURE_KEY] = nextSignature
+      }
+    }
+    guideGroup.visible = true
+    guideGroup.traverse((entry) => {
+      if (
+        entry instanceof THREE.Mesh
+        && entry.name === 'GuideRouteSegments'
+      ) {
+        applyGuideRouteEditorOverlay(entry)
+      }
+    })
+    if (guideGroup !== object) {
+      for (const child of object.children) {
+        if (child.name === 'GuideRouteSegments') {
+          child.visible = false
+        }
       }
     }
 
@@ -25505,6 +26493,12 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   const primaryId = nodeId ?? sceneStore.selectedNodeId ?? null
   const locked = primaryId ? sceneStore.isNodeSelectionLocked(primaryId) : false
   const target = !locked && primaryId ? (objectMap.get(primaryId) ?? null) : null
+  const primaryNode = primaryId ? resolveSceneNodeById(primaryId) : null
+  const roadGeneratedGuideRouteLocked = (
+    primaryNode?.dynamicMesh?.type === 'GuideRoute'
+    && primaryNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props?.origin?.kind
+      === 'procedural-landscape-road'
+  )
   updatePrimaryLandscapeExclusionRing(target)
   syncLandformEditorVisibility()
   updateOutlineSelectionTargets()
@@ -25516,6 +26510,11 @@ function attachSelection(nodeId: string | null, tool: EditorTool = props.activeT
   }
 
   if (!transformControls) return
+
+  if (roadGeneratedGuideRouteLocked && effectiveTool !== 'select') {
+    transformControls.detach()
+    return
+  }
 
   if (!primaryId || locked) {
     transformControls.detach()

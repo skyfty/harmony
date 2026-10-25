@@ -356,7 +356,11 @@ export class CharacterAutoTourRuntimeManager {
     }
     const tourProps = clampAutoTourComponentProps(component.props)
     const controllerProps = clampCharacterControllerComponentProps(controllerComponent.props)
-    const routeData = resolveGuideRouteWorldWaypoints(host.resolveNode, host.nodeObjectMap, tourProps.routeNodeId)
+    const routeData = resolveGuideRouteWorldWaypoints(
+      host.resolveNode,
+      host.nodeObjectMap,
+      target?.routeNodeId ?? tourProps.routeNodeId,
+    )
     if (!routeData || routeData.points.length < 2) {
       return null
     }
@@ -470,7 +474,7 @@ export class CharacterAutoTourRuntimeManager {
         nodeId,
         props: normalizedProps,
         controllerProps: clampCharacterControllerComponentProps(controllerComponent.props),
-        routeNodeId: normalizedProps.routeNodeId,
+        routeNodeId: target?.routeNodeId ?? normalizedProps.routeNodeId,
         routeWaypointCount: previous?.routeWaypointCount ?? 0,
         sourceRouteWaypointCount: previous?.sourceRouteWaypointCount ?? 0,
         target,
@@ -531,7 +535,7 @@ export class CharacterAutoTourRuntimeManager {
       const normalizedProps = clampAutoTourComponentProps(component.props)
       const previousRouteNodeId = entry.routeNodeId
       entry.props = normalizedProps
-      entry.routeNodeId = normalizedProps.routeNodeId
+      entry.routeNodeId = entry.target?.routeNodeId ?? normalizedProps.routeNodeId
       entry.controllerProps = clampCharacterControllerComponentProps(controllerComponent.props)
       if (this.pausedNodeIds.has(nodeId)) {
         entry.lastInput = createIdleCharacterAutoTourInput(

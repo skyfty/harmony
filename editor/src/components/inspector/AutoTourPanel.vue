@@ -3,9 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import type { SceneNodeComponentState } from '@schema/core'
 import { useSceneStore } from '@/stores/sceneStore'
-import NodePicker from '@/components/common/NodePicker.vue'
 import {
   AUTO_TOUR_COMPONENT_TYPE,
+  GUIDE_ROUTE_COMPONENT_TYPE,
   type AutoTourComponentProps,
   clampAutoTourComponentProps,
   DEFAULT_AUTO_TOUR_SPEED_MPS,
@@ -35,6 +35,15 @@ const autoTourComponent = computed(() =>
 )
 
 const componentEnabled = computed(() => autoTourComponent.value?.enabled !== false)
+const routeOptions = computed(() => sceneStore.nodes
+  .filter((node) => (
+    node.dynamicMesh?.type === 'GuideRoute'
+    && node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.enabled !== false
+  ))
+  .map((node) => ({
+    title: node.name?.trim() || node.id,
+    value: node.id,
+  })))
 
 const normalizedProps = computed(() => {
   const props = autoTourComponent.value?.props as Partial<AutoTourComponentProps> | undefined
@@ -157,12 +166,15 @@ function handleRemoveComponent() {
 
     <v-expansion-panel-text>
       <div class="auto-tour-panel-body" :class="{ 'is-disabled': !componentEnabled }">
-        <NodePicker
+        <v-select
           :model-value="localRouteNodeId"
           :disabled="!componentEnabled"
-          owner="behavior-target"
-          :pick-hint="props.routePickHint"
-          :placeholder="props.routePlaceholder"
+          :items="routeOptions"
+          :label="props.routePlaceholder"
+          density="compact"
+          variant="solo"
+          hide-details
+          clearable
           @update:model-value="handleRouteNodeChange"
         />
 

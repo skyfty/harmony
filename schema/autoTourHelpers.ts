@@ -51,9 +51,10 @@ export function startTourAndFollow(
   runtime: AutoTourRuntimeLike,
   nodeId: string,
   onFollow?: (nodeId: string) => void,
+  target?: GuideRouteTourTargetOptions,
 ): void {
   try {
-    runtime.startTour(nodeId)
+    runtime.startTour(nodeId, target)
   } catch {
     // ignore runtime errors here; callers may still want to attempt follow-side effects
   }

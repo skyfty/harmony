@@ -234,7 +234,7 @@ describe('GuideRoute V3 compiler', () => {
     const window = buildGuideRouteTravelWindow(
       route,
       8,
-      { destinationStopIndex: 0 },
+      { routeNodeId: route.routeNodeId, destinationStopId: 'stop-1' },
       false,
     )
     expect(window?.direction).toBe(-1)
@@ -317,6 +317,53 @@ describe('GuideRoute V3 playback events', () => {
     runtime.update(1.1)
     expect(onGuideStop).toHaveBeenCalledTimes(1)
     expect(playback.vehicleObject.position.x).toBeGreaterThan(4)
+  })
+
+  it('uses a selected branch route for snap and playback without rewriting AutoTour props', () => {
+    const playback = createPlayback()
+    const branchRoute = createRouteNode(pathProps({
+      legs: [{
+        id: 'branch-path',
+        kind: 'path',
+        travelMode: 'vehicle',
+        speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 2.5 },
+        surfaceProviderNodeId: null,
+        preserveAuthoredY: true,
+        anchors: [
+          { x: 0, y: 24, z: 20 },
+          { x: 16, y: 24, z: 20 },
+        ],
+      }],
+      stops: [{
+        id: 'branch-stop',
+        name: 'Branch stop',
+        thumbnailAssetId: 'image',
+        anchor: { x: 12, y: 24, z: 20 },
+        legId: 'branch-path',
+        behavior: null,
+      }],
+    }))
+    branchRoute.id = 'branch-route'
+    branchRoute.components.guideRoute.id = 'branch-component'
+    playback.nodes.set(branchRoute.id, branchRoute)
+    playback.nodeObjectMap.set(branchRoute.id, new THREE.Object3D())
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+    const target = {
+      routeNodeId: branchRoute.id,
+      destinationStopId: 'branch-stop',
+    }
+    const snap = runtime.resolveRouteSnap(playback.vehicleNode.id, target)
+    expect(snap?.routeNodeId).toBe(branchRoute.id)
+    runtime.startTour(playback.vehicleNode.id, target)
+    runtime.seedTourPlaybackState(playback.vehicleNode.id, snap!)
+    runtime.update(1)
+    expect(playback.vehicleObject.position.z).toBeGreaterThan(0)
+    expect(playback.vehicleNode.components.autoTour.props.routeNodeId).toBe('route-1')
   })
 
   it('resets stop occurrence tracking after a route loop wraps', () => {
@@ -457,5 +504,86 @@ describe('GuideRoute V3 playback events', () => {
     }
     expect(onGuideStop).toHaveBeenCalledTimes(1)
     expect(runtime.getInput(characterNode.id)?.moveZ).toBeGreaterThan(0)
+  })
+
+  it('lets a character navigate to a stop on a different branch route', () => {
+    const defaultRoute = createRouteNode(pathProps({
+      legs: pathProps().legs.map((leg) => ({ ...leg, travelMode: 'character' })),
+    }))
+    const branchRoute = createRouteNode(pathProps({
+      legs: [{
+        id: 'character-branch',
+        kind: 'path',
+        travelMode: 'character',
+        speedProfile: { cruiseSpeedMps: 2, lateralAccelLimitMps2: 2 },
+        surfaceProviderNodeId: null,
+        preserveAuthoredY: true,
+        anchors: [
+          { x: 0, y: 20, z: 8 },
+          { x: 12, y: 20, z: 8 },
+        ],
+      }],
+      stops: [{
+        id: 'branch-target',
+        name: 'Branch target',
+        thumbnailAssetId: 'image',
+        anchor: { x: 8, y: 20, z: 8 },
+        legId: 'character-branch',
+        behavior: null,
+      }],
+    }))
+    branchRoute.id = 'branch-character-route'
+    branchRoute.components.guideRoute.id = 'branch-character-component'
+    const characterNode = {
+      id: 'character-branch-user',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'auto-tour',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: defaultRoute.id,
+            speedMps: 2,
+          }),
+        },
+        characterController: {
+          id: 'controller',
+          type: 'characterController',
+          enabled: true,
+          props: clampCharacterControllerComponentProps({ walkSpeed: 2 }),
+        },
+      },
+    } as any
+    const characterObject = new THREE.Object3D()
+    characterObject.position.set(0, 20, 0)
+    const nodes = new Map<string, any>([
+      [defaultRoute.id, defaultRoute],
+      [branchRoute.id, branchRoute],
+      [characterNode.id, characterNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [defaultRoute.id, new THREE.Object3D()],
+      [branchRoute.id, new THREE.Object3D()],
+      [characterNode.id, characterObject],
+    ])
+    const runtime = new CharacterAutoTourRuntimeManager()
+    const host = {
+      iterNodes: () => nodes.entries(),
+      resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+    }
+    const target = {
+      routeNodeId: branchRoute.id,
+      destinationStopId: 'branch-target',
+    }
+    const snap = runtime.resolveRouteSnap(host, characterNode.id, target)
+    expect(snap?.travelWindow?.route.routeNodeId).toBe(branchRoute.id)
+    expect(snap?.targetReached).toBe(false)
+    runtime.activate(characterNode.id, target)
+    runtime.refresh(host)
+    runtime.update(host, 0.25)
+    expect(runtime.getInput(characterNode.id)?.moveZ).toBeGreaterThan(0)
+    expect(characterNode.components.autoTour.props.routeNodeId).toBe(defaultRoute.id)
   })
 })

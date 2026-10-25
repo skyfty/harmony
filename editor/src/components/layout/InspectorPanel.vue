@@ -129,7 +129,13 @@ const emit = defineEmits<{
 }>()
 
 const sceneStore = useSceneStore()
-const { selectedNode, selectedNodeId, activeTool } = storeToRefs(sceneStore)
+const {
+  selectedNode,
+  selectedNodeId,
+  selectedGuideRouteStop,
+  guideRouteStopSelectionRequestId,
+  activeTool,
+} = storeToRefs(sceneStore)
 
 const nodeName = ref('')
 const materialDetailsTargetId = ref<string | null>(null)
@@ -458,6 +464,16 @@ defineExpose({
 watch(selectedNodeId, () => {
   expandedPanels.value = computeDefaultExpandedPanels()
 }, { immediate: true })
+
+watch([selectedGuideRouteStop, guideRouteStopSelectionRequestId], ([selection]) => {
+  if (!selection) {
+    return
+  }
+  const next = new Set(expandedPanels.value)
+  next.add('components')
+  next.add('guide-route')
+  expandedPanels.value = Array.from(next)
+})
 
 watch(
   nodeComponents,

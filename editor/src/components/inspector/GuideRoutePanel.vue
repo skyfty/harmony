@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -25,14 +25,25 @@ import {
 import { collectPerformSequenceOptions } from '@schema/behaviors/sequenceOptions'
 import type { ProjectAsset } from '@/types/project-asset'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
+import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
-const { selectedNode } = storeToRefs(sceneStore)
+const {
+  selectedNode,
+  selectedGuideRouteStop,
+  guideRouteStopSelectionRequestId,
+} = storeToRefs(sceneStore)
 const assetDialogVisible = ref(false)
 const assetDialogSelectedId = ref('')
 const assetDialogAnchor = ref<{ x: number; y: number } | null>(null)
 const assetDialogStopId = ref<string | null>(null)
+const stopCardElements = new Map<string, HTMLElement>()
+const stopDropTargetId = ref<string | null>(null)
+const deleteStopDialogVisible = ref(false)
+const pendingDeleteStopId = ref<string | null>(null)
+const snackbarVisible = ref(false)
+const snackbarText = ref('')
 
 const guideRouteComponent = computed(() => {
   const component = selectedNode.value?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]
@@ -46,6 +57,18 @@ const guideRouteProps = computed(() => (
 ))
 
 const componentEnabled = computed(() => guideRouteComponent.value?.enabled !== false)
+const selectedStop = computed(() => {
+  const selection = selectedGuideRouteStop.value
+  if (!selection || selection.nodeId !== selectedNode.value?.id) {
+    return null
+  }
+  return guideRouteProps.value?.stops.find((stop) => stop.id === selection.stopId) ?? null
+})
+const pendingDeleteStop = computed(() => (
+  pendingDeleteStopId.value
+    ? guideRouteProps.value?.stops.find((stop) => stop.id === pendingDeleteStopId.value) ?? null
+    : null
+))
 
 const landscapeNodeOptions = computed(() => sceneStore.nodes
   .filter((node) => node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE])
@@ -77,9 +100,6 @@ function updateProps(patch: Partial<GuideRouteComponentProps>): void {
     component.id,
     nextProps as unknown as Partial<Record<string, unknown>>,
   )
-  if (!nextProps.legs.some((leg) => leg.kind === 'path')) {
-    sceneStore.setGuideRouteDisplayVertices(selectedNode.value!.id, [])
-  }
 }
 
 function updateLeg(legId: string, patch: Partial<GuideRouteLeg>): void {
@@ -216,58 +236,69 @@ function updatePathAnchors(
   })
 }
 
-function addStop(leg: GuideRouteLeg): void {
-  const props = guideRouteProps.value
-  if (!props) {
-    return
-  }
-  const fallback = leg.kind === 'path'
-    ? leg.anchors[0]
-    : selectedNode.value?.position
-  const anchor = fallback ?? { x: 0, y: 0, z: 0 }
-  updateProps({
-    stops: [
-      ...props.stops,
-      {
-        id: createId('stop'),
-        name: `Stop ${props.stops.length + 1}`,
-        thumbnailAssetId: null,
-        anchor: { x: anchor.x, y: anchor.y, z: anchor.z },
-        legId: leg.id,
-        behavior: null,
-      },
-    ],
-  })
-}
-
 function updateStop(stopId: string, patch: Partial<GuideRouteStop>): void {
   const props = guideRouteProps.value
   if (!props) {
     return
   }
+  const nextPatch = patch.legId
+    ? { ...patch, controlAnchorId: null }
+    : patch
   updateProps({
     stops: props.stops.map((stop) => (
-      stop.id === stopId ? { ...stop, ...patch } : stop
+      stop.id === stopId ? { ...stop, ...nextPatch } : stop
     )),
   })
 }
 
-function updateStopAnchor(stop: GuideRouteStop, axis: 'x' | 'y' | 'z', value: unknown): void {
-  const numeric = Number(value)
-  if (!Number.isFinite(numeric)) {
+function selectStop(stopId: string): void {
+  const nodeId = selectedNode.value?.id
+  if (!nodeId) {
     return
   }
-  updateStop(stop.id, {
-    anchor: { ...stop.anchor, [axis]: numeric },
+  sceneStore.setSelectedGuideRouteStop(nodeId, stopId)
+}
+
+function setStopCardElement(stopId: string, element: Element | null): void {
+  if (element instanceof HTMLElement) {
+    stopCardElements.set(stopId, element)
+  } else {
+    stopCardElements.delete(stopId)
+  }
+}
+
+function updateStopAnchor(stop: GuideRouteStop, axis: 'x' | 'y' | 'z', value: unknown): void {
+  const numeric = Number(value)
+  const nodeId = selectedNode.value?.id
+  if (!Number.isFinite(numeric) || !nodeId) {
+    return
+  }
+  sceneStore.moveGuideRouteStopAtPosition(nodeId, stop.id, {
+    ...stop.anchor,
+    [axis]: numeric,
   })
 }
 
-function removeStop(stopId: string): void {
-  const props = guideRouteProps.value
-  if (!props) {
+function requestDeleteStop(stopId: string): void {
+  if (!guideRouteProps.value?.stops.some((stop) => stop.id === stopId)) {
     return
   }
-  updateProps({ stops: props.stops.filter((stop) => stop.id !== stopId) })
+  pendingDeleteStopId.value = stopId
+  deleteStopDialogVisible.value = true
+}
+
+function confirmDeleteStop(): void {
+  const nodeId = selectedNode.value?.id
+  const stopId = pendingDeleteStopId.value
+  deleteStopDialogVisible.value = false
+  pendingDeleteStopId.value = null
+  if (!nodeId || !stopId) {
+    return
+  }
+  if (sceneStore.removeGuideRouteStopWithLinks(nodeId, stopId)) {
+    snackbarText.value = '停靠点已删除，图片资产仍保留在资源库。'
+    snackbarVisible.value = true
+  }
 }
 
 function setStopBehavior(stop: GuideRouteStop, nodeId: string): void {
@@ -356,11 +387,106 @@ function resolveWaypointThumbnail(assetId: string | null | undefined): string | 
 }
 
 function openThumbnailPicker(event: MouseEvent, stop: GuideRouteStop): void {
+  selectStop(stop.id)
   assetDialogStopId.value = stop.id
   assetDialogSelectedId.value = stop.thumbnailAssetId ?? ''
   assetDialogAnchor.value = { x: event.clientX, y: event.clientY }
   assetDialogVisible.value = true
 }
+
+function parseDraggedAssetId(dataTransfer: DataTransfer | null | undefined): string | null {
+  const payload = dataTransfer?.getData(ASSET_DRAG_MIME)?.trim() ?? ''
+  if (!payload) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(payload) as { assetId?: unknown }
+    return typeof parsed.assetId === 'string' && parsed.assetId.trim()
+      ? parsed.assetId.trim()
+      : null
+  } catch {
+    return null
+  }
+}
+
+function handleStopDragOver(event: DragEvent, stop: GuideRouteStop): void {
+  if (!event.dataTransfer || !Array.from(event.dataTransfer.types ?? []).includes(ASSET_DRAG_MIME)) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  event.dataTransfer.dropEffect = 'copy'
+  stopDropTargetId.value = stop.id
+}
+
+function handleStopDragLeave(event: DragEvent, stop: GuideRouteStop): void {
+  const related = event.relatedTarget
+  if (related instanceof Node && event.currentTarget instanceof Node && event.currentTarget.contains(related)) {
+    return
+  }
+  if (stopDropTargetId.value === stop.id) {
+    stopDropTargetId.value = null
+  }
+}
+
+function handleStopDrop(event: DragEvent, stop: GuideRouteStop): void {
+  event.preventDefault()
+  event.stopPropagation()
+  stopDropTargetId.value = null
+  const assetId = parseDraggedAssetId(event.dataTransfer)
+  const asset = assetId ? sceneStore.getAsset(assetId) : null
+  if (!asset || (asset.type !== 'image' && asset.type !== 'texture')) {
+    snackbarText.value = '只能将图片或纹理资产拖到停靠点。'
+    snackbarVisible.value = true
+    return
+  }
+  updateStop(stop.id, { thumbnailAssetId: asset.id })
+  selectStop(stop.id)
+}
+
+function handleStopKeyboardDelete(event: KeyboardEvent): void {
+  if (event.key !== 'Delete' && event.key !== 'Backspace') {
+    return
+  }
+  const target = event.target as HTMLElement | null
+  if (
+    target
+    && (
+      target.isContentEditable
+      || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)
+    )
+  ) {
+    return
+  }
+  const stop = selectedStop.value
+  if (!stop) {
+    return
+  }
+  event.preventDefault()
+  requestDeleteStop(stop.id)
+}
+
+watch(
+  () => [guideRouteStopSelectionRequestId.value, selectedGuideRouteStop.value?.stopId ?? null] as const,
+  async ([, stopId]) => {
+    if (!stopId) {
+      return
+    }
+    await nextTick()
+    stopCardElements.get(stopId)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'nearest',
+    })
+  },
+)
+
+onMounted(() => {
+  window.addEventListener('keydown', handleStopKeyboardDelete)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleStopKeyboardDelete)
+})
 
 function updateThumbnail(asset: ProjectAsset | null): void {
   const stopId = assetDialogStopId.value
@@ -386,6 +512,10 @@ function surfaceStatus(providerNodeId: string | null) {
   return providerNodeId
     ? getProceduralLandscapeGuideRouteSurfaceState(providerNodeId)
     : null
+}
+
+function isRoadBoundStop(stop: GuideRouteStop): boolean {
+  return guideRouteProps.value?.legs.some((leg) => leg.id === stop.legId && leg.kind === 'road') === true
 }
 
 </script>
@@ -430,6 +560,15 @@ function surfaceStatus(providerNodeId: string | null) {
               <v-list-item @click="addPathLeg">绘线路径段</v-list-item>
             </v-list>
           </v-menu>
+        </div>
+        <div class="gr-tool-hint">
+          使用 Guide Route Tool：点击空白新建；点击线路创建或选择停靠点；手工路径可拖动；选中停靠点或端点后点击线路外继续建造。公路段和公路停靠点位置锁定。
+        </div>
+        <div v-if="guideRouteProps.origin" class="gr-source-note">
+          自动公路路线 · {{ guideRouteProps.origin.providerNodeId }} · rev {{ guideRouteProps.origin.sourceRevision }}
+        </div>
+        <div v-if="guideRouteProps.branchOrigin" class="gr-source-note">
+          分支来源 · {{ guideRouteProps.branchOrigin.routeNodeId }} / {{ guideRouteProps.branchOrigin.stopId }}
         </div>
 
         <v-alert
@@ -614,9 +753,6 @@ function surfaceStatus(providerNodeId: string | null) {
           </template>
 
           <div class="gr-inline-actions">
-            <v-btn size="small" variant="tonal" :disabled="!componentEnabled" @click="addStop(leg)">
-              Add stop
-            </v-btn>
             <v-btn
               size="small"
               variant="text"
@@ -630,7 +766,24 @@ function surfaceStatus(providerNodeId: string | null) {
 
         <div class="gr-section-title">Stops</div>
         <div v-if="!guideRouteProps.stops.length" class="gr-empty">Stop is a route event; it does not stop or reroute movement.</div>
-        <div v-for="stop in guideRouteProps.stops" :key="stop.id" class="gr-card">
+        <div
+          v-for="stop in guideRouteProps.stops"
+          :key="stop.id"
+          :ref="(element) => setStopCardElement(stop.id, element as Element | null)"
+          class="gr-card gr-stop-card"
+          :class="{
+            'is-selected': selectedStop?.id === stop.id,
+            'is-drop-target': stopDropTargetId === stop.id,
+          }"
+          :data-stop-id="stop.id"
+          role="button"
+          tabindex="0"
+          @click="selectStop(stop.id)"
+          @keydown.enter.prevent="selectStop(stop.id)"
+          @dragover="handleStopDragOver($event, stop)"
+          @dragleave="handleStopDragLeave($event, stop)"
+          @drop="handleStopDrop($event, stop)"
+        >
           <div class="gr-card-head">
             <v-text-field
               label="Name"
@@ -641,7 +794,13 @@ function surfaceStatus(providerNodeId: string | null) {
               :disabled="!componentEnabled"
               @update:model-value="(value) => updateStop(stop.id, { name: String(value ?? '') })"
             />
-            <v-btn icon size="x-small" variant="text" @click="removeStop(stop.id)">
+            <v-btn
+              icon
+              size="x-small"
+              variant="text"
+              title="从场景删除该停靠点"
+              @click.stop="requestDeleteStop(stop.id)"
+            >
               <v-icon>mdi-delete</v-icon>
             </v-btn>
           </div>
@@ -665,13 +824,37 @@ function surfaceStatus(providerNodeId: string | null) {
               variant="underlined"
               hide-details
               :model-value="stop.anchor[axis]"
-              :disabled="!componentEnabled"
+              :disabled="!componentEnabled || isRoadBoundStop(stop)"
+              :title="isRoadBoundStop(stop) ? '公路停靠点位置由公路决定，不可拖动或数值修改' : undefined"
               @update:model-value="(value) => updateStopAnchor(stop, axis, value)"
             />
-            <div class="gr-thumb" @click="openThumbnailPicker($event, stop)">
+            <button
+              type="button"
+              class="gr-thumb"
+              :class="{ 'is-drop-target': stopDropTargetId === stop.id }"
+              title="点击选择图片，或从 AssetsPanel 拖入"
+              :aria-label="`选择 ${stop.name || '停靠点'} 的景点缩略图`"
+              @click.stop="openThumbnailPicker($event, stop)"
+              @dragover="handleStopDragOver($event, stop)"
+              @dragleave="handleStopDragLeave($event, stop)"
+              @drop="handleStopDrop($event, stop)"
+            >
               <img v-if="resolveWaypointThumbnail(stop.thumbnailAssetId)" :src="resolveWaypointThumbnail(stop.thumbnailAssetId) ?? undefined" alt="">
               <v-icon v-else size="18">mdi-image-plus-outline</v-icon>
-            </div>
+            </button>
+          </div>
+          <div class="gr-stop-actions">
+            <v-btn
+              v-if="stop.thumbnailAssetId"
+              size="x-small"
+              variant="text"
+              @click.stop="updateStop(stop.id, { thumbnailAssetId: null })"
+            >
+              清除缩略图引用
+            </v-btn>
+            <span class="gr-stop-anchor">
+              {{ isRoadBoundStop(stop) ? '公路停靠点 · 位置锁定' : '路径控制点 · 可拖动' }}
+            </span>
           </div>
           <v-select
             label="Behavior node"
@@ -739,6 +922,21 @@ function surfaceStatus(providerNodeId: string | null) {
         @update:asset="updateThumbnail"
         @cancel="assetDialogVisible = false"
       />
+      <v-dialog v-model="deleteStopDialogVisible" max-width="440">
+        <v-card title="删除停靠点">
+          <v-card-text>
+            确定删除“{{ pendingDeleteStop?.name || pendingDeleteStopId }}”及其缩略图引用、行为配置和路径控制点吗？图片资产不会从 AssetsPanel 删除，分支路线会保留并解除来源关联。
+          </v-card-text>
+          <v-card-actions>
+            <v-spacer />
+            <v-btn variant="text" @click="deleteStopDialogVisible = false">取消</v-btn>
+            <v-btn color="error" variant="flat" @click="confirmDeleteStop">删除停靠点</v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+      <v-snackbar v-model="snackbarVisible" :timeout="2600" location="bottom">
+        {{ snackbarText }}
+      </v-snackbar>
     </v-expansion-panel-text>
   </v-expansion-panel>
 </template>
@@ -769,6 +967,54 @@ function surfaceStatus(providerNodeId: string | null) {
 .gr-toolbar {
   justify-content: space-between;
   margin-bottom: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.gr-inline-actions,
+.gr-stop-actions {
+  flex-wrap: wrap;
+}
+
+.gr-source-note {
+  margin: 0.35rem 0 0.55rem;
+  color: rgba(121, 224, 255, 0.86);
+  font-size: 0.74rem;
+}
+
+.gr-tool-hint {
+  margin-bottom: 0.7rem;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.gr-stop-card {
+  cursor: pointer;
+  transition: border-color 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.gr-stop-card.is-selected {
+  border-color: rgba(86, 223, 255, 0.82);
+  background: rgba(32, 112, 136, 0.2);
+  box-shadow: 0 0 0 1px rgba(86, 223, 255, 0.25) inset;
+}
+
+.gr-stop-card.is-drop-target,
+.gr-thumb.is-drop-target {
+  border-color: rgba(255, 215, 92, 0.95);
+  box-shadow: 0 0 0 2px rgba(255, 215, 92, 0.28);
+}
+
+.gr-stop-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.gr-stop-anchor {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 0.7rem;
 }
 
 .gr-section-title {
@@ -824,6 +1070,8 @@ function surfaceStatus(providerNodeId: string | null) {
   min-height: 36px;
   border: 1px dashed rgba(255, 255, 255, 0.2);
   border-radius: 8px;
+  background: transparent;
+  padding: 0;
   cursor: pointer;
   overflow: hidden;
 }

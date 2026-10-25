@@ -221,6 +221,7 @@ function handleRegenerate(): void {
 
 const roadWaypoints = computed(() => propsValue.value?.road.waypoints ?? [])
 const roadActionMessage = ref('')
+const guideRouteRegenerationDialogVisible = ref(false)
 const routeStrategy = computed(() => propsValue.value?.road.routing.strategy ?? 'seeded')
 const routeTermination = computed(() => propsValue.value?.road.routing.termination ?? 'boundary')
 const roadStyle = computed<RoadStyleId>(() => propsValue.value?.road.style ?? 'normal')
@@ -472,12 +473,24 @@ function handleRoadTermination(
 
 function handleGenerateRoad(): void {
   const nodeId = selectedNodeId.value
+  if (nodeId && sceneStore.findProceduralLandscapeRoadGuideRoute(nodeId)) {
+    guideRouteRegenerationDialogVisible.value = true
+    return
+  }
+  generateRoadWithGuideRoutePolicy('preserve')
+}
+
+function generateRoadWithGuideRoutePolicy(
+  guideRoutePolicy: 'preserve' | 'recreate',
+): void {
+  const nodeId = selectedNodeId.value
   if (!nodeId || !componentEnabled.value) {
     return
   }
+  guideRouteRegenerationDialogVisible.value = false
   let result: ReturnType<typeof sceneStore.generateProceduralLandscapeRoad>
   try {
-    result = sceneStore.generateProceduralLandscapeRoad(nodeId)
+    result = sceneStore.generateProceduralLandscapeRoad(nodeId, { guideRoutePolicy })
   } catch (error) {
     console.error('Failed to generate procedural landscape road', error)
     roadActionMessage.value = `公路生成异常：${
@@ -1482,6 +1495,26 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
 
     </v-expansion-panel-text>
   </v-expansion-panel>
+  <v-dialog v-model="guideRouteRegenerationDialogVisible" max-width="540">
+    <v-card title="重新生成公路与导览路线">
+      <v-card-text>
+        当前公路已有自动 Guide Route。请选择导览路线处理方式：
+        <br>
+        “保留并适配”会保留停靠点、缩略图、行为和延长段，并将路线连接到新公路端点；
+        “重建路线”会清空这条自动路线的停靠点与延长段，分支节点会保留但解除来源关联。
+      </v-card-text>
+      <v-card-actions class="pl-regeneration-actions">
+        <v-btn variant="text" @click="guideRouteRegenerationDialogVisible = false">取消</v-btn>
+        <v-spacer />
+        <v-btn color="warning" variant="tonal" @click="generateRoadWithGuideRoutePolicy('recreate')">
+          重建路线
+        </v-btn>
+        <v-btn color="primary" variant="flat" @click="generateRoadWithGuideRoutePolicy('preserve')">
+          保留并适配
+        </v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <style scoped>

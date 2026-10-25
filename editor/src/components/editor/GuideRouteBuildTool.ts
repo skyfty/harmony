@@ -10,10 +10,14 @@ import {
 } from '@schema/guideRouteMesh'
 
 export type GuideRouteBuildToolSession = {
+  mode: 'new' | 'extension' | 'branch'
   points: THREE.Vector3[]
   previewEnd: THREE.Vector3 | null
   previewGroup: THREE.Group | null
   surfaceProviderNodeId: string | null
+  targetNodeId: string | null
+  extensionEndpoint: 'start' | 'end' | null
+  branchStopId: string | null
 }
 
 export type GuideRouteBuildToolHandle = {
@@ -25,6 +29,19 @@ export type GuideRouteBuildToolHandle = {
   handlePointerCancel: (event: PointerEvent) => boolean
   cancel: () => boolean
   dispose: () => void
+  beginNewRoute: () => void
+  beginExtension: (options: {
+    nodeId: string
+    endpoint: 'start' | 'end'
+    point: THREE.Vector3
+    surfaceProviderNodeId: string | null
+  }) => boolean
+  beginBranch: (options: {
+    nodeId: string
+    stopId: string
+    point: THREE.Vector3
+    surfaceProviderNodeId: string | null
+  }) => boolean
 }
 
 type RightClickState = {
@@ -146,10 +163,14 @@ export function createGuideRouteBuildTool(options: {
       return session
     }
     session = {
+      mode: 'new',
       points: [],
       previewEnd: null,
       previewGroup: null,
       surfaceProviderNodeId: null,
+      targetNodeId: null,
+      extensionEndpoint: null,
+      branchStopId: null,
     }
     return session
   }
@@ -256,17 +277,48 @@ export function createGuideRouteBuildTool(options: {
   }
 
   const finalize = () => {
-    if (!session || session.points.length < 2) {
+    const completedSession = session
+    if (!completedSession || completedSession.points.length < 2) {
       clearSession()
       return
     }
-    const created = options.sceneStore.createGuideRouteNode({
-      points: session.points.map((point) => ({ x: point.x, y: point.y, z: point.z }) satisfies Vector3Like),
-      surfaceProviderNodeId: session.surfaceProviderNodeId,
-      travelMode: 'vehicle',
-      editorFlags: { runtimeHiddenInPreview: false, editorOnly: true },
-    })
-    const startPoint = session.points[0]?.clone() ?? null
+    const points = completedSession.points.map((point) => ({
+      x: point.x,
+      y: point.y,
+      z: point.z,
+    }) satisfies Vector3Like)
+    let created: ReturnType<typeof options.sceneStore.createGuideRouteNode> = null
+    if (
+      completedSession.mode === 'extension'
+      && completedSession.targetNodeId
+      && completedSession.extensionEndpoint
+    ) {
+      options.sceneStore.extendGuideRouteFromEndpoint(completedSession.targetNodeId, {
+        endpoint: completedSession.extensionEndpoint,
+        endpointPoint: points[0]!,
+        points: points.slice(1),
+        surfaceProviderNodeId: completedSession.surfaceProviderNodeId,
+      })
+      created = options.sceneStore.nodes.find((node) => node.id === completedSession.targetNodeId) ?? null
+    } else if (
+      completedSession.mode === 'branch'
+      && completedSession.targetNodeId
+      && completedSession.branchStopId
+    ) {
+      created = options.sceneStore.createGuideRouteBranchFromStop({
+        parentRouteNodeId: completedSession.targetNodeId,
+        stopId: completedSession.branchStopId,
+        points,
+      })
+    } else {
+      created = options.sceneStore.createGuideRouteNode({
+        points,
+        surfaceProviderNodeId: completedSession.surfaceProviderNodeId,
+        travelMode: 'vehicle',
+        editorFlags: { runtimeHiddenInPreview: false, editorOnly: true },
+      })
+    }
+    const startPoint = completedSession.points[0]?.clone() ?? null
     clearSession()
     if (created) {
       options.sceneStore.selectNode(created.id)
@@ -378,6 +430,34 @@ export function createGuideRouteBuildTool(options: {
     dispose: () => {
       clearSession()
       leftClickState = null
+    },
+    beginNewRoute: () => {
+      clearSession()
+      ensureSession()
+    },
+    beginExtension: ({ nodeId, endpoint, point, surfaceProviderNodeId }) => {
+      clearSession()
+      const current = ensureSession()
+      current.mode = 'extension'
+      current.targetNodeId = nodeId
+      current.extensionEndpoint = endpoint
+      current.points = [point.clone()]
+      current.previewEnd = point.clone()
+      current.surfaceProviderNodeId = surfaceProviderNodeId
+      options.showStartIndicator?.(point, { height: 0.2 })
+      return true
+    },
+    beginBranch: ({ nodeId, stopId, point, surfaceProviderNodeId }) => {
+      clearSession()
+      const current = ensureSession()
+      current.mode = 'branch'
+      current.targetNodeId = nodeId
+      current.branchStopId = stopId
+      current.points = [point.clone()]
+      current.previewEnd = point.clone()
+      current.surfaceProviderNodeId = surfaceProviderNodeId
+      options.showStartIndicator?.(point, { height: 0.2 })
+      return true
     },
   }
 }
