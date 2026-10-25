@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   resolveVehicleVisualForwardWorld,
   resolveVehicleVisualMotionPose,
+  resolveVehicleWheelRollDelta,
   resolveSignedVehicleTravel,
   resolveWheelSpinAxisInObjectSpace,
 } from '@schema/autoTourVisualKinematics'
@@ -48,6 +49,55 @@ describe('autoTourVisualKinematics', () => {
     expect(axis.x).toBeCloseTo(0)
     expect(axis.y).toBeCloseTo(0)
     expect(axis.z).toBeCloseTo(1)
+  })
+
+  it('keeps the visual spin axis on the vehicle right axis through parent and wheel-base rotations', () => {
+    const rightAxis = new THREE.Vector3(0, 0, 1)
+    for (const [pitch, yaw, roll] of [
+      [0, 0, 0],
+      [0.22, -0.71, 0.15],
+      [-0.34, 1.1, -0.28],
+    ]) {
+      const vehicleWorldQuaternion = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(pitch, yaw, roll, 'YXZ'),
+      )
+      const parentWorldQuaternion = vehicleWorldQuaternion.clone().multiply(
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(0.19, -0.37, 0.08, 'YXZ')),
+      )
+      const baseQuaternion = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(-0.44, 0.63, 1.17, 'YXZ'),
+      )
+      const spinAxis = resolveWheelSpinAxisInObjectSpace({
+        axleAxis: rightAxis,
+        vehicleWorldQuaternion,
+        parentWorldQuaternionInverse: parentWorldQuaternion.clone().invert(),
+        baseQuaternionInverse: baseQuaternion.clone().invert(),
+        target: new THREE.Vector3(),
+      })
+      const resolvedWorldSpinAxis = spinAxis
+        .applyQuaternion(baseQuaternion)
+        .applyQuaternion(parentWorldQuaternion)
+        .normalize()
+      const expectedWorldSpinAxis = rightAxis
+        .clone()
+        .applyQuaternion(vehicleWorldQuaternion)
+        .normalize()
+
+      expect(resolvedWorldSpinAxis.dot(expectedWorldSpinAxis)).toBeCloseTo(1, 6)
+    }
+  })
+
+  it('freezes wheel roll while an auto-tour is paused', () => {
+    expect(resolveVehicleWheelRollDelta({
+      signedTravel: 1.5,
+      radius: 0.5,
+      frozen: false,
+    })).toBeCloseTo(-3)
+    expect(resolveVehicleWheelRollDelta({
+      signedTravel: 1.5,
+      radius: 0.5,
+      frozen: true,
+    })).toBe(0)
   })
 
   it('derives cinematic camera heading from the visual object quaternion', () => {

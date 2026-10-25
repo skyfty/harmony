@@ -246,6 +246,55 @@ export function addGuideRouteStop(
   return { props, stopId }
 }
 
+export function addGuideRouteStopAtPathAnchor(
+  source: GuideRouteComponentProps,
+  options: {
+    legId: string
+    anchorId: string
+    name?: string
+    thumbnailAssetId?: string | null
+    behavior?: GuideRouteStop['behavior']
+  },
+): {
+  props: GuideRouteComponentProps
+  stopId: string
+  created: boolean
+} | null {
+  const props = cloneGuideRouteComponentProps(source)
+  const leg = props.legs.find((entry): entry is GuidePathRouteLeg => (
+    entry.id === options.legId && entry.kind === 'path'
+  ))
+  const anchor = leg?.anchors.find((entry) => entry.id === options.anchorId)
+  if (!leg || !anchor) {
+    return null
+  }
+  const existing = props.stops.find((stop) => (
+    stop.legId === leg.id && stop.controlAnchorId === anchor.id
+  ))
+  if (existing) {
+    return {
+      props,
+      stopId: existing.id,
+      created: false,
+    }
+  }
+  const stopId = createGuideRouteEntityId('stop')
+  props.stops.push({
+    id: stopId,
+    name: options.name?.trim() || `Stop ${props.stops.length + 1}`,
+    thumbnailAssetId: options.thumbnailAssetId?.trim() || null,
+    anchor: copyGuideRoutePoint(anchor),
+    legId: leg.id,
+    behavior: options.behavior ? { ...options.behavior } : null,
+    controlAnchorId: anchor.id,
+  })
+  return {
+    props,
+    stopId,
+    created: true,
+  }
+}
+
 export function moveGuideRouteStop(
   source: GuideRouteComponentProps,
   stopId: string,
@@ -277,28 +326,49 @@ export function removeGuideRouteStop(
 ): {
   props: GuideRouteComponentProps
   removedStop: GuideRouteStop | null
-  removedAnchorId: string | null
 } {
   const props = cloneGuideRouteComponentProps(source)
   const stop = props.stops.find((entry) => entry.id === stopId) ?? null
   if (!stop) {
-    return { props, removedStop: null, removedAnchorId: null }
+    return { props, removedStop: null }
   }
   props.stops = props.stops.filter((entry) => entry.id !== stopId)
-  let removedAnchorId: string | null = null
-  if (stop.controlAnchorId) {
-    const leg = props.legs.find((entry): entry is GuidePathRouteLeg => (
-      entry.id === stop.legId && entry.kind === 'path'
-    ))
-    if (leg) {
-      const nextAnchors = leg.anchors.filter((entry) => entry.id !== stop.controlAnchorId)
-      if (nextAnchors.length !== leg.anchors.length && nextAnchors.length >= 2) {
-        leg.anchors = nextAnchors
-        removedAnchorId = stop.controlAnchorId
-      }
+  return { props, removedStop: stop }
+}
+
+export function removeGuideRoutePathAnchor(
+  source: GuideRouteComponentProps,
+  options: {
+    legId: string
+    anchorId: string
+  },
+): {
+  props: GuideRouteComponentProps
+  removedAnchorId: string
+} | null {
+  const props = cloneGuideRouteComponentProps(source)
+  const legIndex = props.legs.findIndex((leg) => leg.id === options.legId && leg.kind === 'path')
+  const leg = legIndex >= 0 ? props.legs[legIndex] : null
+  if (leg?.kind !== 'path' || leg.anchors.length <= 2) {
+    return null
+  }
+  const anchorIndex = leg.anchors.findIndex((anchor) => anchor.id === options.anchorId)
+  if (anchorIndex < 0) {
+    return null
+  }
+  const [removedAnchor] = leg.anchors.splice(anchorIndex, 1)
+  for (const stop of props.stops) {
+    if (stop.legId === leg.id && stop.controlAnchorId === removedAnchor?.id) {
+      stop.controlAnchorId = null
     }
   }
-  return { props, removedStop: stop, removedAnchorId }
+  if (legIndex === 0 && anchorIndex === 0) {
+    props.branchOrigin = null
+  }
+  return {
+    props,
+    removedAnchorId: options.anchorId,
+  }
 }
 
 export function moveGuideRoutePathAnchor(

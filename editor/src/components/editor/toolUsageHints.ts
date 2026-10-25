@@ -261,6 +261,7 @@ function resolveGenericRows(tool: BuildTool): ToolUsageHintRow[] {
       return createRows([
         { label: '入口', text: '视口工具栏 -> Guide Route Tool' },
         { label: '鼠标', text: '左键逐点添加导览路径点位' },
+        { label: '编辑', text: '选择路线后拖动可编辑的 path 锚点；双击锚点设为停靠点；Delete 删除选中锚点' },
         { label: '完成', text: '双击左键完成当前导览路径' },
         { label: '修饰', text: '顶点吸附会优先对齐已有顶点' },
         { label: '取消', text: '右键或 Escape 取消当前路径草图' },

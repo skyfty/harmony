@@ -87,3 +87,16 @@ export function resolveSignedVehicleTravel(
   }
   return displacementWorld.dot(signedTravelForwardHelper)
 }
+
+export function resolveVehicleWheelRollDelta(params: {
+  signedTravel: number
+  radius: number
+  frozen?: boolean
+}): number {
+  if (params.frozen || !Number.isFinite(params.signedTravel) || !Number.isFinite(params.radius)) {
+    return 0
+  }
+  const radius = Math.max(Math.abs(params.radius), 1e-6)
+  const rollDelta = -params.signedTravel / radius
+  return Number.isFinite(rollDelta) ? rollDelta : 0
+}

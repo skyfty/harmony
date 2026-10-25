@@ -487,6 +487,7 @@ import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
 	resolveVehicleVisualForwardWorld,
 	resolveVehicleVisualMotionPose,
+	resolveVehicleWheelRollDelta,
 	resolveSignedVehicleTravel,
 	resolveWheelSpinAxisInObjectSpace,
 } from '@schema/autoTourVisualKinematics'
@@ -3652,13 +3653,16 @@ function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | nul
 const runtimePanelUi = computed(() => {
 	const characterNodeId = resolveDefaultControlledCharacterNodeId()
 	const characterNode = characterNodeId ? resolveNodeById(characterNodeId) : null
+	const activeVehicleTourNodeId = activeAutoTourNodeIds.values().next().value
 	const characterControlActive =
 		!vehicleDriveState.active
+		&& !activeVehicleTourNodeId
 		&& Boolean(characterNodeId && findDefaultControlledCharacterObject())
 	const override = vehicleDriveUiOverride.value
-	const vehicleVisible = override === 'show' ? true : override === 'hide' ? false : vehicleDriveState.active
+	const vehicleVisible = Boolean(activeVehicleTourNodeId)
+		|| (override === 'show' ? true : override === 'hide' ? false : vehicleDriveState.active)
 	if (vehicleVisible) {
-		const nodeId = vehicleDriveState.nodeId ?? ''
+		const nodeId = vehicleDriveState.nodeId ?? activeVehicleTourNodeId ?? ''
 		const node = nodeId ? resolveNodeById(nodeId) : null
 		const label = node?.name?.trim() || nodeId || 'Vehicle'
 		return {
@@ -4633,7 +4637,8 @@ const autoTourRuntime = createAutoTourRuntime({
 		autoTourPausedNodeId.value = null
 		applyAutoTourCameraInputPolicy()
 	},
-	onGuideStop: (_nodeId, stop) => {
+	onGuideStop: (nodeId, stop) => {
+		pauseAutoTourAtGuideStop(nodeId)
 		if (!stop.behavior) {
 			return
 		}
@@ -8768,7 +8773,8 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
 			syncInstancedTransform(object)
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
-		onGuideStop: (_nodeId, stop) => {
+		onGuideStop: (nodeId, stop) => {
+			pauseAutoTourAtGuideStop(nodeId)
 			if (!stop.behavior) {
 				return
 			}
@@ -9012,7 +9018,8 @@ function updateCharacterPathFollow(delta: number): void {
 			syncInstancedTransform(object)
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
-		onGuideStop: (_nodeId, stop) => {
+		onGuideStop: (nodeId, stop) => {
+			pauseAutoTourAtGuideStop(nodeId)
 			if (!stop.behavior) {
 				return
 			}
@@ -10734,6 +10741,24 @@ const vehicleDriveKeyboardMap: Record<string, DriveControlAction> = {
 	Space: 'brake',
 }
 
+const characterControlKeyboardMap: Record<string, CharacterControlAction> = {
+	KeyW: 'forward',
+	ArrowUp: 'forward',
+	KeyS: 'backward',
+	ArrowDown: 'backward',
+	KeyA: 'left',
+	ArrowLeft: 'left',
+	KeyD: 'right',
+	ArrowRight: 'right',
+	Space: 'jump',
+	ShiftLeft: 'sprint',
+	ShiftRight: 'sprint',
+	ControlLeft: 'crouch',
+	ControlRight: 'crouch',
+	KeyE: 'interact',
+	Enter: 'interact',
+}
+
 function updateVehicleDriveInputFromFlags(): void {
 	vehicleDriveInput.analogThrottle = 0
 	vehicleDriveInput.analogSteering = 0
@@ -10773,6 +10798,12 @@ function handleVehicleDriveControlPointer(
 	if (event) {
 		event.preventDefault()
 	}
+	if (pressed && !vehicleDriveState.active) {
+		const activeTourNodeId = activeAutoTourNodeIds.values().next().value
+		if (!activeTourNodeId || !takeOverVehicleAutoTourForManualInput(activeTourNodeId)) {
+			return
+		}
+	}
 	setVehicleDriveControlFlag(action, pressed)
 }
 
@@ -10790,6 +10821,12 @@ function handleVehicleDriveKeyboardInput(event: KeyboardEvent, pressed: boolean)
 }
 
 function setCharacterControlFlag(action: CharacterControlAction, pressed: boolean): void {
+	if (pressed) {
+		const activeTourNodeId = activeCharacterAutoTourNodeIds.values().next().value
+		if (activeTourNodeId) {
+			takeOverCharacterAutoTourForManualInput(activeTourNodeId)
+		}
+	}
 	if (vehicleDriveState.active || !runtimePanelUi.value.visible || runtimePanelUi.value.mode !== 'character') {
 		return
 	}
@@ -11460,10 +11497,14 @@ function handleVehicleAutoTourPauseToggleClick(): void {
 		}
 		const nextCharacterPaused = !autoTourPaused.value
 		characterAutoTourRuntime.setPaused(targetNodeId, nextCharacterPaused)
-		autoTourPausedIsTerminal.value = false
-		autoTourPausedNodeId.value = null
-		autoTourPaused.value = nextCharacterPaused
-		applyAutoTourCameraInputPolicy()
+		if (nextCharacterPaused) {
+			pauseAutoTourAtGuideStop(targetNodeId)
+		} else {
+			autoTourPausedIsTerminal.value = false
+			autoTourPausedNodeId.value = null
+			autoTourPaused.value = false
+			applyAutoTourCameraInputPolicy()
+		}
 		return
 	}
 	const nextPaused = !autoTourPaused.value
@@ -11471,15 +11512,84 @@ function handleVehicleAutoTourPauseToggleClick(): void {
 		// Resuming: if we paused due to terminal end, first request return-to-start.
 		if (autoTourPausedIsTerminal.value && autoTourPausedNodeId.value === targetNodeId) {
 			autoTourRuntime.continueFromEnd(targetNodeId)
+		} else {
+			autoTourRuntime.setPaused(targetNodeId, false)
 		}
 		autoTourPausedIsTerminal.value = false
 		autoTourPausedNodeId.value = null
 		autoTourPaused.value = false
 	} else {
 		// Manual pause: not a terminal condition.
+		autoTourRuntime.setPaused(targetNodeId, true)
+		pauseAutoTourAtGuideStop(targetNodeId)
+	}
+	applyAutoTourCameraInputPolicy()
+}
+
+function pauseAutoTourAtGuideStop(nodeId: string): void {
+	autoTourPausedIsTerminal.value = false
+	autoTourPausedNodeId.value = nodeId
+	autoTourPaused.value = true
+	applyAutoTourCameraInputPolicy()
+}
+
+function takeOverVehicleAutoTourForManualInput(nodeId: string): boolean {
+	if (vehicleDrivePromptBusy.value || vehicleDriveState.active) {
+		return false
+	}
+	if (!scenePreviewDriveBindingsReady.value) {
+		appendWarningMessage('车辆尚未准备就绪，无法切换到手动驾驶。')
+		autoTourRuntime.setPaused(nodeId, true)
+		autoTourPaused.value = true
+		return false
+	}
+	vehicleDrivePromptBusy.value = true
+	try {
+		clearAutoTourCameraObjectMetrics(nodeId)
+		stopTourAndUnfollow(autoTourRuntime, nodeId, (activeNodeId) => {
+			activeAutoTourNodeIds.delete(activeNodeId)
+			if (autoTourFollowNodeId.value === activeNodeId) {
+				autoTourFollowNodeId.value = null
+				resetAutoTourCameraFollowState()
+				followCameraControlActive = false
+				followCameraControlDirty = false
+			}
+		})
+		autoTourPaused.value = false
 		autoTourPausedIsTerminal.value = false
 		autoTourPausedNodeId.value = null
-		autoTourPaused.value = true
+		const pendingEvent = pendingVehicleDriveEvent.value
+		if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
+			pendingVehicleDriveEvent.value = null
+		}
+		const result = startVehicleDriveMode(buildDefaultSteerDriveEvent(nodeId))
+		if (!result.success) {
+			appendWarningMessage(result.message ?? '无法切换到手动驾驶。')
+			autoTourPaused.value = true
+			return false
+		}
+		handleShowVehicleCockpitEvent()
+		return true
+	} finally {
+		vehicleDrivePromptBusy.value = false
+		applyAutoTourCameraInputPolicy()
+	}
+}
+
+function takeOverCharacterAutoTourForManualInput(nodeId: string): void {
+	characterAutoTourRuntime.deactivate(nodeId)
+	activeCharacterAutoTourNodeIds.delete(nodeId)
+	autoTourPaused.value = false
+	autoTourPausedIsTerminal.value = false
+	autoTourPausedNodeId.value = null
+	characterPlayerControlNodeIdOverride.value = nodeId
+	characterInputYawInitialized = false
+	characterInputYawNodeId = null
+	characterDesiredInputYaw = null
+	resetProtagonistPoseState()
+	setCameraCaging(false)
+	if (characterCameraMode.value !== 'follow') {
+		characterCameraMode.value = 'follow'
 	}
 	applyAutoTourCameraInputPolicy()
 }
@@ -12282,33 +12392,33 @@ function handleKeyDown(event: KeyboardEvent) {
 	if (isInputLikeElement(event.target)) {
 		return
 	}
+	if (!event.repeat) {
+		const activeVehicleTourNodeId = activeAutoTourNodeIds.values().next().value
+		const vehicleAction = vehicleDriveKeyboardMap[event.code]
+		if (activeVehicleTourNodeId && vehicleAction) {
+			event.preventDefault()
+			if (takeOverVehicleAutoTourForManualInput(activeVehicleTourNodeId)) {
+				setVehicleDriveControlFlag(vehicleAction, true)
+			}
+			return
+		}
+		const activeCharacterTourNodeId = activeCharacterAutoTourNodeIds.values().next().value
+		const characterAction = characterControlKeyboardMap[event.code]
+		if (activeCharacterTourNodeId && characterAction) {
+			event.preventDefault()
+			takeOverCharacterAutoTourForManualInput(activeCharacterTourNodeId)
+			characterKeyState[characterAction] = true
+			updateCharacterAuthorityInputFromKeys()
+			return
+		}
+	}
 	if (handleVehicleDriveKeyboardInput(event, true)) {
 		return
 	}
 	if (runtimePanelUi.value.mode === 'character') {
-		if (event.code === 'KeyW' || event.code === 'ArrowUp') {
-			characterKeyState.forward = true
-			updateCharacterAuthorityInputFromKeys()
-		} else if (event.code === 'KeyS' || event.code === 'ArrowDown') {
-			characterKeyState.backward = true
-			updateCharacterAuthorityInputFromKeys()
-		} else if (event.code === 'KeyA' || event.code === 'ArrowLeft') {
-			characterKeyState.left = true
-			updateCharacterAuthorityInputFromKeys()
-		} else if (event.code === 'KeyD' || event.code === 'ArrowRight') {
-			characterKeyState.right = true
-			updateCharacterAuthorityInputFromKeys()
-		} else if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-			characterKeyState.sprint = true
-			updateCharacterAuthorityInputFromKeys()
-		} else if (event.code === 'ControlLeft' || event.code === 'ControlRight') {
-			characterKeyState.crouch = true
-			updateCharacterAuthorityInputFromKeys()
-		} else if (event.code === 'Space') {
-			characterKeyState.jump = true
-			updateCharacterAuthorityInputFromKeys()
-		} else if (event.code === 'KeyE' || event.code === 'Enter') {
-			characterKeyState.interact = true
+		const characterAction = characterControlKeyboardMap[event.code]
+		if (characterAction) {
+			characterKeyState[characterAction] = true
 			updateCharacterAuthorityInputFromKeys()
 		}
 	}
@@ -12435,9 +12545,7 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		}
 		updateBehaviorSoundDistanceGain(instance)
 	})
-	if (!autoTourPaused.value) {
-		autoTourRuntime.update(delta)
-	}
+	autoTourRuntime.update(delta)
 	if (vehicleDriveState.active) {
 		applyVehicleDriveForces(delta)
 		transformDriveUpdated = !physicsEnvironmentEnabled.value
@@ -15226,6 +15334,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 		const nodeId = instance.nodeId ?? null
 		const manualActive = vehicleDriveState.active && vehicleDriveState.nodeId === nodeId
 		const tourActive = Boolean(nodeId) && activeAutoTourNodeIds.has(nodeId)
+		const tourPaused = tourActive && autoTourPaused.value
 		const { vehicle, wheelBindings } = instance
 		// No wheel bindings, nothing to update.
 		if (!wheelBindings.length) {
@@ -15255,7 +15364,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 
 		// Signed travel along the vehicle forward axis (supports reverse).
 		let signedTravel = 0
-		if (instance.hasWheelMotionSample) {
+		if (tourPaused) {
+			instance.hasWheelMotionSample = false
+		} else if (instance.hasWheelMotionSample) {
 			wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastWheelMotionPosition)
 			signedTravel = resolveSignedVehicleTravel(
 				wheelChassisDisplacementHelper,
@@ -15271,7 +15382,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 			}
 		}
 		instance.lastWheelMotionPosition.copy(wheelChassisPositionHelper)
-		instance.hasWheelMotionSample = true
+		if (!tourPaused) {
+			instance.hasWheelMotionSample = true
+		}
 
 		const wheelInfos = vehicle.wheelInfos as Array<{ steering?: number }>
 
@@ -15305,9 +15418,11 @@ function updateVehicleWheelVisuals(delta: number): void {
 			// Wheel roll based on chassis travel.
 			if (signedTravel !== 0) {
 				const radius = Math.max(binding.radius, VEHICLE_WHEEL_MIN_RADIUS)
-				// Sign convention: for our wheel assets, forward travel should spin the wheel forward.
-				// If visuals appear reversed, flip the travel-derived roll sign here.
-				const rollDelta = -signedTravel / radius
+				const rollDelta = resolveVehicleWheelRollDelta({
+					signedTravel,
+					radius,
+					frozen: tourPaused,
+				})
 				if (Number.isFinite(rollDelta) && Math.abs(rollDelta) > VEHICLE_WHEEL_SPIN_EPSILON) {
 					binding.spinAngle += rollDelta
 					// Keep angles bounded to avoid float growth.
@@ -15346,7 +15461,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 			// Build local-space spin quaternion (around wheel axle).
 			wheelBaseQuaternionInverseHelper.copy(binding.baseQuaternion).invert()
 			resolveWheelSpinAxisInObjectSpace({
-				axleAxis: binding.axleAxis,
+				axleAxis: instance.axisRight,
 				vehicleWorldQuaternion: wheelChassisQuaternionHelper,
 				parentWorldQuaternionInverse: wheelParentWorldQuaternionInverseHelper,
 				baseQuaternionInverse: wheelBaseQuaternionInverseHelper,

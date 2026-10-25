@@ -447,16 +447,23 @@ import {
 } from '@schema/proceduralLandscape/runtime'
 import {
   addGuideRouteStop,
+  addGuideRouteStopAtPathAnchor as addGuideRouteStopAtPathAnchorInProps,
   appendGuideRoutePathExtension,
   copyGuideRoutePoint,
   createGuideRouteBranchProps,
   createGuideRoutePathAnchor,
   insertGuideRoutePathStop,
+  moveGuideRoutePathAnchor,
   moveGuideRouteStop,
   prependGuideRoutePathExtension,
+  removeGuideRoutePathAnchor,
   removeGuideRouteStop,
   unlinkGuideRouteBranchOrigins,
 } from '@schema/guideRouteEditing'
+import {
+  findGuideRoutePathHandle,
+  resolveGuideRoutePathHandles,
+} from '@/utils/guideRouteEditPolicy'
 import {
   clampProceduralLandscapeProps,
   type ProceduralLandscapeComponentProps,
@@ -19209,6 +19216,154 @@ export const useSceneStore = defineStore('scene', {
       }
     },
 
+    moveGuideRoutePathAnchorByHandle(nodeId: string, options: {
+      legId: string
+      anchorId: string
+      anchor: Vector3Like
+    }): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id || component.enabled === false) {
+        return false
+      }
+      const currentProps = clampGuideRouteComponentProps(component.props)
+      const handle = findGuideRoutePathHandle(currentProps, options.legId, options.anchorId)
+      if (!handle || handle.locked) {
+        return false
+      }
+      const nextProps = moveGuideRoutePathAnchor(
+        currentProps,
+        options.legId,
+        options.anchorId,
+        options.anchor,
+      )
+      if (!nextProps) {
+        return false
+      }
+      const linkedStopIds = currentProps.stops
+        .filter((stop) => (
+          stop.legId === options.legId && stop.controlAnchorId === options.anchorId
+        ))
+        .map((stop) => stop.id)
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const updated = this.updateNodeComponentProps(
+          nodeId,
+          component.id,
+          nextProps as unknown as Partial<Record<string, unknown>>,
+        )
+        if (!updated) {
+          return false
+        }
+        this.refreshGuideRoutePathDisplay(nodeId)
+        linkedStopIds.forEach((stopId) => {
+          this.updateGuideRouteBranchesForSourceStop(nodeId, stopId, options.anchor)
+        })
+        this.setSelectedGuideRouteWaypoint(nodeId, handle.vertexIndex)
+        return true
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    removeGuideRoutePathAnchorByHandle(nodeId: string, options: {
+      legId: string
+      anchorId: string
+    }): boolean {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id || component.enabled === false) {
+        return false
+      }
+      const currentProps = clampGuideRouteComponentProps(component.props)
+      const handle = findGuideRoutePathHandle(currentProps, options.legId, options.anchorId)
+      if (!handle) {
+        return false
+      }
+      const result = removeGuideRoutePathAnchor(currentProps, options)
+      if (!result) {
+        return false
+      }
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const updated = this.updateNodeComponentProps(
+          nodeId,
+          component.id,
+          result.props as unknown as Partial<Record<string, unknown>>,
+        )
+        if (!updated) {
+          return false
+        }
+        this.refreshGuideRoutePathDisplay(nodeId)
+        const remainingHandles = resolveGuideRoutePathHandles(result.props)
+        if (remainingHandles.length > 0) {
+          this.setSelectedGuideRouteWaypoint(
+            nodeId,
+            Math.min(handle.vertexIndex, remainingHandles.length - 1),
+          )
+        } else {
+          this.clearSelectedGuideRouteWaypoint()
+        }
+        return true
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
+    addGuideRouteStopAtPathAnchor(nodeId: string, options: {
+      legId: string
+      anchorId: string
+      name?: string
+    }): { stopId: string; created: boolean } | null {
+      const target = findNodeById(this.nodes, nodeId)
+      const component = target?.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as
+        | SceneNodeComponentState<GuideRouteComponentProps>
+        | undefined
+      if (!target || !component?.id || component.enabled === false) {
+        return null
+      }
+      const currentProps = clampGuideRouteComponentProps(component.props)
+      const result = addGuideRouteStopAtPathAnchorInProps(currentProps, options)
+      const handle = result
+        ? findGuideRoutePathHandle(result.props, options.legId, options.anchorId)
+        : null
+      if (!result || !handle) {
+        return null
+      }
+      if (!result.created) {
+        this.setSelectedGuideRouteStop(nodeId, result.stopId)
+        this.setSelectedGuideRouteWaypoint(nodeId, handle.vertexIndex)
+        return { stopId: result.stopId, created: false }
+      }
+
+      this.captureHistorySnapshot()
+      this.beginHistoryCaptureSuppression()
+      try {
+        const updated = this.updateNodeComponentProps(
+          nodeId,
+          component.id,
+          result.props as unknown as Partial<Record<string, unknown>>,
+        )
+        if (!updated) {
+          return null
+        }
+        this.refreshGuideRoutePathDisplay(nodeId)
+        this.setSelectedGuideRouteStop(nodeId, result.stopId)
+        this.setSelectedGuideRouteWaypoint(nodeId, handle.vertexIndex)
+        return { stopId: result.stopId, created: true }
+      } finally {
+        this.endHistoryCaptureSuppression()
+      }
+    },
+
     addGuideRouteStopAtRoute(nodeId: string, options: {
       legId: string
       anchor: Vector3Like
@@ -19281,6 +19436,12 @@ export const useSceneStore = defineStore('scene', {
       const stop = current.stops.find((entry) => entry.id === stopId)
       const leg = stop ? current.legs.find((entry) => entry.id === stop.legId) : null
       if (!stop || !leg || leg.kind === 'road') {
+        return false
+      }
+      const controlAnchor = stop.controlAnchorId
+        ? findGuideRoutePathHandle(current, stop.legId, stop.controlAnchorId)
+        : null
+      if (controlAnchor?.locked) {
         return false
       }
       const nextProps = moveGuideRouteStop(current, stopId, anchor)

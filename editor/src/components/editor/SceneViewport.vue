@@ -78,7 +78,6 @@ import type {
   GuideRouteDynamicMesh,
   RegionDynamicMesh,
   ModelCollisionDynamicMesh,
-  Vector3Like,
   WallDynamicMesh,
 } from '@schema/core'
 import { resolveGroundWorkingGridSize } from '@schema/core'
@@ -327,7 +326,11 @@ import {
 import { createFloorVertexRenderer, FLOOR_VERTEX_HANDLE_GROUP_NAME, FLOOR_VERTEX_HANDLE_Y } from './FloorVertexRenderer'
 import { createLandformVertexRenderer, type LandformVertexHandlePickResult } from './LandformVertexRenderer'
 import { createRegionVertexRenderer, type RegionVertexHandlePickResult } from './RegionVertexRenderer'
-import { createGuideRouteVertexRenderer, type GuideRouteVertexHandlePickResult } from './GuideRouteVertexRenderer'
+import {
+  createGuideRouteVertexRenderer,
+  type GuideRouteVertexHandleDescriptor,
+  type GuideRouteVertexHandlePickResult,
+} from './GuideRouteVertexRenderer'
 import {
   createLandscapeRoadPathVertexRenderer,
   type LandscapeRoadPathVertexHandlePickResult,
@@ -419,6 +422,7 @@ import {
   cloneWarpGateComponentProps,
   cloneGuideboardComponentProps,
   GUIDE_ROUTE_COMPONENT_TYPE,
+  clampGuideRouteComponentProps,
   createWarpGateEffectInstance,
   createGuideboardEffectInstance,
   WARP_GATE_EFFECT_METADATA_KEY,
@@ -433,6 +437,11 @@ import {
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
   LANDSCAPE_EXCLUSION_ZONE_COMPONENT_TYPE,
 } from '@schema/components'
+import { moveGuideRoutePathAnchor as moveGuideRoutePathAnchorInProps } from '@schema/guideRouteEditing'
+import {
+  resolveGuideRouteEndpointHandle,
+  resolveGuideRoutePathHandles,
+} from '@/utils/guideRouteEditPolicy'
 
 import type {
   ViewPointComponentProps,
@@ -1922,27 +1931,65 @@ function computeGuideRouteDynamicMeshSignature(definition: GuideRouteDynamicMesh
   return hashString(serialized)
 }
 
+function createGuideRouteNodeWithProps(
+  node: SceneNode,
+  props: GuideRouteComponentProps,
+): SceneNode {
+  const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]
+  return {
+    ...node,
+    components: {
+      ...(node.components ?? {}),
+      [GUIDE_ROUTE_COMPONENT_TYPE]: {
+        ...(component ?? {
+          id: '',
+          type: GUIDE_ROUTE_COMPONENT_TYPE,
+          enabled: true,
+        }),
+        type: GUIDE_ROUTE_COMPONENT_TYPE,
+        enabled: component?.enabled ?? true,
+        props,
+      },
+    },
+  }
+}
+
+function evaluateGuideRouteWithProps(
+  node: SceneNode,
+  routeObject: THREE.Object3D,
+  props?: GuideRouteComponentProps | null,
+) {
+  const normalized = props ?? clampGuideRouteComponentProps(
+    node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | undefined,
+  )
+  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(normalized)
+  return evaluateGuideRoute({
+    routeNode: props ? createGuideRouteNodeWithProps(node, normalized) : node,
+    providerObject: providerNodeId ? objectMap.get(providerNodeId) ?? null : null,
+    routeObject,
+  })
+}
+
 function resolveGuideRouteVisualDefinition(
   node: SceneNode,
   routeObject: THREE.Object3D,
+  propsOverride?: GuideRouteComponentProps | null,
 ): GuideRouteDynamicMesh {
   const fallback = node.dynamicMesh as GuideRouteDynamicMesh
   const props = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
     | Partial<GuideRouteComponentProps>
     | undefined
-  if (props?.version !== 3 || !props.legs?.some((leg) => leg.kind === 'road')) {
+  const overridesVisual = Boolean(propsOverride)
+  if (
+    !overridesVisual
+    && (props?.version !== 3 || !props.legs?.some((leg) => leg.kind === 'road'))
+  ) {
     return fallback
   }
-  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
-  const providerObject = providerNodeId
-    ? objectMap.get(providerNodeId) ?? null
-    : null
   routeObject.updateMatrixWorld(true)
-  const evaluation = evaluateGuideRoute({
-    routeNode: node,
-    providerObject,
-    routeObject,
-  })
+  const evaluation = evaluateGuideRouteWithProps(node, routeObject, propsOverride)
   if (evaluation.status !== 'ready' || evaluation.points.length < 2) {
     return fallback
   }
@@ -1959,6 +2006,7 @@ function resolveGuideRouteVisualDefinition(
 function syncGuideRouteStopOverlay(
   node: SceneNode,
   routeObject: THREE.Object3D,
+  propsOverride?: GuideRouteComponentProps | null,
 ): void {
   const userData = routeObject.userData as Record<string, unknown>
   const existing = userData.guideRouteStopOverlay
@@ -1972,12 +2020,9 @@ function syncGuideRouteStopOverlay(
     delete userData.guideRouteStopOverlay
     return
   }
-  const providerNodeId = resolveGuideRoutePrimaryProviderNodeId(props)
-  const evaluation = evaluateGuideRoute({
-    routeNode: node,
-    providerObject: providerNodeId ? objectMap.get(providerNodeId) ?? null : null,
-    routeObject,
-  })
+  const effectiveProps = propsOverride
+    ?? clampGuideRouteComponentProps(props)
+  const evaluation = evaluateGuideRouteWithProps(node, routeObject, propsOverride ?? null)
   if (evaluation.status !== 'ready' || evaluation.points.length < 2) {
     return
   }
@@ -1994,7 +2039,7 @@ function syncGuideRouteStopOverlay(
       anchor: stop.definition.anchor,
       projected: stop.projectedPoint.toArray(),
       distance: stop.routeDistance,
-      legKind: props.legs?.find((leg) => leg.id === stop.definition.legId)?.kind ?? null,
+      legKind: effectiveProps.legs.find((leg) => leg.id === stop.definition.legId)?.kind ?? null,
     })),
   })
   const group = existing instanceof THREE.Group ? existing : new THREE.Group()
@@ -2066,7 +2111,7 @@ function syncGuideRouteStopOverlay(
     anchorMarker.userData.stopId = stop.definition.id
     anchorMarker.userData.baseRadius = 0.35
     anchorMarker.userData.isLockedToRoad = (
-      props.legs?.find((leg) => leg.id === stop.definition.legId)?.kind === 'road'
+      effectiveProps.legs.find((leg) => leg.id === stop.definition.legId)?.kind === 'road'
     )
     group.add(anchorMarker)
 
@@ -2197,7 +2242,7 @@ function resolveGuideRouteStopMarkerHit(event: PointerEvent): GuideRouteStopMark
 }
 
 function resolveGuideRouteEndpointMarkerHit(
-  event: PointerEvent,
+  event: MouseEvent,
 ): GuideRouteEndpointMarkerHit | null {
   const canvas = canvasRef.value
   if (!canvas || !camera) {
@@ -2285,26 +2330,32 @@ function selectGuideRouteStopMarker(hit: GuideRouteStopMarkerHit): void {
   }
 }
 
-function selectGuideRouteEndpointMarker(hit: GuideRouteEndpointMarkerHit): boolean {
-  const node = resolveSceneNodeById(hit.nodeId)
+function activateGuideRouteEndpointSelection(
+  nodeId: string,
+  endpoint: 'start' | 'end',
+  worldPoint: THREE.Vector3,
+): boolean {
+  const node = resolveSceneNodeById(nodeId)
   const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
     | Partial<GuideRouteComponentProps>
     | undefined
   if (!node || !props?.legs?.length) {
     return false
   }
-  const leg = hit.endpoint === 'start'
+  const leg = endpoint === 'start'
     ? props.legs[0]
     : props.legs[props.legs.length - 1]
-  sceneStore.selectNode(hit.nodeId)
+  const endpointHandle = resolveGuideRouteEndpointHandle(props, endpoint)
+  const locked = !endpointHandle || endpointHandle.locked
+  sceneStore.selectNode(nodeId)
   sceneStore.clearSelectedGuideRouteStop()
   sceneStore.clearSelectedGuideRouteWaypoint()
-  enterGuideRouteEditMode(hit.nodeId)
+  enterGuideRouteEditMode(nodeId)
   guideRouteCanvasContext = {
     kind: 'endpoint',
-    nodeId: hit.nodeId,
-    endpoint: hit.endpoint,
-    point: hit.worldPosition.clone(),
+    nodeId,
+    endpoint,
+    point: worldPoint.clone(),
     surfaceProviderNodeId: leg?.kind === 'road'
       ? leg.providerNodeId
       : leg?.kind === 'path'
@@ -2312,12 +2363,22 @@ function selectGuideRouteEndpointMarker(hit: GuideRouteEndpointMarkerHit): boole
         : null,
   }
   showLandscapeRoadPlacementNotice(
-    hit.endpoint === 'start'
-      ? '已选择起点，下一次在路线外点击开始延长。'
-      : '已选择终点，下一次在路线外点击开始延长。',
+    locked
+      ? `${endpoint === 'start' ? '起点' : '终点'}已连接公路或父分支，位置锁定；下一次在路线外点击开始延长。`
+      : endpoint === 'start'
+        ? '已选择起点，下一次在路线外点击开始延长。'
+        : '已选择终点，下一次在路线外点击开始延长。',
     'info',
   )
   return true
+}
+
+function selectGuideRouteEndpointMarker(hit: GuideRouteEndpointMarkerHit): boolean {
+  return activateGuideRouteEndpointSelection(
+    hit.nodeId,
+    hit.endpoint,
+    hit.worldPosition,
+  )
 }
 
 function updateGuideRouteStopMarkerPresentation(): void {
@@ -2406,6 +2467,11 @@ function setGuideRouteCanvasCursor(cursor: '' | 'grab' | 'grabbing' | 'pointer' 
 
 function updateGuideRouteCanvasHoverCursor(event: PointerEvent): void {
   if (activeBuildTool.value !== 'guideRoute' || event.pointerType !== 'mouse' || event.buttons !== 0) {
+    return
+  }
+  ensureGuideRouteVertexHandlesForSelectedNode()
+  if (pickGuideRouteVertexHandleAtPointer(event)) {
+    setGuideRouteCanvasCursor('grab')
     return
   }
   const stopHit = resolveGuideRouteStopMarkerHit(event)
@@ -3347,6 +3413,25 @@ function getActiveGuideRouteEditNodeId(): string | null {
   return null
 }
 
+function getGuideRoutePointerEditNodeId(): string | null {
+  const activeId = getActiveGuideRouteEditNodeId()
+  if (activeId) {
+    return activeId
+  }
+  if (activeBuildTool.value !== 'guideRoute') {
+    return null
+  }
+  const selectedId = getPrimarySelectedNodeId()
+  if (!selectedId) {
+    return null
+  }
+  const selectedIds = Array.isArray(sceneStore.selectedNodeIds) ? sceneStore.selectedNodeIds : []
+  if (selectedIds.length !== 1 || selectedIds[0] !== selectedId) {
+    return null
+  }
+  return resolveEditableGuideRouteNode(selectedId)?.id ?? null
+}
+
 function isSelectedGuideRouteEditMode(): boolean {
   return Boolean(getActiveGuideRouteEditNodeId())
 }
@@ -3661,6 +3746,11 @@ watch(
       enterLandscapeRoadEditMode(selectedIds[0])
     }
     syncSelectedGuideRouteVertexHandle()
+    if (activeBuildTool.value === 'guideRoute') {
+      void nextTick(() => {
+        ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+      })
+    }
   },
 )
 
@@ -6256,7 +6346,12 @@ type BoundaryWallContourVertexDragState = {
 type GuideRouteVertexDragState = {
   pointerId: number
   nodeId: string
+  handleKey: string
   vertexIndex: number
+  legId: string
+  anchorId: string
+  endpoint: 'start' | 'end' | null
+  locked: boolean
   startX: number
   startY: number
   moved: boolean
@@ -6266,8 +6361,8 @@ type GuideRouteVertexDragState = {
   startPointWorld: THREE.Vector3
   startHitWorld: THREE.Vector3 | null
   runtimeObject: THREE.Object3D
-  basePoints: Vector3Like[]
-  workingPoints: Vector3Like[]
+  baseProps: GuideRouteComponentProps
+  workingAnchorWorld: THREE.Vector3
 }
 
 type LandscapeRoadPathDragState = {
@@ -6403,6 +6498,13 @@ type GuideRouteCanvasContext =
 let guideRouteCanvasContext: GuideRouteCanvasContext | null = null
 let guideRoutePointerConsumedId: number | null = null
 let guideRouteAppliedCursor = ''
+let guideRouteAnchorPressCandidate: {
+  nodeId: string
+  handleKey: string
+  pressedAt: number
+  timer: ReturnType<typeof setTimeout>
+} | null = null
+const GUIDE_ROUTE_ANCHOR_DOUBLE_PRESS_MS = 500
 let landscapeRoadPathDragState: LandscapeRoadPathDragState | null = null
 let landscapeRoadPathSelectedIndex: number | null = null
 let waterCircleCenterDragState: WaterCircleCenterDragState | null = null
@@ -7402,25 +7504,56 @@ function ensureBoundaryWallVertexHandlesForSelectedNode(options?: {
   }
 }
 
-function ensureGuideRouteVertexHandlesForSelectedNode(options?: { force?: boolean; previewPoints?: Vector3Like[] }) {
-  const selectedId = getActiveGuideRouteEditNodeId()
+function resolveGuideRouteVertexHandleDescriptors(
+  nodeId: string,
+  propsOverride?: GuideRouteComponentProps | null,
+): GuideRouteVertexHandleDescriptor[] {
+  const node = findSceneNode(sceneStore.nodes, nodeId)
+  const runtime = objectMap.get(nodeId) ?? null
+  if (!node || !runtime || node.dynamicMesh?.type !== 'GuideRoute') {
+    return []
+  }
+  const props = propsOverride ?? clampGuideRouteComponentProps(
+    node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | undefined,
+  )
+  runtime.updateMatrixWorld(true)
+  const inverse = new THREE.Matrix4().copy(runtime.matrixWorld).invert()
+  return resolveGuideRoutePathHandles(props)
+    .map((handle) => {
+      const local = new THREE.Vector3(
+        handle.anchor.x,
+        handle.anchor.y,
+        handle.anchor.z,
+      ).applyMatrix4(inverse)
+      return {
+        key: handle.key,
+        vertexIndex: handle.vertexIndex,
+        legId: handle.legId,
+        anchorId: handle.anchorId,
+        point: { x: local.x, y: local.y, z: local.z },
+        endpoint: handle.endpoint,
+        locked: handle.locked,
+      }
+    })
+}
+
+function ensureGuideRouteVertexHandlesForSelectedNode(options?: {
+  force?: boolean
+  propsOverride?: GuideRouteComponentProps | null
+}) {
+  const selectedId = getGuideRoutePointerEditNodeId()
   const active = activeBuildTool.value === 'guideRoute' && !!selectedId && !guideRouteBuildTool.getSession()
+  const handles = selectedId
+    ? resolveGuideRouteVertexHandleDescriptors(selectedId, options?.propsOverride)
+    : []
   const common = {
     active,
     selectedNodeId: selectedId,
     isSelectionLocked: (nodeId: string) => sceneStore.isNodeSelectionLocked(nodeId),
-    resolveGuideRouteDefinition: (nodeId: string) => {
-      const node = findSceneNode(sceneStore.nodes, nodeId)
-      const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
-        | Partial<GuideRouteComponentProps>
-        | undefined
-      if (props?.legs?.some((leg) => leg.kind === 'road')) {
-        return null
-      }
-      return node?.dynamicMesh?.type === 'GuideRoute' ? (node.dynamicMesh as GuideRouteDynamicMesh) : null
-    },
+    handles,
     resolveRuntimeObject: (nodeId: string) => objectMap.get(nodeId) ?? null,
-    previewPoints: options?.previewPoints,
   }
   if (options?.force) {
     guideRouteVertexRenderer.forceRebuild(common)
@@ -7468,20 +7601,27 @@ function pickGuideRouteVertexHandleAtPointer(event: PointerEvent): GuideRouteVer
   })
 }
 
-function setActiveGuideRouteVertexHandle(active: { nodeId: string; vertexIndex: number; gizmoPart: any } | null) {
-  guideRouteVertexRenderer.setActiveHandle(active as any)
+function setActiveGuideRouteVertexHandle(
+  active: { handleKey: string; gizmoPart: GuideRouteVertexHandlePickResult['gizmoPart'] } | null,
+) {
+  guideRouteVertexRenderer.setActiveHandle(active)
 }
 
 function syncSelectedGuideRouteVertexHandle() {
   const selected = sceneStore.selectedGuideRouteWaypoint
-  const selectedId = getActiveGuideRouteEditNodeId() ?? getPrimarySelectedNodeId()
+  const selectedId = getGuideRoutePointerEditNodeId() ?? getPrimarySelectedNodeId()
   if (!selected || !selectedId || selected.nodeId !== selectedId) {
     guideRouteVertexRenderer.setSelectedHandle(null)
     return
   }
+  const handle = resolveGuideRouteVertexHandleDescriptors(selected.nodeId)
+    .find((entry) => entry.vertexIndex === selected.waypointIndex)
+  if (!handle) {
+    guideRouteVertexRenderer.setSelectedHandle(null)
+    return
+  }
   guideRouteVertexRenderer.setSelectedHandle({
-    nodeId: selected.nodeId,
-    vertexIndex: selected.waypointIndex,
+    handleKey: handle.key,
   })
 }
 
@@ -8017,66 +8157,110 @@ function buildBoundaryWallPreviewFromLocalPoints(nodeId: string, points: Array<[
   return true
 }
 
-function cloneGuideRouteLocalPoints(node: SceneNode | null | undefined): Vector3Like[] {
-  if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
-    return []
+function resolveGuideRouteDraggedAnchor(
+  props: GuideRouteComponentProps,
+  legId: string,
+  anchorId: string,
+  x: number,
+  z: number,
+): THREE.Vector3 | null {
+  const leg = props.legs.find((entry) => entry.id === legId)
+  if (leg?.kind !== 'path') {
+    return null
   }
-  const vertices = Array.isArray(node.dynamicMesh.vertices) ? node.dynamicMesh.vertices : []
-  return vertices
-    .map((entry) => ({
-      x: Number.isFinite(Number(entry?.x)) ? Number(entry?.x) : 0,
-      y: Number.isFinite(Number(entry?.y)) ? Number(entry?.y) : 0,
-      z: Number.isFinite(Number(entry?.z)) ? Number(entry?.z) : 0,
-    }))
+  const anchor = leg.anchors.find((entry) => entry.id === anchorId)
+  if (!anchor) {
+    return null
+  }
+  let y = anchor.y
+  if (leg.surfaceProviderNodeId && !leg.preserveAuthoredY) {
+    const sampled = sampleProceduralLandscapeGuideRouteSurface(
+      leg.surfaceProviderNodeId,
+      x,
+      z,
+      0,
+    )
+    if (sampled) {
+      y = sampled.point.y
+    }
+  }
+  return new THREE.Vector3(x, y, z)
 }
 
-function buildGuideRoutePreviewFromLocalPoints(nodeId: string, points: Vector3Like[]): boolean {
-  if (points.length < 2) {
-    return false
-  }
+function buildGuideRoutePreviewFromProps(
+  nodeId: string,
+  props: GuideRouteComponentProps,
+): boolean {
   const runtimeObject = objectMap.get(nodeId) ?? null
   const node = findSceneNode(sceneStore.nodes, nodeId)
   if (!runtimeObject || node?.dynamicMesh?.type !== 'GuideRoute') {
     return false
   }
-  return updateGuideRouteGroup(runtimeObject, {
-    ...(node.dynamicMesh as GuideRouteDynamicMesh),
-    vertices: points.map((point) => ({ x: point.x, y: point.y, z: point.z })),
-  }, GUIDE_ROUTE_EDITOR_RENDER_OPTIONS)
+  const guideGroup = runtimeObject.userData?.guideRouteGroup
+  if (!(guideGroup instanceof THREE.Group)) {
+    return false
+  }
+  const definition = resolveGuideRouteVisualDefinition(node, runtimeObject, props)
+  const updated = updateGuideRouteGroup(
+    guideGroup,
+    definition,
+    GUIDE_ROUTE_EDITOR_RENDER_OPTIONS,
+  )
+  if (!updated) {
+    return false
+  }
+  guideGroup.userData[DYNAMIC_MESH_SIGNATURE_KEY] = computeGuideRouteDynamicMeshSignature(definition)
+  syncGuideRouteStopOverlay(node, runtimeObject, props)
+  return true
 }
 
-function commitGuideRouteNode(nodeId: string, points: Vector3Like[]): boolean {
-  if (points.length < 2) {
-    return false
-  }
-  const node = findSceneNode(sceneStore.nodes, nodeId)
-  if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
-    return false
-  }
-  const runtimeObject = objectMap.get(nodeId) ?? null
-  if (!runtimeObject) {
-    return false
-  }
-  runtimeObject.updateMatrixWorld(true)
-  const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
-  const currentPathLeg = component?.props?.legs?.find((leg) => leg.kind === 'path')
-  const providerNodeId = currentPathLeg?.kind === 'path' ? currentPathLeg.surfaceProviderNodeId : null
-  const anchors = points.map((point) => {
-    const world = runtimeObject.localToWorld(new THREE.Vector3(point.x, point.y, point.z))
-    const sampled = providerNodeId
-      ? sampleProceduralLandscapeGuideRouteSurface(providerNodeId, world.x, world.z, 0)
-      : null
-    const position = sampled?.point ?? world
-    return { x: position.x, y: position.y, z: position.z }
+function restoreGuideRouteDragPreview(state: GuideRouteVertexDragState): void {
+  buildGuideRoutePreviewFromProps(state.nodeId, state.baseProps)
+  ensureGuideRouteVertexHandlesForSelectedNode({
+    force: true,
+    propsOverride: state.baseProps,
   })
-  const selectedWaypointIndex = sceneStore.selectedGuideRouteWaypoint?.nodeId === nodeId
-    ? sceneStore.selectedGuideRouteWaypoint.waypointIndex
-    : null
-  return sceneStore.updateGuideRouteWaypoints(nodeId, {
-    vertices: points,
-    anchors,
-    selectedWaypointIndex,
+}
+
+function cancelGuideRouteVertexDrag(event?: PointerEvent): boolean {
+  const state = guideRouteVertexDragState
+  if (!state || (event && event.pointerId !== state.pointerId)) {
+    return false
+  }
+  guideRouteVertexDragState = null
+  clearGuideRouteAnchorPressCandidate()
+  pointerInteraction.releaseIfCaptured(state.pointerId)
+  setActiveGuideRouteVertexHandle(null)
+  restoreGuideRouteDragPreview(state)
+  setGuideRouteCanvasCursor('')
+  return true
+}
+
+function removeSelectedGuideRoutePathAnchor(): boolean {
+  const selection = sceneStore.selectedGuideRouteWaypoint
+  if (!selection) {
+    return false
+  }
+  const node = findSceneNode(sceneStore.nodes, selection.nodeId)
+  const props = clampGuideRouteComponentProps(
+    node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | undefined,
+  )
+  const handle = resolveGuideRoutePathHandles(props)[selection.waypointIndex]
+  if (!node || !handle) {
+    return false
+  }
+  const removed = sceneStore.removeGuideRoutePathAnchorByHandle(node.id, {
+    legId: handle.legId,
+    anchorId: handle.anchorId,
   })
+  if (removed) {
+    showLandscapeRoadPlacementNotice('已删除选中的路径锚点。', 'info')
+  } else {
+    showLandscapeRoadPlacementNotice('每个路径段至少需要保留两个锚点。', 'info')
+  }
+  return true
 }
 
 function pickAnyGuideRouteSegmentAtPointer(
@@ -8421,17 +8605,229 @@ function beginGuideRouteDrawingFromCanvasContext(event: PointerEvent): boolean {
   return true
 }
 
+function promoteGuideRoutePathAnchorToStop(
+  nodeId: string,
+  legId: string,
+  anchorId: string,
+  vertexIndex: number,
+): boolean {
+  const stopResult = sceneStore.addGuideRouteStopAtPathAnchor(nodeId, {
+    legId,
+    anchorId,
+  })
+  if (!stopResult) {
+    return false
+  }
+  guideRouteCanvasContext = null
+  enterGuideRouteEditMode(nodeId)
+  sceneStore.setSelectedGuideRouteWaypoint(nodeId, vertexIndex)
+  syncGuideRouteStopMarkerPresentationAfterEdit(nodeId)
+  syncSelectedGuideRouteVertexHandle()
+  setGuideRouteCanvasCursor('')
+  showLandscapeRoadPlacementNotice(
+    stopResult.created
+      ? '已将路径锚点设为停靠点，可在停靠点卡片中设置缩略图。'
+      : '该锚点已经是停靠点，已为你选中。',
+    'info',
+  )
+  return true
+}
+
+function clearGuideRouteAnchorPressCandidate(): void {
+  if (guideRouteAnchorPressCandidate) {
+    clearTimeout(guideRouteAnchorPressCandidate.timer)
+    guideRouteAnchorPressCandidate = null
+  }
+}
+
+function isGuideRouteAnchorDoublePress(
+  nodeId: string,
+  handleKey: string,
+  event: PointerEvent,
+): boolean {
+  const now = performance.now()
+  const candidate = guideRouteAnchorPressCandidate
+  if (
+    candidate
+    && candidate.nodeId === nodeId
+    && candidate.handleKey === handleKey
+    && now - candidate.pressedAt <= GUIDE_ROUTE_ANCHOR_DOUBLE_PRESS_MS
+  ) {
+    clearGuideRouteAnchorPressCandidate()
+    return true
+  }
+  clearGuideRouteAnchorPressCandidate()
+  if (event.detail >= 2) {
+    return true
+  }
+  const timer = setTimeout(() => {
+    if (guideRouteAnchorPressCandidate?.handleKey === handleKey) {
+      guideRouteAnchorPressCandidate = null
+    }
+  }, GUIDE_ROUTE_ANCHOR_DOUBLE_PRESS_MS)
+  guideRouteAnchorPressCandidate = {
+    nodeId,
+    handleKey,
+    pressedAt: now,
+    timer,
+  }
+  return false
+}
+
+function tryPromoteGuideRouteEndpointAtPointer(event: MouseEvent): boolean {
+  const hit = resolveGuideRouteEndpointMarkerHit(event)
+  if (!hit) {
+    return false
+  }
+  const node = resolveSceneNodeById(hit.nodeId)
+  const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  const handle = props
+    ? resolveGuideRouteEndpointHandle(props, hit.endpoint)
+    : null
+  if (!node || !handle) {
+    return false
+  }
+  return promoteGuideRoutePathAnchorToStop(
+    node.id,
+    handle.legId,
+    handle.anchorId,
+    handle.vertexIndex,
+  )
+}
+
+function tryHandleGuideRouteEndpointAnchorPress(event: PointerEvent): boolean {
+  const hit = resolveGuideRouteEndpointMarkerHit(event)
+  if (!hit) {
+    return false
+  }
+  const node = resolveSceneNodeById(hit.nodeId)
+  const props = node?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+    | Partial<GuideRouteComponentProps>
+    | undefined
+  const handle = props
+    ? resolveGuideRouteEndpointHandle(props, hit.endpoint)
+    : null
+  if (!node || !handle) {
+    return false
+  }
+  return isGuideRouteAnchorDoublePress(node.id, handle.key, event)
+    ? promoteGuideRoutePathAnchorToStop(
+        node.id,
+        handle.legId,
+        handle.anchorId,
+        handle.vertexIndex,
+      )
+    : false
+}
+
+function resolveNearestGuideRouteAnchorAtPointer(event: MouseEvent): {
+  node: SceneNode
+  handle: ReturnType<typeof resolveGuideRoutePathHandles>[number]
+} | null {
+  if (!camera || !canvasRef.value) {
+    return null
+  }
+  const nodeId = getGuideRoutePointerEditNodeId()
+  const node = nodeId ? findSceneNode(sceneStore.nodes, nodeId) : null
+  if (!node || node.dynamicMesh?.type !== 'GuideRoute') {
+    return null
+  }
+  const props = clampGuideRouteComponentProps(
+    node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | undefined,
+  )
+  const rect = canvasRef.value.getBoundingClientRect()
+  camera.updateMatrixWorld(true)
+  let nearest: { handle: ReturnType<typeof resolveGuideRoutePathHandles>[number]; distance: number } | null = null
+  for (const handle of resolveGuideRoutePathHandles(props)) {
+    const projected = new THREE.Vector3(
+      handle.anchor.x,
+      handle.anchor.y,
+      handle.anchor.z,
+    ).project(camera)
+    if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) {
+      continue
+    }
+    const screenX = rect.left + (projected.x * 0.5 + 0.5) * rect.width
+    const screenY = rect.top + (-projected.y * 0.5 + 0.5) * rect.height
+    const distance = Math.hypot(screenX - event.clientX, screenY - event.clientY)
+    if (distance > 32 || (nearest && distance >= nearest.distance)) {
+      continue
+    }
+    nearest = { handle, distance }
+  }
+  if (!nearest) {
+    return null
+  }
+  return {
+    node,
+    handle: nearest.handle,
+  }
+}
+
+function tryPromoteNearestGuideRouteAnchorAtPointer(event: MouseEvent): boolean {
+  const nearest = resolveNearestGuideRouteAnchorAtPointer(event)
+  if (!nearest) {
+    return false
+  }
+  return promoteGuideRoutePathAnchorToStop(
+    nearest.node.id,
+    nearest.handle.legId,
+    nearest.handle.anchorId,
+    nearest.handle.vertexIndex,
+  )
+}
+
+function tryHandleNearestGuideRouteAnchorPress(event: PointerEvent): boolean {
+  const nearest = resolveNearestGuideRouteAnchorAtPointer(event)
+  if (!nearest) {
+    return false
+  }
+  if (isGuideRouteAnchorDoublePress(nearest.node.id, nearest.handle.key, event)) {
+    return promoteGuideRoutePathAnchorToStop(
+      nearest.node.id,
+      nearest.handle.legId,
+      nearest.handle.anchorId,
+      nearest.handle.vertexIndex,
+    )
+  }
+  enterGuideRouteEditMode(nearest.node.id)
+  sceneStore.setSelectedGuideRouteWaypoint(nearest.node.id, nearest.handle.vertexIndex)
+  if (nearest.handle.endpoint) {
+    activateGuideRouteEndpointSelection(
+      nearest.node.id,
+      nearest.handle.endpoint,
+      new THREE.Vector3(
+        nearest.handle.anchor.x,
+        nearest.handle.anchor.y,
+        nearest.handle.anchor.z,
+      ),
+    )
+    sceneStore.setSelectedGuideRouteWaypoint(nearest.node.id, nearest.handle.vertexIndex)
+  } else {
+    guideRouteCanvasContext = null
+    sceneStore.clearSelectedGuideRouteStop()
+  }
+  ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+  syncSelectedGuideRouteVertexHandle()
+  return true
+}
+
 function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
   if (guideRouteVertexDragState) {
     return false
   }
-  if (!isSelectedGuideRouteEditMode() || guideRouteBuildTool.getSession()) {
+  if (guideRouteBuildTool.getSession()) {
     return false
   }
-  const selectedId = getActiveGuideRouteEditNodeId()
+  const selectedId = getGuideRoutePointerEditNodeId()
   if (!selectedId || sceneStore.isNodeSelectionLocked(selectedId)) {
     return false
   }
+  enterGuideRouteEditMode(selectedId)
   const node = findSceneNode(sceneStore.nodes, selectedId)
   const runtime = objectMap.get(selectedId) ?? null
   if (!node || !runtime || node.dynamicMesh?.type !== 'GuideRoute') {
@@ -8439,9 +8835,30 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
   }
 
   ensureGuideRouteVertexHandlesForSelectedNode()
+  runtime.updateMatrixWorld(true)
   const hit = pickGuideRouteVertexHandleAtPointer(event)
   if (!hit || hit.nodeId !== selectedId) {
     return false
+  }
+
+  const baseProps = clampGuideRouteComponentProps(
+    node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
+      | Partial<GuideRouteComponentProps>
+      | undefined,
+  )
+  const pathHandle = resolveGuideRoutePathHandles(baseProps)
+    .find((handle) => handle.key === hit.handleKey)
+  if (!pathHandle) {
+    return false
+  }
+
+  if (isGuideRouteAnchorDoublePress(selectedId, hit.handleKey, event)) {
+    return promoteGuideRoutePathAnchorToStop(
+      selectedId,
+      hit.legId,
+      hit.anchorId,
+      hit.vertexIndex,
+    )
   }
 
   guideRouteCanvasContext = null
@@ -8449,13 +8866,11 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
   sceneStore.setSelectedGuideRouteWaypoint(selectedId, hit.vertexIndex)
   syncSelectedGuideRouteVertexHandle()
 
-  const basePoints = cloneGuideRouteLocalPoints(node)
-  const startPoint = basePoints[hit.vertexIndex]
-  if (!startPoint) {
-    return false
-  }
-
-  const startPointWorld = runtime.localToWorld(new THREE.Vector3(startPoint.x, startPoint.y, startPoint.z))
+  const startPointWorld = new THREE.Vector3(
+    pathHandle.anchor.x,
+    pathHandle.anchor.y,
+    pathHandle.anchor.z,
+  )
   const worldQuaternion = runtime.getWorldQuaternion(new THREE.Quaternion())
   const rawAxisWorld = hit.gizmoKind === 'axis' && hit.gizmoAxis
     ? hit.gizmoAxis.clone().applyQuaternion(worldQuaternion)
@@ -8468,7 +8883,11 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
   guideRouteVertexDragState = {
     pointerId: event.pointerId,
     nodeId: selectedId,
+    handleKey: hit.handleKey,
     vertexIndex: hit.vertexIndex,
+    legId: hit.legId,
+    anchorId: hit.anchorId,
+    endpoint: hit.endpoint,
     startX: event.clientX,
     startY: event.clientY,
     moved: false,
@@ -8483,11 +8902,13 @@ function tryBeginGuideRouteVertexDrag(event: PointerEvent): boolean {
     startPointWorld: startPointWorld.clone(),
     startHitWorld: null,
     runtimeObject: runtime,
-    basePoints,
-    workingPoints: basePoints.map((point) => ({ x: point.x, y: point.y, z: point.z })),
+    baseProps,
+    workingAnchorWorld: startPointWorld.clone(),
+    locked: hit.locked,
   }
 
-  setActiveGuideRouteVertexHandle({ nodeId: selectedId, vertexIndex: hit.vertexIndex, gizmoPart: hit.gizmoPart })
+  setActiveGuideRouteVertexHandle({ handleKey: hit.handleKey, gizmoPart: hit.gizmoPart })
+  setGuideRouteCanvasCursor('grabbing')
   pointerInteraction.capture(event.pointerId)
   return true
 }
@@ -18546,6 +18967,7 @@ async function handlePointerDown(event: PointerEvent) {
   if (rigidbodyColliderEditActive.value) {
     return
   }
+  canvasRef.value?.focus({ preventScroll: true })
   if (coordinateEditorOpen.value || uiStore.activeSelectionContext === 'coordinate-editor') {
     if (coordinateEditorOpen.value) {
       closeCoordinateEditor({ commit: true, deferRestore: true })
@@ -18634,7 +19056,22 @@ async function handlePointerDown(event: PointerEvent) {
   ) {
     let handledMarker = false
     if (activeBuildTool.value === 'guideRoute') {
-      handledMarker = tryBeginGuideRouteStopDrag(event)
+      handledMarker = tryBeginGuideRouteVertexDrag(event)
+      if (!handledMarker) {
+        handledMarker = tryHandleNearestGuideRouteAnchorPress(event)
+      }
+      if (!handledMarker) {
+        handledMarker = tryHandleGuideRouteEndpointAnchorPress(event)
+      }
+      if (!handledMarker && event.detail >= 2) {
+        handledMarker = tryPromoteNearestGuideRouteAnchorAtPointer(event)
+      }
+      if (!handledMarker && event.detail >= 2) {
+        handledMarker = tryPromoteGuideRouteEndpointAtPointer(event)
+      }
+      if (!handledMarker) {
+        handledMarker = tryBeginGuideRouteStopDrag(event)
+      }
       if (!handledMarker) {
         const endpointHit = resolveGuideRouteEndpointMarkerHit(event)
         if (endpointHit) {
@@ -18651,7 +19088,7 @@ async function handlePointerDown(event: PointerEvent) {
       }
     }
     if (handledMarker) {
-      if (!guideRouteStopDragState) {
+      if (!guideRouteStopDragState && !guideRouteVertexDragState) {
         guideRoutePointerConsumedId = event.pointerId
       }
       event.preventDefault()
@@ -19406,7 +19843,7 @@ function handlePointerMove(event: PointerEvent) {
     clearShiftOrbitPivotSession(event.pointerId)
   }
 
-  if (guideRouteStopDragState) {
+  if (guideRouteStopDragState || guideRouteVertexDragState) {
     setGuideRouteCanvasCursor('grabbing')
   } else {
     updateGuideRouteCanvasHoverCursor(event)
@@ -19640,7 +20077,6 @@ function handlePointerMove(event: PointerEvent) {
     if ((event.buttons & 1) === 0) {
       return
     }
-
     if (!state.startHitWorld) {
       if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
@@ -19689,7 +20125,6 @@ function handlePointerMove(event: PointerEvent) {
     if ((event.buttons & 1) === 0) {
       return
     }
-
     if (!state.startHitWorld) {
       if (!raycastLandformDragPoint(event, state.dragPlane, waterDragIntersectionHelper)) {
         return
@@ -19811,8 +20246,13 @@ function handlePointerMove(event: PointerEvent) {
       return
     }
     state.moved = true
+    clearGuideRouteAnchorPressCandidate()
 
     if ((event.buttons & 1) === 0) {
+      return
+    }
+    if (state.locked) {
+      setGuideRouteCanvasCursor('not-allowed')
       return
     }
 
@@ -19834,17 +20274,33 @@ function handlePointerMove(event: PointerEvent) {
       world = state.startHitWorld.clone().add(axis.multiplyScalar(t))
     }
 
-    const local = state.runtimeObject.worldToLocal(world)
-    const nextPoints = state.workingPoints.map((point) => ({ x: point.x, y: point.y, z: point.z }))
-    const current = nextPoints[state.vertexIndex]
-    if (!current) {
+    const nextAnchor = resolveGuideRouteDraggedAnchor(
+      state.baseProps,
+      state.legId,
+      state.anchorId,
+      world.x,
+      world.z,
+    )
+    if (!nextAnchor) {
       return
     }
-    nextPoints[state.vertexIndex] = { x: local.x, y: current.y, z: local.z }
-    state.workingPoints = nextPoints
-    if (buildGuideRoutePreviewFromLocalPoints(state.nodeId, nextPoints)) {
-      ensureGuideRouteVertexHandlesForSelectedNode({ force: true, previewPoints: nextPoints })
+    const nextProps = moveGuideRoutePathAnchorInProps(
+      state.baseProps,
+      state.legId,
+      state.anchorId,
+      { x: nextAnchor.x, y: nextAnchor.y, z: nextAnchor.z },
+    )
+    if (!nextProps) {
+      return
     }
+    state.workingAnchorWorld.copy(nextAnchor)
+    if (buildGuideRoutePreviewFromProps(state.nodeId, nextProps)) {
+      ensureGuideRouteVertexHandlesForSelectedNode({
+        force: true,
+        propsOverride: nextProps,
+      })
+    }
+    setGuideRouteCanvasCursor('grabbing')
     return
   }
 
@@ -20656,17 +21112,44 @@ async function handlePointerUp(event: PointerEvent) {
         setActiveGuideRouteVertexHandle(null)
 
         if (state.moved) {
-          if (!commitGuideRouteNode(state.nodeId, state.workingPoints)) {
-            buildGuideRoutePreviewFromLocalPoints(state.nodeId, state.basePoints)
+          if (state.locked) {
+            restoreGuideRouteDragPreview(state)
+            showLandscapeRoadPlacementNotice(
+              '该锚点连接公路或固定路线边界，位置不可拖动；双击可设为停靠点。',
+              'info',
+            )
+          } else {
+            const committed = sceneStore.moveGuideRoutePathAnchorByHandle(state.nodeId, {
+              legId: state.legId,
+              anchorId: state.anchorId,
+              anchor: {
+                x: state.workingAnchorWorld.x,
+                y: state.workingAnchorWorld.y,
+                z: state.workingAnchorWorld.z,
+              },
+            })
+            if (!committed) {
+              restoreGuideRouteDragPreview(state)
+            }
           }
           ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
           void nextTick(() => {
             ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
           })
         } else {
-          buildGuideRoutePreviewFromLocalPoints(state.nodeId, state.basePoints)
+          restoreGuideRouteDragPreview(state)
           ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+          if (state.endpoint) {
+            activateGuideRouteEndpointSelection(
+              state.nodeId,
+              state.endpoint,
+              state.startPointWorld,
+            )
+            sceneStore.setSelectedGuideRouteWaypoint(state.nodeId, state.vertexIndex)
+            syncSelectedGuideRouteVertexHandle()
+          }
         }
+        setGuideRouteCanvasCursor('')
 
         event.preventDefault()
         event.stopPropagation()
@@ -21639,24 +22122,6 @@ function handlePointerCancel(event: PointerEvent) {
       return
     }
 
-    if (guideRouteVertexDragState && event.pointerId === guideRouteVertexDragState.pointerId) {
-      const state = guideRouteVertexDragState
-      guideRouteVertexDragState = null
-      pointerInteraction.releaseIfCaptured(event.pointerId)
-      setActiveGuideRouteVertexHandle(null)
-
-      try {
-        buildGuideRoutePreviewFromLocalPoints(state.nodeId, state.basePoints)
-        ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
-      } catch {
-        /* noop */
-      }
-
-      event.preventDefault()
-      event.stopPropagation()
-      event.stopImmediatePropagation()
-      return
-    }
   }
 
   if (activeBuildTool.value === 'billboard') {
@@ -21747,6 +22212,13 @@ function handlePointerCancel(event: PointerEvent) {
       /* noop */
     }
 
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
+  }
+
+  if (cancelGuideRouteVertexDrag(event)) {
     event.preventDefault()
     event.stopPropagation()
     event.stopImmediatePropagation()
@@ -21889,6 +22361,19 @@ function handleCanvasDoubleClick(event: MouseEvent) {
       event.stopPropagation()
       return
     }
+  }
+
+  if (
+    activeBuildTool.value === 'guideRoute'
+    && (
+      tryPromoteNearestGuideRouteAnchorAtPointer(event)
+      || tryPromoteGuideRouteEndpointAtPointer(event)
+    )
+  ) {
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return
   }
 
   if (activeBuildTool.value) {
@@ -22052,7 +22537,9 @@ function cancelActiveBuildOperation(options?: { restoreTransformTool?: EditorToo
       handled = true
       break
     case 'guideRoute':
-      if (guideRouteStopDragState) {
+      if (guideRouteVertexDragState) {
+        cancelGuideRouteVertexDrag()
+      } else if (guideRouteStopDragState) {
         cancelGuideRouteStopDrag()
       } else if (guideRouteBuildTool.getSession()) {
         guideRouteBuildTool.cancel()
@@ -22134,6 +22621,8 @@ function handleBuildToolChange(tool: BuildTool | null) {
   }
   if (activeBuildTool.value === 'guideRoute' && tool !== 'guideRoute') {
     guideRouteBuildTool.cancel()
+    clearGuideRouteAnchorPressCandidate()
+    cancelGuideRouteVertexDrag()
     guideRouteCanvasContext = null
     guideRoutePointerConsumedId = null
     cancelGuideRouteStopDrag()
@@ -26719,6 +27208,9 @@ function handleViewportShortcut(event: KeyboardEvent) {
         if (!handled && activeBuildTool.value === 'modelCollision' && selectedModelCollisionFaceId.value) {
           handled = removeSelectedModelCollisionFace()
         }
+        if (!handled && activeBuildTool.value === 'guideRoute') {
+          handled = removeSelectedGuideRoutePathAnchor()
+        }
         if (!handled && activeBuildTool.value === 'landscapeRoad' && landscapeRoadPathSelectedIndex != null) {
           handled = removeSelectedLandscapeRoadWaypoint()
         }
@@ -26951,6 +27443,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  clearGuideRouteAnchorPressCandidate()
   clearLandscapeRoadPlacementNotice()
   setGroundTextureSourceResolver(null)
   setProceduralLandscapeDemOrthoResolver(null)
@@ -27324,6 +27817,16 @@ watch(activeBuildTool, (tool, previous) => {
     }
   } else if (isManagedBuildToolContext(uiStore.activeSelectionContext)) {
     uiStore.setActiveSelectionContext(null)
+  }
+
+  if (tool === 'guideRoute') {
+    const nodeId = getGuideRoutePointerEditNodeId()
+    if (nodeId) {
+      enterGuideRouteEditMode(nodeId)
+      void nextTick(() => {
+        ensureGuideRouteVertexHandlesForSelectedNode({ force: true })
+      })
+    }
   }
 })
 
@@ -27892,6 +28395,7 @@ defineExpose({
         </div>
       <canvas
         ref="canvasRef"
+        tabindex="0"
         :class="[
           'viewport-canvas',
           buildToolCursorClass,
@@ -28134,6 +28638,10 @@ defineExpose({
   height: 100%;
   display: block;
   cursor: grab;
+}
+
+.viewport-canvas:focus {
+  outline: none;
 }
 
 .viewport-canvas:active {

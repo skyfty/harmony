@@ -26,6 +26,7 @@ import { collectPerformSequenceOptions } from '@schema/behaviors/sequenceOptions
 import type { ProjectAsset } from '@/types/project-asset'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
+import { findGuideRoutePathHandle } from '@/utils/guideRouteEditPolicy'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
@@ -207,13 +208,15 @@ function addPathAnchor(leg: GuidePathRouteLeg): void {
 }
 
 function removePathAnchor(leg: GuidePathRouteLeg, index: number): void {
-  if (leg.anchors.length <= 2) {
+  const nodeId = selectedNode.value?.id
+  const anchor = leg.anchors[index]
+  if (leg.anchors.length <= 2 || !nodeId || !anchor?.id) {
     return
   }
-  updatePathAnchors(
-    leg,
-    leg.anchors.filter((_, anchorIndex) => anchorIndex !== index),
-  )
+  sceneStore.removeGuideRoutePathAnchorByHandle(nodeId, {
+    legId: leg.id,
+    anchorId: anchor.id,
+  })
 }
 
 function updatePathAnchors(
@@ -514,8 +517,18 @@ function surfaceStatus(providerNodeId: string | null) {
     : null
 }
 
-function isRoadBoundStop(stop: GuideRouteStop): boolean {
-  return guideRouteProps.value?.legs.some((leg) => leg.id === stop.legId && leg.kind === 'road') === true
+function isStopPositionLocked(stop: GuideRouteStop): boolean {
+  if (guideRouteProps.value?.legs.some((leg) => leg.id === stop.legId && leg.kind === 'road')) {
+    return true
+  }
+  return Boolean(
+    stop.controlAnchorId
+    && findGuideRoutePathHandle(
+      guideRouteProps.value,
+      stop.legId,
+      stop.controlAnchorId,
+    )?.locked,
+  )
 }
 
 </script>
@@ -562,7 +575,7 @@ function isRoadBoundStop(stop: GuideRouteStop): boolean {
           </v-menu>
         </div>
         <div class="gr-tool-hint">
-          使用 Guide Route Tool：点击空白新建；点击线路创建或选择停靠点；手工路径可拖动；选中停靠点或端点后点击线路外继续建造。公路段和公路停靠点位置锁定。
+          使用 Guide Route Tool：点击空白新建；点击线路创建或选择停靠点；手工路径可拖动；双击路径锚点可设为停靠点；选中锚点后按 Delete 可单独删除。公路段和公路连接点位置锁定。
         </div>
         <div v-if="guideRouteProps.origin" class="gr-source-note">
           自动公路路线 · {{ guideRouteProps.origin.providerNodeId }} · rev {{ guideRouteProps.origin.sourceRevision }}
@@ -824,8 +837,8 @@ function isRoadBoundStop(stop: GuideRouteStop): boolean {
               variant="underlined"
               hide-details
               :model-value="stop.anchor[axis]"
-              :disabled="!componentEnabled || isRoadBoundStop(stop)"
-              :title="isRoadBoundStop(stop) ? '公路停靠点位置由公路决定，不可拖动或数值修改' : undefined"
+              :disabled="!componentEnabled || isStopPositionLocked(stop)"
+              :title="isStopPositionLocked(stop) ? '该停靠点连接公路或固定路线边界，不可拖动或数值修改' : undefined"
               @update:model-value="(value) => updateStopAnchor(stop, axis, value)"
             />
             <button
@@ -853,7 +866,7 @@ function isRoadBoundStop(stop: GuideRouteStop): boolean {
               清除缩略图引用
             </v-btn>
             <span class="gr-stop-anchor">
-              {{ isRoadBoundStop(stop) ? '公路停靠点 · 位置锁定' : '路径控制点 · 可拖动' }}
+              {{ isStopPositionLocked(stop) ? '路线连接点 · 位置锁定' : '路径控制点 · 可拖动' }}
             </span>
           </div>
           <v-select
@@ -925,7 +938,7 @@ function isRoadBoundStop(stop: GuideRouteStop): boolean {
       <v-dialog v-model="deleteStopDialogVisible" max-width="440">
         <v-card title="删除停靠点">
           <v-card-text>
-            确定删除“{{ pendingDeleteStop?.name || pendingDeleteStopId }}”及其缩略图引用、行为配置和路径控制点吗？图片资产不会从 AssetsPanel 删除，分支路线会保留并解除来源关联。
+            确定删除“{{ pendingDeleteStop?.name || pendingDeleteStopId }}”及其缩略图引用和行为配置吗？路径锚点会单独保留，图片资产不会从 AssetsPanel 删除，分支路线会保留并解除来源关联。
           </v-card-text>
           <v-card-actions>
             <v-spacer />

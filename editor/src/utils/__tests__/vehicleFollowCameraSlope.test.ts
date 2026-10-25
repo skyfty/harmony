@@ -11,6 +11,7 @@ import {
   type VehicleDriveControllerBindings,
   type VehicleDriveControllerDeps,
 } from '@schema/VehicleDriveController'
+import { resolveVehicleAxisVector } from '@schema/vehicleAxes'
 
 const CAMERA_FOLLOW_DISTANCE = 6
 const CAMERA_FOLLOW_HEIGHT = 4
@@ -20,32 +21,38 @@ type VehicleCameraFixture = {
   controller: VehicleDriveController
   camera: THREE.PerspectiveCamera
   cameraFollowState: ReturnType<typeof createCameraFollowState>
-  vehicleObject: THREE.Mesh
+  vehicleObject: THREE.Group
+  axisForward: THREE.Vector3
 }
 
 function createVehicleCameraFixture(): VehicleCameraFixture {
-  const vehicleObject = new THREE.Mesh(
+  const vehicleObject = new THREE.Group()
+  vehicleObject.position.set(12, 20, -8)
+  const model = new THREE.Group()
+  model.rotation.y = Math.PI / 2
+  model.add(new THREE.Mesh(
     new THREE.BoxGeometry(2.4, 1.4, 4.2),
     new THREE.MeshBasicMaterial(),
-  )
-  vehicleObject.position.set(12, 20, -8)
+  ))
+  vehicleObject.add(model)
   vehicleObject.updateMatrixWorld(true)
 
   const cameraFollowState = createCameraFollowState()
   const camera = new THREE.PerspectiveCamera()
   const nodeObjectMap = new Map<string, THREE.Object3D>([['vehicle', vehicleObject]])
+  const axisForward = new THREE.Vector3(1, 0, 0)
   const vehicleInstances = new Map([
     ['vehicle', {
       nodeId: 'vehicle',
       vehicle: { chassisBody: null },
       wheelCount: 4,
       steerableWheelIndices: [0, 1],
-      axisRight: new THREE.Vector3(1, 0, 0),
+      axisRight: new THREE.Vector3(0, 0, 1),
       axisUp: new THREE.Vector3(0, 1, 0),
-      axisForward: new THREE.Vector3(0, 0, -1),
-      axisRightIndex: 0 as const,
+      axisForward,
+      axisRightIndex: 2 as const,
       axisUpIndex: 1 as const,
-      axisForwardIndex: 2 as const,
+      axisForwardIndex: 0 as const,
     }],
   ])
   const vehicleNode = {
@@ -117,6 +124,7 @@ function createVehicleCameraFixture(): VehicleCameraFixture {
     camera,
     cameraFollowState,
     vehicleObject,
+    axisForward,
   }
 }
 
@@ -127,20 +135,23 @@ function setVehicleRotation(
   rollDegrees = 0,
 ): void {
   fixture.vehicleObject.rotation.set(
-    THREE.MathUtils.degToRad(pitchDegrees),
-    THREE.MathUtils.degToRad(yawDegrees),
     THREE.MathUtils.degToRad(rollDegrees),
+    THREE.MathUtils.degToRad(yawDegrees),
+    THREE.MathUtils.degToRad(pitchDegrees),
     'YXZ',
   )
   fixture.vehicleObject.updateMatrixWorld(true)
 }
 
-function resolveExpectedCameraBasis(vehicleObject: THREE.Object3D): {
+function resolveExpectedCameraBasis(
+  vehicleObject: THREE.Object3D,
+  axisForward: THREE.Vector3,
+): {
   forward: THREE.Vector3
   right: THREE.Vector3
   up: THREE.Vector3
 } {
-  const forward = new THREE.Vector3(0, 0, -1)
+  const forward = axisForward.clone()
     .applyQuaternion(vehicleObject.getWorldQuaternion(new THREE.Quaternion()))
     .normalize()
   const horizontalLength = Math.hypot(forward.x, forward.z)
@@ -178,7 +189,10 @@ function expectStableVehicleCameraComposition(
   setVehicleRotation(fixture, pitchDegrees, yawDegrees, rollDegrees)
   updateCamera(fixture)
 
-  const { forward, right, up } = resolveExpectedCameraBasis(fixture.vehicleObject)
+  const { forward, right, up } = resolveExpectedCameraBasis(
+    fixture.vehicleObject,
+    fixture.axisForward,
+  )
   const anchor = fixture.vehicleObject.getWorldPosition(new THREE.Vector3())
   const offset = fixture.camera.position.clone().sub(anchor)
   const cameraRight = new THREE.Vector3().setFromMatrixColumn(fixture.camera.matrixWorld, 0)
@@ -191,6 +205,34 @@ function expectStableVehicleCameraComposition(
 }
 
 describe('vehicle follow camera slope alignment', () => {
+  it('keeps vehicle cardinal axes isolated after a world-space transform', () => {
+    const worldForward = resolveVehicleAxisVector(0)
+      .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        THREE.MathUtils.degToRad(50),
+      ))
+
+    expect(worldForward.distanceTo(new THREE.Vector3(
+      Math.cos(THREE.MathUtils.degToRad(50)),
+      0,
+      -Math.sin(THREE.MathUtils.degToRad(50)),
+    ))).toBeLessThan(1e-6)
+    expect(resolveVehicleAxisVector(0).toArray()).toEqual([1, 0, 0])
+    expect(resolveVehicleAxisVector(1).toArray()).toEqual([0, 1, 0])
+    expect(resolveVehicleAxisVector(2).toArray()).toEqual([0, 0, 1])
+  })
+
+  it('keeps the Car00 model axis aligned with the vehicle forward axis', () => {
+    const fixture = createVehicleCameraFixture()
+    const model = fixture.vehicleObject.children[0]!
+    const vehicleQuaternion = fixture.vehicleObject.getWorldQuaternion(new THREE.Quaternion())
+    const modelQuaternion = model.getWorldQuaternion(new THREE.Quaternion())
+    const vehicleForward = fixture.axisForward.clone().applyQuaternion(vehicleQuaternion)
+    const modelForward = new THREE.Vector3(0, 0, 1).applyQuaternion(modelQuaternion)
+
+    expect(vehicleForward.dot(modelForward)).toBeCloseTo(1, 5)
+  })
+
   it('keeps the same vehicle-relative composition on flat, uphill, and downhill roads', () => {
     const fixture = createVehicleCameraFixture()
 

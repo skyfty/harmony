@@ -7,11 +7,13 @@ import {
 } from '@schema/components'
 import {
   addGuideRouteStop,
+  addGuideRouteStopAtPathAnchor,
   appendGuideRoutePathExtension,
   createGuideRouteBranchProps,
   insertGuideRoutePathStop,
   moveGuideRouteStop,
   prependGuideRoutePathExtension,
+  removeGuideRoutePathAnchor,
   removeGuideRouteStop,
   unlinkGuideRouteBranchOrigins,
 } from '@schema/guideRouteEditing'
@@ -81,9 +83,15 @@ describe('Guide Route editing model', () => {
     }
     expect(moved?.stops[0]?.anchor).toEqual(point(6, 12, 2))
     expect(movedLeg.anchors.find((anchor) => anchor.id === inserted!.anchorId)).toMatchObject(point(6, 12, 2))
+    const removed = removeGuideRouteStop(moved!, inserted!.stopId)
+    const removedStopLeg = removed.props.legs[0]
+    if (removedStopLeg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(removedStopLeg.anchors).toHaveLength(3)
   })
 
-  it('removes a path stop and its control anchor while retaining the image reference outside the model', () => {
+  it('removes stop metadata while retaining path anchors and image references', () => {
     const added = addGuideRouteStop(pathProps(), {
       legId: 'path-1',
       anchor: point(5),
@@ -92,7 +100,76 @@ describe('Guide Route editing model', () => {
     const removed = removeGuideRouteStop(added.props, added.stopId)
     expect(removed.removedStop?.thumbnailAssetId).toBe('image-1')
     expect(removed.props.stops).toHaveLength(0)
-    expect(removed.removedAnchorId).toBeNull()
+    const remainingLeg = removed.props.legs[0]
+    if (remainingLeg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(remainingLeg.anchors).toHaveLength(2)
+  })
+
+  it('removes a selected anchor separately and detaches any linked stop', () => {
+    const source = appendGuideRoutePathExtension(pathProps(), point(10), [point(20)])
+    const added = addGuideRouteStopAtPathAnchor(source, {
+      legId: 'path-1',
+      anchorId: 'a1',
+      name: 'Lookout',
+    })!
+    const removed = removeGuideRoutePathAnchor(added.props, {
+      legId: 'path-1',
+      anchorId: 'a1',
+    })
+    expect(removed).not.toBeNull()
+    const leg = removed?.props.legs[0]
+    if (leg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(leg.anchors.map((anchor) => anchor.id)).toEqual(['a0', expect.any(String)])
+    expect(removed?.props.stops[0]).toMatchObject({
+      name: 'Lookout',
+      controlAnchorId: null,
+      anchor: point(10),
+    })
+  })
+
+  it('promotes an existing path endpoint to a stop without inserting another anchor', () => {
+    const added = addGuideRouteStopAtPathAnchor(pathProps(), {
+      legId: 'path-1',
+      anchorId: 'a1',
+      name: 'Finish',
+    })
+    expect(added).not.toBeNull()
+    expect(added?.created).toBe(true)
+    const props = added!.props
+    const leg = props.legs[0]
+    if (leg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(leg.anchors).toHaveLength(2)
+    expect(props.stops[0]).toMatchObject({
+      id: added!.stopId,
+      name: 'Finish',
+      anchor: point(10),
+      legId: 'path-1',
+      controlAnchorId: 'a1',
+    })
+
+    const repeated = addGuideRouteStopAtPathAnchor(props, {
+      legId: 'path-1',
+      anchorId: 'a1',
+    })
+    expect(repeated).toMatchObject({
+      stopId: added!.stopId,
+      created: false,
+    })
+    expect(repeated?.props.stops).toHaveLength(1)
+
+    const removed = removeGuideRouteStop(repeated!.props, added!.stopId)
+    const removedLeg = removed.props.legs[0]
+    if (removedLeg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(removedLeg.anchors.map((anchor) => anchor.id)).toEqual(['a0', 'a1'])
+    expect(removed.props.stops).toHaveLength(0)
   })
 
   it('represents a branch as an independent route with source metadata', () => {

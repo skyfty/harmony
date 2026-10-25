@@ -78,6 +78,8 @@ export type AutoTourRuntime = {
   startTour: (nodeId: string, target?: GuideRouteTourTargetOptions) => void
   continueFromEnd: (nodeId: string) => void
   stopTour: (nodeId: string) => void
+  setPaused: (nodeId: string, paused: boolean) => void
+  isPaused: (nodeId: string) => boolean
   isTourActive: (nodeId: string) => boolean
   completeGuideTransition: (nodeId: string, success: boolean, message?: string) => void
 }
@@ -473,6 +475,7 @@ function buildVehicleQuaternion(
 export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntime {
   const playbackStates = new Map<string, PlaybackState>()
   const activeTourNodes = new Set<string>()
+  const pausedTourNodes = new Set<string>()
   const disabledTourNodes = new Set<string>()
   const pendingTourTargets = new Map<string, GuideRouteTourTargetOptions>()
   const vehicleLocalBoundsCache = new WeakMap<THREE.Object3D, THREE.Box3>()
@@ -844,6 +847,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   function stopTour(nodeId: string): void {
     playbackStates.delete(nodeId)
     activeTourNodes.delete(nodeId)
+    pausedTourNodes.delete(nodeId)
     disabledTourNodes.add(nodeId)
     pendingTourTargets.delete(nodeId)
     deps.onAutoSurfaceEnd?.(nodeId)
@@ -859,6 +863,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         continue
       }
       if (!activeTourNodes.has(node.id)) {
+        continue
+      }
+      if (pausedTourNodes.has(node.id)) {
         continue
       }
       const component = resolveEnabledComponentState<AutoTourComponentProps>(
@@ -909,6 +916,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           pendingTourTargets.delete(node.id)
           if (!travelWindow || !targetedRouteData) {
             activeTourNodes.delete(node.id)
+            pausedTourNodes.delete(node.id)
             disabledTourNodes.add(node.id)
             deps.onTerminalStop?.(node.id, 'guide-route-target-reached')
             continue
@@ -964,6 +972,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (progressLeg && progressLeg.travelMode !== 'vehicle') {
         disabledTourNodes.add(node.id)
         activeTourNodes.delete(node.id)
+        pausedTourNodes.delete(node.id)
         deps.onTerminalStop?.(node.id, 'guide-route-actor-mismatch')
         continue
       }
@@ -1030,12 +1039,31 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         !state!.firedStopIds.has(stop.definition.id)
         && crosses(stop.routeDistance, eventRangeEnd)
       ))
+      const nextStop = reachedStops.reduce<CompiledGuideStop | null>((closest, stop) => (
+        !closest || stop.routeDistance < closest.routeDistance ? stop : closest
+      ), null)
       const nextTransition = routeData.evaluation.transitions.find((transition) => (
         !state!.firedTransitionIds.has(transition.definition.id)
         && crosses(transition.routeDistance, eventRangeEnd)
       )) ?? null
-      if (nextTransition) {
-        nextDistance = nextTransition.routeDistance
+      const stopPrecedesTransition = Boolean(
+        nextStop
+        && (
+          !nextTransition
+          || nextStop.routeDistance <= nextTransition.routeDistance + 1e-4
+        ),
+      )
+      const stopsAtNextEvent = stopPrecedesTransition
+        ? reachedStops.filter((stop) => (
+          Math.abs(stop.routeDistance - nextStop!.routeDistance) <= 1e-4
+        ))
+        : []
+      const transitionAtNextEvent = stopPrecedesTransition ? null : nextTransition
+      const nextEventDistance = stopPrecedesTransition
+        ? nextStop!.routeDistance
+        : nextTransition?.routeDistance ?? Number.POSITIVE_INFINITY
+      if (Number.isFinite(nextEventDistance)) {
+        nextDistance = nextEventDistance
         wrapped = false
       }
 
@@ -1118,22 +1146,31 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       syncNodeTransformFromObject(node, object)
       deps.onNodeObjectTransformUpdated?.(node.id, object)
 
-      for (const stop of reachedStops) {
+      if (stopsAtNextEvent.length) {
+        state.distanceAlongRoute = nextStop!.routeDistance
+        state.smoothedSpeedMps = 0
+        pausedTourNodes.add(node.id)
+      }
+      for (const stop of stopsAtNextEvent) {
         state.firedStopIds.add(stop.definition.id)
         deps.onGuideStop?.(node.id, stop)
       }
-      if (nextTransition) {
-        state.firedTransitionIds.add(nextTransition.definition.id)
-        state.pendingTransitionId = nextTransition.definition.id
-        deps.onGuideTransition?.(node.id, nextTransition)
+      if (stopsAtNextEvent.length) {
+        return
+      }
+      if (transitionAtNextEvent) {
+        state.firedTransitionIds.add(transitionAtNextEvent.definition.id)
+        state.pendingTransitionId = transitionAtNextEvent.definition.id
+        deps.onGuideTransition?.(node.id, transitionAtNextEvent)
       }
       if (wrapped) {
         state.firedStopIds.clear()
         state.firedTransitionIds.clear()
       }
-      if (isTerminal && !nextTransition) {
+      if (isTerminal && !transitionAtNextEvent) {
         disabledTourNodes.add(node.id)
         activeTourNodes.delete(node.id)
+        pausedTourNodes.delete(node.id)
         deps.onTerminalStop?.(node.id, 'guide-route-complete')
       }
     }
@@ -1152,6 +1189,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         vehicleLocalBoundsCache.delete(object)
       }
       disabledTourNodes.delete(nodeId)
+      pausedTourNodes.delete(nodeId)
       playbackStates.delete(nodeId)
       if (target) {
         pendingTourTargets.set(nodeId, target)
@@ -1167,12 +1205,28 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         vehicleLocalBoundsCache.delete(object)
       }
       disabledTourNodes.delete(nodeId)
+      pausedTourNodes.delete(nodeId)
       playbackStates.delete(nodeId)
       pendingTourTargets.delete(nodeId)
       activeTourNodes.add(nodeId)
       deps.onAutoSurfaceStart?.(nodeId)
     },
     stopTour,
+    setPaused: (nodeId, paused) => {
+      if (!activeTourNodes.has(nodeId)) {
+        return
+      }
+      if (paused) {
+        pausedTourNodes.add(nodeId)
+        const state = playbackStates.get(nodeId)
+        if (state) {
+          state.smoothedSpeedMps = 0
+        }
+      } else {
+        pausedTourNodes.delete(nodeId)
+      }
+    },
+    isPaused: (nodeId) => pausedTourNodes.has(nodeId),
     isTourActive: (nodeId) => (
       !disabledTourNodes.has(nodeId) && activeTourNodes.has(nodeId)
     ),
@@ -1185,6 +1239,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       if (!success) {
         disabledTourNodes.add(nodeId)
         activeTourNodes.delete(nodeId)
+        pausedTourNodes.delete(nodeId)
         deps.onTerminalStop?.(nodeId, message || 'guide-route-transition-failed')
       }
     },
@@ -1193,6 +1248,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         deps.onAutoSurfaceEnd?.(nodeId)
       })
       activeTourNodes.clear()
+      pausedTourNodes.clear()
       disabledTourNodes.clear()
       playbackStates.clear()
       pendingTourTargets.clear()

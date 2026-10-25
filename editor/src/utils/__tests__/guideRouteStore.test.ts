@@ -6,6 +6,8 @@ import type { SceneNode } from '@schema/core'
 import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+  createGuidePathRouteLeg,
+  createGuideRoadRouteLeg,
   createProceduralLandscapeComponentState,
   type GuideRouteComponentProps,
 } from '@schema/components'
@@ -32,6 +34,220 @@ function createRoute(store: ReturnType<typeof useSceneStore>) {
 }
 
 describe('Guide Route stop and branch store actions', () => {
+  it('moves a pure path endpoint without replacing the route transform', () => {
+    const store = useSceneStore()
+    const route = createRoute(store)
+    const originalPosition = { ...route.position }
+    const props = route.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    const leg = props.legs[0]
+    if (leg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    const endpoint = leg.anchors[leg.anchors.length - 1]!
+    const moved = {
+      x: endpoint.x + 5,
+      y: endpoint.y + 2,
+      z: endpoint.z - 3,
+    }
+
+    expect(store.moveGuideRoutePathAnchorByHandle(route.id, {
+      legId: leg.id,
+      anchorId: endpoint.id!,
+      anchor: moved,
+    })).toBe(true)
+
+    const updatedNode = store.nodes.find((node) => node.id === route.id)!
+    const updatedProps = updatedNode.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    const updatedLeg = updatedProps.legs[0]
+    if (updatedLeg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(updatedLeg.anchors.slice(0, -1)).toEqual(leg.anchors.slice(0, -1))
+    expect(updatedLeg.anchors[updatedLeg.anchors.length - 1]).toMatchObject(moved)
+    expect(updatedNode.position).toEqual(originalPosition)
+    expect(store.selectedGuideRouteWaypoint).toEqual({
+      nodeId: route.id,
+      waypointIndex: leg.anchors.length - 1,
+    })
+  })
+
+  it('promotes either path endpoint to a stop without duplicating its anchor', () => {
+    const store = useSceneStore()
+    const route = createRoute(store)
+    const props = route.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    const leg = props.legs[0]
+    if (leg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+
+    const start = store.addGuideRouteStopAtPathAnchor(route.id, {
+      legId: leg.id,
+      anchorId: leg.anchors[0]!.id!,
+      name: 'Start stop',
+    })
+    const end = store.addGuideRouteStopAtPathAnchor(route.id, {
+      legId: leg.id,
+      anchorId: leg.anchors[leg.anchors.length - 1]!.id!,
+      name: 'End stop',
+    })
+
+    expect(start?.created).toBe(true)
+    expect(end?.created).toBe(true)
+    const updatedProps = store.nodes
+      .find((node) => node.id === route.id)
+      ?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    const updatedLeg = updatedProps.legs[0]
+    if (updatedLeg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(updatedLeg.anchors).toHaveLength(leg.anchors.length)
+    expect(updatedProps.stops).toEqual([
+      expect.objectContaining({
+        id: start!.stopId,
+        name: 'Start stop',
+        anchor: {
+          x: leg.anchors[0]!.x,
+          y: leg.anchors[0]!.y,
+          z: leg.anchors[0]!.z,
+        },
+        controlAnchorId: leg.anchors[0]!.id,
+        thumbnailAssetId: null,
+      }),
+      expect.objectContaining({
+        id: end!.stopId,
+        name: 'End stop',
+        anchor: {
+          x: leg.anchors[leg.anchors.length - 1]!.x,
+          y: leg.anchors[leg.anchors.length - 1]!.y,
+          z: leg.anchors[leg.anchors.length - 1]!.z,
+        },
+        controlAnchorId: leg.anchors[leg.anchors.length - 1]!.id,
+        thumbnailAssetId: null,
+      }),
+    ])
+
+    expect(store.addGuideRouteStopAtPathAnchor(route.id, {
+      legId: leg.id,
+      anchorId: leg.anchors[0]!.id!,
+    })).toEqual({ stopId: start!.stopId, created: false })
+    expect(store.selectedGuideRouteStop).toEqual({
+      nodeId: route.id,
+      stopId: start!.stopId,
+    })
+  })
+
+  it('deletes a selected anchor independently while preserving a linked stop', () => {
+    const store = useSceneStore()
+    const route = createRoute(store)
+    const props = route.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    const leg = props.legs[0]
+    if (leg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    const anchor = leg.anchors[1]!
+    const stop = store.addGuideRouteStopAtPathAnchor(route.id, {
+      legId: leg.id,
+      anchorId: anchor.id!,
+    })!
+
+    expect(store.removeGuideRoutePathAnchorByHandle(route.id, {
+      legId: leg.id,
+      anchorId: anchor.id!,
+    })).toBe(true)
+
+    const updatedProps = store.nodes
+      .find((node) => node.id === route.id)
+      ?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    const updatedLeg = updatedProps.legs[0]
+    if (updatedLeg?.kind !== 'path') {
+      throw new Error('expected path leg')
+    }
+    expect(updatedLeg.anchors).toHaveLength(2)
+    expect(updatedProps.stops).toEqual([
+      expect.objectContaining({
+        id: stop.stopId,
+        controlAnchorId: null,
+        anchor: {
+          x: anchor.x,
+          y: anchor.y,
+          z: anchor.z,
+        },
+      }),
+    ])
+    expect(store.removeGuideRoutePathAnchorByHandle(route.id, {
+      legId: leg.id,
+      anchorId: updatedLeg.anchors[0]!.id!,
+    })).toBe(false)
+  })
+
+  it('edits only path anchors around an internal road leg and rejects attached boundaries', () => {
+    const store = useSceneStore()
+    const firstPath = createGuidePathRouteLeg({
+      id: 'path-start',
+      anchors: [
+        { x: -20, y: 4, z: 0, id: 'start-1' },
+        { x: -10, y: 4, z: 0, id: 'start-2' },
+        { x: 0, y: 4, z: 0, id: 'start-connected' },
+      ],
+      preserveAuthoredY: true,
+    })
+    const road = createGuideRoadRouteLeg({
+      id: 'road-1',
+      providerNodeId: 'terrain-1',
+    })
+    const lastPath = createGuidePathRouteLeg({
+      id: 'path-end',
+      anchors: [
+        { x: 10, y: 4, z: 0, id: 'end-connected' },
+        { x: 20, y: 4, z: 0, id: 'end-2' },
+        { x: 30, y: 4, z: 0, id: 'end-3' },
+      ],
+      preserveAuthoredY: true,
+    })
+    const route = store.createGuideRouteNode({
+      points: [
+        { x: -20, y: 4, z: 0 },
+        { x: -10, y: 4, z: 0 },
+        { x: 0, y: 4, z: 0 },
+        { x: 10, y: 4, z: 0 },
+        { x: 20, y: 4, z: 0 },
+        { x: 30, y: 4, z: 0 },
+      ],
+      legs: [firstPath, road, lastPath],
+      name: 'Path Road Path',
+    })!
+
+    expect(store.moveGuideRoutePathAnchorByHandle(route.id, {
+      legId: firstPath.id,
+      anchorId: 'start-connected',
+      anchor: { x: 1, y: 8, z: 1 },
+    })).toBe(false)
+    expect(store.moveGuideRoutePathAnchorByHandle(route.id, {
+      legId: lastPath.id,
+      anchorId: 'end-connected',
+      anchor: { x: 11, y: 8, z: 1 },
+    })).toBe(false)
+    expect(store.moveGuideRoutePathAnchorByHandle(route.id, {
+      legId: lastPath.id,
+      anchorId: 'end-3',
+      anchor: { x: 35, y: 6, z: 4 },
+    })).toBe(true)
+
+    const updatedProps = store.nodes
+      .find((node) => node.id === route.id)
+      ?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    expect(updatedProps.legs[1]).toEqual(road)
+    const updatedFirstPath = updatedProps.legs[0]
+    const updatedLastPath = updatedProps.legs[2]
+    if (updatedFirstPath?.kind !== 'path' || updatedLastPath?.kind !== 'path') {
+      throw new Error('expected path legs')
+    }
+    expect(updatedFirstPath.anchors).toEqual(firstPath.anchors)
+    expect(updatedLastPath.anchors[0]).toEqual(lastPath.anchors[0])
+    expect(updatedLastPath.anchors[updatedLastPath.anchors.length - 1])
+      .toMatchObject({ x: 35, y: 6, z: 4 })
+  })
+
   it('keeps path stops and branch origins synchronized when a control anchor moves', () => {
     const store = useSceneStore()
     const parent = createRoute(store)
@@ -88,6 +304,56 @@ describe('Guide Route stop and branch store actions', () => {
     expect(branchProps.legs[0]).toMatchObject({
       anchors: [expect.objectContaining(movedStop.anchor), expect.any(Object)],
     })
+  })
+
+  it('keeps a branch origin locked while allowing its free terminal to move', () => {
+    const store = useSceneStore()
+    const parent = createRoute(store)
+    const parentLeg = (
+      parent.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    ).legs[0]!
+    const added = store.addGuideRouteStopAtRoute(parent.id, {
+      legId: parentLeg.id,
+      anchor: { x: 10, y: 10, z: 0 },
+      anchorIndex: 1,
+    })!
+    const branch = store.createGuideRouteBranchFromStop({
+      parentRouteNodeId: parent.id,
+      stopId: added.stopId,
+      points: [
+        { x: 10, y: 10, z: 0 },
+        { x: 10, y: 10, z: 10 },
+      ],
+    })!
+    const branchLeg = (
+      branch.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as GuideRouteComponentProps
+    ).legs[0]
+    if (branchLeg?.kind !== 'path') {
+      throw new Error('expected branch path leg')
+    }
+
+    const lockedStop = store.addGuideRouteStopAtPathAnchor(branch.id, {
+      legId: branchLeg.id,
+      anchorId: branchLeg.anchors[0]!.id!,
+      name: 'Branch start',
+    })!
+    expect(lockedStop.created).toBe(true)
+    expect(store.moveGuideRouteStopAtPosition(branch.id, lockedStop.stopId, {
+      x: 11,
+      y: 10,
+      z: 1,
+    })).toBe(false)
+
+    expect(store.moveGuideRoutePathAnchorByHandle(branch.id, {
+      legId: branchLeg.id,
+      anchorId: branchLeg.anchors[0]!.id!,
+      anchor: { x: 11, y: 10, z: 1 },
+    })).toBe(false)
+    expect(store.moveGuideRoutePathAnchorByHandle(branch.id, {
+      legId: branchLeg.id,
+      anchorId: branchLeg.anchors[1]!.id!,
+      anchor: { x: 12, y: 10, z: 12 },
+    })).toBe(true)
   })
 
   it('creates one automatic road Guide Route per road revision', () => {
@@ -182,7 +448,7 @@ describe('Guide Route stop and branch store actions', () => {
     expect(branchProps.branchOrigin).toBeNull()
   })
 
-  it('moves and deletes a stop atomically while preserving branch nodes', () => {
+  it('moves and deletes stop metadata while preserving anchors and branch nodes', () => {
     const store = useSceneStore()
     const parent = createRoute(store)
     const added = store.addGuideRouteStopAtRoute(parent.id, {
@@ -220,6 +486,7 @@ describe('Guide Route stop and branch store actions', () => {
     expect(parentProps.legs[0]).toMatchObject({
       anchors: [
         expect.objectContaining({ x: 0 }),
+        expect.objectContaining({ x: 12 }),
         expect.objectContaining({ x: 10 }),
         expect.objectContaining({ x: 20 }),
       ],

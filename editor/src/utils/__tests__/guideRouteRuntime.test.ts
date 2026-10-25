@@ -291,7 +291,7 @@ describe('GuideRoute V3 playback events', () => {
     return { routeNode, vehicleNode, vehicleObject, nodes, nodeObjectMap }
   }
 
-  it('fires a projected stop once without stopping movement', () => {
+  it('pauses exactly at a projected stop and resumes from the same distance', () => {
     const playback = createPlayback({
       stops: [
         {
@@ -304,8 +304,12 @@ describe('GuideRoute V3 playback events', () => {
         },
       ],
     })
-    const onGuideStop = vi.fn()
-    const runtime = createAutoTourRuntime({
+    let runtime: ReturnType<typeof createAutoTourRuntime> | null = null
+    const onGuideStop = vi.fn((nodeId: string) => {
+      expect(runtime?.isPaused(nodeId)).toBe(true)
+      expect(playback.vehicleObject.position.x).toBeCloseTo(4)
+    })
+    runtime = createAutoTourRuntime({
       iterNodes: () => playback.nodes.values(),
       resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
       nodeObjectMap: playback.nodeObjectMap,
@@ -316,7 +320,98 @@ describe('GuideRoute V3 playback events', () => {
     runtime.update(1.1)
     runtime.update(1.1)
     expect(onGuideStop).toHaveBeenCalledTimes(1)
+    expect(runtime.isPaused(playback.vehicleNode.id)).toBe(true)
+    expect(playback.vehicleObject.position.x).toBeCloseTo(4)
+    const stoppedPosition = playback.vehicleObject.position.clone()
+    runtime.update(1)
+    expect(playback.vehicleObject.position.distanceTo(stoppedPosition)).toBeCloseTo(0)
+    expect(onGuideStop).toHaveBeenCalledTimes(1)
+
+    runtime.setPaused(playback.vehicleNode.id, false)
+    expect(runtime.isPaused(playback.vehicleNode.id)).toBe(false)
+    runtime.update(0.6)
     expect(playback.vehicleObject.position.x).toBeGreaterThan(4)
+    expect(onGuideStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('supports manual pause and resume without resetting route progress', () => {
+    const playback = createPlayback()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+    runtime.startTour(playback.vehicleNode.id)
+    runtime.update(0.5)
+    const pausedFrom = playback.vehicleObject.position.clone()
+
+    runtime.setPaused(playback.vehicleNode.id, true)
+    runtime.update(1)
+    expect(runtime.isPaused(playback.vehicleNode.id)).toBe(true)
+    expect(playback.vehicleObject.position.distanceTo(pausedFrom)).toBeCloseTo(0)
+
+    runtime.setPaused(playback.vehicleNode.id, false)
+    runtime.update(0.5)
+    expect(playback.vehicleObject.position.x).toBeGreaterThan(pausedFrom.x)
+  })
+
+  it('pauses at a stop before reaching a later route transition', () => {
+    const playback = createPlayback({
+      stops: [{
+        id: 'early-stop',
+        name: 'Early stop',
+        thumbnailAssetId: null,
+        anchor: { x: 4, y: 20, z: 0 },
+        legId: 'path-1',
+        behavior: null,
+      }],
+      transitions: [{
+        id: 'handoff',
+        afterLegId: 'path-1',
+        behavior: {
+          nodeId: 'parking',
+          sequenceId: 'switch-to-character',
+        },
+      }],
+    })
+    const onGuideStop = vi.fn()
+    const onGuideTransition = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onGuideStop,
+      onGuideTransition,
+    })
+
+    runtime.startTour(playback.vehicleNode.id)
+    runtime.update(10)
+    expect(onGuideStop).toHaveBeenCalledOnce()
+    expect(onGuideTransition).not.toHaveBeenCalled()
+    expect(playback.vehicleObject.position.x).toBeCloseTo(4)
+
+    runtime.setPaused(playback.vehicleNode.id, false)
+    runtime.update(10)
+    expect(onGuideTransition).toHaveBeenCalledOnce()
+  })
+
+  it('keeps terminal completion behavior for routes without a stop', () => {
+    const playback = createPlayback()
+    const onTerminalStop = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onTerminalStop,
+    })
+
+    runtime.startTour(playback.vehicleNode.id)
+    runtime.update(10)
+    expect(onTerminalStop).toHaveBeenCalledWith(playback.vehicleNode.id, 'guide-route-complete')
+    expect(runtime.isTourActive(playback.vehicleNode.id)).toBe(false)
   })
 
   it('uses a selected branch route for snap and playback without rewriting AutoTour props', () => {
@@ -390,6 +485,7 @@ describe('GuideRoute V3 playback events', () => {
     })
     runtime.startTour(playback.vehicleNode.id)
     for (let index = 0; index < 16; index += 1) {
+      runtime.setPaused(playback.vehicleNode.id, false)
       runtime.update(0.5)
     }
     expect(onGuideStop.mock.calls.length).toBeGreaterThanOrEqual(2)
@@ -489,8 +585,12 @@ describe('GuideRoute V3 playback events', () => {
       [routeNode.id, new THREE.Object3D()],
       [characterNode.id, characterObject],
     ])
-    const onGuideStop = vi.fn()
-    const runtime = new CharacterAutoTourRuntimeManager()
+    let runtime: CharacterAutoTourRuntimeManager | null = null
+    const onGuideStop = vi.fn((nodeId: string) => {
+      expect(runtime?.getInput(nodeId)?.moveZ).toBe(0)
+      expect(characterObject.position.x).toBeCloseTo(4)
+    })
+    runtime = new CharacterAutoTourRuntimeManager()
     const host = {
       iterNodes: () => nodes.entries(),
       resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
@@ -503,6 +603,13 @@ describe('GuideRoute V3 playback events', () => {
       runtime.update(host, 0.25)
     }
     expect(onGuideStop).toHaveBeenCalledTimes(1)
+    expect(runtime.getInput(characterNode.id)?.moveZ).toBe(0)
+    const stoppedPosition = characterObject.position.clone()
+    runtime.update(host, 0.25)
+    expect(characterObject.position.distanceTo(stoppedPosition)).toBeCloseTo(0)
+
+    runtime.setPaused(characterNode.id, false)
+    runtime.update(host, 0.25)
     expect(runtime.getInput(characterNode.id)?.moveZ).toBeGreaterThan(0)
   })
 
