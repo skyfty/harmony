@@ -2817,9 +2817,6 @@ const defaultWheelAxisVector = new THREE.Vector3(DEFAULT_AXLE.x, DEFAULT_AXLE.y,
 const VEHICLE_WHEEL_MIN_RADIUS = 0.01
 const VEHICLE_WHEEL_SPIN_EPSILON = 1e-4
 const VEHICLE_TRAVEL_EPSILON = 1e-5
-const STEERING_WHEEL_MAX_DEGREES = 135
-const STEERING_WHEEL_MAX_RADIANS = THREE.MathUtils.degToRad(STEERING_WHEEL_MAX_DEGREES)
-const STEERING_WHEEL_RETURN_SPEED = 4
 const STEERING_KEYBOARD_RETURN_SPEED = 7
 const STEERING_KEYBOARD_CATCH_SPEED = 18
 const nodeObjectMap = new Map<string, THREE.Object3D>()
@@ -3717,20 +3714,8 @@ const runtimePanelUi = computed(() => {
 	}
 })
 
-const steeringWheelRef = ref<HTMLDivElement | null>(null)
-const steeringWheelValue = ref(0)
 const steeringKeyboardValue = ref(0)
 const steeringKeyboardTarget = ref(0)
-const steeringWheelState = reactive({
-	dragging: false,
-	pointerId: -1,
-	startPointerAngle: 0,
-	startWheelAngle: 0,
-})
-const vehicleSteeringWheelStyle = computed(() => ({
-	'--steering-rotation': `${vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES}deg`,
-}))
-const vehicleSteeringAngleLabel = computed(() => `${Math.round(vehicleDriveInput.steering * STEERING_WHEEL_MAX_DEGREES)}°`)
 
 const vehicleDriveInputFlags = reactive<VehicleDriveControlFlags>({
 	forward: false,
@@ -4018,12 +4003,7 @@ function clampSteeringScalar(value: number): number {
 }
 
 function syncVehicleSteeringValue(): void {
-	const keyboardValue = steeringKeyboardValue.value
-	if (keyboardValue !== 0) {
-		vehicleDriveInput.steering = keyboardValue
-		return
-	}
-	vehicleDriveInput.steering = clampSteeringScalar(steeringWheelValue.value)
+	vehicleDriveInput.steering = clampSteeringScalar(steeringKeyboardValue.value)
 }
 
 function updateSteeringKeyboardValue(): void {
@@ -4037,93 +4017,10 @@ function updateSteeringKeyboardValue(): void {
 	}
 }
 
-function resetSteeringWheelValue(): void {
-	steeringWheelValue.value = 0
-	if (!steeringWheelState.dragging) {
-		syncVehicleSteeringValue()
-	}
-}
-
-function computeSteeringWheelPointerAngle(event: PointerEvent, target: HTMLElement): number {
-	const bounds = target.getBoundingClientRect()
-	const centerX = bounds.left + bounds.width / 2
-	const centerY = bounds.top + bounds.height / 2
-	const deltaX = event.clientX - centerX
-	const deltaY = event.clientY - centerY
-	return Math.atan2(deltaY, deltaX)
-}
-
-function setSteeringWheelDragActive(active: boolean): void {
-	steeringWheelState.dragging = active
-	if (!active) {
-		steeringWheelState.pointerId = -1
-	}
-}
-
-function handleSteeringWheelPointerDown(event: PointerEvent): void {
-	if (!vehicleDriveState.active) {
-		return
-	}
-	const wheel = steeringWheelRef.value
-	if (!wheel) {
-		return
-	}
-	const pointerAngle = computeSteeringWheelPointerAngle(event, wheel)
-	steeringWheelState.startPointerAngle = pointerAngle
-	steeringWheelState.startWheelAngle = steeringWheelValue.value * STEERING_WHEEL_MAX_RADIANS
-	steeringWheelState.pointerId = event.pointerId
-	setSteeringWheelDragActive(true)
-	try {
-		wheel.setPointerCapture(event.pointerId)
-	} catch (_error) {
-		/* noop */
-	}
-	event.preventDefault()
-}
-
-function applySteeringWheelAngle(angle: number): void {
-	const clampedAngle = THREE.MathUtils.clamp(angle, -STEERING_WHEEL_MAX_RADIANS, STEERING_WHEEL_MAX_RADIANS)
-	steeringWheelValue.value = clampSteeringScalar(clampedAngle / STEERING_WHEEL_MAX_RADIANS)
+function resetVehicleSteeringInput(): void {
+	steeringKeyboardTarget.value = 0
+	steeringKeyboardValue.value = 0
 	syncVehicleSteeringValue()
-}
-
-function handleSteeringWheelPointerMove(event: PointerEvent): void {
-	if (!steeringWheelState.dragging || event.pointerId !== steeringWheelState.pointerId) {
-		return
-	}
-	const wheel = steeringWheelRef.value
-	if (!wheel) {
-		return
-	}
-	const currentAngle = computeSteeringWheelPointerAngle(event, wheel)
-	const delta = currentAngle - steeringWheelState.startPointerAngle
-	const nextAngle = steeringWheelState.startWheelAngle + delta
-	applySteeringWheelAngle(nextAngle)
-	if (event.cancelable) {
-		event.preventDefault()
-	}
-}
-
-function releaseSteeringWheelPointer(event?: PointerEvent): void {
-	const wheel = steeringWheelRef.value
-	if (wheel && steeringWheelState.pointerId !== -1) {
-		try {
-			wheel.releasePointerCapture(steeringWheelState.pointerId)
-		} catch (_error) {
-			/* noop */
-		}
-	}
-	if (event?.cancelable) {
-		event.preventDefault()
-	}
-	setSteeringWheelDragActive(false)
-}
-
-function handleSteeringWheelPointerUp(event: PointerEvent): void {
-	if (event.pointerId !== steeringWheelState.pointerId) {
-		return
-	}
-	releaseSteeringWheelPointer(event)
 }
 
 function approachSteeringValue(current: number, target: number, rate: number, delta: number): number {
@@ -4145,22 +4042,11 @@ function updateSteeringAutoCenter(delta: number): void {
 	if (!Number.isFinite(delta) || delta <= 0) {
 		return
 	}
-	let steeringChanged = false
-	if (!steeringWheelState.dragging) {
-		const nextWheel = approachSteeringValue(steeringWheelValue.value, 0, STEERING_WHEEL_RETURN_SPEED, delta)
-		if (nextWheel !== steeringWheelValue.value) {
-			steeringWheelValue.value = nextWheel
-			steeringChanged = true
-		}
-	}
 	const target = steeringKeyboardTarget.value
 	const keyboardRate = target === 0 ? STEERING_KEYBOARD_RETURN_SPEED : STEERING_KEYBOARD_CATCH_SPEED
 	const nextKeyboard = approachSteeringValue(steeringKeyboardValue.value, target, keyboardRate, delta)
 	if (nextKeyboard !== steeringKeyboardValue.value) {
 		steeringKeyboardValue.value = clampSteeringScalar(nextKeyboard)
-		steeringChanged = true
-	}
-	if (steeringChanged) {
 		syncVehicleSteeringValue()
 	}
 }
@@ -10864,7 +10750,7 @@ function updateVehicleDriveInputFromFlags(): void {
 
 function resetVehicleDriveInputs(): void {
 	vehicleDriveController.resetInputs()
-	resetSteeringWheelValue()
+	resetVehicleSteeringInput()
 	updateVehicleDriveInputFromFlags()
 }
 
@@ -16863,9 +16749,6 @@ onBeforeUnmount(() => {
 	scenePreviewCompiledGroundInjected = false
 	dismissBehaviorBubble({ type: 'continue' })
 	rendererInitialized = false
-	if (steeringWheelState.dragging) {
-		releaseSteeringWheelPointer()
-	}
 	removeBehaviorRuntimeListener(behaviorRuntimeListener)
 	activeBehaviorDelayTimers.forEach((handle) => window.clearTimeout(handle))
 	activeBehaviorDelayTimers.clear()
@@ -17698,30 +17581,9 @@ watch(watchExclusiveUiActive, (active) => {
 					/>
 				</div>
 				<div v-if="runtimePanelUi.mode === 'vehicle'" class="scene-preview__drive-controls">
-					<div class="scene-preview__steering-column">
-						<div class="scene-preview__speed-display" aria-live="polite">
-							<span class="scene-preview__speed-display-value">{{ vehicleSpeedKmh }}</span>
-							<span class="scene-preview__speed-display-unit">km/h</span>
-						</div>
-						<div
-							ref="steeringWheelRef"
-							class="scene-preview__steering-wheel"
-							:style="vehicleSteeringWheelStyle"
-							role="slider"
-							aria-label="Steering wheel"
-							aria-valuemin="-135"
-							aria-valuemax="135"
-							:aria-valuenow="Math.round(vehicleDriveInput.steering * 135)"
-							@pointerdown.prevent="handleSteeringWheelPointerDown"
-							@pointermove.prevent="handleSteeringWheelPointerMove"
-							@pointerup.prevent="handleSteeringWheelPointerUp"
-							@pointercancel.prevent="handleSteeringWheelPointerUp"
-						>
-							<div class="scene-preview__steering-wheel-spokes"></div>
-							<div class="scene-preview__steering-wheel-hub">
-								<span>{{ vehicleSteeringAngleLabel }}</span>
-							</div>
-						</div>
+					<div class="scene-preview__speed-display" aria-live="polite">
+						<span class="scene-preview__speed-display-value">{{ vehicleSpeedKmh }}</span>
+						<span class="scene-preview__speed-display-unit">km/h</span>
 					</div>
 					<div class="scene-preview__pedal-row">
 						<v-btn
@@ -19531,102 +19393,41 @@ watch(watchExclusiveUiActive, (active) => {
 }
 
 .scene-preview__drive-controls {
-	margin-top: 12px;
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-}
-
-.scene-preview__steering-column {
-	display: flex;
-	flex-direction: column;
+	margin-top: 10px;
+	display: grid;
+	grid-template-columns: 48px minmax(0, 1fr);
 	align-items: center;
-	gap: 10px;
+	gap: 12px;
 }
 
 .scene-preview__speed-display {
 	display: flex;
 	flex-direction: column;
-	align-items: center;
-	gap: 2px;
+	align-items: flex-start;
+	gap: 1px;
 	color: #f5f7ff;
-	text-align: center;
+	text-align: left;
+	white-space: nowrap;
 }
 
 .scene-preview__speed-display-value {
-	font-size: 1.4rem;
+	font-size: 1.35rem;
 	font-weight: 600;
+	line-height: 1;
 	color: #9fd6ff;
 }
 
 .scene-preview__speed-display-unit {
-	font-size: 0.75rem;
-	letter-spacing: 0.12em;
+	font-size: 0.68rem;
+	line-height: 1.2;
+	letter-spacing: 0.08em;
 	opacity: 0.8;
-}
-
-.scene-preview__steering-wheel {
-	position: relative;
-	width: 120px;
-	height: 120px;
-	border-radius: 50%;
-	background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.08), rgba(7, 10, 18, 0.95));
-	border: 1px solid rgba(255, 255, 255, 0.12);
-	box-shadow:
-		inset 0 12px 30px rgba(0, 0, 0, 0.45),
-		0 12px 22px rgba(0, 0, 0, 0.4);
-	transform: rotate(var(--steering-rotation, 0deg));
-	transition: transform 120ms ease;
-	cursor: grab;
-}
-
-.scene-preview__steering-wheel:active {
-	cursor: grabbing;
-}
-
-.scene-preview__steering-wheel::after {
-	content: '';
-	position: absolute;
-	inset: 6px;
-	border-radius: 50%;
-	border: 1px dashed rgba(255, 255, 255, 0.18);
-}
-
-.scene-preview__steering-wheel-spokes {
-	position: absolute;
-	inset: 22px;
-	border-radius: 50%;
-	border: 1px solid rgba(255, 255, 255, 0.15);
-	box-shadow: inset 0 0 20px rgba(255, 255, 255, 0.05);
-}
-
-.scene-preview__steering-wheel-hub {
-	position: absolute;
-	left: 50%;
-	top: 50%;
-	width: 54px;
-	height: 54px;
-	border-radius: 50%;
-	background: rgba(15, 20, 32, 0.92);
-	border: 1px solid rgba(255, 255, 255, 0.12);
-	transform: translate(-50%, -50%);
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	font-size: 0.8rem;
-	font-weight: 600;
-}
-
-.scene-preview__steering-wheel-hub span {
-	color: #9fd6ff;
-	display: inline-block;
-	transform: rotate(calc(-1 * var(--steering-rotation, 0deg)));
 }
 
 .scene-preview__pedal-row {
 	display: grid;
 	grid-template-columns: repeat(4, minmax(0, 1fr));
-	gap: 8px;
+	gap: 4px;
 }
 
 .scene-preview__character-controls {
@@ -19647,6 +19448,14 @@ watch(watchExclusiveUiActive, (active) => {
 	border-radius: 50%;
 	aspect-ratio: 1 / 1;
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.scene-preview__drive-controls .scene-preview__pedal-button {
+	width: 100%;
+	min-width: 0;
+	height: 36px;
+	min-height: 36px;
+	aspect-ratio: auto;
 }
 
 .scene-preview__pedal-button--active {
