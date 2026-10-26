@@ -113,6 +113,7 @@ import {
 } from '@harmony/physics-core'
 import { createScenePreviewPhysicsBridge } from '@/physics/createScenePreviewPhysicsBridge'
 import { resolveEditorInstancedLodTarget } from '@/utils/instancedLodTarget'
+import { resolveGroundCollisionVehicleOwnerNodeId } from '@/utils/groundCollisionVehicleOwner'
  
 import {
 	applyMaterialOverrides,
@@ -784,6 +785,7 @@ const meshCollisionDebug = reactive({
 	chunkKey: '',
 	distanceMeters: 0,
 	covered: false,
+	groundPatchCoverageComplete: false,
 })
 
 function resetMeshCollisionDebug(): void {
@@ -800,6 +802,7 @@ function resetMeshCollisionDebug(): void {
 	meshCollisionDebug.chunkKey = ''
 	meshCollisionDebug.distanceMeters = 0
 	meshCollisionDebug.covered = false
+	meshCollisionDebug.groundPatchCoverageComplete = false
 }
 
 function shouldIgnoreDebugTriangleObject(object: THREE.Object3D): boolean {
@@ -2713,6 +2716,7 @@ const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12
 const cameraDependentUpdatePosition = new THREE.Vector3()
 const cameraDependentUpdateQuaternion = new THREE.Quaternion()
 const groundCollisionReferencePositions: THREE.Vector3[] = []
+const groundPatchCollisionReferencePositions: THREE.Vector3[] = []
 const forcedGroundCollisionReferenceNodeIds = new Set<string>()
 const lastCameraDependentUpdatePosition = new THREE.Vector3()
 const lastCameraDependentUpdateQuaternion = new THREE.Quaternion()
@@ -2721,6 +2725,7 @@ let cameraDependentUpdateInitialized = false
 let cameraDependentUpdateElapsed = 0
 let groundCollisionReferenceInitialized = false
 let groundCollisionReferenceElapsed = 0
+let scenePreviewGroundPatchCoverageComplete = false
 let lastGroundCollisionDiagnosticLogAt = 0
 let lastGroundCollisionDiagnosticSignature = ''
 const GROUND_COLLISION_DIAGNOSTIC_LOG_INTERVAL_MS = 2000
@@ -12941,11 +12946,13 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 			syncScenePreviewCompiledGroundRenderTiles(activeCamera)
 		}
 	}
-	if (shouldUpdateGroundCollisionSystems && currentDocument) {
-		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePositions)
-	}
+	let meshCollisionUpdated = false
 	if (shouldUpdateMeshCollisionSystems && currentDocument) {
 		syncScenePreviewMeshCollisionRuntime(currentDocument, groundCollisionReferencePositions)
+		meshCollisionUpdated = true
+	}
+	if ((shouldUpdateGroundCollisionSystems || meshCollisionUpdated) && currentDocument) {
+		syncScenePreviewGroundCollisionRuntimeHost(currentDocument, groundCollisionReferencePositions)
 	}
 }
 
@@ -13827,6 +13834,8 @@ function releaseScenePreviewMeshCollisionRuntime(): void {
 	clearAllMeshCollisionRuntimeHosts()
 	scenePreviewMeshCollisionSourceObjects.clear()
 	scenePreviewMeshCollisionWorkPending = false
+	groundPatchCollisionReferencePositions.length = 0
+	scenePreviewGroundPatchCoverageComplete = false
 	resetMeshCollisionDebug()
 }
 
@@ -13850,6 +13859,8 @@ function syncScenePreviewMeshCollisionRuntime(
 		return false
 	}
 	const activeObjects = new Set<THREE.Object3D>()
+	resolveCurrentGroundPatchReferenceWorld(groundPatchCollisionReferencePositions, document)
+	const groundPatchedReferenceIndexes = new Set<number>()
 	let workPending = false
 	let bestSnapshot: ReturnType<typeof syncMeshCollisionRuntimeHost> | null = null
 	resetMeshCollisionDebug()
@@ -13864,8 +13875,14 @@ function syncScenePreviewMeshCollisionRuntime(
 			sourceId: nodeId,
 			sourceObject: object,
 			referenceWorldPositions: references,
+			groundPatchReferenceWorldPositions: groundPatchCollisionReferencePositions,
 			runtimeDeps,
 			loggerTag: 'ScenePreviewMeshCollision',
+		})
+		snapshot.referenceGroundCoverage.forEach((entry) => {
+			if (entry.groundPatched) {
+				groundPatchedReferenceIndexes.add(entry.referenceIndex)
+			}
 		})
 		meshCollisionDebug.sourceCount += 1
 		meshCollisionDebug.chunkCount += snapshot.chunkCount
@@ -13902,6 +13919,9 @@ function syncScenePreviewMeshCollisionRuntime(
 		scenePreviewMeshCollisionSourceObjects.add(object)
 	})
 	scenePreviewMeshCollisionWorkPending = workPending
+	scenePreviewGroundPatchCoverageComplete = groundPatchCollisionReferencePositions.length > 0
+		&& groundPatchedReferenceIndexes.size >= groundPatchCollisionReferencePositions.length
+	meshCollisionDebug.groundPatchCoverageComplete = scenePreviewGroundPatchCoverageComplete
 	return workPending
 }
 
@@ -13968,7 +13988,9 @@ async function ensureGroundCollisionCoverageForNodes(
 		const wasCollisionBootstrapPending = physicsBridgeCollisionBootstrapPending
 		physicsBridgeCollisionBootstrapPending = true
 		try {
-			syncScenePreviewGroundCollisionRuntimeHost(document, references)
+			const groundNode = resolveSharedDocumentGroundNode(document)
+			const groundObject = groundNode ? nodeObjectMap.get(groundNode.id) ?? null : null
+			clearGroundCollisionRuntimeHost(groundObject)
 			await bootstrapScenePreviewMeshCollisionRuntime(
 				document,
 				references,
@@ -14058,6 +14080,34 @@ function appendGroundCollisionReferencePositionForNode(
 	)
 }
 
+function resolveCurrentGroundCollisionVehicleNodeId(
+	document: SceneJsonExportDocument | null | undefined,
+): string | null {
+	const vehicleNodeIds = new Set(collectVehicleNodes(document?.nodes).map((node) => node.id))
+	vehicleInstances.forEach((_instance, nodeId) => {
+		vehicleNodeIds.add(nodeId)
+	})
+	return resolveGroundCollisionVehicleOwnerNodeId({
+		activeVehicleNodeId: vehicleDriveState.active ? vehicleDriveState.nodeId : null,
+		autoTourNodeIds: activeAutoTourNodeIds,
+		pendingDefaultVehicleNodeId: pendingDefaultSteerDriveEvent.value?.nodeId,
+		vehicleNodeIds,
+	})
+}
+
+function resolveCurrentGroundPatchReferenceWorld(
+	targetPositions: THREE.Vector3[],
+	document: SceneJsonExportDocument | null | undefined,
+): boolean {
+	targetPositions.length = 0
+	const vehicleNodeId = resolveCurrentGroundCollisionVehicleNodeId(document)
+	if (!vehicleNodeId) {
+		return false
+	}
+	appendGroundCollisionReferencePositionForNode(targetPositions, vehicleNodeId)
+	return targetPositions.length > 0
+}
+
 function resolveGroundCollisionReferenceWorld(targetPositions: THREE.Vector3[]): boolean {
 	targetPositions.length = 0
 	const actorNodeIds = new Set<string>(forcedGroundCollisionReferenceNodeIds)
@@ -14079,6 +14129,10 @@ function resolveGroundCollisionReferenceWorld(targetPositions: THREE.Vector3[]):
 		if (characterNodeId) {
 			actorNodeIds.add(characterNodeId)
 		}
+	}
+	const currentVehicleNodeId = resolveCurrentGroundCollisionVehicleNodeId(currentDocument)
+	if (currentVehicleNodeId) {
+		actorNodeIds.add(currentVehicleNodeId)
 	}
 	actorNodeIds.forEach((nodeId) => {
 		appendGroundCollisionReferencePositionForNode(targetPositions, nodeId)
@@ -14139,6 +14193,14 @@ function syncScenePreviewGroundCollisionRuntimeHost(
 	}
 	const groundObject = nodeObjectMap.get(groundNode.id) ?? null
 	if (!groundObject) {
+		return false
+	}
+	if (scenePreviewGroundPatchCoverageComplete) {
+		clearGroundCollisionRuntimeHost(groundObject)
+		syncGroundCollisionRuntimeLoadedTileKeys(groundObject, groundMesh, {
+			compiledKeys: [],
+			infiniteKeys: [],
+		})
 		return false
 	}
 	if (groundMesh?.terrainCollisionEnabled === false) {
@@ -14308,7 +14370,6 @@ async function loadScenePreviewPhysicsBridgeScene(
 		if (hasGroundCollisionReference && groundObject && isGroundDynamicMesh(groundMesh)) {
 			previewGroundCollisionBridgeMutationEpoch += 1
 			clearGroundCollisionRuntimeHost(groundObject)
-			syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
 		}
 		if (hasGroundCollisionReference) {
 			// DEM terrain meshes are built asynchronously after the scene graph is attached.
@@ -14343,6 +14404,13 @@ async function loadScenePreviewPhysicsBridgeScene(
 					() => requestId !== physicsBridgeSceneRequestId,
 				)
 			}
+		}
+		if (
+			hasGroundCollisionReference
+			&& currentDocument === document
+			&& requestId === physicsBridgeSceneRequestId
+		) {
+			syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
 		}
 		const missingCharacterControllers: string[] = []
 		const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
@@ -17564,6 +17632,9 @@ watch(watchExclusiveUiActive, (active) => {
 					<div class="scene-preview__stats-fallback">
 						Anchor coverage: {{ meshCollisionDebug.covered ? 'active' : 'missing' }}
 						({{ meshCollisionDebug.uncoveredReferenceCount }} uncovered)
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Ground owner: {{ meshCollisionDebug.groundPatchCoverageComplete ? 'vehicle patch' : 'fallback' }}
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Anchor:

@@ -18,7 +18,7 @@ export function createCannonSceneRigidBody(params: CannonSceneRigidBodyCreatePar
   })
   ;(body as CANNON.Body & { physicsBodyId?: number }).physicsBodyId = params.desc.id
   if (params.desc.name) {
-    body.name = params.desc.name
+    ;(body as CANNON.Body & { name?: string }).name = params.desc.name
   }
   body.position.set(...params.desc.transform.position)
   body.quaternion.set(...params.desc.transform.rotation)

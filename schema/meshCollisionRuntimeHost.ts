@@ -94,6 +94,11 @@ export type SyncMeshCollisionRuntimeHostParams = {
   sourceId: string
   sourceObject: THREE.Object3D | null | undefined
   referenceWorldPositions: readonly THREE.Vector3[] | null | undefined
+  /**
+   * Ground patches may follow a narrower set of probes than non-ground obstacle
+   * collision. When omitted, the regular references remain the ground patch set.
+   */
+  groundPatchReferenceWorldPositions?: readonly THREE.Vector3[] | null
   runtimeDeps?: MeshCollisionRuntimeDeps | null | undefined
   loggerTag?: string
 }
@@ -125,6 +130,7 @@ export type MeshCollisionReferenceGroundCoverage = {
   active: boolean
   pending: boolean
   covered: boolean
+  groundPatched: boolean
 }
 
 type MeshCollisionChunkBounds = {
@@ -151,6 +157,7 @@ type MeshCollisionMeshSource = {
 type MeshCollisionChunk = MeshCollisionChunkBounds & {
   key: string
   meshIndex: number
+  debugKind: MeshCollisionMeshSource['debugKind']
   isGroundSurface: boolean
   /** `null` means "every triangle of the mesh". */
   triangles: Int32Array | null
@@ -643,6 +650,7 @@ function createWholeMeshChunk(
   return {
     key: `mesh:${meshIndex}`,
     meshIndex,
+    debugKind: source.debugKind,
     isGroundSurface: source.isGroundSurface,
     triangles: null,
     triangleCount: source.triangleCount,
@@ -662,6 +670,7 @@ function createSubdividedChunk(
   return {
     key: `mesh:${meshIndex}:cell:${cellX}:${cellZ}:${cellSizeKey}`,
     meshIndex,
+    debugKind: source.debugKind,
     isGroundSurface: source.isGroundSurface,
     triangles: Int32Array.from(triangles),
     triangleCount: triangles.length,
@@ -1085,6 +1094,9 @@ export function syncMeshCollisionRuntimeHost(
   const references = Array.isArray(params.referenceWorldPositions)
     ? params.referenceWorldPositions.filter((position) => Boolean(position))
     : []
+  const groundPatchReferences = Array.isArray(params.groundPatchReferenceWorldPositions)
+    ? params.groundPatchReferenceWorldPositions.filter((position) => Boolean(position))
+    : references
   if (!params.enabled || !sourceObject || references.length === 0 || !params.runtimeDeps) {
     clearMeshCollisionRuntimeHost(sourceObject)
     return EMPTY_MESH_COLLISION_SNAPSHOT
@@ -1099,7 +1111,7 @@ export function syncMeshCollisionRuntimeHost(
       groundSourceCount: 0,
       groundChunkCount: 0,
       groundPatchCount: 0,
-      referenceGroundCoverage: references.map((_reference, referenceIndex) => ({
+      referenceGroundCoverage: groundPatchReferences.map((_reference, referenceIndex) => ({
         referenceIndex,
         referenceWorldPosition: [
           _reference.x,
@@ -1112,8 +1124,9 @@ export function syncMeshCollisionRuntimeHost(
         active: false,
         pending: false,
         covered: false,
+        groundPatched: false,
       })),
-      uncoveredReferenceCount: references.length,
+      uncoveredReferenceCount: groundPatchReferences.length,
     }
   }
 
@@ -1153,7 +1166,7 @@ export function syncMeshCollisionRuntimeHost(
       ),
       groundChunkCount: 0,
       groundPatchCount: 0,
-      referenceGroundCoverage: references.map((_reference, referenceIndex) => ({
+      referenceGroundCoverage: groundPatchReferences.map((_reference, referenceIndex) => ({
         referenceIndex,
         referenceWorldPosition: [
           _reference.x,
@@ -1166,12 +1179,13 @@ export function syncMeshCollisionRuntimeHost(
         active: false,
         pending: false,
         covered: false,
+        groundPatched: false,
       })),
-      uncoveredReferenceCount: references.length,
+      uncoveredReferenceCount: groundPatchReferences.length,
     }
   }
 
-  syncGroundAnchorPatches(state, deps, sourceObject, references)
+  syncGroundAnchorPatches(state, deps, sourceObject, groundPatchReferences)
 
   const activationSq = MESH_COLLISION_ACTIVATION_RADIUS_METERS * MESH_COLLISION_ACTIVATION_RADIUS_METERS
   const retentionSq = MESH_COLLISION_RETENTION_RADIUS_METERS * MESH_COLLISION_RETENTION_RADIUS_METERS
@@ -1195,7 +1209,7 @@ export function syncMeshCollisionRuntimeHost(
   const groundCandidates = candidates.filter(
     (candidate) => candidate.chunk.isGroundSurface && candidate.distanceSq <= activationSq,
   )
-  const nearestGroundByReference = references.map((reference) => {
+  const nearestGroundByReference = groundPatchReferences.map((reference) => {
     let best: MeshCollisionChunkCandidate | null = null
     let bestDistanceSq = Number.POSITIVE_INFINITY
     groundCandidates.forEach((candidate) => {
@@ -1208,8 +1222,8 @@ export function syncMeshCollisionRuntimeHost(
     return best as MeshCollisionChunkCandidate | null
   })
   const mandatoryGroundByReference = nearestGroundByReference
-  const allReferencesUseGroundPatches = references.length > 0
-    && references.every((_reference, referenceIndex) => state.groundPatches.has(referenceIndex))
+  const allReferencesUseGroundPatches = groundPatchReferences.length > 0
+    && groundPatchReferences.every((_reference, referenceIndex) => state.groundPatches.has(referenceIndex))
   const mandatoryGroundKeys = new Set<string>()
   mandatoryGroundByReference.forEach((candidate) => {
     if (candidate && !allReferencesUseGroundPatches) {
@@ -1227,7 +1241,10 @@ export function syncMeshCollisionRuntimeHost(
     if (!candidate) {
       continue
     }
-    if (allReferencesUseGroundPatches && candidate.chunk.isGroundSurface) {
+    if (
+      allReferencesUseGroundPatches
+      && (candidate.chunk.isGroundSurface || candidate.chunk.debugKind === 'roadbed')
+    ) {
       continue
     }
     if (residentKeys.size < residentLimit) {
@@ -1313,6 +1330,7 @@ export function syncMeshCollisionRuntimeHost(
       active,
       pending,
       covered: active,
+      groundPatched: Boolean(groundPatch),
     }
   })
   const groundSourceCount = state.sources.reduce(

@@ -58,8 +58,8 @@ function createHarness(): Harness {
   const deps = {
     getPhysicsWorld: () => world,
     ensurePhysicsWorld: () => world,
-    createBody: (shape: MeshCollisionChunkShape, object: THREE.Object3D) => {
-      const body = { name: '' }
+    createBody: (shape: MeshCollisionChunkShape, object: THREE.Object3D, name?: string) => {
+      const body = { name: name ?? '' }
       created.push({ shape, object, body })
       return { body, orientationAdjustment: null }
     },
@@ -141,6 +141,7 @@ function syncOnce(
   sourceObject: THREE.Object3D,
   sourceId: string,
   probes: THREE.Vector3[],
+  groundPatchProbes: THREE.Vector3[] = probes,
 ): MeshCollisionRuntimeHostSnapshot {
   sourceObject.updateMatrixWorld(true)
   return syncMeshCollisionRuntimeHost({
@@ -148,6 +149,7 @@ function syncOnce(
     sourceId,
     sourceObject,
     referenceWorldPositions: probes,
+    groundPatchReferenceWorldPositions: groundPatchProbes,
     runtimeDeps: harness.deps,
   })
 }
@@ -158,11 +160,12 @@ function drain(
   sourceId: string,
   probes: THREE.Vector3[],
   maxIterations = 128,
+  groundPatchProbes: THREE.Vector3[] = probes,
 ): MeshCollisionRuntimeHostSnapshot {
-  let snapshot = syncOnce(harness, sourceObject, sourceId, probes)
+  let snapshot = syncOnce(harness, sourceObject, sourceId, probes, groundPatchProbes)
   let iterations = 0
   while ((snapshot.indexing || snapshot.pendingChunkCount > 0) && iterations < maxIterations) {
-    snapshot = syncOnce(harness, sourceObject, sourceId, probes)
+    snapshot = syncOnce(harness, sourceObject, sourceId, probes, groundPatchProbes)
     iterations += 1
   }
   return snapshot
@@ -532,6 +535,128 @@ describe('mesh collision runtime host incremental re-index', () => {
     expect(roadbedBodies.length).toBeGreaterThan(0)
     expect(shapeMaxY(roadbedBodies[0]!.shape)).toBeCloseTo(5, 5)
     expect((roadbedBodies[0]!.body as { name?: string }).name).toContain(':roadbed:')
+  })
+
+  it('uses the patched current-vehicle surface as the sole ground collision owner', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
+    markProceduralLandscapeDemTerrain(terrain, {
+      cellSize: 2,
+      sampleHeightAt: () => 5,
+    })
+    host.add(terrain)
+
+    const roadbedCollision = new THREE.Mesh(
+      makeRibbonGeometry(80, 30, 5, 8),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeRoadCollision(roadbedCollision)
+    host.add(roadbedCollision)
+
+    const wall = new THREE.Mesh(
+      makeRibbonGeometry(40, 4, 6, 4),
+      new THREE.MeshBasicMaterial(),
+    )
+    wall.name = 'slowroads-wall-test'
+    host.add(wall)
+
+    const harness = createHarness()
+    const snapshot = drain(
+      harness,
+      host,
+      'single-owner-node',
+      [new THREE.Vector3(0, 0, 0)],
+    )
+    const bodyNames = harness.created.map((record) => String(
+      (record.body as { name?: string }).name ?? '',
+    ))
+
+    expect(snapshot.referenceGroundCoverage[0]?.groundPatched).toBe(true)
+    expect(snapshot.groundPatchCount).toBe(1)
+    expect(bodyNames.some((name) => name.includes(':dem-terrain:'))).toBe(false)
+    expect(bodyNames.some((name) => name.includes(':roadbed:'))).toBe(false)
+    expect(bodyNames.some((name) => name.includes(':mesh:'))).toBe(true)
+    const patch = harness.created.find((record) => (
+      String((record.body as { name?: string }).name ?? '').includes(':ground-patch:')
+    ))
+    expect(patch).toBeTruthy()
+    expect(shapeMaxY(patch!.shape)).toBeCloseTo(5, 5)
+  })
+
+  it('keeps obstacle streaming on all anchors while patching only the current vehicle', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
+    markProceduralLandscapeDemTerrain(terrain, {
+      cellSize: 2,
+      sampleHeightAt: () => 0,
+    })
+    host.add(terrain)
+    addSmallObstacle(host, 0)
+    addSmallObstacle(host, 80)
+
+    const harness = createHarness()
+    const snapshot = drain(
+      harness,
+      host,
+      'shared-obstacle-node',
+      [new THREE.Vector3(0, 0, 0), new THREE.Vector3(80, 0, 0)],
+      128,
+      [new THREE.Vector3(0, 0, 0)],
+    )
+    const obstacleNames = harness.created
+      .map((record) => String((record.body as { name?: string }).name ?? ''))
+      .filter((name) => name.includes(':mesh:'))
+
+    expect(snapshot.referenceGroundCoverage).toHaveLength(1)
+    expect(snapshot.referenceGroundCoverage[0]?.groundPatched).toBe(true)
+    expect(obstacleNames).toHaveLength(2)
+  })
+
+  it('keeps DEM and roadbed fallback collision when the near patch cannot be sampled', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
+    let sampledHeight: number | null = null
+    markProceduralLandscapeDemTerrain(terrain, {
+      cellSize: 2,
+      sampleHeightAt: () => sampledHeight,
+    })
+    host.add(terrain)
+
+    const roadbedCollision = new THREE.Mesh(
+      makeRibbonGeometry(80, 30, 5, 8),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeRoadCollision(roadbedCollision)
+    host.add(roadbedCollision)
+
+    const harness = createHarness()
+    const snapshot = drain(
+      harness,
+      host,
+      'fallback-node',
+      [new THREE.Vector3(0, 0, 0)],
+    )
+    const bodyNames = harness.created.map((record) => String(
+      (record.body as { name?: string }).name ?? '',
+    ))
+
+    expect(snapshot.referenceGroundCoverage[0]?.groundPatched).toBe(false)
+    expect(snapshot.groundPatchCount).toBe(0)
+    expect(bodyNames.some((name) => name.includes(':dem-terrain:'))).toBe(true)
+    expect(bodyNames.some((name) => name.includes(':roadbed:'))).toBe(true)
+
+    const roadbedFallback = harness.created.find((record) => (
+      String((record.body as { name?: string }).name ?? '').includes(':roadbed:')
+    ))
+    sampledHeight = 5
+    const recovered = drain(
+      harness,
+      host,
+      'fallback-node',
+      [new THREE.Vector3(0, 0, 0)],
+    )
+    expect(recovered.referenceGroundCoverage[0]?.groundPatched).toBe(true)
+    expect(harness.removed).toContain(roadbedFallback!.body)
   })
 
   it('uses a tighter mesh collision window than ground tile streaming', () => {
