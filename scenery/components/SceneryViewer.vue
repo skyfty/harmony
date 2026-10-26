@@ -207,23 +207,24 @@
         >
           <view class="viewer-waypoint-sheet__handle" aria-hidden="true"></view>
           <scroll-view
-            scroll-y
+            scroll-x
+            enable-flex
             class="viewer-waypoint-sheet__list"
             :show-scrollbar="false"
             data-control-skip="guide-waypoints"
+            @wheel.prevent="handleGuideWaypointWheel"
           >
             <view class="viewer-waypoint-sheet__grid">
-              <button
+              <view
                 v-for="item in guideWaypointMenuItems"
                 :key="`${item.routeNodeId}:${item.stopId}`"
-                type="button"
                 class="viewer-waypoint-sheet__card"
-                :class="{ 'is-unavailable': item.error, 'is-loading': item.loading }"
-                :disabled="isGuideWaypointMenuItemDisabled(item)"
-                hover-class="none"
-                :aria-label="`${item.stopName}，${item.error || guideWaypointTravelModeLabel(item)}`"
+                :class="{
+                  'is-unavailable': isGuideWaypointMenuItemDisabled(item),
+                  'is-loading': item.loading,
+                }"
                 data-control-skip="guide-waypoints"
-                @tap.stop.prevent="handleGuideWaypointSelect(item)"
+                @tap="handleGuideWaypointSelect(item)"
               >
                 <view class="viewer-waypoint-sheet__cover">
                   <image
@@ -238,20 +239,43 @@
                     class="viewer-waypoint-sheet__cover-placeholder"
                     :class="{ 'is-loading': item.loading }"
                   >
-                    <view v-if="item.loading" class="viewer-waypoint-sheet__skeleton"></view>
+                    <view
+                      v-if="item.loading"
+                      class="viewer-waypoint-sheet__skeleton"
+                    />
                     <text>{{ item.loading ? '加载中' : '图片不可用' }}</text>
                   </view>
-                  <view v-if="item.imageUrl" class="viewer-waypoint-sheet__cover-action">
+                  <view
+                    v-if="!isGuideWaypointMenuItemDisabled(item)"
+                    class="viewer-waypoint-sheet__cover-action"
+                  >
                     <text>前往</text>
                   </view>
                 </view>
                 <view class="viewer-waypoint-sheet__card-copy">
-                  <text class="viewer-waypoint-sheet__card-title">{{ item.stopName }}</text>
+                  <text class="viewer-waypoint-sheet__card-title">
+                    {{ item.stopName }}
+                  </text>
                   <text class="viewer-waypoint-sheet__card-meta">
-                    {{ item.loading ? '正在加载缩略图' : item.error || guideWaypointTravelModeLabel(item) }}
+                    {{
+                      item.loading
+                        ? '正在加载缩略图'
+                        : item.thumbnailError
+                          ? `缩略图不可用 · ${guideWaypointTravelModeLabel(item)}`
+                          : guideWaypointTravelModeLabel(item)
+                    }}
                   </text>
                 </view>
-              </button>
+                <button
+                  type="button"
+                  class="viewer-waypoint-sheet__card-hit-area"
+                  :disabled="isGuideWaypointMenuItemDisabled(item)"
+                  hover-class="none"
+                  :aria-label="`${item.stopName}，${guideWaypointTravelModeLabel(item)}`"
+                  data-control-skip="guide-waypoints"
+                  @tap.stop.prevent="handleGuideWaypointSelect(item)"
+                />
+              </view>
             </view>
             <view
               v-if="guideWaypointMenuLoading && !guideWaypointMenuItems.some((item) => item.imageUrl)"
@@ -806,6 +830,15 @@ import {
   readTerrainDatasetManifestFromScenePackage,
 } from '../common/utils/terrainDatasetPackage';
 import { createAssetDownloadWorkerFactory } from '../common/utils/assetDownloadWorkerHost';
+import {
+  clearWechatWaypointThumbnailFiles,
+  isGuideWaypointDestinationDisabled,
+  resolveWaypointThumbnailServerUrl,
+  resolveWaypointThumbnailSourceUrl,
+  resolveWechatWaypointThumbnailRuntime,
+  writeWechatWaypointThumbnailFile,
+} from '../common/utils/waypointThumbnailSource';
+import { resolveHorizontalScrollDelta } from '../common/utils/horizontalScroll';
 import { createGltfParseWorkerFactory } from '../common/utils/gltfParseWorkerHost';
 import {
   createGroundRuntimeMeshFromSidecar,
@@ -1755,6 +1788,9 @@ function resolveWeChatMiniProgramRuntime(): boolean {
 }
 
 const isWeChatMiniProgram = resolveWeChatMiniProgramRuntime();
+const wechatWaypointThumbnailRuntime = isWeChatMiniProgram
+  ? resolveWechatWaypointThumbnailRuntime()
+  : null;
 
 const scenePersistentStorage = isWeChatMiniProgram && isWeChatFileSystemPersistentAssetStorageSupported()
   ? createWeChatFileSystemPersistentAssetStorage()
@@ -4279,7 +4315,7 @@ const activeCharacterAutoTourNodeIds = reactive(new Set<string>());
 type GuideWaypointMenuItem = GuideRouteDestination & {
   imageUrl: string | null;
   loading: boolean;
-  error: string | null;
+  thumbnailError: string | null;
 };
 const guideWaypointMenuOpen = ref(false);
 const guideWaypointMenuLoading = ref(false);
@@ -10198,6 +10234,15 @@ function resolveGuideWaypointActorNodeId(): string | null {
   return resolveFloatingAutoTourContext().nodeId;
 }
 
+function resolveGuideWaypointThumbnailRegistryEntry(assetId: string): SceneAssetRegistryEntry | null {
+  return (
+    currentDocument?.sceneOverrideAssets?.[assetId]
+    ?? currentDocument?.projectOverrideAssets?.[assetId]
+    ?? currentDocument?.assetRegistry?.[assetId]
+    ?? null
+  );
+}
+
 async function resolveGuideWaypointThumbnailUrl(assetId: string): Promise<string | null> {
   const normalizedAssetId = assetId.trim().replace(/^asset:\/\//i, '');
   if (!normalizedAssetId) {
@@ -10207,12 +10252,108 @@ async function resolveGuideWaypointThumbnailUrl(assetId: string): Promise<string
   if (cached) {
     return await cached;
   }
-  const request = resolveAssetUrlReference(normalizedAssetId)
-    .then((resolved) => resolved?.url ?? null)
-    .catch((error) => {
-      console.warn('[SceneryViewer] Failed to resolve Guide Route thumbnail', normalizedAssetId, error);
+  const request = (async () => {
+    if (isExternalAssetReference(normalizedAssetId)) {
+      return resolveWaypointThumbnailSourceUrl({
+        directUrl: normalizedAssetId,
+        isWechatMiniProgram: isWeChatMiniProgram,
+      });
+    }
+
+    const registryEntry = resolveGuideWaypointThumbnailRegistryEntry(normalizedAssetId);
+    if (registryEntry?.sourceType === 'server') {
+      const serverUrl = resolveWaypointThumbnailServerUrl({
+        assetBaseUrl: props.serverAssetBaseUrl,
+        fileKey: registryEntry.fileKey,
+        resolvedUrl: registryEntry.resolvedUrl,
+      });
+      if (serverUrl) {
+        return resolveWaypointThumbnailSourceUrl({
+          directUrl: serverUrl,
+          isWechatMiniProgram: isWeChatMiniProgram,
+        });
+      }
+    }
+    const registryDirectUrl = (
+      registryEntry?.sourceType === 'url'
+        ? registryEntry.url.trim()
+        : ''
+    );
+    if (registryDirectUrl) {
+      return resolveWaypointThumbnailSourceUrl({
+        directUrl: registryDirectUrl,
+        isWechatMiniProgram: isWeChatMiniProgram,
+      });
+    }
+
+    const packageRegistryPath = registryEntry?.sourceType === 'package'
+      && typeof registryEntry.zipPath === 'string'
+      ? registryEntry.zipPath.trim()
+      : '';
+    const packageBytes = packageRegistryPath
+      ? activeScenePackagePkg?.files?.[packageRegistryPath] ?? null
+      : null;
+    const registryFilename = typeof registryEntry?.name === 'string'
+      ? registryEntry.name
+      : packageRegistryPath;
+    const registryMimeType = inferMimeTypeFromAssetId(registryFilename || normalizedAssetId);
+
+    if (isWeChatMiniProgram && packageBytes && wechatWaypointThumbnailRuntime) {
+      // WeChat's Blob URL polyfill is not a source the native <image> can decode.
+      const localFilePath = writeWechatWaypointThumbnailFile({
+        assetId: normalizedAssetId,
+        bytes: packageBytes,
+        filename: registryFilename,
+        mimeType: registryMimeType,
+        runtime: wechatWaypointThumbnailRuntime,
+      });
+      return resolveWaypointThumbnailSourceUrl({
+        isWechatMiniProgram: true,
+        localFilePath,
+      });
+    }
+
+    if (isWeChatMiniProgram) {
+      const entry = await acquireViewerAssetEntry(normalizedAssetId);
+      const directUrl = entry?.downloadUrl?.trim() ?? '';
+      if (directUrl) {
+        return resolveWaypointThumbnailSourceUrl({
+          directUrl,
+          isWechatMiniProgram: true,
+        });
+      }
+      if (wechatWaypointThumbnailRuntime) {
+        const bytes = entry?.bytes
+          ?? (entry?.blob && typeof entry.blob.arrayBuffer === 'function'
+            ? await entry.blob.arrayBuffer()
+            : null);
+        if (bytes) {
+          const localFilePath = writeWechatWaypointThumbnailFile({
+            assetId: normalizedAssetId,
+            bytes,
+            filename: entry?.filename ?? registryFilename,
+            mimeType: entry?.mimeType ?? registryMimeType,
+            runtime: wechatWaypointThumbnailRuntime,
+          });
+          return resolveWaypointThumbnailSourceUrl({
+            isWechatMiniProgram: true,
+            localFilePath,
+          });
+        }
+      }
       return null;
+    }
+
+    const resolved = await resolveAssetUrlReference(normalizedAssetId);
+    return resolveWaypointThumbnailSourceUrl({
+      directUrl: resolved?.url,
+      isWechatMiniProgram: false,
+      objectUrl: resolved?.url,
     });
+  })().catch((error) => {
+    console.warn('[SceneryViewer] Failed to resolve Guide Route thumbnail', normalizedAssetId, error);
+    return null;
+  });
   guideWaypointThumbnailUrlCache.set(normalizedAssetId, request);
   return await request;
 }
@@ -10239,7 +10380,7 @@ async function refreshGuideWaypointMenuDestinations(force = false): Promise<void
     ...destination,
     imageUrl: null,
     loading: true,
-    error: null,
+    thumbnailError: null,
   })) satisfies GuideWaypointMenuItem[];
   guideWaypointMenuItems.value = items;
   if (!items.length) {
@@ -10253,7 +10394,7 @@ async function refreshGuideWaypointMenuDestinations(force = false): Promise<void
       ...item,
       imageUrl,
       loading: false,
-      error: imageUrl ? null : '缩略图资源不可用',
+      thumbnailError: imageUrl ? null : '缩略图资源不可用',
     };
   }));
   if (revision !== guideWaypointMenuRefreshRevision) {
@@ -10273,14 +10414,37 @@ function toggleGuideWaypointMenu(): void {
   }
 }
 
+function handleGuideWaypointWheel(event: Event): void {
+  const root = event.currentTarget as HTMLElement | null;
+  if (!root || typeof root.querySelectorAll !== 'function') {
+    return;
+  }
+  const candidates = [
+    root,
+    ...Array.from(root.querySelectorAll<HTMLElement>('.uni-scroll-view, .uni-scroll-view-content')),
+  ];
+  const scrollable = candidates.find((candidate) => candidate.scrollWidth > candidate.clientWidth + 1)
+    ?? candidates[1]
+    ?? root;
+  const wheelEvent = event as WheelEvent;
+  const delta = resolveHorizontalScrollDelta({
+    deltaMode: wheelEvent.deltaMode,
+    deltaX: wheelEvent.deltaX,
+    deltaY: wheelEvent.deltaY,
+    viewportWidth: scrollable.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 0),
+  });
+  if (!delta) {
+    return;
+  }
+  event.preventDefault();
+  scrollable.scrollLeft += delta;
+}
+
 function isGuideWaypointMenuItemDisabled(item: GuideWaypointMenuItem): boolean {
-  return (
-    item.loading
-    || !item.imageUrl
-    || Boolean(item.error)
-    || vehicleDrivePromptBusy.value
-    || !resolveGuideWaypointActorForDestination(item.travelMode)
-  );
+  return isGuideWaypointDestinationDisabled({
+    hasCompatibleActor: Boolean(resolveGuideWaypointActorForDestination(item.travelMode)),
+    vehicleDrivePromptBusy: vehicleDrivePromptBusy.value,
+  });
 }
 
 function handleGuideWaypointSelect(item: GuideWaypointMenuItem): void {
@@ -10294,7 +10458,7 @@ function handleGuideWaypointSelect(item: GuideWaypointMenuItem): void {
 function handleGuideWaypointImageError(item: GuideWaypointMenuItem): void {
   guideWaypointMenuItems.value = guideWaypointMenuItems.value.map((entry) => (
     entry.routeNodeId === item.routeNodeId && entry.stopId === item.stopId
-      ? { ...entry, imageUrl: null, loading: false, error: '缩略图加载失败' }
+      ? { ...entry, imageUrl: null, loading: false, thumbnailError: '缩略图加载失败' }
       : entry
   ));
 }
@@ -25352,6 +25516,7 @@ function cleanupForUnrelatedSceneSwitch(): void {
   disposeEnvironmentResources();
 
   pruneLanternAssets(new Set<string>(), new Set<string>());
+  clearWechatWaypointThumbnailFiles(wechatWaypointThumbnailRuntime);
 
   stopInstancedMeshSubscription?.();
   stopInstancedMeshSubscription = null;
@@ -25936,6 +26101,7 @@ onUnmounted(() => {
   viewerEnvironmentSwitchToken += 1;
   viewerEnvironmentSwitchPhase.value = 'idle';
   guideWaypointMenuRefreshRevision += 1;
+  clearWechatWaypointThumbnailFiles(wechatWaypointThumbnailRuntime);
   guideWaypointThumbnailUrlCache.clear();
   closeGuideWaypointMenu();
   guideWaypointMenuItems.value = [];
@@ -26498,32 +26664,40 @@ onUnmounted(() => {
 }
 
 .viewer-waypoint-sheet__list {
-  flex: 1;
-  min-height: 260rpx;
-  height: calc(70vh - 64rpx);
-  max-height: 760px;
+  width: 100%;
+  height: 290rpx;
+  min-height: 0;
+  max-height: none;
   overflow: hidden;
   box-sizing: border-box;
 }
 
 .viewer-waypoint-sheet__grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 18rpx;
-  padding: 2rpx 4rpx 18rpx;
+  display: inline-flex;
+  width: max-content;
+  min-width: 100%;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 14rpx;
+  padding: 2rpx 18rpx 18rpx 4rpx;
+  box-sizing: border-box;
 }
 
 .viewer-waypoint-sheet__card {
   position: relative;
-  width: calc(50% - 9rpx);
-  min-height: 260rpx;
+  flex: 0 0 280rpx;
+  width: 280rpx;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
   padding: 0;
   overflow: hidden;
   border: 1rpx solid #eceef0;
-  border-radius: 24rpx;
+  border-radius: 20rpx;
   background: #ffffff;
   color: inherit;
   text-align: left;
+  touch-action: manipulation;
   box-sizing: border-box;
   transition: transform 0.14s ease, border-color 0.14s ease, opacity 0.14s ease;
 }
@@ -26533,19 +26707,34 @@ onUnmounted(() => {
   transform: scale(0.985);
 }
 
-.viewer-waypoint-sheet__card[disabled] {
-  opacity: 0.7;
-}
-
 .viewer-waypoint-sheet__card.is-unavailable {
   border-color: #eceef0;
   background: #fafafa;
+  opacity: 0.7;
+}
+
+.viewer-waypoint-sheet__card-hit-area {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  opacity: 0;
+}
+
+.viewer-waypoint-sheet__card-hit-area::after {
+  display: none;
 }
 
 .viewer-waypoint-sheet__cover {
   position: relative;
   width: 100%;
-  padding-top: 62.5%;
+  padding-top: 56.25%;
   overflow: hidden;
   background: #eef0f2;
 }
@@ -26566,7 +26755,7 @@ onUnmounted(() => {
   overflow: hidden;
   background: #eef0f2;
   color: #969ba1;
-  font-size: 22rpx;
+  font-size: 20rpx;
 }
 
 .viewer-waypoint-sheet__cover-placeholder.is-loading {
@@ -26592,13 +26781,13 @@ onUnmounted(() => {
 
 .viewer-waypoint-sheet__cover-action {
   position: absolute;
-  right: 14rpx;
-  bottom: 14rpx;
-  padding: 8rpx 16rpx;
+  right: 10rpx;
+  bottom: 10rpx;
+  padding: 6rpx 12rpx;
   border-radius: 999rpx;
   background: rgba(7, 193, 96, 0.94);
   color: #ffffff;
-  font-size: 21rpx;
+  font-size: 19rpx;
   font-weight: 650;
   line-height: 1.2;
 }
@@ -26607,15 +26796,15 @@ onUnmounted(() => {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 6rpx;
-  padding: 16rpx 18rpx 18rpx;
+  gap: 4rpx;
+  padding: 10rpx 12rpx 12rpx;
 }
 
 .viewer-waypoint-sheet__card-title {
   display: -webkit-box;
   overflow: hidden;
   color: #1f2329;
-  font-size: 27rpx;
+  font-size: 25rpx;
   font-weight: 650;
   line-height: 1.34;
   text-overflow: ellipsis;
@@ -26626,7 +26815,7 @@ onUnmounted(() => {
 .viewer-waypoint-sheet__card-meta {
   overflow: hidden;
   color: #8a9098;
-  font-size: 21rpx;
+  font-size: 19rpx;
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -26676,17 +26865,10 @@ onUnmounted(() => {
   }
 }
 
-@media (max-width: 350px) {
-  .viewer-waypoint-sheet__grid {
-    gap: 14rpx;
-  }
-
+@media (max-width: 280px) {
   .viewer-waypoint-sheet__card {
-    width: 100%;
-  }
-
-  .viewer-waypoint-sheet__cover {
-    padding-top: 52%;
+    flex-basis: 260rpx;
+    width: 260rpx;
   }
 
   .viewer-waypoint-menu__trigger {

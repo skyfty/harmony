@@ -17,6 +17,8 @@
     "build": "pnpm run type-check",
     "type-check": "node ./node_modules/vue-tsc/bin/vue-tsc.js -p tsconfig.app.json --noEmit",
     "test:render-budget": "node --experimental-strip-types --test tests/renderBudget.test.mts",
+    "test:waypoint-carousel": "node --experimental-strip-types --test tests/waypointCarouselScroll.test.mts",
+    "test:waypoint-thumbnail": "node --experimental-strip-types --test tests/waypointThumbnailSource.test.mts",
     "lint": "eslint --ext .ts,.vue common components",
     "lint:fix": "eslint --ext .ts,.vue common components --fix",
     "check": "pnpm run type-check && pnpm run lint",
