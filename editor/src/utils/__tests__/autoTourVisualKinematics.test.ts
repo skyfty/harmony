@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 
 import {
+  resolveVehicleSteeringInputFromHeadingChange,
   resolveVehicleVisualForwardWorld,
   resolveVehicleVisualMotionPose,
   resolveVehicleWheelRollDelta,
@@ -116,6 +117,68 @@ describe('autoTourVisualKinematics', () => {
     expect(forward.x).toBeCloseTo(0)
     expect(forward.y).toBeCloseTo(0)
     expect(forward.z).toBeCloseTo(-1)
+  })
+
+  it('can preserve vehicle pitch for the shared follow camera', () => {
+    const object = new THREE.Object3D()
+    const pitch = THREE.MathUtils.degToRad(15)
+    object.rotation.z = pitch
+    object.updateMatrixWorld(true)
+    const horizontal = new THREE.Vector3()
+    const pitched = new THREE.Vector3()
+
+    expect(resolveVehicleVisualForwardWorld(
+      object,
+      new THREE.Vector3(1, 0, 0),
+      horizontal,
+    )).toBe(true)
+    expect(resolveVehicleVisualForwardWorld(
+      object,
+      new THREE.Vector3(1, 0, 0),
+      pitched,
+      true,
+    )).toBe(true)
+
+    expect(horizontal.y).toBeCloseTo(0, 6)
+    expect(pitched.y).toBeCloseTo(Math.sin(pitch), 5)
+    expect(pitched.x).toBeCloseTo(Math.cos(pitch), 5)
+  })
+
+  it('derives signed steering input from route heading change and travel', () => {
+    const previousForward = new THREE.Vector3(1, 0, 0)
+    const leftForward = new THREE.Vector3(1, 0, -0.2).normalize()
+    const rightForward = new THREE.Vector3(1, 0, 0.2).normalize()
+    const base = {
+      previousForwardWorld: previousForward,
+      wheelbaseMeters: 2.8,
+      maxSteerRadians: THREE.MathUtils.degToRad(30),
+    }
+
+    const left = resolveVehicleSteeringInputFromHeadingChange({
+      ...base,
+      currentForwardWorld: leftForward,
+      signedTravelDistance: 1,
+    })
+    const right = resolveVehicleSteeringInputFromHeadingChange({
+      ...base,
+      currentForwardWorld: rightForward,
+      signedTravelDistance: 1,
+    })
+    const reversing = resolveVehicleSteeringInputFromHeadingChange({
+      ...base,
+      currentForwardWorld: leftForward,
+      signedTravelDistance: -1,
+    })
+    const stationary = resolveVehicleSteeringInputFromHeadingChange({
+      ...base,
+      currentForwardWorld: leftForward,
+      signedTravelDistance: 0,
+    })
+
+    expect(left).toBeGreaterThan(0)
+    expect(right).toBeLessThan(0)
+    expect(reversing).toBeCloseTo(-left, 6)
+    expect(stationary).toBe(0)
   })
 
   it('derives wheel travel from visual displacement while the physics chassis is unchanged', () => {

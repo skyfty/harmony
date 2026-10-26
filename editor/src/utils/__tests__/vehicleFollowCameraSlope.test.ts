@@ -4,11 +4,13 @@ import {
   applyCameraPoseTransition,
   beginCameraPoseTransition,
   createBackFollowCameraTuning,
-  createAutoTourFollowCameraTuning,
   createCameraFollowState,
   createCameraPoseTransitionState,
+  computeFollowPlacement,
   FollowCameraController,
+  getApproxDimensions,
   resolveGroundAlignedFollowForward,
+  VehicleFollowCameraRig,
 } from '@schema/followCameraController'
 import {
   VehicleDriveController,
@@ -432,14 +434,14 @@ describe('follow camera forward pitch option', () => {
     expect(result.camera.up.z).toBeGreaterThan(0)
   })
 
-  it('keeps the auto-tour camera level while tracking terrain elevation', () => {
-    const controller = new FollowCameraController()
-    const follow = createCameraFollowState()
+  it('uses the manual pitched basis for the shared vehicle follow rig', () => {
+    const rig = new VehicleFollowCameraRig()
     const camera = new THREE.PerspectiveCamera()
     const anchor = new THREE.Vector3(2, 5, -3)
+    const pitch = THREE.MathUtils.degToRad(15)
+    const forward = new THREE.Vector3(0, Math.sin(pitch), -Math.cos(pitch))
 
-    expect(controller.update({
-      follow,
+    expect(rig.update({
       placement: {
         distance: 6,
         heightOffset: 4,
@@ -447,18 +449,20 @@ describe('follow camera forward pitch option', () => {
         targetForward: 3,
       },
       anchorWorld: anchor,
-      desiredForwardWorld: new THREE.Vector3(0, 0, 1),
+      vehicleForwardWorld: forward,
+      steeringInput: 0,
       deltaSeconds: 0,
       ctx: { camera },
-      tuning: createAutoTourFollowCameraTuning(),
+      tuning: createBackFollowCameraTuning(),
       immediate: true,
     })).toBe(true)
 
-    expect(camera.up.distanceTo(new THREE.Vector3(0, 1, 0))).toBeLessThan(1e-6)
+    expect(rig.follow.heading.y).toBeCloseTo(Math.sin(pitch), 5)
+    expect(camera.up.y).toBeCloseTo(Math.cos(pitch), 5)
+    expect(new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).y).toBeCloseTo(0, 5)
     const initialCameraY = camera.position.y
 
-    expect(controller.update({
-      follow,
+    expect(rig.update({
       placement: {
         distance: 6,
         heightOffset: 4,
@@ -466,55 +470,125 @@ describe('follow camera forward pitch option', () => {
         targetForward: 3,
       },
       anchorWorld: anchor.clone().setY(8),
-      desiredForwardWorld: new THREE.Vector3(0, 0, 1),
+      vehicleForwardWorld: forward,
+      steeringInput: 0,
       deltaSeconds: 1 / 60,
       ctx: { camera },
-      tuning: createAutoTourFollowCameraTuning(),
+      tuning: createBackFollowCameraTuning(),
     })).toBe(true)
     expect(camera.position.y).toBeCloseTo(initialCameraY + 3, 5)
   })
 })
 
-describe('stable auto-tour follow camera', () => {
-  it('keeps the same camera-anchor offset while speed changes', () => {
-    const controller = new FollowCameraController()
-    const follow = createCameraFollowState()
-    const camera = new THREE.PerspectiveCamera()
-    const anchor = new THREE.Vector3(4, 2, -3)
-    const forward = new THREE.Vector3(0, 0, 1)
+describe('shared vehicle follow camera trajectory', () => {
+  it('matches the manual camera for the same vehicle, steering, and speed inputs', () => {
+    const fixture = createVehicleCameraFixture()
+    const autoCamera = new THREE.PerspectiveCamera()
+    const autoRig = new VehicleFollowCameraRig()
+    const tuning = createBackFollowCameraTuning()
     const localOffset = new THREE.Vector3(0, CAMERA_FOLLOW_HEIGHT, -CAMERA_FOLLOW_DISTANCE)
-    const tuning = createAutoTourFollowCameraTuning()
+    fixture.bindings.input.steering = 0.35
+    fixture.vehicleObject.position.set(12, 20, -8)
+    setVehicleRotation(fixture, 9, 20, 12)
+    const placement = computeFollowPlacement(getApproxDimensions(fixture.vehicleObject))
+    let distanceTravelled = 0
 
-    for (const velocity of [
-      new THREE.Vector3(0, 0, 12),
-      new THREE.Vector3(0, 0, 4),
-      new THREE.Vector3(0, 0, 0),
-    ]) {
-      expect(controller.update({
-        follow,
-        placement: {
-          distance: CAMERA_FOLLOW_DISTANCE,
-          heightOffset: CAMERA_FOLLOW_HEIGHT,
-          targetLift: 0.5,
-          targetForward: 3,
-        },
+    for (let frame = 0; frame < 36; frame += 1) {
+      if (frame > 0) {
+        const step = frame < 12
+          ? 0.025 + frame * 0.006
+          : frame < 24
+            ? 0.11
+            : Math.max(0.012, 0.11 - (frame - 24) * 0.014)
+        distanceTravelled += step
+        fixture.vehicleObject.position.set(
+          12 + distanceTravelled,
+          20,
+          -8 + distanceTravelled * 0.25,
+        )
+        setVehicleRotation(fixture, 9, 20 + frame * 0.8, 12)
+      }
+      const anchor = new THREE.Box3()
+        .setFromObject(fixture.vehicleObject)
+        .getCenter(new THREE.Vector3())
+      const forward = fixture.axisForward.clone().applyQuaternion(
+        fixture.vehicleObject.getWorldQuaternion(new THREE.Quaternion()),
+      ).normalize()
+      const immediate = frame === 0
+
+      expect(fixture.controller.updateCamera(
+        1 / 60,
+        { camera: fixture.camera },
+        { immediate },
+      )).toBe(true)
+      expect(autoRig.update({
+        placement,
         anchorWorld: anchor,
-        desiredForwardWorld: forward,
-        velocityWorld: velocity,
+        vehicleForwardWorld: forward,
+        steeringInput: fixture.bindings.input.steering,
         deltaSeconds: 1 / 60,
-        ctx: { camera },
-        immediate: !follow.initialized,
+        ctx: { camera: autoCamera },
+        immediate,
         localOffsetOverride: localOffset,
-        lockLocalOffset: true,
+        distanceScale: 1,
         tuning,
       })).toBe(true)
 
-      expect(camera.position.x).toBeCloseTo(anchor.x, 6)
-      expect(camera.position.y).toBeCloseTo(anchor.y + CAMERA_FOLLOW_HEIGHT, 6)
-      expect(camera.position.z).toBeCloseTo(anchor.z - CAMERA_FOLLOW_DISTANCE, 6)
-      expect(follow.lookaheadOffset.lengthSq()).toBe(0)
-      expect(follow.motionDistanceBlend).toBe(0)
+      expect(autoCamera.position.distanceTo(fixture.camera.position)).toBeLessThan(1e-5)
+      expect(autoCamera.up.distanceTo(fixture.camera.up)).toBeLessThan(1e-5)
+      expect(autoRig.follow.currentTarget.distanceTo(
+        fixture.cameraFollowState.currentTarget,
+      )).toBeLessThan(1e-5)
     }
+  })
+
+  it('damps camera position and look target when auto tours lock controls', () => {
+    const rig = new VehicleFollowCameraRig()
+    const camera = new THREE.PerspectiveCamera()
+    const anchor = new THREE.Vector3(0, 0, 0)
+    const placement = {
+      distance: CAMERA_FOLLOW_DISTANCE,
+      heightOffset: CAMERA_FOLLOW_HEIGHT,
+      targetLift: 0.5,
+      targetForward: 3,
+    }
+    const localOffset = new THREE.Vector3(0, CAMERA_FOLLOW_HEIGHT, -CAMERA_FOLLOW_DISTANCE)
+    const tuning = createBackFollowCameraTuning({
+      positionLerpSpeed: 12,
+      targetLerpSpeed: 4.8,
+    })
+
+    expect(rig.update({
+      placement,
+      anchorWorld: anchor,
+      vehicleForwardWorld: new THREE.Vector3(0, 0, -1),
+      steeringInput: 0,
+      deltaSeconds: 0,
+      ctx: { camera },
+      localOffsetOverride: localOffset,
+      tuning,
+      smoothTargetForProgrammaticFollow: true,
+      immediate: true,
+    })).toBe(true)
+    const initialPosition = camera.position.clone()
+    const initialTarget = rig.follow.currentTarget.clone()
+
+    expect(rig.update({
+      placement,
+      anchorWorld: anchor.clone().setY(2),
+      vehicleForwardWorld: new THREE.Vector3(0, 0, -1),
+      steeringInput: 0,
+      deltaSeconds: 1 / 60,
+      ctx: { camera },
+      localOffsetOverride: localOffset,
+      tuning,
+      smoothTargetForProgrammaticFollow: true,
+    })).toBe(true)
+
+    expect(camera.position.y - initialPosition.y).toBeGreaterThan(0)
+    expect(camera.position.y - initialPosition.y).toBeLessThan(2)
+    expect(rig.follow.currentTarget.y - initialTarget.y).toBeGreaterThan(0)
+    expect(rig.follow.currentTarget.y - initialTarget.y).toBeLessThan(2.5)
   })
 
   it('eases a camera-owner handoff from the captured pose to the new follow pose', () => {

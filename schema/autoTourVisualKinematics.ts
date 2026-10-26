@@ -61,15 +61,68 @@ export function resolveVehicleVisualForwardWorld(
   object: THREE.Object3D,
   axisForward: THREE.Vector3,
   target: THREE.Vector3,
+  preservePitch = false,
 ): boolean {
   object.getWorldQuaternion(vehicleWorldQuaternionHelper).normalize()
   target.copy(axisForward).applyQuaternion(vehicleWorldQuaternionHelper)
-  target.y = 0
+  if (!preservePitch) {
+    target.y = 0
+  }
   if (target.lengthSq() < 1e-8) {
     return false
   }
   target.normalize()
   return true
+}
+
+export function resolveVehicleSteeringInputFromHeadingChange(params: {
+  previousForwardWorld: THREE.Vector3
+  currentForwardWorld: THREE.Vector3
+  signedTravelDistance: number
+  wheelbaseMeters: number
+  maxSteerRadians: number
+}): number {
+  const travelDistance = params.signedTravelDistance
+  if (!Number.isFinite(travelDistance) || Math.abs(travelDistance) < 1e-4) {
+    return 0
+  }
+  const previousLength = Math.hypot(
+    params.previousForwardWorld.x,
+    params.previousForwardWorld.z,
+  )
+  const currentLength = Math.hypot(
+    params.currentForwardWorld.x,
+    params.currentForwardWorld.z,
+  )
+  if (previousLength < 1e-5 || currentLength < 1e-5) {
+    return 0
+  }
+  const previousYaw = Math.atan2(
+    -params.previousForwardWorld.z / previousLength,
+    params.previousForwardWorld.x / previousLength,
+  )
+  const currentYaw = Math.atan2(
+    -params.currentForwardWorld.z / currentLength,
+    params.currentForwardWorld.x / currentLength,
+  )
+  const yawDelta = Math.atan2(
+    Math.sin(currentYaw - previousYaw),
+    Math.cos(currentYaw - previousYaw),
+  )
+  const wheelbase = Number.isFinite(params.wheelbaseMeters)
+    ? Math.max(0.1, params.wheelbaseMeters)
+    : 1
+  const maxSteer = Number.isFinite(params.maxSteerRadians)
+    ? Math.max(THREE.MathUtils.degToRad(1), params.maxSteerRadians)
+    : THREE.MathUtils.degToRad(30)
+  const steerAngle = Math.atan(
+    (yawDelta * wheelbase) / Math.max(1e-4, Math.abs(travelDistance)),
+  )
+  return THREE.MathUtils.clamp(
+    steerAngle / maxSteer * Math.sign(travelDistance),
+    -1,
+    1,
+  )
 }
 
 export function resolveSignedVehicleTravel(

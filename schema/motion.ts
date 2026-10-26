@@ -31,6 +31,7 @@ export {
   applyCameraPoseTransition,
   beginCameraPoseTransition,
   FollowCameraController,
+  VehicleFollowCameraRig,
   DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
   DEFAULT_BACK_FOLLOW_CAMERA_TUNING,
   createAutoTourFollowCameraTuning,
@@ -51,6 +52,7 @@ export {
   updateMotionAwareFollowCamera,
 } from './followCameraController'
 export type { CameraPoseTransitionState, FollowCameraMotionState } from './followCameraController'
+export type { VehicleFollowCameraRigUpdateOptions } from './followCameraController'
 export { updateVehicleSpeedAndApplyParkingHoldSafe, VEHICLE_PARKED_SPEED_EPSILON, VEHICLE_PARKING_HOLD_SPEED_EPSILON } from './vehicleParkingHold'
 export {
   createControlledNodeMotionRuntime,

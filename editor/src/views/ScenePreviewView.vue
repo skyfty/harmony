@@ -397,6 +397,7 @@ import {
 	createBackFollowCameraTuning,
 	createCameraPoseTransitionState,
 	resetCameraPoseTransitionState,
+	VehicleFollowCameraRig,
 	VehicleDriveController,
 	CharacterAutoTourRuntimeManager,
 	resolveGroundAlignedFollowForward,
@@ -496,6 +497,7 @@ import {
 import { setBoundingBoxFromObject } from '@/components/editor/sceneUtils'
 import {
 	resolveVehicleVisualForwardWorld,
+	resolveVehicleSteeringInputFromHeadingChange,
 	resolveVehicleVisualMotionPose,
 	resolveVehicleWheelRollDelta,
 	resolveSignedVehicleTravel,
@@ -2123,13 +2125,16 @@ const guideWaypointMenuVisible = computed(() => (
 	Boolean(guideWaypointMenuActorNodeId.value)
 	&& guideWaypointMenuItems.value.length > 0
 ))
-const autoTourCameraFollowState = createCameraFollowState()
-const autoTourCameraFollowController = new FollowCameraController()
-const autoTourCameraFollowLastAnchor = new THREE.Vector3()
-const autoTourCameraFollowVelocity = new THREE.Vector3()
-const autoTourCameraFollowVelocityScratch = new THREE.Vector3()
+const autoTourVehicleFollowCamera = new VehicleFollowCameraRig()
+const autoTourCameraFollowState = autoTourVehicleFollowCamera.follow
 const autoTourCameraFollowAnchorScratch = new THREE.Vector3()
 const autoTourCameraFollowForwardScratch = new THREE.Vector3()
+const autoTourCameraSteeringLastAnchor = new THREE.Vector3()
+const autoTourCameraSteeringLastForward = new THREE.Vector3()
+const autoTourCameraSteeringPositionScratch = new THREE.Vector3()
+const autoTourCameraSteeringTravelScratch = new THREE.Vector3()
+const autoTourCameraFallbackForwardScratch = new THREE.Vector3()
+const autoTourCameraObjectQuaternionScratch = new THREE.Quaternion()
 const autoTourCameraFollowBox = new THREE.Box3()
 const autoTourCameraFollowOffsetScratch = new THREE.Vector3()
 const autoTourCameraObjectMetricsByNodeId = new Map<string, {
@@ -2138,10 +2143,9 @@ const autoTourCameraObjectMetricsByNodeId = new Map<string, {
 	height: number
 	length: number
 }>()
-let autoTourCameraFollowHasSample = false
+let autoTourCameraSteeringHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
-const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createAutoTourFollowCameraTuning()
 const vehicleDriveCameraHandoff = createCameraPoseTransitionState()
 
 const vehicleDrivePrompt = computed(() => {
@@ -2343,7 +2347,7 @@ const instancedCullingWorldPosition = new THREE.Vector3()
 const VEHICLE_CAMERA_DEFAULT_LOOK_DISTANCE = 6
 const VEHICLE_FOLLOW_DISTANCE_MIN = 4
 const VEHICLE_FOLLOW_DISTANCE_MAX = 26
-const CHARACTER_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning({
+const VEHICLE_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning({
 	distanceMin: 4.0,
 	distanceMax: 8.0,
 	heightMin: 2.0,
@@ -2351,6 +2355,13 @@ const CHARACTER_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning({
 	motionSpeedFull: 3.5,
 	motionDistanceBoost: 0.12,
 	motionHeightBoost: 0.08,
+})
+const VEHICLE_FOLLOW_CAMERA_VELOCITY_LERP_SPEED = 8
+const AUTO_TOUR_VEHICLE_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning({
+	...VEHICLE_FOLLOW_CAMERA_TUNING,
+	// Auto-tour anchors come from sampled visual terrain rather than a physics body.
+	// Damp the resulting sub-frame position steps without changing manual driving.
+	positionLerpSpeed: 12,
 })
 const SKY_ENVIRONMENT_INTENSITY = 0.35
 const DEFAULT_BACKGROUND_COLOR = 0x0d0d12
@@ -3943,7 +3954,8 @@ const vehicleDriveController = new VehicleDriveController(
 		},
 		resolveCurrentSpeedMps: (nodeId) => controlledNodeMotionRuntime.resolveLinearSpeedMps(nodeId, null),
 		followCameraDistanceScale: () => DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
-		followCameraTuning: () => CHARACTER_FOLLOW_CAMERA_TUNING,
+		followCameraVelocityLerpSpeed: () => VEHICLE_FOLLOW_CAMERA_VELOCITY_LERP_SPEED,
+		followCameraTuning: () => VEHICLE_FOLLOW_CAMERA_TUNING,
 		onVehicleObjectTransformUpdated: (_nodeId, object) => {
 			syncInstancedTransform(object)
 		},
@@ -8235,12 +8247,42 @@ function resolveAutoTourVehicleForwardWorld(
 		return false
 	}
 
-	const resolved = resolveVehicleVisualForwardWorld(object, axisForward, target)
-	if (resolved) {
-		// The auto-tour camera stays level even when the vehicle follows a slope.
-		target.y = 0
+	return resolveVehicleVisualForwardWorld(object, axisForward, target, true)
+}
+
+function resolveAutoTourVehicleFollowSteeringInput(
+	nodeId: string,
+	forwardWorld: THREE.Vector3,
+	vehicleWorldPosition: THREE.Vector3,
+	deltaSeconds: number,
+): number {
+	if (deltaSeconds <= 0) {
+		return 0
 	}
-	return resolved
+	if (!autoTourCameraSteeringHasSample) {
+		autoTourCameraSteeringLastAnchor.copy(vehicleWorldPosition)
+		autoTourCameraSteeringLastForward.copy(forwardWorld)
+		autoTourCameraSteeringHasSample = true
+		return 0
+	}
+	autoTourCameraSteeringTravelScratch
+		.copy(vehicleWorldPosition)
+		.sub(autoTourCameraSteeringLastAnchor)
+	const signedTravelDistance =
+		autoTourCameraSteeringTravelScratch.x * forwardWorld.x
+		+ autoTourCameraSteeringTravelScratch.z * forwardWorld.z
+	const node = resolveNodeById(nodeId)
+	const vehicleProps = clampVehicleComponentProps(resolveVehicleComponent(node)?.props ?? null)
+	const steeringInput = resolveVehicleSteeringInputFromHeadingChange({
+		previousForwardWorld: autoTourCameraSteeringLastForward,
+		currentForwardWorld: forwardWorld,
+		signedTravelDistance,
+		wheelbaseMeters: vehicleProps.wheelbaseMeters,
+		maxSteerRadians: THREE.MathUtils.degToRad(vehicleProps.maxSteerDegrees),
+	})
+	autoTourCameraSteeringLastAnchor.copy(vehicleWorldPosition)
+	autoTourCameraSteeringLastForward.copy(forwardWorld)
+	return steeringInput
 }
 
 function ensureAutoTourCameraObjectMetrics(
@@ -8291,6 +8333,8 @@ function ensureAutoTourCameraObjectMetrics(
 function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3D): THREE.Vector3 {
 	const metrics = ensureAutoTourCameraObjectMetrics(nodeId, object)
 	object.updateMatrixWorld(true)
+	// Keep a rigid local anchor. Recomputing the world AABB each frame includes
+	// wheel spin and body pitch changes, which makes a rigid follow camera jitter.
 	autoTourCameraFollowAnchorScratch.copy(metrics.anchorLocal)
 	object.localToWorld(autoTourCameraFollowAnchorScratch)
 	return autoTourCameraFollowAnchorScratch
@@ -8319,10 +8363,11 @@ function clearAutoTourCameraObjectMetrics(nodeId: string | null | undefined): vo
 }
 
 function resetAutoTourCameraFollowState(): void {
-	resetCameraFollowState(autoTourCameraFollowState)
-	autoTourCameraFollowHasSample = false
-	autoTourCameraFollowLastAnchor.set(0, 0, 0)
-	autoTourCameraFollowVelocity.set(0, 0, 0)
+	autoTourVehicleFollowCamera.reset()
+	autoTourCameraSteeringHasSample = false
+	autoTourCameraSteeringLastAnchor.set(0, 0, 0)
+	autoTourCameraSteeringLastForward.set(0, 0, 0)
+	autoTourCameraSteeringTravelScratch.set(0, 0, 0)
 }
 
 function findDefaultControlledCharacterObject(): THREE.Object3D | null {
@@ -12729,13 +12774,9 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 
 function updateAutoTourCameraForFrame(
 	delta: number,
-	followCameraActive: boolean,
 	activeCamera: THREE.PerspectiveCamera,
 ): void {
 	if (isWatchCameraLocked() || activeCameraLookTween) {
-		return
-	}
-	if (!followCameraActive) {
 		return
 	}
 	if (vehicleDriveState.active) {
@@ -12771,14 +12812,18 @@ function updateAutoTourCameraForFrame(
 		return
 	}
 	if (autoTourPaused.value) {
-		autoTourCameraFollowVelocity.set(0, 0, 0)
-		autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch)
-		autoTourCameraFollowHasSample = true
+		autoTourVehicleFollowCamera.resetMotion()
+		autoTourCameraSteeringHasSample = false
 		return
 	}
 	if (!resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch)) {
-		object.getWorldDirection(autoTourCameraFollowForwardScratch)
-		autoTourCameraFollowForwardScratch.y = 0
+		autoTourCameraObjectQuaternionScratch.copy(
+			object.getWorldQuaternion(autoTourCameraObjectQuaternionScratch),
+		)
+		autoTourCameraFallbackForwardScratch
+			.set(1, 0, 0)
+			.applyQuaternion(autoTourCameraObjectQuaternionScratch)
+		autoTourCameraFollowForwardScratch.copy(autoTourCameraFallbackForwardScratch)
 	}
 	if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
 		autoTourCameraFollowForwardScratch.set(0, 0, 1)
@@ -12786,49 +12831,33 @@ function updateAutoTourCameraForFrame(
 		autoTourCameraFollowForwardScratch.normalize()
 	}
 	const placement = computeFollowPlacement(resolveAutoTourCameraObjectDimensions(nodeId, object))
-	if (delta > 0 && autoTourCameraFollowHasSample) {
-		autoTourCameraFollowVelocityScratch
-			.copy(autoTourCameraFollowAnchorScratch)
-			.sub(autoTourCameraFollowLastAnchor)
-			.multiplyScalar(1 / Math.max(1e-6, delta))
-		const alpha = computeFollowLerpAlpha(delta, 8)
-		autoTourCameraFollowVelocity.lerp(autoTourCameraFollowVelocityScratch, alpha)
-	} else if (followCameraActive) {
-		autoTourCameraFollowVelocity.set(0, 0, 0)
-	}
-	const hasVehicleForward = resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch)
-	if (!hasVehicleForward && autoTourCameraFollowVelocity.lengthSq() > 1e-6) {
-		autoTourCameraFollowForwardScratch.set(autoTourCameraFollowVelocity.x, 0, autoTourCameraFollowVelocity.z)
-	} else if (!hasVehicleForward) {
-		object.getWorldDirection(autoTourCameraFollowForwardScratch)
-		autoTourCameraFollowForwardScratch.y = 0
-	}
-	if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
-		autoTourCameraFollowForwardScratch.set(0, 0, 1)
-	} else {
-		autoTourCameraFollowForwardScratch.normalize()
-	}
+	object.getWorldPosition(autoTourCameraSteeringPositionScratch)
+	const steeringInput = resolveAutoTourVehicleFollowSteeringInput(
+		nodeId,
+		autoTourCameraFollowForwardScratch,
+		autoTourCameraSteeringPositionScratch,
+		delta,
+	)
 	const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId)
-	autoTourCameraFollowController.update({
-		follow: autoTourCameraFollowState,
+	autoTourVehicleFollowCamera.update({
 		placement,
 		anchorWorld: autoTourCameraFollowAnchorScratch,
-		desiredForwardWorld: autoTourCameraFollowForwardScratch,
-		velocityWorld: autoTourCameraFollowVelocity,
+		vehicleForwardWorld: autoTourCameraFollowForwardScratch,
+		steeringInput,
 		deltaSeconds: delta,
 		ctx: { camera: activeCamera, mapControls: mapControls ?? undefined },
+		worldUp: AUTO_TOUR_CAMERA_WORLD_UP,
 		immediate: false,
-		smoothTargetForProgrammaticFollow: false,
 		...(localOffsetOverride ? { localOffsetOverride } : {}),
-		tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
+		tuning: AUTO_TOUR_VEHICLE_FOLLOW_CAMERA_TUNING,
 		distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
-		lockLocalOffset: true,
+		velocityLerpSpeed: VEHICLE_FOLLOW_CAMERA_VELOCITY_LERP_SPEED,
+		smoothTargetForProgrammaticFollow: true,
 	})
 	if (mapControls) {
 		lastOrbitState.position.copy(activeCamera.position)
 		lastOrbitState.target.copy(mapControls.target)
 	}
-	autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch)
 }
 
 /**
@@ -13035,7 +13064,7 @@ function startAnimationLoop() {
 		})
 
 		// 3) Vehicle camera and camera-dependent systems
-		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
+		updateAutoTourCameraForFrame(delta, activeCamera)
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera, vehicleTransformDriveUpdated)
 		applyVehicleDriveCameraHandoff(delta)
 		if (!watchCameraLocked && characterFollowCameraActive && !autoTourFollowCameraActive) {

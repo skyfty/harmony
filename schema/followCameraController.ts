@@ -35,6 +35,25 @@ export type CameraFollowOptions = {
   smoothTargetForProgrammaticFollow?: boolean
 }
 
+export type VehicleFollowCameraRigUpdateOptions = {
+  placement: CameraFollowPlacement
+  anchorWorld: THREE.Vector3
+  vehicleForwardWorld: THREE.Vector3
+  steeringInput: number
+  deltaSeconds: number
+  ctx: CameraFollowContext
+  velocityWorld?: VelocityLike | null
+  worldUp?: THREE.Vector3
+  distanceScale?: number
+  tuning?: Partial<CameraFollowTuning>
+  followControlsDirty?: boolean
+  localOffsetOverride?: THREE.Vector3 | null
+  immediate?: boolean
+  applyOrbitTween?: boolean
+  velocityLerpSpeed?: number
+  smoothTargetForProgrammaticFollow?: boolean
+}
+
 export type CameraFollowContext = {
   camera: THREE.PerspectiveCamera | null
   mapControls?: { target: THREE.Vector3; update: () => void; enabled?: boolean; enablePan?: boolean; minDistance?: number; maxDistance?: number }
@@ -130,6 +149,13 @@ export const DEFAULT_CAMERA_FOLLOW_TUNING: CameraFollowTuning = {
 
 export const DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE = 1.5
 export const DEFAULT_FOLLOW_FORWARD_PITCH_LIMIT = Math.PI / 4
+const DEFAULT_FOLLOW_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
+
+const VEHICLE_FOLLOW_STEER_LOOK_MAX = THREE.MathUtils.degToRad(14)
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD = 0.75
+const VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL = 5.5
+const VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT = 0.22
+const VEHICLE_FOLLOW_STEER_LOOK_TRACK_TIME_CONSTANT = 0.08
 
 export const DEFAULT_BACK_FOLLOW_CAMERA_TUNING: Partial<CameraFollowTuning> = {
   distanceMax: 16,
@@ -157,9 +183,9 @@ export function createBackFollowCameraTuning(overrides: Partial<CameraFollowTuni
 }
 
 /**
- * Auto tours are scripted, so their framing should not expand or contract with
- * instantaneous speed. Keep orientation and look-target smoothing, but follow
- * the anchor rigidly with no speed boost or look-ahead translation.
+ * Character auto tours use authored walking framing: keep orientation and
+ * look-target smoothing, but follow the anchor rigidly without vehicle-style
+ * speed expansion or look-ahead translation.
  */
 export function createAutoTourFollowCameraTuning(
   overrides: Partial<CameraFollowTuning> = {},
@@ -973,6 +999,108 @@ export class FollowCameraController {
     // 标记本帧已完成初始化，后续将进入平滑跟随模式。
     follow.initialized = true
     return true
+  }
+}
+
+export class VehicleFollowCameraRig {
+  readonly follow: CameraFollowState
+
+  private readonly controller = new FollowCameraController()
+  private readonly motion = createFollowCameraMotionState()
+  private readonly desiredFollowForward = new THREE.Vector3()
+  private steerLookAngle = 0
+
+  constructor(follow: CameraFollowState = createCameraFollowState()) {
+    this.follow = follow
+  }
+
+  reset(): void {
+    resetCameraFollowState(this.follow)
+    this.resetMotion()
+    this.resetLocalOffset()
+  }
+
+  resetMotion(): void {
+    resetFollowCameraMotionState(this.motion)
+    this.steerLookAngle = 0
+    this.desiredFollowForward.set(0, 0, 0)
+  }
+
+  resetLocalOffset(): void {
+    this.follow.localOffset.set(0, 0, 0)
+    this.follow.hasLocalOffset = false
+  }
+
+  update(options: VehicleFollowCameraRigUpdateOptions): boolean {
+    const { follow, motion, desiredFollowForward } = this
+    if (!options.ctx.camera) {
+      return false
+    }
+
+    resolveFollowForwardPitch(
+      options.vehicleForwardWorld,
+      follow.heading,
+      desiredFollowForward,
+    )
+
+    const steeringInput = THREE.MathUtils.clamp(options.steeringInput, -1, 1)
+    const planarSpeed = Math.hypot(motion.velocity.x, motion.velocity.z)
+    const steerLookRange = Math.max(
+      1e-3,
+      VEHICLE_FOLLOW_STEER_LOOK_SPEED_FULL - VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD,
+    )
+    const steerLookBlend = planarSpeed <= VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD
+      ? 0
+      : Math.min(1, (planarSpeed - VEHICLE_FOLLOW_STEER_LOOK_SPEED_THRESHOLD) / steerLookRange)
+    const targetSteerLookAngle = steeringInput * VEHICLE_FOLLOW_STEER_LOOK_MAX * steerLookBlend
+    if (options.immediate || options.deltaSeconds <= 0) {
+      this.steerLookAngle = targetSteerLookAngle
+    } else if (Math.abs(targetSteerLookAngle) <= 1e-5) {
+      const releaseAlpha = 1 - Math.exp(
+        -options.deltaSeconds / VEHICLE_FOLLOW_STEER_LOOK_RELEASE_TIME_CONSTANT,
+      )
+      this.steerLookAngle += (0 - this.steerLookAngle) * releaseAlpha
+    } else {
+      const trackAlpha = 1 - Math.exp(
+        -options.deltaSeconds / VEHICLE_FOLLOW_STEER_LOOK_TRACK_TIME_CONSTANT,
+      )
+      this.steerLookAngle += (targetSteerLookAngle - this.steerLookAngle) * trackAlpha
+    }
+    if (Math.abs(this.steerLookAngle) < THREE.MathUtils.degToRad(0.2)) {
+      this.steerLookAngle = 0
+    }
+    if (Math.abs(this.steerLookAngle) > 1e-4) {
+      desiredFollowForward.applyAxisAngle(
+        options.worldUp ?? DEFAULT_FOLLOW_CAMERA_WORLD_UP,
+        this.steerLookAngle,
+      )
+      if (desiredFollowForward.lengthSq() > 1e-6) {
+        desiredFollowForward.normalize()
+      }
+    }
+
+    return updateBackFollowCamera({
+      controller: this.controller,
+      motion,
+      follow,
+      placement: options.placement,
+      anchorWorld: options.anchorWorld,
+      desiredForwardWorld: desiredFollowForward,
+      velocityWorld: options.velocityWorld,
+      deltaSeconds: options.deltaSeconds,
+      ctx: options.ctx,
+      worldUp: options.worldUp,
+      distanceScale: options.distanceScale,
+      tuning: options.tuning,
+      followControlsDirty: options.followControlsDirty,
+      localOffsetOverride: options.localOffsetOverride,
+      lockLocalOffset: true,
+      immediate: options.immediate,
+      applyOrbitTween: options.applyOrbitTween,
+      smoothTargetForProgrammaticFollow: options.smoothTargetForProgrammaticFollow ?? false,
+      velocityLerpSpeed: options.velocityLerpSpeed,
+      followForwardPitch: true,
+    })
   }
 }
 

@@ -1177,6 +1177,7 @@ import {
   resetFollowCameraMotionState,
   resetCameraPoseTransitionState,
   updateBackFollowCamera,
+  VehicleFollowCameraRig,
 } from '@harmony/schema/motion';
 import type { FollowCameraMotionState, CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
 import {
@@ -1197,6 +1198,7 @@ import {
 import { createBridgePhysicsBodyProxy } from '@harmony/schema/bridgePhysicsBodyProxy';
 import {
   resolveSignedVehicleTravel,
+  resolveVehicleSteeringInputFromHeadingChange,
   resolveVehicleVisualForwardWorld,
   resolveVehicleVisualMotionPose,
   resolveVehicleWheelRollDelta,
@@ -4321,24 +4323,34 @@ const autoTourPaused = ref(false);
 const targetStopHeldVehicleNodeId = ref<string | null>(null);
 
 const autoTourFollowNodeId = ref<string | null>(null);
-const autoTourCameraFollowState = createCameraFollowState();
+const autoTourVehicleFollowCamera = new VehicleFollowCameraRig();
+const autoTourCameraFollowState = autoTourVehicleFollowCamera.follow;
 const autoTourCameraFollowController = new FollowCameraController();
 const characterCameraFollowState = createCameraFollowState();
 const characterCameraFollowController = new FollowCameraController();
-const autoTourCameraFollowLastAnchor = new THREE.Vector3();
-const autoTourCameraFollowVelocity = new THREE.Vector3();
-const autoTourCameraFollowVelocityScratch = new THREE.Vector3();
 const autoTourCameraFollowAnchorScratch = new THREE.Vector3();
 const autoTourCameraFollowForwardScratch = new THREE.Vector3();
+const autoTourCameraSteeringLastAnchor = new THREE.Vector3();
+const autoTourCameraSteeringLastForward = new THREE.Vector3();
+const autoTourCameraSteeringPositionScratch = new THREE.Vector3();
+const autoTourCameraSteeringTravelScratch = new THREE.Vector3();
+const autoTourCameraFallbackForwardScratch = new THREE.Vector3();
+const autoTourCameraObjectQuaternionScratch = new THREE.Quaternion();
 const autoTourCameraFollowOffsetScratch = new THREE.Vector3();
-const autoTourCameraFollowBox = new THREE.Box3();
 const autoTourCameraObjectMetricsByNodeId = new Map<string, {
   anchorLocal: THREE.Vector3;
   width: number;
   height: number;
   length: number;
 }>();
-const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createAutoTourFollowCameraTuning();
+const VEHICLE_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning();
+const VEHICLE_FOLLOW_CAMERA_VELOCITY_LERP_SPEED = 0;
+const AUTO_TOUR_VEHICLE_FOLLOW_CAMERA_TUNING = createBackFollowCameraTuning({
+  ...VEHICLE_FOLLOW_CAMERA_TUNING,
+  // Visual terrain sampling has no physics interpolation; damp those small
+  // frame steps in auto tours while manual driving keeps its existing tuning.
+  positionLerpSpeed: 12,
+});
 const AUTO_TOUR_RESUME_BLEND_SECONDS = 0.28;
 const vehicleDriveCameraHandoff = createCameraPoseTransitionState();
 const autoTourPausedCameraPosition = new THREE.Vector3();
@@ -4352,7 +4364,7 @@ const autoTourResumeBlendTempCamera = new THREE.PerspectiveCamera();
 let autoTourResumeBlendActive = false;
 let autoTourResumeBlendElapsedSeconds = 0;
 let autoTourResumeBlendNodeId: string | null = null;
-let autoTourCameraFollowHasSample = false;
+let autoTourCameraSteeringHasSample = false;
 let autoTourActiveSyncAccumSeconds = 0;
 const autoTourRotationOnlyHold = ref(false);
 let autoTourLastAnyActive = false;
@@ -4447,12 +4459,42 @@ function resolveAutoTourVehicleForwardWorld(
   if (!axisForward || axisForward.lengthSq() < 1e-8) {
     return false;
   }
-  const resolved = resolveVehicleVisualForwardWorld(object, axisForward, target);
-  if (resolved) {
-    // The auto-tour camera stays level even when the vehicle follows a slope.
-    target.y = 0;
+  return resolveVehicleVisualForwardWorld(object, axisForward, target, true);
+}
+
+function resolveAutoTourVehicleFollowSteeringInput(
+  nodeId: string,
+  forwardWorld: THREE.Vector3,
+  vehicleWorldPosition: THREE.Vector3,
+  deltaSeconds: number,
+): number {
+  if (deltaSeconds <= 0) {
+    return 0;
   }
-  return resolved;
+  if (!autoTourCameraSteeringHasSample) {
+    autoTourCameraSteeringLastAnchor.copy(vehicleWorldPosition);
+    autoTourCameraSteeringLastForward.copy(forwardWorld);
+    autoTourCameraSteeringHasSample = true;
+    return 0;
+  }
+  autoTourCameraSteeringTravelScratch
+    .copy(vehicleWorldPosition)
+    .sub(autoTourCameraSteeringLastAnchor);
+  const signedTravelDistance =
+    autoTourCameraSteeringTravelScratch.x * forwardWorld.x
+    + autoTourCameraSteeringTravelScratch.z * forwardWorld.z;
+  const node = resolveNodeById(nodeId);
+  const vehicleProps = clampVehicleComponentProps(resolveVehicleComponent(node)?.props ?? null);
+  const steeringInput = resolveVehicleSteeringInputFromHeadingChange({
+    previousForwardWorld: autoTourCameraSteeringLastForward,
+    currentForwardWorld: forwardWorld,
+    signedTravelDistance,
+    wheelbaseMeters: vehicleProps.wheelbaseMeters,
+    maxSteerRadians: THREE.MathUtils.degToRad(vehicleProps.maxSteerDegrees),
+  });
+  autoTourCameraSteeringLastAnchor.copy(vehicleWorldPosition);
+  autoTourCameraSteeringLastForward.copy(forwardWorld);
+  return steeringInput;
 }
 
 function prepareAutoTourResumeBlendContext(
@@ -4469,8 +4511,13 @@ function prepareAutoTourResumeBlendContext(
     }
   }
   if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
-    object.getWorldDirection(autoTourCameraFollowForwardScratch);
-    autoTourCameraFollowForwardScratch.y = 0;
+    autoTourCameraObjectQuaternionScratch.copy(
+      object.getWorldQuaternion(autoTourCameraObjectQuaternionScratch),
+    );
+    autoTourCameraFallbackForwardScratch
+      .set(1, 0, 0)
+      .applyQuaternion(autoTourCameraObjectQuaternionScratch);
+    autoTourCameraFollowForwardScratch.copy(autoTourCameraFallbackForwardScratch);
   }
   if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
     autoTourCameraFollowForwardScratch.set(0, 0, 1);
@@ -4555,9 +4602,10 @@ function ensureAutoTourCameraObjectMetrics(
 
 function resolveAutoTourCameraFollowAnchor(nodeId: string, object: THREE.Object3D): THREE.Vector3 {
   const metrics = ensureAutoTourCameraObjectMetrics(nodeId, object);
-  autoTourCameraFollowBox.makeEmpty();
-  autoTourCameraFollowAnchorScratch.copy(metrics.anchorLocal);
   object.updateMatrixWorld(true);
+  // Cache a rigid anchor instead of recalculating a world AABB that changes
+  // with wheel spin and body pitch every frame.
+  autoTourCameraFollowAnchorScratch.copy(metrics.anchorLocal);
   object.localToWorld(autoTourCameraFollowAnchorScratch);
   return autoTourCameraFollowAnchorScratch;
 }
@@ -4594,7 +4642,6 @@ function seedAutoTourCameraFollowStateFromView(
   resetCameraFollowState(followState);
 
   autoTourCameraFollowForwardScratch.copy(forwardWorld);
-  autoTourCameraFollowForwardScratch.y = 0;
   if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
     autoTourCameraFollowForwardScratch.set(0, 0, 1);
   } else {
@@ -4631,12 +4678,13 @@ function seedAutoTourCameraFollowStateFromView(
 }
 
 function resetAutoTourCameraFollowState(): void {
-  resetCameraFollowState(autoTourCameraFollowState);
+  autoTourVehicleFollowCamera.reset();
   clearAutoTourPausedCameraSnapshot();
   clearAutoTourResumeBlendState();
-  autoTourCameraFollowHasSample = false;
-  autoTourCameraFollowLastAnchor.set(0, 0, 0);
-  autoTourCameraFollowVelocity.set(0, 0, 0);
+  autoTourCameraSteeringHasSample = false;
+  autoTourCameraSteeringLastAnchor.set(0, 0, 0);
+  autoTourCameraSteeringLastForward.set(0, 0, 0);
+  autoTourCameraSteeringTravelScratch.set(0, 0, 0);
 }
 
 function clearVehicleDriveIntroState(): void {
@@ -5024,8 +5072,8 @@ const vehicleDriveController = new VehicleDriveController(
 
     // Use one shared follow-camera tuning profile across platforms.
     followCameraDistanceScale: () => DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
-    followCameraVelocityLerpSpeed: () => 0,
-    followCameraTuning: () => createBackFollowCameraTuning(),
+    followCameraVelocityLerpSpeed: () => VEHICLE_FOLLOW_CAMERA_VELOCITY_LERP_SPEED,
+    followCameraTuning: () => VEHICLE_FOLLOW_CAMERA_TUNING,
     resolveChassisWorldPosition: (nodeId, chassisBody, target) => {
       if (!physicsEnvironmentEnabled.value) {
         return false;
@@ -21233,9 +21281,8 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   advanceCameraOffsetOverrides(deltaSeconds);
 
   if (autoTourPaused.value) {
-    autoTourCameraFollowVelocity.set(0, 0, 0);
-    autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
-    autoTourCameraFollowHasSample = true;
+    autoTourVehicleFollowCamera.resetMotion();
+    autoTourCameraSteeringHasSample = false;
     return;
   }
 
@@ -21247,14 +21294,14 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       placement,
       anchorWorld: autoTourCameraFollowAnchorScratch,
       desiredForwardWorld: autoTourCameraFollowForwardScratch,
-      velocityWorld: autoTourCameraFollowVelocity,
       deltaSeconds: 1 / 60,
       ctx: { camera: autoTourResumeBlendTempCamera, mapControls: undefined },
       immediate: true,
       ...(localOffsetOverride ? { localOffsetOverride } : {}),
-      tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
+      tuning: VEHICLE_FOLLOW_CAMERA_TUNING,
       distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
       lockLocalOffset: true,
+      followForwardPitch: true,
     });
 
     autoTourResumeBlendElapsedSeconds += Math.max(0, deltaSeconds);
@@ -21285,9 +21332,8 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
       autoTourCameraFollowState.localOffset.copy(autoTourResumeBlendState.localOffset);
       autoTourCameraFollowState.hasLocalOffset = autoTourResumeBlendState.hasLocalOffset;
       autoTourCameraFollowState.initialized = true;
-      autoTourCameraFollowVelocity.set(0, 0, 0);
-      autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
-      autoTourCameraFollowHasSample = true;
+      autoTourVehicleFollowCamera.resetMotion();
+      autoTourCameraSteeringHasSample = false;
       clearAutoTourResumeBlendState();
     }
 
@@ -21295,8 +21341,13 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   if (!resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch)) {
-    object.getWorldDirection(autoTourCameraFollowForwardScratch);
-    autoTourCameraFollowForwardScratch.y = 0;
+    autoTourCameraObjectQuaternionScratch.copy(
+      object.getWorldQuaternion(autoTourCameraObjectQuaternionScratch),
+    );
+    autoTourCameraFallbackForwardScratch
+      .set(1, 0, 0)
+      .applyQuaternion(autoTourCameraObjectQuaternionScratch);
+    autoTourCameraFollowForwardScratch.copy(autoTourCameraFallbackForwardScratch);
   }
   if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
     autoTourCameraFollowForwardScratch.set(0, 0, 1);
@@ -21305,49 +21356,30 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   const placement = computeFollowPlacement(resolveAutoTourCameraObjectDimensions(nodeId, object));
-  if (deltaSeconds > 0 && autoTourCameraFollowHasSample) {
-    autoTourCameraFollowVelocityScratch
-      .copy(autoTourCameraFollowAnchorScratch)
-      .sub(autoTourCameraFollowLastAnchor)
-      .multiplyScalar(1 / Math.max(1e-6, deltaSeconds));
-
-    const alpha = computeFollowLerpAlpha(deltaSeconds, 8);
-    autoTourCameraFollowVelocity.lerp(autoTourCameraFollowVelocityScratch, alpha);
-  } else if (options.immediate) {
-    autoTourCameraFollowVelocity.set(0, 0, 0);
-  }
+  object.getWorldPosition(autoTourCameraSteeringPositionScratch);
+  const steeringInput = resolveAutoTourVehicleFollowSteeringInput(
+    nodeId,
+    autoTourCameraFollowForwardScratch,
+    autoTourCameraSteeringPositionScratch,
+    deltaSeconds,
+  );
   const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId);
 
-  const hasVehicleForward = resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch);
-  if (!hasVehicleForward && autoTourCameraFollowVelocity.lengthSq() > 1e-6) {
-    autoTourCameraFollowForwardScratch.set(autoTourCameraFollowVelocity.x, 0, autoTourCameraFollowVelocity.z);
-  } else if (!hasVehicleForward) {
-    object.getWorldDirection(autoTourCameraFollowForwardScratch);
-    autoTourCameraFollowForwardScratch.y = 0;
-  }
-  if (autoTourCameraFollowForwardScratch.lengthSq() < 1e-8) {
-    autoTourCameraFollowForwardScratch.set(0, 0, 1);
-  } else {
-    autoTourCameraFollowForwardScratch.normalize();
-  }
-
-  autoTourCameraFollowController.update({
-    follow: autoTourCameraFollowState,
+  autoTourVehicleFollowCamera.update({
     placement,
     anchorWorld: autoTourCameraFollowAnchorScratch,
-    desiredForwardWorld: autoTourCameraFollowForwardScratch,
-    velocityWorld: autoTourCameraFollowVelocity,
+    vehicleForwardWorld: autoTourCameraFollowForwardScratch,
+    steeringInput,
     deltaSeconds,
     ctx: { camera: context.camera, mapControls: undefined },
+    worldUp,
     immediate: Boolean(options.immediate),
-    smoothTargetForProgrammaticFollow: false,
     ...(localOffsetOverride ? { localOffsetOverride } : {}),
-    tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
+    tuning: AUTO_TOUR_VEHICLE_FOLLOW_CAMERA_TUNING,
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
-    lockLocalOffset: true,
+    velocityLerpSpeed: VEHICLE_FOLLOW_CAMERA_VELOCITY_LERP_SPEED,
+    smoothTargetForProgrammaticFollow: true,
   })
-
-  autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
 }
 
 

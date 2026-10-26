@@ -641,6 +641,90 @@ describe('GuideRoute V3 playback events', () => {
     }
   })
 
+  it('smooths vehicle heading through route corners', () => {
+    const routeNode = createRouteNode(pathProps({
+      legs: [{
+        id: 'corner-path',
+        kind: 'path',
+        travelMode: 'vehicle',
+        speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 8 },
+        surfaceProviderNodeId: null,
+        preserveAuthoredY: true,
+        anchors: [
+          { x: 0, y: 10, z: 0 },
+          { x: 10, y: 10, z: 0 },
+          { x: 10, y: 10, z: 10 },
+        ],
+      }],
+    }))
+    const vehicleObject = new THREE.Group()
+    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4)))
+    vehicleObject.position.set(0, 10, 0)
+    const vehicleNode = {
+      id: 'vehicle-corner',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'auto-tour',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 8,
+          }),
+        },
+        vehicle: {
+          id: 'vehicle',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            indexRightAxis: 2,
+            indexUpAxis: 1,
+            indexForwardAxis: 0,
+          }),
+        },
+      },
+    } as any
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap: new Map<string, THREE.Object3D>([
+        [routeNode.id, new THREE.Object3D()],
+        [vehicleNode.id, vehicleObject],
+      ]),
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    const previousForward = new THREE.Vector3(1, 0, 0)
+    const previousPosition = vehicleObject.position.clone()
+    let maxHeadingStep = 0
+    let movingFrameCount = 0
+    for (let frame = 0; frame < 270; frame += 1) {
+      runtime.update(1 / 120)
+      vehicleObject.updateMatrixWorld(true)
+      if (vehicleObject.position.distanceToSquared(previousPosition) > 1e-10) {
+        movingFrameCount += 1
+      }
+      previousPosition.copy(vehicleObject.position)
+      const forward = new THREE.Vector3(1, 0, 0)
+        .applyQuaternion(vehicleObject.getWorldQuaternion(new THREE.Quaternion()))
+      forward.y = 0
+      forward.normalize()
+      maxHeadingStep = Math.max(maxHeadingStep, previousForward.angleTo(forward))
+      previousForward.copy(forward)
+    }
+
+    expect(maxHeadingStep).toBeLessThan(THREE.MathUtils.degToRad(10))
+    expect(movingFrameCount).toBe(270)
+    expect(previousForward.z).toBeGreaterThan(0.95)
+  })
+
   it('keeps a character collider bottom on the graded provider surface', () => {
     surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
       point: new THREE.Vector3(x, 10 + x * 0.2, z),

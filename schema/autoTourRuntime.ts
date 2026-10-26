@@ -103,12 +103,16 @@ type PlaybackState = {
   firedTransitionIds: Set<string>
   pendingTransitionId: string | null
   smoothedSpeedMps: number
+  smoothedYawRad: number | null
 }
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0)
 const TERMINAL_DISTANCE_EPSILON = 0.05
 const ROUTE_END_REVERSE_EPSILON = 0.5
 const AUTO_TOUR_YAW_SMOOTHING = 12
+// Vehicle tours use a slower response so polyline corners do not snap the
+// chassis (and the rigidly attached chase camera) within one frame.
+const AUTO_TOUR_VEHICLE_YAW_SMOOTHING = 2.2
 const AUTO_TOUR_SURFACE_CLEARANCE_M = 0.04
 const AUTO_TOUR_SUPPORT_FOOTPRINT_INSET_RATIO = 0.15
 const AUTO_TOUR_MAX_SUPPORT_SLOPE = Math.tan(THREE.MathUtils.degToRad(30))
@@ -677,6 +681,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       firedTransitionIds: new Set(),
       pendingTransitionId: null,
       smoothedSpeedMps: 0,
+      smoothedYawRad: null,
     }
   }
 
@@ -996,6 +1001,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       firedTransitionIds: new Set(),
       pendingTransitionId: null,
       smoothedSpeedMps: 0,
+      smoothedYawRad: snap.yaw,
     })
     pendingTourTargets.delete(nodeId)
   }
@@ -1088,6 +1094,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
             firedTransitionIds: new Set(),
             pendingTransitionId: null,
             smoothedSpeedMps: 0,
+            smoothedYawRad: null,
           }
         } else {
           state = initializePlaybackState({
@@ -1257,11 +1264,31 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       } else {
         forwardWorld.normalize()
       }
-      let desiredPosition = sample.point.clone()
       const vehicleComponent = resolveEnabledComponentState<VehicleComponentProps>(
         node,
         VEHICLE_COMPONENT_TYPE,
       )
+      const targetYawRad = Math.atan2(-forwardWorld.z, forwardWorld.x)
+      if (vehicleComponent) {
+        if (state.smoothedYawRad == null || deltaSeconds <= 0) {
+          state.smoothedYawRad = targetYawRad
+        } else {
+          state.smoothedYawRad = dampAngleRadians(
+            state.smoothedYawRad,
+            targetYawRad,
+            expSmoothingAlpha(AUTO_TOUR_VEHICLE_YAW_SMOOTHING, deltaSeconds),
+          )
+        }
+        const horizontalMagnitude = Math.hypot(forwardWorld.x, forwardWorld.z)
+        if (horizontalMagnitude > 1e-6) {
+          forwardWorld.set(
+            Math.cos(state.smoothedYawRad) * horizontalMagnitude,
+            forwardWorld.y,
+            -Math.sin(state.smoothedYawRad) * horizontalMagnitude,
+          ).normalize()
+        }
+      }
+      let desiredPosition = sample.point.clone()
       if (vehicleComponent) {
         const vehicleProps = clampVehicleComponentProps(vehicleComponent.props)
         const desiredQuaternion = buildVehicleQuaternion(
@@ -1283,13 +1310,12 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         desiredPosition = supportedPose.worldPosition
         applyObjectWorldPose(object, desiredPosition, supportedPose.worldQuaternion)
       } else {
-        const yaw = Math.atan2(-forwardWorld.z, forwardWorld.x)
         const current = object.getWorldQuaternion(new THREE.Quaternion())
-        const target = new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw)
+        const target = new THREE.Quaternion().setFromAxisAngle(WORLD_UP, targetYawRad)
         const euler = new THREE.Euler().setFromQuaternion(current, 'YXZ')
         euler.y = dampAngleRadians(
           euler.y,
-          yaw,
+          targetYawRad,
           expSmoothingAlpha(AUTO_TOUR_YAW_SMOOTHING, deltaSeconds),
         )
         target.setFromEuler(new THREE.Euler(0, euler.y, 0, 'YXZ'))
