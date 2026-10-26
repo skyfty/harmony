@@ -258,7 +258,133 @@ function writeVectorAxis(vector: THREE.Vector3, axis: number, value: number): vo
   }
 }
 
-function buildVehicleSupportFootprint(
+type VehicleWheelSupportCandidate = {
+  point: THREE.Vector3
+  isFrontWheel: boolean
+}
+
+function orderVehicleWheelSupportPoints(
+  candidates: VehicleWheelSupportCandidate[],
+  vehicleProps: VehicleComponentProps,
+): THREE.Vector3[] | null {
+  const front = candidates.filter((candidate) => candidate.isFrontWheel)
+  const rear = candidates.filter((candidate) => !candidate.isFrontWheel)
+  if (front.length !== 2 || rear.length !== 2) {
+    return null
+  }
+  const rightAxis = vehicleProps.indexRightAxis
+  const sortByRightAxis = (
+    left: VehicleWheelSupportCandidate,
+    right: VehicleWheelSupportCandidate,
+  ) => readVectorAxis(left.point, rightAxis) - readVectorAxis(right.point, rightAxis)
+  front.sort(sortByRightAxis)
+  rear.sort(sortByRightAxis)
+  const frontWidth = Math.abs(
+    readVectorAxis(front[1]!.point, rightAxis) - readVectorAxis(front[0]!.point, rightAxis),
+  )
+  const rearWidth = Math.abs(
+    readVectorAxis(rear[1]!.point, rightAxis) - readVectorAxis(rear[0]!.point, rightAxis),
+  )
+  if (frontWidth <= 1e-4 || rearWidth <= 1e-4) {
+    return null
+  }
+  return [
+    front[0]!.point,
+    front[1]!.point,
+    rear[0]!.point,
+    rear[1]!.point,
+  ]
+}
+
+function buildConfiguredWheelSupportFootprint(
+  vehicleProps: VehicleComponentProps,
+): THREE.Vector3[] | null {
+  if (vehicleProps.wheels.length !== 4) {
+    return null
+  }
+  const candidates: VehicleWheelSupportCandidate[] = []
+  for (const wheel of vehicleProps.wheels) {
+    const point = new THREE.Vector3(
+      wheel.chassisConnectionPointLocal.x,
+      wheel.chassisConnectionPointLocal.y,
+      wheel.chassisConnectionPointLocal.z,
+    )
+    const direction = new THREE.Vector3(
+      wheel.directionLocal.x,
+      wheel.directionLocal.y,
+      wheel.directionLocal.z,
+    )
+    if (direction.lengthSq() <= 1e-8) {
+      writeVectorAxis(direction, vehicleProps.indexUpAxis, -1)
+    }
+    direction.normalize()
+    point.addScaledVector(direction, wheel.suspensionRestLength + wheel.radius)
+    candidates.push({ point, isFrontWheel: wheel.isFrontWheel })
+  }
+  return orderVehicleWheelSupportPoints(candidates, vehicleProps)
+}
+
+function buildVisualWheelSupportFootprint(params: {
+  object: THREE.Object3D
+  vehicleProps: VehicleComponentProps
+  resolveObjectBounds: (object: THREE.Object3D) => THREE.Box3
+}): THREE.Vector3[] | null {
+  const { object, vehicleProps, resolveObjectBounds } = params
+  const wheelNodeIds = new Set(
+    vehicleProps.wheels
+      .map((wheel) => wheel.nodeId)
+      .filter((nodeId): nodeId is string => Boolean(nodeId)),
+  )
+  if (wheelNodeIds.size !== 4) {
+    return null
+  }
+  object.updateMatrixWorld(true)
+  const wheelObjects = new Map<string, THREE.Object3D>()
+  object.traverse((candidate) => {
+    const nodeId = typeof candidate.userData?.nodeId === 'string'
+      ? candidate.userData.nodeId.trim()
+      : ''
+    if (nodeId && wheelNodeIds.has(nodeId) && !wheelObjects.has(nodeId)) {
+      wheelObjects.set(nodeId, candidate)
+    }
+  })
+  if (wheelObjects.size !== wheelNodeIds.size) {
+    return null
+  }
+
+  const inverseObjectMatrix = object.matrixWorld.clone().invert()
+  const candidates: VehicleWheelSupportCandidate[] = []
+  for (const wheel of vehicleProps.wheels) {
+    const wheelObject = wheel.nodeId ? wheelObjects.get(wheel.nodeId) : null
+    if (!wheelObject) {
+      return null
+    }
+    wheelObject.updateMatrixWorld(true)
+    const wheelBounds = resolveObjectBounds(wheelObject)
+    if (wheelBounds.isEmpty()) {
+      return null
+    }
+    const localBounds = transformBoundsCorners(wheelBounds, inverseObjectMatrix)
+    const point = new THREE.Vector3()
+    writeVectorAxis(
+      point,
+      vehicleProps.indexRightAxis,
+      (readVectorAxis(localBounds.min, vehicleProps.indexRightAxis)
+        + readVectorAxis(localBounds.max, vehicleProps.indexRightAxis)) * 0.5,
+    )
+    writeVectorAxis(point, vehicleProps.indexUpAxis, readVectorAxis(localBounds.min, vehicleProps.indexUpAxis))
+    writeVectorAxis(
+      point,
+      vehicleProps.indexForwardAxis,
+      (readVectorAxis(localBounds.min, vehicleProps.indexForwardAxis)
+        + readVectorAxis(localBounds.max, vehicleProps.indexForwardAxis)) * 0.5,
+    )
+    candidates.push({ point, isFrontWheel: wheel.isFrontWheel })
+  }
+  return orderVehicleWheelSupportPoints(candidates, vehicleProps)
+}
+
+function buildBoundsSupportFootprint(
   localBounds: THREE.Box3,
   vehicleProps: VehicleComponentProps,
 ): THREE.Vector3[] {
@@ -298,6 +424,7 @@ function resolveSupportedVehiclePose(params: {
   providerNodeId: string | null
   resolveObjectBounds: (object: THREE.Object3D) => THREE.Box3
   localBoundsCache: WeakMap<THREE.Object3D, THREE.Box3>
+  visualWheelFootprintCache: WeakMap<THREE.Object3D, THREE.Vector3[]>
 }): SupportedVehiclePose {
   const {
     object,
@@ -308,26 +435,43 @@ function resolveSupportedVehiclePose(params: {
     providerNodeId,
     resolveObjectBounds,
     localBoundsCache,
+    visualWheelFootprintCache,
   } = params
   const originalPosition = object.position.clone()
   const originalQuaternion = object.quaternion.clone()
   try {
     object.updateMatrixWorld(true)
-    let localBounds = localBoundsCache.get(object) ?? null
-    if (!localBounds) {
-      const sourceBounds = resolveObjectBounds(object)
-      if (sourceBounds.isEmpty()) {
-        return {
-          worldPosition: routePoint.clone(),
-          worldQuaternion: worldQuaternion.clone(),
-        }
+    let footprint = visualWheelFootprintCache.get(object) ?? null
+    if (!footprint) {
+      footprint = buildVisualWheelSupportFootprint({
+        object,
+        vehicleProps,
+        resolveObjectBounds,
+      })
+      if (footprint) {
+        visualWheelFootprintCache.set(object, footprint)
       }
-      const inverseObjectMatrix = object.matrixWorld.clone().invert()
-      localBounds = transformBoundsCorners(sourceBounds, inverseObjectMatrix)
-      localBoundsCache.set(object, localBounds)
+    }
+    if (!footprint) {
+      footprint = buildConfiguredWheelSupportFootprint(vehicleProps)
+    }
+    if (!footprint) {
+      let localBounds = localBoundsCache.get(object) ?? null
+      if (!localBounds) {
+        const sourceBounds = resolveObjectBounds(object)
+        if (sourceBounds.isEmpty()) {
+          return {
+            worldPosition: routePoint.clone(),
+            worldQuaternion: worldQuaternion.clone(),
+          }
+        }
+        const inverseObjectMatrix = object.matrixWorld.clone().invert()
+        localBounds = transformBoundsCorners(sourceBounds, inverseObjectMatrix)
+        localBoundsCache.set(object, localBounds)
+      }
+      footprint = buildBoundsSupportFootprint(localBounds, vehicleProps)
     }
 
-    const footprint = buildVehicleSupportFootprint(localBounds, vehicleProps)
     applyObjectWorldPose(object, routePoint.clone(), worldQuaternion)
     const footprintWorld = footprint.map((point) => point.clone().applyMatrix4(object.matrixWorld))
     const facingYawRad = Math.atan2(-forwardWorld.z, forwardWorld.x)
@@ -388,9 +532,11 @@ function resolveSupportedVehiclePose(params: {
       } else {
         forwardBase.normalize()
       }
-      // Local +right in the vehicle quaternion is up x forward. Using
-      // forward x up here reverses the roll sign on cross-sloped terrain.
-      const rightBase = new THREE.Vector3().crossVectors(WORLD_UP, forwardBase).normalize()
+      const localRight = new THREE.Vector3()
+      writeVectorAxis(localRight, vehicleProps.indexRightAxis, 1)
+      const rightBase = localRight
+        .applyQuaternion(buildVehicleQuaternion(vehicleProps, forwardBase, WORLD_UP))
+        .normalize()
       const supportNormal = WORLD_UP.clone()
         .addScaledVector(forwardBase, -pitchSlope)
         .addScaledVector(rightBase, -rollSlope)
@@ -485,6 +631,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
   const disabledTourNodes = new Set<string>()
   const pendingTourTargets = new Map<string, GuideRouteTourTargetOptions>()
   const vehicleLocalBoundsCache = new WeakMap<THREE.Object3D, THREE.Box3>()
+  const visualWheelFootprintCache = new WeakMap<THREE.Object3D, THREE.Vector3[]>()
   const resolveObjectBounds = deps.resolveObjectBounds
     ?? ((object: THREE.Object3D) => new THREE.Box3().setFromObject(object))
 
@@ -599,6 +746,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         providerNodeId: routeData.evaluation.providerNodeId,
         resolveObjectBounds,
         localBoundsCache: vehicleLocalBoundsCache,
+        visualWheelFootprintCache,
       })
       worldPosition = supportedPose.worldPosition
       worldQuaternion = supportedPose.worldQuaternion
@@ -689,6 +837,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           providerNodeId: routeData.evaluation.providerNodeId,
           resolveObjectBounds,
           localBoundsCache: vehicleLocalBoundsCache,
+          visualWheelFootprintCache,
         })
         worldPosition = supportedPose.worldPosition
         worldQuaternion = supportedPose.worldQuaternion
@@ -754,6 +903,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         providerNodeId: routeData.evaluation.providerNodeId,
         resolveObjectBounds,
         localBoundsCache: vehicleLocalBoundsCache,
+        visualWheelFootprintCache,
       })
       worldPosition = supportedPose.worldPosition
       worldQuaternion = supportedPose.worldQuaternion
@@ -1128,6 +1278,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           providerNodeId: routeData.evaluation.providerNodeId,
           resolveObjectBounds,
           localBoundsCache: vehicleLocalBoundsCache,
+          visualWheelFootprintCache,
         })
         desiredPosition = supportedPose.worldPosition
         applyObjectWorldPose(object, desiredPosition, supportedPose.worldQuaternion)
@@ -1199,6 +1350,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const object = deps.nodeObjectMap.get(nodeId) ?? null
       if (object) {
         vehicleLocalBoundsCache.delete(object)
+        visualWheelFootprintCache.delete(object)
       }
       disabledTourNodes.delete(nodeId)
       pausedTourNodes.delete(nodeId)
@@ -1215,6 +1367,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       const object = deps.nodeObjectMap.get(nodeId) ?? null
       if (object) {
         vehicleLocalBoundsCache.delete(object)
+        visualWheelFootprintCache.delete(object)
       }
       disabledTourNodes.delete(nodeId)
       pausedTourNodes.delete(nodeId)

@@ -8235,7 +8235,12 @@ function resolveAutoTourVehicleForwardWorld(
 		return false
 	}
 
-	return resolveVehicleVisualForwardWorld(object, axisForward, target)
+	const resolved = resolveVehicleVisualForwardWorld(object, axisForward, target)
+	if (resolved) {
+		// The auto-tour camera stays level even when the vehicle follows a slope.
+		target.y = 0
+	}
+	return resolved
 }
 
 function ensureAutoTourCameraObjectMetrics(

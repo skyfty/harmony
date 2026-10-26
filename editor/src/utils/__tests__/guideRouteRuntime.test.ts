@@ -326,10 +326,11 @@ describe('GuideRoute V3 playback events', () => {
     return { routeNode, vehicleNode, vehicleObject, nodes, nodeObjectMap }
   }
 
-  it('keeps all vehicle support contacts on the graded provider surface', () => {
+  it('keeps the vehicle pose and all footprint contacts on the provider surface', () => {
+    const expectedNormal = new THREE.Vector3(0, 1, -0.1).normalize()
     surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
       point: new THREE.Vector3(x, 10 + z * 0.1, z),
-      normal: new THREE.Vector3(0, 1, -0.1).normalize(),
+      normal: expectedNormal.clone(),
       kind: 'terrain',
       distanceToRoad: null,
       revision: 1,
@@ -346,6 +347,14 @@ describe('GuideRoute V3 playback events', () => {
           { x: 0, y: 100, z: 0 },
           { x: 20, y: 100, z: 0 },
         ],
+      }],
+      stops: [{
+        id: 'graded-stop',
+        name: 'Graded stop',
+        thumbnailAssetId: null,
+        anchor: { x: 20, y: 100, z: 0 },
+        legId: 'graded-path',
+        behavior: null,
       }],
     }))
     const vehicleObject = new THREE.Group()
@@ -392,9 +401,21 @@ describe('GuideRoute V3 playback events', () => {
       isManualDriveActive: () => false,
     })
 
-    runtime.startTour(vehicleNode.id)
+    const target = {
+      routeNodeId: routeNode.id,
+      destinationStopId: 'graded-stop',
+    }
+    const snap = runtime.resolveRouteSnap(vehicleNode.id, target)
+    expect(snap).not.toBeNull()
+    const snapUp = new THREE.Vector3(0, 1, 0).applyQuaternion(snap!.worldQuaternion)
+    expect(snapUp.distanceTo(expectedNormal)).toBeLessThan(1e-6)
+    runtime.startTour(vehicleNode.id, target)
+    runtime.seedTourPlaybackState(vehicleNode.id, snap!)
     runtime.update(0.5)
     vehicleObject.updateMatrixWorld(true)
+
+    const worldUp = new THREE.Vector3(0, 1, 0).applyQuaternion(vehicleObject.quaternion)
+    expect(worldUp.distanceTo(expectedNormal)).toBeLessThan(1e-6)
 
     const halfRight = 1 * (1 - 0.15)
     const halfForward = 2 * (1 - 0.15)
@@ -408,6 +429,215 @@ describe('GuideRoute V3 playback events', () => {
         const clearance = contact.y - (10 + contact.z * 0.1)
         expect(clearance).toBeCloseTo(0.04, 5)
       }
+    }
+  })
+
+  it('uses four configured wheel contacts for default vehicle axes', () => {
+    const surfaceHeight = (x: number, z: number) => 10 + x * 0.12 + z * 0.08
+    const expectedNormal = new THREE.Vector3(-0.12, 1, -0.08).normalize()
+    surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
+      point: new THREE.Vector3(x, surfaceHeight(x, z), z),
+      normal: expectedNormal.clone(),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 1,
+    }))
+    const routeNode = createRouteNode(pathProps({
+      legs: [{
+        id: 'graded-path',
+        kind: 'path',
+        travelMode: 'vehicle',
+        speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 2.5 },
+        surfaceProviderNodeId: 'landscape-1',
+        preserveAuthoredY: false,
+        anchors: [
+          { x: 0, y: 100, z: 0 },
+          { x: 20, y: 100, z: 0 },
+        ],
+      }],
+    }))
+    const vehicleObject = new THREE.Group()
+    const body = new THREE.Mesh(new THREE.BoxGeometry(4.6, 3, 4))
+    vehicleObject.add(body)
+    vehicleObject.position.set(0, 20, 0)
+    const wheelConnections = [
+      { x: 1.5, z: -0.9, isFrontWheel: true },
+      { x: 1.5, z: 0.9, isFrontWheel: true },
+      { x: -1.3, z: -0.9, isFrontWheel: false },
+      { x: -1.3, z: 0.9, isFrontWheel: false },
+    ]
+    const vehicleNode = {
+      id: 'vehicle-default-axes',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'auto-tour',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 8,
+          }),
+        },
+        vehicle: {
+          id: 'vehicle',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            wheelScaleMode: 'relative',
+            indexRightAxis: 2,
+            indexUpAxis: 1,
+            indexForwardAxis: 0,
+            wheels: wheelConnections.map((connection, index) => ({
+              id: `wheel-${index + 1}`,
+              nodeId: null,
+              chassisConnectionPointLocal: {
+                x: connection.x,
+                y: -0.4,
+                z: connection.z,
+              },
+              radius: 0.45,
+              suspensionRestLength: 0.45,
+              directionLocal: { x: 0, y: -1, z: 0 },
+              axleLocal: { x: 0, y: 0, z: 1 },
+              isFrontWheel: connection.isFrontWheel,
+            })) as any,
+          }),
+        },
+      },
+    } as any
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    runtime.update(0.5)
+    vehicleObject.updateMatrixWorld(true)
+
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(vehicleObject.quaternion)
+    expect(up.distanceTo(expectedNormal)).toBeLessThan(2e-3)
+    for (const connection of wheelConnections) {
+      const contact = new THREE.Vector3(
+        connection.x,
+        -0.4 - 0.45 - 0.45,
+        connection.z,
+      ).applyMatrix4(vehicleObject.matrixWorld)
+      expect(contact.y - surfaceHeight(contact.x, contact.z)).toBeCloseTo(0.04, 2)
+    }
+  })
+
+  it('prefers visible wheel contact bounds over the chassis bounds', () => {
+    surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
+      point: new THREE.Vector3(x, 10, z),
+      normal: new THREE.Vector3(0, 1, 0),
+      kind: 'road',
+      distanceToRoad: 0,
+      revision: 1,
+    }))
+    const routeNode = createRouteNode(pathProps({
+      legs: [{
+        id: 'road-path',
+        kind: 'path',
+        travelMode: 'vehicle',
+        speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 2.5 },
+        surfaceProviderNodeId: 'landscape-1',
+        preserveAuthoredY: false,
+        anchors: [
+          { x: 0, y: 100, z: 0 },
+          { x: 20, y: 100, z: 0 },
+        ],
+      }],
+    }))
+    const vehicleObject = new THREE.Group()
+    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(4.6, 3.4, 4)))
+    vehicleObject.position.set(0, 20, 0)
+    const wheelConnections = [
+      { id: 'fl', x: 1.5, z: -0.9, isFrontWheel: true },
+      { id: 'fr', x: 1.5, z: 0.9, isFrontWheel: true },
+      { id: 'rl', x: -1.3, z: -0.9, isFrontWheel: false },
+      { id: 'rr', x: -1.3, z: 0.9, isFrontWheel: false },
+    ]
+    for (const connection of wheelConnections) {
+      const wheel = new THREE.Group()
+      wheel.userData.nodeId = connection.id
+      wheel.position.set(connection.x, -0.975, connection.z)
+      wheel.add(new THREE.Mesh(new THREE.SphereGeometry(0.25, 8, 6)))
+      vehicleObject.add(wheel)
+    }
+    const vehicleNode = {
+      id: 'vehicle-visible-wheels',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'auto-tour',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 8,
+          }),
+        },
+        vehicle: {
+          id: 'vehicle',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            indexRightAxis: 2,
+            indexUpAxis: 1,
+            indexForwardAxis: 0,
+            wheels: wheelConnections.map((connection) => ({
+              id: connection.id,
+              nodeId: connection.id,
+              chassisConnectionPointLocal: { x: connection.x, y: -0.4, z: connection.z },
+              radius: 0.45,
+              suspensionRestLength: 0.45,
+              directionLocal: { x: 0, y: -1, z: 0 },
+              axleLocal: { x: 0, y: 0, z: 1 },
+              isFrontWheel: connection.isFrontWheel,
+            })) as any,
+          }),
+        },
+      },
+    } as any
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    runtime.update(0.5)
+    vehicleObject.updateMatrixWorld(true)
+
+    for (const connection of wheelConnections) {
+      const contact = new THREE.Vector3(
+        connection.x,
+        -0.975 - 0.25,
+        connection.z,
+      ).applyMatrix4(vehicleObject.matrixWorld)
+      expect(contact.y - 10).toBeCloseTo(0.04, 4)
     }
   })
 

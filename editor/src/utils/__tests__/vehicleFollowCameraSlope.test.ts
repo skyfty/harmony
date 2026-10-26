@@ -431,6 +431,48 @@ describe('follow camera forward pitch option', () => {
     expect(result.camera.up.y).toBeCloseTo(Math.cos(MAX_FOLLOW_PITCH), 5)
     expect(result.camera.up.z).toBeGreaterThan(0)
   })
+
+  it('keeps the auto-tour camera level while tracking terrain elevation', () => {
+    const controller = new FollowCameraController()
+    const follow = createCameraFollowState()
+    const camera = new THREE.PerspectiveCamera()
+    const anchor = new THREE.Vector3(2, 5, -3)
+
+    expect(controller.update({
+      follow,
+      placement: {
+        distance: 6,
+        heightOffset: 4,
+        targetLift: 0.5,
+        targetForward: 3,
+      },
+      anchorWorld: anchor,
+      desiredForwardWorld: new THREE.Vector3(0, 0, 1),
+      deltaSeconds: 0,
+      ctx: { camera },
+      tuning: createAutoTourFollowCameraTuning(),
+      immediate: true,
+    })).toBe(true)
+
+    expect(camera.up.distanceTo(new THREE.Vector3(0, 1, 0))).toBeLessThan(1e-6)
+    const initialCameraY = camera.position.y
+
+    expect(controller.update({
+      follow,
+      placement: {
+        distance: 6,
+        heightOffset: 4,
+        targetLift: 0.5,
+        targetForward: 3,
+      },
+      anchorWorld: anchor.clone().setY(8),
+      desiredForwardWorld: new THREE.Vector3(0, 0, 1),
+      deltaSeconds: 1 / 60,
+      ctx: { camera },
+      tuning: createAutoTourFollowCameraTuning(),
+    })).toBe(true)
+    expect(camera.position.y).toBeCloseTo(initialCameraY + 3, 5)
+  })
 })
 
 describe('stable auto-tour follow camera', () => {
