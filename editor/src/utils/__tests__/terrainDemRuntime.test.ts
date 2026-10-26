@@ -12,6 +12,7 @@ import {
   createDemTerrainMeshBuilder,
   createTerrainDemRuntimeOrthoTexture,
   sampleVisibleDemSurfaceHeightAt,
+  sampleVisibleDemSurfaceNormalAt,
 } from '@schema/proceduralLandscape/demTerrain'
 import {
   createDemRoadbedGeometry,
@@ -303,11 +304,26 @@ describe('DEM roadbed', () => {
     expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 5.5)).toBeCloseTo(9.95, 5)
     expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)!).toBeLessThanOrEqual(10)
 
+    const roadbedNormal = sampleVisibleDemSurfaceNormalAt(grid, roadbed, 0, 10, 0.5)
+    expect(roadbedNormal).not.toBeNull()
+    expect(roadbedNormal!.length()).toBeCloseTo(1, 6)
+    expect(roadbedNormal!.y).toBeGreaterThan(0)
+    expect(roadbedNormal!.z).toBeLessThan(-0.5)
+
     // Outside the generated roadbed, collision continues to follow the visible DEM.
     expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 20)).toBeCloseTo(
       grid.sampleHeight(0, 20)!,
       5,
     )
+    const outsideNormal = sampleVisibleDemSurfaceNormalAt(grid, roadbed, 0, 20, 0.5)
+    const rawOutsideNormal = new THREE.Vector3(
+      -(grid.sampleHeight(0.5, 20)! - grid.sampleHeight(-0.5, 20)!),
+      1,
+      -(grid.sampleHeight(0, 20.5)! - grid.sampleHeight(0, 19.5)!),
+    ).normalize()
+    expect(outsideNormal).not.toBeNull()
+    expect(rawOutsideNormal).not.toBeNull()
+    expect(outsideNormal!.distanceTo(rawOutsideNormal!)).toBeLessThan(1e-6)
   })
 
   it('keeps the carriageway flat and meets the raw terrain at the outer edge', () => {

@@ -6,6 +6,7 @@ import {
   clampAutoTourComponentProps,
   clampCharacterControllerComponentProps,
   clampGuideRouteComponentProps,
+  clampVehicleComponentProps,
   type GuideRouteComponentProps,
 } from '@schema/components'
 import { CharacterAutoTourRuntimeManager } from '@schema/characterAutoTourRuntime'
@@ -112,6 +113,38 @@ describe('GuideRoute V3 compiler', () => {
     expect(result.legs).toHaveLength(1)
     expect(result.points[0]?.y).toBeCloseTo(20)
     expect(result.points[result.points.length - 1]?.x).toBeCloseTo(12)
+  })
+
+  it('compiles provider-backed paths from the graded visible surface', () => {
+    surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
+      point: new THREE.Vector3(x, x < 6 ? 10 : 14, z),
+      normal: new THREE.Vector3(x < 6 ? 0 : -0.6, 1, 0).normalize(),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 7,
+    }))
+    const result = evaluateGuideRoute({
+      routeNode: createRouteNode(pathProps({
+        legs: [{
+          id: 'graded-path',
+          kind: 'path',
+          travelMode: 'vehicle',
+          speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 2.5 },
+          surfaceProviderNodeId: 'landscape-1',
+          preserveAuthoredY: false,
+          anchors: [
+            { x: 0, y: 100, z: 0 },
+            { x: 12, y: 100, z: 0 },
+          ],
+        }],
+      })),
+      providerObject: new THREE.Object3D(),
+    })
+
+    expect(result.status).toBe('ready')
+    expect(result.points[0]?.y).toBeCloseTo(10)
+    expect(result.points[result.points.length - 1]?.y).toBeCloseTo(14)
+    expect(result.normals[result.normals.length - 1]?.x).toBeLessThan(-0.4)
   })
 
   it('projects a stop onto its assigned leg and preserves its original anchor', () => {
@@ -240,6 +273,8 @@ describe('GuideRoute V3 compiler', () => {
     expect(window?.direction).toBe(-1)
     expect(window?.route.points[0]?.x).toBeCloseTo(8)
     expect(window?.route.points[window.route.points.length - 1]?.x).toBeCloseTo(4)
+    expect(window?.route.stops.map((stop) => stop.definition.id)).toEqual(['stop-1'])
+    expect(window?.route.stops[0]?.routeDistance).toBeCloseTo(4)
   })
 })
 
@@ -291,7 +326,166 @@ describe('GuideRoute V3 playback events', () => {
     return { routeNode, vehicleNode, vehicleObject, nodes, nodeObjectMap }
   }
 
-  it('pauses exactly at a projected stop and resumes from the same distance', () => {
+  it('keeps all vehicle support contacts on the graded provider surface', () => {
+    surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
+      point: new THREE.Vector3(x, 10 + z * 0.1, z),
+      normal: new THREE.Vector3(0, 1, -0.1).normalize(),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 1,
+    }))
+    const routeNode = createRouteNode(pathProps({
+      legs: [{
+        id: 'graded-path',
+        kind: 'path',
+        travelMode: 'vehicle',
+        speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 2.5 },
+        surfaceProviderNodeId: 'landscape-1',
+        preserveAuthoredY: false,
+        anchors: [
+          { x: 0, y: 100, z: 0 },
+          { x: 20, y: 100, z: 0 },
+        ],
+      }],
+    }))
+    const vehicleObject = new THREE.Group()
+    vehicleObject.add(new THREE.Mesh(new THREE.BoxGeometry(2, 1, 4)))
+    vehicleObject.position.set(0, 20, 0)
+    const vehicleNode = {
+      id: 'vehicle-graded',
+      name: 'Vehicle',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'auto-tour',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 8,
+          }),
+        },
+        vehicle: {
+          id: 'vehicle',
+          type: 'vehicle',
+          enabled: true,
+          props: clampVehicleComponentProps({
+            indexRightAxis: 0,
+            indexUpAxis: 1,
+            indexForwardAxis: 2,
+          }),
+        },
+      },
+    } as any
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [vehicleNode.id, vehicleNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [vehicleNode.id, vehicleObject],
+    ])
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => nodes.values(),
+      resolveNodeById: (nodeId) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+
+    runtime.startTour(vehicleNode.id)
+    runtime.update(0.5)
+    vehicleObject.updateMatrixWorld(true)
+
+    const halfRight = 1 * (1 - 0.15)
+    const halfForward = 2 * (1 - 0.15)
+    for (const rightSign of [-1, 1]) {
+      for (const forwardSign of [-1, 1]) {
+        const contact = new THREE.Vector3(
+          rightSign * halfRight,
+          -0.5,
+          forwardSign * halfForward,
+        ).applyMatrix4(vehicleObject.matrixWorld)
+        const clearance = contact.y - (10 + contact.z * 0.1)
+        expect(clearance).toBeCloseTo(0.04, 5)
+      }
+    }
+  })
+
+  it('keeps a character collider bottom on the graded provider surface', () => {
+    surfaceMocks.sample.mockImplementation((_nodeId: string, x: number, z: number) => ({
+      point: new THREE.Vector3(x, 10 + x * 0.2, z),
+      normal: new THREE.Vector3(-0.2, 1, 0).normalize(),
+      kind: 'terrain',
+      distanceToRoad: null,
+      revision: 1,
+    }))
+    const routeNode = createRouteNode(pathProps({
+      legs: [{
+        id: 'character-graded-path',
+        kind: 'path',
+        travelMode: 'character',
+        speedProfile: { cruiseSpeedMps: 2, lateralAccelLimitMps2: 2 },
+        surfaceProviderNodeId: 'landscape-1',
+        preserveAuthoredY: false,
+        anchors: [
+          { x: 0, y: 100, z: 0 },
+          { x: 20, y: 100, z: 0 },
+        ],
+      }],
+    }))
+    const characterObject = new THREE.Object3D()
+    characterObject.position.set(0, 20, 0)
+    const characterNode = {
+      id: 'character-graded',
+      name: 'Visitor',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'auto-tour',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 2,
+          }),
+        },
+        characterController: {
+          id: 'character-controller',
+          type: 'characterController',
+          enabled: true,
+          props: clampCharacterControllerComponentProps({
+            colliderRadius: 0.35,
+            colliderHeight: 1.8,
+            walkSpeed: 2,
+          }),
+        },
+      },
+    } as any
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [characterNode.id, characterNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [characterNode.id, characterObject],
+    ])
+    const runtime = new CharacterAutoTourRuntimeManager()
+    const host = {
+      iterNodes: () => nodes.entries(),
+      resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+    }
+
+    runtime.activate(characterNode.id)
+    runtime.refresh(host)
+    runtime.update(host, 0.25)
+
+    const expectedGroundY = 10 + characterObject.position.x * 0.2
+    expect(characterObject.position.y).toBeCloseTo(expectedGroundY + 0.57, 5)
+    expect(characterObject.position.y).toBeLessThan(20)
+  })
+
+  it('fires a non-target stop once and continues along the route', () => {
     const playback = createPlayback({
       stops: [
         {
@@ -305,9 +499,9 @@ describe('GuideRoute V3 playback events', () => {
       ],
     })
     let runtime: ReturnType<typeof createAutoTourRuntime> | null = null
-    const onGuideStop = vi.fn((nodeId: string) => {
-      expect(runtime?.isPaused(nodeId)).toBe(true)
-      expect(playback.vehicleObject.position.x).toBeCloseTo(4)
+    const onGuideStop = vi.fn((nodeId: string, _stop: unknown, context: { isTourTarget: boolean }) => {
+      expect(runtime?.isPaused(nodeId)).toBe(false)
+      expect(context.isTourTarget).toBe(false)
     })
     runtime = createAutoTourRuntime({
       iterNodes: () => playback.nodes.values(),
@@ -320,16 +514,7 @@ describe('GuideRoute V3 playback events', () => {
     runtime.update(1.1)
     runtime.update(1.1)
     expect(onGuideStop).toHaveBeenCalledTimes(1)
-    expect(runtime.isPaused(playback.vehicleNode.id)).toBe(true)
-    expect(playback.vehicleObject.position.x).toBeCloseTo(4)
-    const stoppedPosition = playback.vehicleObject.position.clone()
-    runtime.update(1)
-    expect(playback.vehicleObject.position.distanceTo(stoppedPosition)).toBeCloseTo(0)
-    expect(onGuideStop).toHaveBeenCalledTimes(1)
-
-    runtime.setPaused(playback.vehicleNode.id, false)
     expect(runtime.isPaused(playback.vehicleNode.id)).toBe(false)
-    runtime.update(0.6)
     expect(playback.vehicleObject.position.x).toBeGreaterThan(4)
     expect(onGuideStop).toHaveBeenCalledTimes(1)
   })
@@ -356,7 +541,7 @@ describe('GuideRoute V3 playback events', () => {
     expect(playback.vehicleObject.position.x).toBeGreaterThan(pausedFrom.x)
   })
 
-  it('pauses at a stop before reaching a later route transition', () => {
+  it('does not delay a later route transition for a non-target stop', () => {
     const playback = createPlayback({
       stops: [{
         id: 'early-stop',
@@ -389,12 +574,8 @@ describe('GuideRoute V3 playback events', () => {
     runtime.startTour(playback.vehicleNode.id)
     runtime.update(10)
     expect(onGuideStop).toHaveBeenCalledOnce()
-    expect(onGuideTransition).not.toHaveBeenCalled()
-    expect(playback.vehicleObject.position.x).toBeCloseTo(4)
-
-    runtime.setPaused(playback.vehicleNode.id, false)
-    runtime.update(10)
     expect(onGuideTransition).toHaveBeenCalledOnce()
+    expect(runtime.isPaused(playback.vehicleNode.id)).toBe(false)
   })
 
   it('keeps terminal completion behavior for routes without a stop', () => {
@@ -461,6 +642,202 @@ describe('GuideRoute V3 playback events', () => {
     expect(playback.vehicleNode.components.autoTour.props.routeNodeId).toBe('route-1')
   })
 
+  it('pauses at a targeted stop represented by a travel window', () => {
+    const playback = createPlayback({
+      stops: [{
+        id: 'target-stop',
+        name: 'Target stop',
+        thumbnailAssetId: null,
+        anchor: { x: 8, y: 20, z: 0 },
+        legId: 'path-1',
+        behavior: null,
+      }],
+    })
+    const target = {
+      routeNodeId: playback.routeNode.id,
+      destinationStopId: 'target-stop',
+    }
+    const onGuideStop = vi.fn((_nodeId: string, _stop: unknown, context: { isTourTarget: boolean }) => {
+      expect(context.isTourTarget).toBe(true)
+    })
+    const onTerminalStop = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onGuideStop,
+      onTerminalStop,
+    })
+    const snap = runtime.resolveRouteSnap(playback.vehicleNode.id, target)
+    expect(snap?.travelWindow).not.toBeNull()
+    runtime.startTour(playback.vehicleNode.id, target)
+    runtime.seedTourPlaybackState(playback.vehicleNode.id, snap!)
+    runtime.update(10)
+
+    expect(onGuideStop).toHaveBeenCalledOnce()
+    expect(onTerminalStop).not.toHaveBeenCalled()
+    expect(runtime.isPaused(playback.vehicleNode.id)).toBe(true)
+    expect(playback.vehicleObject.position.x).toBeCloseTo(8)
+
+    runtime.setPaused(playback.vehicleNode.id, false)
+    runtime.update(1)
+    expect(onTerminalStop).toHaveBeenCalledOnce()
+  })
+
+  it('fires intermediate stop behavior without delaying the selected destination', () => {
+    const playback = createPlayback({
+      stops: [
+        {
+          id: 'intermediate-stop',
+          name: 'Intermediate stop',
+          thumbnailAssetId: null,
+          anchor: { x: 4, y: 20, z: 0 },
+          legId: 'path-1',
+          behavior: null,
+        },
+        {
+          id: 'target-stop',
+          name: 'Target stop',
+          thumbnailAssetId: null,
+          anchor: { x: 8, y: 20, z: 0 },
+          legId: 'path-1',
+          behavior: null,
+        },
+      ],
+    })
+    const target = {
+      routeNodeId: playback.routeNode.id,
+      destinationStopId: 'target-stop',
+    }
+    const onGuideStop = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onGuideStop,
+    })
+    const snap = runtime.resolveRouteSnap(playback.vehicleNode.id, target)
+    runtime.startTour(playback.vehicleNode.id, target)
+    runtime.seedTourPlaybackState(playback.vehicleNode.id, snap!)
+    runtime.update(10)
+
+    expect(onGuideStop.mock.calls.map((call) => [call[1].definition.id, call[2].isTourTarget])).toEqual([
+      ['intermediate-stop', false],
+      ['target-stop', true],
+    ])
+    expect(playback.vehicleObject.position.x).toBeCloseTo(8)
+  })
+
+  it('holds a transition before a farther selected destination', () => {
+    const playback = createPlayback({
+      legs: [
+        {
+          id: 'path-1',
+          kind: 'path',
+          travelMode: 'vehicle',
+          speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 2.5 },
+          surfaceProviderNodeId: null,
+          preserveAuthoredY: true,
+          anchors: [
+            { x: 0, y: 20, z: 0 },
+            { x: 12, y: 20, z: 0 },
+          ],
+        },
+        {
+          id: 'path-2',
+          kind: 'path',
+          travelMode: 'character',
+          speedProfile: { cruiseSpeedMps: 2, lateralAccelLimitMps2: 2 },
+          surfaceProviderNodeId: null,
+          preserveAuthoredY: true,
+          anchors: [
+            { x: 12, y: 20, z: 0 },
+            { x: 18, y: 20, z: 0 },
+          ],
+        },
+      ],
+      stops: [{
+        id: 'target-stop',
+        name: 'Far target',
+        thumbnailAssetId: null,
+        anchor: { x: 16, y: 20, z: 0 },
+        legId: 'path-2',
+        behavior: null,
+      }],
+      transitions: [{
+        id: 'handoff',
+        afterLegId: 'path-1',
+        behavior: {
+          nodeId: 'parking',
+          sequenceId: 'switch-to-character',
+        },
+      }],
+    })
+    const target = {
+      routeNodeId: playback.routeNode.id,
+      destinationStopId: 'target-stop',
+    }
+    const onGuideStop = vi.fn()
+    const onGuideTransition = vi.fn()
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onGuideStop,
+      onGuideTransition,
+    })
+    const snap = runtime.resolveRouteSnap(playback.vehicleNode.id, target)
+    runtime.startTour(playback.vehicleNode.id, target)
+    runtime.seedTourPlaybackState(playback.vehicleNode.id, snap!)
+    runtime.update(10)
+
+    expect(onGuideTransition).toHaveBeenCalledOnce()
+    expect(onGuideStop).not.toHaveBeenCalled()
+    expect(playback.vehicleObject.position.x).toBeCloseTo(12)
+  })
+
+  it('lets the target-stop host exit auto-tour immediately at the stop pose', () => {
+    const playback = createPlayback({
+      stops: [{
+        id: 'target-stop',
+        name: 'Target stop',
+        thumbnailAssetId: null,
+        anchor: { x: 8, y: 20, z: 0 },
+        legId: 'path-1',
+        behavior: null,
+      }],
+    })
+    const target = {
+      routeNodeId: playback.routeNode.id,
+      destinationStopId: 'target-stop',
+    }
+    let runtime: ReturnType<typeof createAutoTourRuntime> | null = null
+    const onGuideStop = vi.fn((nodeId: string, _stop: unknown, context: { isTourTarget: boolean }) => {
+      expect(context.isTourTarget).toBe(true)
+      runtime?.stopTour(nodeId)
+    })
+    runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+      onGuideStop,
+    })
+    const snap = runtime.resolveRouteSnap(playback.vehicleNode.id, target)
+    runtime.startTour(playback.vehicleNode.id, target)
+    runtime.seedTourPlaybackState(playback.vehicleNode.id, snap!)
+    runtime.update(10)
+    const stoppedPosition = playback.vehicleObject.position.clone()
+    expect(stoppedPosition.x).toBeCloseTo(8)
+    expect(runtime.isTourActive(playback.vehicleNode.id)).toBe(false)
+
+    runtime.update(10)
+    expect(playback.vehicleObject.position.distanceTo(stoppedPosition)).toBeCloseTo(0)
+  })
+
   it('resets stop occurrence tracking after a route loop wraps', () => {
     const playback = createPlayback({
       loop: true,
@@ -485,7 +862,6 @@ describe('GuideRoute V3 playback events', () => {
     })
     runtime.startTour(playback.vehicleNode.id)
     for (let index = 0; index < 16; index += 1) {
-      runtime.setPaused(playback.vehicleNode.id, false)
       runtime.update(0.5)
     }
     expect(onGuideStop.mock.calls.length).toBeGreaterThanOrEqual(2)
@@ -585,12 +961,10 @@ describe('GuideRoute V3 playback events', () => {
       [routeNode.id, new THREE.Object3D()],
       [characterNode.id, characterObject],
     ])
-    let runtime: CharacterAutoTourRuntimeManager | null = null
-    const onGuideStop = vi.fn((nodeId: string) => {
-      expect(runtime?.getInput(nodeId)?.moveZ).toBe(0)
-      expect(characterObject.position.x).toBeCloseTo(4)
+    const onGuideStop = vi.fn((_nodeId: string, _stop: unknown, context: { isTourTarget: boolean }) => {
+      expect(context.isTourTarget).toBe(false)
     })
-    runtime = new CharacterAutoTourRuntimeManager()
+    const runtime = new CharacterAutoTourRuntimeManager()
     const host = {
       iterNodes: () => nodes.entries(),
       resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
@@ -603,13 +977,6 @@ describe('GuideRoute V3 playback events', () => {
       runtime.update(host, 0.25)
     }
     expect(onGuideStop).toHaveBeenCalledTimes(1)
-    expect(runtime.getInput(characterNode.id)?.moveZ).toBe(0)
-    const stoppedPosition = characterObject.position.clone()
-    runtime.update(host, 0.25)
-    expect(characterObject.position.distanceTo(stoppedPosition)).toBeCloseTo(0)
-
-    runtime.setPaused(characterNode.id, false)
-    runtime.update(host, 0.25)
     expect(runtime.getInput(characterNode.id)?.moveZ).toBeGreaterThan(0)
   })
 
@@ -630,14 +997,24 @@ describe('GuideRoute V3 playback events', () => {
           { x: 12, y: 20, z: 8 },
         ],
       }],
-      stops: [{
-        id: 'branch-target',
-        name: 'Branch target',
-        thumbnailAssetId: 'image',
-        anchor: { x: 8, y: 20, z: 8 },
-        legId: 'character-branch',
-        behavior: null,
-      }],
+      stops: [
+        {
+          id: 'branch-intermediate',
+          name: 'Branch intermediate',
+          thumbnailAssetId: 'image',
+          anchor: { x: 4, y: 20, z: 8 },
+          legId: 'character-branch',
+          behavior: null,
+        },
+        {
+          id: 'branch-target',
+          name: 'Branch target',
+          thumbnailAssetId: 'image',
+          anchor: { x: 8, y: 20, z: 8 },
+          legId: 'character-branch',
+          behavior: null,
+        },
+      ],
     }))
     branchRoute.id = 'branch-character-route'
     branchRoute.components.guideRoute.id = 'branch-character-component'
@@ -663,7 +1040,7 @@ describe('GuideRoute V3 playback events', () => {
       },
     } as any
     const characterObject = new THREE.Object3D()
-    characterObject.position.set(0, 20, 0)
+    characterObject.position.set(0, 20, 8)
     const nodes = new Map<string, any>([
       [defaultRoute.id, defaultRoute],
       [branchRoute.id, branchRoute],
@@ -675,10 +1052,12 @@ describe('GuideRoute V3 playback events', () => {
       [characterNode.id, characterObject],
     ])
     const runtime = new CharacterAutoTourRuntimeManager()
+    const onGuideStop = vi.fn()
     const host = {
       iterNodes: () => nodes.entries(),
       resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
       nodeObjectMap,
+      onGuideStop,
     }
     const target = {
       routeNodeId: branchRoute.id,
@@ -692,5 +1071,16 @@ describe('GuideRoute V3 playback events', () => {
     runtime.update(host, 0.25)
     expect(runtime.getInput(characterNode.id)?.moveZ).toBeGreaterThan(0)
     expect(characterNode.components.autoTour.props.routeNodeId).toBe(defaultRoute.id)
+    for (let index = 0; index < 24; index += 1) {
+      runtime.update(host, 0.25)
+    }
+    expect(onGuideStop.mock.calls.map((call) => [
+      call[1].definition.id,
+      call[2].isTourTarget,
+    ])).toEqual([
+      ['branch-intermediate', false],
+      ['branch-target', true],
+    ])
+    expect(runtime.getInput(characterNode.id)?.moveZ).toBe(0)
   })
 })

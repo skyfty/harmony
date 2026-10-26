@@ -21,8 +21,7 @@ import {
 import {
   evaluateGuideRoute,
   resolveGuideRoutePrimaryProviderNodeId,
-  sampleEvaluatedGuideRouteAtDistance,
-  type CompiledGuideStop,
+  type GuideRouteStopEventContext,
 } from './guideRouteRuntime'
 import {
   buildGuideRouteTravelWindow,
@@ -85,6 +84,7 @@ export type CharacterAutoTourRuntimeHost = {
   onGuideStop?: (
     nodeId: string,
     stop: NonNullable<ReturnType<typeof evaluateGuideRoute>['stops'][number]>,
+    context: GuideRouteStopEventContext,
   ) => void
   onGuideTransition?: (
     nodeId: string,
@@ -663,88 +663,18 @@ export class CharacterAutoTourRuntimeManager {
           && distance <= plannedRouteDistance + 1e-4
         )
       )
-      const reachedStops = !entry.travelWindow
-        ? routeData.evaluation.stops.filter((stop) => (
-          !entry.firedStopIds.has(stop.definition.id)
-          && crossesRouteDistance(stop.routeDistance)
-        ))
-        : []
-      const nextStop = reachedStops.reduce<CompiledGuideStop | null>((closest, stop) => (
-        !closest || stop.routeDistance < closest.routeDistance ? stop : closest
-      ), null)
-      const scheduledTransition = !entry.travelWindow
-        ? routeData.evaluation.transitions.find((transition) => (
-          !entry.firedTransitionIds.has(transition.definition.id)
-          && crossesRouteDistance(transition.routeDistance)
-        )) ?? null
-        : null
-      const stopPrecedesTransition = Boolean(
-        nextStop
-        && (
-          !scheduledTransition
-          || nextStop.routeDistance <= scheduledTransition.routeDistance + 1e-4
-        ),
-      )
-      if (stopPrecedesTransition && nextStop) {
-        const stopSample = sampleEvaluatedGuideRouteAtDistance(
-          routeData.evaluation,
-          nextStop.routeDistance,
-        )
-        if (stopSample) {
-          const tangentBefore = sampleEvaluatedGuideRouteAtDistance(
-            routeData.evaluation,
-            Math.max(0, nextStop.routeDistance - 0.5),
-          )
-          const tangentAfter = sampleEvaluatedGuideRouteAtDistance(
-            routeData.evaluation,
-            Math.min(routeData.evaluation.totalLength, nextStop.routeDistance + 0.5),
-          )
-          characterPathFollowDirection.copy(stopSample.point)
-          if (tangentBefore && tangentAfter) {
-            characterPathFollowDirection.copy(tangentAfter.point).sub(tangentBefore.point)
-          } else {
-            characterPathFollowDirection.set(1, 0, 0)
-          }
-          characterPathFollowDirection.y = 0
-          if (characterPathFollowDirection.lengthSq() <= 1e-8) {
-            characterPathFollowDirection.set(1, 0, 0)
-          } else {
-            characterPathFollowDirection.normalize()
-          }
-          entry.smoothedYaw = Math.atan2(
-            -characterPathFollowDirection.z,
-            characterPathFollowDirection.x,
-          ) + resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis)
-          entry.smoothedWorldPosition.copy(stopSample.point)
-          entry.smoothedWorldPosition.y = resolveCharacterSurfaceY(
-            routeData,
-            stopSample.point.x,
-            stopSample.point.z,
-            entry.smoothedYaw - resolveCharacterForwardAxisOffsetRadians(controllerProps.forwardAxis),
-            stopSample.point.y,
-          ) + groundOffsetY
-          entry.lastRouteDistance = nextStop.routeDistance
-          entry.smoothedSpeedMps = 0
-          entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
-          this.pausedNodeIds.add(nodeId)
-
-          const shouldApplyWorldTransform = host.shouldApplyWorldTransform?.(nodeId) ?? true
-          if (shouldApplyWorldTransform) {
-            characterPathFollowWorldQuaternion.setFromAxisAngle(characterPathFollowUp, entry.smoothedYaw)
-            applyWorldTransformToObject(object, entry.smoothedWorldPosition, characterPathFollowWorldQuaternion)
-            syncNodeTransformFromObject(node, object)
-            host.onNodeObjectTransformUpdated?.(nodeId, object)
-          }
-
-          for (const stop of reachedStops) {
-            if (Math.abs(stop.routeDistance - nextStop.routeDistance) > 1e-4) {
-              continue
-            }
-            entry.firedStopIds.add(stop.definition.id)
-            host.onGuideStop?.(nodeId, stop)
-          }
-          return
-        }
+      const reachedStops = routeData.evaluation.stops.filter((stop) => (
+        stop.definition.id !== entry.travelWindow?.destinationStopId
+        && !entry.firedStopIds.has(stop.definition.id)
+        && crossesRouteDistance(stop.routeDistance)
+      ))
+      const scheduledTransition = routeData.evaluation.transitions.find((transition) => (
+        !entry.firedTransitionIds.has(transition.definition.id)
+        && crossesRouteDistance(transition.routeDistance)
+      )) ?? null
+      for (const stop of reachedStops) {
+        entry.firedStopIds.add(stop.definition.id)
+        host.onGuideStop?.(nodeId, stop, { isTourTarget: false })
       }
 
       if (!activeLoop) {
@@ -755,12 +685,10 @@ export class CharacterAutoTourRuntimeManager {
         )
         const arrivalDistance = Math.max(0.35, Math.min(1.25, speedMps * 0.2))
         if (endDistance <= arrivalDistance) {
-          const endpointTransition = !entry.travelWindow
-            ? routeData.evaluation.transitions.find((transition) => (
-              !entry.firedTransitionIds.has(transition.definition.id)
-              && transition.routeDistance >= routeData.evaluation.totalLength - 0.1
-            )) ?? null
-            : null
+          const endpointTransition = routeData.evaluation.transitions.find((transition) => (
+            !entry.firedTransitionIds.has(transition.definition.id)
+            && transition.routeDistance >= routeData.evaluation.totalLength - 0.1
+          )) ?? null
           if (endpointTransition) {
             entry.firedTransitionIds.add(endpointTransition.definition.id)
             entry.pendingTransitionId = endpointTransition.definition.id
@@ -797,6 +725,19 @@ export class CharacterAutoTourRuntimeManager {
           }
 
           entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
+          const targetedDestinationStop = entry.travelWindow
+            ? routeData.evaluation.stops.find((stop) => (
+              stop.definition.id === entry.travelWindow!.destinationStopId
+              && !entry.firedStopIds.has(stop.definition.id)
+            )) ?? null
+            : null
+          if (targetedDestinationStop) {
+            entry.smoothedSpeedMps = 0
+            entry.firedStopIds.add(targetedDestinationStop.definition.id)
+            this.pausedNodeIds.add(nodeId)
+            host.onGuideStop?.(nodeId, targetedDestinationStop, { isTourTarget: true })
+            return
+          }
           this.deactivate(nodeId)
           host.onTourComplete?.(nodeId)
           return
@@ -884,12 +825,10 @@ export class CharacterAutoTourRuntimeManager {
         yaw: entry.smoothedYaw,
         locallyControlled: false,
       }
-      if (!entry.travelWindow) {
-        entry.lastRouteDistance = Math.min(
-          routeData.evaluation.totalLength,
-          sample.projection.s + actualStep,
-        )
-      }
+      entry.lastRouteDistance = Math.min(
+        routeData.evaluation.totalLength,
+        sample.projection.s + actualStep,
+      )
       if (scheduledTransition) {
         entry.firedTransitionIds.add(scheduledTransition.definition.id)
         entry.pendingTransitionId = scheduledTransition.definition.id

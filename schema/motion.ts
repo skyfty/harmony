@@ -15,6 +15,7 @@ export type {
   CompiledGuideTransition,
   EvaluatedGuideRoute,
   EvaluatedGuideRouteStatus,
+  GuideRouteStopEventContext,
 } from './guideRouteRuntime'
 export { AutoTourCameraAvoidanceController } from './autoTourCameraAvoidanceController'
 export { CharacterAutoTourRuntimeManager } from './characterAutoTourRuntime'
@@ -27,10 +28,14 @@ export type {
 export { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from './autoTourSync'
 export { createBridgeVehicleProxy } from './bridgeVehicleProxy'
 export {
+  applyCameraPoseTransition,
+  beginCameraPoseTransition,
   FollowCameraController,
   DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
   DEFAULT_BACK_FOLLOW_CAMERA_TUNING,
+  createAutoTourFollowCameraTuning,
   createBackFollowCameraTuning,
+  createCameraPoseTransitionState,
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
@@ -42,9 +47,10 @@ export {
   updateBackFollowCamera,
   resetCameraFollowState,
   resetFollowCameraMotionState,
+  resetCameraPoseTransitionState,
   updateMotionAwareFollowCamera,
 } from './followCameraController'
-export type { FollowCameraMotionState } from './followCameraController'
+export type { CameraPoseTransitionState, FollowCameraMotionState } from './followCameraController'
 export { updateVehicleSpeedAndApplyParkingHoldSafe, VEHICLE_PARKED_SPEED_EPSILON, VEHICLE_PARKING_HOLD_SPEED_EPSILON } from './vehicleParkingHold'
 export {
   createControlledNodeMotionRuntime,

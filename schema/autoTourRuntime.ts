@@ -17,6 +17,7 @@ import {
   type CompiledGuideStop,
   type CompiledGuideTransition,
   type EvaluatedGuideRoute,
+  type GuideRouteStopEventContext,
 } from './guideRouteRuntime'
 import {
   buildGuideRouteTravelWindow,
@@ -45,6 +46,7 @@ export type AutoTourRuntimeDeps = {
   onGuideStop?: (
     nodeId: string,
     stop: CompiledGuideStop,
+    context: GuideRouteStopEventContext,
   ) => void
   onGuideTransition?: (
     nodeId: string,
@@ -386,7 +388,9 @@ function resolveSupportedVehiclePose(params: {
       } else {
         forwardBase.normalize()
       }
-      const rightBase = new THREE.Vector3().crossVectors(forwardBase, WORLD_UP).normalize()
+      // Local +right in the vehicle quaternion is up x forward. Using
+      // forward x up here reverses the roll sign on cross-sloped terrain.
+      const rightBase = new THREE.Vector3().crossVectors(WORLD_UP, forwardBase).normalize()
       const supportNormal = WORLD_UP.clone()
         .addScaledVector(forwardBase, -pitchSlope)
         .addScaledVector(rightBase, -rollSlope)
@@ -434,9 +438,11 @@ function buildVehicleQuaternion(
     forward.copy(forwardWorld)
   }
   forward.normalize()
-  const right = new THREE.Vector3().crossVectors(forward, normal).normalize()
+  // Keep the declared vehicle right axis consistent with the same up x
+  // forward convention used when deriving roadbed roll.
+  const right = new THREE.Vector3().crossVectors(normal, forward).normalize()
   const up = right.lengthSq() > 1e-8
-    ? new THREE.Vector3().crossVectors(right, forward).normalize()
+    ? new THREE.Vector3().crossVectors(forward, right).normalize()
     : normal
   const axisIndices = [
     vehicleProps.indexRightAxis,
@@ -1035,33 +1041,32 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
           && eventDistance <= endDistance + 1e-4
         )
       )
-      const reachedStops = routeData.evaluation.stops.filter((stop) => (
+      const crossedStops = routeData.evaluation.stops.filter((stop) => (
         !state!.firedStopIds.has(stop.definition.id)
         && crosses(stop.routeDistance, eventRangeEnd)
-      ))
-      const nextStop = reachedStops.reduce<CompiledGuideStop | null>((closest, stop) => (
-        !closest || stop.routeDistance < closest.routeDistance ? stop : closest
-      ), null)
-      const nextTransition = routeData.evaluation.transitions.find((transition) => (
+      )).sort((left, right) => left.routeDistance - right.routeDistance)
+      const targetedDestinationStop = state.travelWindow
+        ? routeData.evaluation.stops.find((stop) => (
+          stop.definition.id === state!.travelWindow!.destinationStopId
+        )) ?? fullRouteData.evaluation.stops.find((stop) => (
+          stop.definition.id === state!.travelWindow!.destinationStopId
+        )) ?? null
+        : null
+      const crossedTransitions = routeData.evaluation.transitions.filter((transition) => (
         !state!.firedTransitionIds.has(transition.definition.id)
         && crosses(transition.routeDistance, eventRangeEnd)
-      )) ?? null
-      const stopPrecedesTransition = Boolean(
-        nextStop
-        && (
-          !nextTransition
-          || nextStop.routeDistance <= nextTransition.routeDistance + 1e-4
-        ),
+      )).sort((left, right) => left.routeDistance - right.routeDistance)
+      const transitionAtNextEvent = crossedTransitions[0] ?? null
+      const targetAtNextEvent = Boolean(
+        targetedDestinationStop
+        && crosses(totalLength, eventRangeEnd)
+        && !transitionAtNextEvent
       )
-      const stopsAtNextEvent = stopPrecedesTransition
-        ? reachedStops.filter((stop) => (
-          Math.abs(stop.routeDistance - nextStop!.routeDistance) <= 1e-4
-        ))
-        : []
-      const transitionAtNextEvent = stopPrecedesTransition ? null : nextTransition
-      const nextEventDistance = stopPrecedesTransition
-        ? nextStop!.routeDistance
-        : nextTransition?.routeDistance ?? Number.POSITIVE_INFINITY
+      const nextEventDistance = transitionAtNextEvent
+        ? transitionAtNextEvent.routeDistance
+        : targetAtNextEvent
+          ? totalLength
+          : Number.POSITIVE_INFINITY
       if (Number.isFinite(nextEventDistance)) {
         nextDistance = nextEventDistance
         wrapped = false
@@ -1146,16 +1151,23 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       syncNodeTransformFromObject(node, object)
       deps.onNodeObjectTransformUpdated?.(node.id, object)
 
-      if (stopsAtNextEvent.length) {
-        state.distanceAlongRoute = nextStop!.routeDistance
+      const reachedStops = crossedStops.filter((stop) => (
+        stop.definition.id !== targetedDestinationStop?.definition.id
+        && stop.routeDistance <= nextEventDistance + 1e-4
+      ))
+      for (const stop of reachedStops) {
+        if (state.firedStopIds.has(stop.definition.id)) {
+          continue
+        }
+        state.firedStopIds.add(stop.definition.id)
+        deps.onGuideStop?.(node.id, stop, { isTourTarget: false })
+      }
+      if (targetedDestinationStop && targetAtNextEvent) {
+        state.firedStopIds.add(targetedDestinationStop.definition.id)
+        state.distanceAlongRoute = totalLength
         state.smoothedSpeedMps = 0
         pausedTourNodes.add(node.id)
-      }
-      for (const stop of stopsAtNextEvent) {
-        state.firedStopIds.add(stop.definition.id)
-        deps.onGuideStop?.(node.id, stop)
-      }
-      if (stopsAtNextEvent.length) {
+        deps.onGuideStop?.(node.id, targetedDestinationStop, { isTourTarget: true })
         return
       }
       if (transitionAtNextEvent) {

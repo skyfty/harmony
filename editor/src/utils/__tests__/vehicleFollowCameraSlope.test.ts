@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import {
+  applyCameraPoseTransition,
+  beginCameraPoseTransition,
   createBackFollowCameraTuning,
+  createAutoTourFollowCameraTuning,
   createCameraFollowState,
+  createCameraPoseTransitionState,
   FollowCameraController,
   resolveGroundAlignedFollowForward,
 } from '@schema/followCameraController'
@@ -19,6 +23,7 @@ const MAX_FOLLOW_PITCH = THREE.MathUtils.degToRad(45)
 
 type VehicleCameraFixture = {
   controller: VehicleDriveController
+  bindings: VehicleDriveControllerBindings
   camera: THREE.PerspectiveCamera
   cameraFollowState: ReturnType<typeof createCameraFollowState>
   vehicleObject: THREE.Group
@@ -121,6 +126,7 @@ function createVehicleCameraFixture(): VehicleCameraFixture {
 
   return {
     controller: new VehicleDriveController(deps, bindings),
+    bindings,
     camera,
     cameraFollowState,
     vehicleObject,
@@ -205,6 +211,108 @@ function expectStableVehicleCameraComposition(
 }
 
 describe('vehicle follow camera slope alignment', () => {
+  it('reuses an existing valid vehicle and physics binding when entering manual drive', () => {
+    const vehicleObject = new THREE.Object3D()
+    vehicleObject.position.set(42, 12, -8)
+    const chassisBody = {
+      position: new THREE.Vector3(42, 12, -8),
+      quaternion: new THREE.Quaternion(),
+    }
+    const existingInstance = {
+      nodeId: 'vehicle',
+      vehicle: { chassisBody },
+      wheelCount: 4,
+      steerableWheelIndices: [0, 1],
+      axisRight: new THREE.Vector3(0, 0, 1),
+      axisUp: new THREE.Vector3(0, 1, 0),
+      axisForward: new THREE.Vector3(1, 0, 0),
+      axisRightIndex: 2 as const,
+      axisUpIndex: 1 as const,
+      axisForwardIndex: 0 as const,
+    }
+    const vehicleInstances = new Map<string, typeof existingInstance>([
+      ['vehicle', existingInstance],
+    ])
+    const rigidbodyInstances = new Map<string, {
+      body: typeof chassisBody
+      object: THREE.Object3D
+    }>([
+      ['vehicle', { body: chassisBody, object: vehicleObject }],
+    ])
+    let ensureCalls = 0
+    const deps = {
+      vehicleInstances,
+      rigidbodyInstances,
+      nodeObjectMap: new Map<string, THREE.Object3D>([['vehicle', vehicleObject]]),
+      resolveNodeById: (nodeId: string) => nodeId === 'vehicle'
+        ? { id: 'vehicle' }
+        : null,
+      resolveVehicleComponent: () => ({ props: {} }),
+      resolveRigidbodyComponent: () => ({ props: {} }),
+      isPhysicsEnabled: () => true,
+      ensureVehicleBindingForNode: () => {
+        ensureCalls += 1
+      },
+      normalizeNodeId: (nodeId: string | null | undefined) => nodeId ?? null,
+    } as unknown as VehicleDriveControllerDeps
+    const bindings = {
+      state: {},
+      inputFlags: {},
+      input: {},
+      uiOverride: { value: 'auto' },
+      promptBusy: { value: false },
+      exitBusy: { value: false },
+      cameraRestoreState: {},
+      cameraFollowState: createCameraFollowState(),
+      steeringKeyboardValue: { value: 0 },
+    } as unknown as VehicleDriveControllerBindings
+    const controller = new VehicleDriveController(deps, bindings)
+
+    const readiness = controller.prepareTarget('vehicle')
+    expect(readiness.success).toBe(true)
+    expect(ensureCalls).toBe(0)
+    expect(vehicleInstances.get('vehicle')).toBe(existingInstance)
+
+    vehicleInstances.delete('vehicle')
+    expect(controller.prepareTarget('vehicle').success).toBe(false)
+    expect(ensureCalls).toBe(1)
+  })
+
+  it('parks an active manual vehicle without leaving manual drive mode', () => {
+    const fixture = createVehicleCameraFixture()
+    fixture.bindings.input.throttle = 0.8
+    fixture.bindings.input.steering = -0.4
+    fixture.bindings.input.brake = 0
+    fixture.bindings.inputFlags.forward = true
+
+    expect(fixture.controller.parkAtCurrentPose()).toBe(true)
+    expect(fixture.bindings.state.active).toBe(true)
+    expect(fixture.bindings.state.nodeId).toBe('vehicle')
+    expect(fixture.bindings.input.throttle).toBe(0)
+    expect(fixture.bindings.input.steering).toBe(0)
+    expect(fixture.bindings.input.brake).toBe(0)
+    expect(fixture.bindings.inputFlags.forward).toBe(false)
+    const parkedPosition = fixture.vehicleObject.position.clone()
+    fixture.controller.applyForces(1)
+    expect(fixture.vehicleObject.position.distanceTo(parkedPosition)).toBe(0)
+
+    fixture.bindings.input.throttle = 0.5
+    fixture.bindings.inputFlags.forward = true
+    fixture.controller.applyForces(1)
+    expect(fixture.vehicleObject.position.distanceTo(parkedPosition)).toBeGreaterThan(0)
+
+    expect(fixture.controller.parkAtCurrentPose()).toBe(true)
+    const reverseStart = fixture.vehicleObject.position.clone()
+    fixture.bindings.input.steering = 0.35
+    fixture.controller.applyForces(1)
+    expect(fixture.vehicleObject.position.distanceTo(reverseStart)).toBe(0)
+
+    fixture.bindings.input.throttle = -0.5
+    fixture.bindings.inputFlags.backward = true
+    fixture.controller.applyForces(1)
+    expect(fixture.vehicleObject.position.distanceTo(reverseStart)).toBeGreaterThan(0)
+  })
+
   it('keeps vehicle cardinal axes isolated after a world-space transform', () => {
     const worldForward = resolveVehicleAxisVector(0)
       .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(
@@ -322,6 +430,84 @@ describe('follow camera forward pitch option', () => {
     expect(result.heading.y).toBeCloseTo(Math.sin(MAX_FOLLOW_PITCH), 5)
     expect(result.camera.up.y).toBeCloseTo(Math.cos(MAX_FOLLOW_PITCH), 5)
     expect(result.camera.up.z).toBeGreaterThan(0)
+  })
+})
+
+describe('stable auto-tour follow camera', () => {
+  it('keeps the same camera-anchor offset while speed changes', () => {
+    const controller = new FollowCameraController()
+    const follow = createCameraFollowState()
+    const camera = new THREE.PerspectiveCamera()
+    const anchor = new THREE.Vector3(4, 2, -3)
+    const forward = new THREE.Vector3(0, 0, 1)
+    const localOffset = new THREE.Vector3(0, CAMERA_FOLLOW_HEIGHT, -CAMERA_FOLLOW_DISTANCE)
+    const tuning = createAutoTourFollowCameraTuning()
+
+    for (const velocity of [
+      new THREE.Vector3(0, 0, 12),
+      new THREE.Vector3(0, 0, 4),
+      new THREE.Vector3(0, 0, 0),
+    ]) {
+      expect(controller.update({
+        follow,
+        placement: {
+          distance: CAMERA_FOLLOW_DISTANCE,
+          heightOffset: CAMERA_FOLLOW_HEIGHT,
+          targetLift: 0.5,
+          targetForward: 3,
+        },
+        anchorWorld: anchor,
+        desiredForwardWorld: forward,
+        velocityWorld: velocity,
+        deltaSeconds: 1 / 60,
+        ctx: { camera },
+        immediate: !follow.initialized,
+        localOffsetOverride: localOffset,
+        lockLocalOffset: true,
+        tuning,
+      })).toBe(true)
+
+      expect(camera.position.x).toBeCloseTo(anchor.x, 6)
+      expect(camera.position.y).toBeCloseTo(anchor.y + CAMERA_FOLLOW_HEIGHT, 6)
+      expect(camera.position.z).toBeCloseTo(anchor.z - CAMERA_FOLLOW_DISTANCE, 6)
+      expect(follow.lookaheadOffset.lengthSq()).toBe(0)
+      expect(follow.motionDistanceBlend).toBe(0)
+    }
+  })
+
+  it('eases a camera-owner handoff from the captured pose to the new follow pose', () => {
+    const transition = createCameraPoseTransitionState(0.28)
+    const camera = new THREE.PerspectiveCamera()
+    const startPosition = new THREE.Vector3(3, 8, 12)
+    const startTarget = new THREE.Vector3(3, 2, 2)
+    const endPosition = new THREE.Vector3(5, 7, 10)
+    const endTarget = new THREE.Vector3(5, 2, 0)
+    const controls = { target: new THREE.Vector3() }
+
+    camera.position.copy(startPosition)
+    camera.lookAt(startTarget)
+    beginCameraPoseTransition(transition, startPosition, startTarget)
+
+    camera.position.copy(endPosition)
+    camera.lookAt(endTarget)
+    expect(applyCameraPoseTransition(
+      transition,
+      camera,
+      endTarget,
+      1 / 60,
+      controls,
+    )).toBe(true)
+    expect(camera.position.distanceTo(startPosition)).toBeLessThan(0.25)
+
+    for (let frame = 1; frame < 17; frame += 1) {
+      camera.position.copy(endPosition)
+      camera.lookAt(endTarget)
+      applyCameraPoseTransition(transition, camera, endTarget, 1 / 60, controls)
+    }
+
+    expect(transition.active).toBe(false)
+    expect(camera.position.distanceTo(endPosition)).toBeLessThan(1e-6)
+    expect(controls.target.distanceTo(endTarget)).toBeLessThan(1e-6)
   })
 })
 

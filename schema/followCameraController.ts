@@ -156,6 +156,112 @@ export function createBackFollowCameraTuning(overrides: Partial<CameraFollowTuni
   }
 }
 
+/**
+ * Auto tours are scripted, so their framing should not expand or contract with
+ * instantaneous speed. Keep orientation and look-target smoothing, but follow
+ * the anchor rigidly with no speed boost or look-ahead translation.
+ */
+export function createAutoTourFollowCameraTuning(
+  overrides: Partial<CameraFollowTuning> = {},
+): Partial<CameraFollowTuning> {
+  return createBackFollowCameraTuning({
+    targetLerpSpeed: 6,
+    headingLerpSpeed: 2.4,
+    positionLerpSpeed: 0,
+    anchorLerpSpeed: 0,
+    lookaheadTime: 0,
+    lookaheadDistanceMax: 0,
+    lookaheadBlendSpeed: 0,
+    motionDistanceBoost: 0,
+    motionHeightBoost: 0,
+    ...overrides,
+  })
+}
+
+export type CameraPoseTransitionState = {
+  active: boolean
+  elapsedSeconds: number
+  durationSeconds: number
+  startPosition: THREE.Vector3
+  startTarget: THREE.Vector3
+  currentPosition: THREE.Vector3
+  currentTarget: THREE.Vector3
+}
+
+export function createCameraPoseTransitionState(durationSeconds = 0.28): CameraPoseTransitionState {
+  return {
+    active: false,
+    elapsedSeconds: 0,
+    durationSeconds: Math.max(0, Number.isFinite(durationSeconds) ? durationSeconds : 0),
+    startPosition: new THREE.Vector3(),
+    startTarget: new THREE.Vector3(),
+    currentPosition: new THREE.Vector3(),
+    currentTarget: new THREE.Vector3(),
+  }
+}
+
+export function resetCameraPoseTransitionState(state: CameraPoseTransitionState): void {
+  state.active = false
+  state.elapsedSeconds = 0
+  state.startPosition.set(0, 0, 0)
+  state.startTarget.set(0, 0, 0)
+  state.currentPosition.set(0, 0, 0)
+  state.currentTarget.set(0, 0, 0)
+}
+
+export function beginCameraPoseTransition(
+  state: CameraPoseTransitionState,
+  startPosition: THREE.Vector3,
+  startTarget: THREE.Vector3,
+): void {
+  state.startPosition.copy(startPosition)
+  state.startTarget.copy(startTarget)
+  state.currentPosition.copy(startPosition)
+  state.currentTarget.copy(startTarget)
+  state.elapsedSeconds = 0
+  state.active = true
+}
+
+/**
+ * Blends from a pose captured before a camera-owner handoff toward the pose
+ * produced by the new follow camera for the current frame.
+ */
+export function applyCameraPoseTransition(
+  state: CameraPoseTransitionState,
+  camera: THREE.PerspectiveCamera | null,
+  endTarget: THREE.Vector3,
+  deltaSeconds: number,
+  mapControls?: { target: THREE.Vector3 } | null,
+): boolean {
+  if (!state.active || !camera) {
+    return false
+  }
+  if (state.durationSeconds <= 0) {
+    resetCameraPoseTransitionState(state)
+    return false
+  }
+
+  state.elapsedSeconds = Math.min(
+    state.durationSeconds,
+    state.elapsedSeconds + Math.max(0, Number.isFinite(deltaSeconds) ? deltaSeconds : 0),
+  )
+  const progress = state.elapsedSeconds / state.durationSeconds
+  const eased = progress * progress * (3 - 2 * progress)
+  state.currentPosition.lerpVectors(state.startPosition, camera.position, eased)
+  state.currentTarget.lerpVectors(state.startTarget, endTarget, eased)
+  camera.position.copy(state.currentPosition)
+  camera.lookAt(state.currentTarget)
+  if (mapControls) {
+    mapControls.target.copy(state.currentTarget)
+  }
+
+  if (progress >= 1) {
+    state.active = false
+    state.elapsedSeconds = 0
+  }
+  return true
+}
+
 export function resolveBackFollowCameraLocalOffset(target: THREE.Vector3, distance: number, height: number): THREE.Vector3 {
   return target.set(0, height, -distance)
 }

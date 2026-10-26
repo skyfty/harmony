@@ -269,51 +269,6 @@
       >
         <text class="viewer-vehicle-intro-banner__text">出发！</text>
       </view>
-      <button
-        v-if="floatingAutoTourButton.visible && !watchExclusiveUiActive"
-        class="viewer-auto-tour-trigger"
-        :class="{
-          'is-active': floatingAutoTourButton.active,
-          'is-busy': floatingAutoTourButton.busy,
-        }"
-        :style="floatingAutoTourButtonStyle"
-        :disabled="floatingAutoTourButton.disabled"
-        type="button"
-        hover-class="none"
-        :aria-label="floatingAutoTourButton.label"
-        :aria-pressed="floatingAutoTourButton.active"
-        @tap="handleFloatingAutoTourTap"
-      >
-        <view class="viewer-auto-tour-trigger__icon viewer-auto-tour-route-icon" aria-hidden="true">
-          <view class="viewer-auto-tour-route-icon__dot viewer-auto-tour-route-icon__dot--start"></view>
-          <view class="viewer-auto-tour-route-icon__line"></view>
-          <view class="viewer-auto-tour-route-icon__dot viewer-auto-tour-route-icon__dot--end"></view>
-        </view>
-      </button>
-      <button
-        v-if="floatingAutoTourPauseButton.visible && !watchExclusiveUiActive"
-        class="viewer-auto-tour-trigger viewer-auto-tour-trigger--secondary"
-        :class="{
-          'is-active': floatingAutoTourPauseButton.pressed,
-          'is-busy': floatingAutoTourPauseButton.busy,
-        }"
-        :style="floatingAutoTourPauseButtonStyle"
-        :disabled="floatingAutoTourPauseButton.disabled"
-        type="button"
-        hover-class="none"
-        :aria-label="floatingAutoTourPauseButton.label"
-        :aria-pressed="floatingAutoTourPauseButton.pressed"
-        @tap="handleFloatingAutoTourPauseToggleTap"
-      >
-        <view
-          class="viewer-auto-tour-pause-icon"
-          :class="{ 'is-play': floatingAutoTourPauseButton.pressed }"
-          aria-hidden="true"
-        >
-          <view class="viewer-auto-tour-pause-icon__bar"></view>
-          <view class="viewer-auto-tour-pause-icon__bar"></view>
-        </view>
-      </button>
       <view v-if="punchBadgeOverlayEntries.length" class="viewer-punch-badge-layer" aria-hidden="true">
         <view
           v-for="entry in punchBadgeOverlayEntries"
@@ -1204,9 +1159,13 @@ import type {
   VehicleDriveVehicle,
 } from '@harmony/schema/motion';
 import {
+  applyCameraPoseTransition,
+  beginCameraPoseTransition,
+  createAutoTourFollowCameraTuning,
   FollowCameraController,
   DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
   createBackFollowCameraTuning,
+  createCameraPoseTransitionState,
   computeFollowLerpAlpha,
   computeFollowPlacement,
   createCameraFollowState,
@@ -1216,6 +1175,7 @@ import {
   resolveGroundAlignedFollowForward,
   resetCameraFollowState,
   resetFollowCameraMotionState,
+  resetCameraPoseTransitionState,
   updateBackFollowCamera,
 } from '@harmony/schema/motion';
 import type { FollowCameraMotionState, CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
@@ -3048,6 +3008,7 @@ let sceneryGroundCollisionBridgeMutationEpoch = 0;
 let sceneryGroundCollisionNextRuntimeId = 0x71000000;
 const sceneryGroundCollisionRuntimeBodyIds = new Set<number>();
 const sceneryGroundCollisionReferencePositions: THREE.Vector3[] = [];
+const forcedSceneryGroundCollisionReferenceNodeIds = new Set<string>();
 const lastSceneryGroundCollisionReferencePositions: THREE.Vector3[] = [];
 const SCENERY_GROUND_COLLISION_REFERENCE_SAMPLE_INTERVAL_SECONDS = 0.05;
 let sceneryGroundCollisionReferenceInitialized = false;
@@ -3386,16 +3347,6 @@ function resolveCharacterControllerAncestorNodeId(nodeId: string | null): string
   return null;
 }
 
-function resolveCharacterAutoTourAncestorNodeId(nodeId: string | null): string | null {
-  const characterNodeId = resolveCharacterControllerAncestorNodeId(nodeId);
-  if (!characterNodeId) {
-    return null;
-  }
-  return resolveAutoTourComponent(resolveNodeById(characterNodeId))?.props?.routeNodeId
-    ? characterNodeId
-    : null;
-}
-
 function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): void {
   const target = object ?? nodeObjectMap.get(nodeId);
   if (!target) {
@@ -3508,6 +3459,7 @@ type VehicleWheelBinding = {
   spinAngle: number;
   lastSteeringAngle: number;
   baseQuaternion: THREE.Quaternion;
+  pausedQuaternion: THREE.Quaternion | null;
   basePosition: THREE.Vector3;
   baseScale: THREE.Vector3;
 };
@@ -3651,15 +3603,6 @@ const punchSummaryTopOffset = computed(() => {
 
 const punchSummaryStyle = computed(() => ({
   top: `${punchSummaryTopOffset.value}px`,
-}));
-
-const floatingAutoTourButtonStyle = computed(() => ({
-  top: `${punchSummaryTopOffset.value}px`,
-}));
-
-const floatingAutoTourPauseButtonStyle = computed(() => ({
-  top: 'auto',
-  bottom: 'calc(22px + var(--viewer-safe-area-bottom, 0px))',
 }));
 
 const viewerEnvironmentControlsStyle = computed(() => ({
@@ -4340,7 +4283,6 @@ const guideWaypointMenuOpen = ref(false);
 const guideWaypointMenuLoading = ref(false);
 const guideWaypointMenuItems = ref<GuideWaypointMenuItem[]>([]);
 const guideWaypointMenuContextRevision = ref(0);
-let guideWaypointPendingTarget: GuideRouteTourTargetOptions | null = null;
 const guideWaypointMenuActorNodeId = computed(() => {
   guideWaypointMenuContextRevision.value;
   return resolveGuideWaypointActorNodeId();
@@ -4359,6 +4301,12 @@ const characterPlayerControlNodeIdOverride = ref<string | null>(null);
 type SceneryVehicleDriveEvent = Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>;
 let pendingAutoTourManualDriveNodeId: string | null = null;
 let pendingAutoTourManualDriveSourceEvent: SceneryVehicleDriveEvent | null = null;
+let pendingAutoTourManualDriveParkAtTarget = false;
+let pendingAutoTourTargetTakeoverNodeId: string | null = null;
+type AutoTourTargetPose = {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+};
 type ManualDrivePoseHandoff = {
   nodeId: string;
   worldPosition: THREE.Vector3;
@@ -4370,8 +4318,7 @@ let manualDrivePoseHandoff: ManualDrivePoseHandoff | null = null;
 // Auto-tour pause only affects auto-tour playback and vehicles driven by auto-tour.
 // It does NOT change manual driving (`vehicleDriveActive`) behavior or global playback.
 const autoTourPaused = ref(false);
-const autoTourPausedIsTerminal = ref(false);
-const autoTourPausedNodeId = ref<string | null>(null);
+const targetStopHeldVehicleNodeId = ref<string | null>(null);
 
 const autoTourFollowNodeId = ref<string | null>(null);
 const autoTourCameraFollowState = createCameraFollowState();
@@ -4391,22 +4338,9 @@ const autoTourCameraObjectMetricsByNodeId = new Map<string, {
   height: number;
   length: number;
 }>();
-const AUTO_TOUR_CAMERA_DISTANCE_PER_MPS = 0.18;
-const AUTO_TOUR_CAMERA_HEIGHT_PER_MPS = 0.06;
-const AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M = 1.2;
-const AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M = 0.45;
-const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createBackFollowCameraTuning({
-  positionLerpSpeed: 4.2,
-  targetLerpSpeed: 6,
-  headingLerpSpeed: 2.4,
-  anchorLerpSpeed: 8,
-  lookaheadTime: 0.3,
-  lookaheadDistanceMax: 2,
-  lookaheadMinSpeedSq: 0.25,
-  lookaheadBlendStart: 0.5,
-  lookaheadBlendSpeed: 1.5,
-});
+const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createAutoTourFollowCameraTuning();
 const AUTO_TOUR_RESUME_BLEND_SECONDS = 0.28;
+const vehicleDriveCameraHandoff = createCameraPoseTransitionState();
 const autoTourPausedCameraPosition = new THREE.Vector3();
 const autoTourPausedCameraTarget = new THREE.Vector3();
 let autoTourPausedCameraSnapshotValid = false;
@@ -5187,6 +5121,7 @@ watch(
 
 watch(vehicleDriveActive, (active) => {
   if (!active) {
+    releaseTargetStopVehicleHold();
     if (activeManualAuthorityNodeId) {
       vehicleMotionAuthority.endManualPhysics(activeManualAuthorityNodeId);
       activeManualAuthorityNodeId = null;
@@ -8061,21 +7996,7 @@ function advanceCameraOffsetOverrides(deltaSeconds: number): void {
   });
 }
 
-function resolveCinematicFollowDistance(distance: number, speedMps: number): number {
-  return distance + Math.min(
-    AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M,
-    Math.max(0, speedMps) * AUTO_TOUR_CAMERA_DISTANCE_PER_MPS,
-  );
-}
-
-function resolveCinematicFollowHeight(height: number, speedMps: number): number {
-  return height + Math.min(
-    AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M,
-    Math.max(0, speedMps) * AUTO_TOUR_CAMERA_HEIGHT_PER_MPS,
-  );
-}
-
-function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.Vector3 | null {
+function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null {
   const node = resolveNodeById(nodeId);
   if (!node) {
     return null;
@@ -8084,8 +8005,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.
   if (override) {
     return resolveBackFollowCameraLocalOffset(
       autoTourCameraFollowOffsetScratch,
-      resolveCinematicFollowDistance(override.distance, speedMps),
-      resolveCinematicFollowHeight(override.height, speedMps),
+      override.distance,
+      override.height,
     );
   }
   const vehicleComponent = resolveVehicleComponent(node);
@@ -8093,8 +8014,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.
     const props = clampVehicleComponentProps(vehicleComponent.props ?? null);
     return resolveBackFollowCameraLocalOffset(
       autoTourCameraFollowOffsetScratch,
-      resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
-      resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
+      props.cameraFollowDistance,
+      props.cameraFollowHeight,
     );
   }
   const characterComponent = resolveCharacterControllerComponent(node);
@@ -8102,8 +8023,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.
     const props = clampCharacterControllerComponentProps(characterComponent.props ?? null);
     return resolveBackFollowCameraLocalOffset(
       autoTourCameraFollowOffsetScratch,
-      resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
-      resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
+      props.cameraFollowDistance,
+      props.cameraFollowHeight,
     );
   }
   return null;
@@ -8680,17 +8601,18 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
       syncInstancedTransform(object);
     },
     onTourComplete: handleCharacterAutoTourComplete,
-    onGuideStop: (nodeId, stop) => {
-      pauseAutoTourAtGuideStop(nodeId);
-      if (!stop.behavior) {
-        return;
+    onGuideStop: (nodeId, stop, context) => {
+      if (stop.behavior) {
+        processBehaviorEvents(triggerBehaviorAction(
+          stop.behavior.nodeId,
+          'perform',
+          { payload: { routeEvent: stop.definition.id } },
+          { sequenceId: stop.behavior.sequenceId },
+        ));
       }
-      processBehaviorEvents(triggerBehaviorAction(
-        stop.behavior.nodeId,
-        'perform',
-        { payload: { routeEvent: stop.definition.id } },
-        { sequenceId: stop.behavior.sequenceId },
-      ));
+      if (context.isTourTarget && activeCharacterAutoTourNodeIds.has(nodeId)) {
+        void completeAutoTourTargetManualDriveTakeover(nodeId);
+      }
     },
     onGuideTransition: (nodeId, transition) => {
       pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
@@ -8745,17 +8667,18 @@ function updateCharacterPathFollow(deltaSeconds: number): void {
       syncInstancedTransform(object);
     },
     onTourComplete: handleCharacterAutoTourComplete,
-    onGuideStop: (nodeId, stop) => {
-      pauseAutoTourAtGuideStop(nodeId);
-      if (!stop.behavior) {
-        return;
+    onGuideStop: (nodeId, stop, context) => {
+      if (stop.behavior) {
+        processBehaviorEvents(triggerBehaviorAction(
+          stop.behavior.nodeId,
+          'perform',
+          { payload: { routeEvent: stop.definition.id } },
+          { sequenceId: stop.behavior.sequenceId },
+        ));
       }
-      processBehaviorEvents(triggerBehaviorAction(
-        stop.behavior.nodeId,
-        'perform',
-        { payload: { routeEvent: stop.definition.id } },
-        { sequenceId: stop.behavior.sequenceId },
-      ));
+      if (context.isTourTarget && activeCharacterAutoTourNodeIds.has(nodeId)) {
+        void completeAutoTourTargetManualDriveTakeover(nodeId);
+      }
     },
     onGuideTransition: (nodeId, transition) => {
       pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
@@ -10378,41 +10301,6 @@ function guideWaypointTravelModeLabel(item: GuideWaypointMenuItem): string {
     : `${item.routeName} · 将切换到 ${targetLabel}`;
 }
 
-const floatingAutoTourButton = computed(() => {
-  guideWaypointMenuContextRevision.value;
-  const context = resolveFloatingAutoTourContext();
-  const active = context.nodeId
-    ? activeAutoTourNodeIds.has(context.nodeId) || activeCharacterAutoTourNodeIds.has(context.nodeId)
-    : false;
-  const busy = vehicleDrivePromptBusy.value;
-  return {
-    visible: Boolean(context.nodeId),
-    nodeId: context.nodeId,
-    event: context.event,
-    active,
-    busy,
-    disabled: busy,
-    label: active ? '结束导览' : '自动导览',
-  } as const;
-});
-
-const floatingAutoTourPauseButton = computed(() => {
-  guideWaypointMenuContextRevision.value;
-  const context = resolveFloatingAutoTourContext();
-  const active = context.nodeId
-    ? activeAutoTourNodeIds.has(context.nodeId) || activeCharacterAutoTourNodeIds.has(context.nodeId)
-    : false;
-  const busy = vehicleDrivePromptBusy.value;
-  return {
-    visible: active,
-    nodeId: context.nodeId,
-    busy,
-    disabled: busy,
-    pressed: autoTourPaused.value,
-    label: autoTourPaused.value ? '继续导览' : '暂停导览',
-  } as const;
-});
-
 const autoTourRuntime = createAutoTourRuntime({
   iterNodes: () => previewNodeMap.values(),
   resolveNodeById,
@@ -10426,20 +10314,26 @@ const autoTourRuntime = createAutoTourRuntime({
     if (!nodeId) {
       return;
     }
-    pendingAutoTourManualDriveNodeId = nodeId;
-    pendingAutoTourManualDriveSourceEvent = activeVehicleDriveEvent.value;
-  },
-  onGuideStop: (nodeId, stop) => {
-    pauseAutoTourAtGuideStop(nodeId);
-    if (!stop.behavior) {
-      return;
+    if (!vehicleDriveActive.value) {
+      void completeAutoTourTargetManualDriveTakeover(nodeId);
     }
-    processBehaviorEvents(triggerBehaviorAction(
-      stop.behavior.nodeId,
-      'perform',
-      { payload: { routeEvent: stop.definition.id } },
-      { sequenceId: stop.behavior.sequenceId },
-    ));
+  },
+  onGuideStop: (nodeId, stop, context) => {
+    if (stop.behavior) {
+      processBehaviorEvents(triggerBehaviorAction(
+        stop.behavior.nodeId,
+        'perform',
+        { payload: { routeEvent: stop.definition.id } },
+        { sequenceId: stop.behavior.sequenceId },
+      ));
+    }
+    if (
+      context.isTourTarget
+      && activeAutoTourNodeIds.has(nodeId)
+      && !vehicleDriveActive.value
+    ) {
+      void completeAutoTourTargetManualDriveTakeover(nodeId);
+    }
   },
   onGuideTransition: (nodeId, transition) => {
     pendingGuideTransitionAutoTourNodes.set(transition.behavior.sequenceId, {
@@ -10611,6 +10505,8 @@ function clearLegacyPhysicsWorld(): void {
   pendingVehicleDriveEvent.value = null;
   pendingAutoTourManualDriveNodeId = null;
   pendingAutoTourManualDriveSourceEvent = null;
+  pendingAutoTourManualDriveParkAtTarget = false;
+  pendingAutoTourTargetTakeoverNodeId = null;
   clearManualDrivePoseHandoff();
   vehicleDrivePromptBusy.value = false;
   vehicleDriveExitBusy.value = false;
@@ -10698,20 +10594,79 @@ function resolveSceneryCompiledGroundTileLoader(): ((record: { path: string }) =
   };
 }
 
+function appendSceneryGroundCollisionReferencePosition(
+  targetPositions: THREE.Vector3[],
+  position: THREE.Vector3,
+): void {
+  if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+    return;
+  }
+  const alreadyCovered = targetPositions.some((candidate) => (
+    (candidate.x - position.x) ** 2 + (candidate.z - position.z) ** 2 <= 0.25
+  ));
+  if (!alreadyCovered) {
+    targetPositions.push(position.clone());
+  }
+}
+
+function appendSceneryGroundCollisionReferencePositionForNode(
+  targetPositions: THREE.Vector3[],
+  nodeId: string | null | undefined,
+): void {
+  const normalizedNodeId = typeof nodeId === 'string' ? nodeId.trim() : '';
+  if (!normalizedNodeId) {
+    return;
+  }
+  const object = nodeObjectMap.get(normalizedNodeId) ?? null;
+  if (!object) {
+    return;
+  }
+  object.updateMatrixWorld(true);
+  appendSceneryGroundCollisionReferencePosition(
+    targetPositions,
+    object.getWorldPosition(new THREE.Vector3()),
+  );
+}
+
 function resolveSceneryGroundCollisionReferenceWorld(
   camera: THREE.Camera | null | undefined,
   targetPositions: THREE.Vector3[],
 ): boolean {
   void camera;
   targetPositions.length = 0;
+  const actorNodeIds = new Set<string>(forcedSceneryGroundCollisionReferenceNodeIds);
+  if (vehicleDriveActive.value) {
+    if (vehicleDriveNodeId.value) {
+      actorNodeIds.add(vehicleDriveNodeId.value);
+    }
+  } else if (activeAutoTourNodeIds.size > 0) {
+    activeAutoTourNodeIds.forEach((nodeId) => {
+      actorNodeIds.add(nodeId);
+    });
+  } else if (activeCharacterAutoTourNodeIds.size > 0) {
+    activeCharacterAutoTourNodeIds.forEach((nodeId) => {
+      actorNodeIds.add(nodeId);
+    });
+  } else {
+    const characterNodeId = characterPlayerControlNodeIdOverride.value
+      ?? resolveDefaultControlledCharacterNodeId();
+    if (characterNodeId) {
+      actorNodeIds.add(characterNodeId);
+    }
+  }
+  actorNodeIds.forEach((nodeId) => {
+    appendSceneryGroundCollisionReferencePositionForNode(targetPositions, nodeId);
+  });
   const targets = collectGroundAnchorWorldTargets({
     document: currentDocument,
     resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
     runtimeRoots: sceneGraphRoot,
   });
-  targetPositions.push(...targets
+  targets
     .filter((target) => !target.nodeId || vehicleMotionAuthority.shouldIncludeGroundAnchor(target.nodeId))
-    .map((target) => target.position));
+    .forEach((target) => {
+      appendSceneryGroundCollisionReferencePosition(targetPositions, target.position);
+    });
   return targetPositions.length > 0;
 }
 
@@ -10902,6 +10857,85 @@ async function bootstrapSceneryMeshCollisionRuntime(
     }
   }
   await flushSceneryGroundCollisionBridgeMutations();
+}
+
+async function ensureSceneryGroundCollisionCoverageForNodes(
+  nodeIds: readonly (string | null | undefined)[],
+): Promise<boolean> {
+  const document = currentDocument;
+  if (!document || !physicsBridgeSceneLoaded || !physicsEnvironmentEnabled.value) {
+    return false;
+  }
+  const normalizedNodeIds = nodeIds
+    .map((nodeId) => (typeof nodeId === 'string' ? nodeId.trim() : ''))
+    .filter((nodeId) => nodeId.length > 0);
+  if (!normalizedNodeIds.length) {
+    return false;
+  }
+  normalizedNodeIds.forEach((nodeId) => {
+    forcedSceneryGroundCollisionReferenceNodeIds.add(nodeId);
+  });
+  const references: THREE.Vector3[] = [];
+  try {
+    if (!resolveSceneryGroundCollisionReferenceWorld(renderContext?.camera ?? null, references)) {
+      return false;
+    }
+    syncSceneryGroundCollisionReferencePositions(references, sceneryGroundCollisionReferencePositions);
+    sceneryGroundCollisionReferenceInitialized = false;
+
+    const wasCollisionBootstrapPending = physicsBridgeCollisionBootstrapPending;
+    physicsBridgeCollisionBootstrapPending = true;
+    try {
+      syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
+      await bootstrapSceneryMeshCollisionRuntime(
+        document,
+        references,
+        () => currentDocument !== document,
+      );
+      syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
+      await flushSceneryGroundCollisionBridgeMutations();
+      const bridge = physicsBridge;
+      if (bridge) {
+        await Promise.all(normalizedNodeIds.map(async (nodeId) => {
+          const bridgeNodeId = resolveMoveToSubjectBridgeNodeId(nodeId) ?? nodeId;
+          const bodyId = physicsBridgeBodyIdByNodeId.get(bridgeNodeId);
+          const object = nodeObjectMap.get(nodeId) ?? null;
+          if (typeof bodyId !== 'number' || !object) {
+            return;
+          }
+          object.updateMatrixWorld(true);
+          const worldPosition = object.getWorldPosition(new THREE.Vector3());
+          const worldQuaternion = object.getWorldQuaternion(new THREE.Quaternion()).normalize();
+          await bridge.setBodyTransform({
+            bodyId,
+            transform: {
+              position: [worldPosition.x, worldPosition.y, worldPosition.z],
+              rotation: [
+                worldQuaternion.x,
+                worldQuaternion.y,
+                worldQuaternion.z,
+                worldQuaternion.w,
+              ],
+            },
+            resetVelocity: true,
+          });
+          await bridge.setBodyVelocity({
+            bodyId,
+            linearVelocity: [0, 0, 0],
+            angularVelocity: [0, 0, 0],
+            wakeUp: true,
+          });
+        }));
+      }
+    } finally {
+      physicsBridgeCollisionBootstrapPending = wasCollisionBootstrapPending;
+    }
+    return true;
+  } finally {
+    normalizedNodeIds.forEach((nodeId) => {
+      forcedSceneryGroundCollisionReferenceNodeIds.delete(nodeId);
+    });
+  }
 }
 
 function syncSceneryGroundCollisionRuntimeLoadedTileKeys(document: SceneJsonExportDocument | null, camera: THREE.Camera | null | undefined): boolean {
@@ -12497,6 +12531,7 @@ function createBridgeVehicleInstance(
       spinAngle: 0,
       lastSteeringAngle: 0,
       baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
+      pausedQuaternion: null,
       basePosition: wheelObject ? wheelObject.position.clone() : new THREE.Vector3(),
       baseScale: wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1),
     };
@@ -12892,14 +12927,23 @@ function updateVehicleWheelVisuals(delta: number): void {
     const manualActive = vehicleDriveActive.value && vehicleDriveVehicle === instance.vehicle;
     const tourActive = Boolean(nodeId) && activeAutoTourNodeIds.has(nodeId);
     const tourPaused = tourActive && autoTourPaused.value;
-    if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody, manualActive, tourActive, nowMs })) {
+    const targetStopHeld = Boolean(nodeId) && targetStopHeldVehicleNodeId.value === nodeId;
+    const wheelVisualHeld = tourPaused || targetStopHeld;
+    const visualMotionActive = tourActive || targetStopHeld;
+    if (!scenePreviewPerf.shouldUpdateWheelVisuals({
+      nodeId,
+      body: chassisBody,
+      manualActive,
+      tourActive: visualMotionActive,
+      nowMs,
+    })) {
       return;
     }
 
     const vehicleObject = nodeId ? nodeObjectMap.get(nodeId) ?? null : null;
     resolveInterpolatedBodyPosition(chassisBody as PhysicsBodyLike, wheelChassisPositionHelper);
     const motionSource = resolveVehicleVisualMotionPose({
-      tourActive,
+      tourActive: visualMotionActive,
       object: vehicleObject,
       chassisPosition: wheelChassisPositionHelper,
       chassisQuaternion: chassisBody.quaternion,
@@ -12914,7 +12958,7 @@ function updateVehicleWheelVisuals(delta: number): void {
     // 计算车辆沿自身前进方向的有符号位移，用于驱动轮胎滚动角。
     // 这里保留正负号，因此倒车时轮子也会反向滚动。
     let signedTravel = 0;
-    if (tourPaused) {
+    if (wheelVisualHeld) {
       instance.hasWheelMotionSample = false;
     } else if (instance.hasWheelMotionSample) {
       wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastWheelMotionPosition);
@@ -12932,7 +12976,7 @@ function updateVehicleWheelVisuals(delta: number): void {
       }
     }
     instance.lastWheelMotionPosition.copy(wheelChassisPositionHelper);
-    if (!tourPaused) {
+    if (!wheelVisualHeld) {
       instance.hasWheelMotionSample = true;
     }
 
@@ -12956,6 +13000,7 @@ function updateVehicleWheelVisuals(delta: number): void {
         binding.basePosition.copy(wheelObject.position);
         binding.baseScale.copy(wheelObject.scale);
         binding.baseQuaternion.copy(wheelObject.quaternion);
+        binding.pausedQuaternion = null;
         binding.spinAngle = 0;
         binding.lastSteeringAngle = 0;
         binding.instancedTargets = collectInstancedTransformTargets(wheelObject);
@@ -12964,6 +13009,20 @@ function updateVehicleWheelVisuals(delta: number): void {
       // 轮子的位移和缩放保持为基础值，不在这里做动画，只处理转向和滚动旋转。
       wheelObject.position.copy(binding.basePosition);
       wheelObject.scale.copy(binding.baseScale);
+      if (tourPaused && binding.pausedQuaternion) {
+        wheelObject.quaternion.copy(binding.pausedQuaternion);
+        if (wheelObject.parent && !updatedWheelParents.has(wheelObject.parent)) {
+          wheelObject.parent.updateWorldMatrix(true, false);
+          updatedWheelParents.add(wheelObject.parent);
+        }
+        if (binding.instancedTargets.length) {
+          wheelObject.updateMatrixWorld(true);
+          binding.instancedTargets.forEach((target) => {
+            syncInstancedTransformTarget(target);
+          });
+        }
+        return;
+      }
 
       // 根据车身位移计算轮胎滚动角。
       if (signedTravel !== 0) {
@@ -12971,7 +13030,7 @@ function updateVehicleWheelVisuals(delta: number): void {
         const rollDelta = resolveVehicleWheelRollDelta({
           signedTravel,
           radius,
-          frozen: tourPaused,
+          frozen: wheelVisualHeld,
         });
         if (Number.isFinite(rollDelta) && Math.abs(rollDelta) > VEHICLE_WHEEL_SPIN_EPSILON) {
           binding.spinAngle += rollDelta;
@@ -13038,6 +13097,9 @@ function updateVehicleWheelVisuals(delta: number): void {
         wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper);
       }
       wheelObject.quaternion.copy(wheelVisualQuaternionHelper);
+      binding.pausedQuaternion = tourPaused
+        ? wheelVisualQuaternionHelper.clone()
+        : null;
 
       if (wheelObject.parent && !updatedWheelParents.has(wheelObject.parent)) {
         // 先刷新父节点世界矩阵，确保轮子的局部旋转在正确的父空间中生效。
@@ -17291,7 +17353,7 @@ function finishGuideTransition(
   }
   pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(nextNodeId, null);
   guideWaypointMenuContextRevision.value += 1;
-  handleFloatingAutoTourTap();
+  startGuideWaypointAutoTour(nextNodeId, undefined, pendingVehicleDriveEvent.value);
 }
 
 function syncBehaviorCollisionCandidate(nodeId: string): void {
@@ -20405,6 +20467,9 @@ function recomputeVehicleDriveInputs(
   const joystickInput = resolveJoystickDriveInput(x, y);
   const throttleFromJoystick = clampAxisScalar(joystickInput.throttle);
   const steeringFromJoystick = clampAxisScalar(joystickInput.steering);
+  if (Math.abs(throttleFromJoystick) > 1e-4) {
+    releaseTargetStopVehicleHold();
+  }
   // Keep joystick contribution, then let controller clamp and merge with flags/keyboard.
   vehicleDriveInput.analogThrottle = throttleFromJoystick;
   vehicleDriveInput.analogSteering = -steeringFromJoystick;
@@ -20425,13 +20490,79 @@ type VehicleDriveStartResult =
   | { success: true }
   | { success: false; message: string };
 
+type VehicleDriveStartOptions = {
+  preserveCamera?: boolean;
+};
+
+type VehicleDriveCameraHandoffSource = {
+  position: THREE.Vector3;
+  target: THREE.Vector3;
+};
+
 function resetVehicleDriveCameraTracking(): void {
   resetCameraFollowState(vehicleDriveCameraFollowState);
 }
 
+function clearVehicleDriveCameraHandoff(): void {
+  resetCameraPoseTransitionState(vehicleDriveCameraHandoff);
+}
+
+function captureVehicleDriveCameraHandoffSource(): VehicleDriveCameraHandoffSource | null {
+  const context = renderContext;
+  if (!context) {
+    return null;
+  }
+  const target = autoTourCameraFollowState.initialized
+    ? autoTourCameraFollowState.currentTarget.clone()
+    : context.camera.position.clone().addScaledVector(
+        context.camera.getWorldDirection(new THREE.Vector3()),
+        6,
+      );
+  return {
+    position: context.camera.position.clone(),
+    target,
+  };
+}
+
+function beginVehicleDriveCameraHandoff(source: VehicleDriveCameraHandoffSource | null): void {
+  if (!source) {
+    clearVehicleDriveCameraHandoff();
+    return;
+  }
+  beginCameraPoseTransition(vehicleDriveCameraHandoff, source.position, source.target);
+}
+
+function applyVehicleDriveCameraHandoff(deltaSeconds: number): void {
+  const context = renderContext;
+  if (!context || !vehicleDriveActive.value) {
+    clearVehicleDriveCameraHandoff();
+    return;
+  }
+  if (!vehicleDriveCameraFollowState.initialized) {
+    return;
+  }
+  runWithProgrammaticCameraMutation(() => {
+    if (!vehicleDriveCameraHandoff.active) {
+      return false;
+    }
+    applyCameraPoseTransition(
+      vehicleDriveCameraHandoff,
+      context.camera,
+      vehicleDriveCameraFollowState.currentTarget,
+      deltaSeconds,
+      context.controls,
+    );
+    return true;
+  });
+}
+
 function startVehicleDriveMode(
   event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+  options: VehicleDriveStartOptions = {},
 ): VehicleDriveStartResult {
+  if (!options.preserveCamera) {
+    clearVehicleDriveCameraHandoff();
+  }
   Array.from(activeCharacterAutoTourNodeIds).forEach((nodeId) => {
     characterAutoTourRuntime.deactivate(nodeId);
   });
@@ -20453,7 +20584,11 @@ function startVehicleDriveMode(
     purposeActiveMode.value = 'watch';
     // The optional intro starts after this authoritative pose is established
     // and blends back to the already-correct follow position.
-    updateVehicleDriveCamera(0, { immediate: true });
+    if (!options.preserveCamera) {
+      updateVehicleDriveCamera(0, { immediate: true });
+    }
+  } else {
+    clearVehicleDriveCameraHandoff();
   }
   return result;
 }
@@ -20980,6 +21115,27 @@ function updateCharacterFollowCamera(
     );
   }
   const localOffsetOverride = resolveCharacterFollowCameraOffset(props);
+  const characterAutoTourActive = activeCharacterAutoTourNodeIds.has(controlledNodeId);
+  const characterFollowTuning = characterAutoTourActive
+    ? createAutoTourFollowCameraTuning({
+        headingLerpSpeed: characterSteeringActive
+          ? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
+          : 0.4,
+        targetLerpSpeed: 8,
+      })
+    : {
+        ...createBackFollowCameraTuning(),
+        // While steering the camera slowly chases the facing so diagonal pushes
+        // arc; when the character stops it very slowly drifts back to the
+        // behind-the-character follow position.
+        headingLerpSpeed: characterSteeringActive
+          ? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
+          : 0.4,
+        targetLerpSpeed: 8,
+        // Smooth the camera position slightly so the physics/visual anchor's
+        // tiny per-frame steps are absorbed instead of being reproduced 1:1.
+        positionLerpSpeed: 10,
+      };
 
   const motionTelemetry = controlledNodeMotionRuntime.get(bindingNodeId ?? controlledNodeId);
   const rawVelocity = motionTelemetry?.hasSample
@@ -21004,19 +21160,7 @@ function updateCharacterFollowCamera(
     },
     velocityWorld: rawVelocity,
     worldUp,
-    tuning: {
-      ...createBackFollowCameraTuning(),
-      // While steering the camera slowly chases the facing so diagonal pushes
-      // arc; when the character stops it very slowly drifts back to the
-      // behind-the-character follow position.
-      headingLerpSpeed: characterSteeringActive
-        ? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
-        : 0.4,
-      targetLerpSpeed: 8,
-      // Smooth the camera position slightly so the physics/visual anchor's
-      // tiny per-frame steps are absorbed instead of being reproduced 1:1.
-      positionLerpSpeed: 10,
-    },
+    tuning: characterFollowTuning,
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     localOffsetOverride,
     followControlsDirty: false,
@@ -21091,11 +21235,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   }
 
   if (autoTourResumeBlendActive && autoTourResumeBlendNodeId === nodeId && !options.immediate) {
-    const resumeSpeedMps = Math.hypot(
-      autoTourCameraFollowVelocity.x,
-      autoTourCameraFollowVelocity.z,
-    );
-    const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId, resumeSpeedMps);
+    const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId);
     const placement = prepareAutoTourResumeBlendContext(nodeId, object, context);
     autoTourCameraFollowController.update({
       follow: autoTourResumeBlendState,
@@ -21171,11 +21311,7 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
   } else if (options.immediate) {
     autoTourCameraFollowVelocity.set(0, 0, 0);
   }
-  const autoTourSpeedMps = Math.hypot(
-    autoTourCameraFollowVelocity.x,
-    autoTourCameraFollowVelocity.z,
-  );
-  const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId, autoTourSpeedMps);
+  const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId);
 
   const hasVehicleForward = resolveAutoTourVehicleForwardWorld(nodeId, object, autoTourCameraFollowForwardScratch);
   if (!hasVehicleForward && autoTourCameraFollowVelocity.lengthSq() > 1e-6) {
@@ -21205,7 +21341,6 @@ function updateAutoTourFollowCamera(deltaSeconds: number, options: { immediate?:
     distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
     lockLocalOffset: true,
   })
-
 
   autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
 }
@@ -21285,17 +21420,75 @@ function clearManualDrivePoseHandoff(nodeId?: string | null): void {
   manualDrivePoseHandoff = null;
 }
 
-function captureManualDrivePoseHandoff(nodeId: string): ManualDrivePoseHandoff | null {
+function captureAutoTourTargetPose(nodeId: string): AutoTourTargetPose | null {
   const object = nodeObjectMap.get(nodeId) ?? null;
   if (!object) {
-    clearManualDrivePoseHandoff(nodeId);
     return null;
   }
   object.updateMatrixWorld(true);
+  return {
+    position: object.getWorldPosition(new THREE.Vector3()),
+    quaternion: object.getWorldQuaternion(new THREE.Quaternion()).normalize(),
+  };
+}
+
+function applyAutoTourTargetPose(nodeId: string, pose: AutoTourTargetPose): void {
+  applyMoveToSubjectWorldPose(nodeId, pose.position, pose.quaternion);
+  const node = resolveNodeById(nodeId);
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (node && object) {
+    syncSceneNodeLocalTransformFromObject(node, object);
+    syncInstancedTransform(object, true);
+  }
+}
+
+async function commitAutoTourTargetPoseToPhysics(
+  nodeId: string,
+  pose: AutoTourTargetPose,
+): Promise<void> {
+  const bridge = physicsBridge;
+  if (!bridge || !physicsBridgeSceneLoaded) {
+    return;
+  }
+  const bridgeNodeId = resolveMoveToSubjectBridgeNodeId(nodeId) ?? nodeId;
+  const bodyId = physicsBridgeBodyIdByNodeId.get(bridgeNodeId);
+  if (typeof bodyId !== 'number') {
+    return;
+  }
+  await bridge.setBodyTransform({
+    bodyId,
+    transform: {
+      position: [pose.position.x, pose.position.y, pose.position.z],
+      rotation: [pose.quaternion.x, pose.quaternion.y, pose.quaternion.z, pose.quaternion.w],
+    },
+    resetVelocity: true,
+  });
+  await bridge.setBodyVelocity({
+    bodyId,
+    linearVelocity: [0, 0, 0],
+    angularVelocity: [0, 0, 0],
+    wakeUp: true,
+  });
+}
+
+function captureManualDrivePoseHandoff(
+  nodeId: string,
+  targetPose?: AutoTourTargetPose | null,
+): ManualDrivePoseHandoff | null {
+  const object = nodeObjectMap.get(nodeId) ?? null;
+  if (!object && !targetPose) {
+    clearManualDrivePoseHandoff(nodeId);
+    return null;
+  }
+  if (object) {
+    object.updateMatrixWorld(true);
+  }
   const handoff: ManualDrivePoseHandoff = {
     nodeId,
-    worldPosition: object.getWorldPosition(new THREE.Vector3()),
-    worldQuaternion: object.getWorldQuaternion(new THREE.Quaternion()).normalize(),
+    worldPosition: targetPose?.position.clone()
+      ?? object!.getWorldPosition(new THREE.Vector3()),
+    worldQuaternion: targetPose?.quaternion.clone()
+      ?? object!.getWorldQuaternion(new THREE.Quaternion()).normalize(),
     bridgeTransformCommitted: false,
   };
   manualDrivePoseHandoff = handoff;
@@ -21377,32 +21570,23 @@ function commitManualDrivePoseHandoffToPhysics(handoff: ManualDrivePoseHandoff |
 }
 
 function handleCharacterAutoTourComplete(nodeId: string): void {
-  activeCharacterAutoTourNodeIds.delete(nodeId);
-  autoTourPaused.value = false;
-  autoTourPausedIsTerminal.value = false;
-  autoTourPausedNodeId.value = null;
-  characterPlayerControlNodeIdOverride.value = nodeId;
-  resetCharacterControlInputs();
-  resetProtagonistPoseState();
-  setCameraCaging(false);
-  const event = pendingVehicleDriveEvent.value;
-  const eventNodeId = event?.targetNodeId ?? event?.nodeId ?? null;
-  if (eventNodeId !== nodeId) {
-    pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(nodeId, null);
-  }
-  applyAutoTourCameraInputPolicy();
+  void completeAutoTourTargetManualDriveTakeover(nodeId);
 }
 
 function stopCharacterAutoTourAndResumePlayerControl(
   nodeId: string,
-  options: { preserveInput?: boolean } = {},
+  options: { preserveInput?: boolean; targetPose?: AutoTourTargetPose | null } = {},
 ): void {
+  if (pendingAutoTourTargetTakeoverNodeId === nodeId) {
+    return;
+  }
   characterAutoTourRuntime.deactivate(nodeId);
   activeCharacterAutoTourNodeIds.delete(nodeId);
   autoTourPaused.value = false;
-  autoTourPausedIsTerminal.value = false;
-  autoTourPausedNodeId.value = null;
   characterPlayerControlNodeIdOverride.value = nodeId;
+  if (options.targetPose) {
+    applyAutoTourTargetPose(nodeId, options.targetPose);
+  }
   if (!options.preserveInput) {
     resetCharacterControlInputs();
   } else {
@@ -21420,6 +21604,7 @@ function startCharacterAutoTourFromPrompt(
   sourceEvent: SceneryVehicleDriveEvent | null,
   target?: GuideRouteTourTargetOptions,
 ): boolean {
+  releaseTargetStopVehicleHold();
   const node = resolveNodeById(nodeId);
   if (
     !node
@@ -21439,8 +21624,6 @@ function startCharacterAutoTourFromPrompt(
   });
   activeCharacterAutoTourNodeIds.clear();
   autoTourPaused.value = false;
-  autoTourPausedIsTerminal.value = false;
-  autoTourPausedNodeId.value = null;
   const snap = characterAutoTourRuntime.resolveRouteSnap({
     iterNodes: () => previewNodeMap.entries(),
     resolveNode: (nodeId) => resolveNodeById(nodeId),
@@ -21476,33 +21659,92 @@ function startCharacterAutoTourFromPrompt(
   return true;
 }
 
-function stopFloatingAutoTourAndResumeManualDrive(
-  nodeId: string,
-  sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
-): boolean {
-  if (!nodeObjectMap.has(nodeId) || !vehicleInstances.has(nodeId) || !rigidbodyInstances.has(nodeId)) {
-    autoTourRuntime.setPaused(nodeId, true);
-    autoTourPaused.value = true;
-    applyAutoTourCameraInputPolicy();
-    // The mini-program host supplies `uni` without a shared TypeScript declaration.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    uni.showToast({ title: '车辆尚未准备就绪，无法切换到手动驾驶', icon: 'none' });
-    return false;
+async function completeAutoTourTargetManualDriveTakeover(nodeId: string): Promise<void> {
+  if (
+    pendingAutoTourTargetTakeoverNodeId === nodeId
+    || vehicleDriveActive.value
+  ) {
+    return;
   }
-  const handoff = captureManualDrivePoseHandoff(nodeId);
-  pendingAutoTourManualDriveNodeId = null;
-  pendingAutoTourManualDriveSourceEvent = null;
-  autoTourPaused.value = false;
-  autoTourPausedIsTerminal.value = false;
-  autoTourPausedNodeId.value = null;
-  autoTourRotationOnlyHold.value = false;
-  clearAutoTourPausedCameraSnapshot();
-  clearAutoTourResumeBlendState();
-  clearAutoTourCameraObjectMetrics(nodeId);
+  pendingAutoTourTargetTakeoverNodeId = nodeId;
+  const isCharacterTour = activeCharacterAutoTourNodeIds.has(nodeId);
+  const targetPose = captureAutoTourTargetPose(nodeId);
   const pendingEvent = pendingVehicleDriveEvent.value;
   if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
     pendingVehicleDriveEvent.value = null;
   }
+  pendingVehicleDriveRetryRequested.value = false;
+  try {
+    await ensureSceneryGroundCollisionCoverageForNodes([nodeId]);
+    if (
+      pendingAutoTourTargetTakeoverNodeId !== nodeId
+      || vehicleDriveActive.value
+    ) {
+      return;
+    }
+    pendingAutoTourTargetTakeoverNodeId = null;
+    if (isCharacterTour) {
+      stopCharacterAutoTourAndResumePlayerControl(nodeId, { targetPose });
+    } else {
+      stopFloatingAutoTourAndResumeManualDrive(
+        nodeId,
+        activeVehicleDriveEvent.value,
+        { parkAtTarget: true, targetPose },
+      );
+    }
+    if (targetPose) {
+      applyAutoTourTargetPose(nodeId, targetPose);
+      await commitAutoTourTargetPoseToPhysics(nodeId, targetPose);
+      if (!isCharacterTour) {
+        vehicleDriveController.parkAtCurrentPose();
+      }
+    }
+  } finally {
+    if (pendingAutoTourTargetTakeoverNodeId === nodeId) {
+      pendingAutoTourTargetTakeoverNodeId = null;
+    }
+  }
+}
+
+function stopFloatingAutoTourAndResumeManualDrive(
+  nodeId: string,
+  sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
+  options: { parkAtTarget?: boolean; targetPose?: AutoTourTargetPose | null } = {},
+): boolean {
+  if (pendingAutoTourTargetTakeoverNodeId === nodeId) {
+    return false;
+  }
+  const pendingEvent = pendingVehicleDriveEvent.value;
+  if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
+    pendingVehicleDriveEvent.value = null;
+  }
+  const parkAtTarget = options.parkAtTarget === true;
+  if (parkAtTarget) {
+    targetStopHeldVehicleNodeId.value = nodeId;
+  }
+  const queueRetry = () => {
+    pendingAutoTourManualDriveNodeId = nodeId;
+    pendingAutoTourManualDriveSourceEvent = sourceEvent;
+    pendingAutoTourManualDriveParkAtTarget = parkAtTarget;
+    autoTourRuntime.setPaused(nodeId, true);
+    autoTourPaused.value = true;
+    applyAutoTourCameraInputPolicy();
+  };
+  if (!nodeObjectMap.has(nodeId) || !vehicleInstances.has(nodeId) || !rigidbodyInstances.has(nodeId)) {
+    queueRetry();
+    return false;
+  }
+  const cameraHandoffSource = captureVehicleDriveCameraHandoffSource();
+  beginVehicleDriveCameraHandoff(cameraHandoffSource);
+  const handoff = captureManualDrivePoseHandoff(nodeId, options.targetPose);
+  pendingAutoTourManualDriveNodeId = null;
+  pendingAutoTourManualDriveSourceEvent = null;
+  pendingAutoTourManualDriveParkAtTarget = false;
+  autoTourPaused.value = false;
+  autoTourRotationOnlyHold.value = false;
+  clearAutoTourPausedCameraSnapshot();
+  clearAutoTourResumeBlendState();
+  clearAutoTourCameraObjectMetrics(nodeId);
   stopTourAndUnfollow(autoTourRuntime, nodeId, (activeNodeId) => {
     activeAutoTourNodeIds.delete(activeNodeId);
     if (autoTourFollowNodeId.value === activeNodeId) {
@@ -21513,16 +21755,36 @@ function stopFloatingAutoTourAndResumeManualDrive(
   commitManualDrivePoseHandoffToPhysics(handoff);
 
   const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
-  const result = startVehicleDriveMode(driveEvent);
+  const result = startVehicleDriveMode(driveEvent, { preserveCamera: true });
   if (!result.success) {
+    clearVehicleDriveCameraHandoff();
+    if (isVehicleDrivePendingReadinessMessage(result.message)) {
+      queueRetry();
+      return false;
+    }
     const message = result.message ?? '无法返回手动驾驶模式';
     uni.showToast({ title: message, icon: 'none' });
-    applyAutoTourCameraInputPolicy();
+    pendingAutoTourManualDriveNodeId = null;
+    pendingAutoTourManualDriveSourceEvent = null;
+    pendingAutoTourManualDriveParkAtTarget = false;
+    releaseTargetStopVehicleHold();
     return false;
   }
 
   activeVehicleDriveEvent.value = driveEvent;
   vehicleDrivePromptBusy.value = false;
+  if (parkAtTarget) {
+    vehicleDriveController.parkAtCurrentPose();
+    vehicleSpeedDisplayMps.value = 0;
+    vehicleSpeedDisplayLastCommitAtMs = 0;
+    vehicleSpeedDisplayLowSpeedSinceAtMs = null;
+    controlledNodeMotionRuntime.clear(nodeId);
+    const instance = vehicleInstances.get(nodeId) ?? null;
+    if (instance) {
+      instance.hasWheelMotionSample = false;
+      instance.wheelMotionSource = null;
+    }
+  }
   handleShowVehicleCockpitEvent();
   applyAutoTourCameraInputPolicy();
   return true;
@@ -21534,19 +21796,15 @@ function completePendingAutoTourManualDriveTransition(): void {
     return;
   }
   const sourceEvent = pendingAutoTourManualDriveSourceEvent;
+  const parkAtTarget = pendingAutoTourManualDriveParkAtTarget;
   pendingAutoTourManualDriveNodeId = null;
   pendingAutoTourManualDriveSourceEvent = null;
+  pendingAutoTourManualDriveParkAtTarget = false;
 
   const driveEvent = buildFloatingAutoTourDriveEvent(nodeId, sourceEvent);
   vehicleDrivePromptBusy.value = true;
   try {
-    const resumed = stopFloatingAutoTourAndResumeManualDrive(nodeId, driveEvent);
-    if (!resumed && !vehicleDriveActive.value) {
-      // A terminal transition must not strand the vehicle if the physics bridge
-      // is still completing its final-binding pass. Reuse the normal drive retry.
-      pendingVehicleDriveEvent.value = driveEvent;
-      pendingVehicleDriveRetryRequested.value = true;
-    }
+    stopFloatingAutoTourAndResumeManualDrive(nodeId, driveEvent, { parkAtTarget });
   } finally {
     vehicleDrivePromptBusy.value = false;
   }
@@ -21587,30 +21845,30 @@ function retryPendingVehicleDriveIfNeeded(): void {
   pendingVehicleDriveRetryRequested.value = false;
 }
 
-function handleFloatingAutoTourTap(): void {
-  const button = floatingAutoTourButton.value;
-  if (!button.visible || button.disabled || !button.nodeId) {
+function startGuideWaypointAutoTour(
+  targetNodeId: string,
+  waypointTarget?: GuideRouteTourTargetOptions,
+  sourceEvent: SceneryVehicleDriveEvent | null = null,
+): void {
+  if (vehicleDrivePromptBusy.value || !targetNodeId) {
     return;
   }
 
-  const targetNodeId = button.nodeId;
-  const waypointTarget = guideWaypointPendingTarget;
-  guideWaypointPendingTarget = null;
-  if (button.active) {
-    vehicleDrivePromptBusy.value = true;
-    try {
-      if (activeCharacterAutoTourNodeIds.has(targetNodeId)) {
-        stopCharacterAutoTourAndResumePlayerControl(targetNodeId);
-      } else {
-        stopFloatingAutoTourAndResumeManualDrive(targetNodeId, button.event);
-      }
-    } finally {
-      vehicleDrivePromptBusy.value = false;
-    }
-    if (!waypointTarget) {
-      return;
-    }
-  }
+  clearVehicleDriveCameraHandoff();
+  releaseTargetStopVehicleHold();
+  pendingAutoTourManualDriveNodeId = null;
+  pendingAutoTourManualDriveSourceEvent = null;
+  pendingAutoTourManualDriveParkAtTarget = false;
+  Array.from(activeAutoTourNodeIds).forEach((activeNodeId) => {
+    stopTourAndUnfollow(autoTourRuntime, activeNodeId, () => undefined);
+  });
+  activeAutoTourNodeIds.clear();
+  autoTourFollowNodeId.value = null;
+  resetAutoTourCameraFollowState();
+  Array.from(activeCharacterAutoTourNodeIds).forEach((activeNodeId) => {
+    characterAutoTourRuntime.deactivate(activeNodeId);
+  });
+  activeCharacterAutoTourNodeIds.clear();
 
   const node = resolveNodeById(targetNodeId);
   const autoTourComponent = resolveAutoTourComponent(node);
@@ -21636,7 +21894,7 @@ function handleFloatingAutoTourTap(): void {
       }
       resetVehicleDriveInputs();
       setVehicleDriveUiOverride('hide');
-      if (!startCharacterAutoTourFromPrompt(targetNodeId, button.event, waypointTarget ?? undefined)) {
+      if (!startCharacterAutoTourFromPrompt(targetNodeId, sourceEvent, waypointTarget)) {
         uni.showToast({
           title: waypointTarget ? '角色已在目标点或导览路线未就绪' : '角色自动导览尚未准备就绪',
           icon: 'none',
@@ -21648,12 +21906,7 @@ function handleFloatingAutoTourTap(): void {
     return;
   }
 
-  Array.from(activeCharacterAutoTourNodeIds).forEach((activeNodeId) => {
-    characterAutoTourRuntime.deactivate(activeNodeId);
-  });
-  activeCharacterAutoTourNodeIds.clear();
-
-  const snap = autoTourRuntime.resolveRouteSnap(targetNodeId, waypointTarget ?? undefined);
+  const snap = autoTourRuntime.resolveRouteSnap(targetNodeId, waypointTarget);
   if (!snap) {
     uni.showToast({ title: '未找到绑定 Guide Route', icon: 'none' });
     return;
@@ -21668,8 +21921,6 @@ function handleFloatingAutoTourTap(): void {
     activeCameraWatchTween = null;
     clearManualDrivePoseHandoff();
     autoTourPaused.value = false;
-    autoTourPausedIsTerminal.value = false;
-    autoTourPausedNodeId.value = null;
     clearAutoTourPausedCameraSnapshot();
     clearAutoTourResumeBlendState();
 
@@ -21699,7 +21950,7 @@ function handleFloatingAutoTourTap(): void {
       return;
     }
 
-    autoTourRuntime.startTour(targetNodeId, waypointTarget ?? undefined);
+    autoTourRuntime.startTour(targetNodeId, waypointTarget);
     autoTourRuntime.seedTourPlaybackState(targetNodeId, snap);
     activeAutoTourNodeIds.add(targetNodeId);
     autoTourFollowNodeId.value = targetNodeId;
@@ -21745,129 +21996,41 @@ function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): void {
     characterPlayerControlNodeIdOverride.value = null;
     resetCharacterControlInputs();
   }
-  guideWaypointPendingTarget = {
+  const waypointTarget = {
     routeNodeId: item.routeNodeId,
     destinationStopId: item.stopId,
   };
-  pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(actorNodeId, null);
+  const sourceEvent = buildFloatingAutoTourDriveEvent(actorNodeId, null);
+  pendingVehicleDriveEvent.value = sourceEvent;
   guideWaypointMenuContextRevision.value += 1;
-  handleFloatingAutoTourTap();
-}
-
-function handleFloatingAutoTourPauseToggleTap(): void {
-  const button = floatingAutoTourPauseButton.value;
-  if (!button.visible || button.disabled || !button.nodeId) {
-    return;
-  }
-
-  const targetNodeId = button.nodeId;
-  if (!activeAutoTourNodeIds.has(targetNodeId)) {
-    if (!activeCharacterAutoTourNodeIds.has(targetNodeId)) {
-      return;
-    }
-    const nextCharacterPaused = !autoTourPaused.value;
-    characterAutoTourRuntime.setPaused(targetNodeId, nextCharacterPaused);
-    if (nextCharacterPaused) {
-      pauseAutoTourAtGuideStop(targetNodeId);
-    } else {
-      autoTourPausedIsTerminal.value = false;
-      autoTourPausedNodeId.value = null;
-      autoTourPaused.value = false;
-      applyAutoTourCameraInputPolicy();
-    }
-    return;
-  }
-
-  const nextPaused = !autoTourPaused.value;
-  if (!nextPaused) {
-    prepareAutoTourResumeFromCurrentCamera(targetNodeId);
-    if (autoTourPausedIsTerminal.value && autoTourPausedNodeId.value === targetNodeId) {
-      autoTourRuntime.continueFromEnd(targetNodeId);
-    } else {
-      autoTourRuntime.setPaused(targetNodeId, false);
-    }
-    autoTourPausedIsTerminal.value = false;
-    autoTourPausedNodeId.value = null;
-    autoTourPaused.value = false;
-    clearAutoTourPausedCameraSnapshot();
-    applyAutoTourCameraInputPolicy();
-    return;
-  }
-
-  autoTourRuntime.setPaused(targetNodeId, true);
-  pauseAutoTourAtGuideStop(targetNodeId);
+  startGuideWaypointAutoTour(actorNodeId, waypointTarget, sourceEvent);
 }
 
 function pauseAutoTourForInspection(targetNodeId: string): void {
   if (!activeAutoTourNodeIds.has(targetNodeId)) {
     return;
   }
+  clearVehicleDriveCameraHandoff();
   autoTourRuntime.setPaused(targetNodeId, true);
   captureAutoTourPausedCameraSnapshot(targetNodeId);
-  autoTourPausedIsTerminal.value = false;
-  autoTourPausedNodeId.value = null;
   autoTourPaused.value = true;
   clearAutoTourResumeBlendState();
   applyAutoTourCameraInputPolicy();
   reapplyAutoTourPausedCameraSnapshot(targetNodeId);
 }
 
-function pauseAutoTourAtGuideStop(nodeId: string): void {
-  autoTourPausedIsTerminal.value = false;
-  autoTourPausedNodeId.value = nodeId;
-  autoTourPaused.value = true;
-  clearAutoTourResumeBlendState();
-  if (activeAutoTourNodeIds.has(nodeId)) {
-    captureAutoTourPausedCameraSnapshot(nodeId);
-  }
-  applyAutoTourCameraInputPolicy();
-  if (activeAutoTourNodeIds.has(nodeId)) {
-    reapplyAutoTourPausedCameraSnapshot(nodeId);
-  }
-}
-
-function prepareAutoTourResumeFromCurrentCamera(targetNodeId: string): void {
-  const context = renderContext;
-  const object = nodeObjectMap.get(targetNodeId) ?? null;
-  if (!context || !object) {
+function releaseTargetStopVehicleHold(): void {
+  const nodeId = targetStopHeldVehicleNodeId.value;
+  if (!nodeId) {
     return;
   }
-  const placement = prepareAutoTourResumeBlendContext(targetNodeId, object, context);
-  const localOffsetOverride = resolveAutoTourFollowCameraOffset(
-    targetNodeId,
-    Math.hypot(autoTourCameraFollowVelocity.x, autoTourCameraFollowVelocity.z),
-  );
-  autoTourCameraFollowController.update({
-    follow: autoTourResumeBlendState,
-    placement,
-    anchorWorld: autoTourCameraFollowAnchorScratch,
-    desiredForwardWorld: autoTourCameraFollowForwardScratch,
-    velocityWorld: autoTourCameraFollowVelocity,
-    deltaSeconds: 1 / 60,
-    ctx: { camera: autoTourResumeBlendTempCamera, mapControls: undefined },
-    immediate: true,
-    ...(localOffsetOverride ? { localOffsetOverride } : {}),
-    tuning: AUTO_TOUR_CINEMATIC_CAMERA_TUNING,
-    distanceScale: DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
-    lockLocalOffset: true,
-  });
-
-  autoTourCameraFollowState.currentPosition.copy(autoTourResumeBlendStartPosition);
-  autoTourCameraFollowState.currentTarget.copy(autoTourResumeBlendStartTarget);
-  autoTourCameraFollowState.desiredPosition.copy(autoTourResumeBlendState.currentPosition);
-  autoTourCameraFollowState.desiredTarget.copy(autoTourResumeBlendState.currentTarget);
-  autoTourCameraFollowState.currentAnchor.copy(autoTourCameraFollowAnchorScratch);
-  autoTourCameraFollowState.desiredAnchor.copy(autoTourCameraFollowAnchorScratch);
-  autoTourCameraFollowState.heading.copy(autoTourResumeBlendState.heading);
-  autoTourCameraFollowState.localOffset.copy(autoTourResumeBlendState.localOffset);
-  autoTourCameraFollowState.hasLocalOffset = autoTourResumeBlendState.hasLocalOffset;
-  autoTourCameraFollowState.initialized = true;
-  autoTourCameraFollowVelocity.set(0, 0, 0);
-  autoTourCameraFollowLastAnchor.copy(autoTourCameraFollowAnchorScratch);
-  autoTourCameraFollowHasSample = true;
-  autoTourResumeBlendActive = true;
-  autoTourResumeBlendElapsedSeconds = 0;
-  autoTourResumeBlendNodeId = targetNodeId;
+  targetStopHeldVehicleNodeId.value = null;
+  vehicleDriveController.releaseParkingHold();
+  const instance = vehicleInstances.get(nodeId) ?? null;
+  if (instance) {
+    instance.hasWheelMotionSample = false;
+    instance.wheelMotionSource = null;
+  }
 }
 
 function handleVehicleDriveEvent(
@@ -22512,11 +22675,6 @@ function ensureBehaviorTapHandler(canvas: HTMLCanvasElement, camera: THREE.Persp
         resetCharacterControlInputs();
         resetProtagonistPoseState();
         setCameraCaging(false);
-        const autoTourNodeId = resolveCharacterAutoTourAncestorNodeId(nodeId);
-        if (autoTourNodeId) {
-          pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(autoTourNodeId, null);
-          vehicleDrivePromptBusy.value = false;
-        }
         return;
       }
     }
@@ -23868,8 +24026,13 @@ function teardownRenderer() {
   autoTourRuntime.reset();
   autoTourCameraObjectMetricsByNodeId.clear();
   activeAutoTourNodeIds.clear();
+  targetStopHeldVehicleNodeId.value = null;
+  clearVehicleDriveCameraHandoff();
   pendingAutoTourManualDriveNodeId = null;
   pendingAutoTourManualDriveSourceEvent = null;
+  pendingAutoTourManualDriveParkAtTarget = false;
+  pendingAutoTourTargetTakeoverNodeId = null;
+  forcedSceneryGroundCollisionReferenceNodeIds.clear();
   clearManualDrivePoseHandoff();
   autoTourRotationOnlyHold.value = false;
   autoTourFollowNodeId.value = null;
@@ -24941,6 +25104,9 @@ function startRenderLoop(
             updateVehicleDriveCamera(deltaSeconds);
           }
         }
+        if (!isWatchCameraLocked()) {
+          applyVehicleDriveCameraHandoff(deltaSeconds);
+        }
         updateBillboardInstanceCameraWorldPosition(camera.position);
 
         updateBehaviorProximity();
@@ -25101,8 +25267,13 @@ function cleanupForUnrelatedSceneSwitch(): void {
   autoTourCameraObjectMetricsByNodeId.clear();
   waterRuntime.reset();
   activeAutoTourNodeIds.clear();
+  targetStopHeldVehicleNodeId.value = null;
+  clearVehicleDriveCameraHandoff();
   pendingAutoTourManualDriveNodeId = null;
   pendingAutoTourManualDriveSourceEvent = null;
+  pendingAutoTourManualDriveParkAtTarget = false;
+  pendingAutoTourTargetTakeoverNodeId = null;
+  forcedSceneryGroundCollisionReferenceNodeIds.clear();
   clearManualDrivePoseHandoff();
   autoTourRotationOnlyHold.value = false;
   autoTourFollowNodeId.value = null;
@@ -25206,7 +25377,6 @@ async function initializeRenderer(payload: ScenePreviewPayload, result: UseCanva
   guideWaypointMenuRefreshRevision += 1;
   guideWaypointMenuRefreshSignature = '';
   guideWaypointThumbnailUrlCache.clear();
-  guideWaypointPendingTarget = null;
   closeGuideWaypointMenu();
   guideWaypointMenuItems.value = [];
   guideWaypointMenuLoading.value = false;
@@ -25730,7 +25900,6 @@ onUnmounted(() => {
   viewerEnvironmentSwitchPhase.value = 'idle';
   guideWaypointMenuRefreshRevision += 1;
   guideWaypointThumbnailUrlCache.clear();
-  guideWaypointPendingTarget = null;
   closeGuideWaypointMenu();
   guideWaypointMenuItems.value = [];
   releaseInstancedLodCullingWorker();
@@ -26490,169 +26659,6 @@ onUnmounted(() => {
   }
 }
 
-.viewer-auto-tour-trigger {
-  position: absolute;
-  right: 12px;
-  z-index: 1460;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 88rpx;
-  min-width: 88rpx;
-  height: 88rpx;
-  min-height: 88rpx;
-  padding: 0;
-  border: 1rpx solid rgba(0, 0, 0, 0.08);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow:
-    0 12rpx 32rpx rgba(0, 0, 0, 0.16),
-    0 2rpx 8rpx rgba(0, 0, 0, 0.06);
-  color: #07c160;
-  overflow: hidden;
-  backdrop-filter: blur(20rpx) saturate(1.1);
-  transition:
-    transform 0.18s cubic-bezier(0.2, 0.9, 0.2, 1),
-    box-shadow 0.18s ease,
-    border-color 0.18s ease,
-    opacity 0.18s ease;
-}
-
-.viewer-auto-tour-trigger::before {
-  content: '';
-  position: absolute;
-  inset: 7rpx;
-  border: 1rpx solid currentColor;
-  border-radius: 50%;
-  opacity: 0.16;
-  pointer-events: none;
-}
-
-.viewer-auto-tour-trigger::after {
-  display: none;
-}
-
-.viewer-auto-tour-trigger.is-active {
-  border-color: rgba(7, 193, 96, 0.28);
-  background: #eaf8f0;
-  color: #059b4c;
-  box-shadow:
-    0 10rpx 26rpx rgba(7, 193, 96, 0.2),
-    0 2rpx 8rpx rgba(0, 0, 0, 0.05);
-}
-
-.viewer-auto-tour-trigger__icon {
-  position: relative;
-  z-index: 1;
-}
-
-.viewer-auto-tour-route-icon {
-  width: 46rpx;
-  height: 32rpx;
-}
-
-.viewer-auto-tour-route-icon__line {
-  position: absolute;
-  left: 8rpx;
-  right: 8rpx;
-  top: 14rpx;
-  height: 4rpx;
-  border-radius: 999rpx;
-  background: currentColor;
-}
-
-.viewer-auto-tour-route-icon__dot {
-  position: absolute;
-  top: 10rpx;
-  width: 12rpx;
-  height: 12rpx;
-  border: 3rpx solid #ffffff;
-  border-radius: 50%;
-  background: currentColor;
-  box-sizing: border-box;
-}
-
-.viewer-auto-tour-route-icon__dot--start {
-  left: 0;
-}
-
-.viewer-auto-tour-route-icon__dot--end {
-  right: 0;
-}
-
-.viewer-auto-tour-trigger--secondary {
-  left: 50%;
-  right: auto;
-  top: auto;
-  transform: translateX(-50%);
-  width: 88rpx;
-  min-width: 88rpx;
-  height: 88rpx;
-  min-height: 88rpx;
-  padding: 0;
-  border-color: rgba(0, 0, 0, 0.08);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow:
-    0 12rpx 32rpx rgba(0, 0, 0, 0.16),
-    0 2rpx 8rpx rgba(0, 0, 0, 0.06);
-}
-
-.viewer-auto-tour-trigger--secondary.is-active {
-  border-color: rgba(7, 193, 96, 0.28);
-  background: #eaf8f0;
-  color: #059b4c;
-}
-
-.viewer-auto-tour-trigger--secondary:active {
-  transform: translateX(-50%) translateY(1px) scale(0.985);
-}
-
-.viewer-auto-tour-trigger.is-busy,
-.viewer-auto-tour-trigger[disabled] {
-  opacity: 0.72;
-}
-
-.viewer-auto-tour-trigger:active {
-  transform: translateY(1px) scale(0.985);
-  box-shadow: 0 12rpx 24rpx rgba(4, 6, 18, 0.28);
-}
-
-.viewer-auto-tour-pause-icon {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7rpx;
-  width: 34rpx;
-  height: 34rpx;
-}
-
-.viewer-auto-tour-pause-icon__bar {
-  width: 7rpx;
-  height: 28rpx;
-  border-radius: 3rpx;
-  background: currentColor;
-}
-
-.viewer-auto-tour-pause-icon.is-play {
-  gap: 0;
-}
-
-.viewer-auto-tour-pause-icon.is-play .viewer-auto-tour-pause-icon__bar:first-child {
-  width: 0;
-  height: 0;
-  border-top: 13rpx solid transparent;
-  border-bottom: 13rpx solid transparent;
-  border-left: 21rpx solid currentColor;
-  border-radius: 0;
-  background: transparent;
-}
-
-.viewer-auto-tour-pause-icon.is-play .viewer-auto-tour-pause-icon__bar:last-child {
-  display: none;
-}
-
 .viewer-punch-summary__label {
   position: relative;
   z-index: 1;
@@ -26686,15 +26692,6 @@ onUnmounted(() => {
     max-width: calc(100% - 20px);
     gap: 10rpx;
     padding: 10rpx 12rpx 10rpx 14rpx;
-  }
-
-  .viewer-auto-tour-trigger {
-    right: 10px;
-    width: 88rpx;
-    min-width: 88rpx;
-    height: 88rpx;
-    min-height: 88rpx;
-    padding: 0;
   }
 
   .viewer-punch-summary__value {

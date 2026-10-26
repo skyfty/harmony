@@ -391,7 +391,12 @@ import {
 import type { InstancedLodBoundsSnapshot } from '@schema/core'
 import {
 	DEFAULT_BACK_FOLLOW_CAMERA_DISTANCE_SCALE,
+	applyCameraPoseTransition,
+	beginCameraPoseTransition,
+	createAutoTourFollowCameraTuning,
 	createBackFollowCameraTuning,
+	createCameraPoseTransitionState,
+	resetCameraPoseTransitionState,
 	VehicleDriveController,
 	CharacterAutoTourRuntimeManager,
 	resolveGroundAlignedFollowForward,
@@ -462,7 +467,12 @@ import {
   smoothSignboardReference,
   type SignboardPlacementSmoothingState,
 } from '@schema/overlay'
-import { disposeSignboardBillboards, syncSignboardBillboards, type SignboardBillboardStyle } from '@schema/overlay'
+import {
+	disposeSignboardBillboards,
+	runWithProgrammaticCameraMutation,
+	syncSignboardBillboards,
+	type SignboardBillboardStyle,
+} from '@schema/overlay'
 import { grantCouponById, listCouponCatalog, type CouponSceneItem } from '@harmony/utils'
 import type {
 	GuideboardComponentProps,
@@ -1935,8 +1945,7 @@ function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): 
 	}
 
 	const vehicleNodeId = resolveVehicleAncestorNodeId(nodeId)
-	const characterAutoTourNodeId = resolveCharacterAutoTourAncestorNodeId(nodeId)
-	const vehicleInteractive = Boolean(vehicleNodeId || characterAutoTourNodeId)
+	const vehicleInteractive = Boolean(vehicleNodeId)
 
 	applyInteractionLayers(target, behaviorInteractive, vehicleInteractive)
 	// Runtime component visuals (Warp Gate, Guideboard, etc.) are attached as non-node children.
@@ -1945,10 +1954,7 @@ function syncInteractionLayersForNode(nodeId: string, object?: THREE.Object3D): 
 
 function syncVehicleSubtreeInteractionLayers(): void {
 	previewNodeMap.forEach((_node, nodeId) => {
-		if (
-			!resolveVehicleAncestorNodeId(nodeId)
-			&& !resolveCharacterAutoTourAncestorNodeId(nodeId)
-		) {
+		if (!resolveVehicleAncestorNodeId(nodeId)) {
 			return
 		}
 		const object = nodeObjectMap.get(nodeId) ?? null
@@ -2077,8 +2083,22 @@ const activeCharacterAutoTourNodeIds = reactive(new Set<string>())
 const characterPlayerControlNodeIdOverride = ref<string | null>(null)
 // Auto-tour pause only affects tour (not global playback), and does not change manual-drive behavior.
 const autoTourPaused = ref(false)
-const autoTourPausedIsTerminal = ref(false)
-const autoTourPausedNodeId = ref<string | null>(null)
+const targetStopHeldVehicleNodeId = ref<string | null>(null)
+const pendingAutoTourManualTakeoverNodeId = ref<string | null>(null)
+const pendingAutoTourManualTakeoverParkAtTarget = ref(false)
+const pendingAutoTourTargetTakeoverNodeId = ref<string | null>(null)
+type AutoTourTargetPose = {
+	position: THREE.Vector3
+	quaternion: THREE.Quaternion
+}
+type ManualDrivePoseHandoff = {
+	nodeId: string
+	bridgeNodeId: string
+	worldPosition: THREE.Vector3
+	worldQuaternion: THREE.Quaternion
+	bridgeTransformCommitted: boolean
+}
+let manualDrivePoseHandoff: ManualDrivePoseHandoff | null = null
 
 const autoTourFollowNodeId = ref<string | null>(null)
 type GuideWaypointMenuItem = GuideRouteDestination & {
@@ -2121,30 +2141,13 @@ const autoTourCameraObjectMetricsByNodeId = new Map<string, {
 let autoTourCameraFollowHasSample = false
 let autoTourActiveSyncAccumSeconds = 0
 const AUTO_TOUR_CAMERA_WORLD_UP = new THREE.Vector3(0, 1, 0)
-const AUTO_TOUR_CAMERA_DISTANCE_PER_MPS = 0.18
-const AUTO_TOUR_CAMERA_HEIGHT_PER_MPS = 0.06
-const AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M = 1.2
-const AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M = 0.45
-const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createBackFollowCameraTuning({
-	positionLerpSpeed: 4.2,
-	targetLerpSpeed: 6,
-	headingLerpSpeed: 2.4,
-	anchorLerpSpeed: 8,
-	lookaheadTime: 0.3,
-	lookaheadDistanceMax: 2,
-	lookaheadMinSpeedSq: 0.25,
-	lookaheadBlendStart: 0.5,
-	lookaheadBlendSpeed: 1.5,
-})
+const AUTO_TOUR_CINEMATIC_CAMERA_TUNING = createAutoTourFollowCameraTuning()
+const vehicleDriveCameraHandoff = createCameraPoseTransitionState()
 
 const vehicleDrivePrompt = computed(() => {
-	// Ensure this computed updates when the set changes.
-	activeAutoTourNodeIds.size
-	activeCharacterAutoTourNodeIds.size
-	autoTourPaused.value
 	const event = pendingVehicleDriveEvent.value
 	const eventTargetNodeId = event?.targetNodeId ?? event?.nodeId ?? null
-	const targetNodeId = eventTargetNodeId ?? guideWaypointMenuActorNodeId.value
+	const targetNodeId = eventTargetNodeId
 	const node = targetNodeId ? resolveNodeById(targetNodeId) : null
 	if (!node) {
 		return {
@@ -2154,17 +2157,11 @@ const vehicleDrivePrompt = computed(() => {
 			targetNodeId: null,
 			sourceEvent: null,
 			showDrive: false,
-			showAutoTour: false,
-			showStopTour: false,
-			showPauseTour: false,
 			showClose: false,
-			pauseTourLabel: '暂停巡游',
-			pauseTourIcon: 'mdi-pause-circle',
 		}
 	}
 	const label = node?.name?.trim() || targetNodeId || 'Vehicle'
 	const canDrive = Boolean(event && resolveVehicleComponent(node))
-	const canAutoTour = Boolean(resolveAutoTourComponent(node))
 	const isTouring = Boolean(
 		targetNodeId
 		&& (
@@ -2172,21 +2169,15 @@ const vehicleDrivePrompt = computed(() => {
 			|| activeCharacterAutoTourNodeIds.has(targetNodeId)
 		),
 	)
-	const pauseTourLabel = autoTourPaused.value ? '继续巡游' : '暂停巡游'
-	const pauseTourIcon = autoTourPaused.value ? 'mdi-play-circle' : 'mdi-pause-circle'
+	const showDrive = canDrive && !isTouring
 	return {
-		visible: isTouring || canDrive || canAutoTour,
+		visible: showDrive,
 		label,
 		busy: vehicleDrivePromptBusy.value,
 		targetNodeId,
 		sourceEvent: event,
-		showDrive: canDrive && !isTouring,
-		showAutoTour: canAutoTour && !isTouring,
-		showStopTour: isTouring,
-		showPauseTour: isTouring,
-		showClose: Boolean(event) && !isTouring,
-		pauseTourLabel,
-		pauseTourIcon,
+		showDrive,
+		showClose: showDrive,
 	}
 })
 
@@ -2344,7 +2335,6 @@ const characterFollowAnchorPosition = new THREE.Vector3()
 const characterFollowForwardScratch = new THREE.Vector3()
 const characterFollowGroundNormalScratch = new THREE.Vector3(0, 1, 0)
 const tempBox = new THREE.Box3()
-const tempPosition = new THREE.Vector3()
 const tempCameraMatrix = new THREE.Matrix4()
 const cameraViewFrustum = new THREE.Frustum()
 const instancedCullingBox = new THREE.Box3()
@@ -2704,6 +2694,7 @@ const CAMERA_DEPENDENT_UPDATE_INTERVAL_SECONDS = 0.12
 const cameraDependentUpdatePosition = new THREE.Vector3()
 const cameraDependentUpdateQuaternion = new THREE.Quaternion()
 const groundCollisionReferencePositions: THREE.Vector3[] = []
+const forcedGroundCollisionReferenceNodeIds = new Set<string>()
 const lastCameraDependentUpdatePosition = new THREE.Vector3()
 const lastCameraDependentUpdateQuaternion = new THREE.Quaternion()
 const lastGroundCollisionReferencePositions: THREE.Vector3[] = []
@@ -3154,6 +3145,7 @@ type VehicleWheelBinding = {
 	spinAngle: number
 	lastSteeringAngle: number
 	baseQuaternion: THREE.Quaternion
+	pausedQuaternion: THREE.Quaternion | null
 	basePosition: THREE.Vector3
 	baseScale: THREE.Vector3
 }
@@ -3616,24 +3608,6 @@ function resolveVehicleAncestorNodeId(nodeId: string | null): string | null {
 	return null
 }
 
-function resolveCharacterAutoTourAncestorNodeId(nodeId: string | null): string | null {
-	let currentId: string | null = nodeId
-	while (currentId) {
-		const node = resolveNodeById(currentId)
-		if (!node) {
-			break
-		}
-		if (
-			resolveCharacterControllerComponent(node)
-			&& Boolean(resolveAutoTourComponent(node)?.props?.routeNodeId)
-		) {
-			return currentId
-		}
-		currentId = resolveParentNodeId(currentId)
-	}
-	return null
-}
-
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
 	let currentId: string | null = nodeId
 	while (currentId) {
@@ -3991,6 +3965,7 @@ watch(
 	() => vehicleDriveState.active,
 	(active) => {
 		if (!active) {
+			releaseTargetStopVehicleHold()
 			if (activeManualAuthorityNodeId) {
 				vehicleMotionAuthority.endManualPhysics(activeManualAuthorityNodeId)
 				activeManualAuthorityNodeId = null
@@ -4305,7 +4280,7 @@ function buildDefaultSteerDriveEvent(nodeId: string): Extract<BehaviorRuntimeEve
 	}
 }
 
-function buildActorAutoTourPromptEvent(nodeId: string): Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> {
+function buildGuideAutoTourDriveEvent(nodeId: string): Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> {
 	return {
 		type: 'vehicle-drive',
 		nodeId,
@@ -4623,6 +4598,12 @@ const autoTourRuntime = createAutoTourRuntime({
 	resolveObjectBounds: (object) => setBoundingBoxFromObject(object, new THREE.Box3()),
 	isManualDriveActive: () => vehicleDriveState.active,
 	onTerminalStop: (nodeId) => {
+		const pendingEvent = pendingVehicleDriveEvent.value
+		const shouldResumeManualDrive = guideWaypointRouteOverrideByNodeId.has(nodeId)
+			|| (
+				(pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId
+				&& !vehicleDriveState.active
+			)
 		guideWaypointRouteOverrideByNodeId.delete(nodeId)
 		activeAutoTourNodeIds.delete(nodeId)
 		if (autoTourFollowNodeId.value === nodeId) {
@@ -4633,21 +4614,23 @@ const autoTourRuntime = createAutoTourRuntime({
 			setCameraViewState('level', null)
 		}
 		autoTourPaused.value = false
-		autoTourPausedIsTerminal.value = false
-		autoTourPausedNodeId.value = null
 		applyAutoTourCameraInputPolicy()
-	},
-	onGuideStop: (nodeId, stop) => {
-		pauseAutoTourAtGuideStop(nodeId)
-		if (!stop.behavior) {
-			return
+		if (shouldResumeManualDrive) {
+			void completeVehicleAutoTourTargetTakeover(nodeId)
 		}
-		processBehaviorEvents(triggerBehaviorAction(
-			stop.behavior.nodeId,
-			'perform',
-			{ payload: { routeEvent: stop.definition.id } },
-			{ sequenceId: stop.behavior.sequenceId },
-		))
+	},
+	onGuideStop: (nodeId, stop, context) => {
+		if (stop.behavior) {
+			processBehaviorEvents(triggerBehaviorAction(
+				stop.behavior.nodeId,
+				'perform',
+				{ payload: { routeEvent: stop.definition.id } },
+				{ sequenceId: stop.behavior.sequenceId },
+			))
+		}
+		if (context.isTourTarget && activeAutoTourNodeIds.has(nodeId) && !vehicleDriveState.active) {
+			void completeVehicleAutoTourTargetTakeover(nodeId)
+		}
 	},
 	onGuideTransition: (nodeId, transition) => {
 		pendingGuideTransitionAutoTourNodes.set(transition.behavior.sequenceId, {
@@ -6580,7 +6563,7 @@ function setCameraCaging(enabled: boolean, options: { force?: boolean } = {}) {
 	updateCameraControlActivation()
 }
 
-function syncVehicleDriveCameraFollowState(): void {
+function syncVehicleDriveCameraFollowState(options: { immediate?: boolean } = {}): void {
 	if (!vehicleDriveState.active) {
 		vehicleDriveCameraFollowState.initialized = false
 		resetVehicleFollowLocalOffset()
@@ -6594,10 +6577,12 @@ function syncVehicleDriveCameraFollowState(): void {
 	if (!camera || !renderer) {
 		return
 	}
-	updateVehicleDriveCamera(0, {
-		immediate: true,
-		applyOrbitTween: true,
-	})
+	if (options.immediate !== false) {
+		updateVehicleDriveCamera(0, {
+			immediate: true,
+			applyOrbitTween: true,
+		})
+	}
 }
 
 function clearBehaviorAlert() {
@@ -8205,21 +8190,7 @@ function advanceCameraOffsetOverrides(deltaSeconds: number): void {
 	})
 }
 
-function resolveCinematicFollowDistance(distance: number, speedMps: number): number {
-	return distance + Math.min(
-		AUTO_TOUR_CAMERA_MAX_DISTANCE_BOOST_M,
-		Math.max(0, speedMps) * AUTO_TOUR_CAMERA_DISTANCE_PER_MPS,
-	)
-}
-
-function resolveCinematicFollowHeight(height: number, speedMps: number): number {
-	return height + Math.min(
-		AUTO_TOUR_CAMERA_MAX_HEIGHT_BOOST_M,
-		Math.max(0, speedMps) * AUTO_TOUR_CAMERA_HEIGHT_PER_MPS,
-	)
-}
-
-function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.Vector3 | null {
+function resolveAutoTourFollowCameraOffset(nodeId: string): THREE.Vector3 | null {
 	const node = resolveNodeById(nodeId)
 	if (!node) {
 		return null
@@ -8228,8 +8199,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.
 	if (override) {
 		return resolveBackFollowCameraLocalOffset(
 			autoTourCameraFollowOffsetScratch,
-			resolveCinematicFollowDistance(override.distance, speedMps),
-			resolveCinematicFollowHeight(override.height, speedMps),
+			override.distance,
+			override.height,
 		)
 	}
 	const vehicleComponent = resolveVehicleComponent(node)
@@ -8237,8 +8208,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.
 		const props = clampVehicleComponentProps(vehicleComponent.props ?? null)
 		return resolveBackFollowCameraLocalOffset(
 			autoTourCameraFollowOffsetScratch,
-			resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
-			resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
+			props.cameraFollowDistance,
+			props.cameraFollowHeight,
 		)
 	}
 	const characterComponent = resolveCharacterControllerComponent(node)
@@ -8246,8 +8217,8 @@ function resolveAutoTourFollowCameraOffset(nodeId: string, speedMps = 0): THREE.
 		const props = clampCharacterControllerComponentProps(characterComponent.props ?? null)
 		return resolveBackFollowCameraLocalOffset(
 			autoTourCameraFollowOffsetScratch,
-			resolveCinematicFollowDistance(props.cameraFollowDistance, speedMps),
-			resolveCinematicFollowHeight(props.cameraFollowHeight, speedMps),
+			props.cameraFollowDistance,
+			props.cameraFollowHeight,
 		)
 	}
 	return null
@@ -8643,6 +8614,27 @@ function updateCharacterFollowCamera(
 		characterFollowAnchorPosition,
 	)
 	const characterFollowCameraOffset = resolveCharacterFollowCameraOffset(characterFollowCameraOffsetScratch)
+	const characterAutoTourActive = activeCharacterAutoTourNodeIds.has(controlledNodeId)
+	const characterFollowTuning = characterAutoTourActive
+		? createAutoTourFollowCameraTuning({
+				headingLerpSpeed: characterSteeringActive
+					? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
+					: 0.4,
+				targetLerpSpeed: 8,
+			})
+		: {
+				...createBackFollowCameraTuning(),
+				// While steering the camera slowly chases the facing so diagonal
+				// pushes arc; when the character stops it very slowly drifts back
+				// to the behind-the-character follow position.
+				headingLerpSpeed: characterSteeringActive
+					? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
+					: 0.4,
+				targetLerpSpeed: 8,
+				// Smooth the camera position slightly so the physics/visual anchor's
+				// tiny per-frame steps are absorbed instead of reproduced 1:1.
+				positionLerpSpeed: 10,
+			}
 	const updated = updateBackFollowCamera({
 		controller: characterFollowCameraController,
 		motion: characterFollowCameraMotionState,
@@ -8661,19 +8653,7 @@ function updateCharacterFollowCamera(
 		followControlsDirty: false,
 		followForwardPitch: true,
 		immediate,
-		tuning: {
-			...createBackFollowCameraTuning(),
-			// While steering the camera slowly chases the facing so diagonal
-			// pushes arc; when the character stops it very slowly drifts back
-			// to the behind-the-character follow position.
-			headingLerpSpeed: characterSteeringActive
-				? Math.max(characterCameraChaseHeadingSpeed, 1e-4)
-				: 0.4,
-			targetLerpSpeed: 8,
-			// Smooth the camera position slightly so the physics/visual anchor's
-			// tiny per-frame steps are absorbed instead of reproduced 1:1.
-			positionLerpSpeed: 10,
-		},
+		tuning: characterFollowTuning,
 	})
 	if (updated) {
 		lastOrbitState.position.copy(activeCamera.position)
@@ -8745,20 +8725,18 @@ function resolveScenePreviewCharacterAnimationInput(nodeId: string): {
 }
 
 function handleCharacterAutoTourComplete(nodeId: string): void {
+	const reachedGuideTarget = guideWaypointRouteOverrideByNodeId.has(nodeId)
 	guideWaypointRouteOverrideByNodeId.delete(nodeId)
 	activeCharacterAutoTourNodeIds.delete(nodeId)
 	autoTourPaused.value = false
-	autoTourPausedIsTerminal.value = false
-	autoTourPausedNodeId.value = null
+	if (reachedGuideTarget) {
+		void completeCharacterAutoTourTargetTakeover(nodeId)
+		return
+	}
 	characterPlayerControlNodeIdOverride.value = nodeId
 	resetCharacterControlInputs()
 	if (characterCameraMode.value !== 'follow') {
 		characterCameraMode.value = 'follow'
-	}
-	const event = pendingVehicleDriveEvent.value
-	const eventNodeId = event?.targetNodeId ?? event?.nodeId ?? null
-	if (eventNodeId !== nodeId) {
-		pendingVehicleDriveEvent.value = buildActorAutoTourPromptEvent(nodeId)
 	}
 	applyAutoTourCameraInputPolicy()
 }
@@ -8773,17 +8751,18 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
 			syncInstancedTransform(object)
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
-		onGuideStop: (nodeId, stop) => {
-			pauseAutoTourAtGuideStop(nodeId)
-			if (!stop.behavior) {
-				return
+		onGuideStop: (nodeId, stop, context) => {
+			if (stop.behavior) {
+				processBehaviorEvents(triggerBehaviorAction(
+					stop.behavior.nodeId,
+					'perform',
+					{ payload: { routeEvent: stop.definition.id } },
+					{ sequenceId: stop.behavior.sequenceId },
+				))
 			}
-			processBehaviorEvents(triggerBehaviorAction(
-				stop.behavior.nodeId,
-				'perform',
-				{ payload: { routeEvent: stop.definition.id } },
-				{ sequenceId: stop.behavior.sequenceId },
-			))
+			if (context.isTourTarget) {
+				void completeCharacterAutoTourTargetTakeover(nodeId)
+			}
 		},
 		onGuideTransition: (nodeId, transition) => {
 			pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
@@ -9018,17 +8997,18 @@ function updateCharacterPathFollow(delta: number): void {
 			syncInstancedTransform(object)
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
-		onGuideStop: (nodeId, stop) => {
-			pauseAutoTourAtGuideStop(nodeId)
-			if (!stop.behavior) {
-				return
+		onGuideStop: (nodeId, stop, context) => {
+			if (stop.behavior) {
+				processBehaviorEvents(triggerBehaviorAction(
+					stop.behavior.nodeId,
+					'perform',
+					{ payload: { routeEvent: stop.definition.id } },
+					{ sequenceId: stop.behavior.sequenceId },
+				))
 			}
-			processBehaviorEvents(triggerBehaviorAction(
-				stop.behavior.nodeId,
-				'perform',
-				{ payload: { routeEvent: stop.definition.id } },
-				{ sequenceId: stop.behavior.sequenceId },
-			))
+			if (context.isTourTarget) {
+				void completeCharacterAutoTourTargetTakeover(nodeId)
+			}
 		},
 		onGuideTransition: (nodeId, transition) => {
 			pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
@@ -10783,6 +10763,14 @@ function setVehicleDriveControlFlag(action: DriveControlAction, pressed: boolean
 	if (!vehicleDriveState.active) {
 		return
 	}
+	if (
+		pressed
+		&& (action === 'forward' || action === 'backward')
+		&& targetStopHeldVehicleNodeId.value
+		&& targetStopHeldVehicleNodeId.value === vehicleDriveState.nodeId
+	) {
+		releaseTargetStopVehicleHold()
+	}
 	if (vehicleDriveInputFlags[action] === pressed) {
 		return
 	}
@@ -10824,7 +10812,9 @@ function setCharacterControlFlag(action: CharacterControlAction, pressed: boolea
 	if (pressed) {
 		const activeTourNodeId = activeCharacterAutoTourNodeIds.values().next().value
 		if (activeTourNodeId) {
-			takeOverCharacterAutoTourForManualInput(activeTourNodeId)
+			if (pendingAutoTourTargetTakeoverNodeId.value !== activeTourNodeId) {
+				takeOverCharacterAutoTourForManualInput(activeTourNodeId)
+			}
 		}
 	}
 	if (vehicleDriveState.active || !runtimePanelUi.value.visible || runtimePanelUi.value.mode !== 'character') {
@@ -10912,12 +10902,83 @@ function restoreCharacterDriveCameraState(): void {
 	characterDriveCameraRestoreState.hasSnapshot = false
 }
 
+type VehicleDriveStartOptions = {
+	preserveCamera?: boolean
+}
+
+type VehicleDriveCameraHandoffSource = {
+	position: THREE.Vector3
+	target: THREE.Vector3
+}
+
+function clearVehicleDriveCameraHandoff(): void {
+	resetCameraPoseTransitionState(vehicleDriveCameraHandoff)
+}
+
+function captureVehicleDriveCameraHandoffSource(): VehicleDriveCameraHandoffSource | null {
+	if (!camera) {
+		return null
+	}
+	const target = autoTourCameraFollowState.initialized
+		? autoTourCameraFollowState.currentTarget.clone()
+		: camera.position.clone().addScaledVector(
+				camera.getWorldDirection(new THREE.Vector3()),
+				6,
+			)
+	return {
+		position: camera.position.clone(),
+		target,
+	}
+}
+
+function beginVehicleDriveCameraHandoff(source: VehicleDriveCameraHandoffSource | null): void {
+	if (!source) {
+		clearVehicleDriveCameraHandoff()
+		return
+	}
+	beginCameraPoseTransition(vehicleDriveCameraHandoff, source.position, source.target)
+}
+
+function applyVehicleDriveCameraHandoff(delta: number): void {
+	if (!camera || !vehicleDriveState.active) {
+		clearVehicleDriveCameraHandoff()
+		return
+	}
+	if (!vehicleDriveCameraFollowState.initialized) {
+		return
+	}
+	if (isWatchCameraLocked() || activeCameraLookTween) {
+		return
+	}
+	const applied = runWithProgrammaticCameraMutation(() => {
+		if (!vehicleDriveCameraHandoff.active) {
+			return false
+		}
+		applyCameraPoseTransition(
+			vehicleDriveCameraHandoff,
+			camera,
+			vehicleDriveCameraFollowState.currentTarget,
+			delta,
+			mapControls ?? undefined,
+		)
+		return true
+	})
+	if (applied && mapControls) {
+		lastOrbitState.position.copy(camera.position)
+		lastOrbitState.target.copy(mapControls.target)
+	}
+}
+
 function startVehicleDriveMode(
 	event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>,
+	options: VehicleDriveStartOptions = {},
 ): { success: boolean; message?: string } {
 	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
 	if (!targetNodeId) {
 		return { success: false, message: 'No node provided to drive.' }
+	}
+	if (!options.preserveCamera) {
+		clearVehicleDriveCameraHandoff()
 	}
 	if (vehicleDriveState.active) {
 		stopVehicleDriveMode({ resolution: { type: 'abort', message: 'Driving state was replaced by a new script.' } })
@@ -10933,6 +10994,7 @@ function startVehicleDriveMode(
 		: { camera: null as THREE.PerspectiveCamera | null }
 	const result = vehicleDriveController.startDrive(event, ctx)
 	if (!result.success) {
+		clearVehicleDriveCameraHandoff()
 		return result
 	}
 	vehicleMotionAuthority.beginManualPhysics(targetNodeId)
@@ -10943,7 +11005,7 @@ function startVehicleDriveMode(
 	activeCameraLookTween = null
 	setCameraViewState('watching', targetNodeId)
 	setVehicleDriveUiOverride('show')
-	syncVehicleDriveCameraFollowState()
+	syncVehicleDriveCameraFollowState({ immediate: !options.preserveCamera })
 	return { success: true }
 }
 
@@ -11104,121 +11166,6 @@ function alignCameraToVehicleExit(): boolean {
 	return success
 }
 
-const VEHICLE_EXIT_LATERAL_RATIO = 0.6
-const VEHICLE_EXIT_FORWARD_RATIO = 0.35
-const VEHICLE_EXIT_VERTICAL_RATIO = 0.25
-const VEHICLE_EXIT_LATERAL_MIN = 1.25
-const VEHICLE_EXIT_FORWARD_MIN = 1.25
-const VEHICLE_EXIT_VERTICAL_MIN = 0.6
-const VEHICLE_CAMERA_FALLBACK_HEIGHT = 1.35
-const VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO = 0.45
-const VEHICLE_SIZE_FALLBACK = { width: 2.4, height: 1.4, length: 4.2 }
-
-function alignCameraToVehicleExitForNode(nodeId: string): boolean {
-	if (!camera) {
-		return false
-	}
-	const vehicleNodeId = normalizeNodeId(nodeId)
-	if (!vehicleNodeId) {
-		return false
-	}
-	const vehicleObject = nodeObjectMap.get(vehicleNodeId) ?? null
-	if (!vehicleObject) {
-		return false
-	}
-	const instance = vehicleInstances.get(vehicleNodeId) ?? null
-
-	vehicleObject.updateMatrixWorld(true)
-
-	// --- seat position (fallback) ---
-	tempBox.makeEmpty()
-	tempBox.setFromObject(vehicleObject)
-	if (!Number.isFinite(tempBox.min.x) || tempBox.isEmpty()) {
-		vehicleObject.getWorldPosition(tempPosition)
-		tempPosition.addScaledVector(AUTO_TOUR_CAMERA_WORLD_UP, VEHICLE_CAMERA_FALLBACK_HEIGHT)
-	} else {
-		tempBox.getCenter(tempPosition)
-		tempBox.getSize(tempTarget)
-		const upOffset = Math.max(tempTarget.y * VEHICLE_CAMERA_FALLBACK_HEIGHT_RATIO, VEHICLE_CAMERA_FALLBACK_HEIGHT)
-		tempPosition.addScaledVector(AUTO_TOUR_CAMERA_WORLD_UP, upOffset)
-	}
-
-	// --- basis vectors (match VehicleDriveController.computeVehicleBasis) ---
-	vehicleObject.getWorldQuaternion(tempQuaternion)
-	if (instance) {
-		tempDirection.copy(instance.axisForward).applyQuaternion(tempQuaternion)
-		tempTarget.copy(instance.axisUp).applyQuaternion(tempQuaternion)
-	} else {
-		tempDirection.set(0, 0, -1).applyQuaternion(tempQuaternion)
-		tempTarget.set(0, 1, 0).applyQuaternion(tempQuaternion)
-	}
-	if (tempDirection.lengthSq() < 1e-8) {
-		tempDirection.set(0, 0, -1)
-	} else {
-		tempDirection.normalize()
-	}
-	if (tempTarget.lengthSq() < 1e-8) {
-		tempTarget.copy(AUTO_TOUR_CAMERA_WORLD_UP)
-	} else {
-		tempTarget.normalize()
-	}
-	const seatForward = tempDirection
-	const seatUp = tempTarget
-	const seatRight = protagonistPoseDirection.copy(seatForward).cross(seatUp)
-	if (seatRight.lengthSq() < 1e-8) {
-		seatRight.copy(AUTO_TOUR_CAMERA_WORLD_UP).cross(seatForward)
-	}
-	if (seatRight.lengthSq() < 1e-8) {
-		seatRight.set(1, 0, 0)
-	} else {
-		seatRight.normalize()
-	}
-	seatUp.crossVectors(seatRight, seatForward)
-	if (seatUp.lengthSq() < 1e-8) {
-		seatUp.copy(AUTO_TOUR_CAMERA_WORLD_UP)
-	} else {
-		seatUp.normalize()
-	}
-
-	// --- dimensions (match VehicleDriveController.getVehicleApproxDimensions) ---
-	tempBox.makeEmpty()
-	tempBox.setFromObject(vehicleObject)
-	let width = VEHICLE_SIZE_FALLBACK.width
-	let height = VEHICLE_SIZE_FALLBACK.height
-	let length = VEHICLE_SIZE_FALLBACK.length
-	if (Number.isFinite(tempBox.min.x) && !tempBox.isEmpty()) {
-		tempBox.getSize(tempTarget)
-		width = Math.max(tempTarget.x, VEHICLE_SIZE_FALLBACK.width)
-		height = Math.max(tempTarget.y, VEHICLE_SIZE_FALLBACK.height)
-		length = Math.max(tempTarget.z, VEHICLE_SIZE_FALLBACK.length)
-	}
-	const lateralOffset = Math.max(width * VEHICLE_EXIT_LATERAL_RATIO, VEHICLE_EXIT_LATERAL_MIN)
-	const verticalOffset = Math.max(height * VEHICLE_EXIT_VERTICAL_RATIO, VEHICLE_EXIT_VERTICAL_MIN)
-	const forwardOffset = Math.max(length * VEHICLE_EXIT_FORWARD_RATIO, VEHICLE_EXIT_FORWARD_MIN)
-
-	// Camera position: left side (-right), a bit up; look a bit forward.
-	tempPosition.addScaledVector(seatRight, -lateralOffset)
-	tempPosition.addScaledVector(seatUp, verticalOffset)
-	protagonistPoseTarget.copy(tempPosition).addScaledVector(seatForward, forwardOffset)
-
-	camera.up.copy(seatUp)
-	camera.position.copy(tempPosition)
-	camera.lookAt(protagonistPoseTarget)
-	camera.updateMatrixWorld(true)
-	if (mapControls) {
-		mapControls.target.copy(protagonistPoseTarget)
-		mapControls.update()
-	}
-
-	lastOrbitState.position.copy(camera.position)
-	if (mapControls) {
-		lastOrbitState.target.copy(mapControls.target)
-	} else {
-		lastOrbitState.target.copy(protagonistPoseTarget)
-	}
-	return true
-}
-
 function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }>): void {
 	const targetNodeId = event.targetNodeId ?? event.nodeId ?? null
 	if (!targetNodeId) {
@@ -11228,13 +11175,12 @@ function handleVehicleDriveEvent(event: Extract<BehaviorRuntimeEvent, { type: 'v
 	}
 	const targetNode = resolveNodeById(targetNodeId)
 	const canDrive = Boolean(resolveVehicleComponent(targetNode))
-	const canAutoTour = Boolean(resolveAutoTourComponent(targetNode))
 	const isTouring = activeAutoTourNodeIds.has(targetNodeId)
-	if (!isTouring && !canDrive && !canAutoTour) {
-		appendWarningMessage('Target node cannot be driven or auto-toured (missing enabled components).')
+	if (!isTouring && !canDrive) {
+		appendWarningMessage('Target node cannot be driven (missing enabled Vehicle component).')
 		resolveBehaviorToken(event.token, {
 			type: 'fail',
-			message: 'Target node cannot be driven or auto-toured (missing enabled components).',
+			message: 'Target node cannot be driven (missing enabled Vehicle component).',
 		})
 		return
 	}
@@ -11327,7 +11273,12 @@ async function startAutoTourForActor(
 	if (vehicleDrivePromptBusy.value) {
 		return
 	}
-	const event = pendingVehicleDriveEvent.value ?? buildActorAutoTourPromptEvent(targetNodeId)
+	clearVehicleDriveCameraHandoff()
+	releaseTargetStopVehicleHold()
+	pendingAutoTourManualTakeoverNodeId.value = null
+	pendingAutoTourManualTakeoverParkAtTarget.value = false
+	pendingAutoTourTargetTakeoverNodeId.value = null
+	const event = pendingVehicleDriveEvent.value ?? buildGuideAutoTourDriveEvent(targetNodeId)
 	const node = resolveNodeById(targetNodeId)
 	if (!node) {
 		appendWarningMessage('无法找到目标角色或车辆。')
@@ -11347,8 +11298,6 @@ async function startAutoTourForActor(
 	try {
 		// Capture camera settings before auto-tour mutates controls/caging/view.
 		autoTourPaused.value = false
-		autoTourPausedIsTerminal.value = false
-		autoTourPausedNodeId.value = null
 		// Auto tour and manual drive must be mutually exclusive.
 		if (vehicleDriveState.active) {
 			handleHideVehicleCockpitEvent()
@@ -11453,14 +11402,6 @@ async function startAutoTourForActor(
 	}
 }
 
-async function handleVehicleAutoTourStartClick(): Promise<void> {
-	const targetNodeId = vehicleDrivePrompt.value.targetNodeId
-	if (!targetNodeId) {
-		return
-	}
-	await startAutoTourForActor(targetNodeId)
-}
-
 async function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): Promise<void> {
 	const actorNodeId = resolveGuideWaypointActorForDestination(item.travelMode)
 	if (!actorNodeId) {
@@ -11475,7 +11416,7 @@ async function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): Pr
 		characterPlayerControlNodeIdOverride.value = null
 		resetCharacterControlInputs()
 	}
-	pendingVehicleDriveEvent.value = buildActorAutoTourPromptEvent(actorNodeId)
+	pendingVehicleDriveEvent.value = buildGuideAutoTourDriveEvent(actorNodeId)
 	guideWaypointMenuContextRevision.value += 1
 	await startAutoTourForActor(actorNodeId, {
 		routeNodeId: item.routeNodeId,
@@ -11483,68 +11424,270 @@ async function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): Pr
 	})
 }
 
-function handleVehicleAutoTourPauseToggleClick(): void {
-	if (vehicleDrivePromptBusy.value) {
-		return
-	}
-	const targetNodeId = vehicleDrivePrompt.value.targetNodeId
-	if (!targetNodeId) {
-		return
-	}
-	if (!activeAutoTourNodeIds.has(targetNodeId)) {
-		if (!activeCharacterAutoTourNodeIds.has(targetNodeId)) {
-			return
-		}
-		const nextCharacterPaused = !autoTourPaused.value
-		characterAutoTourRuntime.setPaused(targetNodeId, nextCharacterPaused)
-		if (nextCharacterPaused) {
-			pauseAutoTourAtGuideStop(targetNodeId)
-		} else {
-			autoTourPausedIsTerminal.value = false
-			autoTourPausedNodeId.value = null
-			autoTourPaused.value = false
-			applyAutoTourCameraInputPolicy()
-		}
-		return
-	}
-	const nextPaused = !autoTourPaused.value
-	if (!nextPaused) {
-		// Resuming: if we paused due to terminal end, first request return-to-start.
-		if (autoTourPausedIsTerminal.value && autoTourPausedNodeId.value === targetNodeId) {
-			autoTourRuntime.continueFromEnd(targetNodeId)
-		} else {
-			autoTourRuntime.setPaused(targetNodeId, false)
-		}
-		autoTourPausedIsTerminal.value = false
-		autoTourPausedNodeId.value = null
-		autoTourPaused.value = false
-	} else {
-		// Manual pause: not a terminal condition.
-		autoTourRuntime.setPaused(targetNodeId, true)
-		pauseAutoTourAtGuideStop(targetNodeId)
-	}
-	applyAutoTourCameraInputPolicy()
-}
-
-function pauseAutoTourAtGuideStop(nodeId: string): void {
-	autoTourPausedIsTerminal.value = false
-	autoTourPausedNodeId.value = nodeId
+function pauseAutoTourForManualHandoffRetry(): void {
+	clearVehicleDriveCameraHandoff()
 	autoTourPaused.value = true
 	applyAutoTourCameraInputPolicy()
 }
 
-function takeOverVehicleAutoTourForManualInput(nodeId: string): boolean {
-	if (vehicleDrivePromptBusy.value || vehicleDriveState.active) {
+function releaseTargetStopVehicleHold(): void {
+	const nodeId = targetStopHeldVehicleNodeId.value
+	if (!nodeId) {
+		return
+	}
+	targetStopHeldVehicleNodeId.value = null
+	vehicleDriveController.releaseParkingHold()
+	const instance = vehicleInstances.get(nodeId) ?? null
+	if (instance) {
+		instance.hasWheelMotionSample = false
+		instance.wheelMotionSource = null
+	}
+}
+
+function clearManualDrivePoseHandoff(nodeId?: string | null): void {
+	if (!manualDrivePoseHandoff) {
+		return
+	}
+	if (nodeId && manualDrivePoseHandoff.nodeId !== nodeId) {
+		return
+	}
+	manualDrivePoseHandoff = null
+}
+
+function hasManualDrivePoseHandoff(nodeId: string): boolean {
+	return Boolean(
+		manualDrivePoseHandoff
+		&& (
+			manualDrivePoseHandoff.nodeId === nodeId
+			|| manualDrivePoseHandoff.bridgeNodeId === nodeId
+		)
+	)
+}
+
+function isManualDrivePoseHandoffFrameReached(
+	handoff: ManualDrivePoseHandoff,
+	frameState: PhysicsBridgeBodyFrameState,
+): boolean {
+	const positionDeltaSq = frameState.position.distanceToSquared(handoff.worldPosition)
+	return positionDeltaSq <= 2.5e-3
+		&& Math.abs(frameState.quaternion.dot(handoff.worldQuaternion)) >= 1 - 1e-5
+}
+
+function captureManualDrivePoseHandoff(
+	nodeId: string,
+	targetPose?: AutoTourTargetPose | null,
+): ManualDrivePoseHandoff | null {
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!object && !targetPose) {
+		clearManualDrivePoseHandoff(nodeId)
+		return null
+	}
+	if (object) {
+		object.updateMatrixWorld(true)
+	}
+	const handoff: ManualDrivePoseHandoff = {
+		nodeId,
+		bridgeNodeId: resolveMoveToSubjectBridgeNodeId(nodeId) ?? nodeId,
+		worldPosition: targetPose?.position.clone()
+			?? object!.getWorldPosition(new THREE.Vector3()),
+		worldQuaternion: targetPose?.quaternion.clone()
+			?? object!.getWorldQuaternion(new THREE.Quaternion()).normalize(),
+		bridgeTransformCommitted: false,
+	}
+	manualDrivePoseHandoff = handoff
+	return handoff
+}
+
+function commitManualDrivePoseHandoffToPhysics(
+	handoff: ManualDrivePoseHandoff | null,
+): void {
+	if (!handoff) {
+		return
+	}
+	const bridge = physicsBridge
+	const bodyId = physicsBridgeBodyIdByNodeId.get(handoff.bridgeNodeId)
+	if (!bridge || !physicsBridgeSceneLoaded || typeof bodyId !== 'number') {
+		clearManualDrivePoseHandoff(handoff.nodeId)
+		return
+	}
+	physicsBridgeFrameBodiesByNodeId.set(handoff.bridgeNodeId, {
+		position: handoff.worldPosition.clone(),
+		quaternion: handoff.worldQuaternion.clone(),
+		motionState: 0,
+	})
+	void bridge.setBodyTransform({
+		bodyId,
+		transform: {
+			position: [
+				handoff.worldPosition.x,
+				handoff.worldPosition.y,
+				handoff.worldPosition.z,
+			],
+			rotation: [
+				handoff.worldQuaternion.x,
+				handoff.worldQuaternion.y,
+				handoff.worldQuaternion.z,
+				handoff.worldQuaternion.w,
+			],
+		},
+		resetVelocity: true,
+	}).then(() => {
+		if (manualDrivePoseHandoff !== handoff) {
+			return
+		}
+		const chassisBody = vehicleInstances.get(handoff.nodeId)?.vehicle.chassisBody ?? null
+		if (chassisBody) {
+			chassisBody.position.set(
+				handoff.worldPosition.x,
+				handoff.worldPosition.y,
+				handoff.worldPosition.z,
+			)
+			chassisBody.quaternion.set(
+				handoff.worldQuaternion.x,
+				handoff.worldQuaternion.y,
+				handoff.worldQuaternion.z,
+				handoff.worldQuaternion.w,
+			)
+			chassisBody.velocity.set(0, 0, 0)
+			chassisBody.angularVelocity.set(0, 0, 0)
+		}
+		const rigidbody = rigidbodyInstances.get(handoff.bridgeNodeId)?.body
+			?? rigidbodyInstances.get(handoff.nodeId)?.body
+			?? null
+		if (rigidbody) {
+			rigidbody.position.set(
+				handoff.worldPosition.x,
+				handoff.worldPosition.y,
+				handoff.worldPosition.z,
+			)
+			rigidbody.quaternion.x = handoff.worldQuaternion.x
+			rigidbody.quaternion.y = handoff.worldQuaternion.y
+			rigidbody.quaternion.z = handoff.worldQuaternion.z
+			rigidbody.quaternion.w = handoff.worldQuaternion.w
+		}
+		handoff.bridgeTransformCommitted = true
+	}).catch((error) => {
+		console.warn('[ScenePreview] Failed to commit manual drive handoff pose', error)
+		clearManualDrivePoseHandoff(handoff.nodeId)
+	})
+}
+
+function captureAutoTourTargetPose(nodeId: string): AutoTourTargetPose | null {
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (!object) {
+		return null
+	}
+	object.updateMatrixWorld(true)
+	return {
+		position: object.getWorldPosition(new THREE.Vector3()),
+		quaternion: object.getWorldQuaternion(new THREE.Quaternion()).normalize(),
+	}
+}
+
+function applyAutoTourTargetPose(nodeId: string, pose: AutoTourTargetPose): void {
+	applyMoveToSubjectWorldPose(nodeId, pose.position, pose.quaternion)
+	const node = resolveNodeById(nodeId)
+	const object = nodeObjectMap.get(nodeId) ?? null
+	if (node && object) {
+		syncSceneNodeLocalTransformFromObject(node, object)
+		syncInstancedTransform(object, true)
+	}
+}
+
+async function completeVehicleAutoTourTargetTakeover(nodeId: string): Promise<void> {
+	if (
+		pendingAutoTourTargetTakeoverNodeId.value === nodeId
+		|| vehicleDriveState.active
+	) {
+		return
+	}
+	pendingAutoTourTargetTakeoverNodeId.value = nodeId
+	targetStopHeldVehicleNodeId.value = nodeId
+	const pendingEvent = pendingVehicleDriveEvent.value
+	if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
+		pendingVehicleDriveEvent.value = null
+	}
+	pendingVehicleDriveRetryRequested.value = false
+	const targetPose = captureAutoTourTargetPose(nodeId)
+	let switchedToManual = false
+	try {
+		await ensureGroundCollisionCoverageForNodes([nodeId])
+		if (
+			pendingAutoTourTargetTakeoverNodeId.value !== nodeId
+			|| vehicleDriveState.active
+		) {
+			return
+		}
+		pendingAutoTourTargetTakeoverNodeId.value = null
+		switchedToManual = takeOverVehicleAutoTourForManualInput(nodeId, {
+			parkAtTarget: true,
+			targetPose,
+		})
+		if (switchedToManual && targetPose) {
+			applyAutoTourTargetPose(nodeId, targetPose)
+			commitManualDrivePoseHandoffToPhysics(
+				captureManualDrivePoseHandoff(nodeId, targetPose),
+			)
+			vehicleDriveController.parkAtCurrentPose()
+		}
+	} finally {
+		if (pendingAutoTourTargetTakeoverNodeId.value === nodeId) {
+			pendingAutoTourTargetTakeoverNodeId.value = null
+		}
+		if (!switchedToManual && !vehicleDriveState.active) {
+			releaseTargetStopVehicleHold()
+		}
+	}
+}
+
+function takeOverVehicleAutoTourForManualInput(
+	nodeId: string,
+	options: { parkAtTarget?: boolean; targetPose?: AutoTourTargetPose | null } = {},
+): boolean {
+	if (vehicleDriveState.active) {
+		return false
+	}
+	if (pendingAutoTourTargetTakeoverNodeId.value === nodeId) {
+		return false
+	}
+	const pendingEvent = pendingVehicleDriveEvent.value
+	if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
+		pendingVehicleDriveEvent.value = null
+	}
+	const parkAtTarget = options.parkAtTarget === true
+	if (parkAtTarget) {
+		targetStopHeldVehicleNodeId.value = nodeId
+	}
+	const queueRetry = () => {
+		pendingAutoTourManualTakeoverNodeId.value = nodeId
+		pendingAutoTourManualTakeoverParkAtTarget.value = parkAtTarget
+		autoTourRuntime.setPaused(nodeId, true)
+		pauseAutoTourForManualHandoffRetry()
+	}
+	if (vehicleDrivePromptBusy.value) {
+		queueRetry()
 		return false
 	}
 	if (!scenePreviewDriveBindingsReady.value) {
-		appendWarningMessage('车辆尚未准备就绪，无法切换到手动驾驶。')
-		autoTourRuntime.setPaused(nodeId, true)
-		autoTourPaused.value = true
+		queueRetry()
 		return false
 	}
 	vehicleDrivePromptBusy.value = true
 	try {
+		const vehicleObject = nodeObjectMap.get(nodeId) ?? null
+		const worldPosition = options.targetPose?.position.clone() ?? new THREE.Vector3()
+		const worldQuaternion = options.targetPose?.quaternion.clone() ?? new THREE.Quaternion()
+		if (!options.targetPose && vehicleObject) {
+			vehicleObject.updateMatrixWorld(true)
+			vehicleObject.getWorldPosition(worldPosition)
+			vehicleObject.getWorldQuaternion(worldQuaternion).normalize()
+		}
+		const handoff = captureManualDrivePoseHandoff(nodeId, {
+			position: worldPosition,
+			quaternion: worldQuaternion,
+		})
+		const cameraHandoffSource = captureVehicleDriveCameraHandoffSource()
+		beginVehicleDriveCameraHandoff(cameraHandoffSource)
 		clearAutoTourCameraObjectMetrics(nodeId)
 		stopTourAndUnfollow(autoTourRuntime, nodeId, (activeNodeId) => {
 			activeAutoTourNodeIds.delete(activeNodeId)
@@ -11556,17 +11699,45 @@ function takeOverVehicleAutoTourForManualInput(nodeId: string): boolean {
 			}
 		})
 		autoTourPaused.value = false
-		autoTourPausedIsTerminal.value = false
-		autoTourPausedNodeId.value = null
-		const pendingEvent = pendingVehicleDriveEvent.value
-		if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
-			pendingVehicleDriveEvent.value = null
+		if (vehicleObject) {
+			applyAutoTourTargetPose(nodeId, {
+				position: worldPosition,
+				quaternion: worldQuaternion,
+			})
 		}
-		const result = startVehicleDriveMode(buildDefaultSteerDriveEvent(nodeId))
+		commitManualDrivePoseHandoffToPhysics(handoff)
+		const result = startVehicleDriveMode(
+			buildDefaultSteerDriveEvent(nodeId),
+			{ preserveCamera: true },
+		)
 		if (!result.success) {
-			appendWarningMessage(result.message ?? '无法切换到手动驾驶。')
-			autoTourPaused.value = true
+			clearVehicleDriveCameraHandoff()
+			if (isVehicleDrivePendingReadinessMessage(result.message)) {
+				queueRetry()
+			} else {
+				pendingAutoTourManualTakeoverNodeId.value = null
+				pendingAutoTourManualTakeoverParkAtTarget.value = false
+				releaseTargetStopVehicleHold()
+				appendWarningMessage(result.message ?? '无法切换到手动驾驶。')
+			}
 			return false
+		}
+		pendingAutoTourManualTakeoverNodeId.value = null
+		pendingAutoTourManualTakeoverParkAtTarget.value = false
+		if (parkAtTarget) {
+			vehicleDriveController.parkAtCurrentPose()
+			vehicleSpeedDisplayMps.value = 0
+			vehicleSpeedDisplayLastCommitAtMs = 0
+			vehicleSpeedDisplayLowSpeedSinceAtMs = null
+			controlledNodeMotionRuntime.clear(nodeId)
+			const instance = vehicleInstances.get(nodeId) ?? null
+			if (instance) {
+				instance.hasWheelMotionSample = false
+				instance.wheelMotionSource = null
+			}
+		}
+		if (options.targetPose) {
+			applyAutoTourTargetPose(nodeId, options.targetPose)
 		}
 		handleShowVehicleCockpitEvent()
 		return true
@@ -11576,16 +11747,41 @@ function takeOverVehicleAutoTourForManualInput(nodeId: string): boolean {
 	}
 }
 
-function takeOverCharacterAutoTourForManualInput(nodeId: string): void {
+function retryPendingAutoTourManualTakeover(): void {
+	const nodeId = pendingAutoTourManualTakeoverNodeId.value
+	if (
+		!nodeId
+		|| !scenePreviewDriveBindingsReady.value
+		|| vehicleDrivePromptBusy.value
+		|| vehicleDriveState.active
+	) {
+		return
+	}
+	const parkAtTarget = pendingAutoTourManualTakeoverParkAtTarget.value
+	pendingAutoTourManualTakeoverNodeId.value = null
+	pendingAutoTourManualTakeoverParkAtTarget.value = false
+	pendingAutoTourTargetTakeoverNodeId.value = null
+	takeOverVehicleAutoTourForManualInput(nodeId, { parkAtTarget })
+}
+
+function takeOverCharacterAutoTourForManualInput(
+	nodeId: string,
+	options: { resetInput?: boolean; targetPose?: AutoTourTargetPose | null } = {},
+): void {
 	characterAutoTourRuntime.deactivate(nodeId)
 	activeCharacterAutoTourNodeIds.delete(nodeId)
 	autoTourPaused.value = false
-	autoTourPausedIsTerminal.value = false
-	autoTourPausedNodeId.value = null
 	characterPlayerControlNodeIdOverride.value = nodeId
-	characterInputYawInitialized = false
-	characterInputYawNodeId = null
-	characterDesiredInputYaw = null
+	if (options.targetPose) {
+		applyAutoTourTargetPose(nodeId, options.targetPose)
+	}
+	if (options.resetInput) {
+		resetCharacterControlInputs()
+	} else {
+		characterInputYawInitialized = false
+		characterInputYawNodeId = null
+		characterDesiredInputYaw = null
+	}
 	resetProtagonistPoseState()
 	setCameraCaging(false)
 	if (characterCameraMode.value !== 'follow') {
@@ -11594,72 +11790,36 @@ function takeOverCharacterAutoTourForManualInput(nodeId: string): void {
 	applyAutoTourCameraInputPolicy()
 }
 
-function handleVehicleAutoTourStopClick(): void {
-	if (vehicleDrivePromptBusy.value) {
+async function completeCharacterAutoTourTargetTakeover(nodeId: string): Promise<void> {
+	if (pendingAutoTourTargetTakeoverNodeId.value === nodeId) {
 		return
 	}
-	const prompt = vehicleDrivePrompt.value
-	const event = prompt.sourceEvent
-	const currentTourNodeId = resolveAutoTourFollowNodeId(
-		autoTourFollowNodeId.value,
-		cameraViewState.watchTargetId,
-		activeAutoTourNodeIds,
-		previewNodeMap.keys(),
-		autoTourRuntime,
-	)
-	const promptNodeId = prompt.targetNodeId
-	const characterTourNodeId = (
-		promptNodeId
-		&& activeCharacterAutoTourNodeIds.has(promptNodeId)
-			? promptNodeId
-			: activeCharacterAutoTourNodeIds.values().next().value ?? null
-	)
-	if (characterTourNodeId) {
-		characterAutoTourRuntime.deactivate(characterTourNodeId)
-		activeCharacterAutoTourNodeIds.delete(characterTourNodeId)
-		autoTourPaused.value = false
-		autoTourPausedIsTerminal.value = false
-		autoTourPausedNodeId.value = null
-		characterPlayerControlNodeIdOverride.value = characterTourNodeId
-		resetCharacterControlInputs()
-		if (characterCameraMode.value !== 'follow') {
-			characterCameraMode.value = 'follow'
-		}
-		if (event?.token) {
-			resolveBehaviorToken(event.token, { type: 'continue' })
-			pendingVehicleDriveEvent.value = { ...event, token: '' }
-		}
-		applyAutoTourCameraInputPolicy()
-		return
-	}
-	const targetNodeId = currentTourNodeId ?? promptNodeId
-	if (!targetNodeId) {
-		return
-	}
-	vehicleDrivePromptBusy.value = true
-	try {
-		autoTourPaused.value = false
-		autoTourPausedIsTerminal.value = false
-		autoTourPausedNodeId.value = null
-		clearAutoTourCameraObjectMetrics(targetNodeId)
-		stopTourAndUnfollow(autoTourRuntime, targetNodeId, (n) => {
-			activeAutoTourNodeIds.delete(n)
-			if (autoTourFollowNodeId.value === n) {
-				autoTourFollowNodeId.value = null
-				resetAutoTourCameraFollowState()
-				followCameraControlActive = false
-				followCameraControlDirty = false
-				setCameraViewState('level', null)
-			}
-		})
-		// Stop-tour should close the prompt and place the camera at the vehicle's left-side exit.
+	pendingAutoTourTargetTakeoverNodeId.value = nodeId
+	const targetPose = captureAutoTourTargetPose(nodeId)
+	const pendingEvent = pendingVehicleDriveEvent.value
+	if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
 		pendingVehicleDriveEvent.value = null
-		const aligned = alignCameraToVehicleExitForNode(targetNodeId)
-		if (!aligned) {
-			appendWarningMessage('Could not find the default exit position after stopping the tour.')
+	}
+	try {
+		await ensureGroundCollisionCoverageForNodes([nodeId])
+		if (pendingAutoTourTargetTakeoverNodeId.value !== nodeId) {
+			return
+		}
+		pendingAutoTourTargetTakeoverNodeId.value = null
+		takeOverCharacterAutoTourForManualInput(nodeId, {
+			resetInput: true,
+			targetPose,
+		})
+		if (targetPose) {
+			applyAutoTourTargetPose(nodeId, targetPose)
+			commitManualDrivePoseHandoffToPhysics(
+				captureManualDrivePoseHandoff(nodeId, targetPose),
+			)
 		}
 	} finally {
-		vehicleDrivePromptBusy.value = false
+		if (pendingAutoTourTargetTakeoverNodeId.value === nodeId) {
+			pendingAutoTourTargetTakeoverNodeId.value = null
+		}
 	}
 }
 
@@ -12045,17 +12205,15 @@ function handleCanvasClick(event: MouseEvent) {
 		}
 
 		const actorNodeId = resolveVehicleAncestorNodeId(resolvedId)
-			?? resolveCharacterAutoTourAncestorNodeId(resolvedId)
 		if (!actorNodeId) {
 			continue
 		}
 		const actorNode = resolveNodeById(actorNodeId)
 		const canDrive = Boolean(resolveVehicleComponent(actorNode))
-		const canAutoTour = Boolean(resolveAutoTourComponent(actorNode)?.props?.routeNodeId)
-		if (!actorNode || (!canDrive && !canAutoTour)) {
+		if (!actorNode || !canDrive) {
 			continue
 		}
-		handleVehicleDriveEvent(buildActorAutoTourPromptEvent(actorNodeId))
+		handleVehicleDriveEvent(buildDefaultSteerDriveEvent(actorNodeId))
 		return
 	}
 }
@@ -12645,11 +12803,7 @@ function updateAutoTourCameraForFrame(
 	} else {
 		autoTourCameraFollowForwardScratch.normalize()
 	}
-	const autoTourSpeedMps = Math.hypot(
-		autoTourCameraFollowVelocity.x,
-		autoTourCameraFollowVelocity.z,
-	)
-	const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId, autoTourSpeedMps)
+	const localOffsetOverride = resolveAutoTourFollowCameraOffset(nodeId)
 	autoTourCameraFollowController.update({
 		follow: autoTourCameraFollowState,
 		placement,
@@ -12861,6 +13015,7 @@ function startAnimationLoop() {
 		if (isPlaying.value) {
 			vehicleTransformDriveUpdated = updatePlaybackSystemsForFrame(delta)
 		}
+		retryPendingAutoTourManualTakeover()
 		retryPendingVehicleDriveIfNeeded()
 		activatePendingDefaultSteerDriveIfNeeded()
 		activatePendingDefaultCharacterControlIfNeeded()
@@ -12877,6 +13032,7 @@ function startAnimationLoop() {
 		// 3) Vehicle camera and camera-dependent systems
 		updateAutoTourCameraForFrame(delta, autoTourFollowCameraActive, activeCamera)
 		updateVehicleCameraForFrame(delta, vehicleFollowCameraActive, activeCamera, vehicleTransformDriveUpdated)
+		applyVehicleDriveCameraHandoff(delta)
 		if (!watchCameraLocked && characterFollowCameraActive && !autoTourFollowCameraActive) {
 			updateCharacterFollowCamera(delta, activeCamera, false)
 		}
@@ -12964,6 +13120,13 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	autoTourCameraObjectMetricsByNodeId.clear()
 	waterRuntime.reset()
 	activeAutoTourNodeIds.clear()
+	targetStopHeldVehicleNodeId.value = null
+	clearVehicleDriveCameraHandoff()
+	pendingAutoTourManualTakeoverNodeId.value = null
+	pendingAutoTourManualTakeoverParkAtTarget.value = false
+	pendingAutoTourTargetTakeoverNodeId.value = null
+	forcedGroundCollisionReferenceNodeIds.clear()
+	clearManualDrivePoseHandoff()
 	autoTourFollowNodeId.value = null
 	resetAutoTourCameraFollowState()
 	followCameraControlActive = false
@@ -13736,20 +13899,156 @@ async function bootstrapScenePreviewMeshCollisionRuntime(
 	await flushScenePreviewGroundCollisionBridgeMutations()
 }
 
+async function ensureGroundCollisionCoverageForNodes(
+	nodeIds: readonly (string | null | undefined)[],
+): Promise<boolean> {
+	const document = currentDocument
+	if (!document || !physicsBridgeSceneLoaded || !physicsEnvironmentEnabled.value) {
+		return false
+	}
+	const normalizedNodeIds = nodeIds
+		.map((nodeId) => normalizeNodeId(nodeId))
+		.filter((nodeId): nodeId is string => Boolean(nodeId))
+	if (!normalizedNodeIds.length) {
+		return false
+	}
+	normalizedNodeIds.forEach((nodeId) => {
+		forcedGroundCollisionReferenceNodeIds.add(nodeId)
+	})
+	const references: THREE.Vector3[] = []
+	try {
+		if (!resolveGroundCollisionReferenceWorld(references)) {
+			return false
+		}
+		syncGroundCollisionReferencePositions(references, groundCollisionReferencePositions)
+		groundCollisionReferenceInitialized = false
+
+		const wasCollisionBootstrapPending = physicsBridgeCollisionBootstrapPending
+		physicsBridgeCollisionBootstrapPending = true
+		try {
+			syncScenePreviewGroundCollisionRuntimeHost(document, references)
+			await bootstrapScenePreviewMeshCollisionRuntime(
+				document,
+				references,
+				() => currentDocument !== document,
+			)
+			syncScenePreviewGroundCollisionRuntimeHost(document, references)
+			await flushScenePreviewGroundCollisionBridgeMutations()
+			const bridge = physicsBridge
+			if (bridge) {
+				await Promise.all(normalizedNodeIds.map(async (nodeId) => {
+					const bridgeNodeId = resolveMoveToSubjectBridgeNodeId(nodeId) ?? nodeId
+					const bodyId = physicsBridgeBodyIdByNodeId.get(bridgeNodeId)
+					const object = nodeObjectMap.get(nodeId) ?? null
+					if (typeof bodyId !== 'number' || !object) {
+						return
+					}
+					object.updateMatrixWorld(true)
+					const worldPosition = object.getWorldPosition(new THREE.Vector3())
+					const worldQuaternion = object.getWorldQuaternion(new THREE.Quaternion()).normalize()
+					await bridge.setBodyTransform({
+						bodyId,
+						transform: {
+							position: [worldPosition.x, worldPosition.y, worldPosition.z],
+							rotation: [
+								worldQuaternion.x,
+								worldQuaternion.y,
+								worldQuaternion.z,
+								worldQuaternion.w,
+							],
+						},
+						resetVelocity: true,
+					})
+					await bridge.setBodyVelocity({
+						bodyId,
+						linearVelocity: [0, 0, 0],
+						angularVelocity: [0, 0, 0],
+						wakeUp: true,
+					})
+				}))
+			}
+		} finally {
+			physicsBridgeCollisionBootstrapPending = wasCollisionBootstrapPending
+		}
+		return true
+	} finally {
+		normalizedNodeIds.forEach((nodeId) => {
+			forcedGroundCollisionReferenceNodeIds.delete(nodeId)
+		})
+	}
+}
+
 async function syncScenePreviewGroundChunkManifest(document: SceneJsonExportDocument | null): Promise<void> {
 	void document
 }
 
+function appendGroundCollisionReferencePosition(
+	targetPositions: THREE.Vector3[],
+	position: THREE.Vector3,
+): void {
+	if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+		return
+	}
+	const alreadyCovered = targetPositions.some((candidate) => (
+		(candidate.x - position.x) ** 2 + (candidate.z - position.z) ** 2 <= 0.25
+	))
+	if (!alreadyCovered) {
+		targetPositions.push(position.clone())
+	}
+}
+
+function appendGroundCollisionReferencePositionForNode(
+	targetPositions: THREE.Vector3[],
+	nodeId: string | null | undefined,
+): void {
+	const normalizedNodeId = normalizeNodeId(nodeId)
+	if (!normalizedNodeId) {
+		return
+	}
+	const object = nodeObjectMap.get(normalizedNodeId) ?? null
+	if (!object) {
+		return
+	}
+	object.updateMatrixWorld(true)
+	appendGroundCollisionReferencePosition(
+		targetPositions,
+		object.getWorldPosition(new THREE.Vector3()),
+	)
+}
+
 function resolveGroundCollisionReferenceWorld(targetPositions: THREE.Vector3[]): boolean {
 	targetPositions.length = 0
+	const actorNodeIds = new Set<string>(forcedGroundCollisionReferenceNodeIds)
+	if (vehicleDriveState.active) {
+		if (vehicleDriveState.nodeId) {
+			actorNodeIds.add(vehicleDriveState.nodeId)
+		}
+	} else if (activeAutoTourNodeIds.size > 0) {
+		activeAutoTourNodeIds.forEach((nodeId) => {
+			actorNodeIds.add(nodeId)
+		})
+	} else if (activeCharacterAutoTourNodeIds.size > 0) {
+		activeCharacterAutoTourNodeIds.forEach((nodeId) => {
+			actorNodeIds.add(nodeId)
+		})
+	} else {
+		const characterNodeId = characterPlayerControlNodeIdOverride.value
+			?? resolveDefaultControlledCharacterNodeId()
+		if (characterNodeId) {
+			actorNodeIds.add(characterNodeId)
+		}
+	}
+	actorNodeIds.forEach((nodeId) => {
+		appendGroundCollisionReferencePositionForNode(targetPositions, nodeId)
+	})
 	const targets = collectGroundAnchorWorldTargets({
 		document: currentDocument,
 		resolveObjectByNodeId: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
 		runtimeRoots: rootGroup,
 	})
-	targetPositions.push(...targets
+	targets
 		.filter((target) => !target.nodeId || vehicleMotionAuthority.shouldIncludeGroundAnchor(target.nodeId))
-		.map((target) => target.position))
+		.forEach((target) => appendGroundCollisionReferencePosition(targetPositions, target.position))
 	return targetPositions.length > 0
 }
 
@@ -13870,6 +14169,7 @@ function updateScenePreviewPhysicsBridgeIndex(document: SceneJsonExportDocument,
 	nonPhysicsCharacterStates.clear()
 	nonPhysicsCollisionWorld.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
+	clearManualDrivePoseHandoff()
 	physicsBridgeContactsByNodeId.clear()
 	physicsBridgeCharacterMotorStateByCharacterId.clear()
 	behaviorCollisionState.clear()
@@ -14123,19 +14423,35 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 			continue
 		}
 		const base = index * 8
+		const nextPosition = new THREE.Vector3(
+			frame.bodyTransforms[base] ?? 0,
+			frame.bodyTransforms[base + 1] ?? 0,
+			frame.bodyTransforms[base + 2] ?? 0,
+		)
+		const nextQuaternion = new THREE.Quaternion(
+			frame.bodyTransforms[base + 3] ?? 0,
+			frame.bodyTransforms[base + 4] ?? 0,
+			frame.bodyTransforms[base + 5] ?? 0,
+			frame.bodyTransforms[base + 6] ?? 1,
+		).normalize()
+		const pendingHandoff = manualDrivePoseHandoff
+		if (pendingHandoff && hasManualDrivePoseHandoff(nodeId)) {
+			const reachedHandoff = pendingHandoff.bridgeTransformCommitted
+				&& isManualDrivePoseHandoffFrameReached(pendingHandoff, {
+					position: nextPosition,
+					quaternion: nextQuaternion,
+					motionState: frame.bodyTransforms[base + 7] ?? 0,
+				})
+			if (reachedHandoff) {
+				clearManualDrivePoseHandoff(pendingHandoff.nodeId)
+			} else {
+				continue
+			}
+		}
 		const existing = physicsBridgeFrameBodiesByNodeId.get(nodeId)
 		if (existing) {
-			existing.position.set(
-				frame.bodyTransforms[base] ?? 0,
-				frame.bodyTransforms[base + 1] ?? 0,
-				frame.bodyTransforms[base + 2] ?? 0,
-			)
-			existing.quaternion.set(
-				frame.bodyTransforms[base + 3] ?? 0,
-				frame.bodyTransforms[base + 4] ?? 0,
-				frame.bodyTransforms[base + 5] ?? 0,
-				frame.bodyTransforms[base + 6] ?? 1,
-			).normalize()
+			existing.position.copy(nextPosition)
+			existing.quaternion.copy(nextQuaternion)
 			existing.motionState = frame.bodyTransforms[base + 7] ?? 0
 			if (frame.bodyLinearVelocities && frame.bodyLinearVelocities.length >= base + 3) {
 				existing.linearVelocity ??= new THREE.Vector3()
@@ -14151,17 +14467,8 @@ function consumeScenePreviewPhysicsBridgeStepFrame(frame: PhysicsStepFrame): voi
 			continue
 		}
 		const createdState: PhysicsBridgeBodyFrameState = {
-			position: new THREE.Vector3(
-				frame.bodyTransforms[base] ?? 0,
-				frame.bodyTransforms[base + 1] ?? 0,
-				frame.bodyTransforms[base + 2] ?? 0,
-			),
-			quaternion: new THREE.Quaternion(
-				frame.bodyTransforms[base + 3] ?? 0,
-				frame.bodyTransforms[base + 4] ?? 0,
-				frame.bodyTransforms[base + 5] ?? 0,
-				frame.bodyTransforms[base + 6] ?? 1,
-			).normalize(),
+			position: nextPosition,
+			quaternion: nextQuaternion,
 			motionState: frame.bodyTransforms[base + 7] ?? 0,
 		}
 		physicsBridgeFrameBodiesByNodeId.set(nodeId, createdState)
@@ -14227,6 +14534,9 @@ function applyScenePreviewPhysicsBridgeFrameToObjects(): void {
 	}
 	const transformSyncEntries: PhysicsBridgeTransformSyncEntry[] = []
 	physicsBridgeFrameBodiesByNodeId.forEach((state, nodeId) => {
+		if (hasManualDrivePoseHandoff(nodeId)) {
+			return
+		}
 		if (!vehicleMotionAuthority.shouldWritePhysicsToObject(nodeId)) {
 			return
 		}
@@ -14734,6 +15044,7 @@ async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeCharacterBodyNodeIdByControllerNodeId.clear()
 	physicsBridgeCharacterControllerNodeIdByBodyNodeId.clear()
 	physicsBridgeFrameBodiesByNodeId.clear()
+	clearManualDrivePoseHandoff()
 	resetPhysicsBridgeVehicleInputSyncState(physicsBridgeVehicleInputSyncState)
 	if (!physicsBridge || !physicsBridgeSceneLoaded) {
 		physicsBridgeStepPromise = null
@@ -14968,6 +15279,7 @@ function createBridgeVehicleInstance(
 			lastSteeringAngle: 0,
 			instancedTargets: wheelObject ? collectInstancedTransformTargets(wheelObject) : [],
 			baseQuaternion: wheelObject ? wheelObject.quaternion.clone() : new THREE.Quaternion(),
+			pausedQuaternion: null,
 			basePosition: wheelObject ? wheelObject.position.clone() : new THREE.Vector3(),
 			baseScale: wheelObject ? wheelObject.scale.clone() : new THREE.Vector3(1, 1, 1),
 		}
@@ -15335,6 +15647,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 		const manualActive = vehicleDriveState.active && vehicleDriveState.nodeId === nodeId
 		const tourActive = Boolean(nodeId) && activeAutoTourNodeIds.has(nodeId)
 		const tourPaused = tourActive && autoTourPaused.value
+		const targetStopHeld = Boolean(nodeId) && targetStopHeldVehicleNodeId.value === nodeId
+		const wheelVisualHeld = tourPaused || targetStopHeld
+		const visualMotionActive = tourActive || targetStopHeld
 		const { vehicle, wheelBindings } = instance
 		// No wheel bindings, nothing to update.
 		if (!wheelBindings.length) {
@@ -15344,13 +15659,19 @@ function updateVehicleWheelVisuals(delta: number): void {
 		if (!chassisBody) {
 			return
 		}
-		if (!scenePreviewPerf.shouldUpdateWheelVisuals({ nodeId, body: chassisBody, manualActive, tourActive, nowMs })) {
+		if (!scenePreviewPerf.shouldUpdateWheelVisuals({
+			nodeId,
+			body: chassisBody,
+			manualActive,
+			tourActive: visualMotionActive,
+			nowMs,
+		})) {
 			return
 		}
 
 		const vehicleObject = nodeId ? nodeObjectMap.get(nodeId) ?? null : null
 		const motionSource = resolveVehicleVisualMotionPose({
-			tourActive,
+			tourActive: visualMotionActive,
 			object: vehicleObject,
 			chassisPosition: chassisBody.position,
 			chassisQuaternion: chassisBody.quaternion,
@@ -15364,7 +15685,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 
 		// Signed travel along the vehicle forward axis (supports reverse).
 		let signedTravel = 0
-		if (tourPaused) {
+		if (wheelVisualHeld) {
 			instance.hasWheelMotionSample = false
 		} else if (instance.hasWheelMotionSample) {
 			wheelChassisDisplacementHelper.copy(wheelChassisPositionHelper).sub(instance.lastWheelMotionPosition)
@@ -15382,7 +15703,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 			}
 		}
 		instance.lastWheelMotionPosition.copy(wheelChassisPositionHelper)
-		if (!tourPaused) {
+		if (!wheelVisualHeld) {
 			instance.hasWheelMotionSample = true
 		}
 
@@ -15406,6 +15727,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 				binding.basePosition.copy(wheelObject.position)
 				binding.baseScale.copy(wheelObject.scale)
 				binding.baseQuaternion.copy(wheelObject.quaternion)
+				binding.pausedQuaternion = null
 				binding.spinAngle = 0
 				binding.lastSteeringAngle = 0
 				binding.instancedTargets = collectInstancedTransformTargets(wheelObject)
@@ -15414,6 +15736,16 @@ function updateVehicleWheelVisuals(delta: number): void {
 			// Keep wheel translation/scale stable; only rotate for steer + spin.
 			wheelObject.position.copy(binding.basePosition)
 			wheelObject.scale.copy(binding.baseScale)
+			if (tourPaused && binding.pausedQuaternion) {
+				wheelObject.quaternion.copy(binding.pausedQuaternion)
+				if (binding.instancedTargets.length) {
+					wheelObject.updateMatrixWorld(true)
+					binding.instancedTargets.forEach((target) => {
+						syncInstancedTransformTarget(target)
+					})
+				}
+				return
+			}
 
 			// Wheel roll based on chassis travel.
 			if (signedTravel !== 0) {
@@ -15421,7 +15753,7 @@ function updateVehicleWheelVisuals(delta: number): void {
 				const rollDelta = resolveVehicleWheelRollDelta({
 					signedTravel,
 					radius,
-					frozen: tourPaused,
+					frozen: wheelVisualHeld,
 				})
 				if (Number.isFinite(rollDelta) && Math.abs(rollDelta) > VEHICLE_WHEEL_SPIN_EPSILON) {
 					binding.spinAngle += rollDelta
@@ -15478,6 +15810,9 @@ function updateVehicleWheelVisuals(delta: number): void {
 				wheelVisualQuaternionHelper.multiply(wheelSpinQuaternionHelper)
 			}
 			wheelObject.quaternion.copy(wheelVisualQuaternionHelper)
+			binding.pausedQuaternion = tourPaused
+				? wheelVisualQuaternionHelper.clone()
+				: null
 
 			if (binding.instancedTargets.length) {
 				wheelObject.updateMatrixWorld(true)
@@ -17616,42 +17951,6 @@ watch(watchExclusiveUiActive, (active) => {
 				@click="handleVehicleDrivePromptConfirm"
 			>
 				Drive {{ vehicleDrivePrompt.label }}
-			</v-btn>
-			<v-btn
-				v-if="vehicleDrivePrompt.showAutoTour"
-				color="secondary"
-				variant="flat"
-				size="large"
-				prepend-icon="mdi-map-marker-path"
-				:loading="vehicleDrivePrompt.busy"
-				:disabled="vehicleDrivePrompt.busy"
-				@click="handleVehicleAutoTourStartClick"
-			>
-				自动巡游
-			</v-btn>
-			<v-btn
-				v-if="vehicleDrivePrompt.showStopTour"
-				color="warning"
-				variant="flat"
-				size="large"
-				prepend-icon="mdi-stop-circle"
-				:loading="vehicleDrivePrompt.busy"
-				:disabled="vehicleDrivePrompt.busy"
-				@click="handleVehicleAutoTourStopClick"
-			>
-				停止巡游 {{ vehicleDrivePrompt.label }}
-			</v-btn>
-			<v-btn
-				v-if="vehicleDrivePrompt.showPauseTour"
-				color="secondary"
-				variant="flat"
-				size="large"
-				:prepend-icon="vehicleDrivePrompt.pauseTourIcon"
-				:loading="vehicleDrivePrompt.busy"
-				:disabled="vehicleDrivePrompt.busy"
-				@click="handleVehicleAutoTourPauseToggleClick"
-			>
-				{{ vehicleDrivePrompt.pauseTourLabel }} {{ vehicleDrivePrompt.label }}
 			</v-btn>
 			<v-btn
 				v-if="vehicleDrivePrompt.showClose"

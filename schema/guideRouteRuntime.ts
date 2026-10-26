@@ -57,6 +57,10 @@ export type CompiledGuideStop = {
   behavior: GuideRouteBehaviorRef | null
 }
 
+export type GuideRouteStopEventContext = {
+  isTourTarget: boolean
+}
+
 export type CompiledGuideTransition = {
   definition: GuideRouteTransition
   afterLegId: string

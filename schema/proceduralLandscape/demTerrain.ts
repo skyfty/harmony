@@ -41,6 +41,38 @@ export function sampleVisibleDemSurfaceHeightAt(
   return grid?.sampleHeight(worldX, worldZ) ?? null
 }
 
+/**
+ * Samples the normal of the DEM surface that is actually rendered at world XZ.
+ * The probes use the same roadbed-aware height sampler as the visible mesh so
+ * cut/fill slopes are not replaced by the raw DEM normal.
+ */
+export function sampleVisibleDemSurfaceNormalAt(
+  grid: TerrainHeightGrid | null | undefined,
+  roadbed: DemRoadbedTarget | null | undefined,
+  worldX: number,
+  worldZ: number,
+  delta = 0.5,
+): THREE.Vector3 | null {
+  const sampleDelta = Number.isFinite(delta)
+    ? Math.max(0.01, delta)
+    : 0.5
+  const sampleHeight = (x: number, z: number): number | null => (
+    sampleVisibleDemSurfaceHeightAt(grid, roadbed, x, z)
+  )
+  const left = sampleHeight(worldX - sampleDelta, worldZ)
+  const right = sampleHeight(worldX + sampleDelta, worldZ)
+  const back = sampleHeight(worldX, worldZ - sampleDelta)
+  const front = sampleHeight(worldX, worldZ + sampleDelta)
+  if (left == null || right == null || back == null || front == null) {
+    return null
+  }
+  return new THREE.Vector3(
+    -(right - left) / (sampleDelta * 2),
+    1,
+    -(front - back) / (sampleDelta * 2),
+  ).normalize()
+}
+
 export function loadTerrainDemRuntimeGrid(
   url: string,
   onProgress?: (value: number) => void,

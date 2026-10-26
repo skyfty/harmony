@@ -377,6 +377,7 @@ export class VehicleDriveController {
     stopSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
     initialSpeedSq: VEHICLE_SMOOTH_STOP_SPEED_THRESHOLD_SQ,
   }
+  private parked = false
 
   constructor(deps: VehicleDriveControllerDeps, bindings: VehicleDriveControllerBindings) {
     this.deps = deps
@@ -708,9 +709,17 @@ export class VehicleDriveController {
     if (!rigidbodyComponent) {
       return { success: false, message: 'Manual driving requires a Rigidbody component.' }
     }
-    this.deps.ensureVehicleBindingForNode(normalized)
-    const instance = this.deps.vehicleInstances.get(normalized)
-    const rigidbody = this.deps.rigidbodyInstances.get(normalized)
+    let instance = this.deps.vehicleInstances.get(normalized) ?? null
+    let rigidbody = this.deps.rigidbodyInstances.get(normalized) ?? null
+    const shouldRebuildBinding = !instance
+      || !rigidbody
+      || rigidbody.object !== vehicleObject
+      || instance.vehicle.chassisBody !== rigidbody.body
+    if (shouldRebuildBinding) {
+      this.deps.ensureVehicleBindingForNode(normalized)
+      instance = this.deps.vehicleInstances.get(normalized) ?? null
+      rigidbody = this.deps.rigidbodyInstances.get(normalized) ?? null
+    }
     if (!instance || !rigidbody) {
       return { success: false, message: '车辆尚未准备就绪，请稍后再试。' }
     }
@@ -773,6 +782,7 @@ export class VehicleDriveController {
     if (!readiness.success) {
       return readiness
     }
+    this.parked = false
     this.snapshotCamera(ctx)
     const seatNodeId = this.deps.normalizeNodeId(event.seatNodeId)
     const state = this.state
@@ -807,14 +817,72 @@ export class VehicleDriveController {
     return { success: true }
   }
 
+  parkAtCurrentPose(): boolean {
+    if (!this.state.active) {
+      return false
+    }
+    this.hardStopVehicleMotion()
+    this.parked = true
+    this.transformDriveState.speed = 0
+    this.transformDriveState.steering = 0
+    this.transformDriveState.velocityWorld.set(0, 0, 0)
+    this.clearSmoothStop()
+    this.followCameraVelocity.set(0, 0, 0)
+    this.followCameraVelocitySample.set(0, 0, 0)
+    this.followCameraMotionState.hasSample = false
+    this.followCameraSteerLookAngle = 0
+    return true
+  }
+
+  releaseParkingHold(): void {
+    this.parked = false
+  }
+
   stopDrive(options: { resolution?: BehaviorEventResolution; preserveCamera?: boolean } = {}, ctx?: VehicleDriveCameraContext): void {
     const state = this.state
     if (!state.active) {
       return
     }
 
-    const nodeId = state.nodeId
     const token = state.token
+    this.hardStopVehicleMotion()
+    this.parked = false
+    state.active = false
+    state.nodeId = null
+    state.seatNodeId = null
+    state.token = null
+    state.vehicle = null
+    state.steerableWheelIndices = []
+    state.wheelCount = 0
+    state.sourceEvent = null
+    this.transformDriveState.speed = 0
+    this.transformDriveState.yaw = 0
+    this.transformDriveState.steering = 0
+    this.transformDriveState.velocityWorld.set(0, 0, 0)
+    this.bindings.cameraFollowState.initialized = false
+    this.resetFollowCameraOffset()
+    this.clearFollowCameraPlacementCache()
+    this.clearSmoothStop()
+    this.followCameraVelocity.set(0, 0, 0)
+    this.followCameraVelocitySample.set(0, 0, 0)
+    this.followCameraMotionState.hasSample = false
+    this.followCameraSteerLookAngle = 0
+    this.bindings.exitBusy.value = false
+    if (this.deps.setCameraCaging) {
+      this.deps.setCameraCaging(false, { force: true })
+    }
+    if (!options.preserveCamera && ctx) {
+      this.restoreCamera(ctx)
+    }
+    this.setUiOverride('hide')
+    if (token && this.deps.onResolveBehaviorToken) {
+      this.deps.onResolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
+    }
+  }
+
+  private hardStopVehicleMotion(): void {
+    const state = this.state
+    const nodeId = state.nodeId
     const instance = nodeId ? this.deps.vehicleInstances.get(nodeId) ?? null : null
     const chassisBody = instance?.vehicle?.chassisBody ?? null
     // --- HARD STOP ---
@@ -854,38 +922,6 @@ export class VehicleDriveController {
         // best-effort
       }
     }
-    state.active = false
-    state.nodeId = null
-    state.seatNodeId = null
-    state.token = null
-    state.vehicle = null
-    state.steerableWheelIndices = []
-    state.wheelCount = 0
-    state.sourceEvent = null
-    this.transformDriveState.speed = 0
-    this.transformDriveState.yaw = 0
-    this.transformDriveState.steering = 0
-    this.transformDriveState.velocityWorld.set(0, 0, 0)
-    this.bindings.cameraFollowState.initialized = false
-    this.resetFollowCameraOffset()
-    this.clearFollowCameraPlacementCache()
-    this.clearSmoothStop()
-    this.followCameraVelocity.set(0, 0, 0)
-    this.followCameraVelocitySample.set(0, 0, 0)
-    this.followCameraMotionState.hasSample = false
-    this.followCameraSteerLookAngle = 0
-    this.bindings.exitBusy.value = false
-    if (this.deps.setCameraCaging) {
-      this.deps.setCameraCaging(false, { force: true })
-    }
-    if (!options.preserveCamera && ctx) {
-      this.restoreCamera(ctx)
-    }
-    this.setUiOverride('hide')
-    if (token && this.deps.onResolveBehaviorToken) {
-      this.deps.onResolveBehaviorToken(token, options.resolution ?? { type: 'continue' })
-    }
-
   }
 
   applyForces(deltaSeconds: number): void {
@@ -898,6 +934,33 @@ export class VehicleDriveController {
     const throttleInput = THREE.MathUtils.clamp(this.input.throttle, -1, 1)
     const steeringInputRaw = this.input.steering
     const brakeInputRaw = this.input.brake
+    if (this.parked) {
+      if (Math.abs(throttleInput) > 0.05) {
+        this.parked = false
+      } else {
+        const parkedVehicle = state.vehicle
+        const parkedInstance = state.nodeId
+          ? this.deps.vehicleInstances.get(state.nodeId) ?? null
+          : null
+        if (parkedVehicle && parkedInstance) {
+          try {
+            applyPhysicsVehicleWheelControl(parkedVehicle, {
+              steeringValue: steeringInputRaw * VEHICLE_STEER_ANGLE,
+              engineForce: 0,
+              brakeForce: VEHICLE_BRAKE_FORCE,
+              steerableWheelIndices: parkedInstance.steerableWheelIndices,
+              applyControlsToAllWheels: true,
+            })
+            stopPhysicsBodyMotion(parkedVehicle.chassisBody)
+          } catch {
+            // best-effort
+          }
+        }
+        this.transformDriveState.speed = 0
+        this.transformDriveState.velocityWorld.set(0, 0, 0)
+        return
+      }
+    }
     const speedCaps = state.nodeId
       ? this.resolveManualDriveSpeedCaps(state.nodeId)
       : {

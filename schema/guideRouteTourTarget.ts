@@ -2,6 +2,8 @@ import * as THREE from 'three'
 
 import {
   sampleEvaluatedGuideRouteAtDistance,
+  type CompiledGuideStop,
+  type CompiledGuideTransition,
   type EvaluatedGuideRoute,
 } from './guideRouteRuntime'
 
@@ -172,6 +174,50 @@ function createWindowRoute(
 
   const cumulativeLengths = buildCumulativeLengths(points)
   const totalLength = cumulativeLengths[cumulativeLengths.length - 1] ?? 0
+  const mapRouteDistance = (routeDistance: number): number | null => {
+    if (!Number.isFinite(routeDistance)) {
+      return null
+    }
+    const epsilon = DISTANCE_EPSILON
+    if (!loop) {
+      const mapped = direction > 0
+        ? routeDistance - startDistance
+        : startDistance - routeDistance
+      if (mapped < -epsilon || mapped > totalLength + epsilon) {
+        return null
+      }
+      return Math.max(0, Math.min(totalLength, mapped))
+    }
+
+    const loopLength = route.totalLength + resolveLoopClosureLength(route)
+    if (loopLength <= epsilon) {
+      return null
+    }
+    const normalizeDistance = (distance: number) => (
+      ((distance % loopLength) + loopLength) % loopLength
+    )
+    const normalizedStart = normalizeDistance(startDistance)
+    const normalizedRouteDistance = normalizeDistance(routeDistance)
+    const mapped = direction > 0
+      ? normalizeDistance(normalizedRouteDistance - normalizedStart)
+      : normalizeDistance(normalizedStart - normalizedRouteDistance)
+    if (mapped > totalLength + epsilon) {
+      return null
+    }
+    return Math.max(0, Math.min(totalLength, mapped))
+  }
+  const stops = route.stops.flatMap((stop): CompiledGuideStop[] => {
+    const mappedDistance = mapRouteDistance(stop.routeDistance)
+    return mappedDistance === null
+      ? []
+      : [{ ...stop, routeDistance: mappedDistance }]
+  }).sort((left, right) => left.routeDistance - right.routeDistance)
+  const transitions = route.transitions.flatMap((transition): CompiledGuideTransition[] => {
+    const mappedDistance = mapRouteDistance(transition.routeDistance)
+    return mappedDistance === null
+      ? []
+      : [{ ...transition, routeDistance: mappedDistance }]
+  }).sort((left, right) => left.routeDistance - right.routeDistance)
   return {
     ...route,
     points,
@@ -183,8 +229,8 @@ function createWindowRoute(
       routeStartDistance: 0,
       routeEndDistance: totalLength,
     })),
-    stops: [],
-    transitions: [],
+    stops,
+    transitions,
   }
 }
 

@@ -21,6 +21,7 @@ import {
   createTerrainDemRuntimeOrthoTexture,
   loadTerrainDemRuntimeGrid,
   sampleVisibleDemSurfaceHeightAt,
+  sampleVisibleDemSurfaceNormalAt,
   splitDemTerrainGeometry,
   type DemTerrainMeshBuilder,
 } from './demTerrain'
@@ -5562,7 +5563,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         return null
       }
 
-      const terrainY = grid.sampleHeight(worldX, worldZ)
+      const terrainY = usesDemTerrain()
+        ? sampleVisibleDemSurfaceHeightAt(grid, demRoadbedTarget, worldX, worldZ)
+        : grid.sampleHeight(worldX, worldZ)
       if (terrainY == null) {
         return null
       }
@@ -5591,19 +5594,34 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
 
       const delta = Math.max(0.5, grid.cellSize * 0.5)
-      const left = grid.sampleHeight(worldX - delta, worldZ)
-      const right = grid.sampleHeight(worldX + delta, worldZ)
-      const back = grid.sampleHeight(worldX, worldZ - delta)
-      const front = grid.sampleHeight(worldX, worldZ + delta)
       const normal = new THREE.Vector3()
-      if (left != null && right != null && back != null && front != null) {
-        normal.set(
-          -(right - left) / (delta * 2),
-          1,
-          -(front - back) / (delta * 2),
-        ).normalize()
+      if (usesDemTerrain()) {
+        const visibleNormal = sampleVisibleDemSurfaceNormalAt(
+          grid,
+          demRoadbedTarget,
+          worldX,
+          worldZ,
+          delta,
+        )
+        if (visibleNormal) {
+          normal.copy(visibleNormal)
+        } else {
+          normal.set(0, 1, 0)
+        }
       } else {
-        normal.set(0, 1, 0)
+        const left = grid.sampleHeight(worldX - delta, worldZ)
+        const right = grid.sampleHeight(worldX + delta, worldZ)
+        const back = grid.sampleHeight(worldX, worldZ - delta)
+        const front = grid.sampleHeight(worldX, worldZ + delta)
+        if (left != null && right != null && back != null && front != null) {
+          normal.set(
+            -(right - left) / (delta * 2),
+            1,
+            -(front - back) / (delta * 2),
+          ).normalize()
+        } else {
+          normal.set(0, 1, 0)
+        }
       }
 
       return {
