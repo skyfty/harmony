@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useSceneStore } from '@/stores/sceneStore'
 import { useAssetCacheStore } from '@/stores/assetCacheStore'
@@ -27,6 +27,13 @@ import type { ProjectAsset } from '@/types/project-asset'
 import AssetPickerDialog from '@/components/common/AssetPickerDialog.vue'
 import { ASSET_DRAG_MIME } from '@/components/editor/constants'
 import { findGuideRoutePathHandle } from '@/utils/guideRouteEditPolicy'
+import {
+  buildGuideRouteInputDraftKey,
+  normalizeGuideRouteStopNameInput,
+  parseGuideRouteDecimalInput,
+  readGuideRouteInputDraft,
+  writeGuideRouteInputDraft,
+} from '@/utils/guideRouteInputDraft'
 
 const sceneStore = useSceneStore()
 const assetCacheStore = useAssetCacheStore()
@@ -45,6 +52,7 @@ const deleteStopDialogVisible = ref(false)
 const pendingDeleteStopId = ref<string | null>(null)
 const snackbarVisible = ref(false)
 const snackbarText = ref('')
+const fieldDrafts = reactive(new Map<string, string>())
 
 const guideRouteComponent = computed(() => {
   const component = selectedNode.value?.components?.[GUIDE_ROUTE_COMPONENT_TYPE]
@@ -70,6 +78,27 @@ const pendingDeleteStop = computed(() => (
     ? guideRouteProps.value?.stops.find((stop) => stop.id === pendingDeleteStopId.value) ?? null
     : null
 ))
+
+function fieldDraftKey(owner: readonly (string | number)[], field: string): string {
+  return buildGuideRouteInputDraftKey(
+    selectedNode.value?.id ?? '',
+    guideRouteComponent.value?.id ?? '',
+    owner,
+    field,
+  )
+}
+
+function fieldInputValue(key: string, committedValue: string | number): string {
+  return readGuideRouteInputDraft(fieldDrafts, key, committedValue)
+}
+
+function setFieldInputValue(key: string, value: unknown): void {
+  writeGuideRouteInputDraft(fieldDrafts, key, value)
+}
+
+function clearFieldInputValue(key: string): void {
+  fieldDrafts.delete(key)
+}
 
 const landscapeNodeOptions = computed(() => sceneStore.nodes
   .filter((node) => node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE])
@@ -133,6 +162,16 @@ function removeLeg(legId: string): void {
   const props = guideRouteProps.value
   if (!props || props.legs.length <= 1) {
     return
+  }
+  for (const field of [
+    'speed-cruiseSpeedMps',
+    'speed-lateralAccelLimitMps2',
+    'startT',
+    'endT',
+    'laneOffsetM',
+    'sampleSpacingM',
+  ]) {
+    clearFieldInputValue(legFieldKey(legId, field))
   }
   updateProps({
     legs: props.legs.filter((leg) => leg.id !== legId),
@@ -199,6 +238,76 @@ function updatePathAnchor(leg: GuidePathRouteLeg, index: number, axis: 'x' | 'y'
   updatePathAnchors(leg, anchors)
 }
 
+function commitNumericDraft(key: string, apply: (value: number) => void): void {
+  if (!fieldDrafts.has(key)) {
+    return
+  }
+  const numeric = parseGuideRouteDecimalInput(fieldDrafts.get(key))
+  clearFieldInputValue(key)
+  if (numeric !== null) {
+    apply(numeric)
+  }
+}
+
+function legFieldKey(legId: string, field: string): string {
+  return fieldDraftKey(['leg', legId], field)
+}
+
+function pathAnchorFieldKey(legId: string, anchorKey: string, axis: 'x' | 'y' | 'z'): string {
+  return fieldDraftKey(['path-anchor', legId, anchorKey], axis)
+}
+
+function stopFieldKey(stopId: string, field: string): string {
+  return fieldDraftKey(['stop', stopId], field)
+}
+
+function commitLegSpeed(legId: string, field: 'cruiseSpeedMps' | 'lateralAccelLimitMps2'): void {
+  commitNumericDraft(legFieldKey(legId, `speed-${field}`), (value) => {
+    const leg = guideRouteProps.value?.legs.find((entry) => entry.id === legId)
+    if (!leg) {
+      return
+    }
+    updateLeg(legId, {
+      speedProfile: {
+        ...leg.speedProfile,
+        [field]: value,
+      },
+    })
+  })
+}
+
+function commitRoadLegNumber(
+  legId: string,
+  field: 'startT' | 'endT' | 'laneOffsetM' | 'sampleSpacingM',
+): void {
+  commitNumericDraft(legFieldKey(legId, field), (value) => {
+    updateLeg(legId, { [field]: value } as Partial<GuideRoadRouteLeg>)
+  })
+}
+
+function commitPathAnchorInput(
+  leg: GuidePathRouteLeg,
+  index: number,
+  axis: 'x' | 'y' | 'z',
+): void {
+  const anchorKey = leg.anchors[index]?.id || String(index)
+  commitNumericDraft(pathAnchorFieldKey(leg.id, anchorKey, axis), (value) => {
+    updatePathAnchor(leg, index, axis, value)
+  })
+}
+
+function commitStopName(stop: GuideRouteStop): void {
+  const key = stopFieldKey(stop.id, 'name')
+  if (!fieldDrafts.has(key)) {
+    return
+  }
+  const name = normalizeGuideRouteStopNameInput(fieldDrafts.get(key))
+  clearFieldInputValue(key)
+  if (name !== stop.name) {
+    updateStop(stop.id, { name })
+  }
+}
+
 function addPathAnchor(leg: GuidePathRouteLeg): void {
   const previous = leg.anchors[leg.anchors.length - 1] ?? { x: 0, y: 0, z: 0 }
   updatePathAnchors(leg, [
@@ -212,6 +321,9 @@ function removePathAnchor(leg: GuidePathRouteLeg, index: number): void {
   const anchor = leg.anchors[index]
   if (leg.anchors.length <= 2 || !nodeId || !anchor?.id) {
     return
+  }
+  for (const axis of ['x', 'y', 'z'] as const) {
+    clearFieldInputValue(pathAnchorFieldKey(leg.id, anchor.id, axis))
   }
   sceneStore.removeGuideRoutePathAnchorByHandle(nodeId, {
     legId: leg.id,
@@ -282,6 +394,12 @@ function updateStopAnchor(stop: GuideRouteStop, axis: 'x' | 'y' | 'z', value: un
   })
 }
 
+function commitStopAnchorInput(stop: GuideRouteStop, axis: 'x' | 'y' | 'z'): void {
+  commitNumericDraft(stopFieldKey(stop.id, axis), (value) => {
+    updateStopAnchor(stop, axis, value)
+  })
+}
+
 function requestDeleteStop(stopId: string): void {
   if (!guideRouteProps.value?.stops.some((stop) => stop.id === stopId)) {
     return
@@ -297,6 +415,9 @@ function confirmDeleteStop(): void {
   pendingDeleteStopId.value = null
   if (!nodeId || !stopId) {
     return
+  }
+  for (const field of ['name', 'x', 'y', 'z']) {
+    clearFieldInputValue(stopFieldKey(stopId, field))
   }
   if (sceneStore.removeGuideRouteStopWithLinks(nodeId, stopId)) {
     snackbarText.value = '停靠点已删除，图片资产仍保留在资源库。'
@@ -483,12 +604,22 @@ watch(
   },
 )
 
+watch(
+  () => [selectedNode.value?.id ?? '', guideRouteComponent.value?.id ?? ''] as const,
+  ([nodeId, componentId], previous) => {
+    if (nodeId !== previous?.[0] || componentId !== previous?.[1]) {
+      fieldDrafts.clear()
+    }
+  },
+)
+
 onMounted(() => {
   window.addEventListener('keydown', handleStopKeyboardDelete)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleStopKeyboardDelete)
+  fieldDrafts.clear()
 })
 
 function updateThumbnail(asset: ProjectAsset | null): void {
@@ -626,22 +757,28 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
             <v-text-field
               label="Cruise m/s"
               type="number"
+              step="0.1"
               density="compact"
               variant="underlined"
               hide-details
-              :model-value="leg.speedProfile.cruiseSpeedMps"
+              :model-value="fieldInputValue(legFieldKey(leg.id, 'speed-cruiseSpeedMps'), leg.speedProfile.cruiseSpeedMps)"
               :disabled="!componentEnabled"
-              @update:model-value="(value) => updateLeg(leg.id, { speedProfile: { ...leg.speedProfile, cruiseSpeedMps: Number(value) } })"
+              @update:model-value="(value) => setFieldInputValue(legFieldKey(leg.id, 'speed-cruiseSpeedMps'), value)"
+              @blur="commitLegSpeed(leg.id, 'cruiseSpeedMps')"
+              @keydown.enter.prevent.stop="commitLegSpeed(leg.id, 'cruiseSpeedMps')"
             />
             <v-text-field
               label="Lateral accel"
               type="number"
+              step="0.1"
               density="compact"
               variant="underlined"
               hide-details
-              :model-value="leg.speedProfile.lateralAccelLimitMps2"
+              :model-value="fieldInputValue(legFieldKey(leg.id, 'speed-lateralAccelLimitMps2'), leg.speedProfile.lateralAccelLimitMps2)"
               :disabled="!componentEnabled"
-              @update:model-value="(value) => updateLeg(leg.id, { speedProfile: { ...leg.speedProfile, lateralAccelLimitMps2: Number(value) } })"
+              @update:model-value="(value) => setFieldInputValue(legFieldKey(leg.id, 'speed-lateralAccelLimitMps2'), value)"
+              @blur="commitLegSpeed(leg.id, 'lateralAccelLimitMps2')"
+              @keydown.enter.prevent.stop="commitLegSpeed(leg.id, 'lateralAccelLimitMps2')"
             />
           </div>
 
@@ -670,9 +807,11 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
                 density="compact"
                 variant="underlined"
                 hide-details
-                :model-value="leg.startT"
+                :model-value="fieldInputValue(legFieldKey(leg.id, 'startT'), leg.startT)"
                 :disabled="!componentEnabled"
-                @update:model-value="(value) => updateLeg(leg.id, { startT: Number(value) } as Partial<GuideRoadRouteLeg>)"
+                @update:model-value="(value) => setFieldInputValue(legFieldKey(leg.id, 'startT'), value)"
+                @blur="commitRoadLegNumber(leg.id, 'startT')"
+                @keydown.enter.prevent.stop="commitRoadLegNumber(leg.id, 'startT')"
               />
               <v-text-field
                 label="End T"
@@ -681,9 +820,11 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
                 density="compact"
                 variant="underlined"
                 hide-details
-                :model-value="leg.endT"
+                :model-value="fieldInputValue(legFieldKey(leg.id, 'endT'), leg.endT)"
                 :disabled="!componentEnabled"
-                @update:model-value="(value) => updateLeg(leg.id, { endT: Number(value) } as Partial<GuideRoadRouteLeg>)"
+                @update:model-value="(value) => setFieldInputValue(legFieldKey(leg.id, 'endT'), value)"
+                @blur="commitRoadLegNumber(leg.id, 'endT')"
+                @keydown.enter.prevent.stop="commitRoadLegNumber(leg.id, 'endT')"
               />
               <v-text-field
                 label="Lane m"
@@ -692,9 +833,11 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
                 density="compact"
                 variant="underlined"
                 hide-details
-                :model-value="leg.laneOffsetM"
+                :model-value="fieldInputValue(legFieldKey(leg.id, 'laneOffsetM'), leg.laneOffsetM)"
                 :disabled="!componentEnabled"
-                @update:model-value="(value) => updateLeg(leg.id, { laneOffsetM: Number(value) } as Partial<GuideRoadRouteLeg>)"
+                @update:model-value="(value) => setFieldInputValue(legFieldKey(leg.id, 'laneOffsetM'), value)"
+                @blur="commitRoadLegNumber(leg.id, 'laneOffsetM')"
+                @keydown.enter.prevent.stop="commitRoadLegNumber(leg.id, 'laneOffsetM')"
               />
               <v-text-field
                 label="Sample m"
@@ -703,9 +846,11 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
                 density="compact"
                 variant="underlined"
                 hide-details
-                :model-value="leg.sampleSpacingM"
+                :model-value="fieldInputValue(legFieldKey(leg.id, 'sampleSpacingM'), leg.sampleSpacingM)"
                 :disabled="!componentEnabled"
-                @update:model-value="(value) => updateLeg(leg.id, { sampleSpacingM: Number(value) } as Partial<GuideRoadRouteLeg>)"
+                @update:model-value="(value) => setFieldInputValue(legFieldKey(leg.id, 'sampleSpacingM'), value)"
+                @blur="commitRoadLegNumber(leg.id, 'sampleSpacingM')"
+                @keydown.enter.prevent.stop="commitRoadLegNumber(leg.id, 'sampleSpacingM')"
               />
             </div>
             <div class="gr-inline-actions">
@@ -741,7 +886,7 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
               @update:model-value="(value) => updateLeg(leg.id, { preserveAuthoredY: value === true } as Partial<GuidePathRouteLeg>)"
             />
             <div class="gr-anchor-list">
-              <div v-for="(anchor, anchorIndex) in leg.anchors" :key="anchorIndex" class="gr-anchor-row">
+              <div v-for="(anchor, anchorIndex) in leg.anchors" :key="anchor.id ?? anchorIndex" class="gr-anchor-row">
                 <span>A{{ anchorIndex + 1 }}</span>
                 <v-text-field
                   v-for="axis in (['x', 'y', 'z'] as const)"
@@ -751,9 +896,11 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
                   density="compact"
                   variant="underlined"
                   hide-details
-                  :model-value="anchor[axis]"
+                  :model-value="fieldInputValue(pathAnchorFieldKey(leg.id, anchor.id || String(anchorIndex), axis), anchor[axis])"
                   :disabled="!componentEnabled"
-                  @update:model-value="(value) => updatePathAnchor(leg, anchorIndex, axis, value)"
+                  @update:model-value="(value) => setFieldInputValue(pathAnchorFieldKey(leg.id, anchor.id || String(anchorIndex), axis), value)"
+                  @blur="commitPathAnchorInput(leg, anchorIndex, axis)"
+                  @keydown.enter.prevent.stop="commitPathAnchorInput(leg, anchorIndex, axis)"
                 />
                 <v-btn icon size="x-small" variant="text" :disabled="leg.anchors.length <= 2" @click="removePathAnchor(leg, anchorIndex)">
                   <v-icon>mdi-close</v-icon>
@@ -803,9 +950,11 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
               density="compact"
               variant="underlined"
               hide-details
-              :model-value="stop.name"
+              :model-value="fieldInputValue(stopFieldKey(stop.id, 'name'), stop.name)"
               :disabled="!componentEnabled"
-              @update:model-value="(value) => updateStop(stop.id, { name: String(value ?? '') })"
+              @update:model-value="(value) => setFieldInputValue(stopFieldKey(stop.id, 'name'), value)"
+              @blur="commitStopName(stop)"
+              @keydown.enter.prevent.stop="commitStopName(stop)"
             />
             <v-btn
               icon
@@ -836,10 +985,12 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
               density="compact"
               variant="underlined"
               hide-details
-              :model-value="stop.anchor[axis]"
+              :model-value="fieldInputValue(stopFieldKey(stop.id, axis), stop.anchor[axis])"
               :disabled="!componentEnabled || isStopPositionLocked(stop)"
               :title="isStopPositionLocked(stop) ? '该停靠点连接公路或固定路线边界，不可拖动或数值修改' : undefined"
-              @update:model-value="(value) => updateStopAnchor(stop, axis, value)"
+              @update:model-value="(value) => setFieldInputValue(stopFieldKey(stop.id, axis), value)"
+              @blur="commitStopAnchorInput(stop, axis)"
+              @keydown.enter.prevent.stop="commitStopAnchorInput(stop, axis)"
             />
             <button
               type="button"

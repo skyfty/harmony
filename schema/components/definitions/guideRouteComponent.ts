@@ -229,7 +229,7 @@ function normalizeStop(
   if (!legId || !leg) {
     return null
   }
-  const name = typeof candidate.name === 'string' && candidate.name.trim()
+  const name = typeof candidate.name === 'string'
     ? candidate.name.trim()
     : `Stop ${index + 1}`
   const anchor = clampGuideRouteVector3(candidate.anchor)

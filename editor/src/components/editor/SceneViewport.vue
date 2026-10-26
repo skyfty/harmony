@@ -272,7 +272,11 @@ import { ViewportGizmo } from '@/utils/gizmo/ViewportGizmo'
 import { resolveNorthDirectionAngleDegrees } from '@/utils/gizmo/utils/northDirection'
 import { TerrainGridHelper } from './TerrainGridHelper'
 import { useTerrainGridController } from './useTerrainGridController'
-import { createGuideRouteWaypointLabelsManager, getGuideRouteWaypointLabelMeshes } from './GuideRouteWaypointLabels'
+import {
+  createGuideRouteWaypointLabelsManager,
+  disposeAllGuideRouteWaypointLabels,
+  getGuideRouteWaypointLabelMeshes,
+} from './GuideRouteWaypointLabels'
 import { createWallBuildTool } from './WallBuildTool'
 import {
   computeWallOpeningForLocalHit,
@@ -17191,12 +17195,7 @@ function disposeScene() {
     buildingLabelMeshes.clear()
   }
   if (guideRouteWaypointLabelMeshes.size) {
-    for (const mesh of guideRouteWaypointLabelMeshes.values()) {
-      mesh.geometry.dispose()
-      ;(mesh.material as THREE.Material).dispose?.()
-      mesh.removeFromParent()
-    }
-    guideRouteWaypointLabelMeshes.clear()
+    disposeAllGuideRouteWaypointLabels()
   }
   isGroundSelectionOrbitDisabled = false
 

@@ -613,7 +613,7 @@ export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedG
       behavior: stop.behavior,
     })
     if (projectionDistance > 1000) {
-      warnings.push(`Stop ${stop.name} is ${projectionDistance.toFixed(0)}m from its assigned leg.`)
+      warnings.push(`Stop ${stop.name || stop.id} is ${projectionDistance.toFixed(0)}m from its assigned leg.`)
     }
   }
   stops.sort((a, b) => (
