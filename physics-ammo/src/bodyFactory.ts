@@ -56,6 +56,7 @@ export function createAmmoRigidBody(params: {
   constructionInfo.set_m_angularDamping?.(Math.max(0, desc.angularDamping ?? 0))
 
   const body = new ammo.btRigidBody(constructionInfo)
+  body.name = desc.name ?? ''
   body.setUserIndex?.(desc.id)
   body.setDamping?.(
     Math.max(0, desc.linearDamping ?? 0),

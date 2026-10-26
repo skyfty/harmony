@@ -35,6 +35,7 @@ export type PhysicsShapeRef = {
 
 export type PhysicsBodyDesc = {
   id: number
+  name?: string
   type: PhysicsBodyType
   mass: number
   materialId: number | null

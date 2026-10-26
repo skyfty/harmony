@@ -454,6 +454,7 @@ describe('mesh collision runtime host incremental re-index', () => {
     expect(obstacleBodies.length).toBeGreaterThan(0)
     for (const record of obstacleBodies) {
       expect(shapeMaxY(record.shape)).toBeCloseTo(6, 5)
+      expect((record.body as { name?: string }).name).toContain(':mesh:')
     }
     roadBand.dispose()
   })
@@ -530,6 +531,7 @@ describe('mesh collision runtime host incremental re-index', () => {
     const roadbedBodies = harness.created.slice(terrainCreates).filter(isElevatedRecord)
     expect(roadbedBodies.length).toBeGreaterThan(0)
     expect(shapeMaxY(roadbedBodies[0]!.shape)).toBeCloseTo(5, 5)
+    expect((roadbedBodies[0]!.body as { name?: string }).name).toContain(':roadbed:')
   })
 
   it('uses a tighter mesh collision window than ground tile streaming', () => {
@@ -617,6 +619,11 @@ describe('mesh collision runtime host incremental re-index', () => {
     expect(snapshot.uncoveredReferenceCount).toBe(0)
     expect(snapshot.referenceGroundCoverage[0]?.covered).toBe(true)
     expect(harness.created.filter((record) => !isElevatedRecord(record)).length).toBeGreaterThan(0)
+    expect(
+      harness.created.some((record) => (
+        (record.body as { name?: string }).name?.includes(':dem-terrain:') === true
+      )),
+    ).toBe(true)
   })
 
   it('keeps one mandatory DEM chunk for every separated Ground Anchor', () => {

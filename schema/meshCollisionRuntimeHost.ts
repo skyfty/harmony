@@ -13,6 +13,7 @@ import {
 } from './physicsRuntimeBridge'
 import {
   isProceduralLandscapeDemTerrain,
+  isProceduralLandscapeRoadCollision,
   isProceduralLandscapeRoadbedSurface,
   isProceduralLandscapeRoadSurface,
   resolveProceduralLandscapeDemCollisionSampler,
@@ -84,6 +85,7 @@ export type MeshCollisionRuntimeDeps = {
   createBody: (
     shapeDefinition: MeshCollisionChunkShape,
     object: THREE.Object3D,
+    name?: string,
   ) => { body: PhysicsBodyLike; orientationAdjustment: PhysicsOrientationAdjustment | null } | null
 }
 
@@ -134,6 +136,7 @@ type MeshCollisionChunkBounds = {
 
 type MeshCollisionMeshSource = {
   mesh: THREE.Mesh
+  debugKind: 'dem-terrain' | 'roadbed' | 'mesh'
   isGroundSurface: boolean
   /** World matrix snapshot; the source node is treated as static. */
   matrixWorld: THREE.Matrix4
@@ -437,9 +440,13 @@ function resolveMeshSource(object: THREE.Object3D): MeshCollisionMeshSource | nu
   const bounds = resolveWorldXZBoundsFromBox(box, matrixWorld)
   const extentX = bounds.maxX - bounds.minX
   const extentZ = bounds.maxZ - bounds.minZ
+  const isGroundSurface = isProceduralLandscapeDemTerrain(object)
   return {
     mesh,
-    isGroundSurface: isProceduralLandscapeDemTerrain(object),
+    debugKind: isGroundSurface
+      ? 'dem-terrain'
+      : (isProceduralLandscapeRoadCollision(object) ? 'roadbed' : 'mesh'),
+    isGroundSurface,
     matrixWorld,
     position,
     index: indexAttribute,
@@ -862,12 +869,13 @@ function createChunkInstance(
   if (!shape) {
     return null
   }
-  const bodyResult = deps.createBody(shape, sourceObject)
+  const bodyName = `terrain-collision:${sourceId}:${source.debugKind}:${chunk.key}`
+  const bodyResult = deps.createBody(shape, sourceObject, bodyName)
   if (!bodyResult?.body) {
     return null
   }
   addPhysicsBodyToWorld(deps.ensurePhysicsWorld(), bodyResult.body)
-  ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `terrain-collision:${sourceId}:${chunk.key}`
+  ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = bodyName
   return {
     nodeId: sourceId,
     body: bodyResult.body,
@@ -929,17 +937,18 @@ function createGroundPatchInstance(
     }
   }
 
+  const key = `ground-patch:${referenceIndex}`
+  const bodyName = `terrain-collision:${sourceId}:${key}`
   const bodyResult = deps.createBody({
     kind: 'static-mesh',
     vertices,
     indices,
-  }, sourceObject)
+  }, sourceObject, bodyName)
   if (!bodyResult?.body) {
     return null
   }
   addPhysicsBodyToWorld(deps.ensurePhysicsWorld(), bodyResult.body)
-  const key = `ground-patch:${referenceIndex}`
-  ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `terrain-collision:${sourceId}:${key}`
+  ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = bodyName
   return {
     key,
     centerX: reference.x,

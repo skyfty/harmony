@@ -17,6 +17,9 @@ export function createCannonSceneRigidBody(params: CannonSceneRigidBodyCreatePar
     type: mapBodyType(params.desc.type),
   })
   ;(body as CANNON.Body & { physicsBodyId?: number }).physicsBodyId = params.desc.id
+  if (params.desc.name) {
+    body.name = params.desc.name
+  }
   body.position.set(...params.desc.transform.position)
   body.quaternion.set(...params.desc.transform.rotation)
   body.linearDamping = params.desc.linearDamping ?? 0.01

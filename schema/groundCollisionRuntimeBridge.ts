@@ -38,6 +38,7 @@ export type GroundCollisionRuntimeBridgeDeps = {
     component: unknown,
     shapeDefinition: GroundCollisionRuntimeShapeDefinition | null,
     object: THREE.Object3D,
+    name?: string,
   ) => { body: PhysicsBodyLike; orientationAdjustment: null } | null
   loggerTag?: string
 }
@@ -130,6 +131,7 @@ function createRuntimeBodyEntry(
   shapeDefinition: GroundCollisionRuntimeShapeDefinition,
   object: THREE.Object3D,
   nextRuntimeId: () => number,
+  name?: string,
 ): PhysicsRuntimeBodyEntry | null {
   object.updateMatrixWorld(true)
   const worldPosition = new THREE.Vector3()
@@ -158,6 +160,7 @@ function createRuntimeBodyEntry(
       shapes: [shapeDesc],
       body: {
         id: bodyId,
+        name,
         type: 'static',
         mass: 0,
         materialId,
@@ -328,11 +331,12 @@ export function createGroundCollisionRuntimeBridgeDeps(
       _component: unknown,
       shapeDefinition: GroundCollisionRuntimeShapeDefinition | null,
       object: THREE.Object3D,
+      name?: string,
     ) => {
       if (!shapeDefinition) {
         return null
       }
-      const entry = createRuntimeBodyEntry(shapeDefinition, object, options.nextRuntimeId)
+      const entry = createRuntimeBodyEntry(shapeDefinition, object, options.nextRuntimeId, name)
       if (!entry) {
         return null
       }

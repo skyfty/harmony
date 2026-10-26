@@ -62,6 +62,7 @@ export function createAmmoSchemaRigidBody(ammo: AmmoApi, params: SchemaRigidBody
   const body = new ammo.btRigidBody(constructionInfo)
   body.__ammoBody = body
   body.__harmonyShapeBindings = params.shapes
+  body.name = params.name ?? ''
   defineAmmoBodyAccessors(ammo, body)
   if (params.bodyType === 'KINEMATIC') {
     body.setCollisionFlags((body.getCollisionFlags?.() ?? 0) | 2)

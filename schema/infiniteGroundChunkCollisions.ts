@@ -41,6 +41,7 @@ export type InfiniteGroundChunkColliderRuntimeDeps = {
     component: SceneNodeComponentState<RigidbodyComponentProps>,
     shapeDefinition: RigidbodyPhysicsShape | null,
     object: THREE.Object3D,
+    name?: string,
   ) => { body: PhysicsBodyLike; orientationAdjustment: PhysicsOrientationAdjustment | null } | null
   loggerTag?: string
 }
@@ -288,14 +289,15 @@ export function createInfiniteGroundChunkColliderRuntime(
       return
     }
     const { node, component } = createStaticCollisionNode(`ground-collision:${params.sourceId}:${runtimeKey}`)
-    const bodyResult = deps.createBody(node, component, shape, params.groundObject)
+    const bodyName = `infinite-ground:${params.sourceId}:${runtimeKey}`
+    const bodyResult = deps.createBody(node, component, shape, params.groundObject, bodyName)
     if (!bodyResult?.body) {
       debugShapes.set(runtimeKey, [shape])
       return
     }
     const world = deps.ensurePhysicsWorld()
     addPhysicsBodyToWorld(world, bodyResult.body)
-    ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `infinite-ground:${params.sourceId}:${runtimeKey}`
+    ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = bodyName
     instances.set(runtimeKey, {
       nodeId: node.id,
       body: bodyResult.body,

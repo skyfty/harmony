@@ -3,13 +3,31 @@ import type { PhysicsBackendPreference, PhysicsBodyDesc, PhysicsSceneAsset, Phys
 
 export type PhysicsCollisionDebugEngine = Extract<PhysicsBackendPreference, 'ammo' | 'cannon'>
 
+export const PHYSICS_COLLISION_DEBUG_COLORS = {
+  groundPatch: '#22ff88',
+  roadbed: '#ff9f1c',
+  baseGround: '#38bdf8',
+  demTerrain: '#4ea1ff',
+  other: '#cbd5e1',
+} as const
+
+export type PhysicsCollisionDebugCategory = keyof typeof PHYSICS_COLLISION_DEBUG_COLORS
+
 /**
  * Collision debug draws every terrain, roadbed and road collision shape.
  * Large procedural scenes are unplayable with it enabled, so it stays opt-in.
  */
 export const DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE = false
 
+type CannonDebuggerInitEvent = {
+  body: unknown
+  obj3d: THREE.Object3D
+  shape: unknown
+}
+
 type CannonDebuggerLike = {
+  addEventListener?: (type: 'init', listener: (event: CannonDebuggerInitEvent) => void) => void
+  removeEventListener?: (type: 'init', listener: (event: CannonDebuggerInitEvent) => void) => void
   update?: () => void
   clear?: () => void
   destroy?: () => void
@@ -25,6 +43,31 @@ type AmmoBodyEntry = {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+export function resolvePhysicsCollisionDebugCategory(body: unknown): PhysicsCollisionDebugCategory {
+  if (!body || typeof body !== 'object') {
+    return 'other'
+  }
+  const name = (body as { name?: unknown }).name
+  if (typeof name !== 'string' || name.length === 0) {
+    return 'other'
+  }
+  if (name.startsWith('infinite-ground:') || name.startsWith('compiled-ground:')) {
+    return 'baseGround'
+  }
+  if (name.startsWith('terrain-collision:')) {
+    if (name.includes(':ground-patch:')) {
+      return 'groundPatch'
+    }
+    if (name.includes(':roadbed:')) {
+      return 'roadbed'
+    }
+    if (name.includes(':dem-terrain:')) {
+      return 'demTerrain'
+    }
+  }
+  return 'other'
 }
 
 function disposeObject3D(object: THREE.Object3D, disposeMaterials: boolean): void {
@@ -262,6 +305,8 @@ export class ScenePreviewPhysicsCollisionDebugRuntime {
   readonly root = new THREE.Group()
 
   private ammoLineMaterial: THREE.LineBasicMaterial | null = null
+  private cannonLineMaterials = new Map<PhysicsCollisionDebugCategory, THREE.LineBasicMaterial>()
+  private cannonMeshMaterials = new Map<PhysicsCollisionDebugCategory, THREE.MeshBasicMaterial>()
 
   private scene: THREE.Scene | null = null
   private currentEngine: PhysicsCollisionDebugEngine | null = null
@@ -270,6 +315,17 @@ export class ScenePreviewPhysicsCollisionDebugRuntime {
   private cannonWorld: unknown | null = null
   private cannonDebugger: CannonDebuggerLike | null = null
   private visible = DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE
+  private readonly handleCannonDebuggerInit = (event: CannonDebuggerInitEvent): void => {
+    const category = resolvePhysicsCollisionDebugCategory(event.body)
+    event.obj3d.userData.physicsCollisionDebugCategory = category
+    if ((event.obj3d as THREE.Mesh).isMesh === true) {
+      ;(event.obj3d as THREE.Mesh).material = this.ensureCannonMeshMaterial(category)
+      return
+    }
+    if ((event.obj3d as THREE.LineSegments).isLineSegments === true) {
+      ;(event.obj3d as THREE.LineSegments).material = this.ensureCannonLineMaterial(category)
+    }
+  }
 
   constructor() {
     this.root.name = 'PhysicsCollisionDebugRoot'
@@ -440,12 +496,14 @@ export class ScenePreviewPhysicsCollisionDebugRuntime {
       return
     }
     try {
+      this.cannonDebugger.removeEventListener?.('init', this.handleCannonDebuggerInit)
       this.cannonDebugger.clear?.()
       this.cannonDebugger.destroy?.()
     } catch (error) {
       console.warn('[ScenePreviewPhysicsCollisionDebugRuntime] Failed to destroy cannon debugger', error)
     } finally {
       this.cannonDebugger = null
+      this.disposeCannonDebugMaterials()
     }
   }
 
@@ -479,10 +537,53 @@ export class ScenePreviewPhysicsCollisionDebugRuntime {
 
       this.destroyCannonDebugger()
       this.cannonDebugger = new CannonEsDebuggerPro(this.root, this.cannonWorld, 0x66d9ff, 0.005)
+      this.cannonDebugger.addEventListener?.('init', this.handleCannonDebuggerInit)
       this.cannonDebugger.setVisible?.(this.visible)
     } catch (error) {
       console.warn('[ScenePreviewPhysicsCollisionDebugRuntime] Failed to create cannon debugger', error)
       this.destroyCannonDebugger()
     }
+  }
+
+  private ensureCannonLineMaterial(category: PhysicsCollisionDebugCategory): THREE.LineBasicMaterial {
+    const existing = this.cannonLineMaterials.get(category)
+    if (existing) {
+      return existing
+    }
+    const material = new THREE.LineBasicMaterial({
+      color: PHYSICS_COLLISION_DEBUG_COLORS[category],
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    })
+    this.cannonLineMaterials.set(category, material)
+    return material
+  }
+
+  private ensureCannonMeshMaterial(category: PhysicsCollisionDebugCategory): THREE.MeshBasicMaterial {
+    const existing = this.cannonMeshMaterials.get(category)
+    if (existing) {
+      return existing
+    }
+    const material = new THREE.MeshBasicMaterial({
+      color: PHYSICS_COLLISION_DEBUG_COLORS[category],
+      wireframe: true,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    })
+    this.cannonMeshMaterials.set(category, material)
+    return material
+  }
+
+  private disposeCannonDebugMaterials(): void {
+    this.cannonLineMaterials.forEach((material) => material.dispose())
+    this.cannonMeshMaterials.forEach((material) => material.dispose())
+    this.cannonLineMaterials.clear()
+    this.cannonMeshMaterials.clear()
   }
 }

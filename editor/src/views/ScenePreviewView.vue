@@ -98,6 +98,7 @@ import { buildPhysicsSceneAsset } from '@schema/physicsSceneAsset'
 import { resolveDeviceAdaptationPlatform, resolveDeviceAdaptationProfile } from '@schema/deviceAdaptation'
 import {
 	DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE,
+	PHYSICS_COLLISION_DEBUG_COLORS,
 	ScenePreviewPhysicsCollisionDebugRuntime,
 } from '@/physics/collisionDebugRuntime'
 import {
@@ -700,6 +701,13 @@ const physicsCollisionDebugRuntime = new ScenePreviewPhysicsCollisionDebugRuntim
 
 const isPhysicsCollisionDebugVisible = ref(DEFAULT_PHYSICS_COLLISION_DEBUG_VISIBLE)
 const isMeshCollisionDebugVisible = ref(false)
+const physicsCollisionDebugLegend = [
+	{ label: '2 m Ground patch（近车）', color: PHYSICS_COLLISION_DEBUG_COLORS.groundPatch },
+	{ label: '8 m Roadbed collision（路基）', color: PHYSICS_COLLISION_DEBUG_COLORS.roadbed },
+	{ label: 'Ground chunk / heightfield（通用地面）', color: PHYSICS_COLLISION_DEBUG_COLORS.baseGround },
+	{ label: 'DEM terrain chunk（DEM 地形）', color: PHYSICS_COLLISION_DEBUG_COLORS.demTerrain },
+	{ label: 'Other colliders（其他）', color: PHYSICS_COLLISION_DEBUG_COLORS.other },
+] as const
 const isInstancedCullingVisualizationVisible = ref(false)
 const isRendererDebugVisible = ref(false)
 const isInstancingDebugVisible = ref(false)
@@ -13808,7 +13816,7 @@ function resolveScenePreviewMeshCollisionRuntimeDeps(): MeshCollisionRuntimeDeps
 	return {
 		getPhysicsWorld: () => bridgeDeps.getPhysicsWorld(),
 		ensurePhysicsWorld: () => bridgeDeps.ensurePhysicsWorld(),
-		createBody: (shapeDefinition, object) => bridgeDeps.createBody(null, null, shapeDefinition, object),
+		createBody: (shapeDefinition, object, name) => bridgeDeps.createBody(null, null, shapeDefinition, object, name),
 	}
 }
 
@@ -17798,6 +17806,24 @@ watch(watchExclusiveUiActive, (active) => {
 								@update:model-value="togglePhysicsCollisionDebug"
 							/>
 						</v-list-item>
+						<div
+							v-if="isPhysicsCollisionDebugVisible"
+							class="scene-preview__debug-legend"
+							aria-label="Physics collision debug colors"
+						>
+							<div class="scene-preview__debug-legend-title">Collision colors</div>
+							<div
+								v-for="entry in physicsCollisionDebugLegend"
+								:key="entry.label"
+								class="scene-preview__debug-legend-item"
+							>
+								<span
+									class="scene-preview__debug-legend-swatch"
+									:style="{ backgroundColor: entry.color }"
+								/>
+								<span>{{ entry.label }}</span>
+							</div>
+						</div>
 						<v-list-item>
 							<v-checkbox
 								class="scene-preview__debug-checkbox"
@@ -20066,6 +20092,38 @@ watch(watchExclusiveUiActive, (active) => {
 	color: rgba(245, 247, 255, 0.62);
 	font-size: 11px;
 	line-height: 1.45;
+}
+
+.scene-preview__debug-legend {
+	display: grid;
+	gap: 5px;
+	margin: 0 12px 8px;
+	padding: 8px 10px;
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.05);
+	font-size: 11px;
+	line-height: 1.35;
+}
+
+.scene-preview__debug-legend-title {
+	color: rgba(245, 247, 255, 0.82);
+	font-weight: 600;
+}
+
+.scene-preview__debug-legend-item {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	color: rgba(245, 247, 255, 0.72);
+}
+
+.scene-preview__debug-legend-swatch {
+	flex: 0 0 auto;
+	width: 10px;
+	height: 10px;
+	border-radius: 2px;
+	box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22);
 }
 
 .scene-preview__controls {

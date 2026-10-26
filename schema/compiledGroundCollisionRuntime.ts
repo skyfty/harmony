@@ -46,6 +46,7 @@ type CompiledGroundCollisionRuntimeDeps = {
     component: SceneNodeComponentState<RigidbodyComponentProps>,
     shapeDefinition: RigidbodyPhysicsShape | null,
     object: THREE.Object3D,
+    name?: string,
   ) => { body: PhysicsBodyLike; orientationAdjustment: PhysicsOrientationAdjustment | null } | null
   loggerTag?: string
 }
@@ -358,13 +359,14 @@ export function createCompiledGroundCollisionRuntime(
           const shape = buildHeightfieldShapeFromCompiledTile(tileData)
           const proxy = createCollisionProxy(params.groundObject, Number(record.centerX) || 0, Number(record.centerZ) || 0)
           const { node, component } = createStaticCollisionNode(`ground-collision:${params.sourceId}:compiled:${record.key}`)
-          const bodyResult = deps.createBody(node, component, shape, proxy)
+          const bodyName = `compiled-ground:${params.sourceId}:${record.key}`
+          const bodyResult = deps.createBody(node, component, shape, proxy, bodyName)
           if (!bodyResult?.body) {
             throw new Error(`Failed to create compiled ground collision body for tile: ${record.key}`)
           }
           const world = deps.ensurePhysicsWorld()
           addPhysicsBodyToWorld(world, bodyResult.body)
-          ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = `compiled-ground:${params.sourceId}:${record.key}`
+          ;(bodyResult.body as PhysicsBodyLike & { name?: string }).name = bodyName
           instances.set(record.key, {
             nodeId: node.id,
             body: bodyResult.body,
