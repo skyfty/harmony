@@ -14,8 +14,19 @@ export const SIGNBOARD_MAX_SCALE = 1.14
 export const SIGNBOARD_SCREEN_MARGIN = 0.08
 export const DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED = 6
 export const DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED = 9
+export const SIGNBOARD_GUIDANCE_MAX_ENTRIES = 4
+export const SIGNBOARD_GUIDANCE_DEFAULT_INSET_PX = 16
+export const SIGNBOARD_GUIDANCE_DEFAULT_MARKER_HEIGHT_PX = 38
+export const SIGNBOARD_NEAR_HIDE_DISTANCE = 8
+export const SIGNBOARD_NEAR_FADE_END_DISTANCE = 14
+export const SIGNBOARD_CARD_FAR_OPACITY = 0.8
+export const SIGNBOARD_CARD_FAR_SCALE = 0.86
+export const SIGNBOARD_GUIDANCE_MIN_OPACITY = 0.58
+export const SIGNBOARD_GUIDANCE_MIN_SCALE = 0.72
+export const SIGNBOARD_GUIDANCE_VISUAL_SATURATION_DISTANCE = 2000
 
 export type SignboardReferenceKind = 'camera' | 'vehicle'
+export type SignboardGuidanceEdge = 'top' | 'right' | 'bottom' | 'left'
 
 export interface SignboardOverlayPlacement {
   xPercent: number
@@ -24,6 +35,12 @@ export interface SignboardOverlayPlacement {
   opacity: number
   distanceMeters: number
   distanceLabel: string
+}
+
+export interface SignboardDistancePresentation {
+  visible: boolean
+  opacity: number
+  scale: number
 }
 
 export interface SignboardReferenceSmoothingState {
@@ -50,6 +67,37 @@ export interface PurposeOverlayPlacementCandidate {
   estimatedHeightPx: number
 }
 
+export interface SignboardGuidanceInsets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+export interface SignboardGuidanceCandidate {
+  nodeId: string
+  label: string
+  anchorWorld: THREE.Vector3 | Vector3Like
+  distanceMeters: number
+  estimatedWidthPx?: number
+  estimatedHeightPx?: number
+}
+
+export interface SignboardGuidanceEntry {
+  nodeId: string
+  label: string
+  distanceMeters: number
+  distanceLabel: string
+  xPercent: number
+  yPercent: number
+  arrowAngleDeg: number
+  edge: SignboardGuidanceEdge
+  scale: number
+  opacity: number
+  estimatedWidthPx: number
+  estimatedHeightPx: number
+}
+
 const purposeAnchorWorldBox = new THREE.Box3()
 const purposeAnchorWorldCenter = new THREE.Vector3()
 const purposePlacementWorld = new THREE.Vector3()
@@ -69,6 +117,8 @@ const projected = new THREE.Vector3()
 const anchorBox = new THREE.Box3()
 const anchorCenter = new THREE.Vector3()
 const smoothedReferenceTarget = new THREE.Vector3()
+const guidanceCameraSpace = new THREE.Vector3()
+const guidanceProjected = new THREE.Vector3()
 
 function copyVector3(target: THREE.Vector3, source: THREE.Vector3 | Vector3Like): THREE.Vector3 {
   target.set(source.x, source.y, source.z)
@@ -84,6 +134,62 @@ function clamp01(value: number): number {
 
 function lerp(start: number, end: number, amount: number): number {
   return start + (end - start) * amount
+}
+
+function smoothstep01(value: number): number {
+  const clamped = clamp01(value)
+  return clamped * clamped * (3 - 2 * clamped)
+}
+
+export function computeSignboardDistancePresentation(distanceMeters: number): SignboardDistancePresentation {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) {
+    return {
+      visible: false,
+      opacity: 0,
+      scale: SIGNBOARD_CARD_FAR_SCALE,
+    }
+  }
+  if (distanceMeters < SIGNBOARD_NEAR_HIDE_DISTANCE) {
+    return {
+      visible: false,
+      opacity: 0,
+      scale: SIGNBOARD_CARD_FAR_SCALE,
+    }
+  }
+
+  const nearFade = smoothstep01(
+    (distanceMeters - SIGNBOARD_NEAR_HIDE_DISTANCE)
+      / Math.max(SIGNBOARD_NEAR_FADE_END_DISTANCE - SIGNBOARD_NEAR_HIDE_DISTANCE, 1e-6),
+  )
+  if (distanceMeters < SIGNBOARD_NEAR_FADE_END_DISTANCE) {
+    return {
+      visible: true,
+      opacity: nearFade,
+      scale: lerp(SIGNBOARD_CARD_FAR_SCALE, 1, nearFade),
+    }
+  }
+
+  if (distanceMeters <= SIGNBOARD_MAX_DISTANCE) {
+    const farFade = smoothstep01(
+      (distanceMeters - SIGNBOARD_NEAR_FADE_END_DISTANCE)
+        / Math.max(SIGNBOARD_MAX_DISTANCE - SIGNBOARD_NEAR_FADE_END_DISTANCE, 1e-6),
+    )
+    return {
+      visible: true,
+      opacity: lerp(1, SIGNBOARD_CARD_FAR_OPACITY, farFade),
+      scale: lerp(1, SIGNBOARD_CARD_FAR_SCALE, farFade),
+    }
+  }
+
+  const guidanceFade = smoothstep01(
+    (distanceMeters - SIGNBOARD_MAX_DISTANCE)
+      / Math.max(SIGNBOARD_GUIDANCE_VISUAL_SATURATION_DISTANCE - SIGNBOARD_MAX_DISTANCE, 1e-6),
+  )
+  return {
+    visible: true,
+    opacity: lerp(SIGNBOARD_CARD_FAR_OPACITY, SIGNBOARD_GUIDANCE_MIN_OPACITY, guidanceFade),
+    scale: lerp(SIGNBOARD_CARD_FAR_SCALE, SIGNBOARD_GUIDANCE_MIN_SCALE, guidanceFade),
+  }
 }
 
 export function createSignboardReferenceSmoothingState(): SignboardReferenceSmoothingState {
@@ -556,4 +662,276 @@ export function computeSignboardPlacement(params: {
     distanceMeters,
     distanceLabel: formatSignboardDistance(distanceMeters),
   }
+}
+
+function normalizeGuidanceInset(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, value ?? 0) : 0
+}
+
+function resolveGuidanceMarkerDimensions(
+  candidate: SignboardGuidanceCandidate,
+  viewportWidth: number,
+  insets: SignboardGuidanceInsets,
+): { width: number; height: number } {
+  const availableWidth = Math.max(1, viewportWidth - insets.left - insets.right)
+  const estimatedWidth = Number.isFinite(candidate.estimatedWidthPx)
+    ? candidate.estimatedWidthPx ?? 0
+    : 88 + candidate.label.length * 8
+  const width = Math.min(availableWidth, Math.max(148, Math.min(236, estimatedWidth)))
+  const estimatedHeight = Number.isFinite(candidate.estimatedHeightPx)
+    ? candidate.estimatedHeightPx ?? 0
+    : SIGNBOARD_GUIDANCE_DEFAULT_MARKER_HEIGHT_PX
+  const height = Math.max(28, estimatedHeight)
+  return { width, height }
+}
+
+function guidanceRectsOverlap(
+  a: { left: number; top: number; right: number; bottom: number },
+  b: { left: number; top: number; right: number; bottom: number },
+): boolean {
+  const gap = 6
+  return !(
+    a.right + gap <= b.left
+    || a.left >= b.right + gap
+    || a.bottom + gap <= b.top
+    || a.top >= b.bottom + gap
+  )
+}
+
+export function isSignboardAnchorInView(
+  anchorWorld: THREE.Vector3 | Vector3Like,
+  camera: THREE.Camera,
+): boolean {
+  camera.updateWorldMatrix(true, false)
+  guidanceCameraSpace.set(anchorWorld.x, anchorWorld.y, anchorWorld.z)
+  guidanceCameraSpace.applyMatrix4(camera.matrixWorldInverse)
+  if (
+    !Number.isFinite(guidanceCameraSpace.x)
+    || !Number.isFinite(guidanceCameraSpace.y)
+    || !Number.isFinite(guidanceCameraSpace.z)
+    || guidanceCameraSpace.z >= -1e-5
+  ) {
+    return false
+  }
+
+  guidanceProjected.set(anchorWorld.x, anchorWorld.y, anchorWorld.z).project(camera)
+  return (
+    Number.isFinite(guidanceProjected.x)
+    && Number.isFinite(guidanceProjected.y)
+    && Number.isFinite(guidanceProjected.z)
+    && guidanceProjected.x >= -1
+    && guidanceProjected.x <= 1
+    && guidanceProjected.y >= -1
+    && guidanceProjected.y <= 1
+    && guidanceProjected.z >= -1
+    && guidanceProjected.z <= 1
+  )
+}
+
+export function computeSignboardGuidanceEntries(params: {
+  candidates: SignboardGuidanceCandidate[]
+  camera: THREE.Camera
+  viewportWidth: number
+  viewportHeight: number
+  safeArea?: Partial<SignboardGuidanceInsets>
+  maxDistance?: number
+  maxEntries?: number
+}): SignboardGuidanceEntry[] {
+  const viewportWidth = Math.max(1, params.viewportWidth)
+  const viewportHeight = Math.max(1, params.viewportHeight)
+  if (!Number.isFinite(viewportWidth) || !Number.isFinite(viewportHeight)) {
+    return []
+  }
+
+  const defaultInset = SIGNBOARD_GUIDANCE_DEFAULT_INSET_PX
+  const insets: SignboardGuidanceInsets = {
+    top: normalizeGuidanceInset(params.safeArea?.top ?? defaultInset),
+    right: normalizeGuidanceInset(params.safeArea?.right ?? defaultInset),
+    bottom: normalizeGuidanceInset(params.safeArea?.bottom ?? defaultInset),
+    left: normalizeGuidanceInset(params.safeArea?.left ?? defaultInset),
+  }
+  const maxDistance = params.maxDistance ?? SIGNBOARD_MAX_DISTANCE
+  const requestedMaxEntries = params.maxEntries ?? SIGNBOARD_GUIDANCE_MAX_ENTRIES
+  const maxEntries = Number.isFinite(requestedMaxEntries)
+    ? Math.max(0, Math.floor(requestedMaxEntries))
+    : SIGNBOARD_GUIDANCE_MAX_ENTRIES
+  if (maxEntries === 0) {
+    return []
+  }
+
+  params.camera.updateWorldMatrix(true, false)
+  const sortedCandidates = params.candidates
+    .filter((candidate) => (
+      candidate.nodeId.trim().length > 0
+      && Number.isFinite(candidate.distanceMeters)
+      && candidate.distanceMeters >= 0
+      && Number.isFinite(candidate.anchorWorld.x)
+      && Number.isFinite(candidate.anchorWorld.y)
+      && Number.isFinite(candidate.anchorWorld.z)
+    ))
+    .slice()
+    .sort((a, b) => a.distanceMeters - b.distanceMeters || a.nodeId.localeCompare(b.nodeId))
+
+  const entries: SignboardGuidanceEntry[] = []
+  const placedRects: Array<{ left: number; top: number; right: number; bottom: number }> = []
+  const seenNodeIds = new Set<string>()
+
+  for (const candidate of sortedCandidates) {
+    if (seenNodeIds.has(candidate.nodeId)) {
+      continue
+    }
+
+    guidanceCameraSpace
+      .set(candidate.anchorWorld.x, candidate.anchorWorld.y, candidate.anchorWorld.z)
+      .applyMatrix4(params.camera.matrixWorldInverse)
+    if (
+      !Number.isFinite(guidanceCameraSpace.x)
+      || !Number.isFinite(guidanceCameraSpace.y)
+      || !Number.isFinite(guidanceCameraSpace.z)
+      || guidanceCameraSpace.z >= -1e-5
+    ) {
+      continue
+    }
+    const presentation = computeSignboardDistancePresentation(candidate.distanceMeters)
+    if (!presentation.visible) {
+      continue
+    }
+    seenNodeIds.add(candidate.nodeId)
+
+    guidanceProjected
+      .set(candidate.anchorWorld.x, candidate.anchorWorld.y, candidate.anchorWorld.z)
+      .project(params.camera)
+    const inView = (
+      Number.isFinite(guidanceProjected.x)
+      && Number.isFinite(guidanceProjected.y)
+      && Number.isFinite(guidanceProjected.z)
+      && guidanceProjected.x >= -1
+      && guidanceProjected.x <= 1
+      && guidanceProjected.y >= -1
+      && guidanceProjected.y <= 1
+      && guidanceProjected.z >= -1
+      && guidanceProjected.z <= 1
+    )
+    if (inView && candidate.distanceMeters <= maxDistance) {
+      continue
+    }
+
+    const { width, height } = resolveGuidanceMarkerDimensions(candidate, viewportWidth, insets)
+    const availableWidth = Math.max(1, viewportWidth - insets.left - insets.right)
+    const availableHeight = Math.max(1, viewportHeight - insets.top - insets.bottom)
+    const halfWidth = Math.min(width, availableWidth) / 2
+    const halfHeight = Math.min(height, availableHeight) / 2
+    let minX = insets.left + halfWidth
+    let maxX = viewportWidth - insets.right - halfWidth
+    let minY = insets.top + halfHeight
+    let maxY = viewportHeight - insets.bottom - halfHeight
+    if (minX > maxX) {
+      minX = viewportWidth / 2
+      maxX = minX
+    }
+    if (minY > maxY) {
+      minY = viewportHeight / 2
+      maxY = minY
+    }
+
+    let directionX = guidanceCameraSpace.x
+    let directionY = guidanceCameraSpace.z
+    let directionLength = Math.hypot(directionX, directionY)
+    if (!Number.isFinite(directionLength) || directionLength <= 1e-6) {
+      directionX = 0
+      directionY = -1
+      directionLength = 1
+    }
+    directionX /= directionLength
+    directionY /= directionLength
+
+    const centerX = (minX + maxX) / 2
+    const centerY = (minY + maxY) / 2
+    let intersectionDistance = Number.POSITIVE_INFINITY
+    if (directionX > 1e-6) {
+      intersectionDistance = Math.min(intersectionDistance, (maxX - centerX) / directionX)
+    } else if (directionX < -1e-6) {
+      intersectionDistance = Math.min(intersectionDistance, (minX - centerX) / directionX)
+    }
+    if (directionY > 1e-6) {
+      intersectionDistance = Math.min(intersectionDistance, (maxY - centerY) / directionY)
+    } else if (directionY < -1e-6) {
+      intersectionDistance = Math.min(intersectionDistance, (minY - centerY) / directionY)
+    }
+    if (!Number.isFinite(intersectionDistance) || intersectionDistance < 0) {
+      intersectionDistance = 0
+    }
+
+    const edge: SignboardGuidanceEdge = Math.abs(directionX) > Math.abs(directionY)
+      ? (directionX < 0 ? 'left' : 'right')
+      : (directionY < 0 ? 'top' : 'bottom')
+    const baseX = centerX + directionX * intersectionDistance
+    const baseY = centerY + directionY * intersectionDistance
+    const tangentStep = edge === 'top' || edge === 'bottom'
+      ? Math.max(36, halfWidth)
+      : Math.max(34, height + 8)
+    const inwardStep = Math.max(34, height + 8)
+    const tangentIndexes = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5]
+
+    let resolvedX = baseX
+    let resolvedY = baseY
+    let resolvedRect = {
+      left: baseX - halfWidth,
+      top: baseY - halfHeight,
+      right: baseX + halfWidth,
+      bottom: baseY + halfHeight,
+    }
+    placementSearch:
+    for (let inwardIndex = 0; inwardIndex < 5; inwardIndex += 1) {
+      for (const tangentIndex of tangentIndexes) {
+        const tangentOffset = tangentIndex * tangentStep
+        const inwardOffset = inwardIndex * inwardStep
+        let x = baseX
+        let y = baseY
+        if (edge === 'top' || edge === 'bottom') {
+          x += tangentOffset
+          y += edge === 'top' ? inwardOffset : -inwardOffset
+        } else {
+          x += edge === 'left' ? inwardOffset : -inwardOffset
+          y += tangentOffset
+        }
+        x = Math.min(maxX, Math.max(minX, x))
+        y = Math.min(maxY, Math.max(minY, y))
+        const rect = {
+          left: x - halfWidth,
+          top: y - halfHeight,
+          right: x + halfWidth,
+          bottom: y + halfHeight,
+        }
+        const overlaps = placedRects.some((placed) => guidanceRectsOverlap(rect, placed))
+        if (!overlaps) {
+          resolvedX = x
+          resolvedY = y
+          resolvedRect = rect
+          break placementSearch
+        }
+      }
+    }
+
+    placedRects.push(resolvedRect)
+    entries.push({
+      nodeId: candidate.nodeId,
+      label: candidate.label,
+      distanceMeters: candidate.distanceMeters,
+      distanceLabel: formatSignboardDistance(candidate.distanceMeters),
+      xPercent: resolvedX / viewportWidth * 100,
+      yPercent: resolvedY / viewportHeight * 100,
+      arrowAngleDeg: Math.atan2(directionX, -directionY) * 180 / Math.PI,
+      edge,
+      scale: presentation.scale,
+      opacity: presentation.opacity,
+      estimatedWidthPx: width,
+      estimatedHeightPx: height,
+    })
+    if (entries.length >= maxEntries) {
+      break
+    }
+  }
+
+  return entries
 }

@@ -474,6 +474,7 @@ import {
   resolvePurposeOverlayAnchorWorldPosition,
   resolvePurposeOverlayPlacements,
   type PurposeOverlayPlacement,
+  type SignboardGuidanceEntry,
   smoothSignboardPlacement,
   smoothSignboardReference,
   type SignboardPlacementSmoothingState,
@@ -2895,6 +2896,7 @@ const behaviorProximityRuntime = createBehaviorProximityRuntime({
 	processBehaviorEvents,
 })
 const signboardNodeIds = new Set<string>()
+const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([])
 const SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
 	backgroundTopColor: 'rgba(10, 16, 28, 0.92)',
 	backgroundMiddleColor: 'rgba(18, 28, 42, 0.88)',
@@ -3258,6 +3260,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
 	rebuildSceneNodeIndex(document?.nodes ?? null, previewNodeMap, previewParentMap)
 	guideWaypointMenuContextRevision.value += 1
 	signboardNodeIds.clear()
+	signboardGuidanceEntries.value = []
 	punchNodeIds.clear()
 	resetPunchOverlaySmoothing()
 	if (Array.isArray(document?.punchPoints)) {
@@ -3486,8 +3489,35 @@ function resolveSceneSignboardLabel(nodeId: string): string {
 	return label || nodeName || nodeId
 }
 
+function areSignboardGuidanceEntriesEqual(
+	left: SignboardGuidanceEntry[],
+	right: SignboardGuidanceEntry[],
+): boolean {
+	if (left.length !== right.length) {
+		return false
+	}
+	for (let index = 0; index < left.length; index += 1) {
+		const a = left[index]!
+		const b = right[index]!
+		if (
+			a.nodeId !== b.nodeId
+			|| a.label !== b.label
+			|| a.distanceLabel !== b.distanceLabel
+			|| a.edge !== b.edge
+			|| Math.abs(a.xPercent - b.xPercent) > 1e-4
+			|| Math.abs(a.yPercent - b.yPercent) > 1e-4
+			|| Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
+			|| Math.abs(a.scale - b.scale) > 1e-4
+			|| Math.abs(a.opacity - b.opacity) > 1e-4
+		) {
+			return false
+		}
+	}
+	return true
+}
+
 function syncSceneSignboards(activeScene: THREE.Scene | null, activeCamera: THREE.Camera | null): void {
-	syncSignboardBillboards({
+	const nextGuidanceEntries = syncSignboardBillboards({
 		scene: activeScene,
 		camera: activeCamera,
 		nodeObjectMap,
@@ -3495,7 +3525,18 @@ function syncSceneSignboards(activeScene: THREE.Scene | null, activeCamera: THRE
 		resolveLabel: resolveSceneSignboardLabel,
 		isPunched: (nodeId: string) => punchedNodeIds.value.has(nodeId),
 		appearance: SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE,
+		viewportWidth: lanternViewportSize.width,
+		viewportHeight: lanternViewportSize.height,
+		safeArea: {
+			top: 72,
+			right: 16,
+			bottom: 88,
+			left: 16,
+		},
 	})
+	if (!areSignboardGuidanceEntriesEqual(nextGuidanceEntries, signboardGuidanceEntries.value)) {
+		signboardGuidanceEntries.value = nextGuidanceEntries
+	}
 }
 
 function updatePunchBadgeOverlayEntries(activeCamera: THREE.Camera, deltaSeconds: number): void {
@@ -17480,6 +17521,7 @@ onBeforeUnmount(() => {
 	stopBillboardMeshSubscription?.()
 	stopBillboardMeshSubscription = null
 	disposeSignboardBillboards(scene)
+	signboardGuidanceEntries.value = []
 	window.removeEventListener('resize', handleResize)
 	document.removeEventListener('fullscreenchange', handleFullscreenChange)
 	window.removeEventListener('blur', handleWindowBlur)
@@ -17737,6 +17779,36 @@ watch(watchExclusiveUiActive, (active) => {
 				}"
 			>
 				<span class="scene-preview__punch-badge-icon">✓</span>
+			</div>
+		</div>
+		<div
+			v-if="signboardGuidanceEntries.length"
+			class="scene-preview__signboard-guidance-layer"
+			role="list"
+			aria-label="景点方向提示"
+		>
+			<div
+				v-for="entry in signboardGuidanceEntries"
+				:key="entry.nodeId"
+				class="scene-preview__signboard-guidance"
+				:class="`scene-preview__signboard-guidance--${entry.edge}`"
+				role="listitem"
+				:aria-label="`${entry.label}，${entry.distanceLabel}`"
+				:style="{
+					left: `${entry.xPercent}%`,
+					top: `${entry.yPercent}%`,
+					width: `${entry.estimatedWidthPx}px`,
+					opacity: String(entry.opacity),
+					transform: `translate(-50%, -50%) scale(${entry.scale})`,
+				}"
+			>
+				<span
+					class="scene-preview__signboard-guidance-arrow"
+					:style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
+					aria-hidden="true"
+				>↑</span>
+				<span class="scene-preview__signboard-guidance-label">{{ entry.label }}</span>
+				<span class="scene-preview__signboard-guidance-distance">{{ entry.distanceLabel }}</span>
 			</div>
 		</div>
 		<div v-if="behaviorBubbleVisible" class="scene-preview__bubble-layer" aria-live="polite">
@@ -19120,6 +19192,97 @@ watch(watchExclusiveUiActive, (active) => {
 	font-size: 0.75rem;
 	font-weight: 700;
 	line-height: 1;
+}
+
+.scene-preview__signboard-guidance-layer {
+	position: absolute;
+	inset: 0;
+	z-index: 2156;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.scene-preview__signboard-guidance {
+	position: absolute;
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	min-height: 38px;
+	padding: 5px 10px 5px 6px;
+	border: 1px solid rgba(159, 214, 255, 0.3);
+	border-radius: 999px;
+	background:
+		linear-gradient(180deg, rgba(16, 26, 42, 0.94), rgba(11, 20, 33, 0.9)),
+		linear-gradient(135deg, rgba(91, 180, 255, 0.12), rgba(255, 255, 255, 0.04));
+	box-shadow:
+		0 12px 28px rgba(0, 0, 0, 0.28),
+		inset 0 1px 0 rgba(255, 255, 255, 0.08);
+	backdrop-filter: blur(12px) saturate(1.08);
+	-webkit-backdrop-filter: blur(12px) saturate(1.08);
+	color: #f7fbff;
+	transform: translate(-50%, -50%);
+	box-sizing: border-box;
+	white-space: nowrap;
+	transition:
+		left 90ms linear,
+		top 90ms linear,
+		opacity 120ms ease,
+		transform 120ms ease-out;
+	will-change: left, top, transform;
+}
+
+.scene-preview__signboard-guidance-arrow {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 26px;
+	flex: 0 0 26px;
+	border: 1px solid rgba(144, 217, 255, 0.34);
+	border-radius: 50%;
+	background: rgba(102, 190, 255, 0.18);
+	box-shadow: 0 0 14px rgba(89, 188, 255, 0.16);
+	color: #bcecff;
+	font-size: 15px;
+	font-weight: 800;
+	line-height: 1;
+	transform-origin: 50% 50%;
+	transition: transform 90ms linear;
+}
+
+.scene-preview__signboard-guidance-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 0.78rem;
+	font-weight: 700;
+	letter-spacing: 0.01em;
+}
+
+.scene-preview__signboard-guidance-distance {
+	flex: 0 0 auto;
+	padding-left: 7px;
+	border-left: 1px solid rgba(255, 255, 255, 0.16);
+	color: #ffd783;
+	font-size: 0.72rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+	.scene-preview__signboard-guidance {
+		gap: 5px;
+		padding-right: 8px;
+	}
+
+	.scene-preview__signboard-guidance-label {
+		font-size: 0.72rem;
+	}
+
+	.scene-preview__signboard-guidance-distance {
+		font-size: 0.67rem;
+	}
 }
 
 .scene-preview__bubble-layer {

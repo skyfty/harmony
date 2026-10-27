@@ -309,6 +309,38 @@
           <text class="viewer-punch-badge__icon">✓</text>
         </view>
       </view>
+      <view
+        v-if="signboardGuidanceEntries.length"
+        class="viewer-signboard-guidance-layer"
+        role="list"
+        aria-label="景点方向提示"
+      >
+        <view
+          v-for="entry in signboardGuidanceEntries"
+          :key="entry.nodeId"
+          class="viewer-signboard-guidance"
+          :class="`viewer-signboard-guidance--${entry.edge}`"
+          role="listitem"
+          :aria-label="`${entry.label}，${entry.distanceLabel}`"
+          :style="{
+            left: `${entry.xPercent}%`,
+            top: `${entry.yPercent}%`,
+            width: `${entry.estimatedWidthPx}px`,
+            opacity: String(entry.opacity),
+            transform: `translate(-50%, -50%) scale(${entry.scale})`,
+          }"
+        >
+          <view
+            class="viewer-signboard-guidance__arrow"
+            :style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
+            aria-hidden="true"
+          >
+            <text class="viewer-signboard-guidance__arrow-icon">↑</text>
+          </view>
+          <text class="viewer-signboard-guidance__label">{{ entry.label }}</text>
+          <text class="viewer-signboard-guidance__distance">{{ entry.distanceLabel }}</text>
+        </view>
+      </view>
       <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
         <view
           class="viewer-bubble"
@@ -1290,6 +1322,7 @@ import type { InstancedLodTarget, ShowPurposeBehaviorButton } from '@harmony/sch
 import type {
   SignboardPlacementSmoothingState,
   SignboardBillboardStyle,
+  SignboardGuidanceEntry,
 } from '@harmony/schema/overlay';
 import {
   addBehaviorRuntimeListener,
@@ -2860,6 +2893,7 @@ function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean
 
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 const signboardNodeIds = new Set<string>();
+const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([]);
 const punchNodeIds = new Set<string>();
 const SCENERY_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   backgroundTopColor: 'rgba(255, 255, 255, 0.88)',
@@ -3654,6 +3688,12 @@ const punchSummaryStyle = computed(() => ({
 const viewerEnvironmentControlsStyle = computed(() => ({
   top: `${punchSummaryTopOffset.value + 52}px`,
 }));
+const signboardGuidanceSafeArea = {
+  top: punchSummaryTopOffset.value + 134,
+  right: 16 + Math.max(initialSystemInfo?.safeAreaInsets?.right ?? 0, 0),
+  bottom: 124 + Math.max(initialSystemInfo?.safeAreaInsets?.bottom ?? 0, 0),
+  left: 16 + Math.max(initialSystemInfo?.safeAreaInsets?.left ?? 0, 0),
+};
 const viewerEnvironmentControlsVisible = computed(() => (
   viewerEnvironmentControlMode.value === 'manual'
   && viewerEnvironmentHasLandscape.value
@@ -7900,6 +7940,7 @@ function rebuildPreviewNodeMap(document: SceneJsonExportDocument | null | undefi
   // control-node switch, nominate overrides), so the flags cannot go stale.
   resetScenerySceneRuntimeFlags();
   signboardNodeIds.clear();
+  signboardGuidanceEntries.value = [];
   punchNodeIds.clear();
   punchTotalCount.value = 0;
   resetPunchOverlaySmoothing();
@@ -8318,11 +8359,38 @@ function resolveSceneSignboardLabel(nodeId: string): string {
   return label.trim() || nodeName.trim() || nodeId;
 }
 
+function areSignboardGuidanceEntriesEqual(
+  left: SignboardGuidanceEntry[],
+  right: SignboardGuidanceEntry[],
+): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index]!;
+    const b = right[index]!;
+    if (
+      a.nodeId !== b.nodeId
+      || a.label !== b.label
+      || a.distanceLabel !== b.distanceLabel
+      || a.edge !== b.edge
+      || Math.abs(a.xPercent - b.xPercent) > 1e-4
+      || Math.abs(a.yPercent - b.yPercent) > 1e-4
+      || Math.abs(a.arrowAngleDeg - b.arrowAngleDeg) > 1e-3
+      || Math.abs(a.scale - b.scale) > 1e-4
+      || Math.abs(a.opacity - b.opacity) > 1e-4
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function syncSceneSignboardsWithReference(
   distanceReference: { position: THREE.Vector3; kind: 'camera' | 'vehicle'; nodeId: string | null } | null,
 ): void {
   const renderCamera = renderContext?.camera ?? null;
-  syncSignboardBillboards({
+  const nextGuidanceEntries = syncSignboardBillboards({
     scene: renderContext?.scene ?? null,
     camera: renderCamera,
     nodeObjectMap,
@@ -8331,7 +8399,13 @@ function syncSceneSignboardsWithReference(
     isPunched: (nodeId: string) => punchedNodeIds.value.has(nodeId),
     appearance: SCENERY_SIGNBOARD_BILLBOARD_STYLE,
     distanceReferenceWorld: distanceReference?.position ?? null,
+    viewportWidth: lanternViewportSize.width,
+    viewportHeight: lanternViewportSize.height,
+    safeArea: signboardGuidanceSafeArea,
   });
+  if (!areSignboardGuidanceEntriesEqual(nextGuidanceEntries, signboardGuidanceEntries.value)) {
+    signboardGuidanceEntries.value = nextGuidanceEntries;
+  }
 }
 
 function resolveClickBehaviorAncestorNodeId(nodeId: string | null): string | null {
@@ -24422,6 +24496,7 @@ function teardownRenderer() {
   stopBillboardMeshSubscription?.();
   stopBillboardMeshSubscription = null;
   disposeSignboardBillboards(renderContext?.scene ?? null);
+  signboardGuidanceEntries.value = [];
   clearInstancedMeshes();
   clearSceneryCompiledGroundRenderRuntime();
   disposeObject(scene);
@@ -27101,6 +27176,104 @@ onUnmounted(() => {
   font-size: 20rpx;
   font-weight: 700;
   line-height: 1;
+}
+
+.viewer-signboard-guidance-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1456;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.viewer-signboard-guidance {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 5px 10px 5px 6px;
+  border: 1px solid rgba(107, 152, 198, 0.3);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 247, 255, 0.88)),
+    linear-gradient(135deg, rgba(122, 198, 255, 0.13), rgba(255, 255, 255, 0.08));
+  box-shadow:
+    0 12px 28px rgba(52, 87, 128, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(14px) saturate(1.08);
+  -webkit-backdrop-filter: blur(14px) saturate(1.08);
+  color: #173b59;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  white-space: nowrap;
+  transition:
+    left 0.09s linear,
+    top 0.09s linear,
+    opacity 0.12s ease,
+    transform 0.12s ease-out;
+  will-change: left, top, transform;
+}
+
+.viewer-signboard-guidance__arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 27px;
+  border: 1px solid rgba(80, 158, 220, 0.26);
+  border-radius: 50%;
+  background: rgba(97, 183, 245, 0.16);
+  box-shadow: 0 0 14px rgba(77, 166, 223, 0.14);
+  color: #28689a;
+  transform-origin: 50% 50%;
+  transition: transform 0.09s linear;
+}
+
+.viewer-signboard-guidance__arrow-icon {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.viewer-signboard-guidance__label {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #173b59;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.viewer-signboard-guidance__distance {
+  flex: 0 0 auto;
+  padding-left: 7px;
+  border-left: 1px solid rgba(80, 131, 176, 0.18);
+  color: #9a6a10;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  .viewer-signboard-guidance {
+    gap: 5px;
+    padding-right: 8px;
+  }
+
+  .viewer-signboard-guidance__label {
+    font-size: 11px;
+  }
+
+  .viewer-signboard-guidance__distance {
+    font-size: 10px;
+  }
 }
 
 .viewer-bubble-layer {

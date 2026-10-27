@@ -1,10 +1,12 @@
 import * as THREE from 'three'
 import {
-  SIGNBOARD_CLOSE_FADE_DISTANCE,
-  SIGNBOARD_FADE_START_DISTANCE,
   SIGNBOARD_MAX_DISTANCE,
   SIGNBOARD_WORLD_Y_OFFSET,
+  computeSignboardGuidanceEntries,
+  computeSignboardDistancePresentation,
   formatSignboardDistance,
+  type SignboardGuidanceEntry,
+  type SignboardGuidanceInsets,
 } from './signboardOverlay'
 import { createCanvas, type HarmonyCanvas, type HarmonyCanvas2DContext } from './canvas'
 
@@ -160,24 +162,6 @@ function fitLabelFontSize(context: SignboardCanvasContext, label: string, maxWid
     fontSize -= 1
   }
   return LABEL_FONT_MIN
-}
-
-function computeOpacity(distanceMeters: number): number {
-  if (!Number.isFinite(distanceMeters) || distanceMeters <= 0) {
-    return 0
-  }
-  if (distanceMeters > SIGNBOARD_MAX_DISTANCE) {
-    return 0
-  }
-
-  const fadeStart = Math.min(SIGNBOARD_FADE_START_DISTANCE, SIGNBOARD_MAX_DISTANCE)
-  const farFadeRange = Math.max(SIGNBOARD_MAX_DISTANCE - fadeStart, 1e-6)
-  const farFade = Math.min(Math.max((SIGNBOARD_MAX_DISTANCE - distanceMeters) / farFadeRange, 0), 1)
-  const closeFade = SIGNBOARD_CLOSE_FADE_DISTANCE > 0
-    ? Math.min(Math.max(distanceMeters / SIGNBOARD_CLOSE_FADE_DISTANCE, 0), 1)
-    : 1
-
-  return farFade * closeFade
 }
 
 function quantizeSignboardDistance(distanceMeters: number): number {
@@ -386,7 +370,7 @@ function updateSignboardEntry(
   signboardAnchorScratch.y += SIGNBOARD_WORLD_Y_OFFSET + BILLBOARD_WORLD_Y_OFFSET
   const distanceReference = distanceReferenceWorld ?? signboardCameraScratch
   const distanceMeters = signboardAnchorScratch.distanceTo(distanceReference)
-  const opacity = computeOpacity(distanceMeters)
+  const presentation = computeSignboardDistancePresentation(distanceMeters)
   const quantizedDistanceMeters = quantizeSignboardDistance(distanceMeters)
   const distanceText = formatSignboardDistance(quantizedDistanceMeters)
 
@@ -411,13 +395,16 @@ function updateSignboardEntry(
     }
     entry.punchBadgeVisible = punchBadgeVisible
     drawSignboardTexture(entry, style)
-    entry.sprite.scale.set(entry.worldWidth, entry.worldHeight, 1)
   }
 
   entry.sprite.position.copy(signboardAnchorScratch)
-  entry.material.opacity = opacity
-  entry.sprite.visible = opacity > 0.01
-  entry.opacity = opacity
+  entry.sprite.scale.set(entry.worldWidth * presentation.scale, entry.worldHeight * presentation.scale, 1)
+  const cardVisible = presentation.visible
+    && distanceMeters <= SIGNBOARD_MAX_DISTANCE
+    && presentation.opacity > 0.01
+  entry.material.opacity = cardVisible ? presentation.opacity : 0
+  entry.sprite.visible = cardVisible
+  entry.opacity = cardVisible ? presentation.opacity : 0
 }
 
 export function syncSignboardBillboards(params: {
@@ -429,15 +416,31 @@ export function syncSignboardBillboards(params: {
   isPunched?: (nodeId: string) => boolean
   appearance?: Partial<SignboardBillboardStyle>
   distanceReferenceWorld?: THREE.Vector3 | null
-}): void {
-  const { scene, camera, nodeObjectMap, signboardNodeIds, resolveLabel, distanceReferenceWorld } = params
+  viewportWidth?: number
+  viewportHeight?: number
+  safeArea?: Partial<SignboardGuidanceInsets>
+}): SignboardGuidanceEntry[] {
+  const {
+    scene,
+    camera,
+    nodeObjectMap,
+    signboardNodeIds,
+    resolveLabel,
+    distanceReferenceWorld,
+  } = params
   if (!scene || !camera) {
-    return
+    return []
   }
   const style = resolveStyle(params.appearance)
   const isPunched = params.isPunched ?? (() => false)
   camera.getWorldPosition(signboardCameraScratch)
   const resolvedDistanceReference = distanceReferenceWorld ?? signboardCameraScratch
+  const guidanceCandidates: Array<{
+    nodeId: string
+    label: string
+    anchorWorld: THREE.Vector3
+    distanceMeters: number
+  }> = []
 
   for (const [nodeId, entry] of signboardEntries) {
     if (!signboardNodeIds.has(nodeId)) {
@@ -449,15 +452,45 @@ export function syncSignboardBillboards(params: {
   }
 
   signboardNodeIds.forEach((nodeId) => {
+    const object = nodeObjectMap.get(nodeId) ?? null
     updateSignboardEntry(
       scene,
       nodeId,
-      nodeObjectMap.get(nodeId) ?? null,
+      object,
       resolveLabel,
       isPunched,
       style,
       resolvedDistanceReference,
     )
+    if (!object || !isRuntimeObjectEffectivelyVisible(object)) {
+      return
+    }
+    object.getWorldPosition(signboardAnchorScratch)
+    signboardAnchorScratch.y += SIGNBOARD_WORLD_Y_OFFSET + BILLBOARD_WORLD_Y_OFFSET
+    guidanceCandidates.push({
+      nodeId,
+      label: resolveLabel(nodeId),
+      anchorWorld: signboardAnchorScratch.clone(),
+      distanceMeters: signboardAnchorScratch.distanceTo(resolvedDistanceReference),
+    })
+  })
+
+  const viewportWidth = params.viewportWidth
+  const viewportHeight = params.viewportHeight
+  if (
+    !Number.isFinite(viewportWidth)
+    || !Number.isFinite(viewportHeight)
+    || (viewportWidth ?? 0) <= 0
+    || (viewportHeight ?? 0) <= 0
+  ) {
+    return []
+  }
+  return computeSignboardGuidanceEntries({
+    candidates: guidanceCandidates,
+    camera,
+    viewportWidth: viewportWidth!,
+    viewportHeight: viewportHeight!,
+    safeArea: params.safeArea,
   })
 }
 
