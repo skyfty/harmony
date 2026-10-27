@@ -90,6 +90,30 @@ describe('procedural landscape scene readiness', () => {
     expect(result.statuses.missing).toBe('missing-runtime')
   })
 
+  it('keeps waiting while DEM progress advances beyond the former total timeout', async () => {
+    let nowMs = 0
+    let progress = 0.1
+    const result = await waitForProceduralLandscapeSceneReady({
+      nodeIds: ['large-dem'],
+      getStats: () => makeStats({
+        demStatus: progress >= 1 ? 'ready' : 'building',
+        phase: progress >= 1 ? 'streaming' : 'generating',
+        seasonAssetsReady: progress >= 1,
+        progress,
+      }),
+      stallTimeoutMs: 30_000,
+      pollIntervalMs: 5_000,
+      now: () => nowMs,
+      sleep: async () => {
+        nowMs += 5_000
+        progress = Math.min(1, progress + 0.1)
+      },
+    })
+
+    expect(result.status).toBe('ready')
+    expect(nowMs).toBeGreaterThan(30_000)
+  })
+
   it('aborts immediately and treats runtime errors as non-blocking failures', async () => {
     const aborted = await waitForProceduralLandscapeSceneReady({
       nodeIds: ['a'],

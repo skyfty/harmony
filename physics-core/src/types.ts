@@ -174,8 +174,9 @@ export type PhysicsCharacterDesc = {
   airControl: number
   walkSpeed: number
   runSpeed: number
-  sprintSpeed: number
 }
+
+export type PhysicsCharacterGait = 'analog' | 'walk' | 'run'
 
 export type PhysicsSceneAsset = {
   format: 'harmony-physics'
@@ -234,7 +235,8 @@ export type PhysicsCharacterInputCommand = {
   yaw?: number | null
   turnRateRadiansPerSecond?: number | null
   jump: boolean
-  sprint: boolean
+  /** Explicit locomotion tier for digital/keyboard controls. */
+  gait?: PhysicsCharacterGait
   crouch: boolean
   interact: boolean
   resetState?: boolean

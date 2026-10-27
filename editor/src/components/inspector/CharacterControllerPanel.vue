@@ -101,15 +101,6 @@ function updateCameraFollowHeight(value: number) {
   updateField('cameraFollowHeight', value)
 }
 
-function updateSprintSpeed(value: number) {
-  const sprintSpeed = Number.isFinite(value) ? Math.max(0, value) : 0
-  updateComponent({
-    walkSpeed: Number((sprintSpeed * 0.375).toFixed(2)),
-    runSpeed: Number((sprintSpeed * 0.75).toFixed(2)),
-    sprintSpeed,
-  })
-}
-
 function toggleAdvancedMovement() {
   advancedMovementExpanded.value = !advancedMovementExpanded.value
 }
@@ -294,14 +285,14 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
 
         <div class="character-controller-panel__grid">
           <v-text-field
-            :model-value="normalizedProps.sprintSpeed"
+            :model-value="normalizedProps.runSpeed"
             type="number"
-            label="Max speed / Sprint speed"
+            label="Run speed"
             density="compact"
             hide-details
             variant="underlined"
             :disabled="!componentEnabled"
-            @update:model-value="(value) => updateSprintSpeed(Number(value))"
+            @update:model-value="(value) => updateField('runSpeed', Number(value))"
           />
         </div>
 
@@ -321,6 +312,28 @@ const advancedAnimationSlots = CHARACTER_ANIMATION_ADVANCED_SLOTS
           </div>
           <v-expand-transition>
             <div v-show="advancedMovementExpanded" class="character-controller-panel__grid">
+              <v-text-field
+                :model-value="normalizedProps.walkSpeed"
+                type="number"
+                variant="underlined"
+                label="Walk speed"
+                density="compact"
+                hide-details
+                step="0.1"
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('walkSpeed', Number(value))"
+              />
+              <v-text-field
+                :model-value="normalizedProps.runSpeed"
+                type="number"
+                variant="underlined"
+                label="Run speed"
+                density="compact"
+                hide-details
+                step="0.1"
+                :disabled="!componentEnabled"
+                @update:model-value="(value) => updateField('runSpeed', Number(value))"
+              />
               <v-text-field
                 :model-value="normalizedProps.turnRateDegreesPerSecond"
                 type="number"

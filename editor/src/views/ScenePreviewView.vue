@@ -105,6 +105,7 @@ import {
 import {
 	type PhysicsBackendPreference,
 	type PhysicsBridge,
+	type PhysicsCharacterGait,
 	type PhysicsCharacterMotorFrameState,
 	type PhysicsContactEvent,
 	type PhysicsSceneAsset,
@@ -175,8 +176,13 @@ import { VehicleMotionAuthorityController } from '@schema/vehicleMotionAuthority
 import {
 	DEM_GROUND_COLLISION_READY_TIMEOUT_MS,
 	collectGroundCollisionSourceNodeIds,
+	collectDemGroundCollisionSourceNodeIds,
+	isGroundCollisionCoverageReady,
+	resolveGroundCollisionSurfaceSampler,
+	resolveGroundedCharacterBodyCenterY,
 	waitForGroundCollisionSourceTerrainReady,
 } from '@schema/groundCollisionSourceRuntime'
+import { createPhysicsInitializationGate } from '@schema/physicsInitializationGate'
 import {
 	MESH_COLLISION_ACTIVATION_RADIUS_METERS,
 	clearAllMeshCollisionRuntimeHosts,
@@ -354,6 +360,7 @@ import {
 } from '@schema/components'
 import { characterControllerComponentDefinition } from '@schema/components/definitions/characterControllerComponent'
 import { CharacterControllerAnimationRuntimeManager } from '@schema/characterControllerAnimationRuntime'
+import { resolveKeyboardCharacterGait } from '@schema/characterControlRuntime'
 import {
 	collectCachedExternalAnimationClips,
 	getOrLoadExternalAnimationObject,
@@ -673,6 +680,7 @@ const liveUpdatesDisabledLabel = computed(() => {
 	return 'Live updates disabled.'
 })
 const isPlaying = ref(true)
+let landscapeBuildPumpActive = false
 const characterCameraMode = ref<RuntimePanelCameraMode>('first-person')
 const volumePercent = ref(100)
 const isFullscreen = ref(false)
@@ -3118,7 +3126,7 @@ let physicsBridgeSceneReloading = false
 // ground anchors are still being indexed/created. A character would otherwise start
 // falling during that window and tunnel through a thin terrain shell before the first
 // collision chunks reach the physics world.
-let physicsBridgeCollisionBootstrapPending = false
+const physicsBridgeCollisionBootstrapGate = createPhysicsInitializationGate()
 let physicsBridgeSceneRequestId = 0
 const currentPhysicsBridgePreference = ref<PhysicsBackendPreference | undefined>()
 const physicsBridgeBodyIdByNodeId = new Map<string, number>()
@@ -3729,7 +3737,7 @@ const runtimePanelUi = computed(() => {
 			rightActive: vehicleDriveState.active && vehicleDriveInputFlags.right,
 			brakeActive: vehicleDriveState.active && vehicleDriveInputFlags.brake,
 			jumpActive: false,
-			sprintActive: false,
+			runActive: false,
 			crouchActive: false,
 			interactActive: false,
 		}
@@ -3747,7 +3755,7 @@ const runtimePanelUi = computed(() => {
 			rightActive: false,
 			brakeActive: false,
 			jumpActive: false,
-			sprintActive: false,
+			runActive: false,
 			crouchActive: false,
 			interactActive: false,
 		}
@@ -3764,7 +3772,7 @@ const runtimePanelUi = computed(() => {
 		rightActive: characterKeyState.right,
 		brakeActive: false,
 		jumpActive: characterKeyState.jump,
-		sprintActive: characterKeyState.sprint,
+		runActive: characterKeyState.run,
 		crouchActive: characterKeyState.crouch,
 		interactActive: characterKeyState.interact,
 	}
@@ -3802,7 +3810,7 @@ const characterAuthorityInput = reactive({
 	moveZ: 0,
 	turn: 0,
 	jump: false,
-	sprint: false,
+	gait: 'analog' as PhysicsCharacterGait,
 	crouch: false,
 	interact: false,
 })
@@ -3812,7 +3820,7 @@ const characterKeyState = reactive({
 	left: false,
 	right: false,
 	jump: false,
-	sprint: false,
+	run: false,
 	crouch: false,
 	interact: false,
 })
@@ -3958,7 +3966,6 @@ const characterCameraFollowPlacementCache = {
 	placement: null as CameraFollowPlacement | null,
 }
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05
-const CHARACTER_KEYBOARD_RUN_MAGNITUDE = 0.5
 const CHARACTER_INPUT_MAX_DELTA_SECONDS = 0.05
 const CHARACTER_RUNTIME_TURN_RATE_SCALE = 1
 const CHARACTER_CAMERA_CHASE_HEADING_SPEED_MAX = 1.8
@@ -3982,7 +3989,7 @@ type PhysicsBridgeCharacterInputSnapshot = {
 	yaw: number | null
 	turnRateRadiansPerSecond: number | null
 	jump: boolean
-	sprint: boolean
+	gait: PhysicsCharacterGait
 	crouch: boolean
 	interact: boolean
 }
@@ -8199,7 +8206,7 @@ function resetCharacterControlInputs(): void {
 	characterAuthorityInput.moveZ = 0
 	characterAuthorityInput.turn = 0
 	characterAuthorityInput.jump = false
-	characterAuthorityInput.sprint = false
+	characterAuthorityInput.gait = 'analog'
 	characterAuthorityInput.crouch = false
 	characterAuthorityInput.interact = false
 	characterKeyState.forward = false
@@ -8207,7 +8214,7 @@ function resetCharacterControlInputs(): void {
 	characterKeyState.left = false
 	characterKeyState.right = false
 	characterKeyState.jump = false
-	characterKeyState.sprint = false
+	characterKeyState.run = false
 	characterKeyState.crouch = false
 	characterKeyState.interact = false
 	characterInputJumpLatch = false
@@ -8888,11 +8895,11 @@ function resolveScenePreviewCharacterAnimationInput(nodeId: string): {
 	moveZ: number
 	turn: number
 	jump: boolean
-	sprint: boolean
 	crouch: boolean
 	interact: boolean
 	yaw?: number | null
 	locallyControlled: boolean
+	gait: PhysicsCharacterGait
 } {
 	const pathFollowInput = characterAutoTourRuntime.getInput(nodeId)
 	if (
@@ -8902,7 +8909,6 @@ function resolveScenePreviewCharacterAnimationInput(nodeId: string): {
 			|| Math.abs(pathFollowInput.moveZ) > 0.001
 			|| Math.abs(pathFollowInput.turn) > 0.001
 			|| pathFollowInput.jump
-			|| pathFollowInput.sprint
 			|| pathFollowInput.crouch
 			|| pathFollowInput.interact
 		)
@@ -8910,6 +8916,7 @@ function resolveScenePreviewCharacterAnimationInput(nodeId: string): {
 		return {
 			...pathFollowInput,
 			locallyControlled: false,
+			gait: 'analog',
 		}
 	}
 	const isLocallyControlled = resolveDefaultControlledCharacterNodeId() === nodeId
@@ -8918,10 +8925,10 @@ function resolveScenePreviewCharacterAnimationInput(nodeId: string): {
 		moveZ: isLocallyControlled ? characterAuthorityInput.moveZ : 0,
 		turn: isLocallyControlled ? characterAuthorityInput.turn : 0,
 		jump: isLocallyControlled ? characterAuthorityInput.jump : false,
-		sprint: isLocallyControlled ? characterAuthorityInput.sprint : false,
 		crouch: isLocallyControlled ? characterAuthorityInput.crouch : false,
 		interact: isLocallyControlled ? characterAuthorityInput.interact : false,
 		locallyControlled: isLocallyControlled,
+		gait: characterAuthorityInput.gait,
 	}
 }
 
@@ -9011,13 +9018,6 @@ type CharacterCameraMoveFrame = {
 	rightZ: number
 }
 
-function clampAxisScalar(value: number): number {
-	if (!Number.isFinite(value)) {
-		return 0
-	}
-	return Math.max(-1, Math.min(1, value))
-}
-
 function resolveCharacterCameraMoveFrame(frame: CharacterCameraMoveFrame): boolean {
 	const activeCamera = camera
 	if (!activeCamera) {
@@ -9090,17 +9090,18 @@ function updateCharacterAuthorityInputFromKeys(): void {
 	if (hasMovement) {
 		characterDesiredInputYaw = Math.atan2(directionX, directionZ)
 		characterAuthorityInput.moveX = 0
-		const movementMagnitude = clampAxisScalar(length)
-		characterAuthorityInput.moveZ = characterKeyState.sprint
-			? movementMagnitude
-			: Math.min(movementMagnitude, CHARACTER_KEYBOARD_RUN_MAGNITUDE)
+		characterAuthorityInput.moveZ = 1
+		characterAuthorityInput.gait = resolveKeyboardCharacterGait({
+			moving: true,
+			runHeld: characterKeyState.run,
+		})
 	} else {
 		characterDesiredInputYaw = null
 		characterAuthorityInput.moveX = 0
 		characterAuthorityInput.moveZ = 0
+		characterAuthorityInput.gait = 'analog'
 	}
 	characterAuthorityInput.turn = 0
-	characterAuthorityInput.sprint = characterKeyState.sprint
 	characterAuthorityInput.crouch = characterKeyState.crouch
 	characterAuthorityInput.interact = characterKeyState.interact
 	if (characterKeyState.jump) {
@@ -9844,7 +9845,7 @@ function resetMoveToSubjectInputs(): void {
 	characterAuthorityInput.moveZ = 0
 	characterAuthorityInput.turn = 0
 	characterAuthorityInput.jump = false
-	characterAuthorityInput.sprint = false
+	characterAuthorityInput.gait = 'analog'
 	characterAuthorityInput.crouch = false
 	characterAuthorityInput.interact = false
 }
@@ -9964,7 +9965,7 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
 	characterAuthorityInput.moveZ = planarDistance <= stopDistance ? 0 : distanceBlend
 	characterAuthorityInput.turn = THREE.MathUtils.clamp(yawError / (Math.PI * 0.55), -1, 1)
 	characterAuthorityInput.jump = false
-	characterAuthorityInput.sprint = distanceBlend > 0.75
+	characterAuthorityInput.gait = 'analog'
 	characterAuthorityInput.crouch = false
 	characterAuthorityInput.interact = false
 }
@@ -10935,7 +10936,7 @@ async function handleExitSceneEvent(): Promise<void> {
 }
 
 type DriveControlAction = keyof VehicleDriveControlFlags
-type CharacterControlAction = 'forward' | 'backward' | 'left' | 'right' | 'jump' | 'sprint' | 'crouch' | 'interact'
+type CharacterControlAction = 'forward' | 'backward' | 'left' | 'right' | 'jump' | 'run' | 'crouch' | 'interact'
 
 const vehicleDriveKeyboardMap: Record<string, DriveControlAction> = {
 	KeyW: 'forward',
@@ -10955,8 +10956,8 @@ const characterControlKeyboardMap: Record<string, CharacterControlAction> = {
 	KeyD: 'right',
 	ArrowRight: 'right',
 	Space: 'jump',
-	ShiftLeft: 'sprint',
-	ShiftRight: 'sprint',
+	ShiftLeft: 'run',
+	ShiftRight: 'run',
 	ControlLeft: 'crouch',
 	ControlRight: 'crouch',
 	KeyE: 'interact',
@@ -12774,7 +12775,7 @@ function handleWindowBlur() {
 	characterAuthorityInput.moveZ = 0
 	characterAuthorityInput.turn = 0
 	characterAuthorityInput.jump = false
-	characterAuthorityInput.sprint = false
+	characterAuthorityInput.gait = 'analog'
 	characterAuthorityInput.crouch = false
 	characterAuthorityInput.interact = false
 	characterKeyState.forward = false
@@ -12782,7 +12783,7 @@ function handleWindowBlur() {
 	characterKeyState.left = false
 	characterKeyState.right = false
 	characterKeyState.jump = false
-	characterKeyState.sprint = false
+	characterKeyState.run = false
 	characterKeyState.crouch = false
 	characterKeyState.interact = false
 	characterInputJumpLatch = false
@@ -12869,7 +12870,7 @@ function handleKeyUp(event: KeyboardEvent) {
 		return
 	}
 	if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
-		characterKeyState.sprint = false
+		characterKeyState.run = false
 		updateCharacterAuthorityInputFromKeys()
 		return
 	}
@@ -12931,7 +12932,9 @@ function updatePlaybackSystemsForFrame(delta: number): boolean {
 		cameraWorldDirection: camera.getWorldDirection(landscapeFrameCameraDirection),
 		environment: currentSlowroadsEnvironmentState,
 	})
-	previewComponentManager.update(delta)
+	if (!landscapeBuildPumpActive) {
+		previewComponentManager.update(delta)
+	}
 	ensureSlowroadsEnvironmentRuntime()
 	slowroadsEnvironment?.update(delta)
 	updateCharacterPathFollow(delta)
@@ -13323,7 +13326,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	characterAuthorityInput.moveZ = 0
 	characterAuthorityInput.turn = 0
 	characterAuthorityInput.jump = false
-	characterAuthorityInput.sprint = false
+	characterAuthorityInput.gait = 'analog'
 	characterAuthorityInput.crouch = false
 	characterAuthorityInput.interact = false
 	characterKeyState.forward = false
@@ -13331,7 +13334,7 @@ function disposeScene(options: { preservePreviewNodeMap?: boolean } = {}) {
 	characterKeyState.left = false
 	characterKeyState.right = false
 	characterKeyState.jump = false
-	characterKeyState.sprint = false
+	characterKeyState.run = false
 	characterKeyState.crouch = false
 	characterKeyState.interact = false
 	characterInputJumpLatch = false
@@ -14012,6 +14015,10 @@ function resolveScenePreviewMeshCollisionRuntimeDeps(): MeshCollisionRuntimeDeps
 
 const scenePreviewMeshCollisionSourceObjects = new Set<THREE.Object3D>()
 let scenePreviewMeshCollisionWorkPending = false
+type ScenePreviewMeshCollisionSyncResult = {
+	workPending: boolean
+	coverageReady: boolean
+}
 
 function releaseScenePreviewMeshCollisionRuntime(): void {
 	clearAllMeshCollisionRuntimeHosts()
@@ -14029,22 +14036,29 @@ function releaseScenePreviewMeshCollisionRuntime(): void {
 function syncScenePreviewMeshCollisionRuntime(
 	document: SceneJsonExportDocument | null,
 	referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
-): boolean {
+	options: { patchAllReferences?: boolean } = { patchAllReferences: true },
+): ScenePreviewMeshCollisionSyncResult {
 	const sourceNodeIds = collectGroundCollisionSourceNodeIds(document?.nodes)
 	const references = Array.isArray(referenceWorldPositions) ? referenceWorldPositions : []
 	if (sourceNodeIds.length === 0 || references.length === 0) {
 		releaseScenePreviewMeshCollisionRuntime()
-		return false
+		return { workPending: false, coverageReady: false }
 	}
 	const runtimeDeps = resolveScenePreviewMeshCollisionRuntimeDeps()
 	if (!runtimeDeps) {
 		releaseScenePreviewMeshCollisionRuntime()
-		return false
+		return { workPending: false, coverageReady: false }
 	}
 	const activeObjects = new Set<THREE.Object3D>()
-	resolveCurrentGroundPatchReferenceWorld(groundPatchCollisionReferencePositions, document)
+	if (options.patchAllReferences === true) {
+		syncGroundCollisionReferencePositions(references, groundPatchCollisionReferencePositions)
+	} else {
+		resolveCurrentGroundPatchReferenceWorld(groundPatchCollisionReferencePositions, document)
+	}
 	const groundPatchedReferenceIndexes = new Set<number>()
 	let workPending = false
+	let processedSourceCount = 0
+	let allDemCoverageReady = true
 	let bestSnapshot: ReturnType<typeof syncMeshCollisionRuntimeHost> | null = null
 	resetMeshCollisionDebug()
 	sourceNodeIds.forEach((nodeId) => {
@@ -14053,6 +14067,7 @@ function syncScenePreviewMeshCollisionRuntime(
 			return
 		}
 		activeObjects.add(object)
+		processedSourceCount += 1
 		const snapshot = syncMeshCollisionRuntimeHost({
 			enabled: true,
 			sourceId: nodeId,
@@ -14078,6 +14093,12 @@ function syncScenePreviewMeshCollisionRuntime(
 		}
 		if (snapshot.indexing || snapshot.pendingChunkCount > 0) {
 			workPending = true
+		}
+		if (snapshot.groundSourceCount > 0) {
+			allDemCoverageReady = allDemCoverageReady && isGroundCollisionCoverageReady(
+				snapshot,
+				groundPatchCollisionReferencePositions.length || references.length,
+			)
 		}
 	})
 	const resolvedBestSnapshot = bestSnapshot as ReturnType<typeof syncMeshCollisionRuntimeHost> | null
@@ -14105,7 +14126,12 @@ function syncScenePreviewMeshCollisionRuntime(
 	scenePreviewGroundPatchCoverageComplete = groundPatchCollisionReferencePositions.length > 0
 		&& groundPatchedReferenceIndexes.size >= groundPatchCollisionReferencePositions.length
 	meshCollisionDebug.groundPatchCoverageComplete = scenePreviewGroundPatchCoverageComplete
-	return workPending
+	const hasDemCollisionSource = collectDemGroundCollisionSourceNodeIds(document?.nodes).length > 0
+	return {
+		workPending,
+		coverageReady: !hasDemCollisionSource
+			|| (processedSourceCount === sourceNodeIds.length && allDemCoverageReady),
+	}
 }
 
 async function flushScenePreviewGroundCollisionBridgeMutations(): Promise<void> {
@@ -14123,12 +14149,35 @@ async function bootstrapScenePreviewMeshCollisionRuntime(
 	document: SceneJsonExportDocument | null,
 	referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
 	shouldAbort: () => boolean,
-): Promise<void> {
-	const deadline = Date.now() + DEM_GROUND_COLLISION_READY_TIMEOUT_MS
-	let workPending = false
-	while (!shouldAbort() && Date.now() < deadline) {
-		workPending = syncScenePreviewMeshCollisionRuntime(document, referenceWorldPositions)
-		if (!workPending) {
+): Promise<boolean> {
+	const stallTimeoutMs = DEM_GROUND_COLLISION_READY_TIMEOUT_MS
+	let lastActivityAt = Date.now()
+	let lastProgressSignature = ''
+	let result: ScenePreviewMeshCollisionSyncResult = {
+		workPending: false,
+		coverageReady: false,
+	}
+	while (!shouldAbort()) {
+		result = syncScenePreviewMeshCollisionRuntime(document, referenceWorldPositions, {
+			patchAllReferences: true,
+		})
+		const progressSignature = [
+			meshCollisionDebug.sourceCount,
+			meshCollisionDebug.chunkCount,
+			meshCollisionDebug.groundSourceCount,
+			meshCollisionDebug.groundPatchCount,
+			meshCollisionDebug.uncoveredReferenceCount,
+			result.workPending ? 1 : 0,
+			result.coverageReady ? 1 : 0,
+		].join(':')
+		if (progressSignature !== lastProgressSignature) {
+			lastProgressSignature = progressSignature
+			lastActivityAt = Date.now()
+		}
+		if (!result.workPending && result.coverageReady) {
+			break
+		}
+		if (Date.now() - lastActivityAt >= stallTimeoutMs) {
 			break
 		}
 		// Yield so scene loading UI keeps painting while the streamer drains its budget.
@@ -14136,12 +14185,17 @@ async function bootstrapScenePreviewMeshCollisionRuntime(
 			window.setTimeout(resolve, 0)
 		})
 	}
-	if (!shouldAbort() && workPending) {
-		appendWarningMessage(
-			`地形碰撞索引等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s），物理可能先于完整碰撞启动。`,
-		)
-	}
 	await flushScenePreviewGroundCollisionBridgeMutations()
+	if (shouldAbort()) {
+		return false
+	}
+	if (result.workPending || !result.coverageReady) {
+		appendWarningMessage(
+			`地形碰撞初始化停滞（${Math.round(stallTimeoutMs / 1000)}s 无进展），动态角色保持初始姿态。`,
+		)
+		return false
+	}
+	return true
 }
 
 async function ensureGroundCollisionCoverageForNodes(
@@ -14168,17 +14222,19 @@ async function ensureGroundCollisionCoverageForNodes(
 		syncGroundCollisionReferencePositions(references, groundCollisionReferencePositions)
 		groundCollisionReferenceInitialized = false
 
-		const wasCollisionBootstrapPending = physicsBridgeCollisionBootstrapPending
-		physicsBridgeCollisionBootstrapPending = true
+		const collisionBootstrapLease = physicsBridgeCollisionBootstrapGate.begin()
 		try {
 			const groundNode = resolveSharedDocumentGroundNode(document)
 			const groundObject = groundNode ? nodeObjectMap.get(groundNode.id) ?? null : null
 			clearGroundCollisionRuntimeHost(groundObject)
-			await bootstrapScenePreviewMeshCollisionRuntime(
+			const collisionReady = await bootstrapScenePreviewMeshCollisionRuntime(
 				document,
 				references,
 				() => currentDocument !== document,
 			)
+			if (!collisionReady) {
+				return false
+			}
 			syncScenePreviewGroundCollisionRuntimeHost(document, references)
 			await flushScenePreviewGroundCollisionBridgeMutations()
 			const bridge = physicsBridge
@@ -14215,7 +14271,7 @@ async function ensureGroundCollisionCoverageForNodes(
 				}))
 			}
 		} finally {
-			physicsBridgeCollisionBootstrapPending = wasCollisionBootstrapPending
+			physicsBridgeCollisionBootstrapGate.finish(collisionBootstrapLease)
 		}
 		return true
 	} finally {
@@ -14512,6 +14568,84 @@ function updateScenePreviewPhysicsBridgeIndex(document: SceneJsonExportDocument,
 	})
 }
 
+async function initializeGroundedCharactersAtSpawn(
+	document: SceneJsonExportDocument,
+): Promise<number> {
+	const bridge = physicsBridge
+	if (!bridge) {
+		return 0
+	}
+	const sampler = resolveGroundCollisionSurfaceSampler(
+		document.nodes,
+		(nodeId) => nodeObjectMap.get(nodeId) ?? null,
+	)
+	if (!sampler) {
+		return 0
+	}
+
+	let correctedCount = 0
+	for (const node of collectCharacterNodes(document.nodes)) {
+		const controller = resolveCharacterControllerComponent(node)
+		const object = nodeObjectMap.get(node.id) ?? null
+		if (!controller || !object) {
+			continue
+		}
+		const props = clampCharacterControllerComponentProps(controller.props)
+		object.updateMatrixWorld(true)
+		const worldPosition = object.getWorldPosition(new THREE.Vector3())
+		const surfaceY = sampler.sampleHeightAt(worldPosition.x, worldPosition.z)
+		if (surfaceY == null) {
+			continue
+		}
+		const correctedY = resolveGroundedCharacterBodyCenterY(
+			surfaceY,
+			worldPosition.y,
+			props.colliderHeight,
+		)
+		if (Math.abs(correctedY - worldPosition.y) <= 1e-4) {
+			continue
+		}
+		const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(node.id) ?? node.id
+		const bodyId = physicsBridgeBodyIdByNodeId.get(bodyNodeId)
+		if (typeof bodyId !== 'number') {
+			continue
+		}
+		const worldQuaternion = object
+			.getWorldQuaternion(new THREE.Quaternion())
+			.normalize()
+		const correctedPosition = worldPosition.clone()
+		correctedPosition.y = correctedY
+		physicsBridgeFrameBodiesByNodeId.set(bodyNodeId, {
+			position: correctedPosition.clone(),
+			quaternion: worldQuaternion.clone(),
+			motionState: 0,
+		})
+		applyScenePreviewPhysicsBridgeTransformToObject(
+			object,
+			correctedPosition,
+			worldQuaternion,
+			null,
+			object.parent?.matrixWorld ?? null,
+		)
+		await bridge.setBodyTransform({
+			bodyId,
+			transform: {
+				position: [correctedPosition.x, correctedPosition.y, correctedPosition.z],
+				rotation: [worldQuaternion.x, worldQuaternion.y, worldQuaternion.z, worldQuaternion.w],
+			},
+			resetVelocity: true,
+		})
+		await bridge.setBodyVelocity({
+			bodyId,
+			linearVelocity: [0, 0, 0],
+			angularVelocity: [0, 0, 0],
+			wakeUp: true,
+		})
+		correctedCount += 1
+	}
+	return correctedCount
+}
+
 async function loadScenePreviewPhysicsBridgeScene(
 	document: SceneJsonExportDocument | null,
 	onProgress?: SceneSubsystemProgressReporter,
@@ -14525,16 +14659,19 @@ async function loadScenePreviewPhysicsBridgeScene(
 	const groundNode = resolveSharedDocumentGroundNode(document)
 	const groundMesh = groundNode?.dynamicMesh as GroundRuntimeDynamicMesh | null | undefined
 	const groundObject = groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null
-	const hasGroundCollisionReference = resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)
+	const hasDemGroundCollisionSources = collectDemGroundCollisionSourceNodeIds(document.nodes).length > 0
+	const hasGroundCollisionSources = collectGroundCollisionSourceNodeIds(document.nodes).length > 0
 	physicsBridgeSceneReloading = true
 	const requestId = ++physicsBridgeSceneRequestId
-	const asset = await buildPhysicsSceneAsset(document, {
-		onProgress: (progress) => {
-			onProgress?.(createSceneSubsystemProgress('syncingPhysics', progress))
-		},
-	})
+	const collisionBootstrapLease = physicsBridgeCollisionBootstrapGate.begin()
+	let collisionBootstrapReady = !hasGroundCollisionSources
 
 	try {
+		const asset = await buildPhysicsSceneAsset(document, {
+			onProgress: (progress) => {
+				onProgress?.(createSceneSubsystemProgress('syncingPhysics', progress))
+			},
+		})
 		previewGroundCollisionRuntimeBodyIds.clear()
 		releaseScenePreviewMeshCollisionRuntime()
 		const activePhysicsBridge = physicsBridge
@@ -14542,7 +14679,6 @@ async function loadScenePreviewPhysicsBridgeScene(
 			return
 		}
 		physicsCollisionDebugRuntime.setSceneAsset(asset)
-		physicsBridgeCollisionBootstrapPending = true
 		await activePhysicsBridge.loadScene(asset)
 		if (requestId !== physicsBridgeSceneRequestId) {
 			return
@@ -14550,11 +14686,11 @@ async function loadScenePreviewPhysicsBridgeScene(
 		physicsBridgeSceneLoaded = true
 		updateScenePreviewPhysicsBridgeIndex(document, asset)
 		physicsBridgeSceneReloading = false
-		if (hasGroundCollisionReference && groundObject && isGroundDynamicMesh(groundMesh)) {
+		if (hasGroundCollisionSources && groundObject && isGroundDynamicMesh(groundMesh)) {
 			previewGroundCollisionBridgeMutationEpoch += 1
 			clearGroundCollisionRuntimeHost(groundObject)
 		}
-		if (hasGroundCollisionReference) {
+		if (hasDemGroundCollisionSources) {
 			// DEM terrain meshes are built asynchronously after the scene graph is attached.
 			// Keep the bridge's bootstrap gate closed until the source mesh can be indexed.
 			const terrainReadiness = await waitForGroundCollisionSourceTerrainReady({
@@ -14562,9 +14698,15 @@ async function loadScenePreviewPhysicsBridgeScene(
 				resolveSourceObject: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
 				shouldAbort: () => requestId !== physicsBridgeSceneRequestId,
 				onPending: (pendingNodeIds) => {
+					const averageProgress = pendingNodeIds.length > 0
+						? pendingNodeIds.reduce(
+							(sum, nodeId) => sum + (getProceduralLandscapeStats(nodeId)?.progress ?? 0),
+							0,
+						) / pendingNodeIds.length
+						: 1
 					onProgress?.({
 						phase: 'syncingPhysics',
-						percent: 85,
+						percent: 80 + Math.max(0, Math.min(1, averageProgress)) * 19,
 						detail: '等待 DEM 地形碰撞…',
 						currentIndex: 0,
 						currentTotal: pendingNodeIds.length,
@@ -14572,28 +14714,51 @@ async function loadScenePreviewPhysicsBridgeScene(
 					})
 				},
 			})
+			if (terrainReadiness.status === 'aborted') {
+				return
+			}
 			if (terrainReadiness.status === 'timeout') {
 				const details = terrainReadiness.pendingNodeIds
 					.map((nodeId) => `${nodeId} (${terrainReadiness.statuses[nodeId] ?? 'missing'})`)
 					.join(', ')
 				appendWarningMessage(
-					`DEM 地形碰撞等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s）：${details || 'unknown node'}`,
+					`DEM 地形构建停滞（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s 无进展）：${details || 'unknown node'}。动态角色保持初始姿态。`,
 				)
+				return
 			}
-			if (terrainReadiness.status !== 'aborted') {
-				await bootstrapScenePreviewMeshCollisionRuntime(
-					document,
-					groundCollisionReferencePositions,
-					() => requestId !== physicsBridgeSceneRequestId,
+			if (terrainReadiness.skippedNodeIds.length > 0) {
+				const details = terrainReadiness.skippedNodeIds
+					.map((nodeId) => `${nodeId} (${terrainReadiness.statuses[nodeId] ?? 'error'})`)
+					.join(', ')
+				appendWarningMessage(
+					`DEM 地形碰撞初始化失败：${details}。动态角色保持初始姿态。`,
 				)
+				return
 			}
 		}
+		if (hasGroundCollisionSources) {
+			if (!resolveGroundCollisionReferenceWorld(groundCollisionReferencePositions)) {
+				appendWarningMessage('地面碰撞源缺少可用的 Ground Anchor，动态角色保持初始姿态。')
+				return
+			}
+			groundCollisionReferenceInitialized = false
+			collisionBootstrapReady = await bootstrapScenePreviewMeshCollisionRuntime(
+				document,
+				groundCollisionReferencePositions,
+				() => requestId !== physicsBridgeSceneRequestId || currentDocument !== document,
+			)
+			if (!collisionBootstrapReady) {
+				return
+			}
+			await initializeGroundedCharactersAtSpawn(document)
+		}
 		if (
-			hasGroundCollisionReference
+			hasGroundCollisionSources
 			&& currentDocument === document
 			&& requestId === physicsBridgeSceneRequestId
 		) {
 			syncScenePreviewGroundCollisionRuntimeHost(document, groundCollisionReferencePositions)
+			await flushScenePreviewGroundCollisionBridgeMutations()
 		}
 		const missingCharacterControllers: string[] = []
 		const stack: SceneNode[] = Array.isArray(document.nodes) ? [...document.nodes] : []
@@ -14621,7 +14786,9 @@ async function loadScenePreviewPhysicsBridgeScene(
 		console.warn('[ScenePreview] Failed to load physics bridge scene', error)
 	} finally {
 		physicsBridgeSceneReloading = false
-		physicsBridgeCollisionBootstrapPending = false
+		if (collisionBootstrapReady || requestId !== physicsBridgeSceneRequestId) {
+			physicsBridgeCollisionBootstrapGate.finish(collisionBootstrapLease)
+		}
 	}
 }
 
@@ -14992,7 +15159,7 @@ function stepScenePreviewPhysicsBridge(delta: number): void {
 		|| !physicsEnvironmentEnabled.value
 		|| !physicsBridge
 		|| !physicsBridgeSceneLoaded
-		|| physicsBridgeCollisionBootstrapPending
+		|| physicsBridgeCollisionBootstrapGate.hasPending()
 		|| physicsBridgeStepPromise
 	) {
 		return
@@ -15239,7 +15406,7 @@ function isScenePreviewCharacterBridgeInputSnapshotClose(
 	}
 	return (
 		current.jump === next.jump
-		&& current.sprint === next.sprint
+		&& current.gait === next.gait
 		&& current.crouch === next.crouch
 		&& current.interact === next.interact
 	)
@@ -15265,7 +15432,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(): void {
 		let moveX = input.moveX
 		let moveZ = input.moveZ
 		let jump = input.jump
-		let sprint = input.sprint
+		let gait = input.gait
 		let crouch = input.crouch
 		let interact = input.interact
 		if (controllerNodeId === controlledNodeId) {
@@ -15275,7 +15442,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(): void {
 				moveX = 0
 				moveZ = 0
 				jump = false
-				sprint = false
+				gait = 'analog'
 				crouch = false
 				interact = false
 			} else if (input.locallyControlled) {
@@ -15295,7 +15462,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(): void {
 			yaw,
 			turnRateRadiansPerSecond: null,
 			jump,
-			sprint,
+			gait,
 			crouch,
 			interact,
 		}
@@ -15312,7 +15479,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(): void {
 			yaw: snapshot.yaw,
 			turnRateRadiansPerSecond: snapshot.turnRateRadiansPerSecond,
 			jump: snapshot.jump,
-			sprint: snapshot.sprint,
+			gait: snapshot.gait,
 			crouch: snapshot.crouch,
 			interact: snapshot.interact,
 			resetState: !previous,
@@ -15329,6 +15496,7 @@ function syncScenePreviewPhysicsBridgeCharacterInput(): void {
 
 async function disposeScenePreviewPhysicsBridgeScene(): Promise<void> {
 	physicsBridgeSceneRequestId += 1
+	physicsBridgeCollisionBootstrapGate.clear()
 	physicsBridgeBodyIdByNodeId.clear()
 	physicsBridgeNodeIdByBodyId.clear()
 	physicsBridgeVehicleIdByNodeId.clear()
@@ -15377,6 +15545,7 @@ async function destroyScenePreviewPhysicsBridge(): Promise<void> {
 		console.warn('[ScenePreview] Failed to destroy physics bridge', error)
 	} finally {
 		physicsBridgeSceneRequestId += 1
+		physicsBridgeCollisionBootstrapGate.clear()
 		physicsBridgeBodyIdByNodeId.clear()
 		physicsBridgeNodeIdByBodyId.clear()
 		physicsBridgeVehicleIdByNodeId.clear()
@@ -15840,7 +16009,7 @@ function resolveNonPhysicsCharacterInput(nodeId: string): NonPhysicsCharacterInp
 		moveZ: animationInput.moveZ,
 		turn: animationInput.turn,
 		jump: animationInput.jump,
-		sprint: animationInput.sprint,
+		gait: animationInput.gait,
 		crouch: animationInput.crouch,
 		interact: animationInput.interact,
 		camera: activeCamera,
@@ -16949,16 +17118,32 @@ async function applyInitialDocumentGraph(
 	})
 
 	applyPhysicsEnvironmentSettings(document.environment ?? DEFAULT_ENVIRONMENT_SETTINGS)
-	await syncPhysicsBodiesForDocument(document, (progress) => {
-		setSceneInitState({
-			stage: 'syncingPhysics',
-			label: 'Syncing physics...',
-			stagePercent: progress.percent,
-			currentIndex: progress.currentIndex ?? 0,
-			currentTotal: progress.currentTotal ?? 0,
-			active: true,
+	const landscapeNodeIds = collectActiveProceduralLandscapeNodeIds(document.nodes)
+	landscapeBuildPumpActive = landscapeNodeIds.length > 0
+	const landscapeBuildPump = landscapeNodeIds.length > 0
+		? window.setInterval(() => {
+			previewComponentManager.update(1 / 60, {
+				types: PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
+			})
+		}, 16)
+		: null
+	try {
+		await syncPhysicsBodiesForDocument(document, (progress) => {
+			setSceneInitState({
+				stage: 'syncingPhysics',
+				label: progress.detail || 'Syncing physics...',
+				stagePercent: progress.percent,
+				currentIndex: progress.currentIndex ?? 0,
+				currentTotal: progress.currentTotal ?? 0,
+				active: true,
+			})
 		})
-	})
+	} finally {
+		landscapeBuildPumpActive = false
+		if (landscapeBuildPump !== null) {
+			window.clearInterval(landscapeBuildPump)
+		}
+	}
 	await syncGroundCache(document)
 	// (instancing trace removed)
 	setSceneInitState({
@@ -18422,18 +18607,18 @@ watch(watchExclusiveUiActive, (active) => {
 						/>
 						<v-btn
 							class="scene-preview__pedal-button"
-							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.sprintActive }"
+							:class="{ 'scene-preview__pedal-button--active': runtimePanelUi.runActive }"
 							variant="tonal"
 							color="warning"
 							size="small"
 							icon="mdi-run-fast"
-							title="Sprint (Shift)"
-							aria-label="Sprint"
+							title="Run (Shift)"
+							aria-label="Run"
 							@click.prevent
-							@pointerdown.prevent="handleCharacterControlPointer('sprint', true, $event)"
-							@pointerup.prevent="handleCharacterControlPointer('sprint', false, $event)"
-							@pointerleave="handleCharacterControlPointer('sprint', false)"
-							@pointercancel="handleCharacterControlPointer('sprint', false)"
+							@pointerdown.prevent="handleCharacterControlPointer('run', true, $event)"
+							@pointerup.prevent="handleCharacterControlPointer('run', false, $event)"
+							@pointerleave="handleCharacterControlPointer('run', false)"
+							@pointercancel="handleCharacterControlPointer('run', false)"
 						/>
 						<v-btn
 							class="scene-preview__pedal-button"

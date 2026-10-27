@@ -397,6 +397,11 @@ import { resolveViewportCameraFar } from './viewportCameraFar'
 import { PlacementSurfaceTargetIndex } from '@/utils/placementSurfaceTargetIndex'
 import { intersectRayWithPlacementHeightfield } from '@/utils/placementHeightfieldRaycast'
 import {
+  selectNearestPlacementSurfaceHit,
+  type PlacementSurfaceHit,
+} from '@/utils/placementSurfaceHit'
+import { isProceduralLandscapePlacementArtifact } from '@/utils/proceduralLandscapePlacementArtifact'
+import {
   componentManager,
   PROCEDURAL_LANDSCAPE_UPDATE_TYPES,
   VIEW_POINT_COMPONENT_TYPE,
@@ -10324,6 +10329,7 @@ const wallBuildTool = createWallBuildTool({
   resolveBuildPlacementPoint,
   resolveBuildPlacementSurfacePoint: resolveBuildSurfaceAtPointer,
   projectPointToTerrain: (point) => projectPointToBuildTerrain(point),
+  sampleSurfaceHeightAt: samplePlacementSurfaceHeightAt,
   snapPoint: (point) => snapVectorToMajorGrid(point),
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
@@ -10635,9 +10641,9 @@ const roadBuildTool = createRoadBuildTool({
   activeBuildTool,
   pointerInteraction,
   rootGroup,
-  heightSampler: (x: number, z: number) => {
-    const sampledY = sampleRoadBuildWorldYAtXZ(x, z)
-    return typeof sampledY === 'number' && Number.isFinite(sampledY) ? sampledY : 0
+  heightSampler: (x: number, z: number, surfaceNodeId?: string | null) => {
+    const sampledY = sampleRoadBuildWorldYAtXZ(x, z, surfaceNodeId)
+    return typeof sampledY === 'number' && Number.isFinite(sampledY) ? sampledY : Number.NaN
   },
   projectPointToTerrain: (point) => projectPointToRoadBuildSurface(point),
   getScene: () => scene,
@@ -10683,6 +10689,9 @@ const floorBuildTool = createFloorBuildTool({
   rootGroup,
   raycastGroundPoint,
   resolveBuildPlacementPoint,
+  resolveBuildPlacementSurfacePoint: resolveBuildSurfaceAtPointer,
+  sampleSurfaceHeightAt: samplePlacementSurfaceHeightAt,
+  resolveSurfaceNormalAt: resolvePlacementSurfaceNormalAt,
   snapPoint: (point) => point.clone(),
   resolveVertexSnapPoint: resolveBuildToolVertexSnapPoint,
   clearVertexSnap: clearBuildToolVertexSnap,
@@ -12956,6 +12965,13 @@ function listReadyProceduralLandscapePlacementSurfaces(): Array<{
 }> {
   const surfaces: Array<{ nodeId: string; surface: ProceduralLandscapePlacementSurface }> = []
   objectMap.forEach((_object, nodeId) => {
+    if (!sceneStore.isNodeVisible(nodeId)) {
+      return
+    }
+    const object = objectMap.get(nodeId) ?? null
+    if (!object || !isObjectWorldVisible(object)) {
+      return
+    }
     const surface = getProceduralLandscapePlacementSurface(nodeId)
     if (surface) {
       surfaces.push({ nodeId, surface })
@@ -12969,6 +12985,9 @@ function hasPendingProceduralLandscapePlacementSurface(): boolean {
   let pending = false
   const visit = (nodes: SceneNode[]): void => {
     for (const candidate of nodes) {
+      if (candidate.visible === false) {
+        continue
+      }
       const component = candidate.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE]
       if (component?.enabled !== false && component) {
         const status = getProceduralLandscapeStats(candidate.id)?.demStatus
@@ -18436,6 +18455,9 @@ function resolveBuildPlacementPoint(event: PointerEvent, result: THREE.Vector3):
       result.copy(hit.point)
       return true
     }
+    if (hasPendingProceduralLandscapePlacementSurface()) {
+      return false
+    }
   }
   if (raycastGroundHeightfieldPoint(event, result)) {
     return true
@@ -18477,27 +18499,21 @@ function resolveBuildSurfaceAtPointer(event: PointerEvent): {
     return null
   }
 
-  const intersections = collectSceneIntersections()
-  for (const intersection of intersections) {
-    if (!intersection?.point) {
-      continue
-    }
-    const nodeId = resolveNodeIdFromIntersection(intersection)
-    if (!nodeId) {
-      continue
-    }
-    if ((sceneStore.isNodeSelectionLocked(nodeId) && nodeId !== GROUND_NODE_ID) || !sceneStore.isNodeVisible(nodeId)) {
-      continue
-    }
-    const object = objectMap.get(nodeId) ?? null
-    if (!object || !isObjectWorldVisible(object) || isEditorOnlyIntersectionObject(intersection.object as THREE.Object3D)) {
-      continue
+  const hasPendingProceduralSurface = hasPendingProceduralLandscapePlacementSurface()
+  const surfaceHit = computeNearestPlacementSurfaceHit()
+  if (surfaceHit) {
+    if (hasPendingProceduralSurface && surfaceHit.nodeId === GROUND_NODE_ID) {
+      return null
     }
     return {
-      point: intersection.point.clone(),
-      normal: resolveIntersectionWorldNormal(intersection) ?? new THREE.Vector3(0, 1, 0),
-      nodeId,
+      point: surfaceHit.point.clone(),
+      normal: surfaceHit.normal.clone(),
+      nodeId: surfaceHit.nodeId,
     }
+  }
+
+  if (hasPendingProceduralSurface) {
+    return null
   }
 
   const groundPoint = new THREE.Vector3()
@@ -22695,7 +22711,7 @@ type PlacementHitResult = {
   hitNodeId: string | null
 }
 
-function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string; distance: number } | null {
+function computePlacementSurfaceHit(): PlacementSurfaceHit | null {
   const targets = ensurePlacementSurfaceTargetsUpToDate()
   if (!targets.length) {
     return null
@@ -22726,6 +22742,12 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string; d
     if (objectUserData?.editorOnly || objectUserData?.instancedPickProxy) {
       continue
     }
+    if (isProceduralLandscapePlacementArtifact(
+      intersection.object as THREE.Object3D,
+      (nodeId) => sceneStore.getNodeById(nodeId),
+    )) {
+      continue
+    }
 
     const nodeId = resolveNodeIdFromIntersection(intersection)
     if (!nodeId) {
@@ -22743,7 +22765,12 @@ function computePlacementSurfaceHit(): { point: THREE.Vector3; nodeId: string; d
       continue
     }
 
-    return { point: intersection.point.clone(), nodeId, distance: intersection.distance }
+    return {
+      point: intersection.point.clone(),
+      normal: resolveIntersectionWorldNormal(intersection) ?? new THREE.Vector3(0, 1, 0),
+      nodeId,
+      distance: intersection.distance,
+    }
   }
 
   return null
@@ -22904,12 +22931,8 @@ function intersectRayWithGroundHeightfieldWorld(ray: THREE.Ray): THREE.Vector3 |
   return null
 }
 
-function computeProceduralLandscapePlacementSurfaceHit(): {
-  point: THREE.Vector3
-  nodeId: string
-  distance: number
-} | null {
-  let nearest: { point: THREE.Vector3; nodeId: string; distance: number } | null = null
+function computeProceduralLandscapePlacementSurfaceHit(): PlacementSurfaceHit | null {
+  let nearest: PlacementSurfaceHit | null = null
   for (const { nodeId, surface } of listReadyProceduralLandscapePlacementSurfaces()) {
     const point = intersectRayWithPlacementHeightfield(
       raycaster.ray,
@@ -22921,10 +22944,22 @@ function computeProceduralLandscapePlacementSurfaceHit(): {
     }
     const distance = raycaster.ray.origin.distanceTo(point)
     if (!nearest || distance < nearest.distance) {
-      nearest = { point, nodeId, distance }
+      nearest = {
+        point,
+        normal: new THREE.Vector3(0, 1, 0),
+        nodeId,
+        distance,
+      }
     }
   }
   return nearest
+}
+
+function computeNearestPlacementSurfaceHit(): PlacementSurfaceHit | null {
+  return selectNearestPlacementSurfaceHit([
+    computePlacementSurfaceHit(),
+    computeProceduralLandscapePlacementSurfaceHit(),
+  ])
 }
 
 function sampleHeightfieldWorldYAt(worldPosition: THREE.Vector3): number | null {
@@ -22975,6 +23010,12 @@ function sampleVisibleSurfaceWorldYAt(worldPosition: THREE.Vector3): number | nu
     if (objectUserData?.isRoadPreview === true) {
       continue
     }
+    if (isProceduralLandscapePlacementArtifact(
+      intersection.object as THREE.Object3D,
+      (nodeId) => sceneStore.getNodeById(nodeId),
+    )) {
+      continue
+    }
 
     const nodeId = resolveNodeIdFromIntersection(intersection)
     if (!nodeId) {
@@ -23019,9 +23060,69 @@ function sampleRoadBuildWorldYAt(worldPosition: THREE.Vector3): number | null {
   return hf
 }
 
-function sampleRoadBuildWorldYAtXZ(x: number, z: number): number | null {
+function sampleRoadBuildWorldYAtXZ(
+  x: number,
+  z: number,
+  surfaceNodeId: string | null = null,
+): number | null {
+  if (surfaceNodeId) {
+    const proceduralSurface = getProceduralLandscapePlacementSurface(surfaceNodeId)
+    if (proceduralSurface) {
+      const height = proceduralSurface.sampleHeightAt(x, z)
+      return typeof height === 'number' && Number.isFinite(height) ? height : null
+    }
+  }
   roadSurfaceProbeWorldPointHelper.set(x, 0, z)
   return sampleRoadBuildWorldYAt(roadSurfaceProbeWorldPointHelper)
+}
+
+function samplePlacementSurfaceHeightAt(
+  x: number,
+  z: number,
+  surfaceNodeId: string | null,
+): number | null {
+  if (surfaceNodeId) {
+    const proceduralSurface = getProceduralLandscapePlacementSurface(surfaceNodeId)
+    if (proceduralSurface) {
+      const height = proceduralSurface.sampleHeightAt(x, z)
+      return typeof height === 'number' && Number.isFinite(height) ? height : null
+    }
+    if (surfaceNodeId !== GROUND_NODE_ID) {
+      return null
+    }
+  }
+  return sampleHeightfieldWorldYAt(roadSurfaceProbeWorldPointHelper.set(x, 0, z))
+}
+
+function resolvePlacementSurfaceNormalAt(
+  x: number,
+  z: number,
+  surfaceNodeId: string | null,
+): THREE.Vector3 | null {
+  const proceduralSurface = surfaceNodeId
+    ? getProceduralLandscapePlacementSurface(surfaceNodeId)
+    : null
+  if (!proceduralSurface) {
+    return new THREE.Vector3(0, 1, 0)
+  }
+  const sampleDelta = Math.max(0.5, proceduralSurface.bounds.cellSize * 0.5)
+  const left = proceduralSurface.sampleHeightAt(x - sampleDelta, z)
+  const right = proceduralSurface.sampleHeightAt(x + sampleDelta, z)
+  const back = proceduralSurface.sampleHeightAt(x, z - sampleDelta)
+  const front = proceduralSurface.sampleHeightAt(x, z + sampleDelta)
+  if (
+    typeof left !== 'number'
+    || typeof right !== 'number'
+    || typeof back !== 'number'
+    || typeof front !== 'number'
+  ) {
+    return new THREE.Vector3(0, 1, 0)
+  }
+  return new THREE.Vector3(
+    -(right - left) / (sampleDelta * 2),
+    1,
+    -(front - back) / (sampleDelta * 2),
+  ).normalize()
 }
 
 function projectPointToRoadBuildSurface(worldPosition: THREE.Vector3): THREE.Vector3 {
@@ -23091,13 +23192,7 @@ function computeDropPlacement(event: {
   // Default behavior (Alt not held): prefer snapping to visible scene surfaces.
   if (!event.altKey && !isTemporaryNavigationOverrideActive()) {
     const hasPendingProceduralSurface = hasPendingProceduralLandscapePlacementSurface()
-    const surfaceHit = computePlacementSurfaceHit()
-    const proceduralSurfaceHit = computeProceduralLandscapePlacementSurfaceHit()
-    const nearestSurfaceHit = !surfaceHit
-      ? proceduralSurfaceHit
-      : !proceduralSurfaceHit || surfaceHit.distance <= proceduralSurfaceHit.distance
-        ? surfaceHit
-        : proceduralSurfaceHit
+    const nearestSurfaceHit = computeNearestPlacementSurfaceHit()
     if (nearestSurfaceHit) {
       if (
         hasPendingProceduralSurface

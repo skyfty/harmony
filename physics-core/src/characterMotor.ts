@@ -1,5 +1,9 @@
 import { rotateVectorByQuaternion } from './worldMath'
-import type { PhysicsCharacterDesc, PhysicsQuaternion } from './types'
+import type {
+  PhysicsCharacterDesc,
+  PhysicsCharacterGait,
+  PhysicsQuaternion,
+} from './types'
 
 export type PhysicsCharacterMotorGroundProbe = {
   hit: boolean
@@ -24,7 +28,7 @@ export type PhysicsCharacterMotorInput = {
   yaw?: number | null
   turnRateRadiansPerSecond?: number | null
   jump: boolean
-  sprint: boolean
+  gait?: PhysicsCharacterGait
   crouch: boolean
   interact?: boolean
   deltaSeconds: number
@@ -52,6 +56,7 @@ const GROUND_ACCELERATION_RATE = 4
 const GROUND_DECELERATION_RATE = 6
 const AIR_ACCELERATION_RATE = 2
 const AIR_DECELERATION_RATE = 1.5
+const ANALOG_WALK_THRESHOLD = 0.5
 
 export function createPhysicsCharacterMotorState(initialYaw = Math.PI): PhysicsCharacterMotorState {
   return {
@@ -248,21 +253,29 @@ function normalizeYaw(value: number): number {
 function resolveCharacterSpeed(
   desc: PhysicsCharacterDesc,
   movementMagnitude: number,
-  input: Pick<PhysicsCharacterMotorInput, 'crouch' | 'sprint'>,
+  input: Pick<PhysicsCharacterMotorInput, 'crouch' | 'gait'>,
 ): number {
+  if (movementMagnitude <= 0.05) {
+    return 0
+  }
   if (input.crouch) {
     return Math.max(0, desc.walkSpeed * 0.4)
   }
-  if (input.sprint && movementMagnitude > 0.05) {
-    return Math.max(0, desc.sprintSpeed)
+  switch (input.gait) {
+    case 'walk':
+      return Math.max(0, desc.walkSpeed)
+    case 'run':
+      return Math.max(0, desc.runSpeed)
+    default:
+      break
   }
-  if (movementMagnitude >= 0.85) {
-    return Math.max(0, desc.sprintSpeed)
+  const normalizedMagnitude = Math.min(1, Math.max(0, movementMagnitude))
+  if (normalizedMagnitude <= ANALOG_WALK_THRESHOLD) {
+    return Math.max(0, desc.walkSpeed * normalizedMagnitude / ANALOG_WALK_THRESHOLD)
   }
-  if (movementMagnitude >= 0.5) {
-    return Math.max(0, desc.runSpeed)
-  }
-  return Math.max(0, desc.walkSpeed)
+  const blend = (normalizedMagnitude - ANALOG_WALK_THRESHOLD)
+    / (1 - ANALOG_WALK_THRESHOLD)
+  return Math.max(0, desc.walkSpeed + (desc.runSpeed - desc.walkSpeed) * blend)
 }
 
 function resolveGroundNormal(

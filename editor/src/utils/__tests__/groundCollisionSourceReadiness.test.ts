@@ -9,9 +9,13 @@ import type { SceneNode } from '@schema/core'
 import {
   collectDemGroundCollisionSourceNodeIds,
   hasGroundCollisionMesh,
+  isGroundCollisionCoverageReady,
+  resolveGroundCollisionSurfaceSampler,
+  resolveGroundedCharacterBodyCenterY,
   waitForGroundCollisionSourceTerrainReady,
 } from '@schema/groundCollisionSourceRuntime'
 import {
+  markProceduralLandscapeDemTerrain,
   markProceduralLandscapeRoadbedSurface,
   markProceduralLandscapeRoadCollision,
 } from '@schema/proceduralLandscape/collisionMetadata'
@@ -218,6 +222,31 @@ describe('DEM ground collision source readiness', () => {
     expect(result.status).toBe('ready')
     expect(result.pendingNodeIds).toEqual([])
   })
+
+  it('keeps waiting while DEM build progress advances beyond 30 seconds', async () => {
+    const node = makeNode('terrain')
+    const sourceObject = makeTerrainObject()
+    let nowMs = 0
+    let progress = 0.35
+    const result = await waitForGroundCollisionSourceTerrainReady({
+      nodes: [node],
+      resolveSourceObject: () => sourceObject,
+      getStats: () => ({
+        demStatus: progress >= 1 ? 'ready' : 'building',
+        progress,
+      }),
+      stallTimeoutMs: 30_000,
+      pollIntervalMs: 5_000,
+      now: () => nowMs,
+      sleep: async () => {
+        nowMs += 5_000
+        progress = Math.min(1, progress + 0.05)
+      },
+    })
+
+    expect(result.status).toBe('ready')
+    expect(nowMs).toBeGreaterThan(30_000)
+  })
 })
 
 describe('hasGroundCollisionMesh', () => {
@@ -259,5 +288,53 @@ describe('hasGroundCollisionMesh', () => {
     const roadbedGroup = new THREE.Group()
     roadbedGroup.add(roadbed)
     expect(hasGroundCollisionMesh(roadbedGroup)).toBe(false)
+  })
+})
+
+describe('ground collision coverage', () => {
+  it('requires completed indexing and an active surface for every expected reference', () => {
+    expect(isGroundCollisionCoverageReady(null)).toBe(false)
+    expect(isGroundCollisionCoverageReady({
+      indexing: false,
+      pendingChunkCount: 0,
+      uncoveredReferenceCount: 0,
+      referenceGroundCoverage: [{ covered: true, groundPatched: true, active: true }],
+    }, 1)).toBe(true)
+    expect(isGroundCollisionCoverageReady({
+      indexing: true,
+      pendingChunkCount: 0,
+      uncoveredReferenceCount: 0,
+      referenceGroundCoverage: [{ covered: true, groundPatched: true, active: true }],
+    }, 1)).toBe(false)
+    expect(isGroundCollisionCoverageReady({
+      indexing: false,
+      pendingChunkCount: 1,
+      uncoveredReferenceCount: 1,
+      referenceGroundCoverage: [{ covered: false, groundPatched: false, active: false }],
+    }, 1)).toBe(false)
+    expect(isGroundCollisionCoverageReady({
+      indexing: false,
+      pendingChunkCount: 0,
+      uncoveredReferenceCount: 0,
+      referenceGroundCoverage: [{ covered: true, groundPatched: true, active: true }],
+    }, 2)).toBe(false)
+  })
+
+  it('lifts an embedded character body so its capsule foot clears the sampled surface', () => {
+    expect(resolveGroundedCharacterBodyCenterY(48.05, 47.09, 1.7)).toBeCloseTo(48.92, 5)
+    expect(resolveGroundedCharacterBodyCenterY(40, 47.09, 1.7)).toBe(47.09)
+  })
+
+  it('resolves the sampler from the visible DEM subtree', () => {
+    const node = makeNode('terrain')
+    const terrain = makeTerrainObject()
+    const mesh = terrain.children[0] as THREE.Mesh
+    markProceduralLandscapeDemTerrain(mesh, {
+      cellSize: 2,
+      sampleHeightAt: () => 12,
+    })
+
+    const sampler = resolveGroundCollisionSurfaceSampler([node], () => terrain)
+    expect(sampler?.sampleHeightAt(0, 0)).toBe(12)
   })
 })

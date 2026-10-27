@@ -70,7 +70,7 @@ export function createRoadBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   pointerInteraction: PointerInteractionApi
   rootGroup: THREE.Group
-  heightSampler: (x: number, z: number) => number
+  heightSampler: (x: number, z: number, surfaceNodeId?: string | null) => number
   projectPointToTerrain?: (point: THREE.Vector3) => THREE.Vector3
   getScene: () => THREE.Scene | null
 
@@ -120,12 +120,15 @@ export function createRoadBuildTool(options: {
 }): RoadBuildToolHandle {
   const DOUBLE_CLICK_MAX_INTERVAL_MS = 320
   const DOUBLE_CLICK_MAX_DISTANCE_PX = 8
+  let session: RoadBuildToolSession | null = null
+  const heightSampler = (x: number, z: number): number => (
+    options.heightSampler(x, z, session?.surfaceNodeId ?? null)
+  )
   const previewRenderer = createRoadPreviewRenderer({
     rootGroup: options.rootGroup,
-    heightSampler: options.heightSampler,
+    heightSampler,
   })
 
-  let session: RoadBuildToolSession | null = null
   let leftClickState: LeftClickState | null = null
 
   const isLeftDoubleClick = (event: PointerEvent): boolean => {
@@ -217,6 +220,7 @@ export function createRoadBuildTool(options: {
       buildStartPoint: null,
       committedSegmentCount: 0,
       useTerrainHeightSampler: true,
+      surfaceNodeId: null,
     }
     return session
   }
@@ -310,6 +314,7 @@ export function createRoadBuildTool(options: {
     if (!surfacePlacement) {
       return
     }
+    session.surfaceNodeId = surfacePlacement.nodeId
 
     session.snapVertices = options.collectRoadSnapVertices()
 
@@ -347,6 +352,9 @@ export function createRoadBuildTool(options: {
     if (!surfacePlacement) {
       hideStartIndicator()
       return false
+    }
+    if (session) {
+      session.surfaceNodeId = surfacePlacement.nodeId
     }
 
     const rawPointer = surfacePlacement.point.clone()
@@ -533,6 +541,7 @@ export function createRoadBuildTool(options: {
                 const worldProjected = runtime.localToWorld(new THREE.Vector3(bestProjX, localHit.y, bestProjZ))
 
                 current.targetNodeId = hit.nodeId
+                current.surfaceNodeId = hit.nodeId
                 current.startVertexIndex = startIndex
                 current.snapVertices = options.collectRoadSnapVertices()
                 current.points.push(worldProjected.clone())
@@ -552,6 +561,7 @@ export function createRoadBuildTool(options: {
     if (!surfacePlacement) {
       return false
     }
+    current.surfaceNodeId = surfacePlacement.nodeId
 
     const snapped = surfacePlacement.point.clone()
 
@@ -625,7 +635,7 @@ export function createRoadBuildTool(options: {
       }
 
       const build = buildRoadPreviewBuild([segmentStart], segmentEnd, session.width, {
-        heightSampler: session.useTerrainHeightSampler ? options.heightSampler : null,
+        heightSampler: session.useTerrainHeightSampler ? heightSampler : null,
       })
       if (!build) {
         return null

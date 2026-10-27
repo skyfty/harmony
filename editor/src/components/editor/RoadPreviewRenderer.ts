@@ -13,6 +13,7 @@ export type RoadPreviewSession = {
   previewGroup: THREE.Group | null
   width: number
   useTerrainHeightSampler: boolean
+  surfaceNodeId?: string | null
 }
 
 export type RoadPreviewRenderer = {
@@ -47,6 +48,7 @@ function computeRoadPreviewSignature(
   previewEnd: THREE.Vector3 | null,
   width: number,
   useTerrainHeightSampler: boolean,
+  surfaceNodeId: string | null,
 ): string {
   if (!points.length && !previewEnd) {
     return 'empty'
@@ -61,7 +63,7 @@ function computeRoadPreviewSignature(
     ? [encodeRoadPreviewNumber(previewEnd.x), encodeRoadPreviewNumber(previewEnd.y), encodeRoadPreviewNumber(previewEnd.z)].join(',')
     : 'none'
 
-  return `${modeSignature}|${widthSignature}|${pSignature}|${endSignature}`
+  return `${modeSignature}|${surfaceNodeId ?? 'none'}|${widthSignature}|${pSignature}|${endSignature}`
 }
 
 function disposeRoadPreviewGroup(group: THREE.Group) {
@@ -317,6 +319,7 @@ export function createRoadPreviewRenderer(options: {
       session.previewEnd,
       session.width,
       session.useTerrainHeightSampler,
+      session.surfaceNodeId ?? null,
     )
     if (nextSignature === signature) {
       return

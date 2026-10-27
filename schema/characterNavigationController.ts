@@ -30,14 +30,12 @@ export type CharacterNavigationControllerInput = {
 	pointerActive: boolean
 	keyboardX?: number
 	keyboardY?: number
-	sprint?: boolean
 	crouch?: boolean
 	stopDistance?: number
 	slowDistance?: number
 	keyboardTargetDistance?: number
 	yawTurnRateDegreesPerSecond?: number
 	speedLerpPerSecond?: number
-	sprintSpeedThreshold?: number
 	walkIntentFloor?: number
 }
 
@@ -134,14 +132,12 @@ export function updateCharacterNavigationController(params: CharacterNavigationC
 		pointerActive,
 		keyboardX = 0,
 		keyboardY = 0,
-		sprint = false,
 		crouch = false,
 		stopDistance = 0.45,
 		slowDistance = 2,
 		keyboardTargetDistance = 1.6,
 		yawTurnRateDegreesPerSecond = 210,
 		speedLerpPerSecond = 8,
-		sprintSpeedThreshold = 0.75,
 		walkIntentFloor = 0.15,
 	} = params
 
@@ -208,9 +204,7 @@ export function updateCharacterNavigationController(params: CharacterNavigationC
 	const distanceBlend = shouldMove
 		? THREE.MathUtils.clamp((state.distanceToTarget - stopDistance) / slowRange, 0, 1)
 		: 0
-	state.targetSpeed = shouldMove
-		? (sprint || distanceBlend > sprintSpeedThreshold ? 1 : distanceBlend)
-		: 0
+	state.targetSpeed = shouldMove ? distanceBlend : 0
 	state.currentSpeed = approachCharacterNavigationScalar(state.currentSpeed, state.targetSpeed, speedLerpPerSecond, dt)
 
 	const movementMagnitude = THREE.MathUtils.clamp(state.currentSpeed, 0, 1)

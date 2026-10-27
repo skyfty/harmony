@@ -10,7 +10,6 @@ export type CharacterAnimationSlot =
   | 'idle'
   | 'walk'
   | 'run'
-  | 'sprint'
   | 'turn'
   | 'jump'
   | 'fall'
@@ -28,7 +27,6 @@ export const CHARACTER_ANIMATION_COMMON_SLOTS: CharacterAnimationSlotOption[] = 
   { label: 'Idle', value: 'idle' },
   { label: 'Walk', value: 'walk' },
   { label: 'Run', value: 'run' },
-  { label: 'Sprint', value: 'sprint' },
   { label: 'Turn', value: 'turn' },
   { label: 'Jump', value: 'jump' },
   { label: 'Fall', value: 'fall' },
@@ -61,7 +59,6 @@ export interface CharacterControllerComponentProps {
   cameraFollowHeight: number
   walkSpeed: number
   runSpeed: number
-  sprintSpeed: number
   turnRateDegreesPerSecond: number
   jumpImpulse: number
   airControl: number
@@ -76,6 +73,8 @@ export const CHARACTER_FORWARD_AXIS_OPTIONS: CharacterForwardAxis[] = ['+x', '-x
 export const DEFAULT_CHARACTER_FORWARD_AXIS: CharacterForwardAxis = '+x'
 export const DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE = 6.1
 export const DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT = 4.4
+export const DEFAULT_CHARACTER_WALK_SPEED = 2.4
+export const DEFAULT_CHARACTER_RUN_SPEED = 5.2
 
 const DEFAULT_ANIMATION_SLOTS: CharacterAnimationSlot[] = CHARACTER_ANIMATION_EDITOR_SLOTS.map((slot) => slot.value)
 
@@ -144,6 +143,10 @@ function cloneAnimationBinding(binding: CharacterAnimationBinding): CharacterAni
   }
 }
 
+function approximatelyEqual(left: number, right: number): boolean {
+  return Math.abs(left - right) <= 1e-4
+}
+
 export function clampCharacterControllerComponentProps(
   props: Partial<CharacterControllerComponentProps> | null | undefined,
 ): CharacterControllerComponentProps {
@@ -152,15 +155,36 @@ export function clampCharacterControllerComponentProps(
     const binding = sourceBindings.find((entry) => sanitizeString((entry as Partial<CharacterAnimationBinding> | null | undefined)?.slot) === slot)
     return normalizeAnimationBinding(binding as Partial<CharacterAnimationBinding> | null | undefined, slot)
   })
+  const legacySprintSpeed = typeof (props as { sprintSpeed?: unknown } | null | undefined)?.sprintSpeed === 'number'
+    ? (props as { sprintSpeed: number }).sprintSpeed
+    : null
+  let walkSpeed = sanitizeNumber(props?.walkSpeed, DEFAULT_CHARACTER_WALK_SPEED, 0, 100)
+  let runSpeed = sanitizeNumber(props?.runSpeed, DEFAULT_CHARACTER_RUN_SPEED, 0, 100)
+  if (
+    legacySprintSpeed != null
+    && approximatelyEqual(walkSpeed, 1.4)
+    && approximatelyEqual(runSpeed, 3.6)
+    && approximatelyEqual(legacySprintSpeed, 6.4)
+  ) {
+    walkSpeed = DEFAULT_CHARACTER_WALK_SPEED
+    runSpeed = DEFAULT_CHARACTER_RUN_SPEED
+  } else if (
+    legacySprintSpeed != null
+    && approximatelyEqual(walkSpeed, 2.4)
+    && approximatelyEqual(runSpeed, 4.8)
+    && approximatelyEqual(legacySprintSpeed, 6.4)
+  ) {
+    walkSpeed = DEFAULT_CHARACTER_WALK_SPEED
+    runSpeed = DEFAULT_CHARACTER_RUN_SPEED
+  }
   return {
     label: sanitizeString(props?.label) || 'Character Controller',
     targetNodeId: normalizeNodeId(props?.targetNodeId),
     forwardAxis: normalizeForwardAxis(props?.forwardAxis),
     cameraFollowDistance: sanitizeNumber(props?.cameraFollowDistance, DEFAULT_CHARACTER_CAMERA_FOLLOW_DISTANCE, 0.1, 100),
     cameraFollowHeight: sanitizeNumber(props?.cameraFollowHeight, DEFAULT_CHARACTER_CAMERA_FOLLOW_HEIGHT, 0, 100),
-    walkSpeed: sanitizeNumber(props?.walkSpeed, 2.4, 0, 100),
-    runSpeed: sanitizeNumber(props?.runSpeed, 4.8, 0, 100),
-    sprintSpeed: sanitizeNumber(props?.sprintSpeed, 6.4, 0, 100),
+    walkSpeed,
+    runSpeed,
     turnRateDegreesPerSecond: sanitizeNumber(props?.turnRateDegreesPerSecond, 210, 0, 5000),
     jumpImpulse: sanitizeNumber(props?.jumpImpulse, 6.5, 0, 100),
     airControl: sanitizeNumber(props?.airControl, 0.35, 0, 1),
@@ -183,7 +207,6 @@ export function cloneCharacterControllerComponentProps(
     cameraFollowHeight: props.cameraFollowHeight,
     walkSpeed: props.walkSpeed,
     runSpeed: props.runSpeed,
-    sprintSpeed: props.sprintSpeed,
     turnRateDegreesPerSecond: props.turnRateDegreesPerSecond,
     jumpImpulse: props.jumpImpulse,
     airControl: props.airControl,

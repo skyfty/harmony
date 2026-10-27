@@ -181,7 +181,6 @@ describe('PhysicsCharacterMotorFrameState', () => {
         airControl: 0.35,
         walkSpeed: 2.4,
         runSpeed: 4.8,
-        sprintSpeed: 6.4,
       }],
     }
     const world = new ProbeGroundedWorld()

@@ -16,7 +16,12 @@ import {
 } from './components/definitions/characterControllerComponent'
 import {
 	chooseCharacterControlClipName,
+	resolveCharacterControlLocomotionClipSlot,
+	resolveCharacterControlLocomotionSlot,
 	resolveCharacterControlMovementMagnitude,
+	resolveCharacterControlSpeed,
+	type CharacterGait,
+	type CharacterLocomotionSlot,
 } from './characterControlRuntime'
 
 export type CharacterControllerAnimationRuntimeEntry = {
@@ -26,6 +31,7 @@ export type CharacterControllerAnimationRuntimeEntry = {
 	behaviorOverrideTokens: Set<string>
 	lastAutoClipName: string | null
 	lastAutoLoop: boolean | null
+	lastLocomotionSlot: CharacterLocomotionSlot | null
 	lastGrounded: boolean | null
 	lastGroundedAtMs: number | null
 	lastGroundNormalY: number | null
@@ -40,15 +46,16 @@ export type CharacterControllerAnimationInputState = {
 	moveZ: number
 	turn: number
 	jump: boolean
-	sprint: boolean
 	crouch: boolean
 	interact: boolean
+	gait?: CharacterGait
 	locallyControlled?: boolean
 }
 
 export type CharacterControllerMotorGroundState = {
 	grounded: boolean
 	groundNormal: [number, number, number] | null
+	linearVelocity?: [number, number, number] | null
 }
 
 export type CharacterControllerAnimationRuntimeHost = {
@@ -67,6 +74,11 @@ const CHARACTER_JUMP_LAND_FALLBACK_MS = 160
 const CHARACTER_GROUND_LOSS_MIN_GRACE_MS = 120
 const CHARACTER_GROUND_LOSS_MAX_GRACE_MS = 260
 const CHARACTER_GROUND_LOSS_SLOPE_THRESHOLD = 0.995
+const CHARACTER_LOCOMOTION_FADE_SECONDS = 0.15
+const CHARACTER_ACTION_FADE_SECONDS = 0.1
+const CHARACTER_IDLE_FADE_SECONDS = 0.18
+const CHARACTER_ANIMATION_SPEED_SCALE_MIN = 0.65
+const CHARACTER_ANIMATION_SPEED_SCALE_MAX = 1.6
 const CHARACTER_ANIMATION_MATCH_SLOTS: CharacterAnimationSlot[] = CHARACTER_ANIMATION_EDITOR_SLOTS.map((slot) => slot.value)
 
 function resolveAnimationComponentForNode(node: SceneNode | null | undefined): SceneNodeComponentState<AnimationComponentProps> | null {
@@ -220,6 +232,7 @@ export class CharacterControllerAnimationRuntimeManager {
 				behaviorOverrideTokens: previous?.behaviorOverrideTokens ?? new Set<string>(),
 				lastAutoClipName: previous?.lastAutoClipName ?? null,
 				lastAutoLoop: previous?.lastAutoLoop ?? null,
+				lastLocomotionSlot: previous?.lastLocomotionSlot ?? null,
 				lastGrounded: previous?.lastGrounded ?? null,
 				lastGroundedAtMs: previous?.lastGroundedAtMs ?? null,
 				lastGroundNormalY: previous?.lastGroundNormalY ?? null,
@@ -273,6 +286,10 @@ export class CharacterControllerAnimationRuntimeManager {
 				&& entry.lastGroundedAtMs != null
 				&& nowMs - entry.lastGroundedAtMs <= graceMs
 			const animationGrounded = grounded || recentlyGrounded
+			const locomotionSlot = resolveCharacterControlLocomotionSlot(movementMagnitude, {
+				gait: input.gait,
+				previousLocomotionSlot: entry.lastLocomotionSlot,
+			})
 
 			if (jumpPressed) {
 				entry.jumpPhase = 'start'
@@ -284,11 +301,12 @@ export class CharacterControllerAnimationRuntimeManager {
 				const startClipName = chooseCharacterControlClipName(entry.props, movementMagnitude, {
 					moveX,
 					moveZ,
-					sprinting: input.sprint,
 					crouching: input.crouch,
 					interacting: input.interact,
 					turn,
 					jumpPhase: 'start',
+					gait: input.gait,
+					previousLocomotionSlot: entry.lastLocomotionSlot,
 				})
 				const startDurationMs = this.resolveClipDurationMs(host, animationNodeId, startClipName)
 				const maxStartMs = Math.max(0, Math.min(startDurationMs ?? CHARACTER_JUMP_START_FALLBACK_MS, CHARACTER_JUMP_START_FALLBACK_MS))
@@ -320,11 +338,12 @@ export class CharacterControllerAnimationRuntimeManager {
 				const landClipName = chooseCharacterControlClipName(entry.props, movementMagnitude, {
 					moveX,
 					moveZ,
-					sprinting: input.sprint,
 					crouching: input.crouch,
 					interacting: input.interact,
 					turn,
 					jumpPhase: 'land',
+					gait: input.gait,
+					previousLocomotionSlot: entry.lastLocomotionSlot,
 				})
 				const landDurationMs = this.resolveClipDurationMs(host, animationNodeId, landClipName)
 				const maxLandMs = Math.max(0, Math.min(landDurationMs ?? CHARACTER_JUMP_LAND_FALLBACK_MS, CHARACTER_JUMP_LAND_FALLBACK_MS))
@@ -338,15 +357,19 @@ export class CharacterControllerAnimationRuntimeManager {
 			const desiredClipName = chooseCharacterControlClipName(entry.props, movementMagnitude, {
 				moveX,
 				moveZ,
-				sprinting: input.sprint,
 				crouching: input.crouch,
 				interacting: input.interact,
 				turn,
 				jumpPhase: entry.jumpPhase,
+				gait: input.gait,
+				previousLocomotionSlot: entry.lastLocomotionSlot,
 			})
+			entry.lastLocomotionSlot = locomotionSlot
 			if (!desiredClipName) {
 				if (entry.lastAutoClipName !== null || entry.forceResync) {
-					host.nodeAnimationRuntime.restoreDefaultNodeAnimation(animationNodeId)
+					host.nodeAnimationRuntime.restoreDefaultNodeAnimation(animationNodeId, {
+						fadeSeconds: CHARACTER_IDLE_FADE_SECONDS,
+					})
 					entry.lastAutoClipName = null
 					entry.lastAutoLoop = null
 					entry.forceResync = false
@@ -360,14 +383,46 @@ export class CharacterControllerAnimationRuntimeManager {
 			}
 
 			const shouldLoop = entry.jumpPhase !== 'start' && entry.jumpPhase !== 'land'
+			const isLocomotionTransition = locomotionSlot !== null
+				&& entry.lastLocomotionSlot !== null
+				&& entry.lastAutoClipName !== null
+				&& entry.lastAutoClipName !== desiredClipName
+				&& isCharacterLocomotionClip(entry.props, entry.lastAutoClipName)
+				&& isCharacterLocomotionClip(entry.props, desiredClipName)
+				&& entry.jumpPhase === null
+				&& !input.interact
+				&& !input.crouch
+			const clipSlot = locomotionSlot && entry.jumpPhase === null && !input.interact && !input.crouch
+				? resolveCharacterControlLocomotionClipSlot(entry.props, locomotionSlot)
+				: null
+			const motionSpeed = resolveCharacterAnimationMotionSpeed(
+				motorState,
+				entry.props,
+				movementMagnitude,
+				input,
+			)
+			const timeScale = resolveCharacterAnimationTimeScale(
+				animationComponent.props.timeScale,
+				motionSpeed,
+				entry.props,
+				clipSlot,
+			)
 			if (entry.forceResync || entry.lastAutoClipName !== desiredClipName || entry.lastAutoLoop !== shouldLoop) {
 				host.nodeAnimationRuntime.playNodeAnimation(animationNodeId, desiredClipName, {
 					loop: shouldLoop,
-					timeScale: animationComponent.props.timeScale,
+					timeScale,
+					fadeSeconds: isLocomotionTransition
+						? CHARACTER_LOCOMOTION_FADE_SECONDS
+						: (entry.jumpPhase === 'start' || entry.jumpPhase === 'land'
+							? CHARACTER_ACTION_FADE_SECONDS
+							: CHARACTER_LOCOMOTION_FADE_SECONDS),
+					syncPhase: isLocomotionTransition,
 				})
 				entry.lastAutoClipName = desiredClipName
 				entry.lastAutoLoop = shouldLoop
 				entry.forceResync = false
+			} else {
+				host.nodeAnimationRuntime.setNodeAnimationTimeScale(animationNodeId, timeScale)
 			}
 			entry.lastGrounded = animationGrounded
 			if (grounded) {
@@ -464,6 +519,58 @@ export class CharacterControllerAnimationRuntimeManager {
 		}
 	}
 
+}
+
+function resolveCharacterAnimationMotionSpeed(
+	motorState: CharacterControllerMotorGroundState | null,
+	props: CharacterControllerComponentProps,
+	movementMagnitude: number,
+	input: CharacterControllerAnimationInputState,
+): number {
+	const velocity = motorState?.linearVelocity
+	if (
+		Array.isArray(velocity)
+		&& velocity.every((value) => typeof value === 'number' && Number.isFinite(value))
+	) {
+		return Math.hypot(velocity[0] ?? 0, velocity[2] ?? 0)
+	}
+	return resolveCharacterControlSpeed(props, movementMagnitude, {
+		gait: input.gait,
+		crouching: input.crouch,
+	})
+}
+
+function isCharacterLocomotionClip(
+	props: CharacterControllerComponentProps,
+	clipName: string | null,
+): boolean {
+	if (!clipName) {
+		return false
+	}
+	return ['walk', 'run'].some((slot) => (
+		props.animationBindings.find((binding) => binding.slot === slot)?.clipName === clipName
+	))
+}
+
+function resolveCharacterAnimationTimeScale(
+	baseTimeScale: number,
+	motionSpeed: number,
+	props: CharacterControllerComponentProps,
+	clipSlot: CharacterLocomotionSlot | null,
+): number {
+	const normalizedBase = Number.isFinite(baseTimeScale) ? baseTimeScale : 1
+	if (!clipSlot || !(motionSpeed > 0.01)) {
+		return normalizedBase
+	}
+	const referenceSpeed = clipSlot === 'walk' ? props.walkSpeed : props.runSpeed
+	if (!(referenceSpeed > 0.01)) {
+		return normalizedBase
+	}
+	const speedScale = Math.min(
+		CHARACTER_ANIMATION_SPEED_SCALE_MAX,
+		Math.max(CHARACTER_ANIMATION_SPEED_SCALE_MIN, motionSpeed / referenceSpeed),
+	)
+	return normalizedBase * speedScale
 }
 
 function normalizeNodeId(value: unknown): string | null {

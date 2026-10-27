@@ -2,6 +2,10 @@ import * as THREE from 'three'
 import type { CharacterControllerComponentProps } from './components/definitions/characterControllerComponent'
 import { writeCharacterLocalForward } from './components/definitions/characterControllerComponent'
 import type { CapsuleCollisionWorld, CapsuleInfo } from './capsuleCollision'
+import {
+  resolveCharacterControlSpeed,
+  type CharacterGait,
+} from './characterControlRuntime'
 
 export type NonPhysicsCharacterState = {
   nodeId: string
@@ -26,7 +30,7 @@ export type NonPhysicsCharacterInput = {
   moveZ: number
   turn: number
   jump: boolean
-  sprint: boolean
+  gait?: CharacterGait
   crouch: boolean
   interact: boolean
   camera: THREE.Camera
@@ -132,11 +136,10 @@ export function updateNonPhysicsCharacter(
   if (state.moveDirection.lengthSq() > 1e-8) state.moveDirection.normalize()
   else state.moveDirection.set(0, 0, 0)
 
-  let speed = props.walkSpeed
-  if (input.crouch) speed *= 0.4
-  else if (input.sprint && inputMagnitude > 0.05) speed = props.sprintSpeed
-  else if (inputMagnitude >= 0.85) speed = props.sprintSpeed
-  else if (inputMagnitude >= 0.5) speed = props.runSpeed
+  const speed = resolveCharacterControlSpeed(props, inputMagnitude, {
+    gait: input.gait,
+    crouching: input.crouch,
+  })
 
   const targetX = state.moveDirection.x * speed
   const targetZ = state.moveDirection.z * speed

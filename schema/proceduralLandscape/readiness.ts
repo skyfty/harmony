@@ -5,6 +5,7 @@ import {
 
 export const PROCEDURAL_LANDSCAPE_SCENE_READY_TIMEOUT_MS = 30_000
 export const PROCEDURAL_LANDSCAPE_SCENE_READY_POLL_INTERVAL_MS = 100
+const PROCEDURAL_LANDSCAPE_SCENE_READY_PROGRESS_EPSILON = 1e-4
 
 export type ProceduralLandscapeSceneNodeStatus =
   | 'missing-runtime'
@@ -26,7 +27,11 @@ export interface ProceduralLandscapeSceneNodeReadiness {
 export interface ProceduralLandscapeSceneReadyOptions {
   nodeIds: ReadonlyArray<string>
   getStats?: (nodeId: string) => ProceduralLandscapeRuntimeStats | null
+  getProgress?: (nodeId: string, stats: ProceduralLandscapeRuntimeStats | null) => number | null
   shouldAbort?: () => boolean
+  /** Maximum time without a status or numeric-progress change. */
+  stallTimeoutMs?: number
+  /** Backward-compatible alias for stallTimeoutMs. */
   timeoutMs?: number
   pollIntervalMs?: number
   now?: () => number
@@ -102,14 +107,19 @@ export async function waitForProceduralLandscapeSceneReady(
   )]
   const getStats = options.getStats ?? getProceduralLandscapeStats
   const shouldAbort = options.shouldAbort ?? (() => false)
-  const timeoutMs = Math.max(0, options.timeoutMs ?? PROCEDURAL_LANDSCAPE_SCENE_READY_TIMEOUT_MS)
+  const stallTimeoutMs = Math.max(
+    0,
+    options.stallTimeoutMs
+      ?? options.timeoutMs
+      ?? PROCEDURAL_LANDSCAPE_SCENE_READY_TIMEOUT_MS,
+  )
   const pollIntervalMs = Math.max(
     1,
     options.pollIntervalMs ?? PROCEDURAL_LANDSCAPE_SCENE_READY_POLL_INTERVAL_MS,
   )
   const now = options.now ?? defaultNow
   const sleep = options.sleep ?? defaultSleep
-  const deadline = now() + timeoutMs
+  let lastActivityAt = now()
   let lastPendingSignature = ''
 
   const buildResult = (
@@ -136,9 +146,19 @@ export async function waitForProceduralLandscapeSceneReady(
     const pendingNodeIds: string[] = []
     const failedNodeIds: string[] = []
     const statuses: Record<string, ProceduralLandscapeSceneNodeStatus> = {}
+    const progressValues: Array<number | null> = []
     nodeIds.forEach((nodeId) => {
-      const readiness = resolveProceduralLandscapeSceneNodeReadiness(getStats(nodeId))
+      const stats = getStats(nodeId)
+      const readiness = resolveProceduralLandscapeSceneNodeReadiness(stats)
       statuses[nodeId] = readiness.status
+      const rawProgress = options.getProgress
+        ? options.getProgress(nodeId, stats)
+        : stats?.progress
+      progressValues.push(
+        typeof rawProgress === 'number' && Number.isFinite(rawProgress)
+          ? Math.max(0, Math.min(1, rawProgress))
+          : null,
+      )
       if (readiness.failed) {
         failedNodeIds.push(nodeId)
       } else if (!readiness.ready) {
@@ -151,14 +171,22 @@ export async function waitForProceduralLandscapeSceneReady(
     }
 
     const pendingSignature = nodeIds
-      .map((nodeId) => `${nodeId}:${statuses[nodeId] ?? ''}`)
+      .map((nodeId, index) => {
+        const progress = progressValues[index]
+        return `${nodeId}:${statuses[nodeId] ?? ''}:${
+          progress == null
+            ? ''
+            : Math.round(progress / PROCEDURAL_LANDSCAPE_SCENE_READY_PROGRESS_EPSILON)
+        }`
+      })
       .join('|')
     if (pendingSignature !== lastPendingSignature) {
       lastPendingSignature = pendingSignature
+      lastActivityAt = now()
       options.onPending?.(pendingNodeIds, statuses, failedNodeIds)
     }
 
-    if (now() >= deadline) {
+    if (now() - lastActivityAt >= stallTimeoutMs) {
       return buildResult('timeout', pendingNodeIds, failedNodeIds, statuses)
     }
     await sleep(pollIntervalMs)

@@ -18206,9 +18206,13 @@ export const useSceneStore = defineStore('scene', {
       points: Vector3Like[]
       name?: string,
       floorPresetData?: FloorPresetData | null
+      centerY?: number | null
+      rotation?: Vector3Like | null
       editorFlags?: SceneNodeEditorFlags
     }): SceneNode | null {
-      const build = floorHelpers.buildFloorDynamicMeshFromWorldPoints(payload.points)
+      const build = floorHelpers.buildFloorDynamicMeshFromWorldPoints(payload.points, {
+        centerY: payload.centerY,
+      })
       if (!build) {
         return null
       }
@@ -18256,7 +18260,9 @@ export const useSceneStore = defineStore('scene', {
           this.updateNodeTransform({
             id: desiredId,
             position: createVector(build.center.x, build.center.y, build.center.z),
-            rotation: createVector(0, 0, 0),
+            rotation: payload.rotation
+              ? createVector(payload.rotation.x, payload.rotation.y, payload.rotation.z)
+              : createVector(0, 0, 0),
             scale: createVector(1, 1, 1),
           })
 
@@ -18318,7 +18324,9 @@ export const useSceneStore = defineStore('scene', {
           object: floorGroup,
           name: nodeName,
           position: createVector(build.center.x, build.center.y, build.center.z),
-          rotation: createVector(0, 0, 0),
+          rotation: payload.rotation
+            ? createVector(payload.rotation.x, payload.rotation.y, payload.rotation.z)
+            : createVector(0, 0, 0),
           scale: createVector(1, 1, 1),
           dynamicMesh: defaultMesh,
           editorFlags: payload.editorFlags,

@@ -1016,7 +1016,6 @@ export async function buildPhysicsSceneAsset(
           airControl: characterProps.airControl,
           walkSpeed: characterProps.walkSpeed,
           runSpeed: characterProps.runSpeed,
-          sprintSpeed: characterProps.sprintSpeed,
         } as PhysicsSceneAsset['characters'][number])
       }
     }

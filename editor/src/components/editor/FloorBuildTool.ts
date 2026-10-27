@@ -16,6 +16,7 @@ import type { FloorBuildShape } from '@/types/floor-build-shape'
 import type { FloorPresetData } from '@/utils/floorPreset'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import { buildFloorDynamicMeshPresetPatch } from '@/utils/floorPresetNodeMaterials'
+import { resolveSurfaceAlignedQuaternion } from '@/utils/surfacePlacementTransform'
 import { snapPointToRelativeAngleStep } from './planarEditMath'
 
 export type FloorBuildToolHandle = {
@@ -52,6 +53,11 @@ type VertexSnapResolverOptions = {
   keepSourceY?: boolean
 }
 
+type BuildSurfacePlacementPoint = {
+  point: THREE.Vector3
+  nodeId: string | null
+}
+
 export function createFloorBuildTool(options: {
   activeBuildTool: Ref<BuildTool | null>
   floorBuildShape: Ref<FloorBuildShape>
@@ -61,6 +67,9 @@ export function createFloorBuildTool(options: {
   rootGroup: THREE.Group
   raycastGroundPoint: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
+  resolveBuildPlacementSurfacePoint?: (event: PointerEvent) => BuildSurfacePlacementPoint | null
+  sampleSurfaceHeightAt?: (x: number, z: number, surfaceNodeId: string | null) => number | null
+  resolveSurfaceNormalAt?: (x: number, z: number, surfaceNodeId: string | null) => THREE.Vector3 | null
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
@@ -100,12 +109,34 @@ export function createFloorBuildTool(options: {
   })
 
   const groundPointerHelper = new THREE.Vector3()
+  let placementSurfaceNodeId: string | null = null
 
   const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
-    if (options.resolveBuildPlacementPoint) {
-      return options.resolveBuildPlacementPoint(event, result)
+    if (options.resolveBuildPlacementSurfacePoint) {
+      const resolved = options.resolveBuildPlacementSurfacePoint(event)
+      if (resolved) {
+        result.copy(resolved.point)
+        placementSurfaceNodeId = resolved.nodeId
+        if (session) {
+          session.surfaceNodeId = resolved.nodeId
+        }
+        return true
+      }
     }
-    return options.raycastGroundPoint(event, result)
+    if (options.resolveBuildPlacementPoint) {
+      const resolved = options.resolveBuildPlacementPoint(event, result)
+      placementSurfaceNodeId = null
+      if (resolved && session) {
+        session.surfaceNodeId = null
+      }
+      return resolved
+    }
+    const resolved = options.raycastGroundPoint(event, result)
+    placementSurfaceNodeId = null
+    if (resolved && session) {
+      session.surfaceNodeId = null
+    }
+    return resolved
   }
 
   const alignPointYToSession = (point: THREE.Vector3, targetSession: FloorPreviewSession | null): THREE.Vector3 => {
@@ -219,8 +250,46 @@ export function createFloorBuildTool(options: {
       rectangleDirection: null,
       rectangleAxisAligned: options.isAxisAlignedRectangleActive?.value ?? false,
       previewGroup: null,
+      surfaceNodeId: placementSurfaceNodeId,
     }
     return session
+  }
+
+  const resolveFloorSurfaceTransform = (
+    points: THREE.Vector3[],
+    surfaceNodeId: string | null | undefined,
+  ): { centerY: number | null; rotation: THREE.Vector3 | null } => {
+    let minX = Number.POSITIVE_INFINITY
+    let maxX = Number.NEGATIVE_INFINITY
+    let minZ = Number.POSITIVE_INFINITY
+    let maxZ = Number.NEGATIVE_INFINITY
+    for (const point of points) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.z)) {
+        continue
+      }
+      minX = Math.min(minX, point.x)
+      maxX = Math.max(maxX, point.x)
+      minZ = Math.min(minZ, point.z)
+      maxZ = Math.max(maxZ, point.z)
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minZ)) {
+      return { centerY: null, rotation: null }
+    }
+
+    const centerX = (minX + maxX) * 0.5
+    const centerZ = (minZ + maxZ) * 0.5
+    const sampledY = options.sampleSurfaceHeightAt?.(centerX, centerZ, surfaceNodeId ?? null)
+    const normal = options.resolveSurfaceNormalAt?.(centerX, centerZ, surfaceNodeId ?? null)
+    let rotation: THREE.Vector3 | null = null
+    if (normal?.isVector3 && normal.lengthSq() > 1e-8) {
+      const aligned = resolveSurfaceAlignedQuaternion(normal)
+      const euler = new THREE.Euler().setFromQuaternion(aligned, 'XYZ')
+      rotation = new THREE.Vector3(euler.x, euler.y, euler.z)
+    }
+    return {
+      centerY: typeof sampledY === 'number' && Number.isFinite(sampledY) ? sampledY : null,
+      rotation,
+    }
   }
 
   const clearSession = (disposePreview = true) => {
@@ -423,9 +492,12 @@ export function createFloorBuildTool(options: {
       return
     }
 
+    const surfaceTransform = resolveFloorSurfaceTransform(points, session.surfaceNodeId)
     const created = options.sceneStore.createFloorNode({
       points: points.map((p) => ({ x: p.x, y: p.y, z: p.z }) satisfies Vector3Like),
       floorPresetData: options.getFloorBrush()?.presetData ?? null,
+      centerY: surfaceTransform.centerY,
+      rotation: surfaceTransform.rotation,
     })
 
     if (created) {
@@ -456,9 +528,12 @@ export function createFloorBuildTool(options: {
       return
     }
 
+    const surfaceTransform = resolveFloorSurfaceTransform(points, session?.surfaceNodeId)
     const created = options.sceneStore.createFloorNode({
       points: points.map((p) => ({ x: p.x, y: p.y, z: p.z }) satisfies Vector3Like),
       floorPresetData: options.getFloorBrush()?.presetData ?? null,
+      centerY: surfaceTransform.centerY,
+      rotation: surfaceTransform.rotation,
     })
 
     if (created) {

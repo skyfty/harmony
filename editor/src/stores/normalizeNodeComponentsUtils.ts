@@ -48,6 +48,8 @@ import {
   PLANNING_IMAGES_COMPONENT_TYPE,
   clampPlanningImagesComponentProps,
   clonePlanningImagesComponentProps,
+  CHARACTER_CONTROLLER_COMPONENT_TYPE,
+  clampCharacterControllerComponentProps,
 } from '@schema/components'
 import {resolveBoundaryWallReferenceNodeId} from '@schema/boundaryWallReference'
 
@@ -140,6 +142,14 @@ export function normalizeNodeComponents(
       const type = (state.type ?? rawType) as NodeComponentType
       normalized[type] = cloneComponentState(state, type)
     })
+  }
+
+  const characterController = normalized[CHARACTER_CONTROLLER_COMPONENT_TYPE]
+  if (characterController?.props) {
+    normalized[CHARACTER_CONTROLLER_COMPONENT_TYPE] = {
+      ...characterController,
+      props: clampCharacterControllerComponentProps(characterController.props),
+    }
   }
 
   if (node.dynamicMesh?.type === 'Wall') {

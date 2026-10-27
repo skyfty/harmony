@@ -12,6 +12,7 @@ import {
 } from '@schema/components/definitions/characterControllerComponent'
 import {
   CharacterControllerAnimationRuntimeManager,
+  type CharacterControllerAnimationInputState,
   type CharacterControllerMotorGroundState,
 } from '@schema/characterControllerAnimationRuntime'
 import { SceneAnimationRuntimeManager } from '@schema/sceneAnimationRuntime'
@@ -44,6 +45,9 @@ function createAnimationRuntime(): SceneAnimationRuntimeManager {
       new THREE.AnimationClip('Walk', 1, [
         new THREE.NumberKeyframeTrack('bone.position[y]', [0, 1], [0, 1]),
       ]),
+      new THREE.AnimationClip('Run', 2, [
+        new THREE.NumberKeyframeTrack('bone.position[z]', [0, 2], [0, 2]),
+      ]),
     ],
   })
 
@@ -64,6 +68,7 @@ function createCharacterMotorState(grounded: boolean): CharacterControllerMotorG
   return {
     grounded,
     groundNormal: grounded ? [0, 1, 0] : null,
+    linearVelocity: [0, 0, 0],
   }
 }
 
@@ -107,7 +112,6 @@ describe('CharacterControllerAnimationRuntimeManager', () => {
         moveZ: 0.5,
         turn: 0,
         jump: false,
-        sprint: false,
         crouch: false,
         interact: false,
       }),
@@ -165,7 +169,6 @@ describe('CharacterControllerAnimationRuntimeManager', () => {
         moveZ: 0.5,
         turn: 0,
         jump: false,
-        sprint: false,
         crouch: false,
         interact: false,
       }),
@@ -176,5 +179,74 @@ describe('CharacterControllerAnimationRuntimeManager', () => {
     runtime.update(host, 1000)
 
     expect(nodeAnimationRuntime.get('animation')?.activeClipName).toBe('Walk')
+  })
+
+  it('uses explicit gait, preserves locomotion phase and warps animation speed', () => {
+    const nodeAnimationRuntime = createAnimationRuntime()
+    const controllerNode = createNode('controller', {
+      [CHARACTER_CONTROLLER_COMPONENT_TYPE]: {
+        id: 'controller-component',
+        type: CHARACTER_CONTROLLER_COMPONENT_TYPE,
+        enabled: true,
+        props: clampCharacterControllerComponentProps({
+          targetNodeId: 'animation',
+          animationBindings: [
+            { slot: 'idle', clipName: 'Idol' },
+            { slot: 'walk', clipName: 'Walk' },
+            { slot: 'run', clipName: 'Run' },
+          ],
+        }),
+      },
+    })
+    const animationNode = createNode('animation', {
+      [ANIMATION_COMPONENT_TYPE]: {
+        id: 'animation-component',
+        type: ANIMATION_COMPONENT_TYPE,
+        enabled: true,
+        props: clampAnimationComponentProps({ defaultClipName: 'Idol' }),
+      },
+    })
+    const nodes = new Map([
+      [controllerNode.id, controllerNode],
+      [animationNode.id, animationNode],
+    ])
+    const motorState = createCharacterMotorState(true)
+    let input: CharacterControllerAnimationInputState = {
+      moveX: 0,
+      moveZ: 1,
+      turn: 0,
+      jump: false,
+      gait: 'walk',
+      crouch: false,
+      interact: false,
+    }
+    const runtime = new CharacterControllerAnimationRuntimeManager()
+    const host = {
+      nodeAnimationRuntime,
+      iterNodes: () => nodes.entries(),
+      resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
+      resolveInput: () => input,
+      resolveGroundContacts: () => [],
+      resolveCharacterMotorState: () => motorState,
+    }
+
+    runtime.refresh(host)
+    runtime.update(host, 1000)
+    nodeAnimationRuntime.update(0.3)
+    expect(nodeAnimationRuntime.get('animation')?.activeClipName).toBe('Walk')
+
+    input = { ...input, gait: 'run' }
+    motorState.linearVelocity = [0, 0, 5.2]
+    runtime.update(host, 1100)
+    const running = nodeAnimationRuntime.get('animation')
+    expect(running?.activeClipName).toBe('Run')
+    expect(running?.activeAction?.time).toBeCloseTo(0.6, 2)
+    expect(running?.activeAction?.timeScale).toBeCloseTo(1, 2)
+
+    motorState.linearVelocity = [0, 0, 2.6]
+    runtime.update(host, 1200)
+    const slowRunning = nodeAnimationRuntime.get('animation')
+    expect(slowRunning?.activeClipName).toBe('Run')
+    expect(slowRunning?.activeAction?.timeScale).toBeCloseTo(0.65, 2)
   })
 })

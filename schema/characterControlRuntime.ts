@@ -1,5 +1,9 @@
 import * as THREE from 'three'
 import type { CharacterControllerComponentProps } from './components'
+import type { PhysicsCharacterGait } from '@harmony/physics-core'
+
+export type CharacterGait = PhysicsCharacterGait
+export type CharacterLocomotionSlot = 'walk' | 'run'
 
 export type CharacterControlMoveVectorScratch = {
 	facingScratch: THREE.Vector3
@@ -8,13 +12,14 @@ export type CharacterControlMoveVectorScratch = {
 }
 
 export type CharacterControlRuntimeState = {
-	sprinting?: boolean
 	crouching?: boolean
 	jumpPhase?: 'start' | 'loop' | 'land' | null
 	interacting?: boolean
 	turn?: number
 	moveX?: number
 	moveZ?: number
+	gait?: CharacterGait
+	previousLocomotionSlot?: CharacterLocomotionSlot | null
 }
 
 function resolveAnimationBindingClipName(
@@ -28,25 +33,79 @@ export function resolveCharacterControlMovementMagnitude(moveX: number, moveZ: n
 	return Math.min(1, Math.hypot(moveX, moveZ))
 }
 
+export function resolveKeyboardCharacterGait(params: {
+	moving: boolean
+	runHeld?: boolean
+}): CharacterGait {
+	if (!params.moving) {
+		return 'analog'
+	}
+	return params.runHeld ? 'run' : 'walk'
+}
+
 
 export function resolveCharacterControlSpeed(
 	props: CharacterControllerComponentProps,
 	movementMagnitude: number,
 	state: CharacterControlRuntimeState = {},
 ): number {
+	if (movementMagnitude <= 0.05) {
+		return 0
+	}
 	if (state.crouching) {
 		return Math.max(0, props.walkSpeed * 0.4)
 	}
-	if (state.sprinting && movementMagnitude > 0.05) {
-		return props.sprintSpeed
+	switch (state.gait) {
+		case 'walk':
+			return Math.max(0, props.walkSpeed)
+		case 'run':
+			return Math.max(0, props.runSpeed)
+		default:
+			break
 	}
-	if (movementMagnitude >= 0.85) {
-		return props.sprintSpeed
+	const normalizedMagnitude = Math.min(1, Math.max(0, movementMagnitude))
+	if (normalizedMagnitude <= 0.5) {
+		return Math.max(0, props.walkSpeed * normalizedMagnitude / 0.5)
 	}
-	if (movementMagnitude >= 0.5) {
-		return props.runSpeed
+	const blend = (normalizedMagnitude - 0.5) / 0.5
+	return Math.max(0, props.walkSpeed + (props.runSpeed - props.walkSpeed) * blend)
+}
+
+export function resolveCharacterControlLocomotionSlot(
+	movementMagnitude: number,
+	state: CharacterControlRuntimeState = {},
+): CharacterLocomotionSlot | null {
+	if (movementMagnitude <= 0.05) {
+		return null
 	}
-	return props.walkSpeed
+	switch (state.gait) {
+		case 'walk':
+			return 'walk'
+		case 'run':
+			return 'run'
+		default:
+			break
+	}
+	const previous = state.previousLocomotionSlot ?? null
+	if (movementMagnitude >= (previous === 'run' ? 0.47 : 0.53)) {
+		return 'run'
+	}
+	return 'walk'
+}
+
+export function resolveCharacterControlLocomotionClipSlot(
+	props: CharacterControllerComponentProps,
+	locomotionSlot: CharacterLocomotionSlot,
+): CharacterLocomotionSlot | null {
+	const candidates: CharacterLocomotionSlot[] = locomotionSlot === 'run'
+		? ['run', 'walk']
+		: ['walk', 'run']
+	for (const slot of candidates) {
+		if (resolveAnimationBindingClipName(props, slot)) {
+			return slot
+		}
+	}
+	return null
 }
 
 export function chooseCharacterControlClipName(
@@ -113,18 +172,15 @@ export function chooseCharacterControlClipName(
 			?? resolveAnimationBindingClipName(props, 'run')
 			?? null
 	}
-	if (movementMagnitude >= 0.85) {
-		return resolveAnimationBindingClipName(props, 'sprint')
-			?? resolveAnimationBindingClipName(props, 'run')
-			?? resolveAnimationBindingClipName(props, 'walk')
-			?? null
+	const locomotionSlot = resolveCharacterControlLocomotionSlot(movementMagnitude, state)
+	if (locomotionSlot === 'run') {
+		return resolveAnimationBindingClipName(
+			props,
+			resolveCharacterControlLocomotionClipSlot(props, locomotionSlot) ?? 'run',
+		)
 	}
-	if (movementMagnitude >= 0.5) {
-		return resolveAnimationBindingClipName(props, 'run')
-			?? resolveAnimationBindingClipName(props, 'walk')
-			?? null
-	}
-	return resolveAnimationBindingClipName(props, 'walk')
-		?? resolveAnimationBindingClipName(props, 'run')
-		?? null
+	return resolveAnimationBindingClipName(
+		props,
+		resolveCharacterControlLocomotionClipSlot(props, 'walk') ?? 'walk',
+	)
 }

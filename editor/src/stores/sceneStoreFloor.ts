@@ -127,13 +127,19 @@ export function createSceneStoreFloorHelpers(deps: SceneStoreFloorHelpersDeps) {
       return { materialsChanged, meshChanged }
     },
 
-    buildFloorDynamicMeshFromWorldPoints(points: Vector3Like[]): { center: Vector3; definition: FloorDynamicMesh } | null {
+    buildFloorDynamicMeshFromWorldPoints(
+      points: Vector3Like[],
+      options?: { centerY?: number | null },
+    ): { center: Vector3; definition: FloorDynamicMesh } | null {
       const worldPoints = buildFloorWorldPoints(points)
       if (worldPoints.length < 3) {
         return null
       }
 
       const center = computeFloorCenter(worldPoints)
+      if (typeof options?.centerY === 'number' && Number.isFinite(options.centerY)) {
+        center.y = options.centerY
+      }
       // Preserve world Z in local space; geometry no longer flips Z.
       const vertices = worldPoints.map((p) => [p.x - center.x, p.z - center.z] as [number, number])
 

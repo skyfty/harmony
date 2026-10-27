@@ -20,6 +20,7 @@ export type FloorPreviewSession = {
   rectangleDirection: THREE.Vector3 | null
   rectangleAxisAligned: boolean
   previewGroup: THREE.Group | null
+  surfaceNodeId?: string | null
 }
 
 export type FloorPreviewRenderer = {

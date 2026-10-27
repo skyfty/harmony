@@ -38,7 +38,6 @@ export type CharacterAutoTourInputState = {
   moveZ: number
   turn: number
   jump: boolean
-  sprint: boolean
   crouch: boolean
   interact: boolean
   yaw?: number
@@ -275,7 +274,6 @@ function createIdleCharacterAutoTourInput(yaw: number): CharacterAutoTourInputSt
     moveZ: 0,
     turn: 0,
     jump: false,
-    sprint: false,
     crouch: false,
     interact: false,
     yaw,
@@ -491,7 +489,6 @@ export class CharacterAutoTourRuntimeManager {
           moveZ: 0,
           turn: 0,
           jump: false,
-          sprint: false,
           crouch: false,
           interact: false,
           yaw: previous?.lastInput?.yaw ?? 0,
@@ -827,14 +824,13 @@ export class CharacterAutoTourRuntimeManager {
         host.onNodeObjectTransformUpdated?.(nodeId, object)
       }
 
-      const speedCap = Math.max(0.001, controllerProps.sprintSpeed || controllerProps.runSpeed || controllerProps.walkSpeed || 1)
+      const speedCap = Math.max(0.001, controllerProps.runSpeed || controllerProps.walkSpeed || 1)
       const movementMagnitude = clamp01((actualStep / Math.max(deltaSeconds, 1e-4)) / speedCap)
       entry.lastInput = {
         moveX: 0,
         moveZ: movementMagnitude,
         turn: 0,
         jump: false,
-        sprint: speedMps >= Math.max(controllerProps.runSpeed, controllerProps.walkSpeed + 0.01),
         crouch: false,
         interact: false,
         yaw: entry.smoothedYaw,

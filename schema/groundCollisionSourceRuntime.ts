@@ -11,6 +11,8 @@ import {
   type SceneNodeComponentState,
 } from './core'
 import {
+  resolveProceduralLandscapeDemCollisionSampler,
+  type ProceduralLandscapeDemCollisionSampler,
   isProceduralLandscapeRoadCollision,
   isProceduralLandscapeRoadbedSurface,
   isProceduralLandscapeRoadSurface,
@@ -23,6 +25,7 @@ import {
 
 export const DEM_GROUND_COLLISION_READY_TIMEOUT_MS = 30_000
 export const DEM_GROUND_COLLISION_READY_POLL_INTERVAL_MS = 50
+const DEM_GROUND_COLLISION_READY_PROGRESS_EPSILON = 1e-4
 
 export type DemGroundCollisionSourceStatus =
   | 'inactive'
@@ -40,8 +43,23 @@ export type GroundCollisionSourceTerrainReadinessStatus = 'ready' | 'timeout' | 
 export type GroundCollisionSourceTerrainReadinessParams = {
   nodes: SceneNode[] | null | undefined
   resolveSourceObject: (nodeId: string) => Object3D | null | undefined
-  getStats?: (nodeId: string) => Pick<ProceduralLandscapeRuntimeStats, 'demStatus'> | null | undefined
+  getStats?: (
+    nodeId: string,
+  ) => Pick<ProceduralLandscapeRuntimeStats, 'demStatus'>
+    & Partial<Pick<ProceduralLandscapeRuntimeStats, 'progress'>>
+    | null
+    | undefined
+  getProgress?: (
+    nodeId: string,
+    stats: Pick<ProceduralLandscapeRuntimeStats, 'demStatus'>
+      & Partial<Pick<ProceduralLandscapeRuntimeStats, 'progress'>>
+      | null
+      | undefined,
+  ) => number | null
   shouldAbort?: () => boolean
+  /** Maximum time without a status or numeric-progress change. */
+  stallTimeoutMs?: number
+  /** Backward-compatible alias for stallTimeoutMs. */
   timeoutMs?: number
   pollIntervalMs?: number
   now?: () => number
@@ -59,6 +77,94 @@ export type GroundCollisionSourceTerrainReadinessResult = {
   /** Sources whose DEM component reported `error`; waiting on them cannot help. */
   skippedNodeIds: string[]
   statuses: Record<string, DemGroundCollisionSourceStatus>
+}
+
+export type GroundCollisionCoverageSnapshotLike = {
+  indexing?: boolean
+  pendingChunkCount?: number
+  uncoveredReferenceCount?: number
+  referenceGroundCoverage?: ReadonlyArray<{
+    covered?: boolean
+    groundPatched?: boolean
+    resident?: boolean
+    active?: boolean
+  }>
+}
+
+/**
+ * A DEM source is usable by the first physics step only after indexing has
+ * finished and every live ground reference has an active collision surface.
+ */
+export function isGroundCollisionCoverageReady(
+  snapshot: GroundCollisionCoverageSnapshotLike | null | undefined,
+  expectedReferenceCount?: number,
+): boolean {
+  if (!snapshot || snapshot.indexing === true || (snapshot.pendingChunkCount ?? 0) > 0) {
+    return false
+  }
+  const references = Array.isArray(snapshot.referenceGroundCoverage)
+    ? snapshot.referenceGroundCoverage
+    : []
+  const expectedCount = Math.max(
+    0,
+    Math.trunc(expectedReferenceCount ?? references.length),
+  )
+  if (expectedCount === 0 || references.length < expectedCount) {
+    return false
+  }
+  if ((snapshot.uncoveredReferenceCount ?? 0) > 0) {
+    return false
+  }
+  return references
+    .slice(0, expectedCount)
+    .every((reference) => (
+      reference?.covered === true
+      && (reference.groundPatched === true || reference.active === true || reference.resident === true)
+    ))
+}
+
+export function resolveGroundCollisionSurfaceSampler(
+  nodes: SceneNode[] | null | undefined,
+  resolveSourceObject: (nodeId: string) => Object3D | null | undefined,
+): ProceduralLandscapeDemCollisionSampler | null {
+  for (const nodeId of collectDemGroundCollisionSourceNodeIds(nodes)) {
+    const sourceObject = resolveSourceObject(nodeId)
+    if (!sourceObject) {
+      continue
+    }
+    const stack: Object3D[] = [sourceObject]
+    while (stack.length > 0) {
+      const object = stack.pop()
+      if (!object || object.visible === false) {
+        continue
+      }
+      const sampler = resolveProceduralLandscapeDemCollisionSampler(object)
+      if (sampler) {
+        return sampler
+      }
+      if (object.children.length > 0) {
+        stack.push(...object.children)
+      }
+    }
+  }
+  return null
+}
+
+export function resolveGroundedCharacterBodyCenterY(
+  surfaceY: number,
+  currentBodyCenterY: number,
+  colliderHeight: number,
+  clearanceMeters = 0.02,
+): number {
+  if (!Number.isFinite(surfaceY) || !Number.isFinite(currentBodyCenterY)) {
+    return currentBodyCenterY
+  }
+  const halfHeight = Math.max(0.05, Number.isFinite(colliderHeight) ? colliderHeight : 0.1) * 0.5
+  const clearance = Math.max(0, Number.isFinite(clearanceMeters) ? clearanceMeters : 0.02)
+  const footY = currentBodyCenterY - halfHeight
+  return footY <= surfaceY + clearance
+    ? surfaceY + halfHeight + clearance
+    : currentBodyCenterY
 }
 
 export function resolveGroundCollisionSourceComponent(
@@ -236,14 +342,19 @@ export async function waitForGroundCollisionSourceTerrainReady(
 
   const getStats = params.getStats ?? getProceduralLandscapeStats
   const shouldAbort = params.shouldAbort ?? (() => false)
-  const timeoutMs = Math.max(0, params.timeoutMs ?? DEM_GROUND_COLLISION_READY_TIMEOUT_MS)
+  const stallTimeoutMs = Math.max(
+    0,
+    params.stallTimeoutMs
+      ?? params.timeoutMs
+      ?? DEM_GROUND_COLLISION_READY_TIMEOUT_MS,
+  )
   const pollIntervalMs = Math.max(
     1,
     params.pollIntervalMs ?? DEM_GROUND_COLLISION_READY_POLL_INTERVAL_MS,
   )
   const now = params.now ?? defaultNow
   const sleep = params.sleep ?? defaultSleep
-  const deadline = now() + timeoutMs
+  let lastActivityAt = now()
   const skippedNodeIds = new Set<string>()
   let lastPendingSignature = ''
 
@@ -265,13 +376,23 @@ export async function waitForGroundCollisionSourceTerrainReady(
 
     const pendingNodeIds: string[] = []
     const statuses: Record<string, DemGroundCollisionSourceStatus> = {}
+    const progressValues: Array<number | null> = []
     nodeIds.forEach((nodeId) => {
+      const stats = getStats(nodeId)
       const result = resolveSourceStatus({
         nodeId,
         resolveSourceObject: params.resolveSourceObject,
-        getStats,
+        getStats: () => stats,
       })
       statuses[nodeId] = result.status
+      const rawProgress = params.getProgress
+        ? params.getProgress(nodeId, stats)
+        : stats?.progress
+      progressValues.push(
+        typeof rawProgress === 'number' && Number.isFinite(rawProgress)
+          ? Math.max(0, Math.min(1, rawProgress))
+          : null,
+      )
       if (result.skipped) {
         skippedNodeIds.add(nodeId)
         return
@@ -286,14 +407,22 @@ export async function waitForGroundCollisionSourceTerrainReady(
     }
 
     const pendingSignature = nodeIds
-      .map((nodeId) => `${nodeId}:${statuses[nodeId] ?? ''}`)
+      .map((nodeId, index) => {
+        const progress = progressValues[index]
+        return `${nodeId}:${statuses[nodeId] ?? ''}:${
+          progress == null
+            ? ''
+            : Math.round(progress / DEM_GROUND_COLLISION_READY_PROGRESS_EPSILON)
+        }`
+      })
       .join('|')
     if (pendingSignature !== lastPendingSignature) {
       lastPendingSignature = pendingSignature
+      lastActivityAt = now()
       params.onPending?.(pendingNodeIds, statuses)
     }
 
-    if (now() >= deadline) {
+    if (now() - lastActivityAt >= stallTimeoutMs) {
       return buildResult('timeout', pendingNodeIds, statuses)
     }
     await sleep(pollIntervalMs)

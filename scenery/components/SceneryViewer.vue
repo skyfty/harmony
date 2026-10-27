@@ -683,6 +683,7 @@ import type { WatchRestorePositionSource } from '@harmony/schema/core';
 import {
   type PhysicsBackendPreference,
   type PhysicsBridge,
+  type PhysicsCharacterGait,
   type PhysicsCharacterMotorFrameState,
   type PhysicsContactEvent,
   type PhysicsSceneAsset,
@@ -750,9 +751,14 @@ import {
 } from '@harmony/schema/groundAnchorRuntime';
 import {
   DEM_GROUND_COLLISION_READY_TIMEOUT_MS,
+  collectDemGroundCollisionSourceNodeIds,
   collectGroundCollisionSourceNodeIds,
+  isGroundCollisionCoverageReady,
+  resolveGroundCollisionSurfaceSampler,
+  resolveGroundedCharacterBodyCenterY,
   waitForGroundCollisionSourceTerrainReady,
 } from '@harmony/schema/groundCollisionSourceRuntime';
+import { createPhysicsInitializationGate } from '@harmony/schema/physicsInitializationGate';
 import {
   MESH_COLLISION_ACTIVATION_RADIUS_METERS,
   clearAllMeshCollisionRuntimeHosts,
@@ -939,6 +945,7 @@ import {
   type SkinComponentProps,
 } from '@harmony/schema/components/definitions/skinComponent';
 import { CharacterControllerAnimationRuntimeManager } from '@harmony/schema/characterControllerAnimationRuntime';
+import { resolveKeyboardCharacterGait } from '@harmony/schema/characterControlRuntime';
 import {
   collectCachedExternalAnimationClips,
   getOrLoadExternalAnimationObject,
@@ -3061,7 +3068,7 @@ type PhysicsBridgeCharacterInputSnapshot = {
   yaw: number | null;
   turnRateRadiansPerSecond: number | null;
   jump: boolean;
-  sprint: boolean;
+  gait: PhysicsCharacterGait;
   crouch: boolean;
   interact: boolean;
 };
@@ -3080,7 +3087,7 @@ let physicsBridgeSceneReloading = false;
 // ground anchors are still being indexed/created. A character would otherwise start
 // falling during that window and tunnel through a thin terrain shell before the first
 // collision chunks reach the physics world.
-let physicsBridgeCollisionBootstrapPending = false;
+const physicsBridgeCollisionBootstrapGate = createPhysicsInitializationGate();
 let physicsBridgeSceneRequestId = 0;
 let currentPhysicsBridgePreference: PhysicsBackendPreference | undefined;
 let sceneryGroundCollisionBridgeMutationChain: Promise<void> = Promise.resolve();
@@ -3496,7 +3503,6 @@ const characterCameraFollowMotionState: FollowCameraMotionState = createFollowCa
 const JOYSTICK_INPUT_RADIUS = 64;
 const JOYSTICK_DEADZONE = 0.15;
 const CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD = 0.05;
-const CHARACTER_KEYBOARD_RUN_MAGNITUDE = 0.5;
 const CHARACTER_INPUT_MAX_DELTA_SECONDS = 0.05;
 // The editor default is tuned for desktop control. Reduce the runtime rate for
 // the mini program so a full joystick deflection does not rotate too quickly.
@@ -3993,7 +3999,7 @@ let autoTourTelemetryLastSampleAtMs = 0;
 let autoTourTelemetryLastNodeId: string | null = null;
 const VEHICLE_HEADING_UPDATE_EPSILON_DEGREES = 0.25;
 const CHARACTER_ACTION_AUTOMATED_SLOTS = new Set<CharacterAnimationSlot>(['idle', 'walk', 'run']);
-const CHARACTER_ACTION_HOLD_SLOTS = new Set<CharacterAnimationSlot>(['sprint', 'crouch', 'interact']);
+const CHARACTER_ACTION_HOLD_SLOTS = new Set<CharacterAnimationSlot>(['crouch', 'interact']);
 const CHARACTER_ACTION_BUTTON_SLOTS = CHARACTER_ANIMATION_EDITOR_SLOTS
   .map(({ value }) => value)
   .filter((slot): slot is CharacterAnimationSlot => !CHARACTER_ACTION_AUTOMATED_SLOTS.has(slot as CharacterAnimationSlot));
@@ -4006,7 +4012,6 @@ const CHARACTER_ACTION_BUTTON_META: Record<CharacterAnimationSlot, {
   idle: { shortLabel: '待', label: '待机动作', icon: 'I' },
   walk: { shortLabel: '走', label: '行走动作', icon: 'W' },
   run: { shortLabel: '跑', label: '奔跑动作', icon: 'R' },
-  sprint: { shortLabel: '冲', label: '冲刺动作', icon: 'S' },
   turn: { shortLabel: '转', label: '转身动作', icon: 'T' },
   jump: { shortLabel: '跳', label: '跳跃动作', icon: 'J' },
   fall: { shortLabel: '落', label: '下落动作', icon: 'F' },
@@ -4032,7 +4037,7 @@ const characterAuthorityInput = reactive({
   moveZ: 0,
   turn: 0,
   jump: false,
-  sprint: false,
+  gait: 'analog' as PhysicsCharacterGait,
   crouch: false,
   interact: false,
 });
@@ -4042,7 +4047,7 @@ const characterKeyState = reactive({
   left: false,
   right: false,
   jump: false,
-  sprint: false,
+  run: false,
   crouch: false,
   interact: false,
 });
@@ -4329,9 +4334,7 @@ const characterActionButtons = computed<CharacterActionButtonEntry[]>(() => {
         ? 'hold'
         : 'animation';
     const pressed = mode === 'hold'
-      ? (slot === 'sprint'
-        ? characterKeyState.sprint
-        : slot === 'crouch'
+      ? (slot === 'crouch'
           ? characterKeyState.crouch
           : characterKeyState.interact)
       : activeCharacterActionAnimationSlot.value === slot;
@@ -8566,8 +8569,8 @@ function inferCharacterActionFromAnimation(
   if (clipName.includes('jump') || clipName.includes('fall') || clipName.includes('land')) {
     return 'jump';
   }
-  if (clipName.includes('sprint') || clipName.includes('run')) {
-    return 'sprint';
+  if (clipName.includes('run')) {
+    return 'move';
   }
   if (clipName.includes('walk') || clipName.includes('move')) {
     return 'move';
@@ -8600,9 +8603,6 @@ function resolveLocalCharacterPeerAction(nodeId: string): string {
     return 'crouch';
   }
   const hasMove = Math.abs(input.moveX) > 0.001 || Math.abs(input.moveZ) > 0.001;
-  if ((input.sprint && hasMove) || animationAction === 'sprint') {
-    return 'sprint';
-  }
   if (hasMove || animationAction === 'move') {
     return 'move';
   }
@@ -8649,7 +8649,6 @@ const SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT = {
   moveZ: 0,
   turn: 0,
   jump: false,
-  sprint: false,
   crouch: false,
   interact: false,
   locallyControlled: false,
@@ -8660,7 +8659,7 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
   moveZ: number;
   turn: number;
   jump: boolean;
-  sprint: boolean;
+  gait?: PhysicsCharacterGait;
   crouch: boolean;
   interact: boolean;
   yaw?: number | null;
@@ -8675,7 +8674,6 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
       || Math.abs(pathFollowInput.moveZ) > 0.001
       || Math.abs(pathFollowInput.turn) > 0.001
       || pathFollowInput.jump
-      || pathFollowInput.sprint
       || pathFollowInput.crouch
       || pathFollowInput.interact
     )
@@ -8691,7 +8689,7 @@ function resolveSceneryCharacterAnimationInput(nodeId: string): {
       moveZ: characterAuthorityInput.moveZ,
       turn: characterAuthorityInput.turn,
       jump: characterAuthorityInput.jump,
-      sprint: characterAuthorityInput.sprint,
+      gait: characterAuthorityInput.gait,
       crouch: characterAuthorityInput.crouch,
       interact: characterAuthorityInput.interact,
       locallyControlled: true,
@@ -8712,7 +8710,7 @@ function resolveRemoteCharacterAnimationInput(
   moveZ: number;
   turn: number;
   jump: boolean;
-  sprint: boolean;
+  gait?: PhysicsCharacterGait;
   crouch: boolean;
   interact: boolean;
   yaw?: number | null;
@@ -8725,11 +8723,11 @@ function resolveRemoteCharacterAnimationInput(
   if (action === 'idle') {
     return { ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT };
   }
-  if (action === 'move' || action === 'sprint') {
+  if (action === 'move') {
     return {
       ...SCENERY_CHARACTER_NEUTRAL_ANIMATION_INPUT,
       moveZ: 1,
-      sprint: action === 'sprint',
+      gait: 'run',
     };
   }
   if (action === 'jump') {
@@ -11162,6 +11160,11 @@ function resolveSceneryMeshCollisionRuntimeDeps(): MeshCollisionRuntimeDeps | nu
 
 const sceneryMeshCollisionSourceObjects = new Set<THREE.Object3D>();
 let sceneryMeshCollisionWorkPending = false;
+type SceneryMeshCollisionSyncResult = {
+  workPending: boolean;
+  coverageReady: boolean;
+  progressSignature: string;
+};
 
 function releaseSceneryMeshCollisionRuntime(): void {
   clearAllMeshCollisionRuntimeHosts();
@@ -11176,26 +11179,30 @@ function releaseSceneryMeshCollisionRuntime(): void {
 function syncSceneryMeshCollisionRuntime(
   document: SceneJsonExportDocument | null,
   referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
-): boolean {
+): SceneryMeshCollisionSyncResult {
   const sourceNodeIds = collectGroundCollisionSourceNodeIds(document?.nodes);
   const references = Array.isArray(referenceWorldPositions) ? referenceWorldPositions : [];
   if (sourceNodeIds.length === 0 || references.length === 0) {
     releaseSceneryMeshCollisionRuntime();
-    return false;
+    return { workPending: false, coverageReady: false, progressSignature: 'no-source' };
   }
   const runtimeDeps = resolveSceneryMeshCollisionRuntimeDeps();
   if (!runtimeDeps) {
     releaseSceneryMeshCollisionRuntime();
-    return false;
+    return { workPending: false, coverageReady: false, progressSignature: 'no-runtime' };
   }
   const activeObjects = new Set<THREE.Object3D>();
   let workPending = false;
+  let processedSourceCount = 0;
+  let allDemCoverageReady = true;
+  const progressParts: string[] = [];
   sourceNodeIds.forEach((nodeId) => {
     const object = nodeObjectMap.get(nodeId) ?? resolveSceneObjectByNodeId(nodeId);
     if (!object) {
       return;
     }
     activeObjects.add(object);
+    processedSourceCount += 1;
     const snapshot = syncMeshCollisionRuntimeHost({
       enabled: true,
       sourceId: nodeId,
@@ -11206,6 +11213,20 @@ function syncSceneryMeshCollisionRuntime(
     });
     if (snapshot.indexing || snapshot.pendingChunkCount > 0) {
       workPending = true;
+    }
+    progressParts.push([
+      snapshot.chunkCount,
+      snapshot.pendingChunkCount,
+      snapshot.groundSourceCount,
+      snapshot.groundChunkCount,
+      snapshot.groundPatchCount,
+      snapshot.uncoveredReferenceCount,
+    ].join(','));
+    if (snapshot.groundSourceCount > 0) {
+      allDemCoverageReady = allDemCoverageReady && isGroundCollisionCoverageReady(
+        snapshot,
+        references.length,
+      );
     }
   });
   Array.from(sceneryMeshCollisionSourceObjects).forEach((object) => {
@@ -11219,7 +11240,13 @@ function syncSceneryMeshCollisionRuntime(
     sceneryMeshCollisionSourceObjects.add(object);
   });
   sceneryMeshCollisionWorkPending = workPending;
-  return workPending;
+  const hasDemCollisionSource = collectDemGroundCollisionSourceNodeIds(document?.nodes).length > 0;
+  return {
+    workPending,
+    coverageReady: !hasDemCollisionSource
+      || (processedSourceCount === sourceNodeIds.length && allDemCoverageReady),
+    progressSignature: progressParts.join('|'),
+  };
 }
 
 async function flushSceneryGroundCollisionBridgeMutations(): Promise<void> {
@@ -11237,12 +11264,26 @@ async function bootstrapSceneryMeshCollisionRuntime(
   document: SceneJsonExportDocument | null,
   referenceWorldPositions: readonly THREE.Vector3[] | null | undefined,
   shouldAbort: () => boolean,
-): Promise<void> {
-  const deadline = Date.now() + DEM_GROUND_COLLISION_READY_TIMEOUT_MS;
-  let workPending = false;
-  while (!shouldAbort() && Date.now() < deadline) {
-    workPending = syncSceneryMeshCollisionRuntime(document, referenceWorldPositions);
-    if (!workPending) {
+): Promise<boolean> {
+  const stallTimeoutMs = DEM_GROUND_COLLISION_READY_TIMEOUT_MS;
+  let lastActivityAt = Date.now();
+  let lastProgressSignature = '';
+  let result: SceneryMeshCollisionSyncResult = {
+    workPending: false,
+    coverageReady: false,
+    progressSignature: '',
+  };
+  while (!shouldAbort()) {
+    result = syncSceneryMeshCollisionRuntime(document, referenceWorldPositions);
+    const progressSignature = `${result.progressSignature}:${result.workPending ? 1 : 0}:${result.coverageReady ? 1 : 0}`;
+    if (progressSignature !== lastProgressSignature) {
+      lastProgressSignature = progressSignature;
+      lastActivityAt = Date.now();
+    }
+    if (!result.workPending && result.coverageReady) {
+      break;
+    }
+    if (Date.now() - lastActivityAt >= stallTimeoutMs) {
       break;
     }
     // Yield so scene loading UI keeps painting while the streamer drains its budget.
@@ -11250,13 +11291,18 @@ async function bootstrapSceneryMeshCollisionRuntime(
       setTimeout(resolve, 0);
     });
   }
-  if (!shouldAbort() && workPending) {
-    const message = `地形碰撞索引等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s），物理可能先于完整碰撞启动。`;
+  await flushSceneryGroundCollisionBridgeMutations();
+  if (shouldAbort()) {
+    return false;
+  }
+  if (result.workPending || !result.coverageReady) {
+    const message = `地形碰撞初始化停滞（${Math.round(stallTimeoutMs / 1000)}s 无进展），动态角色保持初始姿态。`;
     if (!warnings.value.includes(message)) {
       warnings.value = [...warnings.value, message];
     }
+    return false;
   }
-  await flushSceneryGroundCollisionBridgeMutations();
+  return true;
 }
 
 async function ensureSceneryGroundCollisionCoverageForNodes(
@@ -11283,15 +11329,17 @@ async function ensureSceneryGroundCollisionCoverageForNodes(
     syncSceneryGroundCollisionReferencePositions(references, sceneryGroundCollisionReferencePositions);
     sceneryGroundCollisionReferenceInitialized = false;
 
-    const wasCollisionBootstrapPending = physicsBridgeCollisionBootstrapPending;
-    physicsBridgeCollisionBootstrapPending = true;
+    const collisionBootstrapLease = physicsBridgeCollisionBootstrapGate.begin();
     try {
       syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
-      await bootstrapSceneryMeshCollisionRuntime(
+      const collisionReady = await bootstrapSceneryMeshCollisionRuntime(
         document,
         references,
         () => currentDocument !== document,
       );
+      if (!collisionReady) {
+        return false;
+      }
       syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
       await flushSceneryGroundCollisionBridgeMutations();
       const bridge = physicsBridge;
@@ -11328,7 +11376,7 @@ async function ensureSceneryGroundCollisionCoverageForNodes(
         }));
       }
     } finally {
-      physicsBridgeCollisionBootstrapPending = wasCollisionBootstrapPending;
+      physicsBridgeCollisionBootstrapGate.finish(collisionBootstrapLease);
     }
     return true;
   } finally {
@@ -11590,6 +11638,83 @@ function updateSceneryPhysicsBridgeIndex(document: SceneJsonExportDocument, asse
   });
 }
 
+async function initializeGroundedCharactersAtSpawn(
+  document: SceneJsonExportDocument,
+): Promise<number> {
+  const bridge = physicsBridge;
+  if (!bridge) {
+    return 0;
+  }
+  const sampler = resolveGroundCollisionSurfaceSampler(
+    document.nodes,
+    (nodeId) => nodeObjectMap.get(nodeId) ?? resolveSceneObjectByNodeId(nodeId),
+  );
+  if (!sampler) {
+    return 0;
+  }
+
+  let correctedCount = 0;
+  for (const node of collectCharacterNodes(document.nodes)) {
+    const controller = resolveCharacterControllerComponent(node);
+    const object = nodeObjectMap.get(node.id) ?? resolveSceneObjectByNodeId(node.id);
+    if (!controller || !object) {
+      continue;
+    }
+    const props = clampCharacterControllerComponentProps(controller.props);
+    object.updateWorldMatrix(true, false);
+    const worldPosition = object.getWorldPosition(new THREE.Vector3());
+    const surfaceY = sampler.sampleHeightAt(worldPosition.x, worldPosition.z);
+    if (surfaceY == null) {
+      continue;
+    }
+    const correctedY = resolveGroundedCharacterBodyCenterY(
+      surfaceY,
+      worldPosition.y,
+      props.colliderHeight,
+    );
+    if (Math.abs(correctedY - worldPosition.y) <= 1e-4) {
+      continue;
+    }
+    const bodyNodeId = physicsBridgeCharacterBodyNodeIdByControllerNodeId.get(node.id) ?? node.id;
+    const bodyId = physicsBridgeBodyIdByNodeId.get(bodyNodeId);
+    if (typeof bodyId !== 'number') {
+      continue;
+    }
+    const worldQuaternion = object
+      .getWorldQuaternion(new THREE.Quaternion())
+      .normalize();
+    const correctedPosition = worldPosition.clone();
+    correctedPosition.y = correctedY;
+    physicsBridgeFrameBodiesByNodeId.set(bodyNodeId, {
+      position: correctedPosition.clone(),
+      quaternion: worldQuaternion.clone(),
+      motionState: 0,
+    });
+    applySceneryPhysicsBridgeTransformToObject(
+      object,
+      correctedPosition,
+      worldQuaternion,
+      null,
+    );
+    await bridge.setBodyTransform({
+      bodyId,
+      transform: {
+        position: [correctedPosition.x, correctedPosition.y, correctedPosition.z],
+        rotation: [worldQuaternion.x, worldQuaternion.y, worldQuaternion.z, worldQuaternion.w],
+      },
+      resetVelocity: true,
+    });
+    await bridge.setBodyVelocity({
+      bodyId,
+      linearVelocity: [0, 0, 0],
+      angularVelocity: [0, 0, 0],
+      wakeUp: true,
+    });
+    correctedCount += 1;
+  }
+  return correctedCount;
+}
+
 async function loadSceneryPhysicsBridgeScene(
   document: SceneJsonExportDocument | null,
   onProgress?: SceneSubsystemProgressReporter,
@@ -11602,10 +11727,17 @@ async function loadSceneryPhysicsBridgeScene(
     await disposeSceneryPhysicsBridgeScene();
     return;
   }
+  let requestId = physicsBridgeSceneRequestId;
+  let collisionBootstrapLease: number | null = null;
+  let collisionBootstrapReady = false;
   try {
     currentPhysicsBridgePreference = resolveSceneryPhysicsBridgePreference(resolveDocumentEnvironment(document));
-    const requestId = ++physicsBridgeSceneRequestId;
+    requestId = ++physicsBridgeSceneRequestId;
     physicsBridgeSceneReloading = true;
+    const hasDemGroundCollisionSources = collectDemGroundCollisionSourceNodeIds(document.nodes).length > 0;
+    const hasGroundCollisionSources = collectGroundCollisionSourceNodeIds(document.nodes).length > 0;
+    collisionBootstrapLease = physicsBridgeCollisionBootstrapGate.begin();
+    collisionBootstrapReady = !hasGroundCollisionSources;
     const asset = await buildPhysicsSceneAsset(document, {
       onProgress: (progress) => {
         onProgress?.({
@@ -11632,7 +11764,6 @@ async function loadSceneryPhysicsBridgeScene(
     const bridge = await ensureSceneryPhysicsBridgeReady();
     sceneryGroundCollisionRuntimeBodyIds.clear();
     releaseSceneryMeshCollisionRuntime();
-    physicsBridgeCollisionBootstrapPending = true;
     await bridge.loadScene(asset);
     if (requestId !== physicsBridgeSceneRequestId) {
       return;
@@ -11652,7 +11783,7 @@ async function loadSceneryPhysicsBridgeScene(
       syncSceneryGroundCollisionRuntimeLoadedTileKeys(document, renderContext?.camera ?? null);
     }
     const referenceWorldPositions = sceneryGroundCollisionReferencePositions;
-    if (resolveSceneryGroundCollisionReferenceWorld(renderContext?.camera ?? null, referenceWorldPositions)) {
+    if (hasDemGroundCollisionSources) {
       // DEM terrain meshes are built asynchronously after the scene graph is attached.
       // Keep the bridge's bootstrap gate closed until the source mesh can be indexed.
       const terrainReadiness = await waitForGroundCollisionSourceTerrainReady({
@@ -11660,9 +11791,15 @@ async function loadSceneryPhysicsBridgeScene(
         resolveSourceObject: (nodeId) => nodeObjectMap.get(nodeId) ?? null,
         shouldAbort: () => requestId !== physicsBridgeSceneRequestId,
         onPending: (pendingNodeIds) => {
+          const averageProgress = pendingNodeIds.length > 0
+            ? pendingNodeIds.reduce(
+              (sum, nodeId) => sum + (getProceduralLandscapeStats(nodeId)?.progress ?? 0),
+              0,
+            ) / pendingNodeIds.length
+            : 1;
           onProgress?.({
             phase: 'syncingPhysics',
-            percent: 85,
+            percent: 80 + Math.max(0, Math.min(1, averageProgress)) * 19,
             detail: '等待 DEM 地形碰撞…',
             currentIndex: 0,
             currentTotal: pendingNodeIds.length,
@@ -11670,30 +11807,60 @@ async function loadSceneryPhysicsBridgeScene(
           });
         },
       });
+      if (terrainReadiness.status === 'aborted') {
+        return;
+      }
       if (terrainReadiness.status === 'timeout') {
         const details = terrainReadiness.pendingNodeIds
           .map((nodeId) => `${nodeId} (${terrainReadiness.statuses[nodeId] ?? 'missing'})`)
           .join(', ');
-        const message = `DEM 地形碰撞等待超时（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s）：${details || 'unknown node'}`;
+        const message = `DEM 地形构建停滞（${Math.round(DEM_GROUND_COLLISION_READY_TIMEOUT_MS / 1000)}s 无进展）：${details || 'unknown node'}。动态角色保持初始姿态。`;
         if (!warnings.value.includes(message)) {
           warnings.value = [...warnings.value, message];
         }
+        return;
       }
-      if (terrainReadiness.status !== 'aborted') {
-        await bootstrapSceneryMeshCollisionRuntime(
-          document,
-          referenceWorldPositions,
-          () => requestId !== physicsBridgeSceneRequestId,
-        );
-        // Stepping resumes only now, so restart the full-rate settle window from here.
-        physicsBridgeLastMovedAtMs = Date.now();
+      if (terrainReadiness.skippedNodeIds.length > 0) {
+        const details = terrainReadiness.skippedNodeIds
+          .map((nodeId) => `${nodeId} (${terrainReadiness.statuses[nodeId] ?? 'error'})`)
+          .join(', ');
+        const message = `DEM 地形碰撞初始化失败：${details}。动态角色保持初始姿态。`;
+        if (!warnings.value.includes(message)) {
+          warnings.value = [...warnings.value, message];
+        }
+        return;
       }
+    }
+    if (hasGroundCollisionSources) {
+      if (!resolveSceneryGroundCollisionReferenceWorld(renderContext?.camera ?? null, referenceWorldPositions)) {
+        const message = '地面碰撞源缺少可用的 Ground Anchor，动态角色保持初始姿态。';
+        if (!warnings.value.includes(message)) {
+          warnings.value = [...warnings.value, message];
+        }
+        return;
+      }
+      sceneryGroundCollisionReferenceInitialized = false;
+      collisionBootstrapReady = await bootstrapSceneryMeshCollisionRuntime(
+        document,
+        referenceWorldPositions,
+        () => requestId !== physicsBridgeSceneRequestId || currentDocument !== document,
+      );
+      if (!collisionBootstrapReady) {
+        return;
+      }
+      await initializeGroundedCharactersAtSpawn(document);
+      // Stepping resumes only now, so restart the full-rate settle window from here.
+      physicsBridgeLastMovedAtMs = Date.now();
     }
   } catch (error) {
     console.warn('[SceneViewer] Failed to load physics bridge scene', error);
   } finally {
     physicsBridgeSceneReloading = false;
-    physicsBridgeCollisionBootstrapPending = false;
+    if (collisionBootstrapLease !== null && (
+      collisionBootstrapReady || requestId !== physicsBridgeSceneRequestId
+    )) {
+      physicsBridgeCollisionBootstrapGate.finish(collisionBootstrapLease);
+    }
   }
 }
 
@@ -12095,7 +12262,6 @@ function isPhysicsBridgeIdle(nowMs: number): boolean {
     || characterAuthorityInput.moveZ !== 0
     || characterAuthorityInput.turn !== 0
     || characterAuthorityInput.jump
-    || characterAuthorityInput.sprint
     || characterAuthorityInput.crouch
     || characterAuthorityInput.interact
   );
@@ -12106,7 +12272,7 @@ function stepSceneryPhysicsBridge(delta: number): void {
     !physicsEnvironmentEnabled.value
     || !physicsBridge
     || !physicsBridgeSceneLoaded
-    || physicsBridgeCollisionBootstrapPending
+    || physicsBridgeCollisionBootstrapGate.hasPending()
   ) {
     return;
   }
@@ -12554,7 +12720,7 @@ function isCharacterBridgeInputSnapshotClose(
   }
   return (
     current.jump === next.jump
-    && current.sprint === next.sprint
+		&& current.gait === next.gait
     && current.crouch === next.crouch
     && current.interact === next.interact
   );
@@ -12585,7 +12751,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
     let moveX = input.moveX;
     let moveZ = input.moveZ;
     let jump = input.jump;
-    let sprint = input.sprint;
+    let gait = input.gait ?? 'analog';
     let crouch = input.crouch;
     let interact = input.interact;
     if (controllerNodeId === controlledNodeId) {
@@ -12595,7 +12761,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
         moveX = 0;
         moveZ = 0;
         jump = false;
-        sprint = false;
+        gait = 'analog';
         crouch = false;
         interact = false;
       } else if (input.locallyControlled) {
@@ -12615,7 +12781,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       yaw,
       turnRateRadiansPerSecond: null,
       jump,
-      sprint,
+      gait,
       crouch,
       interact,
     };
@@ -12632,7 +12798,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
       yaw: snapshot.yaw,
       turnRateRadiansPerSecond: snapshot.turnRateRadiansPerSecond,
       jump: snapshot.jump,
-      sprint: snapshot.sprint,
+      gait: snapshot.gait,
       crouch: snapshot.crouch,
       interact: snapshot.interact,
       resetState: !previous,
@@ -12668,6 +12834,7 @@ function syncSceneryPhysicsBridgeCharacterInput(): void {
 
 async function disposeSceneryPhysicsBridgeScene(): Promise<void> {
   physicsBridgeSceneRequestId += 1;
+  physicsBridgeCollisionBootstrapGate.clear();
   sceneryGroundCollisionBridgeMutationEpoch += 1;
   sceneryGroundCollisionRuntimeBodyIds.clear();
   const groundNode = resolveCurrentGroundNode();
@@ -12747,6 +12914,7 @@ async function destroySceneryPhysicsBridge(): Promise<void> {
     console.warn('[SceneViewer] Failed to destroy physics bridge', error);
   } finally {
     physicsBridgeSceneRequestId += 1;
+    physicsBridgeCollisionBootstrapGate.clear();
     sceneryGroundCollisionRuntimeBodyIds.clear();
     const groundNode = resolveCurrentGroundNode();
     clearGroundCollisionRuntimeHost(groundNode ? (nodeObjectMap.get(groundNode.id) ?? null) : null);
@@ -18618,7 +18786,7 @@ function resetMoveToSubjectInputs(): void {
   characterAuthorityInput.moveZ = 0;
   characterAuthorityInput.turn = 0;
   characterAuthorityInput.jump = false;
-  characterAuthorityInput.sprint = false;
+  characterAuthorityInput.gait = 'analog';
   characterAuthorityInput.crouch = false;
   characterAuthorityInput.interact = false;
   resetSceneryCharacterInputYawState();
@@ -18728,7 +18896,7 @@ function updateMoveToSessionForFrame(deltaSeconds: number): void {
   );
   characterAuthorityInput.moveZ = planarDistance <= MOVE_TO_CHARACTER_STOP_DISTANCE ? 0 : distanceBlend;
   characterAuthorityInput.turn = THREE.MathUtils.clamp(yawError / (Math.PI * 0.55), -1, 1);
-  characterAuthorityInput.sprint = distanceBlend > 0.75;
+  characterAuthorityInput.gait = 'analog';
   characterAuthorityInput.jump = false;
   characterAuthorityInput.crouch = false;
   characterAuthorityInput.interact = false;
@@ -19743,19 +19911,22 @@ function updateCharacterAuthorityInputFromKeys(): void {
     characterAuthorityInput.moveX = 0;
     const movementMagnitude = clampAxisScalar(length);
     const joystickMagnitude = Math.hypot(joystickInput.x, joystickInput.y);
-    const keyboardWalkOnly = (keyboardX !== 0 || keyboardY !== 0)
-      && joystickMagnitude <= CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD
-      && !characterKeyState.sprint;
-    characterAuthorityInput.moveZ = keyboardWalkOnly
-      ? Math.min(movementMagnitude, CHARACTER_KEYBOARD_RUN_MAGNITUDE)
-      : movementMagnitude;
+    const keyboardOnly = (keyboardX !== 0 || keyboardY !== 0)
+      && joystickMagnitude <= CHARACTER_EFFECTIVE_MOVEMENT_THRESHOLD;
+    characterAuthorityInput.gait = keyboardOnly
+      ? resolveKeyboardCharacterGait({
+        moving: true,
+        runHeld: characterKeyState.run,
+      })
+      : (characterKeyState.run ? 'run' : 'analog');
+    characterAuthorityInput.moveZ = keyboardOnly ? 1 : movementMagnitude;
   } else {
     characterDesiredInputYaw = null;
     characterAuthorityInput.moveX = 0;
     characterAuthorityInput.moveZ = 0;
+    characterAuthorityInput.gait = 'analog';
   }
   characterAuthorityInput.turn = 0;
-  characterAuthorityInput.sprint = characterKeyState.sprint;
   characterAuthorityInput.crouch = characterKeyState.crouch;
   characterAuthorityInput.interact = characterKeyState.interact;
   if (characterKeyState.jump) {
@@ -19800,10 +19971,7 @@ function releaseActiveCharacterActionAnimation(options: { scheduleResync?: boole
 
 function applyCharacterHoldActionState(slot: CharacterAnimationSlot, pressed: boolean): void {
   let changed = false;
-  if (slot === 'sprint' && characterKeyState.sprint !== pressed) {
-    characterKeyState.sprint = pressed;
-    changed = true;
-  } else if (slot === 'crouch' && characterKeyState.crouch !== pressed) {
+  if (slot === 'crouch' && characterKeyState.crouch !== pressed) {
     characterKeyState.crouch = pressed;
     changed = true;
   } else if (slot === 'interact' && characterKeyState.interact !== pressed) {
@@ -19872,7 +20040,6 @@ function resetCharacterActionButtonState(): void {
   if (characterKeyState.jump) {
     characterKeyState.jump = false;
   }
-  applyCharacterHoldActionState('sprint', false);
   applyCharacterHoldActionState('crouch', false);
   applyCharacterHoldActionState('interact', false);
   characterInputJumpLatch = false;
@@ -19924,7 +20091,7 @@ function setCharacterKeyState(key: string, pressed: boolean): void {
   } else if (normalized === ' ' || normalized === 'space' || normalized === 'spacebar') {
     characterKeyState.jump = pressed;
   } else if (normalized === 'shift' || normalized === 'shiftleft' || normalized === 'shiftright') {
-    characterKeyState.sprint = pressed;
+    characterKeyState.run = pressed;
   } else if (normalized === 'control' || normalized === 'ctrl' || normalized === 'controlleft' || normalized === 'controlright') {
     characterKeyState.crouch = pressed;
   } else if (normalized === 'e' || normalized === 'enter') {
@@ -19971,7 +20138,7 @@ function resetCharacterControlInputs(): void {
   characterAuthorityInput.moveZ = 0;
   characterAuthorityInput.turn = 0;
   characterAuthorityInput.jump = false;
-  characterAuthorityInput.sprint = false;
+  characterAuthorityInput.gait = 'analog';
   characterAuthorityInput.crouch = false;
   characterAuthorityInput.interact = false;
   characterKeyState.forward = false;
@@ -19979,7 +20146,7 @@ function resetCharacterControlInputs(): void {
   characterKeyState.left = false;
   characterKeyState.right = false;
   characterKeyState.jump = false;
-  characterKeyState.sprint = false;
+  characterKeyState.run = false;
   characterKeyState.crouch = false;
   characterKeyState.interact = false;
   characterInputJumpLatch = false;
@@ -25587,10 +25754,11 @@ function startRenderLoop(
                 if (groundObject && shouldUpdateReferenceSystems) {
                   syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
                 }
-                sceneryMeshCollisionWorkPending = syncSceneryMeshCollisionRuntime(
+                const collisionSync = syncSceneryMeshCollisionRuntime(
                   currentDocument,
                   sceneryGroundCollisionReferencePositions,
                 );
+                sceneryMeshCollisionWorkPending = collisionSync.workPending;
               }
             }
           }

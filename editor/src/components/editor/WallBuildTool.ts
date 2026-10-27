@@ -18,6 +18,7 @@ import {
 } from './wallSegmentUtils'
 import type { useSceneStore } from '@/stores/sceneStore'
 import type { WallPresetData } from '@/utils/wallPreset'
+import { conformSegmentsToSurface } from '@/utils/surfaceSegmentConform'
 import type { WallBuildShape } from '@/types/wall-build-shape'
 import { mergeUserDataWithDynamicMeshBuildShape } from '@/utils/dynamicMeshBuildShapeUserData'
 import type { WallPreviewRenderData } from './WallRenderer'
@@ -111,6 +112,7 @@ export function createWallBuildTool(options: {
   resolveBuildPlacementPoint?: (event: PointerEvent, result: THREE.Vector3) => boolean
   resolveBuildPlacementSurfacePoint?: (event: PointerEvent) => BuildSurfacePlacementPoint | null
   projectPointToTerrain?: (point: THREE.Vector3) => THREE.Vector3
+  sampleSurfaceHeightAt?: (x: number, z: number, surfaceNodeId: string | null) => number | null
   snapPoint: (point: THREE.Vector3) => THREE.Vector3
   resolveVertexSnapPoint?: (event: PointerEvent, point: THREE.Vector3, options?: VertexSnapResolverOptions) => THREE.Vector3 | null
   clearVertexSnap?: () => void
@@ -159,6 +161,20 @@ export function createWallBuildTool(options: {
   })
 
   const groundPointerHelper = new THREE.Vector3()
+
+  const conformWallSegments = (
+    segments: WallPreviewSegment[],
+    surfaceNodeId: string | null | undefined,
+  ): WallPreviewSegment[] => {
+    if (!options.sampleSurfaceHeightAt || !surfaceNodeId) {
+      return segments
+    }
+    return conformSegmentsToSurface(
+      segments,
+      (x, z) => options.sampleSurfaceHeightAt?.(x, z, surfaceNodeId) ?? null,
+      4,
+    )
+  }
 
   const raycastPlacementPoint = (event: PointerEvent, result: THREE.Vector3): boolean => {
     if (options.resolveBuildPlacementPoint) {
@@ -1166,7 +1182,7 @@ export function createWallBuildTool(options: {
       return false
     }
 
-    const segmentPayload = segments.map((entry) => ({
+    const segmentPayload = conformWallSegments(segments, session.surfaceNodeId).map((entry) => ({
       start: entry.start.clone(),
       end: entry.end.clone(),
     }))
@@ -1255,7 +1271,7 @@ export function createWallBuildTool(options: {
       : []
     const pendingSegments = currentSession.nodeId ? [...liveBaseSegments, segment] : [segment]
 
-    const segmentPayload = pendingSegments.map((entry) => ({
+    const segmentPayload = conformWallSegments(pendingSegments, currentSession.surfaceNodeId).map((entry) => ({
       start: entry.start.clone(),
       end: entry.end.clone(),
     }))
@@ -1557,7 +1573,7 @@ export function createWallBuildTool(options: {
       return
     }
 
-    const segmentPayload = segments.map((entry) => ({
+    const segmentPayload = conformWallSegments(segments, session.surfaceNodeId).map((entry) => ({
       start: entry.start.clone(),
       end: entry.end.clone(),
     }))

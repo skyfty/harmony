@@ -24,6 +24,10 @@ export interface AnimationRuntimeRegistration {
 export interface AnimationPlaybackOptions {
   loop?: boolean
   timeScale?: number
+  /** Cross-fade from the currently active action instead of hard-cutting. */
+  fadeSeconds?: number
+  /** Keep normalized progress when changing between locomotion clips. */
+  syncPhase?: boolean
 }
 
 export interface AnimationRuntimePresentation {
@@ -49,6 +53,7 @@ type AnimationRuntimeController = {
   activeClipName: string | null
   activeLoop: boolean
   activeTimeScale: number
+  fadeOutActions: Map<THREE.AnimationAction, number>
   externalClipSignature: string | null
   skippedClipLogKeys: Set<string>
 }
@@ -190,6 +195,7 @@ export class SceneAnimationRuntimeManager {
       } catch {
         /* ignore */
       }
+      controller.fadeOutActions.clear()
       this.invalidatePlayableCache(controller.runtimeObject)
     })
     this.controllers.clear()
@@ -205,6 +211,7 @@ export class SceneAnimationRuntimeManager {
     } catch {
       /* ignore */
     }
+    controller.fadeOutActions.clear()
     this.invalidatePlayableCache(controller.runtimeObject)
     this.controllers.delete(nodeId)
   }
@@ -248,6 +255,7 @@ export class SceneAnimationRuntimeManager {
       existing.activeClipName = null
       existing.activeLoop = false
       existing.activeTimeScale = 1
+      existing.fadeOutActions.clear()
       this.restoreDefaultNodeAnimation(registration.nodeId)
       return
     }
@@ -269,6 +277,7 @@ export class SceneAnimationRuntimeManager {
       activeClipName: null,
       activeLoop: false,
       activeTimeScale: 1,
+      fadeOutActions: new Map(),
       externalClipSignature: nextExternalClipSignature,
       skippedClipLogKeys: new Set<string>(),
     }
@@ -277,7 +286,18 @@ export class SceneAnimationRuntimeManager {
   }
 
   update(deltaSeconds: number): void {
-    this.controllers.forEach((controller) => controller.mixer.update(deltaSeconds))
+    this.controllers.forEach((controller) => {
+      controller.mixer.update(deltaSeconds)
+      controller.fadeOutActions.forEach((remainingSeconds, action) => {
+        const nextRemaining = remainingSeconds - Math.max(0, deltaSeconds)
+        if (nextRemaining <= 0) {
+          action.stop()
+          controller.fadeOutActions.delete(action)
+        } else {
+          controller.fadeOutActions.set(action, nextRemaining)
+        }
+      })
+    })
   }
 
   resolveClip(nodeId: string, requestedClipName: string | null | undefined): THREE.AnimationClip | null {
@@ -309,7 +329,18 @@ export class SceneAnimationRuntimeManager {
     if (!clip) {
       return null
     }
-    controller.mixer.stopAllAction()
+    const previousAction = controller.activeAction
+    const previousClip = previousAction?.getClip() ?? null
+    const previousNormalizedTime = previousAction && previousClip && previousClip.duration > 1e-6
+      ? previousAction.time / previousClip.duration
+      : null
+    const fadeSeconds = Number.isFinite(options.fadeSeconds)
+      ? Math.max(0, options.fadeSeconds ?? 0)
+      : 0
+    if (fadeSeconds <= 0) {
+      controller.mixer.stopAllAction()
+      controller.fadeOutActions.clear()
+    }
     const action = playAnimationClip(controller.mixer, clip, options, {
       nodeId,
       skippedClipLogKeys: controller.skippedClipLogKeys,
@@ -321,11 +352,39 @@ export class SceneAnimationRuntimeManager {
       controller.activeTimeScale = 1
       return null
     }
+    controller.fadeOutActions.delete(action)
+    if (
+      options.syncPhase === true
+      && previousNormalizedTime != null
+      && Number.isFinite(previousNormalizedTime)
+      && Number.isFinite(clip.duration)
+      && clip.duration > 1e-6
+    ) {
+      action.time = THREE.MathUtils.euclideanModulo(previousNormalizedTime, 1) * clip.duration
+    }
+    if (previousAction && previousAction !== action && fadeSeconds > 0) {
+      previousAction.crossFadeTo(action, fadeSeconds, false)
+      controller.fadeOutActions.set(previousAction, fadeSeconds)
+    }
     controller.activeAction = action
     controller.activeClipName = sanitizeAnimationClipName(clip.name)
     controller.activeLoop = Boolean(options.loop)
     controller.activeTimeScale = normalizeAnimationTimeScale(action.timeScale, 1)
     return action
+  }
+
+  setNodeAnimationTimeScale(
+    nodeId: string,
+    timeScale: number,
+  ): boolean {
+    const controller = this.controllers.get(nodeId)
+    if (!controller?.activeAction || !Number.isFinite(timeScale)) {
+      return false
+    }
+    const normalized = Math.max(0, timeScale)
+    controller.activeAction.timeScale = normalized
+    controller.activeTimeScale = normalized
+    return true
   }
 
   stopNodeAnimation(nodeId: string, options: { restoreDefault?: boolean } = {}): void {
@@ -338,6 +397,7 @@ export class SceneAnimationRuntimeManager {
     } catch {
       /* ignore */
     }
+    controller.fadeOutActions.clear()
     controller.activeAction = null
     controller.activeClipName = null
     controller.activeLoop = false
@@ -347,7 +407,10 @@ export class SceneAnimationRuntimeManager {
     }
   }
 
-  restoreDefaultNodeAnimation(nodeId: string): THREE.AnimationAction | null {
+  restoreDefaultNodeAnimation(
+    nodeId: string,
+    options: Pick<AnimationPlaybackOptions, 'fadeSeconds'> = {},
+  ): THREE.AnimationAction | null {
     const controller = this.controllers.get(nodeId)
     if (!controller) {
       return null
@@ -364,6 +427,7 @@ export class SceneAnimationRuntimeManager {
     return this.playNodeAnimation(nodeId, sanitizeAnimationClipName(defaultClip.name), {
       loop: controller.defaultLoop,
       timeScale: controller.defaultTimeScale,
+      fadeSeconds: options.fadeSeconds,
     })
   }
 

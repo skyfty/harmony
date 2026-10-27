@@ -333,7 +333,6 @@ export abstract class PhysicsWorldBase<
         moveZ: 0,
         yaw: characterState.motorState.yaw,
         jump: false,
-        sprint: false,
         crouch: false,
         interact: false,
       }
@@ -346,7 +345,7 @@ export abstract class PhysicsWorldBase<
         yaw: input.yaw,
         turnRateRadiansPerSecond: input.turnRateRadiansPerSecond,
         jump: input.jump,
-        sprint: input.sprint,
+        gait: input.gait,
         crouch: input.crouch,
         interact: input.interact,
         deltaSeconds,
