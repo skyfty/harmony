@@ -47,7 +47,6 @@ function createRoute(id: string, startX: number): SceneNode {
         type: GUIDE_ROUTE_COMPONENT_TYPE,
         enabled: true,
         props: clampGuideRouteComponentProps({
-          version: 3,
           loop: false,
           legs: [
             {

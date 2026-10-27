@@ -108,7 +108,6 @@ describe('scene asset diagnostics', () => {
           type: GUIDE_ROUTE_COMPONENT_TYPE,
           enabled: true,
           props: {
-            version: 3,
             loop: false,
             legs: [
               {

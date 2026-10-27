@@ -4,11 +4,12 @@ import type { SceneNode } from '@schema/core'
 import {
   clampGuideRouteComponentProps,
   createGuidePathRouteLeg,
+  type GuideRouteTravelMode,
 } from '@schema/components'
 import { collectGuideRouteDestinations } from '@schema/guideRouteDestinations'
 import { selectNearestGuideRouteActorNodeId } from '@schema/guideRouteActorSelection'
 
-function routeNode(id: string, name: string, travelMode: 'character' | 'vehicle'): SceneNode {
+function routeNode(id: string, name: string, travelMode: GuideRouteTravelMode): SceneNode {
   return {
     id,
     name,
@@ -20,7 +21,6 @@ function routeNode(id: string, name: string, travelMode: 'character' | 'vehicle'
         type: 'guideRoute',
         enabled: true,
         props: clampGuideRouteComponentProps({
-          version: 3,
           loop: false,
           legs: [createGuidePathRouteLeg({
             id: `leg-${id}`,
@@ -89,14 +89,37 @@ describe('Guide Route destination catalog', () => {
     ]
     expect(selectNearestGuideRouteActorNodeId({
       candidates,
-      requiredKind: 'vehicle',
+      requiredMode: 'vehicle',
       referencePosition: { x: 0, y: 0, z: 0 },
     })).toBe('vehicle-near')
     expect(selectNearestGuideRouteActorNodeId({
       candidates,
-      requiredKind: 'vehicle',
+      requiredMode: 'vehicle',
       preferredNodeId: 'vehicle-far',
       referencePosition: { x: 0, y: 0, z: 0 },
     })).toBe('vehicle-far')
+  })
+
+  it('supports Both as a route capability without inventing a Both actor', () => {
+    const destinations = collectGuideRouteDestinations([
+      routeNode('both', 'Shared route', 'both'),
+    ])
+    const candidates = [
+      { nodeId: 'vehicle', kind: 'vehicle' as const, position: { x: 10, y: 0, z: 0 } },
+      { nodeId: 'character', kind: 'character' as const, position: { x: 1, y: 0, z: 0 } },
+    ]
+
+    expect(destinations[0]?.travelMode).toBe('both')
+    expect(selectNearestGuideRouteActorNodeId({
+      candidates,
+      requiredMode: 'both',
+      preferredNodeId: 'vehicle',
+      referencePosition: { x: 0, y: 0, z: 0 },
+    })).toBe('vehicle')
+    expect(selectNearestGuideRouteActorNodeId({
+      candidates,
+      requiredMode: 'both',
+      referencePosition: { x: 0, y: 0, z: 0 },
+    })).toBe('character')
   })
 })

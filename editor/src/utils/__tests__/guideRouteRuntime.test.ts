@@ -31,7 +31,6 @@ vi.mock('@schema/proceduralLandscape/runtime', () => ({
 
 function pathProps(overrides: Partial<GuideRouteComponentProps> = {}): GuideRouteComponentProps {
   return clampGuideRouteComponentProps({
-    version: 3,
     loop: false,
     legs: [
       {
@@ -73,7 +72,7 @@ function createRouteNode(props: Partial<GuideRouteComponentProps>) {
   } as any
 }
 
-describe('GuideRoute V3 compiler', () => {
+describe('Guide Route compiler', () => {
   beforeEach(() => {
     clearGuideRouteEvaluationCache()
     surfaceMocks.state.mockReset()
@@ -91,17 +90,6 @@ describe('GuideRoute V3 compiler', () => {
       distanceToRoad: 0,
       revision: 7,
     }))
-  })
-
-  it('rejects legacy V2 data explicitly', () => {
-    const routeNode = createRouteNode(pathProps())
-    routeNode.components.guideRoute.props.version = 2
-    const result = evaluateGuideRoute({
-      routeNode,
-      providerObject: null,
-    })
-    expect(result.status).toBe('unsupported')
-    expect(result.message).toContain('V3')
   })
 
   it('compiles an authored path without requiring a landscape provider', () => {
@@ -278,7 +266,7 @@ describe('GuideRoute V3 compiler', () => {
   })
 })
 
-describe('GuideRoute V3 playback events', () => {
+describe('Guide Route playback events', () => {
   beforeEach(() => {
     clearGuideRouteEvaluationCache()
     surfaceMocks.state.mockReturnValue({
@@ -799,6 +787,84 @@ describe('GuideRoute V3 playback events', () => {
     expect(characterObject.position.y).toBeLessThan(20)
   })
 
+  it('allows a character to follow a Both leg', () => {
+    const routeNode = createRouteNode(pathProps({
+      legs: [{
+        id: 'shared-path',
+        kind: 'path',
+        travelMode: 'both',
+        speedProfile: { cruiseSpeedMps: 2, lateralAccelLimitMps2: 2 },
+        surfaceProviderNodeId: null,
+        preserveAuthoredY: true,
+        anchors: [
+          { x: 0, y: 20, z: 0 },
+          { x: 12, y: 20, z: 0 },
+        ],
+      }],
+      stops: [{
+        id: 'shared-stop',
+        name: 'Shared stop',
+        thumbnailAssetId: null,
+        anchor: { x: 12, y: 20, z: 0 },
+        legId: 'shared-path',
+        behavior: null,
+      }],
+    }))
+    const characterObject = new THREE.Object3D()
+    characterObject.position.set(0, 20, 0)
+    const characterNode = {
+      id: 'character-shared',
+      name: 'Visitor',
+      nodeType: 'Mesh',
+      components: {
+        autoTour: {
+          id: 'auto-tour',
+          type: 'autoTour',
+          enabled: true,
+          props: clampAutoTourComponentProps({
+            routeNodeId: routeNode.id,
+            speedMps: 2,
+          }),
+        },
+        characterController: {
+          id: 'character-controller',
+          type: 'characterController',
+          enabled: true,
+          props: clampCharacterControllerComponentProps({
+            colliderRadius: 0.35,
+            colliderHeight: 1.8,
+            walkSpeed: 2,
+          }),
+        },
+      },
+    } as any
+    const nodes = new Map<string, any>([
+      [routeNode.id, routeNode],
+      [characterNode.id, characterNode],
+    ])
+    const nodeObjectMap = new Map<string, THREE.Object3D>([
+      [routeNode.id, new THREE.Object3D()],
+      [characterNode.id, characterObject],
+    ])
+    const runtime = new CharacterAutoTourRuntimeManager()
+    const host = {
+      iterNodes: () => nodes.entries(),
+      resolveNode: (nodeId: string) => nodes.get(nodeId) ?? null,
+      nodeObjectMap,
+    }
+    const target = {
+      routeNodeId: routeNode.id,
+      destinationStopId: 'shared-stop',
+    }
+    const snap = runtime.resolveRouteSnap(host, characterNode.id, target)
+
+    expect(snap?.travelWindow).not.toBeNull()
+    runtime.activate(characterNode.id, target)
+    runtime.refresh(host)
+    runtime.update(host, 0.5)
+    expect(characterObject.position.x).toBeGreaterThan(0)
+  })
+
   it('fires a non-target stop once and continues along the route', () => {
     const playback = createPlayback({
       stops: [
@@ -954,6 +1020,48 @@ describe('GuideRoute V3 playback events', () => {
     runtime.update(1)
     expect(playback.vehicleObject.position.z).toBeGreaterThan(0)
     expect(playback.vehicleNode.components.autoTour.props.routeNodeId).toBe('route-1')
+  })
+
+  it('allows a vehicle to follow a Both leg', () => {
+    const playback = createPlayback({
+      legs: [{
+        id: 'shared-path',
+        kind: 'path',
+        travelMode: 'both',
+        speedProfile: { cruiseSpeedMps: 8, lateralAccelLimitMps2: 2.5 },
+        surfaceProviderNodeId: null,
+        preserveAuthoredY: true,
+        anchors: [
+          { x: 0, y: 20, z: 0 },
+          { x: 12, y: 20, z: 0 },
+        ],
+      }],
+      stops: [{
+        id: 'shared-stop',
+        name: 'Shared stop',
+        thumbnailAssetId: null,
+        anchor: { x: 12, y: 20, z: 0 },
+        legId: 'shared-path',
+        behavior: null,
+      }],
+    })
+    const runtime = createAutoTourRuntime({
+      iterNodes: () => playback.nodes.values(),
+      resolveNodeById: (nodeId) => playback.nodes.get(nodeId) ?? null,
+      nodeObjectMap: playback.nodeObjectMap,
+      isManualDriveActive: () => false,
+    })
+    const target = {
+      routeNodeId: playback.routeNode.id,
+      destinationStopId: 'shared-stop',
+    }
+    const snap = runtime.resolveRouteSnap(playback.vehicleNode.id, target)
+
+    expect(snap?.travelWindow).not.toBeNull()
+    runtime.startTour(playback.vehicleNode.id, target)
+    runtime.seedTourPlaybackState(playback.vehicleNode.id, snap!)
+    runtime.update(0.5)
+    expect(playback.vehicleObject.position.x).toBeGreaterThan(0)
   })
 
   it('pauses at a targeted stop represented by a travel window', () => {

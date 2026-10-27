@@ -18886,7 +18886,6 @@ export const useSceneStore = defineStore('scene', {
               preserveAuthoredY: !payload.surfaceProviderNodeId,
             })
             const nextProps = clampGuideRouteComponentProps({
-              version: 3,
               loop: payload.loop === true,
               legs: payload.legs?.length ? payload.legs : [defaultPathLeg],
               stops: payload.stops ?? [],
@@ -19788,7 +19787,6 @@ export const useSceneStore = defineStore('scene', {
           providerNode?.id ?? providerNodeId,
         )
         const nextProps = clampGuideRouteComponentProps({
-          version: 3,
           loop: providerProps.road.routing.termination === 'loop',
           legs: [createGuideRoadRouteLeg({ providerNodeId })],
           stops: [],

@@ -9,9 +9,11 @@ import {
   type VehicleComponentProps,
   clampAutoTourComponentProps,
   clampVehicleComponentProps,
+  guideRouteModeSupportsActor,
 } from './components'
 import {
   evaluateGuideRoute,
+  guideRouteEventKey,
   resolveGuideRoutePrimaryProviderNodeId,
   sampleEvaluatedGuideRouteAtDistance,
   type CompiledGuideStop,
@@ -798,7 +800,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
       current,
       new THREE.Vector3(),
     )
-    const travelWindow = buildGuideRouteTravelWindow(
+    const travelWindow = target.travelWindow ?? buildGuideRouteTravelWindow(
       routeData.evaluation,
       projection.s,
       target,
@@ -1132,7 +1134,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         state.distanceAlongRoute >= leg.routeStartDistance - 1e-4
         && state.distanceAlongRoute <= leg.routeEndDistance + 1e-4
       )) ?? routeData.evaluation.legs[routeData.evaluation.legs.length - 1]
-      if (progressLeg && progressLeg.travelMode !== 'vehicle') {
+      if (
+        progressLeg
+        && !guideRouteModeSupportsActor(progressLeg.travelMode, 'vehicle')
+      ) {
         disabledTourNodes.add(node.id)
         activeTourNodes.delete(node.id)
         pausedTourNodes.delete(node.id)
@@ -1199,7 +1204,7 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         )
       )
       const crossedStops = routeData.evaluation.stops.filter((stop) => (
-        !state!.firedStopIds.has(stop.definition.id)
+        !state!.firedStopIds.has(guideRouteEventKey(stop.routeNodeId, stop.definition.id))
         && crosses(stop.routeDistance, eventRangeEnd)
       )).sort((left, right) => left.routeDistance - right.routeDistance)
       const targetedDestinationStop = state.travelWindow
@@ -1210,7 +1215,9 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         )) ?? null
         : null
       const crossedTransitions = routeData.evaluation.transitions.filter((transition) => (
-        !state!.firedTransitionIds.has(transition.definition.id)
+        !state!.firedTransitionIds.has(
+          guideRouteEventKey(transition.routeNodeId, transition.definition.id),
+        )
         && crosses(transition.routeDistance, eventRangeEnd)
       )).sort((left, right) => left.routeDistance - right.routeDistance)
       const transitionAtNextEvent = crossedTransitions[0] ?? null
@@ -1333,14 +1340,18 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         && stop.routeDistance <= nextEventDistance + 1e-4
       ))
       for (const stop of reachedStops) {
-        if (state.firedStopIds.has(stop.definition.id)) {
+        const stopKey = guideRouteEventKey(stop.routeNodeId, stop.definition.id)
+        if (state.firedStopIds.has(stopKey)) {
           continue
         }
-        state.firedStopIds.add(stop.definition.id)
+        state.firedStopIds.add(stopKey)
         deps.onGuideStop?.(node.id, stop, { isTourTarget: false })
       }
       if (targetedDestinationStop && targetAtNextEvent) {
-        state.firedStopIds.add(targetedDestinationStop.definition.id)
+        state.firedStopIds.add(guideRouteEventKey(
+          targetedDestinationStop.routeNodeId,
+          targetedDestinationStop.definition.id,
+        ))
         state.distanceAlongRoute = totalLength
         state.smoothedSpeedMps = 0
         pausedTourNodes.add(node.id)
@@ -1348,7 +1359,10 @@ export function createAutoTourRuntime(deps: AutoTourRuntimeDeps): AutoTourRuntim
         return
       }
       if (transitionAtNextEvent) {
-        state.firedTransitionIds.add(transitionAtNextEvent.definition.id)
+        state.firedTransitionIds.add(guideRouteEventKey(
+          transitionAtNextEvent.routeNodeId,
+          transitionAtNextEvent.definition.id,
+        ))
         state.pendingTransitionId = transitionAtNextEvent.definition.id
         deps.onGuideTransition?.(node.id, transitionAtNextEvent)
       }

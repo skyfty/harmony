@@ -26,7 +26,6 @@ import {
 
 export type EvaluatedGuideRouteStatus =
   | 'ready'
-  | 'unsupported'
   | 'empty-route'
   | 'provider-missing'
   | 'provider-loading'
@@ -48,6 +47,7 @@ export type CompiledGuideLeg = {
 }
 
 export type CompiledGuideStop = {
+  routeNodeId: string
   definition: GuideRouteStop
   legId: string
   legDistance: number
@@ -61,7 +61,12 @@ export type GuideRouteStopEventContext = {
   isTourTarget: boolean
 }
 
+export function guideRouteEventKey(routeNodeId: string, entityId: string): string {
+  return `${routeNodeId}:${entityId}`
+}
+
 export type CompiledGuideTransition = {
+  routeNodeId: string
   definition: GuideRouteTransition
   afterLegId: string
   routeDistance: number
@@ -485,13 +490,6 @@ export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedG
     | Partial<GuideRouteComponentProps>
     | null
     | undefined
-  if (rawProps?.version !== 3) {
-    return emptyEvaluation(
-      routeNode,
-      'unsupported',
-      'Guide Route data is not V3. Recreate this route.',
-    )
-  }
   const props = clampGuideRouteComponentProps(rawProps)
   if (!props.legs.length) {
     return emptyEvaluation(routeNode, 'empty-route', 'Guide Route needs at least one leg.')
@@ -604,6 +602,7 @@ export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedG
       Math.min(leg.totalLength, segmentStart + (segmentEnd - segmentStart) * projection.t),
     )
     stops.push({
+      routeNodeId: routeNode.id,
       definition: stop,
       legId: leg.definition.id,
       legDistance: clampedLegS,
@@ -628,6 +627,7 @@ export function evaluateGuideRoute(params: EvaluateGuideRouteParams): EvaluatedG
       continue
     }
     transitions.push({
+      routeNodeId: routeNode.id,
       definition: transition,
       afterLegId: transition.afterLegId,
       routeDistance: leg.routeEndDistance,

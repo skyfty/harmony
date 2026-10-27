@@ -163,7 +163,6 @@ export function createGuideRouteBranchProps(options: {
     stopId: options.sourceStop.id,
   }
   return {
-    version: 3,
     loop: false,
     legs: points.length >= 2
       ? [createGuidePathRouteLeg({

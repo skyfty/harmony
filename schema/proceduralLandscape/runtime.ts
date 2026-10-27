@@ -222,6 +222,7 @@ const STREAM_INTERVAL_MS = 200
 const STREAM_MOVE_THRESHOLD = 8
 const NEAR_CARD_REFRESH_DISTANCE = 24
 const NEAR_MESH_REFRESH_DISTANCE = 8
+const NEAR_TREE_INSTANCE_MARGIN = 32
 const NEAR_ROAD_FALLBACK_SAMPLE_METERS = 10
 const NEAR_ROAD_FALLBACK_DEDUPE_CELL_METERS = 5
 const ROAD_FIELD_RESOLUTION = 1024
@@ -2236,7 +2237,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     }
     const bands = resolveTreeLodBands(
       props.forest.nearDistance ?? PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()].treeNearDistance,
-      resolveNearTreeRadius(),
     )
     if (
       nearCardLayers
@@ -3648,7 +3648,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   function applyCardDissolveRange(handle: FoliageMaterialHandle): void {
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
     const nearDistance = props.forest.nearDistance ?? tier.treeNearDistance
-    const bands = resolveTreeLodBands(nearDistance, resolveNearTreeRadius())
+    const bands = resolveTreeLodBands(nearDistance)
     setFoliageMaterialCardRange(handle, {
       near: bands.cardNear,
       far: bands.cardFar,
@@ -3658,10 +3658,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
   function applyTreeLodBands(): void {
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
-    const bands = resolveTreeLodBands(
-      props.forest.nearDistance ?? tier.treeNearDistance,
-      resolveNearTreeRadius(),
-    )
     // updateTreeMeshes() enables this only when the 3D layer is ready and has
     // instances, so near cards never disappear into an empty mesh layer.
     foliageUniforms.meshRadius.value = 0
@@ -3671,7 +3667,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         applyCardDissolveRange(handle)
       }
     }
-    treeMeshManager?.setLodBand(bands.meshNear, bands.meshFar)
   }
 
   function addTreeLayer(
@@ -3693,7 +3688,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       farTintScale: 1,
       hasAlphaTexture: false,
       hasNormalTexture: true,
-      // 近树卡 = 动态 alpha + 距离 dissolve（由 forest.nearDistance 推出）；
+      // 近树卡 = 动态 alpha + 距离硬切换（由 forest.nearDistance 推出）；
       // 远景树 = 静态朝相机树卡。不能走 imposter 的近距离 dissolve，否则
       // 全图森林会在近树卡距离之外整片被裁掉。
       card: tier === 'near' ? 'near' : null,
@@ -4178,6 +4173,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const radius = resolveNearTreeRadius()
     if (radius <= 0) {
       if (treeMeshManager) {
+        treeMeshManager.setView(camera, 0)
         treeMeshManager.setVisible(false)
       }
       return
@@ -4197,12 +4193,6 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           hasSnow: SEASON_PARAMS[seasonAssetsSeason ?? currentSeason].hasSnow,
         })
         manager.setLighting({ radiance: appliedLighting.radiance, shadowFactor: appliedLighting.shadowFactor })
-        const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
-        const bands = resolveTreeLodBands(
-          props.forest.nearDistance ?? tier.treeNearDistance,
-          resolveNearTreeRadius(),
-        )
-        manager.setLodBand(bands.meshNear, bands.meshFar)
         if (grid) {
           manager.setDensity(
             forestMaskTexture,
@@ -4220,6 +4210,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       })
     }
     if (treeMeshManager) {
+      treeMeshManager.setView(camera, radius)
       treeMeshManager.setVisible(true)
       const moved = !Number.isFinite(nearMeshCamera.x)
         || Math.hypot(camera.x - nearMeshCamera.x, camera.z - nearMeshCamera.y)
@@ -4233,11 +4224,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         // `refresh` is the single source of truth for re-anchoring. Forcing the
         // manager prevents its own move threshold from clearing a populated
         // instance buffer with the empty placement list of a skipped frame.
-        treeMeshManager.update(camera, placements, radius, true)
+        treeMeshManager.update(camera, placements, radius + NEAR_TREE_INSTANCE_MARGIN, true)
       }
-      // Hand off to the 3D layer only when it is ready and populated. Its fade
-      // band now matches the card collapse band, so the two LODs cross-fade
-      // instead of drawing overlapping billboards across the same tree.
+      // Hand off to the 3D layer only when it is ready and populated. The
+      // original NearTreeManager swaps opaque instances; it does not dither
+      // near meshes or cross-fade cards against them.
       foliageUniforms.meshRadius.value = treeMeshManager.ready && treeMeshManager.instanceCount > 0
         ? radius
         : 0

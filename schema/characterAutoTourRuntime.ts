@@ -16,10 +16,12 @@ import {
 import {
   GUIDE_ROUTE_COMPONENT_TYPE,
   clampGuideRouteComponentProps,
+  guideRouteModeSupportsActor,
   type GuideRouteComponentProps,
 } from './components/definitions/guideRouteComponent'
 import {
   evaluateGuideRoute,
+  guideRouteEventKey,
   resolveGuideRoutePrimaryProviderNodeId,
   type GuideRouteStopEventContext,
 } from './guideRouteRuntime'
@@ -387,12 +389,12 @@ export class CharacterAutoTourRuntimeManager {
       return null
     }
     const travelWindow = target
-      ? buildGuideRouteTravelWindow(
-        routeData.evaluation,
-        sample.projection.s,
-        target,
-        routeData.evaluation.loop,
-      )
+      ? (target.travelWindow ?? buildGuideRouteTravelWindow(
+          routeData.evaluation,
+          sample.projection.s,
+          target,
+          routeData.evaluation.loop,
+        ))
       : null
     const targetReached = Boolean(target && !travelWindow)
     const effectivePoints = travelWindow?.route.points ?? routeData.points
@@ -634,7 +636,10 @@ export class CharacterAutoTourRuntimeManager {
         progressDistance >= leg.routeStartDistance - 1e-4
         && progressDistance <= leg.routeEndDistance + 1e-4
       )) ?? routeData.evaluation.legs[routeData.evaluation.legs.length - 1]
-      if (progressLeg && progressLeg.travelMode !== 'character') {
+      if (
+        progressLeg
+        && !guideRouteModeSupportsActor(progressLeg.travelMode, 'character')
+      ) {
         entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
         this.deactivate(nodeId)
         host.onTourComplete?.(nodeId)
@@ -665,15 +670,17 @@ export class CharacterAutoTourRuntimeManager {
       )
       const reachedStops = routeData.evaluation.stops.filter((stop) => (
         stop.definition.id !== entry.travelWindow?.destinationStopId
-        && !entry.firedStopIds.has(stop.definition.id)
+        && !entry.firedStopIds.has(guideRouteEventKey(stop.routeNodeId, stop.definition.id))
         && crossesRouteDistance(stop.routeDistance)
       ))
       const scheduledTransition = routeData.evaluation.transitions.find((transition) => (
-        !entry.firedTransitionIds.has(transition.definition.id)
+        !entry.firedTransitionIds.has(
+          guideRouteEventKey(transition.routeNodeId, transition.definition.id),
+        )
         && crossesRouteDistance(transition.routeDistance)
       )) ?? null
       for (const stop of reachedStops) {
-        entry.firedStopIds.add(stop.definition.id)
+        entry.firedStopIds.add(guideRouteEventKey(stop.routeNodeId, stop.definition.id))
         host.onGuideStop?.(nodeId, stop, { isTourTarget: false })
       }
 
@@ -686,11 +693,16 @@ export class CharacterAutoTourRuntimeManager {
         const arrivalDistance = Math.max(0.35, Math.min(1.25, speedMps * 0.2))
         if (endDistance <= arrivalDistance) {
           const endpointTransition = routeData.evaluation.transitions.find((transition) => (
-            !entry.firedTransitionIds.has(transition.definition.id)
+            !entry.firedTransitionIds.has(
+              guideRouteEventKey(transition.routeNodeId, transition.definition.id),
+            )
             && transition.routeDistance >= routeData.evaluation.totalLength - 0.1
           )) ?? null
           if (endpointTransition) {
-            entry.firedTransitionIds.add(endpointTransition.definition.id)
+            entry.firedTransitionIds.add(guideRouteEventKey(
+              endpointTransition.routeNodeId,
+              endpointTransition.definition.id,
+            ))
             entry.pendingTransitionId = endpointTransition.definition.id
             entry.lastInput = createIdleCharacterAutoTourInput(entry.smoothedYaw)
             host.onGuideTransition?.(nodeId, endpointTransition)
@@ -728,12 +740,15 @@ export class CharacterAutoTourRuntimeManager {
           const targetedDestinationStop = entry.travelWindow
             ? routeData.evaluation.stops.find((stop) => (
               stop.definition.id === entry.travelWindow!.destinationStopId
-              && !entry.firedStopIds.has(stop.definition.id)
+              && !entry.firedStopIds.has(guideRouteEventKey(stop.routeNodeId, stop.definition.id))
             )) ?? null
             : null
           if (targetedDestinationStop) {
             entry.smoothedSpeedMps = 0
-            entry.firedStopIds.add(targetedDestinationStop.definition.id)
+            entry.firedStopIds.add(guideRouteEventKey(
+              targetedDestinationStop.routeNodeId,
+              targetedDestinationStop.definition.id,
+            ))
             this.pausedNodeIds.add(nodeId)
             host.onGuideStop?.(nodeId, targetedDestinationStop, { isTourTarget: true })
             return
@@ -830,7 +845,10 @@ export class CharacterAutoTourRuntimeManager {
         sample.projection.s + actualStep,
       )
       if (scheduledTransition) {
-        entry.firedTransitionIds.add(scheduledTransition.definition.id)
+        entry.firedTransitionIds.add(guideRouteEventKey(
+          scheduledTransition.routeNodeId,
+          scheduledTransition.definition.id,
+        ))
         entry.pendingTransitionId = scheduledTransition.definition.id
         host.onGuideTransition?.(nodeId, scheduledTransition)
       }

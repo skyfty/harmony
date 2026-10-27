@@ -17,6 +17,7 @@ import {
   type GuideRouteComponentProps,
   type GuideRouteLeg,
   type GuideRouteStop,
+  type GuideRouteTravelMode,
   type GuideRouteTransition,
 } from '@schema/components'
 import {
@@ -60,7 +61,7 @@ const guideRouteComponent = computed(() => {
 })
 
 const guideRouteProps = computed(() => (
-  guideRouteComponent.value?.props?.version === 3
+  guideRouteComponent.value?.props
     ? clampGuideRouteComponentProps(guideRouteComponent.value.props)
     : null
 ))
@@ -668,7 +669,7 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
   <v-expansion-panel value="guide-route">
     <v-expansion-panel-title>
       <div class="gr-header">
-        <span>Guide Route V3</span>
+        <span>Guide Route</span>
         <v-spacer />
         <span class="gr-meta">{{ guideRouteProps?.legs.length ?? 0 }} legs</span>
       </div>
@@ -750,9 +751,13 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
               variant="underlined"
               hide-details
               :model-value="leg.travelMode"
-              :items="[{ title: 'Vehicle', value: 'vehicle' }, { title: 'Character', value: 'character' }]"
+              :items="[
+                { title: 'Vehicle', value: 'vehicle' },
+                { title: 'Character', value: 'character' },
+                { title: 'Both', value: 'both' },
+              ]"
               :disabled="!componentEnabled"
-              @update:model-value="(value) => updateLeg(leg.id, { travelMode: value as 'vehicle' | 'character' })"
+              @update:model-value="(value) => updateLeg(leg.id, { travelMode: value as GuideRouteTravelMode })"
             />
             <v-text-field
               label="Cruise m/s"
@@ -1045,7 +1050,7 @@ function isStopPositionLocked(stop: GuideRouteStop): boolean {
         </div>
 
         <div class="gr-section-title">Transitions</div>
-        <div v-if="!guideRouteProps.transitions.length" class="gr-empty">Transitions are required when a behavior switches the active vehicle or character.</div>
+        <div v-if="!guideRouteProps.transitions.length" class="gr-empty">Transitions are optional; actor changes are planned automatically at travel-mode boundaries.</div>
         <div v-for="transition in guideRouteProps.transitions" :key="transition.id" class="gr-card">
           <div class="gr-card-head">
             <span>After {{ transition.afterLegId }}</span>

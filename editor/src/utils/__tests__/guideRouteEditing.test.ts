@@ -24,7 +24,6 @@ function point(x: number, y = 10, z = 0) {
 
 function pathProps(): GuideRouteComponentProps {
   return clampGuideRouteComponentProps({
-    version: 3,
     loop: false,
     legs: [createGuidePathRouteLeg({
       id: 'path-1',

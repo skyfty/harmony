@@ -234,10 +234,18 @@ describe('double-sided foliage lighting normal (背面不翻转)', () => {
     })
     const mesh = manager.container.children[0] as THREE.InstancedMesh
     expect(mesh).toBeTruthy()
-    const { fragment } = compileSources(mesh.material as THREE.MeshLambertMaterial)
+    const { vertex, fragment } = compileSources(mesh.material as THREE.MeshLambertMaterial)
     expect(fragment).toContain('normalize(mix(normalize(vNormal), treeUpView, 0.58))')
     expect(fragment).not.toContain('normal *= faceDirection')
     expect(fragment).not.toContain('#include <normal_fragment_begin>')
+    expect(vertex).not.toContain('vPlMeshLodHidden')
+    expect(vertex).not.toContain('uTreeFade')
+    expect(fragment).not.toContain('vPlMeshLodHidden')
+    expect(fragment).not.toContain('uTreeFade')
+    expect(fragment).not.toContain('treeLodDither')
+    expect(vertex).toContain('vPlTreeDistanceXZ = distance(treeOrigin.xz, uTreeCameraPos.xz)')
+    expect(fragment).toContain('if (vPlTreeDistanceXZ > uTreeVisibilityRadius)')
+    expect(fragment).toContain('discard;')
     manager.dispose()
   })
 })
@@ -287,12 +295,22 @@ describe('camera-yaw independent foliage LOD', () => {
     )
 
     const nearCardVertex = compileSources(nearCard.material).vertex
+    const nearCardFragment = compileSources(nearCard.material).fragment
     const bushVertex = compileSources(bush.material).vertex
 
     // 相机原地水平旋转时视深会剧烈变化；LOD/alpha 必须只看水平距离。
-    expect(nearCardVertex).toContain('clamp((plDistXZ - uPlDissolveNear) / uPlDissolveInterval')
+    expect(nearCardVertex).toContain('step(uPlDissolveFar, plDistXZ)')
     expect(nearCardVertex).not.toContain('clamp((plViewDepth - uPlDissolveNear)')
     expect(nearCardVertex).not.toContain('plViewDepth < uPlDissolveFar')
+    expect(nearCardVertex).toContain('step(plDistXZ, uPlMeshRadius)')
+    expect(nearCardVertex).toContain('if (uPlDynamicAlpha > 0.5)')
+    expect(nearCardVertex).toContain('plCollapse = max(plCollapse, plInsideMeshRadius);')
+    expect(nearCardVertex).toContain('vPlLodHidden = plFarCardSwitch;')
+    expect(nearCardVertex).not.toContain('plMeshHide')
+    expect(nearCardVertex).not.toContain('plCardHide')
+    expect(nearCardVertex).not.toContain('vPlDissolve = clamp((plDistXZ - uPlDissolveNear)')
+    expect(nearCardFragment).not.toContain('plLodDither')
+    expect(nearCardFragment).toContain('if (vPlLodHidden > 0.5) discard;')
     expect(bushVertex).toContain('plDistXZ < 10.0')
     expect(bushVertex).not.toContain('plViewDepth < 10.0')
   })

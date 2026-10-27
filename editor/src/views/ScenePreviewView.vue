@@ -63,6 +63,7 @@ import {
 	VIEW_POINT_COMPONENT_TYPE,
 	applyViewPointCameraProjection,
 	clampGuideRouteComponentProps,
+	guideRouteModeSupportsActor,
 	resolveViewPointComponentProps,
 	resolveViewPointWorldCameraPose,
 	type GuideRouteComponentProps,
@@ -432,6 +433,13 @@ import {
 } from '@schema/motion'
 import { syncAutoTourActiveNodesFromRuntime, resolveAutoTourFollowNodeId } from '@schema/motion'
 import type { GuideRouteTourTargetOptions } from '@schema/guideRouteTourTarget'
+import {
+  GUIDE_ROUTE_HANDOFF_STOP_PREFIX,
+  buildGuideRouteJourneySpanWindow,
+  planGuideRouteJourney,
+  type GuideRouteJourneyActor,
+  type GuideRouteJourneyPlan,
+} from '@schema/motion'
 import {
   collectGuideRouteDestinations,
   type GuideRouteDestination,
@@ -2123,6 +2131,11 @@ const guideWaypointMenuOpen = ref(false)
 const guideWaypointMenuLoading = ref(false)
 const guideWaypointMenuItems = ref<GuideWaypointMenuItem[]>([])
 const guideWaypointMenuContextRevision = ref(0)
+type ActiveGuideRouteJourney = {
+	plan: GuideRouteJourneyPlan
+	spanIndex: number
+}
+let activeGuideRouteJourney: ActiveGuideRouteJourney | null = null
 const guideWaypointMenuActorNodeId = computed<string | null>(() => (
 	guideWaypointMenuContextRevision.value,
 	resolveCurrentGuideWaypointActorNodeId()
@@ -4522,7 +4535,7 @@ function resolveGuideWaypointActorForDestination(
 	}
 	return selectNearestGuideRouteActorNodeId({
 		candidates,
-		requiredKind: travelMode,
+		requiredMode: travelMode,
 		preferredNodeId: currentActorId,
 		referencePosition: {
 			x: referencePosition.x,
@@ -4530,6 +4543,87 @@ function resolveGuideWaypointActorForDestination(
 			z: referencePosition.z,
 		},
 	})
+}
+
+function collectGuideRouteJourneyActors(): GuideRouteJourneyActor[] {
+	const actors: GuideRouteJourneyActor[] = []
+	for (const node of previewNodeMap.values()) {
+		const kind = resolveSceneActorKind(node)
+		if (
+			!kind
+			|| !resolveAutoTourComponent(node)
+			|| !nodeObjectMap.has(node.id)
+		) {
+			continue
+		}
+		const position = nodeObjectMap.get(node.id)?.getWorldPosition(new THREE.Vector3())
+		if (!position) {
+			continue
+		}
+		actors.push({
+			nodeId: node.id,
+			kind,
+			position: { x: position.x, y: position.y, z: position.z },
+		})
+	}
+	return actors
+}
+
+async function activateActiveGuideRouteJourneySpan(spanIndex: number): Promise<void> {
+	const journey = activeGuideRouteJourney
+	const span = journey?.plan.controlSpans[spanIndex]
+	if (!journey || !span) {
+		activeGuideRouteJourney = null
+		appendWarningMessage('Guide Route 导览换乘段不可用。')
+		return
+	}
+	const travelWindow = buildGuideRouteJourneySpanWindow(journey.plan, spanIndex)
+	if (!travelWindow) {
+		activeGuideRouteJourney = null
+		appendWarningMessage('Guide Route 导览换乘段无法生成。')
+		return
+	}
+	journey.spanIndex = spanIndex
+	if (span.actorKind === 'vehicle') {
+		characterPlayerControlNodeIdOverride.value = null
+		resetCharacterControlInputs()
+	}
+	pendingVehicleDriveEvent.value = buildGuideAutoTourDriveEvent(span.actorNodeId)
+	guideWaypointMenuContextRevision.value += 1
+	await startAutoTourForActor(span.actorNodeId, {
+		routeNodeId: journey.plan.targetRouteNodeId,
+		destinationStopId: travelWindow.destinationStopId,
+		travelWindow,
+	})
+}
+
+function handleActiveGuideRouteJourneyStop(
+	nodeId: string,
+	stop: { definition: { id: string } },
+	context: { isTourTarget: boolean },
+): boolean {
+	const journey = activeGuideRouteJourney
+	if (!journey || !context.isTourTarget) {
+		return false
+	}
+	const span = journey.plan.controlSpans[journey.spanIndex]
+	if (!span || span.actorNodeId !== nodeId) {
+		return false
+	}
+	if (stop.definition.id === journey.plan.targetStopId && journey.spanIndex === journey.plan.controlSpans.length - 1) {
+		activeGuideRouteJourney = null
+		return false
+	}
+	if (!stop.definition.id.startsWith(GUIDE_ROUTE_HANDOFF_STOP_PREFIX)) {
+		return false
+	}
+	const nextSpanIndex = journey.spanIndex + 1
+	queueMicrotask(() => {
+		if (activeGuideRouteJourney === journey) {
+			void activateActiveGuideRouteJourneySpan(nextSpanIndex)
+		}
+	})
+	return true
 }
 
 function guideWaypointTravelModeLabel(item: GuideWaypointMenuItem): string {
@@ -4645,6 +4739,9 @@ const autoTourRuntime = createAutoTourRuntime({
 		}
 	},
 	onGuideStop: (nodeId, stop, context) => {
+		if (handleActiveGuideRouteJourneyStop(nodeId, stop, context)) {
+			return
+		}
 		if (stop.behavior) {
 			processBehaviorEvents(triggerBehaviorAction(
 				stop.behavior.nodeId,
@@ -4660,7 +4757,7 @@ const autoTourRuntime = createAutoTourRuntime({
 	onGuideTransition: (nodeId, transition) => {
 		pendingGuideTransitionAutoTourNodes.set(transition.behavior.sequenceId, {
 			nodeId,
-			routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+			routeNodeId: transition.routeNodeId,
 			afterLegId: transition.afterLegId,
 			source: 'vehicle',
 		})
@@ -8815,6 +8912,9 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
 		onGuideStop: (nodeId, stop, context) => {
+			if (handleActiveGuideRouteJourneyStop(nodeId, stop, context)) {
+				return
+			}
 			if (stop.behavior) {
 				processBehaviorEvents(triggerBehaviorAction(
 					stop.behavior.nodeId,
@@ -8830,7 +8930,7 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
 		onGuideTransition: (nodeId, transition) => {
 			pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
 				nodeId,
-				routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+				routeNodeId: transition.routeNodeId,
 				afterLegId: transition.afterLegId,
 				source: 'character',
 			})
@@ -9061,6 +9161,9 @@ function updateCharacterPathFollow(delta: number): void {
 		},
 		onTourComplete: handleCharacterAutoTourComplete,
 		onGuideStop: (nodeId, stop, context) => {
+			if (handleActiveGuideRouteJourneyStop(nodeId, stop, context)) {
+				return
+			}
 			if (stop.behavior) {
 				processBehaviorEvents(triggerBehaviorAction(
 					stop.behavior.nodeId,
@@ -9076,7 +9179,7 @@ function updateCharacterPathFollow(delta: number): void {
 		onGuideTransition: (nodeId, transition) => {
 			pendingGuideTransitionCharacterNodes.set(transition.behavior.sequenceId, {
 				nodeId,
-				routeNodeId: resolveAutoTourComponent(resolveNodeById(nodeId))?.props?.routeNodeId ?? null,
+				routeNodeId: transition.routeNodeId,
 				afterLegId: transition.afterLegId,
 				source: 'character',
 			})
@@ -9200,6 +9303,18 @@ async function finishGuideTransition(
 		)
 	}
 	if (!success || !pending.routeNodeId) {
+		if (
+			activeGuideRouteJourney
+			&& activeGuideRouteJourney.plan.controlSpans[activeGuideRouteJourney.spanIndex]?.actorNodeId === pending.nodeId
+		) {
+			activeGuideRouteJourney = null
+		}
+		return
+	}
+	if (
+		activeGuideRouteJourney
+		&& activeGuideRouteJourney.plan.controlSpans[activeGuideRouteJourney.spanIndex]?.actorNodeId === pending.nodeId
+	) {
 		return
 	}
 	const routeNode = resolveNodeById(pending.routeNodeId)
@@ -9214,10 +9329,15 @@ async function finishGuideTransition(
 		return
 	}
 	const nextNodeId = nextLeg.travelMode === 'character'
+		&& pending.source !== 'character'
 		? resolveDefaultControlledCharacterNodeId()
-		: vehicleDriveState.active
-			? vehicleDriveState.nodeId
-			: null
+		: guideRouteModeSupportsActor(nextLeg.travelMode, pending.source)
+			? pending.nodeId
+			: pending.source === 'character'
+				? vehicleDriveState.active
+					? vehicleDriveState.nodeId
+					: null
+				: resolveDefaultControlledCharacterNodeId()
 	if (!nextNodeId) {
 		appendWarningMessage(`导览换乘已完成，但没有活动的${nextLeg.travelMode === 'character' ? '角色' : '车辆'}。`)
 		return
@@ -11466,25 +11586,47 @@ async function startAutoTourForActor(
 }
 
 async function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): Promise<void> {
-	const actorNodeId = resolveGuideWaypointActorForDestination(item.travelMode)
+	activeGuideRouteJourney = null
+	const actorNodeId = guideWaypointMenuActorNodeId.value
 	if (!actorNodeId) {
-		appendWarningMessage('没有可用于目标路段交通类型的 Auto Tour 角色或车辆。')
+		appendWarningMessage('没有可用的 Auto Tour 控制节点。')
+		return
+	}
+	const actorObject = nodeObjectMap.get(actorNodeId) ?? null
+	const actors = collectGuideRouteJourneyActors()
+	const startPosition = actorObject?.getWorldPosition(new THREE.Vector3()) ?? null
+	if (!startPosition || !actors.some((actor) => actor.nodeId === actorNodeId)) {
+		appendWarningMessage('当前控制节点没有可用的世界坐标。')
+		return
+	}
+	const plan = planGuideRouteJourney({
+		iterNodes: () => previewNodeMap.values(),
+		nodeObjectMap,
+		targetRouteNodeId: item.routeNodeId,
+		destinationStopId: item.stopId,
+		startActorNodeId: actorNodeId,
+		startPosition,
+		actors,
+	})
+	if (!plan) {
+		appendWarningMessage('无法在当前类型条件下规划到目标停靠点。')
+		return
+	}
+	if (plan.targetReached) {
+		appendWarningMessage('控制节点已经在目标导航点。')
 		return
 	}
 	const currentActorId = guideWaypointMenuActorNodeId.value
-	if (currentActorId && currentActorId !== actorNodeId) {
+	const firstActorNodeId = plan.controlSpans[0]?.actorNodeId ?? actorNodeId
+	if (currentActorId && currentActorId !== firstActorNodeId) {
 		if (vehicleDriveState.active && vehicleDriveState.nodeId === currentActorId) {
 			stopVehicleDriveMode({ resolution: { type: 'continue' } })
 		}
 		characterPlayerControlNodeIdOverride.value = null
 		resetCharacterControlInputs()
 	}
-	pendingVehicleDriveEvent.value = buildGuideAutoTourDriveEvent(actorNodeId)
-	guideWaypointMenuContextRevision.value += 1
-	await startAutoTourForActor(actorNodeId, {
-		routeNodeId: item.routeNodeId,
-		destinationStopId: item.stopId,
-	})
+	activeGuideRouteJourney = { plan, spanIndex: 0 }
+	await activateActiveGuideRouteJourneySpan(0)
 }
 
 function pauseAutoTourForManualHandoffRetry(): void {

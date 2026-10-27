@@ -5,7 +5,15 @@ import type { SceneNodeComponentState, SceneNode, Vector3Like } from '../../inde
 
 export const GUIDE_ROUTE_COMPONENT_TYPE = 'guideRoute'
 
-export type GuideRouteTravelMode = 'vehicle' | 'character'
+export type GuideRouteActorKind = 'vehicle' | 'character'
+export type GuideRouteTravelMode = GuideRouteActorKind | 'both'
+
+export function guideRouteModeSupportsActor(
+  mode: GuideRouteTravelMode,
+  actorKind: GuideRouteActorKind,
+): boolean {
+  return mode === 'both' || mode === actorKind
+}
 
 export type GuideRouteSpeedProfile = {
   cruiseSpeedMps: number
@@ -77,7 +85,6 @@ export type GuideRouteTransition = {
 }
 
 export interface GuideRouteComponentProps {
-  version: 3
   loop: boolean
   legs: GuideRouteLeg[]
   stops: GuideRouteStop[]
@@ -116,7 +123,10 @@ function normalizeBehaviorRef(value: unknown): GuideRouteBehaviorRef | null {
 }
 
 export function clampGuideRouteTravelMode(value: unknown): GuideRouteTravelMode {
-  return value === 'character' ? 'character' : 'vehicle'
+  if (value === 'character' || value === 'both') {
+    return value
+  }
+  return 'vehicle'
 }
 
 function clampNumber(value: unknown, fallback: number, min: number, max: number): number {
@@ -293,7 +303,6 @@ export function clampGuideRouteComponentProps(
     .map((transition, index) => normalizeTransition(transition, index, legIds))
     .filter((transition): transition is GuideRouteTransition => transition !== null)
   return {
-    version: 3,
     loop: props?.loop === true,
     legs,
     stops,
@@ -307,7 +316,6 @@ export function cloneGuideRouteComponentProps(
   props: GuideRouteComponentProps,
 ): GuideRouteComponentProps {
   return {
-    version: 3,
     loop: props.loop,
     legs: props.legs.map((leg) => (
       leg.kind === 'road'

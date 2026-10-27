@@ -10,6 +10,7 @@ import {
 export type GuideRouteTourTargetOptions = {
   routeNodeId: string
   destinationStopId: string
+  travelWindow?: GuideRouteTravelWindow
 }
 
 export type GuideRouteTravelWindow = {
@@ -18,6 +19,35 @@ export type GuideRouteTravelWindow = {
   startDistance: number
   endDistance: number
   route: EvaluatedGuideRoute
+  network: GuideRouteNetworkTravelInfo | null
+}
+
+export type GuideRouteNetworkTravelInfo = {
+  entryRouteNodeId: string
+  entryActorKind: 'vehicle' | 'character'
+  snapDistanceM: number
+  travelDistanceM: number
+  switchCount: number
+  sourceRouteNodeIds: string[]
+  sourceSignature: string
+  segments: Array<{
+    routeNodeId: string
+    startDistance: number
+    endDistance: number
+    direction: -1 | 1
+    actorKind: 'vehicle' | 'character'
+    lengthM: number
+  }>
+  controlSpans: Array<{
+    actorKind: 'vehicle' | 'character'
+    startDistance: number
+    endDistance: number
+  }>
+  handoffs: Array<{
+    routeDistance: number
+    fromKind: 'vehicle' | 'character'
+    toKind: 'vehicle' | 'character'
+  }>
 }
 
 const DISTANCE_EPSILON = 1e-4
@@ -264,5 +294,6 @@ export function buildGuideRouteTravelWindow(
     startDistance: start,
     endDistance: end,
     route: windowRoute,
+    network: null,
   }
 }

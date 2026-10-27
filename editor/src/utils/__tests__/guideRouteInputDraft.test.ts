@@ -10,7 +10,6 @@ import { parseGuideRouteDecimalInput } from '@/utils/guideRouteInputDraft'
 
 function routeProps(stops: unknown[] = []) {
   return clampGuideRouteComponentProps({
-    version: 3,
     loop: false,
     legs: [createGuidePathRouteLeg({
       id: 'path-1',

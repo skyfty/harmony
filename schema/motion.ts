@@ -4,6 +4,19 @@ export type { AutoTourRuntime, AutoTourRuntimeDeps, AutoTourRouteSnapResult } fr
 export { buildGuideRouteTravelWindow } from './guideRouteTourTarget'
 export type { GuideRouteTourTargetOptions, GuideRouteTravelWindow } from './guideRouteTourTarget'
 export {
+  GUIDE_ROUTE_HANDOFF_STOP_PREFIX,
+  buildGuideRouteJourneySpanWindow,
+  planGuideRouteJourney,
+} from './guideRouteNetwork'
+export type {
+  GuideRouteJourneyActor,
+  GuideRouteJourneyControlSpan,
+  GuideRouteJourneyHandoff,
+  GuideRouteJourneyPlan,
+  GuideRouteJourneySegment,
+  PlanGuideRouteJourneyOptions,
+} from './guideRouteNetwork'
+export {
   evaluateGuideRoute,
   sampleEvaluatedGuideRouteAtDistance,
   resolveCompiledGuideLegAtDistance,

@@ -118,7 +118,7 @@ uniform float uPlSinglePlane;
 uniform float uPlWindStrength;
 uniform float uPlDistanceAlpha;
 uniform float uPlPaletteMode;
-/** 1 = 近树卡：官方动态 alphaTest + 距离 dissolve + 模型高度 leafBrightness。 */
+/** 1 = 近树卡：动态 alphaTest + 距离硬切换 + 模型高度 leafBrightness。 */
 uniform float uPlDynamicAlpha;
 /** 1 = 远景树：官方 imposter（朝相机广告牌 + 16 朝向列 + 角度混列 + 距离放大/下沉）。 */
 uniform float uPlBillboard;
@@ -158,7 +158,6 @@ varying vec3 vPlGroundNormal;
 varying vec2 vPlCardUv;
 varying float vPlTreeDiscolouration;
 varying float vPlLodHidden;
-varying float vPlCardSeed;
 `
 
 const VERTEX_BODY = /* glsl */ `
@@ -171,31 +170,34 @@ const VERTEX_BODY = /* glsl */ `
   #endif
   float plDistXZ = distance(plInstWorld.xz, uPlCameraPos.xz);
   float plIsNear = step(plDistXZ, uPlNearDistance);
-  float plInsideMeshRadius = step(plDistXZ, uPlMeshRadius);
+  float plInsideMeshRadius = uPlMeshRadius > 0.001
+    ? step(plDistXZ, uPlMeshRadius)
+    : 0.0;
   float plFar = 1.0 - plIsNear;
   float plCollapse = 0.0;
   if (uPlTierMode > 0.5) {
     plCollapse = plIsNear;
   } else if (uPlTierMode < -0.5) {
     plCollapse = plFar;
+  }
+  // Near-card materials use tier "all" so the 3D-mesh handoff must depend on
+  // the card mode, not on the broad near/far tier selector.
+  if (uPlDynamicAlpha > 0.5) {
     plCollapse = max(plCollapse, plInsideMeshRadius);
   }
-  // 官方树卡/远景树用距离 dissolve 接管 LOD 交接，不再做硬性分层折叠；
-  // 近树卡仍在 3D 网格半径内让位。
+  // Official tree cards use distance dissolve for near/far handoff. The 3D
+  // near-tree layer uses an opaque instance swap, so near cards inside its
+  // radius collapse directly instead of dithering against the mesh.
   if (uPlBillboard > 0.5) {
     plCollapse = 0.0;
   }
-  float plCardHide = smoothstep(uPlDissolveNear, uPlDissolveFar, plDistXZ);
-  float plMeshHide = uPlMeshRadius > 0.001
-    ? 1.0 - smoothstep(uPlMeshRadius * 0.66, uPlMeshRadius, plDistXZ)
-    : 0.0;
+  float plFarCardSwitch = step(uPlDissolveFar, plDistXZ);
   vPlLodHidden = 0.0;
   if (uPlLodFadeMode > 1.5) {
-    vPlLodHidden = 1.0 - plCardHide;
+    vPlLodHidden = 1.0 - plFarCardSwitch;
   } else if (uPlLodFadeMode > 0.5) {
-    vPlLodHidden = max(plMeshHide, plCardHide);
+    vPlLodHidden = plFarCardSwitch;
   }
-  vPlCardSeed = fract(sin(dot(plInstWorld.zx, vec2(12.9898, 78.233))) * 43758.5453);
   float plPhase = fract(sin(dot(plInstWorld.xz, vec2(12.9898, 78.233))) * 43758.5453);
 
   transformed.xz *= aPlSize.x;
@@ -325,10 +327,8 @@ const VERTEX_BODY = /* glsl */ `
     vPlAlphaTest = plDistXZ < 10.0 ? 0.5 : max(0.2, 0.5 - (plDistXZ - 10.0) / 110.0);
   }
   if (uPlDynamicAlpha > 0.5) {
-    // 官方近树卡：dissolve 由近及远 0→1；alphaTest 随距离放宽（放到 0.3/原值下限）；
-    // vLeafBrightness = 1 - density × shadowFactor × saturate((10 - 模型高度m)/3)。
-    vPlDissolve = clamp((plDistXZ - uPlDissolveNear) / uPlDissolveInterval, 0.0, 1.0);
-    vPlDissolve *= plDissolveRandom;
+    // 近树卡与远景卡在 cardFar 直接切换，避免噪声 dissolve 产生稀疏虚点。
+    // alphaTest 仍按距离放宽，vLeafBrightness 继续匹配官方密度压暗。
     vPlAlphaTest = uPlAlphaTest;
     if (uPlDissolveFar > 200.0) {
       if (plDistXZ < uPlDissolveFar) {
@@ -391,7 +391,6 @@ varying vec3 vPlGroundNormal;
 varying vec2 vPlCardUv;
 varying float vPlTreeDiscolouration;
 varying float vPlLodHidden;
-varying float vPlCardSeed;
 
 float plScreen2(float a, float b) { return 1.0 - ((1.0 - a) * (1.0 - b)); }
 
@@ -442,10 +441,7 @@ const FRAGMENT_BODY = /* glsl */ `
   // 官方 alphaMap 走绿通道（three 语义）。
   float plAlpha = mix(plTexel.a, texture2D(uPlAlphaTex, vPlUv).g, uPlHasAlphaTex);
   if (plAlpha < plCutAlpha) discard;
-  if (vPlLodHidden > 0.001) {
-    float plLodDither = fract(sin(dot(vPlCardSeed + vPlCardUv * 17.0, vec2(12.9898, 78.233))) * 43758.5453);
-    if (vPlLodHidden > 0.999 || plLodDither < vPlLodHidden) discard;
-  }
+  if (vPlLodHidden > 0.5) discard;
   vec3 plColor = plTexel.rgb * uPlFoliageTint;
   if (uPlTreeColourGrade > 0.5) {
     // Preserve the seasonal hue (spring green / autumn orange / winter brown)
@@ -583,7 +579,7 @@ export interface FoliageMaterialSpec {
   hasNormalTexture: boolean
   /** 近树卡 = 'near'（动态 alpha + dissolve）；远景树 = 'far'（广告牌）；其它 null。 */
   card: 'near' | 'far' | null
-  /** Tree-only dither handoff between 3D meshes, near cards and far cards. */
+  /** Tree-only hard handoff between 3D meshes, near cards and far cards. */
   lodFade: 'near-card' | 'far-card' | null
   /** Rotate a single card toward the camera without the imposter UV path. */
   staticBillboard: boolean

@@ -1,15 +1,19 @@
 import type { Vector3Like } from './core'
-import type { GuideRouteTravelMode } from './components/definitions/guideRouteComponent'
+import {
+  guideRouteModeSupportsActor,
+  type GuideRouteActorKind,
+  type GuideRouteTravelMode,
+} from './components/definitions/guideRouteComponent'
 
 export type GuideRouteActorCandidate = {
   nodeId: string
-  kind: GuideRouteTravelMode
+  kind: GuideRouteActorKind
   position: Vector3Like
 }
 
 export function selectNearestGuideRouteActorNodeId(options: {
   candidates: Iterable<GuideRouteActorCandidate>
-  requiredKind: GuideRouteTravelMode
+  requiredMode: GuideRouteTravelMode
   preferredNodeId?: string | null
   referencePosition: Vector3Like
 }): string | null {
@@ -18,7 +22,7 @@ export function selectNearestGuideRouteActorNodeId(options: {
   let bestNodeId: string | null = null
   let bestDistanceSq = Number.POSITIVE_INFINITY
   for (const candidate of options.candidates) {
-    if (candidate.kind !== options.requiredKind) {
+    if (!guideRouteModeSupportsActor(options.requiredMode, candidate.kind)) {
       continue
     }
     if (preferredNodeId && candidate.nodeId === preferredNodeId) {

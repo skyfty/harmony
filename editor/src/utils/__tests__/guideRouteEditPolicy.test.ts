@@ -27,7 +27,6 @@ function makeProps(
   branchOrigin: GuideRouteComponentProps['branchOrigin'] = null,
 ): GuideRouteComponentProps {
   return {
-    version: 3,
     loop: false,
     legs,
     stops: [],

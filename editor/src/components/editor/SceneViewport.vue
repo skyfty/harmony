@@ -1988,7 +1988,7 @@ function resolveGuideRouteVisualDefinition(
   const overridesVisual = Boolean(propsOverride)
   if (
     !overridesVisual
-    && (props?.version !== 3 || !props.legs?.some((leg) => leg.kind === 'road'))
+    && (!props || !props.legs?.some((leg) => leg.kind === 'road'))
   ) {
     return fallback
   }
@@ -2017,7 +2017,7 @@ function syncGuideRouteStopOverlay(
   const props = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE]?.props as
     | Partial<GuideRouteComponentProps>
     | undefined
-  if (props?.version !== 3) {
+  if (!props) {
     if (existing instanceof THREE.Object3D) {
       existing.removeFromParent()
     }
@@ -3064,7 +3064,7 @@ function resolveEditableGuideRouteNode(nodeId: string | null | undefined): Scene
     return null
   }
   const component = node.components?.[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<GuideRouteComponentProps> | undefined
-  if (component?.props?.version !== 3) {
+  if (!component?.props) {
     return null
   }
   if (node.locked || sceneStore.isNodeSelectionLocked(nodeId)) {

@@ -1073,6 +1073,7 @@ import {
   clampGuideRouteComponentProps,
   GUIDE_ROUTE_COMPONENT_TYPE,
   guideRouteComponentDefinition,
+  guideRouteModeSupportsActor,
   type GuideRouteComponentProps,
 } from '@harmony/schema/components/definitions/guideRouteComponent';
 import type { GuideRouteTourTargetOptions } from '@harmony/schema/guideRouteTourTarget';
@@ -1211,6 +1212,13 @@ import {
   resetCameraPoseTransitionState,
   updateBackFollowCamera,
   VehicleFollowCameraRig,
+} from '@harmony/schema/motion';
+import {
+  GUIDE_ROUTE_HANDOFF_STOP_PREFIX,
+  buildGuideRouteJourneySpanWindow,
+  planGuideRouteJourney,
+  type GuideRouteJourneyActor,
+  type GuideRouteJourneyPlan,
 } from '@harmony/schema/motion';
 import type { FollowCameraMotionState, CameraFollowPlacement, CameraFollowState } from '@harmony/schema/followCameraController';
 import {
@@ -4321,6 +4329,11 @@ const guideWaypointMenuOpen = ref(false);
 const guideWaypointMenuLoading = ref(false);
 const guideWaypointMenuItems = ref<GuideWaypointMenuItem[]>([]);
 const guideWaypointMenuContextRevision = ref(0);
+type ActiveGuideRouteJourney = {
+  plan: GuideRouteJourneyPlan;
+  spanIndex: number;
+};
+let activeGuideRouteJourney: ActiveGuideRouteJourney | null = null;
 const guideWaypointMenuActorNodeId = computed(() => {
   guideWaypointMenuContextRevision.value;
   return resolveGuideWaypointActorNodeId();
@@ -8691,6 +8704,9 @@ function refreshCharacterPathFollowRuntimeEntries(): void {
     },
     onTourComplete: handleCharacterAutoTourComplete,
     onGuideStop: (nodeId, stop, context) => {
+      if (handleActiveGuideRouteJourneyStop(nodeId, stop, context)) {
+        return;
+      }
       if (stop.behavior) {
         processBehaviorEvents(triggerBehaviorAction(
           stop.behavior.nodeId,
@@ -8757,6 +8773,9 @@ function updateCharacterPathFollow(deltaSeconds: number): void {
     },
     onTourComplete: handleCharacterAutoTourComplete,
     onGuideStop: (nodeId, stop, context) => {
+      if (handleActiveGuideRouteJourneyStop(nodeId, stop, context)) {
+        return;
+      }
       if (stop.behavior) {
         processBehaviorEvents(triggerBehaviorAction(
           stop.behavior.nodeId,
@@ -10496,7 +10515,7 @@ function resolveGuideWaypointActorForDestination(
   }
   return selectNearestGuideRouteActorNodeId({
     candidates,
-    requiredKind: travelMode,
+    requiredMode: travelMode,
     preferredNodeId: currentActorId,
     referencePosition: {
       x: referencePosition.x,
@@ -10504,6 +10523,90 @@ function resolveGuideWaypointActorForDestination(
       z: referencePosition.z,
     },
   });
+}
+
+function collectGuideRouteJourneyActors(): GuideRouteJourneyActor[] {
+  const actors: GuideRouteJourneyActor[] = [];
+  for (const node of previewNodeMap.values()) {
+    const kind = resolveSceneActorKind(node);
+    if (
+      !kind
+      || !resolveAutoTourComponent(node)
+      || !nodeObjectMap.has(node.id)
+    ) {
+      continue;
+    }
+    const position = nodeObjectMap.get(node.id)?.getWorldPosition(new THREE.Vector3());
+    if (!position) {
+      continue;
+    }
+    actors.push({
+      nodeId: node.id,
+      kind,
+      position: { x: position.x, y: position.y, z: position.z },
+    });
+  }
+  return actors;
+}
+
+function activateActiveGuideRouteJourneySpan(spanIndex: number): void {
+  const journey = activeGuideRouteJourney;
+  const span = journey?.plan.controlSpans[spanIndex];
+  if (!journey || !span) {
+    activeGuideRouteJourney = null;
+    uni.showToast({ title: 'Guide Route 导览换乘段不可用', icon: 'none' });
+    return;
+  }
+  const travelWindow = buildGuideRouteJourneySpanWindow(journey.plan, spanIndex);
+  if (!travelWindow) {
+    activeGuideRouteJourney = null;
+    uni.showToast({ title: 'Guide Route 导览换乘段无法生成', icon: 'none' });
+    return;
+  }
+  journey.spanIndex = spanIndex;
+  if (span.actorKind === 'vehicle') {
+    characterPlayerControlNodeIdOverride.value = null;
+    resetCharacterControlInputs();
+  }
+  pendingVehicleDriveEvent.value = buildFloatingAutoTourDriveEvent(span.actorNodeId, null);
+  guideWaypointMenuContextRevision.value += 1;
+  startGuideWaypointAutoTour(span.actorNodeId, {
+    routeNodeId: journey.plan.targetRouteNodeId,
+    destinationStopId: travelWindow.destinationStopId,
+    travelWindow,
+  }, pendingVehicleDriveEvent.value);
+}
+
+function handleActiveGuideRouteJourneyStop(
+  nodeId: string,
+  stop: { definition: { id: string } },
+  context: { isTourTarget: boolean },
+): boolean {
+  const journey = activeGuideRouteJourney;
+  if (!journey || !context.isTourTarget) {
+    return false;
+  }
+  const span = journey.plan.controlSpans[journey.spanIndex];
+  if (!span || span.actorNodeId !== nodeId) {
+    return false;
+  }
+  if (
+    stop.definition.id === journey.plan.targetStopId
+    && journey.spanIndex === journey.plan.controlSpans.length - 1
+  ) {
+    activeGuideRouteJourney = null;
+    return false;
+  }
+  if (!stop.definition.id.startsWith(GUIDE_ROUTE_HANDOFF_STOP_PREFIX)) {
+    return false;
+  }
+  const nextSpanIndex = journey.spanIndex + 1;
+  queueMicrotask(() => {
+    if (activeGuideRouteJourney === journey) {
+      activateActiveGuideRouteJourneySpan(nextSpanIndex);
+    }
+  });
+  return true;
 }
 
 function guideWaypointTravelModeLabel(item: GuideWaypointMenuItem): string {
@@ -10536,6 +10639,9 @@ const autoTourRuntime = createAutoTourRuntime({
     }
   },
   onGuideStop: (nodeId, stop, context) => {
+    if (handleActiveGuideRouteJourneyStop(nodeId, stop, context)) {
+      return;
+    }
     if (stop.behavior) {
       processBehaviorEvents(triggerBehaviorAction(
         stop.behavior.nodeId,
@@ -17541,6 +17647,18 @@ function finishGuideTransition(
     );
   }
   if (!success || !pending.routeNodeId) {
+    if (
+      activeGuideRouteJourney
+      && activeGuideRouteJourney.plan.controlSpans[activeGuideRouteJourney.spanIndex]?.actorNodeId === pending.nodeId
+    ) {
+      activeGuideRouteJourney = null;
+    }
+    return;
+  }
+  if (
+    activeGuideRouteJourney
+    && activeGuideRouteJourney.plan.controlSpans[activeGuideRouteJourney.spanIndex]?.actorNodeId === pending.nodeId
+  ) {
     return;
   }
   const routeNode = resolveNodeById(pending.routeNodeId);
@@ -17560,10 +17678,15 @@ function finishGuideTransition(
   activeAutoTourNodeIds.delete(pending.nodeId);
   activeCharacterAutoTourNodeIds.delete(pending.nodeId);
   const nextNodeId = nextLeg.travelMode === 'character'
+    && pending.source !== 'character'
     ? resolveDefaultControlledCharacterNodeId()
-    : vehicleDriveActive.value
-      ? vehicleDriveNodeId.value
-      : null;
+    : guideRouteModeSupportsActor(nextLeg.travelMode, pending.source)
+      ? pending.nodeId
+      : pending.source === 'character'
+        ? vehicleDriveActive.value
+          ? vehicleDriveNodeId.value
+          : null
+        : resolveDefaultControlledCharacterNodeId();
   if (!nextNodeId) {
     uni.showToast({ title: '导览换乘后没有活动载体', icon: 'none' });
     return;
@@ -22171,13 +22294,38 @@ function startGuideWaypointAutoTour(
 }
 
 function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): void {
-  const actorNodeId = resolveGuideWaypointActorForDestination(item.travelMode);
+  activeGuideRouteJourney = null;
+  const actorNodeId = guideWaypointMenuActorNodeId.value;
   if (!actorNodeId) {
-    uni.showToast({ title: '没有兼容目标交通类型的 Auto Tour 载体', icon: 'none' });
+    uni.showToast({ title: '没有可用的 Auto Tour 控制节点', icon: 'none' });
     return;
   }
-  const currentActorNodeId = resolveGuideWaypointActorNodeId();
-  if (currentActorNodeId !== actorNodeId) {
+  const actorObject = nodeObjectMap.get(actorNodeId) ?? null;
+  const startPosition = actorObject?.getWorldPosition(new THREE.Vector3()) ?? null;
+  const actors = collectGuideRouteJourneyActors();
+  if (!startPosition || !actors.some((actor) => actor.nodeId === actorNodeId)) {
+    uni.showToast({ title: '当前控制节点没有可用的世界坐标', icon: 'none' });
+    return;
+  }
+  const plan = planGuideRouteJourney({
+    iterNodes: () => previewNodeMap.values(),
+    nodeObjectMap,
+    targetRouteNodeId: item.routeNodeId,
+    destinationStopId: item.stopId,
+    startActorNodeId: actorNodeId,
+    startPosition,
+    actors,
+  });
+  if (!plan) {
+    uni.showToast({ title: '当前类型无法规划到目标停靠点', icon: 'none' });
+    return;
+  }
+  if (plan.targetReached) {
+    uni.showToast({ title: '控制节点已经在目标导航点', icon: 'none' });
+    return;
+  }
+  const firstActorNodeId = plan.controlSpans[0]?.actorNodeId ?? actorNodeId;
+  if (actorNodeId !== firstActorNodeId) {
     Array.from(activeAutoTourNodeIds).forEach((nodeId) => {
       autoTourRuntime.stopTour(nodeId);
     });
@@ -22197,14 +22345,8 @@ function handleGuideWaypointAutoTourStart(item: GuideWaypointMenuItem): void {
     characterPlayerControlNodeIdOverride.value = null;
     resetCharacterControlInputs();
   }
-  const waypointTarget = {
-    routeNodeId: item.routeNodeId,
-    destinationStopId: item.stopId,
-  };
-  const sourceEvent = buildFloatingAutoTourDriveEvent(actorNodeId, null);
-  pendingVehicleDriveEvent.value = sourceEvent;
-  guideWaypointMenuContextRevision.value += 1;
-  startGuideWaypointAutoTour(actorNodeId, waypointTarget, sourceEvent);
+  activeGuideRouteJourney = { plan, spanIndex: 0 };
+  activateActiveGuideRouteJourneySpan(0);
 }
 
 function pauseAutoTourForInspection(targetNodeId: string): void {

@@ -209,22 +209,11 @@ function geometrySurfaceHeightAt(
 
 describe('tree LOD bands', () => {
   it('stays monotonic for default and extreme slider values', () => {
-    for (const [nearDistance, meshRadius] of [
-      [190, 90],
-      [40, 90],
-      [300, 300],
-      [190, 0],
-      [40, 300],
-    ] as const) {
-      const bands = resolveTreeLodBands(nearDistance, meshRadius)
+    for (const nearDistance of [190, 40, 300] as const) {
+      const bands = resolveTreeLodBands(nearDistance)
       expect(bands.cardNear).toBeLessThan(bands.cardFar)
-      if (meshRadius === 0) {
-        expect(bands.meshNear).toBe(0)
-        expect(bands.meshFar).toBe(0)
-      } else {
-        expect(bands.meshNear).toBeLessThan(bands.meshFar)
-        expect(bands.meshFar).toBeLessThan(bands.cardNear)
-      }
+      expect(bands.cardFar).toBe(Math.max(40, nearDistance))
+      expect(bands.cardNear).toBeGreaterThanOrEqual(20)
     }
   })
 })

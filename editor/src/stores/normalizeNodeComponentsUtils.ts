@@ -245,7 +245,7 @@ export function normalizeNodeComponents(
 
   if (node.dynamicMesh?.type === 'GuideRoute') {
     const existing = normalized[GUIDE_ROUTE_COMPONENT_TYPE] as SceneNodeComponentState<any> | undefined
-    if (existing?.props?.version === 3) {
+    if (existing?.props) {
       const nextProps = cloneGuideRouteComponentProps(
         clampGuideRouteComponentProps(existing.props as any),
       )

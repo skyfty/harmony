@@ -269,8 +269,7 @@ function isUsableGuideRoute(node: SceneNode): boolean {
     | undefined
   return Boolean(
     component
-    && component.enabled !== false
-    && component.props?.version === 3,
+    && component.enabled !== false,
   )
 }
 
