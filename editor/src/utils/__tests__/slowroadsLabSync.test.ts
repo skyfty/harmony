@@ -27,6 +27,7 @@ import { SEASON_PARAMS } from '@schema/slowroads/core/seasonParams'
 import { SEASON_CATALOG } from '@schema/slowroads/core/seasonCatalog'
 import {
   clampProceduralLandscapeProps,
+  cloneProceduralLandscapeProps,
   createDefaultProceduralLandscapeProps,
   resolveSurfaceHeightScale,
   resolveSurfaceViewDistanceScale,
@@ -251,6 +252,7 @@ describe('procedural landscape props (full refactor)', () => {
     expect(props.wind.enabled).toBe(true)
     expect(props.wind.strength).toBe(1)
     expect(props.canopy.enabled).toBe(true)
+    expect(props.forest.enabled).toBe(true)
     expect(props.forest.nearDistance).toBe(190)
     expect(props.forest.nearTreeRadius).toBe(90)
     expect(props.forest.minScale).toBe(5)
@@ -287,6 +289,17 @@ describe('procedural landscape props (full refactor)', () => {
     expect(props.water.levelOffset).toBe(-999)
     expect(props.forest.nearTreeRadius).toBe(300)
     expect(props.surface.viewDistanceScale).toBe(1)
+  })
+
+  it('keeps the forest visibility switch through normalization and cloning', () => {
+    const defaults = createDefaultProceduralLandscapeProps({ id: 'forest-toggle' })
+    expect(clampProceduralLandscapeProps({}, 'forest-toggle').forest.enabled).toBe(true)
+
+    const disabled = clampProceduralLandscapeProps({
+      forest: { ...defaults.forest, enabled: false },
+    }, 'forest-toggle')
+    expect(disabled.forest.enabled).toBe(false)
+    expect(cloneProceduralLandscapeProps(disabled).forest.enabled).toBe(false)
   })
 
   it('height-band normalization: ×4 for lab-scale relief, compressed on real terrain', () => {

@@ -93,7 +93,7 @@ export function collectProceduralLandscapeTexturePreloadRefs(
   const singleTrack = isSingleTrackRoad(roadHalfWidth(props) * 2)
   const needs = {
     surface: props.surface.enabled && props.surface.textures,
-    forest: props.forest.coverage > 0 && props.forest.density > 0,
+    forest: props.forest.enabled && props.forest.coverage > 0 && props.forest.density > 0,
     grass: props.grass.enabled,
     bushes: props.bushes.enabled,
     roadSingle: props.road.enabled && roadReady && singleTrack,
@@ -197,7 +197,7 @@ export function collectProceduralLandscapeCoreTexturePreloadForNodes(
 ): SceneSlowroadsTexturePreload | undefined {
   const textureIds = new Set<string>()
   for (const { props } of collectActiveProceduralLandscapeNodes(nodes)) {
-    const foliage = (props.forest.coverage > 0 && props.forest.density > 0)
+    const foliage = (props.forest.enabled && props.forest.coverage > 0 && props.forest.density > 0)
       || props.grass.enabled
       || props.bushes.enabled
     collectProceduralLandscapeCoreTextureRefs(season, {

@@ -161,6 +161,8 @@ export interface ProceduralLandscapeRoadProps {
 }
 
 export interface ProceduralLandscapeForestProps {
+  /** Master visibility switch for every procedural tree layer. */
+  enabled: boolean
   coverage: number
   /** World-space wavelength of the density noise (meters). */
   scale: number
@@ -564,6 +566,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
       flattenStrength: 1,
     },
     forest: {
+      enabled: true,
       coverage: 1,
       scale: 600,
       seedOffset: 0,
@@ -768,6 +771,7 @@ export function clampProceduralLandscapeProps(
       flattenStrength: clampNumber(road?.flattenStrength, defaults.road.flattenStrength, 0, 1),
     },
     forest: {
+      enabled: forest?.enabled !== false,
       coverage: clampNumber(forest?.coverage, defaults.forest.coverage, 0, 1),
       scale: clampNumber(forest?.scale, defaults.forest.scale, 50, 4000),
       seedOffset: Math.round(clampNumber(forest?.seedOffset, defaults.forest.seedOffset, -1e6, 1e6)),

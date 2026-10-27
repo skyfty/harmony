@@ -113,6 +113,19 @@ describe('procedural landscape texture preload', () => {
     expect(ids).toEqual([...ids].sort((left, right) => left.localeCompare(right)))
   })
 
+  it('skips tree atlases while the forest switch is off and restores them when enabled', () => {
+    const props = createDefaultProceduralLandscapeProps({ id: 'terrain' })
+    props.forest.enabled = false
+
+    const disabledIds = collectProceduralLandscapeTexturePreloadIds(props, 'winter')
+    expect(disabledIds).not.toContain('winter_trees_0.99189e5d')
+    expect(disabledIds).toContain('winter_grass.2126ead2')
+
+    props.forest.enabled = true
+    expect(collectProceduralLandscapeTexturePreloadIds(props, 'winter'))
+      .toContain('winter_trees_0.99189e5d')
+  })
+
   it('selects the road style only when a generated route is ready', () => {
     const props = createDefaultProceduralLandscapeProps({ id: 'terrain' })
     props.road.width = 7

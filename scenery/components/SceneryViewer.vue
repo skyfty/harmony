@@ -6221,9 +6221,12 @@ function resolveLandscapePixelRatioCap(document: SceneJsonExportDocument | null)
       continue
     }
     const component = node.components?.['proceduralLandscape'] as {
-      props?: { forest?: { coverage?: unknown; density?: unknown } }
+      props?: { forest?: { enabled?: unknown; coverage?: unknown; density?: unknown } }
     } | undefined
     if (component?.props?.forest) {
+      if (component.props.forest.enabled === false) {
+        continue
+      }
       const coverage = Number(component.props.forest.coverage ?? 1)
       const density = Number(component.props.forest.density ?? 1)
       if (coverage > 0 && density > 0) {

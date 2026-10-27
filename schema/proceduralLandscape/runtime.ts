@@ -996,6 +996,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     textureNeeds: jsonKey([
       props.surface.enabled,
       props.surface.textures,
+      props.forest.enabled,
       props.forest.coverage,
       props.forest.density,
       props.grass.enabled,
@@ -1361,6 +1362,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       tagArtifact(farForestRoot)
       hostObject.add(farForestRoot)
     }
+    farForestRoot.visible = props.forest.enabled
     if (!sceneRoot) {
       // 水面是世界空间水平面（宿主的旋转会让它倾斜），挂到场景根。
       let node: THREE.Object3D | null = hostObject
@@ -2163,7 +2165,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
   function startWorldForest(): void {
     disposeWorldForest()
-    if (!grid || !densityField) {
+    if (!props.forest.enabled || !grid || !densityField) {
       return
     }
     const tier = PROCEDURAL_LANDSCAPE_QUALITY_TIERS[resolveQuality()]
@@ -2232,7 +2234,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function updateNearTreeLayers(camera: THREE.Vector3): void {
-    if (!worldForestIndex || !farForestRoot || !hostObject) {
+    if (!props.forest.enabled || !worldForestIndex || !farForestRoot || !hostObject) {
       return
     }
     const bands = resolveTreeLodBands(
@@ -3515,6 +3517,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function resolveNearTreeRadius(): number {
+    if (!props.forest.enabled) {
+      return 0
+    }
     // Keep a short 3D layer even on the low tier so nearby trees keep their
     // modeled detail without paying medium/high's full-terrain forest budget.
     // Weak devices still get a smaller radius and the low world-forest cap.
@@ -4045,7 +4050,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
 
     // Trees are supplied by the world-anchored placement index. The old chunk
     // planner remains as a fallback only while no world scan/index exists.
-    if (!worldForestScan && !worldForestIndex) {
+    if (props.forest.enabled && !worldForestScan && !worldForestIndex) {
       const treeSize = tier.treeChunkSize
       const treeRadius = tier.viewDistance
       const treeMinX = Math.floor((camera.x - treeRadius) / treeSize)
@@ -4170,6 +4175,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function updateTreeMeshes(camera: THREE.Vector3): void {
+    if (!props.forest.enabled) {
+      if (treeMeshManager) {
+        treeMeshManager.setView(camera, 0)
+        treeMeshManager.setVisible(false)
+      }
+      foliageUniforms.meshRadius.value = 0
+      return
+    }
     const radius = resolveNearTreeRadius()
     if (radius <= 0) {
       if (treeMeshManager) {
@@ -4181,8 +4194,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (!treeMeshManager && !treeMeshInitStarted && hostObject) {
       treeMeshInitStarted = true
       void createTreeMeshManager({ assetStore, hostInverse: hostObject ? hostInverse : null }).then((manager) => {
-        if (disposed) {
+        if (disposed || !props.forest.enabled) {
           manager.dispose()
+          treeMeshInitStarted = false
           return
         }
         treeMeshManager = manager
@@ -4233,6 +4247,27 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         ? radius
         : 0
     }
+  }
+
+  /** Keep the forest switch cheap: release tree-only layers and never rebuild the world. */
+  function applyForestVisibility(): void {
+    if (farForestRoot) {
+      farForestRoot.visible = props.forest.enabled
+    }
+    if (!props.forest.enabled) {
+      foliageUniforms.meshRadius.value = 0
+      if (treeMeshManager) {
+        treeMeshManager.dispose()
+        treeMeshManager = null
+        treeMeshInitStarted = false
+      }
+      disposeWorldForest()
+      return
+    }
+    if (grid && densityField && !dirty.world) {
+      startWorldForest()
+    }
+    forceStream = true
   }
 
   function applyTreeMeshSeasonTextures(): void {
@@ -4501,9 +4536,11 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     stats.seasonAssetsReady = seasonAssetsSeason === currentSeason
       && Boolean(seasonAssets)
       && seasonCoreAssetsReady
-    stats.nearTreeInstances = treeMeshManager?.instanceCount ?? 0
-    stats.nearCardInstances = (nearCardLayers?.broadleaf.count ?? 0) + (nearCardLayers?.conifer.count ?? 0)
-    stats.nearTreeReady = treeMeshManager?.ready === true
+    stats.nearTreeInstances = props.forest.enabled ? treeMeshManager?.instanceCount ?? 0 : 0
+    stats.nearCardInstances = props.forest.enabled
+      ? (nearCardLayers?.broadleaf.count ?? 0) + (nearCardLayers?.conifer.count ?? 0)
+      : 0
+    stats.nearTreeReady = props.forest.enabled && treeMeshManager?.ready === true
     stats.adaptive = {
       deviceTier: adaptiveProfile?.deviceTier ?? null,
       sceneAreaKm2: adaptiveProfile?.sceneAreaKm2 ?? null,
@@ -4595,7 +4632,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     const roadReady = Boolean(roadResult && roadResult.nodes.length >= 2)
     return {
       surface: props.surface.enabled && props.surface.textures,
-      forest: effectiveForestCoverage > 0 && effectiveForestDensity > 0,
+      forest: props.forest.enabled && effectiveForestCoverage > 0 && effectiveForestDensity > 0,
       grass: props.grass.enabled,
       bushes: props.bushes.enabled,
       // Road textures are loaded only after the trace produced a usable path.
@@ -4842,7 +4879,12 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   }
 
   function updateAdaptiveCalibration(deltaTime: number): void {
-    if (!adaptiveProfile || adaptiveState === 'disabled' || adaptiveState === 'done') {
+    if (
+      !props.forest.enabled
+      || !adaptiveProfile
+      || adaptiveState === 'disabled'
+      || adaptiveState === 'done'
+    ) {
       return
     }
     if (adaptiveState === 'waiting') {
@@ -5073,6 +5115,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
       const previousGenerationRevision = props.generationRevision
       const previousGeneratedRouteKey = jsonKey(props.road.generatedRoute)
+      const previousForestEnabled = props.forest.enabled
       props = clampProceduralLandscapeProps(next, hooks.nodeId)
       if (
         previousGenerationRevision !== props.generationRevision
@@ -5136,6 +5179,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         textureNeeds: jsonKey([
           props.surface.enabled,
           props.surface.textures,
+          props.forest.enabled,
           props.forest.coverage,
           props.forest.density,
           props.grass.enabled,
@@ -5152,8 +5196,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         chunkDebug: jsonKey(props.debug.showChunks),
       }
       const forestControlsChanged = keys.forest !== previousKeys.forest
+      const forestVisibilityChanged = previousForestEnabled !== props.forest.enabled
       const waterSpatialChanged = keys.waterSpatial !== previousKeys.waterSpatial
-      if (forestControlsChanged) {
+      if (forestControlsChanged || forestVisibilityChanged) {
         resetAdaptiveState()
       }
       if (keys.textureNeeds !== previousKeys.textureNeeds) {
@@ -5194,6 +5239,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       }
       if (forestControlsChanged && grid && densityField && !dirty.world) {
         startWorldForest()
+      }
+      if (forestVisibilityChanged) {
+        applyForestVisibility()
       }
       if (keys.lod !== previousKeys.lod) {
         applyTreeLodBands()

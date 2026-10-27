@@ -728,6 +728,7 @@ const featureSections: FieldSection[] = [
   {
     group: 'forest',
     title: '森林 / 树木',
+    withSwitch: true,
     blocks: [
       {
         title: '分布',
