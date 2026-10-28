@@ -490,6 +490,7 @@ import {
 	disposeSignboardBillboards,
 	runWithProgrammaticCameraMutation,
 	syncSignboardBillboards,
+	tickSignboardBillboardMotion,
 	type SignboardBillboardStyle,
 } from '@schema/overlay'
 import { grantCouponById, listCouponCatalog, type CouponSceneItem } from '@harmony/utils'
@@ -2906,25 +2907,28 @@ const behaviorProximityRuntime = createBehaviorProximityRuntime({
 const signboardNodeIds = new Set<string>()
 const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([])
 const SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
-	backgroundTopColor: 'rgba(10, 16, 28, 0.92)',
-	backgroundMiddleColor: 'rgba(18, 28, 42, 0.88)',
-	backgroundBottomColor: 'rgba(20, 36, 54, 0.82)',
-	borderColor: 'rgba(159, 214, 255, 0.22)',
-	glowColor: 'rgba(122, 198, 255, 0.12)',
-	sheenColor: 'rgba(255, 255, 255, 0.08)',
+	backgroundTopColor: 'rgba(14, 25, 42, 0.7)',
+	backgroundMiddleColor: 'rgba(18, 33, 53, 0.4)',
+	backgroundBottomColor: 'rgba(15, 29, 47, 0.14)',
+	borderColor: 'rgba(159, 214, 255, 0.1)',
+	glowColor: 'rgba(106, 207, 255, 0.3)',
+	sheenColor: 'rgba(255, 255, 255, 0.13)',
 	labelColor: '#f7fbff',
-	distanceColor: 'rgba(231, 244, 255, 0.82)',
-	dividerColor: 'rgba(255, 255, 255, 0.18)',
-	textShadowColor: 'rgba(0, 0, 0, 0.24)',
-	shadowColor: 'rgba(4, 31, 56, 0.28)',
-	shadowBlur: 6,
+	distanceColor: 'rgba(231, 244, 255, 0.9)',
+	dividerColor: 'rgba(255, 206, 112, 0.72)',
+	textShadowColor: 'rgba(0, 0, 0, 0.72)',
+	textStrokeColor: 'rgba(0, 0, 0, 0.96)',
+	distanceStrokeColor: 'rgba(0, 0, 0, 0.92)',
+	textStrokeWidth: 2,
+	shadowColor: 'rgba(4, 31, 56, 0.22)',
+	shadowBlur: 5,
 	shadowOffsetY: 1,
 	punchBadgeBackgroundTopColor: 'rgba(242, 255, 248, 0.98)',
 	punchBadgeBackgroundBottomColor: 'rgba(226, 255, 239, 0.94)',
 	punchBadgeBorderColor: 'rgba(115, 231, 170, 0.34)',
 	punchBadgeTextColor: '#2f8f67',
 	punchBadgeShadowColor: 'rgba(115, 231, 170, 0.26)',
-	distanceTextAccentColor: '#c88c12',
+	distanceTextAccentColor: '#ffd487',
 }
 const punchNodeIds = new Set<string>()
 const punchBadgeOverlayEntries = ref<Array<{
@@ -13276,6 +13280,7 @@ function startAnimationLoop() {
 		updateBillboardInstanceCameraWorldPosition(activeCamera.position)
 		updatePunchBadgeOverlayEntries(activeCamera, delta)
 		syncSceneSignboards(currentScene, activeCamera)
+		tickSignboardBillboardMotion((typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000)
 		updateInfoBoardOverlayPlacement(activeCamera)
 		updatePurposeControlsPlacement(activeCamera,delta)
 		updatePerFrameDiagnostics(delta)
@@ -17987,13 +17992,17 @@ watch(watchExclusiveUiActive, (active) => {
 					transform: `translate(-50%, -50%) scale(${entry.scale})`,
 				}"
 			>
-				<span
-					class="scene-preview__signboard-guidance-arrow"
-					:style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
-					aria-hidden="true"
-				>↑</span>
-				<span class="scene-preview__signboard-guidance-label">{{ entry.label }}</span>
-				<span class="scene-preview__signboard-guidance-distance">{{ entry.distanceLabel }}</span>
+				<div class="scene-preview__signboard-guidance-float">
+					<span
+						class="scene-preview__signboard-guidance-arrow"
+						:style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
+						aria-hidden="true"
+					>↑</span>
+					<div class="scene-preview__signboard-guidance-copy">
+						<span class="scene-preview__signboard-guidance-label">{{ entry.label }}</span>
+						<span class="scene-preview__signboard-guidance-distance">{{ entry.distanceLabel }}</span>
+					</div>
+				</div>
 			</div>
 		</div>
 		<div v-if="behaviorBubbleVisible" class="scene-preview__bubble-layer" aria-live="polite">
@@ -19389,25 +19398,8 @@ watch(watchExclusiveUiActive, (active) => {
 
 .scene-preview__signboard-guidance {
 	position: absolute;
-	display: flex;
-	align-items: center;
-	gap: 7px;
-	min-height: 38px;
-	padding: 5px 10px 5px 6px;
-	border: 1px solid rgba(159, 214, 255, 0.3);
-	border-radius: 999px;
-	background:
-		linear-gradient(180deg, rgba(16, 26, 42, 0.94), rgba(11, 20, 33, 0.9)),
-		linear-gradient(135deg, rgba(91, 180, 255, 0.12), rgba(255, 255, 255, 0.04));
-	box-shadow:
-		0 12px 28px rgba(0, 0, 0, 0.28),
-		inset 0 1px 0 rgba(255, 255, 255, 0.08);
-	backdrop-filter: blur(12px) saturate(1.08);
-	-webkit-backdrop-filter: blur(12px) saturate(1.08);
-	color: #f7fbff;
 	transform: translate(-50%, -50%);
 	box-sizing: border-box;
-	white-space: nowrap;
 	transition:
 		left 90ms linear,
 		top 90ms linear,
@@ -19416,23 +19408,50 @@ watch(watchExclusiveUiActive, (active) => {
 	will-change: left, top, transform;
 }
 
+.scene-preview__signboard-guidance-float {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-height: 42px;
+	padding: 4px 12px 5px 2px;
+	isolation: isolate;
+	animation: scene-preview-signboard-guidance-drift 6.4s ease-in-out infinite;
+}
+
 .scene-preview__signboard-guidance-arrow {
+	position: relative;
+	z-index: 1;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 26px;
-	height: 26px;
-	flex: 0 0 26px;
-	border: 1px solid rgba(144, 217, 255, 0.34);
-	border-radius: 50%;
-	background: rgba(102, 190, 255, 0.18);
-	box-shadow: 0 0 14px rgba(89, 188, 255, 0.16);
-	color: #bcecff;
-	font-size: 15px;
-	font-weight: 800;
+	width: 29px;
+	height: 29px;
+	flex: 0 0 29px;
+	color: #c9f1ff;
 	line-height: 1;
 	transform-origin: 50% 50%;
-	transition: transform 90ms linear;
+	transition: transform 160ms cubic-bezier(0.2, 0.9, 0.25, 1);
+	filter: drop-shadow(0 0 7px rgba(69, 180, 234, 0.6));
+	font-size: 21px;
+	font-weight: 800;
+	text-shadow:
+		-1px -1px 0 rgba(0, 11, 20, 0.96),
+		1px -1px 0 rgba(0, 11, 20, 0.96),
+		-1px 1px 0 rgba(0, 11, 20, 0.96),
+		1px 1px 0 rgba(0, 11, 20, 0.96),
+		0 2px 7px rgba(0, 0, 0, 0.88),
+		0 0 7px rgba(102, 210, 255, 0.7);
+}
+
+.scene-preview__signboard-guidance-copy {
+	position: relative;
+	z-index: 1;
+	display: flex;
+	min-width: 0;
+	flex: 1 1 auto;
+	flex-direction: column;
+	gap: 1px;
 }
 
 .scene-preview__signboard-guidance-label {
@@ -19440,33 +19459,62 @@ watch(watchExclusiveUiActive, (active) => {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	font-size: 0.78rem;
-	font-weight: 700;
+	color: #f3fbff;
+	font-size: 0.84rem;
+	font-weight: 800;
+	line-height: 1.2;
 	letter-spacing: 0.01em;
+	text-shadow:
+		-1px -1px 0 rgba(0, 12, 22, 0.96),
+		1px -1px 0 rgba(0, 12, 22, 0.96),
+		-1px 1px 0 rgba(0, 12, 22, 0.96),
+		1px 1px 0 rgba(0, 12, 22, 0.96),
+		-1px 0 0 rgba(0, 12, 22, 0.92),
+		1px 0 0 rgba(0, 12, 22, 0.92),
+		0 -1px 0 rgba(0, 12, 22, 0.92),
+		0 1px 0 rgba(0, 12, 22, 0.92),
+		0 2px 7px rgba(0, 0, 0, 0.9);
 }
 
 .scene-preview__signboard-guidance-distance {
 	flex: 0 0 auto;
-	padding-left: 7px;
-	border-left: 1px solid rgba(255, 255, 255, 0.16);
-	color: #ffd783;
-	font-size: 0.72rem;
-	font-weight: 700;
+	color: #ffd487;
+	font-size: 0.68rem;
+	font-weight: 800;
+	line-height: 1.2;
+	letter-spacing: 0.02em;
 	font-variant-numeric: tabular-nums;
+	text-shadow:
+		-1px -1px 0 rgba(0, 10, 20, 0.96),
+		1px -1px 0 rgba(0, 10, 20, 0.96),
+		-1px 1px 0 rgba(0, 10, 20, 0.96),
+		1px 1px 0 rgba(0, 10, 20, 0.96),
+		0 2px 7px rgba(0, 0, 0, 0.9);
+}
+
+@keyframes scene-preview-signboard-guidance-drift {
+	0%, 100% { transform: translateY(-0.8px); }
+	50% { transform: translateY(0.8px); }
 }
 
 @media (max-width: 480px) {
-	.scene-preview__signboard-guidance {
-		gap: 5px;
-		padding-right: 8px;
+	.scene-preview__signboard-guidance-float {
+		gap: 7px;
+		padding-right: 9px;
 	}
 
 	.scene-preview__signboard-guidance-label {
-		font-size: 0.72rem;
+		font-size: 0.8rem;
 	}
 
 	.scene-preview__signboard-guidance-distance {
-		font-size: 0.67rem;
+		font-size: 0.66rem;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.scene-preview__signboard-guidance-float {
+		animation: none;
 	}
 }
 

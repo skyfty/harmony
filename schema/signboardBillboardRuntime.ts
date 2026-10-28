@@ -25,12 +25,42 @@ interface SignboardRuntimeEntry {
   opacity: number
   worldWidth: number
   worldHeight: number
+  anchorPosition: THREE.Vector3
+  presentationScale: number
+  presentationOpacity: number
+  motionPhase: number
   lastDistanceLabelUpdateMs: number
 }
 
 const signboardEntries = new Map<string, SignboardRuntimeEntry>()
 const signboardAnchorScratch = new THREE.Vector3()
 const signboardCameraScratch = new THREE.Vector3()
+const SIGNBOARD_MOTION_PERIOD_SECONDS = 6.4
+const SIGNBOARD_MOTION_SCALE_AMPLITUDE = 0.008
+const SIGNBOARD_MOTION_BOB_WORLD = 0.012
+const SIGNBOARD_MOTION_OPACITY_AMPLITUDE = 0.015
+let reducedMotionQuery: MediaQueryList | null | undefined
+
+function resolveSignboardMotionPhase(nodeId: string): number {
+  let hash = 2166136261
+  for (let index = 0; index < nodeId.length; index += 1) {
+    hash ^= nodeId.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return ((hash >>> 0) / 4294967295) * Math.PI * 2
+}
+
+function shouldReduceSignboardMotion(): boolean {
+  if (reducedMotionQuery !== undefined) {
+    return reducedMotionQuery?.matches ?? false
+  }
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    reducedMotionQuery = null
+    return false
+  }
+  reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  return reducedMotionQuery.matches
+}
 
 function isRuntimeObjectEffectivelyVisible(object: THREE.Object3D | null | undefined): boolean {
   let current = object
@@ -54,6 +84,9 @@ export interface SignboardBillboardStyle {
   distanceColor: string
   dividerColor: string
   textShadowColor: string
+  textStrokeColor?: string
+  distanceStrokeColor?: string
+  textStrokeWidth?: number
   shadowColor: string
   shadowBlur: number
   shadowOffsetY: number
@@ -66,17 +99,18 @@ export interface SignboardBillboardStyle {
 }
 
 const TEXTURE_DPR = 2
-const CARD_PADDING_X = 28
-const CARD_PADDING_Y = 18
-const CONTENT_GAP = 18
+const CARD_PADDING_X = 24
+const CARD_PADDING_Y = 16
+const CONTENT_GAP = 16
 const LABEL_FONT_MAX = 28
 const LABEL_FONT_MIN = 18
 const CARD_MIN_WIDTH = 280
 const CARD_MAX_WIDTH = 460
-const CARD_CORNER_RADIUS = 22
 const WORLD_HEIGHT = 1.16
 const BILLBOARD_WORLD_Y_OFFSET = 0.55
-const DIVIDER_WIDTH = 1.5
+const BEACON_AREA_WIDTH = 24
+const BEACON_CORE_RADIUS = 3.2
+const BEACON_HALO_RADIUS = 11
 const PUNCH_BADGE_DIAMETER = 24
 const PUNCH_BADGE_GAP = 10
 const PUNCH_BADGE_TEXT = '✓'
@@ -93,6 +127,9 @@ const DEFAULT_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   distanceColor: 'rgba(231, 244, 255, 0.82)',
   dividerColor: 'rgba(255, 255, 255, 0.18)',
   textShadowColor: 'rgba(255, 255, 255, 0.14)',
+  textStrokeColor: 'rgba(0, 0, 0, 0.72)',
+  distanceStrokeColor: 'rgba(255, 255, 255, 0.84)',
+  textStrokeWidth: 1.4,
   shadowColor: 'rgba(255, 255, 255, 0.12)',
   shadowBlur: 6,
   shadowOffsetY: 1,
@@ -104,17 +141,6 @@ const DEFAULT_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   distanceTextAccentColor: '#c88c12',
 }
 
-function roundRectPath(context: SignboardCanvasContext, x: number, y: number, width: number, height: number, radius: number): void {
-  const actualRadius = Math.min(radius, width / 2, height / 2)
-  context.beginPath()
-  context.moveTo(x + actualRadius, y)
-  context.arcTo(x + width, y, x + width, y + height, actualRadius)
-  context.arcTo(x + width, y + height, x, y + height, actualRadius)
-  context.arcTo(x, y + height, x, y, actualRadius)
-  context.arcTo(x, y, x + width, y, actualRadius)
-  context.closePath()
-}
-
 function resolveStyle(appearance?: Partial<SignboardBillboardStyle>): SignboardBillboardStyle {
   return {
     ...DEFAULT_SIGNBOARD_BILLBOARD_STYLE,
@@ -122,34 +148,56 @@ function resolveStyle(appearance?: Partial<SignboardBillboardStyle>): SignboardB
   }
 }
 
-function drawSignboardBackground(context: SignboardCanvasContext, width: number, height: number, style: SignboardBillboardStyle): void {
-  roundRectPath(context, 0, 0, width, height, CARD_CORNER_RADIUS)
-  const fill = context.createLinearGradient(0, 0, 0, height)
-  fill.addColorStop(0, style.backgroundTopColor)
-  fill.addColorStop(0.36, style.backgroundMiddleColor)
-  fill.addColorStop(1, style.backgroundBottomColor)
-  context.fillStyle = fill
+function drawSignboardBeacon(
+  context: SignboardCanvasContext,
+  centerX: number,
+  centerY: number,
+  style: SignboardBillboardStyle,
+): void {
+  const halo = context.createRadialGradient(
+    centerX,
+    centerY,
+    0,
+    centerX,
+    centerY,
+    BEACON_HALO_RADIUS,
+  )
+  halo.addColorStop(0, style.labelColor)
+  halo.addColorStop(0.22, style.glowColor)
+  halo.addColorStop(1, 'rgba(0, 0, 0, 0)')
+  context.fillStyle = halo
+  context.beginPath()
+  context.arc(centerX, centerY, BEACON_HALO_RADIUS, 0, Math.PI * 2)
   context.fill()
 
-  context.lineWidth = 1.2
-  context.strokeStyle = style.borderColor
-  context.stroke()
-
-  const glow = context.createRadialGradient(width * 0.16, height * 0.28, 0, width * 0.16, height * 0.28, width * 0.72)
-  glow.addColorStop(0, 'rgba(255, 255, 255, 0.18)')
-  glow.addColorStop(0.5, style.glowColor)
-  glow.addColorStop(1, 'rgba(115, 196, 255, 0)')
-  context.fillStyle = glow
-  context.fillRect(0, 0, width, height)
-
-  context.fillStyle = style.sheenColor
-  context.fillRect(14, 7, Math.max(0, width - 28), 1)
-  context.fillStyle = 'rgba(255, 255, 255, 0.03)'
-  context.fillRect(14, height - 8, Math.max(0, width - 28), 1)
+  context.fillStyle = style.labelColor
+  context.beginPath()
+  context.arc(centerX, centerY, BEACON_CORE_RADIUS, 0, Math.PI * 2)
+  context.fill()
 }
 
 function measureTextWidth(context: SignboardCanvasContext, text: string): number {
   return context.measureText(text).width
+}
+
+function drawOutlinedCanvasText(
+  context: SignboardCanvasContext,
+  text: string,
+  x: number,
+  y: number,
+  font: string,
+  fillColor: string,
+  strokeColor: string,
+  strokeWidth: number,
+): void {
+  context.font = font
+  context.lineJoin = 'round'
+  context.lineCap = 'round'
+  context.lineWidth = Math.max(0.8, strokeWidth)
+  context.strokeStyle = strokeColor
+  context.strokeText(text, x, y)
+  context.fillStyle = fillColor
+  context.fillText(text, x, y)
 }
 
 function fitLabelFontSize(context: SignboardCanvasContext, label: string, maxWidth: number): number {
@@ -226,7 +274,7 @@ function drawSignboardTexture(entry: SignboardRuntimeEntry, style: SignboardBill
   const labelAreaWidth = Math.min(Math.max(labelWidth, 136), 280)
   const distanceAreaWidth = Math.min(Math.max(distanceWidth + 24, 72), 108)
   const badgeAreaWidth = showPunchBadge ? punchBadgeDiameter + punchBadgeGap : 0
-  const contentWidth = labelAreaWidth + CONTENT_GAP + DIVIDER_WIDTH + CONTENT_GAP + distanceAreaWidth + badgeAreaWidth
+  const contentWidth = BEACON_AREA_WIDTH + labelAreaWidth + CONTENT_GAP + distanceAreaWidth + badgeAreaWidth
   const cardWidth = Math.min(CARD_MAX_WIDTH, Math.max(CARD_MIN_WIDTH, Math.ceil(contentWidth + CARD_PADDING_X * 2)))
   const cardHeight = Math.ceil(CARD_PADDING_Y * 2 + Math.max(labelFontSize, distanceFontSize) + 8)
 
@@ -241,7 +289,6 @@ function drawSignboardTexture(entry: SignboardRuntimeEntry, style: SignboardBill
 
   context.resetTransform?.()
   context.scale(TEXTURE_DPR, TEXTURE_DPR)
-  drawSignboardBackground(context, cardWidth, cardHeight, style)
 
   context.textBaseline = 'middle'
   context.shadowColor = style.textShadowColor
@@ -249,30 +296,47 @@ function drawSignboardTexture(entry: SignboardRuntimeEntry, style: SignboardBill
   context.shadowOffsetY = style.shadowOffsetY
 
   const baselineY = cardHeight / 2 + 1
-  const leftTextX = CARD_PADDING_X + 16
+  const beaconX = CARD_PADDING_X + 8
+  const leftTextX = CARD_PADDING_X + BEACON_AREA_WIDTH + 4
   const labelRightLimit = leftTextX + labelAreaWidth
   const labelText = label.length ? label : ' '
+  drawSignboardBeacon(context, beaconX, baselineY, style)
   context.textAlign = 'left'
-  context.fillStyle = style.labelColor
-  context.font = `700 ${labelFontSize}px sans-serif`
-  context.fillText(labelText, leftTextX, baselineY)
+  drawOutlinedCanvasText(
+    context,
+    labelText,
+    leftTextX,
+    baselineY,
+    `800 ${labelFontSize}px sans-serif`,
+    style.labelColor,
+    style.textStrokeColor ?? 'rgba(0, 0, 0, 0.72)',
+    style.textStrokeWidth ?? 1.4,
+  )
 
-  const dividerX = Math.min(cardWidth - CARD_PADDING_X - distanceAreaWidth - CONTENT_GAP, labelRightLimit + CONTENT_GAP)
+  const markerDotX = Math.min(
+    cardWidth - CARD_PADDING_X - distanceAreaWidth - badgeAreaWidth - CONTENT_GAP / 2,
+    labelRightLimit + CONTENT_GAP / 2,
+  )
   context.shadowColor = 'transparent'
-  context.strokeStyle = style.dividerColor
-  context.lineWidth = DIVIDER_WIDTH
+  context.fillStyle = style.distanceTextAccentColor
   context.beginPath()
-  context.moveTo(dividerX, CARD_PADDING_Y - 2)
-  context.lineTo(dividerX, cardHeight - CARD_PADDING_Y + 2)
-  context.stroke()
+  context.arc(markerDotX, baselineY, 1.25, 0, Math.PI * 2)
+  context.fill()
 
-  const distanceX = cardWidth - CARD_PADDING_X - 4
+  const distanceX = cardWidth - CARD_PADDING_X - badgeAreaWidth - 4
   context.textAlign = 'right'
   context.shadowColor = style.textShadowColor
   context.shadowBlur = Math.max(0, style.shadowBlur - 2)
-  context.fillStyle = style.distanceTextAccentColor
-  context.font = `600 ${distanceFontSize}px sans-serif`
-  context.fillText(distance, distanceX, baselineY)
+  drawOutlinedCanvasText(
+    context,
+    distance,
+    distanceX,
+    baselineY,
+    `700 ${distanceFontSize}px sans-serif`,
+    style.distanceTextAccentColor,
+    style.distanceStrokeColor ?? style.textStrokeColor ?? 'rgba(0, 0, 0, 0.72)',
+    (style.textStrokeWidth ?? 1.4) * 0.82,
+  )
 
   if (showPunchBadge) {
     drawPunchBadge(context, cardWidth - CARD_PADDING_X - punchBadgeDiameter / 2, baselineY, style, punchBadgeFontSize, punchBadgeDiameter)
@@ -329,6 +393,10 @@ function createSignboardEntry(scene: THREE.Scene, nodeId: string, labelText: str
     opacity: 1,
     worldWidth: 1,
     worldHeight: WORLD_HEIGHT,
+    anchorPosition: new THREE.Vector3(),
+    presentationScale: 1,
+    presentationOpacity: 0,
+    motionPhase: resolveSignboardMotionPhase(nodeId),
     lastDistanceLabelUpdateMs: Date.now(),
   }
   drawSignboardTexture(entry, style)
@@ -351,6 +419,7 @@ function updateSignboardEntry(
       entry.sprite.visible = false
       entry.material.opacity = 0
       entry.opacity = 0
+      entry.presentationOpacity = 0
     }
     return
   }
@@ -360,6 +429,7 @@ function updateSignboardEntry(
       entry.sprite.visible = false
       entry.material.opacity = 0
       entry.opacity = 0
+      entry.presentationOpacity = 0
     }
     return
   }
@@ -405,6 +475,9 @@ function updateSignboardEntry(
   entry.material.opacity = cardVisible ? presentation.opacity : 0
   entry.sprite.visible = cardVisible
   entry.opacity = cardVisible ? presentation.opacity : 0
+  entry.anchorPosition.copy(signboardAnchorScratch)
+  entry.presentationScale = presentation.scale
+  entry.presentationOpacity = cardVisible ? presentation.opacity : 0
 }
 
 export function syncSignboardBillboards(params: {
@@ -491,6 +564,44 @@ export function syncSignboardBillboards(params: {
     viewportWidth: viewportWidth!,
     viewportHeight: viewportHeight!,
     safeArea: params.safeArea,
+  })
+}
+
+export function tickSignboardBillboardMotion(timeSeconds: number): void {
+  if (!signboardEntries.size) {
+    return
+  }
+  const resolvedTime = Number.isFinite(timeSeconds) ? timeSeconds : 0
+  const motionReduced = shouldReduceSignboardMotion()
+
+  signboardEntries.forEach((entry) => {
+    if (!entry.sprite.visible) {
+      return
+    }
+    if (motionReduced) {
+      entry.sprite.position.copy(entry.anchorPosition)
+      entry.sprite.scale.set(
+        entry.worldWidth * entry.presentationScale,
+        entry.worldHeight * entry.presentationScale,
+        1,
+      )
+      entry.material.opacity = entry.presentationOpacity
+      return
+    }
+
+    const cycle = resolvedTime / SIGNBOARD_MOTION_PERIOD_SECONDS * Math.PI * 2 + entry.motionPhase
+    const breathScale = 1 + Math.sin(cycle) * SIGNBOARD_MOTION_SCALE_AMPLITUDE
+    const bob = Math.sin(cycle) * SIGNBOARD_MOTION_BOB_WORLD
+    const glow = 1 + Math.sin(cycle * 0.875 + entry.motionPhase * 0.37) * SIGNBOARD_MOTION_OPACITY_AMPLITUDE
+
+    entry.sprite.position.copy(entry.anchorPosition)
+    entry.sprite.position.y += bob
+    entry.sprite.scale.set(
+      entry.worldWidth * entry.presentationScale * breathScale,
+      entry.worldHeight * entry.presentationScale * breathScale,
+      1,
+    )
+    entry.material.opacity = Math.min(1, Math.max(0, entry.presentationOpacity * glow))
   })
 }
 

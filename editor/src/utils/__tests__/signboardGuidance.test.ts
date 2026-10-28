@@ -89,8 +89,8 @@ describe('Signboard distance presentation', () => {
 
     expect(computeSignboardDistancePresentation(2000)).toEqual({
       visible: true,
-      opacity: SIGNBOARD_GUIDANCE_MIN_OPACITY,
-      scale: SIGNBOARD_GUIDANCE_MIN_SCALE,
+      opacity: 0.72,
+      scale: 0.82,
     })
     expect(computeSignboardDistancePresentation(5000)).toEqual(computeSignboardDistancePresentation(2000))
   })
@@ -120,25 +120,26 @@ describe('Signboard guidance overlay', () => {
     expect(entries[0]?.scale).toBeLessThan(SIGNBOARD_CARD_FAR_SCALE)
   })
 
-  it('places front-facing forward and side targets on the expected edges', () => {
+  it('places only in-view far targets and keeps their arrow bearings', () => {
     const entries = resolve([
       candidate('forward', 0, 2, -200, 200),
-      candidate('left', -100, 2, -10, 100),
-      candidate('right', 100, 2, -10, 100),
+      candidate('left', -80, 2, -200, 200),
+      candidate('right', 80, 2, -200, 200),
+      candidate('offscreen', -100, 2, -10, 100),
       candidate('rear', 0, 2, 20, 20),
     ])
     const byId = new Map(entries.map((entry) => [entry.nodeId, entry]))
     const forward = byId.get('forward')
     const left = byId.get('left')
     const right = byId.get('right')
+    const offscreen = byId.get('offscreen')
     const rear = byId.get('rear')
 
     expect(forward).toMatchObject({ nodeId: 'forward', edge: 'top' })
     expect(forward?.arrowAngleDeg).toBeCloseTo(0, 4)
-    expect(left).toMatchObject({ nodeId: 'left', edge: 'left' })
-    expect(left?.arrowAngleDeg).toBeCloseTo(-84.2894, 3)
-    expect(right).toMatchObject({ nodeId: 'right', edge: 'right' })
-    expect(right?.arrowAngleDeg).toBeCloseTo(84.2894, 3)
+    expect(left?.arrowAngleDeg).toBeCloseTo(-21.8014, 3)
+    expect(right?.arrowAngleDeg).toBeCloseTo(21.8014, 3)
+    expect(offscreen).toBeUndefined()
     expect(rear).toBeUndefined()
   })
 
@@ -150,13 +151,17 @@ describe('Signboard guidance overlay', () => {
     expect(resolve([candidate('near-offscreen', 100, 2, -6, 7)])).toEqual([])
   })
 
+  it('does not show far targets outside the current camera viewport', () => {
+    expect(resolve([candidate('offscreen-far', 100, 2, -10, 200)])).toEqual([])
+  })
+
   it('limits results to the four nearest targets with deterministic ties', () => {
     const entries = resolve([
-      candidate('node-e', 120, 2, -200, 300),
-      candidate('node-d', -120, 2, -200, 200),
-      candidate('node-c', 0, 2, -50, 180),
-      candidate('node-b', 200, 2, -100, 100),
-      candidate('node-a', -200, 2, -100, 100),
+      candidate('node-e', 60, 2, -200, 400),
+      candidate('node-d', 30, 2, -200, 300),
+      candidate('node-c', 0, 2, -200, 220),
+      candidate('node-b', -30, 2, -200, 200),
+      candidate('node-a', -60, 2, -200, 180),
     ])
 
     expect(entries.map((entry) => entry.nodeId)).toEqual(['node-a', 'node-b', 'node-c', 'node-d'])
@@ -165,7 +170,7 @@ describe('Signboard guidance overlay', () => {
   it('keeps markers inside the configured safe area', () => {
     const entries = resolve([
       candidate('forward', 0, 2, -500, 500),
-      candidate('right-rear', 100, 2, -1, 500, 'A very long signboard display name'),
+      candidate('right', 100, 2, -500, 500, 'A very long signboard display name'),
     ])
 
     for (const entry of entries) {

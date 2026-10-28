@@ -203,16 +203,20 @@
           id="viewer-waypoint-menu-panel"
           class="viewer-waypoint-sheet__panel"
           data-control-skip="guide-waypoints"
+          @wheel.prevent="handleGuideWaypointWheel"
+          @mousedown="handleGuideWaypointMouseDown"
+          @touchstart="handleGuideWaypointTouchStart"
+          @dragstart.prevent
           @tap.stop
         >
           <view class="viewer-waypoint-sheet__handle" aria-hidden="true"></view>
           <scroll-view
             scroll-x
+            direction="horizontal"
             enable-flex
             class="viewer-waypoint-sheet__list"
             :show-scrollbar="false"
             data-control-skip="guide-waypoints"
-            @wheel.prevent="handleGuideWaypointWheel"
           >
             <view class="viewer-waypoint-sheet__grid">
               <view
@@ -223,8 +227,14 @@
                   'is-unavailable': isGuideWaypointMenuItemDisabled(item),
                   'is-loading': item.loading,
                 }"
+                role="button"
+                :tabindex="isGuideWaypointMenuItemDisabled(item) ? -1 : 0"
+                :aria-disabled="isGuideWaypointMenuItemDisabled(item)"
+                :aria-label="`${item.stopName}，${guideWaypointTravelModeLabel(item)}`"
                 data-control-skip="guide-waypoints"
-                @tap="handleGuideWaypointSelect(item)"
+                @tap.stop.prevent="handleGuideWaypointSelect(item)"
+                @keydown.enter.prevent="handleGuideWaypointSelect(item)"
+                @keydown.space.prevent="handleGuideWaypointSelect(item)"
               >
                 <view class="viewer-waypoint-sheet__cover">
                   <image
@@ -232,6 +242,7 @@
                     class="viewer-waypoint-sheet__cover-image"
                     :src="item.imageUrl"
                     mode="aspectFill"
+                    draggable="false"
                     @error="handleGuideWaypointImageError(item)"
                   />
                   <view
@@ -266,15 +277,6 @@
                     }}
                   </text>
                 </view>
-                <button
-                  type="button"
-                  class="viewer-waypoint-sheet__card-hit-area"
-                  :disabled="isGuideWaypointMenuItemDisabled(item)"
-                  hover-class="none"
-                  :aria-label="`${item.stopName}，${guideWaypointTravelModeLabel(item)}`"
-                  data-control-skip="guide-waypoints"
-                  @tap.stop.prevent="handleGuideWaypointSelect(item)"
-                />
               </view>
             </view>
             <view
@@ -330,15 +332,19 @@
             transform: `translate(-50%, -50%) scale(${entry.scale})`,
           }"
         >
-          <view
-            class="viewer-signboard-guidance__arrow"
-            :style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
-            aria-hidden="true"
-          >
-            <text class="viewer-signboard-guidance__arrow-icon">↑</text>
+          <view class="viewer-signboard-guidance__float">
+            <view
+              class="viewer-signboard-guidance__arrow"
+              :style="{ transform: `rotate(${entry.arrowAngleDeg}deg)` }"
+              aria-hidden="true"
+            >
+              <text class="viewer-signboard-guidance__arrow-icon">↑</text>
+            </view>
+            <view class="viewer-signboard-guidance__copy">
+              <text class="viewer-signboard-guidance__label">{{ entry.label }}</text>
+              <text class="viewer-signboard-guidance__distance">{{ entry.distanceLabel }}</text>
+            </view>
           </view>
-          <text class="viewer-signboard-guidance__label">{{ entry.label }}</text>
-          <text class="viewer-signboard-guidance__distance">{{ entry.distanceLabel }}</text>
         </view>
       </view>
       <view v-if="behaviorBubbleVisible" class="viewer-bubble-layer" aria-live="polite">
@@ -876,7 +882,14 @@ import {
   resolveWechatWaypointThumbnailRuntime,
   writeWechatWaypointThumbnailFile,
 } from '../common/utils/waypointThumbnailSource';
-import { resolveHorizontalScrollDelta } from '../common/utils/horizontalScroll';
+import {
+  resolveHorizontalDragScrollLeft,
+  resolveHorizontalScrollDelta,
+} from '../common/utils/horizontalScroll';
+import {
+  resolveAutoTourManualTakeoverKind,
+  type AutoTourManualTakeoverKind,
+} from '../common/utils/autoTourManualTakeover';
 import { createGltfParseWorkerFactory } from '../common/utils/gltfParseWorkerHost';
 import {
   createGroundRuntimeMeshFromSidecar,
@@ -1288,6 +1301,7 @@ import {
   createScenePreviewPerfController,
   disposeSignboardBillboards,
   syncSignboardBillboards,
+  tickSignboardBillboardMotion,
   runWithProgrammaticCameraMutation,
   isProgrammaticCameraMutationActive,
   SIGNBOARD_CLOSE_FADE_DISTANCE,
@@ -2903,25 +2917,28 @@ const signboardNodeIds = new Set<string>();
 const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([]);
 const punchNodeIds = new Set<string>();
 const SCENERY_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
-  backgroundTopColor: 'rgba(255, 255, 255, 0.88)',
-  backgroundMiddleColor: 'rgba(244, 249, 255, 0.76)',
-  backgroundBottomColor: 'rgba(232, 241, 249, 0.68)',
-  borderColor: 'rgba(153, 193, 255, 0.22)',
-  glowColor: 'rgba(122, 198, 255, 0.10)',
-  sheenColor: 'rgba(255, 255, 255, 0.12)',
+  backgroundTopColor: 'rgba(255, 255, 255, 0.46)',
+  backgroundMiddleColor: 'rgba(240, 249, 255, 0.25)',
+  backgroundBottomColor: 'rgba(218, 237, 249, 0.06)',
+  borderColor: 'rgba(153, 193, 255, 0.08)',
+  glowColor: 'rgba(122, 207, 255, 0.2)',
+  sheenColor: 'rgba(255, 255, 255, 0.16)',
   labelColor: '#12314d',
-  distanceColor: 'rgba(21, 50, 79, 0.68)',
-  dividerColor: 'rgba(107, 152, 198, 0.16)',
-  textShadowColor: 'rgba(255, 255, 255, 0.08)',
-  shadowColor: 'rgba(52, 87, 128, 0.16)',
-  shadowBlur: 5,
+  distanceColor: 'rgba(21, 50, 79, 0.74)',
+  dividerColor: 'rgba(202, 153, 45, 0.62)',
+  textShadowColor: 'rgba(7, 28, 45, 0.58)',
+  textStrokeColor: 'rgba(255, 255, 255, 0.96)',
+  distanceStrokeColor: 'rgba(255, 255, 255, 0.9)',
+  textStrokeWidth: 1.8,
+  shadowColor: 'rgba(52, 87, 128, 0.1)',
+  shadowBlur: 4,
   shadowOffsetY: 1,
   punchBadgeBackgroundTopColor: 'rgba(255, 255, 255, 0.92)',
   punchBadgeBackgroundBottomColor: 'rgba(244, 249, 255, 0.82)',
   punchBadgeBorderColor: 'rgba(153, 193, 255, 0.24)',
   punchBadgeTextColor: '#28506f',
   punchBadgeShadowColor: 'rgba(83, 126, 173, 0.12)',
-  distanceTextAccentColor: '#c88c12',
+  distanceTextAccentColor: '#7d5000',
 }
 type PunchBadgeOverlayEntry = {
   id: string;
@@ -10453,6 +10470,7 @@ async function resolveGuideWaypointThumbnailUrl(assetId: string): Promise<string
 }
 
 function closeGuideWaypointMenu(): void {
+  captureGuideWaypointScrollLeft()
   guideWaypointMenuOpen.value = false;
 }
 
@@ -10502,24 +10520,124 @@ function toggleGuideWaypointMenu(): void {
   if (!guideWaypointMenuVisible.value) {
     return;
   }
+  if (guideWaypointMenuOpen.value) {
+    captureGuideWaypointScrollLeft()
+  }
   guideWaypointMenuOpen.value = !guideWaypointMenuOpen.value;
   if (guideWaypointMenuOpen.value) {
+    if (activeDrivePadKind === 'vehicle') {
+      endVehiclePad()
+    } else if (activeDrivePadKind === 'character') {
+      endCharacterPad()
+    }
     closeViewerEnvironmentMenu();
+    scheduleGuideWaypointScrollRestore()
   }
 }
 
-function handleGuideWaypointWheel(event: Event): void {
-  const root = event.currentTarget as HTMLElement | null;
+const GUIDE_WAYPOINT_DRAG_THRESHOLD_PX = 6
+const GUIDE_WAYPOINT_TAP_SUPPRESSION_MS = 400
+const GUIDE_WAYPOINT_MOUSE_INPUT_ID = -3
+const guideWaypointPointerDrag = {
+  pointerId: -1,
+  startX: 0,
+  startY: 0,
+  startScrollLeft: 0,
+  moved: false,
+  scrollable: null as HTMLElement | null,
+};
+let guideWaypointDragInput: 'mouse' | 'touch' | 'pointer' | null = null
+let guideWaypointSavedScrollLeft = 0
+let guideWaypointTapSuppressed = false;
+let guideWaypointTapSuppressionTimer: ReturnType<typeof setTimeout> | null = null;
+
+function resolveGuideWaypointPanelElement(): HTMLElement | null {
+  if (!isBrowserEnvironment) {
+    return null
+  }
+  return document.getElementById('viewer-waypoint-menu-panel')
+}
+
+function resolveGuideWaypointScrollable(root: HTMLElement | null): HTMLElement | null {
   if (!root || typeof root.querySelectorAll !== 'function') {
-    return;
+    return null;
   }
   const candidates = [
     root,
     ...Array.from(root.querySelectorAll<HTMLElement>('.uni-scroll-view, .uni-scroll-view-content')),
   ];
-  const scrollable = candidates.find((candidate) => candidate.scrollWidth > candidate.clientWidth + 1)
+  return candidates.find((candidate) => candidate.scrollWidth > candidate.clientWidth + 1)
     ?? candidates[1]
     ?? root;
+}
+
+function captureGuideWaypointScrollLeft(): void {
+  const scrollable = resolveGuideWaypointScrollable(resolveGuideWaypointPanelElement())
+  if (scrollable) {
+    guideWaypointSavedScrollLeft = scrollable.scrollLeft
+  }
+}
+
+function scheduleGuideWaypointScrollRestore(): void {
+  if (!isBrowserEnvironment) {
+    return
+  }
+  void nextTick(() => {
+    let attempts = 0
+    const restore = () => {
+      if (!guideWaypointMenuOpen.value) {
+        return
+      }
+      const scrollable = resolveGuideWaypointScrollable(resolveGuideWaypointPanelElement())
+      if (!scrollable) {
+        return
+      }
+      const maxScrollLeft = Math.max(
+        scrollable.scrollWidth - scrollable.clientWidth,
+        0,
+      )
+      if (maxScrollLeft <= 0 && attempts < 8) {
+        attempts += 1
+        window.requestAnimationFrame(restore)
+        return
+      }
+      const target = Math.min(
+        Math.max(guideWaypointSavedScrollLeft, 0),
+        maxScrollLeft,
+      )
+      scrollable.scrollLeft = target
+      if (
+        Math.abs(scrollable.scrollLeft - target) > 1
+        && attempts < 10
+      ) {
+        attempts += 1
+        window.requestAnimationFrame(restore)
+      }
+    }
+    window.requestAnimationFrame(restore)
+  })
+}
+
+function handleGuideWaypointNativeScroll(event: Event): void {
+  const target = event.target
+  const panel = resolveGuideWaypointPanelElement()
+  if (
+    !(target instanceof HTMLElement)
+    || !panel?.contains(target)
+    || !target.classList.contains('uni-scroll-view')
+    || target.scrollWidth <= target.clientWidth + 1
+  ) {
+    return
+  }
+  guideWaypointSavedScrollLeft = target.scrollLeft
+}
+
+function handleGuideWaypointWheel(event: Event): void {
+  const root = resolveGuideWaypointPanelElement();
+  const scrollable = resolveGuideWaypointScrollable(root);
+  if (!scrollable) {
+    return;
+  }
   const wheelEvent = event as WheelEvent;
   const delta = resolveHorizontalScrollDelta({
     deltaMode: wheelEvent.deltaMode,
@@ -10532,6 +10650,223 @@ function handleGuideWaypointWheel(event: Event): void {
   }
   event.preventDefault();
   scrollable.scrollLeft += delta;
+  guideWaypointSavedScrollLeft = scrollable.scrollLeft
+}
+
+function suppressGuideWaypointTapAfterDrag(): void {
+  guideWaypointTapSuppressed = true;
+  if (guideWaypointTapSuppressionTimer) {
+    clearTimeout(guideWaypointTapSuppressionTimer);
+  }
+  guideWaypointTapSuppressionTimer = setTimeout(() => {
+    guideWaypointTapSuppressed = false;
+    guideWaypointTapSuppressionTimer = null;
+  }, GUIDE_WAYPOINT_TAP_SUPPRESSION_MS);
+}
+
+function detachGuideWaypointDragListeners(): void {
+  if (!isBrowserEnvironment) {
+    return
+  }
+  window.removeEventListener('mousemove', handleGuideWaypointMouseMove, true)
+  window.removeEventListener('mouseup', handleGuideWaypointMouseEnd, true)
+  window.removeEventListener('touchmove', handleGuideWaypointTouchMove, true)
+  window.removeEventListener('touchend', handleGuideWaypointTouchEnd, true)
+  window.removeEventListener('touchcancel', handleGuideWaypointTouchEnd, true)
+}
+
+function resetGuideWaypointPointerDrag(suppressTap: boolean): void {
+  const moved = guideWaypointPointerDrag.moved;
+  detachGuideWaypointDragListeners()
+  guideWaypointDragInput = null
+  guideWaypointPointerDrag.pointerId = -1;
+  guideWaypointPointerDrag.moved = false;
+  guideWaypointPointerDrag.scrollable = null;
+  if (suppressTap && moved) {
+    suppressGuideWaypointTapAfterDrag();
+  }
+}
+
+function beginGuideWaypointDrag(
+  input: 'mouse' | 'touch' | 'pointer',
+  pointerId: number,
+  clientX: number,
+  clientY: number,
+): boolean {
+  const scrollable = resolveGuideWaypointScrollable(resolveGuideWaypointPanelElement())
+  if (!scrollable) {
+    return false
+  }
+  detachGuideWaypointDragListeners()
+  guideWaypointDragInput = input
+  guideWaypointPointerDrag.pointerId = pointerId
+  guideWaypointPointerDrag.startX = clientX
+  guideWaypointPointerDrag.startY = clientY
+  guideWaypointPointerDrag.startScrollLeft = scrollable.scrollLeft
+  guideWaypointPointerDrag.moved = false
+  guideWaypointPointerDrag.scrollable = scrollable
+  if (!isBrowserEnvironment) {
+    return true
+  }
+  if (input === 'mouse') {
+    window.addEventListener('mousemove', handleGuideWaypointMouseMove, true)
+    window.addEventListener('mouseup', handleGuideWaypointMouseEnd, true)
+  } else if (input === 'touch') {
+    window.addEventListener('touchmove', handleGuideWaypointTouchMove, {
+      capture: true,
+      passive: false,
+    })
+    window.addEventListener('touchend', handleGuideWaypointTouchEnd, true)
+    window.addEventListener('touchcancel', handleGuideWaypointTouchEnd, true)
+  }
+  return true
+}
+
+function moveGuideWaypointDrag(
+  clientX: number,
+  clientY: number,
+  event?: Event,
+): void {
+  const drag = guideWaypointPointerDrag
+  if (drag.pointerId < 0 || !drag.scrollable) {
+    return;
+  }
+  const deltaX = clientX - drag.startX;
+  const deltaY = clientY - drag.startY;
+  if (!drag.moved) {
+    if (Math.hypot(deltaX, deltaY) < GUIDE_WAYPOINT_DRAG_THRESHOLD_PX) {
+      return;
+    }
+    if (Math.abs(deltaX) <= Math.abs(deltaY)) {
+      resetGuideWaypointPointerDrag(false);
+      return;
+    }
+    drag.moved = true;
+  }
+  if (event?.cancelable) {
+    event.preventDefault()
+  }
+  drag.scrollable.scrollLeft = resolveHorizontalDragScrollLeft({
+    startScrollLeft: drag.startScrollLeft,
+    startX: drag.startX,
+    currentX: clientX,
+    maxScrollLeft: drag.scrollable.scrollWidth - drag.scrollable.clientWidth,
+  });
+  guideWaypointSavedScrollLeft = drag.scrollable.scrollLeft
+}
+
+function handleGuideWaypointMouseDown(event: MouseEvent): void {
+  if (!guideWaypointMenuOpen.value || event.button !== 0) {
+    return
+  }
+  beginGuideWaypointDrag(
+    'mouse',
+    GUIDE_WAYPOINT_MOUSE_INPUT_ID,
+    event.clientX,
+    event.clientY,
+  )
+}
+
+function handleGuideWaypointMouseMove(event: MouseEvent): void {
+  if (guideWaypointDragInput !== 'mouse') {
+    return
+  }
+  moveGuideWaypointDrag(event.clientX, event.clientY, event)
+}
+
+function handleGuideWaypointMouseEnd(): void {
+  if (guideWaypointDragInput !== 'mouse') {
+    return
+  }
+  resetGuideWaypointPointerDrag(true)
+}
+
+function resolveGuideWaypointTouch(
+  event: TouchEvent,
+  pointerId: number,
+): Touch | null {
+  return Array.from(event.changedTouches ?? [])
+    .find((touch) => touch.identifier === pointerId)
+    ?? Array.from(event.touches ?? [])
+      .find((touch) => touch.identifier === pointerId)
+    ?? null
+}
+
+function handleGuideWaypointTouchStart(event: TouchEvent): void {
+  if (!guideWaypointMenuOpen.value) {
+    return
+  }
+  const touch = event.changedTouches?.[0] ?? null
+  if (!touch) {
+    return
+  }
+  beginGuideWaypointDrag(
+    'touch',
+    touch.identifier,
+    touch.clientX,
+    touch.clientY,
+  )
+}
+
+function handleGuideWaypointTouchMove(event: TouchEvent): void {
+  if (guideWaypointDragInput !== 'touch') {
+    return
+  }
+  const touch = resolveGuideWaypointTouch(
+    event,
+    guideWaypointPointerDrag.pointerId,
+  )
+  if (!touch) {
+    return
+  }
+  moveGuideWaypointDrag(touch.clientX, touch.clientY, event)
+}
+
+function handleGuideWaypointTouchEnd(event: TouchEvent): void {
+  if (guideWaypointDragInput !== 'touch') {
+    return
+  }
+  if (
+    resolveGuideWaypointTouch(event, guideWaypointPointerDrag.pointerId)
+    || event.type === 'touchcancel'
+  ) {
+    resetGuideWaypointPointerDrag(true)
+  }
+}
+
+function handleGuideWaypointNativePointerDown(event: PointerEvent): void {
+  if (!guideWaypointMenuOpen.value || event.button !== 0) {
+    return
+  }
+  const panel = resolveGuideWaypointPanelElement()
+  if (!panel || !(event.target instanceof Node) || !panel.contains(event.target)) {
+    return
+  }
+  beginGuideWaypointDrag(
+    'pointer',
+    event.pointerId,
+    event.clientX,
+    event.clientY,
+  )
+}
+
+function handleGuideWaypointNativePointerMove(event: PointerEvent): void {
+  if (
+    guideWaypointDragInput !== 'pointer'
+    || event.pointerId !== guideWaypointPointerDrag.pointerId
+  ) {
+    return
+  }
+  moveGuideWaypointDrag(event.clientX, event.clientY, event)
+}
+
+function handleGuideWaypointNativePointerEnd(event: PointerEvent): void {
+  if (
+    guideWaypointDragInput === 'pointer'
+    && event.pointerId === guideWaypointPointerDrag.pointerId
+  ) {
+    resetGuideWaypointPointerDrag(true)
+  }
 }
 
 function isGuideWaypointMenuItemDisabled(item: GuideWaypointMenuItem): boolean {
@@ -10542,6 +10877,9 @@ function isGuideWaypointMenuItemDisabled(item: GuideWaypointMenuItem): boolean {
 }
 
 function handleGuideWaypointSelect(item: GuideWaypointMenuItem): void {
+  if (guideWaypointTapSuppressed) {
+    return;
+  }
   closeGuideWaypointMenu();
   if (isGuideWaypointMenuItemDisabled(item)) {
     return;
@@ -20323,6 +20661,95 @@ function shouldSkipDrivePadPointerFromEventTarget(target: EventTarget | null): b
   ));
 }
 
+function isAutoTourTakeoverCanvasTarget(
+  target: EventTarget | null,
+  clientX?: number,
+  clientY?: number,
+): boolean {
+  let candidate = target as Element | null;
+  if (
+    isBrowserEnvironment
+    && Number.isFinite(clientX)
+    && Number.isFinite(clientY)
+    && typeof document.elementFromPoint === 'function'
+  ) {
+    candidate = document.elementFromPoint(clientX!, clientY!);
+  }
+  return Boolean(
+    candidate
+    && typeof candidate.closest === 'function'
+    && candidate.closest('.viewer-canvas'),
+  );
+}
+
+function isAutoTourPointerTakeoverBlocked(): boolean {
+  return guideWaypointMenuOpen.value
+    || watchExclusiveUiActive.value
+    || viewerEnvironmentSwitchBusy.value
+    || viewerEnvironmentMenu.value !== null
+    || behaviorAlertVisible.value
+    || lanternOverlayVisible.value
+    || sceneSwitchOverlayVisible.value
+    || controlNodeSwitchBusy.value
+    || vehicleDrivePromptBusy.value
+    || vehicleDriveExitBusy.value;
+}
+
+function prepareAutoTourManualTakeover(nodeId: string): void {
+  if (pendingAutoTourTargetTakeoverNodeId === nodeId) {
+    pendingAutoTourTargetTakeoverNodeId = null;
+  }
+  activeGuideRouteJourney = null;
+  pendingVehicleDriveRetryRequested.value = false;
+}
+
+function requestAutoTourManualTakeover(kind: AutoTourManualTakeoverKind): boolean {
+  if (kind === 'vehicle') {
+    const nodeId = activeAutoTourNodeIds.values().next().value;
+    if (!nodeId) {
+      return false;
+    }
+    if (pendingAutoTourManualDriveNodeId === nodeId) {
+      autoTourRuntime.setPaused(nodeId, true);
+      autoTourPaused.value = true;
+      applyAutoTourCameraInputPolicy();
+      return true;
+    }
+    stopFloatingAutoTourAndResumeManualDrive(nodeId, activeVehicleDriveEvent.value);
+    return true;
+  }
+
+  const nodeId = activeCharacterAutoTourNodeIds.values().next().value;
+  if (!nodeId) {
+    return false;
+  }
+  stopCharacterAutoTourAndResumePlayerControl(nodeId, { preserveInput: true });
+  return true;
+}
+
+function tryTakeOverAutoTourFromPointer(params: {
+  target: EventTarget | null;
+  primaryPointer: boolean;
+  primaryButton: boolean;
+  clientX?: number;
+  clientY?: number;
+}): boolean {
+  const kind = resolveAutoTourManualTakeoverKind({
+    activeVehicleTour: activeAutoTourNodeIds.size > 0,
+    activeCharacterTour: activeCharacterAutoTourNodeIds.size > 0,
+    canvasTarget: isAutoTourTakeoverCanvasTarget(
+      params.target,
+      params.clientX,
+      params.clientY,
+    ),
+    primaryPointer: params.primaryPointer,
+    primaryButton: params.primaryButton,
+    padActive: activeDrivePadKind !== null,
+    takeoverBlocked: isAutoTourPointerTakeoverBlocked(),
+  });
+  return kind ? requestAutoTourManualTakeover(kind) : false;
+}
+
 function releaseDrivePadPointerCapture(pointerId: number): void {
   const target = drivePadPointerCaptureTarget;
   drivePadPointerCaptureTarget = null;
@@ -20362,27 +20789,16 @@ function detachDrivePadPointerListeners(): void {
 
 function handleControlPadPointerDown(event: PointerEvent): void {
   if (
-    !shouldUseH5PointerInput()
+    guideWaypointMenuOpen.value
+    || !shouldUseH5PointerInput()
     || watchExclusiveUiActive.value
     || viewerEnvironmentSwitchBusy.value
   ) {
     return;
   }
-  const coords = { x: event.clientX, y: event.clientY };
-  // Uni H5 normalizes some pointerdown events without DOM coordinates. Ignore
-  // those so the native-compatible mousedown/touchstart path can take over.
-  if (
-    !Number.isFinite(coords.x)
-    || !Number.isFinite(coords.y)
-    || !Number.isFinite(event.pointerId)
-  ) {
-    return;
-  }
-  if (
-    event.isPrimary === false
-    || (event.pointerType === 'mouse' && !isPrimaryControlPadButton(event))
-    || activeDrivePadKind !== null
-  ) {
+  const primaryPointer = event.isPrimary !== false;
+  const primaryButton = event.pointerType !== 'mouse' || isPrimaryControlPadButton(event);
+  if (!primaryPointer || !primaryButton || activeDrivePadKind !== null) {
     return;
   }
   // A stale listener should not be able to block the next gesture.
@@ -20392,7 +20808,37 @@ function handleControlPadPointerDown(event: PointerEvent): void {
   if (shouldSkipDrivePadPointerFromEventTarget(event.target)) {
     return;
   }
-  if (!shouldActivateDrivePad(coords.y)) {
+
+  const coords = { x: event.clientX, y: event.clientY };
+  const canActivatePad = Number.isFinite(coords.y) && shouldActivateDrivePad(coords.y);
+  const tookOver = tryTakeOverAutoTourFromPointer({
+    target: event.target,
+    primaryPointer,
+    primaryButton,
+    clientX: coords.x,
+    clientY: coords.y,
+  });
+  if (tookOver) {
+    event.stopPropagation();
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+    if (!canActivatePad) {
+      return;
+    }
+  }
+
+  // Uni H5 normalizes some pointerdown events without DOM coordinates. Ignore
+  // those for pad activation so the native-compatible mousedown/touchstart
+  // path can take over.
+  if (
+    !Number.isFinite(coords.x)
+    || !Number.isFinite(coords.y)
+    || !Number.isFinite(event.pointerId)
+  ) {
+    return;
+  }
+  if (!canActivatePad) {
     return;
   }
   const activeVehicleTourNodeId = activeAutoTourNodeIds.values().next().value;
@@ -20415,9 +20861,11 @@ function handleControlPadPointerDown(event: PointerEvent): void {
     return;
   }
 
-  event.stopPropagation();
-  if (event.cancelable) {
-    event.preventDefault();
+  if (!tookOver) {
+    event.stopPropagation();
+    if (event.cancelable) {
+      event.preventDefault();
+    }
   }
   const captureTarget = event.currentTarget as Element | null;
   if (captureTarget && typeof captureTarget.setPointerCapture === 'function') {
@@ -20735,22 +21183,47 @@ function shouldSkipCharacterDrivePadFromEventTarget(target: EventTarget | null):
     || datasetValue === 'purpose-controls'
     || datasetValue === 'watch-leave'
     || datasetValue === 'environment-controls'
+    || datasetValue === 'guide-waypoints'
   ) {
     return true;
   }
   if (typeof (target as Element | null)?.closest === 'function') {
-    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"], [data-control-skip="watch-leave"], [data-control-skip="environment-controls"]'));
+    return Boolean((target as Element).closest('[data-control-skip="character-actions"], [data-control-skip="purpose-controls"], [data-control-skip="watch-leave"], [data-control-skip="environment-controls"], [data-control-skip="guide-waypoints"]'));
   }
   return false;
 }
 
 function handleControlPadTouchStart(event: TouchEvent): void {
+  if (guideWaypointMenuOpen.value) {
+    return;
+  }
   if (drivePadPointerTracking || activeDrivePadKind !== null) {
     return;
   }
   if (viewerEnvironmentSwitchBusy.value) {
     return;
   }
+
+  const touch = event.changedTouches?.[0] ?? null;
+  const coords = getTouchCoordinates(touch);
+  const canActivatePad = Boolean(coords && shouldActivateDrivePad(coords.y));
+  const tookOver = tryTakeOverAutoTourFromPointer({
+    target: event.target,
+    primaryPointer: true,
+    primaryButton: true,
+    clientX: coords?.x,
+    clientY: coords?.y,
+  });
+  if (tookOver) {
+    event.stopPropagation();
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+    if (!canActivatePad) {
+      return;
+    }
+  }
+
   if (vehicleDriveUi.value.visible) {
     handleDrivePadTouchStart(event);
     return;
@@ -20759,8 +21232,6 @@ function handleControlPadTouchStart(event: TouchEvent): void {
     if (shouldSkipCharacterDrivePadFromEventTarget(event.target)) {
       return;
     }
-    const touch = event.changedTouches?.[0] ?? null;
-    const coords = getTouchCoordinates(touch);
     if (coords && !shouldActivateDrivePad(coords.y)) {
       return;
     }
@@ -20775,6 +21246,9 @@ function handleControlPadTouchStart(event: TouchEvent): void {
 }
 
 function handleControlPadTouchMove(event: TouchEvent): void {
+  if (guideWaypointMenuOpen.value) {
+    return;
+  }
   if (drivePadPointerTracking) {
     return;
   }
@@ -20788,6 +21262,9 @@ function handleControlPadTouchMove(event: TouchEvent): void {
 }
 
 function handleControlPadTouchEnd(event: TouchEvent): void {
+  if (guideWaypointMenuOpen.value) {
+    return;
+  }
   if (drivePadPointerTracking) {
     return;
   }
@@ -20801,12 +21278,36 @@ function handleControlPadTouchEnd(event: TouchEvent): void {
 }
 
 function handleControlPadMouseDown(event: MouseEvent): void {
+  if (guideWaypointMenuOpen.value) {
+    return;
+  }
   if (drivePadPointerTracking || activeDrivePadKind !== null) {
     return;
   }
   if (viewerEnvironmentSwitchBusy.value) {
     return;
   }
+
+  const primaryButton = isPrimaryControlPadButton(event);
+  const canActivatePad = Number.isFinite(event.clientY)
+    && shouldActivateDrivePad(event.clientY);
+  const tookOver = tryTakeOverAutoTourFromPointer({
+    target: event.target,
+    primaryPointer: true,
+    primaryButton,
+    clientX: event.clientX,
+    clientY: event.clientY,
+  });
+  if (tookOver) {
+    event.stopPropagation();
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+    if (!canActivatePad) {
+      return;
+    }
+  }
+
   if (vehicleDriveUi.value.visible) {
     if (!vehiclePadInput.active) {
       handleDrivePadMouseDown(event);
@@ -22145,9 +22646,7 @@ function stopCharacterAutoTourAndResumePlayerControl(
   nodeId: string,
   options: { preserveInput?: boolean; targetPose?: AutoTourTargetPose | null } = {},
 ): void {
-  if (pendingAutoTourTargetTakeoverNodeId === nodeId) {
-    return;
-  }
+  prepareAutoTourManualTakeover(nodeId);
   characterAutoTourRuntime.deactivate(nodeId);
   activeCharacterAutoTourNodeIds.delete(nodeId);
   autoTourPaused.value = false;
@@ -22279,9 +22778,7 @@ function stopFloatingAutoTourAndResumeManualDrive(
   sourceEvent: Extract<BehaviorRuntimeEvent, { type: 'vehicle-drive' }> | null,
   options: { parkAtTarget?: boolean; targetPose?: AutoTourTargetPose | null } = {},
 ): boolean {
-  if (pendingAutoTourTargetTakeoverNodeId === nodeId) {
-    return false;
-  }
+  prepareAutoTourManualTakeover(nodeId);
   const pendingEvent = pendingVehicleDriveEvent.value;
   if ((pendingEvent?.targetNodeId ?? pendingEvent?.nodeId ?? null) === nodeId) {
     pendingVehicleDriveEvent.value = null;
@@ -25789,6 +26286,7 @@ function startRenderLoop(
         // Throttled update of instanced mesh bounding spheres when instance matrices changed.
         tickInstancedBounds(deltaSeconds);
         updateAttachedTerrainTextureStreams(scene, camera);
+        tickSignboardBillboardMotion(instancingNow / 1000);
         renderer.render(scene, camera);
         // Pull renderer.info after rendering so calls/triangles reflect the current frame.
         if (debugEnabled.value && debugMode.value === 'full') {
@@ -26375,6 +26873,14 @@ onMounted(() => {
     window.addEventListener('keydown', handleWindowKeyDown, { passive: false });
     window.addEventListener('keyup', handleWindowKeyUp, { passive: true });
     window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('pointerdown', handleGuideWaypointNativePointerDown, true)
+    window.addEventListener('pointermove', handleGuideWaypointNativePointerMove, {
+      capture: true,
+      passive: false,
+    })
+    window.addEventListener('pointerup', handleGuideWaypointNativePointerEnd, true)
+    window.addEventListener('pointercancel', handleGuideWaypointNativePointerEnd, true)
+    window.addEventListener('scroll', handleGuideWaypointNativeScroll, true)
   }
 
   if (hasAnyPropInput()) {
@@ -26503,7 +27009,13 @@ onUnmounted(() => {
     window.removeEventListener('keydown', handleWindowKeyDown);
     window.removeEventListener('keyup', handleWindowKeyUp);
     window.removeEventListener('blur', handleWindowBlur);
+    window.removeEventListener('pointerdown', handleGuideWaypointNativePointerDown, true)
+    window.removeEventListener('pointermove', handleGuideWaypointNativePointerMove, true)
+    window.removeEventListener('pointerup', handleGuideWaypointNativePointerEnd, true)
+    window.removeEventListener('pointercancel', handleGuideWaypointNativePointerEnd, true)
+    window.removeEventListener('scroll', handleGuideWaypointNativeScroll, true)
   }
+  detachGuideWaypointDragListeners()
   cleanupRuntime();
 });
 
@@ -27057,7 +27569,32 @@ onUnmounted(() => {
   min-height: 0;
   max-height: none;
   overflow: hidden;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: none;
+  cursor: grab;
   box-sizing: border-box;
+}
+
+.viewer-waypoint-sheet__list :deep(.uni-scroll-view),
+.viewer-waypoint-sheet__list :deep(.uni-scroll-view-content) {
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+}
+
+.viewer-waypoint-sheet__list :deep(.uni-scroll-view) {
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+}
+
+.viewer-waypoint-sheet__list :deep(.uni-scroll-view)::-webkit-scrollbar {
+  display: none;
+}
+
+.viewer-waypoint-sheet__list :deep(.uni-scroll-view-content) {
+  width: max-content !important;
+  min-width: 100%;
 }
 
 .viewer-waypoint-sheet__grid {
@@ -27085,7 +27622,9 @@ onUnmounted(() => {
   background: #ffffff;
   color: inherit;
   text-align: left;
-  touch-action: manipulation;
+  touch-action: pan-x;
+  cursor: grab;
+  user-select: none;
   box-sizing: border-box;
   transition: transform 0.14s ease, border-color 0.14s ease, opacity 0.14s ease;
 }
@@ -27101,22 +27640,9 @@ onUnmounted(() => {
   opacity: 0.7;
 }
 
-.viewer-waypoint-sheet__card-hit-area {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  opacity: 0;
-}
-
-.viewer-waypoint-sheet__card-hit-area::after {
-  display: none;
+.viewer-waypoint-sheet__card:focus-visible {
+  outline: 3rpx solid rgba(7, 193, 96, 0.7);
+  outline-offset: -3rpx;
 }
 
 .viewer-waypoint-sheet__cover {
@@ -27132,6 +27658,7 @@ onUnmounted(() => {
   inset: 0;
   width: 100%;
   height: 100%;
+  -webkit-user-drag: none;
 }
 
 .viewer-waypoint-sheet__cover-placeholder {
@@ -27356,25 +27883,8 @@ onUnmounted(() => {
 
 .viewer-signboard-guidance {
   position: absolute;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 38px;
-  padding: 5px 10px 5px 6px;
-  border: 1px solid rgba(107, 152, 198, 0.3);
-  border-radius: 999px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(239, 247, 255, 0.88)),
-    linear-gradient(135deg, rgba(122, 198, 255, 0.13), rgba(255, 255, 255, 0.08));
-  box-shadow:
-    0 12px 28px rgba(52, 87, 128, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(14px) saturate(1.08);
-  -webkit-backdrop-filter: blur(14px) saturate(1.08);
-  color: #173b59;
   transform: translate(-50%, -50%);
   box-sizing: border-box;
-  white-space: nowrap;
   transition:
     left 0.09s linear,
     top 0.09s linear,
@@ -27383,64 +27893,119 @@ onUnmounted(() => {
   will-change: left, top, transform;
 }
 
+.viewer-signboard-guidance__float {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 4px 12px 5px 2px;
+  isolation: isolate;
+  animation: viewer-signboard-guidance-drift 6.4s ease-in-out infinite;
+}
+
 .viewer-signboard-guidance__arrow {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 27px;
-  height: 27px;
-  flex: 0 0 27px;
-  border: 1px solid rgba(80, 158, 220, 0.26);
-  border-radius: 50%;
-  background: rgba(97, 183, 245, 0.16);
-  box-shadow: 0 0 14px rgba(77, 166, 223, 0.14);
-  color: #28689a;
+  width: 29px;
+  height: 29px;
+  flex: 0 0 29px;
+  color: #dff8ff;
   transform-origin: 50% 50%;
-  transition: transform 0.09s linear;
+  transition: transform 0.16s cubic-bezier(0.2, 0.9, 0.25, 1);
+  filter: drop-shadow(0 0 7px rgba(82, 177, 226, 0.58));
 }
 
 .viewer-signboard-guidance__arrow-icon {
-  font-size: 16px;
+  color: #effdff;
+  font-size: 21px;
   font-weight: 800;
   line-height: 1;
+  text-shadow:
+    -1px -1px 0 rgba(4, 35, 54, 0.94),
+    1px -1px 0 rgba(4, 35, 54, 0.94),
+    -1px 1px 0 rgba(4, 35, 54, 0.94),
+    1px 1px 0 rgba(4, 35, 54, 0.94),
+    0 2px 7px rgba(1, 19, 31, 0.82),
+    0 0 7px rgba(108, 210, 255, 0.72);
+}
+
+.viewer-signboard-guidance__copy {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .viewer-signboard-guidance__label {
   display: block;
-  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #173b59;
-  font-size: 12px;
+  color: #082d46;
+  font-size: 14px;
   line-height: 1.2;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: 0.01em;
+  text-shadow:
+    -1px -1px 0 rgba(255, 255, 255, 0.96),
+    1px -1px 0 rgba(255, 255, 255, 0.96),
+    -1px 1px 0 rgba(255, 255, 255, 0.96),
+    1px 1px 0 rgba(255, 255, 255, 0.96),
+    -1px 0 0 rgba(255, 255, 255, 0.9),
+    1px 0 0 rgba(255, 255, 255, 0.9),
+    0 -1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 6px rgba(3, 24, 39, 0.76);
 }
 
 .viewer-signboard-guidance__distance {
+  display: block;
   flex: 0 0 auto;
-  padding-left: 7px;
-  border-left: 1px solid rgba(80, 131, 176, 0.18);
-  color: #9a6a10;
+  color: #7d5000;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
   font-variant-numeric: tabular-nums;
+  text-shadow:
+    -1px -1px 0 rgba(255, 255, 255, 0.94),
+    1px -1px 0 rgba(255, 255, 255, 0.94),
+    -1px 1px 0 rgba(255, 255, 255, 0.94),
+    1px 1px 0 rgba(255, 255, 255, 0.94),
+    0 2px 6px rgba(3, 24, 39, 0.76);
+}
+
+@keyframes viewer-signboard-guidance-drift {
+  0%, 100% { transform: translateY(-0.8px); }
+  50% { transform: translateY(0.8px); }
 }
 
 @media (max-width: 480px) {
-  .viewer-signboard-guidance {
-    gap: 5px;
-    padding-right: 8px;
+  .viewer-signboard-guidance__float {
+    gap: 7px;
+    padding-right: 9px;
   }
 
   .viewer-signboard-guidance__label {
-    font-size: 11px;
+    font-size: 13px;
   }
 
   .viewer-signboard-guidance__distance {
     font-size: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewer-signboard-guidance__float {
+    animation: none;
   }
 }
 

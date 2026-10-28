@@ -16,13 +16,13 @@ export const DEFAULT_SIGNBOARD_REFERENCE_SMOOTH_SPEED = 6
 export const DEFAULT_SIGNBOARD_PLACEMENT_SMOOTH_SPEED = 9
 export const SIGNBOARD_GUIDANCE_MAX_ENTRIES = 4
 export const SIGNBOARD_GUIDANCE_DEFAULT_INSET_PX = 16
-export const SIGNBOARD_GUIDANCE_DEFAULT_MARKER_HEIGHT_PX = 38
+export const SIGNBOARD_GUIDANCE_DEFAULT_MARKER_HEIGHT_PX = 46
 export const SIGNBOARD_NEAR_HIDE_DISTANCE = 8
 export const SIGNBOARD_NEAR_FADE_END_DISTANCE = 14
 export const SIGNBOARD_CARD_FAR_OPACITY = 0.8
 export const SIGNBOARD_CARD_FAR_SCALE = 0.86
-export const SIGNBOARD_GUIDANCE_MIN_OPACITY = 0.58
-export const SIGNBOARD_GUIDANCE_MIN_SCALE = 0.72
+export const SIGNBOARD_GUIDANCE_MIN_OPACITY = 0.72
+export const SIGNBOARD_GUIDANCE_MIN_SCALE = 0.82
 export const SIGNBOARD_GUIDANCE_VISUAL_SATURATION_DISTANCE = 2000
 
 export type SignboardReferenceKind = 'camera' | 'vehicle'
@@ -812,7 +812,7 @@ export function computeSignboardGuidanceEntries(params: {
       && guidanceProjected.z >= -1
       && guidanceProjected.z <= 1
     )
-    if (inView && candidate.distanceMeters <= maxDistance) {
+    if (!inView || candidate.distanceMeters <= maxDistance) {
       continue
     }
 

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { resolveHorizontalScrollDelta } from '../common/utils/horizontalScroll.ts'
+import {
+  resolveHorizontalDragScrollLeft,
+  resolveHorizontalScrollDelta,
+} from '../common/utils/horizontalScroll.ts'
 
 test('vertical mouse wheel scrolls the waypoint strip horizontally', () => {
   assert.equal(resolveHorizontalScrollDelta({
@@ -34,4 +37,28 @@ test('line and page wheel modes are normalized to usable horizontal pixels', () 
     deltaY: -1,
     viewportWidth: 360,
   }), -360)
+})
+
+test('dragging the strip left moves its content right', () => {
+  assert.equal(resolveHorizontalDragScrollLeft({
+    startScrollLeft: 40,
+    startX: 200,
+    currentX: 120,
+    maxScrollLeft: 600,
+  }), 120)
+})
+
+test('dragging the strip clamps scroll position to its real bounds', () => {
+  assert.equal(resolveHorizontalDragScrollLeft({
+    startScrollLeft: 10,
+    startX: 40,
+    currentX: 160,
+    maxScrollLeft: 600,
+  }), 0)
+  assert.equal(resolveHorizontalDragScrollLeft({
+    startScrollLeft: 590,
+    startX: 160,
+    currentX: 40,
+    maxScrollLeft: 600,
+  }), 600)
 })

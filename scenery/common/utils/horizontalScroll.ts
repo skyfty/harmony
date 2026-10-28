@@ -5,6 +5,13 @@ type HorizontalScrollDeltaOptions = {
   viewportWidth: number
 }
 
+type HorizontalDragScrollLeftOptions = {
+  startScrollLeft: number
+  startX: number
+  currentX: number
+  maxScrollLeft: number
+}
+
 const LINE_HEIGHT_PX = 16
 const FALLBACK_VIEWPORT_WIDTH = 360
 
@@ -28,4 +35,19 @@ export function resolveHorizontalScrollDelta(
     return delta * viewportWidth
   }
   return delta
+}
+
+export function resolveHorizontalDragScrollLeft(
+  options: HorizontalDragScrollLeftOptions,
+): number {
+  const startScrollLeft = Number.isFinite(options.startScrollLeft)
+    ? options.startScrollLeft
+    : 0
+  const startX = Number.isFinite(options.startX) ? options.startX : 0
+  const currentX = Number.isFinite(options.currentX) ? options.currentX : startX
+  const maxScrollLeft = Number.isFinite(options.maxScrollLeft)
+    ? Math.max(options.maxScrollLeft, 0)
+    : 0
+  const target = startScrollLeft - (currentX - startX)
+  return Math.min(Math.max(target, 0), maxScrollLeft)
 }
