@@ -81,7 +81,7 @@ import {
   type ProductListItem,
 } from '@/api/mini/products'
 import { selectControllableAsset } from '@/api/mini/controllableAssets'
-import { selectSkin } from '@/api/mini/skins'
+import { selectSkin, unselectSkin } from '@/api/mini/skins'
 import { ensureMiniCapability } from '@/platform/runtime'
 import { redirectToNav, type NavKey } from '@/utils/navKey'
 import { setSelectedControllable } from '@/utils/controllableSelection'
@@ -161,7 +161,10 @@ function statusClass(product: ProductListItem): string {
 }
 
 function actionButtonLabel(product: ProductListItem): string {
-  if (product.controllableAsset?.selected || product.skin?.selected) {
+  if (product.skin?.selected) {
+    return '取消使用'
+  }
+  if (product.controllableAsset?.selected) {
     return '使用中'
   }
   if (product.controllableAsset || product.skin) {
@@ -228,6 +231,10 @@ async function handleCardTap(product: ProductListItem) {
     await handlePurchase(product)
     return
   }
+  if (product.skin?.selected) {
+    await handleUnuseSkin(product)
+    return
+  }
   if ((product.controllableAsset && !product.controllableAsset.selected) || (product.skin && !product.skin.selected)) {
     await handleUse(product)
   }
@@ -236,6 +243,10 @@ async function handleCardTap(product: ProductListItem) {
 async function handlePrimaryAction(product: ProductListItem) {
   if (!isOwnedProduct(product)) {
     await handlePurchase(product)
+    return
+  }
+  if (product.skin?.selected) {
+    await handleUnuseSkin(product)
     return
   }
   if ((product.controllableAsset && !product.controllableAsset.selected) || (product.skin && !product.skin.selected)) {
@@ -313,6 +324,26 @@ async function handleUse(product: ProductListItem) {
     })
   } catch (error: unknown) {
     void uni.showToast({ title: toCheckoutErrorMessage(error, '设置失败'), icon: 'none' })
+  } finally {
+    loading.value = false
+    void uni.hideLoading()
+  }
+}
+
+async function handleUnuseSkin(product: ProductListItem) {
+  const skin = product.skin
+  if (!skin?.selected || loading.value) {
+    return
+  }
+
+  loading.value = true
+  void uni.showLoading({ title: '取消中...' })
+  try {
+    await unselectSkin(skin.id)
+    await reload()
+    void uni.showToast({ title: `${skin.name || '皮肤'}已取消使用`, icon: 'none' })
+  } catch (error: unknown) {
+    void uni.showToast({ title: toCheckoutErrorMessage(error, '取消失败'), icon: 'none' })
   } finally {
     loading.value = false
     void uni.hideLoading()

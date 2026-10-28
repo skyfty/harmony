@@ -50,3 +50,13 @@ export async function selectSkin(id: string) {
     },
   )
 }
+
+export async function unselectSkin(id: string) {
+  await ensureMiniAuth()
+  return await miniRequest<{ success: boolean; categoryId: string; skinId: string }>(
+    `/skins/${encodeURIComponent(id)}/select`,
+    {
+      method: 'DELETE',
+    },
+  )
+}

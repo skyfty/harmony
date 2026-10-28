@@ -76,3 +76,24 @@ export async function setCurrentSkin(ctx: Context): Promise<void> {
   ).exec()
   ctx.body = { success: true, categoryId: skin!.categoryId.toString(), skin: mapSkin(skin, category) }
 }
+
+export async function unsetCurrentSkin(ctx: Context): Promise<void> {
+  const userId = ensureUserId(ctx)
+  const id = String(ctx.params.id ?? '')
+  if (!Types.ObjectId.isValid(id)) {
+    ctx.throw(400, 'Invalid skin id')
+  }
+
+  const skin = await SkinModel.findById(id).select({ categoryId: 1 }).lean().exec()
+  if (!skin) {
+    ctx.throw(404, 'Skin not found')
+  }
+  const categoryId = skin.categoryId?.toString?.() ?? ''
+  if (!categoryId) {
+    ctx.throw(400, 'Skin has no category')
+  }
+
+  // Remove only this user's exact selection. Ownership remains intact and repeated calls are harmless.
+  await UserSkinSelectionModel.deleteOne({ userId, skinId: skin._id }).exec()
+  ctx.body = { success: true, categoryId, skinId: id }
+}

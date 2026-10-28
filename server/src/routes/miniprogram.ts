@@ -74,6 +74,7 @@ import {
 import {
   listUserSkinSelections,
   setCurrentSkin,
+  unsetCurrentSkin,
 } from '@/controllers/miniprogram/skinController'
 import {
   listOrders,
@@ -211,6 +212,7 @@ miniRouter.get('/user-controllable-selections', listUserControllableSelections)
 miniRouter.post('/controllable-assets/:id/select', setCurrentControllableAsset)
 miniRouter.get('/user-skin-selections', listUserSkinSelections)
 miniRouter.post('/skins/:id/select', setCurrentSkin)
+miniRouter.delete('/skins/:id/select', unsetCurrentSkin)
 
 // coupons (user-scoped)
 miniRouter.get('/coupons', listUserCoupons)
