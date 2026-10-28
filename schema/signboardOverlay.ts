@@ -24,6 +24,8 @@ export const SIGNBOARD_CARD_FAR_SCALE = 0.86
 export const SIGNBOARD_GUIDANCE_MIN_OPACITY = 0.72
 export const SIGNBOARD_GUIDANCE_MIN_SCALE = 0.82
 export const SIGNBOARD_GUIDANCE_VISUAL_SATURATION_DISTANCE = 2000
+export const SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO = 0.12
+export const SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO = 0.2
 
 export type SignboardReferenceKind = 'camera' | 'vehicle'
 export type SignboardGuidanceEdge = 'top' | 'right' | 'bottom' | 'left'
@@ -736,6 +738,7 @@ export function computeSignboardGuidanceEntries(params: {
   safeArea?: Partial<SignboardGuidanceInsets>
   maxDistance?: number
   maxEntries?: number
+  previousVisibleNodeIds?: ReadonlySet<string>
 }): SignboardGuidanceEntry[] {
   const viewportWidth = Math.max(1, params.viewportWidth)
   const viewportHeight = Math.max(1, params.viewportHeight)
@@ -758,6 +761,8 @@ export function computeSignboardGuidanceEntries(params: {
   if (maxEntries === 0) {
     return []
   }
+  const enterViewportLimit = 1 + SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO * 2
+  const exitViewportLimit = 1 + SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO * 2
 
   params.camera.updateWorldMatrix(true, false)
   const sortedCandidates = params.candidates
@@ -796,25 +801,28 @@ export function computeSignboardGuidanceEntries(params: {
     if (!presentation.visible) {
       continue
     }
-    seenNodeIds.add(candidate.nodeId)
 
     guidanceProjected
       .set(candidate.anchorWorld.x, candidate.anchorWorld.y, candidate.anchorWorld.z)
       .project(params.camera)
+    const viewportLimit = params.previousVisibleNodeIds?.has(candidate.nodeId)
+      ? exitViewportLimit
+      : enterViewportLimit
     const inView = (
       Number.isFinite(guidanceProjected.x)
       && Number.isFinite(guidanceProjected.y)
       && Number.isFinite(guidanceProjected.z)
-      && guidanceProjected.x >= -1
-      && guidanceProjected.x <= 1
-      && guidanceProjected.y >= -1
-      && guidanceProjected.y <= 1
+      && guidanceProjected.x >= -viewportLimit
+      && guidanceProjected.x <= viewportLimit
+      && guidanceProjected.y >= -viewportLimit
+      && guidanceProjected.y <= viewportLimit
       && guidanceProjected.z >= -1
       && guidanceProjected.z <= 1
     )
     if (!inView || candidate.distanceMeters <= maxDistance) {
       continue
     }
+    seenNodeIds.add(candidate.nodeId)
 
     const { width, height } = resolveGuidanceMarkerDimensions(candidate, viewportWidth, insets)
     const availableWidth = Math.max(1, viewportWidth - insets.left - insets.right)

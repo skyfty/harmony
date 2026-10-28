@@ -6,6 +6,8 @@ import {
   SIGNBOARD_CARD_FAR_SCALE,
   SIGNBOARD_GUIDANCE_MIN_OPACITY,
   SIGNBOARD_GUIDANCE_MIN_SCALE,
+  SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO,
+  SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO,
   SIGNBOARD_MAX_DISTANCE,
   SIGNBOARD_NEAR_FADE_END_DISTANCE,
   SIGNBOARD_NEAR_HIDE_DISTANCE,
@@ -45,14 +47,25 @@ function candidate(
   }
 }
 
-function resolve(candidates: SignboardGuidanceCandidate[]) {
+function resolve(
+  candidates: SignboardGuidanceCandidate[],
+  previousVisibleNodeIds?: ReadonlySet<string>,
+) {
   return computeSignboardGuidanceEntries({
     candidates,
     camera: createCamera(),
     viewportWidth: VIEWPORT.width,
     viewportHeight: VIEWPORT.height,
     safeArea: VIEWPORT.safeArea,
+    previousVisibleNodeIds,
   })
+}
+
+function candidateAtNdcX(nodeId: string, ndcX: number): SignboardGuidanceCandidate {
+  const depth = 200
+  const halfHeight = Math.tan(THREE.MathUtils.degToRad(30)) * depth
+  const x = ndcX * halfHeight * (VIEWPORT.width / VIEWPORT.height)
+  return candidate(nodeId, x, 2, -depth, 200)
 }
 
 describe('Signboard distance presentation', () => {
@@ -153,6 +166,30 @@ describe('Signboard guidance overlay', () => {
 
   it('does not show far targets outside the current camera viewport', () => {
     expect(resolve([candidate('offscreen-far', 100, 2, -10, 200)])).toEqual([])
+  })
+
+  it('uses a wider exit margin for already-visible guidance', () => {
+    expect(SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO).toBe(0.12)
+    expect(SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO).toBe(0.2)
+    const enterNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO - 0.02) * 2
+    const beyondEnterNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_ENTER_MARGIN_SCREEN_RATIO + 0.03) * 2
+    const insideExitNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO - 0.01) * 2
+    const beyondExitNdc = 1 + (SIGNBOARD_GUIDANCE_VIEWPORT_EXIT_MARGIN_SCREEN_RATIO + 0.01) * 2
+
+    expect(resolve([candidateAtNdcX('enter', enterNdc)])).toHaveLength(1)
+    expect(resolve([candidateAtNdcX('new-outside', beyondEnterNdc)])).toEqual([])
+    expect(resolve(
+      [candidateAtNdcX('sticky', beyondEnterNdc)],
+      new Set(['sticky']),
+    )).toHaveLength(1)
+    expect(resolve(
+      [candidateAtNdcX('sticky', insideExitNdc)],
+      new Set(['sticky']),
+    )).toHaveLength(1)
+    expect(resolve(
+      [candidateAtNdcX('sticky', beyondExitNdc)],
+      new Set(['sticky']),
+    )).toEqual([])
   })
 
   it('limits results to the four nearest targets with deterministic ties', () => {

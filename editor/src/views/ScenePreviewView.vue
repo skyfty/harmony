@@ -2906,6 +2906,9 @@ const behaviorProximityRuntime = createBehaviorProximityRuntime({
 })
 const signboardNodeIds = new Set<string>()
 const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([])
+const visibleSignboardGuidanceNodeIds = computed(
+	() => new Set(signboardGuidanceEntries.value.map((entry) => entry.nodeId)),
+)
 const SCENE_PREVIEW_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
 	backgroundTopColor: 'rgba(14, 25, 42, 0.7)',
 	backgroundMiddleColor: 'rgba(18, 33, 53, 0.4)',
@@ -3545,6 +3548,7 @@ function syncSceneSignboards(activeScene: THREE.Scene | null, activeCamera: THRE
 			bottom: 88,
 			left: 16,
 		},
+		previousGuidanceNodeIds: visibleSignboardGuidanceNodeIds.value,
 	})
 	if (!areSignboardGuidanceEntriesEqual(nextGuidanceEntries, signboardGuidanceEntries.value)) {
 		signboardGuidanceEntries.value = nextGuidanceEntries

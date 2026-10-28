@@ -2915,6 +2915,9 @@ function shouldRunInstancedCulling(camera: THREE.Camera, nowMs: number): boolean
 const nodeObjectMap = new Map<string, THREE.Object3D>();
 const signboardNodeIds = new Set<string>();
 const signboardGuidanceEntries = ref<SignboardGuidanceEntry[]>([]);
+const visibleSignboardGuidanceNodeIds = computed(
+  () => new Set(signboardGuidanceEntries.value.map((entry) => entry.nodeId)),
+);
 const punchNodeIds = new Set<string>();
 const SCENERY_SIGNBOARD_BILLBOARD_STYLE: SignboardBillboardStyle = {
   backgroundTopColor: 'rgba(255, 255, 255, 0.46)',
@@ -8422,6 +8425,7 @@ function syncSceneSignboardsWithReference(
     viewportWidth: lanternViewportSize.width,
     viewportHeight: lanternViewportSize.height,
     safeArea: signboardGuidanceSafeArea,
+    previousGuidanceNodeIds: visibleSignboardGuidanceNodeIds.value,
   });
   if (!areSignboardGuidanceEntriesEqual(nextGuidanceEntries, signboardGuidanceEntries.value)) {
     signboardGuidanceEntries.value = nextGuidanceEntries;
