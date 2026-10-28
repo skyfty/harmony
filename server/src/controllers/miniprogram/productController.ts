@@ -13,6 +13,8 @@ import { SkinModel } from '@/models/Skin'
 import { SkinCategoryModel } from '@/models/SkinCategory'
 import { UserSkinSelectionModel } from '@/models/UserSkinSelection'
 import { ProductCategoryModel } from '@/models/ProductCategory'
+import { settleFreeOrder } from '@/services/orderSettlementService'
+import { isFreeProductPrice } from '@/utils/commerce'
 
 function computeUserProductState(entry: {
   state?: UserProductState
@@ -151,6 +153,46 @@ function buildProductResponse(product: ProductLean, userEntry?: {
         }
       : null,
   }
+}
+
+async function buildCurrentProductResponse(product: ProductLean, userId: string): Promise<ProductResponse> {
+  const [userEntry, controllableAsset, skin] = await Promise.all([
+    UserProductModel.findOne({ userId, productId: product._id }).lean().exec(),
+    ControllableAssetModel.findOne({ productId: product._id, isActive: true }).lean().exec(),
+    SkinModel.findOne({ productId: product._id, isActive: true }).lean().exec(),
+  ])
+  const [selectedRow, skinCategory, skinSelectedRow] = await Promise.all([
+    controllableAsset
+      ? UserControllableSelectionModel.findOne({
+          userId,
+          controllableType: controllableAsset.type,
+          controllableAssetId: controllableAsset._id,
+        }).lean().exec()
+      : Promise.resolve(null),
+    skin?.categoryId ? SkinCategoryModel.findById(skin.categoryId).lean().exec() : Promise.resolve(null),
+    skin?.categoryId
+      ? UserSkinSelectionModel.findOne({
+          userId,
+          skinCategoryId: skin.categoryId,
+          skinId: skin._id,
+        }).lean().exec()
+      : Promise.resolve(null),
+  ])
+  return buildProductResponse(
+    product,
+    userEntry
+      ? {
+          acquiredAt: userEntry.acquiredAt,
+          state: userEntry.state,
+          expiresAt: userEntry.expiresAt ?? null,
+          usedAt: userEntry.usedAt ?? null,
+        }
+      : null,
+    controllableAsset,
+    Boolean(selectedRow),
+    skin ? { ...skin, category: skinCategory } : null,
+    Boolean(skinSelectedRow),
+  )
 }
 
 export async function listProducts(ctx: Context): Promise<void> {
@@ -324,8 +366,7 @@ export async function listProductCategories(ctx: Context): Promise<void> {
 }
 
 export async function purchaseProduct(ctx: Context): Promise<void> {
-  const checkoutUser = await ensureMiniCheckoutUser(ctx)
-  const userId = checkoutUser.id
+  const userId = ensureUserId(ctx)
   const { id } = ctx.params as { id: string }
   const { paymentMethod, shippingAddress, metadata } = ctx.request.body as PurchaseBody
   if (!Types.ObjectId.isValid(id)) {
@@ -339,6 +380,89 @@ export async function purchaseProduct(ctx: Context): Promise<void> {
 
   const orderMetadata: Record<string, unknown> = metadata ? { ...metadata } : {}
   orderMetadata.source = 'product-purchase'
+  if (isFreeProductPrice(product.price)) {
+    const existingEntry = await UserProductModel.findOne({ userId, productId: product._id }).lean().exec()
+    if (existingEntry) {
+      const existingOrder = existingEntry.orderId
+        ? await OrderModel.findOne({ _id: existingEntry.orderId, userId }).lean().exec()
+        : null
+      ctx.status = 200
+      ctx.body = {
+        order: existingOrder
+          ? {
+              id: existingOrder._id.toString(),
+              orderNumber: existingOrder.orderNumber,
+              status: existingOrder.orderStatus ?? existingOrder.status,
+              paymentStatus: existingOrder.paymentStatus,
+            }
+          : undefined,
+        payParams: undefined,
+        product: await buildCurrentProductResponse(product.toObject() as ProductLean, userId),
+      }
+      return
+    }
+
+    let freeOrder = await OrderModel.findOne({
+      userId,
+      totalAmount: 0,
+      'items.productId': product._id,
+      orderStatus: { $in: ['pending', 'paid'] },
+      paymentStatus: { $in: ['unpaid', 'processing', 'failed', 'closed'] },
+    })
+      .sort({ createdAt: -1 })
+      .exec()
+    if (!freeOrder) {
+      freeOrder = await OrderModel.create({
+        userId,
+        orderNumber: generateOrderNumber(),
+        status: 'pending',
+        orderStatus: 'pending',
+        paymentStatus: 'unpaid',
+        totalAmount: 0,
+        paymentMethod: 'free',
+        paymentProvider: 'free',
+        shippingAddress,
+        items: [
+          {
+            productId: product._id,
+            itemType: 'product',
+            name: product.name,
+            price: 0,
+            quantity: 1,
+          },
+        ],
+        metadata: {
+          ...orderMetadata,
+          source: 'product-purchase-free',
+        },
+      })
+    }
+
+    await settleFreeOrder({
+      orderId: freeOrder._id.toString(),
+      userId,
+      source: 'free-purchase',
+    })
+    const settledOrder = await OrderModel.findById(freeOrder._id).lean().exec()
+    if (!settledOrder) {
+      ctx.throw(500, 'Failed to load free product order')
+      return
+    }
+    ctx.status = 201
+    ctx.body = {
+      order: {
+        id: settledOrder._id.toString(),
+        orderNumber: settledOrder.orderNumber,
+        status: settledOrder.orderStatus ?? settledOrder.status,
+        paymentStatus: settledOrder.paymentStatus,
+      },
+      payParams: undefined,
+      product: await buildCurrentProductResponse(product.toObject() as ProductLean, userId),
+    }
+    return
+  }
+
+  const checkoutUser = await ensureMiniCheckoutUser(ctx)
   const orderNumber = generateOrderNumber()
   const order = await OrderModel.create({
     userId,

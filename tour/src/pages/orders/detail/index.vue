@@ -50,7 +50,7 @@
             订单状态
           </text>
           <text class="value">
-            {{ statusText(order.status) }}
+            {{ statusText(order.status, isFreeOrder) }}
           </text>
         </view>
         <view class="row">
@@ -58,7 +58,7 @@
             支付状态
           </text>
           <text class="value">
-            {{ paymentStatusText(order.paymentStatus) }}
+            {{ paymentStatusText(order.paymentStatus, isFreeOrder) }}
           </text>
         </view>
         <view class="row">
@@ -223,10 +223,10 @@
       >
         <view class="pay-summary">
           <text class="pay-summary-label">
-            待支付金额
+            {{ isFreeOrder ? '免费商品' : '待支付金额' }}
           </text>
           <text class="pay-summary-value">
-            ¥ {{ order?.totalAmount ?? 0 }}
+            {{ isFreeOrder ? '无需支付' : `¥ ${order?.totalAmount ?? 0}` }}
           </text>
         </view>
         <button
@@ -234,7 +234,7 @@
           :disabled="paying"
           @tap="submitPayment"
         >
-          {{ paying ? '支付中...' : '立即支付' }}
+          {{ paying ? (isFreeOrder ? '领取中...' : '支付中...') : (isFreeOrder ? '立即领取' : '立即支付') }}
         </button>
       </view>
     </view>
@@ -275,15 +275,24 @@ const vehicleItems = computed<OrderItem[]>(() => {
   return order.value.items.filter((item) => item.vehicle);
 });
 
+const isFreeOrder = computed(() => {
+  if (!order.value) return false;
+  return Number(order.value.totalAmount) === 0 || order.value.paymentProvider === 'free';
+});
+
 const showPayAction = computed(() => {
-  if (!paymentEnabled.value) return false;
   if (!order.value) return false;
   const status = order.value.orderStatus || order.value.status;
+  if (isFreeOrder.value) {
+    return status === 'pending' && ['unpaid', 'processing', 'failed', 'closed'].includes(order.value.paymentStatus);
+  }
+  if (!paymentEnabled.value) return false;
   return status === 'pending' && ['unpaid', 'failed', 'closed'].includes(order.value.paymentStatus);
 });
 
 const canApplyRefund = computed(() => {
   if (!order.value) return false;
+  if (isFreeOrder.value) return false;
   const orderStatus = order.value.orderStatus || order.value.status;
   if (orderStatus !== 'paid' && orderStatus !== 'completed') {
     return false;
@@ -314,14 +323,16 @@ async function loadOrder(id: string) {
   }
 }
 
-function statusText(status: OrderStatus) {
+function statusText(status: OrderStatus, free = false) {
+  if (free) return status === 'pending' ? '待领取' : '已完成';
   if (status === 'pending') return '待支付';
   if (status === 'paid') return '已支付';
   if (status === 'completed') return '已完成';
   return '已取消';
 }
 
-function paymentStatusText(status: PaymentStatus) {
+function paymentStatusText(status: PaymentStatus, free = false) {
+  if (free) return '无需支付';
   if (status === 'unpaid') return '未支付';
   if (status === 'processing') return '支付中';
   if (status === 'succeeded') return '支付成功';
@@ -364,6 +375,8 @@ async function submitPayment() {
     if (result.payParams) {
       await requestMiniProgramPayment(result.payParams);
       void uni.showToast({ title: '支付成功', icon: 'none' });
+    } else if (order.value && isFreeOrder.value) {
+      void uni.showToast({ title: '商品已领取', icon: 'none' });
     } else {
       void uni.showToast({ title: '支付请求已提交', icon: 'none' });
     }

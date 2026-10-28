@@ -86,7 +86,10 @@ import { ensureMiniCapability } from '@/platform/runtime'
 import { redirectToNav, type NavKey } from '@/utils/navKey'
 import { setSelectedControllable } from '@/utils/controllableSelection'
 import { isPhoneBindingRequiredError, requestMiniProgramPayment, toCheckoutErrorMessage } from '@/utils/checkout'
-import type { MiniPaymentAction } from '@mini-platform/core'
+
+defineOptions({
+  name: 'ProductsPage',
+})
 
 const fallbackCover = '/static/images/checkin.jpg'
 
@@ -133,7 +136,7 @@ function formatPrice(price: number): string {
 
 function statusText(product: ProductListItem): string {
   if (!isOwnedProduct(product)) {
-    return '可购买'
+    return Number(product.price) === 0 ? '免费领取' : '可购买'
   }
   if (product.controllableAsset?.selected || product.skin?.selected) {
     return '使用中'
@@ -243,7 +246,8 @@ async function handlePrimaryAction(product: ProductListItem) {
 }
 
 async function handlePurchase(product: ProductListItem) {
-  if (!paymentEnabled.value) {
+  const isFree = Number(product.price) === 0
+  if (!isFree && !paymentEnabled.value) {
     void uni.showToast({ title: '当前平台暂未开放购买', icon: 'none' })
     return
   }
@@ -256,12 +260,16 @@ async function handlePurchase(product: ProductListItem) {
   try {
     const result = await purchaseProductById(product.id)
     if (result.payParams) {
-      await requestMiniProgramPayment(result.payParams as MiniPaymentAction)
+      await requestMiniProgramPayment(result.payParams)
     }
     await reload()
+    if (!result.payParams) {
+      void uni.showToast({ title: '领取成功，商品已获得', icon: 'none' })
+      return
+    }
     void uni.showToast({ title: '购买成功', icon: 'none' })
     if (result.order?.id) {
-      uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` })
+      void uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(result.order.id)}` })
     }
   } catch (error: unknown) {
     if (isPhoneBindingRequiredError(error)) {

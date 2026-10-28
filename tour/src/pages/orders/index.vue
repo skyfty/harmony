@@ -9,7 +9,9 @@
       <view v-for="order in orders" :key="order.id" class="card" @tap="openDetail(order.id)">
         <view class="row">
           <text class="no">{{ order.orderNumber }}</text>
-          <text class="status">{{ statusText(order.status) }} / {{ paymentStatusText(order.paymentStatus) }}</text>
+          <text class="status">
+            {{ statusText(order.status, isFreeOrder(order)) }} / {{ paymentStatusText(order.paymentStatus, isFreeOrder(order)) }}
+          </text>
         </view>
         <view class="meta">
           <text class="meta-text">下单时间 {{ formatDate(order.createdAt) }}</text>
@@ -23,7 +25,11 @@
               class="pay-btn"
               :disabled="payingOrderId === order.id"
               @tap.stop="submitPayment(order.id)"
-            >{{ payingOrderId === order.id ? '支付中...' : '立即支付' }}</button>
+            >{{
+              payingOrderId === order.id
+                ? (isFreeOrder(order) ? '领取中...' : '支付中...')
+                : (isFreeOrder(order) ? '立即领取' : '立即支付')
+            }}</button>
             <button class="detail-btn" @tap.stop="openDetail(order.id)">详情</button>
             <text class="link">查看详情 ›</text>
           </view>
@@ -50,6 +56,10 @@ import {
 } from '@/utils/checkout';
 import { ensureMiniCapability } from '@/platform/runtime';
 
+defineOptions({
+  name: 'OrdersPage',
+});
+
 const orders = ref<OrderListItem[]>([]);
 const payingOrderId = ref('');
 const showPhoneBindSheet = ref(false);
@@ -65,7 +75,7 @@ async function reload() {
   try {
     orders.value = await listOrders();
   } catch {
-    uni.showToast({ title: '加载失败', icon: 'none' });
+    void uni.showToast({ title: '加载失败', icon: 'none' });
   }
 }
 
@@ -74,23 +84,32 @@ function itemCount(order: OrderListItem) {
 }
 
 function openDetail(id: string) {
-  uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(id)}` });
+  void uni.navigateTo({ url: `/pages/orders/detail/index?id=${encodeURIComponent(id)}` });
 }
 
 function showPayAction(order: OrderListItem) {
-  if (!paymentEnabled.value) return false;
   const status = order.orderStatus || order.status;
+  if (isFreeOrder(order)) {
+    return status === 'pending' && ['unpaid', 'processing', 'failed', 'closed'].includes(order.paymentStatus);
+  }
+  if (!paymentEnabled.value) return false;
   return status === 'pending' && ['unpaid', 'failed', 'closed'].includes(order.paymentStatus);
 }
 
-function statusText(status: OrderStatus) {
+function isFreeOrder(order: OrderListItem) {
+  return Number(order.totalAmount) === 0 || order.paymentProvider === 'free';
+}
+
+function statusText(status: OrderStatus, free = false) {
+  if (free) return status === 'pending' ? '待领取' : '已完成';
   if (status === 'pending') return '待支付';
   if (status === 'paid') return '已支付';
   if (status === 'completed') return '已完成';
   return '已取消';
 }
 
-function paymentStatusText(status: PaymentStatus) {
+function paymentStatusText(status: PaymentStatus, free = false) {
+  if (free) return '无需支付';
   if (status === 'unpaid') return '未支付';
   if (status === 'processing') return '支付中';
   if (status === 'succeeded') return '支付成功';
@@ -119,6 +138,8 @@ async function submitPayment(orderId: string) {
     if (result.payParams) {
       await requestMiniProgramPayment(result.payParams);
       void uni.showToast({ title: '支付成功', icon: 'none' });
+    } else if (orders.value.some((order) => order.id === orderId && isFreeOrder(order))) {
+      void uni.showToast({ title: '领取成功', icon: 'none' });
     } else {
       void uni.showToast({ title: '支付请求已提交', icon: 'none' });
     }

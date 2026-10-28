@@ -12,8 +12,11 @@ import { UserSkinSelectionModel } from '@/models/UserSkinSelection'
 import { addProductToWarehouse } from '@/services/warehouseService'
 import { queryWechatOrderByOutTradeNo } from '@/services/paymentService'
 import type { WechatTransaction } from '@/services/paymentService'
+import { isFreeOrderRecord } from '@/utils/commerce'
 
 type SettlementSource = 'wechat-notify' | 'order-list-sync' | 'order-detail-sync'
+type FreeSettlementSource = 'free-purchase' | 'free-order-pay'
+type FulfillmentSource = SettlementSource | FreeSettlementSource
 
 interface SettlePaidOrderOptions {
 	orderNumber: string
@@ -31,6 +34,12 @@ interface SyncOrderOptions {
 interface SyncOrderResult {
 	orderFound: boolean
 	changed: boolean
+}
+
+interface SettleFreeOrderOptions {
+	orderId: string
+	userId: string
+	source: FreeSettlementSource
 }
 
 let transactionCapability: 'unknown' | 'supported' | 'unsupported' = 'unknown'
@@ -58,7 +67,7 @@ function normalizeQuantity(quantity: unknown): number {
 function mergeOrderPaymentResult(
 	original: Record<string, unknown> | null | undefined,
 	input: {
-		source: SettlementSource
+		source: FulfillmentSource
 		notifyId?: string
 		success?: WechatTransaction
 		wechatQuery?: WechatTransaction
@@ -76,7 +85,7 @@ function mergeOrderPaymentResult(
 	}
 }
 
-async function fulfillOrder(order: any, session?: ClientSession): Promise<void> {
+async function fulfillOrder(order: any, session?: ClientSession, options: { oneTimeOwnership?: boolean } = {}): Promise<void> {
 	const now = new Date()
 	for (const item of order.items ?? []) {
 		if (!item?.productId) {
@@ -97,6 +106,39 @@ async function fulfillOrder(order: any, session?: ClientSession): Promise<void> 
 		}
 
 		const expiresAt = product.validityDays ? new Date(now.getTime() + product.validityDays * 86400000) : null
+		if (options.oneTimeOwnership) {
+			const claimResult = await UserProductModel.updateOne(
+				{ userId: order.userId, productId: product._id },
+				{
+					$setOnInsert: {
+						userId: order.userId,
+						productId: product._id,
+						state: 'unused',
+						usedAt: null,
+						expiresAt,
+						orderId: order._id,
+						metadata: order.metadata ?? null,
+						acquiredAt: now,
+					},
+				},
+				{ upsert: true, session },
+			).exec()
+			if (!claimResult.upsertedId) {
+				const existingEntryQuery = UserProductModel.findOne({
+					userId: order.userId,
+					productId: product._id,
+				})
+					.select({ orderId: 1 })
+					.lean()
+				if (session) {
+					existingEntryQuery.session(session)
+				}
+				const existingEntry = await existingEntryQuery.exec()
+				if (String(existingEntry?.orderId ?? '') !== order._id.toString()) {
+					continue
+				}
+			}
+		}
 		await UserProductModel.updateOne(
 			{ userId: order.userId, productId: product._id },
 			{
@@ -209,6 +251,96 @@ async function fulfillOrder(order: any, session?: ClientSession): Promise<void> 
 	}
 }
 
+export async function settleFreeOrder(options: SettleFreeOrderOptions): Promise<SyncOrderResult> {
+	const session = await startSession()
+	try {
+		let result: SyncOrderResult = { orderFound: false, changed: false }
+
+		const settleCore = async (activeSession?: ClientSession): Promise<void> => {
+			const orderQuery = OrderModel.findOne({ _id: options.orderId, userId: options.userId })
+			if (activeSession) {
+				orderQuery.session(activeSession)
+			}
+			const order = await orderQuery.exec()
+			if (!order) {
+				result = { orderFound: false, changed: false }
+				return
+			}
+
+			result.orderFound = true
+			if (!isFreeOrderRecord(order)) {
+				throw new Error('Only zero-amount orders can use free fulfillment')
+			}
+
+			const orderStatus = order.orderStatus ?? order.status
+			const alreadyCompleted = orderStatus === 'completed'
+				&& order.paymentStatus === 'succeeded'
+				&& order.fulfillmentStatus === 'fulfilled'
+			if (alreadyCompleted) {
+				return
+			}
+			if (orderStatus === 'cancelled') {
+				throw new Error('Cancelled orders cannot be fulfilled')
+			}
+			if (!['none', 'rejected', 'failed'].includes(order.refundStatus ?? 'none')) {
+				throw new Error('Order has an active refund flow')
+			}
+
+			const now = new Date()
+			await fulfillOrder(order, activeSession, { oneTimeOwnership: true })
+
+			order.status = 'completed'
+			order.orderStatus = 'completed'
+			order.paymentStatus = 'succeeded'
+			order.paymentMethod = 'free'
+			order.paymentProvider = 'free'
+			order.paidAt = order.paidAt ?? now
+			order.fulfillmentStatus = 'fulfilled'
+			order.fulfilledAt = now
+			order.paymentResult = {
+				...mergeOrderPaymentResult(order.paymentResult, { source: options.source }),
+				free: true,
+			}
+
+			if (activeSession) {
+				await order.save({ session: activeSession })
+			} else {
+				await order.save()
+			}
+			result.changed = true
+		}
+
+		if (transactionCapability === 'unsupported') {
+			await settleCore()
+			return result
+		}
+
+		try {
+			await session.withTransaction(async () => {
+				await settleCore(session)
+			})
+			transactionCapability = 'supported'
+		} catch (error) {
+			if (!isTransactionUnsupportedError(error)) {
+				throw error
+			}
+			transactionCapability = 'unsupported'
+			if (!transactionFallbackLogged) {
+				console.warn('[order-settlement] transaction unavailable, fallback to non-transaction settlement', {
+					orderId: options.orderId,
+					source: options.source,
+				})
+				transactionFallbackLogged = true
+			}
+			await settleCore()
+		}
+
+		return result
+	} finally {
+		await session.endSession()
+	}
+}
+
 export async function settlePaidOrder(options: SettlePaidOrderOptions): Promise<SyncOrderResult> {
 	const safeOrderNumber = options.orderNumber.trim()
 	if (!safeOrderNumber) {
@@ -303,7 +435,11 @@ function shouldActiveSyncOrder(order: {
 	fulfillmentStatus?: string
 	orderStatus?: string
 	status?: string
+	totalAmount?: number
 }): boolean {
+	if (isFreeOrderRecord(order)) {
+		return false
+	}
 	if (order.fulfillmentStatus !== 'fulfilled' && order.paymentStatus === 'succeeded') {
 		return true
 	}
@@ -321,7 +457,7 @@ export async function syncOrderWithWechat(options: SyncOrderOptions): Promise<Sy
 	}
 
 	const order = await OrderModel.findOne({ orderNumber: safeOrderNumber })
-		.select({ orderNumber: 1, paymentStatus: 1, fulfillmentStatus: 1, orderStatus: 1, status: 1, paymentResult: 1 })
+		.select({ orderNumber: 1, paymentStatus: 1, fulfillmentStatus: 1, orderStatus: 1, status: 1, paymentResult: 1, totalAmount: 1 })
 		.lean()
 		.exec()
 	if (!order) {

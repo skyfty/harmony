@@ -6,8 +6,9 @@ import { ControllableAssetModel } from '@/models/ControllableAsset'
 import { AppUserModel } from '@/models/AppUser'
 import { ensureMiniCheckoutUser, ensureUserId } from './utils'
 import { getMiniPlatformPaymentProvider } from '@/services/miniPlatformProviders'
-import { syncOrderWithWechat } from '@/services/orderSettlementService'
+import { settleFreeOrder, syncOrderWithWechat } from '@/services/orderSettlementService'
 import { generateOrderNumber } from '@/utils/orderNumber'
+import { isFreeOrderRecord } from '@/utils/commerce'
 
 type OrderStatus = 'pending' | 'paid' | 'completed' | 'cancelled'
 type PaymentStatus = 'unpaid' | 'processing' | 'succeeded' | 'failed' | 'refunded' | 'closed'
@@ -158,6 +159,9 @@ function getMiniAppId(ctx: Context): string | undefined {
 }
 
 function shouldTryActiveSync(order: OrderLean): boolean {
+  if (isFreeOrderRecord(order)) {
+    return false
+  }
   if (order.paymentStatus === 'succeeded' && order.fulfillmentStatus !== 'fulfilled') {
     return true
   }
@@ -471,8 +475,7 @@ export async function createOrder(ctx: Context): Promise<void> {
 }
 
 export async function payOrder(ctx: Context): Promise<void> {
-  const checkoutUser = await ensureMiniCheckoutUser(ctx)
-  const userId = checkoutUser.id
+  const userId = ensureUserId(ctx)
   const { id } = ctx.params as { id: string }
   if (!Types.ObjectId.isValid(id)) {
     ctx.throw(400, 'Invalid order id')
@@ -487,6 +490,32 @@ export async function payOrder(ctx: Context): Promise<void> {
   const orderStatus = (order.orderStatus ?? order.status) as OrderStatus
   const paymentStatus = (order.paymentStatus ?? (orderStatus === 'paid' ? 'succeeded' : 'unpaid')) as PaymentStatus
   const refundStatus = resolveRefundStatus(order.toObject() as OrderLean)
+  if (isFreeOrderRecord(order)) {
+    if (orderStatus === 'cancelled') {
+      ctx.throw(400, 'Order is not payable')
+    }
+    if (refundStatus !== 'none') {
+      ctx.throw(400, 'Free orders cannot be refunded')
+    }
+    await settleFreeOrder({
+      orderId: order._id.toString(),
+      userId,
+      source: 'free-order-pay',
+    })
+    const settled = await OrderModel.findById(order._id).lean().exec()
+    if (!settled) {
+      ctx.throw(500, 'Failed to load settled order')
+      return
+    }
+    ctx.body = {
+      orderId: settled._id.toString(),
+      orderNumber: settled.orderNumber,
+      status: settled.orderStatus ?? settled.status,
+      paymentStatus: settled.paymentStatus,
+      payParams: undefined,
+    }
+    return
+  }
   if (orderStatus === 'completed' || orderStatus === 'cancelled') {
     ctx.throw(400, 'Order is not payable')
   }
@@ -497,6 +526,7 @@ export async function payOrder(ctx: Context): Promise<void> {
     ctx.throw(400, 'Order has an active refund flow')
   }
 
+  const checkoutUser = await ensureMiniCheckoutUser(ctx)
   const description = (order.items[0]?.name || 'Harmony商品支付').slice(0, 120)
   const paymentPlatform = checkoutUser.platform ?? 'wechat'
   const paymentResult = await getMiniPlatformPaymentProvider(paymentPlatform).createPayment({
@@ -557,6 +587,9 @@ export async function applyOrderRefund(ctx: Context): Promise<void> {
 
   if (orderStatus !== 'paid' && orderStatus !== 'completed') {
     ctx.throw(400, 'Order is not refundable')
+  }
+  if (isFreeOrderRecord(order)) {
+    ctx.throw(400, 'Free orders cannot be refunded')
   }
   if (paymentStatus !== 'succeeded') {
     ctx.throw(400, 'Order payment is not completed')

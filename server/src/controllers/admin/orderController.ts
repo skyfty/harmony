@@ -6,6 +6,7 @@ import { ProductModel } from '@/models/Product'
 import { UserProductModel } from '@/models/UserProduct'
 import { createOrderRefund } from '@/services/paymentService'
 import { generateRefundRequestNumber } from '@/utils/orderNumber'
+import { isFreeOrderRecord } from '@/utils/commerce'
 
 const ORDER_STATUS = new Set(['pending', 'paid', 'completed', 'cancelled'])
 const PAYMENT_STATUS = new Set(['unpaid', 'processing', 'succeeded', 'failed', 'refunded', 'closed'])
@@ -309,6 +310,9 @@ export async function approveOrderRefund(ctx: Context): Promise<void> {
 
   if (order.paymentStatus !== 'succeeded') {
     ctx.throw(400, 'Order payment is not refundable')
+  }
+  if (isFreeOrderRecord(order)) {
+    ctx.throw(400, 'Free orders cannot be refunded')
   }
   if (!['applied', 'failed'].includes(order.refundStatus ?? 'none')) {
     ctx.throw(400, 'Order refund is not pending review')
