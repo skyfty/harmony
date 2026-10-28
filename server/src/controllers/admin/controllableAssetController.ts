@@ -242,9 +242,14 @@ export async function deleteControllableAsset(ctx: Context): Promise<void> {
   await ControllableAssetModel.deleteOne({ _id: current._id }).exec()
   if (current.productId) {
     await ProductModel.findByIdAndUpdate(current.productId, {
-      isDeleted: true,
-      deletedAt: new Date(),
-      controllableAssetId: null,
+      $set: {
+        isDeleted: true,
+        deletedAt: new Date(),
+      },
+      $unset: {
+        controllableAssetId: 1,
+        controllableType: 1,
+      },
     }).exec()
   }
   ctx.body = {}
