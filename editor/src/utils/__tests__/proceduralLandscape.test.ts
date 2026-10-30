@@ -38,10 +38,11 @@ import {
   takeDensityPrefix,
 } from '@schema/proceduralLandscape/chunkPlan'
 import { fbm2 } from '@schema/proceduralLandscape/noise'
-import { createDefaultProceduralLandscapeProps } from '@schema/proceduralLandscape/config'
 import {
   activeRoadWaypoints,
   clampProceduralLandscapeProps,
+  cloneProceduralLandscapeProps,
+  createDefaultProceduralLandscapeProps,
 } from '@schema/proceduralLandscape/config'
 import {
   collectFarForestPlacements,
@@ -68,7 +69,11 @@ import {
   applyProceduralLandscapeSurfaceInjection,
   createProceduralLandscapeSurfaceUniforms,
 } from '@schema/proceduralLandscape/surfaceMaterial'
-import { PROCEDURAL_LANDSCAPE_COMPONENT_TYPE } from '@schema/components'
+import {
+  PROCEDURAL_LANDSCAPE_COMPONENT_TYPE,
+  createProceduralLandscapeComponentState,
+} from '@schema/components'
+import type { SceneNode } from '@schema/core'
 import { visitExplicitComponentAssetReferences } from '@/utils/sceneExplicitAssetReferences'
 import { computeRoadMarkings } from '@schema/proceduralLandscape/roadMarkings'
 import {
@@ -471,6 +476,51 @@ describe('road waypoint guide mode', () => {
     expect(serialize(single)).toEqual(serialize(legacy))
     expect(empty.failureReason).toBe(legacy.failureReason)
     expect(single.failureReason).toBe(legacy.failureReason)
+  })
+})
+
+describe('road boundary props', () => {
+  it('defaults legacy scenes to no boundary and accepts the explicit modes', () => {
+    const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
+    expect(defaults.road.boundaryMode).toBe('none')
+    expect(clampProceduralLandscapeProps({}).road.boundaryMode).toBe('none')
+    expect(clampProceduralLandscapeProps({
+      road: { ...defaults.road, boundaryMode: 'air-wall' },
+    }).road.boundaryMode).toBe('air-wall')
+    expect(clampProceduralLandscapeProps({
+      road: { ...defaults.road, boundaryMode: 'isolation-wall' },
+    }).road.boundaryMode).toBe('isolation-wall')
+    expect(clampProceduralLandscapeProps({
+      road: {
+        ...defaults.road,
+        boundaryMode: 'unknown-mode' as never,
+      },
+    }).road.boundaryMode).toBe('none')
+  })
+
+  it('preserves the boundary mode through cloning and component synthesis', () => {
+    const defaults = createDefaultProceduralLandscapeProps({ id: 'node-a' })
+    const source = {
+      ...defaults,
+      road: { ...defaults.road, boundaryMode: 'isolation-wall' as const },
+    }
+    expect(cloneProceduralLandscapeProps(source).road.boundaryMode).toBe('isolation-wall')
+
+    const node = {
+      id: 'node-a',
+      name: 'DEM Terrain',
+      nodeType: 'Mesh',
+      position: { x: 0, y: 0, z: 0 },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+    } as unknown as SceneNode
+    const component = createProceduralLandscapeComponentState(node, {
+      road: {
+        ...defaults.road,
+        boundaryMode: 'air-wall',
+      },
+    })
+    expect(component.props.road.boundaryMode).toBe('air-wall')
   })
 })
 

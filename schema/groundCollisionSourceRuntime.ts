@@ -13,6 +13,8 @@ import {
 import {
   resolveProceduralLandscapeDemCollisionSampler,
   type ProceduralLandscapeDemCollisionSampler,
+  isProceduralLandscapeRoadBoundaryCollision,
+  isProceduralLandscapeRoadBoundaryVisual,
   isProceduralLandscapeRoadCollision,
   isProceduralLandscapeRoadbedSurface,
   isProceduralLandscapeRoadSurface,
@@ -271,6 +273,8 @@ export function hasGroundCollisionMesh(sourceObject: Object3D | null | undefined
       && !isProceduralLandscapeRoadSurface(object)
       && !isProceduralLandscapeRoadbedSurface(object)
       && !isProceduralLandscapeRoadCollision(object)
+      && !isProceduralLandscapeRoadBoundaryCollision(object)
+      && !isProceduralLandscapeRoadBoundaryVisual(object)
     ) {
       const position = mesh.geometry?.getAttribute('position')
       if (position && position.itemSize >= 3 && position.count >= 3) {

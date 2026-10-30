@@ -86,7 +86,14 @@ import {
 import { createRoadBand, type RoadBandHandle, type RoadBandTextures } from './roadBand'
 import { createRoadCollisionGeometry } from './roadCollision'
 import {
+  createRoadBoundaryCollisionGeometry,
+  createRoadBoundaryWallSegments,
+  ROAD_BOUNDARY_ROW_SPACING,
+} from './roadBoundary'
+import {
   markProceduralLandscapeDemTerrain,
+  markProceduralLandscapeRoadBoundaryCollision,
+  markProceduralLandscapeRoadBoundaryVisual,
   markProceduralLandscapeRoadbedSurface,
   markProceduralLandscapeRoadCollision,
 } from './collisionMetadata'
@@ -396,6 +403,9 @@ export interface ProceduralLandscapeRuntimeStats {
   barrierInstances: number
   /** 路侧墙体段数（Drystone / Barrier / Fence / SeaWall 合计）。 */
   wallSegmentCount: number
+  /** Revision changes whenever the road containment collision mesh is replaced or cleared. */
+  roadBoundaryCollisionRevision: number
+  roadBoundaryCollisionTriangleCount: number
   /** 远景林（相机锚定多环环带：近景流式半径 → 雾距）实例数。 */
   farTreeInstances: number
   /** 远景林当前外半径（米；0 = 关闭/尚未建立）。 */
@@ -992,7 +1002,14 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     instances: jsonKey([props.grass, props.bushes, props.quality]),
     waterSpatial: jsonKey([props.water.levelMode, props.water.levelOffset]),
     lod: jsonKey([props.forest.nearDistance, props.forest.nearTreeRadius, props.quality]),
-    uniforms: jsonKey([props.surface, props.canopy, props.wind, props.road.flattenBand, props.road.flattenStrength]),
+    uniforms: jsonKey([
+      props.surface,
+      props.canopy,
+      props.wind,
+      props.road.boundaryMode,
+      props.road.flattenBand,
+      props.road.flattenStrength,
+    ]),
     textureNeeds: jsonKey([
       props.surface.enabled,
       props.surface.textures,
@@ -1003,6 +1020,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       props.bushes.enabled,
       props.road.enabled,
       props.road.width,
+      props.road.boundaryMode === 'isolation-wall',
       props.walls.drystone.enabled,
       props.walls.fence.enabled,
       props.walls.barrier.enabled,
@@ -1089,6 +1107,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
   let surfaceMeshes: THREE.Mesh[] = []
   let roadBand: RoadBandHandle | null = null
   let roadCollisionMesh: THREE.Mesh | null = null
+  let roadBoundaryCollisionMesh: THREE.Mesh | null = null
+  let roadBoundaryWallLayer: WallLayerHandle | null = null
+  let roadBoundaryCollisionRevision = 0
   let treeMeshManager: TreeMeshManager | null = null
   let treeMeshInitStarted = false
   let waterPlane: WaterPlaneHandle | null = null
@@ -1273,6 +1294,8 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     assetVariant: assetStore.variant,
     barrierInstances: 0,
     wallSegmentCount: 0,
+    roadBoundaryCollisionRevision: 0,
+    roadBoundaryCollisionTriangleCount: 0,
     farTreeInstances: 0,
     farForestRadius: 0,
     worldForestInstances: 0,
@@ -1909,6 +1932,25 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadCollisionMesh = null
   }
 
+  function disposeRoadBoundary(): void {
+    if (roadBoundaryCollisionMesh) {
+      roadBoundaryCollisionMesh.removeFromParent()
+      roadBoundaryCollisionMesh.geometry.dispose()
+      const material = roadBoundaryCollisionMesh.material
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry.dispose())
+      } else {
+        material.dispose()
+      }
+      roadBoundaryCollisionMesh = null
+      roadBoundaryCollisionRevision += 1
+      stats.roadBoundaryCollisionRevision = roadBoundaryCollisionRevision
+      stats.roadBoundaryCollisionTriangleCount = 0
+    }
+    roadBoundaryWallLayer?.dispose()
+    roadBoundaryWallLayer = null
+  }
+
   function disposeSurfaceState(): void {
     surfacePatch?.restore()
     surfacePatch = null
@@ -1976,6 +2018,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     wallLayer?.dispose()
     wallLayer = null
     wallSegments = []
+    disposeRoadBoundary()
   }
 
   /**
@@ -2960,6 +3003,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     applyStaticSurfaceUniforms()
     barrierSignature = resolveBarrierSignature()
     buildWalls()
+    buildRoadBoundary()
     buildWater()
     releaseAllBatches()
     startWorldForest()
@@ -2992,6 +3036,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       props.walls,
       props.water,
       props.road.enabled,
+      props.road.boundaryMode,
       props.road.width,
       props.road.shoulderWidth,
       props.road.flattenBand,
@@ -3145,7 +3190,9 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     )
     stats.wallSegmentCount = wallSegments.length
     if (!wallSegments.length) {
-      if (wallTexturesRequested) {
+      const boundaryNeedsWallTextures =
+        props.road.enabled && props.road.boundaryMode === 'isolation-wall'
+      if (wallTexturesRequested && !boundaryNeedsWallTextures) {
         wallTexturesRequested = false
         seasonAssetsSeason = null
         void loadSeasonAssets(currentSeason, { force: true })
@@ -3225,6 +3272,85 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       tagArtifact(child)
     }
     hostObject.add(wallLayer.group)
+  }
+
+  /**
+   * Road containment belongs to the road rather than the terrain-driven wall
+   * placement layer. Air walls use only the collision prism; isolation walls
+   * add the same seasonal barrier visual used by the official hard guardrail.
+   */
+  function buildRoadBoundary(): void {
+    disposeRoadBoundary()
+    if (
+      !props.road.enabled
+      || props.road.boundaryMode === 'none'
+      || !roadResult
+      || roadResult.nodes.length < 2
+      || !hostObject
+    ) {
+      return
+    }
+    const rows = roadBandRows
+      ?? roadResult.nodes.map((row, sourceIndex) => ({ ...row, sourceIndex }))
+    const options = {
+      rows,
+      columnHeights: roadBandColumns,
+      halfWidth: roadHalfWidth(props),
+      closed: roadResult.closed,
+      rowSpacing: ROAD_BOUNDARY_ROW_SPACING,
+      lift: ROAD_BAND_LIFT,
+      hostInverse,
+    }
+    const collision = createRoadBoundaryCollisionGeometry(options)
+    if (collision) {
+      const collisionMaterial = new THREE.MeshBasicMaterial()
+      collisionMaterial.visible = false
+      const collisionMesh = new THREE.Mesh(collision.geometry, collisionMaterial)
+      collisionMesh.name = `slowroads-road-boundary-collision-${hooks.nodeId}`
+      markProceduralLandscapeRoadBoundaryCollision(collisionMesh)
+      tagArtifact(collisionMesh)
+      hostObject.add(collisionMesh)
+      roadBoundaryCollisionMesh = collisionMesh
+      roadBoundaryCollisionRevision += 1
+      stats.roadBoundaryCollisionRevision = roadBoundaryCollisionRevision
+      stats.roadBoundaryCollisionTriangleCount = collision.triangleCount
+    }
+    if (props.road.boundaryMode !== 'isolation-wall') {
+      return
+    }
+    const segments = createRoadBoundaryWallSegments(options)
+    if (!segments.length) {
+      return
+    }
+    if (!wallTexturesRequested) {
+      wallTexturesRequested = true
+      void loadSeasonAssets(currentSeason, { force: true })
+    }
+    const season = seasonAssetsSeason ?? currentSeason
+    const entry = SEASON_CATALOG[season]
+    const placeholder = getSharedPlaceholderTexture()
+    roadBoundaryWallLayer = createWallLayers({
+      segments,
+      textures: {
+        drystone: textureFor(entry.walls.drystone.id) ?? placeholder,
+        barrier: textureFor(entry.walls.barrier.id) ?? placeholder,
+        seaWall: textureFor(entry.walls.seaWall.id) ?? placeholder,
+      },
+      shadowFactor: SEASON_PARAMS[season].shadowFactor,
+      radiance: appliedLighting.radiance,
+      hostInverse,
+    })
+    roadBoundaryWallLayer.group.name = `slowroads-road-boundary-walls-${hooks.nodeId}`
+    roadBoundaryWallLayer.setVisibility({
+      drystone: false,
+      barrier: true,
+      seaWall: false,
+    })
+    for (const child of roadBoundaryWallLayer.group.children) {
+      markProceduralLandscapeRoadBoundaryVisual(child)
+      tagArtifact(child)
+    }
+    hostObject.add(roadBoundaryWallLayer.group)
   }
 
   /**
@@ -4638,8 +4764,10 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       // Road textures are loaded only after the trace produced a usable path.
       roadSingle: props.road.enabled && roadReady && singleTrack,
       roadWide: props.road.enabled && roadReady && !singleTrack,
-      // Wall textures are loaded only after wall placement produced segments.
-      walls: wallSegments.length > 0,
+      // Wall textures serve both terrain-driven placement and the continuous
+      // isolation boundary; either consumer is enough to request the set.
+      walls: wallSegments.length > 0
+        || (props.road.enabled && props.road.boundaryMode === 'isolation-wall'),
       // sea_waves is loaded only when the water line is actually visible.
       water: Boolean(
         props.water.enabled
@@ -4789,6 +4917,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
         appliedLighting.radiance,
       )
     }
+    if (roadBoundaryWallLayer) {
+      roadBoundaryWallLayer.setTextures(
+        {
+          drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
+          barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
+          seaWall: textureFor(entry.walls.seaWall.id) ?? getSharedPlaceholderTexture(),
+        },
+        SEASON_PARAMS[season].shadowFactor,
+        appliedLighting.radiance,
+      )
+    }
     applyTreeMeshSeasonTextures()
     buildWater()
   }
@@ -4802,6 +4941,17 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     roadBand?.setSeason(season, roadBandTexturesFor(season))
     if (wallLayer) {
       wallLayer.setTextures(
+        {
+          drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
+          barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
+          seaWall: textureFor(entry.walls.seaWall.id) ?? getSharedPlaceholderTexture(),
+        },
+        SEASON_PARAMS[season].shadowFactor,
+        appliedLighting.radiance,
+      )
+    }
+    if (roadBoundaryWallLayer) {
+      roadBoundaryWallLayer.setTextures(
         {
           drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
           barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
@@ -4841,6 +4991,18 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
     if (wallLayer) {
       const entry = SEASON_CATALOG[seasonAssetsSeason ?? currentSeason]
       wallLayer.setTextures(
+        {
+          drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
+          barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
+          seaWall: textureFor(entry.walls.seaWall.id) ?? getSharedPlaceholderTexture(),
+        },
+        shadowFactor,
+        radiance,
+      )
+    }
+    if (roadBoundaryWallLayer) {
+      const entry = SEASON_CATALOG[seasonAssetsSeason ?? currentSeason]
+      roadBoundaryWallLayer.setTextures(
         {
           drystone: textureFor(entry.walls.drystone.id) ?? getSharedPlaceholderTexture(),
           barrier: textureFor(entry.walls.barrier.id) ?? getSharedPlaceholderTexture(),
@@ -5025,6 +5187,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
       if (nextBarrierSignature !== barrierSignature) {
         barrierSignature = nextBarrierSignature
         buildWalls()
+        buildRoadBoundary()
         buildWater()
       }
     }
@@ -5173,6 +5336,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           props.road.enabled,
           props.road.width,
           props.road.shoulderWidth,
+          props.road.boundaryMode,
           props.road.flattenBand,
           props.road.flattenStrength,
         ]),
@@ -5186,6 +5350,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
           props.bushes.enabled,
           props.road.enabled,
           props.road.width,
+          props.road.boundaryMode === 'isolation-wall',
           props.walls.drystone.enabled,
           props.walls.fence.enabled,
           props.walls.barrier.enabled,

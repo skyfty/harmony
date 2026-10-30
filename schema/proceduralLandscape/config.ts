@@ -74,6 +74,7 @@ export interface ProceduralLandscapeSurfaceProps {
 
 export type ProceduralLandscapeRoadTermination = 'boundary' | 'loop' | 'dead-end'
 export type ProceduralLandscapeRoadStrategy = 'seeded' | 'shortest'
+export type ProceduralLandscapeRoadBoundaryMode = 'none' | 'air-wall' | 'isolation-wall'
 export type ProceduralLandscapeBaseMapMode = 'replace' | 'aerial' | 'blend'
 
 function normalizeRoadTermination(value: unknown): ProceduralLandscapeRoadTermination {
@@ -124,6 +125,8 @@ export interface ProceduralLandscapeGeneratedRouteProps {
 export interface ProceduralLandscapeRoadProps {
   enabled: boolean
   routing: ProceduralLandscapeRoadRoutingProps
+  /** Invisible collision boundary, optionally paired with a seasonal visible guardrail. */
+  boundaryMode: ProceduralLandscapeRoadBoundaryMode
   /** Official Slow Roads curve style. Width remains independently configurable. */
   style: RoadStyleId
   /**
@@ -506,6 +509,13 @@ function clampGeneratedRoute(
   }
 }
 
+function normalizeRoadBoundaryMode(value: unknown): ProceduralLandscapeRoadBoundaryMode {
+  if (value === 'air-wall' || value === 'isolation-wall') {
+    return value
+  }
+  return 'none'
+}
+
 export function createDefaultProceduralLandscapeProps(node: { id: string }): ProceduralLandscapeComponentProps {
   return {
     seed: hashStringToSeed(node.id || 'procedural-landscape'),
@@ -549,6 +559,7 @@ export function createDefaultProceduralLandscapeProps(node: { id: string }): Pro
         strategy: 'seeded',
         termination: 'boundary',
       },
+      boundaryMode: 'none',
       generatedRoute: null,
       style: DEFAULT_ROAD_STYLE,
       width: 7,
@@ -753,6 +764,7 @@ export function clampProceduralLandscapeProps(
         strategy: routing?.strategy === 'shortest' ? 'shortest' : 'seeded',
         termination: normalizeRoadTermination(routing?.termination),
       },
+      boundaryMode: normalizeRoadBoundaryMode(road?.boundaryMode),
       generatedRoute,
       style: normalizeRoadStyleId(road?.style),
       // 下限取官方 NARROW 档：< 2.25m 才会切到单车道贴图（`isSingleTrackRoad`）。

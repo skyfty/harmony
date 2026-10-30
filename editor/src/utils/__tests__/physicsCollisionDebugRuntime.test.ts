@@ -33,6 +33,7 @@ describe('physics collision debug runtime', () => {
     const cases = [
       ['terrain-collision:terrain:ground-patch:0', 'groundPatch'],
       ['terrain-collision:terrain:roadbed:12:18:roadbed:4', 'roadbed'],
+      ['terrain-collision:terrain:road-boundary:12:18:road-boundary:4', 'roadBoundary'],
       ['terrain-collision:terrain:dem-terrain:12:18:dem-terrain:4', 'demTerrain'],
       ['terrain-collision:terrain:mesh:wall', 'other'],
       ['infinite-ground:terrain:box:12:18', 'baseGround'],
@@ -49,6 +50,7 @@ describe('physics collision debug runtime', () => {
     expect(PHYSICS_COLLISION_DEBUG_COLORS).toEqual({
       groundPatch: '#22ff88',
       roadbed: '#ff9f1c',
+      roadBoundary: '#ef4444',
       baseGround: '#38bdf8',
       demTerrain: '#4ea1ff',
       other: '#cbd5e1',

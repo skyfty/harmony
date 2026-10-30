@@ -12,6 +12,7 @@ import {
   clampProceduralLandscapeProps,
   resolveProceduralLandscapeBaseMapMode,
   type ProceduralLandscapeComponentProps,
+  type ProceduralLandscapeRoadBoundaryMode,
   type ProceduralLandscapeRoadStrategy,
 } from '@schema/proceduralLandscape/config'
 import { SLOWROADS_SCENIC_ROAD_CONSTRAINTS } from '@schema/proceduralLandscape/officialScenicRoad'
@@ -225,6 +226,14 @@ const guideRouteRegenerationDialogVisible = ref(false)
 const routeStrategy = computed(() => propsValue.value?.road.routing.strategy ?? 'seeded')
 const routeTermination = computed(() => propsValue.value?.road.routing.termination ?? 'boundary')
 const roadStyle = computed<RoadStyleId>(() => propsValue.value?.road.style ?? 'normal')
+const roadBoundaryModeOptions: Array<{
+  title: string
+  value: ProceduralLandscapeRoadBoundaryMode
+}> = [
+  { title: '无', value: 'none' },
+  { title: '空气墙', value: 'air-wall' },
+  { title: '隔离墙', value: 'isolation-wall' },
+]
 const roadCurveStyleOptions: RoadStyleId[] = [
   'straight',
   'casual',
@@ -458,6 +467,10 @@ function handleRoadStrategy(value: ProceduralLandscapeRoadStrategy): void {
 
 function handleRoadStyle(value: RoadStyleId): void {
   patchGroup('road', { style: value })
+}
+
+function handleRoadBoundaryMode(value: ProceduralLandscapeRoadBoundaryMode): void {
+  patchGroup('road', { boundaryMode: value })
 }
 
 function handleRoadTermination(
@@ -1153,6 +1166,22 @@ function handleColorInput(key: 'grassTint' | 'forestTint' | 'roadTint' | 'gravel
           <div v-if="roadStatusText" class="pl-hint">{{ roadStatusText }}</div>
           <div v-if="roadBuildNoticeText" class="pl-hint pl-hint--stale">{{ roadBuildNoticeText }}</div>
           <div v-if="roadFailureText" class="pl-hint pl-hint--error">{{ roadFailureText }}</div>
+
+          <v-select
+            :model-value="propsValue.road.boundaryMode"
+            label="隔离墙"
+            density="compact"
+            variant="underlined"
+            hide-details
+            :items="roadBoundaryModeOptions"
+            item-title="title"
+            item-value="value"
+            :disabled="!componentEnabled || !propsValue.road.enabled"
+            @update:model-value="handleRoadBoundaryMode"
+          />
+          <div class="pl-hint">
+            空气墙不可见但会阻挡车辆；隔离墙增加随季节变化的可视护栏。非闭环道路同时封闭端头。
+          </div>
 
           <div class="pl-road-style">
             <div class="pl-subtitle">路型</div>

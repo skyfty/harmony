@@ -13,6 +13,8 @@ import type { Object3D } from 'three'
 export const PROCEDURAL_LANDSCAPE_ROAD_SURFACE_USER_DATA_KEY = 'proceduralLandscapeRoadSurface'
 export const PROCEDURAL_LANDSCAPE_ROADBED_SURFACE_USER_DATA_KEY = 'proceduralLandscapeRoadbedSurface'
 export const PROCEDURAL_LANDSCAPE_ROAD_COLLISION_USER_DATA_KEY = 'proceduralLandscapeRoadCollision'
+export const PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLISION_USER_DATA_KEY = 'proceduralLandscapeRoadBoundaryCollision'
+export const PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_VISUAL_USER_DATA_KEY = 'proceduralLandscapeRoadBoundaryVisual'
 export const PROCEDURAL_LANDSCAPE_DEM_TERRAIN_USER_DATA_KEY = 'proceduralLandscapeDemTerrain'
 export const PROCEDURAL_LANDSCAPE_DEM_COLLISION_SAMPLER_USER_DATA_KEY = 'proceduralLandscapeDemCollisionSampler'
 
@@ -63,6 +65,38 @@ export function isProceduralLandscapeRoadCollision(
   }
   const userData = object.userData as Record<string, unknown> | undefined
   return userData?.[PROCEDURAL_LANDSCAPE_ROAD_COLLISION_USER_DATA_KEY] === true
+}
+
+export function markProceduralLandscapeRoadBoundaryCollision(object: Object3D): void {
+  object.userData[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLISION_USER_DATA_KEY] = true
+}
+
+export function isProceduralLandscapeRoadBoundaryCollision(
+  object: Object3D | null | undefined,
+): boolean {
+  if (!object) {
+    return false
+  }
+  const userData = object.userData as Record<string, unknown> | undefined
+  return userData?.[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_COLLISION_USER_DATA_KEY] === true
+}
+
+/**
+ * The isolation wall has a dedicated, invisible collision prism. Its seasonal
+ * rendered mesh is decoration only and must not add a duplicate physics body.
+ */
+export function markProceduralLandscapeRoadBoundaryVisual(object: Object3D): void {
+  object.userData[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_VISUAL_USER_DATA_KEY] = true
+}
+
+export function isProceduralLandscapeRoadBoundaryVisual(
+  object: Object3D | null | undefined,
+): boolean {
+  if (!object) {
+    return false
+  }
+  const userData = object.userData as Record<string, unknown> | undefined
+  return userData?.[PROCEDURAL_LANDSCAPE_ROAD_BOUNDARY_VISUAL_USER_DATA_KEY] === true
 }
 
 /**

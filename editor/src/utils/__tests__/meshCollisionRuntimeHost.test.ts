@@ -25,10 +25,13 @@ import {
 import { GROUND_COLLISION_RADIUS_METERS } from '@schema/groundCollisionRuntimeConstants'
 import { createRoadBand } from '@schema/proceduralLandscape/roadBand'
 import { createRoadCollisionGeometry } from '@schema/proceduralLandscape/roadCollision'
+import { createRoadBoundaryCollisionGeometry } from '@schema/proceduralLandscape/roadBoundary'
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
 import {
   isProceduralLandscapeRoadSurface,
   markProceduralLandscapeDemTerrain,
+  markProceduralLandscapeRoadBoundaryCollision,
+  markProceduralLandscapeRoadBoundaryVisual,
   markProceduralLandscapeRoadbedSurface,
   markProceduralLandscapeRoadCollision,
 } from '@schema/proceduralLandscape/collisionMetadata'
@@ -497,6 +500,66 @@ describe('mesh collision runtime host incremental re-index', () => {
     const roadBodies = harness.created.slice(terrainCreates).filter(isElevatedRecord)
     expect(roadBodies.length).toBeGreaterThan(0)
     expect(shapeMaxY(roadBodies[0]!.shape)).toBeCloseTo(5.05, 5)
+  })
+
+  it('indexes the boundary collider without duplicating its rendered wall', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
+    markProceduralLandscapeDemTerrain(terrain, {
+      cellSize: 2,
+      sampleHeightAt: () => 0,
+    })
+    host.add(terrain)
+    const probes = [new THREE.Vector3(0, 0, 0)]
+    const harness = createHarness()
+    drain(harness, host, 'terrain-node', probes)
+    const terrainCreates = harness.created.length
+
+    const rows = Array.from({ length: 61 }, (_, index) => ({
+      x: -30 + index,
+      z: 0,
+      y: 5,
+      heading: 0,
+      index,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: 0,
+      sourceIndex: index,
+    }))
+    const visual = new THREE.Mesh(
+      makeRibbonGeometry(40, 4, 6, 4),
+      new THREE.MeshBasicMaterial(),
+    )
+    markProceduralLandscapeRoadBoundaryVisual(visual)
+    host.add(visual)
+    drain(harness, host, 'terrain-node', probes)
+    expect(harness.created).toHaveLength(terrainCreates)
+
+    const collision = createRoadBoundaryCollisionGeometry({
+      rows,
+      halfWidth: 2,
+      closed: false,
+      rowSpacing: 4,
+      lift: 0.05,
+    })
+    expect(collision).not.toBeNull()
+    const collisionMesh = new THREE.Mesh(
+      collision!.geometry,
+      new THREE.MeshBasicMaterial({ visible: false }),
+    )
+    markProceduralLandscapeRoadBoundaryCollision(collisionMesh)
+    host.add(collisionMesh)
+    drain(harness, host, 'terrain-node', probes)
+
+    const boundaryBodies = harness.created
+      .slice(terrainCreates)
+      .filter(isElevatedRecord)
+    expect(boundaryBodies.length).toBeGreaterThan(0)
+    expect(boundaryBodies.some((record) => shapeMaxY(record.shape) > 7.9)).toBe(true)
+    expect(boundaryBodies.some((record) => (
+      String((record.body as { name?: string }).name ?? '').includes(':road-boundary:')
+    ))).toBe(true)
   })
 
   it('excludes the dense rendered DEM roadbed from collision', () => {

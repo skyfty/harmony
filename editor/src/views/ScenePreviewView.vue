@@ -211,6 +211,7 @@ import {
 	getProceduralLandscapeStats,
 	setProceduralLandscapeEnvironment,
 } from '@schema/proceduralLandscape/runtime'
+import { isProceduralLandscapeRoadBoundaryVisual } from '@schema/proceduralLandscape/collisionMetadata'
 import { setProceduralLandscapeDemOrthoResolver } from '@schema/proceduralLandscape/demOrthoResolver'
 import { collectActiveProceduralLandscapeNodeIds } from '@schema/proceduralLandscape/preload'
 import {
@@ -723,6 +724,7 @@ const isMeshCollisionDebugVisible = ref(false)
 const physicsCollisionDebugLegend = [
 	{ label: '2 m Ground patch（近车）', color: PHYSICS_COLLISION_DEBUG_COLORS.groundPatch },
 	{ label: '8 m Roadbed collision（路基）', color: PHYSICS_COLLISION_DEBUG_COLORS.roadbed },
+	{ label: 'Road containment（公路隔离墙）', color: PHYSICS_COLLISION_DEBUG_COLORS.roadBoundary },
 	{ label: 'Ground chunk / heightfield（通用地面）', color: PHYSICS_COLLISION_DEBUG_COLORS.baseGround },
 	{ label: 'DEM terrain chunk（DEM 地形）', color: PHYSICS_COLLISION_DEBUG_COLORS.demTerrain },
 	{ label: 'Other colliders（其他）', color: PHYSICS_COLLISION_DEBUG_COLORS.other },
@@ -3145,6 +3147,8 @@ const physicsBridgeCharacterControllerNodeIdByBodyNodeId = new Map<string, strin
 const nonPhysicsCharacterStates = new Map<string, NonPhysicsCharacterState>()
 const nonPhysicsCharacterFootIK = new Map<string, NonPhysicsCharacterFootIK>()
 const nonPhysicsCollisionWorld: CapsuleCollisionWorld = createCapsuleCollisionWorld()
+const nonPhysicsLandscapeCollisionRevisions = new Map<string, number>()
+let lastNonPhysicsLandscapeCollisionCheckAt = Number.NEGATIVE_INFINITY
 const physicsBridgeContactsByNodeId = new Map<string, PhysicsContactEvent[]>()
 const physicsBridgeCharacterMotorStateByCharacterId = new Map<number, PhysicsCharacterMotorFrameState>()
 type PhysicsBridgeBodyFrameState = {
@@ -15858,9 +15862,28 @@ function rebuildNonPhysicsCharacterCollisionWorld(): void {
 		root.traverse((child) => {
 			if (!(child instanceof THREE.Mesh)) return
 			if (child.userData?.characterController || child.userData?.nonPhysicsCharacter) return
+			if (isProceduralLandscapeRoadBoundaryVisual(child)) return
 			nonPhysicsCollisionWorld.addMesh(child)
 		})
 	})
+}
+
+function syncNonPhysicsLandscapeCollisionWorld(): void {
+	const now = performance.now()
+	if (now - lastNonPhysicsLandscapeCollisionCheckAt < 250) return
+	lastNonPhysicsLandscapeCollisionCheckAt = now
+	let changed = false
+	nodeObjectMap.forEach((_root, nodeId) => {
+		const stats = getProceduralLandscapeStats(nodeId)
+		if (!stats) return
+		const previous = nonPhysicsLandscapeCollisionRevisions.get(nodeId)
+		if (previous === stats.roadBoundaryCollisionRevision) return
+		nonPhysicsLandscapeCollisionRevisions.set(nodeId, stats.roadBoundaryCollisionRevision)
+		changed = true
+	})
+	if (changed) {
+		rebuildNonPhysicsCharacterCollisionWorld()
+	}
 }
 
 function ensureCharacterBindingForNode(nodeId: string): void {
@@ -15993,6 +16016,8 @@ function syncCharacterBindingsForDocument(document: SceneJsonExportDocument | nu
 		nonPhysicsCharacterFootIK.forEach((ik) => ik.dispose())
 	nonPhysicsCharacterFootIK.clear()
 		nonPhysicsCollisionWorld.clear()
+		nonPhysicsLandscapeCollisionRevisions.clear()
+		lastNonPhysicsLandscapeCollisionCheckAt = Number.NEGATIVE_INFINITY
 		return
 	}
 	const characterNodes = collectCharacterNodes(document.nodes)
@@ -16027,6 +16052,7 @@ function resolveNonPhysicsCharacterInput(nodeId: string): NonPhysicsCharacterInp
 
 function updateNonPhysicsCharacters(deltaSeconds: number): void {
 	if (!camera || !nonPhysicsCharacterStates.size) return
+	syncNonPhysicsLandscapeCollisionWorld()
 	nonPhysicsCharacterStates.forEach((state, nodeId) => {
 		const input = resolveNonPhysicsCharacterInput(nodeId)
 		if (!input) return

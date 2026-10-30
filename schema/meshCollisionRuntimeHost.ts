@@ -13,6 +13,8 @@ import {
 } from './physicsRuntimeBridge'
 import {
   isProceduralLandscapeDemTerrain,
+  isProceduralLandscapeRoadBoundaryCollision,
+  isProceduralLandscapeRoadBoundaryVisual,
   isProceduralLandscapeRoadCollision,
   isProceduralLandscapeRoadbedSurface,
   isProceduralLandscapeRoadSurface,
@@ -142,7 +144,7 @@ type MeshCollisionChunkBounds = {
 
 type MeshCollisionMeshSource = {
   mesh: THREE.Mesh
-  debugKind: 'dem-terrain' | 'roadbed' | 'mesh'
+  debugKind: 'dem-terrain' | 'roadbed' | 'road-boundary' | 'mesh'
   isGroundSurface: boolean
   /** World matrix snapshot; the source node is treated as static. */
   matrixWorld: THREE.Matrix4
@@ -277,6 +279,7 @@ function isCollisionEligibleMesh(object: THREE.Object3D): boolean {
     || mesh.isInstancedMesh === true
     || isProceduralLandscapeRoadSurface(object)
     || isProceduralLandscapeRoadbedSurface(object)
+    || isProceduralLandscapeRoadBoundaryVisual(object)
   ) {
     return false
   }
@@ -452,7 +455,9 @@ function resolveMeshSource(object: THREE.Object3D): MeshCollisionMeshSource | nu
     mesh,
     debugKind: isGroundSurface
       ? 'dem-terrain'
-      : (isProceduralLandscapeRoadCollision(object) ? 'roadbed' : 'mesh'),
+      : isProceduralLandscapeRoadBoundaryCollision(object)
+        ? 'road-boundary'
+        : (isProceduralLandscapeRoadCollision(object) ? 'roadbed' : 'mesh'),
     isGroundSurface,
     matrixWorld,
     position,

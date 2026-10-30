@@ -6,6 +6,7 @@ export type PhysicsCollisionDebugEngine = Extract<PhysicsBackendPreference, 'amm
 export const PHYSICS_COLLISION_DEBUG_COLORS = {
   groundPatch: '#22ff88',
   roadbed: '#ff9f1c',
+  roadBoundary: '#ef4444',
   baseGround: '#38bdf8',
   demTerrain: '#4ea1ff',
   other: '#cbd5e1',
@@ -62,6 +63,9 @@ export function resolvePhysicsCollisionDebugCategory(body: unknown): PhysicsColl
     }
     if (name.includes(':roadbed:')) {
       return 'roadbed'
+    }
+    if (name.includes(':road-boundary:')) {
+      return 'roadBoundary'
     }
     if (name.includes(':dem-terrain:')) {
       return 'demTerrain'
