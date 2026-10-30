@@ -20,6 +20,7 @@ import {
 } from '@schema/proceduralLandscape/demRoadbed'
 import { buildRoadProximityIndex } from '@schema/proceduralLandscape/roadProximity'
 import { densifyRoadRows } from '@schema/proceduralLandscape/roadBandRows'
+import { createRoadCollisionGeometry } from '@schema/proceduralLandscape/roadCollision'
 import type { RoadTraceNode } from '@schema/proceduralLandscape/roadTrace'
 import * as THREE from 'three'
 import {
@@ -296,13 +297,32 @@ describe('DEM roadbed', () => {
       demCellSize: 20,
       sideWidth: 8,
       coverageWidth: 2,
+      roadSurfaceLift: 0.05,
     })
 
     // The raw terrain rises across the corridor, while the road design stays flat.
     expect(roadbed.rawHeightAt(0, 0)).toBeCloseTo(20, 5)
-    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)).toBeCloseTo(9.95, 5)
+    expect(roadbed.heightAt(0, 0)).toBeCloseTo(9.95, 5)
+    expect(roadbed.walkableHeightAt(0, 0)).toBeCloseTo(10.05, 5)
+    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)).toBeCloseTo(10.05, 5)
     expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 5.5)).toBeCloseTo(9.95, 5)
-    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)!).toBeLessThanOrEqual(10)
+    expect(sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)!).toBeGreaterThan(10)
+
+    const rows = densifyRoadRows(nodes, 2)
+    const collision = createRoadCollisionGeometry({
+      rows,
+      halfWidth: 3.5,
+      rowSpacing: 2,
+      columnCount: 5,
+      lift: 0.05,
+    })
+    expect(collision).not.toBeNull()
+    const collisionPosition = collision!.geometry.getAttribute('position')
+    const centerIndex = Math.floor(collision!.columnCount / 2)
+    expect(collisionPosition.getY(centerIndex)).toBeCloseTo(
+      sampleVisibleDemSurfaceHeightAt(grid, roadbed, 0, 0)!,
+      3,
+    )
 
     const roadbedNormal = sampleVisibleDemSurfaceNormalAt(grid, roadbed, 0, 10, 0.5)
     expect(roadbedNormal).not.toBeNull()

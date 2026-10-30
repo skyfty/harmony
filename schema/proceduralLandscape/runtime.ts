@@ -2858,6 +2858,7 @@ export function createProceduralLandscapeRuntime(hooks: ProceduralLandscapeRunti
             // beyond it.
             sideWidth: Math.max(15, activeGrid.cellSize * 0.8),
             coverageWidth: Math.max(4, activeGrid.cellSize * 0.35),
+            roadSurfaceLift: ROAD_BAND_LIFT,
             // The 30m coarse triangles interpolate across the roadbed design
             // surface; a 2m safety drop keeps them below the 3m-sampled
             // high-resolution roadbed on steep, curved sections.

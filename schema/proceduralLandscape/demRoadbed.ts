@@ -12,6 +12,8 @@ export interface DemRoadbedTargetOptions {
   sideWidth?: number
   coverageWidth?: number
   roadDrop?: number
+  /** Vertical offset of the rendered road band above the road design surface. */
+  roadSurfaceLift?: number
   coarseClearance?: number
 }
 
@@ -27,9 +29,12 @@ export interface DemRoadbedTarget {
   readonly meshHalfWidth: number
   readonly influenceHalfWidth: number
   readonly coarseClearance: number
+  readonly roadSurfaceLift: number
   distanceAt(x: number, z: number): number
   roadProximityAt(x: number, z: number): number
   heightAt(x: number, z: number): number
+  /** Height of the visible surface used by characters and vehicle wheels. */
+  walkableHeightAt(x: number, z: number): number
   coarseHeightAt(x: number, z: number): number
   rawHeightAt(x: number, z: number): number
   rawNormalAt(x: number, z: number): { x: number; y: number; z: number }
@@ -44,6 +49,7 @@ export function createDemRoadbedTarget(options: DemRoadbedTargetOptions): DemRoa
   const outerHalfWidth = innerHalfWidth + sideWidth
   const meshHalfWidth = outerHalfWidth + coverageWidth
   const roadDrop = Math.max(0, options.roadDrop ?? 0.05)
+  const roadSurfaceLift = Math.max(0, options.roadSurfaceLift ?? 0)
   const coarseClearance = Math.max(0, options.coarseClearance ?? 0.1)
   const rawAt = (x: number, z: number): number => options.rawHeightAt(x, z) ?? 0
 
@@ -64,6 +70,17 @@ export function createDemRoadbedTarget(options: DemRoadbedTargetOptions): DemRoa
     return (designY - roadDrop) + (terrainY - (designY - roadDrop)) * t
   }
 
+  const walkableHeightAt = (x: number, z: number): number => {
+    const distance = options.roadField.distanceAt(x, z)
+    if (distance <= halfWidth) {
+      const designY = options.roadField.heightAt(x, z)
+      if (designY != null) {
+        return designY + roadSurfaceLift
+      }
+    }
+    return distance <= meshHalfWidth ? heightAt(x, z) : rawAt(x, z)
+  }
+
   return {
     halfWidth,
     shoulderWidth,
@@ -72,9 +89,11 @@ export function createDemRoadbedTarget(options: DemRoadbedTargetOptions): DemRoa
     meshHalfWidth,
     influenceHalfWidth: meshHalfWidth,
     coarseClearance,
+    roadSurfaceLift,
     distanceAt: (x, z) => options.roadField.distanceAt(x, z),
     roadProximityAt: (x, z) => options.roadField.distanceAt(x, z) - halfWidth,
     heightAt,
+    walkableHeightAt,
     coarseHeightAt(x: number, z: number): number {
       const distance = options.roadField.distanceAt(x, z)
       const target = heightAt(x, z)

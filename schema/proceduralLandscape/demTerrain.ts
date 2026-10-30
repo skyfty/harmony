@@ -16,8 +16,9 @@ const demCoverageCache = new WeakMap<TerrainDemRuntimeGridData, Uint8Array>()
 
 /**
  * Samples the DEM surface that is visible and physically walkable at a world
- * position. Generated roadbeds replace the raw terrain inside their footprint;
- * outside it the decimated DEM grid is already the visible triangle surface.
+ * position. The rendered road band is the walkable surface inside the
+ * carriageway; generated roadbeds own the shoulder/side slopes, and outside
+ * their footprint the decimated DEM grid is the visible triangle surface.
  *
  * Ground Anchor collision patches must use this sampler rather than the raw
  * nearest DEM cell. In a cut section the raw surface can sit metres above the
@@ -36,7 +37,7 @@ export function sampleVisibleDemSurfaceHeightAt(
     roadbed
     && roadbed.distanceAt(worldX, worldZ) <= roadbed.meshHalfWidth
   ) {
-    return roadbed.heightAt(worldX, worldZ)
+    return roadbed.walkableHeightAt(worldX, worldZ)
   }
   return grid?.sampleHeight(worldX, worldZ) ?? null
 }
