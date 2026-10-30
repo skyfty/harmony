@@ -8,6 +8,7 @@ import {
 import type { SceneNode } from '@schema/core'
 import {
   collectDemGroundCollisionSourceNodeIds,
+  collectGroundCollisionSourceNodeIds,
   hasGroundCollisionMesh,
   isGroundCollisionCoverageReady,
   resolveGroundCollisionSurfaceSampler,
@@ -27,6 +28,8 @@ type NodeOptions = {
   hasLandscape?: boolean
   demAssetId?: string | null
   runtimeGridUrl?: string | null
+  roadEnabled?: boolean
+  boundaryMode?: 'none' | 'air-wall' | 'isolation-wall'
   children?: SceneNode[]
 }
 
@@ -51,6 +54,10 @@ function makeNode(id: string, options: NodeOptions = {}): SceneNode {
           runtimeGridUrl: options.runtimeGridUrl === undefined
             ? 'https://example.test/dem-grid.bin'
             : options.runtimeGridUrl,
+        },
+        road: {
+          enabled: options.roadEnabled ?? true,
+          boundaryMode: options.boundaryMode ?? 'none',
         },
       },
     }
@@ -88,6 +95,52 @@ function makeClock() {
 }
 
 describe('DEM ground collision source readiness', () => {
+  it('implicitly collects enabled DEM procedural road boundaries', () => {
+    const nodes = [
+      makeNode('isolation', {
+        hasGroundCollision: false,
+        boundaryMode: 'isolation-wall',
+      }),
+      makeNode('air-wall', {
+        hasGroundCollision: false,
+        boundaryMode: 'air-wall',
+      }),
+      makeNode('no-boundary', {
+        hasGroundCollision: false,
+        boundaryMode: 'none',
+      }),
+      makeNode('road-disabled', {
+        hasGroundCollision: false,
+        boundaryMode: 'isolation-wall',
+        roadEnabled: false,
+      }),
+      makeNode('glb-landscape', {
+        hasGroundCollision: false,
+        boundaryMode: 'isolation-wall',
+        demAssetId: null,
+        runtimeGridUrl: null,
+      }),
+      makeNode('landscape-disabled', {
+        hasGroundCollision: false,
+        boundaryMode: 'isolation-wall',
+        landscapeEnabled: false,
+      }),
+      makeNode('explicitly-disabled', {
+        boundaryMode: 'isolation-wall',
+        groundCollisionEnabled: false,
+      }),
+    ]
+
+    expect(collectGroundCollisionSourceNodeIds(nodes).sort()).toEqual([
+      'air-wall',
+      'isolation',
+    ])
+    expect(collectDemGroundCollisionSourceNodeIds(nodes).sort()).toEqual([
+      'air-wall',
+      'isolation',
+    ])
+  })
+
   it('collects only enabled DEM procedural landscape sources', () => {
     const children = [
       makeNode('plain-ground', { hasLandscape: false }),

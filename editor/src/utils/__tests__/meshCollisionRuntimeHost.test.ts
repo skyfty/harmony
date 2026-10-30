@@ -562,6 +562,69 @@ describe('mesh collision runtime host incremental re-index', () => {
     ))).toBe(true)
   })
 
+  it('keeps nearby road containment ahead of closer obstacle chunks', () => {
+    const host = new THREE.Group()
+    const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
+    markProceduralLandscapeDemTerrain(terrain, {
+      cellSize: 2,
+      sampleHeightAt: () => 0,
+    })
+    host.add(terrain)
+    for (let index = 0; index < 40; index += 1) {
+      addSmallObstacle(host, 0, 0)
+    }
+
+    const rows = Array.from({ length: 61 }, (_, index) => ({
+      x: -30 + index,
+      z: 98,
+      y: 5,
+      heading: 0,
+      index,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: 0,
+      sourceIndex: index,
+    }))
+    const collision = createRoadBoundaryCollisionGeometry({
+      rows,
+      halfWidth: 2,
+      closed: false,
+      rowSpacing: 4,
+      lift: 0.05,
+    })
+    expect(collision).not.toBeNull()
+    const boundary = new THREE.Mesh(
+      collision!.geometry,
+      new THREE.MeshBasicMaterial({ visible: false }),
+    )
+    markProceduralLandscapeRoadBoundaryCollision(boundary)
+    host.add(boundary)
+
+    const harness = createHarness()
+    const probes = [new THREE.Vector3(0, 0, 0)]
+    drain(harness, host, 'road-priority-node', probes)
+
+    const boundaryBodies = harness.created
+      .filter((record) => (
+        String((record.body as { name?: string }).name ?? '').includes(':road-boundary:')
+      ))
+      .map((record) => record.body)
+    expect(boundaryBodies.length).toBeGreaterThan(0)
+
+    const awayFromRoad = [new THREE.Vector3(300, 0, 0)]
+    drain(harness, host, 'road-priority-node', awayFromRoad)
+    for (const body of boundaryBodies) {
+      expect(harness.removed).toContain(body)
+    }
+
+    boundary.removeFromParent()
+    drain(harness, host, 'road-priority-node', awayFromRoad)
+    for (const body of boundaryBodies) {
+      expect(harness.removed).toContain(body)
+    }
+  })
+
   it('excludes the dense rendered DEM roadbed from collision', () => {
     const host = new THREE.Group()
     host.add(new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial()))

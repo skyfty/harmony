@@ -13123,10 +13123,16 @@ function updateCameraDependentSystemsForFrame(activeCamera: THREE.PerspectiveCam
 	const shouldUpdateGroundCollisionSystems = hasGroundCollisionReference
 		? shouldUpdateGroundCollisionForFrame(delta, groundCollisionReferencePositions)
 		: false
+	const landscapeCollisionRevisionChanged = hasGroundCollisionReference
+		&& hasScenePreviewLandscapeCollisionRevisionChanged()
 	// Mesh collision chunks are created with a per tick budget, so a pending fill keeps
 	// running even while the probes stand still.
 	const shouldUpdateMeshCollisionSystems = hasGroundCollisionReference
-		&& (shouldUpdateGroundCollisionSystems || scenePreviewMeshCollisionWorkPending)
+		&& (
+			shouldUpdateGroundCollisionSystems
+			|| scenePreviewMeshCollisionWorkPending
+			|| landscapeCollisionRevisionChanged
+		)
 	if (!shouldUpdateCameraSystems && !shouldUpdateGroundCollisionSystems && !shouldUpdateMeshCollisionSystems) {
 		return
 	}
@@ -14027,6 +14033,8 @@ function resolveScenePreviewMeshCollisionRuntimeDeps(): MeshCollisionRuntimeDeps
 }
 
 const scenePreviewMeshCollisionSourceObjects = new Set<THREE.Object3D>()
+const scenePreviewLandscapeCollisionRevisions = new Map<string, number>()
+let lastScenePreviewLandscapeCollisionRevisionCheckAt = Number.NEGATIVE_INFINITY
 let scenePreviewMeshCollisionWorkPending = false
 type ScenePreviewMeshCollisionSyncResult = {
 	workPending: boolean
@@ -14036,15 +14044,49 @@ type ScenePreviewMeshCollisionSyncResult = {
 function releaseScenePreviewMeshCollisionRuntime(): void {
 	clearAllMeshCollisionRuntimeHosts()
 	scenePreviewMeshCollisionSourceObjects.clear()
+	scenePreviewLandscapeCollisionRevisions.clear()
+	lastScenePreviewLandscapeCollisionRevisionCheckAt = Number.NEGATIVE_INFINITY
 	scenePreviewMeshCollisionWorkPending = false
 	groundPatchCollisionReferencePositions.length = 0
 	scenePreviewGroundPatchCoverageComplete = false
 	resetMeshCollisionDebug()
 }
 
+function hasScenePreviewLandscapeCollisionRevisionChanged(): boolean {
+	const now = performance.now()
+	if (now - lastScenePreviewLandscapeCollisionRevisionCheckAt < 250) {
+		return false
+	}
+	lastScenePreviewLandscapeCollisionRevisionCheckAt = now
+	let changed = false
+	const activeNodeIds = new Set<string>()
+	const activeSourceNodeIds = new Set(collectGroundCollisionSourceNodeIds(currentDocument?.nodes))
+	nodeObjectMap.forEach((_root, nodeId) => {
+		const stats = getProceduralLandscapeStats(nodeId)
+		if (!stats) {
+			return
+		}
+		activeNodeIds.add(nodeId)
+		const revision = stats.roadBoundaryCollisionRevision
+		const previous = scenePreviewLandscapeCollisionRevisions.get(nodeId)
+		if (previous === undefined ? activeSourceNodeIds.has(nodeId) : previous !== revision) {
+			changed = true
+		}
+		scenePreviewLandscapeCollisionRevisions.set(nodeId, revision)
+	})
+	Array.from(scenePreviewLandscapeCollisionRevisions.keys()).forEach((nodeId) => {
+		if (activeNodeIds.has(nodeId)) {
+			return
+		}
+		scenePreviewLandscapeCollisionRevisions.delete(nodeId)
+		changed = true
+	})
+	return changed
+}
+
 /**
- * Drives mesh generated collisions for every node carrying a Ground Collision Source
- * component, using the Ground Anchor probe positions of the current frame.
+ * Drives mesh generated collisions for explicit Ground Collision Sources and implicit
+ * DEM road-boundary sources, using the Ground Anchor positions of the current frame.
  */
 function syncScenePreviewMeshCollisionRuntime(
 	document: SceneJsonExportDocument | null,

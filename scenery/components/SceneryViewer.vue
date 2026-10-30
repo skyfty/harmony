@@ -11501,6 +11501,8 @@ function resolveSceneryMeshCollisionRuntimeDeps(): MeshCollisionRuntimeDeps | nu
 }
 
 const sceneryMeshCollisionSourceObjects = new Set<THREE.Object3D>();
+const sceneryLandscapeCollisionRevisions = new Map<string, number>();
+let lastSceneryLandscapeCollisionRevisionCheckAt = Number.NEGATIVE_INFINITY;
 let sceneryMeshCollisionWorkPending = false;
 type SceneryMeshCollisionSyncResult = {
   workPending: boolean;
@@ -11511,12 +11513,46 @@ type SceneryMeshCollisionSyncResult = {
 function releaseSceneryMeshCollisionRuntime(): void {
   clearAllMeshCollisionRuntimeHosts();
   sceneryMeshCollisionSourceObjects.clear();
+  sceneryLandscapeCollisionRevisions.clear();
+  lastSceneryLandscapeCollisionRevisionCheckAt = Number.NEGATIVE_INFINITY;
   sceneryMeshCollisionWorkPending = false;
 }
 
+function hasSceneryLandscapeCollisionRevisionChanged(): boolean {
+  const now = performance.now();
+  if (now - lastSceneryLandscapeCollisionRevisionCheckAt < 250) {
+    return false;
+  }
+  lastSceneryLandscapeCollisionRevisionCheckAt = now;
+  let changed = false;
+  const activeNodeIds = new Set<string>();
+  const activeSourceNodeIds = new Set(collectGroundCollisionSourceNodeIds(currentDocument?.nodes));
+  nodeObjectMap.forEach((_root, nodeId) => {
+    const stats = getProceduralLandscapeStats(nodeId);
+    if (!stats) {
+      return;
+    }
+    activeNodeIds.add(nodeId);
+    const revision = stats.roadBoundaryCollisionRevision;
+    const previous = sceneryLandscapeCollisionRevisions.get(nodeId);
+    if (previous === undefined ? activeSourceNodeIds.has(nodeId) : previous !== revision) {
+      changed = true;
+    }
+    sceneryLandscapeCollisionRevisions.set(nodeId, revision);
+  });
+  Array.from(sceneryLandscapeCollisionRevisions.keys()).forEach((nodeId) => {
+    if (activeNodeIds.has(nodeId)) {
+      return;
+    }
+    sceneryLandscapeCollisionRevisions.delete(nodeId);
+    changed = true;
+  });
+  return changed;
+}
+
 /**
- * Drives mesh generated collisions for every node carrying a Ground Collision Source
- * component. Collision chunks follow the Ground Anchor probe positions collected above.
+ * Drives mesh generated collisions for explicit Ground Collision Sources and implicit
+ * DEM road-boundary sources. Chunks follow the Ground Anchor probes collected above.
  */
 function syncSceneryMeshCollisionRuntime(
   document: SceneJsonExportDocument | null,
@@ -26251,7 +26287,15 @@ function startRenderLoop(
                 deltaSeconds,
                 sceneryGroundCollisionReferencePositions,
               );
-              if (physicsBridgeSceneLoaded && (shouldUpdateReferenceSystems || sceneryMeshCollisionWorkPending)) {
+              const landscapeCollisionRevisionChanged = hasSceneryLandscapeCollisionRevisionChanged();
+              if (
+                physicsBridgeSceneLoaded
+                && (
+                  shouldUpdateReferenceSystems
+                  || sceneryMeshCollisionWorkPending
+                  || landscapeCollisionRevisionChanged
+                )
+              ) {
                 if (groundObject && shouldUpdateReferenceSystems) {
                   syncSceneryGroundCollisionRuntimeLoadedTileKeys(currentDocument, camera);
                 }

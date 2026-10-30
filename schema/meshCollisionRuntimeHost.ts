@@ -24,9 +24,9 @@ import {
 
 // Mesh driven collision runtime.
 //
-// Scene nodes tagged with the `groundCollisionSource` component reuse the Ground Anchor
-// probe points: triangles near a probe become static triangle mesh bodies and are
-// destroyed again once every probe moved away.
+// Scene nodes selected as explicit Ground Collision Sources, or implicit DEM procedural
+// road-boundary sources, reuse the Ground Anchor probe points: triangles near a probe
+// become static triangle mesh bodies and are destroyed again once every probe moved away.
 //
 // The indexed mesh set is not frozen: components may add or rebuild their meshes long
 // after the first sync (the procedural landscape only creates its walls once the terrain
@@ -1235,12 +1235,35 @@ export function syncMeshCollisionRuntimeHost(
       mandatoryGroundKeys.add(candidate.chunk.key)
     }
   })
+  const nearestBoundaryByReference = references.map((reference) => {
+    let best: MeshCollisionChunkCandidate | null = null
+    let bestDistanceSq = Number.POSITIVE_INFINITY
+    candidates.forEach((candidate) => {
+      if (candidate.chunk.debugKind !== 'road-boundary') {
+        return
+      }
+      const distanceSq = resolveChunkReferenceDistanceSq(candidate.chunk, reference)
+      if (distanceSq < bestDistanceSq) {
+        bestDistanceSq = distanceSq
+        best = { chunk: candidate.chunk, distanceSq }
+      }
+    })
+    return best as MeshCollisionChunkCandidate | null
+  })
+  const mandatoryBoundaryKeys = new Set<string>()
+  nearestBoundaryByReference.forEach((candidate) => {
+    if (candidate && candidate.distanceSq <= activationSq) {
+      mandatoryBoundaryKeys.add(candidate.chunk.key)
+    }
+  })
 
-  // The DEM terrain under every Ground Anchor is mandatory. Other road, roadbed
-  // and wall chunks only fill the remaining budget by distance.
+  // The DEM terrain and road containment under every Ground Anchor are mandatory.
+  // Roadbed and other obstacle chunks only fill the remaining budget by distance.
   const residentKeys = new Set<string>()
   mandatoryGroundKeys.forEach((key) => residentKeys.add(key))
-  const residentLimit = Math.max(MESH_COLLISION_MAX_RESIDENT_CHUNKS, mandatoryGroundKeys.size)
+  mandatoryBoundaryKeys.forEach((key) => residentKeys.add(key))
+  const mandatoryChunkCount = mandatoryGroundKeys.size + mandatoryBoundaryKeys.size
+  const residentLimit = Math.max(MESH_COLLISION_MAX_RESIDENT_CHUNKS, mandatoryChunkCount)
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index]
     if (!candidate) {
@@ -1273,6 +1296,7 @@ export function syncMeshCollisionRuntimeHost(
     pendingCandidates.push(candidate)
   }
   mandatoryGroundByReference.forEach(appendPending)
+  nearestBoundaryByReference.forEach(appendPending)
   candidates.forEach(appendPending)
 
   Array.from(state.instances.entries()).forEach(([key, instance]) => {

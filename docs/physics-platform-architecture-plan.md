@@ -284,7 +284,10 @@ The following logic should stay engine-specific:
 ## Ground Anchor Mesh Collision (implemented semantics)
 
 Nodes carrying the `groundCollisionSource` component stream their subtree meshes into
-static triangle collision while a Ground Anchor probe is nearby
+static triangle collision while a Ground Anchor probe is nearby. A DEM procedural
+landscape with an enabled `air-wall` or `isolation-wall` road boundary participates
+implicitly as the same kind of source; an explicitly disabled Ground Collision Source
+still suppresses that fallback.
 (`schema/meshCollisionRuntimeHost.ts`, shared by `ScenePreviewView`, `SceneryViewer`,
 `tour` and the mini-app viewer).
 
@@ -292,8 +295,10 @@ static triangle collision while a Ground Anchor probe is nearby
   far-forest imposters stay non-colliding on purpose.
 - The streamed DEM terrain is marked as a mandatory ground source. For every live
   Ground Anchor, its nearest DEM chunk is retained before the shared 32-chunk budget
-  is filled with road, roadbed and wall chunks. Multiple anchors may temporarily raise
-  the effective cap by the number of mandatory ground chunks.
+  is filled with road, roadbed and wall chunks. The nearest road-containment chunk is
+  also reserved for every anchor before nonessential obstacles, so roadbed detail cannot
+  starve the barrier. Multiple anchors may temporarily raise the effective cap by the
+  number of mandatory ground and road-boundary chunks.
 - The DEM also exposes its world-space height sampler to the collision runtime. Each
   Ground Anchor keeps a lightweight sampled ground patch centred near the moving probe.
   The patch is replaced with overlap before the anchor approaches its edge, so terrain

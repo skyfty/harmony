@@ -19,7 +19,10 @@ import {
   isProceduralLandscapeRoadbedSurface,
   isProceduralLandscapeRoadSurface,
 } from './proceduralLandscape/collisionMetadata'
-import type { ProceduralLandscapeComponentProps } from './proceduralLandscape/config'
+import {
+  clampProceduralLandscapeProps,
+  type ProceduralLandscapeComponentProps,
+} from './proceduralLandscape/config'
 import {
   getProceduralLandscapeStats,
   type ProceduralLandscapeRuntimeStats,
@@ -178,27 +181,14 @@ export function resolveGroundCollisionSourceComponent(
   )
 }
 
-export function collectGroundCollisionSourceNodeIds(
-  nodes: SceneNode[] | null | undefined,
-): string[] {
-  if (!Array.isArray(nodes) || nodes.length === 0) {
-    return []
-  }
-  const nodeIds: string[] = []
-  const stack = [...nodes]
-  while (stack.length > 0) {
-    const node = stack.pop()
-    if (!node) {
-      continue
-    }
-    if (resolveGroundCollisionSourceComponent(node)) {
-      nodeIds.push(node.id)
-    }
-    if (Array.isArray(node.children) && node.children.length > 0) {
-      stack.push(...node.children)
-    }
-  }
-  return nodeIds
+function hasExplicitGroundCollisionSourceComponent(node: SceneNode): boolean {
+  return Boolean(
+    node.components
+    && Object.prototype.hasOwnProperty.call(
+      node.components,
+      GROUND_COLLISION_SOURCE_COMPONENT_TYPE,
+    ),
+  )
 }
 
 function isEnabledDemProceduralLandscapeNode(node: SceneNode): boolean {
@@ -215,6 +205,50 @@ function isEnabledDemProceduralLandscapeNode(node: SceneNode): boolean {
       && typeof dem?.runtimeGridUrl === 'string'
       && dem.runtimeGridUrl.trim().length > 0,
   )
+}
+
+function hasImplicitDemRoadBoundaryCollisionSource(node: SceneNode): boolean {
+  // An authored Ground Collision Source remains the explicit opt-out for
+  // terrain-driven collision, even when the road boundary is enabled.
+  if (hasExplicitGroundCollisionSourceComponent(node)) {
+    return false
+  }
+  const component = node.components?.[PROCEDURAL_LANDSCAPE_COMPONENT_TYPE] as
+    | SceneNodeComponentState<Partial<ProceduralLandscapeComponentProps>>
+    | undefined
+  if (!component || !isEnabledDemProceduralLandscapeNode(node)) {
+    return false
+  }
+  const props = clampProceduralLandscapeProps(component.props, node.id)
+  return props.road.enabled && props.road.boundaryMode !== 'none'
+}
+
+function isActiveGroundCollisionSourceNode(node: SceneNode): boolean {
+  return Boolean(resolveGroundCollisionSourceComponent(node))
+    || hasImplicitDemRoadBoundaryCollisionSource(node)
+}
+
+export function collectGroundCollisionSourceNodeIds(
+  nodes: SceneNode[] | null | undefined,
+): string[] {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return []
+  }
+  const nodeIds: string[] = []
+  const stack = [...nodes]
+  while (stack.length > 0) {
+    const node = stack.pop()
+    if (!node) {
+      continue
+    }
+    if (isActiveGroundCollisionSourceNode(node)) {
+      nodeIds.push(node.id)
+    }
+    if (Array.isArray(node.children) && node.children.length > 0) {
+      stack.push(...node.children)
+    }
+  }
+  return nodeIds
 }
 
 /**
@@ -235,10 +269,7 @@ export function collectDemGroundCollisionSourceNodeIds(
     if (!node) {
       continue
     }
-    if (
-      resolveGroundCollisionSourceComponent(node)
-      && isEnabledDemProceduralLandscapeNode(node)
-    ) {
+    if (isActiveGroundCollisionSourceNode(node) && isEnabledDemProceduralLandscapeNode(node)) {
       nodeIds.push(node.id)
     }
     if (Array.isArray(node.children) && node.children.length > 0) {

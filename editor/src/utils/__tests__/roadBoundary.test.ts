@@ -144,4 +144,43 @@ describe('road boundary geometry', () => {
     expect(hits.some((hit) => Math.abs(hit.normal.z) > 0.5)).toBe(true)
     mesh.geometry.dispose()
   })
+
+  it('blocks character capsules approaching from outside and through an end cap', () => {
+    const rows = makeRows()
+    const collision = createRoadBoundaryCollisionGeometry({
+      rows,
+      halfWidth: 4,
+      closed: false,
+      rowSpacing: 4,
+    })
+    expect(collision).not.toBeNull()
+    const mesh = new THREE.Mesh(
+      collision!.geometry,
+      new THREE.MeshBasicMaterial({ visible: false }),
+    )
+    const world = createCapsuleCollisionWorld()
+    world.addMesh(mesh)
+    const character = new THREE.Group()
+
+    const outsideHits = world.resolveCapsule(character, {
+      segment: new THREE.Line3(
+        new THREE.Vector3(5, 10.5, 4.3),
+        new THREE.Vector3(5, 12, 4.3),
+      ),
+      radius: 0.5,
+    })
+    expect(outsideHits.length).toBeGreaterThan(0)
+
+    const endCapHits = world.resolveCapsule(character, {
+      segment: new THREE.Line3(
+        new THREE.Vector3(-0.3, 11.5, 0),
+        new THREE.Vector3(-0.3, 12.5, 0),
+      ),
+      radius: 0.5,
+    })
+    expect(endCapHits.length).toBeGreaterThan(0)
+    expect(endCapHits.some((hit) => Math.abs(hit.normal.x) > 0.5)).toBe(true)
+
+    mesh.geometry.dispose()
+  })
 })
