@@ -794,8 +794,13 @@ const rendererDebug = reactive({
 const meshCollisionDebug = reactive({
 	sourceCount: 0,
 	chunkCount: 0,
+	indexing: false,
+	pendingChunkCount: 0,
 	groundSourceCount: 0,
 	groundChunkCount: 0,
+	roadBoundaryChunkTotal: 0,
+	roadBoundaryChunkCount: 0,
+	pendingRoadBoundaryChunkCount: 0,
 	groundPatchCount: 0,
 	uncoveredReferenceCount: 0,
 	referenceCount: 0,
@@ -811,8 +816,13 @@ const meshCollisionDebug = reactive({
 function resetMeshCollisionDebug(): void {
 	meshCollisionDebug.sourceCount = 0
 	meshCollisionDebug.chunkCount = 0
+	meshCollisionDebug.indexing = false
+	meshCollisionDebug.pendingChunkCount = 0
 	meshCollisionDebug.groundSourceCount = 0
 	meshCollisionDebug.groundChunkCount = 0
+	meshCollisionDebug.roadBoundaryChunkTotal = 0
+	meshCollisionDebug.roadBoundaryChunkCount = 0
+	meshCollisionDebug.pendingRoadBoundaryChunkCount = 0
 	meshCollisionDebug.groundPatchCount = 0
 	meshCollisionDebug.uncoveredReferenceCount = 0
 	meshCollisionDebug.referenceCount = 0
@@ -14139,8 +14149,13 @@ function syncScenePreviewMeshCollisionRuntime(
 		})
 		meshCollisionDebug.sourceCount += 1
 		meshCollisionDebug.chunkCount += snapshot.chunkCount
+		meshCollisionDebug.indexing = meshCollisionDebug.indexing || snapshot.indexing
+		meshCollisionDebug.pendingChunkCount += snapshot.pendingChunkCount
 		meshCollisionDebug.groundSourceCount += snapshot.groundSourceCount
 		meshCollisionDebug.groundChunkCount += snapshot.groundChunkCount
+		meshCollisionDebug.roadBoundaryChunkTotal += snapshot.roadBoundaryChunkTotal
+		meshCollisionDebug.roadBoundaryChunkCount += snapshot.roadBoundaryChunkCount
+		meshCollisionDebug.pendingRoadBoundaryChunkCount += snapshot.pendingRoadBoundaryChunkCount
 		meshCollisionDebug.groundPatchCount += snapshot.groundPatchCount
 		meshCollisionDebug.uncoveredReferenceCount += snapshot.uncoveredReferenceCount
 		if (!bestSnapshot || snapshot.groundSourceCount > bestSnapshot.groundSourceCount) {
@@ -18104,7 +18119,15 @@ watch(watchExclusiveUiActive, (active) => {
 						Sources/chunks: {{ meshCollisionDebug.sourceCount }} / {{ meshCollisionDebug.chunkCount }}
 					</div>
 					<div class="scene-preview__stats-fallback">
+						Indexing/pending: {{ meshCollisionDebug.indexing ? 'yes' : 'no' }} / {{ meshCollisionDebug.pendingChunkCount }}
+					</div>
+					<div class="scene-preview__stats-fallback">
 						Ground sources/chunks: {{ meshCollisionDebug.groundSourceCount }} / {{ meshCollisionDebug.groundChunkCount }}
+					</div>
+					<div class="scene-preview__stats-fallback">
+						Road boundary init:
+						{{ meshCollisionDebug.roadBoundaryChunkCount }} / {{ meshCollisionDebug.roadBoundaryChunkTotal }}
+						({{ meshCollisionDebug.pendingRoadBoundaryChunkCount }} pending)
 					</div>
 					<div class="scene-preview__stats-fallback">
 						Anchors/patches: {{ meshCollisionDebug.referenceCount }} / {{ meshCollisionDebug.groundPatchCount }}

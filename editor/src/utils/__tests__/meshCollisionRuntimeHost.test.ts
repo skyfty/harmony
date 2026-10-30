@@ -562,7 +562,7 @@ describe('mesh collision runtime host incremental re-index', () => {
     ))).toBe(true)
   })
 
-  it('keeps nearby road containment ahead of closer obstacle chunks', () => {
+  it('initializes every road containment chunk regardless of anchor distance', () => {
     const host = new THREE.Group()
     const terrain = new THREE.Mesh(makeTerrainGeometry(), new THREE.MeshBasicMaterial())
     markProceduralLandscapeDemTerrain(terrain, {
@@ -605,17 +605,22 @@ describe('mesh collision runtime host incremental re-index', () => {
     const probes = [new THREE.Vector3(0, 0, 0)]
     drain(harness, host, 'road-priority-node', probes)
 
+    const snapshot = drain(harness, host, 'road-priority-node', probes)
     const boundaryBodies = harness.created
       .filter((record) => (
         String((record.body as { name?: string }).name ?? '').includes(':road-boundary:')
       ))
       .map((record) => record.body)
     expect(boundaryBodies.length).toBeGreaterThan(0)
+    expect(snapshot.roadBoundaryChunkTotal).toBe(boundaryBodies.length)
+    expect(snapshot.roadBoundaryChunkCount).toBe(boundaryBodies.length)
+    expect(snapshot.pendingRoadBoundaryChunkCount).toBe(0)
 
     const awayFromRoad = [new THREE.Vector3(300, 0, 0)]
-    drain(harness, host, 'road-priority-node', awayFromRoad)
+    const movedSnapshot = drain(harness, host, 'road-priority-node', awayFromRoad)
+    expect(movedSnapshot.roadBoundaryChunkCount).toBe(boundaryBodies.length)
     for (const body of boundaryBodies) {
-      expect(harness.removed).toContain(body)
+      expect(harness.removed).not.toContain(body)
     }
 
     boundary.removeFromParent()
@@ -623,6 +628,126 @@ describe('mesh collision runtime host incremental re-index', () => {
     for (const body of boundaryBodies) {
       expect(harness.removed).toContain(body)
     }
+  })
+
+  it('keeps all road containment resident as anchors advance across cells', () => {
+    const host = new THREE.Group()
+    const rows = Array.from({ length: 1001 }, (_, index) => ({
+      x: index,
+      z: 0,
+      y: 5,
+      heading: 0,
+      index,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: 0,
+      sourceIndex: index,
+    }))
+    const collision = createRoadBoundaryCollisionGeometry({
+      rows,
+      halfWidth: 2,
+      closed: false,
+      rowSpacing: 4,
+      lift: 0.05,
+    })
+    expect(collision).not.toBeNull()
+    const boundary = new THREE.Mesh(
+      collision!.geometry,
+      new THREE.MeshBasicMaterial({ visible: false }),
+    )
+    markProceduralLandscapeRoadBoundaryCollision(boundary)
+    host.add(boundary)
+
+    const harness = createHarness()
+    const initialSnapshot = drain(
+      harness,
+      host,
+      'advancing-road-boundary',
+      [new THREE.Vector3(0, 5, 0)],
+    )
+    const boundaryBodies = harness.created
+      .filter((record) => (
+        String((record.body as { name?: string }).name ?? '').includes(':road-boundary:')
+      ))
+      .map((record) => record.body)
+    expect(boundaryBodies.length).toBeGreaterThan(0)
+    expect(initialSnapshot.roadBoundaryChunkTotal).toBe(boundaryBodies.length)
+    expect(initialSnapshot.roadBoundaryChunkCount).toBe(boundaryBodies.length)
+
+    for (const x of [0, 160, 320, 480, 640, 800]) {
+      const snapshot = drain(
+        harness,
+        host,
+        'advancing-road-boundary',
+        [
+          new THREE.Vector3(x, 5, 0),
+          new THREE.Vector3(0, 5, 0),
+        ],
+      )
+      expect(snapshot.chunkCount).toBeGreaterThan(0)
+      expect(snapshot.roadBoundaryChunkTotal).toBe(boundaryBodies.length)
+      expect(snapshot.roadBoundaryChunkCount).toBe(boundaryBodies.length)
+      expect(snapshot.pendingRoadBoundaryChunkCount).toBe(0)
+      for (const body of boundaryBodies) {
+        expect(harness.removed).not.toContain(body)
+      }
+    }
+  })
+
+  it('replaces an active boundary collider after its source geometry changes', () => {
+    const host = new THREE.Group()
+    const rows = Array.from({ length: 121 }, (_, index) => ({
+      x: index,
+      z: 0,
+      y: 5,
+      heading: 0,
+      index,
+      lateral: 0,
+      longitudinal: 0,
+      turn: 0,
+      headingDelta: 0,
+      sourceIndex: index,
+    }))
+    const makeBoundary = (): THREE.Mesh => {
+      const collision = createRoadBoundaryCollisionGeometry({
+        rows,
+        halfWidth: 2,
+        closed: false,
+        rowSpacing: 4,
+        lift: 0.05,
+      })
+      expect(collision).not.toBeNull()
+      const mesh = new THREE.Mesh(
+        collision!.geometry,
+        new THREE.MeshBasicMaterial({ visible: false }),
+      )
+      markProceduralLandscapeRoadBoundaryCollision(mesh)
+      return mesh
+    }
+    const original = makeBoundary()
+    host.add(original)
+    const probes = [new THREE.Vector3(60, 5, 0)]
+    const harness = createHarness()
+    drain(harness, host, 'replaced-road-boundary', probes)
+    const originalBodies = harness.created
+      .filter((record) => (
+        String((record.body as { name?: string }).name ?? '').includes(':road-boundary:')
+      ))
+      .map((record) => record.body)
+    expect(originalBodies.length).toBeGreaterThan(0)
+
+    const replacement = makeBoundary()
+    host.remove(original)
+    host.add(replacement)
+    const snapshot = drain(harness, host, 'replaced-road-boundary', probes)
+
+    for (const body of originalBodies) {
+      expect(harness.removed).toContain(body)
+    }
+    expect(snapshot.roadBoundaryChunkCount).toBeGreaterThan(0)
+    expect(snapshot.roadBoundaryChunkTotal).toBe(snapshot.roadBoundaryChunkCount)
+    expect(snapshot.pendingRoadBoundaryChunkCount).toBe(0)
   })
 
   it('excludes the dense rendered DEM roadbed from collision', () => {

@@ -25,8 +25,9 @@ import {
 // Mesh driven collision runtime.
 //
 // Scene nodes selected as explicit Ground Collision Sources, or implicit DEM procedural
-// road-boundary sources, reuse the Ground Anchor probe points: triangles near a probe
-// become static triangle mesh bodies and are destroyed again once every probe moved away.
+// road-boundary sources, reuse Ground Anchor probes for terrain and road streaming.
+// Road-containment chunks are different: every chunk is created during initialization
+// and remains resident, so moving anchors can never open a barrier gap.
 //
 // The indexed mesh set is not frozen: components may add or rebuild their meshes long
 // after the first sync (the procedural landscape only creates its walls once the terrain
@@ -115,6 +116,12 @@ export type MeshCollisionRuntimeHostSnapshot = {
   groundSourceCount: number
   /** Ground chunks currently resident in the physics world. */
   groundChunkCount: number
+  /** Total indexed road-containment chunks. */
+  roadBoundaryChunkTotal: number
+  /** Road-containment chunks currently resident in the physics world. */
+  roadBoundaryChunkCount: number
+  /** Road-containment chunks waiting for their initial creation budget. */
+  pendingRoadBoundaryChunkCount: number
   /** Moving-anchor fallback patches currently resident in the physics world. */
   groundPatchCount: number
   /** One nearest-ground-chunk result per Ground Anchor reference. */
@@ -199,6 +206,9 @@ type MeshCollisionHostState = {
   lastReferenceGroundCoverage: MeshCollisionReferenceGroundCoverage[]
   lastGroundSourceCount: number
   lastGroundChunkCount: number
+  lastRoadBoundaryChunkTotal: number
+  lastRoadBoundaryChunkCount: number
+  lastPendingRoadBoundaryChunkCount: number
   lastUncoveredReferenceCount: number
   groundPatchSampler: ProceduralLandscapeDemCollisionSampler | null
   groundPatches: Map<number, MeshCollisionGroundPatch>
@@ -230,6 +240,9 @@ const EMPTY_MESH_COLLISION_SNAPSHOT: MeshCollisionRuntimeHostSnapshot = {
   pendingChunkCount: 0,
   groundSourceCount: 0,
   groundChunkCount: 0,
+  roadBoundaryChunkTotal: 0,
+  roadBoundaryChunkCount: 0,
+  pendingRoadBoundaryChunkCount: 0,
   groundPatchCount: 0,
   referenceGroundCoverage: [],
   uncoveredReferenceCount: 0,
@@ -410,6 +423,9 @@ function applyCollisionMeshSetChanges(
     state.lastReferenceGroundCoverage = []
     state.lastGroundSourceCount = 0
     state.lastGroundChunkCount = 0
+    state.lastRoadBoundaryChunkTotal = 0
+    state.lastRoadBoundaryChunkCount = 0
+    state.lastPendingRoadBoundaryChunkCount = 0
     state.lastUncoveredReferenceCount = 0
     state.groundPatchSampler = null
   }
@@ -563,6 +579,9 @@ function createHostState(sourceId: string, sourceObject: THREE.Object3D): MeshCo
     lastReferenceGroundCoverage: [],
     lastGroundSourceCount: 0,
     lastGroundChunkCount: 0,
+    lastRoadBoundaryChunkTotal: 0,
+    lastRoadBoundaryChunkCount: 0,
+    lastPendingRoadBoundaryChunkCount: 0,
     lastUncoveredReferenceCount: 0,
     groundPatchSampler: null,
     groundPatches: new Map(),
@@ -1115,6 +1134,9 @@ export function syncMeshCollisionRuntimeHost(
       pendingChunkCount: 0,
       groundSourceCount: 0,
       groundChunkCount: 0,
+      roadBoundaryChunkTotal: 0,
+      roadBoundaryChunkCount: 0,
+      pendingRoadBoundaryChunkCount: 0,
       groundPatchCount: 0,
       referenceGroundCoverage: groundPatchReferences.map((_reference, referenceIndex) => ({
         referenceIndex,
@@ -1170,6 +1192,11 @@ export function syncMeshCollisionRuntimeHost(
         0,
       ),
       groundChunkCount: 0,
+      roadBoundaryChunkTotal: state.chunks.filter(
+        (chunk) => chunk.debugKind === 'road-boundary',
+      ).length,
+      roadBoundaryChunkCount: 0,
+      pendingRoadBoundaryChunkCount: 0,
       groundPatchCount: 0,
       referenceGroundCoverage: groundPatchReferences.map((_reference, referenceIndex) => ({
         referenceIndex,
@@ -1235,30 +1262,21 @@ export function syncMeshCollisionRuntimeHost(
       mandatoryGroundKeys.add(candidate.chunk.key)
     }
   })
-  const nearestBoundaryByReference = references.map((reference) => {
-    let best: MeshCollisionChunkCandidate | null = null
-    let bestDistanceSq = Number.POSITIVE_INFINITY
-    candidates.forEach((candidate) => {
-      if (candidate.chunk.debugKind !== 'road-boundary') {
-        return
-      }
-      const distanceSq = resolveChunkReferenceDistanceSq(candidate.chunk, reference)
-      if (distanceSq < bestDistanceSq) {
-        bestDistanceSq = distanceSq
-        best = { chunk: candidate.chunk, distanceSq }
-      }
-    })
-    return best as MeshCollisionChunkCandidate | null
-  })
-  const mandatoryBoundaryKeys = new Set<string>()
-  nearestBoundaryByReference.forEach((candidate) => {
-    if (candidate && candidate.distanceSq <= activationSq) {
-      mandatoryBoundaryKeys.add(candidate.chunk.key)
-    }
-  })
+  // Road containment is a complete static safety boundary. Unlike terrain and
+  // roadbed chunks, every indexed boundary chunk is resident from initialization
+  // and is never selected or evicted using Ground Anchor distance.
+  const roadBoundaryCandidates = state.chunks
+    .filter((chunk) => chunk.debugKind === 'road-boundary')
+    .map((chunk): MeshCollisionChunkCandidate => ({
+      chunk,
+      distanceSq: 0,
+    }))
+  const mandatoryBoundaryKeys = new Set(
+    roadBoundaryCandidates.map((candidate) => candidate.chunk.key),
+  )
 
-  // The DEM terrain and road containment under every Ground Anchor are mandatory.
-  // Roadbed and other obstacle chunks only fill the remaining budget by distance.
+  // Keep the DEM terrain under every Ground Anchor and the complete road
+  // containment mesh resident. Other obstacle chunks fill the remaining budget.
   const residentKeys = new Set<string>()
   mandatoryGroundKeys.forEach((key) => residentKeys.add(key))
   mandatoryBoundaryKeys.forEach((key) => residentKeys.add(key))
@@ -1282,10 +1300,13 @@ export function syncMeshCollisionRuntimeHost(
 
   const pendingCandidates: MeshCollisionChunkCandidate[] = []
   const pendingKeys = new Set<string>()
-  const appendPending = (candidate: MeshCollisionChunkCandidate | null): void => {
+  const appendPending = (
+    candidate: MeshCollisionChunkCandidate | null,
+    ignoreActivationRadius = false,
+  ): void => {
     if (
       !candidate
-      || candidate.distanceSq > activationSq
+      || (!ignoreActivationRadius && candidate.distanceSq > activationSq)
       || state.instances.has(candidate.chunk.key)
       || pendingKeys.has(candidate.chunk.key)
       || !residentKeys.has(candidate.chunk.key)
@@ -1295,9 +1316,9 @@ export function syncMeshCollisionRuntimeHost(
     pendingKeys.add(candidate.chunk.key)
     pendingCandidates.push(candidate)
   }
-  mandatoryGroundByReference.forEach(appendPending)
-  nearestBoundaryByReference.forEach(appendPending)
-  candidates.forEach(appendPending)
+  mandatoryGroundByReference.forEach((candidate) => appendPending(candidate))
+  roadBoundaryCandidates.forEach((candidate) => appendPending(candidate, true))
+  candidates.forEach((candidate) => appendPending(candidate))
 
   Array.from(state.instances.entries()).forEach(([key, instance]) => {
     if (residentKeys.has(key)) {
@@ -1307,7 +1328,10 @@ export function syncMeshCollisionRuntimeHost(
     state.instances.delete(key)
   })
 
-  const createLimit = state.burst
+  const hasPendingRoadBoundary = Array.from(mandatoryBoundaryKeys).some(
+    (key) => !state.instances.has(key),
+  )
+  const createLimit = state.burst || hasPendingRoadBoundary
     ? MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC_AFTER_CHANGE
     : MESH_COLLISION_MAX_NEW_CHUNKS_PER_SYNC
   let created = 0
@@ -1336,7 +1360,7 @@ export function syncMeshCollisionRuntimeHost(
     state.burst = false
   }
 
-  const candidateByKey = new Map(candidates.map((candidate) => [candidate.chunk.key, candidate]))
+  const chunkByKey = new Map(state.chunks.map((chunk) => [chunk.key, chunk]))
   const referenceGroundCoverage = mandatoryGroundByReference.map((candidate, referenceIndex) => {
     const key = candidate?.chunk.key ?? null
     const resident = key ? residentKeys.has(key) : false
@@ -1367,16 +1391,28 @@ export function syncMeshCollisionRuntimeHost(
     0,
   )
   let groundChunkCount = 0
+  let roadBoundaryChunkCount = 0
   state.instances.forEach((_instance, key) => {
-    if (candidateByKey.get(key)?.chunk.isGroundSurface) {
+    const chunk = chunkByKey.get(key)
+    if (chunk?.isGroundSurface) {
       groundChunkCount += 1
+    }
+    if (chunk?.debugKind === 'road-boundary') {
+      roadBoundaryChunkCount += 1
     }
   })
   groundChunkCount += state.groundPatches.size
   const uncoveredReferenceCount = referenceGroundCoverage.filter((entry) => !entry.covered).length
+  const roadBoundaryChunkTotal = roadBoundaryCandidates.length
+  const pendingRoadBoundaryChunkCount = roadBoundaryCandidates.filter(
+    (candidate) => !state.instances.has(candidate.chunk.key),
+  ).length
   state.lastReferenceGroundCoverage = referenceGroundCoverage
   state.lastGroundSourceCount = groundSourceCount
   state.lastGroundChunkCount = groundChunkCount
+  state.lastRoadBoundaryChunkTotal = roadBoundaryChunkTotal
+  state.lastRoadBoundaryChunkCount = roadBoundaryChunkCount
+  state.lastPendingRoadBoundaryChunkCount = pendingRoadBoundaryChunkCount
   state.lastUncoveredReferenceCount = uncoveredReferenceCount
 
   if (
@@ -1410,6 +1446,9 @@ export function syncMeshCollisionRuntimeHost(
     pendingChunkCount,
     groundSourceCount,
     groundChunkCount,
+    roadBoundaryChunkTotal,
+    roadBoundaryChunkCount,
+    pendingRoadBoundaryChunkCount,
     groundPatchCount: state.groundPatches.size,
     referenceGroundCoverage,
     uncoveredReferenceCount,
@@ -1461,6 +1500,9 @@ export function resolveMeshCollisionRuntimeHostSnapshot(
     pendingChunkCount: 0,
     groundSourceCount: state.lastGroundSourceCount,
     groundChunkCount: state.lastGroundChunkCount,
+    roadBoundaryChunkTotal: state.lastRoadBoundaryChunkTotal,
+    roadBoundaryChunkCount: state.lastRoadBoundaryChunkCount,
+    pendingRoadBoundaryChunkCount: state.lastPendingRoadBoundaryChunkCount,
     groundPatchCount: state.groundPatches.size,
     referenceGroundCoverage: state.lastReferenceGroundCoverage,
     uncoveredReferenceCount: state.lastUncoveredReferenceCount,
